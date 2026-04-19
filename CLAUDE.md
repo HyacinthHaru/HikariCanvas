@@ -13,13 +13,22 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 | 工程文件扩展名 | `.canvas` |
 | 仓库 | https://github.com/HyacinthHaru/HikariCanvas（MIT） |
 
-## 技术栈
+## 技术栈（锁定版本）
 
-- Java 21 / Paper API 1.21+ / Gradle Kotlin DSL 多模块（`plugin/` + `web/`）
-- 插件描述：**`paper-plugin.yml`**（不用 `plugin.yml` 旧格式）
-- 本地测试服：**`paperweight-userdev`** 的 `./gradlew runServer`
-- 后端依赖：PacketEvents / Javalin 6 / HikariCP + JDBI + SQLite / SnakeYAML
-- 前端：Vite + TypeScript；Vue 3 + Konva + Pinia 于 **M5 引入**（M1~M4 前端仅原生 DOM）
+| 项 | 版本 |
+|---|---|
+| Java | **21**（不升 25，守住 1.21 LTS） |
+| Paper API | **1.21.11**（`1.21.11-R0.1-SNAPSHOT`） |
+| Gradle | **9.4.1** |
+| `paperweight-userdev` | **2.0.0-beta.21**（官方唯一支持最新版） |
+| PacketEvents | **2.11.2**（1.21.x 最终稳定版） |
+| Javalin | **7.1.0**（6 已过时，不用） |
+| 插件描述文件 | **`paper-plugin.yml`**（不用 `plugin.yml` 旧格式） |
+| 本地测试服 | `./gradlew runServer`（paperweight-userdev 提供） |
+
+其余：HikariCP + JDBI + SQLite、SnakeYAML、JUnit 5 + MockBukkit、AWT/Graphics2D。
+
+**前端**：Vite + TypeScript；Vue 3 + Konva + Pinia 于 **M5 引入**（M1~M4 前端仅原生 DOM）。
 
 ## 文档先行
 
@@ -50,7 +59,17 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 6. 签名失败**不要用 `--no-gpg-sign` 绕过**，先查原因
 7. 签名验证：`gh api /repos/HyacinthHaru/HikariCanvas/commits/<sha> --jq '.commit.verification.verified'` 应返回 `true`
 
-## 不可越界的技术决策
+## 架构纪律（26.x 升级保障，不可越界）
+
+Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x 必崩。为让未来升级只改版本号、不动代码：
+
+1. **禁用 NMS。** 任何 `net.minecraft.*` / 服务端内部类一律禁止；只用公开 Bukkit API + PacketEvents
+2. **PacketEvents 调用集中。** 所有 `sendPacket` 走 `plugin/deploy/MapPacketSender.java` 一个类，别的模块不直接碰 PacketEvents
+3. **Mojang mappings 输出。** `paperweight-userdev` 默认行为，不开 reobf
+
+见 PROPOSAL.md §5.2.6 完整说明。
+
+## 其他不可越界的技术决策
 
 - **预览地图池**是技术核心：编辑期间**只刷像素、不新建 MapView**，避免 `idcounts.dat` 膨胀——这一项做不好整个项目报废
 - **双端渲染一致性**：浏览器 Canvas 与 Java Graphics2D 用同一 TTF 文件、禁抗锯齿
