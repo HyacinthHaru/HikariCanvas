@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-04-19 · M1-T3 runServer 可用 + 插件生命周期验证
+
+**范围：** 在本地用 `./gradlew :plugin:runServer` 起一个 Paper 测试服，验证我们的 jar 能被正确 load/enable/disable
+
+**关键认识：** paperweight-userdev 2.0 **不再自带 `runServer` task**。通过 PaperMC 官方 test-plugin 的 `build.gradle.kts` 发现他们用 `xyz.jpenilla.run-paper` 3.0.2（同系列还有 `run-velocity` / `run-waterfall`）。引入这个插件即可。
+
+**改动：**
+- `plugin/build.gradle.kts`：
+  - 新增插件 `id("xyz.jpenilla.run-paper") version "3.0.2"`
+  - `runServer { minecraftVersion("1.21.11") }`
+  - `doFirst` 自动写 `run/eula.txt` 为 `eula=true`（首次跑会被 Paper 初始化为 `eula=false`，卡住启动；加此 hook 后幂等、下次 `clean` 后也能自动复活）。`logger.lifecycle` 会明示"已接受 Mojang EULA"，不做无声操作。
+- `.gitignore` 新增 `.claude/`（Claude Code 产物，不入仓库）
+
+**验证（从 runServer 日志中直接引用）：**
+- `[HikariCanvas] HikariCanvas enabled (skeleton)` — `onEnable` 触发
+- `Done (7.959s)! For help, type "help"` — Paper 1.21.11 build #130 启动完成
+- `SIGTERM` 后 `[HikariCanvas] HikariCanvas disabled` — `onDisable` 也正确触发
+- Gradle 的 `BUILD FAILED`（exit 143 = 128 + 15）是我主动 kill 导致，**不代表 Paper 或插件异常**
+
+**路径与 gitignore：**
+- run-paper 默认工作目录 `plugin/run/`，已被现有 `run/` 规则 ignored（不带 `/` 前缀匹配任何深度）
+- Paper server jar 由 run-paper 缓存在 `~/.gradle/caches/run-task-jars/paper/jars/1.21.11/130.jar`，不进项目目录
+
+**关联文件：** `plugin/build.gradle.kts`、`.gitignore`、`docs/journal.md`
+
+---
+
 ## 2026-04-19 · M1-T2 插件主类 + paper-plugin.yml
 
 **范围：** 最小可 load 的 Paper 插件（skeleton），先把 `./gradlew build` 出 jar 的链路跑通；功能逻辑留给后续任务
