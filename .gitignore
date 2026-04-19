@@ -1,0 +1,105 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# JetBrains / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.project
+.classpath
+.settings/
+bin/
+
+# Gradle
+.gradle/
+build/
+!**/src/**/build/
+!gradle-wrapper.jar
+
+# Maven (若后续使用)
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+!gradle/wrapper/gradle-wrapper.jar
+hs_err_pid*.log
+replay_pid*.log
+
+# Node / 前端
+node_modules/
+dist/
+dist-ssr/
+.vite/
+.cache/
+*.local
+.env
+.env.*
+!.env.example
+
+# TypeScript
+*.tsbuildinfo
+
+# 前端日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 前端构建产物（最终拷贝进插件 jar 的目标位置由 gradle 任务控制，开发中不提交）
+plugin/src/main/resources/web/
+
+# 插件运行时数据（绝对不提交）
+plugins/
+logs/
+world/
+world_nether/
+world_the_end/
+*.db
+*.db-journal
+crash-reports/
+cache/
+*.log
+
+# 本地测试服
+test-server/
+run/
+
+# 密钥 / 凭据
+*.keystore
+*.jks
+*.pem
+*.key
+*.crt
+*.env.local
+
+# 临时
+*.tmp
+*.swp
+*.bak
+*~
+
+# 渲染测试输出（CI 产出保留 expected，actual 不提交）
+rendering-test/actual-java/
+rendering-test/actual-web/
+rendering-test/diff/
