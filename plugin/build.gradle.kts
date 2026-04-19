@@ -2,6 +2,7 @@ plugins {
     `java`
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
     id("xyz.jpenilla.run-paper") version "3.0.2"
+    id("com.gradleup.shadow") version "9.4.1"
 }
 
 java {
@@ -16,6 +17,9 @@ repositories {
 
 dependencies {
     paperweight.paperDevBundle("1.21.11-R0.1-SNAPSHOT")
+
+    implementation("io.javalin:javalin:7.1.0")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
 }
 
 tasks {
@@ -25,11 +29,22 @@ tasks {
     }
 
     jar {
+        enabled = false
+    }
+
+    shadowJar {
         archiveBaseName.set("HikariCanvas")
+        archiveClassifier.set("")
+        mergeServiceFiles()
+    }
+
+    assemble {
+        dependsOn(shadowJar)
     }
 
     runServer {
         minecraftVersion("1.21.11")
+        pluginJars.from(shadowJar.flatMap { it.archiveFile })
         doFirst {
             val eula = project.file("run/eula.txt")
             eula.parentFile.mkdirs()
