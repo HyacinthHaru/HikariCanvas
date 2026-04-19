@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-04-19 · CLAUDE.md 首版 + M1 技术选型拍板
+
+**范围：** 为仓库补充工程规范入口文件；固化 M1 前期决策
+
+**改动：**
+- 新增根目录 `CLAUDE.md`：项目标识、技术栈、契约文档清单、文档先行规则、Git 提交约定、不可越界的技术决策、里程碑
+- 拍板 M1 前的几项技术选型（记录在此以便未来追溯）：
+  - 前端 M1~M4 只写原生 DOM + Vite + TypeScript，Vue 3 + Konva + Pinia 推迟到 M5 引入（避免 M1 端到端验证搭冗余骨架）
+  - 插件描述文件用 `paper-plugin.yml`，不用旧格式 `plugin.yml`
+  - 本地测试服使用 `paperweight-userdev` 的 `./gradlew runServer`
+  - M1 的双端 snapshot 测试台**按 PROPOSAL §5.2.1 / §7 原计划保留**——M1 阶段就搭起测试基础设施，即使首轮只比对固定形状/纯色
+
+**关联文件：** `CLAUDE.md`（新）、`docs/journal.md`
+
+---
+
 ## 2026-04-19 · 项目改名 HikariBetterText → HikariCanvas
 
 **范围：** 全局重命名 + 新增 journal.md + .gitignore + git 初始化
