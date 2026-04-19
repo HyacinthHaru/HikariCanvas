@@ -1,0 +1,8 @@
+name: HikariCanvas
+version: '0.1.0-SNAPSHOT'
+main: moe.hikari.canvas.HikariCanvas
+api-version: '1.21'
+authors:
+  - HaruHyacinth
+description: Text signage plugin with TTF font rendering, template system, and a live web editor.
+website: https://github.com/HyacinthHaru/HikariCanvas
