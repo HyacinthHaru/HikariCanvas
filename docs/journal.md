@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-04-20 · M1-T6 前端按钮页面（原生 DOM + Vite + TypeScript 骨架）
+
+**范围：** 在仓库里建 `web/` 子项目；一个按钮点击时打开 WebSocket 到 `ws://127.0.0.1:8877/ws` 并发 `ping`，把服务端响应渲染到页面。构建链路跑通即算完成（真正的端到端 round-trip 留给 T7）。
+
+**立项期决策再重申**（见 PROPOSAL §5.1、CLAUDE.md 技术栈表）：
+- M1~M4 **仅用原生 DOM + 原生 WebSocket API + TypeScript**
+- Vue 3 / Konva / Pinia **M5 才引入**
+- 目的：M1 端到端验证不需要前端框架；M5 再一次性搭 Canva 式编辑器
+
+**技术选型（当前稳定版实测）：**
+- Vite **8.0.9**（2026-03-12 release；Rolldown 作为统一 Rust 打包器替代 esbuild+Rollup，构建 10-30x 加速）
+- TypeScript **6.0.3**（2026-03-23 release；基于 JS 编译器的最后一个大版本；7.0 年中转 Go）
+- Node **25.2.1** / npm **11.6.2**（本机 brew 装的当前版本）
+- Vite dev server bind `127.0.0.1:5173`（不监听 `0.0.0.0`——不要无意暴露到公网，同 Paper 插件一个安全默认）
+
+**文件结构：**
+- `web/package.json`：`type: module`；scripts `dev / build / preview`；devDeps `vite ^8.0.9 / typescript ^6.0.3`
+- `web/vite.config.ts`：dev server 127.0.0.1:5173；`build.outDir = "dist"`；`build.target = "es2022"`
+- `web/tsconfig.json`：严格模式全开（`strict / noUnusedLocals / noUnusedParameters / noImplicitReturns / noFallthroughCasesInSwitch / verbatimModuleSyntax`）；lib 包含 `DOM / DOM.Iterable`
+- `web/index.html`：页面壳 + `<button id="ping-btn">` + `<div id="log">`；极简 system-ui 样式
+- `web/src/main.ts`：
+  - `Envelope<P>` TypeScript interface 与 `docs/protocol.md` §2 对齐（`v / op / id? / ts? / payload?`）
+  - 按钮点击 → 首次连 `ws://127.0.0.1:8877/ws`（之后复用）→ 发 `{v:1, op:"ping", id:"c-<seq>", ts:Date.now()}` → 收到响应打印到 log
+  - `open / message / close / error` 四个事件各有独立样式（sent/recv/err/meta）
+
+**构建验证：**
+- `npm install` 成功（16 packages，无 vulnerability）
+- `npm run build`（`tsc --noEmit && vite build`）`25ms` 完成；产物：
+  - `dist/index.html` 1.60 KB（gzip 0.84 KB）
+  - `dist/assets/index-<hash>.js` 1.93 KB（gzip 1.02 KB）
+- 这个产物体积反映了「不引任何框架」的初衷——整个前端 2KB 不到
+
+**.gitignore 覆盖验证：**
+- `node_modules/` / `dist/` 都被根 `.gitignore` 已有规则排除
+- 入库的是 `package.json` / `package-lock.json` / `vite.config.ts` / `tsconfig.json` / `index.html` / `src/main.ts` 共 6 个源文件
+
+**未做（留给 T7）：**
+- Gradle ↔ npm 联动（`./gradlew build` 自动触发 `npm run build` + 产物拷到 `plugin/src/main/resources/web/`）——T7 做，届时插件 serve 静态资源 + WS 在同源
+- 端到端实测（runServer + Vite dev server 同时跑、点按钮看 `pong`）——T7 做
+- Jackson 回填的 `payload` 是 `{}` 空对象，前端 `recv` 只打 log 不解析 payload 结构——足够 T6
+
+**关联文件：** `web/package.json`、`web/package-lock.json`、`web/vite.config.ts`、`web/tsconfig.json`、`web/index.html`、`web/src/main.ts`、`docs/journal.md`
+
+---
+
 ## 2026-04-20 · M1-T5 /hc paint + PacketEvents 发包链路打通（M1 核心风险验证通过）
 
 **范围：** 在插件里集成 PacketEvents 2.11.2，注册 Brigadier 命令 `/hc paint`，玩家主手地图被整张涂红——**PROPOSAL 风险表 #1「PacketEvents 版本升级破坏兼容」已实测无问题；#2「预览地图池机制」的前置能力（不走 MapRenderer，直接发包改像素）验证成立**

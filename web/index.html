@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HikariCanvas — dev probe</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        max-width: 760px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.5;
+      }
+      h1 { margin-bottom: 0.25rem; }
+      p.lead { color: #888; margin-top: 0; }
+      button {
+        padding: 0.6rem 1.2rem;
+        font-size: 1rem;
+        cursor: pointer;
+        border-radius: 6px;
+        border: 1px solid #888;
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      #log {
+        margin-top: 1rem;
+        padding: 1rem;
+        background: #111;
+        color: #eee;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+        font-size: 0.82rem;
+        border-radius: 6px;
+        min-height: 240px;
+        white-space: pre-wrap;
+        overflow-x: auto;
+      }
+      #log .sent { color: #8cf; }
+      #log .recv { color: #9f9; }
+      #log .err  { color: #f88; }
+      #log .meta { color: #999; }
+    </style>
+  </head>
+  <body>
+    <h1>HikariCanvas dev probe</h1>
+    <p class="lead">本地开发页面。连到插件的 <code>ws://127.0.0.1:8877/ws</code>，发 <code>ping</code>。</p>
+    <button id="ping-btn">Ping server</button>
+    <div id="log" aria-live="polite"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
