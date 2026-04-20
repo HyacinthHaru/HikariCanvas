@@ -3,7 +3,7 @@ package moe.hikari.canvas;
 import com.github.retrooper.packetevents.PacketEvents;
 import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
-import moe.hikari.canvas.command.HcCommand;
+import moe.hikari.canvas.command.CanvasCommand;
 import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
@@ -37,7 +37,7 @@ public final class HikariCanvas extends JavaPlugin {
         mapPacketSender = new MapPacketSender();
 
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
-                event.registrar().register(new HcCommand(mapPacketSender).build()));
+                event.registrar().register(new CanvasCommand(mapPacketSender).build()));
 
         // M1 骨架：host/port 硬编码，后续任务从 config.yml 读取
         String host = "127.0.0.1";

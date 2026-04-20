@@ -16,29 +16,34 @@ import org.bukkit.map.MapView;
 import java.util.Arrays;
 
 /**
- * M1 阶段只注册最小子命令：
+ * {@code /canvas} 根命令的 Brigadier 注册点。正式子命令
+ * （edit / wand / confirm / cancel / commit / cleanup / stats）
+ * 将在 M2-T11 逐步接入，此处只是入口骨架。
+ *
+ * <p>以下两个子命令是 <b>M1 demo 遗留，DEPRECATED</b>，仅在 M2 实施
+ * 中间阶段临时保留（缺少正式命令族时还能用它手动验证发包链路）；
+ * M2-T11 命令族完整实装时删除。</p>
  * <ul>
- *   <li>{@code /hc give}  —— 给玩家一张绑定新 MapView 的空白 filled_map（便于测试，不需要 OP）</li>
- *   <li>{@code /hc paint} —— 把玩家主手的 filled_map 整张涂红</li>
+ *   <li>{@code /canvas give}  — 给玩家一张绑定新 MapView 的空白 filled_map</li>
+ *   <li>{@code /canvas paint} — 把玩家主手的 filled_map 整张涂红</li>
  * </ul>
- * 完整命令树在后续任务按 {@code edit/cancel/cleanup/undo} 扩展（见 PROPOSAL §4.1）。
  */
-public final class HcCommand {
+public final class CanvasCommand {
 
-    /** MC map palette 中一个明显的红色索引。 */
+    /** MC map palette 中一个明显的红色索引（M1 demo paint 用）。 */
     private static final byte RED_PALETTE = 18;
 
     private final MapPacketSender mapPacketSender;
 
-    public HcCommand(MapPacketSender mapPacketSender) {
+    public CanvasCommand(MapPacketSender mapPacketSender) {
         this.mapPacketSender = mapPacketSender;
     }
 
     public LiteralCommandNode<CommandSourceStack> build() {
-        return Commands.literal("hc")
+        return Commands.literal("canvas")
                 .requires(src -> src.getSender() instanceof Player)
-                .then(Commands.literal("give").executes(this::runGive))
-                .then(Commands.literal("paint").executes(this::runPaint))
+                .then(Commands.literal("give").executes(this::runGive))   // DEPRECATED, remove at M2-T11
+                .then(Commands.literal("paint").executes(this::runPaint)) // DEPRECATED, remove at M2-T11
                 .build();
     }
 
@@ -55,7 +60,8 @@ public final class HcCommand {
         map.setItemMeta(meta);
 
         player.getInventory().addItem(map);
-        player.sendMessage("Gave you a blank canvas map (id=" + view.getId() + "). Hold it and run /hc paint.");
+        player.sendMessage("[DEPRECATED demo] Gave you a blank canvas map (id=" + view.getId()
+                + "). Hold it and run /canvas paint.");
         return Command.SINGLE_SUCCESS;
     }
 
@@ -64,7 +70,7 @@ public final class HcCommand {
 
         ItemStack item = player.getInventory().getItemInMainHand();
         if (item.getType() != Material.FILLED_MAP) {
-            player.sendMessage("Hold a filled_map in your main hand (try /hc give first)");
+            player.sendMessage("Hold a filled_map in your main hand (try /canvas give first)");
             return 0;
         }
         if (!(item.getItemMeta() instanceof MapMeta meta) || !meta.hasMapView()) {
@@ -81,7 +87,7 @@ public final class HcCommand {
         byte[] pixels = new byte[MapPacketSender.MAP_PIXELS];
         Arrays.fill(pixels, RED_PALETTE);
         mapPacketSender.sendFullMap(player, mapId, pixels);
-        player.sendMessage("Painted map #" + mapId + " red (palette=" + RED_PALETTE + ")");
+        player.sendMessage("[DEPRECATED demo] Painted map #" + mapId + " red (palette=" + RED_PALETTE + ")");
         return Command.SINGLE_SUCCESS;
     }
 }

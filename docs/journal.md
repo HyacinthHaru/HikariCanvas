@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-04-20 · M2-T1 代码层改名 Hc → Canvas
+
+**范围：** 契约已改，代码层跟进：类名、根 literal、import、用户消息字串
+
+**改动：**
+- `git mv` `HcCommand.java` → `CanvasCommand.java`；类名同步；根 literal `"hc"` → `"canvas"`
+- `HikariCanvas.java`：import + `new HcCommand(...)` → `new CanvasCommand(...)`
+- 内部 javadoc、聊天栏消息里的 `/hc give` / `/hc paint` 全改 `/canvas give` / `/canvas paint`
+- 子命令 `give` / `paint` **保留为 DEPRECATED demo**（代码注释明确标记，运行时消息前缀加 `[DEPRECATED demo]`）——M2 实施中间阶段还没有正式命令族，需要它们手动验证发包链路；T11 命令族完整实装时一起删除
+- `./gradlew :plugin:shadowJar` 通过
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`（rename from `HcCommand.java`）、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-20 · M2 立项契约修订：命令前缀 /canvas + 墙面交互规范 + Placeholder 地图
 
 **范围：** 进入 M2 前的契约层对齐。三件事：命令前缀从 `/hc` 全局改为 `/canvas`（含权限节点）；细化墙面交互流程（SELECTING 状态 + 两段式确认）；新增 Placeholder 地图规范。纯文档变更，代码留到 M2 任务逐步落实。
