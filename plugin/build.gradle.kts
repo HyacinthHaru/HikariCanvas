@@ -22,6 +22,12 @@ dependencies {
     implementation("io.javalin:javalin:7.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
     implementation("com.github.retrooper:packetevents-spigot:2.11.2")
+
+    // 持久化（M2-T2）
+    implementation("org.xerial:sqlite-jdbc:3.53.0.0")
+    implementation("com.zaxxer:HikariCP:7.0.2")
+    implementation("org.jdbi:jdbi3-core:3.52.1")
+    implementation("org.jdbi:jdbi3-sqlite:3.52.1")
 }
 
 // ---- Gradle ↔ npm 联动 ----

@@ -5,6 +5,8 @@ import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import moe.hikari.canvas.command.CanvasCommand;
 import moe.hikari.canvas.deploy.MapPacketSender;
+import moe.hikari.canvas.storage.Database;
+import moe.hikari.canvas.storage.MigrationRunner;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -21,6 +23,7 @@ public final class HikariCanvas extends JavaPlugin {
 
     private static final byte RED_PALETTE = 18;
 
+    private Database database;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
 
@@ -33,6 +36,10 @@ public final class HikariCanvas extends JavaPlugin {
     @Override
     public void onEnable() {
         PacketEvents.getAPI().init();
+
+        // 持久化：按 docs/data-model.md §2.1 在 plugins/HikariCanvas/data.db
+        database = new Database(getLogger(), getDataFolder().toPath().resolve("data.db"));
+        new MigrationRunner(database.jdbi(), getLogger()).run();
 
         mapPacketSender = new MapPacketSender();
 
@@ -53,6 +60,10 @@ public final class HikariCanvas extends JavaPlugin {
         if (webServer != null) {
             webServer.stop();
             webServer = null;
+        }
+        if (database != null) {
+            database.close();
+            database = null;
         }
         try {
             PacketEvents.getAPI().terminate();

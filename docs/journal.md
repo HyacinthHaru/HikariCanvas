@@ -5,6 +5,45 @@
 
 ---
 
+## 2026-04-20 · M2-T2 SQLite + HikariCP + JDBI 接入 + schema v1 建表
+
+**范围：** 按 data-model.md §2 全量建表；持久化基础设施就位，后续 T3/T4/T7 等能直接写 SQL
+
+**依赖（当前稳定版实测）：**
+- `org.xerial:sqlite-jdbc:3.53.0.0`（Gradle 冲突解析实际拿到 `3.49.1.0`——paperweight-userdev 的 paperDevBundle 传递依赖强制锁了低版本；3.49.1.0 功能相同，stable。M2 不折腾，待 M7 打磨期看是否要 force 3.53。异常栈里能看到版本号已确认）
+- `com.zaxxer:HikariCP:7.0.2`
+- `org.jdbi:jdbi3-core:3.52.1`
+- `org.jdbi:jdbi3-sqlite:3.52.1`（注意包名是 `org.jdbi.v3.sqlite3`——末尾 `3` 是模块约定，不是版本号；不是 `sqlite`）
+
+**踩坑记录：**
+1. **JDBI sqlite 模块包名陷阱**：import 写 `org.jdbi.v3.sqlite.SQLitePlugin` 编译失败；真实路径是 `org.jdbi.v3.sqlite3`。用 `jar tf` 查 jar 内 class 一眼看出
+2. **迁移脚本注释处理 bug**（运行时 crash）：
+   - `V001__initial.sql` 开头有 3 行文件级注释 `-- ...`，紧接第一个 `CREATE TABLE pool_maps`
+   - 原实现按 `;` split 后再 `trimmed.startsWith("--")` 跳过注释——**整个片段以 `--` 开头（实际内含 CREATE TABLE）被误跳过**
+   - 结果：`CREATE TABLE pool_maps` 没跑，下一条 `CREATE INDEX ... ON pool_maps(state)` 报 `no such table`
+   - 修法：loadResource 阶段**逐行剥注释**再拼接；拆分阶段只跳空串，不再判 `--`
+3. **sqlite-jdbc 不支持一次 execute 多条语句**：无论用 `;` 分隔还是批处理都要自己拆。拆分时遇到数据里含 `;` 的情况会有风险（M2 schema 没有，future schema 若有字符串字面量含 `;` 要用更严谨的 SQL tokenizer）
+
+**改动文件：**
+- `plugin/build.gradle.kts`：新增 4 个 implementation 依赖（sqlite-jdbc/HikariCP/jdbi3-core/jdbi3-sqlite）
+- `plugin/src/main/resources/db-migrations/V001__initial.sql`（新）：按 data-model.md §2.3~§2.6 建 `pool_maps`/`sign_records`/`audit_log`/`template_usage` 四张表 + 全部索引。不含 `schema_version`（由 Java 代码首次确保存在）
+- `plugin/src/main/java/moe/hikari/canvas/storage/Database.java`（新）：HikariCP 连接池封装，最大 4 连接；SQLite 打 WAL 模式 + 外键约束；暴露 `Jdbi jdbi()`；`AutoCloseable`
+- `plugin/src/main/java/moe/hikari/canvas/storage/MigrationRunner.java`（新）：显式列表式迁移（不做 classpath 扫描，shadow jar 下不稳定）；`ensureSchemaVersionTable` 用 IF NOT EXISTS；应用每个脚本后 INSERT schema_version；逐行剥注释 + 按 `;` 拆
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`：onEnable 构造 Database 并跑 MigrationRunner；onDisable 关闭
+
+**验证：**
+- `./gradlew :plugin:shadowJar` 通过
+- runServer 启动成功：`Database initialized` → `DB schema current version: 0` → `Applying migration V001 ...` → `✓ V001 applied` → `WebServer listening` → `HikariCanvas enabled` → `Done (8.165s)!`
+- `sqlite3 plugin/run/plugins/HikariCanvas/data.db ".tables"` 输出全部 5 张表：`audit_log pool_maps schema_version sign_records template_usage`
+- `SELECT * FROM schema_version` → `1|1776697225399`
+- 4 张业务表空（新库）
+
+**M2 剩余任务（M2-T3~T12）从这里开始都可以假设 `database.jdbi()` 可用。**
+
+**关联文件：** `plugin/build.gradle.kts`、`plugin/src/main/resources/db-migrations/V001__initial.sql`、`plugin/src/main/java/moe/hikari/canvas/storage/Database.java`、`plugin/src/main/java/moe/hikari/canvas/storage/MigrationRunner.java`、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-20 · M2-T1 代码层改名 Hc → Canvas
 
 **范围：** 契约已改，代码层跟进：类名、根 literal、import、用户消息字串
