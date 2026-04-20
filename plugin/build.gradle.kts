@@ -13,6 +13,7 @@ java {
 
 repositories {
     mavenCentral()
+    maven("https://repo.codemc.io/repository/maven-releases/") { name = "codemc-releases" }
 }
 
 dependencies {
@@ -20,6 +21,7 @@ dependencies {
 
     implementation("io.javalin:javalin:7.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
+    implementation("com.github.retrooper:packetevents-spigot:2.11.2")
 }
 
 tasks {
