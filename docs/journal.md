@@ -5,6 +5,68 @@
 
 ---
 
+## 2026-04-20 · M2 立项契约修订：命令前缀 /canvas + 墙面交互规范 + Placeholder 地图
+
+**范围：** 进入 M2 前的契约层对齐。三件事：命令前缀从 `/hc` 全局改为 `/canvas`（含权限节点）；细化墙面交互流程（SELECTING 状态 + 两段式确认）；新增 Placeholder 地图规范。纯文档变更，代码留到 M2 任务逐步落实。
+
+**为什么要改：**
+- `/hc` 对新玩家意义不明（"hikari canvas" 的缩写不直观）；`/canvas` 一眼见义
+- architecture.md 原版「锁定墙面」段只写了射线检测 + 尺寸从模板来，没定玩家如何告诉插件"就是这面墙"——M2 实施前这一空白必须填上
+- M1 完成时发现：玩家从命令到真正看到编辑效果中间有一大段纯文字反馈，不直观。`/canvas confirm` 立即挂物品框 + Placeholder 能让玩家在游戏里马上看到"墙被选中了"，UX 更自然
+
+**关键决策（讨论后拍板）：**
+
+1. **命令前缀 /hc → /canvas，权限前缀 hc. → canvas.**
+   - PDC namespace `hikari_canvas` **保持不变**（底层数据标记，不与用户直接交互，改动纯属噪声）
+   - Java 类名 `HcCommand` → `CanvasCommand`（M2 实现时改）
+
+2. **墙面交互采用命令 + Wand 双入口组合（用户选定）：**
+   - `/canvas edit`：进入 SELECTING 状态，玩家空手或任何方块点击均可（零背包负担，偶尔使用者友好）
+   - `/canvas wand`：发命名金铲「Canvas Wand」，持 wand 时左/右键直接交互，无需先打命令（频繁使用者友好）
+   - 左键 = pos1，右键 = pos2；每次点击聊天栏 echo 坐标与预览
+   - 手打 `/canvas confirm` 才真正 commit 选区（刻意保留一步手动动作，避免误点意外创建会话）
+   - `/canvas confirm` 后**立即挂物品框 + 借池地图 + 填 Placeholder** → 玩家即刻看到占位网格
+
+3. **新状态 SELECTING 加入会话状态机**（原来只有 CLOSED/ISSUED/ACTIVE/EXPIRED/CLOSING）
+   - SELECTING 态**不占池、不挂物品框**——只是个"选区草稿"；任何时候可 `/canvas cancel` 或玩家掉线即释放
+
+4. **Placeholder 地图视觉（用户选 A）：**
+   - 浅灰底 + 顶部 "HikariCanvas" 水印 + 底部坐标文字
+   - M4 前无字体系统，所以用**预烘焙位图 ASCII 字表**（只覆盖英文字母/数字/标点）
+   - 所有会话共享同一只读像素缓冲；每张物品框叠加独立的 "位置标签"（如 "2/6"）以区分
+
+5. **删除 /hc give demo 命令**
+   - M1 阶段临时用来让玩家拿 filled_map 测试涂色的快捷命令
+   - M2 有 `/canvas edit` + wand 正规流程，give 不再需要；保留会误导用户走错工作流
+
+**改动文件：**
+- `CLAUDE.md` 标识表：命令前缀 / 权限前缀
+- `PROPOSAL.md`：§4.1 命令清单（补 edit/wand/confirm/cancel/commit/cleanup/stats，删 give/undo）；§5.2 UX 文字；§5.3 项目结构；§7 风险表 `/hc/` → `/canvas/`
+- `docs/architecture.md`：§1.3 数据流图两段式重绘；§2.1 组件说明；§3.1 状态机增加 SELECTING 态；§3.2 状态转移表 4 条新增；§7.1 从"锁定墙面"改写为"交互与选区（两段式）"；§7.2 物品框部署补"填 Placeholder"；**新增 §4.4 Placeholder 地图规范**；旧 §4.4 健康指标改号 §4.5；若干 `/hc` 字串替换
+- `docs/security.md`：§5 权限节点表全改名（新增 `canvas.wand` / `canvas.admin.force-break`）；§6 校验检查点表全改；nginx 配置示例 `/hc/` → `/canvas/`；审计命令
+- `docs/data-model.md`：`/hc remove` / `/hc cleanup` / `/hc fsck` 改名（PDC namespace 保持 `hikari_canvas` 不动）
+- `docs/template-spec.md`：`/hc reload templates` 改名
+
+**journal 历史条目里的 /hc 字串**（M1-T5 / T6 / T7 / 改名条目里的 give/paint 等）**不动**——journal 是过程记录，不是契约文档；改动会伪造历史。
+
+**M2 任务拆解（等用户最终 OK 后正式建 Task）：**
+1. SQLite + HikariCP + JDBI 接入 + 建表脚本（data-model.md §2）
+2. 命令 / 权限 / 类名 `HcCommand` → `CanvasCommand`（文档已改，代码跟进；顺便删 M1 的 give/paint demo 命令）
+3. TokenService（内存主 + SHA256 审计；TTL 15min；单次使用 + rotate）
+4. MapPool 实现（FREE/RESERVED/PERMANENT 状态机；借/还/refill/leak detection）
+5. WallResolver（pos1/pos2 → bounding box → 合法性校验 + BlockFace 法线识别）
+6. Canvas Wand 物品 + PlayerInteractEvent listener + SELECTING 状态机
+7. SessionManager（每玩家 1 活跃 + 每墙面排他锁 + disconnect 5min 宽限）
+8. FrameDeployer（挂物品框 + PDC 标记 + 保护 listener：HangingBreak/BlockBreak/PlayerInteractEntity）
+9. PlaceholderRenderer（位图 ASCII 字表 + 预烘焙共享缓冲）
+10. WebServer 预握手 `GET /api/session/:token` + WS `auth` 帧 + `ready` + 初步 `state.snapshot`
+11. /canvas 命令族完整实装（edit/wand/confirm/cancel/commit/cleanup/stats）
+12. 集成测试：完整 SELECTING → ISSUED → ACTIVE → CLOSING(commit) 一轮
+
+**关联文件：** `CLAUDE.md`、`PROPOSAL.md`、`docs/architecture.md`、`docs/security.md`、`docs/data-model.md`、`docs/template-spec.md`、`docs/journal.md`
+
+---
+
 ## 2026-04-20 · M1-T7a 端到端联调通过 · **M1 正式完成**
 
 **范围：** M1 最终验收标准实装——浏览器按钮 → WebSocket → 游戏内地图像素变化。

@@ -53,7 +53,7 @@
 ### 2.1 生命周期
 
 ```
-玩家游戏内 /hc edit
+玩家游戏内 /canvas confirm
     │
     ▼
 生成 token = 随机 32 字节 URL-safe base64 (43 字符)
@@ -187,16 +187,18 @@ validateToken(t):
 
 | 节点 | 默认 | 说明 |
 | --- | --- | --- |
-| `hc.use` | op=true, player=false | 使用任何功能（基础总开关） |
-| `hc.edit` | 继承 `hc.use` | 开启编辑会话 |
-| `hc.commit` | 继承 `hc.edit` | 提交招牌（可分离以支持「只能预览不能提交」） |
-| `hc.template.use.*` | 继承 `hc.edit` | 使用特定模板，如 `hc.template.use.subway_station` |
-| `hc.template.all` | true 等价所有子节点 | |
-| `hc.import` | false | 导入 `.canvas` 工程 |
-| `hc.remove.own` | 继承 `hc.edit` | 删除自己的招牌 |
-| `hc.remove.any` | op=true | 删除任何招牌 |
-| `hc.admin` | op=true | 管理命令（reload / stats / cleanup / fsck） |
-| `hc.admin.bypass-limit` | op=true | 无视限流与画布上限 |
+| `canvas.use` | op=true, player=false | 使用任何功能（基础总开关） |
+| `canvas.edit` | 继承 `canvas.use` | 开启编辑会话（`/canvas edit` / 持 Wand 交互） |
+| `canvas.wand` | 继承 `canvas.edit` | 领取 Canvas Wand 物品 |
+| `canvas.commit` | 继承 `canvas.edit` | 提交招牌（可分离以支持「只能预览不能提交」） |
+| `canvas.template.use.*` | 继承 `canvas.edit` | 使用特定模板，如 `canvas.template.use.subway_station` |
+| `canvas.template.all` | true 等价所有子节点 | |
+| `canvas.import` | false | 导入 `.canvas` 工程 |
+| `canvas.remove.own` | 继承 `canvas.edit` | 删除自己的招牌 |
+| `canvas.remove.any` | op=true | 删除任何招牌 |
+| `canvas.admin` | op=true | 管理命令（reload / stats / cleanup / fsck） |
+| `canvas.admin.bypass-limit` | op=true | 无视限流与画布上限 |
+| `canvas.admin.force-break` | op=true | 允许破坏插件保护的成品物品框 |
 
 Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
@@ -206,13 +208,16 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
 | 场景 | 检查点 |
 | --- | --- |
-| `/hc edit` | `hc.edit` |
-| WS auth 成功 | 再次校验 `hc.edit`（防权限中途撤销） |
-| `template.apply` | `hc.template.use.<id>` 或 `hc.template.all` |
-| `commit` | `hc.commit` |
-| `/hc remove <id>` | 招牌 owner == 自己 且 `hc.remove.own` / 或 `hc.remove.any` |
-| 管理员命令 | `hc.admin` |
-| 超出画布 `max-maps` | 需 `hc.admin.bypass-limit` |
+| `/canvas edit` | `canvas.edit` |
+| `/canvas wand` | `canvas.wand` |
+| `/canvas confirm` | `canvas.edit`（同开启会话的权限） |
+| WS auth 成功 | 再次校验 `canvas.edit`（防权限中途撤销） |
+| `template.apply` | `canvas.template.use.<id>` 或 `canvas.template.all` |
+| `commit` | `canvas.commit` |
+| `/canvas remove <id>` | 招牌 owner == 自己 且 `canvas.remove.own` / 或 `canvas.remove.any` |
+| 管理员命令 | `canvas.admin` |
+| 超出画布 `max-maps` | 需 `canvas.admin.bypass-limit` |
+| 破坏成品物品框 | 需 `canvas.admin.force-break`（否则 event cancel） |
 
 任何检查失败 → 返回 `PERMISSION_DENIED` + 审计记录。
 
@@ -245,7 +250,7 @@ server {
     # 推荐 TLS 配置（Mozilla Modern）
     # ...
 
-    location /hc/ {
+    location /canvas/ {
         proxy_pass http://127.0.0.1:8877/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -257,7 +262,7 @@ server {
 }
 ```
 
-插件配置 `web.context-path: "/hc"` 配合。
+插件配置 `web.context-path: "/canvas"` 配合。
 
 ### 7.4 反代 IP 识别
 
@@ -288,7 +293,7 @@ server {
 
 ### 8.2 访问控制
 
-- 审计日志仅 `hc.admin` 可通过 `/hc audit` 查阅
+- 审计日志仅 `canvas.admin` 可通过 `/canvas audit` 查阅
 - 日志**不可在游戏内删除**；如需删除，DB 层外部操作
 - 保留 90 天（可配）
 

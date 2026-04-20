@@ -103,7 +103,7 @@ CREATE INDEX idx_sign_template ON sign_records(template_id);
 CREATE INDEX idx_sign_created ON sign_records(created_at);
 ```
 
-**软删除语义：** `/hc remove` 不立即清理，只打 `deleted_at`；`/hc cleanup` 真正回收 map 回池 + 物品框清除 + 记录删除。
+**软删除语义：** `/canvas remove` 不立即清理，只打 `deleted_at`；`/canvas cleanup` 真正回收 map 回池 + 物品框清除 + 记录删除。
 
 ### 2.5 表：`audit_log`
 
@@ -328,7 +328,7 @@ src/main/resources/db-migrations/
 | 物品框消失但 SignRecord 存在 | 保留记录，标记 `detached=1`（SignRecord v2 schema） |
 | 物品框存在但 SignRecord 被删 | 下次交互时提示并可一键清除 |
 
-### 7.2 `/hc fsck`（v1.x）
+### 7.2 `/canvas fsck`（v1.x）
 
 管理员命令，扫描全局一致性并输出报告。v1.0 不含，v1.1 补。
 

@@ -69,27 +69,35 @@
 
 ### 1.3 核心数据流
 
-**开启编辑：**
+**开启编辑（两段式：先选区再确认）：**
 ```
-Player ─ /hc edit ─▶ Command ─▶ SessionManager
-                                     │
-                     ┌───────────────┤
-                     │               │
-                     ▼               ▼
-              WallResolver      MapPool.reserve(N×M)
-              （识别墙面朝向）    （借出预览地图）
-                     │               │
-                     └───────────────┤
-                                     ▼
-                               FrameDeployer
-                               （放物品框 + 填入池中地图）
-                                     │
-                                     ▼
-                               TokenService.issue(player)
-                                     │
-                                     ▼
-                     玩家聊天栏收到可点击的 URL + token
+Player ─ /canvas edit ─▶ SessionManager 开启 SELECTING 状态
+          或持 Canvas Wand 首次点击              │
+                                                │
+Player 左/右键点击墙面（空手 / 方块 / wand 均可） │
+                                                ▼
+                             记录 pos1 / pos2 + WallResolver 预览
+                                                │
+                             聊天栏回显坐标与矩形信息（N×M 张地图）
+                                                │
+Player ─ /canvas confirm ─▶ SessionManager.create
+                                                │
+                     ┌───────────────────┬──────┴──────────┐
+                     ▼                   ▼                 ▼
+              WallResolver         MapPool.reserve(N×M)  FrameDeployer
+              （锁定朝向/坐标）     （借出预览地图）      （挂物品框 +
+                                                         填 Placeholder）
+                                                │
+                                                ▼
+                                       TokenService.issue(player)
+                                                │
+                                                ▼
+                               玩家聊天栏收到可点击的 URL + token
 ```
+
+**说明：**
+- `/canvas confirm` **立即**挂物品框并填入 Placeholder 地图（浅灰底 + "HikariCanvas" 水印 + 坐标文字），让玩家在游戏内直接看到所选墙面的物理占位，不必等浏览器才知道选对了位置。
+- Placeholder 像素由 `render.PlaceholderRenderer`（M2 引入）生成：预烘焙位图 ASCII 字表（M4 前无字体系统）+ 静态浅灰底色；同一会话多张地图共享同一张像素缓冲区，减小内存。
 
 **编辑过程：**
 ```
@@ -137,7 +145,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 | 层 | 包 | 职责 |
 | --- | --- | --- |
 | 入口 | `HikariCanvas` | 生命周期、依赖装配 |
-| 命令 | `command/` | `/hc` 所有子命令（Brigadier） |
+| 命令 | `command/` | `/canvas` 所有子命令（Brigadier） |
 | Web | `web/` | Javalin HTTP + WebSocket + 静态资源 |
 | 认证 | `web/auth/` | Token 签发、校验、过期 |
 | 会话 | `session/` | 编辑会话状态、每玩家最多 1 活跃 |
@@ -172,34 +180,43 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
                        ┌─────────────┐
                        │   CLOSED    │
                        └──────┬──────┘
-                              │ /hc edit
+                              │ /canvas edit  或  首次持 Wand 点击
                               ▼
                        ┌─────────────┐
-                       │   ISSUED    │ ← Token 已签发，未使用
+                       │  SELECTING  │ ← 玩家尚在挑选墙面
                        └──┬──────┬───┘
-         Token 15 分钟过期│      │ 浏览器握手
+       /canvas cancel     │      │ /canvas confirm
                           ▼      ▼
-                     ┌─────┐  ┌──────────┐
-                     │EXPIRED│  │  ACTIVE  │
-                     └───────┘  └─┬───┬────┘
-                                   │   │
-                       commit      │   │  cancel / WS 断连 5min
-                                   ▼   ▼
-                           ┌───────────┐
-                           │  CLOSING  │
-                           └─────┬─────┘
-                                 │ 资源回收完成
-                                 ▼
-                           ┌───────────┐
-                           │   CLOSED  │
-                           └───────────┘
+                     ┌───────┐  ┌─────────────┐
+                     │ CLOSED│  │   ISSUED    │ ← 物品框已挂 + placeholder
+                     └───────┘  │             │   + Token 已签发
+                                └─┬──────┬────┘
+          Token 15 分钟过期        │      │ 浏览器握手
+                                  ▼      ▼
+                             ┌───────┐  ┌──────────┐
+                             │EXPIRED│  │  ACTIVE  │
+                             └───────┘  └─┬───┬────┘
+                                           │   │
+                               commit      │   │  cancel / WS 断连 5min
+                                           ▼   ▼
+                                   ┌───────────┐
+                                   │  CLOSING  │
+                                   └─────┬─────┘
+                                         │ 资源回收完成
+                                         ▼
+                                   ┌───────────┐
+                                   │   CLOSED  │
+                                   └───────────┘
 ```
 
 ### 3.2 状态转移动作
 
 | 转移 | 动作 |
 | --- | --- |
-| `CLOSED → ISSUED` | 墙面锁定、池借出地图、物品框部署、Token 签发 |
+| `CLOSED → SELECTING` | 仅记 SessionId + playerUuid；**不触碰池、不挂物品框**；等待玩家点击两角 |
+| `SELECTING → SELECTING` | 记录 pos1 / pos2；WallResolver 做合法性预览；聊天栏回显；玩家可以覆盖重选 |
+| `SELECTING → CLOSED` | `/canvas cancel`：仅丢弃 selection 状态 |
+| `SELECTING → ISSUED` | `/canvas confirm`：墙面锁、池借出 N×M 地图、挂物品框填 placeholder、Token 签发 |
 | `ISSUED → ACTIVE` | WS 握手成功，Token 标记为已使用 |
 | `ISSUED → EXPIRED` | Token 过期，归还预览地图到池、卸下物品框 |
 | `ACTIVE → CLOSING(commit)` | 预览地图转 PERMANENT、写 SignRecord、补池 |
@@ -209,7 +226,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 
 ### 3.3 并发约束
 
-- **每玩家最多 1 个活跃会话**。`/hc edit` 时若已有会话，提示「已有活跃会话，先 `/hc cancel`」
+- **每玩家最多 1 个活跃会话**（包括 `SELECTING` 态）。`/canvas edit` 时若已有会话，提示「已有活跃会话，先 `/canvas cancel`」
 - **每面墙最多 1 个活跃会话**。以起始方块坐标 + 法线为锁 key，先到先得
 - 池容量耗尽：拒绝新会话，提示用户稍后
 
@@ -290,12 +307,29 @@ cancel(session):
         freeQueue.offer(m)
 ```
 
-**清理（管理员 `/hc cleanup`）：**
+**清理（管理员 `/canvas cleanup`）：**
 扫描 SQLite 中所有 PERMANENT 记录 → 验证物品框仍存在 → 不存在则转 FREE 归还池。
 
-### 4.4 健康指标
+### 4.4 Placeholder 地图
 
-插件暴露指标（`/hc stats` 管理员命令）：
+`/canvas confirm` 后物品框**立刻**挂上并填入地图，但浏览器尚未打开——此时显示一张静态 Placeholder：
+
+**视觉：**
+- 浅灰底色（palette 索引待 M4 调色板 LUT 就位后固化；M2 先用 MC map palette 中贴近 `#CCCCCC` 的一个索引）
+- 顶部："HikariCanvas"（约 12px 高位图字，居中）
+- 底部：坐标文字 `(x, y, z) → (x', y', z')` 与尺寸 `N×M`（告诉玩家「这块墙就是你刚选的」）
+
+**实现：**
+- 位图字表：M2 阶段预烘焙一个 ASCII 字表（只用英文字母+数字+括号+逗号+箭头），因为 M4 之前还没有 TTF 字体系统
+- 单张 128×128 图像预生成后**所有会话共享**同一张像素缓冲（只读，内存节省）
+- 每张物品框渲染的 Placeholder 需要叠加自己的"位置标签"（例如 "2/6" 表示这是 6 张地图里的第 2 张）→ 用**字符贴图 + 叠加**，不重渲整张；所有可能的标签预生成有限集
+- 打印代码归属：`render/PlaceholderRenderer.java`（M2 引入）
+
+**协议契约：** Placeholder 的像素布局与字表坐标不算公开契约；`ProjectState` 中不存在 Placeholder 元素，任何编辑动作一旦发出（`element.add` 等），Placeholder 立刻被真实渲染覆盖。
+
+### 4.5 健康指标
+
+插件暴露指标（`/canvas stats` 管理员命令）：
 
 - `pool.size`：池总量
 - `pool.free`：空闲数
@@ -391,28 +425,54 @@ CI 集成：
 
 ## 7. 墙面识别与物品框部署
 
-### 7.1 锁定墙面
+### 7.1 交互与选区（两段式）
 
-玩家执行 `/hc edit` 时：
-1. 射线检测玩家视线，命中方块 B 与法线 N（必须为四个水平方向之一：N/S/E/W）
-2. 从 B + N 向右/上扩展搜索平整的 `width × height` 方块区域（模板决定尺寸）
-3. 验证区域内所有方块为实心、无阻挡、无已有物品框
-4. 若失败，提示玩家「请面向一整面 3×2 的墙」等
+**第一段：进入 SELECTING 状态**
 
-### 7.2 物品框部署
+两条入口，二择一：
+
+| 入口 | 条件 |
+| --- | --- |
+| `/canvas edit` 命令 | 玩家空手或手持任何方块都可，进入 SELECTING |
+| 持 Canvas Wand 点击方块 | 无需命令，首次点击即隐式开启 SELECTING |
+
+前者对偶尔使用的玩家友好（零背包负担），后者对频繁使用的玩家效率更高（WorldEdit 式肌肉记忆）。两种选完成后的语义等价。
+
+**第二段：指定对角线并确认**
+
+1. **选 pos1**：在 SELECTING 状态下，玩家**左键**点击墙面任一方块
+   - 服务端记录 `pos1 = block.location`、`normal = interactEvent.getBlockFace()`
+   - 聊天栏回显：`§7第一角 §f(10, 64, -5) §8朝 §fEast`
+2. **选 pos2**：玩家**右键**点击另一方块
+   - 必须与 `pos1` 位于同一平面（同一 normal + 两点的 normal 方向坐标相等）
+   - WallResolver 做合法性预览：bounding box 内所有方块是否可放物品框（实心方块 + 当前无挂件）
+   - 预览成功 → 聊天栏回显：`§7选区 §f3×2 §8(6 张地图) §f(10, 64, -5) → (13, 65, -5)  §7/canvas confirm 确认`
+   - 预览失败 → 说明具体原因（平面不一致 / 方块不是实心 / 已有物品框等），`pos1/pos2` 均保持，允许玩家继续覆盖重选
+3. **手打 `/canvas confirm` 确认**
+   - 立即走 7.2 的部署流程
+   - 确认成功后**从玩家 inventory 移除 Wand**（如果持有）
+
+**SELECTING 期间的其他行为：**
+- 玩家重复点击 = 覆盖更新最近的同键位点
+- `/canvas cancel` = 丢弃 selection，回到 CLOSED
+- 玩家断线 / 离线 = SELECTING 立即释放（无资源占用）
+
+### 7.2 物品框部署（/canvas confirm 后立即执行）
 
 对区域内每个方块位置：
-- `spawnItemFrame(block, facing = N)`
-- `frame.setItem(mapItem)`  ← 池借出的地图
+- `spawnItemFrame(block, facing = normal)`
+- `frame.setItem(mapItem)` ← **池借出的地图；像素填 Placeholder（§4.x）**
 - `frame.setRotation(NONE)`
-- `frame.setInvisible(true)`  ← 编辑中隐藏边框
-- `frame.setFixed(true)`  ← 防止破坏/旋转
+- `frame.setInvisible(true)` ← 编辑中隐藏边框
+- `frame.setFixed(true)` ← 防止破坏/旋转
 
-PDC 标记：`hc:session = sessionId`，便于清理。
+PDC 标记：`hikari_canvas:session = sessionId`，便于清理与后续 WS 关联。
+
+部署完成后玩家**立即能在游戏中看到浅灰的 Placeholder 网格**，直观验证墙面选对。
 
 ### 7.3 提交 vs 取消
 
-- **提交**：物品框保持可见（可配置）或继续 INVISIBLE；PDC 标记改为 `hc:sign = signId`；`FIXED` 保持
+- **提交**：物品框保持可见（可配置）或继续 INVISIBLE；PDC 标记改为 `hikari_canvas:sign = signId`；`FIXED` 保持
 - **取消**：物品框整体移除；预览地图归还池
 
 ---
@@ -471,7 +531,7 @@ PDC 标记：`hc:session = sessionId`，便于清理。
 
 - 默认 `bind: 127.0.0.1`，端口默认 `8877`（可配置）
 - 公网场景：必须反代 + TLS
-- 支持配置 `context-path`（如 `/hc/`），便于反代下挂多个插件
+- 支持配置 `context-path`（如 `/canvas/`），便于反代下挂多个插件
 
 ---
 
@@ -498,8 +558,8 @@ PDC 标记：`hc:session = sessionId`，便于清理。
 ### 10.3 可观测性
 
 - SLF4J + 配置文件控制 log level
-- `/hc stats` 管理员命令：池状态、活跃会话、近期事件
-- `/hc debug <sessionId>`：单会话详情
+- `/canvas stats` 管理员命令：池状态、活跃会话、近期事件
+- `/canvas debug <sessionId>`：单会话详情
 - 审计日志：commit / cancel / cleanup / auth 失败，写 SQLite
 
 ### 10.4 安全
@@ -521,7 +581,7 @@ PDC 标记：`hc:session = sessionId`，便于清理。
 web:
   bind: 127.0.0.1
   port: 8877
-  context-path: ""                  # 反代时可设 "/hc"
+  context-path: ""                  # 反代时可设 "/canvas"
   public-url: "http://127.0.0.1:8877" # 生成给玩家的链接
 
 pool:
