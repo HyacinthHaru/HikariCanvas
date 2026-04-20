@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-04-20 · M1-T7a 端到端联调通过 · **M1 正式完成**
+
+**范围：** M1 最终验收标准实装——浏览器按钮 → WebSocket → 游戏内地图像素变化。
+
+**里程碑：** PROPOSAL §6 M1 行从「1 周」更新为「已完成（2026-04-20）」。从 M0 立项（2026-04-18）到 M1 收尾共 3 个工作日，较原估 1 周缩短。
+
+**端到端链路（实测）：**
+
+```
+Minecraft 客户端 ─ /hc give ─▶ 插件发地图 item + MapView 给玩家
+浏览器 ─ 点 Paint 按钮 ─▶ ws://127.0.0.1:8877/ws ─ {op:"paint"}
+插件 WebServer.handleMessage(paint) ─▶ paintHandler.run()
+HikariCanvas.paintAllHeldMapsRed ─▶ Bukkit 主线程 runTask
+遍历 online players 主手 filled_map ─▶ MapPacketSender.sendFullMap
+PacketEvents 发 ClientboundMapItemDataPacket ─▶ MC 客户端地图变红
+```
+
+**改动（代码层）：**
+
+**Gradle ↔ npm 联动（`plugin/build.gradle.kts`）：**
+- `installWebDeps`（Exec）：`npm install` in `web/`，`onlyIf` 判断 `node_modules` 不存在（避免每次 CI/clean 重复下载）
+- `buildWeb`（Exec）：`npm run build`；声明完整 inputs（`package.json`/`package-lock.json`/`src/`/`index.html`/`vite.config.ts`/`tsconfig.json`）+ outputs `web/dist`，Gradle up-to-date 检查得以生效
+- `copyWebToResources`（Copy）：把 `web/dist` 拷到 `build/generated/web-resources/web/`
+- `sourceSets.main.resources.srcDir(build/generated/web-resources)` + `processResources.dependsOn(copyWebToResources)`：把前端产物自动并入 plugin 资源，shadowJar 自带包进
+- **陷阱：** Gradle 9 的 Exec task `doFirst {}` 里不再可用 `exec { ... }` 闭包（"Too many arguments for 'fun exec(): Unit'"）。改成**独立 Exec task + onlyIf** 解决
+
+**后端（`WebServer.java` / `HikariCanvas.java`）：**
+- `WebServer` 构造参数加 `Runnable paintHandler`；`handleMessage` 新增 case `"paint"` → `paintHandler.run() + ack(submitted:true)`
+- `HikariCanvas.paintAllHeldMapsRed()`：`Bukkit.getScheduler().runTask(this, ...)` 切主线程；遍历 `Bukkit.getOnlinePlayers()`；对主手 `filled_map` 调 `MapPacketSender.sendFullMap`
+- 架构纪律 §5.2.6 继续被遵守：所有 packet 发送仍在 `MapPacketSender` 内部，HikariCanvas 主类只调 sender API
+
+**前端（`web/` 子项目）：**
+- `vite.config.ts`：dev server 端口 `5173` → `9173` + `strictPort: true`（用户本地 5173 被占；strictPort 让冲突时直接报错而不是静默降级）
+- `index.html`：新增 `Paint held map → red` 按钮（红色主色调）
+- `main.ts`：抽出 `send(op)` helper；新增 paint 按钮 handler；`resolveWsUrl()` 改得不依赖具体 dev 端口——只要 origin 不是 `127.0.0.1:8877` 就跨源连插件（未来再换 dev 端口无需改代码）
+
+**TODO 留给 M7 打磨阶段：** `Javalin 7 的 cfg.staticFiles.add("/web", CLASSPATH)` 在 shadow/fat jar setup 下 directory discovery 失败，抛 `JavalinException: "... does not exist. Depending on your setup, empty folders might not get copied to classpath."`。web 资源**实际已进 jar**（`jar tf` 可见 `web/index.html` 和 `web/assets/*`）。M1-T7a 先绕开：开发期走 Vite dev + 跨源 WS。M7 单 jar 部署时改用手写 GET handler 读 classpath 资源，或 `Location.EXTERNAL` + 已知文件系统路径。WebServer 代码里已留 `TODO(M7)` 注释。
+
+**WS idle timeout：** 实测时出现过 `WebSocketTimeoutException: Idle Timeout 30005/30000 ms` —— Jetty 12 默认 30s 无消息就断，属 Javalin/Jetty 默认行为。前端 `ensureConnected()` 已处理重连；M2 做会话/token 时可一并调大或上应用层心跳。
+
+**实测（你自测）：**
+- MC 1.21.11 客户端连 127.0.0.1 → `/hc give` 拿到空白 canvas 地图
+- 浏览器 `http://127.0.0.1:9173/` → 点 Paint → 游戏内地图可视区**变红**
+- server console 出现 `WS paint op: painted 1 held maps`
+- 无 exception / Caused by
+
+**里程碑总结（M0→M1）：**
+
+| 任务 | commit | 关键成果 |
+| --- | --- | --- |
+| T1 Gradle 骨架 | `525ac54` | paperweight-userdev 2.0.0-beta.21 + paper-api 1.21.11 sync 通过 |
+| T2 插件主类 | `404a4af` | 最小 `JavaPlugin` + `paper-plugin.yml`，jar 能 load |
+| T3 runServer | `4c14fc8` | `xyz.jpenilla.run-paper` 接入；EULA 自动接受；生命周期日志两端跑通 |
+| T4 Javalin + WS | `dd8097c` | Javalin 7 + Jetty 12 + Jackson + shadow 胖 jar；ws upgrade 101 握手通过 |
+| T5 /hc paint + Packet | `73ce7bc` | **核心风险验证通过**：`WrapperPlayServerMapData` 发包直接改像素，游戏内地图涂红 |
+| T6 前端骨架 | `8838ea5` | Vite 8.0.9 + TS 6.0.3；原生 DOM；build 产物 < 2KB |
+| T7b 契约修正 | `8d497e7` | snapshot 测试台推迟到 M4 |
+| T7a 端到端 | *本次* | 浏览器 → WS → 游戏内地图像素变化（**M1 验收**） |
+
+**关联文件：** `PROPOSAL.md`（§6 M1 行状态更新）、`plugin/build.gradle.kts`、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`、`web/index.html`、`web/src/main.ts`、`web/vite.config.ts`、`docs/journal.md`
+
+---
+
 ## 2026-04-20 · M1-T7b 契约修正：snapshot 测试台推迟到 M4
 
 **范围：** 纯文档变更，PROPOSAL 三处表述从"M1 就建 snapshot 测试台"改为"M4 渲染引擎立项期建立"

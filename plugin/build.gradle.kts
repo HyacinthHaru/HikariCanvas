@@ -24,6 +24,51 @@ dependencies {
     implementation("com.github.retrooper:packetevents-spigot:2.11.2")
 }
 
+// ---- Gradle ↔ npm 联动 ----
+// 把 web/ 子项目的 Vite 产物拷成 Java 资源，让 shadowJar 自动包进去。
+// 产出挂在 web/ 前缀下，Javalin 再通过 cfg.staticFiles.add("/web", CLASSPATH) serve。
+
+val webBuildDir = rootProject.layout.projectDirectory.dir("web")
+val generatedWebResources = layout.buildDirectory.dir("generated/web-resources")
+
+val installWebDeps = tasks.register<Exec>("installWebDeps") {
+    group = "build"
+    description = "npm install in web/ — only runs when node_modules is missing"
+    workingDir = webBuildDir.asFile
+    commandLine("npm", "install")
+    onlyIf { !webBuildDir.dir("node_modules").asFile.exists() }
+    outputs.dir(webBuildDir.dir("node_modules"))
+}
+
+val buildWeb = tasks.register<Exec>("buildWeb") {
+    dependsOn(installWebDeps)
+    group = "build"
+    description = "Runs `npm run build` in web/"
+    workingDir = webBuildDir.asFile
+    commandLine("npm", "run", "build")
+    inputs.file(webBuildDir.file("package.json"))
+    inputs.file(webBuildDir.file("package-lock.json"))
+    inputs.file(webBuildDir.file("vite.config.ts"))
+    inputs.file(webBuildDir.file("tsconfig.json"))
+    inputs.file(webBuildDir.file("index.html"))
+    inputs.dir(webBuildDir.dir("src"))
+    outputs.dir(webBuildDir.dir("dist"))
+}
+
+val copyWebToResources = tasks.register<Copy>("copyWebToResources") {
+    dependsOn(buildWeb)
+    from(webBuildDir.dir("dist"))
+    into(generatedWebResources.map { it.dir("web") })
+}
+
+sourceSets.main {
+    resources.srcDir(generatedWebResources)
+}
+
+tasks.processResources {
+    dependsOn(copyWebToResources)
+}
+
 tasks {
     compileJava {
         options.encoding = "UTF-8"

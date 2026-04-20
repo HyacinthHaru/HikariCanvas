@@ -1,7 +1,7 @@
-// HikariCanvas M1-T6 前端探针：一个按钮，连 ws://127.0.0.1:8877/ws，发 ping，
-// 把收到的响应打到页面 log 区域。消息信封遵循 docs/protocol.md §2。
-
-const WS_URL = 'ws://127.0.0.1:8877/ws';
+// HikariCanvas M1-T7a 前端探针：两个按钮（ping / paint），
+// 都走同一条 WebSocket 连接，消息信封遵循 docs/protocol.md §2。
+// 被插件 serve 时为同源（ws:// 同 host/port 切路径），
+// 被 Vite dev server serve 时跨源连 127.0.0.1:8877（开发调试用）。
 
 interface Envelope<P = unknown> {
     v: number;
@@ -11,10 +11,30 @@ interface Envelope<P = unknown> {
     payload?: P;
 }
 
+function resolveWsUrl(): string {
+    // 同源条件：被 WebServer 自己 serve（M7 单 jar 模式），页面的 origin 就是插件端口
+    // 其余情况（Vite dev 任意端口、file:// 直接打开 index.html）→ 跨源连插件
+    const loc = window.location;
+    const pluginHost = '127.0.0.1';
+    const pluginPort = '8877';
+    if (loc.hostname === pluginHost && loc.port === pluginPort) {
+        const scheme = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${scheme}//${loc.host}/ws`;
+    }
+    return `ws://${pluginHost}:${pluginPort}/ws`;
+}
+
+const WS_URL = resolveWsUrl();
+
 const logEl = document.getElementById('log');
-const btn = document.getElementById('ping-btn');
-if (!(logEl instanceof HTMLElement) || !(btn instanceof HTMLButtonElement)) {
-    throw new Error('missing #log or #ping-btn in DOM');
+const pingBtn = document.getElementById('ping-btn');
+const paintBtn = document.getElementById('paint-btn');
+if (
+    !(logEl instanceof HTMLElement) ||
+    !(pingBtn instanceof HTMLButtonElement) ||
+    !(paintBtn instanceof HTMLButtonElement)
+) {
+    throw new Error('missing #log / #ping-btn / #paint-btn in DOM');
 }
 
 let ws: WebSocket | null = null;
@@ -55,24 +75,31 @@ function connect(): Promise<WebSocket> {
     });
 }
 
-btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    try {
-        const socket = await connect();
-        const env: Envelope = {
-            v: 1,
-            op: 'ping',
-            id: `c-${seq++}`,
-            ts: Date.now(),
-        };
-        const txt = JSON.stringify(env);
-        print('sent', `→ ${txt}`);
-        socket.send(txt);
-    } catch (e) {
-        print('err', e instanceof Error ? e.message : String(e));
-    } finally {
-        btn.disabled = false;
-    }
+async function send(op: string): Promise<void> {
+    const socket = await connect();
+    const env: Envelope = {
+        v: 1,
+        op,
+        id: `c-${seq++}`,
+        ts: Date.now(),
+    };
+    const txt = JSON.stringify(env);
+    print('sent', `→ ${txt}`);
+    socket.send(txt);
+}
+
+pingBtn.addEventListener('click', async () => {
+    pingBtn.disabled = true;
+    try { await send('ping'); }
+    catch (e) { print('err', e instanceof Error ? e.message : String(e)); }
+    finally { pingBtn.disabled = false; }
 });
 
-print('meta', 'ready — click the button to probe the plugin');
+paintBtn.addEventListener('click', async () => {
+    paintBtn.disabled = true;
+    try { await send('paint'); }
+    catch (e) { print('err', e instanceof Error ? e.message : String(e)); }
+    finally { paintBtn.disabled = false; }
+});
+
+print('meta', `ready — ws target = ${WS_URL}`);

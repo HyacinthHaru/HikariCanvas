@@ -15,6 +15,7 @@
       }
       h1 { margin-bottom: 0.25rem; }
       p.lead { color: #888; margin-top: 0; }
+      .actions { display: flex; gap: 0.6rem; margin: 1rem 0; }
       button {
         padding: 0.6rem 1.2rem;
         font-size: 1rem;
@@ -23,8 +24,9 @@
         border: 1px solid #888;
       }
       button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.primary { background: #e4002b; color: #fff; border-color: #b30022; }
       #log {
-        margin-top: 1rem;
+        margin-top: 0.5rem;
         padding: 1rem;
         background: #111;
         color: #eee;
@@ -43,8 +45,11 @@
   </head>
   <body>
     <h1>HikariCanvas dev probe</h1>
-    <p class="lead">本地开发页面。连到插件的 <code>ws://127.0.0.1:8877/ws</code>，发 <code>ping</code>。</p>
-    <button id="ping-btn">Ping server</button>
+    <p class="lead">本地开发页面。WebSocket 默认连同源 <code>/ws</code>，也就是 <code>ws://127.0.0.1:8877/ws</code>。</p>
+    <div class="actions">
+      <button id="ping-btn">Ping server</button>
+      <button id="paint-btn" class="primary">Paint held map → red</button>
+    </div>
     <div id="log" aria-live="polite"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
