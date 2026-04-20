@@ -5,6 +5,8 @@ import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import moe.hikari.canvas.command.CanvasCommand;
 import moe.hikari.canvas.deploy.MapPacketSender;
+import moe.hikari.canvas.session.TokenService;
+import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.MigrationRunner;
 import moe.hikari.canvas.web.WebServer;
@@ -15,7 +17,9 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.MapMeta;
 import org.bukkit.map.MapView;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitTask;
 
+import java.time.Duration;
 import java.util.Arrays;
 
 @SuppressWarnings("UnstableApiUsage") // Paper Lifecycle API 标记为 experimental 但稳定可用
@@ -24,6 +28,9 @@ public final class HikariCanvas extends JavaPlugin {
     private static final byte RED_PALETTE = 18;
 
     private Database database;
+    private AuditLog auditLog;
+    private TokenService tokenService;
+    private BukkitTask tokenPurgeTask;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
 
@@ -40,6 +47,15 @@ public final class HikariCanvas extends JavaPlugin {
         // 持久化：按 docs/data-model.md §2.1 在 plugins/HikariCanvas/data.db
         database = new Database(getLogger(), getDataFolder().toPath().resolve("data.db"));
         new MigrationRunner(database.jdbi(), getLogger()).run();
+        auditLog = new AuditLog(database.jdbi());
+
+        // 一次性 token 服务（contract: docs/security.md §2）。TTL 暂硬编码 15m，待 config.yml 接入
+        tokenService = new TokenService(
+                auditLog, getLogger(), Duration.ofMinutes(15).toMillis());
+        // 每 5 分钟异步清一次过期/已用 token
+        long ticks5min = 20L * 60 * 5;
+        tokenPurgeTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
+                this, () -> tokenService.purgeExpired(), ticks5min, ticks5min);
 
         mapPacketSender = new MapPacketSender();
 
@@ -57,6 +73,10 @@ public final class HikariCanvas extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (tokenPurgeTask != null) {
+            tokenPurgeTask.cancel();
+            tokenPurgeTask = null;
+        }
         if (webServer != null) {
             webServer.stop();
             webServer = null;

@@ -5,6 +5,37 @@
 
 ---
 
+## 2026-04-20 · M2-T3 TokenService + AuditLog 封装
+
+**范围：** 一次性 token 签发 / 校验 / 消耗的核心服务，并带 SHA-256 审计。按 `docs/security.md §2` 落地。限流（§2.4）延后到 M2-T10 WS 握手时一起做（需要 IP 上下文）。
+
+**改动：**
+- `plugin/src/main/java/moe/hikari/canvas/storage/AuditLog.java`（新）：`audit_log` 表的薄封装；字段 `event / player_uuid / player_name / session_id / ip_hash / details(JSON)`；`details` 用 Jackson 序列化 `Map<String, Object>`；插入失败 fire-and-forget
+- `plugin/src/main/java/moe/hikari/canvas/session/TokenService.java`（新）：
+  - `SecureRandom` + 32 字节 + `Base64.getUrlEncoder().withoutPadding()` = 43 字符
+  - 内存 `ConcurrentHashMap<String, Record>` 主存
+  - `issue(playerUuid, playerName, sessionId)` → 返回原文 token，同步 `AUTH_ISSUED` 事件入 `audit_log`（**只存 token 的 SHA-256**，永不落盘原文）
+  - `peek(token)` / `consume(token)` 共用 `evaluate(..., consume=)`：长度 / base64 解码 / 不存在 / 已使用 / 过期**五重校验**，按 security.md §2.3 顺序
+  - `consume` 使用 `ConcurrentHashMap.replace(k, oldV, newV)` 做原子 CAS，防并发重复消费
+  - `purgeExpired()` 惰性清理，HikariCanvas 每 5 分钟异步调用一次
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`：onEnable 构造 AuditLog + TokenService 并挂 5min 周期 purge task；onDisable cancel task
+
+**设计细节与取舍：**
+- **TTL 硬编码 15 min**（contract 默认）；config.yml 接入留给 M2-T10 或后续 polish 任务一并做
+- **API 分 `peek` 和 `consume` 两个入口**：HTTP 预握手 `GET /api/session/:token` 只 peek 不消耗（供客户端在 WS auth 前确认会话信息）；WS `auth` 帧到达时才 consume（security.md §2.1 的"消耗后立即失效"）
+- **rotate**（§2.2 的 WS 握手成功后签发新 token）没独立 API；调用方拿到 Ok 结果后自己 `issue` 一次即可——避免给 TokenService 加隐含状态
+- **RejectReason 不向外透露**（security.md §2.3："失败场景统一返回 AUTH_FAILED；不向外透露具体原因，避免枚举攻击"）——内部 log 记具体原因供运维排错，WS/HTTP 响应只返回统一 401/4001
+- 限流实现延后：**单玩家 10/5min 封禁 / 全局 100/min 保守模式** 需要 IP 信息，WS 握手前无从获取；T10 实现 `GET /api/session/:token` 时再在入口做限流
+
+**验证：**
+- `./gradlew :plugin:shadowJar` 通过
+- runServer 启动正常（Done 8.675s）；TokenService + 5min async purge task 挂上无异常
+- `audit_log` 表仍为空（还没有业务链路触发 `issue`；M2-T10/T11 会出现真实记录）
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/storage/AuditLog.java`、`plugin/src/main/java/moe/hikari/canvas/session/TokenService.java`、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-20 · M2-T2 SQLite + HikariCP + JDBI 接入 + schema v1 建表
 
 **范围：** 按 data-model.md §2 全量建表；持久化基础设施就位，后续 T3/T4/T7 等能直接写 SQL
