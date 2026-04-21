@@ -5,6 +5,83 @@
 
 ---
 
+## 2026-04-21 · M3-T13 commit 写入真实 project_json
+
+**范围：** `/canvas commit` 时把 session 的权威 `ProjectState` 经 Jackson 序列化写入 `sign_records.project_json`，替代占位 `"{}"`。契约对应 `docs/data-model.md sign_records.project_json` + `docs/architecture.md §8.2`。
+
+**改动：**
+
+- `CanvasCommand.JSON` 静态 ObjectMapper 增 `NON_NULL` 包含策略——与 WebServer 同策略；hollow rect 的 `fill=null` 不写字段
+- `CanvasCommand.runCommit` 新增 `ProjectState projectState = s.projectState();` 快照（必须在 `sessionManager.commit` 之前，commit 会 `forget` session）
+- `insertSignRecord(...)` 签名扩一个参数 `ProjectState`；序列化失败回退 `"{}"` + WARNING 日志
+- ProjectState 为 null 时（异常路径）兜底写 `"{}"`
+
+**JSON 形态示例**（commit 一面 2×2 hello_world 墙面）：
+
+```json
+{
+  "version": 3,
+  "canvas": {"widthMaps": 2, "heightMaps": 2, "background": "#4A90E2"},
+  "elements": [
+    {"type": "rect", "id": "e-...", "x": 8, "y": 8, "w": 240, "h": 240,
+     "rotation": 0, "locked": false, "visible": true,
+     "stroke": {"width": 2, "color": "#FFFFFF"}},
+    {"type": "text", "id": "e-...", "x": 0, "y": 121, "w": 256, "h": 14,
+     "rotation": 0, "locked": false, "visible": true,
+     "text": "HELLO WORLD", "fontId": "bitmap", "fontSize": 14,
+     "color": "#FFFFFF", "align": "center"}
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}
+```
+
+**M4 承接：** M4 的 `project.load` op（{@code docs/protocol.md §5.2}）会反序列化本字段重构 ProjectState，进入二次编辑。ProjectSnapshot record 的 Jackson 兼容性已在本次 commit 一并验证（FIELD 可见性 + 多态）。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`
+
+---
+
+## 2026-04-21 · M3-T12 template.apply + hello_world 硬编码模板
+
+**范围：** `docs/protocol.md §5.4` `template.apply` op 骨架 + 1 个硬编码模板 `hello_world`（本项目方案 α 的 M3 承诺范围）。正规 YAML 模板系统留 M6。
+
+**EditSession 扩展：**
+- 新 synchronized 方法 `applyTemplate(templateId, params)`
+- M3 只识别 `"hello_world"`；其他 templateId → `INVALID_PAYLOAD "unknown template: X (M3 only supports hello_world)"`
+- 流程：pre-snapshot → clear elements → 改背景色 → 插入模板 elements → commitHistory → bump version → 返回 `OkSnapshot + fullCanvas`
+
+**hello_world 视觉定稿（画布自适应）：**
+
+| 层 | 参数 |
+|---|---|
+| 背景 | `#4A90E2`（湖蓝） |
+| 外框 | RectElement：`(margin, margin, w-2*margin, h-2*margin)`；margin=8px；空心 stroke=2px 白色 |
+| 文字 | TextElement：`HELLO WORLD` 居中白色；字号 `scale = max(1, usable / (11 * 6))`；BitmapFont 5×7 scale=1 时单字 6px 步进 |
+
+**WebServer：**
+- op 分发表加 `"template.apply"`
+- handler：`stringOrNull(payload.templateId) + mapOrEmpty(payload.params)` → `es.applyTemplate(...)` → `OkSnapshot` 路径走 pushSnapshot + fullCanvas throttler.submit
+
+**前端 probe UI 加 3 个按钮**（方便 M3 端到端手测）：
+- `Apply hello_world template` → `template.apply { templateId: "hello_world" }`
+- `Undo` → `undo {}`
+- `Redo` → `redo {}`
+- 同时给 `send(op, payload?)` 扩出第二个参数支持带 payload 发送
+
+**未决项（M6 承接）：**
+- YAML template spec 解析 / 模板库多选
+- 参数化模板（`params.{name, line_color}` 等）
+- 模板预览缩略图
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`（+ applyTemplate + buildHelloWorld）
+- `plugin/src/main/java/moe/hikari/canvas/state/ProjectState.java`（+ `clearElements`）
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`（op 分发）
+- `web/index.html` + `web/src/main.ts`（3 个测试按钮）
+
+---
+
 ## 2026-04-21 · M3-T11 undo / redo / history.mark
 
 **范围：** `docs/protocol.md §5.5` 的历史类 op 全部落地。每会话 16 步环形历史栈，undo/redo 全量下行 `state.snapshot`。

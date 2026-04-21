@@ -230,7 +230,8 @@ public final class WebServer {
                  "canvas.background",
                  "undo",
                  "redo",
-                 "history.mark" -> dispatchEditOp(ctx, in, bound);
+                 "history.mark",
+                 "template.apply" -> dispatchEditOp(ctx, in, bound);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
     }
@@ -304,6 +305,12 @@ public final class WebServer {
             case "undo" -> es.undo();
             case "redo" -> es.redo();
             case "history.mark" -> es.historyMark(stringOrNull(payload.get("label")));
+            case "template.apply" -> {
+                String tpl = stringOrNull(payload.get("templateId"));
+                @SuppressWarnings("unchecked")
+                Map<String, Object> tp = (Map<String, Object>) mapOrEmpty(payload.get("params"));
+                yield es.applyTemplate(tpl, tp);
+            }
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
         };
 

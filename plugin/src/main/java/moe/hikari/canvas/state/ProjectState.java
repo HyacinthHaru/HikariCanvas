@@ -87,6 +87,10 @@ public final class ProjectState {
         elements.add(index, e);
     }
 
+    public void clearElements() {
+        elements.clear();
+    }
+
     public Element removeElementAt(int index) {
         return elements.remove(index);
     }

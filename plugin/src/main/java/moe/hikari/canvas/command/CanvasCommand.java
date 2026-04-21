@@ -1,5 +1,6 @@
 package moe.hikari.canvas.command;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.context.CommandContext;
@@ -14,6 +15,7 @@ import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionState;
 import moe.hikari.canvas.session.TokenService;
+import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.storage.Database;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
@@ -50,7 +52,9 @@ import java.util.logging.Level;
  */
 public final class CanvasCommand {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    // NON_NULL 与 WebServer 同策略：hollow rect 的 fill=null 不写字段，与协议 §7 一致
+    private static final ObjectMapper JSON = new ObjectMapper()
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
     private final JavaPlugin plugin;
     private final SessionManager sessionManager;
@@ -238,6 +242,7 @@ public final class CanvasCommand {
         List<Integer> mapIds = s.mapIds();
         UUID ownerUuid = s.playerUuid();
         String ownerName = s.playerName();
+        ProjectState projectState = s.projectState();  // M3-T13：snapshot 下来写入 project_json
         if (wall == null || mapIds == null) {
             player.sendMessage(Component.text(
                     "Nothing to commit—run /canvas confirm first.", NamedTextColor.RED));
@@ -253,7 +258,7 @@ public final class CanvasCommand {
         }
         // Ok
         int promoted = frameDeployer.promote(s.id(), signId, wall.world());
-        insertSignRecord(signId, ownerUuid, ownerName, wall, mapIds);
+        insertSignRecord(signId, ownerUuid, ownerName, wall, mapIds, projectState);
         CanvasWand.removeAllFrom(player, plugin);
 
         player.sendMessage(Component.text(
@@ -263,7 +268,8 @@ public final class CanvasCommand {
     }
 
     private void insertSignRecord(String signId, UUID ownerUuid, String ownerName,
-                                  WallResolver.Result.Ok wall, List<Integer> mapIds) {
+                                  WallResolver.Result.Ok wall, List<Integer> mapIds,
+                                  ProjectState projectState) {
         long now = System.currentTimeMillis();
         String mapIdsJson;
         try {
@@ -272,7 +278,20 @@ public final class CanvasCommand {
             mapIdsJson = "[]";
             plugin.getLogger().log(Level.WARNING, "serialize mapIds failed", e);
         }
+        // M3-T13：项目工程数据真实序列化。空状态（未改过）也写完整结构（空 elements）而非 "{}"，
+        // 便于 M4 load 时 new ProjectState(json) 一把到位
+        String projectJson;
+        try {
+            projectJson = projectState != null
+                    ? JSON.writeValueAsString(projectState)
+                    : "{}";
+        } catch (Exception e) {
+            projectJson = "{}";
+            plugin.getLogger().log(Level.WARNING,
+                    "serialize projectState failed for " + signId, e);
+        }
         final String finalMapIdsJson = mapIdsJson;
+        final String finalProjectJson = projectJson;
         try {
             database.jdbi().useHandle(h -> h.execute(
                     "INSERT INTO sign_records (id, owner_uuid, owner_name, world, "
@@ -283,7 +302,7 @@ public final class CanvasCommand {
                     signId, ownerUuid.toString(), ownerName, wall.world().getName(),
                     wall.minX(), wall.minY(), wall.minZ(), wall.facing().name(),
                     wall.width(), wall.height(),
-                    finalMapIdsJson, "{}", null, null,
+                    finalMapIdsJson, finalProjectJson, null, null,
                     now, now, null));
         } catch (Exception e) {
             plugin.getLogger().log(Level.SEVERE, "INSERT sign_records failed for " + signId, e);

@@ -31,11 +31,17 @@ const logRaw = document.getElementById('log');
 const statusRaw = document.getElementById('status');
 const pingRaw = document.getElementById('ping-btn');
 const paintRaw = document.getElementById('paint-btn');
+const helloRaw = document.getElementById('hello-btn');
+const undoRaw = document.getElementById('undo-btn');
+const redoRaw = document.getElementById('redo-btn');
 if (
     !(logRaw instanceof HTMLElement) ||
     !(statusRaw instanceof HTMLElement) ||
     !(pingRaw instanceof HTMLButtonElement) ||
-    !(paintRaw instanceof HTMLButtonElement)
+    !(paintRaw instanceof HTMLButtonElement) ||
+    !(helloRaw instanceof HTMLButtonElement) ||
+    !(undoRaw instanceof HTMLButtonElement) ||
+    !(redoRaw instanceof HTMLButtonElement)
 ) {
     throw new Error('missing required DOM nodes');
 }
@@ -43,6 +49,9 @@ const logEl: HTMLElement = logRaw;
 const statusEl: HTMLElement = statusRaw;
 const pingBtn: HTMLButtonElement = pingRaw;
 const paintBtn: HTMLButtonElement = paintRaw;
+const helloBtn: HTMLButtonElement = helloRaw;
+const undoBtn: HTMLButtonElement = undoRaw;
+const redoBtn: HTMLButtonElement = redoRaw;
 
 function print(cls: 'sent' | 'recv' | 'err' | 'meta', msg: string): void {
     const span = document.createElement('span');
@@ -73,12 +82,12 @@ let ws: WebSocket | null = null;
 let seq = 0;
 let authenticated = false;
 
-function send(op: string): void {
+function send(op: string, payload?: unknown): void {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         print('err', 'socket not open');
         return;
     }
-    const env: Envelope = { v: 1, op, id: `c-${seq++}`, ts: Date.now() };
+    const env: Envelope = { v: 1, op, id: `c-${seq++}`, ts: Date.now(), payload };
     const txt = JSON.stringify(env);
     print('sent', `→ ${txt}`);
     ws.send(txt);
@@ -115,6 +124,9 @@ function handleReady(payload: ReadyPayload): void {
         `server ${payload.serverVersion} · protocol v${payload.protocolVersion}`);
     pingBtn!.disabled = false;
     paintBtn!.disabled = false;
+    helloBtn!.disabled = false;
+    undoBtn!.disabled = false;
+    redoBtn!.disabled = false;
 }
 
 function handleMessage(raw: string): void {
@@ -163,6 +175,9 @@ function connect(token: string | null): void {
         authenticated = false;
         pingBtn!.disabled = true;
         paintBtn!.disabled = true;
+        helloBtn!.disabled = true;
+        undoBtn!.disabled = true;
+        redoBtn!.disabled = true;
         if (ev.code === 4001) {
             setStatus('err', 'Session auth failed (WS close 4001).');
         } else if (statusEl!.className !== 'err') {
@@ -181,6 +196,18 @@ pingBtn.addEventListener('click', () => {
 paintBtn.addEventListener('click', () => {
     if (!authenticated) return;
     send('paint');
+});
+helloBtn.addEventListener('click', () => {
+    if (!authenticated) return;
+    send('template.apply', { templateId: 'hello_world' });
+});
+undoBtn.addEventListener('click', () => {
+    if (!authenticated) return;
+    send('undo', {});
+});
+redoBtn.addEventListener('click', () => {
+    if (!authenticated) return;
+    send('redo', {});
 });
 
 // 页面加载入口
