@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-04-21 · M2-T10 WS 预握手 + auth/ready 协议
+
+**范围：** 按 `docs/protocol.md §3.1 / §3.2` 落地会话进入协议：HTTP 预握手校验 token 并返回会话元信息；WS /ws 首帧必须是 `op=auth`；`ready` 响应带 `projectState` 占位。
+
+**改动：**
+- `WebServer.java` 重大扩展：
+  - 构造器签名：`(log, host, port, tokenService, sessionManager, serverVersion, paintHandler)`
+  - `GET /api/session/{token}` → `tokenService.peek(token)`（不消耗），200 返回 session 元信息 / 401 AUTH_FAILED / 409 SESSION_CLOSED
+  - WS auth-first 状态机：`ctx.attribute("sessionId")` 是否绑定判定阶段；未绑定时只接受 `op=auth`，其它 op → `AUTH_FAILED` + close 4001
+  - `handleAuth`：`tokenService.consume(token)` → `sessionManager.markActive(sessionId)` → `ctx.attribute("sessionId", id)` → 发 `{op:"ready", payload:{sessionId, serverVersion, protocolVersion, projectState}}`
+  - 已认证路径：每条消息 `sessionManager.touch(sid)` 更新 `lastActivityAt`；`ping`/`pong` 保留；`paint` demo 通道保留待 T11 删
+  - `onClose`：若绑定了 sessionId，调 `sessionManager.markDisconnected` 记时间戳（T11/M7 的定时回收 task 会扫这个）
+- `HikariCanvas.java`：构造 WebServer 时传入 tokenService / sessionManager / serverVersion（从 `getPluginMeta().getVersion()` 取）
+
+**Javalin 7 API 踩坑：**
+- `cfg.routes.addEndpoint(Endpoint endpoint)` 接受 `io.javalin.router.Endpoint`——**直接 `new Endpoint(HandlerType, String, Handler)`**；没有 `Endpoint.create(...).builder().build()` 链式 API
+- `WsCloseStatus` 是 **enum**（NORMAL_CLOSURE / POLICY_VIOLATION 等预定义常量），**没有**自定义 4001 的 enum 常量；应该用 `ctx.closeSession(int code, String reason)` 重载直接传 `4001`
+- 对应 JavalinException 规避以 `javap -public` 查真实 class 签名最快
+
+**`ready` 响应的 `projectState` 占位结构（`protocol.md §7` 子集）：**
+```json
+{
+  "version": 0,
+  "canvas": { "widthMaps": W, "heightMaps": H, "background": "#CCCCCC" },
+  "elements": [],
+  "history": { "undoDepth": 0, "redoDepth": 0 }
+}
+```
+M3 做增量编辑时会让 `projectState` 真正带元素。
+
+**未做（留给后续）：**
+- **Token rotate**（security.md §2.2 要求）：WS 握手成功后重发新 token 给前端用于断线重连。M2 不做——WS 断开后玩家只能重新 `/canvas edit` + confirm 签发新 token。留给 M3 + M7 polish
+- **Auth 超时**（protocol.md §3.1 要求 5 秒）：当前用 Javalin/Jetty 默认 30 秒 idle timeout。T11 或 M7 polish 时加自定义 watchdog
+- **Origin 校验**（security.md §3.1）：默认关闭；公网部署时再开，M2 只跑本地
+- **per-WS-connection 限流**（security.md §2.4 + protocol.md §9）：20 msg/s / 40 突发 / 5 次拒绝 close 1008——延到 M7
+- **断线重连 5min 宽限自动回收**：`markDisconnected` 已记时间戳，但定时扫描回收 task 未实装；T11 或 M7 做
+
+**验证：** `./gradlew :plugin:compileJava` 通过。真实端到端验证要等 T11 把 `/canvas confirm` 接到 TokenService.issue 后才能跑。
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T8 FrameDeployer + FrameProtectionListener
 
 **范围：** 物品框的批量挂装 / 会话终止时移除 / commit 升级 permanent，以及保护 listener。契约 `docs/architecture.md §7.2` 与 `docs/security.md §5`。T11 命令族实装时把这些 hook 串到 SessionManager 状态转移上。

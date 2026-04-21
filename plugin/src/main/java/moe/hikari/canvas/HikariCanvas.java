@@ -91,7 +91,9 @@ public final class HikariCanvas extends JavaPlugin {
         // M1 骨架：host/port 硬编码，后续任务从 config.yml 读取
         String host = "127.0.0.1";
         int port = 8877;
-        webServer = new WebServer(getLogger(), host, port, this::paintAllHeldMapsRed);
+        String version = getPluginMeta().getVersion();
+        webServer = new WebServer(getLogger(), host, port,
+                tokenService, sessionManager, version, this::paintAllHeldMapsRed);
         webServer.start();
 
         getLogger().info("HikariCanvas enabled (skeleton)");
