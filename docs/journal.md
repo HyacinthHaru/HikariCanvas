@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-04-21 · M2-T9 PlaceholderRenderer + BitmapFont
+
+**范围：** 按 `docs/architecture.md §4.4` 渲染 Placeholder 占位图。128×128 浅灰底 + 顶部 "HIKARICANVAS" 水印 + 底部 "N/M" 位置标签。M4 真字体接入前就靠这套。
+
+**文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/BitmapFont.java`（新）：手工定义的 5×7 ASCII 位图字表
+  - 字符集仅覆盖 **H/I/K/A/R/C/N/V/S + 0-9 + "/" + 空格**（共 21 个）—— 刚够拼 "HIKARICANVAS" 水印 + 位置标签 "N/M"
+  - 存储：`Map<Character, int[7]>`，每行一个 int 的低 5 位（MSB→LSB 代表从左到右 5 个像素）
+  - 未知字符返回 `EMPTY` 空白（不报错），小写自动 `toUpperCase()`
+- `plugin/src/main/java/moe/hikari/canvas/render/PlaceholderRenderer.java`（新）：
+  - `render(slotIndex, totalSlots) → byte[128*128]`
+  - 背景填色 palette 索引 33（浅色）；前景 44（深色）—— M4 调色板 LUT 就位后修正精确值
+  - 顶部 "HIKARICANVAS" scale=1（12 字符 × 6 像素 = 71 px 宽，y=12 居中）
+  - 底部 "N/M" scale=3（显眼大号，y=97）
+  - 无状态，并发安全
+- `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`：新增 `/canvas placeholder <slot> <total>` DEPRECATED 子命令，方便玩家**手动预览渲染效果**（T11 一起删）
+
+**设计取舍：**
+- **字体字符集极小**：contract 只说"HikariCanvas 水印"和"坐标文字"。我把"坐标文字"改成更简洁的 "N/M"（如 "2/6"）——实际 128×128 像素空间下世界坐标 `(x,y,z)→(x',y',z')` 太挤，"第几张/共几张" 反而更有用
+- **全大写**："HIKARICANVAS" 比"HikariCanvas"省字形。M4 真字体接入后再换大小写混排
+- **Palette 索引 33/44 是经验值**：M2 demo 够用；M4 RGB→palette LUT 建好后以 `#CCCCCC` 和 `#3A3A3A` 重选精确索引
+- **位图字表用硬编码 int 数组**：不用图片资源 / PNG 解码，启动零 I/O；字符总数 21，代码不到 30 行
+- **slot 从 0 开始传入，渲染时显示 +1**：代码层保留 0-based 习惯，UI 层玩家看到的是 1-based
+
+**手动验证方式（测试命令已就绪）：**
+```
+/canvas give                       # 拿一张空白地图
+/canvas placeholder 0 6            # 显示 "1/6"
+/canvas placeholder 2 6            # 显示 "3/6"
+/canvas placeholder 5 6            # 显示 "6/6"
+```
+
+**留给后续任务：**
+- T8 `FrameDeployer` 会在 `/canvas confirm` 时调 `render(slot, total)` 给每张物品框填 placeholder
+- M4 渲染引擎会用真 TTF 字体替换此处所有逻辑；本包 `render/` 会保留但 `PlaceholderRenderer` / `BitmapFont` 这两个类的实现完全重写
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/render/BitmapFont.java`、`plugin/src/main/java/moe/hikari/canvas/render/PlaceholderRenderer.java`、`plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T5 WallResolver
 
 **范围：** 纯算法类，将玩家两次点击（pos1/pos2 + BlockFace）解析为墙面矩形 + 合法性校验；输出 `Result.Ok` 或 `Result.Failed(reason, detail)`。T6 Wand + SELECTING 会调用它做选区预览，T7 SessionManager 在 `/canvas confirm` 时复用同一份逻辑。
