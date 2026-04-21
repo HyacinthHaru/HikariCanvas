@@ -9,6 +9,7 @@ import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.TokenService;
+import moe.hikari.canvas.session.WandListener;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.MigrationRunner;
@@ -73,8 +74,12 @@ public final class HikariCanvas extends JavaPlugin {
 
         mapPacketSender = new MapPacketSender();
 
+        getServer().getPluginManager().registerEvents(
+                new WandListener(this, sessionManager), this);
+
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
-                event.registrar().register(new CanvasCommand(mapPacketSender).build()));
+                event.registrar().register(
+                        new CanvasCommand(this, mapPacketSender, sessionManager).build()));
 
         // M1 骨架：host/port 硬编码，后续任务从 config.yml 读取
         String host = "127.0.0.1";

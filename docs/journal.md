@@ -5,6 +5,62 @@
 
 ---
 
+## 2026-04-21 · M2-T6 Canvas Wand + SELECTING 玩家交互入口
+
+**范围：** 玩家侧的墙面选区 UX 全部就绪。命令入口（`/canvas edit`）+ Wand 物品入口双通道、左/右键点击记 pos1/pos2、聊天栏实时 echo 坐标与墙面预览、`/canvas cancel` 放弃。此时 T7 的 SessionManager 状态机第一次有了真正的驱动源。
+
+**文件：**
+- `deploy/CanvasWand.java`（新）：
+  - `Material.GOLDEN_SHOVEL` + Adventure 名称/lore
+  - PDC key `hikari_canvas:wand_owner` 存玩家 UUID 字符串；`isWandFor` 校验防别人捡到误触
+  - `removeAllFrom(player, plugin)` 工具方法（confirm/cancel 后把 wand 从背包收回）
+- `session/WandListener.java`（新，Bukkit Listener）：
+  - 只处理 `LEFT_CLICK_BLOCK` / `RIGHT_CLICK_BLOCK`；用 `getHand() == HAND` 去重避免副手触发
+  - 触发条件：**玩家持 wand** 或 **玩家已在 SELECTING 态**。否则不干预，正常建筑行为不受影响
+  - 触发时 `event.setCancelled(true)`——阻止左键破坏 / 右键放置
+  - Wand 入口但尚未有会话时，隐式调 `SessionManager.beginSelecting` 开会话
+  - 已在 ISSUED/ACTIVE/CLOSING 阶段点击 → 红字提示先 `/canvas cancel`
+  - 两角设完立即跑 `preview()`，Ok 显示 "Wall: WxH (N maps), facing F. From (x,y,z) to (x',y',z'). Run /canvas confirm."，Failed 显示 "Selection invalid: REASON — detail"
+  - `PlayerQuitEvent` 处理：SELECTING 态玩家掉线立即释放；ISSUED/ACTIVE 保留（WS 重连宽限走 T10）
+- `command/CanvasCommand.java`：
+  - 新增 `edit / wand / cancel` 三个正式子命令
+  - `cancel` 调用 `CanvasWand.removeAllFrom` 一并收回 wand
+  - 构造参数从 `(mapPacketSender)` 扩展为 `(plugin, mapPacketSender, sessionManager)`
+- `HikariCanvas.java`：`onEnable` 注册 `WandListener`（Bukkit `PluginManager.registerEvents`），传入 plugin + sessionManager；`CanvasCommand` 构造同步加参数
+
+**玩家交互规范（对应 architecture.md §7.1）：**
+
+| 入口 | 前提 | 行为 |
+|---|---|---|
+| `/canvas edit` | 无活跃会话 | 开启 SELECTING 态，actionbar 提示 |
+| 持 Canvas Wand 点击 | 任意 | 隐式 beginSelecting；已有会话时忽略 wand 作用 |
+| 空手 / 任意方块点击 | 玩家已 SELECTING | 记 pos1（左键）/ pos2（右键），聊天栏 echo + preview |
+| `/canvas cancel` | 任意 | 会话 cancel + wand 收回 |
+
+**实测路径（待手动验证）：**
+
+```
+/canvas edit                       # 进 SELECTING
+左键 点 墙面某方块 (10, 64, -5)    # 聊天栏："First corner (10, 64, -5) facing EAST"
+右键 点 墙面另一方块 (13, 65, -5)  # 聊天栏："Second corner (...)" +
+                                   #           "Wall: 3x2 (6 maps), facing EAST. From (10,64,-5)
+                                   #            to (13,65,-5). Run /canvas confirm."
+/canvas cancel                     # "Session cancelled (was SELECTING)."
+```
+
+然后 Wand 模式：
+
+```
+/canvas wand                       # "Received Canvas Wand."
+右键 / 左键 点墙面                 # 自动进 SELECTING + 记角 + 回显
+```
+
+**留给 T11：** `/canvas confirm` 命令尚未实装——T6 的聊天栏提示里引导用户敲这条命令，但实际执行会报"Unknown command"。T11 把 SessionManager.confirm() 接到命令上即可。
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/deploy/CanvasWand.java`、`plugin/src/main/java/moe/hikari/canvas/session/WandListener.java`、`plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T7 SessionManager + 会话状态机
 
 **范围：** 编辑会话的生命周期核心。契约 `docs/architecture.md §3`。汇合点——后续 T6 Wand 提供玩家入口、T10 WS auth 标 ACTIVE、T11 命令族调 confirm / commit / cancel。
