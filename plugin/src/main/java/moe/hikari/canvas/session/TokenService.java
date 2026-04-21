@@ -54,11 +54,25 @@ public final class TokenService {
     }
 
     /**
-     * 为玩家 + 会话签发新 token。原文只返回给调用方一次。
+     * 首次签发 token（/canvas confirm 流程）。原文只返回给调用方一次；
+     * 审计事件 {@code AUTH_ISSUED}。
      *
      * @return 43 字符的 URL-safe base64 token
      */
     public String issue(UUID playerUuid, String playerName, String sessionId) {
+        return issueInternal(playerUuid, playerName, sessionId, "AUTH_ISSUED");
+    }
+
+    /**
+     * WS auth 成功后 rotate 签发新 token 供后续断线重连使用（{@code docs/security.md §2.2}）。
+     * 语义与 {@link #issue} 完全相同，只是审计事件改为 {@code AUTH_ROTATED} 以便溯源
+     * 「初次签发 vs rotate 签发」。
+     */
+    public String rotate(UUID playerUuid, String playerName, String sessionId) {
+        return issueInternal(playerUuid, playerName, sessionId, "AUTH_ROTATED");
+    }
+
+    private String issueInternal(UUID playerUuid, String playerName, String sessionId, String auditEvent) {
         byte[] bytes = new byte[32];
         rng.nextBytes(bytes);
         String token = encoder.encodeToString(bytes);
@@ -67,7 +81,7 @@ public final class TokenService {
         tokens.put(token, new Record(playerUuid, sessionId, now, defaultTtlMillis, false));
 
         auditLog.record(
-                "AUTH_ISSUED",
+                auditEvent,
                 playerUuid.toString(),
                 playerName,
                 sessionId,

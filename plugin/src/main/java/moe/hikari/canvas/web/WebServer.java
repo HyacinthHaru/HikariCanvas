@@ -13,9 +13,14 @@ import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionState;
 import moe.hikari.canvas.session.TokenService;
+import moe.hikari.canvas.state.ProjectState;
+import moe.hikari.canvas.state.StatePatch;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -28,8 +33,8 @@ import java.util.logging.Logger;
  *   <li>M1 demo {@code op=paint} 保留——待 T11 命令族与 WS 编辑协议族成熟后删</li>
  * </ul>
  *
- * <p>M2 阶段暂不实装 token rotate（auth 成功后重发新 token 给前端用于断线重连）——
- * WS 断开后玩家需要重新 {@code /canvas edit} + confirm 签发新 token。rotate 留给 M3/M7。</p>
+ * <p>M3 已实装 token rotate（auth 成功后回发 {@code reconnectToken} 给前端，供 WS
+ * 断线重连重新 auth 使用）。契约见 {@code docs/security.md §2.2}、{@code docs/protocol.md §11}。</p>
  */
 public final class WebServer {
 
@@ -43,6 +48,11 @@ public final class WebServer {
     private final String serverVersion;
     private final Runnable paintHandler;  // M1 demo
     private Javalin app;
+
+    /** 活跃 session → 绑定的 WS 连接；用于服务端主动推送（state.snapshot / state.patch）。 */
+    private final ConcurrentMap<String, WsContext> wsBySession = new ConcurrentHashMap<>();
+    /** 服务端主动推送 {@code s-<N>} 的自增计数。 */
+    private final AtomicLong serverIdSeq = new AtomicLong(0);
 
     public WebServer(Logger log, String host, int port,
                      TokenService tokenService, SessionManager sessionManager,
@@ -88,6 +98,8 @@ public final class WebServer {
                 wsCfg.onClose(ctx -> {
                     String sid = ctx.attribute(ATTR_SESSION_ID);
                     if (sid != null) {
+                        // 原子 CAS：只清空自己绑的那个 ctx，避免 race 把新连接的 mapping 抹掉
+                        wsBySession.remove(sid, ctx);
                         sessionManager.markDisconnected(sid);
                         log.info("WS closed, sessionId=" + sid);
                     } else {
@@ -236,21 +248,51 @@ public final class WebServer {
 
         sessionManager.markActive(session.id());
         ctx.attribute(ATTR_SESSION_ID, session.id());
+        wsBySession.put(session.id(), ctx);
 
-        Map<String, Object> projectState = Map.of(
-                "version", 0,
-                "canvas", Map.of(
-                        "widthMaps", session.wall().width(),
-                        "heightMaps", session.wall().height(),
-                        "background", "#CCCCCC"),
-                "elements", List.of(),
-                "history", Map.of("undoDepth", 0, "redoDepth", 0));
+        // T3 token rotate：auth 成功后立即 rotate 新 token 交回前端，供 WS 断线重连重新 auth。
+        // 契约见 docs/security.md §2.2 / docs/protocol.md §11。
+        String reconnectToken = tokenService.rotate(
+                session.playerUuid(), session.playerName(), session.id());
+
+        // T4：ready payload 中的 projectState 直接由 session 持有的权威状态序列化
+        ProjectState state = session.projectState();
 
         ctx.send(Envelope.of("ready", in.id(), Map.of(
                 "sessionId", session.id(),
                 "serverVersion", serverVersion,
                 "protocolVersion", 1,
-                "projectState", projectState)));
+                "reconnectToken", reconnectToken,
+                "projectState", state)));
+    }
+
+    // ---------- 服务端主动推送（M3-T5）----------
+
+    /**
+     * 推送 {@code state.snapshot}（全量状态）。用于 undo 之后、template.apply 之后，
+     * 或前端请求全量刷新时使用。
+     *
+     * @return 是否成功发送（false = 该 session 没有活跃 WS 连接）
+     */
+    public boolean pushSnapshot(String sessionId, ProjectState state) {
+        WsContext ctx = wsBySession.get(sessionId);
+        if (ctx == null) return false;
+        String id = "s-" + serverIdSeq.incrementAndGet();
+        ctx.send(Envelope.of("state.snapshot", id, Map.of("projectState", state)));
+        return true;
+    }
+
+    /**
+     * 推送 {@code state.patch}（RFC 6902 子集增量）。每个 element/canvas op 成功后调用。
+     *
+     * @return 是否成功发送
+     */
+    public boolean pushPatch(String sessionId, StatePatch patch) {
+        WsContext ctx = wsBySession.get(sessionId);
+        if (ctx == null) return false;
+        String id = "s-" + serverIdSeq.incrementAndGet();
+        ctx.send(Envelope.of("state.patch", id, patch));
+        return true;
     }
 
     /** 按 protocol.md §6.2: close 4001 = 认证失败。 */

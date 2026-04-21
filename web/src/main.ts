@@ -14,6 +14,8 @@ interface ReadyPayload {
     sessionId: string;
     serverVersion: string;
     protocolVersion: number;
+    // M3-T3：auth 成功后服务端 rotate 出的新 token，供断线重连使用
+    reconnectToken: string;
     projectState: {
         version: number;
         canvas: { widthMaps: number; heightMaps: number; background: string };
@@ -21,6 +23,9 @@ interface ReadyPayload {
         history: { undoDepth: number; redoDepth: number };
     };
 }
+
+// 存 reconnect token 用；sessionStorage 作用域 = 当前 tab，刷新保留、关闭即失效
+const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 
 const logRaw = document.getElementById('log');
 const statusRaw = document.getElementById('status');
@@ -96,6 +101,15 @@ function handleReady(payload: ReadyPayload): void {
     authenticated = true;
     const w = payload.projectState.canvas.widthMaps;
     const h = payload.projectState.canvas.heightMaps;
+    // M3-T3：存 reconnect token 到 sessionStorage；原文不进 console / log
+    if (payload.reconnectToken) {
+        try {
+            sessionStorage.setItem(RECONNECT_TOKEN_KEY, payload.reconnectToken);
+            print('meta', `reconnect token stored (len ${payload.reconnectToken.length})`);
+        } catch {
+            print('err', 'sessionStorage unavailable; reconnect disabled');
+        }
+    }
     setStatus('ready',
         `Ready · session ${payload.sessionId.slice(0, 8)}… · wall ${w}×${h} · ` +
         `server ${payload.serverVersion} · protocol v${payload.protocolVersion}`);
@@ -170,6 +184,13 @@ paintBtn.addEventListener('click', () => {
 });
 
 // 页面加载入口
-const token = new URLSearchParams(location.search).get('token');
-print('meta', `ws target = ${resolveWsUrl()}${token ? ' (with token)' : ' (no token)'}`);
+// M3-T3：优先用 URL token（新会话 / 用户刚点聊天栏链接），回退到 sessionStorage
+// （同 tab 刷新或重连时走这条）
+const urlToken = new URLSearchParams(location.search).get('token');
+const storedToken = (() => {
+    try { return sessionStorage.getItem(RECONNECT_TOKEN_KEY); } catch { return null; }
+})();
+const token = urlToken ?? storedToken;
+const tokenSource = urlToken ? 'url' : storedToken ? 'session-storage' : 'none';
+print('meta', `ws target = ${resolveWsUrl()} (token source: ${tokenSource})`);
 connect(token);

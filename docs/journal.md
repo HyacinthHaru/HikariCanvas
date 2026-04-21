@@ -5,6 +5,86 @@
 
 ---
 
+## 2026-04-21 · M3-T5 state.snapshot / state.patch 推送基建
+
+**范围：** 服务端主动推送 {`state.snapshot`, `state.patch`} 的基建。契约对应 `docs/protocol.md §5.2`。
+
+**新增：**
+- `state/PatchOp.java`：RFC 6902 最小子集 `{ op, path, value }` record + `add/replace/remove` 工厂
+- `state/StatePatch.java`：`{ version: long, ops: List<PatchOp> }` record
+- `state/StatePatchBuilder.java`：累积式构建器（非线程安全，只在 SessionManager 锁内使用）
+
+**WebServer 扩展：**
+- `ConcurrentMap<String, WsContext> wsBySession`：session → 活跃 WS 连接
+- `AtomicLong serverIdSeq`：服务端推送 `s-<N>` id 单调源
+- 绑定点：`handleAuth` 成功后 put；`onClose` 用 `remove(k, v)` 原子 CAS 避免 race 把新连接抹掉
+- 新增 public API：
+  - `pushSnapshot(sessionId, ProjectState) → boolean`
+  - `pushPatch(sessionId, StatePatch) → boolean`
+  - 均返回 `false` 当 session 没有活跃 WS 连接
+- 序列化：`NON_NULL` 策略让 `PatchOp.value == null`（remove op）自动省略
+
+**M3-T5 scope 仅基建**：T6 element op 族接入时才开始真实发 patch；T5 本身不变更既有通道行为。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/state/PatchOp.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/state/StatePatch.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/state/StatePatchBuilder.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`
+
+---
+
+## 2026-04-21 · M3-T4 ProjectState 模型 + Element 接口族
+
+**范围：** 服务端权威工程状态的数据模型落地。契约对应 `docs/protocol.md §7`。
+
+**新增 `moe.hikari.canvas.state` 包：**
+- `Element.java`：`sealed interface` + Jackson `@JsonTypeInfo(property="type")` 多态；permits `TextElement / RectElement`
+- `TextElement.java`：record，M3 字段 = `id/x/y/w/h/rotation/locked/visible/text/fontId/fontSize/color/align`；effects / lineHeight / letterSpacing / vertical 留 M4
+- `RectElement.java`：record，`fill`（可 null 表示空心）+ `stroke`（可 null 表示纯填充）
+- `Stroke.java`：record `{ width, color }`，未来 M4 text outline 复用
+- `ProjectState.java`：可变 class（不是 record——需要 mutator）；字段 `version / canvas / elements / history`；`@JsonAutoDetect(fieldVisibility=ANY, getterVisibility=NONE)` 让字段直接映射到 JSON 键名
+  - 嵌套 record：`Canvas(widthMaps, heightMaps, background)`、`History(undoDepth, redoDepth)`
+  - Java-side 无前缀 accessor + 显式 mutator (`addElement / replaceElementAt / removeElementAt / moveElement / bumpVersion / canvas(Canvas) / history(History)`)
+  - 线程约束：只允许 `SessionManager.synchronized` 段内 mutator，`elements()` 返回 unmodifiable view
+
+**Session 接入：**
+- `Session` 新增 `projectState` 字段 + `projectState()` accessor + package-private `projectState(ProjectState)` mutator
+- `SessionManager.confirm`：`SELECTING → ISSUED` 转移时实例化 `new ProjectState(wall.width(), wall.height())`，默认背景 `#FFFFFF`
+- `WebServer.handleAuth`：`ready` payload 的 `projectState` 字段直接序列化 `session.projectState()` 对象（不再手写 Map）
+
+**关联文件：**
+- 6 个新文件（`state/*.java`）
+- `plugin/src/main/java/moe/hikari/canvas/session/Session.java`
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`
+
+---
+
+## 2026-04-21 · M3-T3 Token rotate（断线重连基建）
+
+**范围：** WS auth 成功后立即 rotate 新 token 给前端，供后续 WS 断线重连使用。契约对应 `docs/security.md §2.2`、`docs/protocol.md §11`。
+
+**后端：**
+- `TokenService` 新增 `rotate(playerUuid, playerName, sessionId)`：与 `issue` 语义相同但审计事件为 `AUTH_ROTATED`（区分「首次签发 vs rotate 签发」）；两方法共享 `issueInternal` 私有实现
+- `WebServer.handleAuth` 在 `markActive` 后立即 `rotate` 并把新 token 随 `ready` payload 回发：`payload.reconnectToken: string`
+- 审计日志里 `AUTH_ROTATED` 只记 `token_sha256`，原文不落盘
+
+**前端：**
+- `ReadyPayload` 接口扩 `reconnectToken` 字段
+- `handleReady` 存 token 到 `sessionStorage["hikari-canvas:reconnect-token"]`（tab-scoped，关闭失效）
+- 页面加载：URL `?token=` 优先（新会话走链接打开），回退 sessionStorage（同 tab 刷新 / 重连）
+- token 原文绝不进 console.log，仅 log length
+
+**M3-T3 scope 仅基建**：真正的"WS 断线自动重连循环"（5/10/30 秒阶梯，protocol.md §3.4）留给后续 UX 迭代。目前只保证 rotate token 能发、能收、能存。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/session/TokenService.java`
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`
+- `web/src/main.ts`
+
+---
+
 ## 2026-04-21 · M3-T2 WS 会话超时回收（SessionReaper）
 
 **范围：** 把 M2 T10/T11 记入 journal 的遗留项「没有主动 schedule 的回收 task」补上。契约对应 `docs/architecture.md §3.1`。
