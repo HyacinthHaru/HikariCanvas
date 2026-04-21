@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
@@ -50,6 +52,14 @@ public final class SessionManager {
     private final Map<String, Session> byId = new HashMap<>();
     private final Map<UUID, String> byPlayer = new HashMap<>();
     private final Map<WallKey, String> byWall = new HashMap<>();
+
+    /** session forget 时调用，用于让 throttler / rate-limiter / WS ctx map 等清状态。 */
+    private final List<Consumer<String>> forgetHooks = new CopyOnWriteArrayList<>();
+
+    /** 注册 session forget 监听。callback 接收被 forget 的 sessionId。线程安全。 */
+    public void addForgetHook(Consumer<String> hook) {
+        forgetHooks.add(hook);
+    }
 
     public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver, AuditLog auditLog) {
         this.log = log;
@@ -346,5 +356,14 @@ public final class SessionManager {
         byId.remove(s.id());
         byPlayer.remove(s.playerUuid(), s.id());
         s.state(SessionState.CLOSING);
+        // 让 throttler / rate-limiter / WS ctx map 跟着清，避免长期运行后内存膨胀。
+        // hooks 是 CopyOnWriteArrayList，遍历期间可并发 add。异常不影响其他 hook 执行。
+        for (Consumer<String> hook : forgetHooks) {
+            try {
+                hook.accept(s.id());
+            } catch (RuntimeException e) {
+                log.warning("SessionManager: forget hook threw for " + s.id() + ": " + e.getMessage());
+            }
+        }
     }
 }

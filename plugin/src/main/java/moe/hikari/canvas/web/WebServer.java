@@ -9,9 +9,10 @@ import io.javalin.router.Endpoint;
 import io.javalin.websocket.WsContext;
 import io.javalin.websocket.WsHandlerType;
 import io.javalin.websocket.WsMessageContext;
-import moe.hikari.canvas.render.CanvasProjector;
+import moe.hikari.canvas.render.ProjectionThrottler;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
+import moe.hikari.canvas.session.SessionRateLimiter;
 import moe.hikari.canvas.session.SessionState;
 import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.state.EditSession;
@@ -47,7 +48,8 @@ public final class WebServer {
     private final int port;
     private final TokenService tokenService;
     private final SessionManager sessionManager;
-    private final CanvasProjector canvasProjector;
+    private final ProjectionThrottler throttler;
+    private final SessionRateLimiter rateLimiter;
     private final String serverVersion;
     private final Runnable paintHandler;  // M1 demo
     private Javalin app;
@@ -59,14 +61,16 @@ public final class WebServer {
 
     public WebServer(Logger log, String host, int port,
                      TokenService tokenService, SessionManager sessionManager,
-                     CanvasProjector canvasProjector,
+                     ProjectionThrottler throttler,
+                     SessionRateLimiter rateLimiter,
                      String serverVersion, Runnable paintHandler) {
         this.log = log;
         this.host = host;
         this.port = port;
         this.tokenService = tokenService;
         this.sessionManager = sessionManager;
-        this.canvasProjector = canvasProjector;
+        this.throttler = throttler;
+        this.rateLimiter = rateLimiter;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
     }
@@ -231,6 +235,12 @@ public final class WebServer {
     // ---------- M3-T6 编辑 op 分发 ----------
 
     private void dispatchEditOp(WsMessageContext ctx, Envelope in, String sessionId) {
+        // T10 输入限流：超 40 msg/2s（≈ 20 msg/s）返 RATE_LIMITED，不进 EditSession
+        if (!rateLimiter.allow(sessionId)) {
+            ctx.send(Envelope.error(in.id(), "RATE_LIMITED",
+                    "input rate exceeded; slow down"));
+            return;
+        }
         Session s = sessionManager.byId(sessionId);
         if (s == null || s.editSession() == null) {
             ctx.send(Envelope.error(in.id(), "SESSION_CLOSED", "no active edit session"));
@@ -298,10 +308,10 @@ public final class WebServer {
             if (!ok.patch().ops().isEmpty()) {
                 pushPatch(sessionId, ok.patch());
             }
-            // 3) M3-T7 脏矩形投影：受影响 mapIds 重绘并写到 canvasRenderer
+            // 3) 脏矩形投影经 T10 节流器：5fps 上限 + 区域 union 合并；
+            //    throttler 负责后续在 BukkitScheduler async task 里调 projector.project
             if (ok.dirty() != null) {
-                Session se = sessionManager.byId(sessionId);
-                if (se != null) canvasProjector.project(se, ok.dirty());
+                throttler.submit(sessionId, ok.dirty());
             }
         } else if (result instanceof EditSession.OpResult.Error er) {
             ctx.send(Envelope.error(in.id(), er.code(), er.message()));

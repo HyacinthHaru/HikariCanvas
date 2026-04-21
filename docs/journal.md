@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-04-21 · M3-T10 帧率节流（投影 5fps + 输入 40/2s）
+
+**范围：** `docs/architecture.md §5.1` + `docs/protocol.md §9` 双层节流落地。
+
+**新增：**
+
+- `render/ProjectionThrottler.java`
+  - per-session bucket `{ pending: DirtyRegion, lastProjectAt, flushTask }`
+  - `submit(sid, region)`：距上次 flush ≥ 200ms 立即走；否则 `union` 进 pending 并 `runTaskLaterAsynchronously` 调尾帧
+  - `union` coalesce 同窗口内的连续 op（10 次快改只投 1~2 次）
+  - `discardSession` 取消 pending task、清状态
+
+- `session/SessionRateLimiter.java`
+  - 40 msg / 2s 固定窗口计数器（≈ 20 msg/s；协议 §9 阈值）
+  - `allow(sid) → boolean`：超限时返 false，WebServer 返 `RATE_LIMITED` 错
+  - 协议 §9 的"5 次 / 1min 重复触发 → close 1008"留 M7
+
+**SessionManager forget hooks：**
+- 新增 `addForgetHook(Consumer<String>)` + 在 `forget()` 末尾调用
+- 主插件注册两条 hook：`throttler::discardSession` + `rateLimiter::discardSession`
+- 长运行内存不再随会话数单调增长；hook 异常互不影响（try/catch 逐条执行）
+
+**WebServer 改动：**
+- `dispatchEditOp` 第一步就查 `rateLimiter.allow`；超限直接返 `RATE_LIMITED`
+- 成功后 `throttler.submit(sid, dirty)` 代替直接 `canvasProjector.project`
+- 移除不再用的 `canvasProjector` 字段与构造参数；throttler 内部持有
+
+**前端 100ms 防抖说明：**
+- 当前 probe UI 只有 `ping / paint` 按钮，没有真正的编辑 op 发送路径
+- 100ms 输入防抖是 M5 编辑器 UI 才能真正验证的东西——现在先把**协议层和后端上限**定准，M5 前端代码自然会按该契约写
+- 协议契约：前端**应**在输入中做 100ms 防抖，但**即使不做**，后端 20 msg/s 硬限流兜底；两层独立、缺一不塌
+
+**线程模型：**
+- throttler 的尾帧 flush 走 `runTaskLaterAsynchronously`（async 线程），与 compositor 纯函数 + canvasRenderer `ConcurrentMap` 一致，不必切主线程
+- rateLimiter 的 `synchronized(bucket)` 锁粒度 = per-session，彼此独立
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/ProjectionThrottler.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionRateLimiter.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`（forget hooks）
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（wiring + hooks）
+
+---
+
 ## 2026-04-21 · M3-T9 per-viewer 同步（架构已满足）
 
 **结论：** M3-T7/T8 引入的 `HikariCanvasRenderer` + `CanvasProjector` 组合已经天然提供 per-viewer 同步，T9 无代码改动。
