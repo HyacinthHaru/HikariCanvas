@@ -227,7 +227,10 @@ public final class WebServer {
                  "element.reorder",
                  "element.transform",
                  "canvas.resize",
-                 "canvas.background" -> dispatchEditOp(ctx, in, bound);
+                 "canvas.background",
+                 "undo",
+                 "redo",
+                 "history.mark" -> dispatchEditOp(ctx, in, bound);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
     }
@@ -298,23 +301,39 @@ public final class WebServer {
                 yield es.resizeCanvas(wn.intValue(), hn.intValue());
             }
             case "canvas.background" -> es.setBackground(stringOrNull(payload.get("color")));
+            case "undo" -> es.undo();
+            case "redo" -> es.redo();
+            case "history.mark" -> es.historyMark(stringOrNull(payload.get("label")));
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
         };
 
-        if (result instanceof EditSession.OpResult.Ok ok) {
-            // 1) ack 给 client id
-            ctx.send(Envelope.of("ack", in.id(), Map.of("version", ok.patch().version())));
-            // 2) pushPatch（s-N id）——空 ops 的 patch 跳过，避免前端收到无内容消息
-            if (!ok.patch().ops().isEmpty()) {
-                pushPatch(sessionId, ok.patch());
+        switch (result) {
+            case EditSession.OpResult.Ok ok -> {
+                // 1) ack 给 client id
+                ctx.send(Envelope.of("ack", in.id(), Map.of("version", ok.patch().version())));
+                // 2) pushPatch（s-N id）——空 ops 的 patch 跳过
+                if (!ok.patch().ops().isEmpty()) {
+                    pushPatch(sessionId, ok.patch());
+                }
+                // 3) 脏矩形投影经 T10 节流器（Bukkit async task 里调 projector.project）
+                if (ok.dirty() != null) {
+                    throttler.submit(sessionId, ok.dirty());
+                }
             }
-            // 3) 脏矩形投影经 T10 节流器：5fps 上限 + 区域 union 合并；
-            //    throttler 负责后续在 BukkitScheduler async task 里调 projector.project
-            if (ok.dirty() != null) {
-                throttler.submit(sessionId, ok.dirty());
+            case EditSession.OpResult.OkSnapshot oks -> {
+                // undo/redo/template.apply：结构跳变，下行 state.snapshot 全量；
+                // 像素全画布重绘经 throttler 排队
+                ctx.send(Envelope.of("ack", in.id(), Map.of("version", oks.version())));
+                Session sn = sessionManager.byId(sessionId);
+                if (sn != null && sn.projectState() != null) {
+                    pushSnapshot(sessionId, sn.projectState());
+                }
+                if (oks.dirty() != null) {
+                    throttler.submit(sessionId, oks.dirty());
+                }
             }
-        } else if (result instanceof EditSession.OpResult.Error er) {
-            ctx.send(Envelope.error(in.id(), er.code(), er.message()));
+            case EditSession.OpResult.Error er ->
+                    ctx.send(Envelope.error(in.id(), er.code(), er.message()));
         }
     }
 

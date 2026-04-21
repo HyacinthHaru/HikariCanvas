@@ -5,6 +5,45 @@
 
 ---
 
+## 2026-04-21 · M3-T11 undo / redo / history.mark
+
+**范围：** `docs/protocol.md §5.5` 的历史类 op 全部落地。每会话 16 步环形历史栈，undo/redo 全量下行 `state.snapshot`。
+
+**四条决策（实施前拍板）：**
+1. **历史存全量快照**（非逆向 patch）：`ProjectSnapshot(canvas, List<Element>, label)`
+2. **undo/redo 下行 `state.snapshot`**（非 `state.patch`）：跨度跳变用全量更稳
+3. **`history.mark` 只贴标签**：push 一个带 label 的 snapshot 到 past，不 clear future
+4. **脏矩形 = full canvas**：undo/redo 后全图重绘
+
+**新增：**
+
+- `state/ProjectSnapshot.java`：record `{ canvas, elements, label }`；`elements` 经 `List.copyOf` 变只读副本，不与 live state 共享
+- `ProjectState.restore(ProjectSnapshot)`：整体替换 canvas + elements；version 不回滚（由调用方 bump）
+
+**EditSession 扩展：**
+
+- `past` / `future` 两个 `ArrayDeque<ProjectSnapshot>`；`MAX_HISTORY = 16`
+- `OpResult` 新增 `OkSnapshot(version, dirty)` 变体；WebServer 按类型 pattern-match 决定下行 patch 还是 snapshot
+- `undo()`：past 空 → `INVALID_PAYLOAD "nothing to undo"`；否则 push 当前到 future、从 past 取最近的 restore、bump version、返回 `OkSnapshot + fullCanvas`
+- `redo()`：对称
+- `historyMark(label)`：label 非空 + ≤ 64 字符；push `(current state, label)` 到 past；**不 clear future**（mark 是标签、不是新分支）；返回 `Ok` 空 patch 只 bump version
+- `commitHistory(preSnapshot)`：5 个原有 mutation op 成功路径都调它——past push 后 `future.clear()`（标准 undo 语义）
+
+**`OkSnapshot` 下行流程（WebServer）：**
+1. `ack { version }` 对 client id
+2. `state.snapshot` 全量 push（`Envelope.of("state.snapshot", s-N, { projectState })`）
+3. dirty 交给 `ProjectionThrottler`（走 5fps 上限 + union 合并）
+
+**T10 互动：** undo/redo 的 full-canvas dirty 会触发 throttler 把整张画布重绘推一次；与普通 op 的局部脏矩形可以 union 合并到同一 flush 窗口里。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/state/ProjectSnapshot.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/state/ProjectState.java`（+ `restore`）
+- `plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`（历史栈 + undo/redo/mark + OkSnapshot）
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`（op 新增 + OkSnapshot 分支）
+
+---
+
 ## 2026-04-21 · M3-T10 帧率节流（投影 5fps + 输入 40/2s）
 
 **范围：** `docs/architecture.md §5.1` + `docs/protocol.md §9` 双层节流落地。

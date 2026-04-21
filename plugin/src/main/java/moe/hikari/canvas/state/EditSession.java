@@ -2,6 +2,8 @@ package moe.hikari.canvas.state;
 
 import moe.hikari.canvas.render.DirtyRegion;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -32,7 +34,15 @@ public final class EditSession {
     private static final int MAX_FONT_SIZE = 512;
     private static final int MAX_STROKE_WIDTH = 128;
 
+    /** T11 历史栈上限（每会话）；超过后踢掉最老的。 */
+    private static final int MAX_HISTORY = 16;
+
     private final ProjectState state;
+
+    /** 过去快照栈：每条记录一次成功 op 的 pre-mutation 状态；push=头、pop=头。 */
+    private final Deque<ProjectSnapshot> past = new ArrayDeque<>();
+    /** 未来快照栈：undo 时从 past 出的快照入此栈，redo 取用；每次新 edit 会清空。 */
+    private final Deque<ProjectSnapshot> future = new ArrayDeque<>();
 
     public EditSession(ProjectState state) {
         this.state = state;
@@ -46,10 +56,22 @@ public final class EditSession {
 
     public sealed interface OpResult {
         /**
+         * 普通 op：下行 {@code state.patch}。
+         *
          * @param patch 下行给前端的 state.patch（空 ops 表示"仅 version 推进"）
          * @param dirty 受影响的画布矩形；{@code null} = 无像素变化（如 canvas.resize no-op）
          */
         record Ok(StatePatch patch, DirtyRegion dirty) implements OpResult {}
+
+        /**
+         * 结构性跳变（undo/redo/template.apply）：下行 {@code state.snapshot} 全量状态。
+         * patch 在这种跳变里无法用 JSON Patch 简洁表达，直接发全量更可靠。
+         *
+         * @param version 跳变后新的 {@link ProjectState#version()}
+         * @param dirty   像素层面受影响的区域；跳变一般 = full canvas
+         */
+        record OkSnapshot(long version, DirtyRegion dirty) implements OpResult {}
+
         record Error(String code, String message) implements OpResult {}
     }
 
@@ -84,7 +106,9 @@ public final class EditSession {
             return err(ve.code, ve.getMessage());
         }
 
+        ProjectSnapshot pre = snapshotNow();
         state.addElement(insertIdx, element);
+        commitHistory(pre);
         long v = state.bumpVersion();
 
         StatePatch patch = new StatePatchBuilder()
@@ -123,7 +147,9 @@ public final class EditSession {
             return err(ve.code, ve.getMessage());
         }
 
+        ProjectSnapshot pre = snapshotNow();
         state.replaceElementAt(idx, updated);
+        commitHistory(pre);
         long v = state.bumpVersion();
 
         StatePatchBuilder b = new StatePatchBuilder();
@@ -150,7 +176,9 @@ public final class EditSession {
         int idx = state.indexOfElement(elementId);
         if (idx < 0) return err("INVALID_ELEMENT", "element not found: " + elementId);
         Element removed = state.elements().get(idx);
+        ProjectSnapshot pre = snapshotNow();
         state.removeElementAt(idx);
+        commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.Ok(
                 new StatePatchBuilder().remove("/elements/" + idx).build(v),
@@ -175,7 +203,9 @@ public final class EditSession {
             return new OpResult.Ok(new StatePatch(v, List.of()), null);
         }
         Element moved = state.elements().get(from);
+        ProjectSnapshot pre = snapshotNow();
         state.moveElement(from, to);
+        commitHistory(pre);
         long v = state.bumpVersion();
         StatePatch patch = new StatePatchBuilder()
                 .remove("/elements/" + from)
@@ -229,11 +259,80 @@ public final class EditSession {
     public synchronized OpResult setBackground(String color) {
         if (!isValidColor(color)) return err("INVALID_PAYLOAD", "invalid color: " + color);
         ProjectState.Canvas c = state.canvas();
+        ProjectSnapshot pre = snapshotNow();
         state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(), color));
+        commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.Ok(
                 new StatePatchBuilder().replace("/canvas/background", color).build(v),
                 DirtyRegion.fullCanvas(state));
+    }
+
+    // ---------- undo / redo / history.mark ----------
+
+    /**
+     * 撤销到最近一次成功 op 之前的状态。past 栈为空时返回错。
+     * 恢复后下行 {@code state.snapshot}（跳变无法用 patch 简洁表达），像素层面全画布重绘。
+     */
+    public synchronized OpResult undo() {
+        if (past.isEmpty()) {
+            return err("INVALID_PAYLOAD", "nothing to undo");
+        }
+        future.push(snapshotNow());
+        ProjectSnapshot restoreTo = past.pop();
+        state.restore(restoreTo);
+        long v = state.bumpVersion();
+        return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
+    }
+
+    /** undo 的逆操作。future 栈为空时返回错。 */
+    public synchronized OpResult redo() {
+        if (future.isEmpty()) {
+            return err("INVALID_PAYLOAD", "nothing to redo");
+        }
+        ProjectSnapshot preRedo = snapshotNow();
+        past.push(preRedo);
+        while (past.size() > MAX_HISTORY) past.removeLast();
+        ProjectSnapshot restoreTo = future.pop();
+        state.restore(restoreTo);
+        long v = state.bumpVersion();
+        return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
+    }
+
+    /**
+     * 在 past 栈顶加一个命名检查点（{@code docs/protocol.md §5.5}）。
+     * <b>不</b>清空 future——mark 只给当前点贴标签，不创建新 edit 分支。
+     */
+    public synchronized OpResult historyMark(String label) {
+        if (label == null || label.isEmpty()) {
+            return err("INVALID_PAYLOAD", "label required");
+        }
+        if (label.length() > 64) {
+            return err("INVALID_PAYLOAD", "label too long (max 64)");
+        }
+        ProjectSnapshot marked = new ProjectSnapshot(
+                state.canvas(), List.copyOf(state.elements()), label);
+        past.push(marked);
+        while (past.size() > MAX_HISTORY) past.removeLast();
+        long v = state.bumpVersion();
+        // 无像素变化；前端不需要 patch，只需新 version
+        return new OpResult.Ok(new StatePatch(v, List.of()), null);
+    }
+
+    // ---------- 历史栈内部 helpers ----------
+
+    private ProjectSnapshot snapshotNow() {
+        return new ProjectSnapshot(state.canvas(), List.copyOf(state.elements()), null);
+    }
+
+    /**
+     * 把 {@code preSnapshot} 推进 past 栈，超过 {@link #MAX_HISTORY} 踢掉最老一条；
+     * 清空 future 栈（标准 undo 语义：新 edit 弃用 redo 分支）。
+     */
+    private void commitHistory(ProjectSnapshot preSnapshot) {
+        past.push(preSnapshot);
+        while (past.size() > MAX_HISTORY) past.removeLast();
+        future.clear();
     }
 
     // ---------- 构造与更新辅助 ----------

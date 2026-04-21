@@ -101,4 +101,14 @@ public final class ProjectState {
         Element e = elements.remove(from);
         elements.add(to, e);
     }
+
+    /**
+     * 从 {@link ProjectSnapshot} 整体恢复 state（undo/redo 用）。
+     * {@code version} 不回滚——恢复后调用方应 {@link #bumpVersion} 标记新版本。
+     */
+    public void restore(ProjectSnapshot snap) {
+        this.canvas = snap.canvas();
+        this.elements.clear();
+        this.elements.addAll(snap.elements());
+    }
 }
