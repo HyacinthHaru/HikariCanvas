@@ -5,6 +5,60 @@
 
 ---
 
+## 2026-04-21 · M3-T6 element.* + canvas.* op 族
+
+**范围：** WS 上行编辑 op 全部接入 `EditSession`，落到 `ProjectState`，产出 `state.patch` 推回前端。契约对应 `docs/protocol.md §5.3 / §5.4`。
+
+**新增 `state/EditSession.java`：**
+- `OpResult` sealed 结果类型：`Ok(StatePatch) / Error(code, message)`
+- 7 个 `apply*` 方法（全部 `synchronized(this)`，Jetty 线程池下并发安全）：
+  - `addElement(type, props, afterId)` — 生成 `"e-<uuid>"`；默认参数兜底；支持 `afterId=null` 追加尾部
+  - `updateElement(elementId, patch)` — 字段级部分更新；all-or-nothing 校验；不变量失败回滚
+  - `deleteElement(elementId)`
+  - `reorderElement(elementId, newIndex)` — 越界 clamp；same-position 空 ops + bump version
+  - `transformElement(elementId, x?, y?, w?, h?, rotation?)` — 等价于 update 五字段子集
+  - `resizeCanvas(widthMaps, heightMaps)` — **M3 仅接受 no-op 同尺寸**；差值返回 `POOL_EXHAUSTED`（真动态扩缩容 M7 再做）
+  - `setBackground(color)`
+- Validator 集中在文件内静态方法：
+  - color `^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$`
+  - rotation ∈ {0, 90, 180, 270}
+  - text length ≤ 256 / fontSize 1..512 / stroke.width 0..128 / w/h 1..10000 / x/y ±10000
+  - align ∈ {left, center, right}
+- Rect 不变式：`fill == null && (stroke == null || stroke.width == 0)` 拒绝（至少一种填充方式）
+- 失败路径统一通过内部 `ValidationException(code, msg)` 抛出 → apply 方法外层 catch 转成 `OpResult.Error`
+
+**patch 路径约定（RFC 6902）：**
+- `element.add` → `add /elements/{idx} {element}`
+- `element.update` → 逐字段 `replace /elements/{idx}/{field} {value}`；**`value == null` 改用 `remove`** 以规避 `NON_NULL` 序列化丢 value 字段违反 RFC 的坑
+- `element.delete` → `remove /elements/{idx}`
+- `element.reorder` → `remove /elements/{from}` + `add /elements/{to} {element}`
+- `element.transform` → 走 updateElement 路径，逐变字段 `replace`
+- `canvas.background` → `replace /canvas/background {color}`
+- `canvas.resize`（no-op 情况）→ 空 ops 列表 + bump version
+
+**WebServer 分发（单个 switch 入栈）：**
+- 新 helper `dispatchEditOp(ctx, in, sid)`：
+  1. 取出 Session.editSession；不存在返回 `SESSION_CLOSED`
+  2. 提取 payload Map（类型错误统一 `INVALID_PAYLOAD`）
+  3. switch op → 调 EditSession 对应方法
+  4. `Ok`：先发 `ack { version }`（对 client id），再 `pushPatch`（s-N id；空 ops 跳过推送）
+  5. `Error`：发 `error { code, message }`（对 client id）
+- switch 表达式统一 `yield OpResult.Error(...)` 代替 early `return`（Java switch expression 限制）
+- 保留 M1 `paint` demo 通道作为 T6 阶段回归测试；M3 收尾（T12/T13）再清
+
+**Session 接入：**
+- Session 新增 `editSession` 字段 + public accessor
+- `SessionManager.confirm`：`SELECTING → ISSUED` 转移时构造 `EditSession(projectState)` 一起挂到 session 上
+- 随 session forget 一起消亡，无需额外清理
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`（新建，~380 行）
+- `plugin/src/main/java/moe/hikari/canvas/session/Session.java`
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`
+
+---
+
 ## 2026-04-21 · M3-T5 state.snapshot / state.patch 推送基建
 
 **范围：** 服务端主动推送 {`state.snapshot`, `state.patch`} 的基建。契约对应 `docs/protocol.md §5.2`。

@@ -13,6 +13,7 @@ import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionState;
 import moe.hikari.canvas.session.TokenService;
+import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.StatePatch;
 
@@ -209,11 +210,113 @@ public final class WebServer {
         switch (in.op()) {
             case "ping" -> ctx.send(Envelope.pong(in.id()));
             case "paint" -> {
-                paintHandler.run();  // M1 demo 通道，T11 后会被正规 op 替换
+                paintHandler.run();  // M1 demo 通道；M3 保留作为回归测试通道，M7 polish 时删
                 ctx.send(Envelope.of("ack", in.id(), Map.of("submitted", true)));
             }
+            case "element.add",
+                 "element.update",
+                 "element.delete",
+                 "element.reorder",
+                 "element.transform",
+                 "canvas.resize",
+                 "canvas.background" -> dispatchEditOp(ctx, in, bound);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
+    }
+
+    // ---------- M3-T6 编辑 op 分发 ----------
+
+    private void dispatchEditOp(WsMessageContext ctx, Envelope in, String sessionId) {
+        Session s = sessionManager.byId(sessionId);
+        if (s == null || s.editSession() == null) {
+            ctx.send(Envelope.error(in.id(), "SESSION_CLOSED", "no active edit session"));
+            return;
+        }
+        EditSession es = s.editSession();
+
+        Map<String, Object> payload;
+        try {
+            payload = asPayloadMap(in.payload());
+        } catch (IllegalArgumentException iae) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
+            return;
+        }
+
+        EditSession.OpResult result = switch (in.op()) {
+            case "element.add" -> {
+                String type = stringOrNull(payload.get("type"));
+                @SuppressWarnings("unchecked")
+                Map<String, Object> props = (Map<String, Object>) mapOrEmpty(payload.get("props"));
+                String after = stringOrNull(payload.get("after"));
+                yield es.addElement(type, props, after);
+            }
+            case "element.update" -> {
+                String eid = stringOrNull(payload.get("elementId"));
+                @SuppressWarnings("unchecked")
+                Map<String, Object> p = (Map<String, Object>) mapOrEmpty(payload.get("patch"));
+                yield es.updateElement(eid, p);
+            }
+            case "element.delete" -> es.deleteElement(stringOrNull(payload.get("elementId")));
+            case "element.reorder" -> {
+                String eid = stringOrNull(payload.get("elementId"));
+                Object idxObj = payload.get("index");
+                if (!(idxObj instanceof Number n)) {
+                    yield new EditSession.OpResult.Error("INVALID_PAYLOAD", "index must be number");
+                }
+                yield es.reorderElement(eid, n.intValue());
+            }
+            case "element.transform" -> {
+                String eid = stringOrNull(payload.get("elementId"));
+                yield es.transformElement(eid,
+                        intOrNull(payload.get("x")),
+                        intOrNull(payload.get("y")),
+                        intOrNull(payload.get("w")),
+                        intOrNull(payload.get("h")),
+                        intOrNull(payload.get("rotation")));
+            }
+            case "canvas.resize" -> {
+                Object wObj = payload.get("widthMaps");
+                Object hObj = payload.get("heightMaps");
+                if (!(wObj instanceof Number wn) || !(hObj instanceof Number hn)) {
+                    yield new EditSession.OpResult.Error(
+                            "INVALID_PAYLOAD", "widthMaps/heightMaps must be numbers");
+                }
+                yield es.resizeCanvas(wn.intValue(), hn.intValue());
+            }
+            case "canvas.background" -> es.setBackground(stringOrNull(payload.get("color")));
+            default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
+        };
+
+        if (result instanceof EditSession.OpResult.Ok ok) {
+            // ack 给 client id；然后立即 pushPatch（s-N id）
+            ctx.send(Envelope.of("ack", in.id(), Map.of("version", ok.patch().version())));
+            if (!ok.patch().ops().isEmpty()) {
+                pushPatch(sessionId, ok.patch());
+            }
+        } else if (result instanceof EditSession.OpResult.Error er) {
+            ctx.send(Envelope.error(in.id(), er.code(), er.message()));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asPayloadMap(Object payload) {
+        if (payload == null) return Map.of();
+        if (payload instanceof Map<?, ?> m) return (Map<String, Object>) m;
+        throw new IllegalArgumentException("payload must be object");
+    }
+
+    private static Map<?, ?> mapOrEmpty(Object v) {
+        if (v == null) return Map.of();
+        if (v instanceof Map<?, ?> m) return m;
+        throw new IllegalArgumentException("expected object, got " + v.getClass().getSimpleName());
+    }
+
+    private static String stringOrNull(Object v) {
+        return (v instanceof String s) ? s : null;
+    }
+
+    private static Integer intOrNull(Object v) {
+        return (v instanceof Number n) ? n.intValue() : null;
     }
 
     private void handleAuth(WsMessageContext ctx, Envelope in) {

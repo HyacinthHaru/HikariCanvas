@@ -3,6 +3,7 @@ package moe.hikari.canvas.session;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.pool.PoolExhaustedException;
+import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.storage.AuditLog;
 import org.bukkit.block.Block;
@@ -158,9 +159,11 @@ public final class SessionManager {
         s.wall(wall);
         s.mapIds(mapIds);
         s.wallKey(key);
-        // 构造初始 ProjectState：尺寸按墙面 maps 数，背景默认白。
-        // M3-T4 契约：服务端持有权威状态，随 session 一起生灭。
-        s.projectState(new ProjectState(wall.width(), wall.height()));
+        // 构造初始 ProjectState + EditSession：服务端持有权威状态与 op 应用器。
+        // M3-T4 / T6 契约：EditSession 随 session 一起生灭；WS 上行 op 入口。
+        ProjectState ps = new ProjectState(wall.width(), wall.height());
+        s.projectState(ps);
+        s.editSession(new EditSession(ps));
         s.state(SessionState.ISSUED);
         byWall.put(key, sessionId);
 

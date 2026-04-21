@@ -1,6 +1,7 @@
 package moe.hikari.canvas.session;
 
 import moe.hikari.canvas.deploy.WallResolver;
+import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
@@ -35,6 +36,7 @@ public final class Session {
     private List<Integer> mapIds;
     private WallKey wallKey;
     private ProjectState projectState;
+    private EditSession editSession;
     private long lastActivityAt;
     private long wsDisconnectedAt = -1;
 
@@ -60,6 +62,7 @@ public final class Session {
     public List<Integer> mapIds() { return mapIds; }
     public WallKey wallKey() { return wallKey; }
     public ProjectState projectState() { return projectState; }
+    public EditSession editSession() { return editSession; }
     public long lastActivityAt() { return lastActivityAt; }
     public long wsDisconnectedAt() { return wsDisconnectedAt; }
 
@@ -71,6 +74,7 @@ public final class Session {
     void mapIds(List<Integer> ids) { this.mapIds = ids; }
     void wallKey(WallKey k) { this.wallKey = k; }
     void projectState(ProjectState ps) { this.projectState = ps; }
+    void editSession(EditSession es) { this.editSession = es; }
     void touchActivity(long now) { this.lastActivityAt = now; this.wsDisconnectedAt = -1; }
     void markWsDisconnected(long now) { this.wsDisconnectedAt = now; }
 }
