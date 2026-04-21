@@ -9,6 +9,7 @@ import moe.hikari.canvas.deploy.FrameProtectionListener;
 import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
+import moe.hikari.canvas.render.CanvasProjector;
 import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.render.PlaceholderRenderer;
 import moe.hikari.canvas.session.SessionManager;
@@ -48,6 +49,7 @@ public final class HikariCanvas extends JavaPlugin {
     private MapPacketSender mapPacketSender;
     private FrameDeployer frameDeployer;
     private HikariCanvasRenderer canvasRenderer;
+    private CanvasProjector canvasProjector;
 
     @Override
     public void onLoad() {
@@ -88,6 +90,9 @@ public final class HikariCanvas extends JavaPlugin {
         mapPacketSender = new MapPacketSender();
         frameDeployer = new FrameDeployer(this, new PlaceholderRenderer(), canvasRenderer);
 
+        // M3-T7：编辑 op 成功后把受影响 mapIds 重绘到 canvasRenderer
+        canvasProjector = new CanvasProjector(canvasRenderer, getLogger());
+
         // 超时回收：ISSUED 15min（与 token TTL 一致）/ WS 断连 5min / ACTIVE idle 30min。
         // 扫描周期 30s，待 config.yml 接入后可调。
         sessionReaper = new SessionReaper(
@@ -112,7 +117,8 @@ public final class HikariCanvas extends JavaPlugin {
                                 tokenService, mapPool, database, editorUrlTemplate).build()));
 
         webServer = new WebServer(getLogger(), host, port,
-                tokenService, sessionManager, version, this::paintAllSessionMaps);
+                tokenService, sessionManager, canvasProjector,
+                version, this::paintAllSessionMaps);
         webServer.start();
 
         getLogger().info("HikariCanvas enabled (skeleton)");

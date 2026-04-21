@@ -1,5 +1,7 @@
 package moe.hikari.canvas.state;
 
+import moe.hikari.canvas.render.DirtyRegion;
+
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -43,7 +45,11 @@ public final class EditSession {
     // ---------- 结果类型 ----------
 
     public sealed interface OpResult {
-        record Ok(StatePatch patch) implements OpResult {}
+        /**
+         * @param patch 下行给前端的 state.patch（空 ops 表示"仅 version 推进"）
+         * @param dirty 受影响的画布矩形；{@code null} = 无像素变化（如 canvas.resize no-op）
+         */
+        record Ok(StatePatch patch, DirtyRegion dirty) implements OpResult {}
         record Error(String code, String message) implements OpResult {}
     }
 
@@ -84,7 +90,7 @@ public final class EditSession {
         StatePatch patch = new StatePatchBuilder()
                 .add("/elements/" + insertIdx, element)
                 .build(v);
-        return new OpResult.Ok(patch);
+        return new OpResult.Ok(patch, DirtyRegion.of(element));
     }
 
     // ---------- element.update ----------
@@ -132,7 +138,9 @@ public final class EditSession {
                 b.replace(path, value);
             }
         }
-        return new OpResult.Ok(b.build(v));
+        // 脏矩形 = 旧 bbox ∪ 新 bbox，覆盖元素"从旧位移到新位"的扫过区域
+        DirtyRegion dirty = DirtyRegion.of(existing).union(DirtyRegion.of(updated));
+        return new OpResult.Ok(b.build(v), dirty);
     }
 
     // ---------- element.delete ----------
@@ -141,9 +149,12 @@ public final class EditSession {
         if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
         int idx = state.indexOfElement(elementId);
         if (idx < 0) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        Element removed = state.elements().get(idx);
         state.removeElementAt(idx);
         long v = state.bumpVersion();
-        return new OpResult.Ok(new StatePatchBuilder().remove("/elements/" + idx).build(v));
+        return new OpResult.Ok(
+                new StatePatchBuilder().remove("/elements/" + idx).build(v),
+                DirtyRegion.of(removed));
     }
 
     // ---------- element.reorder ----------
@@ -161,7 +172,7 @@ public final class EditSession {
         if (to == from) {
             // 无实际变化；仍 bump version 保持简单（也可以返回空 ops）
             long v = state.bumpVersion();
-            return new OpResult.Ok(new StatePatch(v, List.of()));
+            return new OpResult.Ok(new StatePatch(v, List.of()), null);
         }
         Element moved = state.elements().get(from);
         state.moveElement(from, to);
@@ -170,7 +181,8 @@ public final class EditSession {
                 .remove("/elements/" + from)
                 .add("/elements/" + to, moved)
                 .build(v);
-        return new OpResult.Ok(patch);
+        // 脏矩形 = 被移动元素的 bbox；该区域下层像素合成结果变了，整图重绘
+        return new OpResult.Ok(patch, DirtyRegion.of(moved));
     }
 
     // ---------- element.transform ----------
@@ -209,7 +221,7 @@ public final class EditSession {
                     + " not supported (wall fixed at " + c.widthMaps() + "x" + c.heightMaps() + ")");
         }
         long v = state.bumpVersion();
-        return new OpResult.Ok(new StatePatch(v, List.of()));
+        return new OpResult.Ok(new StatePatch(v, List.of()), null);
     }
 
     // ---------- canvas.background ----------
@@ -220,7 +232,8 @@ public final class EditSession {
         state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(), color));
         long v = state.bumpVersion();
         return new OpResult.Ok(
-                new StatePatchBuilder().replace("/canvas/background", color).build(v));
+                new StatePatchBuilder().replace("/canvas/background", color).build(v),
+                DirtyRegion.fullCanvas(state));
     }
 
     // ---------- 构造与更新辅助 ----------

@@ -9,6 +9,7 @@ import io.javalin.router.Endpoint;
 import io.javalin.websocket.WsContext;
 import io.javalin.websocket.WsHandlerType;
 import io.javalin.websocket.WsMessageContext;
+import moe.hikari.canvas.render.CanvasProjector;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionState;
@@ -46,6 +47,7 @@ public final class WebServer {
     private final int port;
     private final TokenService tokenService;
     private final SessionManager sessionManager;
+    private final CanvasProjector canvasProjector;
     private final String serverVersion;
     private final Runnable paintHandler;  // M1 demo
     private Javalin app;
@@ -57,12 +59,14 @@ public final class WebServer {
 
     public WebServer(Logger log, String host, int port,
                      TokenService tokenService, SessionManager sessionManager,
+                     CanvasProjector canvasProjector,
                      String serverVersion, Runnable paintHandler) {
         this.log = log;
         this.host = host;
         this.port = port;
         this.tokenService = tokenService;
         this.sessionManager = sessionManager;
+        this.canvasProjector = canvasProjector;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
     }
@@ -288,10 +292,16 @@ public final class WebServer {
         };
 
         if (result instanceof EditSession.OpResult.Ok ok) {
-            // ack 给 client id；然后立即 pushPatch（s-N id）
+            // 1) ack 给 client id
             ctx.send(Envelope.of("ack", in.id(), Map.of("version", ok.patch().version())));
+            // 2) pushPatch（s-N id）——空 ops 的 patch 跳过，避免前端收到无内容消息
             if (!ok.patch().ops().isEmpty()) {
                 pushPatch(sessionId, ok.patch());
+            }
+            // 3) M3-T7 脏矩形投影：受影响 mapIds 重绘并写到 canvasRenderer
+            if (ok.dirty() != null) {
+                Session se = sessionManager.byId(sessionId);
+                if (se != null) canvasProjector.project(se, ok.dirty());
             }
         } else if (result instanceof EditSession.OpResult.Error er) {
             ctx.send(Envelope.error(in.id(), er.code(), er.message()));

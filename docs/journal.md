@@ -5,6 +5,62 @@
 
 ---
 
+## 2026-04-21 · M3-T7 + T8 脏矩形差分 + 多图拼接渲染
+
+**范围：** 编辑 op 成功后把 `ProjectState` 投影到游戏内墙面——受影响 `mapIds` 重绘 palette 像素并推到 `HikariCanvasRenderer`，下一 tick Paper 自动 sync 给所有 viewer。T8 "多图拼接"在 `CanvasCompositor` 的 per-map 合成内自然实现（详见下文），与 T7 一并结清。
+
+**新增文件：**
+
+| 文件 | 职责 |
+|---|---|
+| `render/DirtyRegion.java` | 画布坐标矩形；`of(element)` / `fullCanvas(state)` / `union` / `coveredMapIndices(w,h)` |
+| `render/CanvasCompositor.java` | 纯函数；`compose(state, mapIndex) → byte[128*128]`；palette 缓存 |
+| `render/CanvasProjector.java` | `project(session, region)` → 遍历受影响 mapIndex 调 compositor 写 canvasRenderer |
+| `render/BitmapFont.java`（扩展） | +17 大写字母 + 14 标点；现覆盖 A-Z / 0-9 / `. , : ; ! ? - _ + = / ( )` |
+
+**多图拼接（T8 实现要点）：** `CanvasCompositor.compose` 对每张 map 独立走：
+1. `offsetX = mapCol * 128`、`offsetY = mapRow * 128`（该 map 在画布的左上角像素坐标）
+2. 对每个可见 element，坐标转换为 local 域：`localX = e.x() - offsetX`、`localY = e.y() - offsetY`
+3. `drawRect` / `drawText` 统一把超出 `[0, 128)` 的像素 clip 掉
+
+这样一个 x=120 / w=30 的 rect 在 widthMaps=2 画布上：map0 localX=120 绘 `x∈[120,128)`、map1 localX=-8 绘 `x∈[0,22)`——拼起来还是一个完整 30px 矩形，无缝跨图。
+
+**脏矩形规则（EditSession 侧扩展）：**
+
+| op | region |
+|---|---|
+| `element.add` | 新元素 bbox |
+| `element.update` | 旧 bbox ∪ 新 bbox |
+| `element.delete` | 被删元素 bbox |
+| `element.reorder` | 被移动元素 bbox（z-order 变化触发该区域下层元素重合成）|
+| `element.transform` | = update 路径（旧 ∪ 新）|
+| `canvas.background` | 整个画布 |
+| `canvas.resize` (no-op) | `null`（无像素变化）|
+
+`EditSession.OpResult.Ok` 扩字段 `DirtyRegion dirty`，WebServer 在 ack + pushPatch 之后按 region 调 `canvasProjector.project`。
+
+**M3-T7 主动简化（documented）：**
+- `rotation != 0` 的元素按 `rotation=0` 渲染（log WARN 一次），真 rotation 留 M4
+- Text wrap 不实装，单行渲染；元素自身 `w` 仅用于 `align` 中心/右对齐偏移计算
+- `fontId` 当前只识别 `"bitmap"`（默认），M4 TTF 系统接入再扩
+- fontSize 离散映射：`scale = max(1, round(fontSize/7))`（7→1×、14→2×、21→3×）
+- `rect.stroke.width` 自动 cap 到 `min(w,h)/2` 防溢出
+
+**调色板策略：** 用 Bukkit `MapPalette.matchColor(int,int,int)`（256 色全映射）+ hex string → byte 缓存。Paper 1.21.11 这个 API 和它的 `Color` 重载都标 `@Deprecated(forRemoval=true)`，但官方没给替代且 `CLAUDE.md` 锁 Paper 1.21；`@SuppressWarnings("removal")` 收口，M4 `docs/rendering.md` 真正 LUT 接入后整类替代。
+
+**线程模型：** compositor 纯函数，projector 写 `ConcurrentMap`，`canvasRenderer.render()` 由 Paper 主线程每 tick 调用——三层互不打架，WS 事件处理线程直接调 projector 即可，不必切主线程。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/DirtyRegion.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasProjector.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/render/BitmapFont.java`（扩字表）
+- `plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`（OpResult.Ok 扩 dirty 字段）
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`（dispatchEditOp 接 projector）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（main wiring）
+
+---
+
 ## 2026-04-21 · M3-T6 element.* + canvas.* op 族
 
 **范围：** WS 上行编辑 op 全部接入 `EditSession`，落到 `ProjectState`，产出 `state.patch` 推回前端。契约对应 `docs/protocol.md §5.3 / §5.4`。
