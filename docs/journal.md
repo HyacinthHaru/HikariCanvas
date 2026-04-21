@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-04-21 · M3-T9 per-viewer 同步（架构已满足）
+
+**结论：** M3-T7/T8 引入的 `HikariCanvasRenderer` + `CanvasProjector` 组合已经天然提供 per-viewer 同步，T9 无代码改动。
+
+**机制：**
+- `HikariCanvasRenderer` 是挂在每张 `MapView` 上的 `MapRenderer(contextual=false)`
+- Paper 每 tick 对 **每个看得见该 MapView 的 viewer** 调 `render(map, canvas, player)`，从 `pixelsByMapId` 拉最新像素写入 `MapCanvas`
+- Paper 负责 diff + 下发 `ClientboundMapItemDataPacket` 到该 viewer
+
+所以"会话外的第三个玩家路过墙面"→ Paper 发现他看到这张 map → 调 render → 拿到当前最新 pixels → 自动同步。无论谁看，数据源都是同一份 `ConcurrentMap<mapId, byte[]>`。
+
+**M3 阶段 `super(false)` = non-contextual：** 所有 viewer 共享同一张 canvas，省 CPU。真正的 per-player 差异化（例如编辑辅助线只对编辑者可见、观众看纯画布）需要切到 `super(true)` 并维护 per-player buffer——留 M7 视需要再做。
+
+**验证留给 M3 总集成实测**（两名玩家同一墙面编辑与旁观）。
+
+**关联文件：** 无改动。
+
+---
+
 ## 2026-04-21 · M3-T7 + T8 脏矩形差分 + 多图拼接渲染
 
 **范围：** 编辑 op 成功后把 `ProjectState` 投影到游戏内墙面——受影响 `mapIds` 重绘 palette 像素并推到 `HikariCanvasRenderer`，下一 tick Paper 自动 sync 给所有 viewer。T8 "多图拼接"在 `CanvasCompositor` 的 per-map 合成内自然实现（详见下文），与 T7 一并结清。
