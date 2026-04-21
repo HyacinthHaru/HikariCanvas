@@ -5,6 +5,45 @@
 
 ---
 
+## 2026-04-21 · M2-T7 SessionManager + 会话状态机
+
+**范围：** 编辑会话的生命周期核心。契约 `docs/architecture.md §3`。汇合点——后续 T6 Wand 提供玩家入口、T10 WS auth 标 ACTIVE、T11 命令族调 confirm / commit / cancel。
+
+**文件：**
+- `session/SessionState.java`（新）：四个状态 `SELECTING / ISSUED / ACTIVE / CLOSING`（CLOSED 不用显式枚举——从 `byId` 中移除即 CLOSED）
+- `session/WallKey.java`（新）：`(world, originX, originY, originZ, facing)` 墙面排他锁 key
+- `session/Session.java`（新）：会话可变 POJO；package-private setter 只允许 SessionManager 在持锁段内修改；字段按状态分阶段生效（SELECTING：pos1/pos2/face；ISSUED+：wall/mapIds/wallKey；ACTIVE：lastActivityAt/wsDisconnectedAt）
+- `session/SessionManager.java`（新，核心）：
+  - 索引 `byId` / `byPlayer` / `byWall`；所有公共方法 `synchronized(this)`
+  - `beginSelecting` 返回 sealed `BeginResult.{Ok, AlreadyHasSession}`；后者封装了"每玩家最多 1 会话"约束
+  - `recordPos(sessionId, isFirstCorner, block, face)` + `preview()`：selecting 阶段的聊天栏回显 hook
+  - `confirm` 返回 sealed `ConfirmResult.{Ok, NotReady, WallFailed, WallOccupied, PoolExhausted}`——把所有失败路径显式建模，命令层 pattern-match 后对玩家产出对应的友好消息
+  - `commit` 返回 sealed `CommitResult.{Ok, NotActive}`；ACTIVE 或 ISSUED 都允许 commit（命令通道 vs WS 通道）
+  - `cancel(sessionId, reason)`：幂等、任何非 CLOSING 状态可调；自动归还池 + 释放 wallKey
+  - `markActive` / `touch` / `markDisconnected` 是 T10 WS 层 hook
+  - `liveSessionIds()` 给 {@code MapPool.detectLeaks} 消费
+- `HikariCanvas.java`：`onEnable` 构造 `WallResolver(16)` + `SessionManager(log, mapPool, wallResolver, auditLog)` 并挂在 plugin 上
+
+**设计取舍：**
+- **失败路径用 sealed interface + record 显式建模**：不用 exception。调用方（T11 命令族）能编译期穷举所有 case，避免遗漏分支
+- **Session 可变 + 外部不该直接改**：Java 17+ sealed + 可见性不支持"只 package 能读"；退而用 package-private setter + 文档约束"只在 SessionManager 持锁下修改"
+- **状态机无 CLOSED 枚举**：`forget(s)` 从 map 里移除 = CLOSED；减少状态判定需要
+- **wallKey 即排他锁**：`byWall` 本身就是锁表；commit/cancel 时 `byWall.remove(wallKey, sessionId)` 原子释放
+- **本 M2 不加定时回收 task**：WS idle 5min、auth 超时这些留给 T10/T11。理由：idle 判定需要 `lastActivityAt`，该字段只在 WS 消息到达时更新，而 T7 阶段还没有 WS 绑定；时机还未到
+
+**未做（留给后续）：**
+- 定时回收 task：T10 或 T11 加 Bukkit scheduler 周期扫 `wsDisconnectedAt > 0 && now - wsDisconnectedAt > 5min` 触发 cancel
+- 权限校验：T11 在命令层做（`canvas.edit` / `canvas.commit`）；SessionManager 不做权限判断
+- SignRecord 写入：T11 commit 流程里 SessionManager.commit 之后由调用方 insert 到 `sign_records` 表
+
+**验证：**
+- `./gradlew :plugin:compileJava` 通过
+- SessionManager 虽已挂在 HikariCanvas 但无调用入口，runServer 启动表现与 T9 一致（空跑不崩）。真正闭环测试在 T11+T12。
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/session/` 4 个新文件、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T9 PlaceholderRenderer + BitmapFont
 
 **范围：** 按 `docs/architecture.md §4.4` 渲染 Placeholder 占位图。128×128 浅灰底 + 顶部 "HIKARICANVAS" 水印 + 底部 "N/M" 位置标签。M4 真字体接入前就靠这套。

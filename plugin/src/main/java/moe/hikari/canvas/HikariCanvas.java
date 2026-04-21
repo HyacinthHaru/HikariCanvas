@@ -5,7 +5,9 @@ import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import moe.hikari.canvas.command.CanvasCommand;
 import moe.hikari.canvas.deploy.MapPacketSender;
+import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
+import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
@@ -33,6 +35,8 @@ public final class HikariCanvas extends JavaPlugin {
     private TokenService tokenService;
     private BukkitTask tokenPurgeTask;
     private MapPool mapPool;
+    private WallResolver wallResolver;
+    private SessionManager sessionManager;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
 
@@ -62,6 +66,10 @@ public final class HikariCanvas extends JavaPlugin {
         // 预览地图池（M2 核心机制）。initial=64, max=256，待 config.yml 接入
         mapPool = new MapPool(getLogger(), database.jdbi(), auditLog, 64, 256);
         mapPool.initialize(Bukkit.getWorlds().get(0));
+
+        // 墙面识别 + 会话管理（T6 Wand / T11 命令族会注入这两个）
+        wallResolver = new WallResolver(16);  // canvas-max-maps 默认
+        sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog);
 
         mapPacketSender = new MapPacketSender();
 
