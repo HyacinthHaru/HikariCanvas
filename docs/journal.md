@@ -5,6 +5,48 @@
 
 ---
 
+## 2026-04-21 · M2-T4 MapPool —— PROPOSAL 风险表 #1 核心机制落地
+
+**范围：** 预览地图池状态机（FREE/RESERVED/PERMANENT）+ SQLite 同步 + 启动恢复 + 泄漏检测。**这是 M2 的技术核心**，也是整个项目防止 `idcounts.dat` 膨胀的唯一防线。
+
+**文件：**
+- `plugin/src/main/java/moe/hikari/canvas/pool/PoolState.java`（新）：三状态枚举
+- `plugin/src/main/java/moe/hikari/canvas/pool/PooledMap.java`（新）：不可变 record，`withFree` / `withReserved` / `withPermanent` 原子 transition
+- `plugin/src/main/java/moe/hikari/canvas/pool/PoolExhaustedException.java`（新）：容量耗尽时抛
+- `plugin/src/main/java/moe/hikari/canvas/pool/MapPool.java`（新，核心）：
+  - 索引：`Map<Integer, PooledMap> byId` + `Deque<Integer> freeQueue`
+  - 全部公开方法 `synchronized(this)`
+  - `initialize(World)`：读 `pool_maps` 表 → 校验不变式（异常行降级 FREE + 告警）→ `Bukkit.getMap(id)` 检查 MapView 仍在（丢失则 DELETE 行 + `POOL_ORPHAN_ROW` 告警）→ FREE 数量 < `initial-size` 时 expand 补齐
+  - `reserve(sessionId, count)`：FREE 不够时自动 expand；expand 超 `max-size` 抛 `PoolExhaustedException`（对应 protocol.md §6.1 错误码 `POOL_EXHAUSTED`）
+  - `returnToPool(sessionId)`：cancel 路径；遍历 RESERVED 且 `reservedBy==sessionId` → FREE + 重入 freeQueue
+  - `promoteToPermanent(sessionId, signId, world)`：commit 路径；RESERVED → PERMANENT（从"可用"计数中抽走，但保留在 `byId`）；随后 refill FREE 到 `initial-size`
+  - `detectLeaks(liveSessions)`：RESERVED 但 sessionId 不在活会话中 → 强制归还 + `POOL_LEAK` 告警
+  - 所有状态转移 `persist()` 用 `INSERT ... ON CONFLICT DO UPDATE`（SQLite upsert），幂等
+- `HikariCanvas.java`：onEnable 构造 `MapPool(initial=64, max=256)` 并 `initialize(Bukkit.getWorlds().get(0))`
+
+**关键约束与设计取舍：**
+- **线程安全 / 主线程约束：** `Bukkit.createMap` 与 `MapView` 相关调用必须在主线程，因此 `initialize`、`reserve`、`promoteToPermanent` 三个"可能触发 createMap"的方法**只能主线程调用**（javadoc 已标）。`detectLeaks` 只读状态和归还（不 createMap），可异步调用——给后台 leak detection 留出空间
+- **PDC 标记暂不实装**：data-model.md §3.3 说"SQLite 与 PDC 不一致时以 SQLite 为权威"，M2 阶段只用 SQLite 作为单一 source of truth；MapView PDC 标记（`pool_state` / `owner` / `session_id` 等）留给 M7 打磨期增强韧性——那时再一次性跨所有状态转移打 PDC
+- **initial/max 硬编码 64/256**：config.yml 接入延后；contract 已定默认值
+- **不变式异常一律降级 FREE**：启动时若发现违反不变式的记录（例如 FREE 但 `reserved_by` 非空），不尝试推断原状态，**直接强制归还 FREE**，让池进入已知干净状态。数据安全 > 便利性
+- **missing MapView 处理**：DB 有记录但 `Bukkit.getMap(id)` 返回 null（典型场景：世界文件丢失 / 手动删 idcounts.dat）→ 删 DB 行 + `POOL_ORPHAN_ROW` 审计；让 MapPool 退回干净状态
+
+**实测（首次启动 2026-04-21 16:22）：**
+- 日志链：`Database initialized` → `DB schema current version: 1` → `MapPool recovered 0 entries` → `MapPool growing FREE by 64 to reach initial-size=64` → `HikariCanvas enabled`
+- 创建 64 张 MapView 用时约 3s
+- `sqlite3 data.db "SELECT state, COUNT(*) FROM pool_maps GROUP BY state"` → `FREE|64`
+- `audit_log` 里出现两条：`POOL_EXPAND` 和 `POOL_INITIALIZED`
+- 下次启动（未测试，T12 集成时验证）应走 "MapPool recovered 64 entries; free=64 ..." 分支而不是再 expand
+
+**留给后续任务：**
+- Placeholder 像素填充（T9）：reserve 出来的地图目前 MapView 是空的（客户端会看到旧缓存）；T9 实现 PlaceholderRenderer 后由 T8 FrameDeployer 挂物品框时一并 push 初始像素
+- Leak detection 调度（T7）：当前 `detectLeaks` 方法有了但没挂定时任务——需要 SessionManager 提供 `liveSessions: Set<String>`，T7 SessionManager 就位后再串起来
+- `/canvas stats` 输出（T11）：`MapPool.stats()` 已准备好 record，等命令族实装
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/pool/`（新 4 个文件）、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-20 · M2-T3 TokenService + AuditLog 封装
 
 **范围：** 一次性 token 签发 / 校验 / 消耗的核心服务，并带 SHA-256 审计。按 `docs/security.md §2` 落地。限流（§2.4）延后到 M2-T10 WS 握手时一起做（需要 IP 上下文）。

@@ -5,6 +5,7 @@ import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import moe.hikari.canvas.command.CanvasCommand;
 import moe.hikari.canvas.deploy.MapPacketSender;
+import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
@@ -31,6 +32,7 @@ public final class HikariCanvas extends JavaPlugin {
     private AuditLog auditLog;
     private TokenService tokenService;
     private BukkitTask tokenPurgeTask;
+    private MapPool mapPool;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
 
@@ -56,6 +58,10 @@ public final class HikariCanvas extends JavaPlugin {
         long ticks5min = 20L * 60 * 5;
         tokenPurgeTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this, () -> tokenService.purgeExpired(), ticks5min, ticks5min);
+
+        // 预览地图池（M2 核心机制）。initial=64, max=256，待 config.yml 接入
+        mapPool = new MapPool(getLogger(), database.jdbi(), auditLog, 64, 256);
+        mapPool.initialize(Bukkit.getWorlds().get(0));
 
         mapPacketSender = new MapPacketSender();
 
