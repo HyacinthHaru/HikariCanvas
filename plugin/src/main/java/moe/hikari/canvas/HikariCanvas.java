@@ -84,14 +84,17 @@ public final class HikariCanvas extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new FrameProtectionListener(frameDeployer), this);
 
-        getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
-                event.registrar().register(
-                        new CanvasCommand(this, mapPacketSender, sessionManager).build()));
-
         // M1 骨架：host/port 硬编码，后续任务从 config.yml 读取
         String host = "127.0.0.1";
         int port = 8877;
         String version = getPluginMeta().getVersion();
+        String editorUrlTemplate = "http://" + host + ":" + port + "/?token={token}";
+
+        getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
+                event.registrar().register(
+                        new CanvasCommand(this, sessionManager, frameDeployer,
+                                tokenService, mapPool, database, editorUrlTemplate).build()));
+
         webServer = new WebServer(getLogger(), host, port,
                 tokenService, sessionManager, version, this::paintAllHeldMapsRed);
         webServer.start();

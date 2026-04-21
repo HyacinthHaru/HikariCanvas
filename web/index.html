@@ -15,6 +15,16 @@
       }
       h1 { margin-bottom: 0.25rem; }
       p.lead { color: #888; margin-top: 0; }
+      #status {
+        margin: 0.75rem 0;
+        padding: 0.6rem 0.9rem;
+        border-radius: 6px;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 0.85rem;
+      }
+      #status.pending  { background: #fff3cd; color: #664d03; }
+      #status.ready    { background: #d1e7dd; color: #0a3622; }
+      #status.err      { background: #f8d7da; color: #58151c; }
       .actions { display: flex; gap: 0.6rem; margin: 1rem 0; }
       button {
         padding: 0.6rem 1.2rem;
@@ -45,10 +55,11 @@
   </head>
   <body>
     <h1>HikariCanvas dev probe</h1>
-    <p class="lead">本地开发页面。WebSocket 默认连同源 <code>/ws</code>，也就是 <code>ws://127.0.0.1:8877/ws</code>。</p>
+    <p class="lead">Enter via the clickable URL from <code>/canvas confirm</code> in-game.</p>
+    <div id="status" class="pending">Initialising…</div>
     <div class="actions">
-      <button id="ping-btn">Ping server</button>
-      <button id="paint-btn" class="primary">Paint held map → red</button>
+      <button id="ping-btn" disabled>Ping server</button>
+      <button id="paint-btn" class="primary" disabled>Paint held map → red</button>
     </div>
     <div id="log" aria-live="polite"></div>
     <script type="module" src="/src/main.ts"></script>

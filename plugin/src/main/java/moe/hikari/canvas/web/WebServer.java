@@ -62,8 +62,21 @@ public final class WebServer {
             cfg.jsonMapper(new JavalinJackson().updateMapper(mapper ->
                     mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL)));
 
-            // TODO(M7 单 jar 部署): Javalin 7 staticFiles.add(..., CLASSPATH) 在 fat jar
-            //   下 directory discovery 失败；M7 打磨期改用手写 GET handler 读 classpath
+            // 静态资源手写 GET（因 Javalin 7 staticFiles.add + fat jar 的 directory
+            // discovery 有 bug，改为显式读 classpath 资源）。覆盖 Vite 产物：
+            // index.html + assets/*（hash 化文件名）
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/", ctx -> serveClasspath(ctx, "web/index.html")));
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/assets/{file}", ctx -> {
+                        String file = ctx.pathParam("file");
+                        // 防路径穿越
+                        if (file.contains("/") || file.contains("..")) {
+                            ctx.status(400);
+                            return;
+                        }
+                        serveClasspath(ctx, "web/assets/" + file);
+                    }));
 
             // HTTP 预握手
             cfg.routes.addEndpoint(new Endpoint(
@@ -94,6 +107,31 @@ public final class WebServer {
             app.stop();
             log.info("WebServer stopped");
         }
+    }
+
+    // ---------- 静态资源 ----------
+
+    private void serveClasspath(Context ctx, String resource) {
+        java.io.InputStream in = getClass().getClassLoader().getResourceAsStream(resource);
+        if (in == null) {
+            ctx.status(404);
+            return;
+        }
+        String mime = guessMime(resource);
+        if (mime != null) ctx.contentType(mime);
+        ctx.result(in);
+    }
+
+    private static String guessMime(String path) {
+        if (path.endsWith(".html")) return "text/html; charset=utf-8";
+        if (path.endsWith(".js"))   return "application/javascript";
+        if (path.endsWith(".mjs"))  return "application/javascript";
+        if (path.endsWith(".css"))  return "text/css";
+        if (path.endsWith(".json")) return "application/json";
+        if (path.endsWith(".woff2"))return "font/woff2";
+        if (path.endsWith(".svg"))  return "image/svg+xml";
+        if (path.endsWith(".png"))  return "image/png";
+        return null;
     }
 
     // ---------- HTTP 预握手 ----------

@@ -5,6 +5,91 @@
 
 ---
 
+## 2026-04-21 · M2-T11 /canvas 命令族完整实装 + 端到端闭环
+
+**范围：** 把 M2 所有模块（TokenService / MapPool / SessionManager / FrameDeployer / PlaceholderRenderer / WebServer）串成完整业务链路；同时做一个顺手的修复：Javalin 7 静态资源 fat-jar discovery bug（T7a 留的 TODO）。
+
+**后端改动：**
+
+`command/CanvasCommand.java` 完整重写：
+- 构造签名从 `(plugin, mapPacketSender, sessionManager)` 重新设计成 `(plugin, sessionManager, frameDeployer, tokenService, mapPool, database, editorUrlTemplate)` —— 去掉 `mapPacketSender`，因为 M2 正式命令路径不直接发包
+- 正式子命令全部接入权限 `.requires()`（contract `docs/security.md §6`）：
+  - `edit` / `wand` / `confirm` / `cancel` → `canvas.edit`
+  - `commit` → `canvas.commit`
+  - `stats` / `cleanup` → `canvas.admin`
+- `/canvas confirm`：调 `SessionManager.confirm` pattern-match 5 种结果（Ok / NotReady / WallFailed / WallOccupied / PoolExhausted），Ok 时走「`FrameDeployer.deploy` → `TokenService.issue` → 发可点击 Adventure Component URL（`ClickEvent.openUrl` + `HoverEvent.showText`）→ 移除 wand」；FrameDeployer 抛异常时立即 `SessionManager.cancel("deploy-failed")` 回滚
+- `/canvas commit`：commit 前**快照 `wall / mapIds / ownerUuid / ownerName`** 到局部变量（因为 `SessionManager.commit` 会 forget session）；然后 `SessionManager.commit → FrameDeployer.promote → INSERT sign_records`
+- `/canvas cancel` 增强：commit 前 snapshot `wall.world()`，确保 cancel 后 `FrameDeployer.removeForSession` 有 world 参照
+- `/canvas stats`：`MapPool.stats() + SessionManager.size() + TokenService.activeCount()` 一行输出
+- `/canvas cleanup`：**M2 阶段 stub**，只打印 `soft-deleted sign_records` 数量；实际数据回收 + map 归还留给 M7 的 `/canvas fsck` 实装
+- 删除 M1/M2 过渡 DEPRECATED 子命令：`give` / `paint` / `placeholder`（T1 起保留至今）
+- 删除 T5 demo 用的 `MapPacketSender` / `PlaceholderRenderer` 字段（FrameDeployer 内部持有，主命令路径不再直接用）
+
+**sign_records 写入：** M2 阶段 `project_json` 存 `"{}"` 占位、`template_id` / `template_version` 为 null。M3 真正的编辑协议族会逐步填充 `project_json`。
+
+**顺手修复 Javalin 7 staticFiles fat-jar bug（T7a TODO）：**
+`web/WebServer.java` 用两条显式 `Endpoint` 替代 `cfg.staticFiles.add`：
+```java
+GET /                → serveClasspath("web/index.html")
+GET /assets/{file}   → serveClasspath("web/assets/" + file)   // 防路径穿越检查
+```
+`serveClasspath` 用 `ClassLoader.getResourceAsStream` 直接流式返回；MIME 按扩展名手动映射（html / js / css / json / woff2 / svg / png）。单 jar 部署在 M2 正式可用；Vite dev 模式也仍然能跑（跨源 WS 到 8877）。
+
+**前端 (`web/src/main.ts`) 改 auth-first 流程：**
+- 页面加载时从 `window.location.search` 取 `token`
+- 自动 `connect(token)` → `open → sendAuth(token)` → `onmessage` 等 `op=ready`
+- `ready` 到来：`handleReady` 从 `payload.projectState.canvas.widthMaps/heightMaps` 显示"wall W×H"，enable ping / paint 按钮
+- 没 token 时显示明确提示"Start via /canvas confirm in Minecraft"（而不是静默失败）
+- 增加 `#status` 彩色状态条（pending/ready/err 三色）
+- **token 原文不进 log**（security.md §2.2 要求）
+- TypeScript 类型收窄陷阱：`instanceof` narrowing 在 `throw` 外不会传播到 outer `const`；加一组局部变量 `logEl / statusEl / pingBtn / paintBtn` 做类型假设
+
+**`web/index.html`**：增加 `#status` 状态条，初始 `disabled` 两个按钮
+
+**主类接入（HikariCanvas.java）：** 构造 CanvasCommand 时传 `(this, sessionManager, frameDeployer, tokenService, mapPool, database, "http://127.0.0.1:8877/?token={token}")`
+
+**端到端链路（T12 要实测的完整流程）：**
+```
+MC 客户端                                       浏览器
+   ├─ /canvas edit                                 
+   ├─ 左键 / 右键点两角                             
+   ├─ /canvas confirm                              
+   │   ├─ SessionManager.confirm: SELECTING→ISSUED
+   │   ├─ MapPool.reserve N 张
+   │   ├─ FrameDeployer.deploy (挂框 + 填 Placeholder)
+   │   ├─ TokenService.issue → token
+   │   └─ 发可点击聊天消息 [Open editor: http://...?token=...]
+   ├─ 点击聊天链接  ──────────────────────► GET / → index.html
+   │                                       GET /assets/*.js → 加载
+   │                                       JS 从 URL 取 token → WS /ws
+   │                                       → send {op:auth, token}
+   │                                       ← {op:ready, projectState:{wall W×H}}
+   │                                       UI 变绿，按钮 enabled
+   ├─ (编辑侧 M3 才做，M2 编辑器只能 ping/paint)
+   └─ /canvas commit                              
+       ├─ SessionManager.commit: ACTIVE→CLOSING→CLOSED
+       ├─ MapPool.promoteToPermanent → refill FREE
+       ├─ FrameDeployer.promote (PDC session→sign)
+       └─ INSERT sign_records row
+```
+
+**未做（按 M2 范围有意留到后续）：**
+- 定时回收 task（WS 断连 5min 宽限 / auth 5s 超时 / idle disconnect）—— M7 polish
+- token rotate（WS 握手成功后重发新 token）—— M3 / M7
+- 限流（security.md §2.4 单玩家 / 全局）—— M7
+- Origin 校验（公网部署时开）—— M7
+- `/canvas cleanup` 实际数据回收 + `/canvas fsck` —— M7
+- `project_json` 真实内容 —— M3
+
+**验证：**
+- `./gradlew :plugin:shadowJar` 通过
+- 前端 `npm run build` 通过（index.html 2.29 KB / index-CZM-HPIQ.js 3.28 KB）
+- 端到端真实闭环测试留到 T12
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`、`plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`web/index.html`、`web/src/main.ts`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T10 WS 预握手 + auth/ready 协议
 
 **范围：** 按 `docs/protocol.md §3.1 / §3.2` 落地会话进入协议：HTTP 预握手校验 token 并返回会话元信息；WS /ws 首帧必须是 `op=auth`；`ready` 响应带 `projectState` 占位。
