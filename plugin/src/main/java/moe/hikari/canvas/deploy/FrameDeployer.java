@@ -1,5 +1,6 @@
 package moe.hikari.canvas.deploy;
 
+import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.render.PlaceholderRenderer;
 import moe.hikari.canvas.session.Session;
 import org.bukkit.Bukkit;
@@ -42,7 +43,7 @@ public final class FrameDeployer {
 
     private final JavaPlugin plugin;
     private final PlaceholderRenderer placeholderRenderer;
-    private final MapPacketSender mapPacketSender;
+    private final HikariCanvasRenderer canvasRenderer;
 
     private final NamespacedKey sessionKey;
     private final NamespacedKey signKey;
@@ -51,10 +52,10 @@ public final class FrameDeployer {
 
     public FrameDeployer(JavaPlugin plugin,
                          PlaceholderRenderer placeholderRenderer,
-                         MapPacketSender mapPacketSender) {
+                         HikariCanvasRenderer canvasRenderer) {
         this.plugin = plugin;
         this.placeholderRenderer = placeholderRenderer;
-        this.mapPacketSender = mapPacketSender;
+        this.canvasRenderer = canvasRenderer;
         // 固定 namespace = hikari_canvas（和 data-model.md §3.1 对齐）
         this.sessionKey = new NamespacedKey(plugin, "session");
         this.signKey = new NamespacedKey(plugin, "sign");
@@ -86,7 +87,6 @@ public final class FrameDeployer {
         BlockFace facing = wall.facing();
 
         int mounted = 0;
-        Player owner = Bukkit.getPlayer(session.playerUuid());
 
         for (int row = 0; row < height; row++) {
             for (int col = 0; col < width; col++) {
@@ -103,11 +103,15 @@ public final class FrameDeployer {
                     blockZ = wall.minZ();
                 }
 
-                // frame 实体位置 = 墙块朝 facing 方向 1 格
-                Location frameLoc = new Location(world,
+                // frame 实体位置 = 墙块朝 facing 方向 1 格**的方块中心**。
+                // 用整数 block 坐标 spawn 时 MC 客户端会把 entity 判为不合法并立即
+                // despawn（"闪一下恢复原样"）——改用 block.toCenterLocation() 放到
+                // 格子中心（x+0.5, y+0.5, z+0.5）才稳妥。
+                Location frameLoc = world.getBlockAt(
                         blockX + facing.getModX(),
                         blockY + facing.getModY(),
-                        blockZ + facing.getModZ());
+                        blockZ + facing.getModZ()
+                ).getLocation().toCenterLocation();
 
                 int mapId = mapIds.get(slotIndex);
                 MapView view = Bukkit.getMap(mapId);
@@ -116,6 +120,8 @@ public final class FrameDeployer {
                             "FrameDeployer: MapView missing for mapId=" + mapId + ", skipping slot " + slotIndex);
                     continue;
                 }
+                // MapPool.initialize / expand 已为每张 MapView 装好 HikariCanvasRenderer；
+                // 这里**不要**再清 renderer（否则把刚装的那个也清掉了）
 
                 ItemStack mapItem = new ItemStack(Material.FILLED_MAP);
                 MapMeta meta = (MapMeta) mapItem.getItemMeta();
@@ -123,23 +129,22 @@ public final class FrameDeployer {
                 mapItem.setItemMeta(meta);
 
                 final int finalSlot = slotIndex;
-                world.spawn(frameLoc, ItemFrame.class, frame -> {
-                    frame.setFacingDirection(facing, true);
-                    frame.setItem(mapItem);
-                    frame.setRotation(Rotation.NONE);
-                    frame.setVisible(false);
-                    frame.setFixed(true);
-                    PersistentDataContainer pdc = frame.getPersistentDataContainer();
+                // M2 调试：暂时不 setInvisible / setFixed——Paper 1.21 spawn consumer
+                // 里同时设这两项会触发客户端 entity desync（spawn 瞬间 despawn "闪一下"）。
+                // 保护交给 FrameProtectionListener。polished 版本 M7 再评估。
+                ItemFrame frame = world.spawn(frameLoc, ItemFrame.class, f -> {
+                    f.setFacingDirection(facing, true);
+                    f.setItem(mapItem);
+                    f.setRotation(Rotation.NONE);
+                    PersistentDataContainer pdc = f.getPersistentDataContainer();
                     pdc.set(sessionKey, PersistentDataType.STRING, session.id());
                     pdc.set(slotKey, PersistentDataType.INTEGER, finalSlot);
                     pdc.set(roleKey, PersistentDataType.STRING, ROLE_PREVIEW);
                 });
 
-                // 立即 push Placeholder 像素（仅会话玩家）
-                if (owner != null) {
-                    byte[] pixels = placeholderRenderer.render(slotIndex, total);
-                    mapPacketSender.sendFullMap(owner, mapId, pixels);
-                }
+                // 写 Placeholder 像素到 shared renderer；Paper 每 tick 自动同步给所有 viewer
+                byte[] pixels = placeholderRenderer.render(slotIndex, total);
+                canvasRenderer.update(mapId, pixels);
                 mounted++;
             }
         }

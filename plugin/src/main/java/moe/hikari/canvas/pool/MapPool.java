@@ -1,5 +1,6 @@
 package moe.hikari.canvas.pool;
 
+import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.storage.AuditLog;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
@@ -39,13 +40,16 @@ public final class MapPool {
     private final Logger log;
     private final Jdbi jdbi;
     private final AuditLog auditLog;
+    private final HikariCanvasRenderer sharedRenderer;
     private final int initialSize;
     private final int maxSize;
 
     private final Map<Integer, PooledMap> byId = new HashMap<>();
     private final Deque<Integer> freeQueue = new ArrayDeque<>();
 
-    public MapPool(Logger log, Jdbi jdbi, AuditLog auditLog, int initialSize, int maxSize) {
+    public MapPool(Logger log, Jdbi jdbi, AuditLog auditLog,
+                   HikariCanvasRenderer sharedRenderer,
+                   int initialSize, int maxSize) {
         if (initialSize <= 0 || maxSize < initialSize) {
             throw new IllegalArgumentException(
                     "invalid pool sizing: initial=" + initialSize + " max=" + maxSize);
@@ -53,6 +57,7 @@ public final class MapPool {
         this.log = log;
         this.jdbi = jdbi;
         this.auditLog = auditLog;
+        this.sharedRenderer = sharedRenderer;
         this.initialSize = initialSize;
         this.maxSize = maxSize;
     }
@@ -92,6 +97,11 @@ public final class MapPool {
                         Map.of("map_id", rec.mapId(), "state", rec.state().name()));
                 continue;
             }
+            // 重启后 Paper 把默认 renderer 加回 MapView，会每 tick 写空白 canvas 覆盖
+            // 我们直接 push 的 MapData packet。解法：清默认 + 装我们自己的 renderer，
+            // 让 Paper tick 去 HikariCanvasRenderer 拿像素。
+            new java.util.ArrayList<>(view.getRenderers()).forEach(view::removeRenderer);
+            view.addRenderer(sharedRenderer);
 
             PooledMap normalizedRec = enforceInvariant(rec, now);
             if (!normalizedRec.equals(rec)) {
@@ -262,8 +272,9 @@ public final class MapPool {
         long now = System.currentTimeMillis();
         for (int i = 0; i < count; i++) {
             MapView view = Bukkit.createMap(world);
-            // 移除默认 renderer（不画地形），只有插件主动 push 像素
-            view.getRenderers().forEach(view::removeRenderer);
+            // 清默认 renderer，装我们的
+            new java.util.ArrayList<>(view.getRenderers()).forEach(view::removeRenderer);
+            view.addRenderer(sharedRenderer);
             int id = view.getId();
             PooledMap rec = new PooledMap(id, PoolState.FREE, null, null, null, now, now);
             byId.put(id, rec);

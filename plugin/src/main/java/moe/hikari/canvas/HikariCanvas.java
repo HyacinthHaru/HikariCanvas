@@ -9,6 +9,7 @@ import moe.hikari.canvas.deploy.FrameProtectionListener;
 import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
+import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.render.PlaceholderRenderer;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.TokenService;
@@ -44,6 +45,7 @@ public final class HikariCanvas extends JavaPlugin {
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
     private FrameDeployer frameDeployer;
+    private HikariCanvasRenderer canvasRenderer;
 
     @Override
     public void onLoad() {
@@ -68,8 +70,13 @@ public final class HikariCanvas extends JavaPlugin {
         tokenPurgeTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this, () -> tokenService.purgeExpired(), ticks5min, ticks5min);
 
+        // 共享 MapRenderer：所有受管 MapView 都挂它，让 Paper tick 持续把我们
+        // 的 Placeholder / 编辑像素同步给 viewer，避免默认 canvas 每 tick 覆盖回空白
+        canvasRenderer = new HikariCanvasRenderer();
+
         // 预览地图池（M2 核心机制）。initial=64, max=256，待 config.yml 接入
-        mapPool = new MapPool(getLogger(), database.jdbi(), auditLog, 64, 256);
+        mapPool = new MapPool(getLogger(), database.jdbi(), auditLog,
+                canvasRenderer, 64, 256);
         mapPool.initialize(Bukkit.getWorlds().get(0));
 
         // 墙面识别 + 会话管理（T6 Wand / T11 命令族会注入这两个）
@@ -77,7 +84,7 @@ public final class HikariCanvas extends JavaPlugin {
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog);
 
         mapPacketSender = new MapPacketSender();
-        frameDeployer = new FrameDeployer(this, new PlaceholderRenderer(), mapPacketSender);
+        frameDeployer = new FrameDeployer(this, new PlaceholderRenderer(), canvasRenderer);
 
         getServer().getPluginManager().registerEvents(
                 new WandListener(this, sessionManager), this);
@@ -96,7 +103,7 @@ public final class HikariCanvas extends JavaPlugin {
                                 tokenService, mapPool, database, editorUrlTemplate).build()));
 
         webServer = new WebServer(getLogger(), host, port,
-                tokenService, sessionManager, version, this::paintAllHeldMapsRed);
+                tokenService, sessionManager, version, this::paintAllSessionMaps);
         webServer.start();
 
         getLogger().info("HikariCanvas enabled (skeleton)");
@@ -125,25 +132,24 @@ public final class HikariCanvas extends JavaPlugin {
     }
 
     /**
-     * 被 WebServer 的 {@code paint} op 触发；切到主线程遍历在线玩家，
-     * 对主手的 {@code filled_map} 整张涂红。M1 demo：不做身份绑定，
-     * M2 引入 session/token 后按会话对应的玩家来精确发包。
+     * 被 WebServer 的 {@code paint} op 触发：把所有活跃会话的全部 mapIds 涂红。
+     * 走 {@link HikariCanvasRenderer#update} 存像素，Paper tick 自动同步给 viewer。
+     * M2 demo 一般只有 1 个会话，效果等同于"把该会话墙面全涂红"。
      */
-    private void paintAllHeldMapsRed() {
+    private void paintAllSessionMaps() {
         Bukkit.getScheduler().runTask(this, () -> {
-            int painted = 0;
-            byte[] pixels = new byte[MapPacketSender.MAP_PIXELS];
+            byte[] pixels = new byte[128 * 128];
             Arrays.fill(pixels, RED_PALETTE);
-            for (Player p : Bukkit.getOnlinePlayers()) {
-                ItemStack item = p.getInventory().getItemInMainHand();
-                if (item.getType() != Material.FILLED_MAP) continue;
-                if (!(item.getItemMeta() instanceof MapMeta meta)) continue;
-                MapView view = meta.getMapView();
-                if (view == null) continue;
-                mapPacketSender.sendFullMap(p, view.getId(), pixels);
-                painted++;
+            int painted = 0;
+            for (String sid : sessionManager.liveSessionIds()) {
+                var s = sessionManager.byId(sid);
+                if (s == null || s.mapIds() == null) continue;
+                for (Integer mapId : s.mapIds()) {
+                    canvasRenderer.update(mapId, pixels);
+                    painted++;
+                }
             }
-            getLogger().info("WS paint op: painted " + painted + " held maps");
+            getLogger().info("WS paint op: painted " + painted + " session maps");
         });
     }
 }

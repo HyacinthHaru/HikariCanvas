@@ -6,3 +6,28 @@ authors:
   - HaruHyacinth
 description: Text signage plugin with TTF font rendering, template system, and a live web editor.
 website: https://github.com/HyacinthHaru/HikariCanvas
+
+# 权限节点（完整节点表见 docs/security.md §5）
+# M2 demo 阶段：编辑 / 提交类权限给所有玩家，管理类保留 op
+permissions:
+  canvas.use:
+    description: Use any HikariCanvas functionality
+    default: true
+  canvas.edit:
+    description: Open an editing session
+    default: true
+  canvas.wand:
+    description: Receive a Canvas Wand
+    default: true
+  canvas.commit:
+    description: Commit (save) a sign
+    default: true
+  canvas.admin:
+    description: Administrative commands (stats / cleanup / reload)
+    default: op
+  canvas.admin.force-break:
+    description: Break HikariCanvas-managed item frames / supporting blocks
+    default: op
+  canvas.admin.bypass-limit:
+    description: Bypass rate limits and canvas size caps
+    default: op

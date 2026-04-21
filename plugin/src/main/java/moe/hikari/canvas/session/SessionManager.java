@@ -114,9 +114,19 @@ public final class SessionManager {
     /**
      * {@code SELECTING → ISSUED}：解析墙面 → 校验排他锁 → 借池 → 挂锁。
      * <b>必须主线程</b>（MapPool.reserve 可能 createMap）。
+     *
+     * <p>幂等容错：非 SELECTING 状态（已 ISSUED/ACTIVE/CLOSING）会返回
+     * {@link ConfirmResult.NotReady} 而不是抛异常——调用方 pattern-match 出"请先 cancel"。</p>
      */
     public synchronized ConfirmResult confirm(String sessionId) {
-        Session s = requireState(sessionId, SessionState.SELECTING);
+        Session s = byId.get(sessionId);
+        if (s == null) {
+            return new ConfirmResult.NotReady("session not found");
+        }
+        if (s.state() != SessionState.SELECTING) {
+            return new ConfirmResult.NotReady(
+                    "session already in state " + s.state() + " — use /canvas cancel to reset");
+        }
         if (s.pos1() == null || s.pos2() == null) {
             return new ConfirmResult.NotReady("please click both corners first");
         }

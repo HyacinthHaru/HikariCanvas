@@ -5,6 +5,91 @@
 
 ---
 
+## 2026-04-21 · M2-T12 集成测试 + 运行时调试 + **M2 完成**
+
+**范围：** 端到端实测联调，沿途修 5 个运行时 bug；M2 所有契约要求的功能就位。`PROPOSAL §6` M2 行从"2 周"更新为"已完成（2026-04-21）"。
+
+**实测达成的完整闭环：**
+```
+MC 客户端 /canvas edit + 左右键两角 + /canvas confirm
+  → 聊天栏收到可点击 editor URL
+浏览器点击 URL（MC 弹确认 → 打开本机 8877/?token=...）
+  → 页面加载 (plugin serve) → main.ts 取 token → WS auth
+  → 收到 ready（带 projectState.canvas.WxH）→ 状态条变绿 + 按钮 enable
+浏览器点 Paint
+  → WS paint op → HikariCanvas.paintAllSessionMaps
+  → 对活跃会话的所有 mapIds 填红色像素 → canvasRenderer.update(...)
+  → Paper 下一 tick 自动把 canvas sync 给所有 viewer
+  → 游戏里整面墙同时变红
+```
+
+**沿途修的 5 个运行时 bug（按发现顺序）：**
+
+1. **命令注册但 Brigadier 报 "unknown"**
+   - 症状：`/canvas edit` 等命令显示"未知或不完整的命令"
+   - 原因：T11 加了 `.requires("canvas.edit")` 权限检查；玩家默认无此权限，Brigadier 在 tab 补全/执行时直接把命令藏起
+   - 修：`paper-plugin.yml` 新增 `permissions:` 字段，`canvas.edit / wand / commit / use` `default: true`；`canvas.admin*` `default: op`
+
+2. **ItemFrame 挂上立刻消失（"闪一下就没了"）**
+   - 症状：`/canvas confirm` 后 6 个 frame 瞬间出现又瞬间消失；log 里 `valid=true` 看上去正常
+   - 原因：`setFixed(true)` + `setVisible(false)` 在 Paper 1.21 的 `world.spawn(..., consumer)` 内部被 apply 时，客户端 entity desync——add packet 和 metadata update 顺序问题
+   - 修：M2 阶段**暂不设 INVISIBLE / FIXED**，保护完全交给 `FrameProtectionListener`。M7 polish 时再回来精调（可能需要 scheduled 1-tick-later 设 fixed）
+
+3. **Placeholder 像素"闪一下被空白覆盖"**
+   - 症状：frame 留住了，但 Placeholder 图像只显示一瞬间，立即被 MC 自己 tick 成空白
+   - 原因：Bukkit `MapView` 有 per-tick 渲染机制——即使清空 `getRenderers()`，Paper 每 tick 仍然把空 canvas sync 给 viewer，覆盖我们直接 push 的 `ClientboundMapItemDataPacket`
+   - 修：**不再对抗 Paper tick**，而是**合作**——新增共享 {@link moe.hikari.canvas.render.HikariCanvasRenderer}（`super(false)` non-contextual），`MapPool` 为每张 MapView `addRenderer`；外部像素改动调 `canvasRenderer.update(mapId, pixels)`，Paper tick 时 renderer 会把像素写进 canvas，自然走官方 sync 通道
+   - 关联：`MapCanvas.setPixel` 内部有 dirty flag，重复写相同值不产生 packet，CPU 可接受
+
+4. **HikariCanvasRenderer 被 FrameDeployer 清掉**
+   - 症状：bug #3 修完后仍然不生效，log 里看 MapView 当前 renderer 数 = 0
+   - 原因：`FrameDeployer.deploy` 里残留了一段"清 renderer"的 debug 代码，把 `MapPool.initialize/expand` 刚装上的 `HikariCanvasRenderer` 又清掉了
+   - 修：删除 FrameDeployer 里的清 renderer 代码；MapPool 负责唯一的 renderer 生命周期
+
+5. **浏览器 Paint 点了没反应**
+   - 症状：所有 frame OK、Placeholder 稳定显示、浏览器 auth 成功，但点 Paint 按钮墙不变红；后端 log 显示 `painted 0 held maps`
+   - 原因：paintHandler 仍是 M1 demo 的"遍历在线玩家主手 `filled_map` 涂红"——M2 玩家 confirm 完手里已无 map item
+   - 修：改为 `paintAllSessionMaps`：遍历 `SessionManager.liveSessionIds()`、对每个活跃会话的全部 `mapIds` 填红像素 → `canvasRenderer.update`
+
+**运行时 cleanup（commit 里一并做）：**
+- 去掉 FrameDeployer 里 T12 期间加的 spawn log / +1 tick 诊断 log
+- 恢复 `FrameProtectionListener` 注册（T12 debug 阶段为排除嫌疑临时注释掉了）
+- 修 `SessionManager.confirm` 的 `requireState` 抛异常问题：已 ISSUED 状态二次 confirm 现在返回 `ConfirmResult.NotReady` 而不是抛 IllegalStateException
+
+**另两个已知问题暂未修（不阻塞 M2 验收）：**
+- **旁边有草/花时 frame 仍然闪掉消失**：WallResolver 只校验墙面方块，没校验**墙面前方一格（frame 将要占据的格子）**是空气。短草/花/雪层等会让 MC 判 frame 不合法 → despawn。修法：WallResolver 遍历 bbox 时顺便 check `getRelative(facing).getType() == AIR`，非空气 → `OCCUPIED` 或新增 `FRAME_SPACE_BLOCKED` 错误码。留给 M2 polish 小修或 M3 集成时补
+- **靠侧墙的某格 frame 不显示**：可能是客户端视距 / chunk tracker / 相邻实体碰撞的边缘情况。留 M7 单独调查
+
+**未做（按 M2 契约范围有意留给后续）：**
+- **Token rotate**（security.md §2.2）— 断线重连 M3 再做
+- **定时回收 task**（WS 断连 5min 宽限 + auth 5s 超时 + idle disconnect）— M7
+- **限流**（security.md §2.4）— M7
+- **Origin 校验** — M7
+- **`/canvas cleanup` 真正数据回收**（现 stub）— M7 `/canvas fsck`
+
+**里程碑总结（M1→M2）：**
+
+| 任务 | 关键点 |
+|---|---|
+| T1 改名 /hc → /canvas | 代码跟进 契约 |
+| T2 SQLite + HikariCP + JDBI | 5 表 schema v1 |
+| T3 TokenService | SecureRandom + CAS 原子 consume + SHA-256 审计 |
+| T4 MapPool | **核心机制**，SQLite 幂等 upsert + 不变式自愈 |
+| T5 WallResolver | 纯算法 + 7 种失败码 sealed 建模 |
+| T6 Wand + SELECTING | 命令/物品双入口；PlayerInteract listener |
+| T7 SessionManager | 汇合点，状态机 SELECTING→ISSUED→ACTIVE→CLOSING |
+| T8 FrameDeployer + 保护 | 挂框 + PDC + HangingBreak/BlockBreak 拦截 |
+| T9 PlaceholderRenderer | 手写 5×7 位图字表，浅灰底 + 水印 + "N/M" |
+| T10 WS auth/ready | 预握手 peek + 首帧 consume + rotate 留坑 |
+| T11 /canvas 命令族 | 5 sealed ConfirmResult pattern-match + sign_records 入库 + 顺手修 staticFiles fat-jar |
+| T12 集成测试 | 5 运行时 bug + HikariCanvasRenderer 设计收敛 |
+
+**M2 工期：** 2026-04-21 立项契约修订 + 当日完成 12 个任务 —— 1 天完成（原估 2 周）。
+
+**关联文件：** `PROPOSAL.md`（§6 M2 行状态更新）、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`plugin/src/main/java/moe/hikari/canvas/deploy/FrameDeployer.java`、`plugin/src/main/java/moe/hikari/canvas/pool/MapPool.java`、`plugin/src/main/java/moe/hikari/canvas/render/HikariCanvasRenderer.java`（新）、`plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`、`plugin/src/main/resources/paper-plugin.yml`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T11 /canvas 命令族完整实装 + 端到端闭环
 
 **范围：** 把 M2 所有模块（TokenService / MapPool / SessionManager / FrameDeployer / PlaceholderRenderer / WebServer）串成完整业务链路；同时做一个顺手的修复：Javalin 7 静态资源 fat-jar discovery bug（T7a 留的 TODO）。
