@@ -4,9 +4,12 @@ import com.github.retrooper.packetevents.PacketEvents;
 import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import moe.hikari.canvas.command.CanvasCommand;
+import moe.hikari.canvas.deploy.FrameDeployer;
+import moe.hikari.canvas.deploy.FrameProtectionListener;
 import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
+import moe.hikari.canvas.render.PlaceholderRenderer;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.session.WandListener;
@@ -40,6 +43,7 @@ public final class HikariCanvas extends JavaPlugin {
     private SessionManager sessionManager;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
+    private FrameDeployer frameDeployer;
 
     @Override
     public void onLoad() {
@@ -73,9 +77,12 @@ public final class HikariCanvas extends JavaPlugin {
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog);
 
         mapPacketSender = new MapPacketSender();
+        frameDeployer = new FrameDeployer(this, new PlaceholderRenderer(), mapPacketSender);
 
         getServer().getPluginManager().registerEvents(
                 new WandListener(this, sessionManager), this);
+        getServer().getPluginManager().registerEvents(
+                new FrameProtectionListener(frameDeployer), this);
 
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
                 event.registrar().register(

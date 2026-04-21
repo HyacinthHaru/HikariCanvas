@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-04-21 · M2-T8 FrameDeployer + FrameProtectionListener
+
+**范围：** 物品框的批量挂装 / 会话终止时移除 / commit 升级 permanent，以及保护 listener。契约 `docs/architecture.md §7.2` 与 `docs/security.md §5`。T11 命令族实装时把这些 hook 串到 SessionManager 状态转移上。
+
+**文件：**
+- `deploy/FrameDeployer.java`（新）：
+  - `deploy(Session, wall, mapIds)`：按 bbox 逐格 spawn ItemFrame，`INVISIBLE + FIXED + rotation NONE + mapItem`；PDC 打 `session / slot / role=preview`；slot 编号 = `row × width + col`，`row=0` 为最上排；deploy 后立即 push Placeholder 像素**只发会话玩家**（per-viewer 同步走 M3）
+  - `removeForSession(sessionId, world)`：扫世界 ItemFrame 按 PDC session 删除；cancel 路径用
+  - `promote(sessionId, signId, world)`：preview → permanent，改 PDC（`sessionKey` 移除 / `signKey` 设 / `roleKey = "permanent"`），**不重建实体** = frame 保持可见
+  - `isProtectedFrame(ItemFrame)`：保护 listener 判定入口（PDC 里有 session 或 sign key）
+  - 4 个 NamespacedKey（`session / sign / slot / role`）全部在 `hikari_canvas` namespace 下
+- `deploy/FrameProtectionListener.java`（新）：
+  - `HangingBreakEvent`：实体原因（爆炸/物理失联）一律拒绝；玩家攻击由下一个 handler 处理
+  - `HangingBreakByEntityEvent`：拒绝，除非破坏者是持 `canvas.admin.force-break` 权限的玩家
+  - `PlayerInteractEntityEvent`：右键改内容拒绝
+  - `BlockBreakEvent`：扫 4 个水平相邻格，若有 attached 在本方块的 protected frame 则取消；同样 `canvas.admin.force-break` bypass。M2 只支持垂直墙面，故只扫水平 4 方向；M4+ 放宽后补 UP/DOWN
+- `HikariCanvas.java`：`onEnable` 构造 `FrameDeployer(this, new PlaceholderRenderer(), mapPacketSender)` + 注册 `FrameProtectionListener`
+
+**关键取舍：**
+- **per-viewer 同步局限**：Minecraft MapData 是 per-player 推送，不是全局广播。T8 只给会话玩家发 Placeholder；其他在线玩家看到的是 MC 客户端本地缓存（新地图会是空白 / 灰）。完整 per-viewer 差分同步是 M3 `protocol.md §state.patch` 的事
+- **promote 不重建实体**：仅改 PDC `sessionKey → signKey`，物品框保持原位可见；好处是不会有"空白闪一帧"
+- **slot 编号 vs 视觉方向**：按 bbox 坐标最小值递增命名（row=0 为最高、col=0 靠 minZ/minX），不对齐"玩家视角左/右"。T11 + Placeholder 对齐后可能要调；M2 demo 阶段保持一致即可
+- **没写 deploy 的回滚**：若某一 slot spawn 失败，之前成功的 frame 不会自动删除；M2 demo 阶段接受这种局部损坏，T12 集成测试时再看
+
+**与其他模块的对接清单（T11 将完成）：**
+- SessionManager.confirm 成功后：调 `frameDeployer.deploy(session, wall, mapIds)`
+- SessionManager.cancel 成功后：调 `frameDeployer.removeForSession(sessionId, wall.world())`
+- SessionManager.commit 成功后：调 `frameDeployer.promote(sessionId, signId, world)`
+
+**验证：**
+- `./gradlew :plugin:shadowJar` 通过；Paper 1.21 API 里 `setFacingDirection(face, force=true)` / `ItemFrame#setVisible(false)` / `setFixed(true)` 全部编译通过
+- 运行时验证留给 T11（T11 完整命令族串好后自然触发）或 T12 集成
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/deploy/FrameDeployer.java`、`plugin/src/main/java/moe/hikari/canvas/deploy/FrameProtectionListener.java`、`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T6 Canvas Wand + SELECTING 玩家交互入口
 
 **范围：** 玩家侧的墙面选区 UX 全部就绪。命令入口（`/canvas edit`）+ Wand 物品入口双通道、左/右键点击记 pos1/pos2、聊天栏实时 echo 坐标与墙面预览、`/canvas cancel` 放弃。此时 T7 的 SessionManager 状态机第一次有了真正的驱动源。
