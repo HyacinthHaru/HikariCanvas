@@ -49,8 +49,9 @@ public final class WallResolver {
         VERTICAL_ONLY,     // normal 是 UP/DOWN（M2 不支持）
         NOT_COPLANAR,      // 两点不在同一垂直平面
         TOO_LARGE,         // 超过 maxMaps
-        BLOCK_NOT_SOLID,   // bbox 内某方块非实心 full cube
-        OCCUPIED           // bbox 前方 + 1 格已有 ItemFrame
+        BLOCK_NOT_SOLID,     // bbox 内某方块非实心 full cube
+        FRAME_SPACE_BLOCKED, // bbox 前方 + 1 格被非 air 方块（草/花/水等）占住，ItemFrame 无法稳定存在
+        OCCUPIED             // bbox 前方 + 1 格已有 ItemFrame
     }
 
     private static final Set<BlockFace> HORIZONTAL = EnumSet.of(
@@ -110,6 +111,15 @@ public final class WallResolver {
                         return fail(FailReason.BLOCK_NOT_SOLID,
                                 "block at (" + x + "," + y + "," + z + ") = "
                                         + wall.getType() + " not a solid full cube");
+                    }
+                    // frame 实体所在格（墙块朝 facing 前一格）必须是 air。
+                    // 草/花/水/熔岩等非 air 方块会让客户端判 frame 不合法并 despawn
+                    // （M2 实测 bug："旁边有草时 frame 闪掉"）。
+                    Block adjacent = wall.getRelative(face1);
+                    if (!adjacent.getType().isAir()) {
+                        return fail(FailReason.FRAME_SPACE_BLOCKED,
+                                "frame space at (" + adjacent.getX() + "," + adjacent.getY() + "," + adjacent.getZ()
+                                        + ") = " + adjacent.getType() + " must be air");
                     }
                     if (hasObstructingItemFrame(wall, face1)) {
                         return fail(FailReason.OCCUPIED,

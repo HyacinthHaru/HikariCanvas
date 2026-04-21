@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-04-21 · M3-T1 WallResolver 补 frame-space air 校验
+
+**范围：** 修 M2 残留 "旁边有草/花时 ItemFrame 闪掉" bug。M3 启动第一步，清 M2 残债。
+
+**改动：**
+- `WallResolver.FailReason` 新增 `FRAME_SPACE_BLOCKED`（bbox 前一格被非 air 方块占）
+- `resolve()` 内循环：检查 `wall.getRelative(face1)` 必须 `isAir()`；否则返回失败
+- 顺序在 `BLOCK_NOT_SOLID` 之后、`OCCUPIED` 之前
+- 拒绝一切非 air 方块：短草、花、水、熔岩、雪层等；只有纯 `AIR / CAVE_AIR / VOID_AIR` 通过
+
+**理由：** M2 实测发现若墙面前一格是短草，frame `spawn()` 即便成功，客户端判非法并立即 despawn（"闪一下"）。`OCCUPIED` 只查 ItemFrame 碰撞，漏了非 frame 的占位方块。
+
+**下游兼容：** `WandListener` 和 `CanvasCommand` 直接 print `reason().name()`，加新枚举值不破坏现有代码。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/deploy/WallResolver.java`
+
+---
+
 ## 2026-04-21 · M2-T12 集成测试 + 运行时调试 + **M2 完成**
 
 **范围：** 端到端实测联调，沿途修 5 个运行时 bug；M2 所有契约要求的功能就位。`PROPOSAL §6` M2 行从"2 周"更新为"已完成（2026-04-21）"。
