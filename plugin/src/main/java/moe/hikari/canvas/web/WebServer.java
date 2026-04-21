@@ -19,6 +19,7 @@ import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.StatePatch;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -80,6 +81,12 @@ public final class WebServer {
             cfg.startup.showJavalinBanner = false;
             cfg.jsonMapper(new JavalinJackson().updateMapper(mapper ->
                     mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL)));
+
+            // Jetty WS 默认 idleTimeout = 30s，太短；玩家停手 30s 就被踢。
+            // 调到 60s + 前端每 20s 发应用层 ping 保活，两层兜底。
+            // 真正的 session 超时由 SessionReaper 负责（wsGrace 5min / idle 30min）。
+            cfg.jetty.modifyWebSocketServletFactory(
+                    factory -> factory.setIdleTimeout(Duration.ofSeconds(60)));
 
             // 静态资源手写 GET（因 Javalin 7 staticFiles.add + fat jar 的 directory
             // discovery 有 bug，改为显式读 classpath 资源）。覆盖 Vite 产物：

@@ -81,6 +81,26 @@ function resolveWsUrl(): string {
 let ws: WebSocket | null = null;
 let seq = 0;
 let authenticated = false;
+// 20s 应用层心跳：协议 §1 要求 30s；Jetty idleTimeout 60s；20s 间隔留两次容错窗口
+const HEARTBEAT_INTERVAL_MS = 20_000;
+let heartbeatTimer: number | null = null;
+
+function stopHeartbeat(): void {
+    if (heartbeatTimer !== null) {
+        window.clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
+}
+
+function startHeartbeat(): void {
+    stopHeartbeat();
+    heartbeatTimer = window.setInterval(() => {
+        if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) return;
+        // 直接写帧，不走 print/send 避免 log 刷屏
+        const env: Envelope = { v: 1, op: 'ping', id: `c-hb-${seq++}`, ts: Date.now() };
+        ws.send(JSON.stringify(env));
+    }, HEARTBEAT_INTERVAL_MS);
+}
 
 function send(op: string, payload?: unknown): void {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -127,6 +147,7 @@ function handleReady(payload: ReadyPayload): void {
     helloBtn!.disabled = false;
     undoBtn!.disabled = false;
     redoBtn!.disabled = false;
+    startHeartbeat();
 }
 
 function handleMessage(raw: string): void {
@@ -173,6 +194,7 @@ function connect(token: string | null): void {
         print('meta', `close code=${ev.code}${ev.reason ? ` reason="${ev.reason}"` : ''}`);
         if (ws === socket) ws = null;
         authenticated = false;
+        stopHeartbeat();
         pingBtn!.disabled = true;
         paintBtn!.disabled = true;
         helloBtn!.disabled = true;

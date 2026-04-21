@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-04-22 · WS 心跳修复（fix/keepalive）
+
+**问题（M3 集成测试暴露）：**
+- `Idle timeout expired: 30005/30000 ms` ——Jetty WS 默认 idleTimeout 30s，用户停手 30 秒 WS 就被服务端踢
+- 前端未实现协议 §1 要求的"30s ping/pong"，完全依赖 Jetty 默认值
+
+**修复（两层兜底）：**
+
+1. **后端** `WebServer`：`cfg.jetty.modifyWebSocketServletFactory(factory -> factory.setIdleTimeout(Duration.ofSeconds(60)))`；把 Jetty idleTimeout 从 30s 放宽到 60s
+2. **前端** `main.ts`：auth 成功后 `startHeartbeat()` 每 20s 发一次 `op: ping`；WS `close` 时 `stopHeartbeat()` 清定时器；心跳帧绕过 `print/send` 避免 log 刷屏
+
+**为什么 60s + 20s 而不是默认 30s + 25s 心跳：**
+- 20s 间隔内发送 3 次都不应超 60s（允许单次网络抖动丢心跳）
+- 真正的 session 超时（5 分钟 ws-reconnect grace / 30 分钟 idle）由 `SessionReaper` 掌管，和 Jetty 层 timeout 分工明确
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`
+- `web/src/main.ts`
+
+---
+
 ## 2026-04-21 · M3-T13 commit 写入真实 project_json
 
 **范围：** `/canvas commit` 时把 session 的权威 `ProjectState` 经 Jackson 序列化写入 `sign_records.project_json`，替代占位 `"{}"`。契约对应 `docs/data-model.md sign_records.project_json` + `docs/architecture.md §8.2`。
