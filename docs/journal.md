@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-04-21 · M3-T2 WS 会话超时回收（SessionReaper）
+
+**范围：** 把 M2 T10/T11 记入 journal 的遗留项「没有主动 schedule 的回收 task」补上。契约对应 `docs/architecture.md §3.1`。
+
+**新增：**
+- `session/SessionReaper.java`：主线程 `BukkitScheduler.runTaskTimer`，30 秒扫一次
+- `SessionManager.ExpiredSession` record + `synchronized collectExpired(now, issuedTimeout, wsGrace, activeIdle)`：只做决策不做副作用，返回待 cancel 列表
+
+**三条超时规则：**
+
+| 状态 | 条件 | reason | 默认阈值 |
+|---|---|---|---|
+| `ISSUED` | `now - createdAt > issuedTimeout` | `"issued-timeout"` | 15 min（与 token TTL 一致）|
+| `ACTIVE` + 断连 | `now - wsDisconnectedAt > wsGrace` | `"ws-reconnect-timeout"` | 5 min |
+| `ACTIVE` + 在线 | `now - lastActivityAt > activeIdle` | `"idle-timeout"` | 30 min |
+| `SELECTING` / `CLOSING` | 不超时 | — | — |
+
+**回收流程**（复用 `/canvas cancel` 的模式）：
+```
+1. 先快照 session.wall().world()（cancel 会把 session forget）
+2. sessionManager.cancel(id, reason) → 归还池 + 释放锁 + forget
+3. frameDeployer.removeForSession(id, world) → 删 preview 物品框
+4. log.info 记录 id / reason / 删框数
+```
+
+**主线程约束：** `cancel` 触发 `MapPool.returnToPool`，`removeForSession` 扫 world 实体，两者都只能主线程。用 `runTaskTimer` 不用 `runTaskTimerAsynchronously`。
+
+**阈值来源：** 全部硬编码常量，TODO 待 M7 config.yml 接入后让运维可调。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionReaper.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`
+
+---
+
 ## 2026-04-21 · M3-T1 WallResolver 补 frame-space air 校验
 
 **范围：** 修 M2 残留 "旁边有草/花时 ItemFrame 闪掉" bug。M3 启动第一步，清 M2 残债。

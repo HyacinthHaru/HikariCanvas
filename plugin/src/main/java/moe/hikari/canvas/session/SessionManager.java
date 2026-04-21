@@ -7,6 +7,7 @@ import moe.hikari.canvas.storage.AuditLog;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -265,6 +266,52 @@ public final class SessionManager {
 
     public synchronized int size() {
         return byId.size();
+    }
+
+    // ---------- 超时扫描（M3-T2 Reaper 用） ----------
+
+    /**
+     * 由 {@link SessionReaper} 批量查询要 cancel 的会话。仅做决策，不做副作用；
+     * 返回后调用方逐个调 {@link #cancel}。
+     *
+     * <p>规则：</p>
+     * <ul>
+     *   <li>{@link SessionState#ISSUED}：{@code now - createdAt > issuedTimeoutMs}
+     *       → {@code "issued-timeout"}（玩家 confirm 后迟迟不打开编辑器）</li>
+     *   <li>{@link SessionState#ACTIVE} + {@code wsDisconnectedAt > 0}：
+     *       {@code now - wsDisconnectedAt > wsGraceMs} → {@code "ws-reconnect-timeout"}
+     *       （断连超过宽限没回来）</li>
+     *   <li>{@link SessionState#ACTIVE} + {@code wsDisconnectedAt < 0}：
+     *       {@code now - lastActivityAt > activeIdleMs} → {@code "idle-timeout"}
+     *       （在线但长期无消息，疑似挂着不管）</li>
+     *   <li>{@link SessionState#SELECTING} / {@link SessionState#CLOSING}：不超时</li>
+     * </ul>
+     */
+    public record ExpiredSession(String id, String reason) {}
+
+    public synchronized List<ExpiredSession> collectExpired(
+            long now, long issuedTimeoutMs, long wsGraceMs, long activeIdleMs) {
+        List<ExpiredSession> out = new ArrayList<>();
+        for (Session s : byId.values()) {
+            switch (s.state()) {
+                case ISSUED -> {
+                    if (now - s.createdAt() > issuedTimeoutMs) {
+                        out.add(new ExpiredSession(s.id(), "issued-timeout"));
+                    }
+                }
+                case ACTIVE -> {
+                    if (s.wsDisconnectedAt() > 0
+                            && now - s.wsDisconnectedAt() > wsGraceMs) {
+                        out.add(new ExpiredSession(s.id(), "ws-reconnect-timeout"));
+                    } else if (s.wsDisconnectedAt() < 0
+                            && now - s.lastActivityAt() > activeIdleMs) {
+                        out.add(new ExpiredSession(s.id(), "idle-timeout"));
+                    }
+                }
+                case SELECTING, CLOSING -> {}
+            }
+        }
+        return out;
     }
 
     // ---------- 内部 ----------

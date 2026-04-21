@@ -12,6 +12,7 @@ import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.render.PlaceholderRenderer;
 import moe.hikari.canvas.session.SessionManager;
+import moe.hikari.canvas.session.SessionReaper;
 import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.session.WandListener;
 import moe.hikari.canvas.storage.AuditLog;
@@ -42,6 +43,7 @@ public final class HikariCanvas extends JavaPlugin {
     private MapPool mapPool;
     private WallResolver wallResolver;
     private SessionManager sessionManager;
+    private SessionReaper sessionReaper;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
     private FrameDeployer frameDeployer;
@@ -86,6 +88,13 @@ public final class HikariCanvas extends JavaPlugin {
         mapPacketSender = new MapPacketSender();
         frameDeployer = new FrameDeployer(this, new PlaceholderRenderer(), canvasRenderer);
 
+        // 超时回收：ISSUED 15min（与 token TTL 一致）/ WS 断连 5min / ACTIVE idle 30min。
+        // 扫描周期 30s，待 config.yml 接入后可调。
+        sessionReaper = new SessionReaper(
+                this, sessionManager, frameDeployer, getLogger(),
+                Duration.ofMinutes(15), Duration.ofMinutes(5), Duration.ofMinutes(30));
+        sessionReaper.start(20L * 30);
+
         getServer().getPluginManager().registerEvents(
                 new WandListener(this, sessionManager), this);
         getServer().getPluginManager().registerEvents(
@@ -111,6 +120,10 @@ public final class HikariCanvas extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (sessionReaper != null) {
+            sessionReaper.stop();
+            sessionReaper = null;
+        }
         if (tokenPurgeTask != null) {
             tokenPurgeTask.cancel();
             tokenPurgeTask = null;
