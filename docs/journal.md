@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-04-21 · M2-T5 WallResolver
+
+**范围：** 纯算法类，将玩家两次点击（pos1/pos2 + BlockFace）解析为墙面矩形 + 合法性校验；输出 `Result.Ok` 或 `Result.Failed(reason, detail)`。T6 Wand + SELECTING 会调用它做选区预览，T7 SessionManager 在 `/canvas confirm` 时复用同一份逻辑。
+
+**设计：**
+- 无状态、无副作用，构造只接收 `maxMaps` 上限（对应 `limits.canvas-max-maps` = 16 默认）
+- Result 用 sealed interface + 两个 record（`Ok` / `Failed`），调用方 pattern-match
+- M2 仅支持**水平四向墙**（N/S/E/W）；UP/DOWN 返回 `VERTICAL_ONLY`，M4+ 再放宽
+
+**失败码清单（返回 `FailReason`）：**
+- `NORMAL_MISMATCH` — 两次点击 BlockFace 不同（两面墙）
+- `DIFFERENT_WORLDS` — 两 block 跨世界
+- `VERTICAL_ONLY` — normal = UP/DOWN
+- `NOT_COPLANAR` — 同 normal 但不在同一平面（X 或 Z 轴需一致）
+- `TOO_LARGE` — `width × height > maxMaps`
+- `BLOCK_NOT_SOLID` — bbox 内某方块非实心 full cube（排除台阶/栅栏/玻璃板）
+- `OCCUPIED` — bbox 前方一格已挂 ItemFrame（扫描 `getNearbyEntitiesByType(ItemFrame.class, ...)`）
+
+**算法要点：**
+- 同平面判定：`EAST/WEST` 要求 `pos1.x == pos2.x`；`NORTH/SOUTH` 要求 `pos1.z == pos2.z`
+- `width` 随法线轴决定（法线 X → width 沿 Z；法线 Z → width 沿 X）
+- `isSolid() && isOccluding()` 判实心 full cube（`isSolid` 包含台阶，`isOccluding` 更严）
+- ItemFrame 占用检测兼容 Paper 1.21 `getAttachedFace()` 的边界差异：既查 `attachedFace.getOpposite() == face`，又查 frame 位置是否落在 adjacent 方块内
+
+**验证：** `./gradlew :plugin:compileJava` 通过。运行时 smoke test 留到 T6 有真实玩家交互入口后做。
+
+**未包含：**
+- 不校验墙面背后是否有"支撑"（物品框挂在固体墙上，MC 不要求背面有支撑；若 T8 发现问题再补）
+- 不处理透明方块（glass）——`isOccluding=false` 会被 `BLOCK_NOT_SOLID` 拦，合理
+- Maximum 尺寸以地图数计（16 默认），不再单独检查单维上限——若玩家选 1×16，算法允许
+
+**关联文件：** `plugin/src/main/java/moe/hikari/canvas/deploy/WallResolver.java`、`docs/journal.md`
+
+---
+
 ## 2026-04-21 · M2-T4 MapPool —— PROPOSAL 风险表 #1 核心机制落地
 
 **范围：** 预览地图池状态机（FREE/RESERVED/PERMANENT）+ SQLite 同步 + 启动恢复 + 泄漏检测。**这是 M2 的技术核心**，也是整个项目防止 `idcounts.dat` 膨胀的唯一防线。
