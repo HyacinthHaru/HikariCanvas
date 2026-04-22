@@ -67,12 +67,50 @@ val copyWebToResources = tasks.register<Copy>("copyWebToResources") {
     into(generatedWebResources.map { it.dir("web") })
 }
 
+// ---- M4-T1 构建期 palette.json 生成 ----
+// 独立 sourceSet 'generator' 隔离构建期工具类，避免 classes → processResources
+// → generatePalette → classes 的循环依赖。
+//
+// 链路：compileGeneratorJava → generatePalette JavaExec
+//       → build/generated/palette/palette.json
+//       → processResources 作为资源合并 → shadow jar 根路径 palette.json
+
+val generatorSource = sourceSets.create("generator") {
+    java {
+        setSrcDirs(listOf("src/generator/java"))
+    }
+    // generator 只需要 paper-api（为了 MapPalette），不需要 main 的 runtime classpath
+    compileClasspath += sourceSets["main"].compileClasspath
+    runtimeClasspath += output + compileClasspath
+}
+
+val generatedPaletteResources = layout.buildDirectory.dir("generated/palette-resources")
+val paletteJson = generatedPaletteResources.map { it.file("palette.json") }
+
+val generatePalette = tasks.register<JavaExec>("generatePalette") {
+    group = "build"
+    description = "导出 Paper MapPalette 全部调色板到 palette.json（构建期一次性）"
+    dependsOn(tasks.named("compileGeneratorJava"))
+    classpath = generatorSource.runtimeClasspath
+    mainClass.set("moe.hikari.canvas.build.PaletteGenerator")
+    // 用 argumentProviders 延迟到执行期 resolve Provider；直接传 Provider 给 args()
+    // 会把 Provider.toString() 当字符串传进去，导致文件名里出现 "map(map(...))"
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf(paletteJson.get().asFile.absolutePath)
+    })
+    outputs.file(paletteJson)
+    // 输入指纹：generator 源码 + Paper 版本不变就复用缓存
+    inputs.files(generatorSource.allSource)
+}
+
 sourceSets.main {
     resources.srcDir(generatedWebResources)
+    resources.srcDir(generatedPaletteResources)
 }
 
 tasks.processResources {
     dependsOn(copyWebToResources)
+    dependsOn(generatePalette)
 }
 
 tasks {

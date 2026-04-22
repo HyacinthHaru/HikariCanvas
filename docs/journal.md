@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-04-22 · M4-T1 palette.json 构建期生成
+
+**范围：** 从 Paper `MapPalette` 导出 MC 地图调色板全部 248 条到 `palette.json`，构建期一次性跑，结果合并进 shadow jar 的 classpath 根路径。M4-T2 的 `PaletteLut` 启动时用 `getResourceAsStream("/palette.json")` 读。契约对应 `docs/rendering.md §6.1`。
+
+**新增：**
+- `plugin/src/generator/java/moe/hikari/canvas/build/PaletteGenerator.java`：独立 sourceSet `generator` 下的 Java main class；调 `MapPalette.getColor((byte) i)` 探测 0..255；遇 `ArrayIndexOutOfBoundsException` 自动停（Paper 1.21.11 实际数组长度 = 248，历史版本曾 192/256，不假定固定）
+- `plugin/build.gradle.kts`：
+  - `sourceSets.create("generator")` 独立 sourceSet 避免循环依赖
+  - `generatePalette` JavaExec task，`argumentProviders` 延迟到执行期 resolve Provider（直接传 `args(provider)` 会写出 literal `"map(map(...))"` 文件名）
+  - `processResources.dependsOn(generatePalette)` + `sourceSets.main.resources.srcDir(generatedPaletteResources)` 让 shadow jar 自动打包
+
+**关键技术点（踩坑 & 修复）：**
+1. **循环依赖**：初版把 `PaletteGenerator` 放 `src/main/java`，`classes → processResources → generatePalette → classes`。修：独立 `generator` sourceSet 隔离构建期代码
+2. **Provider 未 resolve**：`args(paletteJson.map { ... })` 把 Provider.toString() 传给 JavaExec 当字符串参数，导致文件名是 `"map(map(map(...))" `。修：`argumentProviders.add(CommandLineArgumentProvider { ... })`
+3. **248 ≠ 256**：Paper 1.21.11 内部 colors 数组是 248；try/catch AIOOBE 动态探测长度
+
+**输出 JSON 形态（行行可 diff，前 4 条是 MC 保留透明索引）：**
+```json
+[
+  {"index": 0, "rgb": [0, 0, 0], "alpha": 0},
+  {"index": 1, "rgb": [0, 0, 0], "alpha": 0},
+  {"index": 2, "rgb": [0, 0, 0], "alpha": 0},
+  {"index": 3, "rgb": [0, 0, 0], "alpha": 0},
+  {"index": 4, "rgb": [89, 125, 39], "alpha": 255},
+  ...
+  {"index": 247, "rgb": [67, 88, 79], "alpha": 255}
+]
+```
+
+**PaletteGenerator 在 shadow jar 中的命运：** 它只在 `generator` sourceSet 里，不会被打进运行时 jar（sourceSets.main 不引用它）。纯构建期工具，零运行时开销。
+
+**关联文件：**
+- `plugin/src/generator/java/moe/hikari/canvas/build/PaletteGenerator.java`（新建）
+- `plugin/build.gradle.kts`
+
+---
+
 ## 2026-04-22 · M4 渲染引擎启动 · 范围与字体分发决策
 
 **范围**（12 个子任务 ≈ 13.5 工作日 ≈ 3 周）：
