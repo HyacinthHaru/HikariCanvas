@@ -12,6 +12,7 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.logging.Level;
@@ -51,7 +52,6 @@ public final class CanvasCompositor {
     private final PaletteLut paletteLut;
     private final FontRegistry fontRegistry;
     private final Logger log;
-    private volatile boolean rotationWarned = false;
     private volatile boolean verticalWarned = false;
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry, Logger log) {
@@ -81,10 +81,21 @@ public final class CanvasCompositor {
             // 元素按 z-order（index 越大越上层）
             for (Element e : state.elements()) {
                 if (!e.visible()) continue;
-                if (e.rotation() != 0) warnRotationOnce(e);
+                // M4-T6：rotation ∈ {0, 90, 180, 270}。绕 element bbox 中心转
+                // 用 AffineTransform save/restore 保证不污染后续 element 的绘制坐标系
+                AffineTransform savedTx = null;
+                if (e.rotation() != 0) {
+                    savedTx = g.getTransform();
+                    double cx = e.x() + e.w() / 2.0;
+                    double cy = e.y() + e.h() / 2.0;
+                    g.rotate(Math.toRadians(e.rotation()), cx, cy);
+                }
                 switch (e) {
                     case RectElement r -> drawRect(g, r);
                     case TextElement t -> drawText(g, t);
+                }
+                if (savedTx != null) {
+                    g.setTransform(savedTx);
                 }
             }
         } finally {
@@ -192,11 +203,4 @@ public final class CanvasCompositor {
         return new Color((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
     }
 
-    private void warnRotationOnce(Element e) {
-        if (rotationWarned) return;
-        rotationWarned = true;
-        log.log(Level.WARNING,
-                "CanvasCompositor: rotation=" + e.rotation() + " on " + e.id()
-                + " rendered as rotation=0 (M4-T6 will implement true rotation)");
-    }
 }

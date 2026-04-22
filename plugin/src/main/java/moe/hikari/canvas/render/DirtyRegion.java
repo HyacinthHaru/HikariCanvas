@@ -24,8 +24,24 @@ public record DirtyRegion(int x, int y, int w, int h) {
         }
     }
 
-    /** 元素 bbox → DirtyRegion。 */
+    /**
+     * 元素 bbox → DirtyRegion。M4-T6：考虑 rotation 后的外接矩形。
+     *
+     * <ul>
+     *   <li>{@code rotation = 0 / 180}：直接 bbox（w/h 不变）</li>
+     *   <li>{@code rotation = 90 / 270}：内容 w 和 h 对调，外接 bbox = 边长 {@code max(w, h)} 的方形，中心对齐原 bbox 中心</li>
+     * </ul>
+     *
+     * <p>其他 rotation 不支持（EditSession 仅接受 0/90/180/270），fallback 到原 bbox。</p>
+     */
     public static DirtyRegion of(Element e) {
+        int rot = e.rotation();
+        if (rot == 90 || rot == 270) {
+            int cx = e.x() + e.w() / 2;
+            int cy = e.y() + e.h() / 2;
+            int side = Math.max(e.w(), e.h());
+            return new DirtyRegion(cx - side / 2, cy - side / 2, side, side);
+        }
         return new DirtyRegion(e.x(), e.y(), e.w(), e.h());
     }
 

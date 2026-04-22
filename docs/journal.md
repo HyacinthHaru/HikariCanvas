@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-04-22 · M4-T6 rotation 0/90/180/270
+
+**范围：** 清掉 M3-T7 起的 rotation WARN 忽略项，让元素真按旋转度数渲染。仅接受 `{0, 90, 180, 270}`（EditSession 校验已拦截其他值）。
+
+**实现：**
+- `CanvasCompositor.rasterize` 在 element loop 里：`rotation != 0` 时 `save transform → g.rotate(toRadians(rot), cx, cy) → draw → g.setTransform(saved)`
+- 旋转中心 = element bbox 中心 `(x + w/2, y + h/2)`，这样 rotation=180 后元素视觉仍在"同一位置"
+- 去除 `rotationWarned` 字段与 `warnRotationOnce` 方法
+
+**DirtyRegion.of(Element) 扩展：**
+- `rotation ∈ {0, 180}`：bbox 不变
+- `rotation ∈ {90, 270}`：外接 = 边长 `max(w,h)` 的方形，中心对齐原 bbox——保证旋转后溢出原 bbox 的像素也在脏矩形覆盖内、projector 能正确重绘
+
+**语义记账：**
+- bbox 本身不随 rotation 改变（用户选中操作、对齐计算都以原 bbox 为准）
+- 内容可能"视觉上溢出" bbox——rect 旋 90°：方形保持；长方形 w×h=100×20 变 20×100（超出 20 px 高方向）。Dirty 用 max 方形接住
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（+ AffineTransform 旋转；- rotationWarned）
+- `plugin/src/main/java/moe/hikari/canvas/render/DirtyRegion.java`（of(Element) 感知 rotation）
+
+---
+
 ## 2026-04-22 · M4-T5 多行文本 + letterSpacing + lineHeight + 基线
 
 **范围：** 横排文本完整排版。`docs/rendering.md §3.1-§3.5` 横排部分全覆盖；竖排（§3.3）按早先决策推迟到 M4.5/M7。
