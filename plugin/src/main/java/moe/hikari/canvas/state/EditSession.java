@@ -40,6 +40,10 @@ public final class EditSession {
     /** lineHeight 倍数允许范围。&lt; 0.5 会让行重叠到不可读；&gt; 4 属不合理范围。 */
     private static final float MIN_LINE_HEIGHT = 0.5f;
     private static final float MAX_LINE_HEIGHT = 4.0f;
+    /** shadow 偏移允许范围（px）。 */
+    private static final int MAX_SHADOW_OFFSET = 128;
+    /** glow 半径允许范围（px）。太大会让盒模糊性能劣化。 */
+    private static final int MAX_GLOW_RADIUS = 64;
 
     /** T11 历史栈上限（每会话）；超过后踢掉最老的。 */
     private static final int MAX_HISTORY = 16;
@@ -342,7 +346,7 @@ public final class EditSession {
                 0, (h - textH) / 2, w, textH,
                 0, false, true,
                 text, "ark_pixel", fontSize, "#FFFFFF", "center",
-                0f, 1.2f, false));
+                0f, 1.2f, false, null));
 
         return list;
     }
@@ -437,9 +441,61 @@ public final class EditSession {
         float lineHeight = floatFieldOrDefault(p, "lineHeight", 1.2f);
         validateLineHeight(lineHeight);
         boolean vertical = boolFieldOrDefault(p, "vertical", false);
+        // M4-T8/T9/T10 效果族
+        Effects effects = buildEffects(p.get("effects"));
         return new TextElement(id, x, y, w, h, rotation, locked, visible,
                 text, fontId, fontSize, color, align,
-                letterSpacing, lineHeight, vertical);
+                letterSpacing, lineHeight, vertical, effects);
+    }
+
+    /** 解析 {@code payload.effects}。null 或空 object 都返 null。 */
+    private Effects buildEffects(Object raw) {
+        if (raw == null) return null;
+        if (!(raw instanceof Map<?, ?> m)) {
+            throw new ValidationException("INVALID_PAYLOAD", "effects must be object");
+        }
+        Stroke stroke = buildStroke(m.get("stroke"));
+        Shadow shadow = buildShadow(m.get("shadow"));
+        Glow glow = buildGlow(m.get("glow"));
+        if (stroke == null && shadow == null && glow == null) return null;
+        return new Effects(stroke, shadow, glow);
+    }
+
+    private Shadow buildShadow(Object raw) {
+        if (raw == null) return null;
+        if (!(raw instanceof Map<?, ?> m)) {
+            throw new ValidationException("INVALID_PAYLOAD", "shadow must be object");
+        }
+        int dx = ((Number) requireNumber(m, "dx")).intValue();
+        int dy = ((Number) requireNumber(m, "dy")).intValue();
+        if (Math.abs(dx) > MAX_SHADOW_OFFSET || Math.abs(dy) > MAX_SHADOW_OFFSET) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "shadow offset out of range ±" + MAX_SHADOW_OFFSET);
+        }
+        Object c = m.get("color");
+        if (!(c instanceof String color)) {
+            throw new ValidationException("INVALID_PAYLOAD", "shadow.color must be string");
+        }
+        validateColor(color);
+        return new Shadow(dx, dy, color);
+    }
+
+    private Glow buildGlow(Object raw) {
+        if (raw == null) return null;
+        if (!(raw instanceof Map<?, ?> m)) {
+            throw new ValidationException("INVALID_PAYLOAD", "glow must be object");
+        }
+        int radius = ((Number) requireNumber(m, "radius")).intValue();
+        if (radius < 0 || radius > MAX_GLOW_RADIUS) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "glow.radius out of range 0.." + MAX_GLOW_RADIUS);
+        }
+        Object c = m.get("color");
+        if (!(c instanceof String color)) {
+            throw new ValidationException("INVALID_PAYLOAD", "glow.color must be string");
+        }
+        validateColor(color);
+        return new Glow(radius, color);
     }
 
     private Element buildRect(String id, Map<String, Object> p) {
@@ -486,6 +542,7 @@ public final class EditSession {
         float letterSpacing = t.letterSpacing();
         float lineHeight = t.lineHeight();
         boolean vertical = t.vertical();
+        Effects effects = t.effects();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -509,13 +566,14 @@ public final class EditSession {
                     lineHeight = floatValue(v, k); validateLineHeight(lineHeight);
                 }
                 case "vertical" -> vertical = boolValue(v, k);
+                case "effects" -> effects = buildEffects(v);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
                         "unknown text field: " + k);
             }
         }
         return new TextElement(t.id(), x, y, w, h, rotation, locked, visible,
                 text, fontId, fontSize, color, align,
-                letterSpacing, lineHeight, vertical);
+                letterSpacing, lineHeight, vertical, effects);
     }
 
     private RectElement applyRectPatch(RectElement r, Map<String, Object> patch) {

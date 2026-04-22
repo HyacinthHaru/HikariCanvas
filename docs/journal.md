@@ -5,6 +5,59 @@
 
 ---
 
+## 2026-04-22 · M4-T7+T8+T9 Rect stroke 结账 + TextElement.effects 描边 & 阴影
+
+**T7 Rect fill + stroke：已在 M4-T4 compositor 重写时顺手完成**——`g.fillRect` + 手工四 `fillRect` 画 stroke（整数像素对齐、不受 `BasicStroke.drawRect` 的亚像素分摊影响）。T7 无额外代码改动，journal 记账 mark completed。
+
+**T8/T9 TextElement.effects：**
+
+**state 包新增三 record（对齐 protocol.md §7）：**
+- `Shadow(int dx, int dy, String color)`
+- `Glow(int radius, String color)`（T10 渲染用，字段先就位）
+- `Effects(Stroke stroke, Shadow shadow, Glow glow)` 聚合容器；三字段均可 null；整体 null 代表无特效
+
+`TextElement` 末尾追加 `Effects effects` 字段。
+
+**EditSession 扩展：**
+- `buildText` / `applyTextPatch` 新增 `effects` 字段处理，嵌套 `buildStroke/buildShadow/buildGlow`
+- 校验阈值：`shadow.dx/dy ∈ [-128, 128]`、`glow.radius ∈ [0, 64]`、`stroke.width ∈ [0, 128]`（复用）
+- 空 effects 对象 + 三字段全 null → 存为 null（避免无效载荷污染快照）
+
+**CanvasCompositor.drawText 重写（按 rendering.md §5.4 顺序）：**
+```
+glow  (T10 占位)
+ ↓
+shadow (T9)   drawString offset (dx, dy) + shadow.color
+ ↓
+stroke (T8)   font.createGlyphVector + getOutline + BasicStroke.draw
+ ↓
+fill          drawString 正常 color
+```
+- shadow 直接 drawString 到 (dx, dy) 偏移处——rendering.md §5.2 要求"自实现不用 Graphics2D 内置 shadow"；drawString 等效 mask+offset，前后端可对齐
+- stroke 用 `GlyphVector.getOutline(x, baselineY)` 取字形 Shape，`BasicStroke(width, CAP_ROUND, JOIN_ROUND)` 画路径
+- 每层都遍历所有 PositionedGlyph，确保 per-char letterSpacing 与布局阶段一致
+
+**DirtyRegion.of 扩展（effects 四向外扩）：**
+- `shadow(dx, dy)` 单向外扩（dx>0 则右扩，dx<0 则左扩；dy 类似）
+- `stroke.width` 两侧各扩 `width/2`（stroke 一半溢出字形轮廓外）
+- `glow.radius` 四向全扩
+- 扩张后再应用 rotation 规则（90/270 外接方形）
+- RectElement.stroke **不**在外扩——那是 bbox 内部边框，不溢出
+
+**M4-T10 glow：**
+字段已就位（`Glow` record 已入 TextElement.effects），compositor 预留 "glow (T10 占位)" 注释；实际盒模糊自实现留 T10。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/state/Shadow.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/state/Glow.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/state/Effects.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/state/TextElement.java`（+ effects）
+- `plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`（buildText/applyTextPatch + 三 buildX helper + 3 条校验阈值）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（drawText 四层）
+- `plugin/src/main/java/moe/hikari/canvas/render/DirtyRegion.java`（effects 四向外扩）
+
+---
+
 ## 2026-04-22 · M4-T6 rotation 0/90/180/270
 
 **范围：** 清掉 M3-T7 起的 rotation WARN 忽略项，让元素真按旋转度数渲染。仅接受 `{0, 90, 180, 270}`（EditSession 校验已拦截其他值）。

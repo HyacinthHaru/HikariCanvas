@@ -1,8 +1,10 @@
 package moe.hikari.canvas.render;
 
+import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.RectElement;
+import moe.hikari.canvas.state.Shadow;
 import moe.hikari.canvas.state.Stroke;
 import moe.hikari.canvas.state.TextElement;
 
@@ -12,6 +14,9 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.font.FontRenderContext;
+import java.awt.font.GlyphVector;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.List;
@@ -176,12 +181,46 @@ public final class CanvasCompositor {
         }
         Font font = reg.derive(t.fontSize());
         g.setFont(font);
-        g.setColor(parseColor(t.color()));
         FontMetrics fm = g.getFontMetrics(font);
 
         // M4-T5：多行 + wrap + letterSpacing + 基线 + align 走 TextLayout；
-        // 逐字符 drawString 以支持 per-char letterSpacing（Graphics2D 没这个原生能力）
+        // 逐字符 drawString 以支持 per-char letterSpacing（Graphics2D 无原生 per-char letterSpacing）
         List<TextLayout.PositionedGlyph> glyphs = TextLayout.layout(t, fm);
+        if (glyphs.isEmpty()) return;
+
+        Effects effects = t.effects();
+        // M4-T10 预留槽：glow（盒模糊自实现），M4-T10 补
+        // 暂时 skip，直接从 shadow 开始；顺序 rendering.md §5.4
+
+        // M4-T9 阴影：rendering.md §5.2 约定"不用 Graphics2D 内置 shadow"；
+        // 做法是把字形画一份到 (dx, dy) 偏移处、上阴影颜色。与浏览器端 fillText 对齐
+        if (effects != null && effects.shadow() != null) {
+            Shadow sh = effects.shadow();
+            g.setColor(parseColor(sh.color()));
+            for (TextLayout.PositionedGlyph pg : glyphs) {
+                g.drawString(pg.ch(), pg.x() + sh.dx(), pg.baselineY() + sh.dy());
+            }
+        }
+
+        // M4-T8 描边：rendering.md §5.1——glyph outline + BasicStroke.draw 画边框
+        // FontRenderContext 来自当前 Graphics2D（继承 hints，确保与 fill 阶段一致）
+        if (effects != null && effects.stroke() != null && effects.stroke().width() > 0) {
+            Stroke strokeCfg = effects.stroke();
+            FontRenderContext frc = g.getFontRenderContext();
+            java.awt.Stroke prev = g.getStroke();
+            g.setStroke(new BasicStroke(strokeCfg.width(),
+                    BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(parseColor(strokeCfg.color()));
+            for (TextLayout.PositionedGlyph pg : glyphs) {
+                GlyphVector gv = font.createGlyphVector(frc, pg.ch());
+                Shape outline = gv.getOutline(pg.x(), pg.baselineY());
+                g.draw(outline);
+            }
+            g.setStroke(prev);
+        }
+
+        // 最顶层：字形填充（正常颜色）
+        g.setColor(parseColor(t.color()));
         for (TextLayout.PositionedGlyph pg : glyphs) {
             g.drawString(pg.ch(), pg.x(), pg.baselineY());
         }

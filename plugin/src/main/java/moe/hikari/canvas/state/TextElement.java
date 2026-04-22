@@ -29,6 +29,7 @@ public record TextElement(
         String align,
         float letterSpacing,
         float lineHeight,
-        boolean vertical
+        boolean vertical,
+        Effects effects
 ) implements Element {
 }
