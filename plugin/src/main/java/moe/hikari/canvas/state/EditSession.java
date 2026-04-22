@@ -34,6 +34,12 @@ public final class EditSession {
     private static final int MAX_DIM = 10_000;
     private static final int MAX_FONT_SIZE = 512;
     private static final int MAX_STROKE_WIDTH = 128;
+    /** letterSpacing 容许范围（px）。负值表示压字距；极值保护渲染不死循环。 */
+    private static final float MIN_LETTER_SPACING = -32f;
+    private static final float MAX_LETTER_SPACING = 128f;
+    /** lineHeight 倍数允许范围。&lt; 0.5 会让行重叠到不可读；&gt; 4 属不合理范围。 */
+    private static final float MIN_LINE_HEIGHT = 0.5f;
+    private static final float MAX_LINE_HEIGHT = 4.0f;
 
     /** T11 历史栈上限（每会话）；超过后踢掉最老的。 */
     private static final int MAX_HISTORY = 16;
@@ -335,7 +341,8 @@ public final class EditSession {
                 "e-" + UUID.randomUUID(),
                 0, (h - textH) / 2, w, textH,
                 0, false, true,
-                text, "bitmap", fontSize, "#FFFFFF", "center"));
+                text, "ark_pixel", fontSize, "#FFFFFF", "center",
+                0f, 1.2f, false));
 
         return list;
     }
@@ -419,12 +426,20 @@ public final class EditSession {
         int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
         boolean locked = boolFieldOrDefault(p, "locked", false);
         boolean visible = boolFieldOrDefault(p, "visible", true);
-        String fontId = stringFieldOrDefault(p, "fontId", "bitmap");
-        int fontSize = intFieldOrDefault(p, "fontSize", 8); validateFontSize(fontSize);
+        // M4-T3：默认 fontId 改为 ark_pixel（对应 FontRegistry.DEFAULT_FONT_ID）
+        String fontId = stringFieldOrDefault(p, "fontId", "ark_pixel");
+        int fontSize = intFieldOrDefault(p, "fontSize", 12); validateFontSize(fontSize);
         String color = stringFieldOrDefault(p, "color", "#000000"); validateColor(color);
         String align = stringFieldOrDefault(p, "align", "left"); validateAlign(align);
+        // M4-T5 新字段
+        float letterSpacing = floatFieldOrDefault(p, "letterSpacing", 0f);
+        validateLetterSpacing(letterSpacing);
+        float lineHeight = floatFieldOrDefault(p, "lineHeight", 1.2f);
+        validateLineHeight(lineHeight);
+        boolean vertical = boolFieldOrDefault(p, "vertical", false);
         return new TextElement(id, x, y, w, h, rotation, locked, visible,
-                text, fontId, fontSize, color, align);
+                text, fontId, fontSize, color, align,
+                letterSpacing, lineHeight, vertical);
     }
 
     private Element buildRect(String id, Map<String, Object> p) {
@@ -468,6 +483,9 @@ public final class EditSession {
         boolean locked = t.locked(); boolean visible = t.visible();
         String fontId = t.fontId(); int fontSize = t.fontSize();
         String color = t.color(); String align = t.align();
+        float letterSpacing = t.letterSpacing();
+        float lineHeight = t.lineHeight();
+        boolean vertical = t.vertical();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -484,12 +502,20 @@ public final class EditSession {
                 case "fontSize" -> { fontSize = intValue(v, k); validateFontSize(fontSize); }
                 case "color" -> { color = requireStringValue(v, k); validateColor(color); }
                 case "align" -> { align = requireStringValue(v, k); validateAlign(align); }
+                case "letterSpacing" -> {
+                    letterSpacing = floatValue(v, k); validateLetterSpacing(letterSpacing);
+                }
+                case "lineHeight" -> {
+                    lineHeight = floatValue(v, k); validateLineHeight(lineHeight);
+                }
+                case "vertical" -> vertical = boolValue(v, k);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
                         "unknown text field: " + k);
             }
         }
         return new TextElement(t.id(), x, y, w, h, rotation, locked, visible,
-                text, fontId, fontSize, color, align);
+                text, fontId, fontSize, color, align,
+                letterSpacing, lineHeight, vertical);
     }
 
     private RectElement applyRectPatch(RectElement r, Map<String, Object> patch) {
@@ -571,6 +597,20 @@ public final class EditSession {
         }
     }
 
+    private static void validateLetterSpacing(float v) {
+        if (!Float.isFinite(v) || v < MIN_LETTER_SPACING || v > MAX_LETTER_SPACING) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "letterSpacing out of range [" + MIN_LETTER_SPACING + ", " + MAX_LETTER_SPACING + "]: " + v);
+        }
+    }
+
+    private static void validateLineHeight(float v) {
+        if (!Float.isFinite(v) || v < MIN_LINE_HEIGHT || v > MAX_LINE_HEIGHT) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "lineHeight out of range [" + MIN_LINE_HEIGHT + ", " + MAX_LINE_HEIGHT + "]: " + v);
+        }
+    }
+
     // ---------- Map<String,Object> 读取 helpers ----------
 
     private static String requireString(Map<String, Object> m, String k, boolean required) {
@@ -612,6 +652,15 @@ public final class EditSession {
         return n.intValue();
     }
 
+    private static float floatFieldOrDefault(Map<String, Object> m, String k, float def) {
+        Object v = m.get(k);
+        if (v == null) return def;
+        if (!(v instanceof Number n)) {
+            throw new ValidationException("INVALID_PAYLOAD", k + " must be number");
+        }
+        return n.floatValue();
+    }
+
     private static boolean boolFieldOrDefault(Map<String, Object> m, String k, boolean def) {
         Object v = m.get(k);
         if (v == null) return def;
@@ -641,6 +690,13 @@ public final class EditSession {
             throw new ValidationException("INVALID_PAYLOAD", key + " must be number");
         }
         return n.intValue();
+    }
+
+    private static float floatValue(Object v, String key) {
+        if (!(v instanceof Number n)) {
+            throw new ValidationException("INVALID_PAYLOAD", key + " must be number");
+        }
+        return n.floatValue();
     }
 
     private static boolean boolValue(Object v, String key) {

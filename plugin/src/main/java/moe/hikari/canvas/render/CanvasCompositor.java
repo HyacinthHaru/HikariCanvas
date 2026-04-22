@@ -13,6 +13,7 @@ import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -51,6 +52,7 @@ public final class CanvasCompositor {
     private final FontRegistry fontRegistry;
     private final Logger log;
     private volatile boolean rotationWarned = false;
+    private volatile boolean verticalWarned = false;
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry, Logger log) {
         this.paletteLut = paletteLut;
@@ -153,24 +155,33 @@ public final class CanvasCompositor {
 
     private void drawText(Graphics2D g, TextElement t) {
         if (t.text() == null || t.text().isEmpty()) return;
+        if (t.vertical()) warnVerticalOnce(t);
+
         FontRegistry.Registered reg = fontRegistry.getOrDefault(t.fontId());
         if (reg == null) {
             log.warning("CanvasCompositor: no font available (id=" + t.fontId()
-                    + " default=" + FontRegistry.DEFAULT_FONT_ID + "); skipping text element " + t.id());
+                    + " default=" + FontRegistry.DEFAULT_FONT_ID + "); skipping text " + t.id());
             return;
         }
         Font font = reg.derive(t.fontSize());
         g.setFont(font);
         g.setColor(parseColor(t.color()));
         FontMetrics fm = g.getFontMetrics(font);
-        int textWidth = fm.stringWidth(t.text());
-        int baselineY = t.y() + fm.getAscent();
-        int drawX = switch (t.align()) {
-            case "center" -> t.x() + (t.w() - textWidth) / 2;
-            case "right" -> t.x() + t.w() - textWidth;
-            default -> t.x();
-        };
-        g.drawString(t.text(), drawX, baselineY);
+
+        // M4-T5：多行 + wrap + letterSpacing + 基线 + align 走 TextLayout；
+        // 逐字符 drawString 以支持 per-char letterSpacing（Graphics2D 没这个原生能力）
+        List<TextLayout.PositionedGlyph> glyphs = TextLayout.layout(t, fm);
+        for (TextLayout.PositionedGlyph pg : glyphs) {
+            g.drawString(pg.ch(), pg.x(), pg.baselineY());
+        }
+    }
+
+    private void warnVerticalOnce(TextElement t) {
+        if (verticalWarned) return;
+        verticalWarned = true;
+        log.log(Level.WARNING,
+                "CanvasCompositor: vertical=true on " + t.id()
+                + " rendered as horizontal (rendering.md §3.3 推迟到 M4.5/M7)");
     }
 
     private static Color parseColor(String hex) {

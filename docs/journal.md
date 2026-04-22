@@ -5,6 +5,54 @@
 
 ---
 
+## 2026-04-22 · M4-T5 多行文本 + letterSpacing + lineHeight + 基线
+
+**范围：** 横排文本完整排版。`docs/rendering.md §3.1-§3.5` 横排部分全覆盖；竖排（§3.3）按早先决策推迟到 M4.5/M7。
+
+**TextElement 字段扩展（protocol.md §7 对齐）：**
+- `letterSpacing: float`（px，可负；范围 -32..128）
+- `lineHeight: float`（倍数；范围 0.5..4.0，默认 1.2）
+- `vertical: boolean`（字段保留，渲染按 false + WARN）
+- `fontId` 默认改为 `ark_pixel`（对应 `FontRegistry.DEFAULT_FONT_ID`）
+- `fontSize` 默认 8 → 12（match Ark Pixel nativeSize）
+
+**EditSession 同步：**
+- `buildText` / `applyTextPatch` 新增三字段读取 + 校验
+- 新增 `floatFieldOrDefault` / `floatValue` helper
+- 新增 `validateLetterSpacing` / `validateLineHeight`
+
+**新建 `render/TextLayout.java`（~180 行）：**
+- `layout(TextElement, FontMetrics) → List<PositionedGlyph>` 主入口
+- **硬换行**：`\n` split
+- **软换行**：逐字符累宽，超 `w` 回溯到最近可断点
+  - 断点规则：半/全角空格后、CJK 字符后（任意两字间可断）
+  - 无可断点时硬截断（长 ASCII 单词）
+  - 空白断点处空格丢弃（不出现在下一行行首）
+- **行首禁则**：`）】」』。，、？！？；：)].,!?:;` 半全角并收；下一行首若是禁止标点，回溯到上一行末
+- **基线**：`ascentPx = round(fontSize * 0.8)`（rendering.md §3.2 跨字体统一）
+- **行距**：`lineHeightPx = round(fontSize * lineHeight)`
+- **align**：每行独立算 lineWidth，按 left/center/right 计 startX
+- **letterSpacing**：逐字符累加到 cursor（Graphics2D 不支持 per-char letter-spacing，只能逐字符 drawString）
+
+**CanvasCompositor.drawText 重写：**
+- 用 `TextLayout.layout` 产 `PositionedGlyph` 列表；逐字符 `g.drawString(ch, x, baselineY)`
+- `vertical=true` 触发 `warnVerticalOnce`（WARN 一次，避免刷屏），按 horizontal 渲染
+- `hello_world` 模板产生的 TextElement 构造更新为新签名 + `ark_pixel` fontId
+
+**M4-T5 暂不做（推迟项）：**
+- 竖排（文档 §3.3 已标推迟 M4.5/M7）
+- 像素字体最近邻缩放（rendering.md §2.4）——Graphics2D `deriveFont` 在关抗锯齿情况下小字号可用；M4.5 polish 再评估是否需要专门绕过 AWT 内部 hinting
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/state/TextElement.java`（+ 3 字段）
+- `plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`（build/patch + validators）
+- `plugin/src/main/java/moe/hikari/canvas/render/TextLayout.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（drawText 改用 TextLayout）
+
+**先行承接文档决策：** `docs/rendering.md §3.3 / §3.4` 已在上一 commit 标注竖排推迟状态（commit `d77f763`）。
+
+---
+
 ## 2026-04-22 · M4-T4 RgbaCanvas + Graphics2D；CanvasCompositor 重写
 
 **范围：** 把 M3-T7 的 palette-first 直绘换成 `BufferedImage TYPE_INT_RGB` 大画布 + `Graphics2D` 渲染 + `PaletteLut` 量化切片。契约落地 `docs/rendering.md §1 / §4 / §6 / §7`。

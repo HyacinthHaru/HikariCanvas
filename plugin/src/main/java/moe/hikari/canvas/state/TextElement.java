@@ -1,14 +1,20 @@
 package moe.hikari.canvas.state;
 
 /**
- * 文本元素。M3 使用现有 {@link moe.hikari.canvas.render.BitmapFont} 渲染，
- * {@code fontId} 字段预留以在 M4 接入 TTF 字体系统后切换；
- * 当前 M3 只识别 {@code "bitmap"} 一种 fontId，其余值回退。
+ * 文本元素。契约对应 {@code docs/protocol.md §7 TextElement} + {@code docs/rendering.md §3}。
  *
- * <p>字段 {@code align}：{@code "left" | "center" | "right"}。</p>
+ * <p><b>M4-T5 实装字段：</b> {@code text / fontId / fontSize / color / align /
+ * letterSpacing / lineHeight / vertical}。</p>
  *
- * <p>M3 未实装 {@code lineHeight / letterSpacing / vertical / effects}——
- * 协议 §7 列出的完整字段集在 M4 一并补齐。</p>
+ * <p><b>M4-T5 注意：</b></p>
+ * <ul>
+ *   <li>{@code align}：{@code "left" | "center" | "right"}，对每一行分别应用</li>
+ *   <li>{@code lineHeight}：行高倍数（{@code fontSize * lineHeight}），默认 1.2</li>
+ *   <li>{@code letterSpacing}：字符间距（px），可为负数；首尾不加</li>
+ *   <li>{@code vertical}：竖排标志位；M4-T5 暂不实装，渲染按 {@code false} + log WARN
+ *       （见 {@code docs/rendering.md §3.3}，真正竖排排版推迟到 M4.5 / M7）</li>
+ *   <li>{@code effects}（描边 / 阴影 / 发光）：M4-T8 / T9 / T10 追加字段；本 T5 未纳入</li>
+ * </ul>
  */
 public record TextElement(
         String id,
@@ -20,6 +26,9 @@ public record TextElement(
         String fontId,
         int fontSize,
         String color,
-        String align
+        String align,
+        float letterSpacing,
+        float lineHeight,
+        boolean vertical
 ) implements Element {
 }
