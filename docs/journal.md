@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-04-22 · M4 渲染引擎启动 · 范围与字体分发决策
+
+**范围**（12 个子任务 ≈ 13.5 工作日 ≈ 3 周）：
+1. T1 `palette.json` 构建期生成
+2. T2 `PaletteLut`（32³ Lab 距离查表）
+3. T3 `FontRegistry` + 内置 Ark Pixel + 思源黑
+4. T4 `RgbaCanvas` + Graphics2D；重写 `CanvasCompositor`
+5. T5 多行文本 + 基线 + align + letterSpacing + lineHeight
+6. T6 rotation 0/90/180/270
+7. T7 Rect 真 fill + drawRect + BasicStroke
+8. T8 描边效果（glyph outline）
+9. T9 阴影效果（mask offset）
+10. T10 **发光效果**（盒模糊自实现，用户确认 M4 一步到位）
+11. T11 Java runner snapshot 测试台
+12. T12 5 个 fixture + expected PNG
+
+**关键决策（用户拍板）：**
+- 调色板距离：**CIE76 Lab**（非 RGB 欧氏）
+- 内置字体：**Ark Pixel 12px + 思源黑体 SC Regular 两枚**（均 SIL OFL）
+- 前端 Playwright snapshot：**不做**（留 M5 Vue UI 一起）
+- `BitmapFont`：继续用于 `PlaceholderRenderer`，`TextElement` 改走 TTF 管线
+- 效果：描边 + 阴影 + **发光**全做，不推后
+
+**字体分发（方案 A）：**
+- Ark Pixel 12px（~200KB）直接入 git `plugin/src/main/resources/fonts/`
+- 思源黑体 SC Regular（~15MB）Gradle `downloadFonts` 任务构建期抓取；`build/downloaded-fonts/` 由 `.gitignore` 排除；SHA-256 校验；`processResources` 合并入 shadow jar
+
+**文档更新：**
+- `CLAUDE.md`："字体"条款明确两字体来源 + 分发路径；里程碑条加 ✅ 与进行中标记
+- `docs/rendering.md §2.1.1` 新增"分发策略（M4 定稿 · 方案 A）"小节 + Gradle 任务轮廓
+
+**下一步：** 开 T1 palette.json 构建期生成。
+
+---
+
 ## 2026-04-22 · WS 心跳修复（fix/keepalive）
 
 **问题（M3 集成测试暴露）：**

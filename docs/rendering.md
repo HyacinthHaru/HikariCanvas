@@ -42,9 +42,42 @@ List<MapBitmap>   输出
 
 ### 2.1 字体文件
 
-- 后端：`src/main/resources/fonts/*.ttf`（或 `.otf`）
-- 前端：`web/public/fonts/*.woff2`，由 TTF 通过 `woff2_compress` 生成
+- 后端：`src/main/resources/fonts/*.ttf`（或 `.otf`），经 `processResources` 进入 shadow jar
+- 前端：`web/public/fonts/*.woff2`，由 TTF 通过 `woff2_compress` 生成（M5 前端渲染器接入时一起做）
 - **必须从同一源 TTF 产出**，构建脚本中校验 hash
+
+### 2.1.1 分发策略（M4 定稿 · 方案 A）
+
+**两类字体，两种分发路径：**
+
+| 字体 | 协议 | 文件 | 大小 | 分发 |
+|---|---|---|---|---|
+| **Ark Pixel 12px Monospaced zh_cn** | SIL OFL | `ark-pixel-12px-monospaced-zh_cn.ttf` | ~200 KB | 直接入 git `plugin/src/main/resources/fonts/` |
+| **Source Han Sans SC Regular**（思源黑体） | SIL OFL | `SourceHanSansSC-Regular.otf` | ~15 MB | **Gradle `downloadFonts` 任务** 从官方 Release 抓到 `build/downloaded-fonts/`；`processResources` 合并到 jar；SHA-256 校验；`.gitignore` 排除 |
+
+**理由：**
+- 仓库保持纤瘦（<500 KB），`git clone` 快
+- shadow jar 对终端用户仍然一步到位（`./gradlew shadowJar` 后 jar 里字体齐全）
+- SHA-256 固定值内嵌 build script，任何篡改都会让 build 失败
+- 两字体**均为 SIL OFL 1.1**，可合法 redistribute
+
+**Gradle 任务轮廓**（M4-T3 实现）：
+```kotlin
+val fontsDir = layout.buildDirectory.dir("downloaded-fonts")
+val downloadFonts by tasks.registering {
+    outputs.dir(fontsDir)
+    doLast {
+        download(
+            url = "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf",
+            dest = fontsDir.get().file("SourceHanSansSC-Regular.otf").asFile,
+            sha256 = "..."
+        )
+    }
+}
+tasks.processResources { dependsOn(downloadFonts); from(fontsDir) { into("fonts") } }
+```
+
+**其他字体：** 服主可放到 `plugins/HikariCanvas/fonts/` 并在 `config.yml` 里注册 `fontId`（见 §2.2）；运行时 `FontRegistry` 会优先找外部目录、fallback 到 jar 内置。
 
 ### 2.2 字体 ID 与声明
 
