@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-04-22 · M4-T2 PaletteLut（32³ Lab 距离）
+
+**范围：** 启动期从 classpath `palette.json` 构建 32×32×32 byte LUT；CIE76 Lab 距离；O(1) 查询。替代 Paper `MapPalette.matchColor` 的 forRemoval 警告。契约对应 `docs/rendering.md §6.2-§6.4`。
+
+**新增：**
+- `plugin/src/main/java/moe/hikari/canvas/render/PaletteLut.java`
+
+**API：**
+- `PaletteLut.loadFromClasspath("/palette.json")` → 实例；Jackson 反序列化 → 构建 LUT
+- `matchColor(r, g, b) → byte`：纯 RGB 查（O(1)）
+- `matchColor(r, g, b, a) → byte`：alpha < 128 直接返 `TRANSPARENT_INDEX = 0`
+- `getColor(byte index) → java.awt.Color`：反向查询
+- 线程安全：LUT 构建后只读，所有查询纯函数
+
+**算法细节：**
+- **5-bit 量化**：RGB 各取高 5 位，LUT 索引 = `(r>>3)<<10 | (g>>3)<<5 | (b>>3)`；每档 step=8，用中心点 `r*8+4` 作代表色减量化误差
+- **Lab 转换**：sRGB → linear（gamma 2.4 / 12.92 分段）→ XYZ（D65 矩阵）→ Lab（`f(t) = cbrt(t)` 分段）
+- **距离度量**：Lab 欧氏距离平方（省去 sqrt，单调等价）；只在非透明 palette 项上匹配（pre-filter alpha < 128）
+- **构建成本**：32³ × 248 ≈ 8M 距离计算，启动耗时预估 1-3s；LUT 大小 32 KiB 常驻
+
+**透明处理（rendering.md §6.4）：**
+- palette.json 里前 4 条 alpha=0（MC 保留透明索引）
+- LUT 不收录透明项；matchColor 对 alpha<128 入参直接短路返 `TRANSPARENT_INDEX`
+- 半透明（128..254）硬截断为不透明匹配——MC 地图原生不支持 alpha blend
+
+**踩坑：** macOS 目录（Google Drive 同步？）在 `build/classes/` 下累积了 339 个 `*\s\d+.class` phantom file（如 `HikariCanvas 9.class`），让 Gradle MD5 hash 失败卡 `BUILD FAILED in 34m 30s`。`find -name "* *.class" -delete` 清掉后 2 秒编译通过。记在此以防复发。
+
+**后续（T4+）：** `CanvasCompositor` 重写时用 `PaletteLut.matchColor` 替代现有 `MapPalette.matchColor` 调用；可以同步清掉 `@SuppressWarnings("removal")`。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/PaletteLut.java`（新建）
+
+---
+
 ## 2026-04-22 · M4-T1 palette.json 构建期生成
 
 **范围：** 从 Paper `MapPalette` 导出 MC 地图调色板全部 248 条到 `palette.json`，构建期一次性跑，结果合并进 shadow jar 的 classpath 根路径。M4-T2 的 `PaletteLut` 启动时用 `getResourceAsStream("/palette.json")` 读。契约对应 `docs/rendering.md §6.1`。
