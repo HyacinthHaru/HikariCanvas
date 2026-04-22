@@ -1,0 +1,24 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#EEEEEE"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-shadowed",
+      "x": 0, "y": 36, "w": 256, "h": 56,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "SHADOW",
+      "fontId": "source_han_sans",
+      "fontSize": 42,
+      "color": "#1166DD",
+      "align": "center",
+      "letterSpacing": 1,
+      "lineHeight": 1.2,
+      "vertical": false,
+      "effects": {
+        "shadow": {"dx": 3, "dy": 3, "color": "#888888"}
+      }
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

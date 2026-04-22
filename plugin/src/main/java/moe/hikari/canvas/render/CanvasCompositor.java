@@ -189,8 +189,11 @@ public final class CanvasCompositor {
         if (glyphs.isEmpty()) return;
 
         Effects effects = t.effects();
-        // M4-T10 预留槽：glow（盒模糊自实现），M4-T10 补
-        // 暂时 skip，直接从 shadow 开始；顺序 rendering.md §5.4
+
+        // M4-T10 发光：最底层。字形 mask → 盒模糊 alpha → 着色 → 合成到主画布
+        if (effects != null && effects.glow() != null) {
+            GlowRenderer.render(g, glyphs, font, effects.glow());
+        }
 
         // M4-T9 阴影：rendering.md §5.2 约定"不用 Graphics2D 内置 shadow"；
         // 做法是把字形画一份到 (dx, dy) 偏移处、上阴影颜色。与浏览器端 fillText 对齐

@@ -2,6 +2,8 @@ package moe.hikari.canvas.state;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -48,6 +50,22 @@ public final class ProjectState {
         this.canvas = new Canvas(widthMaps, heightMaps, background);
         this.elements = new ArrayList<>();
         this.history = new History(0, 0);
+    }
+
+    /**
+     * Jackson 反序列化入口（fixture / sign_record.project_json 重载入编辑用）。
+     * 缺字段容错：{@code canvas} 为 null 退默认；{@code elements / history} 为 null 退空。
+     */
+    @JsonCreator
+    public ProjectState(
+            @JsonProperty("version") long version,
+            @JsonProperty("canvas") Canvas canvas,
+            @JsonProperty("elements") List<Element> elements,
+            @JsonProperty("history") History history) {
+        this.version = version;
+        this.canvas = canvas != null ? canvas : new Canvas(1, 1, "#FFFFFF");
+        this.elements = elements != null ? new ArrayList<>(elements) : new ArrayList<>();
+        this.history = history != null ? history : new History(0, 0);
     }
 
     // ---------- Java-side accessors（项目无前缀 getter 风格）----------

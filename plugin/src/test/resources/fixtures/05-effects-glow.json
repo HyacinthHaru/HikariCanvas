@@ -1,0 +1,24 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#111133"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-glowing",
+      "x": 0, "y": 32, "w": 256, "h": 64,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "GLOW",
+      "fontId": "source_han_sans",
+      "fontSize": 56,
+      "color": "#FFFFFF",
+      "align": "center",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false,
+      "effects": {
+        "glow": {"radius": 5, "color": "#33CCFF"}
+      }
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

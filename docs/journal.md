@@ -5,6 +5,80 @@
 
 ---
 
+## 2026-04-22 · M4-T10 发光 + T11 snapshot 测试台 + T12 5 fixture baseline
+
+**M4 收尾三合一提交：发光效果完整实装 + Java runner 双端一致性 snapshot 测试台 + 5 个 fixture baseline 建立。**
+
+### T10 GlowRenderer（发光，盒模糊自实现）
+
+**算法（rendering.md §5.3，完全自实现不依赖系统高斯模糊）：**
+1. 算 glyphs 整体外接矩形 + 四向 padding=`radius+1`
+2. 分配 local `TYPE_INT_ARGB` 图（仅覆盖外接盒，不碰全画布）
+3. 在 local 上关 AA 画字形 mask（白色或任意不透明色，只看 alpha）
+4. 提取 alpha 通道 → 水平 + 垂直两次 `diameter = 2*radius+1` 均值滤波（分离核，等效盒模糊）
+5. 着色：保留 alpha，RGB 全替换为 `glow.color`
+6. `mainG.drawImage(local, bboxX, bboxY)`——Graphics2D SRC_OVER 自动 alpha 合成到主画布 RGB
+
+**接入 compositor.drawText：** `glow → shadow → stroke → fill`（rendering.md §5.4 顺序）；glow 在最底层。
+
+**性能：** per-element + per-glyph bbox；radius=5 128×128 约 65K 个像素 × 2 次滤波 = 微秒级。单个画布多个 glow text elements 各自独立 local image，无共享状态。
+
+### T11 RendererSnapshotTest（JUnit 5）
+
+**新增：**
+- `plugin/src/test/java/moe/hikari/canvas/render/RendererSnapshotTest.java`
+- `build.gradle.kts` 加 `testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")` + `useJUnitPlatform()` + `test.dependsOn(processResources)`（保证 palette.json + 字体在 test classpath 就绪）
+
+**ProjectState Jackson 反序列化支持：**
+- 加 `@JsonCreator` 构造器 `(version, canvas, elements, history)` + `@JsonProperty`
+- 空字段容错（canvas/elements/history 为 null 都退默认）
+
+**流程：**
+1. fixture JSON → ObjectMapper → ProjectState
+2. compositor.rasterize → BufferedImage
+3. 写 actual.png 到 `build/test-results/snapshot/actual/`
+4. 对比 expected.png（`src/test/resources/expected/`），逐像素 diff
+5. diff 图写 `build/test-results/snapshot/diff/`（差异红点 + 灰阶背景便于目测）
+6. diff ratio ≥ 0.5% → 测试失败；expected 不存在 → 首次建 baseline 告警不失败
+
+**容忍度策略：** M4 统一 0.5%。rendering.md §8.2 区分 pixelated=0% / 常规 <0.5% / 大字号 <2% 留 M4.5 再细化。
+
+### T12 5 个 fixture JSON + baseline PNG
+
+`plugin/src/test/resources/fixtures/`：
+| # | 文件 | 场景 |
+|---|---|---|
+| 01 | `01-hello-world.json` | hello_world 模板：2×2 湖蓝 + 白框 + `HELLO WORLD` Ark Pixel |
+| 02 | `02-chinese-text.json` | `你好，世界！` 思源黑 28px + letterSpacing=2 + 多行硬换行 |
+| 03 | `03-effects-stroke.json` | `STROKE` 48px 黄底 `#CC0033` 描边宽 3 |
+| 04 | `04-effects-shadow.json` | `SHADOW` 42px 蓝字 `#888888` 阴影 dx=dy=3 |
+| 05 | `05-effects-glow.json` | `GLOW` 56px 白字 `#33CCFF` 发光 radius=5 |
+
+**首次运行自动创建 baseline：** `src/test/resources/expected/*.png` 5 张已入 git；**用户审核后再按需更新**（如果觉得某 fixture 的预期视觉不对，手工改 JSON 或模板参数重跑 test，actual 覆盖 expected，git commit）。
+
+### Build Pipeline 整合
+
+`./gradlew :plugin:test` 端到端验证：
+- downloadFonts（首次抓思源黑 + Ark Pixel）
+- generatePalette（导 248 色 JSON）
+- processResources（palette + fonts + web 合并）
+- compileJava + compileTestJava
+- test → RendererSnapshotTest 5 参数化 case
+
+**一次性实测**：第一次跑 baseline 建立（~3 分 10 秒，大部分时间在 downloadFonts + 首次 gradle 初始化），第二次 1 秒全通过。
+
+### 关联文件
+
+- `plugin/src/main/java/moe/hikari/canvas/render/GlowRenderer.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（glow 槽位接入）
+- `plugin/src/main/java/moe/hikari/canvas/state/ProjectState.java`（@JsonCreator）
+- `plugin/src/test/java/moe/hikari/canvas/render/RendererSnapshotTest.java`（新建）
+- `plugin/src/test/resources/fixtures/*.json`（5 个）
+- `plugin/src/test/resources/expected/*.png`（5 个 baseline）
+- `plugin/build.gradle.kts`（JUnit 5 deps + test task）
+
+---
+
 ## 2026-04-22 · M4-T7+T8+T9 Rect stroke 结账 + TextElement.effects 描边 & 阴影
 
 **T7 Rect fill + stroke：已在 M4-T4 compositor 重写时顺手完成**——`g.fillRect` + 手工四 `fillRect` 画 stroke（整数像素对齐、不受 `BasicStroke.drawRect` 的亚像素分摊影响）。T7 无额外代码改动，journal 记账 mark completed。

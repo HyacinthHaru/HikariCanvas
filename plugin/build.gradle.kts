@@ -35,6 +35,16 @@ dependencies {
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("org.jdbi:jdbi3-core:3.52.1")
     implementation("org.jdbi:jdbi3-sqlite:3.52.1")
+
+    // M4-T11 snapshot 测试台
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    // 保证 palette.json / fonts 在 test classpath 里就绪
+    dependsOn(tasks.processResources)
 }
 
 // ---- Gradle ↔ npm 联动 ----

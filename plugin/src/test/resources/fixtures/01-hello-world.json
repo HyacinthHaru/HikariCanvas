@@ -1,0 +1,28 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 2, "background": "#4A90E2"},
+  "elements": [
+    {
+      "type": "rect",
+      "id": "e-border",
+      "x": 8, "y": 8, "w": 240, "h": 240,
+      "rotation": 0, "locked": false, "visible": true,
+      "stroke": {"width": 2, "color": "#FFFFFF"}
+    },
+    {
+      "type": "text",
+      "id": "e-hello",
+      "x": 0, "y": 121, "w": 256, "h": 14,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "HELLO WORLD",
+      "fontId": "ark_pixel",
+      "fontSize": 14,
+      "color": "#FFFFFF",
+      "align": "center",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

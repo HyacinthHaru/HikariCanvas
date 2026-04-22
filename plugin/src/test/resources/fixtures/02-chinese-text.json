@@ -1,0 +1,35 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#FFFFFF"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-cn",
+      "x": 0, "y": 40, "w": 256, "h": 48,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "你好，世界！",
+      "fontId": "source_han_sans",
+      "fontSize": 28,
+      "color": "#222222",
+      "align": "center",
+      "letterSpacing": 2,
+      "lineHeight": 1.2,
+      "vertical": false
+    },
+    {
+      "type": "text",
+      "id": "e-en",
+      "x": 0, "y": 88, "w": 256, "h": 20,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "multi-line\ntest",
+      "fontId": "ark_pixel",
+      "fontSize": 12,
+      "color": "#777777",
+      "align": "center",
+      "letterSpacing": 0,
+      "lineHeight": 1.3,
+      "vertical": false
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

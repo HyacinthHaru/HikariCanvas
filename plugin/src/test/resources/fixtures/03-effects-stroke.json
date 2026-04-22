@@ -1,0 +1,24 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#000000"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-stroked",
+      "x": 0, "y": 36, "w": 256, "h": 56,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "STROKE",
+      "fontId": "source_han_sans",
+      "fontSize": 48,
+      "color": "#FFEE33",
+      "align": "center",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false,
+      "effects": {
+        "stroke": {"width": 3, "color": "#CC0033"}
+      }
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}
