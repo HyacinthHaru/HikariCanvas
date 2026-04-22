@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-04-22 · M4-T4 RgbaCanvas + Graphics2D；CanvasCompositor 重写
+
+**范围：** 把 M3-T7 的 palette-first 直绘换成 `BufferedImage TYPE_INT_RGB` 大画布 + `Graphics2D` 渲染 + `PaletteLut` 量化切片。契约落地 `docs/rendering.md §1 / §4 / §6 / §7`。
+
+**新管线（替换 M3-T7）：**
+```
+ProjectState
+   → CanvasCompositor.rasterize(state) → BufferedImage(W*128, H*128, TYPE_INT_RGB)
+   → CanvasCompositor.toPaletteSlice(img, mapIndex, widthMaps) → byte[128*128]
+   → HikariCanvasRenderer.update(mapId, pixels)
+   → Paper tick 自动 sync 给 viewer
+```
+
+**CanvasCompositor 重写要点：**
+- 新构造签名：`(PaletteLut, FontRegistry, Logger)`——两依赖在主类注入
+- `rasterize(state)`：分配整张大图 + 5 个 Graphics2D rendering hints（AA_OFF / TEXT_AA_OFF / RENDER_SPEED / FRACTIONALMETRICS_OFF / STROKE_PURE）→ 填背景 → 按 z-order 画 element
+- `toPaletteSlice(img, idx, widthMaps)`：用 `img.getRGB(x, y, 128, 1, buf)` 按行取 RGB，逐像素 `paletteLut.matchColor` 量化
+- Rect：`g.fillRect` 填充 + 手工四 `fillRect` 画 stroke（BasicStroke.drawRect 像素不对齐，保持 M3 整数像素风格）
+- Text：`g.setFont(reg.derive(fontSize))` + `g.drawString` 单行（多行 / letterSpacing / lineHeight 留 M4-T5）
+- `rotation != 0` 仍按 0 渲染 + log WARN 一次（M4-T6 真 rotation）
+
+**CanvasProjector 调整：**
+- 构造注入 `CanvasCompositor`（之前内部 `new`）
+- `project(session, region)`：**一次 `rasterize` 大画布复用** + 对 region.coveredMapIndices 每格 `toPaletteSlice` 写到 canvasRenderer
+- 优化点：脏矩形只省量化成本（rasterize 必须整张，元素可跨图）；2×2=65 KiB 大画布微秒级，8×4=1 MiB 毫秒级，10×10=6.5 MiB 十几毫秒级。M3 per-map 重复渲染的开销清除
+
+**HikariCanvas 启动顺序调整：**
+- `fontRegistry` 加载后 → **`paletteLut = PaletteLut.loadFromClasspath("/palette.json")`** 一次性构建 32 KiB LUT → `compositor` 注入 → `canvasProjector`
+- palette.json 不存在（`./gradlew generatePalette` 没跑过）→ `IllegalStateException` 拒绝启动，错误消息提示
+
+**M4-T4 暂不做（留后续 Tn）：**
+- 多行文本 / `letterSpacing` / `lineHeight` → T5
+- `rotation != 0` 真渲染 → T6
+- BasicStroke 真用（曲线 stroke）→ T7
+- effects 族（stroke / shadow / glow）→ T8 / T9 / T10
+
+**副收获：** `CanvasCompositor` 代码从 220 行缩到 170 行（palette-first 手写 drawGlyph / fillRect / drawRect 全删），让位给 Graphics2D 原生 API + PaletteLut 量化，后续 T5-T10 的扩展都能直接在 Graphics2D 上叠。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（重写）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasProjector.java`（构造签名 + 两阶段 rasterize/quantize）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（PaletteLut 构造 + 注入链）
+
+---
+
 ## 2026-04-22 · M4-T3 FontRegistry + 内置双字体（Ark Pixel + 思源黑）
 
 **范围：** 加载两枚内置字体到 `FontRegistry`，可选扫描 `plugins/HikariCanvas/fonts/` 外部字体。契约对应 `docs/rendering.md §2`。

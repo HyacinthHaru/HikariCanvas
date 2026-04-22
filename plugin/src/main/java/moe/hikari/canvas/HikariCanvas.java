@@ -9,9 +9,11 @@ import moe.hikari.canvas.deploy.FrameProtectionListener;
 import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
+import moe.hikari.canvas.render.CanvasCompositor;
 import moe.hikari.canvas.render.CanvasProjector;
 import moe.hikari.canvas.render.FontRegistry;
 import moe.hikari.canvas.render.HikariCanvasRenderer;
+import moe.hikari.canvas.render.PaletteLut;
 import moe.hikari.canvas.render.PlaceholderRenderer;
 import moe.hikari.canvas.render.ProjectionThrottler;
 import moe.hikari.canvas.session.SessionManager;
@@ -32,6 +34,7 @@ import org.bukkit.map.MapView;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 
@@ -56,6 +59,7 @@ public final class HikariCanvas extends JavaPlugin {
     private ProjectionThrottler projectionThrottler;
     private SessionRateLimiter rateLimiter;
     private FontRegistry fontRegistry;
+    private PaletteLut paletteLut;
 
     @Override
     public void onLoad() {
@@ -102,8 +106,19 @@ public final class HikariCanvas extends JavaPlugin {
         fontRegistry.loadExternal(getDataFolder().toPath().resolve("fonts"));
         getLogger().info("FontRegistry: " + fontRegistry.size() + " font(s) ready");
 
-        // M3-T7：编辑 op 成功后把受影响 mapIds 重绘到 canvasRenderer
-        canvasProjector = new CanvasProjector(canvasRenderer, getLogger());
+        // M4-T2：调色板 LUT（32³ Lab）。启动期一次性构建 ~32 KiB，常驻
+        try {
+            paletteLut = PaletteLut.loadFromClasspath("/palette.json");
+            getLogger().info("PaletteLut: " + paletteLut.size() + " entries loaded");
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to load palette.json from classpath; "
+                    + "did ./gradlew generatePalette run?", e);
+        }
+
+        // M3-T7 / M4-T4：编辑 op 成功后把受影响 mapIds 重绘。
+        // Compositor = RGBA 大图 rasterize + palette 量化切片
+        CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry, getLogger());
+        canvasProjector = new CanvasProjector(canvasRenderer, compositor, getLogger());
 
         // M3-T10 节流：5fps 投影 + 40msg/2s 输入限流（per session）
         projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector);
