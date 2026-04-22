@@ -243,3 +243,12 @@ const token = urlToken ?? storedToken;
 const tokenSource = urlToken ? 'url' : storedToken ? 'session-storage' : 'none';
 print('meta', `ws target = ${resolveWsUrl()} (token source: ${tokenSource})`);
 connect(token);
+
+// 调试入口：浏览器 console 里用 `__hk.send("op", payload)` 发任意 WS 消息
+// 方便手动触发 element.* / canvas.* / template.apply / undo / redo 等 op
+// ws 是模块内 let 变量，这里暴露 getter 让 console 能看到最新连接状态
+(window as unknown as Record<string, unknown>).__hk = {
+    send,
+    get ws(): WebSocket | null { return ws; },
+    get authenticated(): boolean { return authenticated; },
+};

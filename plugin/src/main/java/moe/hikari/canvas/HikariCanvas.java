@@ -98,7 +98,9 @@ public final class HikariCanvas extends JavaPlugin {
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog);
 
         mapPacketSender = new MapPacketSender();
-        frameDeployer = new FrameDeployer(this, new PlaceholderRenderer(), canvasRenderer);
+        // PlaceholderRenderer 也注入 CanvasProjector，用于"state pristine 回 placeholder"语义
+        PlaceholderRenderer placeholderRenderer = new PlaceholderRenderer();
+        frameDeployer = new FrameDeployer(this, placeholderRenderer, canvasRenderer);
 
         // M4-T3：字体注册表。先加载内置（jar 里 /fonts/）再扫外部目录（允许玩家自定义）
         fontRegistry = new FontRegistry(getLogger());
@@ -118,7 +120,7 @@ public final class HikariCanvas extends JavaPlugin {
         // M3-T7 / M4-T4：编辑 op 成功后把受影响 mapIds 重绘。
         // Compositor = RGBA 大图 rasterize + palette 量化切片
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry, getLogger());
-        canvasProjector = new CanvasProjector(canvasRenderer, compositor, getLogger());
+        canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer, getLogger());
 
         // M3-T10 节流：5fps 投影 + 40msg/2s 输入限流（per session）
         projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector);

@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-04-22 · M4 polish 小修 · pristine state 回 placeholder + 前端 __hk 调试入口
+
+**两个实测发现的小问题：**
+
+### 1. undo 到底后一片空白（应回 placeholder）
+
+**现象：** apply hello_world 后 undo 回到 ProjectState 初始态（elements 空、canvas.background=#FFFFFF），compositor 渲白色把 FrameDeployer 当初画的灰底 placeholder 盖没。
+
+**根因设计：** placeholder 是 `/canvas confirm` 时 FrameDeployer 用 palette-first 直接写到 mapId 的灰底像素，**不在 ProjectState 里**——ProjectState 只管 elements + canvas。undo/redo 不可能把 state 外的 placeholder 恢复。
+
+**修复：** `CanvasProjector.project` 第一步检查 `isPristine(state) = elements.isEmpty() && background==#FFFFFF`；若为真，走 `PlaceholderRenderer.render(mapIdx, total)` 渲 placeholder 替代 compositor。等价于"若 ProjectState 回到与 confirm 时构造时等价的初始态，视觉上也回到 confirm 时的 placeholder"。
+
+**签名变更：** `CanvasProjector` 构造多吃一个 `PlaceholderRenderer`（从 `HikariCanvas` 主类复用现有那个 instance 注入）。
+
+**边界情况：** 若用户显式设 `canvas.background=#FFFFFF` 且 elements 空，也会走 placeholder 分支——这是 pristine 语义的 corner case，可接受（"回到初始态即 placeholder"）。
+
+### 2. 浏览器 console `ws is not defined`
+
+**现象：** 我给的测试手册写 `ws.send(JSON.stringify(...))`，但 `ws` 是 `main.ts` 模块私有 `let`，不挂 window。
+
+**修复：** `main.ts` 末尾暴露调试入口：
+```ts
+(window as unknown as Record<string, unknown>).__hk = {
+    send,
+    get ws(): WebSocket | null { return ws; },
+    get authenticated(): boolean { return authenticated; },
+};
+```
+
+用法：`__hk.send("element.add", { type: "text", props: {...} })` —— 直接走 `send()`，自增 client id + 加信封 wrap。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasProjector.java`（+ PlaceholderRenderer 依赖 + pristine 分支）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（注入链调整）
+- `web/src/main.ts`（`__hk` 调试入口）
+
+---
+
 ## 2026-04-22 · M4-T10 发光 + T11 snapshot 测试台 + T12 5 fixture baseline
 
 **M4 收尾三合一提交：发光效果完整实装 + Java runner 双端一致性 snapshot 测试台 + 5 个 fixture baseline 建立。**

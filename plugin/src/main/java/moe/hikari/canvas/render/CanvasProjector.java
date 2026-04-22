@@ -24,11 +24,16 @@ public final class CanvasProjector {
 
     private final HikariCanvasRenderer canvasRenderer;
     private final CanvasCompositor compositor;
+    private final PlaceholderRenderer placeholderRenderer;
     private final Logger log;
 
-    public CanvasProjector(HikariCanvasRenderer canvasRenderer, CanvasCompositor compositor, Logger log) {
+    public CanvasProjector(HikariCanvasRenderer canvasRenderer,
+                           CanvasCompositor compositor,
+                           PlaceholderRenderer placeholderRenderer,
+                           Logger log) {
         this.canvasRenderer = canvasRenderer;
         this.compositor = compositor;
+        this.placeholderRenderer = placeholderRenderer;
         this.log = log;
     }
 
@@ -47,6 +52,26 @@ public final class CanvasProjector {
         int heightMaps = state.canvas().heightMaps();
         List<Integer> indices = region.coveredMapIndices(widthMaps, heightMaps);
         if (indices.isEmpty()) return 0;
+
+        // M4 小修：{@code ProjectState} 回到"pristine 初始态"时，不走 compositor
+        // 渲空白，而是重绘 placeholder（灰底 + HIKARICANVAS 水印 + slot 标签），
+        // 保留 confirm 阶段的视觉提示。触发条件：elements 空 && background=#FFFFFF（session 刚 confirm 时就是这个状态，undo 到底也会回到这）。
+        if (isPristine(state)) {
+            int updated = 0;
+            int total = mapIds.size();
+            for (Integer idx : indices) {
+                if (idx < 0 || idx >= total) continue;
+                try {
+                    byte[] pixels = placeholderRenderer.render(idx, total);
+                    canvasRenderer.update(mapIds.get(idx), pixels);
+                    updated++;
+                } catch (Exception e) {
+                    log.warning("CanvasProjector: placeholder render failed mapIndex=" + idx
+                            + " err=" + e.getMessage());
+                }
+            }
+            return updated;
+        }
 
         BufferedImage img;
         try {
@@ -70,6 +95,12 @@ public final class CanvasProjector {
             }
         }
         return updated;
+    }
+
+    /** pristine = 与 {@code SessionManager.confirm} 时构造的初始 state 等价。 */
+    private static boolean isPristine(ProjectState state) {
+        return state.elements().isEmpty()
+                && "#FFFFFF".equalsIgnoreCase(state.canvas().background());
     }
 
     /** 渲染全部 maps（canvas.background / snapshot 后 / reset 时用）。 */
