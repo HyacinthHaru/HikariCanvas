@@ -10,6 +10,7 @@ import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.render.CanvasProjector;
+import moe.hikari.canvas.render.FontRegistry;
 import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.render.PlaceholderRenderer;
 import moe.hikari.canvas.render.ProjectionThrottler;
@@ -54,6 +55,7 @@ public final class HikariCanvas extends JavaPlugin {
     private CanvasProjector canvasProjector;
     private ProjectionThrottler projectionThrottler;
     private SessionRateLimiter rateLimiter;
+    private FontRegistry fontRegistry;
 
     @Override
     public void onLoad() {
@@ -93,6 +95,12 @@ public final class HikariCanvas extends JavaPlugin {
 
         mapPacketSender = new MapPacketSender();
         frameDeployer = new FrameDeployer(this, new PlaceholderRenderer(), canvasRenderer);
+
+        // M4-T3：字体注册表。先加载内置（jar 里 /fonts/）再扫外部目录（允许玩家自定义）
+        fontRegistry = new FontRegistry(getLogger());
+        fontRegistry.loadBuiltIn();
+        fontRegistry.loadExternal(getDataFolder().toPath().resolve("fonts"));
+        getLogger().info("FontRegistry: " + fontRegistry.size() + " font(s) ready");
 
         // M3-T7：编辑 op 成功后把受影响 mapIds 重绘到 canvasRenderer
         canvasProjector = new CanvasProjector(canvasRenderer, getLogger());

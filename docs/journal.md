@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-04-22 · M4-T3 FontRegistry + 内置双字体（Ark Pixel + 思源黑）
+
+**范围：** 加载两枚内置字体到 `FontRegistry`，可选扫描 `plugins/HikariCanvas/fonts/` 外部字体。契约对应 `docs/rendering.md §2`。
+
+**方案微调**（原方案 A → A'）：
+- 原计划：Ark Pixel 入 git、思源黑 Gradle 下载
+- 实测：我本地到 GitHub Releases 带宽不稳（Ark Pixel 34MB zip 多次 Premature EOF）
+- 调整：**两字体都走 Gradle `downloadFonts`**。仓库继续纤瘦、代码机制统一、SHA-256 校验一致
+- 差别仅是"首次 build 稍慢"，用户端跑通后就 pin SHA 常驻缓存
+
+**Gradle `downloadFonts` 任务（`build.gradle.kts`）：**
+- `FontSpec` data class：`displayId / url / destFileName / expectedSha256 / inZipEntryPattern`
+- 两个 spec：
+  - `source_han_sans` → Adobe raw.githubusercontent，单 OTF 16.5 MB，SHA pinned
+  - `ark_pixel` → TakWolf Release zip 34.3 MB，解压提取 `*monospaced-zh_cn\.ttf`，SHA pinned
+- 重试 3 次，每次 readTimeout 120s；抛 Premature EOF 就重下。手写 fallback 错误消息指导手动下载
+- SHA-256 校验：非空值严格对比，空串仅 log（首次跑自动打印）
+- `processResources.from(downloadedFontsDir) { include "*.ttf", "*.otf"; into "fonts" }` 合并到 jar `/fonts/` classpath 子目录
+
+**SHA-256 pin 值（2026.02.27 Ark Pixel · Adobe release 分支思源黑）：**
+- `SourceHanSansSC-Regular.otf`：`f1d8611151880c6c336aabeac4640ef434fa13cbfbf1ffe82d0a71b2a5637256`
+- `ark-pixel-12px-monospaced-zh_cn.ttf`：`2fa78b40f74714b0092fa549eb6814b3efec5a729d020254968a270771ba5f75`
+
+**新增 `FontRegistry.java`：**
+- `loadBuiltIn()`：从 classpath `/fonts/*.ttf|.otf` 读两枚内置；AWT `Font.createFont(TRUETYPE_FONT)` 一把梭（OpenType 是 TrueType 超集，同常量即可）
+- `loadExternal(Path)`：扫外部目录；文件名去扩展名作 fontId；同名覆盖内置
+- 内置 fontId 约定：
+  - `ark_pixel`（像素字体，`pixelated=true, nativeSize=12`）—— **默认 fontId**（跟 M3 hello_world BitmapFont 视觉平滑过渡）
+  - `source_han_sans`（`pixelated=false`）
+- `getOrDefault(fontId)`：未知 id 回退到 `DEFAULT_FONT_ID = "ark_pixel"`；连默认都没（downloadFonts 失败）返 null
+- 线程：加载期有写入，稳态全局只读；`get/getOrDefault` 纯读
+- `Metadata` record：`displayName / pixelated / nativeSize` —— M4-T4 渲染阶段用这几个字段决定 Graphics2D hint 与最近邻缩放
+
+**HikariCanvas 主类 wiring：**
+- `onEnable` 顺序：db/token/reaper → canvasRenderer → **fontRegistry loadBuiltIn + loadExternal(getDataFolder/fonts)** → projector → webServer
+- 启动 log："FontRegistry: N font(s) ready"
+
+**踩坑记账：**
+1. Kotlin DSL 不自动 import `java.io.File` / `java.nio.file.*`；`java.io.File(...)` 完整路径写法 Kotlin 解析失败，必须 `import` 并用短名
+2. 第一次 `Edit replace_all "java.io.File" → "File"` 把 import 行也改成 `import File`——单次 replace 要避开 import 行或用更具体的 old_string
+3. GitHub Releases 34MB zip 连续 2 次 curl Premature EOF；Gradle 任务 3 次重试 + 每次 120s read timeout 实测第 2 次成功（约 9 分钟）
+
+**后续（T4+）：** CanvasCompositor 重写时用 `fontRegistry.getOrDefault(t.fontId())` 替代 M3 硬编码的 `BitmapFont`；TextElement.fontId 未设时走 `ark_pixel` 保持与 hello_world 视觉一致。
+
+**关联文件：**
+- `plugin/build.gradle.kts`（+ 两字体下载任务 + SHA pin）
+- `plugin/src/main/java/moe/hikari/canvas/render/FontRegistry.java`（新建）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（wiring）
+
+---
+
 ## 2026-04-22 · M4-T2 PaletteLut（32³ Lab 距离）
 
 **范围：** 启动期从 classpath `palette.json` 构建 32×32×32 byte LUT；CIE76 Lab 距离；O(1) 查询。替代 Paper `MapPalette.matchColor` 的 forRemoval 警告。契约对应 `docs/rendering.md §6.2-§6.4`。

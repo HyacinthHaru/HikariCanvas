@@ -1,3 +1,10 @@
+import java.io.File
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
 plugins {
     `java`
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
@@ -103,6 +110,114 @@ val generatePalette = tasks.register<JavaExec>("generatePalette") {
     inputs.files(generatorSource.allSource)
 }
 
+// ---- M4-T3 构建期下载内置字体 ----
+// 仓库不打包字体文件（>30 MB）。首次 `./gradlew shadowJar` 时从 GitHub Release 抓到
+// build/downloaded-fonts/，SHA-256 校验（M7 polish pin 实际值；M4 留空仅 log）。
+// processResources 把 *.ttf / *.otf 合并到 jar 的 /fonts/ classpath 子目录，
+// FontRegistry 启动时 getResourceAsStream 读。
+
+data class FontSpec(
+    val displayId: String,
+    val url: String,
+    val destFileName: String,
+    val expectedSha256: String,  // 空串 = 不校验，只 log 实际值
+    val inZipEntryPattern: String? = null  // 非 null = 下载的是 zip，按模式提取
+)
+
+val bundledFonts = listOf(
+    FontSpec(
+        displayId = "source_han_sans",
+        url = "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf",
+        destFileName = "SourceHanSansSC-Regular.otf",
+        expectedSha256 = "f1d8611151880c6c336aabeac4640ef434fa13cbfbf1ffe82d0a71b2a5637256"
+    ),
+    FontSpec(
+        displayId = "ark_pixel",
+        url = "https://github.com/TakWolf/ark-pixel-font/releases/download/2026.02.27/ark-pixel-font-12px-monospaced-ttf-v2026.02.27.zip",
+        destFileName = "ark-pixel-12px-monospaced-zh_cn.ttf",
+        expectedSha256 = "2fa78b40f74714b0092fa549eb6814b3efec5a729d020254968a270771ba5f75",
+        inZipEntryPattern = ".*monospaced-zh_cn\\.ttf"
+    )
+)
+
+val downloadedFontsDir = layout.buildDirectory.dir("downloaded-fonts")
+
+fun sha256Hex(file: File): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { it.readAllBytes().let(md::update) }
+    return md.digest().joinToString("") { "%02x".format(it) }
+}
+
+val downloadFonts = tasks.register("downloadFonts") {
+    group = "build"
+    description = "下载内置字体（思源黑体 + Ark Pixel 12px）到 build/downloaded-fonts/"
+    outputs.dir(downloadedFontsDir)
+    doLast {
+        val dir = downloadedFontsDir.get().asFile
+        dir.mkdirs()
+        for (spec in bundledFonts) {
+            val dest = File(dir, spec.destFileName)
+            if (dest.exists() && dest.length() > 0 &&
+                (spec.expectedSha256.isEmpty() || sha256Hex(dest) == spec.expectedSha256)) {
+                logger.info("  [skip] ${spec.destFileName} already present & verified")
+                continue
+            }
+            logger.lifecycle("  [fetch] ${spec.displayId} <- ${spec.url}")
+            val tempFile = File(dir, spec.destFileName + ".tmp")
+            // GitHub Releases 对大文件时常 Premature EOF；重试 3 次，每次完整重下
+            var lastErr: Exception? = null
+            val maxAttempts = 3
+            var attempt = 0
+            while (attempt < maxAttempts) {
+                attempt++
+                try {
+                    val conn = URI(spec.url).toURL().openConnection()
+                    conn.connectTimeout = 30_000
+                    conn.readTimeout = 120_000
+                    conn.getInputStream().use { input ->
+                        Files.copy(input, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    lastErr = null
+                    break
+                } catch (e: Exception) {
+                    lastErr = e
+                    logger.lifecycle("  [retry $attempt/$maxAttempts] ${spec.destFileName}: ${e.message}")
+                }
+            }
+            if (lastErr != null) {
+                throw GradleException(
+                    "下载 ${spec.destFileName} 失败（$maxAttempts 次重试均异常）。" +
+                    "可手动下载 ${spec.url} 放到 ${dir.absolutePath}/${spec.destFileName}" +
+                    (spec.inZipEntryPattern?.let { "（zip 需解压，按模式 $it 提取）" } ?: ""),
+                    lastErr
+                )
+            }
+            if (spec.inZipEntryPattern != null) {
+                // 解压出匹配的条目
+                ZipFile(tempFile).use { zip ->
+                    val regex = Regex(spec.inZipEntryPattern)
+                    val entry = zip.entries().asSequence()
+                        .firstOrNull { regex.matches(it.name) || regex.matches(it.name.substringAfterLast('/')) }
+                        ?: error("未在 zip 中找到匹配 ${spec.inZipEntryPattern} 的条目；zip=${tempFile.name}")
+                    zip.getInputStream(entry).use { input ->
+                        Files.copy(input, dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                }
+                tempFile.delete()
+            } else {
+                tempFile.renameTo(dest)
+            }
+            val actual = sha256Hex(dest)
+            if (spec.expectedSha256.isEmpty()) {
+                logger.lifecycle("  [sha256 未 pin] ${spec.destFileName} = $actual （首次构建；建议填入 build.gradle.kts）")
+            } else if (actual != spec.expectedSha256) {
+                error("SHA-256 不符：${spec.destFileName} 期望 ${spec.expectedSha256}，实得 $actual")
+            }
+        }
+    }
+}
+
+// downloadedFontsDir 里是 *.ttf / *.otf；processResources 从该目录读并放到 jar 的 /fonts/ 下
 sourceSets.main {
     resources.srcDir(generatedWebResources)
     resources.srcDir(generatedPaletteResources)
@@ -111,6 +226,11 @@ sourceSets.main {
 tasks.processResources {
     dependsOn(copyWebToResources)
     dependsOn(generatePalette)
+    dependsOn(downloadFonts)
+    from(downloadedFontsDir) {
+        include("*.ttf", "*.otf")
+        into("fonts")
+    }
 }
 
 tasks {
