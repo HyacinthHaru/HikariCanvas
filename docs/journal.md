@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-04-23 · 文档 + 记忆归档整理（为下一次上下文压缩准备）
+
+**背景：** 上下文即将压缩；为让下一次 Claude 实例接手时不丢队、不重复踩坑、不重新推理已定项目决策，对如下信息做集中归档。
+
+**更新项：**
+
+1. **`CLAUDE.md` 现代化：**
+   - "双端渲染一致性"加入 canonical width 要点（M5-D2 起两端 TextLayout 不读 font metrics，改走规则型宽度）
+   - "字体"条款重写为方案 A' 实际做法（两字体都 Gradle `downloadFonts` 拉，不入 git）
+   - 新增"构建期 palette"条目（`generatePalette` + 前后端 `PaletteLut` 镜像）
+   - 里程碑后新加 **构建/开发流程速查** 段：四条常用命令 + 前端状态管理入口 + 指向 journal.md 查细节
+
+2. **Auto-memory 系统（`~/.claude/projects/.../memory/`）：**
+   - `project_hikaricanvas.md` 彻底重写：里程碑状态表（M0~M5 ✅，M6 下一步，M7 polish 档）+ 固化技术栈 + 架构纪律 + 命名约定 + 关键文件速查 + M7 推迟项清单
+   - **新增 `feedback_build_toolchain.md`**：9 类踩坑归档（phantom class files / vite 卡死 / vue-tsc 卡死 / kill -9 写坏 node_modules / sed 清空文件 / Tailwind 4 scoped @apply / Gradle daemon 竞争 / GitHub Releases Premature EOF 等）+ 速查修复步骤
+   - `MEMORY.md` 索引更新加入新 memory
+
+**为何这样做：**
+- Memory 的作用是"跨 conversation 保留必要事实"，上下文压缩后的下一次对话可通过 memory 快速进入状态
+- Journal 是 per-commit 的详细日志，memory 是 per-project 的状态快照——两者互补
+- 构建工具链踩坑每个耗时 10+ 分钟排查；归档后直接按 symptom 查表修
+
+**关联文件：**
+- `CLAUDE.md`
+- `~/.claude/projects/-Users-haru-Desktop----HikariCanvas/memory/project_hikaricanvas.md`（重写）
+- `~/.claude/projects/-Users-haru-Desktop----HikariCanvas/memory/feedback_build_toolchain.md`（新建）
+- `~/.claude/projects/-Users-haru-Desktop----HikariCanvas/memory/MEMORY.md`（索引）
+
+---
+
 ## 2026-04-23 · M5-D3 修 P3 P4：i18n 中英切换 + 文本 Fit content
 
 ### P3 — i18n 中英切换
