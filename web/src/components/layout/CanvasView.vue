@@ -6,11 +6,13 @@ import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
 import { renderProjectState } from '@/render/PreviewRenderer';
+import { useI18n } from '@/i18n';
 import type { Element } from '@/types/protocol';
 
 const project = useProjectStore();
 const ui = useUiStore();
 const ws = getWsClient();
+const { t } = useI18n();
 
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const stageRef = ref<{ getNode(): unknown } | null>(null);
@@ -21,9 +23,9 @@ const widthPx = computed(() => project.canvasPixelWidth || 256);
 const heightPx = computed(() => project.canvasPixelHeight || 256);
 
 const sizeLabel = computed(() => {
-    if (!project.state) return '—';
+    if (!project.state) return t.value.canvas.empty;
     const c = project.state.canvas;
-    return `${c.widthMaps}×${c.heightMaps} maps · ${widthPx.value}×${heightPx.value} px`;
+    return t.value.canvas.sizeLabel(c.widthMaps, c.heightMaps, widthPx.value, heightPx.value);
 });
 
 const stageConfig = computed(() => ({
@@ -296,14 +298,14 @@ function onMouseUpOrLeave() {
 
     <!-- 右下角 zoom 控件 -->
     <div class="sticky bottom-3 float-right mr-3 flex items-center gap-1 bg-[color:var(--card)] border border-[color:var(--border)] rounded-lg p-1 shadow-sm text-[color:var(--foreground)]">
-      <button class="p-1.5 rounded hover:bg-[color:var(--accent)]" title="Zoom out (Ctrl+-)" @click="ui.zoomOut()">
+      <button class="p-1.5 rounded hover:bg-[color:var(--accent)]" :title="t.canvas.zoomOut" @click="ui.zoomOut()">
         <ZoomOut class="size-4" />
       </button>
       <span class="w-12 text-center text-xs tabular-nums">{{ (ui.zoom * 100).toFixed(0) }}%</span>
-      <button class="p-1.5 rounded hover:bg-[color:var(--accent)]" title="Zoom in (Ctrl+=)" @click="ui.zoomIn()">
+      <button class="p-1.5 rounded hover:bg-[color:var(--accent)]" :title="t.canvas.zoomIn" @click="ui.zoomIn()">
         <ZoomIn class="size-4" />
       </button>
-      <button class="p-1.5 rounded hover:bg-[color:var(--accent)]" title="Reset zoom (Ctrl+0)" @click="ui.zoomReset()">
+      <button class="p-1.5 rounded hover:bg-[color:var(--accent)]" :title="t.canvas.zoomReset" @click="ui.zoomReset()">
         <RotateCcw class="size-4" />
       </button>
       <span class="pl-2 pr-1 border-l border-[color:var(--border)] ml-1 text-[10px] text-[color:var(--muted-foreground)]">

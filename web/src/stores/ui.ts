@@ -2,8 +2,10 @@ import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 
 const THEME_KEY = 'hikari-canvas:theme';
+const LOCALE_KEY = 'hikari-canvas:locale';
 
 export type Theme = 'dark' | 'light';
+export type Locale = 'zh' | 'en';
 
 /**
  * UI 本地偏好：主题 / 侧边折叠 / 选中 / 缩放 / 底部日志抽屉。
@@ -11,6 +13,7 @@ export type Theme = 'dark' | 'light';
  */
 export const useUiStore = defineStore('ui', () => {
     const theme = ref<Theme>(loadTheme());
+    const locale = ref<Locale>(loadLocale());
     const leftCollapsed = ref(false);
     const rightCollapsed = ref(false);
     const logDrawerOpen = ref(false);
@@ -29,8 +32,18 @@ export const useUiStore = defineStore('ui', () => {
         try { localStorage.setItem(THEME_KEY, v); } catch { /* localStorage may fail in private mode */ }
     });
 
+    watch(locale, (v) => {
+        try { localStorage.setItem(LOCALE_KEY, v); } catch { /* ignore */ }
+        document.documentElement.lang = v === 'zh' ? 'zh-CN' : 'en';
+    });
+    document.documentElement.lang = locale.value === 'zh' ? 'zh-CN' : 'en';
+
     function toggleTheme() {
         theme.value = theme.value === 'dark' ? 'light' : 'dark';
+    }
+
+    function toggleLocale() {
+        locale.value = locale.value === 'zh' ? 'en' : 'zh';
     }
 
     function toggleLeft() { leftCollapsed.value = !leftCollapsed.value; }
@@ -49,9 +62,9 @@ export const useUiStore = defineStore('ui', () => {
     }
 
     return {
-        theme, leftCollapsed, rightCollapsed, logDrawerOpen,
+        theme, locale, leftCollapsed, rightCollapsed, logDrawerOpen,
         selectedElementId, zoom,
-        toggleTheme, toggleLeft, toggleRight, toggleLogDrawer,
+        toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         setZoom, zoomIn, zoomOut, zoomReset,
         selectElement,
     };
@@ -65,6 +78,16 @@ function loadTheme(): Theme {
     // 默认跟随系统，但兜底深色（符合"Photoshop 网页"期望）
     if (window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'light';
     return 'dark';
+}
+
+function loadLocale(): Locale {
+    try {
+        const v = localStorage.getItem(LOCALE_KEY);
+        if (v === 'zh' || v === 'en') return v;
+    } catch { /* ignore */ }
+    // 默认按 navigator.language 的首个语言段：zh-* → zh；其余 → en
+    const lang = navigator.language?.toLowerCase() ?? '';
+    return lang.startsWith('zh') ? 'zh' : 'en';
 }
 
 function applyThemeToDom(theme: Theme) {

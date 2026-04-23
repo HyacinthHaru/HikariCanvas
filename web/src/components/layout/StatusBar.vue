@@ -3,9 +3,11 @@ import { computed } from 'vue';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { Wifi, WifiOff, Loader2, ShieldAlert } from 'lucide-vue-next';
+import { useI18n } from '@/i18n';
 
 const net = useNetworkStore();
 const project = useProjectStore();
+const { t } = useI18n();
 
 const statusColor = computed(() => {
     switch (net.status) {
@@ -19,11 +21,11 @@ const statusColor = computed(() => {
 
 const statusLabel = computed(() => {
     switch (net.status) {
-        case 'ready': return 'ready';
-        case 'authenticating': return 'authenticating';
-        case 'connecting': return 'connecting';
-        case 'error': return net.lastError ?? 'error';
-        default: return 'disconnected';
+        case 'ready': return t.value.status.ready;
+        case 'authenticating': return t.value.status.authenticating;
+        case 'connecting': return t.value.status.connecting;
+        case 'error': return net.lastError ?? t.value.status.error;
+        default: return t.value.status.disconnected;
     }
 });
 </script>
@@ -39,15 +41,15 @@ const statusLabel = computed(() => {
         {{ statusLabel }}
       </span>
       <span v-if="net.sessionId">
-        session {{ net.sessionId.slice(0, 8) }}…
+        {{ t.status.session(net.sessionId) }}
       </span>
       <span v-if="net.wallSize">
-        wall {{ net.wallSize.w }}×{{ net.wallSize.h }}
+        {{ t.status.wall(net.wallSize.w, net.wallSize.h) }}
       </span>
     </div>
     <div class="flex items-center gap-3">
       <span v-if="project.state">
-        v{{ project.state.version }} · {{ project.state.elements.length }} elements
+        {{ t.status.elements(project.state.elements.length, project.state.version) }}
       </span>
     </div>
   </footer>

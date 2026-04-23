@@ -3,9 +3,11 @@ import { useNetworkStore } from '@/stores/network';
 import { useUiStore } from '@/stores/ui';
 import { X, Trash2 } from 'lucide-vue-next';
 import { computed, nextTick, ref, watch } from 'vue';
+import { useI18n } from '@/i18n';
 
 const net = useNetworkStore();
 const ui = useUiStore();
+const { t } = useI18n();
 
 const logList = ref<HTMLElement | null>(null);
 
@@ -35,18 +37,18 @@ function levelClass(level: string): string {
     class="absolute bottom-6 left-0 right-0 h-56 bg-[color:var(--card)] border-t border-[color:var(--border)] flex flex-col shadow-lg"
   >
     <header class="flex items-center justify-between h-8 px-3 border-b border-[color:var(--border)] text-xs">
-      <span class="font-medium">WS Log ({{ net.logs.length }})</span>
+      <span class="font-medium">{{ t.logdrawer.header }} ({{ net.logs.length }})</span>
       <div class="flex items-center gap-1">
         <button
           class="p-1 rounded hover:bg-[color:var(--accent)]"
-          title="清空"
+          :title="t.logdrawer.clear"
           @click="net.clearLogs()"
         >
           <Trash2 class="size-3.5" />
         </button>
         <button
           class="p-1 rounded hover:bg-[color:var(--accent)]"
-          title="关闭"
+          :title="t.logdrawer.close"
           @click="ui.toggleLogDrawer()"
         >
           <X class="size-3.5" />

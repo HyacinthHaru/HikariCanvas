@@ -4,12 +4,15 @@ import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
-import { Layers, Sliders, Eye, EyeOff, Lock, Unlock } from 'lucide-vue-next';
+import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2 } from 'lucide-vue-next';
+import { layoutText, canonicalCharWidth, ASCENT_RATIO } from '@/render/TextLayout';
+import { useI18n } from '@/i18n';
 import type { Element, RectElement, TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
 const project = useProjectStore();
 const ui = useUiStore();
 const ws = getWsClient();
+const { t } = useI18n();
 
 const selected = computed<Element | null>(() => {
     if (!ui.selectedElementId) return null;
@@ -125,6 +128,42 @@ function patchRectStroke(partial: Partial<Stroke>) {
     sendUpdate({ stroke: { ...cur, ...partial } });
 }
 
+// ---------- M5-D3 P4：文本 fit-content ----------
+
+function fitTextHeight() {
+    const el = selected.value;
+    if (!el || el.type !== 'text') return;
+    const te = el as TextElement;
+    const glyphs = layoutText(te);
+    if (glyphs.length === 0) return;
+    let maxBaselineY = te.y;
+    for (const g of glyphs) {
+        if (g.baselineY > maxBaselineY) maxBaselineY = g.baselineY;
+    }
+    // baseline 到 top = fontSize * ASCENT_RATIO；descent = fontSize - ascent
+    const ascent = Math.round(te.fontSize * ASCENT_RATIO);
+    const descent = Math.max(1, te.fontSize - ascent);
+    const newH = Math.max(1, (maxBaselineY + descent) - te.y);
+    if (newH !== te.h) sendUpdate({ h: newH });
+}
+
+function fitTextWidth() {
+    const el = selected.value;
+    if (!el || el.type !== 'text') return;
+    const te = el as TextElement;
+    const glyphs = layoutText(te);
+    if (glyphs.length === 0) return;
+    let maxRight = te.x;
+    for (const g of glyphs) {
+        // rotated glyph 占方格 fontSize；非旋转占 canonicalCharWidth
+        const w = g.rotated ? te.fontSize : canonicalCharWidth(g.ch, te.fontSize);
+        const right = g.x + w;
+        if (right > maxRight) maxRight = right;
+    }
+    const newW = Math.max(1, maxRight - te.x);
+    if (newW !== te.w) sendUpdate({ w: newW });
+}
+
 // ---------- Layer reorder（HTML5 drag & drop） ----------
 
 const dragIdx = ref(-1);
@@ -176,21 +215,21 @@ function onLayerDragEnd() {
     <section class="flex-1 overflow-y-auto">
       <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Sliders class="size-3.5" />
-        <span>Properties</span>
+        <span>{{ t.properties.header }}</span>
       </header>
 
       <div v-if="!selected" class="p-3 text-xs text-[color:var(--muted-foreground)]">
-        未选中元素；在画布或图层中点击选择。
+        {{ t.properties.empty }}
       </div>
 
       <div v-else class="p-3 space-y-3 text-xs">
         <!-- 基本信息 -->
         <div class="flex items-center justify-between">
-          <span class="text-[color:var(--muted-foreground)]">Type</span>
+          <span class="text-[color:var(--muted-foreground)]">{{ t.properties.type }}</span>
           <span class="font-mono">{{ selected.type }}</span>
         </div>
         <div class="flex items-center justify-between">
-          <span class="text-[color:var(--muted-foreground)]">ID</span>
+          <span class="text-[color:var(--muted-foreground)]">{{ t.properties.id }}</span>
           <span class="font-mono text-[10px] truncate max-w-[140px]" :title="selected.id">
             {{ selected.id }}
           </span>
@@ -199,7 +238,7 @@ function onLayerDragEnd() {
         <!-- 位置 & 尺寸 -->
         <details class="group" open>
           <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            Transform
+            {{ t.properties.transformHeader }}
           </summary>
           <div class="grid grid-cols-2 gap-2 pt-1.5">
             <label class="flex flex-col gap-0.5">
@@ -231,11 +270,11 @@ function onLayerDragEnd() {
           <div class="flex gap-3 pt-2">
             <label class="flex items-center gap-1.5">
               <input type="checkbox" :checked="selected.visible" @change="(e) => onBoolChange('visible', e)">
-              <span>visible</span>
+              <span>{{ t.properties.visible }}</span>
             </label>
             <label class="flex items-center gap-1.5">
               <input type="checkbox" :checked="selected.locked" @change="(e) => onBoolChange('locked', e)">
-              <span>locked</span>
+              <span>{{ t.properties.locked }}</span>
             </label>
           </div>
         </details>
@@ -243,11 +282,11 @@ function onLayerDragEnd() {
         <!-- Rect 专属 -->
         <details v-if="isRect" class="group" open>
           <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            Rect
+            {{ t.properties.rectHeader }}
           </summary>
           <div class="pt-1.5 space-y-2">
             <label class="flex items-center justify-between gap-2">
-              <span class="text-[color:var(--muted-foreground)]">fill</span>
+              <span class="text-[color:var(--muted-foreground)]">{{ t.properties.fill }}</span>
               <div class="flex items-center gap-1">
                 <input type="checkbox" :checked="(selected as RectElement).fill !== undefined && (selected as RectElement).fill !== null"
                        @change="(e: Event) => sendUpdate({ fill: (e.target as HTMLInputElement).checked ? (selected as RectElement).fill ?? '#FF3366' : null })">
@@ -256,18 +295,18 @@ function onLayerDragEnd() {
               </div>
             </label>
             <label class="flex items-center justify-between gap-2">
-              <span class="text-[color:var(--muted-foreground)]">stroke</span>
+              <span class="text-[color:var(--muted-foreground)]">{{ t.properties.stroke }}</span>
               <input type="checkbox" :checked="rectStroke() !== null" @change="toggleRectStroke">
             </label>
             <template v-if="rectStroke()">
               <div class="grid grid-cols-2 gap-2">
                 <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">stroke.width</span>
+                  <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeWidth }}</span>
                   <input type="number" min="0" class="hc-input" :value="rectStroke()!.width"
                          @input="(e) => patchRectStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
                 </label>
                 <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">stroke.color</span>
+                  <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeColor }}</span>
                   <input type="color" class="hc-color h-7" :value="rectStroke()!.color"
                          @input="(e) => patchRectStroke({ color: (e.target as HTMLInputElement).value.toUpperCase() })">
                 </label>
@@ -279,7 +318,7 @@ function onLayerDragEnd() {
         <!-- Text 专属 -->
         <details v-if="isText" class="group" open>
           <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            Text
+            {{ t.properties.textHeader }}
           </summary>
           <div class="pt-1.5 space-y-2">
             <label class="flex flex-col gap-0.5">
@@ -287,6 +326,27 @@ function onLayerDragEnd() {
               <textarea rows="2" class="hc-input font-mono resize-none" :value="(selected as TextElement).text"
                         @input="(e) => onTextChange('text', e)"></textarea>
             </label>
+            <!-- Fit content：按当前 text + 字号 + letterSpacing + lineHeight 计算 bbox -->
+            <div class="flex gap-2 pt-1">
+              <button
+                type="button"
+                class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
+                :title="t.properties.fitHeight"
+                @click="fitTextHeight"
+              >
+                <Maximize2 class="size-3 rotate-90" />
+                <span>{{ t.properties.fitHeight }}</span>
+              </button>
+              <button
+                type="button"
+                class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
+                :title="t.properties.fitWidth"
+                @click="fitTextWidth"
+              >
+                <Maximize2 class="size-3" />
+                <span>{{ t.properties.fitWidth }}</span>
+              </button>
+            </div>
             <div class="grid grid-cols-2 gap-2">
               <label class="flex flex-col gap-0.5">
                 <span class="text-[10px] text-[color:var(--muted-foreground)]">fontId</span>
@@ -327,7 +387,7 @@ function onLayerDragEnd() {
             <label class="flex items-center gap-1.5 pt-1">
               <input type="checkbox" :checked="(selected as TextElement).vertical"
                      @change="(e) => sendUpdate({ vertical: (e.target as HTMLInputElement).checked })">
-              <span>vertical（渲染 M5-C 真实装）</span>
+              <span>{{ t.properties.verticalHelp }}</span>
             </label>
           </div>
         </details>
@@ -335,7 +395,7 @@ function onLayerDragEnd() {
         <!-- Text effects -->
         <details v-if="isText" class="group">
           <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            Effects
+            {{ t.properties.effectsHeader }}
           </summary>
           <div class="pt-1.5 space-y-3">
             <!-- stroke -->
@@ -409,12 +469,12 @@ function onLayerDragEnd() {
     <section class="flex flex-col border-t border-[color:var(--border)] max-h-[40%]">
       <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Layers class="size-3.5" />
-        <span>Layers</span>
-        <span class="ml-auto text-[10px] font-normal normal-case">{{ elementCount }} 项</span>
+        <span>{{ t.layers.header }}</span>
+        <span class="ml-auto text-[10px] font-normal normal-case">{{ t.layers.count(elementCount) }}</span>
       </header>
       <ul class="overflow-y-auto flex-1">
         <li v-if="elementCount === 0" class="p-3 text-xs text-[color:var(--muted-foreground)]">
-          画布为空
+          {{ t.layers.empty }}
         </li>
         <li
           v-for="(el, idx) in project.state?.elements ?? []"
@@ -440,14 +500,14 @@ function onLayerDragEnd() {
           </span>
           <button
             class="p-0.5 rounded hover:bg-[color:var(--background)]"
-            :title="el.visible ? '隐藏' : '显示'"
+            :title="t.layers.toggleVisible(el.visible)"
             @click.stop="ws.send('element.update', { elementId: el.id, patch: { visible: !el.visible } }); (el as any).visible = !el.visible;"
           >
             <component :is="el.visible ? Eye : EyeOff" class="size-3" :class="el.visible ? '' : 'opacity-40'" />
           </button>
           <button
             class="p-0.5 rounded hover:bg-[color:var(--background)]"
-            :title="el.locked ? '解锁' : '锁定'"
+            :title="t.layers.toggleLock(el.locked)"
             @click.stop="ws.send('element.update', { elementId: el.id, patch: { locked: !el.locked } }); (el as any).locked = !el.locked;"
           >
             <component :is="el.locked ? Lock : Unlock" class="size-3" :class="el.locked ? '' : 'opacity-40'" />

@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-04-23 · M5-D3 修 P3 P4：i18n 中英切换 + 文本 Fit content
+
+### P3 — i18n 中英切换
+
+**做法：** 不引 vue-i18n（避免增加运行时依赖和体积）；自己写最简 composable：
+- `web/src/i18n/messages.ts`：两套嵌套对象 `{ zh, en }`，覆盖 TopBar / Tools / Canvas / Properties / Layers / LogDrawer / Status 七个分区
+- `web/src/i18n/index.ts`：`useI18n() → { t: ComputedRef<Messages> }`；基于 `ui.locale` 派生
+- 组件里 `t.xxx.yyy` 直接用（Vue 模板会 unwrap computed 的属性访问）
+- 函数型 message：`t.canvas.sizeLabel(w, h, pw, ph)`、`t.layers.count(n)` 等
+
+**`ui` store：**
+- 新增 `locale: Ref<'zh' | 'en'>`（`loadLocale` 依次查 `localStorage → navigator.language startsWith zh → en`）
+- 新增 `toggleLocale()`；`watch(locale) → localStorage + document.documentElement.lang`
+- TopBar 加 `Languages` icon 按钮触发切换
+
+**覆盖范围：** 所有按钮 title / 面板 header / 状态标签 / 空态提示。技术字段名（`fontSize / letterSpacing / fontId` 等）保持英文（开发者/用户通用术语）。
+
+### P4 — 文本 Fit height / Fit width 按钮
+
+**位置：** Properties Panel > Text 组 > text textarea 下方，两个 `Maximize2` 图标按钮。
+
+**算法（复用 `TextLayout.layoutText`）：**
+- `fitTextHeight`：用 `layoutText(t)` 跑完整 layout → 找所有 glyph `baselineY` 最大值 → `maxBottom = maxBaselineY + descent`；`newH = maxBottom - t.y`；发 `element.update { h }`
+- `fitTextWidth`：glyph 的右沿 = `g.x + (g.rotated ? fontSize : canonicalCharWidth(ch, fontSize))`；取 max；`newW = max - t.x`
+
+**不自动：** 不触发自动 fit；用户显式点按钮。避免编辑文本中途被意外 resize 吞掉（Canva / Figma 也是显式行为）。
+
+**导出：** `TextLayout.ts` 把 `canonicalCharWidth` / `ASCENT_RATIO` 导出供此处复用。
+
+### 关联文件
+
+- `web/src/stores/ui.ts`（+ locale / toggleLocale）
+- `web/src/i18n/messages.ts`（新建，zh + en）
+- `web/src/i18n/index.ts`（新建，useI18n）
+- `web/src/components/layout/TopBar.vue`（+ Languages 按钮）
+- `web/src/components/layout/LeftTools.vue` / `CanvasView.vue` / `StatusBar.vue` / `LogDrawer.vue`（替 title / label）
+- `web/src/components/layout/RightPanel.vue`（i18n 替换 + `fitTextHeight` / `fitTextWidth` 按钮）
+
+---
+
 ## 2026-04-23 · M5-D2 修 P1 + P2：auto-select + TextLayout canonical width
 
 **实测反馈修两个：**
