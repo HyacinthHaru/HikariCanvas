@@ -108,6 +108,10 @@ public final class WebServer {
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/session/{token}", this::handlePreHandshake));
 
+            // M5-C2：前端加载 palette 的端点；与 Java PaletteLut 读同一份 classpath JSON
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/palette", ctx -> servePalette(ctx)));
+
             // WebSocket
             cfg.routes.addWsHandler(WsHandlerType.WEBSOCKET, "/ws", wsCfg -> {
                 wsCfg.onConnect(ctx -> log.info("WS connected"));
@@ -147,6 +151,21 @@ public final class WebServer {
         }
         String mime = guessMime(resource);
         if (mime != null) ctx.contentType(mime);
+        ctx.result(in);
+    }
+
+    /** M5-C2：直读 classpath 根的 palette.json。浏览器端 PaletteLut 用它构建 LUT。 */
+    private void servePalette(Context ctx) {
+        java.io.InputStream in = getClass().getClassLoader().getResourceAsStream("palette.json");
+        if (in == null) {
+            ctx.status(500).json(Map.of(
+                    "error", "palette.json missing from classpath",
+                    "hint", "run ./gradlew generatePalette"));
+            return;
+        }
+        ctx.contentType("application/json; charset=utf-8");
+        // 长期缓存 —— palette 只跟 Paper 版本绑定，极少变
+        ctx.header("Cache-Control", "public, max-age=86400, immutable");
         ctx.result(in);
     }
 

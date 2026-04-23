@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-04-23 · M5-C2 /api/palette 端点 + 前端 PaletteLut 镜像
+
+**后端 `WebServer`：**
+- 新 `GET /api/palette` endpoint 直读 classpath 根的 `palette.json` 回 `application/json`
+- 加 `Cache-Control: public, max-age=86400, immutable`（palette 只随 Paper 版本变，极少动）
+
+**前端 `render/PaletteLut.ts`（~170 行）：**
+- 完整镜像 Java `PaletteLut`：5-bit 量化 → 32³ byte LUT；CIE76 Lab 距离（sRGB D65 → XYZ → Lab）；D65 矩阵 & `LAB_EPSILON/KAPPA` 常量与 Java 完全相同
+- 数据结构：`Uint8Array` LUT 占 32 KiB；`Float64Array` 预存 opaque palette 的 L/a/b
+- 入口：
+  - `loadFromEndpoint('/api/palette')` → fetch + 构造
+  - `matchColor(r, g, b, a?) → byte`（alpha<128 返 `TRANSPARENT_INDEX`）
+  - `getColor(index) → [r,g,b,a]`（反向）
+  - `quantizeImageData(imgData)` → 对 Canvas ImageData 逐像素量化（M5-D snapshot + "Simulate MC" 预览用）
+- 懒加载 singleton：`getPaletteLut()` 首次 fetch+构建，之后返回缓存 promise
+- 构建成本：~8M 次 Lab 距离计算，单线程 1-3s（后端 Java 也差不多）；M7 polish 可迁 Web Worker
+
+**为什么共享 palette：**
+- 前后端同样的量化算法 → 同样的 byte[] → M5-D snapshot 可像素级比对
+- 前端预览默认不量化（CSS 颜色更好看）；加 "Simulate MC palette" UI toggle 可按需预览"发游戏后的样子"
+
+**M5-C2 未启用 UI 开关：** 只把基础设施打好；切换 PreviewRenderer 到量化路径留后续 commit（避免 M5-C 一次改动过多）。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`（+ `/api/palette` endpoint）
+- `web/src/render/PaletteLut.ts`（新建）
+
+---
+
 ## 2026-04-23 · M5-C1 前端字体加载（双字体 @font-face 同源 TTF/OTF）
 
 **契约：** `docs/rendering.md §2.1`「前后端必须从同一源 TTF 产出」——最稳的做法就是**直接共享**下载产物，不做额外 WOFF2 subset（文件偏大但首版可用）。
