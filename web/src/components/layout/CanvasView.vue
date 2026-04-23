@@ -143,7 +143,13 @@ function onTransformEnd(ev: TransformEvt, id: string): void {
 
 // 重绘：state 变就重画 canvas
 watch(() => project.state, () => requestDraw(), { deep: true, immediate: true });
-onMounted(() => requestDraw());
+onMounted(() => {
+    requestDraw();
+    // 字体异步加载；@font-face 就绪后再重画一次确保用上真字形
+    if (document.fonts && typeof document.fonts.ready?.then === 'function') {
+        document.fonts.ready.then(() => requestDraw());
+    }
+});
 
 let drawPending = false;
 function requestDraw(): void {

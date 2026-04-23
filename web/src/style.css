@@ -2,6 +2,27 @@
 @import "tw-animate-css";
 
 /*
+ * M5-C1：前端字体与后端 Graphics2D 同源（rendering.md §2.1）。
+ * font-family 值必须与 TextElement.fontId 一致（PreviewRenderer 直接用 fontId 作 family）。
+ * unicode-range 先不设，加载整包；若 SourceHan 16.5 MB 影响首屏可在 M7 polish 做 subset。
+ */
+@font-face {
+    font-family: 'ark_pixel';
+    src: url('/fonts/ark-pixel-12px-monospaced-zh_cn.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;  /* 字体未到前不 fallback，避免首次渲染用错字形 */
+}
+
+@font-face {
+    font-family: 'source_han_sans';
+    src: url('/fonts/SourceHanSansSC-Regular.otf') format('opentype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+/*
  * M5-A 深色主题 + shadcn-vue 设计 token。
  * shadcn-vue 约定：CSS 变量作 HSL 三元组，Tailwind 4 用 theme(...) 引用。
  * 这里先定义一套「Linear/Figma 式」的深灰主题 + 对应浅色。

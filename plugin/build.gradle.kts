@@ -227,6 +227,19 @@ val downloadFonts = tasks.register("downloadFonts") {
     }
 }
 
+// M5-C1：把已下载的字体同步到 web/public/fonts/，Vite 通过 @font-face 加载到浏览器
+// Canvas 2D / TextLayout 需要与 Java Graphics2D 使用完全相同的 TTF/OTF（rendering.md §2.1）
+val webFontsDir = rootProject.layout.projectDirectory.dir("web/public/fonts")
+val syncFontsToWeb = tasks.register<Copy>("syncFontsToWeb") {
+    group = "build"
+    description = "把 build/downloaded-fonts/*.ttf|otf 拷到 web/public/fonts/（前端 @font-face 用）"
+    dependsOn(downloadFonts)
+    from(downloadedFontsDir) {
+        include("*.ttf", "*.otf")
+    }
+    into(webFontsDir)
+}
+
 // downloadedFontsDir 里是 *.ttf / *.otf；processResources 从该目录读并放到 jar 的 /fonts/ 下
 sourceSets.main {
     resources.srcDir(generatedWebResources)
@@ -237,6 +250,7 @@ tasks.processResources {
     dependsOn(copyWebToResources)
     dependsOn(generatePalette)
     dependsOn(downloadFonts)
+    dependsOn(syncFontsToWeb)
     from(downloadedFontsDir) {
         include("*.ttf", "*.otf")
         into("fonts")

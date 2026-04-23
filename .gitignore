@@ -57,6 +57,9 @@ dist-ssr/
 .cache/
 *.local
 .env
+
+# M5-C1 前端字体：由 ./gradlew downloadFonts 从 plugin/build/downloaded-fonts/ 同步进来
+web/public/fonts/
 .env.*
 !.env.example
 

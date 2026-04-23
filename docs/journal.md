@@ -5,6 +5,39 @@
 
 ---
 
+## 2026-04-23 · M5-C1 前端字体加载（双字体 @font-face 同源 TTF/OTF）
+
+**契约：** `docs/rendering.md §2.1`「前后端必须从同一源 TTF 产出」——最稳的做法就是**直接共享**下载产物，不做额外 WOFF2 subset（文件偏大但首版可用）。
+
+**Gradle：**
+- 新增 `syncFontsToWeb` Copy task：`build/downloaded-fonts/*.ttf|otf → web/public/fonts/`
+- `processResources` 加 `dependsOn(syncFontsToWeb)`，`./gradlew shadowJar` 一次把前后端字体同时准备好
+- `.gitignore` 加 `web/public/fonts/`（产物不入 git）
+
+**前端：**
+- `style.css` 新 `@font-face`：
+  - `ark_pixel` ← `/fonts/ark-pixel-12px-monospaced-zh_cn.ttf`（~4.9 MB TTF）
+  - `source_han_sans` ← `/fonts/SourceHanSansSC-Regular.otf`（~16.5 MB OTF）
+  - `font-display: block` 避免字体未到时渲染 fallback（首次画面略等，但字形保证对）
+- `PreviewRenderer.drawText`：`ctx.font = "${fontSize}px ${fontFamily(fontId)}"`
+  - `fontId` 直接作 CSS family 名（`ark_pixel` / `source_han_sans`）
+  - 未知 id fallback 到 `ark_pixel`（与后端 `FontRegistry.DEFAULT_FONT_ID` 一致）
+- `CanvasView.onMounted` 里 `document.fonts.ready.then(() => requestDraw())`——字体异步到位后重绘一次
+
+**M7 polish 留项：**
+- WOFF2 subset（用 fonttools pyftsubset 做中文常用字 ~2000 字切出来，~200 KB）
+- 首屏 preload `<link rel="preload" as="font" ...>`
+- 字体 hash 防缓存 mismatch
+
+**关联文件：**
+- `plugin/build.gradle.kts`（+ syncFontsToWeb）
+- `.gitignore`
+- `web/src/style.css`（+ @font-face）
+- `web/src/render/PreviewRenderer.ts`（fontFamily mapping）
+- `web/src/components/layout/CanvasView.vue`（document.fonts.ready 重绘）
+
+---
+
 ## 2026-04-23 · M5-B6 LayerPanel reorder + B8 画布 pan/wheel zoom · **M5-B 收尾**
 
 **B6 LayerPanel drag-and-drop 重排：**

@@ -71,9 +71,10 @@ function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
 
 function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (!t.text) return;
-    // M5-B1 简化：系统 sans-serif；真正 ark_pixel / source_han 的 @font-face 在 M5-C 接入
-    const family = 'monospace, sans-serif';
-    ctx.font = `${t.fontSize}px ${family}`;
+    // M5-C1：fontId 直接作 CSS font-family（style.css 已 @font-face 声明
+    // 'ark_pixel' / 'source_han_sans'），与后端 FontRegistry 用同一 TTF/OTF 原件
+    const family = fontFamily(t.fontId);
+    ctx.font = `${t.fontSize}px "${family}"`;
     ctx.fillStyle = t.color;
     ctx.textBaseline = 'top';
     ctx.textAlign = t.align === 'center' ? 'center' : t.align === 'right' ? 'right' : 'left';
@@ -83,6 +84,13 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (t.align === 'center') x = t.x + t.w / 2;
     else if (t.align === 'right') x = t.x + t.w;
 
-    // 单行：M5-B 够用；多行 / wrap / letterSpacing / 基线 0.8 ratio 留 M5-C 镜像
+    // M5-B1 简化：单行 fillText；M5-C3 会换成 TextLayout 镜像（hard/soft wrap + 禁则 +
+    // letterSpacing + 基线 0.8 + 竖排）
     ctx.fillText(t.text, x, t.y);
+}
+
+function fontFamily(fontId: string): string {
+    // 未知 fontId → fallback 到默认（与后端 FontRegistry.DEFAULT_FONT_ID 一致）
+    const KNOWN = new Set(['ark_pixel', 'source_han_sans']);
+    return KNOWN.has(fontId) ? fontId : 'ark_pixel';
 }
