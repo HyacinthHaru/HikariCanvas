@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-04-23 · M5-D2 修 P1 + P2：auto-select + TextLayout canonical width
+
+**实测反馈修两个：**
+
+### P1 — 新增元素后自动选中
+
+**问题：** 工具栏点"Add text / rect"后服务端创建元素，本地 state 更新但 selection 还是空——用户必须手动去 Layers 面板点一下才能看到 Properties 表单。
+
+**修：**
+- `project store` 加 `lastAddedElementId: Ref<string | null>`
+- `applyPatch` 里检测 `op: 'add', path: /elements/N` → 记录 `value.id`
+- `App.vue` watch `project.lastAddedElementId` → 非 null 时调 `ui.selectElement(id)` 并清零
+
+多端场景（M6+ 多人协作）若其他 session add 也会触发 auto-select；M5 单端无影响。
+
+### P2 — 前后端换行不一致（截图里是重头）
+
+**根因：** 前端 `ctx.measureText(ch).width` 和 Java `FontMetrics.charWidth(c)` 即使加载同一 TTF/OTF 也返回不同值（浏览器 hinting / Java AWT rasterizer 差异）。TextLayout 的 `softWrap` 按字符宽度累加判断换行，差 1 px 就让前后端在不同位置断行。截图里 `"这是一个测试TESTABCDEFG..."` 在前端换成 3/3/3/3 模式（中文 3 字、英文 3 字），后端换成 2/4/4 模式。
+
+**修（核心）：** 前后端 `TextLayout` 统一用**规则型 canonical width**：
+- 码点 `< 0x2E80`（ASCII / 拉丁 / 一般标点）：`round(fontSize * 0.5)`
+- 其他（CJK / 假名 / 全角）：`fontSize`
+
+**代价与权衡：**
+- 像素字体 Ark Pixel 本身 monospaced，canonical == actual，零副作用
+- 思源黑非等宽，canonical 比实际略宽一些 → 视觉字间距偏松，但换行位置前后端**完美一致**
+- 与 rendering.md §8.2 的 tolerance（pixelated=0%、常规 <0.5%）方向相符——layout 一致比字形精确优先
+
+**改动：**
+- `web/src/render/TextLayout.ts`：`canonicalCharWidth` 导出 + `layoutText` / `layoutHorizontal` / `layoutVertical` / `softWrap` / `measureLineWidth` 全部替换 `m.measureChar` → `canonicalCharWidth`；删旧 `CharMeasurer` 接口与 `CanvasMeasurer` 类
+- `web/src/render/PreviewRenderer.ts`：不再构造 Measurer，直接 `layoutText(t)`
+- `plugin/src/main/java/.../TextLayout.java`：加 `public static int canonicalCharWidth(char, int)`；`layout` / `softWrap` / `measureLineWidth` / `layoutVertical` 全部切到新函数；移除 `FontMetrics` 参数（签名简化为 `layout(TextElement)`；vertical 同）
+- `plugin/src/main/java/.../CanvasCompositor.java`：`TextLayout.layout(t, fm)` → `TextLayout.layout(t)`
+
+**snapshot 基线：** `canonicalCharWidth` 改了每个字符的 x，5 个 fixture 的 expected PNG 均变。`rm expected/*.png && ./gradlew :plugin:test` 重建基线，二跑通过。baseline diff 已入 git。
+
+**关联文件：**
+- `web/src/stores/project.ts`（+ lastAddedElementId）
+- `web/src/App.vue`（watch auto-select）
+- `web/src/render/TextLayout.ts` / `PreviewRenderer.ts`
+- `plugin/src/main/java/moe/hikari/canvas/render/TextLayout.java` / `CanvasCompositor.java`
+- `plugin/src/test/resources/expected/*.png`（baseline 重生）
+
+---
+
 ## 2026-04-23 · M5-D 收尾（scope 调整） · **M5 编辑器 UI 完成**
 
 **scope 调整：** 原计划 M5-D = Playwright e2e + snapshot 测试台 + 手测。实施前盘点：

@@ -184,8 +184,9 @@ public final class CanvasCompositor {
         g.setFont(font);
         FontMetrics fm = g.getFontMetrics(font);
 
-        // M4-T5 + M5-C6：多行 + wrap + letterSpacing + 基线 + align + 竖排 全由 TextLayout
-        List<TextLayout.PositionedGlyph> glyphs = TextLayout.layout(t, fm);
+        // M4-T5 + M5-C6 + M5-D2：多行 + wrap + letterSpacing + 基线 + align + 竖排
+        // 全由 TextLayout；自 M5-D2 起用 canonicalCharWidth，不再依赖 Java FontMetrics
+        List<TextLayout.PositionedGlyph> glyphs = TextLayout.layout(t);
         if (glyphs.isEmpty()) return;
 
         Effects effects = t.effects();

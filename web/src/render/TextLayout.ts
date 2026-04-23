@@ -12,26 +12,43 @@ export interface PositionedGlyph {
     rotated?: boolean;
 }
 
-/** 注入测量函数，让 layout 不耦合具体 Canvas 实例。 */
-export interface CharMeasurer {
-    measureChar(ch: string): number;
-}
-
 /** 跨字体统一的 ascent 比例（rendering.md §3.2）。 */
 export const ASCENT_RATIO = 0.8;
+
+/**
+ * M5-D2 P2：前后端一致的"标准"字符宽度函数。
+ *
+ * <p>问题背景：浏览器 {@code ctx.measureText} 和 Java {@code FontMetrics.charWidth}
+ * 即使加载同一 TTF/OTF 也会返回不同值（hinting / subpixel 策略不同）。layout
+ * 的 softWrap 依赖 char width，差 1 px 就可能让前后端换行点不同。</p>
+ *
+ * <p>方案：两端不再读 font metrics，改用规则型宽度：</p>
+ * <ul>
+ *   <li>码点 {@code < 0x2E80}（ASCII + 拉丁 + 一般标点）：{@code round(fontSize * 0.5)}</li>
+ *   <li>其他（CJK / Hiragana / Katakana / 全角）：{@code fontSize}</li>
+ * </ul>
+ *
+ * <p>代价：非等宽字体（如思源黑）的视觉字间距可能略宽，但换行一致性优先。
+ * 像素字体 Ark Pixel 本身 monospaced，canonical ≈ actual，无副作用。</p>
+ */
+export function canonicalCharWidth(ch: string, fontSize: number): number {
+    const cp = ch.charCodeAt(0);
+    if (cp < 0x2E80) return Math.round(fontSize * 0.5);
+    return fontSize;
+}
 
 /** 行首禁则：半全角标点不许出现在行首，回溯到上一行末。 */
 const LINE_START_FORBIDDEN = '）】」』。，、？！：；）】」』。，、？！：；)].,!?:;';
 
-export function layoutText(t: TextElement, m: CharMeasurer): PositionedGlyph[] {
+export function layoutText(t: TextElement): PositionedGlyph[] {
     if (!t.text) return [];
-    if (t.vertical) return layoutVertical(t, m);
-    return layoutHorizontal(t, m);
+    if (t.vertical) return layoutVertical(t);
+    return layoutHorizontal(t);
 }
 
 // ---------- 横排 ----------
 
-function layoutHorizontal(t: TextElement, m: CharMeasurer): PositionedGlyph[] {
+function layoutHorizontal(t: TextElement): PositionedGlyph[] {
     const fontSize = t.fontSize;
     const boxW = t.w;
     const letterSpacing = t.letterSpacing;
@@ -48,7 +65,7 @@ function layoutHorizontal(t: TextElement, m: CharMeasurer): PositionedGlyph[] {
         if (para === '') {
             lines.push('');
         } else {
-            softWrap(para, m, boxW, letterSpacing, lines);
+            softWrap(para, fontSize, boxW, letterSpacing, lines);
         }
     }
 
@@ -61,7 +78,7 @@ function layoutHorizontal(t: TextElement, m: CharMeasurer): PositionedGlyph[] {
         const line = lines[li];
         const lineTopY = t.y + li * lineHeightPx;
         const baselineY = lineTopY + ascentPx;
-        const lineWidthPx = measureLineWidth(line, m, letterSpacing);
+        const lineWidthPx = measureLineWidth(line, fontSize, letterSpacing);
         let startX = t.x;
         if (t.align === 'center') startX = t.x + Math.floor((boxW - lineWidthPx) / 2);
         else if (t.align === 'right') startX = t.x + boxW - lineWidthPx;
@@ -70,14 +87,14 @@ function layoutHorizontal(t: TextElement, m: CharMeasurer): PositionedGlyph[] {
         for (let i = 0; i < line.length; i++) {
             const ch = line[i];
             out.push({ ch, x: cursorX, baselineY });
-            cursorX += m.measureChar(ch);
+            cursorX += canonicalCharWidth(ch, fontSize);
             if (i < line.length - 1) cursorX += Math.round(letterSpacing);
         }
     }
     return out;
 }
 
-function softWrap(text: string, m: CharMeasurer, maxW: number,
+function softWrap(text: string, fontSize: number, maxW: number,
                   letterSpacing: number, out: string[]): void {
     const n = text.length;
     let cursor = 0;
@@ -90,7 +107,7 @@ function softWrap(text: string, m: CharMeasurer, maxW: number,
 
         while (i < n) {
             const ch = text[i];
-            const cw = m.measureChar(ch);
+            const cw = canonicalCharWidth(ch, fontSize);
             const step = cw + (i > cursor ? Math.round(letterSpacing) : 0);
             if (accW + step > maxW && i > cursor) {
                 breakOut = i;
@@ -138,11 +155,11 @@ function applyLineStartForbidden(lines: string[]): void {
     }
 }
 
-function measureLineWidth(line: string, m: CharMeasurer, letterSpacing: number): number {
+function measureLineWidth(line: string, fontSize: number, letterSpacing: number): number {
     if (line.length === 0) return 0;
     let w = 0;
     for (let i = 0; i < line.length; i++) {
-        w += m.measureChar(line[i]);
+        w += canonicalCharWidth(line[i], fontSize);
         if (i < line.length - 1) w += Math.round(letterSpacing);
     }
     return w;
@@ -150,7 +167,7 @@ function measureLineWidth(line: string, m: CharMeasurer, letterSpacing: number):
 
 // ---------- 竖排（rendering.md §3.3，与 Java TextLayout.layoutVertical 镜像） ----------
 
-function layoutVertical(t: TextElement, m: CharMeasurer): PositionedGlyph[] {
+function layoutVertical(t: TextElement): PositionedGlyph[] {
     const fontSize = t.fontSize;
     const letterSpacing = Math.round(t.letterSpacing);
     const lineHeightMul = t.lineHeight <= 0 ? 1.2 : t.lineHeight;
@@ -186,7 +203,7 @@ function layoutVertical(t: TextElement, m: CharMeasurer): PositionedGlyph[] {
             if (isRotatableVertical(ch)) {
                 out.push({ ch, x: colCenterX, baselineY: cellTopY + Math.floor(fontSize / 2), rotated: true });
             } else {
-                const chW = m.measureChar(ch);
+                const chW = canonicalCharWidth(ch, fontSize);
                 out.push({ ch, x: colCenterX - Math.floor(chW / 2), baselineY: cellTopY + ascentPx });
             }
             cellTopY += fontSize + letterSpacing;
@@ -231,23 +248,5 @@ function isCjk(c: string): boolean {
         || (cp >= 0x3000 && cp <= 0x303F); // CJK Punct
 }
 
-// ---------- Canvas 2D 测量适配 ----------
-
-/**
- * 用 {@link CanvasRenderingContext2D} 的 measureText 测量字符宽度，带字符级缓存。
- * 调用方必须在 measure 前设好 `ctx.font`，否则缓存会以错误字号记项。
- */
-export class CanvasMeasurer implements CharMeasurer {
-    private cache = new Map<string, number>();
-
-    constructor(private readonly ctx: CanvasRenderingContext2D, private readonly fontKey: string) {}
-
-    measureChar(ch: string): number {
-        const key = this.fontKey + '|' + ch;
-        const cached = this.cache.get(key);
-        if (cached !== undefined) return cached;
-        const w = this.ctx.measureText(ch).width;
-        this.cache.set(key, w);
-        return w;
-    }
-}
+// ---------- CanvasMeasurer 已废弃（M5-D2 P2 切到 canonicalCharWidth） ----------
+// 原文件导出的 CanvasMeasurer 类与 CharMeasurer 接口此轮移除，调用方已不再传 measurer。

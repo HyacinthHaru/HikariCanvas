@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { onMounted, watch } from 'vue';
 import { useEventListener } from '@vueuse/core';
 import TopBar from '@/components/layout/TopBar.vue';
 import LeftTools from '@/components/layout/LeftTools.vue';
@@ -29,6 +29,14 @@ onMounted(() => {
         get ws() { return wsClient.raw; },
         get authenticated() { return net.authenticated; },
     };
+});
+
+// M5-D2 P1：新 element 被 server 加到 state 后自动选中，方便立刻进 Properties 编辑
+watch(() => project.lastAddedElementId, (id) => {
+    if (id) {
+        ui.selectElement(id);
+        project.lastAddedElementId = null;
+    }
 });
 
 // M5-B7 全局快捷键。跳过 input/textarea/contenteditable 以免 typing 时误触

@@ -2,7 +2,6 @@ package moe.hikari.canvas.render;
 
 import moe.hikari.canvas.state.TextElement;
 
-import java.awt.FontMetrics;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,6 +32,22 @@ public final class TextLayout {
     /** 行首禁则：出现在行首的标点会被回溯到上一行末尾。半全角都收录。 */
     private static final String LINE_START_FORBIDDEN = "）】」』。，、？！：；）】」』。，、？！：；)].,!?:;";
 
+    /**
+     * M5-D2 P2：前后端一致的"标准"字符宽度。
+     *
+     * <p>浏览器 {@code ctx.measureText} 和 Java {@code FontMetrics.charWidth} 即使加载
+     * 同一 TTF/OTF 也会返回不同值，导致 softWrap 换行点前后端不同。规避方案：两端不读
+     * font metrics，统一用规则型宽度：</p>
+     * <ul>
+     *   <li>码点 {@code < 0x2E80}（ASCII + 拉丁 + 一般标点）：{@code round(fontSize * 0.5)}</li>
+     *   <li>其他（CJK / 假名 / 全角）：{@code fontSize}</li>
+     * </ul>
+     */
+    public static int canonicalCharWidth(char c, int fontSize) {
+        if (c < '\u2E80') return Math.round(fontSize * 0.5f);
+        return fontSize;
+    }
+
     private TextLayout() {}
 
     /**
@@ -54,19 +69,21 @@ public final class TextLayout {
     }
 
     /**
-     * 给定 TextElement + FontMetrics（来自目标 fontSize 下派生的 Font），
-     * 返回每个字符的绘制位置列表。{@code letterSpacing} 已累计进 x。
+     * 给定 TextElement，返回每个字符的绘制位置列表。{@code letterSpacing} 已累计进 x。
+     *
+     * <p>M5-D2 起改用 {@link #canonicalCharWidth}，不再需要 FontMetrics。之前的签名
+     * {@code layout(t, fm)} 留在别处（CanvasCompositor），此处新重载忽略 fm。</p>
      *
      * <p>调用方用 {@code Graphics2D.drawString(glyph.ch(), glyph.x(), glyph.baselineY())}
      * 逐字符绘制。之所以不直接返回整行 + 一次 drawString，是为了支持 letterSpacing
      * 对整数像素的独立控制（Graphics2D 本身不支持 per-char letterSpacing）。</p>
      */
-    public static List<PositionedGlyph> layout(TextElement t, FontMetrics fm) {
+    public static List<PositionedGlyph> layout(TextElement t) {
         if (t.text() == null || t.text().isEmpty()) {
             return List.of();
         }
         if (t.vertical()) {
-            return layoutVertical(t, fm);
+            return layoutVertical(t);
         }
         int fontSize = t.fontSize();
         int boxWidth = t.w();
@@ -84,7 +101,7 @@ public final class TextLayout {
             if (para.isEmpty()) {
                 lines.add("");
             } else {
-                softWrap(para, fm, boxWidth, letterSpacing, lines);
+                softWrap(para, fontSize, boxWidth, letterSpacing, lines);
             }
         }
 
@@ -97,7 +114,7 @@ public final class TextLayout {
             String line = lines.get(li);
             int lineTopY = t.y() + li * lineHeightPx;
             int baselineY = lineTopY + ascentPx;
-            int lineWidthPx = measureLineWidth(line, fm, letterSpacing);
+            int lineWidthPx = measureLineWidth(line, fontSize, letterSpacing);
             int startX = switch (t.align()) {
                 case "center" -> t.x() + (boxWidth - lineWidthPx) / 2;
                 case "right" -> t.x() + boxWidth - lineWidthPx;
@@ -107,7 +124,7 @@ public final class TextLayout {
             for (int i = 0; i < line.length(); i++) {
                 char c = line.charAt(i);
                 out.add(new PositionedGlyph(String.valueOf(c), cursorX, baselineY));
-                cursorX += fm.charWidth(c);
+                cursorX += canonicalCharWidth(c, fontSize);
                 if (i < line.length() - 1) {
                     cursorX += Math.round(letterSpacing);
                 }
@@ -128,7 +145,7 @@ public final class TextLayout {
      *
      * <p>换行时：若断点为空白字符，空白字符 <b>丢弃</b>（不出现在下一行行首）。</p>
      */
-    private static void softWrap(String text, FontMetrics fm, int maxWidth,
+    private static void softWrap(String text, int fontSize, int maxWidth,
                                  float letterSpacing, List<String> out) {
         int n = text.length();
         int cursor = 0;
@@ -141,7 +158,7 @@ public final class TextLayout {
 
             while (i < n) {
                 char c = text.charAt(i);
-                int cw = fm.charWidth(c);
+                int cw = canonicalCharWidth(c, fontSize);
                 int step = cw + (i > cursor ? Math.round(letterSpacing) : 0);
                 if (accWidth + step > maxWidth && i > cursor) {
                     breakOut = i;
@@ -196,11 +213,11 @@ public final class TextLayout {
         }
     }
 
-    private static int measureLineWidth(String line, FontMetrics fm, float letterSpacing) {
+    private static int measureLineWidth(String line, int fontSize, float letterSpacing) {
         if (line.isEmpty()) return 0;
         int width = 0;
         for (int i = 0; i < line.length(); i++) {
-            width += fm.charWidth(line.charAt(i));
+            width += canonicalCharWidth(line.charAt(i), fontSize);
             if (i < line.length() - 1) {
                 width += Math.round(letterSpacing);
             }
@@ -236,7 +253,7 @@ public final class TextLayout {
      *
      * <p>行首禁则在竖排下未实装（M7 polish）——相对少见。</p>
      */
-    private static List<PositionedGlyph> layoutVertical(TextElement t, FontMetrics fm) {
+    private static List<PositionedGlyph> layoutVertical(TextElement t) {
         int fontSize = t.fontSize();
         int letterSpacing = Math.round(t.letterSpacing());
         float lineHeightMul = t.lineHeight() <= 0 ? 1.2f : t.lineHeight();
@@ -274,7 +291,7 @@ public final class TextLayout {
                     // pivot = 方格中心；CanvasCompositor 绕此点 rotate 90° 后 drawString
                     out.add(new PositionedGlyph(s, colCenterX, cellTopY + fontSize / 2, true));
                 } else {
-                    int chW = fm.charWidth(c);
+                    int chW = canonicalCharWidth(c, fontSize);
                     out.add(new PositionedGlyph(s, colCenterX - chW / 2, cellTopY + ascentPx, false));
                 }
                 cellTopY += fontSize + letterSpacing;

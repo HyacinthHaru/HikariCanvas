@@ -9,6 +9,12 @@ import type { ProjectState, Element, PatchOp } from '@/types/protocol';
 export const useProjectStore = defineStore('project', () => {
     const state = ref<ProjectState | null>(null);
 
+    /**
+     * 最近一次 applyPatch 里被 {@code add} 创建的 element.id。
+     * 顶层组件 watch 它实现"新加即选中"。读后由 UI 侧自行清零（赋 null）。
+     */
+    const lastAddedElementId = ref<string | null>(null);
+
     const canvasPixelWidth = computed(() =>
         state.value ? state.value.canvas.widthMaps * 128 : 0);
     const canvasPixelHeight = computed(() =>
@@ -25,6 +31,11 @@ export const useProjectStore = defineStore('project', () => {
     function applyPatch(version: number, ops: PatchOp[]) {
         if (!state.value) return;
         for (const op of ops) {
+            // 检测 element.add：/elements/N（不含更深路径）
+            if (op.op === 'add' && /^\/elements\/\d+$/.test(op.path) && op.value) {
+                const elId = (op.value as { id?: unknown }).id;
+                if (typeof elId === 'string') lastAddedElementId.value = elId;
+            }
             applyOne(state.value, op);
         }
         state.value.version = version;
@@ -37,6 +48,7 @@ export const useProjectStore = defineStore('project', () => {
 
     return {
         state,
+        lastAddedElementId,
         canvasPixelWidth, canvasPixelHeight,
         setSnapshot, applyPatch,
         elementById,

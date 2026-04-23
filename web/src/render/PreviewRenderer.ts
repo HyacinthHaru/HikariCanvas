@@ -1,5 +1,5 @@
 import type { ProjectState, Element, RectElement, TextElement, Glow } from '@/types/protocol';
-import { layoutText, CanvasMeasurer, type PositionedGlyph } from './TextLayout';
+import { layoutText, type PositionedGlyph } from './TextLayout';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
@@ -78,8 +78,7 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
 
-    const measurer = new CanvasMeasurer(ctx, fontSpec);
-    const glyphs = layoutText(t, measurer);
+    const glyphs = layoutText(t);
     if (glyphs.length === 0) return;
 
     const fx = t.effects;
