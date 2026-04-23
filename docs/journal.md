@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-04-23 · M5-C4 前端效果族镜像（stroke / shadow / glow）
+
+**契约：** `docs/rendering.md §5` 效果族；前端 Canvas 2D 与后端 Java Graphics2D 的一致性要求。
+
+**PreviewRenderer.drawText 按 §5.4 顺序：**
+```
+glow (自实现盒模糊)  →  shadow (fillText offset)  →  stroke (strokeText)  →  fill
+```
+
+**Glow（Canvas 2D 镜像 Java GlowRenderer）：**
+- 算 glyph 外接矩形 + `radius + 1` padding（rotated glyph 按 `fontSize × fontSize` 方格外接）
+- 新 `document.createElement('canvas')` local image（ARGB）
+- 关 imageSmoothing + textRendering='geometricPrecision'；白色 fillText 画字形 mask
+- 提取 alpha 通道 → `boxBlurHorizontal` + `boxBlurVertical`（分离核，算法 1:1 对应 Java）
+- alpha 保留作透明度，RGB 替换 `glow.color`
+- `ctx.drawImage(local, bboxX, bboxY)` 合成到主画布（SRC_OVER 自动）
+
+**Shadow：**
+- 每个 glyph 按 `(dx, dy)` offset 画一次，颜色 = `shadow.color`
+- rotated glyph 绕 pivot 旋转后画（与 fill 层共用 `drawGlyphFill`）
+
+**Stroke：**
+- 浏览器原生 `ctx.strokeText`（rendering.md §5.1 前端约定）
+- `lineWidth = width`、`lineJoin = round`、`lineCap = round`
+- rotated glyph 同样走 `drawGlyphStroke`（translate + rotate + strokeText）
+
+**与后端渲染的潜在差异（留 M5-D snapshot 测试发现）：**
+- `ctx.strokeText` 的 outline 算法可能和 Java `GlyphVector.getOutline + BasicStroke` 有 subpixel 差异
+- 盒模糊在两端实现上的整数除法精度：Java `sum / diameter`（整数除）vs JS `Math.floor(sum / diameter)`——理论上等价，需实测
+- Canvas 2D 不关抗锯齿，即使 `textRendering='geometricPrecision'`——字符边缘可能仍有 sub-pixel；与 Java `TEXT_ANTIALIAS_OFF` 有差距。M5-D 的 `pixelated` 容忍度按 `< 0.5%` 定；超限时可能要引入前端"强制整数像素"或"Graphics2D 后端直出图片 → 前端 drawImage" 的替代方案
+
+**关联文件：**
+- `web/src/render/PreviewRenderer.ts`（重写 drawText + glow/shadow/stroke 全家桶）
+
+---
+
 ## 2026-04-23 · M5-C3 + C6 TextLayout TS 镜像 + 前后端竖排实装
 
 **M5-C3（前端 TextLayout 镜像）：**
