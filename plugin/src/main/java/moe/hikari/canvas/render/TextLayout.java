@@ -35,8 +35,23 @@ public final class TextLayout {
 
     private TextLayout() {}
 
-    /** 单个字符 glyph 在画布坐标系下的绘制位置（{@code y} = baseline）。 */
-    public record PositionedGlyph(String ch, int x, int baselineY) {}
+    /**
+     * 单个字符 glyph 在画布坐标系下的绘制位置。
+     *
+     * <p>语义按 {@code rotated}：</p>
+     * <ul>
+     *   <li>{@code rotated == false}：{@code (x, baselineY)} 是 Graphics2D.drawString 的标准
+     *       锚点——字符 baseline 起点；调用方直接 {@code g.drawString(ch, x, baselineY)}</li>
+     *   <li>{@code rotated == true}（M5-C3 竖排全角标点）：{@code (x, baselineY)} 是字符
+     *       <b>方格中心</b>；调用方应 translate 到该点 → rotate(π/2) → drawString 在字符
+     *       自身坐标系中心偏移处（参见 CanvasCompositor.drawRotatedGlyph）</li>
+     * </ul>
+     */
+    public record PositionedGlyph(String ch, int x, int baselineY, boolean rotated) {
+        public PositionedGlyph(String ch, int x, int baselineY) {
+            this(ch, x, baselineY, false);
+        }
+    }
 
     /**
      * 给定 TextElement + FontMetrics（来自目标 fontSize 下派生的 Font），
@@ -49,6 +64,9 @@ public final class TextLayout {
     public static List<PositionedGlyph> layout(TextElement t, FontMetrics fm) {
         if (t.text() == null || t.text().isEmpty()) {
             return List.of();
+        }
+        if (t.vertical()) {
+            return layoutVertical(t, fm);
         }
         int fontSize = t.fontSize();
         int boxWidth = t.w();
@@ -201,5 +219,95 @@ public final class TextLayout {
                 || (c >= '\u30A0' && c <= '\u30FF') // Katakana
                 || (c >= '\uFF00' && c <= '\uFFEF') // Halfwidth/Fullwidth Forms
                 || (c >= '\u3000' && c <= '\u303F'); // CJK Symbols & Punctuation
+    }
+
+    // ---------- M5-C6 竖排（rendering.md §3.3） ----------
+
+    /**
+     * 竖排布局。与横排不同：
+     * <ul>
+     *   <li>字符从上到下、列从右到左（CJK 传统）</li>
+     *   <li>每个字符占 {@code fontSize × fontSize} 方格；列宽 = {@code fontSize * lineHeight}</li>
+     *   <li>全角标点（{@code U+3000-U+303F} / {@code U+FF00-U+FFEF}）旋转 90° → {@code PositionedGlyph.rotated = true}</li>
+     *   <li>半角字符不旋转（直立）</li>
+     *   <li>{@code align} 在竖排下语义 = 列内 <b>顶/中/底</b> 对齐</li>
+     *   <li>软换行：按 box {@code h}；硬换行 {@code \n} 起新列</li>
+     * </ul>
+     *
+     * <p>行首禁则在竖排下未实装（M7 polish）——相对少见。</p>
+     */
+    private static List<PositionedGlyph> layoutVertical(TextElement t, FontMetrics fm) {
+        int fontSize = t.fontSize();
+        int letterSpacing = Math.round(t.letterSpacing());
+        float lineHeightMul = t.lineHeight() <= 0 ? 1.2f : t.lineHeight();
+        int colStep = Math.max(1, Math.round(fontSize * lineHeightMul));
+        int ascentPx = (int) Math.round(fontSize * ASCENT_RATIO);
+        int boxH = t.h();
+
+        String[] paragraphs = t.text().split("\n", -1);
+        List<List<String>> columns = new ArrayList<>();
+        for (String para : paragraphs) {
+            if (para.isEmpty()) {
+                columns.add(List.of());
+            } else {
+                softWrapVertical(para, fontSize, letterSpacing, boxH, columns);
+            }
+        }
+
+        List<PositionedGlyph> out = new ArrayList<>(t.text().length());
+        int totalCols = columns.size();
+        for (int ci = 0; ci < totalCols; ci++) {
+            List<String> col = columns.get(ci);
+            if (col.isEmpty()) continue;
+            int colCenterX = t.x() + t.w() - ci * colStep - colStep / 2;
+            int cellsH = col.size();
+            int totalH = cellsH * fontSize + Math.max(0, cellsH - 1) * letterSpacing;
+            int startTopY;
+            if ("center".equals(t.align())) startTopY = t.y() + (boxH - totalH) / 2;
+            else if ("right".equals(t.align())) startTopY = t.y() + boxH - totalH;
+            else startTopY = t.y();
+
+            int cellTopY = startTopY;
+            for (String s : col) {
+                char c = s.charAt(0);
+                if (isRotatableVertical(c)) {
+                    // pivot = 方格中心；CanvasCompositor 绕此点 rotate 90° 后 drawString
+                    out.add(new PositionedGlyph(s, colCenterX, cellTopY + fontSize / 2, true));
+                } else {
+                    int chW = fm.charWidth(c);
+                    out.add(new PositionedGlyph(s, colCenterX - chW / 2, cellTopY + ascentPx, false));
+                }
+                cellTopY += fontSize + letterSpacing;
+            }
+        }
+        return out;
+    }
+
+    private static void softWrapVertical(String text, int fontSize, int letterSpacing,
+                                         int maxH, List<List<String>> cols) {
+        int n = text.length();
+        int i = 0;
+        while (i < n) {
+            List<String> col = new ArrayList<>();
+            int accH = 0;
+            while (i < n) {
+                int step = fontSize + (col.isEmpty() ? 0 : letterSpacing);
+                if (accH + step > maxH && !col.isEmpty()) break;
+                col.add(String.valueOf(text.charAt(i)));
+                accH += step;
+                i++;
+            }
+            cols.add(col);
+        }
+    }
+
+    /**
+     * 判断字符是否应在竖排下旋转 90°。
+     * 覆盖 CJK 标点与符号（U+3000-U+303F）+ 半宽全宽形式（U+FF00-U+FFEF，含全角括号等）。
+     * 全角汉字（U+4E00+）本身方形，不旋转。
+     */
+    private static boolean isRotatableVertical(char c) {
+        return (c >= '\u3000' && c <= '\u303F')
+                || (c >= '\uFF00' && c <= '\uFFEF');
     }
 }

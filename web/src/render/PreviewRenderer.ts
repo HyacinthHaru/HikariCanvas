@@ -1,4 +1,5 @@
 import type { ProjectState, Element, RectElement, TextElement } from '@/types/protocol';
+import { layoutText, CanvasMeasurer } from './TextLayout';
 
 /**
  * 前端 Canvas 2D 预览渲染器。
@@ -71,22 +72,32 @@ function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
 
 function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (!t.text) return;
-    // M5-C1：fontId 直接作 CSS font-family（style.css 已 @font-face 声明
-    // 'ark_pixel' / 'source_han_sans'），与后端 FontRegistry 用同一 TTF/OTF 原件
+    // M5-C1：fontId 直接作 CSS font-family（style.css @font-face 声明）
     const family = fontFamily(t.fontId);
-    ctx.font = `${t.fontSize}px "${family}"`;
+    const fontSpec = `${t.fontSize}px "${family}"`;
+    ctx.font = fontSpec;
     ctx.fillStyle = t.color;
-    ctx.textBaseline = 'top';
-    ctx.textAlign = t.align === 'center' ? 'center' : t.align === 'right' ? 'right' : 'left';
+    ctx.textBaseline = 'alphabetic';  // 与 TextLayout 的 baselineY 语义一致
+    ctx.textAlign = 'left';            // 由 layout 自己算 startX
 
-    // align 按元素 w 做偏移
-    let x = t.x;
-    if (t.align === 'center') x = t.x + t.w / 2;
-    else if (t.align === 'right') x = t.x + t.w;
-
-    // M5-B1 简化：单行 fillText；M5-C3 会换成 TextLayout 镜像（hard/soft wrap + 禁则 +
-    // letterSpacing + 基线 0.8 + 竖排）
-    ctx.fillText(t.text, x, t.y);
+    // M5-C3：TextLayout 负责 hard/soft wrap + 禁则 + letterSpacing + 基线 0.8 + 竖排
+    const measurer = new CanvasMeasurer(ctx, fontSpec);
+    const glyphs = layoutText(t, measurer);
+    for (const g of glyphs) {
+        if (g.rotated) {
+            // 竖排全角标点：绕 (g.x, g.baselineY) 顺时针 90° 转；与 Java
+            // CanvasCompositor.drawGlyph 保持一致的锚点语义
+            ctx.save();
+            ctx.translate(g.x, g.baselineY);
+            ctx.rotate(Math.PI / 2);
+            const chW = ctx.measureText(g.ch).width;
+            const ascent = Math.round(t.fontSize * 0.8);
+            ctx.fillText(g.ch, -chW / 2, ascent - t.fontSize / 2);
+            ctx.restore();
+        } else {
+            ctx.fillText(g.ch, g.x, g.baselineY);
+        }
+    }
 }
 
 function fontFamily(fontId: string): string {

@@ -20,7 +20,6 @@ import java.awt.font.GlyphVector;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.List;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -57,7 +56,6 @@ public final class CanvasCompositor {
     private final PaletteLut paletteLut;
     private final FontRegistry fontRegistry;
     private final Logger log;
-    private volatile boolean verticalWarned = false;
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry, Logger log) {
         this.paletteLut = paletteLut;
@@ -171,7 +169,6 @@ public final class CanvasCompositor {
 
     private void drawText(Graphics2D g, TextElement t) {
         if (t.text() == null || t.text().isEmpty()) return;
-        if (t.vertical()) warnVerticalOnce(t);
 
         FontRegistry.Registered reg = fontRegistry.getOrDefault(t.fontId());
         if (reg == null) {
@@ -183,8 +180,7 @@ public final class CanvasCompositor {
         g.setFont(font);
         FontMetrics fm = g.getFontMetrics(font);
 
-        // M4-T5：多行 + wrap + letterSpacing + 基线 + align 走 TextLayout；
-        // 逐字符 drawString 以支持 per-char letterSpacing（Graphics2D 无原生 per-char letterSpacing）
+        // M4-T5 + M5-C6：多行 + wrap + letterSpacing + 基线 + align + 竖排 全由 TextLayout
         List<TextLayout.PositionedGlyph> glyphs = TextLayout.layout(t, fm);
         if (glyphs.isEmpty()) return;
 
@@ -195,18 +191,16 @@ public final class CanvasCompositor {
             GlowRenderer.render(g, glyphs, font, effects.glow());
         }
 
-        // M4-T9 阴影：rendering.md §5.2 约定"不用 Graphics2D 内置 shadow"；
-        // 做法是把字形画一份到 (dx, dy) 偏移处、上阴影颜色。与浏览器端 fillText 对齐
+        // M4-T9 阴影：drawString 到 (dx, dy) 偏移处
         if (effects != null && effects.shadow() != null) {
             Shadow sh = effects.shadow();
             g.setColor(parseColor(sh.color()));
             for (TextLayout.PositionedGlyph pg : glyphs) {
-                g.drawString(pg.ch(), pg.x() + sh.dx(), pg.baselineY() + sh.dy());
+                drawGlyph(g, pg, sh.dx(), sh.dy());
             }
         }
 
-        // M4-T8 描边：rendering.md §5.1——glyph outline + BasicStroke.draw 画边框
-        // FontRenderContext 来自当前 Graphics2D（继承 hints，确保与 fill 阶段一致）
+        // M4-T8 描边：GlyphVector.getOutline + BasicStroke.draw
         if (effects != null && effects.stroke() != null && effects.stroke().width() > 0) {
             Stroke strokeCfg = effects.stroke();
             FontRenderContext frc = g.getFontRenderContext();
@@ -215,9 +209,7 @@ public final class CanvasCompositor {
                     BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.setColor(parseColor(strokeCfg.color()));
             for (TextLayout.PositionedGlyph pg : glyphs) {
-                GlyphVector gv = font.createGlyphVector(frc, pg.ch());
-                Shape outline = gv.getOutline(pg.x(), pg.baselineY());
-                g.draw(outline);
+                drawGlyphOutline(g, pg, font, frc);
             }
             g.setStroke(prev);
         }
@@ -225,16 +217,49 @@ public final class CanvasCompositor {
         // 最顶层：字形填充（正常颜色）
         g.setColor(parseColor(t.color()));
         for (TextLayout.PositionedGlyph pg : glyphs) {
-            g.drawString(pg.ch(), pg.x(), pg.baselineY());
+            drawGlyph(g, pg, 0, 0);
         }
     }
 
-    private void warnVerticalOnce(TextElement t) {
-        if (verticalWarned) return;
-        verticalWarned = true;
-        log.log(Level.WARNING,
-                "CanvasCompositor: vertical=true on " + t.id()
-                + " rendered as horizontal (rendering.md §3.3 推迟到 M4.5/M7)");
+    /**
+     * 绘制单个 glyph。M5-C6：{@code pg.rotated == true} 时绕 {@code (pg.x, pg.baselineY)}
+     * 顺时针旋转 90°（CJK 竖排全角标点）。非旋转字符走标准 {@code drawString}。
+     */
+    private static void drawGlyph(Graphics2D g, TextLayout.PositionedGlyph pg, int offsetDx, int offsetDy) {
+        if (!pg.rotated()) {
+            g.drawString(pg.ch(), pg.x() + offsetDx, pg.baselineY() + offsetDy);
+            return;
+        }
+        AffineTransform saved = g.getTransform();
+        // pivot 是方格中心（TextLayout.layoutVertical 按此约定存 x/baselineY）
+        g.translate(pg.x() + offsetDx, pg.baselineY() + offsetDy);
+        g.rotate(Math.PI / 2);
+        FontMetrics fm = g.getFontMetrics();
+        int chW = fm.stringWidth(pg.ch());
+        int fontSize = g.getFont().getSize();
+        // 在 rotate 后的坐标系里：baseline 位于 y = fontSize/2 * 0.3 的 x 轴上
+        // 为让字符落到方格中心：x = -chW/2；y = fontSize*0.8 - fontSize/2
+        int ascent = (int) Math.round(fontSize * 0.8);
+        g.drawString(pg.ch(), -chW / 2, ascent - fontSize / 2);
+        g.setTransform(saved);
+    }
+
+    private static void drawGlyphOutline(Graphics2D g, TextLayout.PositionedGlyph pg,
+                                         Font font, FontRenderContext frc) {
+        if (!pg.rotated()) {
+            GlyphVector gv = font.createGlyphVector(frc, pg.ch());
+            g.draw(gv.getOutline(pg.x(), pg.baselineY()));
+            return;
+        }
+        AffineTransform saved = g.getTransform();
+        g.translate(pg.x(), pg.baselineY());
+        g.rotate(Math.PI / 2);
+        GlyphVector gv = font.createGlyphVector(frc, pg.ch());
+        int chW = (int) Math.round(gv.getLogicalBounds().getWidth());
+        int fontSize = font.getSize();
+        int ascent = (int) Math.round(fontSize * 0.8);
+        g.draw(gv.getOutline(-chW / 2f, ascent - fontSize / 2f));
+        g.setTransform(saved);
     }
 
     private static Color parseColor(String hex) {

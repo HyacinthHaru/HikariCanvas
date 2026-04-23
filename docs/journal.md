@@ -5,6 +5,53 @@
 
 ---
 
+## 2026-04-23 · M5-C3 + C6 TextLayout TS 镜像 + 前后端竖排实装
+
+**M5-C3（前端 TextLayout 镜像）：**
+- 新建 `web/src/render/TextLayout.ts`（~200 行），完整镜像 Java TextLayout
+- 接口 `layoutText(t, measurer) → PositionedGlyph[]`；`CharMeasurer` 抽象测量函数
+- `CanvasMeasurer` 适配 Canvas 2D `ctx.measureText`，带字符级缓存
+- 横排分支 1:1 镜像 Java `layoutHorizontal`：硬换行 + softWrap（CJK/空白断点、无断点硬切）+ 行首禁则 + `align` 逐行 + 基线 `fontSize * 0.8`
+- 新 PositionedGlyph 扩 `rotated?: boolean` 字段（竖排全角标点用）
+- `PreviewRenderer.drawText` 切到逐字符 `fillText`，`rotated=true` 时绕锚点 `rotate(π/2)` 再画
+
+**M5-C6（前后端竖排实装，rendering.md §3.3）：**
+
+**Java 端：**
+- `PositionedGlyph` 加 `rotated` 字段（保留 3 参构造器兼容历史调用）
+- `TextLayout.layout()` 根据 `t.vertical()` 分流到 `layoutVertical`
+- `layoutVertical`：
+  - 字符从上到下；列从右到左（CJK 传统）
+  - 列宽 = `fontSize × lineHeight`；每字占 `fontSize` 高
+  - `align` 语义变顶/中/底对齐
+  - `isRotatableVertical(c)`：`U+3000-U+303F` 符号标点 + `U+FF00-U+FFEF` 半全角形式
+    旋转；其他不旋转（CJK 汉字本身方形）
+  - 软换行按 box `h`；`\n` 起新列
+- `CanvasCompositor.drawText` 重构：
+  - 新增 `drawGlyph(g, pg, dx, dy)` 统一处理 rotated + offset；shadow/fill 层共用
+  - 新增 `drawGlyphOutline(g, pg, font, frc)` 处理 stroke 效果的 rotated 版
+  - `rotated=true` 时 `save → translate(pivot) → rotate(π/2) → drawString(-chW/2, ascent-fontSize/2) → restore`
+  - 删除 `verticalWarned` / `warnVerticalOnce`（真正实装了，不再 WARN）
+
+**前端 TS 同步（完全 1:1 镜像）：**
+- `layoutVertical` 逻辑一致
+- `isRotatableVertical` 字符范围一致
+- `PreviewRenderer.drawText` 的 rotated 分支用 `ctx.translate + ctx.rotate + fillText` 相同锚点语义
+
+**尚未做（polish）：**
+- 竖排下**行首禁则**（少见，M7 补）
+- 竖排行首/列首禁止标点（例如全角逗号不应出现在列首）
+
+**glow 效果在竖排下的表现：** `GlowRenderer` 当前对 glyph 按 mask 画；rotated glyph 在 mask 里会以"原方向"绘制（因为 `lg.drawString(pg.ch, pg.x - bboxX, pg.baselineY - bboxY)` 没走 drawGlyph），视觉上 glow 带会偏向原横排方向。竖排下的 glow 矫正也留 polish。
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/TextLayout.java`（+ layoutVertical + rotated 字段）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（drawGlyph/drawGlyphOutline 统一出口）
+- `web/src/render/TextLayout.ts`（新建，横排镜像 + 竖排实装）
+- `web/src/render/PreviewRenderer.ts`（接入 TextLayout + rotated 分支）
+
+---
+
 ## 2026-04-23 · M5-C2 /api/palette 端点 + 前端 PaletteLut 镜像
 
 **后端 `WebServer`：**
