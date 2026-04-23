@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-04-23 · M5-B6 LayerPanel reorder + B8 画布 pan/wheel zoom · **M5-B 收尾**
+
+**B6 LayerPanel drag-and-drop 重排：**
+- HTML5 Drag & Drop API 手写（不加 sortable 依赖）
+- `draggable="true"` + `@dragstart/@dragover/@drop/@dragend`
+- 拖动中 source row `opacity-50`，目标 row `ring-1 ring-[color:var(--ring)] ring-inset` 高亮
+- drop 时 optimistic reorder 本地 + `ws.send('element.reorder', {elementId, index})`
+
+**B8 画布交互：**
+- **Ctrl/Cmd + wheel** → zoom（以鼠标光标位置为锚心）
+  - 算 `oldZoom → newZoomClamped` 后，同步调 `scrollLeft/Top = (scrollL + mouseX) * ratio - mouseX`，使鼠标下的那个画布像素在缩放后仍在鼠标下
+  - clamp 到 `[0.25, 4]`（与快捷键 ±/zoom 控件一致）
+- **中键 drag / Alt+左键 drag** → pan（利用 section 的 overflow-auto，scrollLeft/Top 随鼠标位移反向滚）
+- 非 Ctrl 时 wheel 默认行为保持（浏览器原生 scroll pan）
+- 无 Space+drag（留 polish）
+
+**M5-B 8 段汇总：**
+
+| # | 范围 | 状态 |
+|---|---|---|
+| B1 | Canvas 2D PreviewRenderer（临时版）| ✅ |
+| B2 | Konva overlay（Stage/Layer/Rect/Transformer）| ✅ |
+| B3 | 元素选中（click/Esc/Layers 联动）| ✅ |
+| B4 | 拖拽 + resize + rotate → `element.transform` | ✅ |
+| B5 | PropertiesPanel 五组可编辑（Transform/Rect/Text/Effects/Layers）| ✅ |
+| B6 | LayerPanel 显隐/锁/reorder drag | ✅ |
+| B7 | 快捷键 Delete/undo/redo/arrow/shift+arrow/Esc | ✅ |
+| B8 | Ctrl+wheel zoom（锚鼠标）+ 中键/Alt 拖 pan | ✅ |
+
+**M5-B 未做的小项（留 polish 或后续 M5 段）：**
+- Ctrl+D 复制、Ctrl+A 多选 / 多选框选（M5 末尾或 M7）
+- 对齐辅助线（smart guides）；snap to grid / snap to other elements（polish）
+- 元素拖拽时实时 rect 预览（现已用 Transformer 的边框够用）
+- 属性面板对 TextElement 的字段为空时的 UX（目前 optional 字段默认已就位）
+
+**M5-B 收尾实测入口（浏览器）：**
+1. `/canvas edit → 两角 → /canvas confirm` 打开 probe URL
+2. 点 Toolbar 的 Type/Square 按钮添加元素，或 Sparkles 应用 hello_world
+3. Canvas 上看到元素；点击选中、拖拽移动、四角拉 resize、Transformer rotate handle
+4. 右侧 Properties 编辑任意字段（效果族也可勾）→ 游戏内墙面实时响应
+5. Delete 删除选中 / Ctrl+Z 撤销 / 方向键微调
+6. Ctrl+wheel 缩放（锚鼠标）/ 中键拖 pan
+
+**构建：** vite build 235ms；20 KB CSS + 307 KB JS（gzip 4.7 / 97 KB）。
+
+**关联文件：**
+- `web/src/components/layout/RightPanel.vue`（layer drag reorder）
+- `web/src/components/layout/CanvasView.vue`（pan + wheel zoom）
+
+---
+
 ## 2026-04-23 · M5-B5 属性面板可编辑 + B7 快捷键
 
 **B5 PropertiesPanel 重写（`RightPanel.vue`）：**

@@ -179,10 +179,68 @@ onKeyStroke(['=', '+'], (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(
 onKeyStroke('-', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomOut(); } });
 onKeyStroke('0', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomReset(); } });
 onKeyStroke('Escape', () => ui.selectElement(null));
+
+// M5-B8 画布交互：Ctrl+wheel zoom（以鼠标为中心）+ 中键或 Alt+drag pan
+const outerRef = ref<HTMLElement | null>(null);
+
+function onWheel(e: WheelEvent) {
+    if (!(e.ctrlKey || e.metaKey)) return; // 非 Ctrl 让浏览器按默认处理（即 scroll pan）
+    e.preventDefault();
+    const outer = outerRef.value;
+    if (!outer) return;
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    const oldZoom = ui.zoom;
+    const newZoomClamped = Math.max(0.25, Math.min(4, oldZoom * factor));
+    if (newZoomClamped === oldZoom) return;
+    const rect = outer.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    ui.setZoom(newZoomClamped);
+    const ratio = newZoomClamped / oldZoom;
+    nextTick(() => {
+        outer.scrollLeft = (outer.scrollLeft + mouseX) * ratio - mouseX;
+        outer.scrollTop = (outer.scrollTop + mouseY) * ratio - mouseY;
+    });
+}
+
+// 中键 / Alt+左键 拖拽 pan
+interface PanState { active: boolean; startX: number; startY: number; scrollX: number; scrollY: number; }
+const pan: PanState = { active: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 };
+
+function onMouseDown(e: MouseEvent) {
+    const middleBtn = e.button === 1;
+    const altLeft = e.button === 0 && e.altKey;
+    if (!middleBtn && !altLeft) return;
+    if (!outerRef.value) return;
+    e.preventDefault();
+    pan.active = true;
+    pan.startX = e.clientX;
+    pan.startY = e.clientY;
+    pan.scrollX = outerRef.value.scrollLeft;
+    pan.scrollY = outerRef.value.scrollTop;
+}
+
+function onMouseMove(e: MouseEvent) {
+    if (!pan.active || !outerRef.value) return;
+    outerRef.value.scrollLeft = pan.scrollX - (e.clientX - pan.startX);
+    outerRef.value.scrollTop = pan.scrollY - (e.clientY - pan.startY);
+}
+
+function onMouseUpOrLeave() {
+    pan.active = false;
+}
 </script>
 
 <template>
-  <section class="flex-1 relative overflow-auto bg-[color:var(--background)]">
+  <section
+    ref="outerRef"
+    class="flex-1 relative overflow-auto bg-[color:var(--background)]"
+    @wheel="onWheel"
+    @mousedown="onMouseDown"
+    @mousemove="onMouseMove"
+    @mouseup="onMouseUpOrLeave"
+    @mouseleave="onMouseUpOrLeave"
+  >
     <!-- 画布居中容器 -->
     <div class="min-h-full min-w-full flex items-center justify-center p-8">
       <div

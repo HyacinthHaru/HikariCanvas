@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
@@ -123,6 +123,50 @@ function toggleRectStroke(ev: Event) {
 function patchRectStroke(partial: Partial<Stroke>) {
     const cur = rectStroke() ?? { width: 1, color: '#000000' };
     sendUpdate({ stroke: { ...cur, ...partial } });
+}
+
+// ---------- Layer reorder（HTML5 drag & drop） ----------
+
+const dragIdx = ref(-1);
+const dragOverIdx = ref(-1);
+
+function onLayerDragStart(ev: DragEvent, idx: number) {
+    dragIdx.value = idx;
+    if (ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('text/plain', String(idx));
+    }
+}
+
+function onLayerDragOver(ev: DragEvent, idx: number) {
+    ev.preventDefault();
+    dragOverIdx.value = idx;
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+}
+
+function onLayerDragLeave() {
+    dragOverIdx.value = -1;
+}
+
+function onLayerDrop(ev: DragEvent, idx: number) {
+    ev.preventDefault();
+    const from = dragIdx.value;
+    dragIdx.value = -1;
+    dragOverIdx.value = -1;
+    if (from < 0 || from === idx) return;
+    if (!project.state) return;
+    const el = project.state.elements[from];
+    if (!el) return;
+    // optimistic reorder
+    const arr = project.state.elements;
+    const [moved] = arr.splice(from, 1);
+    arr.splice(idx, 0, moved);
+    ws.send('element.reorder', { elementId: el.id, index: idx });
+}
+
+function onLayerDragEnd() {
+    dragIdx.value = -1;
+    dragOverIdx.value = -1;
 }
 </script>
 
@@ -375,9 +419,19 @@ function patchRectStroke(partial: Partial<Stroke>) {
         <li
           v-for="(el, idx) in project.state?.elements ?? []"
           :key="el.id"
-          class="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-[color:var(--accent)]"
-          :class="{ 'bg-[color:var(--accent)]': ui.selectedElementId === el.id }"
+          draggable="true"
+          class="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-[color:var(--accent)] transition-colors"
+          :class="{
+            'bg-[color:var(--accent)]': ui.selectedElementId === el.id,
+            'opacity-50': dragIdx === idx,
+            'ring-1 ring-[color:var(--ring)] ring-inset': dragOverIdx === idx && dragIdx !== idx,
+          }"
           @click="ui.selectElement(el.id)"
+          @dragstart="(e) => onLayerDragStart(e, idx)"
+          @dragover="(e) => onLayerDragOver(e, idx)"
+          @dragleave="onLayerDragLeave"
+          @drop="(e) => onLayerDrop(e, idx)"
+          @dragend="onLayerDragEnd"
         >
           <span class="w-5 text-[10px] text-[color:var(--muted-foreground)] tabular-nums">{{ idx }}</span>
           <span class="flex-1 truncate">
