@@ -5,6 +5,62 @@
 
 ---
 
+## 2026-04-23 · M5-C5 像素字体最近邻缩放（前后端同步）· **M5-C 收尾**
+
+**契约：** `docs/rendering.md §2.4`——若 `pixelated=true` 且字号 ≠ `nativeSize` 整数倍，必须用最近邻缩放避免字形 subpixel 模糊。
+
+**启用条件：** `pixelated==true && nativeSize > 0 && targetSize % nativeSize == 0 && targetSize / nativeSize >= 2`。其他情况（含非整数倍、缩小、非像素字体）走原 `deriveFont` 路径。
+
+**Java 端（`CanvasCompositor`）：**
+- `shouldUseNearestNeighbor(reg, targetSize)` 判定
+- `drawText` fill + shadow 循环里 branch 到 `drawPixelatedGlyph`；stroke / glow 暂不处理 pixelated
+- `drawPixelatedGlyph`：
+  1. `reg.derive(nativeSize)` 派生 native-size Font，FontMetrics 测 nativeChW
+  2. 分配 `BufferedImage TYPE_INT_ARGB(nativeChW, nativeAscent+nativeDescent)` 做 mask
+  3. mask Graphics 走 5 个 hints（关 AA），`drawString(ch, 0, nativeAscent)` 画字形
+  4. 主画布临时 `KEY_INTERPOLATION = NEAREST_NEIGHBOR`
+  5. `drawImage(mask, drawX, drawY, targetChW, targetH)` 缩放到 target 尺寸
+  6. 恢复原 interpolation
+- rotated glyph 路径同步：先 `translate + rotate π/2` 再 drawImage 到 `(-targetChW/2, ascent - targetSize/2)`
+
+**前端（`PreviewRenderer`）：**
+- `FONT_META` 表硬编码：`ark_pixel: { pixelated: true, nativeSize: 12 }` / `source_han_sans: { pixelated: false, nativeSize: 0 }`（与后端 `FontRegistry.Metadata` 对齐）
+- `shouldUseNearestNeighbor` 判定同逻辑
+- `drawPixelatedGlyph`：
+  1. 切主 ctx font 到 nativeSpec 测 `nativeChW`；切 target 测 `targetChW`；恢复 ctx.font
+  2. `document.createElement('canvas')` subcanvas，`imageSmoothingEnabled=false` + `textRendering=geometricPrecision` + native fontSpec + 白色 fillText 画 mask
+  3. 主 ctx `imageSmoothingEnabled=false`（浏览器最近邻）→ `drawImage(sub, drawX, drawY, targetChW, targetH)`
+  4. 恢复 imageSmoothingEnabled
+
+**覆盖范围：**
+- ✅ fill 层（元素主色）
+- ✅ shadow 层（offset + shadow.color）
+- ✗ stroke 层：仍走原 `ctx.strokeText` / Java `GlyphVector.getOutline`（outline 算法与像素字不好配合；M7 polish）
+- ✗ glow 层：内部 mask 仍用 `deriveFont(targetSize)`；M7 polish
+
+**M5-C 段落汇总：**
+
+| # | 范围 | 状态 |
+|---|---|---|
+| C1 | 前端字体加载（Ark Pixel + 思源黑 @font-face）| ✅ |
+| C2 | `/api/palette` 端点 + 前端 `PaletteLut` 镜像 | ✅ |
+| C3 | `TextLayout` TS 镜像（横排完整）| ✅ |
+| C4 | 前端效果族（stroke / shadow / glow）镜像 | ✅ |
+| C5 | 像素字体最近邻缩放（前后端 fill + shadow）| ✅ |
+| C6 | 后端竖排（Java TextLayout.layoutVertical + drawGlyph 旋转）| ✅ |
+
+**M5-C 未做（推迟到 M5-D 或 M7）：**
+- stroke / glow 的 pixelated 路径
+- 竖排行首禁则
+- WOFF2 字体 subset（加载体积优化）
+- "Simulate MC palette" UI toggle（量化渲染预览）
+
+**关联文件：**
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（+ drawPixelatedGlyph + shouldUseNearestNeighbor）
+- `web/src/render/PreviewRenderer.ts`（+ FONT_META + drawPixelatedGlyph）
+
+---
+
 ## 2026-04-23 · M5-C4 前端效果族镜像（stroke / shadow / glow）
 
 **契约：** `docs/rendering.md §5` 效果族；前端 Canvas 2D 与后端 Java Graphics2D 的一致性要求。

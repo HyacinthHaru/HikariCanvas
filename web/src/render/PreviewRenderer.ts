@@ -53,6 +53,21 @@ function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
     }
 }
 
+// ---------- 字体元数据（与后端 FontRegistry.Metadata 镜像，判断 pixelated + nativeSize） ----------
+
+interface FontMeta { pixelated: boolean; nativeSize: number; }
+const FONT_META: Record<string, FontMeta> = {
+    ark_pixel: { pixelated: true, nativeSize: 12 },
+    source_han_sans: { pixelated: false, nativeSize: 0 },
+};
+
+function shouldUseNearestNeighbor(family: string, targetSize: number): boolean {
+    const meta = FONT_META[family];
+    if (!meta?.pixelated || meta.nativeSize <= 0) return false;
+    const scale = Math.floor(targetSize / meta.nativeSize);
+    return scale >= 2 && scale * meta.nativeSize === targetSize;
+}
+
 // ---------- Text：4 层 glow → shadow → stroke → fill ----------
 
 function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
@@ -68,6 +83,9 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (glyphs.length === 0) return;
 
     const fx = t.effects;
+    const useNN = shouldUseNearestNeighbor(family, t.fontSize);
+    const nativeSize = useNN ? FONT_META[family].nativeSize : 0;
+    const nativeSpec = useNN ? `${nativeSize}px "${family}"` : '';
 
     // 1. glow（底层）
     if (fx?.glow && fx.glow.radius > 0) {
@@ -75,10 +93,16 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     }
     // 2. shadow：drawString offset（与后端 CanvasCompositor 一致，不用 ctx.shadow*）
     if (fx?.shadow) {
-        ctx.fillStyle = fx.shadow.color;
-        for (const g of glyphs) drawGlyphFill(ctx, g, t.fontSize, fx.shadow.dx, fx.shadow.dy);
+        for (const g of glyphs) {
+            if (useNN) drawPixelatedGlyph(ctx, g, nativeSpec, t.fontSize, nativeSize,
+                    fx.shadow.color, fx.shadow.dx, fx.shadow.dy);
+            else {
+                ctx.fillStyle = fx.shadow.color;
+                drawGlyphFill(ctx, g, t.fontSize, fx.shadow.dx, fx.shadow.dy);
+            }
+        }
     }
-    // 3. stroke：ctx.strokeText（rendering.md §5.1 前端做法）
+    // 3. stroke：ctx.strokeText（pixelated 路径不支持，仍走原路；对像素字体用 stroke 较少）
     if (fx?.stroke && fx.stroke.width > 0) {
         ctx.strokeStyle = fx.stroke.color;
         ctx.lineWidth = fx.stroke.width;
@@ -87,8 +111,66 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
         for (const g of glyphs) drawGlyphStroke(ctx, g, t.fontSize);
     }
     // 4. fill（顶层）
-    ctx.fillStyle = t.color;
-    for (const g of glyphs) drawGlyphFill(ctx, g, t.fontSize, 0, 0);
+    for (const g of glyphs) {
+        if (useNN) drawPixelatedGlyph(ctx, g, nativeSpec, t.fontSize, nativeSize, t.color, 0, 0);
+        else {
+            ctx.fillStyle = t.color;
+            drawGlyphFill(ctx, g, t.fontSize, 0, 0);
+        }
+    }
+}
+
+/**
+ * M5-C5 像素字体最近邻缩放。用 nativeSize 字号的 subcanvas 画 mask →
+ * {@code imageSmoothingEnabled=false} drawImage 缩放到 target 尺寸。
+ * 位置锚点与 {@link drawGlyphFill} 一致（TextLayout 按 target size 排字）。
+ */
+function drawPixelatedGlyph(ctx: CanvasRenderingContext2D, g: PositionedGlyph,
+                            nativeSpec: string, targetSize: number, nativeSize: number,
+                            color: string, dx: number, dy: number): void {
+    // 先用主 ctx 切到 native font 测 nativeChW（但不污染后续；下面会复原）
+    const savedFont = ctx.font;
+    ctx.font = nativeSpec;
+    const nativeChW = Math.max(1, Math.round(ctx.measureText(g.ch).width));
+    // 目标尺寸（TextLayout 用 target-size 排字；这里按 target chW 贴合）
+    ctx.font = `${targetSize}px "${extractFamily(nativeSpec)}"`;
+    const targetChW = Math.max(1, Math.round(ctx.measureText(g.ch).width));
+    ctx.font = savedFont;
+
+    const targetAscent = Math.round(targetSize * 0.8);
+    const nativeAsc = Math.round(nativeSize * 0.8);
+
+    // subcanvas：用 nativeSize 字体画 mask（关 AA）
+    const sub = document.createElement('canvas');
+    sub.width = nativeChW;
+    sub.height = nativeSize;
+    const sg = sub.getContext('2d');
+    if (!sg) return;
+    sg.imageSmoothingEnabled = false;
+    // @ts-expect-error non-standard
+    sg.textRendering = 'geometricPrecision';
+    sg.font = nativeSpec;
+    sg.textBaseline = 'alphabetic';
+    sg.fillStyle = color;
+    sg.fillText(g.ch, 0, nativeAsc);
+
+    const prevSmoothing = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    if (g.rotated) {
+        ctx.save();
+        ctx.translate(g.x + dx, g.baselineY + dy);
+        ctx.rotate(Math.PI / 2);
+        ctx.drawImage(sub, -targetChW / 2, targetAscent - targetSize / 2, targetChW, targetSize);
+        ctx.restore();
+    } else {
+        ctx.drawImage(sub, g.x + dx, g.baselineY + dy - targetAscent, targetChW, targetSize);
+    }
+    ctx.imageSmoothingEnabled = prevSmoothing;
+}
+
+function extractFamily(fontSpec: string): string {
+    const m = /"([^"]+)"/.exec(fontSpec);
+    return m ? m[1] : 'ark_pixel';
 }
 
 function drawGlyphFill(ctx: CanvasRenderingContext2D, g: PositionedGlyph,

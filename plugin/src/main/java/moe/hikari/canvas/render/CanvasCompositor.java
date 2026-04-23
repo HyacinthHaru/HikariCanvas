@@ -176,6 +176,10 @@ public final class CanvasCompositor {
                     + " default=" + FontRegistry.DEFAULT_FONT_ID + "); skipping text " + t.id());
             return;
         }
+        // M5-C5：像素字体启用最近邻缩放路径。TextLayout 的字符定位仍用 target-size
+        // metrics（保证排字与非像素场景一致）；drawPixelatedGlyph 内部用 nativeSize
+        // 字体画 mask，再 NEAREST_NEIGHBOR drawImage 缩放到 target。
+        boolean useNearest = shouldUseNearestNeighbor(reg, t.fontSize());
         Font font = reg.derive(t.fontSize());
         g.setFont(font);
         FontMetrics fm = g.getFontMetrics(font);
@@ -196,7 +200,8 @@ public final class CanvasCompositor {
             Shadow sh = effects.shadow();
             g.setColor(parseColor(sh.color()));
             for (TextLayout.PositionedGlyph pg : glyphs) {
-                drawGlyph(g, pg, sh.dx(), sh.dy());
+                if (useNearest) drawPixelatedGlyph(g, pg, reg, t.fontSize(), fm, sh.dx(), sh.dy());
+                else drawGlyph(g, pg, sh.dx(), sh.dy());
             }
         }
 
@@ -217,7 +222,72 @@ public final class CanvasCompositor {
         // 最顶层：字形填充（正常颜色）
         g.setColor(parseColor(t.color()));
         for (TextLayout.PositionedGlyph pg : glyphs) {
-            drawGlyph(g, pg, 0, 0);
+            if (useNearest) drawPixelatedGlyph(g, pg, reg, t.fontSize(), fm, 0, 0);
+            else drawGlyph(g, pg, 0, 0);
+        }
+    }
+
+    /**
+     * 判断是否启用像素字体最近邻缩放路径（rendering.md §2.4）：
+     * 要求 {@link FontRegistry.Metadata#pixelated()} 且 {@code targetSize} 是
+     * {@code nativeSize} 的整数倍（≥ 2）。否则走普通 {@code deriveFont} + {@code drawString}。
+     */
+    private static boolean shouldUseNearestNeighbor(FontRegistry.Registered reg, int targetSize) {
+        FontRegistry.Metadata md = reg.metadata();
+        if (!md.pixelated() || md.nativeSize() <= 0) return false;
+        int scale = targetSize / md.nativeSize();
+        return scale >= 2 && scale * md.nativeSize() == targetSize;
+    }
+
+    /**
+     * 像素字体 fill/shadow 路径：用 {@link FontRegistry.Metadata#nativeSize()} 字体
+     * 画 char mask → {@link java.awt.RenderingHints#VALUE_INTERPOLATION_NEAREST_NEIGHBOR}
+     * {@link Graphics2D#drawImage} 缩放到 target 尺寸；保持像素字体的整数像素轮廓感。
+     *
+     * <p>mask 尺寸用 target 的 {@code chW × height}（让 drawImage 1:1 贴合 TextLayout
+     * 的 target-size 排字），缩放比 = {@code targetChW / nativeChW}，多数场景是整数比。</p>
+     */
+    private static void drawPixelatedGlyph(Graphics2D g, TextLayout.PositionedGlyph pg,
+                                           FontRegistry.Registered reg, int targetSize,
+                                           FontMetrics targetFm, int dx, int dy) {
+        Font nativeFont = reg.derive(reg.metadata().nativeSize());
+        FontMetrics nativeFm = g.getFontMetrics(nativeFont);
+        int nativeChW = Math.max(1, nativeFm.charWidth(pg.ch().charAt(0)));
+        int nativeH = Math.max(1, nativeFm.getAscent() + nativeFm.getDescent());
+        BufferedImage mask = new BufferedImage(nativeChW, nativeH, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D mg = mask.createGraphics();
+        try {
+            applyHints(mg);
+            mg.setFont(nativeFont);
+            mg.setColor(g.getColor());
+            mg.drawString(pg.ch(), 0, nativeFm.getAscent());
+        } finally {
+            mg.dispose();
+        }
+
+        // target 绘制目的盒：位置对齐 TextLayout 的 baseline / chW 语义
+        int targetChW = Math.max(1, targetFm.charWidth(pg.ch().charAt(0)));
+        int targetAscent = (int) Math.round(targetSize * TextLayout.ASCENT_RATIO);
+        int targetH = Math.max(1, targetAscent + targetFm.getDescent());
+
+        Object prevInterp = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        try {
+            if (pg.rotated()) {
+                AffineTransform saved = g.getTransform();
+                g.translate(pg.x() + dx, pg.baselineY() + dy);
+                g.rotate(Math.PI / 2);
+                int ascent = targetAscent;
+                g.drawImage(mask, -targetChW / 2, ascent - targetSize / 2, targetChW, targetH, null);
+                g.setTransform(saved);
+            } else {
+                int drawX = pg.x() + dx;
+                int drawY = pg.baselineY() + dy - targetAscent;
+                g.drawImage(mask, drawX, drawY, targetChW, targetH, null);
+            }
+        } finally {
+            if (prevInterp != null) g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, prevInterp);
         }
     }
 
