@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-04-23 · M5-A 前端脚手架（Vue 3 + Pinia + Tailwind 4 + shadcn-vue）
+
+**范围：** 把 M1~M4 的原生 DOM probe 页面整体换成 Vue 3 + Pinia + Tailwind + 现代化 UI 壳（深色主题 / 三栏布局 / 侧边可折叠 / 日志抽屉）。为 M5-B 核心画布、M5-C 前端渲染器打下骨架。架构契约对应 `docs/architecture.md §2.2`。
+
+**技术栈（用户拍板）：**
+- Vue 3 Composition API + Pinia
+- Tailwind CSS 4 + tw-animate-css + shadcn-vue 风格 CSS 变量（深/浅主题）
+- 图标 lucide-vue-next；工具函数 @vueuse/core；Konva + vue-konva（M5-B 才用）
+- 构建 Vite 8（已有），TS 6，vue-tsc 类型检查
+
+**目录结构：**
+```
+web/src/
+  main.ts                       # Vue app entry
+  App.vue                       # 根组件：三栏布局
+  style.css                     # Tailwind @import + HSL design tokens
+  lib/utils.ts                  # cn() clsx + twMerge
+  types/protocol.ts             # docs/protocol.md §7 的 TS 镜像
+  stores/
+    network.ts                  # WS 状态 + 日志流
+    project.ts                  # ProjectState 本地镜像 + applyPatch(RFC 6902)
+    ui.ts                       # 主题 / 折叠 / 选中 / zoom / 日志抽屉开关
+  network/wsClient.ts           # WsClient 单例：connect/send/heartbeat/onMessage
+  components/layout/
+    TopBar.vue                  # 品牌 + 面板折叠 + 主题切换
+    LeftTools.vue               # 工具栏（临时放 ping/paint/hello/undo/redo/add text|rect）
+    CanvasView.vue              # 画布占位（M5-B 接入 Konva + Canvas 2D）
+    RightPanel.vue              # Properties + Layers（只读展示，M5-B 可编辑）
+    StatusBar.vue               # 状态灯 + sessionId + wallSize + version
+    LogDrawer.vue               # 底部可折叠日志抽屉（WS 流全量）
+```
+
+**快捷键（`@vueuse/core onKeyStroke`）：**
+- `Ctrl/Cmd + =` / `+`：zoom in
+- `Ctrl/Cmd + -`：zoom out
+- `Ctrl/Cmd + 0`：zoom reset
+
+**WS 客户端迁移：**
+- `WsClient` 类封装原 `main.ts` 里的 open/auth/heartbeat/reconnect token 全部逻辑
+- `createWsClient()` 单例；`App.vue onMounted` 启动连接
+- 消息分发：`ready / state.snapshot / state.patch / error / pong / ack` 分别更新 `useNetworkStore` / `useProjectStore`
+- `__hk` 调试入口保留：`window.__hk.send("op", payload)`
+
+**深色主题（shadcn-vue 约定）：**
+- `:root` 与 `.dark` 各一套 HSL 变量（背景 / 前景 / card / primary / accent / border / ring 等）
+- `@theme inline` 映射到 Tailwind token（`bg-card`、`text-muted-foreground` 等）
+- `useUiStore.toggleTheme` 写 `<html>` 的 `.dark` class + `localStorage`
+- 默认跟随 `prefers-color-scheme`，否则深色
+
+**踩坑记账：**
+1. **Node 25 + vite package.json 损坏**：之前 `kill -9` 打断 install 造成 `node_modules/vite/package.json` 字节损坏（首 200 字节全 null）；重装触发 ERR_INVALID_PACKAGE_CONFIG；`rm -rf node_modules package-lock.json && npm i` 一遍就清
+2. **`vite.config.ts` 被 sed 清空**：`sed -i.bak` + 原地替换在某时序下把文件清零；改用 Write 整体重写
+
+**构建验证：** `vite build` 成功；产物 17 KB CSS + 95 KB JS（gzip 4 KB + 36 KB）。
+
+**M5-A 阶段性成果：** 旧 probe 功能（ping / paint / apply hello_world / undo / redo）全部迁到 Toolbar 按钮，端到端行为等价；网页视觉从"灰底朴素文档"升级到"Linear/Figma 式深色工具站"。M5-B 要做的编辑器交互（选中、拖拽、属性编辑、图层面板可点操作）留待下一轮。
+
+**关联文件：**
+- `web/package.json / tsconfig.json / vite.config.ts` 调整
+- `web/src/**/*` 全新树（12 个新文件 + 替换 main.ts / index.html）
+
+---
+
 ## 2026-04-22 · M4 polish 小修 · pristine state 回 placeholder + 前端 __hk 调试入口
 
 **两个实测发现的小问题：**

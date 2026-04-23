@@ -1,70 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HikariCanvas — dev probe</title>
-    <style>
-      :root { color-scheme: light dark; }
-      body {
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        max-width: 760px;
-        margin: 2rem auto;
-        padding: 0 1rem;
-        line-height: 1.5;
-      }
-      h1 { margin-bottom: 0.25rem; }
-      p.lead { color: #888; margin-top: 0; }
-      #status {
-        margin: 0.75rem 0;
-        padding: 0.6rem 0.9rem;
-        border-radius: 6px;
-        font-family: ui-monospace, Menlo, monospace;
-        font-size: 0.85rem;
-      }
-      #status.pending  { background: #fff3cd; color: #664d03; }
-      #status.ready    { background: #d1e7dd; color: #0a3622; }
-      #status.err      { background: #f8d7da; color: #58151c; }
-      .actions { display: flex; gap: 0.6rem; margin: 1rem 0; }
-      button {
-        padding: 0.6rem 1.2rem;
-        font-size: 1rem;
-        cursor: pointer;
-        border-radius: 6px;
-        border: 1px solid #888;
-      }
-      button:disabled { opacity: 0.5; cursor: not-allowed; }
-      button.primary { background: #e4002b; color: #fff; border-color: #b30022; }
-      #log {
-        margin-top: 0.5rem;
-        padding: 1rem;
-        background: #111;
-        color: #eee;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-        font-size: 0.82rem;
-        border-radius: 6px;
-        min-height: 240px;
-        white-space: pre-wrap;
-        overflow-x: auto;
-      }
-      #log .sent { color: #8cf; }
-      #log .recv { color: #9f9; }
-      #log .err  { color: #f88; }
-      #log .meta { color: #999; }
-    </style>
+    <title>HikariCanvas</title>
   </head>
   <body>
-    <h1>HikariCanvas dev probe</h1>
-    <p class="lead">Enter via the clickable URL from <code>/canvas confirm</code> in-game.</p>
-    <div id="status" class="pending">Initialising…</div>
-    <div class="actions">
-      <button id="ping-btn" disabled>Ping server</button>
-      <button id="paint-btn" class="primary" disabled>Paint held map → red</button>
-      <button id="hello-btn" disabled>Apply hello_world template</button>
-      <button id="undo-btn" disabled>Undo</button>
-      <button id="redo-btn" disabled>Redo</button>
-    </div>
-    <div id="log" aria-live="polite"></div>
+    <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

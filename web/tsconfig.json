@@ -4,6 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -14,7 +15,11 @@
     "isolatedModules": true,
     "allowImportingTsExtensions": false,
     "verbatimModuleSyntax": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["vite/client"]
   },
-  "include": ["src/**/*", "vite.config.ts"]
+  "include": ["src/**/*", "src/**/*.vue", "vite.config.ts"]
 }
