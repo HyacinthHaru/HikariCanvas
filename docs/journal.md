@@ -5,6 +5,50 @@
 
 ---
 
+## 2026-04-23 · M5-B5 属性面板可编辑 + B7 快捷键
+
+**B5 PropertiesPanel 重写（`RightPanel.vue`）：**
+- 分组折叠（`<details>` + summary）：**Transform / Rect / Text / Effects / Layers**
+- **Transform** 组：x/y/w/h（number）+ rotation（select 仅 0/90/180/270）+ visible/locked（checkbox）
+- **Rect** 专属：fill（开关 + color input）+ stroke（开关 → width number + color）
+- **Text** 专属：text（textarea 多行）+ fontId（select ark_pixel/source_han_sans）+ fontSize + color + align + letterSpacing + lineHeight + vertical
+- **Effects** 三开关：stroke / shadow / glow；每个打开后展开相应字段（shadow 的 dx/dy/color、glow 的 radius/color 等）
+- 共用 `hc-input` / `hc-color` scoped CSS（手写，Tailwind 4 scoped style 不支持 `@apply`）
+- **防抖策略：** number/text → `useDebounceFn 200ms`；boolean/color/select → 立即发（定型操作）
+- **乐观更新：** 发 op 前先 mutate 本地 project.state，避免输入手感延迟；后端 state.patch 回来自然覆盖
+- **Layers 列表：** visible/locked icon 变点击 toggle（发 element.update）
+
+**B7 全局快捷键（`App.vue` useEventListener 顶层挂）：**
+| 键 | 行为 |
+|---|---|
+| `Delete` / `Backspace` | 删除选中 → `element.delete` + 清选 |
+| `Ctrl/Cmd + Z` | `undo` |
+| `Ctrl/Cmd + Shift + Z` / `Ctrl + Y` | `redo` |
+| `↑↓←→` | 移动选中 ±1 px |
+| `Shift + ↑↓←→` | 移动选中 ±10 px |
+| `Esc` | deselect（CanvasView 内已挂）|
+
+- 跳过 `<input>` / `<textarea>` / `<select>` / `contenteditable` 焦点，避免输入时误触
+- 箭头键走 `element.transform` op 而非 `element.update`——语义更贴"移动"
+
+**Effects UI 与后端联动测试**（M4 已做完的效果族终于有 UI 入口）：
+- 选一个 text 元素 → Effects 勾 glow → radius 默认 3 / color #33CCFF → 游戏里墙面该 text 立刻出蓝青光晕
+- 勾 shadow → dx=dy=2 默认 → 黑色阴影偏移
+- 勾 stroke → width=2 默认 → 字形轮廓描边
+
+**暂未做（留 M5-B8 或 B6 后续）：**
+- LayerPanel drag-and-drop 重排（element.reorder）—— 可选用 @vueuse 的 useSortable
+- Ctrl+D 复制选中
+- Ctrl+A 全选（需要多选支持，M5-B 不做多选）
+
+**构建验证：** vite build 302ms；20 KB CSS + 305 KB JS（Konva ~230 KB 占大头）。
+
+**关联文件：**
+- `web/src/components/layout/RightPanel.vue`（重写，~350 行）
+- `web/src/App.vue`（+ 全局快捷键）
+
+---
+
 ## 2026-04-23 · M5-B1~B4 画布渲染 + Konva overlay + 选中 + transform op
 
 **范围：** 让画布能"看见内容 + 选中 + 拖动/缩放"。B1~B4 一批落地；B5（属性面板可编辑）/ B6（图层可点）/ B7（快捷键）/ B8（pan+wheel）分后续批次。
