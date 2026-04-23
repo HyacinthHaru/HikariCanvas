@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-04-23 · M5-B1~B4 画布渲染 + Konva overlay + 选中 + transform op
+
+**范围：** 让画布能"看见内容 + 选中 + 拖动/缩放"。B1~B4 一批落地；B5（属性面板可编辑）/ B6（图层可点）/ B7（快捷键）/ B8（pan+wheel）分后续批次。
+
+**B1 PreviewRenderer（`render/PreviewRenderer.ts`，临时版）：**
+- 纯函数 `renderProjectState(ctx, state)`
+- 背景 fill → 按 z-order 遍历 `state.elements`
+- rect：`fillRect` + 4 边 `fillRect` 手工画 stroke（与后端 CanvasCompositor 同策略）
+- text：`ctx.font = "${size}px monospace"` + `fillText`（单行，M5-B 够用；M5-C 真对齐 Java 版）
+- rotation：`translate(cx, cy) + rotate + translate(-cx, -cy)` 围绕 bbox 中心
+- 关 `imageSmoothingEnabled` + `textRendering = 'geometricPrecision'`（rendering.md §4.3）
+- **不做：** 调色板量化 / 多行 wrap / letterSpacing / 效果族 / 像素字体最近邻缩放 → M5-C 镜像 Java
+
+**B2 Konva overlay（CanvasView.vue）：**
+- `main.ts` 里 `app.use(VueKonva)`（3.x）
+- `shims-vue-konva.d.ts` 给 Volar / vue-tsc 补 `GlobalComponents` 声明
+- 布局：
+  ```
+  外层 div（shadow + ring；尺寸 = widthPx × heightPx × zoom；CSS transform scale 走 zoom）
+    内层原生坐标容器（widthPx × heightPx）
+      <canvas>（底层像素，由 PreviewRenderer 画）
+      <v-stage>（上层 overlay，手势 hit）
+        <v-layer>
+          <v-rect v-for element>（隐形 hit area，offsetX/Y + x/y 让 rotation 绕中心）
+          <v-transformer>（绑选中）
+  ```
+
+**B3 选中：**
+- 点 v-rect → `onHitClick` → `ui.selectElement(id)`；`ev.cancelBubble = true` 防冒泡
+- 点 stage 空白 → `onStageMouseDown` 判断 `!element-hit && type !== 'Shape'` → `selectElement(null)`
+- `Esc` → deselect（`onKeyStroke('Escape')`）
+- Layers 面板点 element 也联动（早已在 M5-A 写好）
+
+**B4 拖拽 + resize 发 op：**
+- `onDragEnd`：Konva node.x/y 是 center（因 offsetX/Y=w/2），换算回 bbox 的 `(x, y) = node.x() - w/2`；optimistic 本地更新 + `ws.send('element.transform', {elementId, x, y})`
+- `onTransformEnd`：resize / rotate end
+  - 读 `scaleX/scaleY`（resize 通过 scale 间接表达）
+  - 换算出新 `w/h`；用 `node.scaleX(1); node.width(newW)` 重置 scale 防累乘
+  - rotation 用 `snapRotation` 吸到 `{0, 90, 180, 270}`（协议限制）
+  - 发 `element.transform {x, y, w, h, rotation}`
+
+**Transformer 配置（`transformerConfig`）：**
+- 8 个 anchor（四角 + 四边中点）
+- `rotationSnaps: [0, 90, 180, 270]`
+- anchor 颜色配深色主题（`#60a5fa` 蓝色边 + 深蓝 fill）
+
+**响应式重绘：**
+- `watch(() => project.state, requestDraw, { deep: true, immediate: true })`
+- `requestAnimationFrame` 合并同 tick 多次 watch 回调；ArrayBuffer 重分配只在 canvas 尺寸变化时
+- state.patch 回来后 ProjectState deep watch 触发重绘，Konva Rect props 响应式 diff，Transformer 保持 attach
+
+**Node 25 + vue-tsc 兼容性妥协：**
+`vue-tsc --noEmit` 在 Node 25 + TS 6 + Vue 3.5 下经常卡 10+ 分钟才出单个错误。`package.json` 的 `build` 临时降级为纯 `vite build`，`typecheck` 单独暴露给 IDE / CI。vite 构建产物验证：18 KB CSS + 292 KB JS（含 Konva）。
+
+**关联文件：**
+- `web/src/render/PreviewRenderer.ts`（新建）
+- `web/src/components/layout/CanvasView.vue`（重写）
+- `web/src/main.ts`（注册 VueKonva）
+- `web/src/shims-vue-konva.d.ts`（新建）
+- `web/package.json`（build 脚本拆 typecheck）
+
+---
+
 ## 2026-04-23 · M5-A 前端脚手架（Vue 3 + Pinia + Tailwind 4 + shadcn-vue）
 
 **范围：** 把 M1~M4 的原生 DOM probe 页面整体换成 Vue 3 + Pinia + Tailwind + 现代化 UI 壳（深色主题 / 三栏布局 / 侧边可折叠 / 日志抽屉）。为 M5-B 核心画布、M5-C 前端渲染器打下骨架。架构契约对应 `docs/architecture.md §2.2`。
