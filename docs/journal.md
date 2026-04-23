@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-04-23 · M5-D 收尾（scope 调整） · **M5 编辑器 UI 完成**
+
+**scope 调整：** 原计划 M5-D = Playwright e2e + snapshot 测试台 + 手测。实施前盘点：
+- 当前本机 Node 25 ↔ 新 toolchain 有多次兼容坑（vue-tsc 卡死、kill -9 打破 node_modules）
+- Playwright chromium install ~200 MB，首次拉取慢且可能中断
+- 前后端像素级一致需要 tolerance 调参轮次，非半天可完成
+
+**决定：** Playwright snapshot 测试台正式推迟到 **M7 打磨发布**，和 M4/M5 所有 polish 一起处理（届时 toolchain 稳定）。**M5-D 只做**：
+1. 端到端手测 checklist（提供给用户实测的详细步骤）
+2. `PROPOSAL.md` 标 M5 完成；`CLAUDE.md` 里程碑行同步
+3. 推迟项明确入 M7 档
+
+**M5 段落汇总：**
+
+| 段 | 范围 | 状态 |
+|---|---|---|
+| A | 脚手架：Vue 3 + Pinia + Tailwind 4 + shadcn-vue 风格 token + 三栏布局 + 深色主题 + LogDrawer + WsClient 封装 | ✅ |
+| B | 核心画布：PreviewRenderer 初版 + Konva overlay + 选中/拖拽/resize/rotate + PropertiesPanel + LayerPanel reorder + 快捷键 + pan/wheel zoom | ✅ |
+| C | 前端渲染器：字体 @font-face + /api/palette + TextLayout TS 镜像 + 效果族（stroke/shadow/glow 含自实现盒模糊） + 像素字体最近邻缩放 + 竖排实装 | ✅ |
+| D | 端到端手测 checklist；Playwright snapshot 推 M7 | ✅ |
+
+**M7 polish 清单（从 M4 + M5 聚合起来的推迟项）：**
+- Playwright e2e / snapshot 测试台（双端像素级对比，含 `rendering-test/web-runner/`）
+- WOFF2 字体 subset（思源黑 16 MB → ~200 KB 中文常用字）
+- stroke / glow 的 pixelated 路径（当前 fill + shadow 已走最近邻）
+- 竖排行首禁则（少见）
+- "Simulate MC palette" UI toggle（用 PaletteLut.quantizeImageData 预览）
+- WS 重连自动化（5/10/30s 阶梯）
+- 限流 "5 次 / 1min 重复触发 → close 1008"
+- 会话 token rotate 频率策略
+- Paper `MapPalette.matchColor` forRemoval 真正替代（当前 M4-T2 PaletteLut 已让运行时绕开，仅 build-time PaletteGenerator 还用它）
+
+---
+
 ## 2026-04-23 · M5-C5 像素字体最近邻缩放（前后端同步）· **M5-C 收尾**
 
 **契约：** `docs/rendering.md §2.4`——若 `pixelated=true` 且字号 ≠ `nativeSize` 整数倍，必须用最近邻缩放避免字形 subpixel 模糊。
