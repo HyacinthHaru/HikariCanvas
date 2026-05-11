@@ -619,8 +619,10 @@ public final class EditSession {
     }
 
     private static void validateRotation(int r) {
-        if (r != 0 && r != 90 && r != 180 && r != 270) {
-            throw new ValidationException("INVALID_PAYLOAD", "rotation must be 0/90/180/270: " + r);
+        // M5-D6：放开到 [0, 360)。Preview 与 CanvasCompositor 都用 AffineTransform 支持任意角度；
+        // DirtyRegion.of 按旋转外接矩形计算。
+        if (r < 0 || r >= 360) {
+            throw new ValidationException("INVALID_PAYLOAD", "rotation must be in [0,360): " + r);
         }
     }
 

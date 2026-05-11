@@ -35,6 +35,7 @@ public final class Session {
     private WallResolver.Result.Ok wall;
     private List<Integer> mapIds;
     private WallKey wallKey;
+    private String wallId;             // M5.5：当前 session 编辑的 wall（confirm 后赋值）
     private ProjectState projectState;
     private EditSession editSession;
     private long lastActivityAt;
@@ -61,6 +62,7 @@ public final class Session {
     public WallResolver.Result.Ok wall() { return wall; }
     public List<Integer> mapIds() { return mapIds; }
     public WallKey wallKey() { return wallKey; }
+    public String wallId() { return wallId; }
     public ProjectState projectState() { return projectState; }
     public EditSession editSession() { return editSession; }
     public long lastActivityAt() { return lastActivityAt; }
@@ -70,9 +72,12 @@ public final class Session {
     void state(SessionState s) { this.state = s; }
     void pos1(Block b, BlockFace f) { this.pos1 = b; this.face = f; }
     void pos2(Block b, BlockFace f) { this.pos2 = b; this.face = f; }
+    /** M5-D8：清空已选角，让玩家在 SELECTING 状态下重新开始（隐式 reselect 用）。 */
+    void clearPos() { this.pos1 = null; this.pos2 = null; this.face = null; }
     void wall(WallResolver.Result.Ok w) { this.wall = w; }
     void mapIds(List<Integer> ids) { this.mapIds = ids; }
     void wallKey(WallKey k) { this.wallKey = k; }
+    void wallId(String id) { this.wallId = id; }
     void projectState(ProjectState ps) { this.projectState = ps; }
     void editSession(EditSession es) { this.editSession = es; }
     void touchActivity(long now) { this.lastActivityAt = now; this.wsDisconnectedAt = -1; }

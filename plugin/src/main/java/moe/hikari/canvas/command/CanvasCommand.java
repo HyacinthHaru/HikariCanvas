@@ -1,8 +1,7 @@
 package moe.hikari.canvas.command;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.tree.LiteralCommandNode;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
@@ -15,8 +14,8 @@ import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionState;
 import moe.hikari.canvas.session.TokenService;
-import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.storage.Database;
+import moe.hikari.canvas.storage.WallRepo;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -27,34 +26,32 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
 
 /**
- * {@code /canvas} 根命令的 Brigadier 注册点，M2-T11 完整实装。
- *
- * <p>正式子命令：
+ * {@code /canvas} 根命令。M5.5 wall 模型起命令族（详见 docs/architecture.md §3、PROPOSAL.md §5.2.x）：
  * <ul>
- *   <li>{@code edit / wand / cancel} — 玩家侧交互入口（M2-T6）</li>
- *   <li>{@code confirm} — 锁定墙面、借池、挂物品框、签发 token、发可点击 URL</li>
- *   <li>{@code commit}  — 转 PERMANENT、写 sign_records、清 wand</li>
- *   <li>{@code stats}   — 管理员：MapPool + 活跃会话统计</li>
- *   <li>{@code cleanup} — 管理员：M2 阶段 stub，实际数据回收留给 M7 fsck</li>
+ *   <li>{@code edit / wand / cancel} — 选区入口</li>
+ *   <li>{@code confirm} — 锁定墙面，新建 wall（部署 ItemFrame + 借池）或 bind 现有 wall（不部署）+ 签发 token URL</li>
+ *   <li>{@code open <wall_id\|alias>} — 直接打开已有 wall（绕过 SELECTING）</li>
+ *   <li>{@code list} — 玩家自己的画清单</li>
+ *   <li>{@code publish / unpublish / alias} — wall 元数据修改（标签层）</li>
+ *   <li>{@code delete <wall_id> [confirm]} — 删除 wall（30s 二次确认）</li>
+ *   <li>{@code stats / cleanup} — 管理员</li>
  * </ul>
  *
- * <p>权限（见 {@code docs/security.md §5}）：
- * <ul>
- *   <li>edit / wand / confirm / cancel → {@code canvas.edit}</li>
- *   <li>commit → {@code canvas.commit}</li>
- *   <li>stats / cleanup → {@code canvas.admin}</li>
- * </ul>
+ * <p>M5.5 起 {@code commit} 子命令彻底废止——保存通过 op auto-save 实现。</p>
  */
 public final class CanvasCommand {
 
-    // NON_NULL 与 WebServer 同策略：hollow rect 的 fill=null 不写字段，与协议 §7 一致
-    private static final ObjectMapper JSON = new ObjectMapper()
-            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+    /** delete 二次确认的窗口（毫秒）。在此期间内 player 再敲带 confirm 才真删。 */
+    private static final long DELETE_CONFIRM_WINDOW_MS = 30_000;
 
     private final JavaPlugin plugin;
     private final SessionManager sessionManager;
@@ -62,8 +59,14 @@ public final class CanvasCommand {
     private final TokenService tokenService;
     private final MapPool mapPool;
     private final Database database;
+    private final WallRepo wallRepo;
     /** 形如 {@code http://host:port/?token={token}}；{token} 占位符会被替换。 */
     private final String editorUrlTemplate;
+
+    /** 玩家最近一次 /canvas delete <id> 的待确认信息：playerUuid → (wallId, ts)。 */
+    private final ConcurrentMap<UUID, PendingDelete> pendingDeletes = new ConcurrentHashMap<>();
+
+    private record PendingDelete(String wallId, long ts) {}
 
     public CanvasCommand(JavaPlugin plugin,
                          SessionManager sessionManager,
@@ -71,6 +74,7 @@ public final class CanvasCommand {
                          TokenService tokenService,
                          MapPool mapPool,
                          Database database,
+                         WallRepo wallRepo,
                          String editorUrlTemplate) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
@@ -78,6 +82,7 @@ public final class CanvasCommand {
         this.tokenService = tokenService;
         this.mapPool = mapPool;
         this.database = database;
+        this.wallRepo = wallRepo;
         this.editorUrlTemplate = editorUrlTemplate;
     }
 
@@ -95,9 +100,29 @@ public final class CanvasCommand {
                 .then(Commands.literal("cancel")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runCancel))
-                .then(Commands.literal("commit")
-                        .requires(src -> isPlayerWith(src, "canvas.commit"))
-                        .executes(this::runCommit))
+                .then(Commands.literal("open")
+                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        .then(Commands.argument("id_or_alias", StringArgumentType.word())
+                                .executes(this::runOpen)))
+                .then(Commands.literal("list")
+                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        .executes(this::runList))
+                .then(Commands.literal("publish")
+                        .requires(src -> isPlayerWith(src, "canvas.publish"))
+                        .executes(this::runPublish))
+                .then(Commands.literal("unpublish")
+                        .requires(src -> isPlayerWith(src, "canvas.publish"))
+                        .executes(this::runUnpublish))
+                .then(Commands.literal("alias")
+                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .executes(this::runAlias)))
+                .then(Commands.literal("delete")
+                        .requires(src -> isPlayerWith(src, "canvas.delete.own"))
+                        .then(Commands.argument("wall_id", StringArgumentType.word())
+                                .executes(this::runDeleteFirstStep)
+                                .then(Commands.literal("confirm")
+                                        .executes(this::runDeleteConfirm))))
                 .then(Commands.literal("stats")
                         .requires(src -> src.getSender().hasPermission("canvas.admin"))
                         .executes(this::runStats))
@@ -118,16 +143,43 @@ public final class CanvasCommand {
         SessionManager.BeginResult r = sessionManager.beginSelecting(
                 player.getUniqueId(), player.getName());
         if (r instanceof SessionManager.BeginResult.Ok) {
-            player.sendMessage(Component.text(
-                    "Selection mode on. Left-click first corner, right-click second corner, then /canvas confirm.",
-                    NamedTextColor.GOLD));
+            ensureWand(player);
+            sendEditGuide(player, "Selection mode on. Pick the wall corners:");
         } else if (r instanceof SessionManager.BeginResult.AlreadyHasSession ex) {
-            player.sendMessage(Component.text(
-                    "You already have an active canvas session (state=" + ex.existing().state()
-                            + "). Use /canvas cancel first.",
-                    NamedTextColor.RED));
+            Session existing = ex.existing();
+            switch (existing.state()) {
+                case SELECTING -> {
+                    // M5-D8：隐式 reselect，避免玩家被卡在"已选一半"
+                    sessionManager.resetSelection(existing.id());
+                    ensureWand(player);
+                    sendEditGuide(player, "Selection reset. Pick the wall corners again:");
+                }
+                case ISSUED, ACTIVE -> player.sendMessage(Component.text(
+                        "Editor is already open. Use /canvas cancel to close it, "
+                                + "or open the URL from the previous /canvas confirm.",
+                        NamedTextColor.YELLOW));
+                case CLOSING -> player.sendMessage(Component.text(
+                        "Session is closing; try again in a moment.",
+                        NamedTextColor.GRAY));
+            }
         }
         return Command.SINGLE_SUCCESS;
+    }
+
+    private void ensureWand(Player player) {
+        if (!CanvasWand.hasWand(player, plugin)) {
+            player.getInventory().addItem(CanvasWand.forPlayer(plugin, player));
+        }
+    }
+
+    private void sendEditGuide(Player player, String headline) {
+        player.sendMessage(Component.text(headline, NamedTextColor.GOLD));
+        player.sendMessage(Component.text("  ① Left-click the first wall block (or item frame on it)",
+                NamedTextColor.GRAY));
+        player.sendMessage(Component.text("  ② Right-click the opposite corner block",
+                NamedTextColor.GRAY));
+        player.sendMessage(Component.text("  ③ Run /canvas confirm to open the editor",
+                NamedTextColor.GRAY));
     }
 
     private int runWand(CommandContext<CommandSourceStack> ctx) {
@@ -146,23 +198,212 @@ public final class CanvasCommand {
             player.sendMessage(Component.text("No active session.", NamedTextColor.GRAY));
             return 0;
         }
-        // 先快照 world 引用（cancel 后 session 被 forget）
+        // M5.5：cancel 仅释放 session/wand；wall 数据 + ItemFrames 保留
         String sid = s.id();
         SessionState prev = s.state();
-        World wallWorld = s.wall() != null ? s.wall().world() : null;
-
         sessionManager.cancel(sid, "player-cancel");
-
-        int frames = 0;
-        if (wallWorld != null) {
-            frames = frameDeployer.removeForSession(sid, wallWorld);
-        }
         int wands = CanvasWand.removeAllFrom(player, plugin);
 
         StringBuilder msg = new StringBuilder("Session cancelled (was " + prev + ").");
-        if (frames > 0) msg.append(" ").append(frames).append(" frames removed.");
         if (wands > 0) msg.append(" Wand returned.");
+        msg.append(" Wall data preserved—use /canvas open or right-click ItemFrame to resume.");
         player.sendMessage(Component.text(msg.toString(), NamedTextColor.YELLOW));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    // ---------- open / list / publish / unpublish / alias / delete ----------
+
+    private int runOpen(CommandContext<CommandSourceStack> ctx) {
+        Player player = (Player) ctx.getSource().getSender();
+        String idOrAlias = StringArgumentType.getString(ctx, "id_or_alias");
+        SessionManager.OpenResult r = sessionManager.open(
+                player.getUniqueId(), player.getName(), idOrAlias);
+        if (r instanceof SessionManager.OpenResult.NotFound) {
+            player.sendMessage(Component.text("No such wall: " + idOrAlias, NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        if (r instanceof SessionManager.OpenResult.AlreadyHasSession a) {
+            player.sendMessage(Component.text(
+                    "You already have an active session (state=" + a.current() + "). Use /canvas cancel first.",
+                    NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        if (r instanceof SessionManager.OpenResult.WallOccupied wo) {
+            player.sendMessage(Component.text(
+                    "Wall is being edited by " + (wo.otherPlayer() == null ? "?" : wo.otherPlayer()) + ".",
+                    NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        if (r instanceof SessionManager.OpenResult.BindFailed bf) {
+            player.sendMessage(Component.text("Cannot bind wall: " + bf.detail(), NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;
+        // 签发 token
+        String token = tokenService.issue(player.getUniqueId(), player.getName(), ok.session().id());
+        String url = editorUrlTemplate.replace("{token}", token);
+        WallRepo.Wall w = ok.wall();
+        String summary = "Opened wall " + w.wallId()
+                + (w.alias() != null ? " (alias: " + w.alias() + ")" : "")
+                + " · " + w.widthMaps() + "×" + w.heightMaps();
+        player.sendMessage(Component.text(summary, NamedTextColor.GREEN));
+        player.sendMessage(Component.text("Open editor: ", NamedTextColor.GRAY)
+                .append(Component.text(url, NamedTextColor.AQUA)
+                        .decorate(TextDecoration.UNDERLINED)
+                        .clickEvent(ClickEvent.openUrl(url))
+                        .hoverEvent(HoverEvent.showText(Component.text("Click to open in browser")))));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int runList(CommandContext<CommandSourceStack> ctx) {
+        Player player = (Player) ctx.getSource().getSender();
+        List<WallRepo.Summary> walls = wallRepo.listForOwner(player.getUniqueId());
+        if (walls.isEmpty()) {
+            player.sendMessage(Component.text(
+                    "You have no canvas walls yet. Use /canvas edit to create one.",
+                    NamedTextColor.GRAY));
+            return Command.SINGLE_SUCCESS;
+        }
+        // 简单分组：published 在前
+        List<WallRepo.Summary> pub = walls.stream().filter(w -> w.publishedAt() != null).toList();
+        List<WallRepo.Summary> drafts = walls.stream().filter(w -> w.publishedAt() == null).toList();
+        player.sendMessage(Component.text(
+                "Your canvas walls: " + walls.size() + " total ("
+                        + pub.size() + " published, " + drafts.size() + " editing)",
+                NamedTextColor.GOLD));
+        for (WallRepo.Summary w : pub) sendWallLine(player, w, true);
+        for (WallRepo.Summary w : drafts) sendWallLine(player, w, false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private void sendWallLine(Player p, WallRepo.Summary w, boolean published) {
+        String tag = published ? "[P]" : "[D]";
+        String aliasPart = w.alias() != null ? " '" + w.alias() + "'" : "";
+        String label = String.format("  %s %s%s · %dx%d · %s (%d,%d,%d) %s",
+                tag, w.wallId(), aliasPart, w.widthMaps(), w.heightMaps(),
+                w.world(), w.originX(), w.originY(), w.originZ(), w.facing());
+        Component line = Component.text(label,
+                published ? NamedTextColor.AQUA : NamedTextColor.GRAY)
+                .clickEvent(ClickEvent.suggestCommand("/canvas open " + w.wallId()))
+                .hoverEvent(HoverEvent.showText(Component.text(
+                        "Click to suggest /canvas open " + w.wallId())));
+        p.sendMessage(line);
+    }
+
+    private int runPublish(CommandContext<CommandSourceStack> ctx) {
+        Player player = (Player) ctx.getSource().getSender();
+        Session s = sessionManager.byPlayer(player.getUniqueId());
+        if (s == null || s.wallId() == null) {
+            player.sendMessage(Component.text("No active wall session. Open one first.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        Long ts = wallRepo.markPublished(s.wallId());
+        if (ts == null) {
+            player.sendMessage(Component.text("Publish failed (DB error).", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        // ItemFrame PDC published_at
+        if (s.wall() != null) {
+            frameDeployer.markPublished(s.wallId(), s.wall().world(), ts);
+        }
+        player.sendMessage(Component.text("Wall " + s.wallId() + " published.", NamedTextColor.GREEN));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int runUnpublish(CommandContext<CommandSourceStack> ctx) {
+        Player player = (Player) ctx.getSource().getSender();
+        Session s = sessionManager.byPlayer(player.getUniqueId());
+        if (s == null || s.wallId() == null) {
+            player.sendMessage(Component.text("No active wall session.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        wallRepo.markUnpublished(s.wallId());
+        if (s.wall() != null) {
+            frameDeployer.markPublished(s.wallId(), s.wall().world(), null);
+        }
+        player.sendMessage(Component.text("Wall " + s.wallId() + " unpublished.", NamedTextColor.YELLOW));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int runAlias(CommandContext<CommandSourceStack> ctx) {
+        Player player = (Player) ctx.getSource().getSender();
+        Session s = sessionManager.byPlayer(player.getUniqueId());
+        if (s == null || s.wallId() == null) {
+            player.sendMessage(Component.text("No active wall session.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        String alias = StringArgumentType.getString(ctx, "name");
+        if (alias.length() < 2 || alias.length() > 32) {
+            player.sendMessage(Component.text("Alias must be 2-32 chars.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        boolean ok = wallRepo.setAlias(s.wallId(), alias);
+        if (!ok) {
+            player.sendMessage(Component.text(
+                    "Alias '" + alias + "' is already in use.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        player.sendMessage(Component.text(
+                "Wall " + s.wallId() + " alias = " + alias, NamedTextColor.GREEN));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int runDeleteFirstStep(CommandContext<CommandSourceStack> ctx) {
+        Player player = (Player) ctx.getSource().getSender();
+        String wallId = StringArgumentType.getString(ctx, "wall_id");
+        var w = wallRepo.loadById(wallId).orElse(null);
+        if (w == null) {
+            player.sendMessage(Component.text("No such wall: " + wallId, NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        if (!w.ownerUuid().equals(player.getUniqueId())
+                && !player.hasPermission("canvas.delete.any")) {
+            player.sendMessage(Component.text(
+                    "You can only delete your own walls (need canvas.delete.any otherwise).",
+                    NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        pendingDeletes.put(player.getUniqueId(),
+                new PendingDelete(wallId, System.currentTimeMillis()));
+        player.sendMessage(Component.text(
+                "About to delete wall " + wallId
+                        + (w.alias() != null ? " '" + w.alias() + "'" : "")
+                        + ". Run /canvas delete " + wallId + " confirm within 30s.",
+                NamedTextColor.YELLOW));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int runDeleteConfirm(CommandContext<CommandSourceStack> ctx) {
+        Player player = (Player) ctx.getSource().getSender();
+        String wallId = StringArgumentType.getString(ctx, "wall_id");
+        PendingDelete pd = pendingDeletes.remove(player.getUniqueId());
+        long now = System.currentTimeMillis();
+        if (pd == null || !pd.wallId().equals(wallId)
+                || now - pd.ts() > DELETE_CONFIRM_WINDOW_MS) {
+            player.sendMessage(Component.text(
+                    "Confirm window expired or mismatched. Re-run /canvas delete " + wallId,
+                    NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        var w = wallRepo.loadById(wallId).orElse(null);
+        if (w == null) {
+            player.sendMessage(Component.text("Wall already gone: " + wallId, NamedTextColor.GRAY));
+            return Command.SINGLE_SUCCESS;
+        }
+        if (!w.ownerUuid().equals(player.getUniqueId())
+                && !player.hasPermission("canvas.delete.any")) {
+            player.sendMessage(Component.text(
+                    "You can only delete your own walls.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        // 拆 ItemFrame
+        World world = plugin.getServer().getWorld(w.key().world());
+        int frames = world == null ? 0 : frameDeployer.removeForWall(wallId, world);
+        // SessionManager.deleteWall 释放池 + 删 walls 行（含 cancel 任何活跃 session）
+        sessionManager.deleteWall(wallId);
+        player.sendMessage(Component.text(
+                "Wall " + wallId + " deleted. " + frames + " frames removed.",
+                NamedTextColor.GREEN));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -180,133 +421,78 @@ public final class CanvasCommand {
         SessionManager.ConfirmResult result = sessionManager.confirm(s.id());
         if (result instanceof SessionManager.ConfirmResult.NotReady nr) {
             player.sendMessage(Component.text("Not ready: " + nr.detail(), NamedTextColor.RED));
-        } else if (result instanceof SessionManager.ConfirmResult.WallFailed wf) {
+            return Command.SINGLE_SUCCESS;
+        }
+        if (result instanceof SessionManager.ConfirmResult.WallFailed wf) {
             player.sendMessage(Component.text(
                     "Wall invalid: " + wf.reason().reason() + " — " + wf.reason().detail(),
                     NamedTextColor.RED));
-        } else if (result instanceof SessionManager.ConfirmResult.WallOccupied wo) {
+            return Command.SINGLE_SUCCESS;
+        }
+        if (result instanceof SessionManager.ConfirmResult.WallOccupied wo) {
             player.sendMessage(Component.text(
                     "This wall is already being edited (session " + wo.otherSessionId() + ").",
                     NamedTextColor.RED));
-        } else if (result instanceof SessionManager.ConfirmResult.PoolExhausted pe) {
+            return Command.SINGLE_SUCCESS;
+        }
+        if (result instanceof SessionManager.ConfirmResult.PoolExhausted pe) {
             player.sendMessage(Component.text(
                     "Pool exhausted: " + pe.message() + ". Try smaller wall or wait.",
                     NamedTextColor.RED));
-        } else if (result instanceof SessionManager.ConfirmResult.Ok ok) {
-            // 挂物品框
-            int mounted;
+            return Command.SINGLE_SUCCESS;
+        }
+
+        Session sessionAfter;
+        WallResolver.Result.Ok wall;
+        List<Integer> mapIds;
+        String wallId;
+        boolean newWall;
+        if (result instanceof SessionManager.ConfirmResult.OkNewWall ok) {
+            sessionAfter = ok.session(); wall = ok.wall(); mapIds = ok.mapIds(); wallId = ok.wallId();
+            newWall = true;
+        } else if (result instanceof SessionManager.ConfirmResult.OkExistingWall ok) {
+            sessionAfter = ok.session(); wall = ok.wall(); mapIds = ok.mapIds(); wallId = ok.wallId();
+            newWall = false;
+        } else {
+            return Command.SINGLE_SUCCESS;
+        }
+
+        // 仅"新建"路径部署 ItemFrames；"打开现有"已有物品框，跳过
+        int mounted = mapIds.size();
+        if (newWall) {
             try {
-                mounted = frameDeployer.deploy(ok.session(), ok.wall(), ok.mapIds());
+                mounted = frameDeployer.deploy(sessionAfter, wall, mapIds);
             } catch (Exception e) {
                 plugin.getLogger().log(Level.SEVERE, "FrameDeployer.deploy failed", e);
-                // 回滚：SessionManager.cancel 会归还池
-                sessionManager.cancel(ok.session().id(), "deploy-failed");
+                sessionManager.cancel(sessionAfter.id(), "deploy-failed");
                 player.sendMessage(Component.text("Frame deployment failed: " + e.getMessage(),
                         NamedTextColor.RED));
-                return 0;
+                return Command.SINGLE_SUCCESS;
             }
-
-            // 签发 token（15min TTL）
-            String token = tokenService.issue(
-                    player.getUniqueId(), player.getName(), ok.session().id());
-            String url = editorUrlTemplate.replace("{token}", token);
-
-            player.sendMessage(Component.text(
-                    "Wall confirmed: " + ok.wall().width() + "×" + ok.wall().height()
-                            + " (" + mounted + " frames). Editor token valid 15 min.",
-                    NamedTextColor.GREEN));
-            player.sendMessage(Component.text("Open editor: ", NamedTextColor.GRAY)
-                    .append(Component.text(url, NamedTextColor.AQUA)
-                            .decorate(TextDecoration.UNDERLINED)
-                            .clickEvent(ClickEvent.openUrl(url))
-                            .hoverEvent(HoverEvent.showText(Component.text(
-                                    "Click to open in browser")))));
-
-            // 移除玩家 inventory 里的 wand（契约：confirm 后 wand 消失）
-            CanvasWand.removeAllFrom(player, plugin);
-        }
-        return Command.SINGLE_SUCCESS;
-    }
-
-    // ---------- commit ----------
-
-    private int runCommit(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
-        Session s = sessionManager.byPlayer(player.getUniqueId());
-        if (s == null) {
-            player.sendMessage(Component.text("No active session.", NamedTextColor.GRAY));
-            return 0;
-        }
-        // 快照 session 信息；commit 后 s 会被 forget
-        WallResolver.Result.Ok wall = s.wall();
-        List<Integer> mapIds = s.mapIds();
-        UUID ownerUuid = s.playerUuid();
-        String ownerName = s.playerName();
-        ProjectState projectState = s.projectState();  // M3-T13：snapshot 下来写入 project_json
-        if (wall == null || mapIds == null) {
-            player.sendMessage(Component.text(
-                    "Nothing to commit—run /canvas confirm first.", NamedTextColor.RED));
-            return 0;
         }
 
-        String signId = UUID.randomUUID().toString();
-        SessionManager.CommitResult r = sessionManager.commit(s.id(), signId);
-        if (r instanceof SessionManager.CommitResult.NotActive na) {
-            player.sendMessage(Component.text(
-                    "Cannot commit in state " + na.current() + ".", NamedTextColor.RED));
-            return 0;
-        }
-        // Ok
-        int promoted = frameDeployer.promote(s.id(), signId, wall.world());
-        insertSignRecord(signId, ownerUuid, ownerName, wall, mapIds, projectState);
-        CanvasWand.removeAllFrom(player, plugin);
+        // 签发 token（15min TTL）
+        String token = tokenService.issue(
+                player.getUniqueId(), player.getName(), sessionAfter.id());
+        String url = editorUrlTemplate.replace("{token}", token);
 
-        player.sendMessage(Component.text(
-                "Committed sign " + signId.substring(0, 8) + "… (" + promoted + " frames).",
+        String summary = newWall
+                ? "Wall created: " + wallId + " · " + wall.width() + "×" + wall.height()
+                        + " (" + mounted + " frames)."
+                : "Wall opened: " + wallId + " · " + wall.width() + "×" + wall.height()
+                        + " (existing).";
+        player.sendMessage(Component.text(summary + " Editor token valid 15 min.",
                 NamedTextColor.GREEN));
-        return Command.SINGLE_SUCCESS;
-    }
+        player.sendMessage(Component.text("Open editor: ", NamedTextColor.GRAY)
+                .append(Component.text(url, NamedTextColor.AQUA)
+                        .decorate(TextDecoration.UNDERLINED)
+                        .clickEvent(ClickEvent.openUrl(url))
+                        .hoverEvent(HoverEvent.showText(Component.text(
+                                "Click to open in browser")))));
 
-    private void insertSignRecord(String signId, UUID ownerUuid, String ownerName,
-                                  WallResolver.Result.Ok wall, List<Integer> mapIds,
-                                  ProjectState projectState) {
-        long now = System.currentTimeMillis();
-        String mapIdsJson;
-        try {
-            mapIdsJson = JSON.writeValueAsString(mapIds);
-        } catch (Exception e) {
-            mapIdsJson = "[]";
-            plugin.getLogger().log(Level.WARNING, "serialize mapIds failed", e);
-        }
-        // M3-T13：项目工程数据真实序列化。空状态（未改过）也写完整结构（空 elements）而非 "{}"，
-        // 便于 M4 load 时 new ProjectState(json) 一把到位
-        String projectJson;
-        try {
-            projectJson = projectState != null
-                    ? JSON.writeValueAsString(projectState)
-                    : "{}";
-        } catch (Exception e) {
-            projectJson = "{}";
-            plugin.getLogger().log(Level.WARNING,
-                    "serialize projectState failed for " + signId, e);
-        }
-        final String finalMapIdsJson = mapIdsJson;
-        final String finalProjectJson = projectJson;
-        try {
-            database.jdbi().useHandle(h -> h.execute(
-                    "INSERT INTO sign_records (id, owner_uuid, owner_name, world, "
-                            + "origin_x, origin_y, origin_z, facing, width_maps, height_maps, "
-                            + "map_ids, project_json, template_id, template_version, "
-                            + "created_at, updated_at, deleted_at) "
-                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    signId, ownerUuid.toString(), ownerName, wall.world().getName(),
-                    wall.minX(), wall.minY(), wall.minZ(), wall.facing().name(),
-                    wall.width(), wall.height(),
-                    finalMapIdsJson, finalProjectJson, null, null,
-                    now, now, null));
-        } catch (Exception e) {
-            plugin.getLogger().log(Level.SEVERE, "INSERT sign_records failed for " + signId, e);
-        }
+        // 收回 wand（契约：confirm 后 wand 消失）
+        CanvasWand.removeAllFrom(player, plugin);
+        return Command.SINGLE_SUCCESS;
     }
 
     // ---------- admin ----------
@@ -314,10 +500,17 @@ public final class CanvasCommand {
     private int runStats(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
         MapPool.Stats ps = mapPool.stats();
+        int wallsCount = database.jdbi().withHandle(h -> h.createQuery(
+                "SELECT COUNT(*) FROM walls").mapTo(Integer.class).one());
+        int published = database.jdbi().withHandle(h -> h.createQuery(
+                "SELECT COUNT(*) FROM walls WHERE published_at IS NOT NULL")
+                .mapTo(Integer.class).one());
         sender.sendMessage(Component.text(String.format(
-                        "MapPool: total=%d  free=%d  reserved=%d  permanent=%d   "
+                        "MapPool: total=%d  free=%d  reserved=%d   "
+                                + "|   Walls: %d (published=%d)   "
                                 + "|   Sessions: %d   |   Tokens: %d",
-                        ps.total(), ps.free(), ps.reserved(), ps.permanent(),
+                        ps.total(), ps.free(), ps.reserved(),
+                        wallsCount, published,
                         sessionManager.size(), tokenService.activeCount()),
                 NamedTextColor.GOLD));
         return Command.SINGLE_SUCCESS;
@@ -325,14 +518,9 @@ public final class CanvasCommand {
 
     private int runCleanup(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
-        // M2 阶段 stub：扫 sign_records 里 deleted_at 非空的行并报数
-        // 真正的 map 回收 + 物品框清除 + DB 删除留给 M7 的 /canvas fsck 实装
-        int softDeleted = database.jdbi().withHandle(h -> h.createQuery(
-                        "SELECT COUNT(*) FROM sign_records WHERE deleted_at IS NOT NULL")
-                .mapTo(Integer.class).one());
+        // M5.5：stub —— 真正的孤立 ItemFrame / 错位 walls 行检测留 M7 fsck
         sender.sendMessage(Component.text(
-                "cleanup is stubbed in M2. Soft-deleted sign_records: " + softDeleted
-                        + " (actual reclamation implemented in M7 fsck).",
+                "cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.",
                 NamedTextColor.YELLOW));
         return Command.SINGLE_SUCCESS;
     }

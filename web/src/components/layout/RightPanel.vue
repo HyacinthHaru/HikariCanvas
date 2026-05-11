@@ -4,8 +4,9 @@ import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
-import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2 } from 'lucide-vue-next';
+import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2, Trash2 } from 'lucide-vue-next';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO } from '@/render/TextLayout';
+import { FONT_META } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import type { Element, RectElement, TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
@@ -53,8 +54,21 @@ function onBoolChange(field: 'visible' | 'locked', ev: Event) {
 
 function onTextChange(field: string, ev: Event) {
     const v = (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
+    // eager optimistic：文本类输入立即更新 local element.text，这样下面的 fitTextHeight
+    // 能读到最新内容。sendUpdateDebounced 自己也会再 optimistic 一次，无害。
+    const el = selected.value;
+    if (el) (el as unknown as Record<string, unknown>)[field] = v;
     sendUpdateDebounced({ [field]: v });
+    if (field === 'text' && el?.type === 'text') {
+        // M5-D5 Bug 8：输入文字后自动按 canonicalCharWidth 布局撑高。不 fit 宽度——
+        // 宽度是用户设定的软换行边界，保留设计意图。
+        autoFitHeightDebounced();
+    }
 }
+
+const autoFitHeightDebounced = useDebounceFn(() => {
+    fitTextHeight();
+}, 250);
 
 function onColorChange(field: string, ev: Event) {
     const v = (ev.target as HTMLInputElement).value.toUpperCase();
@@ -62,8 +76,9 @@ function onColorChange(field: string, ev: Event) {
 }
 
 function onNumberChange(field: string, ev: Event) {
-    const v = parseFloat((ev.target as HTMLInputElement).value);
+    let v = parseFloat((ev.target as HTMLInputElement).value);
     if (!Number.isFinite(v)) return;
+    if (field === 'rotation') v = ((Math.round(v) % 360) + 360) % 360;
     sendUpdateDebounced({ [field]: v });
 }
 
@@ -126,6 +141,13 @@ function toggleRectStroke(ev: Event) {
 function patchRectStroke(partial: Partial<Stroke>) {
     const cur = rectStroke() ?? { width: 1, color: '#000000' };
     sendUpdate({ stroke: { ...cur, ...partial } });
+}
+
+function deleteSelected() {
+    const el = selected.value;
+    if (!el) return;
+    ws.send('element.delete', { elementId: el.id });
+    ui.selectElement(null);
 }
 
 // ---------- M5-D3 P4：文本 fit-content ----------
@@ -216,6 +238,14 @@ function onLayerDragEnd() {
       <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Sliders class="size-3.5" />
         <span>{{ t.properties.header }}</span>
+        <button
+          v-if="selected"
+          class="ml-auto p-1 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] text-[color:var(--muted-foreground)]"
+          :title="t.properties.deleteTitle"
+          @click="deleteSelected"
+        >
+          <Trash2 class="size-3.5" />
+        </button>
       </header>
 
       <div v-if="!selected" class="p-3 text-xs text-[color:var(--muted-foreground)]">
@@ -259,12 +289,8 @@ function onLayerDragEnd() {
             </label>
             <label class="flex flex-col gap-0.5 col-span-2">
               <span class="text-[10px] text-[color:var(--muted-foreground)]">rotation</span>
-              <select class="hc-input" :value="selected.rotation" @change="(e) => onSelectChange('rotation', e)">
-                <option :value="0">0°</option>
-                <option :value="90">90°</option>
-                <option :value="180">180°</option>
-                <option :value="270">270°</option>
-              </select>
+              <input type="number" min="0" max="359" class="hc-input" :value="selected.rotation"
+                     @input="(e) => onNumberChange('rotation', e)">
             </label>
           </div>
           <div class="flex gap-3 pt-2">
@@ -351,8 +377,7 @@ function onLayerDragEnd() {
               <label class="flex flex-col gap-0.5">
                 <span class="text-[10px] text-[color:var(--muted-foreground)]">fontId</span>
                 <select class="hc-input" :value="(selected as TextElement).fontId" @change="(e) => onSelectChange('fontId', e)">
-                  <option value="ark_pixel">ark_pixel</option>
-                  <option value="source_han_sans">source_han_sans</option>
+                  <option v-for="(meta, id) in FONT_META" :key="id" :value="id">{{ meta.displayName }}</option>
                 </select>
               </label>
               <label class="flex flex-col gap-0.5">

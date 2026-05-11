@@ -25,7 +25,11 @@ public final class MigrationRunner {
 
     /** 按序号递增排列；每个条目 = (version, classpath 资源路径)。 */
     private static final List<Migration> MIGRATIONS = List.of(
-            new Migration(1, "db-migrations/V001__initial.sql")
+            new Migration(1, "db-migrations/V001__initial.sql"),
+            new Migration(2, "db-migrations/V002__drafts.sql"),
+            new Migration(3, "db-migrations/V003__drafts_add_maps.sql"),
+            new Migration(4, "db-migrations/V004__drafts_wall_id_alias.sql"),
+            new Migration(5, "db-migrations/V005__walls_unified.sql")
     );
 
     private final Jdbi jdbi;

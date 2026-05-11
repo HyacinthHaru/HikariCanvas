@@ -53,6 +53,9 @@ public final class WebServer {
     private final SessionRateLimiter rateLimiter;
     private final String serverVersion;
     private final Runnable paintHandler;  // M1 demo
+    private final moe.hikari.canvas.storage.WallRepo wallRepo;
+    private final moe.hikari.canvas.deploy.FrameDeployer frameDeployer;
+    private final org.bukkit.plugin.java.JavaPlugin plugin;
     private Javalin app;
 
     /** 活跃 session → 绑定的 WS 连接；用于服务端主动推送（state.snapshot / state.patch）。 */
@@ -64,6 +67,9 @@ public final class WebServer {
                      TokenService tokenService, SessionManager sessionManager,
                      ProjectionThrottler throttler,
                      SessionRateLimiter rateLimiter,
+                     moe.hikari.canvas.storage.WallRepo wallRepo,
+                     moe.hikari.canvas.deploy.FrameDeployer frameDeployer,
+                     org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler) {
         this.log = log;
         this.host = host;
@@ -72,6 +78,9 @@ public final class WebServer {
         this.sessionManager = sessionManager;
         this.throttler = throttler;
         this.rateLimiter = rateLimiter;
+        this.wallRepo = wallRepo;
+        this.frameDeployer = frameDeployer;
+        this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
     }
@@ -111,6 +120,10 @@ public final class WebServer {
             // M5-C2：前端加载 palette 的端点；与 Java PaletteLut 读同一份 classpath JSON
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/palette", ctx -> servePalette(ctx)));
+
+            // M5.5：网页首页"近期项目"列表。无玩家认证（127.0.0.1 trust）；返回所有 walls 的 summary
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/walls", ctx -> ctx.json(wallRepo.listAll())));
 
             // WebSocket
             cfg.routes.addWsHandler(WsHandlerType.WEBSOCKET, "/ws", wsCfg -> {
@@ -258,8 +271,21 @@ public final class WebServer {
                  "redo",
                  "history.mark",
                  "template.apply" -> dispatchEditOp(ctx, in, bound);
+            case "wall.publish", "wall.unpublish", "wall.alias", "wall.refresh" -> dispatchWallOp(ctx, in, bound);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
+    }
+
+    /** M5.5 wall 元数据 op 入口；payload 解析后转 {@link #handleWallOp}。 */
+    private void dispatchWallOp(WsMessageContext ctx, Envelope in, String sessionId) {
+        Map<String, Object> payload;
+        try {
+            payload = asPayloadMap(in.payload());
+        } catch (IllegalArgumentException iae) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
+            return;
+        }
+        handleWallOp(ctx, sessionId, in, payload);
     }
 
     // ---------- M3-T6 编辑 op 分发 ----------
@@ -352,6 +378,8 @@ public final class WebServer {
                 if (ok.dirty() != null) {
                     throttler.submit(sessionId, ok.dirty());
                 }
+                // 4) 草稿持久化（M5-D6）
+                sessionManager.persistWall(sessionId);
             }
             case EditSession.OpResult.OkSnapshot oks -> {
                 // undo/redo/template.apply：结构跳变，下行 state.snapshot 全量；
@@ -364,6 +392,7 @@ public final class WebServer {
                 if (oks.dirty() != null) {
                     throttler.submit(sessionId, oks.dirty());
                 }
+                sessionManager.persistWall(sessionId);
             }
             case EditSession.OpResult.Error er ->
                     ctx.send(Envelope.error(in.id(), er.code(), er.message()));
@@ -389,6 +418,82 @@ public final class WebServer {
 
     private static Integer intOrNull(Object v) {
         return (v instanceof Number n) ? n.intValue() : null;
+    }
+
+    /** M5.5：wall.publish / wall.unpublish / wall.alias。不影响 ProjectState，绕开 EditSession。 */
+    private void handleWallOp(WsMessageContext ctx, String sessionId,
+                              Envelope in, Map<String, Object> payload) {
+        Session s = sessionManager.byId(sessionId);
+        if (s == null || s.wallId() == null) {
+            ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "session has no bound wall"));
+            return;
+        }
+        String wallId = s.wallId();
+        switch (in.op()) {
+            case "wall.publish" -> {
+                Long ts = wallRepo.markPublished(wallId);
+                if (ts == null) {
+                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "publish failed"));
+                    return;
+                }
+                // 主线程更新 ItemFrame PDC
+                if (s.wall() != null) {
+                    org.bukkit.World w = s.wall().world();
+                    final long fts = ts;
+                    org.bukkit.Bukkit.getScheduler().runTask(plugin,
+                            () -> frameDeployer.markPublished(wallId, w, fts));
+                }
+                ctx.send(Envelope.of("ack", in.id(), Map.of("publishedAt", ts)));
+            }
+            case "wall.unpublish" -> {
+                wallRepo.markUnpublished(wallId);
+                if (s.wall() != null) {
+                    org.bukkit.World w = s.wall().world();
+                    org.bukkit.Bukkit.getScheduler().runTask(plugin,
+                            () -> frameDeployer.markPublished(wallId, w, null));
+                }
+                ctx.send(Envelope.of("ack", in.id(), Map.of()));
+            }
+            case "wall.alias" -> {
+                String alias = stringOrNull(payload.get("alias"));
+                if (alias == null || alias.length() < 2 || alias.length() > 32) {
+                    ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
+                            "alias must be 2-32 chars"));
+                    return;
+                }
+                boolean ok = wallRepo.setAlias(wallId, alias);
+                if (!ok) {
+                    ctx.send(Envelope.error(in.id(), "ALIAS_TAKEN",
+                            "alias '" + alias + "' is already in use"));
+                    return;
+                }
+                ctx.send(Envelope.of("ack", in.id(), Map.of("alias", alias)));
+            }
+            case "wall.refresh" -> {
+                // 玩家撸掉了画框 → 补 spawn 缺失的 + 全画布重画。主线程跑 entity spawn。
+                if (s.wall() == null || s.mapIds() == null) {
+                    ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND",
+                            "session lacks wall geometry"));
+                    return;
+                }
+                final moe.hikari.canvas.deploy.WallResolver.Result.Ok geom = s.wall();
+                final java.util.List<Integer> mapIds = s.mapIds();
+                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                    int repaired = frameDeployer.repairFor(wallId, geom, mapIds);
+                    // 触发全画布重画，确保新 spawn 的 frame 立刻有 ProjectState 像素覆盖 placeholder
+                    if (s.projectState() != null) {
+                        throttler.submit(sessionId,
+                                moe.hikari.canvas.render.DirtyRegion.fullCanvas(s.projectState()));
+                    }
+                    plugin.getLogger().info("wall.refresh: wall=" + wallId
+                            + " repaired=" + repaired + " frame(s)");
+                });
+                // 立即 ack；repaired 数量异步无法回填，前端只看到"已发起"
+                ctx.send(Envelope.of("ack", in.id(), Map.of("submitted", true)));
+            }
+            default -> ctx.send(Envelope.error(in.id(), "INVALID_OP",
+                    "unknown wall op: " + in.op()));
+        }
     }
 
     private void handleAuth(WsMessageContext ctx, Envelope in) {
@@ -421,9 +526,19 @@ public final class WebServer {
             return;
         }
 
-        sessionManager.markActive(session.id());
+        // M5.5：/canvas open 同 wall 路径下 session 已是 ACTIVE；只刷活跃时间，不再走 markActive 转移。
+        // 只有首次 auth（ISSUED → ACTIVE）才调 markActive。
+        if (session.state() == SessionState.ISSUED) {
+            sessionManager.markActive(session.id());
+        } else {
+            sessionManager.touch(session.id());
+        }
+        // 旧的 WS ctx（同 sessionId）若还在，关掉再覆盖，避免双连
+        WsContext oldCtx = wsBySession.put(session.id(), ctx);
+        if (oldCtx != null && oldCtx != ctx) {
+            try { oldCtx.closeSession(4003, "session-takeover"); } catch (Exception ignored) {}
+        }
         ctx.attribute(ATTR_SESSION_ID, session.id());
-        wsBySession.put(session.id(), ctx);
 
         // T3 token rotate：auth 成功后立即 rotate 新 token 交回前端，供 WS 断线重连重新 auth。
         // 契约见 docs/security.md §2.2 / docs/protocol.md §11。
@@ -433,12 +548,25 @@ public final class WebServer {
         // T4：ready payload 中的 projectState 直接由 session 持有的权威状态序列化
         ProjectState state = session.projectState();
 
-        ctx.send(Envelope.of("ready", in.id(), Map.of(
-                "sessionId", session.id(),
-                "serverVersion", serverVersion,
-                "protocolVersion", 1,
-                "reconnectToken", reconnectToken,
-                "projectState", state)));
+        // M5.5：附带 wall 元数据（wallId / alias / publishedAt），前端 TopBar 显示
+        String wallId = session.wallId();
+        String alias = null;
+        Long publishedAt = null;
+        if (wallId != null) {
+            var w = wallRepo.loadById(wallId).orElse(null);
+            if (w != null) { alias = w.alias(); publishedAt = w.publishedAt(); }
+        }
+
+        java.util.LinkedHashMap<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("sessionId", session.id());
+        payload.put("serverVersion", serverVersion);
+        payload.put("protocolVersion", 1);
+        payload.put("reconnectToken", reconnectToken);
+        payload.put("projectState", state);
+        if (wallId != null) payload.put("wallId", wallId);
+        if (alias != null) payload.put("alias", alias);
+        if (publishedAt != null) payload.put("publishedAt", publishedAt);
+        ctx.send(Envelope.of("ready", in.id(), payload));
     }
 
     // ---------- 服务端主动推送（M3-T5）----------

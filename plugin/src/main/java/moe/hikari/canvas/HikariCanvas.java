@@ -11,6 +11,7 @@ import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.render.CanvasCompositor;
 import moe.hikari.canvas.render.CanvasProjector;
+import moe.hikari.canvas.render.WallRestorer;
 import moe.hikari.canvas.render.FontRegistry;
 import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.render.PaletteLut;
@@ -23,6 +24,7 @@ import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.session.WandListener;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
+import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.storage.MigrationRunner;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
@@ -51,6 +53,7 @@ public final class HikariCanvas extends JavaPlugin {
     private WallResolver wallResolver;
     private SessionManager sessionManager;
     private SessionReaper sessionReaper;
+    private WallRepo wallRepo;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
     private FrameDeployer frameDeployer;
@@ -94,8 +97,9 @@ public final class HikariCanvas extends JavaPlugin {
         mapPool.initialize(Bukkit.getWorlds().get(0));
 
         // 墙面识别 + 会话管理（T6 Wand / T11 命令族会注入这两个）
-        wallResolver = new WallResolver(16);  // canvas-max-maps 默认
-        sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog);
+        wallResolver = new WallResolver(16, this);  // canvas-max-maps 默认；plugin 提供 PDC namespace
+        wallRepo = new WallRepo(getLogger(), database.jdbi());
+        sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo);
 
         mapPacketSender = new MapPacketSender();
         // PlaceholderRenderer 也注入 CanvasProjector，用于"state pristine 回 placeholder"语义
@@ -122,6 +126,15 @@ public final class HikariCanvas extends JavaPlugin {
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry, getLogger());
         canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer, getLogger());
 
+        // M5.5：启动末尾把所有 walls 的像素 compose 回对应 MapView
+        try {
+            int restored = new WallRestorer(getLogger(), wallRepo, mapPool,
+                    canvasRenderer, compositor, placeholderRenderer).restore();
+            getLogger().info("Wall restore: " + restored + " wall(s) repainted");
+        } catch (Exception e) {
+            getLogger().log(java.util.logging.Level.WARNING, "WallRestorer failed (non-fatal)", e);
+        }
+
         // M3-T10 节流：5fps 投影 + 40msg/2s 输入限流（per session）
         projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector);
         rateLimiter = new SessionRateLimiter();
@@ -132,14 +145,9 @@ public final class HikariCanvas extends JavaPlugin {
         // 超时回收：ISSUED 15min（与 token TTL 一致）/ WS 断连 5min / ACTIVE idle 30min。
         // 扫描周期 30s，待 config.yml 接入后可调。
         sessionReaper = new SessionReaper(
-                this, sessionManager, frameDeployer, getLogger(),
+                this, sessionManager, getLogger(),
                 Duration.ofMinutes(15), Duration.ofMinutes(5), Duration.ofMinutes(30));
         sessionReaper.start(20L * 30);
-
-        getServer().getPluginManager().registerEvents(
-                new WandListener(this, sessionManager), this);
-        getServer().getPluginManager().registerEvents(
-                new FrameProtectionListener(frameDeployer), this);
 
         // M1 骨架：host/port 硬编码，后续任务从 config.yml 读取
         String host = "127.0.0.1";
@@ -147,14 +155,24 @@ public final class HikariCanvas extends JavaPlugin {
         String version = getPluginMeta().getVersion();
         String editorUrlTemplate = "http://" + host + ":" + port + "/?token={token}";
 
+        // WandListener 注册：需要 frameDeployer / tokenService / editorUrlTemplate 来支持
+        // "瞄已有 ItemFrame 二次确认 → open" 路径
+        getServer().getPluginManager().registerEvents(
+                new WandListener(this, sessionManager, frameDeployer, tokenService, editorUrlTemplate),
+                this);
+        getServer().getPluginManager().registerEvents(
+                new FrameProtectionListener(frameDeployer), this);
+
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
                 event.registrar().register(
                         new CanvasCommand(this, sessionManager, frameDeployer,
-                                tokenService, mapPool, database, editorUrlTemplate).build()));
+                                tokenService, mapPool, database, wallRepo,
+                                editorUrlTemplate).build()));
 
         webServer = new WebServer(getLogger(), host, port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
+                wallRepo, frameDeployer, this,
                 version, this::paintAllSessionMaps);
         webServer.start();
 

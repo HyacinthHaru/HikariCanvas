@@ -6,6 +6,7 @@ import moe.hikari.canvas.pool.PoolExhaustedException;
 import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.storage.AuditLog;
+import moe.hikari.canvas.storage.WallRepo;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 
@@ -48,6 +49,7 @@ public final class SessionManager {
     private final MapPool mapPool;
     private final WallResolver wallResolver;
     private final AuditLog auditLog;
+    private final WallRepo wallRepo;
 
     private final Map<String, Session> byId = new HashMap<>();
     private final Map<UUID, String> byPlayer = new HashMap<>();
@@ -61,11 +63,13 @@ public final class SessionManager {
         forgetHooks.add(hook);
     }
 
-    public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver, AuditLog auditLog) {
+    public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver,
+                          AuditLog auditLog, WallRepo wallRepo) {
         this.log = log;
         this.mapPool = mapPool;
         this.wallResolver = wallResolver;
         this.auditLog = auditLog;
+        this.wallRepo = wallRepo;
     }
 
     // ---------- SELECTING 阶段 ----------
@@ -100,6 +104,17 @@ public final class SessionManager {
     }
 
     /**
+     * M5-D8：清空已选 pos1/pos2，玩家在 SELECTING 状态下隐式 reselect。
+     * {@code /canvas edit} 在已 SELECTING 时调用此方法替代抛 AlreadyHasSession。
+     */
+    public synchronized boolean resetSelection(String sessionId) {
+        Session s = byId.get(sessionId);
+        if (s == null || s.state() != SessionState.SELECTING) return false;
+        s.clearPos();
+        return true;
+    }
+
+    /**
      * 对当前已记的 pos1 / pos2 调用 {@link WallResolver} 做预览（不改状态）。
      * 用于聊天栏实时回显。
      */
@@ -117,7 +132,10 @@ public final class SessionManager {
     // ---------- /canvas confirm ----------
 
     public sealed interface ConfirmResult {
-        record Ok(Session session, WallResolver.Result.Ok wall, List<Integer> mapIds) implements ConfirmResult {}
+        /** 新建路径：池借了新 map，调用方应 deploy ItemFrames。 */
+        record OkNewWall(Session session, WallResolver.Result.Ok wall, List<Integer> mapIds, String wallId) implements ConfirmResult {}
+        /** 复用路径：bind 现有 wall 的 map，ItemFrames 已存在不重新部署。 */
+        record OkExistingWall(Session session, WallResolver.Result.Ok wall, List<Integer> mapIds, String wallId) implements ConfirmResult {}
         record NotReady(String detail) implements ConfirmResult {}
         record WallFailed(WallResolver.Result.Failed reason) implements ConfirmResult {}
         record WallOccupied(String otherSessionId, UUID otherPlayer) implements ConfirmResult {}
@@ -125,17 +143,16 @@ public final class SessionManager {
     }
 
     /**
-     * {@code SELECTING → ISSUED}：解析墙面 → 校验排他锁 → 借池 → 挂锁。
-     * <b>必须主线程</b>（MapPool.reserve 可能 createMap）。
-     *
-     * <p>幂等容错：非 SELECTING 状态（已 ISSUED/ACTIVE/CLOSING）会返回
-     * {@link ConfirmResult.NotReady} 而不是抛异常——调用方 pattern-match 出"请先 cancel"。</p>
+     * {@code SELECTING → ISSUED}：解析墙面 → 排他锁 → 两分支：
+     * <ul>
+     *   <li><b>新建</b>（无 walls 行）：reserveForWall + create walls 行 → {@link ConfirmResult.OkNewWall}</li>
+     *   <li><b>现有</b>（walls 行存在）：bindToWall + load ProjectState → {@link ConfirmResult.OkExistingWall}</li>
+     * </ul>
+     * <b>必须主线程</b>（MapPool.reserveForWall 可能 createMap）。
      */
     public synchronized ConfirmResult confirm(String sessionId) {
         Session s = byId.get(sessionId);
-        if (s == null) {
-            return new ConfirmResult.NotReady("session not found");
-        }
+        if (s == null) return new ConfirmResult.NotReady("session not found");
         if (s.state() != SessionState.SELECTING) {
             return new ConfirmResult.NotReady(
                     "session already in state " + s.state() + " — use /canvas cancel to reset");
@@ -144,6 +161,7 @@ public final class SessionManager {
             return new ConfirmResult.NotReady("please click both corners first");
         }
 
+        // 走 WallResolver；M5.5 阶段 OCCUPIED 由 WallResolver 兼容处理（P3 完善）
         WallResolver.Result r = wallResolver.resolve(s.pos1(), s.face(), s.pos2(), s.face());
         if (r instanceof WallResolver.Result.Failed f) {
             return new ConfirmResult.WallFailed(f);
@@ -159,19 +177,45 @@ public final class SessionManager {
                     holder == null ? null : holder.playerUuid());
         }
 
+        var existing = wallRepo.loadByKey(key).orElse(null);
+        boolean hasFrames = wall.hasExistingFrames();
+        ProjectState ps;
         List<Integer> mapIds;
-        try {
-            mapIds = mapPool.reserve(sessionId, wall.mapCount());
-        } catch (PoolExhaustedException e) {
-            return new ConfirmResult.PoolExhausted(e.getMessage());
+        String wallId;
+        boolean newWall;
+
+        if (hasFrames && existing != null && !existing.mapIds().isEmpty()
+                && mapPool.bindToWall(existing.wallId(), existing.mapIds())) {
+            // 自家画框 + walls 行齐全 → 二次编辑路径
+            mapIds = existing.mapIds();
+            ps = existing.state();
+            wallId = existing.wallId();
+            newWall = false;
+        } else if (hasFrames || existing != null) {
+            // 不一致：要么画框存在但 walls 行缺失；要么 walls 行存在但 bbox 没画框。
+            // 拒绝建议玩家先 /canvas delete 重置或换地点。
+            return new ConfirmResult.NotReady(
+                    "this location has stale wall data; /canvas delete <id> to reset, or pick empty space");
+        } else {
+            // 全空 → 新建
+            ps = new ProjectState(wall.width(), wall.height());
+            wallId = wallRepo.create(key, ps, List.of(),
+                    wall.width(), wall.height(),
+                    s.playerUuid(), s.playerName());
+            try {
+                mapIds = mapPool.reserveForWall(wallId, wall.mapCount());
+            } catch (PoolExhaustedException e) {
+                wallRepo.delete(wallId);
+                return new ConfirmResult.PoolExhausted(e.getMessage());
+            }
+            wallRepo.updateMapIds(wallId, mapIds);
+            newWall = true;
         }
 
         s.wall(wall);
         s.mapIds(mapIds);
         s.wallKey(key);
-        // 构造初始 ProjectState + EditSession：服务端持有权威状态与 op 应用器。
-        // M3-T4 / T6 契约：EditSession 随 session 一起生灭；WS 上行 op 入口。
-        ProjectState ps = new ProjectState(wall.width(), wall.height());
+        s.wallId(wallId);
         s.projectState(ps);
         s.editSession(new EditSession(ps));
         s.state(SessionState.ISSUED);
@@ -179,13 +223,71 @@ public final class SessionManager {
 
         auditLog.record("SESSION_CONFIRM", s.playerUuid().toString(), s.playerName(),
                 sessionId, null,
-                Map.of("wall", Map.of(
-                        "world", wall.world().getName(),
-                        "origin", List.of(wall.minX(), wall.minY(), wall.minZ()),
-                        "w", wall.width(), "h", wall.height(),
-                        "facing", wall.facing().name()),
-                        "map_count", mapIds.size()));
-        return new ConfirmResult.Ok(s, wall, mapIds);
+                Map.of("wall_id", wallId, "new_wall", newWall, "map_count", mapIds.size(),
+                        "world", wall.world().getName()));
+
+        return newWall
+                ? new ConfirmResult.OkNewWall(s, wall, mapIds, wallId)
+                : new ConfirmResult.OkExistingWall(s, wall, mapIds, wallId);
+    }
+
+    /**
+     * `/canvas open <wall_id>` / wand 瞄已有 ItemFrame：直接从 CLOSED 进 ISSUED，绕过 SELECTING。
+     * 主线程调用。
+     */
+    public sealed interface OpenResult {
+        record Ok(Session session, WallRepo.Wall wall) implements OpenResult {}
+        record NotFound() implements OpenResult {}
+        record AlreadyHasSession(SessionState current) implements OpenResult {}
+        record WallOccupied(String otherSessionId, UUID otherPlayer) implements OpenResult {}
+        record BindFailed(String detail) implements OpenResult {}
+    }
+
+    public synchronized OpenResult open(UUID playerUuid, String playerName, String wallIdOrAlias) {
+        var w = wallRepo.loadById(wallIdOrAlias).orElse(
+                wallRepo.loadByAlias(wallIdOrAlias).orElse(null));
+        if (w == null) return new OpenResult.NotFound();
+
+        // M5.5 修：玩家若已绑同一 wall（浏览器关了但 session 还 ACTIVE）→ 幂等重用 + 重发 URL；
+        // 绑别的 wall 才报 AlreadyHasSession，避免"5min idle 等不及"的卡死。
+        String existingId = byPlayer.get(playerUuid);
+        if (existingId != null) {
+            Session existing = byId.get(existingId);
+            if (existing != null && w.wallId().equals(existing.wallId())) {
+                existing.touchActivity(System.currentTimeMillis());
+                return new OpenResult.Ok(existing, w);
+            }
+            return new OpenResult.AlreadyHasSession(existing == null ? null : existing.state());
+        }
+
+        WallKey key = w.key();
+        String holderId = byWall.get(key);
+        if (holderId != null) {
+            Session holder = byId.get(holderId);
+            return new OpenResult.WallOccupied(holderId,
+                    holder == null ? null : holder.playerUuid());
+        }
+        if (!mapPool.bindToWall(w.wallId(), w.mapIds())) {
+            return new OpenResult.BindFailed("map pool refused bind for " + w.wallId());
+        }
+
+        long now = System.currentTimeMillis();
+        String sessionId = UUID.randomUUID().toString();
+        Session s = new Session(sessionId, playerUuid, playerName, now);
+        s.wallKey(key);
+        s.wallId(w.wallId());
+        s.mapIds(w.mapIds());
+        s.projectState(w.state());
+        s.editSession(new EditSession(w.state()));
+        s.state(SessionState.ISSUED);
+
+        byId.put(sessionId, s);
+        byPlayer.put(playerUuid, sessionId);
+        byWall.put(key, sessionId);
+
+        auditLog.record("SESSION_OPEN", playerUuid.toString(), playerName, sessionId, null,
+                Map.of("wall_id", w.wallId()));
+        return new OpenResult.Ok(s, w);
     }
 
     // ---------- WS auth / ACTIVE ----------
@@ -212,53 +314,57 @@ public final class SessionManager {
         if (s != null) s.markWsDisconnected(System.currentTimeMillis());
     }
 
+    /**
+     * M5.5：WS op 成功后由 WebServer 调用，把当前 {@link ProjectState} 存 walls 表
+     * （仅 UPDATE project_json，不动 mapIds / wall_id）。非主线程调用即可。
+     */
+    public void persistWall(String sessionId) {
+        Session s;
+        synchronized (this) {
+            s = byId.get(sessionId);
+        }
+        if (s == null || s.wallId() == null || s.projectState() == null) return;
+        wallRepo.updateState(s.wallId(), s.projectState());
+    }
+
     // ---------- /canvas cancel ----------
 
-    /** 任何非 CLOSING 状态都可 cancel；归还池、释放锁。<b>可能触发 MapPool 操作，限主线程</b>。 */
+    /**
+     * 释放 session（不删 wall）。任何非 CLOSING 状态都可 cancel；不归还池（wall 一直占）；
+     * 仅清 byPlayer / byWall / forgetHooks。M5.5 起 wall 数据生命周期与 session 解耦。
+     */
     public synchronized void cancel(String sessionId, String reason) {
         Session s = byId.get(sessionId);
         if (s == null) return;
         if (s.state() == SessionState.CLOSING) return;
         s.state(SessionState.CLOSING);
 
-        if (s.mapIds() != null && !s.mapIds().isEmpty()) {
-            mapPool.returnToPool(sessionId);
-        }
+        // 不归还池！wall 一直占着 maps，等 /canvas delete 才释放
         releaseLocks(s);
         auditLog.record("SESSION_CANCEL", s.playerUuid().toString(), s.playerName(),
                 sessionId, null, Map.of("reason", reason == null ? "" : reason));
         forget(s);
     }
 
-    // ---------- /canvas commit ----------
-
-    public sealed interface CommitResult {
-        record Ok(List<Integer> mapIds, String world) implements CommitResult {}
-        record NotActive(SessionState current) implements CommitResult {}
-    }
-
     /**
-     * {@code ACTIVE → CLOSING → CLOSED}：MapPool 转 PERMANENT + 释放锁。
-     * SignRecord 的 DB 写入由调用方（M2-T11 commit 命令 / T10 WS op=commit）负责。
-     * <b>必须主线程</b>。
+     * `/canvas delete <wall_id> confirm`：彻底删除 wall（释放 map → FREE，删 walls 行）。
+     * 调用方负责拆 ItemFrames 和 cancel 任何活跃 session。
      */
-    public synchronized CommitResult commit(String sessionId, String signId) {
-        Session s = requireSession(sessionId);
-        if (s.state() != SessionState.ACTIVE && s.state() != SessionState.ISSUED) {
-            return new CommitResult.NotActive(s.state());
+    public synchronized boolean deleteWall(String wallId) {
+        if (wallId == null) return false;
+        // 若有活跃 session 持此 wall，先 cancel
+        for (Session s : new ArrayList<>(byId.values())) {
+            if (wallId.equals(s.wallId()) && s.state() != SessionState.CLOSING) {
+                s.state(SessionState.CLOSING);
+                releaseLocks(s);
+                forget(s);
+            }
         }
-        s.state(SessionState.CLOSING);
-
-        String worldName = s.wall().world().getName();
-        mapPool.promoteToPermanent(sessionId, signId, worldName);
-        releaseLocks(s);
-
-        auditLog.record("SESSION_COMMIT", s.playerUuid().toString(), s.playerName(),
-                sessionId, null,
-                Map.of("sign_id", signId, "map_count", s.mapIds().size()));
-        List<Integer> mapIds = s.mapIds();
-        forget(s);
-        return new CommitResult.Ok(mapIds, worldName);
+        List<Integer> released = mapPool.releaseWall(wallId);
+        wallRepo.delete(wallId);
+        auditLog.record("WALL_DELETE", null, null, null, null,
+                Map.of("wall_id", wallId, "released_maps", released.size()));
+        return true;
     }
 
     // ---------- 查询 ----------

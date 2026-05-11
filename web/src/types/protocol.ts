@@ -103,6 +103,10 @@ export interface ReadyPayload {
     protocolVersion: number;
     reconnectToken: string;
     projectState: ProjectState;
+    // M5.5：wall 元数据
+    wallId?: string;
+    alias?: string;
+    publishedAt?: number;
 }
 
 // ---------- §6.1 error ----------

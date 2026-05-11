@@ -18,24 +18,27 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * <b>M2 核心机制</b>——预览地图池。契约见 {@code docs/architecture.md §4}、
- * {@code docs/data-model.md §2.3}。
+ * <b>预览地图池</b>。契约见 {@code docs/architecture.md §4}、{@code docs/data-model.md §2.3}。
  *
- * <p>整个项目的"不让 idcounts.dat 膨胀"就靠这一层：编辑会话借出现有池中
- * {@link PoolState#FREE FREE} 地图并改像素，而不是每次都 {@code Bukkit.createMap}；
- * commit 时将 RESERVED 转 PERMANENT 从池抽走，同时 refill 补新 FREE 到 initial-size。</p>
+ * <p>整个项目的"不让 idcounts.dat 膨胀"就靠这一层：编辑期间借出现有池中
+ * {@link PoolState#FREE FREE} 地图刷像素，而不是每次都 {@code Bukkit.createMap}。
  *
- * <p>线程模型：所有公共方法 {@code synchronized(this)}，调用方不要在持锁状态下做
- * 主线程阻塞操作。涉及 Bukkit API（{@link Bukkit#createMap}、{@link MapView}）
- * 的调用**必须在 Bukkit 主线程**，因此以下方法不能从异步线程调用：
+ * <p><b>M5.5 起两态：</b> {@code FREE} / {@code RESERVED}。{@code RESERVED} 的 owner 统一
+ * 格式 {@code wall:<wall_id>}，wall 占的 map 一直占着直到 {@code /canvas delete} 显式释放。
+ * 原 PERMANENT 状态废止；{@code commit / promoteToPermanent} 整套移除。
+ *
+ * <p>线程模型：所有公共方法 {@code synchronized(this)}。涉及 Bukkit API（{@link Bukkit#createMap}、
+ * {@link MapView}）的调用必须在 Bukkit 主线程：
  * <ul>
  *   <li>{@link #initialize(World)}</li>
- *   <li>{@link #reserve(String, int)}（扩容时会 createMap）</li>
- *   <li>{@link #promoteToPermanent(String, String, String)}（触发 refill）</li>
+ *   <li>{@link #reserveForWall(String, int)}（扩容时会 createMap）</li>
  * </ul>
- * {@link #detectLeaks} 可以从异步调度器调用，它只读状态不碰 Bukkit API。</p>
+ * {@link #detectLeaks} 可异步调用（只读状态不碰 Bukkit API）。
  */
 public final class MapPool {
+
+    /** RESERVED 时 owner 字段的标准前缀。 */
+    public static final String WALL_OWNER_PREFIX = "wall:";
 
     private final Logger log;
     private final Jdbi jdbi;
@@ -70,13 +73,12 @@ public final class MapPool {
         Objects.requireNonNull(defaultWorld, "defaultWorld required for creating new maps");
 
         List<PooledMap> persisted = jdbi.withHandle(h -> h.createQuery(
-                        "SELECT map_id, state, reserved_by, sign_id, world, created_at, last_used_at "
+                        "SELECT map_id, state, reserved_by, world, created_at, last_used_at "
                                 + "FROM pool_maps")
                 .map((rs, ctx) -> new PooledMap(
                         rs.getInt("map_id"),
                         PoolState.valueOf(rs.getString("state")),
                         rs.getString("reserved_by"),
-                        rs.getString("sign_id"),
                         rs.getString("world"),
                         rs.getLong("created_at"),
                         rs.getLong("last_used_at")))
@@ -90,7 +92,6 @@ public final class MapPool {
         for (PooledMap rec : persisted) {
             MapView view = Bukkit.getMap(rec.mapId());
             if (view == null) {
-                // DB 里有记录但游戏里 map 消失（世界数据丢失等）→ 删 DB 行 + 告警，跳过
                 missingMapView++;
                 jdbi.useHandle(h -> h.execute("DELETE FROM pool_maps WHERE map_id = ?", rec.mapId()));
                 auditLog.record("POOL_ORPHAN_ROW", null, null, null, null,
@@ -98,8 +99,7 @@ public final class MapPool {
                 continue;
             }
             // 重启后 Paper 把默认 renderer 加回 MapView，会每 tick 写空白 canvas 覆盖
-            // 我们直接 push 的 MapData packet。解法：清默认 + 装我们自己的 renderer，
-            // 让 Paper tick 去 HikariCanvasRenderer 拿像素。
+            // 我们直接 push 的 MapData packet。解法：清默认 + 装我们自己的 renderer。
             new java.util.ArrayList<>(view.getRenderers()).forEach(view::removeRenderer);
             view.addRenderer(sharedRenderer);
 
@@ -117,15 +117,14 @@ public final class MapPool {
         }
 
         log.info(String.format(
-                "MapPool recovered %d entries (free=%d reserved=%d permanent=%d; missing MapView=%d; normalized=%d)",
+                "MapPool recovered %d entries (free=%d reserved=%d; missing MapView=%d; normalized=%d)",
                 recovered,
                 countByState(PoolState.FREE),
                 countByState(PoolState.RESERVED),
-                countByState(PoolState.PERMANENT),
                 missingMapView,
                 normalized));
 
-        // 补齐到 initial-size（只补 FREE；不动 RESERVED/PERMANENT 数量）
+        // 补齐到 initial-size（只补 FREE）
         int freeNow = freeQueue.size();
         if (freeNow < initialSize) {
             int need = initialSize - freeNow;
@@ -137,16 +136,16 @@ public final class MapPool {
                         "initial_size", initialSize, "max_size", maxSize));
     }
 
+    // ---------- M5.5 wall 模型主路径 ----------
+
     /**
-     * 借出 {@code count} 张 FREE → RESERVED，返回对应的 mapId 列表。
+     * 为新 wall 借出 {@code count} 张 FREE → RESERVED（owner = "wall:<wallId>"）。
      * 不够时按需 expand（到 max 为止）；超 max 抛 {@link PoolExhaustedException}。
      * <b>必须在主线程调用</b>（可能触发扩容 createMap）。
      */
-    public synchronized List<Integer> reserve(String sessionId, int count) {
-        Objects.requireNonNull(sessionId);
-        if (count <= 0) {
-            throw new IllegalArgumentException("count must be > 0");
-        }
+    public synchronized List<Integer> reserveForWall(String wallId, int count) {
+        Objects.requireNonNull(wallId);
+        if (count <= 0) throw new IllegalArgumentException("count must be > 0");
 
         int shortfall = count - freeQueue.size();
         if (shortfall > 0) {
@@ -161,95 +160,107 @@ public final class MapPool {
         }
 
         long now = System.currentTimeMillis();
+        String owner = WALL_OWNER_PREFIX + wallId;
         List<Integer> out = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             int mapId = freeQueue.poll();
             PooledMap cur = byId.get(mapId);
-            PooledMap updated = cur.withReserved(sessionId, now);
+            PooledMap updated = cur.withReserved(owner, now);
             byId.put(mapId, updated);
             persist(updated);
             out.add(mapId);
         }
-        auditLog.record("POOL_RESERVE", null, null, sessionId, null,
-                Map.of("count", count, "map_ids", out));
+        auditLog.record("POOL_RESERVE", null, null, null, null,
+                Map.of("wall_id", wallId, "count", count, "map_ids", out));
         return out;
     }
 
     /**
-     * 归还某 session 所持全部 RESERVED 地图 → FREE。
-     * {@code cancel} 语义；{@code commit} 走 {@link #promoteToPermanent}。
+     * 把已有 {@code mapIds} 绑定到 {@code wallId}（启动恢复 / `/canvas open` 路径用）。
+     * 接受的源状态：FREE 或已是该 wall 的 RESERVED；其它（被别 wall 持有）拒绝返回 false。
      */
-    public synchronized int returnToPool(String sessionId) {
+    public synchronized boolean bindToWall(String wallId, List<Integer> mapIds) {
+        Objects.requireNonNull(wallId);
+        if (mapIds == null || mapIds.isEmpty()) return false;
+        String owner = WALL_OWNER_PREFIX + wallId;
+        for (int id : mapIds) {
+            PooledMap m = byId.get(id);
+            if (m == null) return false;
+            if (m.state() == PoolState.RESERVED && !owner.equals(m.reservedBy())) return false;
+        }
         long now = System.currentTimeMillis();
-        List<Integer> affected = new ArrayList<>();
+        for (int id : mapIds) {
+            PooledMap m = byId.get(id);
+            if (m.state() == PoolState.FREE) freeQueue.remove(Integer.valueOf(id));
+            PooledMap upd = m.withReserved(owner, now);
+            byId.put(id, upd);
+            persist(upd);
+        }
+        auditLog.record("POOL_BIND_WALL", null, null, null, null,
+                Map.of("wall_id", wallId, "map_ids", mapIds));
+        return true;
+    }
+
+    /**
+     * 释放某 wall 持有的所有 RESERVED 地图 → FREE。{@code /canvas delete} 走此路径。
+     * Returns released map ids.
+     */
+    public synchronized List<Integer> releaseWall(String wallId) {
+        Objects.requireNonNull(wallId);
+        String owner = WALL_OWNER_PREFIX + wallId;
+        long now = System.currentTimeMillis();
+        List<Integer> released = new ArrayList<>();
         for (PooledMap m : new ArrayList<>(byId.values())) {
-            if (m.state() == PoolState.RESERVED && sessionId.equals(m.reservedBy())) {
+            if (m.state() == PoolState.RESERVED && owner.equals(m.reservedBy())) {
                 PooledMap freed = m.withFree(now);
                 byId.put(m.mapId(), freed);
                 freeQueue.offer(m.mapId());
                 persist(freed);
-                affected.add(m.mapId());
+                released.add(m.mapId());
             }
         }
-        if (!affected.isEmpty()) {
-            auditLog.record("POOL_RETURN", null, null, sessionId, null,
-                    Map.of("count", affected.size(), "map_ids", affected));
+        if (!released.isEmpty()) {
+            auditLog.record("POOL_RELEASE_WALL", null, null, null, null,
+                    Map.of("wall_id", wallId, "count", released.size(), "map_ids", released));
         }
-        return affected.size();
+        return released;
     }
 
     /**
-     * 提交：把某 session 的所有 RESERVED 转为 PERMANENT（绑到 signId + world），
-     * 从池中 <em>移出</em>（FREE 计数不含它），随后 refill 到 initialSize。
-     * <b>必须在主线程调用</b>（refill 会 createMap）。
+     * 泄漏检测：RESERVED 但 owner 非 "wall:*" 格式（旧版残留），或者 walls 表无对应行。
+     * 当前简化策略：扫所有 RESERVED；非 "wall:" 前缀直接归还（视为旧 session: / draft: 残留）。
+     * 后续可加"wall_id 不在 walls 表"的二次校验；调用方负责传 liveWallIds 集合。
      */
-    public synchronized List<Integer> promoteToPermanent(String sessionId, String signId, String world) {
-        Objects.requireNonNull(sessionId);
-        Objects.requireNonNull(signId);
-        Objects.requireNonNull(world);
-        long now = System.currentTimeMillis();
-        List<Integer> affected = new ArrayList<>();
-        for (PooledMap m : new ArrayList<>(byId.values())) {
-            if (m.state() == PoolState.RESERVED && sessionId.equals(m.reservedBy())) {
-                PooledMap perm = m.withPermanent(signId, world, now);
-                byId.put(m.mapId(), perm);
-                persist(perm);
-                affected.add(m.mapId());
-            }
-        }
-        auditLog.record("POOL_PROMOTE", null, null, sessionId, null,
-                Map.of("count", affected.size(), "sign_id", signId, "map_ids", affected));
-
-        // refill：把 FREE 数量补回 initialSize（PERMANENT 不算池内"可用"）
-        int freeNow = freeQueue.size();
-        if (freeNow < initialSize) {
-            int need = Math.min(initialSize - freeNow, maxSize - byId.size());
-            if (need > 0) {
-                expand(Bukkit.getWorlds().get(0), need);
-            }
-        }
-        return affected;
-    }
-
-    /**
-     * 泄漏检测：DB 显示 RESERVED 但其 sessionId 已不在 {@code liveSessions} 中
-     * → 强制归还 + 记 WARN。可从异步线程调用。
-     */
-    public synchronized int detectLeaks(java.util.Set<String> liveSessions) {
+    public synchronized int detectLeaks(java.util.Set<String> liveWallIds) {
         long now = System.currentTimeMillis();
         List<Integer> leaked = new ArrayList<>();
         for (PooledMap m : new ArrayList<>(byId.values())) {
-            if (m.state() == PoolState.RESERVED && !liveSessions.contains(m.reservedBy())) {
-                PooledMap freed = m.withFree(now);
-                byId.put(m.mapId(), freed);
-                freeQueue.offer(m.mapId());
-                persist(freed);
+            if (m.state() != PoolState.RESERVED) continue;
+            String owner = m.reservedBy();
+            if (owner == null) {
+                leaked.add(m.mapId());
+                continue;
+            }
+            if (!owner.startsWith(WALL_OWNER_PREFIX)) {
+                // 旧版 session: / draft: 残留，回收
+                leaked.add(m.mapId());
+                continue;
+            }
+            String wallId = owner.substring(WALL_OWNER_PREFIX.length());
+            if (liveWallIds != null && !liveWallIds.contains(wallId)) {
                 leaked.add(m.mapId());
             }
         }
+        for (int id : leaked) {
+            PooledMap m = byId.get(id);
+            PooledMap freed = m.withFree(now);
+            byId.put(id, freed);
+            freeQueue.offer(id);
+            persist(freed);
+        }
         if (!leaked.isEmpty()) {
             log.warning("MapPool leak detected: " + leaked.size() + " RESERVED maps "
-                    + "had no live session; force-returned to FREE. map_ids=" + leaked);
+                    + "had no live wall; force-returned to FREE. map_ids=" + leaked);
             auditLog.record("POOL_LEAK", null, null, null, null,
                     Map.of("count", leaked.size(), "map_ids", leaked));
         }
@@ -260,11 +271,10 @@ public final class MapPool {
         return new Stats(
                 byId.size(),
                 countByState(PoolState.FREE),
-                countByState(PoolState.RESERVED),
-                countByState(PoolState.PERMANENT));
+                countByState(PoolState.RESERVED));
     }
 
-    public record Stats(int total, int free, int reserved, int permanent) {}
+    public record Stats(int total, int free, int reserved) {}
 
     // ----- 内部实现 -----
 
@@ -272,11 +282,10 @@ public final class MapPool {
         long now = System.currentTimeMillis();
         for (int i = 0; i < count; i++) {
             MapView view = Bukkit.createMap(world);
-            // 清默认 renderer，装我们的
             new java.util.ArrayList<>(view.getRenderers()).forEach(view::removeRenderer);
             view.addRenderer(sharedRenderer);
             int id = view.getId();
-            PooledMap rec = new PooledMap(id, PoolState.FREE, null, null, null, now, now);
+            PooledMap rec = new PooledMap(id, PoolState.FREE, null, world.getName(), now, now);
             byId.put(id, rec);
             freeQueue.offer(id);
             persist(rec);
@@ -285,30 +294,19 @@ public final class MapPool {
                 Map.of("count", count, "world", world.getName(), "new_total", byId.size()));
     }
 
-    /**
-     * 修复启动时读到的记录中违反不变式的字段（例如 FREE 但 reserved_by 非空）。
-     * 不变式异常时降级为 FREE 并记告警。
-     */
     private PooledMap enforceInvariant(PooledMap rec, long now) {
         switch (rec.state()) {
             case FREE -> {
-                if (rec.reservedBy() != null || rec.signId() != null) {
-                    log.warning("pool_maps row for map_id=" + rec.mapId()
-                            + " is FREE but has reserved_by/sign_id; normalizing");
+                if (rec.reservedBy() != null) {
+                    log.warning("pool_maps row map_id=" + rec.mapId()
+                            + " is FREE but has reserved_by; normalizing");
                     return rec.withFree(now);
                 }
             }
             case RESERVED -> {
-                if (rec.reservedBy() == null || rec.signId() != null) {
-                    log.warning("pool_maps row for map_id=" + rec.mapId()
-                            + " is RESERVED but invariants broken; downgrading to FREE");
-                    return rec.withFree(now);
-                }
-            }
-            case PERMANENT -> {
-                if (rec.signId() == null || rec.reservedBy() != null) {
-                    log.warning("pool_maps row for map_id=" + rec.mapId()
-                            + " is PERMANENT but invariants broken; downgrading to FREE");
+                if (rec.reservedBy() == null) {
+                    log.warning("pool_maps row map_id=" + rec.mapId()
+                            + " is RESERVED with null owner; downgrading to FREE");
                     return rec.withFree(now);
                 }
             }
@@ -325,15 +323,14 @@ public final class MapPool {
     private void persist(PooledMap m) {
         try {
             jdbi.useHandle(h -> h.execute(
-                    "INSERT INTO pool_maps (map_id, state, reserved_by, sign_id, world, created_at, last_used_at) "
-                            + "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO pool_maps (map_id, state, reserved_by, world, created_at, last_used_at) "
+                            + "VALUES (?, ?, ?, ?, ?, ?) "
                             + "ON CONFLICT(map_id) DO UPDATE SET "
                             + "state = excluded.state, "
                             + "reserved_by = excluded.reserved_by, "
-                            + "sign_id = excluded.sign_id, "
                             + "world = excluded.world, "
                             + "last_used_at = excluded.last_used_at",
-                    m.mapId(), m.state().name(), m.reservedBy(), m.signId(), m.world(),
+                    m.mapId(), m.state().name(), m.reservedBy(), m.world(),
                     m.createdAt(), m.lastUsedAt()));
         } catch (Exception e) {
             log.log(Level.SEVERE, "Failed to persist pool_maps row for map_id=" + m.mapId(), e);

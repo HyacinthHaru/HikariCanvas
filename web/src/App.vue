@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useEventListener } from '@vueuse/core';
 import TopBar from '@/components/layout/TopBar.vue';
 import LeftTools from '@/components/layout/LeftTools.vue';
@@ -7,6 +7,7 @@ import CanvasView from '@/components/layout/CanvasView.vue';
 import RightPanel from '@/components/layout/RightPanel.vue';
 import StatusBar from '@/components/layout/StatusBar.vue';
 import LogDrawer from '@/components/layout/LogDrawer.vue';
+import HomePage from '@/components/HomePage.vue';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -16,10 +17,23 @@ const ui = useUiStore();
 const net = useNetworkStore();
 const project = useProjectStore();
 
+// M5.5：URL 没 token → 显示首页（HomePage 列出 walls）；有 token → 走编辑器
+const showHomePage = ref(false);
 const wsClient = createWsClient();
 
 onMounted(() => {
     const { token, source } = pickInitialToken();
+    if (!token) {
+        showHomePage.value = true;
+        net.pushLog('meta', 'no token; showing homepage');
+        // 仍暴露调试入口
+        (window as unknown as Record<string, unknown>).__hk = {
+            send: () => null,
+            get ws() { return null; },
+            get authenticated() { return false; },
+        };
+        return;
+    }
     net.pushLog('meta', `token source: ${source}`);
     wsClient.connect(token);
 
@@ -89,7 +103,8 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 </script>
 
 <template>
-  <div class="h-screen w-screen flex flex-col">
+  <HomePage v-if="showHomePage" />
+  <div v-else class="h-screen w-screen flex flex-col">
     <TopBar />
     <div class="flex-1 flex min-h-0 relative">
       <LeftTools v-if="!ui.leftCollapsed" />

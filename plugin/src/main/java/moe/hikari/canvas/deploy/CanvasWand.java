@@ -49,6 +49,14 @@ public final class CanvasWand {
         return item;
     }
 
+    /** 玩家背包里是否已有他自己的 Canvas Wand。 */
+    public static boolean hasWand(Player player, JavaPlugin plugin) {
+        for (ItemStack it : player.getInventory().getContents()) {
+            if (isWandFor(it, player.getUniqueId(), plugin)) return true;
+        }
+        return false;
+    }
+
     /** 当前物品是否是 {@code playerUuid} 的 Canvas Wand。 */
     public static boolean isWandFor(ItemStack item, UUID playerUuid, JavaPlugin plugin) {
         if (item == null || item.getType() != Material.GOLDEN_SHOVEL) return false;

@@ -18,6 +18,14 @@ const canvasEl = ref<HTMLCanvasElement | null>(null);
 const stageRef = ref<{ getNode(): unknown } | null>(null);
 const layerRef = ref<{ getNode(): unknown } | null>(null);
 const transformerRef = ref<{ getNode(): unknown } | null>(null);
+const editingId = ref<string | null>(null);
+const editingTextarea = ref<HTMLTextAreaElement | null>(null);
+
+const editingElement = computed(() => {
+    if (!editingId.value) return null;
+    const el = project.elementById(editingId.value);
+    return el && el.type === 'text' ? el : null;
+});
 
 const widthPx = computed(() => project.canvasPixelWidth || 256);
 const heightPx = computed(() => project.canvasPixelHeight || 256);
@@ -38,7 +46,9 @@ const transformerConfig = {
         'top-left', 'top-right', 'bottom-left', 'bottom-right',
         'middle-left', 'middle-right', 'top-center', 'bottom-center',
     ],
-    rotationSnaps: [0, 90, 180, 270],
+    // M5-D6：不再强制 snap 到 0/90/180/270，任意角度都可用；按 Shift 拖旋才 snap 到 15° 倍数
+    rotationSnaps: [] as number[],
+    rotationSnapTolerance: 5,
     borderStroke: '#60a5fa',
     anchorStroke: '#60a5fa',
     anchorFill: '#0b1120',
@@ -66,22 +76,49 @@ function hitConfig(e: Element) {
     };
 }
 
-function snapRotation(deg: number): number {
-    const n = ((Math.round(deg) % 360) + 360) % 360;
-    const choices = [0, 90, 180, 270];
-    let best = 0;
-    let bestDiff = Infinity;
-    for (const c of choices) {
-        const diff = Math.min(Math.abs(n - c), 360 - Math.abs(n - c));
-        if (diff < bestDiff) { bestDiff = diff; best = c; }
-    }
-    return best;
+function normalizeRotation(deg: number): number {
+    return ((Math.round(deg) % 360) + 360) % 360;
 }
 
 function onHitClick(ev: { cancelBubble?: boolean }, id: string): void {
     ui.selectElement(id);
     // 避免 click 冒到 stage 被解析成"空白"
     if (ev) ev.cancelBubble = true;
+}
+
+function onHitDblClick(ev: { cancelBubble?: boolean }, id: string): void {
+    const el = project.elementById(id);
+    if (!el || el.type !== 'text') return;
+    ui.selectElement(id);
+    editingId.value = id;
+    if (ev) ev.cancelBubble = true;
+    nextTick(() => editingTextarea.value?.focus());
+}
+
+function onEditInput(ev: Event) {
+    const el = editingElement.value;
+    if (!el) return;
+    const v = (ev.target as HTMLTextAreaElement).value;
+    // optimistic
+    (el as unknown as Record<string, unknown>).text = v;
+    ws.send('element.update', { elementId: el.id, patch: { text: v } });
+}
+
+function finishEditing() {
+    editingId.value = null;
+}
+
+function onEditKeydown(ev: KeyboardEvent) {
+    if (ev.key === 'Escape') {
+        ev.preventDefault();
+        finishEditing();
+        return;
+    }
+    // Enter = 完成；Shift+Enter = 换行（走默认行为）
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+        ev.preventDefault();
+        finishEditing();
+    }
 }
 
 function onStageMouseDown(ev: { target: { getStage?: () => unknown; getType?: () => string; hasName?: (n: string) => boolean } }): void {
@@ -118,6 +155,7 @@ interface TransformEvt { target: {
     rotation: () => number;
     scaleX(v: number): void; scaleY(v: number): void;
     width(v: number): void; height(v: number): void;
+    rotation(v: number): void;
 } }
 function onTransformEnd(ev: TransformEvt, id: string): void {
     const node = ev.target;
@@ -127,10 +165,13 @@ function onTransformEnd(ev: TransformEvt, id: string): void {
     const newH = Math.max(1, Math.round(node.height() * sy));
     const newX = Math.round(node.x() - newW / 2);
     const newY = Math.round(node.y() - newH / 2);
-    const newRot = snapRotation(node.rotation());
-    // 重置 scale 避免累乘；同时把新 w/h 写回 node 让 Transformer 重新 layout
+    const newRot = normalizeRotation(node.rotation());
+    // 重置 scale 避免累乘；同时把新 w/h 写回 node 让 Transformer 重新 layout。
+    // M5-D5 Bug 6 修：显式把 rotation 回写到 snap 值——否则 Konva 视觉停留在任意角度
+    // 而 element.rotation 已是 snap 后的 0/90/180/270，Preview 画布文字看起来「没转」。
     node.scaleX(1); node.scaleY(1);
     node.width(newW); node.height(newH);
+    node.rotation(newRot);
     const el = project.elementById(id);
     if (el) {
         el.x = newX; el.y = newY;
@@ -143,8 +184,9 @@ function onTransformEnd(ev: TransformEvt, id: string): void {
     }
 }
 
-// 重绘：state 变就重画 canvas
+// 重绘：state 或 editingId 变就重画 canvas
 watch(() => project.state, () => requestDraw(), { deep: true, immediate: true });
+watch(editingId, () => requestDraw());
 onMounted(() => {
     requestDraw();
     // 字体异步加载；@font-face 就绪后再重画一次确保用上真字形
@@ -165,7 +207,8 @@ function requestDraw(): void {
         if (el.height !== heightPx.value) el.height = heightPx.value;
         const ctx = el.getContext('2d');
         if (!ctx) return;
-        renderProjectState(ctx, project.state);
+        const hide = editingId.value ? new Set([editingId.value]) : undefined;
+        renderProjectState(ctx, project.state, hide);
     });
 }
 
@@ -286,12 +329,38 @@ function onMouseUpOrLeave() {
                 :config="hitConfig(el)"
                 @click="(ev: any) => onHitClick(ev, el.id)"
                 @tap="(ev: any) => onHitClick(ev, el.id)"
+                @dblclick="(ev: any) => onHitDblClick(ev, el.id)"
                 @dragend="(ev: any) => onDragEnd(ev, el.id)"
                 @transformend="(ev: any) => onTransformEnd(ev, el.id)"
               />
               <v-transformer ref="transformerRef" :config="transformerConfig" />
             </v-layer>
           </v-stage>
+          <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。
+               PreviewRenderer 会跳过 editingId 对应的 element，避免画布底层字形与 textarea 重影。 -->
+          <textarea
+            v-if="editingElement"
+            ref="editingTextarea"
+            class="hc-edit-textarea"
+            :value="editingElement.text"
+            :style="{
+              left: `${editingElement.x}px`,
+              top: `${editingElement.y}px`,
+              width: `${editingElement.w}px`,
+              height: `${editingElement.h}px`,
+              fontSize: `${editingElement.fontSize}px`,
+              fontFamily: editingElement.fontId,
+              color: editingElement.color,
+              textAlign: editingElement.align,
+              transform: `rotate(${editingElement.rotation}deg)`,
+              transformOrigin: 'center center',
+            }"
+            @input="onEditInput"
+            @blur="finishEditing"
+            @keydown="onEditKeydown"
+            @mousedown.stop
+            @dblclick.stop
+          />
         </div>
       </div>
     </div>
@@ -314,3 +383,24 @@ function onMouseUpOrLeave() {
     </div>
   </section>
 </template>
+
+<style scoped>
+/* 就地编辑 textarea：透明背景 + 仅 caret 可见边框，伪装成"直接在画布上写" */
+.hc-edit-textarea {
+    position: absolute;
+    margin: 0;
+    padding: 0;
+    border: 1px dashed var(--ring);
+    outline: none;
+    resize: none;
+    background: transparent;
+    line-height: 1;
+    overflow: hidden;
+    caret-color: var(--ring);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.hc-edit-textarea:focus {
+    border-style: solid;
+}
+</style>

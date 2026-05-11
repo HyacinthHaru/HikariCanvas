@@ -15,6 +15,11 @@ export const useProjectStore = defineStore('project', () => {
      */
     const lastAddedElementId = ref<string | null>(null);
 
+    // M5.5：wall 元数据（来自 ready payload + wall.* op 的 ack）
+    const wallId = ref<string | null>(null);
+    const alias = ref<string | null>(null);
+    const publishedAt = ref<number | null>(null);
+
     const canvasPixelWidth = computed(() =>
         state.value ? state.value.canvas.widthMaps * 128 : 0);
     const canvasPixelHeight = computed(() =>
@@ -22,6 +27,12 @@ export const useProjectStore = defineStore('project', () => {
 
     function setSnapshot(snapshot: ProjectState) {
         state.value = snapshot;
+    }
+
+    function setWallMeta(id: string | null, a: string | null, p: number | null) {
+        wallId.value = id;
+        alias.value = a;
+        publishedAt.value = p;
     }
 
     /**
@@ -49,8 +60,9 @@ export const useProjectStore = defineStore('project', () => {
     return {
         state,
         lastAddedElementId,
+        wallId, alias, publishedAt,
         canvasPixelWidth, canvasPixelHeight,
-        setSnapshot, applyPatch,
+        setSnapshot, setWallMeta, applyPatch,
         elementById,
     };
 });

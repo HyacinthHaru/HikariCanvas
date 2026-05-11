@@ -54,6 +54,7 @@ export const messages = {
             fitContent: '自适应',
             fitHeight: '按内容调高',
             fitWidth: '按内容调宽',
+            deleteTitle: '删除元素 (Del)',
         },
         layers: {
             header: '图层',
@@ -123,6 +124,7 @@ export const messages = {
             fitContent: 'Fit content',
             fitHeight: 'Fit height',
             fitWidth: 'Fit width',
+            deleteTitle: 'Delete element (Del)',
         },
         layers: {
             header: 'Layers',

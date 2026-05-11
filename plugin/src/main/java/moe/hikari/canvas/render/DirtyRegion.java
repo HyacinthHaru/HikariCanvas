@@ -52,13 +52,17 @@ public record DirtyRegion(int x, int y, int w, int h) {
             h += pad[1] + pad[3];
         }
 
-        // Step 2：rotation 外接
-        int rot = e.rotation();
-        if (rot == 90 || rot == 270) {
+        // Step 2：rotation 外接。M5-D6 放开任意角度，按旋转后四角外接矩形算。
+        int rot = ((e.rotation() % 360) + 360) % 360;
+        if (rot != 0 && rot != 180) {
+            double rad = Math.toRadians(rot);
+            double cos = Math.abs(Math.cos(rad));
+            double sin = Math.abs(Math.sin(rad));
+            int newW = (int) Math.ceil(w * cos + h * sin);
+            int newH = (int) Math.ceil(w * sin + h * cos);
             int cx = x + w / 2;
             int cy = y + h / 2;
-            int side = Math.max(w, h);
-            return new DirtyRegion(cx - side / 2, cy - side / 2, side, side);
+            return new DirtyRegion(cx - newW / 2, cy - newH / 2, newW, newH);
         }
         return new DirtyRegion(x, y, w, h);
     }

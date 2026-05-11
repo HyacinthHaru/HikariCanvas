@@ -10,6 +10,8 @@ import { useProjectStore } from '@/stores/project';
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
+/** 重连退避阶梯（秒）。超过最后一档就停。 */
+const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
 
 /**
  * WS 协议客户端单例封装（M5-A3）。
@@ -24,6 +26,12 @@ export class WsClient {
     private ws: WebSocket | null = null;
     private seq = 0;
     private heartbeatTimer: number | null = null;
+    private reconnectTimer: number | null = null;
+    private reconnectAttempt = 0;
+    /** 最近一次成功连接时用的 token；onClose 触发重连时复用。 */
+    private lastToken: string | null = null;
+    /** 用户主动关闭或 auth 已判死时置 true，阻止自动重连。 */
+    private stopped = false;
 
     constructor(private readonly url: string) {}
 
@@ -40,6 +48,9 @@ export class WsClient {
             net.pushLog('err', net.lastError);
             return;
         }
+        this.lastToken = token;
+        this.stopped = false;
+        this.clearReconnect();
         net.connecting = true;
         net.lastError = null;
         net.pushLog('meta', `connecting ${this.url}`);
@@ -49,6 +60,7 @@ export class WsClient {
             this.ws = sock;
             net.connected = true;
             net.connecting = false;
+            this.reconnectAttempt = 0;
             net.pushLog('meta', 'ws open');
             this.sendAuth(token);
         });
@@ -60,6 +72,8 @@ export class WsClient {
     }
 
     close(reason = 'client close'): void {
+        this.stopped = true;
+        this.clearReconnect();
         this.stopHeartbeat();
         this.ws?.close(1000, reason);
     }
@@ -133,8 +147,9 @@ export class WsClient {
                 this.handleError(env.payload as ErrorPayload);
                 break;
             case 'pong':
+                break;
             case 'ack':
-                // 无特殊动作；已在日志里
+                this.handleAck(env.payload);
                 break;
             default:
                 net.pushLog('meta', `unhandled op: ${env.op}`);
@@ -152,6 +167,11 @@ export class WsClient {
             h: payload.projectState.canvas.heightMaps,
         };
         project.setSnapshot(payload.projectState);
+        project.setWallMeta(
+            payload.wallId ?? null,
+            payload.alias ?? null,
+            payload.publishedAt ?? null,
+        );
         // rotate 过来的新 token 存 sessionStorage 供断线重连
         if (payload.reconnectToken) {
             try {
@@ -166,6 +186,22 @@ export class WsClient {
 
     private handleSnapshot(payload: StateSnapshotPayload): void {
         useProjectStore().setSnapshot(payload.projectState);
+    }
+
+    /** ack payload 可能含 wall.* op 的副作用（publishedAt / alias）；同步进 store。 */
+    private handleAck(payload: unknown): void {
+        if (!payload || typeof payload !== 'object') return;
+        const project = useProjectStore();
+        const p = payload as { publishedAt?: unknown; alias?: unknown };
+        if (typeof p.publishedAt === 'number') {
+            project.publishedAt = p.publishedAt;
+        } else if ('publishedAt' in p && p.publishedAt === null) {
+            project.publishedAt = null;
+        }
+        // wall.unpublish 的 ack 是空 payload + Map.of() —— 用 null 兜底，上层调用时再清
+        if (typeof p.alias === 'string') {
+            project.alias = p.alias;
+        }
     }
 
     private handlePatch(payload: StatePatchPayload): void {
@@ -183,21 +219,70 @@ export class WsClient {
     private onClose(ev: CloseEvent): void {
         const net = useNetworkStore();
         this.stopHeartbeat();
+        this.ws = null;
         net.closeCode = ev.code;
         net.reset();
-        if (this.ws === null || !this.wasActive()) {
-            this.ws = null;
-        }
         net.pushLog('meta', `ws closed code=${ev.code}${ev.reason ? ` reason="${ev.reason}"` : ''}`);
-        if (ev.code === 4001) {
-            net.lastError = 'auth failed (WS close 4001)';
-        } else if (!net.lastError) {
-            net.lastError = `disconnected (code ${ev.code})`;
+
+        // M5-D7：按 close code 判断是否重连
+        // - 1000 (normal) / 4001 (auth failed) / 4008 (rate limit) → 不重连
+        // - 1006 (server down) / 1011 (server error) / 1001 (going away) → 退避重连
+        const terminal = ev.code === 1000 || ev.code === 4001 || ev.code === 4008;
+        if (this.stopped || terminal) {
+            if (ev.code === 4001) {
+                net.lastError = '认证失败 — token 已失效，请在游戏里重新 /canvas edit';
+                this.clearStoredToken();
+            } else if (ev.code === 1000) {
+                // 主动关闭，不刷红
+            } else {
+                net.lastError = `连接关闭 (code ${ev.code})`;
+            }
+            return;
+        }
+
+        this.scheduleReconnect();
+    }
+
+    private scheduleReconnect(): void {
+        const net = useNetworkStore();
+        if (this.reconnectAttempt >= RECONNECT_BACKOFF_S.length) {
+            net.lastError = '服务器长时间不可达，请刷新页面或在游戏里重新 /canvas edit';
+            return;
+        }
+        const delay = RECONNECT_BACKOFF_S[this.reconnectAttempt] * 1000;
+        this.reconnectAttempt += 1;
+        net.lastError = `连接断开，${delay / 1000}s 后重试（第 ${this.reconnectAttempt} 次）`;
+        net.pushLog('meta', `reconnect scheduled in ${delay}ms`);
+        this.reconnectTimer = window.setTimeout(() => {
+            this.reconnectTimer = null;
+            if (this.stopped) return;
+            const token = this.pickTokenForReconnect();
+            if (!token) {
+                net.lastError = 'token 丢失，请刷新页面或重新 /canvas edit';
+                return;
+            }
+            this.connect(token);
+        }, delay);
+    }
+
+    private clearReconnect(): void {
+        if (this.reconnectTimer !== null) {
+            window.clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
         }
     }
 
-    private wasActive(): boolean {
-        return this.ws !== null && this.ws.readyState !== WebSocket.CLOSED;
+    private pickTokenForReconnect(): string | null {
+        // 优先 sessionStorage（服务器 rotate 后的 reconnect token）；退回当前 lastToken
+        try {
+            const stored = sessionStorage.getItem(RECONNECT_TOKEN_KEY);
+            if (stored) return stored;
+        } catch { /* ignore */ }
+        return this.lastToken;
+    }
+
+    private clearStoredToken(): void {
+        try { sessionStorage.removeItem(RECONNECT_TOKEN_KEY); } catch { /* ignore */ }
     }
 }
 

@@ -1,11 +1,15 @@
 import type { ProjectState, Element, RectElement, TextElement, Glow } from '@/types/protocol';
-import { layoutText, type PositionedGlyph } from './TextLayout';
+import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
  * 契约 docs/rendering.md §4 / §5（效果渲染顺序：glow → shadow → stroke → fill）。
  */
-export function renderProjectState(ctx: CanvasRenderingContext2D, state: ProjectState | null): void {
+export function renderProjectState(
+    ctx: CanvasRenderingContext2D,
+    state: ProjectState | null,
+    hideIds?: Set<string>,
+): void {
     const widthPx = (state?.canvas.widthMaps ?? 1) * 128;
     const heightPx = (state?.canvas.heightMaps ?? 1) * 128;
 
@@ -20,6 +24,7 @@ export function renderProjectState(ctx: CanvasRenderingContext2D, state: Project
 
     for (const e of state.elements) {
         if (!e.visible) continue;
+        if (hideIds && hideIds.has(e.id)) continue;
         drawElement(ctx, e);
     }
 }
@@ -55,17 +60,24 @@ function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
 
 // ---------- 字体元数据（与后端 FontRegistry.Metadata 镜像，判断 pixelated + nativeSize） ----------
 
-interface FontMeta { pixelated: boolean; nativeSize: number; }
-const FONT_META: Record<string, FontMeta> = {
-    ark_pixel: { pixelated: true, nativeSize: 12 },
-    source_han_sans: { pixelated: false, nativeSize: 0 },
+export interface FontMeta { displayName: string; pixelated: boolean; nativeSize: number; }
+export const FONT_META: Record<string, FontMeta> = {
+    ark_pixel: { displayName: 'Ark Pixel 12px（像素）', pixelated: true, nativeSize: 12 },
+    source_han_sans: { displayName: '思源黑体 SC Regular', pixelated: false, nativeSize: 0 },
 };
 
-function shouldUseNearestNeighbor(family: string, targetSize: number): boolean {
+/**
+ * M5-D4 修 Bug 3/4：放宽为 <b>只要是像素字体就走 NN 路径</b>。
+ *
+ * <p>原实现要求 {@code targetSize} 是 {@code nativeSize}(12) 的 ≥2 整数倍，否则 fallback
+ * 到 {@code ctx.fillText} —— 浏览器在非整数倍下会对 TTF 嵌入位图插值放大得到灰阶像素，
+ * 看起来就像系统黑体而非点阵（Bug 3），且 ascent/descent 视觉上溢出 lineHeight 造成叠字
+ * 视觉（Bug 4）。放宽后任何 {@code fontSize} 都用 {@code nativeSize=12} 画 mask → NEAREST
+ * {@code drawImage} 到 target，保持纯黑白方块。Java 侧同步放宽。</p>
+ */
+function shouldUseNearestNeighbor(family: string): boolean {
     const meta = FONT_META[family];
-    if (!meta?.pixelated || meta.nativeSize <= 0) return false;
-    const scale = Math.floor(targetSize / meta.nativeSize);
-    return scale >= 2 && scale * meta.nativeSize === targetSize;
+    return !!(meta?.pixelated && meta.nativeSize > 0);
 }
 
 // ---------- Text：4 层 glow → shadow → stroke → fill ----------
@@ -82,7 +94,7 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (glyphs.length === 0) return;
 
     const fx = t.effects;
-    const useNN = shouldUseNearestNeighbor(family, t.fontSize);
+    const useNN = shouldUseNearestNeighbor(family);
     const nativeSize = useNN ? FONT_META[family].nativeSize : 0;
     const nativeSpec = useNN ? `${nativeSize}px "${family}"` : '';
 
@@ -120,28 +132,28 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
 }
 
 /**
- * M5-C5 像素字体最近邻缩放。用 nativeSize 字号的 subcanvas 画 mask →
- * {@code imageSmoothingEnabled=false} drawImage 缩放到 target 尺寸。
- * 位置锚点与 {@link drawGlyphFill} 一致（TextLayout 按 target size 排字）。
+ * M5-D6 Bug 7 终版：扫 mask 实际字形边界 + 手工 per-pixel NN。
+ *
+ * <p>根因：ark_pixel TTF 的 {@code advance('W')=6} 但 Chromium 画 W 字形时会把可见像素
+ * 画到 0..11（超出 advance 的 side-bearing）。前几版用 {@code nativeChW=6} 作为采样宽
+ * 只取字形左半 → W 显示为 V。改为：<br>
+ * 1. mask 画到 {@code nativeSize×nativeSize} 全宽；<br>
+ * 2. 扫非透明像素找最右边界 {@code actualW}（字形真实宽度）；<br>
+ * 3. dst 宽 = {@code round(actualW * targetSize / nativeSize)}；<br>
+ * 4. 手工 NN 填 dst（Chromium/AWT 的 drawImage NN 在分数比下都丢源像素列，必须自写循环）；<br>
+ * 5. drawImage 1:1 到主 ctx 支持 alpha blend + rotation。<br>
+ * 字形永远完整；layout cursor 仍按 canonicalCharWidth 推，字形会略溢出或欠宽 cell，
+ * 但绝不破损。Java 侧同策略。</p>
  */
 function drawPixelatedGlyph(ctx: CanvasRenderingContext2D, g: PositionedGlyph,
                             nativeSpec: string, targetSize: number, nativeSize: number,
                             color: string, dx: number, dy: number): void {
-    // 先用主 ctx 切到 native font 测 nativeChW（但不污染后续；下面会复原）
-    const savedFont = ctx.font;
-    ctx.font = nativeSpec;
-    const nativeChW = Math.max(1, Math.round(ctx.measureText(g.ch).width));
-    // 目标尺寸（TextLayout 用 target-size 排字；这里按 target chW 贴合）
-    ctx.font = `${targetSize}px "${extractFamily(nativeSpec)}"`;
-    const targetChW = Math.max(1, Math.round(ctx.measureText(g.ch).width));
-    ctx.font = savedFont;
+    const targetAscent = Math.round(targetSize * ASCENT_RATIO);
+    const nativeAsc = Math.round(nativeSize * ASCENT_RATIO);
 
-    const targetAscent = Math.round(targetSize * 0.8);
-    const nativeAsc = Math.round(nativeSize * 0.8);
-
-    // subcanvas：用 nativeSize 字体画 mask（关 AA）
+    // 1) mask 全宽
     const sub = document.createElement('canvas');
-    sub.width = nativeChW;
+    sub.width = nativeSize;
     sub.height = nativeSize;
     const sg = sub.getContext('2d');
     if (!sg) return;
@@ -153,23 +165,52 @@ function drawPixelatedGlyph(ctx: CanvasRenderingContext2D, g: PositionedGlyph,
     sg.fillStyle = color;
     sg.fillText(g.ch, 0, nativeAsc);
 
-    const prevSmoothing = ctx.imageSmoothingEnabled;
-    ctx.imageSmoothingEnabled = false;
+    // 2) 扫字形实际宽度
+    const maskImg = sg.getImageData(0, 0, nativeSize, nativeSize);
+    let maxCol = -1;
+    for (let y = 0; y < nativeSize; y++) {
+        for (let x = 0; x < nativeSize; x++) {
+            if (maskImg.data[(y * nativeSize + x) * 4 + 3] > 0 && x > maxCol) maxCol = x;
+        }
+    }
+    const actualW = Math.max(1, maxCol + 1);
+
+    // 3) dst 尺寸：等比放大 actualW
+    const dstW = Math.max(1, Math.round(actualW * targetSize / nativeSize));
+    const dstH = targetSize;
+
+    // 4) 手工 NN 填 dst（只采样 mask 左 actualW 列）
+    const out = document.createElement('canvas');
+    out.width = dstW;
+    out.height = dstH;
+    const og = out.getContext('2d');
+    if (!og) return;
+    const dstImg = og.createImageData(dstW, dstH);
+    for (let ty = 0; ty < dstH; ty++) {
+        const sy = Math.min(nativeSize - 1, Math.floor(ty * nativeSize / dstH));
+        const srcRowBase = sy * nativeSize * 4;
+        for (let tx = 0; tx < dstW; tx++) {
+            const sx = Math.min(actualW - 1, Math.floor(tx * actualW / dstW));
+            const si = srcRowBase + sx * 4;
+            const di = (ty * dstW + tx) * 4;
+            dstImg.data[di]     = maskImg.data[si];
+            dstImg.data[di + 1] = maskImg.data[si + 1];
+            dstImg.data[di + 2] = maskImg.data[si + 2];
+            dstImg.data[di + 3] = maskImg.data[si + 3];
+        }
+    }
+    og.putImageData(dstImg, 0, 0);
+
+    // 5) 贴到主画布
     if (g.rotated) {
         ctx.save();
         ctx.translate(g.x + dx, g.baselineY + dy);
         ctx.rotate(Math.PI / 2);
-        ctx.drawImage(sub, -targetChW / 2, targetAscent - targetSize / 2, targetChW, targetSize);
+        ctx.drawImage(out, -dstW / 2, targetAscent - targetSize / 2);
         ctx.restore();
     } else {
-        ctx.drawImage(sub, g.x + dx, g.baselineY + dy - targetAscent, targetChW, targetSize);
+        ctx.drawImage(out, g.x + dx, g.baselineY + dy - targetAscent);
     }
-    ctx.imageSmoothingEnabled = prevSmoothing;
-}
-
-function extractFamily(fontSpec: string): string {
-    const m = /"([^"]+)"/.exec(fontSpec);
-    return m ? m[1] : 'ark_pixel';
 }
 
 function drawGlyphFill(ctx: CanvasRenderingContext2D, g: PositionedGlyph,

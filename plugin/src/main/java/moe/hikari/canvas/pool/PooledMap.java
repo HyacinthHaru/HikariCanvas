@@ -3,25 +3,23 @@ package moe.hikari.canvas.pool;
 /**
  * 池中一张地图的内存视图（{@code pool_maps} 表一行的值对象）。
  * 不可变——状态迁移通过 {@link MapPool} 重建新实例并更新索引。
+ *
+ * <p>M5.5：删除 {@code signId} 字段（PERMANENT 状态废止）。{@code reservedBy} 在 RESERVED 时
+ * 格式为 {@code wall:<wall_id>}。</p>
  */
 public record PooledMap(
         int mapId,
         PoolState state,
-        String reservedBy,   // RESERVED 时的 sessionId，其它状态为 null
-        String signId,       // PERMANENT 时的 signRecord id，其它状态为 null
-        String world,        // PERMANENT 时冗余所在世界，其它状态为 null
+        String reservedBy,   // RESERVED 时的 owner（"wall:<id>"），FREE 时 null
+        String world,        // 创建时的所在世界
         long createdAt,
         long lastUsedAt
 ) {
     public PooledMap withFree(long now) {
-        return new PooledMap(mapId, PoolState.FREE, null, null, null, createdAt, now);
+        return new PooledMap(mapId, PoolState.FREE, null, world, createdAt, now);
     }
 
-    public PooledMap withReserved(String sessionId, long now) {
-        return new PooledMap(mapId, PoolState.RESERVED, sessionId, null, null, createdAt, now);
-    }
-
-    public PooledMap withPermanent(String signId, String world, long now) {
-        return new PooledMap(mapId, PoolState.PERMANENT, null, signId, world, createdAt, now);
+    public PooledMap withReserved(String owner, long now) {
+        return new PooledMap(mapId, PoolState.RESERVED, owner, world, createdAt, now);
     }
 }
