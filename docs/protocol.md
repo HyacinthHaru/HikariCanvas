@@ -17,7 +17,7 @@
 | 编码 | UTF-8 JSON 文本帧 |
 | 压缩 | `permessage-deflate`（必开启） |
 | 心跳 | WS ping/pong，30s 间隔 |
-| 最大消息尺寸 | 1 MiB（commit 时可能接近上限） |
+| 最大消息尺寸 | 1 MiB（snapshot 时可能接近上限） |
 
 二进制帧保留不使用。调色板像素数据走 MC 原生 map packet，不经 WS。
 
@@ -103,7 +103,7 @@ GET /api/session/:token HTTP/1.1
 
 ### 3.4 断开与重连
 
-- **客户端主动关闭**：先发 `cancel`（希望抛弃）或 `commit`（希望保存），再关闭。不发直接关也等同 `disconnect`。
+- **客户端主动关闭**：先发 `cancel`（释放 session；wall 数据保留）再关闭。不发直接关也等同 `disconnect`。M5.5 起 `commit` op 废止——保存通过每次 `element.*` op 的隐式 auto-save（walls 表 UPDATE）实现，不需要客户端显式发包。
 - **网络断连**：前端自动重连，5 秒、10 秒、30 秒阶梯；重新握手时复用同一 token（仍在 TTL 内）
 - **服务端超时断开**：5 分钟无消息 → 踢连 + 会话进入 CLOSING
 - **协议版本不匹配**：close 码 `4002`
@@ -148,7 +148,7 @@ S → C:  { op: "error", id: "c-17",
 | --- | --- | --- |
 | `state.snapshot` | S→C | 完整工程状态（握手后 + undo 后） |
 | `state.patch` | S→C | 增量补丁（JSON Patch RFC 6902 子集） |
-| `project.load` | C→S | 载入既有 SignRecord 进行二次编辑 |
+| `project.load` | C→S | 载入既有 wall 进行二次编辑（M5.5 起：`/canvas open` 已经在握手前完成 load，此 op 实际可能不再需要，待 P2 实施时确认） |
 
 ### 5.3 元素编辑类
 
@@ -182,8 +182,12 @@ S → C:  { op: "error", id: "c-17",
 
 | op | 方向 | payload |
 | --- | --- | --- |
-| `commit` | C→S | `{}` - 服务器回 `ack { signId }` 后关闭 |
-| `cancel` | C→S | `{}` - 服务器回 `ack` 后关闭 |
+| `cancel` | C→S | `{}` - 服务器回 `ack` 后关闭 session（wall 数据保留） |
+| `wall.publish` | C→S | `{}` - 服务器 UPDATE walls.published_at；返回 `ack { publishedAt }`；session 不关闭 |
+| `wall.unpublish` | C→S | `{}` - 服务器 UPDATE walls.published_at=NULL；返回 `ack`；session 不关闭 |
+| `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；冲突返回 error `ALIAS_TAKEN`；session 不关闭 |
+
+> M5.5 起 `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
 
 ### 5.7 服务端主动推送
 
@@ -223,13 +227,15 @@ S → C:  { op: "error", id: "c-17",
 | `INVALID_ELEMENT` | 元素 id 不存在或属性非法 | ❌ |
 | `PERMISSION_DENIED` | 权限不足 | ❌ |
 | `SESSION_CLOSED` | 会话已关闭 | ❌ |
+| `ALIAS_TAKEN` | wall.alias 已被其他 wall 占用 | ❌ |
+| `WALL_NOT_FOUND` | wall.* op 但当前 session 没绑定 wall（不应发生） | ❌ |
 | `INTERNAL_ERROR` | 服务器内部错误 | 视情况 |
 
 ### 6.2 WS Close 码
 
 | code | 说明 |
 | --- | --- |
-| 1000 | 正常关闭（commit / cancel 后） |
+| 1000 | 正常关闭（cancel 后或客户端主动断） |
 | 1008 | 策略违反（限流反复触发） |
 | 1011 | 服务端错误 |
 | 4001 | 认证失败 |
@@ -337,15 +343,25 @@ type RectElement = BaseElement & {
 前端继续快速改色、改字号……每个 op 走同样流程。
 ```
 
-### 8.3 提交
+### 8.3 发布与终结（M5.5）
 
 ```
-前端 ─── { op: "commit", id: "c-42" }
+（编辑期间任何 element.* op 都已 auto-save 到 walls 表，不需要显式 commit）
+
+# 玩家点击"发布"按钮
+前端 ─── { op: "wall.publish", id: "c-42" }
                                            ← { op: "ack", id: "c-42",
-                                               payload: { signId: "sg-xyz" } }
-（服务端执行 commit 流程：转 PERMANENT、写 SQLite、补池）
+                                               payload: { publishedAt: 1714200000000 } }
+（服务端 UPDATE walls.published_at；ItemFrame PDC 写 published_at；session 仍 ACTIVE）
+
+# 玩家关闭浏览器
+前端 ─── { op: "cancel", id: "c-99" }
+                                           ← { op: "ack", id: "c-99" }
                                            ← WS close code 1000
+（服务端释放 session/wand；wall 数据 + ItemFrame 完整保留，下次可 /canvas open <wall_id> 继续）
 ```
+
+> M5.5 前的 `commit` op 流程（转 PERMANENT、写 sign_records、补池、close 1000）已废止。
 
 ---
 
@@ -384,7 +400,8 @@ type RectElement = BaseElement & {
 ## 12. 未决问题
 
 - [ ] 是否支持 batch op（多个操作打包一次发送，减少延迟）
-- [ ] 历史 `history.mark` 的 label 是否持久化到 SignRecord
+- [ ] 历史 `history.mark` 的 label 是否持久化到 walls.project_json（M5.5 决策：当前 walls 不存 history，cancel 后 redo/undo 栈丢失；如要保留可 M7 加 `walls.history_json`）
 - [ ] 画布 resize 是否允许缩小（需处理越界元素）
 - [ ] template.apply 是否支持保留现有自由元素（merge 语义）
-- [ ] 多人协作（v2）时的协议扩展（是否需要 CRDT）
+- [ ] 多人协作（v2）时的协议扩展（是否需要 CRDT）—— M5.5 明确**不做**，`byWall` 排他锁阻止
+- [ ] **M5.5 引入**：ready payload 加 `wallId` / `alias` / `publishedAt` 让前端展示画 ID 与状态（前端首页查询用）

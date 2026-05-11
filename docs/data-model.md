@@ -1,9 +1,11 @@
 # 数据模型
 
-**状态：** 立项稿 v0.1 · 2026-04-19
+**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27
 **适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式、迁移策略
 
 本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。
+
+> **M5.5 重构（2026-04-27）**：合并 `drafts` + `sign_records` → 单一 `walls` 表；`pool_maps.state` 由三态收为两态（FREE/RESERVED）；废止 commit 流程，新增 `published_at` 标签。M5.5 之前的 V001-V004 由 V005 整体重置（见 §6.2）。
 
 ---
 
@@ -11,9 +13,8 @@
 
 | 存储位置 | 内容 | 生命周期 |
 | --- | --- | --- |
-| SQLite `data.db` | 池元信息、招牌记录、审计日志、模板统计 | 跨服务器重启；随世界快照备份 |
-| `MapView` PDC | 地图 owner、signId 标签、用途区分 | 随世界文件；MC 本体持久化 |
-| `ItemFrame` PDC | sessionId / signId 标签 | 随世界文件 |
+| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计 | 跨服务器重启；随世界快照备份 |
+| `ItemFrame` PDC | `wall_id` / `slot` / `published_at` 标签 | 随世界文件 |
 | 文件：`templates/*.yml` | 模板定义 | 人工管理 |
 | 文件：`user-templates/<uuid>/` | 玩家上传模板（v1.x） | 按玩家 uuid 组织 |
 | 文件：`fonts/*.ttf` / `*.woff2` | 字体 | 人工管理 |
@@ -52,58 +53,71 @@ CREATE TABLE schema_version (
 ```sql
 CREATE TABLE pool_maps (
   map_id        INTEGER PRIMARY KEY,       -- MC map ID
-  state         TEXT NOT NULL,             -- 'FREE' | 'RESERVED' | 'PERMANENT'
-  reserved_by   TEXT,                      -- session UUID (state=RESERVED 时)
-  sign_id       TEXT,                      -- SignRecord.id (state=PERMANENT 时)
+  state         TEXT NOT NULL,             -- 'FREE' | 'RESERVED'  (M5.5 起两态)
+  reserved_by   TEXT,                      -- 'wall:<wall_id>' (state=RESERVED 时)
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER NOT NULL,
-  world         TEXT                       -- PERMANENT 时冗余记录所在世界，便于清理
+  world         TEXT                       -- 创建时所在世界，便于清理
 );
 
 CREATE INDEX idx_pool_state ON pool_maps(state);
-CREATE INDEX idx_pool_sign ON pool_maps(sign_id);
-CREATE INDEX idx_pool_session ON pool_maps(reserved_by);
+CREATE INDEX idx_pool_owner ON pool_maps(reserved_by);
 ```
 
 **不变式：**
-- `state=FREE`：`reserved_by`、`sign_id` 均为 NULL
-- `state=RESERVED`：`reserved_by` 非 NULL、`sign_id` 为 NULL
-- `state=PERMANENT`：`sign_id` 非 NULL、`reserved_by` 为 NULL
+- `state=FREE`：`reserved_by` 为 NULL
+- `state=RESERVED`：`reserved_by` 非 NULL，格式 `wall:<wall_id>`
 
 插件启动时执行一次性扫描验证不变式，异常记录移回 FREE + 告警。
 
-### 2.4 表：`sign_records`
+> **M5.5 删字段**：`sign_id` 列删除（合并入 `reserved_by`）。原 `PERMANENT` 状态废止——wall 占的 map 一直 RESERVED 直到 `/canvas delete`。详见 architecture.md §4。
 
-已提交的招牌。一条记录对应一块完整招牌（含多张 map）。
+### 2.4 表：`walls`（M5.5 替代 `sign_records` + `drafts`）
+
+每行 = 一面墙上的一幅画。`(world, origin, facing)` 唯一索引保证一墙一画。`published_at` 是纯 UI 标签，不影响底层行为（wall 始终可改）。
 
 ```sql
-CREATE TABLE sign_records (
-  id            TEXT PRIMARY KEY,          -- UUID
-  owner_uuid    TEXT NOT NULL,             -- 玩家 UUID
-  owner_name    TEXT NOT NULL,             -- 冗余，避免玩家改名后查不到
+CREATE TABLE walls (
+  wall_id       TEXT PRIMARY KEY,          -- 'w-<8hex>'，玩家可见短 ID
   world         TEXT NOT NULL,
   origin_x      INTEGER NOT NULL,
   origin_y      INTEGER NOT NULL,
   origin_z      INTEGER NOT NULL,
-  facing        TEXT NOT NULL,             -- 'NORTH' | 'SOUTH' | 'EAST' | 'WEST'
+  facing        TEXT NOT NULL,             -- 'NORTH'|'SOUTH'|'EAST'|'WEST'|'UP'|'DOWN'
   width_maps    INTEGER NOT NULL,
   height_maps   INTEGER NOT NULL,
-  map_ids       TEXT NOT NULL,             -- JSON array，长度 = width*height
-  project_json  TEXT NOT NULL,             -- 完整 ProjectState，用于二次编辑
-  template_id   TEXT,                      -- 源模板 ID（可空）
-  template_version INTEGER,                 -- 当时模板的 version
+  map_ids       TEXT NOT NULL,             -- CSV，长度 = width_maps*height_maps
+  project_json  TEXT NOT NULL,             -- 完整 ProjectState，op 后 UPDATE
+  owner_uuid    TEXT NOT NULL,             -- 创建者
+  owner_name    TEXT NOT NULL,             -- 冗余，避免玩家改名后查不到
+  alias         TEXT,                      -- 玩家命名，nullable，唯一
+  published_at  INTEGER,                   -- nullable timestamp；NULL=草稿，非 NULL=已发布
+  template_id   TEXT,                      -- M6 模板系统填，源模板 ID
+  template_version INTEGER,                -- M6 当时模板版本
   created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL,
-  deleted_at    INTEGER                    -- 软删除，NULL=存在
+  updated_at    INTEGER NOT NULL
 );
 
-CREATE INDEX idx_sign_owner ON sign_records(owner_uuid);
-CREATE INDEX idx_sign_world_xyz ON sign_records(world, origin_x, origin_z);
-CREATE INDEX idx_sign_template ON sign_records(template_id);
-CREATE INDEX idx_sign_created ON sign_records(created_at);
+CREATE UNIQUE INDEX idx_walls_location ON walls(world, origin_x, origin_y, origin_z, facing);
+CREATE UNIQUE INDEX idx_walls_alias    ON walls(alias) WHERE alias IS NOT NULL;
+CREATE INDEX idx_walls_owner       ON walls(owner_uuid);
+CREATE INDEX idx_walls_published   ON walls(published_at) WHERE published_at IS NOT NULL;
+CREATE INDEX idx_walls_updated     ON walls(updated_at DESC);
 ```
 
-**软删除语义：** `/canvas remove` 不立即清理，只打 `deleted_at`；`/canvas cleanup` 真正回收 map 回池 + 物品框清除 + 记录删除。
+**唯一性：**
+- `wall_id`：主键
+- `(world, origin, facing)`：一墙一画
+- `alias`（非 NULL 时）：玩家命名不允许重复
+
+**published_at 语义（关键）：**
+- NULL → 「草稿」状态。命令 `/canvas list` 在"编辑中"分组显示
+- 非 NULL → 「已发布」状态。`/canvas list` 在"已发布"分组；ItemFrame PDC 同步写 `published_at`，M7 polish 加 break/拆框拦截
+- 这个字段**不影响**任何渲染、map pool、ItemFrame 视觉行为；纯 UI 前置标签
+
+**删除语义：** `/canvas delete <wall_id>` 第一次只显示"30s 内输入 `/canvas delete <wall_id> confirm` 才真删"；二次确认后**直接 DELETE 行**（不软删），同时拆 ItemFrame + 释放 map 回 FREE。无软删 / `deleted_at` 字段（用户操作明确）。
+
+**与 sessions 的关系：** sessions 是临时编辑器持有者；walls 是永久墙上的画。一个 wall 可以有 0 或 1 个活跃 session 编辑它（`byWall` 排他锁）。session cancel/disconnect 不动 walls；wall delete 强制 cancel 关联 session。
 
 ### 2.5 表：`audit_log`
 
@@ -113,7 +127,7 @@ CREATE INDEX idx_sign_created ON sign_records(created_at);
 CREATE TABLE audit_log (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   ts           INTEGER NOT NULL,
-  event        TEXT NOT NULL,              -- 'AUTH_OK' | 'AUTH_FAIL' | 'COMMIT' | 'CANCEL' | 'CLEANUP' | 'POOL_EXPAND' | ...
+  event        TEXT NOT NULL,              -- 'AUTH_OK' | 'AUTH_FAILED' | 'SESSION_BEGIN/CONFIRM/CANCEL' | 'WALL_PUBLISH/UNPUBLISH/DELETE' | 'POOL_RESERVE/RETURN/EXPAND/LEAK/ATTACH' | 'CLEANUP' | ...
   player_uuid  TEXT,                       -- 可空（如未认证阶段）
   player_name  TEXT,
   session_id   TEXT,
@@ -154,37 +168,27 @@ CREATE INDEX idx_usage_global ON template_usage(last_used_at DESC);
 所有 PDC key 使用插件命名空间：`NamespacedKey(plugin, "<key>")`。
 命名空间字符串固定：`"hikari_canvas"`。
 
-### 3.2 Key 表
+### 3.2 Key 表（M5.5 简化）
 
 #### 对 MapView 的 PDC
 
-| Key | 类型 | 说明 |
-| --- | --- | --- |
-| `pool_state` | STRING | `FREE` / `RESERVED` / `PERMANENT` |
-| `owner` | STRING | UUID（PERMANENT 时） |
-| `sign_id` | STRING | SignRecord UUID |
-| `session_id` | STRING | 当前会话（RESERVED 时） |
-| `created_at` | LONG | 创建时间戳 |
-
-> 注：MapView 的 PDC 数据为 SQLite 的副本，保证世界备份时地图仍可还原。SQLite 与 PDC 不一致时以 SQLite 为权威。
+**不写。** M2 立项时设计要把 SQLite 状态镜像到 MapView PDC 作为冗余，但代码从未实装。M5.5 起承认现状：SQLite 是单一来源；MapView PDC 不写业务字段。
 
 #### 对 ItemFrame 的 PDC
 
 | Key | 类型 | 说明 |
 | --- | --- | --- |
-| `sign_id` | STRING | 所属招牌（PERMANENT） |
-| `session_id` | STRING | 所属会话（编辑期间） |
-| `role` | STRING | `preview`（编辑中）/ `permanent`（成品） |
-| `slot_x` | INT | 在招牌矩阵内的列索引 |
-| `slot_y` | INT | 在招牌矩阵内的行索引 |
+| `wall_id` | STRING | 所属 wall（核心 key，M5.5 起替代旧的 `session_id` / `sign_id`） |
+| `slot` | INT | 在 wall 矩阵内的位置序号（row * width + col） |
+| `published_at` | LONG | 仅 publish 后写；nullable；M7 polish 用于 break/拆框拦截 |
 
 #### 对 Map Item 的 PDC
 
-与 MapView 同步（Spigot/Paper map item 可读写 PDC）。
+不写。Map Item 在 ItemFrame 里挂着；要识别属于哪个 wall，从 ItemFrame PDC 取 `wall_id` 即可。
 
-### 3.3 检索不属于 HikariCanvas 的 map
+### 3.3 检索不属于 HikariCanvas 的 ItemFrame
 
-判断一张地图是否受本插件管理：**PDC 中存在 `pool_state` key**。否则视为外部地图，不触碰。
+判断一个 ItemFrame 是否受本插件管理：**PDC 中存在 `wall_id` key**。否则视为外部画框，不触碰。
 
 ---
 
@@ -305,8 +309,25 @@ src/main/resources/db-migrations/
 ### 6.3 破坏性变更处理
 
 - **pool_maps schema 变更**：必须保持既有 map 数据可用
-- **sign_records.project_json 结构变更**：对应 `protocol.md §7` 升版；迁移脚本或启动时懒转换
+- **walls.project_json 结构变更**：对应 `protocol.md §7` 升版；迁移脚本或启动时懒转换
 - **模板 spec 升版**：旧模板文件保持可加载，读取时 `adapter.transform(oldYaml) → currentSpec`
+
+### 6.5 M5.5 V005 整体重置（2026-04-27）
+
+M5.5 重构涉及 schema 大改：合并 `drafts` + `sign_records` → `walls`、`pool_maps` 删 `sign_id` 列。决策按 V005 一次性 drop + recreate 而不是 alter：
+
+```sql
+-- V005__walls_unified.sql （示意，非最终）
+DROP TABLE IF EXISTS sign_records;
+DROP TABLE IF EXISTS drafts;
+DROP INDEX IF EXISTS idx_pool_sign;
+ALTER TABLE pool_maps DROP COLUMN sign_id;
+
+CREATE TABLE walls (...);  -- 完整 §2.4 schema
+CREATE INDEX/UNIQUE INDEX ...;
+```
+
+理由：M5.5 阶段无生产数据，drafts/sign_records 累计 < 50 行；走 alter + 数据迁移成本远高于 drop + 重建。生产发布前最后一次允许 drop。后续任何破坏性变更必须走严格 alter 迁移。
 
 ### 6.4 备份与恢复
 
@@ -322,31 +343,42 @@ src/main/resources/db-migrations/
 
 | 场景 | 处理 |
 | --- | --- |
-| SQLite 中 PERMANENT 但 PDC 无标签 | 重新打 PDC 标签 |
-| PDC 有标签但 SQLite 无记录 | 迁入 SQLite 或降为 FREE（配置决定） |
-| `sign_records.map_ids` 引用的 map 不在 `pool_maps` | 记录损坏，移入 quarantine 表并告警 |
-| 物品框消失但 SignRecord 存在 | 保留记录，标记 `detached=1`（SignRecord v2 schema） |
-| 物品框存在但 SignRecord 被删 | 下次交互时提示并可一键清除 |
+| `pool_maps` RESERVED `wall:<id>` 但 walls 表无对应行 | 视为泄漏；`detectLeaks` 强制 → FREE + 告警 |
+| `walls.map_ids` 引用的 map 不在 `pool_maps` 或非该 wall 持有 | 启动时 WallRestorer 检测；行 → quarantine + 告警，不阻塞启动 |
+| ItemFrame PDC `wall_id` 但 walls 表无对应行 | 启动时报告，不主动拆框（玩家可能误删后想恢复）；管理员 `/canvas cleanup` 决定 |
+| walls 行存在但所有 ItemFrame 消失 | 行保留（玩家可能后续走到原位置 `/canvas open` 恢复）；`/canvas list` 标记 detached |
+| ItemFrame 存在但 walls 表行被删（不应发生，因为 delete 会拆框） | 下次 wand 交互时识别为"陌生 ItemFrame"，提示用户手动拆 |
 
-### 7.2 `/canvas fsck`（v1.x）
+### 7.2 `/canvas fsck`（M7+）
 
-管理员命令，扫描全局一致性并输出报告。v1.0 不含，v1.1 补。
+管理员命令，扫描全局一致性并输出报告。M5.5 不做；当前 `/canvas cleanup` 命令保留 stub 占位。
 
 ---
 
 ## 8. 查询示例
 
 ```sql
--- 玩家招牌清单
-SELECT id, world, origin_x, origin_y, origin_z, created_at
-FROM sign_records
-WHERE owner_uuid = ? AND deleted_at IS NULL
-ORDER BY created_at DESC;
+-- 玩家的画清单（按更新时间倒序）
+SELECT wall_id, alias, world, origin_x, origin_y, origin_z, facing,
+       width_maps, height_maps, published_at, updated_at
+FROM walls
+WHERE owner_uuid = ?
+ORDER BY updated_at DESC;
 
--- 某区域的所有招牌
-SELECT * FROM sign_records
-WHERE world = ? AND origin_x BETWEEN ? AND ? AND origin_z BETWEEN ? AND ?
-  AND deleted_at IS NULL;
+-- 全局已发布画（首页"最近发布"）
+SELECT wall_id, alias, owner_name, published_at
+FROM walls
+WHERE published_at IS NOT NULL
+ORDER BY published_at DESC
+LIMIT 50;
+
+-- 反查 mapId → wall_id（wand 瞄 ItemFrame 时用）
+SELECT wall_id FROM walls WHERE map_ids LIKE ? || ',%' OR map_ids LIKE '%,' || ? || ',%' OR map_ids LIKE '%,' || ? OR map_ids = ?;
+-- 工程实现建议：单独维护 walls_map_index(map_id PK, wall_id) 反向表（M5.5 P1 加）
+
+-- 某区域的所有 walls
+SELECT * FROM walls
+WHERE world = ? AND origin_x BETWEEN ? AND ? AND origin_z BETWEEN ? AND ?;
 
 -- 池健康快照
 SELECT state, COUNT(*) FROM pool_maps GROUP BY state;
@@ -376,7 +408,9 @@ LIMIT 10;
 ## 10. 未决问题
 
 - [ ] `pool_maps` 删除（池缩容）是否支持在线执行
-- [ ] 软删除的 sign_records 保留多久（目前无过期策略，未来可加）
-- [ ] 世界卸载/加载时 DB 的行为（某世界下线，其中的 sign_records 如何处理）
+- [ ] 世界卸载/加载时 DB 的行为（某世界下线，其中的 walls 行如何处理）
+- [ ] **M5.5 引入**：`walls_map_index(map_id PK, wall_id)` 反向表是 P1 加，还是直接走 LIKE 查询（数据量小可不加）
+- [ ] **M5.5 引入**：alias 大小写敏感性（"Subway" vs "subway" 是否同名冲突）
+- [ ] **M5.5 引入**：wall delete 时是否需要保留 audit log 一份 project_json 备份（防误删）
 - [ ] `audit_log` 是否分库以免主 DB 膨胀
 - [ ] 多服务器共享 DB 的场景（暂不支持，但考虑未来是否兼容）

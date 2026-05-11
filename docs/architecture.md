@@ -1,9 +1,11 @@
 # HikariCanvas 系统架构
 
-**状态：** 立项稿 v0.1 · 2026-04-19
+**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27
 **适用范围：** 后端插件 + 前端编辑器
 
 本文档定义系统的组件划分、数据流、生命周期与关键机制。所有代码实现必须遵循此架构；如需调整，先改本文档再改代码。
+
+> **M5.5 路线修正（2026-04-27）**：原"编辑 → commit 永久固化"二段式（drafts + sign_records / RESERVED + PERMANENT）已废止。新模型：单一 `walls` 表 + `published_at` 标签，wall 永远可改，命令族新增 `open / list / publish / delete` 替代 `commit`。详见 §3 状态机与 §6 publish 流程。
 
 ---
 
@@ -11,7 +13,7 @@
 
 ### 1.1 一句话
 
-玩家在游戏里锁定一面墙 → 打开浏览器编辑器 → 编辑过程实时投影到游戏里那面墙上 → 提交后成为永久招牌。
+玩家在游戏里锁定一面墙 → 打开浏览器编辑器 → 编辑实时投影到那面墙上 → 任何时候都能再次打开继续改；可选 `publish` 标记为「已发布」用于网页首页归类，标签层而非数据层。
 
 ### 1.2 高层拓扑
 
@@ -51,7 +53,7 @@
 │  │                       ▼                              │     │
 │  │  ┌───────────────────────────────────────────────┐   │     │
 │  │  │           Map Pool（核心）                     │   │     │
-│  │  │  FREE / RESERVED / PERMANENT                  │   │     │
+│  │  │  FREE / RESERVED（owner = wall:<wall_id>）     │   │     │
 │  │  └────────────────────┬──────────────────────────┘   │     │
 │  │                       │                              │     │
 │  │                       ▼                              │     │
@@ -123,17 +125,30 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 玩家 MC 客户端收到包 → 游戏内墙面像素更新
 ```
 
-**提交：**
+**发布（标签层，非数据层）：**
 ```
-浏览器 ─ WS: {op: "commit"} ─▶ EditSession.commit()
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    ▼                 ▼                 ▼
-               MapPool              SQLite             PDC
-               RESERVED → PERMANENT 写入 SignRecord   打 owner 标记
-                    │
-                    ▼
-               补充新 FREE 地图回池
+玩家 ─ /canvas publish ─▶ WallRepo.markPublished(wallId)
+                                  │
+                ┌─────────────────┼─────────────────┐
+                ▼                 ▼                 ▼
+           SQLite UPDATE     ItemFrame PDC      网页 UI
+           walls.published_at  写 published_at   首页归到 "已发布"
+           = now              （M7 加 break 拦截）   分组
+                  ▲
+                  │ 任何时刻可 unpublish 取消标签；wall 数据始终
+                  │ 单一存储，published 只是 nullable timestamp。
+```
+
+**删除（仅此操作真正移除 wall）：**
+```
+/canvas delete <wall_id>
+   │  显示 "Re-run with confirm in 30s"
+   ▼
+/canvas delete <wall_id> confirm （30s 内）
+   │
+   ├─▶ FrameDeployer.removeForWall  → 拆 ItemFrame
+   ├─▶ MapPool.releaseWall(wallId)   → owned maps 全 → FREE
+   └─▶ WallRepo.delete(wallId)        → 删 walls 行
 ```
 
 ---
@@ -174,61 +189,71 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 
 ## 3. 编辑会话生命周期
 
+> **M5.5 重要变化**：状态机本身保持 SELECTING → ISSUED → ACTIVE → CLOSING → CLOSED；删除 `commit` 转移分支。`ACTIVE → CLOSING` 仅由 cancel / disconnect 触发；新增 `/canvas open` 直接从 CLOSED 跳到 ACTIVE（绕开 SELECTING / ISSUED 选区流程）。
+
 ### 3.1 状态机
 
 ```
                        ┌─────────────┐
                        │   CLOSED    │
-                       └──────┬──────┘
-                              │ /canvas edit  或  首次持 Wand 点击
-                              ▼
-                       ┌─────────────┐
-                       │  SELECTING  │ ← 玩家尚在挑选墙面
                        └──┬──────┬───┘
-       /canvas cancel     │      │ /canvas confirm
+       /canvas edit       │      │ /canvas open <wall_id|alias>
+       或  Wand 首次点击 │      │ 或  Wand 瞄已有 ItemFrame → 二次确认
                           ▼      ▼
-                     ┌───────┐  ┌─────────────┐
-                     │ CLOSED│  │   ISSUED    │ ← 物品框已挂 + placeholder
-                     └───────┘  │             │   + Token 已签发
-                                └─┬──────┬────┘
-          Token 15 分钟过期        │      │ 浏览器握手
-                                  ▼      ▼
-                             ┌───────┐  ┌──────────┐
-                             │EXPIRED│  │  ACTIVE  │
-                             └───────┘  └─┬───┬────┘
-                                           │   │
-                               commit      │   │  cancel / WS 断连 5min
-                                           ▼   ▼
-                                   ┌───────────┐
-                                   │  CLOSING  │
-                                   └─────┬─────┘
-                                         │ 资源回收完成
-                                         ▼
-                                   ┌───────────┐
-                                   │   CLOSED  │
-                                   └───────────┘
+                  ┌─────────────┐ │
+                  │  SELECTING  │ │ ← 玩家挑选墙面（仅"新建"路径走此态）
+                  └──┬──────┬───┘ │
+   /canvas cancel    │      │ /canvas confirm
+                     ▼      ▼     │
+                ┌──────┐  ┌────────┴────┐
+                │CLOSED│  │   ISSUED    │ ← 物品框已挂 + placeholder
+                └──────┘  │             │   + Token 已签发
+                          └─┬──────┬────┘
+     Token 15min 过期       │      │ 浏览器握手
+                            ▼      ▼
+                       ┌───────┐  ┌──────────┐
+                       │EXPIRED│  │  ACTIVE  │
+                       └───────┘  └────┬─────┘
+                                       │  cancel / WS 断连 5min
+                                       ▼
+                              ┌───────────┐
+                              │  CLOSING  │
+                              └─────┬─────┘
+                                    │ 资源回收完成（注：
+                                    │ wall 数据本体仍在 walls 表，
+                                    │ 仅释放 session/锁/wand）
+                                    ▼
+                              ┌───────────┐
+                              │   CLOSED  │
+                              └───────────┘
 ```
+
+> 「ACTIVE → CLOSING(commit)」分支已彻底废止。`/canvas publish` 不改变 session 状态（它是 wall 元数据的一次 UPDATE，玩家继续在 ACTIVE 中编辑）。
 
 ### 3.2 状态转移动作
 
 | 转移 | 动作 |
 | --- | --- |
-| `CLOSED → SELECTING` | 仅记 SessionId + playerUuid；**不触碰池、不挂物品框**；等待玩家点击两角 |
-| `SELECTING → SELECTING` | 记录 pos1 / pos2；WallResolver 做合法性预览；聊天栏回显；玩家可以覆盖重选 |
-| `SELECTING → CLOSED` | `/canvas cancel`：仅丢弃 selection 状态 |
-| `SELECTING → ISSUED` | `/canvas confirm`：墙面锁、池借出 N×M 地图、挂物品框填 placeholder、Token 签发 |
+| `CLOSED → SELECTING` | `/canvas edit`：记 SessionId + playerUuid；**不触碰池、不挂物品框**；发 wand；等待两角点击 |
+| `SELECTING → SELECTING` | 记录 pos1 / pos2；WallResolver 预览；玩家覆盖重选 |
+| `SELECTING → SELECTING (reselect)` | 已 SELECTING 时再次 `/canvas edit` 隐式清 pos1/pos2 重新开始 |
+| `SELECTING → CLOSED` | `/canvas cancel`：丢弃 selection、收回 wand |
+| `SELECTING → ISSUED` | `/canvas confirm`：解析墙面 →（路径 A 新建：池借 N×M、挂物品框、写 walls 新行；路径 B 现有 wall：bind owner、不挂物品框）→ Token 签发 |
+| `CLOSED → ACTIVE` | `/canvas open <id>` 或 wand 二次点击已有 ItemFrame：直接 bind 已有 wall + 签发 Token + 跳过物品框部署 |
 | `ISSUED → ACTIVE` | WS 握手成功，Token 标记为已使用 |
-| `ISSUED → EXPIRED` | Token 过期，归还预览地图到池、卸下物品框 |
-| `ACTIVE → CLOSING(commit)` | 预览地图转 PERMANENT、写 SignRecord、补池 |
-| `ACTIVE → CLOSING(cancel)` | 归还池、卸物品框 |
-| `ACTIVE → CLOSING(disconnect)` | WS 断开 5 分钟后触发，等同 cancel |
-| `CLOSING → CLOSED` | 清理完成 |
+| `ISSUED → EXPIRED` | Token 过期，**仅释放 session/wand**，walls 数据 + ItemFrames 保留（路径 A 新建场景留下"未连入的 wall"，玩家可后续 `/canvas open` 接管） |
+| `ACTIVE → ACTIVE (publish)` | `/canvas publish`：UPDATE walls.published_at；ItemFrame PDC 写 published 标签；session 状态不变 |
+| `ACTIVE → CLOSING(cancel)` | `/canvas cancel`：仅释放 session/wand；wall 数据 + ItemFrames 保留 |
+| `ACTIVE → CLOSING(disconnect)` | WS 断开 5min 触发，等同 cancel |
+| `CLOSING → CLOSED` | session 清理完成（wall 表数据**不动**）|
+
+> **关键不变量**：会话生命周期（SELECTING/ISSUED/ACTIVE）只管"谁在编辑"；wall 数据生命周期（walls 表行 + map RESERVED + ItemFrames）只在 `/canvas delete` 显式清理。两者解耦。
 
 ### 3.3 并发约束
 
-- **每玩家最多 1 个活跃会话**（包括 `SELECTING` 态）。`/canvas edit` 时若已有会话，提示「已有活跃会话，先 `/canvas cancel`」
-- **每面墙最多 1 个活跃会话**。以起始方块坐标 + 法线为锁 key，先到先得
-- 池容量耗尽：拒绝新会话，提示用户稍后
+- **每玩家最多 1 个活跃会话**（包括 `SELECTING` 态）。M5-D8 起 `/canvas edit` 在已 SELECTING 时**隐式 reselect**而非报错；ISSUED/ACTIVE 仍提示先 cancel
+- **每面墙最多 1 个活跃会话**（排他锁，wall_id 为 key）。M5.5 不做协作编辑（OT/CRDT 超 scope）
+- 池容量耗尽：拒绝新会话，提示用户稍后；wall 占的 map 一直占着不自动释放，需 `/canvas delete` 显式清
 
 ---
 
@@ -246,12 +271,13 @@ Minecraft 的 map ID 存于世界文件 `data/idcounts.dat`，每次 `Bukkit.cre
 PooledMap
 ├── id: int                        MC map ID
 ├── mapView: MapView               Bukkit 对象
-├── state: FREE | RESERVED | PERMANENT
-├── reservedBy: SessionId?         RESERVED 时指向会话
-├── signId: UUID?                  PERMANENT 时指向 SignRecord
+├── state: FREE | RESERVED         （M5.5 起两态。PERMANENT 已废止）
+├── reservedBy: String?            RESERVED 时指向 owner，格式 "wall:<wall_id>"
 ├── lastUsedAt: long               用于 LRU 清理
 └── paletteBuffer: byte[128*128]   当前像素（调色板索引）
 ```
+
+> M5.5 重构：`signId` 字段彻底删除；`reservedBy` 在 wall 模型下是 `wall:<wall_id>`（M5-D7 短暂出现的 `draft:<wallTag>` 前缀也合并进去）。`session_id` 概念不再写入 pool_maps —— 会话只是临时持有者，真正持有 map 的是 wall。
 
 池持有一个 `List<PooledMap>` + 两个索引：
 - `freeQueue: Deque<PooledMap>` — O(1) 借出
@@ -264,39 +290,41 @@ PooledMap
 2. 查询 SQLite，恢复既有池地图（插件重启不丢池）
 3. 若不足 `initial-size`，补充新建
 
-**借出（会话开启）：**
+**借出（新建 wall）：**
 ```
-reserve(sessionId, count) -> List<PooledMap>:
+reserveForWall(wallId, count) -> List<PooledMap>:
     if freeQueue.size() < count:
         if pool.size() + (count - freeQueue.size()) > maxSize:
             throw PoolExhausted
         expandPool(count - freeQueue.size())
+    owner = "wall:" + wallId
     result = []
     for i in 0..count:
         m = freeQueue.poll()
         m.state = RESERVED
-        m.reservedBy = sessionId
+        m.reservedBy = owner
         result.append(m)
     return result
 ```
 
-**提交（转永久）：**
+**绑定（打开已有 wall：启动时 WallRestorer 跑一次；运行期 `/canvas open` 也走同路径）：**
 ```
-commit(session) -> SignRecord:
-    signId = UUID.random()
-    record = buildSignRecord(session, signId)
-    for m in session.reservedMaps:
-        m.state = PERMANENT
-        m.signId = signId
-        m.reservedBy = null
-        pdc.set(m.mapView, "hc:owner", session.playerUuid)
-        pdc.set(m.mapView, "hc:sign", signId)
-    sqlite.insert(record)
-    pool.refill()   # 补充新 FREE 到 initial-size
-    return record
+bindWall(wallId, mapIds) -> bool:
+    owner = "wall:" + wallId
+    # 仅接受这些 map 是 FREE 或已是该 wall 持有的状态
+    for id in mapIds:
+        m = byId[id]
+        if m == null or (m.state == RESERVED and m.reservedBy != owner): return false
+    for id in mapIds:
+        m = byId[id]
+        if m.state == FREE: freeQueue.remove(id)
+        m.state = RESERVED; m.reservedBy = owner
+    return true
 ```
 
-**取消（归还）：**
+> publish 不动池；`/canvas publish` 只 UPDATE walls.published_at + ItemFrame PDC，map 状态不变。
+
+**取消（释放会话占用，wall 数据不动）：**
 ```
 cancel(session):
     for m in session.reservedMaps:
@@ -307,8 +335,8 @@ cancel(session):
         freeQueue.offer(m)
 ```
 
-**清理（管理员 `/canvas cleanup`）：**
-扫描 SQLite 中所有 PERMANENT 记录 → 验证物品框仍存在 → 不存在则转 FREE 归还池。
+**清理（管理员 `/canvas cleanup`，原 PERMANENT 校对路径已废止）：**
+M5.5 起 `/canvas cleanup` 语义改为：扫 walls 表，对每行验证 `(world, origin, facing, map_ids)` 与世界中 ItemFrame 的对应关系，孤立行（ItemFrame 全丢）由管理员决定 delete；ItemFrame 不在 walls 表里的（外来）报告但不动。具体实现待 M7。
 
 ### 4.4 Placeholder 地图
 
@@ -333,11 +361,10 @@ cancel(session):
 
 - `pool.size`：池总量
 - `pool.free`：空闲数
-- `pool.reserved`：在用数
-- `pool.permanent`：已转永久数
-- `pool.leaked`：疑似泄漏数（RESERVED 但无对应 ACTIVE 会话，应为 0）
+- `pool.reserved`：被 wall 持有数（M5.5 起合并 RESERVED + 原 PERMANENT，因为已无后者）
+- `pool.unowned_reserved`：RESERVED 但 `reservedBy` 不指向任何 walls 行的疑似泄漏数
 
-**泄漏检测：** 每 5 分钟后台扫描，若 RESERVED 但 `reservedBy` 的会话已不存在，强制归还并记日志。
+**泄漏检测：** 每 5 分钟后台扫描，若 RESERVED 的 `reservedBy = "wall:<id>"` 但 walls 表无对应行，强制归还并记日志。`reservedBy` 是临时 `session:<sid>`（不应出现，本来 wall 模型不再这样写）则视为旧版残留，同样回收。
 
 ---
 
@@ -363,7 +390,7 @@ cancel(session):
 
 - **静止**：无事件 = 无推送。最后一帧的状态已在客户端地图上，自持。
 - **输入中**：100ms 防抖 + 5 fps 节流。
-- **提交**：一次完整（非差分）推送，确保最终帧 100% 正确。
+- **session 关闭前最后一帧**：一次完整（非差分）推送，确保最终帧 100% 正确（M5.5 前称"提交时全量"，新模型下不存在显式 commit，改为 cancel/disconnect 前 ProjectionThrottler flush）。
 
 ### 5.2 脏矩形计算
 
@@ -457,23 +484,35 @@ CI 集成：
 - `/canvas cancel` = 丢弃 selection，回到 CLOSED
 - 玩家断线 / 离线 = SELECTING 立即释放（无资源占用）
 
-### 7.2 物品框部署（/canvas confirm 后立即执行）
+### 7.2 物品框部署（仅"新建 wall"路径走，`/canvas confirm` 后立即执行）
 
 对区域内每个方块位置：
 - `spawnItemFrame(block, facing = normal)`
-- `frame.setItem(mapItem)` ← **池借出的地图；像素填 Placeholder（§4.x）**
+- `frame.setItem(mapItem)` ← 从池 reserveForWall 借出的地图；像素填 Placeholder（§4.4）
 - `frame.setRotation(NONE)`
-- `frame.setInvisible(true)` ← 编辑中隐藏边框
 - `frame.setFixed(true)` ← 防止破坏/旋转
+- `frame.setInvisible(true)` 看场景需求（M2 实测发现 spawn-time 设 invisible 会与客户端 spawn-consumer 时序冲突，目前先 visible，M7 polish）
 
-PDC 标记：`hikari_canvas:session = sessionId`，便于清理与后续 WS 关联。
+PDC 标记：
+- `hikari_canvas:wall_id = <wall_id>` ← M5.5 起核心 key（替代旧的 `session` / `sign`）
+- `hikari_canvas:slot = <index>` ← 该 frame 在 wall 里的位置序号
+- `hikari_canvas:published_at = <ms>` ← 仅 publish 后写；nullable
 
-部署完成后玩家**立即能在游戏中看到浅灰的 Placeholder 网格**，直观验证墙面选对。
+> **路径 B「打开已有 wall」（`/canvas open` 或 wand 二次点击 / 启动恢复）不走 7.2，物品框已存在不重新部署，直接 bind 池 + 写 ProjectState。**
 
-### 7.3 提交 vs 取消
+### 7.3 wall 数据生命周期 vs 会话生命周期
 
-- **提交**：物品框保持可见（可配置）或继续 INVISIBLE；PDC 标记改为 `hikari_canvas:sign = signId`；`FIXED` 保持
-- **取消**：物品框整体移除；预览地图归还池
+| 操作 | 影响 wall 数据？ | 影响 ItemFrames？ | 影响 session？ |
+| --- | --- | --- | --- |
+| `/canvas confirm`（新建路径） | 新增 walls 行 | 新挂 N×M 个 | SELECTING → ISSUED |
+| `/canvas confirm`（现有 wall：bind 路径） | 不变 | 不变 | SELECTING → ISSUED |
+| `/canvas open` | 不变 | 不变 | CLOSED → ACTIVE |
+| `/canvas publish` | UPDATE published_at | 更新 PDC | 不变 |
+| `/canvas unpublish` | UPDATE published_at=NULL | 更新 PDC | 不变 |
+| `/canvas alias` | UPDATE alias | 不变 | 不变 |
+| `/canvas cancel` | 不变 | 不变 | 释放（→ CLOSING → CLOSED） |
+| WS 5min disconnect | 不变 | 不变 | 释放 |
+| `/canvas delete <id>` | 第一次提示等 confirm；30s 内 confirm → DELETE walls 行 | 拆除 | 释放 |
 
 ---
 
@@ -483,26 +522,26 @@ PDC 标记：`hikari_canvas:session = sessionId`，便于清理与后续 WS 关�
 
 | 存储 | 内容 | 生命周期 |
 | --- | --- | --- |
-| **SQLite** (`plugins/HikariCanvas/data.db`) | 池元信息、SignRecord、审计日志、模板使用统计 | 跨重启 |
-| **PDC**（每张 MapView / ItemFrame） | owner、signId、sessionId 等标签 | 随世界文件 |
+| **SQLite** (`plugins/HikariCanvas/data.db`) | 池元信息、walls 表、审计日志、模板使用统计 | 跨重启 |
+| **PDC**（每张 ItemFrame） | `wall_id` / `slot` / `published_at` | 随世界文件 |
 | **文件**（`templates/*.yml`） | 模板定义 | 人工管理 |
 | **文件**（`fonts/*.ttf`） | 字体 | 人工管理 |
 
-### 8.2 SignRecord 表概览
+### 8.2 walls 表概览（M5.5 起取代 SignRecord）
 
 （详细 schema 在 `data-model.md`）
 
 | 字段 | 说明 |
 | --- | --- |
-| `id` | UUID |
-| `owner_uuid` | 玩家 |
-| `world` | 世界名 |
-| `origin_xyz + facing` | 墙面锚点 |
-| `width × height` | 地图矩阵尺寸 |
-| `map_ids` | JSON 数组，指向池中地图 |
-| `project_json` | 完整工程数据（可重新载入编辑） |
-| `template_id` | 源模板（可为空） |
-| `created_at / updated_at` | 时间戳 |
+| `wall_id` | TEXT PK，玩家可见短 ID（`w-<8hex>`） |
+| `world / origin_xyz / facing` | 墙面锚点；与 `wall_id` 一对一（同 `(world, origin, facing)` 唯一索引） |
+| `width_maps / height_maps` | 地图矩阵尺寸 |
+| `map_ids` | CSV，指向池中地图 |
+| `project_json` | 完整工程数据；任何 op 后 UPDATE |
+| `owner_uuid / owner_name` | 创建者；非排他锁，仅做归属展示 |
+| `alias` | 玩家命名，nullable |
+| `published_at` | nullable timestamp；`/canvas publish` 写入，`/canvas unpublish` 清空 |
+| `created_at / updated_at` | 时间戳；updated_at 在每次 op save 时刷新 |
 
 ---
 
@@ -542,7 +581,7 @@ PDC 标记：`hikari_canvas:session = sessionId`，便于清理与后续 WS 关�
 | 指标 | 目标 |
 | --- | --- |
 | 编辑端到端延迟（按键 → 游戏内显示） | < 300ms |
-| 单次 commit 生成 8×4 招牌 | < 500ms |
+| 单次 confirm 部署 8×4 物品框 + 首帧 | < 500ms |
 | 插件内存稳态（池 64 张） | < 100MB |
 | 并发活跃会话 | ≥ 10 |
 | 主线程 tick 时间增加 | < 1ms |
@@ -560,7 +599,7 @@ PDC 标记：`hikari_canvas:session = sessionId`，便于清理与后续 WS 关�
 - SLF4J + 配置文件控制 log level
 - `/canvas stats` 管理员命令：池状态、活跃会话、近期事件
 - `/canvas debug <sessionId>`：单会话详情
-- 审计日志：commit / cancel / cleanup / auth 失败，写 SQLite
+- 审计日志：`SESSION_BEGIN/CONFIRM/CANCEL` / `WALL_PUBLISH/UNPUBLISH/DELETE` / `AUTH_OK/FAILED` / `POOL_*`，写 SQLite
 
 ### 10.4 安全
 
@@ -616,8 +655,9 @@ logging:
 
 - [ ] 预览地图池初始化时，若 SQLite 恢复数量 > `initial-size`，超出部分如何处理（保留 vs 缩容）
 - [ ] 反代下的 `public-url` 自动探测是否可行，或仍要求服主手动配置
-- [ ] commit 后物品框默认可见还是隐藏（用户偏好决定）
 - [ ] 会话 disconnect 5 分钟宽限是否太长（公网弱网场景 vs 池占用）
 - [ ] 多世界支持：同一池跨世界共享 vs 按世界分池
+- [ ] **M5.5 引入**：published wall 是否需要"自动归档"（长期无 op 自动 unpublish 释放给 `/canvas list` 滚动列表）—— 倾向不做，walls 数量 < 100 不需要
+- [ ] **M5.5 引入**：协作编辑（多 client 同时编辑同一 wall_id）—— 当前 `byWall` 排他锁阻止；OT/CRDT 超 scope，可能永远不做
 
-这些问题在 M1/M2 实现时根据实际情况回填本文档。
+这些问题实现时根据实际情况回填本文档。

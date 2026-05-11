@@ -80,7 +80,24 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23；Vue 3 + Pinia + Tailwind 4 + Konva overlay；Playwright snapshot 推迟 M7） → **M6 模板系统（1w）** → M7 打磨发布（2w）。总工期约 3.5 个月。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23；Vue 3 + Pinia + Tailwind 4 + Konva overlay；Playwright snapshot 推迟 M7） → **M5.5 wall 模型重构（约 4 天）** → M6 模板系统（1w） → M7 打磨发布（2w）。总工期约 4 个月。
+
+## M5.5 wall 模型重构（路线修正，2026-04-27 定稿）
+
+**背景**：M2-M5 走的是「编辑 → commit 永久固化」二段式模型（drafts + sign_records 两表 / RESERVED + PERMANENT 两态 / `/canvas commit` 升级）。M5 实测下来「二次编辑已发布画」死路（WallResolver 把自己挂的 ItemFrame 当 OCCUPIED 拒），且 commit 后 drafts 没清导致状态机污染。
+
+**新模型（已固化，不再讨论）**：
+
+1. **一画一行 walls 表**：取代 `drafts` + `sign_records`。每行有稳定 `wall_id`（`w-<8hex>`，玩家可见）+ 可选 `alias`。`published_at` 是 nullable timestamp 标签——纯 UI/命令前置语义，**不影响底层行为**（始终可改）。
+2. **MapPool 两态**：`FREE` / `RESERVED`。owner 统一 `wall:<wall_id>`，wall 占的 map 一直占着直到 `/canvas delete`，不自动释放。`PERMANENT` 状态废止。
+3. **命令族**：`edit / confirm / cancel / open <id\|alias> / list / publish / unpublish / alias <name> / delete <id> [confirm]`。`commit` 命令**废止**（不是改名）。`/canvas delete` 需 30s 内 `/canvas delete <id> confirm` 二次确认。
+4. **wand 瞄已有 ItemFrame**：HikariCanvas 自己挂的 → 不当 OCCUPIED；左/右键先 ActionBar 提示「This is wall <id> 'alias' — left-click again to open」，再次操作才打开二次编辑。第三方 ItemFrame 仍 OCCUPIED 拒绝。
+5. **published 副作用**（Q2=a+b）：标签 + ItemFrame PDC 写 `published_at` 时间戳；M7 加 break 拦截让已发布画更难误删。除此之外游戏内零行为差。
+6. **排他锁保留**：`byWall` 一墙一时刻一个活跃 session。多人协作（OT/CRDT）超 scope，不做。
+
+**契约文档已更新**：`docs/architecture.md` §3 状态机 / §6 commit pseudocode / §7 PDC 标记 / `docs/data-model.md` §2 schema / `docs/protocol.md` §8.3 / `docs/security.md` 权限名 / PROPOSAL.md 命令族。具体 commit hash 见 `docs/journal.md` 2026-04-27 条目。
+
+**写代码前重新对照契约**——这次重构涉及多模块协调，必须文档先行。
 
 ## 构建 / 开发流程速查
 

@@ -5,6 +5,155 @@
 
 ---
 
+## 2026-05-11 · wall 实测打磨（自家画框识别 + wall.refresh）
+
+**背景：** P1-P5 实测后剩两个体验问题：(a) `/canvas edit` 在已有画的墙上选区会撞 `OCCUPIED`，玩家被迫先 delete 才能二次编辑；(b) 创造模式打掉某个画框后该位置永远空白，没有恢复入口。
+
+**改动：**
+
+1. **WallResolver 区分 HikariCanvas 自家 vs 第三方画框**：
+   - 构造参数加 `JavaPlugin`，内部生成 `wall_id` PDC NamespacedKey
+   - 内部 `kindOfFrame()` 返回 `FrameKind.{NONE, HIKARI, FOREIGN}`，HIKARI 通过 PDC 识别
+   - 校验循环：FOREIGN 才报 OCCUPIED；HIKARI 通过且记 `hasExistingFrames=true`；NONE 仍要求前一格 air
+   - `Result.Ok` 加 `boolean hasExistingFrames` 字段
+2. **SessionManager.confirm 三分支**：
+   - `hasFrames && walls 行齐全` → `mapPool.bindToWall` → `OkExistingWall`（二次编辑路径）
+   - `hasFrames` xor `walls 行` 单边存在 → `NotReady("stale wall data; /canvas delete to reset")`
+   - 都无 → 走原新建路径 `OkNewWall`
+3. **wall.refresh op（含玩家撸框恢复）**：
+   - `FrameDeployer` 抽 `spawnSlot` helper；新增 `repairFor(wallId, wall, mapIds)`：扫世界 PDC 收集仍存在的 slot，对缺失 slot 用同样几何/PDC/mapId 重新 spawn
+   - `WebServer.handleWallOp` 加 `case "wall.refresh"`：主线程跑 `repairFor` + `throttler.submit(fullCanvas)` 强制全画布重画
+   - 前端 `TopBar.vue` 加 `RefreshCw` 按钮 → `ws.send('wall.refresh')`，1.5s 内禁用避免连点
+4. **WandListener.routeFrameClick SELECTING 优先**：玩家在 SELECTING 状态点画框 → 视为选角（不再触发"二次确认 → open"路径），消除"You already have an active session (state=SELECTING)"误报
+
+**改的文件：** `WallResolver.java` / `FrameDeployer.java` / `SessionManager.java` / `WebServer.java` / `WandListener.java` / `HikariCanvas.java`（WallResolver 构造改）/ `web/src/components/layout/TopBar.vue`
+
+**未变契约：** 一墙一画（WallKey 唯一索引）+ 排他锁仍保留。WallResolver 现在的 OCCUPIED 只指"第三方画框"，与 docs 一致——`/canvas edit` 选区已挂自家画的墙变成"二次编辑入口"而非错误。
+
+---
+
+## 2026-05-06 · M5.5 实测后批量 fix
+
+**背景：** P1-P5 上线后实测撞到 6 个独立 bug，统一一波修。
+
+**改动：**
+
+1. **MigrationRunner 漏注册 V005**：`MIGRATIONS` 列表只到 V004，V005 文件存在但永远不跑 → `no such table: walls`。同根因 V002 漏注册的复发（显式声明制的代价）。修：list 末尾追加。
+2. **Envelope.error null message NPE**：`Map.of("message", null)` 不允许 null value，handleAuth 拒绝 token 时传 null → NPE → WS uncaught → close 1011。改 `LinkedHashMap` 手动 put + null 跳过。
+3. **FrameDeployer.deploy col 方向对 NORTH/EAST 反向**：M2 阶段 `col 0` 对 WEST/SOUTH 是玩家视角最左，但 NORTH/EAST 漏了反向 → 游戏内文字与浏览器画布左右倒挂。改成显式 switch 四个 facing，明确 `col 0 = 玩家视角最左`。
+4. **SessionManager.open 同 wall 幂等**：玩家关浏览器但 session 还 ACTIVE → 再 `/canvas open <同 id>` 报 AlreadyHasSession。改成：先 load wall → 同 wall_id 直接复用 existing session 重发 URL，不同 wall 才报错。
+5. **handleAuth markActive 容忍 ACTIVE**：`/canvas open` 复用 ACTIVE session → `markActive` 严格要求 ISSUED 抛 IllegalStateException → 前端显示"token 已失效"。改成 ISSUED 走转移、ACTIVE 只 touch。顺手把"旧 WS ctx → close 4003 takeover"写明。
+6. **WebServer dispatch 没匹配 wall.alias / publish / unpublish**：顶层 switch 只列 `element.*` / `canvas.*` / `template.apply` → wall.* 全落 default 返 INVALID_OP → 前端 alias / publish 静默失败（store optimistic 改了，但 walls 表实际 NULL）。修：switch 加 `case "wall.publish", "wall.unpublish", "wall.alias", "wall.refresh"` 路由到 `dispatchWallOp`。同时把之前写在 `dispatchEditOp` 内部的 `wall.*` early-return 删（永远走不到）。
+7. **alias UI 改内联输入**：浏览器 `prompt()` 替换为 TopBar 内联 input（pencil 图标点开 + Enter 提交 + Esc 取消 + blur 自动提交 + ALIAS_TAKEN 错误回滚显示）。
+
+**改的文件：** `MigrationRunner.java` / `Envelope.java` / `FrameDeployer.java` / `SessionManager.java` / `WebServer.java` / `web/src/components/layout/TopBar.vue`
+
+---
+
+## 2026-04-27 · M5.5 P1-P5 代码实施（wall 模型重构落地）
+
+**背景：** 04-27 上半段已固化路线到契约文档；下半段开始按 5-Phase 分步落地代码。每 Phase 完成立即 `gradle :plugin:compileJava` 验证。
+
+**P1 数据层：**
+- 新 migration `V005__walls_unified.sql`：drop sign_records / drafts；recreate pool_maps（删 sign_id 列、迁 PERMANENT→RESERVED）；create walls 表（schema 见 `docs/data-model.md §2.4`）
+- 新 `WallRepo`：`create / loadById / loadByAlias / loadByKey / loadByMapId(反查) / loadAll / listForOwner / listAll / setAlias / markPublished / markUnpublished / updateMapIds / updateState / delete`，含 wall_id 短 hex 生成 + UNIQUE 冲突重试
+- `PooledMap` 删 `signId` 字段；`PoolState` 由三态收为两态；`MapPool` 删 `promoteToPermanent` + `markDraftHeld`，新增 `reserveForWall / bindToWall / releaseWall`；`detectLeaks` 改"非 `wall:` 前缀全回收"
+- `DraftRepo` / `DraftRestorer` 文件删除，由 `WallRepo` / `WallRestorer` 替代
+- `SessionManager.confirm` 改两分支 `OkNewWall` / `OkExistingWall`；删 `commit / promoteToPermanent` 整条；新增 `open / deleteWall / persistWall / resetSelection`
+- `SessionReaper` 不再拆框（wall 数据生命周期与 session 解耦）
+
+**P2 命令族：** `CanvasCommand` 删 `runCommit` + `insertSignRecord`；新增 `runOpen / runList / runPublish / runUnpublish / runAlias / runDeleteFirstStep / runDeleteConfirm`；delete 30s 二次确认走 `pendingDeletes` map；`runCancel` 改为"释放 session/wand，wall 数据保留"。
+
+**P3 wand 二次编辑：** `FrameDeployer` PDC key 改 `wall_id / slot / published_at`；新方法 `removeForWall / markPublished / wallIdOf`；`WandListener` entity 事件分流：HikariCanvas ItemFrame → ActionBar 提示 → 30s 内再次操作触发 `sessionManager.open + tokenService.issue + 发 chat URL`；第三方画框走原选区流程。
+
+**P4 网页 wall 元数据：** 后端 `ready` payload 加 `wallId / alias / publishedAt`；dispatch 加 `wall.publish / wall.unpublish / wall.alias` op（不走 EditSession）；前端 `protocol.ts` `ReadyPayload` 加这三字段；`stores/project.ts` 加 wallId / alias / publishedAt + `setWallMeta`；`wsClient.handleReady` / `handleAck` 同步 store；`TopBar.vue` 显示 wall_id（click copy）+ alias（pencil prompt）+ Published/Draft 徽章。
+
+**P5 网页首页：** `App.vue` URL 没 token → 渲染 `HomePage.vue`；后端新 `GET /api/walls` 返回 `WallRepo.listAll()`；HomePage 分组"已发布 / 编辑中"展示，每张卡片显 wall_id / alias / world+coord+facing / 尺寸 / updatedAt + 可点击复制的 `/canvas open <id>`。
+
+**未做：** alias 实施时 prompt() 还是浏览器原生弹窗；refresh 入口；wand SELECTING 中点画框走 open 误报——这三个 5-06/5-11 修。
+
+---
+
+## 2026-04-26 · M5-D5 / D6 / D7 系列（M5.5 之前的中间态，部分被推翻）
+
+**背景：** 这段时间走的是"drafts + sign_records 二段式"流派，三轮迭代加完整功能后实测发现该模型不顺手（二次编辑 OCCUPIED、commit 后 drafts 没清状态机污染），于是触发 04-27 的 M5.5 路线修正。中间产物（V002-V004 三个 migration、DraftRepo、DraftRestorer、wand_id 字段预留）保留作为 schema_version 历史链，但表本身已被 V005 drop。
+
+**M5-D5（双击就地编辑 + WS 自动重连 + delete 二次确认）：**
+- `CanvasView.vue` 加 `editingId` 状态，`v-rect` 监听 `dblclick` 打开 textarea overlay，绝对定位对齐 element x/y/w/h + rotation；Enter 提交、Shift+Enter 换行、Esc/blur 退出；style 改"原生感"透明背景 + 字体继承
+- `PreviewRenderer.ts` 加 `hideIds` 参数避免画布字与 textarea 重影
+- `wsClient.ts` `onClose` 加指数退避重连（1/2/5/10/30s 阶梯，5 次后停）；4001/4008/1000 不重连；4001 清 sessionStorage token
+- `CanvasCommand` `runDelete` 30s 内带 `confirm` 才真删（旧版"删 sign_record 然后 promote"逻辑）
+
+**M5-D6（drafts 表草稿持久化）：**
+- `V002__drafts.sql` 建 drafts 表（world/origin/facing 复合主键）；`V003__drafts_add_maps.sql` 加 map_ids + width/height；`V004__drafts_wall_id_alias.sql` 预留 wall_id + alias
+- `DraftRepo` save/load/loadAll；`SessionManager.persistDraft` 每次 op 后存 ProjectState JSON
+- `WebServer` op handler 后调 `persistDraft`
+
+**M5-D7（草稿真恢复到游戏内）：**
+- `DraftRestorer` 启动期扫 drafts 表，compose ProjectState → 推像素到 `HikariCanvasRenderer`，`MapPool.markDraftHeld(draft:<tag>)` 保护 map 不被 leak 扫
+- `SessionManager.confirm` 加复用 draft 路径：mapIds 仍在池就 `attachToSession`
+
+**04-27 推翻范围：** drafts 表（V005 drop）、`DraftRepo` / `DraftRestorer`（删）、`MapPool.markDraftHeld` / `attachToSession`（合并为 `bindToWall`）、`MapPool.promoteToPermanent`（删）、sign_records 表（V005 drop）、`commit` 命令（废止）。中间产物的代码细节已不重要，但 V002-V004 migration 文件保留以确保 schema_version 链完整。
+
+---
+
+## 2026-04-27 · M5.5 wall 模型重构（路线修正，仅文档；不动代码）
+
+**背景：** M5 实测下来发现 commit 模型不顺手——已 commit 画的二次编辑撞 `WallResolver OCCUPIED`、commit 后 drafts 没清导致重启状态错乱、`/canvas edit` 在已有 session 时报 `state=SELECTING` 提示模糊、wand 选区被已挂的 ItemFrame 默认行为吃掉。讨论后决定**推翻 commit 模型**，按"一画一行 walls 表 + published_at 标签"的简化模型重构。先固化路线到契约文档，下个会话开工代码。
+
+**用户拍板的 5 个开放问题：**
+1. `/canvas delete <id>` 30s 内 `/canvas delete <id> confirm` 二次确认
+2. publish 副作用：纯标签 + ItemFrame PDC 写 `published_at`（M7 polish 加 break 拦截）
+3. wall 占的 map 一直占着不自动释放，需 `/canvas delete` 显式清
+4. wand 瞄已有 ItemFrame：先提示「This is wall <id> 'alias' — left-click again to open」，再次操作才打开二次编辑
+5. 排他锁保留（`byWall` 一墙一时刻一 session），不做协作编辑
+
+**契约文档更新清单：**
+
+- **`CLAUDE.md`**：里程碑插入 M5.5 阶段；新增「M5.5 wall 模型重构」一整节固化新模型 6 条规则与已修订文档列表。
+- **`docs/architecture.md`**：
+  - §1.1 一句话改写：从"提交后成为永久招牌"改为"任何时候都能再次打开继续改"
+  - §1.3 数据流：删「提交（转永久）」流程图，改为「发布（标签层）」+「删除（仅此操作真正移除 wall）」两段
+  - §3 状态机重写：删 `ACTIVE → CLOSING(commit)` 转移；新增 `CLOSED → ACTIVE`（`/canvas open`）；状态转移表新增 reselect / publish / open 行；明确「session 生命周期 vs wall 数据生命周期解耦」不变量
+  - §4.2 `PooledMap` schema：删 `signId`、state 收为两态、reservedBy 改 `wall:<wall_id>`
+  - §4.3 reserve/commit/cleanup pseudocode 重写：`reserveForWall` / `bindWall` 替代 `reserve` + `commit`
+  - §4.5 健康指标：删 `pool.permanent`，加 `pool.unowned_reserved`
+  - §7.2 物品框部署：PDC keys 从 `session/sign/role` 改为 `wall_id/slot/published_at`；§7.3 改"提交 vs 取消"为「wall 数据 vs 会话 生命周期对照表」
+  - §8.2 SignRecord 表概览改为 walls 表概览
+  - §10/§12 性能指标 / 未决问题加 M5.5 条目
+- **`docs/data-model.md`**：
+  - §2.3 `pool_maps`：删 `sign_id` 列、state 改两态、不变式重写
+  - §2.4 `sign_records` → `walls` 完整重写（含 wall_id 主键、published_at、alias、唯一索引、删除语义无软删）
+  - §2.5 `audit_log` event 列表更新（`COMMIT/CANCEL/CLEANUP` → `SESSION_*`/`WALL_*`/`POOL_*`）
+  - §3 PDC 约定大幅简化：MapView PDC 不写、ItemFrame PDC 三个 key、Map Item PDC 不写
+  - §6.5 新增「V005 整体重置」说明（M5.5 阶段无生产数据，drop + recreate 而非 alter）
+  - §7.1 不一致场景重写（针对 walls + map_ids + ItemFrame PDC）
+  - §8 查询示例全替换：玩家画清单 / 全局已发布 / 反查 mapId / 区域查询
+  - §10 未决问题加 M5.5 条目（walls_map_index 反向表 / alias 大小写 / delete 备份）
+- **`docs/protocol.md`**：
+  - §3.4 客户端主动关闭：删 commit 提及，加 op auto-save 说明
+  - §5.6 会话终结：删 `commit` op，加 `wall.publish` / `wall.unpublish` / `wall.alias`
+  - §6 错误码加 `ALIAS_TAKEN` / `WALL_NOT_FOUND`
+  - §6.2 close 1000 描述改写
+  - §8.3 提交流程改写为「发布与终结」
+  - §12 未决问题：history.mark 持久化决策更明确（M7 加 walls.history_json）
+- **`docs/security.md`**：
+  - §5 权限节点：`canvas.commit` → `canvas.publish`；`canvas.remove.{own,any}` → `canvas.delete.{own,any}`
+  - §6 校验检查点：`/canvas remove` → `/canvas delete <wall_id>`（含二次确认强制 30s）
+- **`docs/rendering.md`**：边界条件表格里"超大画布 commit 拒绝" → "confirm 阶段 WallResolver 拒绝"
+- **`PROPOSAL.md`**：
+  - §5.2.1 推送时机术语：'提交' → 'session 关闭前最后一帧'
+  - §5.2.2 池设计：删 PERMANENT、reservedBy 改 wall: 前缀
+  - §5.2.4 审计事件列表更新
+  - 命令清单完整重写：edit / wand / confirm / open / list / publish / unpublish / alias / delete / cancel / cleanup / stats / audit；明确废止 commit
+  - 性能指标 commit 改 confirm
+
+**未动文件**：`docs/template-spec.md`（模板规范不涉及 wall 模型，M6 时再视情更新）。
+
+**下一步：** 下个会话按 architecture.md §3-4 + data-model.md §2 的固化契约动代码。Phase 顺序：P1 数据层（V005 + WallRepo + MapPool 改）→ P2 命令族 → P3 WallResolver 二次识别 + wand 瞄 ItemFrame → P4 网页 wall 元数据 UI → P5 网页首页。预计 4 天 + 网页 2 天。
+
+---
+
 ## 2026-04-23 · 文档 + 记忆归档整理（为下一次上下文压缩准备）
 
 **背景：** 上下文即将压缩；为让下一次 Claude 实例接手时不丢队、不重复踩坑、不重新推理已定项目决策，对如下信息做集中归档。

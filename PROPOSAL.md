@@ -88,7 +88,7 @@ Minecraft 城市建筑、主题服务器中，文字招牌是高频需求：商�
 - 帧率策略：
   - 静止：0 fps（不推送，最后一帧自持）
   - 输入中：防抖 100ms，上限 5 fps
-  - 提交：一次全质量完整推送
+  - session 关闭前：一次全质量完整推送（M5.5 起无显式 commit，cancel/disconnect 时 throttler flush）
 - 压缩：WebSocket 开 `permessage-deflate`（JSON 指令）；map packet 走 MC 协议层 zlib
 
 **命令与交互（`/canvas` 前缀）：**
@@ -97,14 +97,20 @@ Minecraft 城市建筑、主题服务器中，文字招牌是高频需求：商�
 - **命令模式**：`/canvas edit` 进入 `SELECTING` 状态；之后玩家**空手或任何方块**点击墙面两个对角方块即可（左键 pos1 / 右键 pos2）；每次点击聊天栏回显坐标与初步识别结果
 - **工具模式**：`/canvas wand` 领取一根命名金铲「Canvas Wand」；持 wand 时左/右键**无需先打命令**即能选区，玩家自主决定是否占背包一格
 
-子命令清单：
-- `/canvas edit` — 开启 SELECTING 状态
-- `/canvas wand` — 发放 Canvas Wand（幂等，已有不重发）
-- `/canvas confirm` — 确认当前选区：**立即挂物品框 + 借池地图（填 placeholder）+ 签发 URL**
-- `/canvas cancel` — 撤销 selection 或终止活跃会话
-- `/canvas commit` — 与浏览器 `{op: "commit"}` 等价的命令回退通道
-- `/canvas cleanup` — 管理员清理废弃成品地图
+子命令清单（M5.5 起的 wall 模型）：
+- `/canvas edit` — 开启 SELECTING 状态；自动发 wand + chat 三步引导
+- `/canvas wand` — 单独发放 Canvas Wand（幂等，已有不重发）
+- `/canvas confirm` — 确认当前选区：**新建 wall（挂物品框 + 借池）或打开现有 wall（bind + 不挂框）+ 签发 URL**
+- `/canvas open <wall_id\|alias>` — 直接打开已有画继续编辑（不需要先选区）
+- `/canvas list` — 列出我的画（按"编辑中 / 已发布"分组）
+- `/canvas publish` / `/canvas unpublish` — 标记当前 session 的画为已发布/草稿
+- `/canvas alias <name>` — 给当前 session 的画起别名
+- `/canvas delete <wall_id> [confirm]` — 删除画（首次提示要 30s 内重复带 confirm）
+- `/canvas cancel` — 撤销 selection 或终止活跃会话（**不删画**）
+- `/canvas cleanup` — 管理员清理孤立 ItemFrame / walls 行
 - `/canvas stats` / `/canvas audit` — 管理员查看池状态与审计
+
+> M5.5 起 `/canvas commit` 命令彻底废止；保存通过 op auto-save 实现，"发布"是纯 UI 标签。
 
 Placeholder 地图样式：**浅灰底 + 顶部 "HikariCanvas" 水印 + 底部方位坐标文字**（M2 使用预烘焙位图 ASCII 字表；中文字体待 M4 渲染引擎接入后再回填）。
 
@@ -195,18 +201,20 @@ Placeholder 地图样式：**浅灰底 + 顶部 "HikariCanvas" 水印 + 底部�
 **整个项目的技术核心。** 没做好就会刷爆 `idcounts.dat`。
 
 - 插件启动时从配置读取池大小（默认 64 张），一次性 `Bukkit.createMap()` 或从 SQLite 恢复现有池
-- 池状态：`FREE` / `RESERVED(sessionId)` / `PERMANENT(signId)`
-- 编辑会话开启：按需借出 N×M 张 FREE → RESERVED
+- 池状态：`FREE` / `RESERVED(reservedBy)`，其中 reservedBy 在 M5.5 wall 模型下统一格式 `wall:<wall_id>`
+- 创建新画：按需借出 N×M 张 FREE → RESERVED（owner = `wall:<wall_id>`）
+- 打开已有画：bind 同 owner 接管 RESERVED 的 maps（不再借新）
 - 编辑过程：**不新建 MapView**，只通过 `PacketEvents` 发 `ClientboundMapItemDataPacket` 更新像素
-- 提交：RESERVED → PERMANENT，写入 SQLite，打 PDC owner 标记；从池中抽走，自动补新 FREE
-- 取消：内容清空 → 归还 FREE
+- 删除画（`/canvas delete`）：RESERVED → FREE
 - 池枯竭：提示用户稍后/按配置自动扩容（上限防失控）
+
+> M5.5 起废除原 `PERMANENT` 状态：wall 占的 map 一直 RESERVED 直到 wall 被删除；publish 不动池。
 
 #### 5.2.3 帧率与压缩策略
 
 - **静止：0 fps**（不推送，最后一帧显示持续）
 - **输入中：** 前端防抖 100ms；服务端再做 5 fps 节流
-- **提交：** 一次完整推送
+- **session 关闭前最后一帧：** 一次完整推送（M5.5 起改由 cancel/disconnect 时 throttler flush，无显式 commit 触发）
 - **脏矩形：** 局部改字只推改动块（map packet 原生支持 `x/y/columns/rows` 子区域）
 - **压缩：**
   - 浏览器 ↔ 插件：WebSocket `permessage-deflate`（JSON 指令压缩率高）
@@ -217,9 +225,9 @@ Placeholder 地图样式：**浅灰底 + 顶部 "HikariCanvas" 水印 + 底部�
 
 - **默认 `bind: 127.0.0.1`**，配置可改 `0.0.0.0` 并强制警告
 - 服主公网场景：文档给 nginx 反代 + Let's Encrypt TLS 模板；WSS 在反代层终止；插件本体只说 HTTP
-- Token：玩家游戏内 `/canvas confirm` 生成（`/canvas edit` 只是开启 selecting 状态），单次使用，15 分钟过期，绑定 UUID
+- Token：玩家游戏内 `/canvas confirm` 或 `/canvas open` 生成，单次使用，15 分钟过期，绑定 UUID
 - 限流：每玩家 WS 消息 20 msg/s；握手失败 N 次拉黑 IP
-- 审计：所有 commit/cancel/cleanup 记 SQLite 日志
+- 审计：所有 session/wall 关键事件记 SQLite 日志（SESSION_BEGIN/CONFIRM/CANCEL，WALL_PUBLISH/UNPUBLISH/DELETE，POOL_*）
 
 #### 5.2.5 直接发包绕开 MapRenderer
 
@@ -413,7 +421,7 @@ params:
 
 ### 8.1 技术指标
 - 编辑时端到端延迟（浏览器按键 → 游戏内显示）< 300ms
-- 单次 commit 生成 8×4 地图招牌 < 500ms（主线程不卡顿）
+- 单次 confirm 部署 8×4 物品框 + 首帧 < 500ms（主线程不卡顿）
 - 插件内存稳态 < 100MB（含预览池 64 张地图）
 - 预览池 1 周满负载运行，地图 ID 净增量 = 0（会话结束正确归还）
 - 10 玩家并发编辑无明显延迟

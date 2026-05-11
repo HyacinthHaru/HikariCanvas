@@ -385,7 +385,7 @@ CI 流程：
 | --- | --- |
 | 空文本 | 元素不渲染（但占位包围盒仍用于 layout） |
 | 字号 ≤ 0 | 元素不渲染，校验阶段应已拦截 |
-| 超大画布（> `limits.canvas-max-maps`） | commit 拒绝 |
+| 超大画布（> `limits.canvas-max-maps`） | confirm 阶段 WallResolver 拒绝（M5.5 起，校验在新建路径一次性做；现有 wall 即使配置改小也允许打开） |
 | 元素超出画布边界 | 只绘制画布内部分，越界部分裁剪 |
 | 字体不存在 | fallback 到默认字体并产生 `session.warning` |
 | 调色板 LUT 未加载 | 渲染拒绝并 `INTERNAL_ERROR` |
