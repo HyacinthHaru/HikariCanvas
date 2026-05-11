@@ -52,6 +52,9 @@ public final class CanvasCommand {
 
     /** delete 二次确认的窗口（毫秒）。在此期间内 player 再敲带 confirm 才真删。 */
     private static final long DELETE_CONFIRM_WINDOW_MS = 30_000;
+    /** wall alias 字符集：字母数字 _ -，长度 2-32。与 WebServer / 前端三路一致。 */
+    private static final java.util.regex.Pattern ALIAS_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9_-]{2,32}$");
 
     private final JavaPlugin plugin;
     private final SessionManager sessionManager;
@@ -333,8 +336,9 @@ public final class CanvasCommand {
             return Command.SINGLE_SUCCESS;
         }
         String alias = StringArgumentType.getString(ctx, "name");
-        if (alias.length() < 2 || alias.length() > 32) {
-            player.sendMessage(Component.text("Alias must be 2-32 chars.", NamedTextColor.RED));
+        if (!ALIAS_PATTERN.matcher(alias).matches()) {
+            player.sendMessage(Component.text(
+                    "Alias must match [A-Za-z0-9_-]{2,32}.", NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
         boolean ok = wallRepo.setAlias(s.wallId(), alias);

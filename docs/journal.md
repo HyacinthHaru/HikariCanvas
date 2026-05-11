@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-05-11 · M5.5 polish 收口（i18n / alias 校验 / copy 反馈）
+
+**背景：** 主功能已通，先填几个之前散落的体验坑再进 M6。身份认证 / 鉴权单列下一个 milestone 不在此次范围。
+
+**改动：**
+
+1. **i18n 漏译补全**：`messages.ts` 加两组 `wall.*` + `home.*`，把 TopBar 的 wall_id / alias / Published / Draft / Refresh 按钮全切到 `t.wall.*`；HomePage 整页（heading / subtitle / loading / failed / empty / 分组标题 / 卡片 maps+updatedAt+复制提示）切到 `t.home.*`。中英文双向（en→中英 switchLocale 文案也对齐：en mode 显示 `切换到中文`，zh mode 显示 `Switch to English`）。
+2. **alias 字符集校验三路统一**：正则 `^[A-Za-z0-9_-]{2,32}$`。
+   - 前端 `TopBar.commitAliasEdit` 加 `ALIAS_RE` 校验；服务端 `INVALID_ALIAS_FORMAT` / `ALIAS_TAKEN` 报错时 watch `net.lastError` 自动重打开输入 + 显错
+   - WebServer `wall.alias` 分支用 `ALIAS_PATTERN` 替代旧的长度校验，错误码改 `INVALID_ALIAS_FORMAT`
+   - CanvasCommand `runAlias` 同 pattern，错误提示 `[A-Za-z0-9_-]{2,32}`
+3. **copy 操作的视觉反馈**：
+   - TopBar wall_id 按钮：点击复制后 800ms 内显示 `Copied`（绿色），不再只 log
+   - HomePage 卡片底部 `/canvas open <id>` 命令文本：点击复制后 900ms 内同样视觉反馈
+
+**改的文件：** `web/src/i18n/messages.ts` / `web/src/components/layout/TopBar.vue` / `web/src/components/HomePage.vue` / `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java` / `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`
+
+**下一步：** M6 模板系统（5 个内置 + YAML parser + TemplateGallery dialog）。身份认证 / 鉴权单独立项处理（HomePage 点击直接打开需要先有玩家身份机制）。
+
+---
+
 ## 2026-05-11 · wall 实测打磨（自家画框识别 + wall.refresh）
 
 **背景：** P1-P5 实测后剩两个体验问题：(a) `/canvas edit` 在已有画的墙上选区会撞 `OCCUPIED`，玩家被迫先 delete 才能二次编辑；(b) 创造模式打掉某个画框后该位置永远空白，没有恢复入口。

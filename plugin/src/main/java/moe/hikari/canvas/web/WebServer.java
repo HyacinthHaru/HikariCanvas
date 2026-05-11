@@ -42,6 +42,10 @@ import java.util.logging.Logger;
  */
 public final class WebServer {
 
+    /** wall alias 字符集：字母数字 _ -，长度 2-32。前端 / WS / 命令三路统一校验。 */
+    private static final java.util.regex.Pattern ALIAS_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9_-]{2,32}$");
+
     private static final String ATTR_SESSION_ID = "sessionId";
 
     private final Logger log;
@@ -456,9 +460,9 @@ public final class WebServer {
             }
             case "wall.alias" -> {
                 String alias = stringOrNull(payload.get("alias"));
-                if (alias == null || alias.length() < 2 || alias.length() > 32) {
-                    ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
-                            "alias must be 2-32 chars"));
+                if (alias == null || !ALIAS_PATTERN.matcher(alias).matches()) {
+                    ctx.send(Envelope.error(in.id(), "INVALID_ALIAS_FORMAT",
+                            "alias must match [A-Za-z0-9_-]{2,32}"));
                     return;
                 }
                 boolean ok = wallRepo.setAlias(wallId, alias);
