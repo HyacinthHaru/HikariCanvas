@@ -66,19 +66,140 @@ public final class FrameDeployer {
     }
 
     /**
-     * M5-D9 wall.refresh：补 spawn 用户在创造模式撸掉的画框。{@code wallId} 已有 ItemFrame
-     * 的 slot 跳过；缺失 slot 重新 spawn 同样的 PDC + 同样的 MapView。返回新补的数量。
+     * {@link #repairFor} 的结果。
+     *
+     * @param framesRespawned   完全不存在的画框 → 新 spawn 的数量
+     * @param framesReAttached  画框还挂着但 map item 被撸掉的 → 直接 setItem 塞回的数量
+     * @param wallBlocksReplaced 顺手补回的支撑方块数
      */
-    public int repairFor(String wallId, WallResolver.Result.Ok wall, List<Integer> mapIds) {
-        // 收集现有 slot
+    public record RepairResult(int framesRespawned, int framesReAttached, int wallBlocksReplaced) {
+        /** 合并"重挂"计数：spawn 新 frame + 给空 frame 塞回 map，对玩家来说都算"修好了一格"。 */
+        public int framesFixed() { return framesRespawned + framesReAttached; }
+    }
+
+    /**
+     * M5-D9 wall.refresh：补 spawn 用户在创造模式撸掉的画框。
+     *
+     * <p><b>关键修复（2026-05-12 实测后）：</b> 玩家通常撸掉的是<b>支撑方块</b>，不是画框本身；
+     * 画框因失去支撑掉到地上变成物品。仅 spawn 新画框时它会立即又掉下来 —— 这就是"按刷新按钮
+     * 看似没反应"的真实原因。本方法现在先扫一遍墙面 bbox，把缺失的支撑方块用 {@link Material#STONE}
+     * 自动补回（玩家可以事后手动换皮），再走原 spawn 流程。</p>
+     *
+     * <p>{@code wallId} 已有 ItemFrame 的 slot 跳过；缺失 slot 重新 spawn 同样的 PDC + MapView。</p>
+     */
+    public RepairResult repairFor(String wallId, WallResolver.Result.Ok wall, List<Integer> mapIds) {
+        // 1) 补回缺失的支撑方块（画框需要支撑才能挂住）
+        int wallBlocksReplaced = replaceMissingWallBlocks(wall);
+
+        // 2) 扫现存画框。三态：
+        //    a) 完整（PDC + 有 FILLED_MAP item）→ present
+        //    b) 空框（PDC 在但 item 被撸掉 / 不是 FILLED_MAP）→ emptyFrames，待 setItem 重新塞回
+        //    c) 完全不存在 → 待 deployFor spawn
+        //    MC 左键撸 ItemFrame 第一次去内容，第二次才打掉 entity；很多玩家只撸第一下就发现"画没了"
         java.util.Set<Integer> present = new java.util.HashSet<>();
+        java.util.Map<Integer, ItemFrame> emptyFrames = new java.util.HashMap<>();
+        int scanned = 0;
+        int deadOrInvalid = 0;
+        int wallMatched = 0;
         for (ItemFrame f : wall.world().getEntitiesByClass(ItemFrame.class)) {
+            scanned++;
+            if (f.isDead() || !f.isValid()) { deadOrInvalid++; continue; }
             PersistentDataContainer pdc = f.getPersistentDataContainer();
             if (!wallId.equals(pdc.get(wallIdKey, PersistentDataType.STRING))) continue;
+            wallMatched++;
             Integer slot = pdc.get(slotKey, PersistentDataType.INTEGER);
-            if (slot != null) present.add(slot);
+            if (slot == null) continue;
+            ItemStack held = f.getItem();
+            if (held != null && held.getType() == Material.FILLED_MAP) {
+                present.add(slot);
+            } else {
+                emptyFrames.put(slot, f);
+            }
         }
-        return deployFor(wallId, wall, mapIds, present);
+        int expected = wall.width() * wall.height();
+        plugin.getLogger().info(String.format(
+                "[wall.refresh %s] scanned=%d deadOrInvalid=%d wallMatched=%d present=%s "
+                        + "emptyFrames=%s expected=%d replacedBlocks=%d",
+                wallId, scanned, deadOrInvalid, wallMatched, present,
+                emptyFrames.keySet(), expected, wallBlocksReplaced));
+
+        // 3) 给"画框还在但内容被撸掉"的 slot 直接 setItem，不需要 spawn 新 entity
+        int framesReAttached = reAttachMapsToEmptyFrames(wallId, wall, mapIds, emptyFrames);
+
+        // 4) 完全缺失的 slot 走原 spawn 路径
+        java.util.Set<Integer> skipSlots = new java.util.HashSet<>(present);
+        skipSlots.addAll(emptyFrames.keySet());  // 空框已经在 step 3 处理完了，不要再 spawn
+        int framesRespawned = deployFor(wallId, wall, mapIds, skipSlots);
+        plugin.getLogger().info("[wall.refresh " + wallId + "] framesRespawned=" + framesRespawned
+                + " framesReAttached=" + framesReAttached);
+        return new RepairResult(framesRespawned, framesReAttached, wallBlocksReplaced);
+    }
+
+    /** 给已存在但 item 被撸掉的画框重新塞回对应 mapId 的 FILLED_MAP。 */
+    private int reAttachMapsToEmptyFrames(String wallId, WallResolver.Result.Ok wall,
+                                           List<Integer> mapIds,
+                                           java.util.Map<Integer, ItemFrame> emptyFrames) {
+        int fixed = 0;
+        int total = wall.mapCount();
+        for (var entry : emptyFrames.entrySet()) {
+            int slot = entry.getKey();
+            ItemFrame f = entry.getValue();
+            if (slot < 0 || slot >= mapIds.size()) {
+                plugin.getLogger().warning("[reAttach] slot " + slot + " out of mapIds range for wall " + wallId);
+                continue;
+            }
+            int mapId = mapIds.get(slot);
+            MapView view = Bukkit.getMap(mapId);
+            if (view == null) {
+                plugin.getLogger().warning("[reAttach] MapView missing for mapId=" + mapId + " slot=" + slot);
+                continue;
+            }
+            ItemStack mapItem = new ItemStack(Material.FILLED_MAP);
+            MapMeta meta = (MapMeta) mapItem.getItemMeta();
+            meta.setMapView(view);
+            mapItem.setItemMeta(meta);
+            f.setItem(mapItem);
+            f.setRotation(Rotation.NONE);
+            // 同时把当前 placeholder 重画一遍，throttler 之后会把真实 ProjectState 像素覆盖
+            byte[] pixels = placeholderRenderer.render(slot, total);
+            canvasRenderer.update(mapId, pixels);
+            plugin.getLogger().info("[reAttach] OK slot=" + slot + " mapId=" + mapId
+                    + " frameUuid=" + f.getUniqueId());
+            fixed++;
+        }
+        return fixed;
+    }
+
+    /**
+     * 扫 wall bbox 内的方块；任何 AIR 都视为玩家撸掉的支撑，补 {@link Material#STONE}。
+     * 安全考虑：只动 wall 自己 8 个方块的 bbox，绝不外溢。
+     */
+    private int replaceMissingWallBlocks(WallResolver.Result.Ok wall) {
+        World world = wall.world();
+        int width = wall.width();
+        int height = wall.height();
+        BlockFace facing = wall.facing();
+        int replaced = 0;
+        for (int row = 0; row < height; row++) {
+            for (int col = 0; col < width; col++) {
+                int blockY = wall.minY() + (height - 1 - row);
+                int blockX;
+                int blockZ;
+                switch (facing) {
+                    case NORTH -> { blockX = wall.minX() + (width - 1 - col); blockZ = wall.minZ(); }
+                    case SOUTH -> { blockX = wall.minX() + col;               blockZ = wall.minZ(); }
+                    case EAST  -> { blockX = wall.minX();                     blockZ = wall.minZ() + (width - 1 - col); }
+                    case WEST  -> { blockX = wall.minX();                     blockZ = wall.minZ() + col; }
+                    default -> throw new IllegalStateException("unsupported facing: " + facing);
+                }
+                org.bukkit.block.Block b = world.getBlockAt(blockX, blockY, blockZ);
+                if (b.getType().isAir()) {
+                    b.setType(Material.STONE, false);
+                    replaced++;
+                }
+            }
+        }
+        return replaced;
     }
 
     /**
@@ -157,15 +278,65 @@ public final class FrameDeployer {
         meta.setMapView(view);
         mapItem.setItemMeta(meta);
 
+        // 防御 1：支撑方块仍 AIR（极小概率：replaceMissingWallBlocks 之后又有 player 撸到）→ 再补
+        org.bukkit.block.Block support = world.getBlockAt(blockX, blockY, blockZ);
+        if (support.getType().isAir()) {
+            plugin.getLogger().warning("[spawnSlot] support still AIR at (" + blockX + "," + blockY
+                    + "," + blockZ + ") slot=" + slotIndex + "; placing STONE again");
+            support.setType(Material.STONE, false);
+        }
+
+        // 防御 2：frameLoc 处的方块必须 air，否则 ItemFrame 无法 spawn
+        org.bukkit.block.Block frontBlock = world.getBlockAt(
+                blockX + facing.getModX(),
+                blockY + facing.getModY(),
+                blockZ + facing.getModZ());
+        if (!frontBlock.getType().isAir()) {
+            plugin.getLogger().warning("[spawnSlot] front block at " + frontBlock.getLocation()
+                    + " is " + frontBlock.getType() + " (not air), clearing for slot=" + slotIndex);
+            frontBlock.setType(Material.AIR, false);
+        }
+
+        // 防御 3：清掉 frameLoc 1 格内残留的 Item 掉落物（撸破的画框 / 地图 item 可能掉在这）
+        //         + 清掉同位的"幽灵" ItemFrame（PDC 不带 wall_id 或带别的 wall_id 都视为残骸）
+        for (org.bukkit.entity.Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
+            if (e instanceof org.bukkit.entity.Item || e instanceof ItemFrame) {
+                if (e instanceof ItemFrame ifr) {
+                    String w = ifr.getPersistentDataContainer().get(wallIdKey, PersistentDataType.STRING);
+                    if (wallId.equals(w)) continue;  // 同 wall 的健康 frame 不动
+                }
+                plugin.getLogger().info("[spawnSlot] removing stray " + e.getType()
+                        + " at " + e.getLocation() + " for slot=" + slotIndex);
+                e.remove();
+            }
+        }
+
         final int finalSlot = slotIndex;
-        world.spawn(frameLoc, ItemFrame.class, f -> {
-            f.setFacingDirection(facing, true);
-            f.setItem(mapItem);
-            f.setRotation(Rotation.NONE);
-            PersistentDataContainer pdc = f.getPersistentDataContainer();
-            pdc.set(wallIdKey, PersistentDataType.STRING, wallId);
-            pdc.set(slotKey, PersistentDataType.INTEGER, finalSlot);
-        });
+        ItemFrame frame;
+        try {
+            frame = world.spawn(frameLoc, ItemFrame.class, f -> {
+                f.setFacingDirection(facing, true);
+                f.setItem(mapItem);
+                f.setRotation(Rotation.NONE);
+                PersistentDataContainer pdc = f.getPersistentDataContainer();
+                pdc.set(wallIdKey, PersistentDataType.STRING, wallId);
+                pdc.set(slotKey, PersistentDataType.INTEGER, finalSlot);
+            });
+        } catch (Exception e) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "[spawnSlot] world.spawn threw for slot=" + slotIndex
+                            + " loc=" + frameLoc + " facing=" + facing, e);
+            return false;
+        }
+        if (frame == null || frame.isDead() || !frame.isValid()) {
+            plugin.getLogger().warning("[spawnSlot] spawn returned invalid frame slot=" + slotIndex
+                    + " loc=" + frameLoc + " frame=" + frame
+                    + " isDead=" + (frame != null && frame.isDead())
+                    + " isValid=" + (frame != null && frame.isValid()));
+            return false;
+        }
+        plugin.getLogger().info("[spawnSlot] OK slot=" + slotIndex + " mapId=" + mapId
+                + " loc=" + frameLoc + " uuid=" + frame.getUniqueId());
 
         // 首次/补 spawn 都写一遍 placeholder；wall.refresh 之后由 throttler 全画布重画覆盖
         byte[] pixels = placeholderRenderer.render(slotIndex, total);

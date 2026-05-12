@@ -3,7 +3,6 @@ package moe.hikari.canvas.state;
 import moe.hikari.canvas.render.DirtyRegion;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
@@ -279,76 +278,31 @@ public final class EditSession {
                 DirtyRegion.fullCanvas(state));
     }
 
-    // ---------- template.apply ----------
+    // ---------- template.apply（M6-D 起走 WebServer → TemplateInstantiator → replaceContent） ----------
 
     /**
-     * M3-T12：应用命名模板。当前只识别 {@code "hello_world"} 一种硬编码模板；
-     * 正规 YAML 模板系统留 M6（{@code docs/template-spec.md}）。
+     * 替换 ProjectState 内容（背景 + element list）。{@code template.apply} 的"replace 语义"
+     * 在此落地：清空 elements、改 canvas.background、写入新 elements、推进 version、压
+     * pre-mutation 快照到 history。下行 {@code state.snapshot} 全量。
      *
-     * <p>语义：清空现有 elements + 改背景色 + 插入模板预置 elements；下行 {@code state.snapshot}。</p>
+     * <p><b>不查模板：</b> 模板解析 / 校验 / 实例化由 WebServer 在调用前完成；这里只做
+     * 数据替换。{@code templateId} 仅用于 audit / WallRepo write-back 时携带。</p>
      *
-     * @param params 模板参数（M6 用；M3 hello_world 无参数）
+     * @param backgroundColor 新背景色（{@code #RRGGBB[AA]}）
+     * @param elements        新 element 列表（已由 {@link moe.hikari.canvas.template.TemplateInstantiator} 物化）
      */
-    public synchronized OpResult applyTemplate(String templateId, Map<String, Object> params) {
-        if (!"hello_world".equals(templateId)) {
-            return err("INVALID_PAYLOAD",
-                    "unknown template: " + templateId + " (M3 only supports \"hello_world\")");
-        }
+    public synchronized OpResult replaceContent(String backgroundColor, List<Element> elements) {
         ProjectSnapshot pre = snapshotNow();
         ProjectState.Canvas c = state.canvas();
-        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(), "#4A90E2"));
+        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(),
+                backgroundColor == null ? c.background() : backgroundColor));
         state.clearElements();
-        for (Element e : buildHelloWorld(c.widthMaps(), c.heightMaps())) {
-            state.addElement(e);
+        if (elements != null) {
+            for (Element e : elements) state.addElement(e);
         }
         commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
-    }
-
-    /**
-     * hello_world 模板：湖蓝底（模板自改）+ 白色空心框 + 居中 "HELLO WORLD"。
-     *
-     * <p>自适应画布尺寸：frame 距 canvas 边缘 8px、stroke 2px；text 按 canvas 宽度
-     * 计算 scale（BitmapFont glyphUnit=6px），保证文字能完整装下。</p>
-     */
-    private static List<Element> buildHelloWorld(int widthMaps, int heightMaps) {
-        final int CHAR_UNIT = 6; // BitmapFont 5px 字 + 1px 间隔
-        final int CHAR_H = 7;    // BitmapFont.CHAR_HEIGHT
-        int w = widthMaps * 128;
-        int h = heightMaps * 128;
-        int margin = 8;
-        int strokeW = 2;
-        String text = "HELLO WORLD";
-
-        List<Element> list = new ArrayList<>(2);
-
-        // 白色空心框：从 margin 起，距 canvas 四边 margin
-        list.add(new RectElement(
-                "e-" + UUID.randomUUID(),
-                margin, margin, w - 2 * margin, h - 2 * margin,
-                0, false, true,
-                null, new Stroke(strokeW, "#FFFFFF")));
-
-        // 居中 HELLO WORLD：scale 使得文字宽度不溢出框内 (w - 2*margin - 2*strokeW - 2*innerPad)
-        int innerPad = 4;
-        int usable = Math.max(CHAR_UNIT * text.length(), w - 2 * margin - 2 * strokeW - 2 * innerPad);
-        int scale = Math.max(1, usable / (text.length() * CHAR_UNIT));
-        // 再卡一次上限以防极大画布字溢出
-        while (scale > 1 && text.length() * CHAR_UNIT * scale > (w - 2 * margin - 2 * strokeW - 2 * innerPad)) {
-            scale--;
-        }
-        int fontSize = CHAR_H * scale;
-        int textH = fontSize;
-
-        list.add(new TextElement(
-                "e-" + UUID.randomUUID(),
-                0, (h - textH) / 2, w, textH,
-                0, false, true,
-                text, "ark_pixel", fontSize, "#FFFFFF", "center",
-                0f, 1.2f, false, null));
-
-        return list;
     }
 
     // ---------- undo / redo / history.mark ----------

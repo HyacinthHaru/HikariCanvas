@@ -8,6 +8,7 @@ import RightPanel from '@/components/layout/RightPanel.vue';
 import StatusBar from '@/components/layout/StatusBar.vue';
 import LogDrawer from '@/components/layout/LogDrawer.vue';
 import HomePage from '@/components/HomePage.vue';
+import TemplateGallery from '@/components/template/TemplateGallery.vue';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -113,5 +114,6 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
       <LogDrawer />
     </div>
     <StatusBar />
+    <TemplateGallery />
   </div>
 </template>

@@ -46,20 +46,27 @@ const transformerConfig = {
         'top-left', 'top-right', 'bottom-left', 'bottom-right',
         'middle-left', 'middle-right', 'top-center', 'bottom-center',
     ],
-    // M5-D6：不再强制 snap 到 0/90/180/270，任意角度都可用；按 Shift 拖旋才 snap 到 15° 倍数
     rotationSnaps: [] as number[],
     rotationSnapTolerance: 5,
     borderStroke: '#60a5fa',
+    borderStrokeWidth: 1.5,
     anchorStroke: '#60a5fa',
     anchorFill: '#0b1120',
-    anchorSize: 8,
-    rotateAnchorOffset: 24,
+    // 2026-05-12 polish：anchor 由 8 升 12，方便拖拽；rotate 锚点也拉远 8px
+    anchorSize: 12,
+    rotateAnchorOffset: 32,
 };
+
+/** 悬停的 element id；用于画 hover 描边提示"可拖拽"。 */
+const hoverId = ref<string | null>(null);
 
 const elements = computed(() => project.state?.elements ?? []);
 
 function hitConfig(e: Element) {
     // Konva 用 offsetX/Y 把「bbox 左上」坐标转为「绕中心旋转」
+    const hovered = hoverId.value === e.id;
+    const selected = ui.selectedElementId === e.id;
+    const canDrag = !e.locked && e.visible;
     return {
         id: e.id,
         name: 'element-hit',
@@ -70,10 +77,27 @@ function hitConfig(e: Element) {
         offsetX: e.w / 2,
         offsetY: e.h / 2,
         rotation: e.rotation,
-        // 完全透明但 hit 可点
+        // hover/选中时画轻微描边，让 PS 式拖拽提示可见；rgba 完全透明但 hit 可点
         fill: 'rgba(0,0,0,0.001)',
-        draggable: !e.locked && e.visible,
+        stroke: hovered && !selected ? '#60a5fa' : undefined,
+        strokeWidth: hovered && !selected ? 1 : 0,
+        dash: hovered && !selected ? [4, 3] : undefined,
+        draggable: canDrag,
     };
+}
+
+function onHitMouseEnter(ev: { target?: { getStage?: () => { container?: () => HTMLElement | undefined } | undefined } }, id: string) {
+    hoverId.value = id;
+    const stage = ev?.target?.getStage?.();
+    const container = stage?.container?.();
+    if (container) container.style.cursor = 'move';
+}
+
+function onHitMouseLeave(ev: { target?: { getStage?: () => { container?: () => HTMLElement | undefined } | undefined } }) {
+    hoverId.value = null;
+    const stage = ev?.target?.getStage?.();
+    const container = stage?.container?.();
+    if (container) container.style.cursor = 'default';
 }
 
 function normalizeRotation(deg: number): number {
@@ -81,8 +105,9 @@ function normalizeRotation(deg: number): number {
 }
 
 function onHitClick(ev: { cancelBubble?: boolean }, id: string): void {
+    // 切到别的元素或者在编辑中点同一元素的非 textarea 区域 → 先收编辑态
+    if (editingId.value && editingId.value !== id) finishEditing();
     ui.selectElement(id);
-    // 避免 click 冒到 stage 被解析成"空白"
     if (ev) ev.cancelBubble = true;
 }
 
@@ -122,14 +147,37 @@ function onEditKeydown(ev: KeyboardEvent) {
 }
 
 function onStageMouseDown(ev: { target: { getStage?: () => unknown; getType?: () => string; hasName?: (n: string) => boolean } }): void {
-    // 点击 stage 根（非任何 shape）时 deselect
+    // 点击 stage 根（非任何 shape）时 deselect + 同时收掉编辑态，避免"一个在编辑、一个被拖动"的鬼态
     const node = ev.target as { getType?: () => string; hasName?: (n: string) => boolean } | null;
     if (!node) return;
     const type = node.getType?.();
     const isElementHit = node.hasName?.('element-hit') ?? false;
     if (!isElementHit && type !== 'Shape') {
+        if (editingId.value) finishEditing();
         ui.selectElement(null);
     }
+}
+
+/** 双击 stage 空白处：取消所有选中 + 退出编辑（用户实测后明确要求的 escape 路径）。 */
+function onStageDblClick(ev: { target: { getType?: () => string; hasName?: (n: string) => boolean } }): void {
+    const node = ev.target as { getType?: () => string; hasName?: (n: string) => boolean } | null;
+    if (!node) return;
+    const isElementHit = node.hasName?.('element-hit') ?? false;
+    if (!isElementHit) {
+        if (editingId.value) finishEditing();
+        ui.selectElement(null);
+    }
+}
+
+// 切换 Move 工具时也应主动收掉编辑态——避免"Move 模式下拖一个、textarea 仍浮在另一个上"
+watch(() => ui.activeTool, () => {
+    if (editingId.value) finishEditing();
+});
+
+function onDragStart(id: string): void {
+    // 用户在编辑 A 时点 B 直接拖，Konva 走 mousedown → dragstart 而不触发 click。
+    // 这里兜底：拖任何元素时只要有 editing 状态就先收掉，避免 textarea 滞留在前一个元素上
+    if (editingId.value && editingId.value !== id) finishEditing();
 }
 
 interface DragEvt { target: { x: () => number; y: () => number; width: () => number; height: () => number } }
@@ -220,16 +268,27 @@ function attachTransformer(): void {
     const t = transformerRef.value?.getNode() as undefined | { nodes(ns: unknown[]): void };
     const l = layerRef.value?.getNode() as undefined | { findOne(sel: string): unknown };
     if (!t || !l) return;
-    if (!ui.selectedElementId) { t.nodes([]); return; }
+    // Move 工具模式下不展示 transformer（PS 风格：拖拽专用，无锚点遮挡）
+    if (ui.activeTool === 'move' || !ui.selectedElementId) { t.nodes([]); return; }
     const node = l.findOne(`#${ui.selectedElementId}`);
     t.nodes(node ? [node] : []);
 }
+
+// 工具切换时立刻重附 transformer
+watch(() => ui.activeTool, () => nextTick(attachTransformer));
 
 // 快捷键
 onKeyStroke(['=', '+'], (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomIn(); } });
 onKeyStroke('-', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomOut(); } });
 onKeyStroke('0', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomReset(); } });
 onKeyStroke('Escape', () => ui.selectElement(null));
+// PS 风格快捷键：V 切 select；M 切 move。input/textarea 内输入时跳过
+function inEditable(): boolean {
+    const a = document.activeElement as HTMLElement | null;
+    return !!a && (a.matches?.('input, textarea, select') || a.isContentEditable);
+}
+onKeyStroke(['v', 'V'], () => { if (!inEditable()) ui.setTool('select'); });
+onKeyStroke(['m', 'M'], () => { if (!inEditable()) ui.setTool('move'); });
 
 // M5-B8 画布交互：Ctrl+wheel zoom（以鼠标为中心）+ 中键或 Alt+drag pan
 const outerRef = ref<HTMLElement | null>(null);
@@ -321,6 +380,7 @@ function onMouseUpOrLeave() {
             class="absolute inset-0"
             @mousedown="onStageMouseDown"
             @touchstart="onStageMouseDown"
+            @dblclick="onStageDblClick"
           >
             <v-layer ref="layerRef">
               <v-rect
@@ -330,8 +390,11 @@ function onMouseUpOrLeave() {
                 @click="(ev: any) => onHitClick(ev, el.id)"
                 @tap="(ev: any) => onHitClick(ev, el.id)"
                 @dblclick="(ev: any) => onHitDblClick(ev, el.id)"
+                @dragstart="() => onDragStart(el.id)"
                 @dragend="(ev: any) => onDragEnd(ev, el.id)"
                 @transformend="(ev: any) => onTransformEnd(ev, el.id)"
+                @mouseenter="(ev: any) => onHitMouseEnter(ev, el.id)"
+                @mouseleave="(ev: any) => onHitMouseLeave(ev)"
               />
               <v-transformer ref="transformerRef" :config="transformerConfig" />
             </v-layer>

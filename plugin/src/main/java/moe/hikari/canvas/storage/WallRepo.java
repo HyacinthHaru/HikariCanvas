@@ -350,6 +350,26 @@ public final class WallRepo {
         }
     }
 
+    /**
+     * M6-D：写回模板来源。{@code template.apply} 成功后调用，supports {@code /canvas list} 显示
+     * "出自哪个模板" + 后续审计。templateId 可为 {@code null}（手动清除）。
+     */
+    public void setTemplate(String wallId, String templateId, Integer templateVersion) {
+        long now = System.currentTimeMillis();
+        try {
+            jdbi.useHandle(h -> h.createUpdate(
+                    "UPDATE walls SET template_id = :tid, template_version = :tv, "
+                            + "updated_at = :now WHERE wall_id = :id")
+                    .bind("tid", templateId)
+                    .bind("tv", templateVersion)
+                    .bind("now", now)
+                    .bind("id", wallId)
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "setTemplate failed: " + wallId, e);
+        }
+    }
+
     // ---------- 私有 ----------
 
     private Wall mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {

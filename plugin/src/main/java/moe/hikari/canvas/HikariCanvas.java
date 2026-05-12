@@ -26,6 +26,7 @@ import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.storage.MigrationRunner;
+import moe.hikari.canvas.template.TemplateRegistry;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -63,6 +64,7 @@ public final class HikariCanvas extends JavaPlugin {
     private SessionRateLimiter rateLimiter;
     private FontRegistry fontRegistry;
     private PaletteLut paletteLut;
+    private TemplateRegistry templateRegistry;
 
     @Override
     public void onLoad() {
@@ -135,6 +137,12 @@ public final class HikariCanvas extends JavaPlugin {
             getLogger().log(java.util.logging.Level.WARNING, "WallRestorer failed (non-fatal)", e);
         }
 
+        // M6-A：模板注册表。jar 内 /templates/*.yml + plugins/HikariCanvas/templates/
+        templateRegistry = new TemplateRegistry(
+                getLogger(), HikariCanvas.class,
+                getDataFolder().toPath().resolve("templates"));
+        templateRegistry.reload();
+
         // M3-T10 节流：5fps 投影 + 40msg/2s 输入限流（per session）
         projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector);
         rateLimiter = new SessionRateLimiter();
@@ -167,12 +175,12 @@ public final class HikariCanvas extends JavaPlugin {
                 event.registrar().register(
                         new CanvasCommand(this, sessionManager, frameDeployer,
                                 tokenService, mapPool, database, wallRepo,
-                                editorUrlTemplate).build()));
+                                templateRegistry, editorUrlTemplate).build()));
 
         webServer = new WebServer(getLogger(), host, port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
-                wallRepo, frameDeployer, this,
+                wallRepo, frameDeployer, templateRegistry, this,
                 version, this::paintAllSessionMaps);
         webServer.start();
 

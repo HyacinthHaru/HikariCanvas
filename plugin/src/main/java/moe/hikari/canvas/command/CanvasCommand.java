@@ -16,6 +16,7 @@ import moe.hikari.canvas.session.SessionState;
 import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.WallRepo;
+import moe.hikari.canvas.template.TemplateRegistry;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -63,6 +64,7 @@ public final class CanvasCommand {
     private final MapPool mapPool;
     private final Database database;
     private final WallRepo wallRepo;
+    private final TemplateRegistry templateRegistry;
     /** 形如 {@code http://host:port/?token={token}}；{token} 占位符会被替换。 */
     private final String editorUrlTemplate;
 
@@ -78,6 +80,7 @@ public final class CanvasCommand {
                          MapPool mapPool,
                          Database database,
                          WallRepo wallRepo,
+                         TemplateRegistry templateRegistry,
                          String editorUrlTemplate) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
@@ -86,6 +89,7 @@ public final class CanvasCommand {
         this.mapPool = mapPool;
         this.database = database;
         this.wallRepo = wallRepo;
+        this.templateRegistry = templateRegistry;
         this.editorUrlTemplate = editorUrlTemplate;
     }
 
@@ -132,6 +136,10 @@ public final class CanvasCommand {
                 .then(Commands.literal("cleanup")
                         .requires(src -> src.getSender().hasPermission("canvas.admin"))
                         .executes(this::runCleanup))
+                .then(Commands.literal("reload")
+                        .requires(src -> src.getSender().hasPermission("canvas.admin"))
+                        .then(Commands.literal("templates")
+                                .executes(this::runReloadTemplates)))
                 .build();
     }
 
@@ -526,6 +534,22 @@ public final class CanvasCommand {
         sender.sendMessage(Component.text(
                 "cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.",
                 NamedTextColor.YELLOW));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int runReloadTemplates(CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        var stats = templateRegistry.reload();
+        sender.sendMessage(Component.text(String.format(
+                        "Templates reloaded: %d builtin + %d server (overrides=%d, failed=%d) — total=%d",
+                        stats.builtinLoaded(), stats.serverLoaded(),
+                        stats.overrides(), stats.failed(), templateRegistry.size()),
+                NamedTextColor.GOLD));
+        if (stats.failed() > 0) {
+            for (String f : stats.failures()) {
+                sender.sendMessage(Component.text("  ✗ " + f, NamedTextColor.RED));
+            }
+        }
         return Command.SINGLE_SUCCESS;
     }
 }

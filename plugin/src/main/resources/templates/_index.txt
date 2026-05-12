@@ -1,0 +1,9 @@
+# 内置模板清单 — 每行一个 .yml 名（不含路径）。允许 # 注释。
+# 顺序 = 前端 TemplateGallery 默认展示顺序（M6-F）。
+
+hello_world.yml
+subway_station.yml
+shop_sign.yml
+welcome_banner.yml
+bulletin_board.yml
+nameplate.yml

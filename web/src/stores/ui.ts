@@ -3,9 +3,16 @@ import { ref, watch } from 'vue';
 
 const THEME_KEY = 'hikari-canvas:theme';
 const LOCALE_KEY = 'hikari-canvas:locale';
+const TOOL_KEY = 'hikari-canvas:active-tool';
 
 export type Theme = 'dark' | 'light';
 export type Locale = 'zh' | 'en';
+/**
+ * 当前激活工具。
+ * - {@code 'select'}：默认。点击元素 = 选中 + 显示 transformer（resize/rotate 锚点）。双击文本进 inline edit。
+ * - {@code 'move'}：PS 移动工具风格。点击元素 = 选中 + 立即可拖；transformer 不显示（避免大元素时锚点遮挡）；双击仍允许进 edit。
+ */
+export type ActiveTool = 'select' | 'move';
 
 /**
  * UI 本地偏好：主题 / 侧边折叠 / 选中 / 缩放 / 底部日志抽屉。
@@ -14,6 +21,7 @@ export type Locale = 'zh' | 'en';
 export const useUiStore = defineStore('ui', () => {
     const theme = ref<Theme>(loadTheme());
     const locale = ref<Locale>(loadLocale());
+    const activeTool = ref<ActiveTool>(loadTool());
     const leftCollapsed = ref(false);
     const rightCollapsed = ref(false);
     const logDrawerOpen = ref(false);
@@ -23,6 +31,10 @@ export const useUiStore = defineStore('ui', () => {
 
     /** 画布缩放系数（0.25 .. 4）。 */
     const zoom = ref(1);
+
+    watch(activeTool, (v) => {
+        try { localStorage.setItem(TOOL_KEY, v); } catch { /* ignore */ }
+    });
 
     // 初始应用 theme 到 <html>
     applyThemeToDom(theme.value);
@@ -61,12 +73,16 @@ export const useUiStore = defineStore('ui', () => {
         selectedElementId.value = id;
     }
 
+    function setTool(tool: ActiveTool) {
+        activeTool.value = tool;
+    }
+
     return {
-        theme, locale, leftCollapsed, rightCollapsed, logDrawerOpen,
+        theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen,
         selectedElementId, zoom,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         setZoom, zoomIn, zoomOut, zoomReset,
-        selectElement,
+        selectElement, setTool,
     };
 });
 
@@ -92,4 +108,12 @@ function loadLocale(): Locale {
 
 function applyThemeToDom(theme: Theme) {
     document.documentElement.classList.toggle('dark', theme === 'dark');
+}
+
+function loadTool(): ActiveTool {
+    try {
+        const v = localStorage.getItem(TOOL_KEY);
+        if (v === 'select' || v === 'move') return v;
+    } catch { /* ignore */ }
+    return 'select';
 }

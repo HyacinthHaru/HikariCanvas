@@ -95,13 +95,40 @@ function copyWallId() {
 }
 
 const refreshing = ref(false);
-function refreshWall() {
+const refreshFlash = ref<string | null>(null);
+let refreshFlashTimer: number | null = null;
+
+async function refreshWall() {
     if (!project.wallId || refreshing.value) return;
     refreshing.value = true;
-    ws.send('wall.refresh');
     net.pushLog('meta', `requested wall.refresh for ${project.wallId}`);
-    // 1.5s 后解锁按钮（服务端是 async 处理，ack 立返）
-    window.setTimeout(() => { refreshing.value = false; }, 1500);
+    try {
+        const ack = await ws.sendWithAck('wall.refresh', undefined, 8000);
+        const p = (ack ?? {}) as { framesRespawned?: number; wallBlocksReplaced?: number };
+        const frames = p.framesRespawned ?? 0;
+        const blocks = p.wallBlocksReplaced ?? 0;
+        showRefreshFlash(t.value.wall.refreshedDetail(frames, blocks));
+    } catch (e) {
+        const msg = (e as Error).message;
+        if (msg === 'ack_timeout') {
+            showRefreshFlash(t.value.wall.refreshTimeout);
+        } else if (msg === 'send_failed') {
+            showRefreshFlash(t.value.wall.refreshSendFailed);
+        } else {
+            showRefreshFlash(msg);
+        }
+    } finally {
+        refreshing.value = false;
+    }
+}
+
+function showRefreshFlash(msg: string) {
+    refreshFlash.value = msg;
+    if (refreshFlashTimer != null) window.clearTimeout(refreshFlashTimer);
+    refreshFlashTimer = window.setTimeout(() => {
+        refreshFlash.value = null;
+        refreshFlashTimer = null;
+    }, 3000);
 }
 </script>
 
@@ -175,6 +202,10 @@ function refreshWall() {
           <RefreshCw class="size-3" :class="refreshing ? 'animate-spin' : ''" />
           <span>{{ t.wall.refresh }}</span>
         </button>
+        <span
+          v-if="refreshFlash"
+          class="text-[10px] text-[color:var(--muted-foreground)] tabular-nums"
+        >· {{ refreshFlash }}</span>
       </div>
     </div>
 

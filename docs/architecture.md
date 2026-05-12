@@ -165,7 +165,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 | 认证 | `web/auth/` | Token 签发、校验、过期 |
 | 会话 | `session/` | 编辑会话状态、每玩家最多 1 活跃 |
 | 渲染 | `render/` | 字体、排版、调色板、效果 |
-| 模板 | `template/` | YAML 解析、参数绑定、实例化 |
+| 模板 | `template/` | YAML 解析（jackson-dataformat-yaml）、参数绑定、实例化、registry 热重载 |
 | 地图池 | `pool/` | **核心**：预览地图借还 |
 | 部署 | `deploy/` | 墙面识别、物品框、包发送 |
 | 存储 | `storage/` | SQLite、PDC 工具 |

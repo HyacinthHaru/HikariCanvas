@@ -1,0 +1,79 @@
+spec: 1
+id: nameplate
+name: 门牌
+description: 户号 + 主人姓名。窄长画布，free 布局 + 左右分区
+version: 1
+author: hikari-canvas-official
+tags: [sign, residence, nameplate]
+
+canvas:
+  size: auto
+  min_maps: [2, 1]
+  max_maps: [4, 1]
+  background: "${bg}"
+  padding: 6
+
+params:
+  house_no:
+    type: string
+    label: 户号
+    required: true
+    default: "001"
+    max_length: 6
+
+  owner:
+    type: string
+    label: 户主姓名
+    required: true
+    default: 旅人
+    max_length: 12
+
+  bg:
+    type: color
+    label: 底色
+    default: "#F1E4C9"
+
+  ink:
+    type: color
+    label: 字色
+    default: "#3A2A14"
+
+  show_border:
+    type: bool
+    label: 显示外框
+    default: true
+
+layout:
+  type: free
+  elements:
+    - type: rect
+      x: 0
+      y: 0
+      w: 100%
+      h: 100%
+      stroke:
+        width: 2
+        color: "${ink}"
+      visible_when: "show_border == true"
+
+    - type: text
+      x: 8
+      y: 8
+      w: 30%
+      h: 100%
+      content: "${house_no}"
+      font: ark_pixel
+      size: 48
+      color: "${ink}"
+      align: center
+
+    - type: text
+      x: 35%
+      y: 8
+      w: 60%
+      h: 100%
+      content: "${owner}"
+      font: source_han_sans
+      size: 36
+      color: "${ink}"
+      align: center

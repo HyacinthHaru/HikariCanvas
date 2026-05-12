@@ -26,7 +26,9 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 | 插件描述文件 | **`paper-plugin.yml`**（不用 `plugin.yml` 旧格式） |
 | 本地测试服 | `./gradlew runServer`（paperweight-userdev 提供） |
 
-其余：HikariCP + JDBI + SQLite、SnakeYAML、JUnit 5 + MockBukkit、AWT/Graphics2D。
+其余：HikariCP + JDBI + SQLite、**jackson-dataformat-yaml（2.18.2，与 jackson-databind 同版本）**、JUnit 5 + MockBukkit、AWT/Graphics2D。
+
+> **M6 决策（2026-05-11）**：YAML 解析改用 jackson-dataformat-yaml，不用 SnakeYAML。理由：项目已全面 Jackson 化（ProjectState / PatchOp / WallRepo 都靠 Jackson），同 ObjectMapper 配置 + record 自动 mapping 可省 ~300 行手工 YAML→Map 转换 + 校验。安全考量上 jackson-dataformat-yaml 默认即关闭 polymorphic typing，不存在 SnakeYAML SafeConstructor 才解决的 `!!java/*` tag RCE 面（见 `docs/security.md §4.3`）。
 
 **前端**：Vite + TypeScript；Vue 3 + Konva + Pinia 于 **M5 引入**（M1~M4 前端仅原生 DOM）。
 
@@ -80,7 +82,7 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23；Vue 3 + Pinia + Tailwind 4 + Konva overlay；Playwright snapshot 推迟 M7） → **M5.5 wall 模型重构（约 4 天）** → M6 模板系统（1w） → M7 打磨发布（2w）。总工期约 4 个月。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23；Vue 3 + Pinia + Tailwind 4 + Konva overlay；Playwright snapshot 推迟 M7） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12；jackson-yaml + TemplateRegistry 热重载 + 6 内置模板 + TemplateGallery 前端；grid / icon / group / preview 留 M7） → **M7 打磨发布（2w）**。总工期约 4 个月。
 
 ## M5.5 wall 模型重构（路线修正，2026-04-27 定稿）
 

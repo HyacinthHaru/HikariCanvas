@@ -167,7 +167,7 @@ Placeholder 地图样式：**浅灰底 + 顶部 "HikariCanvas" 水印 + 底部�
 | 图形 | Java AWT / Graphics2D | JDK 内置 | |
 | HTTP / WS | Javalin | **7.1.0** | 轻量、Kotlin/Java 通吃 |
 | 数据包 | PacketEvents | **2.11.2** | 1.21.x 最终稳定版；升 26.x 换 2.12.x |
-| 配置 | SnakeYAML | — | 模板 + 主配置 |
+| 配置 / 模板 | jackson-dataformat-yaml | **2.18.2**（与 jackson-databind 同版本） | M6 决策：与项目 Jackson 主线一致，省手写 mapping；config.yml + 模板 yaml 都走它 |
 | 持久化 | PersistentDataContainer + SQLite（HikariCP + JDBI） | — | 地图元数据、成品记录 |
 | 命令 | Paper Brigadier API | — | 原生 Tab 补全 |
 | 测试 | JUnit 5 + MockBukkit | — | 单元/集成 |

@@ -107,6 +107,8 @@ export interface ReadyPayload {
     wallId?: string;
     alias?: string;
     publishedAt?: number;
+    // M6-D：全量 TemplateSpec 列表（builtin + server-side templates）
+    templates?: import('./template').TemplateSpec[];
 }
 
 // ---------- §6.1 error ----------

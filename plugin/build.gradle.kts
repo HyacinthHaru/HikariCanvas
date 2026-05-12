@@ -28,6 +28,7 @@ dependencies {
 
     implementation("io.javalin:javalin:7.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.2")
     implementation("com.github.retrooper:packetevents-spigot:2.11.2")
 
     // 持久化（M2-T2）

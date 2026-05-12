@@ -1,0 +1,70 @@
+spec: 1
+id: subway_station
+name: 地铁站牌
+description: 标准地铁站风格，横排，白底黑字，上方线路色条
+version: 1
+author: hikari-canvas-official
+tags: [sign, transit, cjk]
+
+canvas:
+  size: auto
+  min_maps: [3, 1]
+  max_maps: [8, 2]
+  background: "#FFFFFF"
+  padding: [8, 8, 8, 8]
+
+params:
+  name:
+    type: string
+    label: 站名
+    required: true
+    default: 人民广场
+    max_length: 8
+    placeholder: "例：人民广场"
+
+  english_name:
+    type: string
+    label: 英文站名
+    required: false
+    default: ""
+    max_length: 32
+    visible_when: "show_english == true"
+
+  line_color:
+    type: color
+    label: 线路色
+    default: "#E4002B"
+    presets:
+      - { label: 1号线红, value: "#E4002B" }
+      - { label: 2号线绿, value: "#00A651" }
+      - { label: 3号线黄, value: "#FFD200" }
+
+  show_english:
+    type: bool
+    label: 显示英文站名
+    default: true
+
+layout:
+  type: stack
+  direction: vertical
+  gap: 4
+  elements:
+    - type: rect
+      w: 100%
+      h: 12
+      fill: "${line_color}"
+
+    - type: text
+      content: "${name}"
+      font: source_han_sans
+      size: 48
+      color: "#000000"
+      align: center
+
+    - type: text
+      content: "${english_name}"
+      font: source_han_sans
+      size: 16
+      color: "#666666"
+      align: center
+      visible_when: "show_english == true"

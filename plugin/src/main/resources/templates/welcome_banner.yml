@@ -1,0 +1,81 @@
+spec: 1
+id: welcome_banner
+name: 欢迎横幅
+description: 服务器入口横幅：主标 + 副标 + 可选底部小字。深底亮字，需要至少 4×2 画布
+version: 1
+author: hikari-canvas-official
+tags: [banner, welcome, server]
+
+canvas:
+  size: auto
+  min_maps: [4, 2]
+  max_maps: [8, 4]
+  background: "${bg}"
+  padding: 12
+
+params:
+  title:
+    type: string
+    label: 主标题
+    required: true
+    default: WELCOME
+    max_length: 32
+
+  subtitle:
+    type: string
+    label: 副标题
+    default: to our server
+    max_length: 64
+
+  footer:
+    type: string
+    label: 底部小字
+    default: ""
+    max_length: 64
+
+  show_footer:
+    type: bool
+    label: 显示底部
+    default: false
+
+  bg:
+    type: color
+    label: 底色
+    default: "#1A1A2E"
+
+  title_color:
+    type: color
+    label: 主标题色
+    default: "#FFD700"
+
+  subtitle_color:
+    type: color
+    label: 副标题色
+    default: "#FFFFFF"
+
+layout:
+  type: stack
+  direction: vertical
+  gap: 8
+  elements:
+    - type: text
+      content: "${title}"
+      font: source_han_sans
+      size: 64
+      color: "${title_color}"
+      align: center
+
+    - type: text
+      content: "${subtitle}"
+      font: source_han_sans
+      size: 24
+      color: "${subtitle_color}"
+      align: center
+
+    - type: text
+      content: "${footer}"
+      font: source_han_sans
+      size: 16
+      color: "${subtitle_color}"
+      align: center
+      visible_when: "show_footer == true"

@@ -19,7 +19,9 @@
 
 加载顺序：**内置 → 服务器 → 玩家**。同 `id` 后加载覆盖前者，允许服主覆盖内置模板。
 
-启动时全部扫描解析，失败的单个模板记 warn log，不影响其他模板加载。`/canvas reload templates` 热重载。
+启动时全部扫描解析，失败的单个模板记 warn log，不影响其他模板加载。`/canvas reload templates` 热重载（管理员权限 `canvas.admin`，原子 swap 一次性替换 registry 指针避免半态）。
+
+**解析库（M6 决策 2026-05-11）：** `jackson-dataformat-yaml` 2.18.2，与项目 Jackson 主线一致。YAML 直接 `readValue` 到 record（详见 `docs/security.md §4.3`）。不开 polymorphic typing、不允许 `@class` 之类字段。
 
 ---
 
@@ -289,7 +291,11 @@ visible_when: "show_english == true && name != \"\""
    - 按 `layout.type` 计算每个元素最终 `x, y, w, h`
 4. **转换为 ProjectState**：输出 `protocol.md §7` 定义的数据结构，推入当前 EditSession
 
-模板**不是**运行时活对象——实例化后即转为普通工程数据，玩家可任意自由编辑，修改不影响源模板。
+**Apply 语义（M6 决策）：replace**——`template.apply` 清空当前 wall 的 `elements` 列表 + 改 `canvas.background`，写入模板实例化产物。前端 UI 必须在调用前弹"应用会覆盖当前内容"二次确认。merge 语义（保留现有自由元素 + 叠加模板）留 v2+。
+
+**Layout 实装范围（M6 v1）：** `stack` + `free`。`grid` 推迟到 M7 polish。
+
+**关联 walls 表：** apply 成功后服务端写入 `walls.template_id` 与 `walls.template_version`，便于「网页首页 / `/canvas list` 显示该 wall 出自哪个模板」。但模板**不是**运行时活对象——实例化后即转为普通工程数据，玩家可任意自由编辑，修改不影响源模板，亦不影响 `template_id` 字段（保留作 audit）。
 
 ---
 
@@ -428,8 +434,8 @@ v1.0 不实现，`pack.yml` 字段设计在 v2.0 专项讨论。
 
 ## 12. 未决问题
 
-- [ ] 是否允许模板间继承（`extends: base_template`）
-- [ ] `grid` 布局细节（固定单元尺寸 vs 自适应）
-- [ ] 参数组（`group`）的 UI 表现细节
-- [ ] 模板 `preview` 图片尺寸与格式规范
-- [ ] 百分比计算在 `stack` 布局下的父容器定义
+- [ ] 是否允许模板间继承（`extends: base_template`）—— v2+
+- [ ] `grid` 布局细节（固定单元尺寸 vs 自适应）—— **M6 v1 不实装**，留 M7 polish
+- [ ] 参数组（`group`）的 UI 表现细节 —— **M6 v1 接受字段但不渲染**，扁平一列展开；UI 分组留 M7
+- [ ] 模板 `preview` 图片尺寸与格式规范 —— M6 v1 用 placeholder；规范留 M7
+- [x] 百分比计算在 `stack` 布局下的父容器定义 —— **M6-C 已固化**：父容器 = canvas 内容区（canvas pixel 尺寸减 padding 的 4 元数组），与 `free` 一致。stack 内 element 的 `w/h` 默认撑满父容器；显式 N% 也按父容器算

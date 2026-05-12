@@ -18,6 +18,10 @@ import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.StatePatch;
+import moe.hikari.canvas.template.TemplateEntry;
+import moe.hikari.canvas.template.TemplateInstantiator;
+import moe.hikari.canvas.template.TemplateRegistry;
+import moe.hikari.canvas.template.TemplateSpec;
 
 import java.time.Duration;
 import java.util.List;
@@ -60,6 +64,8 @@ public final class WebServer {
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final moe.hikari.canvas.deploy.FrameDeployer frameDeployer;
     private final org.bukkit.plugin.java.JavaPlugin plugin;
+    private final TemplateRegistry templateRegistry;
+    private final TemplateInstantiator templateInstantiator = new TemplateInstantiator();
     private Javalin app;
 
     /** 活跃 session → 绑定的 WS 连接；用于服务端主动推送（state.snapshot / state.patch）。 */
@@ -73,6 +79,7 @@ public final class WebServer {
                      SessionRateLimiter rateLimiter,
                      moe.hikari.canvas.storage.WallRepo wallRepo,
                      moe.hikari.canvas.deploy.FrameDeployer frameDeployer,
+                     TemplateRegistry templateRegistry,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler) {
         this.log = log;
@@ -84,6 +91,7 @@ public final class WebServer {
         this.rateLimiter = rateLimiter;
         this.wallRepo = wallRepo;
         this.frameDeployer = frameDeployer;
+        this.templateRegistry = templateRegistry;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
@@ -222,10 +230,17 @@ public final class WebServer {
                         "width", session.wall().width(),
                         "height", session.wall().height()),
                 "mapIds", session.mapIds(),
-                "templates", List.of(),
+                "templates", listTemplates(),
                 "palette", Map.of(),
                 "fonts", List.of(),
                 "wsUrl", "/ws"));
+    }
+
+    /** M6-D 协议 §3.2：ready / pre-handshake 一并下发全量 TemplateSpec 列表。 */
+    private List<TemplateSpec> listTemplates() {
+        return templateRegistry.templates().values().stream()
+                .map(TemplateEntry::spec)
+                .toList();
     }
 
     // ---------- WS 消息 ----------
@@ -365,7 +380,7 @@ public final class WebServer {
                 String tpl = stringOrNull(payload.get("templateId"));
                 @SuppressWarnings("unchecked")
                 Map<String, Object> tp = (Map<String, Object>) mapOrEmpty(payload.get("params"));
-                yield es.applyTemplate(tpl, tp);
+                yield applyTemplate(es, sessionId, tpl, tp);
             }
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
         };
@@ -401,6 +416,39 @@ public final class WebServer {
             case EditSession.OpResult.Error er ->
                     ctx.send(Envelope.error(in.id(), er.code(), er.message()));
         }
+    }
+
+    /**
+     * M6-D template.apply 中枢：resolve registry → instantiate → replaceContent → walls write-back。
+     * 不在主线程跑（持有当前 WS thread），但只做内存/DB I/O，不碰 Bukkit world API。
+     */
+    private EditSession.OpResult applyTemplate(EditSession es, String sessionId,
+                                               String templateId, Map<String, Object> params) {
+        if (templateId == null || templateId.isBlank()) {
+            return new EditSession.OpResult.Error("INVALID_PAYLOAD", "templateId is required");
+        }
+        TemplateEntry entry = templateRegistry.byId(templateId);
+        if (entry == null) {
+            return new EditSession.OpResult.Error("INVALID_PAYLOAD",
+                    "unknown template: " + templateId);
+        }
+        ProjectState.Canvas cv = es.state().canvas();
+        TemplateInstantiator.Result r = templateInstantiator.instantiate(
+                entry.spec(), params, cv.widthMaps(), cv.heightMaps());
+        if (r instanceof TemplateInstantiator.Result.Failed f) {
+            return new EditSession.OpResult.Error(f.code(),
+                    String.join("; ", f.errors()));
+        }
+        TemplateInstantiator.Result.Ok ok = (TemplateInstantiator.Result.Ok) r;
+        EditSession.OpResult applied = es.replaceContent(ok.backgroundColor(), ok.elements());
+        if (applied instanceof EditSession.OpResult.OkSnapshot) {
+            // walls.template_id / template_version write-back（best-effort）
+            Session sess = sessionManager.byId(sessionId);
+            if (sess != null && sess.wallId() != null) {
+                wallRepo.setTemplate(sess.wallId(), templateId, entry.spec().version());
+            }
+        }
+        return applied;
     }
 
     @SuppressWarnings("unchecked")
@@ -474,7 +522,7 @@ public final class WebServer {
                 ctx.send(Envelope.of("ack", in.id(), Map.of("alias", alias)));
             }
             case "wall.refresh" -> {
-                // 玩家撸掉了画框 → 补 spawn 缺失的 + 全画布重画。主线程跑 entity spawn。
+                // 玩家撸掉了支撑方块或画框 → 补回方块 + 补 spawn 缺失画框 + 全画布重画
                 if (s.wall() == null || s.mapIds() == null) {
                     ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND",
                             "session lacks wall geometry"));
@@ -482,18 +530,30 @@ public final class WebServer {
                 }
                 final moe.hikari.canvas.deploy.WallResolver.Result.Ok geom = s.wall();
                 final java.util.List<Integer> mapIds = s.mapIds();
+                final String ackId = in.id();
+                // 主线程跑（动方块 + spawn entity），完成后回 ack 到当前 WS ctx（Jetty 线程安全）
                 org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    int repaired = frameDeployer.repairFor(wallId, geom, mapIds);
-                    // 触发全画布重画，确保新 spawn 的 frame 立刻有 ProjectState 像素覆盖 placeholder
+                    moe.hikari.canvas.deploy.FrameDeployer.RepairResult result =
+                            frameDeployer.repairFor(wallId, geom, mapIds);
                     if (s.projectState() != null) {
                         throttler.submit(sessionId,
                                 moe.hikari.canvas.render.DirtyRegion.fullCanvas(s.projectState()));
                     }
                     plugin.getLogger().info("wall.refresh: wall=" + wallId
-                            + " repaired=" + repaired + " frame(s)");
+                            + " framesRespawned=" + result.framesRespawned()
+                            + " framesReAttached=" + result.framesReAttached()
+                            + " wallBlocksReplaced=" + result.wallBlocksReplaced());
+                    java.util.LinkedHashMap<String, Object> ackPayload = new java.util.LinkedHashMap<>();
+                    // 给前端的"重挂"是 spawn 新 frame + 给空 frame 塞回 map 的总和
+                    ackPayload.put("framesRespawned", result.framesFixed());
+                    ackPayload.put("framesReAttached", result.framesReAttached());
+                    ackPayload.put("wallBlocksReplaced", result.wallBlocksReplaced());
+                    try {
+                        ctx.send(Envelope.of("ack", ackId, ackPayload));
+                    } catch (Exception ignored) {
+                        // WS 可能已断开；忽略
+                    }
                 });
-                // 立即 ack；repaired 数量异步无法回填，前端只看到"已发起"
-                ctx.send(Envelope.of("ack", in.id(), Map.of("submitted", true)));
             }
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP",
                     "unknown wall op: " + in.op()));
@@ -570,6 +630,8 @@ public final class WebServer {
         if (wallId != null) payload.put("wallId", wallId);
         if (alias != null) payload.put("alias", alias);
         if (publishedAt != null) payload.put("publishedAt", publishedAt);
+        // M6-D 协议 §3.2：全量 TemplateSpec 下发，前端无需独立接口
+        payload.put("templates", listTemplates());
         ctx.send(Envelope.of("ready", in.id(), payload));
     }
 

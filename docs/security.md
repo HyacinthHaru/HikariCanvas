@@ -31,7 +31,7 @@
 | T6 | 大 payload 攻击（超大文本、超大画布） | 渲染 OOM、CPU 占满 |
 | T7 | 预览地图池耗尽 | 其他玩家无法编辑 |
 | T8 | PDC / SQLite 注入（非法字段值） | 数据损坏 |
-| T9 | 恶意模板（YAML 解析 RCE） | 任意代码执行 |
+| T9 | 恶意模板（YAML 解析 RCE） | 任意代码执行（M6 起 jackson-dataformat-yaml 默认即免疫 SnakeYAML `!!java/*` tag 路径）|
 | T10 | 恶意 `.canvas` 工程文件导入 | 客户端 XSS / 服务器异常 |
 | T11 | 端口扫描识别本插件 | 辅助上述攻击 |
 | T12 | 审计日志被清除 | 事后无法溯源 |
@@ -167,10 +167,11 @@ validateToken(t):
 
 ### 4.3 YAML 解析（模板）
 
-- 使用 SnakeYAML 的 **SafeConstructor**，禁止 `!!java/*` 等 tag
-- 最大节点数 10000，最大深度 64
-- 最大文件大小 256 KiB
-- 解析失败的模板不加载，打 warn log
+- M6 起使用 **jackson-dataformat-yaml**（2.18.2）替代原计划的 SnakeYAML
+- jackson-dataformat-yaml 底层基于 SnakeYAML 但不暴露 `!!java/*` tag 接口，默认不允许任意类实例化，无 SnakeYAML SafeConstructor 那种"忘记切换 → RCE"的失误面
+- 不开 Jackson 的 `enableDefaultTyping` / `@class` 多态机制
+- 最大文件大小 256 KiB（启动加载时按 byte 长度预筛）
+- 解析失败的模板不加载，打 warn log；YAMLMapper 的 `MISSING_PROPERTY` / `UNKNOWN_PROPERTY` 视情设 strict 或忽略未来兼容
 
 ### 4.4 `.canvas` 文件导入
 
@@ -324,7 +325,7 @@ server {
 | Paper API | 宿主 | 跟随 MC 版本 |
 | Javalin | HTTP/WS | 关注 CVE，及时升级 |
 | PacketEvents | 包发送 | 关注 API 破坏 |
-| SnakeYAML | YAML 解析 | **必用 SafeConstructor** |
+| jackson-dataformat-yaml | YAML 解析 | M6 起用，**不开 `enableDefaultTyping`**；底层 SnakeYAML tag 接口不暴露 |
 | HikariCP + JDBI + SQLite JDBC | DB | 稳定 |
 | SLF4J | 日志 | |
 | 前端：Vue / Vite / Konva | 编辑器 | npm audit 纳入 CI |

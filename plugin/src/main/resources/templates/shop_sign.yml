@@ -1,0 +1,86 @@
+spec: 1
+id: shop_sign
+name: 商店招牌
+description: 商铺门头：店铺名 + 主推商品 + 价格。stack 竖排，参数可关闭商品行
+version: 1
+author: hikari-canvas-official
+tags: [sign, shop, commerce]
+
+canvas:
+  size: auto
+  min_maps: [3, 1]
+  max_maps: [6, 2]
+  background: "${bg}"
+  padding: 8
+
+params:
+  shop_name:
+    type: string
+    label: 店铺名
+    required: true
+    default: 杂货铺
+    max_length: 16
+
+  item:
+    type: string
+    label: 主推商品
+    default: 钻石剑
+    max_length: 24
+
+  price:
+    type: string
+    label: 价格
+    default: 32 emerald
+    max_length: 16
+
+  show_item:
+    type: bool
+    label: 显示商品行
+    default: true
+
+  bg:
+    type: color
+    label: 背景色
+    default: "#FFE7A8"
+
+  ink:
+    type: color
+    label: 文字色
+    default: "#332E1C"
+
+  accent:
+    type: color
+    label: 价格色
+    default: "#A8341A"
+
+  shop_font:
+    type: font
+    label: 字体
+    default: source_han_sans
+
+layout:
+  type: stack
+  direction: vertical
+  gap: 6
+  elements:
+    - type: text
+      content: "${shop_name}"
+      font: "${shop_font}"
+      size: 40
+      color: "${ink}"
+      align: center
+
+    - type: text
+      content: "${item}"
+      font: "${shop_font}"
+      size: 24
+      color: "${ink}"
+      align: center
+      visible_when: "show_item == true"
+
+    - type: text
+      content: "${price}"
+      font: "${shop_font}"
+      size: 32
+      color: "${accent}"
+      align: center

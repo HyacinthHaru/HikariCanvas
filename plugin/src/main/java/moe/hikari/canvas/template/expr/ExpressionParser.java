@@ -1,0 +1,243 @@
+package moe.hikari.canvas.template.expr;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 模板表达式解析器。文法见 {@code docs/template-spec.md §6.2}（已扩充为有优先级版本）：
+ *
+ * <pre>
+ *   or       := and  ( "||" and )*
+ *   and      := equ  ( "&&" equ )*
+ *   equ      := unary ( ("==" | "!=") unary )*
+ *   unary    := "!" unary | primary
+ *   primary  := ident | number | string | "true" | "false" | "(" or ")"
+ * </pre>
+ *
+ * <p>优先级（高 → 低）：{@code !} → {@code ==} / {@code !=} → {@code &&} → {@code ||}。
+ * 与 C 系语言一致，避免 {@code "a == true && b == false"} 写出反直觉的结合。</p>
+ *
+ * <p><b>失败行为：</b> 任何 lex/parse 错误抛 {@link ParseException}，
+ * 调用方（{@link moe.hikari.canvas.template.TemplateLoader}）应把它当 §9 校验失败处理。</p>
+ *
+ * <p>实例无状态，可安全复用。</p>
+ */
+public final class ExpressionParser {
+
+    /** 表达式解析错误。{@code position} 是源字符串中的 0-based 索引。 */
+    public static final class ParseException extends RuntimeException {
+        private final int position;
+
+        public ParseException(String message, int position) {
+            super(message + " (at position " + position + ")");
+            this.position = position;
+        }
+
+        public int position() { return position; }
+    }
+
+    public Expr parse(String src) {
+        if (src == null) throw new ParseException("expression is null", 0);
+        List<Token> tokens = new Lexer(src).run();
+        Parser p = new Parser(tokens);
+        Expr expr = p.parseOr();
+        Token next = p.peek();
+        if (next.kind() != TokenKind.EOF) {
+            throw new ParseException("unexpected token '" + next.text() + "'", next.pos());
+        }
+        return expr;
+    }
+
+    // ============================ Lexer ============================
+
+    private enum TokenKind {
+        IDENT, NUMBER, STRING, TRUE, FALSE,
+        EQ, NE, AND, OR, NOT, LPAREN, RPAREN, EOF
+    }
+
+    private record Token(TokenKind kind, String text, int pos) {}
+
+    private static final class Lexer {
+        private final String src;
+        private int i = 0;
+
+        Lexer(String src) { this.src = src; }
+
+        List<Token> run() {
+            List<Token> out = new ArrayList<>();
+            while (i < src.length()) {
+                char c = src.charAt(i);
+                if (Character.isWhitespace(c)) { i++; continue; }
+                int start = i;
+                if (c == '"' || c == '\'') { out.add(readString(c, start)); continue; }
+                if (Character.isDigit(c)
+                        || (c == '-' && i + 1 < src.length() && Character.isDigit(src.charAt(i + 1)))) {
+                    out.add(readNumber(start));
+                    continue;
+                }
+                if (isIdentStart(c)) { out.add(readIdentOrKeyword(start)); continue; }
+                if (c == '=' && peek(1) == '=') { i += 2; out.add(new Token(TokenKind.EQ, "==", start)); continue; }
+                if (c == '!' && peek(1) == '=') { i += 2; out.add(new Token(TokenKind.NE, "!=", start)); continue; }
+                if (c == '&' && peek(1) == '&') { i += 2; out.add(new Token(TokenKind.AND, "&&", start)); continue; }
+                if (c == '|' && peek(1) == '|') { i += 2; out.add(new Token(TokenKind.OR, "||", start)); continue; }
+                if (c == '!') { i++; out.add(new Token(TokenKind.NOT, "!", start)); continue; }
+                if (c == '(') { i++; out.add(new Token(TokenKind.LPAREN, "(", start)); continue; }
+                if (c == ')') { i++; out.add(new Token(TokenKind.RPAREN, ")", start)); continue; }
+                throw new ParseException("unexpected character '" + c + "'", start);
+            }
+            out.add(new Token(TokenKind.EOF, "", src.length()));
+            return out;
+        }
+
+        private char peek(int offset) {
+            int j = i + offset;
+            return j < src.length() ? src.charAt(j) : '\0';
+        }
+
+        private static boolean isIdentStart(char c) {
+            return c == '_' || Character.isLetter(c);
+        }
+
+        private static boolean isIdentCont(char c) {
+            return c == '_' || Character.isLetterOrDigit(c);
+        }
+
+        private Token readIdentOrKeyword(int start) {
+            int j = i + 1;
+            while (j < src.length() && isIdentCont(src.charAt(j))) j++;
+            String word = src.substring(i, j);
+            i = j;
+            return switch (word) {
+                case "true" -> new Token(TokenKind.TRUE, word, start);
+                case "false" -> new Token(TokenKind.FALSE, word, start);
+                default -> new Token(TokenKind.IDENT, word, start);
+            };
+        }
+
+        private Token readNumber(int start) {
+            int j = i;
+            if (src.charAt(j) == '-') j++;
+            while (j < src.length() && Character.isDigit(src.charAt(j))) j++;
+            if (j < src.length() && src.charAt(j) == '.') {
+                j++;
+                while (j < src.length() && Character.isDigit(src.charAt(j))) j++;
+            }
+            String num = src.substring(i, j);
+            i = j;
+            return new Token(TokenKind.NUMBER, num, start);
+        }
+
+        private Token readString(char quote, int start) {
+            StringBuilder sb = new StringBuilder();
+            i++; // consume opening quote
+            while (i < src.length()) {
+                char c = src.charAt(i);
+                if (c == '\\' && i + 1 < src.length()) {
+                    char n = src.charAt(i + 1);
+                    sb.append(switch (n) {
+                        case 'n' -> '\n';
+                        case 't' -> '\t';
+                        case 'r' -> '\r';
+                        case '\\' -> '\\';
+                        case '"' -> '"';
+                        case '\'' -> '\'';
+                        default -> n;
+                    });
+                    i += 2;
+                    continue;
+                }
+                if (c == quote) {
+                    i++;
+                    return new Token(TokenKind.STRING, sb.toString(), start);
+                }
+                sb.append(c);
+                i++;
+            }
+            throw new ParseException("unterminated string literal", start);
+        }
+    }
+
+    // ============================ Parser ============================
+
+    private static final class Parser {
+        private final List<Token> tokens;
+        private int p = 0;
+
+        Parser(List<Token> tokens) { this.tokens = tokens; }
+
+        Token peek() { return tokens.get(p); }
+
+        private Token consume(TokenKind expected) {
+            Token t = peek();
+            if (t.kind() != expected) {
+                throw new ParseException("expected " + expected + " got " + t.kind() + " '" + t.text() + "'", t.pos());
+            }
+            p++;
+            return t;
+        }
+
+        Expr parseOr() {
+            Expr left = parseAnd();
+            while (peek().kind() == TokenKind.OR) {
+                p++;
+                Expr right = parseAnd();
+                left = new Expr.Binary(Expr.Op.OR, left, right);
+            }
+            return left;
+        }
+
+        Expr parseAnd() {
+            Expr left = parseEquality();
+            while (peek().kind() == TokenKind.AND) {
+                p++;
+                Expr right = parseEquality();
+                left = new Expr.Binary(Expr.Op.AND, left, right);
+            }
+            return left;
+        }
+
+        Expr parseEquality() {
+            Expr left = parseUnary();
+            while (peek().kind() == TokenKind.EQ || peek().kind() == TokenKind.NE) {
+                Expr.Op op = peek().kind() == TokenKind.EQ ? Expr.Op.EQ : Expr.Op.NE;
+                p++;
+                Expr right = parseUnary();
+                left = new Expr.Binary(op, left, right);
+            }
+            return left;
+        }
+
+        Expr parseUnary() {
+            if (peek().kind() == TokenKind.NOT) {
+                p++;
+                return new Expr.Not(parseUnary());
+            }
+            return parsePrimary();
+        }
+
+        Expr parsePrimary() {
+            Token t = peek();
+            switch (t.kind()) {
+                case TRUE  -> { p++; return new Expr.Literal(Boolean.TRUE); }
+                case FALSE -> { p++; return new Expr.Literal(Boolean.FALSE); }
+                case NUMBER -> {
+                    p++;
+                    try {
+                        return new Expr.Literal(Double.parseDouble(t.text()));
+                    } catch (NumberFormatException nfe) {
+                        throw new ParseException("invalid number '" + t.text() + "'", t.pos());
+                    }
+                }
+                case STRING -> { p++; return new Expr.Literal(t.text()); }
+                case IDENT -> { p++; return new Expr.Identifier(t.text()); }
+                case LPAREN -> {
+                    p++;
+                    Expr inner = parseOr();
+                    consume(TokenKind.RPAREN);
+                    return inner;
+                }
+                default -> throw new ParseException("unexpected token '" + t.text() + "'", t.pos());
+            }
+        }
+    }
+}

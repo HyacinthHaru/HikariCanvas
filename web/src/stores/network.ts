@@ -13,6 +13,8 @@ export const useNetworkStore = defineStore('network', () => {
     const serverVersion = ref<string | null>(null);
     const wallSize = ref<{ w: number; h: number } | null>(null);
     const lastError = ref<string | null>(null);
+    /** 最近一次服务端 op 错误。每次 handleError 都更新，用于组件 watch ts 判定"我发的那一帧失败了"。 */
+    const lastOpError = ref<{ code: string; message: string; ts: number } | null>(null);
     const closeCode = ref<number | null>(null);
 
     type LogLine = { ts: number; level: 'sent' | 'recv' | 'meta' | 'err'; text: string };
@@ -45,7 +47,7 @@ export const useNetworkStore = defineStore('network', () => {
     return {
         connected, authenticated, connecting,
         sessionId, serverVersion, wallSize,
-        lastError, closeCode,
+        lastError, lastOpError, closeCode,
         logs, status,
         pushLog, clearLogs, reset,
     };

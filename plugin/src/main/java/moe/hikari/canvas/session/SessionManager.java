@@ -7,6 +7,8 @@ import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.WallRepo;
+import org.bukkit.Bukkit;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 
@@ -255,6 +257,8 @@ public final class SessionManager {
             Session existing = byId.get(existingId);
             if (existing != null && w.wallId().equals(existing.wallId())) {
                 existing.touchActivity(System.currentTimeMillis());
+                // 防御性：上次 open 是修复前版本进入的 → wall geometry 可能 null，补上
+                if (existing.wall() == null) existing.wall(rebuildWallGeometry(w));
                 return new OpenResult.Ok(existing, w);
             }
             return new OpenResult.AlreadyHasSession(existing == null ? null : existing.state());
@@ -279,6 +283,8 @@ public final class SessionManager {
         s.mapIds(w.mapIds());
         s.projectState(w.state());
         s.editSession(new EditSession(w.state()));
+        // 2026-05-12 修：补回 wall geometry，否则 wall.refresh / frame ops 在 /canvas open 后空跑
+        s.wall(rebuildWallGeometry(w));
         s.state(SessionState.ISSUED);
 
         byId.put(sessionId, s);
@@ -288,6 +294,28 @@ public final class SessionManager {
         auditLog.record("SESSION_OPEN", playerUuid.toString(), playerName, sessionId, null,
                 Map.of("wall_id", w.wallId()));
         return new OpenResult.Ok(s, w);
+    }
+
+    /**
+     * 从持久化的 {@link WallRepo.Wall} 反推 {@link WallResolver.Result.Ok}（运行期几何）。
+     * confirm 路径下 geometry 由 WallResolver 直接产出；open 路径下没有玩家点击，只能从
+     * DB 行重建。{@code hasExistingFrames} 固定 true，因为打开已存在的 wall 必然有自家画框。
+     */
+    private WallResolver.Result.Ok rebuildWallGeometry(WallRepo.Wall w) {
+        World world = Bukkit.getWorld(w.key().world());
+        if (world == null) {
+            throw new IllegalStateException(
+                    "world '" + w.key().world() + "' not loaded for wall " + w.wallId());
+        }
+        return new WallResolver.Result.Ok(
+                world,
+                w.key().originX(),
+                w.key().originY(),
+                w.key().originZ(),
+                w.widthMaps(),
+                w.heightMaps(),
+                w.key().facing(),
+                /* hasExistingFrames */ true);
     }
 
     // ---------- WS auth / ACTIVE ----------

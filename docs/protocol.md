@@ -91,9 +91,17 @@ GET /api/session/:token HTTP/1.1
     "sessionId": "e1b2...",
     "serverVersion": "1.0.0",
     "protocolVersion": 1,
-    "projectState": { ... } }
+    "reconnectToken": "...",
+    "projectState": { ... },
+    "wallId": "w-1a2b3c4d",         // M5.5 起，nullable
+    "alias": "subway-test",          // 同上 nullable
+    "publishedAt": 1714200000000,    // 同上 nullable
+    "templates": [ /* 见 §7.x TemplateSpec */ ]   // M6 起，全量下发
+  }
 }
 ```
+
+> **M6 决策（2026-05-11）**：`templates` 字段一次性全量下发，不走单独 `template.list` op。理由：5 个内置模板每个 ~1-2KB，合计 5-10KB；服主自定义模板少（v1 阶段 < 50KB），WS 单帧足够。未来若模板数量爆炸（v2 模板包生态）再切 index + on-demand `template.fetch`。
 
 4. 失败 → `error` + WS close（见 §6 close 码）
 
@@ -402,6 +410,7 @@ type RectElement = BaseElement & {
 - [ ] 是否支持 batch op（多个操作打包一次发送，减少延迟）
 - [ ] 历史 `history.mark` 的 label 是否持久化到 walls.project_json（M5.5 决策：当前 walls 不存 history，cancel 后 redo/undo 栈丢失；如要保留可 M7 加 `walls.history_json`）
 - [ ] 画布 resize 是否允许缩小（需处理越界元素）
-- [ ] template.apply 是否支持保留现有自由元素（merge 语义）
+- [x] template.apply 是否支持保留现有自由元素（merge 语义）—— **M6 v1 不做**，沿用 replace（清空 elements + 替换 background）；UI 上加"应用模板会覆盖当前内容"提示。merge 留 v2+
 - [ ] 多人协作（v2）时的协议扩展（是否需要 CRDT）—— M5.5 明确**不做**，`byWall` 排他锁阻止
-- [ ] **M5.5 引入**：ready payload 加 `wallId` / `alias` / `publishedAt` 让前端展示画 ID 与状态（前端首页查询用）
+- [x] **M5.5**：ready payload 加 `wallId` / `alias` / `publishedAt` —— **已实装**
+- [x] **M6**：ready payload 加 `templates`（全量 TemplateSpec 列表）—— **协议固化，待实施**

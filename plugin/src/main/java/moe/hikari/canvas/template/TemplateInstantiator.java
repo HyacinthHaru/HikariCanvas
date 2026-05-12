@@ -1,0 +1,582 @@
+package moe.hikari.canvas.template;
+
+import moe.hikari.canvas.state.Effects;
+import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.Glow;
+import moe.hikari.canvas.state.RectElement;
+import moe.hikari.canvas.state.Shadow;
+import moe.hikari.canvas.state.Stroke;
+import moe.hikari.canvas.state.TextElement;
+import moe.hikari.canvas.template.expr.Expr;
+import moe.hikari.canvas.template.expr.ExpressionEvaluator;
+import moe.hikari.canvas.template.expr.ExpressionParser;
+import moe.hikari.canvas.template.expr.Interpolator;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.regex.Pattern;
+
+/**
+ * 模板 → {@link moe.hikari.canvas.state.ProjectState} 内容的实例化引擎。
+ * 契约见 {@code docs/template-spec.md §7}。
+ *
+ * <p><b>纯函数语义：</b> 不碰 Bukkit / DB / Session；输入 {@link TemplateSpec} +
+ * 用户参数 + 目标 wall 尺寸（已由 {@link moe.hikari.canvas.session.Session} 确定），
+ * 输出 {@code Result.Ok}（背景色 + element list）或 {@code Result.Failed}（错误码 + 详情）。
+ * WS 层（M6-D）在主线程拿到结果后走 EditSession {@code replace}。</p>
+ *
+ * <p><b>M6 v1 实施范围：</b></p>
+ * <ul>
+ *   <li>layout: {@code stack} + {@code free}（{@code grid} 推迟 M7）</li>
+ *   <li>element: {@code text} + {@code rect}（{@code line} 占位允许，但 v1 不渲染→
+ *       materialize 时返回 null 跳过；{@code icon} 已在 loader 拒绝）</li>
+ *   <li>{@code w}/{@code h} 支持 int / "auto" / "N%" / "${param}"</li>
+ *   <li>{@code visible} + {@code visible_when} 都求值，AND 入 element.visible</li>
+ *   <li>不可见元素直接 skip（不写入 ProjectState，避免"隐形僵尸"）</li>
+ * </ul>
+ *
+ * <p><b>线程安全：</b> 实例本身无状态字段（只装无状态的 Parser/Evaluator），多线程并发
+ * 调 {@code instantiate} 安全。</p>
+ */
+public final class TemplateInstantiator {
+
+    private static final Pattern PERCENT = Pattern.compile("^(-?\\d+(?:\\.\\d+)?)%$");
+    private static final Pattern INT_NUMERIC = Pattern.compile("^-?\\d+$");
+    private static final Pattern COLOR_RE =
+            Pattern.compile("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$");
+
+    private final ExpressionParser exprParser = new ExpressionParser();
+    private final ExpressionEvaluator exprEval = new ExpressionEvaluator();
+
+    /** 实例化结果。失败时 {@code errors} 给出全部累计校验问题。 */
+    public sealed interface Result {
+        record Ok(int widthMaps, int heightMaps, String backgroundColor,
+                  List<Element> elements,
+                  Map<String, Object> resolvedParams) implements Result {}
+
+        record Failed(String code, List<String> errors) implements Result {}
+    }
+
+    /** 画布几何 + 内容区。padding 已展开为 4 元数组（top/right/bottom/left）。 */
+    private record Canvas(int widthMaps, int heightMaps,
+                          int canvasW, int canvasH,
+                          int contentX, int contentY,
+                          int contentW, int contentH) {
+    }
+
+    public Result instantiate(TemplateSpec spec,
+                              Map<String, Object> userInput,
+                              int wallWidthMaps,
+                              int wallHeightMaps) {
+        if (spec == null) {
+            return new Result.Failed("INVALID_TEMPLATE", List.of("spec is null"));
+        }
+
+        List<String> errors = new ArrayList<>();
+
+        // 1) 参数校验 + 默认值填充
+        Map<String, Object> params = validateParams(spec.params(), userInput, errors);
+        if (!errors.isEmpty()) {
+            return new Result.Failed("INVALID_PARAM", errors);
+        }
+
+        // 2) 画布尺寸适配
+        Canvas canvas = fitCanvas(spec.canvas(), wallWidthMaps, wallHeightMaps, errors);
+        if (canvas == null) {
+            return new Result.Failed("CANVAS_MISMATCH", errors);
+        }
+
+        // 3) 背景色（支持 ${param}）
+        String bg = resolveBackground(spec.canvas(), params, errors);
+        if (!errors.isEmpty()) {
+            return new Result.Failed("INVALID_VALUE", errors);
+        }
+
+        // 4) 布局 + 物化
+        List<Element> elements;
+        try {
+            elements = layoutAndMaterialize(spec.layout(), canvas, params);
+        } catch (InstantiationException ie) {
+            errors.add(ie.getMessage());
+            return new Result.Failed(ie.code, errors);
+        }
+
+        return new Result.Ok(wallWidthMaps, wallHeightMaps, bg, elements, params);
+    }
+
+    // ==================== 1. 参数校验 ====================
+
+    private static Map<String, Object> validateParams(
+            Map<String, TemplateParam> declared,
+            Map<String, Object> userInput,
+            List<String> errors) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (declared == null) declared = Map.of();
+        if (userInput == null) userInput = Map.of();
+
+        for (var entry : declared.entrySet()) {
+            String key = entry.getKey();
+            TemplateParam p = entry.getValue();
+            boolean userSupplied = userInput.containsKey(key);
+            Object raw = userSupplied ? userInput.get(key) : p.defaultValue();
+            if (raw == null) {
+                if (p.required()) {
+                    errors.add("param '" + key + "' is required");
+                }
+                out.put(key, null);
+                continue;
+            }
+            Object value = coerceAndValidate(key, p, raw, errors);
+            out.put(key, value);
+        }
+        return out;
+    }
+
+    private static Object coerceAndValidate(String key, TemplateParam p,
+                                            Object raw, List<String> errors) {
+        switch (p.type()) {
+            case "string", "text" -> {
+                String s = raw.toString();
+                if (p.minLength() != null && s.length() < p.minLength()) {
+                    errors.add("param '" + key + "' length < " + p.minLength());
+                }
+                if (p.maxLength() != null && s.length() > p.maxLength()) {
+                    errors.add("param '" + key + "' length > " + p.maxLength());
+                }
+                if (p.pattern() != null) {
+                    try {
+                        if (!Pattern.compile(p.pattern()).matcher(s).matches()) {
+                            errors.add("param '" + key + "' doesn't match pattern " + p.pattern());
+                        }
+                    } catch (Exception e) {
+                        errors.add("param '" + key + "' pattern invalid: " + e.getMessage());
+                    }
+                }
+                return s;
+            }
+            case "int" -> {
+                Integer i = asInt(raw);
+                if (i == null) {
+                    errors.add("param '" + key + "' is not int: " + raw);
+                    return 0;
+                }
+                if (p.min() != null && i < p.min()) errors.add("param '" + key + "' < min");
+                if (p.max() != null && i > p.max()) errors.add("param '" + key + "' > max");
+                return i;
+            }
+            case "float" -> {
+                Double d = asDouble(raw);
+                if (d == null) {
+                    errors.add("param '" + key + "' is not float: " + raw);
+                    return 0.0;
+                }
+                if (p.min() != null && d < p.min()) errors.add("param '" + key + "' < min");
+                if (p.max() != null && d > p.max()) errors.add("param '" + key + "' > max");
+                return d;
+            }
+            case "bool" -> {
+                if (raw instanceof Boolean b) return b;
+                if (raw instanceof String s) {
+                    if ("true".equalsIgnoreCase(s)) return Boolean.TRUE;
+                    if ("false".equalsIgnoreCase(s)) return Boolean.FALSE;
+                }
+                errors.add("param '" + key + "' is not bool: " + raw);
+                return Boolean.FALSE;
+            }
+            case "color" -> {
+                String s = raw.toString();
+                if (!COLOR_RE.matcher(s).matches()) {
+                    errors.add("param '" + key + "' invalid color: " + s);
+                }
+                return s;
+            }
+            case "enum" -> {
+                String s = raw.toString();
+                if (p.options() != null) {
+                    boolean ok = p.options().stream().anyMatch(
+                            o -> String.valueOf(o.value()).equals(s));
+                    if (!ok) errors.add("param '" + key + "' not in enum options: " + s);
+                }
+                return s;
+            }
+            case "font" -> {
+                return raw.toString();
+            }
+            default -> {
+                errors.add("param '" + key + "' has unknown type: " + p.type());
+                return raw;
+            }
+        }
+    }
+
+    // ==================== 2. 画布尺寸 ====================
+
+    private static Canvas fitCanvas(TemplateCanvas tc,
+                                    int wallW, int wallH,
+                                    List<String> errors) {
+        if (tc == null) {
+            errors.add("template has no canvas block");
+            return null;
+        }
+        String size = tc.size() == null ? "auto" : tc.size();
+        if ("fixed".equals(size)) {
+            if (tc.maps() == null || tc.maps().size() != 2
+                    || tc.maps().get(0) != wallW
+                    || tc.maps().get(1) != wallH) {
+                errors.add("template canvas.size=fixed maps=" + tc.maps()
+                        + " does not match wall " + wallW + "x" + wallH);
+                return null;
+            }
+        } else {
+            // auto
+            List<Integer> min = tc.minMaps() == null ? List.of(1, 1) : tc.minMaps();
+            List<Integer> max = tc.maxMaps() == null ? List.of(8, 4) : tc.maxMaps();
+            if (wallW < min.get(0) || wallH < min.get(1)) {
+                errors.add("wall " + wallW + "x" + wallH + " smaller than template min_maps " + min);
+                return null;
+            }
+            if (wallW > max.get(0) || wallH > max.get(1)) {
+                errors.add("wall " + wallW + "x" + wallH + " larger than template max_maps " + max);
+                return null;
+            }
+        }
+        int canvasW = wallW * 128;
+        int canvasH = wallH * 128;
+        int[] pad = normalizePadding(tc.padding());
+        int top = pad[0], right = pad[1], bottom = pad[2], left = pad[3];
+        int contentX = left;
+        int contentY = top;
+        int contentW = Math.max(0, canvasW - left - right);
+        int contentH = Math.max(0, canvasH - top - bottom);
+        return new Canvas(wallW, wallH, canvasW, canvasH,
+                contentX, contentY, contentW, contentH);
+    }
+
+    private static int[] normalizePadding(Object padding) {
+        if (padding == null) return new int[]{0, 0, 0, 0};
+        if (padding instanceof Number n) {
+            int v = n.intValue();
+            return new int[]{v, v, v, v};
+        }
+        if (padding instanceof List<?> list && list.size() == 4) {
+            int[] out = new int[4];
+            for (int i = 0; i < 4; i++) {
+                out[i] = ((Number) list.get(i)).intValue();
+            }
+            return out;
+        }
+        return new int[]{0, 0, 0, 0};
+    }
+
+    // ==================== 3. 背景色 ====================
+
+    private static String resolveBackground(TemplateCanvas tc, Map<String, Object> params,
+                                            List<String> errors) {
+        String bg = tc != null ? tc.background() : null;
+        if (bg == null) return "#FFFFFF";
+        String resolved;
+        try {
+            resolved = Interpolator.interpolate(bg, params);
+        } catch (Interpolator.MissingParamException e) {
+            errors.add("canvas.background references missing param '" + e.paramName() + "'");
+            return "#FFFFFF";
+        }
+        if (!COLOR_RE.matcher(resolved).matches()) {
+            errors.add("canvas.background resolved to non-color: " + resolved);
+        }
+        return resolved;
+    }
+
+    // ==================== 4. 布局 + 物化 ====================
+
+    /** 单内部 checked exception，串起 layout 错误向 result 上抛。 */
+    private static final class InstantiationException extends RuntimeException {
+        final String code;
+        InstantiationException(String code, String message) {
+            super(message);
+            this.code = code;
+        }
+    }
+
+    private List<Element> layoutAndMaterialize(TemplateLayout layout,
+                                               Canvas canvas,
+                                               Map<String, Object> params) {
+        if (layout == null || layout.elements() == null) return List.of();
+        String type = layout.type();
+        return switch (type) {
+            case "stack" -> stackLayout(layout, canvas, params);
+            case "free" -> freeLayout(layout, canvas, params);
+            default -> throw new InstantiationException(
+                    "INVALID_LAYOUT", "unsupported layout.type: " + type);
+        };
+    }
+
+    /** stack 布局：忽略每个 element 自带的 x/y，按 direction 累加 + gap。w 撑满 content。 */
+    private List<Element> stackLayout(TemplateLayout layout, Canvas canvas,
+                                      Map<String, Object> params) {
+        List<Element> out = new ArrayList<>();
+        boolean vertical = !"horizontal".equals(layout.direction());
+        int gap = layout.gap() == null ? 0 : layout.gap();
+        int cursorX = canvas.contentX;
+        int cursorY = canvas.contentY;
+        for (TemplateElement el : layout.elements()) {
+            if (!isVisible(el, params)) continue;
+            int w = vertical ? canvas.contentW : naturalWidth(el, params, canvas);
+            int h = vertical ? naturalHeight(el, params) : canvas.contentH;
+            Element materialized = materialize(el, cursorX, cursorY, w, h, params);
+            if (materialized == null) continue;
+            out.add(materialized);
+            if (vertical) cursorY += h + gap;
+            else cursorX += w + gap;
+        }
+        return out;
+    }
+
+    /** free 布局：x/y/w/h 直接从 element 取，% 按 content 区计算。 */
+    private List<Element> freeLayout(TemplateLayout layout, Canvas canvas,
+                                     Map<String, Object> params) {
+        List<Element> out = new ArrayList<>();
+        for (TemplateElement el : layout.elements()) {
+            if (!isVisible(el, params)) continue;
+            int x = resolveDimension(el.x(), canvas.contentW, params, 0);
+            int y = resolveDimension(el.y(), canvas.contentH, params, 0);
+            int w = resolveDimensionWithAuto(el.w(), canvas.contentW, params,
+                    () -> naturalWidth(el, params, canvas));
+            int h = resolveDimensionWithAuto(el.h(), canvas.contentH, params,
+                    () -> naturalHeight(el, params));
+            Element materialized = materialize(el, x, y, w, h, params);
+            if (materialized == null) continue;
+            out.add(materialized);
+        }
+        return out;
+    }
+
+    private boolean isVisible(TemplateElement el, Map<String, Object> params) {
+        // 顶层 visible 字段
+        if (el.visible() != null) {
+            Object v = el.visible();
+            if (v instanceof Boolean b && !b) return false;
+            if (v instanceof String s) {
+                try {
+                    String resolved = Interpolator.interpolate(s, params);
+                    if ("false".equalsIgnoreCase(resolved.trim())) return false;
+                } catch (Interpolator.MissingParamException ignored) {
+                    return false;
+                }
+            }
+        }
+        // visible_when 条件表达式
+        if (el.visibleWhen() != null && !el.visibleWhen().isBlank()) {
+            try {
+                Expr expr = exprParser.parse(el.visibleWhen());
+                if (!exprEval.evalBoolean(expr, params)) return false;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int naturalHeight(TemplateElement el, Map<String, Object> params) {
+        if (el instanceof TemplateElement.Text t) {
+            int size = t.size() == null ? 24 : t.size();
+            double lh = t.lineHeight() == null ? 1.2 : t.lineHeight();
+            String content;
+            try {
+                content = Interpolator.interpolate(t.content() == null ? "" : t.content(), params);
+            } catch (Interpolator.MissingParamException e) {
+                content = "";
+            }
+            int lines = countLines(content);
+            return (int) Math.ceil(size * lh * lines);
+        }
+        if (el instanceof TemplateElement.Rect r) {
+            // rect 在 stack 中没有"自然高度"——必须显式
+            Integer h = asInt(r.h());
+            if (h != null) return h;
+            throw new InstantiationException(
+                    "INVALID_LAYOUT", "rect element in stack layout needs explicit h");
+        }
+        if (el instanceof TemplateElement.Line l) {
+            return l.width() == null ? 1 : l.width();
+        }
+        return 0;
+    }
+
+    private int naturalWidth(TemplateElement el, Map<String, Object> params, Canvas canvas) {
+        // stack 横向时才用；text 取近似（ASCII=0.5×size, CJK=1×size）；rect/line 必须显式
+        if (el instanceof TemplateElement.Text t) {
+            int size = t.size() == null ? 24 : t.size();
+            String content;
+            try {
+                content = Interpolator.interpolate(t.content() == null ? "" : t.content(), params);
+            } catch (Interpolator.MissingParamException e) {
+                content = "";
+            }
+            // 取最宽行
+            int max = 0;
+            int cur = 0;
+            for (int i = 0; i < content.length(); i++) {
+                char c = content.charAt(i);
+                if (c == '\n') { max = Math.max(max, cur); cur = 0; continue; }
+                cur += (c < 128) ? (size / 2) : size;
+            }
+            max = Math.max(max, cur);
+            return Math.min(max, canvas.contentW);
+        }
+        if (el instanceof TemplateElement.Rect r) {
+            Integer w = asInt(r.w());
+            if (w != null) return w;
+            throw new InstantiationException(
+                    "INVALID_LAYOUT", "rect element in stack-horizontal needs explicit w");
+        }
+        if (el instanceof TemplateElement.Line l) {
+            return l.width() == null ? 1 : l.width();
+        }
+        return 0;
+    }
+
+    private static int countLines(String s) {
+        if (s.isEmpty()) return 1;
+        int n = 1;
+        for (int i = 0; i < s.length(); i++) if (s.charAt(i) == '\n') n++;
+        return n;
+    }
+
+    /** 解析 x/y 这种没有"auto"语义的维度。返回 int。null/无法解析 → fallback。 */
+    private int resolveDimension(Object raw, int contentBasis,
+                                 Map<String, Object> params, int fallback) {
+        if (raw == null) return fallback;
+        if (raw instanceof Number n) return n.intValue();
+        if (raw instanceof String s) {
+            try {
+                s = Interpolator.interpolate(s, params);
+            } catch (Interpolator.MissingParamException e) {
+                return fallback;
+            }
+            var m = PERCENT.matcher(s);
+            if (m.matches()) {
+                double pct = Double.parseDouble(m.group(1)) / 100.0;
+                return (int) Math.round(contentBasis * pct);
+            }
+            if (INT_NUMERIC.matcher(s).matches()) return Integer.parseInt(s);
+        }
+        return fallback;
+    }
+
+    /** 解析 w/h 维度：支持 "auto" 走 supplier，"N%" 按 basis，数字按数字。 */
+    private int resolveDimensionWithAuto(Object raw, int basis,
+                                         Map<String, Object> params,
+                                         java.util.function.IntSupplier autoFallback) {
+        if (raw == null) return autoFallback.getAsInt();
+        if (raw instanceof Number n) return n.intValue();
+        if (raw instanceof String s) {
+            try {
+                s = Interpolator.interpolate(s, params);
+            } catch (Interpolator.MissingParamException e) {
+                return autoFallback.getAsInt();
+            }
+            if ("auto".equalsIgnoreCase(s)) return autoFallback.getAsInt();
+            var m = PERCENT.matcher(s);
+            if (m.matches()) {
+                double pct = Double.parseDouble(m.group(1)) / 100.0;
+                return (int) Math.round(basis * pct);
+            }
+            if (INT_NUMERIC.matcher(s).matches()) return Integer.parseInt(s);
+        }
+        return autoFallback.getAsInt();
+    }
+
+    /** TemplateElement → state.Element 物化。line 在 v1 跳过返回 null。 */
+    private Element materialize(TemplateElement el, int x, int y, int w, int h,
+                                Map<String, Object> params) {
+        String id = "e-" + UUID.randomUUID();
+        if (el instanceof TemplateElement.Text t) {
+            String content = interp(t.content() == null ? "" : t.content(), params);
+            String color = interp(t.color() == null ? "#000000" : t.color(), params);
+            String fontId = interp(t.font() == null ? "ark_pixel" : t.font(), params);
+            int size = t.size() == null ? 24 : t.size();
+            String align = t.align() == null ? "left" : t.align();
+            float lineHeight = t.lineHeight() == null ? 1.2f : t.lineHeight().floatValue();
+            float letterSpacing = t.letterSpacing() == null ? 0f : t.letterSpacing().floatValue();
+            boolean vertical = t.vertical() != null && t.vertical();
+            Effects effects = materializeEffects(t.effects(), params);
+            return new TextElement(
+                    id, x, y, w, h,
+                    t.rotation(), false, true,
+                    content, fontId, size, color, align,
+                    letterSpacing, lineHeight, vertical, effects);
+        }
+        if (el instanceof TemplateElement.Rect r) {
+            String fill = r.fill() == null ? null : interp(r.fill(), params);
+            Stroke stroke = r.stroke() == null ? null
+                    : new Stroke(asInt(r.stroke().width()) == null ? 1 : asInt(r.stroke().width()),
+                                  interp(r.stroke().color(), params));
+            return new RectElement(
+                    id, x, y, w, h,
+                    r.rotation(), false, true,
+                    fill, stroke);
+        }
+        // line: v1 不渲染，但保留 instantiate 链路以待 v2+
+        return null;
+    }
+
+    private Effects materializeEffects(TemplateEffects te, Map<String, Object> params) {
+        if (te == null) return null;
+        Stroke s = null;
+        Shadow sh = null;
+        Glow g = null;
+        if (te.stroke() != null) {
+            Integer w = asInt(te.stroke().width());
+            s = new Stroke(w == null ? 1 : w, interp(te.stroke().color(), params));
+        }
+        if (te.shadow() != null) {
+            Integer dx = asInt(te.shadow().dx());
+            Integer dy = asInt(te.shadow().dy());
+            sh = new Shadow(dx == null ? 0 : dx, dy == null ? 0 : dy,
+                    interp(te.shadow().color(), params));
+        }
+        if (te.glow() != null) {
+            Integer r = asInt(te.glow().radius());
+            g = new Glow(r == null ? 0 : r, interp(te.glow().color(), params));
+        }
+        return new Effects(s, sh, g);
+    }
+
+    private static String interp(String src, Map<String, Object> params) {
+        if (src == null) return null;
+        try {
+            return Interpolator.interpolate(src, params);
+        } catch (Interpolator.MissingParamException e) {
+            // 默认 fallback：空串。校验阶段已 collect 过未声明引用，运行时遇到通常是
+            // 必填 param 没填 + 已走到这一步 → 回到 INVALID_PARAM 路径才对，
+            // 这里兜底返回原文本避免 NPE。
+            return src;
+        }
+    }
+
+    // ==================== 工具 ====================
+
+    private static Integer asInt(Object o) {
+        if (o == null) return null;
+        if (o instanceof Number n) return n.intValue();
+        if (o instanceof String s) {
+            if (INT_NUMERIC.matcher(s).matches()) {
+                try { return Integer.parseInt(s); } catch (NumberFormatException ignored) {}
+            }
+        }
+        return null;
+    }
+
+    private static Double asDouble(Object o) {
+        if (o == null) return null;
+        if (o instanceof Number n) return n.doubleValue();
+        if (o instanceof String s) {
+            try { return Double.parseDouble(s); } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+}

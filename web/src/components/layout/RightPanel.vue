@@ -35,8 +35,9 @@ function sendUpdate(patch: Record<string, unknown>) {
     ws.send('element.update', { elementId: el.id, patch });
 }
 
-/** 200ms 防抖（用于文字 / 数值输入）。 */
-const sendUpdateDebounced = useDebounceFn(sendUpdate, 200);
+/** 80ms 防抖（用于文字 / 数值输入）。2026-05-12 实测后从 200ms 降下来，
+ *  在 ~12 wpm 输入下不会塞 WS，但视觉滞后感明显改善。color/select 路径不防抖。 */
+const sendUpdateDebounced = useDebounceFn(sendUpdate, 80);
 
 // ---------- 控件绑定 helpers ----------
 

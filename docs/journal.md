@@ -5,6 +5,357 @@
 
 ---
 
+## 2026-05-12 · M6 第六轮：refresh 终于真修 — 撸的是 map item 不是 frame entity
+
+**用户提供的服务端 log 直接命中真相：**
+
+```
+[wall.refresh w-...] scanned=84 deadOrInvalid=0 wallMatched=8 present=[0,1,2,3,4,5,6,7] expected=8
+[wall.refresh w-...] framesRespawned=0
+```
+
+`wallMatched=8` + `present=[0..7]` 说明 8 个画框 entity 全在、PDC 完整 — 但截图显示其中 2 个是**空木框**。
+
+**根因：MC 左键撸 ItemFrame 是两阶段动作 —**
+1. 第一次左键：只移除画框内的 item（map drop 出来 / 创造模式直接消失），**frame entity 仍挂在墙上**
+2. 第二次左键：才打掉 frame entity
+
+绝大多数玩家只撸了一下、看到画消失了就以为"撸掉了" — 实际上 entity 还在，PDC 完好。我们旧逻辑把它当"已存在"加进 `present` set 跳过 → 永远没人把 map item 塞回去 → 永远是空木框。
+
+**修：repairFor 扫描时区分三态**
+
+- **完整**（PDC 匹配 + `getItem().type == FILLED_MAP`）→ `present` set，整体跳过
+- **空框**（PDC 匹配但 item 缺失或不是 FILLED_MAP）→ `emptyFrames: Map<slot, ItemFrame>`，进 `reAttachMapsToEmptyFrames` 直接 `f.setItem(...)`，**不需要重新 spawn entity**
+- **完全缺失**（entity 都不存在）→ `deployFor` 走原 spawn 路径
+
+`RepairResult` 加 `framesReAttached` 字段；UI 侧把 spawn 新 frame + reAttach 空 frame 合并显示为"重挂 N 个画框"（玩家视角都是"补回一格"）。
+
+**改动文件：**
+
+- `plugin/src/main/java/moe/hikari/canvas/deploy/FrameDeployer.java` — `RepairResult` 加 `framesReAttached` + `framesFixed()`；`repairFor` 拆三态扫描；新增 `reAttachMapsToEmptyFrames`
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java` — ack payload `framesRespawned` 改为 `result.framesFixed()`（合并 spawn + reAttach），新增 `framesReAttached` 字段
+
+---
+
+## 2026-05-12 · M6 第五轮：refresh 后画框仍不出 → 加诊断 + entity 残骸清理
+
+**用户反馈：** 第四轮修了 open 路径的 WALL_NOT_FOUND，现在 refresh 能跑通了，但只有"补回 1 支撑方块"出现 — 画框（和地图画）本身没补回。换言之 framesRespawned=0。
+
+**分析：** "补回 1 块方块、重挂 0 个画框" → `replaceMissingWallBlocks` 正常但 `deployFor` 一个 slot 都没 mount。两种可能：
+
+1. `present` set 包含全部 slot（spawn 全被 skip）—— 表示破坏的画框残留在 entity 列表中没被 isDead/isValid 过滤掉
+2. `world.spawn(...)` 被某种原因拒绝（front block 非 air、Item 掉落物挡道、Paper 1.21 spawn 异常等）
+
+**本轮加：**
+
+1. **`repairFor` 诊断 log：** 输出 `scanned / deadOrInvalid / wallMatched / present / expected / replacedBlocks` 让我们看到 present set 实际包含哪些 slot
+2. **`spawnSlot` 全程 log：** spawn 前后都打 location + uuid，spawn 异常显式 catch + log；spawn 返回的 frame 立即用 `isDead/isValid` 复核
+3. **`spawnSlot` 三道防御：**
+   - 支撑方块仍 AIR → 再补 STONE（极小概率事件）
+   - frontBlock 非 AIR → 清成 AIR
+   - **frameLoc 0.8 格内的残留 Item 掉落物 + 不属于本 wall 的"幽灵" ItemFrame → `e.remove()`**（怀疑这条是用户场景的真凶 — 撸破画框后掉的 Item entity 没及时被回收，挡 spawn）
+
+**改动文件：**
+
+- `plugin/src/main/java/moe/hikari/canvas/deploy/FrameDeployer.java` — `repairFor` 加诊断日志；`spawnSlot` 加三层防御 + try/catch + isValid 复核
+
+**待用户跑一遍：** 实测后如果第二次撸画框 + refresh 仍是 framesRespawned=0，看 server log 里 `[wall.refresh ...]` / `[spawnSlot ...]` 输出 → 能直接定位是 scan 阶段还是 spawn 阶段卡住，再针对性修。
+
+---
+
+## 2026-05-12 · M6 第四轮：open 路径几何缺失 + 编辑态泄露
+
+**用户反馈：**
+
+1. `/canvas open w-xxx` 进编辑器后点 Refresh 报 `WALL_NOT_FOUND: session lacks wall geometry`
+2. 偶尔出现"一个 element 在 inline edit、另一个在被拖动"的鬼态
+3. 想要"双击空白处取消所有选中"
+
+---
+
+**根因 1：open 路径漏写 `session.wall()`**
+
+`SessionManager.open()` 只 `s.wallKey(key)`、`s.mapIds(...)`，从未 `s.wall(WallResolver.Result.Ok)`。
+而 `WebServer.wall.refresh` / `FrameDeployer.repairFor` 都要求 `session.wall()` 提供 world / origin / facing / width / height — null 立即报 WALL_NOT_FOUND。confirm 路径下 geometry 由 `WallResolver.resolve()` 直接产出，open 路径下没有"玩家点击"的过程所以没人产。
+
+**修：** `SessionManager.rebuildWallGeometry(WallRepo.Wall)` 从 `WallKey`（world/originX/Y/Z/facing）+ `Wall.widthMaps/heightMaps` 反推 `WallResolver.Result.Ok`，`hasExistingFrames` 固定 true（open 的前提就是 wall 已经物化）。世界未加载抛 IllegalStateException。`open()` 与"幂等重用"分支都补上调用；重用分支还做了防御：若 existing.wall 仍为 null（修复前创建的旧 session）也补一刀。
+
+**根因 2 / 3：CanvasView 没有"主动收编辑态"的路径**
+
+`finishEditing()` 之前只在 textarea blur / Escape / Enter 时触发。但用户的实际行为是：
+
+- 编辑 A 时直接点（或拖）B → Konva 走 `mousedown → dragstart`，根本不触发 click
+- 编辑 A 时切到 Move 工具 → tool 改变但没事件清理
+- 编辑 A 时点画布空白处 → 已有 stage.mousedown 走 deselect 路径，但没收编辑态
+- 没有"取消一切"的标准入口
+
+修了四条路径同时收编辑态 + 加新入口：
+
+1. `onHitClick(id)` — 若 editingId 存在且 != id → `finishEditing()` 后再 selectElement
+2. `onDragStart(id)` — 同上（覆盖"在编辑 A 时直接拖 B"的 Konva 跳过 click 的情况）
+3. `onStageMouseDown` 走 deselect 分支时 → `finishEditing()`
+4. `watch(ui.activeTool, ...)` — 切工具时收编辑态
+5. **`onStageDblClick`（新）** — 双击空白处 = 取消选中 + 退出编辑（用户明确要求的 escape 路径）
+
+`<v-stage>` 加 `@dblclick="onStageDblClick"`；`<v-rect>` 加 `@dragstart="() => onDragStart(el.id)"`。
+
+**改动文件：**
+
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java` — 加 `rebuildWallGeometry`；open() 与"幂等重用"分支都补上
+- `web/src/components/layout/CanvasView.vue` — `onDragStart` / `onStageDblClick`；`onHitClick` / `onStageMouseDown` / `watch(ui.activeTool)` 加 finishEditing 兜底；v-stage / v-rect 绑新事件
+
+**质量门：** plugin compileJava OK；vite build OK。
+
+---
+
+## 2026-05-12 · M6 第三轮：wall.refresh promise ack + Move 工具
+
+**用户反馈 2 条：**
+
+1. 撸画框（不是方块）后点刷新仍不恢复 + 总报"服务端无响应"
+2. 要 PS 风格的"Move 移动工具"——独立按钮，按下后单击纯拖、双击进编辑、不显示 resize 锚点
+
+---
+
+**1. wall.refresh 两个隐藏 bug**
+
+- **撸 frame 仍跳过 slot：** `FrameDeployer.repairFor` 在收集已存在 frame 时漏过滤 `f.isDead()` / `!f.isValid()`。创造模式刚 break 的 frame entity 仍可能短暂出现在 `getEntitiesByClass` 结果里，PDC 匹配后被误当成"已存在"加进 `present` set，对应 slot 被跳过 → 新 frame 永远不补。加 `if (f.isDead() || !f.isValid()) continue;` 跳过。
+- **"服务端无响应"误报：** 原 TopBar 实现用 `project.state.version` 变化判定成功，但 wall.refresh 只是触发全画布像素重画，ProjectState version 不会变 → 任何情况都走 5s timeout 分支。**根治：引入按 client id 跟踪 ack 的 Promise 机制。**
+  - `WsClient.sendWithAck(op, payload, timeoutMs)` 返回 `Promise<ackPayload>`；ack 来时解 resolve，error 来时 reject，timeout 默认 5s
+  - 内部 `pendingAcks: Map<id, {resolve, reject, timer}>` 跟踪；`handleAck(id, payload)` / `handleError(id, payload)` 顺手 settle
+  - `TopBar.refreshWall` 改为 `await ws.sendWithAck('wall.refresh', undefined, 8000)`，从 ack payload 取真实 `framesRespawned` / `wallBlocksReplaced` 数字拼成文案（"补回 2 块方块 + 重挂 1 个画框"）
+
+后续 `template.apply` 等长 op 也可以迁到 sendWithAck（M7 polish 范围）。
+
+**2. Move 工具（PS 风格）**
+
+- `ui store` 新增 `activeTool: 'select' | 'move'` + `setTool()`；localStorage 持久化
+- `LeftTools` 顶部加两个工具按钮（MousePointer2 / Move 图标），点亮态突出显示当前激活
+- **`select` 模式（默认）：** 当前行为不变 —— 点选 + 显示 transformer 锚点（12px）+ 双击文本进 inline edit
+- **`move` 模式：** transformer 完全隐藏（无锚点遮挡）；hit rect 仍可拖、可双击进 edit、可 hover 显示蓝色虚线描边和 cursor:move
+- 快捷键：`V` 切 select，`M` 切 move（input/textarea 内输入时跳过）
+- `attachTransformer` 加 `activeTool === 'move'` 分支强制 `nodes([])`；watch `ui.activeTool` 切换即时生效
+
+**改动文件：**
+
+- `plugin/src/main/java/moe/hikari/canvas/deploy/FrameDeployer.java` — `repairFor` 扫 entity 时跳过 dead/invalid
+- `web/src/network/wsClient.ts` — `sendWithAck` Promise API + pendingAcks 跟踪；`handleAck/handleError` 接收 envelope id
+- `web/src/components/layout/TopBar.vue` — refreshWall 用 sendWithAck；flash 文案显示真实计数
+- `web/src/stores/ui.ts` — `activeTool` + `setTool()` + `TOOL_KEY` 持久化
+- `web/src/components/layout/LeftTools.vue` — 顶部加 select/move 工具组按钮
+- `web/src/components/layout/CanvasView.vue` — `attachTransformer` 在 move 模式跳过 attach；watch activeTool；V/M 全局快捷键
+- `web/src/i18n/messages.ts` — `tools.selectTool` / `tools.moveTool` / `wall.refreshedDetail`（接受参数）/ `refreshSendFailed`（中英）
+
+**质量门：** plugin compileJava OK；vite build 357 KB / 26 KB；功能侧待用户实测验证。
+
+---
+
+## 2026-05-12 · M6 第二轮实测打磨（wall.refresh 真修 + 编辑器交互升级）
+
+**用户反馈 4 条：**
+
+1. **wall.refresh 在玩家撸掉方块时无效**
+2. **应用模板后想加 element 交互困难**（例：站牌旁加绿框 + 写"2 号线"）
+3. **编辑画布时前端有滞后感**，改字体偶尔无反馈
+4. **想要 PS 风格的自由拖动**（"那个大细定位方框太难拖动"）
+
+---
+
+**根因 1：撸方块 ≠ 撸画框。** `FrameDeployer.repairFor` 之前只补 spawn 画框，但玩家通常是撸掉了**支撑方块**——画框因此脱落变物品。再 spawn 同位置画框还是会立即掉。`replaceMissingWallBlocks` 新增：扫 wall bbox 内每格，AIR → 自动 `setType(STONE)`，再走 spawn。返回 `RepairResult(framesRespawned, wallBlocksReplaced)`。
+
+WebServer.wall.refresh 改造：原来主线程任务一发出立即 ack `{submitted:true}`；现在把 ack 移到主线程任务**完成后**回发，payload 携带两个真实数字。前端 TopBar 改成轮询 `project.state.version` + `lastOpError.ts`，5s 内任一变化即认定为已完成/失败/超时，屏幕上短暂 flash 一段中文/英文状态（"已刷新" / 错误码 / "服务端无响应"）。
+
+**根因 4 + 部分 2：transformer 锚点 + hit rect 体验。**
+
+- 锚点 `anchorSize: 8 → 12`，`rotateAnchorOffset: 24 → 32`，更易精确拖
+- hit rect 加 hover 反馈：未选中但鼠标悬停时画 1px 蓝色虚线描边 + 切 `cursor: move`，提示"这是可拖拽的对象"
+- 选中后 transformer 自带粗 1.5px 实线 border，与 hover 虚线视觉区分清楚
+
+**根因 2 另一半：新元素生成位置硬编码 (32, 32)。** 模板应用后画布已经满，再加一个新 element 叠在角落几乎看不见。改成：
+
+- `text` 新建 → 192×48 默认尺寸、字号 32（之前 16）、放画布几何中心
+- `rect` 新建 → 80×80 默认尺寸、放画布几何中心
+- 计算用 `project.canvasPixelWidth / canvasPixelHeight`
+
+**根因 3：RightPanel 输入防抖 200ms 太长。** 玩家敲一个字到画布反映之间最长 0.2 秒，叠加 WS RTT 给人卡顿感。改为 80ms（保留 color/select 立即路径不变）。
+
+---
+
+**改动文件：**
+
+- `plugin/src/main/java/moe/hikari/canvas/deploy/FrameDeployer.java` — `RepairResult` record + `replaceMissingWallBlocks`；`repairFor` 返回类型变更
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java` — wall.refresh 改为主线程完成后 ack，payload 含 framesRespawned/wallBlocksReplaced
+- `web/src/components/layout/TopBar.vue` — refreshWall 轮询版本/错误时间戳；按钮旁边加 refreshFlash 文案
+- `web/src/components/layout/CanvasView.vue` — 锚点 12px、hover 描边、hover cursor:move
+- `web/src/components/layout/RightPanel.vue` — debounce 200→80
+- `web/src/components/layout/LeftTools.vue` — addText / addRect 走 `centeredBox`，画布中心 + 更大默认尺寸
+- `web/src/i18n/messages.ts` — `wall.refreshed` / `wall.refreshTimeout` 加 zh + en；refreshTip 描述更新
+
+**质量门：** plugin 编译 OK；vite build 354 KB JS / 26 KB CSS。
+
+---
+
+## 2026-05-12 · M6 模板系统首次实测打磨
+
+**用户反馈：** 从 `welcome_banner`（min 4×2）切到 `nameplate`（max 4×1）apply 后画布不变，模态自动关。无错误提示——以为是 bug。
+
+**根因 1：apply 静默失败**
+
+- 服务端 `TemplateInstantiator` 已正确返回 `Failed("CANVAS_MISMATCH", ...)`；`WebServer.applyTemplate` 转 `EditSession.OpResult.Error` 走 Envelope.error 回前端
+- 但 `wsClient.handleError` 只在 `AUTH_FAILED` 时设置 `net.lastError`，其他错误只 push 到 logs。TemplateGallery 没有路径感知这条错误，1.2s timeout 后乐观关闭模态
+- 修复：`network.ts` 加 `lastOpError = { code, message, ts }`；`wsClient.handleError` 给所有错误打到 lastOpError 上。Gallery 的 `applyNow` 改成捕获 `project.state.version` + `lastOpError.ts` 基线，100ms 轮询其一变化判定成功/失败/5s 超时
+
+**根因 2：模板字体 ID 笔误**
+
+- 5 个新增模板（subway_station / shop_sign / welcome_banner / bulletin_board / nameplate）的 text element 都写 `font: sourcehan`
+- 但后端 `FontRegistry.BUILT_IN` 注册的 ID 是 `source_han_sans`；不匹配时 fallback 到 `ark_pixel`（像素字体），CJK 字幕过粗看起来怪
+- 修复：全局替换为 `source_han_sans`
+
+**用户附加诉求：模板"占地"提示 + 字体选择**
+
+1. Gallery 卡片现在显示 `推荐占地: 3×1 – 8×2 maps`；当前 wall 不在范围内时卡片右上有黄色 ⚠ + 红色"不兼容"标签
+2. 选中模板时 form header 同步显示 `推荐占地 / 当前墙面 / 不兼容` 三段，方便对比
+3. footer 在不兼容时显示完整提示 `当前墙面与模板要求的 2×1 – 4×1 不匹配。请新建一面匹配尺寸的墙面后再应用`
+4. Apply 按钮在不兼容时禁用（避免一次无谓的服务端往返）
+5. `shop_sign` + `bulletin_board` 新增 `font` 类型 param，default `source_han_sans`，前端遇到 `type: font` 且 YAML 没 options 时自动用 `FONT_META`（思源 / Ark Pixel）填下拉
+
+**改动文件：**
+
+- `plugin/src/main/resources/templates/{subway_station,shop_sign,welcome_banner,bulletin_board,nameplate}.yml` — font ID 修正；shop_sign + bulletin_board 加 `${shop_font}` / `${board_font}` 参数化
+- `web/src/stores/network.ts` — 加 `lastOpError`
+- `web/src/network/wsClient.ts` — handleError 同步打 `lastOpError`
+- `web/src/components/template/TemplateGallery.vue` — apply 成功/失败/超时三态轮询；卡片 + form header + footer 三处尺寸提示；不兼容时禁用 Apply；font 参数自动 options
+- `web/src/i18n/messages.ts` — 加 `templates.sizeLabel / currentWall / incompatible / incompatibleHint / wallMismatchHint / applyFailed / applyTimeout`（中英双语）
+
+**质量门：** plugin test 全绿；vite build 通过；vue-tsc M6-F 触及的所有文件零错（剩 1 个 i18n/index.ts 是 pre-existing union 收窄问题，与本次无关）。
+
+---
+
+## 2026-05-12 · M6 模板系统实装（A-G 子阶段）
+
+**背景：** 按 2026-05-11 路线确认条目里的 9 项决策，一气把 M6 跑完。所有契约文档已先于代码改完，本次按 7 子阶段顺序落地。代码量：plugin 端约 1500 LOC + 6 内置 yml + 8 个测试类 90 个 case；web 端约 700 LOC + 1 个新 store + 1 个新模态组件。
+
+**M6-A 解析与注册（plugin）**
+
+新建包 `moe.hikari.canvas.template`：
+
+- `TemplateSpec` / `TemplateCanvas` / `TemplateLayout` / `TemplateElement`（sealed: Text/Rect/Line）/ `TemplateParam` / `TemplateEffects` — Jackson 友好的 record 树
+- `TemplateLoader` — `jackson-dataformat-yaml` 2.18.2 直接 `readValue` 到 record；§9 全套校验（id/name/spec/canvas dims/colors/param id/enum opts/`${ref}` 未声明扫描）；grid layout v1 拒；icon v1 拒；polymorphic typing 显式关
+- `TemplateRegistry` — 内置（jar `_index.txt` 清单 + `getResourceAsStream`）+ 服务器（`plugins/HikariCanvas/templates/*.yml`）合并，server 同 id 覆盖 builtin，`volatile Map` 原子 swap
+- `_index.txt` — 内置模板清单文件（dev 模式 classes/resources 分离 + 打包 jar 两路统一）
+- `/canvas reload templates` — `canvas.admin` 权限，输出 builtin/server/overrides/failed 数
+
+`build.gradle.kts` 加 `com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.2`。
+
+**M6-B 表达式 + 插值**
+
+新建子包 `template.expr`：
+
+- `Expr` — sealed AST：`Literal` / `Identifier` / `Not` / `Binary(EQ/NE/AND/OR)`
+- `ExpressionParser` — lex + 递归下降。优先级 `!` > `==/!=` > `&&` > `||`（C 系一致）；字符串/数字/布尔字面量 + `()` 分组；`ParseException` 带 0-based 位置
+- `ExpressionEvaluator` — truthy 规则（null/0/空串 = false）+ 类型敏感相等（Number→double / Boolean→bool / 否则 toString）；短路 `&&` `||`
+- `Interpolator` — `${name}` 替换；无 `${` 零分配 fast-path；不递归（防注入）
+- `TemplateLoader.validateElement / validateParam` 接入 `ExpressionParser.parse` 完成 §9 末项"visible_when 可解析"语法校验
+
+**M6-C 实例化引擎**
+
+- `TemplateInstantiator.instantiate(spec, userParams, wallW, wallH) → Result.Ok(bg, elements, resolvedParams) | Failed(code, errors)`
+- 流水线：`validateParams` → `fitCanvas` → `resolveBackground` → `layoutAndMaterialize`
+- 错误码：`INVALID_PARAM` / `CANVAS_MISMATCH` / `INVALID_VALUE` / `INVALID_LAYOUT` / `INVALID_TEMPLATE`
+- stack 布局：忽略 element 自带 x/y，按 direction 累加 + gap；w 撑满 content；text 自然高 = `ceil(size × lineHeight × lines)`
+- free 布局：x/y/w/h 直接取；w/h 支持 `int` / `"auto"` / `"N%"`（按 content basis） / `${param}`
+- `visible == false` 直接 false；`visible_when` 走 evaluator；不可见元素 skip 不写入 ProjectState（避免"隐形僵尸"）
+- text 物化所有 string 字段插值，effects（stroke/shadow/glow）透传；line v1 跳过返回 null
+
+**M6-D WS 接入**
+
+- `EditSession.replaceContent(bg, elements)` 通用 replace 入口（替代旧的硬编码 `applyTemplate` + `buildHelloWorld`）；清 elements + 改背景 + 推进 version + push pre-snapshot 到 history（让 undo 可回）
+- `WallRepo.setTemplate(wallId, templateId, version)` — 写回 `walls.template_id` / `template_version` 列
+- `WebServer.applyTemplate` 私有方法 — `template.apply` op 中枢：registry 查表 → instantiator 实例化 → `replaceContent` → walls write-back
+- `WebServer.listTemplates()` — 给 `/api/session/{token}` 和 ready payload 注入全量 TemplateSpec 列表（protocol §3.2）
+- M3 硬编码 `hello_world` 路径整段删，统一走 YAML 流水线
+
+**M6-E 5 个内置模板**
+
+| ID | 用途 | 画布 | 布局 |
+|---|---|---|---|
+| `hello_world` | demo / apply 演示 | 1×1–8×4 auto | free |
+| `subway_station` | 地铁/公交站牌 | 3×1–8×2 auto | stack vertical |
+| `shop_sign` | 商店门头 | 3×1–6×2 auto | stack vertical |
+| `welcome_banner` | 服务器欢迎横幅 | 4×2–8×4 auto | stack vertical |
+| `bulletin_board` | 米黄底公告板 | 3×1–8×3 auto | stack vertical |
+| `nameplate` | 门牌 | 2×1–4×1 auto | free（左右分区） |
+
+每模板覆盖至少 2 种 param type，含 `visible_when` 开关、color preset、stack + free 各覆盖。
+
+> 命名调整：原路线条目里写的 `warning` / `neon_sign` / `minimal` 在落地时换成更贴近实际游戏内场景的 `shop_sign` / `welcome_banner` / `bulletin_board` / `nameplate`（多了一个）。前三个比较抽象、缺明确 param shape；后四个一上来就是装饰场景里能直接用的。
+
+**M6-F TemplateGallery 前端**
+
+- `web/src/types/template.ts` — TemplateSpec / Canvas / Param / Layout / Element TS 类型（Java record 镜像）
+- `web/src/lib/templateExpr.ts` — visible_when 解析器 TS 版本（≈ Java `ExpressionEvaluator` 等价；失败保守返回 true）
+- `web/src/stores/templates.ts` — Pinia store：模板列表 / Gallery 开关 / selectedId / 每模板独立 param 草稿
+- `web/src/components/template/TemplateGallery.vue` — 模态：左侧卡片列表 + 右侧动态参数表单 + 底部 Apply / 二次确认
+- 表单按 type 渲染 8 种控件（string/text/int/float/bool/color+presets/enum/font）；`visible_when` 实时驱动字段显隐
+- `web/src/network/wsClient.ts` — handleReady 把 templates 推入 store
+- `web/src/components/layout/LeftTools.vue` — Sparkles 按钮从硬编码 hello_world 改为 `templates.openGallery()`
+- `web/src/i18n/messages.ts` — 新增 `templates.*` 文案（zh + en）
+
+**M6-G 收口**
+
+- `docs/template-spec.md §12` — 百分比父容器定义打钩归档为"M6-C 已固化：父容器 = canvas 内容区（pixel 尺寸减 padding 4 元）"
+- `CLAUDE.md` 里程碑 → M6 ✅ + 2026-05-12 完成日期
+- 本日志条目
+- 5 个未决问题中剩余 4 个（继承 / grid / preview 规范 / group UI）明确推迟到 M7 polish 或 v2+
+
+**质量门**
+
+- 后端：90 个测试 89 绿 + 1 pre-existing `RendererSnapshotTest.01-hello-world` 像素 baseline 漂移（与 M6 无关）
+  - Loader 15 / Parser 14 / Evaluator 12 / Interpolator 8 / Instantiator 17 / BuiltinTemplates 11 / HelloWorldYaml 4 / EditSessionReplaceContent 4 = 85 个 M6 新增
+- 前端：`vue-tsc --noEmit` M6-F 触及的所有新文件零错（剩 25 个 pre-existing CanvasView/PreviewRenderer 等遗留，与 M6 无关）；`vite build` 348 KB JS / 26 KB CSS 通过
+
+**下一步：** M7 polish（grid 布局 / icon 元素 / preview thumbnail / 分组 UI / 已发布 wall 破坏保护 / 雪藏的 snapshot baseline 重建 / 身份认证与鉴权独立 milestone）
+
+---
+
+## 2026-05-11 · M6 路线确认（仅文档；不动代码）
+
+**背景：** M5.5 polish 已收口，进 M6 模板系统之前先固化 4 个决策到契约文档，避免实施期反复。
+
+**5 个开放问题已拍板（含上次的 5 个）：**
+1. **YAML 解析库**：jackson-dataformat-yaml 2.18.2（不用 SnakeYAML）。同步改 CLAUDE.md 锁定版本表 + PROPOSAL.md 依赖表 + `docs/security.md §4.3` 与第三方库表
+2. **ready payload 模板下发**：v1 阶段全量下发 `templates: [...]`，5 个内置 + 服主自定义合计 < 50KB 可接受。未来若爆量再切 index + on-demand
+3. **5 个内置模板**：`subway_station` / `shop_sign` / `warning` / `neon_sign` / `minimal`
+4. **`/canvas reload templates`**：M6 v1 实装（管理员命令，原子 swap 替换 registry 指针）
+5. **Apply 语义**：replace（清 elements + 改 background），前端弹"覆盖当前内容"提示；merge 留 v2+
+6. **Layout 实装**：M6 v1 stack + free；grid 留 M7
+7. **canvas auto-size 超 limit**：实例化失败，错误回客户端
+8. **icon 元素**：v1.0 不实现（契约 §4.6 已说明）
+9. **参数组 group**：v1 接受字段但不渲染，扁平展开
+
+**文档改动清单：**
+
+- **CLAUDE.md**：技术栈表 SnakeYAML → jackson-dataformat-yaml 2.18.2 + M6 决策段
+- **PROPOSAL.md**：§5.2 依赖表同步
+- **docs/security.md**：§4.3 YAML 解析改写（jackson-yaml 默认免疫 SnakeYAML `!!java/*` tag 路径）；§T9 威胁备注更新；§10.1 第三方库表替换
+- **docs/protocol.md**：ready payload 加 `templates` 字段示例 + 全量下发决策段；§12 未决问题打钩两条（template.apply merge / M6 templates 协议固化）
+- **docs/template-spec.md**：§1 加 jackson-dataformat-yaml 备注 + `/canvas reload templates` 命名固化；§7 实例化加 replace 语义段 + walls.template_id 写回；§12 未决问题状态更新（grid/group/preview/百分比四条明确 v1 范围）
+- **docs/architecture.md**：§2.1 组件分层 template/ 描述补 jackson-yaml + registry 热重载
+
+**M6 范围速查（待实施，7 个子阶段，~6-7 天）：**
+
+- **A** 解析与注册：TemplateSpec records / TemplateLoader / TemplateRegistry（含热重载）
+- **B** 表达式 + 插值：极简 parser `==/!=/&&/||/!/()` + 字符串 `${param}` + 单元测试
+- **C** 实例化引擎：参数校验 / canvas auto-size / stack+free layout / 百分比展开 / 元素插值
+- **D** WS 接入：`template.apply` 改走 registry；ready payload 加 templates；apply 后 `WallRepo.setTemplate`
+- **E** 5 个内置 yml + 内置 resource 加载
+- **F** TemplateGallery 前端 dialog（动态参数表单 + visible_when + 应用确认）
+- **G** 收口：单测 / journal / CLAUDE.md 里程碑勾完
+
+**下一轮开 M6-A 实施代码。**
+
+---
+
 ## 2026-05-11 · M5.5 polish 收口（i18n / alias 校验 / copy 反馈）
 
 **背景：** 主功能已通，先填几个之前散落的体验坑再进 M6。身份认证 / 鉴权单列下一个 milestone 不在此次范围。

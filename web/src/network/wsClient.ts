@@ -7,6 +7,7 @@ import type {
 } from '@/types/protocol';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
+import { useTemplatesStore } from '@/stores/templates';
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
@@ -22,6 +23,12 @@ const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
  * main.ts 启动时调 {@link connect}；重连 / 自动重试逻辑 M5-A 阶段先保留手动 reconnect，
  * 完整的 5s/10s/30s 阶梯重连留 M5-B 或 M7 polish。</p>
  */
+type PendingAck = {
+    resolve: (payload: unknown) => void;
+    reject: (err: Error) => void;
+    timer: number;
+};
+
 export class WsClient {
     private ws: WebSocket | null = null;
     private seq = 0;
@@ -32,6 +39,8 @@ export class WsClient {
     private lastToken: string | null = null;
     /** 用户主动关闭或 auth 已判死时置 true，阻止自动重连。 */
     private stopped = false;
+    /** 按 client id 跟踪等待 ack 的 promise（sendWithAck 用）。 */
+    private pendingAcks = new Map<string, PendingAck>();
 
     constructor(private readonly url: string) {}
 
@@ -98,6 +107,27 @@ export class WsClient {
         return id;
     }
 
+    /**
+     * 像 {@link send} 一样发送，但返回一个 Promise，在服务端 ack（resolve payload）或
+     * error（reject Error）回到来时落定。带 {@code timeoutMs} 超时（默认 5s，0 = 无限）。
+     *
+     * <p>当 socket 未开 / 发送失败时 reject 一个 'send_failed' Error。组件只关心 promise 状态，
+     * 不需要自己轮询 state/lastOpError 时间戳。</p>
+     */
+    sendWithAck(op: string, payload?: unknown, timeoutMs = 5000): Promise<unknown> {
+        const id = this.send(op, payload);
+        if (!id) return Promise.reject(new Error('send_failed'));
+        return new Promise<unknown>((resolve, reject) => {
+            const timer = timeoutMs > 0
+                ? window.setTimeout(() => {
+                    this.pendingAcks.delete(id);
+                    reject(new Error('ack_timeout'));
+                }, timeoutMs)
+                : 0;
+            this.pendingAcks.set(id, { resolve, reject, timer });
+        });
+    }
+
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
@@ -144,12 +174,12 @@ export class WsClient {
                 this.handlePatch(env.payload as StatePatchPayload);
                 break;
             case 'error':
-                this.handleError(env.payload as ErrorPayload);
+                this.handleError(env.id, env.payload as ErrorPayload);
                 break;
             case 'pong':
                 break;
             case 'ack':
-                this.handleAck(env.payload);
+                this.handleAck(env.id, env.payload);
                 break;
             default:
                 net.pushLog('meta', `unhandled op: ${env.op}`);
@@ -159,6 +189,7 @@ export class WsClient {
     private handleReady(payload: ReadyPayload): void {
         const net = useNetworkStore();
         const project = useProjectStore();
+        const templates = useTemplatesStore();
         net.authenticated = true;
         net.sessionId = payload.sessionId;
         net.serverVersion = payload.serverVersion;
@@ -172,6 +203,8 @@ export class WsClient {
             payload.alias ?? null,
             payload.publishedAt ?? null,
         );
+        // M6-D：缓存全量 TemplateSpec 列表，供 TemplateGallery 使用
+        templates.setTemplates(payload.templates ?? []);
         // rotate 过来的新 token 存 sessionStorage 供断线重连
         if (payload.reconnectToken) {
             try {
@@ -189,7 +222,15 @@ export class WsClient {
     }
 
     /** ack payload 可能含 wall.* op 的副作用（publishedAt / alias）；同步进 store。 */
-    private handleAck(payload: unknown): void {
+    private handleAck(ackId: string | undefined, payload: unknown): void {
+        // 1) sendWithAck 的 Promise resolve（与 store 副作用解耦）
+        if (ackId && this.pendingAcks.has(ackId)) {
+            const pending = this.pendingAcks.get(ackId)!;
+            if (pending.timer) window.clearTimeout(pending.timer);
+            this.pendingAcks.delete(ackId);
+            pending.resolve(payload);
+        }
+        // 2) store 副作用
         if (!payload || typeof payload !== 'object') return;
         const project = useProjectStore();
         const p = payload as { publishedAt?: unknown; alias?: unknown };
@@ -198,7 +239,6 @@ export class WsClient {
         } else if ('publishedAt' in p && p.publishedAt === null) {
             project.publishedAt = null;
         }
-        // wall.unpublish 的 ack 是空 payload + Map.of() —— 用 null 兜底，上层调用时再清
         if (typeof p.alias === 'string') {
             project.alias = p.alias;
         }
@@ -208,12 +248,24 @@ export class WsClient {
         useProjectStore().applyPatch(payload.version, payload.ops);
     }
 
-    private handleError(payload: ErrorPayload): void {
+    private handleError(errId: string | undefined, payload: ErrorPayload): void {
         const net = useNetworkStore();
         if (payload.code === 'AUTH_FAILED') {
             net.lastError = 'auth failed — token may be consumed or expired';
         }
+        net.lastOpError = {
+            code: payload.code,
+            message: payload.message ?? payload.code,
+            ts: Date.now(),
+        };
         net.pushLog('err', `${payload.code}: ${payload.message}`);
+        // sendWithAck 等的 promise → reject
+        if (errId && this.pendingAcks.has(errId)) {
+            const pending = this.pendingAcks.get(errId)!;
+            if (pending.timer) window.clearTimeout(pending.timer);
+            this.pendingAcks.delete(errId);
+            pending.reject(new Error(`${payload.code}: ${payload.message ?? ''}`));
+        }
     }
 
     private onClose(ev: CloseEvent): void {

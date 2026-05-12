@@ -34,7 +34,16 @@ export const messages = {
             publishToggleOn: '取消发布',
             publishToggleOff: '发布',
             refresh: '刷新',
-            refreshTip: '重新挂回缺失的画框 + 强制重画',
+            refreshTip: '补回缺失的支撑方块 + 重新挂画框 + 强制重画',
+            refreshed: '已刷新',
+            refreshedDetail: (frames: number, blocks: number) => {
+                if (frames === 0 && blocks === 0) return '已刷新（无需修复）';
+                if (blocks === 0) return `已重挂 ${frames} 个画框`;
+                if (frames === 0) return `补回 ${blocks} 块支撑方块`;
+                return `补回 ${blocks} 块方块 + 重挂 ${frames} 个画框`;
+            },
+            refreshTimeout: '服务端无响应',
+            refreshSendFailed: 'WS 未连接',
         },
         home: {
             heading: '近期项目',
@@ -51,13 +60,40 @@ export const messages = {
             copyHint: '点击复制命令',
         },
         tools: {
-            applyHello: '应用 hello_world 模板',
+            selectTool: '选择工具 (V)：点击选中后显示缩放/旋转锚点，可拖动元素',
+            moveTool: '移动工具 (M)：仅拖拽不显示锚点，双击文本仍可进入编辑',
+            openTemplates: '打开模板库',
             addText: '添加文本',
             addRect: '添加矩形',
             undo: '撤销 (Ctrl+Z)',
             redo: '重做 (Ctrl+Shift+Z)',
             ping: 'Ping',
             paint: 'M1 demo：把所有地图涂红',
+        },
+        templates: {
+            header: '模板库',
+            close: '关闭',
+            count: (n: number) => `${n} 个`,
+            empty: '没有可用模板。在游戏内 /canvas reload templates 重载',
+            pickHint: '从左侧选择一个模板查看参数',
+            idLabel: 'ID',
+            sizeLabel: '推荐占地',
+            currentWall: '当前墙面',
+            incompatible: '不兼容',
+            incompatibleHint: '当前墙面尺寸不在此模板支持范围内',
+            wallMismatchHint: (range: string) =>
+                `当前墙面与模板要求的 ${range} 不匹配。请新建一面匹配尺寸的墙面后再应用。`,
+            noParams: '此模板无可调参数',
+            resetParams: '重置参数',
+            apply: '应用',
+            applying: '应用中…',
+            applyConfirm: '确认覆盖',
+            applyFailed: '应用失败',
+            applyTimeout: '服务端未响应；可能是 WS 断连。请稍后重试。',
+            cancel: '取消',
+            overwriteWarning: '应用模板会清空当前 elements 和背景色，不可撤销前的状态。',
+            on: '开',
+            off: '关',
         },
         canvas: {
             sizeLabel: (cw: number, ch: number, pw: number, ph: number) =>
@@ -136,7 +172,16 @@ export const messages = {
             publishToggleOn: 'Unpublish',
             publishToggleOff: 'Publish',
             refresh: 'Refresh',
-            refreshTip: 'Re-spawn missing ItemFrames and force a full re-render',
+            refreshTip: 'Replace missing support blocks, re-spawn item frames and force a full re-render',
+            refreshed: 'Refreshed',
+            refreshedDetail: (frames: number, blocks: number) => {
+                if (frames === 0 && blocks === 0) return 'Refreshed (nothing to fix)';
+                if (blocks === 0) return `Respawned ${frames} frame${frames === 1 ? '' : 's'}`;
+                if (frames === 0) return `Replaced ${blocks} support block${blocks === 1 ? '' : 's'}`;
+                return `Replaced ${blocks} block${blocks === 1 ? '' : 's'} + respawned ${frames} frame${frames === 1 ? '' : 's'}`;
+            },
+            refreshTimeout: 'Server did not respond',
+            refreshSendFailed: 'WebSocket disconnected',
         },
         home: {
             heading: 'Recent walls',
@@ -153,13 +198,40 @@ export const messages = {
             copyHint: 'click to copy command',
         },
         tools: {
-            applyHello: 'Apply hello_world template',
+            selectTool: 'Select tool (V): click to select; resize/rotate handles shown; drag to move',
+            moveTool: 'Move tool (M): drag-only, no handles; double-click on text still enters edit',
+            openTemplates: 'Open template gallery',
             addText: 'Add text',
             addRect: 'Add rectangle',
             undo: 'Undo (Ctrl+Z)',
             redo: 'Redo (Ctrl+Shift+Z)',
             ping: 'Ping',
             paint: 'M1 demo: paint all maps red',
+        },
+        templates: {
+            header: 'Templates',
+            close: 'Close',
+            count: (n: number) => `${n} item${n === 1 ? '' : 's'}`,
+            empty: 'No templates available. /canvas reload templates in-game.',
+            pickHint: 'Pick a template on the left to see its params',
+            idLabel: 'ID',
+            sizeLabel: 'Maps',
+            currentWall: 'Current wall',
+            incompatible: 'Incompatible',
+            incompatibleHint: 'Current wall does not fit this template',
+            wallMismatchHint: (range: string) =>
+                `Current wall does not match the template's required ${range}. Re-create a wall of matching size first.`,
+            noParams: 'This template has no parameters.',
+            resetParams: 'Reset',
+            apply: 'Apply',
+            applying: 'Applying…',
+            applyConfirm: 'Overwrite',
+            applyFailed: 'Apply failed',
+            applyTimeout: 'Server did not respond; the WebSocket may have disconnected. Retry shortly.',
+            cancel: 'Cancel',
+            overwriteWarning: 'Applying replaces all elements and the background. This cannot be undone before re-edit.',
+            on: 'on',
+            off: 'off',
         },
         canvas: {
             sizeLabel: (cw: number, ch: number, pw: number, ph: number) =>
