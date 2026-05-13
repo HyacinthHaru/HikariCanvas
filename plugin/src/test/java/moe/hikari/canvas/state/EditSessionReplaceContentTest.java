@@ -24,19 +24,21 @@ class EditSessionReplaceContentTest {
     private static TextElement text(String id, int x, int y, String content) {
         return new TextElement(id, x, y, 100, 20, 0, false, true,
                 content, "ark_pixel", 12, "#000000", "left",
-                0f, 1.2f, false, null);
+                0f, 1.2f, false, null,
+                null, null, null);
     }
 
     private static RectElement rect(String id) {
         return new RectElement(id, 0, 0, 50, 50, 0, false, true,
-                "#FF0000", null);
+                "#FF0000", null,
+                null, null, null);
     }
 
     @Test
     void replacesBackgroundAndElements() {
         EditSession es = session(2, 1);
         // 先放一些旧 element
-        es.addElement("text", java.util.Map.of("text", "old"), null);
+        es.addElement("text", java.util.Map.of("text", "old"), null, null);
         long versionBefore = es.state().version();
         int sizeBefore = es.state().elements().size();
         assertTrue(sizeBefore >= 1);
@@ -69,7 +71,7 @@ class EditSessionReplaceContentTest {
     @Test
     void undoRecoversPreReplaceState() {
         EditSession es = session(2, 1);
-        es.addElement("text", java.util.Map.of("text", "before"), null);
+        es.addElement("text", java.util.Map.of("text", "before"), null, null);
         long preVersion = es.state().version();
         int preCount = es.state().elements().size();
         String preBg = es.state().canvas().background();
@@ -96,7 +98,7 @@ class EditSessionReplaceContentTest {
     @Test
     void emptyElementsClears() {
         EditSession es = session(2, 1);
-        es.addElement("text", java.util.Map.of("text", "x"), null);
+        es.addElement("text", java.util.Map.of("text", "x"), null, null);
         assertTrue(es.state().elements().size() >= 1);
         es.replaceContent("#FFFFFF", List.<Element>of());
         assertEquals(0, es.state().elements().size());

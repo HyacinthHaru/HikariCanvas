@@ -548,7 +548,8 @@ public final class TemplateInstantiator {
                     id, x, y, w, h,
                     t.rotation(), false, true,
                     content, fontId, size, color, align,
-                    letterSpacing, lineHeight, vertical, effects);
+                    letterSpacing, lineHeight, vertical, effects,
+                    null, null, null);
         }
         if (el instanceof TemplateElement.Rect r) {
             String fill = r.fill() == null ? null : interp(r.fill(), params);
@@ -558,7 +559,8 @@ public final class TemplateInstantiator {
             return new RectElement(
                     id, x, y, w, h,
                     r.rotation(), false, true,
-                    fill, stroke);
+                    fill, stroke,
+                    null, null, null);
         }
         if (el instanceof TemplateElement.Icon ic) {
             String source = interp(ic.source(), params);
@@ -566,7 +568,8 @@ public final class TemplateInstantiator {
             return new IconElement(
                     id, x, y, w, h,
                     ic.rotation(), false, true,
-                    source, tint);
+                    source, tint,
+                    null, null, null);
         }
         // line: v1 不渲染，但保留 instantiate 链路以待 v2+
         return null;

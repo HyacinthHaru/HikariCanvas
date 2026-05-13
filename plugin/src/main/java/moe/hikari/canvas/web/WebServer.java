@@ -348,8 +348,17 @@ public final class WebServer {
                  "element.delete",
                  "element.reorder",
                  "element.transform",
+                 "element.move-to-layer",
+                 "layer.create",
+                 "layer.delete",
+                 "layer.update",
+                 "layer.reorder",
+                 "layer.duplicate",
+                 "layer.set-active",
                  "canvas.resize",
                  "canvas.background",
+                 "canvas.grid",
+                 "canvas.guides.set",
                  "undo",
                  "redo",
                  "history.mark",
@@ -401,7 +410,8 @@ public final class WebServer {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> props = (Map<String, Object>) mapOrEmpty(payload.get("props"));
                 String after = stringOrNull(payload.get("after"));
-                yield es.addElement(type, props, after);
+                String layerId = stringOrNull(payload.get("layerId"));
+                yield es.addElement(type, props, after, layerId);
             }
             case "element.update" -> {
                 String eid = stringOrNull(payload.get("elementId"));
@@ -427,6 +437,36 @@ public final class WebServer {
                         intOrNull(payload.get("h")),
                         intOrNull(payload.get("rotation")));
             }
+            case "element.move-to-layer" -> {
+                String eid = stringOrNull(payload.get("elementId"));
+                String target = stringOrNull(payload.get("targetLayerId"));
+                Integer idx = intOrNull(payload.get("index"));
+                yield es.moveElementToLayer(eid, target, idx);
+            }
+            // ---- layer.* op 族（M8-C 新增）----
+            case "layer.create" -> {
+                String name = stringOrNull(payload.get("name"));
+                String afterId = stringOrNull(payload.get("afterLayerId"));
+                yield es.createLayer(name, afterId);
+            }
+            case "layer.delete" -> es.deleteLayer(stringOrNull(payload.get("layerId")));
+            case "layer.update" -> {
+                String lid = stringOrNull(payload.get("layerId"));
+                @SuppressWarnings("unchecked")
+                Map<String, Object> lp = (Map<String, Object>) mapOrEmpty(payload.get("patch"));
+                yield es.updateLayer(lid, lp);
+            }
+            case "layer.reorder" -> {
+                String lid = stringOrNull(payload.get("layerId"));
+                Object idxObj = payload.get("index");
+                if (!(idxObj instanceof Number n)) {
+                    yield new EditSession.OpResult.Error("INVALID_PAYLOAD", "index must be number");
+                }
+                yield es.reorderLayer(lid, n.intValue());
+            }
+            case "layer.duplicate" -> es.duplicateLayer(stringOrNull(payload.get("layerId")));
+            case "layer.set-active" -> es.setActiveLayer(stringOrNull(payload.get("layerId")));
+            // ---- canvas.* ----
             case "canvas.resize" -> {
                 Object wObj = payload.get("widthMaps");
                 Object hObj = payload.get("heightMaps");
@@ -437,6 +477,23 @@ public final class WebServer {
                 yield es.resizeCanvas(wn.intValue(), hn.intValue());
             }
             case "canvas.background" -> es.setBackground(stringOrNull(payload.get("color")));
+            case "canvas.grid" -> {
+                Object sz = payload.get("size");
+                if (sz != null && !(sz instanceof Number)) {
+                    yield new EditSession.OpResult.Error("INVALID_PAYLOAD",
+                            "size must be number or null");
+                }
+                yield es.setGridSize(sz == null ? null : ((Number) sz).intValue());
+            }
+            case "canvas.guides.set" -> {
+                Object gs = payload.get("guides");
+                if (gs != null && !(gs instanceof List<?>)) {
+                    yield new EditSession.OpResult.Error("INVALID_PAYLOAD",
+                            "guides must be array");
+                }
+                yield es.setGuides((List<?>) gs);
+            }
+            // ---- history / template ----
             case "undo" -> es.undo();
             case "redo" -> es.redo();
             case "history.mark" -> es.historyMark(stringOrNull(payload.get("label")));
@@ -631,6 +688,17 @@ public final class WebServer {
             closeAuthFailed(ctx, "missing payload");
             return;
         }
+
+        // M8-C：协议 v2 强制——前端必须声明 clientProtocolVersion >= 2，否则切断 v1 客户端。
+        // 注意检查在 token consume 之前，避免为不兼容客户端浪费一次性 token。
+        Object cpv = pl.get("clientProtocolVersion");
+        if (!(cpv instanceof Number cpvN) || cpvN.intValue() < 2) {
+            ctx.send(Envelope.error(in.id(), "VERSION_MISMATCH",
+                    "client must speak protocol v2; received " + cpv));
+            closeVersionMismatch(ctx, "clientProtocolVersion=" + cpv);
+            return;
+        }
+
         Object tokenObj = pl.get("token");
         if (!(tokenObj instanceof String token)) {
             ctx.send(Envelope.error(in.id(), "AUTH_FAILED", "token missing"));
@@ -688,7 +756,7 @@ public final class WebServer {
         java.util.LinkedHashMap<String, Object> payload = new java.util.LinkedHashMap<>();
         payload.put("sessionId", session.id());
         payload.put("serverVersion", serverVersion);
-        payload.put("protocolVersion", 1);
+        payload.put("protocolVersion", 2);
         payload.put("reconnectToken", reconnectToken);
         payload.put("projectState", state);
         if (wallId != null) payload.put("wallId", wallId);
@@ -732,5 +800,11 @@ public final class WebServer {
     private void closeAuthFailed(WsContext ctx, String reason) {
         ctx.closeSession(4001, "AUTH_FAILED");
         log.info("WS closed 4001 AUTH_FAILED: " + reason);
+    }
+
+    /** 按 protocol.md §6.2: close 4002 = 协议版本不匹配（M8-C 起切断 v1）。 */
+    private void closeVersionMismatch(WsContext ctx, String reason) {
+        ctx.closeSession(4002, "VERSION_MISMATCH");
+        log.info("WS closed 4002 VERSION_MISMATCH: " + reason);
     }
 }

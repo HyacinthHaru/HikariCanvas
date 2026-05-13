@@ -63,6 +63,28 @@ const hoverId = ref<string | null>(null);
 
 const elements = computed(() => project.state?.elements ?? []);
 
+// ---------- M8-E：grid overlay ----------
+
+const gridSize = computed(() => project.state?.canvas.gridSize ?? 0);
+
+const gridOverlayStyle = computed(() => {
+    const s = gridSize.value;
+    if (!s) return {};
+    return {
+        backgroundImage:
+            'linear-gradient(to right, color-mix(in srgb, currentColor 20%, transparent) 1px, transparent 1px),' +
+            'linear-gradient(to bottom, color-mix(in srgb, currentColor 20%, transparent) 1px, transparent 1px)',
+        backgroundSize: `${s}px ${s}px`,
+        color: 'rgb(120, 120, 130)',
+    };
+});
+
+function onGridChange(ev: Event): void {
+    const v = parseInt((ev.target as HTMLInputElement).value, 10);
+    const size = Number.isFinite(v) ? Math.max(0, Math.min(256, v)) : 0;
+    ws.send('canvas.grid', { size });
+}
+
 function hitConfig(e: Element) {
     // Konva 用 offsetX/Y 把「bbox 左上」坐标转为「绕中心旋转」
     const hovered = hoverId.value === e.id;
@@ -415,6 +437,12 @@ function onMouseUpOrLeave() {
             class="absolute inset-0 hc-canvas-layer"
             :style="{ width: `${widthPx}px`, height: `${heightPx}px` }"
           />
+          <!-- M8-E：grid overlay（仅前端预览，不入 MC）。CSS 双线性渐变实现实线网格。 -->
+          <div
+            v-if="gridSize > 0"
+            class="absolute inset-0 pointer-events-none"
+            :style="gridOverlayStyle"
+          />
           <v-stage
             ref="stageRef"
             :config="stageConfig"
@@ -531,6 +559,21 @@ function onMouseUpOrLeave() {
       <span class="pl-2 pr-1 border-l border-[color:var(--border)] ml-1 text-[10px] text-[color:var(--muted-foreground)]">
         {{ sizeLabel }}
       </span>
+      <!-- M8-E：grid 调节器（0 = 关；典型值 8/16/32） -->
+      <Tooltip :text="t.canvas.gridTip">
+        <label class="flex items-center gap-1 pl-2 border-l border-[color:var(--border)] ml-1">
+          <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.canvas.grid }}</span>
+          <input
+            type="number"
+            min="0"
+            max="256"
+            step="1"
+            class="hc-grid-input"
+            :value="gridSize"
+            @change="onGridChange"
+          >
+        </label>
+      </Tooltip>
     </div>
   </section>
 </template>
@@ -568,4 +611,20 @@ function onMouseUpOrLeave() {
 }
 .hc-zoom-input::-webkit-outer-spin-button,
 .hc-zoom-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.hc-grid-input {
+    width: 2.5rem;
+    padding: 0.125rem 0.25rem;
+    font-size: 0.7rem;
+    text-align: center;
+    border-radius: 3px;
+    background: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    outline: none;
+    font-variant-numeric: tabular-nums;
+}
+.hc-grid-input:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 1px var(--ring);
+}
 </style>

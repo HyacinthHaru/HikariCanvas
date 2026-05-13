@@ -1,9 +1,13 @@
-import type { ProjectState, Element, RectElement, TextElement, IconElement, Glow } from '@/types/protocol';
+import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, Glow } from '@/types/protocol';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
+import { applyBlendModeOver } from './BlendModes';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
  * 契约 docs/rendering.md §4 / §5（效果渲染顺序：glow → shadow → stroke → fill）。
+ *
+ * M8-E 升级：分层渲染。同后端 fast/slow path 双轨；fast path 直接画主 ctx，
+ * slow path 走 offscreen canvas + ImageData {@code applyBlendModeOver} 合成。
  */
 export function renderProjectState(
     ctx: CanvasRenderingContext2D,
@@ -22,11 +26,59 @@ export function renderProjectState(
     // @ts-expect-error non-standard but supported in Chromium
     ctx.textRendering = 'geometricPrecision';
 
-    for (const e of state.elements) {
-        if (!e.visible) continue;
-        if (hideIds && hideIds.has(e.id)) continue;
-        drawElement(ctx, e);
+    for (const layer of state.layers) {
+        if (!layer.visible || layer.opacity <= 0) continue;
+        if (layer.elements.length === 0) continue;
+        const visibleElements = hideIds
+            ? layer.elements.filter((e) => e.visible && !hideIds.has(e.id))
+            : layer.elements.filter((e) => e.visible);
+        if (visibleElements.length === 0) continue;
+
+        if (canFastPath(layer)) {
+            for (const e of visibleElements) drawElement(ctx, e);
+        } else {
+            // slow path：offscreen ARGB canvas 画 layer 内 element，按 layerOpacity/blendMode 合到主 ctx
+            renderLayerSlowPath(ctx, visibleElements, layer, widthPx, heightPx);
+        }
     }
+}
+
+/** 同后端 canFastPath 判定（含 element.renderMode 防御 check，与 M11 dither 集成对齐）。 */
+function canFastPath(layer: Layer): boolean {
+    if (layer.opacity < 1) return false;
+    if (layer.blendMode !== 'normal') return false;
+    for (const e of layer.elements) {
+        const op = e.opacity;
+        if (op !== undefined && op !== null && op < 1) return false;
+        if (e.renderMode && e.renderMode !== 'clean') return false;
+        // element-level blendMode 字段保留但 M8-E 不实装合成（M11 dither 一起）
+    }
+    return true;
+}
+
+function renderLayerSlowPath(
+    dstCtx: CanvasRenderingContext2D,
+    elements: Element[],
+    layer: Layer,
+    widthPx: number,
+    heightPx: number,
+): void {
+    const off = document.createElement('canvas');
+    off.width = widthPx;
+    off.height = heightPx;
+    const og = off.getContext('2d');
+    if (!og) return;
+    og.imageSmoothingEnabled = false;
+    // @ts-expect-error non-standard
+    og.textRendering = 'geometricPrecision';
+    // 透明背景；不 fillRect
+    for (const e of elements) drawElement(og, e);
+
+    // ImageData 合成：dst ImageData + src ImageData → applyBlendModeOver mutate dst → putImageData 回 dst
+    const dstImg = dstCtx.getImageData(0, 0, widthPx, heightPx);
+    const srcImg = og.getImageData(0, 0, widthPx, heightPx);
+    applyBlendModeOver(dstImg, srcImg, layer.opacity, layer.blendMode);
+    dstCtx.putImageData(dstImg, 0, 0);
 }
 
 function drawElement(ctx: CanvasRenderingContext2D, e: Element): void {
@@ -37,6 +89,11 @@ function drawElement(ctx: CanvasRenderingContext2D, e: Element): void {
         ctx.translate(cx, cy);
         ctx.rotate((e.rotation * Math.PI) / 180);
         ctx.translate(-cx, -cy);
+    }
+    // M8-E：element-level opacity 通过 globalAlpha 实装（同后端 SrcOver.derive）
+    const op = e.opacity;
+    if (op !== undefined && op !== null && op < 1) {
+        ctx.globalAlpha = ctx.globalAlpha * op;
     }
     if (e.type === 'rect') drawRect(ctx, e);
     else if (e.type === 'text') drawText(ctx, e);

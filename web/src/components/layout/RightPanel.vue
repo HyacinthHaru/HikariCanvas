@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
@@ -9,6 +9,7 @@ import { layoutText, canonicalCharWidth, ASCENT_RATIO } from '@/render/TextLayou
 import { FONT_META } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
+import LayerPanel from '@/components/layout/LayerPanel.vue';
 import type { Element, RectElement, TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
 const project = useProjectStore();
@@ -23,7 +24,50 @@ const selected = computed<Element | null>(() => {
 const isText = computed(() => selected.value?.type === 'text');
 const isRect = computed(() => selected.value?.type === 'rect');
 
-const elementCount = computed(() => project.state?.elements.length ?? 0);
+const elementCount = computed(() => project.state?.elements?.length ?? 0);
+const activeLayerLocked = computed(() => project.activeLayerLocked);
+
+// ---------- M8-E：element opacity slider ----------
+
+/**
+ * slider 拖动中本地缓冲百分比；松开后归 null 由 computed 回到 state 真值。
+ * 切换选中元素时必须清空，否则下一个元素 slider 显示前一个的值。
+ */
+const opacityDraftPct = ref<number | null>(null);
+
+watch(() => selected.value?.id, () => { opacityDraftPct.value = null; });
+
+const opacityPct = computed(() => {
+    if (opacityDraftPct.value !== null) return opacityDraftPct.value;
+    const op = selected.value?.opacity;
+    return op === undefined || op === null ? 100 : Math.round(op * 100);
+});
+
+// VueUse useDebounceFn 不提供 flush；input 走 debounce，change（mouseup）immediate send，
+// 两条路最终值相同；最差冗余 1 次 ws 发送同值 patch，无副作用。
+const sendOpacityDebounced = useDebounceFn((elementId: string, value: number) => {
+    ws.send('element.update', { elementId, patch: { opacity: value } });
+}, 80);
+
+function onOpacityInput(ev: Event): void {
+    const v = parseInt((ev.target as HTMLInputElement).value, 10);
+    if (!Number.isFinite(v)) return;
+    opacityDraftPct.value = v;
+    const el = selected.value;
+    if (!el) return;
+    const opacity = v / 100;
+    (el as unknown as Record<string, unknown>).opacity = opacity;
+    sendOpacityDebounced(el.id, opacity);
+}
+
+function onOpacityChange(): void {
+    const el = selected.value;
+    opacityDraftPct.value = null;
+    if (!el) return;
+    // 立即 send 当前 element.opacity（来自最后一次 input 乐观更新），确保最终值落地
+    const op = (el as { opacity?: number }).opacity ?? 1;
+    ws.send('element.update', { elementId: el.id, patch: { opacity: op } });
+}
 
 /** 立即发送（用于 boolean / color / select 之类"定型"变更）。 */
 function sendUpdate(patch: Record<string, unknown>) {
@@ -188,12 +232,15 @@ function fitTextWidth() {
     if (newW !== te.w) sendUpdate({ w: newW });
 }
 
-// ---------- Layer reorder（HTML5 drag & drop） ----------
+// ---------- Element 在活动层内的 z-order 重排（HTML5 drag & drop） ----------
+//
+// 注：M8-D 起这里只处理"层内元素"的重排（element.reorder op），层级的重排由 LayerPanel.vue
+// 单独负责（layer.reorder op）。命名 onElement* 与 LayerPanel 的 onDrag* 区分。
 
 const dragIdx = ref(-1);
 const dragOverIdx = ref(-1);
 
-function onLayerDragStart(ev: DragEvent, idx: number) {
+function onElementDragStart(ev: DragEvent, idx: number) {
     dragIdx.value = idx;
     if (ev.dataTransfer) {
         ev.dataTransfer.effectAllowed = 'move';
@@ -201,17 +248,17 @@ function onLayerDragStart(ev: DragEvent, idx: number) {
     }
 }
 
-function onLayerDragOver(ev: DragEvent, idx: number) {
+function onElementDragOver(ev: DragEvent, idx: number) {
     ev.preventDefault();
     dragOverIdx.value = idx;
     if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
 }
 
-function onLayerDragLeave() {
+function onElementDragLeave() {
     dragOverIdx.value = -1;
 }
 
-function onLayerDrop(ev: DragEvent, idx: number) {
+function onElementDrop(ev: DragEvent, idx: number) {
     ev.preventDefault();
     const from = dragIdx.value;
     dragIdx.value = -1;
@@ -227,7 +274,7 @@ function onLayerDrop(ev: DragEvent, idx: number) {
     ws.send('element.reorder', { elementId: el.id, index: idx });
 }
 
-function onLayerDragEnd() {
+function onElementDragEnd() {
     dragIdx.value = -1;
     dragOverIdx.value = -1;
 }
@@ -235,8 +282,11 @@ function onLayerDragEnd() {
 
 <template>
   <aside class="w-72 bg-[color:var(--card)] border-l border-[color:var(--border)] flex flex-col">
+    <!-- M8-D：图层面板（顶端，自身控制 max-h 40%）。 -->
+    <LayerPanel />
+
     <!-- Properties -->
-    <section class="flex-1 overflow-y-auto">
+    <section class="flex-1 overflow-y-auto min-h-0">
       <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Sliders class="size-3.5" />
         <span>{{ t.properties.header }}</span>
@@ -308,6 +358,55 @@ function onLayerDragEnd() {
             <label class="flex items-center gap-1.5">
               <input type="checkbox" :checked="selected.locked" @change="(e) => onBoolChange('locked', e)">
               <span>{{ t.properties.locked }}</span>
+            </label>
+          </div>
+          <!-- M8-E：element opacity slider -->
+          <label class="flex items-center gap-2 pt-1">
+            <span class="hc-field-label">
+              {{ t.properties.opacity }}
+              <Tooltip :text="t.properties.opacityTip">
+                <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+              </Tooltip>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              class="flex-1 hc-elem-slider"
+              :value="opacityPct"
+              @input="onOpacityInput"
+              @change="onOpacityChange"
+            >
+            <span class="w-8 text-[10px] text-right tabular-nums">{{ opacityPct }}%</span>
+          </label>
+          <!-- M8-E：blendMode + renderMode UI 保留但 disabled（M11 dither 一并实装合成） -->
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <label class="flex flex-col gap-0.5">
+              <span class="hc-field-label">
+                {{ t.properties.blendMode }}
+                <Tooltip :text="t.properties.blendModeTip">
+                  <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+                </Tooltip>
+              </span>
+              <select class="hc-input opacity-60 cursor-not-allowed" :value="selected.blendMode ?? 'normal'" disabled>
+                <option value="normal">normal</option>
+                <option value="multiply">multiply</option>
+                <option value="screen">screen</option>
+                <option value="overlay">overlay</option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-0.5">
+              <span class="hc-field-label">
+                {{ t.properties.renderMode }}
+                <Tooltip :text="t.properties.renderModeTip">
+                  <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+                </Tooltip>
+              </span>
+              <select class="hc-input opacity-60 cursor-not-allowed" :value="selected.renderMode ?? 'clean'" disabled>
+                <option value="clean">{{ t.properties.renderModeClean }}</option>
+                <option value="dither">{{ t.properties.renderModeDither }}</option>
+              </select>
             </label>
           </div>
         </details>
@@ -509,33 +608,37 @@ function onLayerDragEnd() {
       </div>
     </section>
 
-    <!-- Layers -->
-    <section class="flex flex-col border-t border-[color:var(--border)] max-h-[40%]">
+    <!-- Elements（当前活动层内的元素列表）-->
+    <section class="flex flex-col border-t border-[color:var(--border)] max-h-[35%] min-h-[100px]">
       <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Layers class="size-3.5" />
-        <span>{{ t.layers.header }}</span>
-        <span class="ml-auto text-[10px] font-normal normal-case">{{ t.layers.count(elementCount) }}</span>
+        <span>{{ t.elements.header }}</span>
+        <span class="ml-auto text-[10px] font-normal normal-case">{{ t.elements.count(elementCount) }}</span>
       </header>
+      <div v-if="activeLayerLocked" class="px-3 py-1.5 text-[10px] text-[color:var(--muted-foreground)] bg-[color:var(--muted)] border-b border-[color:var(--border)]">
+        {{ t.elements.lockedHint }}
+      </div>
       <ul class="overflow-y-auto flex-1">
         <li v-if="elementCount === 0" class="p-3 text-xs text-[color:var(--muted-foreground)]">
-          {{ t.layers.empty }}
+          {{ activeLayerLocked ? t.elements.emptyLocked : t.elements.empty }}
         </li>
         <li
           v-for="(el, idx) in project.state?.elements ?? []"
           :key="el.id"
-          draggable="true"
+          :draggable="!activeLayerLocked"
           class="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-[color:var(--accent)] transition-colors"
           :class="{
             'bg-[color:var(--accent)]': ui.selectedElementId === el.id,
             'opacity-50': dragIdx === idx,
             'ring-1 ring-[color:var(--ring)] ring-inset': dragOverIdx === idx && dragIdx !== idx,
+            'cursor-not-allowed': activeLayerLocked,
           }"
           @click="ui.selectElement(el.id)"
-          @dragstart="(e) => onLayerDragStart(e, idx)"
-          @dragover="(e) => onLayerDragOver(e, idx)"
-          @dragleave="onLayerDragLeave"
-          @drop="(e) => onLayerDrop(e, idx)"
-          @dragend="onLayerDragEnd"
+          @dragstart="(e) => onElementDragStart(e, idx)"
+          @dragover="(e) => onElementDragOver(e, idx)"
+          @dragleave="onElementDragLeave"
+          @drop="(e) => onElementDrop(e, idx)"
+          @dragend="onElementDragEnd"
         >
           <span class="w-5 text-[10px] text-[color:var(--muted-foreground)] tabular-nums">{{ idx }}</span>
           <span class="flex-1 truncate">
@@ -543,15 +646,17 @@ function onLayerDragEnd() {
             <span v-if="el.type === 'text'" class="opacity-60">· "{{ (el as any).text }}"</span>
           </span>
           <button
-            class="p-0.5 rounded hover:bg-[color:var(--background)]"
-            :title="t.layers.toggleVisible(el.visible)"
+            class="p-0.5 rounded hover:bg-[color:var(--background)] disabled:opacity-30 disabled:cursor-not-allowed"
+            :title="activeLayerLocked ? t.elements.lockedHint : t.elements.toggleVisible(el.visible)"
+            :disabled="activeLayerLocked"
             @click.stop="ws.send('element.update', { elementId: el.id, patch: { visible: !el.visible } }); (el as any).visible = !el.visible;"
           >
             <component :is="el.visible ? Eye : EyeOff" class="size-3" :class="el.visible ? '' : 'opacity-40'" />
           </button>
           <button
-            class="p-0.5 rounded hover:bg-[color:var(--background)]"
-            :title="t.layers.toggleLock(el.locked)"
+            class="p-0.5 rounded hover:bg-[color:var(--background)] disabled:opacity-30 disabled:cursor-not-allowed"
+            :title="activeLayerLocked ? t.elements.lockedHint : t.elements.toggleLock(el.locked)"
+            :disabled="activeLayerLocked"
             @click.stop="ws.send('element.update', { elementId: el.id, patch: { locked: !el.locked } }); (el as any).locked = !el.locked;"
           >
             <component :is="el.locked ? Lock : Unlock" class="size-3" :class="el.locked ? '' : 'opacity-40'" />
@@ -594,6 +699,11 @@ function onLayerDragEnd() {
     cursor: pointer;
     padding: 0;
     background: transparent;
+}
+.hc-elem-slider {
+    height: 14px;
+    background: transparent;
+    accent-color: var(--ring);
 }
 textarea.hc-input {
     min-height: 2.5rem;

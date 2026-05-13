@@ -66,16 +66,33 @@ public final class StatePatchBuilder {
     }
 
     /**
-     * 如果 {@code value} 是 {@link Element}，用 {@link #ELEMENT_WRITER} 转成带 {@code type} 的 Map；
-     * 其他类型原样返回。
+     * 把"运行时是 record / 多态子类，但需要以 JSON 对象语义出现在 patch.value"的对象
+     * 提前序列化成 {@code Map}。包括：
+     * <ul>
+     *   <li>{@link Element}（声明类型 Object 时丢失 {@code @JsonTypeInfo} 多态写入；
+     *       M5-D4 修过 element.add bug 的根因即此）</li>
+     *   <li>{@link Layer}（M8-C 引入；layer.create / duplicate 时 patch.value 是整个 Layer
+     *       record。前端 applyPatch 当 Map 处理，所以这里也提前转，保持测试与运行时一致）</li>
+     * </ul>
+     * 其他类型（基本类型 / String / List<Map> 之类）原样返回。
      */
     private static Object normalize(Object value) {
-        if (!(value instanceof Element e)) return value;
-        try {
-            String json = ELEMENT_WRITER.writeValueAsString(e);
-            return ELEMENT_MAPPER.readValue(json, Map.class);
-        } catch (Exception ex) {
-            throw new IllegalStateException("failed to polymorphically serialize Element", ex);
+        if (value instanceof Element e) {
+            try {
+                String json = ELEMENT_WRITER.writeValueAsString(e);
+                return ELEMENT_MAPPER.readValue(json, Map.class);
+            } catch (Exception ex) {
+                throw new IllegalStateException("failed to polymorphically serialize Element", ex);
+            }
         }
+        if (value instanceof Layer l) {
+            try {
+                String json = ELEMENT_MAPPER.writeValueAsString(l);
+                return ELEMENT_MAPPER.readValue(json, Map.class);
+            } catch (Exception ex) {
+                throw new IllegalStateException("failed to serialize Layer", ex);
+            }
+        }
+        return value;
     }
 }

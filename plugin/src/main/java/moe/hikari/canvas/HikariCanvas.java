@@ -112,6 +112,16 @@ public final class HikariCanvas extends JavaPlugin {
         // 墙面识别 + 会话管理（T6 Wand / T11 命令族会注入这两个）
         wallResolver = new WallResolver(16, this);  // canvas-max-maps 默认；plugin 提供 PDC namespace
         wallRepo = new WallRepo(getLogger(), database.jdbi());
+
+        // M8-B：把 protocol_version < 2 的老 wall 升到 v2 layered 形态。
+        // 失败的行保留 v1，下次启动重试 + 运行期 /canvas open 时 lazy 兼容。
+        WallRepo.MigrationStats wallV2Stats = wallRepo.migrateAllToV2();
+        if (wallV2Stats.scanned() > 0) {
+            getLogger().info("ProjectState v1→v2 migration: scanned="
+                    + wallV2Stats.scanned() + " migrated=" + wallV2Stats.migrated()
+                    + " failed=" + wallV2Stats.failed());
+        }
+
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo);
 
         mapPacketSender = new MapPacketSender();

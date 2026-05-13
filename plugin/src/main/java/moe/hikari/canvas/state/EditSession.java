@@ -3,7 +3,9 @@ package moe.hikari.canvas.state;
 import moe.hikari.canvas.render.DirtyRegion;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -13,13 +15,15 @@ import java.util.regex.Pattern;
  * 权威编辑会话：WS 上行 op → {@link ProjectState} mutation → 产出 {@link StatePatch}。
  * 契约见 {@code docs/protocol.md §5.3 / §5.4}。
  *
- * <p>1 个 EditSession ↔ 1 个 {@link moe.hikari.canvas.session.Session}；随 session 生灭。</p>
+ * <p>1 个 EditSession ↔ 1 个 {@code moe.hikari.canvas.session.Session}；随 session 生灭。</p>
+ *
+ * <p><b>M8-C 升级：</b> 所有 element / layer / canvas op 切换到 v2 path
+ * （{@code /layers/{i}/elements/{j}/...}）。新增 layer.* op 族 + element.move-to-layer
+ * + canvas.grid + canvas.guides.set。{@code locked} 层内 element op 全部拒
+ * {@code LAYER_LOCKED}。</p>
  *
  * <p><b>并发：</b> Javalin WS handler 跑在 Jetty 线程池，同一连接也可能出现 op pipeline。
  * 所有 {@code apply*} 方法 {@code synchronized(this)} 保证 {@link ProjectState} 单线程变更。</p>
- *
- * <p><b>线程：</b> M3-T6 阶段所有 op 均为纯数据变更（不碰 Bukkit API / MapPool / world）。
- * T7 脏矩形推送会把渲染部分迁到主线程。</p>
  *
  * <p><b>验证层级：</b> 这一层做字段格式与范围 sanity 校验（color / rotation / text len / 数值区间）；
  * 业务不变式（跨 session 排他、池容量等）由 SessionManager / MapPool 负责。</p>
@@ -43,6 +47,12 @@ public final class EditSession {
     private static final int MAX_SHADOW_OFFSET = 128;
     /** glow 半径允许范围（px）。太大会让盒模糊性能劣化。 */
     private static final int MAX_GLOW_RADIUS = 64;
+    /** 单工程层数上限（软限，超过 warn 但不拒；硬上限避免内存炸）。 */
+    private static final int MAX_LAYERS = 64;
+    /** 用户可见 layer 名最大长度。 */
+    private static final int MAX_LAYER_NAME = 64;
+    /** 单工程参考线数上限（防意外刷爆）。 */
+    private static final int MAX_GUIDES = 256;
 
     /** T11 历史栈上限（每会话）；超过后踢掉最老的。 */
     private static final int MAX_HISTORY = 16;
@@ -85,23 +95,86 @@ public final class EditSession {
         record Error(String code, String message) implements OpResult {}
     }
 
+    // ---------- 内部反查 ----------
+
+    /** 元素在 {@link ProjectState} 树里的定位：层索引 + 层内索引 + 引用。 */
+    private record Locator(int layerIdx, int elementIdx, Layer layer, Element element) {}
+
+    private Locator findElement(String elementId) {
+        if (elementId == null) return null;
+        List<Layer> ls = state.layers();
+        for (int li = 0; li < ls.size(); li++) {
+            List<Element> es = ls.get(li).elements();
+            for (int ei = 0; ei < es.size(); ei++) {
+                if (es.get(ei).id().equals(elementId)) {
+                    return new Locator(li, ei, ls.get(li), es.get(ei));
+                }
+            }
+        }
+        return null;
+    }
+
+    private int findLayerIdx(String layerId) {
+        if (layerId == null) return -1;
+        List<Layer> ls = state.layers();
+        for (int i = 0; i < ls.size(); i++) {
+            if (ls.get(i).id().equals(layerId)) return i;
+        }
+        return -1;
+    }
+
+    private static String elementPath(int layerIdx, int elIdx) {
+        return "/layers/" + layerIdx + "/elements/" + elIdx;
+    }
+
+    private static String elementFieldPath(int layerIdx, int elIdx, String field) {
+        return "/layers/" + layerIdx + "/elements/" + elIdx + "/" + field;
+    }
+
+    private static String layerPath(int layerIdx) {
+        return "/layers/" + layerIdx;
+    }
+
+    private static String layerFieldPath(int layerIdx, String field) {
+        return "/layers/" + layerIdx + "/" + field;
+    }
+
     // ---------- element.add ----------
 
     /**
      * 新增元素。{@code afterId} 为 null 时追加到末尾；否则插入到该元素之后。
-     * 若 {@code afterId} 指向不存在的元素，返回 {@code INVALID_ELEMENT}。
+     * {@code layerId} 为 null 时落到 activeLayer。
+     *
+     * @return {@code INVALID_ELEMENT} 若 {@code afterId} 指向不存在的元素；
+     *         {@code LAYER_NOT_FOUND} 若 {@code layerId} 不存在；
+     *         {@code LAYER_LOCKED} 若目标层被锁
      */
-    public synchronized OpResult addElement(String type, Map<String, Object> props, String afterId) {
+    public synchronized OpResult addElement(String type, Map<String, Object> props,
+                                            String afterId, String layerId) {
         if (type == null) return err("INVALID_PAYLOAD", "element type missing");
         if (props == null) props = Map.of();
 
+        Layer target;
+        int layerIdx;
+        if (layerId == null || layerId.isEmpty()) {
+            target = state.activeLayer();
+            layerIdx = findLayerIdx(target.id());
+        } else {
+            layerIdx = findLayerIdx(layerId);
+            if (layerIdx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
+            target = state.layers().get(layerIdx);
+        }
+        if (target.locked()) return err("LAYER_LOCKED", "target layer is locked: " + target.id());
+
         int insertIdx;
         if (afterId == null || afterId.isEmpty()) {
-            insertIdx = state.elements().size();
+            insertIdx = target.elements().size();
         } else {
-            int afterIdx = state.indexOfElement(afterId);
-            if (afterIdx < 0) return err("INVALID_ELEMENT", "after element not found: " + afterId);
-            insertIdx = afterIdx + 1;
+            int afterIdxInLayer = indexOfElementInLayer(target, afterId);
+            if (afterIdxInLayer < 0) {
+                return err("INVALID_ELEMENT", "after element not found in target layer: " + afterId);
+            }
+            insertIdx = afterIdxInLayer + 1;
         }
 
         String id = "e-" + UUID.randomUUID();
@@ -117,14 +190,22 @@ public final class EditSession {
         }
 
         ProjectSnapshot pre = snapshotNow();
-        state.addElement(insertIdx, element);
+        target.elements().add(insertIdx, element);
         commitHistory(pre);
         long v = state.bumpVersion();
 
         StatePatch patch = new StatePatchBuilder()
-                .add("/elements/" + insertIdx, element)
+                .add(elementPath(layerIdx, insertIdx), element)
                 .build(v);
         return new OpResult.Ok(patch, DirtyRegion.of(element));
+    }
+
+    private static int indexOfElementInLayer(Layer l, String elementId) {
+        List<Element> es = l.elements();
+        for (int i = 0; i < es.size(); i++) {
+            if (es.get(i).id().equals(elementId)) return i;
+        }
+        return -1;
     }
 
     // ---------- element.update ----------
@@ -133,23 +214,27 @@ public final class EditSession {
      * 字段级部分更新。{@code patch} 的每个 key 代表要修改的字段名，value 为新值。
      * 逐字段校验；失败时**不变更** state（all-or-nothing 语义）。
      *
-     * <p>M3 元素字段覆盖：</p>
+     * <p>支持的字段：</p>
      * <ul>
-     *   <li>共通：{@code x / y / w / h / rotation / locked / visible}</li>
-     *   <li>Text：{@code text / fontId / fontSize / color / align}</li>
-     *   <li>Rect：{@code fill / stroke}（{@code stroke} 值为 {@code { "width":int, "color":string }} 或 null）</li>
+     *   <li>共通：{@code x / y / w / h / rotation / locked / visible /
+     *       opacity / blendMode / renderMode}（v2 新字段 M8-C 起接 patch）</li>
+     *   <li>Text：{@code text / fontId / fontSize / color / align /
+     *       letterSpacing / lineHeight / vertical / effects}</li>
+     *   <li>Rect：{@code fill / stroke}</li>
+     *   <li>Icon：{@code source / tint}</li>
      * </ul>
      */
     public synchronized OpResult updateElement(String elementId, Map<String, Object> patch) {
         if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
         if (patch == null || patch.isEmpty()) return err("INVALID_PAYLOAD", "empty patch");
-        int idx = state.indexOfElement(elementId);
-        if (idx < 0) return err("INVALID_ELEMENT", "element not found: " + elementId);
-        Element existing = state.elements().get(idx);
+
+        Locator loc = findElement(elementId);
+        if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
 
         Element updated;
         try {
-            updated = switch (existing) {
+            updated = switch (loc.element) {
                 case TextElement t -> applyTextPatch(t, patch);
                 case RectElement r -> applyRectPatch(r, patch);
                 case IconElement ic -> applyIconPatch(ic, patch);
@@ -159,16 +244,14 @@ public final class EditSession {
         }
 
         ProjectSnapshot pre = snapshotNow();
-        state.replaceElementAt(idx, updated);
+        loc.layer.elements().set(loc.elementIdx, updated);
         commitHistory(pre);
         long v = state.bumpVersion();
 
         StatePatchBuilder b = new StatePatchBuilder();
         for (var e : patch.entrySet()) {
-            String path = "/elements/" + idx + "/" + e.getKey();
+            String path = elementFieldPath(loc.layerIdx, loc.elementIdx, e.getKey());
             Object value = e.getValue();
-            // null 值用 remove：RectElement.fill / stroke 可清空；
-            // 若保留 replace+null，{@code NON_NULL} 序列化会丢 value 字段，违反 RFC 6902
             if (value == null) {
                 b.remove(path);
             } else {
@@ -176,7 +259,7 @@ public final class EditSession {
             }
         }
         // 脏矩形 = 旧 bbox ∪ 新 bbox，覆盖元素"从旧位移到新位"的扫过区域
-        DirtyRegion dirty = DirtyRegion.of(existing).union(DirtyRegion.of(updated));
+        DirtyRegion dirty = DirtyRegion.of(loc.element).union(DirtyRegion.of(updated));
         return new OpResult.Ok(b.build(v), dirty);
     }
 
@@ -184,45 +267,49 @@ public final class EditSession {
 
     public synchronized OpResult deleteElement(String elementId) {
         if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
-        int idx = state.indexOfElement(elementId);
-        if (idx < 0) return err("INVALID_ELEMENT", "element not found: " + elementId);
-        Element removed = state.elements().get(idx);
+        Locator loc = findElement(elementId);
+        if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
+
         ProjectSnapshot pre = snapshotNow();
-        state.removeElementAt(idx);
+        loc.layer.elements().remove(loc.elementIdx);
         commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.Ok(
-                new StatePatchBuilder().remove("/elements/" + idx).build(v),
-                DirtyRegion.of(removed));
+                new StatePatchBuilder().remove(elementPath(loc.layerIdx, loc.elementIdx)).build(v),
+                DirtyRegion.of(loc.element));
     }
 
     // ---------- element.reorder ----------
 
     /**
-     * 把元素移动到 z-order 的 {@code newIndex} 位置（0 = 底层）。
-     * 超出范围时 clamp 到 {@code [0, size-1]}。
+     * 把元素移动到所在层的 {@code newIndex} 位置（0 = 底层）。
+     * 超出范围时 clamp 到 {@code [0, size-1]}。跨层用 {@link #moveElementToLayer}。
      */
     public synchronized OpResult reorderElement(String elementId, int newIndex) {
         if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
-        int from = state.indexOfElement(elementId);
-        if (from < 0) return err("INVALID_ELEMENT", "element not found: " + elementId);
-        int size = state.elements().size();
+        Locator loc = findElement(elementId);
+        if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
+
+        int size = loc.layer.elements().size();
         int to = Math.max(0, Math.min(newIndex, size - 1));
-        if (to == from) {
-            // 无实际变化；仍 bump version 保持简单（也可以返回空 ops）
+        if (to == loc.elementIdx) {
+            // 无实际变化；仍 bump version 保持简单
             long v = state.bumpVersion();
             return new OpResult.Ok(new StatePatch(v, List.of()), null);
         }
-        Element moved = state.elements().get(from);
+
         ProjectSnapshot pre = snapshotNow();
-        state.moveElement(from, to);
+        Element moved = loc.layer.elements().remove(loc.elementIdx);
+        loc.layer.elements().add(to, moved);
         commitHistory(pre);
         long v = state.bumpVersion();
+
         StatePatch patch = new StatePatchBuilder()
-                .remove("/elements/" + from)
-                .add("/elements/" + to, moved)
+                .remove(elementPath(loc.layerIdx, loc.elementIdx))
+                .add(elementPath(loc.layerIdx, to), moved)
                 .build(v);
-        // 脏矩形 = 被移动元素的 bbox；该区域下层像素合成结果变了，整图重绘
         return new OpResult.Ok(patch, DirtyRegion.of(moved));
     }
 
@@ -239,7 +326,7 @@ public final class EditSession {
         if (x == null && y == null && w == null && h == null && rotation == null) {
             return err("INVALID_PAYLOAD", "transform has no fields");
         }
-        java.util.Map<String, Object> patch = new java.util.LinkedHashMap<>();
+        Map<String, Object> patch = new LinkedHashMap<>();
         if (x != null) patch.put("x", x);
         if (y != null) patch.put("y", y);
         if (w != null) patch.put("w", w);
@@ -248,11 +335,321 @@ public final class EditSession {
         return updateElement(elementId, patch);
     }
 
+    // ---------- element.move-to-layer ----------
+
+    /**
+     * 跨层移动元素。{@code index == null} = 落到目标层底层（index 0），其他值 clamp 到合法范围。
+     *
+     * <p>错误码：{@code INVALID_ELEMENT} / {@code LAYER_NOT_FOUND} / {@code LAYER_LOCKED}
+     * （源层或目标层任一锁住都拒）。源层 == 目标层等价于 {@link #reorderElement}，但允许调用，
+     * 仅按层内 reorder 处理。</p>
+     */
+    public synchronized OpResult moveElementToLayer(String elementId, String targetLayerId,
+                                                    Integer index) {
+        if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
+        if (targetLayerId == null || targetLayerId.isEmpty()) {
+            return err("INVALID_PAYLOAD", "targetLayerId missing");
+        }
+        Locator loc = findElement(elementId);
+        if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        if (loc.layer.locked()) return err("LAYER_LOCKED", "source layer is locked");
+
+        int targetIdx = findLayerIdx(targetLayerId);
+        if (targetIdx < 0) return err("LAYER_NOT_FOUND", "target layer not found: " + targetLayerId);
+        Layer target = state.layers().get(targetIdx);
+        if (target.locked()) return err("LAYER_LOCKED", "target layer is locked");
+
+        // 同层移动 = reorder（保证 patch 输出一致）
+        if (loc.layerIdx == targetIdx) {
+            int to = index == null ? 0 : Math.max(0,
+                    Math.min(index, loc.layer.elements().size() - 1));
+            return reorderElementUnsafe(loc, to);
+        }
+
+        int to = index == null ? 0 : Math.max(0, Math.min(index, target.elements().size()));
+
+        ProjectSnapshot pre = snapshotNow();
+        Element moved = loc.layer.elements().remove(loc.elementIdx);
+        target.elements().add(to, moved);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+
+        StatePatch patch = new StatePatchBuilder()
+                .remove(elementPath(loc.layerIdx, loc.elementIdx))
+                .add(elementPath(targetIdx, to), moved)
+                .build(v);
+        return new OpResult.Ok(patch, DirtyRegion.of(moved));
+    }
+
+    /** 内部 helper：已经 findElement 过的 reorder，避免再扫一遍。 */
+    private OpResult reorderElementUnsafe(Locator loc, int to) {
+        if (to == loc.elementIdx) {
+            long v = state.bumpVersion();
+            return new OpResult.Ok(new StatePatch(v, List.of()), null);
+        }
+        ProjectSnapshot pre = snapshotNow();
+        Element moved = loc.layer.elements().remove(loc.elementIdx);
+        loc.layer.elements().add(to, moved);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+        StatePatch patch = new StatePatchBuilder()
+                .remove(elementPath(loc.layerIdx, loc.elementIdx))
+                .add(elementPath(loc.layerIdx, to), moved)
+                .build(v);
+        return new OpResult.Ok(patch, DirtyRegion.of(moved));
+    }
+
+    // ---------- layer.create ----------
+
+    /**
+     * 新建空 Layer。{@code afterLayerId} 缺省 = 顶端（layers 末尾，渲染顺序最上）；
+     * 非空时插入到该层之上（index + 1）。
+     */
+    public synchronized OpResult createLayer(String name, String afterLayerId) {
+        if (state.layers().size() >= MAX_LAYERS) {
+            return err("INVALID_PAYLOAD", "max layers reached: " + MAX_LAYERS);
+        }
+        String layerName;
+        if (name == null || name.isBlank()) {
+            layerName = "Layer " + (state.layers().size() + 1);
+        } else if (name.length() > MAX_LAYER_NAME) {
+            return err("INVALID_PAYLOAD", "layer name too long (max " + MAX_LAYER_NAME + ")");
+        } else {
+            layerName = name;
+        }
+
+        int insertIdx;
+        if (afterLayerId == null || afterLayerId.isEmpty()) {
+            insertIdx = state.layers().size();
+        } else {
+            int afterIdx = findLayerIdx(afterLayerId);
+            if (afterIdx < 0) {
+                return err("LAYER_NOT_FOUND", "afterLayerId not found: " + afterLayerId);
+            }
+            insertIdx = afterIdx + 1;
+        }
+
+        String id = "l-" + UUID.randomUUID().toString().substring(0, 8);
+        Layer newLayer = new Layer(id, layerName, true, false, 1.0f, BlendMode.NORMAL,
+                new ArrayList<>());
+
+        ProjectSnapshot pre = snapshotNow();
+        state.insertLayer(insertIdx, newLayer);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+
+        StatePatch patch = new StatePatchBuilder()
+                .add(layerPath(insertIdx), newLayer)
+                .build(v);
+        // 空层创建不产生像素变化
+        return new OpResult.Ok(patch, null);
+    }
+
+    // ---------- layer.delete ----------
+
+    public synchronized OpResult deleteLayer(String layerId) {
+        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
+        int idx = findLayerIdx(layerId);
+        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
+        if (state.layers().size() <= 1) {
+            return err("LAST_LAYER", "cannot delete the last layer");
+        }
+
+        Layer doomed = state.layers().get(idx);
+        boolean hadVisibleContent = doomed.visible() && !doomed.elements().isEmpty();
+        boolean wasActive = layerId.equals(state.activeLayerId());
+
+        ProjectSnapshot pre = snapshotNow();
+        state.removeLayer(idx);
+        // 删的是 activeLayer：转到剩余的第一层
+        String newActive = wasActive ? state.layers().get(0).id() : null;
+        if (newActive != null) state.activeLayerId(newActive);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+
+        StatePatchBuilder b = new StatePatchBuilder()
+                .remove(layerPath(idx));
+        if (newActive != null) {
+            b.replace("/activeLayerId", newActive);
+        }
+        // 删除可见非空层 = full canvas 重绘（合成顺序变了）
+        DirtyRegion dirty = hadVisibleContent ? DirtyRegion.fullCanvas(state) : null;
+        return new OpResult.Ok(b.build(v), dirty);
+    }
+
+    // ---------- layer.update ----------
+
+    /**
+     * 修改层属性。支持字段：{@code name / visible / locked / opacity / blendMode}。
+     * locked 层<b>仍可</b>改自身这些属性（包括 unlock 自己）。
+     */
+    public synchronized OpResult updateLayer(String layerId, Map<String, Object> patch) {
+        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
+        if (patch == null || patch.isEmpty()) return err("INVALID_PAYLOAD", "empty patch");
+        int idx = findLayerIdx(layerId);
+        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
+
+        Layer cur = state.layers().get(idx);
+        String name = cur.name();
+        boolean visible = cur.visible();
+        boolean locked = cur.locked();
+        float opacity = cur.opacity();
+        BlendMode blendMode = cur.blendMode();
+
+        try {
+            for (var e : patch.entrySet()) {
+                String k = e.getKey();
+                Object v = e.getValue();
+                switch (k) {
+                    case "name" -> {
+                        String n = requireStringValue(v, k);
+                        if (n.length() > MAX_LAYER_NAME) {
+                            throw new ValidationException("INVALID_PAYLOAD",
+                                    "name too long (max " + MAX_LAYER_NAME + ")");
+                        }
+                        name = n;
+                    }
+                    case "visible" -> visible = boolValue(v, k);
+                    case "locked" -> locked = boolValue(v, k);
+                    case "opacity" -> {
+                        float o = floatValue(v, k);
+                        if (!Float.isFinite(o) || o < 0f || o > 1f) {
+                            throw new ValidationException("INVALID_PAYLOAD",
+                                    "opacity must be in [0,1]: " + o);
+                        }
+                        opacity = o;
+                    }
+                    case "blendMode" -> blendMode = parseBlendMode(v);
+                    default -> throw new ValidationException("INVALID_PAYLOAD",
+                            "unknown layer field: " + k);
+                }
+            }
+        } catch (ValidationException ve) {
+            return err(ve.code, ve.getMessage());
+        }
+
+        Layer updated = new Layer(cur.id(), name, visible, locked, opacity, blendMode,
+                cur.elements());
+
+        ProjectSnapshot pre = snapshotNow();
+        state.replaceLayer(idx, updated);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+
+        StatePatchBuilder b = new StatePatchBuilder();
+        for (var e : patch.entrySet()) {
+            String k = e.getKey();
+            Object value = (k.equals("blendMode") && e.getValue() instanceof String s)
+                    ? s.toLowerCase()   // 规范化输出 lowercase
+                    : e.getValue();
+            b.replace(layerFieldPath(idx, k), value);
+        }
+        // visible / opacity / blendMode 改动 → 影响渲染；name 不影响
+        boolean pixelAffecting = patch.containsKey("visible")
+                || patch.containsKey("opacity")
+                || patch.containsKey("blendMode");
+        DirtyRegion dirty = (pixelAffecting && !updated.elements().isEmpty())
+                ? DirtyRegion.fullCanvas(state)
+                : null;
+        return new OpResult.Ok(b.build(v), dirty);
+    }
+
+    // ---------- layer.reorder ----------
+
+    public synchronized OpResult reorderLayer(String layerId, int newIndex) {
+        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
+        int from = findLayerIdx(layerId);
+        if (from < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
+        int size = state.layers().size();
+        int to = Math.max(0, Math.min(newIndex, size - 1));
+        if (to == from) {
+            long v = state.bumpVersion();
+            return new OpResult.Ok(new StatePatch(v, List.of()), null);
+        }
+        Layer moved = state.layers().get(from);
+
+        ProjectSnapshot pre = snapshotNow();
+        state.moveLayer(from, to);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+        StatePatch patch = new StatePatchBuilder()
+                .remove(layerPath(from))
+                .add(layerPath(to), moved)
+                .build(v);
+        // 层重排 = 合成顺序变 = full canvas 重绘
+        DirtyRegion dirty = moved.visible() && !moved.elements().isEmpty()
+                ? DirtyRegion.fullCanvas(state)
+                : null;
+        return new OpResult.Ok(patch, dirty);
+    }
+
+    // ---------- layer.duplicate ----------
+
+    /** 复制层，所有元素分配新 id；插入到原层之上。 */
+    public synchronized OpResult duplicateLayer(String layerId) {
+        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
+        if (state.layers().size() >= MAX_LAYERS) {
+            return err("INVALID_PAYLOAD", "max layers reached: " + MAX_LAYERS);
+        }
+        int idx = findLayerIdx(layerId);
+        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
+        Layer src = state.layers().get(idx);
+
+        String newId = "l-" + UUID.randomUUID().toString().substring(0, 8);
+        String newName = src.name() + " copy";
+        if (newName.length() > MAX_LAYER_NAME) {
+            newName = newName.substring(0, MAX_LAYER_NAME);
+        }
+        List<Element> copiedElements = new ArrayList<>(src.elements().size());
+        for (Element e : src.elements()) {
+            copiedElements.add(cloneElementWithNewId(e));
+        }
+        Layer copy = new Layer(newId, newName, src.visible(), false, // 复制的层默认不锁
+                src.opacity(), src.blendMode(), copiedElements);
+
+        int insertIdx = idx + 1;
+        ProjectSnapshot pre = snapshotNow();
+        state.insertLayer(insertIdx, copy);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+        StatePatch patch = new StatePatchBuilder()
+                .add(layerPath(insertIdx), copy)
+                .build(v);
+        DirtyRegion dirty = copy.visible() && !copy.elements().isEmpty()
+                ? DirtyRegion.fullCanvas(state)
+                : null;
+        return new OpResult.Ok(patch, dirty);
+    }
+
+    // ---------- layer.set-active ----------
+
+    /**
+     * 切换活动层。仅改 {@code activeLayerId}，**不进 undo 栈**（纯 UI 状态）。
+     * 空 ops 还是要返回 patch 让前端同步 activeLayerId 镜像。
+     */
+    public synchronized OpResult setActiveLayer(String layerId) {
+        if (layerId == null || layerId.isEmpty()) {
+            return err("INVALID_PAYLOAD", "layerId missing");
+        }
+        int idx = findLayerIdx(layerId);
+        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
+        if (layerId.equals(state.activeLayerId())) {
+            long v = state.bumpVersion();
+            return new OpResult.Ok(new StatePatch(v, List.of()), null);
+        }
+        state.activeLayerId(layerId);
+        long v = state.bumpVersion();
+        StatePatch patch = new StatePatchBuilder()
+                .replace("/activeLayerId", layerId)
+                .build(v);
+        return new OpResult.Ok(patch, null);
+    }
+
     // ---------- canvas.resize ----------
 
     /**
      * M3 只接受尺寸等于当前值的 no-op resize（保持 op channel 通畅 + 前端试探能通过）。
-     * 真正的动态扩缩容涉及 MapPool 借还和物品框增删，留给 M7。
+     * 真正的动态扩缩容涉及 MapPool 借还和物品框增删，留给后续 milestone。
      */
     public synchronized OpResult resizeCanvas(int widthMaps, int heightMaps) {
         ProjectState.Canvas c = state.canvas();
@@ -271,7 +668,8 @@ public final class EditSession {
         if (!isValidColor(color)) return err("INVALID_PAYLOAD", "invalid color: " + color);
         ProjectState.Canvas c = state.canvas();
         ProjectSnapshot pre = snapshotNow();
-        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(), color));
+        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(), color,
+                c.gridSize(), c.guides()));
         commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.Ok(
@@ -279,28 +677,90 @@ public final class EditSession {
                 DirtyRegion.fullCanvas(state));
     }
 
-    // ---------- template.apply（M6-D 起走 WebServer → TemplateInstantiator → replaceContent） ----------
+    // ---------- canvas.grid ----------
+
+    /** {@code size} = 0 / null → 关闭网格。 */
+    public synchronized OpResult setGridSize(Integer size) {
+        if (size != null && (size < 0 || size > 512)) {
+            return err("INVALID_PAYLOAD", "gridSize out of range 0..512: " + size);
+        }
+        ProjectState.Canvas c = state.canvas();
+        Integer normalized = (size == null || size == 0) ? null : size;
+        ProjectSnapshot pre = snapshotNow();
+        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(),
+                c.background(), normalized, c.guides()));
+        commitHistory(pre);
+        long v = state.bumpVersion();
+        // gridSize 仅前端预览，不影响 MC 像素
+        return new OpResult.Ok(
+                new StatePatchBuilder().replace("/canvas/gridSize", normalized).build(v),
+                null);
+    }
+
+    // ---------- canvas.guides.set ----------
+
+    /** 整组替换 guides。空列表 / null 都清空。 */
+    public synchronized OpResult setGuides(List<?> rawGuides) {
+        if (rawGuides == null) rawGuides = List.of();
+        if (rawGuides.size() > MAX_GUIDES) {
+            return err("INVALID_PAYLOAD", "too many guides (max " + MAX_GUIDES + ")");
+        }
+        List<Guide> guides = new ArrayList<>(rawGuides.size());
+        try {
+            for (Object o : rawGuides) {
+                if (!(o instanceof Map<?, ?> m)) {
+                    throw new ValidationException("INVALID_PAYLOAD", "guide must be object");
+                }
+                Object ax = m.get("axis");
+                if (!(ax instanceof String axisStr) || (!axisStr.equals("x") && !axisStr.equals("y"))) {
+                    throw new ValidationException("INVALID_PAYLOAD",
+                            "guide.axis must be 'x' or 'y'");
+                }
+                Object pos = m.get("position");
+                if (!(pos instanceof Number pn)) {
+                    throw new ValidationException("INVALID_PAYLOAD",
+                            "guide.position must be number");
+                }
+                guides.add(new Guide(axisStr, pn.intValue()));
+            }
+        } catch (ValidationException ve) {
+            return err(ve.code, ve.getMessage());
+        }
+
+        ProjectState.Canvas c = state.canvas();
+        ProjectSnapshot pre = snapshotNow();
+        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(),
+                c.background(), c.gridSize(), guides));
+        commitHistory(pre);
+        long v = state.bumpVersion();
+        return new OpResult.Ok(
+                new StatePatchBuilder().replace("/canvas/guides", guides).build(v),
+                null);
+    }
+
+    // ---------- template.apply ----------
 
     /**
-     * 替换 ProjectState 内容（背景 + element list）。{@code template.apply} 的"replace 语义"
-     * 在此落地：清空 elements、改 canvas.background、写入新 elements、推进 version、压
-     * pre-mutation 快照到 history。下行 {@code state.snapshot} 全量。
+     * 替换 ProjectState 内容（背景 + 整 layers 树）。{@code template.apply} 的"replace 语义"。
      *
-     * <p><b>不查模板：</b> 模板解析 / 校验 / 实例化由 WebServer 在调用前完成；这里只做
-     * 数据替换。{@code templateId} 仅用于 audit / WallRepo write-back 时携带。</p>
+     * <p>M8-C 升级：清空所有层 → 生成一个 Default Layer 包住 {@code elements} → activeLayerId
+     * 指向它。符合 {@code docs/architecture.md §10.5}。</p>
      *
-     * @param backgroundColor 新背景色（{@code #RRGGBB[AA]}）
-     * @param elements        新 element 列表（已由 {@link moe.hikari.canvas.template.TemplateInstantiator} 物化）
+     * @param backgroundColor 新背景色（null = 保留当前）
+     * @param elements        新 element 列表（已由 TemplateInstantiator 物化）
      */
     public synchronized OpResult replaceContent(String backgroundColor, List<Element> elements) {
         ProjectSnapshot pre = snapshotNow();
         ProjectState.Canvas c = state.canvas();
         state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(),
-                backgroundColor == null ? c.background() : backgroundColor));
-        state.clearElements();
-        if (elements != null) {
-            for (Element e : elements) state.addElement(e);
-        }
+                backgroundColor == null ? c.background() : backgroundColor,
+                c.gridSize(), c.guides()));
+        // 重建：单个 Default Layer 包新 elements，activeLayerId 指向它
+        String newLayerId = "l-" + UUID.randomUUID().toString().substring(0, 8);
+        Layer defLayer = new Layer(newLayerId, ProjectState.DEFAULT_LAYER_NAME,
+                true, false, 1.0f, BlendMode.NORMAL,
+                new ArrayList<>(elements == null ? List.of() : elements));
+        state.replaceAllLayers(List.of(defLayer), newLayerId);
         commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
@@ -349,18 +809,18 @@ public final class EditSession {
             return err("INVALID_PAYLOAD", "label too long (max 64)");
         }
         ProjectSnapshot marked = new ProjectSnapshot(
-                state.canvas(), List.copyOf(state.elements()), label);
+                state.canvas(), state.layers(), state.activeLayerId(), label);
         past.push(marked);
         while (past.size() > MAX_HISTORY) past.removeLast();
         long v = state.bumpVersion();
-        // 无像素变化；前端不需要 patch，只需新 version
         return new OpResult.Ok(new StatePatch(v, List.of()), null);
     }
 
     // ---------- 历史栈内部 helpers ----------
 
     private ProjectSnapshot snapshotNow() {
-        return new ProjectSnapshot(state.canvas(), List.copyOf(state.elements()), null);
+        return new ProjectSnapshot(
+                state.canvas(), state.layers(), state.activeLayerId(), null);
     }
 
     /**
@@ -385,22 +845,20 @@ public final class EditSession {
         int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
         boolean locked = boolFieldOrDefault(p, "locked", false);
         boolean visible = boolFieldOrDefault(p, "visible", true);
-        // M4-T3：默认 fontId 改为 ark_pixel（对应 FontRegistry.DEFAULT_FONT_ID）
         String fontId = stringFieldOrDefault(p, "fontId", "ark_pixel");
         int fontSize = intFieldOrDefault(p, "fontSize", 12); validateFontSize(fontSize);
         String color = stringFieldOrDefault(p, "color", "#000000"); validateColor(color);
         String align = stringFieldOrDefault(p, "align", "left"); validateAlign(align);
-        // M4-T5 新字段
         float letterSpacing = floatFieldOrDefault(p, "letterSpacing", 0f);
         validateLetterSpacing(letterSpacing);
         float lineHeight = floatFieldOrDefault(p, "lineHeight", 1.2f);
         validateLineHeight(lineHeight);
         boolean vertical = boolFieldOrDefault(p, "vertical", false);
-        // M4-T8/T9/T10 效果族
         Effects effects = buildEffects(p.get("effects"));
         return new TextElement(id, x, y, w, h, rotation, locked, visible,
                 text, fontId, fontSize, color, align,
-                letterSpacing, lineHeight, vertical, effects);
+                letterSpacing, lineHeight, vertical, effects,
+                null, null, null);
     }
 
     /** 解析 {@code payload.effects}。null 或空 object 都返 null。 */
@@ -467,7 +925,8 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "rect needs fill or non-zero stroke");
         }
-        return new RectElement(id, x, y, w, h, rotation, locked, visible, fill, stroke);
+        return new RectElement(id, x, y, w, h, rotation, locked, visible, fill, stroke,
+                null, null, null);
     }
 
     private Stroke buildStroke(Object raw) {
@@ -498,6 +957,9 @@ public final class EditSession {
         float lineHeight = t.lineHeight();
         boolean vertical = t.vertical();
         Effects effects = t.effects();
+        Float opacity = t.opacity();
+        BlendMode blendMode = t.blendMode();
+        RenderMode renderMode = t.renderMode();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -522,13 +984,17 @@ public final class EditSession {
                 }
                 case "vertical" -> vertical = boolValue(v, k);
                 case "effects" -> effects = buildEffects(v);
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
                         "unknown text field: " + k);
             }
         }
         return new TextElement(t.id(), x, y, w, h, rotation, locked, visible,
                 text, fontId, fontSize, color, align,
-                letterSpacing, lineHeight, vertical, effects);
+                letterSpacing, lineHeight, vertical, effects,
+                opacity, blendMode, renderMode);
     }
 
     private RectElement applyRectPatch(RectElement r, Map<String, Object> patch) {
@@ -537,6 +1003,9 @@ public final class EditSession {
         boolean locked = r.locked(); boolean visible = r.visible();
         String fill = r.fill();
         Stroke stroke = r.stroke();
+        Float opacity = r.opacity();
+        BlendMode blendMode = r.blendMode();
+        RenderMode renderMode = r.renderMode();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -553,6 +1022,9 @@ public final class EditSession {
                     else { fill = requireStringValue(v, k); validateColor(fill); }
                 }
                 case "stroke" -> stroke = buildStroke(v);
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
                         "unknown rect field: " + k);
             }
@@ -560,7 +1032,8 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "rect needs fill or non-zero stroke");
         }
-        return new RectElement(r.id(), x, y, w, h, rotation, locked, visible, fill, stroke);
+        return new RectElement(r.id(), x, y, w, h, rotation, locked, visible, fill, stroke,
+                opacity, blendMode, renderMode);
     }
 
     private IconElement applyIconPatch(IconElement ic, Map<String, Object> patch) {
@@ -569,6 +1042,9 @@ public final class EditSession {
         boolean locked = ic.locked(); boolean visible = ic.visible();
         String source = ic.source();
         String tint = ic.tint();
+        Float opacity = ic.opacity();
+        BlendMode blendMode = ic.blendMode();
+        RenderMode renderMode = ic.renderMode();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -591,11 +1067,34 @@ public final class EditSession {
                     if (v == null) tint = null;
                     else { tint = requireStringValue(v, k); validateColor(tint); }
                 }
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
                         "unknown icon field: " + k);
             }
         }
-        return new IconElement(ic.id(), x, y, w, h, rotation, locked, visible, source, tint);
+        return new IconElement(ic.id(), x, y, w, h, rotation, locked, visible, source, tint,
+                opacity, blendMode, renderMode);
+    }
+
+    private static Element cloneElementWithNewId(Element src) {
+        String newId = "e-" + UUID.randomUUID();
+        return switch (src) {
+            case TextElement t -> new TextElement(newId,
+                    t.x(), t.y(), t.w(), t.h(), t.rotation(), t.locked(), t.visible(),
+                    t.text(), t.fontId(), t.fontSize(), t.color(), t.align(),
+                    t.letterSpacing(), t.lineHeight(), t.vertical(), t.effects(),
+                    t.opacity(), t.blendMode(), t.renderMode());
+            case RectElement r -> new RectElement(newId,
+                    r.x(), r.y(), r.w(), r.h(), r.rotation(), r.locked(), r.visible(),
+                    r.fill(), r.stroke(),
+                    r.opacity(), r.blendMode(), r.renderMode());
+            case IconElement ic -> new IconElement(newId,
+                    ic.x(), ic.y(), ic.w(), ic.h(), ic.rotation(), ic.locked(), ic.visible(),
+                    ic.source(), ic.tint(),
+                    ic.opacity(), ic.blendMode(), ic.renderMode());
+        };
     }
 
     // ---------- 校验 helpers ----------
@@ -609,8 +1108,6 @@ public final class EditSession {
     }
 
     private static void validateRotation(int r) {
-        // M5-D6：放开到 [0, 360)。Preview 与 CanvasCompositor 都用 AffineTransform 支持任意角度；
-        // DirtyRegion.of 按旋转外接矩形计算。
         if (r < 0 || r >= 360) {
             throw new ValidationException("INVALID_PAYLOAD", "rotation must be in [0,360): " + r);
         }
@@ -659,6 +1156,50 @@ public final class EditSession {
             throw new ValidationException("INVALID_PAYLOAD",
                     "lineHeight out of range [" + MIN_LINE_HEIGHT + ", " + MAX_LINE_HEIGHT + "]: " + v);
         }
+    }
+
+    /** v2 element 字段：null = 清除（element 用默认 1.0）。 */
+    private static Float parseOpacityNullable(Object v) {
+        if (v == null) return null;
+        float f = floatValue(v, "opacity");
+        if (!Float.isFinite(f) || f < 0f || f > 1f) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "opacity must be in [0,1]: " + f);
+        }
+        return f;
+    }
+
+    /** v2 element 字段：null = 清除（element 用默认 normal）。layer.* op 不允 null。 */
+    private static BlendMode parseBlendModeNullable(Object v) {
+        if (v == null) return null;
+        return parseBlendMode(v);
+    }
+
+    private static BlendMode parseBlendMode(Object v) {
+        if (!(v instanceof String s)) {
+            throw new ValidationException("INVALID_PAYLOAD", "blendMode must be string");
+        }
+        return switch (s.toLowerCase()) {
+            case "normal" -> BlendMode.NORMAL;
+            case "multiply" -> BlendMode.MULTIPLY;
+            case "screen" -> BlendMode.SCREEN;
+            case "overlay" -> BlendMode.OVERLAY;
+            default -> throw new ValidationException("INVALID_PAYLOAD",
+                    "unknown blendMode: " + s);
+        };
+    }
+
+    private static RenderMode parseRenderModeNullable(Object v) {
+        if (v == null) return null;
+        if (!(v instanceof String s)) {
+            throw new ValidationException("INVALID_PAYLOAD", "renderMode must be string");
+        }
+        return switch (s.toLowerCase()) {
+            case "clean" -> RenderMode.CLEAN;
+            case "dither" -> RenderMode.DITHER;
+            default -> throw new ValidationException("INVALID_PAYLOAD",
+                    "unknown renderMode: " + s);
+        };
     }
 
     // ---------- Map<String,Object> 读取 helpers ----------

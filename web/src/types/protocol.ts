@@ -1,5 +1,8 @@
 // WebSocket 协议类型（对齐 docs/protocol.md §2 / §7）。
 // 后端 moe.hikari.canvas.state.* records 的 TypeScript 镜像。
+//
+// M8 v2 形态：ProjectState.layers + activeLayerId + canvas.gridSize + canvas.guides；
+// element 加可选 opacity / blendMode / renderMode。
 
 export interface Envelope<P = unknown> {
     v: number;
@@ -9,20 +12,52 @@ export interface Envelope<P = unknown> {
     payload?: P;
 }
 
-// ---------- §7 ProjectState ----------
+// ---------- §7 ProjectState（M8 v2 形态）----------
 
 export interface ProjectState {
     version: number;
+    /** M8 v2：固定为 2；M8-A 起后端始终输出 */
+    protocolVersion?: number;
     canvas: Canvas;
-    elements: Element[];
+    /** v2 树形：层间 z-order = index（越大越上层） */
+    layers: Layer[];
+    /** 当前 UI 操作层；element.add 缺 layerId 时落到这里 */
+    activeLayerId: string;
     history: { undoDepth: number; redoDepth: number };
+    /**
+     * M8-A 兼容视图：指向 activeLayer.elements 同一引用，由 project store 在 setSnapshot
+     * 时建立。组件仍可读写 {@code state.elements}，M8-C 起新协议路径直接走 {@code layers}。
+     */
+    elements?: Element[];
 }
 
 export interface Canvas {
     widthMaps: number;
     heightMaps: number;
     background: string; // "#RRGGBB"
+    /** 网格像素间距；0 / 缺省 = 不显示（仅前端预览，不入 MC） */
+    gridSize?: number;
+    /** 用户从标尺拖出的参考线（仅前端预览） */
+    guides?: Guide[];
 }
+
+export interface Guide {
+    axis: 'x' | 'y';
+    position: number; // 像素坐标
+}
+
+export interface Layer {
+    id: string; // "l-<8hex>"
+    name: string;
+    visible: boolean;
+    locked: boolean;
+    opacity: number; // 0..1
+    blendMode: BlendMode;
+    elements: Element[]; // 层内 z-order = index
+}
+
+export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay';
+export type RenderMode = 'clean' | 'dither';
 
 export type Element = TextElement | RectElement | IconElement;
 
@@ -32,9 +67,13 @@ interface BaseElement {
     y: number;
     w: number;
     h: number;
-    rotation: number;  // 0 / 90 / 180 / 270
+    rotation: number; // [0, 360)
     locked: boolean;
     visible: boolean;
+    // M8 v2 新增（默认值时后端序列化省略字段）
+    opacity?: number;
+    blendMode?: BlendMode;
+    renderMode?: RenderMode;
 }
 
 export interface TextElement extends BaseElement {

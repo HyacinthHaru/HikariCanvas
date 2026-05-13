@@ -95,7 +95,8 @@ export class WsClient {
             return null;
         }
         const id = `c-${this.seq++}`;
-        const env: Envelope = { v: 1, op, id, ts: Date.now(), payload };
+        // M8-C：协议 v2，envelope.v=2；auth 帧负载需带 clientProtocolVersion=2
+        const env: Envelope = { v: 2, op, id, ts: Date.now(), payload };
         const text = JSON.stringify(env);
         this.ws.send(text);
         // 不记 auth 原文（token 敏感）
@@ -131,7 +132,8 @@ export class WsClient {
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
-        this.send('auth', { token });
+        // M8-C：v2 协议强制声明 clientProtocolVersion；后端 < 2 直接 close 4002
+        this.send('auth', { token, clientProtocolVersion: 2 });
     }
 
     private startHeartbeat(): void {
@@ -139,7 +141,7 @@ export class WsClient {
         this.heartbeatTimer = window.setInterval(() => {
             const net = useNetworkStore();
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !net.authenticated) return;
-            const env: Envelope = { v: 1, op: 'ping', id: `c-hb-${this.seq++}`, ts: Date.now() };
+            const env: Envelope = { v: 2, op: 'ping', id: `c-hb-${this.seq++}`, ts: Date.now() };
             this.ws.send(JSON.stringify(env));
         }, HEARTBEAT_INTERVAL_MS);
     }

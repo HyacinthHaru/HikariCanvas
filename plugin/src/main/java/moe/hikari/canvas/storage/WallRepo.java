@@ -1,6 +1,7 @@
 package moe.hikari.canvas.storage;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import moe.hikari.canvas.session.WallKey;
 import moe.hikari.canvas.state.ProjectState;
@@ -369,6 +370,98 @@ public final class WallRepo {
             log.log(Level.WARNING, "setTemplate failed: " + wallId, e);
         }
     }
+
+    // ---------- M8-B：project_json v1 → v2 lazy migration ----------
+
+    /** {@link #migrateAllToV2} 返回的统计。 */
+    public record MigrationStats(int scanned, int migrated, int failed) {
+        public static final MigrationStats EMPTY = new MigrationStats(0, 0, 0);
+    }
+
+    /**
+     * 检测 project_json 是否为 v1 形态（含顶层 {@code elements} 但无 {@code layers}）。
+     *
+     * <p>极简空工程（既无 elements 也无 layers）返 {@code false} —— 它会被
+     * {@link ProjectState.JsonCreator} 当作 "新工程" 包装，本质上也是 v1 → v2
+     * 升级，但行为等价于一次 noop migrate，无需特殊处理。</p>
+     */
+    public static boolean isV1Form(ObjectMapper mapper, String json) {
+        if (json == null || json.isBlank()) return false;
+        try {
+            JsonNode root = mapper.readTree(json);
+            return root.has("elements") && !root.has("layers");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 把 v1 形态的 project_json 升级到 v2 形态。流程：
+     * <ol>
+     *   <li>Jackson 反序列化为 {@link ProjectState} —— 内置 {@code @JsonCreator}
+     *       已经能识别 {@code elements} 字段并自动包成单一 "Default Layer"</li>
+     *   <li>重新序列化为字符串，得到 v2 形态 JSON（含 {@code layers / activeLayerId /
+     *       protocolVersion / canvas.gridSize / canvas.guides}）</li>
+     * </ol>
+     *
+     * <p>如果输入已是 v2 形态，方法仍能完成 roundtrip 并返回等价 v2 JSON；
+     * 但调用方可用 {@link #isV1Form} 提前过滤避免无意义写。</p>
+     *
+     * @throws Exception 反序列化或序列化失败；调用方应 catch 后 log warn 跳过坏数据
+     */
+    public static String migrateProjectJsonV1ToV2(ObjectMapper mapper, String json) throws Exception {
+        ProjectState ps = mapper.readValue(json, ProjectState.class);
+        return mapper.writeValueAsString(ps);
+    }
+
+    /**
+     * 启动期一次性扫描 walls 表，把 {@code protocol_version &lt; 2} 的行升级到 v2。
+     * 实现细节见 {@code docs/data-model.md §2.4.1}（决策 A：startup full-scan）。
+     *
+     * <p>容错策略：单行 migrate 失败 → log warn + 该行 protocol_version 保留为 1，
+     * 启动继续。下次启动会再尝试；运行期 {@code /canvas open <id>} 也会再次走 lazy 路径
+     * （因 {@link ProjectState.JsonCreator} 永远兼容 v1）。</p>
+     *
+     * @return 统计：scanned = 命中行数；migrated = 成功写回数；failed = 出错跳过数
+     */
+    public MigrationStats migrateAllToV2() {
+        List<Row> rows;
+        try {
+            rows = jdbi.withHandle(h -> h.createQuery(
+                    "SELECT wall_id, project_json FROM walls WHERE protocol_version < 2")
+                    .map((rs, ctx) -> new Row(rs.getString("wall_id"), rs.getString("project_json")))
+                    .list());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "migrateAllToV2: scan failed; skipping migration", e);
+            return MigrationStats.EMPTY;
+        }
+        if (rows.isEmpty()) return MigrationStats.EMPTY;
+
+        int scanned = 0, migrated = 0, failed = 0;
+        for (Row r : rows) {
+            scanned++;
+            try {
+                String newJson = migrateProjectJsonV1ToV2(mapper, r.json);
+                // 始终把 protocol_version 标 2 —— 即便内容本就是 v2、roundtrip 没动也算"已确认"，
+                // 避免下次启动重复扫
+                jdbi.useHandle(h -> h.createUpdate(
+                        "UPDATE walls SET project_json = :j, protocol_version = 2 "
+                                + "WHERE wall_id = :id")
+                        .bind("j", newJson)
+                        .bind("id", r.wallId)
+                        .execute());
+                migrated++;
+            } catch (Exception e) {
+                log.log(Level.WARNING,
+                        "migrateAllToV2: project_json upgrade failed for wall_id=" + r.wallId
+                                + " — left at v1, will retry next startup", e);
+                failed++;
+            }
+        }
+        return new MigrationStats(scanned, migrated, failed);
+    }
+
+    private record Row(String wallId, String json) {}
 
     // ---------- 私有 ----------
 

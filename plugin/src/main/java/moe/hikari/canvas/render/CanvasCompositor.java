@@ -1,10 +1,13 @@
 package moe.hikari.canvas.render;
 
+import moe.hikari.canvas.state.BlendMode;
 import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.IconElement;
+import moe.hikari.canvas.state.Layer;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.RectElement;
+import moe.hikari.canvas.state.RenderMode;
 import moe.hikari.canvas.state.Shadow;
 import moe.hikari.canvas.state.Stroke;
 import moe.hikari.canvas.state.TextElement;
@@ -13,6 +16,7 @@ import moe.hikari.canvas.template.asset.TemplateAssetService;
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
@@ -77,13 +81,24 @@ public final class CanvasCompositor {
      * 把 {@link ProjectState} 渲染到整张大画布。返回 {@code TYPE_INT_RGB}（无 alpha）。
      *
      * <p>大小 = {@code (widthMaps*128) × (heightMaps*128)}；2×2 = 64 KiB、8×4 = 1 MiB、10×10 = 6.5 MiB。</p>
+     *
+     * <h3>M8-E 分层渲染</h3>
+     * <ul>
+     *   <li><b>fast path</b>：层 opacity = 1 + blendMode = NORMAL + 层内无 element opacity/blendMode
+     *       → 直接 draw 到主 buffer，与 M7 之前行为完全等价（snapshot baseline 不漂移）</li>
+     *   <li><b>slow path</b>：分配 ARGB 中间 buffer 画层内 element + element.opacity 用
+     *       {@link AlphaComposite#SrcOver}.derive；最后用
+     *       {@link BlendModes#applyBlendModeOver} 把层 buffer 按 layer.opacity / blendMode
+     *       合成到主 buffer</li>
+     * </ul>
+     *
+     * <p>层间 z-order = {@code state.layers()} 索引（0 = 底，越大越上）。</p>
      */
     public BufferedImage rasterize(ProjectState state) {
         ProjectState.Canvas canvas = state.canvas();
         int widthPx = canvas.widthMaps() * MAP_SIZE;
         int heightPx = canvas.heightMaps() * MAP_SIZE;
-        // TYPE_INT_RGB 省一个 byte/pixel 的 alpha；MC 地图原生不支持半透明，我们在 quantize
-        // 阶段也硬截断，所以不用 ARGB 承载中间半透明
+        // 主 buffer：TYPE_INT_RGB（无 alpha）—— MC 地图最终也无 alpha
         BufferedImage img = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         try {
@@ -91,31 +106,84 @@ public final class CanvasCompositor {
             // 背景
             g.setColor(parseColor(canvas.background()));
             g.fillRect(0, 0, widthPx, heightPx);
-            // 元素按 z-order（index 越大越上层）
-            for (Element e : state.elements()) {
-                if (!e.visible()) continue;
-                // M4-T6：rotation ∈ {0, 90, 180, 270}。绕 element bbox 中心转
-                // 用 AffineTransform save/restore 保证不污染后续 element 的绘制坐标系
-                AffineTransform savedTx = null;
-                if (e.rotation() != 0) {
-                    savedTx = g.getTransform();
-                    double cx = e.x() + e.w() / 2.0;
-                    double cy = e.y() + e.h() / 2.0;
-                    g.rotate(Math.toRadians(e.rotation()), cx, cy);
-                }
-                switch (e) {
-                    case RectElement r -> drawRect(g, r);
-                    case TextElement t -> drawText(g, t);
-                    case IconElement ic -> drawIcon(g, ic);
-                }
-                if (savedTx != null) {
-                    g.setTransform(savedTx);
+
+            // M8-E：分层渲染
+            for (Layer layer : state.layers()) {
+                if (!layer.visible() || layer.opacity() <= 0f) continue;
+                if (layer.elements().isEmpty()) continue;
+
+                if (canFastPath(layer)) {
+                    drawElementsTo(g, layer.elements());
+                } else {
+                    BufferedImage layerBuf = renderLayerToBuffer(layer, widthPx, heightPx);
+                    BlendModes.applyBlendModeOver(img, layerBuf, layer.opacity(), layer.blendMode());
                 }
             }
         } finally {
             g.dispose();
         }
         return img;
+    }
+
+    /**
+     * fast path 判定：层与层内所有 element 都为默认混合参数时直接画主 buffer，避免分配中间 ARGB
+     * 缓冲与 per-pixel 合成。这是保证已有 fixture snapshot baseline 不漂移的关键。
+     *
+     * <p>M8-E 阶段 element 级 blendMode / renderMode 字段路径已打通但合成未实装（推到 M11
+     * 与 dither 一起做）。fast path 检查这两个字段是<b>防御性</b>的 —— 一旦 M11 真接 dither，
+     * renderMode=DITHER 的 element 必须走 slow path（per-pixel 抖动）；这里提前堵口避免
+     * 集成时漏判。当前 element.blendMode 即使非 NORMAL 也走 fast path 等价处理（无合成）。</p>
+     */
+    private static boolean canFastPath(Layer layer) {
+        if (layer.opacity() < 1.0f) return false;
+        if (layer.blendMode() != BlendMode.NORMAL) return false;
+        for (Element e : layer.elements()) {
+            Float op = e.opacity();
+            if (op != null && op < 1.0f) return false;
+            RenderMode rm = e.renderMode();
+            if (rm != null && rm != RenderMode.CLEAN) return false;
+        }
+        return true;
+    }
+
+    /** 在指定 Graphics2D 上按 z-order 画一组 element，含 element.opacity 处理。 */
+    private void drawElementsTo(Graphics2D g, List<Element> elements) {
+        Composite baseComposite = g.getComposite();
+        for (Element e : elements) {
+            if (!e.visible()) continue;
+            float opacity = e.effectiveOpacity();
+
+            AffineTransform savedTx = null;
+            if (e.rotation() != 0) {
+                savedTx = g.getTransform();
+                double cx = e.x() + e.w() / 2.0;
+                double cy = e.y() + e.h() / 2.0;
+                g.rotate(Math.toRadians(e.rotation()), cx, cy);
+            }
+            if (opacity < 1.0f) {
+                g.setComposite(AlphaComposite.SrcOver.derive(opacity));
+            }
+            switch (e) {
+                case RectElement r -> drawRect(g, r);
+                case TextElement t -> drawText(g, t);
+                case IconElement ic -> drawIcon(g, ic);
+            }
+            if (opacity < 1.0f) g.setComposite(baseComposite);
+            if (savedTx != null) g.setTransform(savedTx);
+        }
+    }
+
+    /** slow path：把 layer 内 element 画到独立 ARGB buffer（透明背景）。 */
+    private BufferedImage renderLayerToBuffer(Layer layer, int widthPx, int heightPx) {
+        BufferedImage buf = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D lg = buf.createGraphics();
+        try {
+            applyHints(lg);
+            drawElementsTo(lg, layer.elements());
+        } finally {
+            lg.dispose();
+        }
+        return buf;
     }
 
     /**

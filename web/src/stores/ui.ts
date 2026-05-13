@@ -30,6 +30,9 @@ export const useUiStore = defineStore('ui', () => {
     /** 选中元素 id；null = 无选中。 */
     const selectedElementId = ref<string | null>(null);
 
+    /** M8-D：当前正在 inline 重命名的图层 id。LayerPanel 双击 layer name 设；保存或 ESC 清。 */
+    const editingLayerId = ref<string | null>(null);
+
     /** 画布缩放系数（0.25 .. 4）。 */
     const zoom = ref(1);
 
@@ -78,12 +81,16 @@ export const useUiStore = defineStore('ui', () => {
         activeTool.value = tool;
     }
 
+    function setEditingLayer(id: string | null) {
+        editingLayerId.value = id;
+    }
+
     return {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
-        selectedElementId, zoom,
+        selectedElementId, editingLayerId, zoom,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         setZoom, zoomIn, zoomOut, zoomReset,
-        selectElement, setTool,
+        selectElement, setTool, setEditingLayer,
     };
 });
 
