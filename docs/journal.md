@@ -5,6 +5,99 @@
 
 ---
 
+## 2026-05-13 · M9-A/B/C/D/E 全栈实施（PathElement + 工具栏 + drag-to-create）
+
+**目标：** 把"线 / 箭头 / 软线 / 星 / 点"五种工具压缩成一个 path 元素 + marker；CircleElement / ShapeElement 单独立；工具栏 drag-to-create。docs CLAUDE.md / PROPOSAL §6 锁定 M9 = "PathElement + 工具栏（1.5w）"，本次一气完成 A-E 五段。
+
+### M9-A · 后端 record + 协议校验
+
+- 新增 `state/{PathElement, CircleElement, ShapeElement}.java` 三 record + `state/PathDValidator.java`（SVG d 词法校验：M/L/Q/C/Z 子集 + 长度 / 数值范围 / 命令-参数对应）
+- `state/Element.java` sealed permits + JsonSubTypes 加 path/circle/shape
+- `state/EditSession.java`：addElement switch / updateElement sealed switch / cloneElementWithNewId 三处加新 case；新增 buildPath/Circle/Shape + applyPathPatch/CirclePatch/ShapePatch + parseMarkerNullable / validateShapeKind / validateSides / validateInnerRatio helpers
+- `render/CanvasCompositor.java` sealed switch 加 3 case → stub drawTodoStub（M9-B 替换）
+- `web/types/protocol.ts` + `web/render/PreviewRenderer.ts` 类型镜像 + stub
+- 新测试 `PathDValidatorTest` 29 + `EditSessionNewElementsTest` 21
+
+### M9-B · 后端真实绘制
+
+- 新增 `render/PathParser.java`：d → `Path2D.Double` + 起/终点 + 切线元数据（marker 用）；M/L/Q/C/Z 大小写绝对/相对；隐式 lineto；Z 闭合切线指向 subpath 起点；退化 Q/C 控制点 fallback
+- 新增 `render/MarkerRenderer.java`：drawArrow（三角形 apex 在端点）+ drawDot（实心圆），size = max(6, stroke×3) / radius = max(2, stroke+1)
+- `CanvasCompositor.drawPath`：translate(p.x, p.y) → fill + stroke + drawMarker(start/end)
+- `CanvasCompositor.drawCircle`：Ellipse2D.Double + fill/stroke
+- `CanvasCompositor.drawShape` + `buildShapePath`：sides 顶点 -π/2 起算朝上；star 时 2×sides 顶点外内交替（odd 用 outerR×innerRatio）
+- 新增 fixture 06/07/08（path-line / circle / star-polygon）+ baseline 入库（视觉 review 通过）
+- 新测试 `PathParserTest` 19
+
+### M9-C · 前端镜像
+
+- 新增 `web/render/PathParser.ts`：浏览器原生 Path2D + 切线，与 Java 同公式逐行镜像
+- 新增 `web/render/MarkerRenderer.ts`：drawArrow + drawDot 同 Java 几何
+- `web/render/PreviewRenderer.ts`：drawPath / drawCircle / drawShape 实装（删 stub）
+- 双端一致性靠**公式同源** + 共享 fixture（snapshot 测试是双端约束）
+
+### M9-D · 工具栏激活态
+
+- `stores/ui.ts`：`ActiveTool` 类型扩展 6 种（select / move / line / arrow / circle / star）+ `isDrawTool(t)` helper + loadTool 兼容
+- `components/layout/LeftTools.vue`：select/move 组下新分组加 4 个工具按钮（icons：Minus / MoveRight / Circle / Star）
+- `components/layout/CanvasView.vue`：`cursorStyle` 跟随 activeTool（crosshair on drawTool）；watch activeTool 切到 drawTool 时清 selection；onStageMouseDown 在 drawTool 时不启动 marquee
+- 快捷键 L / A / C / S（Cmd 修饰键让位给现有 Cmd+A 全选等）
+- `HelpModal.vue` 加 4 个工具条目
+- i18n 加 t.tools / t.help 4 个工具文案
+
+### M9-E · drag-to-create
+
+- `CanvasView.vue`：
+  - `hitConfig.listening: !drawing` —— drawTool 时穿透 mousedown 到 stage（PS/Figma 行为）
+  - `onStageMouseDown` drawTool 时启动 drawDrag；mousemove 更新；mouseup 调 commitDraw
+  - commitDraw：dx/dy < 3 取消，否则按 activeTool 构造 props 发 element.add；自动切回 select；line/arrow 不规范化方向保持 markerEnd 朝向；circle/star 用 bbox 直推 cx/cy/rx/ry / outerR
+  - drawPreview computed：marquee layer 内根据 kind 渲染 v-line / v-arrow / v-ellipse / v-star（Konva 内置）
+  - window mouseup 兜底清 drawDrag（拖出窗口时取消）
+  - watch activeTool 末尾清 marquee + drawDrag 防御边缘 case
+- i18n 删除 tooltip 末尾 "(M9-E 接入)" 占位
+
+### Code review 修复（实施完成后）
+
+- drawPreview 的 arrow `pointerLength=10/Width=8` 与最终元素 markerSize=6 不一致 → 改为 6/6 保持视觉对齐
+- `commitDraw(tool: typeof ui.activeTool, ...)` 用 typeof 取 store 字段类型不规范 → 改为 `import type { ActiveTool }` + `tool: ActiveTool` 显式
+- Esc 在 drawTool 激活时只清 selection（已是空，noop），用户无法快速取消激活态 → Esc 在 drawTool 时切回 select；select/move 时仍清选中
+
+### 改动文件清单
+
+**后端（plugin）：**
+- 新增 9 个：state/{Path,Circle,Shape}Element.java + state/PathDValidator.java + render/{PathParser,MarkerRenderer}.java + test/{PathDValidator,EditSessionNewElements,PathParser}Test.java + test/resources/{fixtures/06-08*.json + expected/06-08*.png}（6 文件）= 实际 15 个新文件
+- 修改 4 个：state/{Element,EditSession}.java + render/CanvasCompositor.java + test/render/RendererSnapshotTest.java
+
+**前端（web）：**
+- 新增 2 个：render/{PathParser,MarkerRenderer}.ts
+- 修改 7 个：types/protocol.ts、render/PreviewRenderer.ts、stores/ui.ts、components/{layout/LeftTools,layout/CanvasView,HelpModal}.vue、i18n/messages.ts
+
+### 测试
+
+- **整库 250+ 测试全过**（含 M9 新增 69 个：PathDValidator 29 + EditSessionNewElements 21 + PathParser 19）
+- 8 个渲染 fixture（5 原 fixture 零漂移 + 3 新 fixture 视觉 review 通过）
+- `vite build` 通过 417.74KB JS / 33.13KB CSS（M8-F 后 406KB；+11KB PathParser/MarkerRenderer/绘制实装/工具栏/drag-to-create）
+
+### 关键设计决策
+
+1. **PathElement d 内坐标相对 element.(x, y)**：transform 改 x/y 时 d 不动；简化 bbox 同步（Figma 同样做法）
+2. **CircleElement / ShapeElement 不引入新 transform 字段**：完全复用 bbox（cx/cy/rx/ry / outerR 都由 x/y/w/h 推），Konva Transformer 多 node 缩放/旋转自然 work
+3. **fast path 兜底保 baseline 零漂移**：新增 PathElement / CircleElement / ShapeElement 时 canFastPath 已含 element.renderMode != CLEAN 防御 check；5 个原 fixture 命中 fast path 像素一致
+4. **PathParser 输出切线元数据**：marker 直接消费 startTangent / endTangent，避免遍历 PathIterator 求切线
+5. **marker 几何 apex 在端点**：base 朝外退 size；markerEnd 朝 endTangent（顺 path）；markerStart 朝 -startTangent（逆 path）
+6. **双端镜像策略**：PathParser / MarkerRenderer 前后端逐行同公式同变量名；Path2D 是浏览器原生 + Java AWT 同名 API，moveTo/lineTo/quadraticCurveTo/bezierCurveTo/closePath 完全对应
+7. **drawTool 激活时 element-hit listening=false**：让 mousedown 穿透到 stage 启动 drag-to-create（PS/Figma 行为）
+8. **一次性创建 + 自动切回 select**：mouseup 后切回 select 工具让用户立即操作新元素（lastAddedElementId 自动选中）
+9. **drag 距离 < 3px 取消**：防误点
+10. **line/arrow d 不规范化方向**：保持 markerEnd 朝用户拖动终点
+11. **保留 addText / addRect 快捷按钮**：兼容路径，未删除（统一为激活态留后续 polish）
+
+### 工期
+
+- **预估 1.5 周**（M9-A 2d + M9-B 2d + M9-C 2d + M9-D 1d + M9-E 2d = 9d），实际**约 3 小时**（含深度调研 + review + 修复）
+- 17 新文件 / 11 修改文件 / 69 新测试 / 0 baseline 漂移 / 0 测试回归
+
+---
+
 ## 2026-05-13 · M8-F 多选 marquee + 修饰键选择 + 多选 transform
 
 **M8 闭环**：journal 之前的"M8-F 续做"列表完成 1/4（多选 marquee 完整落地；guides 拖出 UI / element-level blendMode 真合成留 M11；slow path 压测留远期）。
