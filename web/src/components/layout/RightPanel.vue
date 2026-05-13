@@ -4,10 +4,11 @@ import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
-import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2, Trash2 } from 'lucide-vue-next';
+import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2, Trash2, HelpCircle } from 'lucide-vue-next';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO } from '@/render/TextLayout';
 import { FONT_META } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
+import Tooltip from '@/components/ui/Tooltip.vue';
 import type { Element, RectElement, TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
 const project = useProjectStore();
@@ -239,14 +240,14 @@ function onLayerDragEnd() {
       <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Sliders class="size-3.5" />
         <span>{{ t.properties.header }}</span>
-        <button
-          v-if="selected"
-          class="ml-auto p-1 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] text-[color:var(--muted-foreground)]"
-          :title="t.properties.deleteTitle"
-          @click="deleteSelected"
-        >
-          <Trash2 class="size-3.5" />
-        </button>
+        <Tooltip v-if="selected" :text="t.properties.deleteTitle" shortcut="Del">
+          <button
+            class="ml-auto p-1 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] text-[color:var(--muted-foreground)]"
+            @click="deleteSelected"
+          >
+            <Trash2 class="size-3.5" />
+          </button>
+        </Tooltip>
       </header>
 
       <div v-if="!selected" class="p-3 text-xs text-[color:var(--muted-foreground)]">
@@ -289,7 +290,12 @@ function onLayerDragEnd() {
               <input type="number" min="1" class="hc-input" :value="selected.h" @input="(e) => onNumberChange('h', e)">
             </label>
             <label class="flex flex-col gap-0.5 col-span-2">
-              <span class="text-[10px] text-[color:var(--muted-foreground)]">rotation</span>
+              <span class="hc-field-label">
+                {{ t.properties.rotation }}
+                <Tooltip :text="t.properties.rotationTip">
+                  <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+                </Tooltip>
+              </span>
               <input type="number" min="0" max="359" class="hc-input" :value="selected.rotation"
                      @input="(e) => onNumberChange('rotation', e)">
             </label>
@@ -355,24 +361,26 @@ function onLayerDragEnd() {
             </label>
             <!-- Fit content：按当前 text + 字号 + letterSpacing + lineHeight 计算 bbox -->
             <div class="flex gap-2 pt-1">
-              <button
-                type="button"
-                class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
-                :title="t.properties.fitHeight"
-                @click="fitTextHeight"
-              >
-                <Maximize2 class="size-3 rotate-90" />
-                <span>{{ t.properties.fitHeight }}</span>
-              </button>
-              <button
-                type="button"
-                class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
-                :title="t.properties.fitWidth"
-                @click="fitTextWidth"
-              >
-                <Maximize2 class="size-3" />
-                <span>{{ t.properties.fitWidth }}</span>
-              </button>
+              <Tooltip :text="t.properties.fitHeightTip">
+                <button
+                  type="button"
+                  class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
+                  @click="fitTextHeight"
+                >
+                  <Maximize2 class="size-3 rotate-90" />
+                  <span>{{ t.properties.fitHeight }}</span>
+                </button>
+              </Tooltip>
+              <Tooltip :text="t.properties.fitWidthTip">
+                <button
+                  type="button"
+                  class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
+                  @click="fitTextWidth"
+                >
+                  <Maximize2 class="size-3" />
+                  <span>{{ t.properties.fitWidth }}</span>
+                </button>
+              </Tooltip>
             </div>
             <div class="grid grid-cols-2 gap-2">
               <label class="flex flex-col gap-0.5">
@@ -400,12 +408,22 @@ function onLayerDragEnd() {
                        @input="(e) => onColorChange('color', e)">
               </label>
               <label class="flex flex-col gap-0.5">
-                <span class="text-[10px] text-[color:var(--muted-foreground)]">letterSpacing</span>
+                <span class="hc-field-label">
+                  {{ t.properties.letterSpacing }}
+                  <Tooltip :text="t.properties.letterSpacingTip">
+                    <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+                  </Tooltip>
+                </span>
                 <input type="number" step="0.5" class="hc-input" :value="(selected as TextElement).letterSpacing"
                        @input="(e) => onNumberChange('letterSpacing', e)">
               </label>
               <label class="flex flex-col gap-0.5">
-                <span class="text-[10px] text-[color:var(--muted-foreground)]">lineHeight</span>
+                <span class="hc-field-label">
+                  {{ t.properties.lineHeight }}
+                  <Tooltip :text="t.properties.lineHeightTip">
+                    <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+                  </Tooltip>
+                </span>
                 <input type="number" step="0.1" class="hc-input" :value="(selected as TextElement).lineHeight"
                        @input="(e) => onNumberChange('lineHeight', e)">
               </label>
@@ -546,6 +564,13 @@ function onLayerDragEnd() {
 
 <style scoped>
 /* 手写样式（Tailwind 4 scoped style 不支持 @apply，改直接 CSS）。 */
+.hc-field-label {
+    font-size: 10px;
+    color: var(--muted-foreground);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
 .hc-input {
     width: 100%;
     padding: 0.25rem 0.375rem;

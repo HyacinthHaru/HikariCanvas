@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Globe, Pencil, Check, X, RefreshCw } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Globe, Pencil, Check, X, RefreshCw, HelpCircle } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useI18n } from '@/i18n';
 import { getWsClient } from '@/network/wsClient';
+import Tooltip from '@/components/ui/Tooltip.vue';
 
 const ui = useUiStore();
 const net = useNetworkStore();
@@ -141,26 +142,27 @@ function showRefreshFlash(msg: string) {
       </span>
       <!-- M5.5: wall 元数据 -->
       <div v-if="project.wallId" class="flex items-center gap-2 ml-2 text-xs">
-        <button
-          class="px-1.5 py-0.5 rounded font-mono bg-[color:var(--secondary)] hover:bg-[color:var(--accent)] transition-colors relative"
-          :title="t.wall.copyId(project.wallId)"
-          @click="copyWallId"
-        >
-          <span v-if="copiedFlash === 'wallid'" class="text-emerald-400">{{ t.wall.copied }}</span>
-          <span v-else>{{ project.wallId }}</span>
-        </button>
+        <Tooltip :text="t.wall.copyId(project.wallId)">
+          <button
+            class="px-1.5 py-0.5 rounded font-mono bg-[color:var(--secondary)] hover:bg-[color:var(--accent)] transition-colors relative"
+            @click="copyWallId"
+          >
+            <span v-if="copiedFlash === 'wallid'" class="text-emerald-400">{{ t.wall.copied }}</span>
+            <span v-else>{{ project.wallId }}</span>
+          </button>
+        </Tooltip>
         <!-- alias：默认显示按钮；点击进入内联编辑 -->
-        <button
-          v-if="!editingAlias"
-          class="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[color:var(--accent)] transition-colors text-[color:var(--muted-foreground)]"
-          :title="project.alias ? t.wall.aliasSetTip(project.alias) : t.wall.aliasSetTipEmpty"
-          @click="startAliasEdit"
-        >
-          <Tag class="size-3" />
-          <span v-if="project.alias">{{ project.alias }}</span>
-          <span v-else class="opacity-60">{{ t.wall.aliasEmpty }}</span>
-          <Pencil class="size-2.5 opacity-50" />
-        </button>
+        <Tooltip v-if="!editingAlias" :text="project.alias ? t.wall.aliasSetTip(project.alias) : t.wall.aliasSetTipEmpty">
+          <button
+            class="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[color:var(--accent)] transition-colors text-[color:var(--muted-foreground)]"
+            @click="startAliasEdit"
+          >
+            <Tag class="size-3" />
+            <span v-if="project.alias">{{ project.alias }}</span>
+            <span v-else class="opacity-60">{{ t.wall.aliasEmpty }}</span>
+            <Pencil class="size-2.5 opacity-50" />
+          </button>
+        </Tooltip>
         <div v-else class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[color:var(--secondary)]">
           <Tag class="size-3 text-[color:var(--muted-foreground)]" />
           <input
@@ -182,26 +184,28 @@ function showRefreshFlash(msg: string) {
           </button>
           <span v-if="aliasError" class="text-[10px] text-red-400 ml-1">{{ aliasError }}</span>
         </div>
-        <button
-          class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors"
-          :class="published
-            ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-            : 'bg-[color:var(--secondary)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
-          :title="published ? t.wall.publishToggleOn : t.wall.publishToggleOff"
-          @click="togglePublish"
-        >
-          <Globe class="size-3" />
-          <span>{{ published ? t.wall.publishOn : t.wall.publishOff }}</span>
-        </button>
-        <button
-          class="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-50"
-          :title="t.wall.refreshTip"
-          :disabled="refreshing"
-          @click="refreshWall"
-        >
-          <RefreshCw class="size-3" :class="refreshing ? 'animate-spin' : ''" />
-          <span>{{ t.wall.refresh }}</span>
-        </button>
+        <Tooltip :text="published ? t.wall.publishToggleOn : t.wall.publishToggleOff">
+          <button
+            class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors"
+            :class="published
+              ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+              : 'bg-[color:var(--secondary)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
+            @click="togglePublish"
+          >
+            <Globe class="size-3" />
+            <span>{{ published ? t.wall.publishOn : t.wall.publishOff }}</span>
+          </button>
+        </Tooltip>
+        <Tooltip :text="t.wall.refreshTip">
+          <button
+            class="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-50"
+            :disabled="refreshing"
+            @click="refreshWall"
+          >
+            <RefreshCw class="size-3" :class="refreshing ? 'animate-spin' : ''" />
+            <span>{{ t.wall.refresh }}</span>
+          </button>
+        </Tooltip>
         <span
           v-if="refreshFlash"
           class="text-[10px] text-[color:var(--muted-foreground)] tabular-nums"
@@ -210,42 +214,55 @@ function showRefreshFlash(msg: string) {
     </div>
 
     <div class="flex items-center gap-1">
-      <button
-        class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
-        :title="t.topbar.toggleLeft"
-        @click="ui.toggleLeft()"
-      >
-        <PanelLeft class="size-4" />
-      </button>
-      <button
-        class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
-        :title="t.topbar.toggleRight"
-        @click="ui.toggleRight()"
-      >
-        <PanelRight class="size-4" />
-      </button>
-      <button
-        class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
-        :title="t.topbar.toggleLog"
-        @click="ui.toggleLogDrawer()"
-      >
-        <Terminal class="size-4" />
-      </button>
-      <button
-        class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
-        :title="t.topbar.switchLocale"
-        @click="ui.toggleLocale()"
-      >
-        <Languages class="size-4" />
-      </button>
-      <button
-        class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
-        :title="t.topbar.toggleTheme"
-        @click="ui.toggleTheme()"
-      >
-        <Sun v-if="ui.theme === 'dark'" class="size-4" />
-        <Moon v-else class="size-4" />
-      </button>
+      <Tooltip :text="t.topbar.toggleLeft">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          @click="ui.toggleLeft()"
+        >
+          <PanelLeft class="size-4" />
+        </button>
+      </Tooltip>
+      <Tooltip :text="t.topbar.toggleRight">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          @click="ui.toggleRight()"
+        >
+          <PanelRight class="size-4" />
+        </button>
+      </Tooltip>
+      <Tooltip :text="t.topbar.toggleLog">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          @click="ui.toggleLogDrawer()"
+        >
+          <Terminal class="size-4" />
+        </button>
+      </Tooltip>
+      <Tooltip :text="t.topbar.help" shortcut="?">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          @click="ui.helpOpen = true"
+        >
+          <HelpCircle class="size-4" />
+        </button>
+      </Tooltip>
+      <Tooltip :text="t.topbar.switchLocale">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          @click="ui.toggleLocale()"
+        >
+          <Languages class="size-4" />
+        </button>
+      </Tooltip>
+      <Tooltip :text="t.topbar.toggleTheme">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          @click="ui.toggleTheme()"
+        >
+          <Sun v-if="ui.theme === 'dark'" class="size-4" />
+          <Moon v-else class="size-4" />
+        </button>
+      </Tooltip>
     </div>
   </header>
 </template>

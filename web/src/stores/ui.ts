@@ -25,6 +25,7 @@ export const useUiStore = defineStore('ui', () => {
     const leftCollapsed = ref(false);
     const rightCollapsed = ref(false);
     const logDrawerOpen = ref(false);
+    const helpOpen = ref(false);
 
     /** 选中元素 id；null = 无选中。 */
     const selectedElementId = ref<string | null>(null);
@@ -78,7 +79,7 @@ export const useUiStore = defineStore('ui', () => {
     }
 
     return {
-        theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen,
+        theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
         selectedElementId, zoom,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         setZoom, zoomIn, zoomOut, zoomReset,

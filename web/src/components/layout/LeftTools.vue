@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { Sparkles, Undo2, Redo2, Paintbrush, RadioTower, Type, Square, MousePointer2, Move } from 'lucide-vue-next';
+import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
 import { useI18n } from '@/i18n';
+import Tooltip from '@/components/ui/Tooltip.vue';
 
 const net = useNetworkStore();
 const project = useProjectStore();
@@ -18,7 +19,7 @@ function runOp(op: string, payload?: unknown) {
     ws.send(op, payload);
 }
 
-/** 计算新元素的居中坐标，避免硬编码 (32,32) 把元素堆在角落叠在模板上。 */
+/** 居中坐标：避免新元素叠在角落看不见。 */
 function centeredBox(w: number, h: number): { x: number; y: number; w: number; h: number } {
     const cw = project.canvasPixelWidth || 256;
     const ch = project.canvasPixelHeight || 128;
@@ -58,91 +59,79 @@ function addRect() {
 
 <template>
   <aside class="w-12 bg-[color:var(--card)] border-r border-[color:var(--border)] flex flex-col items-center py-2 gap-1">
-    <!-- 工具模式切换：Select（默认，含 transformer 锚点）vs Move（纯拖拽，无锚点） -->
-    <button
-      class="p-2 rounded transition-colors"
-      :class="ui.activeTool === 'select'
-        ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
-        : 'hover:bg-[color:var(--accent)]'"
-      :title="t.tools.selectTool"
-      @click="ui.setTool('select')"
-    >
-      <MousePointer2 class="size-5" />
-    </button>
-    <button
-      class="p-2 rounded transition-colors"
-      :class="ui.activeTool === 'move'
-        ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
-        : 'hover:bg-[color:var(--accent)]'"
-      :title="t.tools.moveTool"
-      @click="ui.setTool('move')"
-    >
-      <Move class="size-5" />
-    </button>
+    <!-- 工具模式：Select（带 transformer 锚点）vs Move（PS 风格纯拖拽） -->
+    <Tooltip :text="t.tools.selectTool" shortcut="V">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'select'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('select')"
+      >
+        <MousePointer2 class="size-5" />
+      </button>
+    </Tooltip>
+    <Tooltip :text="t.tools.moveTool" shortcut="M">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'move'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('move')"
+      >
+        <Move class="size-5" />
+      </button>
+    </Tooltip>
 
     <div class="my-1 w-8 h-px bg-[color:var(--border)]"></div>
 
-    <button
-      class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-      :disabled="!net.authenticated"
-      :title="t.tools.openTemplates"
-      @click="templates.openGallery()"
-    >
-      <Sparkles class="size-5" />
-    </button>
-    <button
-      class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-      :disabled="!net.authenticated"
-      :title="t.tools.addText"
-      @click="addText"
-    >
-      <Type class="size-5" />
-    </button>
-    <button
-      class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-      :disabled="!net.authenticated"
-      :title="t.tools.addRect"
-      @click="addRect"
-    >
-      <Square class="size-5" />
-    </button>
+    <Tooltip :text="t.tools.openTemplates">
+      <button
+        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="!net.authenticated"
+        @click="templates.openGallery()"
+      >
+        <Sparkles class="size-5" />
+      </button>
+    </Tooltip>
+    <Tooltip :text="t.tools.addText">
+      <button
+        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="!net.authenticated"
+        @click="addText"
+      >
+        <Type class="size-5" />
+      </button>
+    </Tooltip>
+    <Tooltip :text="t.tools.addRect">
+      <button
+        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="!net.authenticated"
+        @click="addRect"
+      >
+        <Square class="size-5" />
+      </button>
+    </Tooltip>
 
-    <div class="mt-2 mb-1 w-8 h-px bg-[color:var(--border)]"></div>
+    <div class="my-1 w-8 h-px bg-[color:var(--border)]"></div>
 
-    <button
-      class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-      :disabled="!net.authenticated"
-      :title="t.tools.undo"
-      @click="runOp('undo', {})"
-    >
-      <Undo2 class="size-5" />
-    </button>
-    <button
-      class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-      :disabled="!net.authenticated"
-      :title="t.tools.redo"
-      @click="runOp('redo', {})"
-    >
-      <Redo2 class="size-5" />
-    </button>
-
-    <div class="mt-2 mb-1 w-8 h-px bg-[color:var(--border)]"></div>
-
-    <button
-      class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-      :disabled="!net.authenticated"
-      :title="t.tools.ping"
-      @click="runOp('ping')"
-    >
-      <RadioTower class="size-5" />
-    </button>
-    <button
-      class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-      :disabled="!net.authenticated"
-      :title="t.tools.paint"
-      @click="runOp('paint')"
-    >
-      <Paintbrush class="size-5" />
-    </button>
+    <Tooltip :text="t.tools.undo" shortcut="Ctrl+Z">
+      <button
+        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="!net.authenticated"
+        @click="runOp('undo', {})"
+      >
+        <Undo2 class="size-5" />
+      </button>
+    </Tooltip>
+    <Tooltip :text="t.tools.redo" shortcut="Ctrl+⇧Z">
+      <button
+        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="!net.authenticated"
+        @click="runOp('redo', {})"
+      >
+        <Redo2 class="size-5" />
+      </button>
+    </Tooltip>
   </aside>
 </template>

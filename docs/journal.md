@@ -5,6 +5,72 @@
 
 ---
 
+## 2026-05-13 · M7 polish 第一轮：编辑器美化 + 解释性 UI
+
+**用户诉求：** 进入 M7 polish 但**先不动账号权限**；做编辑器/前端美化；缩放升级；文字表述清楚；按钮要有解释（hover tooltip 或 ? 图标）。
+
+**1. Tooltip 组件**
+
+`web/src/components/ui/Tooltip.vue` —— 自定义浮层，替代浏览器原生 `title="..."`（原生 ~1s 延迟 + 不可样式化）：
+- Teleport 到 body，避免被父级 overflow 裁掉
+- 250ms 延迟显示（手感介于 0/500ms 之间）
+- 支持 slot 触发器 + `text` / `shortcut` 双字段（右侧灰色 kbd 显示快捷键）
+- transition 淡入淡出；主题变量驱动色
+
+`title="..."` 在 **LeftTools / TopBar / CanvasView / RightPanel** 全部替换为 `<Tooltip>` 包裹。受影响按钮 ~20+ 个。
+
+**2. HelpModal + ? 入口**
+
+`web/src/components/HelpModal.vue` —— 全屏弹窗式快捷键速查表，分四组：
+
+- **工具**：Select (V) / Move (M) / 模板库
+- **选择 / 编辑**：单击选 / 双击编辑 / Esc / 双击空白取消所有 / Del / 方向键微移 / Ctrl+Z 撤销 / Ctrl+⇧Z 重做
+- **缩放 / 视图**：Ctrl+滚轮 / Ctrl+= / Ctrl+- / Ctrl+0 / 中键或 Alt+左键平移
+- **游戏内命令**：edit / open / list / delete
+
+TopBar 加 `HelpCircle (?)` 图标按钮触发；`ui.helpOpen` 持久状态。i18n 中英双语完整翻译。
+
+**3. CanvasView 缩放面板升级**
+
+原版只有 `+ / - / Reset` 三个按钮。新版：
+- **精确百分比**：点击中间数字 → 切到 `<input type=number>` 输入框，Enter 确认、Esc 取消、blur 自动 commit；25-400% 区间 clamp
+- **预设档位**：50 / 75 / 100 / 150 / 200 / 400% 一排小按钮，当前档高亮
+- **Fit to viewport** 按钮（`Maximize` 图标）：自动算 `outerRef.clientWidth/Height` 除以画布像素，得到刚好放下的缩放值，再 scroll 到中心
+- 所有按钮挂 Tooltip 标明快捷键 `Ctrl+= / Ctrl+- / Ctrl+0`
+
+**4. StatusBar 升级**
+
+加 4 个新维度：
+- **当前工具图标**（MousePointer2 / Move）+ 文字
+- **草稿 / 已发布**徽章（绿色 Globe 强调发布态）+ 解释 tooltip "Draft = 仅自己看到"
+- **完整 sessionId** 在 hover tooltip 里显（之前是字符串截断 8 位，无法复制完整 ID）
+- "v3 · 12 elements" 顺序调整、tabular-nums 等宽对齐
+
+**5. 清理 M1 demo 残留**
+
+LeftTools 上的 `RadioTower(ping)` 和 `Paintbrush(paint)` 是 M1 端到端验证留下的，正式版用户用不到 —— 直接从工具栏删掉。WS 服务端 handler 暂保留（不上版本号才删，留作回归测试通道）。
+
+**6. RightPanel 字段解释**
+
+`rotation` / `letterSpacing` / `lineHeight` 这种小字段单凭名字看不出语义 —— label 旁加小 HelpCircle 图标，悬停 tooltip 说明含义和单位：
+- 旋转：0–359° 顺时针
+- 字距：字符间间距像素，可负值
+- 行高：字号倍数，建议 0.8–3.0
+- "按内容调高/调宽" 按钮也加详细 tip
+
+**改动文件：**
+
+- 新增 `web/src/components/ui/Tooltip.vue`
+- 新增 `web/src/components/HelpModal.vue`
+- `web/src/App.vue` — 挂载 `<HelpModal />`
+- `web/src/stores/ui.ts` — 加 `helpOpen` 状态
+- `web/src/components/layout/{LeftTools,TopBar,CanvasView,RightPanel,StatusBar}.vue` — 全面接入 Tooltip + 文案调整 + 缩放面板重写
+- `web/src/i18n/messages.ts` — 加 `topbar.help` / `canvas.{zoomInputTip,fit}` / `status.{draft,published,wallStateTip,sessionFull}` / `help.*`（30+ 条）/ `properties.{rotation,rotationTip,letterSpacing,letterSpacingTip,lineHeight,lineHeightTip,fitHeightTip,fitWidthTip}`；中英双语对齐
+
+**质量门：** vite build 通过；CSS 26→30KB（+4KB tooltip + helpmodal）；JS 357→381KB（+24KB 新组件 + 文案）。
+
+---
+
 ## 2026-05-12 · M6 第六轮：refresh 终于真修 — 撸的是 map item 不是 frame entity
 
 **用户提供的服务端 log 直接命中真相：**
