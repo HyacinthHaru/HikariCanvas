@@ -24,7 +24,7 @@ export interface Canvas {
     background: string; // "#RRGGBB"
 }
 
-export type Element = TextElement | RectElement;
+export type Element = TextElement | RectElement | IconElement;
 
 interface BaseElement {
     id: string;
@@ -54,6 +54,14 @@ export interface RectElement extends BaseElement {
     type: 'rect';
     fill?: string;
     stroke?: Stroke;
+}
+
+export interface IconElement extends BaseElement {
+    type: 'icon';
+    /** 图标资源名，由 /api/template-asset/icons/{source}.png 提供 */
+    source: string;
+    /** 染色 #RRGGBB[AA]；空 = 原色 */
+    tint?: string;
 }
 
 export interface Effects {

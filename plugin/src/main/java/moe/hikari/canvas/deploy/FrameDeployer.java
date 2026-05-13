@@ -381,6 +381,14 @@ public final class FrameDeployer {
         return frame.getPersistentDataContainer().has(wallIdKey, PersistentDataType.STRING);
     }
 
+    /**
+     * 该 frame 所属的 wall 是否处于"已发布"状态（PDC 有 published_at）。
+     * 已发布 wall 应对所有玩家（含 admin force-break）锁死，必须显式 /canvas unpublish 才能动。
+     */
+    public boolean isFramePublished(ItemFrame frame) {
+        return frame.getPersistentDataContainer().has(publishedAtKey, PersistentDataType.LONG);
+    }
+
     public NamespacedKey wallIdKey() { return wallIdKey; }
     public NamespacedKey slotKey() { return slotKey; }
     public NamespacedKey publishedAtKey() { return publishedAtKey; }

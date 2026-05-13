@@ -17,6 +17,7 @@ import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.template.TemplateRegistry;
+import moe.hikari.canvas.template.preview.TemplatePreviewService;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -65,6 +66,7 @@ public final class CanvasCommand {
     private final Database database;
     private final WallRepo wallRepo;
     private final TemplateRegistry templateRegistry;
+    private final TemplatePreviewService templatePreviewService;
     /** 形如 {@code http://host:port/?token={token}}；{token} 占位符会被替换。 */
     private final String editorUrlTemplate;
 
@@ -81,6 +83,7 @@ public final class CanvasCommand {
                          Database database,
                          WallRepo wallRepo,
                          TemplateRegistry templateRegistry,
+                         TemplatePreviewService templatePreviewService,
                          String editorUrlTemplate) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
@@ -90,6 +93,7 @@ public final class CanvasCommand {
         this.database = database;
         this.wallRepo = wallRepo;
         this.templateRegistry = templateRegistry;
+        this.templatePreviewService = templatePreviewService;
         this.editorUrlTemplate = editorUrlTemplate;
     }
 
@@ -540,6 +544,7 @@ public final class CanvasCommand {
     private int runReloadTemplates(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
         var stats = templateRegistry.reload();
+        templatePreviewService.invalidate();  // 缩略图缓存随之失效
         sender.sendMessage(Component.text(String.format(
                         "Templates reloaded: %d builtin + %d server (overrides=%d, failed=%d) — total=%d",
                         stats.builtinLoaded(), stats.serverLoaded(),

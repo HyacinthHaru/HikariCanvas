@@ -27,6 +27,9 @@ import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.storage.MigrationRunner;
 import moe.hikari.canvas.template.TemplateRegistry;
+import moe.hikari.canvas.template.asset.TemplateAssetService;
+import moe.hikari.canvas.template.preview.TemplatePreviewService;
+import moe.hikari.canvas.template.preview.WallPreviewService;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -65,6 +68,9 @@ public final class HikariCanvas extends JavaPlugin {
     private FontRegistry fontRegistry;
     private PaletteLut paletteLut;
     private TemplateRegistry templateRegistry;
+    private TemplatePreviewService templatePreviewService;
+    private TemplateAssetService templateAssetService;
+    private WallPreviewService wallPreviewService;
 
     @Override
     public void onLoad() {
@@ -123,9 +129,14 @@ public final class HikariCanvas extends JavaPlugin {
                     + "did ./gradlew generatePalette run?", e);
         }
 
+        // M7：模板图标资源服务（classpath /template-assets/icons + dataFolder/assets/icons）
+        templateAssetService = new TemplateAssetService(getLogger(),
+                getDataFolder().toPath());
+
         // M3-T7 / M4-T4：编辑 op 成功后把受影响 mapIds 重绘。
         // Compositor = RGBA 大图 rasterize + palette 量化切片
-        CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry, getLogger());
+        CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry,
+                templateAssetService, getLogger());
         canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer, getLogger());
 
         // M5.5：启动末尾把所有 walls 的像素 compose 回对应 MapView
@@ -142,6 +153,9 @@ public final class HikariCanvas extends JavaPlugin {
                 getLogger(), HikariCanvas.class,
                 getDataFolder().toPath().resolve("templates"));
         templateRegistry.reload();
+        // M7：模板缩略图服务。Registry reload 时调 invalidate() 清缓存
+        templatePreviewService = new TemplatePreviewService(getLogger(), templateRegistry, compositor);
+        wallPreviewService = new WallPreviewService(getLogger(), compositor);
 
         // M3-T10 节流：5fps 投影 + 40msg/2s 输入限流（per session）
         projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector);
@@ -175,12 +189,13 @@ public final class HikariCanvas extends JavaPlugin {
                 event.registrar().register(
                         new CanvasCommand(this, sessionManager, frameDeployer,
                                 tokenService, mapPool, database, wallRepo,
-                                templateRegistry, editorUrlTemplate).build()));
+                                templateRegistry, templatePreviewService, editorUrlTemplate).build()));
 
         webServer = new WebServer(getLogger(), host, port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
-                wallRepo, frameDeployer, templateRegistry, this,
+                wallRepo, frameDeployer, templateRegistry, templatePreviewService,
+                templateAssetService, wallPreviewService, this,
                 version, this::paintAllSessionMaps);
         webServer.start();
 

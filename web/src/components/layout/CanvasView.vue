@@ -5,7 +5,7 @@ import { onKeyStroke } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
-import { renderProjectState } from '@/render/PreviewRenderer';
+import { renderProjectState, onIconReady } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import type { Element } from '@/types/protocol';
@@ -242,6 +242,8 @@ onMounted(() => {
     if (document.fonts && typeof document.fonts.ready?.then === 'function') {
         document.fonts.ready.then(() => requestDraw());
     }
+    // 图标异步加载就绪后请求重绘（每个新 source 第一次显示时占位 ?，加载完后真图替换）
+    onIconReady(() => requestDraw());
 });
 
 let drawPending = false;

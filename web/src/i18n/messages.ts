@@ -59,6 +59,7 @@ export const messages = {
             mapsLabel: (w: number, h: number) => `${w}×${h} 地图`,
             updatedAt: (s: string) => `更新于 ${s}`,
             copyHint: '点击复制命令',
+            refresh: '刷新列表',
         },
         tools: {
             selectTool: '选择工具 (V)：点击选中后显示缩放/旋转锚点，可拖动元素',
@@ -245,6 +246,7 @@ export const messages = {
             mapsLabel: (w: number, h: number) => `${w}×${h} maps`,
             updatedAt: (s: string) => `updated ${s}`,
             copyHint: 'click to copy command',
+            refresh: 'Refresh list',
         },
         tools: {
             selectTool: 'Select tool (V): click to select; resize/rotate handles shown; drag to move',

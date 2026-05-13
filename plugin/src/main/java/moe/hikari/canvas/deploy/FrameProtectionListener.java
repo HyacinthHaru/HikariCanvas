@@ -52,11 +52,17 @@ public final class FrameProtectionListener implements Listener {
     public void onHangingBreakByEntity(HangingBreakByEntityEvent event) {
         if (!(event.getEntity() instanceof ItemFrame frame)) return;
         if (!frameDeployer.isProtectedFrame(frame)) return;
-        // 只有持 force-break 权限的玩家允许
-        if (event.getRemover() instanceof Player p && p.hasPermission(FORCE_BREAK_PERMISSION)) {
-            return;
+        boolean published = frameDeployer.isFramePublished(frame);
+        Player p = event.getRemover() instanceof Player pp ? pp : null;
+        if (!published && p != null && p.hasPermission(FORCE_BREAK_PERMISSION)) {
+            return;  // 草稿 + force-break → 允许
         }
         event.setCancelled(true);
+        if (published && p != null) {
+            p.sendActionBar(Component.text(
+                    "This wall is published. Run /canvas unpublish first.",
+                    NamedTextColor.GOLD));
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -78,14 +84,21 @@ public final class FrameProtectionListener implements Listener {
             for (ItemFrame f : block.getWorld().getNearbyEntitiesByType(
                     ItemFrame.class, adjacent.getLocation().toCenterLocation(), 0.5)) {
                 if (!frameDeployer.isProtectedFrame(f)) continue;
-                // frame.getAttachedFace() = 它贴的墙面方向（指向墙方块）；
-                // 即 face.getOppositeFace()（从 adjacent 指回 block）
                 if (f.getAttachedFace() != face.getOppositeFace()) continue;
-                if (canForce) return;
+                boolean published = frameDeployer.isFramePublished(f);
+                // 已发布 wall：force-break 也不绕过；草稿 wall：force-break 可绕过
+                if (!published && canForce) return;
                 event.setCancelled(true);
-                player.sendMessage(Component.text(
-                        "This block is supporting a HikariCanvas sign; cannot break.",
-                        NamedTextColor.RED));
+                if (published) {
+                    player.sendActionBar(Component.text(
+                            "Wall is published; run /canvas unpublish first to edit.",
+                            NamedTextColor.GOLD));
+                } else {
+                    player.sendActionBar(Component.text(
+                            "This block supports a HikariCanvas sign. "
+                                    + "Op-grant canvas.admin.force-break to bypass.",
+                            NamedTextColor.RED));
+                }
                 return;
             }
         }

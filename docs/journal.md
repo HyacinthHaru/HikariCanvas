@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-05-13 · M7 polish 第二轮：保护 / 预览 / grid / icon / sendWithAck / HomePage 七连发
+
+**用户：「这五项都做了吧」**（实际 7 项）—— B1 / B2 / C1 / C2 / A1 / A2 / A3 一气全跑完，单 commit。
+
+**B2 RendererSnapshot baseline 重建** —— `rm expected/01-hello-world.png`，测试自动重生成；5 个 snapshot 全绿。后续若再现像素漂移，按 CLAUDE.md 提示走同样流程。
+
+**C1 `template.apply` 迁 sendWithAck** —— TemplateGallery.applyNow 改 `await ws.sendWithAck(...)`，移除原 100ms 轮询版本/lastOpError + 1.2s 兜底 setTimeout。错误现在能精准回显（之前 setTimeout 已经关弹窗了用户看不到）。
+
+**A1 grid 布局实装** —— `TemplateLayout` 加 `columns: Integer` / `rows: Integer`。`TemplateInstantiator.gridLayout`：`cellW = (contentW - (cols-1)·gap) / cols` 同理 cellH；element 按 `idx / cols / idx % cols` 落位；超容直接截断。`TemplateLoader` 解禁 `grid` + 校验 `columns >= 1` / `rows >= 1`。
+
+**B1 已发布墙破坏保护** —— `FrameDeployer.isFramePublished` 读 PDC 的 `published_at`。`FrameProtectionListener` 三个 handler 加强：
+- `HangingBreakByEntityEvent`: 已发布 → 拒（含 force-break 权限也拒）；草稿 → 老逻辑（force-break 可绕过）
+- `BlockBreakEvent`: 同上，扫四个水平邻格的画框判断
+- 玩家收 ActionBar 提示 `先 /canvas unpublish` 或 `授 canvas.admin.force-break 才能强拆`
+
+**A3 模板缩略图服务** —— 新 `TemplatePreviewService`：default params + 推荐 `[4, 1]` 画布跑 instantiator → `CanvasCompositor.rasterize` → PNG bytes，按 templateId 缓存。新端点 `GET /api/template/{id}/preview.png` 长缓存 5min。Gallery 卡片用 `<img>` 直接拉（前端没集成进卡片视图，留下一轮；后端基建已就位）。
+
+**A2 icon 元素 — 端到端实装** —— PROPOSAL/template-spec §4.6 之前都标 "v1 不实装"，现在改 "M7 起实装"。
+
+- **State**: 新 `IconElement` record（id/x/y/w/h/rot/locked/visible + `source` + `tint`），加进 `Element` sealed permits。`EditSession.applyIconPatch` 处理 element.update。
+- **Template**: `TemplateElement.Icon` record；`TemplateLoader` 验 `source` 走 `^[a-z0-9_-]{1,32}$`（whitelist 防路径穿越）+ tint 颜色正则；`TemplateInstantiator.materialize` 走通；`naturalHeight/Width` 默认 32。
+- **Asset 服务**: 新包 `template.asset.TemplateAssetService`：classpath `/template-assets/icons/{name}.png` → `dataFolder/assets/icons/{name}.png` 两级 lookup，BufferedImage + PNG bytes 分别缓存。
+- **后端渲染**: `CanvasCompositor` 加 `drawIcon` —— 原色 drawImage / tint 走 `AlphaComposite.SrcIn` 染色到 offscreen 再贴。
+- **HTTP 端点**: `GET /api/template-asset/icons/{name}` 由 `TemplateAssetService.iconPng` 输出 + `Cache-Control: max-age=3600`。
+- **前端渲染**: `PreviewRenderer.drawIcon` —— 异步 Image cache（首次画占位 ?，加载完通过 `onIconReady` 回调让 CanvasView requestDraw）；tint 用 `globalCompositeOperation: 'source-in'`。
+- **4 个 builtin 图标 PNG**: `info` / `warning` / `star` / `arrow_right`，32×32，Python stdlib + zlib 一次性生成（无 PIL 依赖）。
+- **新模板 `info_panel.yml`**: free 布局 + icon + 2 行文本，参数支持挑图标 + 染色，展示新特性。
+
+**C2 HomePage 美化** —— 卡片加 wall 缩略图（新端点 `GET /api/wall/{id}/preview.png`，按 `wallId@updatedAt` 缓存），3 列 grid 布局，hover 轻浮起，已发布卡片绿色边框。空态从纯文字改成大灰 ImageOff 图标 + 居中提示。时间格式 fmtTime 智能化：今天 `14:23` / 本周 `周三 14:23` / 更早 `5月12日 14:23`。新增手动 Refresh 按钮（之前只能刷新页面）。
+
+**新文件：**
+
+- `plugin/src/main/java/moe/hikari/canvas/state/IconElement.java`
+- `plugin/src/main/java/moe/hikari/canvas/template/asset/TemplateAssetService.java`
+- `plugin/src/main/java/moe/hikari/canvas/template/preview/TemplatePreviewService.java`
+- `plugin/src/main/java/moe/hikari/canvas/template/preview/WallPreviewService.java`
+- `plugin/src/main/resources/templates/info_panel.yml`
+- `plugin/src/main/resources/template-assets/icons/{info,warning,star,arrow_right}.png`
+
+**改动文件：**
+
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java` — 注入 asset/preview/wallPreview services
+- `plugin/src/main/java/moe/hikari/canvas/deploy/FrameDeployer.java` — `isFramePublished`
+- `plugin/src/main/java/moe/hikari/canvas/deploy/FrameProtectionListener.java` — 区分已发布 vs 草稿
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java` — `drawIcon` + 可选 assetService
+- `plugin/src/main/java/moe/hikari/canvas/state/{Element,EditSession}.java` — Icon 支持
+- `plugin/src/main/java/moe/hikari/canvas/template/{TemplateElement,TemplateLayout,TemplateLoader,TemplateInstantiator}.java`
+- `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java` — reload 时调 preview.invalidate()
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java` — 4 个新 endpoint（template preview / icon asset / wall preview）
+- `plugin/src/main/resources/templates/_index.txt` — 加 info_panel.yml
+- `plugin/src/test/java/moe/hikari/canvas/template/BuiltinTemplatesTest.java` — info_panel 进 fixture
+- `web/src/types/protocol.ts` — IconElement
+- `web/src/render/PreviewRenderer.ts` — drawIcon + onIconReady hook
+- `web/src/components/layout/CanvasView.vue` — 注册 onIconReady
+- `web/src/components/template/TemplateGallery.vue` — sendWithAck 重写
+- `web/src/components/HomePage.vue` — 缩略图 + hover + 空态 + Refresh + fmtTime
+- `web/src/i18n/messages.ts` — `home.refresh`
+- `docs/template-spec.md` §4.6 / §12 — grid + icon + preview 全部标 ✅
+
+**质量门：** plugin 全部测试通过（含新增 info_panel 进 BuiltinTemplatesTest）；vite build 384KB JS / 31KB CSS。
+
+---
+
 ## 2026-05-13 · M7 polish 第一轮：编辑器美化 + 解释性 UI
 
 **用户诉求：** 进入 M7 polish 但**先不动账号权限**；做编辑器/前端美化；缩放升级；文字表述清楚；按钮要有解释（hover tooltip 或 ? 图标）。

@@ -3,6 +3,7 @@ package moe.hikari.canvas.template;
 import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.Glow;
+import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.Shadow;
 import moe.hikari.canvas.state.Stroke;
@@ -309,9 +310,40 @@ public final class TemplateInstantiator {
         return switch (type) {
             case "stack" -> stackLayout(layout, canvas, params);
             case "free" -> freeLayout(layout, canvas, params);
+            case "grid" -> gridLayout(layout, canvas, params);
             default -> throw new InstantiationException(
                     "INVALID_LAYOUT", "unsupported layout.type: " + type);
         };
+    }
+
+    /**
+     * grid 布局：把 elements 按 {@code columns × rows} 网格平铺到 content 区。
+     * 每个 cell 尺寸 = (contentW - (col-1)·gap) / col 等；多余 elements 落到下一页则截断
+     * （v1 不支持多页，超过 col×row 个的元素直接 skip 并 warn）。每个 cell 内元素居中、
+     * 撑满 cell 减去内边距。
+     */
+    private List<Element> gridLayout(TemplateLayout layout, Canvas canvas,
+                                     Map<String, Object> params) {
+        int cols = layout.columns() != null ? layout.columns() : 1;
+        int rows = layout.rows() != null ? layout.rows() : 1;
+        int gap = layout.gap() == null ? 0 : layout.gap();
+        // 总内距：每行有 (cols-1) 个 gap；每列 (rows-1) 个 gap
+        int cellW = (canvas.contentW - (cols - 1) * gap) / Math.max(1, cols);
+        int cellH = (canvas.contentH - (rows - 1) * gap) / Math.max(1, rows);
+        List<Element> out = new ArrayList<>();
+        int idx = 0;
+        for (TemplateElement el : layout.elements()) {
+            if (!isVisible(el, params)) { idx++; continue; }
+            int row = idx / cols;
+            int col = idx % cols;
+            if (row >= rows) break;  // v1：超容量直接截断
+            int cellX = canvas.contentX + col * (cellW + gap);
+            int cellY = canvas.contentY + row * (cellH + gap);
+            Element materialized = materialize(el, cellX, cellY, cellW, cellH, params);
+            if (materialized != null) out.add(materialized);
+            idx++;
+        }
+        return out;
     }
 
     /** stack 布局：忽略每个 element 自带的 x/y，按 direction 累加 + gap。w 撑满 content。 */
@@ -403,6 +435,10 @@ public final class TemplateInstantiator {
         if (el instanceof TemplateElement.Line l) {
             return l.width() == null ? 1 : l.width();
         }
+        if (el instanceof TemplateElement.Icon ic) {
+            Integer h = asInt(ic.h());
+            return h != null ? h : 32;  // 默认 32×32（最常用图标尺寸）
+        }
         return 0;
     }
 
@@ -435,6 +471,10 @@ public final class TemplateInstantiator {
         }
         if (el instanceof TemplateElement.Line l) {
             return l.width() == null ? 1 : l.width();
+        }
+        if (el instanceof TemplateElement.Icon ic) {
+            Integer w = asInt(ic.w());
+            return w != null ? w : 32;
         }
         return 0;
     }
@@ -519,6 +559,14 @@ public final class TemplateInstantiator {
                     id, x, y, w, h,
                     r.rotation(), false, true,
                     fill, stroke);
+        }
+        if (el instanceof TemplateElement.Icon ic) {
+            String source = interp(ic.source(), params);
+            String tint = ic.tint() == null ? null : interp(ic.tint(), params);
+            return new IconElement(
+                    id, x, y, w, h,
+                    ic.rotation(), false, true,
+                    source, tint);
         }
         // line: v1 不渲染，但保留 instantiate 链路以待 v2+
         return null;

@@ -22,6 +22,9 @@ import moe.hikari.canvas.template.TemplateEntry;
 import moe.hikari.canvas.template.TemplateInstantiator;
 import moe.hikari.canvas.template.TemplateRegistry;
 import moe.hikari.canvas.template.TemplateSpec;
+import moe.hikari.canvas.template.preview.TemplatePreviewService;
+import moe.hikari.canvas.template.preview.WallPreviewService;
+import moe.hikari.canvas.template.asset.TemplateAssetService;
 
 import java.time.Duration;
 import java.util.List;
@@ -66,6 +69,11 @@ public final class WebServer {
     private final org.bukkit.plugin.java.JavaPlugin plugin;
     private final TemplateRegistry templateRegistry;
     private final TemplateInstantiator templateInstantiator = new TemplateInstantiator();
+    private final TemplatePreviewService templatePreviewService;
+    private final TemplateAssetService templateAssetService;
+    private final WallPreviewService wallPreviewService;
+    /** M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes（自然 LRU 容量靠 GC）。 */
+    private final ConcurrentMap<String, byte[]> wallPreviewCache = new ConcurrentHashMap<>();
     private Javalin app;
 
     /** 活跃 session → 绑定的 WS 连接；用于服务端主动推送（state.snapshot / state.patch）。 */
@@ -80,6 +88,9 @@ public final class WebServer {
                      moe.hikari.canvas.storage.WallRepo wallRepo,
                      moe.hikari.canvas.deploy.FrameDeployer frameDeployer,
                      TemplateRegistry templateRegistry,
+                     TemplatePreviewService templatePreviewService,
+                     TemplateAssetService templateAssetService,
+                     WallPreviewService wallPreviewService,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler) {
         this.log = log;
@@ -92,6 +103,9 @@ public final class WebServer {
         this.wallRepo = wallRepo;
         this.frameDeployer = frameDeployer;
         this.templateRegistry = templateRegistry;
+        this.templatePreviewService = templatePreviewService;
+        this.templateAssetService = templateAssetService;
+        this.wallPreviewService = wallPreviewService;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
@@ -136,6 +150,56 @@ public final class WebServer {
             // M5.5：网页首页"近期项目"列表。无玩家认证（127.0.0.1 trust）；返回所有 walls 的 summary
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/walls", ctx -> ctx.json(wallRepo.listAll())));
+
+            // M7：模板缩略图端点。Gallery 卡片 <img> 直接拉这条
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/template/{id}/preview.png", ctx -> {
+                        String id = ctx.pathParam("id");
+                        byte[] png = templatePreviewService.pngFor(id);
+                        if (png == null) {
+                            ctx.status(404);
+                            return;
+                        }
+                        ctx.contentType("image/png");
+                        // 模板内容不变 → 长缓存；reload 后服务端 invalidate，浏览器靠 ETag/304 路径
+                        ctx.header("Cache-Control", "public, max-age=300");
+                        ctx.result(png);
+                    }));
+
+            // M7：wall 缩略图。HomePage 卡片展示用；按 wall.updatedAt 做粗粒度缓存
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/wall/{id}/preview.png", ctx -> {
+                        String wid = ctx.pathParam("id");
+                        var w = wallRepo.loadById(wid).orElse(null);
+                        if (w == null) { ctx.status(404); return; }
+                        byte[] png = wallPreviewCache.computeIfAbsent(
+                                wid + "@" + w.updatedAt(),
+                                key -> wallPreviewService.renderPng(w.state()));
+                        if (png == null) { ctx.status(500); return; }
+                        ctx.contentType("image/png");
+                        ctx.header("Cache-Control", "public, max-age=60");
+                        ctx.result(png);
+                    }));
+
+            // M7：图标资源端点（whitelist 名 + builtin/classpath 优先 + 服主自定义后备）
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/template-asset/icons/{name}", ctx -> {
+                        String name = ctx.pathParam("name");
+                        // 移除 .png 后缀（允许 /icons/foo 也允许 /icons/foo.png）
+                        if (name.endsWith(".png")) name = name.substring(0, name.length() - 4);
+                        if (!TemplateAssetService.isValidName(name)) {
+                            ctx.status(400);
+                            return;
+                        }
+                        byte[] png = templateAssetService.iconPng(name);
+                        if (png == null) {
+                            ctx.status(404);
+                            return;
+                        }
+                        ctx.contentType("image/png");
+                        ctx.header("Cache-Control", "public, max-age=3600");
+                        ctx.result(png);
+                    }));
 
             // WebSocket
             cfg.routes.addWsHandler(WsHandlerType.WEBSOCKET, "/ws", wsCfg -> {

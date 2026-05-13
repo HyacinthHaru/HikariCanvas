@@ -15,6 +15,8 @@ public record TemplateLayout(
         String type,
         String direction,
         Integer gap,
+        Integer columns,
+        Integer rows,
         List<TemplateElement> elements
 ) {
 }

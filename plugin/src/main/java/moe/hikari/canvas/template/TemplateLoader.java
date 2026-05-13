@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.expr.ExpressionParser;
 
 import java.io.IOException;
@@ -40,8 +41,8 @@ public final class TemplateLoader {
     private static final Set<String> ALLOWED_PARAM_TYPES = Set.of(
             "string", "text", "int", "float", "bool", "color", "enum", "font");
 
-    /** M6 v1 实装的 layout type。{@code grid} 推迟到 M7。 */
-    private static final Set<String> ALLOWED_LAYOUT_TYPES = Set.of("stack", "free");
+    /** 实装的 layout type。M7 起 grid 也支持。 */
+    private static final Set<String> ALLOWED_LAYOUT_TYPES = Set.of("stack", "free", "grid");
 
     private final ObjectMapper yamlMapper;
 
@@ -190,8 +191,15 @@ public final class TemplateLoader {
                                        List<String> errors) {
         String type = layout.type();
         if (type == null || !ALLOWED_LAYOUT_TYPES.contains(type)) {
-            errors.add("layout.type '" + type + "' invalid; "
-                    + "M6 v1 supports " + ALLOWED_LAYOUT_TYPES + " (grid -> M7)");
+            errors.add("layout.type '" + type + "' invalid; supports " + ALLOWED_LAYOUT_TYPES);
+        }
+        if ("grid".equals(type)) {
+            if (layout.columns() == null || layout.columns() < 1) {
+                errors.add("layout.type=grid requires columns >= 1");
+            }
+            if (layout.rows() == null || layout.rows() < 1) {
+                errors.add("layout.type=grid requires rows >= 1");
+            }
         }
         List<TemplateElement> els = layout.elements();
         if (els == null || els.isEmpty()) {
@@ -224,6 +232,17 @@ public final class TemplateLoader {
             if (l.from() == null || l.from().size() != 2) errors.add(tag + " 'from' must be [x,y]");
             if (l.to() == null || l.to().size() != 2) errors.add(tag + " 'to' must be [x,y]");
             checkColor(l.color(), errors, tag + ".color");
+        } else if (el instanceof TemplateElement.Icon ic) {
+            if (ic.source() == null || ic.source().isBlank()) {
+                errors.add(tag + " icon missing 'source'");
+            } else if (!ic.source().contains("${")
+                    && !TemplateAssetService.isValidName(ic.source())) {
+                // 含 ${param} 的留实例化期判；纯静态字符串现在就拦
+                errors.add(tag + " icon source '" + ic.source()
+                        + "' invalid (must match " + TemplateAssetService.SAFE_NAME.pattern() + ")");
+            }
+            checkColor(ic.tint(), errors, tag + ".tint");
+            collectParamRefs(ic.source(), paramIds, errors, tag + ".source");
         }
         collectParamRefs(el.visibleWhen(), paramIds, errors, tag + ".visible_when");
         checkExpression(el.visibleWhen(), errors, tag + ".visible_when");

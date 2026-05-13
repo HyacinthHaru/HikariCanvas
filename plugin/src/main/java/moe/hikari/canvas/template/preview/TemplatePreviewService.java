@@ -1,0 +1,156 @@
+package moe.hikari.canvas.template.preview;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import moe.hikari.canvas.render.CanvasCompositor;
+import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.ProjectState;
+import moe.hikari.canvas.template.TemplateEntry;
+import moe.hikari.canvas.template.TemplateInstantiator;
+import moe.hikari.canvas.template.TemplateParam;
+import moe.hikari.canvas.template.TemplateRegistry;
+import moe.hikari.canvas.template.TemplateSpec;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * 模板缩略图服务（M7 polish）。给每个模板渲染一张缩略图供前端 Gallery 卡片显示。
+ *
+ * <p>策略：</p>
+ * <ul>
+ *   <li>缩略图 = 用模板的 default 参数 + 一个"代表性 wall 尺寸"实例化，
+ *       再走 {@link CanvasCompositor} 走完整渲染管线得到 RGBA buffer，最后 PNG 编码</li>
+ *   <li>代表性尺寸 = {@code clamp(min_maps, max_maps, [4, 1])}（在范围内尽量取宽长比 4:1 的标牌形状）</li>
+ *   <li>结果缓存在内存里 {@link #cache}，key = templateId；reload 时清空</li>
+ *   <li>失败的模板（实例化时 INVALID_PARAM 等）→ 不缓存，下次请求重试。前端 fallback 显占位图</li>
+ * </ul>
+ */
+public final class TemplatePreviewService {
+
+    private final Logger log;
+    private final TemplateRegistry registry;
+    private final CanvasCompositor compositor;
+    private final TemplateInstantiator instantiator = new TemplateInstantiator();
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    /** key = templateId；value = PNG bytes（null = 已尝试但失败，不再重试本轮） */
+    private final ConcurrentHashMap<String, byte[]> cache = new ConcurrentHashMap<>();
+
+    public TemplatePreviewService(Logger log, TemplateRegistry registry, CanvasCompositor compositor) {
+        this.log = log;
+        this.registry = registry;
+        this.compositor = compositor;
+    }
+
+    /** Registry reload 后调一次。 */
+    public void invalidate() { cache.clear(); }
+
+    /**
+     * 取（或生成）某模板的 PNG bytes。线程安全：{@link ConcurrentHashMap#computeIfAbsent} 单 flight。
+     * 模板不存在或渲染失败返回 {@code null}（前端 fallback 占位图）。
+     */
+    public byte[] pngFor(String templateId) {
+        TemplateEntry entry = registry.byId(templateId);
+        if (entry == null) return null;
+        return cache.computeIfAbsent(templateId, id -> renderPreview(entry.spec()));
+    }
+
+    private byte[] renderPreview(TemplateSpec spec) {
+        try {
+            int[] dims = chooseDimensions(spec);
+            Map<String, Object> defaults = collectDefaults(spec);
+            TemplateInstantiator.Result r = instantiator.instantiate(spec, defaults, dims[0], dims[1]);
+            if (r instanceof TemplateInstantiator.Result.Failed f) {
+                log.warning("[preview] " + spec.id() + " instantiate failed: "
+                        + f.code() + " — " + String.join("; ", f.errors()));
+                return null;
+            }
+            TemplateInstantiator.Result.Ok ok = (TemplateInstantiator.Result.Ok) r;
+            ProjectState state = stateOf(dims[0], dims[1], ok.backgroundColor(), ok.elements());
+            BufferedImage rgba = compositor.rasterize(state);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream(4096);
+            ImageIO.write(rgba, "PNG", baos);
+            log.fine("[preview] rendered " + spec.id() + " "
+                    + rgba.getWidth() + "x" + rgba.getHeight() + " → " + baos.size() + " B");
+            return baos.toByteArray();
+        } catch (IOException e) {
+            log.log(Level.WARNING, "[preview] PNG encode failed for " + spec.id(), e);
+            return null;
+        } catch (Exception e) {
+            log.log(Level.WARNING, "[preview] render failed for " + spec.id(), e);
+            return null;
+        }
+    }
+
+    /** 优先 4×1，缺则收敛到 [min, max] 内尽量接近的尺寸。 */
+    private static int[] chooseDimensions(TemplateSpec spec) {
+        int wantW = 4, wantH = 1;
+        if (spec.canvas() == null) return new int[]{wantW, wantH};
+        if ("fixed".equals(spec.canvas().size()) && spec.canvas().maps() != null
+                && spec.canvas().maps().size() == 2) {
+            return new int[]{spec.canvas().maps().get(0), spec.canvas().maps().get(1)};
+        }
+        List<Integer> min = spec.canvas().minMaps();
+        List<Integer> max = spec.canvas().maxMaps();
+        int minW = min != null ? min.get(0) : 1;
+        int minH = min != null ? min.get(1) : 1;
+        int maxW = max != null ? max.get(0) : 8;
+        int maxH = max != null ? max.get(1) : 4;
+        int w = Math.min(maxW, Math.max(minW, wantW));
+        int h = Math.min(maxH, Math.max(minH, wantH));
+        return new int[]{w, h};
+    }
+
+    private static Map<String, Object> collectDefaults(TemplateSpec spec) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (spec.params() == null) return out;
+        for (var e : spec.params().entrySet()) {
+            TemplateParam p = e.getValue();
+            if (p == null) continue;
+            if (p.defaultValue() != null) {
+                out.put(e.getKey(), p.defaultValue());
+                continue;
+            }
+            // 非必填可省；必填但无默认 → 给一个占位（避免 INVALID_PARAM）
+            if (p.required()) {
+                out.put(e.getKey(), placeholderFor(p));
+            }
+        }
+        return out;
+    }
+
+    private static Object placeholderFor(TemplateParam p) {
+        return switch (p.type() == null ? "string" : p.type()) {
+            case "int" -> 0;
+            case "float" -> 0.0;
+            case "bool" -> Boolean.FALSE;
+            case "color" -> "#888888";
+            default -> "—";
+        };
+    }
+
+    /**
+     * 直接组装 ProjectState：用我们已有的 Jackson @JsonCreator 入口绕开 mutator
+     * package-private 的限制。
+     */
+    private ProjectState stateOf(int widthMaps, int heightMaps, String background,
+                                 List<Element> elements) {
+        Map<String, Object> shape = Map.of(
+                "version", 0,
+                "canvas", Map.of(
+                        "widthMaps", widthMaps,
+                        "heightMaps", heightMaps,
+                        "background", background == null ? "#FFFFFF" : background),
+                "elements", elements,
+                "history", Map.of("undoDepth", 0, "redoDepth", 0));
+        return mapper.convertValue(shape, ProjectState.class);
+    }
+}

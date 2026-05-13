@@ -7,3 +7,4 @@ shop_sign.yml
 welcome_banner.yml
 bulletin_board.yml
 nameplate.yml
+info_panel.yml

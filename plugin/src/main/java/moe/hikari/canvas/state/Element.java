@@ -16,8 +16,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 @JsonSubTypes({
         @JsonSubTypes.Type(value = TextElement.class, name = "text"),
         @JsonSubTypes.Type(value = RectElement.class, name = "rect"),
+        @JsonSubTypes.Type(value = IconElement.class, name = "icon"),
 })
-public sealed interface Element permits TextElement, RectElement {
+public sealed interface Element permits TextElement, RectElement, IconElement {
 
     /** {@code "e-<uuid>"}，由服务端生成，全局唯一。 */
     String id();

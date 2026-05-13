@@ -152,6 +152,7 @@ public final class EditSession {
             updated = switch (existing) {
                 case TextElement t -> applyTextPatch(t, patch);
                 case RectElement r -> applyRectPatch(r, patch);
+                case IconElement ic -> applyIconPatch(ic, patch);
             };
         } catch (ValidationException ve) {
             return err(ve.code, ve.getMessage());
@@ -560,6 +561,41 @@ public final class EditSession {
             throw new ValidationException("INVALID_ELEMENT", "rect needs fill or non-zero stroke");
         }
         return new RectElement(r.id(), x, y, w, h, rotation, locked, visible, fill, stroke);
+    }
+
+    private IconElement applyIconPatch(IconElement ic, Map<String, Object> patch) {
+        int x = ic.x(); int y = ic.y(); int w = ic.w(); int h = ic.h();
+        int rotation = ic.rotation();
+        boolean locked = ic.locked(); boolean visible = ic.visible();
+        String source = ic.source();
+        String tint = ic.tint();
+
+        for (var e : patch.entrySet()) {
+            String k = e.getKey(); Object v = e.getValue();
+            switch (k) {
+                case "x" -> { x = intValue(v, k); validateCoord(x, k); }
+                case "y" -> { y = intValue(v, k); validateCoord(y, k); }
+                case "w" -> { w = intValue(v, k); validateDim(w, k); }
+                case "h" -> { h = intValue(v, k); validateDim(h, k); }
+                case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
+                case "locked" -> locked = boolValue(v, k);
+                case "visible" -> visible = boolValue(v, k);
+                case "source" -> {
+                    source = requireStringValue(v, k);
+                    if (!source.matches("^[a-z0-9_-]{1,32}$")) {
+                        throw new ValidationException("INVALID_PAYLOAD",
+                                "icon source must match [a-z0-9_-]{1,32}: " + source);
+                    }
+                }
+                case "tint" -> {
+                    if (v == null) tint = null;
+                    else { tint = requireStringValue(v, k); validateColor(tint); }
+                }
+                default -> throw new ValidationException("INVALID_PAYLOAD",
+                        "unknown icon field: " + k);
+            }
+        }
+        return new IconElement(ic.id(), x, y, w, h, rotation, locked, visible, source, tint);
     }
 
     // ---------- 校验 helpers ----------

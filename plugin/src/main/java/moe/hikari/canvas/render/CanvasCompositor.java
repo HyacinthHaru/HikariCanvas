@@ -2,12 +2,15 @@ package moe.hikari.canvas.render;
 
 import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.Shadow;
 import moe.hikari.canvas.state.Stroke;
 import moe.hikari.canvas.state.TextElement;
+import moe.hikari.canvas.template.asset.TemplateAssetService;
 
+import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
@@ -55,11 +58,18 @@ public final class CanvasCompositor {
 
     private final PaletteLut paletteLut;
     private final FontRegistry fontRegistry;
+    private final TemplateAssetService assetService;  // 可空：测试 / 历史调用方
     private final Logger log;
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry, Logger log) {
+        this(paletteLut, fontRegistry, null, log);
+    }
+
+    public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry,
+                            TemplateAssetService assetService, Logger log) {
         this.paletteLut = paletteLut;
         this.fontRegistry = fontRegistry;
+        this.assetService = assetService;
         this.log = log;
     }
 
@@ -96,6 +106,7 @@ public final class CanvasCompositor {
                 switch (e) {
                     case RectElement r -> drawRect(g, r);
                     case TextElement t -> drawText(g, t);
+                    case IconElement ic -> drawIcon(g, ic);
                 }
                 if (savedTx != null) {
                     g.setTransform(savedTx);
@@ -147,6 +158,47 @@ public final class CanvasCompositor {
     }
 
     // ---------- 元素绘制 ----------
+
+    /**
+     * 绘制图标元素。{@code tint} 非空时对图标 alpha 做"source-in"染色 —— 保留 alpha 形状、
+     * 整体替换为 tint 色（适合纯白图标 + 主题色染色）。
+     */
+    private void drawIcon(Graphics2D g, IconElement ic) {
+        if (assetService == null) {
+            log.warning("[compositor] IconElement '" + ic.id() + "' but no assetService bound");
+            return;
+        }
+        BufferedImage img = assetService.loadIcon(ic.source());
+        if (img == null) {
+            // 占位：画个虚线方框 + ?，方便定位"图标 source 错"
+            g.setColor(new Color(0xAAAAAA));
+            g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+                    1f, new float[]{3f, 2f}, 0f));
+            g.drawRect(ic.x(), ic.y(), Math.max(1, ic.w() - 1), Math.max(1, ic.h() - 1));
+            g.setStroke(new BasicStroke(1f));
+            g.drawString("?", ic.x() + ic.w() / 2 - 3, ic.y() + ic.h() / 2 + 4);
+            return;
+        }
+        if (ic.tint() == null || ic.tint().isBlank()) {
+            // 原色直接缩放绘制
+            g.drawImage(img, ic.x(), ic.y(), ic.w(), ic.h(), null);
+            return;
+        }
+        // 染色：先画 tinted 形状 (source-in 合成) 到临时图，再贴
+        BufferedImage tinted = new BufferedImage(ic.w(), ic.h(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D tg = tinted.createGraphics();
+        try {
+            tg.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            tg.drawImage(img, 0, 0, ic.w(), ic.h(), null);
+            tg.setComposite(AlphaComposite.SrcIn);
+            tg.setColor(parseColor(ic.tint()));
+            tg.fillRect(0, 0, ic.w(), ic.h());
+        } finally {
+            tg.dispose();
+        }
+        g.drawImage(tinted, ic.x(), ic.y(), null);
+    }
 
     private void drawRect(Graphics2D g, RectElement r) {
         if (r.fill() != null) {

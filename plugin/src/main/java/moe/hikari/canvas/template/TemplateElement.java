@@ -22,9 +22,10 @@ import java.util.List;
         @JsonSubTypes.Type(value = TemplateElement.Text.class, name = "text"),
         @JsonSubTypes.Type(value = TemplateElement.Rect.class, name = "rect"),
         @JsonSubTypes.Type(value = TemplateElement.Line.class, name = "line"),
+        @JsonSubTypes.Type(value = TemplateElement.Icon.class, name = "icon"),
 })
 public sealed interface TemplateElement
-        permits TemplateElement.Text, TemplateElement.Rect, TemplateElement.Line {
+        permits TemplateElement.Text, TemplateElement.Rect, TemplateElement.Line, TemplateElement.Icon {
 
     /** 元素类型字符串。Jackson 由 {@code @JsonTypeInfo} 自动填充。 */
     String type();
@@ -100,5 +101,23 @@ public sealed interface TemplateElement
             List<Integer> to,
             Integer width,
             String color
+    ) implements TemplateElement {}
+
+    // ---------------- icon ----------------
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record Icon(
+            String type,
+            String id,
+            Object x, Object y, Object w, Object h,
+            int rotation,
+            Object visible,
+            @JsonProperty("z_order") int zOrder,
+            @JsonProperty("visible_when") String visibleWhen,
+
+            /** 图标资源名（不带路径 / 扩展名）；验证后由 TemplateAssetService 解析为 PNG */
+            String source,
+            /** 染色 #RRGGBB[AA]；null = 原色 */
+            String tint
     ) implements TemplateElement {}
 }

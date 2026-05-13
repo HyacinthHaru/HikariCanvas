@@ -36,7 +36,8 @@ class BuiltinTemplatesTest {
                 new Object[]{"shop_sign",       3, 1, 3},   // shop + item + price
                 new Object[]{"welcome_banner",  4, 2, 2},   // title + subtitle（footer 默认隐藏）
                 new Object[]{"bulletin_board",  3, 1, 3},   // title + divider + body（落款默认空隐藏）
-                new Object[]{"nameplate",       2, 1, 3}    // border + house_no + owner
+                new Object[]{"nameplate",       2, 1, 3},   // border + house_no + owner
+                new Object[]{"info_panel",      3, 1, 3}    // icon + title + body (M7 新增)
         );
     }
 
@@ -64,7 +65,7 @@ class BuiltinTemplatesTest {
         TemplateRegistry.ReloadStats stats = reg.reload();
         assertEquals(0, stats.failed(), "reload failures: " + stats.failures());
         List<String> required = List.of("hello_world", "subway_station",
-                "shop_sign", "welcome_banner", "bulletin_board", "nameplate");
+                "shop_sign", "welcome_banner", "bulletin_board", "nameplate", "info_panel");
         for (String id : required) {
             TemplateEntry e = reg.byId(id);
             assertNotNull(e, "registry missing builtin id '" + id + "'");

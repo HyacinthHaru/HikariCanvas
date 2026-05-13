@@ -165,17 +165,23 @@ layout:
   color: "#000000"
 ```
 
-### 4.6 icon 元素（v1.x）
+### 4.6 icon 元素
 
 ```yaml
 - type: icon
-  source: "icons/subway.png"   # 模板包内路径
+  source: warning          # 图标资源名（^[a-z0-9_-]{1,32}$；whitelist 防路径穿越）
+  x: 0
+  y: 0
   w: 32
   h: 32
-  tint: "${line_color}"
+  tint: "${line_color}"    # 染色（source-in 合成；保留 alpha 形状、替换色）；空 = 原色
 ```
 
-v1.0 不实现，保留字段定义避免后续破坏兼容。
+**M7 起实装。** 解析阶段对 `source` 做严格 whitelist 校验（小写字母数字 `_-`，长度 1-32）。运行期解析顺序：先 classpath `template-assets/icons/<source>.png`（jar 内 builtin）→ 后 `plugins/HikariCanvas/assets/icons/<source>.png`（服主自定义）。找不到 → 占位虚线方框 + `?`，不阻塞渲染。
+
+后端用 `AlphaComposite.SrcIn` 染色，前端用 `globalCompositeOperation: 'source-in'`，**两端语义一致**。前端通过 `/api/template-asset/icons/<source>.png` 拿真图，按 `image-rendering: pixelated` 显示。
+
+内置图标：`info` / `warning` / `star` / `arrow_right`（32×32，纯白 alpha 形状，配合 `tint` 用）。
 
 ---
 
@@ -293,7 +299,7 @@ visible_when: "show_english == true && name != \"\""
 
 **Apply 语义（M6 决策）：replace**——`template.apply` 清空当前 wall 的 `elements` 列表 + 改 `canvas.background`，写入模板实例化产物。前端 UI 必须在调用前弹"应用会覆盖当前内容"二次确认。merge 语义（保留现有自由元素 + 叠加模板）留 v2+。
 
-**Layout 实装范围（M6 v1）：** `stack` + `free`。`grid` 推迟到 M7 polish。
+**Layout 实装范围：** `stack` + `free` + `grid`（M7 起 grid 实装；按 `columns × rows` 平铺，超容截断）。
 
 **关联 walls 表：** apply 成功后服务端写入 `walls.template_id` 与 `walls.template_version`，便于「网页首页 / `/canvas list` 显示该 wall 出自哪个模板」。但模板**不是**运行时活对象——实例化后即转为普通工程数据，玩家可任意自由编辑，修改不影响源模板，亦不影响 `template_id` 字段（保留作 audit）。
 
@@ -435,7 +441,7 @@ v1.0 不实现，`pack.yml` 字段设计在 v2.0 专项讨论。
 ## 12. 未决问题
 
 - [ ] 是否允许模板间继承（`extends: base_template`）—— v2+
-- [ ] `grid` 布局细节（固定单元尺寸 vs 自适应）—— **M6 v1 不实装**，留 M7 polish
-- [ ] 参数组（`group`）的 UI 表现细节 —— **M6 v1 接受字段但不渲染**，扁平一列展开；UI 分组留 M7
-- [ ] 模板 `preview` 图片尺寸与格式规范 —— M6 v1 用 placeholder；规范留 M7
+- [x] `grid` 布局细节 —— **M7 实装**：按 `columns × rows` 平铺、cell 尺寸 = `(content - (n-1)·gap) / n`；超容截断
+- [ ] 参数组（`group`）的 UI 表现细节 —— **M6 v1 接受字段但不渲染**，扁平一列展开；UI 分组留 M7+
+- [x] 模板 `preview` 图片尺寸与格式规范 —— **M7 改为服务端动态渲染**：`/api/template/{id}/preview.png` 用 default params 跑 instantiator + compositor 输出 PNG，模板里的 `preview` 字段 v1 不再用
 - [x] 百分比计算在 `stack` 布局下的父容器定义 —— **M6-C 已固化**：父容器 = canvas 内容区（canvas pixel 尺寸减 padding 的 4 元数组），与 `free` 一致。stack 内 element 的 `w/h` 默认撑满父容器；显式 N% 也按父容器算

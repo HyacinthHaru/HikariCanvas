@@ -95,7 +95,7 @@ function resetParams() {
     templates.resetParams(templates.selectedId);
 }
 
-function applyNow() {
+async function applyNow() {
     const tpl = selected.value;
     if (!tpl) return;
     if (hasExistingContent.value && confirmStage.value !== 'pending') {
@@ -105,44 +105,26 @@ function applyNow() {
     confirmStage.value = 'applying';
     lastError.value = null;
 
-    // 捕获基线，轮询其中一个变了来判定成功/失败
-    const versionBefore = project.state?.version ?? -1;
-    const errTsBefore = net.lastOpError?.ts ?? 0;
-    const startedAt = Date.now();
-
-    ws.send('template.apply', {
-        templateId: tpl.id,
-        params: draftParams.value,
-    });
-
-    const timer = window.setInterval(() => {
-        if (confirmStage.value !== 'applying') {
-            window.clearInterval(timer);
-            return;
-        }
-        const versionNow = project.state?.version ?? -1;
-        if (versionNow > versionBefore) {
-            // 服务端回了 state.snapshot → 应用成功
-            window.clearInterval(timer);
-            confirmStage.value = null;
-            close();
-            return;
-        }
-        const errTsNow = net.lastOpError?.ts ?? 0;
-        if (errTsNow > errTsBefore) {
-            // 服务端回了 error envelope → 显示错误，模态保持
-            window.clearInterval(timer);
-            confirmStage.value = null;
-            const e = net.lastOpError;
-            lastError.value = e ? `${e.code}: ${e.message}` : t.value.templates.applyFailed;
-            return;
-        }
-        if (Date.now() - startedAt > 5000) {
-            window.clearInterval(timer);
-            confirmStage.value = null;
+    try {
+        await ws.sendWithAck('template.apply', {
+            templateId: tpl.id,
+            params: draftParams.value,
+        }, 8000);
+        // ack 落地 = 服务端 replaceContent 已成功 + state.snapshot 已下行
+        confirmStage.value = null;
+        close();
+    } catch (e) {
+        const msg = (e as Error).message;
+        confirmStage.value = null;
+        if (msg === 'ack_timeout') {
             lastError.value = t.value.templates.applyTimeout;
+        } else if (msg === 'send_failed') {
+            lastError.value = t.value.templates.applyFailed;
+        } else {
+            // 服务端错误 envelope 的 code/message 拼接在 Error.message 里
+            lastError.value = msg || t.value.templates.applyFailed;
         }
-    }, 100);
+    }
 }
 
 function cancelConfirm() {

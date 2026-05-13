@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue';
-import { Globe, Pencil, MapPin, Clock, Tag } from 'lucide-vue-next';
+import { Globe, Pencil, MapPin, Clock, Tag, ImageOff, RefreshCw } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 
 interface WallSummary {
@@ -21,6 +21,7 @@ interface WallSummary {
 const { t } = useI18n();
 const walls = ref<WallSummary[]>([]);
 const loading = ref(true);
+const refreshing = ref(false);
 const error = ref<string | null>(null);
 const copiedId = ref<string | null>(null);
 let copiedTimer: number | null = null;
@@ -28,20 +29,37 @@ let copiedTimer: number | null = null;
 const published = computed(() => walls.value.filter(w => w.publishedAt != null));
 const drafts = computed(() => walls.value.filter(w => w.publishedAt == null));
 
-onMounted(async () => {
+async function loadWalls(isManualRefresh = false) {
+    if (isManualRefresh) refreshing.value = true;
     try {
         const r = await fetch('/api/walls');
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         walls.value = await r.json();
+        error.value = null;
     } catch (e) {
         error.value = (e as Error).message;
     } finally {
         loading.value = false;
+        refreshing.value = false;
     }
-});
+}
+
+onMounted(() => loadWalls(false));
 
 function fmtTime(ts: number): string {
-    return new Date(ts).toLocaleString();
+    const d = new Date(ts);
+    // 简短：今天 → 14:23；本周 → 周三 14:23；更早 → 5月12日 14:23
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    if (sameDay) return `${hh}:${mm}`;
+    const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+    if (diffDays < 7) {
+        const weekdays = ['日','一','二','三','四','五','六'];
+        return `周${weekdays[d.getDay()]} ${hh}:${mm}`;
+    }
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
 }
 
 function copyOpenCmd(wallId: string) {
@@ -53,53 +71,73 @@ function copyOpenCmd(wallId: string) {
         copiedTimer = null;
     }, 900);
 }
+
+function previewUrl(w: WallSummary): string {
+    return `/api/wall/${encodeURIComponent(w.wallId)}/preview.png?t=${w.updatedAt}`;
+}
 </script>
 
 <template>
   <div class="h-screen w-screen flex flex-col bg-[color:var(--background)] text-[color:var(--foreground)] overflow-auto">
-    <header class="px-6 py-5 border-b border-[color:var(--border)]">
-      <h1 class="text-xl font-semibold tracking-tight">HikariCanvas</h1>
-      <p class="text-sm text-[color:var(--muted-foreground)] mt-1">
-        {{ t.home.heading }} · {{ t.home.subtitle }}<code class="px-1 py-0.5 rounded bg-[color:var(--secondary)] font-mono text-xs">{{ t.home.subtitleCmd }}</code>{{ t.home.subtitleSuffix }}
-      </p>
+    <header class="px-6 py-5 border-b border-[color:var(--border)] flex items-center gap-3">
+      <div class="flex-1 min-w-0">
+        <h1 class="text-xl font-semibold tracking-tight">HikariCanvas</h1>
+        <p class="text-sm text-[color:var(--muted-foreground)] mt-1">
+          {{ t.home.heading }} · {{ t.home.subtitle }}<code class="px-1 py-0.5 rounded bg-[color:var(--secondary)] font-mono text-xs">{{ t.home.subtitleCmd }}</code>{{ t.home.subtitleSuffix }}
+        </p>
+      </div>
+      <button
+        class="p-2 rounded hover:bg-[color:var(--accent)] text-[color:var(--muted-foreground)] disabled:opacity-40"
+        :disabled="refreshing"
+        :title="t.home.refresh"
+        @click="loadWalls(true)"
+      >
+        <RefreshCw class="size-4" :class="refreshing ? 'animate-spin' : ''" />
+      </button>
     </header>
 
-    <main class="flex-1 px-6 py-6 max-w-5xl w-full mx-auto">
+    <main class="flex-1 px-6 py-6 max-w-6xl w-full mx-auto">
       <div v-if="loading" class="text-sm text-[color:var(--muted-foreground)]">{{ t.home.loading }}</div>
       <div v-else-if="error" class="text-sm text-red-400">{{ t.home.failed(error) }}</div>
-      <div v-else-if="walls.length === 0" class="text-sm text-[color:var(--muted-foreground)]">
-        {{ t.home.empty }}
+      <div v-else-if="walls.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-center">
+        <ImageOff class="size-12 text-[color:var(--muted-foreground)] opacity-40" />
+        <div class="text-sm text-[color:var(--muted-foreground)] max-w-md">
+          {{ t.home.empty }}
+        </div>
       </div>
       <div v-else class="space-y-8">
         <section v-if="published.length > 0">
           <h2 class="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3">
-            <Globe class="size-4 text-emerald-400" /> {{ t.home.publishedGroup(published.length) }}
+            <Globe class="size-4 text-emerald-500" /> {{ t.home.publishedGroup(published.length) }}
           </h2>
-          <ul class="grid gap-3 grid-cols-1 md:grid-cols-2">
+          <ul class="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             <li v-for="w in published" :key="w.wallId" class="hc-wall-card hc-wall-published">
+              <div class="hc-wall-thumb" :style="{ aspectRatio: `${w.widthMaps} / ${w.heightMaps}` }">
+                <img :src="previewUrl(w)" loading="lazy" alt="" />
+              </div>
               <div class="flex flex-col gap-1.5 p-3">
-                <div class="flex items-center gap-2 text-base font-mono">
-                  <span class="select-all">{{ w.wallId }}</span>
-                  <span v-if="w.alias" class="flex items-center gap-1 text-sm font-sans text-[color:var(--muted-foreground)]">
-                    <Tag class="size-3" />{{ w.alias }}
+                <div class="flex items-center gap-2 text-sm font-mono truncate">
+                  <span class="select-all truncate">{{ w.wallId }}</span>
+                  <span v-if="w.alias" class="flex items-center gap-1 text-xs font-sans text-[color:var(--muted-foreground)] truncate">
+                    <Tag class="size-3 shrink-0" /><span class="truncate">{{ w.alias }}</span>
                   </span>
                 </div>
-                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
-                  <MapPin class="size-3" />
-                  <span>{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
+                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)] truncate">
+                  <MapPin class="size-3 shrink-0" />
+                  <span class="truncate">{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
                 </div>
-                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
-                  <span>{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
+                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)]">
+                  <span class="tabular-nums">{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
                   <span class="opacity-50">·</span>
                   <Clock class="size-3" />
-                  <span>{{ t.home.updatedAt(fmtTime(w.updatedAt)) }}</span>
+                  <span>{{ fmtTime(w.updatedAt) }}</span>
                 </div>
                 <code
-                  class="mt-1 text-xs px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors"
+                  class="mt-1 text-[11px] px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors truncate"
                   :title="t.home.copyHint"
                   @click="copyOpenCmd(w.wallId)"
                 >
-                  <span v-if="copiedId === w.wallId" class="text-emerald-400">{{ t.wall.copied }}</span>
+                  <span v-if="copiedId === w.wallId" class="text-emerald-500">{{ t.wall.copied }}</span>
                   <span v-else>/canvas open {{ w.wallId }}</span>
                 </code>
               </div>
@@ -110,31 +148,34 @@ function copyOpenCmd(wallId: string) {
           <h2 class="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3">
             <Pencil class="size-4" /> {{ t.home.draftsGroup(drafts.length) }}
           </h2>
-          <ul class="grid gap-3 grid-cols-1 md:grid-cols-2">
+          <ul class="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             <li v-for="w in drafts" :key="w.wallId" class="hc-wall-card">
+              <div class="hc-wall-thumb" :style="{ aspectRatio: `${w.widthMaps} / ${w.heightMaps}` }">
+                <img :src="previewUrl(w)" loading="lazy" alt="" />
+              </div>
               <div class="flex flex-col gap-1.5 p-3">
-                <div class="flex items-center gap-2 text-base font-mono">
-                  <span class="select-all">{{ w.wallId }}</span>
-                  <span v-if="w.alias" class="flex items-center gap-1 text-sm font-sans text-[color:var(--muted-foreground)]">
-                    <Tag class="size-3" />{{ w.alias }}
+                <div class="flex items-center gap-2 text-sm font-mono truncate">
+                  <span class="select-all truncate">{{ w.wallId }}</span>
+                  <span v-if="w.alias" class="flex items-center gap-1 text-xs font-sans text-[color:var(--muted-foreground)] truncate">
+                    <Tag class="size-3 shrink-0" /><span class="truncate">{{ w.alias }}</span>
                   </span>
                 </div>
-                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
-                  <MapPin class="size-3" />
-                  <span>{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
+                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)] truncate">
+                  <MapPin class="size-3 shrink-0" />
+                  <span class="truncate">{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
                 </div>
-                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
-                  <span>{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
+                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)]">
+                  <span class="tabular-nums">{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
                   <span class="opacity-50">·</span>
                   <Clock class="size-3" />
-                  <span>{{ t.home.updatedAt(fmtTime(w.updatedAt)) }}</span>
+                  <span>{{ fmtTime(w.updatedAt) }}</span>
                 </div>
                 <code
-                  class="mt-1 text-xs px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors"
+                  class="mt-1 text-[11px] px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors truncate"
                   :title="t.home.copyHint"
                   @click="copyOpenCmd(w.wallId)"
                 >
-                  <span v-if="copiedId === w.wallId" class="text-emerald-400">{{ t.wall.copied }}</span>
+                  <span v-if="copiedId === w.wallId" class="text-emerald-500">{{ t.wall.copied }}</span>
                   <span v-else>/canvas open {{ w.wallId }}</span>
                 </code>
               </div>
@@ -149,10 +190,47 @@ function copyOpenCmd(wallId: string) {
 <style scoped>
 .hc-wall-card {
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--card);
+    overflow: hidden;
+    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+    display: flex;
+    flex-direction: column;
+}
+.hc-wall-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px -4px rgba(0,0,0,0.18);
+    border-color: var(--ring);
 }
 .hc-wall-published {
-    border-color: rgb(16 185 129 / 0.3);
+    border-color: rgb(16 185 129 / 0.4);
+}
+.hc-wall-published:hover {
+    box-shadow: 0 6px 16px -4px rgba(16, 185, 129, 0.25);
+}
+/* 缩略图 */
+.hc-wall-thumb {
+    width: 100%;
+    background:
+        repeating-linear-gradient(
+            45deg,
+            color-mix(in srgb, var(--border) 30%, transparent),
+            color-mix(in srgb, var(--border) 30%, transparent) 6px,
+            transparent 6px,
+            transparent 12px
+        ),
+        var(--secondary);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+.hc-wall-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+    display: block;
 }
 </style>

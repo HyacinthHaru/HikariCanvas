@@ -1,4 +1,4 @@
-import type { ProjectState, Element, RectElement, TextElement, Glow } from '@/types/protocol';
+import type { ProjectState, Element, RectElement, TextElement, IconElement, Glow } from '@/types/protocol';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 
 /**
@@ -40,7 +40,68 @@ function drawElement(ctx: CanvasRenderingContext2D, e: Element): void {
     }
     if (e.type === 'rect') drawRect(ctx, e);
     else if (e.type === 'text') drawText(ctx, e);
+    else if (e.type === 'icon') drawIcon(ctx, e);
     ctx.restore();
+}
+
+// ---------- Icon 图标 ----------
+//
+// 加载策略：源走 /api/template-asset/icons/<source>.png。Image 是异步的，但 renderProjectState
+// 是同步函数 —— 因此首次绘制时图未就绪，画占位 ?；图加载完毕调用 onIconReady() 回调，外层
+// CanvasView 的 requestDraw 会再触发一次完整重绘。
+
+interface IconCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; }
+const iconCache = new Map<string, IconCacheEntry>();
+let iconReadyHook: (() => void) | null = null;
+
+/** CanvasView 注册：图标异步加载完成后请求重绘 */
+export function onIconReady(hook: () => void) { iconReadyHook = hook; }
+
+function getIconImage(source: string): IconCacheEntry {
+    let entry = iconCache.get(source);
+    if (entry) return entry;
+    const img = new Image();
+    entry = { img, ready: false, failed: false };
+    iconCache.set(source, entry);
+    img.onload = () => { entry!.ready = true; iconReadyHook?.(); };
+    img.onerror = () => { entry!.failed = true; iconReadyHook?.(); };
+    img.src = `/api/template-asset/icons/${encodeURIComponent(source)}.png`;
+    return entry;
+}
+
+function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
+    const entry = getIconImage(ic.source);
+    if (entry.failed || !entry.ready) {
+        // 占位：虚线方框 + ?
+        ctx.save();
+        ctx.strokeStyle = '#AAAAAA';
+        ctx.setLineDash([3, 2]);
+        ctx.strokeRect(ic.x + 0.5, ic.y + 0.5, ic.w - 1, ic.h - 1);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#AAAAAA';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', ic.x + ic.w / 2, ic.y + ic.h / 2);
+        ctx.restore();
+        return;
+    }
+    if (!ic.tint) {
+        ctx.drawImage(entry.img, ic.x, ic.y, ic.w, ic.h);
+        return;
+    }
+    // tint：先画到 offscreen canvas，再 source-in 染色，最后贴到主 canvas
+    const off = document.createElement('canvas');
+    off.width = ic.w;
+    off.height = ic.h;
+    const octx = off.getContext('2d');
+    if (!octx) { ctx.drawImage(entry.img, ic.x, ic.y, ic.w, ic.h); return; }
+    octx.imageSmoothingEnabled = false;
+    octx.drawImage(entry.img, 0, 0, ic.w, ic.h);
+    octx.globalCompositeOperation = 'source-in';
+    octx.fillStyle = ic.tint;
+    octx.fillRect(0, 0, ic.w, ic.h);
+    ctx.drawImage(off, ic.x, ic.y);
 }
 
 function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
