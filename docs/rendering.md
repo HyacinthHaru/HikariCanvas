@@ -160,7 +160,24 @@ fonts:
 
 - 整个工程渲染到单张大画布：`widthMaps × 128 × heightMaps × 128` 像素的 `BufferedImage TYPE_INT_ARGB`（Java）/ `ImageData`（JS）
 - 背景先填充 `canvas.background`
-- 每个元素按其 `x, y, w, h` 栅格化到此画布
+- **v2 起：分层渲染。** 对每个 visible+unlocked 的 layer：
+  1. 分配同尺寸 ARGB layer-buffer
+  2. 在 layer-buffer 上按层内 z-order 绘制每个 visible element（element 自己的 opacity + blendMode 在此层 buffer 内生效）
+  3. 用 `layer.opacity` + `layer.blendMode` 把 layer-buffer 合成到主 buffer
+- 最终主 buffer 走 §6 量化
+
+详细 opacity / blendMode 公式见 §6.5 / §6.6。grid / guides **不参与栅格化**（只在前端预览叠加层画，详见 §4.5）。
+
+### 4.5 网格与参考线（v2 引入，仅前端）
+
+`canvas.gridSize > 0` 时在编辑器 Canvas 上叠加网格（每 N 像素一条浅灰线）。`canvas.guides[]` 渲染为绿/紫细线。两者：
+
+- **不**进入 §4.1 主 buffer
+- **不**参与 §6 量化
+- **不**经过 §7 切片
+- 游戏内 MC 地图看不到这两样
+
+实现：CanvasView 在主 `<canvas>`（渲染主 buffer）之上加一个独立的 `<canvas>` overlay，每帧重画网格 + guides 线条。fly-out 标尺供拖出新 guide，guides[] 改动经 `canvas.guides.set` op 同步到服务端持久化。
 
 ### 4.2 Graphics2D 必设项（Java）
 
@@ -287,10 +304,65 @@ for r in 0..31: for g in 0..31: for b in 0..31:
 
 不支持半透明像素（MC 地图原生不支持 alpha）。文字的半透明抗锯齿边缘也会被硬截断——这是必须关抗锯齿的另一原因。
 
-### 6.5 可选：Dithering
+### 6.5 元素级 opacity（M8 协议 v2 引入）
 
-默认 **不做 dithering**（像素风不需要）。
-可配置 `render.dither: "none" | "floyd-steinberg"`，双端都实现，snapshot 测试覆盖。v1.0 仅实现 `none`。
+`element.opacity ∈ [0, 1]`、`layer.opacity ∈ [0, 1]`。MC 调色板**不支持半透明**，所以语义不是"真透明"而是**"颜色变浅"**：
+
+- 渲染流程：layer 内每个 element 用其 `opacity` 与 layer buffer 做 alpha-composite；layer 自身再用 `layer.opacity` 与下一层 buffer 做 alpha-composite
+- 最终主 buffer 走 §6.4 硬截断量化
+- 结果：`opacity = 0.5` 的红色 `(255, 0, 0)` 落在白底上变成 `(255, 128, 128)` → 量化后是某个粉色调色板索引
+
+**双端契约：** Java `AlphaComposite.SrcOver` + 前端 `globalAlpha`。两边算出来的 RGB **应该位级一致**（线性 alpha 公式相同），量化后必然像素一致。
+
+**用户视角：** opacity 是"褪色"工具，不是"半透明"工具。docs/deployment.md / 编辑器 UI 都要明确告知。
+
+### 6.6 BlendMode（M8 协议 v2 引入）
+
+v1 选 4 个最常用：`normal / multiply / screen / overlay`。计算（对 normalized [0,1] RGB 各通道独立做）：
+
+| 模式 | 公式 |
+|---|---|
+| normal | `src` |
+| multiply | `base × src` |
+| screen | `1 − (1 − base) × (1 − src)` |
+| overlay | `base < 0.5 ? 2·base·src : 1 − 2·(1−base)·(1−src)` |
+
+应用顺序：先 element.blendMode（与 layer buffer 合成）、再 layer.blendMode（与下一层 buffer 合成）。`normal` 是 baseline，不做任何额外计算。
+
+**双端契约：** Canvas2D `globalCompositeOperation = 'multiply' | 'screen' | 'overlay'` 直接支持；Java Graphics2D 不直接支持，需要在 ARGB 缓冲上**逐像素**做合成（性能 ok，反正画布只有 8 张 map = 1024×512 像素以下）。
+
+### 6.7 Dithering（M8 引入 renderMode 字段，M11 完整实施）
+
+v2 起每个 element 有 `renderMode: 'clean' | 'dither'`，默认 `clean`。
+
+**clean 模式**（现状）：直接走 §6.4 LUT 硬截断。文字 / 矩形 / 图标这类硬边几何，clean 看起来"干净像素艺术"。
+
+**dither 模式**（M11 实施）：用 **Bayer 4×4 ordered dither** 在量化前对每个像素加一个空间相关的小扰动，让渐变 / 软笔锋的色阶过渡看起来连续。
+
+Bayer 4×4 阈值矩阵：
+
+```
+ 0  8  2 10
+12  4 14  6
+ 3 11  1  9
+15  7 13  5
+```
+
+对每个像素 `(x, y, r, g, b)`：
+
+```
+threshold = (BAYER[y%4][x%4] / 16 - 0.5) * stepSize
+// stepSize ≈ 调色板平均色阶间距，~16 / 255
+adjusted = (r + threshold, g + threshold, b + threshold)
+// adjusted 走 LUT → 同一区域多次量化结果不同 → 视觉上是 ordered dither
+```
+
+**为什么 Bayer 而不是 Floyd-Steinberg**：
+- Bayer 是**纯函数**：每像素独立 + (x,y) → 同一图任意区域多次渲染像素一致。FS 是误差扩散，要从左上角顺序扫，与浏览器/Java 并行优化冲突
+- Bayer 双端 trivially 一致（4×4 矩阵 + 同 LUT 即可）；FS 容易在边界出现微小漂移
+- 取舍：Bayer 有"网纹感"，FS 更"自然"。对像素艺术目标，网纹反而契合 MC 像素美学
+
+**M8 阶段：** 只把 `renderMode` 字段存到协议 + state，渲染时 `clean / dither` 都走 §6.4 硬截断；M11 才真正接入 dither LUT。早做字段是为了避开协议二次升版。
 
 ---
 

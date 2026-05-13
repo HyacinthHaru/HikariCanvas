@@ -119,6 +119,58 @@ CREATE INDEX idx_walls_updated     ON walls(updated_at DESC);
 
 **与 sessions 的关系：** sessions 是临时编辑器持有者；walls 是永久墙上的画。一个 wall 可以有 0 或 1 个活跃 session 编辑它（`byWall` 排他锁）。session cancel/disconnect 不动 walls；wall delete 强制 cancel 关联 session。
 
+### 2.4.1 `project_json` v1 → v2 lazy migration（M8）
+
+**触发：** WallRepo 读 `project_json` 时，Jackson 反序列化前先快速 peek 顶层结构，发现含 `elements:` 但不含 `layers:` → 视为 v1 形态，走 migrate。
+
+**Migrate 规则：**
+
+```
+v1 形态:
+{
+  "version": N,
+  "canvas": { widthMaps, heightMaps, background },
+  "elements": [ <Element>, ... ],
+  "history": { undoDepth, redoDepth }
+}
+
+v2 形态:
+{
+  "version": N,
+  "protocolVersion": 2,
+  "canvas": {
+    "widthMaps", "heightMaps", "background",
+    "gridSize": 0,           // 默认无网格
+    "guides": []             // 默认无参考线
+  },
+  "layers": [{
+    "id": "l-<UUID 8 位>",
+    "name": "Default Layer",
+    "visible": true,
+    "locked": false,
+    "opacity": 1.0,
+    "blendMode": "normal",
+    "elements": [ <每个 element 补 opacity:1.0/blendMode:"normal"/renderMode:"clean">, ... ]
+  }],
+  "activeLayerId": "l-<同上>",
+  "history": { undoDepth, redoDepth }
+}
+```
+
+**执行时机选项：**
+
+- **A 启动期全库扫描**：M8 onEnable 时一次性把所有 wall.project_json 升级 + 回写。优：透明、无 read-time 开销；缺：启动慢（按 walls 数量）
+- **B Lazy（每次 load 时升）**：WallRepo.loadById 内置检测 + 即时升 + 写回。优：启动快；缺：分布式写、首次 load 多一次 UPDATE
+- **C 双路径**：服务端代码同时识别 v1/v2 形态（构造 ProjectState 时归一化），不写回 DB。优：零迁移；缺：代码长期维护 v1 兼容
+
+**决策（2026-05-13）：** **选 A**。理由：
+- 简单、确定
+- HikariCanvas 单服 walls 数量上限通常 < 200（典型创意服 ~50）；扫描 200 条 JSON 反序列化耗时 < 200ms，可接受
+- A 之后所有运行期代码只需要处理 v2 形态，长期维护成本最低
+- 失败容忍：若某条 project_json 解析失败 → log warn 跳过该 wall（不让坏数据卡启动）；启动后该 wall `/canvas open` 时仍会 lazy 再尝试
+
+**实施位置：** `MigrationRunner` V006 + `WallRepo.migrateProjectJsonV1ToV2` 静态方法。M8-B 子阶段实施。
+
 ### 2.5 表：`audit_log`
 
 安全/操作审计日志。
@@ -235,7 +287,7 @@ mysign.canvas
 
 ### 4.3 `project.json`
 
-直接包含 `protocol.md §7` 定义的 `ProjectState` 对象。
+直接包含 `protocol.md §7` 定义的 `ProjectState` 对象。v2 起为 layered 形态（含 `layers[]` / `activeLayerId` / `canvas.gridSize` / `canvas.guides` / 元素级 `opacity` / `blendMode` / `renderMode`）。导入老的 v1 `project.json`（含 `elements[]`）时自动 migrate（见 §2.4.1）。
 
 ### 4.4 导入语义
 

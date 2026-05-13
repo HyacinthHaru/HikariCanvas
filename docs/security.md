@@ -21,6 +21,8 @@
 
 ### 1.2 威胁清单
 
+
+
 | 编号 | 威胁 | 影响 |
 | --- | --- | --- |
 | T1 | 未授权用户访问编辑器 | 他人冒充玩家生成招牌、污染世界 |
@@ -36,6 +38,7 @@
 | T11 | 端口扫描识别本插件 | 辅助上述攻击 |
 | T12 | 审计日志被清除 | 事后无法溯源 |
 | T13 | 管理员误操作 | 数据丢失 |
+| T14 | 图片上传滥用：超大文件 / 压缩炸弹 / 伪造 MIME / 路径穿越 / 磁盘填满 / 恶意 EXIF | 资源耗尽、RCE 风险（M13 引入；详细缓解见 §4.5） |
 
 ### 1.3 非目标
 
@@ -182,6 +185,65 @@ validateToken(t):
 - 只接受 `manifest.json`、`project.json`、`thumbnail.png`、`assets/` 前缀下的文件
 - assets 文件仅允许 PNG，magic number 校验
 
+### 4.5 图片导入 `/api/upload`（M13）
+
+`canvas.upload` 权限（默认绑 `canvas.edit`）的玩家可通过编辑器上传图片。后端走严格校验栈：
+
+**a) 大小限制（config.images.max-size-kb）**
+
+- 单文件默认上限 2 MB（2048 KB）
+- 超出 → 413 + `UPLOAD_REJECTED: file too large`
+- 服主可调高/调低；上限 0 表示无限制（不推荐）
+
+**b) MIME 双重校验**
+
+- 第一层：HTTP `Content-Type` 必须在 `config.images.allowed-mime`（默认 `image/png` / `image/jpeg` / `image/webp`）
+- 第二层：**读首 16 字节 magic 校验真实类型**
+  - PNG: `89 50 4E 47 0D 0A 1A 0A`
+  - JPEG: `FF D8 FF`
+  - WEBP: `52 49 46 46 ?? ?? ?? ?? 57 45 42 50`
+- 两层不一致 → 拒绝（防伪造 Content-Type 走畸形图片解析路径）
+
+**c) 内容解码验证**
+
+- ImageIO.read 返回 null 或抛异常 → 不是合法图像 → 拒
+- 解码成功后宽 × 高 + 字节深度做 sanity check（拒绝 0×0、超 8192×8192）
+- 解码出来若边长 > `config.images.downscale-max-edge`（默认 1024）→ 自动 downscale（bilinear），节省存储
+
+**d) 每画 / 每玩家配额**
+
+- 每 wall 关联图片数：`config.images.max-per-wall`（默认 8 张）
+- 每玩家 24 小时上传次数：`config.images.max-uploads-per-day`（默认 50）
+- 服务端总磁盘配额：`config.images.max-total-storage-mb`（默认 1024 MB）
+- 任一超限 → `UPLOAD_REJECTED` + 提示
+
+**e) 存储与命名**
+
+- 服务端按内容 hash 命名：`plugins/HikariCanvas/uploads/<sha256[:16]>.png`
+- 跨画引用同一文件不重复存储（hash 内容寻址）
+- ImageElement.source 持 hash，渲染时按 hash 查文件
+- 删 wall 不立即清文件（其他 wall 可能引用）；走 **LRU 清理**：磁盘配额接近上限时按 last-used 删最老的
+
+**f) 文件名 sanitize**
+
+- 客户端 multipart 字段名 / 原始 filename 一律忽略（仅用作日志）
+- 内部存储路径完全由服务端 hash 决定，杜绝任何客户端控制的路径
+
+**g) 内容扫描**
+
+- 不实施杀毒（超 scope）
+- 但**Java 的 ImageIO 解码本身就是隔离测试**：如果文件让 ImageIO 抛 / 死循环 / OOM，会被 try-catch 抓住拒掉
+- ImageIO 解码超时（如 200ms）→ 拒（防压缩炸弹），用 `ExecutorService.submit(...).get(200, MS)`
+
+**h) 配额查询端点**
+
+`GET /api/upload/quota` 返回当前玩家剩余配额（次数 / 字节），前端在 UI 提示。
+
+**权限：**
+
+- `canvas.upload`：默认绑 `canvas.edit`
+- `canvas.upload.bypass-limit`：默认 op=true，跳过配额（紧急用）
+
 ---
 
 ## 5. 权限节点
@@ -195,6 +257,8 @@ validateToken(t):
 | `canvas.template.use.*` | 继承 `canvas.edit` | 使用特定模板，如 `canvas.template.use.subway_station` |
 | `canvas.template.all` | true 等价所有子节点 | |
 | `canvas.import` | false | 导入 `.canvas` 工程 |
+| `canvas.upload` | 继承 `canvas.edit` | 通过 `/api/upload` 上传图片（M13） |
+| `canvas.upload.bypass-limit` | op=true | 跳过每画 / 每日配额检查（M13） |
 | `canvas.delete.own` | 继承 `canvas.edit` | 删除自己的画（`/canvas delete <wall_id>`，M5.5 起替代 `canvas.remove.own`） |
 | `canvas.delete.any` | op=true | 删除任何画（M5.5 起替代 `canvas.remove.any`） |
 | `canvas.admin` | op=true | 管理命令（reload / stats / cleanup / fsck） |

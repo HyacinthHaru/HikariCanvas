@@ -5,6 +5,139 @@
 
 ---
 
+## 2026-05-13 · M8-A/B/C/D/E 全栈实施（layered model + 协议 v2 + 分层渲染）
+
+**M8 路线锁定后一次性把 5 段代码全部落地。** 实施顺序与 task 拆分一一对应；每段独立完成 + 测试通过后才进入下一段。
+
+### M8-A · 数据模型 + 协议 v2 record（Java + TS）
+
+- 新增 `state/Layer.java`（record + JsonCreator 容错 + elements 列表归一化为 ArrayList）/ `state/BlendMode.java`（enum @JsonProperty 小写） / `state/RenderMode.java`（同上） / `state/Guide.java`
+- `state/Element.java`：sealed 接口加 opacity() / blendMode() / renderMode() 三方法 + effectiveXxx() default 兜底；TextElement / RectElement / IconElement 三 record 末尾追加 Float/BlendMode/RenderMode 字段，`@JsonInclude(NON_NULL)` 序列化省略默认
+- `state/ProjectState.java`：Canvas 加 gridSize/guides；内部存 layers + activeLayerId + protocolVersion=2；JsonCreator 同时识别 v1（elements）与 v2（layers）入参，v1 自动包装为单 Default Layer；保留 elements/indexOfElement/addElement 等兼容 API 转发到 activeLayer 让 EditSession 零修改
+- `state/EditSession.java` / `template/TemplateInstantiator.java` / test 中所有 element 构造调用末尾补 null/null/null；Canvas 构造 5 参数化
+- `web/src/types/protocol.ts`：BlendMode/RenderMode/Guide/Layer 完整镜像；ProjectState 改 layers 形态 + 保留可选 elements 兼容字段
+- `web/src/stores/project.ts`：setSnapshot 时把 `state.elements` 链接到 `activeLayer.elements` 同一引用，组件零修改；applyPatch 同时识别 v1 path（/elements/N）和 v2 path（/layers/M/elements/N）
+
+**验证：** plugin test + vite build 全过；snapshot test 5 fixture **零像素漂移**（JsonCreator 自动 migrate + 兼容视图）。
+
+### M8-B · 持久化迁移（启动期全库扫描）
+
+- 新增 `db-migrations/V006__walls_protocol_version.sql`：`ALTER TABLE walls ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 1` + 索引
+- `storage/MigrationRunner.java`：注册 V006
+- `storage/WallRepo.java`：新增 `isV1Form(mapper, json)` 静态检测 + `migrateProjectJsonV1ToV2(mapper, json)` 静态 roundtrip + 实例方法 `migrateAllToV2()` 扫库 + 写回 + `MigrationStats` record
+- `HikariCanvas.java` onEnable：MigrationRunner.run() 后、SessionManager 启动前调 `wallRepo.migrateAllToV2()`，输出 scanned/migrated/failed 统计
+
+**关键：** roundtrip 复用 M8-A 写好的 `@JsonCreator` 自动 migrate，零重复逻辑。单行失败 → log warn + protocol_version 留 1 → 下次启动重试 + 运行期 lazy 兜底。
+
+**测试：** 新增 `WallRepoMigrationTest.java`（11 个测试覆盖 isV1Form 边界 + migrate 行为 + idempotent + 空 elements）全过。
+
+### M8-C · 协议路径切换 + locked check + layer.* op 族
+
+- `state/ProjectSnapshot.java`：升级到 `{canvas, layers, activeLayerId, label}`；紧凑 ctor 深拷贝每个 Layer（重建 elements ArrayList）
+- `state/ProjectState.java`：`restore(snap)` 整体替换 + 二次深拷贝避免共享；新增 5 个 layer 级 mutator
+- `state/EditSession.java`：**全面重写为 layer-aware**：Locator/findElement/findLayerIdx 反查 + 全部 element op 切 v2 path + locked check + 新增 createLayer/deleteLayer/updateLayer/reorderLayer/duplicateLayer/setActiveLayer 六个 layer.* op + moveElementToLayer 跨层 + setGridSize / setGuides；applyTextPatch/Rect/Icon 加 opacity/blendMode/renderMode 字段处理；replaceContent 重置整 layers 树
+- `state/StatePatchBuilder.java`：normalize 扩展支持 Layer record → Map（patch.value 永远 JSON 对象语义）
+- `web/Envelope.java`：v=1 → v=2
+- `web/WebServer.java`：handleAuth 加 `clientProtocolVersion >= 2` 校验，否则 VERSION_MISMATCH + close 4002；ready protocolVersion=2；dispatchEditOp 新增 10 个 op case；新增 `closeVersionMismatch`
+- `web/src/network/wsClient.ts`：send / heartbeat v=2；sendAuth 带 `clientProtocolVersion: 2`
+- `web/src/stores/project.ts` applyPatch 三类新 path 分支：/activeLayerId 替换（含 elements 链接重建）/ /layers/{i} 层级 add/remove/replace / /layers/{i}/{field} 单字段
+
+**测试：** 新增三个测试套（48 个用例）—— `EditSessionLayerOpsTest`（26）/ `EditSessionLockedLayerTest`（10）/ `EditSessionV2PathTest`（12）全部通过；snapshot fixtures 仍零漂移。
+
+### M8-D · 图层面板前端 UI
+
+- 新增 `components/layout/LayerPanel.vue`：右栏顶部 section；倒序列表（UI 顶 = 最上层）；每行 [eye][lock][name][count][duplicate][trash]；hover 显示 duplicate/trash；双击 inline rename；HTML5 drag reorder；active 层视觉高亮（左竖线 + 背景）；最后一层禁删
+- `stores/ui.ts`：加 `editingLayerId` ref + `setEditingLayer` action
+- `stores/project.ts`：加 `activeLayer` computed（含 EMPTY_LAYER 兜底）+ `activeLayerLocked` + `layerById(id)`
+- `components/layout/RightPanel.vue`：顶部插入 LayerPanel；底部 Elements section 用新 `t.elements` 文案 + locked layer 时禁用 toggle/drag；顺手把 onLayerDrag* 重命名为 onElementDrag* 修正 M5 时期命名混乱
+- `i18n/messages.ts`：新增 t.layerPanel.*（15 key）+ t.elements.*；原 t.layers.* 已迁出
+
+### M8-E · 分层渲染 + opacity + BlendMode + grid overlay
+
+- 新增 `render/BlendModes.java`：normal/multiply/screen/overlay 四公式 per-channel 实现 + `applyBlendModeOver` per-pixel 合成
+- 新增 `web/render/BlendModes.ts`：前端镜像，与后端逐行公式一致
+- `render/CanvasCompositor.java`：升级为分层渲染；**fast path**（layer 1 + normal + 无 element opacity/renderMode）直接画主 buffer 保持原行为；**slow path** 走 ARGB 中间 buffer + applyBlendModeOver；element-level opacity 用 `AlphaComposite.SrcOver.derive(opacity)` 实装
+- `web/render/PreviewRenderer.ts`：同上分层 + canFastPath；slow path 用 offscreen canvas + getImageData/putImageData + applyBlendModeOver；element-level opacity 用 globalAlpha
+- `components/layout/LayerPanel.vue`：active layer 行下方紧跟两行 inline 控件 = opacity slider（80ms debounce input + immediate change）+ blendMode select 四项
+- `components/layout/RightPanel.vue`：Transform 段加 element opacity slider + blendMode/renderMode disabled select（保留字段 + tooltip "M11 实装"）
+- `components/layout/CanvasView.vue`：主 canvas 上叠 CSS background-image grid overlay（按 canvas.gridSize 双线性渐变）+ 右下角 grid input
+- `i18n/messages.ts`：新增 t.properties.opacity/blendMode/renderMode + t.layerPanel.opacityLabel/blendModeLabel/blendModeOptions + t.canvas.grid 共 ~20 个 key
+
+**测试：** 新增 `BlendModesTest.java`（12 测试覆盖公式边界 + 单调性不变量 + 整体合成）全过；`RendererSnapshotTest` 5 fixture **零像素漂移**（fast path 兜底生效）。
+
+### Code Review 修复（实施完成后）
+
+- LayerPanel.vue 双重 v-for 渲染顺序错位 → 合并到单 v-for + template 嵌入主行下方
+- LayerPanel.vue 模板 ref 在 v-for 内为数组 .focus() 不工作 → 改 querySelector + data-attr
+- RightPanel.vue + LayerPanel.vue 误用 `useDebounceFn().flush?.()`（VueUse 不支持） → onChange 走 immediate ws.send + 最多冗余 1 次同值 patch
+- RightPanel.vue opacityDraftPct 切换选中元素时未清空 → watch selected.id 重置
+- CanvasCompositor + PreviewRenderer canFastPath 加 element.renderMode != CLEAN 防御 check，对齐 M11 dither 集成
+
+### 改动文件清单
+
+- **新增 12 个**：state/{Layer,BlendMode,RenderMode,Guide}.java；render/BlendModes.java；db-migrations/V006_*.sql；test/state/{LayerOps,LockedLayer,V2Path}Test.java；test/storage/WallRepoMigrationTest.java；test/render/BlendModesTest.java；web/components/layout/LayerPanel.vue；web/render/BlendModes.ts
+- **修改 30+**：state/{Element,TextElement,RectElement,IconElement,ProjectSnapshot,ProjectState,EditSession,StatePatchBuilder,PatchOp}.java；storage/{MigrationRunner,WallRepo}.java；template/TemplateInstantiator.java；web/{Envelope,WebServer}.java；HikariCanvas.java；test/state/EditSessionReplaceContentTest.java；以及前端 web/src/* 全套（types/protocol.ts、stores/{project,ui}.ts、network/wsClient.ts、render/PreviewRenderer.ts、components/layout/{RightPanel,CanvasView}.vue、i18n/messages.ts）
+
+### 测试总览
+
+- 整库 **150+ 测试全过**（含 M8 新增 71 个：11 migration + 26 layerops + 10 locked + 12 v2path + 12 blendmodes）
+- 5 个渲染 fixture 零漂移
+- 前后端构建均通过
+
+### M8-F 续做（未实施）
+
+- 多选 marquee + 多选 transform
+- guides 拖出 + Rulers 完整 UI（后端已通，前端先 noop）
+- element-level blendMode / renderMode 真接合成（与 M11 dither 一起做）
+- slow path 性能优化（worker / 分块）—— 压测后决定
+
+---
+
+## 2026-05-13 · M8 路线确认（仅文档；不动代码）
+
+**背景：** 用户要把项目方向往"Minecraft 里的 Figma / Canva"演进。提出短期工具（圆/箭头/线/星/软线）+ 远期功能（笔刷/数位板/图片导入/图层/渐变/调色板）。
+
+**对齐过程 — 6 个开放问题已拍板：**
+
+1. **PathElement 一统天下**：线 / 箭头 / 软线 / 笔刷 / 点 全部基于 SVG-like path 命令 + marker。CircleElement / ShapeElement 单独立。M9 实施
+2. **图层先做**：M8 = 图层 + 协议 v2 + migrate；M9 才上 PathElement。理由是后期再做图层迁移成本太大
+3. **元素级 renderMode（clean / dither）**：默认 clean，dither 用 Bayer 4×4。M11 真正实装；M8 只把字段写进协议避免二次升版
+4. **接力编辑而非协作**：现状（任意 canvas.edit 玩家可 /canvas open <wall_id>，byWall 排他锁）已满足；多人协作（OT/CRDT）永久不做
+5. **图片上传 config 可调 + 权限节点 canvas.upload 默认绑 canvas.edit**
+6. **协议 v2 一次性升级**：layers + activeLayerId + canvas.gridSize + canvas.guides + element.opacity + element.blendMode + element.renderMode 同一波改完，**切断 v1 客户端**（v1 未公开发布）
+7. **BlendMode v1 选 4 个**：normal / multiply / screen / overlay
+8. **opacity 在 MC 调色板下 = "颜色变浅"**（先 alpha-composite 到背景再硬截断量化）。docs 提示用户、不是真透明
+
+**M8 子阶段拆分（约 2 周）：**
+
+- **M8-A**：数据模型 + 协议 v2 record（Java + TS 同步）
+- **M8-B**：项目 JSON migration（V006 + WallRepo 启动期全库扫描升级）
+- **M8-C**：协议路径切换（state.snapshot 新形态 + patch path `/layers/{i}/elements/{j}/...` + layer.* op 族 + element.* 加 layerId）
+- **M8-D**：图层面板前端 UI（右栏；可见 / 锁定 / 拖动重排 / 双击重命名 / 删除）
+- **M8-E**：元素级 opacity / blendMode / 多选 / 网格 + 参考线
+
+**远期 TODO（M8 之外、列入路线）：**
+
+- 图层缩略图（per-layer rasterize 端点 + 缓存）
+- 图层颜色标签 / 图层 mask / smart object / 图层组
+- 对齐 / 分布工具
+- 模板包生态（.canvas 多模板打包）
+- 玩家身份认证 + HomePage 点击直开（独立 milestone）
+
+**契约文档已更新：**
+
+- `CLAUDE.md` 里程碑 + M8 路线段
+- `PROPOSAL.md` §6 里程碑表 M6/M7 标 ✅、新增 M8-M13 行 + 远期 TODO
+- `docs/architecture.md` 新 §10.5 图层模型（数据形态 / 生命周期 / 渲染顺序 / activeLayerId 职责 / locked 行为 / v1→v2 迁移）；§12 未决问题加 2 条 M8 相关
+- `docs/protocol.md` 顶部加 v1→v2 总览表；§3.2 auth 加 clientProtocolVersion ≥ 2 强制；§5.3 element.* 加 layerId；§5.4 新增 layer.* op 族；§5.5 加 canvas.grid / canvas.guides.set；§5.9 brush.* 占位；§6.1 错误码加 LAYER_LOCKED/LAYER_NOT_FOUND/LAST_LAYER/UPLOAD_REJECTED；§7 ProjectState 完整重写 v2 形态；§8.2.5 新增图层操作示例；§12 未决问题升级
+- `docs/data-model.md` §2.4.1 新增 lazy migration 规则（决策 A：启动期全库扫描）；§4.3 .canvas 文件改注释 v2
+- `docs/rendering.md` §4.1 提到分层渲染 + §4.5 grid/guides 仅前端；§6.5 元素级 opacity；§6.6 BlendMode 4 个公式；§6.7 Bayer 4×4 dither 双端契约
+- `docs/security.md` T14 图片上传威胁 + §4.5 全套约束（大小 / MIME 双校验 / magic bytes / 解码超时 / 配额 / hash 内容寻址）；§5 权限节点加 canvas.upload + .bypass-limit
+
+**下一步：** 等用户说"开始写代码"再启动 M8-A 编码。先不动任何 java/ts 文件。
+
+---
+
 ## 2026-05-13 · M7 第三轮：config.yml / group UI / 部署文档
 
 **用户：「先做 config.yml、参数 group UI 分组和公网部署文档」**

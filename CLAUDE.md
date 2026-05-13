@@ -82,7 +82,38 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23；Vue 3 + Pinia + Tailwind 4 + Konva overlay；Playwright snapshot 推迟 M7） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12；jackson-yaml + TemplateRegistry 热重载 + 6 内置模板 + TemplateGallery 前端；grid / icon / group / preview 留 M7） → **M7 打磨发布（2w）**。总工期约 4 个月。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12；6 内置模板 + TemplateGallery） → M7 polish ✅（2026-05-13；保护/缩略图/grid/icon/Move 工具/HelpModal/config.yml/group UI/部署文档） → **M8 图层 + 协议 v2（2w）** → M9 PathElement + 工具栏（1.5w） → M10 调色板（3d） → M11 渐变 + Dither（1w） → M12 笔刷 + 数位板（1.5w） → M13 图片导入 + 蒙版（1w）。总工期约 6 个月（含 M8-M13 共约 8 周）。
+
+## M8 路线（2026-05-13 定稿，未实施）
+
+**核心：把"扁平 element list"升级为"layer 树"，同时升协议到 v2 顺便加几个早该有的字段。**
+
+### 8 个锁定决策
+
+1. PathElement 一统线/箭头/软线/笔刷/点（M9 实施；M8 不动新元素类型）
+2. **图层先做** —— M8 做完图层 + 协议 v2 + 迁移，再上 PathElement
+3. 元素级 `renderMode: 'clean' | 'dither'`，默认 clean
+4. wall 接力编辑（任意 canvas.edit 玩家 /canvas open <wall_id>）已是现状，无需新做
+5. 图片导入 config 可调（max-size-kb / max-per-wall / max-uploads-per-day / max-total-storage-mb / allowed-mime / downscale-max-edge）；权限节点 `canvas.upload` 默认绑 `canvas.edit`
+6. **协议 v2 一次性升级**：layers + activeLayerId + canvas.gridSize + canvas.guides + element.opacity + element.blendMode；切断 v1 客户端（auth 时拒 `clientProtocolVersion < 2`）
+7. BlendMode v1 集合：`normal / multiply / screen / overlay` 4 个
+8. opacity 在 MC 调色板上 = "先 alpha-composite 到背景再量化"，不会真透明，颜色会变浅；用户能接受
+
+### M8 子阶段（约 2 周）
+
+- **M8-A 数据模型 + 协议 v2 类型** — ProjectState.layers / Layer record / Element.opacity+blendMode / Canvas.gridSize+guides；前后端 TS+Java 同步
+- **M8-B 持久化迁移** — `walls.project_json` lazy upgrade：读到 v1 形态 → 包成 Default Layer 写回；M8 启动时一次性 migrate 整库
+- **M8-C 协议路径** — state.snapshot 新形态；state.patch 用 `/layers/{i}/elements/{j}/...` 路径；新增 layer.* op 族
+- **M8-D 图层面板 UI** — 右栏新增 LayerPanel（缩略图列 v1 不做，列文字 + 可见/锁定/删除按钮 + 拖动重排）
+- **M8-E 元素级 opacity / blendMode / 多选 / 网格 + 参考线** — RightPanel 加属性；CanvasView 加 marquee 多选 + grid overlay + guides 拖出标尺
+
+### M8 远期 TODO（不做但记下）
+
+- 图层缩略图（per-layer rasterize 端点 + 缓存）
+- 图层颜色标签（用户给图层染色辅助识别）
+- 图层 mask / group / smart object
+- 多人协作（OT/CRDT）
+- 对齐 / 分布工具（M9+ 多选基础上）
 
 ## M5.5 wall 模型重构（路线修正，2026-04-27 定稿）
 

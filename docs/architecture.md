@@ -612,6 +612,105 @@ PDC 标记：
 
 ---
 
+## 10.5 图层模型（M8 引入，协议 v2）
+
+**心智模型：** ProjectState 不再持有扁平 `elements: Element[]`，而是 `layers: Layer[]`。每个 Layer 是一组共享可见性 / 锁 / 不透明度 / 混合模式的元素集合。Z-order 在两层：层间（`layers[i]` 的 i 越大越上层）+ 层内（layer.elements[j] 的 j 越大越上层）。
+
+### 数据形态
+
+```
+ProjectState {
+  version: long
+  protocolVersion: int = 2
+  canvas: Canvas {
+    widthMaps, heightMaps, background
+    gridSize: int?     // 0/null = 不显示。常用 8, 16, 32
+    guides: Guide[]    // 用户从标尺拖出的参考线
+  }
+  layers: Layer[]      // 至少 1 个（创建 wall 时自动生成 "Default Layer"）
+  activeLayerId: string  // 当前操作所在层；UI 状态，服务端只是中继
+  history
+}
+
+Layer {
+  id: "l-<uuid>"
+  name: string             // 用户可改，默认 "Layer N"
+  visible: boolean
+  locked: boolean          // 锁后无法增删/移动元素，但 visibility / name 仍可改
+  opacity: float           // 0.0 - 1.0
+  blendMode: enum          // normal | multiply | screen | overlay
+  elements: Element[]      // 层内 z-order = 索引
+}
+
+Element {
+  // 现有字段 + 新增：
+  opacity: float = 1.0
+  blendMode: enum = normal
+  renderMode: 'clean' | 'dither' = 'clean'  // 量化策略；详见 docs/rendering.md
+}
+
+Guide {
+  axis: 'x' | 'y'          // 垂直 / 水平参考线
+  position: int            // 像素坐标
+}
+```
+
+### 生命周期
+
+- **创建 wall（M5.5 confirm 路径）**：自动生成 1 个 `Default Layer`，所有 element 落入该层；activeLayerId 指向它
+- **template.apply（M6-D replace 语义）**：清空所有层 → 生成 1 个 `Default Layer` 包住模板物化结果。**不保留**旧的多层结构（与 M6-D replace 语义一致）
+- **/canvas open 重新打开**：activeLayerId 沿用 DB 持久化值；若 DB 没有（v1 老画 migrate 后）→ 取第一个 layer
+- **/canvas delete**：所有层一起删（layer 不跨 wall 共享）
+
+### 渲染顺序
+
+CanvasCompositor.rasterize 大体流程：
+
+```
+对每个 visible 层 (i = 0..n-1):
+    若 layer.locked + layer.visible == false → skip
+    为该 layer 分配临时 ARGB buffer
+    对每个 visible element 按层内 z-order 顺序：
+        画到 layer buffer（element 自己的 opacity / blendMode 在 element vs layer buffer 之间生效）
+    应用 layer.opacity + layer.blendMode 合成到主 buffer
+
+最后整张主 buffer 走 toPaletteSlice 量化输出
+```
+
+层内 element 与层间 layer 的合成两次执行，符合 PS / Figma 通用心智模型。
+
+### activeLayerId 的服务端职责
+
+- `state.snapshot` 下行携带 activeLayerId（UI 恢复用）
+- 客户端发任何 `element.add` 不带 `layerId` 字段时，服务端默认落到 `activeLayerId`
+- 客户端 `layer.set-active` op 更新 server-side 值（仅一个字段；不进 undo 栈）
+
+### locked 层行为
+
+- 服务端校验：locked layer 内的 element 收到 add/update/delete/reorder/transform 一律拒 `LAYER_LOCKED`
+- locked 层自己仍可改 visible / name / opacity / blendMode / 解锁
+
+### v1 老画迁移
+
+启动期遇到老的 `project_json`（无 `layers` 字段、有 `elements` 字段）→ 自动包装：
+
+```json
+{
+  "layers": [{
+    "id": "l-<新 uuid>",
+    "name": "Default Layer",
+    "visible": true, "locked": false,
+    "opacity": 1.0, "blendMode": "normal",
+    "elements": [<原 elements 数组>]
+  }],
+  "activeLayerId": "l-<新 uuid>"
+}
+```
+
+具体迁移脚本在 `docs/data-model.md`。
+
+---
+
 ## 11. 配置文件骨架
 
 ```yaml
@@ -658,6 +757,8 @@ logging:
 - [ ] 会话 disconnect 5 分钟宽限是否太长（公网弱网场景 vs 池占用）
 - [ ] 多世界支持：同一池跨世界共享 vs 按世界分池
 - [ ] **M5.5 引入**：published wall 是否需要"自动归档"（长期无 op 自动 unpublish 释放给 `/canvas list` 滚动列表）—— 倾向不做，walls 数量 < 100 不需要
-- [ ] **M5.5 引入**：协作编辑（多 client 同时编辑同一 wall_id）—— 当前 `byWall` 排他锁阻止；OT/CRDT 超 scope，可能永远不做
+- [x] **M5.5 引入**：协作编辑（多 client 同时编辑同一 wall_id）—— **永久不做**。`byWall` 排他锁阻止，玩家接力编辑（前一玩家 cancel 后下一玩家 `/canvas open <wall_id>`）已是现状
+- [ ] **M8 引入**：图层数 / 层内元素数上限（暂无；建议 layers ≤ 32、单层 elements ≤ 200 作为软上限做 warn 不做 hard cap）
+- [ ] **M8 引入**：blendMode v1 选 normal/multiply/screen/overlay 4 个；其他 PS 风格 mode 等用户呼声
 
 这些问题实现时根据实际情况回填本文档。

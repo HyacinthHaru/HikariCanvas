@@ -389,10 +389,24 @@ params:
 | M3 实时投影 | 差分推送、防抖节流、多图拼接、双端一致性测试 | 已完成（2026-04-21，方案 α：op 骨架 + `hello_world` 硬编码模板，正规模板系统 M6） | `docs/journal.md` 记录 T1~T13；13/13 任务完成 |
 | M4 渲染引擎 | 字体、调色板 LUT、效果（描边/阴影/发光）；**同步建立双端像素级 snapshot 测试台**（见 §5.2.1） | 已完成（2026-04-22；竖排文本 + 像素字体最近邻缩放 + 前端 Playwright snapshot 推迟到 M4.5 / M7） | `docs/journal.md` 记录 T1~T12；12/12 任务完成；5 fixture baseline 入 git |
 | M5 编辑器 UI | Canva 式完整编辑器（画布、图层、工具栏、属性面板、撤销） | 已完成（2026-04-23；Playwright snapshot 测试台推迟到 M7） | `docs/journal.md` M5-A/B/C/D 全部段落；Vue 3 + Pinia + Tailwind 4 + Konva overlay + 字体 / 调色板 / TextLayout / 效果族 前后端镜像 |
-| M6 模板系统 | YAML 解析 + 5 个内置模板 + 编辑器集成 | 1 周 | 模板规范文档 |
-| M7 打磨发布 | 多玩家测试、性能、bug、部署文档 | 2 周 | v1.0 release |
+| M6 模板系统 | YAML 解析 + 6 个内置模板 + 编辑器集成 | 已完成（2026-05-12；jackson-yaml + TemplateRegistry 热重载 + 6 模板 + TemplateGallery 前端） | `docs/template-spec.md` 完整契约 |
+| M7 打磨发布 | 工具栏 / Tooltip / HelpModal / config.yml / 部署文档 / 已发布墙保护 / 缩略图 / grid / icon / Move 工具 / HomePage 美化 / param group UI | 已完成（2026-05-13） | `docs/deployment.md` v1 |
+| **M8 图层 + 协议 v2** | layers + activeLayerId + opacity + blendMode + gridSize + guides；一次性 migrate；图层面板 + 多选 | **2 周（进行中）** | 协议 v2 + data v2 + 客户端拒 v1 |
+| M9 PathElement + 工具栏 | 通用 path (M/L/Q/C/Z + marker)；CircleElement、ShapeElement；7 个工具切换器 | 1.5 周 | "线/箭头/软线/星/点/圆" 全部统一通过 path/circle/shape |
+| M10 调色板 | 项目色板 + 最近色板 + MC-friendly 默认色板 + swatches UI | 3 天 | 类 Figma 色板面板 |
+| M11 渐变 + Dither | fill 升 union（solid/linear-gradient/radial-gradient）；Bayer 4×4 dither 双端实装 | 1 周 | 第一个支持 dither 的元素类型上线 |
+| M12 笔刷 + 数位板 | brush.* WS 通道；PointerEvent.pressure；本地 floating preview | 1.5 周 | 类 Procreate 的笔触体验 |
+| M13 图片导入 + 蒙版 | /api/upload + 全套安全约束；ImageElement；clipPath 蒙版 | 1 周 | 用户可拖图进编辑器 |
 
-**总工期估算：约 3.5 个月**（单人兼职开发节奏）。
+**总工期估算：约 6 个月**（单人兼职开发节奏；M8-M13 累计约 8 周）。
+
+**长远 TODO（v2.0+，不在 M13 内）：**
+- 图层缩略图（per-layer rasterize 端点）
+- 图层颜色标签 / 图层 mask / smart object / 图层组
+- 对齐 / 分布 / 分布间距工具（Photoshop "align" 工具栏）
+- 多人协作 OT/CRDT（明确不做）
+- 模板包生态（`.canvas` 打包多模板 + 资产）
+- 玩家身份认证 + HomePage 点击直开 + 权限隔离 milestone（独立路线）
 
 **关键决策点：** M1 完成后评估双端渲染一致性与 packet 推送稳定性，若任一项存在根本性障碍则重新评估方案。
 

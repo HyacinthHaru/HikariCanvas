@@ -1,10 +1,22 @@
 # WebSocket 通信协议
 
-**状态：** 立项稿 v0.1 · 2026-04-19
+**状态：** v2 规划稿 · 2026-05-13
 **适用范围：** 浏览器编辑器 ↔ 插件
-**协议版本：** `1.0`
+**协议版本：** `2.0`（M8 起；v1 不再兼容）
 
 本协议定义浏览器与插件之间的消息格式、生命周期、错误处理。**前后端必须严格按此实现**；任何变更必须升级协议版本并在此文档记录。
+
+## v1 → v2 变更总览（M8）
+
+| 维度 | v1 | v2 |
+|---|---|---|
+| ProjectState 顶层 | `elements: Element[]` 扁平列表 | `layers: Layer[]` 树形 + `activeLayerId` |
+| Element 字段 | x/y/w/h/rotation/visible/locked + 类型字段 | **新增** `opacity` / `blendMode` / `renderMode` |
+| Canvas | widthMaps/heightMaps/background | **新增** `gridSize` / `guides[]` |
+| state.patch path | `/elements/{i}/x` | `/layers/{i}/elements/{j}/x` |
+| op 族 | element.* / canvas.* / wall.* / template.* / undo / redo / history.mark | **新增** layer.* + canvas.guides.* / canvas.grid；element.add 加可选 `layerId` |
+| 客户端协商 | auth payload 不带版本 | auth payload **必须**带 `clientProtocolVersion: 2`；服务端遇 `< 2` 直接 reject `VERSION_MISMATCH` + close 4002 |
+| v1 客户端兼容 | — | **不兼容**。v1 没正式发布，不维持双轨
 
 ---
 
@@ -39,7 +51,7 @@
 
 | 字段 | 类型 | 方向 | 说明 |
 | --- | --- | --- | --- |
-| `v` | int | 双向 | 协议版本，当前 `1` |
+| `v` | int | 双向 | 协议版本，当前 `2`（M8 起；v1 不再支持） |
 | `op` | string | 双向 | 消息类型，见 §5 |
 | `id` | string | 双向（可选） | 请求 ID，用于对应响应；客户端发起用 `"c-<序号>"`，服务器发起用 `"s-<序号>"` |
 | `ts` | int | 双向（可选） | 毫秒时间戳，用于日志与延迟测量 |
@@ -77,26 +89,29 @@ GET /api/session/:token HTTP/1.1
 ### 3.2 WS 握手
 
 1. 打开 `wss://.../ws`（或 `ws://` 本地）
-2. 客户端首帧必须发送 `auth`：
+2. 客户端首帧必须发送 `auth`，**必须**携带 `clientProtocolVersion: 2`：
 
 ```json
-{ "v": 1, "op": "auth", "id": "c-0", "payload": { "token": "..." } }
+{ "v": 2, "op": "auth", "id": "c-0",
+  "payload": { "token": "...", "clientProtocolVersion": 2 } }
 ```
+
+> 服务端收到 `clientProtocolVersion < 2` 或缺字段 → 立刻发 `error: VERSION_MISMATCH` + close 4002。v1 客户端不再兼容（v1 未正式发布、无外部依赖）。
 
 3. 服务器校验通过 → `ready`：
 
 ```json
-{ "v": 1, "op": "ready", "id": "s-0",
+{ "v": 2, "op": "ready", "id": "s-0",
   "payload": {
     "sessionId": "e1b2...",
     "serverVersion": "1.0.0",
-    "protocolVersion": 1,
+    "protocolVersion": 2,
     "reconnectToken": "...",
-    "projectState": { ... },
-    "wallId": "w-1a2b3c4d",         // M5.5 起，nullable
-    "alias": "subway-test",          // 同上 nullable
-    "publishedAt": 1714200000000,    // 同上 nullable
-    "templates": [ /* 见 §7.x TemplateSpec */ ]   // M6 起，全量下发
+    "projectState": { /* v2 形态，见 §7 */ },
+    "wallId": "w-1a2b3c4d",
+    "alias": "subway-test",
+    "publishedAt": 1714200000000,
+    "templates": [ ... ]
   }
 }
 ```
@@ -162,23 +177,39 @@ S → C:  { op: "error", id: "c-17",
 
 所有元素编辑均通过 `element.*` 族 op。服务端是权威状态持有者，客户端发意图、服务端算结果。
 
+v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`。所有元素 op 在 locked 层上拒 `LAYER_LOCKED`。
+
 | op | 方向 | payload |
 | --- | --- | --- |
-| `element.add` | C→S | `{ type, props, after? }` |
-| `element.update` | C→S | `{ elementId, patch }` |
+| `element.add` | C→S | `{ type, props, after?, layerId? }`（缺 layerId 用 activeLayerId） |
+| `element.update` | C→S | `{ elementId, patch }`（patch 可含 opacity / blendMode / renderMode） |
 | `element.delete` | C→S | `{ elementId }` |
-| `element.reorder` | C→S | `{ elementId, index }` |
+| `element.reorder` | C→S | `{ elementId, index, layerId? }`（在层内换位；跨层用 element.move-to-layer） |
+| `element.move-to-layer` | C→S | `{ elementId, targetLayerId, index? }`（跨层移动；index 缺省 = 落底） |
 | `element.transform` | C→S | `{ elementId, x?, y?, w?, h?, rotation? }` |
 
-### 5.4 画布与模板
+### 5.4 图层（v2 新增）
+
+| op | 方向 | payload | 说明 |
+| --- | --- | --- | --- |
+| `layer.create` | C→S | `{ name?, afterLayerId? }` | 新建空层，落到 afterLayerId 之上；无该参数 → 顶端 |
+| `layer.delete` | C→S | `{ layerId }` | 删除层及层内 element。至少保留 1 层；删最后一层报 `INVALID_OP` |
+| `layer.update` | C→S | `{ layerId, patch: {name?,visible?,locked?,opacity?,blendMode?} }` | 部分更新 |
+| `layer.reorder` | C→S | `{ layerId, index }` | 调整层间 z-order |
+| `layer.duplicate` | C→S | `{ layerId }` | 复制层（含所有 element，新 uuid） |
+| `layer.set-active` | C→S | `{ layerId }` | 仅更新 activeLayerId；不进 undo 栈 |
+
+### 5.5 画布、网格、参考线、模板
 
 | op | 方向 | payload |
 | --- | --- | --- |
 | `canvas.resize` | C→S | `{ widthMaps, heightMaps }` (前提：池有容量) |
 | `canvas.background` | C→S | `{ color }` |
-| `template.apply` | C→S | `{ templateId, params }` （会清空现有工程） |
+| `canvas.grid` | C→S | `{ size: int }`（0 = 关闭网格） |
+| `canvas.guides.set` | C→S | `{ guides: [{ axis, position }, ...] }`（整组替换；前端拖动期不发，松手 batch 发） |
+| `template.apply` | C→S | `{ templateId, params }` （会清空所有层 + 用 Default Layer 包结果） |
 
-### 5.5 历史类
+### 5.6 历史类
 
 | op | 方向 | payload |
 | --- | --- | --- |
@@ -186,7 +217,7 @@ S → C:  { op: "error", id: "c-17",
 | `redo` | C→S | `{}` |
 | `history.mark` | C→S | `{ label }` 打一个可命名的历史点 |
 
-### 5.6 会话终结
+### 5.7 会话终结
 
 | op | 方向 | payload |
 | --- | --- | --- |
@@ -197,7 +228,19 @@ S → C:  { op: "error", id: "c-17",
 
 > M5.5 起 `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
 
-### 5.7 服务端主动推送
+### 5.9 笔刷流（M12 占位，未实施）
+
+笔刷 op 走专用通道避开 `state.patch` 5fps 节流。设计草案：
+
+| op | 方向 | payload |
+| --- | --- | --- |
+| `brush.start` | C→S | `{ layerId?, props: { color, size, opacity, ... } }` → 返回 `ack { strokeId }` |
+| `brush.point` | C→S | `{ strokeId, points: [[x,y,pressure,t], ...] }` 批量点；服务端立即 dirty bbox |
+| `brush.end` | C→S | `{ strokeId }` 服务端固化为 PathElement 写入 layer |
+
+M8 阶段不实装；只在 §12 列为已规划，不写代码前再补具体语义。
+
+### 5.8 服务端主动推送
 
 | op | 方向 | 说明 |
 | --- | --- | --- |
@@ -237,6 +280,10 @@ S → C:  { op: "error", id: "c-17",
 | `SESSION_CLOSED` | 会话已关闭 | ❌ |
 | `ALIAS_TAKEN` | wall.alias 已被其他 wall 占用 | ❌ |
 | `WALL_NOT_FOUND` | wall.* op 但当前 session 没绑定 wall（不应发生） | ❌ |
+| `LAYER_LOCKED` | element.* op 命中 locked 层；v2 起 | ❌ |
+| `LAYER_NOT_FOUND` | layer.* op 指向不存在的 layerId | ❌ |
+| `LAST_LAYER` | layer.delete 试图删最后一层 | ❌ |
+| `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / 配额） | ❌ |
 | `INTERNAL_ERROR` | 服务器内部错误 | 视情况 |
 
 ### 6.2 WS Close 码
@@ -253,30 +300,51 @@ S → C:  { op: "error", id: "c-17",
 
 ---
 
-## 7. 工程状态模型
+## 7. 工程状态模型（v2）
 
-客户端与服务器共享同一份数据结构：
+客户端与服务器共享同一份数据结构。v2 起 elements 数组被层包裹：
 
 ```typescript
 type ProjectState = {
   version: number;            // 递增版本号，每次变更 +1
+  protocolVersion: 2;
   canvas: {
-    widthMaps: number;        // 横向地图数
-    heightMaps: number;       // 纵向地图数
-    background: string;       // "#RRGGBB"
+    widthMaps: number;
+    heightMaps: number;
+    background: string;
+    gridSize?: number;        // 0/缺省 = 不显示网格；常用值 8/16/32（仅前端预览，不入 MC）
+    guides?: Guide[];         // 用户参考线，仅前端预览
   };
-  elements: Element[];        // 按 z-order 排列，index 越大越上层
-  history: {
-    undoDepth: number;
-    redoDepth: number;
-  };
+  layers: Layer[];            // 至少 1 个；层间 z-order = index（大 = 上）
+  activeLayerId: string;      // 当前 UI 操作层；服务端中继 + element.add 缺 layerId 时用
+  history: { undoDepth, redoDepth };
 };
+
+type Guide = {
+  axis: "x" | "y";
+  position: number;           // 像素坐标
+};
+
+type Layer = {
+  id: string;                 // "l-<uuid>"
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;            // 0..1
+  blendMode: BlendMode;       // 见下
+  elements: Element[];        // 层内 z-order = index
+};
+
+type BlendMode = "normal" | "multiply" | "screen" | "overlay";
 
 type Element =
   | TextElement
   | RectElement
-  | LineElement
-  | IconElement;   // v1.x
+  | IconElement
+  | PathElement       // M9
+  | CircleElement     // M9
+  | ShapeElement      // M9（正多边形 / 星）
+  | ImageElement;     // M13
 
 type BaseElement = {
   id: string;       // "e-<uuid>"
@@ -285,9 +353,12 @@ type BaseElement = {
   y: number;
   w: number;
   h: number;
-  rotation: number; // 度，限定 0/90/180/270 以规避双端渲染差异
+  rotation: number; // 0..359
   locked: boolean;
   visible: boolean;
+  opacity?: number;           // v2 新增；默认 1.0
+  blendMode?: BlendMode;      // v2 新增；默认 "normal"
+  renderMode?: "clean" | "dither";  // v2 新增；默认 "clean"
 };
 
 type TextElement = BaseElement & {
@@ -346,9 +417,39 @@ type RectElement = BaseElement & {
           payload: { elementId: "e-abc", patch: { text: "静安寺" } } }
                                            ← { op: "ack", id: "c-5", payload: { version: 2 } }
 
-（服务端算出 "人民广场" → "静安寺" 的脏矩形，构造 MC map packet 推送）
+（服务端算出 "人民广场" → "静安寺" 的脏矩形，构造 MC map packet 推送。
+ patch path 是 /layers/{i}/elements/{j}/text，由服务端按 elementId 查到正确层和位置）
 
 前端继续快速改色、改字号……每个 op 走同样流程。
+```
+
+### 8.2.5 图层操作（v2）
+
+```
+# 新建图层（叠加到 "线条" 层之上）
+前端 ─── { op: "layer.create", id: "c-7",
+          payload: { name: "标注", afterLayerId: "l-base" } }
+                                           ← { op: "ack", id: "c-7",
+                                               payload: { layerId: "l-a1b2c3d4" } }
+                                           ← { op: "state.patch", id: "s-3",
+                                               payload: { ops: [
+                                                 { op: "add", path: "/layers/2",
+                                                   value: { id: "l-a1b2c3d4", ... } }
+                                               ] } }
+
+# 把元素拖到另一层
+前端 ─── { op: "element.move-to-layer", id: "c-8",
+          payload: { elementId: "e-abc", targetLayerId: "l-a1b2c3d4" } }
+                                           ← { op: "state.patch", id: "s-4",
+                                               payload: { ops: [
+                                                 { op: "remove", path: "/layers/0/elements/3" },
+                                                 { op: "add", path: "/layers/2/elements/0", value: {...} }
+                                               ] } }
+
+# 切换当前活动层（仅 UI 状态；不进 history；不发 patch）
+前端 ─── { op: "layer.set-active", id: "c-9",
+          payload: { layerId: "l-a1b2c3d4" } }
+                                           ← { op: "ack", id: "c-9" }
 ```
 
 ### 8.3 发布与终结（M5.5）
@@ -411,6 +512,9 @@ type RectElement = BaseElement & {
 - [ ] 历史 `history.mark` 的 label 是否持久化到 walls.project_json（M5.5 决策：当前 walls 不存 history，cancel 后 redo/undo 栈丢失；如要保留可 M7 加 `walls.history_json`）
 - [ ] 画布 resize 是否允许缩小（需处理越界元素）
 - [x] template.apply 是否支持保留现有自由元素（merge 语义）—— **M6 v1 不做**，沿用 replace（清空 elements + 替换 background）；UI 上加"应用模板会覆盖当前内容"提示。merge 留 v2+
-- [ ] 多人协作（v2）时的协议扩展（是否需要 CRDT）—— M5.5 明确**不做**，`byWall` 排他锁阻止
+- [x] 多人协作（v2）时的协议扩展（是否需要 CRDT）—— **永久不做**。接力编辑（前一玩家 cancel 后下一玩家 /canvas open）已满足需求
 - [x] **M5.5**：ready payload 加 `wallId` / `alias` / `publishedAt` —— **已实装**
-- [x] **M6**：ready payload 加 `templates`（全量 TemplateSpec 列表）—— **协议固化，待实施**
+- [x] **M6**：ready payload 加 `templates`（全量 TemplateSpec 列表）—— **已实装**
+- [x] **M8**：图层模型 + 协议 v2 + opacity/blendMode/gridSize/guides 一次性升级 —— **协议固化，待实施**
+- [ ] **M12** 笔刷流 brush.* 通道：能否复用 element.update 还是必须独立通道 → 决策时机：M11 dither 完成后回头评估带宽
+- [ ] **M13** 图片上传 `/api/upload` 端点能否走 chunked 大文件 vs 一次性 multipart → 取决于 max-size-kb 默认值
