@@ -1,6 +1,8 @@
-import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, Glow } from '@/types/protocol';
+import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, PathElement, CircleElement, ShapeElement, Glow } from '@/types/protocol';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 import { applyBlendModeOver } from './BlendModes';
+import { parsePathD } from './PathParser';
+import { arrowSize, dotRadius, drawArrow, drawDot } from './MarkerRenderer';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
@@ -98,7 +100,128 @@ function drawElement(ctx: CanvasRenderingContext2D, e: Element): void {
     if (e.type === 'rect') drawRect(ctx, e);
     else if (e.type === 'text') drawText(ctx, e);
     else if (e.type === 'icon') drawIcon(ctx, e);
+    else if (e.type === 'path') drawPath(ctx, e);
+    else if (e.type === 'circle') drawCircle(ctx, e);
+    else if (e.type === 'shape') drawShape(ctx, e);
     ctx.restore();
+}
+
+// ---------- M9-C：PathElement / CircleElement / ShapeElement 真实绘制 ----------
+
+/** 与后端 CanvasCompositor.drawPath 镜像。d 内坐标相对 element.(x, y)。 */
+function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
+    if (!p.d) return;
+    const parsed = parsePathD(p.d);
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+
+    if (p.fill) {
+        ctx.fillStyle = p.fill;
+        ctx.fill(parsed.path);
+    }
+
+    let strokeColor: string | null = null;
+    let strokeWidth = 0;
+    if (p.stroke && p.stroke.width > 0) {
+        strokeWidth = p.stroke.width;
+        strokeColor = p.stroke.color;
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = strokeWidth;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke(parsed.path);
+    }
+
+    if (parsed.hasSegments && strokeColor) {
+        if (p.markerEnd) {
+            drawPathMarker(ctx, p.markerEnd,
+                parsed.endX, parsed.endY,
+                parsed.endTangentX, parsed.endTangentY,
+                strokeWidth, strokeColor);
+        }
+        if (p.markerStart) {
+            // markerStart 朝起点外 = startTangent 反向
+            drawPathMarker(ctx, p.markerStart,
+                parsed.startX, parsed.startY,
+                -parsed.startTangentX, -parsed.startTangentY,
+                strokeWidth, strokeColor);
+        }
+    }
+
+    ctx.restore();
+}
+
+function drawPathMarker(
+    ctx: CanvasRenderingContext2D,
+    type: 'arrow' | 'dot',
+    x: number, y: number,
+    dirX: number, dirY: number,
+    strokeWidth: number, color: string,
+): void {
+    if (type === 'arrow') {
+        drawArrow(ctx, x, y, dirX, dirY, arrowSize(strokeWidth), color);
+    } else if (type === 'dot') {
+        drawDot(ctx, x, y, dotRadius(strokeWidth), color);
+    }
+}
+
+/** 与后端 CanvasCompositor.drawCircle 镜像：bbox 推 cx/cy/rx/ry → ctx.ellipse。 */
+function drawCircle(ctx: CanvasRenderingContext2D, c: CircleElement): void {
+    const cx = c.x + c.w / 2;
+    const cy = c.y + c.h / 2;
+    const rx = c.w / 2;
+    const ry = c.h / 2;
+
+    if (c.fill) {
+        ctx.fillStyle = c.fill;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    if (c.stroke && c.stroke.width > 0) {
+        ctx.strokeStyle = c.stroke.color;
+        ctx.lineWidth = c.stroke.width;
+        ctx.lineCap = 'butt';
+        ctx.lineJoin = 'miter';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+}
+
+/** 与后端 CanvasCompositor.drawShape / buildShapePath 镜像。 */
+function drawShape(ctx: CanvasRenderingContext2D, s: ShapeElement): void {
+    const cx = s.x + s.w / 2;
+    const cy = s.y + s.h / 2;
+    const outerR = Math.min(s.w, s.h) / 2;
+    const star = s.kind === 'star';
+    const innerR = star ? outerR * (s.innerRatio ?? 0.5) : 0;
+    const sides = s.sides;
+    const totalVerts = star ? sides * 2 : sides;
+
+    ctx.beginPath();
+    for (let i = 0; i < totalVerts; i++) {
+        const angle = -Math.PI / 2 + (Math.PI * 2 * i / totalVerts);
+        const r = (star && (i & 1) === 1) ? innerR : outerR;
+        const x = cx + Math.cos(angle) * r;
+        const y = cy + Math.sin(angle) * r;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+
+    if (s.fill) {
+        ctx.fillStyle = s.fill;
+        ctx.fill();
+    }
+    if (s.stroke && s.stroke.width > 0) {
+        ctx.strokeStyle = s.stroke.color;
+        ctx.lineWidth = s.stroke.width;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+    }
 }
 
 // ---------- Icon 图标 ----------

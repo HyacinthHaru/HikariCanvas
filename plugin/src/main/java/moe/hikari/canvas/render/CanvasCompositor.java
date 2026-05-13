@@ -1,14 +1,17 @@
 package moe.hikari.canvas.render;
 
 import moe.hikari.canvas.state.BlendMode;
+import moe.hikari.canvas.state.CircleElement;
 import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.Layer;
+import moe.hikari.canvas.state.PathElement;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.RenderMode;
 import moe.hikari.canvas.state.Shadow;
+import moe.hikari.canvas.state.ShapeElement;
 import moe.hikari.canvas.state.Stroke;
 import moe.hikari.canvas.state.TextElement;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
@@ -167,6 +170,9 @@ public final class CanvasCompositor {
                 case RectElement r -> drawRect(g, r);
                 case TextElement t -> drawText(g, t);
                 case IconElement ic -> drawIcon(g, ic);
+                case PathElement p -> drawPath(g, p);
+                case CircleElement cir -> drawCircle(g, cir);
+                case ShapeElement sh -> drawShape(g, sh);
             }
             if (opacity < 1.0f) g.setComposite(baseComposite);
             if (savedTx != null) g.setTransform(savedTx);
@@ -266,6 +272,135 @@ public final class CanvasCompositor {
             tg.dispose();
         }
         g.drawImage(tinted, ic.x(), ic.y(), null);
+    }
+
+    // ---------- M9-B：PathElement / CircleElement / ShapeElement 绘制 ----------
+
+    /**
+     * 绘制 path 元素。d 内坐标相对 element.(x, y)，所以临时 translate 后绘制；marker 在
+     * path 端点上，方向由 {@link PathParser} 提取的切线决定。
+     */
+    private void drawPath(Graphics2D g, PathElement p) {
+        if (p.d() == null || p.d().isEmpty()) return;
+        PathParser.Result parsed = PathParser.parse(p.d());
+        if (parsed.path() == null) return;
+
+        AffineTransform savedTx = g.getTransform();
+        g.translate(p.x(), p.y());
+
+        // 填充
+        if (p.fill() != null) {
+            g.setColor(parseColor(p.fill()));
+            g.fill(parsed.path());
+        }
+
+        // 描边
+        Stroke s = p.stroke();
+        Color strokeColor = null;
+        int strokeWidth = 0;
+        if (s != null && s.width() > 0) {
+            strokeWidth = s.width();
+            strokeColor = parseColor(s.color());
+            g.setColor(strokeColor);
+            java.awt.Stroke prevStroke = g.getStroke();
+            g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.draw(parsed.path());
+            g.setStroke(prevStroke);
+        }
+
+        // marker（需要 stroke 才有意义；color 沿用 stroke.color）
+        if (parsed.hasSegments() && strokeColor != null) {
+            if (p.markerEnd() != null) {
+                drawMarker(g, p.markerEnd(),
+                        parsed.endX(), parsed.endY(),
+                        parsed.endTangentX(), parsed.endTangentY(),
+                        strokeWidth, strokeColor);
+            }
+            if (p.markerStart() != null) {
+                // markerStart 朝起点外 = startTangent 反向
+                drawMarker(g, p.markerStart(),
+                        parsed.startX(), parsed.startY(),
+                        -parsed.startTangentX(), -parsed.startTangentY(),
+                        strokeWidth, strokeColor);
+            }
+        }
+
+        g.setTransform(savedTx);
+    }
+
+    private static void drawMarker(Graphics2D g, String type, double x, double y,
+                                   double dirX, double dirY, int strokeWidth, Color color) {
+        switch (type) {
+            case "arrow" -> MarkerRenderer.drawArrow(g, x, y, dirX, dirY,
+                    MarkerRenderer.arrowSize(strokeWidth), color);
+            case "dot" -> MarkerRenderer.drawDot(g, x, y,
+                    MarkerRenderer.dotRadius(strokeWidth), color);
+            default -> { /* ignore unknown marker；EditSession 已限值，理论不可达 */ }
+        }
+    }
+
+    /**
+     * 绘制 circle / 椭圆。bbox 推 cx/cy/rx/ry：cx = x + w/2, cy = y + h/2, rx = w/2, ry = h/2。
+     */
+    private void drawCircle(Graphics2D g, CircleElement c) {
+        java.awt.geom.Ellipse2D.Double e = new java.awt.geom.Ellipse2D.Double(
+                c.x(), c.y(), c.w(), c.h());
+        if (c.fill() != null) {
+            g.setColor(parseColor(c.fill()));
+            g.fill(e);
+        }
+        Stroke s = c.stroke();
+        if (s != null && s.width() > 0) {
+            g.setColor(parseColor(s.color()));
+            java.awt.Stroke prevStroke = g.getStroke();
+            g.setStroke(new BasicStroke(s.width(), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+            g.draw(e);
+            g.setStroke(prevStroke);
+        }
+    }
+
+    /**
+     * 绘制正多边形 / 星。外接圆中心在 bbox 中心；半径 = min(w, h) / 2。
+     * 第一个顶点朝上（角度 -π/2）；后续顶点等角度分布。star 时外内交替（外用 outerR，内用 outerR × innerRatio）。
+     */
+    private void drawShape(Graphics2D g, ShapeElement s) {
+        java.awt.geom.Path2D.Double path = buildShapePath(s);
+        if (s.fill() != null) {
+            g.setColor(parseColor(s.fill()));
+            g.fill(path);
+        }
+        Stroke st = s.stroke();
+        if (st != null && st.width() > 0) {
+            g.setColor(parseColor(st.color()));
+            java.awt.Stroke prevStroke = g.getStroke();
+            g.setStroke(new BasicStroke(st.width(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.draw(path);
+            g.setStroke(prevStroke);
+        }
+    }
+
+    private static java.awt.geom.Path2D.Double buildShapePath(ShapeElement s) {
+        double cx = s.x() + s.w() / 2.0;
+        double cy = s.y() + s.h() / 2.0;
+        double outerR = Math.min(s.w(), s.h()) / 2.0;
+        boolean star = "star".equals(s.kind());
+        double innerR = star
+                ? outerR * (s.innerRatio() == null ? 0.5 : s.innerRatio())
+                : 0;
+        int sides = s.sides();
+        int totalVerts = star ? sides * 2 : sides;
+
+        java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
+        for (int i = 0; i < totalVerts; i++) {
+            double angle = -Math.PI / 2 + (Math.PI * 2 * i / totalVerts);
+            double r = (star && (i & 1) == 1) ? innerR : outerR;
+            double x = cx + Math.cos(angle) * r;
+            double y = cy + Math.sin(angle) * r;
+            if (i == 0) path.moveTo(x, y);
+            else path.lineTo(x, y);
+        }
+        path.closePath();
+        return path;
     }
 
     private void drawRect(Graphics2D g, RectElement r) {

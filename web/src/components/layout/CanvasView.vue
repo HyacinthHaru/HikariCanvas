@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { ZoomIn, ZoomOut, RotateCcw, Maximize } from 'lucide-vue-next';
 import { onKeyStroke, useEventListener } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
-import { useUiStore } from '@/stores/ui';
+import { isDrawTool, useUiStore, type ActiveTool } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
 import { renderProjectState, onIconReady } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
@@ -90,6 +90,9 @@ function hitConfig(e: Element) {
     const hovered = hoverId.value === e.id;
     const selected = ui.isSelected(e.id);
     const canDrag = !e.locked && e.visible && !project.activeLayerLocked;
+    // M9-E：绘制工具激活时，element-hit 整层 listening=false，让 mousedown 穿透到 stage
+    // 启动 drag-to-create（PS/Figma 行为：drawTool 下点已有元素也是开始画新元素）
+    const drawing = isDrawTool(ui.activeTool);
     return {
         id: e.id,
         name: 'element-hit',
@@ -106,6 +109,7 @@ function hitConfig(e: Element) {
         strokeWidth: hovered && !selected ? 1 : 0,
         dash: hovered && !selected ? [4, 3] : undefined,
         draggable: canDrag,
+        listening: !drawing,
     };
 }
 
@@ -193,24 +197,33 @@ interface MarqueeState {
 const marquee = ref<MarqueeState | null>(null);
 
 interface KonvaStageNode { getStage?: () => { getPointerPosition?: () => { x: number; y: number } | null } | null }
+type MouseEvt = MouseEvent | TouchEvent;
 interface StageEvt {
     target: KonvaStageNode & { getType?: () => string; hasName?: (n: string) => boolean };
-    evt?: MouseEvent | TouchEvent;
+    evt?: MouseEvt;
 }
 
 function onStageMouseDown(ev: StageEvt): void {
     const node = ev.target;
     if (!node) return;
     const isElementHit = node.hasName?.('element-hit') ?? false;
-    if (isElementHit) return;  // element 点击由 onHitClick 处理
+    // drawTool 下 element-hit listening=false，target 实际是 stage 根，所以下面 isElementHit 必为 false
+    if (isElementHit) return;  // element 点击由 onHitClick 处理（仅 select/move 工具）
 
     // alt / middle 让 outer onMouseDown 接管 pan
-    const evt = ev.evt as MouseEvent | undefined;
+    const evt = ev.evt as MouseEvt | undefined;
     if (evt && (evt.button === 1 || evt.altKey)) return;
 
     const stage = node.getStage?.();
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
+
+    // M9-E：绘制工具激活时启动 drag-to-create；其他工具启动 marquee
+    if (isDrawTool(ui.activeTool)) {
+        if (editingId.value) finishEditing();
+        drawDrag.value = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y };
+        return;
+    }
 
     marquee.value = {
         x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y,
@@ -219,14 +232,27 @@ function onStageMouseDown(ev: StageEvt): void {
 }
 
 function onStageMouseMove(ev: StageEvt): void {
-    if (!marquee.value) return;
     const stage = ev.target?.getStage?.();
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
-    marquee.value = { ...marquee.value, x2: pos.x, y2: pos.y };
+    if (drawDrag.value) {
+        drawDrag.value = { ...drawDrag.value, x2: pos.x, y2: pos.y };
+        return;
+    }
+    if (marquee.value) {
+        marquee.value = { ...marquee.value, x2: pos.x, y2: pos.y };
+    }
 }
 
 function onStageMouseUp(): void {
+    // M9-E：绘制工具的 drag-to-create 完成
+    if (drawDrag.value) {
+        const d = drawDrag.value;
+        drawDrag.value = null;
+        commitDraw(ui.activeTool, d.x1, d.y1, d.x2, d.y2);
+        return;
+    }
+
     const m = marquee.value;
     if (!m) return;
     marquee.value = null;
@@ -266,9 +292,10 @@ function bboxIntersects(el: Element, x1: number, y1: number, x2: number, y2: num
     return !(el.x + el.w < x1 || el.x > x2 || el.y + el.h < y1 || el.y > y2);
 }
 
-// window 兜底：拖出窗口后松手时清掉 marquee
+// window 兜底：拖出窗口后松手时清掉 marquee / drawDrag
 useEventListener(window, 'mouseup', () => {
     if (marquee.value) marquee.value = null;
+    if (drawDrag.value) drawDrag.value = null;  // 拖出窗口 = 取消本次创建
 });
 
 const marqueeConfig = computed(() => {
@@ -287,6 +314,148 @@ const marqueeConfig = computed(() => {
     };
 });
 
+// ---------- M9-E：drag-to-create 状态 + 预览 ----------
+
+interface DrawDrag { x1: number; y1: number; x2: number; y2: number; }
+const drawDrag = ref<DrawDrag | null>(null);
+
+/**
+ * 当前 drawDrag 对应的预览 shape：{ kind, config }，渲染到 marquee 同 layer（listening:false）。
+ * v-stage 内根据 kind 渲染 v-line / v-ellipse / v-star 之一。
+ */
+type PreviewKind = 'line' | 'arrow' | 'ellipse' | 'star';
+const drawPreview = computed<{ kind: PreviewKind; config: Record<string, unknown> } | null>(() => {
+    const d = drawDrag.value;
+    if (!d) return null;
+    const tool = ui.activeTool;
+    const minX = Math.min(d.x1, d.x2);
+    const minY = Math.min(d.y1, d.y2);
+    const w = Math.abs(d.x2 - d.x1);
+    const h = Math.abs(d.y2 - d.y1);
+
+    if (tool === 'line' || tool === 'arrow') {
+        // 直线/箭头预览：实线 + 半透明（明确 stroke 方向）。
+        // arrow 的 pointer 尺寸与最终元素的 marker 一致：默认 stroke=2 → arrowSize=max(6,2*3)=6
+        return {
+            kind: tool === 'arrow' ? 'arrow' : 'line',
+            config: {
+                points: [d.x1, d.y1, d.x2, d.y2],
+                stroke: '#000000',
+                strokeWidth: 2,
+                opacity: 0.6,
+                pointerLength: 6,
+                pointerWidth: 6,
+                fill: '#000000',  // arrow head 用
+                listening: false,
+            },
+        };
+    }
+    if (tool === 'circle') {
+        return {
+            kind: 'ellipse',
+            config: {
+                x: minX + w / 2,
+                y: minY + h / 2,
+                radiusX: w / 2,
+                radiusY: h / 2,
+                stroke: '#60a5fa',
+                strokeWidth: 1,
+                fill: 'rgba(96, 165, 250, 0.15)',
+                dash: [4, 3],
+                listening: false,
+            },
+        };
+    }
+    if (tool === 'star') {
+        const outer = Math.min(w, h) / 2;
+        return {
+            kind: 'star',
+            config: {
+                x: minX + w / 2,
+                y: minY + h / 2,
+                numPoints: 5,
+                innerRadius: outer * 0.5,
+                outerRadius: outer,
+                stroke: '#FFCC00',
+                strokeWidth: 1,
+                fill: 'rgba(255, 204, 0, 0.2)',
+                dash: [4, 3],
+                listening: false,
+            },
+        };
+    }
+    return null;
+});
+
+function commitDraw(tool: ActiveTool, x1: number, y1: number, x2: number, y2: number): void {
+    if (!isDrawTool(tool)) return;
+    const minX = Math.min(x1, x2);
+    const minY = Math.min(y1, y2);
+    const dx = Math.abs(x2 - x1);
+    const dy = Math.abs(y2 - y1);
+    // 距离太小视为误点：取消创建（不发 ws）
+    if (dx < 3 && dy < 3) {
+        ui.setTool('select');
+        return;
+    }
+
+    let type = '';
+    let props: Record<string, unknown> | null = null;
+    switch (tool) {
+        case 'line':
+        case 'arrow': {
+            type = 'path';
+            // line/arrow 不规范化方向：保持 start→end 的箭头朝向
+            const elX = Math.round(minX);
+            const elY = Math.round(minY);
+            const sx = Math.round(x1 - minX);
+            const sy = Math.round(y1 - minY);
+            const ex = Math.round(x2 - minX);
+            const ey = Math.round(y2 - minY);
+            props = {
+                x: elX,
+                y: elY,
+                w: Math.max(2, Math.round(dx)),
+                h: Math.max(2, Math.round(dy)),
+                d: `M ${sx} ${sy} L ${ex} ${ey}`,
+                stroke: { width: 2, color: '#000000' },
+            };
+            if (tool === 'arrow') (props as Record<string, unknown>).markerEnd = 'arrow';
+            break;
+        }
+        case 'circle': {
+            type = 'circle';
+            props = {
+                x: Math.round(minX),
+                y: Math.round(minY),
+                w: Math.max(2, Math.round(dx)),
+                h: Math.max(2, Math.round(dy)),
+                fill: '#3366FF',
+            };
+            break;
+        }
+        case 'star': {
+            type = 'shape';
+            props = {
+                x: Math.round(minX),
+                y: Math.round(minY),
+                w: Math.max(2, Math.round(dx)),
+                h: Math.max(2, Math.round(dy)),
+                kind: 'star',
+                sides: 5,
+                fill: '#FFCC00',
+            };
+            break;
+        }
+    }
+
+    if (type && props) {
+        ws.send('element.add', { type, props });
+    }
+    // 一次性创建：自动切回 select 工具，让用户能直接操作新元素
+    ui.setTool('select');
+}
+
 /** 双击 stage 空白处：取消所有选中 + 退出编辑（用户实测后明确要求的 escape 路径）。 */
 function onStageDblClick(ev: { target: { getType?: () => string; hasName?: (n: string) => boolean } }): void {
     const node = ev.target as { getType?: () => string; hasName?: (n: string) => boolean } | null;
@@ -299,9 +468,20 @@ function onStageDblClick(ev: { target: { getType?: () => string; hasName?: (n: s
 }
 
 // 切换 Move 工具时也应主动收掉编辑态——避免"Move 模式下拖一个、textarea 仍浮在另一个上"
-watch(() => ui.activeTool, () => {
+// M9-D：切到绘制工具（line/arrow/circle/star）时也清 selection，避免"激活创建工具+持有 selection"
+// 的矛盾视觉（transformer 还在但用户期望拖出新元素）
+// M9-E：清掉进行中的 marquee / drawDrag 状态，避免边缘 case（拖动中按快捷键切工具）
+watch(() => ui.activeTool, (next) => {
     if (editingId.value) finishEditing();
+    if (isDrawTool(next)) {
+        ui.clearSelection();
+    }
+    marquee.value = null;
+    drawDrag.value = null;
 });
+
+/** M9-D：cursor 跟随 activeTool。绘制工具显示 crosshair；其他默认 cursor。 */
+const cursorStyle = computed(() => isDrawTool(ui.activeTool) ? 'crosshair' : 'default');
 
 // ---------- M8-F：多选 drag 同步 ----------
 //
@@ -495,7 +675,15 @@ watch(() => ui.activeTool, () => nextTick(attachTransformer));
 onKeyStroke(['=', '+'], (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomIn(); } });
 onKeyStroke('-', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomOut(); } });
 onKeyStroke('0', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomReset(); } });
-onKeyStroke('Escape', () => ui.clearSelection());
+onKeyStroke('Escape', () => {
+    // M9-E：绘制工具激活时按 Esc 切回 select（watch(activeTool) 自动清 drawDrag）；
+    // select / move 工具下按 Esc 等同清空选中
+    if (isDrawTool(ui.activeTool)) {
+        ui.setTool('select');
+        return;
+    }
+    ui.clearSelection();
+});
 // PS 风格快捷键：V 切 select；M 切 move。input/textarea 内输入时跳过
 function inEditable(): boolean {
     const a = document.activeElement as HTMLElement | null;
@@ -503,6 +691,22 @@ function inEditable(): boolean {
 }
 onKeyStroke(['v', 'V'], () => { if (!inEditable()) ui.setTool('select'); });
 onKeyStroke(['m', 'M'], () => { if (!inEditable()) ui.setTool('move'); });
+// M9-D：绘制工具快捷键
+onKeyStroke(['l', 'L'], () => { if (!inEditable()) ui.setTool('line'); });
+onKeyStroke(['a', 'A'], (e) => {
+    // 跳过 Cmd+A 全选；只接单 'A'
+    if (e.ctrlKey || e.metaKey) return;
+    if (!inEditable()) ui.setTool('arrow');
+});
+onKeyStroke(['c', 'C'], (e) => {
+    // 跳过 Cmd+C 复制（虽然现在没接，但保留语义）
+    if (e.ctrlKey || e.metaKey) return;
+    if (!inEditable()) ui.setTool('circle');
+});
+onKeyStroke(['s', 'S'], (e) => {
+    if (e.ctrlKey || e.metaKey) return;
+    if (!inEditable()) ui.setTool('star');
+});
 
 // M5-B8 画布交互：Ctrl+wheel zoom（以鼠标为中心）+ 中键或 Alt+drag pan
 const outerRef = ref<HTMLElement | null>(null);
@@ -597,6 +801,7 @@ function onMouseUpOrLeave() {
   <section
     ref="outerRef"
     class="flex-1 relative overflow-auto bg-[color:var(--background)]"
+    :style="{ cursor: cursorStyle }"
     @wheel="onWheel"
     @mousedown="onMouseDown"
     @mousemove="onMouseMove"
@@ -661,9 +866,13 @@ function onMouseUpOrLeave() {
               />
               <v-transformer ref="transformerRef" :config="transformerConfig" />
             </v-layer>
-            <!-- M8-F：marquee 拖框可视层（独立 layer 在 hit 之上） -->
-            <v-layer v-if="marqueeConfig" :listening="false">
-              <v-rect :config="marqueeConfig" />
+            <!-- M8-F：marquee 拖框可视层；M9-E：drag-to-create 预览同 layer -->
+            <v-layer v-if="marqueeConfig || drawPreview" :listening="false">
+              <v-rect v-if="marqueeConfig" :config="marqueeConfig" />
+              <v-line v-if="drawPreview?.kind === 'line'" :config="drawPreview.config" />
+              <v-arrow v-if="drawPreview?.kind === 'arrow'" :config="drawPreview.config" />
+              <v-ellipse v-if="drawPreview?.kind === 'ellipse'" :config="drawPreview.config" />
+              <v-star v-if="drawPreview?.kind === 'star'" :config="drawPreview.config" />
             </v-layer>
           </v-stage>
           <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。

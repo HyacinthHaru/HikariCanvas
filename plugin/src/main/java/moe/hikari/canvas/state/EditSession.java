@@ -183,6 +183,9 @@ public final class EditSession {
             element = switch (type) {
                 case "text" -> buildText(id, props);
                 case "rect" -> buildRect(id, props);
+                case "path" -> buildPath(id, props);
+                case "circle" -> buildCircle(id, props);
+                case "shape" -> buildShape(id, props);
                 default -> throw new ValidationException("INVALID_ELEMENT", "unknown element type: " + type);
             };
         } catch (ValidationException ve) {
@@ -238,6 +241,9 @@ public final class EditSession {
                 case TextElement t -> applyTextPatch(t, patch);
                 case RectElement r -> applyRectPatch(r, patch);
                 case IconElement ic -> applyIconPatch(ic, patch);
+                case PathElement p -> applyPathPatch(p, patch);
+                case CircleElement c -> applyCirclePatch(c, patch);
+                case ShapeElement sh -> applyShapePatch(sh, patch);
             };
         } catch (ValidationException ve) {
             return err(ve.code, ve.getMessage());
@@ -929,6 +935,265 @@ public final class EditSession {
                 null, null, null);
     }
 
+    // ---------- M9 PathElement ----------
+
+    private Element buildPath(String id, Map<String, Object> p) {
+        int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
+        int y = intFieldOrDefault(p, "y", 0); validateCoord(y, "y");
+        int w = intFieldOrDefault(p, "w", 100); validateDim(w, "w");
+        int h = intFieldOrDefault(p, "h", 100); validateDim(h, "h");
+        int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
+        boolean locked = boolFieldOrDefault(p, "locked", false);
+        boolean visible = boolFieldOrDefault(p, "visible", true);
+        String d = requireString(p, "d", true);
+        validatePathD(d);
+        String fill = nullableString(p, "fill");
+        if (fill != null) validateColor(fill);
+        Stroke stroke = buildStroke(p.get("stroke"));
+        if (fill == null && (stroke == null || stroke.width() == 0)) {
+            throw new ValidationException("INVALID_ELEMENT", "path needs fill or non-zero stroke");
+        }
+        String markerStart = parseMarkerNullable(p.get("markerStart"));
+        String markerEnd = parseMarkerNullable(p.get("markerEnd"));
+        return new PathElement(id, x, y, w, h, rotation, locked, visible,
+                d, fill, stroke, markerStart, markerEnd,
+                null, null, null);
+    }
+
+    private PathElement applyPathPatch(PathElement orig, Map<String, Object> patch) {
+        int x = orig.x(); int y = orig.y(); int w = orig.w(); int h = orig.h();
+        int rotation = orig.rotation();
+        boolean locked = orig.locked(); boolean visible = orig.visible();
+        String d = orig.d();
+        String fill = orig.fill();
+        Stroke stroke = orig.stroke();
+        String markerStart = orig.markerStart();
+        String markerEnd = orig.markerEnd();
+        Float opacity = orig.opacity();
+        BlendMode blendMode = orig.blendMode();
+        RenderMode renderMode = orig.renderMode();
+
+        for (var e : patch.entrySet()) {
+            String k = e.getKey(); Object v = e.getValue();
+            switch (k) {
+                case "x" -> { x = intValue(v, k); validateCoord(x, k); }
+                case "y" -> { y = intValue(v, k); validateCoord(y, k); }
+                case "w" -> { w = intValue(v, k); validateDim(w, k); }
+                case "h" -> { h = intValue(v, k); validateDim(h, k); }
+                case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
+                case "locked" -> locked = boolValue(v, k);
+                case "visible" -> visible = boolValue(v, k);
+                case "d" -> { d = requireStringValue(v, k); validatePathD(d); }
+                case "fill" -> {
+                    if (v == null) fill = null;
+                    else { fill = requireStringValue(v, k); validateColor(fill); }
+                }
+                case "stroke" -> stroke = buildStroke(v);
+                case "markerStart" -> markerStart = parseMarkerNullable(v);
+                case "markerEnd" -> markerEnd = parseMarkerNullable(v);
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
+                default -> throw new ValidationException("INVALID_PAYLOAD",
+                        "unknown path field: " + k);
+            }
+        }
+        if (fill == null && (stroke == null || stroke.width() == 0)) {
+            throw new ValidationException("INVALID_ELEMENT", "path needs fill or non-zero stroke");
+        }
+        return new PathElement(orig.id(), x, y, w, h, rotation, locked, visible,
+                d, fill, stroke, markerStart, markerEnd,
+                opacity, blendMode, renderMode);
+    }
+
+    private static void validatePathD(String d) {
+        PathDValidator.Result r = PathDValidator.validate(d);
+        if (!r.ok()) throw new ValidationException("INVALID_PAYLOAD", "path.d invalid: " + r.reason());
+    }
+
+    private static String parseMarkerNullable(Object v) {
+        if (v == null) return null;
+        if (!(v instanceof String s)) {
+            throw new ValidationException("INVALID_PAYLOAD", "marker must be string");
+        }
+        return switch (s) {
+            case "arrow", "dot" -> s;
+            default -> throw new ValidationException("INVALID_PAYLOAD",
+                    "marker must be 'arrow' or 'dot': " + s);
+        };
+    }
+
+    // ---------- M9 CircleElement ----------
+
+    private Element buildCircle(String id, Map<String, Object> p) {
+        int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
+        int y = intFieldOrDefault(p, "y", 0); validateCoord(y, "y");
+        int w = intFieldOrDefault(p, "w", 64); validateDim(w, "w");
+        int h = intFieldOrDefault(p, "h", 64); validateDim(h, "h");
+        int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
+        boolean locked = boolFieldOrDefault(p, "locked", false);
+        boolean visible = boolFieldOrDefault(p, "visible", true);
+        String fill = nullableString(p, "fill");
+        if (fill != null) validateColor(fill);
+        Stroke stroke = buildStroke(p.get("stroke"));
+        if (fill == null && (stroke == null || stroke.width() == 0)) {
+            throw new ValidationException("INVALID_ELEMENT", "circle needs fill or non-zero stroke");
+        }
+        return new CircleElement(id, x, y, w, h, rotation, locked, visible,
+                fill, stroke,
+                null, null, null);
+    }
+
+    private CircleElement applyCirclePatch(CircleElement orig, Map<String, Object> patch) {
+        int x = orig.x(); int y = orig.y(); int w = orig.w(); int h = orig.h();
+        int rotation = orig.rotation();
+        boolean locked = orig.locked(); boolean visible = orig.visible();
+        String fill = orig.fill();
+        Stroke stroke = orig.stroke();
+        Float opacity = orig.opacity();
+        BlendMode blendMode = orig.blendMode();
+        RenderMode renderMode = orig.renderMode();
+
+        for (var e : patch.entrySet()) {
+            String k = e.getKey(); Object v = e.getValue();
+            switch (k) {
+                case "x" -> { x = intValue(v, k); validateCoord(x, k); }
+                case "y" -> { y = intValue(v, k); validateCoord(y, k); }
+                case "w" -> { w = intValue(v, k); validateDim(w, k); }
+                case "h" -> { h = intValue(v, k); validateDim(h, k); }
+                case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
+                case "locked" -> locked = boolValue(v, k);
+                case "visible" -> visible = boolValue(v, k);
+                case "fill" -> {
+                    if (v == null) fill = null;
+                    else { fill = requireStringValue(v, k); validateColor(fill); }
+                }
+                case "stroke" -> stroke = buildStroke(v);
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
+                default -> throw new ValidationException("INVALID_PAYLOAD",
+                        "unknown circle field: " + k);
+            }
+        }
+        if (fill == null && (stroke == null || stroke.width() == 0)) {
+            throw new ValidationException("INVALID_ELEMENT", "circle needs fill or non-zero stroke");
+        }
+        return new CircleElement(orig.id(), x, y, w, h, rotation, locked, visible,
+                fill, stroke,
+                opacity, blendMode, renderMode);
+    }
+
+    // ---------- M9 ShapeElement ----------
+
+    private static final int MIN_SIDES = 3;
+    private static final int MAX_SIDES = 32;
+    private static final float MIN_INNER_RATIO = 0.1f;
+    private static final float MAX_INNER_RATIO = 0.95f;
+
+    private Element buildShape(String id, Map<String, Object> p) {
+        int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
+        int y = intFieldOrDefault(p, "y", 0); validateCoord(y, "y");
+        int w = intFieldOrDefault(p, "w", 80); validateDim(w, "w");
+        int h = intFieldOrDefault(p, "h", 80); validateDim(h, "h");
+        int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
+        boolean locked = boolFieldOrDefault(p, "locked", false);
+        boolean visible = boolFieldOrDefault(p, "visible", true);
+        String kind = stringFieldOrDefault(p, "kind", "polygon");
+        validateShapeKind(kind);
+        int sides = intFieldOrDefault(p, "sides", kind.equals("star") ? 5 : 6);
+        validateSides(sides);
+        Float innerRatio = null;
+        Object irRaw = p.get("innerRatio");
+        if (irRaw != null) {
+            innerRatio = ((Number) irRaw).floatValue();
+            validateInnerRatio(innerRatio);
+        }
+        String fill = nullableString(p, "fill");
+        if (fill != null) validateColor(fill);
+        Stroke stroke = buildStroke(p.get("stroke"));
+        if (fill == null && (stroke == null || stroke.width() == 0)) {
+            throw new ValidationException("INVALID_ELEMENT", "shape needs fill or non-zero stroke");
+        }
+        return new ShapeElement(id, x, y, w, h, rotation, locked, visible,
+                kind, sides, innerRatio,
+                fill, stroke,
+                null, null, null);
+    }
+
+    private ShapeElement applyShapePatch(ShapeElement orig, Map<String, Object> patch) {
+        int x = orig.x(); int y = orig.y(); int w = orig.w(); int h = orig.h();
+        int rotation = orig.rotation();
+        boolean locked = orig.locked(); boolean visible = orig.visible();
+        String kind = orig.kind();
+        int sides = orig.sides();
+        Float innerRatio = orig.innerRatio();
+        String fill = orig.fill();
+        Stroke stroke = orig.stroke();
+        Float opacity = orig.opacity();
+        BlendMode blendMode = orig.blendMode();
+        RenderMode renderMode = orig.renderMode();
+
+        for (var e : patch.entrySet()) {
+            String k = e.getKey(); Object v = e.getValue();
+            switch (k) {
+                case "x" -> { x = intValue(v, k); validateCoord(x, k); }
+                case "y" -> { y = intValue(v, k); validateCoord(y, k); }
+                case "w" -> { w = intValue(v, k); validateDim(w, k); }
+                case "h" -> { h = intValue(v, k); validateDim(h, k); }
+                case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
+                case "locked" -> locked = boolValue(v, k);
+                case "visible" -> visible = boolValue(v, k);
+                case "kind" -> { kind = requireStringValue(v, k); validateShapeKind(kind); }
+                case "sides" -> { sides = intValue(v, k); validateSides(sides); }
+                case "innerRatio" -> {
+                    if (v == null) innerRatio = null;
+                    else { innerRatio = floatValue(v, k); validateInnerRatio(innerRatio); }
+                }
+                case "fill" -> {
+                    if (v == null) fill = null;
+                    else { fill = requireStringValue(v, k); validateColor(fill); }
+                }
+                case "stroke" -> stroke = buildStroke(v);
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
+                default -> throw new ValidationException("INVALID_PAYLOAD",
+                        "unknown shape field: " + k);
+            }
+        }
+        if (fill == null && (stroke == null || stroke.width() == 0)) {
+            throw new ValidationException("INVALID_ELEMENT", "shape needs fill or non-zero stroke");
+        }
+        return new ShapeElement(orig.id(), x, y, w, h, rotation, locked, visible,
+                kind, sides, innerRatio,
+                fill, stroke,
+                opacity, blendMode, renderMode);
+    }
+
+    private static void validateShapeKind(String k) {
+        if (!"polygon".equals(k) && !"star".equals(k)) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "shape.kind must be 'polygon' or 'star': " + k);
+        }
+    }
+
+    private static void validateSides(int v) {
+        if (v < MIN_SIDES || v > MAX_SIDES) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "shape.sides out of range [" + MIN_SIDES + ", " + MAX_SIDES + "]: " + v);
+        }
+    }
+
+    private static void validateInnerRatio(float v) {
+        if (!Float.isFinite(v) || v < MIN_INNER_RATIO || v > MAX_INNER_RATIO) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "shape.innerRatio out of range [" + MIN_INNER_RATIO + ", " + MAX_INNER_RATIO + "]: " + v);
+        }
+    }
+
+    // ---------- 共享 helpers ----------
+
     private Stroke buildStroke(Object raw) {
         if (raw == null) return null;
         if (!(raw instanceof Map<?, ?> m)) {
@@ -1094,6 +1359,19 @@ public final class EditSession {
                     ic.x(), ic.y(), ic.w(), ic.h(), ic.rotation(), ic.locked(), ic.visible(),
                     ic.source(), ic.tint(),
                     ic.opacity(), ic.blendMode(), ic.renderMode());
+            case PathElement p -> new PathElement(newId,
+                    p.x(), p.y(), p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
+                    p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
+                    p.opacity(), p.blendMode(), p.renderMode());
+            case CircleElement c -> new CircleElement(newId,
+                    c.x(), c.y(), c.w(), c.h(), c.rotation(), c.locked(), c.visible(),
+                    c.fill(), c.stroke(),
+                    c.opacity(), c.blendMode(), c.renderMode());
+            case ShapeElement sh -> new ShapeElement(newId,
+                    sh.x(), sh.y(), sh.w(), sh.h(), sh.rotation(), sh.locked(), sh.visible(),
+                    sh.kind(), sh.sides(), sh.innerRatio(),
+                    sh.fill(), sh.stroke(),
+                    sh.opacity(), sh.blendMode(), sh.renderMode());
         };
     }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { X, Keyboard, MousePointer2, Move, Layers, Sparkles, ZoomIn } from 'lucide-vue-next';
+import { X, Keyboard, MousePointer2, Move, Layers, Sparkles, ZoomIn, Minus, MoveRight, Circle, Star } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 import { useUiStore } from '@/stores/ui';
 
@@ -44,6 +44,30 @@ const ui = useUiStore();
                 <Move class="size-3.5" /> {{ t.help.moveTool }}
               </span>
               <kbd class="hc-kbd-help">M</kbd>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="flex items-center gap-2">
+                <Minus class="size-3.5" /> {{ t.help.lineTool }}
+              </span>
+              <kbd class="hc-kbd-help">L</kbd>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="flex items-center gap-2">
+                <MoveRight class="size-3.5" /> {{ t.help.arrowTool }}
+              </span>
+              <kbd class="hc-kbd-help">A</kbd>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="flex items-center gap-2">
+                <Circle class="size-3.5" /> {{ t.help.circleTool }}
+              </span>
+              <kbd class="hc-kbd-help">C</kbd>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="flex items-center gap-2">
+                <Star class="size-3.5" /> {{ t.help.starTool }}
+              </span>
+              <kbd class="hc-kbd-help">S</kbd>
             </li>
             <li class="flex items-center justify-between">
               <span>{{ t.help.openTemplates }}</span>

@@ -8,23 +8,33 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  *
  * <p>M3 最小元素集 = {@link TextElement} + {@link RectElement}。{@link IconElement}
  * 在 M7 polish 引入。M8 v2 新增 {@link #opacity()} / {@link #blendMode()} / {@link #renderMode()}
- * 三个统一字段，详见 {@code docs/architecture.md §10.5}。</p>
+ * 三个统一字段，详见 {@code docs/architecture.md §10.5}。
+ * M9 新增 {@link PathElement} / {@link CircleElement} / {@link ShapeElement}：</p>
+ *
+ * <ul>
+ *   <li>{@code path}：通用 SVG-like 路径（M/L/Q/C/Z 子集 + marker），承载线/箭头/软线/点</li>
+ *   <li>{@code circle}：圆 / 椭圆（bbox 推 cx/cy/rx/ry）</li>
+ *   <li>{@code shape}：正多边形 / 星（kind + sides + innerRatio）</li>
+ * </ul>
  *
  * <p><b>v2 字段默认值约定：</b> 三字段均为 nullable，序列化按 {@code NON_NULL} 省略；
  * Java 侧调用方可通过 {@link #effectiveOpacity()} / {@link #effectiveBlendMode()} /
- * {@link #effectiveRenderMode()} 取兜底后的值（{@code 1.0f / NORMAL / CLEAN}）。
- * M8-A 阶段所有构造调用传 null 保持与 v1 等价行为；M8-C/E 起 EditSession 才接受 patch 修改。</p>
+ * {@link #effectiveRenderMode()} 取兜底后的值（{@code 1.0f / NORMAL / CLEAN}）。</p>
  *
  * <p>Jackson 序列化：基于 {@code type} 字段的多态判定。写出的 JSON 会自动带
- * {@code "type": "text" | "rect" | "icon"}。</p>
+ * {@code "type": "text" | "rect" | "icon" | "path" | "circle" | "shape"}。</p>
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
         @JsonSubTypes.Type(value = TextElement.class, name = "text"),
         @JsonSubTypes.Type(value = RectElement.class, name = "rect"),
         @JsonSubTypes.Type(value = IconElement.class, name = "icon"),
+        @JsonSubTypes.Type(value = PathElement.class, name = "path"),
+        @JsonSubTypes.Type(value = CircleElement.class, name = "circle"),
+        @JsonSubTypes.Type(value = ShapeElement.class, name = "shape"),
 })
-public sealed interface Element permits TextElement, RectElement, IconElement {
+public sealed interface Element permits TextElement, RectElement, IconElement,
+        PathElement, CircleElement, ShapeElement {
 
     /** {@code "e-<uuid>"}，由服务端生成，全局唯一。 */
     String id();

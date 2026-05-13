@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move } from 'lucide-vue-next';
+import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Minus, MoveRight, Circle, Star } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -80,6 +80,54 @@ function addRect() {
         @click="ui.setTool('move')"
       >
         <Move class="size-5" />
+      </button>
+    </Tooltip>
+
+    <div class="my-1 w-8 h-px bg-[color:var(--border)]"></div>
+
+    <!-- M9-D：绘制工具激活态切换（drag-to-create 在 M9-E 接入） -->
+    <Tooltip :text="t.tools.lineTool" shortcut="L">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'line'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('line')"
+      >
+        <Minus class="size-5" />
+      </button>
+    </Tooltip>
+    <Tooltip :text="t.tools.arrowTool" shortcut="A">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'arrow'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('arrow')"
+      >
+        <MoveRight class="size-5" />
+      </button>
+    </Tooltip>
+    <Tooltip :text="t.tools.circleTool" shortcut="C">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'circle'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('circle')"
+      >
+        <Circle class="size-5" />
+      </button>
+    </Tooltip>
+    <Tooltip :text="t.tools.starTool" shortcut="S">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'star'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('star')"
+      >
+        <Star class="size-5" />
       </button>
     </Tooltip>
 

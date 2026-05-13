@@ -1,0 +1,46 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#FFFFFF"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-title",
+      "x": 8, "y": 2, "w": 240, "h": 12,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "PATH",
+      "fontId": "ark_pixel",
+      "fontSize": 10,
+      "color": "#888888",
+      "align": "left",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false
+    },
+    {
+      "type": "path",
+      "id": "e-line",
+      "x": 20, "y": 36, "w": 220, "h": 4,
+      "rotation": 0, "locked": false, "visible": true,
+      "d": "M 0 0 L 220 0",
+      "stroke": {"width": 2, "color": "#000000"}
+    },
+    {
+      "type": "path",
+      "id": "e-arrow",
+      "x": 20, "y": 66, "w": 220, "h": 12,
+      "rotation": 0, "locked": false, "visible": true,
+      "d": "M 0 0 L 200 0",
+      "stroke": {"width": 2, "color": "#4A90E2"},
+      "markerEnd": "arrow"
+    },
+    {
+      "type": "path",
+      "id": "e-curve",
+      "x": 20, "y": 95, "w": 220, "h": 25,
+      "rotation": 0, "locked": false, "visible": true,
+      "d": "M 0 20 Q 110 -20 220 20",
+      "stroke": {"width": 2, "color": "#E4002B"}
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

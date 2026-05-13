@@ -11,8 +11,15 @@ export type Locale = 'zh' | 'en';
  * 当前激活工具。
  * - {@code 'select'}：默认。点击元素 = 选中 + 显示 transformer（resize/rotate 锚点）。双击文本进 inline edit。
  * - {@code 'move'}：PS 移动工具风格。点击元素 = 选中 + 立即可拖；transformer 不显示（避免大元素时锚点遮挡）；双击仍允许进 edit。
+ * - {@code 'line' / 'arrow' / 'circle' / 'star'}（M9-D）：进入"待绘制"状态，cursor = crosshair；
+ *   M9-E 接 canvas mousedown/move/up 实现 drag-to-create。M9-D 期间画布上 drag 暂无效果。
  */
-export type ActiveTool = 'select' | 'move';
+export type ActiveTool = 'select' | 'move' | 'line' | 'arrow' | 'circle' | 'star';
+
+/** 是否是绘制工具（拖出新元素）。select/move 之外均为绘制工具。 */
+export function isDrawTool(tool: ActiveTool): boolean {
+    return tool !== 'select' && tool !== 'move';
+}
 
 /**
  * UI 本地偏好：主题 / 侧边折叠 / 选中 / 缩放 / 底部日志抽屉。
@@ -180,9 +187,10 @@ function applyThemeToDom(theme: Theme) {
 }
 
 function loadTool(): ActiveTool {
+    const KNOWN: ActiveTool[] = ['select', 'move', 'line', 'arrow', 'circle', 'star'];
     try {
-        const v = localStorage.getItem(TOOL_KEY);
-        if (v === 'select' || v === 'move') return v;
+        const v = localStorage.getItem(TOOL_KEY) as ActiveTool | null;
+        if (v && KNOWN.includes(v)) return v;
     } catch { /* ignore */ }
     return 'select';
 }

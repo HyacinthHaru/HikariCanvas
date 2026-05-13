@@ -59,7 +59,13 @@ export interface Layer {
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay';
 export type RenderMode = 'clean' | 'dither';
 
-export type Element = TextElement | RectElement | IconElement;
+export type Element =
+    | TextElement
+    | RectElement
+    | IconElement
+    | PathElement      // M9
+    | CircleElement    // M9
+    | ShapeElement;    // M9
 
 interface BaseElement {
     id: string;
@@ -101,6 +107,36 @@ export interface IconElement extends BaseElement {
     source: string;
     /** 染色 #RRGGBB[AA]；空 = 原色 */
     tint?: string;
+}
+
+/**
+ * M9 PathElement：通用 SVG-like 路径（M/L/Q/C/Z 子集 + marker）。
+ * d 内坐标相对 element.(x, y)；transform 改 x/y 时 d 不动。
+ */
+export interface PathElement extends BaseElement {
+    type: 'path';
+    d: string;
+    fill?: string;
+    stroke?: Stroke;
+    markerStart?: 'arrow' | 'dot';
+    markerEnd?: 'arrow' | 'dot';
+}
+
+/** M9 CircleElement：圆 / 椭圆，由 bbox 推 cx/cy/rx/ry。 */
+export interface CircleElement extends BaseElement {
+    type: 'circle';
+    fill?: string;
+    stroke?: Stroke;
+}
+
+/** M9 ShapeElement：正多边形 / 星，外接圆由 bbox 决定。 */
+export interface ShapeElement extends BaseElement {
+    type: 'shape';
+    kind: 'polygon' | 'star';
+    sides: number;        // 3..32
+    innerRatio?: number;  // star 用，0.1..0.95；省略 = 默认 0.5
+    fill?: string;
+    stroke?: Stroke;
 }
 
 export interface Effects {

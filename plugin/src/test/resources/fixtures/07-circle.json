@@ -1,0 +1,64 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 2, "background": "#FFFFFF"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-title",
+      "x": 8, "y": 2, "w": 240, "h": 12,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "CIRCLE",
+      "fontId": "ark_pixel",
+      "fontSize": 10,
+      "color": "#888888",
+      "align": "left",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false
+    },
+    {
+      "type": "circle",
+      "id": "e-fill",
+      "x": 20, "y": 30, "w": 60, "h": 60,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": "#FF3366"
+    },
+    {
+      "type": "circle",
+      "id": "e-stroke",
+      "x": 100, "y": 30, "w": 60, "h": 60,
+      "rotation": 0, "locked": false, "visible": true,
+      "stroke": {"width": 2, "color": "#000000"}
+    },
+    {
+      "type": "circle",
+      "id": "e-both",
+      "x": 180, "y": 30, "w": 60, "h": 60,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": "#FFCC00",
+      "stroke": {"width": 2, "color": "#000000"}
+    },
+    {
+      "type": "circle",
+      "id": "e-ellipse",
+      "x": 30, "y": 130, "w": 200, "h": 60,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": "#22AAEE"
+    },
+    {
+      "type": "circle",
+      "id": "e-small",
+      "x": 30, "y": 220, "w": 16, "h": 16,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": "#000000"
+    },
+    {
+      "type": "circle",
+      "id": "e-small2",
+      "x": 60, "y": 220, "w": 16, "h": 16,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": "#666666"
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}
