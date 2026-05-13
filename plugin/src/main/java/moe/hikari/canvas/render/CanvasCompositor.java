@@ -598,12 +598,20 @@ public final class CanvasCompositor {
         g.setTransform(saved);
     }
 
+    /**
+     * 解析 {@code #RRGGBB} 或 {@code #RRGGBBAA} 为 AWT Color。
+     *
+     * <p>M10：alpha 通道支持。alpha 字段缺省时 = 255（不透明）；非空时 0-255 控制半透明。
+     * 在 {@code TYPE_INT_RGB} 主 buffer 上 fill 时 Graphics2D 走 Porter-Duff SrcOver，
+     * alpha < 255 的色与底层像素叠加（"颜色变浅"语义，同 docs/rendering.md §6.5 element opacity）。</p>
+     */
     private static Color parseColor(String hex) {
         if (hex == null) return Color.WHITE;
         Matcher m = HEX_RE.matcher(hex);
         if (!m.matches()) return Color.WHITE;
         int rgb = Integer.parseInt(m.group(1), 16);
-        return new Color((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
+        int alpha = m.group(2) != null ? Integer.parseInt(m.group(2), 16) : 255;
+        return new Color((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, alpha);
     }
 
 }

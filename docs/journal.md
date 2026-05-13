@@ -5,6 +5,56 @@
 
 ---
 
+## 2026-05-13 · M10 调色板（ColorInput + 三色板 + alpha + copy hex）
+
+**用户加买项**：alpha 通道（8 位 hex） + 复制 hex 到剪贴板。本次 M10 实施含 alpha + copy hex。
+
+### 范围
+
+- **三色板**：项目色板（ProjectState 派生）+ 最近色板（localStorage 持久化前 20）+ 默认色板（24 色 MC-friendly 配色，硬编码）
+- **ColorInput 自定义组件**：替代所有原生 `<input type="color">`，含 HTML5 picker + alpha slider + hex 文本框 + 复制按钮 + 三色板 swatches 网格
+- **alpha 通道**：默认开启（`allowAlpha=true`），alpha=ff 时存 6 位 hex，alpha<ff 时存 8 位
+- **复制 hex**：popover 内复制按钮 → `navigator.clipboard.writeText` + 1.5s "已复制" 视觉反馈
+
+### 实施
+
+- 新增 `web/config/palettes.ts`：DEFAULT_SWATCHES 24 色（黑白灰 4 + 暖色 4 + 绿 4 + 蓝 4 + 紫粉 4 + MC 标志 4）
+- 新增 `web/stores/palette.ts`：recent localStorage + projectColors computed（扫所有 layer.elements 的 color/fill/stroke.color/tint/effects.* + canvas.background，Set 去重）
+- 新增 `web/components/ui/ColorInput.vue`：~330 行
+  - trigger：色块 + hex 文本按钮
+  - popover（absolute 定位 + onClickOutside 自动关）：HTML5 picker + alpha slider（棋盘格底 + 当前色渐变 overlay）+ hex 文本框 + 复制按钮 + 三色板网格 8 列
+  - emit 分两类：picker/slider input 阶段不加 recent，change/swatch 点击/hex 提交才 addRecent
+  - 棋盘格背景 CSS（hc-checkerboard）让 alpha < 255 时透出
+- `web/components/layout/RightPanel.vue`：6 处 `<input type="color">` 替换为 `<ColorInput :model-value @update:model-value>`（rect.fill + rect.stroke.color + text.color + effects.{stroke,shadow,glow}.color）
+- `web/i18n/messages.ts`：t.palette.{projectHeader, recentHeader, defaultHeader, copyTip, copied, alphaLabel} 中英
+- **后端 `CanvasCompositor.parseColor` 加 alpha 支持**：解析 `#RRGGBBAA` 时 alpha 0-255 → `new Color(r, g, b, a)`；Graphics2D 在 TYPE_INT_RGB 上 SrcOver 叠加（"颜色变浅"语义同 docs/rendering.md §6.5）
+
+### Review 修复（实施完成后）
+
+- hex 文本框同步 bug：用户在 picker/slider 改色后切到 hex 文本框，显示的还是旧 draft（未跟随 modelValue 变化）→ 加 `hexFocused` 跟踪 + `watch(modelValue)` 当未 focus 时同步到 hexDraft
+
+### 关键设计决策
+
+1. **alpha=ff 归一化存 6 位 hex**：保持向后兼容，老 element 字段不被升级；新存 alpha<ff 时存 8 位，新老共存
+2. **projectColors 不持久化**：从 ProjectState 派生 computed，再次打开 wall 自动重扫，避免引入新的工程文件字段
+3. **recent 完全前端 localStorage**：不发 ws，多 client 互不影响
+4. **canvas.background 用 `allowAlpha=false`** 留作 future 接入背景调色器；当前 UI 无 background input
+5. **emit 分两阶段**：input（拖动期）不加 recent，change（mouseup）/swatch/hex commit 才加，避免拖动期 localStorage 频繁写
+6. **棋盘格背景显 alpha**：CSS linear-gradient × 2 实现，浏览器原生渲染零开销
+7. **后端 parseColor 同步 alpha**：原本只读 6 位忽略 alpha，会导致前后端不一致；M10 一并修
+
+### 验证
+
+- `vite build` 通过：425.35KB JS / 36.90KB CSS（M9 后 417.74/33.13；+8KB JS 含 ColorInput 组件 +3.5KB CSS 含棋盘格/popover 样式）
+- `./gradlew :plugin:test --offline` 全过：parseColor 改动不破坏现有测试（5+3 fixture 都是 6 位 hex，alpha=255 行为不变）
+
+### 工期
+
+- **预估 3 天**（PROPOSAL §6 锁定），实际**约 30 分钟**
+- 3 新文件 + 4 修改文件 + 0 测试漂移 + 1 个 review 修复
+
+---
+
 ## 2026-05-13 · M9-A/B/C/D/E 全栈实施（PathElement + 工具栏 + drag-to-create）
 
 **目标：** 把"线 / 箭头 / 软线 / 星 / 点"五种工具压缩成一个 path 元素 + marker；CircleElement / ShapeElement 单独立；工具栏 drag-to-create。docs CLAUDE.md / PROPOSAL §6 锁定 M9 = "PathElement + 工具栏（1.5w）"，本次一气完成 A-E 五段。

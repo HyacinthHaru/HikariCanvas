@@ -154,6 +154,14 @@ export const messages = {
             renderModeClean: '直接量化',
             renderModeDither: '抖动（M11）',
         },
+        palette: {
+            projectHeader: '项目色板',
+            recentHeader: '最近用过',
+            defaultHeader: '默认色板',
+            copyTip: '复制 hex 到剪贴板',
+            copied: '已复制',
+            alphaLabel: 'α',
+        },
         layerPanel: {
             header: '图层',
             count: (n: number) => `${n} 层`,
@@ -389,6 +397,14 @@ export const messages = {
             renderModeTip: 'Element-level quantize policy (M11 implements Bayer 4×4 dither)',
             renderModeClean: 'Clean quantize',
             renderModeDither: 'Dither (M11)',
+        },
+        palette: {
+            projectHeader: 'Project palette',
+            recentHeader: 'Recent',
+            defaultHeader: 'Defaults',
+            copyTip: 'Copy hex to clipboard',
+            copied: 'Copied',
+            alphaLabel: 'α',
         },
         layerPanel: {
             header: 'Layers',

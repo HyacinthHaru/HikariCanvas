@@ -10,6 +10,7 @@ import { FONT_META } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import LayerPanel from '@/components/layout/LayerPanel.vue';
+import ColorInput from '@/components/ui/ColorInput.vue';
 import type { Element, RectElement, TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
 const project = useProjectStore();
@@ -445,11 +446,12 @@ function onElementDragEnd() {
           <div class="pt-1.5 space-y-2">
             <label class="flex items-center justify-between gap-2">
               <span class="text-[color:var(--muted-foreground)]">{{ t.properties.fill }}</span>
-              <div class="flex items-center gap-1">
+              <div class="flex items-center gap-1 flex-1 max-w-[160px]">
                 <input type="checkbox" :checked="(selected as RectElement).fill !== undefined && (selected as RectElement).fill !== null"
                        @change="(e: Event) => sendUpdate({ fill: (e.target as HTMLInputElement).checked ? (selected as RectElement).fill ?? '#FF3366' : null })">
-                <input type="color" class="hc-color" :value="(selected as RectElement).fill ?? '#FF3366'"
-                       @input="(e) => onColorChange('fill', e)" :disabled="!((selected as RectElement).fill)">
+                <ColorInput v-if="(selected as RectElement).fill"
+                            :model-value="(selected as RectElement).fill!"
+                            @update:model-value="(v) => sendUpdate({ fill: v })" />
               </div>
             </label>
             <label class="flex items-center justify-between gap-2">
@@ -465,8 +467,8 @@ function onElementDragEnd() {
                 </label>
                 <label class="flex flex-col gap-0.5">
                   <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeColor }}</span>
-                  <input type="color" class="hc-color h-7" :value="rectStroke()!.color"
-                         @input="(e) => patchRectStroke({ color: (e.target as HTMLInputElement).value.toUpperCase() })">
+                  <ColorInput :model-value="rectStroke()!.color"
+                              @update:model-value="(v) => patchRectStroke({ color: v })" />
                 </label>
               </div>
             </template>
@@ -529,8 +531,8 @@ function onElementDragEnd() {
               </label>
               <label class="flex flex-col gap-0.5">
                 <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                <input type="color" class="hc-color h-7" :value="(selected as TextElement).color"
-                       @input="(e) => onColorChange('color', e)">
+                <ColorInput :model-value="(selected as TextElement).color"
+                            @update:model-value="(v) => sendUpdate({ color: v })" />
               </label>
               <label class="flex flex-col gap-0.5">
                 <span class="hc-field-label">
@@ -581,8 +583,8 @@ function onElementDragEnd() {
                 </label>
                 <label class="flex flex-col gap-0.5">
                   <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                  <input type="color" class="hc-color h-7" :value="textEffects().stroke!.color"
-                         @input="(e) => patchStroke({ color: (e.target as HTMLInputElement).value.toUpperCase() })">
+                  <ColorInput :model-value="textEffects().stroke!.color"
+                              @update:model-value="(v) => patchStroke({ color: v })" />
                 </label>
               </div>
             </div>
@@ -605,8 +607,8 @@ function onElementDragEnd() {
                 </label>
                 <label class="flex flex-col gap-0.5">
                   <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                  <input type="color" class="hc-color h-7" :value="textEffects().shadow!.color"
-                         @input="(e) => patchShadow({ color: (e.target as HTMLInputElement).value.toUpperCase() })">
+                  <ColorInput :model-value="textEffects().shadow!.color"
+                              @update:model-value="(v) => patchShadow({ color: v })" />
                 </label>
               </div>
             </div>
@@ -624,8 +626,8 @@ function onElementDragEnd() {
                 </label>
                 <label class="flex flex-col gap-0.5">
                   <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                  <input type="color" class="hc-color h-7" :value="textEffects().glow!.color"
-                         @input="(e) => patchGlow({ color: (e.target as HTMLInputElement).value.toUpperCase() })">
+                  <ColorInput :model-value="textEffects().glow!.color"
+                              @update:model-value="(v) => patchGlow({ color: v })" />
                 </label>
               </div>
             </div>
