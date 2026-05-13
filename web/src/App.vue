@@ -64,11 +64,29 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     const ctrl = e.ctrlKey || e.metaKey;
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
+        // M8-F：多选批量删
+        if (ui.selectedCount > 1) {
+            e.preventDefault();
+            const ids = Array.from(ui.selectedIds);
+            for (const id of ids) wsClient.send('element.delete', { elementId: id });
+            ui.clearSelection();
+            return;
+        }
         if (selectedId) {
             e.preventDefault();
             wsClient.send('element.delete', { elementId: selectedId });
             ui.selectElement(null);
         }
+        return;
+    }
+
+    // M8-F：Cmd+A 全选当前活动层所有元素
+    if (ctrl && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        const ids = project.activeLayer.elements
+            .filter((el) => el.visible)
+            .map((el) => el.id);
+        ui.selectMany(ids);
         return;
     }
 
@@ -84,6 +102,26 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     }
 
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        // M8-F：多选时所有选中 element 同步微移
+        if (ui.selectedCount > 1) {
+            e.preventDefault();
+            const step = e.shiftKey ? 10 : 1;
+            let dx = 0;
+            let dy = 0;
+            if (e.key === 'ArrowLeft') dx = -step;
+            else if (e.key === 'ArrowRight') dx = step;
+            else if (e.key === 'ArrowUp') dy = -step;
+            else if (e.key === 'ArrowDown') dy = step;
+            for (const id of ui.selectedIds) {
+                const el = project.elementById(id);
+                if (!el) continue;
+                const newX = el.x + dx;
+                const newY = el.y + dy;
+                el.x = newX; el.y = newY;
+                wsClient.send('element.transform', { elementId: id, x: newX, y: newY });
+            }
+            return;
+        }
         if (!selectedId) return;
         const el = project.elementById(selectedId);
         if (!el) return;

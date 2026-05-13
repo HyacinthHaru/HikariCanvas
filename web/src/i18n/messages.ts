@@ -112,6 +112,10 @@ export const messages = {
         properties: {
             header: '属性',
             empty: '未选中元素；在画布或图层中点击选择。',
+            multiSelected: (n: number) => `${n} 个元素被选中`,
+            multiHint: '多选下仅支持批量删除；单选可编辑全部字段。Esc 取消',
+            deleteMulti: '批量删除',
+            deleteMultiTip: (n: number) => `删除 ${n} 个选中元素`,
             id: 'ID',
             type: '类型',
             transformHeader: '变换',
@@ -336,6 +340,10 @@ export const messages = {
         properties: {
             header: 'Properties',
             empty: 'No element selected. Click an element on canvas or in Layers.',
+            multiSelected: (n: number) => `${n} elements selected`,
+            multiHint: 'Multi-select supports batch delete only; single-select for full edit. Esc to clear',
+            deleteMulti: 'Delete all',
+            deleteMultiTip: (n: number) => `Delete ${n} selected elements`,
             id: 'ID',
             type: 'Type',
             transformHeader: 'Transform',

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 const THEME_KEY = 'hikari-canvas:theme';
 const LOCALE_KEY = 'hikari-canvas:locale';
@@ -17,6 +17,9 @@ export type ActiveTool = 'select' | 'move';
 /**
  * UI 本地偏好：主题 / 侧边折叠 / 选中 / 缩放 / 底部日志抽屉。
  * 仅前端状态，不与 WS 协议交互。
+ *
+ * <p>M8-F：选中模型升级为多选。{@link #selectedIds} 是单一真相；{@link #selectedElementId}
+ * 仍保留为 computed（size==1 时返该 id），让 M5/M7 期间的单选代码可以零修改继续工作。</p>
  */
 export const useUiStore = defineStore('ui', () => {
     const theme = ref<Theme>(loadTheme());
@@ -27,8 +30,26 @@ export const useUiStore = defineStore('ui', () => {
     const logDrawerOpen = ref(false);
     const helpOpen = ref(false);
 
-    /** 选中元素 id；null = 无选中。 */
-    const selectedElementId = ref<string | null>(null);
+    /** M8-F：所有当前选中的元素 id。size > 1 时为多选。 */
+    const selectedIds = ref<Set<string>>(new Set());
+
+    /**
+     * 兼容视图：size==1 时返第一个 id，否则 null。
+     * 旧组件 `ui.selectedElementId === el.id` 判等在多选时返 false（id ≠ null），但
+     * 多选行为应改用 {@link isSelected} —— 高亮 / 拖动判断需切到新 API。
+     */
+    const selectedElementId = computed<string | null>(() => {
+        if (selectedIds.value.size === 1) {
+            return selectedIds.value.values().next().value as string;
+        }
+        return null;
+    });
+
+    /** 当前选中数量。0 = 无选中；>= 2 = 多选。 */
+    const selectedCount = computed(() => selectedIds.value.size);
+
+    /** 是否至少有 1 个选中。 */
+    const hasSelection = computed(() => selectedIds.value.size > 0);
 
     /** M8-D：当前正在 inline 重命名的图层 id。LayerPanel 双击 layer name 设；保存或 ESC 清。 */
     const editingLayerId = ref<string | null>(null);
@@ -73,8 +94,45 @@ export const useUiStore = defineStore('ui', () => {
     function zoomOut() { setZoom(zoom.value / 1.25); }
     function zoomReset() { setZoom(1); }
 
-    function selectElement(id: string | null) {
-        selectedElementId.value = id;
+    // ---------- M8-F 选中操作 ----------
+
+    /** 单选或清空。`null` = 清空所有选中。 */
+    function selectElement(id: string | null): void {
+        if (id === null) {
+            if (selectedIds.value.size === 0) return;
+            selectedIds.value = new Set();
+        } else {
+            if (selectedIds.value.size === 1 && selectedIds.value.has(id)) return;
+            selectedIds.value = new Set([id]);
+        }
+    }
+
+    /** Shift / Cmd+click 用：在已有选中里切换该 id。 */
+    function toggleSelection(id: string): void {
+        const next = new Set(selectedIds.value);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        selectedIds.value = next;
+    }
+
+    /** marquee 拖框完成 / Cmd+A 全选用：整组替换。 */
+    function selectMany(ids: string[]): void {
+        selectedIds.value = new Set(ids);
+    }
+
+    function addToSelection(id: string): void {
+        if (selectedIds.value.has(id)) return;
+        const next = new Set(selectedIds.value);
+        next.add(id);
+        selectedIds.value = next;
+    }
+
+    function clearSelection(): void {
+        selectElement(null);
+    }
+
+    function isSelected(id: string): boolean {
+        return selectedIds.value.has(id);
     }
 
     function setTool(tool: ActiveTool) {
@@ -87,10 +145,13 @@ export const useUiStore = defineStore('ui', () => {
 
     return {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
-        selectedElementId, editingLayerId, zoom,
+        selectedIds, selectedElementId, selectedCount, hasSelection,
+        editingLayerId, zoom,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         setZoom, zoomIn, zoomOut, zoomReset,
-        selectElement, setTool, setEditingLayer,
+        selectElement, toggleSelection, selectMany, addToSelection, clearSelection,
+        isSelected,
+        setTool, setEditingLayer,
     };
 });
 

@@ -24,6 +24,9 @@ const selected = computed<Element | null>(() => {
 const isText = computed(() => selected.value?.type === 'text');
 const isRect = computed(() => selected.value?.type === 'rect');
 
+/** M8-F：是否多选（>= 2）。multi 时隐藏单选 UI，显示批量操作提示。 */
+const isMulti = computed(() => ui.selectedCount >= 2);
+
 const elementCount = computed(() => project.state?.elements?.length ?? 0);
 const activeLayerLocked = computed(() => project.activeLayerLocked);
 
@@ -196,6 +199,16 @@ function deleteSelected() {
     ui.selectElement(null);
 }
 
+/** M8-F：批量删除多选元素，逐个发 element.delete op。 */
+function deleteMultiSelected(): void {
+    if (ui.selectedCount === 0) return;
+    const ids = Array.from(ui.selectedIds);
+    for (const id of ids) {
+        ws.send('element.delete', { elementId: id });
+    }
+    ui.clearSelection();
+}
+
 // ---------- M5-D3 P4：文本 fit-content ----------
 
 function fitTextHeight() {
@@ -298,9 +311,22 @@ function onElementDragEnd() {
             <Trash2 class="size-3.5" />
           </button>
         </Tooltip>
+        <Tooltip v-else-if="isMulti" :text="t.properties.deleteMultiTip(ui.selectedCount)" shortcut="Del">
+          <button
+            class="ml-auto p-1 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] text-[color:var(--muted-foreground)]"
+            @click="deleteMultiSelected"
+          >
+            <Trash2 class="size-3.5" />
+          </button>
+        </Tooltip>
       </header>
 
-      <div v-if="!selected" class="p-3 text-xs text-[color:var(--muted-foreground)]">
+      <div v-if="isMulti" class="p-3 space-y-2 text-xs">
+        <div class="font-medium">{{ t.properties.multiSelected(ui.selectedCount) }}</div>
+        <div class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.multiHint }}</div>
+      </div>
+
+      <div v-else-if="!selected" class="p-3 text-xs text-[color:var(--muted-foreground)]">
         {{ t.properties.empty }}
       </div>
 
@@ -628,12 +654,12 @@ function onElementDragEnd() {
           :draggable="!activeLayerLocked"
           class="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-[color:var(--accent)] transition-colors"
           :class="{
-            'bg-[color:var(--accent)]': ui.selectedElementId === el.id,
+            'bg-[color:var(--accent)]': ui.isSelected(el.id),
             'opacity-50': dragIdx === idx,
             'ring-1 ring-[color:var(--ring)] ring-inset': dragOverIdx === idx && dragIdx !== idx,
             'cursor-not-allowed': activeLayerLocked,
           }"
-          @click="ui.selectElement(el.id)"
+          @click="(e) => (e.shiftKey || e.metaKey || e.ctrlKey) ? ui.toggleSelection(el.id) : ui.selectElement(el.id)"
           @dragstart="(e) => onElementDragStart(e, idx)"
           @dragover="(e) => onElementDragOver(e, idx)"
           @dragleave="onElementDragLeave"

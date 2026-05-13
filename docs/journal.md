@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-05-13 · M8-F 多选 marquee + 修饰键选择 + 多选 transform
+
+**M8 闭环**：journal 之前的"M8-F 续做"列表完成 1/4（多选 marquee 完整落地；guides 拖出 UI / element-level blendMode 真合成留 M11；slow path 压测留远期）。
+
+### 实施
+
+- `stores/ui.ts`：选中模型升级为 `selectedIds: Set<string>` 作为单一真相；`selectedElementId` 改为 computed（size==1 时返 id 否则 null）兼容老组件；新增 `selectedCount` / `hasSelection` / `isSelected` / `toggleSelection` / `selectMany` / `addToSelection` / `clearSelection` API
+- `components/layout/CanvasView.vue`：
+  - 加 marquee 状态 + onStageMouseDown/Move/Up 三 handler；空白处拖框 ≥ 3px 触发多选；Shift 加选；window mouseup 兜底拖出窗口的清理
+  - marquee 可视化：v-stage 内新增独立 v-layer + v-rect（蓝色虚线半透明填充，listening: false）
+  - `onHitClick` 支持 Shift / Cmd / Ctrl click = toggle 选中
+  - `hitConfig` 用 `ui.isSelected(id)` 替代单 id 判等
+  - `attachTransformer` 升级：watch `Array.from(ui.selectedIds).join(',')` 触发；attach 全部选中 nodes
+  - `onDragStart` 多选时记录所有选中 element 的初始位置到 `dragInitial: Map`
+  - `onDragMove` 新增：按 leader 的 delta 同步其他选中 element 位置（视觉跟随 + 乐观更新）
+  - `onDragEnd` 多选时对其他选中 element 各发一条 element.transform op
+  - hit Rect 加 `@dragmove`；Transformer 多 node 时 transformend 各 node 自己触发自己的 op 发送（沿用单选老逻辑）
+  - Escape 改 `ui.clearSelection()`
+- `components/layout/RightPanel.vue`：
+  - `isMulti` computed（selectedCount ≥ 2）
+  - Properties section 加 multi 分支：显示"N 个元素被选中" + multi hint；header 改为 multi 时显批量删除按钮
+  - `deleteMultiSelected` 函数：逐 id 发 element.delete + clearSelection
+  - 底部 Elements 列表点击支持修饰键 toggle，高亮判定改 `ui.isSelected(el.id)`
+- `App.vue` 全局快捷键：
+  - Delete / Backspace 多选时批量删
+  - Cmd / Ctrl + A 全选当前 activeLayer 内 visible elements（跳过 input/textarea/contenteditable）
+  - ArrowKey 多选时所有选中 element 同步微移（步长 1px / Shift+10px）
+- `i18n/messages.ts`：加 `t.properties.multiSelected` / `multiHint` / `deleteMulti` / `deleteMultiTip`
+
+### 设计决策
+
+- **bbox intersect 用 axis-aligned**（rotated element 用外接 axis-aligned bbox 近似）：简单可靠，MVP 接受略多框风险；M9+ PathElement 时再考虑精确旋转 bbox
+- **多选 click 修饰键统一为 Shift / Cmd / Ctrl**（PS / Figma 同步）
+- **drag 同步用 leader-follower 模式**：onDragStart 记录初始位置，onDragMove leader 计算 delta 应用到 followers（视觉 + 乐观），onDragEnd 一次性 N 个 ws op
+- **multi transform 仍各 node 触发自己 transformend**：沿用 Konva Transformer 原生行为，无需聚合处理
+- **Properties 多选时只支持批量删 + ArrowKey 微移 + Esc 取消**：批量改字段需要 N 多 ws 同值校验复杂度高，留远期。多选下隐藏单选 UI 避免 UX 矛盾
+- **layer 多选不做**：M9+ 多选层操作时再考虑
+
+### 验证
+
+- vite build 通过，bundle 406.63KB JS / 33.13KB CSS（M8-E 后 402；+4KB 多选逻辑）
+- plugin test 全过（offline 模式跑；网络偶发 TLS 抖动）
+- M8 之前的 150+ 测试无回归
+
+### 改动文件
+
+- 修改 5 个：stores/ui.ts、components/layout/CanvasView.vue、components/layout/RightPanel.vue、App.vue、i18n/messages.ts
+- 新增 0 个
+
+---
+
 ## 2026-05-13 · M8-A/B/C/D/E 全栈实施（layered model + 协议 v2 + 分层渲染）
 
 **M8 路线锁定后一次性把 5 段代码全部落地。** 实施顺序与 task 拆分一一对应；每段独立完成 + 测试通过后才进入下一段。

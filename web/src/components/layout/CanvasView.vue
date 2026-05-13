@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { ZoomIn, ZoomOut, RotateCcw, Maximize } from 'lucide-vue-next';
-import { onKeyStroke } from '@vueuse/core';
+import { onKeyStroke, useEventListener } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
@@ -88,8 +88,8 @@ function onGridChange(ev: Event): void {
 function hitConfig(e: Element) {
     // Konva 用 offsetX/Y 把「bbox 左上」坐标转为「绕中心旋转」
     const hovered = hoverId.value === e.id;
-    const selected = ui.selectedElementId === e.id;
-    const canDrag = !e.locked && e.visible;
+    const selected = ui.isSelected(e.id);
+    const canDrag = !e.locked && e.visible && !project.activeLayerLocked;
     return {
         id: e.id,
         name: 'element-hit',
@@ -127,10 +127,16 @@ function normalizeRotation(deg: number): number {
     return ((Math.round(deg) % 360) + 360) % 360;
 }
 
-function onHitClick(ev: { cancelBubble?: boolean }, id: string): void {
+function onHitClick(ev: { cancelBubble?: boolean; evt?: MouseEvent | TouchEvent }, id: string): void {
     // 切到别的元素或者在编辑中点同一元素的非 textarea 区域 → 先收编辑态
     if (editingId.value && editingId.value !== id) finishEditing();
-    ui.selectElement(id);
+    // M8-F：Shift / Cmd / Ctrl click = 加选 / 切换；普通 click = 单选替换
+    const me = ev.evt as MouseEvent | undefined;
+    if (me && (me.shiftKey || me.metaKey || me.ctrlKey)) {
+        ui.toggleSelection(id);
+    } else {
+        ui.selectElement(id);
+    }
     if (ev) ev.cancelBubble = true;
 }
 
@@ -169,17 +175,117 @@ function onEditKeydown(ev: KeyboardEvent) {
     }
 }
 
-function onStageMouseDown(ev: { target: { getStage?: () => unknown; getType?: () => string; hasName?: (n: string) => boolean } }): void {
-    // 点击 stage 根（非任何 shape）时 deselect + 同时收掉编辑态，避免"一个在编辑、一个被拖动"的鬼态
-    const node = ev.target as { getType?: () => string; hasName?: (n: string) => boolean } | null;
+// ---------- M8-F：marquee 拖框多选 ----------
+//
+// 行为：
+// - 空白处 mousedown（非 element-hit / 非 alt/middle pan）→ 启动 marquee
+// - mousemove 实时画 marquee 矩形（v-rect 渲染在最上层 v-layer）
+// - mouseup 时：
+//   - 拖动距离 < 3px：等价 click 空白 → 清空选中（shift 时保留）
+//   - 否则：计算与 activeLayer 内 visible element bbox 相交的 → selectMany（shift = addToSelection）
+//
+// 仅在 activeLayer 内多选（避免跨层混乱）；rotated element 用 axis-aligned bbox 近似（M8-F MVP）。
+
+interface MarqueeState {
+    x1: number; y1: number; x2: number; y2: number;
+    additive: boolean;
+}
+const marquee = ref<MarqueeState | null>(null);
+
+interface KonvaStageNode { getStage?: () => { getPointerPosition?: () => { x: number; y: number } | null } | null }
+interface StageEvt {
+    target: KonvaStageNode & { getType?: () => string; hasName?: (n: string) => boolean };
+    evt?: MouseEvent | TouchEvent;
+}
+
+function onStageMouseDown(ev: StageEvt): void {
+    const node = ev.target;
     if (!node) return;
-    const type = node.getType?.();
     const isElementHit = node.hasName?.('element-hit') ?? false;
-    if (!isElementHit && type !== 'Shape') {
+    if (isElementHit) return;  // element 点击由 onHitClick 处理
+
+    // alt / middle 让 outer onMouseDown 接管 pan
+    const evt = ev.evt as MouseEvent | undefined;
+    if (evt && (evt.button === 1 || evt.altKey)) return;
+
+    const stage = node.getStage?.();
+    const pos = stage?.getPointerPosition?.();
+    if (!pos) return;
+
+    marquee.value = {
+        x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y,
+        additive: evt?.shiftKey ?? false,
+    };
+}
+
+function onStageMouseMove(ev: StageEvt): void {
+    if (!marquee.value) return;
+    const stage = ev.target?.getStage?.();
+    const pos = stage?.getPointerPosition?.();
+    if (!pos) return;
+    marquee.value = { ...marquee.value, x2: pos.x, y2: pos.y };
+}
+
+function onStageMouseUp(): void {
+    const m = marquee.value;
+    if (!m) return;
+    marquee.value = null;
+
+    const dx = Math.abs(m.x2 - m.x1);
+    const dy = Math.abs(m.y2 - m.y1);
+
+    if (dx < 3 && dy < 3) {
+        // click 空白：清编辑态 + 清选中（shift 时保留现有选中）
         if (editingId.value) finishEditing();
-        ui.selectElement(null);
+        if (!m.additive) ui.clearSelection();
+        return;
+    }
+
+    const minX = Math.min(m.x1, m.x2);
+    const minY = Math.min(m.y1, m.y2);
+    const maxX = Math.max(m.x1, m.x2);
+    const maxY = Math.max(m.y1, m.y2);
+
+    const layer = project.activeLayer;
+    const hits: string[] = [];
+    for (const el of layer.elements) {
+        if (!el.visible) continue;
+        if (bboxIntersects(el, minX, minY, maxX, maxY)) hits.push(el.id);
+    }
+
+    if (m.additive) {
+        for (const id of hits) ui.addToSelection(id);
+    } else {
+        if (editingId.value) finishEditing();
+        ui.selectMany(hits);
     }
 }
+
+function bboxIntersects(el: Element, x1: number, y1: number, x2: number, y2: number): boolean {
+    // axis-aligned；rotation 用外接 axis-aligned bbox 近似（M8-F MVP）
+    return !(el.x + el.w < x1 || el.x > x2 || el.y + el.h < y1 || el.y > y2);
+}
+
+// window 兜底：拖出窗口后松手时清掉 marquee
+useEventListener(window, 'mouseup', () => {
+    if (marquee.value) marquee.value = null;
+});
+
+const marqueeConfig = computed(() => {
+    const m = marquee.value;
+    if (!m) return null;
+    return {
+        x: Math.min(m.x1, m.x2),
+        y: Math.min(m.y1, m.y2),
+        width: Math.abs(m.x2 - m.x1),
+        height: Math.abs(m.y2 - m.y1),
+        fill: 'rgba(96, 165, 250, 0.12)',
+        stroke: '#60a5fa',
+        strokeWidth: 1,
+        dash: [4, 3],
+        listening: false,
+    };
+});
 
 /** 双击 stage 空白处：取消所有选中 + 退出编辑（用户实测后明确要求的 escape 路径）。 */
 function onStageDblClick(ev: { target: { getType?: () => string; hasName?: (n: string) => boolean } }): void {
@@ -197,13 +303,70 @@ watch(() => ui.activeTool, () => {
     if (editingId.value) finishEditing();
 });
 
+// ---------- M8-F：多选 drag 同步 ----------
+//
+// 拖单个 node 时若其在多选集合内，记录所有选中 element 的初始位置；dragmove 时按 leader
+// 的 delta 同步其他 element 位置（视觉跟随）；dragend 时为所有选中 element 各发一条
+// element.transform op。单选场景 dragInitial 为空，走原 fast path。
+
+const dragInitial = ref<Map<string, { x: number; y: number }>>(new Map());
+
 function onDragStart(id: string): void {
     // 用户在编辑 A 时点 B 直接拖，Konva 走 mousedown → dragstart 而不触发 click。
     // 这里兜底：拖任何元素时只要有 editing 状态就先收掉，避免 textarea 滞留在前一个元素上
     if (editingId.value && editingId.value !== id) finishEditing();
+
+    // 多选：记录所有选中 element 的初始 (x, y) 供 dragmove 同步
+    if (ui.selectedCount > 1 && ui.isSelected(id)) {
+        const init = new Map<string, { x: number; y: number }>();
+        for (const sid of ui.selectedIds) {
+            const el = project.elementById(sid);
+            if (el) init.set(sid, { x: el.x, y: el.y });
+        }
+        dragInitial.value = init;
+    } else {
+        dragInitial.value = new Map();
+    }
 }
 
-interface DragEvt { target: { x: () => number; y: () => number; width: () => number; height: () => number } }
+interface DragEvt { target: {
+    id?: () => string;
+    x: () => number; y: () => number;
+    width: () => number; height: () => number;
+    x(v: number): void; y(v: number): void;
+} }
+
+function onDragMove(ev: DragEvt, id: string): void {
+    if (dragInitial.value.size <= 1) return;  // 单选 path 不需要同步
+    const initLeader = dragInitial.value.get(id);
+    if (!initLeader) return;
+    const node = ev.target;
+    const w = node.width();
+    const h = node.height();
+    const leaderX = Math.round(node.x() - w / 2);
+    const leaderY = Math.round(node.y() - h / 2);
+    const dx = leaderX - initLeader.x;
+    const dy = leaderY - initLeader.y;
+
+    const layerNode = layerRef.value?.getNode() as undefined | { findOne(sel: string): DragEvt['target'] | undefined };
+    if (!layerNode) return;
+    for (const [sid, init] of dragInitial.value) {
+        if (sid === id) continue;
+        const el = project.elementById(sid);
+        if (!el) continue;
+        const newX = init.x + dx;
+        const newY = init.y + dy;
+        el.x = newX;
+        el.y = newY;
+        const other = layerNode.findOne(`#${sid}`);
+        if (other) {
+            other.x(newX + el.w / 2);
+            other.y(newY + el.h / 2);
+        }
+    }
+    requestDraw();
+}
+
 function onDragEnd(ev: DragEvt, id: string): void {
     const node = ev.target;
     const w = node.width();
@@ -217,6 +380,27 @@ function onDragEnd(ev: DragEvt, id: string): void {
         el.y = newY;
         ws.send('element.transform', { elementId: id, x: newX, y: newY });
     }
+
+    // 多选：把 leader 的 delta 应用到其他选中 element，逐个发 ws
+    if (dragInitial.value.size > 1) {
+        const initLeader = dragInitial.value.get(id);
+        if (initLeader) {
+            const dx = newX - initLeader.x;
+            const dy = newY - initLeader.y;
+            for (const [sid, init] of dragInitial.value) {
+                if (sid === id) continue;
+                const otherEl = project.elementById(sid);
+                if (!otherEl) continue;
+                const otherX = init.x + dx;
+                const otherY = init.y + dy;
+                if (otherEl.x !== otherX || otherEl.y !== otherY) {
+                    // dragmove 已经乐观更新过；这里只发 ws 确保服务端落地
+                    ws.send('element.transform', { elementId: sid, x: otherX, y: otherY });
+                }
+            }
+        }
+    }
+    dragInitial.value = new Map();
 }
 
 interface TransformEvt { target: {
@@ -285,8 +469,9 @@ function requestDraw(): void {
     });
 }
 
-// Transformer attach：selection 变化时 nodes([<konva node>])
-watch(() => ui.selectedElementId, () => nextTick(attachTransformer));
+// Transformer attach：selection 变化时 nodes([...])
+// M8-F：watch 改为 selectedIds（Set 引用每次 selectMany 都换新，触发 reactive）
+watch(() => Array.from(ui.selectedIds).join(','), () => nextTick(attachTransformer));
 watch(elements, () => nextTick(attachTransformer), { deep: true });
 
 function attachTransformer(): void {
@@ -294,9 +479,13 @@ function attachTransformer(): void {
     const l = layerRef.value?.getNode() as undefined | { findOne(sel: string): unknown };
     if (!t || !l) return;
     // Move 工具模式下不展示 transformer（PS 风格：拖拽专用，无锚点遮挡）
-    if (ui.activeTool === 'move' || !ui.selectedElementId) { t.nodes([]); return; }
-    const node = l.findOne(`#${ui.selectedElementId}`);
-    t.nodes(node ? [node] : []);
+    if (ui.activeTool === 'move' || ui.selectedCount === 0) { t.nodes([]); return; }
+    const nodes: unknown[] = [];
+    for (const id of ui.selectedIds) {
+        const n = l.findOne(`#${id}`);
+        if (n) nodes.push(n);
+    }
+    t.nodes(nodes);
 }
 
 // 工具切换时立刻重附 transformer
@@ -306,7 +495,7 @@ watch(() => ui.activeTool, () => nextTick(attachTransformer));
 onKeyStroke(['=', '+'], (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomIn(); } });
 onKeyStroke('-', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomOut(); } });
 onKeyStroke('0', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomReset(); } });
-onKeyStroke('Escape', () => ui.selectElement(null));
+onKeyStroke('Escape', () => ui.clearSelection());
 // PS 风格快捷键：V 切 select；M 切 move。input/textarea 内输入时跳过
 function inEditable(): boolean {
     const a = document.activeElement as HTMLElement | null;
@@ -448,7 +637,11 @@ function onMouseUpOrLeave() {
             :config="stageConfig"
             class="absolute inset-0"
             @mousedown="onStageMouseDown"
+            @mousemove="onStageMouseMove"
+            @mouseup="onStageMouseUp"
             @touchstart="onStageMouseDown"
+            @touchmove="onStageMouseMove"
+            @touchend="onStageMouseUp"
             @dblclick="onStageDblClick"
           >
             <v-layer ref="layerRef">
@@ -460,12 +653,17 @@ function onMouseUpOrLeave() {
                 @tap="(ev: any) => onHitClick(ev, el.id)"
                 @dblclick="(ev: any) => onHitDblClick(ev, el.id)"
                 @dragstart="() => onDragStart(el.id)"
+                @dragmove="(ev: any) => onDragMove(ev, el.id)"
                 @dragend="(ev: any) => onDragEnd(ev, el.id)"
                 @transformend="(ev: any) => onTransformEnd(ev, el.id)"
                 @mouseenter="(ev: any) => onHitMouseEnter(ev, el.id)"
                 @mouseleave="(ev: any) => onHitMouseLeave(ev)"
               />
               <v-transformer ref="transformerRef" :config="transformerConfig" />
+            </v-layer>
+            <!-- M8-F：marquee 拖框可视层（独立 layer 在 hit 之上） -->
+            <v-layer v-if="marqueeConfig" :listening="false">
+              <v-rect :config="marqueeConfig" />
             </v-layer>
           </v-stage>
           <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。
