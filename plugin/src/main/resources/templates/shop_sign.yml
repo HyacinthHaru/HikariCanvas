@@ -20,43 +20,51 @@ params:
     required: true
     default: 杂货铺
     max_length: 16
+    group: 文案
 
   item:
     type: string
     label: 主推商品
     default: 钻石剑
     max_length: 24
+    group: 文案
 
   price:
     type: string
     label: 价格
     default: 32 emerald
     max_length: 16
+    group: 文案
 
   show_item:
     type: bool
     label: 显示商品行
     default: true
+    group: 显示
 
   bg:
     type: color
     label: 背景色
     default: "#FFE7A8"
+    group: 主题
 
   ink:
     type: color
     label: 文字色
     default: "#332E1C"
+    group: 主题
 
   accent:
     type: color
     label: 价格色
     default: "#A8341A"
+    group: 主题
 
   shop_font:
     type: font
     label: 字体
     default: source_han_sans
+    group: 主题
 
 layout:
   type: stack

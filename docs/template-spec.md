@@ -442,6 +442,6 @@ v1.0 不实现，`pack.yml` 字段设计在 v2.0 专项讨论。
 
 - [ ] 是否允许模板间继承（`extends: base_template`）—— v2+
 - [x] `grid` 布局细节 —— **M7 实装**：按 `columns × rows` 平铺、cell 尺寸 = `(content - (n-1)·gap) / n`；超容截断
-- [ ] 参数组（`group`）的 UI 表现细节 —— **M6 v1 接受字段但不渲染**，扁平一列展开；UI 分组留 M7+
+- [x] 参数组（`group`）的 UI 表现细节 —— **M7 实装**：TemplateGallery 按 `group` 字符串分节、首次出现顺序排序；section header 点击折叠。无 `group` 字段的 param 进默认组无标题
 - [x] 模板 `preview` 图片尺寸与格式规范 —— **M7 改为服务端动态渲染**：`/api/template/{id}/preview.png` 用 default params 跑 instantiator + compositor 输出 PNG，模板里的 `preview` 字段 v1 不再用
 - [x] 百分比计算在 `stack` 布局下的父容器定义 —— **M6-C 已固化**：父容器 = canvas 内容区（canvas pixel 尺寸减 padding 的 4 元数组），与 `free` 一致。stack 内 element 的 `w/h` 默认撑满父容器；显式 N% 也按父容器算

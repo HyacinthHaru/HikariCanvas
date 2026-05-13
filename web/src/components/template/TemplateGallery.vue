@@ -29,6 +29,39 @@ const visibleParams = computed(() => {
     ) as Array<[string, TemplateParam]>;
 });
 
+/**
+ * 按 param.group 分组。无 group 字段的归入 null 组（无标题、直接展开）；
+ * 有 group 的按 YAML 中首次出现顺序排列分组（不按字母序）。
+ */
+const paramGroups = computed<Array<{ name: string | null; entries: Array<[string, TemplateParam]> }>>(() => {
+    const groups: Array<{ name: string | null; entries: Array<[string, TemplateParam]> }> = [];
+    const idx = new Map<string | null, number>();
+    for (const [key, p] of visibleParams.value) {
+        const g = p.group ?? null;
+        let pos = idx.get(g);
+        if (pos === undefined) {
+            pos = groups.length;
+            idx.set(g, pos);
+            groups.push({ name: g, entries: [] });
+        }
+        groups[pos].entries.push([key, p]);
+    }
+    return groups;
+});
+
+/** 折叠态：key = `${templateId}::${groupName}`；默认全展开。 */
+const collapsedGroups = ref<Set<string>>(new Set());
+function toggleGroup(groupName: string | null) {
+    if (!templates.selectedId || !groupName) return;
+    const key = `${templates.selectedId}::${groupName}`;
+    if (collapsedGroups.value.has(key)) collapsedGroups.value.delete(key);
+    else collapsedGroups.value.add(key);
+}
+function isCollapsed(groupName: string | null): boolean {
+    if (!templates.selectedId || !groupName) return false;
+    return collapsedGroups.value.has(`${templates.selectedId}::${groupName}`);
+}
+
 const hasExistingContent = computed(() => (project.state?.elements?.length ?? 0) > 0);
 
 // ---------- 画布尺寸约束（M6-F polish） ----------
@@ -277,18 +310,34 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
               </button>
             </header>
 
-            <div class="flex-1 overflow-y-auto p-4 space-y-3">
+            <div class="flex-1 overflow-y-auto p-4 space-y-5">
               <div
                 v-if="visibleParams.length === 0"
                 class="text-xs text-[color:var(--muted-foreground)] italic"
               >
                 {{ t.templates.noParams }}
               </div>
-              <label
-                v-for="[key, p] in visibleParams"
-                :key="key"
-                class="block"
+              <!-- 按 group 分节渲染；无 group 的归 null 组直接展开 -->
+              <section
+                v-for="group in paramGroups"
+                :key="group.name ?? '__default__'"
+                class="space-y-3"
               >
+                <header
+                  v-if="group.name"
+                  class="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[color:var(--muted-foreground)] font-medium cursor-pointer hover:text-[color:var(--foreground)] transition-colors select-none"
+                  @click="toggleGroup(group.name)"
+                >
+                  <span class="opacity-60">{{ isCollapsed(group.name) ? '▸' : '▾' }}</span>
+                  <span>{{ group.name }}</span>
+                  <span class="opacity-50">· {{ group.entries.length }}</span>
+                </header>
+                <div v-show="!isCollapsed(group.name)" class="space-y-3">
+                  <label
+                    v-for="[key, p] in group.entries"
+                    :key="key"
+                    class="block"
+                  >
                 <span class="text-xs text-[color:var(--muted-foreground)] flex items-center gap-1.5">
                   {{ p.label ?? key }}
                   <span v-if="p.required" class="text-[color:var(--destructive)]">*</span>
@@ -387,7 +436,9 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                     :value="String(opt.value)"
                   >{{ opt.label }}</option>
                 </select>
-              </label>
+                  </label>
+                </div>
+              </section>
             </div>
 
             <!-- footer + apply -->

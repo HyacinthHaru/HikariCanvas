@@ -5,6 +5,59 @@
 
 ---
 
+## 2026-05-13 · M7 第三轮：config.yml / group UI / 部署文档
+
+**用户：「先做 config.yml、参数 group UI 分组和公网部署文档」**
+
+**1. config.yml 真接入**
+
+之前 onEnable 里硬编码了一堆值（host/port/TTL/idle/grace/pool 容量/fps/rate）。新增：
+
+- `plugin/src/main/resources/config.yml` —— 默认配置，首次启动 `saveDefaultConfig()` 拷到 dataFolder。带详细中文注释 + [需重启] 标记
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvasConfig.java` —— 强类型解析。Builder 默认值兜底（缺字段不报错，向后兼容）；`summary()` 输出一行摘要供 log
+- `HikariCanvas.onEnable` 全部硬编码替换为 `config.xxx`
+- `/canvas reload config` 命令（canvas.admin 权限）—— 刷新 `plugin.reloadConfig()` + 重建 `HikariCanvasConfig`；当前 v1 只更新引用 + log，提示玩家"多数字段需要重启"。**Hot-apply 留 M7+。** 改 host/port/超时/池容量后仍要重启才生效
+
+字段速查见 `docs/deployment.md §7`。
+
+**2. 参数 group UI 分组**
+
+- `TemplateGallery.paramGroups`：按 `param.group` 字符串首次出现顺序分组；无 group 字段 → null 组直接展开不显标题
+- 每组 section header（10px uppercase，带计数 `· 4`）点击可折叠/展开
+- 折叠态用 `Set<"${templateId}::${groupName}">` 存
+- **demo：** `shop_sign.yml` 加 `group: 文案 / 显示 / 主题` 三档
+
+模板示例已展示出预期 UX：店铺名/商品/价格 → "文案"组；show_item → "显示"组；颜色/字体 → "主题"组。
+
+template-spec.md §12 `group` 一项标 ✅ M7 实装。
+
+**3. 公网部署文档 `docs/deployment.md`**
+
+七节内容：
+
+1. 单机/内网最小可用配置
+2. 为什么默认 `127.0.0.1`（token 明文 + WS 明文 + CORS 缺失）
+3. **推荐部署**：Caddy / nginx 反代 + Let's Encrypt + WS 升级配置 + 防火墙规则（iptables / ufw）
+4. 不推荐路径：直绑 0.0.0.0（仅临时测试）
+5. 多玩家注意事项（wall 排他锁全局、alias 唯一、归属隔离留单独 milestone）
+6. 排错对照表
+7. config.yml 字段速查 + 哪些需要重启
+
+**改动文件：**
+
+- 新增 `plugin/src/main/resources/config.yml`
+- 新增 `plugin/src/main/java/moe/hikari/canvas/HikariCanvasConfig.java`
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java` —— 加 config 字段、`applyConfig`、`config()` 访问器；onEnable 用 config
+- `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java` —— `/canvas reload config` 子命令
+- `plugin/src/main/resources/templates/shop_sign.yml` —— group 字段示范
+- `web/src/components/template/TemplateGallery.vue` —— paramGroups + 折叠 UI
+- `docs/template-spec.md` §12 —— group 标 ✅
+- 新增 `docs/deployment.md`
+
+**质量门：** plugin 测试全绿；vite build 385KB JS / 31KB CSS。
+
+---
+
 ## 2026-05-13 · M7 polish 第二轮：保护 / 预览 / grid / icon / sendWithAck / HomePage 七连发
 
 **用户：「这五项都做了吧」**（实际 7 项）—— B1 / B2 / C1 / C2 / A1 / A2 / A3 一气全跑完，单 commit。

@@ -1,0 +1,59 @@
+# HikariCanvas 配置文件
+# ----------------------------------------------------------------
+# 修改后用 `/canvas reload config`（管理员）或重启服务器生效。
+# 标 [需重启] 的项 hot-reload 不影响 —— 必须重启服务器。
+# ----------------------------------------------------------------
+
+# WebSocket / HTTP 编辑器服务
+network:
+  # 监听地址。生产环境强烈建议保持 127.0.0.1 + nginx/Caddy 反代加 TLS。
+  # 直接绑 0.0.0.0 会暴露未加密 token，详见 docs/deployment.md。
+  # [需重启]
+  host: "127.0.0.1"
+  # 监听端口。
+  # [需重启]
+  port: 8877
+  # 玩家点 /canvas confirm 后看到的 URL 模板。{token} 会被实际 token 替换。
+  # 内网默认就是 http://127.0.0.1:8877/?token={token}。
+  # 公网部署改为 https://yourdomain.com/?token={token}。
+  editor-url: "http://{host}:{port}/?token={token}"
+
+# 会话生命周期（玩家从 /canvas confirm 到关浏览器的整个过程）
+session:
+  # token 签发后多久内必须 auth 完成，否则 token 失效。
+  token-ttl-minutes: 15
+  # WS 连接断开后保留 session 多久（玩家断网重连用）。超时 → cancel。
+  ws-grace-minutes: 5
+  # ACTIVE 会话无任何输入多久后被清。0 = 永不超时（谨慎，可能 leak 内存）。
+  idle-minutes: 30
+  # SessionReaper 扫描周期。值越小回收越及时但更费 CPU；30s 是合理默认。
+  reaper-scan-seconds: 30
+  # 过期 token 异步清理周期。
+  token-purge-minutes: 5
+
+# 地图池容量（M2 预览池）
+map-pool:
+  # 启动时预创建多少张 MapView。每张消耗约 64 KiB 内存 + 一个 mapId。
+  # 建议 = 服务器同时编辑会话数 × 平均墙面尺寸（如 4×2=8 张）+ 一些 buffer。
+  initial: 64
+  # 池上限。达到上限后新会话会拿到 POOL_EXHAUSTED 错误，提示玩家等待。
+  # 单服 200 张地图够 25 人同时编辑 4×2 墙面。
+  max: 256
+
+# 投影帧率 / 输入限流
+throttle:
+  # 服务端把 ProjectState 渲染推送到游戏地图的最大频率（fps）。
+  # 玩家停手 → 0 fps；持续输入 → 上限被卡到这个值。5 fps 对 4×2 墙的 MC packet 量是合理上限。
+  projection-fps: 5
+  # 单 session 输入 op 速率上限（msg/s）。
+  input-rate-per-second: 20
+  # 突发 op 上限（在任意 2 秒窗口）。
+  input-burst: 40
+
+# 模板系统
+templates:
+  # 启动时自动 reload；改为 false 适合内置模板需要手工 reload 的工作流。
+  auto-reload-on-startup: true
+  # 模板缩略图（/api/template/{id}/preview.png）缓存 TTL（秒）。
+  # reload templates 时服务端会主动 invalidate；TTL 主要影响浏览器侧。
+  preview-cache-seconds: 300

@@ -71,6 +71,7 @@ public final class HikariCanvas extends JavaPlugin {
     private TemplatePreviewService templatePreviewService;
     private TemplateAssetService templateAssetService;
     private WallPreviewService wallPreviewService;
+    private volatile HikariCanvasConfig config;
 
     @Override
     public void onLoad() {
@@ -82,26 +83,30 @@ public final class HikariCanvas extends JavaPlugin {
     public void onEnable() {
         PacketEvents.getAPI().init();
 
+        // M7 polish：config.yml。首次启动把 jar 内默认配置拷到 dataFolder
+        saveDefaultConfig();
+        config = HikariCanvasConfig.load(this);
+        getLogger().info("Config loaded: " + config.summary());
+
         // 持久化：按 docs/data-model.md §2.1 在 plugins/HikariCanvas/data.db
         database = new Database(getLogger(), getDataFolder().toPath().resolve("data.db"));
         new MigrationRunner(database.jdbi(), getLogger()).run();
         auditLog = new AuditLog(database.jdbi());
 
-        // 一次性 token 服务（contract: docs/security.md §2）。TTL 暂硬编码 15m，待 config.yml 接入
+        // 一次性 token 服务（contract: docs/security.md §2）。
         tokenService = new TokenService(
-                auditLog, getLogger(), Duration.ofMinutes(15).toMillis());
-        // 每 5 分钟异步清一次过期/已用 token
-        long ticks5min = 20L * 60 * 5;
+                auditLog, getLogger(), config.tokenTtl.toMillis());
         tokenPurgeTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
-                this, () -> tokenService.purgeExpired(), ticks5min, ticks5min);
+                this, () -> tokenService.purgeExpired(),
+                config.tokenPurgeTicks, config.tokenPurgeTicks);
 
         // 共享 MapRenderer：所有受管 MapView 都挂它，让 Paper tick 持续把我们
         // 的 Placeholder / 编辑像素同步给 viewer，避免默认 canvas 每 tick 覆盖回空白
         canvasRenderer = new HikariCanvasRenderer();
 
-        // 预览地图池（M2 核心机制）。initial=64, max=256，待 config.yml 接入
+        // 预览地图池
         mapPool = new MapPool(getLogger(), database.jdbi(), auditLog,
-                canvasRenderer, 64, 256);
+                canvasRenderer, config.mapPoolInitial, config.mapPoolMax);
         mapPool.initialize(Bukkit.getWorlds().get(0));
 
         // 墙面识别 + 会话管理（T6 Wand / T11 命令族会注入这两个）
@@ -152,30 +157,31 @@ public final class HikariCanvas extends JavaPlugin {
         templateRegistry = new TemplateRegistry(
                 getLogger(), HikariCanvas.class,
                 getDataFolder().toPath().resolve("templates"));
-        templateRegistry.reload();
+        if (config.autoReloadTemplatesOnStartup) {
+            templateRegistry.reload();
+        }
         // M7：模板缩略图服务。Registry reload 时调 invalidate() 清缓存
         templatePreviewService = new TemplatePreviewService(getLogger(), templateRegistry, compositor);
         wallPreviewService = new WallPreviewService(getLogger(), compositor);
 
-        // M3-T10 节流：5fps 投影 + 40msg/2s 输入限流（per session）
-        projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector);
-        rateLimiter = new SessionRateLimiter();
-        // session forget 时清两个 bucket map 避免内存膨胀
+        // 节流：投影 fps + 输入速率（per session）
+        long projectionIntervalMs = Math.max(1000L / config.projectionFps, 33L);
+        projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector,
+                projectionIntervalMs);
+        rateLimiter = new SessionRateLimiter(config.inputBurst,
+                Math.max(1000L, (long) config.inputBurst * 1000 / Math.max(1, config.inputRatePerSecond)));
         sessionManager.addForgetHook(projectionThrottler::discardSession);
         sessionManager.addForgetHook(rateLimiter::discardSession);
 
-        // 超时回收：ISSUED 15min（与 token TTL 一致）/ WS 断连 5min / ACTIVE idle 30min。
-        // 扫描周期 30s，待 config.yml 接入后可调。
+        // 超时回收：ISSUED ttl（与 token TTL 一致）/ WS 断连 grace / ACTIVE idle
         sessionReaper = new SessionReaper(
                 this, sessionManager, getLogger(),
-                Duration.ofMinutes(15), Duration.ofMinutes(5), Duration.ofMinutes(30));
-        sessionReaper.start(20L * 30);
+                config.tokenTtl, config.wsGrace, config.idleTimeout);
+        sessionReaper.start(config.reaperScanTicks);
 
-        // M1 骨架：host/port 硬编码，后续任务从 config.yml 读取
-        String host = "127.0.0.1";
-        int port = 8877;
         String version = getPluginMeta().getVersion();
-        String editorUrlTemplate = "http://" + host + ":" + port + "/?token={token}";
+        // 用 config 里的 url 模板（保留 {token} 占位符给运行期 token 替换）
+        String editorUrlTemplate = config.editorUrlTemplate;
 
         // WandListener 注册：需要 frameDeployer / tokenService / editorUrlTemplate 来支持
         // "瞄已有 ItemFrame 二次确认 → open" 路径
@@ -191,7 +197,7 @@ public final class HikariCanvas extends JavaPlugin {
                                 tokenService, mapPool, database, wallRepo,
                                 templateRegistry, templatePreviewService, editorUrlTemplate).build()));
 
-        webServer = new WebServer(getLogger(), host, port,
+        webServer = new WebServer(getLogger(), config.host, config.port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
@@ -201,6 +207,20 @@ public final class HikariCanvas extends JavaPlugin {
 
         getLogger().info("HikariCanvas enabled (skeleton)");
     }
+
+    /**
+     * 接收 {@code /canvas reload config} 的新配置。M7 v1 只更新引用 + log；多数字段（host/port/
+     * 池容量/超时等）已传给具体服务，必须重启才能真正生效。提示由命令侧打。
+     *
+     * <p>未来若有需要做 hot-apply，可在此扩展：给 TokenService/SessionReaper/MapPool 各加 setter。</p>
+     */
+    public synchronized void applyConfig(HikariCanvasConfig fresh) {
+        this.config = fresh;
+        getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
+    }
+
+    /** 供命令侧用；返回 null 表示插件还没 onEnable。 */
+    public HikariCanvasConfig config() { return config; }
 
     @Override
     public void onDisable() {

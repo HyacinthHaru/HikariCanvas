@@ -143,7 +143,9 @@ public final class CanvasCommand {
                 .then(Commands.literal("reload")
                         .requires(src -> src.getSender().hasPermission("canvas.admin"))
                         .then(Commands.literal("templates")
-                                .executes(this::runReloadTemplates)))
+                                .executes(this::runReloadTemplates))
+                        .then(Commands.literal("config")
+                                .executes(this::runReloadConfig)))
                 .build();
     }
 
@@ -538,6 +540,24 @@ public final class CanvasCommand {
         sender.sendMessage(Component.text(
                 "cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.",
                 NamedTextColor.YELLOW));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int runReloadConfig(CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        if (!(plugin instanceof moe.hikari.canvas.HikariCanvas hc)) {
+            sender.sendMessage(Component.text(
+                    "reload config: plugin type mismatch (internal bug)", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        plugin.reloadConfig();
+        moe.hikari.canvas.HikariCanvasConfig fresh = moe.hikari.canvas.HikariCanvasConfig.load(plugin);
+        hc.applyConfig(fresh);
+        sender.sendMessage(Component.text("Config reloaded: " + fresh.summary(),
+                NamedTextColor.GOLD));
+        sender.sendMessage(Component.text(
+                "Note: host/port changes require server restart to take effect.",
+                NamedTextColor.GRAY));
         return Command.SINGLE_SUCCESS;
     }
 
