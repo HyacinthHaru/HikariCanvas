@@ -5,6 +5,65 @@
 
 ---
 
+## 2026-05-15 · fix(deploy)：confirm 多 slot wall 只生成 1 frame 的恶性 bug
+
+**用户报告**：`/canvas wand` 圈选 6×1 → `/canvas confirm` 后只生成 1 个 ItemFrame（其他 5 个位置连 frame 都没有），前端刷新一致。
+
+### 根因
+
+`FrameDeployer.spawnSlot` 行 308 的"清残骸"循环：
+
+```java
+for (Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
+    if (e instanceof ItemFrame ifr) {
+        String w = pdc.get(wallIdKey, ...);
+        if (wallId.equals(w)) ifr.remove();   // ← 同 wall_id 即删
+    }
+}
+```
+
+**bug 模式**（spawn 串行 slot 0..N）：
+1. slot 0 spawn OK，PDC `wall_id=W slot=0`
+2. slot 1 spawn 前 query box `0.8` 半径以 slot 1 frameLoc 为中心 → 与 slot 0 entity bbox（半径 ~0.5）相交（中心距 1.0 < 0.5 + 0.8 = 1.3）→ 抓到 slot 0
+3. slot 0 PDC `wall_id == W` 匹配 → 当残骸 `remove()` 删了 slot 0
+4. slot 1 spawn OK，PDC `wall_id=W slot=1`
+5. slot 2 spawn 前抓到 slot 1（同 wall_id）→ 删 slot 1
+6. ... 串联到 slot N-1：每 spawn 一个新的都删上一个；最终只剩最后 spawn 的一个
+
+2026-05-14 修"邻接 wall confirm 误删"的 fix 把"非同 wall_id 不删"约束加上去，但**同 wall_id 邻接 slot 互删**这个对称问题没考虑。
+
+### 修复
+
+「同 wall_id 即删」收紧为「同 wall_id **且** 同 slot」：
+
+```java
+PersistentDataContainer pdc = ifr.getPersistentDataContainer();
+String w = pdc.get(wallIdKey, PersistentDataType.STRING);
+Integer s = pdc.get(slotKey, PersistentDataType.INTEGER);
+if (wallId.equals(w) && s != null && s == slotIndex) {
+    ifr.remove();
+}
+```
+
+只有"同一格"上次失败 spawn 的真残留才会被识别——因为 ItemFrame 的 PDC `slot` 字段在 spawn 时就写入（line 333），可作为位置指纹。
+
+### 验证
+
+- `./gradlew :plugin:test`：364 case 全过（无回归）
+- 真实游戏内 6×1 confirm 路径：需 `./gradlew :plugin:runServer` 实测；逻辑上邻接 slot 不再互删
+- 测试盲点：FrameDeployer 单元测试需 MockBukkit world / Entity 设施，沿 2026-05-14 同款 "⏸ Future"
+
+### 影响范围
+
+- 受影响：所有 multi-slot wall（width × height > 1）的 confirm + refresh 路径
+- 修复后行为：每个 slot 独立 spawn 不互删；同位置失败 spawn 残留仍能被正确清理（PDC slot 指纹精确匹配）
+
+### 工期
+
+约 15 分钟（定位 + 修 + 验证 + journal）。
+
+---
+
 ## 2026-05-14 · M13 图片导入 + 蒙版（A-E 五段全栈）
 
 **核心**：用户可拖图 / paste / 选文件进编辑器；上传走 6 层校验栈；`ImageElement` 支持 SVG path 蒙版（v1 UI 4 预设几何 + inverted，数据模型 path 形态留 v2 完全体接口）。M13 完成 = 项目主线收尾。

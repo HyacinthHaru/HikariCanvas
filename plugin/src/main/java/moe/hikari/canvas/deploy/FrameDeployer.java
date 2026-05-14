@@ -297,12 +297,16 @@ public final class FrameDeployer {
         }
 
         // 防御 3：清掉 frameLoc 1 格内残留的 Item 掉落物（撸破的画框 / 地图 item 可能掉在这）
-        //         + 清掉"自己 wall 上次失败 spawn 留下的"幽灵 ItemFrame（PDC 带 same wall_id）。
+        //         + 清掉"自己 wall + 同 slot 上次失败 spawn 留下的"幽灵 ItemFrame。
         //
-        // 关键约束（2026-05-14 修 Bug：邻接 wall confirm 误删）：
+        // 关键约束 A（2026-05-14 修 Bug：邻接 wall confirm 误删）：
         //   不动 PDC wall_id != current 的 ItemFrame —— ItemFrame bbox 半径 ~0.25 + query box
         //   半径 0.8 = 1.05 格 > 标准 1 格间距，相邻 wall 的 frame bbox 会被 getNearbyEntities
-        //   抓到，旧逻辑把它们当残骸 remove() 导致用户邻接画消失。
+        //   抓到。
+        // 关键约束 B（2026-05-15 修 Bug：同 wall 邻接 slot 互删导致只剩 1 frame）：
+        //   同 wall_id 但邻接 slot 也会被 query box 抓到（slot 间距 1 + bbox 0.5 + box 0.8 相交）。
+        //   光看 wall_id 会把刚 spawn 的兄弟 slot 当残骸删。必须额外要求 PDC slot == current slot
+        //   才算"真正同位置的失败 spawn 残留"。
         //   PDC 不带 wall_id 的 vanilla ItemFrame（玩家自己挂的画框 / 地图）也不动——
         //   位置占用问题由 WallResolver 在 confirm 之前的 OCCUPIED 检查拒绝。
         for (org.bukkit.entity.Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
@@ -311,13 +315,15 @@ public final class FrameDeployer {
                         + " for slot=" + slotIndex);
                 e.remove();
             } else if (e instanceof ItemFrame ifr) {
-                String w = ifr.getPersistentDataContainer().get(wallIdKey, PersistentDataType.STRING);
-                if (wallId.equals(w)) {
-                    plugin.getLogger().info("[spawnSlot] removing stale ItemFrame (same wall) at "
-                            + e.getLocation() + " for slot=" + slotIndex);
+                PersistentDataContainer pdc = ifr.getPersistentDataContainer();
+                String w = pdc.get(wallIdKey, PersistentDataType.STRING);
+                Integer s = pdc.get(slotKey, PersistentDataType.INTEGER);
+                if (wallId.equals(w) && s != null && s == slotIndex) {
+                    plugin.getLogger().info("[spawnSlot] removing stale ItemFrame (same wall + slot "
+                            + slotIndex + ") at " + e.getLocation());
                     e.remove();
                 }
-                // 其他 wall_id 或 PDC 缺失的 ItemFrame：跳过，不动
+                // 其他 wall_id / 同 wall 但不同 slot / PDC 缺失的 ItemFrame：跳过，不动
             }
         }
 
