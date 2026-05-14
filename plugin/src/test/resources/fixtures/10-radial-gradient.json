@@ -1,0 +1,66 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#222244"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-title",
+      "x": 8, "y": 2, "w": 240, "h": 12,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "RADIAL GRADIENT",
+      "fontId": "ark_pixel",
+      "fontSize": 10,
+      "color": "#CCCCCC",
+      "align": "left",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false
+    },
+    {
+      "type": "rect",
+      "id": "e-centered",
+      "x": 8, "y": 20, "w": 80, "h": 80,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": {
+        "type": "radial",
+        "cx": 0.5, "cy": 0.5, "r": 1.0,
+        "stops": [
+          {"position": 0.0, "color": "#FFFFFF"},
+          {"position": 1.0, "color": "#000000"}
+        ]
+      }
+    },
+    {
+      "type": "rect",
+      "id": "e-offset",
+      "x": 100, "y": 20, "w": 80, "h": 80,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": {
+        "type": "radial",
+        "cx": 0.3, "cy": 0.3, "r": 1.2,
+        "stops": [
+          {"position": 0.0, "color": "#FFCC00"},
+          {"position": 0.5, "color": "#FF6600"},
+          {"position": 1.0, "color": "#3A1948"}
+        ]
+      }
+    },
+    {
+      "type": "shape",
+      "id": "e-star",
+      "x": 192, "y": 20, "w": 60, "h": 60,
+      "rotation": 0, "locked": false, "visible": true,
+      "kind": "star",
+      "sides": 5,
+      "fill": {
+        "type": "radial",
+        "cx": 0.5, "cy": 0.5, "r": 0.8,
+        "stops": [
+          {"position": 0.0, "color": "#FFEE88"},
+          {"position": 1.0, "color": "#B22222"}
+        ]
+      }
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

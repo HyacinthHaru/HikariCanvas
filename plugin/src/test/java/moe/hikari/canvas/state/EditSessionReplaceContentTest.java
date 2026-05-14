@@ -30,7 +30,7 @@ class EditSessionReplaceContentTest {
 
     private static RectElement rect(String id) {
         return new RectElement(id, 0, 0, 50, 50, 0, false, true,
-                "#FF0000", null,
+                new SolidFill("#FF0000"), null,
                 null, null, null);
     }
 

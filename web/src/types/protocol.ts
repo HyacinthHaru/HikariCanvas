@@ -59,6 +59,52 @@ export interface Layer {
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay';
 export type RenderMode = 'clean' | 'dither';
 
+// ---------- §7.X Fill（M11 引入；几何元素 fill 字段类型）----------
+
+/**
+ * 渐变停止点（M11 引入）。
+ * - position: [0, 1] 单调非递减
+ * - color: "#RRGGBB" 或 "#RRGGBBAA"
+ */
+export interface Stop {
+    position: number;
+    color: string;
+}
+
+export interface SolidFill {
+    type: 'solid';
+    color: string;
+}
+
+/**
+ * 线性渐变。angle ∈ [0, 360)，单位度数；0° 沿 +x（左→右），90° 沿 +y（上→下），顺时针为正。
+ * 渐变线穿过 element bbox 中心。
+ */
+export interface LinearGradient {
+    type: 'linear';
+    angle: number;
+    stops: Stop[]; // [2, 8]
+}
+
+/**
+ * 径向渐变。cx/cy ∈ [0, 1] 归一化到 bbox；r ∈ (0, 2] 归一化到 min(w, h) / 2。
+ */
+export interface RadialGradient {
+    type: 'radial';
+    cx: number;
+    cy: number;
+    r: number;
+    stops: Stop[]; // [2, 8]
+}
+
+export type Fill = SolidFill | LinearGradient | RadialGradient;
+
+/**
+ * M0-M10 兼容形态：单 hex 字符串等价于 SolidFill。后端会一并接受，但 M11 起新写出形态统一是 object。
+ * 前端 store 侧建议把 string 形态在入口处归一化为 object 形态（见 stores/project.ts）。
+ */
+export type FillCompat = Fill | string;
+
 export type Element =
     | TextElement
     | RectElement
@@ -97,7 +143,7 @@ export interface TextElement extends BaseElement {
 
 export interface RectElement extends BaseElement {
     type: 'rect';
-    fill?: string;
+    fill?: FillCompat;
     stroke?: Stroke;
 }
 
@@ -116,7 +162,7 @@ export interface IconElement extends BaseElement {
 export interface PathElement extends BaseElement {
     type: 'path';
     d: string;
-    fill?: string;
+    fill?: FillCompat;
     stroke?: Stroke;
     markerStart?: 'arrow' | 'dot';
     markerEnd?: 'arrow' | 'dot';
@@ -125,7 +171,7 @@ export interface PathElement extends BaseElement {
 /** M9 CircleElement：圆 / 椭圆，由 bbox 推 cx/cy/rx/ry。 */
 export interface CircleElement extends BaseElement {
     type: 'circle';
-    fill?: string;
+    fill?: FillCompat;
     stroke?: Stroke;
 }
 
@@ -135,7 +181,7 @@ export interface ShapeElement extends BaseElement {
     kind: 'polygon' | 'star';
     sides: number;        // 3..32
     innerRatio?: number;  // star 用，0.1..0.95；省略 = 默认 0.5
-    fill?: string;
+    fill?: FillCompat;
     stroke?: Stroke;
 }
 

@@ -4,14 +4,19 @@ import moe.hikari.canvas.state.BlendMode;
 import moe.hikari.canvas.state.CircleElement;
 import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.Layer;
+import moe.hikari.canvas.state.LinearGradient;
 import moe.hikari.canvas.state.PathElement;
 import moe.hikari.canvas.state.ProjectState;
+import moe.hikari.canvas.state.RadialGradient;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.RenderMode;
 import moe.hikari.canvas.state.Shadow;
 import moe.hikari.canvas.state.ShapeElement;
+import moe.hikari.canvas.state.SolidFill;
+import moe.hikari.canvas.state.Stop;
 import moe.hikari.canvas.state.Stroke;
 import moe.hikari.canvas.state.TextElement;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
@@ -23,6 +28,9 @@ import java.awt.Composite;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
+import java.awt.LinearGradientPaint;
+import java.awt.Paint;
+import java.awt.RadialGradientPaint;
 import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.font.FontRenderContext;
@@ -116,7 +124,7 @@ public final class CanvasCompositor {
                 if (layer.elements().isEmpty()) continue;
 
                 if (canFastPath(layer)) {
-                    drawElementsTo(g, layer.elements());
+                    drawElementsTo(g, layer.elements(), widthPx, heightPx);
                 } else {
                     BufferedImage layerBuf = renderLayerToBuffer(layer, widthPx, heightPx);
                     BlendModes.applyBlendModeOver(img, layerBuf, layer.opacity(), layer.blendMode());
@@ -149,12 +157,25 @@ public final class CanvasCompositor {
         return true;
     }
 
-    /** 在指定 Graphics2D 上按 z-order 画一组 element，含 element.opacity 处理。 */
-    private void drawElementsTo(Graphics2D g, List<Element> elements) {
+    /**
+     * 在指定 Graphics2D 上按 z-order 画一组 element，含 element.opacity 与 renderMode=DITHER 处理。
+     *
+     * <p><b>dither element 路径（M11-B）</b>：分配一张 canvas 尺寸的 ARGB 中间 buffer，
+     * 在其上画 element body（仍走 drawRect/Path/etc）+ rotation；然后跑
+     * {@link BayerDither#apply} 量化抖动；最后用 element.opacity 透明地 drawImage 到 {@code g}。
+     * 这种做法保证 dither 仅作用于该 element 自身的像素，不污染相邻 element 或层背景。</p>
+     */
+    private void drawElementsTo(Graphics2D g, List<Element> elements,
+                                int widthPx, int heightPx) {
         Composite baseComposite = g.getComposite();
         for (Element e : elements) {
             if (!e.visible()) continue;
             float opacity = e.effectiveOpacity();
+
+            if (e.effectiveRenderMode() == RenderMode.DITHER) {
+                drawDitheredElement(g, e, opacity, widthPx, heightPx);
+                continue;
+            }
 
             AffineTransform savedTx = null;
             if (e.rotation() != 0) {
@@ -166,17 +187,49 @@ public final class CanvasCompositor {
             if (opacity < 1.0f) {
                 g.setComposite(AlphaComposite.SrcOver.derive(opacity));
             }
-            switch (e) {
-                case RectElement r -> drawRect(g, r);
-                case TextElement t -> drawText(g, t);
-                case IconElement ic -> drawIcon(g, ic);
-                case PathElement p -> drawPath(g, p);
-                case CircleElement cir -> drawCircle(g, cir);
-                case ShapeElement sh -> drawShape(g, sh);
-            }
+            drawElementBody(g, e);
             if (opacity < 1.0f) g.setComposite(baseComposite);
             if (savedTx != null) g.setTransform(savedTx);
         }
+    }
+
+    /** 单 element 几何绘制 dispatch（不含 opacity / rotation / dither 装饰）。 */
+    private void drawElementBody(Graphics2D g, Element e) {
+        switch (e) {
+            case RectElement r -> drawRect(g, r);
+            case TextElement t -> drawText(g, t);
+            case IconElement ic -> drawIcon(g, ic);
+            case PathElement p -> drawPath(g, p);
+            case CircleElement cir -> drawCircle(g, cir);
+            case ShapeElement sh -> drawShape(g, sh);
+        }
+    }
+
+    /**
+     * dither element：在独立 ARGB buffer 上画 + 跑 Bayer 抖动 → blend 回主 graphics。
+     * canvas 尺寸 buffer 简化裁剪（path 元素 d 可超 bbox），代价是每个 dither element 一次
+     * 内存分配；10×10 maps 画布 ≈ 6.5 MiB，常规场景 dither element 数 ≤ 5 个，可接受。
+     */
+    private void drawDitheredElement(Graphics2D g, Element e, float opacity,
+                                      int widthPx, int heightPx) {
+        BufferedImage buf = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D eg = buf.createGraphics();
+        try {
+            applyHints(eg);
+            if (e.rotation() != 0) {
+                double cx = e.x() + e.w() / 2.0;
+                double cy = e.y() + e.h() / 2.0;
+                eg.rotate(Math.toRadians(e.rotation()), cx, cy);
+            }
+            drawElementBody(eg, e);
+        } finally {
+            eg.dispose();
+        }
+        BayerDither.apply(buf, paletteLut);
+        Composite prev = g.getComposite();
+        if (opacity < 1.0f) g.setComposite(AlphaComposite.SrcOver.derive(opacity));
+        g.drawImage(buf, 0, 0, null);
+        if (opacity < 1.0f) g.setComposite(prev);
     }
 
     /** slow path：把 layer 内 element 画到独立 ARGB buffer（透明背景）。 */
@@ -185,7 +238,7 @@ public final class CanvasCompositor {
         Graphics2D lg = buf.createGraphics();
         try {
             applyHints(lg);
-            drawElementsTo(lg, layer.elements());
+            drawElementsTo(lg, layer.elements(), widthPx, heightPx);
         } finally {
             lg.dispose();
         }
@@ -290,7 +343,7 @@ public final class CanvasCompositor {
 
         // 填充
         if (p.fill() != null) {
-            g.setColor(parseColor(p.fill()));
+            g.setPaint(fillToPaint(p.fill(), 0, 0, p.w(), p.h()));
             g.fill(parsed.path());
         }
 
@@ -346,7 +399,7 @@ public final class CanvasCompositor {
         java.awt.geom.Ellipse2D.Double e = new java.awt.geom.Ellipse2D.Double(
                 c.x(), c.y(), c.w(), c.h());
         if (c.fill() != null) {
-            g.setColor(parseColor(c.fill()));
+            g.setPaint(fillToPaint(c.fill(), c.x(), c.y(), c.w(), c.h()));
             g.fill(e);
         }
         Stroke s = c.stroke();
@@ -366,7 +419,7 @@ public final class CanvasCompositor {
     private void drawShape(Graphics2D g, ShapeElement s) {
         java.awt.geom.Path2D.Double path = buildShapePath(s);
         if (s.fill() != null) {
-            g.setColor(parseColor(s.fill()));
+            g.setPaint(fillToPaint(s.fill(), s.x(), s.y(), s.w(), s.h()));
             g.fill(path);
         }
         Stroke st = s.stroke();
@@ -405,7 +458,7 @@ public final class CanvasCompositor {
 
     private void drawRect(Graphics2D g, RectElement r) {
         if (r.fill() != null) {
-            g.setColor(parseColor(r.fill()));
+            g.setPaint(fillToPaint(r.fill(), r.x(), r.y(), r.w(), r.h()));
             g.fillRect(r.x(), r.y(), r.w(), r.h());
         }
         Stroke s = r.stroke();
@@ -612,6 +665,98 @@ public final class CanvasCompositor {
         int rgb = Integer.parseInt(m.group(1), 16);
         int alpha = m.group(2) != null ? Integer.parseInt(m.group(2), 16) : 255;
         return new Color((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, alpha);
+    }
+
+    /**
+     * M11-B：把 {@link Fill} 转成 AWT {@link Paint}，喂给 {@code g.setPaint}。
+     *
+     * <ul>
+     *   <li>{@link SolidFill} → {@link Color}（{@code Color extends Paint}，等价 setColor）</li>
+     *   <li>{@link LinearGradient} → {@link LinearGradientPaint}，渐变线穿过 bbox 中心，
+     *       两端点 = bbox 4 角向方向向量投影的 max/min 点</li>
+     *   <li>{@link RadialGradient} → {@link RadialGradientPaint}，中心 = bbox 内归一化 (cx, cy)，
+     *       半径 = r × min(w, h) / 2</li>
+     * </ul>
+     *
+     * @param bx 元素 bbox 左上 x（path 元素已 translate 时传 0）
+     * @param by 元素 bbox 左上 y
+     * @param bw 元素 bbox 宽
+     * @param bh 元素 bbox 高
+     */
+    private static Paint fillToPaint(Fill fill, double bx, double by, double bw, double bh) {
+        if (fill == null) return Color.WHITE;
+        if (fill instanceof SolidFill s) return parseColor(s.color());
+        if (fill instanceof LinearGradient lg) return buildLinearPaint(lg, bx, by, bw, bh);
+        if (fill instanceof RadialGradient rg) return buildRadialPaint(rg, bx, by, bw, bh);
+        return Color.WHITE;
+    }
+
+    private static Paint buildLinearPaint(LinearGradient g,
+                                           double bx, double by, double bw, double bh) {
+        List<Stop> stops = g.stops();
+        if (stops == null || stops.isEmpty()) return Color.WHITE;
+        // 角度 → 方向向量（0° 沿 +x，90° 沿 +y，画布坐标系 Y 朝下，顺时针为正）
+        double rad = Math.toRadians(g.angle());
+        double dx = Math.cos(rad);
+        double dy = Math.sin(rad);
+        double cx = bx + bw / 2.0;
+        double cy = by + bh / 2.0;
+        // 把 bbox 4 角投影到方向向量，取最远的两点作为渐变线端点
+        double minP = Double.POSITIVE_INFINITY, maxP = Double.NEGATIVE_INFINITY;
+        double[][] corners = {{bx, by}, {bx + bw, by}, {bx, by + bh}, {bx + bw, by + bh}};
+        for (double[] c : corners) {
+            double p = (c[0] - cx) * dx + (c[1] - cy) * dy;
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
+        }
+        float x1 = (float) (cx + dx * minP);
+        float y1 = (float) (cy + dy * minP);
+        float x2 = (float) (cx + dx * maxP);
+        float y2 = (float) (cy + dy * maxP);
+        // 退化（0 尺寸 bbox）：LinearGradientPaint 要求 (x1,y1) != (x2,y2)，否则抛 IAE → fallback 纯色
+        if (x1 == x2 && y1 == y2) return parseColor(stops.get(0).color());
+
+        float[] fractions = monotonicFractions(stops);
+        Color[] colors = stopColors(stops);
+        return new LinearGradientPaint(x1, y1, x2, y2, fractions, colors);
+    }
+
+    private static Paint buildRadialPaint(RadialGradient g,
+                                           double bx, double by, double bw, double bh) {
+        List<Stop> stops = g.stops();
+        if (stops == null || stops.isEmpty()) return Color.WHITE;
+        float cx = (float) (bx + g.cx() * bw);
+        float cy = (float) (by + g.cy() * bh);
+        float radius = (float) (g.r() * Math.min(bw, bh) / 2.0);
+        // RadialGradientPaint 要求 radius > 0；退化时 fallback 首 stop 纯色
+        if (radius <= 0f) return parseColor(stops.get(0).color());
+
+        float[] fractions = monotonicFractions(stops);
+        Color[] colors = stopColors(stops);
+        return new RadialGradientPaint(cx, cy, radius, fractions, colors);
+    }
+
+    /**
+     * AWT {@code GradientPaint} 要求 fractions 严格递增。FillValidator 允许相等（硬切色），
+     * 这里 epsilon-bump 处理：连续相等 fraction 改为 {@code prev + 1e-5f}，最高 clamp 到 1。
+     */
+    private static float[] monotonicFractions(List<Stop> stops) {
+        int n = stops.size();
+        float[] out = new float[n];
+        float prev = -1f;
+        for (int i = 0; i < n; i++) {
+            float f = (float) stops.get(i).position();
+            if (f <= prev) f = Math.min(1f, prev + 1e-5f);
+            out[i] = f;
+            prev = f;
+        }
+        return out;
+    }
+
+    private static Color[] stopColors(List<Stop> stops) {
+        Color[] out = new Color[stops.size()];
+        for (int i = 0; i < stops.size(); i++) out[i] = parseColor(stops.get(i).color());
+        return out;
     }
 
 }

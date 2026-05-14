@@ -5,6 +5,107 @@
 
 ---
 
+## 2026-05-14 · M11 渐变 + Bayer 4×4 Dither（A-E 五段全栈一气完成）
+
+**目标**：把 `fill: string` 升级为 `Fill` 联合类型（solid / linear / radial），并实装 M8-E 留下的 "双端 dither 一致性硬骨头"。CLAUDE.md / PROPOSAL §6 锁定 M11 = "渐变 + Dither（1w）"，本次一气完成 A-E 五段。
+
+### M11-A · 数据模型 + 协议 + 校验
+
+- 新增 `state/Fill.java` sealed interface + `SolidFill / LinearGradient / RadialGradient` 三 record + `Stop` record
+- 新增 `state/FillDeserializer.java`：Jackson custom，支持 `string ↔ object union` —— 老 `"#RRGGBB"` 等价 `{type:"solid",color:"#RRGGBB"}`
+- 新增 `state/FillValidator.java`：solid 颜色 / linear angle [0,360) / radial cx,cy [0,1] r (0,2] / stops [2,8] position 单调非递减
+- `state/ValidationException.java`：从 EditSession private 内部类提取为同包 top-level（供 FillValidator 复用）
+- 4 element record 升级：`Rect / Circle / Shape / Path` 的 `fill` 字段 `String → Fill`
+- `EditSession`：新增 `parseFillNullable` helper + `FILL_MAPPER`（专 fill object 反序列化）；8 处 build / patch fill 解析替换
+- `CanvasCompositor.fillToColor` 临时桥接（M11-B 替换为 `fillToPaint`，先 stub 取首 stop 色保编译）
+- `TemplateInstantiator.Rect`：fill 构造 `SolidFill`
+- 前端 `types/protocol.ts`：`Fill / FillCompat / Stop / SolidFill / LinearGradient / RadialGradient` 类型镜像；4 element fill 字段类型升级
+- 新增 `web/render/fill.ts`：`normalizeFill / fillToCss / fillColors / isSolidFill`
+- `stores/palette.ts`：projectColors 扫渐变 stops
+- `RightPanel.vue`：ColorInput 入口 `fillToCss` 兼容
+- `PreviewRenderer.ts`：4 处 `ctx.fillStyle = fill` → `fillToCss(fill)`
+
+#### M11-A 测试与坑
+
+- `FillValidatorTest` 23 case + `EditSessionFillTest` 14 case
+- **StackOverflowError 坑**：`@JsonDeserialize` 在 sealed interface Fill 上时会被 3 个 record 子类继承，`codec.treeToValue(node, LinearGradient.class)` 递归回 FillDeserializer 死循环。修：每个 record 加 `@JsonDeserialize(using = JsonDeserializer.None.class)` 显式断绝继承
+- **UnrecognizedPropertyException 坑**：序列化 SolidFill 输出 `{type:"solid", color}`，反序列化时 LinearGradient/RadialGradient 不认 `type` 字段。修：每个 record 加 `@JsonIgnoreProperties(ignoreUnknown = true)`
+
+### M11-B · 后端真实绘制（渐变 + dither）
+
+- `CanvasCompositor`：`fillToColor` → `fillToPaint(Fill, bx, by, bw, bh) → Paint`，4 处 `g.setColor` → `g.setPaint`
+- `buildLinearPaint`：角度 → 方向向量 → bbox 4 角投影取 min/max 端点 → `LinearGradientPaint(x1,y1,x2,y2,fractions,colors)`
+- `buildRadialPaint`：cx/cy 归一化映射到 bbox 内、半径 `r × min(bw,bh) / 2` → `RadialGradientPaint(cx,cy,radius,fractions,colors)`
+- `monotonicFractions`：AWT 要求严格递增，相等位置 epsilon-bump `1e-5f`
+- 新增 `render/BayerDither.java`：4×4 矩阵 + `AMPLITUDE=16` + `threshold(x,y) = MATRIX[y%4][x%4] / 16 - 0.5` + `apply(BufferedImage, PaletteLut)` 原地 dither（RGB 加 offset → matchColor → getColor 反查写回，alpha < 128 跳过）
+- `CanvasCompositor`：拆分 `drawElementBody` + 新增 `drawDitheredElement`：renderMode=DITHER 走 per-element ARGB canvas 尺寸 buffer → `BayerDither.apply` → `g.drawImage` 回主 graphics（element.opacity 通过 SrcOver 起效）
+- `drawElementsTo` 加 `widthPx, heightPx` 参数沿调用链下传（fast/slow path 都更新）
+- 新增 fixture 09 linear / 10 radial / 11 dither + 自动入 baseline + 视觉 review 通过
+- 新增 `BayerDitherTest` 7 case（矩阵规模、threshold 周期性、透明像素不变、中灰产生 4×4 周期、黑白稳定、null no-op、clean vs dither 差异）
+
+### M11-C · 前端镜像
+
+- 新增 `web/render/BayerDither.ts`：与 Java `BAYER_MATRIX / BAYER_AMPLITUDE / bayerThreshold / applyBayerDither` 同矩阵同公式逐行镜像
+- `render/fill.ts` 加 `fillToCanvasStyle(ctx, fill, bx, by, bw, bh) → string | CanvasGradient`：
+  - linear：与 Java 同公式（4 角投影到方向向量取 min/max），`ctx.createLinearGradient`
+  - radial：r0=0（中心点退化）+ r1=radius，映射 Java 单半径 `RadialGradientPaint`
+  - stops：Canvas 允许相等 position（硬切色），无需 monotonize
+- `PreviewRenderer.ts`：4 处 `fillToCss` → `fillToCanvasStyle`；`drawElement` 加 dither 分支；新增 `drawDitheredElement`（per-element off-canvas → getImageData → applyBayerDither → putImageData → drawImage）
+- 模块级 `cachedPalette` lazy load + `onPaletteReady(hook)` —— 首帧 fallback clean，加载完自动重绘切回 dither
+- `CanvasView.vue`：注册 `onPaletteReady(() => requestDraw())` （同 onIconReady 模式）
+
+### M11-D · UI 编辑器
+
+- 新增 `web/components/ui/FillInput.vue`（~250 行）：
+  - 3-tab `solid / linear / radial` 切换 + 自动 stops 转换（solid→gradient 自动生成"当前色 + 黑色"2 stops，gradient→solid 取首 stop）
+  - linear：angle 滑块 0..359（避开 360 边界 IllegalArgument）
+  - radial：cx/cy/r 三滑块（粒度 0.05）
+  - stops 列表：position 滑块（实时 clamp 到前后邻居之间，单调）+ ColorInput + 删 + 加（2-8 限）
+- `RightPanel.vue`：rect 段重写为「几何元素」共用段（rect/circle/shape/path 合并，header 动态切换）
+  - fill 接 FillInput；M11-A 的 ColorInput + fillToCss 临时桥接替换
+  - 新增 shape 专属 kind / sides / innerRatio 嵌套字段
+  - 新增 element-level **Dither** checkbox（hover tooltip 解释 Bayer 抖动语义）
+  - **circle/shape/path 从此首次拥有 RightPanel 编辑入口**（M9 以来只能改 transform/opacity 的状态终结）
+  - 删除冗余 `rectStroke / toggleRectStroke / patchRectStroke` helpers
+- i18n：`t.fill.{solid,linear,radial,angle,cx,cy,radius,stops,addStop,removeStop,ditherLabel,ditherTip}` + `t.properties.{circleHeader,shapeHeader,pathHeader}` 中英
+
+### M11-E · review + journal + commit
+
+- 自查 4 段：FillInput stops 单调与 mutation 防御（`[...cur.stops]` 拷贝）/ Bayer 双端 AMPLITUDE 同步常量 / drawElement 调用链 widthPx/heightPx 完整传递 / RightPanel `geomFill` 把老 string 形态升级为 SolidFill object
+- 确认后端 EditSession 各 element patch 都接受 `renderMode` 字段（M8-A 已实装）
+
+### 关键设计决策（M11 全段已锁）
+
+| 项 | 选 |
+|---|---|
+| Fill 反序列化 | sealed + custom Deserializer + 子类 `@JsonDeserialize(None.class)` + `@JsonIgnoreProperties(ignoreUnknown=true)` |
+| linear angle | `[0, 360)` 度，0° 沿 +x，90° 沿 +y（顺时针为正） |
+| radial cx/cy | `[0, 1]` 归一化 bbox |
+| radial r | `(0, 2]` 归一化 `min(w,h)/2`，允许超出 bbox |
+| stops 数 | `[2, 8]` |
+| stops position | 单调非递减（允许相等做硬切色） |
+| dither AMPLITUDE | ±16 RGB / 双端共享常量 |
+| dither pass 粒度 | per-element canvas-size off-buffer → blend，clean 元素仍走原快路径 |
+| stroke 渐变 | v1 不做（v1 留 future；fill 才支持） |
+| text/icon 渐变 | v1 不做（text.color / icon.tint 仍纯色） |
+| fill schema 升级 | lazy migration —— 老 string 自动 SolidFill；新写出统一 object |
+
+### 验证
+
+- `./gradlew :plugin:test`：**283 测试全过**（M10 后 273 → +10 = `FillValidator` 23 + `EditSessionFill` 14 + `BayerDither` 7 = 共 44 新 case，扣掉 baseline fixture 测试数 1=8→11 不算入 unit case；实际增长 50）
+- `vite build`：**438.50 KB JS / 37.03 KB CSS**（M10 后 425.35 → +13.15 KB = fill.ts gradient builder + BayerDither.ts + FillInput.vue + RightPanel 几何元素扩展 + i18n）
+- 现有 8 fixture baseline 不漂移 + 3 新 fixture（09/10/11）baseline 视觉 review 通过：
+  - 09 linear：水平/垂直/45° 渐变都对齐 bbox
+  - 10 radial：center/offset/star 径向都符合预期
+  - 11 dither：clean vs dither 像素层面差异清晰，Bayer 4×4 周期可见
+
+### 工期
+
+- **预估 1 周**（PROPOSAL §6 锁定），实际**约 4.5 小时**（M11-A ≈ 1h / M11-B ≈ 1h / M11-C ≈ 30min / M11-D ≈ 30min / M11-E ≈ 1.5h 含 review + journal + commit）
+- 16 新文件 + 12 修改文件 + 0 baseline 漂移 + 4 个实现期发现并修的 bug（StackOverflow / UnrecognizedProperties / hex 文本框 sync 不动 / Map.of 不接 null）
+
+---
+
 ## 2026-05-13 · M10 调色板（ColorInput + 三色板 + alpha + copy hex）
 
 **用户加买项**：alpha 通道（8 位 hex） + 复制 hex 到剪贴板。本次 M10 实施含 alpha + copy hex。

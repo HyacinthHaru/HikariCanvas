@@ -25,7 +25,7 @@ public record PathElement(
         boolean locked,
         boolean visible,
         String d,
-        String fill,            // 可空（开放 path 或仅描边）
+        Fill fill,              // 可空（M11：纯色或渐变）
         Stroke stroke,          // 可空（仅填充）
         String markerStart,     // null / "arrow" / "dot"
         String markerEnd,

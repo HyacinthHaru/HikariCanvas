@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useProjectStore } from './project';
-import type { Element } from '@/types/protocol';
+import type { Element, FillCompat } from '@/types/protocol';
+import { fillColors } from '@/render/fill';
 
 const RECENT_KEY = 'hikari-canvas:recent-colors';
 const MAX_RECENT = 20;
@@ -65,7 +66,9 @@ function collectElementColors(el: Element, set: Set<string>): void {
     };
     // 共通字段（M8/M9 各 element 类型）
     if ('color' in el) add((el as { color?: string }).color);
-    if ('fill' in el) add((el as { fill?: string }).fill);
+    if ('fill' in el) {
+        for (const c of fillColors((el as { fill?: FillCompat }).fill)) add(c);
+    }
     if ('tint' in el) add((el as { tint?: string }).tint);
     const stroke = (el as { stroke?: { color?: string } }).stroke;
     if (stroke?.color) add(stroke.color);

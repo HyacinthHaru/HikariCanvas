@@ -5,7 +5,7 @@ import { onKeyStroke, useEventListener } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { isDrawTool, useUiStore, type ActiveTool } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
-import { renderProjectState, onIconReady } from '@/render/PreviewRenderer';
+import { renderProjectState, onIconReady, onPaletteReady } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import type { Element } from '@/types/protocol';
@@ -630,6 +630,8 @@ onMounted(() => {
     }
     // 图标异步加载就绪后请求重绘（每个新 source 第一次显示时占位 ?，加载完后真图替换）
     onIconReady(() => requestDraw());
+    // M11-C：PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）
+    onPaletteReady(() => requestDraw());
 });
 
 let drawPending = false;

@@ -11,7 +11,8 @@ import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import LayerPanel from '@/components/layout/LayerPanel.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
-import type { Element, RectElement, TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
+import FillInput from '@/components/ui/FillInput.vue';
+import type { Element, RectElement, TextElement, CircleElement, ShapeElement, PathElement, Effects, Stroke, Shadow, Glow, Fill } from '@/types/protocol';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -24,6 +25,42 @@ const selected = computed<Element | null>(() => {
 });
 const isText = computed(() => selected.value?.type === 'text');
 const isRect = computed(() => selected.value?.type === 'rect');
+const isCircle = computed(() => selected.value?.type === 'circle');
+const isShape = computed(() => selected.value?.type === 'shape');
+const isPath = computed(() => selected.value?.type === 'path');
+/** M11-D：几何元素族（支持 fill / dither）。text / icon 不在内。 */
+const isGeometric = computed(() => isRect.value || isCircle.value || isShape.value || isPath.value);
+/** M11-D：当前元素 renderMode 是否 'dither'（缺省 'clean'）。 */
+const isDither = computed(() => selected.value?.renderMode === 'dither');
+
+/** M11-D：fill 通用切换 + 透传给 FillInput。fill 关闭时发 null（rect/path/circle/shape 必须 stroke 兜底）。 */
+function geomStroke(): Stroke | null {
+    const e = selected.value as (RectElement | CircleElement | ShapeElement | PathElement | null);
+    return e?.stroke ?? null;
+}
+function toggleGeomStroke(ev: Event) {
+    const on = (ev.target as HTMLInputElement).checked;
+    sendUpdate({ stroke: on ? { width: 1, color: '#000000' } : null });
+}
+function patchGeomStroke(partial: Partial<Stroke>) {
+    const cur = geomStroke() ?? { width: 1, color: '#000000' };
+    sendUpdate({ stroke: { ...cur, ...partial } });
+}
+function toggleGeomFill(ev: Event) {
+    const on = (ev.target as HTMLInputElement).checked;
+    sendUpdate({ fill: on ? { type: 'solid', color: '#FF3366' } : null });
+}
+function geomFill(): Fill | undefined {
+    const e = selected.value as (RectElement | CircleElement | ShapeElement | PathElement | null);
+    const raw = e?.fill;
+    if (raw === undefined || raw === null) return undefined;
+    if (typeof raw === 'string') return { type: 'solid', color: raw };
+    return raw;
+}
+function onDitherChange(ev: Event) {
+    const on = (ev.target as HTMLInputElement).checked;
+    sendUpdate({ renderMode: on ? 'dither' : 'clean' });
+}
 
 /** M8-F：是否多选（>= 2）。multi 时隐藏单选 UI，显示批量操作提示。 */
 const isMulti = computed(() => ui.selectedCount >= 2);
@@ -177,20 +214,6 @@ function patchShadow(partial: Partial<Shadow>) {
 function patchGlow(partial: Partial<Glow>) {
     const cur = textEffects().glow ?? { radius: 3, color: '#33CCFF' };
     updateEffects({ glow: { ...cur, ...partial } });
-}
-
-// ---------- Rect stroke（独立于 text effects.stroke） ----------
-
-function rectStroke(): Stroke | null {
-    return (selected.value as RectElement | null)?.stroke ?? null;
-}
-function toggleRectStroke(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    sendUpdate({ stroke: on ? { width: 1, color: '#000000' } : null });
-}
-function patchRectStroke(partial: Partial<Stroke>) {
-    const cur = rectStroke() ?? { width: 1, color: '#000000' };
-    sendUpdate({ stroke: { ...cur, ...partial } });
 }
 
 function deleteSelected() {
@@ -438,40 +461,79 @@ function onElementDragEnd() {
           </div>
         </details>
 
-        <!-- Rect 专属 -->
-        <details v-if="isRect" class="group" open>
+        <!-- 几何元素（rect / circle / shape / path）公用 fill + stroke + dither -->
+        <details v-if="isGeometric" class="group" open>
           <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            {{ t.properties.rectHeader }}
+            {{ isRect ? t.properties.rectHeader
+                : isCircle ? t.properties.circleHeader
+                : isShape ? t.properties.shapeHeader
+                : t.properties.pathHeader }}
           </summary>
           <div class="pt-1.5 space-y-2">
-            <label class="flex items-center justify-between gap-2">
-              <span class="text-[color:var(--muted-foreground)]">{{ t.properties.fill }}</span>
-              <div class="flex items-center gap-1 flex-1 max-w-[160px]">
-                <input type="checkbox" :checked="(selected as RectElement).fill !== undefined && (selected as RectElement).fill !== null"
-                       @change="(e: Event) => sendUpdate({ fill: (e.target as HTMLInputElement).checked ? (selected as RectElement).fill ?? '#FF3366' : null })">
-                <ColorInput v-if="(selected as RectElement).fill"
-                            :model-value="(selected as RectElement).fill!"
-                            @update:model-value="(v) => sendUpdate({ fill: v })" />
+            <!-- fill：toggle + FillInput（M11-D 支持 solid / linear / radial） -->
+            <div class="flex items-start justify-between gap-2">
+              <span class="text-[color:var(--muted-foreground)] mt-0.5">{{ t.properties.fill }}</span>
+              <div class="flex flex-col gap-1 flex-1 max-w-[180px]">
+                <input type="checkbox"
+                       :checked="geomFill() !== undefined"
+                       @change="toggleGeomFill"
+                       class="self-end">
+                <FillInput v-if="geomFill()"
+                           :model-value="geomFill()"
+                           @update:model-value="(v) => sendUpdate({ fill: v })" />
               </div>
-            </label>
+            </div>
+            <!-- stroke：toggle + 宽度 + 颜色 -->
             <label class="flex items-center justify-between gap-2">
               <span class="text-[color:var(--muted-foreground)]">{{ t.properties.stroke }}</span>
-              <input type="checkbox" :checked="rectStroke() !== null" @change="toggleRectStroke">
+              <input type="checkbox" :checked="geomStroke() !== null" @change="toggleGeomStroke">
             </label>
-            <template v-if="rectStroke()">
+            <template v-if="geomStroke()">
               <div class="grid grid-cols-2 gap-2">
                 <label class="flex flex-col gap-0.5">
                   <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeWidth }}</span>
-                  <input type="number" min="0" class="hc-input" :value="rectStroke()!.width"
-                         @input="(e) => patchRectStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
+                  <input type="number" min="0" class="hc-input" :value="geomStroke()!.width"
+                         @input="(e) => patchGeomStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
                 </label>
                 <label class="flex flex-col gap-0.5">
                   <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeColor }}</span>
-                  <ColorInput :model-value="rectStroke()!.color"
-                              @update:model-value="(v) => patchRectStroke({ color: v })" />
+                  <ColorInput :model-value="geomStroke()!.color"
+                              @update:model-value="(v) => patchGeomStroke({ color: v })" />
                 </label>
               </div>
             </template>
+            <!-- Shape 专属：kind / sides / innerRatio -->
+            <template v-if="isShape">
+              <div class="grid grid-cols-2 gap-2">
+                <label class="flex flex-col gap-0.5">
+                  <span class="text-[10px] text-[color:var(--muted-foreground)]">kind</span>
+                  <select class="hc-input" :value="(selected as ShapeElement).kind"
+                          @change="(e) => onSelectChange('kind', e)">
+                    <option value="polygon">polygon</option>
+                    <option value="star">star</option>
+                  </select>
+                </label>
+                <label class="flex flex-col gap-0.5">
+                  <span class="text-[10px] text-[color:var(--muted-foreground)]">sides</span>
+                  <input type="number" min="3" max="32" class="hc-input"
+                         :value="(selected as ShapeElement).sides"
+                         @input="(e) => onNumberChange('sides', e)">
+                </label>
+              </div>
+              <label v-if="(selected as ShapeElement).kind === 'star'" class="flex flex-col gap-0.5">
+                <span class="text-[10px] text-[color:var(--muted-foreground)]">innerRatio</span>
+                <input type="range" min="0.1" max="0.95" step="0.05"
+                       :value="(selected as ShapeElement).innerRatio ?? 0.5"
+                       @input="(e) => onNumberChange('innerRatio', e)">
+              </label>
+            </template>
+            <!-- dither toggle -->
+            <Tooltip :text="t.fill.ditherTip">
+              <label class="flex items-center justify-between gap-2 cursor-help">
+                <span class="text-[color:var(--muted-foreground)]">{{ t.fill.ditherLabel }}</span>
+                <input type="checkbox" :checked="isDither" @change="onDitherChange">
+              </label>
+            </Tooltip>
           </div>
         </details>
 

@@ -22,7 +22,7 @@ public record CircleElement(
         int rotation,
         boolean locked,
         boolean visible,
-        String fill,          // 可空
+        Fill fill,            // 可空（M11：纯色或渐变）
         Stroke stroke,        // 可空（与 fill 至少一个非空）
         Float opacity,
         BlendMode blendMode,

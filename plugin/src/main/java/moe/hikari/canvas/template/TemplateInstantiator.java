@@ -2,10 +2,12 @@ package moe.hikari.canvas.template;
 
 import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.Glow;
 import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.Shadow;
+import moe.hikari.canvas.state.SolidFill;
 import moe.hikari.canvas.state.Stroke;
 import moe.hikari.canvas.state.TextElement;
 import moe.hikari.canvas.template.expr.Expr;
@@ -552,7 +554,7 @@ public final class TemplateInstantiator {
                     null, null, null);
         }
         if (el instanceof TemplateElement.Rect r) {
-            String fill = r.fill() == null ? null : interp(r.fill(), params);
+            Fill fill = r.fill() == null ? null : new SolidFill(interp(r.fill(), params));
             Stroke stroke = r.stroke() == null ? null
                     : new Stroke(asInt(r.stroke().width()) == null ? 1 : asInt(r.stroke().width()),
                                   interp(r.stroke().color(), params));

@@ -26,7 +26,7 @@ public record ShapeElement(
         String kind,            // "polygon" | "star"
         int sides,              // 3..32
         Float innerRatio,       // 仅 star 用；null = 默认 0.5
-        String fill,            // 可空
+        Fill fill,              // 可空（M11：纯色或渐变）
         Stroke stroke,          // 可空
         Float opacity,
         BlendMode blendMode,

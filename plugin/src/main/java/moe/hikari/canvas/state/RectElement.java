@@ -15,6 +15,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * 与 {@code protocol.md §7 RectElement.fill: string} 的「可选」语义吻合。</p>
  *
  * <p><b>M8 v2 新增：</b> {@code opacity / blendMode / renderMode}（追加到末尾；nullable）。</p>
+ *
+ * <p><b>M11 升级：</b> {@code fill} 由 {@code String} 升级为 {@link Fill}，支持纯色与渐变；
+ * 老形态 {@code "#RRGGBB"} 字符串由 {@link FillDeserializer} 兼容读入。</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RectElement(
@@ -23,7 +26,7 @@ public record RectElement(
         int rotation,
         boolean locked,
         boolean visible,
-        String fill,     // 可为 null（空心框）
+        Fill fill,       // 可为 null（空心框）
         Stroke stroke,   // 可为 null（纯填充）
         Float opacity,
         BlendMode blendMode,

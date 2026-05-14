@@ -3,6 +3,9 @@ import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } fr
 import { applyBlendModeOver } from './BlendModes';
 import { parsePathD } from './PathParser';
 import { arrowSize, dotRadius, drawArrow, drawDot } from './MarkerRenderer';
+import { fillToCanvasStyle } from './fill';
+import { applyBayerDither } from './BayerDither';
+import { getPaletteLut, type PaletteLut } from './PaletteLut';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
@@ -37,7 +40,7 @@ export function renderProjectState(
         if (visibleElements.length === 0) continue;
 
         if (canFastPath(layer)) {
-            for (const e of visibleElements) drawElement(ctx, e);
+            for (const e of visibleElements) drawElement(ctx, e, widthPx, heightPx);
         } else {
             // slow path：offscreen ARGB canvas 画 layer 内 element，按 layerOpacity/blendMode 合到主 ctx
             renderLayerSlowPath(ctx, visibleElements, layer, widthPx, heightPx);
@@ -74,7 +77,7 @@ function renderLayerSlowPath(
     // @ts-expect-error non-standard
     og.textRendering = 'geometricPrecision';
     // 透明背景；不 fillRect
-    for (const e of elements) drawElement(og, e);
+    for (const e of elements) drawElement(og, e, widthPx, heightPx);
 
     // ImageData 合成：dst ImageData + src ImageData → applyBlendModeOver mutate dst → putImageData 回 dst
     const dstImg = dstCtx.getImageData(0, 0, widthPx, heightPx);
@@ -83,7 +86,11 @@ function renderLayerSlowPath(
     dstCtx.putImageData(dstImg, 0, 0);
 }
 
-function drawElement(ctx: CanvasRenderingContext2D, e: Element): void {
+function drawElement(ctx: CanvasRenderingContext2D, e: Element, widthPx: number, heightPx: number): void {
+    if (e.renderMode === 'dither') {
+        drawDitheredElement(ctx, e, widthPx, heightPx);
+        return;
+    }
     ctx.save();
     if (e.rotation !== 0) {
         const cx = e.x + e.w / 2;
@@ -97,13 +104,97 @@ function drawElement(ctx: CanvasRenderingContext2D, e: Element): void {
     if (op !== undefined && op !== null && op < 1) {
         ctx.globalAlpha = ctx.globalAlpha * op;
     }
+    drawElementBody(ctx, e);
+    ctx.restore();
+}
+
+function drawElementBody(ctx: CanvasRenderingContext2D, e: Element): void {
     if (e.type === 'rect') drawRect(ctx, e);
     else if (e.type === 'text') drawText(ctx, e);
     else if (e.type === 'icon') drawIcon(ctx, e);
     else if (e.type === 'path') drawPath(ctx, e);
     else if (e.type === 'circle') drawCircle(ctx, e);
     else if (e.type === 'shape') drawShape(ctx, e);
-    ctx.restore();
+}
+
+// ---------- M11-C：dither pass（per-element off-canvas → BayerDither → drawImage） ----------
+
+let cachedPalette: PaletteLut | null = null;
+let paletteReadyHook: (() => void) | null = null;
+
+/** CanvasView 注册：PaletteLut 加载完成 → 请求重绘（dither element 首帧本来 fallback clean）。 */
+export function onPaletteReady(hook: () => void) { paletteReadyHook = hook; }
+
+function getCachedPalette(): PaletteLut | null {
+    if (cachedPalette) return cachedPalette;
+    // 首次：发起 lazy load，本帧返回 null，加载完后 hook 触发重绘
+    getPaletteLut().then((p) => {
+        cachedPalette = p;
+        paletteReadyHook?.();
+    }).catch(() => { /* palette 加载失败：dither element 永久 fallback 走 clean */ });
+    return null;
+}
+
+/**
+ * dither element 路径：与后端 CanvasCompositor.drawDitheredElement 镜像。
+ * 单 element 一张 canvas 尺寸的 off-canvas，画 element body（含 rotation）→ getImageData
+ * → applyBayerDither → putImageData → drawImage 回主 ctx（opacity 通过主 ctx.globalAlpha 起效）。
+ *
+ * <p>palette 未就绪时降级走 clean 路径（drawElementBody 直接画主 ctx + rotation/opacity），
+ * palette 加载完后 hook 触发重绘自动切到 dither 形态。</p>
+ */
+function drawDitheredElement(
+    ctx: CanvasRenderingContext2D,
+    e: Element,
+    widthPx: number,
+    heightPx: number,
+): void {
+    const palette = getCachedPalette();
+    if (!palette) {
+        // fallback：clean 路径
+        ctx.save();
+        if (e.rotation !== 0) {
+            const cx = e.x + e.w / 2;
+            const cy = e.y + e.h / 2;
+            ctx.translate(cx, cy);
+            ctx.rotate((e.rotation * Math.PI) / 180);
+            ctx.translate(-cx, -cy);
+        }
+        const op = e.opacity;
+        if (op !== undefined && op !== null && op < 1) {
+            ctx.globalAlpha = ctx.globalAlpha * op;
+        }
+        drawElementBody(ctx, e);
+        ctx.restore();
+        return;
+    }
+    const off = document.createElement('canvas');
+    off.width = widthPx;
+    off.height = heightPx;
+    const og = off.getContext('2d');
+    if (!og) return;
+    og.imageSmoothingEnabled = false;
+    if (e.rotation !== 0) {
+        const cx = e.x + e.w / 2;
+        const cy = e.y + e.h / 2;
+        og.translate(cx, cy);
+        og.rotate((e.rotation * Math.PI) / 180);
+        og.translate(-cx, -cy);
+    }
+    drawElementBody(og, e);
+
+    const img = og.getImageData(0, 0, widthPx, heightPx);
+    applyBayerDither(img, palette);
+    og.putImageData(img, 0, 0);
+
+    // element.opacity 通过主 ctx.globalAlpha 起作用（drawImage 走 SrcOver）
+    const op = e.opacity;
+    const prevAlpha = ctx.globalAlpha;
+    if (op !== undefined && op !== null && op < 1) {
+        ctx.globalAlpha = prevAlpha * op;
+    }
+    ctx.drawImage(off, 0, 0);
+    ctx.globalAlpha = prevAlpha;
 }
 
 // ---------- M9-C：PathElement / CircleElement / ShapeElement 真实绘制 ----------
@@ -116,8 +207,10 @@ function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
     ctx.save();
     ctx.translate(p.x, p.y);
 
-    if (p.fill) {
-        ctx.fillStyle = p.fill;
+    // d 内已 translate(p.x, p.y)，渐变 bbox 用本地坐标 0..p.w/p.h
+    const pFill = fillToCanvasStyle(ctx, p.fill, 0, 0, p.w, p.h);
+    if (pFill) {
+        ctx.fillStyle = pFill;
         ctx.fill(parsed.path);
     }
 
@@ -173,8 +266,9 @@ function drawCircle(ctx: CanvasRenderingContext2D, c: CircleElement): void {
     const rx = c.w / 2;
     const ry = c.h / 2;
 
-    if (c.fill) {
-        ctx.fillStyle = c.fill;
+    const cFill = fillToCanvasStyle(ctx, c.fill, c.x, c.y, c.w, c.h);
+    if (cFill) {
+        ctx.fillStyle = cFill;
         ctx.beginPath();
         ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
         ctx.fill();
@@ -211,8 +305,9 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ShapeElement): void {
     }
     ctx.closePath();
 
-    if (s.fill) {
-        ctx.fillStyle = s.fill;
+    const sFill = fillToCanvasStyle(ctx, s.fill, s.x, s.y, s.w, s.h);
+    if (sFill) {
+        ctx.fillStyle = sFill;
         ctx.fill();
     }
     if (s.stroke && s.stroke.width > 0) {
@@ -285,8 +380,9 @@ function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
 }
 
 function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
-    if (r.fill) {
-        ctx.fillStyle = r.fill;
+    const rFill = fillToCanvasStyle(ctx, r.fill, r.x, r.y, r.w, r.h);
+    if (rFill) {
+        ctx.fillStyle = rFill;
         ctx.fillRect(r.x, r.y, r.w, r.h);
     }
     if (r.stroke && r.stroke.width > 0) {

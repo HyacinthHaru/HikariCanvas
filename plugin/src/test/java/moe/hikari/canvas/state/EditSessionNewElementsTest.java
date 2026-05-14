@@ -131,7 +131,7 @@ class EditSessionNewElementsTest {
         CircleElement c = (CircleElement) es.state().elements().get(0);
         assertEquals(10, c.x());
         assertEquals(50, c.w());
-        assertEquals("#3366FF", c.fill());
+        assertEquals(new SolidFill("#3366FF"), c.fill());
         assertNull(c.stroke());
     }
 

@@ -1,5 +1,7 @@
 package moe.hikari.canvas.state;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import moe.hikari.canvas.render.DirtyRegion;
 
 import java.util.ArrayDeque;
@@ -32,6 +34,11 @@ public final class EditSession {
 
     // ---------- 校验常量 ----------
     private static final Pattern COLOR_RE = Pattern.compile("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$");
+
+    /** M11：用于把 patch / op payload 中的 fill object 转成 {@link Fill}（走 {@link FillDeserializer}）。 */
+    private static final ObjectMapper FILL_MAPPER = new ObjectMapper()
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+
     private static final int MAX_TEXT_LEN = 256;
     private static final int MAX_COORD = 10_000;
     private static final int MAX_DIM = 10_000;
@@ -925,8 +932,7 @@ public final class EditSession {
         int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
         boolean locked = boolFieldOrDefault(p, "locked", false);
         boolean visible = boolFieldOrDefault(p, "visible", true);
-        String fill = nullableString(p, "fill");
-        if (fill != null) validateColor(fill);
+        Fill fill = parseFillNullable(p.get("fill"));
         Stroke stroke = buildStroke(p.get("stroke"));
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "rect needs fill or non-zero stroke");
@@ -947,8 +953,7 @@ public final class EditSession {
         boolean visible = boolFieldOrDefault(p, "visible", true);
         String d = requireString(p, "d", true);
         validatePathD(d);
-        String fill = nullableString(p, "fill");
-        if (fill != null) validateColor(fill);
+        Fill fill = parseFillNullable(p.get("fill"));
         Stroke stroke = buildStroke(p.get("stroke"));
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "path needs fill or non-zero stroke");
@@ -965,7 +970,7 @@ public final class EditSession {
         int rotation = orig.rotation();
         boolean locked = orig.locked(); boolean visible = orig.visible();
         String d = orig.d();
-        String fill = orig.fill();
+        Fill fill = orig.fill();
         Stroke stroke = orig.stroke();
         String markerStart = orig.markerStart();
         String markerEnd = orig.markerEnd();
@@ -984,10 +989,7 @@ public final class EditSession {
                 case "locked" -> locked = boolValue(v, k);
                 case "visible" -> visible = boolValue(v, k);
                 case "d" -> { d = requireStringValue(v, k); validatePathD(d); }
-                case "fill" -> {
-                    if (v == null) fill = null;
-                    else { fill = requireStringValue(v, k); validateColor(fill); }
-                }
+                case "fill" -> fill = parseFillNullable(v);
                 case "stroke" -> stroke = buildStroke(v);
                 case "markerStart" -> markerStart = parseMarkerNullable(v);
                 case "markerEnd" -> markerEnd = parseMarkerNullable(v);
@@ -1033,8 +1035,7 @@ public final class EditSession {
         int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
         boolean locked = boolFieldOrDefault(p, "locked", false);
         boolean visible = boolFieldOrDefault(p, "visible", true);
-        String fill = nullableString(p, "fill");
-        if (fill != null) validateColor(fill);
+        Fill fill = parseFillNullable(p.get("fill"));
         Stroke stroke = buildStroke(p.get("stroke"));
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "circle needs fill or non-zero stroke");
@@ -1048,7 +1049,7 @@ public final class EditSession {
         int x = orig.x(); int y = orig.y(); int w = orig.w(); int h = orig.h();
         int rotation = orig.rotation();
         boolean locked = orig.locked(); boolean visible = orig.visible();
-        String fill = orig.fill();
+        Fill fill = orig.fill();
         Stroke stroke = orig.stroke();
         Float opacity = orig.opacity();
         BlendMode blendMode = orig.blendMode();
@@ -1064,10 +1065,7 @@ public final class EditSession {
                 case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
                 case "locked" -> locked = boolValue(v, k);
                 case "visible" -> visible = boolValue(v, k);
-                case "fill" -> {
-                    if (v == null) fill = null;
-                    else { fill = requireStringValue(v, k); validateColor(fill); }
-                }
+                case "fill" -> fill = parseFillNullable(v);
                 case "stroke" -> stroke = buildStroke(v);
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
@@ -1109,8 +1107,7 @@ public final class EditSession {
             innerRatio = ((Number) irRaw).floatValue();
             validateInnerRatio(innerRatio);
         }
-        String fill = nullableString(p, "fill");
-        if (fill != null) validateColor(fill);
+        Fill fill = parseFillNullable(p.get("fill"));
         Stroke stroke = buildStroke(p.get("stroke"));
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "shape needs fill or non-zero stroke");
@@ -1128,7 +1125,7 @@ public final class EditSession {
         String kind = orig.kind();
         int sides = orig.sides();
         Float innerRatio = orig.innerRatio();
-        String fill = orig.fill();
+        Fill fill = orig.fill();
         Stroke stroke = orig.stroke();
         Float opacity = orig.opacity();
         BlendMode blendMode = orig.blendMode();
@@ -1150,10 +1147,7 @@ public final class EditSession {
                     if (v == null) innerRatio = null;
                     else { innerRatio = floatValue(v, k); validateInnerRatio(innerRatio); }
                 }
-                case "fill" -> {
-                    if (v == null) fill = null;
-                    else { fill = requireStringValue(v, k); validateColor(fill); }
-                }
+                case "fill" -> fill = parseFillNullable(v);
                 case "stroke" -> stroke = buildStroke(v);
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
@@ -1266,7 +1260,7 @@ public final class EditSession {
         int x = r.x(); int y = r.y(); int w = r.w(); int h = r.h();
         int rotation = r.rotation();
         boolean locked = r.locked(); boolean visible = r.visible();
-        String fill = r.fill();
+        Fill fill = r.fill();
         Stroke stroke = r.stroke();
         Float opacity = r.opacity();
         BlendMode blendMode = r.blendMode();
@@ -1282,10 +1276,7 @@ public final class EditSession {
                 case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
                 case "locked" -> locked = boolValue(v, k);
                 case "visible" -> visible = boolValue(v, k);
-                case "fill" -> {
-                    if (v == null) fill = null;
-                    else { fill = requireStringValue(v, k); validateColor(fill); }
-                }
+                case "fill" -> fill = parseFillNullable(v);
                 case "stroke" -> stroke = buildStroke(v);
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
@@ -1383,6 +1374,36 @@ public final class EditSession {
 
     private static void validateColor(String s) {
         if (!isValidColor(s)) throw new ValidationException("INVALID_PAYLOAD", "invalid color: " + s);
+    }
+
+    /**
+     * M11：把 fill 字段 raw value（{@code Map} / {@code String} / {@code null}）解析为
+     * {@link Fill}，并跑 {@link FillValidator} 校验。
+     *
+     * <ul>
+     *   <li>{@code null} → 返回 {@code null}（空心 / 仅描边）</li>
+     *   <li>{@code String} → {@link SolidFill}（向后兼容 M10 及以前的形态）</li>
+     *   <li>{@code Map} → 走 {@link FillDeserializer}（{@code "type"} 字段决定子类）</li>
+     * </ul>
+     */
+    private static Fill parseFillNullable(Object raw) {
+        if (raw == null) return null;
+        Fill fill;
+        if (raw instanceof String s) {
+            fill = new SolidFill(s);
+        } else if (raw instanceof Map<?, ?> m) {
+            try {
+                fill = FILL_MAPPER.convertValue(m, Fill.class);
+            } catch (IllegalArgumentException e) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "invalid fill: " + e.getMessage());
+            }
+        } else {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "fill must be string or object");
+        }
+        FillValidator.validate(fill);
+        return fill;
     }
 
     private static void validateRotation(int r) {
@@ -1579,9 +1600,6 @@ public final class EditSession {
         return new OpResult.Error(code, msg);
     }
 
-    /** 内部用：validate 失败时抛，外层 catch 转 {@link OpResult.Error}。 */
-    private static final class ValidationException extends RuntimeException {
-        final String code;
-        ValidationException(String code, String message) { super(message); this.code = code; }
-    }
+    // ValidationException：M11 提取为 top-level 同包类（让 FillValidator 共用），见 ValidationException.java。
+
 }

@@ -2,6 +2,7 @@ package moe.hikari.canvas.template;
 
 import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.RectElement;
+import moe.hikari.canvas.state.SolidFill;
 import moe.hikari.canvas.state.TextElement;
 import org.junit.jupiter.api.Test;
 
@@ -469,7 +470,7 @@ class TemplateInstantiatorTest {
         assertEquals("#FFFFFF", r.backgroundColor());
         assertEquals(3, r.elements().size());
         RectElement bar = (RectElement) r.elements().get(0);
-        assertEquals("#E4002B", bar.fill());
+        assertEquals(new SolidFill("#E4002B"), bar.fill());
         // padding 8 → content 起点 y=8
         assertEquals(8, bar.y());
         assertEquals(12, bar.h());
