@@ -109,9 +109,10 @@ export type Element =
     | TextElement
     | RectElement
     | IconElement
-    | PathElement      // M9
-    | CircleElement    // M9
-    | ShapeElement;    // M9
+    | PathElement              // M9
+    | CircleElement            // M9
+    | ShapeElement             // M9
+    | BrushStrokeElement;      // M12
 
 interface BaseElement {
     id: string;
@@ -183,6 +184,34 @@ export interface ShapeElement extends BaseElement {
     innerRatio?: number;  // star 用，0.1..0.95；省略 = 默认 0.5
     fill?: FillCompat;
     stroke?: Stroke;
+}
+
+/** M12 BrushPoint：单个笔触采样点，相对 BrushStrokeElement 左上原点。 */
+export interface BrushPoint {
+    x: number;
+    y: number;
+    /** PointerEvent.pressure，[0, 1]；鼠标默认 0.5，数位板真实压感 */
+    pressure: number;
+}
+
+/**
+ * M12 BrushStrokeElement：用户用笔刷工具画出的连续笔迹。
+ *
+ * 与 path 元素的关键区别：保留原始采样点 + 压感（Q1=B 决策），不退化为 d 字符串。
+ * 渲染时用 Catmull-Rom 拟合 + 变宽（pressureSize）+ 变 alpha（pressureOpacity）。
+ */
+export interface BrushStrokeElement extends BaseElement {
+    type: 'brush';
+    /** RDP 简化后的采样点（M12-B 起做简化）；相对 (element.x, element.y) */
+    points: BrushPoint[];
+    /** 基础大小（px），[1, 64] */
+    size: number;
+    /** 笔刷填充：SolidFill / LinearGradient / RadialGradient（Q7） */
+    fill: FillCompat;
+    /** 压感→大小：true 时实际宽度 = size × pressure */
+    pressureSize: boolean;
+    /** 压感→opacity：true 时每段 alpha = base × pressure */
+    pressureOpacity: boolean;
 }
 
 export interface Effects {

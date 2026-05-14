@@ -12,6 +12,7 @@ import Tooltip from '@/components/ui/Tooltip.vue';
 import LayerPanel from '@/components/layout/LayerPanel.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import FillInput from '@/components/ui/FillInput.vue';
+import BrushPanel from '@/components/layout/BrushPanel.vue';
 import type { Element, RectElement, TextElement, CircleElement, ShapeElement, PathElement, Effects, Stroke, Shadow, Glow, Fill } from '@/types/protocol';
 
 const project = useProjectStore();
@@ -325,7 +326,11 @@ function onElementDragEnd() {
     <!-- M8-D：图层面板（顶端，自身控制 max-h 40%）。 -->
     <LayerPanel />
 
+    <!-- M12-D：笔刷工具激活时，下半 BrushPanel 替代 Properties；其他工具走 Properties 原路径 -->
+    <BrushPanel v-if="ui.activeTool === 'brush'" />
+
     <!-- Properties -->
+    <template v-else>
     <section class="flex-1 overflow-y-auto min-h-0">
       <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Sliders class="size-3.5" />
@@ -757,6 +762,7 @@ function onElementDragEnd() {
         </li>
       </ul>
     </section>
+    </template> <!-- M12-D：v-else 结束（Properties 块只在非 brush 工具显示） -->
   </aside>
 </template>
 

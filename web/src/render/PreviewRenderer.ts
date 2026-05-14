@@ -1,4 +1,4 @@
-import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, PathElement, CircleElement, ShapeElement, Glow } from '@/types/protocol';
+import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, PathElement, CircleElement, ShapeElement, BrushStrokeElement, Glow } from '@/types/protocol';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 import { applyBlendModeOver } from './BlendModes';
 import { parsePathD } from './PathParser';
@@ -115,6 +115,58 @@ function drawElementBody(ctx: CanvasRenderingContext2D, e: Element): void {
     else if (e.type === 'path') drawPath(ctx, e);
     else if (e.type === 'circle') drawCircle(ctx, e);
     else if (e.type === 'shape') drawShape(ctx, e);
+    else if (e.type === 'brush') drawBrush(ctx, e);
+}
+
+/**
+ * M12-C 笔触绘制：与 Java {@code CanvasCompositor.drawBrush} 公式逐行镜像。
+ * Catmull-Rom → cubic Bezier：B1 = P1 + (P2 - P0) / 6, B2 = P2 - (P3 - P1) / 6；
+ * 首尾 phantom：P[-1] = P[0], P[n] = P[n-1]。段宽度 = size × avgPressure（pressureSize）；
+ * 段 alpha 与外层 globalAlpha 复合。
+ */
+function drawBrush(ctx: CanvasRenderingContext2D, b: BrushStrokeElement): void {
+    if (!b.points || b.points.length < 2) return;
+    const paint = fillToCanvasStyle(ctx, b.fill, b.x, b.y, b.w, b.h);
+    if (!paint) return;
+    ctx.strokeStyle = paint;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const outerAlpha = ctx.globalAlpha;
+    const n = b.points.length;
+    for (let i = 0; i < n - 1; i++) {
+        const p1 = b.points[i];
+        const p2 = b.points[i + 1];
+        const p0 = i > 0 ? b.points[i - 1] : p1;
+        const p3 = i < n - 2 ? b.points[i + 2] : p2;
+
+        const x1 = b.x + p1.x, y1 = b.y + p1.y;
+        const x2 = b.x + p2.x, y2 = b.y + p2.y;
+        const x0 = b.x + p0.x, y0 = b.y + p0.y;
+        const x3 = b.x + p3.x, y3 = b.y + p3.y;
+
+        const cx1 = x1 + (x2 - x0) / 6;
+        const cy1 = y1 + (y2 - y0) / 6;
+        const cx2 = x2 - (x3 - x1) / 6;
+        const cy2 = y2 - (y3 - y1) / 6;
+
+        const avgPressure = (p1.pressure + p2.pressure) / 2;
+        const segWidth = b.pressureSize
+            ? Math.max(1, b.size * Math.max(0.05, avgPressure))
+            : Math.max(1, b.size);
+        let segAlpha = outerAlpha;
+        if (b.pressureOpacity) {
+            segAlpha *= Math.max(0.05, avgPressure);
+        }
+        ctx.globalAlpha = Math.min(1, segAlpha);
+        ctx.lineWidth = segWidth;
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.bezierCurveTo(cx1, cy1, cx2, cy2, x2, y2);
+        ctx.stroke();
+    }
+    ctx.globalAlpha = outerAlpha;
 }
 
 // ---------- M11-C：dither pass（per-element off-canvas → BayerDither → drawImage） ----------

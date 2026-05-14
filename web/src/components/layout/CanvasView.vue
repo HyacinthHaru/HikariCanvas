@@ -10,6 +10,8 @@ import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import type { Element, PathElement } from '@/types/protocol';
 import { scalePathD } from '@/render/pathScale';
+import { BrushController, extractPressure } from '@/brush/BrushController';
+import { useBrushStore } from '@/stores/brush';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -219,6 +221,8 @@ function onStageMouseDown(ev: StageEvt): void {
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
 
+    // M12-C：brush 工具走 PointerEvent + BrushController（独立路径），stage Konva 事件不动
+    if (ui.activeTool === 'brush') return;
     // M9-E：绘制工具激活时启动 drag-to-create；其他工具启动 marquee
     if (isDrawTool(ui.activeTool)) {
         if (editingId.value) finishEditing();
@@ -746,6 +750,69 @@ onKeyStroke(['s', 'S'], (e) => {
     if (e.ctrlKey || e.metaKey) return;
     if (!inEditable()) ui.setTool('star');
 });
+onKeyStroke(['b', 'B'], (e) => {
+    if (e.ctrlKey || e.metaKey) return;
+    if (!inEditable()) ui.setTool('brush');
+});
+
+// ---------- M12-C 笔刷接入 ----------
+
+const brushHostRef = ref<HTMLElement | null>(null);
+const brushStore = useBrushStore();
+const brushController = new BrushController({
+    container: () => brushHostRef.value,
+    canvasWidth: () => widthPx.value,
+    canvasHeight: () => heightPx.value,
+    getLayerId: () => null,
+    onStrokeFinished: () => { /* 保持 brush 工具激活，连续画 */ },
+});
+
+function brushPropsFromUi(): import('@/brush/BrushController').BrushProps {
+    return brushStore.snapshot;
+}
+
+function pointerEventToStagePoint(e: PointerEvent): { x: number; y: number; pressure: number } {
+    const host = brushHostRef.value;
+    if (!host) return { x: 0, y: 0, pressure: 0.5 };
+    const rect = host.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / ui.zoom;
+    const y = (e.clientY - rect.top) / ui.zoom;
+    return { x, y, pressure: extractPressure(e) };
+}
+
+function onBrushPointerDown(e: PointerEvent) {
+    if (ui.activeTool !== 'brush') return;
+    if (project.isLocked) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    brushController.pointerDown(pointerEventToStagePoint(e), brushPropsFromUi());
+}
+
+function onBrushPointerMove(e: PointerEvent) {
+    if (ui.activeTool !== 'brush') return;
+    if (!brushController.isActive()) return;
+    e.preventDefault();
+    brushController.pointerMove(pointerEventToStagePoint(e));
+}
+
+function onBrushPointerUp(e: PointerEvent) {
+    if (ui.activeTool !== 'brush') return;
+    if (!brushController.isActive()) return;
+    e.preventDefault();
+    brushController.pointerUp(pointerEventToStagePoint(e));
+}
+
+function onBrushPointerCancel() {
+    if (ui.activeTool !== 'brush') return;
+    brushController.pointerCancel();
+}
+
+watch(() => ui.activeTool, (tool) => {
+    if (tool !== 'brush' && brushController.isActive()) {
+        brushController.pointerCancel();
+    }
+});
 
 // M5-B8 画布交互：Ctrl+wheel zoom（以鼠标为中心）+ 中键或 Alt+drag pan
 const outerRef = ref<HTMLElement | null>(null);
@@ -858,12 +925,17 @@ function onMouseUpOrLeave() {
       >
         <!-- 外层一个 scale wrapper，让 canvas 和 Konva 都按原始像素绘制，DOM 缩放由 CSS 做 -->
         <div
+          ref="brushHostRef"
           class="absolute origin-top-left"
           :style="{
             width: `${widthPx}px`,
             height: `${heightPx}px`,
             transform: `scale(${ui.zoom})`,
           }"
+          @pointerdown="onBrushPointerDown"
+          @pointermove="onBrushPointerMove"
+          @pointerup="onBrushPointerUp"
+          @pointercancel="onBrushPointerCancel"
         >
           <canvas
             ref="canvasEl"

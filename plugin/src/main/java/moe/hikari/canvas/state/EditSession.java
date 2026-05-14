@@ -91,6 +91,12 @@ public final class EditSession {
         record Ok(StatePatch patch, DirtyRegion dirty) implements OpResult {}
 
         /**
+         * M12 brush.start 专用结果：ack 中需要带 {@code strokeId} 回前端，且无 patch / dirty。
+         * 其他 brush.* op（point / end / cancel）走 {@link Ok} 路径。
+         */
+        record OkBrushStart(String strokeId) implements OpResult {}
+
+        /**
          * 结构性跳变（undo/redo/template.apply）：下行 {@code state.snapshot} 全量状态。
          * patch 在这种跳变里无法用 JSON Patch 简洁表达，直接发全量更可靠。
          *
@@ -251,6 +257,7 @@ public final class EditSession {
                 case PathElement p -> applyPathPatch(p, patch);
                 case CircleElement c -> applyCirclePatch(c, patch);
                 case ShapeElement sh -> applyShapePatch(sh, patch);
+                case BrushStrokeElement b -> applyBrushPatch(b, patch);
             };
         } catch (ValidationException ve) {
             return err(ve.code, ve.getMessage());
@@ -1186,6 +1193,287 @@ public final class EditSession {
         }
     }
 
+    // ---------- M12 BrushStrokeElement op handlers ----------
+
+    /** 笔刷大小允许范围（px）。BrushPanel 滑块 1..64 与此对齐。 */
+    private static final int MIN_BRUSH_SIZE = 1;
+    private static final int MAX_BRUSH_SIZE = 64;
+    /** 单笔触最大采样点数（防长按 + 拖动产生无限点占满内存）。 */
+    private static final int MAX_BRUSH_POINTS_PER_STROKE = 5000;
+    /** 单 session 同时活跃笔触数上限（防恶意 brush.start 不发 end）。 */
+    private static final int MAX_ACTIVE_STROKES = 4;
+    /** 笔触 buffer 闲置 timeout（ms）；超过后认为客户端掉线，brush.* op 拒。 */
+    private static final long STROKE_TIMEOUT_MS = 30_000;
+
+    /**
+     * 服务端笔触缓冲。{@code brush.start} 时分配，{@code brush.point} 累加，
+     * {@code brush.end} 时简化并写入 layer 的 elements 列表；{@code brush.cancel} 或 timeout
+     * 直接丢弃。
+     *
+     * <p>{@link #rawPoints} 中的坐标是<b>画布绝对坐标</b>（前端发送时即按 stage 坐标计算）；
+     * {@code brush.end} 时转换为 element bbox 相对坐标写入 {@link BrushStrokeElement#points}。</p>
+     */
+    static final class StrokeBuffer {
+        final String strokeId;
+        final String layerId;          // null = activeLayer 解析（endBrush 时取当前 activeLayer）
+        final int size;
+        final Fill fill;
+        final float opacity;
+        final boolean pressureSize;
+        final boolean pressureOpacity;
+        final float smoothing;           // [0, 1]，brush.end 时 RDP epsilon = smoothing × 4 px
+        final BlendMode blendMode;
+        final RenderMode renderMode;
+        final List<BrushPoint> rawPoints = new ArrayList<>();
+        long lastActivityMs;
+
+        StrokeBuffer(String strokeId, String layerId, int size, Fill fill, float opacity,
+                     boolean pressureSize, boolean pressureOpacity, float smoothing,
+                     BlendMode blendMode, RenderMode renderMode) {
+            this.strokeId = strokeId;
+            this.layerId = layerId;
+            this.size = size;
+            this.fill = fill;
+            this.opacity = opacity;
+            this.pressureSize = pressureSize;
+            this.pressureOpacity = pressureOpacity;
+            this.smoothing = smoothing;
+            this.blendMode = blendMode;
+            this.renderMode = renderMode;
+            this.lastActivityMs = System.currentTimeMillis();
+        }
+    }
+
+    private final Map<String, StrokeBuffer> strokes = new java.util.HashMap<>();
+
+    /**
+     * brush.start：分配 strokeId 并初始化笔触 buffer。返回 {@link OpResult.Ok} 但 patch 为
+     * 空（笔触此时还没生成 element）；session 仍 ACTIVE。
+     *
+     * @param props {@code size / color / fill / opacity / pressureSize / pressureOpacity /
+     *              blendMode / renderMode}（color 等价 SolidFill；fill 优先级高于 color）
+     */
+    public synchronized OpResult startBrush(Map<String, Object> props, String layerId) {
+        if (props == null) props = Map.of();
+        purgeStaleStrokes();
+        if (strokes.size() >= MAX_ACTIVE_STROKES) {
+            return err("TOO_MANY_STROKES", "active stroke count >= " + MAX_ACTIVE_STROKES);
+        }
+        // 校验 + 解析 props
+        int size;
+        Fill fill;
+        float opacity;
+        boolean pressureSize;
+        boolean pressureOpacity;
+        float smoothing;
+        BlendMode blendMode;
+        RenderMode renderMode;
+        try {
+            size = intFieldOrDefault(props, "size", 4);
+            validateBrushSize(size);
+            // fill 优先；缺省时退到 color 字段（兼容性简化）
+            Object fillRaw = props.get("fill");
+            if (fillRaw == null && props.containsKey("color")) {
+                fillRaw = props.get("color");
+            }
+            fill = parseFillNullable(fillRaw);
+            if (fill == null) fill = new SolidFill("#000000"); // 笔刷必须有色
+            opacity = props.containsKey("opacity")
+                    ? floatValue(props.get("opacity"), "opacity")
+                    : 1.0f;
+            if (opacity < 0f || opacity > 1f) {
+                return err("INVALID_PAYLOAD", "opacity out of [0, 1]: " + opacity);
+            }
+            pressureSize = boolFieldOrDefault(props, "pressureSize", true);
+            pressureOpacity = boolFieldOrDefault(props, "pressureOpacity", false);
+            smoothing = props.containsKey("smoothing")
+                    ? floatValue(props.get("smoothing"), "smoothing")
+                    : 0.5f;
+            if (smoothing < 0f || smoothing > 1f) {
+                return err("INVALID_PAYLOAD", "smoothing out of [0, 1]: " + smoothing);
+            }
+            blendMode = parseBlendModeNullable(props.get("blendMode"));
+            renderMode = parseRenderModeNullable(props.get("renderMode"));
+        } catch (ValidationException ve) {
+            return err(ve.code, ve.getMessage());
+        }
+        // layerId 校验
+        if (layerId != null && !layerId.isEmpty()) {
+            int idx = findLayerIdx(layerId);
+            if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
+            if (state.layers().get(idx).locked()) {
+                return err("LAYER_LOCKED", "target layer locked: " + layerId);
+            }
+        } else if (state.activeLayer().locked()) {
+            return err("LAYER_LOCKED", "active layer locked");
+        }
+
+        String strokeId = "s-" + UUID.randomUUID().toString().substring(0, 8);
+        StrokeBuffer buf = new StrokeBuffer(strokeId, layerId, size, fill, opacity,
+                pressureSize, pressureOpacity, smoothing, blendMode, renderMode);
+        strokes.put(strokeId, buf);
+        return new OpResult.OkBrushStart(strokeId);
+    }
+
+    /** brush.point：累加点到 buffer。空 patch（不 emit），客户端不期待 ack。 */
+    public synchronized OpResult appendBrushPoints(String strokeId, List<BrushPoint> points) {
+        StrokeBuffer buf = strokes.get(strokeId);
+        if (buf == null) return err("INVALID_STROKE", "unknown strokeId: " + strokeId);
+        if (points == null || points.isEmpty()) {
+            return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
+        }
+        if (buf.rawPoints.size() + points.size() > MAX_BRUSH_POINTS_PER_STROKE) {
+            strokes.remove(strokeId);
+            return err("STROKE_TOO_LONG", "stroke point count > " + MAX_BRUSH_POINTS_PER_STROKE);
+        }
+        buf.rawPoints.addAll(points);
+        buf.lastActivityMs = System.currentTimeMillis();
+        return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
+    }
+
+    /**
+     * brush.end：把 buffer 内 raw points 转换为 {@link BrushStrokeElement} 写入 layer。
+     * M12-A 阶段不做 RDP 简化（M12-B 加）；直接用 raw points 写入。
+     *
+     * <p>bbox 计算：minX/maxX/minY/maxY of points + padding={@code ceil(size/2)}
+     * （笔触半宽，保证 stroke 不出 bbox）。points 坐标从画布绝对转为 element 相对。</p>
+     */
+    public synchronized OpResult endBrush(String strokeId) {
+        StrokeBuffer buf = strokes.remove(strokeId);
+        if (buf == null) return err("INVALID_STROKE", "unknown strokeId: " + strokeId);
+        if (buf.rawPoints.size() < 2) {
+            // 太短的笔触（点 < 2）丢弃，不生成元素，返回空 patch
+            return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
+        }
+
+        // M12-B：RDP 简化。epsilon = smoothing × 4 px。smoothing=0 时不简化（保留全部点），
+        // smoothing=1 时 4 px 容差（强压缩短笔触可能压成 2 点）。保证 ≥ 2 点。
+        double epsilon = buf.smoothing * 4.0;
+        List<BrushPoint> simplified = RdpSimplifier.simplify(buf.rawPoints, epsilon);
+        if (simplified.size() < 2) {
+            // 极端情况：RDP 把退化笔触压成 1 点，回退用 raw 首尾保证 ≥ 2
+            simplified = List.of(buf.rawPoints.get(0),
+                    buf.rawPoints.get(buf.rawPoints.size() - 1));
+        }
+
+        // 计算 bbox（基于简化后的点）
+        double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
+        for (BrushPoint p : simplified) {
+            if (p.x() < minX) minX = p.x();
+            if (p.x() > maxX) maxX = p.x();
+            if (p.y() < minY) minY = p.y();
+            if (p.y() > maxY) maxY = p.y();
+        }
+        int pad = (buf.size + 1) / 2;
+        int bx = (int) Math.floor(minX) - pad;
+        int by = (int) Math.floor(minY) - pad;
+        int bw = (int) Math.ceil(maxX) - bx + pad;
+        int bh = (int) Math.ceil(maxY) - by + pad;
+        if (bw < 1) bw = 1;
+        if (bh < 1) bh = 1;
+        // 不限制 bbox 出画布；EditSession 其他元素也允许（用户后续可手动 move）
+
+        // 转相对坐标（基于简化后的点）
+        List<BrushPoint> rel = new ArrayList<>(simplified.size());
+        for (BrushPoint p : simplified) {
+            rel.add(new BrushPoint(p.x() - bx, p.y() - by, p.pressure()));
+        }
+
+        // 目标 layer 解析
+        Layer target;
+        int layerIdx;
+        if (buf.layerId == null || buf.layerId.isEmpty()) {
+            target = state.activeLayer();
+            layerIdx = findLayerIdx(target.id());
+        } else {
+            layerIdx = findLayerIdx(buf.layerId);
+            if (layerIdx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + buf.layerId);
+            target = state.layers().get(layerIdx);
+        }
+        if (target.locked()) return err("LAYER_LOCKED", "target layer locked: " + target.id());
+
+        String id = "e-" + UUID.randomUUID();
+        Float elementOpacity = buf.opacity < 1.0f ? buf.opacity : null;
+        BrushStrokeElement element = new BrushStrokeElement(
+                id, bx, by, bw, bh, 0, false, true,
+                rel, buf.size, buf.fill,
+                buf.pressureSize, buf.pressureOpacity,
+                elementOpacity, buf.blendMode, buf.renderMode);
+
+        ProjectSnapshot pre = snapshotNow();
+        int insertIdx = target.elements().size();
+        target.elements().add(insertIdx, element);
+        commitHistory(pre);
+        long v = state.bumpVersion();
+
+        StatePatch patch = new StatePatchBuilder()
+                .add(elementPath(layerIdx, insertIdx), element)
+                .build(v);
+        return new OpResult.Ok(patch, DirtyRegion.of(element));
+    }
+
+    /** brush.cancel：丢弃 buffer，不生成 element。 */
+    public synchronized OpResult cancelBrush(String strokeId) {
+        StrokeBuffer removed = strokes.remove(strokeId);
+        if (removed == null) return err("INVALID_STROKE", "unknown strokeId: " + strokeId);
+        return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
+    }
+
+    /** 清理超过 {@link #STROKE_TIMEOUT_MS} 闲置的笔触 buffer（防客户端断线泄漏内存）。 */
+    private void purgeStaleStrokes() {
+        long cutoff = System.currentTimeMillis() - STROKE_TIMEOUT_MS;
+        strokes.values().removeIf(b -> b.lastActivityMs < cutoff);
+    }
+
+    private BrushStrokeElement applyBrushPatch(BrushStrokeElement orig, Map<String, Object> patch) {
+        int x = orig.x(); int y = orig.y();
+        int rotation = orig.rotation();
+        boolean locked = orig.locked(); boolean visible = orig.visible();
+        Float opacity = orig.opacity();
+        BlendMode blendMode = orig.blendMode();
+        RenderMode renderMode = orig.renderMode();
+        Fill fill = orig.fill();
+        boolean pressureSize = orig.pressureSize();
+        boolean pressureOpacity = orig.pressureOpacity();
+        int size = orig.size();
+
+        for (var e : patch.entrySet()) {
+            String k = e.getKey(); Object v = e.getValue();
+            switch (k) {
+                case "x" -> { x = intValue(v, k); validateCoord(x, k); }
+                case "y" -> { y = intValue(v, k); validateCoord(y, k); }
+                case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
+                case "locked" -> locked = boolValue(v, k);
+                case "visible" -> visible = boolValue(v, k);
+                case "size" -> { size = intValue(v, k); validateBrushSize(size); }
+                case "fill" -> {
+                    fill = parseFillNullable(v);
+                    if (fill == null) {
+                        throw new ValidationException("INVALID_PAYLOAD", "brush.fill must be non-null");
+                    }
+                }
+                case "pressureSize" -> pressureSize = boolValue(v, k);
+                case "pressureOpacity" -> pressureOpacity = boolValue(v, k);
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
+                default -> throw new ValidationException("INVALID_PAYLOAD",
+                        "unknown brush field: " + k);
+            }
+        }
+        return new BrushStrokeElement(orig.id(), x, y, orig.w(), orig.h(), rotation,
+                locked, visible, orig.points(), size, fill, pressureSize, pressureOpacity,
+                opacity, blendMode, renderMode);
+    }
+
+    private static void validateBrushSize(int v) {
+        if (v < MIN_BRUSH_SIZE || v > MAX_BRUSH_SIZE) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "brush.size out of range [" + MIN_BRUSH_SIZE + ", " + MAX_BRUSH_SIZE + "]: " + v);
+        }
+    }
+
     // ---------- 共享 helpers ----------
 
     private Stroke buildStroke(Object raw) {
@@ -1363,6 +1651,11 @@ public final class EditSession {
                     sh.kind(), sh.sides(), sh.innerRatio(),
                     sh.fill(), sh.stroke(),
                     sh.opacity(), sh.blendMode(), sh.renderMode());
+            case BrushStrokeElement b -> new BrushStrokeElement(newId,
+                    b.x(), b.y(), b.w(), b.h(), b.rotation(), b.locked(), b.visible(),
+                    b.points(), b.size(), b.fill(),
+                    b.pressureSize(), b.pressureOpacity(),
+                    b.opacity(), b.blendMode(), b.renderMode());
         };
     }
 

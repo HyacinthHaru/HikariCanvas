@@ -15,6 +15,7 @@ import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionRateLimiter;
 import moe.hikari.canvas.session.SessionState;
 import moe.hikari.canvas.session.TokenService;
+import moe.hikari.canvas.state.BrushPoint;
 import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.StatePatch;
@@ -27,6 +28,7 @@ import moe.hikari.canvas.template.preview.WallPreviewService;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -363,6 +365,7 @@ public final class WebServer {
                  "redo",
                  "history.mark",
                  "template.apply" -> dispatchEditOp(ctx, in, bound);
+            case "brush.start", "brush.point", "brush.end", "brush.cancel" -> dispatchBrushOp(ctx, in, bound);
             case "wall.lock", "wall.unlock", "wall.alias", "wall.refresh" -> dispatchWallOp(ctx, in, bound);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
@@ -534,9 +537,110 @@ public final class WebServer {
                 }
                 sessionManager.persistWall(sessionId);
             }
+            case EditSession.OpResult.OkBrushStart obs ->
+                    // 非 brush op 不应返回 OkBrushStart；进到这里说明 EditSession 实现 bug
+                    ctx.send(Envelope.error(in.id(), "UNEXPECTED",
+                            "non-brush op returned brush start: strokeId=" + obs.strokeId()));
             case EditSession.OpResult.Error er ->
                     ctx.send(Envelope.error(in.id(), er.code(), er.message()));
         }
+    }
+
+    /**
+     * M12 brush op 入口。{@code brush.start / point / end / cancel} 走独立路径，**不走** edit
+     * 路径的 rateLimiter（brush.point 高频低消息，限流会卡笔触流畅性）；内存安全靠
+     * EditSession 的 {@code MAX_BRUSH_POINTS_PER_STROKE} + {@code MAX_ACTIVE_STROKES} 保护。
+     */
+    private void dispatchBrushOp(WsMessageContext ctx, Envelope in, String sessionId) {
+        Session s = sessionManager.byId(sessionId);
+        if (s == null || s.editSession() == null) {
+            ctx.send(Envelope.error(in.id(), "SESSION_CLOSED", "no active edit session"));
+            return;
+        }
+        EditSession es = s.editSession();
+        Map<String, Object> payload;
+        try {
+            payload = asPayloadMap(in.payload());
+        } catch (IllegalArgumentException iae) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
+            return;
+        }
+
+        EditSession.OpResult result;
+        try {
+            result = switch (in.op()) {
+                case "brush.start" -> {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> props = (Map<String, Object>) mapOrEmpty(payload.get("props"));
+                    String layerId = stringOrNull(payload.get("layerId"));
+                    yield es.startBrush(props, layerId);
+                }
+                case "brush.point" -> {
+                    String sid = stringOrNull(payload.get("strokeId"));
+                    List<BrushPoint> points = parseBrushPoints(payload.get("points"));
+                    yield es.appendBrushPoints(sid, points);
+                }
+                case "brush.end" -> es.endBrush(stringOrNull(payload.get("strokeId")));
+                case "brush.cancel" -> es.cancelBrush(stringOrNull(payload.get("strokeId")));
+                default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable brush: " + in.op());
+            };
+        } catch (IllegalArgumentException iae) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
+            return;
+        }
+
+        switch (result) {
+            case EditSession.OpResult.OkBrushStart obs ->
+                    ctx.send(Envelope.of("ack", in.id(), Map.of("strokeId", obs.strokeId())));
+            case EditSession.OpResult.Ok ok -> {
+                // brush.end 走这里：state.patch 含 element.add；brush.point/cancel 走这里但 patch 为空
+                if (!ok.patch().ops().isEmpty()) {
+                    ctx.send(Envelope.of("ack", in.id(), Map.of("version", ok.patch().version())));
+                    pushPatch(sessionId, ok.patch());
+                }
+                // brush.point 高频不 ack（避免来回）；brush.cancel ack 空
+                else if ("brush.cancel".equals(in.op()) || "brush.end".equals(in.op())) {
+                    ctx.send(Envelope.of("ack", in.id(), Map.of()));
+                }
+                if (ok.dirty() != null) {
+                    throttler.submit(sessionId, ok.dirty());
+                }
+                if ("brush.end".equals(in.op())) {
+                    sessionManager.persistWall(sessionId);
+                }
+            }
+            case EditSession.OpResult.OkSnapshot oks ->
+                    ctx.send(Envelope.error(in.id(), "UNEXPECTED",
+                            "brush op should not return OkSnapshot v=" + oks.version()));
+            case EditSession.OpResult.Error er ->
+                    ctx.send(Envelope.error(in.id(), er.code(), er.message()));
+        }
+    }
+
+    /** 解析 brush.point 的 payload {@code points: [[x, y, pressure], ...]} 为 {@link BrushPoint} 列表。 */
+    private static List<BrushPoint> parseBrushPoints(Object raw) {
+        if (raw == null) return List.of();
+        if (!(raw instanceof List<?> list)) {
+            throw new IllegalArgumentException("points must be array");
+        }
+        List<BrushPoint> out = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof List<?> inner) || inner.size() < 3) {
+                throw new IllegalArgumentException("each point must be [x, y, pressure]");
+            }
+            Object xo = inner.get(0), yo = inner.get(1), po = inner.get(2);
+            if (!(xo instanceof Number) || !(yo instanceof Number) || !(po instanceof Number)) {
+                throw new IllegalArgumentException("point values must be numbers");
+            }
+            double x = ((Number) xo).doubleValue();
+            double y = ((Number) yo).doubleValue();
+            double p = ((Number) po).doubleValue();
+            if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(p)) {
+                throw new IllegalArgumentException("non-finite point value");
+            }
+            out.add(new BrushPoint(x, y, p));
+        }
+        return out;
     }
 
     /**

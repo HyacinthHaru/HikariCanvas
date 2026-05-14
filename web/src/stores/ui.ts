@@ -14,11 +14,16 @@ export type Locale = 'zh' | 'en';
  * - {@code 'line' / 'arrow' / 'circle' / 'star'}（M9-D）：进入"待绘制"状态，cursor = crosshair；
  *   M9-E 接 canvas mousedown/move/up 实现 drag-to-create。M9-D 期间画布上 drag 暂无效果。
  */
-export type ActiveTool = 'select' | 'move' | 'line' | 'arrow' | 'circle' | 'star';
+export type ActiveTool = 'select' | 'move' | 'line' | 'arrow' | 'circle' | 'star' | 'brush';
 
-/** 是否是绘制工具（拖出新元素）。select/move 之外均为绘制工具。 */
+/** 是否是绘制工具（拖出新元素 / 笔触）。select/move 之外均为绘制工具。 */
 export function isDrawTool(tool: ActiveTool): boolean {
     return tool !== 'select' && tool !== 'move';
+}
+
+/** 是否是笔刷工具（M12：走 PointerEvent + BrushController 而非 drag-to-create）。 */
+export function isBrushTool(tool: ActiveTool): boolean {
+    return tool === 'brush';
 }
 
 /**
@@ -187,7 +192,7 @@ function applyThemeToDom(theme: Theme) {
 }
 
 function loadTool(): ActiveTool {
-    const KNOWN: ActiveTool[] = ['select', 'move', 'line', 'arrow', 'circle', 'star'];
+    const KNOWN: ActiveTool[] = ['select', 'move', 'line', 'arrow', 'circle', 'star', 'brush'];
     try {
         const v = localStorage.getItem(TOOL_KEY) as ActiveTool | null;
         if (v && KNOWN.includes(v)) return v;

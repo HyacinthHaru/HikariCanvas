@@ -1,0 +1,74 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#FFFFFF"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-title",
+      "x": 8, "y": 2, "w": 240, "h": 12,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "BRUSH",
+      "fontId": "ark_pixel",
+      "fontSize": 10,
+      "color": "#888888",
+      "align": "left",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false
+    },
+    {
+      "type": "brush",
+      "id": "e-uniform",
+      "x": 0, "y": 18, "w": 256, "h": 14,
+      "rotation": 0, "locked": false, "visible": true,
+      "points": [
+        {"x": 8, "y": 7, "pressure": 0.6},
+        {"x": 60, "y": 6, "pressure": 0.6},
+        {"x": 120, "y": 8, "pressure": 0.6},
+        {"x": 180, "y": 5, "pressure": 0.6},
+        {"x": 240, "y": 7, "pressure": 0.6}
+      ],
+      "size": 4,
+      "fill": {"type": "solid", "color": "#1B4965"},
+      "pressureSize": false,
+      "pressureOpacity": false
+    },
+    {
+      "type": "brush",
+      "id": "e-curved",
+      "x": 0, "y": 38, "w": 256, "h": 30,
+      "rotation": 0, "locked": false, "visible": true,
+      "points": [
+        {"x": 12, "y": 15, "pressure": 0.7},
+        {"x": 50, "y": 5, "pressure": 0.7},
+        {"x": 100, "y": 22, "pressure": 0.7},
+        {"x": 150, "y": 5, "pressure": 0.7},
+        {"x": 200, "y": 22, "pressure": 0.7},
+        {"x": 245, "y": 12, "pressure": 0.7}
+      ],
+      "size": 5,
+      "fill": {"type": "solid", "color": "#E4002B"},
+      "pressureSize": false,
+      "pressureOpacity": false
+    },
+    {
+      "type": "brush",
+      "id": "e-variable",
+      "x": 0, "y": 76, "w": 256, "h": 32,
+      "rotation": 0, "locked": false, "visible": true,
+      "points": [
+        {"x": 8, "y": 16, "pressure": 0.1},
+        {"x": 50, "y": 16, "pressure": 0.4},
+        {"x": 100, "y": 16, "pressure": 0.7},
+        {"x": 150, "y": 16, "pressure": 1.0},
+        {"x": 200, "y": 16, "pressure": 0.7},
+        {"x": 245, "y": 16, "pressure": 0.2}
+      ],
+      "size": 12,
+      "fill": {"type": "solid", "color": "#3366FF"},
+      "pressureSize": true,
+      "pressureOpacity": false
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

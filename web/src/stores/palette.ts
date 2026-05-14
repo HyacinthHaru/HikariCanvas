@@ -64,9 +64,10 @@ function collectElementColors(el: Element, set: Set<string>): void {
     const add = (c: string | undefined | null) => {
         if (c) set.add(c.toUpperCase());
     };
-    // 共通字段（M8/M9 各 element 类型）
+    // 共通字段（M8/M9/M12 各 element 类型）
     if ('color' in el) add((el as { color?: string }).color);
     if ('fill' in el) {
+        // M12 BrushStrokeElement.fill 也走这条
         for (const c of fillColors((el as { fill?: FillCompat }).fill)) add(c);
     }
     if ('tint' in el) add((el as { tint?: string }).tint);
