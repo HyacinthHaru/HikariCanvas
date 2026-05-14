@@ -5,6 +5,59 @@
 
 ---
 
+## 2026-05-14 · M11 review fix · 退化形态 IAE 防御 + fill.ts 类型加强
+
+**起因**：M11 主提交后做二次审查，扫到两个潜在问题。
+
+### Bug 1（真 bug）· `LinearGradientPaint` / `RadialGradientPaint` 退化形态 IAE
+
+**触发**：用户在 FillInput 把所有 stops 拖到 `position=1.0`（FillValidator 允许相等位置做硬切色，UI 也能造出全 1 的极端），后端 `monotonicFractions` 的 epsilon-bump 公式 `Math.min(1f, prev + 1e-5f)` 在 prev 已 1.0 时仍输出 1.0 → fractions 为 `[1.0, 1.0]` **非严格递增** → AWT 抛 `IllegalArgumentException` → 整张画面 rasterize 崩。
+
+**根因**：M11-B 写 `monotonicFractions` 时只想着"相等位置 epsilon-bump"，没考虑 prev 已经卡到 1.0 上界的反向退化。整个序列向左收缩的逻辑复杂，所以选 graceful degradation 路线。
+
+**修法**：`buildLinearPaint` / `buildRadialPaint` 把 `new GradientPaint(...)` 包 try-catch `IllegalArgumentException`，捕到时 fallback 首 stop 纯色 `Paint`（同 0 尺寸 bbox 处理一致）。视觉上极端形态 = 纯色，不再让 rasterize 整体崩。
+
+**回归测试**：新增 `FillDegenerateTest` 4 case：
+- linear stops 全 1.0
+- linear stops 全 0.0
+- radial stops 全 1.0
+- linear + 0 尺寸 bbox（M11-B 原有检查的固化）
+- 均断言 `compositor.rasterize(state)` 不抛 + 返回非空 BufferedImage
+
+### Bug 2（lint 级）· `fill.ts` 函数参数 inline literal
+
+`buildLinearGradient` / `buildRadialGradient` / `addStops` 的形参用了 `{ angle, stops }` 这种内联字面量类型而非 `protocol.ts` 导出的 `LinearGradient` / `RadialGradient` 类型 —— 未来 protocol 类型升级时（如加新字段）这些函数不会被 TS 报错提醒。
+
+**修法**：
+
+- `import` 增加 `LinearGradient, RadialGradient`
+- 三个函数形参换成 `LinearGradient` / `RadialGradient`
+- `addStops` 的 stops 参数加 `ReadonlyArray<{position, color}>` 类型签名（更安全）
+
+### 验证
+
+- `./gradlew :plugin:test`：**287 测试全过**（M11 主提交 283 → +4 = `FillDegenerateTest` 全过，意味着修复后退化形态不再抛）
+- `vite build`：JS 体积 **438.50 KB** 无变化（仅类型签名调整，运行时代码不变）
+- 现有所有 baseline 不漂移（11 个 fixture 都通过）
+
+### 改动文件清单
+
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`：`buildLinearPaint` / `buildRadialPaint` 加 try-catch IAE 兜底
+- `web/src/render/fill.ts`：参数类型从 inline literal → `LinearGradient` / `RadialGradient` / `ReadonlyArray`
+- `plugin/src/test/java/moe/hikari/canvas/render/FillDegenerateTest.java`（新）：4 case regression
+
+### 总结
+
+| 项 | 状态 |
+|---|---|
+| 找到 bug | 2（1 真 bug + 1 类型加强） |
+| 修法 | 防御性 try-catch + 类型签名收紧 |
+| 测试 | +4 regression case 覆盖修复路径 |
+| 现有功能影响 | 0（baseline 不变 + 已有 283 case 全过） |
+| 工期 | ~20 分钟（review + 修 + 测试 + journal） |
+
+---
+
 ## 2026-05-14 · M11 渐变 + Bayer 4×4 Dither（A-E 五段全栈一气完成）
 
 **目标**：把 `fill: string` 升级为 `Fill` 联合类型（solid / linear / radial），并实装 M8-E 留下的 "双端 dither 一致性硬骨头"。CLAUDE.md / PROPOSAL §6 锁定 M11 = "渐变 + Dither（1w）"，本次一气完成 A-E 五段。

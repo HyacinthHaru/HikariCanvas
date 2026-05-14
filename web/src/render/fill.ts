@@ -10,7 +10,7 @@
 //
 // M11-B 实施时本文件加 fillToCanvasStyle(ctx, fill, bbox) → string | CanvasGradient。
 
-import type { Fill, FillCompat, SolidFill } from '../types/protocol';
+import type { Fill, FillCompat, LinearGradient, RadialGradient, SolidFill } from '../types/protocol';
 
 /**
  * 把 string 形态 fill 归一化为 object 形态。其余按原样返回。
@@ -83,7 +83,7 @@ export function fillToCanvasStyle(
 
 function buildLinearGradient(
     ctx: CanvasRenderingContext2D,
-    g: { angle: number; stops: { position: number; color: string }[] },
+    g: LinearGradient,
     bx: number, by: number, bw: number, bh: number,
 ): CanvasGradient {
     // 与 Java buildLinearPaint 同：方向向量 (cos θ, sin θ)；θ=0° 沿 +x，90° 沿 +y（画布坐标系 Y 朝下）
@@ -115,7 +115,7 @@ function buildLinearGradient(
 
 function buildRadialGradient(
     ctx: CanvasRenderingContext2D,
-    g: { cx: number; cy: number; r: number; stops: { position: number; color: string }[] },
+    g: RadialGradient,
     bx: number, by: number, bw: number, bh: number,
 ): CanvasGradient {
     const cx = bx + g.cx * bw;
@@ -127,7 +127,7 @@ function buildRadialGradient(
     return grad;
 }
 
-function addStops(grad: CanvasGradient, stops: { position: number; color: string }[]): void {
+function addStops(grad: CanvasGradient, stops: ReadonlyArray<{ position: number; color: string }>): void {
     // Canvas 允许相等 position（硬切），无需 monotonize；只 clamp 到 [0,1]
     for (const s of stops) {
         const p = s.position < 0 ? 0 : s.position > 1 ? 1 : s.position;

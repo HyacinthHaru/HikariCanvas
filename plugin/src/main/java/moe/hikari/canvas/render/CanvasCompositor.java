@@ -718,7 +718,13 @@ public final class CanvasCompositor {
 
         float[] fractions = monotonicFractions(stops);
         Color[] colors = stopColors(stops);
-        return new LinearGradientPaint(x1, y1, x2, y2, fractions, colors);
+        try {
+            return new LinearGradientPaint(x1, y1, x2, y2, fractions, colors);
+        } catch (IllegalArgumentException ex) {
+            // 极端形态（如 stops 全 position=1.0，monotonicFractions 推到 [1.0, 1.0] 仍非严格递增）
+            // 触发 AWT IAE → 优雅降级首 stop 纯色，不让 rasterize 崩
+            return parseColor(stops.get(0).color());
+        }
     }
 
     private static Paint buildRadialPaint(RadialGradient g,
@@ -733,7 +739,12 @@ public final class CanvasCompositor {
 
         float[] fractions = monotonicFractions(stops);
         Color[] colors = stopColors(stops);
-        return new RadialGradientPaint(cx, cy, radius, fractions, colors);
+        try {
+            return new RadialGradientPaint(cx, cy, radius, fractions, colors);
+        } catch (IllegalArgumentException ex) {
+            // 同 buildLinearPaint 兜底：AWT 严格 fractions 单调要求触发的 IAE → 纯色 fallback
+            return parseColor(stops.get(0).color());
+        }
     }
 
     /**
