@@ -235,7 +235,12 @@ export interface ReadyPayload {
     // M5.5：wall 元数据
     wallId?: string;
     alias?: string;
-    publishedAt?: number;
+    /** lock 时间戳；null = 可编辑，非 null = 锁定（前端 readonly UI）。2026-05-14 rename from publishedAt */
+    lockedAt?: number;
+    /** wall 创建者 UUID（M5.5 walls.owner_uuid） */
+    ownerUuid?: string;
+    /** 当前 session 玩家 UUID，供前端判 isOwner = (selfUuid === ownerUuid) */
+    selfUuid?: string;
     // M6-D：全量 TemplateSpec 列表（builtin + server-side templates）
     templates?: import('./template').TemplateSpec[];
 }

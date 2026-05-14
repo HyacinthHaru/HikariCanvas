@@ -25,10 +25,11 @@ import java.util.List;
  * 提供按 wall 移除、publish 标签写 PDC，以及保护 listener 用的"是否属于 HikariCanvas"接口。
  *
  * <p>契约见 {@code docs/architecture.md §7.2}、PDC key 规范见 {@code docs/data-model.md §3.2}。
- * <b>M5.5：</b> PDC key 简化为 {@code wall_id / slot / published_at}，删除原 {@code session / sign / role}。</p>
+ * <b>M5.5：</b> PDC key 简化为 {@code wall_id / slot}（原 {@code published_at} 在 2026-05-14
+ * lock-state 重设计后砍除，不再写入；现有 PDC 数据保留无害）。</p>
  *
- * <p><b>主线程约束：</b> {@link #deploy}、{@link #removeForWall}、{@link #markPublished}
- * 都使用 Bukkit 实体/世界 API，必须在主线程调用。</p>
+ * <p><b>主线程约束：</b> {@link #deploy}、{@link #removeForWall} 都使用 Bukkit
+ * 实体/世界 API，必须在主线程调用。</p>
  */
 public final class FrameDeployer {
 
@@ -38,7 +39,6 @@ public final class FrameDeployer {
 
     private final NamespacedKey wallIdKey;
     private final NamespacedKey slotKey;
-    private final NamespacedKey publishedAtKey;
 
     public FrameDeployer(JavaPlugin plugin,
                          PlaceholderRenderer placeholderRenderer,
@@ -49,7 +49,6 @@ public final class FrameDeployer {
         // 固定 namespace = hikari_canvas
         this.wallIdKey = new NamespacedKey(plugin, "wall_id");
         this.slotKey = new NamespacedKey(plugin, "slot");
-        this.publishedAtKey = new NamespacedKey(plugin, "published_at");
     }
 
     /**
@@ -298,16 +297,27 @@ public final class FrameDeployer {
         }
 
         // 防御 3：清掉 frameLoc 1 格内残留的 Item 掉落物（撸破的画框 / 地图 item 可能掉在这）
-        //         + 清掉同位的"幽灵" ItemFrame（PDC 不带 wall_id 或带别的 wall_id 都视为残骸）
+        //         + 清掉"自己 wall 上次失败 spawn 留下的"幽灵 ItemFrame（PDC 带 same wall_id）。
+        //
+        // 关键约束（2026-05-14 修 Bug：邻接 wall confirm 误删）：
+        //   不动 PDC wall_id != current 的 ItemFrame —— ItemFrame bbox 半径 ~0.25 + query box
+        //   半径 0.8 = 1.05 格 > 标准 1 格间距，相邻 wall 的 frame bbox 会被 getNearbyEntities
+        //   抓到，旧逻辑把它们当残骸 remove() 导致用户邻接画消失。
+        //   PDC 不带 wall_id 的 vanilla ItemFrame（玩家自己挂的画框 / 地图）也不动——
+        //   位置占用问题由 WallResolver 在 confirm 之前的 OCCUPIED 检查拒绝。
         for (org.bukkit.entity.Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
-            if (e instanceof org.bukkit.entity.Item || e instanceof ItemFrame) {
-                if (e instanceof ItemFrame ifr) {
-                    String w = ifr.getPersistentDataContainer().get(wallIdKey, PersistentDataType.STRING);
-                    if (wallId.equals(w)) continue;  // 同 wall 的健康 frame 不动
-                }
-                plugin.getLogger().info("[spawnSlot] removing stray " + e.getType()
-                        + " at " + e.getLocation() + " for slot=" + slotIndex);
+            if (e instanceof org.bukkit.entity.Item) {
+                plugin.getLogger().info("[spawnSlot] removing stray Item at " + e.getLocation()
+                        + " for slot=" + slotIndex);
                 e.remove();
+            } else if (e instanceof ItemFrame ifr) {
+                String w = ifr.getPersistentDataContainer().get(wallIdKey, PersistentDataType.STRING);
+                if (wallId.equals(w)) {
+                    plugin.getLogger().info("[spawnSlot] removing stale ItemFrame (same wall) at "
+                            + e.getLocation() + " for slot=" + slotIndex);
+                    e.remove();
+                }
+                // 其他 wall_id 或 PDC 缺失的 ItemFrame：跳过，不动
             }
         }
 
@@ -357,19 +367,10 @@ public final class FrameDeployer {
         return removed;
     }
 
-    /** publish/unpublish 时给所有 wall 的 ItemFrame 写 published_at PDC。{@code timestamp == null} 表示 unpublish。 */
-    public int markPublished(String wallId, World world, Long timestamp) {
-        int touched = 0;
-        for (ItemFrame f : world.getEntitiesByClass(ItemFrame.class)) {
-            String pdc = f.getPersistentDataContainer().get(wallIdKey, PersistentDataType.STRING);
-            if (!wallId.equals(pdc)) continue;
-            PersistentDataContainer pc = f.getPersistentDataContainer();
-            if (timestamp == null) pc.remove(publishedAtKey);
-            else pc.set(publishedAtKey, PersistentDataType.LONG, timestamp);
-            touched++;
-        }
-        return touched;
-    }
+    // 2026-05-14 lock-state 重设计砍：
+    //   - markPublished(...) 整体砍除（ItemFrame PDC 不再写 published_at；旧 PDC 保留无害）
+    //   - isFramePublished(...) 砍（FrameProtectionListener 不再读 published 状态）
+    //   - publishedAtKey 字段砍
 
     /** 反查：{@link ItemFrame} 上的 wall_id PDC（wand 瞄已有画框 P3 用）。 */
     public String wallIdOf(ItemFrame frame) {
@@ -381,15 +382,6 @@ public final class FrameDeployer {
         return frame.getPersistentDataContainer().has(wallIdKey, PersistentDataType.STRING);
     }
 
-    /**
-     * 该 frame 所属的 wall 是否处于"已发布"状态（PDC 有 published_at）。
-     * 已发布 wall 应对所有玩家（含 admin force-break）锁死，必须显式 /canvas unpublish 才能动。
-     */
-    public boolean isFramePublished(ItemFrame frame) {
-        return frame.getPersistentDataContainer().has(publishedAtKey, PersistentDataType.LONG);
-    }
-
     public NamespacedKey wallIdKey() { return wallIdKey; }
     public NamespacedKey slotKey() { return slotKey; }
-    public NamespacedKey publishedAtKey() { return publishedAtKey; }
 }

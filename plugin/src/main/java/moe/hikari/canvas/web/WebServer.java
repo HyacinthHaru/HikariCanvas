@@ -363,7 +363,7 @@ public final class WebServer {
                  "redo",
                  "history.mark",
                  "template.apply" -> dispatchEditOp(ctx, in, bound);
-            case "wall.publish", "wall.unpublish", "wall.alias", "wall.refresh" -> dispatchWallOp(ctx, in, bound);
+            case "wall.lock", "wall.unlock", "wall.alias", "wall.refresh" -> dispatchWallOp(ctx, in, bound);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
     }
@@ -593,7 +593,8 @@ public final class WebServer {
         return (v instanceof Number n) ? n.intValue() : null;
     }
 
-    /** M5.5：wall.publish / wall.unpublish / wall.alias。不影响 ProjectState，绕开 EditSession。 */
+    /** M5.5：wall.alias / wall.refresh；M11+ lock-state 重设计：wall.lock / wall.unlock（owner-only）。
+     *  不影响 ProjectState，绕开 EditSession。 */
     private void handleWallOp(WsMessageContext ctx, String sessionId,
                               Envelope in, Map<String, Object> payload) {
         Session s = sessionManager.byId(sessionId);
@@ -603,29 +604,40 @@ public final class WebServer {
         }
         String wallId = s.wallId();
         switch (in.op()) {
-            case "wall.publish" -> {
-                Long ts = wallRepo.markPublished(wallId);
-                if (ts == null) {
-                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "publish failed"));
+            case "wall.lock" -> {
+                // owner-only：只有 wall 创建者（owner_uuid）能锁
+                var wall = wallRepo.loadById(wallId).orElse(null);
+                if (wall == null) {
+                    ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
                     return;
                 }
-                // 主线程更新 ItemFrame PDC
-                if (s.wall() != null) {
-                    org.bukkit.World w = s.wall().world();
-                    final long fts = ts;
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin,
-                            () -> frameDeployer.markPublished(wallId, w, fts));
+                if (!wall.ownerUuid().equals(s.playerUuid())) {
+                    ctx.send(Envelope.error(in.id(), "FORBIDDEN", "only wall owner can lock"));
+                    return;
                 }
-                ctx.send(Envelope.of("ack", in.id(), Map.of("publishedAt", ts)));
+                Long ts = wallRepo.markPublished(wallId);
+                if (ts == null) {
+                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "lock failed"));
+                    return;
+                }
+                // 2026-05-14 lock-state 重设计：ItemFrame PDC 不再写 published_at（FrameDeployer.markPublished 砍）
+                ctx.send(Envelope.of("ack", in.id(), Map.of("lockedAt", ts)));
             }
-            case "wall.unpublish" -> {
-                wallRepo.markUnpublished(wallId);
-                if (s.wall() != null) {
-                    org.bukkit.World w = s.wall().world();
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin,
-                            () -> frameDeployer.markPublished(wallId, w, null));
+            case "wall.unlock" -> {
+                // owner-only：只有 wall 创建者能解锁
+                var wall = wallRepo.loadById(wallId).orElse(null);
+                if (wall == null) {
+                    ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
+                    return;
                 }
-                ctx.send(Envelope.of("ack", in.id(), Map.of()));
+                if (!wall.ownerUuid().equals(s.playerUuid())) {
+                    ctx.send(Envelope.error(in.id(), "FORBIDDEN", "only wall owner can unlock"));
+                    return;
+                }
+                wallRepo.markUnpublished(wallId);
+                java.util.HashMap<String, Object> ackPayload = new java.util.HashMap<>();
+                ackPayload.put("lockedAt", null);
+                ctx.send(Envelope.of("ack", in.id(), ackPayload));
             }
             case "wall.alias" -> {
                 String alias = stringOrNull(payload.get("alias"));
@@ -744,13 +756,20 @@ public final class WebServer {
         // T4：ready payload 中的 projectState 直接由 session 持有的权威状态序列化
         ProjectState state = session.projectState();
 
-        // M5.5：附带 wall 元数据（wallId / alias / publishedAt），前端 TopBar 显示
+        // M5.5：附带 wall 元数据（wallId / alias / lockedAt + ownerUuid + selfUuid），前端 TopBar 显示。
+        // 2026-05-14 lock-state 重设计：字段 publishedAt 改名 lockedAt；新增 ownerUuid + selfUuid
+        // 供前端判 isOwner = (selfUuid === ownerUuid)。
         String wallId = session.wallId();
         String alias = null;
-        Long publishedAt = null;
+        Long lockedAt = null;
+        String ownerUuid = null;
         if (wallId != null) {
             var w = wallRepo.loadById(wallId).orElse(null);
-            if (w != null) { alias = w.alias(); publishedAt = w.publishedAt(); }
+            if (w != null) {
+                alias = w.alias();
+                lockedAt = w.publishedAt();  // DB 列名保留 published_at，语义为 lock 时间戳
+                ownerUuid = w.ownerUuid().toString();  // Wall.ownerUuid() 返回 UUID，前端 selfUuid 也是 String
+            }
         }
 
         java.util.LinkedHashMap<String, Object> payload = new java.util.LinkedHashMap<>();
@@ -761,7 +780,9 @@ public final class WebServer {
         payload.put("projectState", state);
         if (wallId != null) payload.put("wallId", wallId);
         if (alias != null) payload.put("alias", alias);
-        if (publishedAt != null) payload.put("publishedAt", publishedAt);
+        if (lockedAt != null) payload.put("lockedAt", lockedAt);
+        if (ownerUuid != null) payload.put("ownerUuid", ownerUuid);
+        payload.put("selfUuid", session.playerUuid().toString());
         // M6-D 协议 §3.2：全量 TemplateSpec 下发，前端无需独立接口
         payload.put("templates", listTemplates());
         ctx.send(Envelope.of("ready", in.id(), payload));

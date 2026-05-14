@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Globe, Pencil, Check, X, RefreshCw, HelpCircle } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -14,7 +14,9 @@ const project = useProjectStore();
 const { t } = useI18n();
 const ws = getWsClient();
 
-const published = computed(() => project.publishedAt != null);
+// 2026-05-14 lock-state：published 概念砍 → lock 概念。仅 wall owner 可锁/解锁。
+const locked = computed(() => project.isLocked);
+const isOwner = computed(() => project.isOwner);
 
 const editingAlias = ref(false);
 const aliasDraft = ref('');
@@ -26,15 +28,16 @@ const ALIAS_RE = /^[A-Za-z0-9_-]{2,32}$/;
 const copiedFlash = ref<'wallid' | null>(null);
 let copiedFlashTimer: number | null = null;
 
-function togglePublish() {
+function toggleLock() {
     if (!project.wallId) return;
-    if (published.value) {
-        project.publishedAt = null; // optimistic
-        ws.send('wall.unpublish');
+    if (!isOwner.value) return;  // 非 owner 按钮 disabled，理论上不应触发
+    if (locked.value) {
+        project.lockedAt = null; // optimistic
+        ws.send('wall.unlock');
     } else {
         // optimistic：用本地时间戳，server ack 会用真实值覆盖
-        project.publishedAt = Date.now();
-        ws.send('wall.publish');
+        project.lockedAt = Date.now();
+        ws.send('wall.lock');
     }
 }
 
@@ -184,16 +187,21 @@ function showRefreshFlash(msg: string) {
           </button>
           <span v-if="aliasError" class="text-[10px] text-red-400 ml-1">{{ aliasError }}</span>
         </div>
-        <Tooltip :text="published ? t.wall.publishToggleOn : t.wall.publishToggleOff">
+        <!-- 2026-05-14 lock 按钮：替换原 publish 按钮。owner 可点；非 owner disabled。 -->
+        <Tooltip :text="locked
+          ? (isOwner ? t.wall.lockToggleOff : t.wall.lockOwnerOnly)
+          : (isOwner ? t.wall.lockToggleOn : t.wall.lockOwnerOnly)">
           <button
-            class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors"
-            :class="published
-              ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+            class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            :class="locked
+              ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
               : 'bg-[color:var(--secondary)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
-            @click="togglePublish"
+            :disabled="!isOwner"
+            @click="toggleLock"
           >
-            <Globe class="size-3" />
-            <span>{{ published ? t.wall.publishOn : t.wall.publishOff }}</span>
+            <Lock v-if="locked" class="size-3" />
+            <Unlock v-else class="size-3" />
+            <span>{{ locked ? t.wall.locked : t.wall.unlocked }}</span>
           </button>
         </Tooltip>
         <Tooltip :text="t.wall.refreshTip">

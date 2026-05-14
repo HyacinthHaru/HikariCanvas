@@ -1,11 +1,13 @@
 # 数据模型
 
-**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27
+**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14
 **适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式、迁移策略
 
 本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。
 
-> **M5.5 重构（2026-04-27）**：合并 `drafts` + `sign_records` → 单一 `walls` 表；`pool_maps.state` 由三态收为两态（FREE/RESERVED）；废止 commit 流程，新增 `published_at` 标签。M5.5 之前的 V001-V004 由 V005 整体重置（见 §6.2）。
+> **M5.5 重构（2026-04-27）**：合并 `drafts` + `sign_records` → 单一 `walls` 表；`pool_maps.state` 由三态收为两态（FREE/RESERVED）；废止 commit 流程，新增 `published_at` 标签。
+
+> **lock-state 重设计（2026-05-14）**：DB 列 `walls.published_at` 名字保留（避免 SQL 迁移风险），但语义改为 **lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定（前端 readonly UI）。`walls.owner_uuid` 为作者权限依据。ItemFrame PDC `published_at` 不再写（FrameDeployer.markPublished 砍）；现有 PDC 数据保留无害。下文 §2.X 涉及 published 语义的描述均按"lock 时间戳"理解。详见 CLAUDE.md `§lock-state` + `docs/architecture.md §3.6`。
 
 ---
 

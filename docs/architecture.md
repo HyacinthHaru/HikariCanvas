@@ -1,11 +1,13 @@
 # HikariCanvas 系统架构
 
-**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27
+**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14
 **适用范围：** 后端插件 + 前端编辑器
 
 本文档定义系统的组件划分、数据流、生命周期与关键机制。所有代码实现必须遵循此架构；如需调整，先改本文档再改代码。
 
-> **M5.5 路线修正（2026-04-27）**：原"编辑 → commit 永久固化"二段式（drafts + sign_records / RESERVED + PERMANENT）已废止。新模型：单一 `walls` 表 + `published_at` 标签，wall 永远可改，命令族新增 `open / list / publish / delete` 替代 `commit`。详见 §3 状态机与 §6 publish 流程。
+> **M5.5 路线修正（2026-04-27）**：原"编辑 → commit 永久固化"二段式（drafts + sign_records / RESERVED + PERMANENT）已废止。新模型：单一 `walls` 表 + `published_at` 标签，wall 永远可改，命令族新增 `open / list / publish / delete` 替代 `commit`。
+
+> **lock-state 重设计（2026-05-14）**：`/canvas publish` / `/canvas unpublish` 命令砍；DB 列 `walls.published_at` 保留但语义改为 lock 时间戳；新 WS op `wall.lock` / `wall.unlock`（owner-only）；前端 TopBar Lock 按钮 + RightPanel readonly UI 是 lock 的唯一执行者；后端编辑 op 路径与 lock 状态完全解耦（未来动态展示用例需要）；ItemFrame PDC 不再写 published_at；FrameProtectionListener "已发布拦截" 砍。下文 §6/§7 旧 publish 流程段落标 `[DEPRECATED 2026-05-14]`，请参考 CLAUDE.md `§lock-state` 与本文档 §3.6 新流程。
 
 ---
 
@@ -13,7 +15,34 @@
 
 ### 1.1 一句话
 
-玩家在游戏里锁定一面墙 → 打开浏览器编辑器 → 编辑实时投影到那面墙上 → 任何时候都能再次打开继续改；可选 `publish` 标记为「已发布」用于网页首页归类，标签层而非数据层。
+玩家在游戏里锁定一面墙 → 打开浏览器编辑器 → 编辑实时投影到那面墙上 → 任何时候都能再次打开继续改；作者可在前端 TopBar 触发 lock 把 wall 冻结为只读（其他玩家拿到 `/canvas open` 也只能查看，无解锁路径）。
+
+### 3.6 lock 状态（2026-05-14 引入）
+
+`walls.published_at` 列保留原名，**语义改为 lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定。owner 由 `walls.owner_uuid` 决定（M5.5 已有字段）。
+
+```
+玩家 A（owner）──── 前端 TopBar Lock 按钮 ──▶ ws.send(wall.lock)
+                                                    │
+                              WebServer 校验 caller UUID == owner_uuid
+                                                    │
+                              WallRepo.markLocked(wallId, now)  ── UPDATE walls.published_at = now
+                                                    │
+                              ack 回前端 + 广播状态变更
+                                                    │
+                                          前端 readonly UI 生效
+
+玩家 B（非 owner）/canvas open ──▶ ready payload 含 lockedAt + ownerUuid + selfUuid
+                                       │
+                              前端 computed isOwner = (selfUuid === ownerUuid) = false
+                                       │
+                              UI 显示"已锁定，仅作者可解锁"，Lock 按钮 disabled
+                                       │
+                              用户开发者工具绕过前端 lock → 编辑 op 仍能发送 + 后端接受
+                              （后端编辑 op 不读 lock 状态——这是 lock-state 重设计的核心）
+```
+
+**关键不变量**：lock 是 UX 层概念，不阻挡 op 路径。如果作者发布锁定的 wall，但内部系统（如未来的动态展示）想用 ws.send(element.update) 更新内容，**不会被 lock 拒**。这是 2026-05-14 砍 published 概念的根本动机。
 
 ### 1.2 高层拓扑
 

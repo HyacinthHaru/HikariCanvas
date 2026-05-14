@@ -121,16 +121,29 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 
 **新模型（已固化，不再讨论）**：
 
-1. **一画一行 walls 表**：取代 `drafts` + `sign_records`。每行有稳定 `wall_id`（`w-<8hex>`，玩家可见）+ 可选 `alias`。`published_at` 是 nullable timestamp 标签——纯 UI/命令前置语义，**不影响底层行为**（始终可改）。
+1. **一画一行 walls 表**：取代 `drafts` + `sign_records`。每行有稳定 `wall_id`（`w-<8hex>`，玩家可见）+ 可选 `alias`。DB 列 `published_at`（M5.5 引入）**2026-05-14 起语义化为 lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定（前端 readonly）。`owner_uuid` 为作者权限依据。
 2. **MapPool 两态**：`FREE` / `RESERVED`。owner 统一 `wall:<wall_id>`，wall 占的 map 一直占着直到 `/canvas delete`，不自动释放。`PERMANENT` 状态废止。
-3. **命令族**：`edit / confirm / cancel / open <id\|alias> / list / publish / unpublish / alias <name> / delete <id> [confirm]`。`commit` 命令**废止**（不是改名）。`/canvas delete` 需 30s 内 `/canvas delete <id> confirm` 二次确认。
+3. **命令族**：`edit / confirm / cancel / open <id\|alias> / list / alias <name> / delete <id> [confirm]`。`commit` 命令**废止**（不是改名）。`/canvas publish` / `/canvas unpublish` 2026-05-14 砍（lock 状态由前端 TopBar UI 触发 WS op）。`/canvas delete` 需 30s 内 `/canvas delete <id> confirm` 二次确认。
 4. **wand 瞄已有 ItemFrame**：HikariCanvas 自己挂的 → 不当 OCCUPIED；左/右键先 ActionBar 提示「This is wall <id> 'alias' — left-click again to open」，再次操作才打开二次编辑。第三方 ItemFrame 仍 OCCUPIED 拒绝。
-5. **published 副作用**（Q2=a+b）：标签 + ItemFrame PDC 写 `published_at` 时间戳；M7 加 break 拦截让已发布画更难误删。除此之外游戏内零行为差。
+5. ~~published 副作用（M5.5 决策已废 2026-05-14）~~ → **lock 状态重设计**：纯前端 readonly UI，后端只持元数据（owner_uuid + locked_at），不影响编辑 op 路径。游戏内零行为差。ItemFrame PDC 不再写 published_at；FrameProtectionListener "已发布拦截" 砍。详见下方 §lock-state。
 6. **排他锁保留**：`byWall` 一墙一时刻一个活跃 session。多人协作（OT/CRDT）超 scope，不做。
 
-**契约文档已更新**：`docs/architecture.md` §3 状态机 / §6 commit pseudocode / §7 PDC 标记 / `docs/data-model.md` §2 schema / `docs/protocol.md` §8.3 / `docs/security.md` 权限名 / PROPOSAL.md 命令族。具体 commit hash 见 `docs/journal.md` 2026-04-27 条目。
+## lock 状态（2026-05-14 引入，替代 M5.5 published 概念）
 
-**写代码前重新对照契约**——这次重构涉及多模块协调，必须文档先行。
+**目标**：让 wall 作者能"只读冻结"自己的画防误编辑；其他玩家拿到 `/canvas open <wall_id>` 也无法解锁。但保持后端编辑路径与 lock 状态完全解耦——未来动态化展示（视频 / 时间轮播）想在锁定的 wall 上更新数据时不被卡。
+
+**架构纪律**：
+1. **锁状态 = 元数据**：DB 列 `walls.published_at`（保留原列名）非 null 即锁定，时间戳 = lock 时间。`walls.owner_uuid` 为作者权限依据。
+2. **后端编辑 op 不读 lock**：element.* / canvas.* / layer.* 所有编辑 op 透明，不因 lock 拒绝。
+3. **WS op**：`wall.lock` / `wall.unlock`，**owner-only**（caller UUID == wall.owner_uuid，非 owner 拒 `FORBIDDEN`）。
+4. **前端是 lock 的唯一执行者**：locked 时 RightPanel 编辑控件 disabled、Konva Transformer 隐藏、拖动失效、删除快捷键失效、drawTool 失效。
+5. **isOwner 判定**：ready payload 携带 `ownerUuid` + `selfUuid`，前端 computed `isOwner = selfUuid === ownerUuid`。非 owner 看不到解锁按钮，无路径绕过。
+6. **`/canvas publish` / `/canvas unpublish` 命令砍**：玩家通过浏览器编辑器 TopBar 的 Lock 按钮触发；MC 命令族不再包含 lock 相关。
+7. **ItemFrame PDC 不再写 published_at**：FrameDeployer.markPublished 砍；M7 的"已发布破坏拦截"砍，所有 wall ItemFrame 一致由 `canvas.modify` 权限保护。
+
+**契约文档已更新**：`docs/architecture.md` §3 状态机 / §6 commit pseudocode / §7 PDC 标记 / `docs/data-model.md` §2 schema / `docs/protocol.md` §8.3 / `docs/security.md` 权限名 / PROPOSAL.md 命令族。具体 commit hash 见 `docs/journal.md` 2026-04-27 / 2026-05-14 条目。
+
+**写代码前重新对照契约**——重构涉及多模块协调，必须文档先行。
 
 ## 构建 / 开发流程速查
 

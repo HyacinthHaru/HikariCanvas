@@ -5,6 +5,88 @@
 
 ---
 
+## 2026-05-14 · 三 Bug 修复 + published 概念整体重设计为 lock-state
+
+用户反馈三个问题，全部修完。
+
+### Bug 1 · 箭头工具 transformer resize 失效
+
+**根因**：`CanvasView.vue onTransformEnd` 对所有 element 统一发 `{x, y, w, h, rotation}` 走 `element.transform`；PathElement 的几何完全由 `d` 字符串（绝对坐标）+ `stroke.width`（常量）决定，bbox 不参与渲染。所以 resize handle 拖动只改 bbox，箭头粗细 / 形状不变。
+
+**修法**：
+- 新增 `web/render/pathScale.ts`：tokenize d 字符串 → 把 M/L/Q/C 命令后续数字按偶/奇下标 × sx / sy → 重组。Z 命令无坐标原样保留。M9 PathDValidator 接受输出格式。
+- `CanvasView.vue onTransformEnd` 检测 `el.type === 'path'`：计算 sx=newW/oldW、sy=newH/oldH → 调 `scalePathD` 得新 d → stroke.width 按 max(sx, sy) 缩放 → 走 `element.update`（element.transform 只接 x/y/w/h/rotation，d/stroke 字段必须走通用 patch）。
+- 其他 element 类型保持原 element.transform 路径。
+
+### Bug 2 · 邻接 wall confirm 误删现有 ItemFrame
+
+**根因**：`FrameDeployer.spawnSlot:302` 用 `getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)` 清"残留"，原注释明确写"PDC 不带 wall_id 或带别的 wall_id 都视为残骸"——故意把别人的 frame 当残骸删。问题：ItemFrame bbox 半径 ~0.25 + query box 半径 0.8 = 1.05 格 > 标准 1 格间距，相邻 wall 的 frame 一定会被抓到。
+
+**修法**：清残留时只 remove **PDC `wall_id == current`** 的 ItemFrame（自己上次失败 spawn 留下的）。其他 wall_id 或 PDC 缺失的 ItemFrame 一律跳过；位置占用问题由 WallResolver 在 confirm 之前的 OCCUPIED 检查拒绝。Item 掉落物保持照清。
+
+### Bug 3 · published 概念整体重设计为 lock-state
+
+用户提出 "把发布功能整体放前端 readonly 锁"，最终定下方案：
+
+- 锁状态服务端持久化（不 localStorage，避免跨设备 / 玩家分享时丢失）
+- 复用 `walls.published_at` DB 列（语义化为 lock 时间戳，避免 schema 迁移）
+- 复用 `walls.owner_uuid` 作为作者权限依据
+- 后端**不**用 lock 状态阻挡编辑 op（未来动态展示用例需要）
+- `wall.lock` / `wall.unlock` WS op **owner-only** 校验（caller UUID == wall.owner_uuid）
+- 前端是 lock 的唯一执行者（readonly UI）
+
+#### 后端砍除
+
+- `/canvas publish` / `/canvas unpublish` 命令 + tab complete（CanvasCommand.java）
+- WS op `wall.publish` / `wall.unpublish`（WebServer.java）
+- `FrameDeployer.markPublished` + `FrameDeployer.isFramePublished` + `FrameDeployer.publishedAtKey` 字段
+- `FrameProtectionListener` 中"已发布拦截"完整路径（M7 引入的）—— 所有 wall ItemFrame 一致由 `canvas.modify` 权限保护
+
+#### 后端新增
+
+- WS op `wall.lock`：owner-only 校验通过 → `WallRepo.markPublished` 写入时间戳 → ack `{lockedAt}`
+- WS op `wall.unlock`：owner-only 校验通过 → `WallRepo.markUnpublished` → ack `{lockedAt: null}`
+- ready payload 新增字段：
+  - `lockedAt` (从 `publishedAt` 改名)
+  - `ownerUuid` （wall.owner_uuid）
+  - `selfUuid` （当前 session 玩家 UUID）
+
+#### 前端砍除
+
+- `TopBar.vue` togglePublish 函数 + Globe icon "Published/Draft" 按钮
+- `stores/project.ts` 的 publishedAt
+- `network/wsClient.ts` ack handler publishedAt 字段
+- i18n `publishToggleOn/Off` / `publishOn/Off` / `publishedGroup` / `draftsGroup` / status.published / status.draft
+
+#### 前端新增
+
+- `stores/project.ts`：`lockedAt` + `ownerUuid` + `selfUuid` 字段；`isLocked` / `isOwner` / `canEdit` computed
+- `TopBar.vue`：Lock/Unlock 图标按钮（owner 可点，非 owner disabled + tooltip "仅作者可锁定 / 解锁"）
+- `CanvasView.vue`：locked 时整 stage 上覆盖 readonly overlay div（z-20、bg-black/10、backdrop-blur）拦截所有 mousedown/click/dblclick；中央显示 amber 色提示文字（owner 看 "已锁定 · 点 TopBar Unlock 继续编辑"，非 owner 看 "已锁定（仅作者可解锁）· 只读模式"）
+- `RightPanel.vue`：根元素 `:class="{ hc-readonly-panel: project.isLocked }"`，scoped CSS 给 `.hc-readonly-panel section` 加 `pointer-events: none; opacity: 0.6`，完全禁用编辑控件
+- `StatusBar.vue`：published / draft 替换为 locked / unlocked，icon Globe/FileText 替换为 Lock/Unlock
+- `HomePage.vue`：published / drafts 分组改为 locked / unlocked，icon Globe→Lock 色彩 emerald→amber
+- i18n：`t.wall.{locked, unlocked, lockToggleOn, lockToggleOff, lockOwnerOnly, lockedOwnerHint, lockedReaderHint}` + `t.status.{locked, unlocked, wallStateTip}` + `t.home.{lockedGroup, unlockedGroup}` 中英
+
+### 文档同步（"文档先行"）
+
+- `CLAUDE.md`：M5.5 重构段顶部加 `§lock-state` 块，详细列 7 条架构纪律
+- `docs/architecture.md` 顶部 banner + 新加 `§3.6 lock 状态`（含数据流图）；老 §6 publish 流程段标 `[DEPRECATED 2026-05-14]`
+- `docs/data-model.md` 顶部 banner，published_at 列名保留但语义变更
+- `docs/protocol.md`：§5.7 砍 wall.publish/wall.unpublish 行 + 加 wall.lock/wall.unlock；ready payload 例改 lockedAt + ownerUuid + selfUuid
+
+### 验证
+
+- `./gradlew :plugin:compileJava`：过（修了一处 UUID vs String 比较 bug，把 `w.ownerUuid().equals(s.playerUuid().toString())` 改成 UUID-UUID 直接比较）
+- `./gradlew :plugin:test`：**287 测试全过**（M11 review fix 后基线，未引入测试漂移）
+- `vite build`：440.20 KB JS / 39.26 KB CSS（之前 M11-E 438.50 → +1.7 KB JS = TopBar lock 按钮 + readonly overlay + i18n 新字段；+2.2 KB CSS = readonly 样式 + amber 颜色变量）
+
+### 工期
+
+约 1.5 小时（Bug 1 ~15 分钟、Bug 2 ~5 分钟、Bug 3 文档 ~25 分钟 + 后端 ~25 分钟 + 前端 ~30 分钟 + journal & verify ~10 分钟）。
+
+---
+
 ## 2026-05-14 · M11 review fix · 退化形态 IAE 防御 + fill.ts 类型加强
 
 **起因**：M11 主提交后做二次审查，扫到两个潜在问题。

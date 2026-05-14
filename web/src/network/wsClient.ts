@@ -203,7 +203,9 @@ export class WsClient {
         project.setWallMeta(
             payload.wallId ?? null,
             payload.alias ?? null,
-            payload.publishedAt ?? null,
+            payload.lockedAt ?? null,
+            payload.ownerUuid ?? null,
+            payload.selfUuid ?? null,
         );
         // M6-D：缓存全量 TemplateSpec 列表，供 TemplateGallery 使用
         templates.setTemplates(payload.templates ?? []);
@@ -223,7 +225,8 @@ export class WsClient {
         useProjectStore().setSnapshot(payload.projectState);
     }
 
-    /** ack payload 可能含 wall.* op 的副作用（publishedAt / alias）；同步进 store。 */
+    /** ack payload 可能含 wall.* op 的副作用（lockedAt / alias）；同步进 store。
+     *  2026-05-14：publishedAt → lockedAt 重命名。 */
     private handleAck(ackId: string | undefined, payload: unknown): void {
         // 1) sendWithAck 的 Promise resolve（与 store 副作用解耦）
         if (ackId && this.pendingAcks.has(ackId)) {
@@ -235,11 +238,11 @@ export class WsClient {
         // 2) store 副作用
         if (!payload || typeof payload !== 'object') return;
         const project = useProjectStore();
-        const p = payload as { publishedAt?: unknown; alias?: unknown };
-        if (typeof p.publishedAt === 'number') {
-            project.publishedAt = p.publishedAt;
-        } else if ('publishedAt' in p && p.publishedAt === null) {
-            project.publishedAt = null;
+        const p = payload as { lockedAt?: unknown; alias?: unknown };
+        if (typeof p.lockedAt === 'number') {
+            project.lockedAt = p.lockedAt;
+        } else if ('lockedAt' in p && p.lockedAt === null) {
+            project.lockedAt = null;
         }
         if (typeof p.alias === 'string') {
             project.alias = p.alias;

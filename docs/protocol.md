@@ -110,10 +110,14 @@ GET /api/session/:token HTTP/1.1
     "projectState": { /* v2 形态，见 §7 */ },
     "wallId": "w-1a2b3c4d",
     "alias": "subway-test",
-    "publishedAt": 1714200000000,
+    "lockedAt": 1714200000000,
+    "ownerUuid": "00112233-4455-6677-8899-aabbccddeeff",
+    "selfUuid": "ffeeddcc-bbaa-9988-7766-554433221100",
     "templates": [ ... ]
   }
 }
+
+> **2026-05-14**：ready payload 字段 `publishedAt` 改名 `lockedAt`；新增 `ownerUuid`（wall.owner_uuid） + `selfUuid`（当前 session 玩家）让前端判 `isOwner = selfUuid === ownerUuid`。详见 CLAUDE.md `§lock-state`。
 ```
 
 > **M6 决策（2026-05-11）**：`templates` 字段一次性全量下发，不走单独 `template.list` op。理由：5 个内置模板每个 ~1-2KB，合计 5-10KB；服主自定义模板少（v1 阶段 < 50KB），WS 单帧足够。未来若模板数量爆炸（v2 模板包生态）再切 index + on-demand `template.fetch`。
@@ -222,11 +226,13 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | op | 方向 | payload |
 | --- | --- | --- |
 | `cancel` | C→S | `{}` - 服务器回 `ack` 后关闭 session（wall 数据保留） |
-| `wall.publish` | C→S | `{}` - 服务器 UPDATE walls.published_at；返回 `ack { publishedAt }`；session 不关闭 |
-| `wall.unpublish` | C→S | `{}` - 服务器 UPDATE walls.published_at=NULL；返回 `ack`；session 不关闭 |
+| `wall.lock` | C→S | `{}` - **owner-only**：caller UUID == wall.owner_uuid 才接受；UPDATE walls.published_at=now（DB 列名保留，语义为 lock 时间戳）；返回 `ack { lockedAt }`；非 owner 返 `FORBIDDEN`；session 不关闭。**2026-05-14 引入** |
+| `wall.unlock` | C→S | `{}` - **owner-only**：UPDATE walls.published_at=NULL；返回 `ack { lockedAt: null }`；非 owner 返 `FORBIDDEN`；session 不关闭 |
 | `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；冲突返回 error `ALIAS_TAKEN`；session 不关闭 |
 
 > M5.5 起 `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
+>
+> **2026-05-14**：`wall.publish` / `wall.unpublish` 砍，新 `wall.lock` / `wall.unlock`。lock 是 UX 层概念，**后端编辑 op（element.* / canvas.* / layer.*）路径与 lock 状态完全解耦**——锁定的 wall 仍能接受编辑 op（动态展示场景需要），前端 readonly UI 是 lock 唯一的执行者。`/canvas publish` / `/canvas unpublish` 命令同时砍。
 
 ### 5.9 笔刷流（M12 占位，未实施）
 

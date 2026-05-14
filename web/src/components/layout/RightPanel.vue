@@ -318,7 +318,10 @@ function onElementDragEnd() {
 </script>
 
 <template>
-  <aside class="w-72 bg-[color:var(--card)] border-l border-[color:var(--border)] flex flex-col">
+  <aside class="w-72 bg-[color:var(--card)] border-l border-[color:var(--border)] flex flex-col"
+         :class="{ 'hc-readonly-panel': project.isLocked }">
+    <!-- 2026-05-14 lock-state：locked 时整个右栏 pointer-events: none + opacity 60%，
+         禁止任何编辑控件交互；解锁路径只能走 TopBar Lock 按钮（owner 才可见）。 -->
     <!-- M8-D：图层面板（顶端，自身控制 max-h 40%）。 -->
     <LayerPanel />
 
@@ -799,5 +802,12 @@ textarea.hc-input {
     min-height: 2.5rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     resize: none;
+}
+/* 2026-05-14 lock-state：locked 时整栏禁用编辑。pointer-events: none 完全屏蔽点击 / 输入 / 拖拽；
+   opacity 60% 提供视觉反馈让用户知道控件不可用。 */
+.hc-readonly-panel section,
+.hc-readonly-panel :deep(.layer-panel) {
+    pointer-events: none;
+    opacity: 0.6;
 }
 </style>

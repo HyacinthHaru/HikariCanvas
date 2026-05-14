@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue';
-import { Globe, Pencil, MapPin, Clock, Tag, ImageOff, RefreshCw } from 'lucide-vue-next';
+import { Lock, Pencil, MapPin, Clock, Tag, ImageOff, RefreshCw } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 
 interface WallSummary {
@@ -14,6 +14,7 @@ interface WallSummary {
     facing: string;
     widthMaps: number;
     heightMaps: number;
+    /** 锁定时间戳（2026-05-14 起 publishedAt 字段语义化为 lock 时间戳） */
     publishedAt: number | null;
     updatedAt: number;
 }
@@ -26,8 +27,9 @@ const error = ref<string | null>(null);
 const copiedId = ref<string | null>(null);
 let copiedTimer: number | null = null;
 
-const published = computed(() => walls.value.filter(w => w.publishedAt != null));
-const drafts = computed(() => walls.value.filter(w => w.publishedAt == null));
+// 2026-05-14 lock-state：published 分组改为 locked / unlocked
+const locked = computed(() => walls.value.filter(w => w.publishedAt != null));
+const unlocked = computed(() => walls.value.filter(w => w.publishedAt == null));
 
 async function loadWalls(isManualRefresh = false) {
     if (isManualRefresh) refreshing.value = true;
@@ -106,12 +108,12 @@ function previewUrl(w: WallSummary): string {
         </div>
       </div>
       <div v-else class="space-y-8">
-        <section v-if="published.length > 0">
+        <section v-if="locked.length > 0">
           <h2 class="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3">
-            <Globe class="size-4 text-emerald-500" /> {{ t.home.publishedGroup(published.length) }}
+            <Lock class="size-4 text-amber-500" /> {{ t.home.lockedGroup(locked.length) }}
           </h2>
           <ul class="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-            <li v-for="w in published" :key="w.wallId" class="hc-wall-card hc-wall-published">
+            <li v-for="w in locked" :key="w.wallId" class="hc-wall-card hc-wall-locked">
               <div class="hc-wall-thumb" :style="{ aspectRatio: `${w.widthMaps} / ${w.heightMaps}` }">
                 <img :src="previewUrl(w)" loading="lazy" alt="" />
               </div>
@@ -144,12 +146,12 @@ function previewUrl(w: WallSummary): string {
             </li>
           </ul>
         </section>
-        <section v-if="drafts.length > 0">
+        <section v-if="unlocked.length > 0">
           <h2 class="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3">
-            <Pencil class="size-4" /> {{ t.home.draftsGroup(drafts.length) }}
+            <Pencil class="size-4" /> {{ t.home.unlockedGroup(unlocked.length) }}
           </h2>
           <ul class="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-            <li v-for="w in drafts" :key="w.wallId" class="hc-wall-card">
+            <li v-for="w in unlocked" :key="w.wallId" class="hc-wall-card">
               <div class="hc-wall-thumb" :style="{ aspectRatio: `${w.widthMaps} / ${w.heightMaps}` }">
                 <img :src="previewUrl(w)" loading="lazy" alt="" />
               </div>
@@ -202,11 +204,11 @@ function previewUrl(w: WallSummary): string {
     box-shadow: 0 6px 16px -4px rgba(0,0,0,0.18);
     border-color: var(--ring);
 }
-.hc-wall-published {
-    border-color: rgb(16 185 129 / 0.4);
+.hc-wall-locked {
+    border-color: rgb(245 158 11 / 0.4);
 }
-.hc-wall-published:hover {
-    box-shadow: 0 6px 16px -4px rgba(16, 185, 129, 0.25);
+.hc-wall-locked:hover {
+    box-shadow: 0 6px 16px -4px rgba(245, 158, 11, 0.25);
 }
 /* 缩略图 */
 .hc-wall-thumb {

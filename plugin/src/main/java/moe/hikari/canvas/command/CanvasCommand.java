@@ -43,7 +43,8 @@ import java.util.logging.Level;
  *   <li>{@code confirm} — 锁定墙面，新建 wall（部署 ItemFrame + 借池）或 bind 现有 wall（不部署）+ 签发 token URL</li>
  *   <li>{@code open <wall_id\|alias>} — 直接打开已有 wall（绕过 SELECTING）</li>
  *   <li>{@code list} — 玩家自己的画清单</li>
- *   <li>{@code publish / unpublish / alias} — wall 元数据修改（标签层）</li>
+ *   <li>{@code alias} — wall 元数据修改（标签层）</li>
+ *   <li>~~{@code publish / unpublish}~~ 2026-05-14 砍：lock 状态由前端 TopBar 按钮触发 ws 的 wall.lock/unlock</li>
  *   <li>{@code delete <wall_id> [confirm]} — 删除 wall（30s 二次确认）</li>
  *   <li>{@code stats / cleanup} — 管理员</li>
  * </ul>
@@ -118,12 +119,8 @@ public final class CanvasCommand {
                 .then(Commands.literal("list")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runList))
-                .then(Commands.literal("publish")
-                        .requires(src -> isPlayerWith(src, "canvas.publish"))
-                        .executes(this::runPublish))
-                .then(Commands.literal("unpublish")
-                        .requires(src -> isPlayerWith(src, "canvas.publish"))
-                        .executes(this::runUnpublish))
+                // 2026-05-14 lock-state 重设计：/canvas publish 与 /canvas unpublish 砍。
+                // 锁定 / 解锁由前端浏览器 TopBar 的 Lock 按钮触发 WS op wall.lock/wall.unlock。
                 .then(Commands.literal("alias")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .then(Commands.argument("name", StringArgumentType.word())
@@ -228,7 +225,7 @@ public final class CanvasCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    // ---------- open / list / publish / unpublish / alias / delete ----------
+    // ---------- open / list / alias / delete ----------
 
     private int runOpen(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
@@ -307,40 +304,8 @@ public final class CanvasCommand {
         p.sendMessage(line);
     }
 
-    private int runPublish(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
-        Session s = sessionManager.byPlayer(player.getUniqueId());
-        if (s == null || s.wallId() == null) {
-            player.sendMessage(Component.text("No active wall session. Open one first.", NamedTextColor.RED));
-            return Command.SINGLE_SUCCESS;
-        }
-        Long ts = wallRepo.markPublished(s.wallId());
-        if (ts == null) {
-            player.sendMessage(Component.text("Publish failed (DB error).", NamedTextColor.RED));
-            return Command.SINGLE_SUCCESS;
-        }
-        // ItemFrame PDC published_at
-        if (s.wall() != null) {
-            frameDeployer.markPublished(s.wallId(), s.wall().world(), ts);
-        }
-        player.sendMessage(Component.text("Wall " + s.wallId() + " published.", NamedTextColor.GREEN));
-        return Command.SINGLE_SUCCESS;
-    }
-
-    private int runUnpublish(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
-        Session s = sessionManager.byPlayer(player.getUniqueId());
-        if (s == null || s.wallId() == null) {
-            player.sendMessage(Component.text("No active wall session.", NamedTextColor.RED));
-            return Command.SINGLE_SUCCESS;
-        }
-        wallRepo.markUnpublished(s.wallId());
-        if (s.wall() != null) {
-            frameDeployer.markPublished(s.wallId(), s.wall().world(), null);
-        }
-        player.sendMessage(Component.text("Wall " + s.wallId() + " unpublished.", NamedTextColor.YELLOW));
-        return Command.SINGLE_SUCCESS;
-    }
+    // 2026-05-14 砍：runPublish / runUnpublish 命令处理器移除。
+    // lock 状态由前端 TopBar Lock 按钮 → ws.send('wall.lock' | 'wall.unlock') → WebServer.handleWallOp 处理。
 
     private int runAlias(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();

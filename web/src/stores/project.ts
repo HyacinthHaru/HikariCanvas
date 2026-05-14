@@ -31,9 +31,18 @@ export const useProjectStore = defineStore('project', () => {
     const lastAddedElementId = ref<string | null>(null);
 
     // M5.5：wall 元数据（来自 ready payload + wall.* op 的 ack）
+    // 2026-05-14 lock-state 重设计：publishedAt → lockedAt；新增 ownerUuid + selfUuid
+    // 供前端 computed isOwner = (selfUuid === ownerUuid)，仅 owner 能 lock/unlock。
     const wallId = ref<string | null>(null);
     const alias = ref<string | null>(null);
-    const publishedAt = ref<number | null>(null);
+    const lockedAt = ref<number | null>(null);
+    const ownerUuid = ref<string | null>(null);
+    const selfUuid = ref<string | null>(null);
+
+    const isLocked = computed(() => lockedAt.value != null);
+    const isOwner = computed(() => !!ownerUuid.value && ownerUuid.value === selfUuid.value);
+    /** locked + 非 owner = 完全 readonly 无解锁路径；locked + owner = 锁定状态但可解锁 */
+    const canEdit = computed(() => !isLocked.value);
 
     const canvasPixelWidth = computed(() =>
         state.value ? state.value.canvas.widthMaps * 128 : 0);
@@ -56,10 +65,13 @@ export const useProjectStore = defineStore('project', () => {
         linkActiveLayerElements(state.value);
     }
 
-    function setWallMeta(id: string | null, a: string | null, p: number | null) {
+    function setWallMeta(id: string | null, a: string | null, lock: number | null,
+                         owner: string | null, self: string | null) {
         wallId.value = id;
         alias.value = a;
-        publishedAt.value = p;
+        lockedAt.value = lock;
+        ownerUuid.value = owner;
+        selfUuid.value = self;
     }
 
     /**
@@ -99,7 +111,8 @@ export const useProjectStore = defineStore('project', () => {
     return {
         state,
         lastAddedElementId,
-        wallId, alias, publishedAt,
+        wallId, alias, lockedAt, ownerUuid, selfUuid,
+        isLocked, isOwner, canEdit,
         canvasPixelWidth, canvasPixelHeight,
         activeLayer, activeLayerLocked,
         setSnapshot, setWallMeta, applyPatch,

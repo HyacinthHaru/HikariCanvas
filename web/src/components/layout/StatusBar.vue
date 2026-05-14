@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
-import { Wifi, WifiOff, Loader2, ShieldAlert, MousePointer2, Move, Globe, FileText } from 'lucide-vue-next';
+import { Wifi, WifiOff, Loader2, ShieldAlert, MousePointer2, Move, Lock, Unlock } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
@@ -32,9 +32,10 @@ const statusLabel = computed(() => {
     }
 });
 
+// 2026-05-14 lock-state：published 砍 → locked / unlocked
 const wallStateLabel = computed(() => {
-    if (project.publishedAt != null) return t.value.status.published;
-    return t.value.status.draft;
+    if (project.isLocked) return t.value.status.locked;
+    return t.value.status.unlocked;
 });
 </script>
 
@@ -61,9 +62,9 @@ const wallStateLabel = computed(() => {
         {{ t.status.wall(net.wallSize.w, net.wallSize.h) }}
       </span>
       <Tooltip v-if="project.wallId" :text="t.status.wallStateTip">
-        <span class="flex items-center gap-1" :class="project.publishedAt != null ? 'text-emerald-500' : ''">
-          <Globe v-if="project.publishedAt != null" class="size-3" />
-          <FileText v-else class="size-3" />
+        <span class="flex items-center gap-1" :class="project.isLocked ? 'text-amber-500' : ''">
+          <Lock v-if="project.isLocked" class="size-3" />
+          <Unlock v-else class="size-3" />
           {{ wallStateLabel }}
         </span>
       </Tooltip>

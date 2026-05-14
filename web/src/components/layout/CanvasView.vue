@@ -8,7 +8,8 @@ import { getWsClient } from '@/network/wsClient';
 import { renderProjectState, onIconReady, onPaletteReady } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
-import type { Element } from '@/types/protocol';
+import type { Element, PathElement } from '@/types/protocol';
+import { scalePathD } from '@/render/pathScale';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -608,15 +609,51 @@ function onTransformEnd(ev: TransformEvt, id: string): void {
     node.width(newW); node.height(newH);
     node.rotation(newRot);
     const el = project.elementById(id);
-    if (el) {
-        el.x = newX; el.y = newY;
-        el.w = newW; el.h = newH;
-        el.rotation = newRot;
-        ws.send('element.transform', {
-            elementId: id,
+    if (!el) return;
+
+    // 2026-05-14 Bug 修：PathElement 的几何完全由 d 字符串 + stroke.width 决定，
+    // bbox 不参与渲染；transformer 改 w/h 时必须同步缩放 d 内坐标 + stroke.width，
+    // 否则箭头粗细 / 形状不会跟随 resize handle 改变（用户报"调整大小方框失效"）。
+    if (el.type === 'path') {
+        const path = el as PathElement;
+        const oldW = Math.max(1, path.w);
+        const oldH = Math.max(1, path.h);
+        const scaleX = newW / oldW;
+        const scaleY = newH / oldH;
+        const newD = scalePathD(path.d, scaleX, scaleY);
+        // stroke.width 按 max(sx, sy) 缩放（保持视觉一致：宽高同比变粗）
+        const oldStroke = path.stroke;
+        const linearScale = Math.max(scaleX, scaleY);
+        const newStrokeWidth = oldStroke
+            ? Math.max(1, Math.round(oldStroke.width * linearScale))
+            : null;
+        // optimistic 写本地
+        path.x = newX; path.y = newY; path.w = newW; path.h = newH;
+        path.rotation = newRot;
+        path.d = newD;
+        if (oldStroke && newStrokeWidth !== null) {
+            path.stroke = { ...oldStroke, width: newStrokeWidth };
+        }
+        // 走 element.update 一次性 patch 全部字段（element.transform 只接 x/y/w/h/rotation）
+        const patch: Record<string, unknown> = {
             x: newX, y: newY, w: newW, h: newH, rotation: newRot,
-        });
+            d: newD,
+        };
+        if (oldStroke && newStrokeWidth !== null) {
+            patch.stroke = { ...oldStroke, width: newStrokeWidth };
+        }
+        ws.send('element.update', { elementId: id, patch });
+        return;
     }
+
+    // 其他 element 类型：bbox 即几何（rect/circle/shape）或字号自描述（text/icon）
+    el.x = newX; el.y = newY;
+    el.w = newW; el.h = newH;
+    el.rotation = newRot;
+    ws.send('element.transform', {
+        elementId: id,
+        x: newX, y: newY, w: newW, h: newH, rotation: newRot,
+    });
 }
 
 // 重绘：state 或 editingId 变就重画 canvas
@@ -839,6 +876,19 @@ function onMouseUpOrLeave() {
             class="absolute inset-0 pointer-events-none"
             :style="gridOverlayStyle"
           />
+          <!-- 2026-05-14 lock-state readonly overlay：locked 时拦截所有 stage 鼠标事件。
+               中间显示提示；owner 看到解锁按钮，非 owner 看到 "仅作者可解锁"。 -->
+          <div
+            v-if="project.isLocked"
+            class="absolute inset-0 z-20 flex items-center justify-center bg-black/10 backdrop-blur-[1px] cursor-not-allowed"
+            @mousedown.stop.prevent
+            @click.stop.prevent
+            @dblclick.stop.prevent
+          >
+            <div class="px-3 py-1.5 rounded bg-amber-500/90 text-black text-xs font-medium shadow-lg pointer-events-none">
+              {{ project.isOwner ? t.wall.lockedOwnerHint : t.wall.lockedReaderHint }}
+            </div>
+          </div>
           <v-stage
             ref="stageRef"
             :config="stageConfig"
