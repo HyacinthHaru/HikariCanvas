@@ -5,6 +5,133 @@
 
 ---
 
+## 2026-05-14 · M13 图片导入 + 蒙版（A-E 五段全栈）
+
+**核心**：用户可拖图 / paste / 选文件进编辑器；上传走 6 层校验栈；`ImageElement` 支持 SVG path 蒙版（v1 UI 4 预设几何 + inverted，数据模型 path 形态留 v2 完全体接口）。M13 完成 = 项目主线收尾。
+
+### M13-A 数据模型 + 协议（约 1h）
+
+- `state/Mask` record（d + inverted）+ `state/ImageElement` record（source = sha256[:16] 16 字符小写 hex；mask 可选）
+- `Element` sealed permits 加 image；`@JsonSubTypes` 加 image
+- `EditSession`：`addElement` switch 加 `case "image"`；`updateElement` 模式 switch 加 `case ImageElement im`；`cloneElementWithNewId` 加 image；新增 `buildImage` / `applyImagePatch` / `parseMaskNullable` / `validateImageSource`
+- `CanvasCompositor` switch 加 占位 `case ImageElement im -> {}`（M13-C 实装）
+- `web/src/types/protocol.ts` 加 `ImageElement` + `Mask`
+- 测试：`EditSessionImageTest`（21 case：add + 各形态 mask + update + 拒绝路径 + 配额边界）
+
+### M13-B 后端 /api/upload + ImageStorage（约 3h，最高复杂度）
+
+- `db-migrations/V007__image_uploads.sql`：sha256[:16] PK + bytes/width/height/mime/uploader/uploaded_at/last_used_at/refcount + 2 索引
+- `storage/ImageUploadDao`：insert（INSERT OR IGNORE）/ findByHash / touchLastUsed / delete / countByUploaderSince / sumBytes / pickLruCandidates(限制 + excludeHashes) / listAll
+- `image/ImageStorage`：sha256 内容寻址 + 60s 内存 LRU（LinkedHashMap accessOrder）+ 磁盘 LRU sweep。`putIfAbsent(BufferedImage, UUID)` → `StoreResult(hash, w, h, bytes, isNew)`；`load(hash)` → BufferedImage（缓存命中 / 磁盘加载）；`readPngBytes(hash)` 直接返字节（HTTP 下载用）；`evictLruUntilUnder(incomingBytes, maxTotalBytes, wallRepo)` 按 LRU 删 orphan
+- **v1 refcount 简化**：image_uploads.refcount 列保留但不实时增减；LRU 候选实时 sweep `walls.project_json` 收集仍被引用的 hash（`collectReferencedHashes` 反射 ImageElement.source）。~50 walls 量级 < 50ms 可接受；wall 数上千再考虑增量维护
+- `image/ImageQuotaService`：三层配额（per-wall / per-day / total-disk-mb），任一超限拒；磁盘超限返 `NeedsEviction` 让上层触 LRU evict 后重试；`bypass=true` 跳过全部
+- `image/UploadHandler`：Javalin POST /api/upload + 6 层校验栈
+  1. sessionId（multipart 字段）→ `SessionManager.byId` → live Player → `hasPermission("canvas.upload")`；bypass = `hasPermission("canvas.upload.bypass-limit")`
+  2. `file.size()` ≤ `images.max-size-kb`
+  3. `Content-Type` ∈ `images.allowed-mime`（去 `;charset=...` 后参数）
+  4. magic bytes（前 12 字节）真实 MIME 探测；与 Content-Type 不符拒
+  5. ImageIO 隔离解码：单独 `ExecutorService.submit(...).get(200, MS)`；超时 cancel 抛 `TimeoutException` → `UPLOAD_REJECTED: decode timeout`
+  6. bbox sanity：0 < w/h ≤ 8192；超 `downscale-max-edge` 自动 bilinear downscale
+  7. 配额三层（per-wall 由后续 EditSession 协调，v1 这里传 0）+ `evictLruUntilUnder` 重试
+- `UploadHandler.handleDownload` GET /api/upload/{source}：hash 校验 → `readPngBytes` → image/png + max-age=31536000 immutable（hash 内容寻址，URL 与内容 1:1）
+- `UploadHandler.handleQuota` GET /api/upload/quota：返三层剩余配额给前端 UI
+- `WebServer`：3 个新路由注册；构造器加 `UploadHandler` 参数
+- `HikariCanvas.onEnable`：image 服务在 Compositor 之前装配（WallRestorer 也能正确加载）；`UploadHandler` 在 sessionManager 后装配；compositor.setImageLoader 注入 storage::load；onDisable 调 `uploadHandler.shutdown()` 关 decoder 线程池
+- `HikariCanvasConfig.ImageConfig` record + load() 读 `images:` 段（6 字段）
+- `paper-plugin.yml`：`canvas.upload`（default true）+ `canvas.upload.bypass-limit`（default op）
+- `config.yml`：`images:` 段含 max-size-kb=2048 / allowed-mime=PNG|JPEG|WebP / downscale-max-edge=1024 / max-per-wall=16 / max-uploads-per-day=50 / max-total-storage-mb=1024
+- 测试：`ImageStorageTest`（13 case 真磁盘 IO + DAO + LRU sweep + sha256 稳定性）+ `ImageQuotaServiceTest`（8 case 三层边界 + bypass + 0=unlimited + 24h 时间窗）+ `UploadHandlerHelpersTest`（8 case magic bytes 全形式 + downscale 等比例缩放）
+- HTTP path 完整 e2e 测试需 `javalin-testtools` 依赖未引入，留 future
+
+### M13-C 后端渲染（约 1h）
+
+- `CanvasCompositor.drawImage(g, im)`：translate 到元素左上 → 可选 mask clip → `g.drawImage(img, 0, 0, w, h, null)`；文件缺失走 `drawImagePlaceholder`（虚线方框 + ?，同 IconElement 风格）
+- mask：复用 M9 `PathParser.parse(mask.d).path()`；`inverted=false` 直接 `g.clip(Path2D)`；`inverted=true` 用 `Area(bbox).subtract(Area(mask))` 反算
+- **dither × mask 顺序**：`drawDitheredElement` 的 per-element off-buffer 路径上自然达成「先 dither 再 mask」语义：mask clip 在 drawElementBody 内部生效，dither 在整张 element buffer 跑，mask 外像素本就透明不受影响
+- 抽 `ImageLoader` SAM（`String → BufferedImage`）作为 compositor 的注入接口；生产 wire `imageStorage::load`，测试可传 lambda
+- fixture：`13-image-placeholder.json`（占位渲染：两个 source 都不存在文件，含 rotation）+ `13-image-mask.json`（占位 + 4 种 mask + inverted）；snapshot test `@ValueSource` 加 13-*
+
+### M13-D 前端拖拽 + UI（约 1h）
+
+- `PreviewRenderer.drawImage`：`imageCache: Map<hash, ImageCacheEntry>` 异步加载（`/api/upload/{hash}`）；ready 前画占位（虚线 + ?）；onload 触 `iconReadyHook` 重绘；mask 用 `ctx.clip(Path2D)`；inverted 用 `Path2D.addPath` + `'evenodd'` fillRule
+- `preloadImage(source, dataUrl)`：上传成功立即缓存乐观 dataUrl 直接命中，省去一次 fetch 往返
+- `CanvasView`：三入口
+  1. 拖拽：根 `<section>` 加 `@dragover="onCanvasDragOver"` + `@drop="onCanvasDrop"`；drop 坐标 → host bounding rect / ui.zoom 换算 canvas 内坐标
+  2. paste：`useEventListener(window, 'paste', onPasteImage)` 全局监听；activeElement 是 textarea/input 时不抢
+  3. file input：右下 toolbar 加 ImagePlus 按钮 → `fileInputRef.click()` → `@change` 上传
+  - `uploadAndPlace(file, clientX?, clientY?)`：FormData(sessionId + file) → fetch /api/upload → 200 → preloadImage + `ws.send('element.add', { type: 'image', props: { x, y, w, h, source } })`；非 200 → flashError 6s 自消
+  - 等比缩到 canvas 短边 80%；多文件 drop 只取第一个（M13 决策 3）；locked 拒；非 image MIME 拒
+  - 顶部 banner（红色错误 / 蓝色 uploading）+ readonly overlay 不影响 banner
+- `RightPanel`：`isImage` computed + 整个 image details 段
+  - 缩略图 + 16 字符 hash + Replace 按钮（自家 hidden file input + 独立 imageReplacing 状态）
+  - mask preset dropdown：none / circle / roundedRect / ellipse；切换调 `makeCircleD` / `makeEllipseD` / `makeRoundedRectD` 生成 d 字符串 → `sendUpdate({ mask: { d, inverted } })`
+  - circle / ellipse 用 4 段 cubic Bezier 近似（kappa = 0.5522847498）；roundedRect 用 4 个 Q + L 段（半径 = min(w, h) * 0.15）
+  - `detectMaskPreset` 启发式：4 个 C 命令 → 椭圆/圆（按 w==h 判断）；4 个 Q 命令 → 圆角矩形；其他 → none。**不写魔数前缀**到 d，避免被后端 PathDValidator 拒
+  - bbox resize watch：监 `${w}x${h}` 变化时按 detectMaskPreset 重生成 d，否则被裁形变
+  - inverted 复选框（仅 mask != none 时显示）
+  - dither 复选框（image 不属 geometric 族，复用 `t.fill.ditherLabel`）
+- i18n（中英对 16 字段）：`t.image.header / source / sourceTip / replace / replaceTip / maskHeader / maskPreset / maskPresetTip / maskInverted / maskInvertedTip / maskPresets.{none,circle,roundedRect,ellipse} / uploading / uploadTip / uploadFailed / lockedDenied / noSession / notImage`
+
+### M13-E polish + 测试 + journal
+
+- gradle test 全套：**364 case 全过**（M12 baseline 312 → M13-A +21 → M13-B +29 = 362 + 2 fixture 雪片测试 = 364）
+- vite build：**465.24 KB JS** / 40.86 KB CSS（M12 baseline 453.57 → +11.67 KB JS 来自 D2 imageCache + D3 三入口 + D4 RightPanel 段 + i18n 16 字段；+1.49 KB CSS = mask 段 + banner）
+- fixture baseline 14 个 PNG 全不漂移（含 13-image-placeholder + 13-image-mask 两个新）
+
+### 关键决策（已落地，固化于 docs）
+
+1. **mask 数据模型 = SVG path d 字符串**（B 风格，留 v2 lasso / 自由 path mask 完全体接口）；mask UI = dropdown 4 预设（A 风格）
+2. **上传入口 = file input + drop + paste**（Figma 标准）；多文件批量 / mask 拖动编辑 / feather / URL 粘贴 → v1 不做
+3. **LRU 清理时机** = 每次 upload 前检查总配额，超限删 orphan
+4. **mask + dither 顺序** = 先 dither 再 mask（per-element off-buffer 路径自然达成）
+5. **content-hash sha256[:16]** 内容寻址（PNG 编码字节），跨 wall 零重复存储
+6. **ImageIO 解码隔离** = ExecutorService.submit(...).get(200, MS) 防压缩炸弹
+7. **v1 refcount 简化** = LRU sweep walls.project_json 收集仍被引用的 hash，不维护实时 refcount
+8. **HTTP 认证** = multipart `sessionId` 字段 → SessionManager.byId → Bukkit Player.hasPermission（HTTP 不消耗 token，避免一次性 token 与 upload 冲突）
+
+### v1 留 future
+
+- POST /api/upload 完整 HTTP e2e 测试（需引入 `javalin-testtools` 依赖）
+- 增量 refcount 维护（替换 v1 sweep 模式，wall 上千时）
+- mask 完全体（lasso 自由路径 / 拖动编辑 mask 形状 / feather / 多 mask 组合）
+- 多文件批量上传（drop 多文件全部接收）
+- URL 粘贴上传 / EXIF 读取 / PNG→WEBP 自动转换 / 杀毒
+
+### 改动文件清单（13 新 + 14 改）
+
+**新建（13）**：
+- `plugin/.../state/Mask.java` / `ImageElement.java`
+- `plugin/.../storage/ImageUploadDao.java`
+- `plugin/.../image/ImageStorage.java` / `ImageQuotaService.java` / `UploadHandler.java`
+- `plugin/.../db-migrations/V007__image_uploads.sql`
+- `plugin/.../test/.../state/EditSessionImageTest.java`（21 case）
+- `plugin/.../test/.../image/ImageStorageTest.java`（13 case）+ `ImageQuotaServiceTest.java`（8 case）+ `UploadHandlerHelpersTest.java`（8 case）
+- `plugin/.../test/resources/fixtures/13-image-placeholder.json` + `13-image-mask.json`
+- `plugin/.../test/resources/expected/13-image-placeholder.png` + `13-image-mask.png`
+
+**改动（14）**：
+- `plugin/.../state/Element.java`（sealed permits + JsonSubTypes）
+- `plugin/.../state/EditSession.java`（buildImage / applyImagePatch / parseMaskNullable / validateImageSource + 3 处 switch）
+- `plugin/.../render/CanvasCompositor.java`（drawImage + ImageLoader SAM + 占位）
+- `plugin/.../HikariCanvas.java`（image 服务 wire-up）
+- `plugin/.../HikariCanvasConfig.java`（ImageConfig record + load()）
+- `plugin/.../web/WebServer.java`（3 新路由 + 构造器扩展）
+- `plugin/.../storage/MigrationRunner.java`（V007 入列）
+- `plugin/.../resources/paper-plugin.yml`（2 权限节点）
+- `plugin/.../resources/config.yml`（images 段）
+- `plugin/.../test/.../render/RendererSnapshotTest.java`（13-* 入 @ValueSource）
+- `web/src/types/protocol.ts`（ImageElement + Mask TS 镜像）
+- `web/src/render/PreviewRenderer.ts`（drawImage + imageCache + preloadImage）
+- `web/src/components/layout/CanvasView.vue`（drop/paste/file input 三入口 + banner + toolbar 按钮）
+- `web/src/components/layout/RightPanel.vue`（isImage + image 段 + mask preset 生成 + replace）
+- `web/src/i18n/messages.ts`（image 段中英对 16 字段）
+
+### 工期
+
+约 5h wall-clock（M13-A 1h + M13-B 3h + M13-C 30min + M13-D 1h + M13-E journal/commit 30min）。整体 PROPOSAL 估计 1 周 = 大幅压缩。M0–M13 累计约 7.5 周 wall-clock 完成，比规划 6 个月缩短约 4 个月。
+
+---
+
 ## 2026-05-14 · 全栈审查 + 3 Bug 修复 + 文档批量重写
 
 **起因**：用户反馈 "别的 AI 审查发现 CLAUDE.md 等文档严重滞后于实际"。本会话做了系统化审查（3 个 Explore agent 并行扫 doc-drift / code-quality / test-coverage）+ 修真 bug + 重写文档。

@@ -220,6 +220,45 @@ if stroke:
     g.drawRect(x, y, w, h)
 ```
 
+**ImageElement（M13）：**
+```
+// 1. 加载缓存 BufferedImage（按 hash 从 plugins/HikariCanvas/uploads/<hash>.png）
+BufferedImage img = imageStorage.load(e.source);
+if (img == null) {
+    drawIconStylePlaceholder(g, e);  // 同 IconElement 文件缺失占位（虚线框 + ?）
+    return;
+}
+
+// 2. 旋转（同其他元素，已在 drawElementsTo 外层 translate-rotate）
+
+// 3. mask 处理（M13 锁定决策：mask 是 SVG path d，相对 (0, 0)..(w, h)）
+Shape originalClip = g.getClip();
+if (e.mask != null) {
+    Path2D maskPath = PathParser.parse(e.mask.d).path();   // 复用 M9 PathParser
+    // mask 坐标相对 element bbox → 绝对坐标变换
+    AffineTransform tx = new AffineTransform();
+    tx.translate(e.x, e.y);
+    Shape maskShape = tx.createTransformedShape(maskPath);
+    if (e.mask.inverted) {
+        // 反相 mask：用整张元素 bbox 减去 mask 形状
+        Area area = new Area(new Rectangle2D.Double(e.x, e.y, e.w, e.h));
+        area.subtract(new Area(maskShape));
+        g.clip(area);
+    } else {
+        g.clip(maskShape);
+    }
+}
+
+// 4. 真正 drawImage（bbox 内拉伸到 e.w × e.h）
+g.drawImage(img, e.x, e.y, e.w, e.h, null);
+
+g.setClip(originalClip);
+```
+
+**M13 mask × dither 顺序（已锁）：**
+
+如 element.renderMode === 'dither'：drawElementsTo 走的是 per-element off-buffer 路径（M11-B）→ `drawElementBody` 完整跑（含 mask clip）→ 整个 element buffer 跑 `BayerDither.apply` → blend 回主 graphics。所以 dither 在 mask **内部** 像素，mask 外像素本就透明，dither 不影响（"先 dither 再 mask"语义实际由 per-element buffer 结构自然达成）。
+
 ---
 
 ## 5. 效果

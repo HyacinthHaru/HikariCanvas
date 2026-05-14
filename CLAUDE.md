@@ -82,30 +82,53 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12；6 内置模板 + TemplateGallery） → M7 polish ✅（2026-05-13；保护/缩略图/grid/icon/Move 工具/HelpModal/config.yml/group UI/部署文档） → **M8 图层 + 协议 v2（2w）** → M9 PathElement + 工具栏（1.5w） → M10 调色板（3d） → M11 渐变 + Dither（1w） → M12 笔刷 + 数位板（1.5w） → M13 图片导入 + 蒙版（1w）。总工期约 6 个月（含 M8-M13 共约 8 周）。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → **M13 图片导入 + 蒙版（1w，最后一站）**。总工期约 6 个月（M0-M12 累计约 7 周 wall-clock）。
 
-## M8 路线（2026-05-13 定稿，未实施）
+## M8-M12 已完成（详见 docs/journal.md）
 
-**核心：把"扁平 element list"升级为"layer 树"，同时升协议到 v2 顺便加几个早该有的字段。**
+- **M8 图层 + 协议 v2**：layers + activeLayerId + gridSize + guides + element.opacity/blendMode/renderMode + marquee 多选
+- **M9 PathElement + 工具栏**：path/circle/shape 三新元素 + drag-to-create + line/arrow/circle/star 4 工具
+- **M10 调色板**：ColorInput + 三色板（project/recent/default）+ alpha 通道
+- **M11 渐变 + Dither**：Fill 联合类型（solid/linear/radial）+ Bayer 4×4 dither + FillInput
+- **M12 笔刷 + 数位板**：BrushStrokeElement + RDP + Catmull-Rom + PointerEvent 接管 + floating preview + BrushPanel
 
-### 8 个锁定决策
+## M13 路线（2026-05-14 定稿，未实施）
 
-1. PathElement 一统线/箭头/软线/笔刷/点（M9 实施；M8 不动新元素类型）
-2. **图层先做** —— M8 做完图层 + 协议 v2 + 迁移，再上 PathElement
-3. 元素级 `renderMode: 'clean' | 'dither'`，默认 clean
-4. wall 接力编辑（任意 canvas.edit 玩家 /canvas open <wall_id>）已是现状，无需新做
-5. 图片导入 config 可调（max-size-kb / max-per-wall / max-uploads-per-day / max-total-storage-mb / allowed-mime / downscale-max-edge）；权限节点 `canvas.upload` 默认绑 `canvas.edit`
-6. **协议 v2 一次性升级**：layers + activeLayerId + canvas.gridSize + canvas.guides + element.opacity + element.blendMode；切断 v1 客户端（auth 时拒 `clientProtocolVersion < 2`）
-7. BlendMode v1 集合：`normal / multiply / screen / overlay` 4 个
-8. opacity 在 MC 调色板上 = "先 alpha-composite 到背景再量化"，不会真透明，颜色会变浅；用户能接受
+**核心：用户能拖图进编辑器；上传严格 6 层校验栈；ImageElement 支持 SVG path 蒙版（v1 UI 仅暴露预设几何，数据模型 path 形态预留 v2 完全体接口）。**
 
-### M8 子阶段（约 2 周）
+### 7 个锁定决策
 
-- **M8-A 数据模型 + 协议 v2 类型** — ProjectState.layers / Layer record / Element.opacity+blendMode / Canvas.gridSize+guides；前后端 TS+Java 同步
-- **M8-B 持久化迁移** — `walls.project_json` lazy upgrade：读到 v1 形态 → 包成 Default Layer 写回；M8 启动时一次性 migrate 整库
-- **M8-C 协议路径** — state.snapshot 新形态；state.patch 用 `/layers/{i}/elements/{j}/...` 路径；新增 layer.* op 族
-- **M8-D 图层面板 UI** — 右栏新增 LayerPanel（缩略图列 v1 不做，列文字 + 可见/锁定/删除按钮 + 拖动重排）
-- **M8-E 元素级 opacity / blendMode / 多选 / 网格 + 参考线** — RightPanel 加属性；CanvasView 加 marquee 多选 + grid overlay + guides 拖出标尺
+1. **mask 数据模型 = SVG path d 字符串**（B 风格，留 v2 lasso / 自由 path mask 完全体接口）；mask 字段 `Mask { d: string, inverted: boolean }`，d 复用 M9 PathDValidator（M/L/Q/C/Z 子集，相对 element bbox `0..w / 0..h`）
+2. **mask UI = RightPanel dropdown + 参数滑块**（4 个预设：none / circle / roundedRect / ellipse），内部把 dropdown 选择转 d 字符串；完全体 "mask shape over image" 拖动编辑 / lasso 自由绘制 留 v2
+3. **上传入口 = file input + drop + paste 三种**（Figma 标准；多文件批量 v1 不做，单次 drop 多文件只接第一个）
+4. **LRU 清理时机 = 每次 upload 前检查总配额**，超限时删最老 last-used 文件直到腾出空间；不做周期 scheduler
+5. **mask + dither 顺序 = 先 dither 再 mask**（dither 在 mask 内部像素，避免 dither 边缘羽化错位）
+6. **content-hash 内容寻址** `sha256[:16]`：跨 wall 引用同一文件不重复存；删 wall 不立即清文件，靠 LRU
+7. **ImageIO 解码隔离** = `ExecutorService.submit(...).get(200, MS)` 防压缩炸弹 / 死循环；超时拒 `UPLOAD_REJECTED`
+
+### M13 子阶段（约 1 周；实际估 ~8h）
+
+- **M13-A 数据模型 + 协议**（~1h）— `ImageElement` record（source=sha256 hash + Mask 可选）；`Mask` record（d + inverted）；Element sealed permits 加 image；EditSession.buildImage / applyImagePatch；前后端 TS+Java 类型镜像；mask.d 复用 PathDValidator 校验
+- **M13-B 后端 /api/upload + ImageStorage**（~2.5-3h，最高复杂度）— Javalin HTTP POST + multipart 解析；6 层校验栈（大小 / Content-Type / magic bytes / ImageIO 隔离解码 200ms / bbox sanity / downscale 1024）；`ImageStorage` 类（hash 内容寻址 + LRU）；DB 表 `image_uploads`（玩家 / 时间戳 / 字节数 / hash）；配额三层（per-wall / per-player 24h / total disk）；`GET /api/upload/quota`；`config.yml` images 段；权限节点 `canvas.upload` + `canvas.upload.bypass-limit`；UploadHandlerTest 全场景
+- **M13-C 后端渲染**（~1.5h）— `CanvasCompositor.drawImage`：按 hash 加载缓存 BufferedImage + rotation / opacity / dither；mask 用 `Graphics2D.setClip(Path2D)`（复用 M9 PathParser 将 mask.d 转 Path2D）；inverted 用 `Area.subtract` 反算；文件缺失占位（同 IconElement 风格）；fixture 13-image + baseline
+- **M13-D 前端拖拽 + UI**（~2h）— `types/protocol.ts ImageElement`；`PreviewRenderer.drawImage` 异步加载 fetch `/api/upload/{hash}`（同 IconElement async pattern）；CanvasView 拖拽 drop + 文件 input + Clipboard paste 三入口；上传进度 + 错误提示 + 配额 UI；RightPanel ImageElement 段（hash 缩略图 + mask dropdown + 参数滑块 + opacity / dither）；i18n 中英
+- **M13-E polish + 测试 + journal**（~1h）— UploadHandlerTest 各拒绝路径 / 配额边界；fixture 13 baseline review；journal + commit + push
+
+### 复杂度新增（前面里程碑没出现过）
+
+- **真磁盘 IO**：之前都是内存 + DB；现在管 `plugins/HikariCanvas/uploads/` 目录 + LRU + 磁盘配额追踪
+- **HTTP multipart**：之前全 WS；Javalin multipart 解析 + 流式读取避大文件 OOM
+- **ImageIO 解码隔离**：压缩炸弹防御 = 单独 ExecutorService + 200ms get timeout + 失败回收资源
+- **配额系统**：新 SQLite 表 + 每次 upload 前 3 查询（per-player 24h / per-wall / total disk）
+
+### M13 v1 不做（留 future / v2）
+
+- mask 拖动编辑模式（mask shape over image / lasso 自由绘制）
+- 多文件批量上传（drop 多个）
+- 蒙版边缘羽化（feather）/ 多 mask 组合
+- URL 粘贴上传
+- 图片 EXIF 信息读取 / 自动旋转
+- 图片格式转换（如自动 PNG → WEBP 节省存储）
 
 ### M8 远期 TODO（不做但记下）
 

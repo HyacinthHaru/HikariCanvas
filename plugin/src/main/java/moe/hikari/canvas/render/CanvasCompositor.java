@@ -8,7 +8,9 @@ import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.IconElement;
+import moe.hikari.canvas.state.ImageElement;
 import moe.hikari.canvas.state.Layer;
+import moe.hikari.canvas.state.Mask;
 import moe.hikari.canvas.state.LinearGradient;
 import moe.hikari.canvas.state.PathElement;
 import moe.hikari.canvas.state.ProjectState;
@@ -38,6 +40,9 @@ import java.awt.Shape;
 import java.awt.font.FontRenderContext;
 import java.awt.font.GlyphVector;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Area;
+import java.awt.geom.Path2D;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.logging.Logger;
@@ -73,10 +78,21 @@ public final class CanvasCompositor {
 
     private static final Pattern HEX_RE = Pattern.compile("^#([0-9A-Fa-f]{6})([0-9A-Fa-f]{2})?$");
 
+    /**
+     * M13 ImageElement 文件加载 SAM。生产环境注入 {@code ImageStorage::load}；测试可注入
+     * 从 test resources 加载的 lambda。返回 {@code null} → drawImage 走占位路径。
+     */
+    @FunctionalInterface
+    public interface ImageLoader {
+        java.awt.image.BufferedImage load(String source);
+    }
+
     private final PaletteLut paletteLut;
     private final FontRegistry fontRegistry;
     private final TemplateAssetService assetService;  // 可空：测试 / 历史调用方
     private final Logger log;
+    /** M13：图片加载器；null = 所有 ImageElement 走占位。 */
+    private volatile ImageLoader imageLoader;
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry, Logger log) {
         this(paletteLut, fontRegistry, null, log);
@@ -88,6 +104,11 @@ public final class CanvasCompositor {
         this.fontRegistry = fontRegistry;
         this.assetService = assetService;
         this.log = log;
+    }
+
+    /** M13：启动期由 {@code HikariCanvas.onEnable} 注入；测试可传 lambda。 */
+    public void setImageLoader(ImageLoader loader) {
+        this.imageLoader = loader;
     }
 
     /**
@@ -205,6 +226,71 @@ public final class CanvasCompositor {
             case CircleElement cir -> drawCircle(g, cir);
             case ShapeElement sh -> drawShape(g, sh);
             case BrushStrokeElement b -> drawBrush(g, b);
+            case ImageElement im -> drawImage(g, im);
+        }
+    }
+
+    /**
+     * M13 ImageElement 绘制：按 hash 加载文件 + 可选 mask 裁切 + bbox 拉伸。dither 由
+     * {@link #drawDitheredElement} 的 per-element off-buffer 路径自然达成"先 dither 再 mask"，
+     * 见 {@code docs/rendering.md §4.4}。
+     */
+    private void drawImage(Graphics2D g, ImageElement im) {
+        BufferedImage img = imageLoader == null ? null : imageLoader.load(im.source());
+        if (img == null) {
+            drawImagePlaceholder(g, im);
+            return;
+        }
+
+        AffineTransform savedTx = g.getTransform();
+        Shape savedClip = g.getClip();
+        try {
+            g.translate(im.x(), im.y());
+            if (im.mask() != null) {
+                applyImageMaskClip(g, im.mask(), im.w(), im.h());
+            }
+            g.drawImage(img, 0, 0, im.w(), im.h(), null);
+        } finally {
+            g.setClip(savedClip);
+            g.setTransform(savedTx);
+        }
+    }
+
+    /**
+     * 文件缺失占位：虚线方框 + 中央 {@code ?}（同 {@link #drawIcon} 风格）。
+     */
+    private void drawImagePlaceholder(Graphics2D g, ImageElement im) {
+        Color prev = g.getColor();
+        java.awt.Stroke prevStroke = g.getStroke();
+        try {
+            g.setColor(new Color(0xAAAAAA));
+            g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+                    1f, new float[]{3f, 2f}, 0f));
+            g.drawRect(im.x(), im.y(), Math.max(1, im.w() - 1), Math.max(1, im.h() - 1));
+            g.setStroke(new BasicStroke(1f));
+            g.drawString("?", im.x() + im.w() / 2 - 3, im.y() + im.h() / 2 + 4);
+        } finally {
+            g.setColor(prev);
+            g.setStroke(prevStroke);
+        }
+    }
+
+    /**
+     * mask.d → Path2D（复用 M9 {@link PathParser}）；{@code inverted=true} 时用整 bbox
+     * 减去 mask 形状（图层蒙版反相）。坐标系：调用前 {@code g} 已 translate 到 element 左上角，
+     * mask path 坐标也是 0..w/0..h 相对，所以直接 setClip 即可。
+     */
+    private static void applyImageMaskClip(Graphics2D g, Mask mask, int w, int h) {
+        if (mask == null || mask.d() == null || mask.d().isEmpty()) return;
+        PathParser.Result parsed = PathParser.parse(mask.d());
+        Path2D maskPath = parsed.path();
+        if (maskPath == null) return;
+        if (mask.inverted()) {
+            Area area = new Area(new Rectangle2D.Double(0, 0, w, h));
+            area.subtract(new Area(maskPath));
+            g.clip(area);
+        } else {
+            g.clip(maskPath);
         }
     }
 

@@ -1,0 +1,43 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 1, "background": "#FFFFFF"},
+  "elements": [
+    {
+      "type": "text",
+      "id": "e-title",
+      "x": 8, "y": 2, "w": 240, "h": 12,
+      "rotation": 0, "locked": false, "visible": true,
+      "text": "IMAGE MASK (PLACEHOLDER + CLIP)",
+      "fontId": "ark_pixel",
+      "fontSize": 10,
+      "color": "#888888",
+      "align": "left",
+      "letterSpacing": 0,
+      "lineHeight": 1.2,
+      "vertical": false
+    },
+    {
+      "type": "image",
+      "id": "e-img-clip-rect",
+      "x": 16, "y": 24, "w": 100, "h": 100,
+      "rotation": 0, "locked": false, "visible": true,
+      "source": "abcdef0123456789",
+      "mask": {
+        "d": "M 20 20 L 80 20 L 80 80 L 20 80 Z",
+        "inverted": false
+      }
+    },
+    {
+      "type": "image",
+      "id": "e-img-clip-inverted",
+      "x": 140, "y": 24, "w": 100, "h": 100,
+      "rotation": 0, "locked": false, "visible": true,
+      "source": "abcdef0123456789",
+      "mask": {
+        "d": "M 30 30 L 70 30 L 70 70 L 30 70 Z",
+        "inverted": true
+      }
+    }
+  ],
+  "history": {"undoDepth": 0, "redoDepth": 0}
+}

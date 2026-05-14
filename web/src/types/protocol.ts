@@ -112,7 +112,8 @@ export type Element =
     | PathElement              // M9
     | CircleElement            // M9
     | ShapeElement             // M9
-    | BrushStrokeElement;      // M12
+    | BrushStrokeElement       // M12
+    | ImageElement;            // M13
 
 interface BaseElement {
     id: string;
@@ -212,6 +213,31 @@ export interface BrushStrokeElement extends BaseElement {
     pressureSize: boolean;
     /** 压感→opacity：true 时每段 alpha = base × pressure */
     pressureOpacity: boolean;
+}
+
+/**
+ * M13 Mask：ImageElement 的可选 SVG path 蒙版。
+ * - d：M9 PathDValidator 子集（M/L/Q/C/Z），坐标相对 element bbox (0, 0)..(w, h)；4096 字符长度上限
+ * - inverted：false=显示 mask 内（默认），true=显示 mask 外（用 bbox 减去 mask 形状）
+ *
+ * v1 仅 RightPanel dropdown 暴露 4 预设（none / circle / roundedRect / ellipse）；
+ * lasso / 拖动编辑 mask 形状 v2 再做（数据模型已留接口）。
+ */
+export interface Mask {
+    d: string;
+    inverted: boolean;
+}
+
+/**
+ * M13 ImageElement：用户上传的位图。source 是 sha256[:16] 内容寻址 hash；
+ * 服务端从 plugins/HikariCanvas/uploads/<source>.png 加载（GET /api/upload/{source}）。
+ * mask 非空时按几何裁切；dither 与 mask 复合走 per-element off-buffer 路径，先 dither 再 mask。
+ */
+export interface ImageElement extends BaseElement {
+    type: 'image';
+    /** sha256[:16] 小写 hex 16 字符 */
+    source: string;
+    mask?: Mask;
 }
 
 export interface Effects {

@@ -202,11 +202,13 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 | Web | `web/` | Javalin HTTP + WebSocket + 静态资源 |
 | 认证 | `web/auth/` | Token 签发、校验、过期 |
 | 会话 | `session/` | 编辑会话状态、每玩家最多 1 活跃 |
-| 渲染 | `render/` | 字体、排版、调色板、效果 |
+| 渲染 | `render/` | 字体、排版、调色板、效果、笔触简化（M12 RDP）、Bayer dither（M11） |
+| 笔刷 | （EditSession 内 StrokeBuffer，M12） | brush.* op 缓冲、RDP 简化、 Catmull-Rom 拟合 |
 | 模板 | `template/` | YAML 解析（jackson-dataformat-yaml）、参数绑定、实例化、registry 热重载 |
 | 地图池 | `pool/` | **核心**：预览地图借还 |
 | 部署 | `deploy/` | 墙面识别、物品框、包发送 |
-| 存储 | `storage/` | SQLite、PDC 工具 |
+| **图片**（M13） | `image/`（`ImageStorage` / `UploadHandler` / `ImageQuotaService`） | sha256 内容寻址 + LRU + 配额 + ImageIO 解码隔离 |
+| 存储 | `storage/` | SQLite、PDC 工具；M13 起新增 `image_uploads` 表 DAO |
 | 配置 | `config/` | YAML 配置读取 |
 
 ### 2.2 前端（编辑器）
@@ -292,6 +294,58 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 - **每玩家最多 1 个活跃会话**（包括 `SELECTING` 态）。M5-D8 起 `/canvas edit` 在已 SELECTING 时**隐式 reselect**而非报错；ISSUED/ACTIVE 仍提示先 cancel
 - **每面墙最多 1 个活跃会话**（排他锁，wall_id 为 key）。M5.5 不做协作编辑（OT/CRDT 超 scope）
 - 池容量耗尽：拒绝新会话，提示用户稍后；wall 占的 map 一直占着不自动释放，需 `/canvas delete` 显式清
+
+---
+
+### 3.7 图片上传数据流（M13 引入）
+
+`/api/upload` 走纯 HTTP（不经 WS），与编辑 op 通道完全解耦。配额跟踪在专表 `image_uploads`；ImageElement.source 持 sha256[:16] hash，跨 wall 引用同 hash 文件零重复存储。
+
+```
+浏览器 ─ 拖拽 / paste / file input ─▶ ws-token 校验
+                                          │
+              POST /api/upload (multipart) │
+                                          ▼
+                                  UploadHandler.handle
+                                          │
+                            (a) 大小校验 Content-Length ≤ max-size-kb
+                            (b) MIME Content-Type ∈ allowed-mime
+                            (c) magic bytes 真实 MIME 校验
+                            (d) ImageIO.read 隔离（ExecutorService.get 200ms）
+                            (e) bbox sanity；边长 > 1024 自动 downscale
+                            (f) ImageQuotaService：3 层配额检查
+                                  │
+                                  ▼
+                          ImageStorage.persist(decoded BufferedImage)
+                                  │
+                       sha256[:16] = computeHash(pngBytes)
+                                  │
+                       已存在 hash？─ 是 → refcount++ / last_used_at touch
+                                  │
+                                  否 → 写 plugins/HikariCanvas/uploads/<hash>.png
+                                       INSERT image_uploads（uploader / bytes / mime / ...）
+                                       磁盘超总配额 → LRU 删 refcount=0 最老文件
+                                  │
+                                  ▼
+                          ack { source: <hash>, width, height }
+                                  │
+        前端拿 hash ───▶ ws.send element.add type=image props.source=hash
+                                  │
+                                  ▼
+                          EditSession.buildImage / persist project_json
+                                  │
+                                  ▼
+                          下次 rasterize：CanvasCompositor.drawImage(e.source)
+                          ───▶ ImageStorage.load(hash) → BufferedImage
+                                  ↑
+                                内存缓存（LRU MRU 60s）
+```
+
+**关键不变量：**
+- ImageStorage.load 内存缓存：图片首次解码后保留 60s（LRU MRU 队列）；过期重读磁盘
+- refcount：服务端在 element.add type=image / element.delete / wall.delete 时增减；refcount=0 才进 LRU 候选
+- 删 wall 不立即清磁盘（其他 wall 可能引用同 hash）；refcount-- 后由 LRU 自然回收
+- 客户端无路径控制：filename 仅日志，存储路径完全由 hash 决定（防路径穿越）
 
 ---
 

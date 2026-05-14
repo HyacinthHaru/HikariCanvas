@@ -1,4 +1,4 @@
-import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, PathElement, CircleElement, ShapeElement, BrushStrokeElement, Glow } from '@/types/protocol';
+import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, ImageElement, PathElement, CircleElement, ShapeElement, BrushStrokeElement, Glow } from '@/types/protocol';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 import { applyBlendModeOver } from './BlendModes';
 import { parsePathD } from './PathParser';
@@ -116,6 +116,7 @@ function drawElementBody(ctx: CanvasRenderingContext2D, e: Element): void {
     else if (e.type === 'circle') drawCircle(ctx, e);
     else if (e.type === 'shape') drawShape(ctx, e);
     else if (e.type === 'brush') drawBrush(ctx, e);
+    else if (e.type === 'image') drawImage(ctx, e);
 }
 
 /**
@@ -429,6 +430,77 @@ function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
     octx.fillStyle = ic.tint;
     octx.fillRect(0, 0, ic.w, ic.h);
     ctx.drawImage(off, ic.x, ic.y);
+}
+
+// ---------- M13 ImageElement ----------
+//
+// 加载策略：源走 /api/upload/<hash>。同 IconElement 异步模型：首次绘制时图未就绪→占位 ?，
+// 加载完毕调用同一 iconReadyHook → CanvasView.requestDraw 再触一次重绘。
+// mask 用 Canvas 2D ctx.clip(Path2D) 实装；inverted 用 even-odd fill rule 反相。
+
+interface ImageCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; }
+const imageCache = new Map<string, ImageCacheEntry>();
+
+function getUploadImage(source: string): ImageCacheEntry {
+    let entry = imageCache.get(source);
+    if (entry) return entry;
+    const img = new Image();
+    entry = { img, ready: false, failed: false };
+    imageCache.set(source, entry);
+    img.onload = () => { entry!.ready = true; iconReadyHook?.(); };
+    img.onerror = () => { entry!.failed = true; iconReadyHook?.(); };
+    img.src = `/api/upload/${encodeURIComponent(source)}`;
+    return entry;
+}
+
+/** 上传完成后立即缓存 + 标 ready，省去一次 fetch 往返。可选优化入口。 */
+export function preloadImage(source: string, dataUrl: string): void {
+    if (imageCache.has(source)) return;
+    const img = new Image();
+    const entry: ImageCacheEntry = { img, ready: false, failed: false };
+    imageCache.set(source, entry);
+    img.onload = () => { entry.ready = true; iconReadyHook?.(); };
+    img.onerror = () => { entry.failed = true; iconReadyHook?.(); };
+    img.src = dataUrl;
+}
+
+function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
+    const entry = getUploadImage(im.source);
+    if (entry.failed || !entry.ready) {
+        // 占位：虚线方框 + ?，同 drawIcon 风格
+        ctx.save();
+        ctx.strokeStyle = '#AAAAAA';
+        ctx.setLineDash([3, 2]);
+        ctx.strokeRect(im.x + 0.5, im.y + 0.5, im.w - 1, im.h - 1);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#AAAAAA';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', im.x + im.w / 2, im.y + im.h / 2);
+        ctx.restore();
+        return;
+    }
+
+    ctx.save();
+    try {
+        ctx.translate(im.x, im.y);
+        if (im.mask) {
+            const parsed = parsePathD(im.mask.d);
+            if (im.mask.inverted) {
+                // 反相 = bbox 减 mask；用 Path2D + addPath + evenodd 自然达成
+                const inverted = new Path2D();
+                inverted.rect(0, 0, im.w, im.h);
+                inverted.addPath(parsed.path);
+                ctx.clip(inverted, 'evenodd');
+            } else {
+                ctx.clip(parsed.path);
+            }
+        }
+        ctx.drawImage(entry.img, 0, 0, im.w, im.h);
+    } finally {
+        ctx.restore();
+    }
 }
 
 function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {

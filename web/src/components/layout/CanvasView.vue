@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { ZoomIn, ZoomOut, RotateCcw, Maximize } from 'lucide-vue-next';
+import { ZoomIn, ZoomOut, RotateCcw, Maximize, ImagePlus } from 'lucide-vue-next';
 import { onKeyStroke, useEventListener } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { isDrawTool, useUiStore, type ActiveTool } from '@/stores/ui';
+import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
-import { renderProjectState, onIconReady, onPaletteReady } from '@/render/PreviewRenderer';
+import { renderProjectState, onIconReady, onPaletteReady, preloadImage } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import type { Element, PathElement } from '@/types/protocol';
@@ -15,6 +16,7 @@ import { useBrushStore } from '@/stores/brush';
 
 const project = useProjectStore();
 const ui = useUiStore();
+const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
@@ -901,6 +903,140 @@ function onMouseMove(e: MouseEvent) {
 function onMouseUpOrLeave() {
     pan.active = false;
 }
+
+// ---------- M13-D：图片上传三入口（drop / paste / file input） ----------
+
+const fileInputRef = ref<HTMLInputElement | null>(null);
+const uploadError = ref<string | null>(null);
+const uploading = ref(false);
+
+function flashError(msg: string) {
+    uploadError.value = msg;
+    window.setTimeout(() => {
+        if (uploadError.value === msg) uploadError.value = null;
+    }, 6000);
+}
+
+async function uploadAndPlace(file: File, dropClientX?: number, dropClientY?: number) {
+    if (project.isLocked) { flashError(t.value.image.lockedDenied); return; }
+    if (!net.sessionId) { flashError(t.value.image.noSession); return; }
+    if (!file.type.startsWith('image/')) { flashError(t.value.image.notImage); return; }
+
+    // 客户端预读 dataUrl 作为乐观缓存：上传成功后 preloadImage 直接命中
+    const dataUrl = await readFileAsDataUrl(file);
+
+    uploading.value = true;
+    try {
+        const fd = new FormData();
+        fd.append('sessionId', net.sessionId);
+        fd.append('file', file);
+        const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+        if (!resp.ok) {
+            const body = await resp.json().catch(() => ({} as Record<string, string>));
+            flashError(t.value.image.uploadFailed(resp.status, body.message || body.error || ''));
+            return;
+        }
+        const result = await resp.json() as { source: string; width: number; height: number; bytes: number };
+        if (dataUrl) preloadImage(result.source, dataUrl);
+
+        const cv = project.state?.canvas;
+        if (!cv) return;
+        // 等比缩到 canvas 内（最大占 80% 短边）
+        const cvW = cv.widthMaps * 128;
+        const cvH = cv.heightMaps * 128;
+        const limit = Math.floor(Math.min(cvW, cvH) * 0.8);
+        let w = result.width;
+        let h = result.height;
+        if (Math.max(w, h) > limit) {
+            const s = limit / Math.max(w, h);
+            w = Math.max(8, Math.round(w * s));
+            h = Math.max(8, Math.round(h * s));
+        }
+        const center = dropToCanvas(dropClientX, dropClientY) ?? { x: cvW / 2, y: cvH / 2 };
+        const x = Math.max(0, Math.min(cvW - w, Math.round(center.x - w / 2)));
+        const y = Math.max(0, Math.min(cvH - h, Math.round(center.y - h / 2)));
+        ws.send('element.add', {
+            type: 'image',
+            props: { x, y, w, h, source: result.source },
+        });
+    } catch (e) {
+        flashError(t.value.image.uploadFailed(0, (e as Error).message));
+    } finally {
+        uploading.value = false;
+    }
+}
+
+function readFileAsDataUrl(file: File): Promise<string | null> {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+    });
+}
+
+/** 把 client 像素坐标（DragEvent / PointerEvent）转 canvas 内部像素坐标。 */
+function dropToCanvas(clientX?: number, clientY?: number): { x: number; y: number } | null {
+    if (clientX == null || clientY == null) return null;
+    const host = (brushHostRef.value as HTMLElement | null) ?? null;
+    if (!host) return null;
+    const rect = host.getBoundingClientRect();
+    const local = {
+        x: (clientX - rect.left) / ui.zoom,
+        y: (clientY - rect.top) / ui.zoom,
+    };
+    return local;
+}
+
+function onCanvasDragOver(e: DragEvent) {
+    if (project.isLocked) return;
+    // 仅当含文件时才阻止默认（允许其他 DnD 如元素重排不受影响）
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
+        e.preventDefault();
+    }
+}
+
+function onCanvasDrop(e: DragEvent) {
+    if (project.isLocked) return;
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    e.preventDefault();
+    // v1：多文件 drop 只取第一个（M13 决策 3）
+    const file = files[0];
+    uploadAndPlace(file, e.clientX, e.clientY);
+}
+
+function onPasteImage(e: ClipboardEvent) {
+    if (project.isLocked) return;
+    // 编辑文本时不抢 paste（textarea 元素正在 active）
+    if (document.activeElement instanceof HTMLTextAreaElement) return;
+    if (document.activeElement instanceof HTMLInputElement) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+                uploadAndPlace(file);
+                e.preventDefault();
+                return;
+            }
+        }
+    }
+}
+
+function onFileInputChange(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) uploadAndPlace(file);
+    input.value = '';  // 允许选同一文件再次触发 change
+}
+
+function triggerFileInput() {
+    fileInputRef.value?.click();
+}
+
+useEventListener(window, 'paste', onPasteImage);
 </script>
 
 <template>
@@ -913,6 +1049,8 @@ function onMouseUpOrLeave() {
     @mousemove="onMouseMove"
     @mouseup="onMouseUpOrLeave"
     @mouseleave="onMouseUpOrLeave"
+    @dragover="onCanvasDragOver"
+    @drop="onCanvasDrop"
   >
     <!-- 画布居中容器 -->
     <div class="min-h-full min-w-full flex items-center justify-center p-8">
@@ -1028,8 +1166,36 @@ function onMouseUpOrLeave() {
       </div>
     </div>
 
+    <!-- M13-D：上传错误 / 进度 banner（顶部居中，自动消失） -->
+    <div
+      v-if="uploadError || uploading"
+      class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-md text-xs shadow-lg pointer-events-none"
+      :class="uploadError ? 'bg-red-500/95 text-white' : 'bg-blue-500/95 text-white'"
+    >
+      {{ uploadError ?? t.image.uploading }}
+    </div>
+
+    <!-- M13-D：隐藏 file input（点击工具栏上传按钮触发） -->
+    <input
+      ref="fileInputRef"
+      type="file"
+      accept="image/png,image/jpeg,image/webp"
+      class="hidden"
+      @change="onFileInputChange"
+    />
+
     <!-- 右下角 zoom 控件（升级版） -->
     <div class="sticky bottom-3 float-right mr-3 flex items-center gap-1 bg-[color:var(--card)] border border-[color:var(--border)] rounded-lg p-1 shadow-sm text-[color:var(--foreground)]">
+      <Tooltip :text="t.image.uploadTip">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+          :disabled="project.isLocked || uploading"
+          @click="triggerFileInput"
+        >
+          <ImagePlus class="size-4" />
+        </button>
+      </Tooltip>
+      <div class="w-px h-5 bg-[color:var(--border)] mx-0.5"></div>
       <Tooltip :text="t.canvas.zoomOut" shortcut="Ctrl+-">
         <button class="p-1.5 rounded hover:bg-[color:var(--accent)]" @click="ui.zoomOut()">
           <ZoomOut class="size-4" />

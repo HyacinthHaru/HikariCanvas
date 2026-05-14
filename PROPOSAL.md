@@ -392,22 +392,33 @@ params:
 | M5 编辑器 UI | Canva 式完整编辑器（画布、图层、工具栏、属性面板、撤销） | 已完成（2026-04-23；Playwright snapshot 测试台推迟到 M7） | `docs/journal.md` M5-A/B/C/D 全部段落；Vue 3 + Pinia + Tailwind 4 + Konva overlay + 字体 / 调色板 / TextLayout / 效果族 前后端镜像 |
 | M6 模板系统 | YAML 解析 + 6 个内置模板 + 编辑器集成 | 已完成（2026-05-12；jackson-yaml + TemplateRegistry 热重载 + 6 模板 + TemplateGallery 前端） | `docs/template-spec.md` 完整契约 |
 | M7 打磨发布 | 工具栏 / Tooltip / HelpModal / config.yml / 部署文档 / 已发布墙保护 / 缩略图 / grid / icon / Move 工具 / HomePage 美化 / param group UI | 已完成（2026-05-13） | `docs/deployment.md` v1 |
-| **M8 图层 + 协议 v2** | layers + activeLayerId + opacity + blendMode + gridSize + guides；一次性 migrate；图层面板 + 多选 | **2 周（进行中）** | 协议 v2 + data v2 + 客户端拒 v1 |
-| M9 PathElement + 工具栏 | 通用 path (M/L/Q/C/Z + marker)；CircleElement、ShapeElement；7 个工具切换器 | 1.5 周 | "线/箭头/软线/星/点/圆" 全部统一通过 path/circle/shape |
-| M10 调色板 | 项目色板 + 最近色板 + MC-friendly 默认色板 + swatches UI | 3 天 | 类 Figma 色板面板 |
-| M11 渐变 + Dither | fill 升 union（solid/linear-gradient/radial-gradient）；Bayer 4×4 dither 双端实装 | 1 周 | 第一个支持 dither 的元素类型上线 |
-| M12 笔刷 + 数位板 | brush.* WS 通道；PointerEvent.pressure；本地 floating preview | 1.5 周 | 类 Procreate 的笔触体验 |
-| M13 图片导入 + 蒙版 | /api/upload + 全套安全约束；ImageElement；clipPath 蒙版 | 1 周 | 用户可拖图进编辑器 |
+| M8 图层 + 协议 v2 ✅ | layers + activeLayerId + opacity + blendMode + gridSize + guides；一次性 migrate；图层面板 + 多选 | 2 周（实际 1 天） | 协议 v2 + data v2 + 客户端拒 v1 |
+| M9 PathElement + 工具栏 ✅ | 通用 path (M/L/Q/C/Z + marker)；CircleElement、ShapeElement；4 个工具切换器 | 1.5 周（实际 1 天） | "线/箭头/软线/星/点/圆" 全部统一通过 path/circle/shape |
+| M10 调色板 ✅ | 项目色板 + 最近色板 + MC-friendly 默认色板 + swatches UI + alpha 通道 | 3 天（实际 30min） | 类 Figma 色板面板 |
+| M11 渐变 + Dither ✅ | fill 升 union（solid/linear-gradient/radial-gradient）；Bayer 4×4 dither 双端实装 | 1 周（实际 4.5h） | 第一个支持 dither 的元素类型上线 |
+| **2026-05-14 lock-state 重设计 ✅** | published 概念整体砍除；wall.lock/unlock owner-only WS op；后端编辑路径与 lock 解耦 | 当天插入 | 为未来动态化展示用例（视频 / 轮播）让出后端编辑路径 |
+| M12 笔刷 + 数位板 ✅ | brush.\* WS 通道；BrushStrokeElement + 原始 points + pressure；RDP + Catmull-Rom；floating preview；BrushPanel | 1.5 周（实际 3h） | 类 Procreate 的笔触体验 |
+| **M13 图片导入 + 蒙版** | /api/upload + 6 层校验栈；ImageElement（hash 内容寻址 sha256[:16]）；SVG path mask（B 风格数据模型，A 风格 dropdown UI） | 1 周（估 ~8h） | 用户可拖图进编辑器；mask 完全体接口预留 |
 
-**总工期估算：约 6 个月**（单人兼职开发节奏；M8-M13 累计约 8 周）。
+**M13 决策摘要**：
+1. mask 数据模型 = SVG path d 字符串（留 v2 lasso / 自由 mask 完全体接口）；v1 UI dropdown 4 预设
+2. 上传入口 = file input + drop + paste（Figma 标准）
+3. 多文件批量、mask shape over image 拖动、feather 边缘羽化、URL 粘贴均 **v1 不做**
+4. LRU 清理 = 每次 upload 前检查总配额超限删最老
+5. mask + dither 顺序 = 先 dither 再 mask
+6. ImageIO 解码隔离 = ExecutorService.submit 200ms timeout 防压缩炸弹
+
+**总工期估算：约 6 个月**（单人兼职节奏；实际 M0-M12 累计 wall-clock 约 7 周；M13 估完 8 周 = 2 个月，比规划缩短约 4 个月）。
 
 **长远 TODO（v2.0+，不在 M13 内）：**
 - 图层缩略图（per-layer rasterize 端点）
 - 图层颜色标签 / 图层 mask / smart object / 图层组
+- mask 完全体：lasso 工具 / mask shape over image 拖动编辑 / 多 mask 组合 / feather
 - 对齐 / 分布 / 分布间距工具（Photoshop "align" 工具栏）
 - 多人协作 OT/CRDT（明确不做）
 - 模板包生态（`.canvas` 打包多模板 + 资产）
 - 玩家身份认证 + HomePage 点击直开 + 权限隔离 milestone（独立路线）
+- 动态化展示（视频 / 时间轮播 / 实时数据）——lock-state 重设计已为此让路
 
 **关键决策点：** M1 完成后评估双端渲染一致性与 packet 推送稳定性，若任一项存在根本性障碍则重新评估方案。
 

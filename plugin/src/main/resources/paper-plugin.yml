@@ -31,3 +31,9 @@ permissions:
   canvas.admin.bypass-limit:
     description: Bypass rate limits and canvas size caps
     default: op
+  canvas.upload:
+    description: Upload images for use as ImageElement
+    default: true
+  canvas.upload.bypass-limit:
+    description: Bypass per-player / per-wall / total-disk image quota
+    default: op

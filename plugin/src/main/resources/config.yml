@@ -57,3 +57,20 @@ templates:
   # 模板缩略图（/api/template/{id}/preview.png）缓存 TTL（秒）。
   # reload templates 时服务端会主动 invalidate；TTL 主要影响浏览器侧。
   preview-cache-seconds: 300
+
+# 图片上传（M13）
+# 文件存在 plugins/HikariCanvas/uploads/<sha256[:16]>.png；hash 内容寻址，跨 wall
+# 引用同 hash 文件零重复存储。详见 docs/security.md §4.5、docs/architecture.md §3.7。
+images:
+  # 单文件最大字节（KiB）。超出 → 413 UPLOAD_REJECTED。
+  max-size-kb: 2048
+  # 允许的上传 MIME。magic bytes 与 Content-Type 双层校验。
+  allowed-mime: ["image/png", "image/jpeg", "image/webp"]
+  # 解码后边长上限；超出自动 bilinear downscale 到此尺寸。
+  downscale-max-edge: 1024
+  # 单 wall 引用 image 元素的上限（防滥用）。0 = 不限。
+  max-per-wall: 16
+  # 单玩家 24 小时上传次数。0 = 不限。
+  max-uploads-per-day: 50
+  # 全服磁盘总配额（MiB）。超出 → 触发 LRU 清理直到腾出空间。0 = 不限。
+  max-total-storage-mb: 1024

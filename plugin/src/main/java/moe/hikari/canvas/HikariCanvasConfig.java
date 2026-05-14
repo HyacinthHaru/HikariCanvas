@@ -42,6 +42,24 @@ public final class HikariCanvasConfig {
     public final boolean autoReloadTemplatesOnStartup;
     public final int previewCacheSeconds;
 
+    // ---- images (M13) ----
+    public final ImageConfig images;
+
+    public record ImageConfig(
+            int maxSizeKb,
+            java.util.List<String> allowedMime,
+            int downscaleMaxEdge,
+            int maxPerWall,
+            int maxUploadsPerDay,
+            int maxTotalStorageMb
+    ) {
+        public static ImageConfig defaults() {
+            return new ImageConfig(2048,
+                    java.util.List.of("image/png", "image/jpeg", "image/webp"),
+                    1024, 16, 50, 1024);
+        }
+    }
+
     private HikariCanvasConfig(Builder b) {
         this.host = b.host;
         this.port = b.port;
@@ -58,6 +76,7 @@ public final class HikariCanvasConfig {
         this.inputBurst = b.inputBurst;
         this.autoReloadTemplatesOnStartup = b.autoReloadTemplatesOnStartup;
         this.previewCacheSeconds = b.previewCacheSeconds;
+        this.images = b.images;
     }
 
     /**
@@ -92,6 +111,19 @@ public final class HikariCanvasConfig {
         b.autoReloadTemplatesOnStartup = f.getBoolean("templates.auto-reload-on-startup", true);
         b.previewCacheSeconds = Math.max(0, f.getInt("templates.preview-cache-seconds", 300));
 
+        // M13 images 段
+        ImageConfig defaults = ImageConfig.defaults();
+        @SuppressWarnings("unchecked")
+        java.util.List<String> mimes = (java.util.List<String>) f.getList(
+                "images.allowed-mime", defaults.allowedMime());
+        b.images = new ImageConfig(
+                Math.max(1, f.getInt("images.max-size-kb", defaults.maxSizeKb())),
+                mimes == null || mimes.isEmpty() ? defaults.allowedMime() : mimes,
+                Math.max(64, f.getInt("images.downscale-max-edge", defaults.downscaleMaxEdge())),
+                Math.max(0, f.getInt("images.max-per-wall", defaults.maxPerWall())),
+                Math.max(0, f.getInt("images.max-uploads-per-day", defaults.maxUploadsPerDay())),
+                Math.max(0, f.getInt("images.max-total-storage-mb", defaults.maxTotalStorageMb())));
+
         return new HikariCanvasConfig(b);
     }
 
@@ -123,5 +155,6 @@ public final class HikariCanvasConfig {
         int inputBurst = 40;
         boolean autoReloadTemplatesOnStartup = true;
         int previewCacheSeconds = 300;
+        ImageConfig images = ImageConfig.defaults();
     }
 }

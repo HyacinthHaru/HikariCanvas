@@ -74,6 +74,7 @@ public final class WebServer {
     private final TemplatePreviewService templatePreviewService;
     private final TemplateAssetService templateAssetService;
     private final WallPreviewService wallPreviewService;
+    private final moe.hikari.canvas.image.UploadHandler uploadHandler;
     /** M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes（自然 LRU 容量靠 GC）。 */
     private final ConcurrentMap<String, byte[]> wallPreviewCache = new ConcurrentHashMap<>();
     private Javalin app;
@@ -93,6 +94,7 @@ public final class WebServer {
                      TemplatePreviewService templatePreviewService,
                      TemplateAssetService templateAssetService,
                      WallPreviewService wallPreviewService,
+                     moe.hikari.canvas.image.UploadHandler uploadHandler,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler) {
         this.log = log;
@@ -108,6 +110,7 @@ public final class WebServer {
         this.templatePreviewService = templatePreviewService;
         this.templateAssetService = templateAssetService;
         this.wallPreviewService = wallPreviewService;
+        this.uploadHandler = uploadHandler;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
@@ -202,6 +205,16 @@ public final class WebServer {
                         ctx.header("Cache-Control", "public, max-age=3600");
                         ctx.result(png);
                     }));
+
+            // M13：图片上传 + 下载 + 配额查询
+            if (uploadHandler != null) {
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.POST, "/api/upload", uploadHandler::handleUpload));
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.GET, "/api/upload/quota", uploadHandler::handleQuota));
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.GET, "/api/upload/{source}", uploadHandler::handleDownload));
+            }
 
             // WebSocket
             cfg.routes.addWsHandler(WsHandlerType.WEBSOCKET, "/ws", wsCfg -> {

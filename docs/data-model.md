@@ -15,12 +15,13 @@
 
 | 存储位置 | 内容 | 生命周期 |
 | --- | --- | --- |
-| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计 | 跨服务器重启；随世界快照备份 |
-| `ItemFrame` PDC | `wall_id` / `slot` / `published_at` 标签 | 随世界文件 |
+| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计、**image_uploads 配额表（M13）** | 跨服务器重启；随世界快照备份 |
+| `ItemFrame` PDC | `wall_id` / `slot` 标签（`published_at` 不再写入，2026-05-14 砍） | 随世界文件 |
 | 文件：`templates/*.yml` | 模板定义 | 人工管理 |
 | 文件：`user-templates/<uuid>/` | 玩家上传模板（v1.x） | 按玩家 uuid 组织 |
 | 文件：`fonts/*.ttf` / `*.woff2` | 字体 | 人工管理 |
 | 文件：`.canvas` 工程导出 | 玩家导出的工程 | 外部管理 |
+| **文件：`uploads/<sha256[:16]>.png`（M13）** | 玩家上传的图片（hash 内容寻址，跨 wall 引用同一文件不重复存） | 按 last_used_at LRU 清理；删 wall 不立即清 |
 
 ---
 
@@ -198,7 +199,48 @@ CREATE INDEX idx_audit_event ON audit_log(event);
 
 **保留策略：** 默认保留 90 天，后台任务定期 `DELETE WHERE ts < now - 90d`。可配置。
 
-### 2.6 表：`template_usage`
+### 2.6.5 表：`image_uploads`（M13 引入）
+
+按 sha256[:16] hash 内容寻址。一个 hash 对应磁盘上一个 PNG 文件 + 一条 image_uploads 行；多个 ImageElement.source 可指同一 hash（跨 wall 引用零重复存储）。
+
+```sql
+CREATE TABLE image_uploads (
+    hash            TEXT    PRIMARY KEY,    -- sha256[:16] hex（16 字符）
+    bytes           INTEGER NOT NULL,        -- 磁盘字节数（downscale 后）
+    width           INTEGER NOT NULL,
+    height          INTEGER NOT NULL,
+    mime            TEXT    NOT NULL,        -- 'image/png'（统一存储格式，jpeg/webp 上传时转）
+    uploader_uuid   TEXT    NOT NULL,
+    uploaded_at     INTEGER NOT NULL,
+    last_used_at    INTEGER NOT NULL,        -- ImageElement 引用时更新；LRU 清理依据
+    refcount        INTEGER NOT NULL         -- 当前被多少 ImageElement.source 引用；0 = 可 LRU 删
+);
+
+CREATE INDEX idx_uploads_uploader ON image_uploads(uploader_uuid, uploaded_at DESC);
+CREATE INDEX idx_uploads_lru ON image_uploads(refcount, last_used_at) WHERE refcount = 0;
+```
+
+**关键字段语义：**
+
+- `refcount`：服务端在 `element.add type=image` / `element.update fill` / `element.delete` 时增减
+- `last_used_at`：每次 wall 重新打开 / element 被引用渲染时刷新
+- LRU 清理：`SELECT hash FROM image_uploads WHERE refcount=0 ORDER BY last_used_at ASC LIMIT N` → unlink 磁盘文件 + DELETE 表行
+
+**配额查询（M13）：**
+
+```sql
+-- 玩家 24h 上传次数
+SELECT COUNT(*) FROM image_uploads
+WHERE uploader_uuid = ? AND uploaded_at > strftime('%s', 'now') * 1000 - 86400000;
+
+-- 单 wall 关联图片数（通过 ImageElement.source）—— project_json JSON_EACH 查
+-- v1 简化：在 EditSession 内存层算（layers 内所有 image element.source 去重）
+
+-- 总磁盘字节
+SELECT SUM(bytes) FROM image_uploads;
+```
+
+### 2.7 表：`template_usage`
 
 模板使用统计，供编辑器排序「最近用过」「热门」。
 

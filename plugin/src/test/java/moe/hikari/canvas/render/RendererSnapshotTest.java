@@ -71,7 +71,9 @@ class RendererSnapshotTest {
             "09-linear-gradient",
             "10-radial-gradient",
             "11-dither",
-            "12-brush"
+            "12-brush",
+            "13-image-placeholder",
+            "13-image-mask"
     })
     void snapshot(String fixtureName) throws IOException {
         Path fixturePath = FIXTURES_DIR.resolve(fixtureName + ".json");

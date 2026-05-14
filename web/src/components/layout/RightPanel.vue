@@ -3,8 +3,10 @@ import { computed, ref, watch } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
+import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
-import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2, Trash2, HelpCircle } from 'lucide-vue-next';
+import { preloadImage } from '@/render/PreviewRenderer';
+import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2, Trash2, HelpCircle, ImagePlus, RefreshCw } from 'lucide-vue-next';
 import { layoutText, canonicalCharWidth, ASCENT_RATIO } from '@/render/TextLayout';
 import { FONT_META } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
@@ -13,10 +15,11 @@ import LayerPanel from '@/components/layout/LayerPanel.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import FillInput from '@/components/ui/FillInput.vue';
 import BrushPanel from '@/components/layout/BrushPanel.vue';
-import type { Element, RectElement, TextElement, CircleElement, ShapeElement, PathElement, Effects, Stroke, Shadow, Glow, Fill } from '@/types/protocol';
+import type { Element, RectElement, TextElement, CircleElement, ShapeElement, PathElement, Effects, Stroke, Shadow, Glow, Fill, ImageElement, Mask } from '@/types/protocol';
 
 const project = useProjectStore();
 const ui = useUiStore();
+const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
@@ -29,6 +32,8 @@ const isRect = computed(() => selected.value?.type === 'rect');
 const isCircle = computed(() => selected.value?.type === 'circle');
 const isShape = computed(() => selected.value?.type === 'shape');
 const isPath = computed(() => selected.value?.type === 'path');
+const isImage = computed(() => selected.value?.type === 'image');
+const imageEl = computed(() => isImage.value ? (selected.value as ImageElement) : null);
 /** M11-D：几何元素族（支持 fill / dither）。text / icon 不在内。 */
 const isGeometric = computed(() => isRect.value || isCircle.value || isShape.value || isPath.value);
 /** M11-D：当前元素 renderMode 是否 'dither'（缺省 'clean'）。 */
@@ -315,6 +320,183 @@ function onElementDrop(ev: DragEvent, idx: number) {
 function onElementDragEnd() {
     dragIdx.value = -1;
     dragOverIdx.value = -1;
+}
+
+// ---------- M13-D: ImageElement 段 ----------
+
+type MaskPresetKind = 'none' | 'circle' | 'roundedRect' | 'ellipse';
+
+const imageMaskKind = computed<MaskPresetKind>(() => detectMaskPreset(imageEl.value));
+const imageMaskInverted = computed<boolean>(() => imageEl.value?.mask?.inverted ?? false);
+
+/**
+ * 从已存在的 mask.d + bbox 反推出最匹配的预设 kind。v1：纯启发式
+ * （路径首字符 + 命令计数；v2 lasso 自由 path 会落到 'none' 显示）。
+ *
+ * - circle / ellipse 走 4 段 cubic（4 个 C 命令）
+ * - roundedRect 走 4 个圆角（4 个 Q 命令 + L 段）
+ */
+function detectMaskPreset(im: ImageElement | null): MaskPresetKind {
+    if (!im || !im.mask) return 'none';
+    const d = im.mask.d;
+    const cCount = (d.match(/ C /g) ?? []).length;
+    const qCount = (d.match(/ Q /g) ?? []).length;
+    if (cCount === 4 && qCount === 0) {
+        return im.w === im.h ? 'circle' : 'ellipse';
+    }
+    if (qCount === 4 && cCount === 0) return 'roundedRect';
+    return 'none';
+}
+
+/**
+ * 用 cubic Bezier 4 段近似画椭圆（外接 bbox 0..w/0..h）。kappa ≈ 0.5523 是
+ * 圆弧 → 三阶 Bezier 控制点的标准近似系数（误差 < 0.027%）。
+ */
+function makeEllipseD(w: number, h: number): string {
+    const cx = w / 2;
+    const cy = h / 2;
+    const rx = w / 2;
+    const ry = h / 2;
+    const k = 0.5522847498;
+    const cxk = rx * k;
+    const cyk = ry * k;
+    return [
+        `M ${cx} 0`,
+        `C ${cx + cxk} 0 ${w} ${cy - cyk} ${w} ${cy}`,
+        `C ${w} ${cy + cyk} ${cx + cxk} ${h} ${cx} ${h}`,
+        `C ${cx - cxk} ${h} 0 ${cy + cyk} 0 ${cy}`,
+        `C 0 ${cy - cyk} ${cx - cxk} 0 ${cx} 0`,
+        'Z',
+    ].join(' ');
+}
+
+/** 用短边作直径的圆（居中），cubic Bezier 4 段。 */
+function makeCircleD(w: number, h: number): string {
+    const r = Math.min(w, h) / 2;
+    const cx = w / 2;
+    const cy = h / 2;
+    const k = 0.5522847498 * r;
+    return [
+        `M ${cx} ${cy - r}`,
+        `C ${cx + k} ${cy - r} ${cx + r} ${cy - k} ${cx + r} ${cy}`,
+        `C ${cx + r} ${cy + k} ${cx + k} ${cy + r} ${cx} ${cy + r}`,
+        `C ${cx - k} ${cy + r} ${cx - r} ${cy + k} ${cx - r} ${cy}`,
+        `C ${cx - r} ${cy - k} ${cx - k} ${cy - r} ${cx} ${cy - r}`,
+        'Z',
+    ].join(' ');
+}
+
+/** 圆角矩形，圆角半径 = min(w, h) * 0.15。 */
+function makeRoundedRectD(w: number, h: number): string {
+    const r = Math.max(1, Math.min(w, h) * 0.15);
+    return [
+        `M ${r} 0`,
+        `L ${w - r} 0`,
+        `Q ${w} 0 ${w} ${r}`,
+        `L ${w} ${h - r}`,
+        `Q ${w} ${h} ${w - r} ${h}`,
+        `L ${r} ${h}`,
+        `Q 0 ${h} 0 ${h - r}`,
+        `L 0 ${r}`,
+        `Q 0 0 ${r} 0`,
+        'Z',
+    ].join(' ');
+}
+
+function onMaskKindChange(ev: Event) {
+    const kind = (ev.target as HTMLSelectElement).value as MaskPresetKind;
+    const im = imageEl.value;
+    if (!im) return;
+    if (kind === 'none') {
+        sendUpdate({ mask: null });
+        return;
+    }
+    let d = '';
+    if (kind === 'circle') d = makeCircleD(im.w, im.h);
+    else if (kind === 'roundedRect') d = makeRoundedRectD(im.w, im.h);
+    else if (kind === 'ellipse') d = makeEllipseD(im.w, im.h);
+    const inverted = im.mask?.inverted ?? false;
+    sendUpdate({ mask: { d, inverted } as Mask });
+}
+
+function onMaskInvertedToggle(ev: Event) {
+    const im = imageEl.value;
+    if (!im || !im.mask) return;
+    const inverted = (ev.target as HTMLInputElement).checked;
+    sendUpdate({ mask: { d: im.mask.d, inverted } });
+}
+
+function toggleImageDither(ev: Event) {
+    const on = (ev.target as HTMLInputElement).checked;
+    sendUpdate({ renderMode: on ? 'dither' : 'clean' });
+}
+
+/** 当 image bbox 变化（resize）时，把 mask 预设按新 bbox 重生成 —— 否则会被裁形变。
+ *  仅当 d 是预设产生的（startsWith __）时才重生成，自由 path 不动。 */
+watch(
+    () => imageEl.value ? `${imageEl.value.w}x${imageEl.value.h}` : '',
+    () => {
+        const im = imageEl.value;
+        if (!im || !im.mask) return;
+        const kind = detectMaskPreset(im);
+        let regenerated = '';
+        if (kind === 'circle') regenerated = makeCircleD(im.w, im.h);
+        else if (kind === 'roundedRect') regenerated = makeRoundedRectD(im.w, im.h);
+        else if (kind === 'ellipse') regenerated = makeEllipseD(im.w, im.h);
+        if (regenerated && regenerated !== im.mask.d) {
+            sendUpdate({ mask: { d: regenerated, inverted: im.mask.inverted } });
+        }
+    },
+);
+
+// 替换图片：自己的 hidden file input
+const imageReplaceInputRef = ref<HTMLInputElement | null>(null);
+const imageReplaceError = ref<string | null>(null);
+const imageReplacing = ref(false);
+
+function triggerReplaceImage() {
+    imageReplaceInputRef.value?.click();
+}
+
+async function onReplaceFileChange(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || !imageEl.value) return;
+    if (!file.type.startsWith('image/')) { imageReplaceError.value = t.value.image.notImage; return; }
+    if (!net.sessionId) { imageReplaceError.value = t.value.image.noSession; return; }
+    imageReplacing.value = true;
+    imageReplaceError.value = null;
+    try {
+        const dataUrl = await new Promise<string | null>((resolve) => {
+            const r = new FileReader();
+            r.onload = () => resolve(typeof r.result === 'string' ? r.result : null);
+            r.onerror = () => resolve(null);
+            r.readAsDataURL(file);
+        });
+        const fd = new FormData();
+        fd.append('sessionId', net.sessionId);
+        fd.append('file', file);
+        const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+        if (!resp.ok) {
+            const body = await resp.json().catch(() => ({} as Record<string, string>));
+            imageReplaceError.value = t.value.image.uploadFailed(resp.status, body.message || body.error || '');
+            return;
+        }
+        const result = await resp.json() as { source: string; width: number; height: number };
+        if (dataUrl) preloadImage(result.source, dataUrl);
+        sendUpdate({ source: result.source });
+    } catch (err) {
+        imageReplaceError.value = t.value.image.uploadFailed(0, (err as Error).message);
+    } finally {
+        imageReplacing.value = false;
+        if (imageReplaceError.value) {
+            const msg = imageReplaceError.value;
+            window.setTimeout(() => {
+                if (imageReplaceError.value === msg) imageReplaceError.value = null;
+            }, 6000);
+        }
+    }
 }
 </script>
 
@@ -701,6 +883,81 @@ function onElementDragEnd() {
                 </label>
               </div>
             </div>
+          </div>
+        </details>
+
+        <!-- M13-D：ImageElement 段（hash 缩略图 + replace + mask preset + inverted + dither） -->
+        <details v-if="isImage && imageEl" class="group" open>
+          <summary class="flex items-center justify-between cursor-pointer py-1.5">
+            <span class="font-medium">{{ t.image.header }}</span>
+            <span class="text-[10px] text-[color:var(--muted-foreground)] group-open:rotate-90 transition-transform">›</span>
+          </summary>
+          <div class="space-y-2 pt-1.5">
+            <!-- 缩略图 + hash + replace -->
+            <div class="flex gap-2 items-start">
+              <div class="w-14 h-14 shrink-0 rounded border border-[color:var(--border)] bg-[color:var(--background)] overflow-hidden flex items-center justify-center">
+                <img
+                  :src="`/api/upload/${encodeURIComponent(imageEl.source)}`"
+                  class="max-w-full max-h-full object-contain"
+                  alt=""
+                />
+              </div>
+              <div class="flex-1 min-w-0 space-y-1">
+                <Tooltip :text="t.image.sourceTip">
+                  <span class="block text-[10px] font-mono text-[color:var(--muted-foreground)] truncate" :title="imageEl.source">
+                    {{ imageEl.source }}
+                  </span>
+                </Tooltip>
+                <Tooltip :text="t.image.replaceTip">
+                  <button
+                    class="w-full inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                    :disabled="imageReplacing"
+                    @click="triggerReplaceImage"
+                  >
+                    <component :is="imageReplacing ? RefreshCw : ImagePlus"
+                               class="size-3" :class="{ 'animate-spin': imageReplacing }" />
+                    <span>{{ t.image.replace }}</span>
+                  </button>
+                </Tooltip>
+                <input
+                  ref="imageReplaceInputRef"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  class="hidden"
+                  @change="onReplaceFileChange"
+                />
+                <div v-if="imageReplaceError" class="text-[10px] text-red-500">{{ imageReplaceError }}</div>
+              </div>
+            </div>
+
+            <!-- 蒙版 -->
+            <div class="space-y-1.5 pt-1 border-t border-[color:var(--border)]">
+              <div class="flex items-center justify-between">
+                <Tooltip :text="t.image.maskPresetTip">
+                  <span class="hc-field-label">{{ t.image.maskHeader }}</span>
+                </Tooltip>
+                <select class="hc-input w-32" :value="imageMaskKind" @change="onMaskKindChange">
+                  <option value="none">{{ t.image.maskPresets.none }}</option>
+                  <option value="circle">{{ t.image.maskPresets.circle }}</option>
+                  <option value="roundedRect">{{ t.image.maskPresets.roundedRect }}</option>
+                  <option value="ellipse">{{ t.image.maskPresets.ellipse }}</option>
+                </select>
+              </div>
+              <Tooltip v-if="imageMaskKind !== 'none'" :text="t.image.maskInvertedTip">
+                <label class="flex items-center justify-between pl-1">
+                  <span class="hc-field-label">{{ t.image.maskInverted }}</span>
+                  <input type="checkbox" :checked="imageMaskInverted" @change="onMaskInvertedToggle" />
+                </label>
+              </Tooltip>
+            </div>
+
+            <!-- Dither -->
+            <Tooltip :text="t.fill.ditherTip">
+              <label class="flex items-center justify-between pl-1 pt-1 border-t border-[color:var(--border)]">
+                <span class="hc-field-label">{{ t.fill.ditherLabel }}</span>
+                <input type="checkbox" :checked="isDither" @change="toggleImageDither" />
+              </label>
+            </Tooltip>
           </div>
         </details>
       </div>

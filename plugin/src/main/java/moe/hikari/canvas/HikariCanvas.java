@@ -24,8 +24,12 @@ import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.session.WandListener;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
+import moe.hikari.canvas.storage.ImageUploadDao;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.storage.MigrationRunner;
+import moe.hikari.canvas.image.ImageQuotaService;
+import moe.hikari.canvas.image.ImageStorage;
+import moe.hikari.canvas.image.UploadHandler;
 import moe.hikari.canvas.template.TemplateRegistry;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.preview.TemplatePreviewService;
@@ -71,6 +75,8 @@ public final class HikariCanvas extends JavaPlugin {
     private TemplatePreviewService templatePreviewService;
     private TemplateAssetService templateAssetService;
     private WallPreviewService wallPreviewService;
+    private ImageStorage imageStorage;
+    private UploadHandler uploadHandler;
     private volatile HikariCanvasConfig config;
 
     @Override
@@ -148,10 +154,17 @@ public final class HikariCanvas extends JavaPlugin {
         templateAssetService = new TemplateAssetService(getLogger(),
                 getDataFolder().toPath());
 
+        // M13：图片上传 + 存储 + 配额。先于 compositor 装配，让 WallRestorer 重启
+        // restore 时 ImageElement 也能正确加载（否则一次启动期会画占位）。
+        ImageUploadDao imageDao = new ImageUploadDao(getLogger(), database.jdbi());
+        imageStorage = new ImageStorage(getLogger(), getDataFolder().toPath(), imageDao);
+        ImageQuotaService imageQuota = new ImageQuotaService(imageDao, config.images);
+
         // M3-T7 / M4-T4：编辑 op 成功后把受影响 mapIds 重绘。
         // Compositor = RGBA 大图 rasterize + palette 量化切片
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry,
                 templateAssetService, getLogger());
+        compositor.setImageLoader(imageStorage::load);
         canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer, getLogger());
 
         // M5.5：启动末尾把所有 walls 的像素 compose 回对应 MapView
@@ -207,11 +220,15 @@ public final class HikariCanvas extends JavaPlugin {
                                 tokenService, mapPool, database, wallRepo,
                                 templateRegistry, templatePreviewService, editorUrlTemplate).build()));
 
+        // M13：UploadHandler 需要 sessionManager / wallRepo，所以晚于它们装配
+        uploadHandler = new UploadHandler(getLogger(), imageStorage, imageQuota,
+                config.images, tokenService, sessionManager, wallRepo);
+
         webServer = new WebServer(getLogger(), config.host, config.port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
-                templateAssetService, wallPreviewService, this,
+                templateAssetService, wallPreviewService, uploadHandler, this,
                 version, this::paintAllSessionMaps);
         webServer.start();
 
@@ -245,6 +262,10 @@ public final class HikariCanvas extends JavaPlugin {
         if (webServer != null) {
             webServer.stop();
             webServer = null;
+        }
+        if (uploadHandler != null) {
+            uploadHandler.shutdown();
+            uploadHandler = null;
         }
         if (database != null) {
             database.close();

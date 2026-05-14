@@ -16,6 +16,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  *   <li>{@code circle}：圆 / 椭圆（bbox 推 cx/cy/rx/ry）</li>
  *   <li>{@code shape}：正多边形 / 星（kind + sides + innerRatio）</li>
  *   <li>{@code brush}（M12）：笔触，含 RDP 简化后的采样点 + 压感（{@link BrushStrokeElement}）</li>
+ *   <li>{@code image}（M13）：位图图片，sha256[:16] 内容寻址 + 可选 SVG path 蒙版（{@link ImageElement}）</li>
  * </ul>
  *
  * <p><b>v2 字段默认值约定：</b> 三字段均为 nullable，序列化按 {@code NON_NULL} 省略；
@@ -23,7 +24,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * {@link #effectiveRenderMode()} 取兜底后的值（{@code 1.0f / NORMAL / CLEAN}）。</p>
  *
  * <p>Jackson 序列化：基于 {@code type} 字段的多态判定。写出的 JSON 会自动带
- * {@code "type": "text" | "rect" | "icon" | "path" | "circle" | "shape" | "brush"}。</p>
+ * {@code "type": "text" | "rect" | "icon" | "path" | "circle" | "shape" | "brush" | "image"}。</p>
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
@@ -34,9 +35,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = CircleElement.class, name = "circle"),
         @JsonSubTypes.Type(value = ShapeElement.class, name = "shape"),
         @JsonSubTypes.Type(value = BrushStrokeElement.class, name = "brush"),
+        @JsonSubTypes.Type(value = ImageElement.class, name = "image"),
 })
 public sealed interface Element permits TextElement, RectElement, IconElement,
-        PathElement, CircleElement, ShapeElement, BrushStrokeElement {
+        PathElement, CircleElement, ShapeElement, BrushStrokeElement, ImageElement {
 
     /** {@code "e-<uuid>"}，由服务端生成，全局唯一。 */
     String id();

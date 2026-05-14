@@ -199,6 +199,7 @@ public final class EditSession {
                 case "path" -> buildPath(id, props);
                 case "circle" -> buildCircle(id, props);
                 case "shape" -> buildShape(id, props);
+                case "image" -> buildImage(id, props);
                 default -> throw new ValidationException("INVALID_ELEMENT", "unknown element type: " + type);
             };
         } catch (ValidationException ve) {
@@ -258,6 +259,7 @@ public final class EditSession {
                 case CircleElement c -> applyCirclePatch(c, patch);
                 case ShapeElement sh -> applyShapePatch(sh, patch);
                 case BrushStrokeElement b -> applyBrushPatch(b, patch);
+                case ImageElement im -> applyImagePatch(im, patch);
             };
         } catch (ValidationException ve) {
             return err(ve.code, ve.getMessage());
@@ -1641,6 +1643,96 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
+    // ---------- M13 ImageElement ----------
+
+    private Element buildImage(String id, Map<String, Object> p) {
+        int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
+        int y = intFieldOrDefault(p, "y", 0); validateCoord(y, "y");
+        int w = intFieldOrDefault(p, "w", 128); validateDim(w, "w");
+        int h = intFieldOrDefault(p, "h", 128); validateDim(h, "h");
+        int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
+        boolean locked = boolFieldOrDefault(p, "locked", false);
+        boolean visible = boolFieldOrDefault(p, "visible", true);
+        String source = requireString(p, "source", true);
+        validateImageSource(source);
+        Mask mask = parseMaskNullable(p.get("mask"));
+        return new ImageElement(id, x, y, w, h, rotation, locked, visible,
+                source, mask,
+                null, null, null);
+    }
+
+    private ImageElement applyImagePatch(ImageElement orig, Map<String, Object> patch) {
+        int x = orig.x(); int y = orig.y(); int w = orig.w(); int h = orig.h();
+        int rotation = orig.rotation();
+        boolean locked = orig.locked(); boolean visible = orig.visible();
+        String source = orig.source();
+        Mask mask = orig.mask();
+        Float opacity = orig.opacity();
+        BlendMode blendMode = orig.blendMode();
+        RenderMode renderMode = orig.renderMode();
+
+        for (var e : patch.entrySet()) {
+            String k = e.getKey(); Object v = e.getValue();
+            switch (k) {
+                case "x" -> { x = intValue(v, k); validateCoord(x, k); }
+                case "y" -> { y = intValue(v, k); validateCoord(y, k); }
+                case "w" -> { w = intValue(v, k); validateDim(w, k); }
+                case "h" -> { h = intValue(v, k); validateDim(h, k); }
+                case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
+                case "locked" -> locked = boolValue(v, k);
+                case "visible" -> visible = boolValue(v, k);
+                case "source" -> {
+                    source = requireStringValue(v, k);
+                    validateImageSource(source);
+                }
+                case "mask" -> mask = parseMaskNullable(v);
+                case "opacity" -> opacity = parseOpacityNullable(v);
+                case "blendMode" -> blendMode = parseBlendModeNullable(v);
+                case "renderMode" -> renderMode = parseRenderModeNullable(v);
+                default -> throw new ValidationException("INVALID_PAYLOAD",
+                        "unknown image field: " + k);
+            }
+        }
+        return new ImageElement(orig.id(), x, y, w, h, rotation, locked, visible,
+                source, mask, opacity, blendMode, renderMode);
+    }
+
+    private static final java.util.regex.Pattern IMAGE_SOURCE_RE =
+            java.util.regex.Pattern.compile("^[0-9a-f]{16}$");
+
+    private static void validateImageSource(String s) {
+        if (s == null || !IMAGE_SOURCE_RE.matcher(s).matches()) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "image source must be sha256[:16] lowercase hex: " + s);
+        }
+    }
+
+    /**
+     * 解析可选的 {@link Mask}：{@code null} → 无蒙版；非空时必须含 {@code d}（SVG path）+
+     * {@code inverted}（boolean）。{@code d} 复用 {@link PathDValidator}（含 4096 长度上限）。
+     */
+    private static Mask parseMaskNullable(Object v) {
+        if (v == null) return null;
+        if (!(v instanceof Map<?, ?> m)) {
+            throw new ValidationException("INVALID_PAYLOAD", "mask must be object");
+        }
+        Object dRaw = m.get("d");
+        if (!(dRaw instanceof String d)) {
+            throw new ValidationException("INVALID_PAYLOAD", "mask.d must be string");
+        }
+        validatePathD(d);
+        Object invRaw = m.get("inverted");
+        boolean inverted;
+        if (invRaw == null) {
+            inverted = false;
+        } else if (invRaw instanceof Boolean bb) {
+            inverted = bb;
+        } else {
+            throw new ValidationException("INVALID_PAYLOAD", "mask.inverted must be boolean");
+        }
+        return new Mask(d, inverted);
+    }
+
     private static Element cloneElementWithNewId(Element src) {
         String newId = "e-" + UUID.randomUUID();
         return switch (src) {
@@ -1675,6 +1767,10 @@ public final class EditSession {
                     b.points(), b.size(), b.fill(),
                     b.pressureSize(), b.pressureOpacity(),
                     b.opacity(), b.blendMode(), b.renderMode());
+            case ImageElement im -> new ImageElement(newId,
+                    im.x(), im.y(), im.w(), im.h(), im.rotation(), im.locked(), im.visible(),
+                    im.source(), im.mask(),
+                    im.opacity(), im.blendMode(), im.renderMode());
         };
     }
 

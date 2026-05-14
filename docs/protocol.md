@@ -389,6 +389,19 @@ type RectElement = BaseElement & {
   fill: string;
   stroke?: { width: number; color: string };
 };
+
+// M13：图片元素。source 是上传时返回的 sha256[:16] hash（内容寻址）；
+// 客户端用 GET /api/upload/{source} 拉取原图。mask 是可选 SVG path
+// 蒙版（M9 PathDValidator 子集 M/L/Q/C/Z），坐标相对 element bbox 0..w/0..h；
+// inverted=true 时取 mask 外部像素（图层蒙版反相）。
+type ImageElement = BaseElement & {
+  type: "image";
+  source: string;          // sha256[:16] hash
+  mask?: {
+    d: string;             // SVG path d，相对 (0,0)..(w,h)
+    inverted: boolean;     // false=显示 mask 内（默认），true=显示 mask 外
+  };
+};
 ```
 
 ---
@@ -492,6 +505,47 @@ type RectElement = BaseElement & {
 
 ---
 
+## 9.5 HTTP API（M13 引入）
+
+部分操作不走 WS，而是 HTTP 端点：
+
+### `POST /api/upload`（M13）
+
+玩家上传图片。请求体 `multipart/form-data` + 字段 `file`。
+
+**校验栈**（详见 `security.md §4.5`）：
+1. 权限：caller 必须有 `canvas.upload`（默认绑 `canvas.edit`）
+2. `Content-Length` ≤ `config.images.max-size-kb`（默认 2 MB），否则 `413` + `UPLOAD_REJECTED: file too large`
+3. `Content-Type` ∈ `config.images.allowed-mime`（默认 `image/png|jpeg|webp`）
+4. **Magic bytes** 校验真实 MIME（前 16 字节），两层不一致拒
+5. `ImageIO.read` 超时 200ms（`ExecutorService.submit(...).get`）；解码失败 / 死循环 / OOM 拒
+6. Bbox sanity：0 < w/h ≤ 8192；边长 > `downscale-max-edge`（默认 1024）→ 自动 bilinear downscale
+7. 配额三层：`max-per-wall` / `max-uploads-per-day` / `max-total-storage-mb`，任一超限 → LRU 删最老或拒
+
+**响应**（`200 OK`）：
+```json
+{ "source": "9f3a2b7e4c1d0a5f", "width": 512, "height": 512, "bytes": 87432 }
+```
+
+**错误**：`401` 未认证 / `403` 无权限 / `413` 太大 / `400` `UPLOAD_REJECTED`（含 reason）/ `429` 配额耗尽
+
+### `GET /api/upload/{source}`（M13）
+
+按 sha256[:16] hash 拉取原图。返回 `image/png`（统一存储为 PNG，jpeg/webp 上传时已转）。无需 token（图已脱敏存储；URL 不可枚举因 hash 不可猜）。
+
+### `GET /api/upload/quota`（M13）
+
+返当前 player 剩余配额，前端 UI 显示。
+```json
+{
+  "perWall": { "limit": 8, "used": 3 },
+  "perDay":  { "limit": 50, "used": 17 },
+  "totalDiskMb": { "limit": 1024, "used": 412 }
+}
+```
+
+---
+
 ## 10. 版本化与兼容
 
 - 协议版本字段 `v` 只在**不兼容**变更时递增
@@ -523,4 +577,4 @@ type RectElement = BaseElement & {
 - [x] **M6**：ready payload 加 `templates`（全量 TemplateSpec 列表）—— **已实装**
 - [x] **M8**：图层模型 + 协议 v2 + opacity/blendMode/gridSize/guides 一次性升级 —— **协议固化，待实施**
 - [ ] **M12** 笔刷流 brush.* 通道：能否复用 element.update 还是必须独立通道 → 决策时机：M11 dither 完成后回头评估带宽
-- [ ] **M13** 图片上传 `/api/upload` 端点能否走 chunked 大文件 vs 一次性 multipart → 取决于 max-size-kb 默认值
+- [x] **M13** 图片上传 `/api/upload` 端点 chunked 大文件 vs 一次性 multipart → **决策（2026-05-14）：一次性 multipart**。默认 max-size-kb=2048（2 MB），单 HTTP body multipart 足够；chunked 上传增加协议复杂度，单文件上限提到 10 MB 内都可承受。chunked 留 v2 加视频文件支持时再上

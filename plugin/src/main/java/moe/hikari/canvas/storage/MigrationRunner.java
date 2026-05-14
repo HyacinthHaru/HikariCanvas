@@ -30,7 +30,8 @@ public final class MigrationRunner {
             new Migration(3, "db-migrations/V003__drafts_add_maps.sql"),
             new Migration(4, "db-migrations/V004__drafts_wall_id_alias.sql"),
             new Migration(5, "db-migrations/V005__walls_unified.sql"),
-            new Migration(6, "db-migrations/V006__walls_protocol_version.sql")
+            new Migration(6, "db-migrations/V006__walls_protocol_version.sql"),
+            new Migration(7, "db-migrations/V007__image_uploads.sql")
     );
 
     private final Jdbi jdbi;
