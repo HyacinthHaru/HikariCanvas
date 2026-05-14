@@ -51,6 +51,8 @@ export class BrushController {
     private currentProps: BrushProps | null = null;
     private pendingPoints: RawPoint[] = [];
     private batchTimer: number | null = null;
+    /** tryEnd 超时后置 true；pointerDown 的 then 分支看到后会主动 cancel 服务端 stroke。 */
+    private aborted = false;
 
     private floating: HTMLCanvasElement | null = null;
     private floatingCtx: CanvasRenderingContext2D | null = null;
@@ -69,6 +71,7 @@ export class BrushController {
         this.currentProps = props;
         this.pendingPoints = [];
         this.drawnPoints = [];
+        this.aborted = false;
 
         this.setupFloating();
 
@@ -77,7 +80,8 @@ export class BrushController {
             layerId: this.cfg.getLayerId(),
         }, 5000).then((ack) => {
             const ackObj = ack as { strokeId?: string };
-            if (!this.isDrawing && this.strokeId === null) {
+            // 2026-05-14：ack 到达时若已 cancel / abort，主动发 brush.cancel 通知服务端清理 buffer
+            if (this.aborted || (!this.isDrawing && this.strokeId === null)) {
                 if (ackObj.strokeId) {
                     this.ws.send('brush.cancel', { strokeId: ackObj.strokeId });
                 }
@@ -117,6 +121,14 @@ export class BrushController {
         this.cleanup();
     }
 
+    /**
+     * 等 brush.start ack 到达后发 brush.end。最多重试 40 次（2s）。
+     *
+     * <p>2026-05-14 修复：超时后如果 ack 仍未到，pointerDown 内的 sendWithAck.then 仍可能
+     * 后续 resolve（WS 慢但不挂）。改进：超时清理时设置 {@link #aborted} 标志，让 then 分支
+     * 在 ack 真到达时发 brush.cancel（server 端必须收到清理通知，否则 StrokeBuffer 残留
+     * 等 30s + SessionReaper purge 才被收）。</p>
+     */
     private tryEnd(attempts = 0): void {
         if (this.strokeId !== null) {
             this.flushPendingPoints();
@@ -127,6 +139,8 @@ export class BrushController {
             return;
         }
         if (attempts > 40) {
+            // ack 超 2s 未到 → 设置 aborted 标志，pointerDown 的 then 分支会自动 cancel
+            this.aborted = true;
             this.cleanup();
             return;
         }

@@ -56,6 +56,10 @@ public final class SessionReaper {
     }
 
     private void sweep() {
+        // 2026-05-14：每次 sweep 顺手清各 session 的 stale brush stroke buffer
+        // （M12 brush 引入；用户永久离开后 EditSession 内 strokes Map 不会自动清）
+        sessions.purgeAllStaleStrokes();
+
         long now = System.currentTimeMillis();
         List<SessionManager.ExpiredSession> expired = sessions.collectExpired(
                 now, issuedTimeoutMs, wsGraceMs, activeIdleMs);

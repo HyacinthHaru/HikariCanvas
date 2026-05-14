@@ -5,6 +5,61 @@
 
 ---
 
+## 2026-05-14 · 全栈审查 + 3 Bug 修复 + 文档批量重写
+
+**起因**：用户反馈 "别的 AI 审查发现 CLAUDE.md 等文档严重滞后于实际"。本会话做了系统化审查（3 个 Explore agent 并行扫 doc-drift / code-quality / test-coverage）+ 修真 bug + 重写文档。
+
+### 审查发现
+
+- **真 bug 5 个**：(1) lock 快捷键守卫缺失（高，键盘绕过 readonly overlay）；(2) StrokeBuffer 泄漏（高，purgeStaleStrokes 只 startBrush 内调用）；(3) BrushController.tryEnd 超时漏掉清理通知（高，ack 后到导致服务端 buffer 孤儿）；(4) applyBrushPatch 忽略 w/h 字段（中）；(5) brush.end persistWall 主线程阻塞风险（中）
+- **测试盲点 3 个**：wall.lock owner-only / 邻接 frame regression / 前端 scalePathD
+- **文档严重滞后 5 处**：PROPOSAL 命令清单 / architecture §6 流程图 + 状态机表 / data-model published_at 注释 + 语义 / security 权限节点
+
+### 本次修复
+
+**Bug 1 · lock 快捷键守卫**（App.vue）：`useEventListener('keydown')` 顶部加 `if (project.isLocked)` 守卫；Delete/Backspace、Ctrl+Z/Y、ArrowKeys 全拒 + `e.preventDefault()`；zoom/select/locale/theme/Cmd+A 等非编辑快捷键不受影响。
+
+**Bug 2 · purgeStaleStrokes 定时调用**：
+- `EditSession.purgeStaleStrokes` private → public synchronized
+- `SessionManager.purgeAllStaleStrokes`：遍历所有 session 调 purge
+- `SessionReaper.sweep`：每次 sweep 顶部触发（30s 周期，已有 tick）
+- 新增 `EditSessionBrushPurgeTest` 4 case + EditSession 加 `activeStrokeCountForTest` / `overrideStrokeActivityForTest` 测试 hook（package-private）
+
+**Bug 3 · BrushController.tryEnd abort 标志**：
+- 新加 `aborted: boolean` 字段
+- tryEnd 超 2s 未拿 strokeId → 设 `aborted = true` 再 cleanup
+- pointerDown sendWithAck.then 检测 aborted；ack 真到达时主动 `ws.send('brush.cancel', { strokeId })` 通知服务端
+
+### 文档批量重写（subagent 并行执行 6 处）
+
+- **PROPOSAL.md** 命令清单删 publish/unpublish + 加 lock-state 段说明
+- **docs/architecture.md §6** 旧 publish ASCII 流程图整体替换为 wall.lock owner-only 新图
+- **docs/architecture.md 状态机表** `ACTIVE→publish` 改为 `ACTIVE→lock`
+- **docs/data-model.md** walls schema 列注释 + 语义段重写
+- **docs/data-model.md** PDC 表 published_at 标"2026-05-14 不再写入"
+- **docs/security.md** 删 canvas.publish 权限节点 + wall.publish 检查表 + 加 owner-only 说明
+
+### 测试盲点未补全
+
+| 项 | 状态 | 原因 |
+|---|---|---|
+| brush purgeStaleStrokes | ✅ 已补 4 case | EditSession 加 testing hook 后纯函数易测 |
+| wall.lock owner-only | ⏸ Future | WebServer 端到端 mock 工作量 vs 1 行 .equals 投入产出比低 |
+| FrameDeployer 邻接 frame regression | ⏸ Future | 需 MockBukkit world / Entity 设施 |
+| 前端 scalePathD 单测 | ⏸ Future | 项目无前端测试 framework（vitest 未引入）；M13 后引入 |
+
+### 验证
+
+- `./gradlew :plugin:test`：**312 测试全过**（M12 commit 308 → +4 EditSessionBrushPurgeTest）
+- `vite build`：**453.57 KB JS** / 39.37 KB CSS（+0.27 KB 守卫 + abort 字段）
+- 现有 12 fixture baseline 不漂移
+
+### 工期
+
+约 1.5 小时（审查 3 agent ~15min + Bug 1/2/3 修复 ~30min + purge 测试 ~15min + 文档 subagent ~15min + journal & commit ~15min）。
+
+---
+
 ## 2026-05-14 · 三 Bug 修复 + published 概念整体重设计为 lock-state
 
 用户反馈三个问题，全部修完。

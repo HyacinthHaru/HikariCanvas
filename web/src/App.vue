@@ -63,6 +63,21 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     const selectedId = ui.selectedElementId;
     const ctrl = e.ctrlKey || e.metaKey;
 
+    // 2026-05-14 lock-state 守卫：locked wall 时拒所有编辑型快捷键（删除 / undo / redo / 微移）；
+    // zoom / select / theme / locale / Cmd+A 等非编辑快捷键不受影响。
+    // 这是 lock-state 的核心：readonly overlay 挡住 stage 鼠标，但快捷键直接走 window 必须独立守卫。
+    if (project.isLocked) {
+        const isEditKey =
+            e.key === 'Delete' ||
+            e.key === 'Backspace' ||
+            (ctrl && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) ||
+            ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key);
+        if (isEditKey) {
+            e.preventDefault();
+            return;
+        }
+    }
+
     if (e.key === 'Delete' || e.key === 'Backspace') {
         // M8-F：多选批量删
         if (ui.selectedCount > 1) {

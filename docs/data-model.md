@@ -93,7 +93,7 @@ CREATE TABLE walls (
   owner_uuid    TEXT NOT NULL,             -- 创建者
   owner_name    TEXT NOT NULL,             -- 冗余，避免玩家改名后查不到
   alias         TEXT,                      -- 玩家命名，nullable，唯一
-  published_at  INTEGER,                   -- nullable timestamp；NULL=草稿，非 NULL=已发布
+  published_at  INTEGER,                   -- nullable timestamp；NULL=可编辑，非 NULL=已锁定（lock 时间戳，2026-05-14 起语义化）
   template_id   TEXT,                      -- M6 模板系统填，源模板 ID
   template_version INTEGER,                -- M6 当时模板版本
   created_at    INTEGER NOT NULL,
@@ -112,10 +112,12 @@ CREATE INDEX idx_walls_updated     ON walls(updated_at DESC);
 - `(world, origin, facing)`：一墙一画
 - `alias`（非 NULL 时）：玩家命名不允许重复
 
-**published_at 语义（关键）：**
-- NULL → 「草稿」状态。命令 `/canvas list` 在"编辑中"分组显示
-- 非 NULL → 「已发布」状态。`/canvas list` 在"已发布"分组；ItemFrame PDC 同步写 `published_at`，M7 polish 加 break/拆框拦截
-- 这个字段**不影响**任何渲染、map pool、ItemFrame 视觉行为；纯 UI 前置标签
+**published_at 语义（关键，2026-05-14 lock-state 重设计）：**
+- NULL → wall 处于"可编辑"状态，任意 canvas.edit 玩家可 `/canvas open` 进入编辑器
+- 非 NULL → wall 处于"已锁定（只读）"状态，时间戳 = 锁定那一刻的 ms epoch；前端 readonly UI 拦截编辑控件 + 快捷键
+- 列名保留 `published_at` 是为避免 SQL 迁移；代码层应用方读它时按 "lockedAt" 语义理解
+- 锁/解锁由前端 TopBar Lock 按钮触发 `wall.lock` / `wall.unlock` WS op（owner-only：caller UUID == walls.owner_uuid）
+- **后端编辑 op 不读 lock 状态**——element.* / canvas.* / layer.* 仍可在锁定的 wall 上执行（动态展示用例必需）；lock 是纯 UX 层概念
 
 **删除语义：** `/canvas delete <wall_id>` 第一次只显示"30s 内输入 `/canvas delete <wall_id> confirm` 才真删"；二次确认后**直接 DELETE 行**（不软删），同时拆 ItemFrame + 释放 map 回 FREE。无软删 / `deleted_at` 字段（用户操作明确）。
 
@@ -234,7 +236,7 @@ CREATE INDEX idx_usage_global ON template_usage(last_used_at DESC);
 | --- | --- | --- |
 | `wall_id` | STRING | 所属 wall（核心 key，M5.5 起替代旧的 `session_id` / `sign_id`） |
 | `slot` | INT | 在 wall 矩阵内的位置序号（row * width + col） |
-| `published_at` | LONG | 仅 publish 后写；nullable；M7 polish 用于 break/拆框拦截 |
+| `published_at` | LONG | **2026-05-14 不再写入**；FrameDeployer.markPublished + FrameProtectionListener "已发布拦截" 都砍；现存 PDC 数据保留无害但不被读 |
 
 #### 对 Map Item 的 PDC
 

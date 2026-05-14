@@ -419,6 +419,18 @@ public final class SessionManager {
         return byId.size();
     }
 
+    /**
+     * 2026-05-14：对所有活跃 session 的 {@link moe.hikari.canvas.state.EditSession#purgeStaleStrokes}
+     * 一并调用。由 {@link SessionReaper} 周期触发——确保用户永久离开后服务端
+     * 不会积压 stroke buffer 内存（M12 brush 引入的潜在泄漏）。
+     */
+    public synchronized void purgeAllStaleStrokes() {
+        for (Session s : byId.values()) {
+            moe.hikari.canvas.state.EditSession es = s.editSession();
+            if (es != null) es.purgeStaleStrokes();
+        }
+    }
+
     // ---------- 超时扫描（M3-T2 Reaper 用） ----------
 
     /**

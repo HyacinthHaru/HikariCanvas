@@ -102,15 +102,16 @@ Minecraft 城市建筑、主题服务器中，文字招牌是高频需求：商�
 - `/canvas wand` — 单独发放 Canvas Wand（幂等，已有不重发）
 - `/canvas confirm` — 确认当前选区：**新建 wall（挂物品框 + 借池）或打开现有 wall（bind + 不挂框）+ 签发 URL**
 - `/canvas open <wall_id\|alias>` — 直接打开已有画继续编辑（不需要先选区）
-- `/canvas list` — 列出我的画（按"编辑中 / 已发布"分组）
-- `/canvas publish` / `/canvas unpublish` — 标记当前 session 的画为已发布/草稿
+- `/canvas list` — 列出我的画（按"编辑中 / 已锁定"分组）
 - `/canvas alias <name>` — 给当前 session 的画起别名
 - `/canvas delete <wall_id> [confirm]` — 删除画（首次提示要 30s 内重复带 confirm）
 - `/canvas cancel` — 撤销 selection 或终止活跃会话（**不删画**）
 - `/canvas cleanup` — 管理员清理孤立 ItemFrame / walls 行
 - `/canvas stats` / `/canvas audit` — 管理员查看池状态与审计
 
-> M5.5 起 `/canvas commit` 命令彻底废止；保存通过 op auto-save 实现，"发布"是纯 UI 标签。
+> M5.5 起 `/canvas commit` 命令彻底废止；保存通过 op auto-save 实现。
+>
+> **锁定/解锁**：2026-05-14 lock-state 重设计起，"published"概念整体砍除；wall 的只读冻结由前端 TopBar 的 Lock 按钮触发 WS op `wall.lock` / `wall.unlock`（owner-only：caller UUID 必须 == wall.owner_uuid）；前端 readonly UI 是 lock 唯一执行者，后端编辑 op 路径与 lock 完全解耦（动态展示用例必需）。
 
 Placeholder 地图样式：**浅灰底 + 顶部 "HikariCanvas" 水印 + 底部方位坐标文字**（M2 使用预烘焙位图 ASCII 字表；中文字体待 M4 渲染引擎接入后再回填）。
 

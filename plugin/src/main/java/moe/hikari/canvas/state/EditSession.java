@@ -1420,10 +1420,29 @@ public final class EditSession {
         return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
     }
 
-    /** 清理超过 {@link #STROKE_TIMEOUT_MS} 闲置的笔触 buffer（防客户端断线泄漏内存）。 */
-    private void purgeStaleStrokes() {
+    /**
+     * 清理超过 {@link #STROKE_TIMEOUT_MS} 闲置的笔触 buffer（防客户端断线泄漏内存）。
+     *
+     * <p>2026-05-14：从 private 提升为 public，便于 {@link moe.hikari.canvas.session.SessionReaper}
+     * 全局定时调用——之前只在 {@code brush.start} 内 purge，用户永久离开后 stroke buffer
+     * 永不清理（高优 bug 修复）。</p>
+     */
+    public synchronized void purgeStaleStrokes() {
         long cutoff = System.currentTimeMillis() - STROKE_TIMEOUT_MS;
         strokes.values().removeIf(b -> b.lastActivityMs < cutoff);
+    }
+
+    // ---------- 测试 hook（package-private，仅 test 包内访问）----------
+
+    /** 当前活跃 stroke 数。EditSessionBrushPurgeTest 用。 */
+    int activeStrokeCountForTest() {
+        return strokes.size();
+    }
+
+    /** 把某 stroke 的 lastActivityMs 强制设置为 ms。purgeStaleStrokes 回归测试用。 */
+    void overrideStrokeActivityForTest(String strokeId, long ms) {
+        StrokeBuffer b = strokes.get(strokeId);
+        if (b != null) b.lastActivityMs = ms;
     }
 
     private BrushStrokeElement applyBrushPatch(BrushStrokeElement orig, Map<String, Object> patch) {

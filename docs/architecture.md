@@ -154,19 +154,28 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 玩家 MC 客户端收到包 → 游戏内墙面像素更新
 ```
 
-**发布（标签层，非数据层）：**
+**锁定（前端 UX 层，非数据层）：**
 ```
-玩家 ─ /canvas publish ─▶ WallRepo.markPublished(wallId)
-                                  │
-                ┌─────────────────┼─────────────────┐
-                ▼                 ▼                 ▼
-           SQLite UPDATE     ItemFrame PDC      网页 UI
-           walls.published_at  写 published_at   首页归到 "已发布"
-           = now              （M7 加 break 拦截）   分组
-                  ▲
-                  │ 任何时刻可 unpublish 取消标签；wall 数据始终
-                  │ 单一存储，published 只是 nullable timestamp。
+玩家 A（owner） ─ TopBar Lock 按钮 ─▶ ws.send('wall.lock')
+                                              │
+                                              ▼
+                                      WebServer.handleWallOp
+                                              │
+                                  校验：caller.uuid == wall.owner_uuid
+                                              │
+                                              ▼
+                                  WallRepo.markPublished(wallId, now)
+                                  （DB 列名保留 published_at；语义为 lock 时间戳）
+                                              │
+                                              ▼
+                                  ack { lockedAt: now } 回前端
+                                              │
+                                              ▼
+                                  前端 readonly UI 生效
+                                  （CanvasView overlay + RightPanel 禁用 + 快捷键守卫）
 ```
+
+2026-05-14 lock-state 重设计：DB 列 walls.published_at 保留原列名（避 SQL 迁移），语义改为 lock 时间戳；non-owner 调用 wall.lock/unlock 返 FORBIDDEN。ItemFrame PDC 不再写 published_at（FrameDeployer.markPublished 已砍）；M7 引入的"已发布拦截"已砍，所有 wall ItemFrame 由 canvas.modify 权限统一保护。
 
 **删除（仅此操作真正移除 wall）：**
 ```
@@ -257,7 +266,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
                               └───────────┘
 ```
 
-> 「ACTIVE → CLOSING(commit)」分支已彻底废止。`/canvas publish` 不改变 session 状态（它是 wall 元数据的一次 UPDATE，玩家继续在 ACTIVE 中编辑）。
+> 「ACTIVE → CLOSING(commit)」分支已彻底废止。`wall.lock` / `wall.unlock` WS op 不改变 session 状态（它是 wall 元数据的一次 UPDATE，玩家继续在 ACTIVE 中编辑；前端 readonly UI 是 lock 唯一执行者）。
 
 ### 3.2 状态转移动作
 
@@ -271,7 +280,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 | `CLOSED → ACTIVE` | `/canvas open <id>` 或 wand 二次点击已有 ItemFrame：直接 bind 已有 wall + 签发 Token + 跳过物品框部署 |
 | `ISSUED → ACTIVE` | WS 握手成功，Token 标记为已使用 |
 | `ISSUED → EXPIRED` | Token 过期，**仅释放 session/wand**，walls 数据 + ItemFrames 保留（路径 A 新建场景留下"未连入的 wall"，玩家可后续 `/canvas open` 接管） |
-| `ACTIVE → ACTIVE (publish)` | `/canvas publish`：UPDATE walls.published_at；ItemFrame PDC 写 published 标签；session 状态不变 |
+| `ACTIVE → ACTIVE (lock)` | `wall.lock` WS op（owner-only）：UPDATE walls.published_at = now（语义为 lock 时间戳）；session 状态不变；前端 readonly UI 生效 |
 | `ACTIVE → CLOSING(cancel)` | `/canvas cancel`：仅释放 session/wand；wall 数据 + ItemFrames 保留 |
 | `ACTIVE → CLOSING(disconnect)` | WS 断开 5min 触发，等同 cancel |
 | `CLOSING → CLOSED` | session 清理完成（wall 表数据**不动**）|

@@ -253,7 +253,6 @@ validateToken(t):
 | `canvas.use` | op=true, player=false | 使用任何功能（基础总开关） |
 | `canvas.edit` | 继承 `canvas.use` | 开启编辑会话（`/canvas edit` / 持 Wand 交互） |
 | `canvas.wand` | 继承 `canvas.edit` | 领取 Canvas Wand 物品 |
-| `canvas.publish` | 继承 `canvas.edit` | `/canvas publish` / `unpublish` 标签；可分离支持"能编辑不能发布"（M5.5 起替代废止的 `canvas.commit`） |
 | `canvas.template.use.*` | 继承 `canvas.edit` | 使用特定模板，如 `canvas.template.use.subway_station` |
 | `canvas.template.all` | true 等价所有子节点 | |
 | `canvas.import` | false | 导入 `.canvas` 工程 |
@@ -267,6 +266,8 @@ validateToken(t):
 
 Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
+> **lock/unlock op 权限（2026-05-14）**：`wall.lock` / `wall.unlock` 不走权限节点，由 owner-only 校验代替——后端直接对比 caller.uuid == wall.owner_uuid，非 owner 拒 FORBIDDEN。无权限节点。
+
 ---
 
 ## 6. 权限校验检查点
@@ -278,7 +279,6 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 | `/canvas confirm` | `canvas.edit`（同开启会话的权限） |
 | WS auth 成功 | 再次校验 `canvas.edit`（防权限中途撤销） |
 | `template.apply` | `canvas.template.use.<id>` 或 `canvas.template.all` |
-| `wall.publish` / `wall.unpublish` | `canvas.publish` |
 | `/canvas delete <wall_id>` | wall owner == 自己 且 `canvas.delete.own` / 或 `canvas.delete.any`；二次确认强制 30s |
 | 管理员命令 | `canvas.admin` |
 | 超出画布 `max-maps` | 需 `canvas.admin.bypass-limit` |
