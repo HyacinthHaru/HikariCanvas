@@ -2,7 +2,7 @@ import type { ProjectState, Element, Layer, RectElement, TextElement, IconElemen
 import { layoutText, canonicalCharWidth, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 import { applyBlendModeOver } from './BlendModes';
 import { parsePathD } from './PathParser';
-import { arrowSize, dotRadius, drawArrow, drawDot } from './MarkerRenderer';
+import { arrowSize, arrowShape, dotRadius, drawArrow, drawDot } from './MarkerRenderer';
 import { fillToCanvasStyle } from './fill';
 import { applyBayerDither } from './BayerDither';
 import { getPaletteLut, type PaletteLut } from './PaletteLut';
@@ -276,7 +276,19 @@ function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
         ctx.lineWidth = strokeWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.stroke(parsed.path);
+
+        // 2026-05-15 修箭头 Bug：arrow apex 处宽 0，粗 stroke 会从 arrow 锥尖戳出。
+        // 在描边前 clip 一个反相形状（大矩形外圈 + arrow 三角形作"洞"，evenodd 填充规则），
+        // 让 stroke 不画进 arrow 内部，arrow 自己 fill 覆盖。
+        const subtractClip = buildArrowSubtractClip(parsed, p, strokeWidth);
+        if (subtractClip) {
+            ctx.save();
+            ctx.clip(subtractClip, 'evenodd');
+            ctx.stroke(parsed.path);
+            ctx.restore();
+        } else {
+            ctx.stroke(parsed.path);
+        }
     }
 
     if (parsed.hasSegments && strokeColor) {
@@ -310,6 +322,40 @@ function drawPathMarker(
     } else if (type === 'dot') {
         drawDot(ctx, x, y, dotRadius(strokeWidth), color);
     }
+}
+
+/**
+ * 构造「整 element bbox 减去 arrow 三角形」的反相 clip 形状。返回 null = 无 arrow，
+ * 调用方走原描边路径。坐标系：调用时 ctx 已 translate(p.x, p.y)，所有几何用本地坐标。
+ */
+function buildArrowSubtractClip(
+    parsed: ReturnType<typeof parsePathD>,
+    p: PathElement,
+    strokeWidth: number,
+): Path2D | null {
+    const hasEndArrow = p.markerEnd === 'arrow';
+    const hasStartArrow = p.markerStart === 'arrow';
+    if (!hasEndArrow && !hasStartArrow) return null;
+    if (!parsed.hasSegments) return null;
+
+    const size = arrowSize(strokeWidth);
+    const clip = new Path2D();
+    // 外圈：大矩形（含 strokeWidth padding 防 AA gap）。坐标原点已 translate 到 p.(x,y)，
+    // 所以本地坐标 0..p.w/p.h；padding 取 strokeWidth + size 足够外延。
+    const pad = strokeWidth + size + 16;
+    clip.rect(-pad, -pad, p.w + 2 * pad, p.h + 2 * pad);
+
+    if (hasEndArrow) {
+        const tri = arrowShape(parsed.endX, parsed.endY,
+            parsed.endTangentX, parsed.endTangentY, size);
+        if (tri) clip.addPath(tri);
+    }
+    if (hasStartArrow) {
+        const tri = arrowShape(parsed.startX, parsed.startY,
+            -parsed.startTangentX, -parsed.startTangentY, size);
+        if (tri) clip.addPath(tri);
+    }
+    return clip;
 }
 
 /** 与后端 CanvasCompositor.drawCircle 镜像：bbox 推 cx/cy/rx/ry → ctx.ellipse。 */

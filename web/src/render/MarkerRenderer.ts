@@ -14,6 +14,32 @@ export function dotRadius(strokeWidth: number): number {
 }
 
 /**
+ * 构造 arrow 三角形几何（不绘制）。drawArrow 内部用，也供 PreviewRenderer 在描边前
+ * 从 stroke clip 中扣除（2026-05-15 修 Bug：粗 stroke 突破 arrow 锥尖）。
+ */
+export function arrowShape(
+    apexX: number, apexY: number,
+    dirX: number, dirY: number,
+    size: number,
+): Path2D | null {
+    const len = Math.hypot(dirX, dirY);
+    if (len < 1e-9) return null;
+    const dx = dirX / len;
+    const dy = dirY / len;
+    const bcx = apexX - dx * size;
+    const bcy = apexY - dy * size;
+    const px = -dy;
+    const py = dx;
+    const halfBase = size * 0.5;
+    const path = new Path2D();
+    path.moveTo(apexX, apexY);
+    path.lineTo(bcx + px * halfBase, bcy + py * halfBase);
+    path.lineTo(bcx - px * halfBase, bcy - py * halfBase);
+    path.closePath();
+    return path;
+}
+
+/**
  * 在 (apexX, apexY) 画实心三角形 arrow，朝 (dirX, dirY) 方向。
  * dirX/dirY 不必预先归一化（内部归一化）。
  */
@@ -23,24 +49,11 @@ export function drawArrow(
     dirX: number, dirY: number,
     size: number, color: string,
 ): void {
-    const len = Math.hypot(dirX, dirY);
-    if (len < 1e-9) return;
-    const dx = dirX / len;
-    const dy = dirY / len;
-    const bcx = apexX - dx * size;
-    const bcy = apexY - dy * size;
-    const px = -dy;
-    const py = dx;
-    const halfBase = size * 0.5;
-
+    const path = arrowShape(apexX, apexY, dirX, dirY, size);
+    if (!path) return;
     const prevFill = ctx.fillStyle;
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(apexX, apexY);
-    ctx.lineTo(bcx + px * halfBase, bcy + py * halfBase);
-    ctx.lineTo(bcx - px * halfBase, bcy - py * halfBase);
-    ctx.closePath();
-    ctx.fill();
+    ctx.fill(path);
     ctx.fillStyle = prevFill;
 }
 

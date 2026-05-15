@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-05-15 · fix(render)：粗 stroke 从 arrow 锥尖突破的视觉 Bug
+
+**用户报告**：箭头工具画的「直线 + 方向箭头」组合，当 stroke 调粗后，直线从 arrow 三角形锥尖戳出来，看起来"直线大过方向箭头本身"。
+
+### 根因
+
+`MarkerRenderer.drawArrow` 三角形：apex 在 path 端点 + base 朝 inward 退 size 距离。三角形在 apex 处宽度 = 0，沿 inward 方向线性增加到 base 处 = size 宽。
+
+`CanvasCompositor.drawPath` / `PreviewRenderer.drawPath` 用 `BasicStroke(width, ROUND, ROUND)` / `ctx.lineCap='round'` 描边整条 path 到 apex。Stroke 中段宽度恒等于 `strokeWidth`。
+
+**视觉冲突**：从 arrow apex 朝 base 走 distance d，arrow 宽 = `size × d / size = d`。当 `d < strokeWidth` 时 arrow 锥尖宽 < stroke → stroke 矩形（2 × `strokeWidth/2` = `strokeWidth` 宽）从 arrow 锥尖区域向外凸出。
+
+实测：`stroke=10`，`arrowSize=30`，arrow tip 朝 base 走 10px 内 arrow 宽 0..10 < stroke 10 → 直线从箭头尖端"戳出"~10×10 px 一小段。stroke 越粗这一段越大，肉眼上去就是「直线大过方向箭头」。
+
+### 修复
+
+`MarkerRenderer.arrowShape(apex, dir, size)` 抽出几何构造（不绘制），供 `drawArrow` 与 `drawPath` 共用。
+
+`CanvasCompositor.drawPath` 描边前：用 `Area(baseClip).subtract(arrowShape)` 把 arrow 三角形从 stroke clip 中扣掉。stroke 只画在 arrow **外**，arrow 自己 fill 覆盖。
+
+`PreviewRenderer.drawPath` 镜像：用 `Path2D` 外圈大矩形 + addPath(arrowShape) + `ctx.clip(path, 'evenodd')` 反相填充规则（同 M13 mask inverted 模式）。
+
+两端皆 `markerStart='arrow'` / `markerEnd='arrow'` 通用；`dot` marker 不参与（圆形 marker 在端点重叠时不会"突破"，stroke 完全在 dot 圆内）。
+
+### 验证
+
+- `./gradlew :plugin:test`：364 case 全过；06-path-line fixture baseline 不漂移（旧 fixture stroke=2 时 arrow tip 突破区域 < 2px²，落在 snapshot 0.5% pixel tolerance 内）
+- `vite build`：465.74 KB JS（+0.5 KB）；TypeScript 类型 OK
+- 真实游戏内 stroke=10 / 20 验证需 `runServer` 实测，预期 arrow tip 处线条不再突破三角形边界
+
+### 改动文件
+
+- `plugin/.../render/MarkerRenderer.java`（抽 `arrowShape` 静态构造）
+- `plugin/.../render/CanvasCompositor.java`（`buildArrowSubtractedClip` + `drawPath` 描边前 setClip）
+- `web/src/render/MarkerRenderer.ts`（镜像 `arrowShape` 导出）
+- `web/src/render/PreviewRenderer.ts`（`buildArrowSubtractClip` + ctx.clip evenodd）
+
+### 工期
+
+约 20 分钟（定位 + 双端镜像 + 验证 + journal）。
+
+---
+
 ## 2026-05-15 · fix(deploy)：confirm 多 slot wall 只生成 1 frame 的恶性 bug
 
 **用户报告**：`/canvas wand` 圈选 6×1 → `/canvas confirm` 后只生成 1 个 ItemFrame（其他 5 个位置连 frame 都没有），前端刷新一致。

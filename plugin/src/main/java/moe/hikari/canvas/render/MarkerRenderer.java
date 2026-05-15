@@ -34,20 +34,19 @@ public final class MarkerRenderer {
     }
 
     /**
-     * 在 (apexX, apexY) 画一个朝 (dirX, dirY) 方向的实心三角形 arrow。
-     * 调用方应预先 setColor；本方法只用 {@link Graphics2D#fill}。
+     * 构造 arrow 三角形几何（不绘制）。供 {@link #drawArrow} 用，也供 CanvasCompositor 在
+     * 描边前从 stroke clip 中 subtract，避免「粗 stroke 在 arrow 锥尖处突破 arrow 边界」
+     * （2026-05-15 修 Bug）。
      */
-    public static void drawArrow(Graphics2D g, double apexX, double apexY,
-                                 double dirX, double dirY, int size, Color color) {
-        // 归一化 dir（容错调用方传非单位向量）
+    public static Path2D.Double arrowShape(double apexX, double apexY,
+                                           double dirX, double dirY, int size) {
+        Path2D.Double tri = new Path2D.Double();
         double len = Math.hypot(dirX, dirY);
-        if (len < 1e-9) return;  // 无方向：跳过
+        if (len < 1e-9) return tri;
         double dx = dirX / len;
         double dy = dirY / len;
-        // base center 在 apex 朝 dir 反方向退 size
         double bcx = apexX - dx * size;
         double bcy = apexY - dy * size;
-        // 垂直方向
         double px = -dy;
         double py = dx;
         double halfBase = size * 0.5;
@@ -55,13 +54,21 @@ public final class MarkerRenderer {
         double leftY = bcy + py * halfBase;
         double rightX = bcx - px * halfBase;
         double rightY = bcy - py * halfBase;
-
-        Path2D.Double tri = new Path2D.Double();
         tri.moveTo(apexX, apexY);
         tri.lineTo(leftX, leftY);
         tri.lineTo(rightX, rightY);
         tri.closePath();
+        return tri;
+    }
 
+    /**
+     * 在 (apexX, apexY) 画一个朝 (dirX, dirY) 方向的实心三角形 arrow。
+     * 调用方应预先 setColor；本方法只用 {@link Graphics2D#fill}。
+     */
+    public static void drawArrow(Graphics2D g, double apexX, double apexY,
+                                 double dirX, double dirY, int size, Color color) {
+        if (Math.hypot(dirX, dirY) < 1e-9) return;
+        Path2D.Double tri = arrowShape(apexX, apexY, dirX, dirY, size);
         Color prev = g.getColor();
         g.setColor(color);
         g.fill(tri);

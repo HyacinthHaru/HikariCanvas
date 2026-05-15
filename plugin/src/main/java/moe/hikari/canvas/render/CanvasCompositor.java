@@ -528,7 +528,20 @@ public final class CanvasCompositor {
             g.setColor(strokeColor);
             java.awt.Stroke prevStroke = g.getStroke();
             g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+
+            // 2026-05-15 修箭头 Bug：arrow marker 在 apex 处宽度 = 0（三角形收尖），
+            // stroke 直线宽 strokeWidth。Visual：arrow tip 附近 distance < strokeWidth/3 范围内
+            // arrow 比 stroke 窄 → stroke 矩形从 arrow 锥尖处突出。修法：把 arrow 内部从
+            // 描边 clip 中扣掉，让 stroke 不画进 arrow 三角形，arrow 自己 fill 覆盖。
+            Shape savedClip = g.getClip();
+            Shape strokeClip = buildArrowSubtractedClip(savedClip, parsed, p, strokeWidth);
+            if (strokeClip != null) {
+                g.setClip(strokeClip);
+            }
             g.draw(parsed.path());
+            if (strokeClip != null) {
+                g.setClip(savedClip);
+            }
             g.setStroke(prevStroke);
         }
 
@@ -550,6 +563,35 @@ public final class CanvasCompositor {
         }
 
         g.setTransform(savedTx);
+    }
+
+    /**
+     * 若 path 有 arrow marker，把 arrow 三角形从 stroke clip 中扣掉。返回 null = 无 arrow，
+     * 调用方不用改 clip。dot marker 不参与（圆形 marker 与直线在端点重叠不会"突破"）。
+     */
+    private static Shape buildArrowSubtractedClip(Shape baseClip,
+                                                  PathParser.Result parsed,
+                                                  PathElement p, int strokeWidth) {
+        boolean hasEndArrow = "arrow".equals(p.markerEnd());
+        boolean hasStartArrow = "arrow".equals(p.markerStart());
+        if (!hasEndArrow && !hasStartArrow) return null;
+        if (!parsed.hasSegments()) return null;
+
+        int arrowSize = MarkerRenderer.arrowSize(strokeWidth);
+        Area subtractClip = baseClip == null
+                ? new Area(new java.awt.geom.Rectangle2D.Double(-1e6, -1e6, 2e6, 2e6))
+                : new Area(baseClip);
+        if (hasEndArrow) {
+            subtractClip.subtract(new Area(MarkerRenderer.arrowShape(
+                    parsed.endX(), parsed.endY(),
+                    parsed.endTangentX(), parsed.endTangentY(), arrowSize)));
+        }
+        if (hasStartArrow) {
+            subtractClip.subtract(new Area(MarkerRenderer.arrowShape(
+                    parsed.startX(), parsed.startY(),
+                    -parsed.startTangentX(), -parsed.startTangentY(), arrowSize)));
+        }
+        return subtractClip;
     }
 
     private static void drawMarker(Graphics2D g, String type, double x, double y,
