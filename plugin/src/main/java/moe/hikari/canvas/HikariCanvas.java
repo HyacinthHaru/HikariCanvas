@@ -25,11 +25,14 @@ import moe.hikari.canvas.session.WandListener;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.ImageUploadDao;
+import moe.hikari.canvas.storage.TemplateRepo;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.storage.MigrationRunner;
 import moe.hikari.canvas.image.ImageQuotaService;
 import moe.hikari.canvas.image.ImageStorage;
 import moe.hikari.canvas.image.UploadHandler;
+import moe.hikari.canvas.template.TemplateLoader;
+import moe.hikari.canvas.template.TemplatePublisher;
 import moe.hikari.canvas.template.TemplateRegistry;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.preview.TemplatePreviewService;
@@ -77,6 +80,8 @@ public final class HikariCanvas extends JavaPlugin {
     private WallPreviewService wallPreviewService;
     private ImageStorage imageStorage;
     private UploadHandler uploadHandler;
+    private TemplateRepo templateRepo;
+    private TemplatePublisher templatePublisher;
     private volatile HikariCanvasConfig config;
 
     @Override
@@ -176,13 +181,23 @@ public final class HikariCanvas extends JavaPlugin {
             getLogger().log(java.util.logging.Level.WARNING, "WallRestorer failed (non-fatal)", e);
         }
 
-        // M6-A：模板注册表。jar 内 /templates/*.yml + plugins/HikariCanvas/templates/
+        // M6-A：模板注册表。jar 内 /templates/*.yml + plugins/HikariCanvas/templates/ +
+        // M14 user-templates/<uuid>/*.yml（创意工坊）
         templateRegistry = new TemplateRegistry(
                 getLogger(), HikariCanvas.class,
-                getDataFolder().toPath().resolve("templates"));
+                getDataFolder().toPath().resolve("templates"),
+                getDataFolder().toPath().resolve("user-templates"));
         if (config.autoReloadTemplatesOnStartup) {
             templateRegistry.reload();
         }
+        // M14：模板元数据 DAO + 创意工坊协调器
+        templateRepo = new TemplateRepo(getLogger(), database.jdbi());
+        TemplateLoader publisherYamlLoader = new TemplateLoader();
+        templatePublisher = new TemplatePublisher(getLogger(),
+                getDataFolder().toPath(),
+                publisherYamlLoader, templateRegistry, templateRepo,
+                compositor, config.templatesMaxPerPlayer);
+        templatePublisher.syncBuiltinToDb();
         // M7：模板缩略图服务。Registry reload 时调 invalidate() 清缓存
         templatePreviewService = new TemplatePreviewService(getLogger(), templateRegistry, compositor);
         wallPreviewService = new WallPreviewService(getLogger(), compositor);
@@ -228,7 +243,8 @@ public final class HikariCanvas extends JavaPlugin {
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
-                templateAssetService, wallPreviewService, uploadHandler, this,
+                templateAssetService, wallPreviewService, uploadHandler,
+                templatePublisher, templateRepo, this,
                 version, this::paintAllSessionMaps);
         webServer.start();
 

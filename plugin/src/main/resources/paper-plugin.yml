@@ -37,3 +37,18 @@ permissions:
   canvas.upload.bypass-limit:
     description: Bypass per-player / per-wall / total-disk image quota
     default: op
+  canvas.template.save:
+    description: Publish the current wall as a workshop template
+    default: true
+  canvas.template.delete.own:
+    description: Delete templates you authored
+    default: true
+  canvas.template.delete.any:
+    description: Delete any workshop template (moderation)
+    default: op
+  canvas.template.feature:
+    description: Mark / unmark templates as featured on the marketplace
+    default: op
+  canvas.template.bypass-limit:
+    description: Bypass per-player template publication count quota
+    default: op

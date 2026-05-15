@@ -46,19 +46,27 @@ public final class TemplateRegistry {
     /** 用于定位 jar 的"锚点类"——通常传 {@code HikariCanvas.class}。 */
     private final Class<?> anchorClass;
     private final Path serverTemplatesDir;
+    /** M14 创意工坊：玩家发布的模板根目录 {@code dataFolder/user-templates/<uuid>/*.yml}。 */
+    private final Path userTemplatesDir;
 
     /** {@code id → entry}。每次 reload 整体替换。读时取一次引用，避免拷贝。 */
     private volatile Map<String, TemplateEntry> entries = Collections.emptyMap();
 
     public TemplateRegistry(Logger log, Class<?> anchorClass, Path serverTemplatesDir) {
+        this(log, anchorClass, serverTemplatesDir, null);
+    }
+
+    public TemplateRegistry(Logger log, Class<?> anchorClass, Path serverTemplatesDir,
+                            Path userTemplatesDir) {
         this.log = log;
         this.loader = new TemplateLoader();
         this.anchorClass = anchorClass;
         this.serverTemplatesDir = serverTemplatesDir;
+        this.userTemplatesDir = userTemplatesDir;
     }
 
     /** 加载汇总。每次 reload 返回，用于命令输出 + log。 */
-    public record ReloadStats(int builtinLoaded, int serverLoaded, int overrides,
+    public record ReloadStats(int builtinLoaded, int serverLoaded, int userLoaded, int overrides,
                               int failed, List<String> failures) {
     }
 
@@ -84,21 +92,26 @@ public final class TemplateRegistry {
         java.util.List<String> failures = new java.util.ArrayList<>();
         int[] builtinLoaded = {0};
         int[] serverLoaded = {0};
+        int[] userLoaded = {0};
         int[] overrides = {0};
 
         // 1) 内置：jar 内 /templates/*.yml
         loadBuiltin(next, builtinLoaded, failures);
 
-        // 2) 服务器：dataFolder/templates/*.yml（同 id 覆盖）
+        // 2) 服务器：dataFolder/templates/*.yml（同 id 覆盖 builtin）
         loadServer(next, serverLoaded, overrides, failures);
 
-        // 3) atomic swap
+        // 3) M14 玩家发布：dataFolder/user-templates/<uuid>/*.yml（同 id 跳过；不覆盖 builtin/server）
+        loadUser(next, userLoaded, failures);
+
+        // 4) atomic swap
         this.entries = Collections.unmodifiableMap(next);
 
-        ReloadStats stats = new ReloadStats(builtinLoaded[0], serverLoaded[0],
+        ReloadStats stats = new ReloadStats(builtinLoaded[0], serverLoaded[0], userLoaded[0],
                 overrides[0], failures.size(), failures);
         log.info("Templates reloaded: builtin=" + stats.builtinLoaded()
                 + " server=" + stats.serverLoaded()
+                + " user=" + stats.userLoaded()
                 + " overrides=" + stats.overrides()
                 + " failed=" + stats.failed());
         return stats;
@@ -265,6 +278,67 @@ public final class TemplateRegistry {
             }
         } catch (IOException e) {
             log.log(Level.WARNING, "Templates: list failed " + serverTemplatesDir, e);
+        }
+    }
+
+    // ---------------- user (plugins/HikariCanvas/user-templates/<uuid>/) ----------------
+
+    /**
+     * M14 创意工坊：递归扫 {@code user-templates/<uuid>/*.yml}。同 id 已存在 → 跳过（不覆盖
+     * builtin / server）。容错：单 uuid 子目录失败不影响其他。
+     */
+    private void loadUser(Map<String, TemplateEntry> out, int[] counter,
+                          java.util.List<String> failures) {
+        if (userTemplatesDir == null) return;
+        try {
+            Files.createDirectories(userTemplatesDir);
+        } catch (IOException e) {
+            log.log(Level.WARNING, "Templates: cannot create " + userTemplatesDir, e);
+            return;
+        }
+        try (Stream<Path> uuidDirs = Files.list(userTemplatesDir)) {
+            List<Path> dirs = uuidDirs.filter(Files::isDirectory).sorted().toList();
+            for (Path uuidDir : dirs) {
+                loadUserUuidDir(uuidDir, out, counter, failures);
+            }
+        } catch (IOException e) {
+            log.log(Level.WARNING, "Templates: list user-templates failed", e);
+        }
+    }
+
+    private void loadUserUuidDir(Path uuidDir, Map<String, TemplateEntry> out,
+                                  int[] counter, java.util.List<String> failures) {
+        try (Stream<Path> stream = Files.list(uuidDir)) {
+            List<Path> files = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> isTemplateFileName(p.getFileName().toString()))
+                    .sorted()
+                    .toList();
+            for (Path p : files) {
+                String label = "user:" + uuidDir.getFileName() + "/" + p.getFileName();
+                try (InputStream in = Files.newInputStream(p)) {
+                    TemplateLoader.Result result = loader.load(in);
+                    if (result instanceof TemplateLoader.Result.Ok ok) {
+                        String id = ok.spec().id();
+                        if (out.containsKey(id)) {
+                            failures.add(label + ": duplicate id '" + id
+                                    + "' (already loaded from " + out.get(id).sourceLabel() + ")");
+                            log.warning(label + ": duplicate id '" + id + "', skipped");
+                            continue;
+                        }
+                        out.put(id, new TemplateEntry(ok.spec(), TemplateSource.USER, label));
+                        counter[0]++;
+                    } else if (result instanceof TemplateLoader.Result.Failed f) {
+                        failures.add(label + ": " + f.reason() + " — " + f.detail());
+                        log.warning("Template '" + label + "' rejected: " + f.reason() + " — " + f.detail());
+                    }
+                } catch (IOException e) {
+                    failures.add(label + ": " + e.getMessage());
+                    log.log(Level.WARNING, "Templates: read failed " + label, e);
+                }
+            }
+        } catch (IOException e) {
+            log.log(Level.WARNING, "Templates: list user uuid dir failed " + uuidDir, e);
         }
     }
 

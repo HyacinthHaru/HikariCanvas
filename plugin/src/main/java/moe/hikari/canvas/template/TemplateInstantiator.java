@@ -77,6 +77,9 @@ public final class TemplateInstantiator {
         if (spec == null) {
             return new Result.Failed("INVALID_TEMPLATE", List.of("spec is null"));
         }
+        if (spec.isRawStateMode()) {
+            return instantiateRawState(spec, userInput, wallWidthMaps, wallHeightMaps);
+        }
 
         List<String> errors = new ArrayList<>();
 
@@ -108,6 +111,138 @@ public final class TemplateInstantiator {
         }
 
         return new Result.Ok(wallWidthMaps, wallHeightMaps, bg, elements, params);
+    }
+
+    // ==================== M14 raw state 模式 ====================
+
+    /**
+     * 创意工坊模板（{@link TemplateSpec#rawState} 非空）的实例化路径。
+     *
+     * <p>流程：参数校验 → 深拷贝 rawState → 遍历 Map 把所有 String 字段中的
+     * {@code "${paramId}"} 替换为 params 实际值（text 类型直接 toString）→
+     * 用 Jackson 反序列化为 {@link moe.hikari.canvas.state.ProjectState} → 平铺 layers
+     * 内所有 element 为 List。</p>
+     *
+     * <p>{@code layers / canvas} 在 rawState 内自带，wallWidthMaps / wallHeightMaps 仅记入
+     * Result（不用于 fit/scale —— v1 raw 模式忽略目标 wall 尺寸差异，原样 apply）。</p>
+     */
+    @SuppressWarnings("unchecked")
+    private Result instantiateRawState(TemplateSpec spec, Map<String, Object> userInput,
+                                       int wallWidthMaps, int wallHeightMaps) {
+        List<String> errors = new ArrayList<>();
+        Map<String, Object> params = validateParams(spec.params(), userInput, errors);
+        if (!errors.isEmpty()) {
+            return new Result.Failed("INVALID_PARAM", errors);
+        }
+
+        // 深拷贝 rawState（避免污染 spec 单例）
+        Map<String, Object> raw = deepCopyMap(spec.rawState());
+
+        // 遍历替换字符串中的 ${paramId} 占位符
+        Object replaced = replacePlaceholders(raw, params);
+        if (!(replaced instanceof Map<?, ?> rawMap)) {
+            errors.add("rawState root must be object");
+            return new Result.Failed("INVALID_TEMPLATE", errors);
+        }
+
+        // Jackson 反序列化为 ProjectState
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        moe.hikari.canvas.state.ProjectState state;
+        try {
+            state = mapper.convertValue(rawMap, moe.hikari.canvas.state.ProjectState.class);
+        } catch (Exception e) {
+            errors.add("rawState deserialize: " + e.getMessage());
+            return new Result.Failed("INVALID_TEMPLATE", errors);
+        }
+
+        String bg = state.canvas().background();
+        List<Element> flat = new ArrayList<>();
+        for (var layer : state.layers()) {
+            for (Element el : layer.elements()) {
+                // 给 element 新 id，避免与目标 wall 现有 id 冲突
+                flat.add(cloneElementWithFreshId(el));
+            }
+        }
+        return new Result.Ok(wallWidthMaps, wallHeightMaps, bg, flat, params);
+    }
+
+    /** 把节点中所有 String 内的 "${paramId}" 替换为 params 对应值的 toString()。 */
+    @SuppressWarnings("unchecked")
+    private static Object replacePlaceholders(Object node, Map<String, Object> params) {
+        if (node instanceof Map<?, ?> m) {
+            Map<String, Object> map = (Map<String, Object>) m;
+            for (Map.Entry<String, Object> e : map.entrySet()) {
+                e.setValue(replacePlaceholders(e.getValue(), params));
+            }
+            return map;
+        }
+        if (node instanceof List<?> list) {
+            List<Object> rawList = (List<Object>) list;
+            for (int i = 0; i < rawList.size(); i++) {
+                rawList.set(i, replacePlaceholders(rawList.get(i), params));
+            }
+            return rawList;
+        }
+        if (node instanceof String s) {
+            return Interpolator.interpolate(s, params);
+        }
+        return node;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+        Map<String, Object> dst = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : src.entrySet()) {
+            dst.put(e.getKey(), deepCopyValue(e.getValue()));
+        }
+        return dst;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object deepCopyValue(Object v) {
+        if (v instanceof Map<?, ?> m) return deepCopyMap((Map<String, Object>) m);
+        if (v instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>(list.size());
+            for (Object item : list) copy.add(deepCopyValue(item));
+            return copy;
+        }
+        return v;
+    }
+
+    /** 给 element 一个新的 e-<uuid> id，避免 apply 时与 wall 中现有 element id 冲突。 */
+    private static Element cloneElementWithFreshId(Element el) {
+        String newId = "e-" + UUID.randomUUID();
+        return switch (el) {
+            case TextElement t -> new TextElement(newId, t.x(), t.y(), t.w(), t.h(),
+                    t.rotation(), t.locked(), t.visible(), t.text(), t.fontId(), t.fontSize(),
+                    t.color(), t.align(), t.letterSpacing(), t.lineHeight(), t.vertical(),
+                    t.effects(), t.opacity(), t.blendMode(), t.renderMode());
+            case RectElement r -> new RectElement(newId, r.x(), r.y(), r.w(), r.h(),
+                    r.rotation(), r.locked(), r.visible(), r.fill(), r.stroke(),
+                    r.opacity(), r.blendMode(), r.renderMode());
+            case IconElement ic -> new IconElement(newId, ic.x(), ic.y(), ic.w(), ic.h(),
+                    ic.rotation(), ic.locked(), ic.visible(), ic.source(), ic.tint(),
+                    ic.opacity(), ic.blendMode(), ic.renderMode());
+            case moe.hikari.canvas.state.PathElement p -> new moe.hikari.canvas.state.PathElement(newId,
+                    p.x(), p.y(), p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
+                    p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
+                    p.opacity(), p.blendMode(), p.renderMode());
+            case moe.hikari.canvas.state.CircleElement c -> new moe.hikari.canvas.state.CircleElement(newId,
+                    c.x(), c.y(), c.w(), c.h(), c.rotation(), c.locked(), c.visible(),
+                    c.fill(), c.stroke(), c.opacity(), c.blendMode(), c.renderMode());
+            case moe.hikari.canvas.state.ShapeElement sh -> new moe.hikari.canvas.state.ShapeElement(newId,
+                    sh.x(), sh.y(), sh.w(), sh.h(), sh.rotation(), sh.locked(), sh.visible(),
+                    sh.kind(), sh.sides(), sh.innerRatio(), sh.fill(), sh.stroke(),
+                    sh.opacity(), sh.blendMode(), sh.renderMode());
+            case moe.hikari.canvas.state.BrushStrokeElement b -> new moe.hikari.canvas.state.BrushStrokeElement(newId,
+                    b.x(), b.y(), b.w(), b.h(), b.rotation(), b.locked(), b.visible(),
+                    b.points(), b.size(), b.fill(), b.pressureSize(), b.pressureOpacity(),
+                    b.opacity(), b.blendMode(), b.renderMode());
+            case moe.hikari.canvas.state.ImageElement im -> new moe.hikari.canvas.state.ImageElement(newId,
+                    im.x(), im.y(), im.w(), im.h(), im.rotation(), im.locked(), im.visible(),
+                    im.source(), im.mask(), im.opacity(), im.blendMode(), im.renderMode());
+        };
     }
 
     // ==================== 1. 参数校验 ====================

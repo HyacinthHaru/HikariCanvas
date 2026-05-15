@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue';
-import { Lock, Pencil, MapPin, Clock, Tag, ImageOff, RefreshCw } from 'lucide-vue-next';
+import { Lock, Pencil, MapPin, Clock, Tag, ImageOff, RefreshCw, Sparkles, Star, User } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 
 interface WallSummary {
@@ -46,7 +46,45 @@ async function loadWalls(isManualRefresh = false) {
     }
 }
 
-onMounted(() => loadWalls(false));
+// ---------- M14 创意工坊：模板市场 ----------
+interface TemplateRow {
+    templateId: string;
+    ownerUuid: string | null;
+    ownerName: string | null;
+    displayName: string;
+    description: string | null;
+    builtin: boolean;
+    featured: boolean;
+    downloadCount: number;
+    createdAt: number;
+    updatedAt: number;
+}
+
+const templates = ref<TemplateRow[]>([]);
+const templatesLoading = ref(true);
+const templatesError = ref<string | null>(null);
+
+async function loadTemplates() {
+    try {
+        const r = await fetch('/api/templates');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        templates.value = await r.json();
+        templatesError.value = null;
+    } catch (e) {
+        templatesError.value = (e as Error).message;
+    } finally {
+        templatesLoading.value = false;
+    }
+}
+
+function templatePreview(t: TemplateRow): string {
+    return `/api/template/${encodeURIComponent(t.templateId)}/preview.png?t=${t.updatedAt}`;
+}
+
+onMounted(() => {
+    loadWalls(false);
+    loadTemplates();
+});
 
 function fmtTime(ts: number): string {
     const d = new Date(ts);
@@ -180,6 +218,61 @@ function previewUrl(w: WallSummary): string {
                   <span v-if="copiedId === w.wallId" class="text-emerald-500">{{ t.wall.copied }}</span>
                   <span v-else>/canvas open {{ w.wallId }}</span>
                 </code>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <!-- M14 创意工坊：模板市场（只读卡片网格；精选优先 + 时间倒序） -->
+        <section class="mt-10">
+          <header class="flex items-baseline gap-2 mb-3">
+            <Sparkles class="size-4 text-amber-500 translate-y-0.5" />
+            <h2 class="text-lg font-semibold">{{ t.workshop.marketplaceHeader }}</h2>
+            <span class="text-xs text-[color:var(--muted-foreground)]">
+              {{ t.workshop.marketplaceCount(templates.length) }}
+            </span>
+          </header>
+          <p v-if="templatesLoading" class="text-xs text-[color:var(--muted-foreground)]">
+            {{ t.workshop.loading }}
+          </p>
+          <p v-else-if="templatesError" class="text-xs text-red-500">
+            {{ t.workshop.loadFailed(templatesError) }}
+          </p>
+          <p v-else-if="templates.length === 0" class="text-xs text-[color:var(--muted-foreground)]">
+            {{ t.workshop.empty }}
+          </p>
+          <ul v-else class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            <li v-for="tpl in templates" :key="tpl.templateId"
+                class="bg-[color:var(--card)] border border-[color:var(--border)] rounded-lg overflow-hidden flex flex-col">
+              <div class="aspect-[4/3] bg-[color:var(--muted)] relative">
+                <img :src="templatePreview(tpl)" :alt="tpl.displayName"
+                     class="w-full h-full object-contain"
+                     loading="lazy"
+                     @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')" />
+                <span v-if="tpl.featured"
+                      class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-medium
+                             bg-amber-500/95 text-black inline-flex items-center gap-0.5">
+                  <Star class="size-2.5 fill-current" />
+                  {{ t.workshop.featuredBadge }}
+                </span>
+                <span v-if="tpl.builtin"
+                      class="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-medium
+                             bg-blue-500/90 text-white">
+                  {{ t.workshop.builtinBadge }}
+                </span>
+              </div>
+              <div class="p-2 flex-1 min-h-0 flex flex-col gap-0.5">
+                <div class="text-xs font-medium truncate" :title="tpl.displayName">{{ tpl.displayName }}</div>
+                <div v-if="tpl.description"
+                     class="text-[10px] text-[color:var(--muted-foreground)] line-clamp-2">{{ tpl.description }}</div>
+                <div class="mt-auto flex items-center justify-between pt-1 text-[10px] text-[color:var(--muted-foreground)]">
+                  <span v-if="tpl.ownerName" class="inline-flex items-center gap-0.5">
+                    <User class="size-2.5" />
+                    {{ tpl.ownerName }}
+                  </span>
+                  <span v-else class="opacity-60">{{ t.workshop.builtinAuthor }}</span>
+                  <span class="font-mono">{{ tpl.templateId }}</span>
+                </div>
               </div>
             </li>
           </ul>

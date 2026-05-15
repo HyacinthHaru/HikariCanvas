@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark } from 'lucide-vue-next';
+import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -27,6 +28,8 @@ const aliasError = ref<string | null>(null);
 const ALIAS_RE = /^[A-Za-z0-9_-]{2,32}$/;
 const copiedFlash = ref<'wallid' | null>(null);
 let copiedFlashTimer: number | null = null;
+
+const saveModalOpen = ref(false);
 
 function toggleLock() {
     if (!project.wallId) return;
@@ -246,6 +249,15 @@ function showRefreshFlash(msg: string) {
           <Terminal class="size-4" />
         </button>
       </Tooltip>
+      <Tooltip :text="t.workshop.saveTip">
+        <button
+          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors disabled:opacity-40"
+          :disabled="!project.wallId || project.isLocked"
+          @click="saveModalOpen = true"
+        >
+          <Bookmark class="size-4" />
+        </button>
+      </Tooltip>
       <Tooltip :text="t.topbar.help" shortcut="?">
         <button
           class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
@@ -273,6 +285,8 @@ function showRefreshFlash(msg: string) {
       </Tooltip>
     </div>
   </header>
+
+  <SaveAsTemplateModal v-if="saveModalOpen" @close="saveModalOpen = false" />
 </template>
 
 <style scoped>

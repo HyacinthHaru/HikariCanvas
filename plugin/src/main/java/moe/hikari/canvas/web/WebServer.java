@@ -75,6 +75,8 @@ public final class WebServer {
     private final TemplateAssetService templateAssetService;
     private final WallPreviewService wallPreviewService;
     private final moe.hikari.canvas.image.UploadHandler uploadHandler;
+    private final moe.hikari.canvas.template.TemplatePublisher templatePublisher;
+    private final moe.hikari.canvas.storage.TemplateRepo templateRepo;
     /** M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes（自然 LRU 容量靠 GC）。 */
     private final ConcurrentMap<String, byte[]> wallPreviewCache = new ConcurrentHashMap<>();
     private Javalin app;
@@ -95,6 +97,8 @@ public final class WebServer {
                      TemplateAssetService templateAssetService,
                      WallPreviewService wallPreviewService,
                      moe.hikari.canvas.image.UploadHandler uploadHandler,
+                     moe.hikari.canvas.template.TemplatePublisher templatePublisher,
+                     moe.hikari.canvas.storage.TemplateRepo templateRepo,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler) {
         this.log = log;
@@ -111,6 +115,8 @@ public final class WebServer {
         this.templateAssetService = templateAssetService;
         this.wallPreviewService = wallPreviewService;
         this.uploadHandler = uploadHandler;
+        this.templatePublisher = templatePublisher;
+        this.templateRepo = templateRepo;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
@@ -216,6 +222,12 @@ public final class WebServer {
                         HandlerType.GET, "/api/upload/{source}", uploadHandler::handleDownload));
             }
 
+            // M14：创意工坊市场（DB 元数据列表）
+            if (templateRepo != null) {
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.GET, "/api/templates", this::handleTemplatesList));
+            }
+
             // WebSocket
             cfg.routes.addWsHandler(WsHandlerType.WEBSOCKET, "/ws", wsCfg -> {
                 wsCfg.onConnect(ctx -> log.info("WS connected"));
@@ -315,6 +327,30 @@ public final class WebServer {
                 "wsUrl", "/ws"));
     }
 
+    /**
+     * M14 创意工坊：返所有模板的元数据（含 owner / featured / 下载数）+ 按 featured/created
+     * 排序。前端 HomePage Marketplace 用这个数据 + selfUuid 决定"我的"判定。
+     */
+    private void handleTemplatesList(io.javalin.http.Context ctx) {
+        java.util.List<moe.hikari.canvas.storage.TemplateRepo.Row> rows = templateRepo.listMarketplace(0);
+        java.util.List<Map<String, Object>> json = new java.util.ArrayList<>(rows.size());
+        for (moe.hikari.canvas.storage.TemplateRepo.Row r : rows) {
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("templateId", r.templateId());
+            m.put("ownerUuid", r.ownerUuid() == null ? null : r.ownerUuid().toString());
+            m.put("ownerName", r.ownerName());
+            m.put("displayName", r.displayName());
+            m.put("description", r.description());
+            m.put("builtin", r.builtin());
+            m.put("featured", r.featured());
+            m.put("downloadCount", r.downloadCount());
+            m.put("createdAt", r.createdAt());
+            m.put("updatedAt", r.updatedAt());
+            json.add(m);
+        }
+        ctx.json(json);
+    }
+
     /** M6-D 协议 §3.2：ready / pre-handshake 一并下发全量 TemplateSpec 列表。 */
     private List<TemplateSpec> listTemplates() {
         return templateRegistry.templates().values().stream()
@@ -380,8 +416,135 @@ public final class WebServer {
                  "template.apply" -> dispatchEditOp(ctx, in, bound);
             case "brush.start", "brush.point", "brush.end", "brush.cancel" -> dispatchBrushOp(ctx, in, bound);
             case "wall.lock", "wall.unlock", "wall.alias", "wall.refresh" -> dispatchWallOp(ctx, in, bound);
+            case "template.save", "template.delete", "template.feature", "template.unfeature"
+                    -> dispatchTemplateOp(ctx, in, bound);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
+    }
+
+    /**
+     * M14 创意工坊：template.save / delete / feature / unfeature 入口。
+     * 鉴权用当前 session 的 player UUID 查 Bukkit live Player 拿 hasPermission。
+     */
+    private void dispatchTemplateOp(WsMessageContext ctx, Envelope in, String sessionId) {
+        Session s = sessionManager.byId(sessionId);
+        if (s == null) {
+            ctx.send(Envelope.error(in.id(), "SESSION_CLOSED", "no active session"));
+            return;
+        }
+        Map<String, Object> payload;
+        try {
+            payload = asPayloadMap(in.payload());
+        } catch (IllegalArgumentException iae) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
+            return;
+        }
+        org.bukkit.entity.Player player = org.bukkit.Bukkit.getPlayer(s.playerUuid());
+        if (player == null) {
+            ctx.send(Envelope.error(in.id(), "FORBIDDEN", "player offline"));
+            return;
+        }
+
+        switch (in.op()) {
+            case "template.save" -> handleTemplateSave(ctx, in, s, payload, player);
+            case "template.delete" -> handleTemplateDelete(ctx, in, s, payload, player);
+            case "template.feature" -> handleTemplateFeature(ctx, in, payload, player, true);
+            case "template.unfeature" -> handleTemplateFeature(ctx, in, payload, player, false);
+            default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unreachable: " + in.op()));
+        }
+    }
+
+    private void handleTemplateSave(WsMessageContext ctx, Envelope in, Session s,
+                                    Map<String, Object> payload, org.bukkit.entity.Player player) {
+        if (!player.hasPermission("canvas.template.save")) {
+            ctx.send(Envelope.error(in.id(), "FORBIDDEN", "missing canvas.template.save"));
+            return;
+        }
+        moe.hikari.canvas.state.ProjectState state = s.projectState();
+        if (state == null) {
+            ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "no project state in session"));
+            return;
+        }
+        String slug = stringOrNull(payload.get("slug"));
+        String displayName = stringOrNull(payload.get("displayName"));
+        String description = stringOrNull(payload.get("description"));
+        moe.hikari.canvas.template.TemplateExporter.ParamConfig paramConfig =
+                parseParamConfig(payload.get("paramConfig"));
+        boolean bypass = player.hasPermission("canvas.template.bypass-limit");
+
+        moe.hikari.canvas.template.TemplatePublisher.Result result = templatePublisher.publish(
+                s.playerUuid(), s.playerName(),
+                slug, displayName, description, paramConfig, state, bypass);
+        if (result instanceof moe.hikari.canvas.template.TemplatePublisher.Result.Ok ok) {
+            ctx.send(Envelope.of("ack", in.id(), Map.of("templateId", ok.templateId())));
+        } else if (result instanceof moe.hikari.canvas.template.TemplatePublisher.Result.Failed f) {
+            ctx.send(Envelope.error(in.id(), f.code(), f.message()));
+        }
+    }
+
+    private void handleTemplateDelete(WsMessageContext ctx, Envelope in, Session s,
+                                      Map<String, Object> payload, org.bukkit.entity.Player player) {
+        String templateId = stringOrNull(payload.get("templateId"));
+        if (templateId == null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "templateId is required"));
+            return;
+        }
+        boolean isAdmin = player.hasPermission("canvas.template.delete.any");
+        boolean canDeleteOwn = player.hasPermission("canvas.template.delete.own");
+        if (!isAdmin && !canDeleteOwn) {
+            ctx.send(Envelope.error(in.id(), "FORBIDDEN", "missing delete permission"));
+            return;
+        }
+        moe.hikari.canvas.template.TemplatePublisher.Result result =
+                templatePublisher.delete(templateId, s.playerUuid(), isAdmin);
+        if (result instanceof moe.hikari.canvas.template.TemplatePublisher.Result.Ok ok) {
+            ctx.send(Envelope.of("ack", in.id(), Map.of("templateId", ok.templateId())));
+        } else if (result instanceof moe.hikari.canvas.template.TemplatePublisher.Result.Failed f) {
+            ctx.send(Envelope.error(in.id(), f.code(), f.message()));
+        }
+    }
+
+    private void handleTemplateFeature(WsMessageContext ctx, Envelope in,
+                                       Map<String, Object> payload,
+                                       org.bukkit.entity.Player player, boolean featured) {
+        if (!player.hasPermission("canvas.template.feature")) {
+            ctx.send(Envelope.error(in.id(), "FORBIDDEN", "missing canvas.template.feature"));
+            return;
+        }
+        String templateId = stringOrNull(payload.get("templateId"));
+        if (templateId == null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "templateId is required"));
+            return;
+        }
+        moe.hikari.canvas.template.TemplatePublisher.Result result =
+                templatePublisher.setFeatured(templateId, featured);
+        if (result instanceof moe.hikari.canvas.template.TemplatePublisher.Result.Ok ok) {
+            ctx.send(Envelope.of("ack", in.id(), Map.of("templateId", ok.templateId(), "featured", featured)));
+        } else if (result instanceof moe.hikari.canvas.template.TemplatePublisher.Result.Failed f) {
+            ctx.send(Envelope.error(in.id(), f.code(), f.message()));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static moe.hikari.canvas.template.TemplateExporter.ParamConfig parseParamConfig(Object raw) {
+        if (raw == null) return moe.hikari.canvas.template.TemplateExporter.ParamConfig.empty();
+        if (!(raw instanceof Map<?, ?> m)) return moe.hikari.canvas.template.TemplateExporter.ParamConfig.empty();
+        Object textActionsObj = m.get("textActions");
+        if (!(textActionsObj instanceof Map<?, ?> txMap)) {
+            return moe.hikari.canvas.template.TemplateExporter.ParamConfig.empty();
+        }
+        Map<String, moe.hikari.canvas.template.TemplateExporter.AutoTextAction> textActions = new java.util.LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : txMap.entrySet()) {
+            if (!(e.getKey() instanceof String autoId)) continue;
+            if (!(e.getValue() instanceof Map<?, ?> v)) continue;
+            String action = v.get("action") instanceof String sa ? sa : "keep";
+            String name = v.get("name") instanceof String sn ? sn : null;
+            String label = v.get("label") instanceof String sl ? sl : null;
+            String desc = v.get("description") instanceof String sd ? sd : null;
+            textActions.put(autoId, new moe.hikari.canvas.template.TemplateExporter.AutoTextAction(
+                    action, name, label, desc));
+        }
+        return new moe.hikari.canvas.template.TemplateExporter.ParamConfig(textActions);
     }
 
     /** M5.5 wall 元数据 op 入口；payload 解析后转 {@link #handleWallOp}。 */

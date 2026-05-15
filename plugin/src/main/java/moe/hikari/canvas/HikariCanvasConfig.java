@@ -41,6 +41,8 @@ public final class HikariCanvasConfig {
     // ---- templates ----
     public final boolean autoReloadTemplatesOnStartup;
     public final int previewCacheSeconds;
+    /** M14 创意工坊：每玩家可发布模板数；0 = 不限。 */
+    public final int templatesMaxPerPlayer;
 
     // ---- images (M13) ----
     public final ImageConfig images;
@@ -76,6 +78,7 @@ public final class HikariCanvasConfig {
         this.inputBurst = b.inputBurst;
         this.autoReloadTemplatesOnStartup = b.autoReloadTemplatesOnStartup;
         this.previewCacheSeconds = b.previewCacheSeconds;
+        this.templatesMaxPerPlayer = b.templatesMaxPerPlayer;
         this.images = b.images;
     }
 
@@ -110,6 +113,7 @@ public final class HikariCanvasConfig {
 
         b.autoReloadTemplatesOnStartup = f.getBoolean("templates.auto-reload-on-startup", true);
         b.previewCacheSeconds = Math.max(0, f.getInt("templates.preview-cache-seconds", 300));
+        b.templatesMaxPerPlayer = Math.max(0, f.getInt("templates.max-per-player", 20));
 
         // M13 images 段
         ImageConfig defaults = ImageConfig.defaults();
@@ -155,6 +159,7 @@ public final class HikariCanvasConfig {
         int inputBurst = 40;
         boolean autoReloadTemplatesOnStartup = true;
         int previewCacheSeconds = 300;
+        int templatesMaxPerPlayer = 20;
         ImageConfig images = ImageConfig.defaults();
     }
 }

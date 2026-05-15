@@ -3,6 +3,7 @@ package moe.hikari.canvas.template;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.expr.ExpressionParser;
@@ -32,7 +33,8 @@ public final class TemplateLoader {
     /** 当前插件支持的最高 spec 版本。 */
     public static final int SUPPORTED_SPEC = 1;
 
-    private static final Pattern ID_PATTERN = Pattern.compile("^[a-z][a-z0-9_]{2,63}$");
+    /** M14 起允许 {@code -} 以容纳 {@code user-<uuid8>-<slug>} 工坊命名约定。 */
+    private static final Pattern ID_PATTERN = Pattern.compile("^[a-z][a-z0-9_-]{2,63}$");
     private static final Pattern PARAM_ID_PATTERN = Pattern.compile("^[a-z][a-z0-9_]{0,31}$");
     private static final Pattern COLOR_PATTERN = Pattern.compile("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$");
     /** 字符串里嵌的 {@code ${param_name}} 引用，捕获组 1 是 param id。 */
@@ -47,9 +49,27 @@ public final class TemplateLoader {
     private final ObjectMapper yamlMapper;
 
     public TemplateLoader() {
-        this.yamlMapper = new YAMLMapper(new YAMLFactory())
+        this.yamlMapper = new YAMLMapper(new YAMLFactory()
+                .disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER))
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        yamlMapper.setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
         // jackson-yaml 默认不开 polymorphic typing；这里不调用 activateDefaultTyping。
+    }
+
+    /**
+     * M14 创意工坊：把 {@link TemplateSpec} 序列化为 YAML 字符串，用于写入
+     * {@code user-templates/<uuid>/<slug>.yml}。共享同一 YAMLMapper 配置（NON_NULL 省略，
+     * 无 doc-start {@code ---} 头）。
+     *
+     * @throws IOException Jackson 序列化失败
+     */
+    public String serializeToYaml(TemplateSpec spec) throws IOException {
+        return yamlMapper.writeValueAsString(spec);
+    }
+
+    /** test-only：暴露 mapper 供外部以同一配置序列化/反序列化复合对象（如 rawState Map）。 */
+    public ObjectMapper mapper() {
+        return yamlMapper;
     }
 
     public sealed interface Result {
@@ -98,9 +118,10 @@ public final class TemplateLoader {
             errors.add("name length > 64");
         }
 
-        // 4) canvas
+        // 4) canvas（rawState 模式可空——尺寸由 rawState.canvas 内嵌决定）
+        boolean rawMode = spec.isRawStateMode();
         if (spec.canvas() == null) {
-            errors.add("canvas is required");
+            if (!rawMode) errors.add("canvas is required");
         } else {
             validateCanvas(spec.canvas(), errors);
         }
@@ -114,9 +135,9 @@ public final class TemplateLoader {
             }
         }
 
-        // 6) layout
+        // 6) layout（rawState 模式可空——element 全部在 rawState 内）
         if (spec.layout() == null) {
-            errors.add("layout is required");
+            if (!rawMode) errors.add("layout is required");
         } else {
             validateLayout(spec.layout(), paramIds, errors);
         }

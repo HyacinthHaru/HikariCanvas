@@ -5,6 +5,101 @@
 
 ---
 
+## 2026-05-15 · M14 创意工坊（A-F 六段全栈）
+
+**核心**：玩家把当前画布发布为模板；服务器内的模板市场（精选优先 + 时间倒序）；admin 可精选；模板自动文本参数化 + 用户手工命名/取消；hard delete；每玩家配额可改。
+
+### 7 个锁定决策
+
+1. **模板格式 = rawState 模式**：不扩 `TemplateElement` 加 Path/Circle/Shape/Brush/Image 5 record；改让 `TemplateSpec.rawState: Map<String, Object>` 直接内嵌完整 `ProjectState` JSON。Instantiator 检测 rawState 非空 → 新分支：参数替换 + JsonNode → ProjectState → 平铺 layers 走 `replaceContent`。元素类型覆盖问题一举解决（任何 M8-M13 元素都能序列化导出）
+2. **参数化 v1 = 自动 text + 手工命名/取消 text**：非 text 字段（color / fontSize / x/y/w/h）手工添加为参数 **留 v1.x**（需 RawState 通用 interpolator + 字段类型推断 UI）
+3. **/canvas template 命令族延后 v1.x**：前端 TopBar UI 已能完整覆盖 save/delete/feature；命令仅锦上添花
+4. **HomePage 仅展示**：admin feature/delete 操作放在编辑器内 TemplateGallery（已有 token）；HomePage admin 视图需 token-less auth，留 v1.x
+5. **hard delete**：YAML + preview PNG + DB 行 + 空 uuid 目录同清
+6. **slug 字符集** = `[a-z0-9][a-z0-9-]{1,31}`；templateId = `user-<uuid8>-<slug>`；TemplateLoader `ID_PATTERN` 扩展加 `-`
+7. **builtin 永远 featured**：DB row builtin=1 时 setFeatured 拒绝（builtin 不可 unfeature）
+
+### M14-A DB + DAO + Registry（约 2h）
+
+- `V008__templates.sql`：templates 表（template_id PK / owner / featured / yaml_path / builtin / download_count）+ 3 索引（owner / marketplace / yaml_path UNIQUE）
+- **踩坑**：行内 `--` 注释含分号 / 引号干扰 `MigrationRunner.split(";")`；改成纯行注释解决
+- `TemplateRepo`：upsert(UPSERT semantics) / findById / listMarketplace(featured + time) / listForOwner / countByOwner（配额）/ setFeatured（builtin 拒）/ incrementDownload / delete
+- `TemplateRegistry` 扩展：加 `userTemplatesDir` 字段 + `loadUser(...)` 扫 `user-templates/<uuid>/*.yml`；`TemplateSource.USER` 枚举；`ReloadStats` 加 `userLoaded`
+
+### M14-B TemplateExporter + rawState 模式（约 3h，最高复杂度）
+
+- `TemplateSpec` 加 `rawState: Map<String, Object>` 字段（NON_NULL 序列化省略）+ `isRawStateMode()`
+- `TemplateLoader.serializeToYaml(spec)` 公开 + YAMLMapper 配置 NON_NULL 输出 + 关 doc-start `---` 头
+- `TemplateLoader.ID_PATTERN` 加 `-` 容纳 `user-<uuid8>-<slug>`；validate 在 rawState 模式下放宽 canvas/layout 必需
+- `TemplateExporter`：纯函数。参数化策略 — 按 z-order 扫所有 TextElement → `text_1 / text_2 / ...`；`ParamConfig.textActions` 允许 keep（参数化 + 重命名 + label + description）或 drop（保持静态）。Roundtrip 自校验（导出 YAML 再读回必须 valid）
+- `TemplateInstantiator.instantiateRawState`：deep-copy rawState → 递归遍历 Map/List/String 替换 `${param}` 占位符 → `mapper.convertValue(...).ProjectState.class` → 平铺 layers 内所有 element + 给新 id 避免冲突 → 返 `Result.Ok`
+
+### M14-C 后端 WS op + Publisher + 端点（约 2h）
+
+- `TemplatePublisher`：协调器。`publish` 链路 — 配额 → Exporter → 写 YAML → 渲染缩略图 PNG（CanvasCompositor.rasterize → ImageIO.write）→ DB upsert → Registry.reload；`delete` 链路 — 鉴权 → unlink YAML + PNG + uuidDir → DB delete → reload；`setFeatured` 鉴权 builtin 拒
+- `WebServer` 4 个 WS op：`template.save / delete / feature / unfeature` → `dispatchTemplateOp` → 拿 Bukkit Player 查 `canvas.template.*` 权限
+- `GET /api/templates` HTTP 端点：listMarketplace JSON
+- `paper-plugin.yml` 4 新权限节点：`canvas.template.save / delete.own / delete.any / feature / bypass-limit`
+- `config.yml` + `HikariCanvasConfig` `templates.max-per-player`（默认 20，可改）
+- `HikariCanvas.onEnable` wire：TemplateLoader（独立 publisher 用）→ TemplateRegistry（含 userTemplatesDir）→ TemplateRepo → TemplatePublisher → `syncBuiltinToDb()` 启动期把 builtin / server 模板入库 → WebServer 构造器扩参
+
+### M14-D 前端 SaveAsTemplateModal（约 1.5h）
+
+- `web/src/components/template/SaveAsTemplateModal.vue`：自动扫 project.state.layers 中 TextElement 生成 `text_N` 列表；每个参数 row 含 keep checkbox / name / label / description 4 控件（keep=false 时 collapse）；slug regex 客户端校验 + hint；ws.sendWithAck('template.save', payload, 8000)
+- TopBar：`Bookmark` icon 按钮触发；wallId 缺或 locked 时 disabled
+- 用 Vue fragment root（`</header><Modal/>`）避免 Teleport 复杂
+
+### M14-E HomePage Marketplace（约 1h）
+
+- `HomePage.vue` 加只读 grid section：`Sparkles` 标题 + cards（缩略图 + featured/builtin badge + name + description + owner + templateId）
+- `loadTemplates` fetch `/api/templates` + featured / builtin 标签
+- 不分 tab / 不放管理操作（v1.x 留 admin 视图）
+
+### M14-F polish + i18n + 验证
+
+- i18n `t.workshop.*` 中英对 27 字段（save 流程 + marketplace 元素）
+- gradle test：**364 case 全过**（M13 baseline 不漂移；M14 后端纯逻辑无新单元测试 case；TemplateExporterTest 留 v1.x）
+- vite build：**477.79 KB JS / 42.85 KB CSS**（M13 baseline 465.74 → +12.05 KB JS / +1.99 KB CSS = SaveAsTemplateModal + Marketplace section + 27 i18n 字段 + TopBar 按钮）
+
+### v1.x 留 future（journal 显式）
+
+- 非 text 字段（color / fontSize / x/y/w/h / fontId / align 等）手工标注为参数 + 类型推断 UI
+- `/canvas template save / list / feature / unfeature / delete` 命令族
+- HomePage admin 视图（token-less auth + 在卡片上直接 feature / delete）
+- TemplateGallery 内点击 apply 直接套用工坊模板（v1 builtin/server 已支持；user 模板也已可通过 template.apply 走 rawState 路径，UI 未连）
+- 模板下载量统计 + 分类 / 搜索 / 评分
+
+### 工期
+
+约 9.5h wall-clock（A 2h + B 3h + C 2h + D 1.5h + E 1h + F polish 0.5h），略低于 13-14h 估算 —— 走 rawState 模式跳过扩展 5 个 TemplateElement record 是关键加速。
+
+### 改动文件清单（9 新 + 8 改）
+
+**新建（9）**：
+- `plugin/.../storage/TemplateRepo.java`
+- `plugin/.../template/TemplateExporter.java`
+- `plugin/.../template/TemplatePublisher.java`
+- `plugin/.../db-migrations/V008__templates.sql`
+- `web/src/components/template/SaveAsTemplateModal.vue`
+
+**改动（8）**：
+- `plugin/.../template/TemplateSpec.java`（加 rawState 字段 + isRawStateMode + 兼容老 11 字段 ctor）
+- `plugin/.../template/TemplateSource.java`（加 USER）
+- `plugin/.../template/TemplateRegistry.java`（构造器扩 userTemplatesDir + loadUser）
+- `plugin/.../template/TemplateLoader.java`（ID_PATTERN 加 `-` + rawState 模式宽校验 + serializeToYaml + YAMLMapper writer 配置）
+- `plugin/.../template/TemplateInstantiator.java`（rawState 分支 + replacePlaceholders + deepCopy + cloneElementWithFreshId 覆盖全 8 type）
+- `plugin/.../HikariCanvas.java`（wire TemplateRepo + TemplatePublisher + syncBuiltinToDb）
+- `plugin/.../HikariCanvasConfig.java`（templatesMaxPerPlayer）
+- `plugin/.../web/WebServer.java`（构造器扩 publisher + repo + WS op 4 个 + `/api/templates` 端点）
+- `plugin/.../storage/MigrationRunner.java`（V008 入列）
+- `plugin/src/main/resources/paper-plugin.yml`（5 权限节点）
+- `plugin/src/main/resources/config.yml`（templates.max-per-player）
+- `web/src/components/layout/TopBar.vue`（Bookmark 按钮 + Modal 渲染）
+- `web/src/components/HomePage.vue`（marketplace section + loadTemplates + 缩略图 + featured/builtin badges）
+- `web/src/i18n/messages.ts`（t.workshop.* 中英 27 字段）
+
+---
+
 ## 2026-05-15 · fix(render)：粗 stroke 从 arrow 锥尖突破的视觉 Bug
 
 **用户报告**：箭头工具画的「直线 + 方向箭头」组合，当 stroke 调粗后，直线从 arrow 三角形锥尖戳出来，看起来"直线大过方向箭头本身"。
