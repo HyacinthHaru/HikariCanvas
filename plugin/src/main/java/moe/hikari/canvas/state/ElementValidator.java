@@ -70,6 +70,24 @@ public final class ElementValidator {
     public static final int MIN_BRUSH_SIZE = 1;
     public static final int MAX_BRUSH_SIZE = 64;
 
+    // ---------- M16 P3.2：non-finite 兜底 ----------
+
+    /**
+     * M16 P3.2：非 finite（NaN / ±Inf）→ {@code fallback}；否则返回原值。
+     * 用于渲染层兜底所有浮点字段（rotation / opacity / stop.offset / dx / dy / blur 等）；
+     * 对已存在的残破数据（极端模板 / 旧 .canvas 文件）容忍替换、不抛，避免单元素污染整 wall。
+     *
+     * <p>protocol 入口（{@link FillValidator} / {@link #parseOpacityNullable} 等）已经
+     * reject 非 finite 值；本 helper 是渲染期的兜底，覆盖模板 raw_state 反序列化等绕过路径。</p>
+     */
+    public static double finiteOr(double v, double fallback) {
+        return Double.isFinite(v) ? v : fallback;
+    }
+
+    public static float finiteOr(float v, float fallback) {
+        return Float.isFinite(v) ? v : fallback;
+    }
+
     // ---------- 颜色 ----------
 
     public static boolean isValidColor(String s) {

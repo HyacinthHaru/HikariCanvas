@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-05-16 · M16 Phase 3（渲染防御 P0 4 项）
+
+针对 docs/ultrareview-2026-05-16.md 渲染层 P0 防御，单 agent 完成。
+
+### P3.1 负 w/h 防御
+
+**协议入口已校验**：`ElementValidator.validateDim` 已强 `1..10000`，EditSession 49 处调用全经过——协议层无新增。
+
+**渲染层兜底**：`RectRenderer` / `CircleRenderer` / `ShapeRenderer` / `ImageRenderer` 入口加 `if (w <= 0 || h <= 0) return;`。
+
+### P3.2 NaN/Inf 过滤
+
+新增 `ElementValidator.finiteOr(double, double)` + float 重载 package-public 静态工具。CanvasCompositor 入口对 element/layer opacity 做 `finiteOr` 再 clamp。
+
+**重要发现**：`Element.rotation()` 返回 int（非 double），物理上 NaN 不可能——task 描述提到的 `if (e.rotation() != 0)` 永真路径在此 codebase 不触发，保留原逻辑。Shadow.dx/dy / Glow.radius 同样是 int。
+
+FillPaintBuilder：新增 `filterFiniteStops()` 剔除 NaN offset 的 stops；< 2 个有效 stop 时降级首 stop 纯色；linear angle / radial cx/cy/r 加 `Double.isFinite` 兜底（防 raw_state 模板绕过 FillValidator）。
+
+### P3.3 ImageRenderer mask 越界防御
+
+`applyImageMaskClipSafely(g, im, ctx)` 替换原方法，Area / PathParser / g.clip 整段包 `try { ... } catch (InternalError | RuntimeException ex)`；fail 时 log.warning 并降级到无 mask（caller 的 outer try-finally 用 `savedClip` 兜底）。
+
+**bbox sanity 阈值 = 10×**：mask path bbox area > element area × 10 时直接降级。这容忍合理的"略大于 bbox 的 mask"（外发光式），同时拒掉 100×+ 恶意/损坏数据触发 AWT Area O(n²) 卡死。
+
+happy-path 性能不变：try-catch 只包 Area boolean op，不圈整个 drawImage。
+
+### P3.4 前端 Mask 预设兜底
+
+`ImageElementSection.vue` 新增 `sanitizeDimension(v: number)`（finite + >0 + clamp 16384，否则 fallback 1）和 `sanitizeRadius(v, maxR)`（额外 clamp 到 `[0.5, maxR]`）。`makeCircleD` / `makeEllipseD` / `makeRoundedRectD` 全入口过 sanitize；roundedRect 启发式半径 clamp 到 `min(w, h) / 2`。
+
+### 验证
+
+`./gradlew :plugin:test` 364 tests pass，0 failures；`RendererSnapshotTest` 14 fixtures（含 13-image-mask）**baseline 0 漂移**；`vite build` 1728 modules ok。
+
+### 关联文件
+
+`plugin/src/main/java/moe/hikari/canvas/`: `state/ElementValidator.java` / `render/CanvasCompositor.java` / `render/RectRenderer.java` / `render/CircleRenderer.java` / `render/ShapeRenderer.java` / `render/ImageRenderer.java` / `render/FillPaintBuilder.java`。`web/src/components/properties/ImageElementSection.vue`。
+
+---
+
 ## 2026-05-16 · M16 Phase 2（数据完整性 / 并发 P0 7 项）
 
 针对 docs/ultrareview-2026-05-16.md 数据一致性 P0，3 个并行 agent 完成。

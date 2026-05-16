@@ -4,6 +4,7 @@ import moe.hikari.canvas.state.BlendMode;
 import moe.hikari.canvas.state.BrushStrokeElement;
 import moe.hikari.canvas.state.CircleElement;
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.ElementValidator;
 import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.ImageElement;
 import moe.hikari.canvas.state.Layer;
@@ -121,14 +122,17 @@ public final class CanvasCompositor {
 
             // M8-E：分层渲染
             for (Layer layer : state.layers()) {
-                if (!layer.visible() || layer.opacity() <= 0f) continue;
+                if (!layer.visible()) continue;
+                // M16 P3.2：NaN-aware opacity 兜底；layer.opacity 非 finite → fallback 1.0
+                float layerOpacity = ElementValidator.finiteOr(layer.opacity(), 1.0f);
+                if (layerOpacity <= 0f) continue;
                 if (layer.elements().isEmpty()) continue;
 
-                if (canFastPath(layer)) {
+                if (canFastPath(layer, layerOpacity)) {
                     drawElementsTo(g, layer.elements(), widthPx, heightPx);
                 } else {
                     BufferedImage layerBuf = renderLayerToBuffer(layer, widthPx, heightPx);
-                    BlendModes.applyBlendModeOver(img, layerBuf, layer.opacity(), layer.blendMode());
+                    BlendModes.applyBlendModeOver(img, layerBuf, layerOpacity, layer.blendMode());
                 }
             }
         } finally {
@@ -146,12 +150,13 @@ public final class CanvasCompositor {
      * renderMode=DITHER 的 element 必须走 slow path（per-pixel 抖动）；这里提前堵口避免
      * 集成时漏判。当前 element.blendMode 即使非 NORMAL 也走 fast path 等价处理（无合成）。</p>
      */
-    private static boolean canFastPath(Layer layer) {
-        if (layer.opacity() < 1.0f) return false;
+    private static boolean canFastPath(Layer layer, float sanitizedLayerOpacity) {
+        if (sanitizedLayerOpacity < 1.0f) return false;
         if (layer.blendMode() != BlendMode.NORMAL) return false;
         for (Element e : layer.elements()) {
             Float op = e.opacity();
-            if (op != null && op < 1.0f) return false;
+            // M16 P3.2：NaN opacity 视为非默认（避开 fast path），让 slow path 兜底 clamp
+            if (op != null && (!Float.isFinite(op) || op < 1.0f)) return false;
             RenderMode rm = e.renderMode();
             if (rm != null && rm != RenderMode.CLEAN) return false;
         }
@@ -171,7 +176,12 @@ public final class CanvasCompositor {
         Composite baseComposite = g.getComposite();
         for (Element e : elements) {
             if (!e.visible()) continue;
-            float opacity = e.effectiveOpacity();
+            // M16 P3.2：opacity 经 ElementValidator.parseOpacityNullable 入口已挡 NaN，
+            // 但模板 raw_state 反序列化绕过路径可能漏；finiteOr 兜底到 1.0
+            float opacity = ElementValidator.finiteOr(e.effectiveOpacity(), 1.0f);
+            // clamp 入 [0, 1]：协议入口允许 [0,1]，这里防御性 clamp 保证 AlphaComposite 不抛
+            if (opacity < 0f) opacity = 0f;
+            else if (opacity > 1f) opacity = 1f;
 
             if (e.effectiveRenderMode() == RenderMode.DITHER) {
                 drawDitheredElement(g, e, opacity, widthPx, heightPx);
@@ -179,6 +189,7 @@ public final class CanvasCompositor {
             }
 
             AffineTransform savedTx = null;
+            // rotation() 是 int 不会 NaN；只判 != 0 即可
             if (e.rotation() != 0) {
                 savedTx = g.getTransform();
                 double cx = e.x() + e.w() / 2.0;

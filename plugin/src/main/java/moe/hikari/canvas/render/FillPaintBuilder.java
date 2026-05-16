@@ -68,10 +68,14 @@ public final class FillPaintBuilder {
 
     public static Paint buildLinearPaint(LinearGradient g,
                                           double bx, double by, double bw, double bh) {
-        List<Stop> stops = g.stops();
+        // M16 P3.2：剔除 NaN offset 的 stops；FillValidator 协议入口已挡，
+        // 这里兜底覆盖模板 raw_state 等绕过路径
+        List<Stop> stops = filterFiniteStops(g.stops());
         if (stops == null || stops.isEmpty()) return Color.WHITE;
+        if (stops.size() < 2) return parseColor(stops.get(0).color());
         // 角度 → 方向向量（0° 沿 +x，90° 沿 +y，画布坐标系 Y 朝下，顺时针为正）
-        double rad = Math.toRadians(g.angle());
+        double angle = Double.isFinite(g.angle()) ? g.angle() : 0.0;
+        double rad = Math.toRadians(angle);
         double dx = Math.cos(rad);
         double dy = Math.sin(rad);
         double cx = bx + bw / 2.0;
@@ -104,13 +108,19 @@ public final class FillPaintBuilder {
 
     public static Paint buildRadialPaint(RadialGradient g,
                                           double bx, double by, double bw, double bh) {
-        List<Stop> stops = g.stops();
+        // M16 P3.2：剔除 NaN offset 的 stops
+        List<Stop> stops = filterFiniteStops(g.stops());
         if (stops == null || stops.isEmpty()) return Color.WHITE;
-        float cx = (float) (bx + g.cx() * bw);
-        float cy = (float) (by + g.cy() * bh);
-        float radius = (float) (g.r() * Math.min(bw, bh) / 2.0);
+        if (stops.size() < 2) return parseColor(stops.get(0).color());
+        // M16 P3.2：cx / cy / r 非 finite → fallback；保留协议入口 FillValidator 已挡
+        double gcx = Double.isFinite(g.cx()) ? g.cx() : 0.5;
+        double gcy = Double.isFinite(g.cy()) ? g.cy() : 0.5;
+        double gr = Double.isFinite(g.r()) ? g.r() : 1.0;
+        float cx = (float) (bx + gcx * bw);
+        float cy = (float) (by + gcy * bh);
+        float radius = (float) (gr * Math.min(bw, bh) / 2.0);
         // RadialGradientPaint 要求 radius > 0；退化时 fallback 首 stop 纯色
-        if (radius <= 0f) return parseColor(stops.get(0).color());
+        if (radius <= 0f || !Float.isFinite(radius)) return parseColor(stops.get(0).color());
 
         float[] fractions = monotonicFractions(stops);
         Color[] colors = stopColors(stops);
@@ -120,6 +130,22 @@ public final class FillPaintBuilder {
             // 同 buildLinearPaint 兜底：AWT 严格 fractions 单调要求触发的 IAE → 纯色 fallback
             return parseColor(stops.get(0).color());
         }
+    }
+
+    /**
+     * M16 P3.2：剔除 {@code position} 非 finite 的 stops；颜色非法不在此过滤
+     * （parseColor 已 fallback 到白）。{@code null} → 返回 {@code null} 上调用方走纯白
+     * fallback；返回 size &lt; 2 由调用方降级首 stop 纯色。
+     */
+    private static List<Stop> filterFiniteStops(List<Stop> stops) {
+        if (stops == null) return null;
+        java.util.List<Stop> out = new java.util.ArrayList<>(stops.size());
+        for (Stop s : stops) {
+            if (s == null) continue;
+            if (!Double.isFinite(s.position())) continue;
+            out.add(s);
+        }
+        return out;
     }
 
     /**

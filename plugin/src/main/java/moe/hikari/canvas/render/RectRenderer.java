@@ -16,6 +16,9 @@ public final class RectRenderer implements ElementRenderer {
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         RectElement r = (RectElement) e;
+        // M16 P3.1：渲染层兜底（ElementValidator.validateDim 已在协议入口拒 w/h≤0，
+        // 但模板 raw_state / 旧数据迁移路径可能漏校验）；负 / 零尺寸 → 不画
+        if (r.w() <= 0 || r.h() <= 0) return;
         if (r.fill() != null) {
             g.setPaint(FillPaintBuilder.fillToPaint(r.fill(), r.x(), r.y(), r.w(), r.h()));
             g.fillRect(r.x(), r.y(), r.w(), r.h());

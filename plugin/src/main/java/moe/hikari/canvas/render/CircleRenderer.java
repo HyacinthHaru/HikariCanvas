@@ -17,6 +17,8 @@ public final class CircleRenderer implements ElementRenderer {
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         CircleElement c = (CircleElement) e;
+        // M16 P3.1：渲染层兜底；w/h ≤ 0 时半径 ≤ 0，Ellipse2D 行为退化 → 直接 return
+        if (c.w() <= 0 || c.h() <= 0) return;
         Ellipse2D.Double el = new Ellipse2D.Double(c.x(), c.y(), c.w(), c.h());
         if (c.fill() != null) {
             g.setPaint(FillPaintBuilder.fillToPaint(c.fill(), c.x(), c.y(), c.w(), c.h()));

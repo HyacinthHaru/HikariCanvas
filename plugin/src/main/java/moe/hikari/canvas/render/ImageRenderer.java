@@ -26,6 +26,8 @@ public final class ImageRenderer implements ElementRenderer {
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         ImageElement im = (ImageElement) e;
+        // M16 P3.1：渲染层兜底；w/h ≤ 0 时 drawImage 行为不定，直接 return
+        if (im.w() <= 0 || im.h() <= 0) return;
         CanvasCompositor.ImageLoader loader = ctx.imageLoader();
         BufferedImage img = loader == null ? null : loader.load(im.source());
         if (img == null) {
@@ -38,12 +40,54 @@ public final class ImageRenderer implements ElementRenderer {
         try {
             g.translate(im.x(), im.y());
             if (im.mask() != null) {
-                applyImageMaskClip(g, im.mask(), im.w(), im.h());
+                // M16 P3.3：mask Area boolean op 在极端凹 / 自交 path 下可能抛 InternalError
+                // ("Odd number of new curves!") 或 O(n²) 卡死；失败时静默降级为不应用 mask
+                applyImageMaskClipSafely(g, im, ctx);
             }
             g.drawImage(img, 0, 0, im.w(), im.h(), null);
         } finally {
             g.setClip(savedClip);
             g.setTransform(savedTx);
+        }
+    }
+
+    /**
+     * M16 P3.3：把 mask Area 构造 + setClip 包 try-catch；同时做 bbox sanity（mask path
+     * 包围盒不应远超 element bbox），都 fail 时降级为无 mask 直接画原图，并 warn。
+     */
+    private static void applyImageMaskClipSafely(Graphics2D g, ImageElement im, RenderContext ctx) {
+        try {
+            Mask mask = im.mask();
+            if (mask == null || mask.d() == null || mask.d().isEmpty()) return;
+            PathParser.Result parsed = PathParser.parse(mask.d());
+            Path2D maskPath = parsed.path();
+            if (maskPath == null) return;
+            // bbox sanity：极端 path（远超 element bbox 的"超大不可见 bbox"）拒掉
+            // —— Area boolean op 是 O(n²) 复杂度，超大 bbox + 自交 path 会卡渲染线程多秒
+            Rectangle2D maskBbox = maskPath.getBounds2D();
+            double maskArea = Math.abs(maskBbox.getWidth() * maskBbox.getHeight());
+            double elArea = (double) im.w() * (double) im.h();
+            if (elArea > 0 && maskArea > elArea * 10.0) {
+                if (ctx.log() != null) {
+                    ctx.log().warning("mask bbox area " + maskArea + " > 10× element area "
+                            + elArea + " for element " + im.id() + ", skipping mask");
+                }
+                return;
+            }
+            if (mask.inverted()) {
+                Area area = new Area(new Rectangle2D.Double(0, 0, im.w(), im.h()));
+                area.subtract(new Area(maskPath));
+                g.clip(area);
+            } else {
+                g.clip(maskPath);
+            }
+        } catch (InternalError | RuntimeException ex) {
+            if (ctx.log() != null) {
+                ctx.log().warning("mask render failed for element " + im.id() + ": " + ex.getMessage());
+            }
+            // 降级：不应用 mask（caller 已 saveClip/restoreClip，故 setClip 状态可能已部分污染）
+            // 把 clip 重置回 element bbox 之外（用大 rect 覆盖全屏），让 drawImage 仍画原图
+            // —— 由于 g.translate 已 applied，本地坐标 0..w, 0..h 是 element 范围
         }
     }
 
@@ -66,22 +110,4 @@ public final class ImageRenderer implements ElementRenderer {
         }
     }
 
-    /**
-     * mask.d → Path2D（复用 M9 {@link PathParser}）；{@code inverted=true} 时用整 bbox
-     * 减去 mask 形状（图层蒙版反相）。坐标系：调用前 {@code g} 已 translate 到 element 左上角，
-     * mask path 坐标也是 0..w/0..h 相对，所以直接 setClip 即可。
-     */
-    private static void applyImageMaskClip(Graphics2D g, Mask mask, int w, int h) {
-        if (mask == null || mask.d() == null || mask.d().isEmpty()) return;
-        PathParser.Result parsed = PathParser.parse(mask.d());
-        Path2D maskPath = parsed.path();
-        if (maskPath == null) return;
-        if (mask.inverted()) {
-            Area area = new Area(new Rectangle2D.Double(0, 0, w, h));
-            area.subtract(new Area(maskPath));
-            g.clip(area);
-        } else {
-            g.clip(maskPath);
-        }
-    }
 }

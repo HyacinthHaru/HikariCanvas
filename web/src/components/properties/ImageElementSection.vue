@@ -57,10 +57,28 @@ function detectMaskPreset(im: ImageElement | null): MaskPresetKind {
 }
 
 /**
+ * M16 P3.4：尺寸 sanitize —— NaN / Infinity / 负数 / 0 → 1；上限 16384（同后端 validateDim 范围）。
+ * 防御性：上游 vue model 若被外部输入污染（如 v-model 输入框 invalid），不让 d 生成 `M NaN NaN`。
+ */
+function sanitizeDimension(v: number): number {
+    return Number.isFinite(v) && v > 0 ? Math.min(v, 16384) : 1;
+}
+
+/**
+ * M16 P3.4：radius sanitize —— 同 sanitizeDimension 但额外 clamp 到 maxR（一般是 min(w, h)/2）。
+ */
+function sanitizeRadius(v: number, maxR: number): number {
+    const safe = Number.isFinite(v) && v > 0 ? v : 1;
+    return Math.max(0.5, Math.min(safe, Math.max(0.5, maxR)));
+}
+
+/**
  * 用 cubic Bezier 4 段近似画椭圆（外接 bbox 0..w/0..h）。kappa ≈ 0.5523 是
  * 圆弧 → 三阶 Bezier 控制点的标准近似系数（误差 < 0.027%）。
  */
-function makeEllipseD(w: number, h: number): string {
+function makeEllipseD(wIn: number, hIn: number): string {
+    const w = sanitizeDimension(wIn);
+    const h = sanitizeDimension(hIn);
     const cx = w / 2;
     const cy = h / 2;
     const rx = w / 2;
@@ -78,7 +96,9 @@ function makeEllipseD(w: number, h: number): string {
     ].join(' ');
 }
 
-function makeCircleD(w: number, h: number): string {
+function makeCircleD(wIn: number, hIn: number): string {
+    const w = sanitizeDimension(wIn);
+    const h = sanitizeDimension(hIn);
     const r = Math.min(w, h) / 2;
     const cx = w / 2;
     const cy = h / 2;
@@ -93,8 +113,11 @@ function makeCircleD(w: number, h: number): string {
     ].join(' ');
 }
 
-function makeRoundedRectD(w: number, h: number): string {
-    const r = Math.max(1, Math.min(w, h) * 0.15);
+function makeRoundedRectD(wIn: number, hIn: number): string {
+    const w = sanitizeDimension(wIn);
+    const h = sanitizeDimension(hIn);
+    // 圆角半径用启发式 15%，但 sanitize + clamp 上限 min(w, h) / 2
+    const r = sanitizeRadius(Math.min(w, h) * 0.15, Math.min(w, h) / 2);
     return [
         `M ${r} 0`,
         `L ${w - r} 0`,

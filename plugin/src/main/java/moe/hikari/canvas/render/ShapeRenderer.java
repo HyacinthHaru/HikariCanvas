@@ -19,6 +19,8 @@ public final class ShapeRenderer implements ElementRenderer {
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         ShapeElement s = (ShapeElement) e;
+        // M16 P3.1：渲染层兜底；w/h ≤ 0 时外接圆半径退化为非正数 → 不画
+        if (s.w() <= 0 || s.h() <= 0) return;
         Path2D.Double path = buildShapePath(s);
         if (s.fill() != null) {
             g.setPaint(FillPaintBuilder.fillToPaint(s.fill(), s.x(), s.y(), s.w(), s.h()));
