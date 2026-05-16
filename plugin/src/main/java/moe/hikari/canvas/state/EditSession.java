@@ -1,17 +1,46 @@
 package moe.hikari.canvas.state;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import moe.hikari.canvas.render.DirtyRegion;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Pattern;
+
+import static moe.hikari.canvas.state.ElementValidator.boolFieldOrDefault;
+import static moe.hikari.canvas.state.ElementValidator.boolValue;
+import static moe.hikari.canvas.state.ElementValidator.buildEffects;
+import static moe.hikari.canvas.state.ElementValidator.buildStroke;
+import static moe.hikari.canvas.state.ElementValidator.floatFieldOrDefault;
+import static moe.hikari.canvas.state.ElementValidator.floatValue;
+import static moe.hikari.canvas.state.ElementValidator.intFieldOrDefault;
+import static moe.hikari.canvas.state.ElementValidator.intValue;
+import static moe.hikari.canvas.state.ElementValidator.isValidColor;
+import static moe.hikari.canvas.state.ElementValidator.parseBlendModeNullable;
+import static moe.hikari.canvas.state.ElementValidator.parseFillNullable;
+import static moe.hikari.canvas.state.ElementValidator.parseMarkerNullable;
+import static moe.hikari.canvas.state.ElementValidator.parseMaskNullable;
+import static moe.hikari.canvas.state.ElementValidator.parseOpacityNullable;
+import static moe.hikari.canvas.state.ElementValidator.parseRenderModeNullable;
+import static moe.hikari.canvas.state.ElementValidator.requireString;
+import static moe.hikari.canvas.state.ElementValidator.requireStringValue;
+import static moe.hikari.canvas.state.ElementValidator.stringFieldOrDefault;
+import static moe.hikari.canvas.state.ElementValidator.validateAlign;
+import static moe.hikari.canvas.state.ElementValidator.validateBrushSize;
+import static moe.hikari.canvas.state.ElementValidator.validateColor;
+import static moe.hikari.canvas.state.ElementValidator.validateCoord;
+import static moe.hikari.canvas.state.ElementValidator.validateDim;
+import static moe.hikari.canvas.state.ElementValidator.validateFontSize;
+import static moe.hikari.canvas.state.ElementValidator.validateImageSource;
+import static moe.hikari.canvas.state.ElementValidator.validateInnerRatio;
+import static moe.hikari.canvas.state.ElementValidator.validateLetterSpacing;
+import static moe.hikari.canvas.state.ElementValidator.validateLineHeight;
+import static moe.hikari.canvas.state.ElementValidator.validatePathD;
+import static moe.hikari.canvas.state.ElementValidator.validateRotation;
+import static moe.hikari.canvas.state.ElementValidator.validateShapeKind;
+import static moe.hikari.canvas.state.ElementValidator.validateSides;
+import static moe.hikari.canvas.state.ElementValidator.validateText;
 
 /**
  * 权威编辑会话：WS 上行 op → {@link ProjectState} mutation → 产出 {@link StatePatch}。
@@ -33,50 +62,31 @@ import java.util.regex.Pattern;
 public final class EditSession {
 
     // ---------- 校验常量 ----------
-    private static final Pattern COLOR_RE = Pattern.compile("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$");
+    // 元素级校验常量（COLOR_RE / MAX_TEXT_LEN / MAX_COORD / MAX_DIM / MIN_/MAX_LETTER_SPACING /
+    // MIN_/MAX_LINE_HEIGHT / MAX_SHADOW_OFFSET / MAX_GLOW_RADIUS / MASK_NUMBER_RE / MAX_MASK_VERTICES /
+    // IMAGE_SOURCE_RE / MIN_/MAX_SIDES / MIN_/MAX_INNER_RATIO / MIN_/MAX_BRUSH_SIZE / FILL_MAPPER）
+    // 2026-05-14 重构后集中于 {@link ElementValidator}。
 
-    /** M11：用于把 patch / op payload 中的 fill object 转成 {@link Fill}（走 {@link FillDeserializer}）。 */
-    private static final ObjectMapper FILL_MAPPER = new ObjectMapper()
-            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
-
-    private static final int MAX_TEXT_LEN = 256;
-    private static final int MAX_COORD = 10_000;
-    private static final int MAX_DIM = 10_000;
-    private static final int MAX_FONT_SIZE = 512;
-    private static final int MAX_STROKE_WIDTH = 128;
-    /** M15.3 P0-10：mask path 最大 vertex 数（v1 仅支持预设几何，远未达上限；自由 lasso v2 才放开）。 */
-    private static final int MAX_MASK_VERTICES = 64;
-    /** M15.3 P0-10：mask path d 字符串内数字绝对值上限（element-bbox 相对，10k 已足够预设几何）。 */
-    private static final Pattern MASK_NUMBER_RE = Pattern.compile("-?\\d+(?:\\.\\d+)?");
-    /** letterSpacing 容许范围（px）。负值表示压字距；极值保护渲染不死循环。 */
-    private static final float MIN_LETTER_SPACING = -32f;
-    private static final float MAX_LETTER_SPACING = 128f;
-    /** lineHeight 倍数允许范围。&lt; 0.5 会让行重叠到不可读；&gt; 4 属不合理范围。 */
-    private static final float MIN_LINE_HEIGHT = 0.5f;
-    private static final float MAX_LINE_HEIGHT = 4.0f;
-    /** shadow 偏移允许范围（px）。 */
-    private static final int MAX_SHADOW_OFFSET = 128;
-    /** glow 半径允许范围（px）。太大会让盒模糊性能劣化。 */
-    private static final int MAX_GLOW_RADIUS = 64;
-    /** 单工程层数上限（软限，超过 warn 但不拒；硬上限避免内存炸）。 */
-    private static final int MAX_LAYERS = 64;
-    /** 用户可见 layer 名最大长度。 */
-    private static final int MAX_LAYER_NAME = 64;
+    // layer 容量常量集中于 {@link LayerOperations}；保留单工程参考线上限本地化（仅 canvas op 用）。
     /** 单工程参考线数上限（防意外刷爆）。 */
     private static final int MAX_GUIDES = 256;
 
-    /** T11 历史栈上限（每会话）；超过后踢掉最老的。 */
-    private static final int MAX_HISTORY = 16;
-
     private final ProjectState state;
 
-    /** 过去快照栈：每条记录一次成功 op 的 pre-mutation 状态；push=头、pop=头。 */
-    private final Deque<ProjectSnapshot> past = new ArrayDeque<>();
-    /** 未来快照栈：undo 时从 past 出的快照入此栈，redo 取用；每次新 edit 会清空。 */
-    private final Deque<ProjectSnapshot> future = new ArrayDeque<>();
+    /** T11 历史栈（past + future + commit/undo/redo/mark）。2026-05-14 抽出。 */
+    private final HistoryStack history;
+
+    /** layer.* op 模块（create / delete / update / reorder / duplicate / set-active）。2026-05-14 抽出。 */
+    private final LayerOperations layerOps;
+
+    /** M12 brush.* op 状态机模块。2026-05-14 抽出。 */
+    private final BrushSession brushOps;
 
     public EditSession(ProjectState state) {
         this.state = state;
+        this.history = new HistoryStack(state);
+        this.layerOps = new LayerOperations(state, history);
+        this.brushOps = new BrushSession(state, history);
     }
 
     public ProjectState state() {
@@ -148,13 +158,7 @@ public final class EditSession {
         return "/layers/" + layerIdx + "/elements/" + elIdx + "/" + field;
     }
 
-    private static String layerPath(int layerIdx) {
-        return "/layers/" + layerIdx;
-    }
-
-    private static String layerFieldPath(int layerIdx, String field) {
-        return "/layers/" + layerIdx + "/" + field;
-    }
+    // layerPath / layerFieldPath 已整体迁出至 {@link LayerOperations}。
 
     // ---------- element.add ----------
 
@@ -425,250 +429,36 @@ public final class EditSession {
         return new OpResult.Ok(patch, DirtyRegion.of(moved));
     }
 
-    // ---------- layer.create ----------
+    // ---------- layer.* op（实现见 {@link LayerOperations}） ----------
 
-    /**
-     * 新建空 Layer。{@code afterLayerId} 缺省 = 顶端（layers 末尾，渲染顺序最上）；
-     * 非空时插入到该层之上（index + 1）。
-     */
+    /** 见 {@link LayerOperations#createLayer(String, String)}。 */
     public synchronized OpResult createLayer(String name, String afterLayerId) {
-        if (state.layers().size() >= MAX_LAYERS) {
-            return err("INVALID_PAYLOAD", "max layers reached: " + MAX_LAYERS);
-        }
-        String layerName;
-        if (name == null || name.isBlank()) {
-            layerName = "Layer " + (state.layers().size() + 1);
-        } else if (name.length() > MAX_LAYER_NAME) {
-            return err("INVALID_PAYLOAD", "layer name too long (max " + MAX_LAYER_NAME + ")");
-        } else {
-            layerName = name;
-        }
-
-        int insertIdx;
-        if (afterLayerId == null || afterLayerId.isEmpty()) {
-            insertIdx = state.layers().size();
-        } else {
-            int afterIdx = findLayerIdx(afterLayerId);
-            if (afterIdx < 0) {
-                return err("LAYER_NOT_FOUND", "afterLayerId not found: " + afterLayerId);
-            }
-            insertIdx = afterIdx + 1;
-        }
-
-        String id = "l-" + UUID.randomUUID().toString().substring(0, 8);
-        Layer newLayer = new Layer(id, layerName, true, false, 1.0f, BlendMode.NORMAL,
-                new ArrayList<>());
-
-        ProjectSnapshot pre = snapshotNow();
-        state.insertLayer(insertIdx, newLayer);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-
-        StatePatch patch = new StatePatchBuilder()
-                .add(layerPath(insertIdx), newLayer)
-                .build(v);
-        // 空层创建不产生像素变化
-        return new OpResult.Ok(patch, null);
+        return layerOps.createLayer(name, afterLayerId);
     }
 
-    // ---------- layer.delete ----------
-
+    /** 见 {@link LayerOperations#deleteLayer(String)}。 */
     public synchronized OpResult deleteLayer(String layerId) {
-        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
-        int idx = findLayerIdx(layerId);
-        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
-        if (state.layers().size() <= 1) {
-            return err("LAST_LAYER", "cannot delete the last layer");
-        }
-
-        Layer doomed = state.layers().get(idx);
-        boolean hadVisibleContent = doomed.visible() && !doomed.elements().isEmpty();
-        boolean wasActive = layerId.equals(state.activeLayerId());
-
-        ProjectSnapshot pre = snapshotNow();
-        state.removeLayer(idx);
-        // 删的是 activeLayer：转到剩余的第一层
-        String newActive = wasActive ? state.layers().get(0).id() : null;
-        if (newActive != null) state.activeLayerId(newActive);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-
-        StatePatchBuilder b = new StatePatchBuilder()
-                .remove(layerPath(idx));
-        if (newActive != null) {
-            b.replace("/activeLayerId", newActive);
-        }
-        // 删除可见非空层 = full canvas 重绘（合成顺序变了）
-        DirtyRegion dirty = hadVisibleContent ? DirtyRegion.fullCanvas(state) : null;
-        return new OpResult.Ok(b.build(v), dirty);
+        return layerOps.deleteLayer(layerId);
     }
 
-    // ---------- layer.update ----------
-
-    /**
-     * 修改层属性。支持字段：{@code name / visible / locked / opacity / blendMode}。
-     * locked 层<b>仍可</b>改自身这些属性（包括 unlock 自己）。
-     */
+    /** 见 {@link LayerOperations#updateLayer(String, Map)}。 */
     public synchronized OpResult updateLayer(String layerId, Map<String, Object> patch) {
-        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
-        if (patch == null || patch.isEmpty()) return err("INVALID_PAYLOAD", "empty patch");
-        int idx = findLayerIdx(layerId);
-        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
-
-        Layer cur = state.layers().get(idx);
-        String name = cur.name();
-        boolean visible = cur.visible();
-        boolean locked = cur.locked();
-        float opacity = cur.opacity();
-        BlendMode blendMode = cur.blendMode();
-
-        try {
-            for (var e : patch.entrySet()) {
-                String k = e.getKey();
-                Object v = e.getValue();
-                switch (k) {
-                    case "name" -> {
-                        String n = requireStringValue(v, k);
-                        if (n.length() > MAX_LAYER_NAME) {
-                            throw new ValidationException("INVALID_PAYLOAD",
-                                    "name too long (max " + MAX_LAYER_NAME + ")");
-                        }
-                        name = n;
-                    }
-                    case "visible" -> visible = boolValue(v, k);
-                    case "locked" -> locked = boolValue(v, k);
-                    case "opacity" -> {
-                        float o = floatValue(v, k);
-                        if (!Float.isFinite(o) || o < 0f || o > 1f) {
-                            throw new ValidationException("INVALID_PAYLOAD",
-                                    "opacity must be in [0,1]: " + o);
-                        }
-                        opacity = o;
-                    }
-                    case "blendMode" -> blendMode = parseBlendMode(v);
-                    default -> throw new ValidationException("INVALID_PAYLOAD",
-                            "unknown layer field: " + k);
-                }
-            }
-        } catch (ValidationException ve) {
-            return err(ve.code, ve.getMessage());
-        }
-
-        Layer updated = new Layer(cur.id(), name, visible, locked, opacity, blendMode,
-                cur.elements());
-
-        ProjectSnapshot pre = snapshotNow();
-        state.replaceLayer(idx, updated);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-
-        StatePatchBuilder b = new StatePatchBuilder();
-        for (var e : patch.entrySet()) {
-            String k = e.getKey();
-            Object value = (k.equals("blendMode") && e.getValue() instanceof String s)
-                    ? s.toLowerCase()   // 规范化输出 lowercase
-                    : e.getValue();
-            b.replace(layerFieldPath(idx, k), value);
-        }
-        // visible / opacity / blendMode 改动 → 影响渲染；name 不影响
-        boolean pixelAffecting = patch.containsKey("visible")
-                || patch.containsKey("opacity")
-                || patch.containsKey("blendMode");
-        DirtyRegion dirty = (pixelAffecting && !updated.elements().isEmpty())
-                ? DirtyRegion.fullCanvas(state)
-                : null;
-        return new OpResult.Ok(b.build(v), dirty);
+        return layerOps.updateLayer(layerId, patch);
     }
 
-    // ---------- layer.reorder ----------
-
+    /** 见 {@link LayerOperations#reorderLayer(String, int)}。 */
     public synchronized OpResult reorderLayer(String layerId, int newIndex) {
-        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
-        int from = findLayerIdx(layerId);
-        if (from < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
-        int size = state.layers().size();
-        int to = Math.max(0, Math.min(newIndex, size - 1));
-        if (to == from) {
-            long v = state.bumpVersion();
-            return new OpResult.Ok(new StatePatch(v, List.of()), null);
-        }
-        Layer moved = state.layers().get(from);
-
-        ProjectSnapshot pre = snapshotNow();
-        state.moveLayer(from, to);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-        StatePatch patch = new StatePatchBuilder()
-                .remove(layerPath(from))
-                .add(layerPath(to), moved)
-                .build(v);
-        // 层重排 = 合成顺序变 = full canvas 重绘
-        DirtyRegion dirty = moved.visible() && !moved.elements().isEmpty()
-                ? DirtyRegion.fullCanvas(state)
-                : null;
-        return new OpResult.Ok(patch, dirty);
+        return layerOps.reorderLayer(layerId, newIndex);
     }
 
-    // ---------- layer.duplicate ----------
-
-    /** 复制层，所有元素分配新 id；插入到原层之上。 */
+    /** 见 {@link LayerOperations#duplicateLayer(String)}。 */
     public synchronized OpResult duplicateLayer(String layerId) {
-        if (layerId == null) return err("INVALID_PAYLOAD", "layerId missing");
-        if (state.layers().size() >= MAX_LAYERS) {
-            return err("INVALID_PAYLOAD", "max layers reached: " + MAX_LAYERS);
-        }
-        int idx = findLayerIdx(layerId);
-        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
-        Layer src = state.layers().get(idx);
-
-        String newId = "l-" + UUID.randomUUID().toString().substring(0, 8);
-        String newName = src.name() + " copy";
-        if (newName.length() > MAX_LAYER_NAME) {
-            newName = newName.substring(0, MAX_LAYER_NAME);
-        }
-        List<Element> copiedElements = new ArrayList<>(src.elements().size());
-        for (Element e : src.elements()) {
-            copiedElements.add(cloneElementWithNewId(e));
-        }
-        Layer copy = new Layer(newId, newName, src.visible(), false, // 复制的层默认不锁
-                src.opacity(), src.blendMode(), copiedElements);
-
-        int insertIdx = idx + 1;
-        ProjectSnapshot pre = snapshotNow();
-        state.insertLayer(insertIdx, copy);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-        StatePatch patch = new StatePatchBuilder()
-                .add(layerPath(insertIdx), copy)
-                .build(v);
-        DirtyRegion dirty = copy.visible() && !copy.elements().isEmpty()
-                ? DirtyRegion.fullCanvas(state)
-                : null;
-        return new OpResult.Ok(patch, dirty);
+        return layerOps.duplicateLayer(layerId);
     }
 
-    // ---------- layer.set-active ----------
-
-    /**
-     * 切换活动层。仅改 {@code activeLayerId}，**不进 undo 栈**（纯 UI 状态）。
-     * 空 ops 还是要返回 patch 让前端同步 activeLayerId 镜像。
-     */
+    /** 见 {@link LayerOperations#setActiveLayer(String)}。 */
     public synchronized OpResult setActiveLayer(String layerId) {
-        if (layerId == null || layerId.isEmpty()) {
-            return err("INVALID_PAYLOAD", "layerId missing");
-        }
-        int idx = findLayerIdx(layerId);
-        if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
-        if (layerId.equals(state.activeLayerId())) {
-            long v = state.bumpVersion();
-            return new OpResult.Ok(new StatePatch(v, List.of()), null);
-        }
-        state.activeLayerId(layerId);
-        long v = state.bumpVersion();
-        StatePatch patch = new StatePatchBuilder()
-                .replace("/activeLayerId", layerId)
-                .build(v);
-        return new OpResult.Ok(patch, null);
+        return layerOps.setActiveLayer(layerId);
     }
 
     // ---------- canvas.resize ----------
@@ -794,69 +584,29 @@ public final class EditSession {
 
     // ---------- undo / redo / history.mark ----------
 
-    /**
-     * 撤销到最近一次成功 op 之前的状态。past 栈为空时返回错。
-     * 恢复后下行 {@code state.snapshot}（跳变无法用 patch 简洁表达），像素层面全画布重绘。
-     */
+    /** 见 {@link HistoryStack#undo()}。 */
     public synchronized OpResult undo() {
-        if (past.isEmpty()) {
-            return err("INVALID_PAYLOAD", "nothing to undo");
-        }
-        future.push(snapshotNow());
-        ProjectSnapshot restoreTo = past.pop();
-        state.restore(restoreTo);
-        long v = state.bumpVersion();
-        return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
+        return history.undo();
     }
 
-    /** undo 的逆操作。future 栈为空时返回错。 */
+    /** 见 {@link HistoryStack#redo()}。 */
     public synchronized OpResult redo() {
-        if (future.isEmpty()) {
-            return err("INVALID_PAYLOAD", "nothing to redo");
-        }
-        ProjectSnapshot preRedo = snapshotNow();
-        past.push(preRedo);
-        while (past.size() > MAX_HISTORY) past.removeLast();
-        ProjectSnapshot restoreTo = future.pop();
-        state.restore(restoreTo);
-        long v = state.bumpVersion();
-        return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
+        return history.redo();
     }
 
-    /**
-     * 在 past 栈顶加一个命名检查点（{@code docs/protocol.md §5.5}）。
-     * <b>不</b>清空 future——mark 只给当前点贴标签，不创建新 edit 分支。
-     */
+    /** 见 {@link HistoryStack#historyMark(String)}。 */
     public synchronized OpResult historyMark(String label) {
-        if (label == null || label.isEmpty()) {
-            return err("INVALID_PAYLOAD", "label required");
-        }
-        if (label.length() > 64) {
-            return err("INVALID_PAYLOAD", "label too long (max 64)");
-        }
-        ProjectSnapshot marked = new ProjectSnapshot(
-                state.canvas(), state.layers(), state.activeLayerId(), label);
-        past.push(marked);
-        while (past.size() > MAX_HISTORY) past.removeLast();
-        long v = state.bumpVersion();
-        return new OpResult.Ok(new StatePatch(v, List.of()), null);
+        return history.historyMark(label);
     }
 
-    // ---------- 历史栈内部 helpers ----------
+    // ---------- 历史栈内部 helpers（thin delegates，保留以最小化 op 内调用点改动）----------
 
     private ProjectSnapshot snapshotNow() {
-        return new ProjectSnapshot(
-                state.canvas(), state.layers(), state.activeLayerId(), null);
+        return history.snapshotNow();
     }
 
-    /**
-     * 把 {@code preSnapshot} 推进 past 栈，超过 {@link #MAX_HISTORY} 踢掉最老一条；
-     * 清空 future 栈（标准 undo 语义：新 edit 弃用 redo 分支）。
-     */
     private void commitHistory(ProjectSnapshot preSnapshot) {
-        past.push(preSnapshot);
-        while (past.size() > MAX_HISTORY) past.removeLast();
-        future.clear();
+        history.commitHistory(preSnapshot);
     }
 
     // ---------- 构造与更新辅助 ----------
@@ -885,56 +635,6 @@ public final class EditSession {
                 text, fontId, fontSize, color, align,
                 letterSpacing, lineHeight, vertical, effects,
                 null, null, null);
-    }
-
-    /** 解析 {@code payload.effects}。null 或空 object 都返 null。 */
-    private Effects buildEffects(Object raw) {
-        if (raw == null) return null;
-        if (!(raw instanceof Map<?, ?> m)) {
-            throw new ValidationException("INVALID_PAYLOAD", "effects must be object");
-        }
-        Stroke stroke = buildStroke(m.get("stroke"));
-        Shadow shadow = buildShadow(m.get("shadow"));
-        Glow glow = buildGlow(m.get("glow"));
-        if (stroke == null && shadow == null && glow == null) return null;
-        return new Effects(stroke, shadow, glow);
-    }
-
-    private Shadow buildShadow(Object raw) {
-        if (raw == null) return null;
-        if (!(raw instanceof Map<?, ?> m)) {
-            throw new ValidationException("INVALID_PAYLOAD", "shadow must be object");
-        }
-        int dx = ((Number) requireNumber(m, "dx")).intValue();
-        int dy = ((Number) requireNumber(m, "dy")).intValue();
-        if (Math.abs(dx) > MAX_SHADOW_OFFSET || Math.abs(dy) > MAX_SHADOW_OFFSET) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "shadow offset out of range ±" + MAX_SHADOW_OFFSET);
-        }
-        Object c = m.get("color");
-        if (!(c instanceof String color)) {
-            throw new ValidationException("INVALID_PAYLOAD", "shadow.color must be string");
-        }
-        validateColor(color);
-        return new Shadow(dx, dy, color);
-    }
-
-    private Glow buildGlow(Object raw) {
-        if (raw == null) return null;
-        if (!(raw instanceof Map<?, ?> m)) {
-            throw new ValidationException("INVALID_PAYLOAD", "glow must be object");
-        }
-        int radius = ((Number) requireNumber(m, "radius")).intValue();
-        if (radius < 0 || radius > MAX_GLOW_RADIUS) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "glow.radius out of range 0.." + MAX_GLOW_RADIUS);
-        }
-        Object c = m.get("color");
-        if (!(c instanceof String color)) {
-            throw new ValidationException("INVALID_PAYLOAD", "glow.color must be string");
-        }
-        validateColor(color);
-        return new Glow(radius, color);
     }
 
     private Element buildRect(String id, Map<String, Object> p) {
@@ -1021,23 +721,6 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
-    private static void validatePathD(String d) {
-        PathDValidator.Result r = PathDValidator.validate(d);
-        if (!r.ok()) throw new ValidationException("INVALID_PAYLOAD", "path.d invalid: " + r.reason());
-    }
-
-    private static String parseMarkerNullable(Object v) {
-        if (v == null) return null;
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", "marker must be string");
-        }
-        return switch (s) {
-            case "arrow", "dot" -> s;
-            default -> throw new ValidationException("INVALID_PAYLOAD",
-                    "marker must be 'arrow' or 'dot': " + s);
-        };
-    }
-
     // ---------- M9 CircleElement ----------
 
     private Element buildCircle(String id, Map<String, Object> p) {
@@ -1096,11 +779,6 @@ public final class EditSession {
     }
 
     // ---------- M9 ShapeElement ----------
-
-    private static final int MIN_SIDES = 3;
-    private static final int MAX_SIDES = 32;
-    private static final float MIN_INNER_RATIO = 0.1f;
-    private static final float MAX_INNER_RATIO = 0.95f;
 
     private Element buildShape(String id, Map<String, Object> p) {
         int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
@@ -1178,277 +856,46 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
-    private static void validateShapeKind(String k) {
-        if (!"polygon".equals(k) && !"star".equals(k)) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "shape.kind must be 'polygon' or 'star': " + k);
-        }
-    }
+    // ---------- M12 BrushStrokeElement op handlers（实现见 {@link BrushSession}） ----------
 
-    private static void validateSides(int v) {
-        if (v < MIN_SIDES || v > MAX_SIDES) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "shape.sides out of range [" + MIN_SIDES + ", " + MAX_SIDES + "]: " + v);
-        }
-    }
-
-    private static void validateInnerRatio(float v) {
-        if (!Float.isFinite(v) || v < MIN_INNER_RATIO || v > MAX_INNER_RATIO) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "shape.innerRatio out of range [" + MIN_INNER_RATIO + ", " + MAX_INNER_RATIO + "]: " + v);
-        }
-    }
-
-    // ---------- M12 BrushStrokeElement op handlers ----------
-
-    /** 笔刷大小允许范围（px）。BrushPanel 滑块 1..64 与此对齐。 */
-    private static final int MIN_BRUSH_SIZE = 1;
-    private static final int MAX_BRUSH_SIZE = 64;
-    /** 单笔触最大采样点数（防长按 + 拖动产生无限点占满内存）。 */
-    private static final int MAX_BRUSH_POINTS_PER_STROKE = 5000;
-    /** 单 session 同时活跃笔触数上限（防恶意 brush.start 不发 end）。 */
-    private static final int MAX_ACTIVE_STROKES = 4;
-    /** 笔触 buffer 闲置 timeout（ms）；超过后认为客户端掉线，brush.* op 拒。 */
-    private static final long STROKE_TIMEOUT_MS = 30_000;
-
-    /**
-     * 服务端笔触缓冲。{@code brush.start} 时分配，{@code brush.point} 累加，
-     * {@code brush.end} 时简化并写入 layer 的 elements 列表；{@code brush.cancel} 或 timeout
-     * 直接丢弃。
-     *
-     * <p>{@link #rawPoints} 中的坐标是<b>画布绝对坐标</b>（前端发送时即按 stage 坐标计算）；
-     * {@code brush.end} 时转换为 element bbox 相对坐标写入 {@link BrushStrokeElement#points}。</p>
-     */
-    static final class StrokeBuffer {
-        final String strokeId;
-        final String layerId;          // null = activeLayer 解析（endBrush 时取当前 activeLayer）
-        final int size;
-        final Fill fill;
-        final float opacity;
-        final boolean pressureSize;
-        final boolean pressureOpacity;
-        final float smoothing;           // [0, 1]，brush.end 时 RDP epsilon = smoothing × 4 px
-        final BlendMode blendMode;
-        final RenderMode renderMode;
-        final List<BrushPoint> rawPoints = new ArrayList<>();
-        long lastActivityMs;
-
-        StrokeBuffer(String strokeId, String layerId, int size, Fill fill, float opacity,
-                     boolean pressureSize, boolean pressureOpacity, float smoothing,
-                     BlendMode blendMode, RenderMode renderMode) {
-            this.strokeId = strokeId;
-            this.layerId = layerId;
-            this.size = size;
-            this.fill = fill;
-            this.opacity = opacity;
-            this.pressureSize = pressureSize;
-            this.pressureOpacity = pressureOpacity;
-            this.smoothing = smoothing;
-            this.blendMode = blendMode;
-            this.renderMode = renderMode;
-            this.lastActivityMs = System.currentTimeMillis();
-        }
-    }
-
-    private final Map<String, StrokeBuffer> strokes = new java.util.HashMap<>();
-
-    /**
-     * brush.start：分配 strokeId 并初始化笔触 buffer。返回 {@link OpResult.Ok} 但 patch 为
-     * 空（笔触此时还没生成 element）；session 仍 ACTIVE。
-     *
-     * @param props {@code size / color / fill / opacity / pressureSize / pressureOpacity /
-     *              blendMode / renderMode}（color 等价 SolidFill；fill 优先级高于 color）
-     */
+    /** 见 {@link BrushSession#startBrush(Map, String)}。 */
     public synchronized OpResult startBrush(Map<String, Object> props, String layerId) {
-        if (props == null) props = Map.of();
-        purgeStaleStrokes();
-        if (strokes.size() >= MAX_ACTIVE_STROKES) {
-            return err("TOO_MANY_STROKES", "active stroke count >= " + MAX_ACTIVE_STROKES);
-        }
-        // 校验 + 解析 props
-        int size;
-        Fill fill;
-        float opacity;
-        boolean pressureSize;
-        boolean pressureOpacity;
-        float smoothing;
-        BlendMode blendMode;
-        RenderMode renderMode;
-        try {
-            size = intFieldOrDefault(props, "size", 4);
-            validateBrushSize(size);
-            // fill 优先；缺省时退到 color 字段（兼容性简化）
-            Object fillRaw = props.get("fill");
-            if (fillRaw == null && props.containsKey("color")) {
-                fillRaw = props.get("color");
-            }
-            fill = parseFillNullable(fillRaw);
-            if (fill == null) fill = new SolidFill("#000000"); // 笔刷必须有色
-            opacity = props.containsKey("opacity")
-                    ? floatValue(props.get("opacity"), "opacity")
-                    : 1.0f;
-            if (opacity < 0f || opacity > 1f) {
-                return err("INVALID_PAYLOAD", "opacity out of [0, 1]: " + opacity);
-            }
-            pressureSize = boolFieldOrDefault(props, "pressureSize", true);
-            pressureOpacity = boolFieldOrDefault(props, "pressureOpacity", false);
-            smoothing = props.containsKey("smoothing")
-                    ? floatValue(props.get("smoothing"), "smoothing")
-                    : 0.5f;
-            if (smoothing < 0f || smoothing > 1f) {
-                return err("INVALID_PAYLOAD", "smoothing out of [0, 1]: " + smoothing);
-            }
-            blendMode = parseBlendModeNullable(props.get("blendMode"));
-            renderMode = parseRenderModeNullable(props.get("renderMode"));
-        } catch (ValidationException ve) {
-            return err(ve.code, ve.getMessage());
-        }
-        // layerId 校验
-        if (layerId != null && !layerId.isEmpty()) {
-            int idx = findLayerIdx(layerId);
-            if (idx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + layerId);
-            if (state.layers().get(idx).locked()) {
-                return err("LAYER_LOCKED", "target layer locked: " + layerId);
-            }
-        } else if (state.activeLayer().locked()) {
-            return err("LAYER_LOCKED", "active layer locked");
-        }
-
-        String strokeId = "s-" + UUID.randomUUID().toString().substring(0, 8);
-        StrokeBuffer buf = new StrokeBuffer(strokeId, layerId, size, fill, opacity,
-                pressureSize, pressureOpacity, smoothing, blendMode, renderMode);
-        strokes.put(strokeId, buf);
-        return new OpResult.OkBrushStart(strokeId);
+        return brushOps.startBrush(props, layerId);
     }
 
-    /** brush.point：累加点到 buffer。空 patch（不 emit），客户端不期待 ack。 */
+    /** 见 {@link BrushSession#appendBrushPoints(String, List)}。 */
     public synchronized OpResult appendBrushPoints(String strokeId, List<BrushPoint> points) {
-        StrokeBuffer buf = strokes.get(strokeId);
-        if (buf == null) return err("INVALID_STROKE", "unknown strokeId: " + strokeId);
-        if (points == null || points.isEmpty()) {
-            return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
-        }
-        if (buf.rawPoints.size() + points.size() > MAX_BRUSH_POINTS_PER_STROKE) {
-            strokes.remove(strokeId);
-            return err("STROKE_TOO_LONG", "stroke point count > " + MAX_BRUSH_POINTS_PER_STROKE);
-        }
-        buf.rawPoints.addAll(points);
-        buf.lastActivityMs = System.currentTimeMillis();
-        return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
+        return brushOps.appendBrushPoints(strokeId, points);
     }
 
-    /**
-     * brush.end：把 buffer 内 raw points 转换为 {@link BrushStrokeElement} 写入 layer。
-     * M12-A 阶段不做 RDP 简化（M12-B 加）；直接用 raw points 写入。
-     *
-     * <p>bbox 计算：minX/maxX/minY/maxY of points + padding={@code ceil(size/2)}
-     * （笔触半宽，保证 stroke 不出 bbox）。points 坐标从画布绝对转为 element 相对。</p>
-     */
+    /** 见 {@link BrushSession#endBrush(String)}。 */
     public synchronized OpResult endBrush(String strokeId) {
-        StrokeBuffer buf = strokes.remove(strokeId);
-        if (buf == null) return err("INVALID_STROKE", "unknown strokeId: " + strokeId);
-        if (buf.rawPoints.size() < 2) {
-            // 太短的笔触（点 < 2）丢弃，不生成元素，返回空 patch
-            return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
-        }
-
-        // M12-B：RDP 简化。epsilon = smoothing × 4 px。smoothing=0 时不简化（保留全部点），
-        // smoothing=1 时 4 px 容差（强压缩短笔触可能压成 2 点）。保证 ≥ 2 点。
-        double epsilon = buf.smoothing * 4.0;
-        List<BrushPoint> simplified = RdpSimplifier.simplify(buf.rawPoints, epsilon);
-        if (simplified.size() < 2) {
-            // 极端情况：RDP 把退化笔触压成 1 点，回退用 raw 首尾保证 ≥ 2
-            simplified = List.of(buf.rawPoints.get(0),
-                    buf.rawPoints.get(buf.rawPoints.size() - 1));
-        }
-
-        // 计算 bbox（基于简化后的点）
-        double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
-        double minY = Double.POSITIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
-        for (BrushPoint p : simplified) {
-            if (p.x() < minX) minX = p.x();
-            if (p.x() > maxX) maxX = p.x();
-            if (p.y() < minY) minY = p.y();
-            if (p.y() > maxY) maxY = p.y();
-        }
-        int pad = (buf.size + 1) / 2;
-        int bx = (int) Math.floor(minX) - pad;
-        int by = (int) Math.floor(minY) - pad;
-        int bw = (int) Math.ceil(maxX) - bx + pad;
-        int bh = (int) Math.ceil(maxY) - by + pad;
-        if (bw < 1) bw = 1;
-        if (bh < 1) bh = 1;
-        // 不限制 bbox 出画布；EditSession 其他元素也允许（用户后续可手动 move）
-
-        // 转相对坐标（基于简化后的点）
-        List<BrushPoint> rel = new ArrayList<>(simplified.size());
-        for (BrushPoint p : simplified) {
-            rel.add(new BrushPoint(p.x() - bx, p.y() - by, p.pressure()));
-        }
-
-        // 目标 layer 解析
-        Layer target;
-        int layerIdx;
-        if (buf.layerId == null || buf.layerId.isEmpty()) {
-            target = state.activeLayer();
-            layerIdx = findLayerIdx(target.id());
-        } else {
-            layerIdx = findLayerIdx(buf.layerId);
-            if (layerIdx < 0) return err("LAYER_NOT_FOUND", "layer not found: " + buf.layerId);
-            target = state.layers().get(layerIdx);
-        }
-        if (target.locked()) return err("LAYER_LOCKED", "target layer locked: " + target.id());
-
-        String id = "e-" + UUID.randomUUID();
-        Float elementOpacity = buf.opacity < 1.0f ? buf.opacity : null;
-        BrushStrokeElement element = new BrushStrokeElement(
-                id, bx, by, bw, bh, 0, false, true,
-                rel, buf.size, buf.fill,
-                buf.pressureSize, buf.pressureOpacity,
-                elementOpacity, buf.blendMode, buf.renderMode);
-
-        ProjectSnapshot pre = snapshotNow();
-        int insertIdx = target.elements().size();
-        target.elements().add(insertIdx, element);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-
-        StatePatch patch = new StatePatchBuilder()
-                .add(elementPath(layerIdx, insertIdx), element)
-                .build(v);
-        return new OpResult.Ok(patch, DirtyRegion.of(element));
+        return brushOps.endBrush(strokeId);
     }
 
-    /** brush.cancel：丢弃 buffer，不生成 element。 */
+    /** 见 {@link BrushSession#cancelBrush(String)}。 */
     public synchronized OpResult cancelBrush(String strokeId) {
-        StrokeBuffer removed = strokes.remove(strokeId);
-        if (removed == null) return err("INVALID_STROKE", "unknown strokeId: " + strokeId);
-        return new OpResult.Ok(new StatePatch(state.version(), List.of()), null);
+        return brushOps.cancelBrush(strokeId);
     }
 
     /**
-     * 清理超过 {@link #STROKE_TIMEOUT_MS} 闲置的笔触 buffer（防客户端断线泄漏内存）。
-     *
-     * <p>2026-05-14：从 private 提升为 public，便于 {@link moe.hikari.canvas.session.SessionReaper}
-     * 全局定时调用——之前只在 {@code brush.start} 内 purge，用户永久离开后 stroke buffer
-     * 永不清理（高优 bug 修复）。</p>
+     * 清理超过 idle 阈值的笔触 buffer。{@link moe.hikari.canvas.session.SessionReaper}
+     * 定时调用本接口。
      */
     public synchronized void purgeStaleStrokes() {
-        long cutoff = System.currentTimeMillis() - STROKE_TIMEOUT_MS;
-        strokes.values().removeIf(b -> b.lastActivityMs < cutoff);
+        brushOps.purgeStaleStrokes();
     }
 
     // ---------- 测试 hook（package-private，仅 test 包内访问）----------
 
     /** 当前活跃 stroke 数。EditSessionBrushPurgeTest 用。 */
     int activeStrokeCountForTest() {
-        return strokes.size();
+        return brushOps.activeStrokeCountForTest();
     }
 
     /** 把某 stroke 的 lastActivityMs 强制设置为 ms。purgeStaleStrokes 回归测试用。 */
     void overrideStrokeActivityForTest(String strokeId, long ms) {
-        StrokeBuffer b = strokes.get(strokeId);
-        if (b != null) b.lastActivityMs = ms;
+        brushOps.overrideStrokeActivityForTest(strokeId, ms);
     }
 
     private BrushStrokeElement applyBrushPatch(BrushStrokeElement orig, Map<String, Object> patch) {
@@ -1492,31 +939,7 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
-    private static void validateBrushSize(int v) {
-        if (v < MIN_BRUSH_SIZE || v > MAX_BRUSH_SIZE) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "brush.size out of range [" + MIN_BRUSH_SIZE + ", " + MAX_BRUSH_SIZE + "]: " + v);
-        }
-    }
-
     // ---------- 共享 helpers ----------
-
-    private Stroke buildStroke(Object raw) {
-        if (raw == null) return null;
-        if (!(raw instanceof Map<?, ?> m)) {
-            throw new ValidationException("INVALID_PAYLOAD", "stroke must be object");
-        }
-        int width = ((Number) requireNumber(m, "width")).intValue();
-        if (width < 0 || width > MAX_STROKE_WIDTH) {
-            throw new ValidationException("INVALID_PAYLOAD", "stroke.width out of range");
-        }
-        Object c = m.get("color");
-        if (!(c instanceof String color)) {
-            throw new ValidationException("INVALID_PAYLOAD", "stroke.color must be string");
-        }
-        validateColor(color);
-        return new Stroke(width, color);
-    }
 
     private TextElement applyTextPatch(TextElement t, Map<String, Object> patch) {
         String text = t.text();
@@ -1701,84 +1124,8 @@ public final class EditSession {
                 source, mask, opacity, blendMode, renderMode);
     }
 
-    private static final java.util.regex.Pattern IMAGE_SOURCE_RE =
-            java.util.regex.Pattern.compile("^[0-9a-f]{16}$");
-
-    private static void validateImageSource(String s) {
-        if (s == null || !IMAGE_SOURCE_RE.matcher(s).matches()) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "image source must be sha256[:16] lowercase hex: " + s);
-        }
-    }
-
-    /**
-     * 解析可选的 {@link Mask}：{@code null} → 无蒙版；非空时必须含 {@code d}（SVG path）+
-     * {@code inverted}（boolean）。{@code d} 复用 {@link PathDValidator}（含 4096 长度上限）。
-     */
-    private static Mask parseMaskNullable(Object v) {
-        if (v == null) return null;
-        if (!(v instanceof Map<?, ?> m)) {
-            throw new ValidationException("INVALID_PAYLOAD", "mask must be object");
-        }
-        Object dRaw = m.get("d");
-        if (!(dRaw instanceof String d)) {
-            throw new ValidationException("INVALID_PAYLOAD", "mask.d must be string");
-        }
-        validatePathD(d);
-        // M15.3 P0-10：mask path 二次约束 — 坐标 ∈ [0, w] / [0, h]（element-bbox-relative）+ vertex 数 ≤ 64
-        validateMaskPathBounds(d);
-        Object invRaw = m.get("inverted");
-        boolean inverted;
-        if (invRaw == null) {
-            inverted = false;
-        } else if (invRaw instanceof Boolean bb) {
-            inverted = bb;
-        } else {
-            throw new ValidationException("INVALID_PAYLOAD", "mask.inverted must be boolean");
-        }
-        return new Mask(d, inverted);
-    }
-
-    /**
-     * M15.3 P0-10：在 {@link #validatePathD} 之上对 mask path 加二次约束。
-     * <ul>
-     *   <li>vertex 数（M/L/Q/C 命令计数）≤ {@link #MAX_MASK_VERTICES}：v1 UI 仅暴露 4 个预设几何
-     *       （none / circle / roundedRect / ellipse），最多十几个顶点远未达上限；自由 lasso 留 v2。</li>
-     *   <li>d 内任何数字 token 的绝对值 ≤ 10000：这一层是 v1 简化校验；
-     *       精确"在 element bbox [0, w] × [0, h] 内"需要 element w/h 上下文，
-     *       此处仅约束 ≤ 10000，超出由后端 renderer 自然 clip 收尾。</li>
-     * </ul>
-     */
-    private static void validateMaskPathBounds(String d) {
-        // vertex 数 = M/L/Q/C 命令出现次数（大小写均算；Z/z 闭合不算 vertex）
-        int vertexCount = 0;
-        for (int i = 0, n = d.length(); i < n; i++) {
-            char c = d.charAt(i);
-            if (c == 'M' || c == 'L' || c == 'Q' || c == 'C'
-                    || c == 'm' || c == 'l' || c == 'q' || c == 'c') {
-                vertexCount++;
-            }
-        }
-        if (vertexCount > MAX_MASK_VERTICES) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "mask.d has " + vertexCount + " vertices > " + MAX_MASK_VERTICES);
-        }
-        // 坐标范围：用正则提取所有数字 token，比较绝对值 ≤ 10000
-        java.util.regex.Matcher m = MASK_NUMBER_RE.matcher(d);
-        while (m.find()) {
-            try {
-                double v = Double.parseDouble(m.group());
-                if (Math.abs(v) > 10_000) {
-                    throw new ValidationException("INVALID_PAYLOAD",
-                            "mask.d coordinate " + v + " > 10000");
-                }
-            } catch (NumberFormatException ignored) {
-                // MASK_NUMBER_RE 已限定为合法数字格式，理论上不会进这里
-            }
-        }
-    }
-
-    private static Element cloneElementWithNewId(Element src) {
+    // 2026-05-14 重构：package-private 以便 {@link LayerOperations#duplicateLayer} 跨类调用。
+    static Element cloneElementWithNewId(Element src) {
         String newId = "e-" + UUID.randomUUID();
         return switch (src) {
             case TextElement t -> new TextElement(newId,
@@ -1819,294 +1166,26 @@ public final class EditSession {
         };
     }
 
-    // ---------- 校验 helpers ----------
-
-    private static boolean isValidColor(String s) {
-        return s != null && COLOR_RE.matcher(s).matches();
-    }
-
-    private static void validateColor(String s) {
-        if (!isValidColor(s)) throw new ValidationException("INVALID_PAYLOAD", "invalid color: " + s);
-    }
-
-    /**
-     * M11：把 fill 字段 raw value（{@code Map} / {@code String} / {@code null}）解析为
-     * {@link Fill}，并跑 {@link FillValidator} 校验。
-     *
-     * <ul>
-     *   <li>{@code null} → 返回 {@code null}（空心 / 仅描边）</li>
-     *   <li>{@code String} → {@link SolidFill}（向后兼容 M10 及以前的形态）</li>
-     *   <li>{@code Map} → 走 {@link FillDeserializer}（{@code "type"} 字段决定子类）</li>
-     * </ul>
-     */
-    private static Fill parseFillNullable(Object raw) {
-        if (raw == null) return null;
-        Fill fill;
-        if (raw instanceof String s) {
-            fill = new SolidFill(s);
-        } else if (raw instanceof Map<?, ?> m) {
-            try {
-                fill = FILL_MAPPER.convertValue(m, Fill.class);
-            } catch (IllegalArgumentException e) {
-                throw new ValidationException("INVALID_PAYLOAD",
-                        "invalid fill: " + e.getMessage());
-            }
-        } else {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "fill must be string or object");
-        }
-        FillValidator.validate(fill);
-        return fill;
-    }
-
-    private static void validateRotation(int r) {
-        if (r < 0 || r >= 360) {
-            throw new ValidationException("INVALID_PAYLOAD", "rotation must be in [0,360): " + r);
-        }
-    }
-
-    private static void validateText(String s) {
-        if (s.length() > MAX_TEXT_LEN) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "text length " + s.length() + " exceeds " + MAX_TEXT_LEN);
-        }
-    }
-
-    private static void validateCoord(int v, String name) {
-        if (v < -MAX_COORD || v > MAX_COORD) {
-            throw new ValidationException("INVALID_PAYLOAD", name + " out of range: " + v);
-        }
-    }
-
-    private static void validateDim(int v, String name) {
-        if (v <= 0 || v > MAX_DIM) {
-            throw new ValidationException("INVALID_PAYLOAD", name + " must be 1.." + MAX_DIM + ": " + v);
-        }
-    }
-
-    private static void validateFontSize(int v) {
-        if (v < 1 || v > MAX_FONT_SIZE) {
-            throw new ValidationException("INVALID_PAYLOAD", "fontSize out of range: " + v);
-        }
-    }
-
-    private static void validateAlign(String v) {
-        if (!"left".equals(v) && !"center".equals(v) && !"right".equals(v)) {
-            throw new ValidationException("INVALID_PAYLOAD", "invalid align: " + v);
-        }
-    }
-
-    private static void validateLetterSpacing(float v) {
-        if (!Float.isFinite(v) || v < MIN_LETTER_SPACING || v > MAX_LETTER_SPACING) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "letterSpacing out of range [" + MIN_LETTER_SPACING + ", " + MAX_LETTER_SPACING + "]: " + v);
-        }
-    }
-
-    private static void validateLineHeight(float v) {
-        if (!Float.isFinite(v) || v < MIN_LINE_HEIGHT || v > MAX_LINE_HEIGHT) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "lineHeight out of range [" + MIN_LINE_HEIGHT + ", " + MAX_LINE_HEIGHT + "]: " + v);
-        }
-    }
-
-    /** v2 element 字段：null = 清除（element 用默认 1.0）。 */
-    private static Float parseOpacityNullable(Object v) {
-        if (v == null) return null;
-        float f = floatValue(v, "opacity");
-        if (!Float.isFinite(f) || f < 0f || f > 1f) {
-            throw new ValidationException("INVALID_PAYLOAD",
-                    "opacity must be in [0,1]: " + f);
-        }
-        return f;
-    }
-
-    /** v2 element 字段：null = 清除（element 用默认 normal）。layer.* op 不允 null。 */
-    private static BlendMode parseBlendModeNullable(Object v) {
-        if (v == null) return null;
-        return parseBlendMode(v);
-    }
-
-    private static BlendMode parseBlendMode(Object v) {
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", "blendMode must be string");
-        }
-        return switch (s.toLowerCase()) {
-            case "normal" -> BlendMode.NORMAL;
-            case "multiply" -> BlendMode.MULTIPLY;
-            case "screen" -> BlendMode.SCREEN;
-            case "overlay" -> BlendMode.OVERLAY;
-            default -> throw new ValidationException("INVALID_PAYLOAD",
-                    "unknown blendMode: " + s);
-        };
-    }
-
-    private static RenderMode parseRenderModeNullable(Object v) {
-        if (v == null) return null;
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", "renderMode must be string");
-        }
-        return switch (s.toLowerCase()) {
-            case "clean" -> RenderMode.CLEAN;
-            case "dither" -> RenderMode.DITHER;
-            default -> throw new ValidationException("INVALID_PAYLOAD",
-                    "unknown renderMode: " + s);
-        };
-    }
-
-    // ---------- Map<String,Object> 读取 helpers ----------
-
-    private static String requireString(Map<String, Object> m, String k, boolean required) {
-        Object v = m.get(k);
-        if (v == null) {
-            if (required) throw new ValidationException("INVALID_PAYLOAD", k + " required");
-            return null;
-        }
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be string");
-        }
-        return s;
-    }
-
-    private static String stringFieldOrDefault(Map<String, Object> m, String k, String def) {
-        Object v = m.get(k);
-        if (v == null) return def;
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be string");
-        }
-        return s;
-    }
-
-    private static String nullableString(Map<String, Object> m, String k) {
-        Object v = m.get(k);
-        if (v == null) return null;
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be string or null");
-        }
-        return s;
-    }
-
-    private static int intFieldOrDefault(Map<String, Object> m, String k, int def) {
-        Object v = m.get(k);
-        if (v == null) return def;
-        if (!(v instanceof Number n)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be number");
-        }
-        return n.intValue();
-    }
-
-    private static float floatFieldOrDefault(Map<String, Object> m, String k, float def) {
-        Object v = m.get(k);
-        if (v == null) return def;
-        if (!(v instanceof Number n)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be number");
-        }
-        return n.floatValue();
-    }
-
-    private static boolean boolFieldOrDefault(Map<String, Object> m, String k, boolean def) {
-        Object v = m.get(k);
-        if (v == null) return def;
-        if (!(v instanceof Boolean b)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be boolean");
-        }
-        return b;
-    }
-
-    private static Number requireNumber(Map<?, ?> m, String k) {
-        Object v = m.get(k);
-        if (!(v instanceof Number n)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be number");
-        }
-        return n;
-    }
-
-    private static String requireStringValue(Object v, String key) {
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", key + " must be string");
-        }
-        return s;
-    }
-
-    private static int intValue(Object v, String key) {
-        if (!(v instanceof Number n)) {
-            throw new ValidationException("INVALID_PAYLOAD", key + " must be number");
-        }
-        return n.intValue();
-    }
-
-    private static float floatValue(Object v, String key) {
-        if (!(v instanceof Number n)) {
-            throw new ValidationException("INVALID_PAYLOAD", key + " must be number");
-        }
-        return n.floatValue();
-    }
-
-    private static boolean boolValue(Object v, String key) {
-        if (!(v instanceof Boolean b)) {
-            throw new ValidationException("INVALID_PAYLOAD", key + " must be boolean");
-        }
-        return b;
-    }
+    // 校验 helpers（validateColor / parseFill / validateRotation / validate* /
+    // requireString / intFieldOrDefault / intValue / boolValue 等）已整体迁出至
+    // {@link ElementValidator}（2026-05-14 god class 拆分）。
+    //
+    // ValidationException：M11 提取为 top-level 同包类（让 FillValidator 共用），见 ValidationException.java。
 
     private static OpResult.Error err(String code, String msg) {
         return new OpResult.Error(code, msg);
     }
 
-    // ValidationException：M11 提取为 top-level 同包类（让 FillValidator 共用），见 ValidationException.java。
-
     /**
      * M15.4 P0-23：模板 raw_state 反序列化得到的 element 通过本方法二次校验。
-     *
-     * <p>复用 EditSession 内现有 private static validator（{@link #validatePathD} /
-     * {@link #validateMaskPathBounds} / {@link #IMAGE_SOURCE_RE} 等），不需要 session 实例。
-     * 这一层把 v2 模板 raw_state 路径与 element.* op 路径校验对齐，
-     * 避免任意 {@code canvas.template.save} 玩家发布的模板注入畸形 element。</p>
-     *
-     * <p><b>v1 简化：</b>通用字段（x/y/w/h/rotation）全走范围检；type-specific 字段中
-     * 仅强校验 image source / icon source / path.d / mask.d（已知攻击面）；
-     * 其余字段（text / rect / circle / shape 的 fill / fontId / stroke 等）信任
-     * Jackson 反序列化时已结构化，留 M16 全量对齐。</p>
+     * 2026-05-14 god class 重构后实现位于 {@link ElementValidator#validateElementForTemplateApply}；
+     * 保留本 wrapper 以维持 {@code moe.hikari.canvas.template.TemplateInstantiator} 等外部调用方
+     * 的 API 不变。
      *
      * @throws ValidationException 任一字段不合法
      */
     public static void validateElementForTemplateApply(Element el) {
-        validateCoord(el.x(), "x");
-        validateCoord(el.y(), "y");
-        validateDim(el.w(), "w");
-        validateDim(el.h(), "h");
-        validateRotation(el.rotation());
-
-        if (el instanceof PathElement p) {
-            if (p.d() == null) {
-                throw new ValidationException("INVALID_PAYLOAD", "path.d required");
-            }
-            validatePathD(p.d());
-        } else if (el instanceof BrushStrokeElement b) {
-            if (b.points() == null) {
-                throw new ValidationException("INVALID_PAYLOAD", "brush.points required");
-            }
-            // 简化：不重跑全 brush 校验；信任模板作者自己上传时已校验
-        } else if (el instanceof ImageElement im) {
-            if (im.source() == null || !IMAGE_SOURCE_RE.matcher(im.source()).matches()) {
-                throw new ValidationException("INVALID_PAYLOAD",
-                        "image source must match [0-9a-f]{16}: " + im.source());
-            }
-            if (im.mask() != null) {
-                if (im.mask().d() == null) {
-                    throw new ValidationException("INVALID_PAYLOAD", "mask.d required");
-                }
-                validatePathD(im.mask().d());
-                validateMaskPathBounds(im.mask().d());
-            }
-        } else if (el instanceof IconElement ic) {
-            if (ic.source() == null || !ic.source().matches("^[a-z0-9_-]{1,32}$")) {
-                throw new ValidationException("INVALID_PAYLOAD",
-                        "icon source must match [a-z0-9_-]{1,32}: " + ic.source());
-            }
-        }
-        // text / rect / circle / shape：通用字段已检；type-specific 字段
-        // （fontId / fill 等）信任 ProjectState 反序列化时已结构化
+        ElementValidator.validateElementForTemplateApply(el);
     }
 
 }
