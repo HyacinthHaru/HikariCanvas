@@ -77,3 +77,10 @@ images:
   max-uploads-per-day: 50
   # 全服磁盘总配额（MiB）。超出 → 触发 LRU 清理直到腾出空间。0 = 不限。
   max-total-storage-mb: 1024
+
+# 数据库 / 迁移（M15.4）
+database:
+  # 跑 schema migration 前自动备份 data.db 到 data.db.pre-V<NNN>.bak。
+  # 多个 migration 各备份一份，文件名带版本号方便回滚。
+  # pre-release（0.1.x SNAPSHOT）默认关；0.1.0 发版后建议改 true。
+  auto-backup-before-migration: false

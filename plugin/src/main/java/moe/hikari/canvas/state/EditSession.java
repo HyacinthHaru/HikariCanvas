@@ -2055,4 +2055,58 @@ public final class EditSession {
 
     // ValidationException：M11 提取为 top-level 同包类（让 FillValidator 共用），见 ValidationException.java。
 
+    /**
+     * M15.4 P0-23：模板 raw_state 反序列化得到的 element 通过本方法二次校验。
+     *
+     * <p>复用 EditSession 内现有 private static validator（{@link #validatePathD} /
+     * {@link #validateMaskPathBounds} / {@link #IMAGE_SOURCE_RE} 等），不需要 session 实例。
+     * 这一层把 v2 模板 raw_state 路径与 element.* op 路径校验对齐，
+     * 避免任意 {@code canvas.template.save} 玩家发布的模板注入畸形 element。</p>
+     *
+     * <p><b>v1 简化：</b>通用字段（x/y/w/h/rotation）全走范围检；type-specific 字段中
+     * 仅强校验 image source / icon source / path.d / mask.d（已知攻击面）；
+     * 其余字段（text / rect / circle / shape 的 fill / fontId / stroke 等）信任
+     * Jackson 反序列化时已结构化，留 M16 全量对齐。</p>
+     *
+     * @throws ValidationException 任一字段不合法
+     */
+    public static void validateElementForTemplateApply(Element el) {
+        validateCoord(el.x(), "x");
+        validateCoord(el.y(), "y");
+        validateDim(el.w(), "w");
+        validateDim(el.h(), "h");
+        validateRotation(el.rotation());
+
+        if (el instanceof PathElement p) {
+            if (p.d() == null) {
+                throw new ValidationException("INVALID_PAYLOAD", "path.d required");
+            }
+            validatePathD(p.d());
+        } else if (el instanceof BrushStrokeElement b) {
+            if (b.points() == null) {
+                throw new ValidationException("INVALID_PAYLOAD", "brush.points required");
+            }
+            // 简化：不重跑全 brush 校验；信任模板作者自己上传时已校验
+        } else if (el instanceof ImageElement im) {
+            if (im.source() == null || !IMAGE_SOURCE_RE.matcher(im.source()).matches()) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "image source must match [0-9a-f]{16}: " + im.source());
+            }
+            if (im.mask() != null) {
+                if (im.mask().d() == null) {
+                    throw new ValidationException("INVALID_PAYLOAD", "mask.d required");
+                }
+                validatePathD(im.mask().d());
+                validateMaskPathBounds(im.mask().d());
+            }
+        } else if (el instanceof IconElement ic) {
+            if (ic.source() == null || !ic.source().matches("^[a-z0-9_-]{1,32}$")) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "icon source must match [a-z0-9_-]{1,32}: " + ic.source());
+            }
+        }
+        // text / rect / circle / shape：通用字段已检；type-specific 字段
+        // （fontId / fill 等）信任 ProjectState 反序列化时已结构化
+    }
+
 }

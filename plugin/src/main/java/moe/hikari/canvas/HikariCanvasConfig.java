@@ -47,6 +47,10 @@ public final class HikariCanvasConfig {
     // ---- images (M13) ----
     public final ImageConfig images;
 
+    // ---- database (M15.4) ----
+    /** 跑 schema migration 前是否先备份 data.db。pre-release 默认 false。 */
+    public final boolean databaseAutoBackup;
+
     public record ImageConfig(
             int maxSizeKb,
             java.util.List<String> allowedMime,
@@ -80,6 +84,7 @@ public final class HikariCanvasConfig {
         this.previewCacheSeconds = b.previewCacheSeconds;
         this.templatesMaxPerPlayer = b.templatesMaxPerPlayer;
         this.images = b.images;
+        this.databaseAutoBackup = b.databaseAutoBackup;
     }
 
     /**
@@ -128,6 +133,9 @@ public final class HikariCanvasConfig {
                 Math.max(0, f.getInt("images.max-uploads-per-day", defaults.maxUploadsPerDay())),
                 Math.max(0, f.getInt("images.max-total-storage-mb", defaults.maxTotalStorageMb())));
 
+        // M15.4 P0-29 database 段
+        b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", false);
+
         return new HikariCanvasConfig(b);
     }
 
@@ -161,5 +169,6 @@ public final class HikariCanvasConfig {
         int previewCacheSeconds = 300;
         int templatesMaxPerPlayer = 20;
         ImageConfig images = ImageConfig.defaults();
+        boolean databaseAutoBackup = false;
     }
 }

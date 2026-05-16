@@ -324,16 +324,12 @@ public final class WebServer {
             return;
         }
 
+        // M15.4 P0-Web-2：预握手只返 ok + wsUrl + playerName（低敏感），所有敏感元数据
+        // （sessionId / wall / templates / mapIds 等）通过 WS ready 帧下发。
+        // 修复 HTTP 响应可被嗅探后跨 session 访问的攻击面。
         ctx.json(Map.of(
-                "sessionId", session.id(),
+                "ok", true,
                 "playerName", session.playerName(),
-                "wall", Map.of(
-                        "width", session.wall().width(),
-                        "height", session.wall().height()),
-                "mapIds", session.mapIds(),
-                "templates", listTemplates(),
-                "palette", Map.of(),
-                "fonts", List.of(),
                 "wsUrl", "/ws"));
     }
 

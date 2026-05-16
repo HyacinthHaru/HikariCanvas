@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-05-16 · M15.4 ultrareview Phase 3（ImageIO 隔离 + DB 一致性 + 协议 + 渲染）
+
+4 个 agent 并行实施 10 处中高风险修复。覆盖 ImageIO DoS / LRU 死锁 / DB 事务 / 协议明文 / 模板注入 / dither OOM 6 个独立领域。
+
+### Group A：ImageIO 隔离 + LRU 死锁
+
+- **P0-12 IIORegistry 注销不可信 reader**：`HikariCanvas.onEnable` 头部扫 IIORegistry 把非 PNG/JPEG/WebP 的 ImageReaderSpi 注销。Thread.interrupt 对 ImageIO 内部循环大多无效——唯一可靠的防线是不让它们注册。降低压缩炸弹 / 损坏文件触发 TIFF/BMP/GIF 解码器漏洞的攻击面
+- **P0-15 pickLruCandidates SQL NOT IN**：`ImageUploadDao.pickLruCandidates` 把内存 `stream.filter(!isReferenced)` 改成 JDBI `bindList("exc", ...)` + `WHERE hash NOT IN (<exc>)`。攻击者上传 16 张图全引用后 SQL 直接跳过这些行返非引用候选，不再"返 16 行内存全 filter → break → 所有玩家永久 fail"
+- **P0-17 ImageStorage.load timeout 隔离**：加私有 `renderDecoderPool`（1-thread bounded + ArrayBlockingQueue(4) + AbortPolicy + daemon）+ 500ms timeout。损坏 PNG 不再让 rasterize 主线程死锁；reject 时返 null 走占位
+
+### Group B：DB 一致性 + AuditLog
+
+- **P0-27 MigrationRunner SQL 拆分识别引号**：新 `splitSqlStatements` 状态机识别单引号串（含 `''` escape）/ 双引号串 / 行内 `--` 注释。朴素 `split(";")` 对 `INSERT VALUES ('a;b')` 会破裂；新状态机扛住未来 DDL 含数据 INSERT 的 migration
+- **P0-28 + P0-29 MigrationRunner 事务化 + auto-backup**：每个 migration 包 `h.useTransaction(...)`，DDL 失败回滚不留半态；`HikariCanvasConfig.databaseAutoBackup` + `config.yml database.auto-backup-before-migration`（pre-release 默认 false，0.1.0 发版后建议 true）；开启时 migration 前 `Files.copy(data.db, data.db.pre-V<NNN>.bak)`
+- **P0-33 AuditLog DB 失败 fallback**：`record(...)` jdbi.useHandle 包 try-catch；DB 失败时 `log.severe("[AUDIT FALLBACK] event=... player=... reason=...")` 至少留痕到 server log。AuditLog 构造扩 Logger 参数 + 老单参 ctor 兼容
+
+### Group C：预握手协议 + Template 校验
+
+- **P0-Web-2 预握手协议精简**：`handlePreHandshake` 响应从 `{ sessionId, playerName, wall, mapIds, templates, palette, fonts, wsUrl }` 砍到 `{ ok: true, playerName, wsUrl }`。sessionId / wall / templates 全由 WS `ready` 帧下发（已实装）。HTTP 响应不再泄漏 sessionId → 配合 P0-21 capability-by-URL 缓解。前端无需改（grep 已确认前端不调 `/api/session/:token` HTTP，直接走 WS）
+- **P0-23 Template raw_state 安全校验**：`EditSession.validateElementForTemplateApply(Element)` 抽 static + 公开。`TemplateInstantiator.instantiateRawState` 在 `cloneElementWithFreshId` 前调；catch `ValidationException` → `Result.Failed("INVALID_TEMPLATE", ...)`。覆盖 x/y/w/h/rotation 通用范围 + PathElement.d + ImageElement.source + ImageElement.mask + IconElement.source。`ValidationException` 提升为 public final 让 template 包能 catch
+
+### Group D：渲染 dither buffer 收紧
+
+- **P0-Render-2 dither buffer 按 element bbox**：`drawDitheredElement` 把整 canvas ARGB buffer 改成 element bbox + rotation 外接圆 + canvas clip 交集大小。`BayerDither.apply` 新签名 `apply(img, palette, phaseX, phaseY)` 让 dither phase 按原画坐标取 Bayer matrix，buffer 缩到 bbox 后输出**逐像素等价**。所有 11-dither / 12-brush / 13-image-mask fixture baseline **零漂移**。常规元素从 64MB transient 降到几 KB ~ 几百 KB
+
+### 验证
+
+- `./gradlew :plugin:test`：**364 case 全过**（baseline 不漂移）
+- `vite build`：不变（M15.4 只动后端）
+- M15.4 期间发现需要清理 `build/` 内 macOS Finder/iCloud 残留的 `* 2.xml` / `* 2.class` 副本——清完测试干净
+
+### 剩余推后 P0
+
+- **P0-26 MapPool persist 失败一致性**：留 M15.2 god class 拆分阶段（MapPool 也是 candidate）一起做—— byId.put 失败回滚 + 调用方重试
+- **P0-Web-4 WS auth → wsBySession race**：v1 不做，需要更深的并发设施（CountDownLatch 等）
+
+### 工期
+
+约 3h（4 agent 并行）—— 预算 6-8h，节省 ~60%。
+
+### 改动文件清单（13 文件）
+
+- `plugin/.../HikariCanvas.java`（IIORegistry 启动期注销 + imageStorage.shutdown 接 onDisable）
+- `plugin/.../HikariCanvasConfig.java`（databaseAutoBackup 字段）
+- `plugin/.../image/ImageStorage.java`（renderDecoderPool + load timeout）
+- `plugin/.../render/BayerDither.java`（phaseX/phaseY 重载）
+- `plugin/.../render/CanvasCompositor.java`（drawDitheredElement bbox-only）
+- `plugin/.../state/EditSession.java`（validateElementForTemplateApply public static）
+- `plugin/.../state/ValidationException.java`（提升 public final）
+- `plugin/.../storage/AuditLog.java`（catch + log.severe fallback + Logger 字段）
+- `plugin/.../storage/ImageUploadDao.java`（pickLruCandidates SQL NOT IN）
+- `plugin/.../storage/MigrationRunner.java`（splitSqlStatements + useTransaction + tryBackup）
+- `plugin/.../template/TemplateInstantiator.java`（validateElementForTemplateApply 接入）
+- `plugin/.../web/WebServer.java`（handlePreHandshake 精简）
+- `plugin/.../resources/config.yml`（database 段）
+
+---
+
 ## 2026-05-16 · M15.3 ultrareview Phase 2（鉴权方案 C + 数据安全 + 基础设施）
 
 3 个 agent 并行实施 9 处中风险修复 —— P0 鉴权破口 + 数据丢失 + DoS 防线。

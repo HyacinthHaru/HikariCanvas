@@ -62,8 +62,23 @@ public final class BayerDither {
      *
      * <p>性能：单次像素操作 = {@code getImageData + bayer + matchColor + getColor + putImageData}，
      * 1280×1280 主流画布约 1-2 ms（单线程，O(N) 比 LUT 慢一倍仍可接受）。</p>
+     *
+     * <p>等价于 {@link #apply(BufferedImage, PaletteLut, int, int)} 传 {@code phaseX=0, phaseY=0}。</p>
      */
     public static void apply(BufferedImage img, PaletteLut palette) {
+        apply(img, palette, 0, 0);
+    }
+
+    /**
+     * 带 phase 偏移的 dither。{@code phaseX/phaseY} 让 Bayer 矩阵索引从
+     * {@code (x+phaseX, y+phaseY)} 取值——使得 buffer 局部坐标 (0,0) 对齐到
+     * 原画坐标 ({@code phaseX}, {@code phaseY})，dither 图案相位与"全画布 buffer 时"
+     * 一致，跨 element 边界的 dither 图案不会错位。
+     *
+     * <p>M15.4 P0-Render-2 引入：dither buffer 缩到 element bbox 后必传
+     * {@code (clipX, clipY)} 维持视觉相位一致。</p>
+     */
+    public static void apply(BufferedImage img, PaletteLut palette, int phaseX, int phaseY) {
         if (img == null || palette == null) return;
         int w = img.getWidth();
         int h = img.getHeight();
@@ -77,7 +92,7 @@ public final class BayerDither {
                 int r = (argb >> 16) & 0xff;
                 int g = (argb >> 8) & 0xff;
                 int b = argb & 0xff;
-                double t = threshold(x, y);
+                double t = threshold(x + phaseX, y + phaseY);
                 int offset = (int) Math.round(t * AMPLITUDE * 2);
                 int dr = clamp(r + offset);
                 int dg = clamp(g + offset);

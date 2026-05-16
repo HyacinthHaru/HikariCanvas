@@ -160,6 +160,14 @@ public final class TemplateInstantiator {
         List<Element> flat = new ArrayList<>();
         for (var layer : state.layers()) {
             for (Element el : layer.elements()) {
+                // M15.4 P0-23：raw_state 反序列化得到的 element 跑安全校验，
+                // 避免 canvas.template.save 玩家通过模板注入畸形 element（path / image source / mask 等）。
+                try {
+                    moe.hikari.canvas.state.EditSession.validateElementForTemplateApply(el);
+                } catch (moe.hikari.canvas.state.ValidationException ve) {
+                    errors.add("template element invalid: " + ve.getMessage());
+                    return new Result.Failed("INVALID_TEMPLATE", errors);
+                }
                 // 给 element 新 id，避免与目标 wall 现有 id 冲突
                 flat.add(cloneElementWithFreshId(el));
             }

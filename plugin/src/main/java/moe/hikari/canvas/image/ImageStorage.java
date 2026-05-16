@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -48,6 +49,21 @@ public final class ImageStorage {
     private final Logger log;
     private final Path uploadsDir;
     private final ImageUploadDao dao;
+
+    // M15.4 P0-17：渲染解码也要 timeout 隔离，否则损坏 PNG 让 rasterize 主线程死锁。
+    // 同 UploadHandler 的有界 ThreadPoolExecutor pattern，但 TTL 短（render 上下文）。
+    private final ExecutorService renderDecoderPool = new java.util.concurrent.ThreadPoolExecutor(
+            1, 1,
+            0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+            new java.util.concurrent.ArrayBlockingQueue<>(4),
+            r -> {
+                Thread t = new Thread(r, "hikari-render-decoder");
+                t.setDaemon(true);
+                return t;
+            },
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+
+    private static final long RENDER_DECODE_TIMEOUT_MS = 500L;
 
     private final LinkedHashMap<String, CacheEntry> memCache = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
@@ -132,8 +148,19 @@ public final class ImageStorage {
         if (!Files.isRegularFile(file)) return null;
         BufferedImage img;
         try {
-            img = ImageIO.read(file.toFile());
-        } catch (IOException e) {
+            java.util.concurrent.Future<BufferedImage> fut = renderDecoderPool.submit(
+                    () -> ImageIO.read(file.toFile()));
+            try {
+                img = fut.get(RENDER_DECODE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.TimeoutException te) {
+                fut.cancel(true);
+                log.warning("ImageStorage.load timeout: " + hash);
+                return null;
+            }
+        } catch (java.util.concurrent.RejectedExecutionException ree) {
+            log.warning("ImageStorage.load decoder busy: " + hash);
+            return null;
+        } catch (Exception e) {
             log.log(Level.WARNING, "ImageStorage.load read failed: " + hash, e);
             return null;
         }
@@ -143,6 +170,11 @@ public final class ImageStorage {
         }
         dao.touchLastUsed(hash, now);
         return img;
+    }
+
+    /** M15.4 P0-17：关闭渲染解码池，由 HikariCanvas.onDisable 调。 */
+    public void shutdown() {
+        renderDecoderPool.shutdownNow();
     }
 
     /**

@@ -378,15 +378,46 @@ public final class CanvasCompositor {
 
     /**
      * dither element：在独立 ARGB buffer 上画 + 跑 Bayer 抖动 → blend 回主 graphics。
-     * canvas 尺寸 buffer 简化裁剪（path 元素 d 可超 bbox），代价是每个 dither element 一次
-     * 内存分配；10×10 maps 画布 ≈ 6.5 MiB，常规场景 dither element 数 ≤ 5 个，可接受。
+     *
+     * <p><b>M15.4 P0-Render-2</b>：buffer 按 element bbox（含 rotation 包围盒）而非整 canvas
+     * 分配。配合 P0-Render-1 的 32 maps 上限，原来 4096×4096×ARGB = 64 MiB transient × N dither
+     * element 的 OOM 风险消除；常规小元素只占 几 KiB ~ 几百 KiB。</p>
+     *
+     * <p><b>dither 相位保持</b>：buffer 局部坐标 (0,0) 对应原画 (clipX, clipY)，调用
+     * {@link BayerDither#apply(BufferedImage, PaletteLut, int, int)} 传 phase=(clipX, clipY)
+     * 让 Bayer 矩阵以原画坐标取阈值——snapshot baseline 不漂移、跨 element 边界不错位。</p>
      */
     private void drawDitheredElement(Graphics2D g, Element e, float opacity,
                                       int widthPx, int heightPx) {
-        BufferedImage buf = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
+        // bbox 外接矩形（含 rotation padding）。简化：任意角度的外接 = bbox 对角线 √(w²+h²)
+        int bbX, bbY, bbW, bbH;
+        if (e.rotation() != 0) {
+            int diagonal = (int) Math.ceil(Math.hypot(e.w(), e.h()));
+            int cx = e.x() + e.w() / 2;
+            int cy = e.y() + e.h() / 2;
+            bbX = cx - diagonal / 2;
+            bbY = cy - diagonal / 2;
+            bbW = diagonal;
+            bbH = diagonal;
+        } else {
+            bbX = e.x();
+            bbY = e.y();
+            bbW = e.w();
+            bbH = e.h();
+        }
+        // 与 canvas 相交
+        int clipX = Math.max(0, bbX);
+        int clipY = Math.max(0, bbY);
+        int clipW = Math.min(widthPx, bbX + bbW) - clipX;
+        int clipH = Math.min(heightPx, bbY + bbH) - clipY;
+        if (clipW <= 0 || clipH <= 0) return;
+
+        BufferedImage buf = new BufferedImage(clipW, clipH, BufferedImage.TYPE_INT_ARGB);
         Graphics2D eg = buf.createGraphics();
         try {
             applyHints(eg);
+            // buf 局部 (0,0) 对应原画 (clipX, clipY)，drawElementBody 仍用原画坐标
+            eg.translate(-clipX, -clipY);
             if (e.rotation() != 0) {
                 double cx = e.x() + e.w() / 2.0;
                 double cy = e.y() + e.h() / 2.0;
@@ -396,10 +427,11 @@ public final class CanvasCompositor {
         } finally {
             eg.dispose();
         }
-        BayerDither.apply(buf, paletteLut);
+        // phase = (clipX, clipY) 让 dither 图案以原画坐标为基准，与全画布 buffer 时等价
+        BayerDither.apply(buf, paletteLut, clipX, clipY);
         Composite prev = g.getComposite();
         if (opacity < 1.0f) g.setComposite(AlphaComposite.SrcOver.derive(opacity));
-        g.drawImage(buf, 0, 0, null);
+        g.drawImage(buf, clipX, clipY, null);
         if (opacity < 1.0f) g.setComposite(prev);
     }
 

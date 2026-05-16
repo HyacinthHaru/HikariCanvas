@@ -96,6 +96,36 @@ public final class HikariCanvas extends JavaPlugin {
     public void onEnable() {
         PacketEvents.getAPI().init();
 
+        // M15.4 P0-12：IIORegistry 防御 — 注销已知有 CVE 历史 / 不需要的 ImageIO reader。
+        // 我们 ImageStorage 只用 PNG / JPEG / WebP；其他格式（TIFF、BMP、GIF）attack surface
+        // 大且未用，启动期注销避免 ImageIO.read 触发它们的解码循环（Thread.interrupt
+        // 大多对 ImageIO 内部循环无效，唯一稳的防线是不让它们注册）。
+        try {
+            javax.imageio.spi.IIORegistry registry = javax.imageio.spi.IIORegistry.getDefaultInstance();
+            java.util.Iterator<javax.imageio.spi.ImageReaderSpi> readers = registry.getServiceProviders(
+                    javax.imageio.spi.ImageReaderSpi.class, false);
+            java.util.List<javax.imageio.spi.ImageReaderSpi> toRemove = new java.util.ArrayList<>();
+            while (readers.hasNext()) {
+                javax.imageio.spi.ImageReaderSpi spi = readers.next();
+                String[] names = spi.getFormatNames();
+                boolean keep = false;
+                for (String n : names) {
+                    String lc = n.toLowerCase(java.util.Locale.ROOT);
+                    if (lc.equals("png") || lc.equals("jpeg") || lc.equals("jpg") || lc.equals("webp")) {
+                        keep = true;
+                        break;
+                    }
+                }
+                if (!keep) toRemove.add(spi);
+            }
+            for (var spi : toRemove) registry.deregisterServiceProvider(spi);
+            getLogger().info("IIORegistry: deregistered " + toRemove.size()
+                    + " unused image readers (kept PNG/JPEG/WebP)");
+        } catch (Exception e) {
+            getLogger().log(java.util.logging.Level.WARNING,
+                    "IIORegistry deregistration failed (non-fatal)", e);
+        }
+
         // M7 polish：config.yml。首次启动把 jar 内默认配置拷到 dataFolder
         saveDefaultConfig();
         config = HikariCanvasConfig.load(this);
@@ -103,8 +133,12 @@ public final class HikariCanvas extends JavaPlugin {
 
         // 持久化：按 docs/data-model.md §2.1 在 plugins/HikariCanvas/data.db
         database = new Database(getLogger(), getDataFolder().toPath().resolve("data.db"));
-        new MigrationRunner(database.jdbi(), getLogger()).run();
-        auditLog = new AuditLog(database.jdbi());
+        // M15.4 P0-29：可选 migration 前自动备份；pre-release 默认关。
+        new MigrationRunner(database.jdbi(), getLogger(),
+                config.databaseAutoBackup,
+                getDataFolder().toPath().resolve("data.db")).run();
+        // M15.4 P0-33：AuditLog 接 logger，让 DB 失败时能 fallback 到 server log。
+        auditLog = new AuditLog(database.jdbi(), getLogger());
 
         // 一次性 token 服务（contract: docs/security.md §2）。
         tokenService = new TokenService(
@@ -304,6 +338,10 @@ public final class HikariCanvas extends JavaPlugin {
         if (uploadHandler != null) {
             uploadHandler.shutdown();
             uploadHandler = null;
+        }
+        if (imageStorage != null) {
+            imageStorage.shutdown();
+            imageStorage = null;
         }
         if (database != null) {
             database.close();

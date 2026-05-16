@@ -142,14 +142,23 @@ public final class ImageUploadDao {
      */
     public List<Row> pickLruCandidates(int limit, java.util.Set<String> excludeHashes) {
         try {
+            if (excludeHashes == null || excludeHashes.isEmpty()) {
+                return jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM image_uploads ORDER BY last_used_at ASC LIMIT :n")
+                        .bind("n", Math.max(limit, 1))
+                        .map((rs, ctx) -> mapRow(rs))
+                        .list());
+            }
+            // M15.4 P0-15：用 SQL NOT IN 替代内存 filter。否则攻击者上传 16 张图全引用 →
+            // SQL 返 16 行、filter 全空 → break → 所有玩家永久 fail。
             return jdbi.withHandle(h -> h.createQuery(
-                    "SELECT * FROM image_uploads ORDER BY last_used_at ASC LIMIT :n")
+                    "SELECT * FROM image_uploads "
+                            + "WHERE hash NOT IN (<exc>) "
+                            + "ORDER BY last_used_at ASC LIMIT :n")
+                    .bindList("exc", new java.util.ArrayList<>(excludeHashes))
                     .bind("n", Math.max(limit, 1))
                     .map((rs, ctx) -> mapRow(rs))
-                    .list()
-                    .stream()
-                    .filter(r -> excludeHashes == null || !excludeHashes.contains(r.hash()))
-                    .toList());
+                    .list());
         } catch (Exception e) {
             log.log(Level.WARNING, "pickLruCandidates failed", e);
             return List.of();
