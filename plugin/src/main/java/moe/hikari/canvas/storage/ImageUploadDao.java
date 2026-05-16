@@ -14,8 +14,9 @@ import java.util.logging.Logger;
  * 文件零重复存储。schema 见 {@code db-migrations/V007__image_uploads.sql}、
  * {@code docs/data-model.md §2.6.5}。
  *
- * <p>v1 简化：{@code refcount} 列保留但不做实时增减；LRU 候选由
- * {@code ImageStorage} 在 evict 时实时 sweep {@code walls.project_json} 算出。</p>
+ * <p>M16 P6.3：移除 {@code refcount} 列（V010 migration drop）。代码自承「不做实时增减」
+ * 是 dead 列。LRU 候选实时由 {@link moe.hikari.canvas.image.ImageStorage#collectReferencedHashes}
+ * sweep {@code walls.project_json} 计算。</p>
  */
 public final class ImageUploadDao {
 
@@ -28,8 +29,7 @@ public final class ImageUploadDao {
             String mime,
             UUID uploaderUuid,
             long uploadedAt,
-            long lastUsedAt,
-            int refcount
+            long lastUsedAt
     ) {}
 
     private final Logger log;
@@ -66,9 +66,9 @@ public final class ImageUploadDao {
         return h.createUpdate(
                 "INSERT OR IGNORE INTO image_uploads("
                         + "hash, bytes, width, height, mime, uploader_uuid, "
-                        + "uploaded_at, last_used_at, refcount) "
+                        + "uploaded_at, last_used_at) "
                         + "VALUES(:hash, :bytes, :w, :h, :mime, :uploader, "
-                        + ":uploaded, :lastUsed, :refcount)")
+                        + ":uploaded, :lastUsed)")
                 .bind("hash", r.hash)
                 .bind("bytes", r.bytes)
                 .bind("w", r.width)
@@ -77,7 +77,6 @@ public final class ImageUploadDao {
                 .bind("uploader", r.uploaderUuid.toString())
                 .bind("uploaded", r.uploadedAt)
                 .bind("lastUsed", r.lastUsedAt)
-                .bind("refcount", r.refcount)
                 .execute();
     }
 
@@ -227,7 +226,6 @@ public final class ImageUploadDao {
                 rs.getString("mime"),
                 UUID.fromString(rs.getString("uploader_uuid")),
                 rs.getLong("uploaded_at"),
-                rs.getLong("last_used_at"),
-                rs.getInt("refcount"));
+                rs.getLong("last_used_at"));
     }
 }

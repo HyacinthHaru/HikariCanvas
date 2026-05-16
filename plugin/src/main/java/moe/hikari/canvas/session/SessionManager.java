@@ -15,14 +15,16 @@ import org.bukkit.block.BlockFace;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -30,22 +32,31 @@ import java.util.logging.Logger;
 /**
  * 会话生命周期核心。契约见 {@code docs/architecture.md §3}。
  *
- * <p><b>并发与主线程约束：</b> 所有公共方法均 {@code synchronized(this)}。涉及
- * {@link MapPool#reserve} / {@link MapPool#promoteToPermanent}（会 {@code Bukkit.createMap}）
- * 的方法必须在 Bukkit 主线程调用——即 {@link #confirm} 与 {@link #commit}。
- * {@link #cancel} 若当前状态 ≥ {@link SessionState#ISSUED} 也会触发 MapPool 操作，
- * 因此同样限主线程。只读查询（{@link #liveSessionIds} 等）可从异步调用。</p>
+ * <p><b>并发模型（M16-P6.7 重构）：</b></p>
+ * <ul>
+ *   <li>三索引 {@code byId} / {@code byPlayer} / {@code byWall} 全部 {@link ConcurrentHashMap}：
+ *       单 key 读写 lock-free；任意线程可并发查询无阻塞。</li>
+ *   <li>跨 map 的复合写（confirm / cancel / open / deleteWall / forget）用 {@link #writeLock}
+ *       串行化，保证多 map mutate 原子可见——避免出现 {@code byPlayer} 已 put 但
+ *       {@code byId} 还没 put 的中间态被另一线程读到。</li>
+ *   <li><b>持锁中严禁调 Bukkit API</b>（{@code Bukkit.getPlayer} / {@code getWorld} /
+ *       {@link MapPool} 的 {@code createMap} 等）：Bukkit 主线程若同时在排其它任务，再来
+ *       等 SessionManager 锁就死锁。本类的所有 MapPool / Bukkit 调用都在
+ *       {@link #writeLock} <b>外</b>执行；持锁阶段只做纯 map mutate。</li>
+ *   <li>{@link #forgetHooks} 回调也在锁外触发，防止 hook 反向锁定造成死锁。</li>
+ * </ul>
  *
- * <p>并发约束：</p>
+ * <p><b>主线程约束：</b> 涉及 {@link MapPool#reserveForWall} / {@link MapPool#bindToWall}
+ * （可能 {@code Bukkit.createMap}）的方法必须在 Bukkit 主线程调用——即 {@link #confirm} /
+ * {@link #open} / {@link #cancel} / {@link #deleteWall}。这些方法用 {@link #assertMainThread}
+ * 自检。只读查询（{@link #byId(String)} / {@link #liveSessionIds} 等）可从异步调用。</p>
+ *
+ * <p>排他约束：</p>
  * <ul>
  *   <li>每玩家最多 1 个活跃会话（含 {@link SessionState#SELECTING}）</li>
  *   <li>每墙面排他锁 {@link WallKey}——{@code SELECTING → ISSUED} 时获取、
  *       cancel/commit 时释放</li>
  * </ul>
- *
- * <p><b>M2 范围：</b> WS 相关 timing（auth 超时、idle disconnect、5 分钟重连宽限的
- * 后台扫描）留给 M2-T10 / T11 接入时补。本类已提供 {@link Session#markWsDisconnected}
- * 等 hook，但没有主动 schedule 的回收 task。</p>
  */
 public final class SessionManager {
 
@@ -57,9 +68,16 @@ public final class SessionManager {
     /** M15.3 P0-25：deleteWall 释放 map 后清除像素缓存，防 mapId 复用导致跨 wall 像素泄漏。可空（不强制依赖）。 */
     private final HikariCanvasRenderer canvasRenderer;
 
-    private final Map<String, Session> byId = new HashMap<>();
-    private final Map<UUID, String> byPlayer = new HashMap<>();
-    private final Map<WallKey, String> byWall = new HashMap<>();
+    /** M16-P6.7：lock-free 单 key read/write，跨 map 复合写通过 {@link #writeLock} 串行化。 */
+    private final Map<String, Session> byId = new ConcurrentHashMap<>();
+    private final Map<UUID, String> byPlayer = new ConcurrentHashMap<>();
+    private final Map<WallKey, String> byWall = new ConcurrentHashMap<>();
+
+    /**
+     * M16-P6.7：守护多 map 的复合 mutate（confirm / cancel / open / deleteWall / forget）。
+     * 不守护 Bukkit / MapPool 调用——那些必须在锁外执行（详见 class javadoc）。
+     */
+    private final ReentrantLock writeLock = new ReentrantLock();
 
     /** session forget 时调用，用于让 throttler / rate-limiter / WS ctx map 等清状态。 */
     private final List<Consumer<String>> forgetHooks = new CopyOnWriteArrayList<>();
@@ -96,24 +114,30 @@ public final class SessionManager {
     }
 
     /** 开启新会话（{@code /canvas edit} 或持 Wand 首次点击）。 */
-    public synchronized BeginResult beginSelecting(UUID playerUuid, String playerName) {
+    public BeginResult beginSelecting(UUID playerUuid, String playerName) {
         Objects.requireNonNull(playerUuid);
-        String existingId = byPlayer.get(playerUuid);
-        if (existingId != null) {
-            return new BeginResult.AlreadyHasSession(byId.get(existingId));
-        }
         long now = System.currentTimeMillis();
         String sessionId = UUID.randomUUID().toString();
         Session s = new Session(sessionId, playerUuid, playerName, now);
-        byId.put(sessionId, s);
-        byPlayer.put(playerUuid, sessionId);
+        // M16-P6.7：跨 byPlayer + byId 双 put，用 writeLock 串行化（race：两玩家同时 edit）
+        writeLock.lock();
+        try {
+            String existingId = byPlayer.get(playerUuid);
+            if (existingId != null) {
+                return new BeginResult.AlreadyHasSession(byId.get(existingId));
+            }
+            byId.put(sessionId, s);
+            byPlayer.put(playerUuid, sessionId);
+        } finally {
+            writeLock.unlock();
+        }
         auditLog.record("SESSION_BEGIN", playerUuid.toString(), playerName, sessionId, null,
                 Map.of("state", s.state().name()));
         return new BeginResult.Ok(s);
     }
 
     /** 左键点击记为 pos1；右键点击记为 pos2。 */
-    public synchronized void recordPos(String sessionId, boolean isFirstCorner, Block block, BlockFace face) {
+    public void recordPos(String sessionId, boolean isFirstCorner, Block block, BlockFace face) {
         Session s = requireState(sessionId, SessionState.SELECTING);
         if (isFirstCorner) s.pos1(block, face);
         else s.pos2(block, face);
@@ -123,7 +147,7 @@ public final class SessionManager {
      * M5-D8：清空已选 pos1/pos2，玩家在 SELECTING 状态下隐式 reselect。
      * {@code /canvas edit} 在已 SELECTING 时调用此方法替代抛 AlreadyHasSession。
      */
-    public synchronized boolean resetSelection(String sessionId) {
+    public boolean resetSelection(String sessionId) {
         Session s = byId.get(sessionId);
         if (s == null || s.state() != SessionState.SELECTING) return false;
         s.clearPos();
@@ -134,7 +158,7 @@ public final class SessionManager {
      * 对当前已记的 pos1 / pos2 调用 {@link WallResolver} 做预览（不改状态）。
      * 用于聊天栏实时回显。
      */
-    public synchronized WallResolver.Result preview(String sessionId) {
+    public WallResolver.Result preview(String sessionId) {
         Session s = requireSession(sessionId);
         if (s.state() != SessionState.SELECTING) {
             throw new IllegalStateException("preview only valid in SELECTING; got " + s.state());
@@ -178,10 +202,14 @@ public final class SessionManager {
      *
      * <p>M16-P2.7-A：multi-step 链路用 rollback stack 包裹——任一中间步抛异常时
      * 倒序执行已 push 的 rollback action，避免留下 mapPool reserved 但 walls 无对应行
-     * （maps 永久泄漏）或反过来的状态。所有 rollback 自身异常仅 log.warning，不掩盖
-     * 原始异常。最终向调用方抛 {@link SessionConfirmFailedException}。</p>
+     * （maps 永久泄漏）或反过来的状态。</p>
+     *
+     * <p>M16-P6.7：不再 {@code synchronized(this)}。confirm 已 {@link #assertMainThread}
+     * 保证主线程串行；跨 map 的最终 commit（{@code byWall.putIfAbsent}）由 {@link #writeLock}
+     * 短临界区守护，确保异步线程的 read 观察到完整状态。Bukkit / MapPool 调用全部在
+     * writeLock 之外。</p>
      */
-    public synchronized ConfirmResult confirm(String sessionId) {
+    public ConfirmResult confirm(String sessionId) {
         assertMainThread();
         Session s = byId.get(sessionId);
         if (s == null) return new ConfirmResult.NotReady("session not found");
@@ -202,6 +230,7 @@ public final class SessionManager {
 
         WallKey key = new WallKey(
                 wall.world().getName(), wall.minX(), wall.minY(), wall.minZ(), wall.facing());
+        // M16-P6.7：early probe；最终 commit 用 putIfAbsent 在临界区里 race-free
         String holderId = byWall.get(key);
         if (holderId != null) {
             Session holder = byId.get(holderId);
@@ -276,7 +305,10 @@ public final class SessionManager {
                 newWall = true;
             }
 
-            // ---- 从此处起进入 in-memory 状态变更；理论上不应抛，但仍包在 try 内 ----
+            // ---- 从此处起进入 in-memory 状态变更 ----
+            // Session 字段赋值不需要 writeLock：confirm 已 assertMainThread 保证主线程串行，
+            // 而异步线程拿到的 Session 对象引用是从 byId.get 来的——byWall.putIfAbsent
+            // 失败回滚时，session 也未发布到 byWall，外部读不到。
             s.wall(wall);
             s.mapIds(mapIds);
             s.wallKey(key);
@@ -284,7 +316,19 @@ public final class SessionManager {
             s.projectState(ps);
             s.editSession(new EditSession(ps));
             s.state(SessionState.ISSUED);
-            byWall.put(key, sessionId);
+
+            // M16-P6.7：byWall race-free put。失败说明 confirm-vs-confirm race（实际不会
+            // 发生，因 confirm 主线程串行），但作为防御保留 + WallOccupied 路径。
+            writeLock.lock();
+            try {
+                String raceHolder = byWall.putIfAbsent(key, sessionId);
+                if (raceHolder != null) {
+                    Session holder = byId.get(raceHolder);
+                    throw new WallRaceException(raceHolder, holder == null ? null : holder.playerUuid());
+                }
+            } finally {
+                writeLock.unlock();
+            }
 
             auditLog.record("SESSION_CONFIRM", s.playerUuid().toString(), s.playerName(),
                     sessionId, null,
@@ -294,6 +338,9 @@ public final class SessionManager {
             return newWall
                     ? new ConfirmResult.OkNewWall(s, wall, mapIds, wallId)
                     : new ConfirmResult.OkExistingWall(s, wall, mapIds, wallId);
+        } catch (WallRaceException race) {
+            runRollbacks(rollbacks);
+            return new ConfirmResult.WallOccupied(race.holderSessionId, race.holderPlayer);
         } catch (SessionConfirmFailedException e) {
             // map bind race 内部抛出 → 跑 rollback 后向上层报 PoolExhausted（保持 API 兼容）
             runRollbacks(rollbacks);
@@ -304,6 +351,17 @@ public final class SessionManager {
             log.log(Level.SEVERE, "SessionManager.confirm failed, rolled back; see chain above", e);
             throw new SessionConfirmFailedException(
                     "failed to confirm session; server log for details", e);
+        }
+    }
+
+    /** 内部 sentinel：byWall.putIfAbsent 发现竞争时使用，触发 confirm rollback 链。 */
+    private static final class WallRaceException extends RuntimeException {
+        final String holderSessionId;
+        final UUID holderPlayer;
+        WallRaceException(String holderSessionId, UUID holderPlayer) {
+            super("wall race lost to session " + holderSessionId);
+            this.holderSessionId = holderSessionId;
+            this.holderPlayer = holderPlayer;
         }
     }
 
@@ -336,17 +394,27 @@ public final class SessionManager {
         record Forbidden(String message) implements OpenResult {}
     }
 
-    public synchronized OpenResult open(UUID playerUuid, String playerName, String wallIdOrAlias) {
+    public OpenResult open(UUID playerUuid, String playerName, String wallIdOrAlias) {
+        assertMainThread();
         var w = wallRepo.loadById(wallIdOrAlias).orElse(
                 wallRepo.loadByAlias(wallIdOrAlias).orElse(null));
         if (w == null) return new OpenResult.NotFound();
 
         // M15.3 Phase 2 方案 C：lock-aware open。后端编辑 op 仍透明放行（CLAUDE.md §lock-state 第 2 条），
         // 仅在 open 入口拦截：locked wall + 非 owner + 无 canvas.admin.bypass-lock 权限 → Forbidden。
+        // 注意：Bukkit.getPlayer 调用在锁外（持锁中调 Bukkit API 易死锁）。
         if (w.publishedAt() != null && !playerUuid.equals(w.ownerUuid())) {
-            org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(playerUuid);
+            org.bukkit.entity.Player live = Bukkit.getPlayer(playerUuid);
             boolean bypass = live != null && live.hasPermission("canvas.admin.bypass-lock");
             if (!bypass) {
+                // M16 P6.4：lock-aware open 拒绝留痕——监控异常尝试访问他人 locked wall
+                LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+                details.put("operation", "open");
+                details.put("wall_id", w.wallId());
+                details.put("caller", playerUuid.toString());
+                details.put("reason", "lock_owner_only");
+                auditLog.record("PERMISSION_DENIED", playerUuid.toString(), playerName,
+                        null, null, details);
                 return new OpenResult.Forbidden(
                         "wall '" + w.wallId() + "' is locked by its owner");
             }
@@ -367,12 +435,14 @@ public final class SessionManager {
         }
 
         WallKey key = w.key();
+        // early probe（race-free 由后续 writeLock + putIfAbsent 段保证）
         String holderId = byWall.get(key);
         if (holderId != null) {
             Session holder = byId.get(holderId);
             return new OpenResult.WallOccupied(holderId,
                     holder == null ? null : holder.playerUuid());
         }
+        // Bukkit.getWorld + MapPool.bindToWall 必须在锁外（持锁中调 Bukkit API 易死锁）
         World world = Bukkit.getWorld(w.key().world());
         if (world == null) {
             return new OpenResult.BindFailed(
@@ -394,9 +464,26 @@ public final class SessionManager {
         s.wall(rebuildWallGeometry(w));
         s.state(SessionState.ISSUED);
 
-        byId.put(sessionId, s);
-        byPlayer.put(playerUuid, sessionId);
-        byWall.put(key, sessionId);
+        // M16-P6.7：跨 byId / byPlayer / byWall 三 map commit 在 writeLock 临界区内串行化，
+        // 确保异步 read 看到完整状态；race-check 防主线程窗口（不应该发生但防御）。
+        writeLock.lock();
+        try {
+            String racePlayer = byPlayer.get(playerUuid);
+            if (racePlayer != null) {
+                Session existing = byId.get(racePlayer);
+                return new OpenResult.AlreadyHasSession(existing == null ? null : existing.state());
+            }
+            String raceHolder = byWall.putIfAbsent(key, sessionId);
+            if (raceHolder != null) {
+                Session holder = byId.get(raceHolder);
+                return new OpenResult.WallOccupied(raceHolder,
+                        holder == null ? null : holder.playerUuid());
+            }
+            byId.put(sessionId, s);
+            byPlayer.put(playerUuid, sessionId);
+        } finally {
+            writeLock.unlock();
+        }
 
         auditLog.record("SESSION_OPEN", playerUuid.toString(), playerName, sessionId, null,
                 Map.of("wall_id", w.wallId()));
@@ -409,6 +496,7 @@ public final class SessionManager {
      * DB 行重建。{@code hasExistingFrames} 固定 true，因为打开已存在的 wall 必然有自家画框。
      */
     private WallResolver.Result.Ok rebuildWallGeometry(WallRepo.Wall w) {
+        // 注意：Bukkit.getWorld 调用在锁外（rebuildWallGeometry 仅由 open 主线程路径调用）
         World world = Bukkit.getWorld(w.key().world());
         if (world == null) {
             throw new IllegalStateException(
@@ -428,7 +516,7 @@ public final class SessionManager {
     // ---------- WS auth / ACTIVE ----------
 
     /** WS {@code auth} 成功后标 ACTIVE；token consume 由 {@link TokenService#consume} 提前做。 */
-    public synchronized void markActive(String sessionId) {
+    public void markActive(String sessionId) {
         Session s = requireSession(sessionId);
         if (s.state() != SessionState.ISSUED) {
             throw new IllegalStateException("markActive expects ISSUED; got " + s.state());
@@ -439,12 +527,12 @@ public final class SessionManager {
                 sessionId, null, Map.of());
     }
 
-    public synchronized void touch(String sessionId) {
+    public void touch(String sessionId) {
         Session s = byId.get(sessionId);
         if (s != null) s.touchActivity(System.currentTimeMillis());
     }
 
-    public synchronized void markDisconnected(String sessionId) {
+    public void markDisconnected(String sessionId) {
         Session s = byId.get(sessionId);
         if (s != null) s.markWsDisconnected(System.currentTimeMillis());
     }
@@ -454,12 +542,45 @@ public final class SessionManager {
      * （仅 UPDATE project_json，不动 mapIds / wall_id）。非主线程调用即可。
      */
     public void persistWall(String sessionId) {
-        Session s;
-        synchronized (this) {
-            s = byId.get(sessionId);
-        }
+        // M16-P6.7：CHM read 无锁
+        Session s = byId.get(sessionId);
         if (s == null || s.wallId() == null || s.projectState() == null) return;
         wallRepo.updateState(s.wallId(), s.projectState());
+    }
+
+    /**
+     * M16 P6.6：会话级 IP 绑定判定。
+     * <ul>
+     *   <li>session 不存在 → {@link IpBindResult#NO_SESSION}（调用方应已 closeAuthFailed，
+     *       此返回仅为安全网）。</li>
+     *   <li>session.boundIp == null（首次 auth）→ 写入 presentedIp 并返回 {@link IpBindResult#BOUND}。</li>
+     *   <li>session.boundIp.equals(presentedIp) → {@link IpBindResult#OK}。</li>
+     *   <li>不等 → {@link IpBindResult#MISMATCH}。调用方 closeAuthFailed。</li>
+     * </ul>
+     * 用单 session 字段的可见性保证（boundIp 仅 SessionManager 写）+ writeLock 串行化首次绑定，
+     * 防同一 sessionId 并发两 WS 都看到 boundIp==null 同时写入两不同 IP。
+     */
+    public enum IpBindResult { OK, BOUND, MISMATCH, NO_SESSION }
+
+    public IpBindResult bindOrCheckIp(String sessionId, String presentedIp) {
+        Session s = byId.get(sessionId);
+        if (s == null) return IpBindResult.NO_SESSION;
+        String current = s.boundIp();
+        if (current != null) {
+            return current.equals(presentedIp) ? IpBindResult.OK : IpBindResult.MISMATCH;
+        }
+        // 首次绑定：加锁防 race（两 WS 同 sessionId 同时 auth）
+        writeLock.lock();
+        try {
+            current = s.boundIp();
+            if (current == null) {
+                s.boundIp(presentedIp);
+                return IpBindResult.BOUND;
+            }
+            return current.equals(presentedIp) ? IpBindResult.OK : IpBindResult.MISMATCH;
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     // ---------- /canvas cancel ----------
@@ -467,36 +588,60 @@ public final class SessionManager {
     /**
      * 释放 session（不删 wall）。任何非 CLOSING 状态都可 cancel；不归还池（wall 一直占）；
      * 仅清 byPlayer / byWall / forgetHooks。M5.5 起 wall 数据生命周期与 session 解耦。
+     *
+     * <p>M16-P6.7：跨 map mutate 在 {@link #writeLock} 内；{@link #forgetHooks} 在锁外触发，
+     * 防止 hook 回调持外部锁造成 lock-order 死锁。</p>
      */
-    public synchronized void cancel(String sessionId, String reason) {
+    public void cancel(String sessionId, String reason) {
         assertMainThread();
         Session s = byId.get(sessionId);
         if (s == null) return;
         if (s.state() == SessionState.CLOSING) return;
-        s.state(SessionState.CLOSING);
 
-        // 不归还池！wall 一直占着 maps，等 /canvas delete 才释放
-        releaseLocks(s);
+        writeLock.lock();
+        try {
+            // 锁内再校验（防 race：另一线程已并发 cancel/forget）
+            s = byId.get(sessionId);
+            if (s == null || s.state() == SessionState.CLOSING) return;
+            s.state(SessionState.CLOSING);
+            // 不归还池！wall 一直占着 maps，等 /canvas delete 才释放
+            releaseLocks(s);
+            forget(s);
+        } finally {
+            writeLock.unlock();
+        }
+
         auditLog.record("SESSION_CANCEL", s.playerUuid().toString(), s.playerName(),
                 sessionId, null, Map.of("reason", reason == null ? "" : reason));
-        forget(s);
+        runForgetHooks(sessionId);
     }
 
     /**
      * `/canvas delete <wall_id> confirm`：彻底删除 wall（释放 map → FREE，删 walls 行）。
      * 调用方负责拆 ItemFrames 和 cancel 任何活跃 session。
+     *
+     * <p>M16-P6.7：map mutate 在 writeLock 内；MapPool / WallRepo / renderer / forgetHooks
+     * 全部在锁外执行。</p>
      */
-    public synchronized boolean deleteWall(String wallId) {
+    public boolean deleteWall(String wallId) {
         assertMainThread();
         if (wallId == null) return false;
-        // 若有活跃 session 持此 wall，先 cancel
-        for (Session s : new ArrayList<>(byId.values())) {
-            if (wallId.equals(s.wallId()) && s.state() != SessionState.CLOSING) {
-                s.state(SessionState.CLOSING);
-                releaseLocks(s);
-                forget(s);
+        // 收集要 forget 的 session id（在锁外发 hook），map mutate 在锁内
+        List<String> forgottenIds = new ArrayList<>();
+        writeLock.lock();
+        try {
+            for (Session s : new ArrayList<>(byId.values())) {
+                if (wallId.equals(s.wallId()) && s.state() != SessionState.CLOSING) {
+                    s.state(SessionState.CLOSING);
+                    releaseLocks(s);
+                    forget(s);
+                    forgottenIds.add(s.id());
+                }
             }
+        } finally {
+            writeLock.unlock();
         }
+        // Bukkit / MapPool / WallRepo / renderer 全部在锁外
         List<Integer> released = mapPool.releaseWall(wallId);
         // M15.3 P0-25：清像素缓存，防 mapId 复用导致旧像素显示在新 wall。
         if (canvasRenderer != null && !released.isEmpty()) {
@@ -505,22 +650,23 @@ public final class SessionManager {
         wallRepo.delete(wallId);
         auditLog.record("WALL_DELETE", null, null, null, null,
                 Map.of("wall_id", wallId, "released_maps", released.size()));
+        for (String id : forgottenIds) runForgetHooks(id);
         return true;
     }
 
     // ---------- 查询 ----------
 
-    public synchronized Session byPlayer(UUID playerUuid) {
+    public Session byPlayer(UUID playerUuid) {
         String id = byPlayer.get(playerUuid);
         return id == null ? null : byId.get(id);
     }
 
-    public synchronized Session byId(String sessionId) {
+    public Session byId(String sessionId) {
         return byId.get(sessionId);
     }
 
     /** 给 {@link MapPool#detectLeaks} 用：当前所有活跃（非 CLOSING）会话 id。 */
-    public synchronized Set<String> liveSessionIds() {
+    public Set<String> liveSessionIds() {
         Set<String> out = new HashSet<>();
         for (Session s : byId.values()) {
             if (s.state() != SessionState.CLOSING) out.add(s.id());
@@ -528,7 +674,7 @@ public final class SessionManager {
         return Collections.unmodifiableSet(out);
     }
 
-    public synchronized int size() {
+    public int size() {
         return byId.size();
     }
 
@@ -537,7 +683,7 @@ public final class SessionManager {
      * 一并调用。由 {@link SessionReaper} 周期触发——确保用户永久离开后服务端
      * 不会积压 stroke buffer 内存（M12 brush 引入的潜在泄漏）。
      */
-    public synchronized void purgeAllStaleStrokes() {
+    public void purgeAllStaleStrokes() {
         for (Session s : byId.values()) {
             moe.hikari.canvas.state.EditSession es = s.editSession();
             if (es != null) es.purgeStaleStrokes();
@@ -565,7 +711,7 @@ public final class SessionManager {
      */
     public record ExpiredSession(String id, String reason) {}
 
-    public synchronized List<ExpiredSession> collectExpired(
+    public List<ExpiredSession> collectExpired(
             long now, long issuedTimeoutMs, long wsGraceMs, long activeIdleMs) {
         List<ExpiredSession> out = new ArrayList<>();
         for (Session s : byId.values()) {
@@ -628,21 +774,26 @@ public final class SessionManager {
         return s;
     }
 
+    /** 调用方必须持 {@link #writeLock}。 */
     private void releaseLocks(Session s) {
         if (s.wallKey() != null) byWall.remove(s.wallKey(), s.id());
     }
 
+    /** 调用方必须持 {@link #writeLock}。仅做 map mutate；hook 由调用方在锁外触发。 */
     private void forget(Session s) {
         byId.remove(s.id());
         byPlayer.remove(s.playerUuid(), s.id());
         s.state(SessionState.CLOSING);
-        // 让 throttler / rate-limiter / WS ctx map 跟着清，避免长期运行后内存膨胀。
+    }
+
+    /** 在锁外执行 forgetHooks，避免持锁中回调三方组件造成反向 lock-order 死锁。 */
+    private void runForgetHooks(String sessionId) {
         // hooks 是 CopyOnWriteArrayList，遍历期间可并发 add。异常不影响其他 hook 执行。
         for (Consumer<String> hook : forgetHooks) {
             try {
-                hook.accept(s.id());
+                hook.accept(sessionId);
             } catch (RuntimeException e) {
-                log.warning("SessionManager: forget hook threw for " + s.id() + ": " + e.getMessage());
+                log.warning("SessionManager: forget hook threw for " + sessionId + ": " + e.getMessage());
             }
         }
     }

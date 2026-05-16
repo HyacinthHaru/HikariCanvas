@@ -289,7 +289,7 @@ public final class HikariCanvas extends JavaPlugin {
         // M16 P2.1/P2.2：还需要 imageDao + jdbi 做事务化 quota+insert+evict
         uploadHandler = new UploadHandler(getLogger(), imageStorage, imageQuota,
                 imageDao, database.jdbi(),
-                config.images, tokenService, sessionManager, wallRepo);
+                config.images, tokenService, sessionManager, wallRepo, auditLog);
 
         webServer = new WebServer(getLogger(), config.host, config.port,
                 tokenService, sessionManager,

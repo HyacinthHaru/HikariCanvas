@@ -1,6 +1,7 @@
 package moe.hikari.canvas.web;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.HandlerType;
@@ -164,7 +165,7 @@ public final class WebServer {
             }
         };
         this.editOpDispatcher = new EditOpDispatcher(
-                sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push);
+                sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, auditLog);
         this.brushOpDispatcher = new BrushOpDispatcher(sessionManager, throttler, push);
         this.wallOpDispatcher = new WallOpDispatcher(
                 sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog);
@@ -174,8 +175,12 @@ public final class WebServer {
     public void start() {
         app = Javalin.create(cfg -> {
             cfg.startup.showJavalinBanner = false;
-            cfg.jsonMapper(new JavalinJackson().updateMapper(mapper ->
-                    mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL)));
+            cfg.jsonMapper(new JavalinJackson().updateMapper(mapper -> {
+                mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+                // M16 P6.1：接收方严格——客户端发未知字段一律拒，防协议漂移 / 字段嗅探。
+                // 发送侧（server→client）依然宽松：client 用 TypeScript 解析，未声明字段读出 undefined 就行。
+                mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true);
+            }));
 
             // Jetty WS 默认 idleTimeout = 30s，太短；玩家停手 30s 就被踢。
             // 调到 60s + 前端每 20s 发应用层 ping 保活，两层兜底。
@@ -492,7 +497,10 @@ public final class WebServer {
         try {
             in = ctx.messageAsClass(Envelope.class);
         } catch (Exception e) {
-            ctx.send(Envelope.error(null, "INVALID_PAYLOAD", "malformed envelope: " + e.getMessage()));
+            // M16 P6.1：错误脱敏——不 echo Jackson 异常（含类路径 / 字段名 / unknown property 名）。
+            // 细节走 server 日志，client 拿固定 code。
+            log.log(Level.FINE, "WS malformed envelope", e);
+            ctx.send(Envelope.error(null, "INVALID_PAYLOAD", null));
             return;
         }
         if (in == null || in.op() == null || in.op().isBlank()) {
@@ -561,15 +569,21 @@ public final class WebServer {
             return;
         }
 
-        // M8-C：协议 v2 强制——前端必须声明 clientProtocolVersion >= 2，否则切断 v1 客户端。
+        // M16 P6.2：协议版本协商。client 在 auth payload 携 {@code client_v}（新字段）
+        // 或旧 {@code clientProtocolVersion}（M8-C 兼容名）。server 校验范围
+        // [SUPPORTED_MIN, SUPPORTED_MAX]；不在范围 → close 4002 + VERSION_MISMATCH。
         // 注意检查在 token consume 之前，避免为不兼容客户端浪费一次性 token。
-        Object cpv = pl.get("clientProtocolVersion");
-        if (!(cpv instanceof Number cpvN) || cpvN.intValue() < 2) {
-            ctx.send(Envelope.error(in.id(), "VERSION_MISMATCH",
-                    "client must speak protocol v2; received " + cpv));
-            closeVersionMismatch(ctx, "clientProtocolVersion=" + cpv);
+        Object cpv = pl.get("client_v");
+        if (cpv == null) cpv = pl.get("clientProtocolVersion");  // 旧字段名兼容
+        if (!(cpv instanceof Number cpvN) || !Protocol.isSupported(cpvN.intValue())) {
+            // 不 echo 客户端发的版本号（防嗅探 + 信息漏）；客户端用 i18n 自己提示
+            log.fine("WS auth: client_v=" + cpv + " not in ["
+                    + Protocol.SUPPORTED_MIN + ", " + Protocol.SUPPORTED_MAX + "]");
+            ctx.send(Envelope.error(in.id(), "VERSION_MISMATCH", null));
+            closeVersionMismatch(ctx, "client_v=" + cpv);
             return;
         }
+        int negotiatedV = cpvN.intValue();
 
         Object tokenObj = pl.get("token");
         if (!(tokenObj instanceof String token)) {
@@ -591,6 +605,20 @@ public final class WebServer {
         if (session == null || session.state() == SessionState.CLOSING) {
             ctx.send(Envelope.error(in.id(), "AUTH_FAILED", "session not available"));
             closeAuthFailed(ctx, "session missing/closing");
+            return;
+        }
+
+        // M16 P6.6：会话级 IP 绑定。首次 auth 时 sessionManager 写下 boundIp；reconnect 必须 IP 同源。
+        // 不同 → 当作 AUTH_FAILED 拒（外部只看到 4001，不区分；服务器侧 log.warning 详细原因）。
+        // 攻击者 XSS / 抓包拿到 reconnectToken 后从异机重连必撞 MISMATCH。
+        String presentedIp = clientIp(ctx);
+        SessionManager.IpBindResult ipRes = sessionManager.bindOrCheckIp(session.id(), presentedIp);
+        if (ipRes == SessionManager.IpBindResult.MISMATCH) {
+            log.warning("WS auth IP mismatch sid=" + session.id()
+                    + " boundIp=" + session.boundIp() + " presentedIp=" + presentedIp
+                    + "; token may be replayed from a different host");
+            ctx.send(Envelope.error(in.id(), "AUTH_FAILED", null));
+            closeAuthFailed(ctx, "ip_mismatch");
             return;
         }
 
@@ -638,6 +666,9 @@ public final class WebServer {
         payload.put("sessionId", session.id());
         payload.put("serverVersion", serverVersion);
         payload.put("protocolVersion", 2);
+        // M16 P6.2：accepted_v = server 实际同意的 business protocol 版本（来自 auth 中
+        // 协商的 client_v，目前固定 2）。client 收到后应双向校验：accepted_v !== CLIENT_V → 断开。
+        payload.put("accepted_v", negotiatedV);
         payload.put("reconnectToken", reconnectToken);
         payload.put("projectState", state);
         if (wallId != null) payload.put("wallId", wallId);
@@ -685,9 +716,36 @@ public final class WebServer {
         log.info("WS closed 4001 AUTH_FAILED: " + reason);
     }
 
-    /** 按 protocol.md §6.2: close 4002 = 协议版本不匹配（M8-C 起切断 v1）。 */
+    /**
+     * M16 P6.6：解析 WS 客户端 IP，用于 session-IP 绑定。
+     *
+     * <p>从 Jetty Session.getRemoteAddress() 取 client socket peer 地址（不是 Host header，
+     * 那是服务器端 hostname）。返回形如 {@code "/127.0.0.1:54321"} 的 InetSocketAddress
+     * toString —— 我们用 {@link java.net.InetSocketAddress#getAddress()} 拿 IP 字符串。
+     *
+     * <p>反代场景下 client IP 是反代机的，不是真实玩家。需要反代写 {@code X-Forwarded-For}
+     * 并在 nginx/Caddy 配置好。V1 不解析 XFF（避免伪造头攻击）；如果未来要支持，应当
+     * 配 {@code trust-proxy} 白名单。</p>
+     *
+     * <p>取不到 → 返回 {@code "unknown"}。所有 session 的首次 auth 都会绑到 "unknown"，
+     * 后续重连只要也是 "unknown" 仍 OK——这是 fail-open；接受这个 trade-off 因为安全
+     * 主要靠 token + Origin 白名单，IP 绑定是第三层防御。</p>
+     */
+    private static String clientIp(WsContext ctx) {
+        try {
+            java.net.SocketAddress addr = ctx.session.getRemoteSocketAddress();
+            if (addr instanceof java.net.InetSocketAddress isa && isa.getAddress() != null) {
+                return isa.getAddress().getHostAddress();
+            }
+            if (addr != null) return addr.toString();
+        } catch (Throwable ignored) {}
+        return "unknown";
+    }
+
+    /** 按 protocol.md §6.2: close 4002 = 协议版本不匹配（M8-C 起切断 v1；M16 P6.2 协商化）。 */
     private void closeVersionMismatch(WsContext ctx, String reason) {
-        ctx.closeSession(4002, "VERSION_MISMATCH");
-        log.info("WS closed 4002 VERSION_MISMATCH: " + reason);
+        ctx.closeSession(Protocol.CLOSE_PROTOCOL_VERSION_UNSUPPORTED, "protocol_version_unsupported");
+        log.info("WS closed " + Protocol.CLOSE_PROTOCOL_VERSION_UNSUPPORTED
+                + " protocol_version_unsupported: " + reason);
     }
 }

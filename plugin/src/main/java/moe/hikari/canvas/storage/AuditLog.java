@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 
 import java.util.Map;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -61,11 +62,12 @@ public final class AuditLog {
                     ipHash,
                     finalDetails));
         } catch (Exception e) {
-            // M15.4 P0-33：DB 失败 fallback 到 server log，至少留痕；
-            // 安全事件不能因 DB 异常静默丢失。
-            log.severe(String.format(
+            // M15.4 P0-33 / M16 P6.4：DB 失败 fallback 到 server log，至少留痕；
+            // 安全事件不能因 DB 异常静默丢失。severe + 带异常对象（log.log）让 ops
+            // 工具链能拿到 stack trace。
+            log.log(Level.SEVERE, String.format(
                     "[AUDIT FALLBACK] event=%s player=%s session=%s wall=- details=%s reason=%s",
-                    event, playerUuid, sessionId, finalDetails, e.getMessage()));
+                    event, playerUuid, sessionId, finalDetails, e.getMessage()), e);
         }
     }
 }

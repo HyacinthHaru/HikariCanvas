@@ -32,6 +32,8 @@ final class EditOpDispatcher {
     private final TemplateInstantiator templateInstantiator = new TemplateInstantiator();
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final OpPushCallback push;
+    /** M16 P6.4：可空——给 template.apply 跨用户拒绝路径写 audit。 */
+    private final moe.hikari.canvas.storage.AuditLog auditLog;
 
     EditOpDispatcher(SessionManager sessionManager,
                      ProjectionThrottler throttler,
@@ -39,12 +41,23 @@ final class EditOpDispatcher {
                      TemplateRegistry templateRegistry,
                      moe.hikari.canvas.storage.WallRepo wallRepo,
                      OpPushCallback push) {
+        this(sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, null);
+    }
+
+    EditOpDispatcher(SessionManager sessionManager,
+                     ProjectionThrottler throttler,
+                     SessionRateLimiter rateLimiter,
+                     TemplateRegistry templateRegistry,
+                     moe.hikari.canvas.storage.WallRepo wallRepo,
+                     OpPushCallback push,
+                     moe.hikari.canvas.storage.AuditLog auditLog) {
         this.sessionManager = sessionManager;
         this.throttler = throttler;
         this.rateLimiter = rateLimiter;
         this.templateRegistry = templateRegistry;
         this.wallRepo = wallRepo;
         this.push = push;
+        this.auditLog = auditLog;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -170,7 +183,7 @@ final class EditOpDispatcher {
                 java.util.UUID callerUuid = s.playerUuid();
                 org.bukkit.entity.Player p = org.bukkit.Bukkit.getPlayer(callerUuid);
                 boolean hasBypass = p != null && p.hasPermission("canvas.template.use-others");
-                yield applyTemplate(es, sessionId, tpl, tp, callerUuid, hasBypass);
+                yield applyTemplate(es, sessionId, tpl, tp, callerUuid, s.playerName(), hasBypass);
             }
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
         };
@@ -218,7 +231,8 @@ final class EditOpDispatcher {
      */
     private EditSession.OpResult applyTemplate(EditSession es, String sessionId,
                                                String templateId, Map<String, Object> params,
-                                               java.util.UUID callerUuid, boolean hasBypass) {
+                                               java.util.UUID callerUuid, String callerName,
+                                               boolean hasBypass) {
         if (templateId == null || templateId.isBlank()) {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD", "templateId is required");
         }
@@ -227,6 +241,15 @@ final class EditOpDispatcher {
             entry = templateRegistry.byIdForApply(templateId, callerUuid, hasBypass);
         } catch (moe.hikari.canvas.template.ForbiddenTemplateException fte) {
             // M16 P1.6：包装为 FORBIDDEN，不 echo 内部异常细节
+            // M16 P6.4：跨用户 template.apply 拒绝留痕（监控异常尝试用他人 template）
+            if (auditLog != null) {
+                java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                details.put("operation", "template.apply");
+                details.put("template_id", fte.templateId());
+                auditLog.record("PERMISSION_DENIED",
+                        callerUuid == null ? null : callerUuid.toString(),
+                        callerName, sessionId, null, details);
+            }
             return new EditSession.OpResult.Error("FORBIDDEN",
                     "template '" + fte.templateId() + "' not accessible");
         }

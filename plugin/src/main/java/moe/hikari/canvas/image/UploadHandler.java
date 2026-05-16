@@ -72,6 +72,8 @@ public final class UploadHandler {
     private final TokenService tokenService;
     private final SessionManager sessionManager;
     private final WallRepo wallRepo;
+    /** M16 P6.4：上传成功 / 拒绝路径打 audit；可空（旧测试构造器走 null）。 */
+    private final moe.hikari.canvas.storage.AuditLog auditLog;
     private final ExecutorService decoderPool;
 
     public UploadHandler(Logger log,
@@ -80,6 +82,16 @@ public final class UploadHandler {
                          HikariCanvasConfig.ImageConfig cfg,
                          TokenService tokenService, SessionManager sessionManager,
                          WallRepo wallRepo) {
+        this(log, storage, quota, imageDao, jdbi, cfg, tokenService, sessionManager, wallRepo, null);
+    }
+
+    public UploadHandler(Logger log,
+                         ImageStorage storage, ImageQuotaService quota,
+                         ImageUploadDao imageDao, Jdbi jdbi,
+                         HikariCanvasConfig.ImageConfig cfg,
+                         TokenService tokenService, SessionManager sessionManager,
+                         WallRepo wallRepo,
+                         moe.hikari.canvas.storage.AuditLog auditLog) {
         this.log = log;
         this.storage = storage;
         this.quota = quota;
@@ -89,6 +101,7 @@ public final class UploadHandler {
         this.tokenService = tokenService;
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
+        this.auditLog = auditLog;
         // M15.1 P0-13：有界 ThreadPool 防 unbounded fork。线程上限 2 + 队列 8 =
         // 同时最多 10 个上传等待，超出立即 AbortPolicy 拒（不堆积内存）。
         this.decoderPool = new java.util.concurrent.ThreadPoolExecutor(
@@ -121,8 +134,10 @@ public final class UploadHandler {
         Session session = resolveSession(ctx, sessionId);
         if (session == null) return;
         UUID uploader = session.playerUuid();
+        String uploaderName = session.playerName();
         Player player = Bukkit.getPlayer(uploader);
         if (player != null && !player.hasPermission("canvas.upload")) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission");
             reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
             return;
         }
@@ -131,6 +146,7 @@ public final class UploadHandler {
         // 2. multipart file
         UploadedFile file = ctx.uploadedFile("file");
         if (file == null) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "missing_file_field");
             reject(ctx, 400, "INVALID_PAYLOAD", "missing 'file' multipart field");
             return;
         }
@@ -138,11 +154,13 @@ public final class UploadHandler {
         long sizeBytes = file.size();
         long maxBytes = (long) cfg.maxSizeKb() * 1024L;
         if (sizeBytes > maxBytes) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "size_exceeded");
             reject(ctx, 413, "UPLOAD_REJECTED",
                     "file too large: " + sizeBytes + " > " + maxBytes + " bytes");
             return;
         }
         if (sizeBytes <= 0) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "empty_file");
             reject(ctx, 400, "INVALID_PAYLOAD", "empty file");
             return;
         }
@@ -155,6 +173,7 @@ public final class UploadHandler {
         int sep = declaredMime.indexOf(';');
         if (sep > 0) declaredMime = declaredMime.substring(0, sep).trim();
         if (!cfg.allowedMime().contains(declaredMime)) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "mime_not_allowed");
             reject(ctx, 415, "UPLOAD_REJECTED",
                     "Content-Type not allowed: " + declaredMime);
             return;
@@ -165,11 +184,15 @@ public final class UploadHandler {
         try (InputStream in = file.content()) {
             bytes = in.readAllBytes();
         } catch (IOException e) {
-            reject(ctx, 400, "UPLOAD_REJECTED", "read failed: " + e.getMessage());
+            // M16 P6.1：不 echo IOException message（可能含 multipart tmp 路径 / 文件名 / 内部状态）
+            log.log(Level.WARNING, "upload read failed", e);
+            auditUploadRejected(uploader, uploaderName, sessionId, "read_failed");
+            reject(ctx, 400, "UPLOAD_REJECTED", "failed to read uploaded file");
             return;
         }
         String actualMime = detectMagicMime(bytes);
         if (actualMime == null || !actualMime.equals(declaredMime)) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "magic_mismatch");
             reject(ctx, 400, "UPLOAD_REJECTED",
                     "magic bytes mismatch: declared=" + declaredMime
                             + " actual=" + actualMime);
@@ -181,14 +204,18 @@ public final class UploadHandler {
         try {
             decoded = decodeWithTimeout(bytes);
         } catch (TimeoutException te) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_timeout");
             reject(ctx, 400, "UPLOAD_REJECTED", "decode timeout (possible decompression bomb)");
             return;
         } catch (Exception e) {
-            log.log(Level.FINE, "decode failed", e);
-            reject(ctx, 400, "UPLOAD_REJECTED", "decode failed: " + e.getMessage());
+            // M16 P6.1：不 echo ImageIO 异常 message（可能含 codec 内部细节、tmp 路径）
+            log.log(Level.WARNING, "image decode failed", e);
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_failed");
+            reject(ctx, 400, "UPLOAD_REJECTED", "failed to decode image");
             return;
         }
         if (decoded == null) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_null");
             reject(ctx, 400, "UPLOAD_REJECTED", "ImageIO returned null (unsupported format?)");
             return;
         }
@@ -197,6 +224,7 @@ public final class UploadHandler {
         int w = decoded.getWidth();
         int h = decoded.getHeight();
         if (w <= 0 || h <= 0 || w > BBOX_MAX_EDGE || h > BBOX_MAX_EDGE) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "bbox_out_of_range");
             reject(ctx, 400, "UPLOAD_REJECTED",
                     "bbox out of range: " + w + "x" + h);
             return;
@@ -212,6 +240,7 @@ public final class UploadHandler {
             pngBytes = ImageStorage.encodePng(decoded);
         } catch (IOException e) {
             log.log(Level.WARNING, "PNG encode failed", e);
+            auditUploadRejected(uploader, uploaderName, sessionId, "encode_failed");
             reject(ctx, 500, "INTERNAL_ERROR", "encode failed");
             return;
         }
@@ -229,7 +258,7 @@ public final class UploadHandler {
                     hash, pngLen,
                     decoded.getWidth(), decoded.getHeight(),
                     "image/png", uploader,
-                    System.currentTimeMillis(), System.currentTimeMillis(), 1);
+                    System.currentTimeMillis(), System.currentTimeMillis());
             // referenced 集合在事务外 sweep（jdbi 读连接）；事务内只用作 LRU 排除集
             Set<String> referenced = storage.collectReferencedHashes(wallRepo);
 
@@ -250,16 +279,19 @@ public final class UploadHandler {
                 });
             } catch (Exception e) {
                 log.log(Level.WARNING, "upload transaction failed", e);
+                auditUploadRejected(uploader, uploaderName, sessionId, "persist_failed");
                 reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
                 return;
             }
 
             if (qr instanceof ImageQuotaService.DeniedPerDay dp) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "quota_per_day");
                 reject(ctx, 429, "QUOTA_EXCEEDED",
                         "per-day upload limit reached: " + dp.currentCount() + "/" + dp.limit());
                 return;
             }
             if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk");
                 reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
                         "disk full; cannot free " + dd.bytesShort() + " more bytes");
                 return;
@@ -281,6 +313,7 @@ public final class UploadHandler {
                         log.log(Level.SEVERE,
                                 "compensation DELETE failed; orphan DB row may remain: " + hash, rb);
                     }
+                    auditUploadRejected(uploader, uploaderName, sessionId, "write_failed");
                     reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
                     return;
                 }
@@ -293,6 +326,9 @@ public final class UploadHandler {
         } finally {
             hashLock.unlock();
         }
+
+        // M16 P6.4：上传成功 audit（磁盘写敏感操作，必须留痕便于审计 / 异常排查）
+        auditUploadOk(uploader, uploaderName, sessionId, hash, pngLen);
 
         ctx.status(200).json(Map.of(
                 "source", hash,
@@ -370,6 +406,35 @@ public final class UploadHandler {
 
     private void reject(Context ctx, int status, String code, String message) {
         ctx.status(status).json(Map.of("error", code, "message", message == null ? "" : message));
+    }
+
+    /**
+     * M16 P6.4：成功上传 audit。包含 uploader / sha16 / bytes；不含文件名 / 内容
+     * （内容寻址下 hash 已足够定位文件）。
+     */
+    private void auditUploadOk(UUID uploader, String uploaderName, String sessionId,
+                               String sha16, long bytes) {
+        if (auditLog == null) return;
+        java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+        details.put("sha16", sha16);
+        details.put("bytes", bytes);
+        auditLog.record("IMAGE_UPLOAD_OK",
+                uploader == null ? null : uploader.toString(),
+                uploaderName, sessionId, null, details);
+    }
+
+    /**
+     * M16 P6.4：拒绝上传 audit。{@code reason} 是稳定枚举 token（如 {@code size_exceeded}），
+     * 不含文件名 / 路径 / IO 异常 message 等敏感数据。
+     */
+    private void auditUploadRejected(UUID uploader, String uploaderName, String sessionId,
+                                     String reason) {
+        if (auditLog == null) return;
+        java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+        details.put("reason", reason);
+        auditLog.record("IMAGE_UPLOAD_REJECTED",
+                uploader == null ? null : uploader.toString(),
+                uploaderName, sessionId, null, details);
     }
 
     /**

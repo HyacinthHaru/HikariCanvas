@@ -14,6 +14,13 @@ const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
 /** 重连退避阶梯（秒）。超过最后一档就停。 */
 const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
+/**
+ * M16 P6.2：business protocol version（区别于 envelope.v 消息壳版本）。
+ * auth 帧携这个值发给 server，server 在范围内则 ready 回 {@code accepted_v}；
+ * client 收到 ready 后再次校验 {@code accepted_v === CLIENT_V}，不匹配则断开。
+ * 升级时与 {@code plugin/.../Protocol.java SUPPORTED_MIN/MAX} 同步改。
+ */
+const CLIENT_V = 2;
 
 /**
  * WS 协议客户端单例封装（M5-A3）。
@@ -133,8 +140,10 @@ export class WsClient {
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
-        // M8-C：v2 协议强制声明 clientProtocolVersion；后端 < 2 直接 close 4002
-        this.send('auth', { token, clientProtocolVersion: 2 });
+        // M16 P6.2：发新字段 client_v；旧字段 clientProtocolVersion 同步发以兼容回滚
+        // 到旧服务端 jar 的情形（旧后端不识别 client_v，识别 clientProtocolVersion）。
+        // 新后端（M16+）优先读 client_v；范围检查通过 → ready 回 accepted_v。
+        this.send('auth', { token, client_v: CLIENT_V, clientProtocolVersion: CLIENT_V });
     }
 
     private startHeartbeat(): void {
@@ -194,6 +203,17 @@ export class WsClient {
         const project = useProjectStore();
         const templates = useTemplatesStore();
         const ui = useUiStore();
+        // M16 P6.2：双向校验业务协议版本——server 同意了 accepted_v 但若与 CLIENT_V
+        // 不一致（如运维误装错版本），客户端主动断开避免后续 op 行为漂移。
+        // 旧后端不发 accepted_v → undefined → 沿用 M8-C 的 v2 默认（信任 server）。
+        const acceptedV = payload.accepted_v;
+        if (typeof acceptedV === 'number' && acceptedV !== CLIENT_V) {
+            net.lastError = `协议版本不兼容 (server accepted_v=${acceptedV}, client=${CLIENT_V})；请升级`;
+            net.pushLog('err', `protocol version mismatch: accepted_v=${acceptedV} client_v=${CLIENT_V}`);
+            this.stopped = true;
+            try { this.ws?.close(4002, 'protocol_version_unsupported'); } catch { /* ignore */ }
+            return;
+        }
         // M16 P4.2：切到新 wall 时清掉旧 wall 残留状态（selectedIds / lockedAt / state...）。
         // 同 wall 重连（wallId 不变）保留 UI 上下文，避免重连闪烁。
         const incomingWallId = payload.wallId ?? null;

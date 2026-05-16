@@ -16,6 +16,9 @@ network:
   # 玩家点 /canvas confirm 后看到的 URL 模板。{token} 会被实际 token 替换。
   # 内网默认就是 http://127.0.0.1:8877/?token={token}。
   # 公网部署改为 https://yourdomain.com/?token={token}。
+  # M16 P6.5 安全收口：仅支持 http:// 和 https:// 协议；javascript: / data: / file: /
+  # vbscript: 等一律被拒（防止 admin 误配后玩家点 ActionBar 链接执行任意 JS）。
+  # URL 中也不允许含换行（CR/LF）。配置不合法 → 启动期 severe log + 回退到内置默认值。
   editor-url: "http://{host}:{port}/?token={token}"
   # M16 P1.2：WS 连接建立后多少秒内必须完成 auth；超时 → close 4001 auth_timeout。
   # 防御未认证 socket 长挂占连接的 DoS 路径。范围 1-60。

@@ -48,6 +48,9 @@ export const messages = {
             },
             refreshTimeout: '服务端无响应',
             refreshSendFailed: 'WS 未连接',
+            lockFailed: '锁定失败',
+            unlockFailed: '解锁失败',
+            aliasFailed: '保存别名失败',
         },
         home: {
             heading: '近期项目',
@@ -385,6 +388,9 @@ export const messages = {
             },
             refreshTimeout: 'Server did not respond',
             refreshSendFailed: 'WebSocket disconnected',
+            lockFailed: 'Failed to lock',
+            unlockFailed: 'Failed to unlock',
+            aliasFailed: 'Failed to save alias',
         },
         home: {
             heading: 'Recent walls',

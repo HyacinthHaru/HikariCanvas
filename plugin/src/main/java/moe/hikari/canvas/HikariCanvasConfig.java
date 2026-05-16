@@ -3,7 +3,9 @@ package moe.hikari.canvas;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.net.URI;
 import java.time.Duration;
+import java.util.logging.Logger;
 
 /**
  * 把 {@code plugins/HikariCanvas/config.yml} 解析成强类型对象。
@@ -111,9 +113,10 @@ public final class HikariCanvasConfig {
         b.port = f.getInt("network.port", b.port);
         String urlTemplate = f.getString("network.editor-url",
                 "http://{host}:{port}/?token={token}");
-        b.editorUrlTemplate = urlTemplate
-                .replace("{host}", b.host)
-                .replace("{port}", String.valueOf(b.port));
+        // M16 P6.5：editor-url 协议白名单。admin 把 url 写成 javascript:/data:/file:/vbscript:
+        // 等 → 玩家点 ActionBar / chat 链接执行 JS，等价于配置侧 XSS。仅允许 http(s)；
+        // 不合法回退到默认 http://{host}:{port}/?token={token}，并 severe log 让 ops 知道。
+        b.editorUrlTemplate = sanitizeEditorUrl(urlTemplate, b.host, b.port, plugin.getLogger());
 
         // M16 P1.2 / P1.3：网络层安全收口
         b.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, f.getInt("network.ws-auth-timeout-seconds", 5)));
@@ -175,6 +178,56 @@ public final class HikariCanvasConfig {
         b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", false);
 
         return new HikariCanvasConfig(b);
+    }
+
+    /**
+     * M16 P6.5：editor-url 协议白名单。
+     *
+     * <p>解析步骤：</p>
+     * <ol>
+     *   <li>占位符 {@code {host}/{port}} 替换</li>
+     *   <li>拒绝含 CR/LF（防注入额外协议或 header）</li>
+     *   <li>{@code URI.create()} 解析；scheme 必须存在且为 {@code http/https}（大小写不敏感）</li>
+     * </ol>
+     *
+     * <p>任一步失败 → log.severe 并回退默认 {@code http://{host}:{port}/?token={token}}。
+     * 不抛异常，不阻塞启动；URL 是用户体验功能，回退到默认仍可用。</p>
+     */
+    static String sanitizeEditorUrl(String template, String host, int port, Logger logger) {
+        String fallback = "http://" + host + ":" + port + "/?token={token}";
+        if (template == null || template.isBlank()) {
+            return fallback;
+        }
+        String resolved = template
+                .replace("{host}", host)
+                .replace("{port}", String.valueOf(port));
+        // CR/LF 注入防御：合法 url 不应含换行
+        if (resolved.indexOf('\n') >= 0 || resolved.indexOf('\r') >= 0) {
+            logger.severe("editor-url contains CR/LF; falling back to default. raw=<redacted>");
+            return fallback;
+        }
+        // {token} 是运行期替换占位符；URI 解析期为了拿 scheme，先用占位字符串替代
+        String parseTarget = resolved.replace("{token}", "PLACEHOLDER");
+        String scheme;
+        try {
+            URI uri = URI.create(parseTarget);
+            scheme = uri.getScheme();
+        } catch (IllegalArgumentException e) {
+            logger.severe("editor-url is not a valid URI; falling back to default. reason=" + e.getMessage());
+            return fallback;
+        }
+        if (scheme == null) {
+            logger.severe("editor-url has no scheme; must start with http:// or https://. falling back to default.");
+            return fallback;
+        }
+        String lower = scheme.toLowerCase(java.util.Locale.ROOT);
+        if (!lower.equals("http") && !lower.equals("https")) {
+            logger.severe("editor-url has invalid scheme '" + scheme
+                    + "'; must be http(s); falling back to default. "
+                    + "(rejected schemes include javascript:/data:/file:/vbscript:)");
+            return fallback;
+        }
+        return resolved;
     }
 
     /** 摘要字符串，启动 / reload 时 log 一下，方便排错。 */

@@ -83,7 +83,7 @@ class ImageQuotaServiceTest {
         for (int i = 0; i < 2; i++) {
             dao.insert(new ImageUploadDao.Row(
                     String.format("%016d", i), 100, 10, 10, "image/png",
-                    uploader, now - 1000L, now - 1000L, 1));
+                    uploader, now - 1000L, now - 1000L));
         }
         var svc = new ImageQuotaService(dao, cfg(0, 2, 0));
         ImageQuotaService.CheckResult r = svc.check(uploader, 0, 1, false);
@@ -98,7 +98,7 @@ class ImageQuotaServiceTest {
         long oldTs = System.currentTimeMillis() - 2 * 86_400_000L; // 2 天前
         dao.insert(new ImageUploadDao.Row(
                 "ffffffffffffffff", 100, 10, 10, "image/png",
-                uploader, oldTs, oldTs, 1));
+                uploader, oldTs, oldTs));
         var svc = new ImageQuotaService(dao, cfg(0, 1, 0));
         // 24h 内没有上传 → OK
         assertInstanceOf(ImageQuotaService.CheckResult.Ok.class,
@@ -112,7 +112,7 @@ class ImageQuotaServiceTest {
         // 塞 500 KB
         dao.insert(new ImageUploadDao.Row(
                 "0123456789abcdef", 500_000, 100, 100, "image/png",
-                uploader, now, now, 1));
+                uploader, now, now));
         // 1 MB 限额 + 即将上传 800 KB → 总 = 1.3 MB > 1 MB
         var svc = new ImageQuotaService(dao, cfg(0, 0, 1));
         ImageQuotaService.CheckResult r = svc.check(uploader, 0, 800_000, false);
@@ -136,7 +136,7 @@ class ImageQuotaServiceTest {
         long now = System.currentTimeMillis();
         dao.insert(new ImageUploadDao.Row(
                 "abcdef0123456789", 300_000, 50, 50, "image/png",
-                uploader, now, now, 1));
+                uploader, now, now));
         var svc = new ImageQuotaService(dao, cfg(8, 50, 1024));
         ImageQuotaService.Summary s = svc.remaining(uploader, 2);
         assertEquals(8, s.perWallLimit());

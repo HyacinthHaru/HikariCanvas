@@ -90,6 +90,14 @@ final class WallOpDispatcher {
                     return;
                 }
                 // 2026-05-14 lock-state 重设计：ItemFrame PDC 不再写 published_at（FrameDeployer.markPublished 砍）
+                // M16 P6.4：owner 锁定画板留痕（防误锁纠纷 / 后续 audit 查谁锁的）
+                if (auditLog != null) {
+                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    details.put("wall_id", wallId);
+                    details.put("locked_at", ts);
+                    auditLog.record("WALL_LOCK", s.playerUuid().toString(), s.playerName(),
+                            sessionId, null, details);
+                }
                 ctx.send(Envelope.of("ack", in.id(), Map.of("lockedAt", ts)));
             }
             case "wall.unlock" -> {
@@ -104,6 +112,13 @@ final class WallOpDispatcher {
                     return;
                 }
                 wallRepo.markUnpublished(wallId);
+                // M16 P6.4：owner 解锁画板留痕（对应 WALL_LOCK 的对偶事件）
+                if (auditLog != null) {
+                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    details.put("wall_id", wallId);
+                    auditLog.record("WALL_UNLOCK", s.playerUuid().toString(), s.playerName(),
+                            sessionId, null, details);
+                }
                 // M15.1 P0-2：全局 JsonInclude.NON_NULL 会把 lockedAt: null 字段吞掉，前端收空对象；
                 // 改用显式布尔 locked: false（协议变更，前端 wsClient.ts 同步调整）
                 ctx.send(Envelope.of("ack", in.id(), Map.of("locked", false)));
@@ -128,6 +143,16 @@ final class WallOpDispatcher {
                     org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(s.playerUuid());
                     boolean canAny = live != null && live.hasPermission("canvas.alias.any");
                     if (!canAny) {
+                        // M16 P6.4：非 owner 尝试改 alias 留痕——可观测异常尝试
+                        if (auditLog != null) {
+                            java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                            details.put("operation", "alias");
+                            details.put("wall_id", wallId);
+                            details.put("caller", s.playerUuid().toString());
+                            auditLog.record("PERMISSION_DENIED",
+                                    s.playerUuid().toString(), s.playerName(),
+                                    sessionId, null, details);
+                        }
                         ctx.send(Envelope.error(in.id(), "FORBIDDEN",
                                 "only wall owner can change alias"));
                         return;

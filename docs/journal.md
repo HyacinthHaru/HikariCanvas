@@ -5,6 +5,81 @@
 
 ---
 
+## 2026-05-16 · M16 Phase 6（P1 防御 + 观测 8 项）
+
+针对 docs/ultrareview-2026-05-16.md P1 防御层，3 个并行 agent 完成。Phase 6 是 M16 最长阶段。
+
+### P6.1 Jackson 严格 + 错误消息脱敏
+
+`WebServer` ObjectMapper 加 `FAIL_ON_UNKNOWN_PROPERTIES=true` 接收侧严格；发送侧保持 NON_NULL 不变。WS messageAsClass / WebHelpers.mapOrEmpty / UploadHandler 多处 `e.getMessage()` 改为固定 friendly 文案 + `log.log(Level.WARNING)` 服务端。dispatcher 内的 `iae.getMessage()` 保留（已是预定义 friendly 常量）。
+
+### P6.2 协议版本协商
+
+新 `web/Protocol.java`：`SUPPORTED_MIN=2 / SUPPORTED_MAX=2 / CLOSE_PROTOCOL_VERSION_UNSUPPORTED=4002 / isSupported(int)`。区分 envelope schema v vs business protocol version。
+
+- WebServer.handleAuth：原 M8-C 单条 `< 2` 检查改为范围；优先读 `client_v`，回落 `clientProtocolVersion`（兼容）；ready payload 加 `accepted_v`
+- wsClient.ts 顶层 `CLIENT_V = 2`；sendAuth 双带（新+旧字段）；handleReady 双向校验 accepted_v，不匹配 close 4002 + `stopped=true` 阻止重连风暴
+- ReadyPayload 加 `accepted_v?: number`（旧后端不发为 undefined → 旧路径继续工作）
+
+### P6.3 image_uploads.refcount 列移除
+
+新 `V010__remove_refcount.sql` 直接 DROP COLUMN（sqlite-jdbc 3.53 对应 SQLite ≥ 3.45 原生支持）。`ImageUploadDao.Row` record 删 refcount 字段；insertOn / mapRow 同步；调用方 UploadHandler / ImageStorage / ImageQuotaServiceTest 4 处构造同步删尾 1。
+
+### P6.4 AuditLog 补全
+
+新事件常量：`WALL_LOCK` / `WALL_UNLOCK` / `IMAGE_UPLOAD_OK` / `IMAGE_UPLOAD_REJECTED` / `PERMISSION_DENIED`。
+
+调用点：
+- WallOpDispatcher：lock/unlock 成功 + alias 非 owner 拒
+- SessionManager.open lock-aware 拒（reason=lock_owner_only）
+- EditOpDispatcher.template.apply ForbiddenTemplateException
+- UploadHandler 10+ 拒绝路径 + 成功路径（reason 是稳定 token 不含文件名 / 路径）
+
+write 失败 fallback：`AuditLog.java` 从 `log.severe(String)` 改 `log.log(Level.SEVERE, msg, e)` 保 stack trace。
+
+### P6.5 editor-url 协议白名单
+
+`HikariCanvasConfig.sanitizeEditorUrl`：CR/LF 检测 → `{token}` 替换 PLACEHOLDER → `URI.create()` 解析 → scheme 必须 `http` 或 `https`（lower-case）。非法 → `log.severe` + 回退默认。config.yml 注释加警告。
+
+### P6.6 Token + WS IP 绑定（方案 B：会话级）
+
+Token 不绑（confirm 阶段无 HTTP context），改会话级。
+
+- Session 加 `boundIp` 字段
+- SessionManager.bindOrCheckIp：新 `IpBindResult { OK, BOUND, MISMATCH, NO_SESSION }`；首次绑定在 writeLock 内 CAS 防 race
+- WebServer.handleAuth：consume token + session lookup 后调 bindOrCheckIp(presentedIp)；MISMATCH → close auth_failed + log.warning（外部仍是 4001）
+- 已知限制：IPv4-mapped IPv6 不 norm；反代场景未解 XFF；玩家切网络必须重 confirm
+
+### P6.7 SessionManager ReadWriteLock
+
+三 map（byId / byPlayer / byWall）改 `ConcurrentHashMap`，所有 `synchronized(this)` 砍掉。
+
+新 `ReentrantLock writeLock` 守护跨 map 复合写：`beginSelecting` / `confirm` / `open` / `cancel` / `deleteWall` / `bindOrCheckIp`。read-modify-write 用 `putIfAbsent` 防 race。
+
+**持锁中调 Bukkit API 全部挪到锁外**：`Bukkit.getPlayer` / `Bukkit.getWorld` / MapPool 系列 / wallRepo / auditLog / forgetHooks 回调——锁内只做 map mutate + Session 元数据 read。`runForgetHooks` 从 `forget()` 拆出在锁外执行（防 hook 回调持外部锁 → lock-order 死锁）。
+
+副作用：confirm 加 `WallRaceException` sentinel 处理 putIfAbsent race；新 `disconnect()` 非主线程版 cancel。public API 全保留。
+
+### P6.8 Optimistic mutation 回滚
+
+`TopBar.toggleLock` / `commitAliasEdit` 改 async：save prev → optimistic mutate → `await ws.sendWithAck(..., 5000)` → catch 时回滚 + `net.lastError` 分流错误码。
+
+连击防护：`lockInFlight` / `aliasInFlight` ref，pending 直接 return。lock 按钮 `:disabled="!isOwner || lockInFlight"`。
+
+砍掉旧 `watch(net.lastError)` 拦截副作用（避免误触发其它 op 报错时显示别名 UI）。
+
+i18n 加 `wall.lockFailed / unlockFailed / aliasFailed`（中英）。
+
+### 验证
+
+`:plugin:test --rerun-tasks` 全绿；`vite build` 通过（dist 485kB / gzip 150kB）。先清 macOS `* 2.class` 污染。
+
+### 关联文件
+
+`plugin/src/main/java/moe/hikari/canvas/`: `HikariCanvas.java` / `HikariCanvasConfig.java` / `image/ImageStorage.java` / `image/UploadHandler.java` / `session/Session.java` / `session/SessionManager.java` / `storage/AuditLog.java` / `storage/ImageUploadDao.java` / `web/EditOpDispatcher.java` / `web/WallOpDispatcher.java` / `web/WebHelpers.java` / `web/WebServer.java` / `web/Protocol.java`（新）。`db-migrations/V010__remove_refcount.sql`（新）/ `config.yml`。`plugin/src/test/.../ImageQuotaServiceTest.java`。`web/src/`: `components/layout/TopBar.vue` / `i18n/messages.ts` / `network/wsClient.ts` / `types/protocol.ts`。
+
+---
+
 ## 2026-05-16 · M16 Phase 5（构建依赖 P0 3 项）
 
 针对 docs/ultrareview-2026-05-16.md 第十四章构建 P0，单 agent 完成。

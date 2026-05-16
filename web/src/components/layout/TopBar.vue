@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import { useUiStore } from '@/stores/ui';
@@ -31,16 +31,43 @@ let copiedFlashTimer: number | null = null;
 
 const saveModalOpen = ref(false);
 
-function toggleLock() {
+/**
+ * M16 P6.8：lock / unlock 进行中的 promise。pending 时按钮 disabled；防止用户连点
+ * 引起 lockedAt 在多次 ack 之间跳变。alias 同款用 aliasInFlight。
+ */
+const lockInFlight = ref(false);
+const aliasInFlight = ref(false);
+
+/**
+ * M16 P6.8：optimistic mutation + rollback on server reject。
+ *
+ * 之前实现只 ws.send 不等 ack；server 拒绝（FORBIDDEN / VALIDATION / NOT_OWNER）时
+ * 用户看到 UI 已锁但实际未锁，靠 watch(lastError) log 提示但不还原状态。现在 sendWithAck
+ * 走 ack/error rejection → catch 回滚 lockedAt 到 prev 值并提示。
+ */
+async function toggleLock() {
     if (!project.wallId) return;
     if (!isOwner.value) return;  // 非 owner 按钮 disabled，理论上不应触发
-    if (locked.value) {
-        project.lockedAt = null; // optimistic
-        ws.send('wall.unlock');
-    } else {
-        // optimistic：用本地时间戳，server ack 会用真实值覆盖
-        project.lockedAt = Date.now();
-        ws.send('wall.lock');
+    if (lockInFlight.value) return;  // 连击防护：pending 期间忽略
+    const prev = project.lockedAt;
+    const wasLocked = prev != null;
+    // optimistic：先 mutate，server ack 会用真实值（含权威 lockedAt 时间戳）覆盖
+    project.lockedAt = wasLocked ? null : Date.now();
+    lockInFlight.value = true;
+    try {
+        await ws.sendWithAck(wasLocked ? 'wall.unlock' : 'wall.lock', undefined, 5000);
+        // server ack 已通过 wsClient.handleAck 写入权威 lockedAt（见 wsClient.ts handleAck）
+    } catch (err) {
+        // rollback：恢复 prev
+        project.lockedAt = prev;
+        const msg = (err as Error).message;
+        // 用 net.lastError 作为统一错误显示通道（已被 NetworkStatus / 日志面板订阅）
+        net.lastError = wasLocked
+            ? `${t.value.wall.unlockFailed}: ${msg}`
+            : `${t.value.wall.lockFailed}: ${msg}`;
+        net.pushLog('err', `lock toggle rejected: ${msg}`);
+    } finally {
+        lockInFlight.value = false;
     }
 }
 
@@ -58,8 +85,9 @@ function cancelAliasEdit() {
     aliasError.value = null;
 }
 
-function commitAliasEdit() {
+async function commitAliasEdit() {
     if (!project.wallId) return;
+    if (aliasInFlight.value) return;
     const trimmed = aliasDraft.value.trim();
     const cur = project.alias ?? '';
     if (trimmed === cur || trimmed === '') {
@@ -70,25 +98,39 @@ function commitAliasEdit() {
         aliasError.value = t.value.wall.aliasInvalid;
         return;
     }
-    project.alias = trimmed; // optimistic
-    ws.send('wall.alias', { alias: trimmed });
+    // M16 P6.8：optimistic + ack-driven rollback
+    const prev = project.alias;
+    project.alias = trimmed;
     editingAlias.value = false;
     aliasError.value = null;
-}
-
-// 监听服务端报错（ALIAS_TAKEN / INVALID_ALIAS_FORMAT）→ 回滚 + 错误提示
-watch(() => net.lastError, (err) => {
-    if (!err) return;
-    if (err.includes('ALIAS_TAKEN')) {
-        editingAlias.value = true;
-        aliasError.value = t.value.wall.aliasInUse;
-        nextTick(() => aliasInput.value?.focus());
-    } else if (err.includes('INVALID_ALIAS_FORMAT')) {
-        editingAlias.value = true;
-        aliasError.value = t.value.wall.aliasInvalid;
-        nextTick(() => aliasInput.value?.focus());
+    aliasInFlight.value = true;
+    try {
+        await ws.sendWithAck('wall.alias', { alias: trimmed }, 5000);
+        // server ack 已通过 wsClient.handleAck 写入权威 alias
+    } catch (err) {
+        // rollback to prev
+        project.alias = prev;
+        const msg = (err as Error).message;
+        // 按 server code 决定 UI：被占用 / 格式 → 回到 inline edit；其它（FORBIDDEN/timeout）
+        // → 统一 lastError 提示
+        if (msg.includes('ALIAS_TAKEN')) {
+            aliasDraft.value = trimmed;
+            editingAlias.value = true;
+            aliasError.value = t.value.wall.aliasInUse;
+            nextTick(() => aliasInput.value?.focus());
+        } else if (msg.includes('INVALID_ALIAS_FORMAT')) {
+            aliasDraft.value = trimmed;
+            editingAlias.value = true;
+            aliasError.value = t.value.wall.aliasInvalid;
+            nextTick(() => aliasInput.value?.focus());
+        } else {
+            net.lastError = `${t.value.wall.aliasFailed}: ${msg}`;
+            net.pushLog('err', `alias commit rejected: ${msg}`);
+        }
+    } finally {
+        aliasInFlight.value = false;
     }
-});
+}
 
 function copyWallId() {
     if (!project.wallId) return;
@@ -199,7 +241,7 @@ function showRefreshFlash(msg: string) {
             :class="locked
               ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
               : 'bg-[color:var(--secondary)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
-            :disabled="!isOwner"
+            :disabled="!isOwner || lockInFlight"
             @click="toggleLock"
           >
             <Lock v-if="locked" class="size-3" />

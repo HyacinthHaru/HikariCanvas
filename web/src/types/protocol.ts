@@ -285,6 +285,11 @@ export interface ReadyPayload {
     sessionId: string;
     serverVersion: string;
     protocolVersion: number;
+    /**
+     * M16 P6.2：server 同意的 business protocol version；为 undefined 表示对端是
+     * 旧后端（M15-）。client 收到后双向校验 acceptedV === CLIENT_V 才继续。
+     */
+    accepted_v?: number;
     reconnectToken: string;
     projectState: ProjectState;
     // M5.5：wall 元数据

@@ -40,6 +40,12 @@ public final class Session {
     private EditSession editSession;
     private long lastActivityAt;
     private long wsDisconnectedAt = -1;
+    /**
+     * M16 P6.6：会话级 IP 绑定。首次 WS auth 成功时设值；后续 reconnect 必须 IP 同源。
+     * null = 尚未首次 auth；非 null = 已绑定，认 IP 字符串严格相等。
+     * 见 CLAUDE.md §lock-state 后的 IP 绑定决策。
+     */
+    private String boundIp;
 
     Session(String id, UUID playerUuid, String playerName, long now) {
         this.id = id;
@@ -67,6 +73,8 @@ public final class Session {
     public EditSession editSession() { return editSession; }
     public long lastActivityAt() { return lastActivityAt; }
     public long wsDisconnectedAt() { return wsDisconnectedAt; }
+    /** M16 P6.6：当前绑定的 client IP；null 表示尚未首次 auth。 */
+    public String boundIp() { return boundIp; }
 
     // package-private mutators——只允许 SessionManager 在持锁下修改
     void state(SessionState s) { this.state = s; }
@@ -82,4 +90,6 @@ public final class Session {
     void editSession(EditSession es) { this.editSession = es; }
     void touchActivity(long now) { this.lastActivityAt = now; this.wsDisconnectedAt = -1; }
     void markWsDisconnected(long now) { this.wsDisconnectedAt = now; }
+    /** M16 P6.6：首次 WS auth 成功时调；后续 reconnect 必须 IP 同源。 */
+    void boundIp(String ip) { this.boundIp = ip; }
 }

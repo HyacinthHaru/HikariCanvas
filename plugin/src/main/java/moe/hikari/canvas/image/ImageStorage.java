@@ -129,7 +129,7 @@ public final class ImageStorage {
             boolean inserted = dao.insert(new ImageUploadDao.Row(
                     hash, pngBytes.length,
                     img.getWidth(), img.getHeight(),
-                    "image/png", uploader, now, now, 1));
+                    "image/png", uploader, now, now));
             if (!inserted) {
                 // race：另一线程同 hash 抢先 insert
                 Optional<ImageUploadDao.Row> raced = dao.findByHash(hash);

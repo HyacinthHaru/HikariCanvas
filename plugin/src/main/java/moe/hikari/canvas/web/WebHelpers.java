@@ -25,7 +25,8 @@ final class WebHelpers {
     static Map<?, ?> mapOrEmpty(Object v) {
         if (v == null) return Map.of();
         if (v instanceof Map<?, ?> m) return m;
-        throw new IllegalArgumentException("expected object, got " + v.getClass().getSimpleName());
+        // M16 P6.1：不暴露内部类名（Java SimpleName），固定消息。
+        throw new IllegalArgumentException("expected object");
     }
 
     static String stringOrNull(Object v) {
