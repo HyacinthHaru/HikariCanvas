@@ -155,6 +155,17 @@ export const useUiStore = defineStore('ui', () => {
         editingLayerId.value = id;
     }
 
+    /**
+     * M16 P4.2：wall 切换时重置 wall-scoped 状态；用户偏好（theme / locale / activeTool / zoom /
+     * 面板折叠态）保留，因为它们应跨 wall 持久。
+     */
+    function reset(): void {
+        selectedIds.value = new Set();
+        editingLayerId.value = null;
+        logDrawerOpen.value = false;
+        helpOpen.value = false;
+    }
+
     return {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
         selectedIds, selectedElementId, selectedCount, hasSelection,
@@ -164,6 +175,7 @@ export const useUiStore = defineStore('ui', () => {
         selectElement, toggleSelection, selectMany, addToSelection, clearSelection,
         isSelected,
         setTool, setEditingLayer,
+        reset,
     };
 });
 

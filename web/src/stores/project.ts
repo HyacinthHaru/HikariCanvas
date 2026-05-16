@@ -108,6 +108,20 @@ export const useProjectStore = defineStore('project', () => {
         return state.value.layers.find((l) => l.id === id) ?? null;
     }
 
+    /**
+     * M16 P4.2：setup store 没有自动 $reset，手动把所有 wall-scoped ref 重置到初始值。
+     * 调用点：wall 切换 / disconnect 后；palette / brush store 等跨 wall 用户偏好不在此处理。
+     */
+    function reset(): void {
+        state.value = null;
+        lastAddedElementId.value = null;
+        wallId.value = null;
+        alias.value = null;
+        lockedAt.value = null;
+        ownerUuid.value = null;
+        selfUuid.value = null;
+    }
+
     return {
         state,
         lastAddedElementId,
@@ -117,6 +131,7 @@ export const useProjectStore = defineStore('project', () => {
         activeLayer, activeLayerLocked,
         setSnapshot, setWallMeta, applyPatch,
         elementById, layerById,
+        reset,
     };
 });
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useEventListener } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { isDrawTool, useUiStore } from '@/stores/ui';
@@ -436,10 +436,30 @@ onMounted(() => {
 });
 
 let drawPending = false;
+let drawRafId: number | null = null;
+
+// M16 P4.2 Konva 清理：组件 unmount 时显式 destroy stage（级联清理 Layer / Transformer
+// 内部的 listeners + 2D context + cached image data）。Vue Konva 不主动 destroy node。
+onBeforeUnmount(() => {
+    if (drawRafId !== null) {
+        cancelAnimationFrame(drawRafId);
+        drawRafId = null;
+    }
+    const stageNode = stageRef.value?.getNode() as undefined | { destroy(): void };
+    if (stageNode && typeof stageNode.destroy === 'function') {
+        try { stageNode.destroy(); } catch (err) { console.warn('[CanvasView] stage.destroy failed', err); }
+    }
+    // 主动 null 引用让 GC 可回收（template ref 由 Vue 自动清，但显式重置更稳）
+    stageRef.value = null;
+    layerRef.value = null;
+    transformerRef.value = null;
+});
+
 function requestDraw(): void {
     if (drawPending) return;
     drawPending = true;
-    requestAnimationFrame(() => {
+    drawRafId = requestAnimationFrame(() => {
+        drawRafId = null;
         drawPending = false;
         const el = canvasEl.value;
         if (!el) return;

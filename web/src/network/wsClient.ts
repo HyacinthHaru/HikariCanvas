@@ -8,6 +8,7 @@ import type {
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
+import { useUiStore } from '@/stores/ui';
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
@@ -192,6 +193,14 @@ export class WsClient {
         const net = useNetworkStore();
         const project = useProjectStore();
         const templates = useTemplatesStore();
+        const ui = useUiStore();
+        // M16 P4.2：切到新 wall 时清掉旧 wall 残留状态（selectedIds / lockedAt / state...）。
+        // 同 wall 重连（wallId 不变）保留 UI 上下文，避免重连闪烁。
+        const incomingWallId = payload.wallId ?? null;
+        if (project.wallId !== null && project.wallId !== incomingWallId) {
+            project.reset();
+            ui.reset();
+        }
         net.authenticated = true;
         net.sessionId = payload.sessionId;
         net.serverVersion = payload.serverVersion;
@@ -280,6 +289,17 @@ export class WsClient {
         net.closeCode = ev.code;
         net.reset();
         net.pushLog('meta', `ws closed code=${ev.code}${ev.reason ? ` reason="${ev.reason}"` : ''}`);
+
+        // M16 P4.3：清空所有未完成 ack，让 await sendWithAck 的消费者收到 rejection
+        // 而非永远 pending。重连后是干净的 Map，不混前后两次连接的 ack 序号。
+        // 注意 seq 计数器不重置——保留现有行为（id 全局递增）。
+        if (this.pendingAcks.size > 0) {
+            for (const [, pending] of this.pendingAcks) {
+                if (pending.timer) window.clearTimeout(pending.timer);
+                pending.reject(new Error('connection closed before ack'));
+            }
+            this.pendingAcks.clear();
+        }
 
         // M5-D7：按 close code 判断是否重连
         // - 1000 (normal) / 4001 (auth failed) / 4008 (rate limit) → 不重连

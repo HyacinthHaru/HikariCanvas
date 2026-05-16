@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-05-16 · M16 Phase 4（前端资源生命周期 P0 3 项）
+
+针对 docs/ultrareview-2026-05-16.md 前端 P0，单 agent 完成。
+
+### P4.1 setPointerCapture 异常 release
+
+`useBrushHost.ts` 整文件重写。
+
+- `tryCapture(target, pointerId)` / `tryRelease()` 包 try-catch
+- 维护独立 `capturedTarget` / `capturedPointerId`，不依赖 PointerEvent.target
+- `abortStroke()` idempotent：检查 brushController.isActive 后 cancel + 总是 tryRelease
+- pointerDown capture 失败时不调 brushController.pointerDown 避免半死
+- 新监听：元素 `pointercancel` / window `blur` / document `visibilitychange` 都 abortStroke
+- onScopeDispose 兜底 removeEventListener + abortStroke
+
+### P4.2 Konva + Pinia 卸载清理
+
+**Konva**（`CanvasView.vue`）：
+- 新 `drawRafId` 变量记录 requestAnimationFrame id
+- `onBeforeUnmount`：cancelAnimationFrame + `stage.destroy()`（级联清 Layer / Transformer / 内部 listener / 2D ctx / cache）+ ref 置 null
+- 全仓 grep 确认：composables（useTransformerManager / useMarqueeSelection / useDrawToCreate / usePanScroll / useCanvasShortcuts / useCanvasUpload）全部通过 vue-konva template ref 拿节点，不直接 `new Konva.*`；watch / useEventListener / onKeyStroke 已在 effect scope 内自动 cleanup。ResizeObserver / IntersectionObserver 全仓 0 引用
+
+**Pinia reset**：
+- `stores/project.ts` 加 `reset()`：清 state / lastAddedElementId / wallId / alias / lockedAt / ownerUuid / selfUuid
+- `stores/ui.ts` 加 `reset()`：清 selectedIds / editingLayerId / logDrawerOpen / helpOpen；**保留** theme / locale / activeTool / zoom / 面板折叠（用户偏好跨 wall）
+- palette / brush / templates / network store **不 reset**（localStorage 持久化偏好）
+- 调用点：`wsClient.ts handleReady` 仅当 `project.wallId !== null && wallId !== incomingWallId`（切 wall）时调，**同 wall 重连不触发** 避 UI 闪烁
+
+### P4.3 pendingAcks onClose 清理
+
+`wsClient.ts onClose` 加：遍历 pendingAcks，clearTimeout + reject('connection closed before ack') + Map.clear()。`seq` 计数器保持现状不重置。`sendWithAck` 超时 / ack / error 三个 delete 点已齐备。
+
+### 验证
+
+- `vite build` 372ms / 1728 modules ok（dist 484kB / gzip 150kB）
+- `vue-tsc --noEmit` 仅 baseline 预存错误（useTransformerManager 重复签名、i18n、PreviewRenderer @ts-expect-error、vite.config @types/node），与本次无关；改的 5 个文件 0 新错误
+
+### 关联文件
+
+`web/src/components/layout/CanvasView.vue` / `composables/useBrushHost.ts` / `network/wsClient.ts` / `stores/project.ts` / `stores/ui.ts`。
+
+---
+
 ## 2026-05-16 · M16 Phase 3（渲染防御 P0 4 项）
 
 针对 docs/ultrareview-2026-05-16.md 渲染层 P0 防御，单 agent 完成。
