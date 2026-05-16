@@ -854,3 +854,33 @@ logging:
 - [ ] **M8 引入**：blendMode v1 选 normal/multiply/screen/overlay 4 个；其他 PS 风格 mode 等用户呼声
 
 这些问题实现时根据实际情况回填本文档。
+
+---
+
+## 13. 动态画板设计约束（M15.3 拍板）
+
+未来加 PAPI / 数据源驱动的"动态画板"功能时必须遵循以下路径，避免与
+M15.3 鉴权方案 C（lock-aware open + 后端编辑 op 透明）冲突。
+
+### 13.1 选 P-1：渲染期占位符解析
+
+TextElement 加 `dynamic: { source: 'papi', expr: '%player_name%' }` 字段。
+ProjectState 持久化时仅存「模板」（含 `${}` / `%papi%`），不存「实际值」。
+`CanvasCompositor.drawText` 检测 dynamic flag → 渲染前调
+`PlaceholderAPI.setPlaceholders(player, text)` 替换 → 渲染当前值。
+
+- ✅ 与方案 C 兼容：渲染走 `CanvasProjector` 不经过 `SessionManager.open`
+- ✅ Lock 锁的是「模板编辑」，不是「显示内容更新」
+- ✅ 玩家 lock 后模板冻结，但每帧仍读最新动态值
+
+### 13.2 备选 P-3：Plugin API + DynamicValueProvider
+
+外部插件注册 `DynamicValueProvider` 回调；渲染时 HikariCanvas 拉取。
+同 P-1 的兼容性（不走 open 路径）。
+
+### 13.3 反模式（不允许）
+
+P-2 定时 patch ProjectState：后台 task 每 N 秒 `EditSession.updateElement`。
+**不允许** — 会撞 lock-aware open 鉴权 + 撑爆 history 栈 + 产生大量 WS 流量。
+
+详见 `docs/journal.md` 2026-05-16 M15.3 / M15.4 条目。

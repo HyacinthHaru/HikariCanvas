@@ -5,6 +5,70 @@
 
 ---
 
+## 2026-05-16 · M15.5 ultrareview Phase 4（docs 同步收尾）+ M15.2 god class 拆分（5 commit batch）
+
+### M15.2 god class 拆分（5 个 commit）
+
+5 个 agent 并行 + WebServer 收尾 agent，把累计 6519 行 god class 拆到 33 个新模块（平均 60-300 行 / 模块），各类公共 API 100% 不变，364 测试全过 + fixture baseline 0 漂移。
+
+| god class | 之前 | 之后 | 减少 | 新模块 | commit |
+|---|---:|---:|---:|---|---|
+| EditSession.java | 2013 | **1191** | -41% | ElementValidator (537) / BrushSession (304) / LayerOperations (295) / HistoryStack (105) | `91e54dc` |
+| CanvasCompositor.java | 986 | **328** | -67% | ElementRenderer sealed (23) + RenderContext (44) + FillPaintBuilder (147) + 8 Renderer（Rect/Circle/Shape/Icon/Path/Text/Image/Brush） | `8839c5c` |
+| WebServer.java | 1117 | **581** | -48% | OpPushCallback / WebHelpers / EditOpDispatcher (243) / BrushOpDispatcher (102) / WallOpDispatcher (153) / TemplateOpDispatcher (147) | `c0106f1` |
+| RightPanel.vue | 1076 | **193** | -82% | TransformSection (199) / TextElementSection (311) / GeometricElementSection (168) / ImageElementSection (301) / ElementListSection (126) | `d26134f` |
+| CanvasView.vue | 1327 | **596** | -55% | 3 子组件（CanvasGridOverlay 25 / TextInlineEditor 83 / CanvasZoomBar 163）+ 7 composable（useMarqueeSelection 109 / useDrawToCreate 183 / useBrushHost 84 / useTransformerManager 117 / useCanvasShortcuts 50 / usePanScroll 84 / useCanvasUpload 157） | `fefa91b` |
+| **合计** | **6519** | **2889** | **-56%** | **33 个新模块** | 5 commit |
+
+**设计要点**：
+- ElementRenderer 用 sealed permits 8 子类 + record pattern switch dispatch → 新增 Element 类型时编译期强制补 renderer
+- RenderContext.ImageLoaderHolder SAM 让 setImageLoader 写后所有 renderer 立即可见（volatile 字段间接读）
+- OpPushCallback interface 解耦 dispatcher 与 WebServer：dispatcher 只需 push 回调，不持完整 WebServer 引用
+- BayerDither.apply(img, palette, phaseX, phaseY) 让 dither buffer 缩到 element bbox 后输出像素级等价（fixture 0 漂移关键）
+- 测试钩子（activeStrokeCountForTest / overrideStrokeActivityForTest / purgeStaleStrokes）仍在 EditSession 上保留 package-private 签名，内部 delegate BrushSession 同名方法 → EditSessionBrushPurgeTest 等不动
+
+**收益**：33 个新模块平均 60-300 行 → 单 reader 一坐能读完；后续 M13/M14/动态画板等扩展往里塞功能可以独立子模块迭代，god class 膨胀有了边界。
+
+**工期约 4h**（5 agent 并行；预算 22-25h；节省 ~80% wall-clock）。
+
+### M15.5 docs 同步（M15 收尾）
+
+docs/protocol.md / docs/architecture.md / docs/data-model.md / docs/deployment.md / CLAUDE.md 5 个文档批量更新，把 M11-M14 + M15 改动全部回填契约：
+
+- **docs/protocol.md** (+42 行)：§3.1 预握手响应精简 + §5.7 wall.refresh / wall.alias 错误码 + §5.9 brush 段从占位重写为 M12 完整版 + §5.10 新增模板创意工坊段 + §6.1 错误码表补 13 个（FORBIDDEN / INVALID_ALIAS_FORMAT / UNEXPECTED / TOO_MANY_STROKES 等）+ §8.3 锁定与终结（lock/unlock + FORBIDDEN 示例）
+- **docs/architecture.md** (+30 行)：§13 动态画板设计约束（P-1 渲染期占位符推荐 / P-3 Plugin API 备选 / P-2 反模式禁用）
+- **docs/data-model.md** (+32 行)：§6.6 Migration 兼容性规则（pre-release 激进 OK / 0.1.0 后 forward-only + auto-backup / fixture 测试要求）
+- **docs/deployment.md** (+37 行)：§8 版本升级 SOP（升级前 / 中 / 后 / 回滚）
+- **CLAUDE.md** (+19 行)：M15 ultrareview 大重构段（5 phase 概览 + 3 关键架构决策）
+
+### M15 累计统计
+
+- **27 P0 修完**（M15.1 + M15.3 + M15.4 + M15.2 顺手修的 P0-3 部分）
+- **5 god class 拆完**
+- **3 测试基建依赖**引入（Caffeine / MockBukkit / JavalinTest）
+- **9 commit 分 5 phase batch push**
+- **364 测试不漂移** + **14 fixture snapshot 0 漂移**
+- **vite build 482.40 KB JS**（M14 baseline 477.79 → +4.61 KB，符合预算）
+
+**剩余 P0**：
+- P0-26 MapPool persist 失败一致性 — 留 v1.x（M15.2 god class 拆分时未碰 MapPool）
+- P0-Web-4 WS auth → wsBySession race — v1 不做（需 CountDownLatch 等并发设施）
+
+### 整体工期
+
+| Phase | 内容 | wall-clock |
+|---|---|---:|
+| M15.1 | 9 P0 + 3 依赖 + Caffeine wallPreviewCache | 2.5h |
+| M15.3 | 8 P0 鉴权方案 C + 数据安全 + 基础设施 | 2.5h |
+| M15.4 | 10 P0 ImageIO/DB/协议/渲染 | 3h |
+| M15.2 | 5 god class 拆分（5 commit batch） | 4h |
+| M15.5 | docs 同步 + 整体 journal | 1h |
+| **合计** | | **~13h** |
+
+预算 35-40h；实际 ~13h（节省 ~65%）。靠大量子代理并行（5 agent × 多 phase = 累计 ~20 agent 工作量）+ 主代理只做装配 + commit + push。
+
+---
+
 ## 2026-05-16 · M15.4 ultrareview Phase 3（ImageIO 隔离 + DB 一致性 + 协议 + 渲染）
 
 4 个 agent 并行实施 10 处中高风险修复。覆盖 ImageIO DoS / LRU 死锁 / DB 事务 / 协议明文 / 模板注入 / dither OOM 6 个独立领域。

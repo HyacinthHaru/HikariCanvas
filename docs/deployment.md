@@ -234,3 +234,40 @@ network:
 | `throttle.input-rate-per-second` | `20` | 单玩家 WS op 速率上限 | ✅ |
 
 > "改了要重启 = ✅" 表示 `/canvas reload config` 不足以让该字段生效，必须重启服务器。M7+ 会扩展 hot-apply 覆盖面。
+
+---
+
+## 8. 版本升级 SOP（0.1.0+）
+
+> **配套契约：** `docs/data-model.md §6.6` 定义 0.1.0 之后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。
+
+### 8.1 升级前
+
+1. 停服（保证 `data.db` / world 文件不变）
+2. **手动备份**：`cp -r plugins/HikariCanvas plugins/HikariCanvas.bak.<date>`
+3. 备份 `data.db`（即便 plugin 自动 backup 也建议手工冗余）
+
+### 8.2 升级中
+
+4. 替换 jar 文件
+5. 启动服务器
+6. 启动期 `MigrationRunner` 自动跑 `V<currentVersion+1>..V<latest>`
+   （`database.auto-backup-before-migration: true` 时每个 migration
+   前再 `cp data.db data.db.pre-V<NNN>.bak`）
+7. 看 server log 确认 `DB schema current version: <newVersion>` 和
+   `✓ V<NNN> applied` 信息
+
+### 8.3 升级后
+
+8. 跑 `/canvas list` 验证 walls 数据完整
+9. 至少 1 个玩家打开旧 wall 验证编辑流程正常
+10. 24h 后无问题再删 backup（disk 充裕则保留 30d）
+
+### 8.4 回滚
+
+如启动失败 / migration 异常：
+
+1. 停服
+2. `cp data.db.pre-V<NNN>.bak data.db`（或恢复手动备份）
+3. 换回旧版本 jar
+4. 启动 — server log 应看到 `current version: <旧 N>` 跳过新 migration

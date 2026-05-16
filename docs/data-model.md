@@ -433,6 +433,38 @@ CREATE INDEX/UNIQUE INDEX ...;
 - `data.db` 应随世界文件一并快照
 - 恢复时确保 DB 与世界文件的时间一致，否则 map 与 PDC 可能不匹配
 
+### 6.6 Migration 兼容性规则（pre-release vs 0.1.0 发版）
+
+> **M15.4 P0-28/29 落地**（2026-05-16）：M15 之前 migration 走的是"激进 drop+recreate"（如 V005 整体重置），适合 pre-release 阶段；0.1.0 之后必须切到 forward-only + 强制 auto-backup。
+
+#### 6.6.1 Pre-release（0.1.x SNAPSHOT）
+
+允许激进改 schema：V<N+1> 可 `DROP` 旧表 / 重命名列 / 删字段。
+`database.auto-backup-before-migration` config 默认 `false`。
+
+#### 6.6.2 0.1.0 发版后
+
+强制 forward-only：
+
+- 不允许 `DROP TABLE` / `DROP COLUMN`（用户数据可能丢失）
+- 不允许 `ALTER COLUMN` type 改变（兼容性破坏）
+- 新加列 `ADD COLUMN` 必须有 default 值或 nullable
+- 列删除走"逻辑删除"（保留物理列 + 应用层不用）
+- 表删除走"重命名为 `_v<NNN>_archive`"（保留 30 天后清）
+
+强制 auto-backup：
+
+- `database.auto-backup-before-migration: true`（config 默认值改）
+- 每个 migration 前自动 `cp data.db data.db.pre-V<NNN>.bak`
+- 备份保留 30 天，超出由 BackupReaper（v2 加）清
+
+#### 6.6.3 Migration 测试要求（0.1.0+）
+
+每个新 migration 必须有 fixture 测试：跑 V<N-1> baseline DB → V<N> →
+验证关键查询仍返同等价数据。测试 fixture 在 `plugin/src/test/resources/migration-fixtures/V<NNN>__before.sql`。
+
+详见 `docs/journal.md` 2026-05-16 M15.4 条目（P0-28/29 落地）。
+
 ---
 
 ## 7. 一致性与修复

@@ -69,22 +69,19 @@
 GET /api/session/:token HTTP/1.1
 ```
 
-响应 200：
+响应 200（**M15.4 P0-Web-2 起精简**）：
 
 ```json
 {
-  "sessionId": "e1b2...",
+  "ok": true,
   "playerName": "Steve",
-  "wall": { "width": 4, "height": 2 },
-  "mapIds": [101, 102, 103, 104, 105, 106, 107, 108],
-  "templates": [ ... ],
-  "palette": { ... },
-  "fonts": [ { "id": "sourcehan", "url": "/assets/fonts/sourcehan.woff2" } ],
   "wsUrl": "/ws"
 }
 ```
 
-响应 401：token 无效/过期。响应 409：会话已占用。
+> **M15.4 协议变更（2026-05-16）**：预握手响应从全量元数据精简到 `{ ok, playerName, wsUrl }` 三字段。理由：HTTP 响应可被同源页面 / 浏览器历史 / 代理缓存嗅探，把 `sessionId / wall / mapIds / templates / palette` 这种敏感元数据放 HTTP 等于扩大攻击面。改为 token consume 后只确认"会话存在 + WS 入口位置"，所有敏感初始化数据通过 WS `ready` 帧下发（见 §3.2）。`templates` / `palette` / `fonts` / `wall` / `mapIds` 等全部移到 `ready` payload。
+
+响应 401：token 无效/过期（JSON `{ "error": "AUTH_FAILED" }`）。响应 409：会话已占用 / CLOSING（JSON `{ "error": "SESSION_CLOSED" }`）。
 
 ### 3.2 WS 握手
 
@@ -228,23 +225,40 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `cancel` | C→S | `{}` - 服务器回 `ack` 后关闭 session（wall 数据保留） |
 | `wall.lock` | C→S | `{}` - **owner-only**：caller UUID == wall.owner_uuid 才接受；UPDATE walls.published_at=now（DB 列名保留，语义为 lock 时间戳）；返回 `ack { lockedAt }`；非 owner 返 `FORBIDDEN`；session 不关闭。**2026-05-14 引入** |
 | `wall.unlock` | C→S | `{}` - **owner-only**：UPDATE walls.published_at=NULL；返回 `ack { lockedAt: null }`；非 owner 返 `FORBIDDEN`；session 不关闭 |
-| `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；冲突返回 error `ALIAS_TAKEN`；session 不关闭 |
+| `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；不符合 `[A-Za-z0-9_-]{2,32}` 返 `INVALID_ALIAS_FORMAT`；冲突返 `ALIAS_TAKEN`；session 不关闭 |
+| `wall.refresh` | C→S | `{}` - 玩家撸掉支撑方块 / 画框时手动触发；切回主线程跑 `FrameDeployer.repairFor`（补方块 + 补 spawn 缺失画框）后整画布脏矩形 reprojection；`ack { framesRespawned, framesReAttached, wallBlocksReplaced }` |
 
 > M5.5 起 `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
 >
 > **2026-05-14**：`wall.publish` / `wall.unpublish` 砍，新 `wall.lock` / `wall.unlock`。lock 是 UX 层概念，**后端编辑 op（element.* / canvas.* / layer.*）路径与 lock 状态完全解耦**——锁定的 wall 仍能接受编辑 op（动态展示场景需要），前端 readonly UI 是 lock 唯一的执行者。`/canvas publish` / `/canvas unpublish` 命令同时砍。
 
-### 5.9 笔刷流（M12 占位，未实施）
+### 5.9 笔刷流（M12 实施）
 
-笔刷 op 走专用通道避开 `state.patch` 5fps 节流。设计草案：
+笔刷 op 走 `BrushOpDispatcher` 独立路径，**不走** edit 路径的 rateLimiter（brush.point 高频低消息，限流会卡笔触流畅性）；内存安全靠 `MAX_BRUSH_POINTS_PER_STROKE` + `MAX_ACTIVE_STROKES` 双闸门。
 
-| op | 方向 | payload |
-| --- | --- | --- |
-| `brush.start` | C→S | `{ layerId?, props: { color, size, opacity, ... } }` → 返回 `ack { strokeId }` |
-| `brush.point` | C→S | `{ strokeId, points: [[x,y,pressure,t], ...] }` 批量点；服务端立即 dirty bbox |
-| `brush.end` | C→S | `{ strokeId }` 服务端固化为 PathElement 写入 layer |
+| op | 方向 | payload | 响应 |
+| --- | --- | --- | --- |
+| `brush.start` | C→S | `{ layerId?, props: BrushProps }` `BrushProps = { color: "#RRGGBB[AA]", size: number, opacity: 0..1, smoothing?: 0..1, taper?: bool, hardness?: 0..1 }` | `ack { strokeId }` / `error TOO_MANY_STROKES / LAYER_LOCKED` |
+| `brush.point` | C→S | `{ strokeId, points: [[x, y, pressure, t], ...] }` 批量点，pressure 0..1，t 是相对 stroke.start 的 ms | **无 ack**（高频）；服务端立即更 dirty bbox 推 MC packet；点数超限拒 `STROKE_TOO_LONG` |
+| `brush.end` | C→S | `{ strokeId }` | `ack { version }` + `state.patch`（固化为 `BrushStrokeElement` 写入 layer，附带 RDP 简化 + Catmull-Rom 平滑）；`INVALID_STROKE` 若 strokeId 不存在 |
+| `brush.cancel` | C→S | `{ strokeId }` | `ack {}`；丢弃 stroke 不持久化；空 patch |
 
-M8 阶段不实装；只在 §12 列为已规划，不写代码前再补具体语义。
+> 限制：`MAX_ACTIVE_STROKES` = 8（同 session 同时活跃 stroke 上限）；`MAX_BRUSH_POINTS_PER_STROKE` = 4096（单 stroke 累计点数硬上限）。超出返 `TOO_MANY_STROKES` / `STROKE_TOO_LONG`，前端 UI 应拦截不该发到这一层。
+
+### 5.10 模板创意工坊（M14 引入）
+
+玩家可发布 / 删除 / 推荐自己的模板。走 `TemplateOpDispatcher`。权限节点：
+- `canvas.template.save`（发布）
+- `canvas.template.delete.own`（删自己） / `canvas.template.delete.any`（管理员删任意）
+- `canvas.template.feature`（推荐 / 取消推荐，管理员）
+- `canvas.template.bypass-limit`（绕过 per-player 模板数配额）
+
+| op | 方向 | payload | 响应 |
+| --- | --- | --- | --- |
+| `template.save` | C→S | `{ slug: string, displayName: string, description?: string, paramConfig?: { textActions: { <autoId>: { action: "keep"\|"prompt", name?, label?, description? } } } }` 当前 session 的 `projectState` 作为模板内容 | `ack { templateId }` / `error QUOTA_EXCEEDED / WRITE_FAILED / DB_FAILED / FORBIDDEN` |
+| `template.delete` | C→S | `{ templateId }` | `ack { templateId }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
+| `template.feature` | C→S | `{ templateId }` | `ack { templateId, featured: true }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
+| `template.unfeature` | C→S | `{ templateId }` | `ack { templateId, featured: false }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
 
 ### 5.8 服务端主动推送
 
@@ -282,14 +296,27 @@ M8 阶段不实装；只在 §12 列为已规划，不写代码前再补具体�
 | `INVALID_OP` | 未知 op | ❌ |
 | `INVALID_PAYLOAD` | payload 校验失败 | ❌ |
 | `INVALID_ELEMENT` | 元素 id 不存在或属性非法 | ❌ |
+| `INVALID_ALIAS_FORMAT` | wall.alias 不满足 `[A-Za-z0-9_-]{2,32}`（M11） | ❌ |
 | `PERMISSION_DENIED` | 权限不足 | ❌ |
+| `FORBIDDEN` | M15.3 鉴权方案 C：lock-aware open / template.* / wall.lock/unlock 非 owner（或缺管理员 bypass）；与 PERMISSION_DENIED 区别是基于运行期身份（owner_uuid / lock 状态）而非静态权限节点 | ❌ |
 | `SESSION_CLOSED` | 会话已关闭 | ❌ |
 | `ALIAS_TAKEN` | wall.alias 已被其他 wall 占用 | ❌ |
 | `WALL_NOT_FOUND` | wall.* op 但当前 session 没绑定 wall（不应发生） | ❌ |
-| `LAYER_LOCKED` | element.* op 命中 locked 层；v2 起 | ❌ |
+| `LAYER_LOCKED` | element.* op 命中 locked 层（M8 layer.locked=true） | ❌ |
 | `LAYER_NOT_FOUND` | layer.* op 指向不存在的 layerId | ❌ |
 | `LAST_LAYER` | layer.delete 试图删最后一层 | ❌ |
-| `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / 配额） | ❌ |
+| `TOO_MANY_STROKES` | M12 brush：active stroke 数超 `MAX_ACTIVE_STROKES`（默认 8） | ❌ |
+| `INVALID_STROKE` | M12 brush：strokeId 不存在 / 已 end / 已 cancel | ❌ |
+| `STROKE_TOO_LONG` | M12 brush：单 stroke 点数超 `MAX_BRUSH_POINTS_PER_STROKE`（默认 4096） | ❌ |
+| `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
+| `QUOTA_PER_WALL` | M13/M14：当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
+| `QUOTA_PER_DAY` | M13/M14：玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
+| `QUOTA_DISK_FULL` | M13/M14：插件 uploads 目录总字节超 `images.max-total-storage-mb`，且 LRU 无可回收行 | ❌ |
+| `QUOTA_EXCEEDED` | M14：模板发布超 `templates.max-per-player`，且无 `canvas.template.bypass-limit` | ❌ |
+| `NOT_FOUND` | M14：template.delete / template.feature / template.unfeature 指向不存在 templateId | ❌ |
+| `DB_FAILED` | M14：TemplatePublisher 写 SQLite 失败（templates upsert / featured update） | ✅ |
+| `WRITE_FAILED` | M14：TemplatePublisher 写 YAML 文件失败（user-templates/<uuid>/*.yml） | ✅ |
+| `UNEXPECTED` | 服务端断言失败（如 brush op 返了 OkSnapshot），通常是 bug，含上下文 | ❌ |
 | `INTERNAL_ERROR` | 服务器内部错误 | 视情况 |
 
 ### 6.2 WS Close 码
@@ -471,16 +498,30 @@ type ImageElement = BaseElement & {
                                            ← { op: "ack", id: "c-9" }
 ```
 
-### 8.3 发布与终结（M5.5）
+### 8.3 锁定与终结（lock-state 重设计 · 2026-05-14）
 
 ```
 （编辑期间任何 element.* op 都已 auto-save 到 walls 表，不需要显式 commit）
 
-# 玩家点击"发布"按钮
-前端 ─── { op: "wall.publish", id: "c-42" }
+# 玩家（必须是 owner）点击 TopBar Lock 按钮
+前端 ─── { op: "wall.lock", id: "c-42" }
                                            ← { op: "ack", id: "c-42",
-                                               payload: { publishedAt: 1714200000000 } }
-（服务端 UPDATE walls.published_at；ItemFrame PDC 写 published_at；session 仍 ACTIVE）
+                                               payload: { lockedAt: 1714200000000 } }
+（服务端校验 caller.uuid == wall.owner_uuid，UPDATE walls.published_at=now；
+ ItemFrame PDC **不再** 写 published_at（2026-05-14 lock-state 重设计砍）；
+ session 仍 ACTIVE；后端编辑 op 路径不被 lock 状态影响——前端 readonly UI 是唯一执行者）
+
+# 非 owner 试图 lock
+前端 ─── { op: "wall.lock", id: "c-42" }
+                                           ← { op: "error", id: "c-42",
+                                               payload: { code: "FORBIDDEN",
+                                                          message: "only wall owner can lock" } }
+
+# 玩家解锁
+前端 ─── { op: "wall.unlock", id: "c-43" }
+                                           ← { op: "ack", id: "c-43",
+                                               payload: { locked: false } }
+> 注意：M15.1 P0-2 起 `lockedAt: null` 改为显式 `locked: false`（避免 JsonInclude.NON_NULL 全局策略把字段吞掉导致前端收空对象）。
 
 # 玩家关闭浏览器
 前端 ─── { op: "cancel", id: "c-99" }
@@ -489,7 +530,8 @@ type ImageElement = BaseElement & {
 （服务端释放 session/wand；wall 数据 + ItemFrame 完整保留，下次可 /canvas open <wall_id> 继续）
 ```
 
-> M5.5 前的 `commit` op 流程（转 PERMANENT、写 sign_records、补池、close 1000）已废止。
+> M5.5 前的 `commit` op 流程（转 PERMANENT、写 sign_records、补池、close 1000）已废止。  
+> 2026-05-14 起 `wall.publish` / `wall.unpublish` 也废止，由 `wall.lock` / `wall.unlock` 取代；MC 命令族不再含 publish/unpublish 子命令。
 
 ---
 

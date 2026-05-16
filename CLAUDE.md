@@ -183,3 +183,22 @@ WS 通讯封装：`web/src/network/wsClient.ts`（单例 `WsClient`）。
 浏览器 console 调试：`window.__hk.send("op", payload)`。
 
 **详细里程碑日志、每个 commit 的含义、踩坑归档**：`docs/journal.md`（日期倒序）。**细节与决策**查该文件优先于重新推理。
+
+## M15 ultrareview 大重构（2026-05-16）
+
+第三方 AI 全栈 ultrareview 列 38 P0；5 agent 并行核验 ~37 条属实。
+M15 分 5 phase commit batch 修完：
+
+- **M15.1** P0 9 处低风险散点 + 3 测试基建依赖（Caffeine / MockBukkit / JavalinTest）
+- **M15.2** 5 god class 拆分（EditSession / CanvasView / RightPanel / WebServer / CanvasCompositor）→ 33 个新模块平均 60-300 行
+- **M15.3** 鉴权方案 C（仅 open 路径鉴权 lock，后端编辑 op 透明放行；兼容未来动态画板 PAPI / 数据源 P-1/P-3 路径，见 `docs/architecture.md §13`）+ 8 P0 数据安全 / 基础设施
+- **M15.4** ImageIO 防御 + DB 事务 + 协议精简 + dither 优化 10 P0
+- **M15.5** docs 同步
+
+**关键架构决策（已固化）**：
+
+1. CLAUDE.md `§lock-state` 第 2 条「后端编辑 op 不读 lock」保留（方案 C 只动 open 路径）
+2. Pre-release（0.1.x SNAPSHOT）激进改 schema OK；0.1.0 发版后 forward-only + 强制 auto-backup（详见 `docs/data-model.md §6.6`）
+3. 动态画板必须走 P-1（渲染期占位符）或 P-3（Plugin API + Provider）；反模式 P-2（定时 patch ProjectState）禁用（详见 `docs/architecture.md §13`）
+
+累计 27 P0 修完 + 5 god class 拆完 + 3 commit batch（5 个 phase）。
