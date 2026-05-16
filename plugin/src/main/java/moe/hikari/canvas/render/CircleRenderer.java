@@ -1,0 +1,34 @@
+package moe.hikari.canvas.render;
+
+import moe.hikari.canvas.state.CircleElement;
+import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.Stroke;
+
+import java.awt.BasicStroke;
+import java.awt.Graphics2D;
+import java.awt.geom.Ellipse2D;
+
+/**
+ * 绘制 circle / 椭圆。bbox 推 cx/cy/rx/ry：cx = x + w/2, cy = y + h/2, rx = w/2, ry = h/2。
+ * 拆分自 god class {@code CanvasCompositor}（2026-05-14）。
+ */
+public final class CircleRenderer implements ElementRenderer {
+
+    @Override
+    public void draw(Graphics2D g, Element e, RenderContext ctx) {
+        CircleElement c = (CircleElement) e;
+        Ellipse2D.Double el = new Ellipse2D.Double(c.x(), c.y(), c.w(), c.h());
+        if (c.fill() != null) {
+            g.setPaint(FillPaintBuilder.fillToPaint(c.fill(), c.x(), c.y(), c.w(), c.h()));
+            g.fill(el);
+        }
+        Stroke s = c.stroke();
+        if (s != null && s.width() > 0) {
+            g.setColor(FillPaintBuilder.parseColor(s.color()));
+            java.awt.Stroke prevStroke = g.getStroke();
+            g.setStroke(new BasicStroke(s.width(), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+            g.draw(el);
+            g.setStroke(prevStroke);
+        }
+    }
+}
