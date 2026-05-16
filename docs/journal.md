@@ -5,6 +5,74 @@
 
 ---
 
+## 2026-05-16 · M16 Phase 1（安全 P0 核心 7 项）
+
+针对 `docs/ultrareview-2026-05-16.md` ≈200 条去重问题中的最高优先级安全 P0，分 3 个并行 agent（network / template / wall）完成 7 项。
+
+### P1.1 `/api/upload/{hash}` 加 sessionId 鉴权（IDOR）
+
+下载端点改为要求 `?sessionId=<id>` query，由 SessionManager 校验 active；命中后响应 `Cache-Control: private` 防代理缓存命中跨用户。前端 PreviewRenderer 加 `setUploadAuthProvider()` 钩子，App.vue 启动时注入 `net.sessionId`。
+
+**未采用 TokenService**：token 是 one-shot consume，rotate 后会触发反复刷新；sessionId 等价 AUTHED 语义。
+
+涉及：`UploadHandler.java` / `PreviewRenderer.ts` / `App.vue` / `ImageElementSection.vue`。
+
+### P1.2 WS auth 5s 超时（DoS）
+
+WS onConnect 注册 ScheduledFuture，N 秒（默认 5，clamp 1-60）后若未 auth → close code=4001 reason=`auth_timeout`；auth 成功 / onClose 都 cancel。N 可配 `network.ws-auth-timeout-seconds`。WebServer.stop() shutdownNow scheduler。
+
+涉及：`WebServer.java` / `HikariCanvasConfig.java` / `HikariCanvas.java` / `config.yml`。
+
+### P1.3 WS Origin 白名单（CSWSH）
+
+注册 `WEBSOCKET_BEFORE_UPGRADE` handler 校验 Origin：放行 ①缺失 / "null" ②`http(s)://127.0.0.1[:port]` / `localhost[:port]` ③`network.host` 同源 ④`network.allowed-origins` 精确匹配。其它 → 403 + `skipRemainingHandlers`。
+
+`startsWith("http://127.0.0.1:")` 要求紧跟 `:`，不会被 `127.0.0.1.attacker.com` 绕过。
+
+涉及：`WebServer.java` / `HikariCanvasConfig.java` / `config.yml`。
+
+### P1.4 YAMLFactory 限制（Billion Laughs）
+
+`YAMLFactoryBuilder` 配 `LoaderOptions.setMaxAliasesForCollections(50)` + `setCodePointLimit(5MB)`（jackson 2.18.2 真实 API 是 `setCodePointLimit` 非 spec 拼写）。所有 TemplateLoader 加载路径生效。
+
+涉及：`TemplateLoader.java`。
+
+### P1.5 deepCopyMap 递归 + Interpolator 长度限制
+
+- `deepCopyMap` 公开入口委托私有 `(Map, int depth)`；`MAX_DEEP_COPY_DEPTH=32` 同时约束 Map/List 嵌套，超阈抛 `IllegalArgumentException`，上游 catch 包装 `INVALID_TEMPLATE`。
+- `Interpolator`：单值 `MAX_VALUE_LEN=16384`、整次 `MAX_OUTPUT_LEN=1048576`；超阈抛 IAE。常量公开。
+
+涉及：`TemplateInstantiator.java` / `Interpolator.java`。
+
+### P1.6 user-templates 跨用户隔离（IDOR）
+
+- `TemplateEntry` record 加 `Optional<UUID> ownerUuid`（builtin/server 为 empty，user 为目录 uuid）
+- 加载时校验目录名是合法 UUID，非法跳过 + warn
+- 新方法 `TemplateRegistry.byIdForApply(id, callerUuid, hasBypass)`：owner empty / hasBypass / caller==owner 任一通过；否则抛 `ForbiddenTemplateException`
+- `byId(id)` 保持原签名供 listing / preview（marketplace gallery 全员可见，不做 owner 隔离 —— 与 listMarketplace 一致）
+- `EditOpDispatcher.template.apply` 改用 `byIdForApply`，catch 异常返 `EditSession.OpResult.Error("FORBIDDEN", ...)` 不 echo 异常细节
+- 新权限节点：`canvas.template.use-others`（default: op）—— 跨用户 apply 的 bypass
+
+涉及：`TemplateEntry.java` / `TemplateRegistry.java` / `ForbiddenTemplateException.java`（新）/ `EditOpDispatcher.java` / `paper-plugin.yml`。
+
+### P1.7 `wall.alias` WS op owner-only（IDOR）
+
+与命令侧 `/canvas alias` 同款校验：`wall.ownerUuid().equals(s.playerUuid())` 通过；否则查 `canvas.alias.any` 权限 bypass（玩家在线时）；否则 `FORBIDDEN`。补 `WALL_ALIAS` audit 事件（操作者 / wall_id / old / new alias）。
+
+顺便审查其它 wall.* op：lock/unlock 已有 owner 校验（无 bypass，符合 lock-state §5）；wall.refresh 隐式被 SessionManager.open lock 鉴权拦截；wall.delete 仅命令侧实装，已校验。
+
+涉及：`WallOpDispatcher.java` / `WebServer.java`（构造器加 AuditLog 参数）/ `HikariCanvas.java`。
+
+### 验证
+
+`./gradlew :plugin:test` 全绿（含 InterpolatorTest / TemplateInstantiatorTest / TemplateLoaderTest 全套 fixture）；`:plugin:compileJava` 干净。无 baseline 漂移。
+
+### 关联文件
+
+`plugin/src/main/java/moe/hikari/canvas/`: `HikariCanvas.java` / `HikariCanvasConfig.java` / `image/UploadHandler.java` / `template/TemplateEntry.java` / `template/TemplateInstantiator.java` / `template/TemplateLoader.java` / `template/TemplateRegistry.java` / `template/ForbiddenTemplateException.java`（新）/ `template/expr/Interpolator.java` / `web/EditOpDispatcher.java` / `web/WallOpDispatcher.java` / `web/WebServer.java`。`plugin/src/main/resources/`: `config.yml` / `paper-plugin.yml`。`web/src/`: `App.vue` / `components/properties/ImageElementSection.vue` / `render/PreviewRenderer.ts`。
+
+---
+
 ## 2026-05-16 · M15.5 ultrareview Phase 4（docs 同步收尾）+ M15.2 god class 拆分（5 commit batch）
 
 ### M15.2 god class 拆分（5 个 commit）

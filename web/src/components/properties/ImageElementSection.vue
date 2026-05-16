@@ -30,6 +30,12 @@ const { t } = useI18n();
 
 type MaskPresetKind = 'none' | 'circle' | 'roundedRect' | 'ellipse';
 
+// M16 P1.1：缩略图 URL 也需带 sessionId，否则 401
+const thumbnailSrc = computed(() => {
+    const base = `/api/upload/${encodeURIComponent(props.element.source)}`;
+    return net.sessionId ? `${base}?sessionId=${encodeURIComponent(net.sessionId)}` : base;
+});
+
 const imageMaskKind = computed<MaskPresetKind>(() => detectMaskPreset(props.element));
 const imageMaskInverted = computed<boolean>(() => props.element.mask?.inverted ?? false);
 const isDither = computed(() => props.element.renderMode === 'dither');
@@ -210,7 +216,7 @@ async function onReplaceFileChange(e: Event) {
       <div class="flex gap-2 items-start">
         <div class="w-14 h-14 shrink-0 rounded border border-[color:var(--border)] bg-[color:var(--background)] overflow-hidden flex items-center justify-center">
           <img
-            :src="`/api/upload/${encodeURIComponent(element.source)}`"
+            :src="thumbnailSrc"
             class="max-w-full max-h-full object-contain"
             alt=""
           />

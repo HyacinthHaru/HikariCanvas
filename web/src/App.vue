@@ -14,6 +14,7 @@ import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { createWsClient, pickInitialToken } from '@/network/wsClient';
+import { setUploadAuthProvider } from '@/render/PreviewRenderer';
 
 const ui = useUiStore();
 const net = useNetworkStore();
@@ -22,6 +23,8 @@ const project = useProjectStore();
 // M5.5：URL 没 token → 显示首页（HomePage 列出 walls）；有 token → 走编辑器
 const showHomePage = ref(false);
 const wsClient = createWsClient();
+// M16 P1.1：把 sessionId 注入 PreviewRenderer 的 /api/upload/{hash} URL 构造器（lazy 读 store）
+setUploadAuthProvider(() => net.sessionId ?? null);
 
 onMounted(() => {
     const { token, source } = pickInitialToken();

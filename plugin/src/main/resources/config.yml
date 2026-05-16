@@ -17,6 +17,18 @@ network:
   # 内网默认就是 http://127.0.0.1:8877/?token={token}。
   # 公网部署改为 https://yourdomain.com/?token={token}。
   editor-url: "http://{host}:{port}/?token={token}"
+  # M16 P1.2：WS 连接建立后多少秒内必须完成 auth；超时 → close 4001 auth_timeout。
+  # 防御未认证 socket 长挂占连接的 DoS 路径。范围 1-60。
+  ws-auth-timeout-seconds: 5
+  # M16 P1.3：WS upgrade Origin 白名单。下列三类一律放行，无需配置：
+  #   1) Origin 缺失 / null（非浏览器 client，或同源 fetch 不带 Origin）
+  #   2) http://127.0.0.1:<port> / http://localhost:<port>
+  #   3) 与 network.host:port 完全匹配
+  # 公网通过反代部署时把反代 origin 加进来，例如：
+  #   allowed-origins:
+  #     - "https://canvas.example.com"
+  # 默认空列表 = 只信回环 + 同源；其它 Origin 一律 403。
+  allowed-origins: []
 
 # 会话生命周期（玩家从 /canvas confirm 到关浏览器的整个过程）
 session:
@@ -60,6 +72,11 @@ templates:
   # M14 创意工坊：每玩家最多可发布模板数。0 = 不限。
   # 持 canvas.template.bypass-limit 权限的玩家跳过此限制。
   max-per-player: 20
+  # M16 Phase 1 模板系统 DoS 防御 & 跨用户隔离（当前硬编码，未来可改为本段可配）：
+  #   P1.4 YAML 解析：maxAliasesForCollections=50, codePointLimit=5 MiB
+  #   P1.5 raw_state 嵌套深度：MAX_DEPTH=32
+  #   P1.5 Interpolator：单参数 ≤16 KiB，单次累计输出 ≤1 MiB
+  #   P1.6 user-templates：玩家间默认隔绝；apply 他人模板需 canvas.template.use-others（default: op）
 
 # 图片上传（M13）
 # 文件存在 plugins/HikariCanvas/uploads/<sha256[:16]>.png；hash 内容寻址，跨 wall

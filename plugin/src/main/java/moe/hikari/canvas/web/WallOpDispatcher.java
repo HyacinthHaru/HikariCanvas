@@ -26,17 +26,28 @@ final class WallOpDispatcher {
     private final moe.hikari.canvas.deploy.FrameDeployer frameDeployer;
     private final moe.hikari.canvas.render.ProjectionThrottler throttler;
     private final org.bukkit.plugin.java.JavaPlugin plugin;
+    private final moe.hikari.canvas.storage.AuditLog auditLog;
 
     WallOpDispatcher(SessionManager sessionManager,
                      moe.hikari.canvas.storage.WallRepo wallRepo,
                      moe.hikari.canvas.deploy.FrameDeployer frameDeployer,
                      moe.hikari.canvas.render.ProjectionThrottler throttler,
                      org.bukkit.plugin.java.JavaPlugin plugin) {
+        this(sessionManager, wallRepo, frameDeployer, throttler, plugin, null);
+    }
+
+    WallOpDispatcher(SessionManager sessionManager,
+                     moe.hikari.canvas.storage.WallRepo wallRepo,
+                     moe.hikari.canvas.deploy.FrameDeployer frameDeployer,
+                     moe.hikari.canvas.render.ProjectionThrottler throttler,
+                     org.bukkit.plugin.java.JavaPlugin plugin,
+                     moe.hikari.canvas.storage.AuditLog auditLog) {
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
         this.frameDeployer = frameDeployer;
         this.throttler = throttler;
         this.plugin = plugin;
+        this.auditLog = auditLog;
     }
 
     /** 入口：payload 解析后转 {@link #handleWallOp}。 */
@@ -104,11 +115,38 @@ final class WallOpDispatcher {
                             "alias must match [A-Za-z0-9_-]{2,32}"));
                     return;
                 }
+                // P1.7：owner-only（或带 canvas.alias.any 权限）。与命令侧 CanvasCommand.runAlias 同款检查。
+                // 离线玩家无法走 hasPermission，bypass 视为 false（与 SessionManager.open 处理一致）。
+                var wallOpt = wallRepo.loadById(wallId);
+                if (wallOpt.isEmpty()) {
+                    ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
+                    return;
+                }
+                var wall = wallOpt.get();
+                boolean isOwner = wall.ownerUuid().equals(s.playerUuid());
+                if (!isOwner) {
+                    org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(s.playerUuid());
+                    boolean canAny = live != null && live.hasPermission("canvas.alias.any");
+                    if (!canAny) {
+                        ctx.send(Envelope.error(in.id(), "FORBIDDEN",
+                                "only wall owner can change alias"));
+                        return;
+                    }
+                }
+                String oldAlias = wall.alias();
                 boolean ok = wallRepo.setAlias(wallId, alias);
                 if (!ok) {
                     ctx.send(Envelope.error(in.id(), "ALIAS_TAKEN",
                             "alias '" + alias + "' is already in use"));
                     return;
+                }
+                if (auditLog != null) {
+                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    details.put("wall_id", wallId);
+                    details.put("old_alias", oldAlias);
+                    details.put("new_alias", alias);
+                    auditLog.record("WALL_ALIAS", s.playerUuid().toString(), s.playerName(),
+                            sessionId, null, details);
                 }
                 ctx.send(Envelope.of("ack", in.id(), Map.of("alias", alias)));
             }

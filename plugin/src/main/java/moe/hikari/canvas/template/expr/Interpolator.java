@@ -18,12 +18,30 @@ import java.util.regex.Pattern;
  * </ul>
  *
  * <p>不支持嵌套（{@code ${a${b}}}）与默认值语法（{@code ${a:-x}}）—— v2+ 议题。</p>
+ *
+ * <p><b>M16 P1.5 DoS 防御：</b></p>
+ * <ul>
+ *   <li>单参数 {@code toString()} 长度 &gt; {@link #MAX_VALUE_LEN}（16 KiB）→
+ *       抛 {@link IllegalArgumentException}。防恶意 user-template 把超大值塞进
+ *       text element 的 content 字段。</li>
+ *   <li>累计输出长度 &gt; {@link #MAX_OUTPUT_LEN}（1 MiB）→
+ *       抛 {@link IllegalArgumentException}。防 {@code "${a}${a}${a}..."}
+ *       式倍增展开。</li>
+ * </ul>
+ * <p>{@code IllegalArgumentException} 由 {@code TemplateInstantiator} 上游 try-catch
+ * 包装为 {@code INVALID_TEMPLATE} 结构化错误码，不向客户端 echo 内部异常细节。</p>
  */
 public final class Interpolator {
 
     /** 与 {@link moe.hikari.canvas.template.TemplateLoader} 的 PARAM_REF 同形。 */
     private static final Pattern REF =
             Pattern.compile("\\$\\{([a-z][a-z0-9_]{0,31})\\}");
+
+    /** 单参数替换值的最大字符数（16 KiB）。 */
+    public static final int MAX_VALUE_LEN = 16 * 1024;
+
+    /** 单次 interpolation 调用累计输出最大字符数（1 MiB）。 */
+    public static final int MAX_OUTPUT_LEN = 1024 * 1024;
 
     public static final class MissingParamException extends RuntimeException {
         private final String paramName;
@@ -45,16 +63,38 @@ public final class Interpolator {
         StringBuilder out = new StringBuilder(template.length() + 16);
         int last = 0;
         while (m.find()) {
-            out.append(template, last, m.start());
+            appendChecked(out, template, last, m.start());
             String name = m.group(1);
             if (values == null || !values.containsKey(name)) {
                 throw new MissingParamException(name);
             }
             Object val = values.get(name);
-            out.append(val == null ? "" : val.toString());
+            String s = val == null ? "" : val.toString();
+            // M16 P1.5：单参数值长度上限——防超大 string 注入
+            if (s.length() > MAX_VALUE_LEN) {
+                throw new IllegalArgumentException(
+                        "interpolated value for '" + name + "' too large: "
+                                + s.length() + " > " + MAX_VALUE_LEN);
+            }
+            // M16 P1.5：累计输出上限——防 ${a}${a}${a}... 倍增展开
+            if ((long) out.length() + s.length() > MAX_OUTPUT_LEN) {
+                throw new IllegalArgumentException(
+                        "interpolated output exceeds limit " + MAX_OUTPUT_LEN);
+            }
+            out.append(s);
             last = m.end();
         }
-        out.append(template, last, template.length());
+        appendChecked(out, template, last, template.length());
         return out.toString();
+    }
+
+    /** Append substring while enforcing the cumulative output cap. */
+    private static void appendChecked(StringBuilder out, String src, int start, int end) {
+        int add = end - start;
+        if ((long) out.length() + add > MAX_OUTPUT_LEN) {
+            throw new IllegalArgumentException(
+                    "interpolated output exceeds limit " + MAX_OUTPUT_LEN);
+        }
+        out.append(src, start, end);
     }
 }

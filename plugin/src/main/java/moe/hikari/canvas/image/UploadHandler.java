@@ -238,7 +238,21 @@ public final class UploadHandler {
 
     // ---------- GET /api/upload/{source} ----------
 
+    /**
+     * M16 P1.1：要求 query string {@code ?sessionId=<id>} 校验，sessionId 只有通过 WS auth 才能拿到
+     * （契约见 {@code docs/protocol.md §3}），等价于 AUTHED 状态。修复任何人拿到 hash 即可
+     * 下载图片的 IDOR 风险（{@code docs/security.md §4.5}）。
+     *
+     * <p>失败统一 401 + {@code {"code":"UNAUTHORIZED"}}，不 echo 内部异常。</p>
+     */
     public void handleDownload(Context ctx) {
+        // M16 P1.1：sessionId query 参数 → resolveSession 校验。等价于 POST /api/upload 的鉴权方式
+        String sessionId = ctx.queryParam("sessionId");
+        if (sessionId == null || sessionId.isBlank() || sessionManager.byId(sessionId) == null) {
+            ctx.status(401).json(Map.of("code", "UNAUTHORIZED"));
+            return;
+        }
+
         String hash = ctx.pathParam("source");
         // 去掉可选 .png 后缀
         if (hash.endsWith(".png")) hash = hash.substring(0, hash.length() - 4);
@@ -252,8 +266,9 @@ public final class UploadHandler {
             return;
         }
         ctx.contentType("image/png");
-        // hash 唯一对应内容 → 强缓存 + immutable
-        ctx.header("Cache-Control", "public, max-age=31536000, immutable");
+        // hash 唯一对应内容 → 强缓存 + immutable；但因 URL 带 sessionId 鉴权，
+        // 改 private（防止被中间代理跨用户缓存命中泄露内容）
+        ctx.header("Cache-Control", "private, max-age=31536000, immutable");
         ctx.result(bytes);
     }
 

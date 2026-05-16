@@ -166,7 +166,11 @@ final class EditOpDispatcher {
                 String tpl = stringOrNull(payload.get("templateId"));
                 @SuppressWarnings("unchecked")
                 Map<String, Object> tp = (Map<String, Object>) mapOrEmpty(payload.get("params"));
-                yield applyTemplate(es, sessionId, tpl, tp);
+                // M16 P1.6：跨用户隔离——查 caller 的 use-others bypass 权限
+                java.util.UUID callerUuid = s.playerUuid();
+                org.bukkit.entity.Player p = org.bukkit.Bukkit.getPlayer(callerUuid);
+                boolean hasBypass = p != null && p.hasPermission("canvas.template.use-others");
+                yield applyTemplate(es, sessionId, tpl, tp, callerUuid, hasBypass);
             }
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
         };
@@ -213,11 +217,19 @@ final class EditOpDispatcher {
      * 不在主线程跑（持有当前 WS thread），但只做内存/DB I/O，不碰 Bukkit world API。
      */
     private EditSession.OpResult applyTemplate(EditSession es, String sessionId,
-                                               String templateId, Map<String, Object> params) {
+                                               String templateId, Map<String, Object> params,
+                                               java.util.UUID callerUuid, boolean hasBypass) {
         if (templateId == null || templateId.isBlank()) {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD", "templateId is required");
         }
-        TemplateEntry entry = templateRegistry.byId(templateId);
+        TemplateEntry entry;
+        try {
+            entry = templateRegistry.byIdForApply(templateId, callerUuid, hasBypass);
+        } catch (moe.hikari.canvas.template.ForbiddenTemplateException fte) {
+            // M16 P1.6：包装为 FORBIDDEN，不 echo 内部异常细节
+            return new EditSession.OpResult.Error("FORBIDDEN",
+                    "template '" + fte.templateId() + "' not accessible");
+        }
         if (entry == null) {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD",
                     "unknown template: " + templateId);

@@ -12,6 +12,8 @@ import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
@@ -77,6 +79,29 @@ public final class TemplateRegistry {
 
     public TemplateEntry byId(String id) {
         return entries.get(id);
+    }
+
+    /**
+     * M16 P1.6：apply 用查询，强制跨用户隔离。
+     *
+     * <ul>
+     *   <li>id 不存在 → 返回 {@code null}（保持与 {@link #byId(String)} 一致的"未找到"语义）</li>
+     *   <li>条目 {@code ownerUuid} 为 empty（builtin / server）→ 任何调用方可用</li>
+     *   <li>条目 {@code ownerUuid} = {@code callerUuid} → 自己的模板可用</li>
+     *   <li>条目 {@code ownerUuid} 非空且 ≠ {@code callerUuid} 且 {@code !hasBypass} →
+     *       抛 {@link ForbiddenTemplateException}（caller UUID null 等同非 owner）</li>
+     * </ul>
+     *
+     * <p>{@code hasBypass} 由调用方查 {@code canvas.template.use-others} 权限传入。</p>
+     */
+    public TemplateEntry byIdForApply(String id, UUID callerUuid, boolean hasBypass) {
+        TemplateEntry entry = entries.get(id);
+        if (entry == null) return null;
+        Optional<UUID> owner = entry.ownerUuid();
+        if (owner.isEmpty()) return entry;
+        if (hasBypass) return entry;
+        if (callerUuid != null && callerUuid.equals(owner.get())) return entry;
+        throw new ForbiddenTemplateException(id);
     }
 
     public int size() {
@@ -299,14 +324,25 @@ public final class TemplateRegistry {
         try (Stream<Path> uuidDirs = Files.list(userTemplatesDir)) {
             List<Path> dirs = uuidDirs.filter(Files::isDirectory).sorted().toList();
             for (Path uuidDir : dirs) {
-                loadUserUuidDir(uuidDir, out, counter, failures);
+                // M16 P1.6：校验目录名为合法 UUID；非法目录跳过 + warn（防伪造目录名注入
+                // 全局可见模板，或绕过 owner 隔离）。
+                String dirName = uuidDir.getFileName().toString();
+                UUID ownerUuid;
+                try {
+                    ownerUuid = UUID.fromString(dirName);
+                } catch (IllegalArgumentException iae) {
+                    log.warning("Templates: skipping user-templates subdir with non-UUID name '"
+                            + dirName + "'");
+                    continue;
+                }
+                loadUserUuidDir(uuidDir, ownerUuid, out, counter, failures);
             }
         } catch (IOException e) {
             log.log(Level.WARNING, "Templates: list user-templates failed", e);
         }
     }
 
-    private void loadUserUuidDir(Path uuidDir, Map<String, TemplateEntry> out,
+    private void loadUserUuidDir(Path uuidDir, UUID ownerUuid, Map<String, TemplateEntry> out,
                                   int[] counter, java.util.List<String> failures) {
         try (Stream<Path> stream = Files.list(uuidDir)) {
             List<Path> files = stream
@@ -326,7 +362,8 @@ public final class TemplateRegistry {
                             log.warning(label + ": duplicate id '" + id + "', skipped");
                             continue;
                         }
-                        out.put(id, new TemplateEntry(ok.spec(), TemplateSource.USER, label));
+                        out.put(id, new TemplateEntry(ok.spec(), TemplateSource.USER, label,
+                                Optional.of(ownerUuid)));
                         counter[0]++;
                     } else if (result instanceof TemplateLoader.Result.Failed f) {
                         failures.add(label + ": " + f.reason() + " — " + f.detail());

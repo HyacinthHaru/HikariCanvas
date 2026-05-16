@@ -21,6 +21,10 @@ public final class HikariCanvasConfig {
     public final String host;
     public final int port;
     public final String editorUrlTemplate;  // 解析后的最终模板（{host}/{port} 已替换；{token} 留给运行期）
+    /** M16 P1.2：WS 连上后多少秒内未通过 auth 就主动 close 4001（防 idle DoS）。 */
+    public final int wsAuthTimeoutSeconds;
+    /** M16 P1.3：WS upgrade 允许的 Origin 白名单（除同源 / 127.0.0.1 / localhost 外的反代域名）。 */
+    public final java.util.List<String> allowedOrigins;
 
     // ---- session ----
     public final Duration tokenTtl;
@@ -70,6 +74,8 @@ public final class HikariCanvasConfig {
         this.host = b.host;
         this.port = b.port;
         this.editorUrlTemplate = b.editorUrlTemplate;
+        this.wsAuthTimeoutSeconds = b.wsAuthTimeoutSeconds;
+        this.allowedOrigins = b.allowedOrigins;
         this.tokenTtl = b.tokenTtl;
         this.wsGrace = b.wsGrace;
         this.idleTimeout = b.idleTimeout;
@@ -101,6 +107,15 @@ public final class HikariCanvasConfig {
         b.editorUrlTemplate = urlTemplate
                 .replace("{host}", b.host)
                 .replace("{port}", String.valueOf(b.port));
+
+        // M16 P1.2 / P1.3：网络层安全收口
+        b.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, f.getInt("network.ws-auth-timeout-seconds", 5)));
+        @SuppressWarnings("unchecked")
+        java.util.List<String> origins = (java.util.List<String>) f.getList(
+                "network.allowed-origins", java.util.List.of());
+        b.allowedOrigins = origins == null
+                ? java.util.List.of()
+                : java.util.List.copyOf(origins);
 
         b.tokenTtl = Duration.ofMinutes(f.getLong("session.token-ttl-minutes", 15));
         b.wsGrace = Duration.ofMinutes(f.getLong("session.ws-grace-minutes", 5));
@@ -155,6 +170,8 @@ public final class HikariCanvasConfig {
         String host = "127.0.0.1";
         int port = 8877;
         String editorUrlTemplate = "http://127.0.0.1:8877/?token={token}";
+        int wsAuthTimeoutSeconds = 5;
+        java.util.List<String> allowedOrigins = java.util.List.of();
         Duration tokenTtl = Duration.ofMinutes(15);
         Duration wsGrace = Duration.ofMinutes(5);
         Duration idleTimeout = Duration.ofMinutes(30);

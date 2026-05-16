@@ -3,10 +3,12 @@ package moe.hikari.canvas.template;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactoryBuilder;
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.expr.ExpressionParser;
+import org.yaml.snakeyaml.LoaderOptions;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -46,11 +48,34 @@ public final class TemplateLoader {
     /** 实装的 layout type。M7 起 grid 也支持。 */
     private static final Set<String> ALLOWED_LAYOUT_TYPES = Set.of("stack", "free", "grid");
 
+    /**
+     * M16 P1.4 SnakeYAML DoS 防御阈值。
+     *
+     * <p>{@code MAX_ALIASES_FOR_COLLECTIONS}：单 YAML 内 anchor/alias 展开总次数上限。
+     * 防 Billion-Laughs 风格的 alias 嵌套指数膨胀。50 远大于任何合理模板的复用次数。</p>
+     *
+     * <p>{@code MAX_CODEPOINT_LIMIT}：单文档字符码点总量上限（5 MiB）。比 SnakeYAML 默认
+     * 3 MiB 略宽，覆盖 raw_state 大画板模板；仍能在解析早期拦掉巨型 payload。</p>
+     */
+    private static final int MAX_ALIASES_FOR_COLLECTIONS = 50;
+    private static final int MAX_CODEPOINT_LIMIT = 5 * 1024 * 1024;
+
     private final ObjectMapper yamlMapper;
 
     public TemplateLoader() {
-        this.yamlMapper = new YAMLMapper(new YAMLFactory()
-                .disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER))
+        // M16 P1.4：通过 YAMLFactoryBuilder 注入受限 SnakeYAML LoaderOptions。
+        // jackson-dataformat-yaml 2.18.2 的 LoaderOptions 字段名是 codePointLimit
+        // （非 maxCodepointLimit），见 org.yaml.snakeyaml.LoaderOptions。
+        LoaderOptions loaderOptions = new LoaderOptions();
+        loaderOptions.setMaxAliasesForCollections(MAX_ALIASES_FOR_COLLECTIONS);
+        loaderOptions.setCodePointLimit(MAX_CODEPOINT_LIMIT);
+
+        YAMLFactory factory = YAMLFactory.builder()
+                .loaderOptions(loaderOptions)
+                .build()
+                .disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER);
+
+        this.yamlMapper = new YAMLMapper(factory)
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         yamlMapper.setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
         // jackson-yaml 默认不开 polymorphic typing；这里不调用 activateDefaultTyping。

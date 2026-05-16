@@ -487,6 +487,17 @@ function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
 interface ImageCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; }
 const imageCache = new Map<string, ImageCacheEntry>();
 
+// M16 P1.1：/api/upload/{hash} 后端鉴权要 sessionId query param；上层注入访问器避免
+// PreviewRenderer 直接耦合 Pinia store。
+let uploadAuthProvider: (() => string | null) | null = null;
+export function setUploadAuthProvider(fn: () => string | null) { uploadAuthProvider = fn; }
+
+function buildUploadUrl(source: string): string {
+    const sid = uploadAuthProvider?.() ?? null;
+    const base = `/api/upload/${encodeURIComponent(source)}`;
+    return sid ? `${base}?sessionId=${encodeURIComponent(sid)}` : base;
+}
+
 function getUploadImage(source: string): ImageCacheEntry {
     let entry = imageCache.get(source);
     if (entry) return entry;
@@ -495,7 +506,7 @@ function getUploadImage(source: string): ImageCacheEntry {
     imageCache.set(source, entry);
     img.onload = () => { entry!.ready = true; iconReadyHook?.(); };
     img.onerror = () => { entry!.failed = true; iconReadyHook?.(); };
-    img.src = `/api/upload/${encodeURIComponent(source)}`;
+    img.src = buildUploadUrl(source);
     return entry;
 }
 

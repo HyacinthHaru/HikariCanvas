@@ -280,8 +280,9 @@ public final class HikariCanvas extends JavaPlugin {
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
                 templateAssetService, wallPreviewService, uploadHandler,
-                templatePublisher, templateRepo, this,
-                version, this::paintAllSessionMaps);
+                templatePublisher, templateRepo, auditLog, this,
+                version, this::paintAllSessionMaps,
+                config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();
 
         // M15.3 P0-24：MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。

@@ -108,6 +108,10 @@ public final class TemplateInstantiator {
         } catch (InstantiationException ie) {
             errors.add(ie.getMessage());
             return new Result.Failed(ie.code, errors);
+        } catch (IllegalArgumentException iae) {
+            // M16 P1.5：Interpolator 长度上限触发——IAE 透过 interp() helper 上抛
+            errors.add(iae.getMessage());
+            return new Result.Failed("INVALID_TEMPLATE", errors);
         }
 
         return new Result.Ok(wallWidthMaps, wallHeightMaps, bg, elements, params);
@@ -136,10 +140,23 @@ public final class TemplateInstantiator {
         }
 
         // 深拷贝 rawState（避免污染 spec 单例）
-        Map<String, Object> raw = deepCopyMap(spec.rawState());
+        Map<String, Object> raw;
+        try {
+            raw = deepCopyMap(spec.rawState());
+        } catch (IllegalArgumentException iae) {
+            errors.add(iae.getMessage());
+            return new Result.Failed("INVALID_TEMPLATE", errors);
+        }
 
         // 遍历替换字符串中的 ${paramId} 占位符
-        Object replaced = replacePlaceholders(raw, params);
+        Object replaced;
+        try {
+            replaced = replacePlaceholders(raw, params);
+        } catch (IllegalArgumentException iae) {
+            // M16 P1.5：Interpolator 长度上限被触发（单参数 / 累计输出）
+            errors.add(iae.getMessage());
+            return new Result.Failed("INVALID_TEMPLATE", errors);
+        }
         if (!(replaced instanceof Map<?, ?> rawMap)) {
             errors.add("rawState root must be object");
             return new Result.Failed("INVALID_TEMPLATE", errors);
@@ -198,21 +215,42 @@ public final class TemplateInstantiator {
         return node;
     }
 
+    /**
+     * M16 P1.5：raw_state 嵌套深度上限。Map / List 任一层嵌套累计超过此值抛
+     * {@link IllegalArgumentException}。32 足以覆盖现实模板（典型 ProjectState
+     * 深度 ≤ 6：layers[].elements[].effects.stroke），同时挡住恶意指数嵌套触发
+     * 解析期 StackOverflow / 内存爆炸。
+     */
+    private static final int MAX_DEEP_COPY_DEPTH = 32;
+
     @SuppressWarnings("unchecked")
-    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+    static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+        return deepCopyMap(src, 0);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deepCopyMap(Map<String, Object> src, int depth) {
+        if (depth > MAX_DEEP_COPY_DEPTH) {
+            throw new IllegalArgumentException(
+                    "template structure too deep (depth > " + MAX_DEEP_COPY_DEPTH + ")");
+        }
         Map<String, Object> dst = new LinkedHashMap<>();
         for (Map.Entry<String, Object> e : src.entrySet()) {
-            dst.put(e.getKey(), deepCopyValue(e.getValue()));
+            dst.put(e.getKey(), deepCopyValue(e.getValue(), depth + 1));
         }
         return dst;
     }
 
     @SuppressWarnings("unchecked")
-    private static Object deepCopyValue(Object v) {
-        if (v instanceof Map<?, ?> m) return deepCopyMap((Map<String, Object>) m);
+    private static Object deepCopyValue(Object v, int depth) {
+        if (depth > MAX_DEEP_COPY_DEPTH) {
+            throw new IllegalArgumentException(
+                    "template structure too deep (depth > " + MAX_DEEP_COPY_DEPTH + ")");
+        }
+        if (v instanceof Map<?, ?> m) return deepCopyMap((Map<String, Object>) m, depth);
         if (v instanceof List<?> list) {
             List<Object> copy = new ArrayList<>(list.size());
-            for (Object item : list) copy.add(deepCopyValue(item));
+            for (Object item : list) copy.add(deepCopyValue(item, depth + 1));
             return copy;
         }
         return v;

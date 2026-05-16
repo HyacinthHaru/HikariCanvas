@@ -26,9 +26,14 @@ import moe.hikari.canvas.template.asset.TemplateAssetService;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -60,6 +65,10 @@ public final class WebServer {
     private final SessionManager sessionManager;
     private final String serverVersion;
     private final Runnable paintHandler;  // M1 demo
+    /** M16 P1.2：WS auth 超时秒。0 < x ≤ 60。 */
+    private final int wsAuthTimeoutSeconds;
+    /** M16 P1.3：除回环 + 同源外的额外 Origin 白名单（公网反代用）。 */
+    private final List<String> allowedOrigins;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final org.bukkit.plugin.java.JavaPlugin plugin;
     private final TemplateRegistry templateRegistry;
@@ -68,6 +77,7 @@ public final class WebServer {
     private final WallPreviewService wallPreviewService;
     private final moe.hikari.canvas.image.UploadHandler uploadHandler;
     private final moe.hikari.canvas.storage.TemplateRepo templateRepo;
+    private final moe.hikari.canvas.storage.AuditLog auditLog;
 
     // ---------- 拆分后的 dispatcher（M15.x god-class 拆分）----------
     private final EditOpDispatcher editOpDispatcher;
@@ -92,6 +102,20 @@ public final class WebServer {
     /** 服务端主动推送 {@code s-<N>} 的自增计数。 */
     private final AtomicLong serverIdSeq = new AtomicLong(0);
 
+    /**
+     * M16 P1.2：未认证 WS 连接的 close timer。key = ctx 的 sessionId() 字符串
+     * （Javalin 的 WsContext 唯一标识，不是登录态 sessionId）。
+     * onConnect → 注册；auth 成功 / onClose → cancel & remove。
+     */
+    private final ConcurrentMap<String, ScheduledFuture<?>> pendingAuthTimers = new ConcurrentHashMap<>();
+    /** P1.2 内部专用，单线程 daemon scheduler；够轻。 */
+    private final ScheduledExecutorService authTimeoutScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "hikari-ws-auth-timeout");
+                t.setDaemon(true);
+                return t;
+            });
+
     public WebServer(Logger log, String host, int port,
                      TokenService tokenService, SessionManager sessionManager,
                      ProjectionThrottler throttler,
@@ -105,20 +129,26 @@ public final class WebServer {
                      moe.hikari.canvas.image.UploadHandler uploadHandler,
                      moe.hikari.canvas.template.TemplatePublisher templatePublisher,
                      moe.hikari.canvas.storage.TemplateRepo templateRepo,
+                     moe.hikari.canvas.storage.AuditLog auditLog,
                      org.bukkit.plugin.java.JavaPlugin plugin,
-                     String serverVersion, Runnable paintHandler) {
+                     String serverVersion, Runnable paintHandler,
+                     int wsAuthTimeoutSeconds,
+                     List<String> allowedOrigins) {
         this.log = log;
         this.host = host;
         this.port = port;
         this.tokenService = tokenService;
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
+        this.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, wsAuthTimeoutSeconds));
+        this.allowedOrigins = allowedOrigins == null ? List.of() : List.copyOf(allowedOrigins);
         this.templateRegistry = templateRegistry;
         this.templatePreviewService = templatePreviewService;
         this.templateAssetService = templateAssetService;
         this.wallPreviewService = wallPreviewService;
         this.uploadHandler = uploadHandler;
         this.templateRepo = templateRepo;
+        this.auditLog = auditLog;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
@@ -137,7 +167,7 @@ public final class WebServer {
                 sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push);
         this.brushOpDispatcher = new BrushOpDispatcher(sessionManager, throttler, push);
         this.wallOpDispatcher = new WallOpDispatcher(
-                sessionManager, wallRepo, frameDeployer, throttler, plugin);
+                sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog);
         this.templateOpDispatcher = new TemplateOpDispatcher(sessionManager, templatePublisher);
     }
 
@@ -249,10 +279,19 @@ public final class WebServer {
                         HandlerType.GET, "/api/templates", this::handleTemplatesList));
             }
 
+            // M16 P1.3：WS upgrade Origin 白名单。在 upgrade 前拒绝跨站 WS 攻击（CSWSH）。
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.WEBSOCKET_BEFORE_UPGRADE, "/ws", this::checkWsOrigin));
+
             // WebSocket
             cfg.routes.addWsHandler(WsHandlerType.WEBSOCKET, "/ws", wsCfg -> {
-                wsCfg.onConnect(ctx -> log.info("WS connected"));
+                wsCfg.onConnect(ctx -> {
+                    // M16 P1.2：起 auth 超时任务，N 秒后未 auth → close 4001
+                    scheduleAuthTimeout(ctx);
+                    log.info("WS connected (sid=" + ctx.sessionId() + ", auth-timeout=" + wsAuthTimeoutSeconds + "s)");
+                });
                 wsCfg.onClose(ctx -> {
+                    cancelAuthTimeout(ctx);
                     String sid = ctx.attribute(ATTR_SESSION_ID);
                     if (sid != null) {
                         // 原子 CAS：只清空自己绑的那个 ctx，避免 race 把新连接的 mapping 抹掉
@@ -272,10 +311,81 @@ public final class WebServer {
     }
 
     public void stop() {
+        // M16 P1.2：先停 scheduler，否则 JVM 退出时 daemon 线程虽不阻塞但 cancel 顺序不可控
+        authTimeoutScheduler.shutdownNow();
+        pendingAuthTimers.clear();
         if (app != null) {
             app.stop();
             log.info("WebServer stopped");
         }
+    }
+
+    // ---------- M16 P1.2：未认证 WS 超时 ----------
+
+    /**
+     * onConnect 注册一个 N 秒后触发的 close 任务；如果到时间还未通过 auth（即没有
+     * 设置 {@link #ATTR_SESSION_ID}）就主动 close 4001，避免空连接累积。
+     */
+    private void scheduleAuthTimeout(WsContext ctx) {
+        String key = ctx.sessionId();
+        ScheduledFuture<?> fut = authTimeoutScheduler.schedule(() -> {
+            try {
+                if (ctx.attribute(ATTR_SESSION_ID) == null) {
+                    log.info("WS auth timeout (" + wsAuthTimeoutSeconds + "s) → close 4001 sid=" + key);
+                    try {
+                        ctx.closeSession(4001, "auth_timeout");
+                    } catch (Exception ignored) {}
+                }
+            } finally {
+                pendingAuthTimers.remove(key);
+            }
+        }, wsAuthTimeoutSeconds, TimeUnit.SECONDS);
+        // 并发新连接复用 sid 极不可能；put 即可
+        pendingAuthTimers.put(key, fut);
+    }
+
+    private void cancelAuthTimeout(WsContext ctx) {
+        ScheduledFuture<?> fut = pendingAuthTimers.remove(ctx.sessionId());
+        if (fut != null) fut.cancel(false);
+    }
+
+    // ---------- M16 P1.3：WS upgrade Origin 白名单 ----------
+
+    /**
+     * Origin 检查。放行：1) 无 Origin（同源 fetch / 非浏览器 client）；
+     * 2) 127.0.0.1:<port> / localhost:<port>（任何端口都接受，因为本机用户友好）；
+     * 3) 等于 network.host:port（被代理时的同源）；4) 配置白名单。
+     * 拒绝 → 403 + 不 upgrade。
+     */
+    private void checkWsOrigin(Context ctx) {
+        String origin = ctx.header("Origin");
+        if (isOriginAllowed(origin)) return;
+        log.warning("WS upgrade rejected: Origin=" + origin + " not in allowlist; "
+                + "add to network.allowed-origins if intentional");
+        ctx.status(403).result("forbidden");
+        ctx.skipRemainingHandlers();
+    }
+
+    boolean isOriginAllowed(String origin) {
+        if (origin == null || origin.isEmpty() || "null".equalsIgnoreCase(origin)) {
+            return true;  // 同源 fetch / 非浏览器
+        }
+        String low = origin.toLowerCase(Locale.ROOT);
+        // 1) 127.0.0.1:* / localhost:*（任何方案 + 端口，开发环境 vite proxy 等）
+        if (low.startsWith("http://127.0.0.1:") || low.startsWith("https://127.0.0.1:")
+                || low.startsWith("http://localhost:") || low.startsWith("https://localhost:")
+                || low.equals("http://127.0.0.1") || low.equals("http://localhost")) {
+            return true;
+        }
+        // 2) 同源（与 host:port 完全匹配）
+        String selfHttp = "http://" + host + ":" + port;
+        String selfHttps = "https://" + host + ":" + port;
+        if (low.equals(selfHttp) || low.equals(selfHttps)) return true;
+        // 3) 白名单（严格大小写敏感匹配 scheme + host + port）
+        for (String allowed : allowedOrigins) {
+            if (allowed != null && origin.equals(allowed)) return true;
+        }
+        return false;
     }
 
     // ---------- 静态资源 ----------
@@ -497,6 +607,8 @@ public final class WebServer {
             try { oldCtx.closeSession(4003, "session-takeover"); } catch (Exception ignored) {}
         }
         ctx.attribute(ATTR_SESSION_ID, session.id());
+        // M16 P1.2：auth 成功 → 取消未认证超时 close 任务
+        cancelAuthTimeout(ctx);
 
         // T3 token rotate：auth 成功后立即 rotate 新 token 交回前端，供 WS 断线重连重新 auth。
         // 契约见 docs/security.md §2.2 / docs/protocol.md §11。

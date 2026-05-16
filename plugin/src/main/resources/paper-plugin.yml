@@ -67,3 +67,6 @@ permissions:
   canvas.template.bypass-limit:
     description: Bypass per-player template publication count quota
     default: op
+  canvas.template.use-others:
+    description: Apply user-templates owned by other players (workshop cross-user)
+    default: op
