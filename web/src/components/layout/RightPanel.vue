@@ -1,25 +1,36 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+/**
+ * 右栏总装配器。本身只管：
+ * - 顶部 LayerPanel（不动）
+ * - 笔刷工具激活时切到 BrushPanel（替代 Properties，不动）
+ * - Properties 头部 + 多选 / 空选提示
+ * - 按 element.type dispatch 到对应 properties/*Section 子组件
+ * - 子组件 emit('update' | 'updateDebounced') → 这里统一走 sendUpdate / sendUpdateDebounced
+ *   做 optimistic mutation + ws.send；保证对外 op 流与拆分前一致
+ * - 底部 ElementListSection（不动）
+ *
+ * 拆分前 1076 行 god component。M13 后续段 + M14 协作各类还会继续往里塞东西，
+ * 留薄壳让子组件迭代不影响其他段。
+ */
+import { computed } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
-import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
-import { preloadImage } from '@/render/PreviewRenderer';
-import { Layers, Sliders, Eye, EyeOff, Lock, Unlock, Maximize2, Trash2, HelpCircle, ImagePlus, RefreshCw } from 'lucide-vue-next';
-import { layoutText, canonicalCharWidth, ASCENT_RATIO } from '@/render/TextLayout';
-import { FONT_META } from '@/render/PreviewRenderer';
+import { Sliders, Trash2 } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import LayerPanel from '@/components/layout/LayerPanel.vue';
-import ColorInput from '@/components/ui/ColorInput.vue';
-import FillInput from '@/components/ui/FillInput.vue';
 import BrushPanel from '@/components/layout/BrushPanel.vue';
-import type { Element, RectElement, TextElement, CircleElement, ShapeElement, PathElement, Effects, Stroke, Shadow, Glow, Fill, ImageElement, Mask } from '@/types/protocol';
+import TransformSection from '@/components/properties/TransformSection.vue';
+import TextElementSection from '@/components/properties/TextElementSection.vue';
+import GeometricElementSection from '@/components/properties/GeometricElementSection.vue';
+import ImageElementSection from '@/components/properties/ImageElementSection.vue';
+import ElementListSection from '@/components/properties/ElementListSection.vue';
+import type { Element, TextElement, RectElement, CircleElement, ShapeElement, PathElement, ImageElement } from '@/types/protocol';
 
 const project = useProjectStore();
 const ui = useUiStore();
-const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
@@ -33,88 +44,11 @@ const isCircle = computed(() => selected.value?.type === 'circle');
 const isShape = computed(() => selected.value?.type === 'shape');
 const isPath = computed(() => selected.value?.type === 'path');
 const isImage = computed(() => selected.value?.type === 'image');
-const imageEl = computed(() => isImage.value ? (selected.value as ImageElement) : null);
-/** M11-D：几何元素族（支持 fill / dither）。text / icon 不在内。 */
+/** M11-D：几何元素族（支持 fill / dither）。text / icon / image 不在内。 */
 const isGeometric = computed(() => isRect.value || isCircle.value || isShape.value || isPath.value);
-/** M11-D：当前元素 renderMode 是否 'dither'（缺省 'clean'）。 */
-const isDither = computed(() => selected.value?.renderMode === 'dither');
-
-/** M11-D：fill 通用切换 + 透传给 FillInput。fill 关闭时发 null（rect/path/circle/shape 必须 stroke 兜底）。 */
-function geomStroke(): Stroke | null {
-    const e = selected.value as (RectElement | CircleElement | ShapeElement | PathElement | null);
-    return e?.stroke ?? null;
-}
-function toggleGeomStroke(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    sendUpdate({ stroke: on ? { width: 1, color: '#000000' } : null });
-}
-function patchGeomStroke(partial: Partial<Stroke>) {
-    const cur = geomStroke() ?? { width: 1, color: '#000000' };
-    sendUpdate({ stroke: { ...cur, ...partial } });
-}
-function toggleGeomFill(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    sendUpdate({ fill: on ? { type: 'solid', color: '#FF3366' } : null });
-}
-function geomFill(): Fill | undefined {
-    const e = selected.value as (RectElement | CircleElement | ShapeElement | PathElement | null);
-    const raw = e?.fill;
-    if (raw === undefined || raw === null) return undefined;
-    if (typeof raw === 'string') return { type: 'solid', color: raw };
-    return raw;
-}
-function onDitherChange(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    sendUpdate({ renderMode: on ? 'dither' : 'clean' });
-}
 
 /** M8-F：是否多选（>= 2）。multi 时隐藏单选 UI，显示批量操作提示。 */
 const isMulti = computed(() => ui.selectedCount >= 2);
-
-const elementCount = computed(() => project.state?.elements?.length ?? 0);
-const activeLayerLocked = computed(() => project.activeLayerLocked);
-
-// ---------- M8-E：element opacity slider ----------
-
-/**
- * slider 拖动中本地缓冲百分比；松开后归 null 由 computed 回到 state 真值。
- * 切换选中元素时必须清空，否则下一个元素 slider 显示前一个的值。
- */
-const opacityDraftPct = ref<number | null>(null);
-
-watch(() => selected.value?.id, () => { opacityDraftPct.value = null; });
-
-const opacityPct = computed(() => {
-    if (opacityDraftPct.value !== null) return opacityDraftPct.value;
-    const op = selected.value?.opacity;
-    return op === undefined || op === null ? 100 : Math.round(op * 100);
-});
-
-// VueUse useDebounceFn 不提供 flush；input 走 debounce，change（mouseup）immediate send，
-// 两条路最终值相同；最差冗余 1 次 ws 发送同值 patch，无副作用。
-const sendOpacityDebounced = useDebounceFn((elementId: string, value: number) => {
-    ws.send('element.update', { elementId, patch: { opacity: value } });
-}, 80);
-
-function onOpacityInput(ev: Event): void {
-    const v = parseInt((ev.target as HTMLInputElement).value, 10);
-    if (!Number.isFinite(v)) return;
-    opacityDraftPct.value = v;
-    const el = selected.value;
-    if (!el) return;
-    const opacity = v / 100;
-    (el as unknown as Record<string, unknown>).opacity = opacity;
-    sendOpacityDebounced(el.id, opacity);
-}
-
-function onOpacityChange(): void {
-    const el = selected.value;
-    opacityDraftPct.value = null;
-    if (!el) return;
-    // 立即 send 当前 element.opacity（来自最后一次 input 乐观更新），确保最终值落地
-    const op = (el as { opacity?: number }).opacity ?? 1;
-    ws.send('element.update', { elementId: el.id, patch: { opacity: op } });
-}
 
 /** 立即发送（用于 boolean / color / select 之类"定型"变更）。 */
 function sendUpdate(patch: Record<string, unknown>) {
@@ -131,97 +65,6 @@ function sendUpdate(patch: Record<string, unknown>) {
  *  在 ~12 wpm 输入下不会塞 WS，但视觉滞后感明显改善。color/select 路径不防抖。 */
 const sendUpdateDebounced = useDebounceFn(sendUpdate, 80);
 
-// ---------- 控件绑定 helpers ----------
-
-function numberModel(field: keyof Element) {
-    return {
-        get: () => (selected.value as unknown as Record<string, number>)[field as string] ?? 0,
-        set: (v: number) => sendUpdateDebounced({ [field]: Number.isFinite(v) ? v : 0 }),
-    };
-}
-
-function onBoolChange(field: 'visible' | 'locked', ev: Event) {
-    const v = (ev.target as HTMLInputElement).checked;
-    sendUpdate({ [field]: v });
-}
-
-function onTextChange(field: string, ev: Event) {
-    const v = (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
-    // eager optimistic：文本类输入立即更新 local element.text，这样下面的 fitTextHeight
-    // 能读到最新内容。sendUpdateDebounced 自己也会再 optimistic 一次，无害。
-    const el = selected.value;
-    if (el) (el as unknown as Record<string, unknown>)[field] = v;
-    sendUpdateDebounced({ [field]: v });
-    if (field === 'text' && el?.type === 'text') {
-        // M5-D5 Bug 8：输入文字后自动按 canonicalCharWidth 布局撑高。不 fit 宽度——
-        // 宽度是用户设定的软换行边界，保留设计意图。
-        autoFitHeightDebounced();
-    }
-}
-
-const autoFitHeightDebounced = useDebounceFn(() => {
-    fitTextHeight();
-}, 250);
-
-function onColorChange(field: string, ev: Event) {
-    const v = (ev.target as HTMLInputElement).value.toUpperCase();
-    sendUpdate({ [field]: v });
-}
-
-function onNumberChange(field: string, ev: Event) {
-    let v = parseFloat((ev.target as HTMLInputElement).value);
-    if (!Number.isFinite(v)) return;
-    if (field === 'rotation') v = ((Math.round(v) % 360) + 360) % 360;
-    sendUpdateDebounced({ [field]: v });
-}
-
-function onSelectChange(field: string, ev: Event) {
-    const v = (ev.target as HTMLSelectElement).value;
-    sendUpdate({ [field]: field === 'rotation' ? parseInt(v, 10) : v });
-}
-
-// ---------- Effects 专用 ----------
-
-function textEffects(): Effects {
-    const t = selected.value as TextElement | null;
-    return t?.effects ?? {};
-}
-
-function updateEffects(patch: Partial<Effects>) {
-    const e = selected.value as TextElement | null;
-    if (!e) return;
-    const merged: Effects = { ...(e.effects ?? {}), ...patch };
-    // 所有子键为 null/undefined 时干脆传 undefined 让后端去 effects
-    const clean: Effects | null = (merged.stroke || merged.shadow || merged.glow) ? merged : null;
-    sendUpdate({ effects: clean });
-}
-
-function toggleStroke(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    updateEffects({ stroke: on ? { width: 2, color: '#000000' } : undefined });
-}
-function toggleShadow(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    updateEffects({ shadow: on ? { dx: 2, dy: 2, color: '#000000' } : undefined });
-}
-function toggleGlow(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    updateEffects({ glow: on ? { radius: 3, color: '#33CCFF' } : undefined });
-}
-
-function patchStroke(partial: Partial<Stroke>) {
-    const cur = textEffects().stroke ?? { width: 2, color: '#000000' };
-    updateEffects({ stroke: { ...cur, ...partial } });
-}
-function patchShadow(partial: Partial<Shadow>) {
-    const cur = textEffects().shadow ?? { dx: 2, dy: 2, color: '#000000' };
-    updateEffects({ shadow: { ...cur, ...partial } });
-}
-function patchGlow(partial: Partial<Glow>) {
-    const cur = textEffects().glow ?? { radius: 3, color: '#33CCFF' };
-    updateEffects({ glow: { ...cur, ...partial } });
-}
-
 function deleteSelected() {
     const el = selected.value;
     if (!el) return;
@@ -237,266 +80,6 @@ function deleteMultiSelected(): void {
         ws.send('element.delete', { elementId: id });
     }
     ui.clearSelection();
-}
-
-// ---------- M5-D3 P4：文本 fit-content ----------
-
-function fitTextHeight() {
-    const el = selected.value;
-    if (!el || el.type !== 'text') return;
-    const te = el as TextElement;
-    const glyphs = layoutText(te);
-    if (glyphs.length === 0) return;
-    let maxBaselineY = te.y;
-    for (const g of glyphs) {
-        if (g.baselineY > maxBaselineY) maxBaselineY = g.baselineY;
-    }
-    // baseline 到 top = fontSize * ASCENT_RATIO；descent = fontSize - ascent
-    const ascent = Math.round(te.fontSize * ASCENT_RATIO);
-    const descent = Math.max(1, te.fontSize - ascent);
-    const newH = Math.max(1, (maxBaselineY + descent) - te.y);
-    if (newH !== te.h) sendUpdate({ h: newH });
-}
-
-function fitTextWidth() {
-    const el = selected.value;
-    if (!el || el.type !== 'text') return;
-    const te = el as TextElement;
-    const glyphs = layoutText(te);
-    if (glyphs.length === 0) return;
-    let maxRight = te.x;
-    for (const g of glyphs) {
-        // rotated glyph 占方格 fontSize；非旋转占 canonicalCharWidth
-        const w = g.rotated ? te.fontSize : canonicalCharWidth(g.ch, te.fontSize);
-        const right = g.x + w;
-        if (right > maxRight) maxRight = right;
-    }
-    const newW = Math.max(1, maxRight - te.x);
-    if (newW !== te.w) sendUpdate({ w: newW });
-}
-
-// ---------- Element 在活动层内的 z-order 重排（HTML5 drag & drop） ----------
-//
-// 注：M8-D 起这里只处理"层内元素"的重排（element.reorder op），层级的重排由 LayerPanel.vue
-// 单独负责（layer.reorder op）。命名 onElement* 与 LayerPanel 的 onDrag* 区分。
-
-const dragIdx = ref(-1);
-const dragOverIdx = ref(-1);
-
-function onElementDragStart(ev: DragEvent, idx: number) {
-    dragIdx.value = idx;
-    if (ev.dataTransfer) {
-        ev.dataTransfer.effectAllowed = 'move';
-        ev.dataTransfer.setData('text/plain', String(idx));
-    }
-}
-
-function onElementDragOver(ev: DragEvent, idx: number) {
-    ev.preventDefault();
-    dragOverIdx.value = idx;
-    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
-}
-
-function onElementDragLeave() {
-    dragOverIdx.value = -1;
-}
-
-function onElementDrop(ev: DragEvent, idx: number) {
-    ev.preventDefault();
-    const from = dragIdx.value;
-    dragIdx.value = -1;
-    dragOverIdx.value = -1;
-    if (from < 0 || from === idx) return;
-    if (!project.state) return;
-    const el = project.state.elements[from];
-    if (!el) return;
-    // optimistic reorder
-    const arr = project.state.elements;
-    const [moved] = arr.splice(from, 1);
-    arr.splice(idx, 0, moved);
-    ws.send('element.reorder', { elementId: el.id, index: idx });
-}
-
-function onElementDragEnd() {
-    dragIdx.value = -1;
-    dragOverIdx.value = -1;
-}
-
-// ---------- M13-D: ImageElement 段 ----------
-
-type MaskPresetKind = 'none' | 'circle' | 'roundedRect' | 'ellipse';
-
-const imageMaskKind = computed<MaskPresetKind>(() => detectMaskPreset(imageEl.value));
-const imageMaskInverted = computed<boolean>(() => imageEl.value?.mask?.inverted ?? false);
-
-/**
- * 从已存在的 mask.d + bbox 反推出最匹配的预设 kind。v1：纯启发式
- * （路径首字符 + 命令计数；v2 lasso 自由 path 会落到 'none' 显示）。
- *
- * - circle / ellipse 走 4 段 cubic（4 个 C 命令）
- * - roundedRect 走 4 个圆角（4 个 Q 命令 + L 段）
- */
-function detectMaskPreset(im: ImageElement | null): MaskPresetKind {
-    if (!im || !im.mask) return 'none';
-    const d = im.mask.d;
-    const cCount = (d.match(/ C /g) ?? []).length;
-    const qCount = (d.match(/ Q /g) ?? []).length;
-    if (cCount === 4 && qCount === 0) {
-        return im.w === im.h ? 'circle' : 'ellipse';
-    }
-    if (qCount === 4 && cCount === 0) return 'roundedRect';
-    return 'none';
-}
-
-/**
- * 用 cubic Bezier 4 段近似画椭圆（外接 bbox 0..w/0..h）。kappa ≈ 0.5523 是
- * 圆弧 → 三阶 Bezier 控制点的标准近似系数（误差 < 0.027%）。
- */
-function makeEllipseD(w: number, h: number): string {
-    const cx = w / 2;
-    const cy = h / 2;
-    const rx = w / 2;
-    const ry = h / 2;
-    const k = 0.5522847498;
-    const cxk = rx * k;
-    const cyk = ry * k;
-    return [
-        `M ${cx} 0`,
-        `C ${cx + cxk} 0 ${w} ${cy - cyk} ${w} ${cy}`,
-        `C ${w} ${cy + cyk} ${cx + cxk} ${h} ${cx} ${h}`,
-        `C ${cx - cxk} ${h} 0 ${cy + cyk} 0 ${cy}`,
-        `C 0 ${cy - cyk} ${cx - cxk} 0 ${cx} 0`,
-        'Z',
-    ].join(' ');
-}
-
-/** 用短边作直径的圆（居中），cubic Bezier 4 段。 */
-function makeCircleD(w: number, h: number): string {
-    const r = Math.min(w, h) / 2;
-    const cx = w / 2;
-    const cy = h / 2;
-    const k = 0.5522847498 * r;
-    return [
-        `M ${cx} ${cy - r}`,
-        `C ${cx + k} ${cy - r} ${cx + r} ${cy - k} ${cx + r} ${cy}`,
-        `C ${cx + r} ${cy + k} ${cx + k} ${cy + r} ${cx} ${cy + r}`,
-        `C ${cx - k} ${cy + r} ${cx - r} ${cy + k} ${cx - r} ${cy}`,
-        `C ${cx - r} ${cy - k} ${cx - k} ${cy - r} ${cx} ${cy - r}`,
-        'Z',
-    ].join(' ');
-}
-
-/** 圆角矩形，圆角半径 = min(w, h) * 0.15。 */
-function makeRoundedRectD(w: number, h: number): string {
-    const r = Math.max(1, Math.min(w, h) * 0.15);
-    return [
-        `M ${r} 0`,
-        `L ${w - r} 0`,
-        `Q ${w} 0 ${w} ${r}`,
-        `L ${w} ${h - r}`,
-        `Q ${w} ${h} ${w - r} ${h}`,
-        `L ${r} ${h}`,
-        `Q 0 ${h} 0 ${h - r}`,
-        `L 0 ${r}`,
-        `Q 0 0 ${r} 0`,
-        'Z',
-    ].join(' ');
-}
-
-function onMaskKindChange(ev: Event) {
-    const kind = (ev.target as HTMLSelectElement).value as MaskPresetKind;
-    const im = imageEl.value;
-    if (!im) return;
-    if (kind === 'none') {
-        sendUpdate({ mask: null });
-        return;
-    }
-    let d = '';
-    if (kind === 'circle') d = makeCircleD(im.w, im.h);
-    else if (kind === 'roundedRect') d = makeRoundedRectD(im.w, im.h);
-    else if (kind === 'ellipse') d = makeEllipseD(im.w, im.h);
-    const inverted = im.mask?.inverted ?? false;
-    sendUpdate({ mask: { d, inverted } as Mask });
-}
-
-function onMaskInvertedToggle(ev: Event) {
-    const im = imageEl.value;
-    if (!im || !im.mask) return;
-    const inverted = (ev.target as HTMLInputElement).checked;
-    sendUpdate({ mask: { d: im.mask.d, inverted } });
-}
-
-function toggleImageDither(ev: Event) {
-    const on = (ev.target as HTMLInputElement).checked;
-    sendUpdate({ renderMode: on ? 'dither' : 'clean' });
-}
-
-/** 当 image bbox 变化（resize）时，把 mask 预设按新 bbox 重生成 —— 否则会被裁形变。
- *  仅当 d 是预设产生的（startsWith __）时才重生成，自由 path 不动。 */
-watch(
-    () => imageEl.value ? `${imageEl.value.w}x${imageEl.value.h}` : '',
-    () => {
-        const im = imageEl.value;
-        if (!im || !im.mask) return;
-        const kind = detectMaskPreset(im);
-        let regenerated = '';
-        if (kind === 'circle') regenerated = makeCircleD(im.w, im.h);
-        else if (kind === 'roundedRect') regenerated = makeRoundedRectD(im.w, im.h);
-        else if (kind === 'ellipse') regenerated = makeEllipseD(im.w, im.h);
-        if (regenerated && regenerated !== im.mask.d) {
-            sendUpdate({ mask: { d: regenerated, inverted: im.mask.inverted } });
-        }
-    },
-);
-
-// 替换图片：自己的 hidden file input
-const imageReplaceInputRef = ref<HTMLInputElement | null>(null);
-const imageReplaceError = ref<string | null>(null);
-const imageReplacing = ref(false);
-
-function triggerReplaceImage() {
-    imageReplaceInputRef.value?.click();
-}
-
-async function onReplaceFileChange(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = '';
-    if (!file || !imageEl.value) return;
-    if (!file.type.startsWith('image/')) { imageReplaceError.value = t.value.image.notImage; return; }
-    if (!net.sessionId) { imageReplaceError.value = t.value.image.noSession; return; }
-    imageReplacing.value = true;
-    imageReplaceError.value = null;
-    try {
-        const dataUrl = await new Promise<string | null>((resolve) => {
-            const r = new FileReader();
-            r.onload = () => resolve(typeof r.result === 'string' ? r.result : null);
-            r.onerror = () => resolve(null);
-            r.readAsDataURL(file);
-        });
-        const fd = new FormData();
-        fd.append('sessionId', net.sessionId);
-        fd.append('file', file);
-        const resp = await fetch('/api/upload', { method: 'POST', body: fd });
-        if (!resp.ok) {
-            const body = await resp.json().catch(() => ({} as Record<string, string>));
-            imageReplaceError.value = t.value.image.uploadFailed(resp.status, body.message || body.error || '');
-            return;
-        }
-        const result = await resp.json() as { source: string; width: number; height: number };
-        if (dataUrl) preloadImage(result.source, dataUrl);
-        sendUpdate({ source: result.source });
-    } catch (err) {
-        imageReplaceError.value = t.value.image.uploadFailed(0, (err as Error).message);
-    } finally {
-        imageReplacing.value = false;
-        if (imageReplaceError.value) {
-            const msg = imageReplaceError.value;
-            window.setTimeout(() => {
-                if (imageReplaceError.value === msg) imageReplaceError.value = null;
-            }, 6000);
-        }
-    }
 }
 </script>
 
@@ -557,515 +140,49 @@ async function onReplaceFileChange(e: Event) {
           </span>
         </div>
 
-        <!-- 位置 & 尺寸 -->
-        <details class="group" open>
-          <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            {{ t.properties.transformHeader }}
-          </summary>
-          <div class="grid grid-cols-2 gap-2 pt-1.5">
-            <label class="flex flex-col gap-0.5">
-              <span class="text-[10px] text-[color:var(--muted-foreground)]">x</span>
-              <input type="number" class="hc-input" :value="selected.x" @input="(e) => onNumberChange('x', e)">
-            </label>
-            <label class="flex flex-col gap-0.5">
-              <span class="text-[10px] text-[color:var(--muted-foreground)]">y</span>
-              <input type="number" class="hc-input" :value="selected.y" @input="(e) => onNumberChange('y', e)">
-            </label>
-            <label class="flex flex-col gap-0.5">
-              <span class="text-[10px] text-[color:var(--muted-foreground)]">w</span>
-              <input type="number" min="1" class="hc-input" :value="selected.w" @input="(e) => onNumberChange('w', e)">
-            </label>
-            <label class="flex flex-col gap-0.5">
-              <span class="text-[10px] text-[color:var(--muted-foreground)]">h</span>
-              <input type="number" min="1" class="hc-input" :value="selected.h" @input="(e) => onNumberChange('h', e)">
-            </label>
-            <label class="flex flex-col gap-0.5 col-span-2">
-              <span class="hc-field-label">
-                {{ t.properties.rotation }}
-                <Tooltip :text="t.properties.rotationTip">
-                  <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
-                </Tooltip>
-              </span>
-              <input type="number" min="0" max="359" class="hc-input" :value="selected.rotation"
-                     @input="(e) => onNumberChange('rotation', e)">
-            </label>
-          </div>
-          <div class="flex gap-3 pt-2">
-            <label class="flex items-center gap-1.5">
-              <input type="checkbox" :checked="selected.visible" @change="(e) => onBoolChange('visible', e)">
-              <span>{{ t.properties.visible }}</span>
-            </label>
-            <label class="flex items-center gap-1.5">
-              <input type="checkbox" :checked="selected.locked" @change="(e) => onBoolChange('locked', e)">
-              <span>{{ t.properties.locked }}</span>
-            </label>
-          </div>
-          <!-- M8-E：element opacity slider -->
-          <label class="flex items-center gap-2 pt-1">
-            <span class="hc-field-label">
-              {{ t.properties.opacity }}
-              <Tooltip :text="t.properties.opacityTip">
-                <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
-              </Tooltip>
-            </span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              class="flex-1 hc-elem-slider"
-              :value="opacityPct"
-              @input="onOpacityInput"
-              @change="onOpacityChange"
-            >
-            <span class="w-8 text-[10px] text-right tabular-nums">{{ opacityPct }}%</span>
-          </label>
-          <!-- M8-E：blendMode + renderMode UI 保留但 disabled（M11 dither 一并实装合成） -->
-          <div class="grid grid-cols-2 gap-2 pt-1">
-            <label class="flex flex-col gap-0.5">
-              <span class="hc-field-label">
-                {{ t.properties.blendMode }}
-                <Tooltip :text="t.properties.blendModeTip">
-                  <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
-                </Tooltip>
-              </span>
-              <select class="hc-input opacity-60 cursor-not-allowed" :value="selected.blendMode ?? 'normal'" disabled>
-                <option value="normal">normal</option>
-                <option value="multiply">multiply</option>
-                <option value="screen">screen</option>
-                <option value="overlay">overlay</option>
-              </select>
-            </label>
-            <label class="flex flex-col gap-0.5">
-              <span class="hc-field-label">
-                {{ t.properties.renderMode }}
-                <Tooltip :text="t.properties.renderModeTip">
-                  <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
-                </Tooltip>
-              </span>
-              <select class="hc-input opacity-60 cursor-not-allowed" :value="selected.renderMode ?? 'clean'" disabled>
-                <option value="clean">{{ t.properties.renderModeClean }}</option>
-                <option value="dither">{{ t.properties.renderModeDither }}</option>
-              </select>
-            </label>
-          </div>
-        </details>
+        <!-- 位置 & 尺寸 + opacity + blendMode / renderMode（共通段） -->
+        <TransformSection
+          :element="selected"
+          :locked="project.isLocked"
+          @update="sendUpdate"
+          @update-debounced="sendUpdateDebounced"
+        />
 
         <!-- 几何元素（rect / circle / shape / path）公用 fill + stroke + dither -->
-        <details v-if="isGeometric" class="group" open>
-          <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            {{ isRect ? t.properties.rectHeader
-                : isCircle ? t.properties.circleHeader
-                : isShape ? t.properties.shapeHeader
-                : t.properties.pathHeader }}
-          </summary>
-          <div class="pt-1.5 space-y-2">
-            <!-- fill：toggle + FillInput（M11-D 支持 solid / linear / radial） -->
-            <div class="flex items-start justify-between gap-2">
-              <span class="text-[color:var(--muted-foreground)] mt-0.5">{{ t.properties.fill }}</span>
-              <div class="flex flex-col gap-1 flex-1 max-w-[180px]">
-                <input type="checkbox"
-                       :checked="geomFill() !== undefined"
-                       @change="toggleGeomFill"
-                       class="self-end">
-                <FillInput v-if="geomFill()"
-                           :model-value="geomFill()"
-                           @update:model-value="(v) => sendUpdate({ fill: v })" />
-              </div>
-            </div>
-            <!-- stroke：toggle + 宽度 + 颜色 -->
-            <label class="flex items-center justify-between gap-2">
-              <span class="text-[color:var(--muted-foreground)]">{{ t.properties.stroke }}</span>
-              <input type="checkbox" :checked="geomStroke() !== null" @change="toggleGeomStroke">
-            </label>
-            <template v-if="geomStroke()">
-              <div class="grid grid-cols-2 gap-2">
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeWidth }}</span>
-                  <input type="number" min="0" class="hc-input" :value="geomStroke()!.width"
-                         @input="(e) => patchGeomStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeColor }}</span>
-                  <ColorInput :model-value="geomStroke()!.color"
-                              @update:model-value="(v) => patchGeomStroke({ color: v })" />
-                </label>
-              </div>
-            </template>
-            <!-- Shape 专属：kind / sides / innerRatio -->
-            <template v-if="isShape">
-              <div class="grid grid-cols-2 gap-2">
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">kind</span>
-                  <select class="hc-input" :value="(selected as ShapeElement).kind"
-                          @change="(e) => onSelectChange('kind', e)">
-                    <option value="polygon">polygon</option>
-                    <option value="star">star</option>
-                  </select>
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">sides</span>
-                  <input type="number" min="3" max="32" class="hc-input"
-                         :value="(selected as ShapeElement).sides"
-                         @input="(e) => onNumberChange('sides', e)">
-                </label>
-              </div>
-              <label v-if="(selected as ShapeElement).kind === 'star'" class="flex flex-col gap-0.5">
-                <span class="text-[10px] text-[color:var(--muted-foreground)]">innerRatio</span>
-                <input type="range" min="0.1" max="0.95" step="0.05"
-                       :value="(selected as ShapeElement).innerRatio ?? 0.5"
-                       @input="(e) => onNumberChange('innerRatio', e)">
-              </label>
-            </template>
-            <!-- dither toggle -->
-            <Tooltip :text="t.fill.ditherTip">
-              <label class="flex items-center justify-between gap-2 cursor-help">
-                <span class="text-[color:var(--muted-foreground)]">{{ t.fill.ditherLabel }}</span>
-                <input type="checkbox" :checked="isDither" @change="onDitherChange">
-              </label>
-            </Tooltip>
-          </div>
-        </details>
+        <GeometricElementSection
+          v-if="isGeometric"
+          :element="selected as RectElement | CircleElement | ShapeElement | PathElement"
+          :locked="project.isLocked"
+          @update="sendUpdate"
+          @update-debounced="sendUpdateDebounced"
+        />
 
-        <!-- Text 专属 -->
-        <details v-if="isText" class="group" open>
-          <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            {{ t.properties.textHeader }}
-          </summary>
-          <div class="pt-1.5 space-y-2">
-            <label class="flex flex-col gap-0.5">
-              <span class="text-[10px] text-[color:var(--muted-foreground)]">text</span>
-              <textarea rows="2" class="hc-input font-mono resize-none" :value="(selected as TextElement).text"
-                        @input="(e) => onTextChange('text', e)"></textarea>
-            </label>
-            <!-- Fit content：按当前 text + 字号 + letterSpacing + lineHeight 计算 bbox -->
-            <div class="flex gap-2 pt-1">
-              <Tooltip :text="t.properties.fitHeightTip">
-                <button
-                  type="button"
-                  class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
-                  @click="fitTextHeight"
-                >
-                  <Maximize2 class="size-3 rotate-90" />
-                  <span>{{ t.properties.fitHeight }}</span>
-                </button>
-              </Tooltip>
-              <Tooltip :text="t.properties.fitWidthTip">
-                <button
-                  type="button"
-                  class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
-                  @click="fitTextWidth"
-                >
-                  <Maximize2 class="size-3" />
-                  <span>{{ t.properties.fitWidth }}</span>
-                </button>
-              </Tooltip>
-            </div>
-            <div class="grid grid-cols-2 gap-2">
-              <label class="flex flex-col gap-0.5">
-                <span class="text-[10px] text-[color:var(--muted-foreground)]">fontId</span>
-                <select class="hc-input" :value="(selected as TextElement).fontId" @change="(e) => onSelectChange('fontId', e)">
-                  <option v-for="(meta, id) in FONT_META" :key="id" :value="id">{{ meta.displayName }}</option>
-                </select>
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span class="text-[10px] text-[color:var(--muted-foreground)]">fontSize</span>
-                <input type="number" min="1" class="hc-input" :value="(selected as TextElement).fontSize"
-                       @input="(e) => onNumberChange('fontSize', e)">
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span class="text-[10px] text-[color:var(--muted-foreground)]">align</span>
-                <select class="hc-input" :value="(selected as TextElement).align" @change="(e) => onSelectChange('align', e)">
-                  <option value="left">left</option>
-                  <option value="center">center</option>
-                  <option value="right">right</option>
-                </select>
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                <ColorInput :model-value="(selected as TextElement).color"
-                            @update:model-value="(v) => sendUpdate({ color: v })" />
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span class="hc-field-label">
-                  {{ t.properties.letterSpacing }}
-                  <Tooltip :text="t.properties.letterSpacingTip">
-                    <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
-                  </Tooltip>
-                </span>
-                <input type="number" step="0.5" class="hc-input" :value="(selected as TextElement).letterSpacing"
-                       @input="(e) => onNumberChange('letterSpacing', e)">
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span class="hc-field-label">
-                  {{ t.properties.lineHeight }}
-                  <Tooltip :text="t.properties.lineHeightTip">
-                    <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
-                  </Tooltip>
-                </span>
-                <input type="number" step="0.1" class="hc-input" :value="(selected as TextElement).lineHeight"
-                       @input="(e) => onNumberChange('lineHeight', e)">
-              </label>
-            </div>
-            <label class="flex items-center gap-1.5 pt-1">
-              <input type="checkbox" :checked="(selected as TextElement).vertical"
-                     @change="(e) => sendUpdate({ vertical: (e.target as HTMLInputElement).checked })">
-              <span>{{ t.properties.verticalHelp }}</span>
-            </label>
-          </div>
-        </details>
+        <!-- Text 主段 + Effects 段 -->
+        <TextElementSection
+          v-if="isText"
+          :element="selected as TextElement"
+          :locked="project.isLocked"
+          @update="sendUpdate"
+          @update-debounced="sendUpdateDebounced"
+        />
 
-        <!-- Text effects -->
-        <details v-if="isText" class="group">
-          <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
-            {{ t.properties.effectsHeader }}
-          </summary>
-          <div class="pt-1.5 space-y-3">
-            <!-- stroke -->
-            <div>
-              <label class="flex items-center justify-between">
-                <span>stroke</span>
-                <input type="checkbox" :checked="!!textEffects().stroke" @change="toggleStroke">
-              </label>
-              <div v-if="textEffects().stroke" class="grid grid-cols-2 gap-2 pt-1.5">
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">width</span>
-                  <input type="number" min="0" class="hc-input" :value="textEffects().stroke!.width"
-                         @input="(e) => patchStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                  <ColorInput :model-value="textEffects().stroke!.color"
-                              @update:model-value="(v) => patchStroke({ color: v })" />
-                </label>
-              </div>
-            </div>
-            <!-- shadow -->
-            <div>
-              <label class="flex items-center justify-between">
-                <span>shadow</span>
-                <input type="checkbox" :checked="!!textEffects().shadow" @change="toggleShadow">
-              </label>
-              <div v-if="textEffects().shadow" class="grid grid-cols-3 gap-2 pt-1.5">
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">dx</span>
-                  <input type="number" class="hc-input" :value="textEffects().shadow!.dx"
-                         @input="(e) => patchShadow({ dx: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">dy</span>
-                  <input type="number" class="hc-input" :value="textEffects().shadow!.dy"
-                         @input="(e) => patchShadow({ dy: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                  <ColorInput :model-value="textEffects().shadow!.color"
-                              @update:model-value="(v) => patchShadow({ color: v })" />
-                </label>
-              </div>
-            </div>
-            <!-- glow -->
-            <div>
-              <label class="flex items-center justify-between">
-                <span>glow</span>
-                <input type="checkbox" :checked="!!textEffects().glow" @change="toggleGlow">
-              </label>
-              <div v-if="textEffects().glow" class="grid grid-cols-2 gap-2 pt-1.5">
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">radius</span>
-                  <input type="number" min="0" max="64" class="hc-input" :value="textEffects().glow!.radius"
-                         @input="(e) => patchGlow({ radius: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
-                  <ColorInput :model-value="textEffects().glow!.color"
-                              @update:model-value="(v) => patchGlow({ color: v })" />
-                </label>
-              </div>
-            </div>
-          </div>
-        </details>
-
-        <!-- M13-D：ImageElement 段（hash 缩略图 + replace + mask preset + inverted + dither） -->
-        <details v-if="isImage && imageEl" class="group" open>
-          <summary class="flex items-center justify-between cursor-pointer py-1.5">
-            <span class="font-medium">{{ t.image.header }}</span>
-            <span class="text-[10px] text-[color:var(--muted-foreground)] group-open:rotate-90 transition-transform">›</span>
-          </summary>
-          <div class="space-y-2 pt-1.5">
-            <!-- 缩略图 + hash + replace -->
-            <div class="flex gap-2 items-start">
-              <div class="w-14 h-14 shrink-0 rounded border border-[color:var(--border)] bg-[color:var(--background)] overflow-hidden flex items-center justify-center">
-                <img
-                  :src="`/api/upload/${encodeURIComponent(imageEl.source)}`"
-                  class="max-w-full max-h-full object-contain"
-                  alt=""
-                />
-              </div>
-              <div class="flex-1 min-w-0 space-y-1">
-                <Tooltip :text="t.image.sourceTip">
-                  <span class="block text-[10px] font-mono text-[color:var(--muted-foreground)] truncate" :title="imageEl.source">
-                    {{ imageEl.source }}
-                  </span>
-                </Tooltip>
-                <Tooltip :text="t.image.replaceTip">
-                  <button
-                    class="w-full inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
-                    :disabled="imageReplacing"
-                    @click="triggerReplaceImage"
-                  >
-                    <component :is="imageReplacing ? RefreshCw : ImagePlus"
-                               class="size-3" :class="{ 'animate-spin': imageReplacing }" />
-                    <span>{{ t.image.replace }}</span>
-                  </button>
-                </Tooltip>
-                <input
-                  ref="imageReplaceInputRef"
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  class="hidden"
-                  @change="onReplaceFileChange"
-                />
-                <div v-if="imageReplaceError" class="text-[10px] text-red-500">{{ imageReplaceError }}</div>
-              </div>
-            </div>
-
-            <!-- 蒙版 -->
-            <div class="space-y-1.5 pt-1 border-t border-[color:var(--border)]">
-              <div class="flex items-center justify-between">
-                <Tooltip :text="t.image.maskPresetTip">
-                  <span class="hc-field-label">{{ t.image.maskHeader }}</span>
-                </Tooltip>
-                <select class="hc-input w-32" :value="imageMaskKind" @change="onMaskKindChange">
-                  <option value="none">{{ t.image.maskPresets.none }}</option>
-                  <option value="circle">{{ t.image.maskPresets.circle }}</option>
-                  <option value="roundedRect">{{ t.image.maskPresets.roundedRect }}</option>
-                  <option value="ellipse">{{ t.image.maskPresets.ellipse }}</option>
-                </select>
-              </div>
-              <Tooltip v-if="imageMaskKind !== 'none'" :text="t.image.maskInvertedTip">
-                <label class="flex items-center justify-between pl-1">
-                  <span class="hc-field-label">{{ t.image.maskInverted }}</span>
-                  <input type="checkbox" :checked="imageMaskInverted" @change="onMaskInvertedToggle" />
-                </label>
-              </Tooltip>
-            </div>
-
-            <!-- Dither -->
-            <Tooltip :text="t.fill.ditherTip">
-              <label class="flex items-center justify-between pl-1 pt-1 border-t border-[color:var(--border)]">
-                <span class="hc-field-label">{{ t.fill.ditherLabel }}</span>
-                <input type="checkbox" :checked="isDither" @change="toggleImageDither" />
-              </label>
-            </Tooltip>
-          </div>
-        </details>
+        <!-- M13-D：ImageElement 段 -->
+        <ImageElementSection
+          v-if="isImage"
+          :element="selected as ImageElement"
+          :locked="project.isLocked"
+          @update="sendUpdate"
+        />
       </div>
     </section>
 
     <!-- Elements（当前活动层内的元素列表）-->
-    <section class="flex flex-col border-t border-[color:var(--border)] max-h-[35%] min-h-[100px]">
-      <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
-        <Layers class="size-3.5" />
-        <span>{{ t.elements.header }}</span>
-        <span class="ml-auto text-[10px] font-normal normal-case">{{ t.elements.count(elementCount) }}</span>
-      </header>
-      <div v-if="activeLayerLocked" class="px-3 py-1.5 text-[10px] text-[color:var(--muted-foreground)] bg-[color:var(--muted)] border-b border-[color:var(--border)]">
-        {{ t.elements.lockedHint }}
-      </div>
-      <ul class="overflow-y-auto flex-1">
-        <li v-if="elementCount === 0" class="p-3 text-xs text-[color:var(--muted-foreground)]">
-          {{ activeLayerLocked ? t.elements.emptyLocked : t.elements.empty }}
-        </li>
-        <li
-          v-for="(el, idx) in project.state?.elements ?? []"
-          :key="el.id"
-          :draggable="!activeLayerLocked"
-          class="px-3 py-1.5 flex items-center gap-2 text-xs cursor-pointer hover:bg-[color:var(--accent)] transition-colors"
-          :class="{
-            'bg-[color:var(--accent)]': ui.isSelected(el.id),
-            'opacity-50': dragIdx === idx,
-            'ring-1 ring-[color:var(--ring)] ring-inset': dragOverIdx === idx && dragIdx !== idx,
-            'cursor-not-allowed': activeLayerLocked,
-          }"
-          @click="(e) => (e.shiftKey || e.metaKey || e.ctrlKey) ? ui.toggleSelection(el.id) : ui.selectElement(el.id)"
-          @dragstart="(e) => onElementDragStart(e, idx)"
-          @dragover="(e) => onElementDragOver(e, idx)"
-          @dragleave="onElementDragLeave"
-          @drop="(e) => onElementDrop(e, idx)"
-          @dragend="onElementDragEnd"
-        >
-          <span class="w-5 text-[10px] text-[color:var(--muted-foreground)] tabular-nums">{{ idx }}</span>
-          <span class="flex-1 truncate">
-            {{ el.type }}
-            <span v-if="el.type === 'text'" class="opacity-60">· "{{ (el as any).text }}"</span>
-          </span>
-          <button
-            class="p-0.5 rounded hover:bg-[color:var(--background)] disabled:opacity-30 disabled:cursor-not-allowed"
-            :title="activeLayerLocked ? t.elements.lockedHint : t.elements.toggleVisible(el.visible)"
-            :disabled="activeLayerLocked"
-            @click.stop="ws.send('element.update', { elementId: el.id, patch: { visible: !el.visible } }); (el as any).visible = !el.visible;"
-          >
-            <component :is="el.visible ? Eye : EyeOff" class="size-3" :class="el.visible ? '' : 'opacity-40'" />
-          </button>
-          <button
-            class="p-0.5 rounded hover:bg-[color:var(--background)] disabled:opacity-30 disabled:cursor-not-allowed"
-            :title="activeLayerLocked ? t.elements.lockedHint : t.elements.toggleLock(el.locked)"
-            :disabled="activeLayerLocked"
-            @click.stop="ws.send('element.update', { elementId: el.id, patch: { locked: !el.locked } }); (el as any).locked = !el.locked;"
-          >
-            <component :is="el.locked ? Lock : Unlock" class="size-3" :class="el.locked ? '' : 'opacity-40'" />
-          </button>
-        </li>
-      </ul>
-    </section>
+    <ElementListSection />
     </template> <!-- M12-D：v-else 结束（Properties 块只在非 brush 工具显示） -->
   </aside>
 </template>
 
 <style scoped>
-/* 手写样式（Tailwind 4 scoped style 不支持 @apply，改直接 CSS）。 */
-.hc-field-label {
-    font-size: 10px;
-    color: var(--muted-foreground);
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-}
-.hc-input {
-    width: 100%;
-    padding: 0.25rem 0.375rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border-radius: 4px;
-    background: var(--background);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-}
-.hc-input:focus {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-}
-.hc-color {
-    width: 100%;
-    height: 1.5rem;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    cursor: pointer;
-    padding: 0;
-    background: transparent;
-}
-.hc-elem-slider {
-    height: 14px;
-    background: transparent;
-    accent-color: var(--ring);
-}
-textarea.hc-input {
-    min-height: 2.5rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    resize: none;
-}
 /* 2026-05-14 lock-state：locked 时整栏禁用编辑。pointer-events: none 完全屏蔽点击 / 输入 / 拖拽；
    opacity 60% 提供视觉反馈让用户知道控件不可用。 */
 .hc-readonly-panel section,
