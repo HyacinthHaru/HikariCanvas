@@ -42,6 +42,9 @@ public final class Database implements AutoCloseable {
         // SQLite 特定：WAL 模式（读写并发友好）+ 外键约束
         cfg.addDataSourceProperty("journal_mode", "WAL");
         cfg.addDataSourceProperty("foreign_keys", "true");
+        // M15.1 P0-31：WAL 下并发写撞 BUSY 会立即抛 SQLITE_BUSY；5s busy_timeout
+        // 让 SQLite 内部自旋重试，配合 HikariCP 4 连接消除竞争异常。
+        cfg.addDataSourceProperty("busy_timeout", "5000");
 
         this.dataSource = new HikariDataSource(cfg);
         this.jdbi = Jdbi.create(dataSource).installPlugin(new SQLitePlugin());

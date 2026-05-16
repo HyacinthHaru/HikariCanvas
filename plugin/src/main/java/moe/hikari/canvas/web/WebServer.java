@@ -77,8 +77,16 @@ public final class WebServer {
     private final moe.hikari.canvas.image.UploadHandler uploadHandler;
     private final moe.hikari.canvas.template.TemplatePublisher templatePublisher;
     private final moe.hikari.canvas.storage.TemplateRepo templateRepo;
-    /** M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes（自然 LRU 容量靠 GC）。 */
-    private final ConcurrentMap<String, byte[]> wallPreviewCache = new ConcurrentHashMap<>();
+    /**
+     * M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes。
+     * M15.1 P0-16：Caffeine 替代 ConcurrentHashMap（ConcurrentHashMap 不收缩）；
+     * 5 分钟 access TTL + 上限 100 项。
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, byte[]> wallPreviewCache =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(100)
+                    .expireAfterAccess(java.time.Duration.ofMinutes(5))
+                    .build();
     private Javalin app;
 
     /** 活跃 session → 绑定的 WS 连接；用于服务端主动推送（state.snapshot / state.patch）。 */
@@ -131,8 +139,10 @@ public final class WebServer {
             // Jetty WS 默认 idleTimeout = 30s，太短；玩家停手 30s 就被踢。
             // 调到 60s + 前端每 20s 发应用层 ping 保活，两层兜底。
             // 真正的 session 超时由 SessionReaper 负责（wsGrace 5min / idle 30min）。
-            cfg.jetty.modifyWebSocketServletFactory(
-                    factory -> factory.setIdleTimeout(Duration.ofSeconds(60)));
+            cfg.jetty.modifyWebSocketServletFactory(factory -> {
+                factory.setIdleTimeout(Duration.ofSeconds(60));
+                factory.setMaxTextMessageSize(65536);  // M15.1 P0-9 + P1-Web-3：64KB 上限防 WS flood
+            });
 
             // 静态资源手写 GET（因 Javalin 7 staticFiles.add + fat jar 的 directory
             // discovery 有 bug，改为显式读 classpath 资源）。覆盖 Vite 产物：
@@ -183,7 +193,7 @@ public final class WebServer {
                         String wid = ctx.pathParam("id");
                         var w = wallRepo.loadById(wid).orElse(null);
                         if (w == null) { ctx.status(404); return; }
-                        byte[] png = wallPreviewCache.computeIfAbsent(
+                        byte[] png = wallPreviewCache.get(
                                 wid + "@" + w.updatedAt(),
                                 key -> wallPreviewService.renderPng(w.state()));
                         if (png == null) { ctx.status(500); return; }
@@ -337,7 +347,7 @@ public final class WebServer {
         for (moe.hikari.canvas.storage.TemplateRepo.Row r : rows) {
             Map<String, Object> m = new java.util.LinkedHashMap<>();
             m.put("templateId", r.templateId());
-            m.put("ownerUuid", r.ownerUuid() == null ? null : r.ownerUuid().toString());
+            // M15.1 P0-30：v1 隐私——公开端点不暴露 ownerUuid；保留 ownerName 用于"我的"判定的友好展示
             m.put("ownerName", r.ownerName());
             m.put("displayName", r.displayName());
             m.put("description", r.description());
@@ -915,9 +925,9 @@ public final class WebServer {
                     return;
                 }
                 wallRepo.markUnpublished(wallId);
-                java.util.HashMap<String, Object> ackPayload = new java.util.HashMap<>();
-                ackPayload.put("lockedAt", null);
-                ctx.send(Envelope.of("ack", in.id(), ackPayload));
+                // M15.1 P0-2：全局 JsonInclude.NON_NULL 会把 lockedAt: null 字段吞掉，前端收空对象；
+                // 改用显式布尔 locked: false（协议变更，前端 wsClient.ts 同步调整）
+                ctx.send(Envelope.of("ack", in.id(), Map.of("locked", false)));
             }
             case "wall.alias" -> {
                 String alias = stringOrNull(payload.get("alias"));

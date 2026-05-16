@@ -37,9 +37,17 @@ dependencies {
     implementation("org.jdbi:jdbi3-core:3.52.1")
     implementation("org.jdbi:jdbi3-sqlite:3.52.1")
 
+    // M15 内存上限：wallPreviewCache 等需要 LRU + TTL（替代 ConcurrentHashMap 无界）
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+
     // M4-T11 snapshot 测试台
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // M15 测试基建：MockBukkit（FrameDeployer / wall.lock owner-only 等需要 Bukkit world / entity 设施）
+    testImplementation("com.github.seeseemelk:MockBukkit-v1.21:3.123.0")
+    // M15 测试基建：JavalinTest（HTTP / WS 端到端测试 — UploadHandler 全场景 / sessionId 鉴权）
+    testImplementation("io.javalin:javalin-testtools:7.1.0")
 }
 
 tasks.test {

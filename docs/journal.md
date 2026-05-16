@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-05-16 · M15.1 ultrareview Phase 1（9 处立即修复 + 3 依赖引入）
+
+**起因**：`docs/ultrareview-2026-05-15.md` 列 38+ P0 真 bug。5 个子 agent 并行核验后 ~37 条属实，1 条（双端 canonicalCharWidth 跨端差异）实际不属实但缺测试覆盖。规划 M15 整体重构（A-E 5 个 phase commit batch），约 35-40h wall-clock。
+
+### M15.1 Phase 1 修复内容（9 处）
+
+**后端散点（Group X agent）**：
+
+- `Database.java:46` 加 `busy_timeout=5000`（修 P0-31：WAL 模式 2 并发写撞 BUSY 立即抛 → SQLite 5s 自旋重试）
+- `paper-plugin.yml` 补 5 个权限节点：`canvas.delete.own / canvas.delete.any / canvas.alias.own / canvas.alias.any / canvas.admin.bypass-lock`（修 P0-20 + 为 M15.3 方案 C 鉴权预留）
+- `ProjectState.Canvas` compact constructor 加 `widthMaps/heightMaps ∈ [1, 32]` 校验（修 P0-Render-1：远程一条 WS op 即可 48GB heap OOM 服务器崩；32×32 = 1024 maps 上限符合 PROPOSAL §3.1 设计上限的 4x 富余）
+- `UploadHandler.decoderPool` `newCachedThreadPool` → 有界 `ThreadPoolExecutor(2, 2, ArrayBlockingQueue<>(8), AbortPolicy)` + `RejectedExecutionException` 捕获转 503（修 P0-13：unbounded fork 攻击）
+
+**WebServer 散点（Group Y agent）**：
+
+- `wallPreviewCache` `ConcurrentHashMap<String, byte[]>` → Caffeine `maximumSize(100).expireAfterAccess(5min)`（修 P0-16：ConcurrentHashMap 不收缩，旧 key 永不淘汰，攻击者编辑 1000 次 → 5GB 缓存）
+- `cfg.jetty.modifyWebSocketServletFactory` 加 `factory.setMaxTextMessageSize(65536)`（修 P0-9 + P1-Web-3：WS 大消息 DoS）
+- `handleTemplatesList` 删除 `m.put("ownerUuid", ...)`（修 P0-30：公开 `/api/templates` 端点泄漏 owner UUID；保留 ownerName 给"我的模板"判定）
+- `wall.unlock` ack `{lockedAt: null}` → `{locked: false}` 显式布尔（修 P0-2：全局 JsonInclude.NON_NULL 把 null 字段序列化时删，前端收到空对象 → unlock UI 不切回；改协议为显式 locked boolean 字段）
+
+**前端散点（Group Z agent）**：
+
+- `App.vue` window.__hk stub + 实际 send 入口两处都包 `if (import.meta.env.DEV)` 守卫（修 P0-22：生产构建 Vite 死代码消除让 `window.__hk` 不存在，F12 console 无法绕过 lock）
+- `wsClient.ts handleAck` 加判 `p.locked === false` 触发 `project.lockedAt = null`（P0-2 协议变更前端配套；保留旧 `typeof p.lockedAt === 'number'` 分支处理 wall.lock ack）
+
+### 依赖引入（plugin/build.gradle.kts）
+
+- `com.github.ben-manes.caffeine:caffeine:3.1.8` — wallPreviewCache 用
+- `com.github.seeseemelk:MockBukkit-v1.21:3.123.0` — M15+ FrameDeployer / wall.lock owner-only 等 Bukkit world/Entity 设施测试
+- `io.javalin:javalin-testtools:7.1.0` — M15+ HTTP / WS 端到端测试（UploadHandler 全场景 / sessionId 鉴权）
+
+### 验证
+
+- `./gradlew :plugin:test`：**364 case 全过**（M14 baseline 不漂移；macOS Finder 副本 `* 2.xml` 清理）
+- `vite build`：**477.58 KB JS**（M14 baseline 477.79 → -0.21 KB；DEV 守卫消除冗余分支带来微减）
+- 编译 / 类型检查全过
+
+### 关键决策（这次会话拍板）
+
+1. **Q1 鉴权方案 = C（你提议）**：仅在 `SessionManager.open` 路径鉴权 lock + owner + `canvas.admin.bypass-lock`；后端编辑 op 透明（CLAUDE.md §lock-state 第 2 条保留）。完美兼容未来动态画板（PAPI / 数据源），因为动态更新走渲染期占位符解析路径（P-1），不经过 open。M15.3 实施。
+2. **Q3 V005 处理**：pre-release 激进改可接受；MigrationRunner 加 auto-backup 机制（默认关 / 0.1.0 发版后默认开）。M15.4 实施。
+3. **god class 拆分纳入 M15.2**（不延后）。
+4. **Caffeine + MockBukkit + JavalinTest 现在加**（不延后）。
+5. **commit 策略**：5 个 phase batch（约 9 个 commit），每个 phase 完成后推一次。
+
+### 工期
+
+约 2.5h（agent 派发 / 验证 / commit；3 个 agent 并行节省 ~70% wall-clock vs 串行）。
+
+### 改动文件清单（10 改动 + 1 新依赖）
+
+- `plugin/build.gradle.kts`（+3 依赖）
+- `plugin/src/main/java/moe/hikari/canvas/storage/Database.java`
+- `plugin/src/main/java/moe/hikari/canvas/state/ProjectState.java`
+- `plugin/src/main/java/moe/hikari/canvas/image/UploadHandler.java`
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`（4 处）
+- `plugin/src/main/resources/paper-plugin.yml`（+5 节点）
+- `web/src/App.vue`
+- `web/src/network/wsClient.ts`
+- `docs/journal.md`
+
+---
+
 ## 2026-05-15 · M14 创意工坊（A-F 六段全栈）
 
 **核心**：玩家把当前画布发布为模板；服务器内的模板市场（精选优先 + 时间倒序）；admin 可精选；模板自动文本参数化 + 用户手工命名/取消；hard delete；每玩家配额可改。

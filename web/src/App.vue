@@ -28,23 +28,27 @@ onMounted(() => {
     if (!token) {
         showHomePage.value = true;
         net.pushLog('meta', 'no token; showing homepage');
-        // 仍暴露调试入口
-        (window as unknown as Record<string, unknown>).__hk = {
-            send: () => null,
-            get ws() { return null; },
-            get authenticated() { return false; },
-        };
+        // 仍暴露调试入口（仅 DEV；生产构建走 Vite 死代码消除，window.__hk 完全不存在）
+        if (import.meta.env.DEV) {
+            (window as unknown as Record<string, unknown>).__hk = {
+                send: () => null,
+                get ws() { return null; },
+                get authenticated() { return false; },
+            };
+        }
         return;
     }
     net.pushLog('meta', `token source: ${source}`);
     wsClient.connect(token);
 
-    // 暴露调试入口到 console
-    (window as unknown as Record<string, unknown>).__hk = {
-        send: (op: string, payload?: unknown) => wsClient.send(op, payload),
-        get ws() { return wsClient.raw; },
-        get authenticated() { return net.authenticated; },
-    };
+    // 暴露调试入口到 console（仅 DEV；生产构建走 Vite 死代码消除，window.__hk 完全不存在）
+    if (import.meta.env.DEV) {
+        (window as unknown as Record<string, unknown>).__hk = {
+            send: (op: string, payload?: unknown) => wsClient.send(op, payload),
+            get ws() { return wsClient.raw; },
+            get authenticated() { return net.authenticated; },
+        };
+    }
 });
 
 // M5-D2 P1：新 element 被 server 加到 state 后自动选中，方便立刻进 Properties 编辑

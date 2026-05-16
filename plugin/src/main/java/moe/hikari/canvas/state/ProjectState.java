@@ -54,6 +54,14 @@ public final class ProjectState {
             List<Guide> guides      // null/empty = 无参考线
     ) {
         public Canvas {
+            // M15.1 P0-Render-1：widthMaps/heightMaps 上限校验，防远程 OOM（48GB heap）。
+            // 32×32 = 1024 maps 上限符合 PROPOSAL.md §3.1 设计上限。
+            if (widthMaps < 1 || widthMaps > 32) {
+                throw new IllegalArgumentException("widthMaps out of range [1, 32]: " + widthMaps);
+            }
+            if (heightMaps < 1 || heightMaps > 32) {
+                throw new IllegalArgumentException("heightMaps out of range [1, 32]: " + heightMaps);
+            }
             if (guides == null) guides = List.of();
         }
 

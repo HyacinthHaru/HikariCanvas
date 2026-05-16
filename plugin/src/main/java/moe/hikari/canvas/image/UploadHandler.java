@@ -79,14 +79,21 @@ public final class UploadHandler {
         this.tokenService = tokenService;
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
-        this.decoderPool = Executors.newCachedThreadPool(new ThreadFactory() {
-            private final AtomicInteger n = new AtomicInteger();
-            @Override public Thread newThread(Runnable r) {
-                Thread t = new Thread(r, "hikari-image-decoder-" + n.incrementAndGet());
-                t.setDaemon(true);
-                return t;
-            }
-        });
+        // M15.1 P0-13：有界 ThreadPool 防 unbounded fork。线程上限 2 + 队列 8 =
+        // 同时最多 10 个上传等待，超出立即 AbortPolicy 拒（不堆积内存）。
+        this.decoderPool = new java.util.concurrent.ThreadPoolExecutor(
+                2, 2,
+                0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(8),
+                new ThreadFactory() {
+                    private final AtomicInteger n = new AtomicInteger();
+                    @Override public Thread newThread(Runnable r) {
+                        Thread t = new Thread(r, "hikari-image-decoder-" + n.incrementAndGet());
+                        t.setDaemon(true);
+                        return t;
+                    }
+                },
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     }
 
     public void shutdown() {
@@ -290,8 +297,14 @@ public final class UploadHandler {
      * {@value #IMAGEIO_TIMEOUT_MS} ms；超时 cancel 抛 {@link TimeoutException}。
      */
     private BufferedImage decodeWithTimeout(byte[] bytes) throws Exception {
-        Future<BufferedImage> fut = decoderPool.submit(
-                (Callable<BufferedImage>) () -> ImageIO.read(new ByteArrayInputStream(bytes)));
+        Future<BufferedImage> fut;
+        try {
+            fut = decoderPool.submit(
+                    (Callable<BufferedImage>) () -> ImageIO.read(new ByteArrayInputStream(bytes)));
+        } catch (java.util.concurrent.RejectedExecutionException ree) {
+            // M15.1 P0-13：bounded pool 满 → AbortPolicy 抛 → 转成上层可识别的 IOException。
+            throw new IOException("upload decoder busy; retry later", ree);
+        }
         try {
             return fut.get(IMAGEIO_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (TimeoutException te) {

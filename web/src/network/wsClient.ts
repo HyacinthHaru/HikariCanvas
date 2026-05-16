@@ -238,11 +238,11 @@ export class WsClient {
         // 2) store 副作用
         if (!payload || typeof payload !== 'object') return;
         const project = useProjectStore();
-        const p = payload as { lockedAt?: unknown; alias?: unknown };
+        const p = payload as { lockedAt?: unknown; locked?: unknown; alias?: unknown };
         if (typeof p.lockedAt === 'number') {
-            project.lockedAt = p.lockedAt;
-        } else if ('lockedAt' in p && p.lockedAt === null) {
-            project.lockedAt = null;
+            project.lockedAt = p.lockedAt;  // wall.lock ack
+        } else if (p.locked === false) {
+            project.lockedAt = null;          // wall.unlock ack（M15.1 改协议）
         }
         if (typeof p.alias === 'string') {
             project.alias = p.alias;

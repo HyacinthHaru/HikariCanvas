@@ -37,6 +37,21 @@ permissions:
   canvas.upload.bypass-limit:
     description: Bypass per-player / per-wall / total-disk image quota
     default: op
+  canvas.delete.own:
+    description: Delete walls you own (used by /canvas delete)
+    default: true
+  canvas.delete.any:
+    description: Delete any wall regardless of owner
+    default: op
+  canvas.alias.own:
+    description: Set alias on walls you own
+    default: true
+  canvas.alias.any:
+    description: Set alias on any wall (moderation)
+    default: op
+  canvas.admin.bypass-lock:
+    description: Open / edit locked walls created by others (动态展示插件 / admin)
+    default: op
   canvas.template.save:
     description: Publish the current wall as a workshop template
     default: true
