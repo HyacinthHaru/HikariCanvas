@@ -3,6 +3,7 @@ package moe.hikari.canvas.session;
 import moe.hikari.canvas.deploy.CanvasWand;
 import moe.hikari.canvas.deploy.FrameDeployer;
 import moe.hikari.canvas.deploy.WallResolver;
+import moe.hikari.canvas.storage.WallRepo;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -53,6 +54,7 @@ public final class WandListener implements Listener {
     private final SessionManager sessionManager;
     private final FrameDeployer frameDeployer;
     private final TokenService tokenService;
+    private final WallRepo wallRepo;
     private final String editorUrlTemplate;
 
     /** 第一次点 HikariCanvas ItemFrame 后记录待确认。playerUuid → (wallId, ts)。 */
@@ -62,11 +64,12 @@ public final class WandListener implements Listener {
 
     public WandListener(JavaPlugin plugin, SessionManager sessionManager,
                         FrameDeployer frameDeployer, TokenService tokenService,
-                        String editorUrlTemplate) {
+                        WallRepo wallRepo, String editorUrlTemplate) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
         this.frameDeployer = frameDeployer;
         this.tokenService = tokenService;
+        this.wallRepo = wallRepo;
         this.editorUrlTemplate = editorUrlTemplate;
     }
 
@@ -128,6 +131,17 @@ public final class WandListener implements Listener {
     // ---------- "瞄已有 wall → 二次确认 → open" ----------
 
     private void handleOpenExistingWall(Player player, String wallId) {
+        // M15.3 Phase 2 方案 C：wand 路径同步 lock check。SessionManager.open 已硬拦截,
+        // 这里多一道 ActionBar 提示让玩家立刻明白不必再点。
+        WallRepo.Wall w = wallRepo.loadById(wallId).orElse(null);
+        if (w != null && w.publishedAt() != null
+                && !player.getUniqueId().equals(w.ownerUuid())
+                && !player.hasPermission("canvas.admin.bypass-lock")) {
+            player.sendActionBar(Component.text(
+                    "Wall '" + wallId + "' is locked by " + w.ownerName(),
+                    NamedTextColor.RED));
+            return;
+        }
         long now = System.currentTimeMillis();
         PendingOpen pending = pendingOpens.get(player.getUniqueId());
         if (pending != null && pending.wallId().equals(wallId)
@@ -164,6 +178,11 @@ public final class WandListener implements Listener {
         }
         if (r instanceof SessionManager.OpenResult.BindFailed bf) {
             player.sendMessage(Component.text("Cannot open: " + bf.detail(), NamedTextColor.RED));
+            return;
+        }
+        if (r instanceof SessionManager.OpenResult.Forbidden f) {
+            player.sendMessage(Component.text(
+                    "Wall is locked: " + f.message(), NamedTextColor.RED));
             return;
         }
         SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;

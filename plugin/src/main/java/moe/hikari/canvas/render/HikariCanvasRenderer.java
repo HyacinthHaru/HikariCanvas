@@ -44,6 +44,17 @@ public final class HikariCanvasRenderer extends MapRenderer {
         pixelsByMapId.remove(mapId);
     }
 
+    /**
+     * M15.3 P0-25：批量清除像素缓存（wall delete / mapPool.releaseWall 路径调用）。
+     * 防止 mapId 复用时旧 wall 的像素显示在新 wall（跨 wall 像素泄漏）。
+     */
+    public void invalidate(java.util.Collection<Integer> mapIds) {
+        if (mapIds == null) return;
+        for (Integer id : mapIds) {
+            if (id != null) pixelsByMapId.remove(id);
+        }
+    }
+
     @Override
     public void render(MapView map, MapCanvas canvas, Player player) {
         byte[] pixels = pixelsByMapId.get(map.getId());

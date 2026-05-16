@@ -3,6 +3,7 @@ package moe.hikari.canvas.session;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.pool.PoolExhaustedException;
+import moe.hikari.canvas.render.HikariCanvasRenderer;
 import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.storage.AuditLog;
@@ -52,6 +53,8 @@ public final class SessionManager {
     private final WallResolver wallResolver;
     private final AuditLog auditLog;
     private final WallRepo wallRepo;
+    /** M15.3 P0-25：deleteWall 释放 map 后清除像素缓存，防 mapId 复用导致跨 wall 像素泄漏。可空（不强制依赖）。 */
+    private final HikariCanvasRenderer canvasRenderer;
 
     private final Map<String, Session> byId = new HashMap<>();
     private final Map<UUID, String> byPlayer = new HashMap<>();
@@ -67,11 +70,21 @@ public final class SessionManager {
 
     public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver,
                           AuditLog auditLog, WallRepo wallRepo) {
+        this(log, mapPool, wallResolver, auditLog, wallRepo, null);
+    }
+
+    /**
+     * M15.3 P0-25：带 renderer 引用的构造器。生产路径走此构造，测试可走 5-arg 版本传 null。
+     */
+    public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver,
+                          AuditLog auditLog, WallRepo wallRepo,
+                          HikariCanvasRenderer canvasRenderer) {
         this.log = log;
         this.mapPool = mapPool;
         this.wallResolver = wallResolver;
         this.auditLog = auditLog;
         this.wallRepo = wallRepo;
+        this.canvasRenderer = canvasRenderer;
     }
 
     // ---------- SELECTING 阶段 ----------
@@ -199,18 +212,36 @@ public final class SessionManager {
             return new ConfirmResult.NotReady(
                     "this location has stale wall data; /canvas delete <id> to reset, or pick empty space");
         } else {
-            // 全空 → 新建
+            // 全空 → 新建。
+            // M15.3 P0-32 v1：先 reserve（mapPool 自带 byId.put 内存状态难协调事务，留在事务外），
+            // 再 createWithMapIds 单事务 INSERT walls 行（含 mapIds）。避免旧路径 create + updateMapIds
+            // 两步无事务（中间 mapPool 故障会留下 mapIds 为空的 walls 行）。
+            // 完整 mapPool + walls 跨子系统事务一致性 → M15.4 phase。
             ps = new ProjectState(wall.width(), wall.height());
-            wallId = wallRepo.create(key, ps, List.of(),
-                    wall.width(), wall.height(),
-                    s.playerUuid(), s.playerName());
+            // 用占位 wall_id 先 reserve（reserveForWall 内部仅靠 owner 字符串区分，事后无需回填）
+            String reserveOwnerWallId = "pending-" + UUID.randomUUID();
             try {
-                mapIds = mapPool.reserveForWall(wallId, wall.mapCount());
+                mapIds = mapPool.reserveForWall(reserveOwnerWallId, wall.mapCount());
             } catch (PoolExhaustedException e) {
-                wallRepo.delete(wallId);
                 return new ConfirmResult.PoolExhausted(e.getMessage());
             }
-            wallRepo.updateMapIds(wallId, mapIds);
+            try {
+                wallId = wallRepo.createWithMapIds(key, ps, mapIds,
+                        wall.width(), wall.height(),
+                        s.playerUuid(), s.playerName());
+            } catch (RuntimeException e) {
+                // 回滚 map reserve（释放刚刚分配的 maps）
+                mapPool.releaseWall(reserveOwnerWallId);
+                throw e;
+            }
+            // 把 reserve 时的占位 owner 改写为真正的 wallId（bindToWall 接受 FREE 或同 wallId 的 RESERVED，
+            // 但我们这里的 maps owner 是 pending-*，需要先 release 再 bind 到正确 wallId）。
+            mapPool.releaseWall(reserveOwnerWallId);
+            if (!mapPool.bindToWall(wallId, mapIds)) {
+                // 极罕见：maps 在两步之间被别处抢占。回滚 walls 行。
+                wallRepo.delete(wallId);
+                return new ConfirmResult.PoolExhausted("map bind race after reserve");
+            }
             newWall = true;
         }
 
@@ -243,12 +274,25 @@ public final class SessionManager {
         record AlreadyHasSession(SessionState current) implements OpenResult {}
         record WallOccupied(String otherSessionId, UUID otherPlayer) implements OpenResult {}
         record BindFailed(String detail) implements OpenResult {}
+        /** M15.3 Phase 2 方案 C：wall 已锁定 + caller 非 owner + 无 bypass 权限 → 拒绝 open。 */
+        record Forbidden(String message) implements OpenResult {}
     }
 
     public synchronized OpenResult open(UUID playerUuid, String playerName, String wallIdOrAlias) {
         var w = wallRepo.loadById(wallIdOrAlias).orElse(
                 wallRepo.loadByAlias(wallIdOrAlias).orElse(null));
         if (w == null) return new OpenResult.NotFound();
+
+        // M15.3 Phase 2 方案 C：lock-aware open。后端编辑 op 仍透明放行（CLAUDE.md §lock-state 第 2 条），
+        // 仅在 open 入口拦截：locked wall + 非 owner + 无 canvas.admin.bypass-lock 权限 → Forbidden。
+        if (w.publishedAt() != null && !playerUuid.equals(w.ownerUuid())) {
+            org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(playerUuid);
+            boolean bypass = live != null && live.hasPermission("canvas.admin.bypass-lock");
+            if (!bypass) {
+                return new OpenResult.Forbidden(
+                        "wall '" + w.wallId() + "' is locked by its owner");
+            }
+        }
 
         // M5.5 修：玩家若已绑同一 wall（浏览器关了但 session 还 ACTIVE）→ 幂等重用 + 重发 URL；
         // 绑别的 wall 才报 AlreadyHasSession，避免"5min idle 等不及"的卡死。
@@ -389,6 +433,10 @@ public final class SessionManager {
             }
         }
         List<Integer> released = mapPool.releaseWall(wallId);
+        // M15.3 P0-25：清像素缓存，防 mapId 复用导致旧像素显示在新 wall。
+        if (canvasRenderer != null && !released.isEmpty()) {
+            canvasRenderer.invalidate(released);
+        }
         wallRepo.delete(wallId);
         auditLog.record("WALL_DELETE", null, null, null, null,
                 Map.of("wall_id", wallId, "released_maps", released.size()));

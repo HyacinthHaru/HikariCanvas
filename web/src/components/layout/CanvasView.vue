@@ -569,6 +569,8 @@ function onDragEnd(ev: DragEvt, id: string): void {
     }
 
     // 多选：把 leader 的 delta 应用到其他选中 element，逐个发 ws
+    // M15.3 P0-1：判等用 init 记录的初始位置而非已被 dragmove mutate 后的 otherEl.x/y，
+    //   否则 dragmove 同步后 otherEl.x === otherX 恒成立 → ws.send 永不发 → 服务端漏更新
     if (dragInitial.value.size > 1) {
         const initLeader = dragInitial.value.get(id);
         if (initLeader) {
@@ -580,7 +582,7 @@ function onDragEnd(ev: DragEvt, id: string): void {
                 if (!otherEl) continue;
                 const otherX = init.x + dx;
                 const otherY = init.y + dy;
-                if (otherEl.x !== otherX || otherEl.y !== otherY) {
+                if (init.x !== otherX || init.y !== otherY) {
                     // dragmove 已经乐观更新过；这里只发 ws 确保服务端落地
                     ws.send('element.transform', { elementId: sid, x: otherX, y: otherY });
                 }

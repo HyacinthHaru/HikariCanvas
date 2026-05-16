@@ -252,6 +252,11 @@ public final class CanvasCommand {
             player.sendMessage(Component.text("Cannot bind wall: " + bf.detail(), NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
+        if (r instanceof SessionManager.OpenResult.Forbidden f) {
+            player.sendMessage(Component.text(
+                    "Wall is locked: " + f.message(), NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
         SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;
         // 签发 token
         String token = tokenService.issue(player.getUniqueId(), player.getName(), ok.session().id());
@@ -318,6 +323,21 @@ public final class CanvasCommand {
         if (!ALIAS_PATTERN.matcher(alias).matches()) {
             player.sendMessage(Component.text(
                     "Alias must match [A-Za-z0-9_-]{2,32}.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        // M15.3 P0-19：alias 操作必须是 wall owner（或带 canvas.alias.any 权限）
+        var wallOpt = wallRepo.loadById(s.wallId());
+        if (wallOpt.isEmpty()) {
+            player.sendMessage(Component.text("Wall not found.", NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
+        var wall = wallOpt.get();
+        boolean isOwner = wall.ownerUuid().equals(player.getUniqueId());
+        boolean canAny = player.hasPermission("canvas.alias.any");
+        if (!isOwner && !canAny) {
+            player.sendMessage(Component.text(
+                    "Only the wall owner can change alias.",
+                    NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
         boolean ok = wallRepo.setAlias(s.wallId(), alias);

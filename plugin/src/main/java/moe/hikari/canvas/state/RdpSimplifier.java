@@ -1,16 +1,21 @@
 package moe.hikari.canvas.state;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Ramer-Douglas-Peucker 折线简化（M12-B 引入）。
  *
- * <p>经典递归算法：找出"端点连线"的最远点，若距离 > epsilon 则保留并递归两侧；
+ * <p>经典算法：找出"端点连线"的最远点，若距离 > epsilon 则保留并继续处理两侧；
  * 否则该段整体压缩为 (start, end) 两点。{@code O(n log n)} 平均、{@code O(n²)} 最坏。</p>
  *
  * <p><b>笔触特化：</b> {@link BrushPoint} 含 {@code pressure} 字段；RDP 仅按 (x, y) 计算距离，
  * 保留点的原始 pressure（不平均、不插值），这样 brush.end 后简化产物仍带原始压感数据。</p>
+ *
+ * <p><b>M15.3 P0-11：迭代化。</b> 原递归实现最坏栈深 ≈ n；MAX_BRUSH_POINTS_PER_STROKE=5000
+ * 时配合 JVM 512KB 栈约 ~2500 帧后 StackOverflowError。改用 {@link ArrayDeque} 显式栈
+ * 模拟递归，算法等价（同输入同输出），栈在堆上不受 JVM 线程栈大小限制。</p>
  */
 public final class RdpSimplifier {
 
@@ -30,7 +35,7 @@ public final class RdpSimplifier {
         boolean[] keep = new boolean[n];
         keep[0] = true;
         keep[n - 1] = true;
-        recurse(points, 0, n - 1, epsilon * epsilon, keep);
+        simplifyIterative(points, 0, n - 1, epsilon * epsilon, keep);
         List<BrushPoint> out = new ArrayList<>();
         for (int i = 0; i < n; i++) {
             if (keep[i]) out.add(points.get(i));
@@ -39,26 +44,34 @@ public final class RdpSimplifier {
     }
 
     /**
-     * 递归 RDP：找 [lo, hi] 之间距离 (lo, hi) 端点线段最远的点。
+     * 迭代版 RDP：用 ArrayDeque 模拟递归调用栈。算法语义与递归版完全一致——
+     * 每个 [lo, hi] 区间找最远点，距离 > epsilon 则保留并把两个子区间压栈；否则丢弃整段中间点。
      * 比较的是平方距离，避免 sqrt（{@code epsilon2 = epsilon × epsilon}）。
      */
-    private static void recurse(List<BrushPoint> pts, int lo, int hi, double epsilon2, boolean[] keep) {
-        if (hi <= lo + 1) return;
-        BrushPoint a = pts.get(lo);
-        BrushPoint b = pts.get(hi);
-        double maxDist2 = 0;
-        int maxIdx = -1;
-        for (int i = lo + 1; i < hi; i++) {
-            double d2 = perpendicularDistanceSquared(pts.get(i), a, b);
-            if (d2 > maxDist2) {
-                maxDist2 = d2;
-                maxIdx = i;
+    private static void simplifyIterative(List<BrushPoint> pts, int lo, int hi,
+                                          double epsilon2, boolean[] keep) {
+        ArrayDeque<int[]> stack = new ArrayDeque<>();
+        stack.push(new int[]{lo, hi});
+        while (!stack.isEmpty()) {
+            int[] range = stack.pop();
+            int s = range[0], e = range[1];
+            if (e <= s + 1) continue;
+            BrushPoint a = pts.get(s);
+            BrushPoint b = pts.get(e);
+            double maxDist2 = 0;
+            int maxIdx = -1;
+            for (int i = s + 1; i < e; i++) {
+                double d2 = perpendicularDistanceSquared(pts.get(i), a, b);
+                if (d2 > maxDist2) {
+                    maxDist2 = d2;
+                    maxIdx = i;
+                }
             }
-        }
-        if (maxDist2 > epsilon2 && maxIdx > 0) {
-            keep[maxIdx] = true;
-            recurse(pts, lo, maxIdx, epsilon2, keep);
-            recurse(pts, maxIdx, hi, epsilon2, keep);
+            if (maxDist2 > epsilon2 && maxIdx > 0) {
+                keep[maxIdx] = true;
+                stack.push(new int[]{s, maxIdx});
+                stack.push(new int[]{maxIdx, e});
+            }
         }
     }
 

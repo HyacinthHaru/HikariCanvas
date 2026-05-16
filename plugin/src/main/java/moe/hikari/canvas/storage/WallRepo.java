@@ -82,6 +82,65 @@ public final class WallRepo {
     }
 
     /**
+     * M15.3 P0-32 v1：原子地写一行 walls（含 mapIds）。confirm 路径先 reserve 拿 mapIds，
+     * 再一次性 INSERT，避免 create + updateMapIds 两步无事务半态（旧路径若 updateMapIds 失败，
+     * walls 行 mapIds 字段为空字符串，但 mapPool 已 reserve）。
+     *
+     * <p>本方法替代旧的 {@code create + updateMapIds} 组合；旧 {@link #create} 保留以兼容
+     * 其他可能的调用方（如 templatePublisher / future restore paths）。</p>
+     *
+     * @return 生成的 wall_id；冲突 5 次则抛
+     */
+    public String createWithMapIds(WallKey key, ProjectState state, List<Integer> mapIds,
+                                   int widthMaps, int heightMaps, UUID ownerUuid, String ownerName) {
+        String json;
+        try {
+            json = mapper.writeValueAsString(state);
+        } catch (Exception e) {
+            throw new IllegalStateException("serialize ProjectState failed", e);
+        }
+        String mapIdsCsv = mapIds == null ? "" :
+                mapIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+        long now = System.currentTimeMillis();
+
+        for (int attempt = 0; attempt < 5; attempt++) {
+            String wallId = generateWallId();
+            try {
+                jdbi.useTransaction(h -> h.createUpdate(
+                        "INSERT INTO walls(wall_id, world, origin_x, origin_y, origin_z, facing, "
+                                + "width_maps, height_maps, map_ids, project_json, "
+                                + "owner_uuid, owner_name, alias, published_at, "
+                                + "template_id, template_version, created_at, updated_at) "
+                                + "VALUES(:id, :world, :ox, :oy, :oz, :facing, "
+                                + ":w, :h, :mapIds, :json, :ouuid, :oname, NULL, NULL, "
+                                + "NULL, NULL, :now, :now)")
+                        .bind("id", wallId)
+                        .bind("world", key.world())
+                        .bind("ox", key.originX())
+                        .bind("oy", key.originY())
+                        .bind("oz", key.originZ())
+                        .bind("facing", key.facing().name())
+                        .bind("w", widthMaps)
+                        .bind("h", heightMaps)
+                        .bind("mapIds", mapIdsCsv)
+                        .bind("json", json)
+                        .bind("ouuid", ownerUuid.toString())
+                        .bind("oname", ownerName)
+                        .bind("now", now)
+                        .execute());
+                return wallId;
+            } catch (Exception e) {
+                String msg = e.getMessage();
+                if (msg != null && msg.contains("UNIQUE constraint failed: walls.wall_id")) {
+                    continue; // wall_id 撞了重试
+                }
+                throw new IllegalStateException("createWithMapIds failed", e);
+            }
+        }
+        throw new IllegalStateException("wall_id collision 5x; SecureRandom broken?");
+    }
+
+    /**
      * 创建一个新 wall 行，自动生成 wall_id。返回生成的 wall_id；冲突 5 次则抛。
      * 调用方应在 confirm（新建路径）时一次调用，之后通过 {@link #updateState} 增量更新。
      */

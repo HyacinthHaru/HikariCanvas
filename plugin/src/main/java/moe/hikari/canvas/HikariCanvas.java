@@ -60,6 +60,8 @@ public final class HikariCanvas extends JavaPlugin {
     private AuditLog auditLog;
     private TokenService tokenService;
     private BukkitTask tokenPurgeTask;
+    // M15.3 P0-24：MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。
+    private BukkitTask mapPoolLeakTask;
     private MapPool mapPool;
     private WallResolver wallResolver;
     private SessionManager sessionManager;
@@ -133,7 +135,7 @@ public final class HikariCanvas extends JavaPlugin {
                     + " failed=" + wallV2Stats.failed());
         }
 
-        sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo);
+        sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo, canvasRenderer);
 
         mapPacketSender = new MapPacketSender();
         // PlaceholderRenderer 也注入 CanvasProjector，用于"state pristine 回 placeholder"语义
@@ -224,7 +226,7 @@ public final class HikariCanvas extends JavaPlugin {
         // WandListener 注册：需要 frameDeployer / tokenService / editorUrlTemplate 来支持
         // "瞄已有 ItemFrame 二次确认 → open" 路径
         getServer().getPluginManager().registerEvents(
-                new WandListener(this, sessionManager, frameDeployer, tokenService, editorUrlTemplate),
+                new WandListener(this, sessionManager, frameDeployer, tokenService, wallRepo, editorUrlTemplate),
                 this);
         getServer().getPluginManager().registerEvents(
                 new FrameProtectionListener(frameDeployer), this);
@@ -247,6 +249,22 @@ public final class HikariCanvas extends JavaPlugin {
                 templatePublisher, templateRepo, this,
                 version, this::paintAllSessionMaps);
         webServer.start();
+
+        // M15.3 P0-24：MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。
+        // 同 tokenPurgeTask 模式：异步周期跑；扫所有 RESERVED 找 owner 已不在 walls 表的强制 FREE。
+        mapPoolLeakTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
+                this,
+                () -> {
+                    java.util.Set<String> liveWallIds = wallRepo.loadAll().stream()
+                            .map(w -> w.wallId())
+                            .collect(java.util.stream.Collectors.toSet());
+                    int leaked = mapPool.detectLeaks(liveWallIds);
+                    if (leaked > 0) {
+                        getLogger().warning("[mapPool] detected " + leaked + " leaked map(s); released");
+                    }
+                },
+                20L * 60 * 5,    // 启动后 5 分钟首次跑
+                20L * 60 * 5);   // 每 5 分钟一次
 
         getLogger().info("HikariCanvas enabled (skeleton)");
     }
@@ -274,6 +292,10 @@ public final class HikariCanvas extends JavaPlugin {
         if (tokenPurgeTask != null) {
             tokenPurgeTask.cancel();
             tokenPurgeTask = null;
+        }
+        if (mapPoolLeakTask != null) {
+            mapPoolLeakTask.cancel();
+            mapPoolLeakTask = null;
         }
         if (webServer != null) {
             webServer.stop();

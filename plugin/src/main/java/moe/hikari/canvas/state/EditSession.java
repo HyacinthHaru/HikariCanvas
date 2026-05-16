@@ -44,6 +44,10 @@ public final class EditSession {
     private static final int MAX_DIM = 10_000;
     private static final int MAX_FONT_SIZE = 512;
     private static final int MAX_STROKE_WIDTH = 128;
+    /** M15.3 P0-10：mask path 最大 vertex 数（v1 仅支持预设几何，远未达上限；自由 lasso v2 才放开）。 */
+    private static final int MAX_MASK_VERTICES = 64;
+    /** M15.3 P0-10：mask path d 字符串内数字绝对值上限（element-bbox 相对，10k 已足够预设几何）。 */
+    private static final Pattern MASK_NUMBER_RE = Pattern.compile("-?\\d+(?:\\.\\d+)?");
     /** letterSpacing 容许范围（px）。负值表示压字距；极值保护渲染不死循环。 */
     private static final float MIN_LETTER_SPACING = -32f;
     private static final float MAX_LETTER_SPACING = 128f;
@@ -1721,6 +1725,8 @@ public final class EditSession {
             throw new ValidationException("INVALID_PAYLOAD", "mask.d must be string");
         }
         validatePathD(d);
+        // M15.3 P0-10：mask path 二次约束 — 坐标 ∈ [0, w] / [0, h]（element-bbox-relative）+ vertex 数 ≤ 64
+        validateMaskPathBounds(d);
         Object invRaw = m.get("inverted");
         boolean inverted;
         if (invRaw == null) {
@@ -1731,6 +1737,45 @@ public final class EditSession {
             throw new ValidationException("INVALID_PAYLOAD", "mask.inverted must be boolean");
         }
         return new Mask(d, inverted);
+    }
+
+    /**
+     * M15.3 P0-10：在 {@link #validatePathD} 之上对 mask path 加二次约束。
+     * <ul>
+     *   <li>vertex 数（M/L/Q/C 命令计数）≤ {@link #MAX_MASK_VERTICES}：v1 UI 仅暴露 4 个预设几何
+     *       （none / circle / roundedRect / ellipse），最多十几个顶点远未达上限；自由 lasso 留 v2。</li>
+     *   <li>d 内任何数字 token 的绝对值 ≤ 10000：这一层是 v1 简化校验；
+     *       精确"在 element bbox [0, w] × [0, h] 内"需要 element w/h 上下文，
+     *       此处仅约束 ≤ 10000，超出由后端 renderer 自然 clip 收尾。</li>
+     * </ul>
+     */
+    private static void validateMaskPathBounds(String d) {
+        // vertex 数 = M/L/Q/C 命令出现次数（大小写均算；Z/z 闭合不算 vertex）
+        int vertexCount = 0;
+        for (int i = 0, n = d.length(); i < n; i++) {
+            char c = d.charAt(i);
+            if (c == 'M' || c == 'L' || c == 'Q' || c == 'C'
+                    || c == 'm' || c == 'l' || c == 'q' || c == 'c') {
+                vertexCount++;
+            }
+        }
+        if (vertexCount > MAX_MASK_VERTICES) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "mask.d has " + vertexCount + " vertices > " + MAX_MASK_VERTICES);
+        }
+        // 坐标范围：用正则提取所有数字 token，比较绝对值 ≤ 10000
+        java.util.regex.Matcher m = MASK_NUMBER_RE.matcher(d);
+        while (m.find()) {
+            try {
+                double v = Double.parseDouble(m.group());
+                if (Math.abs(v) > 10_000) {
+                    throw new ValidationException("INVALID_PAYLOAD",
+                            "mask.d coordinate " + v + " > 10000");
+                }
+            } catch (NumberFormatException ignored) {
+                // MASK_NUMBER_RE 已限定为合法数字格式，理论上不会进这里
+            }
+        }
     }
 
     private static Element cloneElementWithNewId(Element src) {

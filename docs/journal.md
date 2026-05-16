@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-05-16 · M15.3 ultrareview Phase 2（鉴权方案 C + 数据安全 + 基础设施）
+
+3 个 agent 并行实施 9 处中风险修复 —— P0 鉴权破口 + 数据丢失 + DoS 防线。
+
+### 鉴权方案 C 落地（Group A agent）
+
+**核心原则**：仅在 `SessionManager.open` 路径鉴权 lock 状态；后端编辑 op 透明放行（CLAUDE.md §lock-state 第 2 条保留）。
+
+- `SessionManager.open` 加 lock check：`w.publishedAt() != null` + caller != owner + 无 `canvas.admin.bypass-lock` 权限 → 返新 `OpenResult.Forbidden(message)`（修 P0-18）
+- `CanvasCommand.runOpen` 处理 `Forbidden` 分支：红字 `"Wall is locked: ..."` 提示
+- `CanvasCommand.runAlias` 加 owner 校验：非 owner + 无 `canvas.alias.any` 权限拒（修 P0-19）
+- `WandListener` 加 `WallRepo` 注入；wand 二次确认前预检 lock → ActionBar 红字 `"Wall '<id>' is locked by <ownerName>"` 早退（边界处理：与 SessionManager.open 双重防御）
+- `HikariCanvas.onEnable` WandListener 构造扩 wallRepo 参数
+
+**兼容性验证**：CLAUDE.md §lock-state 第 2 条「后端编辑 op 不读 lock」保留——所有 element.\* / canvas.\* / layer.\* 透明放行。未来 PAPI / 动态画板走渲染期占位符解析（P-1 路径）不经过 open → 不受方案 C 影响。
+
+### 数据安全散点（Group B agent）
+
+- **P0-1 多选拖拽 silent loss**：`CanvasView.vue:583` 比较条件 `otherEl.x !== otherX` → `init.x !== otherX`。dragmove 已乐观更新 element.x 用于 Konva 视觉反馈；dragend 改用 dragstart 记录的 `initialPositions: Map` 做判等，恢复多选拖拽 ws.send 触发
+- **P0-10 mask 二次约束**：`EditSession.parseMaskNullable` 在 `validatePathD` 后追加 `validateMaskPathBounds`：`MAX_MASK_VERTICES = 64`（v1 决策上限）+ 坐标绝对值 ≤ 10000（element bbox 范围，相对 PathDValidator 的 100K 二次卡）。`EditSessionImageTest` 21 case 全过（fixture 坐标都 ≤ 100，未触限）
+- **P0-11 RDP 改迭代**：`RdpSimplifier.recurse` → `simplifyIterative`（`ArrayDeque<int[]>` 模拟栈）。算法等价 + 公共 API 不变；规避 MAX_BRUSH_POINTS_PER_STROKE=5000 + JVM 默认 512KB 栈下 ~2500 帧 SO 风险。`RdpSimplifierTest` 7 case 零修改全过
+
+### 基础设施（Group C agent）
+
+- **P0-24 detectLeaks 接 BukkitScheduler**：`HikariCanvas.onEnable` 新 `mapPoolLeakTask` 字段；5 分钟周期异步任务 `runTaskTimerAsynchronously` 调 `mapPool.detectLeaks(liveWallIds)`，启动后 5 分钟首次跑；`onDisable` cancel。idcounts.dat 防膨胀的最后防线启动
+- **P0-25 清渲染缓存**：`HikariCanvasRenderer.invalidate(Collection<Integer>)` 批量清除；`SessionManager` 构造扩 `HikariCanvasRenderer canvasRenderer` 参数；`SessionManager.deleteWall` 在 `mapPool.releaseWall(...)` 后调 `canvasRenderer.invalidate(released)`。跨 wall 像素泄漏防线就位
+- **P0-32 confirm 事务化（v1）**：`WallRepo.createWithMapIds` 新方法 wrapped in `jdbi.useTransaction`，单 INSERT 直接含 mapIds 字段（不再先空字符串再 update）。`SessionManager.confirm` 重构为 reserve-first + tx INSERT + rebind 模式：先 reserve（owner placeholder） → wallRepo.createWithMapIds → rebind 到真实 wallId。任何步失败回滚 `mapPool.releaseWall` + 错误返回。完整 mapPool ↔ walls 跨子系统一致性（如 persist 失败回滚 byId.put）留 M15.4
+
+### 验证
+
+- `./gradlew :plugin:test`：**364 case 全过**（baseline 不漂移）
+- `vite build`：**477.56 KB JS / 42.85 KB CSS**（M15.1 baseline -0.02 KB；纯逻辑改动几乎无体积变化）
+
+### 工期
+
+约 2.5h（3 agent 并行）。M15.3 是预算 5-6h —— 节省 ~50% wall-clock。
+
+### 改动文件清单（9 文件 plugin + 1 文件 web）
+
+- `plugin/.../HikariCanvas.java`（M15.3 +30 行 = mapPoolLeakTask wire + WandListener 扩 wallRepo + SessionManager 扩 canvasRenderer）
+- `plugin/.../command/CanvasCommand.java`（runOpen Forbidden 分支 + runAlias owner check）
+- `plugin/.../session/SessionManager.java`（OpenResult.Forbidden record + open lock check + 扩 canvasRenderer 构造 + confirm 重构 + deleteWall invalidate）
+- `plugin/.../session/WandListener.java`（wallRepo 注入 + wand lock 预检）
+- `plugin/.../render/HikariCanvasRenderer.java`（invalidate Collection 批量清）
+- `plugin/.../state/EditSession.java`（MAX_MASK_VERTICES + MASK_NUMBER_RE + validateMaskPathBounds）
+- `plugin/.../state/RdpSimplifier.java`（recurse → ArrayDeque iterative）
+- `plugin/.../storage/WallRepo.java`（createWithMapIds + jdbi.useTransaction）
+- `web/src/components/layout/CanvasView.vue`（dragstart 记 initialPositions + dragend 判等改用 init）
+
+---
+
 ## 2026-05-16 · M15.1 ultrareview Phase 1（9 处立即修复 + 3 依赖引入）
 
 **起因**：`docs/ultrareview-2026-05-15.md` 列 38+ P0 真 bug。5 个子 agent 并行核验后 ~37 条属实，1 条（双端 canonicalCharWidth 跨端差异）实际不属实但缺测试覆盖。规划 M15 整体重构（A-E 5 个 phase commit batch），约 35-40h wall-clock。
