@@ -82,7 +82,7 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → **M13 图片导入 + 蒙版（1w，最后一站）**。总工期约 6 个月（M0-M12 累计约 7 周 wall-clock）。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → **M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16）**。总工期约 6 个月（M0-M16 累计约 8 周 wall-clock）。
 
 ## M8-M12 已完成（详见 docs/journal.md）
 
@@ -202,3 +202,25 @@ M15 分 5 phase commit batch 修完：
 3. 动态画板必须走 P-1（渲染期占位符）或 P-3（Plugin API + Provider）；反模式 P-2（定时 patch ProjectState）禁用（详见 `docs/architecture.md §13`）
 
 累计 27 P0 修完 + 5 god class 拆完 + 3 commit batch（5 个 phase）。
+
+## M16 第二轮 ultrareview（2026-05-16）
+
+M15 落地当晚跑第二轮全栈 ultrareview，又扫出 28 项 P0/P1。分 6 phase commit batch 修完：
+
+- **M16.1 安全 P0 7 项**（commit 4695269）/api/upload/{hash} GET 加 sessionId query 鉴权；WS 未认证 5s 超时 close 4001 + WS upgrade Origin 白名单；YAMLFactory `maxAliasesForCollections=50` + `codePointLimit=5MB`；TemplateInstantiator deepCopy 递归 ≤32 + Interpolator 单值 16KB / 总输出 1MB；TemplateEntry.ownerUuid + `canvas.template.use-others` 跨用户隔离；wall.alias owner-only + `canvas.alias.any` bypass + WALL_ALIAS audit
+- **M16.2 数据完整性 P0 7 项**（commit 8564275）配额 + 磁盘/DB 走 `jdbi.inTransaction(SERIALIZABLE)` + `BEGIN IMMEDIATE` 写锁；`ImageStorage.writeFileAtomic` 用 `.tmp` + `Files.move(ATOMIC_MOVE)`；**MapPool 按 world UUID 分桶**（`acquireForWall(World, ...)` / `bindToWall` 强校验 mapView.world 一致；跨世界绑定抛 IllegalStateException）；**WallRestorer 失败 `releaseToFree`** 防 idcounts.dat 膨胀（项目核心风险修复）；新 `MapPool.releaseToFree` + `POOL_RELEASE_TO_FREE` audit；`pendingDeletes` 改 `Map<UUID, Map<wallId, PendingDelete>>` 多 wall 支持；`SessionManager.confirm` rollback stack + assertMainThread 8 处；config `map-pool.per-world: {}`
+- **M16.3 渲染防御 P0 4 项**（commit 9747975）Rect/Circle/Shape/ImageRenderer 入口 w/h<=0 return；`ElementValidator.finiteOr`（double/float）+ CanvasCompositor opacity finite clamp；FillPaintBuilder `filterFiniteStops` + <2 个降级纯色；ImageRenderer mask Area 包 try-catch + bbox 10× sanity 降级；前端 `sanitizeDimension` / `sanitizeRadius`
+- **M16.4 前端资源 P0 3 项**（commit 3c800f8）useBrushHost tryCapture/tryRelease + `pointercancel/blur/visibilitychange`；CanvasView onBeforeUnmount `stage.destroy` + cancelAnimationFrame；`stores/project.reset` + `ui.reset`（切 wall 触发，同 wall 重连不动）；wsClient.onClose pendingAcks reject all + clearTimeout
+- **M16.5 构建依赖 P0 3 项**（commit d9ab3fc）shadowJar 7 条 relocate（jackson/caffeine/jdbi/hikari/javalin/jetty/snakeyaml）→ `moe.hikari.canvas.shaded.*`；mergeServiceFiles 处理 SPI；**org.sqlite 不 relocate（JNI 保护）**；HikariCP `setLeakDetectionThreshold(30_000)`；npm ci 替 npm install
+- **M16.6 P1 防御 + 观测 8 项**（commit ca4bc54）Jackson FAIL_ON_UNKNOWN_PROPERTIES 接收侧严格 + 错误消息脱敏；新 `web/Protocol.java`：SUPPORTED_MIN/MAX/`CLOSE_PROTOCOL_VERSION_UNSUPPORTED=4002`；auth payload 新 `client_v`；ready payload 新 `accepted_v`；双向校验；V010 DROP COLUMN refcount（pre-release 激进改 schema OK）；AuditLog 5 新事件 `WALL_LOCK / WALL_UNLOCK / IMAGE_UPLOAD_OK / IMAGE_UPLOAD_REJECTED / PERMISSION_DENIED` + write 失败 SEVERE stack trace；`HikariCanvasConfig.sanitizeEditorUrl` URI 解析 + http/https 白名单；**会话级 IP 绑定**（Session.boundIp + bindOrCheckIp，**不绑 token 绑 session**）；SessionManager 三 map → ConcurrentHashMap + ReentrantLock；TopBar.toggleLock/commitAliasEdit optimistic 回滚 + 连击防护
+
+**关键架构决策（M16 已固化）**：
+
+1. **草稿 wall 协作语义**：未锁定 wall（lockedAt=null）默认任何 `canvas.edit` 玩家可 `/canvas open`——这是协作中间态语义（多人接力 / 同步编辑）。只 owner 可触发 lock；lock 后非 owner 拒 open（除 `canvas.admin.bypass-lock`）。未来 ACL（owner-only 草稿）走 v1.x 协作 scope，详见 `docs/architecture.md §13`
+2. **多世界分桶**：MapPool 按 world UUID 分桶，wall 与 map 必须 world 一致（强校验）；config `map-pool.per-world: {}` 配每世界 size
+3. **会话级 IP 绑定**：首次 auth 时 CAS 绑定 caller IP 到 Session.boundIp；后续帧不一致拒 4001。**绑 session 不绑 token**——token 已单次使用 + 短 TTL，再绑 token 是冗余且阻塞合法重连
+4. **shadowJar relocate**：所有第三方依赖（除 org.sqlite JNI）relocate 到 `moe.hikari.canvas.shaded.*` 防服内插件 classpath 冲突
+5. **HikariCP maxPoolSize=4 保持**：SQLite 单写但允许并发读；4 池让 read-heavy 路径（preview / quota check）不阻塞主线程；写靠 SQLite `busy_timeout=5000` + `leakDetectionThreshold=30s` 兜底；缩到 1 会让任何长查询阻塞所有后续连接获取
+
+累计 M15+M16 = 55 项 P0/P1 修完。**Token 暴力枚举防御（SessionRateLimiter）未实装**——M16 范围外，留 v1.x；详见 `docs/security.md §2.4`。
+

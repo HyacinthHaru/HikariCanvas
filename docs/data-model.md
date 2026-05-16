@@ -30,8 +30,10 @@
 ### 2.1 基础
 
 - 文件路径：`plugins/HikariCanvas/data.db`
-- 连接池：HikariCP，最大 4 连接（插件内异步 I/O 即可）
+- 连接池：HikariCP，**最大 4 连接** + `setLeakDetectionThreshold(30_000)`（M16-P5.2）
 - 访问层：JDBI 3（轻量、类型安全，比 JOOQ 启动快）
+
+> **maxPoolSize=4 不缩到 1 的理由（M16 确认）**：SQLite 单写但允许并发读（WAL 模式）。4 池让 read-heavy 路径（preview 渲染查询 / quota check / template registry load）不阻塞主线程的 write 路径。写一致性靠 SQLite `busy_timeout=5000ms` + `jdbi.inTransaction(SERIALIZABLE)` + `BEGIN IMMEDIATE` 写锁串行化（M16-P2.1 上传配额路径已切）。缩到 1 会让任何一个长查询（如 `WallRepo.listByOwner` 走全表）阻塞所有后续连接获取，触发 Bukkit 主线程卡顿。`leakDetectionThreshold=30s` 在连接借出 30s 未还时打印 stack trace 兜底排查未关连接的代码路径。
 - 所有时间戳：`INTEGER NOT NULL`，Unix 毫秒时间戳（UTC）
 - 所有 UUID：`TEXT`，标准 36 字符带连字符格式
 - 所有 JSON blob：`TEXT`
@@ -420,12 +422,17 @@ DROP TABLE IF EXISTS sign_records;
 DROP TABLE IF EXISTS drafts;
 DROP INDEX IF EXISTS idx_pool_sign;
 ALTER TABLE pool_maps DROP COLUMN sign_id;
+DROP TABLE IF EXISTS pool_maps;  -- M15.1 实装：整表 drop+recreate（替代 ALTER DROP COLUMN）
 
 CREATE TABLE walls (...);  -- 完整 §2.4 schema
 CREATE INDEX/UNIQUE INDEX ...;
 ```
 
 理由：M5.5 阶段无生产数据，drafts/sign_records 累计 < 50 行；走 alter + 数据迁移成本远高于 drop + 重建。生产发布前最后一次允许 drop。后续任何破坏性变更必须走严格 alter 迁移。
+
+### 6.5.1 V010 DROP COLUMN refcount（M16-P6.3，2026-05-16）
+
+`image_uploads.refcount` 列在 V010 中 DROP。理由：M15.4 起 refcount 改为运行期从 `project_json` JSON_EACH 算（避免 element.add / element.delete 时多一次 DB UPDATE 引入事务竞争）；refcount 列变成 stale 数据源，留着误导调试。Pre-release（0.1.x SNAPSHOT）阶段允许激进 DROP COLUMN，符合 §6.6.1 规则。0.1.0 发版后类似清理必须走"逻辑删除"路径。
 
 ### 6.4 备份与恢复
 

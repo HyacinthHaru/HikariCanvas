@@ -86,14 +86,18 @@ GET /api/session/:token HTTP/1.1
 ### 3.2 WS 握手
 
 1. 打开 `wss://.../ws`（或 `ws://` 本地）
-2. 客户端首帧必须发送 `auth`，**必须**携带 `clientProtocolVersion: 2`：
+2. 客户端首帧必须发送 `auth`，**必须**携带 `client_v`（M16-P6.2 起的字段名；2026-05-16 之前别名 `clientProtocolVersion` 兼容期保留）：
 
 ```json
 { "v": 2, "op": "auth", "id": "c-0",
-  "payload": { "token": "...", "clientProtocolVersion": 2 } }
+  "payload": { "token": "...", "client_v": 2 } }
 ```
 
-> 服务端收到 `clientProtocolVersion < 2` 或缺字段 → 立刻发 `error: VERSION_MISMATCH` + close 4002。v1 客户端不再兼容（v1 未正式发布、无外部依赖）。
+> 服务端收到 `client_v < SUPPORTED_MIN_PROTOCOL_VERSION (=2)` 或 `client_v > SUPPORTED_MAX_PROTOCOL_VERSION (=2)` 或缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `moe.hikari.canvas.web.Protocol`（M16-P6.2 引入；前后端双向校验）。
+>
+> **未认证 5s 超时**（M16-P1.2）：WS 升级后未在 `network.ws-auth-timeout-seconds`（默认 5s）内收到合法 `auth` 帧 → close `4001` (`auth_timeout`)。防止恶意客户端占 WS 槽。
+>
+> **Origin 白名单**（M16-P1.3）：WS upgrade 时校验 `Origin` 头是否在 `network.allowed-origins` 配置；不在白名单 reject upgrade。默认空 = 不校验（兼容原生 WS 客户端）。
 
 3. 服务器校验通过 → `ready`：
 
@@ -103,6 +107,7 @@ GET /api/session/:token HTTP/1.1
     "sessionId": "e1b2...",
     "serverVersion": "1.0.0",
     "protocolVersion": 2,
+    "accepted_v": 2,
     "reconnectToken": "...",
     "projectState": { /* v2 形态，见 §7 */ },
     "wallId": "w-1a2b3c4d",
@@ -113,6 +118,8 @@ GET /api/session/:token HTTP/1.1
     "templates": [ ... ]
   }
 }
+
+> **M16-P6.2 协议字段**：ready 携带 `accepted_v: number`（服务端实际接受的协议版本，与 client_v 等值或为 server fallback 值）。前端在收到 ready 后做一次「accepted_v == client_v」断言，不一致则 console.warn 但不断连（防御服务端 forward-compat bug）。
 
 > **2026-05-14**：ready payload 字段 `publishedAt` 改名 `lockedAt`；新增 `ownerUuid`（wall.owner_uuid） + `selfUuid`（当前 session 玩家）让前端判 `isOwner = selfUuid === ownerUuid`。详见 CLAUDE.md `§lock-state`。
 ```
@@ -289,8 +296,10 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 | code | 说明 | retryable |
 | --- | --- | --- |
-| `AUTH_FAILED` | token 无效/过期 | ❌ |
-| `VERSION_MISMATCH` | 协议版本不兼容 | ❌ |
+| `AUTH_FAILED` | token 无效/过期；M16-P6.6 会话 IP 绑定不一致也用此码 | ❌ |
+| `UNAUTHORIZED` | M16-P1.1：`GET /api/upload/{hash}?session=...` 缺 sessionId query 或 sessionId 不匹配活跃 session（HTTP 401） | ❌ |
+| `VERSION_MISMATCH` | 协议版本不兼容（含 `client_v` 缺 / 超出 [SUPPORTED_MIN, SUPPORTED_MAX]） | ❌ |
+| `QUOTA_EXCEEDED_DISK` | M16-P2.1：上传时插件 uploads 总字节超 `images.max-total-storage-mb` 且 LRU 无可回收行（与 `QUOTA_DISK_FULL` 同语义，M16 起统一新码） | ❌ |
 | `RATE_LIMITED` | 超过限流阈值 | ✅ |
 | `POOL_EXHAUSTED` | 预览池耗尽，resize 失败 | ✅ |
 | `INVALID_OP` | 未知 op | ❌ |
@@ -326,8 +335,8 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | 1000 | 正常关闭（cancel 后或客户端主动断） |
 | 1008 | 策略违反（限流反复触发） |
 | 1011 | 服务端错误 |
-| 4001 | 认证失败 |
-| 4002 | 协议版本不匹配 |
+| 4001 | 认证失败 / `auth_timeout`（M16-P1.2：未认证 5s 超时；M16-P6.6：会话级 IP 绑定不一致也走此码 + 文本 `ip_mismatch`） |
+| 4002 | 协议版本不匹配（`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`，M16-P6.2 常量化） |
 | 4003 | 会话被其他连接接管 |
 | 4004 | 空闲超时 |
 
@@ -571,9 +580,11 @@ type ImageElement = BaseElement & {
 
 **错误**：`401` 未认证 / `403` 无权限 / `413` 太大 / `400` `UPLOAD_REJECTED`（含 reason）/ `429` 配额耗尽
 
-### `GET /api/upload/{source}`（M13）
+### `GET /api/upload/{source}?session=<sessionId>`（M13；M16-P1.1 起强制鉴权）
 
-按 sha256[:16] hash 拉取原图。返回 `image/png`（统一存储为 PNG，jpeg/webp 上传时已转）。无需 token（图已脱敏存储；URL 不可枚举因 hash 不可猜）。
+按 sha256[:16] hash 拉取原图。返回 `image/png`（统一存储为 PNG，jpeg/webp 上传时已转）。
+
+> **M16-P1.1 鉴权变更（2026-05-16）**：原"无需 token，hash 不可枚举即视为脱敏"的假设被推翻——hash 会出现在 `project_json` / 客户端 DOM / WS 帧日志中，任何能拿到 ws 流量的第三方插件 / 服内调试工具都能枚举出 hash 列表。现强制要求 query `?session=<sessionId>`，服务端校验：(a) sessionId 对应一个活跃 ACTIVE session；(b) 该 session 绑定 wall 的 `project_json` 内任意 ImageElement.source == 请求的 hash。不通过 → HTTP 401 + `UNAUTHORIZED`。这保证图片只对正在编辑该 wall 的玩家可见。
 
 ### `GET /api/upload/quota`（M13）
 
@@ -602,9 +613,11 @@ type ImageElement = BaseElement & {
 
 - Token 必须通过 HTTPS/WSS（公网部署）
 - Token 单次使用：握手成功后立即 rotate，新 token 供重连用
+- **会话级 IP 绑定**（M16-P6.6）：Session.boundIp 在首次 auth 时 CAS 绑定 caller IP；后续帧 IP 不一致 → close 4001 + `AUTH_FAILED`。绑 session 不绑 token（token 已单次 + TTL）。已知限制（IPv6 norm / 反代 XFF）见 `security.md §2.5`
 - 所有 payload 字段在服务端二次校验（长度、数值范围、颜色格式）
 - 任何字符串字段最大长度 256；富文本字段单独定义最大长度
 - 颜色必须为 `#RRGGBB` 或 `#RRGGBBAA` 格式，拒绝 CSS 关键字
+- Jackson 接收侧严格（M16-P6.1）：`FAIL_ON_UNKNOWN_PROPERTIES=true`，未知字段直接拒 `INVALID_PAYLOAD`；服务端错误消息脱敏（不回传字段实际值 / 内部路径）
 
 ---
 

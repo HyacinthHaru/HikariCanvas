@@ -44,6 +44,36 @@
 
 **关键不变量**：lock 是 UX 层概念，不阻挡 op 路径。如果作者发布锁定的 wall，但内部系统（如未来的动态展示）想用 ws.send(element.update) 更新内容，**不会被 lock 拒**。这是 2026-05-14 砍 published 概念的根本动机。
 
+### 3.6.1 草稿 wall 协作语义（M16 确认）
+
+**未锁定 wall（lockedAt=null）= 协作中间态**：任何 `canvas.edit` 玩家可 `/canvas open <wall_id>`，进入 ACTIVE 编辑。`byWall` 排他锁保证同一时刻只有一个活跃 session，但接力 / 切换 owner 完全开放——前一玩家 `cancel` 后下一玩家立即 open。这是 v1 的协作模型（接力 ≠ 实时多人，OT/CRDT 永久不做）。
+
+**锁定 wall（lockedAt 非 null）**：M15.3 鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`。
+
+**未来 ACL（owner-only 草稿）**：若服主想要"草稿也仅 owner 可改"的语义，走 v1.x 协作 scope（新增 `walls.acl` 列 + acl-aware open 校验）；详见 §13 动态画板路径的同源扩展思路（acl 字段同样不进编辑 op 路径，仅在 open 鉴权点生效）。
+
+### 3.6.2 多世界假设（M16-P2.3 改）
+
+**MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；M16 起 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。
+
+- `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（受 `map-pool.per-world.<worldName>.max-size` 限制）
+- `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（之前 silent bind 会让 map 显示在错误维度）
+- 跨世界绑定路径被根除：WallRestorer 启动恢复 / `/canvas open` / `confirm` 三处都走 world-aware 路径
+- 失败兜底：WallRestorer 任一 wall 恢复异常 → `MapPool.releaseToFree(mapIds, world)` 回收避免 idcounts.dat 膨胀（**项目核心风险**，详见 PROPOSAL §5.2.6）；同时审计 `POOL_RELEASE_TO_FREE`
+
+**配置（config.yml）**：
+
+```yaml
+map-pool:
+  initial-size: 64       # 全局默认（无 per-world 配置时用）
+  max-size: 256
+  per-world:             # 可选：按 world name 覆写
+    world:        { initial-size: 64, max-size: 512 }
+    world_nether: { initial-size: 16, max-size: 64 }
+```
+
+无 per-world 配置时所有 world 共享同一组默认值（仍是每 world 一个独立 bucket，只是 size 一致）。
+
 ### 1.2 高层拓扑
 
 ```
@@ -698,7 +728,8 @@ PDC 标记：
 见 `security.md`，此处只列原则：
 - 默认不暴露公网
 - Token 单次使用 + 过期 + UUID 绑定
-- WS 消息限流
+- **会话级 IP 绑定**（M16-P6.6）：Session 首次 auth 时 CAS 绑定 caller IP，后续帧不一致 close 4001。绑 session 不绑 token——token 已单次使用 + TTL，再绑 token IP 是冗余；session 跨重连复用，绑定语义更稳定。已知限制：IPv6 norm + 反代 XFF 见 `security.md §2.5`
+- WS 消息限流 + WS upgrade Origin 白名单（M16-P1.3）+ 未认证 5s 超时 close 4001 auth_timeout（M16-P1.2）
 - 输入严格校验（字符长度、颜色格式、坐标范围）
 - 权限节点细分
 
@@ -847,7 +878,7 @@ logging:
 - [ ] 预览地图池初始化时，若 SQLite 恢复数量 > `initial-size`，超出部分如何处理（保留 vs 缩容）
 - [ ] 反代下的 `public-url` 自动探测是否可行，或仍要求服主手动配置
 - [ ] 会话 disconnect 5 分钟宽限是否太长（公网弱网场景 vs 池占用）
-- [ ] 多世界支持：同一池跨世界共享 vs 按世界分池
+- [x] 多世界支持：同一池跨世界共享 vs 按世界分池 —— **M16-P2.3 拍板：按 world UUID 分桶**。MapPool 内部 `Map<UUID worldId, PoolBucket>`；`acquireForWall(World, ...)` / `bindToWall` 强校验 mapView.world 一致；跨世界绑定抛 IllegalStateException。config `map-pool.per-world: {}` 按 world name 覆写 size。详见 §3.6.2
 - [ ] **M5.5 引入**：published wall 是否需要"自动归档"（长期无 op 自动 unpublish 释放给 `/canvas list` 滚动列表）—— 倾向不做，walls 数量 < 100 不需要
 - [x] **M5.5 引入**：协作编辑（多 client 同时编辑同一 wall_id）—— **永久不做**。`byWall` 排他锁阻止，玩家接力编辑（前一玩家 cancel 后下一玩家 `/canvas open <wall_id>`）已是现状
 - [ ] **M8 引入**：图层数 / 层内元素数上限（暂无；建议 layers ≤ 32、单层 elements ≤ 200 作为软上限做 warn 不做 hard cap）

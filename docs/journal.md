@@ -5,6 +5,90 @@
 
 ---
 
+## 2026-05-16 · M16 Phase 7（docs 同步 + 收尾）
+
+针对 M16 6 phase 28 项改动同步契约文档；ultrareview-2026-05-15.md 落地删除（已被 05-16 review 取代）；ultrareview-2026-05-16.md 入仓存档。
+
+### 文档同步（1 agent）
+
+- **CLAUDE.md**：里程碑表 M13/M14/M15/M16 全 ✅；M15 段下加 M16 完整段（6 phase commit batch + 4 个 M16 关键架构决策固化），引用 6 个 commit sha
+- **security.md**：§2.4 SessionRateLimiter 未实装状态 + v1.x 留档；新 §2.5 会话级 IP 绑定（方案 B 不绑 token、绑 session）+ IPv6/XFF 限制；§权限节点补 `canvas.template.use-others` / `canvas.alias.any` / `canvas.admin.bypass-lock`；§审计补 5 新事件 + WALL_ALIAS + POOL_RELEASE_TO_FREE
+- **architecture.md**：新 §3.6.1 草稿 wall 协作语义（Q1 决策落地：未锁 wall 任何玩家可 open，协作中间态）+ §3.6.2 多世界假设（按 world UUID 分桶）；§10.4 安全补 IP 绑定 / Origin 白名单 / 5s auth timeout；§12 未决「多世界分池」标 [x] 已决
+- **data-model.md**：§2.1 HikariCP maxPoolSize=4 不缩 1 的理由（WAL 读并发 + leakDetectionThreshold 兜底）；§6.5 V005 + 新 §6.5.1 V010 DROP COLUMN refcount（pre-release 0.1.x SNAPSHOT 阶段激进改 schema OK）
+- **protocol.md**：§3.2 WS 握手 `client_v` + ready `accepted_v` + 5s auth timeout / Origin 白名单；§6.2 close codes 4001/4002（auth_timeout / ip_mismatch / CLOSE_PROTOCOL_VERSION_UNSUPPORTED）；§6.1 error codes 补 UNAUTHORIZED / QUOTA_EXCEEDED_DISK；§9.5 `GET /api/upload/{source}` 改为强制 `?session=` query 鉴权；§11 安全补 IP 绑定 + FAIL_ON_UNKNOWN_PROPERTIES
+
+### Q1 / 多世界 / IP 绑定语义落地（关键决策固化）
+
+- **Q1 草稿 wall**：写入 `architecture.md §3.6.1` —— 行为/状态机决策不是 schema 决策；保留「未来 ACL 走 v1.x 协作 scope」逃生通道
+- **多世界**：新 `§3.6.2` 而非改写 §4 ——§4 仍是单世界概念介绍，§3.6.2 是 M16-P2.3 增量补丁层
+- **IP 绑定**：`security.md §2.5` 主段 + `architecture.md §10.4` / `protocol.md §11` 交叉引用；明示「绑 session 不绑 token」+ IPv6/XFF 限制
+- **HikariCP=4**：`data-model.md §2.1` 用对话式表达「为何不缩到 1」
+
+### 已知留档（v1.x scope）
+
+- M13 路线段（M16 已完成）保留为历史规划留档（类似 M5.5 段做法），里程碑表已标 ✅
+- SessionRateLimiter 仍 P1 未实装
+- IPv4-mapped IPv6 与 IPv4 字符串不归一化
+- 反代场景 XFF 未解（IP 绑定仅看 socket peer）
+
+### 收尾
+
+- ultrareview-2026-05-15.md 落地删除（被 05-16 review 取代）
+- ultrareview-2026-05-16.md 入仓存档（M16 工作的 ~200 条去重 P0/P1/P2/P3 完整原文）
+
+### 关联文件
+
+`CLAUDE.md` / `docs/architecture.md` / `docs/data-model.md` / `docs/protocol.md` / `docs/security.md` / `docs/journal.md` / `docs/ultrareview-2026-05-15.md`（删）/ `docs/ultrareview-2026-05-16.md`（新入仓）。
+
+---
+
+## 2026-05-16 · M16 收尾总览
+
+**M16 = 28 项 P0/P1 落地 + 7 phase commit batch + 0 baseline 漂移**
+
+针对第三方 AI ultrareview 2026-05-16（≈200 条去重问题）的最高优先级 P0/P1 安全 + 数据完整性 + 防御层修复。继 M15 大重构后第二轮全栈收口。
+
+| Phase | 主题 | 项数 | commit |
+|---|---|---:|---|
+| M16-P1 | 安全 P0 核心（鉴权 / DoS / IDOR / Origin） | 7 | `4695269` |
+| M16-P2 | 数据完整性 / 并发 P0 | 7 | `8564275` |
+| M16-P3 | 渲染防御 P0 | 4 | `9747975` |
+| M16-P4 | 前端资源生命周期 P0 | 3 | `3c800f8` |
+| M16-P5 | 构建依赖 P0 | 3 | `d9ab3fc` |
+| M16-P6 | P1 防御 + 观测 | 8 | `ca4bc54` |
+| M16-P7 | docs 同步 | — | （本 commit） |
+| **合计** | | **32** | **7 commit** |
+
+### M16 4 个关键架构决策（已固化）
+
+1. **草稿 wall = 协作中间态**（Q1 决策）：未锁 wall 任何玩家可 open，多人可同步编辑同一画板；只有 owner 可触发 lock；lock 后非 owner 不能 open（除 canvas.admin.bypass-lock）。未来 ACL 走 v1.x 协作 scope（详见 architecture.md §3.6.1）
+2. **shadowJar 全 relocate**（Q2 决策）：jackson / caffeine / jdbi / hikari / javalin / jetty / snakeyaml 都 relocate 到 `moe.hikari.canvas.shaded.*`；org.sqlite 保护 JNI 不动；PacketEvents 走 plugin-loader 模式不 shade
+3. **HikariCP maxPoolSize=4 保留**（Q3 决策）：SQLite WAL 模式下读并发友好；leakDetectionThreshold=30s 兜底；不缩到 1（详见 data-model.md §2.1）
+4. **会话级 IP 绑定（方案 B）**：Token 不绑 IP（confirm 阶段无 HTTP context），改 Session.boundIp 首次 auth 时 CAS；后续重连必须同 IP；玩家切网络必须重 `/canvas confirm`（详见 security.md §2.5）
+
+### M16 累计技术细节
+
+- **新文件**：`web/Protocol.java` / `ForbiddenTemplateException.java` / `db-migrations/V010__remove_refcount.sql`
+- **新配置项**：`network.ws-auth-timeout-seconds` / `network.allowed-origins` / `map-pool.per-world`
+- **新权限节点**：`canvas.template.use-others` / `canvas.alias.any`
+- **新协议字段**：auth `client_v` / ready `accepted_v` / close codes 4001 (auth_timeout) / 4002 (protocol_version_unsupported)
+- **新审计事件**：WALL_LOCK / WALL_UNLOCK / WALL_ALIAS / IMAGE_UPLOAD_OK / IMAGE_UPLOAD_REJECTED / PERMISSION_DENIED / POOL_RELEASE_TO_FREE
+- **核心风险修复**：WallRestorer 失败 releaseToFree 防 idcounts.dat 膨胀（项目核心风险）
+- **god class 进一步收口**：Phase 6 SessionManager 锁拆分 + Bukkit API 全挪锁外，避免 lock-order 死锁
+
+### 待办留档（v1.x / 不阻塞 0.1.0 发版）
+
+- 14 章 Group III 长期项：CI 设置、vitest、Playwright E2E、MockBukkit / JavalinTest 完整使用、双端镜像算法 fixture 自动校验、MapPool 进一步拆分、多世界 wand 支持
+- SessionRateLimiter / token 暴力枚举防御（docs/security.md §2.4 规定但未实装）
+- IPv6 / XFF 归一化
+- 协议版本升级路径（v3 时的迁移策略）
+
+### 评估
+
+main 分支当前安全状态远优于 M15 之前。剩余多为非阻塞细化项，**项目处于可用 0.1.0 发版候选状态**。
+
+---
+
 ## 2026-05-16 · M16 Phase 6（P1 防御 + 观测 8 项）
 
 针对 docs/ultrareview-2026-05-16.md P1 防御层，3 个并行 agent 完成。Phase 6 是 M16 最长阶段。

@@ -111,6 +111,24 @@ validateToken(t):
 - 全局失败率：**100 次 / 分钟 → 切换入「保守模式」**，所有新 token 签发延迟 1s
 - IP 的存储：SHA-256 哈希存 `audit_log.ip_hash`，配置允许加 salt
 
+> **当前实装状态（2026-05-16 M16 后）**：上述 `SessionRateLimiter` IP 级失败计数 + 全局保守模式 **未实装**。M16 仅落地会话级 IP 绑定（见 §2.5）。token 暴力枚举防御依赖 token 本体熵（256 bit · 单次使用 · 15min TTL）+ 反代层 rate-limit（nginx `limit_req_zone`）。SessionRateLimiter 留 v1.x 实装。
+
+### 2.5 会话级 IP 绑定（M16-P6.6，2026-05-16）
+
+为防御 token 在传输 / 浏览器历史 / 日志泄漏后被异地重放，Session 首次 `auth` 成功时绑定 caller IP（`Session.boundIp`，CAS 写入），后续所有帧到达必须从同 IP 来源；不一致 → `error: AUTH_FAILED` + close 4001。
+
+**方案 B：绑 session 不绑 token**
+
+- Token 已是单次使用 + 15min TTL，再绑 token IP 等于双重防御一个已被消耗的凭证，无收益
+- Session 跨多次 WS 重连复用（5s~30s 阶梯重连），首次 auth 后任何重连都会触发 bindOrCheckIp
+- 实现位置：`SessionManager.bindOrCheckIp(sessionId, callerIp)`，单方法 CAS + check 两态
+
+**已知限制：**
+
+- **IPv6 normalization**：当前用 `InetAddress.getHostAddress()` 字符串比较，未做 `::ffff:0:0/96` IPv4-mapped 归一化；玩家 IPv4/IPv6 切换会被误拒（需要重新走 token issue 路径，无安全风险但 UX 差）
+- **反代 X-Forwarded-For**：未在 IP 绑定路径读 XFF（避免反代伪造 XFF 头突破 IP 绑定）。这意味着所有公网部署（反代→插件）下 boundIp 永远是反代本机 IP，绑定退化为「同一反代来源」。需要服主在反代层（nginx `limit_req_zone $binary_remote_addr`）做真实 IP 级限流弥补
+- v1.x 修复方向：trusted-proxies 白名单内的 XFF 头才信任，配合 §7.4 trusted-proxies 联动
+
 ---
 
 ## 3. WebSocket 安全
@@ -273,6 +291,9 @@ validateToken(t):
 | `canvas.import` | false | 导入 `.canvas` 工程 |
 | `canvas.upload` | 继承 `canvas.edit` | 通过 `/api/upload` 上传图片（M13） |
 | `canvas.upload.bypass-limit` | op=true | 跳过每画 / 每日配额检查（M13） |
+| `canvas.template.use-others` | op=true | 使用其他玩家发布的用户模板（**M16-P1.6 引入**；TemplateRegistry `byIdForApply` 跨用户隔离，无此节点只能用自己发布的 + 内置模板） |
+| `canvas.alias.any` | op=true | 修改任意 wall 的 alias（**M16-P1.7 引入**；默认 wall.alias WS op 只允许 owner 改） |
+| `canvas.admin.bypass-lock` | op=true | M15.3 鉴权方案 C：绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open（M15 引入） |
 | `canvas.delete.own` | 继承 `canvas.edit` | 删除自己的画（`/canvas delete <wall_id>`，M5.5 起替代 `canvas.remove.own`） |
 | `canvas.delete.any` | op=true | 删除任何画（M5.5 起替代 `canvas.remove.any`） |
 | `canvas.admin` | op=true | 管理命令（reload / stats / cleanup / fsck） |
@@ -368,8 +389,14 @@ server {
 | `POOL_EXPAND` | old_size, new_size |
 | `POOL_SHRINK` | old_size, new_size |
 | `RATE_LIMITED` | session, op_count |
-| `PERMISSION_DENIED` | player, node |
+| `PERMISSION_DENIED` | player, node（M16-P6.4：write 失败 SEVERE stack trace 兜底） |
 | `INPUT_REJECTED` | session, field, reason |
+| `WALL_LOCK` | player, session, wall_id, locked_at（**M16-P6.4 新增**） |
+| `WALL_UNLOCK` | player, session, wall_id（**M16-P6.4 新增**） |
+| `WALL_ALIAS` | player, session, wall_id, old_alias, new_alias（M16-P1.7） |
+| `IMAGE_UPLOAD_OK` | player, session, hash, bytes, width, height（**M16-P6.4 新增**） |
+| `IMAGE_UPLOAD_REJECTED` | player, session, reason, content_length（**M16-P6.4 新增**） |
+| `POOL_RELEASE_TO_FREE` | wall_id, map_ids, reason（M16-P2.5；WallRestorer 失败回收路径） |
 
 ### 8.2 访问控制
 
