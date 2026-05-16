@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -158,14 +159,30 @@ public final class SessionManager {
     }
 
     /**
+     * M16-P2.7-A：confirm 失败时统一异常，含已执行的 rollback 链摘要。
+     * 调用方据此向玩家显示"failed to confirm session, server log for details"。
+     */
+    public static final class SessionConfirmFailedException extends RuntimeException {
+        public SessionConfirmFailedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
      * {@code SELECTING → ISSUED}：解析墙面 → 排他锁 → 两分支：
      * <ul>
      *   <li><b>新建</b>（无 walls 行）：reserveForWall + create walls 行 → {@link ConfirmResult.OkNewWall}</li>
      *   <li><b>现有</b>（walls 行存在）：bindToWall + load ProjectState → {@link ConfirmResult.OkExistingWall}</li>
      * </ul>
      * <b>必须主线程</b>（MapPool.reserveForWall 可能 createMap）。
+     *
+     * <p>M16-P2.7-A：multi-step 链路用 rollback stack 包裹——任一中间步抛异常时
+     * 倒序执行已 push 的 rollback action，避免留下 mapPool reserved 但 walls 无对应行
+     * （maps 永久泄漏）或反过来的状态。所有 rollback 自身异常仅 log.warning，不掩盖
+     * 原始异常。最终向调用方抛 {@link SessionConfirmFailedException}。</p>
      */
     public synchronized ConfirmResult confirm(String sessionId) {
+        assertMainThread();
         Session s = byId.get(sessionId);
         if (s == null) return new ConfirmResult.NotReady("session not found");
         if (s.state() != SessionState.SELECTING) {
@@ -199,69 +216,110 @@ public final class SessionManager {
         String wallId;
         boolean newWall;
 
-        if (hasFrames && existing != null && !existing.mapIds().isEmpty()
-                && mapPool.bindToWall(existing.wallId(), existing.mapIds())) {
-            // 自家画框 + walls 行齐全 → 二次编辑路径
-            mapIds = existing.mapIds();
-            ps = existing.state();
-            wallId = existing.wallId();
-            newWall = false;
-        } else if (hasFrames || existing != null) {
-            // 不一致：要么画框存在但 walls 行缺失；要么 walls 行存在但 bbox 没画框。
-            // 拒绝建议玩家先 /canvas delete 重置或换地点。
-            return new ConfirmResult.NotReady(
-                    "this location has stale wall data; /canvas delete <id> to reset, or pick empty space");
-        } else {
-            // 全空 → 新建。
-            // M15.3 P0-32 v1：先 reserve（mapPool 自带 byId.put 内存状态难协调事务，留在事务外），
-            // 再 createWithMapIds 单事务 INSERT walls 行（含 mapIds）。避免旧路径 create + updateMapIds
-            // 两步无事务（中间 mapPool 故障会留下 mapIds 为空的 walls 行）。
-            // 完整 mapPool + walls 跨子系统事务一致性 → M15.4 phase。
-            ps = new ProjectState(wall.width(), wall.height());
-            // 用占位 wall_id 先 reserve（reserveForWall 内部仅靠 owner 字符串区分，事后无需回填）
-            String reserveOwnerWallId = "pending-" + UUID.randomUUID();
-            try {
-                mapIds = mapPool.reserveForWall(reserveOwnerWallId, wall.mapCount());
-            } catch (PoolExhaustedException e) {
-                return new ConfirmResult.PoolExhausted(e.getMessage());
-            }
-            try {
+        // M16-P2.7-A：rollback stack。每步成功后 push 一个 undo action；任何后续步骤
+        // 抛异常时倒序运行（LIFO）。所有 Runnable 都用 try/catch 包裹，单条 rollback
+        // 失败仅 log.warning，不影响其它 rollback 和原始异常传递。
+        final java.util.Deque<Runnable> rollbacks = new java.util.ArrayDeque<>();
+
+        try {
+            if (hasFrames && existing != null && !existing.mapIds().isEmpty()
+                    && mapPool.bindToWall(existing.wallId(), existing.mapIds(), wall.world())) {
+                // 自家画框 + walls 行齐全 → 二次编辑路径。bindToWall 接受 FREE 或同 wallId
+                // 的 RESERVED；本路径下原本就是 RESERVED，所以 rollback 无需 release（释放
+                // 会把别人的 owner 也清掉）——只注册 byWall 一项即可。
+                mapIds = existing.mapIds();
+                ps = existing.state();
+                wallId = existing.wallId();
+                newWall = false;
+            } else if (hasFrames || existing != null) {
+                // 不一致：要么画框存在但 walls 行缺失；要么 walls 行存在但 bbox 没画框。
+                // 拒绝建议玩家先 /canvas delete 重置或换地点。
+                return new ConfirmResult.NotReady(
+                        "this location has stale wall data; /canvas delete <id> to reset, or pick empty space");
+            } else {
+                // 全空 → 新建。链路：reserve → INSERT walls → release(pending) + bind(wallId)
+                ps = new ProjectState(wall.width(), wall.height());
+                final String reserveOwnerWallId = "pending-" + UUID.randomUUID();
+                try {
+                    mapIds = mapPool.reserveForWall(reserveOwnerWallId, wall.mapCount(), wall.world());
+                } catch (PoolExhaustedException e) {
+                    return new ConfirmResult.PoolExhausted(e.getMessage());
+                }
+                final List<Integer> reservedMapIds = mapIds;
+                // step1 rollback：释放 pending owner 持有的 reserve
+                rollbacks.push(() -> mapPool.releaseWall(reserveOwnerWallId));
+
                 wallId = wallRepo.createWithMapIds(key, ps, mapIds,
                         wall.width(), wall.height(),
                         s.playerUuid(), s.playerName());
-            } catch (RuntimeException e) {
-                // 回滚 map reserve（释放刚刚分配的 maps）
+                final String createdWallId = wallId;
+                // step2 rollback：删 walls 行（注意倒序：先 delete walls 行，再 release maps）
+                rollbacks.push(() -> wallRepo.delete(createdWallId));
+
+                // owner 从 pending-* 改写为真正的 wallId：先 release pending，再 bind 到 wallId。
+                // 这两步是 step3 的 atomic 处理——失败一并视作 step3 失败，前两步 rollback 起作用。
                 mapPool.releaseWall(reserveOwnerWallId);
-                throw e;
+                // 注意：上面 rollback push(() -> releaseWall(pending)) 已经执行了同样的效果，
+                // 此处 release 后 pending owner 已无 maps，rollback 再调用是 no-op，幂等安全。
+                if (!mapPool.bindToWall(wallId, mapIds, wall.world())) {
+                    // 极罕见：maps 在两步之间被别处抢占。让 outer catch 触发 rollback 链。
+                    throw new SessionConfirmFailedException(
+                            "map bind race after reserve for wall=" + wallId, null);
+                }
+                // step3 rollback：释放最终绑定的 maps（按 wallId owner）
+                final String boundWallId = wallId;
+                rollbacks.push(() -> mapPool.releaseWall(boundWallId));
+                // 用 reservedMapIds 防止后续 step 把变量 shadow（仅文档作用，不参与逻辑）
+                if (reservedMapIds != mapIds) {
+                    log.warning("mapIds mutated mid-flow (unexpected); using last value");
+                }
+                newWall = true;
             }
-            // 把 reserve 时的占位 owner 改写为真正的 wallId（bindToWall 接受 FREE 或同 wallId 的 RESERVED，
-            // 但我们这里的 maps owner 是 pending-*，需要先 release 再 bind 到正确 wallId）。
-            mapPool.releaseWall(reserveOwnerWallId);
-            if (!mapPool.bindToWall(wallId, mapIds)) {
-                // 极罕见：maps 在两步之间被别处抢占。回滚 walls 行。
-                wallRepo.delete(wallId);
-                return new ConfirmResult.PoolExhausted("map bind race after reserve");
-            }
-            newWall = true;
+
+            // ---- 从此处起进入 in-memory 状态变更；理论上不应抛，但仍包在 try 内 ----
+            s.wall(wall);
+            s.mapIds(mapIds);
+            s.wallKey(key);
+            s.wallId(wallId);
+            s.projectState(ps);
+            s.editSession(new EditSession(ps));
+            s.state(SessionState.ISSUED);
+            byWall.put(key, sessionId);
+
+            auditLog.record("SESSION_CONFIRM", s.playerUuid().toString(), s.playerName(),
+                    sessionId, null,
+                    Map.of("wall_id", wallId, "new_wall", newWall, "map_count", mapIds.size(),
+                            "world", wall.world().getName()));
+
+            return newWall
+                    ? new ConfirmResult.OkNewWall(s, wall, mapIds, wallId)
+                    : new ConfirmResult.OkExistingWall(s, wall, mapIds, wallId);
+        } catch (SessionConfirmFailedException e) {
+            // map bind race 内部抛出 → 跑 rollback 后向上层报 PoolExhausted（保持 API 兼容）
+            runRollbacks(rollbacks);
+            log.log(Level.WARNING, "SessionManager.confirm rolled back: " + e.getMessage(), e);
+            return new ConfirmResult.PoolExhausted("map bind race after reserve");
+        } catch (RuntimeException e) {
+            runRollbacks(rollbacks);
+            log.log(Level.SEVERE, "SessionManager.confirm failed, rolled back; see chain above", e);
+            throw new SessionConfirmFailedException(
+                    "failed to confirm session; server log for details", e);
         }
+    }
 
-        s.wall(wall);
-        s.mapIds(mapIds);
-        s.wallKey(key);
-        s.wallId(wallId);
-        s.projectState(ps);
-        s.editSession(new EditSession(ps));
-        s.state(SessionState.ISSUED);
-        byWall.put(key, sessionId);
-
-        auditLog.record("SESSION_CONFIRM", s.playerUuid().toString(), s.playerName(),
-                sessionId, null,
-                Map.of("wall_id", wallId, "new_wall", newWall, "map_count", mapIds.size(),
-                        "world", wall.world().getName()));
-
-        return newWall
-                ? new ConfirmResult.OkNewWall(s, wall, mapIds, wallId)
-                : new ConfirmResult.OkExistingWall(s, wall, mapIds, wallId);
+    /** M16-P2.7-A：倒序执行 rollback stack，单条失败仅 log.warning，不抛。 */
+    private void runRollbacks(java.util.Deque<Runnable> rollbacks) {
+        while (!rollbacks.isEmpty()) {
+            Runnable r = rollbacks.pop();
+            try {
+                r.run();
+            } catch (RuntimeException rollbackEx) {
+                log.log(Level.WARNING,
+                        "SessionManager.confirm rollback step failed (continuing): "
+                                + rollbackEx.getMessage(),
+                        rollbackEx);
+            }
+        }
     }
 
     /**
@@ -315,7 +373,12 @@ public final class SessionManager {
             return new OpenResult.WallOccupied(holderId,
                     holder == null ? null : holder.playerUuid());
         }
-        if (!mapPool.bindToWall(w.wallId(), w.mapIds())) {
+        World world = Bukkit.getWorld(w.key().world());
+        if (world == null) {
+            return new OpenResult.BindFailed(
+                    "world '" + w.key().world() + "' not loaded for wall " + w.wallId());
+        }
+        if (!mapPool.bindToWall(w.wallId(), w.mapIds(), world)) {
             return new OpenResult.BindFailed("map pool refused bind for " + w.wallId());
         }
 
@@ -406,6 +469,7 @@ public final class SessionManager {
      * 仅清 byPlayer / byWall / forgetHooks。M5.5 起 wall 数据生命周期与 session 解耦。
      */
     public synchronized void cancel(String sessionId, String reason) {
+        assertMainThread();
         Session s = byId.get(sessionId);
         if (s == null) return;
         if (s.state() == SessionState.CLOSING) return;
@@ -423,6 +487,7 @@ public final class SessionManager {
      * 调用方负责拆 ItemFrames 和 cancel 任何活跃 session。
      */
     public synchronized boolean deleteWall(String wallId) {
+        assertMainThread();
         if (wallId == null) return false;
         // 若有活跃 session 持此 wall，先 cancel
         for (Session s : new ArrayList<>(byId.values())) {
@@ -526,6 +591,27 @@ public final class SessionManager {
     }
 
     // ---------- 内部 ----------
+
+    /**
+     * M16-P2.7-B：主线程断言。{@link #confirm} / {@link #cancel} / {@link #deleteWall}
+     * 直接或间接调用 {@link MapPool} 的 Bukkit API 路径（{@code createMap} / MapView 操作），必须主线程。
+     *
+     * <p>纯单测环境（Bukkit server 未注入）下 {@link Bukkit#getServer()} 抛 NPE 或返回 null，
+     * 此时跳过断言，防止已有单测因新增断言变红。MockBukkit / 生产路径下 server 非 null，
+     * 严格校验主线程。</p>
+     */
+    private static void assertMainThread() {
+        try {
+            if (Bukkit.getServer() == null) return;
+        } catch (Throwable t) {
+            return;
+        }
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException(
+                    "SessionManager: must be called on Bukkit main thread (was: "
+                            + Thread.currentThread().getName() + ")");
+        }
+    }
 
     private Session requireSession(String sessionId) {
         Session s = byId.get(sessionId);

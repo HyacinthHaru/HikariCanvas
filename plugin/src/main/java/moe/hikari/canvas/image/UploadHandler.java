@@ -7,9 +7,12 @@ import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.TokenService;
 import moe.hikari.canvas.state.ImageElement;
+import moe.hikari.canvas.storage.ImageUploadDao;
 import moe.hikari.canvas.storage.WallRepo;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.transaction.TransactionIsolationLevel;
 
 import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
@@ -22,7 +25,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -61,6 +66,8 @@ public final class UploadHandler {
     private final Logger log;
     private final ImageStorage storage;
     private final ImageQuotaService quota;
+    private final ImageUploadDao imageDao;
+    private final Jdbi jdbi;
     private final HikariCanvasConfig.ImageConfig cfg;
     private final TokenService tokenService;
     private final SessionManager sessionManager;
@@ -69,12 +76,15 @@ public final class UploadHandler {
 
     public UploadHandler(Logger log,
                          ImageStorage storage, ImageQuotaService quota,
+                         ImageUploadDao imageDao, Jdbi jdbi,
                          HikariCanvasConfig.ImageConfig cfg,
                          TokenService tokenService, SessionManager sessionManager,
                          WallRepo wallRepo) {
         this.log = log;
         this.storage = storage;
         this.quota = quota;
+        this.imageDao = imageDao;
+        this.jdbi = jdbi;
         this.cfg = cfg;
         this.tokenService = tokenService;
         this.sessionManager = sessionManager;
@@ -196,44 +206,99 @@ public final class UploadHandler {
             decoded = downscale(decoded, maxEdge);
         }
 
-        // 7. 配额（per-wall 由 EditSession 在 element.add 时再卡；这里 0 占位 → 不卡 per-wall）
-        long approxBytes = (long) decoded.getWidth() * decoded.getHeight() * 4L; // 上限估算（PNG 编码后通常更小）
-        ImageQuotaService.CheckResult qr = quota.check(uploader, 0, approxBytes, bypass);
-        if (qr instanceof ImageQuotaService.CheckResult.Rejected rj) {
-            reject(ctx, 429, rj.code(), rj.reason());
-            return;
-        }
-        if (qr instanceof ImageQuotaService.CheckResult.NeedsEviction ne) {
-            long maxTotal = (long) cfg.maxTotalStorageMb() * 1024L * 1024L;
-            storage.evictLruUntilUnder(approxBytes, maxTotal, wallRepo);
-            // 再查一次
-            ImageQuotaService.CheckResult retry = quota.check(uploader, 0, approxBytes, bypass);
-            if (retry instanceof ImageQuotaService.CheckResult.Rejected rj2) {
-                reject(ctx, 429, rj2.code(), rj2.reason());
-                return;
-            }
-            if (retry instanceof ImageQuotaService.CheckResult.NeedsEviction) {
-                reject(ctx, 429, "QUOTA_DISK_FULL",
-                        "all uploads in use by active walls; cannot free space (need " + ne.bytesToFree() + " bytes)");
-                return;
-            }
-        }
-
-        // 8. PNG 编码 + 落盘
-        ImageStorage.StoreResult result;
+        // 7. PNG 编码 + hash 计算（事务外做 CPU 重活）
+        byte[] pngBytes;
         try {
-            result = storage.putIfAbsent(decoded, uploader);
+            pngBytes = ImageStorage.encodePng(decoded);
         } catch (IOException e) {
-            log.log(Level.WARNING, "ImageStorage.putIfAbsent failed", e);
-            reject(ctx, 500, "INTERNAL_ERROR", "persist failed: " + e.getMessage());
+            log.log(Level.WARNING, "PNG encode failed", e);
+            reject(ctx, 500, "INTERNAL_ERROR", "encode failed");
             return;
+        }
+        String hash = ImageStorage.sha256Hex16(pngBytes);
+        long pngLen = pngBytes.length;
+
+        // 8. M16 P2.1 + P2.2 单事务 quota+evict+insert（IMMEDIATE 写锁）。
+        //    per-hash lock 串行化同 hash 并发，避免两个 caller 同时写同一文件。
+        ReentrantLock hashLock = storage.writeLockFor(hash);
+        hashLock.lock();
+        ImageQuotaService.QuotaResult qr;
+        ImageUploadDao.Row finalRow;
+        try {
+            final ImageUploadDao.Row candidate = new ImageUploadDao.Row(
+                    hash, pngLen,
+                    decoded.getWidth(), decoded.getHeight(),
+                    "image/png", uploader,
+                    System.currentTimeMillis(), System.currentTimeMillis(), 1);
+            // referenced 集合在事务外 sweep（jdbi 读连接）；事务内只用作 LRU 排除集
+            Set<String> referenced = storage.collectReferencedHashes(wallRepo);
+
+            try {
+                qr = jdbi.inTransaction(TransactionIsolationLevel.SERIALIZABLE, handle -> {
+                    // P2.1：SQLite 下用 SAVEPOINT-style 不行；这里通过先发一条 no-op
+                    // UPDATE（影响 0 行也持锁）把事务从 DEFERRED 升级到 RESERVED 写锁，
+                    // 避免并发两个 caller 都先 read 然后争 write 撞 SQLITE_BUSY。
+                    // 配合 Database busy_timeout=5000 兜底。
+                    handle.execute("UPDATE image_uploads SET last_used_at = last_used_at "
+                            + "WHERE hash = '__locker__'");
+                    // 重新查（持写锁内）以决定走 exists vs new
+                    Optional<ImageUploadDao.Row> existing = imageDao.findByHashOn(handle, hash);
+                    boolean alreadyExists = existing.isPresent();
+                    return quota.tryReserveQuotaOn(
+                            handle, uploader, candidate, pngLen,
+                            alreadyExists, referenced, bypass);
+                });
+            } catch (Exception e) {
+                log.log(Level.WARNING, "upload transaction failed", e);
+                reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
+                return;
+            }
+
+            if (qr instanceof ImageQuotaService.DeniedPerDay dp) {
+                reject(ctx, 429, "QUOTA_EXCEEDED",
+                        "per-day upload limit reached: " + dp.currentCount() + "/" + dp.limit());
+                return;
+            }
+            if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
+                reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
+                        "disk full; cannot free " + dd.bytesShort() + " more bytes");
+                return;
+            }
+
+            ImageQuotaService.Reserved ok = (ImageQuotaService.Reserved) qr;
+
+            // 事务 commit 后：(a) 写新文件 atomic move；(b) 清 LRU 已 evict 的孤儿文件
+            if (ok.inserted()) {
+                try {
+                    storage.writeFileAtomic(hash, pngBytes);
+                } catch (IOException e) {
+                    // 补偿：回滚 DB 行，避免孤儿 DB row
+                    log.log(Level.WARNING, "writeFileAtomic failed; rolling back DB row " + hash, e);
+                    try {
+                        jdbi.useTransaction(TransactionIsolationLevel.SERIALIZABLE, handle ->
+                                imageDao.deleteOn(handle, hash));
+                    } catch (Exception rb) {
+                        log.log(Level.SEVERE,
+                                "compensation DELETE failed; orphan DB row may remain: " + hash, rb);
+                    }
+                    reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
+                    return;
+                }
+            }
+            // best-effort 删除 LRU 已 evict 的磁盘文件（DB row 已在事务内 DELETE）
+            for (String evictedHash : ok.evictedHashes()) {
+                storage.deleteFileOnly(evictedHash);
+            }
+            finalRow = candidate;
+        } finally {
+            hashLock.unlock();
         }
 
         ctx.status(200).json(Map.of(
-                "source", result.hash(),
-                "width", result.width(),
-                "height", result.height(),
-                "bytes", result.bytes()));
+                "source", hash,
+                "width", finalRow.width(),
+                "height", finalRow.height(),
+                "bytes", pngLen));
     }
 
     // ---------- GET /api/upload/{source} ----------

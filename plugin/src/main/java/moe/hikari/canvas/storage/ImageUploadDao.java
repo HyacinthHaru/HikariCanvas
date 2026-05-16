@@ -1,5 +1,6 @@
 package moe.hikari.canvas.storage;
 
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 
 import java.util.List;
@@ -47,22 +48,7 @@ public final class ImageUploadDao {
      */
     public boolean insert(Row r) {
         try {
-            int rows = jdbi.withHandle(h -> h.createUpdate(
-                    "INSERT OR IGNORE INTO image_uploads("
-                            + "hash, bytes, width, height, mime, uploader_uuid, "
-                            + "uploaded_at, last_used_at, refcount) "
-                            + "VALUES(:hash, :bytes, :w, :h, :mime, :uploader, "
-                            + ":uploaded, :lastUsed, :refcount)")
-                    .bind("hash", r.hash)
-                    .bind("bytes", r.bytes)
-                    .bind("w", r.width)
-                    .bind("h", r.height)
-                    .bind("mime", r.mime)
-                    .bind("uploader", r.uploaderUuid.toString())
-                    .bind("uploaded", r.uploadedAt)
-                    .bind("lastUsed", r.lastUsedAt)
-                    .bind("refcount", r.refcount)
-                    .execute());
+            int rows = jdbi.withHandle(h -> insertOn(h, r));
             return rows == 1;
         } catch (Exception e) {
             log.log(Level.WARNING, "ImageUploadDao.insert failed: " + r.hash, e);
@@ -70,70 +56,120 @@ public final class ImageUploadDao {
         }
     }
 
+    /**
+     * M16 P2.1：事务内执行 INSERT，不吞异常。调用方在 {@code jdbi.inTransaction} lambda
+     * 内传入活动 {@link Handle}；冲突或异常上抛使外层事务能感知并回滚。
+     *
+     * @return 1 = 插入成功；0 = INSERT OR IGNORE 命中冲突（同 hash 已存在）
+     */
+    public int insertOn(Handle h, Row r) {
+        return h.createUpdate(
+                "INSERT OR IGNORE INTO image_uploads("
+                        + "hash, bytes, width, height, mime, uploader_uuid, "
+                        + "uploaded_at, last_used_at, refcount) "
+                        + "VALUES(:hash, :bytes, :w, :h, :mime, :uploader, "
+                        + ":uploaded, :lastUsed, :refcount)")
+                .bind("hash", r.hash)
+                .bind("bytes", r.bytes)
+                .bind("w", r.width)
+                .bind("h", r.height)
+                .bind("mime", r.mime)
+                .bind("uploader", r.uploaderUuid.toString())
+                .bind("uploaded", r.uploadedAt)
+                .bind("lastUsed", r.lastUsedAt)
+                .bind("refcount", r.refcount)
+                .execute();
+    }
+
     public Optional<Row> findByHash(String hash) {
         try {
-            return jdbi.withHandle(h -> h.createQuery(
-                    "SELECT * FROM image_uploads WHERE hash = :h")
-                    .bind("h", hash)
-                    .map((rs, ctx) -> mapRow(rs))
-                    .findOne());
+            return jdbi.withHandle(h -> findByHashOn(h, hash));
         } catch (Exception e) {
             log.log(Level.WARNING, "ImageUploadDao.findByHash failed: " + hash, e);
             return Optional.empty();
         }
     }
 
+    /** Transaction-aware overload; throws on error so outer tx can rollback. */
+    public Optional<Row> findByHashOn(Handle h, String hash) {
+        return h.createQuery(
+                "SELECT * FROM image_uploads WHERE hash = :h")
+                .bind("h", hash)
+                .map((rs, ctx) -> mapRow(rs))
+                .findOne();
+    }
+
     /** 引用图片时刷新 last_used_at（用于 LRU 排序）。 */
     public void touchLastUsed(String hash, long ts) {
         try {
-            jdbi.useHandle(h -> h.createUpdate(
-                    "UPDATE image_uploads SET last_used_at = :ts WHERE hash = :h")
-                    .bind("ts", ts)
-                    .bind("h", hash)
-                    .execute());
+            jdbi.useHandle(h -> touchLastUsedOn(h, hash, ts));
         } catch (Exception e) {
             log.log(Level.WARNING, "touchLastUsed failed: " + hash, e);
         }
     }
 
+    /** Transaction-aware overload. */
+    public void touchLastUsedOn(Handle h, String hash, long ts) {
+        h.createUpdate(
+                "UPDATE image_uploads SET last_used_at = :ts WHERE hash = :h")
+                .bind("ts", ts)
+                .bind("h", hash)
+                .execute();
+    }
+
     public void delete(String hash) {
         try {
-            jdbi.useHandle(h -> h.createUpdate(
-                    "DELETE FROM image_uploads WHERE hash = :h")
-                    .bind("h", hash)
-                    .execute());
+            jdbi.useHandle(h -> deleteOn(h, hash));
         } catch (Exception e) {
             log.log(Level.WARNING, "ImageUploadDao.delete failed: " + hash, e);
         }
     }
 
+    /** Transaction-aware overload; throws on error. */
+    public int deleteOn(Handle h, String hash) {
+        return h.createUpdate(
+                "DELETE FROM image_uploads WHERE hash = :h")
+                .bind("h", hash)
+                .execute();
+    }
+
     /** 玩家在 sinceTs 后的上传次数（per-player 24h 配额用）。 */
     public int countByUploaderSince(UUID uploaderUuid, long sinceTs) {
         try {
-            return jdbi.withHandle(h -> h.createQuery(
-                    "SELECT COUNT(*) FROM image_uploads "
-                            + "WHERE uploader_uuid = :u AND uploaded_at >= :ts")
-                    .bind("u", uploaderUuid.toString())
-                    .bind("ts", sinceTs)
-                    .mapTo(Integer.class)
-                    .one());
+            return jdbi.withHandle(h -> countByUploaderSinceOn(h, uploaderUuid, sinceTs));
         } catch (Exception e) {
             log.log(Level.WARNING, "countByUploaderSince failed: " + uploaderUuid, e);
             return 0;
         }
     }
 
+    /** Transaction-aware overload; throws on error. */
+    public int countByUploaderSinceOn(Handle h, UUID uploaderUuid, long sinceTs) {
+        return h.createQuery(
+                "SELECT COUNT(*) FROM image_uploads "
+                        + "WHERE uploader_uuid = :u AND uploaded_at >= :ts")
+                .bind("u", uploaderUuid.toString())
+                .bind("ts", sinceTs)
+                .mapTo(Integer.class)
+                .one();
+    }
+
     /** 总磁盘字节数（total-disk-mb 配额用）。 */
     public long sumBytes() {
         try {
-            return jdbi.withHandle(h -> h.createQuery(
-                    "SELECT COALESCE(SUM(bytes), 0) FROM image_uploads")
-                    .mapTo(Long.class)
-                    .one());
+            return jdbi.withHandle(this::sumBytesOn);
         } catch (Exception e) {
             log.log(Level.WARNING, "sumBytes failed", e);
             return 0L;
         }
+    }
+
+    /** Transaction-aware overload; throws on error. */
+    public long sumBytesOn(Handle h) {
+        return h.createQuery(
+                "SELECT COALESCE(SUM(bytes), 0) FROM image_uploads")
+                .mapTo(Long.class)
+                .one();
     }
 
     /**
@@ -142,27 +178,32 @@ public final class ImageUploadDao {
      */
     public List<Row> pickLruCandidates(int limit, java.util.Set<String> excludeHashes) {
         try {
-            if (excludeHashes == null || excludeHashes.isEmpty()) {
-                return jdbi.withHandle(h -> h.createQuery(
-                        "SELECT * FROM image_uploads ORDER BY last_used_at ASC LIMIT :n")
-                        .bind("n", Math.max(limit, 1))
-                        .map((rs, ctx) -> mapRow(rs))
-                        .list());
-            }
-            // M15.4 P0-15：用 SQL NOT IN 替代内存 filter。否则攻击者上传 16 张图全引用 →
-            // SQL 返 16 行、filter 全空 → break → 所有玩家永久 fail。
-            return jdbi.withHandle(h -> h.createQuery(
-                    "SELECT * FROM image_uploads "
-                            + "WHERE hash NOT IN (<exc>) "
-                            + "ORDER BY last_used_at ASC LIMIT :n")
-                    .bindList("exc", new java.util.ArrayList<>(excludeHashes))
-                    .bind("n", Math.max(limit, 1))
-                    .map((rs, ctx) -> mapRow(rs))
-                    .list());
+            return jdbi.withHandle(h -> pickLruCandidatesOn(h, limit, excludeHashes));
         } catch (Exception e) {
             log.log(Level.WARNING, "pickLruCandidates failed", e);
             return List.of();
         }
+    }
+
+    /** Transaction-aware overload; throws on error. */
+    public List<Row> pickLruCandidatesOn(Handle h, int limit, java.util.Set<String> excludeHashes) {
+        if (excludeHashes == null || excludeHashes.isEmpty()) {
+            return h.createQuery(
+                    "SELECT * FROM image_uploads ORDER BY last_used_at ASC LIMIT :n")
+                    .bind("n", Math.max(limit, 1))
+                    .map((rs, ctx) -> mapRow(rs))
+                    .list();
+        }
+        // M15.4 P0-15：用 SQL NOT IN 替代内存 filter。否则攻击者上传 16 张图全引用 →
+        // SQL 返 16 行、filter 全空 → break → 所有玩家永久 fail。
+        return h.createQuery(
+                "SELECT * FROM image_uploads "
+                        + "WHERE hash NOT IN (<exc>) "
+                        + "ORDER BY last_used_at ASC LIMIT :n")
+                .bindList("exc", new java.util.ArrayList<>(excludeHashes))
+                .bind("n", Math.max(limit, 1))
+                .map((rs, ctx) -> mapRow(rs))
+                .list();
     }
 
     public List<Row> listAll() {

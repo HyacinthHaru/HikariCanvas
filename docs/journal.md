@@ -5,6 +5,62 @@
 
 ---
 
+## 2026-05-16 · M16 Phase 2（数据完整性 / 并发 P0 7 项）
+
+针对 docs/ultrareview-2026-05-16.md 数据一致性 P0，3 个并行 agent 完成。
+
+### P2.1 + P2.2 上传配额 + 磁盘/DB 原子化
+
+并发上传可超额（stateless check → insert），磁盘写半截留孤儿。整合到单事务：
+
+- `ImageUploadDao` 加事务感知重载 `*On(Handle, ...)`，不吞异常便于回滚
+- `ImageQuotaService.tryReserveQuotaOn(Handle, ...)` 在传入事务内顺序：per-day count → disk sum → LRU `pickLruCandidatesOn + deleteOn` 循环 → `insertOn`；返 sealed `QuotaResult { Reserved | DeniedPerDay | DeniedDiskAfterLru }`，`Reserved` 携 evictedHashes
+- `UploadHandler` 走 `jdbi.inTransaction(SERIALIZABLE, ...)`，事务首句 `UPDATE __locker__` 升级到 SQLite RESERVED 写锁
+- `ImageStorage.writeFileAtomic`：写 `<hash>.png.tmp` → `Files.move(ATOMIC_MOVE, REPLACE_EXISTING)`；同 hash `ReentrantLock` 串行；目标已存在 idempotent 跳过
+- 流程：编码 PNG（事务外）→ 取 writeLock → 事务（quota + evict + insert）→ commit → `writeFileAtomic` + 多个 `deleteFileOnly`；写文件失败开补偿 tx 删孤儿行
+
+错误码：`429 QUOTA_EXCEEDED` / `413 QUOTA_EXCEEDED_DISK`。
+
+### P2.3 + P2.4 MapPool 多世界化 + bindToWall 一致性
+
+- `freeQueue` → `Map<UUID worldId, Deque<Integer>>`，按 world 分桶
+- `reserveForWall(wallId, count, World world)`；同 world FREE 不足时 `expand(world, n)`；超 max 抛 `PoolExhaustedException`（错误含 world 名）
+- `initialize(World defaultWorld, Map<String, Integer> perWorldInitial)`：扫持久化行按 `MapView.getWorld()` 归桶，按 perWorldInitial 扩容，default world 补齐
+- 调用点：`HikariCanvas.initialize` / `SessionManager` 4 处 `bindToWall` + `reserveForWall` 全部传 world
+- `bindToWall` 校验 mapView.world == expected.world，不一致抛 `IllegalStateException`（不可恢复内部 bug）
+- 配置：`map-pool.per-world: {}`（默认空，按 world 名 → initial count）
+
+### P2.5 WallRestorer 池泄漏修复（**项目核心风险**）
+
+启动期 restore 失败留 acquired map 不归还 → idcounts.dat 膨胀。
+
+- `WallRestorer.restoreOne` 用 `try-catch(RuntimeException | Error)` 包裹；catch 时 for-loop `mapPool.releaseToFree(mid)` 释放本轮所有 bound map（bindToWall 已是原子语义：先全扫描后全更新，部分失败 = 0 bind）
+- 新 `MapPool.releaseToFree(mapId)`：不论 owner 强制 RESERVED → FREE，归还到 mapView world 桶；audit `POOL_RELEASE_TO_FREE`
+- 失败 wall ID 收集到 `failedRestoreWallIds` 不可变 set；wall row 在 DB 保留供重试
+- `WandListener` 加 7-arg 构造接 WallRestorer：玩家用 wand 选到 failed wall 时红字 ActionBar「Wall failed to restore on startup, see server log」，不进 open
+
+### P2.6 pendingDeletes 多 wall 支持
+
+`Map<UUID, PendingDelete>` → `ConcurrentMap<UUID, ConcurrentMap<wallId, PendingDelete>>`。同玩家 30s 窗口内不同 wall pending 互不覆盖；同 wall 二次敲提示「Already pending, type confirm」。新内部 `QuitListener` 监听 `PlayerQuitEvent` 整层 remove。
+
+### P2.7 SessionManager confirm 原子回滚 + 主线程断言
+
+- 新 `SessionConfirmFailedException`
+- confirm 维护 `Deque<Runnable> rollbacks` LIFO 倒序栈：3 步 push（`releaseWall(pending)` / `wallRepo.delete(wallId)` / `releaseWall(wallId)`）；bind race / 通用异常都 catch 跑 rollbacks 再抛 SessionConfirmFailedException；`runRollbacks` 单条 try/catch 不掩盖原异常
+- `CanvasCommand.runConfirm` catch 显示「Failed to confirm session, server log」
+- `assertMainThread()` 加在 `SessionManager` (confirm/cancel/deleteWall) + `MapPool` (initialize/reserveForWall/bindToWall/releaseWall/releaseToFree) 8 处
+- 测试兼容：`Bukkit.getServer()` null 时跳过断言（纯单测环境）
+
+### 验证
+
+`./gradlew :plugin:test --rerun-tasks` 全绿。先 macOS Finder `* 2.class` 重复污染清掉。
+
+### 关联文件
+
+`plugin/src/main/java/moe/hikari/canvas/`: `HikariCanvas.java` / `HikariCanvasConfig.java` / `command/CanvasCommand.java` / `image/ImageQuotaService.java` / `image/ImageStorage.java` / `image/UploadHandler.java` / `pool/MapPool.java` / `render/WallRestorer.java` / `session/SessionManager.java` / `session/WandListener.java` / `storage/ImageUploadDao.java`。`config.yml`。
+
+---
+
 ## 2026-05-16 · M16 Phase 1（安全 P0 核心 7 项）
 
 针对 `docs/ultrareview-2026-05-16.md` ≈200 条去重问题中的最高优先级安全 P0，分 3 个并行 agent（network / template / wall）完成 7 项。

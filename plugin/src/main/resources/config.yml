@@ -51,6 +51,17 @@ map-pool:
   # 池上限。达到上限后新会话会拿到 POOL_EXHAUSTED 错误，提示玩家等待。
   # 单服 200 张地图够 25 人同时编辑 4×2 墙面。
   max: 256
+  # M16 P2.3：可选 per-world initial 分配（多世界服务器用）。池内按 world 分桶；
+  # 给 wall 借出的 map 必须与 wall 所在 world 一致——否则 wall 在 nether 但 map 在
+  # overworld 会导致位置概念错乱。下面 key = world name（与 server.properties 一致）。
+  # 列出的 world 在启动时确保 ≥ 该数 FREE map；未列出的 world 走 on-demand 扩容
+  # （首次 /canvas confirm 时按需 createMap）。所有 per-world 之和不超过 max。
+  # 示例：
+  #   per-world:
+  #     world: 32          # overworld 预热 32 张
+  #     world_nether: 8    # nether 预热 8 张
+  #     world_the_end: 4   # end 预热 4 张
+  per-world: {}
 
 # 投影帧率 / 输入限流
 throttle:

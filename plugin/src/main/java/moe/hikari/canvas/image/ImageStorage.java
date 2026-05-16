@@ -8,8 +8,10 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
@@ -19,7 +21,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -65,6 +69,12 @@ public final class ImageStorage {
 
     private static final long RENDER_DECODE_TIMEOUT_MS = 500L;
 
+    // M16 P2.2：同 hash 并发 putIfAbsent 串行（保证 Files.write 不重入），
+    // 不同 hash 不互相阻塞。LRU 自动清理：lock 在 finally 释放后由 GC 回收的可能性
+    // 极低（map 永远引用），但锁数与历史出现的 hash 数同阶；每个 ReentrantLock ~48B，
+    // 1k hash 占 ~48KB，可接受。
+    private final ConcurrentHashMap<String, ReentrantLock> writeLocks = new ConcurrentHashMap<>();
+
     private final LinkedHashMap<String, CacheEntry> memCache = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, CacheEntry> eldest) {
@@ -92,42 +102,127 @@ public final class ImageStorage {
      * 把 {@link BufferedImage} 编码为 PNG 后按 hash 内容寻址持久化。
      * 若同 hash 已存在 → 不写磁盘 + 仅刷 last_used_at，返回 {@code isNew=false}。
      *
+     * <p><b>注意</b>：M16 P2.2 之后此方法保留作 legacy 简化路径（仅用于测试 / 老代码）。
+     * 生产路径 {@link moe.hikari.canvas.image.UploadHandler} 走"事务内 quota+insert →
+     * 事务外写磁盘"的拆分流程，不再调本方法。</p>
+     *
      * <p>注意：调用方应在调用前完成所有上层校验（大小 / mime / 解码 / 配额）；此方法不做这些。</p>
      *
      * @throws IOException 磁盘写失败
      */
     public StoreResult putIfAbsent(BufferedImage img, UUID uploader) throws IOException {
+        byte[] pngBytes = encodePng(img);
+        String hash = sha256Hex16(pngBytes);
+        long now = System.currentTimeMillis();
+
+        ReentrantLock lock = writeLocks.computeIfAbsent(hash, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            Optional<ImageUploadDao.Row> existing = dao.findByHash(hash);
+            if (existing.isPresent()) {
+                dao.touchLastUsed(hash, now);
+                ImageUploadDao.Row r = existing.get();
+                return new StoreResult(hash, r.width(), r.height(), r.bytes(), false);
+            }
+
+            // 先 DB insert，后写文件（与 P2.2 主路径方向一致）
+            boolean inserted = dao.insert(new ImageUploadDao.Row(
+                    hash, pngBytes.length,
+                    img.getWidth(), img.getHeight(),
+                    "image/png", uploader, now, now, 1));
+            if (!inserted) {
+                // race：另一线程同 hash 抢先 insert
+                Optional<ImageUploadDao.Row> raced = dao.findByHash(hash);
+                if (raced.isPresent()) {
+                    ImageUploadDao.Row r = raced.get();
+                    return new StoreResult(hash, r.width(), r.height(), r.bytes(), false);
+                }
+            }
+            try {
+                writeFileAtomic(hash, pngBytes);
+            } catch (IOException e) {
+                // 补偿：删除已插入的 DB 行，避免孤儿
+                dao.delete(hash);
+                throw e;
+            }
+            return new StoreResult(hash, img.getWidth(), img.getHeight(), pngBytes.length, true);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * M16 P2.2：将 BufferedImage 编码为 PNG 字节。无副作用，可在任何线程调用。
+     */
+    public static byte[] encodePng(BufferedImage img) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         if (!ImageIO.write(img, "png", baos)) {
             throw new IOException("ImageIO.write returned false; no PNG writer?");
         }
-        byte[] pngBytes = baos.toByteArray();
-        String hash = sha256Hex16(pngBytes);
-        long now = System.currentTimeMillis();
+        return baos.toByteArray();
+    }
 
-        Optional<ImageUploadDao.Row> existing = dao.findByHash(hash);
-        if (existing.isPresent()) {
-            dao.touchLastUsed(hash, now);
-            ImageUploadDao.Row r = existing.get();
-            return new StoreResult(hash, r.width(), r.height(), r.bytes(), false);
+    /**
+     * M16 P2.2：原子地把 PNG 字节落到 {@code uploads/<hash>.png}。
+     * 流程：写到 {@code <hash>.png.tmp} → {@code Files.move(tmp → final, ATOMIC_MOVE, REPLACE_EXISTING)}。
+     * 失败 finally 清理 tmp，避免孤儿。
+     *
+     * <p>幂等：目标已存在 + 同 hash（content-addressed）则跳过写。这样 race 中第二个 caller
+     * 不会重复 IO。</p>
+     */
+    public void writeFileAtomic(String hash, byte[] pngBytes) throws IOException {
+        if (hash == null || !HASH_RE.matcher(hash).matches()) {
+            throw new IOException("invalid hash for writeFileAtomic: " + hash);
         }
-
-        Path file = uploadsDir.resolve(hash + ".png");
-        Files.write(file, pngBytes);
-
-        boolean inserted = dao.insert(new ImageUploadDao.Row(
-                hash, pngBytes.length,
-                img.getWidth(), img.getHeight(),
-                "image/png", uploader, now, now, 1));
-        if (!inserted) {
-            // 罕见并发：另一线程同 hash 抢先 insert；以已有行为准
-            Optional<ImageUploadDao.Row> raced = dao.findByHash(hash);
-            if (raced.isPresent()) {
-                ImageUploadDao.Row r = raced.get();
-                return new StoreResult(hash, r.width(), r.height(), r.bytes(), false);
+        Path finalPath = uploadsDir.resolve(hash + ".png");
+        if (Files.isRegularFile(finalPath)) {
+            // content-hash 内容寻址保证 idempotent
+            return;
+        }
+        Path tmpPath = uploadsDir.resolve(hash + ".png.tmp");
+        try {
+            Files.write(tmpPath, pngBytes);
+            try {
+                Files.move(tmpPath, finalPath,
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException amnse) {
+                // 兜底：FS 不支持原子 move（极少见，比如跨 mount）→ 退化为普通 move
+                Files.move(tmpPath, finalPath, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            try {
+                Files.deleteIfExists(tmpPath);
+            } catch (IOException ignored) {
+                // best-effort
             }
         }
-        return new StoreResult(hash, img.getWidth(), img.getHeight(), pngBytes.length, true);
+    }
+
+    /**
+     * M16 P2.2：删除磁盘 PNG 文件（**不**碰 DB / 内存缓存）。
+     * 用于事务 commit 之后 LRU evict 已 DELETE 的行的磁盘 cleanup；DB 行已不在，
+     * 这里失败仅 warn，孤儿文件由下次启动 sweep / 手工清理 / 永远占空间（最坏情况）。
+     */
+    public void deleteFileOnly(String hash) {
+        if (hash == null || !HASH_RE.matcher(hash).matches()) return;
+        Path file = uploadsDir.resolve(hash + ".png");
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            log.log(Level.WARNING, "deleteFileOnly failed (orphan file may remain): " + hash, e);
+        }
+        synchronized (memCache) {
+            memCache.remove(hash);
+        }
+    }
+
+    /**
+     * M16 P2.2：取（创建）某 hash 专属串行锁。同 hash 写流程必须 lock/unlock 包裹。
+     * 不同 hash 不互锁。
+     */
+    public ReentrantLock writeLockFor(String hash) {
+        return writeLocks.computeIfAbsent(hash, k -> new ReentrantLock());
     }
 
     /**

@@ -67,6 +67,8 @@ public final class HikariCanvas extends JavaPlugin {
     private SessionManager sessionManager;
     private SessionReaper sessionReaper;
     private WallRepo wallRepo;
+    /** M16 P2.5：启动期 wall 恢复器，wand listener 用它查"restore 失败"白名单。 */
+    private WallRestorer wallRestorer;
     private WebServer webServer;
     private MapPacketSender mapPacketSender;
     private FrameDeployer frameDeployer;
@@ -154,7 +156,9 @@ public final class HikariCanvas extends JavaPlugin {
         // 预览地图池
         mapPool = new MapPool(getLogger(), database.jdbi(), auditLog,
                 canvasRenderer, config.mapPoolInitial, config.mapPoolMax);
-        mapPool.initialize(Bukkit.getWorlds().get(0));
+        // M16 P2.3：多世界 per-world initial（可选 config）。defaultWorld 用于总数补齐 +
+        // 旧池行 world 信息缺失时的 fallback。未配置 per-world 的 world 走 on-demand 扩容。
+        mapPool.initialize(Bukkit.getWorlds().get(0), config.mapPoolPerWorldInitial);
 
         // 墙面识别 + 会话管理（T6 Wand / T11 命令族会注入这两个）
         wallResolver = new WallResolver(16, this);  // canvas-max-maps 默认；plugin 提供 PDC namespace
@@ -209,13 +213,22 @@ public final class HikariCanvas extends JavaPlugin {
         canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer, getLogger());
 
         // M5.5：启动末尾把所有 walls 的像素 compose 回对应 MapView
+        // M16 P2.5：保留 restorer 引用，让 wand listener 能查"启动期 restore 失败的 wall"
+        // 并给玩家 ActionBar 提示。
+        WallRestorer wallRestorerInstance = new WallRestorer(getLogger(), wallRepo, mapPool,
+                canvasRenderer, compositor, placeholderRenderer);
         try {
-            int restored = new WallRestorer(getLogger(), wallRepo, mapPool,
-                    canvasRenderer, compositor, placeholderRenderer).restore();
+            int restored = wallRestorerInstance.restore();
             getLogger().info("Wall restore: " + restored + " wall(s) repainted");
+            if (!wallRestorerInstance.failedRestoreWallIds().isEmpty()) {
+                getLogger().warning("Wall restore: failed wall_ids = "
+                        + wallRestorerInstance.failedRestoreWallIds()
+                        + " (interactions will be blocked until next successful restart)");
+            }
         } catch (Exception e) {
             getLogger().log(java.util.logging.Level.WARNING, "WallRestorer failed (non-fatal)", e);
         }
+        this.wallRestorer = wallRestorerInstance;
 
         // M6-A：模板注册表。jar 内 /templates/*.yml + plugins/HikariCanvas/templates/ +
         // M14 user-templates/<uuid>/*.yml（创意工坊）
@@ -260,7 +273,8 @@ public final class HikariCanvas extends JavaPlugin {
         // WandListener 注册：需要 frameDeployer / tokenService / editorUrlTemplate 来支持
         // "瞄已有 ItemFrame 二次确认 → open" 路径
         getServer().getPluginManager().registerEvents(
-                new WandListener(this, sessionManager, frameDeployer, tokenService, wallRepo, editorUrlTemplate),
+                new WandListener(this, sessionManager, frameDeployer, tokenService, wallRepo,
+                        editorUrlTemplate, wallRestorer),
                 this);
         getServer().getPluginManager().registerEvents(
                 new FrameProtectionListener(frameDeployer), this);
@@ -272,7 +286,9 @@ public final class HikariCanvas extends JavaPlugin {
                                 templateRegistry, templatePreviewService, editorUrlTemplate).build()));
 
         // M13：UploadHandler 需要 sessionManager / wallRepo，所以晚于它们装配
+        // M16 P2.1/P2.2：还需要 imageDao + jdbi 做事务化 quota+insert+evict
         uploadHandler = new UploadHandler(getLogger(), imageStorage, imageQuota,
+                imageDao, database.jdbi(),
                 config.images, tokenService, sessionManager, wallRepo);
 
         webServer = new WebServer(getLogger(), config.host, config.port,

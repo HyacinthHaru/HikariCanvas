@@ -3,6 +3,7 @@ package moe.hikari.canvas.session;
 import moe.hikari.canvas.deploy.CanvasWand;
 import moe.hikari.canvas.deploy.FrameDeployer;
 import moe.hikari.canvas.deploy.WallResolver;
+import moe.hikari.canvas.render.WallRestorer;
 import moe.hikari.canvas.storage.WallRepo;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
@@ -56,6 +57,8 @@ public final class WandListener implements Listener {
     private final TokenService tokenService;
     private final WallRepo wallRepo;
     private final String editorUrlTemplate;
+    /** M16 P2.5：启动期 restore 失败的 wall 白名单查询；玩家与失败 wall 交互时给提示。可空（test 路径）。 */
+    private final WallRestorer wallRestorer;
 
     /** 第一次点 HikariCanvas ItemFrame 后记录待确认。playerUuid → (wallId, ts)。 */
     private final ConcurrentMap<UUID, PendingOpen> pendingOpens = new ConcurrentHashMap<>();
@@ -65,12 +68,24 @@ public final class WandListener implements Listener {
     public WandListener(JavaPlugin plugin, SessionManager sessionManager,
                         FrameDeployer frameDeployer, TokenService tokenService,
                         WallRepo wallRepo, String editorUrlTemplate) {
+        this(plugin, sessionManager, frameDeployer, tokenService, wallRepo, editorUrlTemplate, null);
+    }
+
+    /**
+     * M16 P2.5 完整构造：注入 {@link WallRestorer} 让 wand 路径能查"启动期 restore 失败"白名单。
+     * 旧 6-arg 构造保留兼容 test。
+     */
+    public WandListener(JavaPlugin plugin, SessionManager sessionManager,
+                        FrameDeployer frameDeployer, TokenService tokenService,
+                        WallRepo wallRepo, String editorUrlTemplate,
+                        WallRestorer wallRestorer) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
         this.frameDeployer = frameDeployer;
         this.tokenService = tokenService;
         this.wallRepo = wallRepo;
         this.editorUrlTemplate = editorUrlTemplate;
+        this.wallRestorer = wallRestorer;
     }
 
     // ---------- 方块层 ----------
@@ -131,6 +146,14 @@ public final class WandListener implements Listener {
     // ---------- "瞄已有 wall → 二次确认 → open" ----------
 
     private void handleOpenExistingWall(Player player, String wallId) {
+        // M16 P2.5：启动期 restore 失败的 wall → ActionBar 提示，不进入 open 路径。
+        // 让玩家立刻明白不必再点（避免一直点不开还以为是 lock 问题）。
+        if (wallRestorer != null && wallRestorer.isRestorationFailed(wallId)) {
+            player.sendActionBar(Component.text(
+                    "Wall '" + wallId + "' failed to restore on startup — see server log",
+                    NamedTextColor.RED));
+            return;
+        }
         // M15.3 Phase 2 方案 C：wand 路径同步 lock check。SessionManager.open 已硬拦截,
         // 这里多一道 ActionBar 提示让玩家立刻明白不必再点。
         WallRepo.Wall w = wallRepo.loadById(wallId).orElse(null);

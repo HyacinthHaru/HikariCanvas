@@ -26,6 +26,9 @@ import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.HashMap;
@@ -71,8 +74,20 @@ public final class CanvasCommand {
     /** 形如 {@code http://host:port/?token={token}}；{token} 占位符会被替换。 */
     private final String editorUrlTemplate;
 
-    /** 玩家最近一次 /canvas delete <id> 的待确认信息：playerUuid → (wallId, ts)。 */
-    private final ConcurrentMap<UUID, PendingDelete> pendingDeletes = new ConcurrentHashMap<>();
+    /**
+     * M16-P2.6：玩家最近的 /canvas delete <wallId> 待确认条目。
+     * 外层 key = playerUuid；内层 key = wallId，value = pending 元数据。
+     *
+     * <p>多 wall 并存：玩家可同时对多个不同 wall 各起一个 pending（30s 窗口内），
+     * 互不覆盖。后续敲 {@code /canvas delete <wallId> confirm} 时按 (player, wallId)
+     * 精确匹配。原来用 {@code Map<UUID, PendingDelete>} 会导致连续两个 {@code delete A}
+     * 后 {@code delete B} 第二条覆盖第一条 → 玩家若想 confirm A 会得到 "mismatched" 报错。</p>
+     *
+     * <p>清理：{@link QuitListener} 在玩家退出时清整层 bucket（{@code pendingDeletes.remove(playerUuid)}）；
+     * 另在 {@link #runDeleteFirstStep} 入口顺手 reap 该玩家已超 30s 的旧条目。无独立 reap task。</p>
+     */
+    private final ConcurrentMap<UUID, ConcurrentMap<String, PendingDelete>> pendingDeletes =
+            new ConcurrentHashMap<>();
 
     private record PendingDelete(String wallId, long ts) {}
 
@@ -96,6 +111,17 @@ public final class CanvasCommand {
         this.templateRegistry = templateRegistry;
         this.templatePreviewService = templatePreviewService;
         this.editorUrlTemplate = editorUrlTemplate;
+        // M16-P2.6：注册 PlayerQuit 监听清 pendingDeletes，避免玩家退出后 bucket 长期挂着
+        plugin.getServer().getPluginManager().registerEvents(
+                new QuitListener(), plugin);
+    }
+
+    /** Internal listener: PlayerQuit → 清整层 pendingDeletes entry。 */
+    private final class QuitListener implements Listener {
+        @EventHandler
+        public void onQuit(PlayerQuitEvent event) {
+            pendingDeletes.remove(event.getPlayer().getUniqueId());
+        }
     }
 
     public LiteralCommandNode<CommandSourceStack> build() {
@@ -366,8 +392,20 @@ public final class CanvasCommand {
                     NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
-        pendingDeletes.put(player.getUniqueId(),
-                new PendingDelete(wallId, System.currentTimeMillis()));
+        long now = System.currentTimeMillis();
+        ConcurrentMap<String, PendingDelete> bucket = pendingDeletes.computeIfAbsent(
+                player.getUniqueId(), k -> new ConcurrentHashMap<>());
+        // M16-P2.6：先清这玩家自己已过期的条目（顺手 reap），再判同一 wallId 是否已 pending
+        reapExpired(bucket, now);
+        PendingDelete existing = bucket.get(wallId);
+        if (existing != null && now - existing.ts() <= DELETE_CONFIRM_WINDOW_MS) {
+            player.sendMessage(Component.text(
+                    "Already pending for wall " + wallId
+                            + ". Type /canvas delete " + wallId + " confirm to proceed.",
+                    NamedTextColor.YELLOW));
+            return Command.SINGLE_SUCCESS;
+        }
+        bucket.put(wallId, new PendingDelete(wallId, now));
         player.sendMessage(Component.text(
                 "About to delete wall " + wallId
                         + (w.alias() != null ? " '" + w.alias() + "'" : "")
@@ -376,11 +414,24 @@ public final class CanvasCommand {
         return Command.SINGLE_SUCCESS;
     }
 
+    /**
+     * 清理一个玩家 bucket 中所有超过 {@link #DELETE_CONFIRM_WINDOW_MS} 的条目。
+     * O(n) on bucket size；bucket 通常仅 0-3 项，不需要后台线程。
+     */
+    private static void reapExpired(ConcurrentMap<String, PendingDelete> bucket, long now) {
+        bucket.entrySet().removeIf(e -> now - e.getValue().ts() > DELETE_CONFIRM_WINDOW_MS);
+    }
+
     private int runDeleteConfirm(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
         String wallId = StringArgumentType.getString(ctx, "wall_id");
-        PendingDelete pd = pendingDeletes.remove(player.getUniqueId());
         long now = System.currentTimeMillis();
+        ConcurrentMap<String, PendingDelete> bucket = pendingDeletes.get(player.getUniqueId());
+        PendingDelete pd = bucket == null ? null : bucket.remove(wallId);
+        // 若 bucket 被清空，gc 外层 entry，避免长期挂着空 map
+        if (bucket != null && bucket.isEmpty()) {
+            pendingDeletes.remove(player.getUniqueId(), bucket);
+        }
         if (pd == null || !pd.wallId().equals(wallId)
                 || now - pd.ts() > DELETE_CONFIRM_WINDOW_MS) {
             player.sendMessage(Component.text(
@@ -421,7 +472,17 @@ public final class CanvasCommand {
             return 0;
         }
 
-        SessionManager.ConfirmResult result = sessionManager.confirm(s.id());
+        SessionManager.ConfirmResult result;
+        try {
+            result = sessionManager.confirm(s.id());
+        } catch (SessionManager.SessionConfirmFailedException e) {
+            // M16-P2.7-A：confirm 中跨子系统步骤已 rollback。给玩家提示，细节看服务端日志。
+            plugin.getLogger().log(Level.SEVERE, "SessionManager.confirm rolled back", e);
+            player.sendMessage(Component.text(
+                    "Failed to confirm session, server log for details.",
+                    NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
         if (result instanceof SessionManager.ConfirmResult.NotReady nr) {
             player.sendMessage(Component.text("Not ready: " + nr.detail(), NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;

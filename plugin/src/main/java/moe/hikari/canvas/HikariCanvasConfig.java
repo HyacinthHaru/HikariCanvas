@@ -36,6 +36,12 @@ public final class HikariCanvasConfig {
     // ---- map-pool ----
     public final int mapPoolInitial;
     public final int mapPoolMax;
+    /**
+     * M16 P2.3：per-world initial 配置（world name → 该 world 至少 FREE 数）。
+     * 未配置的 world 走 on-demand 扩容。配置 key = world name（与 server.properties 一致）。
+     * 不可变 Map，可能为 empty。
+     */
+    public final java.util.Map<String, Integer> mapPoolPerWorldInitial;
 
     // ---- throttle ----
     public final int projectionFps;
@@ -83,6 +89,7 @@ public final class HikariCanvasConfig {
         this.tokenPurgeTicks = b.tokenPurgeTicks;
         this.mapPoolInitial = b.mapPoolInitial;
         this.mapPoolMax = b.mapPoolMax;
+        this.mapPoolPerWorldInitial = b.mapPoolPerWorldInitial;
         this.projectionFps = b.projectionFps;
         this.inputRatePerSecond = b.inputRatePerSecond;
         this.inputBurst = b.inputBurst;
@@ -126,6 +133,22 @@ public final class HikariCanvasConfig {
 
         b.mapPoolInitial = Math.max(0, f.getInt("map-pool.initial", 64));
         b.mapPoolMax = Math.max(b.mapPoolInitial, f.getInt("map-pool.max", 256));
+        // M16 P2.3：可选 per-world 初始分配。yml 形如：
+        //   map-pool:
+        //     per-world:
+        //       world: 32
+        //       world_nether: 8
+        //       world_the_end: 4
+        // 未列出的 world 走 on-demand 扩容；负值 / 非整数 clamp 到 0。
+        org.bukkit.configuration.ConfigurationSection pw = f.getConfigurationSection("map-pool.per-world");
+        if (pw != null) {
+            java.util.Map<String, Integer> parsed = new java.util.LinkedHashMap<>();
+            for (String k : pw.getKeys(false)) {
+                int v = Math.max(0, pw.getInt(k, 0));
+                if (v > 0) parsed.put(k, v);
+            }
+            b.mapPoolPerWorldInitial = java.util.Map.copyOf(parsed);
+        }
 
         b.projectionFps = Math.max(1, Math.min(30, f.getInt("throttle.projection-fps", 5)));
         b.inputRatePerSecond = Math.max(1, f.getInt("throttle.input-rate-per-second", 20));
@@ -179,6 +202,7 @@ public final class HikariCanvasConfig {
         long tokenPurgeTicks = 20L * 60 * 5;
         int mapPoolInitial = 64;
         int mapPoolMax = 256;
+        java.util.Map<String, Integer> mapPoolPerWorldInitial = java.util.Map.of();
         int projectionFps = 5;
         int inputRatePerSecond = 20;
         int inputBurst = 40;
