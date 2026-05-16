@@ -5,6 +5,55 @@
 
 ---
 
+## 2026-05-16 · M16 Phase 5（构建依赖 P0 3 项）
+
+针对 docs/ultrareview-2026-05-16.md 第十四章构建 P0，单 agent 完成。
+
+### P5.1 shadowJar relocate
+
+`plugin/build.gradle.kts` shadowJar block 加 7 条 `relocate`：
+
+```
+com.fasterxml.jackson         → moe.hikari.canvas.shaded.jackson
+com.github.benmanes.caffeine  → moe.hikari.canvas.shaded.caffeine
+org.jdbi                      → moe.hikari.canvas.shaded.jdbi
+com.zaxxer.hikari             → moe.hikari.canvas.shaded.hikari
+io.javalin                    → moe.hikari.canvas.shaded.javalin
+org.eclipse.jetty             → moe.hikari.canvas.shaded.jetty
+org.yaml.snakeyaml            → moe.hikari.canvas.shaded.snakeyaml
+```
+
+**关键**：snakeyaml 必须同步 relocate（jackson-yaml 间接依赖，否则破解析）。**不动**：`org.sqlite`（JNI native lib，relocate 会导致 native 加载失败）；PacketEvents（plugin-loader 模式，compileOnly 即可）。
+
+`mergeServiceFiles()` 保留，处理 META-INF/services 下 Jackson Module SPI / JDBI Plugin SPI / Jetty SPI 等。
+
+**unzip 验证**（HikariCanvas-0.1.0-SNAPSHOT-all.jar）：
+- 旧路径泄漏：**0 条**
+- `moe/hikari/canvas/shaded/` 下：**5397 条** entries
+- `org/sqlite/JDBC.class` 保留原路径（JNI 安全）
+- `META-INF/services/*` 自动改名（`moe.hikari.canvas.shaded.jackson.core.JsonFactory` / `...jdbi.v3.core.spi.JdbiPlugin` 等）
+
+### P5.2 HikariCP leakDetectionThreshold
+
+`Database.java` HikariConfig 加 `cfg.setLeakDetectionThreshold(30_000)`。SQLite 单写场景下任何超 30s 未还连接都肯定是 bug，dev/prod 都启用。
+
+### P5.3 paperweight 锁定 + npm ci
+
+- paperweight-userdev 已锁 `2.0.0-beta.21`（无需改）
+- `installWebDeps` task 从 `npm install` 改 `npm ci`；`web/package-lock.json` 与 package.json 一致（vite build 1728 modules 已验证）
+
+### 验证
+
+- `./gradlew :plugin:shadowJar`：SUCCESS（32s 全量 / 2s 增量）
+- `./gradlew :plugin:test --rerun-tasks`：**364 tests / 0 failures / 0 errors**
+- 先清掉 macOS Finder `* 2.class` 同步残留（已知陷阱）
+
+### 关联文件
+
+`plugin/build.gradle.kts` / `plugin/src/main/java/moe/hikari/canvas/storage/Database.java`。
+
+---
+
 ## 2026-05-16 · M16 Phase 4（前端资源生命周期 P0 3 项）
 
 针对 docs/ultrareview-2026-05-16.md 前端 P0，单 agent 完成。

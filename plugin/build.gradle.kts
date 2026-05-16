@@ -65,9 +65,11 @@ val generatedWebResources = layout.buildDirectory.dir("generated/web-resources")
 
 val installWebDeps = tasks.register<Exec>("installWebDeps") {
     group = "build"
-    description = "npm install in web/ — only runs when node_modules is missing"
+    description = "npm ci in web/ — only runs when node_modules is missing"
     workingDir = webBuildDir.asFile
-    commandLine("npm", "install")
+    // M16 P5.3：npm ci 严格按 package-lock.json 装，可重现性 > 自动升级；
+    // package.json 与 lock 不一致直接报错，比 npm install 静默升级更安全。
+    commandLine("npm", "ci")
     onlyIf { !webBuildDir.dir("node_modules").asFile.exists() }
     outputs.dir(webBuildDir.dir("node_modules"))
 }
@@ -279,6 +281,22 @@ tasks {
     shadowJar {
         archiveBaseName.set("HikariCanvas")
         archiveClassifier.set("")
+        // M16 P5.1：把所有 runtime 内嵌 lib relocate 到 moe.hikari.canvas.shaded.*，防止
+        // 与生产服其它插件（多半也带 jackson 等）发生类加载冲突。
+        //
+        // 注意事项：
+        // - org.sqlite 含 JNI native lib（路径硬编码），relocate 会导致 native load 失败 → 不动
+        // - PacketEvents 是 plugin-loader 模式（compileOnly），不进 shadow jar → 无需 relocate
+        // - mergeServiceFiles 必须保留：jackson modules / jdbi plugins / jetty 都靠
+        //   META-INF/services 走 ServiceLoader 注册
+        relocate("com.fasterxml.jackson", "moe.hikari.canvas.shaded.jackson")
+        relocate("com.github.benmanes.caffeine", "moe.hikari.canvas.shaded.caffeine")
+        relocate("org.jdbi", "moe.hikari.canvas.shaded.jdbi")
+        relocate("com.zaxxer.hikari", "moe.hikari.canvas.shaded.hikari")
+        relocate("io.javalin", "moe.hikari.canvas.shaded.javalin")
+        relocate("org.eclipse.jetty", "moe.hikari.canvas.shaded.jetty")
+        // jackson-dataformat-yaml 间接依赖 SnakeYAML；同步 relocate 避免半 shade
+        relocate("org.yaml.snakeyaml", "moe.hikari.canvas.shaded.snakeyaml")
         mergeServiceFiles()
     }
 
