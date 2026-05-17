@@ -17,3 +17,7 @@ export { elementToPolygon, CIRCLE_SAMPLE_POINTS, PATH_CURVE_SAMPLES } from './El
 export { buildGraph, findGapAt } from './LivePaintCore';
 export { gapPolygonToPathD, gapToPathElement, VERTEX_WARN_THRESHOLD } from './PolygonToPath';
 export type { Polygon, GapPolygon, LivePaintGraph } from './types';
+
+// M18-P2：Worker 化 composable
+export { useLivePaint } from './useLivePaint';
+export type { UseLivePaintOpts, UseLivePaintReturn } from './useLivePaint';

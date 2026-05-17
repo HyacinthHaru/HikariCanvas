@@ -70,6 +70,33 @@
 
 ---
 
+## 2026-05-17 · M18 Phase 2（Worker + 增量缓存）
+
+1 个 agent 完成。
+
+### 新文件
+
+- `web/src/livepaint/livePaintWorker.ts`：module worker；message discriminated union `{type:'build', requestId, elements, canvasWidth, canvasHeight}` → `{type:'ok'|'err', requestId, graph|message}`；内部 try/catch 包 buildGraph
+- `web/src/livepaint/useLivePaint.ts`：Vue composable
+  - debounce 100ms（与 M5 编辑器输入防抖一致；避免 element 高频变化 worker 风暴）
+  - requestId race 处理：`pendingRequestId` 记最新，旧响应丢弃
+  - JSON 深 clone（Vue reactive Proxy 不能 structuredClone；toRaw 不能 deep）
+  - `enabled` gate：Live Paint 工具未激活时不重建，节省 CPU
+  - `onScopeDispose` terminate worker + clearTimeout（对齐 M16-P4.2 资源纪律）
+  - API：`graph / isBuilding / findGapAt / rebuildNow`
+
+### 设计决策
+
+- **vite.config.ts 未动**：`?worker` import 默认 module worker，Vite 自动处理
+- **Worker chunk 当前未单独生成**：barrel export 不构成消费，tree-shake 掉是预期；P3 接入 CanvasView 后才会出 `livePaintWorker-*.js`
+- **修复细节**：初稿误从 LivePaintCore 导入 LivePaintGraph（实际只在 types），改 `import type` 修
+
+### vite build
+
+503.43 kB / 155.65 kB gzip 零增量（worker 代码 dead-code-eliminated 等 P3）。
+
+---
+
 ## 2026-05-17 · M18 Phase 1（Live Paint 核心算法）
 
 针对 B-medium+ 路线，1 个 agent 完成核心几何算法（无 UI / 无 Worker）。
