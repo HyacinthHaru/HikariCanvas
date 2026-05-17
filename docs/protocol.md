@@ -212,10 +212,26 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | op | 方向 | payload |
 | --- | --- | --- |
 | `canvas.resize` | C→S | `{ widthMaps, heightMaps }` (前提：池有容量) |
-| `canvas.background` | C→S | `{ color }` |
+| `canvas.background` | C→S | `{ fill: Fill }` 推荐 / `{ color: "#RRGGBB[AA]" }` 兼容 — 见下方 schema |
 | `canvas.grid` | C→S | `{ size: int }`（0 = 关闭网格） |
 | `canvas.guides.set` | C→S | `{ guides: [{ axis, position }, ...] }`（整组替换；前端拖动期不发，松手 batch 发） |
 | `template.apply` | C→S | `{ templateId, params }` （会清空所有层 + 用 Default Layer 包结果） |
+
+**`canvas.background` payload schema（M17 升级）：**
+
+```jsonc
+// 新格式（推荐，支持渐变）
+{ "fill": Fill }
+
+// 兼容旧格式（仅支持纯色 hex）
+{ "color": "#RRGGBB[AA]" }
+```
+
+- **优先识别 `fill` 字段**，缺则降级读 `color`（包成 SolidFill 内部表示）
+- **两者都缺** → `INVALID_PAYLOAD`
+- `Fill` 联合类型 schema 复用 element fill（M11 引入）：`SolidFill { type: "solid", color }` / `LinearFill { type: "linear", stops, angle }` / `RadialFill { type: "radial", stops, cx, cy, r }`。完整字段见 `state/Fill.java` + `web/src/types/protocol.ts`
+- 渐变背景的 bbox = 整画布；CanvasCompositor 通过 `FillPaintBuilder.fillToPaint(canvas.background(), 0, 0, w, h)` 渲染
+- 持久化兼容：`ProjectState.Canvas.background` 反序列化时 `FillDeserializer` 自动把字符串 `"#xxx"` wrap 成 SolidFill；旧 .canvas 文件与 fixture 0 漂移
 
 ### 5.6 历史类
 

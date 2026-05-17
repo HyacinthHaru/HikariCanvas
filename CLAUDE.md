@@ -82,7 +82,7 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → **M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16）**。总工期约 6 个月（M0-M16 累计约 8 周 wall-clock）。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16） → **M17 生产级体验组（F1-F5 复制粘贴 / 拖动跟手 / 智能对齐 / 自由拖动画布 / Canvas Fill） ✅（2026-05-17）**。总工期约 6 个月（M0-M17 累计约 8 周 wall-clock）。
 
 ## M8-M12 已完成（详见 docs/journal.md）
 
@@ -223,4 +223,22 @@ M15 落地当晚跑第二轮全栈 ultrareview，又扫出 28 项 P0/P1。分 6 
 5. **HikariCP maxPoolSize=4 保持**：SQLite 单写但允许并发读；4 池让 read-heavy 路径（preview / quota check）不阻塞主线程；写靠 SQLite `busy_timeout=5000` + `leakDetectionThreshold=30s` 兜底；缩到 1 会让任何长查询阻塞所有后续连接获取
 
 累计 M15+M16 = 55 项 P0/P1 修完。**Token 暴力枚举防御（SessionRateLimiter）未实装**——M16 范围外，留 v1.x；详见 `docs/security.md §2.4`。
+
+## M17 生产级体验组（2026-05-17）
+
+M16 安全 / 数据完整性收口后，把"体验质量从 demo 升到生产级"作为单独里程碑推一组 5 大 feature。4 phase commit batch 完成：
+
+- **M17.1 F2 + F4**（commit `a049484`）F2 onDragMove 单选 path 实时跟手 bug 修复（双层渲染——顶层 Konva 透明 hit-test + 底层 Canvas 2D PreviewRenderer——单选时早 return 导致底层不重绘，删早 return 后视觉跟手）；F4 自由拖动画布 + 1024px 虚空白边 + 新 `'hand'` 工具（H 键 / Space 临时切 / cursor grab|grabbing）
+- **M17.2+3 F1 + F5 + F3 v1**（commit `1ed92ca`）F1 复制粘贴：`useClipboard` composable + Ctrl+C/V 快捷键 + 剪贴板格式 `hikari-canvas-v1:{...}` magic header + 跨 wall 工作 + 锁定 wall 拒粘贴；F5 `ProjectState.Canvas.background` String → Fill 联合类型，Jackson 自动兼容旧 hex 字符串，CanvasCompositor 走 FillPaintBuilder，alpha<1 编辑器 UI CSS 棋盘格提示，新 `CanvasSettingsSection.vue`，WS op `canvas.background` payload 升级 `{fill}`（新）+ `{color}`（兼容）；F3 v1 `useSnapManager` composable（canvas / element / grid 候选轴 + `snapAxis` 两遍扫描 + bypass 钩子）+ ui store snap 偏好 + localStorage + CanvasView onDragMove 接 snap + shift 临时禁用
+- **M17.4 F3 v2 完整版**（commit `2ac5558`）distribute 间距均分（`EqualGapX/Y` hints，仅两侧最近邻，与 axis snap 互斥）+ `SnapGuideOverlay.vue` 对齐线（红虚线 axis + 绿实线 gap + 距离标签）+ `SnapSettingsPopover.vue`（Magnet 按钮挂 TopBar）+ resize snap 走 Konva `boundBoxFunc` 按"动的边"应用 delta + rotation ≠ 0 跳过
+
+**关键架构决策（M17 已固化）**：
+
+1. **Canvas.background = Fill 联合类型**：`Solid / Linear / Radial` 三态统一，Jackson 自动兼容旧 hex 字符串（`FillDeserializer` 在 M11 已存在 string → SolidFill 路径，反序列化链路自动复用）。模板 raw_state fallback：渐变背景 v1 退 `"#FFFFFF"`，因 raw_state 模板格式仅识别 hex
+2. **`'hand'` 工具是非绘制工具之一**（M17 引入）：`ui.ActiveTool` 三大非绘制工具 = `select / move / hand`，与 line / arrow / circle / star / brush 等绘制工具区分；Space 临时切由闭包 `spaceSavedTool` 保存原工具 + window blur 兜底防卡死
+3. **`useSnapManager` = 前端公共能力**（drag + resize 共用）：单候选轴扫描算法（canvas 3 / element 6/个 / grid floor+ceil 倍数）+ `snapAxis` 两遍扫描；O(n) 线性，100 elements ≈ 1800 比较 / frame，spatial index 留 v1.x
+4. **SnapHints 视觉反馈走 vue-konva 独立 layer**：`SnapGuideOverlay.vue` 挂载在 v-stage 内 marquee / drawPreview 同级的独立 v-layer，覆盖 element / transformer 上方；drag / transform end 立刻清 `activeSnapHints`，layer `v-if` 自然卸载
+5. **resize snap 选 `boundBoxFunc` 而非 transformend**：前者每帧拖锚点 call 可给视觉反馈，后者是结束时一次性事件；比对 newBox vs oldBox 找"动的边"按边应用 snap delta，比"snap 整 bbox"更精准，任何锚点（角 / 边中点）都正确无视觉跳动
+
+**评估**：5 feature 累计 ~1500 行净增、6 新文件、0 baseline 漂移；编辑器体验从 demo 质量升到生产级（拖动 60fps 实时跟手 / 智能对齐 + distribute / 自由 pan / 跨 wall 剪贴板 / 渐变背景）。**M18 (B-advanced Live Paint) 已可开工**。
 

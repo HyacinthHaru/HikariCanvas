@@ -915,3 +915,74 @@ P-2 定时 patch ProjectState：后台 task 每 N 秒 `EditSession.updateElement
 **不允许** — 会撞 lock-aware open 鉴权 + 撑爆 history 栈 + 产生大量 WS 流量。
 
 详见 `docs/journal.md` 2026-05-16 M15.3 / M15.4 条目。
+
+---
+
+## 14. 前端工具栏 & 交互模式（M17 起固化）
+
+LeftTools 工具栏分两组：
+
+| 组 | 工具 | 快捷键 | 行为 |
+| --- | --- | --- | --- |
+| 非绘制（M17 引入 hand） | `select` | V | 默认；点击 / 框选 / Transformer 锚点 |
+| | `move` | M | 同 select 的拖动子模式，禁用 marquee |
+| | `hand` | H | pan 模式；左键拖 outer scroll；与 marquee 互斥 |
+| 绘制 | `line` / `arrow` / `circle` / `star` | — | M9 引入 drag-to-create |
+| | `brush` | B | M12 引入 PointerEvent 接管 |
+
+**Space 临时切 hand**：keydown Space 闭包 `spaceSavedTool` 保存原工具 → 切 hand；keyup 恢复。`e.repeat` 保护防 OS 长按重复；window blur 兜底防卡死；keydown preventDefault 防 Space 触发页面滚动。
+
+**hand 工具下交互屏蔽**：hitConfig `listening: false`（与 drawTool 同路径）→ 左键穿透到 outer pan；onStageMouseDown 早 return 不启 marquee / draw；useTransformerManager 不挂 Transformer 锚点；cursor `grab` / 拖动时 `grabbing`。
+
+**1024px 虚空白边**：CanvasView inner wrapper scoped CSS `padding: 1024px`；onMounted nextTick 主动 `scrollLeft/Top = (scrollWidth - clientWidth) / 2` 居中。fitToViewport 不读 scrollWidth 故不受影响。
+
+---
+
+## 15. 前端智能对齐 useSnapManager（M17 引入）
+
+`web/src/composables/useSnapManager.ts` 是 drag + resize 共用的对齐能力 composable。**O(n) 线性**，100 elements ≈ 1800 比较 / frame，无 spatial index（留 v1.x）。
+
+### 15.1 候选轴（三类）
+
+| 类 | 数量 | 候选 |
+| --- | --- | --- |
+| canvas | 6 | x: 0 / w/2 / w；y: 0 / h/2 / h |
+| element（每元素） | 6 | x: left / cx / right；y: top / cy / bottom（按 `layer.visible && el.visible` 过滤，`excludeIds` 排除） |
+| grid | 2 | gridSize > 0 时 floor / ceil 倍数 |
+
+### 15.2 snapAxis 两遍扫描
+
+1. **第一遍**：anchors（dragged 元素的 left/center/right）× candidates 找最近距离 ≤ threshold 的 `bestDelta`
+2. **第二遍**：收集"应用 bestDelta 后恰好命中"的所有 candidate 作 `activeAxes`（多线同时命中 → visualizer 多线可视化）
+
+### 15.3 distribute 间距均分（v2）
+
+`findEqualGapX` / `findEqualGapY`：A.right < dragged.left 中 right 最大的 + C.left > dragged.right 中 left 最小的；A/C 必须同方向找到；span < w/h 跳过；**与同方向 axis snap 互斥**（axis 命中时不跑 distribute）。「任意三元素均分」留 v1.x 扩展。SnapHints 含 `equalGapX / equalGapY`（含 aRight / bLeft / bRight / cLeft + yCenter / x 镜像）。
+
+### 15.4 resize snap
+
+走 Konva Transformer 的 `boundBoxFunc(oldBox, newBox)` 钩子，**每帧拖锚点 call**（transformend 是结束时一次性事件无法做拖动反馈）。比对 newBox vs oldBox 找正在动的边（leftMoved / rightMoved / topMoved / bottomMoved），按边把 snap delta 应用到 `x or width` / `y or height`，对任何锚点（角 / 边中点）都正确无视觉跳动。
+
+- `rotation != 0` → return newBox 跳过 snap（旋转后 bbox 不对齐画布轴）
+- `w/h < 1` → return newBox
+- 多选时 excludeIds 整组 selectedIds 排除
+
+完整版（按锚点显式映射 + rotated bbox 支持）留 v1.x。
+
+### 15.5 shift 临时禁用
+
+CanvasView 内 window `keydown/keyup/blur` 维护 `isShiftDown` ref → 传给 snapManager 的 `bypass` 钩子，true 时 snap 透传 raw 坐标。
+
+### 15.6 持久化偏好
+
+ui store 字段：`snapEnabled / snapToGrid / snapToCanvas / snapToElement / snapToDistribute / snapThreshold`，localStorage key **`hikari-canvas:snap`**（与 theme / locale 同级），threshold 范围 [1, 64]，默认 `{enabled:true, toGrid:false, toCanvas:true, toElement:true, toDistribute:true, threshold:8}`。SnapSettingsPopover（TopBar Magnet 按钮）暴露 UI 开关。
+
+### 15.7 视觉反馈
+
+`SnapGuideOverlay.vue`（vue-konva v-layer + v-line / v-rect / v-text）挂载在 v-stage 内 marquee / drawPreview 同级独立 layer，覆盖 element / transformer 上方：
+
+- snap axis 红色虚线 `#ef4444` + dash `[4,3] / zoom`
+- equalGap 绿色实线 `#22c55e` + 两端短刻度 + 中间像素距离标签（白字 + 绿底圆角 pill）
+- strokeWidth / fontSize 全部 `1 / zoom` 保持视觉密度
+
+**fade**：drag / transform end 立刻清 `activeSnapHints = null`，layer `v-if` 自然卸载；CSS fade 留 v1.x。

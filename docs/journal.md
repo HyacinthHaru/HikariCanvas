@@ -5,6 +5,71 @@
 
 ---
 
+## 2026-05-17 · M17 收尾总览
+
+**M17 = 5 大 feature（F1-F5）落地 + 4 phase commit batch + 0 baseline 漂移 + ~1500 行净增**
+
+继 M15 / M16 安全与数据完整性收口后，把"体验质量从 demo 升到生产级"作为单独里程碑推完。
+
+| Phase | 主题 | feature 项 | commit |
+|---|---|---|---|
+| M17-P1 | 拖动跟手 + 自由拖动画布 | F2 + F4 | `a049484` |
+| M17-P2+3 | 复制粘贴 + Canvas Fill + 智能对齐 v1 | F1 + F5 + F3 v1 | `1ed92ca` |
+| M17-P4 | 智能对齐 v2 完整版（distribute + visualizer + resize snap） | F3 v2 | `2ac5558` |
+| M17-P5 | docs 同步收尾 | — | （本 commit） |
+| **合计** | | **5 feature / 4 commit** | |
+
+### 5 feature 一句话总结
+
+| feature | 类型 | 一句话 |
+| --- | --- | --- |
+| F1 | 新能力 | 复制粘贴 Ctrl+C/V，剪贴板 magic header `hikari-canvas-v1:` 跨 wall 工作，锁定 wall 拒粘贴 |
+| F2 | bug 修复 | onDragMove 单选 path 实时跟手 —— 双层渲染下早 return 导致底层 Canvas 2D 不重绘的视觉滞后 |
+| F3 | 新能力 | 智能对齐 = `useSnapManager` composable（drag + resize 共用）+ distribute 间距均分 + SnapGuideOverlay 对齐线 + Magnet popover |
+| F4 | 新能力 | 自由拖动画布（新 'hand' 工具 / H 键 / Space 临时切）+ 1024px 虚空白边 |
+| F5 | 数据模型升级 | `Canvas.background`: String → Fill 联合类型，Jackson 自动兼容旧 hex，渐变背景就位 |
+
+### M17 已固化的关键决策
+
+1. **Canvas.background = Fill 联合类型**：Solid / Linear / Radial 三态统一；`FillDeserializer`（M11 已存在 string → SolidFill 路径）自动反序列化兼容旧 hex 字符串与 14 fixture 0 漂移；模板 raw_state 渐变背景 fallback `"#FFFFFF"`（raw_state 格式仅识 hex）
+2. **`'hand'` 工具是非绘制工具之一**：`ui.ActiveTool` 三大非绘制工具 = `select / move / hand`，与 drawTool（line / arrow / circle / star / brush）区分；Space 临时切由闭包 `spaceSavedTool` 保存原工具 + window blur 兜底防卡死
+3. **`useSnapManager` = 公共能力**：drag （CanvasView onDragMove）+ resize （Konva Transformer boundBoxFunc）共用；O(n) 线性 + snapAxis 两遍扫描 + shift bypass + localStorage 持久化 `hikari-canvas:snap`
+4. **SnapGuideOverlay 走 vue-konva 独立 v-layer**：挂载在 v-stage 内 marquee / drawPreview 同级 layer，覆盖 element / transformer 上方；drag / transform end 立刻清 hints + `v-if` 自然卸载
+5. **resize snap 选 `boundBoxFunc` 而非 transformend**：前者每帧拖锚点 call 可给视觉反馈；按"动的边"应用 delta 比"snap 整 bbox"更精准，任何锚点（角 / 边中点）都正确无视觉跳动
+6. **双层渲染配合**：HikariCanvas 编辑器 = 顶层 Konva 透明 hit-test 矩形（fill rgba 0.001）+ 底层 Canvas 2D PreviewRenderer 像素化输出（dither + 248 调色板）。底层重绘依赖 `requestDraw()` → `watch(project.state, {deep:true})`。F2 修复证明任何拖动 mutation 必须落 store 才能触发 PreviewRenderer 重绘
+
+### M17 累计文件改动
+
+**新文件（6）**：
+- `web/src/composables/useClipboard.ts`（F1）
+- `web/src/composables/useSnapManager.ts`（F3）
+- `web/src/components/properties/CanvasSettingsSection.vue`（F5）
+- `web/src/components/canvas/SnapGuideOverlay.vue`（F3 v2）
+- `web/src/components/layout/SnapSettingsPopover.vue`（F3 v2）
+
+**改动 Java**（F5）：`state/Fill.java` / `state/ProjectState.java` / `state/EditSession.java` / `render/CanvasCompositor.java` / `render/CanvasProjector.java` / `render/WallRestorer.java` / `template/TemplateInstantiator.java` / `web/EditOpDispatcher.java` / test `EditSessionReplaceContentTest.java`
+
+**改动前端**（F1-F5）：`stores/ui.ts` / `stores/project.ts` / `stores/palette.ts` / `components/layout/CanvasView.vue` / `components/layout/LeftTools.vue` / `components/layout/RightPanel.vue` / `components/layout/TopBar.vue` / `composables/useCanvasShortcuts.ts` / `composables/usePanScroll.ts` / `composables/useTransformerManager.ts` / `render/PreviewRenderer.ts` / `types/protocol.ts` / `i18n/messages.ts`
+
+### 验证
+
+- `:plugin:test --rerun-tasks` BUILD SUCCESSFUL（14 RendererSnapshotTest baseline 0 像素漂移；F5 FillDeserializer 自动处理 fixture `"background": "#xxx"` 字符串）
+- `vite build` ~330-400ms / ~503 kB / ~155 kB gzip，0 新 TS 错误
+
+### 评估
+
+体验质量从 demo 升到生产级：60fps 拖动实时跟手 + 智能对齐 + distribute + 自由 pan + 跨 wall 剪贴板 + 渐变背景。**M18 (B-advanced Live Paint) 已可开工**。
+
+### 已知留档（v1.x scope）
+
+- 「任意三元素均分」(distribute) 完整版（v2 仅匹配两侧最近邻）
+- 完整版 resize snap（按锚点显式映射 + rotated bbox 支持）
+- SnapGuideOverlay CSS fade-out 过渡
+- spatial index for snapManager（100 elements 内 O(n) 不卡）
+- 多文件批量剪贴板 / image data 粘贴（M13 配额 + 6 层校验栈外）
+
+---
+
 ## 2026-05-17 · M17 Phase 4（F3 智能对齐完善 → v2 完整版）
 
 1 个 agent 完成。补齐 M17.3 v1 剩余：distribute + visualizer + popover + resize snap。
