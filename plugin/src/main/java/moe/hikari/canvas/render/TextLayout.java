@@ -48,6 +48,18 @@ public final class TextLayout {
         return fontSize;
     }
 
+    /**
+     * M20-P2\uFF1A\u57FA\u4E8E {@link FontMetricsTable} \u7684\u771F\u5B9E\u5B57\u7B26 advance\uFF1B\u7F3A\u5B57 / \u8868\u672A\u52A0\u8F7D\u65F6 fallback
+     * \u5230 {@link #canonicalCharWidth}\u3002\u6240\u6709 layout \u5B50\u65B9\u6CD5\u7684\u7EDF\u4E00\u5165\u53E3\u3002
+     *
+     * <p>fontId \u6765\u81EA {@link TextElement#fontId()}\uFF1B\u4E3A null \u76F4\u63A5\u8D70 canonical\u3002</p>
+     */
+    public static int charAdvance(String fontId, char c, int fontSize) {
+        int real = FontMetricsTable.advance(fontId, c, fontSize);
+        if (real > 0) return real;
+        return canonicalCharWidth(c, fontSize);
+    }
+
     private TextLayout() {}
 
     /**
@@ -85,6 +97,7 @@ public final class TextLayout {
         if (t.vertical()) {
             return layoutVertical(t);
         }
+        String fontId = t.fontId();
         int fontSize = t.fontSize();
         int boxWidth = t.w();
         float letterSpacing = t.letterSpacing();
@@ -101,7 +114,7 @@ public final class TextLayout {
             if (para.isEmpty()) {
                 lines.add("");
             } else {
-                softWrap(para, fontSize, boxWidth, letterSpacing, lines);
+                softWrap(fontId, para, fontSize, boxWidth, letterSpacing, lines);
             }
         }
 
@@ -114,7 +127,7 @@ public final class TextLayout {
             String line = lines.get(li);
             int lineTopY = t.y() + li * lineHeightPx;
             int baselineY = lineTopY + ascentPx;
-            int lineWidthPx = measureLineWidth(line, fontSize, letterSpacing);
+            int lineWidthPx = measureLineWidth(fontId, line, fontSize, letterSpacing);
             int startX = switch (t.align()) {
                 case "center" -> t.x() + (boxWidth - lineWidthPx) / 2;
                 case "right" -> t.x() + boxWidth - lineWidthPx;
@@ -124,7 +137,7 @@ public final class TextLayout {
             for (int i = 0; i < line.length(); i++) {
                 char c = line.charAt(i);
                 out.add(new PositionedGlyph(String.valueOf(c), cursorX, baselineY));
-                cursorX += canonicalCharWidth(c, fontSize);
+                cursorX += charAdvance(fontId, c, fontSize);
                 if (i < line.length() - 1) {
                     cursorX += Math.round(letterSpacing);
                 }
@@ -145,7 +158,7 @@ public final class TextLayout {
      *
      * <p>换行时：若断点为空白字符，空白字符 <b>丢弃</b>（不出现在下一行行首）。</p>
      */
-    private static void softWrap(String text, int fontSize, int maxWidth,
+    private static void softWrap(String fontId, String text, int fontSize, int maxWidth,
                                  float letterSpacing, List<String> out) {
         int n = text.length();
         int cursor = 0;
@@ -158,7 +171,7 @@ public final class TextLayout {
 
             while (i < n) {
                 char c = text.charAt(i);
-                int cw = canonicalCharWidth(c, fontSize);
+                int cw = charAdvance(fontId, c, fontSize);
                 int step = cw + (i > cursor ? Math.round(letterSpacing) : 0);
                 if (accWidth + step > maxWidth && i > cursor) {
                     breakOut = i;
@@ -213,11 +226,11 @@ public final class TextLayout {
         }
     }
 
-    private static int measureLineWidth(String line, int fontSize, float letterSpacing) {
+    private static int measureLineWidth(String fontId, String line, int fontSize, float letterSpacing) {
         if (line.isEmpty()) return 0;
         int width = 0;
         for (int i = 0; i < line.length(); i++) {
-            width += canonicalCharWidth(line.charAt(i), fontSize);
+            width += charAdvance(fontId, line.charAt(i), fontSize);
             if (i < line.length() - 1) {
                 width += Math.round(letterSpacing);
             }
@@ -254,6 +267,7 @@ public final class TextLayout {
      * <p>行首禁则在竖排下未实装（M7 polish）——相对少见。</p>
      */
     private static List<PositionedGlyph> layoutVertical(TextElement t) {
+        String fontId = t.fontId();
         int fontSize = t.fontSize();
         int letterSpacing = Math.round(t.letterSpacing());
         float lineHeightMul = t.lineHeight() <= 0 ? 1.2f : t.lineHeight();
@@ -291,7 +305,7 @@ public final class TextLayout {
                     // pivot = 方格中心；CanvasCompositor 绕此点 rotate 90° 后 drawString
                     out.add(new PositionedGlyph(s, colCenterX, cellTopY + fontSize / 2, true));
                 } else {
-                    int chW = canonicalCharWidth(c, fontSize);
+                    int chW = charAdvance(fontId, c, fontSize);
                     out.add(new PositionedGlyph(s, colCenterX - chW / 2, cellTopY + ascentPx, false));
                 }
                 cellTopY += fontSize + letterSpacing;

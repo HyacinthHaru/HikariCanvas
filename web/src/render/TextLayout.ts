@@ -2,6 +2,7 @@
 // 契约 docs/rendering.md §3。M5-C3 第一批：横排；竖排分支留下一个 commit 前后端一起做。
 
 import type { TextElement } from '@/types/protocol';
+import { advance } from './GlyphMetricsLut';
 
 /** 单字 glyph 在画布坐标下的绘制点。x + baselineY 与后端 Java 含义一致。 */
 export interface PositionedGlyph {
@@ -37,6 +38,16 @@ export function canonicalCharWidth(ch: string, fontSize: number): number {
     return fontSize;
 }
 
+/**
+ * M20-P3 dispatch：优先查 per-font GlyphMetricsLut（与后端 FontMetricsTable mirror），
+ * 表缺 / 字符缺则 fallback 到 {@link canonicalCharWidth}。fontId 沿调用链从 TextElement 透传。
+ */
+export function charAdvance(fontId: string, ch: string, fontSize: number): number {
+    const real = advance(fontId, ch, fontSize);
+    if (real > 0) return real;
+    return canonicalCharWidth(ch, fontSize);
+}
+
 /** 行首禁则：半全角标点不许出现在行首，回溯到上一行末。 */
 const LINE_START_FORBIDDEN = '）】」』。，、？！：；）】」』。，、？！：；)].,!?:;';
 
@@ -50,6 +61,7 @@ export function layoutText(t: TextElement): PositionedGlyph[] {
 
 function layoutHorizontal(t: TextElement): PositionedGlyph[] {
     const fontSize = t.fontSize;
+    const fontId = t.fontId;
     const boxW = t.w;
     const letterSpacing = t.letterSpacing;
     const lineHeightMul = t.lineHeight <= 0 ? 1.2 : t.lineHeight;
@@ -65,7 +77,7 @@ function layoutHorizontal(t: TextElement): PositionedGlyph[] {
         if (para === '') {
             lines.push('');
         } else {
-            softWrap(para, fontSize, boxW, letterSpacing, lines);
+            softWrap(para, fontId, fontSize, boxW, letterSpacing, lines);
         }
     }
 
@@ -78,7 +90,7 @@ function layoutHorizontal(t: TextElement): PositionedGlyph[] {
         const line = lines[li];
         const lineTopY = t.y + li * lineHeightPx;
         const baselineY = lineTopY + ascentPx;
-        const lineWidthPx = measureLineWidth(line, fontSize, letterSpacing);
+        const lineWidthPx = measureLineWidth(line, fontId, fontSize, letterSpacing);
         let startX = t.x;
         if (t.align === 'center') startX = t.x + Math.floor((boxW - lineWidthPx) / 2);
         else if (t.align === 'right') startX = t.x + boxW - lineWidthPx;
@@ -87,14 +99,14 @@ function layoutHorizontal(t: TextElement): PositionedGlyph[] {
         for (let i = 0; i < line.length; i++) {
             const ch = line[i];
             out.push({ ch, x: cursorX, baselineY });
-            cursorX += canonicalCharWidth(ch, fontSize);
+            cursorX += charAdvance(fontId, ch, fontSize);
             if (i < line.length - 1) cursorX += Math.round(letterSpacing);
         }
     }
     return out;
 }
 
-function softWrap(text: string, fontSize: number, maxW: number,
+function softWrap(text: string, fontId: string, fontSize: number, maxW: number,
                   letterSpacing: number, out: string[]): void {
     const n = text.length;
     let cursor = 0;
@@ -107,7 +119,7 @@ function softWrap(text: string, fontSize: number, maxW: number,
 
         while (i < n) {
             const ch = text[i];
-            const cw = canonicalCharWidth(ch, fontSize);
+            const cw = charAdvance(fontId, ch, fontSize);
             const step = cw + (i > cursor ? Math.round(letterSpacing) : 0);
             if (accW + step > maxW && i > cursor) {
                 breakOut = i;
@@ -155,11 +167,11 @@ function applyLineStartForbidden(lines: string[]): void {
     }
 }
 
-function measureLineWidth(line: string, fontSize: number, letterSpacing: number): number {
+function measureLineWidth(line: string, fontId: string, fontSize: number, letterSpacing: number): number {
     if (line.length === 0) return 0;
     let w = 0;
     for (let i = 0; i < line.length; i++) {
-        w += canonicalCharWidth(line[i], fontSize);
+        w += charAdvance(fontId, line[i], fontSize);
         if (i < line.length - 1) w += Math.round(letterSpacing);
     }
     return w;
@@ -169,6 +181,7 @@ function measureLineWidth(line: string, fontSize: number, letterSpacing: number)
 
 function layoutVertical(t: TextElement): PositionedGlyph[] {
     const fontSize = t.fontSize;
+    const fontId = t.fontId;
     const letterSpacing = Math.round(t.letterSpacing);
     const lineHeightMul = t.lineHeight <= 0 ? 1.2 : t.lineHeight;
     const colStep = Math.max(1, Math.round(fontSize * lineHeightMul));
@@ -203,7 +216,7 @@ function layoutVertical(t: TextElement): PositionedGlyph[] {
             if (isRotatableVertical(ch)) {
                 out.push({ ch, x: colCenterX, baselineY: cellTopY + Math.floor(fontSize / 2), rotated: true });
             } else {
-                const chW = canonicalCharWidth(ch, fontSize);
+                const chW = charAdvance(fontId, ch, fontSize);
                 out.push({ ch, x: colCenterX - Math.floor(chW / 2), baselineY: cellTopY + ascentPx });
             }
             cellTopY += fontSize + letterSpacing;

@@ -10,7 +10,7 @@ import { useDebounceFn } from '@vueuse/core';
 import { HelpCircle, Maximize2 } from 'lucide-vue-next';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
-import { layoutText, canonicalCharWidth, ASCENT_RATIO } from '@/render/TextLayout';
+import { layoutText, charAdvance, ASCENT_RATIO } from '@/render/TextLayout';
 import { FONT_META } from '@/render/PreviewRenderer';
 import { useI18n } from '@/i18n';
 import type { TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
@@ -72,7 +72,7 @@ function fitTextWidth() {
     if (glyphs.length === 0) return;
     let maxRight = te.x;
     for (const g of glyphs) {
-        const w = g.rotated ? te.fontSize : canonicalCharWidth(g.ch, te.fontSize);
+        const w = g.rotated ? te.fontSize : charAdvance(te.fontId, g.ch, te.fontSize);
         const right = g.x + w;
         if (right > maxRight) maxRight = right;
     }

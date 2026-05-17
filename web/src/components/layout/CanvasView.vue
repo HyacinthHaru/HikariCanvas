@@ -5,6 +5,7 @@ import { useProjectStore } from '@/stores/project';
 import { isDrawTool, useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
 import { renderProjectState, onIconReady, onPaletteReady } from '@/render/PreviewRenderer';
+import { preloadMetrics, onMetricsReady } from '@/render/GlyphMetricsLut';
 import { useI18n } from '@/i18n';
 import type { Element } from '@/types/protocol';
 
@@ -728,6 +729,11 @@ onMounted(() => {
     onIconReady(() => requestDraw());
     // M11-C：PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）
     onPaletteReady(() => requestDraw());
+    // M20-P3：GlyphMetricsLut 异步加载完成后请求重绘（text element 首帧走 canonicalCharWidth fallback，
+    // 加载完切到 per-font advance；与 onIconReady / onPaletteReady 同款 pattern）
+    preloadMetrics('ark_pixel');
+    preloadMetrics('source_han_sans');
+    onMetricsReady(() => requestDraw());
 
     // M17 F4：1024px 虚空白边让 scrollWidth / scrollHeight 比 viewport 大；
     // 默认 scrollLeft/Top = 0 会停在 padding 区导致看不到画布。nextTick 后居中。

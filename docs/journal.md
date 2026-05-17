@@ -5,6 +5,63 @@
 
 ---
 
+## 2026-05-17 · M20 Phase 2+3（后端 FontMetricsTable + 前端 GlyphMetricsLut）
+
+2 个并行 agent 完成运行时消费 M20.1 产物。
+
+### 后端 M20.2
+
+新 `FontMetricsTable.java` ~95 行：
+- `ConcurrentHashMap<String, Table>` 缓存 + MISSING sentinel 防重复 IO
+- `Table` record 内 `int[0x10000]` advances 数组（O(1) lookup，缺字 -1）
+- `advance(fontId, cp, fontSize)` 返 -1 → 调用方走 fallback `canonicalCharWidth`
+- 读 classpath `/fonts/{fontId}.metrics.json`，shaded jackson 自动透明（M16-P5.1）
+
+`TextLayout.java` 改造：
+- 新 `charAdvance(fontId, c, fontSize)` 统一入口；`canonicalCharWidth` 保留作 fallback
+- `softWrap` / `measureLineWidth` / `layoutVertical` 三方法签名加 `String fontId` 参数；`layout(t)` 取 `t.fontId()` 串联下游
+- 4 处 `canonicalCharWidth` 调用 → `charAdvance(fontId, ...)`
+
+`:plugin:test --rerun-tasks`：**364 tests / 3 fail / 0 error**。fail 全是 RendererSnapshotTest fixture（03-effects-stroke / 04-effects-shadow / 05-effects-glow）—— 预期，留 M20.5 重建 baseline。**01-hello-world / 02-chinese-text / 13-image-mask 等纯文本 fixture 未漂移**：说明 source_han_sans 在 ASCII/CJK 范围 advance 与 canonical 比例（0.5/1.0）高度接近，只有 effects 二阶像素扩散（stroke 宽度 / shadow / glow）放大了细微 advance 差异。非 fixture：361/361 通过。
+
+### 前端 M20.3
+
+新 `GlyphMetricsLut.ts` ~105 行（Java FontMetricsTable mirror）：
+- `preloadMetrics(fontId)` async + `pendingLoads` Map 去重并发请求
+- `advance(fontId, ch, fontSize)` 同款 round 缩放
+- `tables: Map<fontId, Table | null>` 以 null 作 sentinel 防重复加载
+- `Int16Array(0x10000)` 索引 BMP codepoint（节省 50% 内存 vs Int32Array）
+- `onMetricsReady(fn)` 钩子（与 onIconReady / onPaletteReady 同款 pattern）
+
+`TextLayout.ts` 改造：5 处 `canonicalCharWidth` → `charAdvance(fontId, ...)`；fontId 沿 softWrap / measureLineWidth 调用链传递；竖排 softWrapVertical 不传 fontId（仅用 fontSize 整字高度量列）。
+
+`CanvasView.vue` onMounted 加 `preloadMetrics('ark_pixel')` + `preloadMetrics('source_han_sans')` + `onMetricsReady(() => requestDraw())`。
+
+`TextElementSection.vue fitTextWidth` 同步改 `charAdvance(te.fontId, ...)`。
+
+### 验证
+
+- 后端 compileJava clean / 测试 361 non-fixture pass
+- 前端 vite build：543.29 → 544.29 KB（+1.00 KB；gzip +0.44 KB）；livePaintWorker 33.75 KB 不变（worker 未消费 GlyphMetricsLut，符合 M19 隔离）；0 TS 错误
+
+### 关键设计纪律
+
+- **保留 canonicalCharWidth 作 fallback**：用户字体未生成 metrics 时仍能画；首次渲染表未加载也能画
+- **fontId 串联到所有 layout 子方法**：避免全局变量 / context 注入
+- **onMetricsReady → requestDraw**：metrics fetch 到位后自动重画一次，无视觉跳变（fallback canonical 与真值差距 < 5px，眼睛察觉不到）
+
+### 留 M20.4-6
+
+- M20.4 用户字体启动期 metrics 生成 + HTTP 端点
+- M20.5 baseline 3 个 effects fixture re-review + 重建
+- M20.6 docs
+
+### 关联文件
+
+新：`plugin/.../render/FontMetricsTable.java` / `web/src/render/GlyphMetricsLut.ts`。改：`plugin/.../render/TextLayout.java` / `web/src/render/TextLayout.ts` / `web/src/render/PreviewRenderer.ts` / `web/src/components/layout/CanvasView.vue` / `web/src/components/properties/TextElementSection.vue`。
+
+---
+
 ## 2026-05-17 · M20 Phase 1（Glyph metrics generator）
 
 **起因**：用户报告字体展示问题——浏览器画板上「TO NEW CAMPUS OF HENAN UNIVERSITY」字符叠加在一起、「Sanyang Plaza」字间距全乱；MC 内同字符串视觉上还能读，但实际上 Java 端也按同样错误布局——只是 128×128 地图 + 248 调色板 + dither 把重叠像素 mush together 掩盖了。
