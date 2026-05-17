@@ -13,10 +13,42 @@
  * - M18-P4 将做 Douglas-Peucker / RDP 简化
  */
 
-import type { GapPolygon } from './types';
+import type { GapPolygon, Polygon } from './types';
+import { rdpSimplify } from './RdpSimplifier';
 
-/** 顶点数软警告阈值；超此值后端可能因 d 字符串过长拒绝。 */
+/** 顶点数软警告阈值；超此值会触发 RDP 简化。 */
 export const VERTEX_WARN_THRESHOLD = 180;
+
+/**
+ * 顶点硬上限。PathDValidator MAX_LEN = 4096，每顶点 fmt(...) 后约 17 char（"L1234.56 7890.12 "），
+ * 留 holes / 模板字段余量后 ~240 为安全顶。超此值仍由 RDP 阶梯式抬 tolerance 尝试压缩；
+ * 实在压不下来时只能 console.warn，由后端拒绝。
+ */
+export const VERTEX_HARD_LIMIT = 240;
+
+/**
+ * M18-P4：阶梯式 RDP 简化。顶点 > VERTEX_WARN_THRESHOLD 时触发，初始 tolerance=0.5，
+ * 每轮翻倍直到 ≤ VERTEX_HARD_LIMIT 或 tolerance ≥ 16（再大就视觉退化太厉害，放弃）。
+ * 每轮都用原 polygon 重算（而非上轮结果），避免误差累计偏移过大。
+ */
+function maybeSimplify(poly: Polygon): Polygon {
+    if (poly.length <= VERTEX_WARN_THRESHOLD) return poly;
+    let tol = 0.5;
+    let simplified = poly;
+    // 一轮就压到 LIMIT 以下当然好；不行就 tolerance 翻倍重来
+    while (simplified.length > VERTEX_HARD_LIMIT && tol < 16) {
+        simplified = rdpSimplify(poly, tol);
+        tol *= 2;
+    }
+    if (simplified.length > VERTEX_HARD_LIMIT) {
+        console.warn(
+            `[LivePaint] RDP unable to reduce ${poly.length} verts below ${VERTEX_HARD_LIMIT};`
+            + ` final = ${simplified.length} at tolerance ${tol / 2}px.`
+            + ' Server may reject the path; consider deleting overlapping elements.',
+        );
+    }
+    return simplified;
+}
 
 /** 一个 GapPolygon → 多 subpath SVG d 字符串。坐标 = 输入坐标系。 */
 export function gapPolygonToPathD(gap: GapPolygon): string {
@@ -62,18 +94,19 @@ export function gapToPathElement(gap: GapPolygon): {
     }
 
     const shift = ([x, y]: [number, number]): [number, number] => [x - minX, y - minY];
+    // M18-P4：先对外环 / 每个 hole 做 RDP 简化（基于本地坐标，shift 后再算更稳定，
+    // 因为 tolerance 是绝对像素阈值）。简化策略见 maybeSimplify。
+    const shiftedOuter: Polygon = gap.outer.map(shift);
+    const shiftedHoles: Polygon[] = gap.holes.map(h => h.map(shift));
+    const simplifiedOuter = maybeSimplify(shiftedOuter);
+    const simplifiedHoles = shiftedHoles.map(maybeSimplify);
+
     const localGap: GapPolygon = {
-        outer: gap.outer.map(shift),
-        holes: gap.holes.map(h => h.map(shift)),
+        outer: simplifiedOuter,
+        holes: simplifiedHoles,
     };
 
-    const vertexCount = gap.outer.length + gap.holes.reduce((s, h) => s + h.length, 0);
-    if (vertexCount > VERTEX_WARN_THRESHOLD) {
-        console.warn(
-            `[LivePaint] gap vertex count ${vertexCount} > ${VERTEX_WARN_THRESHOLD};`
-            + ' may exceed PathDValidator MAX_LEN=4096. RDP simplification deferred to M18-P4.',
-        );
-    }
+    const vertexCount = simplifiedOuter.length + simplifiedHoles.reduce((s, h) => s + h.length, 0);
 
     return {
         x: minX,

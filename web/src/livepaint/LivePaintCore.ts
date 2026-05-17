@@ -29,6 +29,11 @@ export function buildGraph(
         return { gaps: [], canvasWidth: 0, canvasHeight: 0 };
     }
 
+    /** 极小 gap 阈值（px²）。polygon-clipping 在数值精度边界偶尔输出近零面积 polygon；
+     *  这些 polygon 用户根本点不中，留着只会让 findGapAt 多扫一次。4px² ≈ 2×2 像素，
+     *  低于这个面积的 gap 实际不可达。 */
+    const MIN_GAP_AREA = 4;
+
     // 收集 polygon
     const polys: Polygon[] = [];
     for (const el of elements) {
@@ -65,34 +70,55 @@ export function buildGraph(
         // canvas - occupied → 所有空隙
         gapsRaw = polygonClipping.difference(canvasRect, occupied);
     } catch (e) {
-        // polygon-clipping 在极端退化输入（共线 / 重合点 / 自交）下可能抛
-        // 失败时降级为整画布单 gap（用户能继续点别处）
+        // M18-P4：polygon-clipping 在退化输入（自交 / 重合边 / 共线）下偶尔抛
+        // "Unable to complete output ring" 等。M18-P1 旧策略是降级为"整画布单 gap"，
+        // 但这会让用户误以为油漆桶能用——实际点哪里都填充整画布，行为完全不符。
+        // P4 改为 degraded=true + 空 gap 列表，让 UI 显式提示"不可用"。
         console.warn('[LivePaint] buildGraph union/difference failed:', e);
         return {
-            gaps: [{
-                outer: [[0, 0], [canvasWidth, 0], [canvasWidth, canvasHeight], [0, canvasHeight]],
-                holes: [],
-            }],
+            gaps: [],
             canvasWidth,
             canvasHeight,
+            degraded: true,
         };
     }
 
     // MultiPolygon → GapPolygon[]
+    // M18-P4：极小 gap（面积 < MIN_GAP_AREA px²）整体丢弃；这些来自 polygon-clipping
+    // 数值精度噪声，用户点不中也增加 findGapAt 扫描成本。
     const gaps: GapPolygon[] = [];
     for (const poly of gapsRaw) {
         if (poly.length === 0) continue;
         const outer = fromPCRing(poly[0]);
         if (outer.length < 3) continue;
+        if (polygonArea(outer) < MIN_GAP_AREA) continue;
         const holes: Polygon[] = [];
         for (let i = 1; i < poly.length; i++) {
             const hole = fromPCRing(poly[i]);
+            // hole 不做面积过滤——极小 hole 也是 gap 形状的一部分（虽然渲染上几乎不可见，
+            // 但保留让 even-odd fill 行为与几何意图一致）。
             if (hole.length >= 3) holes.push(hole);
         }
         gaps.push({ outer, holes });
     }
 
     return { gaps, canvasWidth, canvasHeight };
+}
+
+/**
+ * Shoelace formula 算 polygon 面积。约定首点不重复末点。
+ * 输出绝对值（不区分 CW/CCW）。M18-P4 用于过滤数值精度噪声生成的极小 gap。
+ */
+function polygonArea(poly: Polygon): number {
+    const n = poly.length;
+    if (n < 3) return 0;
+    let area = 0;
+    for (let i = 0; i < n; i++) {
+        const [x1, y1] = poly[i];
+        const [x2, y2] = poly[(i + 1) % n];
+        area += x1 * y2 - x2 * y1;
+    }
+    return Math.abs(area) / 2;
 }
 
 /** 在 graph 内找包含 (px, py) 的 gap。null = 命中 element 或画布外。 */
@@ -111,8 +137,15 @@ export function findGapAt(graph: LivePaintGraph, px: number, py: number): GapPol
 
 // ---------- 内部 helpers ----------
 
-/** 标准 ray casting point-in-polygon。O(n)。 */
-function pointInPolygon(px: number, py: number, poly: Polygon): boolean {
+/**
+ * 标准 ray casting point-in-polygon。O(n)。
+ *
+ * M18-P4：从 file-private 升级为 export，供 CanvasView 在"点击 element 内部 vector-fill"
+ * 路径上做精确命中（仅 bbox hit 会让 circle / star 在角落区域误中）。
+ *
+ * 输入约定：poly 首点不重复末点（本模块 Polygon 约定）。
+ */
+export function pointInPolygon(px: number, py: number, poly: Polygon): boolean {
     let inside = false;
     const n = poly.length;
     for (let i = 0, j = n - 1; i < n; j = i++) {

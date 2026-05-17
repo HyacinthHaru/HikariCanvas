@@ -70,6 +70,46 @@
 
 ---
 
+## 2026-05-17 · M18 Phase 4（边界 case + vector-fill 决策 A + 退化 fallback）
+
+1 个 agent 完成。
+
+### A. vector-fill 决策 A 实装
+
+`findElementAt(canvasX, canvasY)`：倒序遍历 visibleElements（z-order 顶层优先）+ `elementToPolygon` + `pointInPolygon` 精确命中（不只 bbox，避免 circle / star 角落误判）。
+
+`onPaintBucketClick` 优先级：wall lock → graph 未就绪 → graph degraded → gap 命中 → element 命中 → noGap。element 命中分支：lock 拒；`rect/circle/shape/path` 走 `element.update {patch:{fill}}` + 乐观本地 mutate；`text/image/brush` 走 `livePaint.elementUnsupported(type)` 提示。
+
+### B. pointInPolygon API export
+
+`LivePaintCore.ts` 内 `pointInPolygon` 由 file-private 升级为 `export`；`livepaint/index.ts` 加 export。
+
+### C. RDP 顶点简化
+
+新 `web/src/livepaint/RdpSimplifier.ts` 迭代式 stack 实现（防大输入栈溢出）；点到线段距离 + 投影 + 截断。`PolygonToPath.gapToPathElement` 内 `maybeSimplify` tolerance 阶梯式 0.5 → 16 翻倍直到 ≤ VERTEX_HARD_LIMIT=240（PathDValidator 实际限制）。每轮基于原 polygon（不累计误差）。
+
+### D. 退化几何 fallback
+
+`types.LivePaintGraph` 加可选 `degraded?: boolean`。`buildGraph` try/catch 改：原"整画布单 gap"假象 → `{gaps:[], degraded:true}`。useLivePaint 透传；CanvasView click handler 检测 degraded → `pushLog('err', t.livePaint.degraded)`。
+
+### E. 极小 gap 过滤
+
+`LivePaintCore` 新 `polygonArea` (shoelace 绝对值)；`MIN_GAP_AREA = 4` px²；outer 面积 < 阈值的 gap 整体丢弃；holes 不过滤（保留 even-odd 几何意图）。
+
+### F. i18n
+
+删 `livePaint.recolorPending`；新增 `recolorSuccess / elementLocked / elementUnsupported(type) / wallLocked / degraded` zh+en 镜像。
+
+### G. perf log
+
+`useLivePaint.ts` DEV-only `import.meta.env.DEV` 静态分支让 prod tree-shake：`sentAt: Map<requestId, {startedAt, elementCount}>` 打点；onmessage elapsed；格式 `[livepaint] graph built in 12.3ms (8 elements → 4 gaps)`；race 丢弃旧 requestId 也清 sentAt 防内存泄漏。
+
+### vite build
+
+`✓ built in 374ms`；livePaintWorker chunk 33.75 kB（含 RDP）；index 543.29 kB / 168.54 kB gzip；0 新 TS 错误。
+
+---
+
 ## 2026-05-17 · M18 Phase 3（UI + hover 预览集成）
 
 1 个 agent 完成 UI 全栈集成。

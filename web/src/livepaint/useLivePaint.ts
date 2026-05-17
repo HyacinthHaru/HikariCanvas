@@ -58,12 +58,39 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
     let pendingRequestId = -1;
     /** debounce timer handle。 */
     let debounceTimer: number | null = null;
+    /**
+     * M18-P4：性能跟踪——pendingRequestId → { startedAt, elementCount } 映射。
+     * onmessage 内换算 elapsed 后立刻 delete。仅 DEV 启用，prod build 走 import.meta.env.DEV
+     * 静态分支被 Vite tree-shake 完整消除（含 Map 实例分配也不发生）。
+     */
+    const sentAt = import.meta.env.DEV
+        ? new Map<number, { startedAt: number; elementCount: number }>()
+        : null;
 
     worker.onmessage = (e: MessageEvent<LivePaintWorkerResponse>) => {
         const resp = e.data;
         // race 保护：只接受最新 request 的响应
-        if (resp.requestId !== pendingRequestId) return;
+        if (resp.requestId !== pendingRequestId) {
+            // 旧请求的 perf 记录也要清，避免内存泄漏（高频 dragmove 下可能积一堆）
+            if (sentAt) sentAt.delete(resp.requestId);
+            return;
+        }
         isBuilding.value = false;
+        if (sentAt) {
+            const ctx = sentAt.get(resp.requestId);
+            sentAt.delete(resp.requestId);
+            if (ctx) {
+                const elapsed = performance.now() - ctx.startedAt;
+                const status = resp.type === 'ok'
+                    ? `${resp.graph.gaps.length} gaps${resp.graph.degraded ? ' (degraded)' : ''}`
+                    : `err: ${resp.message}`;
+                // eslint-disable-next-line no-console
+                console.log(
+                    `[livepaint] graph built in ${elapsed.toFixed(1)}ms`
+                    + ` (${ctx.elementCount} elements → ${status})`,
+                );
+            }
+        }
         if (resp.type === 'ok') {
             graph.value = resp.graph;
         } else {
@@ -81,11 +108,13 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
         const requestId = ++nextRequestId;
         pendingRequestId = requestId;
         isBuilding.value = true;
+        const elements: import('@/types/protocol').Element[] = JSON.parse(JSON.stringify(opts.elements.value));
+        if (sentAt) sentAt.set(requestId, { startedAt: performance.now(), elementCount: elements.length });
         const req: LivePaintWorkerRequest = {
             type: 'build',
             requestId,
             // 深 clone：避免 Vue Proxy / reactive ref 不能 structured-clone
-            elements: JSON.parse(JSON.stringify(opts.elements.value)),
+            elements,
             canvasWidth: opts.canvasWidth.value,
             canvasHeight: opts.canvasHeight.value,
         };

@@ -14,8 +14,14 @@
  */
 
 export { elementToPolygon, CIRCLE_SAMPLE_POINTS, PATH_CURVE_SAMPLES } from './ElementToPolygon';
-export { buildGraph, findGapAt } from './LivePaintCore';
-export { gapPolygonToPathD, gapToPathElement, VERTEX_WARN_THRESHOLD } from './PolygonToPath';
+export { buildGraph, findGapAt, pointInPolygon } from './LivePaintCore';
+export {
+    gapPolygonToPathD,
+    gapToPathElement,
+    VERTEX_WARN_THRESHOLD,
+    VERTEX_HARD_LIMIT,
+} from './PolygonToPath';
+export { rdpSimplify } from './RdpSimplifier';
 export type { Polygon, GapPolygon, LivePaintGraph } from './types';
 
 // M18-P2：Worker 化 composable

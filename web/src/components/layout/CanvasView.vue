@@ -23,7 +23,7 @@ import { usePanScroll } from '@/composables/usePanScroll';
 import { useCanvasUpload } from '@/composables/useCanvasUpload';
 import { useSnapManager, type SnapHints } from '@/composables/useSnapManager';
 // M18 Live Paint：油漆桶工具支持
-import { useLivePaint, gapToPathElement } from '@/livepaint';
+import { useLivePaint, gapToPathElement, elementToPolygon, pointInPolygon } from '@/livepaint';
 import type { GapPolygon } from '@/livepaint';
 import { usePaintBucketStore } from '@/stores/paintBucket';
 import { useNetworkStore } from '@/stores/network';
@@ -392,19 +392,48 @@ function onStageMouseMove(ev: StageEvt): void {
 /**
  * M18 Live Paint：paint-bucket 单击处理。
  *
- * 流程：
- *   1. 锁定 wall → 走"画板锁定"分支（直接 reuse clipboard.pasteRejectedLocked 文案）
- *   2. graph 还没构建好 → reuse livePaint.building 文案
- *   3. point-in-polygon 命中 gap → 转 PathElement payload → 决定 layerId → ws.send element.add
- *   4. 没命中 gap → 检查是否点在 element 上（vector-fill 快捷，P4 实装）→ 提示 P4
- *   5. 都没 → 提示 noGapFound
+ * 优先级：
+ *   1. wall 锁定 → 拒
+ *   2. graph 未就绪 / 退化 → 拒（提示 building / degraded）
+ *   3. 命中 gap → 新建 PathElement 填充
+ *   4. 命中 element 内部（精确 polygon hit-test）→ vector-fill 决策 A：直接改 element.fill
+ *      - rect / circle / shape / path 支持 fill 字段，直接 element.update
+ *      - text / image / brush 不支持（text 用 color，image 无填充语义，brush 不在 P4 范围）→ 提示
+ *      - 元素锁定 → 拒
+ *   5. 都没命中（理论几乎不应该——visibleElements 之外的区域应该都是 gap）→ noGapFound
  *
- * 不实装的：vector-fill（点击 element 内部 modify fill）—— P4 范围。
+ * 决策 A 关键：vector-fill 走 element.update（修改既有元素 fill 字段），而非在元素上方
+ * 叠加一个 PathElement。这样 dither / opacity / blendMode 等元素级状态保持完好；
+ * 视觉行为最接近 Figma / PS 的"油漆桶点对象重着色"。
+ *
+ * 命中检测用 livepaint.elementToPolygon + pointInPolygon 精确判定（不只 bbox）——否则
+ * circle / star 的角落区域会被误判为命中。bbox 判定在 polygon 内为 false 时直接跳过。
  */
+
+/**
+ * 在所有 visible elements 内倒序（z-order top-down）查找包含 (x, y) 的元素。
+ * 找到第一个就返回，null = 都没命中。
+ *
+ * 性能：O(n) × O(polygon vertex)，~32 vertex circle / 数百 vertex path 各一次 ray-casting。
+ * 单次 click 触发，不在热路径上；100 elements 远低于 1ms。
+ */
+function findElementAt(canvasX: number, canvasY: number): Element | null {
+    const list = visibleElements.value;
+    for (let i = list.length - 1; i >= 0; i--) {
+        const el = list[i];
+        // 先 bbox 早剪（绕旋转后 bbox 略大但仍是上界），polygon 测试只对幸存的跑
+        // 旋转 element 的 polygon 已经是旋转后顶点，bbox 用 elementToPolygon 出来再算更准
+        const poly = elementToPolygon(el);
+        if (!poly) continue;
+        if (pointInPolygon(canvasX, canvasY, poly)) return el;
+    }
+    return null;
+}
+
 function onPaintBucketClick(canvasX: number, canvasY: number): void {
     // P0：wall 锁定
     if (project.isLocked) {
-        net.pushLog('meta', t.value.clipboard.pasteRejectedLocked);
+        net.pushLog('meta', t.value.livePaint.wallLocked);
         return;
     }
     // P0：graph 还没构建（首帧 / 大量 element rebuild 中）—— 提示用户稍等再点
@@ -412,54 +441,78 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
         net.pushLog('meta', t.value.livePaint.building);
         return;
     }
+    // M18-P4：polygon-clipping 抛错时 graph.degraded=true，gaps 为空——显式不可用
+    // 而不是给用户"整画布单 gap"的假象
+    if (livePaint.graph.value.degraded) {
+        net.pushLog('err', t.value.livePaint.degraded);
+        return;
+    }
 
+    // 1. gap 优先（点击空白处）
     const gap = livePaint.findGapAt(canvasX, canvasY);
-    if (!gap) {
-        // 命中 element 内部 → P4 vector-fill 待实装；console.log 让开发可观察
-        // 兜底：检测 click 是否落在某个 visible element 的 bbox 内（不算旋转）
-        const hit = visibleElements.value.find((e) =>
-            canvasX >= e.x && canvasX <= e.x + e.w && canvasY >= e.y && canvasY <= e.y + e.h,
-        );
-        if (hit) {
-            console.log('[LivePaint] click hit element', hit.id, hit.type, '→ recolor pending M18-P4');
-            net.pushLog('meta', t.value.livePaint.recolorPending);
-        } else {
-            net.pushLog('meta', t.value.livePaint.noGapFound);
+    if (gap) {
+        // 决定目标 layer：active layer 优先；锁定时拒绝（不自动跳到别的 layer，避免用户困惑）
+        const activeLayer = project.activeLayer;
+        if (!activeLayer || activeLayer.locked) {
+            net.pushLog('meta', t.value.livePaint.layerLocked);
+            return;
         }
+
+        const elementData = gapToPathElement(gap);
+        if (elementData.w <= 0 || elementData.h <= 0 || !elementData.d) {
+            net.pushLog('meta', t.value.livePaint.noGapFound);
+            return;
+        }
+
+        // element.add payload 结构 = { type, props, layerId }
+        ws.send('element.add', {
+            type: 'path',
+            layerId: activeLayer.id,
+            props: {
+                x: elementData.x,
+                y: elementData.y,
+                w: elementData.w,
+                h: elementData.h,
+                rotation: 0,
+                d: elementData.d,
+                fill: paintBucket.currentFill,
+                locked: false,
+                visible: true,
+            },
+        });
         return;
     }
 
-    // 决定目标 layer：active layer 优先；锁定时拒绝（不自动跳到别的 layer，避免用户困惑）
-    const activeLayer = project.activeLayer;
-    if (!activeLayer || activeLayer.locked) {
-        net.pushLog('meta', t.value.livePaint.layerLocked);
+    // 2. vector-fill 决策 A：点击 element 内部 → 直接改 element.fill
+    const hitElement = findElementAt(canvasX, canvasY);
+    if (hitElement) {
+        if (hitElement.locked) {
+            net.pushLog('meta', t.value.livePaint.elementLocked);
+            return;
+        }
+        // 仅 4 种元素支持 fill 字段（任务约束）：rect / circle / shape / path
+        if (
+            hitElement.type === 'rect'
+            || hitElement.type === 'circle'
+            || hitElement.type === 'shape'
+            || hitElement.type === 'path'
+        ) {
+            ws.send('element.update', {
+                elementId: hitElement.id,
+                patch: { fill: paintBucket.currentFill },
+            });
+            // 乐观本地更新（其他 update 路径同款）：fill 是公开字段，无需类型断言重型操作
+            (hitElement as unknown as Record<string, unknown>).fill = paintBucket.currentFill;
+            net.pushLog('meta', t.value.livePaint.recolorSuccess);
+            return;
+        }
+        // text（color 字段）/ image（无填充语义）/ brush（笔触不在 P4 范围）→ 提示
+        net.pushLog('meta', t.value.livePaint.elementUnsupported(hitElement.type));
         return;
     }
 
-    const elementData = gapToPathElement(gap);
-    if (elementData.w <= 0 || elementData.h <= 0 || !elementData.d) {
-        net.pushLog('meta', t.value.livePaint.noGapFound);
-        return;
-    }
-
-    // element.add payload 结构 = { type, props, layerId }（grep useClipboard / useDrawToCreate 确认）
-    // BaseElement 必填字段：id 由 server 生成；x/y/w/h/rotation/locked/visible
-    // 可选：opacity/blendMode/renderMode/stroke 省略让 server 走默认。
-    ws.send('element.add', {
-        type: 'path',
-        layerId: activeLayer.id,
-        props: {
-            x: elementData.x,
-            y: elementData.y,
-            w: elementData.w,
-            h: elementData.h,
-            rotation: 0,
-            d: elementData.d,
-            fill: paintBucket.currentFill,
-            locked: false,
-            visible: true,
-        },
-    });
+    // 3. 都没命中（理论几乎不应该——gap 覆盖空白，element 覆盖元素；缝隙极少）
+    net.pushLog('meta', t.value.livePaint.noGapFound);
 }
 
 function onStageMouseUp(): void {

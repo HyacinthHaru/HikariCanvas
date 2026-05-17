@@ -27,4 +27,11 @@ export interface LivePaintGraph {
     canvasWidth: number;
     /** 画布像素高 */
     canvasHeight: number;
+    /**
+     * M18-P4：true 时表示 polygon-clipping union/difference 抛错且本模块没有可信回退
+     *（即没法构出可点击的 gap 集合）。UI 应提示用户"Live Paint 暂时不可用"，
+     * 而不是给一个虚假的"整画布单 gap" fallback——后者会让用户误以为油漆桶能用，
+     * 实际点下去发现行为不符（点哪里都是整片画布）。
+     */
+    degraded?: boolean;
 }
