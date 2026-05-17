@@ -22,6 +22,7 @@ import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import LayerPanel from '@/components/layout/LayerPanel.vue';
 import BrushPanel from '@/components/layout/BrushPanel.vue';
+import PaintBucketPanel from '@/components/layout/PaintBucketPanel.vue';
 import TransformSection from '@/components/properties/TransformSection.vue';
 import TextElementSection from '@/components/properties/TextElementSection.vue';
 import GeometricElementSection from '@/components/properties/GeometricElementSection.vue';
@@ -94,6 +95,8 @@ function deleteMultiSelected(): void {
 
     <!-- M12-D：笔刷工具激活时，下半 BrushPanel 替代 Properties；其他工具走 Properties 原路径 -->
     <BrushPanel v-if="ui.activeTool === 'brush'" />
+    <!-- M18 Live Paint：油漆桶工具激活时，下半 PaintBucketPanel 替代 Properties -->
+    <PaintBucketPanel v-else-if="ui.activeTool === 'paint-bucket'" />
 
     <!-- Properties -->
     <template v-else>

@@ -12,6 +12,7 @@ import CanvasGridOverlay from '@/components/canvas/CanvasGridOverlay.vue';
 import CanvasZoomBar from '@/components/canvas/CanvasZoomBar.vue';
 import TextInlineEditor from '@/components/canvas/TextInlineEditor.vue';
 import SnapGuideOverlay from '@/components/canvas/SnapGuideOverlay.vue';
+import LivePaintHoverOverlay from '@/components/canvas/LivePaintHoverOverlay.vue';
 
 import { useMarqueeSelection } from '@/composables/useMarqueeSelection';
 import { useDrawToCreate } from '@/composables/useDrawToCreate';
@@ -21,11 +22,18 @@ import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts';
 import { usePanScroll } from '@/composables/usePanScroll';
 import { useCanvasUpload } from '@/composables/useCanvasUpload';
 import { useSnapManager, type SnapHints } from '@/composables/useSnapManager';
+// M18 Live Paint：油漆桶工具支持
+import { useLivePaint, gapToPathElement } from '@/livepaint';
+import type { GapPolygon } from '@/livepaint';
+import { usePaintBucketStore } from '@/stores/paintBucket';
+import { useNetworkStore } from '@/stores/network';
 
 const project = useProjectStore();
 const ui = useUiStore();
 const ws = getWsClient();
 const { t } = useI18n();
+const paintBucket = usePaintBucketStore();
+const net = useNetworkStore();
 
 // ---------- 核心 ref ----------
 const canvasEl = ref<HTMLCanvasElement | null>(null);
@@ -150,6 +158,20 @@ const hoverId = ref<string | null>(null);
 
 const elements = computed(() => project.state?.elements ?? []);
 
+// ---------- M18 Live Paint ----------
+// 只在 paint-bucket 工具激活时跑 worker；切走时 useLivePaint 内部跳过 send + 清空 graph。
+// visibleElements 过滤 visible=false 的 element（隐藏图层 / 隐藏元素不参与 gap 计算）。
+const livePaintEnabled = computed(() => ui.activeTool === 'paint-bucket');
+const visibleElements = computed(() => elements.value.filter((e) => e.visible !== false));
+const livePaint = useLivePaint({
+    elements: visibleElements,
+    canvasWidth: widthPx,
+    canvasHeight: heightPx,
+    enabled: livePaintEnabled,
+});
+/** 当前 hover 命中的 gap polygon；非 paint-bucket 工具下永远 null。 */
+const hoveredGap = ref<GapPolygon | null>(null);
+
 // ---------- M8-E：grid overlay ----------
 const gridSize = computed(() => project.state?.canvas.gridSize ?? 0);
 
@@ -218,7 +240,9 @@ function hitConfig(e: Element) {
     // M9-E：绘制工具激活时，element-hit 整层 listening=false，让 mousedown 穿透到 stage
     // 启动 drag-to-create（PS/Figma 行为：drawTool 下点已有元素也是开始画新元素）
     // M17 F4：hand 工具同样关闭 element-hit listening，使左键直接被 outer 的 pan 处理。
-    const drawing = isDrawTool(ui.activeTool) || ui.activeTool === 'hand';
+    // M18 Live Paint：paint-bucket 也关 element-hit listening，让 mousedown/move 都直达 stage
+    // 由 onPaintBucketClick / hover 逻辑统一接管；P4 实装"点击 element 内部 recolor"时再开
+    const drawing = isDrawTool(ui.activeTool) || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket';
     return {
         id: e.id,
         name: 'element-hit',
@@ -335,6 +359,12 @@ function onStageMouseDown(ev: StageEvt): void {
 
     // M12-C：brush 工具走 PointerEvent + BrushController（独立路径），stage Konva 事件不动
     if (ui.activeTool === 'brush') return;
+    // M18 Live Paint：paint-bucket 单击 = 填充。stage 坐标 = 画布像素坐标（stage 无 scale）。
+    if (ui.activeTool === 'paint-bucket') {
+        if (editingId.value) finishEditing();
+        onPaintBucketClick(pos.x, pos.y);
+        return;
+    }
     // M9-E：绘制工具激活时启动 drag-to-create；其他工具启动 marquee
     if (isDrawTool(ui.activeTool)) {
         if (editingId.value) finishEditing();
@@ -349,8 +379,87 @@ function onStageMouseMove(ev: StageEvt): void {
     const stage = ev.target?.getStage?.();
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
+    // M18 Live Paint：paint-bucket 工具下做 hover preview（point-in-polygon 查 cached graph）
+    // 不进 drawMove / marqueeMove；保证不与 marquee 拖框冲突。
+    if (ui.activeTool === 'paint-bucket') {
+        hoveredGap.value = livePaint.findGapAt(pos.x, pos.y);
+        return;
+    }
     if (drawMove(pos)) return;
     marqueeMove(pos);
+}
+
+/**
+ * M18 Live Paint：paint-bucket 单击处理。
+ *
+ * 流程：
+ *   1. 锁定 wall → 走"画板锁定"分支（直接 reuse clipboard.pasteRejectedLocked 文案）
+ *   2. graph 还没构建好 → reuse livePaint.building 文案
+ *   3. point-in-polygon 命中 gap → 转 PathElement payload → 决定 layerId → ws.send element.add
+ *   4. 没命中 gap → 检查是否点在 element 上（vector-fill 快捷，P4 实装）→ 提示 P4
+ *   5. 都没 → 提示 noGapFound
+ *
+ * 不实装的：vector-fill（点击 element 内部 modify fill）—— P4 范围。
+ */
+function onPaintBucketClick(canvasX: number, canvasY: number): void {
+    // P0：wall 锁定
+    if (project.isLocked) {
+        net.pushLog('meta', t.value.clipboard.pasteRejectedLocked);
+        return;
+    }
+    // P0：graph 还没构建（首帧 / 大量 element rebuild 中）—— 提示用户稍等再点
+    if (!livePaint.graph.value) {
+        net.pushLog('meta', t.value.livePaint.building);
+        return;
+    }
+
+    const gap = livePaint.findGapAt(canvasX, canvasY);
+    if (!gap) {
+        // 命中 element 内部 → P4 vector-fill 待实装；console.log 让开发可观察
+        // 兜底：检测 click 是否落在某个 visible element 的 bbox 内（不算旋转）
+        const hit = visibleElements.value.find((e) =>
+            canvasX >= e.x && canvasX <= e.x + e.w && canvasY >= e.y && canvasY <= e.y + e.h,
+        );
+        if (hit) {
+            console.log('[LivePaint] click hit element', hit.id, hit.type, '→ recolor pending M18-P4');
+            net.pushLog('meta', t.value.livePaint.recolorPending);
+        } else {
+            net.pushLog('meta', t.value.livePaint.noGapFound);
+        }
+        return;
+    }
+
+    // 决定目标 layer：active layer 优先；锁定时拒绝（不自动跳到别的 layer，避免用户困惑）
+    const activeLayer = project.activeLayer;
+    if (!activeLayer || activeLayer.locked) {
+        net.pushLog('meta', t.value.livePaint.layerLocked);
+        return;
+    }
+
+    const elementData = gapToPathElement(gap);
+    if (elementData.w <= 0 || elementData.h <= 0 || !elementData.d) {
+        net.pushLog('meta', t.value.livePaint.noGapFound);
+        return;
+    }
+
+    // element.add payload 结构 = { type, props, layerId }（grep useClipboard / useDrawToCreate 确认）
+    // BaseElement 必填字段：id 由 server 生成；x/y/w/h/rotation/locked/visible
+    // 可选：opacity/blendMode/renderMode/stroke 省略让 server 走默认。
+    ws.send('element.add', {
+        type: 'path',
+        layerId: activeLayer.id,
+        props: {
+            x: elementData.x,
+            y: elementData.y,
+            w: elementData.w,
+            h: elementData.h,
+            rotation: 0,
+            d: elementData.d,
+            fill: paintBucket.currentFill,
+            locked: false,
+            visible: true,
+        },
+    });
 }
 
 function onStageMouseUp(): void {
@@ -377,6 +486,9 @@ useEventListener(window, 'mouseup', () => {
     activeSnapHints.value = null;
 });
 
+// M18 Live Paint：鼠标离开 outer 容器（或 window blur）时清 hover 高亮
+useEventListener(window, 'blur', () => { hoveredGap.value = null; });
+
 /** 双击 stage 空白处：取消所有选中 + 退出编辑（用户实测后明确要求的 escape 路径）。 */
 function onStageDblClick(ev: { target: { getType?: () => string; hasName?: (n: string) => boolean } }): void {
     const node = ev.target as { getType?: () => string; hasName?: (n: string) => boolean } | null;
@@ -399,6 +511,10 @@ watch(() => ui.activeTool, (next) => {
     }
     marqueeCancel();
     drawCancel();
+    // M18 Live Paint：切走时清 hover 高亮，避免下次切回时短暂残留旧 gap
+    if (next !== 'paint-bucket') {
+        hoveredGap.value = null;
+    }
 });
 
 /**
@@ -408,6 +524,7 @@ watch(() => ui.activeTool, (next) => {
 const cursorStyle = computed(() => {
     if (isPanning.value) return 'grabbing';
     if (ui.activeTool === 'hand') return 'grab';
+    if (ui.activeTool === 'paint-bucket') return 'crosshair';  // M18 Live Paint
     if (isDrawTool(ui.activeTool)) return 'crosshair';
     return 'default';
 });
@@ -616,7 +733,7 @@ function requestDraw(): void {
     @mousedown="onMouseDown"
     @mousemove="onMouseMove"
     @mouseup="onMouseUpOrLeave"
-    @mouseleave="onMouseUpOrLeave"
+    @mouseleave="() => { onMouseUpOrLeave(); hoveredGap = null; }"
     @dragover="onCanvasDragOver"
     @drop="onCanvasDrop"
   >
@@ -710,6 +827,9 @@ function requestDraw(): void {
               :width-px="widthPx"
               :height-px="heightPx"
             />
+            <!-- M18 Live Paint：paint-bucket 工具 hover 高亮。layer listening=false，
+                 让 mousedown/move 直达 stage。 -->
+            <LivePaintHoverOverlay :hovered-gap="hoveredGap" />
           </v-stage>
           <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。
                PreviewRenderer 会跳过 editingId 对应的 element，避免画布底层字形与 textarea 重影。 -->
@@ -731,6 +851,15 @@ function requestDraw(): void {
       :class="uploadError ? 'bg-red-500/95 text-white' : 'bg-blue-500/95 text-white'"
     >
       {{ uploadError ?? t.image.uploading }}
+    </div>
+
+    <!-- M18 Live Paint：worker 正在构建 graph 时的浮动 indicator（仅 paint-bucket 工具下显示） -->
+    <div
+      v-if="ui.activeTool === 'paint-bucket' && livePaint.isBuilding.value"
+      class="absolute bottom-16 right-4 z-40 px-2.5 py-1 rounded-md text-[11px] bg-[color:var(--card)] border border-[color:var(--border)] text-[color:var(--muted-foreground)] shadow-md pointer-events-none flex items-center gap-1.5"
+    >
+      <span class="inline-block size-2 rounded-full bg-blue-400 animate-pulse"></span>
+      {{ t.livePaint.building }}
     </div>
 
     <!-- M13-D：隐藏 file input（点击工具栏上传按钮触发） -->

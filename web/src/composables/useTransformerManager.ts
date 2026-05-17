@@ -40,7 +40,8 @@ export function useTransformerManager(opts: {
         const l = opts.layerRef.value?.getNode() as undefined | { findOne(sel: string): unknown };
         if (!t || !l) return;
         // M17 F4：hand 工具下同样隐藏 transformer（pan 模式不显示锚点遮挡）
-        if (ui.activeTool === 'move' || ui.activeTool === 'hand' || ui.selectedCount === 0) { t.nodes([]); return; }
+        // M18 Live Paint：paint-bucket 工具下隐藏 transformer（click-only 工具，不需要 resize/rotate 锚点）
+        if (ui.activeTool === 'move' || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket' || ui.selectedCount === 0) { t.nodes([]); return; }
         const nodes: unknown[] = [];
         for (const id of ui.selectedIds) {
             const n = l.findOne(`#${id}`);

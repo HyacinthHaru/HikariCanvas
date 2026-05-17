@@ -74,6 +74,11 @@ export function useCanvasShortcuts() {
         if (e.ctrlKey || e.metaKey) return;
         if (!inEditable()) ui.setTool('brush');
     });
+    // M18 Live Paint：G 油漆桶（Photoshop / Figma 行业标准 fill bucket 键位）
+    onKeyStroke(['g', 'G'], (e) => {
+        if (e.ctrlKey || e.metaKey) return;
+        if (!inEditable()) ui.setTool('paint-bucket');
+    });
 
     // M17 F4：Space-hold 临时手型工具。保存原工具到 spaceSavedTool，松开 Space 恢复。
     // 用 useEventListener 而非 onKeyStroke：keydown 的 repeat 标志 + keyup 配对要原始事件。

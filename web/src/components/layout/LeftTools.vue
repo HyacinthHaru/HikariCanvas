@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Hand, Minus, MoveRight, Circle, Star, Brush } from 'lucide-vue-next';
+import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Hand, Minus, MoveRight, Circle, Star, Brush, PaintBucket } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -151,6 +151,18 @@ function addRect() {
         @click="ui.setTool('brush')"
       >
         <Brush class="size-5" />
+      </button>
+    </Tooltip>
+    <!-- M18 Live Paint：油漆桶工具（click 工具，非 drag-to-create） -->
+    <Tooltip :text="t.tools.paintBucketTool" shortcut="G">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'paint-bucket'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('paint-bucket')"
+      >
+        <PaintBucket class="size-5" />
       </button>
     </Tooltip>
 

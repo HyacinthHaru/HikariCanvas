@@ -70,6 +70,48 @@
 
 ---
 
+## 2026-05-17 · M18 Phase 3（UI + hover 预览集成）
+
+1 个 agent 完成 UI 全栈集成。
+
+### 工具系统
+
+- `ui.ActiveTool` union 加 `'paint-bucket'`；`isDrawTool` 排除 paint-bucket（click 工具非 drag-to-create）；`loadTool` KNOWN 列表加
+- 快捷键 `G`（Photoshop / Figma fill bucket 标准，与 brush `B` 错开）
+- `useTransformerManager.attachTransformer` 隐藏 transformer 工具列表加 paint-bucket（与 move / hand 同列）
+- LeftTools 加 PaintBucket 按钮（lucide `PaintBucket` icon）
+
+### 新组件
+
+- `web/src/components/layout/PaintBucketPanel.vue`：BrushPanel 同款结构；FillInput 绑 paintBucket.currentFill + 双行操作提示
+- `web/src/components/canvas/LivePaintHoverOverlay.vue`：`<v-layer listening="false">` 包 `<v-path>`；data 由 `gapPolygonToPathD(hoveredGap)` 生成，fillRule='evenodd' 自动挖洞；fill rgba(96,165,250,0.22) 蓝色半透明 + stroke `#60a5fa`；strokeWidth `1.5/zoom` 保视觉密度
+
+### 新 store
+
+- `web/src/stores/paintBucket.ts`：`currentFill: Ref<FillCompat>` + localStorage 持久化（key `hikari-canvas:paint-bucket`，默认 `{type:'solid', color:'#000000'}`）
+
+### CanvasView 集成
+
+- `useLivePaint` 接入：`livePaintEnabled = ui.activeTool === 'paint-bucket'` + `visibleElements` 过滤 `visible !== false`
+- `hoveredGap` ref：mousemove 时调 `livePaint.findGapAt(pos.x, pos.y)`（stage 无 scale，坐标直接是画布像素）
+- `onPaintBucketClick`：① wall 锁定 → 文案；② graph 未就绪 → t.livePaint.building；③ 命中 gap → `gapToPathElement` + `ws.send('element.add', { type:'path', layerId, props:{...fill: paintBucket.currentFill} })`；④ 命中 element bbox → console.log + t.livePaint.recolorPending（P4 待实装 vector-fill）；⑤ 都未命中 → t.livePaint.noGapFound
+- cursorStyle 加 paint-bucket → 'crosshair'
+- hitConfig listening 关：paint-bucket 加 `drawing` flag 让 element-hit 整层不响应
+- watch ui.activeTool 切走时清 hoveredGap；@mouseleave + window blur 兜底
+- LivePaintHoverOverlay 挂在 v-stage 内 SnapGuideOverlay 同级
+- isBuilding indicator：右下角 absolute 浮窗 `bottom-16 right-4`，蓝色脉冲点 + t.livePaint.building
+
+### i18n
+
+- `tools.paintBucketTool` 中英
+- `livePaint.{ title, hint, hintHoverPreview, fillLabel, noGapFound, layerLocked, building, recolorPending }` 中英
+
+### vite build
+
+`✓ built in 354ms`；`dist/assets/livePaintWorker-DBy-krPN.js 33.63 kB` 出现，确认 useLivePaint 被消费 + worker 单独切包；bundle `538.40 → 538.43 kB`（+0.03 kB；gzip 166.92 不变）。
+
+---
+
 ## 2026-05-17 · M18 Phase 2（Worker + 增量缓存）
 
 1 个 agent 完成。

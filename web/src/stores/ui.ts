@@ -26,11 +26,13 @@ export type Locale = 'zh' | 'en';
  * - {@code 'line' / 'arrow' / 'circle' / 'star'}（M9-D）：进入"待绘制"状态，cursor = crosshair；
  *   M9-E 接 canvas mousedown/move/up 实现 drag-to-create。M9-D 期间画布上 drag 暂无效果。
  */
-export type ActiveTool = 'select' | 'move' | 'hand' | 'line' | 'arrow' | 'circle' | 'star' | 'brush';
+export type ActiveTool = 'select' | 'move' | 'hand' | 'line' | 'arrow' | 'circle' | 'star' | 'brush' | 'paint-bucket';
 
-/** 是否是绘制工具（拖出新元素 / 笔触）。select/move/hand 之外均为绘制工具。 */
+/** 是否是绘制工具（拖出新元素 / 笔触）。select/move/hand/paint-bucket 之外均为绘制工具。
+ *  paint-bucket 是 click 工具（M18 Live Paint）：单击空白处填充 gap、单击元素内部 recolor（P4 实装），
+ *  不走 drag-to-create 路径。 */
 export function isDrawTool(tool: ActiveTool): boolean {
-    return tool !== 'select' && tool !== 'move' && tool !== 'hand';
+    return tool !== 'select' && tool !== 'move' && tool !== 'hand' && tool !== 'paint-bucket';
 }
 
 /** 是否是笔刷工具（M12：走 PointerEvent + BrushController 而非 drag-to-create）。 */
@@ -256,7 +258,7 @@ function applyThemeToDom(theme: Theme) {
 }
 
 function loadTool(): ActiveTool {
-    const KNOWN: ActiveTool[] = ['select', 'move', 'hand', 'line', 'arrow', 'circle', 'star', 'brush'];
+    const KNOWN: ActiveTool[] = ['select', 'move', 'hand', 'line', 'arrow', 'circle', 'star', 'brush', 'paint-bucket'];
     try {
         const v = localStorage.getItem(TOOL_KEY) as ActiveTool | null;
         if (v && KNOWN.includes(v)) return v;
