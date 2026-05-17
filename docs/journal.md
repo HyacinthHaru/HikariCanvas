@@ -5,6 +5,75 @@
 
 ---
 
+## 2026-05-17 · M20 Phase 5+6（baseline 重建 + docs 收尾）
+
+### M20.5 baseline 重建
+
+跑 `:plugin:test --rerun-tasks`：13 fixture / 3 fail（03-effects-stroke / 04-effects-shadow / 05-effects-glow）。逐一比对 actual vs expected PNG：
+
+| fixture | 旧 baseline | 新 actual |
+|---|---|---|
+| 03 STROKE | 字符偏挤偏左 | 字间距匀称居中 |
+| 04 SHADOW | W 后空隙不均 | 整体舒展 |
+| 05 GLOW | O-W 间有重影 | 干净无重叠 |
+
+3 个都视觉**更好**——正是 M20 修复目标。覆盖 `expected/*.png`，再跑 `:plugin:test --rerun-tasks` → **364 tests 全绿**。
+
+其余 10 fixture 未漂移（01-hello-world / 02-chinese-text / 06-path-line / 07-circle / 08-star / 09-linear-gradient / 10-radial-gradient / 11-dither / 12-brush / 13-image-mask / 13-placeholder）：source_han_sans 在 ASCII / CJK 普通字符 advance 与 canonical 比例（0.5 / 1.0）接近，差异 < 0.5% 测试阈值；effects 二阶像素扩散（stroke 宽度 / shadow 偏移 / glow 半径）放大了细微 advance 差异。
+
+### M20.6 docs
+
+- **CLAUDE.md §其他不可越界的技术决策**：双端渲染一致性条目从 canonicalCharWidth 改为 charAdvance(fontId, ch, fontSize)，说明运行时 advance 公式 + 用户字体 registerRuntime + HTTP 端点；canonical 降级为 fallback 路径
+- **CLAUDE.md 里程碑列表**：加 M20 ✅；总工期 M0-M20
+
+### 关联文件
+
+`CLAUDE.md` / `docs/journal.md` / `plugin/src/test/resources/expected/03-effects-stroke.png` / `04-effects-shadow.png` / `05-effects-glow.png`（baseline 替换）。
+
+---
+
+## 2026-05-17 · M20 收尾总览
+
+**M20 = 字体精确化全链路 / B 路线（per-font advance 表）/ 6 phase 5 commit / 0 残留 fixture failure**
+
+针对用户报告「思源黑体字间距漂移 / 字符重叠」问题。
+
+### 6 phase 5 commit
+
+| Phase | 主题 | commit |
+|---|---|---|
+| P1 | 构建期 GlyphMetricsGenerator + Gradle task + jar/web 双产物 | `3fba1a0` |
+| P2+3 | 后端 FontMetricsTable + TextLayout charAdvance / 前端 GlyphMetricsLut + 镜像 | `e3eeda4` |
+| P4 | 用户字体 registerRuntime + `GET /api/font/metrics?id=...` HTTP 端点 | `c9d1095` |
+| P5+6 | 3 effects fixture baseline 重建 + docs 同步 | （本 commit） |
+
+### M20 5 个关键架构决策（已固化入 CLAUDE.md）
+
+1. **per-font advance 表**：构建期 AWT FontMetrics.charWidth 扫 BMP 0x20..0xFFFF → 紧凑 JSON `{baseSize:12, ascent, descent, advances:{cp:width}}`；双端共享同款 JSON
+2. **运行时缩放公式**：`advance = round(baseAdv × fontSize / baseSize)`，O(1) 数组索引 + 1 次 Math.round；baseSize=12 锁定（与 nativeSize 习惯一致）
+3. **canonical 降级为 fallback**：保留作首次渲染 / 表未到位 / 缺字时兜底；不删除（语义保持兼容）
+4. **用户字体走 runtime 注册路径**：FontRegistry.loadExternal 调 registerRuntime；不写文件（重启重算，避磁盘 IO + 缓存失效复杂度）；HTTP 端点序列化内存表给前端
+5. **fontId 严格白名单**：`[a-zA-Z0-9_-]+` 防 `../` 路径注入
+
+### 累计统计
+
+- 新文件 3：GlyphMetricsGenerator.java / FontMetricsTable.java / GlyphMetricsLut.ts
+- 改动文件 ~8：TextLayout.java/ts、FontRegistry.java、WebServer.java、PreviewRenderer.ts、CanvasView.vue、TextElementSection.vue、plugin/build.gradle.kts、3 expected PNG
+- 测试：`:plugin:test` 364 / 0 fail；非 fixture 361 + fixture 13（含 13-placeholder）= 374 实际 case
+- bundle：vite +1KB；shadowJar +800KB（含 2 JSON metrics）
+
+### v1.x 留档
+
+- **surrogate pair（U+10000+）**：emoji / 罕用 CJK 扩展未扫，运行时遇 surrogate 走 canonical fallback
+- **用户字体 ascent/descent 替换 ASCENT_RATIO=0.8 经验值**：当前仍用经验值 + getAscent/getDescent 仅暴露未消费
+- **registerRuntime 异步化**：用户字体多时 onEnable 串行 ~20s 阻塞 ServerStart；可换 onEnable 后台线程或 Bukkit Scheduler
+
+### 评估
+
+字体展示问题彻底修复。视觉效果在 effects fixture 中**肉眼可见地更好**（字符不挤 / 居中 / 无重影）。M0-M20 累计 20 milestone 全部 ✅。
+
+---
+
 ## 2026-05-17 · M20 Phase 4（用户字体 runtime metrics + HTTP 端点）
 
 1 个 agent 完成。补完用户字体 metrics 链路。
