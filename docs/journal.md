@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-05-17 · M17 Phase 1（F2 拖动跟手修复 + F4 自由拖动画布）
+
+针对生产级 UX 增强 / bug 修复 2 项，2 个并行 agent 完成。
+
+### F2 onDragMove 单选 path 实时跟手（bug 修复）
+
+**根因**：HikariCanvas 编辑器双层渲染——顶层 Konva 透明 hit-test 矩形（fill rgba 0.001）+ 底层 Canvas 2D PreviewRenderer 像素化输出（dither + 248 调色板）。用户实际看到的是底层 Canvas。底层重绘依赖 `requestDraw()` → `watch(project.state, {deep:true})`。
+
+CanvasView.vue `onDragMove(ev, id)` 原逻辑 `if (dragInitial.value.size <= 1) return;` 单选场景早 return，根本不更新 store → PreviewRenderer 不重绘 → 视觉上"松手才跳到位"。
+
+修复：删早 return，单选 / 多选都先 mutate leader 自身 store + `requestDraw()`，多选 path 的 follower 同步逻辑保持不变（含 M15.3 P0-1 `init.x !== otherX` 判等修复）。**onDragEnd 仍是唯一 ws.send 入口**（保持 60fps 不塞爆服务端）。
+
+性能：`requestDraw()` 内部 rAF 自合并（line 458-460 `if (drawPending) return`），天然 60fps 上限；浏览器 dragmove ≤60Hz；不预防性加 throttle，500+ 元素 wall 实测卡顿时再加。
+
+### F4 自由拖动画布 + 1024px 虚空白边
+
+**新 'hand' 工具**：
+- `ui.ActiveTool` union 加 `'hand'`；isDrawTool 排除（保留 selection / hover）；loadTool KNOWN 列表加 hand
+- LeftTools Move 按钮后插入 Hand 工具（lucide Hand icon，H 快捷键）
+- `useCanvasShortcuts` H 键激活；keydown Space 临时切（闭包 `spaceSavedTool` 保存原工具）、keyup 恢复；`e.repeat` 保护防 OS 长按重复；window blur 兜底防卡死；keydown preventDefault 防 Space 触发页面滚动
+
+**虚空白边 1024px**：
+- CanvasView 模板 inner wrapper 原 `p-8` 改 class `hc-canvas-padding` + scoped CSS `padding: 1024px`（Tailwind arbitrary 值在 scoped 偶失效，直接 CSS 最稳）
+- onMounted nextTick 主动 `scrollLeft / scrollTop = (scrollWidth - clientWidth) / 2` 居中（padding 让 scrollWidth >viewport，不主动滚则首屏停在 padding 空白）
+- fitToViewport 不受影响（仍按 outer.clientWidth - 64 算缩放，不读 scrollWidth）
+
+**cursor 反馈**：CanvasView `cursorStyle` computed → `isPanning` → grabbing / `activeTool === 'hand'` → grab / drawTool → crosshair / else default。`usePanScroll` 暴露新 `isPanning` ref；onMouseDown 加 `button === 0 && activeTool === 'hand'` 分支（与中键 / Alt+左键并列）
+
+**hand 工具下交互屏蔽**：
+- hitConfig `listening: false`（与 drawTool 同路径），左键穿透到 outer pan
+- onStageMouseDown 早 return 不启 marquee / draw
+- useTransformerManager 不挂 Transformer 锚点
+
+i18n 加 `tools.handTool` zh/en + `help.midMouseOrAlt` 文案补 `H 工具 / 按住 Space`。
+
+### 验证
+
+`vite build` 315ms / 486.87 kB ok。vue-tsc 我改动 0 新 TS 错误（既有 baseline 错误来自 DragEvt / node.x(v) setter 重载、Tooltip / useTransformerManager / i18n / PreviewRenderer / vite.config @types/node 等历史问题）。
+
+### 关联文件
+
+`web/src/`: `stores/ui.ts` / `components/layout/CanvasView.vue` / `components/layout/LeftTools.vue` / `composables/useCanvasShortcuts.ts` / `composables/usePanScroll.ts` / `composables/useTransformerManager.ts` / `i18n/messages.ts`。
+
+---
+
 ## 2026-05-16 · M16 Phase 7（docs 同步 + 收尾）
 
 针对 M16 6 phase 28 项改动同步契约文档；ultrareview-2026-05-15.md 落地删除（已被 05-16 review 取代）；ultrareview-2026-05-16.md 入仓存档。

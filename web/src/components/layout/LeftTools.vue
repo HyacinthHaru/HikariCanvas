@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Minus, MoveRight, Circle, Star, Brush } from 'lucide-vue-next';
+import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Hand, Minus, MoveRight, Circle, Star, Brush } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -80,6 +80,18 @@ function addRect() {
         @click="ui.setTool('move')"
       >
         <Move class="size-5" />
+      </button>
+    </Tooltip>
+    <!-- M17 F4：手型工具，按住 Space 也可临时切换 -->
+    <Tooltip :text="t.tools.handTool" shortcut="H">
+      <button
+        class="p-2 rounded transition-colors"
+        :class="ui.activeTool === 'hand'
+          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          : 'hover:bg-[color:var(--accent)]'"
+        @click="ui.setTool('hand')"
+      >
+        <Hand class="size-5" />
       </button>
     </Tooltip>
 

@@ -70,6 +70,7 @@ export const messages = {
         tools: {
             selectTool: '选择工具 (V)：点击选中后显示缩放/旋转锚点，可拖动元素',
             moveTool: '移动工具 (M)：仅拖拽不显示锚点，双击文本仍可进入编辑',
+            handTool: '手型工具 (H)：拖动平移画布；按住空格临时切换',
             lineTool: '直线工具 (L)：在画布拖出两点创建直线',
             arrowTool: '箭头工具 (A)：在画布拖出两点创建带箭头的直线',
             circleTool: '圆 / 椭圆工具 (C)：在画布拖出 bbox 创建椭圆',
@@ -342,7 +343,7 @@ export const messages = {
             mouseDoubleClick: '左键双击',
             dblClickBlank: '双击空白处',
             scrollWheel: '鼠标滚轮',
-            midMouseOrAlt: '中键拖 / Alt+左键拖',
+            midMouseOrAlt: '中键拖 / Alt+左键拖 / H 工具 / 按住 Space',
             cmdEdit: '/canvas edit — 新建一面墙画',
             cmdOpen: '/canvas open <wall_id|alias> — 重新打开已有的画',
             cmdList: '/canvas list — 列出自己的所有画',
@@ -410,6 +411,7 @@ export const messages = {
         tools: {
             selectTool: 'Select tool (V): click to select; resize/rotate handles shown; drag to move',
             moveTool: 'Move tool (M): drag-only, no handles; double-click on text still enters edit',
+            handTool: 'Hand tool (H): drag to pan the canvas; hold Space to temporarily switch',
             lineTool: 'Line tool (L): drag two points on canvas to create a line',
             arrowTool: 'Arrow tool (A): drag two points to create a line with arrow marker',
             circleTool: 'Circle / Ellipse tool (C): drag a bbox to create an ellipse',
@@ -682,7 +684,7 @@ export const messages = {
             mouseDoubleClick: 'Double left click',
             dblClickBlank: 'Double-click blank area',
             scrollWheel: 'Scroll wheel',
-            midMouseOrAlt: 'Middle-drag / Alt+Left-drag',
+            midMouseOrAlt: 'Middle / Alt+Left drag / H tool / hold Space',
             cmdEdit: '/canvas edit — start a new wall painting',
             cmdOpen: '/canvas open <wall_id|alias> — reopen an existing painting',
             cmdList: '/canvas list — list your paintings',

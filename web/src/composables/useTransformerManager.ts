@@ -39,7 +39,8 @@ export function useTransformerManager(opts: {
         const t = opts.transformerRef.value?.getNode() as undefined | { nodes(ns: unknown[]): void };
         const l = opts.layerRef.value?.getNode() as undefined | { findOne(sel: string): unknown };
         if (!t || !l) return;
-        if (ui.activeTool === 'move' || ui.selectedCount === 0) { t.nodes([]); return; }
+        // M17 F4：hand 工具下同样隐藏 transformer（pan 模式不显示锚点遮挡）
+        if (ui.activeTool === 'move' || ui.activeTool === 'hand' || ui.selectedCount === 0) { t.nodes([]); return; }
         const nodes: unknown[] = [];
         for (const id of ui.selectedIds) {
             const n = l.findOne(`#${id}`);

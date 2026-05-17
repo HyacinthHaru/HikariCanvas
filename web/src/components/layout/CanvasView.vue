@@ -119,6 +119,7 @@ const {
     onMouseMove,
     onMouseUpOrLeave,
     fitToViewport,
+    isPanning,
 } = usePanScroll({ outerRef, widthPx: () => widthPx.value, heightPx: () => heightPx.value });
 const {
     uploadError,
@@ -137,7 +138,8 @@ function hitConfig(e: Element) {
     const canDrag = !e.locked && e.visible && !project.activeLayerLocked;
     // M9-E：绘制工具激活时，element-hit 整层 listening=false，让 mousedown 穿透到 stage
     // 启动 drag-to-create（PS/Figma 行为：drawTool 下点已有元素也是开始画新元素）
-    const drawing = isDrawTool(ui.activeTool);
+    // M17 F4：hand 工具同样关闭 element-hit listening，使左键直接被 outer 的 pan 处理。
+    const drawing = isDrawTool(ui.activeTool) || ui.activeTool === 'hand';
     return {
         id: e.id,
         name: 'element-hit',
@@ -245,6 +247,9 @@ function onStageMouseDown(ev: StageEvt): void {
     const evt = ev.evt as MouseEvt | undefined;
     if (evt && ((evt as MouseEvent).button === 1 || (evt as MouseEvent).altKey)) return;
 
+    // M17 F4：hand 工具 / 按住 Space 临时切的 hand —— 左键交给 outer pan，不启动 marquee / draw。
+    if (ui.activeTool === 'hand') return;
+
     const stage = node.getStage?.();
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
@@ -315,8 +320,16 @@ watch(() => ui.activeTool, (next) => {
     drawCancel();
 });
 
-/** M9-D：cursor 跟随 activeTool。绘制工具显示 crosshair；其他默认 cursor。 */
-const cursorStyle = computed(() => isDrawTool(ui.activeTool) ? 'crosshair' : 'default');
+/**
+ * M9-D：cursor 跟随 activeTool。绘制工具显示 crosshair；其他默认 cursor。
+ * M17 F4：hand 工具 grab；正在 pan grabbing；Alt 按下且 select/move 也 grab（提示 Alt+左键 pan）。
+ */
+const cursorStyle = computed(() => {
+    if (isPanning.value) return 'grabbing';
+    if (ui.activeTool === 'hand') return 'grab';
+    if (isDrawTool(ui.activeTool)) return 'crosshair';
+    return 'default';
+});
 
 // ---------- M8-F：多选 drag 同步 ----------
 //
@@ -352,7 +365,9 @@ interface DragEvt { target: {
 } }
 
 function onDragMove(ev: DragEvt, id: string): void {
-    if (dragInitial.value.size <= 1) return;  // 单选 path 不需要同步
+    // F2: 必须同步更新 leader 自身的 store，否则底层 PreviewRenderer（依赖 deep-watch
+    //   project.state）不重绘 → 用户看到顶层 Konva hit-rect 跟手但实际像素不动。
+    //   仅本地 mutate + requestDraw，不发 WS（避免 60fps 塞爆服务端，落地仍走 onDragEnd）。
     const initLeader = dragInitial.value.get(id);
     if (!initLeader) return;
     const node = ev.target;
@@ -360,23 +375,32 @@ function onDragMove(ev: DragEvt, id: string): void {
     const h = node.height();
     const leaderX = Math.round(node.x() - w / 2);
     const leaderY = Math.round(node.y() - h / 2);
-    const dx = leaderX - initLeader.x;
-    const dy = leaderY - initLeader.y;
+    const leaderEl = project.elementById(id);
+    if (leaderEl) {
+        leaderEl.x = leaderX;
+        leaderEl.y = leaderY;
+    }
 
-    const layerNode = layerRef.value?.getNode() as undefined | { findOne(sel: string): DragEvt['target'] | undefined };
-    if (!layerNode) return;
-    for (const [sid, init] of dragInitial.value) {
-        if (sid === id) continue;
-        const el = project.elementById(sid);
-        if (!el) continue;
-        const newX = init.x + dx;
-        const newY = init.y + dy;
-        el.x = newX;
-        el.y = newY;
-        const other = layerNode.findOne(`#${sid}`);
-        if (other) {
-            other.x(newX + el.w / 2);
-            other.y(newY + el.h / 2);
+    if (dragInitial.value.size > 1) {
+        // 多选：算 delta 同步其他被选中 element 的 store + Konva pos
+        const dx = leaderX - initLeader.x;
+        const dy = leaderY - initLeader.y;
+        const layerNode = layerRef.value?.getNode() as undefined | { findOne(sel: string): DragEvt['target'] | undefined };
+        if (layerNode) {
+            for (const [sid, init] of dragInitial.value) {
+                if (sid === id) continue;
+                const el = project.elementById(sid);
+                if (!el) continue;
+                const newX = init.x + dx;
+                const newY = init.y + dy;
+                el.x = newX;
+                el.y = newY;
+                const other = layerNode.findOne(`#${sid}`);
+                if (other) {
+                    other.x(newX + el.w / 2);
+                    other.y(newY + el.h / 2);
+                }
+            }
         }
     }
     requestDraw();
@@ -433,6 +457,15 @@ onMounted(() => {
     onIconReady(() => requestDraw());
     // M11-C：PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）
     onPaletteReady(() => requestDraw());
+
+    // M17 F4：1024px 虚空白边让 scrollWidth / scrollHeight 比 viewport 大；
+    // 默认 scrollLeft/Top = 0 会停在 padding 区导致看不到画布。nextTick 后居中。
+    nextTick(() => {
+        const outer = outerRef.value;
+        if (!outer) return;
+        outer.scrollLeft = Math.max(0, (outer.scrollWidth - outer.clientWidth) / 2);
+        outer.scrollTop = Math.max(0, (outer.scrollHeight - outer.clientHeight) / 2);
+    });
 });
 
 let drawPending = false;
@@ -486,8 +519,11 @@ function requestDraw(): void {
     @dragover="onCanvasDragOver"
     @drop="onCanvasDrop"
   >
-    <!-- 画布居中容器 -->
-    <div class="min-h-full min-w-full flex items-center justify-center p-8">
+    <!-- 画布居中容器
+         M17 F4：1024px 虚空白边——padding 让 scrollWidth / scrollHeight 虚拟扩大，
+         用户可以把画布拖到 viewport 任意角落。fitToViewport 仍按 v-stage 实际尺寸计算
+         不受 padding 影响；初次居中由 scrollLeft / scrollTop 中点策略实现。 -->
+    <div class="min-h-full min-w-full flex items-center justify-center hc-canvas-padding">
       <div
         class="relative shadow-lg ring-1 ring-[color:var(--border)] bg-white"
         :style="{
@@ -613,4 +649,12 @@ function requestDraw(): void {
 <style scoped>
 /* canvas / brush host 视觉样式由全局 / Tailwind 提供；
    TextInlineEditor / CanvasZoomBar 各自 scoped 自带样式。 */
+
+/* M17 F4：1024px 虚空白边——让画布可以拖到 viewport 任意角落（Figma / PS 风格）。
+   不用 Tailwind 的 p-[1024px]：scoped 下 arbitrary value 偶失效，直接写 CSS 最稳。
+   注意：padding 不影响 fitToViewport 计算（按 widthPx / heightPx 而非 scrollWidth），
+   但会让 scrollWidth / scrollHeight 比 viewport 大 → outer.scrollLeft/Top 有空间走。 */
+.hc-canvas-padding {
+    padding: 1024px;
+}
 </style>

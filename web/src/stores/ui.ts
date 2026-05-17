@@ -11,14 +11,15 @@ export type Locale = 'zh' | 'en';
  * 当前激活工具。
  * - {@code 'select'}：默认。点击元素 = 选中 + 显示 transformer（resize/rotate 锚点）。双击文本进 inline edit。
  * - {@code 'move'}：PS 移动工具风格。点击元素 = 选中 + 立即可拖；transformer 不显示（避免大元素时锚点遮挡）；双击仍允许进 edit。
+ * - {@code 'hand'}（M17 F4）：Figma 风格手型工具。任何位置 mousedown+drag = pan 画布；按住 Space 临时切到此工具。
  * - {@code 'line' / 'arrow' / 'circle' / 'star'}（M9-D）：进入"待绘制"状态，cursor = crosshair；
  *   M9-E 接 canvas mousedown/move/up 实现 drag-to-create。M9-D 期间画布上 drag 暂无效果。
  */
-export type ActiveTool = 'select' | 'move' | 'line' | 'arrow' | 'circle' | 'star' | 'brush';
+export type ActiveTool = 'select' | 'move' | 'hand' | 'line' | 'arrow' | 'circle' | 'star' | 'brush';
 
-/** 是否是绘制工具（拖出新元素 / 笔触）。select/move 之外均为绘制工具。 */
+/** 是否是绘制工具（拖出新元素 / 笔触）。select/move/hand 之外均为绘制工具。 */
 export function isDrawTool(tool: ActiveTool): boolean {
-    return tool !== 'select' && tool !== 'move';
+    return tool !== 'select' && tool !== 'move' && tool !== 'hand';
 }
 
 /** 是否是笔刷工具（M12：走 PointerEvent + BrushController 而非 drag-to-create）。 */
@@ -204,7 +205,7 @@ function applyThemeToDom(theme: Theme) {
 }
 
 function loadTool(): ActiveTool {
-    const KNOWN: ActiveTool[] = ['select', 'move', 'line', 'arrow', 'circle', 'star', 'brush'];
+    const KNOWN: ActiveTool[] = ['select', 'move', 'hand', 'line', 'arrow', 'circle', 'star', 'brush'];
     try {
         const v = localStorage.getItem(TOOL_KEY) as ActiveTool | null;
         if (v && KNOWN.includes(v)) return v;
