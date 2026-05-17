@@ -432,7 +432,7 @@ CREATE INDEX/UNIQUE INDEX ...;
 
 ### 6.5.1 V010 DROP COLUMN refcount（M16-P6.3，2026-05-16）
 
-`image_uploads.refcount` 列在 V010 中 DROP。理由：M15.4 起 refcount 改为运行期从 `project_json` JSON_EACH 算（避免 element.add / element.delete 时多一次 DB UPDATE 引入事务竞争）；refcount 列变成 stale 数据源，留着误导调试。Pre-release（0.1.x SNAPSHOT）阶段允许激进 DROP COLUMN，符合 §6.6.1 规则。0.1.0 发版后类似清理必须走"逻辑删除"路径。
+`image_uploads.refcount` 列在 V010 中 DROP。理由：M15.4 起 refcount 改为运行期从 `project_json` JSON_EACH 算（避免 element.add / element.delete 时多一次 DB UPDATE 引入事务竞争）；refcount 列变成 stale 数据源，留着误导调试。Pre-release（0.x SNAPSHOT）阶段允许激进 DROP COLUMN，符合 §6.6.1 规则。首次 stable（≥1.0.0）发版后类似清理必须走"逻辑删除"路径。
 
 ### 6.4 备份与恢复
 
@@ -440,16 +440,18 @@ CREATE INDEX/UNIQUE INDEX ...;
 - `data.db` 应随世界文件一并快照
 - 恢复时确保 DB 与世界文件的时间一致，否则 map 与 PDC 可能不匹配
 
-### 6.6 Migration 兼容性规则（pre-release vs 0.1.0 发版）
+### 6.6 Migration 兼容性规则（pre-release vs stable 发版）
 
-> **M15.4 P0-28/29 落地**（2026-05-16）：M15 之前 migration 走的是"激进 drop+recreate"（如 V005 整体重置），适合 pre-release 阶段；0.1.0 之后必须切到 forward-only + 强制 auto-backup。
+> **M15.4 P0-28/29 落地**（2026-05-16）：M15 之前 migration 走的是"激进 drop+recreate"（如 V005 整体重置），适合 pre-release 阶段；首次 stable（≥1.0.0）之后必须切到 forward-only + 强制 auto-backup。
+>
+> **版本语义**（M18 后调整）：`0.x.y-SNAPSHOT` 全部视为 pre-release 阶段，允许激进改 schema；`1.0.0` 起视为 stable 发版。当前 `0.2.0-SNAPSHOT` 仍处 pre-release。
 
-#### 6.6.1 Pre-release（0.1.x SNAPSHOT）
+#### 6.6.1 Pre-release（0.x SNAPSHOT）
 
 允许激进改 schema：V<N+1> 可 `DROP` 旧表 / 重命名列 / 删字段。
 `database.auto-backup-before-migration` config 默认 `false`。
 
-#### 6.6.2 0.1.0 发版后
+#### 6.6.2 Stable（≥1.0.0）发版后
 
 强制 forward-only：
 
@@ -465,7 +467,7 @@ CREATE INDEX/UNIQUE INDEX ...;
 - 每个 migration 前自动 `cp data.db data.db.pre-V<NNN>.bak`
 - 备份保留 30 天，超出由 BackupReaper（v2 加）清
 
-#### 6.6.3 Migration 测试要求（0.1.0+）
+#### 6.6.3 Migration 测试要求（stable 发版后）
 
 每个新 migration 必须有 fixture 测试：跑 V<N-1> baseline DB → V<N> →
 验证关键查询仍返同等价数据。测试 fixture 在 `plugin/src/test/resources/migration-fixtures/V<NNN>__before.sql`。

@@ -198,7 +198,7 @@ M15 分 5 phase commit batch 修完：
 **关键架构决策（已固化）**：
 
 1. CLAUDE.md `§lock-state` 第 2 条「后端编辑 op 不读 lock」保留（方案 C 只动 open 路径）
-2. Pre-release（0.1.x SNAPSHOT）激进改 schema OK；0.1.0 发版后 forward-only + 强制 auto-backup（详见 `docs/data-model.md §6.6`）
+2. Pre-release（`0.x.y-SNAPSHOT`，含当前 `0.2.0-SNAPSHOT`）激进改 schema OK；首次 stable（≥1.0.0）发版后 forward-only + 强制 auto-backup（详见 `docs/data-model.md §6.6`）
 3. 动态画板必须走 P-1（渲染期占位符）或 P-3（Plugin API + Provider）；反模式 P-2（定时 patch ProjectState）禁用（详见 `docs/architecture.md §13`）
 
 累计 27 P0 修完 + 5 god class 拆完 + 3 commit batch（5 个 phase）。
