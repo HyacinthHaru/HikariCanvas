@@ -1,5 +1,7 @@
 # HikariCanvas
 
+[![CI](https://github.com/HyacinthHaru/HikariCanvas/actions/workflows/ci.yml/badge.svg)](https://github.com/HyacinthHaru/HikariCanvas/actions/workflows/ci.yml)
+
 Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 模板系统 + 实时投影，在游戏内生成文字招牌。
 
 ## 标识
@@ -82,7 +84,7 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16） → M17 生产级体验组（F1-F5 复制粘贴 / 拖动跟手 / 智能对齐 / 自由拖动画布 / Canvas Fill） ✅（2026-05-17） → **M18 Live Paint 油漆桶（B-medium+ 路线 / polygon-clipping / Web Worker / vector-fill 决策 A / vitest 引入） ✅（2026-05-17）**。总工期约 6 个月（M0-M18 累计约 8 周 wall-clock）。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16） → M17 生产级体验组（F1-F5 复制粘贴 / 拖动跟手 / 智能对齐 / 自由拖动画布 / Canvas Fill） ✅（2026-05-17） → M18 Live Paint 油漆桶（B-medium+ 路线 / polygon-clipping / Web Worker / vector-fill 决策 A / vitest 引入） ✅（2026-05-17） → **M19 GitHub Actions CI + Release（ci.yml push/PR 触发 / release.yml tag v* 触发 / Java 21 + Node 22 / shadowJar artifact 30d） ✅（2026-05-17）**。总工期约 6 个月（M0-M19 累计约 8 周 wall-clock）。
 
 ## M8-M12 已完成（详见 docs/journal.md）
 
@@ -176,7 +178,17 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 cd web && npm install               # 首次
 cd web && ./node_modules/.bin/vite build --clearScreen false   # 前端产物（Node 25 下偶卡，重跑即过）
 ./gradlew :plugin:test              # snapshot 测试（5 个 fixture）；baseline 变时 rm expected/*.png 重建
+cd web && npm run test              # M18 vitest（28 case，166ms）
 ```
+
+## CI / Release（M19 引入）
+
+GitHub Actions 2 workflow：
+
+- **`.github/workflows/ci.yml`**：push/PR 到 main 触发。单 job 跑 frontend（npm ci + vitest 28 + vite build）+ backend（:plugin:test 364 + :plugin:shadowJar）+ 上传 jar artifact 30 天。首跑 ~5min，后续 ~2min（setup-gradle 缓存生效）
+- **`.github/workflows/release.yml`**：tag `v*` 触发。`git tag v0.2.0 && git push origin v0.2.0` → 自动跑测试 + shadowJar + 创建 GitHub Release + 附 jar。含 `-`（如 v0.2.0-SNAPSHOT）自动标 prerelease
+- **环境锁**：Java 21 Temurin + Node 22 LTS（不用 Node 25，CLAUDE.md 已知卡 vue-tsc）
+- **cache**：`gradle/actions/setup-gradle@v4` 自带 Gradle dep/build cache；`setup-node@v4` 自带 npm cache（cache-dependency-path: `web/package-lock.json`）。不显式配 `actions/cache`，保持"原生"
 
 前端状态管理：`web/src/stores/{network,project,ui}.ts`（Pinia setup stores）。
 WS 通讯封装：`web/src/network/wsClient.ts`（单例 `WsClient`）。

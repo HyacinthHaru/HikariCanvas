@@ -5,6 +5,53 @@
 
 ---
 
+## 2026-05-17 · M19 GitHub Actions CI + Release
+
+继 M18 全栈完成后补 CI 防回归（M16 待办段「CI 设置 / vitest / Playwright E2E」中的 CI / vitest 两项落地；vitest M18-P5 已做，CI 本里程碑做）。
+
+### 设计基础（用户对齐）
+
+- 不要 nightly / PR auto checks / release signing
+- 用户本地翻墙不稳定，但 GitHub runner 网络稳定 → CI yml 不显式 `actions/cache`，依赖 `setup-gradle@v4` + `setup-node@v4 cache: npm` 自带缓存（"原生"）
+- 单 job 集成 frontend + backend：项目前后端互依（syncFontsToWeb 喂字体给 web；copyWebToResources 喂 dist 给 jar），拆 job 反而重复 setup-java/setup-node
+
+### 改动
+
+#### `.github/workflows/ci.yml`
+- push/PR 到 main 触发；timeout 30min；ubuntu-latest
+- setup-java Temurin 21 / setup-node 22 LTS（Node 25 已知卡 vue-tsc）
+- setup-gradle v4（自带 dep/build/config cache）
+- 步骤：`npm ci` → `vitest run` → `vite build` → `:plugin:test` → `:plugin:shadowJar` → 上传 jar artifact 30 天 → 失败时上传 test reports 7 天
+
+#### `.github/workflows/release.yml`
+- tag `v*` 触发；permissions contents:write
+- 同样 setup + 跑完整测试 + shadowJar
+- 提取 tag 版本号 → 重命名 jar `HikariCanvas-${VERSION}.jar`
+- `softprops/action-gh-release@v2` 自动生成 release notes + 上传 jar
+- `prerelease: ${{ contains(env.VERSION, '-') }}` 含 `-` 标 pre-release
+
+### 首跑事故
+
+push d9aebd3 后 GitHub Actions 4s 返：
+```
+The job was not started because your account is locked due to a billing issue.
+```
+
+不是 yml 问题——账号级 billing 锁。public repo Actions 通常免费，但用户账号本身被锁。需要用户去 https://github.com/settings/billing 处理后 CI 才能跑。**yml 部署正确**，等账号解锁后会自动 retry / 下次 push 触发。
+
+### CLAUDE.md 同步
+
+- 顶部加 CI badge：`[![CI](.../ci.yml/badge.svg)](.../actions/workflows/ci.yml)`
+- 里程碑表加 M19 ✅；M0-M19 累计约 8 周 wall-clock
+- 速查段加 `cd web && npm run test`（M18 vitest）
+- 新「CI / Release（M19 引入）」段：两个 workflow + 环境锁 + cache 策略
+
+### 关联文件
+
+`.github/workflows/ci.yml`（新）/ `.github/workflows/release.yml`（新）/ `CLAUDE.md` / `docs/journal.md`。
+
+---
+
 ## 2026-05-17 · 版本号 0.1.0-SNAPSHOT → 0.2.0-SNAPSHOT
 
 M0-M18 累计 18 个 milestone 落地，Live Paint / 智能对齐 / 复制粘贴 / Fill 联合类型等大量 feature 已不属于"0.1.0 初版"语义范畴。版本号往前推进一位。
