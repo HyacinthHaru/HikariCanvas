@@ -278,6 +278,25 @@ public final class WebServer {
                         HandlerType.GET, "/api/upload/{source}", uploadHandler::handleDownload));
             }
 
+            // M20-P4：字体 advance 表查询端点（用户字体走这条路；内置字体仍由
+            // /fonts/{id}.metrics.json 静态文件提供，前端先 fetch 静态后 fallback 此端点）
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/font/metrics", ctx -> {
+                        String id = ctx.queryParam("id");
+                        if (id == null || id.isEmpty() || !id.matches("[a-zA-Z0-9_-]+")) {
+                            ctx.status(400).result("{\"code\":\"BAD_REQUEST\"}");
+                            return;
+                        }
+                        String json = moe.hikari.canvas.render.FontMetricsTable.serializeToJson(id);
+                        if (json == null) {
+                            ctx.status(404).result("{\"code\":\"NOT_FOUND\"}");
+                            return;
+                        }
+                        ctx.contentType("application/json").result(json);
+                        // 5 min；用户改字体后重启服务即可刷新
+                        ctx.header("Cache-Control", "max-age=300, private");
+                    }));
+
             // M14：创意工坊市场（DB 元数据列表）
             if (templateRepo != null) {
                 cfg.routes.addEndpoint(new Endpoint(

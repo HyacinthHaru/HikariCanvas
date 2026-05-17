@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-05-17 · M20 Phase 4（用户字体 runtime metrics + HTTP 端点）
+
+1 个 agent 完成。补完用户字体 metrics 链路。
+
+### 设计
+
+内置字体走构建期 generator → classpath JSON（M20.1-3 已成）。用户字体（`plugins/HikariCanvas/fonts/*.ttf/otf`）启动期用 AWT 现场算 → 内存表；前端 fetch 不到 `/fonts/{id}.metrics.json` 时 fallback `/api/font/metrics?id=...` 从后端拿。
+
+### 改动
+
+- **`FontMetricsTable.java`**：
+  - 加 `registerRuntime(fontId, Font)`：AWT BufferedImage + Graphics2D + Font.deriveFont(12f) + FontMetrics.charWidth 扫 BMP 0x20..0xFFFF（**与构建期 GlyphMetricsGenerator 算法完全一致**）→ put 真表覆盖 MISSING sentinel
+  - 加 `serializeToJson(fontId)`：识别 null / MISSING / baseSize<=0 都返 null；输出格式与构建期 JSON 完全对齐
+- **`FontRegistry.loadExternal`**：`Font.createFont` 成功 + `fonts.put` 后立即调 `FontMetricsTable.registerRuntime(id, font)` + info log
+- **`WebServer`**：新路由 `GET /api/font/metrics?id=...`：与 `/api/upload/*` 同级，public pre-handshake；fontId 严格 `[a-zA-Z0-9_-]+` 白名单（防路径注入）；400 / 404 / 200 三态；`Cache-Control: max-age=300, private`
+- **`GlyphMetricsLut.preloadMetrics`**：先 `fetch('/fonts/{id}.metrics.json')`；`!resp.ok` 时 fallback `fetch('/api/font/metrics?id=...')`；两边都失败 → `tables.set(null)` sentinel → 运行时 fallback canonical
+
+### 性能 / 并发 / 安全
+
+- 单用户字体 registerRuntime ~1-2s（65k canDisplay+charWidth）；用户 10 字体 ~20s onEnable 阻塞——Paper plugin ServerStart 早期可接受
+- ConcurrentHashMap `put` 覆盖 MISSING sentinel；正常启动顺序（loadBuiltIn → loadExternal → WebServer 启动）下内置走 JSON 路径、用户走 runtime 路径互不冲突
+- fontId 正则 `[a-zA-Z0-9_-]+` 严格防 `../` 路径穿越
+- 不写文件——runtime metrics 仅内存，重启重算（避开磁盘 IO + 缓存失效）
+
+### 验证
+
+`:plugin:compileJava` clean / `vite build` 453ms clean。未碰 baseline fixture（留 M20.5）。
+
+### 关联文件
+
+`plugin/.../render/FontMetricsTable.java` / `plugin/.../render/FontRegistry.java` / `plugin/.../web/WebServer.java` / `web/src/render/GlyphMetricsLut.ts`。
+
+---
+
 ## 2026-05-17 · M20 Phase 2+3（后端 FontMetricsTable + 前端 GlyphMetricsLut）
 
 2 个并行 agent 完成运行时消费 M20.1 产物。

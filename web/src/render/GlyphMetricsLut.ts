@@ -45,10 +45,15 @@ export function preloadMetrics(fontId: string): Promise<void> {
 
     const p = (async () => {
         try {
-            const resp = await fetch(`/fonts/${encodeURIComponent(fontId)}.metrics.json`);
+            // 先试 vite public dir（内置字体走构建期产物 web/public/fonts/{id}.metrics.json）
+            let resp = await fetch(`/fonts/${encodeURIComponent(fontId)}.metrics.json`);
             if (!resp.ok) {
-                tables.set(fontId, null);
-                return;
+                // M20-P4：fallback 后端 API（用户字体由 FontRegistry.registerRuntime 注册到内存）
+                resp = await fetch(`/api/font/metrics?id=${encodeURIComponent(fontId)}`);
+                if (!resp.ok) {
+                    tables.set(fontId, null);
+                    return;
+                }
             }
             const raw: RawTable = await resp.json();
             const advances = new Int16Array(0x10000);

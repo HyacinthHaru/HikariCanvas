@@ -102,6 +102,11 @@ public final class FontRegistry {
                             new Metadata(id, false, 0),
                             path.toAbsolutePath().toString()));
                     log.info("FontRegistry: loaded external '" + id + "' (" + path + ")");
+                    // M20-P4：用户字体没有构建期生成的 .metrics.json，运行时扫一次 advance 表
+                    // 覆盖 MISSING sentinel；否则 charAdvance 返 -1 fallback canonicalCharWidth 与
+                    // GlyphMetricsLut HTTP 端点的查询也会 404。
+                    FontMetricsTable.registerRuntime(id, font);
+                    log.info("FontRegistry: registered runtime metrics for external font '" + id + "'");
                 } catch (IOException | FontFormatException ex) {
                     log.log(Level.WARNING, "FontRegistry: failed to load external " + path, ex);
                 }

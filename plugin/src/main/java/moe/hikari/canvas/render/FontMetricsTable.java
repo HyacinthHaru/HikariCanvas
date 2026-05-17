@@ -91,6 +91,69 @@ public final class FontMetricsTable {
         });
     }
 
+    /**
+     * M20-P4：运行时注册字体 advance 表（用户字体走这条路）。
+     *
+     * <p>用 AWT BufferedImage + Graphics2D + Font.deriveFont(12f) + FontMetrics.charWidth
+     * 扫 BMP 0x20..0xFFFF（与构建期 GlyphMetricsGenerator 算法完全一致），结果直接
+     * put 到 tables 内存表，覆盖 MISSING sentinel。</p>
+     *
+     * <p>启动期由 FontRegistry.loadExternal 对每个加载成功的用户字体调用一次。
+     * 性能：单字体 ~1-2s（65k canDisplay+charWidth），与构建期 generator 同量级。
+     * 服务启动期阻塞主线程可接受（Paper plugin onEnable 在 ServerStart 早期）。</p>
+     */
+    public static void registerRuntime(String fontId, java.awt.Font font) {
+        if (fontId == null || font == null) return;
+        java.awt.image.BufferedImage dummy = new java.awt.image.BufferedImage(
+                1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = dummy.createGraphics();
+        try {
+            int baseSize = 12;
+            java.awt.Font sized = font.deriveFont((float) baseSize);
+            g.setFont(sized);
+            java.awt.FontMetrics fm = g.getFontMetrics();
+
+            int[] advances = new int[0x10000];
+            java.util.Arrays.fill(advances, -1);
+            for (int cp = 0x20; cp < 0x10000; cp++) {
+                if (!sized.canDisplay(cp)) continue;
+                int w = fm.charWidth(cp);
+                if (w <= 0) continue;
+                advances[cp] = w;
+            }
+            int ascent = fm.getAscent();
+            int descent = fm.getDescent();
+            tables.put(fontId, new Table(baseSize, ascent, descent, advances));
+        } finally {
+            g.dispose();
+        }
+    }
+
+    /**
+     * M20-P4：把指定字体的 advance 表序列化为 JSON 字符串，供 WebServer
+     * {@code GET /api/font/metrics} 端点输出。表未加载 / 为 MISSING sentinel 返 null。
+     */
+    public static String serializeToJson(String fontId) {
+        if (fontId == null) return null;
+        Table t = tables.get(fontId);
+        if (t == null || t == MISSING || t.baseSize <= 0) return null;
+        StringBuilder sb = new StringBuilder(t.advances.length * 8);
+        sb.append("{\"fontId\":\"").append(fontId).append("\",")
+          .append("\"baseSize\":").append(t.baseSize).append(",")
+          .append("\"ascent\":").append(t.ascent).append(",")
+          .append("\"descent\":").append(t.descent).append(",")
+          .append("\"advances\":{");
+        boolean first = true;
+        for (int cp = 0; cp < t.advances.length; cp++) {
+            if (t.advances[cp] <= 0) continue;
+            if (!first) sb.append(",");
+            sb.append("\"").append(cp).append("\":").append(t.advances[cp]);
+            first = false;
+        }
+        sb.append("}}");
+        return sb.toString();
+    }
+
     /** 测试钩子：清缓存。 */
     static void clearCacheForTest() {
         tables.clear();
