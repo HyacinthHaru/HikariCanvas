@@ -70,6 +70,39 @@
 
 ---
 
+## 2026-05-17 · M18 Phase 5（vitest 引入 + Live Paint 单测）
+
+补 CLAUDE.md / M16 待办段自承的"前端无 vitest"。生产级标准要求 livepaint 自写算法必须有单测。
+
+### 依赖
+
+vitest 4.1.6 + @vitest/ui 4.1.6（devDependencies）；未引入 jsdom（livepaint 纯算法，node 环境最快）。
+
+### 配置
+
+- `vite.config.ts`：`/// <reference types="vitest" />` + `test: { environment: 'node', include: ['src/**/*.test.ts'] }`
+- `package.json` scripts：`test` / `test:watch` / `test:ui`
+
+### 测试用例（28 total）
+
+`web/src/livepaint/__tests__/`：
+- `ElementToPolygon.test.ts`（8）：rect 4 顶点 + rotation；circle 32 采样 + 椭圆；shape 五边形；star 10 顶点；path 矩形 + fallback
+- `LivePaintCore.test.ts`（8）：pointInPolygon 内/外/U 形；buildGraph 空/单 rect/退化/完全覆盖/两不重叠
+- `PolygonToPath.test.ts`（6）：gapPolygonToPathD 矩形/hole；gapToPathElement bbox/退化；maybeSimplify 不触发/触发
+- `RdpSimplifier.test.ts`（6）：三顶点/共线/tolerance=0/NaN/1000 点不爆栈/方波拐点
+
+### 结果
+
+```
+Test Files  4 passed (4)
+     Tests  28 passed (28)
+  Duration  166ms
+```
+
+vite build 无退化：382ms / 543.29 kB index / 33.75 kB worker / 47.22 kB css。
+
+---
+
 ## 2026-05-17 · M18 Phase 4（边界 case + vector-fill 决策 A + 退化 fallback）
 
 1 个 agent 完成。
