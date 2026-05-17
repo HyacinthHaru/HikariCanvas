@@ -585,6 +585,12 @@ export interface FontMeta { displayName: string; pixelated: boolean; nativeSize:
 export const FONT_META: Record<string, FontMeta> = {
     ark_pixel: { displayName: 'Ark Pixel 12px（像素）', pixelated: true, nativeSize: 12 },
     source_han_sans: { displayName: '思源黑体 SC Regular', pixelated: false, nativeSize: 0 },
+    // M21：6 个新内置字体（全 SIL OFL 1.1）
+    source_han_serif: { displayName: '思源宋体 SC Regular', pixelated: false, nativeSize: 0 },
+    jetbrains_mono: { displayName: 'JetBrains Mono Regular', pixelated: false, nativeSize: 0 },
+    fira_code: { displayName: 'Fira Code Regular', pixelated: false, nativeSize: 0 },
+    inter: { displayName: 'Inter Regular', pixelated: false, nativeSize: 0 },
+    noto_serif: { displayName: 'Noto Serif Regular', pixelated: false, nativeSize: 0 },
 };
 
 /**

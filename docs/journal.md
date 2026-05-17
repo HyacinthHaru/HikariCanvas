@@ -32,6 +32,75 @@
 
 ---
 
+## 2026-05-17 · M21 内置字体扩充（2 → 7 字体矩阵）
+
+用户要求"添加几种宋体 / 黑体 / 非衬线 / JetBrains Mono 等"。选定**选项 B（完整）= 6 新字体**实施。
+
+### 实际落地 5/6（1 字体技术性跳过）
+
+| 字体 ID | 字体名 | 类别 | 来源 | size |
+|---|---|---|---|---:|
+| `source_han_serif` | 思源宋体 SC Regular | 中文宋体 | adobe-fonts/source-han-serif raw | ~24MB |
+| `jetbrains_mono` | JetBrains Mono Regular | 西文编程等宽 | JetBrains/JetBrainsMono raw | ~200KB |
+| `fira_code` | Fira Code Regular | 西文编程含连字 | tonsky/FiraCode v6.2 zip | ~250KB |
+| `inter` | Inter Regular | 西文通用无衬线 | rsms/inter v4.1 zip | ~350KB |
+| `noto_serif` | Noto Serif Regular | 西文衬线 | notofonts/notofonts.github.io raw | ~250KB |
+| ~~`source_han_mono`~~ | ~~思源等宽 SC~~ | ~~中文等宽~~ | **跳过** | ~~122MB OTC~~ |
+
+**跳过原因**：adobe-fonts/source-han-mono release 仅发 `SourceHanMono.ttc` 多语言合包 122MB，没有独立 SC 单 OTF 版本——超出整个 shadow jar 现尺寸 2 倍不合适内置。中文等宽需求走用户字体路径（M20 用户字体 metrics 自动生效）。
+
+### 4 处改动 per 字体
+
+每个新字体改 4 处（参考 source_han_sans 现成模式）：
+
+1. **`plugin/build.gradle.kts` bundledFonts**：加 `FontSpec(displayId, url, destFileName, expectedSha256, inZipEntryPattern?)`
+2. **`plugin/.../render/FontRegistry.java` BUILT_IN**：加 `BUILT_IN.put(id, new BuiltIn(classpath, new Metadata(displayName, false, 0)))`
+3. **`web/src/style.css`**：加 `@font-face`（TTF 用 `format('truetype')`、OTF 用 `format('opentype')`、`font-display: block`）
+4. **`web/src/render/PreviewRenderer.ts` FONT_META**：加 `{ displayName, pixelated: false, nativeSize: 0 }`
+
+M20 metrics 链路按 `bundledFonts` 列表自动 iterate（generateGlyphMetrics + jar processResources + syncFontsToWeb），**零额外手动改**。
+
+### SHA-256 锁定
+
+首次构建留空 SHA → log 实际值 → 锁回 FontSpec：
+- `source_han_serif`: `78aa7a32...4117`
+- `jetbrains_mono`: `e6fd0d7e...aed1`
+- `fira_code`: `5992ab96...6117`
+- `inter`: `d4f2b9e1...a799`
+- `noto_serif`: `19e72cd8...5f88`
+
+重跑 `:plugin:downloadFonts --rerun-tasks` → 全部 `[skip] already present & verified` SHA 校验通过。
+
+### jar size 评估
+
+- 原 60MB → **新 98MB**（思源宋体 SC 单字体 24MB 占大头，比预估 16MB 大；其他 4 西文合计 ~1.9MB）
+- **重要**：CI / 发版前必须 `./gradlew :plugin:clean :plugin:shadowJar`——未 clean 时 `build/generated/web-resources/` 残留 macOS Finder iCloud sync 字体副本可让 jar 膨胀到 167MB
+
+### 验证
+
+- `:plugin:test` BUILD SUCCESSFUL，14 fixture baseline **无漂移**（纯加字体不改既有渲染）
+- `cd web && npm run build` ✓ 502ms
+- jar `unzip -l` 显示 `fonts/` 下 **7 字体 + 7 metrics.json**，无副本
+- `web/public/fonts/` 镜像同步 7+7
+
+### 字体矩阵覆盖（M21 后）
+
+| 类别 | 字体 ID | 适用场景 |
+|---|---|---|
+| 中文黑体 | `source_han_sans` | 招牌主标题 |
+| 中文宋体 | `source_han_serif` | 正式 / 古风招牌 |
+| 中文像素 | `ark_pixel` | 复古 / 像素风 |
+| 西文无衬线 | `inter` | 现代 / 通用 |
+| 西文衬线 | `noto_serif` | 正式 / 学术 |
+| 西文编程 | `jetbrains_mono` / `fira_code` | 代码块 / 等宽 |
+| **缺：中文等宽** | （用户字体路径） | （需用户自带） |
+
+### 关联文件
+
+`plugin/build.gradle.kts` / `plugin/.../render/FontRegistry.java` / `web/src/style.css` / `web/src/render/PreviewRenderer.ts` / `CLAUDE.md` / `docs/journal.md`。
+
+---
+
 ## 2026-05-17 · M20 收尾总览
 
 **M20 = 字体精确化全链路 / B 路线（per-font advance 表）/ 6 phase 5 commit / 0 残留 fixture failure**

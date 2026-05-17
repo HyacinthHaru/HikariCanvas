@@ -158,7 +158,42 @@ val bundledFonts = listOf(
         destFileName = "ark-pixel-12px-monospaced-zh_cn.ttf",
         expectedSha256 = "2fa78b40f74714b0092fa549eb6814b3efec5a729d020254968a270771ba5f75",
         inZipEntryPattern = ".*monospaced-zh_cn\\.ttf"
+    ),
+    // M21：6 个新内置字体（全 SIL OFL 1.1）
+    FontSpec(
+        displayId = "source_han_serif",
+        url = "https://github.com/adobe-fonts/source-han-serif/raw/release/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf",
+        destFileName = "SourceHanSerifSC-Regular.otf",
+        expectedSha256 = "78aa7a328fd974df2d688c8a9fd74a33d8334dfa84ab24d9d11efb2ffc464117"
+    ),
+    FontSpec(
+        displayId = "jetbrains_mono",
+        url = "https://github.com/JetBrains/JetBrainsMono/raw/master/fonts/ttf/JetBrainsMono-Regular.ttf",
+        destFileName = "JetBrainsMono-Regular.ttf",
+        expectedSha256 = "e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1"
+    ),
+    FontSpec(
+        displayId = "fira_code",
+        url = "https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip",
+        destFileName = "FiraCode-Regular.ttf",
+        expectedSha256 = "5992ab9640e2df491b2f609467b1de60e8bc39b2c28db184342a0592d98f6117",
+        inZipEntryPattern = "ttf/FiraCode-Regular\\.ttf"
+    ),
+    FontSpec(
+        displayId = "inter",
+        url = "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+        destFileName = "Inter-Regular.otf",
+        expectedSha256 = "d4f2b9e148059a15f014cb0f0b8fea8cd11bfa447dd483bedf1b0adc0e2ba799",
+        inZipEntryPattern = "extras/otf/Inter-Regular\\.otf"
+    ),
+    FontSpec(
+        displayId = "noto_serif",
+        url = "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSerif/hinted/ttf/NotoSerif-Regular.ttf",
+        destFileName = "NotoSerif-Regular.ttf",
+        expectedSha256 = "19e72cd8d595fae5bd74a5206f5d938512e1183d4fed7abb1ec1be1d7efa5f88"
     )
+    // 注：source_han_mono SC 单文件不存在（adobe-fonts/source-han-mono release 只发 122MB ttc 多语言合包），
+    // 122MB 超过整个 shadow jar 现尺寸 2 倍，本期跳过；未来需中文等宽可走外部字体目录。
 )
 
 val downloadedFontsDir = layout.buildDirectory.dir("downloaded-fonts")

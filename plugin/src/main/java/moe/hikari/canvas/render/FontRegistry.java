@@ -48,6 +48,22 @@ public final class FontRegistry {
         BUILT_IN.put("source_han_sans", new BuiltIn(
                 "/fonts/SourceHanSansSC-Regular.otf",
                 new Metadata("思源黑体 SC Regular", false, 0)));
+        // M21：6 个新内置字体（全 SIL OFL 1.1）
+        BUILT_IN.put("source_han_serif", new BuiltIn(
+                "/fonts/SourceHanSerifSC-Regular.otf",
+                new Metadata("思源宋体 SC Regular", false, 0)));
+        BUILT_IN.put("jetbrains_mono", new BuiltIn(
+                "/fonts/JetBrainsMono-Regular.ttf",
+                new Metadata("JetBrains Mono Regular", false, 0)));
+        BUILT_IN.put("fira_code", new BuiltIn(
+                "/fonts/FiraCode-Regular.ttf",
+                new Metadata("Fira Code Regular", false, 0)));
+        BUILT_IN.put("inter", new BuiltIn(
+                "/fonts/Inter-Regular.otf",
+                new Metadata("Inter Regular", false, 0)));
+        BUILT_IN.put("noto_serif", new BuiltIn(
+                "/fonts/NotoSerif-Regular.ttf",
+                new Metadata("Noto Serif Regular", false, 0)));
     }
 
     private final Logger log;

@@ -22,6 +22,47 @@
     font-display: block;
 }
 
+/* M21：6 个新内置字体（全 SIL OFL 1.1） */
+@font-face {
+    font-family: 'source_han_serif';
+    src: url('/fonts/SourceHanSerifSC-Regular.otf') format('opentype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'jetbrains_mono';
+    src: url('/fonts/JetBrainsMono-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'fira_code';
+    src: url('/fonts/FiraCode-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'inter';
+    src: url('/fonts/Inter-Regular.otf') format('opentype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'noto_serif';
+    src: url('/fonts/NotoSerif-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
 /*
  * M5-A 深色主题 + shadcn-vue 设计 token。
  * shadcn-vue 约定：CSS 变量作 HSL 三元组，Tailwind 4 用 theme(...) 引用。
