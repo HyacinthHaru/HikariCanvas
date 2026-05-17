@@ -465,6 +465,18 @@ CI 流程：
 
 每次修复后**更新 expected** 并提交 PR 审查。
 
+### 8.4 Live Paint 例外（M18，2026-05-17）
+
+Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**，后端 Java 不做任何镜像。
+这是 §1 / §8 双端镜像纪律的**显式例外**，理由：
+
+- 输出是 `PathElement.d`（SVG path），已经在 M9 双端镜像协议内；后端走常规 `PathRenderer` 渲染，与用户手画 / 工具栏画的 path 完全同路径
+- 拓扑算法（element → polygon → polygon-clipping union/difference → gap polygons → SVG path d）**不参与最终像素输出**，仅作"工具输入辅助"——它把用户的鼠标点击位置解释成一条 PathElement.d 字符串，之后的渲染管线与该 element 是工具生成还是手画无区别
+- Java AWT 无 planar subdivision / boolean polygon op 等价物（`Area` API 性能与精度都达不到 `polygon-clipping` 同等级）；强行镜像会引入 ~2000 行 Java 几何代码且仍可能与 TS 实现行为差异，**得不偿失**
+
+实装位置 `web/src/livepaint/`（5 算法文件 + 1 worker + 1 composable + 1 hover overlay）；后端无对应代码。
+退化几何 fallback：worker 返 `{gaps:[], degraded:true}` 时 UI 拒绝创建 PathElement 而非用错误数据落库。
+
 ---
 
 ## 9. 性能

@@ -82,7 +82,7 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 ## 里程碑
 
-M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16） → **M17 生产级体验组（F1-F5 复制粘贴 / 拖动跟手 / 智能对齐 / 自由拖动画布 / Canvas Fill） ✅（2026-05-17）**。总工期约 6 个月（M0-M17 累计约 8 周 wall-clock）。
+M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16） → M17 生产级体验组（F1-F5 复制粘贴 / 拖动跟手 / 智能对齐 / 自由拖动画布 / Canvas Fill） ✅（2026-05-17） → **M18 Live Paint 油漆桶（B-medium+ 路线 / polygon-clipping / Web Worker / vector-fill 决策 A / vitest 引入） ✅（2026-05-17）**。总工期约 6 个月（M0-M18 累计约 8 周 wall-clock）。
 
 ## M8-M12 已完成（详见 docs/journal.md）
 
@@ -241,4 +241,25 @@ M16 安全 / 数据完整性收口后，把"体验质量从 demo 升到生产级
 5. **resize snap 选 `boundBoxFunc` 而非 transformend**：前者每帧拖锚点 call 可给视觉反馈，后者是结束时一次性事件；比对 newBox vs oldBox 找"动的边"按边应用 snap delta，比"snap 整 bbox"更精准，任何锚点（角 / 边中点）都正确无视觉跳动
 
 **评估**：5 feature 累计 ~1500 行净增、6 新文件、0 baseline 漂移；编辑器体验从 demo 质量升到生产级（拖动 60fps 实时跟手 / 智能对齐 + distribute / 自由 pan / 跨 wall 剪贴板 / 渐变背景）。**M18 (B-advanced Live Paint) 已可开工**。
+
+## M18 Live Paint 油漆桶（2026-05-17）
+
+M17 体验组收口后接做「油漆桶」工具：用户在编辑器画布上点击，自动识别该点所在的"空白闭合 gap"并创建对应 PathElement 填充，或点击元素内部直接修改其 fill（vector-fill 快捷）。5 phase commit batch 完成：
+
+- **M18-P1 核心算法**（commit `050a549`）引入 `polygon-clipping@0.15.7`；新 `web/src/livepaint/` 5 文件（`types.ts` / `ElementToPolygon.ts` / `LivePaintCore.ts` / `PolygonToPath.ts` / `index.ts`）；算法管线 = element → polygon array → polygon-clipping union (占用) → canvas rect difference 占用 = gaps → point-in-polygon 找用户点击命中的 gap → polygon ring 转 SVG path d；element→polygon：rect 4 顶点 / circle 32 采样 / shape 正多边形 / star outer-inner 交替 / path M/L/Q/C/Z 自实装 de Casteljau / text/image/brush bbox 兜底；rotation 应用；自交 path fallback bbox
+- **M18-P2 Web Worker 隔离**（commit `cc74b7e`）`livePaintWorker.ts` module worker + discriminated union message；`useLivePaint.ts` Vue composable：debounce 100ms + requestId race（最新请求胜出，弃旧 response）+ JSON 深 clone + `enabled` gate（仅 paint-bucket 工具激活时跑）+ `onScopeDispose` cleanup
+- **M18-P3 UI 集成**（commit `0c39c0c`）`ui.ActiveTool` 加 `'paint-bucket'`；快捷键 G；新 `paintBucket` store（FillCompat + localStorage 持久化最近 fill）；新 `PaintBucketPanel.vue`（复用 FillInput）；新 `LivePaintHoverOverlay.vue`（v-path + `fillRule='evenodd'` 处理 hole + 蓝色半透明 hover hint）；CanvasView 集成：`useLivePaint(enabled = paint-bucket)` + `onPaintBucketClick`
+- **M18-P4 边界 + vector-fill 决策 A**（commit `5a71c86`）`findElementAt` 倒序 z-order + `elementToPolygon` + `pointInPolygon` 精确命中（非 bbox）；element 命中 vector-fill：`rect/circle/shape/path` → `element.update {patch:{fill}}` + 乐观本地 mutate；`text/image/brush` → `livePaint.elementUnsupported(type)` 提示；新 `RdpSimplifier.ts` 迭代式（防爆栈）+ tolerance 阶梯 0.5→16 简化到 ≤ 240 顶点；退化几何 fallback `{gaps:[], degraded:true}`；极小 gap 过滤 `MIN_GAP_AREA=4 px²`；DEV-only perf log（tree-shake prod）
+- **M18-P5 vitest 引入 + 单测**（commit `1c5794f`）引入 `vitest@4.1.6` + `@vitest/ui`（CLAUDE.md / M16 待办自承的"前端无 vitest"已补）；28 test cases 4 文件 / 166ms 全绿；node 环境（不引 jsdom）；`ElementToPolygon` 8 / `LivePaintCore` 8 / `PolygonToPath` 6 / `RdpSimplifier` 6
+- **M18-P6 docs 同步**（本 commit）CLAUDE.md / rendering.md / architecture.md / protocol.md / journal.md
+
+**关键架构决策（M18 已固化）**：
+
+1. **Live Paint = 前端独占功能**：拓扑计算仅浏览器 Web Worker 跑；输出 PathElement.d 由后端常规 PathRenderer 渲染。**这是 `docs/rendering.md §1 / §8 双端镜像纪律的显式例外**——理由：(a) 输出（PathElement）已经在双端镜像协议内（M9 引入）；(b) 拓扑算法不参与最终像素输出，仅作为工具输入辅助；(c) Java AWT 无 planar subdivision 等价物，强行镜像会引入 ~2000 行 Java 几何代码且仍可能与 TS 实现行为差异
+2. **B-medium+ 路线**：用 `polygon-clipping` 库做 boolean op，不自写 DCEL。理由：用例覆盖 95%（vs B-advanced 99% 差 4% 是元素内部洞 / 嵌套 path face 等用户极少触发场景），工时 22h vs 38h，浮点精度风险远低；B-advanced 升级路径留 v1.x
+3. **vector-fill 决策 A**：点击元素内部 = `element.update patch fill`（不创建 PathElement，沿用 M11 Fill 联合类型）；非闭合空白 gap = `element.add type=path` + d 字符串（gap polygon ring 转 M/L/Z 路径）。两种行为统一在 `onPaintBucketClick`，不引入新协议 op
+4. **顶点 RDP 简化**：`PathDValidator` 实际限制 ~240 顶点；超阈走 `RdpSimplifier` 迭代式（防递归爆栈）+ tolerance 阶梯 0.5→1→2→4→8→16，直到 ≤ 240
+5. **退化几何 fallback**：polygon-clipping 在退化输入（如自交 / 共线 / 浮点累计误差）下抛 / 返空时，core 不假装可用，返 `{gaps:[], degraded:true}`；UI 检测 `degraded` 显示「无法识别此区域」提示而非创建错误 PathElement
+
+**评估**：5 algorithm + 1 docs phase / 6 commit / ~2400 行净增（含 vitest 配置 + 28 单测）/ 11 新文件 / 0 baseline 漂移；vite bundle +33.75 kB worker chunk（gzip ~10 kB），index 543 kB 内；编辑器获得"图形软件标配"工具。**v1.x 升级**：B-advanced 自写 DCEL 覆盖剩余 4% 用例 / 多 subpath path 切分 / text glyph 真实形状（fontkit 路径化）/ brush 真实形状（stroke offset polygon）/ RDP tolerance UI 配置
 

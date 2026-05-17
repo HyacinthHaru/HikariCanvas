@@ -986,3 +986,94 @@ ui store 字段：`snapEnabled / snapToGrid / snapToCanvas / snapToElement / sna
 - strokeWidth / fontSize 全部 `1 / zoom` 保持视觉密度
 
 **fade**：drag / transform end 立刻清 `activeSnapHints = null`，layer `v-if` 自然卸载；CSS fade 留 v1.x。
+
+## 16. Live Paint 子系统（M18 引入，2026-05-17）
+
+油漆桶工具：用户点击画布上某个位置 → 系统识别该点所在的"闭合空白 gap"（被一组元素轮廓包围的连通区域）→ 生成对应 PathElement 并以当前 fill 填充；点击元素内部时直接修改该元素的 fill 字段（vector-fill 决策 A）。
+
+### 16.1 设计纪律：前端独占
+
+拓扑计算**完全在浏览器 Web Worker 跑**，后端 Java 不做镜像。这是 `docs/rendering.md §8.4` 显式记录的双端镜像例外。理由见 rendering.md §8.4。
+
+### 16.2 算法管线
+
+```
+elements (visibleLayers, sorted)
+   │
+   ▼
+ElementToPolygon       每个 element → polygon ring（含 rotation 应用）
+   │                   rect: 4 顶点 / circle: 32 采样 / shape: 正多边形
+   │                   star: outer/inner 交替 / path: M/L/Q/C/Z 自实装 de Casteljau
+   │                   text/image/brush: bbox 兜底
+   ▼
+polygon-clipping.union 元素覆盖区域（occupied multipolygon）
+   │
+   ▼
+canvas rect - occupied 差集 = gap multipolygons
+   │
+   ▼
+RdpSimplifier          顶点 > 240 时迭代 tolerance 阶梯简化
+   │
+   ▼
+gap polygons (cached in worker)
+   │
+   ▼ （用户点击）
+pointInPolygon         O(n) ray-cast 找命中的 gap（含 hole 处理）
+   │
+   ▼
+PolygonToPath          ring → SVG path d（M/L/Z + hole 用第二条 subpath）
+   │
+   ▼
+element.add type=path  落库 + 后端 PathRenderer 渲染
+```
+
+退化输入（自交 / 共线 / 浮点累计误差导致 polygon-clipping 抛或返空）→ 返 `{gaps:[], degraded:true}`；UI 不创建 PathElement 而是显示「无法识别此区域」提示。
+
+### 16.3 Web Worker 隔离 + lazy invalidate
+
+- `livePaintWorker.ts` = module worker，discriminated union message（`build` / `result` / `error`）
+- `useLivePaint.ts` Vue composable：`enabled` gate（仅 `paint-bucket` 工具激活时跑）+ debounce 100ms（element mutation 高频时合并）+ requestId race（最新请求胜出，弃旧 response）+ JSON 深 clone（隔离 store 反应式对象）+ `onScopeDispose` cleanup
+- 不预热：用户切到 paint-bucket 工具时才首次 build；切走后保留最后一次 graph 直到下次 mutation
+
+### 16.4 文件清单
+
+`web/src/livepaint/`：
+
+| 文件 | 职责 |
+|---|---|
+| `types.ts` | Polygon / Ring / Point / BuildRequest / BuildResult discriminated union |
+| `ElementToPolygon.ts` | 单 element → ring；rect/circle/shape/star/path/text/image/brush 分支 + rotation |
+| `LivePaintCore.ts` | union 占用 + difference 求 gaps + `pointInPolygon` ray-cast |
+| `PolygonToPath.ts` | ring → SVG path d（含 evenodd hole）；gap → PathElement props |
+| `RdpSimplifier.ts` | 迭代式 RDP（防递归爆栈）+ tolerance 阶梯简化到 ≤ 240 顶点 |
+| `livePaintWorker.ts` | module worker entry，封装 build pipeline |
+| `useLivePaint.ts` | Vue composable：debounce + race + enabled + dispose |
+| `index.ts` | export 桶 |
+
+`web/src/components/canvas/LivePaintHoverOverlay.vue` = hover hint（vue-konva v-path + `fillRule='evenodd'` + 蓝色半透明）。
+
+### 16.5 vector-fill 决策 A
+
+`findElementAt(canvasX, canvasY)` 倒序遍历 visibleElements（z-order 顶层优先）+ `elementToPolygon` + `pointInPolygon` 精确命中（非 bbox，避免 circle / star / path 角落误判）。
+
+`onPaintBucketClick` 优先级链：
+
+1. wall locked → 拒（`livePaint.wallLocked`）
+2. graph 未就绪 → 拒（`livePaint.graphNotReady`）
+3. graph degraded → 拒（`livePaint.graphDegraded`）
+4. 命中 gap → `element.add type=path` + 当前 fill + 乐观本地 mutate
+5. 命中 element：
+   - `rect / circle / shape / path` → `element.update {patch:{fill}}` + 乐观本地 mutate（vector-fill 快捷，沿用 M11 Fill 联合类型）
+   - `text / image / brush` → `livePaint.elementUnsupported(type)` 提示（这些元素 fill 不是颜色平铺语义）
+6. 都没命中 → `livePaint.noGap` 提示
+
+不引入新 WS op：建路径走既有 `element.add`，改 fill 走既有 `element.update`，与协议正交。
+
+### 16.6 性能与边界
+
+- RDP 顶点上限 240（PathDValidator 实际阈值），tolerance 阶梯 0.5→1→2→4→8→16 直到达标
+- 极小 gap 过滤 `MIN_GAP_AREA = 4 px²`（防点击噪声）
+- DEV-only `console.debug` perf log（tree-shake prod 构建期由 `__DEV__` 常量剥掉）
+- 100 elements 实测 build < 50ms（worker 内）；UI debounce 100ms 后调度
+- 自交 path → ElementToPolygon 改用 bbox fallback（不把无效 ring 喂给 polygon-clipping）
+- vitest 28 单测覆盖 ElementToPolygon / LivePaintCore / PolygonToPath / RdpSimplifier 四模块全部分支

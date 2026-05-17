@@ -5,6 +5,73 @@
 
 ---
 
+## 2026-05-17 · M18 收尾总览
+
+**M18 = Live Paint 油漆桶 / B-medium+ 路线（polygon-clipping）/ 5 algorithm + 1 docs phase / 6 commit / 0 baseline 漂移 / 28 vitest 单测全绿**
+
+继 M17 体验组后做油漆桶工具。技术选型在 B-medium+（polygon-clipping 库 + 用户层 element→polygon 适配）vs B-advanced（自写 DCEL）之间选了前者：用例覆盖 95% vs 99%（缺的 4% 是元素内部洞 / 嵌套 path face，用户极少触发），工时 22h vs 38h，浮点精度风险远低。
+
+| Phase | 主题 | commit |
+|---|---|---|
+| M18-P1 | 核心算法（livepaint/ 5 文件 + polygon-clipping@0.15.7） | `050a549` |
+| M18-P2 | Web Worker 隔离（livePaintWorker + useLivePaint composable） | `cc74b7e` |
+| M18-P3 | UI 集成（paint-bucket 工具 + G 键 + PaintBucketPanel + LivePaintHoverOverlay） | `0c39c0c` |
+| M18-P4 | 边界 case + vector-fill 决策 A + RDP 简化 + 退化 fallback | `5a71c86` |
+| M18-P5 | vitest 4.1.6 引入 + 28 单测全绿 | `1c5794f` |
+| M18-P6 | docs 同步（CLAUDE.md / rendering.md / architecture.md / protocol.md / journal.md） | （本 commit） |
+| **合计** | | **6 phase / 6 commit** |
+
+### M18 已固化的关键架构决策（5）
+
+1. **Live Paint = 前端独占功能**：拓扑计算仅浏览器 Web Worker 跑，后端 Java 不做镜像。这是 `docs/rendering.md §1 / §8 双端镜像纪律的显式例外`，理由：(a) 输出（PathElement）已在 M9 双端镜像协议内；(b) 拓扑算法不参与最终像素输出，仅工具输入辅助；(c) Java AWT 无 planar subdivision 等价物，强行镜像 ~2000 行 Java 几何代码且仍可能行为差异。详见 `docs/rendering.md §8.4`
+2. **B-medium+ 路线**：用 `polygon-clipping@0.15.7` 库做 boolean op，不自写 DCEL。用例覆盖 95%（缺的 4% = 元素内部洞 / 嵌套 path face / 自交 path 精确处理）；B-advanced 自写 DCEL 升级路径留 v1.x
+3. **vector-fill 决策 A**：点击元素内部 = `element.update patch fill`（沿用 M11 Fill 联合类型，不创 PathElement）；非闭合空白 gap = `element.add type=path` + d 字符串。两种行为统一在 `onPaintBucketClick`，**不引入新 WS op**
+4. **顶点 RDP 简化**：PathDValidator 实际限制 ~240 顶点；超阈走 `RdpSimplifier` 迭代式（防递归爆栈）+ tolerance 阶梯 0.5→1→2→4→8→16
+5. **退化几何 fallback**：polygon-clipping 退化输入时返 `{gaps:[], degraded:true}`，UI 拒绝创建 PathElement 而非用错误数据落库
+
+### M18 文件改动统计
+
+**新文件（11）**：
+- `web/src/livepaint/types.ts`
+- `web/src/livepaint/ElementToPolygon.ts`
+- `web/src/livepaint/LivePaintCore.ts`
+- `web/src/livepaint/PolygonToPath.ts`
+- `web/src/livepaint/RdpSimplifier.ts`（P4 引入）
+- `web/src/livepaint/livePaintWorker.ts`
+- `web/src/livepaint/index.ts`
+- `web/src/composables/useLivePaint.ts`
+- `web/src/stores/paintBucket.ts`
+- `web/src/components/properties/PaintBucketPanel.vue`
+- `web/src/components/canvas/LivePaintHoverOverlay.vue`
+
+**改动前端**：`stores/ui.ts`（加 `'paint-bucket'` tool） / `components/layout/CanvasView.vue`（useLivePaint + onPaintBucketClick + findElementAt） / `components/layout/LeftTools.vue`（油漆桶按钮 + G 键 hint） / `components/layout/RightPanel.vue`（PaintBucketPanel 段） / `composables/useCanvasShortcuts.ts`（G 键）/ `i18n/messages.ts`（livePaint.* 文案） / `vite.config.ts`（vitest test 段） / `package.json`（vitest + @vitest/ui + polygon-clipping）
+
+**新单测（28 cases / 4 文件 / 166ms）**：`web/src/livepaint/__tests__/{ElementToPolygon,LivePaintCore,PolygonToPath,RdpSimplifier}.test.ts`
+
+### 累计 / 性能
+
+- 净增代码 ~2400 行（含 vitest 配置 + 28 单测）
+- vite build：382ms / 543.29 kB index / **+33.75 kB livePaintWorker chunk（gzip ~10 kB）** / 47.22 kB css
+- `:plugin:test --rerun-tasks` BUILD SUCCESSFUL（14 RendererSnapshotTest baseline 0 漂移；Live Paint 前端独占，后端不动）
+- worker build < 50ms / 100 elements；UI debounce 100ms 调度
+
+### 评估
+
+油漆桶 = 图形软件标配工具，HikariCanvas 编辑器获得最后一块"主流绘图工具"拼图（笔刷 M12 + 图片 M13 + 多元素 M9 + 渐变 M11 + 智能对齐 M17 → 油漆桶 M18）。
+M16 自承的"前端无 vitest"在 P5 一并补完——后续任何前端纯算法模块（snapManager / clipboard format / palette LUT 镜像）都可立刻补测，技术负债清零。
+
+### v1.x 留档（已知未做）
+
+- B-advanced 自写 DCEL 覆盖剩余 4% 用例（元素内部洞 / 嵌套 path face）
+- 多 subpath path（M / M / M）切分为独立 element-occupied region
+- text glyph 真实形状（fontkit 路径化代替 bbox 兜底）
+- brush 真实形状（stroke offset polygon 代替 bbox 兜底）
+- RDP tolerance UI 配置（当前固定阶梯）
+- Live Paint 撤销栈优化（vector-fill 模式的 fill diff 与正常 element.update 合并）
+- Worker SharedArrayBuffer 加速（需 COOP/COEP，部署门槛高，留 v2）
+
+---
+
 ## 2026-05-17 · M17 收尾总览
 
 **M17 = 5 大 feature（F1-F5）落地 + 4 phase commit batch + 0 baseline 漂移 + ~1500 行净增**
