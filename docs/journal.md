@@ -70,6 +70,55 @@
 
 ---
 
+## 2026-05-17 · M18 Phase 1（Live Paint 核心算法）
+
+针对 B-medium+ 路线，1 个 agent 完成核心几何算法（无 UI / 无 Worker）。
+
+### 依赖
+
+`polygon-clipping@0.15.7` 加入 dependencies；4 packages / 0 vulnerabilities；TS types 自带。
+
+### 新模块 `web/src/livepaint/`（5 文件 / 658 行）
+
+- `types.ts`（30）：`Polygon = [[x,y]...]` 单环；`GapPolygon = { outer, holes[] }`；`LivePaintGraph = { gaps[] }`
+- `ElementToPolygon.ts`（350）：元素 → polygon array
+  - rect → 4 顶点 + rotation
+  - circle → 32 点采样（椭圆支持 w≠h）+ rotation
+  - shape → ShapeElement.sides 正多边形，起始角 -π/2 顶点朝上
+  - star → 2×sides 交替 outer/inner（innerRatio 默认 0.5）
+  - path → 自实装 M/L/Q/C/Z + de Casteljau 12 等分；多 subpath v1 只取首段；解析失败 fallback bbox
+  - text / image / brush → bbox 兜底
+- `LivePaintCore.ts`（154）：`buildGraph` + `findGapAt`
+  - polygon-clipping `union(...polys)` → 占用区
+  - `difference(canvasRect, ...occupied)` → 所有空隙 MultiPolygon
+  - 转 GapPolygon[]（first ring = outer CCW；rest = holes CW；剥末尾重复首点）
+  - findGapAt：ray-casting 点在外环 + 不在任何 hole
+  - try/catch 包 boolean op，极端退化 → 降级整画布单 gap + console.warn
+- `PolygonToPath.ts`（105）：`gapPolygonToPathD` + `gapToPathElement`
+  - 多 subpath 串 M-L-Z；依赖 even-odd fill rule 自动挖洞
+  - gapToPathElement：算 gap bbox → 平移到 (0,0) → 输出 `{x, y, w, h, d (相对 bbox), vertexCount}`
+- `index.ts`（19）：桶式 re-export 5 个 API + 3 类型 + 3 常量
+
+### 关键设计决策
+
+- **circle 采样 32 点**：128px 半径下视觉无棱角；64 点会让 union 后顶点爆炸
+- **path 复杂度 fallback**：多 subpath / 解析失败 / 自交 → bbox 兜底
+- **顶点警告阈值 180**：PathDValidator 实际限 MAX_LEN=4096 char ≈ 240 顶点；软警告 console.warn，RDP 简化留 P4
+- **rotation 应用顺序**：先生成局部 polygon 再绕 (x+w/2, y+h/2) 旋转；rotation=0 短路
+- **类型坑隔离**：本模块 `Polygon` = 单环（首点不复制末点）；polygon-clipping 库 `Polygon` = 多环（末点复制首点）。LivePaintCore 内用 `PCRing/PCPolygon` 别名 + 转换 helper
+
+### 留 Phase 后续
+
+- M18-P2：Web Worker 化（buildGraph 100+ element 时主线程可能 jank）
+- M18-P3：UI + 集成（livepaint 模块当前被 tree-shake 完全剔除）
+- M18-P4：RDP 顶点简化 + vector-fill 决策 A（点击 element 内部改 element.fill）
+
+### 验证
+
+`vite build` 371ms / 503 kB（livepaint 未消费 = bundle 大小未变）；livepaint 5 文件 0 TS 错误。
+
+---
+
 ## 2026-05-17 · M17 Phase 4（F3 智能对齐完善 → v2 完整版）
 
 1 个 agent 完成。补齐 M17.3 v1 剩余：distribute + visualizer + popover + resize snap。
