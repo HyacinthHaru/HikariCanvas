@@ -238,15 +238,65 @@ val downloadFonts = tasks.register("downloadFonts") {
     }
 }
 
+// ---- M20-T1 构建期字体 advance 表生成 ----
+// 链路：downloadFonts → generateGlyphMetrics（每字体一次 JavaExec）
+//       → build/generated/glyph-metrics/{fontId}.metrics.json
+//       → processResources 合并到 jar `/fonts/{fontId}.metrics.json` 供后端读
+//       → syncFontsToWeb 同步到 web/public/fonts/{fontId}.metrics.json 供前端 fetch
+//
+// 注意：generator sourceSet 已有，无需新建。
+
+val generatedGlyphMetricsDir = layout.buildDirectory.dir("generated/glyph-metrics")
+
+// Gradle 9 起 project.javaexec { } 在 task action 里不再可用；改用 per-font JavaExec subtask
+// 聚合：父任务 generateGlyphMetrics 仅 dependsOn 所有 generateGlyphMetrics_<fontId>。
+val generateGlyphMetricsTasks = bundledFonts.map { spec ->
+    tasks.register<JavaExec>("generateGlyphMetrics_${spec.displayId}") {
+        group = "build"
+        description = "生成 ${spec.displayId} 的 BMP advance 查找表 JSON"
+        dependsOn(downloadFonts)
+        dependsOn(tasks.named("compileGeneratorJava"))
+
+        val fontFile = downloadedFontsDir.map { it.file(spec.destFileName) }
+        val outFile = generatedGlyphMetricsDir.map { it.file("${spec.displayId}.metrics.json") }
+
+        classpath = generatorSource.runtimeClasspath
+        mainClass.set("moe.hikari.canvas.build.GlyphMetricsGenerator")
+        argumentProviders.add(CommandLineArgumentProvider {
+            listOf(
+                fontFile.get().asFile.absolutePath,
+                spec.displayId,
+                outFile.get().asFile.absolutePath
+            )
+        })
+
+        // 输入指纹：generator 源码 + 字体文件本身；任一变则重跑
+        inputs.files(generatorSource.allSource)
+        inputs.file(fontFile)
+        outputs.file(outFile)
+    }
+}
+
+val generateGlyphMetrics = tasks.register("generateGlyphMetrics") {
+    group = "build"
+    description = "对所有内置字体生成 BMP advance 查找表 JSON（聚合任务）"
+    dependsOn(generateGlyphMetricsTasks)
+}
+
 // M5-C1：把已下载的字体同步到 web/public/fonts/，Vite 通过 @font-face 加载到浏览器
 // Canvas 2D / TextLayout 需要与 Java Graphics2D 使用完全相同的 TTF/OTF（rendering.md §2.1）
+// M20-T1：同步追加 *.metrics.json（前端运行期 fetch）
 val webFontsDir = rootProject.layout.projectDirectory.dir("web/public/fonts")
 val syncFontsToWeb = tasks.register<Copy>("syncFontsToWeb") {
     group = "build"
-    description = "把 build/downloaded-fonts/*.ttf|otf 拷到 web/public/fonts/（前端 @font-face 用）"
+    description = "把 build/downloaded-fonts/*.ttf|otf + glyph metrics JSON 拷到 web/public/fonts/"
     dependsOn(downloadFonts)
+    dependsOn(generateGlyphMetrics)
     from(downloadedFontsDir) {
         include("*.ttf", "*.otf")
+    }
+    from(generatedGlyphMetricsDir) {
+        include("*.metrics.json")
     }
     into(webFontsDir)
 }
@@ -261,9 +311,15 @@ tasks.processResources {
     dependsOn(copyWebToResources)
     dependsOn(generatePalette)
     dependsOn(downloadFonts)
+    dependsOn(generateGlyphMetrics)
     dependsOn(syncFontsToWeb)
     from(downloadedFontsDir) {
         include("*.ttf", "*.otf")
+        into("fonts")
+    }
+    // M20-T1：metrics.json 进 jar /fonts/，后端 FontRegistry 后续 phase 用 getResourceAsStream 读
+    from(generatedGlyphMetricsDir) {
+        include("*.metrics.json")
         into("fonts")
     }
 }

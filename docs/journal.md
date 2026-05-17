@@ -5,6 +5,61 @@
 
 ---
 
+## 2026-05-17 · M20 Phase 1（Glyph metrics generator）
+
+**起因**：用户报告字体展示问题——浏览器画板上「TO NEW CAMPUS OF HENAN UNIVERSITY」字符叠加在一起、「Sanyang Plaza」字间距全乱；MC 内同字符串视觉上还能读，但实际上 Java 端也按同样错误布局——只是 128×128 地图 + 248 调色板 + dither 把重叠像素 mush together 掩盖了。
+
+**根因实锤**：`canonicalCharWidth`（M5-D2 算法）一律按 `ASCII = 0.5×fontSize` 假设，对**非等宽字体严重不匹配**。M20.1 生成产物 sample 实测：
+
+- **`ark_pixel`**：ASCII 全 6 / CJK 全 12（完全等宽，canonical 假设成立，**无问题**）
+- **`source_han_sans`**：**M=10, W=11, i=3, l=3**（vs canonical 一律 6）→ 误差 4-5px 就是字符重叠/漂移的源头
+
+### M20 路线 B-medium+ 的 Phase 1（增量、零运行时改动）
+
+构建期预生成 per-font advance 表 JSON，运行时双端共享读。本 Phase 只做 generator，不动 TextLayout / 不破 baseline。
+
+### 新增
+
+- **`plugin/src/generator/java/moe/hikari/canvas/build/GlyphMetricsGenerator.java`**：复用 PaletteGenerator 的 generator sourceSet 模式
+  - `Font.createFont(TRUETYPE_FONT, file).deriveFont(12f)`（同时支持 .ttf 和 .otf）
+  - 扫 BMP 0x20–0xFFFF 65k codepoints
+  - 双保险过滤：`canDisplay(cp) && charWidth>0`（charWidth 对缺字会返 fallback 默认值，单 `w>0` 漏判）
+  - 输出 `{fontId, baseSize:12, ascent, descent, advances:{codePoint: width}}` 紧凑 JSON
+- **Gradle `generateGlyphMetrics` task**：Gradle 9 禁用 task action 内 `project.javaexec` → 改 per-font `tasks.register<JavaExec>("generateGlyphMetrics_$fontId")` 子任务 + 父任务 dependsOn 聚合；输入指纹 = generator 源 + 字体本身
+- **链路接入**：`processResources` 把 metrics.json 进 jar `/fonts/`；`syncFontsToWeb` 同步 `web/public/fonts/`
+
+### 产物验证
+
+```
+font=ark_pixel base=12px asc=10 desc=2 glyphs=22799/65504
+font=source_han_sans base=12px asc=14 desc=4 glyphs=42246/65504
+```
+
+- ark_pixel.metrics.json: 248KB
+- source_han_sans.metrics.json: 463KB
+- shadowJar 内 `/fonts/{fontId}.metrics.json` 已 unzip 验证
+- web/public/fonts/ 同步成功
+
+### 关键发现
+
+- 思源黑体 ascent=14 / descent=4 → 14/(14+4)≈0.778，**与现有 ASCENT_RATIO=0.8 经验值几乎一致**，M20.3 用 metrics 真值替代时不会引入视觉跳变
+- 单字体 generator ~1-2s，UP-TO-DATE 后零成本
+- BMP only：U+10000+（emoji / 罕用 CJK 扩展）surrogate pair 未扫，运行时遇 surrogate 需 fallback canonical
+
+### 留 M20.2-6
+
+- M20.2 后端 FontMetricsTable + TextLayout dispatch
+- M20.3 前端 GlyphMetricsLut mirror
+- M20.4 用户字体启动期 metrics 生成 + HTTP 端点
+- M20.5 14 baseline fixture re-review + 重建（视觉变化预期内 — 是修复）
+- M20.6 docs（CLAUDE.md / rendering.md）+ journal
+
+### 关联文件
+
+`plugin/build.gradle.kts` / `plugin/src/generator/java/moe/hikari/canvas/build/GlyphMetricsGenerator.java`（新）。
+
+---
+
 ## 2026-05-17 · M19 GitHub Actions CI + Release
 
 继 M18 全栈完成后补 CI 防回归（M16 待办段「CI 设置 / vitest / Playwright E2E」中的 CI / vitest 两项落地；vitest M18-P5 已做，CI 本里程碑做）。
