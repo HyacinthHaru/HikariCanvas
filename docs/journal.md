@@ -50,6 +50,25 @@ The job was not started because your account is locked due to a billing issue.
 
 `.github/workflows/ci.yml`（新）/ `.github/workflows/release.yml`（新）/ `CLAUDE.md` / `docs/journal.md`。
 
+### 本地等价验证（不依赖 GitHub 账号）
+
+由于账号 billing 锁让 CI 没法跑，做了本地全步骤等价验证（actionlint + workflow 所有步骤照搬本地跑）：
+
+1. **actionlint 1.7.12** 静态校验两个 yml → 修了 1 个 shellcheck SC2012（`ls` → `find`）后 0 issue
+2. `npm ci`：115 packages / 2s ✓
+3. `npm run test`：vitest 28/28 pass / 169ms ✓
+4. `npm run build`：vite build 388ms / dist 543kB + worker 33.75kB ✓
+5. `./gradlew :plugin:test`：BUILD SUCCESSFUL 44s ✓
+6. `./gradlew :plugin:shadowJar`：60MB jar / 5397 shaded entries / 0 路径泄漏 ✓
+
+**捉到 1 个 yml bug**：原 glob `HikariCanvas-*-all.jar` 不匹配 shadowJar 真实输出 `HikariCanvas-<version>.jar`（plugin/build.gradle.kts:283 设 `archiveClassifier.set("")`，无 `-all` 后缀）。改 yml 用 `HikariCanvas-*.jar`，release.yml rename 步骤同步用 find 排除 sources jar + 兼容 src==dst。
+
+**意外发现**：本地 jar 之前 640MB 是 macOS Finder iCloud sync 在 `plugin/build/resources/main/` 累积了 ~30 个 SourceHanSansSC-Regular 字体副本（每个 16.5MB）。`gradle clean` 后干净 60MB。**CI Linux 无 macOS Finder 同步问题**，所以 CI 出的 jar 直接是正确 size。这反过来说明 CI 比本地构建更可靠。
+
+### M19 真实状态
+
+代码层 ✅ + 本地等价跑全绿 ✅ + workflow yml 修复后再次部署 ✅ / 远程 CI 跑 ⏸ blocked by GitHub 账号 billing 锁定（与代码无关）
+
 ---
 
 ## 2026-05-17 · 版本号 0.1.0-SNAPSHOT → 0.2.0-SNAPSHOT

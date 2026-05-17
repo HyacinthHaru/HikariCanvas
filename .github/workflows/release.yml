@@ -55,12 +55,20 @@ jobs:
           echo "Releasing version: ${VERSION}"
 
       - name: Rename artifact
+        # plugin/build.gradle.kts shadowJar.archiveClassifier="" → 输出
+        # HikariCanvas-<gradle-version>.jar；tag 版本与 gradle 内置版本可能不一致
+        # （如 tag 是 v0.2.0 但 build.gradle 是 0.2.0-SNAPSHOT），所以需要重命名为
+        # tag 版本以供 Release。
         run: |
           set -eu
-          src=$(ls plugin/build/libs/HikariCanvas-*-all.jar | head -1)
+          src=$(find plugin/build/libs -name 'HikariCanvas-*.jar' ! -name 'HikariCanvas-*-sources.jar' -print -quit)
           dst="plugin/build/libs/HikariCanvas-${VERSION}.jar"
-          mv "$src" "$dst"
-          echo "Renamed: $src → $dst"
+          if [ "$src" = "$dst" ]; then
+            echo "Already named correctly: $src"
+          else
+            mv "$src" "$dst"
+            echo "Renamed: $src → $dst"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
