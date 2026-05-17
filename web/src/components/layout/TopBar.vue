@@ -2,6 +2,7 @@
 import { computed, nextTick, ref } from 'vue';
 import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
+import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -300,6 +301,8 @@ function showRefreshFlash(msg: string) {
           <Bookmark class="size-4" />
         </button>
       </Tooltip>
+      <!-- M17.4 F3：Snap 设置 -->
+      <SnapSettingsPopover />
       <Tooltip :text="t.topbar.help" shortcut="?">
         <button
           class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"

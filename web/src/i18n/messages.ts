@@ -196,6 +196,16 @@ export const messages = {
             ditherLabel: 'Dither 抖动',
             ditherTip: 'Bayer 4×4 有序抖动：在 MC 调色板上用周期点阵打散渐变条带（颜色变粗糙、过渡更细腻）',
         },
+        snap: {
+            settings: 'Snap 设置',
+            enable: '启用 Snap',
+            toGrid: '网格',
+            toCanvas: '画布锚点',
+            toElement: '元素边',
+            toDistribute: '均分间距',
+            threshold: '阈值',
+            shiftHint: '按住 Shift 临时禁用 snap',
+        },
         brush: {
             header: '笔刷参数',
             size: '大小',
@@ -545,6 +555,16 @@ export const messages = {
             removeStop: 'Remove stop',
             ditherLabel: 'Dither',
             ditherTip: 'Bayer 4×4 ordered dither: breaks up gradient bands using periodic noise on MC palette (rougher pixels, smoother transitions)',
+        },
+        snap: {
+            settings: 'Snap Settings',
+            enable: 'Enable Snap',
+            toGrid: 'To Grid',
+            toCanvas: 'To Canvas',
+            toElement: 'To Element',
+            toDistribute: 'To Distribute',
+            threshold: 'Threshold',
+            shiftHint: 'Hold Shift to temporarily disable',
         },
         brush: {
             header: 'Brush settings',

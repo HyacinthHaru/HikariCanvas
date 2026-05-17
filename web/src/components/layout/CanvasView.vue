@@ -11,6 +11,7 @@ import type { Element } from '@/types/protocol';
 import CanvasGridOverlay from '@/components/canvas/CanvasGridOverlay.vue';
 import CanvasZoomBar from '@/components/canvas/CanvasZoomBar.vue';
 import TextInlineEditor from '@/components/canvas/TextInlineEditor.vue';
+import SnapGuideOverlay from '@/components/canvas/SnapGuideOverlay.vue';
 
 import { useMarqueeSelection } from '@/composables/useMarqueeSelection';
 import { useDrawToCreate } from '@/composables/useDrawToCreate';
@@ -19,7 +20,7 @@ import { useTransformerManager } from '@/composables/useTransformerManager';
 import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts';
 import { usePanScroll } from '@/composables/usePanScroll';
 import { useCanvasUpload } from '@/composables/useCanvasUpload';
-import { useSnapManager } from '@/composables/useSnapManager';
+import { useSnapManager, type SnapHints } from '@/composables/useSnapManager';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -52,6 +53,8 @@ useEventListener(window, 'keydown', (e: KeyboardEvent) => { if (e.key === 'Shift
 useEventListener(window, 'keyup', (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftDown.value = false; });
 useEventListener(window, 'blur', () => { isShiftDown.value = false; });
 const snapManager = useSnapManager({ project, ui, bypass: () => isShiftDown.value });
+/** M17.4：当前 snap 命中信息，传给 SnapGuideOverlay 画线 + 间距标注。drag/transform 结束时清。 */
+const activeSnapHints = ref<SnapHints | null>(null);
 
 const sizeLabel = computed(() => {
     if (!project.state) return t.value.canvas.empty;
@@ -63,6 +66,67 @@ const stageConfig = computed(() => ({
     width: widthPx.value,
     height: heightPx.value,
 }));
+
+interface BoundBox { x: number; y: number; width: number; height: number; rotation: number }
+
+/**
+ * M17.4 F3：resize snap。Konva Transformer 每帧拖锚点 call boundBoxFunc(oldBox, newBox)。
+ *
+ * 简化版（v2）：跑 snapManager 拿 hints（含 candidate 轴 + delta），然后按"哪条边在动"
+ * 应用 delta：
+ *   - left 边在动 → 应用 X delta 到 x（width 反向调整以保 right 不动）
+ *   - right 边在动 → 应用 X delta 到 width（不动 x）
+ *   - 没动 → 不 snap
+ * 纵向同理。能正确处理任何锚点（top-left / top-right / bottom-left / bottom-right /
+ * middle-* / *-center）；shift 临时禁用走 snapManager.bypass。
+ *
+ * 排除：当前所有选中（含正在 resize 的）；resize 多选时整组排除避免 snap 到自己。
+ * 旋转：rotation != 0 时跳过（旋转后 bbox 不再对齐画布轴；snapManager 几何不支持）。
+ */
+function boundBoxFunc(oldBox: BoundBox, newBox: BoundBox): BoundBox {
+    if (Math.abs(newBox.rotation) > 0.01) return newBox;
+    if (newBox.width < 1 || newBox.height < 1) return newBox;
+    const excludeIds = new Set<string>(ui.selectedIds);
+    const hints = snapManager.snap(newBox.x, newBox.y, newBox.width, newBox.height, excludeIds);
+    const hasHits = hints.activeXAxes.length > 0 || hints.activeYAxes.length > 0
+        || !!hints.equalGapX || !!hints.equalGapY;
+    activeSnapHints.value = hasHits ? hints : null;
+
+    const dx = hints.snappedX - newBox.x;
+    const dy = hints.snappedY - newBox.y;
+    const EPS = 0.01;
+    // 判断哪条边在动（与 oldBox 对比）
+    const leftMoved = Math.abs(newBox.x - oldBox.x) > EPS;
+    const rightMoved = Math.abs((newBox.x + newBox.width) - (oldBox.x + oldBox.width)) > EPS;
+    const topMoved = Math.abs(newBox.y - oldBox.y) > EPS;
+    const bottomMoved = Math.abs((newBox.y + newBox.height) - (oldBox.y + oldBox.height)) > EPS;
+
+    let x = newBox.x;
+    let y = newBox.y;
+    let width = newBox.width;
+    let height = newBox.height;
+
+    if (dx !== 0) {
+        if (leftMoved && !rightMoved) {
+            // left 在动：移动 x，反向减 width 保 right 不动
+            x = newBox.x + dx;
+            width = Math.max(1, newBox.width - dx);
+        } else if (rightMoved && !leftMoved) {
+            // right 在动：只加 width，不动 x
+            width = Math.max(1, newBox.width + dx);
+        }
+        // 两边都没动（仅旋转 / 等比缩放？）或都动了（中心缩放）→ 不应用 X
+    }
+    if (dy !== 0) {
+        if (topMoved && !bottomMoved) {
+            y = newBox.y + dy;
+            height = Math.max(1, newBox.height - dy);
+        } else if (bottomMoved && !topMoved) {
+            height = Math.max(1, newBox.height + dy);
+        }
+    }
+    return { x, y, width, height, rotation: newBox.rotation };
+}
 
 const transformerConfig = {
     enabledAnchors: [
@@ -78,6 +142,7 @@ const transformerConfig = {
     // 2026-05-12 polish：anchor 由 8 升 12，方便拖拽；rotate 锚点也拉远 8px
     anchorSize: 12,
     rotateAnchorOffset: 32,
+    boundBoxFunc,
 };
 
 /** 悬停的 element id；用于画 hover 描边提示"可拖拽"。 */
@@ -120,6 +185,12 @@ const { onTransformEnd } = useTransformerManager({
     layerRef,
     elementsWatchSource: () => elements.value,
 });
+
+/** M17.4：包一层透传给 onTransformEnd，并在结束时清 snap visualizer。 */
+function onElementTransformEnd(ev: Parameters<typeof onTransformEnd>[0], id: string): void {
+    onTransformEnd(ev, id);
+    activeSnapHints.value = null;
+}
 useCanvasShortcuts();
 const {
     onWheel,
@@ -302,6 +373,8 @@ function onStageMouseUp(): void {
 useEventListener(window, 'mouseup', () => {
     marqueeCancel();
     drawCancel();  // 拖出窗口 = 取消本次创建
+    // M17.4：也清 snap hints（防止 drag 被中断时残留 visualizer）
+    activeSnapHints.value = null;
 });
 
 /** 双击 stage 空白处：取消所有选中 + 退出编辑（用户实测后明确要求的 escape 路径）。 */
@@ -389,6 +462,10 @@ function onDragMove(ev: DragEvt, id: string): void {
     // M17 F3：snap manager 修正 leader 落点。excludeIds 排除整个拖动组（多选）避免 snap 到自己。
     const excludeIds = new Set<string>(dragInitial.value.keys());
     const hints = snapManager.snap(leaderX, leaderY, w, h, excludeIds);
+    // M17.4：把 hints 推给 visualizer（即使无 snap 也置 null）。activeAxes / equalGap 任一非空都画。
+    const hasHits = hints.activeXAxes.length > 0 || hints.activeYAxes.length > 0
+        || !!hints.equalGapX || !!hints.equalGapY;
+    activeSnapHints.value = hasHits ? hints : null;
     if (hints.snappedX !== leaderX || hints.snappedY !== leaderY) {
         leaderX = hints.snappedX;
         leaderY = hints.snappedY;
@@ -464,6 +541,8 @@ function onDragEnd(ev: DragEvt, id: string): void {
         }
     }
     dragInitial.value = new Map();
+    // M17.4：drag 结束立刻清 hints（无 fade，v1.x 再加）
+    activeSnapHints.value = null;
 }
 
 // 重绘：state 或 editingId 变就重画 canvas
@@ -610,7 +689,7 @@ function requestDraw(): void {
                 @dragstart="() => onDragStart(el.id)"
                 @dragmove="(ev: any) => onDragMove(ev, el.id)"
                 @dragend="(ev: any) => onDragEnd(ev, el.id)"
-                @transformend="(ev: any) => onTransformEnd(ev, el.id)"
+                @transformend="(ev: any) => onElementTransformEnd(ev, el.id)"
                 @mouseenter="(ev: any) => onHitMouseEnter(ev, el.id)"
                 @mouseleave="(ev: any) => onHitMouseLeave(ev)"
               />
@@ -624,6 +703,13 @@ function requestDraw(): void {
               <v-ellipse v-if="drawPreview?.kind === 'ellipse'" :config="drawPreview.config" />
               <v-star v-if="drawPreview?.kind === 'star'" :config="drawPreview.config" />
             </v-layer>
+            <!-- M17.4 F3：snap visualizer（红色对齐线 + 绿色间距标注）。
+                 仅当 activeSnapHints 非空时层 mount；drag/transform 结束立刻清。 -->
+            <SnapGuideOverlay
+              :hints="activeSnapHints"
+              :width-px="widthPx"
+              :height-px="heightPx"
+            />
           </v-stage>
           <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。
                PreviewRenderer 会跳过 editingId 对应的 element，避免画布底层字形与 textarea 重影。 -->

@@ -5,6 +5,73 @@
 
 ---
 
+## 2026-05-17 · M17 Phase 4（F3 智能对齐完善 → v2 完整版）
+
+1 个 agent 完成。补齐 M17.3 v1 剩余：distribute + visualizer + popover + resize snap。
+
+### distribute 间距均分
+
+`useSnapManager.ts` 加 `EqualGapX` / `EqualGapY` hint 类型；新私有方法 `findEqualGapX` / `findEqualGapY`。SnapHints 加 `equalGapX?` / `equalGapY?` 字段（含 aRight / bLeft / bRight / cLeft + yCenter / x 镜像）。
+
+**v2 简化**：仅匹配两侧最近邻 —— A.right < dragged.left 中 right 最大的 + C.left > dragged.right 中 left 最小的；A/C 必须同方向找到；span < w/h 时跳过；与同方向 axis snap **互斥**（axis 命中时不跑 distribute）。「任意三元素均分」留 v1.x 扩展。
+
+### visualizer 对齐线
+
+新 `web/src/components/canvas/SnapGuideOverlay.vue`（vue-konva `v-line` + `v-rect` + `v-text`）。挂载位置：CanvasView v-stage 内 marquee/drawPreview 同级独立 v-layer，覆盖 element/transformer 上方。
+
+视觉规范：
+- snap axis 红色虚线 `#ef4444` + dash `[4,3] / zoom`
+- equalGap 绿色实线 `#22c55e` + 两端短刻度 + 中间像素距离标签（白字 + 绿底圆角 pill）
+- strokeWidth / fontSize 全部 `1 / zoom` 保持视觉密度
+
+**fade**：drag/transform end 立刻清 `activeSnapHints = null`，layer `v-if` 自然卸载；CSS fade 标注留 v1.x。
+
+### popover 开关 UI
+
+新 `web/src/components/layout/SnapSettingsPopover.vue`：lucide `Magnet` icon 按钮 + popover（onClickOutside 关闭）。挂载位置：`TopBar.vue` 右侧按钮组（紧贴 Bookmark 后、Help 前）。
+
+内容：
+- Enable Snap 总开关
+- 4 子开关（To Grid / To Canvas / To Element / To Distribute；总开关关闭时子项 disabled 半透明）
+- threshold range slider 1-32
+- shift 提示文字
+
+### resize snap (onTransform 接入)
+
+CanvasView.vue 新 `boundBoxFunc(oldBox, newBox)` 并入 `transformerConfig`。Konva Transformer 每帧拖锚点 call。
+
+**为何选 boundBoxFunc 而非 transformend**：transformend 是结束时一次性事件，无法在拖动中给视觉反馈。
+
+**简化版（v2 已采用）**：比对 newBox vs oldBox 找出**正在动的边**（leftMoved / rightMoved / topMoved / bottomMoved），按边把 snap delta 应用到 `x or width` / `y or height`。比"snap 整 bbox"更精准——任何锚点（top-left / bottom-right / middle-* / *-center）都正确，无视觉跳动。
+
+- `rotation != 0` → return newBox 跳过 snap（旋转后 bbox 不对齐画布轴）
+- `w/h < 1` → return newBox
+- 多选时 excludeIds 整组 selectedIds 排除（避免 snap 到自己）
+
+完整版扩展（按锚点显式映射 + rotated bbox）留 v1.x。
+
+`onElementTransformEnd` wrap：调用 `onTransformEnd(ev, id)` 后清 `activeSnapHints`。
+
+### ui store 新字段
+
+`snapToDistribute: Ref<boolean>` 默认 true；加入 `SnapPrefs` interface + `SNAP_DEFAULT` + `loadSnap` 反序列化默认值 + watch 持久化数组 + return 暴露。
+
+### i18n
+
+新 8 key：`snap.{settings, enable, toGrid, toCanvas, toElement, toDistribute, threshold, shiftHint}` 中英全。
+
+### 验证
+
+`vite build` 335ms / 503.43 kB / 155.65 kB gzip。后端无改动，未跑 :plugin:test。
+
+### 关联文件
+
+**新文件**：`web/src/components/canvas/SnapGuideOverlay.vue` / `web/src/components/layout/SnapSettingsPopover.vue`
+
+**改文件**：`web/src/composables/useSnapManager.ts`（+ distribute + EqualGap 类型）/ `web/src/stores/ui.ts`（+ snapToDistribute + SnapPrefs 扩展）/ `web/src/i18n/messages.ts`（+ snap 段）/ `web/src/components/layout/TopBar.vue`（挂 popover）/ `web/src/components/layout/CanvasView.vue`（boundBoxFunc + activeSnapHints + overlay 挂载 + drag/transform end 清 hints + window mouseup 兜底清）。
+
+---
+
 ## 2026-05-17 · M17 Phase 2 + 3（F1 复制粘贴 + F5 Canvas Fill + F3 智能对齐 v1）
 
 3 个并行 agent 完成 + 一次主线程手动接入（F3 agent 对 CanvasView/ui store 的 edit 未生效，主线程补做）。

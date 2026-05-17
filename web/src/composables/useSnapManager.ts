@@ -1,21 +1,45 @@
-// M17 P3 / F3 智能对齐 v1（smart guides）。
+// M17 P3 / F3 智能对齐 v1（smart guides）+ M17.4 distribute & resize 扩展。
 //
 // 输入：拖动中元素的 bbox（左上 + 宽高）+ raw 位置 + 需排除 ID 集合。
-// 输出：snap 后的 (x, y) + 命中的对齐轴 X / Y 数组（供 M17.4 visualizer 画红线）。
+// 输出：snap 后的 (x, y) + 命中的对齐轴 X / Y 数组（供 visualizer 画红线）+
+// 可选的 distribute 间距标注（供 visualizer 画绿色间距段）。
 //
 // 候选轴来源（按 ui store 开关启用）：
 //   1. canvas：left=0 / centerX=widthPx/2 / right=widthPx；top / centerY / bottom 同理；四角隐含在边的交集中
 //   2. element：其他可见元素的 left / centerX / right + top / centerY / bottom
 //   3. grid：rawX / rawY 附近的 floor / ceil 倍数（仅当 gridSize > 0）
+//   4. distribute（M17.4）：两侧最近邻 A、C 决定"AB == BC"的理想中点；横纵向各算一次
 //
 // dragged 锚点：left = rawX，centerX = rawX + w/2，right = rawX + w（Y 同理）。
 // 匹配距离阈值 ui.snapThreshold（默认 8px）。每个轴方向取最近 candidate 应用。
 //
-// v1 仅打底：visualizer / popover / distribute / resize snap 留 M17.4。
+// distribute 限制（v2 简化）：仅匹配「两侧最近邻」，不做"任意三元素均分"。
 
 import type { useProjectStore } from '@/stores/project';
 import type { useUiStore } from '@/stores/ui';
 import type { Element } from '@/types/protocol';
+
+/** distribute 命中时的间距段标注（visualizer 画绿色线段 + 距离数字）。 */
+export interface EqualGapX {
+    /** A 元素的 right 边 X 坐标 */
+    aRight: number;
+    /** dragged B 的 left X 坐标 */
+    bLeft: number;
+    /** dragged B 的 right X 坐标 */
+    bRight: number;
+    /** C 元素的 left X 坐标 */
+    cLeft: number;
+    /** 两段共同的 Y 坐标（取 dragged B 的 centerY，仅用于绘制水平间距线）。 */
+    yCenter: number;
+}
+
+export interface EqualGapY {
+    aBottom: number;
+    bTop: number;
+    bBottom: number;
+    cTop: number;
+    xCenter: number;
+}
 
 export interface SnapHints {
     /** snap 后 X；若无命中 = rawX */
@@ -26,6 +50,10 @@ export interface SnapHints {
     activeXAxes: number[];
     /** 命中的 Y 轴坐标列表（供 visualizer 画横向红线）。空数组 = 未 snap。 */
     activeYAxes: number[];
+    /** 横向 distribute 命中时的标注；未命中 = undefined。 */
+    equalGapX?: EqualGapX;
+    /** 纵向 distribute 命中时的标注；未命中 = undefined。 */
+    equalGapY?: EqualGapY;
 }
 
 export interface UseSnapManagerOpts {
@@ -39,6 +67,16 @@ export interface SnapManager {
     snap(rawX: number, rawY: number, w: number, h: number, excludeIds: Set<string>): SnapHints;
 }
 
+interface CollectedElement {
+    id: string;
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+    cx: number;
+    cy: number;
+}
+
 export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
     const { project, ui } = opts;
 
@@ -46,25 +84,35 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
         return { snappedX: rawX, snappedY: rawY, activeXAxes: [], activeYAxes: [] };
     }
 
-    function collectElementAxes(excludeIds: Set<string>): { xs: number[]; ys: number[] } {
-        const xs: number[] = [];
-        const ys: number[] = [];
+    function collectElements(excludeIds: Set<string>): CollectedElement[] {
+        const out: CollectedElement[] = [];
         const layers = project.state?.layers;
-        if (!layers) return { xs, ys };
+        if (!layers) return out;
         for (const layer of layers) {
             if (!layer.visible) continue;
             for (const el of layer.elements as Element[]) {
                 if (excludeIds.has(el.id)) continue;
                 if (!el.visible) continue;
-                const left = el.x;
-                const right = el.x + el.w;
-                const cx = el.x + el.w / 2;
-                const top = el.y;
-                const bottom = el.y + el.h;
-                const cy = el.y + el.h / 2;
-                xs.push(left, cx, right);
-                ys.push(top, cy, bottom);
+                out.push({
+                    id: el.id,
+                    left: el.x,
+                    right: el.x + el.w,
+                    top: el.y,
+                    bottom: el.y + el.h,
+                    cx: el.x + el.w / 2,
+                    cy: el.y + el.h / 2,
+                });
             }
+        }
+        return out;
+    }
+
+    function collectElementAxes(elements: CollectedElement[]): { xs: number[]; ys: number[] } {
+        const xs: number[] = [];
+        const ys: number[] = [];
+        for (const el of elements) {
+            xs.push(el.left, el.cx, el.right);
+            ys.push(el.top, el.cy, el.bottom);
         }
         return { xs, ys };
     }
@@ -127,6 +175,105 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
         return { delta: bestDelta, axes };
     }
 
+    /**
+     * M17.4 distribute 横向：找 dragged 左右两侧最近邻 A / C；
+     * 若理想中点（B.left = A.right + ((C.left - A.right) - w) / 2）距 rawX 落在阈值内 → snap。
+     *
+     * 返回 delta（== idealLeft - rawX）+ 间距段标注（用 snap 后位置标注，让 visualizer 画线对齐）。
+     */
+    function findEqualGapX(
+        rawX: number,
+        rawY: number,
+        w: number,
+        h: number,
+        elements: CollectedElement[],
+        threshold: number,
+    ): { delta: number; hint: EqualGapX } | null {
+        const draggedLeft = rawX;
+        const draggedRight = rawX + w;
+        const cy = rawY + h / 2;
+        // A = 左侧最近邻：right < draggedLeft 中 right 最大者
+        let aRight = -Infinity;
+        let aHit: CollectedElement | null = null;
+        // C = 右侧最近邻：left > draggedRight 中 left 最小者
+        let cLeft = Infinity;
+        let cHit: CollectedElement | null = null;
+        for (const el of elements) {
+            if (el.right <= draggedLeft && el.right > aRight) {
+                aRight = el.right;
+                aHit = el;
+            }
+            if (el.left >= draggedRight && el.left < cLeft) {
+                cLeft = el.left;
+                cHit = el;
+            }
+        }
+        if (!aHit || !cHit) return null;
+        const span = cHit.left - aHit.right;
+        if (span < w) return null;  // dragged 放不下两段相等间距
+        const idealLeft = aHit.right + (span - w) / 2;
+        const delta = idealLeft - rawX;
+        if (Math.abs(delta) > threshold) return null;
+        const snappedLeft = idealLeft;
+        const snappedRight = snappedLeft + w;
+        return {
+            delta,
+            hint: {
+                aRight: aHit.right,
+                bLeft: snappedLeft,
+                bRight: snappedRight,
+                cLeft: cHit.left,
+                yCenter: cy,
+            },
+        };
+    }
+
+    /** 纵向 distribute，与 findEqualGapX 镜像。 */
+    function findEqualGapY(
+        rawX: number,
+        rawY: number,
+        w: number,
+        h: number,
+        elements: CollectedElement[],
+        threshold: number,
+    ): { delta: number; hint: EqualGapY } | null {
+        const draggedTop = rawY;
+        const draggedBottom = rawY + h;
+        const cx = rawX + w / 2;
+        let aBottom = -Infinity;
+        let aHit: CollectedElement | null = null;
+        let cTop = Infinity;
+        let cHit: CollectedElement | null = null;
+        for (const el of elements) {
+            if (el.bottom <= draggedTop && el.bottom > aBottom) {
+                aBottom = el.bottom;
+                aHit = el;
+            }
+            if (el.top >= draggedBottom && el.top < cTop) {
+                cTop = el.top;
+                cHit = el;
+            }
+        }
+        if (!aHit || !cHit) return null;
+        const span = cHit.top - aHit.bottom;
+        if (span < h) return null;
+        const idealTop = aHit.bottom + (span - h) / 2;
+        const delta = idealTop - rawY;
+        if (Math.abs(delta) > threshold) return null;
+        const snappedTop = idealTop;
+        const snappedBottom = snappedTop + h;
+        return {
+            delta,
+            hint: {
+                aBottom: aHit.bottom,
+                bTop: snappedTop,
+                bBottom: snappedBottom,
+                cTop: cHit.top,
+                xCenter: cx,
+            },
+        };
+    }
+
     function snap(
         rawX: number,
         rawY: number,
@@ -141,13 +288,18 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
         const xs: number[] = [];
         const ys: number[] = [];
 
+        // 收集 element 一次，element axes + distribute 共享
+        const otherElements = ui.snapToElement || ui.snapToDistribute
+            ? collectElements(excludeIds)
+            : [];
+
         if (ui.snapToCanvas) {
             const c = collectCanvasAxes();
             xs.push(...c.xs);
             ys.push(...c.ys);
         }
         if (ui.snapToElement) {
-            const e = collectElementAxes(excludeIds);
+            const e = collectElementAxes(otherElements);
             xs.push(...e.xs);
             ys.push(...e.ys);
         }
@@ -164,16 +316,47 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
             }
         }
 
-        if (xs.length === 0 && ys.length === 0) return noSnap(rawX, rawY);
+        const rx = (xs.length > 0)
+            ? snapAxis(rawX, w, xs, threshold)
+            : { delta: 0, axes: [] as number[] };
+        const ry = (ys.length > 0)
+            ? snapAxis(rawY, h, ys, threshold)
+            : { delta: 0, axes: [] as number[] };
 
-        const rx = snapAxis(rawX, w, xs, threshold);
-        const ry = snapAxis(rawY, h, ys, threshold);
+        // M17.4 distribute：与 axis snap 同方向竞争——若 axis 已命中（delta != 0 或 axes 非空），
+        // distribute 不再覆盖（避免两种 snap 互相抢夺导致跳变）。
+        let equalGapX: EqualGapX | undefined;
+        let equalGapY: EqualGapY | undefined;
+        let dxDelta = rx.delta;
+        let dyDelta = ry.delta;
+        if (ui.snapToDistribute && otherElements.length >= 2) {
+            if (rx.axes.length === 0) {
+                const eg = findEqualGapX(rawX, rawY, w, h, otherElements, threshold);
+                if (eg) {
+                    dxDelta = eg.delta;
+                    equalGapX = eg.hint;
+                }
+            }
+            if (ry.axes.length === 0) {
+                const eg = findEqualGapY(rawX, rawY, w, h, otherElements, threshold);
+                if (eg) {
+                    dyDelta = eg.delta;
+                    equalGapY = eg.hint;
+                }
+            }
+        }
+
+        const noHit = rx.axes.length === 0 && ry.axes.length === 0
+            && !equalGapX && !equalGapY;
+        if (noHit) return noSnap(rawX, rawY);
 
         return {
-            snappedX: rawX + rx.delta,
-            snappedY: rawY + ry.delta,
+            snappedX: rawX + dxDelta,
+            snappedY: rawY + dyDelta,
             activeXAxes: rx.axes,
             activeYAxes: ry.axes,
+            equalGapX,
+            equalGapY,
         };
     }
 

@@ -11,9 +11,10 @@ interface SnapPrefs {
     toGrid: boolean;
     toCanvas: boolean;
     toElement: boolean;
+    toDistribute: boolean;
     threshold: number;
 }
-const SNAP_DEFAULT: SnapPrefs = { enabled: true, toGrid: false, toCanvas: true, toElement: true, threshold: 8 };
+const SNAP_DEFAULT: SnapPrefs = { enabled: true, toGrid: false, toCanvas: true, toElement: true, toDistribute: true, threshold: 8 };
 
 export type Theme = 'dark' | 'light';
 export type Locale = 'zh' | 'en';
@@ -87,14 +88,16 @@ export const useUiStore = defineStore('ui', () => {
     const snapToGrid = ref(snapPrefs.toGrid);
     const snapToCanvas = ref(snapPrefs.toCanvas);
     const snapToElement = ref(snapPrefs.toElement);
+    const snapToDistribute = ref(snapPrefs.toDistribute);
     const snapThreshold = ref(snapPrefs.threshold);
-    watch([snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapThreshold], () => {
+    watch([snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapToDistribute, snapThreshold], () => {
         try {
             localStorage.setItem(SNAP_KEY, JSON.stringify({
                 enabled: snapEnabled.value,
                 toGrid: snapToGrid.value,
                 toCanvas: snapToCanvas.value,
                 toElement: snapToElement.value,
+                toDistribute: snapToDistribute.value,
                 threshold: Math.max(1, Math.min(64, snapThreshold.value)),
             } satisfies SnapPrefs));
         } catch { /* ignore */ }
@@ -201,7 +204,7 @@ export const useUiStore = defineStore('ui', () => {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
         selectedIds, selectedElementId, selectedCount, hasSelection,
         editingLayerId, zoom,
-        snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapThreshold,
+        snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapToDistribute, snapThreshold,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         setZoom, zoomIn, zoomOut, zoomReset,
         selectElement, toggleSelection, selectMany, addToSelection, clearSelection,
@@ -221,6 +224,7 @@ function loadSnap(): SnapPrefs {
             toGrid: typeof parsed.toGrid === 'boolean' ? parsed.toGrid : SNAP_DEFAULT.toGrid,
             toCanvas: typeof parsed.toCanvas === 'boolean' ? parsed.toCanvas : SNAP_DEFAULT.toCanvas,
             toElement: typeof parsed.toElement === 'boolean' ? parsed.toElement : SNAP_DEFAULT.toElement,
+            toDistribute: typeof parsed.toDistribute === 'boolean' ? parsed.toDistribute : SNAP_DEFAULT.toDistribute,
             threshold: typeof parsed.threshold === 'number' && parsed.threshold >= 1 && parsed.threshold <= 64
                 ? parsed.threshold : SNAP_DEFAULT.threshold,
         };
