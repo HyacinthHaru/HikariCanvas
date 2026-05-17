@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-05-17 · 版本号 0.1.0-SNAPSHOT → 0.2.0-SNAPSHOT
+
+M0-M18 累计 18 个 milestone 落地，Live Paint / 智能对齐 / 复制粘贴 / Fill 联合类型等大量 feature 已不属于"0.1.0 初版"语义范畴。版本号往前推进一位。
+
+### 改动
+
+- `build.gradle.kts`：allprojects version `0.1.0-SNAPSHOT` → `0.2.0-SNAPSHOT`（plugin / generator 子项目继承）
+- `web/package.json`：version 同步
+- `plugin/src/main/resources/paper-plugin.yml`：version 同步
+
+### 配套语义调整
+
+CLAUDE.md / data-model.md / deployment.md 中所有"0.1.0 发版"等版本绑定字眼改为"首次 stable（≥1.0.0）发版"。新语义：
+
+- **`0.x.y-SNAPSHOT`**（含当前 `0.2.0-SNAPSHOT`）= pre-release 阶段，允许激进改 schema
+- **`1.0.0`** 起 = stable 发版，schema forward-only + auto-backup 强制开
+
+让版本号继续前进（0.2 / 0.3 / ...）时不需要每次修文档；契约规则锚定在 stable 1.0.0 边界。
+
+### 编译验证
+
+`./gradlew :plugin:compileJava` BUILD SUCCESSFUL。版本号改动不影响代码行为。
+
+### 关联文件
+
+`build.gradle.kts` / `web/package.json` / `plugin/src/main/resources/paper-plugin.yml` / `CLAUDE.md` / `docs/data-model.md` / `docs/deployment.md` / `docs/journal.md`。
+
+---
+
 ## 2026-05-17 · M18 收尾总览
 
 **M18 = Live Paint 油漆桶 / B-medium+ 路线（polygon-clipping）/ 5 algorithm + 1 docs phase / 6 commit / 0 baseline 漂移 / 28 vitest 单测全绿**

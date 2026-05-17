@@ -237,9 +237,9 @@ network:
 
 ---
 
-## 8. 版本升级 SOP（0.1.0+）
+## 8. 版本升级 SOP（stable 1.0.0+）
 
-> **配套契约：** `docs/data-model.md §6.6` 定义 0.1.0 之后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。
+> **配套契约：** `docs/data-model.md §6.6` 定义 stable 发版（≥1.0.0）后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。当前 `0.2.0-SNAPSHOT` 仍处 pre-release。
 
 ### 8.1 升级前
 
