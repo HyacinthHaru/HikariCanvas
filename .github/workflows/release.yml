@@ -1,0 +1,74 @@
+name: Release
+
+# Tag 触发：`git tag v0.2.0-SNAPSHOT && git push origin v0.2.0-SNAPSHOT`
+# 自动跑测试 + shadowJar + 创建 GitHub Release + 附 jar。
+# 含 `-`（pre-release / SNAPSHOT）自动标 prerelease=true。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # 创建 Release 需要
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Node 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Frontend - install deps + test + build
+        working-directory: web
+        run: |
+          npm ci
+          npm run test
+          npm run build
+
+      - name: Backend - test + shadowJar
+        run: ./gradlew :plugin:test :plugin:shadowJar --no-daemon --stacktrace
+
+      - name: Extract version from tag
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Releasing version: ${VERSION}"
+
+      - name: Rename artifact
+        run: |
+          set -eu
+          src=$(ls plugin/build/libs/HikariCanvas-*-all.jar | head -1)
+          dst="plugin/build/libs/HikariCanvas-${VERSION}.jar"
+          mv "$src" "$dst"
+          echo "Renamed: $src → $dst"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: plugin/build/libs/HikariCanvas-${{ env.VERSION }}.jar
+          generate_release_notes: true
+          draft: false
+          # 含 `-`（如 v0.2.0-SNAPSHOT / v1.0.0-beta.1）自动 prerelease；
+          # 纯 stable（如 v1.0.0）不打 prerelease。
+          prerelease: ${{ contains(env.VERSION, '-') }}
+          fail_on_unmatched_files: true

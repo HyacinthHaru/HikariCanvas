@@ -1,0 +1,82 @@
+name: CI
+
+# push/PR 到 main 时跑：前端单测 + 后端单测 + shadowJar artifact。
+# 单 job 集成而非拆分：项目前后端互相依赖（gradle syncFontsToWeb 把字体喂 web；
+# copyWebToResources 把 vite dist 喂 jar），拆 job 反而要重复 setup-java / setup-node。
+# 首跑 ~5min（paperweight dev bundle 首装），后续 ~2min（setup-gradle 缓存生效）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Node 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # CLAUDE.md：Node 25 偶卡 vue-tsc，CI 锁 22 LTS 稳定。
+          # cache: npm 自动用 web/package-lock.json 做 key 缓存 node_modules 依赖。
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        # 自带 Gradle Dependency Cache + Build Cache + Configuration Cache。
+        # 不需要显式 actions/cache（用户偏好"原生"）。
+
+      - name: Frontend - install deps
+        working-directory: web
+        run: npm ci
+
+      - name: Frontend - vitest (28 cases)
+        working-directory: web
+        run: npm run test
+
+      - name: Frontend - vite build (production)
+        working-directory: web
+        run: npm run build
+
+      - name: Backend - test (:plugin:test)
+        run: ./gradlew :plugin:test --no-daemon --stacktrace
+
+      - name: Backend - shadowJar
+        # 链路自动跑：compileJava → processResources（含 generatePalette + downloadFonts
+        # + copyWebToResources）→ shadowJar relocate 7 个内嵌依赖（M16-P5.1）
+        # → moe.hikari.canvas.shaded.*；输出 plugin/build/libs/*-all.jar
+        run: ./gradlew :plugin:shadowJar --no-daemon --stacktrace
+
+      - name: Upload jar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HikariCanvas-${{ github.sha }}
+          path: plugin/build/libs/HikariCanvas-*-all.jar
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: |
+            plugin/build/reports/tests/
+            plugin/build/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
