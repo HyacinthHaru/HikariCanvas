@@ -170,7 +170,9 @@ function applyOne(state: ProjectState, op: PatchOp): void {
     if (tokens[0] === 'canvas' && tokens.length === 2) {
         const field = tokens[1] as keyof ProjectState['canvas'];
         if (op.op === 'replace' && op.value !== undefined) {
-            (state.canvas as Record<string, unknown>)[field] = op.value;
+            // M17 F5：canvas.background 升级 FillCompat 后 Canvas 字段类型异构，
+            // 显式 unknown 中转避免 TS 严格 cast 报错。
+            (state.canvas as unknown as Record<string, unknown>)[field] = op.value;
         }
         return;
     }

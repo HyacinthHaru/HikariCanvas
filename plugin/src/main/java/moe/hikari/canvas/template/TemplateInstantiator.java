@@ -54,7 +54,14 @@ public final class TemplateInstantiator {
     private final ExpressionParser exprParser = new ExpressionParser();
     private final ExpressionEvaluator exprEval = new ExpressionEvaluator();
 
-    /** 实例化结果。失败时 {@code errors} 给出全部累计校验问题。 */
+    /**
+     * 实例化结果。失败时 {@code errors} 给出全部累计校验问题。
+     *
+     * <p>M17 F5：{@code backgroundColor} 字段语义未变（仍是 hex 字符串），非 raw_state
+     * 模板的 {@code resolveBackground} 仍输出 hex；raw_state 模式下从 {@link Fill}
+     * 抽 {@link moe.hikari.canvas.state.SolidFill#color()}，非 solid 形态退默认 {@code "#FFFFFF"}。
+     * v1 模板谱系不支持渐变背景；要做需扩展 template-spec 接口。</p>
+     */
     public sealed interface Result {
         record Ok(int widthMaps, int heightMaps, String backgroundColor,
                   List<Element> elements,
@@ -173,7 +180,10 @@ public final class TemplateInstantiator {
             return new Result.Failed("INVALID_TEMPLATE", errors);
         }
 
-        String bg = state.canvas().background();
+        // M17 F5：state.canvas().background() 现在是 Fill；raw_state 模板若是渐变背景，
+        // v1 不支持向 template.apply.Result.Ok 透传——抽 SolidFill.color 或退默认。
+        moe.hikari.canvas.state.Fill bgFill = state.canvas().background();
+        String bg = bgFill instanceof moe.hikari.canvas.state.SolidFill sf ? sf.color() : "#FFFFFF";
         List<Element> flat = new ArrayList<>();
         for (var layer : state.layers()) {
             for (Element el : layer.elements()) {

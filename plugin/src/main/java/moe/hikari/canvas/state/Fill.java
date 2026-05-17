@@ -27,4 +27,12 @@ public sealed interface Fill permits SolidFill, LinearGradient, RadialGradient {
     /** {@code "solid" | "linear" | "radial"}；序列化时写出。 */
     @JsonProperty("type")
     String type();
+
+    /**
+     * 便利构造：{@code "#RRGGBB"} / {@code "#RRGGBBAA"} → {@link SolidFill}。
+     * M17 F5（Canvas.background Fill 联合类型升级）引入；统一旧字符串入口。
+     */
+    static Fill solid(String color) {
+        return new SolidFill(color == null ? "#FFFFFF" : color);
+    }
 }

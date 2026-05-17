@@ -99,8 +99,15 @@ public final class CanvasProjector {
 
     /** pristine = 与 {@code SessionManager.confirm} 时构造的初始 state 等价。 */
     private static boolean isPristine(ProjectState state) {
-        return state.elements().isEmpty()
-                && "#FFFFFF".equalsIgnoreCase(state.canvas().background());
+        return state.elements().isEmpty() && isWhiteSolid(state.canvas().background());
+    }
+
+    /** M17 F5：判 background 是否纯白 SolidFill（渐变 / 非白 / 半透明都不算 pristine）。 */
+    private static boolean isWhiteSolid(moe.hikari.canvas.state.Fill bg) {
+        if (!(bg instanceof moe.hikari.canvas.state.SolidFill s)) return false;
+        String c = s.color();
+        if (c == null) return false;
+        return "#FFFFFF".equalsIgnoreCase(c) || "#FFFFFFFF".equalsIgnoreCase(c);
     }
 
     /** 渲染全部 maps（canvas.background / snapshot 后 / reset 时用）。 */

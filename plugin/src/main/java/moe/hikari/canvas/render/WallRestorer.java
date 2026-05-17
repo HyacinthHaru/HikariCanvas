@@ -171,7 +171,17 @@ public final class WallRestorer {
     }
 
     private static boolean isPristine(ProjectState state) {
-        return state.elements().isEmpty()
-                && "#FFFFFF".equalsIgnoreCase(state.canvas().background());
+        return state.elements().isEmpty() && isWhiteSolid(state.canvas().background());
+    }
+
+    /**
+     * M17 F5：background 升级为 {@link moe.hikari.canvas.state.Fill} 联合类型后的判等。
+     * 只把 {@code SolidFill #FFFFFF[FF]} 视为"白色背景"；渐变 / 半透明都不算 pristine。
+     */
+    private static boolean isWhiteSolid(moe.hikari.canvas.state.Fill bg) {
+        if (!(bg instanceof moe.hikari.canvas.state.SolidFill s)) return false;
+        String c = s.color();
+        if (c == null) return false;
+        return "#FFFFFF".equalsIgnoreCase(c) || "#FFFFFFFF".equalsIgnoreCase(c);
     }
 }

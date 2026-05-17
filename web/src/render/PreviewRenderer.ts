@@ -22,7 +22,10 @@ export function renderProjectState(
     const widthPx = (state?.canvas.widthMaps ?? 1) * 128;
     const heightPx = (state?.canvas.heightMaps ?? 1) * 128;
 
-    ctx.fillStyle = state?.canvas.background ?? '#FFFFFF';
+    // M17 F5：canvas.background 升级为 Fill 联合类型。镜像后端 FillPaintBuilder.fillToPaint：
+    // solid → hex string；linear/radial → CanvasGradient（端点 / 中心由 bbox=整画布推）。
+    const bgStyle = fillToCanvasStyle(ctx, state?.canvas.background, 0, 0, widthPx, heightPx);
+    ctx.fillStyle = bgStyle ?? '#FFFFFF';
     ctx.fillRect(0, 0, widthPx, heightPx);
 
     if (!state) return;

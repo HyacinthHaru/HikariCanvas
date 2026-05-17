@@ -5,6 +5,87 @@
 
 ---
 
+## 2026-05-17 · M17 Phase 2 + 3（F1 复制粘贴 + F5 Canvas Fill + F3 智能对齐 v1）
+
+3 个并行 agent 完成 + 一次主线程手动接入（F3 agent 对 CanvasView/ui store 的 edit 未生效，主线程补做）。
+
+### F1 复制粘贴
+
+新 `web/src/composables/useClipboard.ts`：`useClipboard()` → `{ copy(), paste() }`，导出 `CLIPBOARD_MAGIC = 'hikari-canvas-v1:'`。
+
+剪贴板格式：`hikari-canvas-v1:{"elements":[...深 clone 完整 element],"timestamp":"<iso>","sourceWallId":"<id|null>"}`。magic header 不匹配静默忽略 → 不干扰文本框常规 paste。
+
+- `useCanvasShortcuts.ts`：Ctrl/Cmd+C → copy，Ctrl/Cmd+V → paste；裸 c 仍走 circle 工具；inEditable 时不触发
+- copy 不读 isLocked（只读安全）；paste 检查 isLocked + pickWritableLayer fallback
+- 元素剥离：JSON 深 clone → 剥 id + type（顶层 envelope）→ x/y +10 偏移
+- z-order：copy 按 layer.elements 索引升序，paste 按数组顺序逐个 ws.send，新元素堆叠顺序一致
+- 发 `element.add` 显式带 `layerId`（EditOpDispatcher 已支持）
+- PathElement.d / BrushPoint[] 子坐标相对 bbox 不变换
+- 反馈复用 `net.pushLog('meta'|'err', ...)`
+- i18n：`clipboard.copySuccess(n) / pasteSuccess(n) / pasteRejectedLocked / pasteParseFailed` 中英
+
+### F5 Canvas.background → Fill 联合类型
+
+**后端**：
+- `ProjectState.Canvas` `String background` → `Fill background`；新 `@JsonCreator` 接收 Fill；保留 `(int, int, String)` 兼容构造器内部 wrap Solid；紧凑构造器默认 `Fill.solid("#FFFFFF")`
+- `Fill` 加静态 helper `Fill.solid(String)`
+- **FillDeserializer**：M11 已存在 string → SolidFill 路径，无需新增；`Fill` 自身已 `@JsonDeserialize(using = FillDeserializer.class)`，整条反序列化链路自动复用——WebServer / RendererSnapshotTest 共用同一 ObjectMapper 都生效
+- `CanvasCompositor.rasterize` 入口 paint bg 改 `g.setPaint(FillPaintBuilder.fillToPaint(canvas.background(), 0, 0, w, h))`；渐变 bbox = 整画布
+- `WallRestorer.isPristine` / `CanvasProjector.isPristine`：旧 `"#FFFFFF".equalsIgnoreCase` → 新 `isWhiteSolid(Fill)`（仅 SolidFill #FFFFFF[FF] 命中）
+- `EditSession.setBackground(Fill)` 跑 FillValidator；旧 `setBackground(String)` wrap 调新；新 `replaceContent(Fill, List)` overload
+- `TemplateInstantiator.instantiateRawState`：state.canvas().background() 现是 Fill；只在 SolidFill 抽 color，渐变背景 v1 raw_state 模板 fallback `"#FFFFFF"`
+- `EditOpDispatcher canvas.background`：优先识别新 `fill` 字段，兼容老 `color` 字段
+- 测试 `EditSessionReplaceContentTest` 4 处类型对比改 SolidFill；replaceContent(null,...) 加 `(String) null` 消歧
+
+**baseline 14 fixture**：`:plugin:test --rerun-tasks` 全绿，**0 像素漂移**（FillDeserializer 自动处理 fixture `"background": "#xxx"` 字符串）
+
+**前端**：
+- `types/protocol.ts Canvas.background`: `string` → `FillCompat`
+- `PreviewRenderer.ts` entry paint 改 `fillToCanvasStyle(ctx, state?.canvas.background, 0, 0, w, h) ?? '#FFFFFF'`
+- `stores/palette.ts` projectColors：`bg.toUpperCase()` → `fillColors(bg)` 全 stop 提取
+- `stores/project.ts` patch apply：Canvas record 类型混合后加 `as unknown as` 中转
+- 新 `CanvasSettingsSection.vue`：未选中元素时挂载；`FillInput` 编辑；alpha<1 用 CSS 棋盘格 UI 提示（仅视觉，不参与 PaletteLut）；emit `ws.send('canvas.background', { fill })`
+- `RightPanel.vue` `!selected` 分支挂载
+- i18n：`canvas.settings` / `canvas.backgroundLabel` 中英
+
+**WS op**：未引入新 op；`canvas.background` payload 升级 `{fill}`（新）或 `{color}`（兼容）
+
+### F3 智能对齐 v1（grid + 锚点 + 元素边/中点）
+
+新 `web/src/composables/useSnapManager.ts`：
+- API：`snap(rawX, rawY, w, h, excludeIds) → SnapHints { snappedX, snappedY, activeXAxes, activeYAxes }`
+- 候选轴：canvas 3 项（0 / w/2 / w）+ element 6 项/个（left/cx/right + top/cy/bot，按 layer.visible + el.visible 过滤、excludeIds 排除）+ grid floor/ceil 倍数（仅 gridSize>0）
+- `snapAxis` 两遍扫描：先 anchors（left/center/right）× candidates 找最近距离 ≤ threshold；再收集"应用 bestDelta 后恰好命中"的所有 candidate 作 activeAxes（多线同时命中 → visualizer M17.4 用）
+- bypass 钩子：true 时 snap 透传 raw（shift 临时禁用）
+
+**ui store**：`snapEnabled / snapToGrid / snapToCanvas / snapToElement / snapThreshold`，localStorage key `hikari-canvas:snap` 持久化（与 theme/locale 同级），threshold 范围 [1, 64]，默认 `{enabled:true, toGrid:false, toCanvas:true, toElement:true, threshold:8}`
+
+**CanvasView 接入**（主线程手动补做——agent 的 edit 没生效）：
+- `onDragStart` 单选 / 多选都 set dragInitial：单选时也 init 自己 leader 的初始 (x,y)。M17-P1 漏修——原代码单选时 dragInitial 是空 Map → onDragMove `initLeader === undefined` → return → leader 仍不跟手。**真正完成 F2 修复**
+- `onDragMove`：调 `snapManager.snap(leaderX, leaderY, w, h, new Set(dragInitial.keys()))`；snap 后把 Konva 节点位置回写到 snap 落点（视觉跟手）；leader.store + follower delta 都用 snapped 坐标
+- 新 `isShiftDown` ref + window keydown/keyup/blur 维护；传给 snapManager bypass
+
+**性能**：100 elements ≈ 600 候选 × 3 锚点 ≈ 1800 比较 / frame，O(n) 线性；rAF 自合并；spatial index 留 v1.x
+
+### 关键事故记录
+
+F3 agent 声称"已改 CanvasView.vue + ui.ts"但 git diff 显示无改动——edit 静默失败。已 fallback 由主线程手动补做。这是 agent 协作中的隐性失败模式，需要在 commit 前用 git diff 验证。
+
+### 验证
+
+- `:plugin:test --rerun-tasks` BUILD SUCCESSFUL，14 RendererSnapshotTest baseline 0 漂移，EditSession 测试全绿
+- `vite build` 403ms / 493.89 kB / 153.11 kB gzip，0 新 TS 错误
+
+### 关联文件
+
+**新文件**：`web/src/composables/useClipboard.ts` / `web/src/composables/useSnapManager.ts` / `web/src/components/properties/CanvasSettingsSection.vue`
+
+**改动 Java**：`plugin/src/main/java/moe/hikari/canvas/`: `state/Fill.java` / `state/ProjectState.java` / `state/EditSession.java` / `render/CanvasCompositor.java` / `render/CanvasProjector.java` / `render/WallRestorer.java` / `template/TemplateInstantiator.java` / `web/EditOpDispatcher.java` / test `EditSessionReplaceContentTest.java`
+
+**改动前端**：`web/src/`: `composables/useCanvasShortcuts.ts` / `components/layout/CanvasView.vue` / `components/layout/RightPanel.vue` / `render/PreviewRenderer.ts` / `stores/palette.ts` / `stores/project.ts` / `stores/ui.ts` / `types/protocol.ts` / `i18n/messages.ts`
+
+---
+
 ## 2026-05-17 · M17 Phase 1（F2 拖动跟手修复 + F4 自由拖动画布）
 
 针对生产级 UX 增强 / bug 修复 2 项，2 个并行 agent 完成。

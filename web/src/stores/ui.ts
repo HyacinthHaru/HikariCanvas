@@ -4,6 +4,16 @@ import { computed, ref, watch } from 'vue';
 const THEME_KEY = 'hikari-canvas:theme';
 const LOCALE_KEY = 'hikari-canvas:locale';
 const TOOL_KEY = 'hikari-canvas:active-tool';
+const SNAP_KEY = 'hikari-canvas:snap';
+
+interface SnapPrefs {
+    enabled: boolean;
+    toGrid: boolean;
+    toCanvas: boolean;
+    toElement: boolean;
+    threshold: number;
+}
+const SNAP_DEFAULT: SnapPrefs = { enabled: true, toGrid: false, toCanvas: true, toElement: true, threshold: 8 };
 
 export type Theme = 'dark' | 'light';
 export type Locale = 'zh' | 'en';
@@ -69,6 +79,26 @@ export const useUiStore = defineStore('ui', () => {
 
     /** 画布缩放系数（0.25 .. 4）。 */
     const zoom = ref(1);
+
+    // ---------- M17 F3 智能对齐 ----------
+    // localStorage 持久化，与 theme / locale 等用户偏好同级。shift 临时禁用走 CanvasView 的 bypass 钩子。
+    const snapPrefs = loadSnap();
+    const snapEnabled = ref(snapPrefs.enabled);
+    const snapToGrid = ref(snapPrefs.toGrid);
+    const snapToCanvas = ref(snapPrefs.toCanvas);
+    const snapToElement = ref(snapPrefs.toElement);
+    const snapThreshold = ref(snapPrefs.threshold);
+    watch([snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapThreshold], () => {
+        try {
+            localStorage.setItem(SNAP_KEY, JSON.stringify({
+                enabled: snapEnabled.value,
+                toGrid: snapToGrid.value,
+                toCanvas: snapToCanvas.value,
+                toElement: snapToElement.value,
+                threshold: Math.max(1, Math.min(64, snapThreshold.value)),
+            } satisfies SnapPrefs));
+        } catch { /* ignore */ }
+    });
 
     watch(activeTool, (v) => {
         try { localStorage.setItem(TOOL_KEY, v); } catch { /* ignore */ }
@@ -171,6 +201,7 @@ export const useUiStore = defineStore('ui', () => {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
         selectedIds, selectedElementId, selectedCount, hasSelection,
         editingLayerId, zoom,
+        snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapThreshold,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         setZoom, zoomIn, zoomOut, zoomReset,
         selectElement, toggleSelection, selectMany, addToSelection, clearSelection,
@@ -179,6 +210,22 @@ export const useUiStore = defineStore('ui', () => {
         reset,
     };
 });
+
+function loadSnap(): SnapPrefs {
+    try {
+        const raw = localStorage.getItem(SNAP_KEY);
+        if (!raw) return { ...SNAP_DEFAULT };
+        const parsed = JSON.parse(raw) as Partial<SnapPrefs>;
+        return {
+            enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : SNAP_DEFAULT.enabled,
+            toGrid: typeof parsed.toGrid === 'boolean' ? parsed.toGrid : SNAP_DEFAULT.toGrid,
+            toCanvas: typeof parsed.toCanvas === 'boolean' ? parsed.toCanvas : SNAP_DEFAULT.toCanvas,
+            toElement: typeof parsed.toElement === 'boolean' ? parsed.toElement : SNAP_DEFAULT.toElement,
+            threshold: typeof parsed.threshold === 'number' && parsed.threshold >= 1 && parsed.threshold <= 64
+                ? parsed.threshold : SNAP_DEFAULT.threshold,
+        };
+    } catch { return { ...SNAP_DEFAULT }; }
+}
 
 function loadTheme(): Theme {
     try {

@@ -38,8 +38,10 @@ export const usePaletteStore = defineStore('palette', () => {
                 collectElementColors(el, set);
             }
         }
-        const bg = project.state.canvas.background;
-        if (bg) set.add(bg.toUpperCase());
+        // M17 F5：canvas.background 升级为 Fill 联合类型；fillColors 抽出全部 stop / solid 颜色。
+        for (const c of fillColors(project.state.canvas.background)) {
+            set.add(c.toUpperCase());
+        }
         return Array.from(set);
     });
 

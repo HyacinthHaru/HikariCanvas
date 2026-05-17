@@ -49,7 +49,7 @@ public final class ProjectState {
     public record Canvas(
             int widthMaps,
             int heightMaps,
-            String background,
+            Fill background,
             Integer gridSize,       // null / 0 = 不显示网格
             List<Guide> guides      // null/empty = 无参考线
     ) {
@@ -62,25 +62,40 @@ public final class ProjectState {
             if (heightMaps < 1 || heightMaps > 32) {
                 throw new IllegalArgumentException("heightMaps out of range [1, 32]: " + heightMaps);
             }
+            if (background == null) background = Fill.solid("#FFFFFF");
             if (guides == null) guides = List.of();
         }
 
+        /**
+         * M17 F5：Jackson 反序列化入口。{@code background} 字段类型从 {@code String}
+         * 升级为 {@link Fill}（solid / linear / radial）。{@link FillDeserializer} 同时
+         * 接受 string（M0-M16 旧形态自动 wrap 为 {@link SolidFill}）与 object（v2 新形态），
+         * 保留旧 .canvas 工程文件向后兼容。
+         */
         @JsonCreator
         public static Canvas fromJson(
                 @JsonProperty("widthMaps") int widthMaps,
                 @JsonProperty("heightMaps") int heightMaps,
-                @JsonProperty("background") String background,
+                @JsonProperty("background") Fill background,
                 @JsonProperty("gridSize") Integer gridSize,
                 @JsonProperty("guides") List<Guide> guides) {
             return new Canvas(widthMaps, heightMaps,
-                    background == null ? "#FFFFFF" : background,
+                    background == null ? Fill.solid("#FFFFFF") : background,
                     gridSize,
                     guides == null ? List.of() : guides);
         }
 
         /** v1 兼容快捷构造：等价于 5 参数版本传 {@code null} / {@code List.of()}。 */
-        public Canvas(int widthMaps, int heightMaps, String background) {
+        public Canvas(int widthMaps, int heightMaps, Fill background) {
             this(widthMaps, heightMaps, background, null, List.of());
+        }
+
+        /**
+         * M17 F5 兼容构造：旧 String 入口仍可用，内部 wrap 为 {@link SolidFill}。
+         * 调用方应在新代码里直接传 {@link Fill}；保留此构造避开测试 / 全栈大规模重写。
+         */
+        public Canvas(int widthMaps, int heightMaps, String backgroundColor) {
+            this(widthMaps, heightMaps, Fill.solid(backgroundColor), null, List.of());
         }
     }
 
@@ -131,7 +146,7 @@ public final class ProjectState {
             @JsonProperty("activeLayerId") String activeLayerId,
             @JsonProperty("history") History history) {
         this.version = version;
-        this.canvas = canvas != null ? canvas : new Canvas(1, 1, "#FFFFFF");
+        this.canvas = canvas != null ? canvas : new Canvas(1, 1, Fill.solid("#FFFFFF"));
         this.history = history != null ? history : new History(0, 0);
 
         if (v2Layers != null && !v2Layers.isEmpty()) {

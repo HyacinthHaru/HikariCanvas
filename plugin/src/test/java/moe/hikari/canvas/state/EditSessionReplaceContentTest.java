@@ -52,7 +52,9 @@ class EditSessionReplaceContentTest {
                 EditSession.OpResult.OkSnapshot.class, result);
 
         // canvas 背景已替换；保留 widthMaps/heightMaps
-        assertEquals("#112233", es.state().canvas().background());
+        // M17 F5：background 是 Fill 联合类型，replaceContent(String, ...) 旧入口
+        // 内部 wrap 成 SolidFill。
+        assertEquals(new SolidFill("#112233"), es.state().canvas().background());
         assertEquals(2, es.state().canvas().widthMaps());
         assertEquals(1, es.state().canvas().heightMaps());
 
@@ -74,7 +76,7 @@ class EditSessionReplaceContentTest {
         es.addElement("text", java.util.Map.of("text", "before"), null, null);
         long preVersion = es.state().version();
         int preCount = es.state().elements().size();
-        String preBg = es.state().canvas().background();
+        Fill preBg = es.state().canvas().background();
 
         es.replaceContent("#445566", List.<Element>of(rect("e-new")));
         // version 又被 undo 推进一次
@@ -89,8 +91,8 @@ class EditSessionReplaceContentTest {
     @Test
     void nullBackgroundKeepsPrevious() {
         EditSession es = session(2, 1);
-        String origBg = es.state().canvas().background();
-        es.replaceContent(null, List.<Element>of());
+        Fill origBg = es.state().canvas().background();
+        es.replaceContent((String) null, List.<Element>of());
         assertEquals(origBg, es.state().canvas().background());
         assertEquals(0, es.state().elements().size());
     }

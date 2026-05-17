@@ -19,6 +19,7 @@ import { useTransformerManager } from '@/composables/useTransformerManager';
 import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts';
 import { usePanScroll } from '@/composables/usePanScroll';
 import { useCanvasUpload } from '@/composables/useCanvasUpload';
+import { useSnapManager } from '@/composables/useSnapManager';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -44,6 +45,13 @@ const editingElement = computed(() => {
 
 const widthPx = computed(() => project.canvasPixelWidth || 256);
 const heightPx = computed(() => project.canvasPixelHeight || 256);
+
+// M17 F3：shift 临时禁用 snap；keydown/keyup + window blur 维护
+const isShiftDown = ref(false);
+useEventListener(window, 'keydown', (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftDown.value = true; });
+useEventListener(window, 'keyup', (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftDown.value = false; });
+useEventListener(window, 'blur', () => { isShiftDown.value = false; });
+const snapManager = useSnapManager({ project, ui, bypass: () => isShiftDown.value });
 
 const sizeLabel = computed(() => {
     if (!project.state) return t.value.canvas.empty;
@@ -344,17 +352,19 @@ function onDragStart(id: string): void {
     // 这里兜底：拖任何元素时只要有 editing 状态就先收掉，避免 textarea 滞留在前一个元素上
     if (editingId.value && editingId.value !== id) finishEditing();
 
-    // 多选：记录所有选中 element 的初始 (x, y) 供 dragmove 同步
+    // M17 F2/F3：单选 / 多选都记录初始位置 —— 单选场景 onDragMove 需要 initLeader 才能算 delta；
+    // 多选场景还要给 follower 同步用。原 size>1 才 set 的逻辑会让单选 onDragMove 早 return。
+    const init = new Map<string, { x: number; y: number }>();
     if (ui.selectedCount > 1 && ui.isSelected(id)) {
-        const init = new Map<string, { x: number; y: number }>();
         for (const sid of ui.selectedIds) {
             const el = project.elementById(sid);
             if (el) init.set(sid, { x: el.x, y: el.y });
         }
-        dragInitial.value = init;
     } else {
-        dragInitial.value = new Map();
+        const el = project.elementById(id);
+        if (el) init.set(id, { x: el.x, y: el.y });
     }
+    dragInitial.value = init;
 }
 
 interface DragEvt { target: {
@@ -373,8 +383,20 @@ function onDragMove(ev: DragEvt, id: string): void {
     const node = ev.target;
     const w = node.width();
     const h = node.height();
-    const leaderX = Math.round(node.x() - w / 2);
-    const leaderY = Math.round(node.y() - h / 2);
+    let leaderX = Math.round(node.x() - w / 2);
+    let leaderY = Math.round(node.y() - h / 2);
+
+    // M17 F3：snap manager 修正 leader 落点。excludeIds 排除整个拖动组（多选）避免 snap 到自己。
+    const excludeIds = new Set<string>(dragInitial.value.keys());
+    const hints = snapManager.snap(leaderX, leaderY, w, h, excludeIds);
+    if (hints.snappedX !== leaderX || hints.snappedY !== leaderY) {
+        leaderX = hints.snappedX;
+        leaderY = hints.snappedY;
+        // 同步 Konva 节点位置回 snap 落点（视觉跟手）；后续 follower 同步算 delta 也用 snapped 值
+        node.x(leaderX + w / 2);
+        node.y(leaderY + h / 2);
+    }
+
     const leaderEl = project.elementById(id);
     if (leaderEl) {
         leaderEl.x = leaderX;

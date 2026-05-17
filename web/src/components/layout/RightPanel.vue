@@ -26,6 +26,7 @@ import TransformSection from '@/components/properties/TransformSection.vue';
 import TextElementSection from '@/components/properties/TextElementSection.vue';
 import GeometricElementSection from '@/components/properties/GeometricElementSection.vue';
 import ImageElementSection from '@/components/properties/ImageElementSection.vue';
+import CanvasSettingsSection from '@/components/properties/CanvasSettingsSection.vue';
 import ElementListSection from '@/components/properties/ElementListSection.vue';
 import type { Element, TextElement, RectElement, CircleElement, ShapeElement, PathElement, ImageElement } from '@/types/protocol';
 
@@ -123,8 +124,12 @@ function deleteMultiSelected(): void {
         <div class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.multiHint }}</div>
       </div>
 
-      <div v-else-if="!selected" class="p-3 text-xs text-[color:var(--muted-foreground)]">
-        {{ t.properties.empty }}
+      <div v-else-if="!selected" class="text-xs">
+        <!-- 未选中元素时空 hint + M17 F5 画板设置段 -->
+        <div class="p-3 text-[color:var(--muted-foreground)]">
+          {{ t.properties.empty }}
+        </div>
+        <CanvasSettingsSection />
       </div>
 
       <div v-else class="p-3 space-y-3 text-xs">

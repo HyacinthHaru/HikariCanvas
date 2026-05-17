@@ -154,7 +154,21 @@ final class EditOpDispatcher {
                 }
                 yield es.resizeCanvas(wn.intValue(), hn.intValue());
             }
-            case "canvas.background" -> es.setBackground(stringOrNull(payload.get("color")));
+            case "canvas.background" -> {
+                // M17 F5：协议 v2 升级——优先看 fill（Fill 对象，solid/linear/radial），
+                // 兼容老 color（hex 字符串）。两者皆缺 → INVALID_PAYLOAD。
+                Object fillRaw = payload.get("fill");
+                if (fillRaw != null) {
+                    try {
+                        moe.hikari.canvas.state.Fill fill =
+                                moe.hikari.canvas.state.ElementValidator.parseFillNullable(fillRaw);
+                        yield es.setBackground(fill);
+                    } catch (moe.hikari.canvas.state.ValidationException ve) {
+                        yield new EditSession.OpResult.Error(ve.code, ve.getMessage());
+                    }
+                }
+                yield es.setBackground(stringOrNull(payload.get("color")));
+            }
             case "canvas.grid" -> {
                 Object sz = payload.get("size");
                 if (sz != null && !(sz instanceof Number)) {

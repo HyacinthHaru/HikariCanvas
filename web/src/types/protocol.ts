@@ -34,7 +34,12 @@ export interface ProjectState {
 export interface Canvas {
     widthMaps: number;
     heightMaps: number;
-    background: string; // "#RRGGBB"
+    /**
+     * M17 F5：升级为 Fill 联合类型（solid / linear / radial），与 M11 element fill 一致。
+     * 后端 {@code FillDeserializer} 兼容 M0-M16 旧字符串形态（自动 wrap 为 SolidFill）；
+     * 前端通过 {@code normalizeFill} 在 store 入口归一化为 object 形态。
+     */
+    background: FillCompat;
     /** 网格像素间距；0 / 缺省 = 不显示（仅前端预览，不入 MC） */
     gridSize?: number;
     /** 用户从标尺拖出的参考线（仅前端预览） */

@@ -116,8 +116,9 @@ public final class CanvasCompositor {
         Graphics2D g = img.createGraphics();
         try {
             applyHints(g);
-            // 背景
-            g.setColor(FillPaintBuilder.parseColor(canvas.background()));
+            // 背景：M17 F5 起 background 是 Fill 联合类型（solid / linear / radial），
+            // 由 FillPaintBuilder.fillToPaint 渲染——bbox 取全画布以便渐变铺满。
+            g.setPaint(FillPaintBuilder.fillToPaint(canvas.background(), 0, 0, widthPx, heightPx));
             g.fillRect(0, 0, widthPx, heightPx);
 
             // M8-E：分层渲染

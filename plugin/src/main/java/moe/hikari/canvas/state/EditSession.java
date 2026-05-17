@@ -480,16 +480,35 @@ public final class EditSession {
 
     // ---------- canvas.background ----------
 
+    /**
+     * 旧入口：{@code "#RRGGBB"} hex 字符串。M17 F5 起内部 wrap 成 {@link SolidFill} 后调
+     * {@link #setBackground(Fill)}。WS op {@code canvas.background} 的 {@code color} 字段
+     * 仍走这条；新协议字段 {@code fill} 走 Fill 直传。
+     */
     public synchronized OpResult setBackground(String color) {
         if (!isValidColor(color)) return err("INVALID_PAYLOAD", "invalid color: " + color);
+        return setBackground(new SolidFill(color));
+    }
+
+    /**
+     * M17 F5：Fill 联合类型入口（solid / linear / radial）。{@link FillValidator} 校验后
+     * 整体替换 canvas.background；dirty = 全画布、history mark。
+     */
+    public synchronized OpResult setBackground(Fill fill) {
+        if (fill == null) return err("INVALID_PAYLOAD", "background fill is null");
+        try {
+            FillValidator.validate(fill);
+        } catch (ValidationException ve) {
+            return err(ve.code, ve.getMessage());
+        }
         ProjectState.Canvas c = state.canvas();
         ProjectSnapshot pre = snapshotNow();
-        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(), color,
+        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(), fill,
                 c.gridSize(), c.guides()));
         commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.Ok(
-                new StatePatchBuilder().replace("/canvas/background", color).build(v),
+                new StatePatchBuilder().replace("/canvas/background", fill).build(v),
                 DirtyRegion.fullCanvas(state));
     }
 
@@ -562,14 +581,22 @@ public final class EditSession {
      * <p>M8-C 升级：清空所有层 → 生成一个 Default Layer 包住 {@code elements} → activeLayerId
      * 指向它。符合 {@code docs/architecture.md §10.5}。</p>
      *
-     * @param backgroundColor 新背景色（null = 保留当前）
+     * <p>M17 F5：{@code backgroundColor} String 入口保留兼容（自动 wrap 为 SolidFill）；
+     * 推荐新调用方走 {@link #replaceContent(Fill, List)} 直传 Fill。</p>
+     *
+     * @param backgroundColor 新背景色 hex（null = 保留当前）
      * @param elements        新 element 列表（已由 TemplateInstantiator 物化）
      */
     public synchronized OpResult replaceContent(String backgroundColor, List<Element> elements) {
+        return replaceContent(backgroundColor == null ? null : new SolidFill(backgroundColor), elements);
+    }
+
+    /** M17 F5：Fill 入口的 replaceContent。{@code null} 保留当前 background。 */
+    public synchronized OpResult replaceContent(Fill background, List<Element> elements) {
         ProjectSnapshot pre = snapshotNow();
         ProjectState.Canvas c = state.canvas();
         state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(),
-                backgroundColor == null ? c.background() : backgroundColor,
+                background == null ? c.background() : background,
                 c.gridSize(), c.guides()));
         // 重建：单个 Default Layer 包新 elements，activeLayerId 指向它
         String newLayerId = "l-" + UUID.randomUUID().toString().substring(0, 8);

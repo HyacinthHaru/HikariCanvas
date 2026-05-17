@@ -120,6 +120,9 @@ export const messages = {
             empty: '—',
             grid: '网格',
             gridTip: '画布参考网格（仅前端预览；0 = 关闭，常用 8 / 16 / 32）',
+            // M17 F5：未选中元素时右栏显示的画板设置段
+            settings: '画板设置',
+            backgroundLabel: '背景',
         },
         properties: {
             header: '属性',
@@ -172,6 +175,12 @@ export const messages = {
             copyTip: '复制 hex 到剪贴板',
             copied: '已复制',
             alphaLabel: 'α',
+        },
+        clipboard: {
+            copySuccess: (n: number) => `已复制 ${n} 个元素`,
+            pasteSuccess: (n: number) => `已粘贴 ${n} 个元素`,
+            pasteRejectedLocked: '画板已锁定，无法粘贴',
+            pasteParseFailed: '剪贴板内容不是有效的 HikariCanvas 数据',
         },
         fill: {
             solid: '纯色',
@@ -461,6 +470,9 @@ export const messages = {
             empty: '—',
             grid: 'Grid',
             gridTip: 'Canvas reference grid (preview only, not rendered to MC; 0 = off, typical 8 / 16 / 32)',
+            // M17 F5: canvas settings panel shown in RightPanel when nothing is selected
+            settings: 'Canvas Settings',
+            backgroundLabel: 'Background',
         },
         properties: {
             header: 'Properties',
@@ -513,6 +525,12 @@ export const messages = {
             copyTip: 'Copy hex to clipboard',
             copied: 'Copied',
             alphaLabel: 'α',
+        },
+        clipboard: {
+            copySuccess: (n: number) => `Copied ${n} element${n === 1 ? '' : 's'}`,
+            pasteSuccess: (n: number) => `Pasted ${n} element${n === 1 ? '' : 's'}`,
+            pasteRejectedLocked: 'Wall is locked; cannot paste',
+            pasteParseFailed: 'Clipboard does not contain valid HikariCanvas data',
         },
         fill: {
             solid: 'Solid',

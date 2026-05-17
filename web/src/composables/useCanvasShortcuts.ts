@@ -1,6 +1,7 @@
 import { onKeyStroke, useEventListener } from '@vueuse/core';
 import type { ActiveTool } from '@/stores/ui';
 import { isDrawTool, useUiStore } from '@/stores/ui';
+import { useClipboard } from '@/composables/useClipboard';
 
 /**
  * 全部 V/M/H/L/A/C/S/B 工具快捷键 + Esc + Ctrl+0/+/- zoom 快捷键 + Space-hold 临时手型。
@@ -13,6 +14,7 @@ import { isDrawTool, useUiStore } from '@/stores/ui';
  */
 export function useCanvasShortcuts() {
     const ui = useUiStore();
+    const clipboard = useClipboard();
 
     function inEditable(): boolean {
         const a = document.activeElement as HTMLElement | null;
@@ -34,7 +36,11 @@ export function useCanvasShortcuts() {
     });
 
     // PS 风格快捷键
-    onKeyStroke(['v', 'V'], () => { if (!inEditable()) ui.setTool('select'); });
+    onKeyStroke(['v', 'V'], (e) => {
+        // Ctrl/Cmd+V 由下方 paste 处理；这里只接裸 V → select 工具
+        if (e.ctrlKey || e.metaKey) return;
+        if (!inEditable()) ui.setTool('select');
+    });
     onKeyStroke(['m', 'M'], () => { if (!inEditable()) ui.setTool('move'); });
     onKeyStroke(['h', 'H'], () => { if (!inEditable()) ui.setTool('hand'); });
     onKeyStroke(['l', 'L'], () => { if (!inEditable()) ui.setTool('line'); });
@@ -43,8 +49,22 @@ export function useCanvasShortcuts() {
         if (!inEditable()) ui.setTool('arrow');
     });
     onKeyStroke(['c', 'C'], (e) => {
-        if (e.ctrlKey || e.metaKey) return;
+        if (e.ctrlKey || e.metaKey) {
+            // F1 Ctrl/Cmd+C：复制选中元素到 system clipboard
+            if (inEditable()) return;
+            e.preventDefault();
+            void clipboard.copy();
+            return;
+        }
         if (!inEditable()) ui.setTool('circle');
+    });
+    onKeyStroke(['v', 'V'], (e) => {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        // F1 Ctrl/Cmd+V：粘贴 clipboard 内的 HikariCanvas 数据
+        // 不在 editable 焦点（input/textarea/contenteditable）才接管；否则让浏览器走常规 paste
+        if (inEditable()) return;
+        e.preventDefault();
+        void clipboard.paste();
     });
     onKeyStroke(['s', 'S'], (e) => {
         if (e.ctrlKey || e.metaKey) return;
