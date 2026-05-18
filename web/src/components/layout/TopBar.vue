@@ -3,6 +3,7 @@ import { computed, nextTick, ref } from 'vue';
 import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
+import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -183,7 +184,7 @@ function showRefreshFlash(msg: string) {
 </script>
 
 <template>
-  <header class="flex items-center justify-between h-10 px-3 border-b border-[color:var(--border)] bg-[color:var(--card)] text-[color:var(--card-foreground)] select-none">
+  <header class="flex items-center justify-between h-11 px-3 border-b border-[color:var(--border)] bg-[color:var(--card)] text-[color:var(--card-foreground)] select-none">
     <div class="flex items-center gap-3">
       <span class="text-sm font-semibold tracking-tight">{{ t.brand }}</span>
       <span class="text-xs text-[color:var(--muted-foreground)]">
@@ -193,26 +194,26 @@ function showRefreshFlash(msg: string) {
       <div v-if="project.wallId" class="flex items-center gap-2 ml-2 text-xs">
         <Tooltip :text="t.wall.copyId(project.wallId)">
           <button
-            class="px-1.5 py-0.5 rounded font-mono bg-[color:var(--secondary)] hover:bg-[color:var(--accent)] transition-colors relative"
+            class="hc-btn px-2 py-1 rounded-[var(--radius-sm)] font-mono bg-[color:var(--secondary)] hover:bg-[color:var(--accent)] transition-colors relative"
             @click="copyWallId"
           >
-            <span v-if="copiedFlash === 'wallid'" class="text-emerald-400">{{ t.wall.copied }}</span>
+            <span v-if="copiedFlash === 'wallid'" class="text-[color:var(--ctp-green)]">{{ t.wall.copied }}</span>
             <span v-else>{{ project.wallId }}</span>
           </button>
         </Tooltip>
         <!-- alias：默认显示按钮；点击进入内联编辑 -->
         <Tooltip v-if="!editingAlias" :text="project.alias ? t.wall.aliasSetTip(project.alias) : t.wall.aliasSetTipEmpty">
           <button
-            class="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[color:var(--accent)] transition-colors text-[color:var(--muted-foreground)]"
+            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors text-[color:var(--muted-foreground)]"
             @click="startAliasEdit"
           >
             <Tag class="size-3" />
             <span v-if="project.alias">{{ project.alias }}</span>
             <span v-else class="opacity-60">{{ t.wall.aliasEmpty }}</span>
-            <Pencil class="size-2.5 opacity-50" />
+            <Pencil class="size-3 opacity-50" />
           </button>
         </Tooltip>
-        <div v-else class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[color:var(--secondary)]">
+        <div v-else class="flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] bg-[color:var(--secondary)]">
           <Tag class="size-3 text-[color:var(--muted-foreground)]" />
           <input
             ref="aliasInput"
@@ -225,22 +226,22 @@ function showRefreshFlash(msg: string) {
             @keydown.escape.prevent="cancelAliasEdit"
             @blur="commitAliasEdit"
           />
-          <button class="p-0.5 rounded hover:bg-emerald-500/20 text-emerald-400" :title="t.wall.aliasSave" @mousedown.prevent="commitAliasEdit">
+          <button class="hc-btn p-0.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--ctp-green)]/20 text-[color:var(--ctp-green)]" :title="t.wall.aliasSave" @mousedown.prevent="commitAliasEdit">
             <Check class="size-3" />
           </button>
-          <button class="p-0.5 rounded hover:bg-red-500/20 text-red-400" :title="t.wall.aliasCancel" @mousedown.prevent="cancelAliasEdit">
+          <button class="hc-btn p-0.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--destructive)]/20 text-[color:var(--destructive)]" :title="t.wall.aliasCancel" @mousedown.prevent="cancelAliasEdit">
             <X class="size-3" />
           </button>
-          <span v-if="aliasError" class="text-[10px] text-red-400 ml-1">{{ aliasError }}</span>
+          <span v-if="aliasError" class="text-xs text-[color:var(--destructive)] ml-1">{{ aliasError }}</span>
         </div>
         <!-- 2026-05-14 lock 按钮：替换原 publish 按钮。owner 可点；非 owner disabled。 -->
         <Tooltip :text="locked
           ? (isOwner ? t.wall.lockToggleOff : t.wall.lockOwnerOnly)
           : (isOwner ? t.wall.lockToggleOn : t.wall.lockOwnerOnly)">
           <button
-            class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             :class="locked
-              ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
+              ? 'bg-[color:var(--ctp-peach)]/20 text-[color:var(--ctp-peach)] hover:bg-[color:var(--ctp-peach)]/30'
               : 'bg-[color:var(--secondary)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
             :disabled="!isOwner || lockInFlight"
             @click="toggleLock"
@@ -252,7 +253,7 @@ function showRefreshFlash(msg: string) {
         </Tooltip>
         <Tooltip :text="t.wall.refreshTip">
           <button
-            class="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-50"
+            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-50"
             :disabled="refreshing"
             @click="refreshWall"
           >
@@ -262,7 +263,7 @@ function showRefreshFlash(msg: string) {
         </Tooltip>
         <span
           v-if="refreshFlash"
-          class="text-[10px] text-[color:var(--muted-foreground)] tabular-nums"
+          class="text-xs text-[color:var(--muted-foreground)] tabular-nums"
         >· {{ refreshFlash }}</span>
       </div>
     </div>
@@ -270,7 +271,7 @@ function showRefreshFlash(msg: string) {
     <div class="flex items-center gap-1">
       <Tooltip :text="t.topbar.toggleLeft">
         <button
-          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.toggleLeft()"
         >
           <PanelLeft class="size-4" />
@@ -278,7 +279,7 @@ function showRefreshFlash(msg: string) {
       </Tooltip>
       <Tooltip :text="t.topbar.toggleRight">
         <button
-          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.toggleRight()"
         >
           <PanelRight class="size-4" />
@@ -286,7 +287,7 @@ function showRefreshFlash(msg: string) {
       </Tooltip>
       <Tooltip :text="t.topbar.toggleLog">
         <button
-          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.toggleLogDrawer()"
         >
           <Terminal class="size-4" />
@@ -294,7 +295,7 @@ function showRefreshFlash(msg: string) {
       </Tooltip>
       <Tooltip :text="t.workshop.saveTip">
         <button
-          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors disabled:opacity-40"
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-40"
           :disabled="!project.wallId || project.isLocked"
           @click="saveModalOpen = true"
         >
@@ -305,7 +306,7 @@ function showRefreshFlash(msg: string) {
       <SnapSettingsPopover />
       <Tooltip :text="t.topbar.help" shortcut="?">
         <button
-          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.helpOpen = true"
         >
           <HelpCircle class="size-4" />
@@ -313,7 +314,7 @@ function showRefreshFlash(msg: string) {
       </Tooltip>
       <Tooltip :text="t.topbar.switchLocale">
         <button
-          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.toggleLocale()"
         >
           <Languages class="size-4" />
@@ -321,13 +322,15 @@ function showRefreshFlash(msg: string) {
       </Tooltip>
       <Tooltip :text="t.topbar.toggleTheme">
         <button
-          class="p-1.5 rounded hover:bg-[color:var(--accent)] transition-colors"
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.toggleTheme()"
         >
           <Sun v-if="ui.theme === 'dark'" class="size-4" />
           <Moon v-else class="size-4" />
         </button>
       </Tooltip>
+      <!-- M24-B：主题切换器（preset / accent / radius） -->
+      <ThemeSwitcher />
     </div>
   </header>
 

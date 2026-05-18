@@ -32,6 +32,72 @@
 
 ---
 
+## 2026-05-18 · M24 前端 UX 大整修（Catppuccin + M3 扁平 + i18n 友好化）
+
+用户要求：Material Design 3 扁平化 + Catppuccin 色板 + **避开"大灰黑 / 大黑紫 / AI 审美"** + 文案玩家友好 + 多主题 + 主题 switcher。2 个并行 agent 完成（约 4h wall-clock）。
+
+### M24-A i18n 文案用户友好化（agent A）
+
+- `messages.ts` 764 → 775 行，~140 个 value 改写 + 40 个新 key
+- **错误码翻译**：22 个 raw code（FORBIDDEN / NOT_FOUND / INVALID_PAYLOAD / QUOTA_EXCEEDED 等）→ "你没有这块画板的权限 / 找不到这块画板 / 本日上传次数已达上限"等口语化
+- **元素属性字段**：fontId / blendMode / renderMode / strokeWidth / letterSpacing 全部去开发味；新 properties.fontIdLabel/Tip 等 10 个 label+tip 键
+- **Empty state 引导**：从"未选中元素"→"点击画布或图层面板里的元素来开始编辑。"；图层空 → "从左边工具栏挑个工具开始画吧"
+- **工具栏**：每个工具加快捷键 + "怎么操作"（"按住空格临时切换 pan" 等）
+- **专有名词保留**：MC / sha256 / Bayer / Apple Pencil
+- **中英语气对齐**：中文亲切口语化；英文 friendly conversational
+
+### M24-B Catppuccin + M3 扁平 + ThemeSwitcher（agent B）
+
+**主题色板替换**：
+- `style.css` 完整重写：删 shadcn 中性灰，注入 Catppuccin 全套（base/mantle/crust + surface0-2 + overlay0-2 + subtext0-1 + text + 14 accent）三 flavor
+- **Latte（浅米白暖色）**默认 / **Frappé（深灰偏紫暖）**深色 / **Macchiato（更深低饱和）**
+- shadcn-vue `--background/--card/--primary/--ring` 等全部映射到 `--ctp-*`——组件代码零改动即生效
+- 默认 primary = `--ctp-mauve`（温暖紫粉，**绝不大黑紫**）
+
+**Material 3 设计 tokens**：
+- `--radius-{xs,sm,md,lg,xl,full}` (4/6/12/16/24/9999px)
+- `--elevation-{0..3}` 用 surface tones 做层级（**不用 box-shadow**——避 AI 审美）
+- 新 `.hc-btn` 类 + 全局 `.hc-focus` accent outline + `.hc-alpha-checkerboard`（surface2 棋盘格替代硬 #ccc）
+
+**ThemeStore + ThemeSwitcher**：
+- 新 `stores/theme.ts`：flavor + accent + radius，独立 3 个 localStorage key；向后兼容旧 `theme=dark/light`（→ frappe/latte）；初始 apply 在 main.ts mount 前调用避免首屏闪烁
+- 新 `ThemeSwitcher.vue`：M3 popover 风格挂 TopBar；preset 列表（圆点 + check）+ 8 accent swatch 网格 + 5 radius preview
+- i18n 新增 `theme.*` 段
+
+**Visual bug 修复**：
+- **FillInput tab 撞色**（用户原报告 bug）：active 改 `bg-card + foreground + font-medium`（M3 segmented control 风格，弃 `bg-primary`）
+- Tooltip 硬 #18181b / #1f2937 / #fafafa → surface tones
+- ColorInput 棋盘格 `#ccc` → `--ctp-surface2`；alpha thumb white → foreground + card border
+- LayerPanel slider `accent-color: --ring → --primary`
+- SnapSettingsPopover `accent-color: #60a5fa` → `--primary`
+- CanvasView lock overlay backdrop-blur 删（AI 审美），改 ctp-crust/20 + peach badge
+- HelpModal / SaveAsTemplateModal / TemplateGallery scrim `bg-black/50 + shadow-2xl` → ctp-crust/50 + shadow-md
+
+**全栈 visual polish**：
+- 89 处 `text-[9/10/11px]` → `text-xs`（M3 type scale 收敛）
+- 7 处 `rounded-md/lg/xl` → `rounded-[var(--radius{,-sm})]` 跟主题
+- 12+ 处 Tailwind palette 硬编码色（amber/emerald/red/blue/sky 等）→ `--ctp-*` / `--destructive`
+- HomePage card hover：translateY + shadow 替换为 surface tone + border-color
+- 模板 featured/builtin badge：`text-black/white` → `text-[color:var(--ctp-base)]` 自适应 flavor
+
+### 验证
+
+- `:plugin:test` BUILD SUCCESSFUL，14 baseline fixture 无漂移（前端 only）
+- `vite build` 460ms / 0 错；JS 546 → 562 kB（+15.7 kB，theme store + ThemeSwitcher + 主题 token 表）；gzip 174.63 kB
+
+### 关键遗留 / 待办（M25 候选）
+
+1. **i18n 新 key 未挂到组件**：M24-A 准备了 22 错误码 + 40+ tooltip + properties label 键，但 wsClient.ts / TopBar / RightPanel 等组件仍用旧 key 显示。下一步把 errors.* 挂到 wsClient.handleError；tooltips.* 挂到 button `:title`；properties.fontIdLabel 挂到 TextElementSection
+2. **ColorInput native picker** 仍由浏览器渲染（系统级限制，无法主题化）
+3. **vue-tsc Node 25 兼容性** 阻塞类型检查 CLI；vite Vue SFC 编译期 0 错
+4. **TextElementSection 字体下拉** 还未应用 ThemeSwitcher 圆角 token（保留 select 默认样式）
+
+### 关联文件
+
+新：`web/src/stores/theme.ts` / `web/src/components/layout/ThemeSwitcher.vue`。改：`style.css` / `main.ts` / `stores/ui.ts` / `i18n/messages.ts` / 25+ 组件 .vue 文件。
+
+---
+
 ## 2026-05-18 · M23 字体加载通法（双轨变单轨，删 fallback bug）
 
 ### 根因诊断

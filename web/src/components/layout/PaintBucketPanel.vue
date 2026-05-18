@@ -38,10 +38,10 @@ function onFillChange(v: Fill) {
       </div>
 
       <!-- 操作提示 -->
-      <p class="text-[10px] text-[color:var(--muted-foreground)] pt-2 leading-relaxed">
+      <p class="text-xs text-[color:var(--muted-foreground)] pt-2 leading-relaxed">
         {{ t.livePaint.hint }}
       </p>
-      <p class="text-[10px] text-[color:var(--muted-foreground)] leading-relaxed">
+      <p class="text-xs text-[color:var(--muted-foreground)] leading-relaxed">
         {{ t.livePaint.hintHoverPreview }}
       </p>
     </div>

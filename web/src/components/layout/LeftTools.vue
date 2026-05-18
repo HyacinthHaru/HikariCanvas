@@ -62,9 +62,9 @@ function addRect() {
     <!-- 工具模式：Select（带 transformer 锚点）vs Move（PS 风格纯拖拽） -->
     <Tooltip :text="t.tools.selectTool" shortcut="V">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'select'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('select')"
       >
@@ -73,9 +73,9 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.moveTool" shortcut="M">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'move'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('move')"
       >
@@ -85,9 +85,9 @@ function addRect() {
     <!-- M17 F4：手型工具，按住 Space 也可临时切换 -->
     <Tooltip :text="t.tools.handTool" shortcut="H">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'hand'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('hand')"
       >
@@ -100,9 +100,9 @@ function addRect() {
     <!-- M9-D：绘制工具激活态切换（drag-to-create 在 M9-E 接入） -->
     <Tooltip :text="t.tools.lineTool" shortcut="L">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'line'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('line')"
       >
@@ -111,9 +111,9 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.arrowTool" shortcut="A">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'arrow'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('arrow')"
       >
@@ -122,9 +122,9 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.circleTool" shortcut="C">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'circle'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('circle')"
       >
@@ -133,9 +133,9 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.starTool" shortcut="S">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'star'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('star')"
       >
@@ -144,9 +144,9 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.brushTool" shortcut="B">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'brush'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('brush')"
       >
@@ -156,9 +156,9 @@ function addRect() {
     <!-- M18 Live Paint：油漆桶工具（click 工具，非 drag-to-create） -->
     <Tooltip :text="t.tools.paintBucketTool" shortcut="G">
       <button
-        class="p-2 rounded transition-colors"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
         :class="ui.activeTool === 'paint-bucket'
-          ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)] ring-1 ring-[color:var(--ring)]'
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
           : 'hover:bg-[color:var(--accent)]'"
         @click="ui.setTool('paint-bucket')"
       >
@@ -170,7 +170,7 @@ function addRect() {
 
     <Tooltip :text="t.tools.openTemplates">
       <button
-        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="!net.authenticated"
         @click="templates.openGallery()"
       >
@@ -179,7 +179,7 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.addText">
       <button
-        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="!net.authenticated"
         @click="addText"
       >
@@ -188,7 +188,7 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.addRect">
       <button
-        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="!net.authenticated"
         @click="addRect"
       >
@@ -200,7 +200,7 @@ function addRect() {
 
     <Tooltip :text="t.tools.undo" shortcut="Ctrl+Z">
       <button
-        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="!net.authenticated"
         @click="runOp('undo', {})"
       >
@@ -209,7 +209,7 @@ function addRect() {
     </Tooltip>
     <Tooltip :text="t.tools.redo" shortcut="Ctrl+⇧Z">
       <button
-        class="p-2 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+        class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="!net.authenticated"
         @click="runOp('redo', {})"
       >

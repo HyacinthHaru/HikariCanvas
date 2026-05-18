@@ -216,7 +216,7 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
     <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
       <Layers class="size-3.5" />
       <span>{{ t.layerPanel.header }}</span>
-      <span class="ml-auto text-[10px] font-normal normal-case">{{ t.layerPanel.count(layerCount) }}</span>
+      <span class="ml-auto text-xs font-normal normal-case">{{ t.layerPanel.count(layerCount) }}</span>
       <Tooltip :text="t.layerPanel.newLayerHint">
         <button
           class="p-1 rounded hover:bg-[color:var(--accent)] text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
@@ -297,7 +297,7 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
           </span>
 
           <!-- element count badge -->
-          <span class="text-[9px] text-[color:var(--muted-foreground)] tabular-nums shrink-0">
+          <span class="text-xs text-[color:var(--muted-foreground)] tabular-nums shrink-0">
             {{ layer.elements.length }}
           </span>
 
@@ -328,7 +328,7 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
         <!-- M8-E：active layer 行紧跟两行 opacity / blendMode 控件 -->
         <li
           v-if="isActive(layer.id)"
-          class="px-2 py-1.5 flex items-center gap-2 text-[10px] bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)]"
+          class="px-2 py-1.5 flex items-center gap-2 text-xs bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)]"
         >
           <span class="text-[color:var(--muted-foreground)] shrink-0">{{ t.layerPanel.opacityLabel }}</span>
           <input
@@ -348,7 +348,7 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
         </li>
         <li
           v-if="isActive(layer.id)"
-          class="px-2 pb-1.5 flex items-center gap-2 text-[10px] bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)] border-b border-[color:var(--border)]"
+          class="px-2 pb-1.5 flex items-center gap-2 text-xs bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)] border-b border-[color:var(--border)]"
         >
           <span class="text-[color:var(--muted-foreground)] shrink-0">{{ t.layerPanel.blendModeLabel }}</span>
           <select
@@ -368,27 +368,27 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
 
 <style scoped>
 .hc-input {
-    background: var(--background);
+    background: var(--ctp-surface0);
     color: var(--foreground);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
 }
 .hc-input:focus {
     outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
+    border-color: var(--primary);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 50%, transparent);
 }
 .hc-layer-slider {
     height: 14px;
     background: transparent;
-    accent-color: var(--ring);
+    accent-color: var(--primary);
 }
 .hc-layer-select {
-    background: var(--background);
+    background: var(--ctp-surface0);
     color: var(--foreground);
     border: 1px solid var(--border);
-    border-radius: 3px;
-    font-size: 10px;
-    padding: 1px 4px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    padding: 2px 5px;
 }
 </style>

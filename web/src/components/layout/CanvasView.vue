@@ -836,12 +836,12 @@ function requestDraw(): void {
                中间显示提示；owner 看到解锁按钮，非 owner 看到 "仅作者可解锁"。 -->
           <div
             v-if="project.isLocked"
-            class="absolute inset-0 z-20 flex items-center justify-center bg-black/10 backdrop-blur-[1px] cursor-not-allowed"
+            class="absolute inset-0 z-20 flex items-center justify-center bg-[color:var(--ctp-crust)]/20 cursor-not-allowed"
             @mousedown.stop.prevent
             @click.stop.prevent
             @dblclick.stop.prevent
           >
-            <div class="px-3 py-1.5 rounded bg-amber-500/90 text-black text-xs font-medium shadow-lg pointer-events-none">
+            <div class="px-3 py-1.5 rounded-[var(--radius-sm)] bg-[color:var(--ctp-peach)] text-[color:var(--ctp-base)] text-xs font-medium pointer-events-none">
               {{ project.isOwner ? t.wall.lockedOwnerHint : t.wall.lockedReaderHint }}
             </div>
           </div>
@@ -909,8 +909,8 @@ function requestDraw(): void {
     <!-- M13-D：上传错误 / 进度 banner（顶部居中，自动消失） -->
     <div
       v-if="uploadError || uploading"
-      class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-md text-xs shadow-lg pointer-events-none"
-      :class="uploadError ? 'bg-red-500/95 text-white' : 'bg-blue-500/95 text-white'"
+      class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-[var(--radius-sm)] text-xs shadow-lg pointer-events-none"
+      :class="uploadError ? 'bg-[color:var(--destructive)]/95 text-white' : 'bg-[color:var(--ctp-blue)]/95 text-white'"
     >
       {{ uploadError ?? t.image.uploading }}
     </div>
@@ -918,9 +918,9 @@ function requestDraw(): void {
     <!-- M18 Live Paint：worker 正在构建 graph 时的浮动 indicator（仅 paint-bucket 工具下显示） -->
     <div
       v-if="ui.activeTool === 'paint-bucket' && livePaint.isBuilding.value"
-      class="absolute bottom-16 right-4 z-40 px-2.5 py-1 rounded-md text-[11px] bg-[color:var(--card)] border border-[color:var(--border)] text-[color:var(--muted-foreground)] shadow-md pointer-events-none flex items-center gap-1.5"
+      class="absolute bottom-16 right-4 z-40 px-2.5 py-1 rounded-[var(--radius-sm)] text-xs bg-[color:var(--card)] border border-[color:var(--border)] text-[color:var(--muted-foreground)] shadow-md pointer-events-none flex items-center gap-1.5"
     >
-      <span class="inline-block size-2 rounded-full bg-blue-400 animate-pulse"></span>
+      <span class="inline-block size-2 rounded-full bg-[color:var(--ctp-blue)] animate-pulse"></span>
       {{ t.livePaint.building }}
     </div>
 

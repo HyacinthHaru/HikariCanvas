@@ -63,7 +63,7 @@ const childDisabled = computed(() => !ui.snapEnabled);
     <!-- popover -->
     <div
       v-if="open"
-      class="absolute right-0 top-full mt-1 z-50 w-64 rounded-md border border-[color:var(--border)] bg-[color:var(--card)] text-[color:var(--card-foreground)] shadow-xl text-xs"
+      class="absolute right-0 top-full mt-1 z-50 w-64 rounded-[var(--radius-sm)] border border-[color:var(--border)] bg-[color:var(--card)] text-[color:var(--card-foreground)] shadow-md text-xs"
     >
       <header class="flex items-center justify-between px-3 h-8 border-b border-[color:var(--border)]">
         <span class="font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
@@ -122,7 +122,7 @@ const childDisabled = computed(() => !ui.snapEnabled);
           >
         </label>
 
-        <p class="text-[10px] text-[color:var(--muted-foreground)] leading-snug">
+        <p class="text-xs text-[color:var(--muted-foreground)] leading-snug">
           {{ t.snap.shiftHint }}
         </p>
       </div>
@@ -134,6 +134,7 @@ const childDisabled = computed(() => !ui.snapEnabled);
 .hc-snap-checkbox {
     width: 0.9rem;
     height: 0.9rem;
-    accent-color: var(--accent-foreground, #60a5fa);
+    /* M24-B：用 primary（= 当前 accent）替代浅蓝 #60a5fa，跟随 ThemeSwitcher accent */
+    accent-color: var(--primary);
 }
 </style>

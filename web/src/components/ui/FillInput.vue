@@ -167,17 +167,18 @@ function removeStop(i: number): void {
 </script>
 
 <template>
-  <div class="hc-fill-input flex flex-col gap-1.5">
-    <!-- type tab -->
-    <div class="flex items-center rounded border border-[color:var(--border)] overflow-hidden text-[10px]">
+  <div class="hc-fill-input flex flex-col gap-2">
+    <!-- type tab：M24-B 修撞色 bug——原 active tab 用 bg-primary + text-primary-foreground
+         在 mauve / blue accent 下文字辨识度低；改用 surface1 底 + foreground 文字 + accent ring。 -->
+    <div class="flex items-center rounded-[var(--radius-sm)] border border-[color:var(--border)] overflow-hidden text-xs bg-[color:var(--secondary)]">
       <button
           v-for="opt in (['solid', 'linear', 'radial'] as const)"
           :key="opt"
           type="button"
-          class="flex-1 px-1 py-1 transition-colors"
+          class="hc-btn flex-1 px-2 py-1 transition-colors capitalize"
           :class="current.type === opt
-            ? 'bg-[color:var(--primary)] text-[color:var(--primary-foreground)]'
-            : 'hover:bg-[color:var(--accent)]'"
+            ? 'bg-[color:var(--card)] text-[color:var(--foreground)] font-medium'
+            : 'text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)] hover:text-[color:var(--foreground)]'"
           @click="changeType(opt)">
         {{ t.fill[opt] }}
       </button>
@@ -190,19 +191,19 @@ function removeStop(i: number): void {
 
     <!-- linear -->
     <template v-else-if="current.type === 'linear'">
-      <label class="flex items-center gap-1.5 text-[10px]">
+      <label class="flex items-center gap-1.5 text-xs">
         <span class="text-[color:var(--muted-foreground)] w-10 shrink-0">{{ t.fill.angle }}</span>
         <input type="range" min="0" max="359" :value="angleDisplay"
                class="flex-1" @input="onAngleInput" @change="onAngleChange" />
-        <span class="font-mono w-8 text-right tabular-nums">{{ angleDisplay }}°</span>
+        <span class="font-mono w-9 text-right tabular-nums">{{ angleDisplay }}°</span>
       </label>
 
-      <div class="flex flex-col gap-1 pt-1">
-        <div class="flex items-center justify-between text-[10px] text-[color:var(--muted-foreground)] uppercase tracking-wider">
+      <div class="flex flex-col gap-1.5 pt-1">
+        <div class="flex items-center justify-between text-xs text-[color:var(--muted-foreground)] uppercase tracking-wider">
           <span>{{ t.fill.stops }}</span>
           <button
               type="button"
-              class="p-0.5 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+              class="hc-btn p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
               :disabled="stops.length >= MAX_STOPS"
               @click="addStop"
               :title="t.fill.addStop">
@@ -215,7 +216,7 @@ function removeStop(i: number): void {
           <ColorInput :model-value="s.color" @update:model-value="(c) => onStopColor(i, c)" />
           <button
               type="button"
-              class="p-0.5 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] disabled:opacity-40 disabled:cursor-not-allowed"
+              class="hc-btn p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] disabled:opacity-40 disabled:cursor-not-allowed"
               :disabled="stops.length <= MIN_STOPS"
               @click="removeStop(i)"
               :title="t.fill.removeStop">
@@ -227,7 +228,7 @@ function removeStop(i: number): void {
 
     <!-- radial -->
     <template v-else>
-      <div class="grid grid-cols-3 gap-1 text-[10px]">
+      <div class="grid grid-cols-3 gap-1.5 text-xs">
         <label class="flex flex-col gap-0.5">
           <span class="text-[color:var(--muted-foreground)]">{{ t.fill.cx }}</span>
           <input type="range" min="0" max="1" step="0.05" :value="current.cx"
@@ -245,12 +246,12 @@ function removeStop(i: number): void {
         </label>
       </div>
 
-      <div class="flex flex-col gap-1 pt-1">
-        <div class="flex items-center justify-between text-[10px] text-[color:var(--muted-foreground)] uppercase tracking-wider">
+      <div class="flex flex-col gap-1.5 pt-1">
+        <div class="flex items-center justify-between text-xs text-[color:var(--muted-foreground)] uppercase tracking-wider">
           <span>{{ t.fill.stops }}</span>
           <button
               type="button"
-              class="p-0.5 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+              class="hc-btn p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
               :disabled="stops.length >= MAX_STOPS"
               @click="addStop"
               :title="t.fill.addStop">
@@ -263,7 +264,7 @@ function removeStop(i: number): void {
           <ColorInput :model-value="s.color" @update:model-value="(c) => onStopColor(i, c)" />
           <button
               type="button"
-              class="p-0.5 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] disabled:opacity-40 disabled:cursor-not-allowed"
+              class="hc-btn p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] disabled:opacity-40 disabled:cursor-not-allowed"
               :disabled="stops.length <= MIN_STOPS"
               @click="removeStop(i)"
               :title="t.fill.removeStop">

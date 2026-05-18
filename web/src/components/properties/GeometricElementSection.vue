@@ -74,7 +74,7 @@ function onNumberChange(field: string, ev: Event) {
 
 <template>
   <details class="group" open>
-    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
+    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-xs py-1 hover:text-[color:var(--foreground)]">
       {{ isRect ? t.properties.rectHeader
           : isCircle ? t.properties.circleHeader
           : isShape ? t.properties.shapeHeader
@@ -102,12 +102,12 @@ function onNumberChange(field: string, ev: Event) {
       <template v-if="geomStroke()">
         <div class="grid grid-cols-2 gap-2">
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeWidth }}</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.strokeWidth }}</span>
             <input type="number" min="0" class="hc-input" :value="geomStroke()!.width"
                    @input="(e) => patchGeomStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.strokeColor }}</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.strokeColor }}</span>
             <ColorInput :model-value="geomStroke()!.color"
                         @update:model-value="(v) => patchGeomStroke({ color: v })" />
           </label>
@@ -117,7 +117,7 @@ function onNumberChange(field: string, ev: Event) {
       <template v-if="isShape">
         <div class="grid grid-cols-2 gap-2">
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">kind</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">kind</span>
             <select class="hc-input" :value="(element as ShapeElement).kind"
                     @change="(e) => onSelectChange('kind', e)">
               <option value="polygon">polygon</option>
@@ -125,14 +125,14 @@ function onNumberChange(field: string, ev: Event) {
             </select>
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">sides</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">sides</span>
             <input type="number" min="3" max="32" class="hc-input"
                    :value="(element as ShapeElement).sides"
                    @input="(e) => onNumberChange('sides', e)">
           </label>
         </div>
         <label v-if="(element as ShapeElement).kind === 'star'" class="flex flex-col gap-0.5">
-          <span class="text-[10px] text-[color:var(--muted-foreground)]">innerRatio</span>
+          <span class="text-xs text-[color:var(--muted-foreground)]">innerRatio</span>
           <input type="range" min="0.1" max="0.95" step="0.05"
                  :value="(element as ShapeElement).innerRatio ?? 0.5"
                  @input="(e) => onNumberChange('innerRatio', e)">

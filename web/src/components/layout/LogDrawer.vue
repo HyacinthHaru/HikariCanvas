@@ -23,9 +23,9 @@ watch(displayLogs, async () => {
 
 function levelClass(level: string): string {
     switch (level) {
-        case 'sent': return 'text-sky-400';
-        case 'recv': return 'text-emerald-400';
-        case 'err': return 'text-red-400';
+        case 'sent': return 'text-[color:var(--ctp-sky)]';
+        case 'recv': return 'text-[color:var(--ctp-green)]';
+        case 'err': return 'text-[color:var(--destructive)]';
         default: return 'text-[color:var(--muted-foreground)]';
     }
 }
@@ -57,7 +57,7 @@ function levelClass(level: string): string {
     </header>
     <div
       ref="logList"
-      class="flex-1 overflow-y-auto px-3 py-2 font-mono text-[11px] leading-5 bg-[color:var(--background)]"
+      class="flex-1 overflow-y-auto px-3 py-2 font-mono text-xs leading-5 bg-[color:var(--background)]"
     >
       <div v-for="line in displayLogs" :key="line.ts + line.text" :class="levelClass(line.level)">
         <span class="text-[color:var(--muted-foreground)] mr-2">

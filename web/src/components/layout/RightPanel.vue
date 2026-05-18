@@ -124,7 +124,7 @@ function deleteMultiSelected(): void {
 
       <div v-if="isMulti" class="p-3 space-y-2 text-xs">
         <div class="font-medium">{{ t.properties.multiSelected(ui.selectedCount) }}</div>
-        <div class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.properties.multiHint }}</div>
+        <div class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.multiHint }}</div>
       </div>
 
       <div v-else-if="!selected" class="text-xs">
@@ -143,7 +143,7 @@ function deleteMultiSelected(): void {
         </div>
         <div class="flex items-center justify-between">
           <span class="text-[color:var(--muted-foreground)]">{{ t.properties.id }}</span>
-          <span class="font-mono text-[10px] truncate max-w-[140px]" :title="selected.id">
+          <span class="font-mono text-xs truncate max-w-[140px]" :title="selected.id">
             {{ selected.id }}
           </span>
         </div>

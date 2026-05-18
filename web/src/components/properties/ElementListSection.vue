@@ -72,9 +72,9 @@ function onElementDragEnd() {
     <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
       <Layers class="size-3.5" />
       <span>{{ t.elements.header }}</span>
-      <span class="ml-auto text-[10px] font-normal normal-case">{{ t.elements.count(elementCount) }}</span>
+      <span class="ml-auto text-xs font-normal normal-case">{{ t.elements.count(elementCount) }}</span>
     </header>
-    <div v-if="activeLayerLocked" class="px-3 py-1.5 text-[10px] text-[color:var(--muted-foreground)] bg-[color:var(--muted)] border-b border-[color:var(--border)]">
+    <div v-if="activeLayerLocked" class="px-3 py-1.5 text-xs text-[color:var(--muted-foreground)] bg-[color:var(--muted)] border-b border-[color:var(--border)]">
       {{ t.elements.lockedHint }}
     </div>
     <ul class="overflow-y-auto flex-1">
@@ -99,7 +99,7 @@ function onElementDragEnd() {
         @drop="(e) => onElementDrop(e, idx)"
         @dragend="onElementDragEnd"
       >
-        <span class="w-5 text-[10px] text-[color:var(--muted-foreground)] tabular-nums">{{ idx }}</span>
+        <span class="w-5 text-xs text-[color:var(--muted-foreground)] tabular-nums">{{ idx }}</span>
         <span class="flex-1 truncate">
           {{ el.type }}
           <span v-if="el.type === 'text'" class="opacity-60">· "{{ (el as any).text }}"</span>

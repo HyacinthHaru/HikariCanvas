@@ -232,7 +232,7 @@ async function onReplaceFileChange(e: Event) {
   <details class="group" open>
     <summary class="flex items-center justify-between cursor-pointer py-1.5">
       <span class="font-medium">{{ t.image.header }}</span>
-      <span class="text-[10px] text-[color:var(--muted-foreground)] group-open:rotate-90 transition-transform">›</span>
+      <span class="text-xs text-[color:var(--muted-foreground)] group-open:rotate-90 transition-transform">›</span>
     </summary>
     <div class="space-y-2 pt-1.5">
       <!-- 缩略图 + hash + replace -->
@@ -246,13 +246,13 @@ async function onReplaceFileChange(e: Event) {
         </div>
         <div class="flex-1 min-w-0 space-y-1">
           <Tooltip :text="t.image.sourceTip">
-            <span class="block text-[10px] font-mono text-[color:var(--muted-foreground)] truncate" :title="element.source">
+            <span class="block text-xs font-mono text-[color:var(--muted-foreground)] truncate" :title="element.source">
               {{ element.source }}
             </span>
           </Tooltip>
           <Tooltip :text="t.image.replaceTip">
             <button
-              class="w-full inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+              class="w-full inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
               :disabled="imageReplacing"
               @click="triggerReplaceImage"
             >
@@ -268,7 +268,7 @@ async function onReplaceFileChange(e: Event) {
             class="hidden"
             @change="onReplaceFileChange"
           />
-          <div v-if="imageReplaceError" class="text-[10px] text-red-500">{{ imageReplaceError }}</div>
+          <div v-if="imageReplaceError" class="text-xs text-[color:var(--destructive)]">{{ imageReplaceError }}</div>
         </div>
       </div>
 

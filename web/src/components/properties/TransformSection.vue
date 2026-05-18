@@ -75,24 +75,24 @@ function onOpacityChange(): void {
 
 <template>
   <details class="group" open>
-    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
+    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-xs py-1 hover:text-[color:var(--foreground)]">
       {{ t.properties.transformHeader }}
     </summary>
     <div class="grid grid-cols-2 gap-2 pt-1.5">
       <label class="flex flex-col gap-0.5">
-        <span class="text-[10px] text-[color:var(--muted-foreground)]">x</span>
+        <span class="text-xs text-[color:var(--muted-foreground)]">x</span>
         <input type="number" class="hc-input" :value="element.x" @input="(e) => onNumberChange('x', e)">
       </label>
       <label class="flex flex-col gap-0.5">
-        <span class="text-[10px] text-[color:var(--muted-foreground)]">y</span>
+        <span class="text-xs text-[color:var(--muted-foreground)]">y</span>
         <input type="number" class="hc-input" :value="element.y" @input="(e) => onNumberChange('y', e)">
       </label>
       <label class="flex flex-col gap-0.5">
-        <span class="text-[10px] text-[color:var(--muted-foreground)]">w</span>
+        <span class="text-xs text-[color:var(--muted-foreground)]">w</span>
         <input type="number" min="1" class="hc-input" :value="element.w" @input="(e) => onNumberChange('w', e)">
       </label>
       <label class="flex flex-col gap-0.5">
-        <span class="text-[10px] text-[color:var(--muted-foreground)]">h</span>
+        <span class="text-xs text-[color:var(--muted-foreground)]">h</span>
         <input type="number" min="1" class="hc-input" :value="element.h" @input="(e) => onNumberChange('h', e)">
       </label>
       <label class="flex flex-col gap-0.5 col-span-2">
@@ -134,7 +134,7 @@ function onOpacityChange(): void {
         @input="onOpacityInput"
         @change="onOpacityChange"
       >
-      <span class="w-8 text-[10px] text-right tabular-nums">{{ opacityPct }}%</span>
+      <span class="w-8 text-xs text-right tabular-nums">{{ opacityPct }}%</span>
     </label>
     <!-- M8-E：blendMode + renderMode UI 保留但 disabled（M11 dither 一并实装合成） -->
     <div class="grid grid-cols-2 gap-2 pt-1">

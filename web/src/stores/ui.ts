@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, watch } from 'vue';
+import { useThemeStore } from './theme';
 
-const THEME_KEY = 'hikari-canvas:theme';
 const LOCALE_KEY = 'hikari-canvas:locale';
 const TOOL_KEY = 'hikari-canvas:active-tool';
 const SNAP_KEY = 'hikari-canvas:snap';
@@ -48,7 +48,15 @@ export function isBrushTool(tool: ActiveTool): boolean {
  * 仍保留为 computed（size==1 时返该 id），让 M5/M7 期间的单选代码可以零修改继续工作。</p>
  */
 export const useUiStore = defineStore('ui', () => {
-    const theme = ref<Theme>(loadTheme());
+    const themeStore = useThemeStore();
+    /**
+     * M24-B：theme 已迁到 {@link useThemeStore}（preset flavor + accent + radius）。
+     * 这里保留 `theme` computed 兼容旧组件——返 `'dark'`/`'light'` 二态：
+     *   - Latte → `'light'`
+     *   - Frappé / Macchiato → `'dark'`
+     * 写入仍走 themeStore.toggleLightDark。
+     */
+    const theme = computed<Theme>(() => themeStore.flavor === 'latte' ? 'light' : 'dark');
     const locale = ref<Locale>(loadLocale());
     const activeTool = ref<ActiveTool>(loadTool());
     const leftCollapsed = ref(false);
@@ -109,13 +117,8 @@ export const useUiStore = defineStore('ui', () => {
         try { localStorage.setItem(TOOL_KEY, v); } catch { /* ignore */ }
     });
 
-    // 初始应用 theme 到 <html>
-    applyThemeToDom(theme.value);
-
-    watch(theme, (v) => {
-        applyThemeToDom(v);
-        try { localStorage.setItem(THEME_KEY, v); } catch { /* localStorage may fail in private mode */ }
-    });
+    // M24-B：theme DOM 应用已迁到 themeStore（applyFlavor/Accent/Radius）。
+    // 此处不再单独写 .dark class，避免双写竞态。
 
     watch(locale, (v) => {
         try { localStorage.setItem(LOCALE_KEY, v); } catch { /* ignore */ }
@@ -124,7 +127,9 @@ export const useUiStore = defineStore('ui', () => {
     document.documentElement.lang = locale.value === 'zh' ? 'zh-CN' : 'en';
 
     function toggleTheme() {
-        theme.value = theme.value === 'dark' ? 'light' : 'dark';
+        // M24-B：委托给 themeStore。Latte ↔ Frappé 二态切；其他 flavor（macchiato）
+        // 走 ThemeSwitcher 完整 UI。
+        themeStore.toggleLightDark();
     }
 
     function toggleLocale() {
@@ -233,16 +238,6 @@ function loadSnap(): SnapPrefs {
     } catch { return { ...SNAP_DEFAULT }; }
 }
 
-function loadTheme(): Theme {
-    try {
-        const v = localStorage.getItem(THEME_KEY);
-        if (v === 'light' || v === 'dark') return v;
-    } catch { /* ignore */ }
-    // 默认跟随系统，但兜底深色（符合"Photoshop 网页"期望）
-    if (window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'light';
-    return 'dark';
-}
-
 function loadLocale(): Locale {
     try {
         const v = localStorage.getItem(LOCALE_KEY);
@@ -251,10 +246,6 @@ function loadLocale(): Locale {
     // 默认按 navigator.language 的首个语言段：zh-* → zh；其余 → en
     const lang = navigator.language?.toLowerCase() ?? '';
     return lang.startsWith('zh') ? 'zh' : 'en';
-}
-
-function applyThemeToDom(theme: Theme) {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
 }
 
 function loadTool(): ActiveTool {

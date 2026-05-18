@@ -138,7 +138,7 @@ function previewUrl(w: WallSummary): string {
 
     <main class="flex-1 px-6 py-6 max-w-6xl w-full mx-auto">
       <div v-if="loading" class="text-sm text-[color:var(--muted-foreground)]">{{ t.home.loading }}</div>
-      <div v-else-if="error" class="text-sm text-red-400">{{ t.home.failed(error) }}</div>
+      <div v-else-if="error" class="text-sm text-[color:var(--destructive)]">{{ t.home.failed(error) }}</div>
       <div v-else-if="walls.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-center">
         <ImageOff class="size-12 text-[color:var(--muted-foreground)] opacity-40" />
         <div class="text-sm text-[color:var(--muted-foreground)] max-w-md">
@@ -148,7 +148,7 @@ function previewUrl(w: WallSummary): string {
       <div v-else class="space-y-8">
         <section v-if="locked.length > 0">
           <h2 class="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-[color:var(--muted-foreground)] mb-3">
-            <Lock class="size-4 text-amber-500" /> {{ t.home.lockedGroup(locked.length) }}
+            <Lock class="size-4 text-[color:var(--ctp-peach)]" /> {{ t.home.lockedGroup(locked.length) }}
           </h2>
           <ul class="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             <li v-for="w in locked" :key="w.wallId" class="hc-wall-card hc-wall-locked">
@@ -162,22 +162,22 @@ function previewUrl(w: WallSummary): string {
                     <Tag class="size-3 shrink-0" /><span class="truncate">{{ w.alias }}</span>
                   </span>
                 </div>
-                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)] truncate">
+                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)] truncate">
                   <MapPin class="size-3 shrink-0" />
                   <span class="truncate">{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
                 </div>
-                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)]">
+                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
                   <span class="tabular-nums">{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
                   <span class="opacity-50">·</span>
                   <Clock class="size-3" />
                   <span>{{ fmtTime(w.updatedAt) }}</span>
                 </div>
                 <code
-                  class="mt-1 text-[11px] px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors truncate"
+                  class="mt-1 text-xs px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors truncate"
                   :title="t.home.copyHint"
                   @click="copyOpenCmd(w.wallId)"
                 >
-                  <span v-if="copiedId === w.wallId" class="text-emerald-500">{{ t.wall.copied }}</span>
+                  <span v-if="copiedId === w.wallId" class="text-[color:var(--ctp-green)]">{{ t.wall.copied }}</span>
                   <span v-else>/canvas open {{ w.wallId }}</span>
                 </code>
               </div>
@@ -200,22 +200,22 @@ function previewUrl(w: WallSummary): string {
                     <Tag class="size-3 shrink-0" /><span class="truncate">{{ w.alias }}</span>
                   </span>
                 </div>
-                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)] truncate">
+                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)] truncate">
                   <MapPin class="size-3 shrink-0" />
                   <span class="truncate">{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
                 </div>
-                <div class="flex items-center gap-1.5 text-[11px] text-[color:var(--muted-foreground)]">
+                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
                   <span class="tabular-nums">{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
                   <span class="opacity-50">·</span>
                   <Clock class="size-3" />
                   <span>{{ fmtTime(w.updatedAt) }}</span>
                 </div>
                 <code
-                  class="mt-1 text-[11px] px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors truncate"
+                  class="mt-1 text-xs px-2 py-1 rounded bg-[color:var(--secondary)] cursor-pointer font-mono hover:bg-[color:var(--accent)] transition-colors truncate"
                   :title="t.home.copyHint"
                   @click="copyOpenCmd(w.wallId)"
                 >
-                  <span v-if="copiedId === w.wallId" class="text-emerald-500">{{ t.wall.copied }}</span>
+                  <span v-if="copiedId === w.wallId" class="text-[color:var(--ctp-green)]">{{ t.wall.copied }}</span>
                   <span v-else>/canvas open {{ w.wallId }}</span>
                 </code>
               </div>
@@ -226,7 +226,7 @@ function previewUrl(w: WallSummary): string {
         <!-- M14 创意工坊：模板市场（只读卡片网格；精选优先 + 时间倒序） -->
         <section class="mt-10">
           <header class="flex items-baseline gap-2 mb-3">
-            <Sparkles class="size-4 text-amber-500 translate-y-0.5" />
+            <Sparkles class="size-4 text-[color:var(--ctp-peach)] translate-y-0.5" />
             <h2 class="text-lg font-semibold">{{ t.workshop.marketplaceHeader }}</h2>
             <span class="text-xs text-[color:var(--muted-foreground)]">
               {{ t.workshop.marketplaceCount(templates.length) }}
@@ -235,7 +235,7 @@ function previewUrl(w: WallSummary): string {
           <p v-if="templatesLoading" class="text-xs text-[color:var(--muted-foreground)]">
             {{ t.workshop.loading }}
           </p>
-          <p v-else-if="templatesError" class="text-xs text-red-500">
+          <p v-else-if="templatesError" class="text-xs text-[color:var(--destructive)]">
             {{ t.workshop.loadFailed(templatesError) }}
           </p>
           <p v-else-if="templates.length === 0" class="text-xs text-[color:var(--muted-foreground)]">
@@ -243,29 +243,29 @@ function previewUrl(w: WallSummary): string {
           </p>
           <ul v-else class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             <li v-for="tpl in templates" :key="tpl.templateId"
-                class="bg-[color:var(--card)] border border-[color:var(--border)] rounded-lg overflow-hidden flex flex-col">
+                class="bg-[color:var(--card)] border border-[color:var(--border)] rounded-[var(--radius)] overflow-hidden flex flex-col">
               <div class="aspect-[4/3] bg-[color:var(--muted)] relative">
                 <img :src="templatePreview(tpl)" :alt="tpl.displayName"
                      class="w-full h-full object-contain"
                      loading="lazy"
                      @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')" />
                 <span v-if="tpl.featured"
-                      class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-medium
-                             bg-amber-500/95 text-black inline-flex items-center gap-0.5">
+                      class="absolute top-1 left-1 px-1.5 py-0.5 rounded-[var(--radius-sm)] text-xs font-medium
+                             bg-[color:var(--ctp-peach)] text-[color:var(--ctp-base)] inline-flex items-center gap-0.5">
                   <Star class="size-2.5 fill-current" />
                   {{ t.workshop.featuredBadge }}
                 </span>
                 <span v-if="tpl.builtin"
-                      class="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-medium
-                             bg-blue-500/90 text-white">
+                      class="absolute top-1 right-1 px-1.5 py-0.5 rounded-[var(--radius-sm)] text-xs font-medium
+                             bg-[color:var(--ctp-blue)] text-[color:var(--ctp-base)]">
                   {{ t.workshop.builtinBadge }}
                 </span>
               </div>
               <div class="p-2 flex-1 min-h-0 flex flex-col gap-0.5">
                 <div class="text-xs font-medium truncate" :title="tpl.displayName">{{ tpl.displayName }}</div>
                 <div v-if="tpl.description"
-                     class="text-[10px] text-[color:var(--muted-foreground)] line-clamp-2">{{ tpl.description }}</div>
-                <div class="mt-auto flex items-center justify-between pt-1 text-[10px] text-[color:var(--muted-foreground)]">
+                     class="text-xs text-[color:var(--muted-foreground)] line-clamp-2">{{ tpl.description }}</div>
+                <div class="mt-auto flex items-center justify-between pt-1 text-xs text-[color:var(--muted-foreground)]">
                   <span v-if="tpl.ownerName" class="inline-flex items-center gap-0.5">
                     <User class="size-2.5" />
                     {{ tpl.ownerName }}
@@ -283,25 +283,26 @@ function previewUrl(w: WallSummary): string {
 </template>
 
 <style scoped>
+/* M24-B：M3 surface elevation——hover 不再用 box-shadow + translateY 营造浮动
+   AI 审美，而是改用 surface 色调加深（var(--accent) ≈ surface1）+ border 高亮。 */
 .hc-wall-card {
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--card);
     overflow: hidden;
-    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+    transition: background-color 140ms ease, border-color 140ms ease;
     display: flex;
     flex-direction: column;
 }
 .hc-wall-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px -4px rgba(0,0,0,0.18);
+    background: var(--accent);
     border-color: var(--ring);
 }
 .hc-wall-locked {
-    border-color: rgb(245 158 11 / 0.4);
+    border-color: color-mix(in srgb, var(--ctp-peach) 50%, var(--border));
 }
 .hc-wall-locked:hover {
-    box-shadow: 0 6px 16px -4px rgba(245, 158, 11, 0.25);
+    border-color: var(--ctp-peach);
 }
 /* 缩略图 */
 .hc-wall-thumb {

@@ -115,11 +115,11 @@ function onClose() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+  <div class="fixed inset-0 z-50 bg-[color:var(--ctp-crust)]/50 flex items-center justify-center p-4"
        @click.self="onClose">
-    <div class="bg-[color:var(--card)] text-[color:var(--foreground)] rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col border border-[color:var(--border)]">
+    <div class="bg-[color:var(--card)] text-[color:var(--foreground)] rounded-[var(--radius)] shadow-md max-w-2xl w-full max-h-[90vh] flex flex-col border border-[color:var(--border)]">
       <header class="flex items-center gap-2 px-4 h-11 border-b border-[color:var(--border)]">
-        <Bookmark class="size-4 text-amber-500" />
+        <Bookmark class="size-4 text-[color:var(--ctp-peach)]" />
         <h2 class="text-sm font-semibold">{{ t.workshop.saveTitle }}</h2>
         <button class="ml-auto p-1 rounded hover:bg-[color:var(--accent)]"
                 @click="onClose" :disabled="submitting">
@@ -131,19 +131,19 @@ function onClose() {
         <!-- 基本字段 -->
         <div class="space-y-2">
           <label class="block">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.slugLabel }}</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.slugLabel }}</span>
             <input type="text"
                    class="hc-input mt-0.5 font-mono"
                    :placeholder="t.workshop.slugPlaceholder"
                    v-model="slug"
                    @blur="validateSlugInput"
                    maxlength="32" />
-            <span v-if="slugError" class="text-[10px] text-red-500">{{ slugError }}</span>
-            <span v-else class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.slugHint }}</span>
+            <span v-if="slugError" class="text-xs text-[color:var(--destructive)]">{{ slugError }}</span>
+            <span v-else class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.slugHint }}</span>
           </label>
 
           <label class="block">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.displayNameLabel }}</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.displayNameLabel }}</span>
             <input type="text"
                    class="hc-input mt-0.5"
                    v-model="displayName"
@@ -151,7 +151,7 @@ function onClose() {
           </label>
 
           <label class="block">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.descriptionLabel }}</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.descriptionLabel }}</span>
             <textarea class="hc-input mt-0.5 min-h-[3em]"
                       v-model="description"
                       :placeholder="t.workshop.descriptionPlaceholder"
@@ -162,11 +162,11 @@ function onClose() {
         <!-- 参数列表 -->
         <section class="space-y-2">
           <div class="flex items-center gap-1.5">
-            <Sparkles class="size-3.5 text-blue-500" />
+            <Sparkles class="size-3.5 text-[color:var(--ctp-blue)]" />
             <span class="font-medium">{{ t.workshop.paramsHeader }}</span>
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">({{ paramRows.length }})</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">({{ paramRows.length }})</span>
           </div>
-          <p class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.paramsHint }}</p>
+          <p class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.paramsHint }}</p>
 
           <div v-if="paramRows.length === 0"
                class="p-3 rounded bg-[color:var(--muted)] text-[color:var(--muted-foreground)]">
@@ -177,33 +177,33 @@ function onClose() {
             <li v-for="row in paramRows" :key="row.autoId"
                 class="border border-[color:var(--border)] rounded p-2 space-y-1.5">
               <div class="flex items-center gap-2">
-                <span class="font-mono text-[10px] text-[color:var(--muted-foreground)]">{{ row.autoId }}</span>
+                <span class="font-mono text-xs text-[color:var(--muted-foreground)]">{{ row.autoId }}</span>
                 <span class="flex-1 truncate text-[color:var(--foreground)] italic">"{{ row.originalText }}"</span>
                 <label class="flex items-center gap-1 cursor-pointer">
                   <input type="checkbox" v-model="row.keep" />
-                  <span class="text-[10px]">{{ row.keep ? t.workshop.keep : t.workshop.drop }}</span>
+                  <span class="text-xs">{{ row.keep ? t.workshop.keep : t.workshop.drop }}</span>
                 </label>
               </div>
               <div v-if="row.keep" class="grid grid-cols-2 gap-2 pl-3">
                 <label class="block">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.paramNameLabel }}</span>
+                  <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.paramNameLabel }}</span>
                   <input type="text"
-                         class="hc-input mt-0.5 font-mono text-[10px]"
+                         class="hc-input mt-0.5 font-mono text-xs"
                          v-model="row.name"
                          maxlength="32"
                          pattern="^[a-z][a-z0-9_]{0,31}$" />
                 </label>
                 <label class="block">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.paramLabelLabel }}</span>
+                  <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.paramLabelLabel }}</span>
                   <input type="text"
-                         class="hc-input mt-0.5 text-[10px]"
+                         class="hc-input mt-0.5 text-xs"
                          v-model="row.label"
                          maxlength="64" />
                 </label>
                 <label class="col-span-2 block">
-                  <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.workshop.paramDescLabel }}</span>
+                  <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.paramDescLabel }}</span>
                   <input type="text"
-                         class="hc-input mt-0.5 text-[10px]"
+                         class="hc-input mt-0.5 text-xs"
                          v-model="row.description"
                          maxlength="128" />
                 </label>
@@ -214,11 +214,11 @@ function onClose() {
       </div>
 
       <footer class="px-4 py-3 border-t border-[color:var(--border)] flex items-center gap-2">
-        <span v-if="submitError" class="text-[10px] text-red-500 flex-1">{{ submitError }}</span>
+        <span v-if="submitError" class="text-xs text-[color:var(--destructive)] flex-1">{{ submitError }}</span>
         <span v-else class="flex-1"></span>
-        <button class="px-3 py-1.5 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+        <button class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
                 @click="onClose" :disabled="submitting">{{ t.workshop.cancel }}</button>
-        <button class="px-3 py-1.5 text-xs rounded bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+        <button class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                 @click="onSave"
                 :disabled="!formValid || submitting">
           <span v-if="submitting">{{ t.workshop.saving }}</span>

@@ -97,7 +97,7 @@ function onFillChange(v: Fill) {
         </label>
       </Tooltip>
 
-      <p class="text-[10px] text-[color:var(--muted-foreground)] pt-2 leading-relaxed">
+      <p class="text-xs text-[color:var(--muted-foreground)] pt-2 leading-relaxed">
         {{ t.brush.hint }}
       </p>
     </div>

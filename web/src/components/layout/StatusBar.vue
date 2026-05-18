@@ -14,10 +14,10 @@ const { t } = useI18n();
 
 const statusColor = computed(() => {
     switch (net.status) {
-        case 'ready': return 'text-emerald-500';
+        case 'ready': return 'text-[color:var(--ctp-green)]';
         case 'connecting':
-        case 'authenticating': return 'text-amber-500';
-        case 'error': return 'text-red-500';
+        case 'authenticating': return 'text-[color:var(--ctp-peach)]';
+        case 'error': return 'text-[color:var(--destructive)]';
         default: return 'text-[color:var(--muted-foreground)]';
     }
 });
@@ -40,7 +40,7 @@ const wallStateLabel = computed(() => {
 </script>
 
 <template>
-  <footer class="flex items-center justify-between h-6 px-3 text-[10px] bg-[color:var(--card)] border-t border-[color:var(--border)] text-[color:var(--muted-foreground)] select-none tabular-nums">
+  <footer class="flex items-center justify-between h-6 px-3 text-xs bg-[color:var(--card)] border-t border-[color:var(--border)] text-[color:var(--muted-foreground)] select-none tabular-nums">
     <div class="flex items-center gap-3">
       <Tooltip :text="statusLabel">
         <span class="flex items-center gap-1" :class="statusColor">
@@ -62,7 +62,7 @@ const wallStateLabel = computed(() => {
         {{ t.status.wall(net.wallSize.w, net.wallSize.h) }}
       </span>
       <Tooltip v-if="project.wallId" :text="t.status.wallStateTip">
-        <span class="flex items-center gap-1" :class="project.isLocked ? 'text-amber-500' : ''">
+        <span class="flex items-center gap-1" :class="project.isLocked ? 'text-[color:var(--ctp-peach)]' : ''">
           <Lock v-if="project.isLocked" class="size-3" />
           <Unlock v-else class="size-3" />
           {{ wallStateLabel }}

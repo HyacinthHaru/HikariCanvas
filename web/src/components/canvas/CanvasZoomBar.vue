@@ -43,7 +43,7 @@ function cancelZoomEdit() {
 </script>
 
 <template>
-  <div class="sticky bottom-3 float-right mr-3 flex items-center gap-1 bg-[color:var(--card)] border border-[color:var(--border)] rounded-lg p-1 shadow-sm text-[color:var(--foreground)]">
+  <div class="sticky bottom-3 float-right mr-3 flex items-center gap-1 bg-[color:var(--card)] border border-[color:var(--border)] rounded-[var(--radius)] p-1 shadow-sm text-[color:var(--foreground)]">
     <Tooltip :text="t.image.uploadTip">
       <button
         class="p-1.5 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
@@ -91,7 +91,7 @@ function cancelZoomEdit() {
       <button
         v-for="p in ZOOM_PRESETS"
         :key="p"
-        class="px-1.5 py-0.5 text-[10px] tabular-nums rounded transition-colors"
+        class="px-1.5 py-0.5 text-xs tabular-nums rounded transition-colors"
         :class="Math.abs(ui.zoom - p) < 0.01
           ? 'bg-[color:var(--accent)] text-[color:var(--accent-foreground)]'
           : 'hover:bg-[color:var(--accent)] text-[color:var(--muted-foreground)]'"
@@ -109,12 +109,12 @@ function cancelZoomEdit() {
         <RotateCcw class="size-4" />
       </button>
     </Tooltip>
-    <span class="pl-2 pr-1 border-l border-[color:var(--border)] ml-1 text-[10px] text-[color:var(--muted-foreground)]">
+    <span class="pl-2 pr-1 border-l border-[color:var(--border)] ml-1 text-xs text-[color:var(--muted-foreground)]">
       {{ props.sizeLabel }}
     </span>
     <Tooltip :text="t.canvas.gridTip">
       <label class="flex items-center gap-1 pl-2 border-l border-[color:var(--border)] ml-1">
-        <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.canvas.grid }}</span>
+        <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.canvas.grid }}</span>
         <input
           type="number"
           min="0"

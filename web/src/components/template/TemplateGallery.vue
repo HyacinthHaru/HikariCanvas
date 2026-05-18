@@ -206,15 +206,15 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
 <template>
   <div
     v-if="templates.galleryOpen"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-[color:var(--ctp-crust)]/50"
     @click.self="close"
   >
-    <div class="bg-[color:var(--card)] text-[color:var(--foreground)] rounded-lg shadow-2xl w-[min(900px,95vw)] h-[min(640px,90vh)] flex flex-col border border-[color:var(--border)]">
+    <div class="bg-[color:var(--card)] text-[color:var(--foreground)] rounded-[var(--radius)] shadow-md w-[min(900px,95vw)] h-[min(640px,90vh)] flex flex-col border border-[color:var(--border)]">
       <!-- header -->
       <header class="flex items-center px-4 h-10 border-b border-[color:var(--border)] gap-2">
         <Sparkles class="size-4" />
         <h2 class="text-sm font-medium">{{ t.templates.header }}</h2>
-        <span class="text-[10px] text-[color:var(--muted-foreground)] ml-2">
+        <span class="text-xs text-[color:var(--muted-foreground)] ml-2">
           {{ t.templates.count(templates.list.length) }}
         </span>
         <button
@@ -245,10 +245,10 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                   :title="t.templates.incompatibleHint"
                 />
               </div>
-              <div v-if="tpl.description" class="text-[11px] text-[color:var(--muted-foreground)] line-clamp-2 mt-0.5">
+              <div v-if="tpl.description" class="text-xs text-[color:var(--muted-foreground)] line-clamp-2 mt-0.5">
                 {{ tpl.description }}
               </div>
-              <div class="flex items-center gap-1.5 mt-1 text-[10px] text-[color:var(--muted-foreground)] tabular-nums">
+              <div class="flex items-center gap-1.5 mt-1 text-xs text-[color:var(--muted-foreground)] tabular-nums">
                 <span>{{ t.templates.sizeLabel }}: {{ formatRange(sizeRange(tpl)) }}</span>
                 <span v-if="!fitsCurrentWall(tpl)" class="text-[color:var(--destructive)] font-medium">
                   {{ t.templates.incompatible }}
@@ -258,7 +258,7 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                 <span
                   v-for="tag in tpl.tags"
                   :key="tag"
-                  class="text-[9px] px-1.5 py-0.5 rounded bg-[color:var(--background)] text-[color:var(--muted-foreground)] uppercase tracking-wider"
+                  class="text-xs px-1.5 py-0.5 rounded bg-[color:var(--background)] text-[color:var(--muted-foreground)] uppercase tracking-wider"
                 >{{ tag }}</span>
               </div>
             </li>
@@ -277,12 +277,12 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
             <header class="px-4 py-3 border-b border-[color:var(--border)] flex items-center gap-3">
               <div class="min-w-0">
                 <div class="text-base font-medium truncate">{{ selected.name }}</div>
-                <div class="text-[11px] text-[color:var(--muted-foreground)] truncate">
+                <div class="text-xs text-[color:var(--muted-foreground)] truncate">
                   {{ t.templates.idLabel }}: <span class="font-mono">{{ selected.id }}</span>
                   <span v-if="selected.author"> · {{ selected.author }}</span>
                   <span v-if="selected.version"> · v{{ selected.version }}</span>
                 </div>
-                <div class="text-[11px] mt-0.5 flex items-center gap-2 tabular-nums">
+                <div class="text-xs mt-0.5 flex items-center gap-2 tabular-nums">
                   <span class="text-[color:var(--muted-foreground)]">
                     {{ t.templates.sizeLabel }}: {{ formatRange(sizeRange(selected)) }}
                   </span>
@@ -294,14 +294,14 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                   </span>
                   <span
                     v-if="!fitsCurrentWall(selected)"
-                    class="px-1.5 py-0.5 rounded bg-[color:var(--destructive)] text-[color:var(--destructive-foreground)] text-[10px] font-medium uppercase tracking-wider"
+                    class="px-1.5 py-0.5 rounded bg-[color:var(--destructive)] text-[color:var(--destructive-foreground)] text-xs font-medium uppercase tracking-wider"
                   >
                     {{ t.templates.incompatible }}
                   </span>
                 </div>
               </div>
               <button
-                class="ml-auto text-[11px] px-2 py-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center gap-1"
+                class="ml-auto text-xs px-2 py-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center gap-1"
                 :title="t.templates.resetParams"
                 @click="resetParams"
               >
@@ -325,7 +325,7 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
               >
                 <header
                   v-if="group.name"
-                  class="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[color:var(--muted-foreground)] font-medium cursor-pointer hover:text-[color:var(--foreground)] transition-colors select-none"
+                  class="flex items-center gap-1.5 text-xs uppercase tracking-wider text-[color:var(--muted-foreground)] font-medium cursor-pointer hover:text-[color:var(--foreground)] transition-colors select-none"
                   @click="toggleGroup(group.name)"
                 >
                   <span class="opacity-60">{{ isCollapsed(group.name) ? '▸' : '▾' }}</span>
@@ -341,7 +341,7 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                 <span class="text-xs text-[color:var(--muted-foreground)] flex items-center gap-1.5">
                   {{ p.label ?? key }}
                   <span v-if="p.required" class="text-[color:var(--destructive)]">*</span>
-                  <span v-if="p.description" class="text-[10px] opacity-70">— {{ p.description }}</span>
+                  <span v-if="p.description" class="text-xs opacity-70">— {{ p.description }}</span>
                 </span>
 
                 <!-- string -->
@@ -445,15 +445,15 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
             <footer class="border-t border-[color:var(--border)] p-3 flex items-center gap-2">
               <div
                 v-if="lastError"
-                class="text-[11px] text-[color:var(--destructive)] flex-1 flex items-start gap-1.5"
+                class="text-xs text-[color:var(--destructive)] flex-1 flex items-start gap-1.5"
               >
                 <AlertTriangle class="size-3.5 shrink-0 mt-0.5" />
                 <span class="break-words">{{ lastError }}</span>
               </div>
-              <div v-else-if="confirmStage === 'pending'" class="text-[11px] text-[color:var(--destructive)] flex-1">
+              <div v-else-if="confirmStage === 'pending'" class="text-xs text-[color:var(--destructive)] flex-1">
                 {{ t.templates.overwriteWarning }}
               </div>
-              <div v-else-if="!fitsCurrentWall(selected)" class="text-[11px] text-[color:var(--destructive)] flex-1 flex items-start gap-1.5">
+              <div v-else-if="!fitsCurrentWall(selected)" class="text-xs text-[color:var(--destructive)] flex-1 flex items-start gap-1.5">
                 <AlertTriangle class="size-3.5 shrink-0 mt-0.5" />
                 <span>{{ t.templates.wallMismatchHint(formatRange(sizeRange(selected))) }}</span>
               </div>

@@ -49,7 +49,7 @@ const hasAlpha = computed(() => {
 
 <template>
   <section v-if="project.state" class="border-t border-[color:var(--border)] mt-2 pt-2">
-    <header class="flex items-center gap-2 px-3 h-8 text-[10px] font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
+    <header class="flex items-center gap-2 px-3 h-8 text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
       <Settings class="size-3" />
       <span>{{ t.canvas.settings }}</span>
     </header>

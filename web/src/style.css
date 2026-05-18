@@ -10,57 +10,198 @@
  */
 
 /*
- * M5-A 深色主题 + shadcn-vue 设计 token。
- * shadcn-vue 约定：CSS 变量作 HSL 三元组，Tailwind 4 用 theme(...) 引用。
- * 这里先定义一套「Linear/Figma 式」的深灰主题 + 对应浅色。
+ * ============================================================================
+ * M24-B 设计系统大整修（2026-05-18）
+ *
+ * 主题色板：Catppuccin（catppuccin.com）—— 不要 Mocha（大黑紫），用 Latte 浅色
+ * + Frappé 中等深色（深灰偏紫但暖）作为默认；提供 Macchiato（深色）选项。
+ * 绝对避免大灰黑 / 大黑紫。
+ *
+ * 风格：Material Design 3 扁平化 —— surface tones / elevation tokens（用 surface
+ * 色调做层级而不是 box-shadow）/ 大圆角 / 强调色 + surface 配比 / 高对比度文字 /
+ * 单一 accent 点缀。
+ *
+ * 实现方式：
+ *   1. `:root` / `.dark` 走 shadcn-vue 兼容 token，但底层全部映射到 Catppuccin
+ *      flavor 变量 `--ctp-*`；
+ *   2. `<html>` 上的 `theme-latte` / `theme-frappe` / `theme-macchiato` class 切换
+ *      flavor（默认 Latte，`.dark` 同时挂 `theme-frappe` 是兼容旧 toggleTheme 路径）；
+ *   3. `[data-accent]` / `[data-radius]` 属性在 `<html>` 上切换强调色 + 圆角刻度。
+ *
+ * shadcn-vue 组件代码不动 —— 所有 `var(--background)` / `var(--primary)` 等仍生效。
+ * ============================================================================
  */
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-:root {
-    --background: hsl(0 0% 100%);
-    --foreground: hsl(240 10% 3.9%);
-    --card: hsl(0 0% 100%);
-    --card-foreground: hsl(240 10% 3.9%);
-    --popover: hsl(0 0% 100%);
-    --popover-foreground: hsl(240 10% 3.9%);
-    --primary: hsl(240 5.9% 10%);
-    --primary-foreground: hsl(0 0% 98%);
-    --secondary: hsl(240 4.8% 95.9%);
-    --secondary-foreground: hsl(240 5.9% 10%);
-    --muted: hsl(240 4.8% 95.9%);
-    --muted-foreground: hsl(240 3.8% 46.1%);
-    --accent: hsl(240 4.8% 95.9%);
-    --accent-foreground: hsl(240 5.9% 10%);
-    --destructive: hsl(0 84.2% 60.2%);
-    --destructive-foreground: hsl(0 0% 98%);
-    --border: hsl(240 5.9% 90%);
-    --input: hsl(240 5.9% 90%);
-    --ring: hsl(240 5.9% 10%);
-    --radius: 0.5rem;
+/* ---------- Catppuccin Latte（浅色温暖，默认）---------- */
+
+:root,
+.theme-latte {
+    /* Catppuccin Latte 官方 spec */
+    --ctp-rosewater: hsl(11 59% 67%);
+    --ctp-flamingo: hsl(0 60% 67%);
+    --ctp-pink: hsl(316 73% 69%);
+    --ctp-mauve: hsl(266 85% 58%);
+    --ctp-red: hsl(347 87% 44%);
+    --ctp-maroon: hsl(355 76% 59%);
+    --ctp-peach: hsl(22 99% 52%);
+    --ctp-yellow: hsl(35 77% 49%);
+    --ctp-green: hsl(109 58% 40%);
+    --ctp-teal: hsl(183 74% 35%);
+    --ctp-sky: hsl(197 97% 46%);
+    --ctp-sapphire: hsl(189 70% 42%);
+    --ctp-blue: hsl(220 91% 54%);
+    --ctp-lavender: hsl(231 97% 72%);
+
+    --ctp-text: hsl(234 16% 35%);
+    --ctp-subtext1: hsl(233 13% 41%);
+    --ctp-subtext0: hsl(233 10% 47%);
+    --ctp-overlay2: hsl(232 10% 53%);
+    --ctp-overlay1: hsl(231 10% 59%);
+    --ctp-overlay0: hsl(228 11% 65%);
+    --ctp-surface2: hsl(227 12% 71%);
+    --ctp-surface1: hsl(225 14% 77%);
+    --ctp-surface0: hsl(223 16% 83%);
+    --ctp-base: hsl(220 23% 95%);
+    --ctp-mantle: hsl(220 22% 92%);
+    --ctp-crust: hsl(220 21% 89%);
 }
 
-.dark {
-    --background: hsl(240 10% 3.9%);
-    --foreground: hsl(0 0% 98%);
-    --card: hsl(240 8% 6%);
-    --card-foreground: hsl(0 0% 98%);
-    --popover: hsl(240 10% 3.9%);
-    --popover-foreground: hsl(0 0% 98%);
-    --primary: hsl(0 0% 98%);
-    --primary-foreground: hsl(240 5.9% 10%);
-    --secondary: hsl(240 3.7% 15.9%);
-    --secondary-foreground: hsl(0 0% 98%);
-    --muted: hsl(240 3.7% 15.9%);
-    --muted-foreground: hsl(240 5% 64.9%);
-    --accent: hsl(240 3.7% 15.9%);
-    --accent-foreground: hsl(0 0% 98%);
-    --destructive: hsl(0 62.8% 30.6%);
-    --destructive-foreground: hsl(0 0% 98%);
-    --border: hsl(240 3.7% 15.9%);
-    --input: hsl(240 3.7% 15.9%);
-    --ring: hsl(240 4.9% 83.9%);
+/* ---------- Catppuccin Frappé（中等深色，紫灰但暖；默认 dark）---------- */
+
+.dark,
+.theme-frappe {
+    --ctp-rosewater: hsl(10 57% 88%);
+    --ctp-flamingo: hsl(0 59% 84%);
+    --ctp-pink: hsl(316 73% 84%);
+    --ctp-mauve: hsl(277 59% 76%);
+    --ctp-red: hsl(359 68% 71%);
+    --ctp-maroon: hsl(358 66% 76%);
+    --ctp-peach: hsl(20 79% 70%);
+    --ctp-yellow: hsl(40 62% 73%);
+    --ctp-green: hsl(96 44% 68%);
+    --ctp-teal: hsl(172 39% 65%);
+    --ctp-sky: hsl(189 48% 73%);
+    --ctp-sapphire: hsl(199 55% 69%);
+    --ctp-blue: hsl(222 74% 74%);
+    --ctp-lavender: hsl(239 66% 84%);
+
+    --ctp-text: hsl(227 70% 87%);
+    --ctp-subtext1: hsl(227 44% 80%);
+    --ctp-subtext0: hsl(228 29% 73%);
+    --ctp-overlay2: hsl(228 22% 66%);
+    --ctp-overlay1: hsl(227 17% 58%);
+    --ctp-overlay0: hsl(229 13% 52%);
+    --ctp-surface2: hsl(228 13% 44%);
+    --ctp-surface1: hsl(227 15% 37%);
+    --ctp-surface0: hsl(230 16% 30%);
+    --ctp-base: hsl(229 19% 23%);
+    --ctp-mantle: hsl(231 19% 20%);
+    --ctp-crust: hsl(229 20% 17%);
 }
+
+/* ---------- Catppuccin Macchiato（深色低饱和，可选）---------- */
+
+.theme-macchiato {
+    --ctp-rosewater: hsl(10 58% 90%);
+    --ctp-flamingo: hsl(0 58% 86%);
+    --ctp-pink: hsl(316 74% 85%);
+    --ctp-mauve: hsl(267 83% 80%);
+    --ctp-red: hsl(351 74% 73%);
+    --ctp-maroon: hsl(355 71% 77%);
+    --ctp-peach: hsl(21 86% 73%);
+    --ctp-yellow: hsl(40 70% 78%);
+    --ctp-green: hsl(105 48% 72%);
+    --ctp-teal: hsl(171 47% 69%);
+    --ctp-sky: hsl(189 59% 73%);
+    --ctp-sapphire: hsl(199 66% 69%);
+    --ctp-blue: hsl(220 83% 75%);
+    --ctp-lavender: hsl(232 97% 85%);
+
+    --ctp-text: hsl(227 68% 88%);
+    --ctp-subtext1: hsl(228 39% 80%);
+    --ctp-subtext0: hsl(227 27% 72%);
+    --ctp-overlay2: hsl(228 20% 65%);
+    --ctp-overlay1: hsl(228 15% 57%);
+    --ctp-overlay0: hsl(230 12% 49%);
+    --ctp-surface2: hsl(230 14% 41%);
+    --ctp-surface1: hsl(231 16% 34%);
+    --ctp-surface0: hsl(230 19% 26%);
+    --ctp-base: hsl(232 23% 18%);
+    --ctp-mantle: hsl(233 23% 15%);
+    --ctp-crust: hsl(232 23% 12%);
+}
+
+/* ---------- shadcn-vue 兼容 token，全部映射到 Catppuccin ---------- */
+
+:root {
+    --background: var(--ctp-base);
+    --foreground: var(--ctp-text);
+    --card: var(--ctp-mantle);
+    --card-foreground: var(--ctp-text);
+    --popover: var(--ctp-mantle);
+    --popover-foreground: var(--ctp-text);
+
+    /* primary 默认 = mauve（温暖紫粉，不是大黑紫）。data-accent 可改 */
+    --primary: var(--ctp-mauve);
+    --primary-foreground: var(--ctp-base);
+
+    --secondary: var(--ctp-surface0);
+    --secondary-foreground: var(--ctp-text);
+    --muted: var(--ctp-surface0);
+    --muted-foreground: var(--ctp-subtext0);
+    --accent: var(--ctp-surface1);
+    --accent-foreground: var(--ctp-text);
+    --destructive: var(--ctp-red);
+    --destructive-foreground: var(--ctp-base);
+    --border: var(--ctp-surface0);
+    --input: var(--ctp-surface0);
+    --ring: var(--ctp-mauve);
+
+    /* ---------- M3 设计 tokens ---------- */
+
+    /* M3 elevation：用 surface tones 而不是 box-shadow */
+    --elevation-0: var(--ctp-base);
+    --elevation-1: var(--ctp-mantle);
+    --elevation-2: var(--ctp-crust);
+    --elevation-3: var(--ctp-surface0);
+
+    /* M3 radius scale */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 24px;
+    --radius-full: 9999px;
+
+    /* 默认 radius（[data-radius] 可改） */
+    --radius: 12px;
+
+    /* 兼容旧 shadcn 引用 */
+    --radius-lg-shadcn: var(--radius);
+}
+
+/* ---------- accent 切换（data-accent on <html>）---------- */
+
+[data-accent="mauve"]  { --primary: var(--ctp-mauve);  --ring: var(--ctp-mauve);  }
+[data-accent="blue"]   { --primary: var(--ctp-blue);   --ring: var(--ctp-blue);   }
+[data-accent="teal"]   { --primary: var(--ctp-teal);   --ring: var(--ctp-teal);   }
+[data-accent="green"]  { --primary: var(--ctp-green);  --ring: var(--ctp-green);  }
+[data-accent="peach"]  { --primary: var(--ctp-peach);  --ring: var(--ctp-peach);  }
+[data-accent="pink"]   { --primary: var(--ctp-pink);   --ring: var(--ctp-pink);   }
+[data-accent="lavender"] { --primary: var(--ctp-lavender); --ring: var(--ctp-lavender); }
+[data-accent="sapphire"] { --primary: var(--ctp-sapphire); --ring: var(--ctp-sapphire); }
+
+/* ---------- radius 切换（data-radius on <html>）---------- */
+
+[data-radius="sm"]   { --radius: 6px;  }
+[data-radius="md"]   { --radius: 12px; }
+[data-radius="lg"]   { --radius: 16px; }
+[data-radius="xl"]   { --radius: 24px; }
+[data-radius="full"] { --radius: 9999px; }
+
+/* ---------- Tailwind 4 @theme（让 bg-primary / rounded-md 之类直接生效） ---------- */
 
 @theme inline {
     --color-background: var(--background);
@@ -87,7 +228,8 @@
     --radius-sm: calc(var(--radius) - 4px);
 }
 
-/* 全局 reset */
+/* ---------- 全局 reset ---------- */
+
 html, body, #app {
     height: 100%;
     margin: 0;
@@ -107,6 +249,37 @@ body {
 button {
     font: inherit;
     color: inherit;
+}
+
+/* ---------- M3 通用微动效：button 按下回弹 ---------- */
+
+/* 不污染所有 button（input range / color picker 也是 button），靠 hc-btn 类按需挂 */
+.hc-btn {
+    transition: background-color 120ms ease, color 120ms ease, transform 80ms ease, box-shadow 120ms ease;
+}
+.hc-btn:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+/* focus ring：用 accent ring 提示而不是浏览器默认蓝色 outline */
+.hc-focus,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ring) 70%, transparent);
+    outline-offset: 1px;
+}
+
+/* alpha 棋盘格背景（FillInput 等用） */
+.hc-alpha-checkerboard {
+    background-image:
+        linear-gradient(45deg, var(--ctp-surface2) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--ctp-surface2) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--ctp-surface2) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--ctp-surface2) 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
 
 /* 画布专用：关字体渲染抗锯齿以匹配后端 Graphics2D / rendering.md §4 */

@@ -10,15 +10,15 @@ const ui = useUiStore();
 <template>
   <div
     v-if="ui.helpOpen"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-[color:var(--ctp-crust)]/70"
     @click.self="ui.helpOpen = false"
   >
-    <div class="bg-[color:var(--card)] text-[color:var(--foreground)] rounded-lg shadow-2xl w-[min(640px,92vw)] max-h-[88vh] flex flex-col border border-[color:var(--border)]">
-      <header class="flex items-center px-4 h-10 border-b border-[color:var(--border)] gap-2">
+    <div class="bg-[color:var(--card)] text-[color:var(--foreground)] rounded-[var(--radius)] w-[min(640px,92vw)] max-h-[88vh] flex flex-col border border-[color:var(--border)]">
+      <header class="flex items-center px-4 h-11 border-b border-[color:var(--border)] gap-2">
         <Keyboard class="size-4" />
         <h2 class="text-sm font-medium">{{ t.help.header }}</h2>
         <button
-          class="ml-auto p-1 rounded hover:bg-[color:var(--accent)]"
+          class="hc-btn ml-auto p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)]"
           @click="ui.helpOpen = false"
         >
           <X class="size-4" />
@@ -28,7 +28,7 @@ const ui = useUiStore();
       <div class="overflow-y-auto p-5 space-y-5 text-xs">
         <!-- 工具切换 -->
         <section>
-          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2 flex items-center gap-1.5">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2 flex items-center gap-1.5">
             <MousePointer2 class="size-3.5" />
             {{ t.help.groupTools }}
           </h3>
@@ -78,7 +78,7 @@ const ui = useUiStore();
 
         <!-- 选择 / 编辑 -->
         <section>
-          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2 flex items-center gap-1.5">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2 flex items-center gap-1.5">
             <Layers class="size-3.5" />
             {{ t.help.groupEdit }}
           </h3>
@@ -124,7 +124,7 @@ const ui = useUiStore();
 
         <!-- 缩放 / 视图 -->
         <section>
-          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2 flex items-center gap-1.5">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2 flex items-center gap-1.5">
             <ZoomIn class="size-3.5" />
             {{ t.help.groupView }}
           </h3>
@@ -154,10 +154,10 @@ const ui = useUiStore();
 
         <!-- 游戏命令小提示 -->
         <section>
-          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2">
             {{ t.help.groupInGame }}
           </h3>
-          <ul class="space-y-1.5 text-[11px] text-[color:var(--muted-foreground)] font-mono">
+          <ul class="space-y-1.5 text-xs text-[color:var(--muted-foreground)] font-mono">
             <li>{{ t.help.cmdEdit }}</li>
             <li>{{ t.help.cmdOpen }}</li>
             <li>{{ t.help.cmdList }}</li>
@@ -173,7 +173,7 @@ const ui = useUiStore();
 .hc-kbd-help {
     padding: 2px 7px;
     border-radius: 4px;
-    background: var(--background);
+    background: var(--ctp-surface0);
     color: var(--foreground);
     border: 1px solid var(--border);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

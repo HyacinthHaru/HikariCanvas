@@ -103,19 +103,20 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* M24-B：用 Catppuccin surface tones 做 tooltip，避免硬编码 #18181b / #1f2937。
+   两个 flavor（latte 浅 + frappe/macchiato 深）通过 CSS 变量自适应。 */
 .hc-tooltip {
     position: fixed;
     z-index: 100;
     pointer-events: none;
     transform: translateX(-50%);
-    padding: 0.3rem 0.55rem;
+    padding: 0.35rem 0.6rem;
     font-size: 11px;
     line-height: 1.3;
-    border-radius: 6px;
-    background: var(--popover, #18181b);
-    color: var(--popover-foreground, #fafafa);
-    border: 1px solid var(--border, #27272a);
-    box-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.35);
+    border-radius: var(--radius-sm);
+    background: var(--ctp-surface0);
+    color: var(--foreground);
+    border: 1px solid var(--ctp-surface1);
     white-space: nowrap;
     max-width: 280px;
     display: inline-flex;
@@ -125,19 +126,10 @@ onUnmounted(() => {
 .hc-kbd {
     padding: 1px 5px;
     border-radius: 3px;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: var(--ctp-surface1);
+    border: 1px solid var(--ctp-surface2);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 9.5px;
-    color: var(--popover-foreground, #fafafa);
-}
-:global(html:not(.dark)) .hc-tooltip {
-    background: #1f2937;
-    color: #fafafa;
-    border-color: #1f2937;
-}
-:global(html:not(.dark)) .hc-kbd {
-    background: rgba(255, 255, 255, 0.14);
-    border-color: rgba(255, 255, 255, 0.22);
+    color: var(--foreground);
 }
 </style>

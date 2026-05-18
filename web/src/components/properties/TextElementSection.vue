@@ -159,12 +159,12 @@ function patchGlow(partial: Partial<Glow>) {
 <template>
   <!-- Text 主段 -->
   <details class="group" open>
-    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
+    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-xs py-1 hover:text-[color:var(--foreground)]">
       {{ t.properties.textHeader }}
     </summary>
     <div class="pt-1.5 space-y-2">
       <label class="flex flex-col gap-0.5">
-        <span class="text-[10px] text-[color:var(--muted-foreground)]">text</span>
+        <span class="text-xs text-[color:var(--muted-foreground)]">text</span>
         <textarea rows="2" class="hc-input font-mono resize-none" :value="element.text"
                   @input="(e) => onTextChange('text', e)"></textarea>
       </label>
@@ -173,7 +173,7 @@ function patchGlow(partial: Partial<Glow>) {
         <Tooltip :text="t.properties.fitHeightTip">
           <button
             type="button"
-            class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
+            class="flex-1 px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
             @click="fitTextHeight"
           >
             <Maximize2 class="size-3 rotate-90" />
@@ -183,7 +183,7 @@ function patchGlow(partial: Partial<Glow>) {
         <Tooltip :text="t.properties.fitWidthTip">
           <button
             type="button"
-            class="flex-1 px-2 py-1 text-[11px] rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
+            class="flex-1 px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] flex items-center justify-center gap-1"
             @click="fitTextWidth"
           >
             <Maximize2 class="size-3" />
@@ -193,7 +193,7 @@ function patchGlow(partial: Partial<Glow>) {
       </div>
       <div class="grid grid-cols-2 gap-2">
         <label class="flex flex-col gap-0.5">
-          <span class="text-[10px] text-[color:var(--muted-foreground)]">fontId</span>
+          <span class="text-xs text-[color:var(--muted-foreground)]">fontId</span>
           <select class="hc-input" :value="element.fontId" @change="onFontIdChange">
             <optgroup label="内置字体">
               <option v-for="f in builtInFonts" :key="f.id" :value="f.id">{{ f.displayName }}</option>
@@ -204,12 +204,12 @@ function patchGlow(partial: Partial<Glow>) {
           </select>
         </label>
         <label class="flex flex-col gap-0.5">
-          <span class="text-[10px] text-[color:var(--muted-foreground)]">fontSize</span>
+          <span class="text-xs text-[color:var(--muted-foreground)]">fontSize</span>
           <input type="number" min="1" class="hc-input" :value="element.fontSize"
                  @input="(e) => onNumberChange('fontSize', e)">
         </label>
         <label class="flex flex-col gap-0.5">
-          <span class="text-[10px] text-[color:var(--muted-foreground)]">align</span>
+          <span class="text-xs text-[color:var(--muted-foreground)]">align</span>
           <select class="hc-input" :value="element.align" @change="(e) => onSelectChange('align', e)">
             <option value="left">left</option>
             <option value="center">center</option>
@@ -217,7 +217,7 @@ function patchGlow(partial: Partial<Glow>) {
           </select>
         </label>
         <label class="flex flex-col gap-0.5">
-          <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
+          <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
           <ColorInput :model-value="element.color"
                       @update:model-value="(v) => emit('update', { color: v })" />
         </label>
@@ -252,7 +252,7 @@ function patchGlow(partial: Partial<Glow>) {
 
   <!-- Effects 段（stroke / shadow / glow） -->
   <details class="group">
-    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-[10px] py-1 hover:text-[color:var(--foreground)]">
+    <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-xs py-1 hover:text-[color:var(--foreground)]">
       {{ t.properties.effectsHeader }}
     </summary>
     <div class="pt-1.5 space-y-3">
@@ -264,12 +264,12 @@ function patchGlow(partial: Partial<Glow>) {
         </label>
         <div v-if="textEffects().stroke" class="grid grid-cols-2 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">width</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">width</span>
             <input type="number" min="0" class="hc-input" :value="textEffects().stroke!.width"
                    @input="(e) => patchStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
             <ColorInput :model-value="textEffects().stroke!.color"
                         @update:model-value="(v) => patchStroke({ color: v })" />
           </label>
@@ -283,17 +283,17 @@ function patchGlow(partial: Partial<Glow>) {
         </label>
         <div v-if="textEffects().shadow" class="grid grid-cols-3 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">dx</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">dx</span>
             <input type="number" class="hc-input" :value="textEffects().shadow!.dx"
                    @input="(e) => patchShadow({ dx: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">dy</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">dy</span>
             <input type="number" class="hc-input" :value="textEffects().shadow!.dy"
                    @input="(e) => patchShadow({ dy: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
             <ColorInput :model-value="textEffects().shadow!.color"
                         @update:model-value="(v) => patchShadow({ color: v })" />
           </label>
@@ -307,12 +307,12 @@ function patchGlow(partial: Partial<Glow>) {
         </label>
         <div v-if="textEffects().glow" class="grid grid-cols-2 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">radius</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">radius</span>
             <input type="number" min="0" max="64" class="hc-input" :value="textEffects().glow!.radius"
                    @input="(e) => patchGlow({ radius: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-[10px] text-[color:var(--muted-foreground)]">color</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
             <ColorInput :model-value="textEffects().glow!.color"
                         @update:model-value="(v) => patchGlow({ color: v })" />
           </label>

@@ -305,11 +305,12 @@ function toggle() {
     white-space: nowrap;
 }
 
-/* 棋盘格背景，alpha 透明时露出 */
+/* M24-B：棋盘格背景从硬编码 #ccc 改为 Catppuccin surface2（在 Latte / Frappé / Macchiato
+   三个 flavor 下都能与背景区分；alpha 透明时露出）。 */
 .hc-checkerboard {
     background-image:
-        linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%),
-        linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%);
+        linear-gradient(45deg, var(--ctp-surface2) 25%, transparent 25%, transparent 75%, var(--ctp-surface2) 75%),
+        linear-gradient(45deg, var(--ctp-surface2) 25%, transparent 25%, transparent 75%, var(--ctp-surface2) 75%);
     background-size: 8px 8px;
     background-position: 0 0, 4px 4px;
 }
@@ -337,15 +338,14 @@ function toggle() {
     right: 0;
     z-index: 50;
     max-width: 260px;
-    padding: 8px;
-    border-radius: 6px;
+    padding: 10px;
+    border-radius: var(--radius);
     background: var(--card);
     color: var(--foreground);
     border: 1px solid var(--border);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
 }
 
 .hc-pp-section { display: flex; flex-direction: column; gap: 4px; }
@@ -406,17 +406,19 @@ function toggle() {
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: white;
-    border: 1px solid var(--ring);
+    background: var(--foreground);
+    border: 2px solid var(--card);
     cursor: ew-resize;
+    box-shadow: 0 0 0 1px var(--border);
 }
 .hc-alpha-input::-moz-range-thumb {
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: white;
-    border: 1px solid var(--ring);
+    background: var(--foreground);
+    border: 2px solid var(--card);
     cursor: ew-resize;
+    box-shadow: 0 0 0 1px var(--border);
 }
 
 .hc-hex-row { display: flex; gap: 4px; align-items: stretch; }
