@@ -32,6 +32,59 @@
 
 ---
 
+## 2026-05-18 · M26-C PathParser 扩展 H/V/A/S/T（FA icon MC 渲染根因）
+
+### 用户报告 + 根因
+
+M26-B 修了 icon add bug 后，前端拖入显示正常，但**游戏内 MC 渲染为"杂乱无章像素"**。
+
+**根因诊断**：`PathParser.java` 注释明确只支持 **M/L/Q/C/Z**（M9 PathElement 子集 + DoS 防御）。FA SVG 大量用：
+- `fa-solid/circle`: `M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z` —— **全靠 A（arc）画圆**
+- `fa-solid/heart` / `star` 等：**S/s** smooth cubic shortcut
+- `gear` 等：**A** + **s**
+
+未支持命令静默跳过 → 后端 path 残缺 → MC 渲染"杂乱像素"。前端用浏览器 `new Path2D(d)` 原生支持完整 SVG 命令——所以前端 OK 后端崩。
+
+### 扩展实装
+
+**H/h** 水平 lineto（1 参）/ **V/v** 垂直 lineto（1 参）：直接 `path.lineTo`。
+
+**S/s** smooth cubic（4 参，缺 c1）：反射前 c2——`c1 = cur*2 - prevC2`；前非 C/S 时 `c1 = cur`。新状态 `prevC2X/Y + prevWasCubic`。
+
+**T/t** smooth quadratic（2 参，缺 cp）：反射前 Q/T cp 同款。新状态 `prevQcX/Y + prevWasQuad`。
+
+**M/L/H/V/A/Z** 清除 cubic / quad 标记。
+
+**A/a 椭圆弧（最难，7 参 `rx ry rotation large-arc sweep x y`）**：
+- W3C SVG 1.1 §F.6 / B.2.4 标准 endpoint→center 算法
+- 切 ≤π/2 弧度段 → 每段 cubic bezier 近似
+- 公式：`α = sin(θ) × (√(4+3tan²(θ/2)) - 1) / 3` 控制点距离系数
+- 起/末段切线沿 path 走向（含 sweep 翻向）输出给 marker
+- flag 参数支持单字符无分隔（`A 50 50 0 01 100 0`）
+- 半径校正 / x-axis-rotation 全套
+- 退化处理：rx==0 或 ry==0 走 lineTo
+
+### PathDValidator 保持不变
+
+M9 PathElement 用户输入仍走 M/L/Q/C/Z 严格 validator（DoS 防御）。**FA icon path 不经过 validator**（IconRegistry 直接喂 PathParser），构建期受信。
+
+### 测试
+
+新 **19 case**（H/V 各 3、S 4、T 2、A 7 含 FA circle/heart/star 实测）；PathParserTest **41 总过**。
+
+- FA `circle` parse → **bbox (0,0)-(512,512) 圆形正确** ←（这就是"杂乱像素"根因，之前 A 静默跳过 → 残缺路径）
+- FA `heart` 含 L/C/c/v/s/z parse → 宽 > 400 OK
+- FA `star` 含 C/c/s/l parse → 宽 > 500 OK
+
+`:plugin:test --rerun-tasks` 0 fail / 0 error / **14 baseline fixture 0 漂移**。
+
+### 关联文件
+
+`plugin/src/main/java/moe/hikari/canvas/render/PathParser.java`（+ ~250 行：H/V/S/T case + arcToBezier helper + flag scanner）
+`plugin/src/test/java/moe/hikari/canvas/render/PathParserTest.java`（+19 case ~210 行）
+
+---
+
 ## 2026-05-18 · M26-B Icon add bug + registerRuntime 异步化 + Material 留 M27
 
 ### Icon add bug 修复（用户报告：点击 / 拖入无反应）
