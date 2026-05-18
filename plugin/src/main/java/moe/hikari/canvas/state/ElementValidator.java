@@ -546,10 +546,13 @@ public final class ElementValidator {
                 validateMaskPathBounds(im.mask().d());
             }
         } else if (el instanceof IconElement ic) {
-            if (ic.source() == null || !ic.source().matches("^[a-z0-9_-]{1,32}$")) {
+            // M26：扩展 source schema 接受 fa-solid/heart / user/foo / material/star.fill / legacy "heart"
+            if (!IconElement.isValidSource(ic.source())) {
                 throw new ValidationException("INVALID_PAYLOAD",
-                        "icon source must match [a-z0-9_-]{1,32}: " + ic.source());
+                        "icon source must match " + IconElement.SOURCE_RE.pattern()
+                                + " (≤" + IconElement.SOURCE_MAX_LEN + "): " + ic.source());
             }
+            if (ic.fill() != null) FillValidator.validate(ic.fill());
         }
     }
 }

@@ -436,6 +436,111 @@ val syncFontsToWeb = tasks.register<Copy>("syncFontsToWeb") {
     into(webFontsDir)
 }
 
+// ---- M26-T1 构建期 Font Awesome Free 矢量图标库下载 + JSON 生成 ----
+// 链路：downloadIcons（curl FA zip + SHA-256 校验）
+//       → generateIconLibrary JavaExec（IconLibraryGenerator 解 zip 转 JSON）
+//       → build/generated/icon-resources/{fa-solid,fa-regular,fa-brands}.icons.json
+//       → processResources 进 jar /icons/ 供 IconRegistry 启动期读
+//
+// 决策：M26 Phase 1 只内置 Font Awesome Free 6.7.2（CC BY 4.0；~2000 icons / pack 总
+// 计 ~800KB-1.5MB JSON）；Material Symbols 留 M27 单独 pipeline。IconRegistry 已为
+// material/ 命名空间留 hook。
+
+data class IconSpec(
+    val displayId: String,
+    val url: String,
+    val destFileName: String,
+    val expectedSha256: String
+)
+
+val faIconsSpec = IconSpec(
+    displayId = "fontawesome_free",
+    // GitHub release zip，13MB；CI 拉得动
+    url = "https://github.com/FortAwesome/Font-Awesome/releases/download/6.7.2/fontawesome-free-6.7.2-web.zip",
+    destFileName = "fontawesome-free-6.7.2-web.zip",
+    // SHA-256 pin（首次构建实测）。GitHub release asset 不变，签名稳定
+    expectedSha256 = "ecdaaa6d347cd7da82c66054770995e97f3d066a57e8d58ac9c517f0f77561fb"
+)
+
+val downloadedIconsDir = layout.buildDirectory.dir("downloaded-icons")
+val generatedIconResources = layout.buildDirectory.dir("generated/icon-resources")
+
+val downloadIcons = tasks.register("downloadIcons") {
+    group = "build"
+    description = "下载 Font Awesome Free 6.7.2 SVG zip 到 build/downloaded-icons/"
+    val dirProv = downloadedIconsDir
+    outputs.dir(dirProv)
+    doLast {
+        val dir = dirProv.get().asFile
+        dir.mkdirs()
+        val spec = faIconsSpec
+        val dest = File(dir, spec.destFileName)
+        if (dest.exists() && dest.length() > 0 &&
+            (spec.expectedSha256.isEmpty() || sha256Hex(dest) == spec.expectedSha256)) {
+            logger.info("  [skip] ${spec.destFileName} already present & verified")
+            return@doLast
+        }
+        logger.lifecycle("  [fetch] ${spec.displayId} <- ${spec.url}")
+        val tempFile = File(dir, spec.destFileName + ".tmp")
+        var lastErr: Exception? = null
+        val maxAttempts = 3
+        var attempt = 0
+        while (attempt < maxAttempts) {
+            attempt++
+            try {
+                val conn = URI(spec.url).toURL().openConnection()
+                conn.connectTimeout = 30_000
+                conn.readTimeout = 120_000
+                conn.getInputStream().use { input ->
+                    Files.copy(input, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+                lastErr = null
+                break
+            } catch (e: Exception) {
+                lastErr = e
+                logger.lifecycle("  [retry $attempt/$maxAttempts] ${spec.destFileName}: ${e.message}")
+            }
+        }
+        if (lastErr != null) {
+            throw GradleException(
+                "下载 ${spec.destFileName} 失败（$maxAttempts 次重试均异常）。" +
+                "可手动下载 ${spec.url} 放到 ${dir.absolutePath}/${spec.destFileName}",
+                lastErr
+            )
+        }
+        tempFile.renameTo(dest)
+        val actual = sha256Hex(dest)
+        if (spec.expectedSha256.isEmpty()) {
+            logger.lifecycle("  [sha256 未 pin] ${spec.destFileName} = $actual （首次构建；建议填入 build.gradle.kts）")
+        } else if (actual != spec.expectedSha256) {
+            error("SHA-256 不符：${spec.destFileName} 期望 ${spec.expectedSha256}，实得 $actual")
+        }
+    }
+}
+
+val generateIconLibrary = tasks.register<JavaExec>("generateIconLibrary") {
+    group = "build"
+    description = "解 Font Awesome zip 并生成 fa-solid/regular/brands.icons.json"
+    dependsOn(downloadIcons)
+    dependsOn(tasks.named("compileGeneratorJava"))
+
+    val zipFile = downloadedIconsDir.map { it.file(faIconsSpec.destFileName) }
+    val outDir = generatedIconResources
+
+    classpath = generatorSource.runtimeClasspath
+    mainClass.set("moe.hikari.canvas.build.IconLibraryGenerator")
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf(
+            zipFile.get().asFile.absolutePath,
+            outDir.get().asFile.absolutePath
+        )
+    })
+
+    inputs.files(generatorSource.allSource)
+    inputs.file(zipFile)
+    outputs.dir(outDir)
+}
+
 // downloadedFontsDir 里是 *.ttf / *.otf；processResources 从该目录读并放到 jar 的 /fonts/ 下
 sourceSets.main {
     resources.srcDir(generatedWebResources)
@@ -448,6 +553,8 @@ tasks.processResources {
     dependsOn(downloadFonts)
     dependsOn(generateGlyphMetrics)
     dependsOn(syncFontsToWeb)
+    // M26：FA Free 矢量包入 jar /icons/。IconRegistry.loadBuiltIn 读 classpath。
+    dependsOn(generateIconLibrary)
     from(downloadedFontsDir) {
         include("*.ttf", "*.otf")
         into("fonts")
@@ -456,6 +563,11 @@ tasks.processResources {
     from(generatedGlyphMetricsDir) {
         include("*.metrics.json")
         into("fonts")
+    }
+    // M26-T1：FA Free 矢量包 JSON 进 jar /icons/，IconRegistry.loadBuiltIn 读 classpath
+    from(generatedIconResources) {
+        include("*.icons.json")
+        into("icons")
     }
 }
 

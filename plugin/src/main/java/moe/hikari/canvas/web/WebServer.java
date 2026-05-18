@@ -11,6 +11,7 @@ import io.javalin.websocket.WsContext;
 import io.javalin.websocket.WsHandlerType;
 import io.javalin.websocket.WsMessageContext;
 import moe.hikari.canvas.render.FontRegistry;
+import moe.hikari.canvas.render.IconRegistry;
 import moe.hikari.canvas.render.ProjectionThrottler;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
@@ -82,6 +83,8 @@ public final class WebServer {
     private final moe.hikari.canvas.storage.AuditLog auditLog;
     /** M23-P1：HTTP 字体端点 {@code /api/font/file} 与 {@code /api/font/list} 用。 */
     private final FontRegistry fontRegistry;
+    /** M26：HTTP 矢量图标端点 {@code /api/icon/list} 与 {@code /api/icon/paths} 用。 */
+    private final IconRegistry iconRegistry;
 
     // ---------- 拆分后的 dispatcher（M15.x god-class 拆分）----------
     private final EditOpDispatcher editOpDispatcher;
@@ -135,6 +138,7 @@ public final class WebServer {
                      moe.hikari.canvas.storage.TemplateRepo templateRepo,
                      moe.hikari.canvas.storage.AuditLog auditLog,
                      FontRegistry fontRegistry,
+                     IconRegistry iconRegistry,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler,
                      int wsAuthTimeoutSeconds,
@@ -155,6 +159,7 @@ public final class WebServer {
         this.templateRepo = templateRepo;
         this.auditLog = auditLog;
         this.fontRegistry = fontRegistry;
+        this.iconRegistry = iconRegistry;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
@@ -335,6 +340,54 @@ public final class WebServer {
                     HandlerType.GET, "/api/font/list", ctx -> {
                         ctx.header("Cache-Control", "max-age=60");
                         ctx.json(Map.of("fonts", fontRegistry.listAll()));
+                    }));
+
+            // M26：矢量图标清单 + 搜索 + 分页。前端 IconPicker 走这条路。
+            // query：q（substring，可空）/ category（pack id；支持 "fa-*" 前缀）/ limit（1..200）/ offset（≥0）
+            // 响应：{ icons:[{id,displayName,pack,viewBox,source}], total:int, hasMore:bool }
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/icon/list", ctx -> {
+                        String q = ctx.queryParam("q");
+                        String category = ctx.queryParam("category");
+                        int limit = parseIntOrDefault(ctx.queryParam("limit"), 60);
+                        int offset = parseIntOrDefault(ctx.queryParam("offset"), 0);
+                        if (limit > 200) limit = 200;
+                        if (limit < 1) limit = 1;
+                        if (offset < 0) offset = 0;
+                        IconRegistry.SearchResult result =
+                                iconRegistry.search(q, category, limit, offset);
+                        ctx.header("Cache-Control", "max-age=300");
+                        ctx.json(Map.of(
+                                "icons", result.icons(),
+                                "total", result.total(),
+                                "hasMore", result.hasMore()));
+                    }));
+
+            // M26：单个图标 path d 拉取。id 形如 fa-solid/heart；查 IconRegistry 表，未注册 404。
+            // 严格 fullId 校验（防 path traversal / 嗅探）：用 IconElement.isValidSource 同一正则。
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/icon/paths", ctx -> {
+                        String id = ctx.queryParam("id");
+                        if (id == null || id.isEmpty() || id.length() > 64
+                                || !moe.hikari.canvas.state.IconElement.isValidSource(id)
+                                || moe.hikari.canvas.state.IconElement.isLegacySource(id)) {
+                            // legacy PNG 形态不走本端点（前端应拉 /api/template-asset/icons/）
+                            ctx.status(400).result("{\"code\":\"BAD_REQUEST\"}");
+                            return;
+                        }
+                        String d = iconRegistry.getPathD(id);
+                        String viewBox = iconRegistry.getViewBox(id);
+                        if (d == null || viewBox == null) {
+                            ctx.status(404).result("{\"code\":\"NOT_FOUND\"}");
+                            return;
+                        }
+                        // path d + viewBox 按 id immutable（重启 / reload 才改）→ 长缓存
+                        ctx.header("Cache-Control", "max-age=86400, immutable");
+                        ctx.json(Map.of(
+                                "id", id,
+                                "viewBox", viewBox,
+                                // 数组形态预留 v2：单 svg 多 path / 各自 fill 颜色（M26 v1 单元素）
+                                "paths", List.of(Map.of("d", d))));
                     }));
 
             // M14：创意工坊市场（DB 元数据列表）
@@ -799,6 +852,13 @@ public final class WebServer {
             if (addr != null) return addr.toString();
         } catch (Throwable ignored) {}
         return "unknown";
+    }
+
+    /** M26：query param 安全 int 解析。null / 非数字 / 越界返默认值。 */
+    private static int parseIntOrDefault(String raw, int def) {
+        if (raw == null || raw.isEmpty()) return def;
+        try { return Integer.parseInt(raw); }
+        catch (NumberFormatException e) { return def; }
     }
 
     /** 按 protocol.md §6.2: close 4002 = 协议版本不匹配（M8-C 起切断 v1；M16 P6.2 协商化）。 */

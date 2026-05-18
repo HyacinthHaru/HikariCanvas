@@ -77,6 +77,8 @@ public final class HikariCanvas extends JavaPlugin {
     private ProjectionThrottler projectionThrottler;
     private SessionRateLimiter rateLimiter;
     private FontRegistry fontRegistry;
+    /** M26：矢量图标注册表（FA Free + 用户 SVG）。 */
+    private moe.hikari.canvas.render.IconRegistry iconRegistry;
     private PaletteLut paletteLut;
     private TemplateRegistry templateRegistry;
     private TemplatePreviewService templatePreviewService;
@@ -185,6 +187,12 @@ public final class HikariCanvas extends JavaPlugin {
         fontRegistry.loadBuiltIn();
         fontRegistry.loadExternal(getDataFolder().toPath().resolve("fonts"));
         getLogger().info("FontRegistry: " + fontRegistry.size() + " font(s) ready");
+
+        // M26：矢量图标注册表。jar 内置 Font Awesome Free + 用户 plugins/HikariCanvas/icons/*.svg
+        iconRegistry = new moe.hikari.canvas.render.IconRegistry(getLogger());
+        iconRegistry.loadBuiltIn();
+        iconRegistry.loadExternal(getDataFolder().toPath().resolve("icons"));
+        getLogger().info("IconRegistry: " + iconRegistry.size() + " icon(s) ready");
 
         // M4-T2：调色板 LUT（32³ Lab）。启动期一次性构建 ~32 KiB，常驻
         try {
@@ -296,7 +304,7 @@ public final class HikariCanvas extends JavaPlugin {
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
                 templateAssetService, wallPreviewService, uploadHandler,
-                templatePublisher, templateRepo, auditLog, fontRegistry, this,
+                templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry, this,
                 version, this::paintAllSessionMaps,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();

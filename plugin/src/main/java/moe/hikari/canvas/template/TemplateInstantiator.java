@@ -279,7 +279,7 @@ public final class TemplateInstantiator {
                     r.opacity(), r.blendMode(), r.renderMode());
             case IconElement ic -> new IconElement(newId, ic.x(), ic.y(), ic.w(), ic.h(),
                     ic.rotation(), ic.locked(), ic.visible(), ic.source(), ic.tint(),
-                    ic.opacity(), ic.blendMode(), ic.renderMode());
+                    ic.opacity(), ic.blendMode(), ic.renderMode(), ic.fill());
             case moe.hikari.canvas.state.PathElement p -> new moe.hikari.canvas.state.PathElement(newId,
                     p.x(), p.y(), p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
                     p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
@@ -758,11 +758,13 @@ public final class TemplateInstantiator {
         if (el instanceof TemplateElement.Icon ic) {
             String source = interp(ic.source(), params);
             String tint = ic.tint() == null ? null : interp(ic.tint(), params);
+            // M26：模板 tint 字段语义升级——若指定 tint 则同步为 SolidFill；否则 fill=null（用 pack 默认色）
+            Fill fill = (tint == null || tint.isBlank()) ? null : new SolidFill(tint);
             return new IconElement(
                     id, x, y, w, h,
                     ic.rotation(), false, true,
                     source, tint,
-                    null, null, null);
+                    null, null, null, fill);
         }
         // line: v1 不渲染，但保留 instantiate 链路以待 v2+
         return null;

@@ -1064,6 +1064,7 @@ public final class EditSession {
         Float opacity = ic.opacity();
         BlendMode blendMode = ic.blendMode();
         RenderMode renderMode = ic.renderMode();
+        Fill fill = ic.fill();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -1077,15 +1078,23 @@ public final class EditSession {
                 case "visible" -> visible = boolValue(v, k);
                 case "source" -> {
                     source = requireStringValue(v, k);
-                    if (!source.matches("^[a-z0-9_-]{1,32}$")) {
+                    if (!IconElement.isValidSource(source)) {
                         throw new ValidationException("INVALID_PAYLOAD",
-                                "icon source must match [a-z0-9_-]{1,32}: " + source);
+                                "icon source must match " + IconElement.SOURCE_RE.pattern()
+                                        + " (≤" + IconElement.SOURCE_MAX_LEN + "): " + source);
                     }
                 }
+                // M26 deprecated：仍接受 tint 入参（兼容旧客户端 patch），并同步升级到 fill
                 case "tint" -> {
-                    if (v == null) tint = null;
-                    else { tint = requireStringValue(v, k); validateColor(tint); }
+                    if (v == null) { tint = null; }
+                    else {
+                        tint = requireStringValue(v, k); validateColor(tint);
+                        // tint 入参等价于 SolidFill；若同次 patch 也带了 fill，下面 fill 分支覆盖之
+                        fill = new SolidFill(tint);
+                    }
                 }
+                // M26：新协议入口
+                case "fill" -> fill = parseFillNullable(v);
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
                 case "renderMode" -> renderMode = parseRenderModeNullable(v);
@@ -1094,7 +1103,7 @@ public final class EditSession {
             }
         }
         return new IconElement(ic.id(), x, y, w, h, rotation, locked, visible, source, tint,
-                opacity, blendMode, renderMode);
+                opacity, blendMode, renderMode, fill);
     }
 
     // ---------- M13 ImageElement ----------
@@ -1167,7 +1176,7 @@ public final class EditSession {
             case IconElement ic -> new IconElement(newId,
                     ic.x(), ic.y(), ic.w(), ic.h(), ic.rotation(), ic.locked(), ic.visible(),
                     ic.source(), ic.tint(),
-                    ic.opacity(), ic.blendMode(), ic.renderMode());
+                    ic.opacity(), ic.blendMode(), ic.renderMode(), ic.fill());
             case PathElement p -> new PathElement(newId,
                     p.x(), p.y(), p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
                     p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
