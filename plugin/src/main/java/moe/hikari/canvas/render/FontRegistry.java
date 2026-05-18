@@ -64,6 +64,50 @@ public final class FontRegistry {
         BUILT_IN.put("noto_serif", new BuiltIn(
                 "/fonts/NotoSerif-Regular.ttf",
                 new Metadata("Noto Serif Regular", false, 0)));
+        // M22：13 个艺术 / 装饰字体（全 SIL OFL 1.1）
+        // 中文艺术 6
+        BUILT_IN.put("smiley_sans", new BuiltIn(
+                "/fonts/SmileySans-Oblique.otf",
+                new Metadata("得意黑 Smiley Sans Oblique", false, 0)));
+        BUILT_IN.put("ma_shan_zheng", new BuiltIn(
+                "/fonts/MaShanZheng-Regular.ttf",
+                new Metadata("马善政毛笔楷书 Ma Shan Zheng Regular", false, 0)));
+        BUILT_IN.put("zcool_xiaowei", new BuiltIn(
+                "/fonts/ZCOOLXiaoWei-Regular.ttf",
+                new Metadata("站酷小薇 ZCOOL XiaoWei Regular", false, 0)));
+        BUILT_IN.put("zcool_kuaile", new BuiltIn(
+                "/fonts/ZCOOLKuaiLe-Regular.ttf",
+                new Metadata("站酷快乐体 ZCOOL KuaiLe Regular", false, 0)));
+        BUILT_IN.put("zcool_qingkehuangyou", new BuiltIn(
+                "/fonts/ZCOOLQingKeHuangYou-Regular.ttf",
+                new Metadata("站酷庆科黄油体 ZCOOL QingKe HuangYou Regular", false, 0)));
+        BUILT_IN.put("lxgw_wenkai", new BuiltIn(
+                "/fonts/LXGWWenKai-Regular.ttf",
+                new Metadata("霞鹜文楷 LXGW WenKai Regular", false, 0)));
+        // 西文装饰 7（permanent_marker Apache License 跳过，shadows_into_light 替代马克笔位）
+        BUILT_IN.put("comic_neue", new BuiltIn(
+                "/fonts/ComicNeue-Regular.ttf",
+                new Metadata("Comic Neue Regular", false, 0)));
+        BUILT_IN.put("pacifico", new BuiltIn(
+                "/fonts/Pacifico-Regular.ttf",
+                new Metadata("Pacifico Regular", false, 0)));
+        BUILT_IN.put("lobster", new BuiltIn(
+                "/fonts/Lobster-Regular.ttf",
+                new Metadata("Lobster Regular", false, 0)));
+        BUILT_IN.put("bangers", new BuiltIn(
+                "/fonts/Bangers-Regular.ttf",
+                new Metadata("Bangers Regular", false, 0)));
+        BUILT_IN.put("shadows_into_light", new BuiltIn(
+                "/fonts/ShadowsIntoLight.ttf",
+                new Metadata("Shadows Into Light Regular", false, 0)));
+        // caveat / dancing_script 是 variable font（google/fonts 无 static），AWT + 浏览器 Canvas
+        // 取 default instance（wght=400）双端一致。
+        BUILT_IN.put("caveat", new BuiltIn(
+                "/fonts/Caveat-Variable.ttf",
+                new Metadata("Caveat Regular", false, 0)));
+        BUILT_IN.put("dancing_script", new BuiltIn(
+                "/fonts/DancingScript-Variable.ttf",
+                new Metadata("Dancing Script Regular", false, 0)));
     }
 
     private final Logger log;

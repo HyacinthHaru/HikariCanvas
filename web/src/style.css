@@ -63,6 +63,114 @@
     font-display: block;
 }
 
+/* M22：13 个艺术 / 装饰字体（全 SIL OFL 1.1） */
+/* 中文艺术 6 */
+@font-face {
+    font-family: 'smiley_sans';
+    src: url('/fonts/SmileySans-Oblique.otf') format('opentype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'ma_shan_zheng';
+    src: url('/fonts/MaShanZheng-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'zcool_xiaowei';
+    src: url('/fonts/ZCOOLXiaoWei-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'zcool_kuaile';
+    src: url('/fonts/ZCOOLKuaiLe-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'zcool_qingkehuangyou';
+    src: url('/fonts/ZCOOLQingKeHuangYou-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'lxgw_wenkai';
+    src: url('/fonts/LXGWWenKai-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+/* 西文装饰 7 */
+@font-face {
+    font-family: 'comic_neue';
+    src: url('/fonts/ComicNeue-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'pacifico';
+    src: url('/fonts/Pacifico-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'lobster';
+    src: url('/fonts/Lobster-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'bangers';
+    src: url('/fonts/Bangers-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'shadows_into_light';
+    src: url('/fonts/ShadowsIntoLight.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+/* caveat / dancing_script 是 variable font；浏览器取 wght=400 default instance，与 AWT 一致 */
+@font-face {
+    font-family: 'caveat';
+    src: url('/fonts/Caveat-Variable.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'dancing_script';
+    src: url('/fonts/DancingScript-Variable.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
 /*
  * M5-A 深色主题 + shadcn-vue 设计 token。
  * shadcn-vue 约定：CSS 变量作 HSL 三元组，Tailwind 4 用 theme(...) 引用。

@@ -591,6 +591,22 @@ export const FONT_META: Record<string, FontMeta> = {
     fira_code: { displayName: 'Fira Code Regular', pixelated: false, nativeSize: 0 },
     inter: { displayName: 'Inter Regular', pixelated: false, nativeSize: 0 },
     noto_serif: { displayName: 'Noto Serif Regular', pixelated: false, nativeSize: 0 },
+    // M22：13 个艺术 / 装饰字体（全 SIL OFL 1.1）
+    // 中文艺术 6
+    smiley_sans: { displayName: '得意黑 Smiley Sans Oblique', pixelated: false, nativeSize: 0 },
+    ma_shan_zheng: { displayName: '马善政毛笔楷书 Ma Shan Zheng Regular', pixelated: false, nativeSize: 0 },
+    zcool_xiaowei: { displayName: '站酷小薇 ZCOOL XiaoWei Regular', pixelated: false, nativeSize: 0 },
+    zcool_kuaile: { displayName: '站酷快乐体 ZCOOL KuaiLe Regular', pixelated: false, nativeSize: 0 },
+    zcool_qingkehuangyou: { displayName: '站酷庆科黄油体 ZCOOL QingKe HuangYou Regular', pixelated: false, nativeSize: 0 },
+    lxgw_wenkai: { displayName: '霞鹜文楷 LXGW WenKai Regular', pixelated: false, nativeSize: 0 },
+    // 西文装饰 7（permanent_marker Apache License 跳过，shadows_into_light 替代）
+    comic_neue: { displayName: 'Comic Neue Regular', pixelated: false, nativeSize: 0 },
+    pacifico: { displayName: 'Pacifico Regular', pixelated: false, nativeSize: 0 },
+    lobster: { displayName: 'Lobster Regular', pixelated: false, nativeSize: 0 },
+    bangers: { displayName: 'Bangers Regular', pixelated: false, nativeSize: 0 },
+    shadows_into_light: { displayName: 'Shadows Into Light Regular', pixelated: false, nativeSize: 0 },
+    caveat: { displayName: 'Caveat Regular', pixelated: false, nativeSize: 0 },
+    dancing_script: { displayName: 'Dancing Script Regular', pixelated: false, nativeSize: 0 },
 };
 
 /**

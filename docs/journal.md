@@ -32,6 +32,102 @@
 
 ---
 
+## 2026-05-18 · M22 字体艺术/装饰扩充（7 → 20 字体矩阵，选项 C）
+
+用户选"选项 C 完整版"再加 13 字体。复用 M21 工作流（4 处改动 per 字体）。
+
+### 实际落地 13/13
+
+#### 中文艺术 6
+| 字体 ID | 风格 | size |
+|---|---|---:|
+| `smiley_sans` | 圆体艺术（得意黑） | 2.0MB (OTF) |
+| `ma_shan_zheng` | 毛笔楷书 | 5.6MB |
+| `zcool_xiaowei` | 宋体艺术化 | 6.0MB |
+| `zcool_kuaile` | 圆体可爱 | 1.4MB |
+| `zcool_qingkehuangyou` | 黄油涂鸦 | 7.9MB |
+| `lxgw_wenkai` | 手写楷书 | 18.4MB |
+
+#### 西文装饰 7
+| 字体 ID | 风格 | size |
+|---|---|---:|
+| `comic_neue` | Comic Sans 替代 | 56KB |
+| `pacifico` | 手写艺术 | 322KB |
+| `lobster` | 复古手写 | 397KB |
+| `bangers` | 漫画粗体 | 91KB |
+| `shadows_into_light` | 马克笔手写（替 permanent_marker） | 53KB |
+| `caveat` | 手写笔记（variable font） | 394KB |
+| `dancing_script` | 飘逸草书（variable font） | 131KB |
+
+### 关键替换 / 决策
+
+1. **`permanent_marker` 跳过 → `shadows_into_light` 替代**
+   - google/fonts 把 permanent_marker 放在 `apache/` 目录（Apache 2.0 License），不符 CLAUDE.md "只打包 SIL OFL" 纪律
+   - `shadows_into_light`（SIL OFL，54KB，手写马克笔风格）填补"马克笔涂鸦"位
+   - 总数仍是 13 字体（6 中文 + 7 西文）
+
+2. **`caveat` / `dancing_script` = variable font**
+   - google/fonts 无 static 子目录；用 `Caveat[wght].ttf` / `DancingScript[wght].ttf`
+   - AWT `Font.TRUETYPE_FONT` 加载 variable font 取 default instance (wght=400)
+   - 浏览器 CSS `font-family` 不指定 weight 时也取 default
+   - GlyphMetricsGenerator 跑通 = 双端 default instance 对齐
+   - 不影响双端一致性
+
+3. **`smiley_sans` 选 OTF（2.0MB）而非 TTF（2.6MB）**
+   - zip release 内含两格式；OTF 更小
+   - FontRegistry 注册路径 `/fonts/SmileySans-Oblique.otf` + `@font-face format('opentype')`
+
+4. **URL 路径修正**（multiple URLs 404 → 替换源）
+   - `googlefonts/<name>` 仓库多个 404 → 改 `google/fonts/main/ofl/<name>/`
+   - `crozynski/comicneue/master` 404 → 同样改 `google/fonts/main/ofl/comicneue/`
+
+### SHA-256 全部锁定
+
+13 个新字体 SHA-256 全部从首跑 log 取实际值锁回 build.gradle.kts。重跑 `:plugin:downloadFonts --rerun-tasks` 全 verified。
+
+### shadowJar size
+
+98MB → **122MB**（+24MB；比预期 ~135MB 略低，因 permanent_marker 换更小的 shadows_into_light + 部分中文字体实际比预估小）。
+
+GitHub Releases jar 上限 2GB；下载 30Mbps ~30s，可接受。
+
+### jar 内容验证
+
+`fonts/` 下：**20 字体 + 20 metrics.json = 40 条目**（2 原始 + 5 M21 + 13 M22）。后缀分布 14 TTF + 5 OTF + 1 OTF（smiley_sans）+ 2 variable TTF（caveat / dancing_script）。
+
+### 验证
+
+- `:plugin:test` BUILD SUCCESSFUL，**14 baseline fixture 无漂移**（纯加字体不改既有渲染）
+- `vite build` 650ms ok
+- 13 字体的 M20 generateGlyphMetrics 全部跑通（含 variable font）
+
+### 字体矩阵（M22 后 20 字体）
+
+| 类别 | 字体 |
+|---|---|
+| 中文正文 / 黑 | source_han_sans |
+| 中文正文 / 宋 | source_han_serif |
+| 中文正文 / 像素 | ark_pixel |
+| 中文艺术 / 圆体 | smiley_sans, zcool_kuaile |
+| 中文艺术 / 毛笔 | ma_shan_zheng |
+| 中文艺术 / 宋艺 | zcool_xiaowei |
+| 中文艺术 / 涂鸦 | zcool_qingkehuangyou |
+| 中文艺术 / 手写楷 | lxgw_wenkai |
+| 西文正文 / 无衬线 | inter |
+| 西文正文 / 衬线 | noto_serif |
+| 西文正文 / 编程 | jetbrains_mono, fira_code |
+| 西文装饰 / Comic | comic_neue |
+| 西文装饰 / 手写 | pacifico, caveat, dancing_script |
+| 西文装饰 / 复古 | lobster |
+| 西文装饰 / 漫画 | bangers |
+| 西文装饰 / 马克笔 | shadows_into_light |
+
+### 关联文件
+
+`plugin/build.gradle.kts` / `plugin/.../render/FontRegistry.java` / `web/src/style.css` / `web/src/render/PreviewRenderer.ts` / `CLAUDE.md` / `docs/journal.md`。
+
+---
+
 ## 2026-05-17 · M21 内置字体扩充（2 → 7 字体矩阵）
 
 用户要求"添加几种宋体 / 黑体 / 非衬线 / JetBrains Mono 等"。选定**选项 B（完整）= 6 新字体**实施。

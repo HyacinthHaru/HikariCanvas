@@ -191,9 +191,93 @@ val bundledFonts = listOf(
         url = "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSerif/hinted/ttf/NotoSerif-Regular.ttf",
         destFileName = "NotoSerif-Regular.ttf",
         expectedSha256 = "19e72cd8d595fae5bd74a5206f5d938512e1183d4fed7abb1ec1be1d7efa5f88"
-    )
+    ),
     // 注：source_han_mono SC 单文件不存在（adobe-fonts/source-han-mono release 只发 122MB ttc 多语言合包），
     // 122MB 超过整个 shadow jar 现尺寸 2 倍，本期跳过；未来需中文等宽可走外部字体目录。
+    // M22：13 个艺术 / 装饰字体（全 SIL OFL 1.1）
+    // 中文艺术 6
+    FontSpec(
+        displayId = "smiley_sans",
+        url = "https://github.com/atelier-anchor/smiley-sans/releases/download/v2.0.0/smiley-sans-v2.0.0.zip",
+        destFileName = "SmileySans-Oblique.otf",
+        expectedSha256 = "f3ea574697a37b63fff393fa61c781766d2e99daeeb8b6ec7c46d2421b768cb8",
+        inZipEntryPattern = "SmileySans-Oblique\\.otf"
+    ),
+    FontSpec(
+        displayId = "ma_shan_zheng",
+        url = "https://github.com/google/fonts/raw/main/ofl/mashanzheng/MaShanZheng-Regular.ttf",
+        destFileName = "MaShanZheng-Regular.ttf",
+        expectedSha256 = "b844c59bf20bf530e41c20d6ff12b383b23a2e553b9b68cc89f070869213155d"
+    ),
+    FontSpec(
+        displayId = "zcool_xiaowei",
+        url = "https://github.com/google/fonts/raw/main/ofl/zcoolxiaowei/ZCOOLXiaoWei-Regular.ttf",
+        destFileName = "ZCOOLXiaoWei-Regular.ttf",
+        expectedSha256 = "a42b620140f493db42f741351dfbf343c0936d58588ee8004b8b2a218d997ff1"
+    ),
+    FontSpec(
+        displayId = "zcool_kuaile",
+        url = "https://github.com/google/fonts/raw/main/ofl/zcoolkuaile/ZCOOLKuaiLe-Regular.ttf",
+        destFileName = "ZCOOLKuaiLe-Regular.ttf",
+        expectedSha256 = "812a6fc1fe54b6d73a419245c32dfeba8aa33104d5be90d1cf6af082007cb71d"
+    ),
+    FontSpec(
+        displayId = "zcool_qingkehuangyou",
+        url = "https://github.com/google/fonts/raw/main/ofl/zcoolqingkehuangyou/ZCOOLQingKeHuangYou-Regular.ttf",
+        destFileName = "ZCOOLQingKeHuangYou-Regular.ttf",
+        expectedSha256 = "54f0c0df4308cd74cd0f2fd3494ae054dbc4a1fd6fa7d71f4807eb4cdd8b4136"
+    ),
+    FontSpec(
+        displayId = "lxgw_wenkai",
+        url = "https://github.com/lxgw/LxgwWenKai/releases/download/v1.510/LXGWWenKai-Regular.ttf",
+        destFileName = "LXGWWenKai-Regular.ttf",
+        expectedSha256 = "ea47ec17d0f3d0ed1e6d9c51d6146402d4d1e2f0ff397a90765aaaa0ddd382fb"
+    ),
+    // 西文装饰 7（permanent_marker 因 Apache License 跳过，用 OFL shadows_into_light 替代马克笔位）
+    FontSpec(
+        displayId = "comic_neue",
+        url = "https://github.com/google/fonts/raw/main/ofl/comicneue/ComicNeue-Regular.ttf",
+        destFileName = "ComicNeue-Regular.ttf",
+        expectedSha256 = "a0ee5a37c8b27c4db0700137d928598b1e23b0089e1546a8961909176b779360"
+    ),
+    FontSpec(
+        displayId = "pacifico",
+        url = "https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf",
+        destFileName = "Pacifico-Regular.ttf",
+        expectedSha256 = "5b6c0d5334a7bf77dea52b975c5a0c408878c0f7115ed5b6fb151f634b7bf701"
+    ),
+    FontSpec(
+        displayId = "lobster",
+        url = "https://github.com/google/fonts/raw/main/ofl/lobster/Lobster-Regular.ttf",
+        destFileName = "Lobster-Regular.ttf",
+        expectedSha256 = "d6568e697fd50cedc0be04d8aae4127fe95add607e7bff954ca88604be80c205"
+    ),
+    FontSpec(
+        displayId = "bangers",
+        url = "https://github.com/google/fonts/raw/main/ofl/bangers/Bangers-Regular.ttf",
+        destFileName = "Bangers-Regular.ttf",
+        expectedSha256 = "4160a7311de9342674cce9160cde9fcbb30f48190397d86ff1b70b455af65824"
+    ),
+    FontSpec(
+        displayId = "shadows_into_light",
+        url = "https://github.com/google/fonts/raw/main/ofl/shadowsintolight/ShadowsIntoLight.ttf",
+        destFileName = "ShadowsIntoLight.ttf",
+        expectedSha256 = "1347863151acdc00fa281daaba1a3543dbce5870b55f9cf7479a15bb84007681"
+    ),
+    // caveat / dancing_script 仅有 variable font（google/fonts 无 static 目录）；AWT + 浏览器 Canvas
+    // 取 default instance（wght=400）双端一致，可直接用。文件名带 [wght] 方括号，URL 编码为 %5Bwght%5D。
+    FontSpec(
+        displayId = "caveat",
+        url = "https://github.com/google/fonts/raw/main/ofl/caveat/Caveat%5Bwght%5D.ttf",
+        destFileName = "Caveat-Variable.ttf",
+        expectedSha256 = "0bdb6b660482d31531b3945849fba5916b3ef8695da7024a9e6b9ee3c4157988"
+    ),
+    FontSpec(
+        displayId = "dancing_script",
+        url = "https://github.com/google/fonts/raw/main/ofl/dancingscript/DancingScript%5Bwght%5D.ttf",
+        destFileName = "DancingScript-Variable.ttf",
+        expectedSha256 = "21808625578fe8d8cd10cb684be546dca077b27cd03a53a2f1ec11dc743c924c"
+    )
 )
 
 val downloadedFontsDir = layout.buildDirectory.dir("downloaded-fonts")
