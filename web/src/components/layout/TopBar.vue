@@ -293,7 +293,7 @@ function showRefreshFlash(msg: string) {
           <Terminal class="size-4" />
         </button>
       </Tooltip>
-      <Tooltip :text="t.workshop.saveTip">
+      <Tooltip :text="project.isLocked ? t.tooltips.disabledWhenLocked : t.tooltips.saveTemplate">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-40"
           :disabled="!project.wallId || project.isLocked"

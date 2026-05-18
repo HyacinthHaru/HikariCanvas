@@ -9,6 +9,23 @@ import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
+import { messages } from '@/i18n/messages';
+
+/**
+ * M25 任务 2A：把 server 端 error code 翻译成对用户友好的 i18n 文案。
+ * 找不到对应 key 时回退 UNKNOWN，最后回退原 code。直接读 messages 表（非 useI18n composable），
+ * 因为 wsClient 是单例 ts class 不是 Vue setup。locale 从 useUiStore() 拿。
+ */
+function localizeErrorCode(code: string, fallbackMessage?: string): string {
+    const ui = useUiStore();
+    const errs = messages[ui.locale]?.errors as Record<string, string> | undefined;
+    if (errs && typeof errs[code] === 'string') return errs[code];
+    if (errs && typeof errs.UNKNOWN === 'string') {
+        // 兜底文案 + 附原 code，便于排查 / 反馈
+        return fallbackMessage ? `${errs.UNKNOWN}（${code}）` : `${errs.UNKNOWN}（${code}）`;
+    }
+    return fallbackMessage ?? code;
+}
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
@@ -284,21 +301,25 @@ export class WsClient {
 
     private handleError(errId: string | undefined, payload: ErrorPayload): void {
         const net = useNetworkStore();
+        // M25 任务 2A：把后端 code 翻译成 i18n friendly message；保留 raw code 进 lastOpError + log
+        // （方便 LogDrawer 排查、客户端 i18n key 缺失时回退）。
+        const friendly = localizeErrorCode(payload.code, payload.message);
         if (payload.code === 'AUTH_FAILED') {
-            net.lastError = 'auth failed — token may be consumed or expired';
+            net.lastError = friendly;
         }
         net.lastOpError = {
             code: payload.code,
-            message: payload.message ?? payload.code,
+            message: friendly,
             ts: Date.now(),
         };
-        net.pushLog('err', `${payload.code}: ${payload.message}`);
-        // sendWithAck 等的 promise → reject
+        // log 仍保留原文（含 server side detail），LogDrawer 显示给开发者；UI 状态走 friendly。
+        net.pushLog('err', `${payload.code}: ${payload.message ?? friendly}`);
+        // sendWithAck 等的 promise → reject（携 friendly 给消费者展示）
         if (errId && this.pendingAcks.has(errId)) {
             const pending = this.pendingAcks.get(errId)!;
             if (pending.timer) window.clearTimeout(pending.timer);
             this.pendingAcks.delete(errId);
-            pending.reject(new Error(`${payload.code}: ${payload.message ?? ''}`));
+            pending.reject(new Error(`${payload.code}: ${friendly}`));
         }
     }
 
@@ -327,12 +348,13 @@ export class WsClient {
         const terminal = ev.code === 1000 || ev.code === 4001 || ev.code === 4008;
         if (this.stopped || terminal) {
             if (ev.code === 4001) {
-                net.lastError = '认证失败 — token 已失效，请在游戏里重新 /canvas edit';
+                // M25 任务 2A：友好提示走 i18n（AUTH_FAILED 中英文都覆盖到 token 提示）
+                net.lastError = localizeErrorCode('AUTH_FAILED');
                 this.clearStoredToken();
             } else if (ev.code === 1000) {
                 // 主动关闭，不刷红
             } else {
-                net.lastError = `连接关闭 (code ${ev.code})`;
+                net.lastError = `${localizeErrorCode('CONNECTION_CLOSED')}（code ${ev.code}）`;
             }
             return;
         }

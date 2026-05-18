@@ -608,6 +608,9 @@ export const FONT_META: Record<string, FontMeta> = {
     shadows_into_light: { displayName: 'Shadows Into Light Regular', pixelated: false, nativeSize: 0 },
     caveat: { displayName: 'Caveat Regular', pixelated: false, nativeSize: 0 },
     dancing_script: { displayName: 'Dancing Script Regular', pixelated: false, nativeSize: 0 },
+    // M25：FHWA / Bahnschrift OFL 替代品
+    overpass: { displayName: 'Overpass Regular (FHWA-like)', pixelated: false, nativeSize: 0 },
+    bebas_neue: { displayName: 'Bebas Neue Regular (DIN-like)', pixelated: false, nativeSize: 0 },
 };
 
 /**

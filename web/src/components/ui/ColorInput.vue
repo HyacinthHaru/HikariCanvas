@@ -152,7 +152,7 @@ function toggle() {
     <button
       type="button"
       class="hc-color-trigger"
-      :title="modelValue"
+      :title="`${t.tooltips.colorPicker}（${modelValue}）`"
       @click="toggle"
     >
       <span class="hc-swatch-outer hc-checkerboard">

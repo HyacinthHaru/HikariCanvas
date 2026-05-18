@@ -193,31 +193,46 @@ function patchGlow(partial: Partial<Glow>) {
       </div>
       <div class="grid grid-cols-2 gap-2">
         <label class="flex flex-col gap-0.5">
-          <span class="text-xs text-[color:var(--muted-foreground)]">fontId</span>
+          <span class="hc-field-label">
+            {{ t.properties.fontIdLabel }}
+            <Tooltip :text="t.properties.fontIdTip">
+              <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+            </Tooltip>
+          </span>
           <select class="hc-input" :value="element.fontId" @change="onFontIdChange">
-            <optgroup label="内置字体">
+            <optgroup :label="t.properties.fontGroupBuiltin">
               <option v-for="f in builtInFonts" :key="f.id" :value="f.id">{{ f.displayName }}</option>
             </optgroup>
-            <optgroup v-if="userFonts.length > 0" label="用户字体">
+            <optgroup v-if="userFonts.length > 0" :label="t.properties.fontGroupUser">
               <option v-for="f in userFonts" :key="f.id" :value="f.id">{{ f.displayName }}</option>
             </optgroup>
           </select>
         </label>
         <label class="flex flex-col gap-0.5">
-          <span class="text-xs text-[color:var(--muted-foreground)]">fontSize</span>
+          <span class="hc-field-label">
+            {{ t.properties.fontSizeLabel }}
+            <Tooltip :text="t.properties.fontSizeTip">
+              <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+            </Tooltip>
+          </span>
           <input type="number" min="1" class="hc-input" :value="element.fontSize"
                  @input="(e) => onNumberChange('fontSize', e)">
         </label>
         <label class="flex flex-col gap-0.5">
-          <span class="text-xs text-[color:var(--muted-foreground)]">align</span>
+          <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.alignLabel }}</span>
           <select class="hc-input" :value="element.align" @change="(e) => onSelectChange('align', e)">
-            <option value="left">left</option>
-            <option value="center">center</option>
-            <option value="right">right</option>
+            <option value="left">{{ t.properties.alignLeft }}</option>
+            <option value="center">{{ t.properties.alignCenter }}</option>
+            <option value="right">{{ t.properties.alignRight }}</option>
           </select>
         </label>
         <label class="flex flex-col gap-0.5">
-          <span class="text-xs text-[color:var(--muted-foreground)]">color</span>
+          <span class="hc-field-label">
+            {{ t.properties.colorLabel }}
+            <Tooltip :text="t.properties.colorTip">
+              <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+            </Tooltip>
+          </span>
           <ColorInput :model-value="element.color"
                       @update:model-value="(v) => emit('update', { color: v })" />
         </label>

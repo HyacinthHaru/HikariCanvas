@@ -277,6 +277,22 @@ val bundledFonts = listOf(
         url = "https://github.com/google/fonts/raw/main/ofl/dancingscript/DancingScript%5Bwght%5D.ttf",
         destFileName = "DancingScript-Variable.ttf",
         expectedSha256 = "21808625578fe8d8cd10cb684be546dca077b27cd03a53a2f1ec11dc743c924c"
+    ),
+    // M25：用户请求 FHWA Series（美国路牌字体）+ Bahnschrift（Microsoft 专有）的 OFL 替代。
+    // Overpass：Red Hat 出品的 FHWA Series B / D 风格替代（variable wght；default 400 双端一致）。
+    // Bebas Neue：经典 DIN / Bahnschrift Condensed 风格替代（纯大写英文 condensed sans）。
+    // 都来自 google/fonts，全 SIL OFL 1.1。
+    FontSpec(
+        displayId = "overpass",
+        url = "https://github.com/google/fonts/raw/main/ofl/overpass/Overpass%5Bwght%5D.ttf",
+        destFileName = "Overpass-Variable.ttf",
+        expectedSha256 = "970717df17a7f9911dee45f60695d05bfa9d745fa0a11fc5c348371fa21f0073"
+    ),
+    FontSpec(
+        displayId = "bebas_neue",
+        url = "https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf",
+        destFileName = "BebasNeue-Regular.ttf",
+        expectedSha256 = "08e4623805102d819f58601e46e345648846075e363b2ceb23313c2d1c83ec73"
     )
 )
 

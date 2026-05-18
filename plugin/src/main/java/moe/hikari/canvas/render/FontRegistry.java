@@ -112,6 +112,15 @@ public final class FontRegistry {
         BUILT_IN.put("dancing_script", new BuiltIn(
                 "/fonts/DancingScript-Variable.ttf",
                 new Metadata("Dancing Script Regular", false, 0)));
+        // M25：用户请求 FHWA Series + Bahnschrift 的 OFL 替代品。
+        // overpass：Red Hat 的 FHWA Series 风格 sans（variable wght）；default 400 取静态等价。
+        // bebas_neue：经典 DIN / Bahnschrift Condensed 替代（condensed sans，仅英文）。
+        BUILT_IN.put("overpass", new BuiltIn(
+                "/fonts/Overpass-Variable.ttf",
+                new Metadata("Overpass Regular (FHWA-like)", false, 0)));
+        BUILT_IN.put("bebas_neue", new BuiltIn(
+                "/fonts/BebasNeue-Regular.ttf",
+                new Metadata("Bebas Neue Regular (DIN-like)", false, 0)));
     }
 
     private final Logger log;

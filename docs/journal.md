@@ -32,6 +32,73 @@
 
 ---
 
+## 2026-05-18 · M25 ThemeSwitcher Bug 修复 + i18n 挂载 + 2 字体扩充
+
+3 块工作 1 agent 完成。
+
+### 任务 1：ThemeSwitcher Bug 真实根因
+
+用户报"点击调色板 icon 无反应 + icon 消失"。
+
+**实际根因**（不是猜测的 Tooltip + onClickOutside 时序）：
+
+```ts
+// ThemeSwitcher.vue
+const { t, locale } = useI18n();  // ← useI18n 只返回 { t }，没有 locale
+// ...
+return locale.value === 'zh' ? p.nameZh : p.nameEn;  // ← 抛 Cannot read undefined
+```
+
+→ Vue 渲染 popover 时整个组件树崩塌 → button icon 跟着消失 + popover 不显。
+
+**修复方案 A+B 双保险**：
+- A. ThemeSwitcher 改用 `useUiStore().locale` 直接读
+- B. `onClickOutside` 加 `{ ignore: ['.hc-tooltip'] }` 防御 Teleport 出去的 tooltip 误判（虽然这次没触发，但作为 popover + Tooltip 模式的通用防御）
+
+SnapSettingsPopover 检查后**不动**——它没解构 `locale`，长期工作正常。
+
+### 任务 2：M24-A i18n 挂载到组件
+
+M24-A 准备的 i18n key 终于挂到 UI：
+
+#### A. errors.* 挂到 wsClient（22 错误码）
+`wsClient.ts` 新 `localizeErrorCode(code)` 统一翻译；`handleError` + `onClose(4001 / non-1000)` 都接入。新增 messages key 11 个补全 server 实际 code 覆盖（AUTH_FAILED / WALL_NOT_FOUND / INVALID_OP / VERSION_MISMATCH / UNEXPECTED / SESSION_CLOSED / ALIAS_TAKEN / INVALID_ALIAS_FORMAT / QUOTA_EXCEEDED_DISK / PERMISSION_DENIED 等）。
+
+#### B. tooltips.* 挂载（3 处）
+- `tooltips.saveTemplate` + `tooltips.disabledWhenLocked` 三元到 TopBar Bookmark 按钮
+- `tooltips.colorPicker` 到 ColorInput trigger native `title`
+
+#### C. properties.*Label/*Tip 挂载（8 字段）
+- TextElementSection 4：fontId / fontSize / align / color label + tip + i18n optgroup 名
+- TransformSection 4：x / y / w / h tip（position/size）
+- 新增 messages key 6（fontGroupBuiltin/User / alignLabel/Left/Center/Right）
+
+### 任务 3：2 个新字体（用户要 FHWA + Bahnschrift）
+
+用户字体协议：
+- **FHWA Series（Highway Gothic）** 美国联邦字体，源公有领域但没便利 OFL 发布 → 用 **Overpass**（Red Hat 资助 / OFL 1.1，FHWA 风格开源替代）
+- **Bahnschrift** Microsoft 专有 → 不可打包；OFL 等价物 D-DIN URL 找不到便利源 → 改用 **Bebas Neue**（OFL 1.1，DIN/Bahnschrift Condensed 视觉最接近）
+
+| 字体 ID | 字体 | size | SHA-256 | 来源 |
+|---|---|---:|---|---|
+| `overpass` | Overpass Regular（FHWA 替代） | 311KB | `970717df...f0073` | google/fonts ofl/overpass variable[wght] |
+| `bebas_neue` | Bebas Neue Regular（Bahnschrift 替代） | 60KB | `08e46238...ec73` | google/fonts ofl/bebasneue static |
+
+style.css 已无 @font-face（M23 通法），无需挂载——FontRegistry 注册后 `/api/font/list` 自动暴露 + 前端 TextElementSection 下拉自动出现。
+
+### 验证
+
+- `:plugin:test` BUILD SUCCESSFUL，14 fixture 无漂移
+- `:plugin:shadowJar` BUILD SUCCESSFUL；jar 155.8 MB（含 macOS Finder 副本污染，CI clean 后会回到正常 size）
+- `vite build` 1756 modules / 0 错
+- 字体下载 SHA pin 全 verified
+
+### 关联文件
+
+`plugin/build.gradle.kts` / `plugin/.../render/FontRegistry.java` / `web/src/components/layout/ThemeSwitcher.vue` / `web/src/components/layout/TopBar.vue` / `web/src/components/properties/TextElementSection.vue` / `web/src/components/properties/TransformSection.vue` / `web/src/components/ui/ColorInput.vue` / `web/src/i18n/messages.ts` / `web/src/network/wsClient.ts` / `web/src/render/PreviewRenderer.ts`。
+
+---
+
 ## 2026-05-18 · M24 前端 UX 大整修（Catppuccin + M3 扁平 + i18n 友好化）
 
 用户要求：Material Design 3 扁平化 + Catppuccin 色板 + **避开"大灰黑 / 大黑紫 / AI 审美"** + 文案玩家友好 + 多主题 + 主题 switcher。2 个并行 agent 完成（约 4h wall-clock）。

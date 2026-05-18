@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { onClickOutside } from '@vueuse/core';
 import { Palette, Check, X } from 'lucide-vue-next';
 import { useThemeStore, PRESETS, ACCENTS, RADIUS_OPTIONS, type Flavor, type Accent, type RadiusScale } from '@/stores/theme';
+import { useUiStore } from '@/stores/ui';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
@@ -23,17 +24,22 @@ import Tooltip from '@/components/ui/Tooltip.vue';
  *   - hover 不上 scale，按 M3 用底色加深表达交互态。
  */
 const theme = useThemeStore();
-const { t, locale } = useI18n();
+const ui = useUiStore();
+const { t } = useI18n();
 
 const rootRef = ref<HTMLElement | null>(null);
 const open = ref(false);
-onClickOutside(rootRef, () => { open.value = false; });
+// M25: 用 ignore selector 排除 Tooltip Teleport 出去的 .hc-tooltip。
+// 没 ignore 时，触发 tooltip 显示 → tooltip 渲染在 <body> 下 → 任何点击如果落在 tooltip
+// 上会被视为 outside；正常情况下 tooltip pointer-events:none 已经规避，但保险起见加上。
+onClickOutside(rootRef, () => { open.value = false; }, { ignore: ['.hc-tooltip'] });
 
 function toggle(): void { open.value = !open.value; }
 function close(): void { open.value = false; }
 
 function flavorLabel(p: typeof PRESETS[number]): string {
-    return locale.value === 'zh' ? p.nameZh : p.nameEn;
+    // M25 修复：useI18n() 只返回 { t }，没 locale；直接读 ui.locale。
+    return ui.locale === 'zh' ? p.nameZh : p.nameEn;
 }
 
 function radiusLabel(id: RadiusScale): string {

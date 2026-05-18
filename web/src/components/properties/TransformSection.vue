@@ -78,21 +78,42 @@ function onOpacityChange(): void {
     <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-xs py-1 hover:text-[color:var(--foreground)]">
       {{ t.properties.transformHeader }}
     </summary>
+    <!-- M25：把 x/y → position 段，w/h → size 段，每段加 i18n 帮助 tooltip -->
     <div class="grid grid-cols-2 gap-2 pt-1.5">
       <label class="flex flex-col gap-0.5">
-        <span class="text-xs text-[color:var(--muted-foreground)]">x</span>
+        <span class="hc-field-label">
+          x
+          <Tooltip :text="t.properties.positionTip">
+            <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+          </Tooltip>
+        </span>
         <input type="number" class="hc-input" :value="element.x" @input="(e) => onNumberChange('x', e)">
       </label>
       <label class="flex flex-col gap-0.5">
-        <span class="text-xs text-[color:var(--muted-foreground)]">y</span>
+        <span class="hc-field-label">
+          y
+          <Tooltip :text="t.properties.positionTip">
+            <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+          </Tooltip>
+        </span>
         <input type="number" class="hc-input" :value="element.y" @input="(e) => onNumberChange('y', e)">
       </label>
       <label class="flex flex-col gap-0.5">
-        <span class="text-xs text-[color:var(--muted-foreground)]">w</span>
+        <span class="hc-field-label">
+          w
+          <Tooltip :text="t.properties.sizeTip">
+            <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+          </Tooltip>
+        </span>
         <input type="number" min="1" class="hc-input" :value="element.w" @input="(e) => onNumberChange('w', e)">
       </label>
       <label class="flex flex-col gap-0.5">
-        <span class="text-xs text-[color:var(--muted-foreground)]">h</span>
+        <span class="hc-field-label">
+          h
+          <Tooltip :text="t.properties.sizeTip">
+            <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
+          </Tooltip>
+        </span>
         <input type="number" min="1" class="hc-input" :value="element.h" @input="(e) => onNumberChange('h', e)">
       </label>
       <label class="flex flex-col gap-0.5 col-span-2">
