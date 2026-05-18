@@ -6,14 +6,43 @@
  * 父组件传入 element + locked，子组件直接 mutate element 做 optimistic（与原 RightPanel
  * 行为一致），通过 emit('update' | 'updateDebounced') 让父去发 ws op。
  */
+import { computed, onMounted, ref } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
 import { HelpCircle, Maximize2 } from 'lucide-vue-next';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import { layoutText, charAdvance, ASCENT_RATIO } from '@/render/TextLayout';
-import { FONT_META } from '@/render/PreviewRenderer';
+import { ensureLoaded as ensureFontLoaded } from '@/render/FontLoader';
 import { useI18n } from '@/i18n';
 import type { TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
+
+// M23：字体下拉动态化 —— fetch /api/font/list 而非读硬编码 FONT_META 白名单。
+// 内置 + 用户字体都来自后端，displayName / source 分组在 UI 区分。
+interface FontInfo {
+    id: string;
+    displayName: string;
+    source: 'builtin' | 'user';
+    format: 'ttf' | 'otf';
+    pixelated: boolean;
+    nativeSize: number;
+}
+
+const availableFonts = ref<FontInfo[]>([]);
+
+onMounted(async () => {
+    try {
+        const resp = await fetch('/api/font/list');
+        if (resp.ok) {
+            const data = await resp.json();
+            availableFonts.value = data.fonts ?? [];
+        }
+    } catch (e) {
+        console.warn('[TextElementSection] /api/font/list failed:', e);
+    }
+});
+
+const builtInFonts = computed(() => availableFonts.value.filter((f) => f.source === 'builtin'));
+const userFonts = computed(() => availableFonts.value.filter((f) => f.source === 'user'));
 
 interface Props {
     element: TextElement;
@@ -48,6 +77,14 @@ function onNumberChange(field: string, ev: Event) {
 function onSelectChange(field: string, ev: Event) {
     const v = (ev.target as HTMLSelectElement).value;
     emit('update', { [field]: v });
+}
+
+// M23：切字体时主动 ensureLoaded（FontLoader 内部幂等 + 去重），加载完触发
+//     CanvasView 注册的 onFontLoaded 回调 requestDraw；首帧 ctx.font 走 system fallback。
+function onFontIdChange(ev: Event) {
+    const v = (ev.target as HTMLSelectElement).value;
+    ensureFontLoaded(v);
+    emit('update', { fontId: v });
 }
 
 // ---------- M5-D3 P4：文本 fit-content ----------
@@ -157,8 +194,13 @@ function patchGlow(partial: Partial<Glow>) {
       <div class="grid grid-cols-2 gap-2">
         <label class="flex flex-col gap-0.5">
           <span class="text-[10px] text-[color:var(--muted-foreground)]">fontId</span>
-          <select class="hc-input" :value="element.fontId" @change="(e) => onSelectChange('fontId', e)">
-            <option v-for="(meta, id) in FONT_META" :key="id" :value="id">{{ meta.displayName }}</option>
+          <select class="hc-input" :value="element.fontId" @change="onFontIdChange">
+            <optgroup label="内置字体">
+              <option v-for="f in builtInFonts" :key="f.id" :value="f.id">{{ f.displayName }}</option>
+            </optgroup>
+            <optgroup v-if="userFonts.length > 0" label="用户字体">
+              <option v-for="f in userFonts" :key="f.id" :value="f.id">{{ f.displayName }}</option>
+            </optgroup>
           </select>
         </label>
         <label class="flex flex-col gap-0.5">

@@ -6,6 +6,7 @@ import { isDrawTool, useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
 import { renderProjectState, onIconReady, onPaletteReady } from '@/render/PreviewRenderer';
 import { preloadMetrics, onMetricsReady } from '@/render/GlyphMetricsLut';
+import { ensureLoaded as ensureFontLoaded, onFontLoaded } from '@/render/FontLoader';
 import { useI18n } from '@/i18n';
 import type { Element } from '@/types/protocol';
 
@@ -721,10 +722,12 @@ watch(() => project.state, () => requestDraw(), { deep: true, immediate: true })
 watch(editingId, () => requestDraw());
 onMounted(() => {
     requestDraw();
-    // 字体异步加载；@font-face 就绪后再重画一次确保用上真字形
-    if (document.fonts && typeof document.fonts.ready?.then === 'function') {
-        document.fonts.ready.then(() => requestDraw());
-    }
+    // M23：所有字体走 FontLoader（document.fonts 动态加载）。
+    //     ensureLoaded 是 PreviewRenderer drawText 调用的，这里只 preload 默认两个
+    //     避免首帧空白；onFontLoaded 回调注册后任何 fontId 加载完都触发重画。
+    ensureFontLoaded('ark_pixel');
+    ensureFontLoaded('source_han_sans');
+    onFontLoaded(() => requestDraw());
     // 图标异步加载就绪后请求重绘（每个新 source 第一次显示时占位 ?，加载完后真图替换）
     onIconReady(() => requestDraw());
     // M11-C：PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）

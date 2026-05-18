@@ -6,6 +6,7 @@ import { arrowSize, arrowShape, dotRadius, drawArrow, drawDot } from './MarkerRe
 import { fillToCanvasStyle } from './fill';
 import { applyBayerDither } from './BayerDither';
 import { getPaletteLut, type PaletteLut } from './PaletteLut';
+import { ensureLoaded, isLoaded } from './FontLoader';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
@@ -627,7 +628,13 @@ function shouldUseNearestNeighbor(family: string): boolean {
 
 function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (!t.text) return;
-    const family = fontFamily(t.fontId);
+    // M23：fontId 直接当 family（删除 KNOWN 白名单 fallback）。未加载的 fontId 触发
+    //     ensureLoaded 异步加载；首帧 ctx.font 走系统 fallback，加载完 onFontLoaded
+    //     回调通知 CanvasView.requestDraw 重画一次切到真字形。
+    const family = t.fontId;
+    if (!isLoaded(family)) {
+        ensureLoaded(family);
+    }
     const fontSpec = `${t.fontSize}px "${family}"`;
     ctx.font = fontSpec;
     ctx.textBaseline = 'alphabetic';
@@ -906,7 +913,3 @@ function parseRgb(hex: string): [number, number, number] {
     return [(rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff];
 }
 
-function fontFamily(fontId: string): string {
-    const KNOWN = new Set(['ark_pixel', 'source_han_sans']);
-    return KNOWN.has(fontId) ? fontId : 'ark_pixel';
-}

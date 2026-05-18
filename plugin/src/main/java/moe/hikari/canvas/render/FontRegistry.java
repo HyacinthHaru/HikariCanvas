@@ -6,9 +6,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -199,9 +203,79 @@ public final class FontRegistry {
         return Collections.unmodifiableMap(new LinkedHashMap<>(fonts));
     }
 
+    // ---------- M23-P1 HTTP 端点支持 ----------
+
+    /**
+     * 读取字体文件二进制。内置字体从 jar classpath，用户字体从绝对路径。
+     * 不存在 / 读取失败返 null。fontId 必须已注册（防 path traversal：不直接拼接外部输入）。
+     */
+    public byte[] loadFontBytes(String fontId) {
+        if (fontId == null) return null;
+        Registered r = fonts.get(fontId);
+        if (r == null) return null;
+        String src = r.source();
+        try {
+            if (src.startsWith("classpath:")) {
+                String path = src.substring("classpath:".length());
+                try (InputStream in = FontRegistry.class.getResourceAsStream(path)) {
+                    if (in == null) return null;
+                    return in.readAllBytes();
+                }
+            } else {
+                // 用户字体走文件系统；源路径来自启动期 loadExternal 扫描，非用户实时输入
+                return Files.readAllBytes(Paths.get(src));
+            }
+        } catch (IOException ex) {
+            log.warning("FontRegistry.loadFontBytes failed for " + fontId + ": " + ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 列举所有已注册字体的元数据。返回顺序：内置在前 + 用户在后；同组按 id 字母序。
+     * 给 {@code /api/font/list} 端点用。
+     */
+    public List<FontInfo> listAll() {
+        List<FontInfo> result = new ArrayList<>(fonts.size());
+        for (Map.Entry<String, Registered> entry : fonts.entrySet()) {
+            Registered r = entry.getValue();
+            String src = r.source();
+            boolean builtin = src.startsWith("classpath:");
+            String path = builtin ? src.substring("classpath:".length()) : src;
+            int dot = path.lastIndexOf('.');
+            String ext = dot >= 0 ? path.substring(dot + 1).toLowerCase(Locale.ROOT) : "";
+            // 仅 ttf / otf 暴露；其他扩展名归一到 ttf（AWT TRUETYPE_FONT 兼容超集）
+            if (!"otf".equals(ext)) ext = "ttf";
+            result.add(new FontInfo(
+                    entry.getKey(),
+                    r.metadata().displayName(),
+                    builtin ? "builtin" : "user",
+                    ext,
+                    r.metadata().pixelated(),
+                    r.metadata().nativeSize()));
+        }
+        result.sort((a, b) -> {
+            if (!a.source().equals(b.source())) {
+                return "builtin".equals(a.source()) ? -1 : 1;
+            }
+            return a.id().compareTo(b.id());
+        });
+        return result;
+    }
+
     // ---------- 数据类型 ----------
 
     public record Metadata(String displayName, boolean pixelated, int nativeSize) {}
+
+    /**
+     * 公开给 HTTP 端点 {@code /api/font/list} 的字体元信息。
+     * <ul>
+     *   <li>{@code source}: {@code "builtin"}（jar 内置）/ {@code "user"}（plugins/.../fonts/）</li>
+     *   <li>{@code format}: {@code "ttf"} / {@code "otf"}，仅基于文件扩展名</li>
+     * </ul>
+     */
+    public record FontInfo(String id, String displayName, String source, String format,
+                           boolean pixelated, int nativeSize) {}
 
     /** 已注册的字体：fontId + AWT Font + 元数据 + 来源（调试用）。 */
     public record Registered(String fontId, Font font, Metadata metadata, String source) {

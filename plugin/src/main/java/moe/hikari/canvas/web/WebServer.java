@@ -10,6 +10,7 @@ import io.javalin.router.Endpoint;
 import io.javalin.websocket.WsContext;
 import io.javalin.websocket.WsHandlerType;
 import io.javalin.websocket.WsMessageContext;
+import moe.hikari.canvas.render.FontRegistry;
 import moe.hikari.canvas.render.ProjectionThrottler;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
@@ -79,6 +80,8 @@ public final class WebServer {
     private final moe.hikari.canvas.image.UploadHandler uploadHandler;
     private final moe.hikari.canvas.storage.TemplateRepo templateRepo;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
+    /** M23-P1：HTTP 字体端点 {@code /api/font/file} 与 {@code /api/font/list} 用。 */
+    private final FontRegistry fontRegistry;
 
     // ---------- 拆分后的 dispatcher（M15.x god-class 拆分）----------
     private final EditOpDispatcher editOpDispatcher;
@@ -131,6 +134,7 @@ public final class WebServer {
                      moe.hikari.canvas.template.TemplatePublisher templatePublisher,
                      moe.hikari.canvas.storage.TemplateRepo templateRepo,
                      moe.hikari.canvas.storage.AuditLog auditLog,
+                     FontRegistry fontRegistry,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler,
                      int wsAuthTimeoutSeconds,
@@ -150,6 +154,7 @@ public final class WebServer {
         this.uploadHandler = uploadHandler;
         this.templateRepo = templateRepo;
         this.auditLog = auditLog;
+        this.fontRegistry = fontRegistry;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
         this.paintHandler = paintHandler;
@@ -295,6 +300,41 @@ public final class WebServer {
                         ctx.contentType("application/json").result(json);
                         // 5 min；用户改字体后重启服务即可刷新
                         ctx.header("Cache-Control", "max-age=300, private");
+                    }));
+
+            // M23-P1：字体二进制端点。前端 FontFace API 动态加载（替代 @font-face 静态注册）。
+            // 严格 id 白名单 [a-zA-Z0-9_-]+；间接寻址（FontRegistry.loadFontBytes 查表）防 path traversal。
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/font/file", ctx -> {
+                        String id = ctx.queryParam("id");
+                        if (id == null || id.isEmpty() || !id.matches("[a-zA-Z0-9_-]+")) {
+                            ctx.status(400).result("{\"code\":\"BAD_REQUEST\"}");
+                            return;
+                        }
+                        byte[] bytes = fontRegistry.loadFontBytes(id);
+                        if (bytes == null) {
+                            ctx.status(404).result("{\"code\":\"NOT_FOUND\"}");
+                            return;
+                        }
+                        // 文件扩展名决定 Content-Type；同 id 文件 immutable，长缓存
+                        String mime = "font/ttf";
+                        for (FontRegistry.FontInfo info : fontRegistry.listAll()) {
+                            if (info.id().equals(id)) {
+                                mime = "otf".equals(info.format()) ? "font/otf" : "font/ttf";
+                                break;
+                            }
+                        }
+                        ctx.contentType(mime);
+                        ctx.header("Cache-Control", "max-age=86400, immutable");
+                        ctx.result(bytes);
+                    }));
+
+            // M23-P1：字体清单端点。返所有已注册字体（内置 + 用户）的 metadata。
+            // 无鉴权（与 /api/font/metrics 同级 trust）；短缓存（用户字体可能重启后增减）。
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/api/font/list", ctx -> {
+                        ctx.header("Cache-Control", "max-age=60");
+                        ctx.json(Map.of("fonts", fontRegistry.listAll()));
                     }));
 
             // M14：创意工坊市场（DB 元数据列表）

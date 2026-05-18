@@ -32,6 +32,84 @@
 
 ---
 
+## 2026-05-18 · M23 字体加载通法（双轨变单轨，删 fallback bug）
+
+### 根因诊断
+
+用户报告 M22 字体（得意黑 / 马善政毛笔楷书 / 站酷庆科黄油体 等）在 **MC 内完美但浏览器画板显示普通字体**。
+
+定位 `web/src/render/PreviewRenderer.ts:909-912`：
+
+```ts
+function fontFamily(fontId: string): string {
+    const KNOWN = new Set(['ark_pixel', 'source_han_sans']);
+    return KNOWN.has(fontId) ? fontId : 'ark_pixel';
+}
+```
+
+**M5-D 期遗留的"安全网"白名单，M21/M22 加 18 字体时 agent 都没更新**。所有新字体在 `drawText` 设置 `ctx.font` 前被强制 fallback 到 `ark_pixel` → 浏览器二次 fallback 到 system 字体 → 视觉上"普通字体"。
+
+MC 内为何完美：Java FontRegistry 按 fontId 直接拿 Font 对象，无此白名单限制 → 后端正确 + 前端 broken。
+
+### 深层架构问题
+
+用户字体（plugins/HikariCanvas/fonts/）**前端完全无 @font-face**——双轨制：
+- 内置字体：style.css 写死 @font-face（构建期固定列表）
+- 用户字体：后端 FontRegistry.loadExternal + FontMetricsTable.registerRuntime + `/api/font/metrics` 但**前端没法拿字体二进制** → 浏览器静默 fallback
+
+每次加字体易漏环节（M21/M22 fontFamily 漏修就是例证）。
+
+### 通法：双轨变单轨
+
+M23 删除 style.css 所有 @font-face + 删除 fontFamily KNOWN，统一走 HTTP + `FontFace` API。
+
+### 后端 M23.1（commit ?）
+
+`plugin/.../render/FontRegistry.java`：
+- 新 `loadFontBytes(fontId): byte[]`——从 jar classpath（内置）或文件系统（用户）读字体二进制；间接寻址（fonts Map lookup）防 path traversal
+- 新 `listAll(): List<FontInfo>`——内置在前 + 同组按 id 字母序
+- 新 record `FontInfo(id, displayName, source, format, pixelated, nativeSize)`
+
+`plugin/.../web/WebServer.java`：
+- 新 `GET /api/font/file?id=X`——fontId 白名单 `[a-zA-Z0-9_-]+`；200 + `Content-Type: font/ttf|otf` + `Cache-Control: max-age=86400, immutable`；404 / 400
+- 新 `GET /api/font/list`——返 `{fonts: [...]}` JSON；`Cache-Control: max-age=60`
+- WebServer 构造器加 FontRegistry 参数；HikariCanvas.java 调用点更新
+
+### 前端 M23.2
+
+新 `web/src/render/FontLoader.ts`（~70 行）：
+- `ensureLoaded(fontId)` 幂等 async + 去重 Map + 静默失败（fallback 由浏览器 system 字体处理）
+- `isLoaded(fontId)` 同步查询 `face.status === 'loaded'`
+- `onFontLoaded(fn)` 回调注册（与 onIconReady / onPaletteReady / onMetricsReady 同 pattern）
+- 内部 `new FontFace(id, 'url(/api/font/file?id=X)') + face.load() + document.fonts.add`
+
+删除：
+- `web/src/style.css`：20 个 @font-face 全删（line 9-172）+ 保留 Tailwind / 主题 / body reset + 加 M23 注释
+- `PreviewRenderer.ts fontFamily()` 函数 KNOWN 白名单（**根因 bug 修复**）；`drawText` 内 `family = t.fontId` 直接用；入口 `if (!isLoaded(family)) ensureLoaded(family)` 预热
+
+`CanvasView.vue`：onMounted 预热 ark_pixel / source_han_sans + `onFontLoaded(() => requestDraw())` 回调（替代原 `document.fonts.ready` 一次性等待）
+
+`TextElementSection.vue`：
+- onMounted fetch `/api/font/list` → `availableFonts` ref
+- computed `builtInFonts` / `userFonts` 分组
+- `<select>` 改用 `<optgroup>` 两段（"内置字体" / "用户字体"，后者仅当 user 字体存在才渲染）
+- 切字体时 `ensureFontLoaded(newId)` + emit
+
+### FONT_META 兼容性
+
+保留 `FONT_META` 字典作"启动期已知字体" hint（pixelated / nativeSize 判断）；未知 fontId（用户字体）走默认 `{pixelated: false, nativeSize: 0}`——`shouldUseNearestNeighbor` 访问 `FONT_META[family]?.pixelated && nativeSize > 0`，未知返 false 走标准 fillText 路径，无需额外改造
+
+### 验证
+
+- `:plugin:test` BUILD SUCCESSFUL，14 baseline fixture 无漂移
+- `vite build` 1753 modules / 921ms / 0 错；CSS 47.7 → 46.91 kB（删 160 行 @font-face）；JS gzip 不变
+
+### 关联文件
+
+后端：`FontRegistry.java` / `WebServer.java` / `HikariCanvas.java`。前端新：`FontLoader.ts`。前端改：`style.css` / `PreviewRenderer.ts` / `CanvasView.vue` / `TextElementSection.vue`。
+
+---
+
 ## 2026-05-18 · M22 字体艺术/装饰扩充（7 → 20 字体矩阵，选项 C）
 
 用户选"选项 C 完整版"再加 13 字体。复用 M21 工作流（4 处改动 per 字体）。
