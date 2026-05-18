@@ -32,6 +32,109 @@
 
 ---
 
+## 2026-05-18 · M26 内置图标库（FA Free 2060 icons + IconLibrary UI）
+
+用户要求"图标库 / 素材库共享侧边栏"——选项 C 奢华版（FA Free + Material Symbols + 用户 SVG + 收藏夹 + 拖入）。
+
+**M26 实际范围调整**：Material Symbols 9000 icon × 4 风格无单一 zip release，单独工程 ≥6h，留 M27；M26 收口 FA Free + 用户 SVG + 完整 UI。3 commit batch（4h+4h+8h ≈ 16h wall-clock）。
+
+### M26.1 数据模型 + 后端 IconRegistry + 构建期生成器（commit `2e3c58d`）
+
+**IconElement 升级**：
+- 加 `Fill fill` 字段（M11 联合类型，替代 tint；保留 tint 兼容旧模板）
+- `IconElementDeserializer`：旧 `tint` 字符串自动 → `SolidFill(tint)` 升级
+- `source` 命名 schema：`fa-solid/heart` / `user/train`（新）vs 无 `/` 的 legacy PNG（M7 完全兼容）
+- `SOURCE_RE = ^[a-z0-9_-]+(/[a-z0-9_.-]+)?$`（≤ 64）
+
+**IconLibraryGenerator**（构建期）：
+- 拉 FA Free 6.7.2 zip 13MB（SHA-256 pin `ecdaaa6d...`，3 次重试同 downloadFonts 防御）
+- 正则取 `<path d>` 首个 + viewBox（FA 全 0 0 512 512）
+- 输出 `build/generated/icon-resources/{fa-solid,fa-regular,fa-brands}.icons.json` ≈ 1.4MB（jar +1.4MB）
+- processResources include 到 jar `/icons/`
+- **总产物**：fa-solid 1402 + fa-regular 163 + fa-brands 495 = **2060 icons**
+
+**IconRegistry**：
+- `loadBuiltIn()` 读 jar JSON / `loadExternal(plugins/HikariCanvas/icons)` 扫 SVG
+- 用户 SVG 解析：regex `<path d>` 首个 + viewBox 属性（缺则 `0 0 24 24`）；文件名白名单 `[a-z0-9_-]+\.svg`
+- API：`getPathD / getViewBox / getInfo / listAll / search(q, category, limit, offset)`
+
+**HTTP 端点**：
+- `GET /api/icon/list?q&category&limit(默 60,max 200)&offset` → `{icons,total,hasMore}`，Cache 300s
+- `GET /api/icon/paths?id=X`（严格 isValidSource）→ `{id,viewBox,paths:[{d}]}`，Cache 86400s immutable
+
+### M26.2 IconRenderer SVG 双端（commit `5c5b7eb`）
+
+**后端 IconRenderer dual-path**：
+- `IconElement.isLegacySource()` 判定：含 `/` 走 `renderSvgPath`（新）/ 无 `/` 走 `renderLegacyPng`（M7 完全保留）
+- SVG 路径：`PathParser.parse(d)` + viewBox 平移等比缩放居中 AffineTransform + Fill 经 `FillPaintBuilder.fillToPaint(fill, elBbox)` + `g.fill(transformedShape)`；fill==null fallback `SolidFill("#000000")`
+- 占位画法（虚线方框 + ?）与 PNG 路径一致
+
+**RenderContext + CanvasCompositor**：新 ctor 加 `IconRegistry` 注入；保旧 ctor 测试路径兼容（iconRegistry=null SVG 退占位）
+
+**前端 PreviewRenderer.drawIcon** 拆为 `drawIconLegacyPng + drawIconSvgPath`：
+- SVG 走 `getCachedIcon` 同步查 + `ensureIconLoaded` 异步首加载
+- `fillToCanvasStyle(在 translate 前算 gradient 避免端点错位)`
+- `ctx.translate + scale + new Path2D(d) + ctx.fill`
+
+**新 IconLoader.ts**（镜像 FontLoader）：cache + pending 去重 + readyHandlers；404/网络失败缓存 null 让上层走占位。
+
+`CanvasView` 加 `onIconLoaded(() => requestDraw())` 同 onFontLoaded pattern。
+
+### M26.3 前端 IconLibrary UI（commit `cf99dcf`）
+
+**新组件 `IconLibrary.vue` 360px 左侧 panel**：
+- absolute 紧贴 LeftTools，z-30 浮 CanvasView 上；v-if 完全卸载（关时省 fetch/observer）
+- 7 tabs（全部 / FA solid / regular / brands / 我的 / 收藏 / 最近）+ localStorage 当前 tab 持久
+- 6 列 aspect-square grid，hover 角标收藏星标，`:title` 显示 name·pack
+- 搜索 debounce 200ms；tab/词变重置 + first page fetch
+- IntersectionObserver lazy ensureLoaded：仅可见 cell 调 `/api/icon/paths`
+- sentinel IntersectionObserver 无限滚动 +128px 触底 → offset+=60
+- 客户端 favorites/recent tab 跳 fetch，子串过滤
+
+**新 `stores/iconLibrary.ts`**：open / activeCategory / favorites / recent 三段 localStorage。
+
+**交互**：
+- 拖入：cell `:draggable` + `setData('application/x-hikari-icon', id)` + text/plain 兜底；CanvasView client→canvas 坐标解算 → 创建 64×64 IconElement 居中于光标
+- 点击：画布中心新建 IconElement（fill solid #000000）+ trackUsage 推 recent
+
+**LeftTools 加 Shapes 按钮（I 快捷键）**；`useCanvasShortcuts` 加 I toggle + Esc 关闭；click-outside 关闭（排除自己按钮 data-icon-library-trigger）
+
+**i18n**：`tools.iconLibraryTool` + `iconLibrary.*` 中英双语（含 7 category label）
+
+### 验证
+
+- `:plugin:test` 28 suite / 364 tests / 0 失败 / 14 fixture 0 漂移（M26.1 + M26.2）
+- vite build 580 kB (+18 kB) / gzip 179 kB / 0 错 / 1762 modules
+
+### 关键架构决策
+
+1. **SOURCE_RE 双形式**：`pack/name` 走新 SVG，无 `/` 走旧 PNG——一行正则隔离新旧
+2. **IconElementDeserializer 自动 tint→fill 升级**：旧模板 / 旧 .canvas 透明读取，永不破坏
+3. **IconRegistry 与 FontRegistry 同款双源 + HTTP 通法**（M23 设计延续）
+4. **Fill 联合类型复用**：icon 支持渐变填充（同 Path / Canvas.background），不限单色
+5. **lazy + infinite scroll**：2060 icons 前端不一次加载 SVG path，IntersectionObserver 按需 `ensureLoaded`
+
+### 留 M27 + v1.x
+
+- **Material Symbols 集成**（M27）：9000 icon × 4 风格需要 GitHub API 列文件或拉 marella/material-symbols npm 包 + 解析
+- **PNG IconElement → SVG 迁移工具**（v1.x，可选）：现有 PNG 资源转 SVG path
+- **Icon 多 path / multi-fill**（v1.x）：当前 paths 数组留 v2 multi-path（FA Free 全单 path）
+- **更多 icon source**：Iconify / Lucide / Heroicons（任何 SVG icon 集都能加入 IconRegistry pack）
+
+### 关联文件（M26.1+2+3 共）
+
+**新**：
+- `plugin/src/main/java/moe/hikari/canvas/render/IconRegistry.java`
+- `plugin/src/main/java/moe/hikari/canvas/state/IconElementDeserializer.java`
+- `plugin/src/generator/java/moe/hikari/canvas/build/IconLibraryGenerator.java`
+- `web/src/render/IconLoader.ts`
+- `web/src/components/layout/IconLibrary.vue`
+- `web/src/stores/iconLibrary.ts`
+
+**改**：`IconElement.java` / `IconRenderer.java` / `RenderContext.java` / `CanvasCompositor.java` / `HikariCanvas.java` / `EditSession.java` / `ElementValidator.java` / `TemplateInstantiator.java` / `WebServer.java` / `plugin/build.gradle.kts` / `web/src/render/PreviewRenderer.ts` / `web/src/types/protocol.ts` / `web/src/components/layout/CanvasView.vue` / `LeftTools.vue` / `App.vue` / `useCanvasShortcuts.ts` / `i18n/messages.ts`
+
+---
+
 ## 2026-05-18 · M25 ThemeSwitcher Bug 修复 + i18n 挂载 + 2 字体扩充
 
 3 块工作 1 agent 完成。
