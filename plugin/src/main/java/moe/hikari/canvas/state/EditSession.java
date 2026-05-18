@@ -208,6 +208,7 @@ public final class EditSession {
                 case "circle" -> buildCircle(id, props);
                 case "shape" -> buildShape(id, props);
                 case "image" -> buildImage(id, props);
+                case "icon" -> buildIcon(id, props);
                 default -> throw new ValidationException("INVALID_ELEMENT", "unknown element type: " + type);
             };
         } catch (ValidationException ve) {
@@ -1053,6 +1054,53 @@ public final class EditSession {
         }
         return new RectElement(r.id(), x, y, w, h, rotation, locked, visible, fill, stroke,
                 opacity, blendMode, renderMode);
+    }
+
+    // ---------- M7 IconElement（M26 升级矢量 + Fill 联合类型） ----------
+
+    /**
+     * 构造 IconElement。M26 升级后 source 走 {@link IconElement#isValidSource}（pack/name 形态
+     * 或 legacy 单段），fill 优先于 tint：
+     * <ul>
+     *   <li>同次 add 给了 {@code fill} → 走 {@link FillValidator}；{@code tint} 仅作为冗余字段
+     *       存入 record（向后兼容旧客户端读取）</li>
+     *   <li>没 fill 但有 {@code tint}（旧客户端 / 旧模板） → 自动 wrap {@link SolidFill}</li>
+     *   <li>两者都没 → fill = null（IconRenderer 退回 pack 默认色 / 黑）</li>
+     * </ul>
+     *
+     * <p>M26-B（2026-05-17）补丁：M26.1 加 IconElement record 时漏改 addElement switch，所有
+     * {@code element.add type=icon} fall through default 返 {@code INVALID_ELEMENT}。本方法补上。</p>
+     */
+    private Element buildIcon(String id, Map<String, Object> p) {
+        int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
+        int y = intFieldOrDefault(p, "y", 0); validateCoord(y, "y");
+        int w = intFieldOrDefault(p, "w", 32); validateDim(w, "w");
+        int h = intFieldOrDefault(p, "h", 32); validateDim(h, "h");
+        int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
+        boolean locked = boolFieldOrDefault(p, "locked", false);
+        boolean visible = boolFieldOrDefault(p, "visible", true);
+        String source = requireString(p, "source", true);
+        if (!IconElement.isValidSource(source)) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "icon source must match " + IconElement.SOURCE_RE.pattern()
+                            + " (≤" + IconElement.SOURCE_MAX_LEN + "): " + source);
+        }
+        // tint legacy 兼容：若 props 提供 tint，校验 + 留作 record 字段
+        String tint = null;
+        if (p.containsKey("tint") && p.get("tint") != null) {
+            tint = requireStringValue(p.get("tint"), "tint");
+            validateColor(tint);
+        }
+        // fill 优先；缺则从 tint 升级；两者都缺则 null（pack 默认色）
+        Fill fill = parseFillNullable(p.get("fill"));
+        if (fill == null && tint != null) {
+            fill = new SolidFill(tint);
+        }
+        Float opacity = parseOpacityNullable(p.get("opacity"));
+        BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
+        RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
+        return new IconElement(id, x, y, w, h, rotation, locked, visible,
+                source, tint, opacity, blendMode, renderMode, fill);
     }
 
     private IconElement applyIconPatch(IconElement ic, Map<String, Object> patch) {

@@ -32,6 +32,60 @@
 
 ---
 
+## 2026-05-18 · M26-B Icon add bug + registerRuntime 异步化 + Material 留 M27
+
+### Icon add bug 修复（用户报告：点击 / 拖入无反应）
+
+**根因**：`EditSession.addElement` switch 缺 `case "icon"`：
+
+```java
+element = switch (type) {
+    case "text" / "rect" / "path" / "circle" / "shape" / "image" -> build...
+    // ❌ 缺 case "icon"
+    default -> throw new ValidationException("INVALID_ELEMENT", "unknown element type: " + type);
+};
+```
+
+M7 期 IconElement 只在 template 内部 build；M26.1 加 IconLibrary 让 icon 第一次走 element.add 路径，agent 漏改这个关键 case → 所有 icon add 返 INVALID_ELEMENT，前端"无反应"。
+
+**修复**：
+- 加 `case "icon" -> buildIcon(id, props);`
+- 新 `buildIcon(id, props)`：解析 x/y/w/h/rotation/locked/visible/source/tint/fill/opacity/blendMode/renderMode，复用 ElementValidator.parseFillNullable / parseOpacityNullable；source 走 IconElement.isValidSource；fill 优先 tint 兼容（与 IconElementDeserializer 一致）
+- 新测试 `EditSessionIconTest.java` 8 case：fill 入口 / tint 升级 / fill+tint 双给 fill 优先 / 都缺 → null / legacy source / 非法 source / 缺 source / `material/` 命名空间
+
+### Material Symbols 调研 + 留 M27
+
+调研 marella/material-symbols + @material-symbols/svg-400 npm tarball：
+- 源稳定（npm tarball 1.8MB → 解压 30MB），单 `<path>` SVG
+- **阻塞 1**：viewBox `0 -960 960 960`（负 Y 起点）与 FA `0 0 512 512` 不同，IconRenderer 当前 parseViewBox 支持但需 fixture 测多 viewBox 双端一致
+- **阻塞 2**：outlined-only 3879 个 ≈ 5MB JSON（FA 三 pack 仅 1.5MB）；全 4 风格 7758 ≈ 10MB jar 增量过大
+- **决策**：M27 单独 phase 处理：① 选 curated 子集（~500-1000）控 jar；② IconRenderer viewBox 参数化（已 ready）+ fixture 验证；③ IconLibrary tab + i18n
+
+### registerRuntime 异步化（v1.x 散点收尾）
+
+**问题**：M20.4 用户字体 metrics 计算在 `FontRegistry.loadExternal` 同步跑，每字体扫 65k codepoints ~1-2s；N 个用户字体 onEnable 阻塞 N × 1-2s（N=10 ~15s）。
+
+**修复**：把 `FontMetricsTable.registerRuntime` 改为 daemon worker 后台串行跑：
+- `Font.createFont` + `fonts.put` 仍同步（其他模块 onEnable 后立即 ready）
+- 只把 metrics 计算推后台
+- worker 未完成时 `FontMetricsTable.advance` 返 -1 → 调用方走 `canvasCharWidth` fallback（功能可用，前几秒宽度按经验值，metrics 到位后 onMetricsReady → CanvasView.requestDraw 自动重画）
+- ConcurrentHashMap.put 原子覆盖 MISSING sentinel
+- worker daemon=true 防 plugin disable 后 JVM hang
+- 每字体独立 try-catch 防一个失败拖垮全队
+
+**收益**：N 个用户字体 ~1-2s × N → 0；N=10 节省 ~15s onEnable
+
+### 验证
+
+- `:plugin:test` BUILD SUCCESSFUL（含新 EditSessionIconTest 8 case）
+- 后端 baseline 14 fixture 0 漂移
+
+### 关联文件
+
+`plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`（+ buildIcon + case "icon"）/ `FontRegistry.java`（registerRuntime worker）/ `plugin/src/test/.../EditSessionIconTest.java`（新）
+
+---
+
 ## 2026-05-18 · M26 内置图标库（FA Free 2060 icons + IconLibrary UI）
 
 用户要求"图标库 / 素材库共享侧边栏"——选项 C 奢华版（FA Free + Material Symbols + 用户 SVG + 收藏夹 + 拖入）。

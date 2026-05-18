@@ -156,12 +156,26 @@ public final class FontRegistry {
     /**
      * 扫描给定目录加载外部字体；fileName 去扩展名作为 fontId。
      * 目录不存在或扫描失败不抛异常，仅 log。
+     *
+     * <p><b>M26-B 异步化（2026-05-17）：</b> {@link Font#createFont} + {@code fonts.put} 仍同步
+     * 完成（其他模块 onEnable 后立即假定字体注册表 ready）；但 {@link FontMetricsTable#registerRuntime}
+     * 扫 65k codepoints 每字体 ~1-2s 阻塞，N 个用户字体启动期累计 20s+。改为 daemon worker thread
+     * 后台跑：</p>
+     * <ul>
+     *   <li>worker 完成前调用 {@link FontMetricsTable#advance} 返 -1，调用方走 canonicalCharWidth
+     *       fallback —— 渲染功能完全可用，只是前几秒宽度按 ASCII=0.5×fontSize / CJK=fontSize 近似</li>
+     *   <li>worker 内部用 {@code ConcurrentHashMap.put} 原子覆盖 MISSING sentinel，
+     *       不需要 caller 同步；与运行时 {@code advance} 查询天然无锁</li>
+     *   <li>异常吞掉到 log（避免 worker 静默死掉但 main 仍跑）</li>
+     * </ul>
      */
     public void loadExternal(Path fontsDir) {
         if (!Files.isDirectory(fontsDir)) {
             log.info("FontRegistry: external fonts dir not present: " + fontsDir);
             return;
         }
+        // 收集需要后台算 metrics 的字体（id, Font 对象），避免在 Files.list 流里逃逸捕获 try-with-resources
+        List<Map.Entry<String, Font>> pendingMetrics = new ArrayList<>();
         try (var stream = Files.list(fontsDir)) {
             stream.forEach(path -> {
                 String fileName = path.getFileName().toString();
@@ -178,8 +192,8 @@ public final class FontRegistry {
                     // M20-P4：用户字体没有构建期生成的 .metrics.json，运行时扫一次 advance 表
                     // 覆盖 MISSING sentinel；否则 charAdvance 返 -1 fallback canonicalCharWidth 与
                     // GlyphMetricsLut HTTP 端点的查询也会 404。
-                    FontMetricsTable.registerRuntime(id, font);
-                    log.info("FontRegistry: registered runtime metrics for external font '" + id + "'");
+                    // M26-B：异步化（见 javadoc）；这里只收集，后面统一 spawn worker
+                    pendingMetrics.add(Map.entry(id, font));
                 } catch (IOException | FontFormatException ex) {
                     log.log(Level.WARNING, "FontRegistry: failed to load external " + path, ex);
                 }
@@ -187,6 +201,39 @@ public final class FontRegistry {
         } catch (IOException ex) {
             log.log(Level.WARNING, "FontRegistry: scan failed for " + fontsDir, ex);
         }
+        if (!pendingMetrics.isEmpty()) {
+            spawnMetricsWorker(pendingMetrics);
+        }
+    }
+
+    /**
+     * 启动单个 daemon 线程后台逐字体跑 {@link FontMetricsTable#registerRuntime}。
+     * daemon 防 plugin disable 后 JVM 仍挂住；逐字体而非并行—避免同时算 65k×N 把 GC 打爆。
+     */
+    private void spawnMetricsWorker(List<Map.Entry<String, Font>> pending) {
+        Thread t = new Thread(() -> {
+            long t0 = System.nanoTime();
+            int done = 0;
+            for (Map.Entry<String, Font> e : pending) {
+                String id = e.getKey();
+                Font font = e.getValue();
+                try {
+                    FontMetricsTable.registerRuntime(id, font);
+                    done++;
+                    log.info("FontRegistry: registered runtime metrics for external font '" + id + "'");
+                } catch (Throwable th) {
+                    // 不让一个字体 metrics 失败拖垮 worker
+                    log.log(Level.WARNING,
+                            "FontRegistry: registerRuntime failed for '" + id + "'", th);
+                }
+            }
+            long ms = (System.nanoTime() - t0) / 1_000_000L;
+            log.info("FontRegistry: async metrics worker done (" + done + "/"
+                    + pending.size() + " fonts, " + ms + " ms)");
+        }, "HikariCanvas-FontMetrics-Worker");
+        t.setDaemon(true);
+        t.setPriority(Thread.NORM_PRIORITY - 1);
+        t.start();
     }
 
     /** 返回指定 id 的字体；不存在返 null。 */
