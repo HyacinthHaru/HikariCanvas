@@ -1,6 +1,7 @@
 import { onKeyStroke, useEventListener } from '@vueuse/core';
 import type { ActiveTool } from '@/stores/ui';
 import { isDrawTool, useUiStore } from '@/stores/ui';
+import { useIconLibraryStore } from '@/stores/iconLibrary';
 import { useClipboard } from '@/composables/useClipboard';
 
 /**
@@ -15,6 +16,7 @@ import { useClipboard } from '@/composables/useClipboard';
 export function useCanvasShortcuts() {
     const ui = useUiStore();
     const clipboard = useClipboard();
+    const iconLibrary = useIconLibraryStore();
 
     function inEditable(): boolean {
         const a = document.activeElement as HTMLElement | null;
@@ -78,6 +80,11 @@ export function useCanvasShortcuts() {
     onKeyStroke(['g', 'G'], (e) => {
         if (e.ctrlKey || e.metaKey) return;
         if (!inEditable()) ui.setTool('paint-bucket');
+    });
+    // M26.3：I 图标库 panel toggle（非工具，独立 UI 状态）
+    onKeyStroke(['i', 'I'], (e) => {
+        if (e.ctrlKey || e.metaKey) return;
+        if (!inEditable()) iconLibrary.toggleOpen();
     });
 
     // M17 F4：Space-hold 临时手型工具。保存原工具到 spaceSavedTool，松开 Space 恢复。

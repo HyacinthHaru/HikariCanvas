@@ -234,6 +234,82 @@ const {
     triggerFileInput,
 } = useCanvasUpload({ brushHostRef, fileInputRef });
 
+// ---------- M26.3 IconLibrary drop ----------
+//
+// IconLibrary 的 grid cell 通过 dataTransfer.setData('application/x-hikari-icon', id)
+// 携带 icon source。这里在 outer drop 时先尝试解出 icon → 创建 IconElement；
+// 不是 icon drag 才让 useCanvasUpload 的 onCanvasDrop 接管文件上传。dragover 同款
+// 拓展：icon drag 也需要 preventDefault 才能触发 drop。
+const ICON_DRAG_MIME = 'application/x-hikari-icon';
+const ICON_SIZE = 64;
+
+function hasIconDrag(ev: DragEvent): boolean {
+    if (!ev.dataTransfer) return false;
+    // dragover 阶段 types 可访问，但 getData 受同源策略限制只在 drop 才可读
+    return Array.from(ev.dataTransfer.types).includes(ICON_DRAG_MIME);
+}
+
+function clientToCanvas(clientX: number, clientY: number): { x: number; y: number } | null {
+    const host = brushHostRef.value;
+    if (!host) return null;
+    const rect = host.getBoundingClientRect();
+    return {
+        x: (clientX - rect.left) / ui.zoom,
+        y: (clientY - rect.top) / ui.zoom,
+    };
+}
+
+function onOuterDragOver(ev: DragEvent): void {
+    if (project.isLocked) return;
+    if (hasIconDrag(ev)) {
+        // 接受 icon drop
+        ev.preventDefault();
+        if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+        return;
+    }
+    // 委托给原有 image upload dragover
+    onCanvasDragOver(ev);
+}
+
+function onOuterDrop(ev: DragEvent): void {
+    if (project.isLocked) return;
+    if (hasIconDrag(ev)) {
+        ev.preventDefault();
+        const id = ev.dataTransfer?.getData(ICON_DRAG_MIME);
+        if (!id) return;
+        // 简单形态校验：必须 pack/name 形态，长度 ≤ 64（与后端 IconElement.isValidSource 同侧约束）
+        if (id.length === 0 || id.length > 64 || id.indexOf('/') < 0) return;
+
+        const center = clientToCanvas(ev.clientX, ev.clientY);
+        const cw = project.canvasPixelWidth || 256;
+        const ch = project.canvasPixelHeight || 128;
+        const cx = center?.x ?? cw / 2;
+        const cy = center?.y ?? ch / 2;
+        const x = Math.max(0, Math.min(cw - ICON_SIZE, Math.round(cx - ICON_SIZE / 2)));
+        const y = Math.max(0, Math.min(ch - ICON_SIZE, Math.round(cy - ICON_SIZE / 2)));
+
+        const activeLayer = project.activeLayer;
+        if (!activeLayer || activeLayer.locked) return;
+
+        ws.send('element.add', {
+            type: 'icon',
+            layerId: activeLayer.id,
+            props: {
+                x, y,
+                w: ICON_SIZE, h: ICON_SIZE,
+                rotation: 0,
+                source: id,
+                fill: { type: 'solid', color: '#000000' },
+                locked: false,
+                visible: true,
+            },
+        });
+        return;
+    }
+    // 委托给原有 image upload drop
+    onCanvasDrop(ev);
+}
+
 // ---------- element 命中 ----------
 function hitConfig(e: Element) {
     // Konva 用 offsetX/Y 把「bbox 左上」坐标转为「绕中心旋转」
@@ -800,8 +876,8 @@ function requestDraw(): void {
     @mousemove="onMouseMove"
     @mouseup="onMouseUpOrLeave"
     @mouseleave="() => { onMouseUpOrLeave(); hoveredGap = null; }"
-    @dragover="onCanvasDragOver"
-    @drop="onCanvasDrop"
+    @dragover="onOuterDragOver"
+    @drop="onOuterDrop"
   >
     <!-- 画布居中容器
          M17 F4：1024px 虚空白边——padding 让 scrollWidth / scrollHeight 虚拟扩大，

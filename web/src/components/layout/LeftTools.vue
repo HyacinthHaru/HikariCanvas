@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Hand, Minus, MoveRight, Circle, Star, Brush, PaintBucket } from 'lucide-vue-next';
+import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Hand, Minus, MoveRight, Circle, Star, Brush, PaintBucket, Shapes } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
+import { useIconLibraryStore } from '@/stores/iconLibrary';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
@@ -13,6 +14,7 @@ const project = useProjectStore();
 const ws = getWsClient();
 const templates = useTemplatesStore();
 const ui = useUiStore();
+const iconLibrary = useIconLibraryStore();
 const { t } = useI18n();
 
 function runOp(op: string, payload?: unknown) {
@@ -168,6 +170,21 @@ function addRect() {
 
     <div class="my-1 w-8 h-px bg-[color:var(--border)]"></div>
 
+    <!-- M26.3：图标库 panel toggle（不参与 activeTool）。快捷键 I。 -->
+    <Tooltip :text="t.tools.iconLibraryTool" shortcut="I">
+      <button
+        data-icon-library-trigger
+        class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        :class="iconLibrary.open
+          ? 'bg-[color:var(--primary)]/15 text-[color:var(--primary)] ring-1 ring-[color:var(--primary)]/40'
+          : 'hover:bg-[color:var(--accent)]'"
+        :disabled="!net.authenticated"
+        :aria-pressed="iconLibrary.open"
+        @click="iconLibrary.toggleOpen()"
+      >
+        <Shapes class="size-5" />
+      </button>
+    </Tooltip>
     <Tooltip :text="t.tools.openTemplates">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"

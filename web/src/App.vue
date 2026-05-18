@@ -4,6 +4,7 @@ import { useEventListener } from '@vueuse/core';
 import TopBar from '@/components/layout/TopBar.vue';
 import LeftTools from '@/components/layout/LeftTools.vue';
 import CanvasView from '@/components/layout/CanvasView.vue';
+import IconLibrary from '@/components/layout/IconLibrary.vue';
 import RightPanel from '@/components/layout/RightPanel.vue';
 import StatusBar from '@/components/layout/StatusBar.vue';
 import LogDrawer from '@/components/layout/LogDrawer.vue';
@@ -170,6 +171,8 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     <TopBar />
     <div class="flex-1 flex min-h-0 relative">
       <LeftTools v-if="!ui.leftCollapsed" />
+      <!-- M26.3：图标库 panel。挂在 LeftTools 右侧、CanvasView 上方（absolute）。 -->
+      <IconLibrary />
       <CanvasView />
       <RightPanel v-if="!ui.rightCollapsed" />
       <LogDrawer />
