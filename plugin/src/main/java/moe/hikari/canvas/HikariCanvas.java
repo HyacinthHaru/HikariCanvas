@@ -216,7 +216,7 @@ public final class HikariCanvas extends JavaPlugin {
         // M3-T7 / M4-T4：编辑 op 成功后把受影响 mapIds 重绘。
         // Compositor = RGBA 大图 rasterize + palette 量化切片
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry,
-                templateAssetService, getLogger());
+                templateAssetService, iconRegistry, getLogger());
         compositor.setImageLoader(imageStorage::load);
         canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer, getLogger());
 

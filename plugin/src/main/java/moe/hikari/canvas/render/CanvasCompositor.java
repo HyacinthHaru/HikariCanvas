@@ -76,13 +76,25 @@ public final class CanvasCompositor {
     private final ElementRenderer imageRenderer = new ImageRenderer();
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry, Logger log) {
-        this(paletteLut, fontRegistry, null, log);
+        this(paletteLut, fontRegistry, null, null, log);
     }
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry,
                             TemplateAssetService assetService, Logger log) {
+        this(paletteLut, fontRegistry, assetService, null, log);
+    }
+
+    /**
+     * M26.2：完整构造，含 {@link IconRegistry} 注入（矢量 icon 渲染需要）。生产路径
+     * （{@code HikariCanvas.onEnable}）走这条；测试 / 老 fixture 仍可走前两个无 iconRegistry
+     * 构造（IconRenderer 对 SVG 元素退占位）。
+     */
+    public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry,
+                            TemplateAssetService assetService, IconRegistry iconRegistry,
+                            Logger log) {
         this.paletteLut = paletteLut;
-        this.ctx = new RenderContext(paletteLut, fontRegistry, assetService, log, () -> this.imageLoader);
+        this.ctx = new RenderContext(paletteLut, fontRegistry, assetService, iconRegistry,
+                log, () -> this.imageLoader);
     }
 
     /** M13：启动期由 {@code HikariCanvas.onEnable} 注入；测试可传 lambda。 */

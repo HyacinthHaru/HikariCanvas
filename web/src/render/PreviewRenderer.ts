@@ -1,4 +1,5 @@
 import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, ImageElement, PathElement, CircleElement, ShapeElement, BrushStrokeElement, Glow } from '@/types/protocol';
+import { isLegacyIconSource } from '@/types/protocol';
 import { layoutText, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 import { applyBlendModeOver } from './BlendModes';
 import { parsePathD } from './PathParser';
@@ -7,6 +8,7 @@ import { fillToCanvasStyle } from './fill';
 import { applyBayerDither } from './BayerDither';
 import { getPaletteLut, type PaletteLut } from './PaletteLut';
 import { ensureLoaded, isLoaded } from './FontLoader';
+import { ensureLoaded as ensureIconLoaded, getCached as getCachedIcon, onIconLoaded } from './IconLoader';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
@@ -448,20 +450,18 @@ function getIconImage(source: string): IconCacheEntry {
 }
 
 function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
+    if (isLegacyIconSource(ic.source)) {
+        drawIconLegacyPng(ctx, ic);
+        return;
+    }
+    drawIconSvgPath(ctx, ic);
+}
+
+/** M7 legacy PNG 路径（行为完全不变）：source 不含 `/` 时走 /api/template-asset/icons/<source>.png。 */
+function drawIconLegacyPng(ctx: CanvasRenderingContext2D, ic: IconElement): void {
     const entry = getIconImage(ic.source);
     if (entry.failed || !entry.ready) {
-        // 占位：虚线方框 + ?
-        ctx.save();
-        ctx.strokeStyle = '#AAAAAA';
-        ctx.setLineDash([3, 2]);
-        ctx.strokeRect(ic.x + 0.5, ic.y + 0.5, ic.w - 1, ic.h - 1);
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#AAAAAA';
-        ctx.font = '12px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('?', ic.x + ic.w / 2, ic.y + ic.h / 2);
-        ctx.restore();
+        drawIconPlaceholder(ctx, ic);
         return;
     }
     if (!ic.tint) {
@@ -480,6 +480,84 @@ function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
     octx.fillStyle = ic.tint;
     octx.fillRect(0, 0, ic.w, ic.h);
     ctx.drawImage(off, ic.x, ic.y);
+}
+
+/**
+ * M26.2 SVG 矢量路径：source 含 `/`（如 `fa-solid/heart`）→ 从 IconLoader 拉 path d + viewBox，
+ * 用 Path2D + 变换 + Fill 绘制。镜像后端 {@code IconRenderer.renderSvgPath}：
+ *
+ * <ol>
+ *   <li>cache 未命中触发 ensureLoaded（异步），本帧画占位 ?；加载完 onIconLoaded → requestDraw</li>
+ *   <li>cache 中 null = 失败/不存在 → 画占位 ?</li>
+ *   <li>等比缩放居中：scale = min(elW/vbW, elH/vbH)；offset 含 vbX/vbY 平移</li>
+ *   <li>fill：FillCompat → ctx.fillStyle (string | CanvasGradient)；undefined → 黑色</li>
+ * </ol>
+ */
+function drawIconSvgPath(ctx: CanvasRenderingContext2D, ic: IconElement): void {
+    if (ic.w <= 0 || ic.h <= 0) return;
+    const cached = getCachedIcon(ic.source);
+    if (cached === undefined) {
+        // 首次：发起 lazy load，本帧占位；加载完后 hook 触发重绘
+        void ensureIconLoaded(ic.source);
+        drawIconPlaceholder(ctx, ic);
+        return;
+    }
+    if (cached === null) {
+        drawIconPlaceholder(ctx, ic);
+        return;
+    }
+    const vb = parseViewBox(cached.viewBox);
+    if (!vb) { drawIconPlaceholder(ctx, ic); return; }
+    const [vbX, vbY, vbW, vbH] = vb;
+    if (vbW <= 0 || vbH <= 0) { drawIconPlaceholder(ctx, ic); return; }
+
+    const scale = Math.min(ic.w / vbW, ic.h / vbH);
+    const offX = (ic.w - vbW * scale) / 2 - vbX * scale;
+    const offY = (ic.h - vbH * scale) / 2 - vbY * scale;
+
+    // fill 渐变 bbox = element bbox（与 Rect/Circle 一致）。fillStyle 在变换前算好（用 element 坐标系），
+    // 否则 CanvasGradient 端点会被 translate/scale 错位。Canvas API: fillStyle 一旦 set，
+    // 后续 fill() 在当前变换矩阵下绘制——gradient 几何按 set 时坐标系算。
+    const style = fillToCanvasStyle(ctx, ic.fill, ic.x, ic.y, ic.w, ic.h) ?? '#000000';
+
+    ctx.save();
+    try {
+        ctx.translate(ic.x + offX, ic.y + offY);
+        ctx.scale(scale, scale);
+        ctx.fillStyle = style;
+        for (const p of cached.paths) {
+            const path2d = new Path2D(p.d);
+            ctx.fill(path2d);
+        }
+    } finally {
+        ctx.restore();
+    }
+}
+
+function parseViewBox(viewBox: string): [number, number, number, number] | null {
+    const parts = viewBox.trim().split(/[\s,]+/);
+    if (parts.length !== 4) return null;
+    const nums: number[] = [];
+    for (const p of parts) {
+        const n = Number(p);
+        if (!Number.isFinite(n)) return null;
+        nums.push(n);
+    }
+    return [nums[0], nums[1], nums[2], nums[3]];
+}
+
+function drawIconPlaceholder(ctx: CanvasRenderingContext2D, ic: IconElement): void {
+    ctx.save();
+    ctx.strokeStyle = '#AAAAAA';
+    ctx.setLineDash([3, 2]);
+    ctx.strokeRect(ic.x + 0.5, ic.y + 0.5, ic.w - 1, ic.h - 1);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#AAAAAA';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', ic.x + ic.w / 2, ic.y + ic.h / 2);
+    ctx.restore();
 }
 
 // ---------- M13 ImageElement ----------
