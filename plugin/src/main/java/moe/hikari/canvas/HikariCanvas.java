@@ -204,7 +204,7 @@ public final class HikariCanvas extends JavaPlugin {
 
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo, canvasRenderer);
 
-        mapPacketSender = new MapPacketSender();
+        // 0.4.0 方案 B 自适应渲染：mapPacketSender 在 CanvasProjector 构造前才 new（见下方）。
         // PlaceholderRenderer 也注入 CanvasProjector，用于"state pristine 回 placeholder"语义
         PlaceholderRenderer placeholderRenderer = new PlaceholderRenderer();
         frameDeployer = new FrameDeployer(this, placeholderRenderer, canvasRenderer);
@@ -245,7 +245,12 @@ public final class HikariCanvas extends JavaPlugin {
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry,
                 templateAssetService, iconRegistry, getLogger());
         compositor.setImageLoader(imageStorage::load);
-        canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer, getLogger());
+        // 0.4.0 方案 B 自适应渲染：构造期传 mapPacketSender + wallRepo，让 projector 渲染完
+        // 主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket（不再依赖 Paper 默认 MapView
+        // sync 的 250ms-5s 抖动窗口）。mapPacketSender 已在上面 new，wallRepo 已 ready。
+        mapPacketSender = new MapPacketSender();
+        canvasProjector = new CanvasProjector(canvasRenderer, compositor, placeholderRenderer,
+                getLogger(), mapPacketSender, wallRepo);
 
         // M5.5：启动末尾把所有 walls 的像素 compose 回对应 MapView
         // M16 P2.5：保留 restorer 引用，让 wand listener 能查"启动期 restore 失败的 wall"
@@ -347,7 +352,10 @@ public final class HikariCanvas extends JavaPlugin {
         wallPreviewService = new WallPreviewService(getLogger(), compositor);
 
         // 节流：投影 fps + 输入速率（per session）
-        long projectionIntervalMs = Math.max(1000L / config.projectionFps, 33L);
+        // 0.4.0 方案 B：默认间隔走 adaptive-fps.default-min-interval-ms（覆盖 throttle.projection-fps
+        // 推算结果），用户在 config 里调 adaptive-fps 即直接控制 throttler 默认底；旧 throttle.projection-fps
+        // 仍保留作"上限提示"语义，但实际节流由 adaptive 段决定。
+        long projectionIntervalMs = Math.max(33L, config.adaptiveFps.defaultMinIntervalMs());
         projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector,
                 projectionIntervalMs);
         rateLimiter = new SessionRateLimiter(config.inputBurst,
@@ -443,6 +451,36 @@ public final class HikariCanvas extends JavaPlugin {
         variableStore.registerChangeListener(event ->
                 sessionManagerRef.broadcastVariableChangeToWall(event, varPushCallback));
         getLogger().info("VariableStore.ChangeListener registered (Provider→frontend mirror)");
+
+        // 0.4.0 方案 B 自适应渲染：第二条 ChangeListener。任意变量 mutation 或 wall 引用集合变化都
+        // 重新评估"该 wall 是否含高频变量"→ 给绑定该 wall 的所有 session 在 ProjectionThrottler
+        // 上调 setIntervalForSession（高频 50ms / 默认 200ms）。WALL_REFS_UPDATED 是 markWallReferences
+        // 后专门 fire 的事件（Compositor 渲染期变化也能触发）；其他事件类型只在 referencingWalls
+        // 已有的 wall 上重评，新引用 wall 由 WALL_REFS_UPDATED 兜底。
+        final VariableStore variableStoreForAdaptive = this.variableStore;
+        final ProjectionThrottler throttlerRef = this.projectionThrottler;
+        final SessionManager sessionManagerForAdaptive = this.sessionManager;
+        final long defaultIntervalMs = config.adaptiveFps.defaultMinIntervalMs();
+        final long highFreqIntervalMs = config.adaptiveFps.highFreqMinIntervalMs();
+        variableStore.registerChangeListener(event -> {
+            // 路由 walls 集合：event.referencingWalls 已经是 listener 关心的全部 wall
+            // （WALL_REFS_UPDATED 时仅包含触发 markWallReferences 的那一个 wall）。
+            java.util.Set<String> walls = event.referencingWalls();
+            if (walls == null || walls.isEmpty()) return;
+            for (String wallId : walls) {
+                boolean highFreq = variableStoreForAdaptive.isWallHighFreq(wallId);
+                long interval = highFreq ? highFreqIntervalMs : defaultIntervalMs;
+                // 找该 wall 的所有活跃 session，逐个调 setIntervalForSession
+                for (String sid : sessionManagerForAdaptive.liveSessionIds()) {
+                    var s = sessionManagerForAdaptive.byId(sid);
+                    if (s == null) continue;
+                    if (!wallId.equals(s.wallId())) continue;
+                    throttlerRef.setIntervalForSession(sid, interval);
+                }
+            }
+        });
+        getLogger().info("VariableStore.ChangeListener registered (adaptive-fps high-freq detection,"
+                + " default=" + defaultIntervalMs + "ms high-freq=" + highFreqIntervalMs + "ms)");
 
         // M15.3 P0-24：MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。
         // 同 tokenPurgeTask 模式：异步周期跑；扫所有 RESERVED 找 owner 已不在 walls 表的强制 FREE。

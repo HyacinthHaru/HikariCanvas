@@ -5,6 +5,86 @@
 
 ---
 
+## 2026-05-20 · M28-adaptive-fps：方案 B 自适应渲染（高频 wall 50ms + 主动推帧 chunk viewer）
+
+### 背景
+
+用户报告 schedule 秒精度倒计时 (`eta_seconds` / `eta_mmss` / `arrival_status` 含 `进站中` 切换) 在游戏内更新 2-5s 不稳定。
+根因：渲染链最后一步 `HikariCanvasRenderer.update(mapId, pixels)` 只更新内存 ConcurrentMap，**靠 Paper 默认 MapView sync** 把像素推给客户端 ItemFrame；这个 sync 间隔 250ms-5s 不可控。
+代码库已有 `MapPacketSender.sendFullMap`（M1 引入），但**全代码库零调用**——白搭这条已铺好的快速通道。
+
+### 实施
+
+#### 1. VariableStore 高频 wall 判断 + WALL_REFS_UPDATED 事件
+
+- `isWallHighFreq(wallId)`：检查 byWall 倒排索引内是否含
+  `*/eta_seconds` `*/eta_mmss` `*/arrival_status` `*/next2_eta_seconds` `*/next2_eta_mmss`
+  `*/next2_arrival_status` 后缀或 `system/server.tick` 全名匹配 → 含 ⇒ 高频
+- `ChangeType.WALL_REFS_UPDATED` 新枚举值；`markWallReferences` diff 后若引用集合
+  实际变化（add ∪ remove 非空），fire 占位 event（variable=null / fullName=`<bulk_wall_refs>`
+  / referencingWalls={wallId}）让外部 listener 重评 throttler 间隔
+- `SessionManager.broadcastVariableChangeToWall` 加 WALL_REFS_UPDATED 早返，避免推 state.patch
+- `buildVariablePatchOp` switch 加 WALL_REFS_UPDATED → null 防漏
+
+#### 2. ProjectionThrottler 动态间隔
+
+- `sessionIntervalOverride: ConcurrentMap<String, Long>` per-session 覆盖
+- `setIntervalForSession(sid, ms)` / `clearSessionInterval(sid)` / `effectiveIntervalForTest(sid)`
+- `submit` 内 `effectiveInterval(sid)` 替换 hardcoded `minIntervalMs`
+- `discardSession` 同时清掉 override 防泄漏
+
+#### 3. CanvasProjector 主动发包 + viewer 检测
+
+- 构造器扩展 `MapPacketSender + WallRepo`（旧 4-arg 构造器保留作 fallback）
+- `project(session, region)` 每次 `canvasRenderer.update(mapId, pixels)` 后立刻
+  `mapPacketSender.sendFullMap(p, mapId, pixels)` 给 viewer
+- `findViewersForWall(wallId)`：`wallRepo.loadById` → `WallKey.world() + originX/Z`
+  → `Bukkit.getWorld` → `world.getPlayers()` → 按 `Math.abs(pChunkX - wallChunkX) + Math.abs(pChunkZ - wallChunkZ) ≤ 8` 过滤
+- 单 viewer push 失败被吞掉 + log warning；wallRepo / mapPacketSender 为 null → 跳过推送（fallback）
+- Paper 的 `world.getPlayers()` / `Player.getLocation` 线程安全只读，async throttler 线程直接调，省 50ms 主线程切换抖动
+
+#### 4. HikariCanvas 装配
+
+- 旧 `mapPacketSender = new MapPacketSender();` 移到 CanvasProjector 构造行前
+- `new CanvasProjector(..., mapPacketSender, wallRepo)` 走新构造器
+- `projectionThrottler = new ProjectionThrottler(this, sessionManager, canvasProjector, config.adaptiveFps.defaultMinIntervalMs())`
+- 第二条 `variableStore.registerChangeListener`：任意 event 都按 `event.referencingWalls()` 遍历
+  → 对每个 wallId 调 `isWallHighFreq` → 找该 wall 所有活跃 session → `throttlerRef.setIntervalForSession(sid, highFreq ? 50ms : 200ms)`
+
+#### 5. config.yml + HikariCanvasConfig
+
+- 新段 `rendering.adaptive-fps`：`default-min-interval-ms` (default 200) / `high-freq-min-interval-ms` (default 50) / `push-packets-enabled` (default true)
+- `AdaptiveFpsConfig` record；clamp `≥ 33ms`；`high > default` 时取小者保护用户意图
+
+### 单测
+
+- `VariableStoreTest`：+7 case（isWallHighFreq null/empty/user-only/eta_seconds/arrival_status/server.tick/slow + WALL_REFS_UPDATED listener fire + noop unchanged）
+- `ProjectionThrottlerTest`（新文件）：6 case（default → override → clear → 非正值=clear → discardSession 清掉 → null sid noop）
+- backend `:plugin:test` 全绿（756 tests，含其它增量历史 case）
+- frontend `npm run test` 105 全绿
+- `vite build` 643 kB（gzip 195 kB）/ shadowJar OK / 0 baseline 漂移
+
+### 验证（用户侧手测）
+
+1. wall 文本写 `${var:schedule/eta_seconds}` 或 `${var:system/server.tick}` 触发高频判定
+2. 游戏内站到 wall 同 chunk 距离 ≤8 chunks 范围
+3. 倒计时应看起来顺滑 1Hz 跳秒（之前 2-5s）；超出阈值的玩家仍走 Paper 默认 sync
+4. config `rendering.adaptive-fps.push-packets-enabled: false` 可关掉主动推帧验证 fallback
+
+### 关联文件
+
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableStore.java`（+isWallHighFreq / WALL_REFS_UPDATED）
+- `plugin/src/main/java/moe/hikari/canvas/render/ProjectionThrottler.java`（+setIntervalForSession）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasProjector.java`（+主动推帧 + viewer 检测）
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`（WALL_REFS_UPDATED 处理）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（自适应 listener 接入）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvasConfig.java`（AdaptiveFpsConfig）
+- `plugin/src/main/resources/config.yml`（rendering.adaptive-fps 段）
+- `plugin/src/test/java/moe/hikari/canvas/variable/VariableStoreTest.java`（+7 case）
+- `plugin/src/test/java/moe/hikari/canvas/render/ProjectionThrottlerTest.java`（新文件 +6 case）
+
+---
+
 ## 2026-05-20 · M28-enhance：schedule next2 第二班次 + MM:SS 格式 + 编辑器 placeholder hint chip
 
 ### 需求

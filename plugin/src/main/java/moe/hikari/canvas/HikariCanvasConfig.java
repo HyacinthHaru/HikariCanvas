@@ -50,6 +50,29 @@ public final class HikariCanvasConfig {
     public final int inputRatePerSecond;
     public final int inputBurst;
 
+    /**
+     * 0.4.0 方案 B 自适应渲染配置（{@code rendering.adaptive-fps} 段）。
+     */
+    public final AdaptiveFpsConfig adaptiveFps;
+
+    /**
+     * 0.4.0 方案 B：自适应 fps + 主动推帧配置。
+     *
+     * @param defaultMinIntervalMs  普通 wall 节流间隔（ms）；默认 200ms = 5fps
+     * @param highFreqMinIntervalMs 高频 wall 节流间隔（ms）；默认 50ms = 20fps
+     * @param pushPacketsEnabled    是否在每次渲染后主动给 chunk-loaded viewer 推
+     *                              ClientboundMapItemDataPacket；false 时仅靠 Paper 默认 sync
+     */
+    public record AdaptiveFpsConfig(
+            long defaultMinIntervalMs,
+            long highFreqMinIntervalMs,
+            boolean pushPacketsEnabled
+    ) {
+        public static AdaptiveFpsConfig defaults() {
+            return new AdaptiveFpsConfig(200L, 50L, true);
+        }
+    }
+
     // ---- templates ----
     public final boolean autoReloadTemplatesOnStartup;
     public final int previewCacheSeconds;
@@ -127,6 +150,7 @@ public final class HikariCanvasConfig {
         this.projectionFps = b.projectionFps;
         this.inputRatePerSecond = b.inputRatePerSecond;
         this.inputBurst = b.inputBurst;
+        this.adaptiveFps = b.adaptiveFps;
         this.autoReloadTemplatesOnStartup = b.autoReloadTemplatesOnStartup;
         this.previewCacheSeconds = b.previewCacheSeconds;
         this.templatesMaxPerPlayer = b.templatesMaxPerPlayer;
@@ -190,6 +214,24 @@ public final class HikariCanvasConfig {
         b.projectionFps = Math.max(1, Math.min(30, f.getInt("throttle.projection-fps", 5)));
         b.inputRatePerSecond = Math.max(1, f.getInt("throttle.input-rate-per-second", 20));
         b.inputBurst = Math.max(b.inputRatePerSecond, f.getInt("throttle.input-burst", 40));
+
+        // 0.4.0 方案 B 自适应渲染段
+        org.bukkit.configuration.ConfigurationSection adaptSec =
+                f.getConfigurationSection("rendering.adaptive-fps");
+        AdaptiveFpsConfig adaptDefaults = AdaptiveFpsConfig.defaults();
+        if (adaptSec == null) {
+            b.adaptiveFps = adaptDefaults;
+        } else {
+            long defMs = Math.max(33L,
+                    adaptSec.getLong("default-min-interval-ms", adaptDefaults.defaultMinIntervalMs()));
+            long highMs = Math.max(33L,
+                    adaptSec.getLong("high-freq-min-interval-ms", adaptDefaults.highFreqMinIntervalMs()));
+            // 高频间隔不该比默认还大；交叉配置时取小者保护用户意图
+            if (highMs > defMs) highMs = defMs;
+            boolean pushOn = adaptSec.getBoolean("push-packets-enabled",
+                    adaptDefaults.pushPacketsEnabled());
+            b.adaptiveFps = new AdaptiveFpsConfig(defMs, highMs, pushOn);
+        }
 
         b.autoReloadTemplatesOnStartup = f.getBoolean("templates.auto-reload-on-startup", true);
         b.previewCacheSeconds = Math.max(0, f.getInt("templates.preview-cache-seconds", 300));
@@ -338,5 +380,6 @@ public final class HikariCanvasConfig {
         moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
                 moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
         ScheduleConfig scheduleConfig = ScheduleConfig.defaults();
+        AdaptiveFpsConfig adaptiveFps = AdaptiveFpsConfig.defaults();
     }
 }

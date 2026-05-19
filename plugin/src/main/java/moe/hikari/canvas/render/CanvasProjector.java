@@ -1,9 +1,15 @@
 package moe.hikari.canvas.render;
 
+import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.state.ProjectState;
+import moe.hikari.canvas.storage.WallRepo;
+import org.bukkit.Bukkit;
+import org.bukkit.World;
+import org.bukkit.entity.Player;
 
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Logger;
 
@@ -26,15 +32,45 @@ public final class CanvasProjector {
     private final CanvasCompositor compositor;
     private final PlaceholderRenderer placeholderRenderer;
     private final Logger log;
+    /**
+     * 0.4.0 方案 B 自适应渲染：主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket。
+     * Paper 默认 MapView sync 间隔 250ms-5s 不可控，秒精度倒计时场景不够稳；本路径补齐"渲染完
+     * 立刻推帧"语义。可空（测试 / 旧构造器路径）—— null 时跳过主动推送，回落 Paper 默认 sync。
+     */
+    private final MapPacketSender mapPacketSender;
+    /**
+     * 0.4.0 方案 B：拿 wall 元数据（world / origin）算 viewer 候选。可空——同上。
+     */
+    private final WallRepo wallRepo;
+    /**
+     * 0.4.0 方案 B：viewer 检测的 chunk 曼哈顿距离阈值。8 chunks ≈ 默认 view distance 内。
+     * 超出阈值的玩家由 Paper 默认 sync 兜底。
+     */
+    private static final int VIEWER_CHUNK_DISTANCE = 8;
 
+    /** M1-M28 兼容构造器：不带主动推帧能力，回落 Paper 默认 sync。 */
     public CanvasProjector(HikariCanvasRenderer canvasRenderer,
                            CanvasCompositor compositor,
                            PlaceholderRenderer placeholderRenderer,
                            Logger log) {
+        this(canvasRenderer, compositor, placeholderRenderer, log, null, null);
+    }
+
+    /**
+     * 0.4.0 方案 B：完整构造器；mapPacketSender / wallRepo 任一为 null 即关闭主动推帧（fallback）。
+     */
+    public CanvasProjector(HikariCanvasRenderer canvasRenderer,
+                           CanvasCompositor compositor,
+                           PlaceholderRenderer placeholderRenderer,
+                           Logger log,
+                           MapPacketSender mapPacketSender,
+                           WallRepo wallRepo) {
         this.canvasRenderer = canvasRenderer;
         this.compositor = compositor;
         this.placeholderRenderer = placeholderRenderer;
         this.log = log;
+        this.mapPacketSender = mapPacketSender;
+        this.wallRepo = wallRepo;
     }
 
     /**
@@ -56,6 +92,10 @@ public final class CanvasProjector {
         // M4 小修：{@code ProjectState} 回到"pristine 初始态"时，不走 compositor
         // 渲空白，而是重绘 placeholder（灰底 + HIKARICANVAS 水印 + slot 标签），
         // 保留 confirm 阶段的视觉提示。触发条件：elements 空 && background=#FFFFFF（session 刚 confirm 时就是这个状态，undo 到底也会回到这）。
+        // 0.4.0 方案 B：viewer 列表只算一次给本次 project 用（pristine / 正常分支共享）。
+        // 计算稍贵（遍历 world.getPlayers()）；只在 mapPacketSender + wallRepo 齐全时算。
+        List<Player> viewers = findViewersForWall(session.wallId());
+
         if (isPristine(state)) {
             int updated = 0;
             int total = mapIds.size();
@@ -63,7 +103,9 @@ public final class CanvasProjector {
                 if (idx < 0 || idx >= total) continue;
                 try {
                     byte[] pixels = placeholderRenderer.render(idx, total);
-                    canvasRenderer.update(mapIds.get(idx), pixels);
+                    int mapId = mapIds.get(idx);
+                    canvasRenderer.update(mapId, pixels);
+                    pushToViewers(viewers, mapId, pixels);
                     updated++;
                 } catch (Exception e) {
                     log.warning("CanvasProjector: placeholder render failed mapIndex=" + idx
@@ -91,6 +133,9 @@ public final class CanvasProjector {
             try {
                 byte[] pixels = compositor.toPaletteSlice(img, idx, widthMaps);
                 canvasRenderer.update(mapId, pixels);
+                // 0.4.0 方案 B：渲染完立刻给 chunk-loaded viewer 推帧（Paper 默认 sync
+                // 250ms-5s 不稳，秒精度倒计时场景必须主动）。
+                pushToViewers(viewers, mapId, pixels);
                 updated++;
             } catch (Exception e) {
                 log.warning("CanvasProjector: quantize failed mapIndex=" + idx
@@ -98,6 +143,68 @@ public final class CanvasProjector {
             }
         }
         return updated;
+    }
+
+    /**
+     * 0.4.0 方案 B：主动给 viewer 推 ClientboundMapItemDataPacket。
+     * 单 viewer 推送失败不影响其他 viewer / 其他 map。
+     */
+    private void pushToViewers(List<Player> viewers, int mapId, byte[] pixels) {
+        if (viewers == null || viewers.isEmpty() || mapPacketSender == null) return;
+        for (Player p : viewers) {
+            try {
+                mapPacketSender.sendFullMap(p, mapId, pixels);
+            } catch (Exception e) {
+                log.warning("CanvasProjector: push packet failed mapId=" + mapId
+                        + " viewer=" + p.getName() + " err=" + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 0.4.0 方案 B：找 chunk-loaded 范围内的 viewer 候选。
+     *
+     * <p>策略：从 {@link WallRepo} 拿 wall 元数据 → 取 world + origin chunk → 取 world 当前在线
+     * 玩家 → 按曼哈顿 chunk 距离阈值 {@link #VIEWER_CHUNK_DISTANCE} 过滤。Paper 的 world.getPlayers
+     * / Player.getLocation 是线程安全只读，可在 ProjectionThrottler async 线程直接调，省去主线程
+     * 调度的 50ms 抖动。</p>
+     *
+     * <p>线程安全：方法本身只读 Bukkit API + 本地集合；可重入。</p>
+     *
+     * @return 候选 viewer 列表（可能空）；wallId 为 null / wall 不存在 / world 未加载 → 空表，
+     *         调用方应自然 fallback Paper 默认 sync。
+     */
+    private List<Player> findViewersForWall(String wallId) {
+        if (wallId == null || mapPacketSender == null || wallRepo == null) {
+            return List.of();
+        }
+        WallRepo.Wall w;
+        try {
+            w = wallRepo.loadById(wallId).orElse(null);
+        } catch (Exception e) {
+            return List.of();
+        }
+        if (w == null || w.key() == null) return List.of();
+        World world = Bukkit.getWorld(w.key().world());
+        if (world == null) return List.of();
+        int wallChunkX = w.key().originX() >> 4;
+        int wallChunkZ = w.key().originZ() >> 4;
+        List<Player> out = new ArrayList<>();
+        for (Player p : world.getPlayers()) {
+            try {
+                org.bukkit.Location loc = p.getLocation();
+                int pChunkX = loc.getBlockX() >> 4;
+                int pChunkZ = loc.getBlockZ() >> 4;
+                int dx = Math.abs(pChunkX - wallChunkX);
+                int dz = Math.abs(pChunkZ - wallChunkZ);
+                if (dx + dz <= VIEWER_CHUNK_DISTANCE) {
+                    out.add(p);
+                }
+            } catch (Exception ignored) {
+                // 玩家瞬间下线 / 跨维度切换 → Location 可能短暂不可用；跳过该 viewer
+            }
+        }
+        return out;
     }
 
     /** pristine = 与 {@code SessionManager.confirm} 时构造的初始 state 等价。 */

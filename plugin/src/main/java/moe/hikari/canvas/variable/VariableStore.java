@@ -149,8 +149,15 @@ public final class VariableStore {
     //  0.4.0 bugfix3（Bug B）：ChangeListener API
     // ──────────────────────────────────────────────────────────────────
 
-    /** 变更类型。Listener 据此决定如何构造 state.patch op。 */
-    public enum ChangeType { CREATED, UPDATED, VALUE_SET, BOUND, DELETED }
+    /**
+     * 变更类型。Listener 据此决定如何构造 state.patch op。
+     *
+     * <p>{@link #WALL_REFS_UPDATED}（0.4.0 方案 B 自适应渲染）—— 一次 {@link #markWallReferences}
+     * 调用后 wall 的引用集合发生过实际变化（增加 / 移除任意 fullName）。listener 收到时不该推
+     * state.patch（fullName 字段语义占位为 {@code "<bulk_wall_refs>"}，variable 为 null），
+     * 只用于触发"该 wall 高频状态可能改变了，重新评估 ProjectionThrottler 间隔"。</p>
+     */
+    public enum ChangeType { CREATED, UPDATED, VALUE_SET, BOUND, DELETED, WALL_REFS_UPDATED }
 
     /**
      * 变更事件。listener 拿此构造 RFC 6902 PatchOp 推送给前端 mirror。
@@ -525,6 +532,37 @@ public final class VariableStore {
             bucket.add(fn);
             addWallToReferencedSet(fn, wallId);
         }
+
+        // 0.4.0 方案 B 自适应渲染：引用集合有变化时通知 listener 重新评估高频状态。
+        // 用 WALL_REFS_UPDATED 类型 + variable=null + fullName=占位符 让广播 listener 跳过 patch 推送
+        // （SessionManager.broadcastVariableChangeToWall 拿到 null variable 时不构造 patch）；
+        // HikariCanvas 注入的自适应 listener 据此调 ProjectionThrottler.setIntervalForSession。
+        if (!removed.isEmpty() || !added.isEmpty()) {
+            fireWallRefsUpdated(wallId);
+        }
+    }
+
+    /**
+     * 0.4.0 方案 B 自适应渲染：发布 WALL_REFS_UPDATED 事件。
+     *
+     * <p>事件 fullName 字段使用占位符 {@code "<bulk_wall_refs>"}；variable 为 null；
+     * referencingWalls 仅含触发 wallId。listener 必须自行识别此类型，跳过 state.patch 路径，
+     * 仅做"该 wall 高频状态可能改变"的副作用（调 ProjectionThrottler.setIntervalForSession）。</p>
+     */
+    private void fireWallRefsUpdated(String wallId) {
+        if (changeListeners.isEmpty()) return;
+        VariableChangeEvent event = new VariableChangeEvent(
+                "<bulk_wall_refs>", null, ChangeType.WALL_REFS_UPDATED, Set.of(wallId));
+        for (VariableChangeListener listener : changeListeners) {
+            try {
+                listener.onChange(event);
+            } catch (Exception e) {
+                java.util.logging.Logger.getLogger(VariableStore.class.getName())
+                        .log(java.util.logging.Level.WARNING,
+                                "VariableChangeListener threw for WALL_REFS_UPDATED wall="
+                                        + wallId + ": " + e.getMessage(), e);
+            }
+        }
     }
 
     /**
@@ -696,5 +734,55 @@ public final class VariableStore {
         Set<String> bucket = byWall.get(wallId);
         if (bucket == null) return Set.of();
         return Set.copyOf(bucket);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  0.4.0 方案 B 自适应渲染：高频 wall 判断
+    // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * 高频 key 后缀（按 fullName 形如 {@code schedule:<wallId>/eta_seconds} 匹配）。
+     * 任一变量 endsWith 命中即视为该 wall 含秒级变化变量。
+     */
+    private static final Set<String> HIGH_FREQ_KEY_SUFFIXES = Set.of(
+            "/eta_seconds",
+            "/eta_mmss",
+            "/arrival_status",
+            "/next2_eta_seconds",
+            "/next2_eta_mmss",
+            "/next2_arrival_status"
+    );
+
+    /** 全局高频 fullName（namespace + key 完全匹配；目前仅 system/server.tick）。 */
+    private static final Set<String> HIGH_FREQ_FULL_NAMES = Set.of(
+            "system/server.tick"
+    );
+
+    /**
+     * 0.4.0 方案 B 自适应渲染：检查 wall 引用的变量是否含秒级变化的高频 key。
+     *
+     * <p>调用方（{@link moe.hikari.canvas.HikariCanvas} 注入的 ChangeListener）据此把
+     * {@link moe.hikari.canvas.render.ProjectionThrottler} 该 session 的间隔从默认 200ms
+     * （5 fps）切到 50ms（20 fps），让秒精度倒计时 / 服务端 tick 等场景看起来顺滑。</p>
+     *
+     * <p>判断依据 {@link #byWall} 倒排索引——本方法纯查内存，O(N) 其中 N 是该 wall 引用变量数
+     * （通常 &lt; 50）。线程安全：byWall 是 ConcurrentHashMap，bucket 是 newKeySet 视图，
+     * 迭代期允许并发修改。</p>
+     *
+     * @param wallId 目标 wall id；null / 未引用任何变量 → false
+     * @return true 表示该 wall 至少引用了一个高频变量，应启用高 fps 渲染
+     */
+    public boolean isWallHighFreq(String wallId) {
+        if (wallId == null) return false;
+        Set<String> referenced = byWall.get(wallId);
+        if (referenced == null || referenced.isEmpty()) return false;
+        for (String fn : referenced) {
+            if (fn == null) continue;
+            if (HIGH_FREQ_FULL_NAMES.contains(fn)) return true;
+            for (String suffix : HIGH_FREQ_KEY_SUFFIXES) {
+                if (fn.endsWith(suffix)) return true;
+            }
+        }
+        return false;
     }
 }

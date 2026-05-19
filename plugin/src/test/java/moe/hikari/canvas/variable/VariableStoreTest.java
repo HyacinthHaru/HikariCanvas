@@ -304,6 +304,86 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  0.4.0 方案 B：高频 wall 判断
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void isWallHighFreq_nullOrEmptyReturnsFalse() {
+        assertFalse(store.isWallHighFreq(null), "null wallId → false");
+        assertFalse(store.isWallHighFreq("w-empty"),
+                "未引用任何变量 → false");
+    }
+
+    @Test
+    void isWallHighFreq_onlyUserVariablesReturnsFalse() {
+        // user 变量 / 普通插件变量都不算高频
+        store.markWallReferences("w-1",
+                Set.of("user:w-1/score", "bedwars/red_score"));
+        assertFalse(store.isWallHighFreq("w-1"),
+                "user 变量 + 普通插件变量都不算高频");
+    }
+
+    @Test
+    void isWallHighFreq_scheduleEtaSecondsTriggers() {
+        store.markWallReferences("w-A",
+                Set.of("schedule:w-A/eta_seconds", "user:w-A/title"));
+        assertTrue(store.isWallHighFreq("w-A"),
+                "含 schedule:wallId/eta_seconds 应判为高频");
+    }
+
+    @Test
+    void isWallHighFreq_arrivalStatusTriggers() {
+        store.markWallReferences("w-B",
+                Set.of("schedule:w-B/arrival_status"));
+        assertTrue(store.isWallHighFreq("w-B"),
+                "arrival_status 后缀应判为高频");
+        store.markWallReferences("w-C",
+                Set.of("schedule:w-C/next2_eta_mmss"));
+        assertTrue(store.isWallHighFreq("w-C"),
+                "next2_eta_mmss 后缀应判为高频");
+    }
+
+    @Test
+    void isWallHighFreq_systemServerTickTriggers() {
+        store.markWallReferences("w-tick",
+                Set.of("system/server.tick"));
+        assertTrue(store.isWallHighFreq("w-tick"),
+                "system/server.tick 全局变量应判为高频");
+    }
+
+    @Test
+    void isWallHighFreq_slowScheduleKeysReturnFalse() {
+        // schedule 变量但不是秒级 key（譬如 eta_minutes / next_origin 等假设非高频）
+        store.markWallReferences("w-slow",
+                Set.of("schedule:w-slow/eta_minutes", "schedule:w-slow/next_origin"));
+        assertFalse(store.isWallHighFreq("w-slow"),
+                "schedule 但非秒级 key 不算高频");
+    }
+
+    @Test
+    void markWallReferences_firesWallRefsUpdatedListener() {
+        // 0.4.0 方案 B：listener 必须能监听到 markWallReferences 后引用集合变化
+        java.util.List<VariableStore.VariableChangeEvent> events = new java.util.ArrayList<>();
+        store.registerChangeListener(events::add);
+        store.markWallReferences("w-1", Set.of("schedule:w-1/eta_seconds"));
+        assertTrue(events.stream().anyMatch(e -> e.type()
+                        == VariableStore.ChangeType.WALL_REFS_UPDATED
+                && e.referencingWalls().contains("w-1")),
+                "markWallReferences 后必须 fire WALL_REFS_UPDATED");
+    }
+
+    @Test
+    void markWallReferences_noopWhenSetUnchangedDoesNotFire() {
+        // 重复 mark 同样的集合 → 不 fire（避免风暴）
+        store.markWallReferences("w-1", Set.of("schedule:w-1/eta_seconds"));
+        java.util.List<VariableStore.VariableChangeEvent> events = new java.util.ArrayList<>();
+        store.registerChangeListener(events::add);
+        store.markWallReferences("w-1", Set.of("schedule:w-1/eta_seconds"));
+        assertTrue(events.isEmpty(),
+                "引用集合无变化时不应 fire WALL_REFS_UPDATED");
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  loadFromDb
     // ──────────────────────────────────────────────────────────
 

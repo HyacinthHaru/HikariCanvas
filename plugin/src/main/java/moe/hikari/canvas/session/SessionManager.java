@@ -772,6 +772,14 @@ public final class SessionManager {
             moe.hikari.canvas.variable.VariableStore.VariableChangeEvent event,
             moe.hikari.canvas.web.OpPushCallback push) {
         if (event == null || push == null) return;
+        // 0.4.0 方案 B 自适应渲染：WALL_REFS_UPDATED 事件由 markWallReferences 引发，
+        // variable 字段为 null + fullName 是占位符；该事件用于让自适应 listener 重新评估
+        // ProjectionThrottler 间隔，不需要推 state.patch。这里早返避免 buildVariablePatchOp
+        // 走 switch 时缺 case + NPE。
+        if (event.type()
+                == moe.hikari.canvas.variable.VariableStore.ChangeType.WALL_REFS_UPDATED) {
+            return;
+        }
         // 路由 walls 集合：
         //  1) referencingWalls — Compositor markWallReferences 写入的精确倒排索引
         //     （含 Bug 2 反查注入；多 wall 共享插件 / system 全局变量必走这里）
@@ -848,6 +856,9 @@ public final class SessionManager {
                         path + "/source", src);
             }
             case DELETED -> moe.hikari.canvas.state.PatchOp.remove(path);
+            // 0.4.0 方案 B：WALL_REFS_UPDATED 不构造 patch（broadcastVariableChangeToWall
+            // 已早返）。switch exhaustive 时此分支永不命中；返 null 上游也已处理。
+            case WALL_REFS_UPDATED -> null;
         };
     }
 

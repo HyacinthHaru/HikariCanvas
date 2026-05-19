@@ -76,6 +76,19 @@ throttle:
   # 突发 op 上限（在任意 2 秒窗口）。
   input-burst: 40
 
+# 0.4.0 方案 B 自适应渲染
+# wall 引用秒级变量（schedule.eta_seconds / system.server.tick 等）时，自动把投影间隔
+# 切到 high-freq；同时渲染完主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket
+# 弥补 Paper 默认 MapView sync 的 250ms-5s 抖动。
+rendering:
+  adaptive-fps:
+    # 普通 wall 间隔（ms；保持 throttle.projection-fps 等价默认 200ms = 5fps）
+    default-min-interval-ms: 200
+    # 高频 wall 间隔（ms；50ms = 20fps；CPU / bandwidth 翻倍可接受）
+    high-freq-min-interval-ms: 50
+    # 是否主动推帧给 chunk-loaded viewer。false → 仅靠 Paper 默认 sync（不稳但带宽更省）。
+    push-packets-enabled: true
+
 # 模板系统
 templates:
   # 启动时自动 reload；改为 false 适合内置模板需要手工 reload 的工作流。

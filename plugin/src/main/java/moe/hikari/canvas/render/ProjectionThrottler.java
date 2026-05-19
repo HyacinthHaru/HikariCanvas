@@ -43,6 +43,15 @@ public final class ProjectionThrottler {
 
     private final ConcurrentMap<String, Bucket> bySession = new ConcurrentHashMap<>();
 
+    /**
+     * 0.4.0 方案 B 自适应渲染：per-session 间隔覆盖。
+     *
+     * <p>HikariCanvas 注入的自适应 listener 在 {@link moe.hikari.canvas.variable.VariableStore.ChangeType#WALL_REFS_UPDATED}
+     * 时调 {@link #setIntervalForSession} 把绑定到含高频变量 wall 的 session 切到 50ms（20 fps）；
+     * wall 不再含高频引用时调 {@link #clearSessionInterval} 回落到默认 {@link #minIntervalMs}。</p>
+     */
+    private final ConcurrentMap<String, Long> sessionIntervalOverride = new ConcurrentHashMap<>();
+
     private static final class Bucket {
         DirtyRegion pending;
         long lastProjectAt;
@@ -72,20 +81,59 @@ public final class ProjectionThrottler {
     public void submit(String sessionId, DirtyRegion region) {
         if (region == null) return;
         Bucket b = bySession.computeIfAbsent(sessionId, k -> new Bucket());
+        long effective = effectiveInterval(sessionId);
         synchronized (b) {
             b.pending = b.pending == null ? region : b.pending.union(region);
             long now = System.currentTimeMillis();
             long since = now - b.lastProjectAt;
-            if (since >= minIntervalMs) {
+            if (since >= effective) {
                 flushLocked(sessionId, b, now);
             } else if (b.flushTask == null) {
-                long waitMs = Math.max(1, minIntervalMs - since);
+                long waitMs = Math.max(1, effective - since);
                 long delayTicks = Math.max(1, (waitMs + 49) / 50);
                 b.flushTask = Bukkit.getScheduler().runTaskLaterAsynchronously(
                         plugin, () -> onScheduledFlush(sessionId), delayTicks);
             }
             // else: 已调度，仅并入 pending
         }
+    }
+
+    /**
+     * 0.4.0 方案 B 自适应渲染：取该 session 的有效节流间隔。
+     * 优先 {@link #sessionIntervalOverride}；未设置时回落到构造期 {@link #minIntervalMs}。
+     */
+    private long effectiveInterval(String sessionId) {
+        Long override = sessionIntervalOverride.get(sessionId);
+        return override == null ? minIntervalMs : override;
+    }
+
+    /**
+     * 0.4.0 方案 B 自适应渲染：覆盖某 session 的节流间隔（ms）。
+     *
+     * <p>典型用法：含 {@code schedule:<wallId>/eta_seconds} / {@code system/server.tick} 引用的 wall
+     * 切到 50ms（20 fps）；wall 不再含高频引用时调 {@link #clearSessionInterval} 回落。
+     * 入参 ≤ 0 等同 {@link #clearSessionInterval}。</p>
+     *
+     * <p>线程安全：单 key put / get，{@link ConcurrentHashMap} 自身串行化。</p>
+     */
+    public void setIntervalForSession(String sessionId, long intervalMs) {
+        if (sessionId == null) return;
+        if (intervalMs <= 0) {
+            sessionIntervalOverride.remove(sessionId);
+        } else {
+            sessionIntervalOverride.put(sessionId, intervalMs);
+        }
+    }
+
+    /** 0.4.0 方案 B：清除 session 间隔覆盖，回落到默认 {@link #minIntervalMs}。 */
+    public void clearSessionInterval(String sessionId) {
+        if (sessionId == null) return;
+        sessionIntervalOverride.remove(sessionId);
+    }
+
+    /** 测试 / 调试：当前 session 的有效间隔（ms）。 */
+    public long effectiveIntervalForTest(String sessionId) {
+        return effectiveInterval(sessionId);
     }
 
     private void onScheduledFlush(String sessionId) {
@@ -115,6 +163,8 @@ public final class ProjectionThrottler {
 
     /** session 结束时清理，避免 BukkitTask 泄漏到下个 session。 */
     public void discardSession(String sessionId) {
+        // 0.4.0 方案 B：自适应间隔覆盖也要清，避免泄漏到下个 session（虽然 sessionId 是 UUID 不会重）。
+        sessionIntervalOverride.remove(sessionId);
         Bucket b = bySession.remove(sessionId);
         if (b == null) return;
         synchronized (b) {
