@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-05-19 · 紧急修复：onDragEnd 单选 element.transform 永不发
+
+### 症状
+
+用户报告："网页上怎么拖都拖不动，游戏内字体展示完全乱了"。前端 Konva 拖动有视觉反馈（element 跟手）
+但游戏内 wall 元素位置不变；多元素叠在 server 端的初始默认位置。新建元素 + 修改文本（element.update）
+能正常同步，但拖动后 element.transform 从未真正到达 server。
+
+### 根因
+
+`web/src/components/layout/CanvasView.vue:onDragEnd` 的 mutation-race bug：
+
+1. `onDragMove`（line 726-730）为支持 F2 视觉跟手，**直接 mutate** `leaderEl.x/y` 到新位置
+2. `onDragEnd`（line 764）判等 `el.x !== newX` —— 但因 onDragMove 已同步 mutation，
+   **`el.x === newX` 恒成立** → `ws.send('element.transform', ...)` 永不触发
+
+M15.3 P0-1 已对多选 case 做了同样修复（用 `dragInitial` 记录的初始位置判等，line 772-773 注释明确说了
+这个坑），**但单选 path 漏修**。从 M15.3（2026-05-16）至今所有单选拖动**从未真正同步到 server**。
+
+为何之前没发现：测试 fixture 都是无拖动的渲染快照；前端 Konva 视觉反馈正确导致用户也很难察觉；
+持久化与渲染都走 server ProjectState，而 ProjectState 在 reload 时 push 回前端覆盖前端的 mutation
+→ 用户重连后看到的"错位"实际是 server 的初始位置。
+
+### 修复
+
+`onDragEnd` 判等改用 `dragInitial.value.get(id)` 拿初始位置（与多选 path 一致）；
+如果 dragInitial 缺失（非 drag start 进入的边缘场景）fallback 到旧逻辑。
+
+### 用户操作
+
+修复后**已存在的 wall 元素仍在 server 的旧错位**。需要用户重新拖动一次每个元素让其同步到 server。
+不会自动追溯历史拖动。
+
+### 关联
+
+- `web/src/components/layout/CanvasView.vue` onDragEnd 函数（~5 行改动）
+- 93 frontend test 全绿 / vite build 通过
+- 不影响多选 path（M15.3 P0-1 修过）
+
+---
+
 ## 2026-05-19 · 0.4.0 上线 4 项体验 bug 修复（单 commit 合）
 
 用户上线 0.4.0 实测发现 4 项体验 bug，单 agent 串干修完，1 个 commit 合所有改动 + V013 migration + 新变量 + UI 改造。**714 backend test + 93 frontend test 全绿 / shadow jar 152MB / 0 baseline 漂移**。

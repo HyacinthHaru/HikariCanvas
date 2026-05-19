@@ -761,8 +761,16 @@ function onDragEnd(ev: DragEvt, id: string): void {
     const newX = Math.round(node.x() - w / 2);
     const newY = Math.round(node.y() - h / 2);
     const el = project.elementById(id);
-    if (el && (el.x !== newX || el.y !== newY)) {
-        // optimistic
+    // 0.4.0 bugfix：判等必须用 dragInitial 记录的初始位置而非 mutated 后的 el.x/y——
+    // onDragMove 已经乐观把 el.x/y 同步到拖后位置（line 728-729 F2 视觉跟手），
+    // 这里若再判 el.x !== newX 恒为 false → ws.send 永不发 → server 漏更新元素位置。
+    // M15.3 P0-1 已对多选 case 做了同样修复，但单选 path 漏修，导致所有拖动从未真正同步。
+    const initLeader = dragInitial.value.get(id);
+    const moved = initLeader
+        ? (initLeader.x !== newX || initLeader.y !== newY)
+        : (el != null && (el.x !== newX || el.y !== newY));
+    if (el && moved) {
+        // onDragMove 已乐观 mutate el.x/y；这里只发 ws 保证 server 落地
         el.x = newX;
         el.y = newY;
         ws.send('element.transform', { elementId: id, x: newX, y: newY });
