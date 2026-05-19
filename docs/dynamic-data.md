@@ -168,9 +168,65 @@ VariableStore 变更通过 state.patch 推到客户端：
 
 ### 3.3 HTTP 端点
 
-- `GET /api/variable/list?wall=<wallId>` → 该 wall 引用的变量当前快照
-- `GET /api/variable/list-all-namespaces` → 所有可用 namespace + key（编辑器自动补全用）
-- 这些是只读端点 + 短 cache（5s）
+- `GET /api/variable/list?wall=<wallId>` → 该 wall 引用的变量当前快照（暂未实装；ready payload 已能下发 wall 引用快照，前端不需要主动 fetch）
+- `GET /api/variable/list-all-namespaces?sessionId=<id>&wallId=<wallId>` → **所有可用 namespace + 已声明 keys**（编辑器 VariablePicker 自动补全用，P3-M 实装）
+- 只读端点 + 短 cache（仅 wallId 缺省路径 5s server-side cache；带 wallId 因 user 变量增删频繁直走实时算）
+
+#### `/api/variable/list-all-namespaces` 返样
+
+```json
+{
+  "namespaces": [
+    {
+      "namespace": "user:w-3a17b2c1",
+      "displayName": "我的变量",
+      "dynamic": false,
+      "keys": [
+        {"key": "red_score", "type": "NUMBER", "description": "默认值: 0", "ttlMs": 0}
+      ]
+    },
+    {
+      "namespace": "system",
+      "displayName": "系统变量",
+      "dynamic": false,
+      "keys": [
+        {"key": "server.time", "type": "STRING", "description": "当前服务器本地时间 HH:mm", "ttlMs": 60000},
+        {"key": "wall.alias", "type": "STRING", "description": "wall 玩家命名（可空）（per-wall）", "ttlMs": 5000}
+      ]
+    },
+    {
+      "namespace": "scoreboard",
+      "displayName": "记分板",
+      "dynamic": true,
+      "keys": []
+    },
+    {
+      "namespace": "papi",
+      "displayName": "PlaceholderAPI",
+      "dynamic": true,
+      "keys": []
+    },
+    {
+      "namespace": "schedule:w-3a17b2c1",
+      "displayName": "列车时刻表（per-wall）",
+      "dynamic": false,
+      "keys": [...]
+    }
+  ]
+}
+```
+
+**字段语义**：
+
+- `namespace`：用于在 placeholder 文本里引用的 namespace（如 `${var:system/server.time}`）。
+- `displayName`：UI 显示分组名（picker 标题等）。
+- `dynamic`：是否为动态 namespace（{@link VariableProvider#isDynamic()}）；动态 namespace `keys` 始终为空，编辑器应给出模板字符串说明（如 `scoreboard.<obj>.<player>` / `papi:%placeholder%`）。
+- `keys[i].key`：完整 key（不含 namespace 前缀）。
+- `keys[i].type`：`STRING` / `NUMBER` / `BOOLEAN` / `COLOR`。
+- `keys[i].description`：人类可读说明（可选）。
+- `keys[i].ttlMs`：TTL（毫秒），0 = 永久。让前端知道刷新频率（如标识 "动态" 类型变量）。
+
+**鉴权**：必须带 `sessionId` query param（同 `/api/upload/{source}` / `/api/upload/quota`）；不通过 401 `{"error":"UNAUTHORIZED"}`。失败 500 `{"error":"INTERNAL"}`，不 echo 异常内容（防内部细节泄露）。
 
 ---
 

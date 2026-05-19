@@ -13,10 +13,14 @@
 import { describe, expect, it } from 'vitest';
 import {
     buildGroups,
+    declaredKeyToVariable,
     displayName,
     flattenGroups,
+    isDynamicNamespace,
+    mergeMetadata,
     nextActiveIndex,
     totalCount,
+    type NamespaceMetadata,
 } from '../pickerLogic';
 import type { Variable } from '@/types/variable';
 
@@ -103,6 +107,175 @@ describe('flattenGroups / totalCount', () => {
 
     it('totalCount = 总变量数', () => {
         expect(totalCount(groups)).toBe(3);
+    });
+});
+
+// ---------- P3-M metadata 合并 ----------
+
+describe('declaredKeyToVariable (P3-M)', () => {
+    it('生成完整 Variable 骨架（cached/default 留 null）', () => {
+        const v = declaredKeyToVariable('system', {
+            key: 'server.time',
+            type: 'STRING',
+            description: '当前服务器本地时间 HH:mm',
+            ttlMs: 60000,
+        });
+        expect(v.namespace).toBe('system');
+        expect(v.key).toBe('server.time');
+        expect(v.type).toBe('STRING');
+        expect(v.defaultValue).toBeNull();
+        expect(v.currentValue).toBeNull();
+        expect(v.ttl).toBe(60000);
+        expect(v.source).toBeNull();
+    });
+
+    it('未知 type 退化为 STRING', () => {
+        const v = declaredKeyToVariable('foo', { key: 'bar', type: 'WEIRD', ttlMs: 0 });
+        expect(v.type).toBe('STRING');
+    });
+});
+
+describe('mergeMetadata (P3-M)', () => {
+    const metadata: NamespaceMetadata[] = [
+        {
+            namespace: 'user:w-abc',
+            displayName: '我的变量',
+            dynamic: false,
+            keys: [{ key: 'red', type: 'NUMBER', ttlMs: 0 }],
+        },
+        {
+            namespace: 'system',
+            displayName: '系统变量',
+            dynamic: false,
+            keys: [
+                { key: 'server.time', type: 'STRING', ttlMs: 60000 },
+                { key: 'server.online', type: 'NUMBER', ttlMs: 30000 },
+            ],
+        },
+        {
+            namespace: 'scoreboard',
+            displayName: '记分板',
+            dynamic: true,
+            keys: [],
+        },
+    ];
+
+    it('metadata declared keys 全部出现（即使 store 无 cached value）', () => {
+        const merged = mergeMetadata([], metadata);
+        expect(merged.length).toBe(3);
+        const fullNames = merged.map((v) => `${v.namespace}/${v.key}`);
+        expect(fullNames).toEqual(['user:w-abc/red', 'system/server.time', 'system/server.online']);
+        // cached value 留空
+        for (const v of merged) expect(v.currentValue).toBeNull();
+    });
+
+    it('store cached value 覆盖骨架（同 fullName）', () => {
+        const stored: Variable[] = [
+            {
+                namespace: 'system',
+                key: 'server.time',
+                type: 'STRING',
+                defaultValue: null,
+                currentValue: '14:35',
+                updatedAt: 1000,
+                ttl: 60000,
+                source: 'system',
+            },
+        ];
+        const merged = mergeMetadata(stored, metadata);
+        const t = merged.find((v) => v.namespace === 'system' && v.key === 'server.time');
+        expect(t?.currentValue).toBe('14:35');
+        expect(t?.updatedAt).toBe(1000);
+    });
+
+    it('store-only 变量（metadata 没声明）append 到末尾', () => {
+        const stored: Variable[] = [
+            {
+                namespace: 'scoreboard',
+                key: 'kill.Steve',  // 动态 namespace 已注册的具体 key
+                type: 'NUMBER',
+                defaultValue: null,
+                currentValue: '5',
+                updatedAt: 100,
+                ttl: 5000,
+                source: 'scoreboard',
+            },
+        ];
+        const merged = mergeMetadata(stored, metadata);
+        // 3 declared + 1 store-only = 4
+        expect(merged.length).toBe(4);
+        // store-only 在末尾
+        const last = merged[merged.length - 1];
+        expect(last.namespace).toBe('scoreboard');
+        expect(last.key).toBe('kill.Steve');
+        expect(last.currentValue).toBe('5');
+    });
+
+    it('动态 namespace（keys 空）不污染骨架；其上动态注册的 key 走 store-only 路径', () => {
+        // scoreboard dynamic - keys 空 → 仅当 store 有具体 key 才出现
+        const merged = mergeMetadata([], metadata);
+        expect(merged.some((v) => v.namespace === 'scoreboard')).toBe(false);
+    });
+
+    it('空 metadata + 空 store → 空数组', () => {
+        const merged = mergeMetadata([], []);
+        expect(merged).toEqual([]);
+    });
+});
+
+describe('isDynamicNamespace (P3-M)', () => {
+    const metadata: NamespaceMetadata[] = [
+        { namespace: 'system', displayName: 'System', dynamic: false, keys: [] },
+        { namespace: 'scoreboard', displayName: 'Scoreboard', dynamic: true, keys: [] },
+        { namespace: 'papi', displayName: 'PAPI', dynamic: true, keys: [] },
+    ];
+
+    it('动态 namespace 返 true', () => {
+        expect(isDynamicNamespace(metadata, 'scoreboard')).toBe(true);
+        expect(isDynamicNamespace(metadata, 'papi')).toBe(true);
+    });
+
+    it('静态 namespace 返 false', () => {
+        expect(isDynamicNamespace(metadata, 'system')).toBe(false);
+    });
+
+    it('未声明 namespace 返 false', () => {
+        expect(isDynamicNamespace(metadata, 'bedwars')).toBe(false);
+        expect(isDynamicNamespace([], 'system')).toBe(false);
+    });
+});
+
+// ---------- buildGroups 接入 mergeMetadata 后行为不变 ----------
+
+describe('buildGroups + merged metadata (P3-M)', () => {
+    it('用 mergeMetadata 输出走 buildGroups 仍 4 组分类正确', () => {
+        const metadata: NamespaceMetadata[] = [
+            {
+                namespace: 'user:w-abc',
+                displayName: '我的变量',
+                dynamic: false,
+                keys: [{ key: 'red', type: 'NUMBER', ttlMs: 0 }],
+            },
+            {
+                namespace: 'system',
+                displayName: '系统变量',
+                dynamic: false,
+                keys: [{ key: 'server.time', type: 'STRING', ttlMs: 60000 }],
+            },
+            {
+                namespace: 'papi',
+                displayName: 'PAPI',
+                dynamic: true,
+                keys: [],
+            },
+        ];
+        const merged = mergeMetadata([], metadata);
+        const groups = buildGroups(merged, 'w-abc', '');
+        // mine: 1, plugin: 0, system: 1, papi: 0
+        expect(groups[0].items.map((v) => v.key)).toEqual(['red']);
+        expect(groups[1].items.length).toBe(0);
+        expect(groups[2].items.map((v) => v.key)).toEqual(['server.time']);
+        expect(groups[3].items.length).toBe(0);
     });
 });
 

@@ -1,25 +1,34 @@
 <script setup lang="ts">
 /**
- * VariablePicker（0.4.0-P2-H）：编辑器内 popover 变量选择器。
+ * VariablePicker（0.4.0-P2-H + P3-M 扩展）：编辑器内 popover 变量选择器。
  *
  * <p>从 TextElementSection 的"插入变量"按钮 / 文本中输入 {@code ${} 自动触发；选中后把
  * 短名（{@code user/key} 或 {@code namespace/key}）回传给 caller，由 caller 拼成
  * {@code ${var:...}} 插入 textarea。</p>
  *
- * <p>纯逻辑（分组 / 过滤 / activeIndex）抽到 {@code @/variable/pickerLogic}；本文件只
- * 负责渲染 + 键盘交互 + onClickOutside。</p>
+ * <p>纯逻辑（分组 / 过滤 / activeIndex / metadata 合并）抽到 {@code @/variable/pickerLogic}；
+ * 本文件只负责渲染 + 键盘交互 + onClickOutside + mount 时 fetch metadata。</p>
+ *
+ * <p><b>P3-M</b>：mount 时调 {@code GET /api/variable/list-all-namespaces?sessionId=&wallId=}
+ * 拉所有 Provider 声明的 keys + 当前 wall 的 user 变量 metadata；与 store cached 值合并后
+ * 展示——让 picker 看到所有可用 namespace/key（即使 cached value 还没来）。fetch 失败 silent
+ * fallback 到原 store-only 行为，不影响基础功能。</p>
  */
 import { computed, nextTick, onMounted, ref } from 'vue';
 import { onClickOutside } from '@vueuse/core';
 import { Search } from 'lucide-vue-next';
+import { useNetworkStore } from '@/stores/network';
 import { useVariableStore } from '@/stores/variables';
 import { useI18n } from '@/i18n';
 import {
     buildGroups,
     displayName,
     flattenGroups,
+    isDynamicNamespace,
+    mergeMetadata,
     nextActiveIndex,
     totalCount,
+    type NamespaceMetadata,
     type PickerGroup,
 } from '@/variable/pickerLogic';
 
@@ -33,6 +42,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useVariableStore();
+const network = useNetworkStore();
 const { t } = useI18n();
 
 const rootRef = ref<HTMLElement | null>(null);
@@ -40,8 +50,14 @@ const searchRef = ref<HTMLInputElement | null>(null);
 const keyword = ref('');
 const activeIndex = ref(0);
 
+/** P3-M：metadata fetch 结果；失败 / 未到位时空数组（picker 走 store-only 兜底）。 */
+const metadata = ref<NamespaceMetadata[]>([]);
+
+/** 合并 store cached + metadata declared keys → 完整可用列表。 */
+const merged = computed(() => mergeMetadata(store.variables.values(), metadata.value));
+
 const groups = computed<PickerGroup[]>(() =>
-    buildGroups(store.variables.values(), props.wallId, keyword.value),
+    buildGroups(merged.value, props.wallId, keyword.value),
 );
 
 const flat = computed(() => flattenGroups(groups.value));
@@ -66,6 +82,11 @@ function selectFlat(idx: number) {
     emit('select', displayName(v));
 }
 
+/** 是否 dynamic namespace（picker 行 UI 加标签）。 */
+function isDynamic(namespace: string): boolean {
+    return isDynamicNamespace(metadata.value, namespace);
+}
+
 function onKeyDown(ev: KeyboardEvent) {
     if (ev.key === 'ArrowDown') {
         ev.preventDefault();
@@ -84,9 +105,25 @@ function onKeyDown(ev: KeyboardEvent) {
     }
 }
 
+async function fetchMetadata() {
+    const sid = network.sessionId;
+    if (!sid) return; // 未鉴权：picker 走 store-only
+    try {
+        const params = new URLSearchParams({ sessionId: sid });
+        if (props.wallId) params.append('wallId', props.wallId);
+        const res = await fetch(`/api/variable/list-all-namespaces?${params.toString()}`);
+        if (!res.ok) return;
+        const json = (await res.json()) as { namespaces?: NamespaceMetadata[] };
+        metadata.value = json.namespaces ?? [];
+    } catch {
+        // 静默：metadata 拿不到不影响 picker 基础（cached 变量仍可选）
+    }
+}
+
 onMounted(async () => {
     await nextTick();
     searchRef.value?.focus();
+    void fetchMetadata();
 });
 
 onClickOutside(rootRef, () => emit('close'));
@@ -135,7 +172,15 @@ onClickOutside(rootRef, () => emit('close'));
             @mouseenter="activeIndex = absoluteIdx(gi, vi)"
           >
             <span class="hc-vp-name">{{ displayName(v) }}</span>
-            <span class="hc-vp-value">{{ v.currentValue ?? v.defaultValue ?? '—' }}</span>
+            <span class="hc-vp-meta">
+              <span
+                v-if="isDynamic(v.namespace)"
+                class="hc-vp-chip hc-vp-chip-dynamic"
+                :title="t.variables.picker.dynamicHint"
+              >dyn</span>
+              <span class="hc-vp-chip hc-vp-chip-type">{{ v.type }}</span>
+              <span class="hc-vp-value">{{ v.currentValue ?? v.defaultValue ?? '—' }}</span>
+            </span>
           </li>
         </ul>
       </section>
@@ -231,9 +276,32 @@ onClickOutside(rootRef, () => emit('close'));
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.hc-vp-value {
+.hc-vp-meta {
     flex-shrink: 0;
-    max-width: 50%;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 55%;
+    overflow: hidden;
+}
+.hc-vp-chip {
+    flex-shrink: 0;
+    font-size: 9px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    text-transform: uppercase;
+}
+.hc-vp-chip-dynamic {
+    background: var(--accent);
+    color: var(--accent-foreground);
+}
+.hc-vp-value {
+    flex-shrink: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

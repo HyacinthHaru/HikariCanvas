@@ -1,11 +1,16 @@
 /**
- * VariablePicker 纯逻辑层（0.4.0-P2-H）。
+ * VariablePicker 纯逻辑层（0.4.0-P2-H + P3-M 扩展）。
  *
  * <p>把 picker 的 group 划分 / 搜索过滤 / activeIndex 平铺 / Enter onSelect 行为从
  * Vue 组件抽出，便于 vitest node 环境直接测（不需 jsdom + @vue/test-utils）。</p>
  *
  * <p>组件 {@code VariablePicker.vue} 是 thin wrapper：拿 store + wallId + keyword
- * → 调本模块 {@link buildGroups} 得分组 + flat index 模型 → 渲染 + 键盘 / 鼠标交互。</p>
+ * → 调本模块 {@link buildGroups} / {@link mergeMetadata} 得分组 + flat index 模型 → 渲染 + 键盘 / 鼠标交互。</p>
+ *
+ * <p><b>P3-M 扩展</b>：Picker 不再只显示已 cached 的变量；通过
+ * {@code GET /api/variable/list-all-namespaces} 拉到所有 Provider declared keys + 当前 wall 的
+ * user 变量 metadata 后，合并 store cached value 得完整可用列表（即便 cached value 未来即时也显示
+ * "—" 占位）。{@link mergeMetadata} 完成这一合并。</p>
  */
 import type { Variable } from '@/types/variable';
 
@@ -18,6 +23,112 @@ import type { Variable } from '@/types/variable';
 export interface PickerGroup {
     id: 'mine' | 'plugin' | 'system' | 'papi';
     items: Variable[];
+}
+
+// ---------- P3-M：metadata 接入 ----------
+
+/**
+ * 一个 namespace 在 metadata response 中的描述（对应后端 P3-M
+ * {@code GET /api/variable/list-all-namespaces} JSON）。
+ */
+export interface NamespaceMetadata {
+    namespace: string;
+    displayName: string;
+    /** 动态 namespace（如 scoreboard / papi）；keys 为空，编辑器应提示模板形态。 */
+    dynamic: boolean;
+    keys: DeclaredKeyMetadata[];
+}
+
+export interface DeclaredKeyMetadata {
+    key: string;
+    /** 与 {@link Variable.type} 一致；后端枚举名 STRING/NUMBER/BOOLEAN/COLOR。 */
+    type: string;
+    description?: string;
+    /** 0 = 永久；>0 = TTL（ms）。 */
+    ttlMs: number;
+}
+
+/** 已知 Variable['type'] 集合（运行时白名单 — declaredKeyToVariable 防 wild type 字段污染 store）。 */
+const KNOWN_TYPES: ReadonlyArray<Variable['type']> = ['STRING', 'NUMBER', 'BOOLEAN', 'COLOR'];
+
+/**
+ * 把 metadata 描述的 declared key 转成 {@link Variable} 形态（供 buildGroups 复用）；
+ * cached value 与 defaultValue 留空（{@code null}），UI 渲染时显示占位符 "—"。
+ *
+ * <p>非已知 type 字符串退化为 {@code STRING}（防后端未来加新 type 时前端旧版本崩溃）。</p>
+ */
+export function declaredKeyToVariable(
+    namespace: string,
+    k: DeclaredKeyMetadata,
+): Variable {
+    const type = (KNOWN_TYPES as ReadonlyArray<string>).includes(k.type)
+        ? (k.type as Variable['type'])
+        : 'STRING';
+    return {
+        namespace,
+        key: k.key,
+        type,
+        defaultValue: null,
+        currentValue: null,
+        updatedAt: 0,
+        ttl: k.ttlMs,
+        source: null,
+    };
+}
+
+/**
+ * 合并 store cached 变量 + metadata 声明 keys。
+ *
+ * <p>策略：</p>
+ * <ul>
+ *   <li>遍历 metadata 每个 namespace 的 declared keys → 构造 Variable 骨架（cached value 留 null）</li>
+ *   <li>同 fullName（{@code namespace/key}）若 store 已有 cached → 覆盖骨架，让 currentValue 走 store 真值</li>
+ *   <li>store 中存在但 metadata 不含的变量（如插件 push 出来但 declaredKeys 未列；scoreboard / papi 动态注册的具体 key）→ append 到末尾，保持显示</li>
+ * </ul>
+ *
+ * <p><b>动态 namespace 的 declared 部分</b>：metadata 返 {@code dynamic: true} 时 keys 为空——
+ * 不产生骨架；但已动态注册的具体 key 会从 store 那边走 append 路径出现在列表内（如玩家已引用过的
+ * scoreboard.kill.Steve）。</p>
+ *
+ * @returns 合并后的 Variable 数组（顺序：metadata 顺序 + store-only 追加）
+ */
+export function mergeMetadata(
+    storeVariables: Iterable<Variable>,
+    metadata: NamespaceMetadata[],
+): Variable[] {
+    const byFullName = new Map<string, Variable>();
+    for (const v of storeVariables) {
+        byFullName.set(`${v.namespace}/${v.key}`, v);
+    }
+    const out: Variable[] = [];
+    const seen = new Set<string>();
+    for (const ns of metadata) {
+        for (const k of ns.keys) {
+            const fullName = `${ns.namespace}/${k.key}`;
+            const cached = byFullName.get(fullName);
+            out.push(cached ?? declaredKeyToVariable(ns.namespace, k));
+            seen.add(fullName);
+        }
+    }
+    // store-only：metadata 没声明、但 store 有的（动态注册 + 老插件未实现 declaredKeys 兜底）
+    for (const [fullName, v] of byFullName.entries()) {
+        if (!seen.has(fullName)) out.push(v);
+    }
+    return out;
+}
+
+/**
+ * 取 metadata 内特定 namespace 的 dynamic flag。给 UI 做 "动态注册" 标记用。
+ * 找不到 namespace 时返 {@code false}。
+ */
+export function isDynamicNamespace(
+    metadata: NamespaceMetadata[],
+    namespace: string,
+): boolean {
+    for (const ns of metadata) {
+        if (ns.namespace === namespace) return ns.dynamic;
+    }
+    return false;
 }
 
 /**

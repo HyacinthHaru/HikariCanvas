@@ -475,6 +475,8 @@ export const messages = {
                 insertButtonLabel: '插入变量',
                 insertButtonTooltip: '插入变量占位符（或在文本中输入 ${ 触发）',
                 keyboardHint: '↑↓ 选择，Enter 确认，Esc 关闭',
+                // P3-M：动态 namespace（如 scoreboard / papi）行内标记 tooltip
+                dynamicHint: '动态注册：引用时按 namespace 模板（如 scoreboard.<obj>.<player>）自动创建',
             },
             // P2-H：TextElement 下方 live preview + 删除警告
             hints: {
@@ -1040,6 +1042,8 @@ export const messages = {
                 insertButtonLabel: 'Insert variable',
                 insertButtonTooltip: 'Insert a variable placeholder (or type ${ in the text)',
                 keyboardHint: '↑↓ to choose, Enter to confirm, Esc to close',
+                // P3-M: dynamic namespace (e.g. scoreboard / papi) row marker tooltip
+                dynamicHint: 'Dynamic namespace: register on reference (e.g. scoreboard.<obj>.<player>)',
             },
             // P2-H: TextElement live preview + deletion warning
             hints: {

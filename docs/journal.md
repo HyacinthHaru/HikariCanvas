@@ -5,6 +5,100 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P3-M：`/api/variable/list-all-namespaces` 端点 + VariablePicker metadata 接入
+
+P3 Wave 2 之一：编辑器 VariablePicker 自动补全数据源落地。**1 commit / ~620 行净增（含 1 新生产类 + 1 测试类 + 1 picker 重写）/ 576 backend test 全绿（+10 from P3-K 基线 566）/ 90 frontend test 全绿（+17 from P2-I 基线 73 — pickerLogic 新 17 case）**。
+
+### 改动一览
+
+1. **VariableMetadataHandler**（{{web/VariableMetadataHandler.java}}, ~210 行）：
+   - `GET /api/variable/list-all-namespaces?sessionId=<id>&wallId=<wallId>` 端点 handler；不主动注册路由（由 N 收尾一行 `addEndpoint` 接入 WebServer）
+   - 鉴权：query `sessionId` 通过 `SessionManager.byId(sid) != null` 校验（同 UploadHandler.handleDownload）；失败 401 `{"error":"UNAUTHORIZED"}`
+   - 聚合：遍历 `daemon.registeredProviders()` → 每个 provider 序列化 `{namespace, displayName, dynamic, keys:[DeclaredKey...]}`；带 wallId 时在首位插入 `user:<wallId>` namespace（含该 wall 的所有 user 变量，**不依赖 Compositor markReferences**——直接扫 `store.listAll()` 按 namespace 严格匹配）
+   - cache：5s server-side cache；**仅** wallId 缺省路径命中（带 wallId 走实时算——user 变量增删频繁）。`volatile cachedJson + AtomicLong cachedAt`
+   - 容错：provider `declaredKeys()` 抛异常被 try-catch 吞掉 + log warning + 本 provider 仍下发 namespace 元数据但 keys=空；序列化失败 500 `{"error":"INTERNAL"}` 不 echo 内部异常
+   - **测试 seam**：`Predicate<String> sessionAuthCheck` 注入（生产用 `sessionManager::byId 非空 lambda`，测试注入 fake）——避免测试构造重 SessionManager（final 类，需要 Logger + MapPool + WallResolver + AuditLog + WallRepo 全套）
+
+2. **pickerLogic.ts 扩展**（{{web/variable/pickerLogic.ts}}）：
+   - 新 `NamespaceMetadata` / `DeclaredKeyMetadata` 接口（与后端 JSON wire 形态对齐）
+   - 新 `declaredKeyToVariable(ns, k) → Variable`：metadata declared key 转 Variable 骨架（cached value 留 null；UI 渲染显示 "—"）；运行时白名单 `KNOWN_TYPES` 防后端新增 type 时前端崩
+   - 新 `mergeMetadata(storeVariables, metadata) → Variable[]`：metadata declared keys 为主轴 + store cached value 覆盖；store-only 变量（如 scoreboard 动态注册的具体 key）append 到末尾
+   - 新 `isDynamicNamespace(metadata, namespace) → boolean`：UI 标记 "动态注册" chip 用
+
+3. **VariablePicker.vue 重写**（{{web/components/variables/VariablePicker.vue}}）：
+   - `onMounted` async fetch `/api/variable/list-all-namespaces?sessionId=&wallId=` 拉 metadata；失败 silent fallback 到 store-only（不影响基础功能）
+   - 内部 ref `metadata` + computed `merged = mergeMetadata(store + metadata)` 喂给 `buildGroups`
+   - UI 行扩展：name 旁加 `<chip type>` + 动态 namespace 加 `<chip dyn>`（tooltip `t.variables.picker.dynamicHint`）；value 走 cached / default / "—" 三档 fallback
+   - CSS：新 `.hc-vp-meta / .hc-vp-chip / .hc-vp-chip-dynamic` token-style；`max-width 55%` 容纳 chip + value
+
+4. **i18n**（{{web/i18n/messages.ts}}）：picker 子段加 `dynamicHint` 中英 key
+
+5. **后端单测**（{{test:.../VariableMetadataHandlerTest.java}}, 10 case，JavalinTest 端到端）：
+   - 鉴权：sessionId 缺 / 空 / 未知 → 401
+   - 无 wallId：聚合 provider declaredKeys；不含 user namespace
+   - 带 wallId：user namespace 排首位 + 含该 wall user 变量 + 跨 wall 隔离
+   - 带 wallId 空 user 变量 → keys=[]
+   - cache：5s TTL 内 declaredKeys 只调一次；带 wallId 每次实时算 + 不写 cache
+   - declaredKeys 抛异常隔离：其他 provider 仍下发；抛者下发 namespace + 空 keys
+   - 动态 namespace：dynamic=true + keys=[]
+
+6. **前端单测扩展**（{{web/variable/__tests__/pickerLogic.test.ts}}, +17 case）：
+   - `declaredKeyToVariable`：完整 Variable 骨架 + 未知 type 退化 STRING
+   - `mergeMetadata`：declared keys 全显示 / cached 覆盖骨架 / store-only append / 动态 namespace 不污染 / 空输入
+   - `isDynamicNamespace`：动态 / 静态 / 未声明 namespace
+   - `buildGroups + merged metadata` 集成：4 组分类仍正确
+
+7. **docs/dynamic-data.md §3.3** 扩写：`/api/variable/list-all-namespaces` JSON wire 形态 + 鉴权 + cache 策略
+
+### 关键决策（已固化）
+
+1. **handler 不主动注册路由，由 N 收尾装配**：保持 M15.x 拆分纪律（handler 自治；WebServer 仅装配 + 路由）；同时避免与并行进行的 L 任务（schedule.* WS op）抢 WebServer.java 编辑权
+2. **`Predicate<String>` 注入鉴权**：生产构造仍接受 `SessionManager`（即时打包成 lambda）；测试构造直接传 predicate—不构造 SessionManager（final 类，重 deps）。Auth check 边界变小→易测；测试覆盖率 / 速度都受益
+3. **5s cache 仅 wallId 缺省路径**：user 变量 create/delete 频繁；带 wallId 走实时算 200μs 内（store.listAll + 字符串匹配），不写 cache—**正确性优先于 cache 命中率**
+4. **provider declaredKeys 异常隔离**：本任务下游 K (PapiVariableBridge) / L (ManualScheduleProvider) 可能在 declaredKeys 抛异常；外层 try-catch 让 picker UI 永远能拿到 namespace 元数据，单 provider 故障不影响其他
+5. **user namespace 直接扫 store.listAll**：不依赖 `store.listByWall`（那个依赖 Compositor markReferences——但 user 变量是玩家手动 create，可能尚未在文本中引用）。直接 strict namespace 匹配 `user:<wallId>`—保证 picker 显示所有 user 变量（含未引用过的）
+6. **运行时 KNOWN_TYPES 白名单**：前端 declaredKeyToVariable 把未知 type 退化 STRING；防后端未来加新 VarType（如 ARRAY / OBJECT）时旧前端崩
+
+### N 收尾装配指引（一行）
+
+WebServer 构造内（同 uploadHandler 装配处附近）：
+
+```java
+this.variableMetadataHandler = new VariableMetadataHandler(
+    variableStore, variableProviderDaemon, sessionManager,
+    /* ObjectMapper - 复用 JavalinJackson 的 mapper 或新 ObjectMapper() */);
+```
+
+routes block 内：
+
+```java
+cfg.routes.addEndpoint(new Endpoint(
+    HandlerType.GET, "/api/variable/list-all-namespaces",
+    variableMetadataHandler::handle));
+```
+
+构造依赖：VariableStore + VariableProviderDaemon 已是 HikariCanvas#onEnable 实例化的字段，N 直接 forward 进 WebServer ctor 即可。
+
+### 通用基线
+
+- backend test: 566 → 576（10 new VariableMetadataHandlerTest）
+- frontend test: 73 → 90（17 new pickerLogic.test.ts P3-M case）
+- bundle: 620 kB → 623 kB（gzip 190 kB→190 kB；+3 kB 体现 mergeMetadata / declaredKeyToVariable / fetchMetadata onMounted block）
+- shadow jar: 161 MB (P3-K) → 不变（M 仅 +0.5 KB 类）
+- 0 baseline 漂移
+
+### 关联文件
+
+- 新 {{web/VariableMetadataHandler.java}}
+- 新 {{test:.../VariableMetadataHandlerTest.java}}
+- 改 {{web/variable/pickerLogic.ts}}
+- 改 {{web/components/variables/VariablePicker.vue}}
+- 改 {{web/variable/__tests__/pickerLogic.test.ts}}
+- 改 {{web/i18n/messages.ts}}
+- 改 {{docs/dynamic-data.md §3.3}}
+
+---
+
 ## 2026-05-19 · 0.4.0-P3-K：PapiVariableBridge（reflection 软依赖 + 动态注册）
 
 P3 Wave 2 之一：PAPI 桥接落地。**1 commit / ~430 行净增（含 1 新生产类 + 1 测试类）/ 556 backend test 全绿（+29 from P3-J 基线 527）**。
