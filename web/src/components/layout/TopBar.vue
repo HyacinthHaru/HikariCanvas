@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
@@ -312,6 +312,16 @@ function showRefreshFlash(msg: string) {
           @click="ui.toggleVariablePanel()"
         >
           <Variable class="size-4" />
+        </button>
+      </Tooltip>
+      <!-- 0.4.0-P3-L：列车时刻表管理 -->
+      <Tooltip :text="t.topbar.scheduleManager">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
+          :class="ui.scheduleManagerOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="ui.toggleScheduleManager()"
+        >
+          <Train class="size-4" />
         </button>
       </Tooltip>
       <Tooltip :text="t.topbar.help" shortcut="?">

@@ -12,6 +12,7 @@ import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
 import { useVariableStore } from '@/stores/variables';
+import { useScheduleStore } from '@/stores/schedule';
 import { messages } from '@/i18n/messages';
 
 /**
@@ -190,6 +191,45 @@ export class WsClient {
         return this.sendWithAck('variable.bind', { fullName, boundTo }).then(() => undefined);
     }
 
+    // ---------- 列车时刻表（0.4.0-P3-L，协议契约见 docs/protocol.md §5.12）----------
+    //
+    // 5 个 op 都走 ack 通道；ScheduleStore mirror 由各方法返回的 payload 自己更新。
+
+    /** {@code schedule.list}：查当前 wall 的完整时刻表。返 ack payload {schedule: WallSchedule|null}。 */
+    sendScheduleList(): Promise<{ schedule: import('@/types/schedule').WallSchedule | null }> {
+        return this.sendWithAck('schedule.list', {}, 8000)
+                .then((p) => p as { schedule: import('@/types/schedule').WallSchedule | null });
+    }
+
+    /** {@code schedule.upsert}：创建 / 更新 schedule 元数据（站名）。 */
+    sendScheduleUpsert(stationName: string | null): Promise<{ stationName: string | null }> {
+        return this.sendWithAck('schedule.upsert', { stationName })
+                .then((p) => p as { stationName: string | null });
+    }
+
+    /** {@code schedule.entry.add}：添加时刻表条目；返新生成的 id + 字段回填。 */
+    sendScheduleEntryAdd(
+        departureTime: string, destination: string | null, sortOrder: number,
+    ): Promise<import('@/types/schedule').ScheduleEntryAck> {
+        return this.sendWithAck('schedule.entry.add', { departureTime, destination, sortOrder })
+                .then((p) => p as import('@/types/schedule').ScheduleEntryAck);
+    }
+
+    /** {@code schedule.entry.update}：按 id 改条目。 */
+    sendScheduleEntryUpdate(
+        id: number, departureTime: string, destination: string | null, sortOrder: number,
+    ): Promise<import('@/types/schedule').ScheduleEntryAck> {
+        return this.sendWithAck('schedule.entry.update', {
+            id, departureTime, destination, sortOrder,
+        }).then((p) => p as import('@/types/schedule').ScheduleEntryAck);
+    }
+
+    /** {@code schedule.entry.delete}：按 id 删条目。 */
+    sendScheduleEntryDelete(id: number): Promise<{ id: number }> {
+        return this.sendWithAck('schedule.entry.delete', { id })
+                .then((p) => p as { id: number });
+    }
+
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
@@ -273,6 +313,8 @@ export class WsClient {
         if (project.wallId !== null && project.wallId !== incomingWallId) {
             project.reset();
             ui.reset();
+            // 0.4.0-P3-L：schedule 是 wall-scoped 元数据；wall 切换时清旧 wall 缓存
+            useScheduleStore().reset();
         }
         net.authenticated = true;
         net.sessionId = payload.sessionId;

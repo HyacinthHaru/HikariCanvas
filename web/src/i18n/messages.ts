@@ -25,6 +25,7 @@ export const messages = {
             switchLocale: 'Switch to English',
             help: '快捷键速查 / 帮助',
             variableManager: '变量管理（动态数据）',
+            scheduleManager: '列车时刻表（动态站牌）',
         },
         wall: {
             copyId: (id: string) => `点击复制画板 ID：${id}`,
@@ -485,6 +486,39 @@ export const messages = {
                 referencedHint: '此文本引用变量 {names}',
             },
         },
+        // 0.4.0-P3-L：列车 / 公交时刻表管理（兜底功能，零外部依赖）
+        schedule: {
+            // TopBar / 入口
+            topbarButton: '列车时刻表',
+            topbarTooltip: '管理 wall 的列车 / 公交时刻表，自动暴露 schedule.* 变量',
+            // Modal 主体
+            modalTitle: '列车时刻表管理',
+            stationName: '站名',
+            stationPlaceholder: '例如 中央站（可空）',
+            entriesHeader: '时刻表条目',
+            addEntry: '+ 添加条目',
+            emptyEntries: '尚无时刻表条目，点击 + 添加第一条',
+            // Entry dialog
+            entryDialogTitle: '时刻表条目',
+            entryDepartureLabel: '出发时间',
+            entryDestinationLabel: '终点站',
+            entrySortOrderLabel: '排序权重（小在前）',
+            entrySubmit: '保存',
+            entryCancel: '取消',
+            entryEditAria: '编辑此条目',
+            entryDeleteAria: '删除此条目',
+            // 状态预览
+            previewHeader: '当前状态预览',
+            previewNextDeparture: '下一班车',
+            previewNextDestination: '终点',
+            previewEtaMinutes: 'ETA（分钟）',
+            previewIsArriving: '即将到站',
+            // 关闭
+            close: '关闭',
+            // 错误
+            errorBadTimeFormat: '出发时间格式无效（应为 HH:mm 24 小时制）',
+            errorEmptyDestination: '终点不能为空',
+        },
         // M24-A 新增：错误码 → 用户友好提示。M24-B 整修时挂到 wsClient / upload error handler
         errors: {
             // WebSocket / 协议级
@@ -592,6 +626,7 @@ export const messages = {
             switchLocale: '切换到中文',
             help: 'Shortcuts & help',
             variableManager: 'Variable manager (dynamic data)',
+            scheduleManager: 'Train schedule (dynamic departure board)',
         },
         wall: {
             copyId: (id: string) => `Click to copy wall id: ${id}`,
@@ -1051,6 +1086,39 @@ export const messages = {
                 deletedWarning: 'Variable {names} has been deleted. Text referencing it will show "???"',
                 referencedHint: 'This text references variable {names}',
             },
+        },
+        // 0.4.0-P3-L: train / bus schedule manager (built-in fallback, zero external dependency)
+        schedule: {
+            // TopBar
+            topbarButton: 'Train schedule',
+            topbarTooltip: 'Manage the wall\'s train / bus schedule; auto-exposes schedule.* variables',
+            // Modal body
+            modalTitle: 'Schedule manager',
+            stationName: 'Station name',
+            stationPlaceholder: 'e.g. Central Station (optional)',
+            entriesHeader: 'Schedule entries',
+            addEntry: '+ Add entry',
+            emptyEntries: 'No entries yet — click + to add the first one',
+            // Entry dialog
+            entryDialogTitle: 'Schedule entry',
+            entryDepartureLabel: 'Departure time',
+            entryDestinationLabel: 'Destination',
+            entrySortOrderLabel: 'Sort order (lower first)',
+            entrySubmit: 'Save',
+            entryCancel: 'Cancel',
+            entryEditAria: 'Edit this entry',
+            entryDeleteAria: 'Delete this entry',
+            // Preview
+            previewHeader: 'Current state preview',
+            previewNextDeparture: 'Next departure',
+            previewNextDestination: 'Destination',
+            previewEtaMinutes: 'ETA (minutes)',
+            previewIsArriving: 'Arriving soon',
+            // Close
+            close: 'Close',
+            // Errors
+            errorBadTimeFormat: 'Invalid time format (use HH:mm 24h)',
+            errorEmptyDestination: 'Destination cannot be empty',
         },
         // M24-A: error code → user-friendly message. Wire into wsClient / upload error handler in M24-B
         errors: {

@@ -123,6 +123,14 @@ public final class VariableInterpolator {
         if (wallId != null && !wallId.isEmpty() && rawName.startsWith("wall.")) {
             return "system:" + wallId + "/" + rawName;
         }
+        // 0.4.0-P3-L：schedule.* per-wall namespace 注入（与 wall.* 同款）
+        // e.g. ${var:schedule.next_departure} + wallId="w-abc" → "schedule:w-abc/next_departure"
+        // ManualScheduleProvider 按 namespace=schedule:<wallId> 注册 4 个 key（next_departure /
+        // next_destination / eta_minutes / is_arriving）。wallId == null 跳过注入，字面查询走 fallback。
+        if (wallId != null && !wallId.isEmpty() && rawName.startsWith("schedule.")) {
+            String tail = rawName.substring("schedule.".length());
+            return "schedule:" + wallId + "/" + tail;
+        }
         // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
         // 与 ScoreboardVariableProvider.handleDynamic 存储侧约定一致。
         if (rawName.startsWith("scoreboard.")) {

@@ -327,6 +327,47 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  P3-L：schedule.* 注入
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void scheduleNamespace_injectsWallIdIntoPerWall() {
+        store.create("schedule:w-abc", "next_departure", VarType.STRING, null, "schedule");
+        store.setValue("schedule:w-abc/next_departure", "08:30", null);
+
+        var r = interp.interpolate("Next train at ${var:schedule.next_departure}", "w-abc");
+        assertEquals("Next train at 08:30", r.text());
+        assertTrue(r.referencedFullNames().contains("schedule:w-abc/next_departure"),
+                "schedule.X 应被注入成 schedule:<wallId>/X");
+    }
+
+    @Test
+    void scheduleNamespace_allFourKeys_inject() {
+        store.create("schedule:w-1", "next_departure", VarType.STRING, null, "schedule");
+        store.create("schedule:w-1", "next_destination", VarType.STRING, null, "schedule");
+        store.create("schedule:w-1", "eta_minutes", VarType.NUMBER, null, "schedule");
+        store.create("schedule:w-1", "is_arriving", VarType.BOOLEAN, null, "schedule");
+        store.setValue("schedule:w-1/next_departure", "09:00", null);
+        store.setValue("schedule:w-1/next_destination", "Beijing", null);
+        store.setValue("schedule:w-1/eta_minutes", "15", null);
+        store.setValue("schedule:w-1/is_arriving", "false", null);
+
+        var r = interp.interpolate(
+                "${var:schedule.next_departure} → ${var:schedule.next_destination} "
+                        + "(${var:schedule.eta_minutes}min, arriving=${var:schedule.is_arriving})",
+                "w-1");
+        assertEquals("09:00 → Beijing (15min, arriving=false)", r.text());
+    }
+
+    @Test
+    void scheduleNamespace_nullWallIdFallsBackLiterally() {
+        var r = interp.interpolate("${var:schedule.next_departure}", null);
+        assertEquals(VariableInterpolator.UNRESOLVED, r.text());
+        assertTrue(r.referencedFullNames().contains("schedule.next_departure"),
+                "wallId 为 null 时 schedule.* 不注入");
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  P3-J：notifyDynamicLookup 触发
     // ──────────────────────────────────────────────────────────
 

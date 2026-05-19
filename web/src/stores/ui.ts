@@ -65,6 +65,8 @@ export const useUiStore = defineStore('ui', () => {
     const helpOpen = ref(false);
     /** M28-P2-G：变量管理面板（VariablePanel）开关。TopBar 按钮 / ESC 触发。 */
     const variablePanelOpen = ref(false);
+    /** 0.4.0-P3-L：列车时刻表管理 modal 开关。TopBar Calendar 按钮触发。 */
+    const scheduleManagerOpen = ref(false);
 
     /** M8-F：所有当前选中的元素 id。size > 1 时为多选。 */
     const selectedIds = ref<Set<string>>(new Set());
@@ -143,6 +145,8 @@ export const useUiStore = defineStore('ui', () => {
     function toggleLogDrawer() { logDrawerOpen.value = !logDrawerOpen.value; }
     function toggleVariablePanel() { variablePanelOpen.value = !variablePanelOpen.value; }
     function closeVariablePanel() { variablePanelOpen.value = false; }
+    function toggleScheduleManager() { scheduleManagerOpen.value = !scheduleManagerOpen.value; }
+    function closeScheduleManager() { scheduleManagerOpen.value = false; }
 
     function setZoom(z: number) {
         zoom.value = Math.max(0.25, Math.min(4, z));
@@ -210,16 +214,18 @@ export const useUiStore = defineStore('ui', () => {
         logDrawerOpen.value = false;
         helpOpen.value = false;
         variablePanelOpen.value = false;
+        scheduleManagerOpen.value = false;
     }
 
     return {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
-        variablePanelOpen,
+        variablePanelOpen, scheduleManagerOpen,
         selectedIds, selectedElementId, selectedCount, hasSelection,
         editingLayerId, zoom,
         snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapToDistribute, snapThreshold,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         toggleVariablePanel, closeVariablePanel,
+        toggleScheduleManager, closeScheduleManager,
         setZoom, zoomIn, zoomOut, zoomReset,
         selectElement, toggleSelection, selectMany, addToSelection, clearSelection,
         isSelected,

@@ -93,6 +93,8 @@ public final class WebServer {
     private final TemplateOpDispatcher templateOpDispatcher;
     /** 0.4.0-P1-B：variable.* 五个 op 的分发；可为 null（VariableStore 未配置） */
     private final VariableOpDispatcher variableOpDispatcher;
+    /** 0.4.0-P3-L：schedule.* 五个 op 的分发；可为 null（ScheduleDao 未配置） */
+    private final ScheduleOpDispatcher scheduleOpDispatcher;
     /**
      * 0.4.0-P2-F：ready payload 注入 variables 快照需要直读 VariableStore。
      * 与 {@link #variableOpDispatcher} 同生命周期；可为 null（VariableStore 未配置时跳过注入）。
@@ -147,6 +149,8 @@ public final class WebServer {
                      FontRegistry fontRegistry,
                      IconRegistry iconRegistry,
                      moe.hikari.canvas.variable.VariableStore variableStore,
+                     moe.hikari.canvas.storage.ScheduleDao scheduleDao,
+                     moe.hikari.canvas.variable.provider.ManualScheduleProvider manualScheduleProvider,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler,
                      int wsAuthTimeoutSeconds,
@@ -193,6 +197,10 @@ public final class WebServer {
         this.variableOpDispatcher = variableStore == null ? null
                 : new VariableOpDispatcher(sessionManager, rateLimiter, variableStore,
                         wallRepo, push, auditLog);
+        // 0.4.0-P3-L：schedule.* dispatcher（ScheduleDao 必传；manualScheduleProvider 可空）
+        this.scheduleOpDispatcher = scheduleDao == null ? null
+                : new ScheduleOpDispatcher(sessionManager, rateLimiter, scheduleDao,
+                        manualScheduleProvider, wallRepo, auditLog);
         // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
         this.variableStore = variableStore;
     }
@@ -689,6 +697,15 @@ public final class WebServer {
                             "variable system not initialized"));
                 } else {
                     variableOpDispatcher.dispatch(ctx, in, bound);
+                }
+            }
+            case "schedule.upsert", "schedule.entry.add", "schedule.entry.update",
+                 "schedule.entry.delete", "schedule.list" -> {
+                if (scheduleOpDispatcher == null) {
+                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR",
+                            "schedule system not initialized"));
+                } else {
+                    scheduleOpDispatcher.dispatch(ctx, in, bound);
                 }
             }
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));

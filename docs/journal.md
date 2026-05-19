@@ -5,6 +5,83 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P3-L：ManualScheduleProvider 全栈（兜底列车时刻表）
+
+P3 Wave 2 之一：零外部依赖的"时刻表" provider。**1 commit / ~1700 行净增（含 6 新生产类 + 2 测试类 + 1 V012 migration + 4 前端组件 + 1 store）/ 631 backend test 全绿（+31 from P3-M 基线 600）/ 96 frontend test 全绿（+3 from P3-M 基线 93）**。
+
+### 改动一览
+
+1. **V012__wall_schedules.sql**（{{plugin/.../resources/db-migrations/V012__wall_schedules.sql}}）：
+   - `wall_schedules` 表（wallId 主键 + stationName + updatedAt + FK CASCADE）
+   - `schedule_entries` 表（id 自增 + wallId FK + departureTime "HH:mm" + destination nullable + sortOrder + idx_schedule_entries_wall）
+   - 注册到 MigrationRunner.MIGRATIONS 列表 V011 之后
+
+2. **ScheduleDao**（{{plugin/.../storage/ScheduleDao.java}}, ~230 行）：JDBI CRUD —— `loadByWall / upsertSchedule / insertEntry / updateEntry / deleteEntry / deleteByWall / loadAll`；entries 按 `sort_order ASC, departure_time ASC` 预排序；记录 record `WallSchedule / ScheduleEntry`（`moe.hikari.canvas.schedule` 新包）
+
+3. **ManualScheduleProvider**（{{plugin/.../variable/provider/ManualScheduleProvider.java}}, ~340 行）：
+   - namespace = `"schedule:<wallId>"`（per-wall，同 SystemProvider 风格）
+   - 4 key：`next_departure (STRING) / next_destination (STRING) / eta_minutes (NUMBER) / is_arriving (BOOLEAN)`
+   - 30s refresh interval；computeNext 纯函数（按 departure_time 排 + 找第一个 > now + 过零点计算 + is_arriving ≤ 5min 阈值）
+   - `initialize()` 启动期遍历 `dao.loadAll()` 注册所有已有 schedule 的 wall
+   - `ensureWallRegistered(wallId)` / `refreshWall(wallId)` / `unregisterWall(wallId)` API — 业务侧（EditSession + SessionManager.wallDeleteHook）调用
+   - `DataSource` 测试 seam（DAO + LocalTime 抽象），生产 `DaoDataSource` 包 ScheduleDao + `LocalTime.now()`
+   - 容错：非法 "HH:mm" 退化 `MIDNIGHT`；entries 空时 push 空字符串占位
+
+4. **ProviderBootstrap 扩展**（{{plugin/.../variable/provider/ProviderBootstrap.java}}）：
+   - `initialize(store, plugin, wallRepo, scheduleDao)` 4 参数 overload（旧 3 参 wrapper 留兼容）
+   - daemon.register(new ManualScheduleProvider(store, plugin, scheduleDao))
+
+5. **ScheduleOpDispatcher**（{{plugin/.../web/ScheduleOpDispatcher.java}}, ~330 行）：
+   - 5 WS op：`schedule.list / schedule.upsert / schedule.entry.add / schedule.entry.update / schedule.entry.delete`
+   - 权限：owner 走 `canvas.schedule.own` (default=true)，非 owner 需 `canvas.schedule.any` (default=op)
+   - HH:mm 24h regex 校验 + destination ≤ 64 字符 + sortOrder int 校验
+   - entry.* op 完成后调 `provider.refreshWall(wallId)` 立即重算 4 个变量（不等 30s tick）
+   - 跨 wall entry id 拒（先 loadByWall 校验包含 id）
+   - 5 audit 事件：`SCHEDULE_UPSERT / SCHEDULE_ENTRY_ADD / SCHEDULE_ENTRY_UPDATE / SCHEDULE_ENTRY_DELETE / PERMISSION_DENIED`
+
+6. **VariableInterpolator + interpolator.ts**（{{plugin/.../variable/VariableInterpolator.java}} + {{web/variable/interpolator.ts}}）：
+   - `schedule.<key>` + wallId → `schedule:<wallId>/<key>` 注入（与 wall.* 同款）
+   - 双端镜像一致；wallId 为 null 时字面查询走 fallback
+
+7. **HikariCanvas onEnable wiring**：scheduleDao 字段 + `wallDeleteHook` 联动 `manualScheduleProvider.unregisterWall + scheduleDao.deleteByWall`；ProviderBootstrap.initialize 4 参版
+
+8. **paper-plugin.yml**：新 `canvas.schedule.own` (true) + `canvas.schedule.any` (op) 权限节点
+
+9. **前端**：
+   - `types/schedule.ts`：`ScheduleEntry / WallSchedule / Schedule*Ack` 接口
+   - `stores/schedule.ts`：Pinia store（`current / loading / setLoaded / setStationName / upsertEntry / removeEntry / reset`）；wall 切换时由 wsClient.handleReady 触发 reset
+   - `wsClient.ts` 加 5 个 send method（list / upsert / entry.add / update / delete）+ static import useScheduleStore + reset on wall switch
+   - `components/schedule/ScheduleManagerModal.vue`：站名 inline edit + entries 列表 + 添加 / 编辑 / 删除 + 4 个 schedule.* 变量 live preview
+   - `components/schedule/ScheduleEntryDialog.vue`：双用途（add/edit）子 modal（type=time 24h + destination + sortOrder + HH:mm 实时校验）
+   - `stores/ui.ts`：`scheduleManagerOpen + toggleScheduleManager + closeScheduleManager + reset 复位`
+   - `TopBar.vue`：Train icon 按钮挂在 Variable 按钮旁边，toggle scheduleManagerOpen
+   - `App.vue`：末尾 `<ScheduleManagerModal />`
+   - `i18n/messages.ts`：顶层 `schedule` section（中英 30+ key）+ `topbar.scheduleManager`
+
+10. **测试**：
+    - **ScheduleDaoTest**（14 case）：CRUD + 排序 + 级联删 (`cascade_onWallDelete_clearsScheduleData`) + loadAll
+    - **ManualScheduleProviderTest**（17 case，FakeDataSource）：register/unregister + refresh 计算 + per-wall 隔离 + edge case（空 entries / 过零点 / 5min 阈值 / 非法时间格式 / 幂等 / shutdown）
+    - **VariableInterpolatorTest** +3 case：schedule.* 双端注入测试
+    - **frontend interpolator.test.ts** +3 case：schedule.X resolve / wallId null fallback
+
+### 关键决策（已固化）
+
+1. **schedule 走 dispatcher 而非 EditSession**：schedule 不影响 ProjectState / 像素 dirty，独立的 ScheduleOpDispatcher 直发 ack（无 state.patch / version bump）；同 WallOpDispatcher 模式
+2. **per-wall namespace = `"schedule:<wallId>"`**：与 SystemProvider 的 `system:<wallId>/wall.*` 风格统一；Provider.namespace() 返 `"schedule"` 仅是 daemon 唯一性 key，per-wall 真实 namespace 在 store 中按 `"schedule:" + wallId` 注册
+3. **Provider 注册时机**：玩家首次添加 entry 时由 EditSession（实际由 ScheduleOpDispatcher）调 `provider.refreshWall(wallId)`，内部走 `ensureWallRegistered` 注册 4 个变量；避免对所有 wall 都注册无意义空 schedule
+4. **wall 删除联动**：HikariCanvas onEnable 注册 `sessionManager.addWallDeleteHook`：删 wall → `provider.unregisterWall + scheduleDao.deleteByWall`（SQLite FK CASCADE 也会清，但显式调更稳）
+5. **`refreshWall` 同步立即算**：entry add/update/delete 后立即 push 新值，不等 30s refresh tick——玩家在编辑器看到的 live preview 体验
+6. **过零点 ETA**：所有 entry 已过时，next 选第一条（明天），eta = `(24h - now) + nextTime`，capped 1440min。is_arriving 仅 ≤ 5min 阈值触发
+
+### 与 K/M 协调
+
+- ProviderBootstrap.java 在 K 加 PapiVariableBridge 之上加 ManualScheduleProvider（无冲突 — K 已 commit 219f731）
+- WebServer.java 加 ScheduleOpDispatcher（M 未动 WebServer，N 收尾时合并 VariableMetadataHandler 装配）
+- HikariCanvas.java onEnable 加 scheduleDao + provider hook（M 未动 onEnable）
+- VariableInterpolator.java / interpolator.ts 紧挨 J 加的 wall.* 注入后加 schedule.* 注入（无冲突）
+
+---
+
 ## 2026-05-19 · 0.4.0-P3-M：`/api/variable/list-all-namespaces` 端点 + VariablePicker metadata 接入
 
 P3 Wave 2 之一：编辑器 VariablePicker 自动补全数据源落地。**1 commit / ~620 行净增（含 1 新生产类 + 1 测试类 + 1 picker 重写）/ 576 backend test 全绿（+10 from P3-K 基线 566）/ 90 frontend test 全绿（+17 from P2-I 基线 73 — pickerLogic 新 17 case）**。

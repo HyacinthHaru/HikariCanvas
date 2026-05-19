@@ -38,6 +38,7 @@ import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.preview.TemplatePreviewService;
 import moe.hikari.canvas.template.preview.WallPreviewService;
 import moe.hikari.canvas.variable.VariableStore;
+import moe.hikari.canvas.variable.provider.ManualScheduleProvider;
 import moe.hikari.canvas.variable.provider.ProviderBootstrap;
 import moe.hikari.canvas.variable.provider.VariableProviderDaemon;
 import moe.hikari.canvas.storage.UserVariableDao;
@@ -98,6 +99,8 @@ public final class HikariCanvas extends JavaPlugin {
     // 0.4.0-P1-E：异步 Provider 调度框架（守护线程 + 定时 refresh）。P1 阶段不注册任何
     // provider；P3 在 ProviderBootstrap.initialize 内加 SystemVariableProvider / PapiVariableBridge 等。
     private VariableProviderDaemon variableProviderDaemon;
+    // 0.4.0-P3-L：兜底列车时刻表 DAO。WebServer schedule.* op + ManualScheduleProvider 共享。
+    private moe.hikari.canvas.storage.ScheduleDao scheduleDao;
     private volatile HikariCanvasConfig config;
 
     @Override
@@ -278,11 +281,24 @@ public final class HikariCanvas extends JavaPlugin {
         // map 释放 + walls 表删除后触发；user_variables 表通过 FK CASCADE 自动清。
         final VariableStore variableStoreForHook = variableStore;
         sessionManager.addWallDeleteHook(wid -> variableStoreForHook.clearWallReferences(wid));
-        // 0.4.0-P1-E / P3-J：Provider daemon 框架（守护线程池 + 定时调度）。
-        // P3-J 起注册 SystemVariableProvider + ScoreboardVariableProvider；
-        // P3-K / P3-L 再加 PAPI / ManualSchedule。
+        // 0.4.0-P1-E / P3-J/K/L：Provider daemon 框架（守护线程池 + 定时调度）。
+        // P3-J 注册 system + scoreboard；P3-K 加 PAPI 桥接；P3-L 加 ManualScheduleProvider。
+        // ScheduleDao 必须先于 ProviderBootstrap.initialize 构造（V012 migration 已跑）。
+        this.scheduleDao = new moe.hikari.canvas.storage.ScheduleDao(getLogger(), database.jdbi());
         this.variableProviderDaemon =
-                ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo);
+                ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo, this.scheduleDao);
+        // P3-L：wall 删除时清掉 schedule_entries + wall_schedules（FK CASCADE 已配，显式调更稳；
+        // 同时 unregister Provider 内存态 + store 内的 4 个 schedule:<wallId>/* 变量）。
+        final ManualScheduleProvider manualScheduleProvider =
+                (ManualScheduleProvider) this.variableProviderDaemon
+                        .registeredProviders().stream()
+                        .filter(p -> p instanceof ManualScheduleProvider)
+                        .findFirst().orElse(null);
+        final moe.hikari.canvas.storage.ScheduleDao scheduleDaoForHook = this.scheduleDao;
+        sessionManager.addWallDeleteHook(wid -> {
+            if (manualScheduleProvider != null) manualScheduleProvider.unregisterWall(wid);
+            if (scheduleDaoForHook != null) scheduleDaoForHook.deleteByWall(wid);
+        });
 
         // M14：模板元数据 DAO + 创意工坊协调器
         templateRepo = new TemplateRepo(getLogger(), database.jdbi());
@@ -336,13 +352,18 @@ public final class HikariCanvas extends JavaPlugin {
                 imageDao, database.jdbi(),
                 config.images, tokenService, sessionManager, wallRepo, auditLog);
 
+        // 0.4.0-P3-L：取出 ManualScheduleProvider 引用让 WebServer 在 entry 增删时通知 refreshWall
+        ManualScheduleProvider manualScheduleProviderRef = (ManualScheduleProvider)
+                variableProviderDaemon.registeredProviders().stream()
+                        .filter(p -> p instanceof ManualScheduleProvider)
+                        .findFirst().orElse(null);
         webServer = new WebServer(getLogger(), config.host, config.port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
                 templateAssetService, wallPreviewService, uploadHandler,
                 templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry,
-                variableStore, this,
+                variableStore, scheduleDao, manualScheduleProviderRef, this,
                 version, this::paintAllSessionMaps,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();

@@ -61,6 +61,19 @@ describe('interpolator.resolveFullName', () => {
     it('wall.X + wallId null → 字面 wall.X', () => {
         expect(resolveFullName('wall.id', null)).toBe('wall.id');
     });
+    // 0.4.0-P3-L：schedule.* 注入
+    it('schedule.next_departure + wallId → schedule:<wallId>/next_departure', () => {
+        expect(resolveFullName('schedule.next_departure', 'w-abc'))
+            .toBe('schedule:w-abc/next_departure');
+    });
+    it('schedule.eta_minutes + wallId → schedule:<wallId>/eta_minutes', () => {
+        expect(resolveFullName('schedule.eta_minutes', 'w-1'))
+            .toBe('schedule:w-1/eta_minutes');
+    });
+    it('schedule.X + wallId null → 字面 schedule.X', () => {
+        expect(resolveFullName('schedule.next_departure', null))
+            .toBe('schedule.next_departure');
+    });
 });
 
 describe('interpolator.interpolate', () => {

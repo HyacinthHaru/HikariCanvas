@@ -91,3 +91,9 @@ permissions:
   canvas.var.command:
     description: 使用 /canvas var 命令族
     default: op
+  canvas.schedule.own:
+    description: 管理自己 wall 的列车 / 公交时刻表（0.4.0-P3-L）
+    default: true
+  canvas.schedule.any:
+    description: 管理任意 wall 的时刻表（管理员）
+    default: op

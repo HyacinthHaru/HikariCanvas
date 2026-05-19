@@ -60,6 +60,12 @@ export function resolveFullName(rawName: string, wallId: string | null): string 
     if (wallId && wallId.length > 0 && trimmed.startsWith('wall.')) {
         return `system:${wallId}/${trimmed}`;
     }
+    // 0.4.0-P3-L：schedule.* per-wall namespace 注入（与 wall.* 同款）
+    // ${var:schedule.next_departure} + wallId → schedule:<wallId>/next_departure
+    if (wallId && wallId.length > 0 && trimmed.startsWith('schedule.')) {
+        const tail = trimmed.substring('schedule.'.length);
+        return `schedule:${wallId}/${tail}`;
+    }
     // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
     if (trimmed.startsWith('scoreboard.')) {
         const tail = trimmed.substring('scoreboard.'.length);

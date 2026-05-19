@@ -9,6 +9,7 @@ import RightPanel from '@/components/layout/RightPanel.vue';
 import StatusBar from '@/components/layout/StatusBar.vue';
 import LogDrawer from '@/components/layout/LogDrawer.vue';
 import VariablePanel from '@/components/variables/VariablePanel.vue';
+import ScheduleManagerModal from '@/components/schedule/ScheduleManagerModal.vue';
 import HomePage from '@/components/HomePage.vue';
 import TemplateGallery from '@/components/template/TemplateGallery.vue';
 import HelpModal from '@/components/HelpModal.vue';
@@ -183,5 +184,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     <HelpModal />
     <!-- 0.4.0-P2-G：变量管理面板 fixed drawer，z-50；与 LogDrawer / TemplateGallery 同层 modal -->
     <VariablePanel />
+    <!-- 0.4.0-P3-L：列车时刻表管理 modal -->
+    <ScheduleManagerModal />
   </div>
 </template>

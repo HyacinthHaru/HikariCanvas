@@ -43,7 +43,8 @@ public final class MigrationRunner {
             new Migration(8, "db-migrations/V008__templates.sql"),
             // V009 跳号（迭代过程中预留，未落地脚本）。
             new Migration(10, "db-migrations/V010__remove_refcount.sql"),
-            new Migration(11, "db-migrations/V011__user_variables.sql")
+            new Migration(11, "db-migrations/V011__user_variables.sql"),
+            new Migration(12, "db-migrations/V012__wall_schedules.sql")
     );
 
     private final Jdbi jdbi;
