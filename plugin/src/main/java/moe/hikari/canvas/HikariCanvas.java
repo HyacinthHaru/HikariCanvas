@@ -363,7 +363,8 @@ public final class HikariCanvas extends JavaPlugin {
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
                 templateAssetService, wallPreviewService, uploadHandler,
                 templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry,
-                variableStore, scheduleDao, manualScheduleProviderRef, this,
+                variableStore, scheduleDao, manualScheduleProviderRef,
+                variableProviderDaemon, this,
                 version, this::paintAllSessionMaps,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();

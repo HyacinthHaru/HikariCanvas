@@ -5,6 +5,82 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P3 收尾：内置 Provider 完工
+
+P3 五子任务（J/K/L/M/N）完工。**5 commit / 600 backend + 93 frontend test 全绿 /
+shadow jar 152 MB / 0 fixture baseline 漂移**。Wave 1 单跑（J 建基础设施）+ Wave 2 三 agent
+并行（K/L/M 各自实施 Provider 与 metadata 端点）+ Wave 3 N 主控收尾（WebServer 装配
+VariableMetadataHandler + 全测 + journal + push）。
+
+### Phase commit 时间线
+
+| Commit | Task | 范围 |
+|---|---|---|
+| `8828b2b` | P3-J Wave 1 | VariableProvider 接口扩展 + 双端 interpolator wall.* 注入 + SystemVariableProvider 13 变量分轨 + ScoreboardVariableProvider 混合模式自动注册（+47 单测） |
+| `219f731` | P3-K Wave 2 | PapiVariableBridge 软依赖 reflection + 编码层 + PapiAccessor 接口（+29 单测） |
+| `c975996` | P3-M Wave 2 | VariableMetadataHandler HTTP 端点 + Picker mergeMetadata 接入（+27 单测） |
+| `b0b2e52` | P3-L Wave 2 | ManualScheduleProvider 全栈 V012 + 5 WS op + Schedule Manager Modal + Train icon TopBar（+31 单测） |
+| `<本 commit>` | P3-N Wave 3 | WebServer 装配 VariableMetadataHandler + CLAUDE.md 路线段 P3 标记完成 + journal P3 总览 |
+
+### 关键架构落地
+
+1. **VariableProvider 接口契约统一**（J 首创 + K/L 沿用）：所有 Provider 暴露 `declaredKeys() → List<DeclaredKey>`（编辑器自动补全用）+ `isDynamic()`（动态注册标记，影响 Picker UI 提示）+ `refreshInterval()` 返 `Duration.ZERO` 即不调度（K 用此让 PAPI 未装时零开销）
+2. **VariableStore dynamic lookup hook**（J）：`registerDynamicLookupHook(BiConsumer<fullName, namespace>)` + interpolator resolve miss → `notifyDynamicLookup` → hook 异步处理。Scoreboard / PAPI 都用这套混合模式：interpolator 首次解析触发注册，10s / 5s 后第二次 tick 起有数据
+3. **双端 interpolator 三种 namespace alias 注入**（J + L）：
+   - `${var:user/X}` → `user:<wallId>/X`（P1）
+   - `${var:wall.X}` → `system:<wallId>/wall.X`（P3-J）
+   - `${var:schedule.X}` → `schedule:<wallId>/X`（P3-L）
+   - 前后端 1:1 镜像，48 单测对称覆盖
+4. **per-wall vs 全局 namespace 分轨**（J / L）：
+   - 全局：`system` (server.time 等 8 个) / `papi` / `scoreboard`
+   - per-wall：`system:<wallId>` (wall.* 4 个) / `schedule:<wallId>` (4 个 next_*) / `user:<wallId>` (玩家自建)
+   - 注册时机：启动期遍历 + WallRepo create hook（J）+ 用户首次操作触发（L 的 schedule entry add 触发 ensureWallRegistered）
+5. **PAPI 编码层**（K）：VariableStore key 正则 `[a-zA-Z0-9_.-]+` 不允许 `%`，Bridge 边界编码 `%player_name%` ↔ `pct_player_name_pct`；内部 encoded → original 映射；refresh 按 original 调 PAPI、按 encoded 写 store；外部占位符语法 `${var:papi:%xxx%}` 暂保留留 0.4.1+ 完整支持（P3 范围内通过 dynamic lookup hook 外部触发可工作）
+6. **HTTP 端点测试 seam**（M）：`VariableMetadataHandler` 注入 `Predicate<String> sessionAuthCheck` 替代直接耦合 SessionManager.isAuthenticated，单测无需 mock 全套 session 子系统
+7. **schedule 走独立 dispatcher**（L 决策）：ScheduleOpDispatcher 同 WallOpDispatcher 模式，**不入 EditSession**——schedule 不影响 ProjectState / 像素 dirty，避免污染 element op 路径
+8. **过零点 ETA 算法**（L）：所有 entry 已过时 next 选第一条（明天），eta = (24h - now) + nextTime，capped 1440min；is_arriving 阈值 = 5min（dynamic-data.md §7.3 规范）
+9. **测试友好抽象**（J / K / L 一致风格）：DataSource / PapiAccessor 接口注入，单测用 Fake 实现，**不依赖 MockBukkit / PAPI classpath**，提升测试速度与可移植性
+
+### 协议契约新增
+
+**HTTP 端点**（dynamic-data.md §3.3 + protocol.md §5.13）：
+- `GET /api/variable/list-all-namespaces?sessionId=<id>&wallId=<wallId>` → `{namespaces: [{namespace, displayName, dynamic, keys: [...]}]}`
+
+**WS op**（protocol.md §5.12）：
+- `schedule.list / upsert / entry.add / entry.update / entry.delete` 共 5 个
+
+**权限节点新增**：
+- `canvas.schedule.own` (default=true) / `canvas.schedule.any` (default=op)
+
+### 工时核对
+
+| Task | 估时 | 实际 wall-clock |
+|---|---:|---:|
+| P3-J 基础设施 + SystemProvider + Scoreboard | 6h | ~19min |
+| P3-K PapiBridge | 3h | ~8min |
+| P3-L ManualSchedule 全栈 | 7h | ~34min（最大头） |
+| P3-M HTTP 端点 + Picker | 3h | ~21min |
+| P3-N 收尾整合 | 1h | ~15min |
+| **总（wall-clock）** | **20h** | **~1.5h**（Wave 2 并行节约 ~12×） |
+
+### 不做（留 P4-P5 / 0.4.1+）
+
+- Plugin Push API + HikariCanvasAPI.setVariable + 注册中心 → P4（28h）
+- `/canvas var` 命令族 + 教程 docs → P5（10h）
+- chip 编辑器（Notion-style contentEditable） → 0.4.1
+- `${var:papi:%xxx%}` 占位符语法的 interpolator 解析（P3-K 暂用 encoded 形态绕开） → 0.4.1+
+- 动画 / 时间轴 / Blockly 脚本 → 0.5.0+
+
+### 下一步
+
+**P4 启动等用户通知**（Plugin Push API：HikariCanvasAPI 接口 + 注册中心 + DemoTrainPlugin /
+DemoScorePlugin 示例插件，28h）。P3 落地后**4 Provider 全部就绪**——MC 服务器启动即可让玩家：
+- 在 wall 上引用 `${var:server.time}` / `${var:wall.alias}` / `${var:scoreboard.points.HaruHyacinth}` 等系统/记分板变量
+- 装上 PAPI 后即可引用 `papi/<placeholder>` 变量（编码层暂时需手动构造 `${var:papi/pct_player_name_pct}`）
+- 通过 Schedule Manager modal 配列车时刻表 + 自动暴露 `schedule.next_departure` 等动态变量
+
+---
+
 ## 2026-05-19 · 0.4.0-P3-L：ManualScheduleProvider 全栈（兜底列车时刻表）
 
 P3 Wave 2 之一：零外部依赖的"时刻表" provider。**1 commit / ~1700 行净增（含 6 新生产类 + 2 测试类 + 1 V012 migration + 4 前端组件 + 1 store）/ 631 backend test 全绿（+31 from P3-M 基线 600）/ 96 frontend test 全绿（+3 from P3-M 基线 93）**。

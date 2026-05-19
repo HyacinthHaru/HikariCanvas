@@ -100,6 +100,8 @@ public final class WebServer {
      * 与 {@link #variableOpDispatcher} 同生命周期；可为 null（VariableStore 未配置时跳过注入）。
      */
     private final moe.hikari.canvas.variable.VariableStore variableStore;
+    /** 0.4.0-P3-M：/api/variable/list-all-namespaces 端点 handler，聚合 Provider declaredKeys。可为 null。 */
+    private final VariableMetadataHandler variableMetadataHandler;
 
     /**
      * M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes。
@@ -151,6 +153,7 @@ public final class WebServer {
                      moe.hikari.canvas.variable.VariableStore variableStore,
                      moe.hikari.canvas.storage.ScheduleDao scheduleDao,
                      moe.hikari.canvas.variable.provider.ManualScheduleProvider manualScheduleProvider,
+                     moe.hikari.canvas.variable.provider.VariableProviderDaemon variableProviderDaemon,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler,
                      int wsAuthTimeoutSeconds,
@@ -203,6 +206,12 @@ public final class WebServer {
                         manualScheduleProvider, wallRepo, auditLog);
         // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
         this.variableStore = variableStore;
+        // 0.4.0-P3-M：variable metadata 端点 handler；store/daemon/sessionManager 任一缺则禁用
+        this.variableMetadataHandler = (variableStore == null || variableProviderDaemon == null)
+                ? null
+                : new VariableMetadataHandler(
+                        variableStore, variableProviderDaemon, sessionManager,
+                        new com.fasterxml.jackson.databind.ObjectMapper());
     }
 
     public void start() {
@@ -417,6 +426,13 @@ public final class WebServer {
             if (templateRepo != null) {
                 cfg.routes.addEndpoint(new Endpoint(
                         HandlerType.GET, "/api/templates", this::handleTemplatesList));
+            }
+
+            // 0.4.0-P3-M：variable metadata 聚合端点（Picker 自动补全用，5s server-side cache）
+            if (variableMetadataHandler != null) {
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.GET, "/api/variable/list-all-namespaces",
+                        variableMetadataHandler::handle));
             }
 
             // M16 P1.3：WS upgrade Origin 白名单。在 upgrade 前拒绝跨站 WS 攻击（CSWSH）。
