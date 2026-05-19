@@ -73,6 +73,8 @@ public final class CanvasCommand {
     private final TemplatePreviewService templatePreviewService;
     /** 形如 {@code http://host:port/?token={token}}；{token} 占位符会被替换。 */
     private final String editorUrlTemplate;
+    /** 0.4.0-P5：{@code /canvas var} 子命令族（7 子命令）。null = 主插件未传，跳过注册。 */
+    private final VariableSubCommand variableSubCommand;
 
     /**
      * M16-P2.6：玩家最近的 /canvas delete <wallId> 待确认条目。
@@ -100,7 +102,8 @@ public final class CanvasCommand {
                          WallRepo wallRepo,
                          TemplateRegistry templateRegistry,
                          TemplatePreviewService templatePreviewService,
-                         String editorUrlTemplate) {
+                         String editorUrlTemplate,
+                         VariableSubCommand variableSubCommand) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
         this.frameDeployer = frameDeployer;
@@ -111,6 +114,7 @@ public final class CanvasCommand {
         this.templateRegistry = templateRegistry;
         this.templatePreviewService = templatePreviewService;
         this.editorUrlTemplate = editorUrlTemplate;
+        this.variableSubCommand = variableSubCommand;
         // M16-P2.6：注册 PlayerQuit 监听清 pendingDeletes，避免玩家退出后 bucket 长期挂着
         plugin.getServer().getPluginManager().registerEvents(
                 new QuitListener(), plugin);
@@ -125,7 +129,12 @@ public final class CanvasCommand {
     }
 
     public LiteralCommandNode<CommandSourceStack> build() {
-        return Commands.literal("canvas")
+        var root = Commands.literal("canvas");
+        if (variableSubCommand != null) {
+            // 0.4.0-P5：/canvas var <sub> 命令族
+            root = root.then(variableSubCommand.build());
+        }
+        return root
                 .then(Commands.literal("edit")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runEdit))

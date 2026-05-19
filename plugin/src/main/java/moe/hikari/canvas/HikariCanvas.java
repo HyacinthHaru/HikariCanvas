@@ -4,6 +4,7 @@ import com.github.retrooper.packetevents.PacketEvents;
 import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import moe.hikari.canvas.command.CanvasCommand;
+import moe.hikari.canvas.command.VariableSubCommand;
 import moe.hikari.canvas.deploy.FrameDeployer;
 import moe.hikari.canvas.deploy.FrameProtectionListener;
 import moe.hikari.canvas.deploy.MapPacketSender;
@@ -372,11 +373,26 @@ public final class HikariCanvas extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new FrameProtectionListener(frameDeployer), this);
 
+        // 0.4.0-P5：/canvas var 子命令族。reload hook 重读 config.yml + 重建 PushRateLimiter
+        // + 通过 setRateLimiter 热替换，无需重启服务器。
+        final HikariCanvas selfRef = this;
+        final HikariCanvasAPIImpl apiImplRef = this.apiImpl;
+        VariableSubCommand variableSubCommand = new VariableSubCommand(
+                variableStore, variableProviderDaemon, wallRepo, auditLog,
+                () -> {
+                    selfRef.reloadConfig();
+                    HikariCanvasConfig fresh = HikariCanvasConfig.load(selfRef);
+                    selfRef.applyConfig(fresh);
+                    PushRateLimiter newLimiter = new PushRateLimiter(fresh.pushRateLimitConfig);
+                    apiImplRef.setRateLimiter(newLimiter);
+                    return fresh.pushRateLimitConfig;
+                });
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
                 event.registrar().register(
                         new CanvasCommand(this, sessionManager, frameDeployer,
                                 tokenService, mapPool, database, wallRepo,
-                                templateRegistry, templatePreviewService, editorUrlTemplate).build()));
+                                templateRegistry, templatePreviewService, editorUrlTemplate,
+                                variableSubCommand).build()));
 
         // M13：UploadHandler 需要 sessionManager / wallRepo，所以晚于它们装配
         // M16 P2.1/P2.2：还需要 imageDao + jdbi 做事务化 quota+insert+evict

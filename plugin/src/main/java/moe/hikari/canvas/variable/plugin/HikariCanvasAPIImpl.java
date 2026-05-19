@@ -60,8 +60,14 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     private final PluginNamespaceRegistry registry;
     private final VariableStore store;
     private final VariableProviderDaemon daemon;
-    /** P 任务：双层 push 限流（per-plugin 100/s + 全局 1000/s + 保护期 10s）。 */
-    private final PushRateLimiter limiter;
+    /**
+     * P 任务：双层 push 限流（per-plugin 100/s + 全局 1000/s + 保护期 10s）。
+     *
+     * <p>0.4.0-P5：改 volatile 让 {@code /canvas var reload} 触发的
+     * {@link #setRateLimiter} 能热替换。读路径（{@link #setVariable} 等）每次 push 都
+     * 重新拿引用——少量内存屏障开销换 reload 后立刻生效，无需重启。</p>
+     */
+    private volatile PushRateLimiter limiter;
 
     /** namespace → PluginNamespaceProvider（与 registry 同步生命周期）。 */
     private final ConcurrentHashMap<String, PluginNamespaceProvider> providers = new ConcurrentHashMap<>();
@@ -76,6 +82,20 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         this.store = Objects.requireNonNull(store, "store");
         this.daemon = Objects.requireNonNull(daemon, "daemon");
         this.limiter = Objects.requireNonNull(limiter, "limiter");
+    }
+
+    /**
+     * 0.4.0-P5：热替换 {@link PushRateLimiter}（{@code /canvas var reload} 调）。
+     *
+     * <p>仅替换引用——窗口数据不迁移（旧 limiter 内的 fixed-window counter 直接 GC）。
+     * 替换瞬间到下个 1s 边界之间最坏出现一次窗口"重置"，但 1s 窗口本就是 lossy 抽样，
+     * 这一次重置不破坏整体限流语义。多次调用幂等。</p>
+     *
+     * <p>package-private：只允许 {@link moe.hikari.canvas.HikariCanvas} 主类（同 plugin
+     * package 链路）触发。外部不应有任何理由热替换 limiter——这是配置 reload 专用 hook。</p>
+     */
+    public void setRateLimiter(PushRateLimiter newLimiter) {
+        this.limiter = Objects.requireNonNull(newLimiter, "newLimiter");
     }
 
     // ──────────────────────────────────────────────────────────────────

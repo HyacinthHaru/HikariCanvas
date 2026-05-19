@@ -5,6 +5,112 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P5 收尾 + 0.4.0 完整收尾总览
+
+P5 单 agent 串干完工。**1 commit / 695+ backend + 93 frontend test 全绿 / shadow jar 152 MB / 0 fixture baseline 漂移**。
+
+P5 任务范围：`/canvas var` 7 子命令族 + `docs/variables.md` 合集教程 + 端到端 smoke test + 0.4.0 完整收尾文档同步。
+
+### Phase 实施
+
+| 子任务 | 范围 |
+|---|---|
+| **P5.1** `/canvas var` 命令族 | `VariableSubCommand.java` 7 子命令（list/get/set/delete/providers/reload/inspect） + tab completion 4 分支 + ReloadHook 注入 + audit 事件 2 个 |
+| **P5.2** 命令单测 | `VariableSubCommandTest.java` 29 case（权限拒绝 + 各子命令分支 + tab completion + 异常路径） |
+| **P5.3** docs/variables.md | 合集教程 ~430 行 / 3 段（玩家入门 11 节 + 运维管理 6 节 + 测试 checklist 31 步） |
+| **P5.4** 端到端 smoke test | `EndToEndSmokeTest.java` 6 case 装配链验证 |
+| **P5.5** CLAUDE.md / journal | M28-P5 段 + 0.4.0 路线段 P1-P5 标完工 + 总览 |
+| **P5.6** 全测 | backend 695+ / frontend 93 / shadow jar OK / examples jar OK |
+| **P5.7** commit + push | SSH 签名 + push origin main |
+
+### 关键架构落地
+
+1. **VariableSubCommand 双层分离**：`execute(sender, args)` 纯逻辑供单测；`build()` 返 Brigadier `LiteralArgumentBuilder` 供 CanvasCommand 嵌入。单测不依赖 Brigadier `CommandContext` / `SuggestionsBuilder` 注入 — 用 `java.lang.reflect.Proxy` 造 CommandSender 抓 `sendMessage(...)` 入参（同 HikariCanvasAPIImplTest `fakePlugin` 模式）
+2. **WallSource 接口注入**：原计划测试用 `extends WallRepo` 失败（WallRepo 是 final）→ 抽出 `interface WallSource { allWallIds(); exists(); }` + 两构造器（生产 `WallRepo` / 测试 `FakeWallSource`）。本质上是 P4 各模块的"测试 seam"哲学延续 — Provider / Scheduler / DataSource 都同 pattern
+3. **ReloadHook 抽象**：`/canvas var reload` 触发 hook（HikariCanvas 主类 wire 时注入 lambda 跑 `reloadConfig + HikariCanvasConfig.load + applyConfig + new PushRateLimiter + apiImpl.setRateLimiter`）。命令侧不知道 HikariCanvas 主类，仅触发抽象 + 反馈结果
+4. **HikariCanvasAPIImpl.limiter 改 volatile**：让热替换无锁可见性。读路径（`setVariable` 每次都拿 `this.limiter` 引用）有极小内存屏障开销，但 push 路径本来就高频原子操作竞争，volatile 加持不显著；换 reload 立刻生效（无需重启）的大幅可用性
+5. **PluginCleanupListener.handleDisable 改 public**：原 package-private（test 同 package）；EndToEndSmokeTest 在 `moe.hikari.canvas.variable` package 跨 package 调，public 化即可（Bukkit 主线程 ServerEvent 构造在无 Bukkit.server 单测环境本来就走不通，handleDisable 即测试唯一入口）
+6. **AuditLog 命令侧 vs WS 侧事件分离**：命令侧用 `VARIABLE_COMMAND_SET` / `VARIABLE_COMMAND_DELETE`，WS 侧（VariableOpDispatcher）继续用 `VARIABLE_SET` / `VARIABLE_DELETE`。事后审计能区分 "玩家在编辑器改" vs "管理员在 console 改"
+
+### 文件列表
+
+| 类型 | 路径 | 行数 |
+|---|---|---|
+| 新增 | `plugin/src/main/java/moe/hikari/canvas/command/VariableSubCommand.java` | ~510 |
+| 新增 | `plugin/src/test/java/moe/hikari/canvas/command/VariableSubCommandTest.java` | ~410 |
+| 新增 | `plugin/src/test/java/moe/hikari/canvas/variable/EndToEndSmokeTest.java` | ~225 |
+| 新增 | `docs/variables.md` | ~430 |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java` | +21 / VariableSubCommand 装配 |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java` | +6 / 注入 VariableSubCommand 进 build |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/variable/plugin/HikariCanvasAPIImpl.java` | +18 / `volatile limiter` + `setRateLimiter` |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/variable/plugin/PluginCleanupListener.java` | +2 / `handleDisable` 改 public |
+| 修改 | `CLAUDE.md` + `docs/journal.md` | 路线收尾 + 总览 |
+
+---
+
+## 2026-05-19 · 0.4.0 完整收尾总览（M28-P1 至 M28-P5）
+
+0.4.0 "动态信息屏" 路线 **完工**。5 phases / **22+ commit** / **695+ backend + 93 frontend test 全绿** / wall-clock ~3 天（2026-05-19 单日推完 P1-P5）。
+
+### 5 phase 累计统计
+
+| Phase | 主题 | 实际工时（h） | commit 数 | 测试新增 |
+|---|---|---:|---:|---:|
+| **P1** | 变量系统底座 | ~5 | 5 | +480 backend |
+| **P2** | 编辑器基础 UX | ~4 | 4 | +73 frontend |
+| **P3** | 内置 4 Provider + HTTP 端点 | ~5 | 5 | +120 backend |
+| **P4** | Plugin Push API + 2 示例插件 + docs/api.md | ~6 | 6 | +60 backend + +20 frontend |
+| **P5** | `/canvas var` + docs/variables.md + smoke | ~3 | 1 | +35 backend |
+| **合计** | | **~23h** | **21** | **+695 backend + +93 frontend** |
+
+> 估时 ~150h 远高估 — agent + 并行 wave + 已有 phase 基础设施复用，实际推得很快。
+
+### 关键架构 1:1 对照（6 固化决策）
+
+| 决策 | 落地位置 |
+|---|---|
+| Push > Pull | P3 全部 Provider 走 daemon scheduler 主动推；P4 HikariCanvasAPI 暴露 push 接口；Compositor 渲染时仅 read store cache |
+| 变量是 string | `Variable.currentValue: String`；`VarType` 仅 UI hint（dynamic-data.md §16-2） |
+| 用户变量持久化 / 其他内存 | V011 `user_variables` 表 + `VariableStore.persistIfUser`；插件 / system / papi / scoreboard 仅 in-memory |
+| resolve 不在主线程 | `VariableProviderDaemon` 守护线程池 2 thread；CanvasCompositor.render 读 cache（不阻塞）；ScheduleProvider 主动 prefetch |
+| namespace 严格隔离 | `PluginNamespaceRegistry` 原子 CAS + 5 保留 namespace + spoof 防御；setVariable 内 `checkAcl` |
+| fallback 4 档链 | `VariableInterpolator.resolveValue`：cached → `\|fallback=` → `defaultValue` → `"???"`；双端镜像 |
+
+### 子任务清单
+
+```
+P1 — VariableStore + V011 user_variables + 5 WS op + Compositor 替换 + daemon 框架 + 7 权限节点 + 前端 store
+     A 11b2773 / B dcffe9f / C ab765dd / D 02be5ca / E 74b4f4f
+
+P2 — ready payload variables + VariablePanel + NewVariableDialog + ValueEditor + BindDialog + useLongPressIncrement
+     + VariablePicker + interpolator.ts + TextElementVariableHints + TextElementSection 集成 + wsClient ready hookup
+     F 46eb6e9 / G c7dd01f / H 41c2ba3 / I fe40d17
+
+P3 — VariableProvider declaredKeys + isDynamic + dynamicLookupHook 基础设施
+     SystemVariableProvider 8 全局 + 4 per-wall / ScoreboardVariableProvider 混合 / PapiVariableBridge reflection + 编码
+     ManualScheduleProvider 全栈 V012 + DAO + 5 WS op + Schedule Manager UI / list-all-namespaces 端点 + Picker mergeMetadata
+     J 8828b2b / K 219f731 / L b0b2e52 / M c975996 / N e855964
+
+P4 — moe.hikari.canvas.api 公开包 / HikariCanvasAPIImpl + checkAcl / PluginNamespaceRegistry + 保留 ns
+     PushRateLimiter per-plugin 100/s + 全局 1000/s + 10s 保护期 + clock 注入
+     PluginCleanupListener 立即 unregister + 30s purge / ServicesManager + getAPI() 双入口
+     DemoTrainPlugin 定时器 + DemoScorePlugin 事件命令 / docs/api.md 660 行
+     O 10eeda1 / S 24c16f3 / P 3d8d214 / R e5158ce / Q b227b5c / T a69c0f1
+
+P5 — /canvas var 7 子命令 + tab completion + ReloadHook + audit
+     docs/variables.md 合集教程 + 31 步 checklist
+     EndToEndSmokeTest 6 case + VariableSubCommandTest 29 case
+     handleDisable public + HikariCanvasAPIImpl.limiter volatile
+     <本 commit>
+```
+
+### 不可越界路线（已固化）
+
+- **0.4.1 chip 编辑器**（~25h，1 周）：留 0.4.0 落地后单独 milestone
+- **0.5.0+** 动画 / 时间轴 / Blockly 脚本路线见 `docs/dynamic-data.md §13`
+
+---
+
 ## 2026-05-19 · 0.4.0-P4 收尾：Plugin Push API + 示例插件完工
 
 P4 六子任务（O / P / Q / R / S / T）完工。**6 commit / 660 backend + 93 frontend test 全绿 /

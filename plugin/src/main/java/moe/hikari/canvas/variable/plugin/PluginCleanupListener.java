@@ -130,12 +130,12 @@ public final class PluginCleanupListener implements Listener {
     }
 
     /**
-     * 核心清理逻辑（package-private，便于测试无需构造 PluginDisableEvent —
-     * Bukkit 的 ServerEvent 构造需 Bukkit.server 单例，单测环境没装）。
+     * 核心清理逻辑。原 package-private；0.4.0-P5 改 public 让端到端 smoke test 同样跨 package 直接调
+     * （Bukkit 的 ServerEvent 构造需 Bukkit.server 单例，单测环境没装 → 跳过 onPluginDisable 是必须的）。
      *
      * @param disabled 被 disable 的插件实例
      */
-    void handleDisable(Plugin disabled) {
+    public void handleDisable(Plugin disabled) {
         // 跳过 HikariCanvas 自己：onDisable 已统一关 daemon + DB
         if (disabled == host) return;
 
