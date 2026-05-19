@@ -17,7 +17,8 @@ import java.util.logging.Logger;
 /**
  * {@code wall_schedules} + {@code schedule_entries} 表 DAO（0.4.0 P3-L）。
  *
- * <p>schema 见 {@code db-migrations/V012__wall_schedules.sql} + {@code docs/data-model.md §2.9}。
+ * <p>schema 见 {@code db-migrations/V012__wall_schedules.sql} + V013 增加 precision 列
+ * + {@code docs/data-model.md §2.9}。
  *
  * <p><b>per-wall</b>：一个 wall 一行 wall_schedules + N 行 schedule_entries。FK CASCADE 让
  * wall 删除时 SQLite 自动级联清理；{@link #deleteByWall} 提供显式入口避免业务依赖 PRAGMA
@@ -48,13 +49,14 @@ public class ScheduleDao {
         try {
             return jdbi.withHandle(h -> {
                 Optional<MetaRow> metaOpt = h.createQuery(
-                        "SELECT wall_id, station_name, updated_at FROM wall_schedules "
+                        "SELECT wall_id, station_name, updated_at, precision FROM wall_schedules "
                                 + "WHERE wall_id = :w")
                         .bind("w", wallId)
                         .map((rs, ctx) -> new MetaRow(
                                 rs.getString("wall_id"),
                                 rs.getString("station_name"),
-                                rs.getLong("updated_at")))
+                                rs.getLong("updated_at"),
+                                rs.getString("precision")))
                         .findOne();
                 if (metaOpt.isEmpty()) return Optional.empty();
                 MetaRow meta = metaOpt.get();
@@ -66,7 +68,8 @@ public class ScheduleDao {
                         .map((rs, ctx) -> mapEntry(rs))
                         .list();
                 return Optional.of(new WallSchedule(
-                        meta.wallId, meta.stationName, meta.updatedAt, entries));
+                        meta.wallId, meta.stationName, meta.updatedAt,
+                        WallSchedule.normalizePrecision(meta.precision), entries));
             });
         } catch (Exception e) {
             log.log(Level.WARNING, "ScheduleDao.loadByWall failed: " + wallId, e);
@@ -77,19 +80,37 @@ public class ScheduleDao {
     /**
      * Upsert wall_schedules 元数据（站名 + updated_at）。首次调用同时创建元数据行；后续调用
      * 仅刷新字段。entries 走 {@link #insertEntry} 等独立 API。
+     *
+     * <p>3 参数 overload 保持向下兼容：默认 precision = "minute"。新代码请用
+     * {@link #upsertSchedule(String, String, String)}。</p>
      */
     public void upsertSchedule(String wallId, @Nullable String stationName) {
+        upsertSchedule(wallId, stationName, WallSchedule.PRECISION_MINUTE);
+    }
+
+    /**
+     * 0.4.0 bugfix（Bug 4）：4 参数 overload，可指定 precision。
+     *
+     * <p>首次 upsert 时插入 (wall_id, station_name, updated_at, precision)；后续 upsert 同时
+     * 更新 station_name + precision + updated_at（让玩家在 modal 切精度时 UI 即可触发持久化）。</p>
+     *
+     * @param precision {@code "minute"} 或 {@code "second"}；非法值自动规范化为 "minute"
+     */
+    public void upsertSchedule(String wallId, @Nullable String stationName, String precision) {
         long now = System.currentTimeMillis();
+        String normalized = WallSchedule.normalizePrecision(precision);
         try {
             jdbi.useHandle(h -> h.createUpdate(
-                    "INSERT INTO wall_schedules(wall_id, station_name, updated_at) "
-                            + "VALUES(:w, :s, :now) "
+                    "INSERT INTO wall_schedules(wall_id, station_name, updated_at, precision) "
+                            + "VALUES(:w, :s, :now, :p) "
                             + "ON CONFLICT(wall_id) DO UPDATE SET "
                             + "station_name = excluded.station_name, "
+                            + "precision = excluded.precision, "
                             + "updated_at = excluded.updated_at")
                     .bind("w", wallId)
                     .bind("s", stationName)
                     .bind("now", now)
+                    .bind("p", normalized)
                     .execute());
         } catch (Exception e) {
             log.log(Level.WARNING, "ScheduleDao.upsertSchedule failed: " + wallId, e);
@@ -186,12 +207,13 @@ public class ScheduleDao {
             return jdbi.withHandle(h -> {
                 // 先取元数据列表
                 List<MetaRow> metas = h.createQuery(
-                        "SELECT wall_id, station_name, updated_at FROM wall_schedules "
+                        "SELECT wall_id, station_name, updated_at, precision FROM wall_schedules "
                                 + "ORDER BY wall_id")
                         .map((rs, ctx) -> new MetaRow(
                                 rs.getString("wall_id"),
                                 rs.getString("station_name"),
-                                rs.getLong("updated_at")))
+                                rs.getLong("updated_at"),
+                                rs.getString("precision")))
                         .list();
                 if (metas.isEmpty()) return List.of();
                 // 再一次性拉所有 entries（按 wall 桶分发）
@@ -208,7 +230,9 @@ public class ScheduleDao {
                         if (meta.wallId.equals(e.wallId())) bucket.add(e);
                     }
                     out.add(new WallSchedule(meta.wallId, meta.stationName,
-                            meta.updatedAt, bucket));
+                            meta.updatedAt,
+                            WallSchedule.normalizePrecision(meta.precision),
+                            bucket));
                 }
                 return out;
             });
@@ -243,5 +267,6 @@ public class ScheduleDao {
     }
 
     /** 内部行视图。 */
-    private record MetaRow(String wallId, @Nullable String stationName, long updatedAt) {}
+    private record MetaRow(String wallId, @Nullable String stationName,
+                           long updatedAt, @Nullable String precision) {}
 }

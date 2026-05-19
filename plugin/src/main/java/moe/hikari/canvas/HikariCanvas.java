@@ -300,7 +300,8 @@ public final class HikariCanvas extends JavaPlugin {
         // ScheduleDao 必须先于 ProviderBootstrap.initialize 构造（V012 migration 已跑）。
         this.scheduleDao = new moe.hikari.canvas.storage.ScheduleDao(getLogger(), database.jdbi());
         this.variableProviderDaemon =
-                ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo, this.scheduleDao);
+                ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo,
+                        this.scheduleDao, config.scheduleConfig);
         // P3-L：wall 删除时清掉 schedule_entries + wall_schedules（FK CASCADE 已配，显式调更稳；
         // 同时 unregister Provider 内存态 + store 内的 4 个 schedule:<wallId>/* 变量）。
         final ManualScheduleProvider manualScheduleProvider =

@@ -44,7 +44,9 @@ public final class MigrationRunner {
             // V009 跳号（迭代过程中预留，未落地脚本）。
             new Migration(10, "db-migrations/V010__remove_refcount.sql"),
             new Migration(11, "db-migrations/V011__user_variables.sql"),
-            new Migration(12, "db-migrations/V012__wall_schedules.sql")
+            new Migration(12, "db-migrations/V012__wall_schedules.sql"),
+            // 0.4.0 bugfix（Bug 4）：per-wall schedule 精度（minute / second）
+            new Migration(13, "db-migrations/V013__schedule_precision.sql")
     );
 
     private final Jdbi jdbi;

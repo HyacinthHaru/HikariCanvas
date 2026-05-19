@@ -236,4 +236,55 @@ class ScheduleDaoTest {
     void loadAll_emptyDb_returnsEmpty() {
         assertTrue(dao.loadAll().isEmpty());
     }
+
+    // ──────────────────────────────────────────────────────────
+    //  0.4.0 bugfix（Bug 4）：precision 字段 CRUD
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void upsertSchedule_default3argDefaultsPrecisionToMinute() {
+        dao.upsertSchedule("w-test-1", "中央站");
+        WallSchedule ws = dao.loadByWall("w-test-1").orElseThrow();
+        assertEquals(WallSchedule.PRECISION_MINUTE, ws.precision());
+    }
+
+    @Test
+    void upsertSchedule_4argRoundTripsPrecisionSecond() {
+        dao.upsertSchedule("w-test-1", "Station", WallSchedule.PRECISION_SECOND);
+        WallSchedule ws = dao.loadByWall("w-test-1").orElseThrow();
+        assertEquals(WallSchedule.PRECISION_SECOND, ws.precision());
+    }
+
+    @Test
+    void upsertSchedule_changingPrecisionOverwrites() {
+        dao.upsertSchedule("w-test-1", "S", WallSchedule.PRECISION_MINUTE);
+        dao.upsertSchedule("w-test-1", "S", WallSchedule.PRECISION_SECOND);
+        WallSchedule ws = dao.loadByWall("w-test-1").orElseThrow();
+        assertEquals(WallSchedule.PRECISION_SECOND, ws.precision());
+        // 切回 minute
+        dao.upsertSchedule("w-test-1", "S", WallSchedule.PRECISION_MINUTE);
+        assertEquals(WallSchedule.PRECISION_MINUTE,
+                dao.loadByWall("w-test-1").orElseThrow().precision());
+    }
+
+    @Test
+    void upsertSchedule_invalidPrecisionNormalizesToMinute() {
+        dao.upsertSchedule("w-test-1", null, "bogus");
+        WallSchedule ws = dao.loadByWall("w-test-1").orElseThrow();
+        assertEquals(WallSchedule.PRECISION_MINUTE, ws.precision());
+    }
+
+    @Test
+    void loadAll_preservesPrecisionPerWall() {
+        insertWall("w-test-2");
+        dao.upsertSchedule("w-test-1", "M-Station", WallSchedule.PRECISION_MINUTE);
+        dao.upsertSchedule("w-test-2", "S-Station", WallSchedule.PRECISION_SECOND);
+        List<WallSchedule> all = dao.loadAll();
+        WallSchedule w1 = all.stream().filter(s -> s.wallId().equals("w-test-1"))
+                .findFirst().orElseThrow();
+        WallSchedule w2 = all.stream().filter(s -> s.wallId().equals("w-test-2"))
+                .findFirst().orElseThrow();
+        assertEquals(WallSchedule.PRECISION_MINUTE, w1.precision());
+        assertEquals(WallSchedule.PRECISION_SECOND, w2.precision());
+    }
 }

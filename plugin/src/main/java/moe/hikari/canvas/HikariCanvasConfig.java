@@ -70,6 +70,31 @@ public final class HikariCanvasConfig {
      */
     public final moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig;
 
+    /**
+     * 0.4.0 bugfix（Bug 3）：兜底列车 ManualScheduleProvider 配置。
+     * 配置段 {@code dynamic.schedule}。
+     */
+    public final ScheduleConfig scheduleConfig;
+
+    /**
+     * 0.4.0 bugfix（Bug 3）：兜底列车时刻表配置。
+     *
+     * @param arrivingThresholdSeconds 进站阈值（秒）。eta ≤ 阈值时 {@code is_arriving=true} +
+     *                                 {@code arrival_status=arrivingText}；默认 60 秒（dynamic-data.md
+     *                                 §7.3 原写 5min 已废，秒粒度更符合实际列车业务）
+     * @param arrivingText             arrival_status 进站文案，默认 "进站中"
+     * @param idleText                 arrival_status 空闲文案，默认空字符串
+     */
+    public record ScheduleConfig(
+            long arrivingThresholdSeconds,
+            String arrivingText,
+            String idleText
+    ) {
+        public static ScheduleConfig defaults() {
+            return new ScheduleConfig(60L, "进站中", "");
+        }
+    }
+
     public record ImageConfig(
             int maxSizeKb,
             java.util.List<String> allowedMime,
@@ -108,6 +133,7 @@ public final class HikariCanvasConfig {
         this.images = b.images;
         this.databaseAutoBackup = b.databaseAutoBackup;
         this.pushRateLimitConfig = b.pushRateLimitConfig;
+        this.scheduleConfig = b.scheduleConfig;
     }
 
     /**
@@ -203,6 +229,25 @@ public final class HikariCanvasConfig {
                     perPlugin, global, breakMs);
         }
 
+        // 0.4.0 bugfix（Bug 3）：dynamic.schedule 段
+        org.bukkit.configuration.ConfigurationSection schedSec =
+                f.getConfigurationSection("dynamic.schedule");
+        ScheduleConfig schedDefaults = ScheduleConfig.defaults();
+        if (schedSec == null) {
+            b.scheduleConfig = schedDefaults;
+        } else {
+            long threshold = Math.max(0L,
+                    schedSec.getLong("arriving-threshold-seconds",
+                            schedDefaults.arrivingThresholdSeconds()));
+            String arrivingText = schedSec.getString("arriving-text",
+                    schedDefaults.arrivingText());
+            String idleText = schedSec.getString("idle-text", schedDefaults.idleText());
+            b.scheduleConfig = new ScheduleConfig(
+                    threshold,
+                    arrivingText == null ? schedDefaults.arrivingText() : arrivingText,
+                    idleText == null ? schedDefaults.idleText() : idleText);
+        }
+
         return new HikariCanvasConfig(b);
     }
 
@@ -292,5 +337,6 @@ public final class HikariCanvasConfig {
         boolean databaseAutoBackup = false;
         moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
                 moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
+        ScheduleConfig scheduleConfig = ScheduleConfig.defaults();
     }
 }

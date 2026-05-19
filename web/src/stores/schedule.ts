@@ -1,16 +1,19 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
-import type { ScheduleEntry, WallSchedule } from '@/types/schedule';
+import type { ScheduleEntry, SchedulePrecision, WallSchedule } from '@/types/schedule';
 
 /**
  * 0.4.0-P3-L：列车 / 公交时刻表前端镜像 store。
  *
  * <p>不是全局变量 store——schedule 是 per-wall 元数据 + entries，仅 ScheduleManagerModal
- * / TopBar 按钮 / Provider 4 个变量 live-preview 使用。打开 modal 时调
+ * / TopBar 按钮 / Provider live-preview 使用。打开 modal 时调
  * {@code wsClient.sendScheduleList(wallId)} 一次性拉数据；后续 op 走 ack payload 自己更新本地
  * mirror（不像 variables 走 state.patch 广播，schedule 用户量小不值得多路推送）。</p>
  *
  * <p>wall 切换时 {@link reset} 清空（由 {@code project.reset()} 触发）；同 wall 重连保留。</p>
+ *
+ * <p>0.4.0 bugfix（Bug 4）：增加 precision 字段（minute / second），UI 切换控制 entry 时间
+ * 输入精度 + Provider 刷新频率。</p>
  */
 export const useScheduleStore = defineStore('schedule', () => {
     /** 当前 wall 的时刻表；null = 未加载 / 元数据行不存在。 */
@@ -31,10 +34,26 @@ export const useScheduleStore = defineStore('schedule', () => {
                 wallId: '',
                 stationName,
                 updatedAt: Date.now(),
+                precision: 'minute',
                 entries: [],
             };
         } else {
             current.value = { ...current.value, stationName, updatedAt: Date.now() };
+        }
+    }
+
+    /** 0.4.0 bugfix（Bug 4）：本地切换精度（upsert ack 回灌时调）。 */
+    function setPrecision(precision: SchedulePrecision): void {
+        if (!current.value) {
+            current.value = {
+                wallId: '',
+                stationName: null,
+                updatedAt: Date.now(),
+                precision,
+                entries: [],
+            };
+        } else {
+            current.value = { ...current.value, precision, updatedAt: Date.now() };
         }
     }
 
@@ -44,6 +63,7 @@ export const useScheduleStore = defineStore('schedule', () => {
                 wallId: '',
                 stationName: null,
                 updatedAt: Date.now(),
+                precision: 'minute',
                 entries: [entry],
             };
             return;
@@ -83,10 +103,13 @@ export const useScheduleStore = defineStore('schedule', () => {
     /** entries 按已排序顺序返回（modal 渲染用）。 */
     const sortedEntries = computed<ScheduleEntry[]>(() => current.value?.entries ?? []);
 
+    /** 当前精度（缺省 minute）。 */
+    const precision = computed<SchedulePrecision>(() => current.value?.precision ?? 'minute');
+
     return {
         current, loading, lastError,
-        sortedEntries,
-        setLoaded, setStationName, upsertEntry, removeEntry,
+        sortedEntries, precision,
+        setLoaded, setStationName, setPrecision, upsertEntry, removeEntry,
         setLoading, setError,
         reset,
     };

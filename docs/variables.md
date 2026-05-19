@@ -179,26 +179,42 @@ ${var:papi/pct_<expansion>_<key>_pct}
 
 ### 1.9 列车时刻表（Manual Schedule）
 
-HikariCanvas 内置 **手动时刻表** 工具，给 server 没装专门列车 / 公交插件做兜底。
+HikariCanvas 内置 **手动时刻表** 工具，给 server 没装专门列车 / 公交插件做兜底。**0.4.0 bugfix** 后支持每 wall 独立的 **分钟 / 秒精度** + 4 个新变量（`eta_seconds` / `arrival_status` / `precision` 等）。
 
 操作：
 
 1. TopBar 点 **Train**（列车）图标 → 弹 **Schedule Manager** modal
-2. 设站名（终点）+ 配若干 entry（`HH:mm` 格式时间）
-3. 关闭 modal → 自动注册 4 个 `schedule:<wallId>` 变量
+2. 设站名（终点）
+3. **新**：选时间精度（分钟 / 秒）
+   - 分钟（默认）：entry 用 `HH:mm`，刷新 30s 一次
+   - 秒：entry 用 `HH:mm:ss`（或 `HH:mm` 自动补 `:00`），刷新 1s 一次
+4. 配若干 entry
+5. 关闭 modal → 自动注册 7 个 `schedule:<wallId>` 变量
 
 引用：
 
-| 变量 | 描述 |
-|---|---|
-| `${var:schedule.next_departure}` | 下一班发车时间 `HH:mm` |
-| `${var:schedule.next_destination}` | 下一班终点 |
-| `${var:schedule.eta_minutes}` | 距下一班还有多少分钟 |
-| `${var:schedule.is_arriving}` | 5min 内到达？`true` / `false` |
+| 变量 | 类型 | 描述 |
+|---|---|---|
+| `${var:schedule.next_departure}` | STRING | 下一班发车时间 `HH:mm` 或 `HH:mm:ss`（按 wall 精度） |
+| `${var:schedule.next_destination}` | STRING | 下一班终点 |
+| `${var:schedule.eta_minutes}` | NUMBER | 距下一班还有多少分钟（向下兼容） |
+| `${var:schedule.eta_seconds}` | NUMBER | **0.4.0 bugfix**：距下一班还有多少秒（秒精度主用） |
+| `${var:schedule.is_arriving}` | BOOLEAN | eta ≤ 阈值（默认 60s）→ `true` / `false` |
+| `${var:schedule.arrival_status}` | STRING | **0.4.0 bugfix**：进站中文案 / 空闲文案（config 可改） |
+| `${var:schedule.precision}` | STRING | **0.4.0 bugfix**：wall 当前精度 `minute` / `second` |
 
-刷新间隔 60s。
+**配置**（`config.yml`）：
+
+```yaml
+dynamic:
+  schedule:
+    arriving-threshold-seconds: 60   # is_arriving / arrival_status 阈值（秒）
+    arriving-text: "进站中"           # arrival_status 进站文案
+    idle-text: ""                    # arrival_status 空闲文案
+```
 
 > per-wall：每个 wall 一组独立时刻表。`wall.id` 自动注入到 fullName 内（namespace = `schedule:w-xxxxx`）。
+> precision 字段由 V013 migration 引入，现有 wall 默认 `minute`，无数据丢失。
 
 ### 1.10 fallback 语法
 

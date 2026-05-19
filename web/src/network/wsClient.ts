@@ -201,10 +201,21 @@ export class WsClient {
                 .then((p) => p as { schedule: import('@/types/schedule').WallSchedule | null });
     }
 
-    /** {@code schedule.upsert}：创建 / 更新 schedule 元数据（站名）。 */
-    sendScheduleUpsert(stationName: string | null): Promise<{ stationName: string | null }> {
-        return this.sendWithAck('schedule.upsert', { stationName })
-                .then((p) => p as { stationName: string | null });
+    /**
+     * {@code schedule.upsert}：创建 / 更新 schedule 元数据（站名 + 0.4.0 bugfix Bug 4 precision）。
+     * precision 可选；不传时 server 保留现有值（首次 upsert 默认 minute）。
+     */
+    sendScheduleUpsert(
+        stationName: string | null,
+        precision?: import('@/types/schedule').SchedulePrecision,
+    ): Promise<{ stationName: string | null; precision?: import('@/types/schedule').SchedulePrecision }> {
+        const payload: { stationName: string | null; precision?: string } = { stationName };
+        if (precision != null) payload.precision = precision;
+        return this.sendWithAck('schedule.upsert', payload)
+                .then((p) => p as {
+                    stationName: string | null;
+                    precision?: import('@/types/schedule').SchedulePrecision;
+                });
     }
 
     /** {@code schedule.entry.add}：添加时刻表条目；返新生成的 id + 字段回填。 */

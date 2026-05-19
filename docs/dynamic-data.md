@@ -538,16 +538,39 @@ PAPI placeholder 自动 wrap 为 `papi/<encoded>` 变量；TTL 默认 5s（PAPI 
 
 ### 7.3 内置 Manual Schedule Provider（兜底列车功能）
 
-零外部依赖的"时刻表" provider，让玩家不依赖第三方铁路插件也能做基础站牌：
+零外部依赖的"时刻表" provider，让玩家不依赖第三方铁路插件也能做基础站牌。**0.4.0 bugfix 后**支持每 wall 独立的分钟 / 秒精度，并把 `is_arriving` 阈值改为可配（默认 60s）。
 
-- 玩家在 wall 的 "Schedule Manager" panel 配时刻表（JSON-like UI）
-- 内置 provider 暴露变量：
-  - `schedule.<wallId>.next_departure` → "08:30"
-  - `schedule.<wallId>.next_destination` → "郑州东站"
-  - `schedule.<wallId>.eta_minutes` → "12"
-  - `schedule.<wallId>.is_arriving` → "true"（5min 内为 true）
+- 玩家在 wall 的 "Schedule Manager" panel 配时刻表 + 选精度（minute / second）
+- 内置 provider 暴露 7 个变量（namespace = `schedule:<wallId>`）：
 
-**v0.4.0 包含**——价值高 + 工时不重（~20h）。
+| 变量 | 类型 | 示例 | 说明 |
+|---|---|---|---|
+| `next_departure` | STRING | `"08:30"` / `"08:30:45"` | 下一班车出发时间；HH:mm 或 HH:mm:ss（按 wall 精度） |
+| `next_destination` | STRING | `"郑州东站"` | 下一班车终点 |
+| `eta_minutes` | NUMBER | `"12"` | 距下一班车几分钟（向下兼容，整除丢秒） |
+| `eta_seconds` | NUMBER | `"742"` | **0.4.0 bugfix**：距下一班车几秒（秒精度主用） |
+| `is_arriving` | BOOLEAN | `"true"` | eta ≤ `arriving-threshold-seconds` 时为 true |
+| `arrival_status` | STRING | `"进站中"` / `""` | **0.4.0 bugfix**：进站中文案 / 空闲文案（config 可改） |
+| `precision` | STRING | `"minute"` / `"second"` | **0.4.0 bugfix**：当前 wall 精度 |
+
+**config.yml**（默认值）：
+
+```yaml
+dynamic:
+  schedule:
+    arriving-threshold-seconds: 60   # is_arriving / arrival_status 阈值
+    arriving-text: "进站中"           # arrival_status 进站文案
+    idle-text: ""                    # arrival_status 空闲文案
+```
+
+**刷新频率**：
+- `precision="minute"` → 每 30s 一次 push（默认；现有 wall 升级后行为不变）
+- `precision="second"` → 每 1s 一次 push
+
+**schema**：V013 `ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute'`；
+现有 wall 平滑升级到 minute 精度。
+
+**v0.4.0 + bugfix 包含**——价值高 + 工时不重（~25h）。
 
 ---
 

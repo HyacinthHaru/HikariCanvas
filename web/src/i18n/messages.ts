@@ -498,6 +498,11 @@ export const messages = {
             entriesHeader: '时刻表条目',
             addEntry: '+ 添加条目',
             emptyEntries: '尚无时刻表条目，点击 + 添加第一条',
+            // 0.4.0 bugfix（Bug 4）：精度切换
+            precisionLabel: '时间精度',
+            precisionMinute: '分钟（HH:mm）',
+            precisionSecond: '秒（HH:mm:ss）',
+            precisionHint: '秒精度：刷新频率 1s，eta_seconds / arrival_status 实时变化',
             // Entry dialog
             entryDialogTitle: '时刻表条目',
             entryDepartureLabel: '出发时间',
@@ -512,11 +517,14 @@ export const messages = {
             previewNextDeparture: '下一班车',
             previewNextDestination: '终点',
             previewEtaMinutes: 'ETA（分钟）',
+            previewEtaSeconds: 'ETA（秒）',
             previewIsArriving: '即将到站',
+            previewArrivalStatus: '到站文案',
+            previewPrecision: '精度',
             // 关闭
             close: '关闭',
             // 错误
-            errorBadTimeFormat: '出发时间格式无效（应为 HH:mm 24 小时制）',
+            errorBadTimeFormat: '出发时间格式无效（应为 HH:mm 或 HH:mm:ss 24 小时制）',
             errorEmptyDestination: '终点不能为空',
         },
         // M24-A 新增：错误码 → 用户友好提示。M24-B 整修时挂到 wsClient / upload error handler
@@ -1099,6 +1107,11 @@ export const messages = {
             entriesHeader: 'Schedule entries',
             addEntry: '+ Add entry',
             emptyEntries: 'No entries yet — click + to add the first one',
+            // 0.4.0 bugfix (Bug 4): precision toggle
+            precisionLabel: 'Time precision',
+            precisionMinute: 'Minute (HH:mm)',
+            precisionSecond: 'Second (HH:mm:ss)',
+            precisionHint: 'Second precision: refresh rate 1s; eta_seconds / arrival_status update live',
             // Entry dialog
             entryDialogTitle: 'Schedule entry',
             entryDepartureLabel: 'Departure time',
@@ -1113,11 +1126,14 @@ export const messages = {
             previewNextDeparture: 'Next departure',
             previewNextDestination: 'Destination',
             previewEtaMinutes: 'ETA (minutes)',
+            previewEtaSeconds: 'ETA (seconds)',
             previewIsArriving: 'Arriving soon',
+            previewArrivalStatus: 'Arrival status',
+            previewPrecision: 'Precision',
             // Close
             close: 'Close',
             // Errors
-            errorBadTimeFormat: 'Invalid time format (use HH:mm 24h)',
+            errorBadTimeFormat: 'Invalid time format (use HH:mm or HH:mm:ss 24h)',
             errorEmptyDestination: 'Destination cannot be empty',
         },
         // M24-A: error code → user-friendly message. Wire into wsClient / upload error handler in M24-B

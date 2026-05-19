@@ -7,11 +7,12 @@
  * 加载当前 wall 的 schedule（loading state）。后端 op 走 ack payload，本地 mirror 由
  * ScheduleStore 维护。</p>
  *
- * <p>UI：站名输入 + entries 列表（inline 删除）+ 添加按钮 + 当前状态预览（4 个 schedule.* 变量）。
- * 子 modal {@link ScheduleEntryDialog} 用于添加 / 编辑单条 entry。</p>
+ * <p>UI：站名输入 + 精度切换（0.4.0 bugfix Bug 4）+ entries 列表（inline 删除）+ 添加按钮
+ * + 当前状态预览（schedule.* 变量）。子 modal {@link ScheduleEntryDialog} 用于添加 / 编辑
+ * 单条 entry，按 wall.precision 决定时间输入是 HH:mm 还是 HH:mm:ss。</p>
  */
 import { computed, ref, watch } from 'vue';
-import { X, Train, Plus, Trash2, Pencil } from 'lucide-vue-next';
+import { X, Train, Plus, Trash2, Pencil, Clock } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
 import { useProjectStore } from '@/stores/project';
 import { useScheduleStore } from '@/stores/schedule';
@@ -19,7 +20,7 @@ import { useVariableStore } from '@/stores/variables';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import ScheduleEntryDialog from './ScheduleEntryDialog.vue';
-import type { ScheduleEntry } from '@/types/schedule';
+import type { ScheduleEntry, SchedulePrecision } from '@/types/schedule';
 
 const ui = useUiStore();
 const project = useProjectStore();
@@ -32,6 +33,7 @@ const open = computed(() => ui.scheduleManagerOpen);
 
 const stationDraft = ref('');
 const stationSubmitting = ref(false);
+const precisionSubmitting = ref(false);
 const submittingEntryId = ref<number | null>(null);
 const entryDialogOpen = ref(false);
 const editingEntry = ref<ScheduleEntry | null>(null);
@@ -59,12 +61,30 @@ async function saveStationName(): Promise<void> {
     if ((schedule.current?.stationName ?? null) === next) return;
     stationSubmitting.value = true;
     try {
-        await ws.sendScheduleUpsert(next);
-        schedule.setStationName(next);
+        const ack = await ws.sendScheduleUpsert(next, schedule.precision);
+        schedule.setStationName(ack.stationName);
+        if (ack.precision) schedule.setPrecision(ack.precision);
     } catch (e) {
         schedule.setError((e as Error).message);
     } finally {
         stationSubmitting.value = false;
+    }
+}
+
+/** 0.4.0 bugfix（Bug 4）：切换精度。stationName 保留当前值。 */
+async function switchPrecision(precision: SchedulePrecision): Promise<void> {
+    if (precisionSubmitting.value) return;
+    if (schedule.precision === precision) return;
+    precisionSubmitting.value = true;
+    try {
+        const ack = await ws.sendScheduleUpsert(
+            schedule.current?.stationName ?? null, precision);
+        if (ack.precision) schedule.setPrecision(ack.precision);
+        else schedule.setPrecision(precision);
+    } catch (e) {
+        schedule.setError((e as Error).message);
+    } finally {
+        precisionSubmitting.value = false;
     }
 }
 
@@ -126,13 +146,14 @@ async function deleteEntry(entry: ScheduleEntry): Promise<void> {
 }
 
 function close(): void {
-    if (stationSubmitting.value || entrySubmitting.value || submittingEntryId.value !== null) {
+    if (stationSubmitting.value || precisionSubmitting.value
+            || entrySubmitting.value || submittingEntryId.value !== null) {
         return;
     }
     ui.closeScheduleManager();
 }
 
-// 4 个 schedule.* 变量 live preview（schedule:<wallId>/key 形态）
+// schedule:* 变量 live preview。0.4.0 bugfix（Bug 3）：扩展 eta_seconds + arrival_status
 const previewVars = computed(() => {
     const wid = project.wallId;
     if (!wid) return null;
@@ -141,7 +162,10 @@ const previewVars = computed(() => {
         nextDeparture: get('next_departure')?.currentValue ?? '',
         nextDestination: get('next_destination')?.currentValue ?? '',
         etaMinutes: get('eta_minutes')?.currentValue ?? '',
+        etaSeconds: get('eta_seconds')?.currentValue ?? '',
         isArriving: get('is_arriving')?.currentValue ?? 'false',
+        arrivalStatus: get('arrival_status')?.currentValue ?? '',
+        precision: get('precision')?.currentValue ?? schedule.precision,
     };
 });
 </script>
@@ -155,7 +179,7 @@ const previewVars = computed(() => {
         <Train class="size-4 text-[color:var(--ctp-blue)]" />
         <h2 class="text-sm font-semibold">{{ t.schedule.modalTitle }}</h2>
         <button class="ml-auto p-1 rounded hover:bg-[color:var(--accent)]"
-                @click="close" :disabled="entrySubmitting || stationSubmitting">
+                @click="close" :disabled="entrySubmitting || stationSubmitting || precisionSubmitting">
           <X class="size-4" />
         </button>
       </header>
@@ -175,6 +199,38 @@ const previewVars = computed(() => {
             <span v-if="stationSubmitting" class="text-xs text-[color:var(--muted-foreground)]">…</span>
           </div>
         </label>
+
+        <!-- 0.4.0 bugfix（Bug 4）：精度切换 -->
+        <div class="block">
+          <div class="flex items-center gap-2 mb-1">
+            <Clock class="size-3.5 text-[color:var(--ctp-blue)]" />
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.schedule.precisionLabel }}</span>
+            <span v-if="precisionSubmitting" class="text-xs text-[color:var(--muted-foreground)]">…</span>
+          </div>
+          <div class="inline-flex border border-[color:var(--border)] rounded-[var(--radius-sm)] overflow-hidden">
+            <button type="button"
+                    class="px-3 py-1 text-xs"
+                    :class="schedule.precision === 'minute'
+                        ? 'bg-[color:var(--primary)] text-[color:var(--primary-foreground)]'
+                        : 'bg-[color:var(--background)] hover:bg-[color:var(--accent)]'"
+                    :disabled="precisionSubmitting"
+                    @click="switchPrecision('minute')">
+              {{ t.schedule.precisionMinute }}
+            </button>
+            <button type="button"
+                    class="px-3 py-1 text-xs border-l border-[color:var(--border)]"
+                    :class="schedule.precision === 'second'
+                        ? 'bg-[color:var(--primary)] text-[color:var(--primary-foreground)]'
+                        : 'bg-[color:var(--background)] hover:bg-[color:var(--accent)]'"
+                    :disabled="precisionSubmitting"
+                    @click="switchPrecision('second')">
+              {{ t.schedule.precisionSecond }}
+            </button>
+          </div>
+          <p class="mt-1 text-[10px] text-[color:var(--muted-foreground)]">
+            {{ t.schedule.precisionHint }}
+          </p>
+        </div>
 
         <!-- entries 列表 -->
         <section class="space-y-2">
@@ -204,7 +260,8 @@ const previewVars = computed(() => {
           <ul v-else class="space-y-1.5">
             <li v-for="entry in schedule.sortedEntries" :key="entry.id"
                 class="flex items-center gap-2 px-2 py-1.5 border border-[color:var(--border)] rounded">
-              <span class="font-mono font-semibold text-[color:var(--ctp-blue)] w-12">
+              <span class="font-mono font-semibold text-[color:var(--ctp-blue)]"
+                    :class="schedule.precision === 'second' ? 'w-20' : 'w-12'">
                 {{ entry.departureTime }}
               </span>
               <span class="flex-1 truncate"
@@ -240,10 +297,16 @@ const previewVars = computed(() => {
             <dd>{{ previewVars.nextDeparture || '—' }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewNextDestination }}</dt>
             <dd>{{ previewVars.nextDestination || '—' }}</dd>
+            <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaSeconds }}</dt>
+            <dd>{{ previewVars.etaSeconds || '—' }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaMinutes }}</dt>
             <dd>{{ previewVars.etaMinutes || '—' }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewIsArriving }}</dt>
             <dd>{{ previewVars.isArriving }}</dd>
+            <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewArrivalStatus }}</dt>
+            <dd>{{ previewVars.arrivalStatus || '—' }}</dd>
+            <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewPrecision }}</dt>
+            <dd>{{ previewVars.precision }}</dd>
           </dl>
         </section>
 
@@ -264,6 +327,7 @@ const previewVars = computed(() => {
     <!-- 子对话框：添加 / 编辑 entry -->
     <ScheduleEntryDialog v-if="entryDialogOpen"
                         :entry="editingEntry"
+                        :precision="schedule.precision"
                         :submitting="entrySubmitting"
                         :error-message="entryDialogError"
                         @close="entryDialogOpen = false"

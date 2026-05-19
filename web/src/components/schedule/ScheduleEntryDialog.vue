@@ -4,14 +4,19 @@
  *
  * <p>双用途：传 entry={null} 时作"添加"；传 entry={existing} 时作"编辑"。submit emit
  * 由父组件 ScheduleManagerModal 接管，调对应的 sendScheduleEntryAdd / Update。</p>
+ *
+ * <p>0.4.0 bugfix（Bug 4）：增 precision prop。precision="second" 时时间输入接受
+ * HH:mm:ss + step="1" 让浏览器显秒；precision="minute" 时仅 HH:mm + step="60"。
+ * 编辑现有 HH:mm:ss entry 时显示完整秒；编辑 HH:mm entry 自动补 ":00"。</p>
  */
 import { computed, ref, watchEffect } from 'vue';
 import { X, Train } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
-import type { ScheduleEntry } from '@/types/schedule';
+import type { ScheduleEntry, SchedulePrecision } from '@/types/schedule';
 
 const props = defineProps<{
     entry: ScheduleEntry | null;        // null = 新增；非空 = 编辑
+    precision: SchedulePrecision;        // 0.4.0 bugfix（Bug 4）
     submitting: boolean;
     errorMessage: string | null;
 }>();
@@ -32,18 +37,38 @@ const departureTime = ref('08:00');
 const destination = ref('');
 const sortOrder = ref(0);
 
-// HH:mm 24h 校验
-const HHMM_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+// HH:mm 或 HH:mm:ss 24h 校验
+const HHMM_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/;
 const timeValid = computed(() => HHMM_PATTERN.test(departureTime.value));
 const formValid = computed(() => timeValid.value && !props.submitting);
 
+/** 让 HTML5 <input type="time"> 显秒（步长 1s）；分钟模式 60s。 */
+const timeStep = computed(() => props.precision === 'second' ? '1' : '60');
+
+/** 提交前规范化：second 模式给 HH:mm 自动补 ":00"。 */
+function normalizeForSubmit(raw: string): string {
+    if (props.precision === 'second' && /^\d{2}:\d{2}$/.test(raw)) {
+        return raw + ':00';
+    }
+    return raw;
+}
+
 watchEffect(() => {
     if (props.entry) {
-        departureTime.value = props.entry.departureTime;
+        let initial = props.entry.departureTime;
+        // 切到 minute 模式编辑 HH:mm:ss entry → 截断显示前 5 字符（HH:mm）
+        if (props.precision === 'minute' && /^\d{2}:\d{2}:\d{2}$/.test(initial)) {
+            initial = initial.substring(0, 5);
+        }
+        // 切到 second 模式编辑 HH:mm entry → 补 :00（让浏览器显秒）
+        if (props.precision === 'second' && /^\d{2}:\d{2}$/.test(initial)) {
+            initial = initial + ':00';
+        }
+        departureTime.value = initial;
         destination.value = props.entry.destination ?? '';
         sortOrder.value = props.entry.sortOrder;
     } else {
-        departureTime.value = '08:00';
+        departureTime.value = props.precision === 'second' ? '08:00:00' : '08:00';
         destination.value = '';
         sortOrder.value = 0;
     }
@@ -54,7 +79,7 @@ function onSubmit(): void {
     const trimmedDest = destination.value.trim();
     emit('submit', {
         id: props.entry?.id ?? null,
-        departureTime: departureTime.value,
+        departureTime: normalizeForSubmit(departureTime.value),
         destination: trimmedDest.length === 0 ? null : trimmedDest,
         sortOrder: sortOrder.value,
     });
@@ -78,11 +103,14 @@ function onSubmit(): void {
         <label class="block">
           <span class="text-xs text-[color:var(--muted-foreground)]">
             {{ t.schedule.entryDepartureLabel }}
+            <span class="ml-1 font-mono opacity-60">
+              ({{ precision === 'second' ? 'HH:mm:ss' : 'HH:mm' }})
+            </span>
           </span>
           <input type="time"
                  class="hc-input mt-0.5 font-mono"
                  v-model="departureTime"
-                 step="60" />
+                 :step="timeStep" />
           <span v-if="!timeValid"
                 class="text-xs text-[color:var(--destructive)] mt-0.5 block">
             {{ t.schedule.errorBadTimeFormat }}

@@ -285,6 +285,36 @@ CREATE INDEX idx_uvar_bound ON user_variables(bound_to) WHERE bound_to IS NOT NU
 - **级联删除**：wall 删除时 cascade（FOREIGN KEY 已声明）
 - **migration V011**：pre-release 0.x SNAPSHOT 阶段允许加表（§6.6.1 规则）
 
+### 2.9 表：`wall_schedules` + `schedule_entries`（0.4.0 引入，V012；V013 加 precision）
+
+per-wall 列车 / 公交时刻表元数据。`ManualScheduleProvider` 启动期 loadAll 注册所有 wall 的 schedule 变量。
+
+```sql
+-- V012：基础表
+CREATE TABLE wall_schedules (
+    wall_id        TEXT PRIMARY KEY,
+    station_name   TEXT,                  -- 玩家命名站点（可空）
+    updated_at     INTEGER NOT NULL,
+    FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE
+);
+
+CREATE TABLE schedule_entries (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    wall_id         TEXT NOT NULL,
+    departure_time  TEXT NOT NULL,        -- "HH:mm" 或 "HH:mm:ss"（V013 后允许 HH:mm:ss）
+    destination     TEXT,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE
+);
+
+-- V013：0.4.0 bugfix（Bug 4）—— per-wall 精度
+ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute';
+```
+
+- **precision**：`'minute'`（默认；HH:mm + 30s 刷新）或 `'second'`（HH:mm:ss + 1s 刷新）
+- **migration V013**：现有 wall 行 ALTER ADD COLUMN DEFAULT 'minute'，无数据丢失，向下兼容
+- **级联删除**：wall 删除时 cascade（FK CASCADE 已声明；ScheduleDao.deleteByWall 显式调用兜底）
+
 ---
 
 ## 3. PersistentDataContainer 约定

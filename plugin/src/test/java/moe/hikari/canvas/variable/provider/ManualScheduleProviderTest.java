@@ -1,5 +1,6 @@
 package moe.hikari.canvas.variable.provider;
 
+import moe.hikari.canvas.HikariCanvasConfig;
 import moe.hikari.canvas.schedule.ScheduleEntry;
 import moe.hikari.canvas.schedule.WallSchedule;
 import moe.hikari.canvas.storage.UserVariableDao;
@@ -33,8 +34,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>per-wall 隔离（多 wall 同时跑互不影响）</li>
  *   <li>ensureWallRegistered 幂等（重复调不抛 + 不重复 create）</li>
  *   <li>edge case：空 entries、过零点、单 entry 已过</li>
- *   <li>is_arriving 阈值（5min）</li>
- *   <li>unregisterWall 清干净</li>
+ *   <li>is_arriving / arrival_status 阈值（0.4.0 bugfix Bug 3：config 化默认 60s）</li>
+ *   <li>precision 秒精度（0.4.0 bugfix Bug 4：支持 HH:mm:ss）</li>
+ *   <li>unregisterWall 清干净（7 变量）</li>
  * </ul>
  */
 class ManualScheduleProviderTest {
@@ -62,13 +64,17 @@ class ManualScheduleProviderTest {
     }
 
     @Test
-    void declaredKeys_returns4() {
+    void declaredKeys_returnsSeven() {
+        // 0.4.0 bugfix（Bug 3+4）：扩展到 7 个 key
         List<DeclaredKey> keys = provider.declaredKeys();
-        assertEquals(4, keys.size());
+        assertEquals(7, keys.size());
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("next_departure")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("next_destination")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("eta_minutes")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("eta_seconds")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("is_arriving")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("arrival_status")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("precision")));
     }
 
     @Test
@@ -84,8 +90,10 @@ class ManualScheduleProviderTest {
     void initialize_registersAllWallsFromDao() {
         dataSource.now = LocalTime.of(7, 30);
         dataSource.allSchedules.add(new WallSchedule("w-1", "中央站", 0L,
+                WallSchedule.PRECISION_MINUTE,
                 List.of(new ScheduleEntry(1, "w-1", "08:00", "Beijing", 0))));
         dataSource.allSchedules.add(new WallSchedule("w-2", null, 0L,
+                WallSchedule.PRECISION_MINUTE,
                 List.of(new ScheduleEntry(2, "w-2", "09:30", "Shanghai", 0))));
 
         provider.initialize();
@@ -114,15 +122,45 @@ class ManualScheduleProviderTest {
     }
 
     @Test
-    void refresh_isArrivingTrueWithinFiveMinutes() {
-        dataSource.now = LocalTime.of(8, 27);
+    void refresh_isArrivingTrueWithinThresholdSeconds() {
+        // 0.4.0 bugfix（Bug 3）：默认阈值 60s，3min ETA 不再算 arriving
+        dataSource.now = LocalTime.of(8, 29, 30); // 30s 后到 08:30
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "08:30", "Beijing", 0)));
         provider.ensureWallRegistered("w-1");
 
-        // 08:27 → 08:30 = 3min ≤ 5 → true
-        assertEquals("3", currentValueOrNull(store, "schedule:w-1/eta_minutes"));
+        // 08:29:30 → 08:30 = 30s ≤ 60 → true
+        assertEquals("0", currentValueOrNull(store, "schedule:w-1/eta_minutes"));
+        assertEquals("30", currentValueOrNull(store, "schedule:w-1/eta_seconds"));
         assertEquals("true", currentValueOrNull(store, "schedule:w-1/is_arriving"));
+        assertEquals("进站中", currentValueOrNull(store, "schedule:w-1/arrival_status"));
+    }
+
+    @Test
+    void refresh_arrivalStatusUsesIdleTextWhenNotArriving() {
+        // 默认 idleText = ""
+        dataSource.now = LocalTime.of(8, 0);
+        dataSource.entriesByWall.put("w-1", List.of(
+                new ScheduleEntry(1, "w-1", "09:00", "Beijing", 0)));
+        provider.ensureWallRegistered("w-1");
+
+        assertEquals("false", currentValueOrNull(store, "schedule:w-1/is_arriving"));
+        assertEquals("", currentValueOrNull(store, "schedule:w-1/arrival_status"));
+    }
+
+    @Test
+    void refresh_customConfigChangesArrivalText() {
+        // 0.4.0 bugfix（Bug 3）：自定义阈值 + 文案
+        provider = new ManualScheduleProvider(store, dataSource,
+                new HikariCanvasConfig.ScheduleConfig(300L, "Arriving", "Standby"));
+        dataSource.now = LocalTime.of(8, 25);
+        dataSource.entriesByWall.put("w-2", List.of(
+                new ScheduleEntry(1, "w-2", "08:28", "Tokyo", 0)));
+        provider.ensureWallRegistered("w-2");
+
+        // 3min = 180s ≤ 300 → arriving
+        assertEquals("true", currentValueOrNull(store, "schedule:w-2/is_arriving"));
+        assertEquals("Arriving", currentValueOrNull(store, "schedule:w-2/arrival_status"));
     }
 
     @Test
@@ -201,7 +239,8 @@ class ManualScheduleProviderTest {
     }
 
     @Test
-    void unregisterWall_removesAllFourVariables() {
+    void unregisterWall_removesAllVariables() {
+        // 0.4.0 bugfix（Bug 3+4）：扩展到 7 变量，unregister 全部清掉
         dataSource.now = LocalTime.of(8, 0);
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "08:30", "A", 0)));
@@ -213,7 +252,10 @@ class ManualScheduleProviderTest {
         assertFalse(store.get("schedule:w-1/next_departure").isPresent());
         assertFalse(store.get("schedule:w-1/next_destination").isPresent());
         assertFalse(store.get("schedule:w-1/eta_minutes").isPresent());
+        assertFalse(store.get("schedule:w-1/eta_seconds").isPresent());
         assertFalse(store.get("schedule:w-1/is_arriving").isPresent());
+        assertFalse(store.get("schedule:w-1/arrival_status").isPresent());
+        assertFalse(store.get("schedule:w-1/precision").isPresent());
         assertFalse(provider.registeredWallsSnapshot().contains("w-1"));
     }
 
@@ -223,6 +265,33 @@ class ManualScheduleProviderTest {
         provider.unregisterWall("nonexistent");
         provider.unregisterWall(null);
         provider.unregisterWall("");
+    }
+
+    @Test
+    void refresh_publishesPrecisionVariable() {
+        // 0.4.0 bugfix（Bug 4）：precision 字段也作为变量暴露
+        dataSource.now = LocalTime.of(8, 0);
+        dataSource.precisionByWall.put("w-prec", WallSchedule.PRECISION_SECOND);
+        dataSource.entriesByWall.put("w-prec", List.of(
+                new ScheduleEntry(1, "w-prec", "08:30:00", "Tokyo", 0)));
+        provider.ensureWallRegistered("w-prec");
+        assertEquals("second", currentValueOrNull(store, "schedule:w-prec/precision"));
+    }
+
+    @Test
+    void setConfig_hotReload() {
+        // 0.4.0 bugfix（Bug 3）：reload config 后阈值生效
+        dataSource.now = LocalTime.of(8, 0);
+        dataSource.entriesByWall.put("w-1", List.of(
+                new ScheduleEntry(1, "w-1", "08:02", "T", 0)));
+        provider.ensureWallRegistered("w-1");
+        assertEquals("false", currentValueOrNull(store, "schedule:w-1/is_arriving"));
+
+        provider.setConfig(new HikariCanvasConfig.ScheduleConfig(300L, "X", "Y"));
+        provider.refreshWall("w-1");
+        // 2min = 120s ≤ 300 → arriving
+        assertEquals("true", currentValueOrNull(store, "schedule:w-1/is_arriving"));
+        assertEquals("X", currentValueOrNull(store, "schedule:w-1/arrival_status"));
     }
 
     @Test
@@ -242,19 +311,21 @@ class ManualScheduleProviderTest {
                 new ScheduleEntry(1, "w", "07:00", "Early", 0),
                 new ScheduleEntry(2, "w", "09:00", "Mid", 0),
                 new ScheduleEntry(3, "w", "12:00", "Noon", 0));
-        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 30));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 30), 60L);
         assertEquals("09:00", c.nextDeparture());
         assertEquals("Mid", c.nextDestination());
         assertEquals(30, (int) c.etaMinutes());
+        assertEquals(1800, (int) c.etaSeconds());
         assertFalse(c.isArriving());
     }
 
     @Test
     void computeNext_emptyEntries_returnsNulls() {
-        var c = ManualScheduleProvider.computeNext(List.of(), LocalTime.of(8, 0));
+        var c = ManualScheduleProvider.computeNext(List.of(), LocalTime.of(8, 0), 60L);
         assertNull(c.nextDeparture());
         assertNull(c.nextDestination());
         assertNull(c.etaMinutes());
+        assertNull(c.etaSeconds());
         assertFalse(c.isArriving());
     }
 
@@ -264,9 +335,33 @@ class ManualScheduleProviderTest {
         List<ScheduleEntry> entries = List.of(
                 new ScheduleEntry(1, "w", "garbage", "Bad", 0),
                 new ScheduleEntry(2, "w", "09:00", "Good", 0));
-        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 60L);
         assertEquals("09:00", c.nextDeparture());
         assertEquals("Good", c.nextDestination());
+    }
+
+    @Test
+    void computeNext_secondGranularity_HHmmss() {
+        // 0.4.0 bugfix（Bug 4）：支持 HH:mm:ss 格式
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "08:30:45", "PreciseTrain", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 30, 0), 60L);
+        assertEquals("08:30:45", c.nextDeparture());
+        assertEquals(45, (int) c.etaSeconds());
+        assertEquals(0, (int) c.etaMinutes());
+        assertTrue(c.isArriving());
+    }
+
+    @Test
+    void computeNext_thresholdSeconds_isConfigurable() {
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "08:05", "T", 0));
+        // 300s 阈值
+        var c1 = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 300L);
+        assertTrue(c1.isArriving()); // 300s ≥ 300
+        // 60s 阈值
+        var c2 = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 60L);
+        assertFalse(c2.isArriving()); // 300s > 60
     }
 
     // ──────────────────────────────────────────────────────────
@@ -281,6 +376,7 @@ class ManualScheduleProviderTest {
     private static final class FakeDataSource implements ManualScheduleProvider.DataSource {
         final List<WallSchedule> allSchedules = new ArrayList<>();
         final Map<String, List<ScheduleEntry>> entriesByWall = new HashMap<>();
+        final Map<String, String> precisionByWall = new HashMap<>();
         LocalTime now = LocalTime.of(8, 0);
 
         @Override
@@ -302,6 +398,16 @@ class ManualScheduleProviderTest {
         @Override
         public LocalTime currentLocalTime() {
             return now;
+        }
+
+        @Override
+        public String loadByWallPrecision(String wallId) {
+            String p = precisionByWall.get(wallId);
+            if (p != null) return p;
+            for (WallSchedule ws : allSchedules) {
+                if (ws.wallId().equals(wallId)) return ws.precision();
+            }
+            return WallSchedule.PRECISION_MINUTE;
         }
     }
 

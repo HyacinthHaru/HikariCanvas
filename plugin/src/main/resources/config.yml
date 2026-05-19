@@ -131,3 +131,15 @@ dynamic:
     # 全局触限后的保护期（ms）—— 期间所有 push reject
     # 10s 给运维 / 日志足够时间排查；保护期结束自动恢复。
     global-circuit-break-ms: 10000
+
+  # 0.4.0 bugfix（Bug 3）：兜底列车 ManualScheduleProvider 配置
+  # 见 docs/dynamic-data.md §7.3
+  schedule:
+    # is_arriving / arrival_status 触发阈值（秒）。eta ≤ 阈值时 is_arriving=true 且
+    # arrival_status=arriving-text。默认 60s（原 dynamic-data.md §7.3 写的 5min 已废，
+    # 秒粒度更符合实际列车 / 公交业务）。
+    arriving-threshold-seconds: 60
+    # arrival_status 文案（eta ≤ 阈值时）
+    arriving-text: "进站中"
+    # arrival_status 文案（eta > 阈值时）
+    idle-text: ""

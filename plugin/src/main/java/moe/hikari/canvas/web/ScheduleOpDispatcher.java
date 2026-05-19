@@ -49,9 +49,13 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
  */
 final class ScheduleOpDispatcher {
 
-    /** "HH:mm" 24h 格式校验。00:00..23:59；不接受单位数 hour 如 "8:00"。 */
+    /**
+     * "HH:mm" 或 "HH:mm:ss" 24h 格式校验。00:00 .. 23:59[:59]；不接受单位数 hour 如 "8:00"。
+     * 0.4.0 bugfix（Bug 4）：扩展为可选秒精度。Server 端不强制 wall.precision——前端 UI 控制
+     * 展示，server 两种格式都接受。
+     */
     private static final Pattern HHMM_PATTERN =
-            Pattern.compile("^([01][0-9]|2[0-3]):[0-5][0-9]$");
+            Pattern.compile("^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$");
 
     /** stationName / destination 字符上限。 */
     private static final int STR_MAX_LEN = 64;
@@ -159,14 +163,33 @@ final class ScheduleOpDispatcher {
                     "stationName must be string or null"));
             return;
         }
-        dao.upsertSchedule(wallId, stationName);
-        // upsert 不影响 schedule:* 变量值，但首次创建可能让 Provider 注册 4 个变量；
+        // 0.4.0 bugfix（Bug 4）：可选 precision 字段（"minute" / "second"，默认 minute）
+        Object rawPrecision = payload.get("precision");
+        String precision = moe.hikari.canvas.schedule.WallSchedule.PRECISION_MINUTE;
+        if (rawPrecision instanceof String pstr) {
+            precision = moe.hikari.canvas.schedule.WallSchedule.normalizePrecision(pstr);
+        } else if (rawPrecision != null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
+                    "precision must be 'minute' or 'second' (string)"));
+            return;
+        } else {
+            // 没传 precision → 保留现有值（如果有）；首次 upsert 走 minute 默认
+            var existing = dao.loadByWall(wallId).orElse(null);
+            if (existing != null) {
+                precision = moe.hikari.canvas.schedule.WallSchedule
+                        .normalizePrecision(existing.precision());
+            }
+        }
+        dao.upsertSchedule(wallId, stationName, precision);
+        // upsert 不影响 schedule:* 变量值，但首次创建可能让 Provider 注册变量；
         // ensureWallRegistered 幂等。
-        if (provider != null) provider.ensureWallRegistered(wallId);
+        if (provider != null) provider.refreshWall(wallId);
         recordAudit("SCHEDULE_UPSERT", sessionId, s, wallId,
-                Map.of("station_name", stationName == null ? "" : stationName));
+                Map.of("station_name", stationName == null ? "" : stationName,
+                        "precision", precision));
         Map<String, Object> ack = new LinkedHashMap<>();
         ack.put("stationName", stationName);
+        ack.put("precision", precision);
         ctx.send(Envelope.of("ack", in.id(), ack));
     }
 
@@ -186,10 +209,11 @@ final class ScheduleOpDispatcher {
         }
         int sortOrder = intOrNullDefault(payload.get("sortOrder"), 0);
 
-        // 业务侧确保 wall_schedules 元数据行存在（首次 add 时自动）
+        // 业务侧确保 wall_schedules 元数据行存在（首次 add 时自动，默认 minute precision）
         WallSchedule existing = dao.loadByWall(wallId).orElse(null);
         if (existing == null) {
-            dao.upsertSchedule(wallId, null);
+            dao.upsertSchedule(wallId, null,
+                    moe.hikari.canvas.schedule.WallSchedule.PRECISION_MINUTE);
         }
 
         long id = dao.insertEntry(wallId, departureTime, destination, sortOrder);
@@ -333,6 +357,8 @@ final class ScheduleOpDispatcher {
         m.put("wallId", ws.wallId());
         if (ws.stationName() != null) m.put("stationName", ws.stationName());
         m.put("updatedAt", ws.updatedAt());
+        // 0.4.0 bugfix（Bug 4）：携带 precision 字段（旧客户端忽略未知字段；新客户端用此切 UI）
+        m.put("precision", WallSchedule.normalizePrecision(ws.precision()));
         List<Map<String, Object>> entries = new ArrayList<>(ws.entries().size());
         for (ScheduleEntry e : ws.entries()) {
             Map<String, Object> em = new LinkedHashMap<>();

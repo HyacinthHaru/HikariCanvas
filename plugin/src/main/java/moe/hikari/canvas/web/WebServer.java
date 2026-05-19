@@ -847,13 +847,15 @@ public final class WebServer {
         payload.put("selfUuid", session.playerUuid().toString());
         // M6-D 协议 §3.2：全量 TemplateSpec 下发，前端无需独立接口
         payload.put("templates", listTemplates());
-        // 0.4.0-P2-F：携带 wall 当前引用的变量快照，前端无需额外 HTTP round-trip
-        // 初始化 VariableStore mirror。注意 listByWall 依赖 markWallReferences 被 Compositor
-        // 调用过——首次连接尚未触发渲染时返空表是正常的（前端按需通过 state.patch /variables/*
-        // 接增量更新）。VariableDto 主动剔除 referencedByWalls 字段防泄露。
+        // 0.4.0-P2-F + 0.4.0 bugfix（Bug 1）：携带 wall 可见的变量快照，前端无需额外 HTTP round-trip
+        // 初始化 VariableStore mirror。改用 listVisibleToWall（不依赖 byWall 倒排索引），
+        // 解决 ready payload 鸡生蛋问题：wall 刚 open 时 Compositor 尚未渲染 → listByWall 返空 →
+        // 前端漏掉 system / schedule / scoreboard / papi 等内置变量 → live preview 出现误报
+        // "变量已删除" 红色 banner。listVisibleToWall 按 namespace 形态判定可见性。
+        // VariableDto 主动剔除 referencedByWalls 字段防泄露。
         if (variableStore != null && wallId != null) {
             java.util.List<moe.hikari.canvas.variable.Variable> vars =
-                    variableStore.listByWall(wallId);
+                    variableStore.listVisibleToWall(wallId);
             java.util.List<moe.hikari.canvas.variable.VariableDto> dtos =
                     new java.util.ArrayList<>(vars.size());
             for (moe.hikari.canvas.variable.Variable v : vars) {

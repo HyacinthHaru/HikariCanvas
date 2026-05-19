@@ -5,6 +5,88 @@
 
 ---
 
+## 2026-05-19 · 0.4.0 上线 4 项体验 bug 修复（单 commit 合）
+
+用户上线 0.4.0 实测发现 4 项体验 bug，单 agent 串干修完，1 个 commit 合所有改动 + V013 migration + 新变量 + UI 改造。**714 backend test + 93 frontend test 全绿 / shadow jar 152MB / 0 baseline 漂移**。
+
+### Bug 1：ready payload "鸡生蛋"（变量误报已删除）
+
+- **根因**：`WebServer.handleAuth` 用 `variableStore.listByWall(wallId)` 拿初始 variables，但 byWall 倒排索引由 `Compositor` 渲染时 `markWallReferences` 才填——wall 刚 open 还没渲染过 → 倒排索引空 → ready payload 返空。前端 mirror 因此漏所有 system / schedule / scoreboard / papi 变量，interpolator 把它们当 missing → 红 banner "变量已删除"
+- **修法**：新增 `VariableStore.listVisibleToWall(wallId)`，不依赖倒排索引，按 namespace 形态判定可见性（全局 ns 全部包含 / per-wall ns 仅本 wall）。`WebServer.handleAuth` 改用此方法
+
+### Bug 2：store.create 不反查 byWall（值变化不重画）
+
+- **根因**：用户先在 wall 写 `${var:schedule.X}`（Compositor `markWallReferences("wall-A", {"schedule:wall-A/X"})` 入 `byWall` 但 `addWallToReferencedSet` 因变量不存在 noop），后 Provider `ensureWallRegistered` 触发 `store.create` 时 `referencedByWalls = empty`。Provider 后续 `setValue` → `notifyReferencingWalls` 遍历空集合 → wall 不重画
+- **修法**：`VariableStore.create` 在 new Variable 前反查 `byWall`，把已记录引用本变量的 wall 注入 `referencedByWalls`。O(W) 性能可忽略
+
+### Bug 3：is_arriving 阈值改 config + 新增 arrival_status
+
+- **新增变量** `schedule:<wallId>/arrival_status`（STRING）：eta ≤ threshold → `config.arrivingText`（默 "进站中"）；否则 → `config.idleText`（默 ""）
+- **config.yml** 新增 `dynamic.schedule`：`arriving-threshold-seconds: 60` / `arriving-text: "进站中"` / `idle-text: ""`
+- **HikariCanvasConfig.ScheduleConfig record** 加载 + 注入 `ManualScheduleProvider`
+- **阈值改秒**：原 `ARRIVING_THRESHOLD_MINUTES=5` 废止；改为 config 注入的秒阈值（默 60s）
+
+### Bug 4：秒精度系统（per-wall HH:mm:ss）
+
+- **V013 migration** `ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute'`，现有 wall 平滑升级
+- **WallSchedule record** 加 `precision` 字段（`"minute"` / `"second"`）+ `normalizePrecision` 规范化
+- **ScheduleDao** 加 `upsertSchedule(wallId, stationName, precision)` 4 参 overload；3 参版保留向下兼容；`loadByWall` / `loadAll` 读 precision 列
+- **HHMM_PATTERN** 扩展为 `^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$`（接受 HH:mm 或 HH:mm:ss）
+- **ManualScheduleProvider.refreshInterval** 改 1s（最小粒度）；内部按 wall.precision 节流：`SECOND_INTERVAL_MS=1000` / `MINUTE_INTERVAL_MS=30000`，per-wall `lastPushAt` 跟踪
+- **新增变量**：`eta_seconds` / `arrival_status` / `precision`；旧 `eta_minutes` / `is_arriving` / `next_*` 保留向下兼容（共 7 变量）
+- **computeNext 重写为秒粒度**：`Duration.between(now, t).getSeconds()`；`safeParseTime` 改用 `DateTimeFormatterBuilder` 支持可选秒
+- **WS 协议**：`schedule.upsert` payload 加可选 `precision`；`schedule.list` ack `schedule` 对象带 `precision`
+- **前端 ScheduleManagerModal**：顶部加 "时间精度" toggle button group（minute / second），切换调 `sendScheduleUpsert(stationName, precision)`；preview 加 4 新字段（eta_seconds / arrival_status / precision / eta_minutes）
+- **前端 ScheduleEntryDialog**：加 `precision` prop；input[type="time"] 当 second 时 `step="1"`；编辑 HH:mm:ss 显完整秒 / 编辑 HH:mm 切到 second 模式自动补 ":00"
+- **前端 i18n**：新增 `precisionLabel / precisionMinute / precisionSecond / precisionHint / previewEtaSeconds / previewArrivalStatus / previewPrecision` 中英 key
+
+### 关键架构落地
+
+1. **listVisibleToWall vs listByWall**：分工明确——`listVisibleToWall` 用于 ready payload（鸡生蛋安全）；`listByWall` 用于运行期"哪些 wall 引用此变量"反向查询（依赖倒排索引，但此时 Compositor 已多次 mark）。两个 API 不互相替代
+2. **create 反查 byWall = O(W)**：W = 当前活跃 wall 数（实际 ≪ 100）；create 频率本身极低（启动期 + 注册时），全量扫描 byWall 的成本远低于丢失 wall 重画语义带来的 bug
+3. **Schedule precision 是 wall scope 而非全局**：per-wall column 让一个 server 上可以同时有"分钟时刻表"和"秒级倒计时屏"，不互相干扰。Provider 内 `lastPushAt` per-wall 节流是天然产物
+4. **配置热替换**：`ManualScheduleProvider.setConfig` 用 volatile 字段保证可见性，未来 `/canvas var reload` 钩子可直接调而不必重启
+5. **向下兼容**：`eta_minutes` / `is_arriving` / `next_departure` 等旧变量保留——已用 0.4.0 写过 wall 的玩家升级后零调整。`is_arriving` 默认阈值变了（5min → 60s），用户场景下"5min 进站"已显得过于宽松，秒粒度更符合实际列车业务
+
+### 文件列表
+
+| 类型 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `plugin/src/main/resources/db-migrations/V013__schedule_precision.sql` | ALTER ADD COLUMN precision |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/variable/VariableStore.java` | + listVisibleToWall + create 反查 byWall |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java` | handleAuth 改 listVisibleToWall |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/schedule/WallSchedule.java` | + precision 字段 + normalizePrecision |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/storage/ScheduleDao.java` | upsertSchedule 4 参 overload + 读 precision |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/storage/MigrationRunner.java` | 注册 V013 |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/variable/provider/ManualScheduleProvider.java` | 7 变量 + 秒粒度 + per-wall 节流 + config 注入 |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/variable/provider/ProviderBootstrap.java` | 加 5 参 overload 传 config |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/HikariCanvasConfig.java` | + ScheduleConfig record + dynamic.schedule 解析 |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java` | 传 config.scheduleConfig 到 ProviderBootstrap |
+| 修改 | `plugin/src/main/java/moe/hikari/canvas/web/ScheduleOpDispatcher.java` | upsert 接收 precision + HHMM_PATTERN 扩展 + scheduleToMap 带 precision |
+| 修改 | `plugin/src/main/resources/config.yml` | + dynamic.schedule 段 |
+| 修改 | `plugin/src/test/java/moe/hikari/canvas/variable/VariableStoreTest.java` | + 8 个新 case（Bug 1 + Bug 2） |
+| 修改 | `plugin/src/test/java/moe/hikari/canvas/variable/provider/ManualScheduleProviderTest.java` | computeNext 签名更新 + 7 新 case |
+| 修改 | `plugin/src/test/java/moe/hikari/canvas/storage/ScheduleDaoTest.java` | + 5 个 precision case |
+| 修改 | `web/src/types/schedule.ts` | + SchedulePrecision + precision 字段 |
+| 修改 | `web/src/stores/schedule.ts` | + setPrecision + precision computed |
+| 修改 | `web/src/network/wsClient.ts` | sendScheduleUpsert 加可选 precision 参 |
+| 修改 | `web/src/components/schedule/ScheduleManagerModal.vue` | 精度 toggle + 7 变量 preview |
+| 修改 | `web/src/components/schedule/ScheduleEntryDialog.vue` | precision prop + step="1" |
+| 修改 | `web/src/i18n/messages.ts` | + 7 个 schedule i18n key（中英） |
+| 修改 | `docs/dynamic-data.md §7.3` | 7 变量表 + config + 刷新频率说明 |
+| 修改 | `docs/variables.md §1.9` | 7 变量教程 + precision 切换说明 |
+| 修改 | `docs/data-model.md §2.9` | 新增 wall_schedules + schedule_entries + V013 说明 |
+
+### 验证
+
+- `./gradlew :plugin:test` → 714 case 全绿（VariableStore +8 / ManualScheduleProvider +7 / ScheduleDao +5）
+- `cd web && npm run test` → 93 case 全绿
+- `cd web && vite build` → 639kB / gzip 194kB
+- `./gradlew :plugin:shadowJar` → 152 MB
+- `./gradlew :examples:demo-train-plugin:jar :examples:demo-score-plugin:jar` → OK
+
+---
+
 ## 2026-05-19 · 0.4.0-P5 收尾 + 0.4.0 完整收尾总览
 
 P5 单 agent 串干完工。**1 commit / 695+ backend + 93 frontend test 全绿 / shadow jar 152 MB / 0 fixture baseline 漂移**。

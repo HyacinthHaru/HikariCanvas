@@ -177,6 +177,97 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  listVisibleToWall — 0.4.0 bugfix Bug 1（ready payload 鸡生蛋）
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void listVisibleToWall_includesGlobalNamespaces() {
+        // 全局 namespace（不含 ':'）→ 任何 wall 可见
+        store.create("system", "online", VarType.NUMBER, null, null);
+        store.create("papi", "balance", VarType.STRING, null, null);
+        store.create("scoreboard", "kills", VarType.NUMBER, null, null);
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        var visible = store.listVisibleToWall("w-1");
+        assertEquals(4, visible.size());
+    }
+
+    @Test
+    void listVisibleToWall_includesOwnPerWallNamespaces() {
+        // per-wall namespace（X:wallId 形式）只匹配本 wall
+        store.create("user:w-1", "score", VarType.NUMBER, null, null);
+        store.create("schedule:w-1", "next", VarType.STRING, null, null);
+        store.create("user:w-2", "other", VarType.STRING, null, null);
+        var visible = store.listVisibleToWall("w-1");
+        assertEquals(2, visible.size());
+        assertTrue(visible.stream().anyMatch(v -> v.fullName().equals("user:w-1/score")));
+        assertTrue(visible.stream().anyMatch(v -> v.fullName().equals("schedule:w-1/next")));
+    }
+
+    @Test
+    void listVisibleToWall_excludesOtherWallsPerWallNamespaces() {
+        store.create("user:w-1", "secret", VarType.STRING, null, null);
+        var visible = store.listVisibleToWall("w-2");
+        assertEquals(0, visible.size());
+    }
+
+    @Test
+    void listVisibleToWall_emptyStoreReturnsEmpty() {
+        assertEquals(0, store.listVisibleToWall("w-any").size());
+    }
+
+    @Test
+    void listVisibleToWall_doesNotDependOnByWallIndex() {
+        // 关键 bug 1 修复证明：即使 Compositor 从未 markWallReferences，listVisibleToWall
+        // 仍能返回 wall 可见变量（这是 ready payload 场景）
+        store.create("system", "online", VarType.NUMBER, null, null);
+        store.create("schedule:w-1", "next", VarType.STRING, null, null);
+        assertEquals(0, store.listByWall("w-1").size(), "byWall index empty");
+        assertEquals(2, store.listVisibleToWall("w-1").size(),
+                "listVisibleToWall works without markWallReferences");
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  create 反查 byWall — 0.4.0 bugfix Bug 2
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void create_inheritsReferencedByWallsFromByWallIndex() {
+        // Compositor 先 markWallReferences("w-1", {"schedule:w-1/eta"})——此时变量未 create，
+        // markWallReferences 把 "schedule:w-1/eta" 加进 byWall["w-1"] 但 addWallToReferencedSet
+        // 因变量不存在被 noop。
+        store.markWallReferences("w-1", Set.of("schedule:w-1/eta"));
+        // 然后 ManualScheduleProvider.ensureWallRegistered 触发 create
+        store.create("schedule:w-1", "eta", VarType.NUMBER, null, "schedule");
+        var v = store.get("schedule:w-1/eta").orElseThrow();
+        assertTrue(v.referencedByWalls().contains("w-1"),
+                "create 必须反查 byWall，把已引用我的 wall 注入 referencedByWalls");
+    }
+
+    @Test
+    void create_inheritsReferencesFromMultipleWalls() {
+        // 多个 wall 都引用同一插件变量；create 时全部继承
+        store.markWallReferences("w-1", Set.of("bedwars/score"));
+        store.markWallReferences("w-2", Set.of("bedwars/score"));
+        store.markWallReferences("w-3", Set.of("other/var"));
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        var v = store.get("bedwars/score").orElseThrow();
+        assertTrue(v.referencedByWalls().contains("w-1"));
+        assertTrue(v.referencedByWalls().contains("w-2"));
+        assertFalse(v.referencedByWalls().contains("w-3"));
+    }
+
+    @Test
+    void setValue_afterCreateInheritedRefs_triggersDirtyCallback() {
+        // 验证 Bug 2 完整链路：mark → create → setValue → wallDirtyCallback 被调
+        store.markWallReferences("w-A", Set.of("schedule:w-A/eta"));
+        store.create("schedule:w-A", "eta", VarType.NUMBER, null, "schedule");
+        dirtyWalls.clear();
+        store.setValue("schedule:w-A/eta", "30", null);
+        assertTrue(dirtyWalls.contains("w-A"),
+                "create 反查 byWall 后，setValue 必须能触发 wallDirtyCallback");
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Wall dirty 触发
     // ──────────────────────────────────────────────────────────
 

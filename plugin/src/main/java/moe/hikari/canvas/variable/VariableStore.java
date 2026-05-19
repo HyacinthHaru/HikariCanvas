@@ -174,8 +174,23 @@ public final class VariableStore {
                                 + ": " + MAX_PER_NAMESPACE);
             }
             nsBucket.add(k);
+            // 0.4.0 bugfix（Bug 2）：反查 byWall 倒排索引。Compositor 渲染早于 store.create
+            // 时（典型场景：用户先在 wall 文本里写 ${var:schedule.X} 触发 markWallReferences，
+            // 后 ManualScheduleProvider.ensureWallRegistered 才 create），addWallToReferencedSet
+            // 之前因 store 不含变量被 noop 跳过。这里反查 byWall 把"已经引用我"的 wall 注入
+            // 新 Variable.referencedByWalls — 后续 setValue 触发 notifyReferencingWalls 时能正确
+            // 通知到这些 wall（否则 pushValues → setValue 仍把 wall 当未引用，永不重画）。
+            //
+            // 复杂度 O(W × N_per_wall)：wall 数量通常 ≪ 100，每个 wall 引用变量数 ≪ 50，
+            // create 频率本身极低（仅启动期 + 注册时），总开销可忽略。
+            Set<String> initialRefs = new HashSet<>();
+            for (java.util.Map.Entry<String, Set<String>> wallEntry : byWall.entrySet()) {
+                if (wallEntry.getValue().contains(k)) {
+                    initialRefs.add(wallEntry.getKey());
+                }
+            }
             return new Variable(namespace, key, type, defaultValue, null,
-                    now, 0L, source, Collections.unmodifiableSet(new HashSet<>()));
+                    now, 0L, source, Collections.unmodifiableSet(initialRefs));
         });
 
         persistIfUser(created, now, now);
@@ -333,6 +348,47 @@ public final class VariableStore {
             if (v != null) out.add(v);
         }
         return out;
+    }
+
+    /**
+     * 0.4.0 bugfix（Bug 1）：列出该 wall <b>可能引用</b>的全部变量（不依赖 byWall 倒排索引，
+     * 解决 ready payload "鸡生蛋"问题）。
+     *
+     * <p>ready payload 在 wall 刚 open 时构造，此时 Compositor 尚未对该 wall 执行渲染 →
+     * {@link #markWallReferences} 未调 → {@link #listByWall} 返空表。前端 mirror 因此漏掉
+     * system / schedule / scoreboard / papi / 插件 namespace 全部变量，
+     * VariableInterpolator 把它们当 missing → live preview 出现"变量已删除"红色 banner。
+     *
+     * <p>本方法不依赖倒排索引，按 namespace 形态判定可见性：
+     * <ul>
+     *   <li>全局 namespace（namespace 不含 ':'，如 {@code system / papi / scoreboard /
+     *       插件 namespace}）→ 全部包含</li>
+     *   <li>per-wall namespace（namespace 形如 {@code X:wallId}，如 {@code user:wallId /
+     *       system:wallId / schedule:wallId}）→ 只匹配本 wall</li>
+     *   <li>其他 wall 的 per-wall namespace → 排除（防泄漏）</li>
+     * </ul>
+     *
+     * <p>复杂度 O(N)，N = 全局变量数。N ≤ MAX_GLOBAL (10000) 实际玩家场景下不会超千。
+     *
+     * @param wallId 当前 wall 的 wall_id（{@code w-<8hex>}）
+     * @return 该 wall 可能引用的变量集合（无序）；空 store 或非法 wallId 返空表
+     */
+    public List<Variable> listVisibleToWall(String wallId) {
+        Objects.requireNonNull(wallId, "wallId");
+        String wallSuffix = ":" + wallId;
+        List<Variable> result = new ArrayList<>();
+        for (Variable v : store.values()) {
+            String ns = v.namespace();
+            if (!ns.contains(":")) {
+                // 全局 namespace（system / papi / scoreboard / 插件 namespace 等）
+                result.add(v);
+            } else if (ns.endsWith(wallSuffix)) {
+                // per-wall namespace 匹配本 wall（user:wallId / system:wallId / schedule:wallId）
+                result.add(v);
+            }
+            // 其他 wall 的 per-wall 变量跳过（防泄漏）
+        }
+        return result;
     }
 
     // ──────────────────────────────────────────────────────────────────
