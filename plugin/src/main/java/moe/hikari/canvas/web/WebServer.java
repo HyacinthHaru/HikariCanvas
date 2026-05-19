@@ -93,6 +93,11 @@ public final class WebServer {
     private final TemplateOpDispatcher templateOpDispatcher;
     /** 0.4.0-P1-B：variable.* 五个 op 的分发；可为 null（VariableStore 未配置） */
     private final VariableOpDispatcher variableOpDispatcher;
+    /**
+     * 0.4.0-P2-F：ready payload 注入 variables 快照需要直读 VariableStore。
+     * 与 {@link #variableOpDispatcher} 同生命周期；可为 null（VariableStore 未配置时跳过注入）。
+     */
+    private final moe.hikari.canvas.variable.VariableStore variableStore;
 
     /**
      * M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes。
@@ -188,6 +193,8 @@ public final class WebServer {
         this.variableOpDispatcher = variableStore == null ? null
                 : new VariableOpDispatcher(sessionManager, rateLimiter, variableStore,
                         wallRepo, push, auditLog);
+        // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
+        this.variableStore = variableStore;
     }
 
     public void start() {
@@ -807,6 +814,22 @@ public final class WebServer {
         payload.put("selfUuid", session.playerUuid().toString());
         // M6-D 协议 §3.2：全量 TemplateSpec 下发，前端无需独立接口
         payload.put("templates", listTemplates());
+        // 0.4.0-P2-F：携带 wall 当前引用的变量快照，前端无需额外 HTTP round-trip
+        // 初始化 VariableStore mirror。注意 listByWall 依赖 markWallReferences 被 Compositor
+        // 调用过——首次连接尚未触发渲染时返空表是正常的（前端按需通过 state.patch /variables/*
+        // 接增量更新）。VariableDto 主动剔除 referencedByWalls 字段防泄露。
+        if (variableStore != null && wallId != null) {
+            java.util.List<moe.hikari.canvas.variable.Variable> vars =
+                    variableStore.listByWall(wallId);
+            java.util.List<moe.hikari.canvas.variable.VariableDto> dtos =
+                    new java.util.ArrayList<>(vars.size());
+            for (moe.hikari.canvas.variable.Variable v : vars) {
+                dtos.add(moe.hikari.canvas.variable.VariableDto.from(v));
+            }
+            payload.put("variables", dtos);
+        } else {
+            payload.put("variables", java.util.List.of());
+        }
         ctx.send(Envelope.of("ready", in.id(), payload));
     }
 

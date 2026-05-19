@@ -5,6 +5,38 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P2-F：ready payload 加 variables 字段
+
+P2-F 单子任务完工：让浏览器首次连接 wall 时 ready WS 帧携带该 wall 当前引用变量的快照，免去额外 HTTP round-trip 初始化 VariableStore mirror。
+
+### 改动
+
+| 范围 | 文件 | 行为 |
+|---|---|---|
+| 新 DTO | `plugin/src/main/java/moe/hikari/canvas/variable/VariableDto.java` | 8 字段 record + `from(Variable)` 静态工厂；故意丢 `referencedByWalls`（VariableStore 内部倒排索引，跨 wall peer 信息不下发） |
+| WebServer 注入 | `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java` | 新 `variableStore` 字段（与 `variableOpDispatcher` 同生命周期）；`handleAuth` 末段 `payload.put("variables", listByWall(wallId).map(VariableDto::from).toList())`；`variableStore == null` 或 `wallId == null` 走空数组 fallback（变量未配置 / 模板预览的 ghost session 不会 NPE） |
+| 单测 | `plugin/src/test/java/moe/hikari/canvas/web/ReadyPayloadVariableTest.java` | 7 case：含 3 用户变量正确序列化 / referencedByWalls 不外泄 + peer wallId 不外泄 / wallA wallB 隔离 / 空 store 返 `[]` / VarType 4 枚举值序列化为 name() 字符串 / DTO 字段一一对应 / 未 mark 的 wall 返 `[]` |
+| 协议契约 | `docs/protocol.md` §3.2 | ready payload JSON 示例补 `variables` 字段；新增 0.4.0-P2-F 决策段落（DTO 投影字段表 / 防泄露说明 / 空数组语义） |
+
+### 关键设计
+
+1. **DTO over @JsonIgnore**：选方案 B 引入独立 `VariableDto` 而非在 `Variable` record 上加 `@JsonIgnore Set<String> referencedByWalls`。理由：(a) record 加注解的 Jackson 序列化兼容性有坑（accessor vs canonical constructor 解析）；(b) 显式 DTO 表达"给前端的简化视图"语义清晰；(c) P3 HTTP `/api/variable/list` 端点也能共用同一 DTO
+2. **空数组兜底**：`variableStore == null`（VariableStore 未配置）和 `wallId == null`（理论上不会，但保留 defensive null check）路径都走 `List.of()`，**字段永远存在**——前端 mirror 初始化代码不用 if-defined 判断
+3. **测试切片策略**：不 boot Javalin / WebServer 全栈（过重；变量注入是 5 行 mapping 纯代码），改测产生 ready payload 的等价 slice（`listByWall` → `VariableDto::from` → Jackson 序列化），ObjectMapper 配置 `NON_NULL inclusion` 与 WebServer 主线 JavalinJackson 配置一致
+
+### 测试结果
+
+- `:plugin:test` 全 487 用例绿（含新 7 case 118ms）；P1 基线 480 → P2-F 后 487
+- 协议契约 `docs/protocol.md §3.2` 与代码一致
+
+### 不在 P2-F 范围
+
+- 前端 `network` store 接收 ready.variables 写入 `useVariableStore.replace(...)` → 留给 P2-G/H/I
+- HTTP `/api/variable/list` 端点 → 留给 P3
+- 任何 UI
+
+---
+
 ## 2026-05-19 · 0.4.0-P1 收尾：变量系统底座完工
 
 P1 五子任务（A/B/C/D/E）并行实施完毕。**5 commit / ~3000 行净增 / 480 backend test +

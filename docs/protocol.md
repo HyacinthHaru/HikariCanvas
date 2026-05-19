@@ -115,13 +115,27 @@ GET /api/session/:token HTTP/1.1
     "lockedAt": 1714200000000,
     "ownerUuid": "00112233-4455-6677-8899-aabbccddeeff",
     "selfUuid": "ffeeddcc-bbaa-9988-7766-554433221100",
-    "templates": [ ... ]
+    "templates": [ ... ],
+    "variables": [
+      {
+        "namespace": "user:w-1a2b3c4d",
+        "key": "red_score",
+        "type": "NUMBER",
+        "defaultValue": "0",
+        "currentValue": "5",
+        "updatedAt": 1684512345678,
+        "ttl": 0,
+        "source": "manual"
+      }
+    ]
   }
 }
 
 > **M16-P6.2 协议字段**：ready 携带 `accepted_v: number`（服务端实际接受的协议版本，与 client_v 等值或为 server fallback 值）。前端在收到 ready 后做一次「accepted_v == client_v」断言，不一致则 console.warn 但不断连（防御服务端 forward-compat bug）。
 
 > **2026-05-14**：ready payload 字段 `publishedAt` 改名 `lockedAt`；新增 `ownerUuid`（wall.owner_uuid） + `selfUuid`（当前 session 玩家）让前端判 `isOwner = selfUuid === ownerUuid`。详见 CLAUDE.md `§lock-state`。
+
+> **0.4.0-P2-F（2026-05-19）**：ready payload 新增 `variables: VariableDto[]` 字段，携带当前 wall 引用的变量快照，前端无需额外 HTTP round-trip 初始化 VariableStore mirror。`VariableDto` 字段对应 `Variable` record 投影 = `{namespace, key, type, defaultValue?, currentValue?, updatedAt, ttl, source?}`；**主动剔除**内部倒排索引字段 `referencedByWalls`（防泄露 peer wallId 元数据）。`type` 走 Jackson 默认枚举 name 序列化：`"STRING" | "NUMBER" | "BOOLEAN" | "COLOR"`。`null` 字段被 `NON_NULL` inclusion 略去。`variables` 字段在 wall 未引用任何变量或首次连接尚未触发 Compositor `markWallReferences` 时为空数组 `[]`（前端按需通过 `state.patch /variables/*` 接增量更新）。
 ```
 
 > **M6 决策（2026-05-11）**：`templates` 字段一次性全量下发，不走单独 `template.list` op。理由：5 个内置模板每个 ~1-2KB，合计 5-10KB；服主自定义模板少（v1 阶段 < 50KB），WS 单帧足够。未来若模板数量爆炸（v2 模板包生态）再切 index + on-demand `template.fetch`。
