@@ -5,6 +5,59 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P4-O：HikariCanvasAPI 包 + Impl + PluginNamespaceRegistry + Provider
+
+P4 Wave 1 基础设施落地。**1 commit / 638 backend test 全绿（+38）/ 0 fixture baseline 漂移**。
+P/Q/R/S/T 并行任务的"地基"，让 PushRateLimiter（P）/ ServicesManager + getAPI()（Q）/ Demo 插件（R）/ docs/api.md（S）/ shadowJar relocate exclude（T）有可接入的契约。
+
+### 新增 8 文件
+
+- **`moe.hikari.canvas.api`**（公开 API 包，外部插件 import 用，**不可改路径**）：
+  - `HikariCanvasAPI.java` — 5 方法接口：`registerNamespace / declareKey / setVariable / setVariables / unsetVariable`，全部首参 `Plugin plugin`（决策 2：显式传 Plugin 实例）
+  - `NamespaceInfo.java` — `(displayName, pluginName, version)` record
+  - `VariableUpdate.java` — `(value, @Nullable Duration ttl)` record
+  - `VarType.java` — API 包独立 enum（STRING/NUMBER/BOOLEAN/COLOR），与内部 `variable.VarType` 1:1 但<b>不引用</b>——保证 shadowJar relocate exclude `moe/hikari/canvas/api/**` 后外部插件 import 路径稳定
+  - `NamespaceConflictException.java` — register 跨 plugin 冲突
+  - `PluginNamespaceException.java` — set/declare/unset ACL 拒绝（Code = NAMESPACE_NOT_REGISTERED / NAMESPACE_ACL_DENIED）
+
+- **`moe.hikari.canvas.variable.plugin`**（内部实现）：
+  - `PluginNamespaceRegistry.java` — namespace ACL 注册表，`ConcurrentHashMap.putIfAbsent` 原子注册；保留 namespace `user/system/papi/scoreboard/schedule` 抛 IllegalArgumentException；同 plugin 重复 register 幂等覆盖（保留 registeredAt）；提供 `unregisterAllByPlugin` 给 Q 的 PluginDisableEvent listener 调
+  - `PluginNamespaceProvider.java` — 实现 `VariableProvider`，每个外部 namespace 一实例；`isDynamic=true / refreshInterval=ZERO`（不调度，纯 push）；`declaredKeys()` 暴露 declareKey 加入的 keys 给 P3-M `/api/variable/list-all-namespaces` 端点
+  - `HikariCanvasAPIImpl.java` — API 核心实现：错误隔离（VariableException 静默 + log、未知异常 SEVERE 不外泄、ACL 异常抛回调用方）；`doSetVariable` 先 setValue 试探 → NOT_FOUND 再 create + setValue（保证 VALUE_TOO_LONG 等失败时不残留半态变量）；暴露 `unregisterPluginProviders(List)` + `purgeNamespaceData(String)` 给 Q 的 disable + 30s 延迟清理钩子
+
+### 新增 2 测试文件（+38 case）
+
+- `PluginNamespaceRegistryTest.java` — 12 case：register + owns + 跨 plugin 冲突 + 保留 namespace + 非法格式（8 种）+ unregisterAllByPlugin + snapshot 行为 + null 校验。**Plugin mock 走 `java.lang.reflect.Proxy`**（项目无 Mockito 依赖，且引入 MockBukkit ServerMock 启动开销过高）
+- `HikariCanvasAPIImplTest.java` — 26 case：register/declareKey/setVariable/setVariables/unsetVariable 全分支 + ACL（NOT_REGISTERED / DENIED）+ VarType 4 case 转换 + 自动 create + declared key 影响类型 + 静默错误（valueTooLong）+ Q 钩子（unregisterPluginProviders / purgeNamespaceData）+ 构造 null 校验
+
+### 关键决策
+
+1. **API 包独立 VarType**：不让外部插件 import `moe.hikari.canvas.variable.VarType`——shadowJar relocate 后内部包名变成 `moe.hikari.canvas.shaded.*`（M16.5）会破坏插件编译。API 包定义自己的 enum + `HikariCanvasAPIImpl.convertVarType` 1:1 转换
+2. **decision 3 落地分工**：本任务交付 Impl 的两个钩子 `unregisterPluginProviders(List)` + `purgeNamespaceData(String)`；不挂 PluginDisableEvent listener（Q 任务做）；不接 Bukkit scheduler 做 30s 延迟（Q 任务做）。本任务<b>只</b>给"按需触发"的纯函数 API，让 Q 自由编排
+3. **错误隔离三档**：
+   - 业务异常（QUOTA / VALUE_TOO_LONG / TTL_INVALID / NAME_INVALID）→ catch + log WARNING + 静默返回；插件作者写错值不应感知
+   - ACL 异常（NAMESPACE_NOT_REGISTERED / DENIED）→ 抛回调用方；插件 bug（漏 register / spoof）不应静默
+   - 未知 Exception → catch + log SEVERE + 静默；HikariCanvas 不能被插件 bug 拖垮
+4. **doSetVariable 失败原子性**：先 `setValue` 试探（变量已存在路径直接成功；VALUE_TOO_LONG 等抛出直接 catch）→ 只有 NOT_FOUND 才落 `create + setValue`，避免"create 成功但 setValue 抛"导致 currentValue=null 的半态变量遗留在 store
+5. **registerNamespace 内同步 daemon.register 失败容忍**：`computeIfAbsent` 保证 provider 实例幂等；`daemon.register` 第二次抛 IllegalStateException 被 catch 吞（同 plugin reload / register 同 namespace 时 daemon 内已有 entry）
+
+### 给 P / Q / R / S / T 任务的接入指引
+
+- **P（PushRateLimiter）**：在 `HikariCanvasAPIImpl.doSetVariable` 入口或 `setVariable` / `setVariables` 之前插一道限流；通过构造器注入 Limiter 即可（不需要改接口）。注意 `setVariables` 批量已避免重复 ACL 检查，限流也建议按 batch 计费而非单条
+- **Q（getAPI + ServicesManager + PluginDisableEvent listener）**：
+  1. `HikariCanvas.onEnable` 实例化 `HikariCanvasAPIImpl(registry, store, daemon)`；暴露 `getAPI()` 字段 + `Bukkit.getServicesManager().register(HikariCanvasAPI.class, apiImpl, this, ServicePriority.Normal)`
+  2. 挂 `Listener` 监听 `PluginDisableEvent`：`var removed = registry.unregisterAllByPlugin(ev.getPlugin()); apiImpl.unregisterPluginProviders(removed); Bukkit.getScheduler().runTaskLaterAsynchronously(this, () -> removed.forEach(apiImpl::purgeNamespaceData), 20L * 30)`
+- **R（Demo 插件）**：Gradle subproject，依赖 `compileOnly project(":plugin")`（仅需 API 包）；onEnable 调 `Bukkit.getServicesManager().load(HikariCanvasAPI.class)`
+- **S（docs/api.md）**：把 `docs/dynamic-data.md §4.1` 接口示例补 `Plugin plugin` 首参；新建 `docs/api.md` 详细记录两种获取入口 + namespace ACL + 错误码表
+- **T（shadowJar relocate exclude）**：在 `plugin/build.gradle.kts` shadowJar 的 7 条 relocate 之上加 `exclude "moe/hikari/canvas/api/**"`——保证外部插件 import 路径 `moe.hikari.canvas.api.*` 在 shaded jar 内保持公开
+
+### 测试结果
+
+- `:plugin:test`：**638 tests / 0 failed / 0 skipped**（P3 baseline 600 → +38）
+- 仅 `:plugin:compileJava` + `:plugin:test` 跑过，**未跑 shadowJar / runServer**（任务纪律）
+
+---
+
 ## 2026-05-19 · 0.4.0-P3 收尾：内置 Provider 完工
 
 P3 五子任务（J/K/L/M/N）完工。**5 commit / 600 backend + 93 frontend test 全绿 /
