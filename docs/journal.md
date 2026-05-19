@@ -5,6 +5,82 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P1 收尾：变量系统底座完工
+
+P1 五子任务（A/B/C/D/E）并行实施完毕。**5 commit / ~3000 行净增 / 480 backend test +
+28 frontend test 全绿 / shadow jar 161 MB / 0 fixture baseline 漂移**。
+
+### Phase commit 时间线
+
+| Commit | Task | 范围 |
+|---|---|---|
+| `11b2773` | P1-A | VariableStore 核心 + V011 user_variables + 29 单测 |
+| `74b4f4f` | P1-E | VariableProvider daemon 框架 + ProviderBootstrap + 10 单测 |
+| `ab765dd` | P1-C | VariableInterpolator + CanvasCompositor 渲染期替换 + 29 单测 |
+| `dcffe9f` | P1-B | variable.* WS 协议 + EditSession 集成 + dirty callback + 18 单测 |
+| `02be5ca` | P1-D | canvas.var.* 权限节点 + 前端 TS types + Pinia store + wsClient send |
+
+### 关键架构落地（dynamic-data.md §1-9 → 代码现实）
+
+1. **fullName 编码规范**（A 决策固化）：普通 `<namespace>/<key>`；user 变量 `user:<wallId>/<key>`
+   （冒号分隔避免 user namespace 内多 wall 撞 key）；对外占位符仍写 `${var:user/<key>}`，
+   Compositor 解析时注入当前 wallId 转内部形式
+2. **state.patch `/variables/<encoded>` 路径**（B 决策）：JSON Pointer 转义（`~` → `~0`、
+   `/` → `~1`）；variables 不进 ProjectState 内嵌 record（per-wall 持久），而走 global
+   VariableStore + 独立 state.patch 分拣（前端 wsClient 接收侧按 `/variables/` 前缀走
+   useVariableStore）
+3. **倒排索引按需维护**（C 决策）：CanvasCompositor.rasterize 末尾才调
+   `markWallReferences(wallId, allReferenced)`——纯文本路径 O(1) 短路 indexOf 跳过；
+   含占位符 O(n) regex 提取；wallId == null 不写索引（模板 publish / 预览不污染 byWall ghost 引用）
+4. **dirty 触发链**（B 决策）：`VariableStore.setValue/update/delete/bind` 触发
+   `wallDirtyCallback.accept(wallId)` for each referencing wall → `SessionManager.submitFullCanvasDirtyByWall`
+   → `ProjectionThrottler.submit(DirtyRegion.full)` → 既有渲染管线
+5. **VariableProvider 接口**（E 决策）：`refresh() boolean` 返 false 表示 fallback 跳过该 tick；
+   `refreshInterval() ≤ 0` 表示 Push-only provider（无定时调度，靠外部 push 写值）；
+   三层异常隔离（initialize / refresh / shutdown 各自 try-catch 不传播）
+6. **权限策略**（B + D 协议固化）：own / any 二分法 — owner 走 `canvas.var.write.own`
+   （offline owner 视为已授权，与 paper-plugin.yml default=true 一致），非 owner 需
+   `canvas.var.write.any`；`variable.bind` 统一查 `canvas.var.bind`（敏感，不分 own/any）
+
+### 协议契约 → 代码 1:1 对照
+
+| 协议 op | EditSession 方法 | OpResult patch op |
+|---|---|---|
+| `variable.create` | `createVariable(store, wallId, name, type, defaultValue)` | `add /variables/<encoded>` 整 Variable |
+| `variable.update` | `updateUserVariable(store, wallId, fullName, patch)` | `replace /variables/<encoded>` 整 Variable |
+| `variable.set` | `setUserVariableValue(store, wallId, fullName, value)` | `replace /variables/<encoded>/currentValue` |
+| `variable.delete` | `deleteUserVariable(store, wallId, fullName)` | `remove /variables/<encoded>` |
+| `variable.bind` | `bindUserVariable(store, wallId, fullName, boundTo)` | `replace /variables/<encoded>/source` |
+
+### 错误码（8 内部 → 4 协议 + 4 通用 fallback）
+
+VariableException.Code → 协议错误：
+- `VARIABLE_NOT_FOUND / VARIABLE_EXISTS / VARIABLE_TYPE_MISMATCH / VARIABLE_NAMESPACE_DENIED` 1:1 映射
+- `VARIABLE_NAME_INVALID / VARIABLE_VALUE_TOO_LONG / QUOTA_EXCEEDED / TTL_INVALID` 归 `INVALID_PAYLOAD`
+- 权限 / 限流 / wall 缺失走既有 `PERMISSION_DENIED / RATE_LIMITED / WALL_NOT_FOUND`
+
+### Working tree 并行竞争解决
+
+A → E 串行（11b2773 → 74b4f4f）；C/B/D 在 working tree 共享下并行编辑同文件
+（HikariCanvas.java / SessionManager.java / docs/journal.md）。C agent 用
+`git apply --cached` 精确 staged 自己范围；B agent commit 时检测到 C 已先一步落地（main 推到
+ab765dd），自己的 hunks 与 C 不冲突 fast-forward 拼上；D 工作树由主控（我）手动 commit。
+**所有 5 commit GitHub 端 SSH 签名 verified=true**。
+
+### 不做（留 P2-P5）
+
+- 编辑器 UI（变量管理面板 / Variable Picker）→ P2
+- 具体 Provider 实现（system.time / scoreboard / PAPI / Manual Schedule）→ P3
+- 插件 Push API + 注册中心（HikariCanvasAPI.setVariable）→ P4
+- `/canvas var` 命令族 → P5
+
+### 下一步
+
+**P2 启动等用户通知**。P1 落地后：playground 测试 `${var:user/X}` 占位符在 wall 上
+实时渲染（创建变量 → 改值 → 看 wall 重画）需要 P2 UI 才能验证；P1 单测层验证已完毕。
+
+---
+
 ## 2026-05-19 · 0.4.0-P1-D：canvas.var.* 权限节点 + 前端 TS types + Pinia store + wsClient send
 
 P1 阶段"权限注册 + 前端协议契约"。后端 A/B/C/E 收口后，把 7 个 `canvas.var.*` 权限节点
