@@ -424,6 +424,125 @@ class VariableStoreTest {
         assertFalse(v.isStale(Long.MAX_VALUE));
     }
 
+    // ──────────────────────────────────────────────────────────
+    //  0.4.0 bugfix3（Bug B）：ChangeListener 广播
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void changeListener_create_firesCreatedEvent() {
+        List<VariableStore.VariableChangeEvent> events = new ArrayList<>();
+        store.registerChangeListener(events::add);
+
+        store.create("bedwars", "score", VarType.NUMBER, "0", "BedWars");
+
+        assertEquals(1, events.size());
+        var e = events.get(0);
+        assertEquals(VariableStore.ChangeType.CREATED, e.type());
+        assertEquals("bedwars/score", e.fullName());
+        assertNotNull(e.variable());
+        assertEquals("0", e.variable().defaultValue());
+        // 新建变量初始 referencedByWalls 空（除非 Bug 2 反查注入）→ event.referencingWalls() 空
+        assertTrue(e.referencingWalls().isEmpty());
+    }
+
+    @Test
+    void changeListener_setValue_firesValueSetEvent() {
+        store.create("bedwars", "score", VarType.NUMBER, "0", null);
+        List<VariableStore.VariableChangeEvent> events = new ArrayList<>();
+        store.registerChangeListener(events::add);
+
+        store.markWallReferences("w-1", Set.of("bedwars/score"));
+        store.setValue("bedwars/score", "42", null);
+
+        // VALUE_SET 事件应被触发，referencingWalls 含 w-1
+        var valueSetEvents = events.stream()
+                .filter(ev -> ev.type() == VariableStore.ChangeType.VALUE_SET)
+                .toList();
+        assertEquals(1, valueSetEvents.size());
+        var e = valueSetEvents.get(0);
+        assertEquals("bedwars/score", e.fullName());
+        assertEquals("42", e.variable().currentValue());
+        assertTrue(e.referencingWalls().contains("w-1"),
+                "VALUE_SET 应携带 referencingWalls 用于路由广播");
+    }
+
+    @Test
+    void changeListener_delete_firesDeletedEventWithNullVariableAndPreservedWalls() {
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        store.markWallReferences("w-1", Set.of("bedwars/score"));
+        store.markWallReferences("w-2", Set.of("bedwars/score"));
+        List<VariableStore.VariableChangeEvent> events = new ArrayList<>();
+        store.registerChangeListener(events::add);
+
+        store.delete("bedwars/score");
+
+        var deletedEvents = events.stream()
+                .filter(ev -> ev.type() == VariableStore.ChangeType.DELETED)
+                .toList();
+        assertEquals(1, deletedEvents.size());
+        var e = deletedEvents.get(0);
+        assertEquals("bedwars/score", e.fullName());
+        assertNull(e.variable(), "DELETED 事件 variable 应为 null");
+        // 删除前的 referencingWalls 应保留在 event 里（否则 listener 无法路由广播给该 wall）
+        assertTrue(e.referencingWalls().contains("w-1"));
+        assertTrue(e.referencingWalls().contains("w-2"));
+    }
+
+    @Test
+    void changeListener_update_firesUpdatedEvent() {
+        store.create("bedwars", "score", VarType.NUMBER, "0", null);
+        List<VariableStore.VariableChangeEvent> events = new ArrayList<>();
+        store.registerChangeListener(events::add);
+
+        store.update("bedwars/score", new VariablePatch(VarType.STRING, "default-new"));
+
+        var updatedEvents = events.stream()
+                .filter(ev -> ev.type() == VariableStore.ChangeType.UPDATED)
+                .toList();
+        assertEquals(1, updatedEvents.size());
+        var e = updatedEvents.get(0);
+        assertEquals(VarType.STRING, e.variable().type());
+        assertEquals("default-new", e.variable().defaultValue());
+    }
+
+    @Test
+    void changeListener_bind_firesBoundEvent() {
+        store.create("user:w-1", "score", VarType.NUMBER, null, null);
+        List<VariableStore.VariableChangeEvent> events = new ArrayList<>();
+        store.registerChangeListener(events::add);
+
+        store.bind("user:w-1/score", "BedWarsPlugin");
+
+        var boundEvents = events.stream()
+                .filter(ev -> ev.type() == VariableStore.ChangeType.BOUND)
+                .toList();
+        assertEquals(1, boundEvents.size());
+        assertEquals("BedWarsPlugin", boundEvents.get(0).variable().source());
+    }
+
+    @Test
+    void changeListener_throwingListener_doesNotAbortOthers() {
+        java.util.concurrent.atomic.AtomicInteger goodCalls = new java.util.concurrent.atomic.AtomicInteger();
+        store.registerChangeListener(e -> { throw new RuntimeException("simulated crash"); });
+        store.registerChangeListener(e -> goodCalls.incrementAndGet());
+
+        // 主路径不被打断；第二个 listener 仍被调
+        store.create("bedwars", "k", VarType.STRING, null, null);
+        assertEquals(1, goodCalls.get(),
+                "listener 抛异常应被吞掉，不影响其他 listener");
+        // store 本身不受影响
+        assertNotNull(store.get("bedwars/k").orElse(null));
+    }
+
+    @Test
+    void changeListener_multipleListeners_calledInOrder() {
+        List<String> order = new ArrayList<>();
+        store.registerChangeListener(e -> order.add("A"));
+        store.registerChangeListener(e -> order.add("B"));
+        store.create("bedwars", "k", VarType.STRING, null, null);
+        assertEquals(List.of("A", "B"), order);
+    }
+
     @Test
     void variable_isStale_ttlExceeded() {
         long now = System.currentTimeMillis();

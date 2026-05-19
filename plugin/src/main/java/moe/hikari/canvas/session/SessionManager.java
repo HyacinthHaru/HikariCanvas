@@ -738,6 +738,144 @@ public final class SessionManager {
         }
     }
 
+    /**
+     * 0.4.0 bugfix3（Bug B）：把 {@link moe.hikari.canvas.variable.VariableStore.VariableChangeEvent}
+     * 翻译成 {@code state.patch} 推给绑定到 {@code event.referencingWalls()} 的所有活跃 session。
+     *
+     * <p>用例：Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge 等）
+     * 直接调 {@link moe.hikari.canvas.variable.VariableStore#setValue} 写值时，EditSession 路径
+     * 不参与 → 前端 mirror 不更新。本方法由 HikariCanvas onEnable 注入的 ChangeListener 调用，
+     * 兜底主动推送。</p>
+     *
+     * <p>state.patch 形态与 {@link moe.hikari.canvas.state.EditSession} 的 variable.* op
+     * 完全一致（见 {@code variablePath / variableToMap}）：
+     * <ul>
+     *   <li>CREATED → {@code add /variables/<encoded> <Variable JSON>}</li>
+     *   <li>VALUE_SET → {@code replace /variables/<encoded>/currentValue <string|null>}</li>
+     *   <li>UPDATED → {@code replace /variables/<encoded> <Variable JSON>}（type / defaultValue 改）</li>
+     *   <li>BOUND → {@code replace /variables/<encoded>/source <string|null>}</li>
+     *   <li>DELETED → {@code remove /variables/<encoded>}</li>
+     * </ul></p>
+     *
+     * <p><b>version 字段</b>：variable 变更不属于 ProjectState 像素层，<b>不 bump version</b>——
+     * 复用绑定到该 wall 的 session 当前 ProjectState.version（前端 wsClient.handleStatePatch 已按
+     * path 前缀分拣 /variables/ 走 VariableStore，version 仅用于 projectOps 路径，空 projectOps
+     * 时设 version=当前值不会引入 race）。</p>
+     *
+     * <p>线程安全：只读 {@code byId} + per-session immutable getters；push.pushPatch 自身线程安全。
+     * 单 session push 失败被吞掉（log 经由 OpPushCallback 实现层），不影响其他 session。</p>
+     *
+     * @param event 变更事件
+     * @param push  OpPushCallback（由 WebServer 实现）
+     */
+    public void broadcastVariableChangeToWall(
+            moe.hikari.canvas.variable.VariableStore.VariableChangeEvent event,
+            moe.hikari.canvas.web.OpPushCallback push) {
+        if (event == null || push == null) return;
+        // 路由 walls 集合：
+        //  1) referencingWalls — Compositor markWallReferences 写入的精确倒排索引
+        //     （含 Bug 2 反查注入；多 wall 共享插件 / system 全局变量必走这里）
+        //  2) 变量 namespace 形如 X:wallId（per-wall：user / system:<wall> / schedule:<wall>）
+        //     → 隐含归属该 wallId，必须广播给该 wall 的所有活跃 session，即便 Compositor 还
+        //     没机会 markWallReferences（典型：用户开 ScheduleManagerModal 加 entry → Provider
+        //     首次 create + setValue 时，wall 文本里可能还没写 ${var:schedule/X}，referencingWalls
+        //     为空——本路径兜底保证 modal preview 实时显值）。
+        java.util.Set<String> walls = new java.util.HashSet<>();
+        if (event.referencingWalls() != null) walls.addAll(event.referencingWalls());
+        // 解析 per-wall namespace 隐含归属
+        String ownerWallId = parseOwnerWallId(event.fullName());
+        if (ownerWallId != null) walls.add(ownerWallId);
+        if (walls.isEmpty()) return;
+        // 构造 PatchOp（仅一条；批量改值场景下每次 mutation 都触发独立 event，不批合并）
+        moe.hikari.canvas.state.PatchOp op = buildVariablePatchOp(event);
+        if (op == null) return;
+        java.util.List<moe.hikari.canvas.state.PatchOp> ops = java.util.List.of(op);
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            String sWallId = s.wallId();
+            if (sWallId == null || !walls.contains(sWallId)) continue;
+            moe.hikari.canvas.state.ProjectState ps = s.projectState();
+            // version：variable 变更不动 ProjectState，复用当前 version（前端 applyPatch 收到
+            // 同 version 不会引入异常——空 projectOps 时仅是 version 字段重写自身）。
+            long version = ps == null ? 0L : ps.version();
+            moe.hikari.canvas.state.StatePatch patch =
+                    new moe.hikari.canvas.state.StatePatch(version, ops);
+            try {
+                push.pushPatch(s.id(), patch);
+            } catch (Exception e) {
+                log.log(java.util.logging.Level.WARNING,
+                        "broadcastVariableChangeToWall push failed: session=" + s.id()
+                                + " wall=" + sWallId + " event=" + event.type()
+                                + " fullName=" + event.fullName() + " err=" + e.getMessage(),
+                        e);
+            }
+        }
+    }
+
+    /**
+     * 从 fullName 拆 per-wall namespace 的 wallId。形如 {@code user:w-abc/X} / {@code system:w-1/wall.id}
+     * / {@code schedule:w-2/eta_seconds} → 返 wallId；全局 namespace（如 {@code bedwars/score}）返 null。
+     *
+     * <p>规则：fullName 拆首个 '/' 得 namespace；namespace 含 ':' 则取冒号后到 '/' 之前的子串。</p>
+     */
+    private static @org.jetbrains.annotations.Nullable String parseOwnerWallId(String fullName) {
+        if (fullName == null) return null;
+        int slash = fullName.indexOf('/');
+        if (slash <= 0) return null;
+        String namespace = fullName.substring(0, slash);
+        int colon = namespace.indexOf(':');
+        if (colon < 0 || colon == namespace.length() - 1) return null;
+        return namespace.substring(colon + 1);
+    }
+
+    /** {@code VariableChangeEvent} → RFC 6902 PatchOp。形态与 EditSession 一致。 */
+    private static moe.hikari.canvas.state.PatchOp buildVariablePatchOp(
+            moe.hikari.canvas.variable.VariableStore.VariableChangeEvent event) {
+        String path = "/variables/" + encodeJsonPointer(event.fullName());
+        return switch (event.type()) {
+            case CREATED -> moe.hikari.canvas.state.PatchOp.add(
+                    path, variableToMap(event.variable()));
+            case UPDATED -> moe.hikari.canvas.state.PatchOp.replace(
+                    path, variableToMap(event.variable()));
+            case VALUE_SET -> {
+                String cur = event.variable() == null ? null : event.variable().currentValue();
+                yield moe.hikari.canvas.state.PatchOp.replace(
+                        path + "/currentValue", cur);
+            }
+            case BOUND -> {
+                String src = event.variable() == null ? null : event.variable().source();
+                yield moe.hikari.canvas.state.PatchOp.replace(
+                        path + "/source", src);
+            }
+            case DELETED -> moe.hikari.canvas.state.PatchOp.remove(path);
+        };
+    }
+
+    /** RFC 6901 JSON Pointer 段编码：{@code ~} → {@code ~0}，{@code /} → {@code ~1}。 */
+    private static String encodeJsonPointer(String s) {
+        return s.replace("~", "~0").replace("/", "~1");
+    }
+
+    /**
+     * 把 Variable 序列化为 patch value Map。与 {@link moe.hikari.canvas.state.EditSession#variableToMap}
+     * 形态完全一致 — 前端 wsClient.applyVariablePatches 路径已就位，无需特殊处理。
+     */
+    private static java.util.Map<String, Object> variableToMap(
+            moe.hikari.canvas.variable.Variable v) {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        if (v == null) return m;
+        m.put("namespace", v.namespace());
+        m.put("key", v.key());
+        m.put("type", v.type().name());
+        if (v.defaultValue() != null) m.put("defaultValue", v.defaultValue());
+        if (v.currentValue() != null) m.put("currentValue", v.currentValue());
+        m.put("updatedAt", v.updatedAt());
+        m.put("ttl", v.ttl());
+        if (v.source() != null) m.put("source", v.source());
+        // referencedByWalls 是服务端倒排索引细节，不下发（与 EditSession.variableToMap 一致）
+        return m;
+    }
+
     // ---------- 超时扫描（M3-T2 Reaper 用） ----------
 
     /**

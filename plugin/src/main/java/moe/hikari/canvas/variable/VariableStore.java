@@ -79,6 +79,22 @@ public final class VariableStore {
     private final java.util.List<java.util.function.BiConsumer<String, String>> dynamicLookupHooks =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
+    /**
+     * 0.4.0 bugfix3（Bug B）：变量变更广播 listener。
+     *
+     * <p>EditSession 走 OpResult.dirty 触发 pushPatch 给前端 mirror，但 Provider 直接调
+     * {@link #create} / {@link #setValue} / {@link #bind} / {@link #delete} 不走该路径——
+     * 前端 mirror 永远拿不到 Provider 自动更新的值（典型：ManualScheduleProvider 写
+     * schedule:wallId/* 七变量 → editor 内 VariablePanel 全显 "—"，TextElement live preview
+     * 显 "???"）。本 listener 钩子兜底：Provider 写值时主动推 state.patch。</p>
+     *
+     * <p>listener 在 mutation 临界区<b>之外</b>调（避免持锁回调）；单 listener 抛异常被吞掉
+     * + log warning，不影响其他 listener / store 主路径。HikariCanvas onEnable 注入实际 listener
+     * 把变更通过 SessionManager → OpPushCallback.pushPatch 广播给绑定该 wall 的所有 session。</p>
+     */
+    private final java.util.List<VariableChangeListener> changeListeners =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
     public VariableStore(UserVariableDao dao,
                          java.util.function.Consumer<String> wallDirtyCallback) {
         this.dao = Objects.requireNonNull(dao, "dao");
@@ -125,6 +141,62 @@ public final class VariableStore {
                         .log(java.util.logging.Level.WARNING,
                                 "dynamic lookup hook threw for " + fullName + ": " + e.getMessage(),
                                 e);
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  0.4.0 bugfix3（Bug B）：ChangeListener API
+    // ──────────────────────────────────────────────────────────────────
+
+    /** 变更类型。Listener 据此决定如何构造 state.patch op。 */
+    public enum ChangeType { CREATED, UPDATED, VALUE_SET, BOUND, DELETED }
+
+    /**
+     * 变更事件。listener 拿此构造 RFC 6902 PatchOp 推送给前端 mirror。
+     *
+     * @param fullName          变更的 fullName（如 {@code schedule:w-1/eta_seconds}）
+     * @param variable          mutation 之后的最新 Variable；DELETED 时为 null
+     * @param type              变更类型
+     * @param referencingWalls  该变量当前 referencedByWalls 的不可变快照
+     *                          （DELETED 时取 mutation 前的快照——避免删除后无人能收到）
+     */
+    public record VariableChangeEvent(
+            String fullName,
+            @Nullable Variable variable,
+            ChangeType type,
+            Set<String> referencingWalls
+    ) {
+    }
+
+    /** 变更监听器 — 由 HikariCanvas onEnable 注入实际广播逻辑。 */
+    @FunctionalInterface
+    public interface VariableChangeListener {
+        void onChange(VariableChangeEvent event);
+    }
+
+    /** 注册 listener。多次注册 = 多 listener，按注册顺序触发。 */
+    public void registerChangeListener(VariableChangeListener listener) {
+        Objects.requireNonNull(listener, "listener");
+        changeListeners.add(listener);
+    }
+
+    /**
+     * 触发所有 listener。<b>不持锁调</b>——所有 mutation 方法在 compute*块之后调本方法。
+     * 单 listener 抛异常被吞掉 + log warning，不影响其他 listener 或 store 主路径。
+     */
+    private void fireChange(String fullName, @Nullable Variable v, ChangeType type) {
+        if (changeListeners.isEmpty()) return;
+        Set<String> walls = v == null ? Set.of() : Set.copyOf(v.referencedByWalls());
+        VariableChangeEvent event = new VariableChangeEvent(fullName, v, type, walls);
+        for (VariableChangeListener listener : changeListeners) {
+            try {
+                listener.onChange(event);
+            } catch (Exception e) {
+                java.util.logging.Logger.getLogger(VariableStore.class.getName())
+                        .log(java.util.logging.Level.WARNING,
+                                "VariableChangeListener threw for " + fullName
+                                        + " (" + type + "): " + e.getMessage(), e);
             }
         }
     }
@@ -194,6 +266,9 @@ public final class VariableStore {
         });
 
         persistIfUser(created, now, now);
+        // 0.4.0 bugfix3（Bug B）：广播 CREATED 给 listener（HikariCanvas 注入的 listener 推
+        // state.patch 给前端 mirror）。fireChange 在 compute 之外调，避免持锁回调。
+        fireChange(fullName, created, ChangeType.CREATED);
         return created;
     }
 
@@ -230,6 +305,8 @@ public final class VariableStore {
 
         persistIfUser(updated, createdAtHolder[0], now);
         notifyReferencingWalls(updated);
+        // 0.4.0 bugfix3（Bug B）
+        fireChange(fullName, updated, ChangeType.UPDATED);
         return updated;
     }
 
@@ -262,6 +339,10 @@ public final class VariableStore {
 
         persistIfUser(updated, now, now);
         notifyReferencingWalls(updated);
+        // 0.4.0 bugfix3（Bug B）：Provider 写值的核心路径——ManualScheduleProvider /
+        // SystemVariableProvider / PapiVariableBridge / ScoreboardVariableProvider 都靠
+        // 此 listener 才能让前端 mirror 同步显示 currentValue。
+        fireChange(fullName, updated, ChangeType.VALUE_SET);
     }
 
     public void delete(String fullName) {
@@ -275,6 +356,9 @@ public final class VariableStore {
             nsBucket.remove(fullName);
             // 不主动清空 nsBucket：留住 namespace 桶给将来同 ns 创建复用 set 对象。
         }
+        // 0.4.0 bugfix3（Bug B）：删除前先抓住 referencedByWalls 快照——用于 fireChange 路由。
+        // 接下来 byWall 清掉之后 removed.referencedByWalls() 仍是 mutation 前的 Set（record immutable），
+        // 而 fireChange(... DELETED, removed) 用 removed.referencedByWalls() 作为 walls 列表，正确。
         // 清掉所有 wall 倒排索引里的引用
         for (Set<String> wallBucket : byWall.values()) {
             wallBucket.remove(fullName);
@@ -287,6 +371,21 @@ public final class VariableStore {
             }
         }
         notifyReferencingWalls(removed);
+        // 0.4.0 bugfix3（Bug B）：DELETED 事件的 variable=null，referencingWalls 取删除前的快照
+        // 一并打到 event.referencingWalls 字段（listener 拿来路由）。
+        Set<String> walls = Set.copyOf(removed.referencedByWalls());
+        VariableChangeEvent event = new VariableChangeEvent(
+                fullName, null, ChangeType.DELETED, walls);
+        for (VariableChangeListener listener : changeListeners) {
+            try {
+                listener.onChange(event);
+            } catch (Exception e) {
+                java.util.logging.Logger.getLogger(VariableStore.class.getName())
+                        .log(java.util.logging.Level.WARNING,
+                                "VariableChangeListener threw for " + fullName
+                                        + " (DELETED): " + e.getMessage(), e);
+            }
+        }
     }
 
     /**
@@ -314,6 +413,8 @@ public final class VariableStore {
 
         persistIfUser(updated, now, now);
         notifyReferencingWalls(updated);
+        // 0.4.0 bugfix3（Bug B）
+        fireChange(fullName, updated, ChangeType.BOUND);
     }
 
     public Optional<Variable> get(String fullName) {

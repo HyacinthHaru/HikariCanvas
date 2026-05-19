@@ -74,6 +74,25 @@ describe('interpolator.resolveFullName', () => {
         expect(resolveFullName('schedule.next_departure', null))
             .toBe('schedule.next_departure');
     });
+    // 0.4.0 bugfix3（Bug A）：用户直觉的 namespace/key 斜杠语法
+    it('schedule/X + wallId → schedule:<wallId>/X (slash 语法)', () => {
+        expect(resolveFullName('schedule/eta_seconds', 'w-abc'))
+            .toBe('schedule:w-abc/eta_seconds');
+    });
+    it('schedule 斜杠与点号语法产同 fullName', () => {
+        expect(resolveFullName('schedule/next_departure', 'w-1'))
+            .toBe(resolveFullName('schedule.next_departure', 'w-1'));
+    });
+    it('wall/X + wallId → system:<wallId>/wall.X (slash 语法)', () => {
+        expect(resolveFullName('wall/id', 'w-abc'))
+            .toBe('system:w-abc/wall.id');
+    });
+    it('slash 语法 + wallId null → 字面查询', () => {
+        expect(resolveFullName('schedule/eta_seconds', null))
+            .toBe('schedule/eta_seconds');
+        expect(resolveFullName('wall/id', null))
+            .toBe('wall/id');
+    });
 });
 
 describe('interpolator.interpolate', () => {

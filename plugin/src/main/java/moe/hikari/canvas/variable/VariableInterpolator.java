@@ -131,6 +131,19 @@ public final class VariableInterpolator {
             String tail = rawName.substring("schedule.".length());
             return "schedule:" + wallId + "/" + tail;
         }
+        // 0.4.0 bugfix3（Bug A）：用户直觉的 namespace/key 斜杠语法 — 与 ${var:user/X} 同款风格。
+        // 不破坏 schedule.X / wall.X 点号语法，仅作为 fallback；wallId 为空时跳过，字面查询走 fallback。
+        // e.g. ${var:schedule/eta_seconds} + wallId="w-abc" → "schedule:w-abc/eta_seconds"
+        // e.g. ${var:wall/id} + wallId="w-abc" → "system:w-abc/wall.id"（注入到 SystemVariableProvider
+        // 注册的同款 fullName 形态）
+        if (wallId != null && !wallId.isEmpty() && rawName.startsWith("wall/")) {
+            String tail = rawName.substring("wall/".length());
+            return "system:" + wallId + "/wall." + tail;
+        }
+        if (wallId != null && !wallId.isEmpty() && rawName.startsWith("schedule/")) {
+            String tail = rawName.substring("schedule/".length());
+            return "schedule:" + wallId + "/" + tail;
+        }
         // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
         // 与 ScoreboardVariableProvider.handleDynamic 存储侧约定一致。
         if (rawName.startsWith("scoreboard.")) {

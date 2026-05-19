@@ -66,6 +66,18 @@ export function resolveFullName(rawName: string, wallId: string | null): string 
         const tail = trimmed.substring('schedule.'.length);
         return `schedule:${wallId}/${tail}`;
     }
+    // 0.4.0 bugfix3（Bug A）：用户直觉的 namespace/key 斜杠语法 — 与 ${var:user/X} 同款风格。
+    // 不破坏 schedule.X / wall.X 点号语法，仅作为 fallback；wallId 为空时跳过。
+    // ${var:schedule/eta_seconds} + wallId → schedule:<wallId>/eta_seconds
+    // ${var:wall/id} + wallId → system:<wallId>/wall.id（注入到 SystemVariableProvider 同款 fullName）
+    if (wallId && wallId.length > 0 && trimmed.startsWith('wall/')) {
+        const tail = trimmed.substring('wall/'.length);
+        return `system:${wallId}/wall.${tail}`;
+    }
+    if (wallId && wallId.length > 0 && trimmed.startsWith('schedule/')) {
+        const tail = trimmed.substring('schedule/'.length);
+        return `schedule:${wallId}/${tail}`;
+    }
     // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
     if (trimmed.startsWith('scoreboard.')) {
         const tail = trimmed.substring('scoreboard.'.length);

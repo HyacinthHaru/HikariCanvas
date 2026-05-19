@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-05-20 · M28-bugfix3：schedule 显示双 bug 修复（interpolator 斜杠语法 + Provider 推 state.patch）
+
+### 症状
+
+用户报告：Schedule Manager 内加 entry 后，**modal 内 7 项 preview 全显 "—"**；同时 wall 上写
+`${var:schedule/eta_seconds}` 也显示 "???"。`${var:schedule.eta_seconds}`（点号）能 work。
+
+### 根因
+
+**Bug A：interpolator 不识别 schedule/X 斜杠语法。**
+后端 `VariableInterpolator.resolveFullName` + 前端 `interpolator.ts:resolveFullName` 只支持点号前缀（`schedule.X` / `wall.X`）。用户更直觉地写 `${var:schedule/eta_seconds}`（与 `${var:user/red}` 一致），不被注入 wallId → 字面查 store → 找不到 → "???"。
+
+**Bug B：Provider 写值不推 state.patch 给前端 mirror。**
+`VariableStore.setValue/create/update/bind/delete` 仅触发 wall dirty callback（让 wall 重画），**不广播 state.patch**。玩家手动 op 走 `EditSession.OpResult.dirty + dispatcher pushPatch` 主动推送，但 Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge / ScoreboardVariableProvider）直接调 store，前端 mirror 永远拿不到 Provider 自动更新的值——Schedule Manager modal `variables.get('schedule:wid/eta_seconds')` 永远 undefined → preview 全 "—"。
+
+### 修复
+
+**Phase A**：interpolator 双端各加 2 个分支（`schedule/X` + `wall/X` 注入），与现有点号 alias 等价。`wall/id` 注入成 `system:<wallId>/wall.id`（与 SystemVariableProvider 注册的 fullName 同款）；`schedule/X` 注入成 `schedule:<wallId>/X`。保留旧点号语法继续工作（向下兼容）。
+
+**Phase B**：`VariableStore` 加 `VariableChangeListener` 接口 + `ChangeType` (CREATED/UPDATED/VALUE_SET/BOUND/DELETED) + `VariableChangeEvent` record + `registerChangeListener` + `fireChange` 钩子（在 create/update/setValue/bind/delete 各 mutation 之后调；不持锁；单 listener 抛异常被吞掉 + log warning 不影响其他）。`SessionManager.broadcastVariableChangeToWall(event, OpPushCallback)` 把事件翻译成 RFC 6902 PatchOp 推给绑定该 wall 的所有活跃 session；路由 walls = `event.referencingWalls() ∪ parseOwnerWallId(fullName)`（per-wall namespace 如 `schedule:wid/*` 隐含归属，即便 Compositor 还没 markWallReferences 也广播——这是 Schedule Manager modal 首次 add entry 时 preview 即时显值的关键）。`HikariCanvas` onEnable 在 `webServer.start()` 之后注入 listener wrap webServer 的 pushPatch。
+
+**version 字段**：variable 变更不动 ProjectState version，复用绑定该 wall session 的当前 ProjectState.version（前端 wsClient.handleStatePatch 按 path 前缀分拣 `/variables/` 走 VariableStore，version 仅用于 projectOps 路径）。
+
+### 影响 / 用户验证
+
+- `${var:schedule/X}`、`${var:wall/X}` 与 `${var:schedule.X}`、`${var:wall.X}` 等价工作（两种语法都支持）
+- Schedule Manager modal 7 项 preview 实时显值（add entry / refresh 时刻同步）
+- 任何 Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge / ScoreboardVariableProvider）写值时前端 mirror 同步更新
+- TextElement live preview 显 Provider 写入的实际值（不再 "???"）
+
+### 测试
+
+- 后端：8 个新单测（VariableStoreTest +7 listener 行为；ManualScheduleProviderTest +2 集成；VariableInterpolatorTest +4 slash 语法）+ 全套 487 测试 `--rerun-tasks` 全绿
+- 前端：4 个新 vitest case（interpolator.test.ts slash 语法）+ 全 97 全绿
+- vite build：bundle 639.33 kB gzip 194.42 kB；livePaintWorker 33.75 kB；CSS 61.53 kB
+- shadowJar 通过
+
+### 关联
+
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableInterpolator.java`（Bug A 后端）
+- `web/src/variable/interpolator.ts`（Bug A 前端）
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableStore.java`（Bug B ChangeListener API + fireChange 钩入 create/update/setValue/bind/delete）
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`（broadcastVariableChangeToWall + buildVariablePatchOp + parseOwnerWallId）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（onEnable 注入 listener）
+- `plugin/src/test/java/.../VariableStoreTest.java`（+7 listener 测试）
+- `plugin/src/test/java/.../variable/VariableInterpolatorTest.java`（+4 slash 测试）
+- `plugin/src/test/java/.../variable/provider/ManualScheduleProviderTest.java`（+2 集成测试）
+- `web/src/variable/__tests__/interpolator.test.ts`（+4 slash 测试）
+
+---
+
 ## 2026-05-19 · 紧急修复：onDragEnd 单选 element.transform 永不发
 
 ### 症状

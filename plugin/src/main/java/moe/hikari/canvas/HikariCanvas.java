@@ -418,6 +418,32 @@ public final class HikariCanvas extends JavaPlugin {
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();
 
+        // 0.4.0 bugfix3（Bug B）：Provider 写值时主动推 state.patch 给前端 mirror。
+        // EditSession op 路径走 OpResult.dirty + dispatcher 调 push.pushPatch；
+        // Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge）
+        // 直接调 store 不走该路径——必须 listener 钩子兜底，否则前端 mirror 永远拿不到
+        // Provider 自动更新的值（用户报"Schedule Manager 7 项预览全 '—'"的根因）。
+        //
+        // listener 内构造 OpPushCallback wrap webServer 的 pushPatch（webServer 已 start）；
+        // 异步线程安全：webServer.pushPatch / sessionManager.byId 都是线程安全只读。
+        final moe.hikari.canvas.web.OpPushCallback varPushCallback =
+                new moe.hikari.canvas.web.OpPushCallback() {
+                    @Override
+                    public boolean pushSnapshot(
+                            String sid, moe.hikari.canvas.state.ProjectState s) {
+                        return webServer != null && webServer.pushSnapshot(sid, s);
+                    }
+                    @Override
+                    public boolean pushPatch(
+                            String sid, moe.hikari.canvas.state.StatePatch p) {
+                        return webServer != null && webServer.pushPatch(sid, p);
+                    }
+                };
+        final SessionManager sessionManagerRef = this.sessionManager;
+        variableStore.registerChangeListener(event ->
+                sessionManagerRef.broadcastVariableChangeToWall(event, varPushCallback));
+        getLogger().info("VariableStore.ChangeListener registered (Provider→frontend mirror)");
+
         // M15.3 P0-24：MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。
         // 同 tokenPurgeTask 模式：异步周期跑；扫所有 RESERVED 找 owner 已不在 walls 表的强制 FREE。
         mapPoolLeakTask = Bukkit.getScheduler().runTaskTimerAsynchronously(

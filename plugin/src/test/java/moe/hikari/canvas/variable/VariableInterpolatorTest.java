@@ -368,6 +368,60 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  0.4.0 bugfix3（Bug A）：schedule/X、wall/X 斜杠语法
+    //  (与 ${var:user/X} 同款 namespace/key 风格)
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void scheduleNamespace_slashSyntax_injectsWallId() {
+        // ${var:schedule/eta_seconds} 应等价于 ${var:schedule.eta_seconds}
+        store.create("schedule:w-abc", "eta_seconds", VarType.NUMBER, null, "schedule");
+        store.setValue("schedule:w-abc/eta_seconds", "42", null);
+
+        var r = interp.interpolate("ETA = ${var:schedule/eta_seconds}", "w-abc");
+        assertEquals("ETA = 42", r.text(),
+                "schedule/X slash 语法应被注入成 schedule:<wallId>/X");
+        assertTrue(r.referencedFullNames().contains("schedule:w-abc/eta_seconds"));
+    }
+
+    @Test
+    void scheduleNamespace_slashAndDotProduceSameFullName() {
+        // 两种语法应产同样 fullName，命中同一个 Variable
+        store.create("schedule:w-1", "next_departure", VarType.STRING, null, "schedule");
+        store.setValue("schedule:w-1/next_departure", "08:30", null);
+
+        var rDot = interp.interpolate("${var:schedule.next_departure}", "w-1");
+        var rSlash = interp.interpolate("${var:schedule/next_departure}", "w-1");
+        assertEquals(rDot.text(), rSlash.text(), "斜杠与点号语法语义等价");
+        assertEquals("08:30", rSlash.text());
+    }
+
+    @Test
+    void wallNamespace_slashSyntax_injectsToSystemPerWall() {
+        // ${var:wall/id} 应等价于 ${var:wall.id} → system:<wallId>/wall.id
+        store.create("system:w-abc", "wall.id", VarType.STRING, null, "system");
+        store.setValue("system:w-abc/wall.id", "w-abc", null);
+
+        var r = interp.interpolate("Wall=${var:wall/id}", "w-abc");
+        assertEquals("Wall=w-abc", r.text());
+        assertTrue(r.referencedFullNames().contains("system:w-abc/wall.id"),
+                "wall/X slash 语法应被注入成 system:<wallId>/wall.X");
+    }
+
+    @Test
+    void slashSyntax_nullWallIdFallsBackLiterally() {
+        var r1 = interp.interpolate("${var:schedule/eta_seconds}", null);
+        assertEquals(VariableInterpolator.UNRESOLVED, r1.text());
+        assertTrue(r1.referencedFullNames().contains("schedule/eta_seconds"),
+                "wallId 为 null 时 schedule/X slash 形式不注入");
+
+        var r2 = interp.interpolate("${var:wall/id}", null);
+        assertEquals(VariableInterpolator.UNRESOLVED, r2.text());
+        assertTrue(r2.referencedFullNames().contains("wall/id"),
+                "wallId 为 null 时 wall/X slash 形式不注入");
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  P3-J：notifyDynamicLookup 触发
     // ──────────────────────────────────────────────────────────
 

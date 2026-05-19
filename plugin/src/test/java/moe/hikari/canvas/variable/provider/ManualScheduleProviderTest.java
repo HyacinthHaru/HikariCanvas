@@ -352,6 +352,73 @@ class ManualScheduleProviderTest {
         assertTrue(c.isArriving());
     }
 
+    // ──────────────────────────────────────────────────────────
+    //  0.4.0 bugfix3（Bug B）：ChangeListener 集成
+    //  Provider 写值时 listener 应被触发——这是前端 Schedule Manager preview
+    //  实时显值的关键路径。
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void ensureWallRegistered_firesChangeListenerForCreateAndSetValue() {
+        dataSource.now = LocalTime.of(8, 0);
+        dataSource.entriesByWall.put("w-1", List.of(
+                new ScheduleEntry(1, "w-1", "08:30", "终点A", 0)));
+
+        java.util.List<VariableStore.VariableChangeEvent> events =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        store.registerChangeListener(events::add);
+
+        provider.ensureWallRegistered("w-1");
+
+        // 应至少有 7 个 CREATED 事件（schedule:w-1/<7 keys>）+ 7 个 VALUE_SET（pushValues 写所有 7 个）
+        long createdCount = events.stream()
+                .filter(e -> e.type() == VariableStore.ChangeType.CREATED)
+                .filter(e -> e.fullName().startsWith("schedule:w-1/"))
+                .count();
+        long valueSetCount = events.stream()
+                .filter(e -> e.type() == VariableStore.ChangeType.VALUE_SET)
+                .filter(e -> e.fullName().startsWith("schedule:w-1/"))
+                .count();
+        assertEquals(7, createdCount,
+                "ensureWallRegistered 应让 listener 接收 7 个 CREATED（7 schedule 变量）");
+        assertEquals(7, valueSetCount,
+                "ensureWallRegistered 后立即 pushValues 应让 listener 接收 7 个 VALUE_SET");
+
+        // 验证 VALUE_SET 事件携带的 variable 含 currentValue
+        var etaSecondsEvent = events.stream()
+                .filter(e -> e.type() == VariableStore.ChangeType.VALUE_SET)
+                .filter(e -> e.fullName().equals("schedule:w-1/eta_seconds"))
+                .findFirst().orElseThrow();
+        assertNotNull(etaSecondsEvent.variable());
+        // 08:00 → 08:30 = 1800s
+        assertEquals("1800", etaSecondsEvent.variable().currentValue());
+    }
+
+    @Test
+    void unregisterWall_firesChangeListenerForDeleted() {
+        dataSource.now = LocalTime.of(8, 0);
+        dataSource.entriesByWall.put("w-1", List.of(
+                new ScheduleEntry(1, "w-1", "08:30", "终点", 0)));
+        provider.ensureWallRegistered("w-1");
+
+        java.util.List<VariableStore.VariableChangeEvent> events =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        store.registerChangeListener(events::add);
+
+        provider.unregisterWall("w-1");
+
+        long deletedCount = events.stream()
+                .filter(e -> e.type() == VariableStore.ChangeType.DELETED)
+                .filter(e -> e.fullName().startsWith("schedule:w-1/"))
+                .count();
+        assertEquals(7, deletedCount,
+                "unregisterWall 应让 listener 接收 7 个 DELETED");
+        // DELETED 事件 variable=null
+        events.stream()
+                .filter(e -> e.type() == VariableStore.ChangeType.DELETED)
+                .forEach(e -> assertNull(e.variable()));
+    }
+
     @Test
     void computeNext_thresholdSeconds_isConfigurable() {
         List<ScheduleEntry> entries = List.of(
