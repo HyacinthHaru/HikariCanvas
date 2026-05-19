@@ -60,6 +60,8 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     private final PluginNamespaceRegistry registry;
     private final VariableStore store;
     private final VariableProviderDaemon daemon;
+    /** P 任务：双层 push 限流（per-plugin 100/s + 全局 1000/s + 保护期 10s）。 */
+    private final PushRateLimiter limiter;
 
     /** namespace → PluginNamespaceProvider（与 registry 同步生命周期）。 */
     private final ConcurrentHashMap<String, PluginNamespaceProvider> providers = new ConcurrentHashMap<>();
@@ -67,11 +69,13 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     public HikariCanvasAPIImpl(
             PluginNamespaceRegistry registry,
             VariableStore store,
-            VariableProviderDaemon daemon
+            VariableProviderDaemon daemon,
+            PushRateLimiter limiter
     ) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.store = Objects.requireNonNull(store, "store");
         this.daemon = Objects.requireNonNull(daemon, "daemon");
+        this.limiter = Objects.requireNonNull(limiter, "limiter");
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -123,6 +127,10 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         Objects.requireNonNull(plugin, "plugin");
         Objects.requireNonNull(value, "value");
         checkAcl(plugin, namespace);
+        // P 任务：限流检查（dynamic-data.md §10.2）。limiter 内部已 log；这里 drop。
+        if (!limiter.tryAcquire(plugin)) {
+            return;
+        }
         try {
             doSetVariable(namespace, key, value, ttl, plugin.getName());
         } catch (VariableException e) {
@@ -144,7 +152,11 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         Objects.requireNonNull(updates, "updates");
         checkAcl(plugin, namespace);
         if (updates.isEmpty()) return;
-        // P 任务接入 PushRateLimiter 后这里会做 entry 级 rate limit；当前直接转发。
+        // P 任务：批量计费 — 一次性占 updates.size() token，要么全成要么全 reject。
+        // 实际写入循环不再走 tryAcquire（已批量占用）。
+        if (!limiter.tryAcquireBatch(plugin, updates.size())) {
+            return;
+        }
         // 不调 setVariable 是因为它会重复做 ACL 检查 —— 抽出 doSetVariable 复用。
         for (Map.Entry<String, VariableUpdate> e : updates.entrySet()) {
             VariableUpdate upd = e.getValue();

@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P4-P：PushRateLimiter（per-plugin 100/s + 全局 1000/s + 保护期）+ config 段
+
+P4 Wave 2 Push 限流防御接入 HikariCanvasAPIImpl。**1 commit / 653 backend test 全绿（+15）/ 0 fixture baseline 漂移**。
+让"恶意 / bug 插件 push 死循环"在 100ms 量级被拦下，不击穿 VariableStore。
+
+### 新增 1 文件 / 新增 1 测试文件（+15 case）
+
+- **`plugin/src/main/java/moe/hikari/canvas/variable/plugin/PushRateLimiter.java`** — 双层限流：per-plugin（默认 100/s，drop tail + WARN）+ 全局（默认 1000/s，触发 10s 保护期 + WARN）。1s 固定窗口 + `ConcurrentHashMap<pluginName, Window>` + `AtomicLong windowSec/count` 无锁；批量 `tryAcquireBatch(plugin, n)` 给 `setVariables` 用（一次性占 n token，all-or-nothing）。`Config` record（perPluginPerSecond / globalPerSecond / globalCircuitBreakMs）+ `defaults()`（100/1000/10_000）+ `unlimited()`（Integer.MAX_VALUE，测试用）。clock 注入 seam（`LongSupplier`，单测全部不用 `Thread.sleep`）
+- **`PushRateLimiterTest.java`** — 15 case：单次 allow / per-plugin 边界 101 drop / 跨秒重置 / 全局 1001 触发 circuit break / 保护期内 reject 全 plugin / 保护期超时恢复 / batch 50×3 第三次 reject / batch 单次超限 reject / 多 plugin 隔离 / Config 非法参数 IAE / unlimited 永 allow / resetForTest 清零 / nullPlugin NPE / invalid count IAE / defaults 值匹配规范
+
+### 修改 3 文件
+
+- `HikariCanvasAPIImpl.java` — 构造器加 `PushRateLimiter limiter` 参数（5 args）；`setVariable` 在 `checkAcl` 后插 `tryAcquire(plugin)`，false 时 drop（limiter 内已 log）；`setVariables` 在 `checkAcl` 后插 `tryAcquireBatch(plugin, updates.size())`，all-or-nothing；保留 `doSetVariable` 私有 helper 复用
+- `HikariCanvasConfig.java` — 新字段 `pushRateLimitConfig`（`PushRateLimiter.Config` 类型）；`load()` 解析 `dynamic.push-rate-limit` 段：`per-plugin-per-second`（默认 100，clamp ≥1）/ `global-per-second`（默认 1000，clamp ≥ perPlugin）/ `global-circuit-break-ms`（默认 10_000，clamp ≥0）；Builder defaults
+
+### 修改 2 文件（资源 / 测试夹具）
+
+- `config.yml` — 末尾追加 `dynamic.push-rate-limit` 段（per-plugin-per-second / global-per-second / global-circuit-break-ms 三项 + 注释指向 docs/dynamic-data.md §10.2）
+- `HikariCanvasAPIImplTest.java` — 测试构造调用扩展为 4 args（注入 `new PushRateLimiter(Config.unlimited())` 永 allow fake）；null 检查测试加第 4 个 null limiter case
+
+### 关键决策
+
+1. **双层限流而非单层**：per-plugin 拦单个 bug 插件刷自己 namespace；全局 + 保护期拦多 plugin 协同压垮 VariableStore。两层独立配置，可分别调
+2. **batch all-or-nothing**：`setVariables({a:1, b:2, c:3})` 5 entry 但 per-plugin 还剩 3 token —— 要么 5 全 reject 要么 5 全过；不部分写入（部分写入语义不一致：第 1-3 成 / 第 4-5 失败 → 调用方难处理）。代价是 batch 失败时 global window 已加进去（fixed-window 固有妥协，1s 内自然衰减）
+3. **clock 注入 seam**：单测全用 `AtomicLong::get` 当虚拟时钟，跨秒重置 / 保护期超时全部确定性测试，不用 `Thread.sleep`。M16 `SessionRateLimiter` 没做这个，新代码统一新风格
+4. **fixed-window 而非 sliding-window**：sliding-window 需要保存近 1s 内每个时间戳，O(N) 内存；fixed-window 单 AtomicLong + windowSec key，O(1)。代价：跨秒边界处可能放过 2× 上限（前后 100ms 各 100 token）—— 但 push 限流目标是防"刷爆"，2× 突发可接受
+5. **per-plugin log 跨阈值一次**：avoid 日志洪水。`if (prev <= limit && pluginCount > limit)` 跨阈值时 log 一次；同 window 后续 reject 静默
+
+### 不变更
+
+- 不动 NMS / 不引新依赖
+- 不动 HikariCanvasAPI 接口（限流是 Impl 私事）
+- 不挂 PluginDisableEvent listener（Q 任务领域）
+- 不动 HikariCanvas.java（onEnable 装配由 Q 任务完成；Q 拿到本 commit 的 4-arg 构造器后接入即可）
+- 不动 docs/dynamic-data.md（限流参数变更不影响契约）
+
+### 测试 / 构建
+
+- `./gradlew :plugin:test` 653 case 全绿（PushRateLimiterTest 15 新 + 既有 638）
+- `./gradlew :plugin:compileJava` 通过（HikariCanvas.java onEnable 装配由 Q 任务负责对接 4-arg 构造器）
+
+---
+
 ## 2026-05-19 · 0.4.0-P4-S：docs/api.md 完整接入教程 + dynamic-data.md §4 回填
 
 P4 Wave 2 文档任务。**纯文档 / 无代码改动 / 无测试 / 无构建**。把 M28-P4-O 落地的 `HikariCanvasAPI` 接口（5 方法 + Plugin 首参 + 2 exception + NamespaceInfo / VariableUpdate / VarType）翻成给第三方插件作者的完整接入教程，并回填 `dynamic-data.md §4` 让规划文档与实施接口一致。
@@ -89,53 +132,6 @@ P4 Wave 2 示例插件双范型落地。**两个独立 Paper subproject / compil
 - `examples/README.md`（新）
 - `examples/demo-train-plugin/` 全树（新）
 - `examples/demo-score-plugin/` 全树（新）
-
----
-
-## 2026-05-19 · 0.4.0-P4-P：PushRateLimiter（per-plugin 100/s + 全局 1000/s + 保护期）+ config 段
-
-P4 Wave 2 Push 限流防御接入 HikariCanvasAPIImpl。**1 commit / 653 backend test 全绿（+15）/ 0 fixture baseline 漂移**。
-让"恶意 / bug 插件 push 死循环"在 100ms 量级被拦下，不击穿 VariableStore。
-
-### 新增 1 文件 / 新增 1 测试文件（+15 case）
-
-- **`plugin/src/main/java/moe/hikari/canvas/variable/plugin/PushRateLimiter.java`** — 双层限流：per-plugin（默认 100/s，drop tail + WARN）+ 全局（默认 1000/s，触发 10s 保护期 + WARN）。1s 固定窗口 + `ConcurrentHashMap<pluginName, Window>` + `AtomicLong windowSec/count` 无锁；批量 `tryAcquireBatch(plugin, n)` 给 `setVariables` 用（一次性占 n token，all-or-nothing）。`Config` record（perPluginPerSecond / globalPerSecond / globalCircuitBreakMs）+ `defaults()`（100/1000/10_000）+ `unlimited()`（Integer.MAX_VALUE，测试用）。clock 注入 seam（`LongSupplier`，单测全部不用 `Thread.sleep`）
-- **`PushRateLimiterTest.java`** — 15 case：单次 allow / per-plugin 边界 101 drop / 跨秒重置 / 全局 1001 触发 circuit break / 保护期内 reject 全 plugin / 保护期超时恢复 / batch 50×3 第三次 reject / batch 单次超限 reject / 多 plugin 隔离 / Config 非法参数 IAE / unlimited 永 allow / resetForTest 清零 / nullPlugin NPE / invalid count IAE / defaults 值匹配规范
-
-### 修改 3 文件
-
-- `HikariCanvasAPIImpl.java` — 构造器加 `PushRateLimiter limiter` 参数（5 args）；`setVariable` 在 `checkAcl` 后插 `tryAcquire(plugin)`，false 时 drop（limiter 内已 log）；`setVariables` 在 `checkAcl` 后插 `tryAcquireBatch(plugin, updates.size())`，all-or-nothing；保留 `doSetVariable` 私有 helper 复用
-- `HikariCanvas.java` — onEnable 装配段加 `new PushRateLimiter(config.pushRateLimitConfig)` + 传入 Impl 构造器（4 args→5 args）
-- `HikariCanvasConfig.java` — 新字段 `pushRateLimitConfig`（`PushRateLimiter.Config` 类型）；`load()` 解析 `dynamic.push-rate-limit` 段：`per-plugin-per-second`（默认 100，clamp ≥1）/ `global-per-second`（默认 1000，clamp ≥ perPlugin）/ `global-circuit-break-ms`（默认 10_000，clamp ≥0）；Builder defaults
-
-### 修改 2 文件（资源 / 测试夹具）
-
-- `config.yml` — 末尾追加 `dynamic.push-rate-limit` 段（per-plugin-per-second / global-per-second / global-circuit-break-ms 三项 + 注释指向 docs/dynamic-data.md §10.2）
-- `HikariCanvasAPIImplTest.java` — 27 个测试构造调用全部扩展为 5 args（注入 `new PushRateLimiter(Config.unlimited())` 永 allow fake）；null 检查测试加第 4 个 null limiter case
-
-### 关键决策
-
-1. **双层限流而非单层**：per-plugin 拦单个 bug 插件刷自己 namespace；全局 + 保护期拦多 plugin 协同压垮 VariableStore。两层独立配置，可分别调
-2. **batch all-or-nothing**：`setVariables({a:1, b:2, c:3})` 5 entry 但 per-plugin 还剩 3 token —— 要么 5 全 reject 要么 5 全过；不部分写入（部分写入语义不一致：第 1-3 成 / 第 4-5 失败 → 调用方难处理）。代价是 batch 失败时 global window 已加进去（fixed-window 固有妥协，1s 内自然衰减）
-3. **clock 注入 seam**：单测全用 `AtomicLong::get` 当虚拟时钟，跨秒重置 / 保护期超时全部确定性测试，不用 `Thread.sleep`。M16 `SessionRateLimiter` 没做这个，新代码统一新风格
-4. **fixed-window 而非 sliding-window**：sliding-window 需要保存近 1s 内每个时间戳，O(N) 内存；fixed-window 单 AtomicLong + windowSec key，O(1)。代价：跨秒边界处可能放过 2× 上限（前后 100ms 各 100 token）—— 但 push 限流目标是防"刷爆"，2× 突发可接受
-5. **per-plugin log 跨阈值一次**：avoid 日志洪水。`if (prev <= limit && pluginCount > limit)` 跨阈值时 log 一次；同 window 后续 reject 静默
-
-### 不变更
-
-- 不动 NMS / 不引新依赖
-- 不动 HikariCanvasAPI 接口（限流是 Impl 私事）
-- 不挂 PluginDisableEvent listener（Q 任务领域）
-- 不动 docs/dynamic-data.md（限流参数变更不影响契约）
-
-### commit
-
-待提交：`M28-P4-P: PushRateLimiter（per-plugin 100/s + 全局 1000/s + 保护期）+ config 段`
-
-### 测试 / 构建
-
-- `./gradlew :plugin:test` 653 case 全绿（PushRateLimiterTest 15 新 + 既有 638）
-- `./gradlew :plugin:compileJava` 通过（HikariCanvas.java onEnable 已扩展构造器调用）
 
 ---
 

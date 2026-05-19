@@ -63,6 +63,13 @@ public final class HikariCanvasConfig {
     /** 跑 schema migration 前是否先备份 data.db。pre-release 默认 false。 */
     public final boolean databaseAutoBackup;
 
+    // ---- dynamic (0.4.0-P4-P) ----
+    /**
+     * 0.4.0-P4-P：Plugin Push API 限流参数（{@code docs/dynamic-data.md §10.2}）。
+     * 配置段 {@code dynamic.push-rate-limit}。
+     */
+    public final moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig;
+
     public record ImageConfig(
             int maxSizeKb,
             java.util.List<String> allowedMime,
@@ -100,6 +107,7 @@ public final class HikariCanvasConfig {
         this.templatesMaxPerPlayer = b.templatesMaxPerPlayer;
         this.images = b.images;
         this.databaseAutoBackup = b.databaseAutoBackup;
+        this.pushRateLimitConfig = b.pushRateLimitConfig;
     }
 
     /**
@@ -176,6 +184,24 @@ public final class HikariCanvasConfig {
 
         // M15.4 P0-29 database 段
         b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", false);
+
+        // 0.4.0-P4-P：dynamic.push-rate-limit 段
+        org.bukkit.configuration.ConfigurationSection rate =
+                f.getConfigurationSection("dynamic.push-rate-limit");
+        moe.hikari.canvas.variable.plugin.PushRateLimiter.Config rateDefaults =
+                moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
+        if (rate == null) {
+            b.pushRateLimitConfig = rateDefaults;
+        } else {
+            int perPlugin = Math.max(1,
+                    rate.getInt("per-plugin-per-second", rateDefaults.perPluginPerSecond()));
+            int global = Math.max(perPlugin,
+                    rate.getInt("global-per-second", rateDefaults.globalPerSecond()));
+            long breakMs = Math.max(0L,
+                    rate.getLong("global-circuit-break-ms", rateDefaults.globalCircuitBreakMs()));
+            b.pushRateLimitConfig = new moe.hikari.canvas.variable.plugin.PushRateLimiter.Config(
+                    perPlugin, global, breakMs);
+        }
 
         return new HikariCanvasConfig(b);
     }
@@ -264,5 +290,7 @@ public final class HikariCanvasConfig {
         int templatesMaxPerPlayer = 20;
         ImageConfig images = ImageConfig.defaults();
         boolean databaseAutoBackup = false;
+        moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
+                moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
     }
 }

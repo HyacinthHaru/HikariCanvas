@@ -115,3 +115,19 @@ database:
   # 多个 migration 各备份一份，文件名带版本号方便回滚。
   # pre-release（0.1.x SNAPSHOT）默认关；0.1.0 发版后建议改 true。
   auto-backup-before-migration: false
+
+# 动态数据（0.4.0）
+# 详见 docs/dynamic-data.md
+dynamic:
+  # Plugin Push API 限流（防恶意 / bug 插件刷爆 VariableStore）
+  # 见 docs/dynamic-data.md §10.2
+  push-rate-limit:
+    # 单插件每秒 push 上限（超出 drop tail + WARN log）
+    # 100/s 对正常使用绰绰有余；BedWars / 列车 ETA / 比分等业务 1-10/s 即可。
+    per-plugin-per-second: 100
+    # 全局每秒 push 上限（超出触发保护期）
+    # 保护期内所有插件 push 一律 reject——防多插件协同压垮 VariableStore。
+    global-per-second: 1000
+    # 全局触限后的保护期（ms）—— 期间所有 push reject
+    # 10s 给运维 / 日志足够时间排查；保护期结束自动恢复。
+    global-circuit-break-ms: 10000

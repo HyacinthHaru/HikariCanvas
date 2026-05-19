@@ -66,7 +66,8 @@ class HikariCanvasAPIImplTest {
         store = new VariableStore(fakeDao, w -> { });
         daemon = new VariableProviderDaemon();
         registry = new PluginNamespaceRegistry();
-        api = new HikariCanvasAPIImpl(registry, store, daemon);
+        api = new HikariCanvasAPIImpl(registry, store, daemon,
+                new PushRateLimiter(PushRateLimiter.Config.unlimited()));
         pluginA = fakePlugin("PluginA");
         pluginB = fakePlugin("PluginB");
     }
@@ -375,12 +376,15 @@ class HikariCanvasAPIImplTest {
 
     @Test
     void constructor_nullArgs_throws() {
+        PushRateLimiter fakeLimiter = new PushRateLimiter(PushRateLimiter.Config.unlimited());
         assertThrows(NullPointerException.class,
-                () -> new HikariCanvasAPIImpl(null, store, daemon));
+                () -> new HikariCanvasAPIImpl(null, store, daemon, fakeLimiter));
         assertThrows(NullPointerException.class,
-                () -> new HikariCanvasAPIImpl(registry, null, daemon));
+                () -> new HikariCanvasAPIImpl(registry, null, daemon, fakeLimiter));
         assertThrows(NullPointerException.class,
-                () -> new HikariCanvasAPIImpl(registry, store, null));
+                () -> new HikariCanvasAPIImpl(registry, store, null, fakeLimiter));
+        assertThrows(NullPointerException.class,
+                () -> new HikariCanvasAPIImpl(registry, store, daemon, null));
     }
 
     // ──────────────────────────────────────────────────────────
