@@ -65,10 +65,68 @@ public final class VariableStore {
     /** 任意 wall dirty 通知（B 任务接到 ProjectionThrottler#dirty）；P1 阶段可为 noop。 */
     private final java.util.function.Consumer<String> wallDirtyCallback;
 
+    /**
+     * 0.4.0-P3-J：动态 namespace 注册 hook。
+     *
+     * <p>{@link VariableInterpolator} 在 {@code resolve} 时若 store 内查不到 fullName，会逐个
+     * 调用已注册的 hook（BiConsumer 参数为 fullName + namespace）。动态 Provider（如
+     * {@link moe.hikari.canvas.variable.provider.ScoreboardVariableProvider}）可在 hook 里
+     * 自筛 namespace 匹配，决定是否自动 {@link #create} + 加入 refresh tracking。</p>
+     *
+     * <p>注意：hook 在调用线程同步执行——hook 实现应快速返回（异步处理走自己的 daemon），
+     * 不阻塞 interpolate；hook 抛异常会被吞掉 + log warning（详见 {@link #notifyDynamicLookup}）。</p>
+     */
+    private final java.util.List<java.util.function.BiConsumer<String, String>> dynamicLookupHooks =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
     public VariableStore(UserVariableDao dao,
                          java.util.function.Consumer<String> wallDirtyCallback) {
         this.dao = Objects.requireNonNull(dao, "dao");
         this.wallDirtyCallback = wallDirtyCallback == null ? wid -> {} : wallDirtyCallback;
+    }
+
+    /**
+     * 0.4.0-P3-J：注册动态 namespace 查找 hook。
+     *
+     * <p>由 Provider 在 {@link moe.hikari.canvas.variable.provider.VariableProvider#initialize()}
+     * 内调用一次；hook 在 {@link VariableInterpolator} 遇 missing 变量时同步被回调。</p>
+     *
+     * @param hook 接收 (fullName, namespace) 的回调；hook 自己负责按 namespace 自筛。
+     */
+    public void registerDynamicLookupHook(
+            java.util.function.BiConsumer<String, String> hook) {
+        Objects.requireNonNull(hook, "hook");
+        dynamicLookupHooks.add(hook);
+    }
+
+    /**
+     * 0.4.0-P3-J：由 {@link VariableInterpolator} 在 resolve miss 时调用，通知所有注册过的
+     * 动态 namespace hook。本方法不阻塞调用线程语义之外：hook 抛异常被吞掉 + log warning。
+     *
+     * @param fullName missing 的 fullName（已注入 wallId 形态，如 {@code user:w-1/X}）
+     */
+    public void notifyDynamicLookup(String fullName) {
+        if (fullName == null || dynamicLookupHooks.isEmpty()) return;
+        // namespace 提取：优先 '/' 分隔（store 标准 fullName 形态 namespace/key）；
+        // 若无 '/'，退而求其次按第一个 '.' 分（外部点分号 alias 形态如 scoreboard.<obj>.<player>）。
+        int slash = fullName.indexOf('/');
+        String namespace;
+        if (slash >= 0) {
+            namespace = fullName.substring(0, slash);
+        } else {
+            int dot = fullName.indexOf('.');
+            namespace = dot > 0 ? fullName.substring(0, dot) : fullName;
+        }
+        for (var hook : dynamicLookupHooks) {
+            try {
+                hook.accept(fullName, namespace);
+            } catch (Exception e) {
+                java.util.logging.Logger.getLogger(VariableStore.class.getName())
+                        .log(java.util.logging.Level.WARNING,
+                                "dynamic lookup hook threw for " + fullName + ": " + e.getMessage(),
+                                e);
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────

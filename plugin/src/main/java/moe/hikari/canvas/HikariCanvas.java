@@ -278,9 +278,11 @@ public final class HikariCanvas extends JavaPlugin {
         // map 释放 + walls 表删除后触发；user_variables 表通过 FK CASCADE 自动清。
         final VariableStore variableStoreForHook = variableStore;
         sessionManager.addWallDeleteHook(wid -> variableStoreForHook.clearWallReferences(wid));
-        // 0.4.0-P1-E：Provider daemon 框架（守护线程池 + 定时调度）。
-        // P1 阶段不注册任何 provider；P3 在 ProviderBootstrap.initialize 内加 system / papi 等。
-        this.variableProviderDaemon = ProviderBootstrap.initialize(this.variableStore);
+        // 0.4.0-P1-E / P3-J：Provider daemon 框架（守护线程池 + 定时调度）。
+        // P3-J 起注册 SystemVariableProvider + ScoreboardVariableProvider；
+        // P3-K / P3-L 再加 PAPI / ManualSchedule。
+        this.variableProviderDaemon =
+                ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo);
 
         // M14：模板元数据 DAO + 创意工坊协调器
         templateRepo = new TemplateRepo(getLogger(), database.jdbi());

@@ -5,6 +5,95 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P3-J：SystemProvider + ScoreboardProvider + Provider 接口扩展
+
+P3 Wave 1：基础设施 + 两个内置 Provider 落地。**1 commit / ~860 行净增（含 2 新生产
+类 + 2 测试类 + interpolator 双端扩展）/ 527 backend + 79 frontend test 全绿 / shadow
+jar 161 MB**。
+
+### 改动一览
+
+1. **VariableProvider 接口扩展**（{{provider/VariableProvider.java}}）：新增 default 方法
+   - `declaredKeys() → List<DeclaredKey>`：静态 namespace 返完整 key 列表（P3-M
+     `/api/variable/list-all-namespaces` 端点序列化下发）
+   - `isDynamic() → boolean`：标记动态 namespace（如 scoreboard 任意 key 都自动创建）
+   - 新 record {{provider/DeclaredKey.java}}：(key, type, description, ttlMs)
+
+2. **VariableStore 加 dynamicLookupHook**（{{variable/VariableStore.java}}）：
+   - `registerDynamicLookupHook(BiConsumer<String, String>)` 接受 (fullName, namespace)
+   - `notifyDynamicLookup(fullName)` 在 namespace 解析时支持 slash + dot 双形态
+   - 由 {{VariableInterpolator}} 在 `resolveValue` miss 路径同步调用
+
+3. **VariableInterpolator wall.\* 注入 + scoreboard.\* alias**
+   （{{variable/VariableInterpolator.java}} + {{web/src/variable/interpolator.ts}}）：
+   - `${var:wall.X}` + wallId → `system:<wallId>/wall.X`（per-wall namespace）；wallId
+     为 null 时跳过注入（模板 publish / 预览路径）
+   - `${var:scoreboard.<obj>.<player>}` → `scoreboard/<obj>.<player>`（点分号 alias
+     → slash；与 ScoreboardProvider 存储侧约定一致）
+   - resolve miss 时调 `store.notifyDynamicLookup(fullName)`——让动态 Provider 自动注册
+
+4. **SystemVariableProvider**（{{provider/SystemVariableProvider.java}}, ~430 行）：
+   - 全局 8 变量（namespace `system`）：server.time / real_time / tick / online / online_list /
+     motd / tps / name；每个独立 TTL（1s ~ 1h）
+   - per-wall 4 变量（namespace `system:<wallId>`）：wall.id / wall.alias / wall.owner /
+     wall.owner_uuid
+   - `refresh()` daemon 线程跑，最小公约 1s；内部 `nextRefreshAt` per-key 时刻表，到期者切主
+     线程 (`Bukkit.getScheduler().runTask`) 计算 + 写回 store
+   - `DataSource` 接口抽象 Bukkit / WallRepo 访问，让单测注入 mock；生产用 {{BukkitDataSource}}
+   - per-wall 注册时机：`initialize()` 遍历 `dataSource.allWallIds()` + 显式 `registerWall(wid)` /
+     `unregisterWall(wid)` 钩子（P3-J 不接 WallRepo create hook，启动 + onDisable 满足初版需求）
+   - `declaredKeys()` 返 8 + 4 = 12 项；`isDynamic() = false`
+
+5. **ScoreboardVariableProvider**（{{provider/ScoreboardVariableProvider.java}}, ~210 行）：
+   - 动态 namespace `scoreboard`；`initialize()` 注册 dynamic lookup hook（自筛 namespace）
+   - `handleDynamic(rawFullName)` 接受 slash + dot 双形态，解析为 `<obj>.<player>` key
+   - `refresh()` 10s 周期，切主线程读 `Bukkit.getScoreboardManager().getMainScoreboard()`
+   - obj / player 不存在 → 不 setValue（让 fallback 兜底，避免覆盖上次正确值）
+   - `DataSource` 同样可注入 mock；`declaredKeys() = []`, `isDynamic() = true`
+
+6. **ProviderBootstrap 改签名**（{{provider/ProviderBootstrap.java}}）：
+   `initialize(store, plugin, wallRepo)` → 注册 system + scoreboard 两 Provider；
+   P3-K/L 占位 PAPI + ManualSchedule
+
+7. **HikariCanvas.java**（{{HikariCanvas.java}}）：onEnable 改 1 行 `ProviderBootstrap.initialize`
+   调用方匹配新签名
+
+### 测试
+
+- {{plugin/.../variable/VariableInterpolatorTest.java}} +8 case（wall.\* 注入 4 / dynamic hook 3 /
+  整体 29）
+- {{plugin/.../variable/provider/SystemVariableProviderTest.java}}（新建，17 case）：FakeDataSource
+  注入、initialize 12 变量 + initial refresh、registerWall / unregisterWall 幂等、null tps / tick
+  防御、scheduleMainThread 计数
+- {{plugin/.../variable/provider/ScoreboardVariableProviderTest.java}}（新建，16 case）：dot/slash
+  form parseKey、initialize 注册 hook、refresh 读 score、score null 时保留旧值（不覆盖）、
+  interpolator 端到端 miss→register→refresh→hit
+- {{web/src/variable/__tests__/interpolator.test.ts}} +6 case（resolveFullName wall.\* 3 / 端到端
+  3 / 整体 24，总文件 79 test）
+
+### 关键决策
+
+1. **DataSource 接口注入** 而非直接 Bukkit 调用：保证单测无需 MockBukkit 即可跑全路径，
+   且生产时切主线程逻辑封装在 BukkitDataSource 内（防 async-unsafe getter 触发崩溃）。
+2. **`server.time` 等 dot alias 在 P3-J 仅部分实现**——只翻 `wall.*` 和 `scoreboard.*` 两个高
+   价值场景；`server.*` / `wall.*` 完整 dot-alias 留 0.4.1+（用户 Picker 使用 slash 形式）。
+3. **scoreboard 失败回退** 选 "不 setValue 让旧值留缓存"，而非 setValue null。理由：避免
+   单次 scoreboard plugin 重启 / obj 短暂缺失就把页面渲染成 fallback。
+4. **mixed 模式动态注册**——interpolator 在 resolve miss 时同步触发 hook，hook 实现自负责
+   异步。首次渲染走 fallback，第二次 tick 起有数据。store 的 `notifyDynamicLookup` 用
+   CopyOnWriteArrayList 防 hook 列表并发修改。
+
+### 关联文件
+
+- 新建：DeclaredKey.java / SystemVariableProvider.java / ScoreboardVariableProvider.java /
+  SystemVariableProviderTest.java / ScoreboardVariableProviderTest.java
+- 修改：VariableProvider.java / VariableStore.java / VariableInterpolator.java /
+  ProviderBootstrap.java / HikariCanvas.java / VariableInterpolatorTest.java /
+  web/src/variable/interpolator.ts / web/src/variable/__tests__/interpolator.test.ts /
+  docs/dynamic-data.md §2.3
+
+---
+
 ## 2026-05-19 · 0.4.0-P2 收尾：编辑器基础 UX 完工
 
 P2 三子任务（F/G/H）并行实施完毕 + I 主控收尾。**4 commit / ~5500 行净增（前端 ~5000 +

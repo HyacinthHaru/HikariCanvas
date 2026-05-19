@@ -97,17 +97,39 @@ public final class VariableInterpolator {
      * 把对外 placeholder 内的 rawName 转成 {@link VariableStore} 的 fullName 编码：
      * <ul>
      *   <li>{@code user/X} → {@code user:<wallId>/X}（wallId 非空时；为空走字面）</li>
+     *   <li>{@code wall.X} → {@code system:<wallId>/wall.X}（0.4.0-P3-J；
+     *       {@link moe.hikari.canvas.variable.provider.SystemVariableProvider} 按 per-wall
+     *       namespace 注册 wall.id / wall.alias / wall.owner / wall.owner_uuid，wallId 为空跳过）</li>
+     *   <li>{@code scoreboard.<obj>.<player>} → {@code scoreboard/<obj>.<player>}（0.4.0-P3-J；
+     *       动态 namespace 别名：把第一个 {@code .} 当 namespace/key 分隔——让
+     *       {@link moe.hikari.canvas.variable.provider.ScoreboardVariableProvider}
+     *       存的 {@code scoreboard/<obj>.<player>} 被字面查询命中）</li>
      *   <li>{@code bedwars/score} → 字面 {@code bedwars/score}</li>
-     *   <li>{@code server.time} → 字面 {@code server.time}（system namespace alias，
-     *       由 Provider 任务 E 在 store 内注册同名 fullName）</li>
+     *   <li>{@code server.time} → 字面 {@code server.time}（system namespace 点分号 alias
+     *       在 P3-J 仍按字面；SystemVariableProvider 内部 fullName 是 {@code system/server.time}，
+     *       编辑器 Picker 使用 slash 形式；点分号 alias 完整支持留 0.4.1+）</li>
      * </ul>
      */
-    private static String resolveFullName(String rawName, @Nullable String wallId) {
+    static String resolveFullName(String rawName, @Nullable String wallId) {
         if (wallId != null && !wallId.isEmpty()
                 && rawName.startsWith(VariableStore.USER_NAMESPACE_PREFIX + "/")) {
             // ${var:user/X} → user:<wallId>/X
             String key = rawName.substring(VariableStore.USER_NAMESPACE_PREFIX.length() + 1);
             return VariableStore.USER_NAMESPACE_PREFIX + ":" + wallId + "/" + key;
+        }
+        // 0.4.0-P3-J：wall.* 系统变量按 per-wall namespace 注入
+        // e.g. ${var:wall.id} + wallId="w-abc" → "system:w-abc/wall.id"
+        // wallId == null（模板 publish / 预览路径）跳过注入，让 wall.* 字面查询（多半 fallback）
+        if (wallId != null && !wallId.isEmpty() && rawName.startsWith("wall.")) {
+            return "system:" + wallId + "/" + rawName;
+        }
+        // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
+        // 与 ScoreboardVariableProvider.handleDynamic 存储侧约定一致。
+        if (rawName.startsWith("scoreboard.")) {
+            String tail = rawName.substring("scoreboard.".length());
+            if (!tail.isEmpty() && tail.indexOf('/') < 0) {
+                return "scoreboard/" + tail;
+            }
         }
         return rawName;
     }
@@ -124,7 +146,10 @@ public final class VariableInterpolator {
             if (def != null) return def;
             return UNRESOLVED;
         }
-        // 变量不存在（被删 / 未声明 / 命名不匹配）
+        // 变量不存在（被删 / 未声明 / 命名不匹配）。
+        // 0.4.0-P3-J：触发动态 namespace 注册 hook——首次渲染走 fallback，后续 tick 起有数据。
+        // 本方法仍 O(1) 短路：hook 实现应快速返回；阻塞处理走自己的 daemon。
+        store.notifyDynamicLookup(fullName);
         if (inlineFallback != null) return inlineFallback;
         return UNRESOLVED;
     }

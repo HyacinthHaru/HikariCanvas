@@ -51,6 +51,16 @@ describe('interpolator.resolveFullName', () => {
     it('system.time + wallId → 字面 system.time', () => {
         expect(resolveFullName('server.time', 'w-abc')).toBe('server.time');
     });
+    // 0.4.0-P3-J：wall.* 注入
+    it('wall.id + wallId → system:<wallId>/wall.id', () => {
+        expect(resolveFullName('wall.id', 'w-abc')).toBe('system:w-abc/wall.id');
+    });
+    it('wall.alias + wallId → system:<wallId>/wall.alias', () => {
+        expect(resolveFullName('wall.alias', 'w-1')).toBe('system:w-1/wall.alias');
+    });
+    it('wall.X + wallId null → 字面 wall.X', () => {
+        expect(resolveFullName('wall.id', null)).toBe('wall.id');
+    });
 });
 
 describe('interpolator.interpolate', () => {
@@ -162,5 +172,33 @@ describe('interpolator.interpolate', () => {
         store.set('user:w-abc/k', mkVar('user:w-abc', 'k', '$1\\back'));
         const r = interpolate('${var:user/k}', 'w-abc', store);
         expect(r.text).toBe('$1\\back');
+    });
+
+    // 0.4.0-P3-J：wall.* 注入端到端
+    it('16. ${var:wall.id} + wallId 注入命中 system:<wallId>/wall.id', () => {
+        store.set('system:w-abc/wall.id', mkVar('system:w-abc', 'wall.id', 'w-abc'));
+        const r = interpolate('Wall=${var:wall.id}', 'w-abc', store);
+        expect(r.text).toBe('Wall=w-abc');
+        expect(r.referencedFullNames.has('system:w-abc/wall.id')).toBe(true);
+    });
+
+    it('17. 混合 ${var:user/X} + ${var:wall.id} 都正确注入替换', () => {
+        store.set('user:w-1/score', mkVar('user:w-1', 'score', '42'));
+        store.set('system:w-1/wall.id', mkVar('system:w-1', 'wall.id', 'w-1'));
+        const r = interpolate(
+            '${var:user/score} 分 @ ${var:wall.id}',
+            'w-1',
+            store,
+        );
+        expect(r.text).toBe('42 分 @ w-1');
+        expect(r.referencedFullNames.size).toBe(2);
+        expect(r.referencedFullNames.has('user:w-1/score')).toBe(true);
+        expect(r.referencedFullNames.has('system:w-1/wall.id')).toBe(true);
+    });
+
+    it('18. wallId null 时 wall.X 字面查询 missing', () => {
+        const r = interpolate('${var:wall.id}', null, store);
+        expect(r.text).toBe(UNRESOLVED);
+        expect(r.missingFullNames.has('wall.id')).toBe(true);
     });
 });

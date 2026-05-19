@@ -278,6 +278,98 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  P3-J：wall.* 注入
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void wallNamespace_injectsWallIdIntoSystemPerWall() {
+        // SystemVariableProvider 按 per-wall namespace 注册：system:<wallId>/wall.id
+        store.create("system:w-abc", "wall.id", VarType.STRING, null, "system");
+        store.setValue("system:w-abc/wall.id", "w-abc", null);
+
+        var r = interp.interpolate("Wall = ${var:wall.id}", "w-abc");
+        assertEquals("Wall = w-abc", r.text());
+        assertTrue(r.referencedFullNames().contains("system:w-abc/wall.id"),
+                "wall.X 应被注入成 system:<wallId>/wall.X");
+    }
+
+    @Test
+    void wallNamespace_alias_injectsAndResolves() {
+        store.create("system:w-1", "wall.alias", VarType.STRING, null, "system");
+        store.setValue("system:w-1/wall.alias", "郑州地铁1号线", null);
+
+        var r = interp.interpolate("Alias=${var:wall.alias}", "w-1");
+        assertEquals("Alias=郑州地铁1号线", r.text());
+        assertTrue(r.referencedFullNames().contains("system:w-1/wall.alias"));
+    }
+
+    @Test
+    void wallNamespace_nullWallIdFallsBackLiterally() {
+        // wallId 为 null（模板 publish / 无 wall 上下文预览）→ wall.X 字面查询，必然 miss
+        var r = interp.interpolate("${var:wall.id}", null);
+        assertEquals(VariableInterpolator.UNRESOLVED, r.text());
+        assertTrue(r.referencedFullNames().contains("wall.id"),
+                "wallId 为 null 时 wall.* 不注入，按字面 fullName 查询");
+    }
+
+    @Test
+    void mixedUserAndWallPlaceholders_bothInjected() {
+        store.create("user:w-1", "score", VarType.NUMBER, "0", null);
+        store.setValue("user:w-1/score", "42", null);
+        store.create("system:w-1", "wall.id", VarType.STRING, null, "system");
+        store.setValue("system:w-1/wall.id", "w-1", null);
+
+        var r = interp.interpolate(
+                "${var:user/score} on ${var:wall.id}", "w-1");
+        assertEquals("42 on w-1", r.text());
+        assertTrue(r.referencedFullNames().contains("user:w-1/score"));
+        assertTrue(r.referencedFullNames().contains("system:w-1/wall.id"));
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  P3-J：notifyDynamicLookup 触发
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void miss_triggersDynamicLookupHook_withNamespace() {
+        java.util.List<String> calledNs = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.List<String> calledFullName = new java.util.concurrent.CopyOnWriteArrayList<>();
+        store.registerDynamicLookupHook((fn, ns) -> {
+            calledFullName.add(fn);
+            calledNs.add(ns);
+        });
+        // 不存在的变量；hook 必须被调用。resolveFullName 把 scoreboard.X.Y 转 scoreboard/X.Y
+        interp.interpolate("${var:scoreboard.points.Haru}", "w-1");
+        assertEquals(1, calledNs.size());
+        assertEquals("scoreboard", calledNs.get(0),
+                "scoreboard/X.Y 形态 namespace 解析为 slash 前段");
+        assertEquals("scoreboard/points.Haru", calledFullName.get(0),
+                "interpolator 在 lookup 前已 alias 翻译过 dot→slash");
+    }
+
+    @Test
+    void miss_hookExceptionDoesNotPropagate() {
+        store.registerDynamicLookupHook((fn, ns) -> {
+            throw new RuntimeException("simulated hook crash");
+        });
+        // 不应传播；fallback 链照常走
+        var r = interp.interpolate("${var:custom/missing|fallback=X}", "w-1");
+        assertEquals("X", r.text());
+    }
+
+    @Test
+    void hit_doesNotTriggerDynamicLookupHook() {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        store.registerDynamicLookupHook((fn, ns) -> calls.incrementAndGet());
+
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        store.setValue("bedwars/score", "5", null);
+        interp.interpolate("${var:bedwars/score}", "w-1");
+        assertEquals(0, calls.get(),
+                "命中的变量不应触发动态 lookup hook");
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Helper：与 VariableStoreTest 同构的 fake DAO
     // ──────────────────────────────────────────────────────────
 

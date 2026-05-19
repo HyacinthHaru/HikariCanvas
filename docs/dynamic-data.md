@@ -100,6 +100,18 @@ ${var:eta_minutes|format=int|suffix=min}
 
 **正则**：`\$\{var:([^|}]+)(\|fallback=([^}]+))?\}`
 
+**P3-J 引入的 namespace 注入 / 别名规则**（双端 interpolator 一致）：
+
+- `${var:user/X}` + `wallId="w-abc"` → 内部 `user:w-abc/X`（user 变量是 per-wall）
+- `${var:wall.X}` + `wallId="w-abc"` → 内部 `system:w-abc/wall.X`（{{SystemVariableProvider}} 按
+  per-wall namespace 注册 `wall.id` / `wall.alias` / `wall.owner` / `wall.owner_uuid`）；wallId 为
+  null（模板 publish / 预览路径）跳过注入
+- `${var:scoreboard.<obj>.<player>}` → 内部 `scoreboard/<obj>.<player>`（点分号 alias →
+  slash；与 {{ScoreboardVariableProvider}} `store.create("scoreboard", "<obj>.<player>", …)` 存储
+  侧约定一致）
+- `${var:server.time}` 等系统点分号 alias **暂未实现完整映射**（P3-J 仅 wall.* / scoreboard.\*）；
+  系统变量当前以 slash 形式访问：`${var:system/server.time}`。完整 dot-alias 留 0.4.1+
+
 ---
 
 ## 3. WS 协议扩展

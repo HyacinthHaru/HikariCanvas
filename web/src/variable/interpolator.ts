@@ -43,6 +43,9 @@ export interface InterpolateResult {
  * <ul>
  *   <li>{@code user/X} + wallId 非空 → {@code user:<wallId>/X}</li>
  *   <li>{@code user/X} + wallId 为空 → 字面 {@code user/X}（必然 miss，便于无 wall 上下文预览）</li>
+ *   <li>{@code wall.X} + wallId 非空 → {@code system:<wallId>/wall.X}（0.4.0-P3-J；
+ *       后端 SystemVariableProvider 按 per-wall namespace 注册 wall.id / wall.alias 等）</li>
+ *   <li>{@code wall.X} + wallId 为空 → 字面 {@code wall.X}（必然 miss，便于模板 publish / 预览）</li>
  *   <li>{@code bedwars/score} / {@code server.time} 等 → 字面不变</li>
  * </ul>
  */
@@ -52,6 +55,17 @@ export function resolveFullName(rawName: string, wallId: string | null): string 
             && trimmed.startsWith(USER_NAMESPACE_PREFIX + '/')) {
         const key = trimmed.substring(USER_NAMESPACE_PREFIX.length + 1);
         return `${USER_NAMESPACE_PREFIX}:${wallId}/${key}`;
+    }
+    // 0.4.0-P3-J：wall.* 系统变量按 per-wall namespace 注入
+    if (wallId && wallId.length > 0 && trimmed.startsWith('wall.')) {
+        return `system:${wallId}/${trimmed}`;
+    }
+    // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
+    if (trimmed.startsWith('scoreboard.')) {
+        const tail = trimmed.substring('scoreboard.'.length);
+        if (tail.length > 0 && tail.indexOf('/') < 0) {
+            return `scoreboard/${tail}`;
+        }
     }
     return trimmed;
 }
