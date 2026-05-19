@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
@@ -304,6 +304,16 @@ function showRefreshFlash(msg: string) {
       </Tooltip>
       <!-- M17.4 F3：Snap 设置 -->
       <SnapSettingsPopover />
+      <!-- 0.4.0-P2-G：变量管理面板触发 -->
+      <Tooltip :text="t.topbar.variableManager">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
+          :class="ui.variablePanelOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="ui.toggleVariablePanel()"
+        >
+          <Variable class="size-4" />
+        </button>
+      </Tooltip>
       <Tooltip :text="t.topbar.help" shortcut="?">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"

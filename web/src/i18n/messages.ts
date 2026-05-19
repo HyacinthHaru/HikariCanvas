@@ -24,6 +24,7 @@ export const messages = {
             toggleTheme: '切换深色 / 浅色主题',
             switchLocale: 'Switch to English',
             help: '快捷键速查 / 帮助',
+            variableManager: '变量管理（动态数据）',
         },
         wall: {
             copyId: (id: string) => `点击复制画板 ID：${id}`,
@@ -403,9 +404,66 @@ export const messages = {
             locked: '已锁定',
             wallStateTip: '可编辑 = 任何能进入这块画板的玩家都能改；已锁定 = 只有作者能解锁，其他人只读',
         },
-        // 0.4.0-P2-H：变量系统编辑器 picker / hints。
-        // panel / dialog / actions / errors 子段由 P2-G 负责（独立 commit），合并到同一 variables section。
+        // 0.4.0-P2-G 新增：变量管理面板 / 对话框 / 错误文案。
+        // H 任务会另加 picker / livePreview / hints 子段，最终合并为完整 variables section。
         variables: {
+            // 面板
+            panelTitle: '变量管理',
+            panelEmpty: '该 wall 暂无变量',
+            panelSearch: '搜索变量名',
+            panelNewButton: '新建变量',
+            // 分组
+            groupMine: '我的变量',
+            groupPlugin: '由插件提供',
+            groupSystem: '系统（自动）',
+            groupPapi: 'PAPI',
+            emptyMine: '点击 "+ 新建变量" 添加你的第一个变量',
+            emptyPlugin: 'P3 启用 Plugin Provider 后此处自动出现',
+            emptySystem: 'P3 启用 System Provider 后此处自动出现',
+            emptyPapi: '安装 PlaceholderAPI 后此处自动出现',
+            // 类型 chip
+            typeString: '字符串',
+            typeNumber: '数字',
+            typeBoolean: '布尔',
+            typeColor: '颜色',
+            // 值显示
+            currentLabel: '当前',
+            defaultLabel: '默认',
+            sourceLabel: '来源',
+            boundToLabel: '绑定到',
+            // 操作
+            actionInc: '+1（长按累加）',
+            actionDec: '-1（长按累加）',
+            actionEdit: '改值',
+            actionDelete: '删除',
+            actionBind: '让插件接管',
+            actionUnbind: '取消绑定',
+            // 新建对话框
+            dialogNewTitle: '新建变量',
+            dialogNewNameLabel: '名称',
+            dialogNewNamePlaceholder: '例如 red_score',
+            dialogNewNameHint: '将自动加 user:<wallId>/ 前缀',
+            dialogNewTypeLabel: '类型',
+            dialogNewDefaultLabel: '默认值',
+            dialogNewSubmit: '创建',
+            dialogNewCancel: '取消',
+            nameErrorEmpty: '名称不能为空',
+            nameErrorInvalid: '名称只能包含字母数字 _ . -，且 ≤ 64 字符',
+            nameErrorTooLong: '名称太长（≤ 64 字符）',
+            // 改值对话框
+            dialogValueTitle: '修改当前值',
+            dialogValueSubmit: '保存',
+            // 删除确认
+            deleteConfirm: (fullName: string) => `确定要删除变量 ${fullName} 吗？`,
+            deleteConfirmYes: '删除',
+            deleteConfirmNo: '取消',
+            // 绑定对话框
+            dialogBindTitle: (fullName: string) => `让插件接管 ${fullName}`,
+            bindEmpty: '暂无可用插件',
+            bindHint: 'P4 阶段启用 Plugin Push API 后，此处显示已注册插件列表',
+            bindCurrent: (plugin: string) => `当前已绑定: ${plugin}`,
+            bindUnbindButton: '取消绑定',
+            bindCloseButton: '关闭',
             // P2-H：VariablePicker（TextElement 内插入变量）
             picker: {
                 searchPlaceholder: '搜索变量',
@@ -531,6 +589,7 @@ export const messages = {
             toggleTheme: 'Switch between dark / light theme',
             switchLocale: '切换到中文',
             help: 'Shortcuts & help',
+            variableManager: 'Variable manager (dynamic data)',
         },
         wall: {
             copyId: (id: string) => `Click to copy wall id: ${id}`,
@@ -910,9 +969,66 @@ export const messages = {
             locked: 'Locked',
             wallStateTip: 'Editable = anyone who can open this wall can edit it; Locked = only the owner can unlock, everyone else is read-only',
         },
-        // 0.4.0-P2-H: editor picker / hints subsections for the variable system.
-        // panel / dialog / actions / errors subsections are owned by P2-G (separate commit), merged into the same variables section.
+        // 0.4.0-P2-G: variable management panel / dialogs / error strings.
+        // H task will add picker / livePreview / hints subsections; merge into one variables section.
         variables: {
+            // panel
+            panelTitle: 'Variable manager',
+            panelEmpty: 'No variables yet on this wall',
+            panelSearch: 'Search variable name',
+            panelNewButton: 'New variable',
+            // groups
+            groupMine: 'My variables',
+            groupPlugin: 'Provided by plugins',
+            groupSystem: 'System (automatic)',
+            groupPapi: 'PAPI',
+            emptyMine: 'Click "+ New variable" to add your first variable',
+            emptyPlugin: 'Will appear here once Plugin Provider is enabled (P3)',
+            emptySystem: 'Will appear here once System Provider is enabled (P3)',
+            emptyPapi: 'Install PlaceholderAPI for these to appear',
+            // type chips
+            typeString: 'String',
+            typeNumber: 'Number',
+            typeBoolean: 'Boolean',
+            typeColor: 'Color',
+            // value display
+            currentLabel: 'Current',
+            defaultLabel: 'Default',
+            sourceLabel: 'Source',
+            boundToLabel: 'Bound to',
+            // actions
+            actionInc: '+1 (hold to keep adding)',
+            actionDec: '-1 (hold to keep subtracting)',
+            actionEdit: 'Edit value',
+            actionDelete: 'Delete',
+            actionBind: 'Let a plugin manage this',
+            actionUnbind: 'Unbind',
+            // new variable dialog
+            dialogNewTitle: 'New variable',
+            dialogNewNameLabel: 'Name',
+            dialogNewNamePlaceholder: 'e.g. red_score',
+            dialogNewNameHint: 'A user:<wallId>/ prefix will be added automatically',
+            dialogNewTypeLabel: 'Type',
+            dialogNewDefaultLabel: 'Default value',
+            dialogNewSubmit: 'Create',
+            dialogNewCancel: 'Cancel',
+            nameErrorEmpty: 'Name cannot be empty',
+            nameErrorInvalid: 'Name may only contain letters, digits, _ . -, and must be ≤ 64 chars',
+            nameErrorTooLong: 'Name is too long (≤ 64 chars)',
+            // value editor dialog
+            dialogValueTitle: 'Edit current value',
+            dialogValueSubmit: 'Save',
+            // delete confirm
+            deleteConfirm: (fullName: string) => `Delete variable ${fullName}?`,
+            deleteConfirmYes: 'Delete',
+            deleteConfirmNo: 'Cancel',
+            // bind dialog
+            dialogBindTitle: (fullName: string) => `Let a plugin manage ${fullName}`,
+            bindEmpty: 'No plugins available yet',
+            bindHint: 'Once Plugin Push API (P4) is enabled, registered plugins will appear here',
+            bindCurrent: (plugin: string) => `Currently bound to: ${plugin}`,
+            bindUnbindButton: 'Unbind',
+            bindCloseButton: 'Close',
             // P2-H: VariablePicker (insert variable into TextElement)
             picker: {
                 searchPlaceholder: 'Search variables',

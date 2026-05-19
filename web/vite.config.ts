@@ -25,7 +25,9 @@ export default defineConfig({
         target: 'es2022',
     },
     test: {
+        // M18-P5 / M28-P2-G：node 环境跑纯算法 / composable / 校验逻辑测试。
+        // 组件渲染测试暂不引入（需 @vue/test-utils + jsdom），改写纯逻辑测试。
         environment: 'node',
-        include: ['src/**/*.test.ts'],
+        include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
     },
 });

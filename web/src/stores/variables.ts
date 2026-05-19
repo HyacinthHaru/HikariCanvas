@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import type { Variable } from '@/types/variable';
+import { makeFullName } from '@/types/variable';
 
 /**
  * VariableStore 前端镜像（0.4.0-P1-D）。
@@ -63,9 +64,35 @@ export const useVariableStore = defineStore('variables', () => {
         return map;
     });
 
+    /**
+     * 0.4.0-P2-G 扩展：批量初始化（用于 wsClient.handleReady 钩 ready payload.variables 列表）。
+     * 一次性赋新 Map，避免循环触发 N 次响应。
+     */
+    function initVariables(list: Variable[]): void {
+        const next = new Map<string, Variable>();
+        for (const v of list) {
+            const fullName = makeFullName(v.namespace, v.key);
+            next.set(fullName, v);
+        }
+        variables.value = next;
+    }
+
+    /**
+     * 0.4.0-P2-G 扩展：当前 wall 可用的 user 变量 key 集合（给 VariablePicker / TextElementVariableHints 用）。
+     * 返 fullName 列表（含 {@code user:<wallId>/} 前缀）。供 H 任务的 picker 引用，免再扫一遍 store。
+     */
+    const availableUserKeys = computed<string[]>(() => {
+        const result: string[] = [];
+        for (const [fullName, v] of variables.value.entries()) {
+            if (v.namespace.startsWith('user:')) result.push(fullName);
+        }
+        return result;
+    });
+
     return {
         variables,
         set, get, remove, clear, reset,
         all, byNamespace,
+        initVariables, availableUserKeys,
     };
 });
