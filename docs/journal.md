@@ -32,6 +32,98 @@
 
 ---
 
+## 2026-05-19 · 0.4.0 动态接入路线规划（文档定稿，等用户通知开干）
+
+用户要求规划"动态数据接入"。多轮评估后定型 **Push 模式 + 玩家自定义变量 + 四层数据源 + Plugin API**。
+
+### 核心定位
+
+**HikariCanvas = 展示层 + 通用扩展口 + 简单到中等内置编辑**。专业数据（铁路时刻 / PvP 引擎 / 商店逻辑）由专业插件 push；HikariCanvas 不重新造业务系统轮子。
+
+### Pull → Push 设计转变
+
+之前评估倾向 Pull（HikariCanvas 主动调 Provider.resolve）；用户提出 Push 后我同意转向：
+- 性能：HikariCanvas 不做 active polling，专业插件控制节奏
+- 解耦：HikariCanvas 不懂业务（只存 string）
+- 扩展性：插件想推什么就推什么（"08:15 / 晚点 5 分钟 / 大交路"）
+- 玩家自定义变量是核心差异化（手动赛分 / 时刻表 / 商店时价）
+
+### 四层数据源
+
+1. **Tier 1 用户变量**（`user/*` namespace，持久化，玩家手动改 / +/- 按钮 / 命令）
+2. **Tier 2 插件 push**（`<namespace>/*`，HikariCanvasAPI.setVariable）
+3. **Tier 3 系统变量**（13 项 `server.*` / `wall.*` / `scoreboard.*`，内置）
+4. **Tier 4 PAPI 桥接**（`papi/%placeholder%` 自动暴露）
+
+优先级（同 key 时）：Tier 2 > Tier 4 > Tier 3 > Tier 1 default
+
+### 引用语法
+
+```
+${var:user/红队比分}                  显式 namespace
+${var:红队比分}                       简写（自动加 user/）
+${var:bedwars/score|fallback=0}       插件变量 + fallback
+${var:server.time}                    系统变量
+```
+
+### 6 个固化决策
+
+1. **Push > Pull**（性能 / 解耦 / 扩展性）
+2. **变量是 string**（业务语义在插件侧，HikariCanvas 不解析）
+3. **用户变量持久化**（DB + .canvas）；插件 / 系统 / PAPI 变量内存态
+4. **resolve 不在主线程**（ProjectionThrottler 用 cache O(1)；async daemon 后台拉系统 / PAPI）
+5. **namespace 严格隔离**（防 plugin spoof；注册中心 enforce）
+6. **fallback 链**：cached → `${var:X|fallback=...}` → `Variable.default` → `"???"`
+
+### 五个 phase（每 phase 可演示推出）
+
+| Phase | 内容 | 工时 |
+|---|---|---:|
+| P1 变量系统底座 | VariableStore + 协议 + 持久化 + Compositor 替换 + threading + 权限 | 62h |
+| P2 编辑器基础 UX | 变量管理面板 + 朴素 textarea + Variable Picker | 30h |
+| P3 内置 Provider | 13 系统变量 + Scoreboard 桥接 + PAPI 桥接 + Manual Schedule | 20h |
+| P4 Plugin Push API | HikariCanvasAPI + 注册中心 + DemoTrain/DemoScore | 28h |
+| P5 命令 + 测试 + docs | `/canvas var` + 单测 + baseline + 教程 | 10h |
+
+**0.4.0 总 ~150h ≈ 6-7 周 wall-clock**
+
+每 phase 结束可推 demo（不是 MVP 阶段式半成品，每阶段都是 demo-ready 状态）。
+
+### 0.4.1 与远期路线
+
+- **0.4.1**（~25h）Notion-style chip 编辑器（${var:X} → 蓝色 pill + hover 显示当前值 + click 改绑定）
+- **0.5.0**（~120h）动画 + 时间轴（AE 简化版）
+- **0.6.0+**（~200h）Blockly 块脚本（避代码沙盒 RCE，编译为内部 DSL JSON，事件驱动）
+- **1.0.0 stable** ETA ~4 个月 wall-clock（含变量 + 动画 + 教程）
+- **全量动态接入** ETA ~8-10 个月 wall-clock
+
+### 已知边界 / 限制
+
+- 变量命名空间冲突：玩家 `user/X` vs 插件 `bedwars/X` 不冲突（不同 namespace）；同 namespace 内同 key 后写覆盖
+- TTL 过期 fallback：cached → fallback 语法 → default → "???"
+- 重启后：user/* 变量从 DB 恢复；插件 / 系统 / PAPI 变量重新 push
+- per-player personalized 变量：v0.4 不做（性能成本高，留 v1.x）
+- 数据类型：v0.4 只 STRING/NUMBER/BOOLEAN/COLOR；list/map 留 v1.x
+
+### 文档落地
+
+- 新 `docs/dynamic-data.md`（~400 行规划文档，16 个 section）—— **实施前必读**
+- `CLAUDE.md` 契约文档列表加 dynamic-data.md；新 0.4.0 路线段
+- `docs/architecture.md §13` 细化（P-1 + P-3 混合架构 + 6 个固化决策）
+- `docs/protocol.md §5.11` 新 variable.* op 族 + 4 个 error code
+- `docs/data-model.md §2.8` 新 user_variables 表（V011 migration）
+- `docs/security.md §5` 权限节点加 7 个 `canvas.var.*` + 插件 namespace ACL 说明
+
+### 实施状态
+
+**未开工**。等用户通知再开 M28 Phase 1。所有数据模型 / 协议 / API 决策已固化，agent 可直接据 dynamic-data.md 实施。
+
+### 关联文件
+
+`docs/dynamic-data.md`（新）/ `CLAUDE.md` / `docs/architecture.md` / `docs/protocol.md` / `docs/data-model.md` / `docs/security.md` / `docs/journal.md`。
+
+---
+
 ## 2026-05-19 · M27 Shift 等比锁 + 版本号 0.3.0-SNAPSHOT
 
 ### Shift 等比锁

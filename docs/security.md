@@ -299,10 +299,19 @@ validateToken(t):
 | `canvas.admin` | op=true | 管理命令（reload / stats / cleanup / fsck） |
 | `canvas.admin.bypass-limit` | op=true | 无视限流与画布上限 |
 | `canvas.admin.force-break` | op=true | 允许破坏插件保护的成品物品框 |
+| `canvas.var.read` | 继承 `canvas.use` | 0.4.0：查看变量列表（编辑器自动补全） |
+| `canvas.var.write.own` | 继承 `canvas.edit` | 0.4.0：在自己 wall 上创建 / 改值 user/* 变量 |
+| `canvas.var.write.any` | op=true | 0.4.0：在任意 wall 上 |
+| `canvas.var.delete.own` | 继承 `canvas.edit` | 0.4.0：删除自己 wall 上的 user/* 变量 |
+| `canvas.var.delete.any` | op=true | 0.4.0 |
+| `canvas.var.bind` | op=true | 0.4.0：让 user/* 变量被插件 push 接管（敏感操作） |
+| `canvas.var.command` | op=true | 0.4.0：用 `/canvas var` 命令族 |
 
 Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
 > **lock/unlock op 权限（2026-05-14）**：`wall.lock` / `wall.unlock` 不走权限节点，由 owner-only 校验代替——后端直接对比 caller.uuid == wall.owner_uuid，非 owner 拒 FORBIDDEN。无权限节点。
+
+> **插件 namespace ACL（0.4.0）**：`HikariCanvasAPI.setVariable` 走 namespace 注册中心校验——插件 A 不能 push 插件 B 的 namespace（防 spoof）。无玩家权限节点，由 plugin 自声明 namespace 后强制绑定。详见 `docs/dynamic-data.md §9.2`。
 
 ---
 

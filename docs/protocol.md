@@ -285,12 +285,25 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `template.feature` | C→S | `{ templateId }` | `ack { templateId, featured: true }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
 | `template.unfeature` | C→S | `{ templateId }` | `ack { templateId, featured: false }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
 
+### 5.11 变量系统（0.4.0 规划，详见 `docs/dynamic-data.md`）
+
+| op | 方向 | payload | 行为 |
+| --- | --- | --- | --- |
+| `variable.create` | C→S | `{ name, type, defaultValue? }` | 玩家创建用户变量（自动加 `user/` 前缀）；`ack { fullName }` / `error VARIABLE_EXISTS / INVALID_PAYLOAD` |
+| `variable.update` | C→S | `{ fullName, patch: { type?, defaultValue? } }` | 改类型 / default；`ack` / `error VARIABLE_NOT_FOUND` |
+| `variable.set` | C→S | `{ fullName, value }` | 手动设当前值（仅 user/*）；`ack` / `error VARIABLE_TYPE_MISMATCH` |
+| `variable.bind` | C→S | `{ fullName, boundTo: pluginName \| null }` | 让 user/* 变量被插件 push 接管 |
+| `variable.delete` | C→S | `{ fullName }` | 删除 user/* 变量；引用该变量的 element 显示 fallback |
+
+state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形如 `/variables/<encoded-fullName>/currentValue`。
+
 ### 5.8 服务端主动推送
 
 | op | 方向 | 说明 |
 | --- | --- | --- |
 | `session.warning` | S→C | 非致命警告（如池即将耗尽、限流） |
 | `session.terminated` | S→C | 服务端强制结束（管理员操作或超时） |
+| `variable.changed` | S→C | 变量值变化通知（替代或补充 state.patch；可选实施） |
 
 ---
 
@@ -335,6 +348,10 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `TOO_MANY_STROKES` | M12 brush：active stroke 数超 `MAX_ACTIVE_STROKES`（默认 8） | ❌ |
 | `INVALID_STROKE` | M12 brush：strokeId 不存在 / 已 end / 已 cancel | ❌ |
 | `STROKE_TOO_LONG` | M12 brush：单 stroke 点数超 `MAX_BRUSH_POINTS_PER_STROKE`（默认 4096） | ❌ |
+| `VARIABLE_NOT_FOUND` | 0.4.0：variable.* op 指向不存在的 fullName | ❌ |
+| `VARIABLE_EXISTS` | 0.4.0：variable.create 同名已存在 | ❌ |
+| `VARIABLE_TYPE_MISMATCH` | 0.4.0：variable.set 值与声明 type 不符 | ❌ |
+| `VARIABLE_NAMESPACE_DENIED` | 0.4.0：HikariCanvasAPI.setVariable 试图推非注册 namespace | ❌ |
 | `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
 | `QUOTA_PER_WALL` | M13/M14：当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
 | `QUOTA_PER_DAY` | M13/M14：玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |

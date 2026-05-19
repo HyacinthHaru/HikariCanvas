@@ -259,6 +259,32 @@ CREATE INDEX idx_usage_player ON template_usage(player_uuid, last_used_at DESC);
 CREATE INDEX idx_usage_global ON template_usage(last_used_at DESC);
 ```
 
+### 2.8 表：`user_variables`（0.4.0 引入，V011）
+
+玩家在 wall 内创建的用户变量持久化。Tier 1 数据源（详见 `docs/dynamic-data.md`）。
+
+```sql
+CREATE TABLE user_variables (
+    wall_id        TEXT NOT NULL,             -- 所属 wall（per-wall scope）
+    name           TEXT NOT NULL,             -- "红队比分"（不含 user/ 前缀）
+    type           TEXT NOT NULL,             -- 'STRING' / 'NUMBER' / 'BOOLEAN' / 'COLOR'
+    default_value  TEXT,                      -- 可空：fallback when push 失效
+    current_value  TEXT,                      -- 当前值（手动设 / 插件 push 后被写回）
+    bound_to       TEXT,                      -- 绑定到的插件 namespace；NULL = 手动管理
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    PRIMARY KEY (wall_id, name),
+    FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_uvar_wall ON user_variables(wall_id);
+CREATE INDEX idx_uvar_bound ON user_variables(bound_to) WHERE bound_to IS NOT NULL;
+```
+
+- **持久化**：仅 `user/*` namespace 变量持久化；插件 / 系统 / PAPI 变量内存态重启不留
+- **级联删除**：wall 删除时 cascade（FOREIGN KEY 已声明）
+- **migration V011**：pre-release 0.x SNAPSHOT 阶段允许加表（§6.6.1 规则）
+
 ---
 
 ## 3. PersistentDataContainer 约定

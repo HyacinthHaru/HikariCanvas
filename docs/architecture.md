@@ -888,33 +888,43 @@ logging:
 
 ---
 
-## 13. 动态画板设计约束（M15.3 拍板）
+## 13. 动态画板设计约束（M15.3 拍板，0.4.0 细化）
 
-未来加 PAPI / 数据源驱动的"动态画板"功能时必须遵循以下路径，避免与
-M15.3 鉴权方案 C（lock-aware open + 后端编辑 op 透明）冲突。
+> **0.4.0 详细设计**：`docs/dynamic-data.md`（变量系统 + Push API + UX + 权限）。本节为顶层架构约束。
 
-### 13.1 选 P-1：渲染期占位符解析
+### 13.1 路径选择：P-1 + P-3 混合
 
-TextElement 加 `dynamic: { source: 'papi', expr: '%player_name%' }` 字段。
-ProjectState 持久化时仅存「模板」（含 `${}` / `%papi%`），不存「实际值」。
-`CanvasCompositor.drawText` 检测 dynamic flag → 渲染前调
-`PlaceholderAPI.setPlaceholders(player, text)` 替换 → 渲染当前值。
+**最终架构 = P-1 渲染期占位符 + P-3 Plugin Push API**（0.4.0 实施）：
 
+- **P-1 渲染期**：TextElement.text 含 `${var:name}` / `${var:bedwars/score}` 占位符；`ProjectState` 仅存「模板字符串」不存「实际值」；`CanvasCompositor.drawText` 渲染前用 cached value 替换
+- **P-3 Push API**：外部插件 `HikariCanvasAPI.setVariable(namespace, key, value, ttl)` 主动 push；HikariCanvas 写入 VariableStore + mark wall dirty 触发重画
 - ✅ 与方案 C 兼容：渲染走 `CanvasProjector` 不经过 `SessionManager.open`
 - ✅ Lock 锁的是「模板编辑」，不是「显示内容更新」
 - ✅ 玩家 lock 后模板冻结，但每帧仍读最新动态值
 
-### 13.2 备选 P-3：Plugin API + DynamicValueProvider
+**关键纪律（不可越界）**：
 
-外部插件注册 `DynamicValueProvider` 回调；渲染时 HikariCanvas 拉取。
-同 P-1 的兼容性（不走 open 路径）。
+1. **Push > Pull**：HikariCanvas 不做 active polling 外部数据；插件主动 push
+2. **变量是 string**：HikariCanvas 不解析业务语义，纯字符串 forward
+3. **不在主线程 resolve**：`ProjectionThrottler` 用 cached value 渲染（O(1) lookup）；async daemon 后台拉系统变量 / PAPI
+4. **namespace 严格隔离**：插件注册 namespace 后只能 push 自己 namespace（防 spoof）
+5. **fallback 链**：cached → `${var:X\|fallback=...}` → `Variable.default` → `"???"`
+
+### 13.2 四层数据源（详见 dynamic-data.md §1）
+
+- Tier 1 用户变量（`user/*`，持久化，玩家手动改）
+- Tier 2 插件 push（`<namespace>/*`，HikariCanvasAPI.setVariable）
+- Tier 3 系统变量（`server.*` / `wall.*` / `scoreboard.*`，内置）
+- Tier 4 PAPI 桥接（`papi/%placeholder%`，自动暴露）
 
 ### 13.3 反模式（不允许）
 
-P-2 定时 patch ProjectState：后台 task 每 N 秒 `EditSession.updateElement`。
+**P-2 定时 patch ProjectState**：后台 task 每 N 秒 `EditSession.updateElement`。
 **不允许** — 会撞 lock-aware open 鉴权 + 撑爆 history 栈 + 产生大量 WS 流量。
 
-详见 `docs/journal.md` 2026-05-16 M15.3 / M15.4 条目。
+变量系统取代这条死路。
+
+详见 `docs/journal.md` 2026-05-16 M15.3 / M15.4 + 2026-05-19 0.4.0 规划条目。
 
 ---
 

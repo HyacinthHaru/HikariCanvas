@@ -45,6 +45,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 - `docs/template-spec.md` — 模板 YAML v1
 - `docs/data-model.md` — SQLite / PDC / `.canvas` 格式
 - `docs/security.md` — 威胁模型与安全规范
+- `docs/dynamic-data.md` — 0.4.0 变量系统 + Push API + 四层数据源（2026-05-19 规划）
 
 **操作类（M1 之后按需写，先写易过时）：** `deployment.md` / `development.md` / `api.md` / `troubleshooting.md`
 
@@ -92,6 +93,34 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 ## 里程碑
 
 M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图池 ✅（2026-04-21） → M3 实时投影 ✅（2026-04-21） → M4 渲染引擎 ✅（2026-04-22；竖排合并到 M5-C） → M5 编辑器 UI ✅（2026-04-23） → M5.5 wall 模型重构 ✅（2026-04-27） → M6 模板系统 ✅（2026-05-12） → M7 polish ✅（2026-05-13） → M8 图层 + 协议 v2 ✅（2026-05-13） → M9 PathElement + 工具栏 ✅（2026-05-13） → M10 调色板 ✅（2026-05-13） → M11 渐变 + Dither ✅（2026-05-13） → 2026-05-14 lock-state 重设计 ✅ → M12 笔刷 + 数位板 ✅（2026-05-14） → 2026-05-14 全栈审查 + 3 bug 修复 ✅ → M13 图片导入 + 蒙版 ✅（2026-05-15） → M14 模板创意工坊 ✅（2026-05-15） → M15 ultrareview 大重构 ✅（2026-05-16） → M16 第二轮 ultrareview 28 项 P0/P1 修复 ✅（2026-05-16） → M17 生产级体验组（F1-F5 复制粘贴 / 拖动跟手 / 智能对齐 / 自由拖动画布 / Canvas Fill） ✅（2026-05-17） → M18 Live Paint 油漆桶（B-medium+ 路线 / polygon-clipping / Web Worker / vector-fill 决策 A / vitest 引入） ✅（2026-05-17） → M19 GitHub Actions CI + Release（ci.yml push/PR 触发 / release.yml tag v* 触发 / Java 21 + Node 22 / shadowJar artifact 30d） ✅（2026-05-17）→ M20 双端字体 advance 精确化（构建期 generateGlyphMetrics + 运行时 FontMetricsTable / GlyphMetricsLut + 用户字体 registerRuntime + `/api/font/metrics` 端点 + 3 effects fixture baseline 重建） ✅（2026-05-17） → M21 内置字体扩充 7 字体矩阵（中文黑/宋/像素 + 西文 Inter/Noto Serif/JetBrains Mono/Fira Code；全 OFL 1.1） ✅（2026-05-17） → M22 字体艺术 / 装饰扩充至 20 字体矩阵（中文艺术 6 + 西文装饰 7） ✅（2026-05-18） → M23 字体加载通法（双轨变单轨：删 style.css @font-face + 删 PreviewRenderer.fontFamily KNOWN 白名单 / 新 FontLoader composable + FontFace API / 后端 GET /api/font/file + /api/font/list / TextElementSection 字体下拉动态化） ✅（2026-05-18） → M24 前端 UX 大整修（Catppuccin Latte/Frappé/Macchiato 三 flavor 替代 shadcn 中性灰 / Material 3 扁平化 + radius/elevation/spacing tokens / ThemeStore + ThemeSwitcher 8 accent + 5 radius preset / i18n 全文用户友好化 + 22 错误码翻译 + 40+ tooltip key / 修 FillInput tab 撞色） ✅（2026-05-18） → M25 ThemeSwitcher bug 修复 + i18n 挂载收尾 + 2 字体扩充（22 字体矩阵） ✅（2026-05-18） → **M26 内置图标库（FA Free 2060 icons / IconRegistry + 双源加载 / SVG path 双端渲染 + Fill 联合类型 / IconLibrary 侧边栏 panel + 拖入 + 收藏夹 + 最近使用 / PNG IconElement 完全兼容） + M26-B（修 EditSession.addElement 漏 case "icon" 紧急 bug + FontRegistry.registerRuntime 异步化 N×1-2s onEnable 阻塞 → 0；Material Symbols 留 M27） + M26-C（PathParser 扩展 H/V/A/S/T 完整 SVG 命令集——FA icon MC 内渲染"杂乱像素"根因，A 椭圆弧用 cubic bezier 近似 W3C §F.6 算法） ✅（2026-05-18） → **M27 Shift 等比锁（drag-to-create 时按 Shift 锁正圆 / 正方形 / 45° 线）+ 版本号 0.2.0→0.3.0-SNAPSHOT ✅（2026-05-19）**。总工期约 6 个月（M0-M27 累计约 8 周 wall-clock）。
+
+## 0.4.0 路线（规划阶段 2026-05-19 / 等用户通知开干）
+
+**目标**：把"静态招牌"升级到"动态信息屏"。**Push 模式 + 玩家自定义变量 + 四层数据源 + Plugin API**。
+
+**详细设计文档**：`docs/dynamic-data.md`（**实施前必读**；所有数据模型 / 协议 / API 决策以此为准）。
+
+**5 个 phase（每 phase 可演示）**：
+
+- **P1（62h）** 变量系统底座：VariableStore + WS op `variable.*` + 持久化（V011 user_variables 表）+ Compositor 渲染期 `${var:X}` 替换 + threading（async daemon，不在主线程 resolve）+ 权限节点 `canvas.var.*`
+- **P2（30h）** 编辑器基础 UX：变量管理面板 + 朴素 textarea + Variable Picker 弹出选择
+- **P3（20h）** 内置 Provider：13 个系统变量（`server.time` / `wall.alias` / `scoreboard.*` 等）+ PAPI 桥接（`papi/%placeholder%`）+ Manual Schedule provider（兜底列车 ETA）
+- **P4（28h）** Plugin Push API：`HikariCanvasAPI.setVariable(namespace, key, value, ttl)` + 注册中心 + DemoTrainPlugin / DemoScorePlugin 示例
+- **P5（10h）** `/canvas var` 命令族 + 测试 + 教程 docs
+
+**0.4.0 总 ~150h ≈ 6-7 周 wall-clock**。
+
+**6 个固化决策**（不可越界，避技术债）：
+1. Push > Pull（性能 / 解耦 / 扩展性）
+2. 变量是 string（业务在插件侧）
+3. 用户变量持久化（DB）；插件 / 系统 / PAPI 变量内存态
+4. resolve 不在主线程（ProjectionThrottler 用 cache）
+5. namespace 严格隔离（防 plugin spoof）
+6. fallback 链：cached → `${var:X\|fallback=...}` → `Variable.default` → `"???"`
+
+**0.4.1（chip 编辑器，~25h，1 周）** 留 0.4.0 落地后单独 milestone。
+
+**0.5.0+** 动画 / 时间轴 / Blockly 脚本路线见 `docs/dynamic-data.md §13`。
 
 ## M8-M12 已完成（详见 docs/journal.md）
 
