@@ -38,9 +38,14 @@ import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.preview.TemplatePreviewService;
 import moe.hikari.canvas.template.preview.WallPreviewService;
 import moe.hikari.canvas.variable.VariableStore;
+import moe.hikari.canvas.variable.plugin.HikariCanvasAPIImpl;
+import moe.hikari.canvas.variable.plugin.PluginCleanupListener;
+import moe.hikari.canvas.variable.plugin.PluginNamespaceRegistry;
+import moe.hikari.canvas.variable.plugin.PushRateLimiter;
 import moe.hikari.canvas.variable.provider.ManualScheduleProvider;
 import moe.hikari.canvas.variable.provider.ProviderBootstrap;
 import moe.hikari.canvas.variable.provider.VariableProviderDaemon;
+import moe.hikari.canvas.api.HikariCanvasAPI;
 import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
@@ -49,6 +54,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.MapMeta;
 import org.bukkit.map.MapView;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -101,6 +107,13 @@ public final class HikariCanvas extends JavaPlugin {
     private VariableProviderDaemon variableProviderDaemon;
     // 0.4.0-P3-L：兜底列车时刻表 DAO。WebServer schedule.* op + ManualScheduleProvider 共享。
     private moe.hikari.canvas.storage.ScheduleDao scheduleDao;
+    // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
+    // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
+    // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
+    // PluginCleanupListener 监听 PluginDisableEvent，外部插件 disable 时立即移除
+    // namespace + 30s 后清 store 变量。
+    private PluginNamespaceRegistry pluginNamespaceRegistry;
+    private HikariCanvasAPIImpl apiImpl;
     private volatile HikariCanvasConfig config;
 
     @Override
@@ -300,6 +313,25 @@ public final class HikariCanvas extends JavaPlugin {
             if (scheduleDaoForHook != null) scheduleDaoForHook.deleteByWall(wid);
         });
 
+        // 0.4.0-P4-Q：HikariCanvasAPI 装配。依赖 VariableStore + VariableProviderDaemon，
+        // 必须晚于 ProviderBootstrap.initialize；早于 WebServer（虽然当前 P4 范围内 WebServer
+        // 不直接用 apiImpl，未来 phase 想加 /api/plugin/* 端点可直接访问字段）。
+        // 0.4.0-P4-P：双层 push 限流（per-plugin 100/s + 全局 1000/s + 保护期 10s，
+        // 默认值，可在 config.yml dynamic.push-rate-limit 调）。
+        this.pluginNamespaceRegistry = new PluginNamespaceRegistry();
+        PushRateLimiter pushRateLimiter = new PushRateLimiter(config.pushRateLimitConfig);
+        this.apiImpl = new HikariCanvasAPIImpl(
+                pluginNamespaceRegistry, variableStore, variableProviderDaemon, pushRateLimiter);
+        // ServicesManager 注册：外部插件零编译耦合获取入口（推荐 docs/dynamic-data.md §4）。
+        // plugin disable 时 Bukkit 自动反注册，无需手动 unregister。
+        Bukkit.getServicesManager().register(
+                HikariCanvasAPI.class, apiImpl, this, ServicePriority.Normal);
+        getLogger().info("HikariCanvasAPI registered to Bukkit ServicesManager");
+        // PluginDisableEvent listener：外部插件 disable 时清掉它的 namespace。
+        // 立即 unregister registry + daemon；30s 后清 store 数据（保留 cached value 平滑过渡）。
+        getServer().getPluginManager().registerEvents(
+                new PluginCleanupListener(pluginNamespaceRegistry, apiImpl, this), this);
+
         // M14：模板元数据 DAO + 创意工坊协调器
         templateRepo = new TemplateRepo(getLogger(), database.jdbi());
         TemplateLoader publisherYamlLoader = new TemplateLoader();
@@ -404,6 +436,16 @@ public final class HikariCanvas extends JavaPlugin {
 
     /** 0.4.0-P1-A：供 B / C / D / E 任务取 VariableStore 单例。 */
     public VariableStore getVariableStore() { return variableStore; }
+
+    /**
+     * 0.4.0-P4-Q：外部插件获取 HikariCanvasAPI 的入口 A（需 import HikariCanvas 主类）。
+     *
+     * <p>推荐入口 B：{@code Bukkit.getServicesManager().load(HikariCanvasAPI.class)}
+     * （零编译耦合，详见 {@link HikariCanvasAPI} javadoc）。</p>
+     *
+     * @return API 实现；插件 onEnable 完成前可能返 null
+     */
+    public HikariCanvasAPI getAPI() { return apiImpl; }
 
     @Override
     public void onDisable() {

@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P4-Q：PluginDisableEvent listener + ServicesManager 注册 + getAPI()
+
+P4 Wave 2 生命周期接入。**1 commit / 660 backend test 全绿（+7）/ 0 fixture baseline 漂移**。
+HikariCanvasAPI 终于"装上"——外部插件 disable 时变量自动清理 + 通过 ServicesManager 零编译耦合获取入口。
+
+### 新增 1 文件 / 新增 1 测试文件（+7 case）
+
+- **`plugin/src/main/java/moe/hikari/canvas/variable/plugin/PluginCleanupListener.java`** — `Listener` 实现，监听 `PluginDisableEvent`（`MONITOR` 优先级）。三阶段清理：(1) 同步立即 `registry.unregisterAllByPlugin` 摘 namespace；(2) 同步立即 `apiImpl.unregisterPluginProviders(removed)` 摘 daemon provider；(3) **30s 后**（async Bukkit scheduler）`apiImpl.purgeNamespaceData(ns)` 清 store 变量值——保留 cached 平滑过渡（dynamic-data.md §4.3 决策）。自跳过 host：`disabled == host` 直接 return（避免 self-cleanup 与 `onDisable` 顺序竞争）。`DelayedScheduler` 函数式接口抽象 + 生产实现 `bukkitAsyncScheduler(host)` + 测试可注入同步 fake（避免在单测里挂 MockBukkit ServerMock）。异常隔离：outer try/catch + purge 阶段单 namespace 失败不影响其他
+- **`PluginCleanupListenerTest.java`** — 7 case：外部插件 with namespaces → registry/provider 立即移除 + store 保留 + scheduler 收 30s task / 跑 task 后 store 清空；外部插件 without namespaces → scheduler 不调度；host 自己 disable → 整 listener return（registry / store / scheduler 都不动）；scheduler 抛异常被吞（不传播给 Bukkit event bus）；purge task 内多 namespace 鲁棒（空 namespace OK）；构造 null 防御（4 NPE）；`bukkitAsyncScheduler(null)` NPE。测试用 `handleDisable(plugin)` 包内入口（避免单测构造 `PluginDisableEvent` 触发 `Bukkit.isPrimaryThread()` NPE）
+
+### 修改 1 文件
+
+- `HikariCanvas.java` — onEnable 末尾段（在 ProviderBootstrap 后 / WebServer 前）加 5 处改动：(1) 新增 2 字段 `pluginNamespaceRegistry` / `apiImpl`；(2) 实例化 `PluginNamespaceRegistry` + `PushRateLimiter(config.pushRateLimitConfig)` + `HikariCanvasAPIImpl(...)`；(3) `Bukkit.getServicesManager().register(HikariCanvasAPI.class, apiImpl, this, ServicePriority.Normal)`；(4) `registerEvents(new PluginCleanupListener(...))`；(5) 新 public `getAPI()` getter 供入口 A。onDisable 不动（ServicesManager 自动反注册 + daemon.shutdown 已包含 provider cleanup）
+
+### 关键决策
+
+1. **listener 字段类型用 `Plugin` 而非 `JavaPlugin`**：仅做 identity 比较 + 传给 Bukkit scheduler（接受 `Plugin`），松约束让测试可用 `Proxy` 造 fake；生产侧传 `this`（JavaPlugin 是 Plugin 子类，向上兼容）
+2. **`handleDisable(Plugin)` 抽出包内方法**：单测无法构造 `PluginDisableEvent`（其 super ctor 调 `Bukkit.isPrimaryThread()` → 单测环境 `Bukkit.server == null` NPE）。抽出 package-private 入口直接传 plugin；不增 MockBukkit ServerMock 设施依赖（项目至今未用过 MockBukkit @BeforeAll setup）
+3. **`DelayedScheduler` 函数式接口注入**：避免单测里 mock `Bukkit.getScheduler()`。生产 `bukkitAsyncScheduler` 走 `runTaskLaterAsynchronously`（async 因为 purge 只动 in-memory + DB，不抢主线程资源）
+4. **30s grace 用 async scheduler 而非 sync**：purge 路径不涉及 entity / packet / world，async 无副作用；不阻塞主线程
+5. **不挂 `onDisable` 钩子做手动清理**：ServicesManager.register 时 Bukkit 自动 track owner（this），plugin disable 时自动 unregisterAll；显式 unregister 是冗余且容易顺序错（daemon 已 shutdown 后再调 unregister 会触发 IllegalStateException）
+
+### 不变更
+
+- 不动 NMS / 不引新依赖
+- 不动 `HikariCanvasAPI` 接口（生命周期是 Impl + listener 私事）
+- 不动 paper-plugin.yml（listener runtime register 不需要 yml 声明）
+
+### 关联文件
+
+- 新增：`plugin/src/main/java/moe/hikari/canvas/variable/plugin/PluginCleanupListener.java`
+- 新增：`plugin/src/test/java/moe/hikari/canvas/variable/plugin/PluginCleanupListenerTest.java`
+- 修改：`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`
+- 文档：`docs/dynamic-data.md §4.3`（已由 S 任务回填）
+
+---
+
 ## 2026-05-19 · 0.4.0-P4-P：PushRateLimiter（per-plugin 100/s + 全局 1000/s + 保护期）+ config 段
 
 P4 Wave 2 Push 限流防御接入 HikariCanvasAPIImpl。**1 commit / 653 backend test 全绿（+15）/ 0 fixture baseline 漂移**。
