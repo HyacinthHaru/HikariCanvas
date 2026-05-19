@@ -5,6 +5,110 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P2-G：VariablePanel + NewVariableDialog + ValueEditor + BindDialog + useLongPressIncrement
+
+P2-G 子任务：变量管理 UX 主路径。把后端 P1 已铺的 WS op + Pinia store 接到前端 UI——TopBar Variable 按钮 → 380px fixed drawer → 4 分组（我的 / 插件 / 系统 / PAPI）→ 行内 +/- / 改值 / 让插件接管 / 删除。
+
+### 改动
+
+| 范围 | 文件 | 行为 |
+|---|---|---|
+| 新组件 | `web/src/components/variables/VariablePanel.vue`（~370 行含 style） | 主面板 fixed drawer，z-50，380px 宽；顶部 X / ESC / onClickOutside 关闭；搜索框 + "+ 新建变量" 按钮；4 分组折叠（默认展开）；"我的变量"扫 store 取 namespace=`user:<wallId>`；type chip 4 色 / 当前 / 默认 / 删除二次确认 inline popover；NUMBER 行 +/- 用 NumberStepButton |
+| 新组件 | `web/src/components/variables/NewVariableDialog.vue`（~180 行含 style） | modal z-60；name regex `^[a-zA-Z0-9_.-]+$` + ≤ 64 长度三 case 实时校验；4 type button group；type 切换 default 值控件（STRING text / NUMBER number / BOOLEAN toggle / COLOR ColorInput allowAlpha=false）；走 `wsClient.sendVariableCreate` ack 通道，失败留 dialog 显错便于改名重试 |
+| 新组件 | `web/src/components/variables/VariableValueEditor.vue`（~150 行含 style） | modal z-60；按 variable.type 切控件解析 currentValue（NUMBER → Number / BOOLEAN → 'true'/'false' / COLOR → hex 或 #FFFFFF fallback）；走 `wsClient.sendVariableSet` |
+| 新组件 | `web/src/components/variables/BindDialog.vue`（~120 行） | P2 简化版：未绑 → empty state 提示 P4 启用后显示插件；已绑（source ≠ manual/system/papi）→ 显示当前绑定 + "取消绑定" 按钮走 `wsClient.sendVariableBind(fullName, null)`；P4 时整体替换为插件列表 picker |
+| 新组件 | `web/src/components/variables/NumberStepButton.vue`（~50 行） | useLongPressIncrement 的 props-driven 包装；每按钮拥有独立 timer 生命周期 + onBeforeUnmount 清理 |
+| 新模块 | `web/src/components/variables/variableNameValidation.ts`（~30 行） | 从 NewVariableDialog 抽出纯校验函数（VARIABLE_NAME_REGEX / MAX_LEN 64 / VariableNameError 三态），让单测可直接覆盖不引 @vue/test-utils |
+| 新模块 | `web/src/composables/useLongPressIncrement.ts`（~100 行） | 长按累加 composable：onPointerDown 立即触发 1 次 + setTimeout(initialDelay=300) → setInterval(50) 持续触发；onPointerUp/Leave/Cancel 清两层 timer；onBeforeUnmount 兜底清理；返 isPressing computed 供视觉反馈 |
+| ui store | `web/src/stores/ui.ts` | 加 `variablePanelOpen` ref / `toggleVariablePanel` / `closeVariablePanel` actions / `reset()` 内同时复位 |
+| variables store | `web/src/stores/variables.ts` | 加 `initVariables(list)` 批量赋值（I 任务 handleReady 钩 ready.variables 用）+ `availableUserKeys` computed（H 任务 picker 用） |
+| i18n | `web/src/i18n/messages.ts` | 新 `topbar.variableManager` + 新 `variables` section 双语（panel / groups / type chips / actions / 3 dialog title+button+hint / 删除确认 / 绑定 empty state）；与 H 子段 picker / hints 互不冲突合并 |
+| TopBar | `web/src/components/layout/TopBar.vue` | 加 lucide `Variable` icon 按钮，挂在 SnapSettingsPopover 右侧，活跃态 accent 背景 |
+| App | `web/src/App.vue` | import VariablePanel 挂在 v-else 容器底部（与 TemplateGallery / HelpModal 同层）；自身 v-if=ui.variablePanelOpen 控显 |
+| 测试 | `web/test/composables/useLongPressIncrement.test.ts`（5 case） | 单击 / 长按 350ms / pointerleave / pointercancel / onBeforeUnmount 清理；用 `@vitest-environment happy-dom` 指令 + 最小 Vue app mount 测 onBeforeUnmount |
+| 测试 | `web/test/components/NewVariableDialog.test.ts`（5 case） | 合法 name 集 / 非法字符（中文 / 空格 / 斜杠 / 冒号 / hash） / >64 char + 边界 64 / 空 name / NAME_REGEX 文本对齐后端 P1-A |
+| 构建 | `web/vite.config.ts` | test.include 加 `test/**/*.test.ts`；保持 node env 主线（per-file 用 `@vitest-environment` 指令切 happy-dom） |
+| 依赖 | `web/package.json` | 加 happy-dom devDependency（vitest 组件 + 真 mount 测 onBeforeUnmount 路径用） |
+
+### 关键设计
+
+1. **NumberStepButton 独立组件**：原打算在 VariablePanel 主组件里给每行调一次 composable，但 composable 必须在 setup 顶层调用——v-for 行数变化时违反规则。独立组件让每按钮拥有自己的 setup + onBeforeUnmount cleanup，避免组件销毁后残留 timer 触发 stale closure。
+2. **BindDialog P2 简化版**：P4 Plugin Push API 前没插件列表可枚举。当前仅支持取消绑定（罕见，但当 source 显示为插件名时需要给用户路径解绑）。P4 落地后整体替换为插件 picker，sendVariableBind 参数从 null 升级到具体 pluginName。
+3. **删除二次确认走 inline popover 而非全屏 modal**：列表内单行操作太重的话视觉中断；inline confirm popover（带 "确定 / 取消" 两按钮 + destructive 配色）足够。
+4. **i18n 撞车防护**：P2-G 只写 panel / dialog / groups / types / actions / value editor / delete / bind 子段；H 任务（picker / livePreview / hints）独立子段；最终合并为一个 variables section（已观察到 H commit 已正确并入）。
+5. **测试不依赖 @vue/test-utils**：NewVariableDialog 测试只验证 `validateVariableName` 纯函数；useLongPressIncrement 测试需要 onBeforeUnmount lifecycle，用 happy-dom + `createApp(...).mount(...).unmount()` 最小 Vue 上下文，不需要 @vue/test-utils 抽象。
+
+### 验证
+
+- `cd web && npm run test` → 8 test files, **73 passing**（68 原有 + 5 composable + 5 dialog 校验；包含 H 已合入的 15 interpolator + 20 picker）
+- `cd web && ./node_modules/.bin/vite build` → 通过；无 TS 错；livePaintWorker 33.75kB + index 619.67kB（gzip 189.72kB）
+- 不动 Java 后端（F 做）/ wsClient.handleReady（I 做）/ VariablePicker / TextElementSection（H 做）
+
+### 关联文件（git diff HEAD --stat）
+
+```
+docs/journal.md
+web/package-lock.json
+web/package.json
+web/src/App.vue
+web/src/components/layout/TopBar.vue
+web/src/components/variables/BindDialog.vue (new)
+web/src/components/variables/NewVariableDialog.vue (new)
+web/src/components/variables/NumberStepButton.vue (new)
+web/src/components/variables/VariablePanel.vue (new)
+web/src/components/variables/VariableValueEditor.vue (new)
+web/src/components/variables/variableNameValidation.ts (new)
+web/src/composables/useLongPressIncrement.ts (new)
+web/src/i18n/messages.ts
+web/src/stores/ui.ts
+web/src/stores/variables.ts
+web/test/composables/useLongPressIncrement.test.ts (new)
+web/test/components/NewVariableDialog.test.ts (new)
+web/vite.config.ts
+```
+
+---
+
+## 2026-05-19 · 0.4.0-P2-H：VariablePicker + interpolator + TextElement 集成 + live preview
+
+P2-H 子任务：让玩家在 TextElement textarea 内插入 `${var:...}` 占位符（按钮 / 输入 `${` 自动触发），并实时看到替换后的最终文本 + 引用变量被删除时的红色警告。
+
+### 改动
+
+| 范围 | 文件 | 行为 |
+|---|---|---|
+| 新模块 | `web/src/variable/interpolator.ts`（~100 行） | 前端镜像后端 `VariableInterpolator`；同正则 / 同 fallback 4 档（cached → `\|fallback=` → defaultValue → "???"）+ `user/X` wallId 注入 + `O(1)` 短路 + `referencedFullNames` / `missingFullNames` 集合产出 |
+| 新模块 | `web/src/variable/pickerLogic.ts`（~110 行） | VariablePicker 纯逻辑层：`buildGroups`（4 组 mine/plugin/system/papi 分类 + 跨 wall user 隔离 + keyword filter 大小写不敏感）+ `flattenGroups` / `nextActiveIndex`（循环回绕）+ `displayName`（user 变量显示 `user/key` 短名）。剥离纯逻辑便于 vitest node 直跑（避免引入 jsdom + @vue/test-utils） |
+| 新组件 | `web/src/components/variables/VariablePicker.vue`（~200 行含 style） | popover 选择器：搜索框 + 4 分组列表 + ↑↓/Enter/Esc 键盘交互 + onClickOutside；显示当前值预览。emit `select(shortName)` + `close()` |
+| 新组件 | `web/src/components/variables/TextElementVariableHints.vue`（~120 行含 style） | textarea 下方挂件：200ms debounce 调 interpolate；显示 live preview + 红色 missingFullNames 警告 + 引用提示。仅在 text 含 `${var:` 时挂载（外层 v-if） |
+| 集成入口 | `web/src/components/properties/TextElementSection.vue` | textarea 添加 `ref="textareaRef"`；label 区右侧加 "插入变量"按钮（lucide `Variable` icon）；`onTextChange` 检测 caret 前 2 字符为 `${` → 自动弹 picker + 标记 `triggeredByDollarBrace`；`onPickerSelect` 用 `setRangeText` 插入 `${var:...}` 并 `dispatchEvent input` 让 vue 同步 v-model；hints 组件挂在 textarea 下方 |
+| i18n | `web/src/i18n/messages.ts` | 在已有 `variables` section（P2-G 范围）追加 `picker` / `hints` 子段，中英双语：searchPlaceholder / emptyResults / 4 个 group 标题（含 emoji） / insertButtonLabel / keyboardHint / previewLabel / deletedWarning(`{names}` 占位） / referencedHint |
+| 单测 | `web/src/variable/__tests__/interpolator.test.ts` | 15 case：纯文本短路 / wallId 注入 / fallback 4 档 / 多占位符 / missing & referenced 集合 / null undefined 输入 / 显式空 fallback / 替换值含 `$`+`\\` 不当反向引用 |
+| 单测 | `web/src/variable/__tests__/pickerLogic.test.ts` | 20 case：displayName 三 namespace / buildGroups 4 组分类 + 跨 wall user 隔离 + wallId null 排除 mine / keyword 大小写不敏感 + trim / flatten 顺序 / nextActiveIndex 边界 + 回绕 |
+
+### 关键设计
+
+1. **interpolator 算法权威 = 后端 Java `VariableInterpolator`**。前端纯前端 live preview 用，不参与 MC 内实际投影（后端 CanvasCompositor 走自己的 Java 路径）。两端共享行为契约的目的是**让编辑器预览与游戏内最终渲染逐字符一致**——避免玩家"编辑器看是 5，游戏里渲染出来变 ???"的认知裂痕
+2. **触发模式 双轨**：点按钮（`triggeredByDollarBrace=false` → 直接 setRangeText 插占位符）vs 用户输入 `${` 触发（`true` → 插入时把已输入的 `${` 一并替换掉，避免重复）。两轨用同一 `onPickerSelect`，靠 flag 分支
+3. **picker 纯逻辑剥离**：把 group 构建 / filter / activeIndex 移到 `pickerLogic.ts`，Vue 组件只剩渲染 + 键盘事件 + onClickOutside。理由：当前 web/ 测试栈无 jsdom + 无 @vue/test-utils（CLAUDE.md M18-P5 决策），引入这两个会让 Node 25 build 链多一层风险；剥离纯逻辑 = 20 case 直接 node 跑，组件层只靠 vite build / 真实 manual QA 验
+4. **TextElementVariableHints 挂载条件**：仅当 `text.indexOf('${var:') >= 0` 时才显示，避免对所有 Text 元素都挂一个空 hint UI。空判定 + debounce 都在组件内部，外层只 mount/unmount
+5. **store reactive 触发 watch**：`store.variables.size` 加入 watch source，让 G/F 任务的 store 写入（variable.add/remove/set patch）直接触发 live preview 重算。`variables` ref<Map> 自身 ref 重新赋值时 size 变化也是响应式
+
+### 测试结果
+
+- `cd web && npm run test`：63 test 全绿（28 旧 livepaint + 15 interpolator + 20 pickerLogic）/ 244ms
+- `cd web && ./node_modules/.bin/vite build`：通过 / 1772 modules / bundle 543 kB → 594.89 kB（+50 kB，含 picker + hints + interpolator + i18n keys，合理）
+- `vue-tsc --noEmit`：Node 25 已知坑跳过（CLAUDE.md M5 记录）；vite build 通过即代表 TS 编译无 fatal
+
+### 不在 P2-H 范围
+
+- VariablePanel / NewVariableDialog / ValueEditor / BindDialog（P2-G 负责）
+- wsClient.handleReady 接收 ready.variables 写入 store（P2-I 负责）
+- 后端任何改动（P2-F / P3 / P4）
+- chip 化 contentEditable 体验（0.4.1 独立 milestone）
+
+---
+
 ## 2026-05-19 · 0.4.0-P2-F：ready payload 加 variables 字段
 
 P2-F 单子任务完工：让浏览器首次连接 wall 时 ready WS 帧携带该 wall 当前引用变量的快照，免去额外 HTTP round-trip 初始化 VariableStore mirror。

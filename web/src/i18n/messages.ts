@@ -403,6 +403,28 @@ export const messages = {
             locked: '已锁定',
             wallStateTip: '可编辑 = 任何能进入这块画板的玩家都能改；已锁定 = 只有作者能解锁，其他人只读',
         },
+        // 0.4.0-P2-H：变量系统编辑器 picker / hints。
+        // panel / dialog / actions / errors 子段由 P2-G 负责（独立 commit），合并到同一 variables section。
+        variables: {
+            // P2-H：VariablePicker（TextElement 内插入变量）
+            picker: {
+                searchPlaceholder: '搜索变量',
+                emptyResults: '无匹配变量',
+                groupMine: '👤 我的',
+                groupPlugin: '📦 插件',
+                groupSystem: '🌐 系统',
+                groupPapi: '🔌 PAPI',
+                insertButtonLabel: '插入变量',
+                insertButtonTooltip: '插入变量占位符（或在文本中输入 ${ 触发）',
+                keyboardHint: '↑↓ 选择，Enter 确认，Esc 关闭',
+            },
+            // P2-H：TextElement 下方 live preview + 删除警告
+            hints: {
+                previewLabel: '预览',
+                deletedWarning: '变量 {names} 已被删除，引用此变量的文本将显示 "???"',
+                referencedHint: '此文本引用变量 {names}',
+            },
+        },
         // M24-A 新增：错误码 → 用户友好提示。M24-B 整修时挂到 wsClient / upload error handler
         errors: {
             // WebSocket / 协议级
@@ -887,6 +909,28 @@ export const messages = {
             unlocked: 'Editable',
             locked: 'Locked',
             wallStateTip: 'Editable = anyone who can open this wall can edit it; Locked = only the owner can unlock, everyone else is read-only',
+        },
+        // 0.4.0-P2-H: editor picker / hints subsections for the variable system.
+        // panel / dialog / actions / errors subsections are owned by P2-G (separate commit), merged into the same variables section.
+        variables: {
+            // P2-H: VariablePicker (insert variable into TextElement)
+            picker: {
+                searchPlaceholder: 'Search variables',
+                emptyResults: 'No matching variables',
+                groupMine: '👤 Mine',
+                groupPlugin: '📦 Plugins',
+                groupSystem: '🌐 System',
+                groupPapi: '🔌 PAPI',
+                insertButtonLabel: 'Insert variable',
+                insertButtonTooltip: 'Insert a variable placeholder (or type ${ in the text)',
+                keyboardHint: '↑↓ to choose, Enter to confirm, Esc to close',
+            },
+            // P2-H: TextElement live preview + deletion warning
+            hints: {
+                previewLabel: 'Preview',
+                deletedWarning: 'Variable {names} has been deleted. Text referencing it will show "???"',
+                referencedHint: 'This text references variable {names}',
+            },
         },
         // M24-A: error code → user-friendly message. Wire into wsClient / upload error handler in M24-B
         errors: {

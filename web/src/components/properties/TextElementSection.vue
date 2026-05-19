@@ -8,12 +8,15 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
-import { HelpCircle, Maximize2 } from 'lucide-vue-next';
+import { HelpCircle, Maximize2, Variable as VariableIcon } from 'lucide-vue-next';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
+import VariablePicker from '@/components/variables/VariablePicker.vue';
+import TextElementVariableHints from '@/components/variables/TextElementVariableHints.vue';
 import { layoutText, charAdvance, ASCENT_RATIO } from '@/render/TextLayout';
 import { ensureLoaded as ensureFontLoaded } from '@/render/FontLoader';
 import { useI18n } from '@/i18n';
+import { useProjectStore } from '@/stores/project';
 import type { TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
 // M23：字体下拉动态化 —— fetch /api/font/list 而非读硬编码 FONT_META 白名单。
@@ -55,13 +58,61 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const project = useProjectStore();
+
+// ---------- P2-H：变量 picker 集成 ----------
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const pickerOpen = ref(false);
+/** 触发 picker 时是 textarea 里输入 ${ 还是点击按钮（前者要把 ${ 删掉再插）。 */
+const triggeredByDollarBrace = ref(false);
+
+function openPickerFromButton() {
+    triggeredByDollarBrace.value = false;
+    pickerOpen.value = true;
+}
+
+function onPickerSelect(shortName: string) {
+    const placeholder = `\${var:${shortName}}`;
+    const ta = textareaRef.value;
+    if (!ta) {
+        pickerOpen.value = false;
+        triggeredByDollarBrace.value = false;
+        return;
+    }
+    let start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? start;
+    if (triggeredByDollarBrace.value && start >= 2 && ta.value.substring(start - 2, start) === '${') {
+        start -= 2;
+    }
+    ta.setRangeText(placeholder, start, end, 'end');
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    pickerOpen.value = false;
+    triggeredByDollarBrace.value = false;
+    ta.focus();
+}
+
+function onPickerClose() {
+    pickerOpen.value = false;
+    triggeredByDollarBrace.value = false;
+}
 
 function onTextChange(field: string, ev: Event) {
     const v = (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
     // eager optimistic：文本类输入立即更新 local element，下面的 fitTextHeight 能读到最新内容
     (props.element as unknown as Record<string, unknown>)[field] = v;
     emit('updateDebounced', { [field]: v });
-    if (field === 'text') autoFitHeightDebounced();
+    if (field === 'text') {
+        autoFitHeightDebounced();
+        // 检测 caret 前 2 字符是 ${（用户刚刚 type 出来）→ 自动弹 picker
+        if (ev.target instanceof HTMLTextAreaElement) {
+            const ta = ev.target;
+            const caret = ta.selectionStart ?? 0;
+            if (caret >= 2 && ta.value.substring(caret - 2, caret) === '${') {
+                triggeredByDollarBrace.value = true;
+                pickerOpen.value = true;
+            }
+        }
+    }
 }
 
 const autoFitHeightDebounced = useDebounceFn(() => {
@@ -163,11 +214,40 @@ function patchGlow(partial: Partial<Glow>) {
       {{ t.properties.textHeader }}
     </summary>
     <div class="pt-1.5 space-y-2">
-      <label class="flex flex-col gap-0.5">
-        <span class="text-xs text-[color:var(--muted-foreground)]">text</span>
-        <textarea rows="2" class="hc-input font-mono resize-none" :value="element.text"
-                  @input="(e) => onTextChange('text', e)"></textarea>
-      </label>
+      <div class="hc-text-row">
+        <label class="flex flex-col gap-0.5">
+          <span class="text-xs text-[color:var(--muted-foreground)] flex items-center justify-between">
+            <span>text</span>
+            <Tooltip :text="t.variables.picker.insertButtonTooltip">
+              <button
+                type="button"
+                class="hc-var-btn"
+                :aria-label="t.variables.picker.insertButtonLabel"
+                @click="openPickerFromButton"
+              >
+                <VariableIcon class="size-3" />
+                <span>{{ t.variables.picker.insertButtonLabel }}</span>
+              </button>
+            </Tooltip>
+          </span>
+          <textarea
+            ref="textareaRef"
+            rows="2"
+            class="hc-input font-mono resize-none"
+            :value="element.text"
+            @input="(e) => onTextChange('text', e)"
+          ></textarea>
+        </label>
+        <!-- VariablePicker popover -->
+        <VariablePicker
+          v-if="pickerOpen"
+          :wall-id="project.wallId"
+          @select="onPickerSelect"
+          @close="onPickerClose"
+        />
+        <!-- live preview + 警告 -->
+        <TextElementVariableHints :text="element.text" :wall-id="project.wallId" />
+      </div>
       <!-- Fit content -->
       <div class="flex gap-2 pt-1">
         <Tooltip :text="t.properties.fitHeightTip">
@@ -364,5 +444,30 @@ textarea.hc-input {
     min-height: 2.5rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     resize: none;
+}
+
+/* P2-H：text 区 + VariablePicker popover 包装 */
+.hc-text-row {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.hc-var-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    font-size: 10px;
+    color: var(--muted-foreground);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+}
+.hc-var-btn:hover {
+    background: var(--accent);
+    color: var(--accent-foreground);
 }
 </style>
