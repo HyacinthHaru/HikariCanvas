@@ -32,6 +32,40 @@
 
 ---
 
+## 2026-05-19 · M27 Shift 等比锁 + 版本号 0.3.0-SNAPSHOT
+
+### Shift 等比锁
+
+`useDrawToCreate.ts` 加 `applyShiftLock(x1, y1, x2, y2, tool)`：
+- 圆 / 矩形 / 星：`s = max(|dx|, |dy|)`，终点 `(x1+sx·s, y1+sy·s)` 锁正方形 bbox
+- 线 / 箭头：`angle = atan2(dy,dx)`，snap 到最近 0/45/90/135° 倍数 → `(x1 + cos(α)·len, y1 + sin(α)·len)` 锁 8 向
+
+接入：
+- `DrawDrag` 加 `shiftLocked: boolean` 字段
+- `move(pos, shiftLocked=false)` 签名扩展；CanvasView `drawMove(pos, isShiftDown.value)` 接 M17.4 已有的全局 isShiftDown ref（snapManager 同款）
+- `drawPreview` computed 应用 applyShiftLock 实时反馈视觉
+- `end()` 提交时根据 shiftLocked 标志决定用 raw 或 locked 终点
+
+### 版本号
+
+`0.2.0-SNAPSHOT → 0.3.0-SNAPSHOT`：累积 M22(Material Symbols 留)→M27 间大量 feature（20 字体扩充 / Live Paint / 图标库 / 主题 / 字体 advance 精确化等），符合 minor 推进语义。
+
+- `build.gradle.kts` allprojects
+- `web/package.json`
+- `paper-plugin.yml`
+
+仍 SNAPSHOT pre-release；契约规则锚定 stable ≥1.0.0 边界（data-model.md §6.6 不动）。
+
+### 验证
+
+`vite build` 通过；后端无改动（前端 only feature）；CLAUDE.md 里程碑加 M27 ✅。
+
+### 关联文件
+
+`web/src/composables/useDrawToCreate.ts` / `web/src/components/layout/CanvasView.vue` / `build.gradle.kts` / `web/package.json` / `plugin/src/main/resources/paper-plugin.yml` / `CLAUDE.md` / `docs/journal.md`。
+
+---
+
 ## 2026-05-18 · M26-C PathParser 扩展 H/V/A/S/T（FA icon MC 渲染根因）
 
 ### 用户报告 + 根因

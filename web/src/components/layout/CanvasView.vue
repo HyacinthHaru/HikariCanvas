@@ -464,7 +464,7 @@ function onStageMouseMove(ev: StageEvt): void {
         hoveredGap.value = livePaint.findGapAt(pos.x, pos.y);
         return;
     }
-    if (drawMove(pos)) return;
+    if (drawMove(pos, isShiftDown.value)) return;  // M27：Shift 锁等比传给绘制
     marqueeMove(pos);
 }
 
