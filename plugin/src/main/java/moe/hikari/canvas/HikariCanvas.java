@@ -37,6 +37,8 @@ import moe.hikari.canvas.template.TemplateRegistry;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.preview.TemplatePreviewService;
 import moe.hikari.canvas.template.preview.WallPreviewService;
+import moe.hikari.canvas.variable.VariableStore;
+import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -88,6 +90,9 @@ public final class HikariCanvas extends JavaPlugin {
     private UploadHandler uploadHandler;
     private TemplateRepo templateRepo;
     private TemplatePublisher templatePublisher;
+    // 0.4.0-P1-A：变量系统底座（VariableStore + user_variables 持久化）。
+    // wallDirtyCallback 暂为 noop，待 0.4.0-P1-B 接入 ProjectionThrottler。
+    private VariableStore variableStore;
     private volatile HikariCanvasConfig config;
 
     @Override
@@ -247,6 +252,13 @@ public final class HikariCanvas extends JavaPlugin {
         if (config.autoReloadTemplatesOnStartup) {
             templateRegistry.reload();
         }
+        // 0.4.0-P1-A：变量系统底座。DAO + Store + 启动期 loadFromDb。
+        // wallDirtyCallback 暂占位 noop —— B 任务接入 ProjectionThrottler 后注入真 hook。
+        UserVariableDao userVariableDao = new UserVariableDao(getLogger(), database.jdbi());
+        variableStore = new VariableStore(userVariableDao, wallId -> { /* B 任务接 ProjectionThrottler#dirty */ });
+        variableStore.loadFromDb();
+        getLogger().info("VariableStore: " + variableStore.size() + " user variable(s) loaded");
+
         // M14：模板元数据 DAO + 创意工坊协调器
         templateRepo = new TemplateRepo(getLogger(), database.jdbi());
         TemplateLoader publisherYamlLoader = new TemplateLoader();
@@ -341,6 +353,9 @@ public final class HikariCanvas extends JavaPlugin {
 
     /** 供命令侧用；返回 null 表示插件还没 onEnable。 */
     public HikariCanvasConfig config() { return config; }
+
+    /** 0.4.0-P1-A：供 B / C / D / E 任务取 VariableStore 单例。 */
+    public VariableStore getVariableStore() { return variableStore; }
 
     @Override
     public void onDisable() {

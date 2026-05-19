@@ -5,6 +5,86 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P1-A：VariableStore 核心 + V011 user_variables 持久化
+
+0.4.0 动态接入路线 P1 阶段的"底座"——四类数据源（user / plugin / system / papi）共用的内存变量表
++ 用户变量 SQLite 持久化。**仅核心类**，WS 协议路由（B）、Compositor 替换（C）、权限节点（D）、threading
+daemon（E）由后续 agent 接入；P1-A 暴露的公共 API 是后续任务的契约。
+
+### 主要变更
+
+- **新包** `moe.hikari.canvas.variable`：
+  - `VarType.java` — enum（STRING / NUMBER / BOOLEAN / COLOR）
+  - `Variable.java` — immutable record（namespace / key / type / defaultValue / currentValue /
+    updatedAt / ttl / source / referencedByWalls）+ `fullName()` / `isStale(now)` helper
+  - `VariablePatch.java` — record（@Nullable VarType type, @Nullable String defaultValue），
+    `variable.update` op 用
+  - `VariableUpdate.java` — record（@Nullable String value, @Nullable Duration ttl），
+    Push API 批量接口预留（P4 落地）
+  - `VariableException.java` — 8 错误码（VARIABLE_NOT_FOUND / VARIABLE_EXISTS /
+    VARIABLE_TYPE_MISMATCH / VARIABLE_NAMESPACE_DENIED / VARIABLE_NAME_INVALID /
+    VARIABLE_VALUE_TOO_LONG / QUOTA_EXCEEDED / TTL_INVALID）
+  - `VariableStore.java` — 核心类。`ConcurrentHashMap` 主表 + namespace 桶 + per-wall 倒排索引；
+    `compute` / `computeIfPresent` 保证原子；`create` / `update` / `setValue` / `delete` / `bind` /
+    `get` / `listAll` / `listByNamespace` / `listByWall` / `markWallReferences` /
+    `clearWallReferences` / `loadFromDb` + 校验 + 配额 + TTL ≥ 100ms
+
+- **fullName 编码决策固化**：user 变量内部 namespace = `user:<wallId>`（冒号分隔 wallId），
+  避免与普通插件 namespace `user/X` 冲突。对外 placeholder 文本仍写 `${var:user/红队比分}`，
+  由 Compositor（C 任务）注入 wallId。namespace 校验 regex `[a-zA-Z_][a-zA-Z0-9_:\-]*`
+  兼容 wallId 形如 `w-3a17b2c1` 的连字符。
+
+- **DB schema V011 + DAO**：
+  - `plugin/src/main/resources/db-migrations/V011__user_variables.sql` — 按 `docs/data-model.md §2.8`
+    schema：PRIMARY KEY (wall_id, name) + FK CASCADE
+  - `plugin/src/main/java/moe/hikari/canvas/storage/UserVariableDao.java` — JDBI DAO
+    （upsert / delete / deleteByWall / loadAll / listByWall + 事务感知 *On(Handle) 重载）。
+    `UserVariableDao` 由 final → 普通 class，让单测 fake 子类化覆盖
+
+- **MigrationRunner V010/V011 补注册**：M16-P6 落了 V010 SQL 但漏注册到 `MIGRATIONS` list；
+  本次顺手补上 V010 + 新 V011（V009 跳号留空）
+
+- **HikariCanvas onEnable 集成**：在 templateRepo 装配前构造 `UserVariableDao` + `VariableStore`，
+  `loadFromDb()` 启动期加载，wallDirtyCallback 暂为 noop lambda（B 任务接入 ProjectionThrottler#dirty）；
+  新 getter `getVariableStore()` 供 B/C/D/E 取单例
+
+- **单测** `VariableStoreTest.java`（29 cases）：CRUD / list / Wall dirty 触发 / loadFromDb /
+  边界（非法 ns/key / 超长值 / sub-min TTL / 负 TTL / 永久 TTL=0 / per-namespace quota 1000） /
+  isStale TTL 语义。用内存 fake DAO（`FakeUserVariableDao extends UserVariableDao`），不触真 SQLite。
+  `:plugin:test` 423 → 全绿
+
+### 关键决策记录
+
+1. **VariableStore 单例 owner = main plugin 类**（HikariCanvas#variableStore）；B/C/D/E 走
+   `plugin.getVariableStore()` 不重复构造
+2. **dirty 触发时机**：setValue / update / delete / bind 触发对当前 referencedByWalls 集合内 wall
+   的 callback；**create 不触发**（变量刚建无 referencer）
+3. **持久化时机**：每次 user 变量 create / update / setValue / bind 都 upsert 一次；非 user namespace
+   纯内存态，重启不留（Push 模式自然属性）
+4. **倒排索引精确性**：`markWallReferences` 用 set diff 维护——新加入加进 bucket + 写到 Variable
+   record；离开的 remove + 反向清掉。每次 Compositor 渲染前调一次保证精确
+5. **loadFromDb 容错**：DB 里出现 schema 漂 / 非法 key / 非法 namespace 的行直接 skip 而非
+   抛出——防一坏全坏拖垮启动；DB type 列 unknown 值降级 STRING
+
+### 关联文件
+
+新建：
+- `plugin/src/main/java/moe/hikari/canvas/variable/VarType.java`
+- `plugin/src/main/java/moe/hikari/canvas/variable/Variable.java`
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariablePatch.java`
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableUpdate.java`
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableException.java`
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableStore.java`
+- `plugin/src/main/java/moe/hikari/canvas/storage/UserVariableDao.java`
+- `plugin/src/main/resources/db-migrations/V011__user_variables.sql`
+- `plugin/src/test/java/moe/hikari/canvas/variable/VariableStoreTest.java`
+
+修改：
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（imports + 字段 + 构造 + getter）
+- `plugin/src/main/java/moe/hikari/canvas/storage/MigrationRunner.java`（V010 + V011 注册）
+
+---
+
 ## 2026-05-17 · M20 Phase 5+6（baseline 重建 + docs 收尾）
 
 ### M20.5 baseline 重建

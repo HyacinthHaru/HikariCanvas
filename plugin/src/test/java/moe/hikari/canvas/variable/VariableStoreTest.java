@@ -1,0 +1,384 @@
+package moe.hikari.canvas.variable;
+
+import moe.hikari.canvas.storage.UserVariableDao;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.logging.Logger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * 0.4.0-P1-A：VariableStore 单测。
+ *
+ * <p>用 {@link FakeUserVariableDao} 在内存里跟踪 upsert / delete 调用——不碰真 SQLite，
+ * 单测跑 < 100ms。schema 行为由 V011 SQL + 集成测试覆盖（B 任务范围）。</p>
+ */
+class VariableStoreTest {
+
+    private FakeUserVariableDao fakeDao;
+    private List<String> dirtyWalls;
+    private VariableStore store;
+
+    @BeforeEach
+    void setUp() {
+        fakeDao = new FakeUserVariableDao();
+        dirtyWalls = new ArrayList<>();
+        store = new VariableStore(fakeDao, dirtyWalls::add);
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  基本 CRUD
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void create_and_get_returnsVariable() {
+        Variable v = store.create("bedwars", "red_score", VarType.NUMBER, "0", "BedWarsPlugin");
+        assertEquals("bedwars", v.namespace());
+        assertEquals("red_score", v.key());
+        assertEquals(VarType.NUMBER, v.type());
+        assertEquals("0", v.defaultValue());
+        assertNull(v.currentValue());
+        assertEquals("BedWarsPlugin", v.source());
+        assertEquals(0L, v.ttl());
+
+        var fetched = store.get("bedwars/red_score").orElseThrow();
+        assertEquals(v.fullName(), fetched.fullName());
+    }
+
+    @Test
+    void create_userNamespacePersists() {
+        // user:<wallId> 形式触发持久化
+        store.create("user:w-deadbeef", "red_score", VarType.NUMBER, "0", null);
+        assertEquals(1, fakeDao.upserts.size());
+        var row = fakeDao.upserts.get(0);
+        assertEquals("w-deadbeef", row.wallId);
+        assertEquals("red_score", row.name);
+        assertEquals(VarType.NUMBER, row.type);
+        assertEquals("0", row.defaultValue);
+    }
+
+    @Test
+    void create_pluginNamespaceDoesNotPersist() {
+        store.create("bedwars", "red_score", VarType.NUMBER, "0", "BedWarsPlugin");
+        assertTrue(fakeDao.upserts.isEmpty(),
+                "non-user namespace should not be persisted");
+    }
+
+    @Test
+    void create_duplicateThrowsVariableExists() {
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        var ex = assertThrows(VariableException.class,
+                () -> store.create("bedwars", "score", VarType.STRING, null, null));
+        assertEquals(VariableException.Code.VARIABLE_EXISTS, ex.code());
+    }
+
+    @Test
+    void update_changesTypeAndDefault() {
+        store.create("user:w-1", "score", VarType.NUMBER, "0", null);
+        Variable updated = store.update("user:w-1/score",
+                new VariablePatch(VarType.STRING, "N/A"));
+        assertEquals(VarType.STRING, updated.type());
+        assertEquals("N/A", updated.defaultValue());
+        // persist follow-up
+        assertEquals(2, fakeDao.upserts.size());  // create + update
+        var lastRow = fakeDao.upserts.get(fakeDao.upserts.size() - 1);
+        assertEquals("N/A", lastRow.defaultValue);
+    }
+
+    @Test
+    void update_missingThrowsNotFound() {
+        var ex = assertThrows(VariableException.class,
+                () -> store.update("ghost/x", new VariablePatch(VarType.STRING, "v")));
+        assertEquals(VariableException.Code.VARIABLE_NOT_FOUND, ex.code());
+    }
+
+    @Test
+    void setValue_updatesCurrent() {
+        store.create("bedwars", "score", VarType.NUMBER, "0", null);
+        store.setValue("bedwars/score", "5", Duration.ofMinutes(5));
+        var v = store.get("bedwars/score").orElseThrow();
+        assertEquals("5", v.currentValue());
+        assertEquals(Duration.ofMinutes(5).toMillis(), v.ttl());
+    }
+
+    @Test
+    void setValue_nullTtlKeepsExisting() {
+        store.create("bedwars", "score", VarType.NUMBER, "0", null);
+        store.setValue("bedwars/score", "5", Duration.ofMinutes(5));
+        store.setValue("bedwars/score", "7", null);
+        var v = store.get("bedwars/score").orElseThrow();
+        assertEquals("7", v.currentValue());
+        assertEquals(Duration.ofMinutes(5).toMillis(), v.ttl(),
+                "null ttl should preserve previous ttl");
+    }
+
+    @Test
+    void delete_removesAndCleansIndex() {
+        store.create("user:w-1", "v", VarType.STRING, null, null);
+        store.markWallReferences("w-1", Set.of("user:w-1/v"));
+        store.delete("user:w-1/v");
+        assertTrue(store.get("user:w-1/v").isEmpty());
+        // user 变量级联删 DB
+        assertEquals(1, fakeDao.deletes.size());
+        assertEquals("w-1", fakeDao.deletes.get(0).wallId);
+        // wall 倒排索引也清掉
+        assertFalse(store.referencedFullNamesByWall("w-1").contains("user:w-1/v"));
+    }
+
+    @Test
+    void delete_missingThrowsNotFound() {
+        assertThrows(VariableException.class, () -> store.delete("ghost/x"));
+    }
+
+    @Test
+    void bind_updatesSourceAndPersistsForUserNamespace() {
+        store.create("user:w-1", "score", VarType.NUMBER, "0", null);
+        store.bind("user:w-1/score", "BedWarsPlugin");
+        var v = store.get("user:w-1/score").orElseThrow();
+        assertEquals("BedWarsPlugin", v.source());
+        // upsert 走到 DB 一次（create）+ 一次（bind）
+        assertEquals(2, fakeDao.upserts.size());
+        assertEquals("BedWarsPlugin", fakeDao.upserts.get(1).boundTo);
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  list 系列
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void listByNamespace_returnsOnlyMatching() {
+        store.create("bedwars", "a", VarType.STRING, null, null);
+        store.create("bedwars", "b", VarType.STRING, null, null);
+        store.create("trains", "x", VarType.STRING, null, null);
+        assertEquals(2, store.listByNamespace("bedwars").size());
+        assertEquals(1, store.listByNamespace("trains").size());
+        assertEquals(0, store.listByNamespace("absent").size());
+    }
+
+    @Test
+    void listByWall_followsMarkedReferences() {
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        store.create("system", "online", VarType.NUMBER, null, null);
+        store.markWallReferences("w-1", Set.of("bedwars/score", "system/online"));
+        store.markWallReferences("w-2", Set.of("system/online"));
+        assertEquals(2, store.listByWall("w-1").size());
+        assertEquals(1, store.listByWall("w-2").size());
+        assertEquals(0, store.listByWall("w-empty").size());
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Wall dirty 触发
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void setValue_triggersWallDirtyCallback() {
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        store.markWallReferences("w-A", Set.of("bedwars/score"));
+        store.markWallReferences("w-B", Set.of("bedwars/score"));
+
+        dirtyWalls.clear();
+        store.setValue("bedwars/score", "5", null);
+        assertEquals(2, dirtyWalls.size(),
+                "both referencing walls should be marked dirty");
+        assertTrue(dirtyWalls.contains("w-A"));
+        assertTrue(dirtyWalls.contains("w-B"));
+    }
+
+    @Test
+    void create_doesNotTriggerDirtyCallback() {
+        // 刚创建无 referencer，按设计不触发 dirty
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        assertTrue(dirtyWalls.isEmpty(),
+                "create should not trigger dirty (no referencers yet)");
+    }
+
+    @Test
+    void clearWallReferences_removesFromInvertedIndex() {
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        store.markWallReferences("w-1", Set.of("bedwars/score"));
+        store.clearWallReferences("w-1");
+        // 之后 setValue 不再触发 w-1
+        store.setValue("bedwars/score", "x", null);
+        assertFalse(dirtyWalls.contains("w-1"));
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  loadFromDb
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void loadFromDb_rehydratesUserNamespaceVariables() {
+        // 重启场景：DAO 里有 1 个旧变量，store 从空开始。
+        // 注：key 受 [a-zA-Z0-9_.-]+ 校验，用 ASCII；defaultValue / currentValue 是任意 UTF-8 字符串。
+        fakeDao.preload.add(new UserVariableDao.Row(
+                "w-saved", "announcement", VarType.STRING, "默认公告", "Hello", null,
+                10_000L, 20_000L));
+        store.loadFromDb();
+        var v = store.get("user:w-saved/announcement").orElseThrow();
+        assertEquals("默认公告", v.defaultValue());
+        assertEquals("Hello", v.currentValue());
+        assertEquals(VarType.STRING, v.type());
+    }
+
+    @Test
+    void loadFromDb_skipsBadRows() {
+        fakeDao.preload.add(new UserVariableDao.Row(
+                "w-1", "valid", VarType.STRING, null, null, null, 1L, 1L));
+        // 非法 key（含空格）
+        fakeDao.preload.add(new UserVariableDao.Row(
+                "w-1", "bad key with space", VarType.STRING, null, null, null, 1L, 1L));
+        store.loadFromDb();
+        assertEquals(1, store.size(), "bad row should be skipped");
+        assertNotNull(store.get("user:w-1/valid").orElse(null));
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  边界 / 错误码
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void create_invalidNamespaceThrowsNameInvalid() {
+        var ex = assertThrows(VariableException.class,
+                () -> store.create("123-bad", "x", VarType.STRING, null, null));
+        assertEquals(VariableException.Code.VARIABLE_NAME_INVALID, ex.code());
+    }
+
+    @Test
+    void create_invalidKeyThrowsNameInvalid() {
+        var ex = assertThrows(VariableException.class,
+                () -> store.create("bedwars", "bad key", VarType.STRING, null, null));
+        assertEquals(VariableException.Code.VARIABLE_NAME_INVALID, ex.code());
+    }
+
+    @Test
+    void create_oversizeDefaultThrowsValueTooLong() {
+        String huge = "x".repeat(VariableStore.MAX_VALUE_LENGTH + 1);
+        var ex = assertThrows(VariableException.class,
+                () -> store.create("bedwars", "k", VarType.STRING, huge, null));
+        assertEquals(VariableException.Code.VARIABLE_VALUE_TOO_LONG, ex.code());
+    }
+
+    @Test
+    void setValue_oversizeThrowsValueTooLong() {
+        store.create("bedwars", "k", VarType.STRING, null, null);
+        String huge = "x".repeat(VariableStore.MAX_VALUE_LENGTH + 1);
+        var ex = assertThrows(VariableException.class,
+                () -> store.setValue("bedwars/k", huge, null));
+        assertEquals(VariableException.Code.VARIABLE_VALUE_TOO_LONG, ex.code());
+    }
+
+    @Test
+    void setValue_subMinTtlThrowsTtlInvalid() {
+        store.create("bedwars", "k", VarType.STRING, null, null);
+        var ex = assertThrows(VariableException.class,
+                () -> store.setValue("bedwars/k", "v", Duration.ofMillis(50)));
+        assertEquals(VariableException.Code.TTL_INVALID, ex.code());
+    }
+
+    @Test
+    void setValue_zeroTtlIsAllowedAsPermanent() {
+        store.create("bedwars", "k", VarType.STRING, null, null);
+        store.setValue("bedwars/k", "v", Duration.ZERO);
+        assertEquals(0L, store.get("bedwars/k").orElseThrow().ttl());
+    }
+
+    @Test
+    void setValue_negativeTtlThrowsTtlInvalid() {
+        store.create("bedwars", "k", VarType.STRING, null, null);
+        var ex = assertThrows(VariableException.class,
+                () -> store.setValue("bedwars/k", "v", Duration.ofMillis(-10)));
+        assertEquals(VariableException.Code.TTL_INVALID, ex.code());
+    }
+
+    @Test
+    void create_perNamespaceQuotaTriggers() {
+        // 不实际跑 1000 个；改测 size() 行为：填满 1000 后再 create 抛配额
+        // 直接测边界：分配比 quota 多 1，最后一次抛
+        int quota = VariableStore.MAX_PER_NAMESPACE;
+        for (int i = 0; i < quota; i++) {
+            store.create("bedwars", "k" + i, VarType.STRING, null, null);
+        }
+        var ex = assertThrows(VariableException.class,
+                () -> store.create("bedwars", "overflow", VarType.STRING, null, null));
+        assertEquals(VariableException.Code.QUOTA_EXCEEDED, ex.code());
+    }
+
+    @Test
+    void markWallReferences_updatesReferencedByWallsField() {
+        store.create("bedwars", "score", VarType.NUMBER, null, null);
+        store.markWallReferences("w-1", Set.of("bedwars/score"));
+        var v = store.get("bedwars/score").orElseThrow();
+        assertTrue(v.referencedByWalls().contains("w-1"));
+
+        // 再次 mark 不含 w-1 → 应清出
+        store.markWallReferences("w-1", Set.of());
+        v = store.get("bedwars/score").orElseThrow();
+        assertFalse(v.referencedByWalls().contains("w-1"));
+    }
+
+    @Test
+    void variable_isStale_zeroTtlIsPermanent() {
+        Variable v = new Variable("ns", "k", VarType.STRING, null, null,
+                0L, 0L, null, Set.of());
+        assertFalse(v.isStale(Long.MAX_VALUE));
+    }
+
+    @Test
+    void variable_isStale_ttlExceeded() {
+        long now = System.currentTimeMillis();
+        Variable v = new Variable("ns", "k", VarType.STRING, null, null,
+                now - 60_000L, 30_000L, null, Set.of());
+        assertTrue(v.isStale(now));
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Helper：内存 fake DAO
+    // ──────────────────────────────────────────────────────────
+
+    /**
+     * 极简 fake：不连真 SQLite，把 upsert / delete 调用录到 list 给断言用，preload
+     * 列表喂给 loadAll() 模拟"重启后 DB 里已有数据"场景。
+     */
+    private static final class FakeUserVariableDao extends UserVariableDao {
+        record UpsertCall(String wallId, String name, VarType type,
+                          String defaultValue, String currentValue, String boundTo,
+                          long createdAt, long updatedAt) {}
+        record DeleteCall(String wallId, String name) {}
+
+        final List<UpsertCall> upserts = new ArrayList<>();
+        final List<DeleteCall> deletes = new ArrayList<>();
+        final List<Row> preload = new ArrayList<>();
+
+        FakeUserVariableDao() {
+            super(Logger.getLogger("test"), null);
+        }
+
+        @Override
+        public void upsert(String wallId, String name, VarType type,
+                           String defaultValue, String currentValue, String boundTo,
+                           long createdAt, long updatedAt) {
+            upserts.add(new UpsertCall(wallId, name, type, defaultValue,
+                    currentValue, boundTo, createdAt, updatedAt));
+        }
+
+        @Override
+        public void delete(String wallId, String name) {
+            deletes.add(new DeleteCall(wallId, name));
+        }
+
+        @Override
+        public List<Row> loadAll() {
+            return new ArrayList<>(preload);
+        }
+    }
+}

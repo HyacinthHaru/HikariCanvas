@@ -40,7 +40,10 @@ public final class MigrationRunner {
             new Migration(5, "db-migrations/V005__walls_unified.sql"),
             new Migration(6, "db-migrations/V006__walls_protocol_version.sql"),
             new Migration(7, "db-migrations/V007__image_uploads.sql"),
-            new Migration(8, "db-migrations/V008__templates.sql")
+            new Migration(8, "db-migrations/V008__templates.sql"),
+            // V009 跳号（迭代过程中预留，未落地脚本）。
+            new Migration(10, "db-migrations/V010__remove_refcount.sql"),
+            new Migration(11, "db-migrations/V011__user_variables.sql")
     );
 
     private final Jdbi jdbi;
