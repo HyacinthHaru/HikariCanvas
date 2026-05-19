@@ -5,6 +5,97 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P2 收尾：编辑器基础 UX 完工
+
+P2 三子任务（F/G/H）并行实施完毕 + I 主控收尾。**4 commit / ~5500 行净增（前端 ~5000 +
+后端 ~330）/ 487 backend + 73 frontend test 全绿 / bundle 620 kB（gzip 190 kB）**。
+
+### Phase commit 时间线
+
+| Commit | Task | 范围 |
+|---|---|---|
+| `46eb6e9` | P2-F | ready payload 加 variables 字段（VariableDto 防外泄 + 7 单测） |
+| `41c2ba3` | P2-H | VariablePicker + interpolator.ts + TextElement 集成 + live preview（35 vitest） |
+| `c7dd01f` | P2-G | VariablePanel + NewVariableDialog + ValueEditor + BindDialog + useLongPressIncrement（10 vitest） |
+| `<本 commit>` | P2-I | wsClient.handleReady 接 variables / protocol.ts ReadyPayload 扩展 / CLAUDE.md + journal 收尾 |
+
+### P1 → P2 端到端可演示路径（demo 验证）
+
+1. 浏览器打开编辑器 → TopBar 出现 `Variable` 图标按钮
+2. 点击 → 右侧 380px drawer 弹出 VariablePanel，4 分组（我的 / 插件 / 系统 / PAPI）
+3. `[+ 新建变量]` → NewVariableDialog modal → name="red_score" / type=NUMBER / default="0" → 提交
+4. VariablePanel "我的变量" 段出现 "user/red_score" 行，type chip + 当前值 "0"
+5. 单击 `[+1]` → 当前值 "1"（state.patch 回 → store mirror 更新 → UI 自动）
+6. 长按 `[+1]` ~1s → 当前值跳到 ~14（300ms 启动 + 50ms 重复）
+7. 选中 TextElement → RightPanel textarea 旁出现 `[变量]` 按钮
+8. 点按钮 → textarea 下方弹 VariablePicker，列表显 "user/red_score"
+9. 选中 → textarea 插入 `${var:user/red_score}` 到光标位置
+10. textarea 下方 live preview 显 "14"（200ms debounce 后）
+11. 在 textarea 输入 `${` → Picker 自动弹（双触发模式）
+12. VariablePanel 删除 "red_score" → TextElementVariableHints 红色 banner 提示 + preview "???"
+13. wall 切换重连 → variables store reset + 新 wall 的 variables 从 ready payload 初始化
+
+### 关键架构落地
+
+1. **首次初始化通道 = ready payload 内嵌 variables**（F 决策，dynamic-data.md §3.3 之外的实施层选项）：
+   不引入新 HTTP `/api/variable/list` 端点（留 P3 编辑器自动补全 list-all-namespaces 用），
+   首次连接走 WS ready 帧一次性传该 wall 全部变量 → 无额外 round-trip + 共享 WS 鉴权 +
+   后续增量走 state.patch `/variables/<encoded>` 路径
+2. **VariableDto 防外泄**（F）：序列化层独立 record，主动剔除 `referencedByWalls`
+   （倒排索引内部状态，包含 peer wallId 元信息），保证跨 wall 隔离 + 不泄露其他 wall 引用关系
+3. **drawer 独立于 RightPanel**（G 决策）：380px fixed 右侧 z-50，与 RightPanel 元素选中态完全解耦——
+   管理变量时同时仍能看 wall canvas + 选中的 TextElement（用户已答 4 决策点之一）
+4. **长按累加双段式**（G）：mousedown 立即 onTick(单击场景 +1)→ setTimeout(300ms) →
+   setInterval(50ms)。pointercancel + blur + onBeforeUnmount 三重清理防卡死（沿用 M27 spaceSavedTool 模式）
+5. **Picker 双触发**（H 决策）：按钮主入口 + textarea input 检测 caret 前 2 字符 `${` 自动弹（用户已答 4 决策之一）。
+   选中插入用 native `textarea.setRangeText`（支持 undo / redo 栈）+ dispatchEvent 同步 v-model；
+   `${` 触发场景先回退 2 字符吃掉触发符
+6. **interpolator 双端镜像**（H）：前端 `web/src/variable/interpolator.ts` 与后端
+   `VariableInterpolator.java` regex / fallback 4 档 / wallId 注入算法 1:1 一致（双端单测平行覆盖）；
+   前端额外暴露 `missingFullNames` Set 给 live preview 删除警告 banner 用
+7. **i18n 并行撞车解决**（G + H + I）：G 写 panel / dialog / actions / groups 子段，
+   H 写 picker / hints 子段，commit 时序导致 H 先 main（41c2ba3）覆盖了 G 的本地未提交工作；
+   G commit 时人工合并两段子段到同一 `variables` section（zh + en 各一份），最终 messages.ts
+   含完整 variables section ~70 个 key
+8. **变量删除不级联**（dynamic-data.md §11 固化 + 用户已答 4 决策之一）：DB 表 FK CASCADE
+   只清 user_variables 行，不动 element；前端 TextElementVariableHints 检测 missingFullNames
+   红色 banner 提示 + live preview 显示 "???" fallback；用户自行决定改文本或重建变量
+
+### 协议契约 → 代码 1:1 对照
+
+| ready 帧字段 | 来源 | 序列化 |
+|---|---|---|
+| `payload.variables: VariableDto[]` | `VariableStore.listByWall(wallId)` | Jackson NON_NULL inclusion；referencedByWalls 不出现 |
+
+ProjectState 不变（不内嵌 variables，per-wall global 模型不变）。
+
+### 工时核对
+
+| Task | 估时 | 实际 |
+|---|---:|---:|
+| P2-F | 3h | ~50min（含单测 / docs / commit） |
+| P2-G | 14h | ~110min（含合并 i18n / commit） |
+| P2-H | 12h | ~90min（含双端镜像测 / commit） |
+| P2-I | 1h | ~20min（hookup + 全测 + journal + commit） |
+| **总** | **30h** | **agent 并行 wall-clock ~3h**（vs 序列估时 30h，并行节约 ~10×） |
+
+### 不做（留 P3-P5 / 0.4.1 / 0.5.0+）
+
+- chip 编辑器（Notion-style contentEditable + 蓝色 pill） → 0.4.1 独立 milestone
+- 光标精确锚定 Picker（弹在 caret 上方而非 textarea 下方） → v1.x（需 textarea-caret-position 库）
+- 实际 system / PAPI / 插件变量数据 → P3（Provider 实施后才有数据，P2 仅搭 UI empty state）
+- 变量绑定到插件 namespace 的实际下拉 → P4（NamespaceInfo 注册中心后才有数据）
+- 格式化语法 `${var:X|format=HH:mm}` → 0.5.0
+- 批量编辑 / 导入导出 → P5
+
+### 下一步
+
+**P3 启动等用户通知**（内置 Provider 20h：13 个系统变量 + Scoreboard 桥接 + PAPI 桥接 +
+Manual Schedule 兜底列车）。P2 端到端 demo 现在已可演示（用户创建 user 变量 + 实时改值 +
+Wall 文本随变更跟随重画），P3 后将自动出现 server.time / wall.alias / scoreboard / PAPI 等系统变量。
+
+---
+
 ## 2026-05-19 · 0.4.0-P2-G：VariablePanel + NewVariableDialog + ValueEditor + BindDialog + useLongPressIncrement
 
 P2-G 子任务：变量管理 UX 主路径。把后端 P1 已铺的 WS op + Pinia store 接到前端 UI——TopBar Variable 按钮 → 380px fixed drawer → 4 分组（我的 / 插件 / 系统 / PAPI）→ 行内 +/- / 改值 / 让插件接管 / 删除。

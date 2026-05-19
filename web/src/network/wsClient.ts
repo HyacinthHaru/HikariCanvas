@@ -291,6 +291,9 @@ export class WsClient {
         );
         // M6-D：缓存全量 TemplateSpec 列表，供 TemplateGallery 使用
         templates.setTemplates(payload.templates ?? []);
+        // 0.4.0-P2-I：用 ready payload 携带的 variables 快照一次性初始化 VariableStore mirror；
+        // 后续变更走 state.patch /variables/<encoded> 路径（见 applyVariablePatches）。
+        useVariableStore().initVariables(payload.variables ?? []);
         // rotate 过来的新 token 存 sessionStorage 供断线重连
         if (payload.reconnectToken) {
             try {

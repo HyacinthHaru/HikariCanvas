@@ -330,6 +330,8 @@ export interface ReadyPayload {
     selfUuid?: string;
     // M6-D：全量 TemplateSpec 列表（builtin + server-side templates）
     templates?: import('./template').TemplateSpec[];
+    // 0.4.0-P2-F：该 wall 当前所有变量快照（VariableDto 形式，referencedByWalls 已剔除）
+    variables?: import('./variable').Variable[];
 }
 
 // ---------- §6.1 error ----------
