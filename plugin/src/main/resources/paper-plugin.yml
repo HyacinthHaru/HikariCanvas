@@ -70,3 +70,24 @@ permissions:
   canvas.template.use-others:
     description: Apply user-templates owned by other players (workshop cross-user)
     default: op
+  canvas.var.read:
+    description: 查看变量列表与值
+    default: true
+  canvas.var.write.own:
+    description: 在自己的 wall 上创建 / 修改用户变量
+    default: true
+  canvas.var.write.any:
+    description: 在任意 wall 上修改用户变量（管理员）
+    default: op
+  canvas.var.delete.own:
+    description: 删除自己 wall 上的用户变量
+    default: true
+  canvas.var.delete.any:
+    description: 删除任意 wall 上的用户变量（管理员）
+    default: op
+  canvas.var.bind:
+    description: 把用户变量绑定到插件 namespace（敏感）
+    default: op
+  canvas.var.command:
+    description: 使用 /canvas var 命令族
+    default: op

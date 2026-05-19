@@ -5,6 +5,61 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P1-D：canvas.var.* 权限节点 + 前端 TS types + Pinia store + wsClient send
+
+P1 阶段"权限注册 + 前端协议契约"。后端 A/B/C/E 收口后，把 7 个 `canvas.var.*` 权限节点
+注册到 paper-plugin.yml；前端建立完整 TS 类型镜像 + Pinia VariableStore + wsClient 5 个
+`sendVariable*` 方法；state.patch 接收侧按 `/variables/` 前缀分拣到 VariableStore（而非
+ProjectState）；i18n 4 个错误码 + 切 wall 时 reset 钩子。
+
+### 主要变更
+
+- **paper-plugin.yml**：加 7 个权限节点 `canvas.var.{read,write.own,write.any,delete.own,delete.any,bind,command}`，
+  按 `docs/dynamic-data.md §9.1` 表格固化 default（write.own / read / delete.own = true；其他 = op）
+
+- **web/src/types/variable.ts**（新）：`VarType` union（STRING / NUMBER / BOOLEAN / COLOR）+
+  `Variable` interface（namespace / key / type / default / current / updatedAt / ttl / source）+
+  `VariablePatch` / `VariableUpdate` + `makeUserFullName / makeFullName / parseFullName` helper
+
+- **web/src/types/protocol.ts**：5 个新 payload type（VariableCreate/Update/Set/Delete/Bind）
+  + 4 个错误码注释（与后端 B 任务的 `VARIABLE_NOT_FOUND / EXISTS / TYPE_MISMATCH / NAMESPACE_DENIED` 映射）
+
+- **web/src/network/wsClient.ts**：
+  - 5 个 `sendVariable*` method（`sendWithAck` 走 ack，server-as-truth 不预测性 mutate）
+  - state.patch 接收侧按 `/variables/` 前缀分拣：`applyVariablePatches` 走 VariableStore，
+    其余仍走 `useProjectStore().applyPatch`
+  - JSON Pointer 解码（`~1` → `/`，`~0` → `~`）+ add/replace/remove 三 op 完整支持
+  - race 兜底：replace 但本地无该 var → log meta 跳过
+
+- **web/src/stores/variables.ts**（新）：Pinia setup store，`Map<fullName, Variable>` 内核 +
+  `set / get / remove / clear / reset` + `all` + `byNamespace` computed
+  （UI 在 P2 阶段消费）
+
+- **web/src/stores/project.ts**：`reset()` 加 `useVariableStore().reset()`——切 wall 时
+  全局变量 mirror 一起清；重连同 wall 不进 reset 分支（wsClient.handleReady 的 wallId diff 判断）
+
+- **web/src/i18n/messages.ts**：4 个错误码翻译（zh-CN / en 各一组）
+
+### 验证
+
+- `vite build` 通过：424ms / 583 kB bundle（gzip 180 kB）+ 33.75 kB livePaintWorker
+- `npm run test`（vitest）：4 文件 / 28 case 全绿 / 152ms（M18 + Live Paint 基线无漂移）
+
+### 关联文件
+
+新建：
+- `web/src/types/variable.ts`
+- `web/src/stores/variables.ts`
+
+修改：
+- `plugin/src/main/resources/paper-plugin.yml`
+- `web/src/types/protocol.ts`
+- `web/src/network/wsClient.ts`
+- `web/src/stores/project.ts`
+- `web/src/i18n/messages.ts`
+
+---
+
 ## 2026-05-19 · 0.4.0-P1-B：variable.* WS 协议 + EditSession 集成 + dirty callback
 
 P1 阶段"WS 协议路由"。把 Task A 交付的 `VariableStore` 串入 WS edit op 路径——

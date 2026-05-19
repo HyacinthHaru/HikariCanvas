@@ -4,11 +4,14 @@ import type {
     ErrorPayload,
     StatePatchPayload,
     StateSnapshotPayload,
+    PatchOp,
 } from '@/types/protocol';
+import type { Variable, VariablePatch, VarType } from '@/types/variable';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
+import { useVariableStore } from '@/stores/variables';
 import { messages } from '@/i18n/messages';
 
 /**
@@ -154,6 +157,39 @@ export class WsClient {
         });
     }
 
+    // ---------- 变量系统（0.4.0-P1-D，协议契约见 docs/protocol.md §5.11）----------
+    //
+    // 5 个 op 都走 ack 通道，副作用（VariableStore mirror）由后端发 state.patch 推回；
+    // send 方法本身仅负责发送，不预测性 mutate 本地 store——保持 server-as-truth。
+
+    /**
+     * `variable.create`：在当前 wall 上创建用户变量。
+     * 后端自动加 {@code user:<wallId>/} 前缀。
+     */
+    sendVariableCreate(name: string, type: VarType, defaultValue?: string | null): Promise<void> {
+        return this.sendWithAck('variable.create', { name, type, defaultValue }).then(() => undefined);
+    }
+
+    /** `variable.update`：改 user/* 变量的 type / defaultValue。 */
+    sendVariableUpdate(fullName: string, patch: VariablePatch): Promise<void> {
+        return this.sendWithAck('variable.update', { fullName, patch }).then(() => undefined);
+    }
+
+    /** `variable.set`：玩家手动改 user/* 变量当前值。 */
+    sendVariableSet(fullName: string, value: string): Promise<void> {
+        return this.sendWithAck('variable.set', { fullName, value }).then(() => undefined);
+    }
+
+    /** `variable.delete`：删除 user/* 变量；引用该变量的 element 渲染时走 fallback。 */
+    sendVariableDelete(fullName: string): Promise<void> {
+        return this.sendWithAck('variable.delete', { fullName }).then(() => undefined);
+    }
+
+    /** `variable.bind`：让 user/* 变量被插件 push 接管；{@code boundTo = null} 解绑。 */
+    sendVariableBind(fullName: string, boundTo: string | null): Promise<void> {
+        return this.sendWithAck('variable.bind', { fullName, boundTo }).then(() => undefined);
+    }
+
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
@@ -296,7 +332,19 @@ export class WsClient {
     }
 
     private handlePatch(payload: StatePatchPayload): void {
-        useProjectStore().applyPatch(payload.version, payload.ops);
+        // 0.4.0-P1-D：variables 走 global VariableStore 而非 ProjectState；按 patch.path
+        // 前缀分拣后再分别落 store。剩余 patch 仍走 project.applyPatch（既有路径不变）。
+        const variableOps: PatchOp[] = [];
+        const projectOps: PatchOp[] = [];
+        for (const op of payload.ops) {
+            if (op.path.startsWith('/variables/')) variableOps.push(op);
+            else projectOps.push(op);
+        }
+        if (variableOps.length > 0) {
+            applyVariablePatches(variableOps);
+        }
+        // 即便 projectOps 为空也要更新 version 号（version 是 wall-scoped 单调递增）
+        useProjectStore().applyPatch(payload.version, projectOps);
     }
 
     private handleError(errId: string | undefined, payload: ErrorPayload): void {
@@ -437,4 +485,72 @@ function resolveWsUrl(): string {
         return `${scheme}//${loc.host}/ws`;
     }
     return 'ws://127.0.0.1:8877/ws';
+}
+
+// ---------- 变量 state.patch 路由（0.4.0-P1-D）----------
+//
+// 后端发 path 形如 {@code /variables/<encoded>/currentValue}；encoded 是 fullName 用
+// RFC 6901 {@code ~1} 转义 {@code /} 后的字符串。本路由解码后落到 VariableStore。
+//
+// 支持的形态：
+//   - add    /variables/<encoded>              value = 完整 Variable JSON
+//   - replace /variables/<encoded>/currentValue value = 新值（string | null）
+//   - remove /variables/<encoded>
+// 其他 path 形态不支持（B 任务限定 patch 形态），收到时静默忽略并 log。
+
+function applyVariablePatches(ops: PatchOp[]): void {
+    const store = useVariableStore();
+    const net = useNetworkStore();
+    for (const op of ops) {
+        // strip leading "/variables/"；按首个 "/" 切 encoded fullName + 子路径
+        const rest = op.path.substring('/variables/'.length);
+        if (rest.length === 0) {
+            net.pushLog('err', `variable patch: empty path ${op.path}`);
+            continue;
+        }
+        const slashIdx = rest.indexOf('/');
+        const encoded = slashIdx < 0 ? rest : rest.substring(0, slashIdx);
+        const sub = slashIdx < 0 ? '' : rest.substring(slashIdx + 1);
+        const fullName = decodeJsonPointerToken(encoded);
+
+        if (op.op === 'add' && sub === '') {
+            // 整 Variable JSON 落表
+            if (op.value && typeof op.value === 'object') {
+                store.set(fullName, op.value as Variable);
+            } else {
+                net.pushLog('err', `variable patch add: missing value for ${fullName}`);
+            }
+        } else if (op.op === 'remove' && sub === '') {
+            store.remove(fullName);
+        } else if (op.op === 'replace' && sub === 'currentValue') {
+            const v = store.get(fullName);
+            if (v) {
+                const next: Variable = {
+                    ...v,
+                    currentValue: (op.value as string | null) ?? null,
+                    updatedAt: Date.now(),
+                };
+                store.set(fullName, next);
+            } else {
+                // 后端推 replace 但本地无该 var——通常是 race（刚 remove 后又收 replace）
+                net.pushLog('meta', `variable patch replace skipped: ${fullName} not in store`);
+            }
+        } else if (op.op === 'replace' && sub !== '') {
+            // 兜底：其他字段 replace（如 type / defaultValue）——B 任务暂未要求，但支持也无害
+            const v = store.get(fullName);
+            if (v) {
+                const next: Variable = { ...v };
+                (next as unknown as Record<string, unknown>)[sub] = op.value;
+                next.updatedAt = Date.now();
+                store.set(fullName, next);
+            }
+        } else {
+            net.pushLog('err', `variable patch: unsupported ${op.op} ${op.path}`);
+        }
+    }
+}
+
+/** RFC 6901：{@code ~1} → {@code /}，{@code ~0} → {@code ~}（顺序必须先 ~1 再 ~0）。 */
+function decodeJsonPointerToken(token: string): string {
+    return token.replace(/~1/g, '/').replace(/~0/g, '~');
 }

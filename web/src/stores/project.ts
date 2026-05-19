@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ProjectState, Element, Layer, PatchOp } from '@/types/protocol';
+import { useVariableStore } from './variables';
 
 /** 兜底默认层（state 尚未到达时供 UI 渲染避免 null check 散落组件里）。 */
 const EMPTY_LAYER: Layer = {
@@ -120,6 +121,9 @@ export const useProjectStore = defineStore('project', () => {
         lockedAt.value = null;
         ownerUuid.value = null;
         selfUuid.value = null;
+        // 0.4.0-P1-D：variables 是 cross-wall 全局 store，切 wall 时一起清；
+        // 重连同 wall 不会进 reset 分支（见 wsClient.handleReady 的 wallId diff 判断）
+        useVariableStore().reset();
     }
 
     return {

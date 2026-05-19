@@ -442,6 +442,11 @@ export const messages = {
             // 校验
             VALIDATION: '内容不符合要求，请检查后重试',
             BAD_REQUEST: '请求格式不正确',
+            // 变量系统（0.4.0-P1）
+            VARIABLE_NOT_FOUND: '变量不存在',
+            VARIABLE_EXISTS: '变量已存在',
+            VARIABLE_TYPE_MISMATCH: '变量类型不匹配',
+            VARIABLE_NAMESPACE_DENIED: '无权限操作该命名空间的变量',
             // 兜底
             UNKNOWN: '出了点小问题，请稍后再试',
         },
@@ -922,6 +927,11 @@ export const messages = {
             // Validation
             VALIDATION: 'Some content doesn\'t pass validation — please check and retry',
             BAD_REQUEST: 'Request format isn\'t correct',
+            // Variable system (0.4.0-P1)
+            VARIABLE_NOT_FOUND: 'Variable not found',
+            VARIABLE_EXISTS: 'Variable already exists',
+            VARIABLE_TYPE_MISMATCH: 'Variable type mismatch',
+            VARIABLE_NAMESPACE_DENIED: 'Permission denied for that variable namespace',
             // Fallback
             UNKNOWN: 'Something went wrong — please try again in a moment',
         },

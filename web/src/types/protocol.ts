@@ -4,6 +4,8 @@
 // M8 v2 形态：ProjectState.layers + activeLayerId + canvas.gridSize + canvas.guides；
 // element 加可选 opacity / blendMode / renderMode。
 
+import type { VarType, VariablePatch } from './variable';
+
 export interface Envelope<P = unknown> {
     v: number;
     op: string;
@@ -337,4 +339,59 @@ export interface ErrorPayload {
     message: string;
     retryable: boolean;
     details?: Record<string, unknown>;
+}
+
+// ---------- §5.11 变量系统 op payloads（0.4.0-P1）----------
+//
+// 协议契约见 docs/protocol.md §5.11 + docs/dynamic-data.md §3。
+// 后端 op 路由 (B 任务) 解析以下 payload；ack 形态另见 docs/dynamic-data.md §3.1。
+// 类型 import 已在文件顶部声明：`VarType` / `VariablePatch`。
+
+/**
+ * `variable.create`：玩家在当前 wall 上创建用户变量。
+ * server 自动加 {@code user:<wallId>/} 前缀，ack 回 {@code { fullName }}。
+ *
+ * 错误：{@code VARIABLE_EXISTS} / {@code INVALID_PAYLOAD} / {@code PERMISSION_DENIED}
+ * （缺 {@code canvas.var.write.own}）
+ */
+export interface VariableCreatePayload {
+    /** 不含 {@code user:<wallId>/} 前缀；regex 由后端校验 */
+    name: string;
+    type: VarType;
+    defaultValue?: string | null;
+}
+
+/**
+ * `variable.update`：改类型 / 改 default。仅 user/* 变量；插件 / 系统 / PAPI 变量不可改。
+ * 错误：{@code VARIABLE_NOT_FOUND} / {@code PERMISSION_DENIED}
+ */
+export interface VariableUpdatePayload {
+    fullName: string;
+    patch: VariablePatch;
+}
+
+/**
+ * `variable.set`：玩家手动改 user/* 变量当前值。
+ * 错误：{@code VARIABLE_NOT_FOUND} / {@code VARIABLE_TYPE_MISMATCH} / {@code PERMISSION_DENIED}
+ */
+export interface VariableSetPayload {
+    fullName: string;
+    value: string;
+}
+
+/**
+ * `variable.delete`：删除 user/* 变量。引用该变量的 element 渲染时走 fallback。
+ */
+export interface VariableDeletePayload {
+    fullName: string;
+}
+
+/**
+ * `variable.bind`：把 user/* 变量绑给插件 push 接管。{@code boundTo = null} 取消接管。
+ * 错误：{@code VARIABLE_NOT_FOUND} / {@code PERMISSION_DENIED}（缺 {@code canvas.var.bind}）
+ */
+export interface VariableBindPayload {
+    fullName: string;
+    /** 插件名（与 NamespaceInfo.pluginName 对齐）；null = 解绑 */
+    boundTo: string | null;
 }
