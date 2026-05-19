@@ -240,39 +240,45 @@ package moe.hikari.canvas.api;
 public interface HikariCanvasAPI {
     /**
      * 主动 push 变量值。插件每次数据变化时调用。
-     * 
+     *
      * <p>HikariCanvas 自动：
      * 1. 写入 VariableStore
      * 2. 查 inverted index 找引用该变量的 wall
      * 3. mark wall dirty → 下次 ProjectionThrottler tick 重画
-     * 
+     *
+     * @param plugin    调用方 Plugin 实例（用于 ACL spoof 防御 + plugin disable 时自动清理）
      * @param namespace 插件 namespace，必须 == 注册时声明的（防 spoof）
      * @param key       变量名，[a-zA-Z0-9_.-]+ ≤ 64
-     * @param value     字符串值
-     * @param ttl       TTL；null = 永久；建议合理值如 30s 防卡僵尸数据
-     * @throws PermissionDeniedException 如果 namespace 与注册不匹配
+     * @param value     字符串值（非 null；空串合法，≤ 4096 char）
+     * @param ttl       TTL；null = 沿用变量原 TTL；Duration.ZERO = 永久；>0 必须 ≥ 100ms
+     * @throws PluginNamespaceException 如果 namespace 未注册或不属于 plugin
      */
-    void setVariable(String namespace, String key, String value, @Nullable Duration ttl);
-    
+    void setVariable(Plugin plugin, String namespace, String key, String value, @Nullable Duration ttl);
+    //               ^^^^^^^^^^^^ 新增第一参数（M28-P4 实施决策）
+
     /**
      * 批量 push（性能：内部 dirty wall merge，比单次循环高效）
      */
-    void setVariables(String namespace, Map<String, VariableUpdate> updates);
-    
+    void setVariables(Plugin plugin, String namespace, Map<String, VariableUpdate> updates);
+
     /**
      * 注册 namespace。每个插件 onEnable 时调用一次。
+     *
+     * @throws NamespaceConflictException 已被其他插件注册
+     * @throws IllegalArgumentException   namespace 格式非法 / 与保留前缀冲突
      */
-    void registerNamespace(String namespace, NamespaceInfo info);
-    
+    void registerNamespace(Plugin plugin, String namespace, NamespaceInfo info);
+
     /**
-     * 列出当前 namespace 下的所有 key（编辑器自动补全用）
+     * 列出当前 namespace 下的所有 key（编辑器自动补全用）。
+     * declareKey 不写值；仅供 Variable Picker 列出可选项。
      */
-    void declareKey(String namespace, String key, VarType type, @Nullable String hint);
-    
+    void declareKey(Plugin plugin, String namespace, String key, VarType type, @Nullable String hint);
+
     /**
      * 撤销 variable（如插件停用）
      */
-    void unsetVariable(String namespace, String key);
+    void unsetVariable(Plugin plugin, String namespace, String key);
 }
 
 public record NamespaceInfo(
@@ -287,36 +293,46 @@ public record VariableUpdate(
 ) {}
 ```
 
+**实施实际接口**（M28-P4 落地）：
+
+- 接口位置：`plugin/src/main/java/moe/hikari/canvas/api/HikariCanvasAPI.java`
+- 实现位置：`plugin/src/main/java/moe/hikari/canvas/variable/plugin/HikariCanvasAPIImpl.java`
+- 注册中心：`PluginNamespaceRegistry`（防 spoof，原子 `putIfAbsent`）
+- 限流：`PushRateLimiter`（per-plugin 100/s + 全局 1000/s + 10s circuit break）
+- 卸载清理：`PluginCleanupListener`（`PluginDisableEvent` → 立即 unregister + 30s 延迟 purge）
+- API 包独立 enum：`moe.hikari.canvas.api.VarType`（不引用内部 `variable.VarType`，shadowJar relocate exclude 保护外部插件 import 路径稳定）
+- 异常体系：`NamespaceConflictException`（跨 plugin 冲突）+ `PluginNamespaceException`（Code = `NAMESPACE_NOT_REGISTERED` / `NAMESPACE_ACL_DENIED`），均 RuntimeException
+- 完整接入教程：`docs/api.md`
+
 ### 4.2 插件接入示例
 
 ```java
 public class BedWarsPlugin extends JavaPlugin {
     private HikariCanvasAPI canvas;
-    
+
     @Override
     public void onEnable() {
-        // 1. 检测 HikariCanvas
-        Plugin hikari = Bukkit.getPluginManager().getPlugin("HikariCanvas");
-        if (hikari == null) {
+        // 1. 检测 HikariCanvas（推荐 ServicesManager 方式，零编译耦合）
+        canvas = Bukkit.getServicesManager().load(HikariCanvasAPI.class);
+        if (canvas == null) {
             getLogger().info("HikariCanvas not found, score display disabled");
             return;
         }
-        canvas = ((HikariCanvas) hikari).getAPI();
-        
-        // 2. 注册 namespace
-        canvas.registerNamespace("bedwars", new NamespaceInfo(
+
+        // 2. 注册 namespace（首参 this = Plugin 实例，用于 ACL spoof 防御）
+        canvas.registerNamespace(this, "bedwars", new NamespaceInfo(
             "BedWars 比赛数据", "BedWarsPlugin", getDescription().getVersion()));
-        
+
         // 3. 声明可用 key（让编辑器自动补全显示）
-        canvas.declareKey("bedwars", "match_a.red_score", VarType.NUMBER, "红队当前分数");
-        canvas.declareKey("bedwars", "match_a.blue_score", VarType.NUMBER, "蓝队当前分数");
-        canvas.declareKey("bedwars", "match_a.mvp", VarType.STRING, "MVP 玩家名");
+        canvas.declareKey(this, "bedwars", "match_a.red_score", VarType.NUMBER, "红队当前分数");
+        canvas.declareKey(this, "bedwars", "match_a.blue_score", VarType.NUMBER, "蓝队当前分数");
+        canvas.declareKey(this, "bedwars", "match_a.mvp", VarType.STRING, "MVP 玩家名");
     }
-    
+
     // 4. 比赛事件触发 push
     @EventHandler
     public void onPlayerKill(MatchKillEvent ev) {
-        canvas.setVariable("bedwars", "match_a.red_score",
+        canvas.setVariable(this, "bedwars", "match_a.red_score",
                 String.valueOf(ev.matchRedScore()),
                 Duration.ofMinutes(5));  // 5 分钟无更新视为比赛结束
     }
@@ -725,9 +741,9 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 - 里程碑列表加 0.4.0 路线段
 - 「其他不可越界的技术决策」加：**Push 模式 + 不在主线程 resolve**
 
-### docs/api.md（新文件）
-- `HikariCanvasAPI` 完整接口文档 + 接入教程 + 示例插件
-- M28 实施时落地（本规划阶段先不写）
+### docs/api.md（M28-P4 已落地）
+- `HikariCanvasAPI` 完整接口文档 + 接入教程 + 示例插件 + FAQ
+- 见 `docs/api.md`
 
 ---
 

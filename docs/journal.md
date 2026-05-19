@@ -5,6 +5,140 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P4-S：docs/api.md 完整接入教程 + dynamic-data.md §4 回填
+
+P4 Wave 2 文档任务。**纯文档 / 无代码改动 / 无测试 / 无构建**。把 M28-P4-O 落地的 `HikariCanvasAPI` 接口（5 方法 + Plugin 首参 + 2 exception + NamespaceInfo / VariableUpdate / VarType）翻成给第三方插件作者的完整接入教程，并回填 `dynamic-data.md §4` 让规划文档与实施接口一致。
+
+### 新增 1 文件
+
+- **`docs/api.md`** — 13 章节 / 约 660 行 / 完整接入教程：
+  1. **概览** — 数据流 + 异步 / 错误隔离 / 限流防御纪律
+  2. **快速开始** — Gradle 依赖 + `paper-plugin.yml` + ServicesManager / getAPI 两种入口 + 完整 BedWars 示例
+  3. **API 接口完整参考** — 5 方法逐一参数表 + 抛异常 + 静默 drop + 示例
+  4. **namespace ACL & 保留 namespace** — 5 保留 ns 表 + ACL spoof 防御机制 + 命名建议
+  5. **生命周期 & 清理** — `PluginDisableEvent` 自动 + 30s 延迟 purge + 服务器重启行为
+  6. **渲染 / 变量解析** — 引用语法 + fallback 链 + wall dirty 合并 + 线程模型
+  7. **限流** — 默认配置 + 触限行为 + 最佳实践
+  8. **错误码 / 异常表** — 调用方异常 + 静默 drop + 防御性编程模板
+  9. **完整示例插件** — 指向 `examples/demo-train-plugin/` + `examples/demo-score-plugin/`（R 任务交付）
+  10. **FAQ** — 10 题（不装 HC 能否工作 / 重启变量值 / declareKey 显示 / TTL 选择 / 同名 key / 查询当前值 / 颜色格式化 / PAPI vs Push / 限流封号 / async 调用 / HC reload 处理）
+  11. **升级 / 向后兼容承诺** — pre-1.0 / 1.0+ 路径 + 包路径稳定保证（指向 P4-T shadowJar exclude）
+  12. **参考文档**
+  13. **反馈 & 贡献**
+
+### 修改 1 文件
+
+- **`docs/dynamic-data.md`** — 3 处更新：
+  - §4.1 接口示例 5 方法全部加 `Plugin plugin` 首参（与 P4-O 实际接口对齐）+ 行内注释 `// 新增第一参数（M28-P4 实施决策）`；javadoc 也同步（异常类型 `PermissionDeniedException` → `PluginNamespaceException`）
+  - §4 段尾新增「实施实际接口（M28-P4 落地）」总览段：接口位置 / 实现位置 / 注册中心 / 限流 / 卸载清理 / API 包独立 VarType / 异常体系 / 完整接入教程交叉引用
+  - §4.2 BedWars 示例代码同步：`Plugin hikari = Bukkit.getPluginManager().getPlugin("HikariCanvas")` 路径换为 `Bukkit.getServicesManager().load(HikariCanvasAPI.class)`（推荐方式 A），三个 `canvas.declareKey / setVariable` 全部加 `this` 首参
+  - §15 把 `docs/api.md（新文件）` 状态从 "M28 实施时落地（本规划阶段先不写）" 改为 "M28-P4 已落地"
+
+### 不变更
+
+- 不动任何 Java 代码 / 任何 yml / 任何前端
+- 不跑 runServer / 不跑 npm build / 不跑 test
+- 不动 README.md（项目根 README 仅 13 行欢迎页，无 "Dynamic Data" 段；按 S.4 指示跳过）
+- 不动 docs/protocol.md / data-model.md / security.md / architecture.md（其他任务领域 / 已在 P1-P3 阶段更新过）
+
+### commit
+
+待提交：`M28-P4-S: docs/api.md 完整接入教程 + dynamic-data.md §4 回填`
+
+---
+
+## 2026-05-19 · 0.4.0-P4-R：DemoTrainPlugin + DemoScorePlugin（Gradle subproject 双范型）
+
+P4 Wave 2 示例插件双范型落地。**两个独立 Paper subproject / compileJava + jar 全绿 / 仅 compileOnly plugin 主项目 classes 目录**。证明 HikariCanvasAPI 真好用 + 双触发方式（定时 push / 事件 + 命令 push）都覆盖。
+
+### settings.gradle.kts 扩展
+
+加 `include("examples:demo-train-plugin") + include("examples:demo-score-plugin")`，让 Gradle 把 `examples/` 子目录作为两个独立 Java subproject 识别。
+
+### examples/demo-train-plugin（定时器 push 范型）
+
+`build.gradle.kts`（Java 21 + paper-api + `compileOnly(files(rootProject.layout.projectDirectory.dir("plugin/build/classes/java/main")))`）+ `tasks.compileJava { dependsOn(":plugin:compileJava") }`。**为何不用 `compileOnly(project(":plugin"))`**：主 plugin 的 `:jar` 被 paperweight `enabled = false`，default `apiElements` 配置没有可消费的 archive；改 `shadowJar` 当依赖物又拖慢示例编译。直接 compileOnly classes 目录最干净（IDE 也能识别符号）。
+
+- `DemoTrainPlugin.java`（70 行）：`Bukkit.getServicesManager().load(HikariCanvasAPI.class)` 获取 API（推荐零编译耦合路径，Q 任务后续会 register 这个 Service）→ `registerNamespace("demo_train", ...)` → `declareKey` 6 个 key（line1/2 × {next_departure / next_destination / eta_minutes}）→ 启动 `TrainSchedulePusher`
+- `TrainSchedulePusher.java`（70 行）：`BukkitScheduler.runTaskTimer` 每 5s（100 ticks）调一次；模拟 `computeNextDeparture` 算 `now + 5~15 min` 下一班车；每次 push 3 个变量 / 线，TTL 10 分钟兜底（插件挂掉变量仍可见 10 分钟，再之后走 fallback 链）
+- `paper-plugin.yml`：声明 `HikariCanvas: required: true + load: BEFORE + join-classpath: true` 让启动顺序由 Paper plugin loader 保证
+
+### examples/demo-score-plugin（事件 + 命令 push 范型）
+
+`build.gradle.kts` 同 train。
+
+- `DemoScorePlugin.java`（80 行）：`registerNamespace("demo_score", ...)` + `declareKey` 3 个 key（red/blue/mvp）；暴露 `addRed/addBlue/setRed/setBlue/reset/setMvp` 公开 mutation API 给 listener + command 调；每次变化即时 `setVariable`（TTL=null 永久）
+- `DemoScoreListener.java`（22 行）：`@EventHandler PlayerJoinEvent → plugin.setMvp(player.name)`
+- `DemoScoreCommand.java`（70 行）：`/demoscore add <red|blue> <n>` / `/demoscore set <red|blue> <n>` / `/demoscore reset`，`NumberFormatException` 友好提示
+- `paper-plugin.yml`：声明 `commands.demoscore` + `permissions.hikari.demo.score: default op`
+
+### examples/README.md
+
+约 60 行：DemoTrainPlugin / DemoScorePlugin 用法说明 + 可用变量列表 + 编译 / 安装 / wall 上引用占位符语法。
+
+### 验证
+
+- `./gradlew :examples:demo-train-plugin:compileJava :examples:demo-score-plugin:compileJava` 全绿（只有 `getDescription()` deprecated 警告，Paper 1.21 仍可用，留 Paper API 升级再修）
+- `./gradlew :examples:demo-train-plugin:jar :examples:demo-score-plugin:jar` 全绿，输出 `DemoTrainPlugin-0.3.0-SNAPSHOT.jar`（4.8 KB）+ `DemoScorePlugin-0.3.0-SNAPSHOT.jar`（5.8 KB）
+- 两个 jar 仅含 demo 源码 class + paper-plugin.yml，不包打主 plugin 的 API 类（运行期由 HikariCanvas 主插件提供）
+- `:plugin:test` 因 Wave 2 Q 任务并行 untracked 文件未收尾当下不可独立验证；R 改动**绝不接触** plugin/main 源 / plugin/test 源 / plugin/build.gradle.kts，对 plugin module 编译/test 零副作用
+
+### 关联文件
+
+- `settings.gradle.kts`
+- `examples/README.md`（新）
+- `examples/demo-train-plugin/` 全树（新）
+- `examples/demo-score-plugin/` 全树（新）
+
+---
+
+## 2026-05-19 · 0.4.0-P4-P：PushRateLimiter（per-plugin 100/s + 全局 1000/s + 保护期）+ config 段
+
+P4 Wave 2 Push 限流防御接入 HikariCanvasAPIImpl。**1 commit / 653 backend test 全绿（+15）/ 0 fixture baseline 漂移**。
+让"恶意 / bug 插件 push 死循环"在 100ms 量级被拦下，不击穿 VariableStore。
+
+### 新增 1 文件 / 新增 1 测试文件（+15 case）
+
+- **`plugin/src/main/java/moe/hikari/canvas/variable/plugin/PushRateLimiter.java`** — 双层限流：per-plugin（默认 100/s，drop tail + WARN）+ 全局（默认 1000/s，触发 10s 保护期 + WARN）。1s 固定窗口 + `ConcurrentHashMap<pluginName, Window>` + `AtomicLong windowSec/count` 无锁；批量 `tryAcquireBatch(plugin, n)` 给 `setVariables` 用（一次性占 n token，all-or-nothing）。`Config` record（perPluginPerSecond / globalPerSecond / globalCircuitBreakMs）+ `defaults()`（100/1000/10_000）+ `unlimited()`（Integer.MAX_VALUE，测试用）。clock 注入 seam（`LongSupplier`，单测全部不用 `Thread.sleep`）
+- **`PushRateLimiterTest.java`** — 15 case：单次 allow / per-plugin 边界 101 drop / 跨秒重置 / 全局 1001 触发 circuit break / 保护期内 reject 全 plugin / 保护期超时恢复 / batch 50×3 第三次 reject / batch 单次超限 reject / 多 plugin 隔离 / Config 非法参数 IAE / unlimited 永 allow / resetForTest 清零 / nullPlugin NPE / invalid count IAE / defaults 值匹配规范
+
+### 修改 3 文件
+
+- `HikariCanvasAPIImpl.java` — 构造器加 `PushRateLimiter limiter` 参数（5 args）；`setVariable` 在 `checkAcl` 后插 `tryAcquire(plugin)`，false 时 drop（limiter 内已 log）；`setVariables` 在 `checkAcl` 后插 `tryAcquireBatch(plugin, updates.size())`，all-or-nothing；保留 `doSetVariable` 私有 helper 复用
+- `HikariCanvas.java` — onEnable 装配段加 `new PushRateLimiter(config.pushRateLimitConfig)` + 传入 Impl 构造器（4 args→5 args）
+- `HikariCanvasConfig.java` — 新字段 `pushRateLimitConfig`（`PushRateLimiter.Config` 类型）；`load()` 解析 `dynamic.push-rate-limit` 段：`per-plugin-per-second`（默认 100，clamp ≥1）/ `global-per-second`（默认 1000，clamp ≥ perPlugin）/ `global-circuit-break-ms`（默认 10_000，clamp ≥0）；Builder defaults
+
+### 修改 2 文件（资源 / 测试夹具）
+
+- `config.yml` — 末尾追加 `dynamic.push-rate-limit` 段（per-plugin-per-second / global-per-second / global-circuit-break-ms 三项 + 注释指向 docs/dynamic-data.md §10.2）
+- `HikariCanvasAPIImplTest.java` — 27 个测试构造调用全部扩展为 5 args（注入 `new PushRateLimiter(Config.unlimited())` 永 allow fake）；null 检查测试加第 4 个 null limiter case
+
+### 关键决策
+
+1. **双层限流而非单层**：per-plugin 拦单个 bug 插件刷自己 namespace；全局 + 保护期拦多 plugin 协同压垮 VariableStore。两层独立配置，可分别调
+2. **batch all-or-nothing**：`setVariables({a:1, b:2, c:3})` 5 entry 但 per-plugin 还剩 3 token —— 要么 5 全 reject 要么 5 全过；不部分写入（部分写入语义不一致：第 1-3 成 / 第 4-5 失败 → 调用方难处理）。代价是 batch 失败时 global window 已加进去（fixed-window 固有妥协，1s 内自然衰减）
+3. **clock 注入 seam**：单测全用 `AtomicLong::get` 当虚拟时钟，跨秒重置 / 保护期超时全部确定性测试，不用 `Thread.sleep`。M16 `SessionRateLimiter` 没做这个，新代码统一新风格
+4. **fixed-window 而非 sliding-window**：sliding-window 需要保存近 1s 内每个时间戳，O(N) 内存；fixed-window 单 AtomicLong + windowSec key，O(1)。代价：跨秒边界处可能放过 2× 上限（前后 100ms 各 100 token）—— 但 push 限流目标是防"刷爆"，2× 突发可接受
+5. **per-plugin log 跨阈值一次**：avoid 日志洪水。`if (prev <= limit && pluginCount > limit)` 跨阈值时 log 一次；同 window 后续 reject 静默
+
+### 不变更
+
+- 不动 NMS / 不引新依赖
+- 不动 HikariCanvasAPI 接口（限流是 Impl 私事）
+- 不挂 PluginDisableEvent listener（Q 任务领域）
+- 不动 docs/dynamic-data.md（限流参数变更不影响契约）
+
+### commit
+
+待提交：`M28-P4-P: PushRateLimiter（per-plugin 100/s + 全局 1000/s + 保护期）+ config 段`
+
+### 测试 / 构建
+
+- `./gradlew :plugin:test` 653 case 全绿（PushRateLimiterTest 15 新 + 既有 638）
+- `./gradlew :plugin:compileJava` 通过（HikariCanvas.java onEnable 已扩展构造器调用）
+
+---
+
 ## 2026-05-19 · 0.4.0-P4-O：HikariCanvasAPI 包 + Impl + PluginNamespaceRegistry + Provider
 
 P4 Wave 1 基础设施落地。**1 commit / 638 backend test 全绿（+38）/ 0 fixture baseline 漂移**。
