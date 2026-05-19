@@ -1,0 +1,14 @@
+name: DemoTrainPlugin
+version: '0.3.0-SNAPSHOT'
+main: moe.hikari.canvas.demos.train.DemoTrainPlugin
+api-version: '1.21'
+description: HikariCanvas Push API demo — simulated train schedule with live ETA pushes.
+authors:
+  - HaruHyacinth
+
+dependencies:
+  server:
+    HikariCanvas:
+      load: BEFORE
+      required: true
+      join-classpath: true
