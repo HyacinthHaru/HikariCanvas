@@ -75,7 +75,10 @@ public final class CanvasProjector {
 
         BufferedImage img;
         try {
-            img = compositor.rasterize(state);
+            // 0.4.0-P1-C：传 session.wallId() 让 compositor 把 ${var:user/X} 注入当前 wallId，
+            // 渲染末尾 VariableStore.markWallReferences 倒排索引联动。session.wallId() 在 SELECTING
+            // 阶段为 null —— compositor 内部对 null wallId 走"无 user 变量解析 + 不写倒排索引"分支。
+            img = compositor.rasterize(state, session.wallId());
         } catch (Exception e) {
             log.warning("CanvasProjector: rasterize failed err=" + e.getMessage());
             return 0;

@@ -140,7 +140,10 @@ public final class WallRestorer {
                 }
                 return true;
             }
-            BufferedImage img = compositor.rasterize(state);
+            // 0.4.0-P1-C：传 wallId 让 ${var:user/X} 注入；启动期 variable store 加载在 compositor
+            // setVariableSupport 之前，restorer 仍可能在 setVariableSupport 前调用 —— 此时 interpolator
+            // 为 null，rasterize 走原行为；setVariableSupport 注入后再次 restore（极少见）也安全。
+            BufferedImage img = compositor.rasterize(state, w.wallId());
             int total = mapIds.size();
             for (int i = 0; i < total; i++) {
                 byte[] pixels = compositor.toPaletteSlice(img, i, widthMaps);

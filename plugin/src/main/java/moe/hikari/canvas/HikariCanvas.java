@@ -263,6 +263,16 @@ public final class HikariCanvas extends JavaPlugin {
         variableStore = new VariableStore(userVariableDao, wallId -> { /* B 任务接 ProjectionThrottler#dirty */ });
         variableStore.loadFromDb();
         getLogger().info("VariableStore: " + variableStore.size() + " user variable(s) loaded");
+        // 0.4.0-P1-C：Compositor 接入变量替换 + 倒排索引联动。注入在 store 创建之后即生效；
+        // 此时 WallRestorer 已用旧 compositor 完成启动期 restore（restore 时占位符还没机会被注册），
+        // 后续 CanvasProjector / 预览路径走有 interpolator 的渲染。注入幂等，volatile 多线程可见。
+        moe.hikari.canvas.variable.VariableInterpolator variableInterpolator =
+                new moe.hikari.canvas.variable.VariableInterpolator(variableStore);
+        compositor.setVariableSupport(variableInterpolator, variableStore);
+        // 0.4.0-P1-C：wall 删除时清掉 VariableStore 倒排索引。SessionManager.deleteWall 完成
+        // map 释放 + walls 表删除后触发；user_variables 表通过 FK CASCADE 自动清。
+        final VariableStore variableStoreForHook = variableStore;
+        sessionManager.addWallDeleteHook(wid -> variableStoreForHook.clearWallReferences(wid));
         // 0.4.0-P1-E：Provider daemon 框架（守护线程池 + 定时调度）。
         // P1 阶段不注册任何 provider；P3 在 ProviderBootstrap.initialize 内加 system / papi 等。
         this.variableProviderDaemon = ProviderBootstrap.initialize(this.variableStore);

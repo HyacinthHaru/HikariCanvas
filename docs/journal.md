@@ -5,6 +5,117 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P1-C：VariableInterpolator + CanvasCompositor 渲染期 ${var:X} 替换
+
+P1 阶段"渲染期变量替换"。`VariableInterpolator` 把 TextElement.text 内的 `${var:X}` 或
+`${var:X|fallback=Y}` 占位符替换为 `VariableStore` 缓存值；`CanvasCompositor` 渲染入口
+新增 `rasterize(state, wallId)` 重载，对每个 TextElement 走透明替换并在渲染结束累计
+`referencedFullNames` 调 `markWallReferences` 维护倒排索引。变量值变化时 P1-B 的
+`wallDirtyCallback` 沿这条倒排索引精准触发只重画引用 wall。
+
+### 主要变更
+
+- **新文件 `plugin/src/main/java/moe/hikari/canvas/variable/VariableInterpolator.java`**：
+  - 单例正则 `\$\{var:([^|}]+)(?:\|fallback=([^}]*))?\}`（编译期静态字段）
+  - `interpolate(text, wallId) -> Result(text, referencedFullNames)`：
+    - 纯文本（不含 `${var:` 子串）O(1) 短路返原引用 + 空集（性能优化）
+    - text == null safe
+    - `Matcher.quoteReplacement` 防 `$` / `\` 在 `appendReplacement` 内被解释为
+      反向引用 / 转义符
+  - fullName 注入：`${var:user/X}` + wallId 非空 → `user:<wallId>/X`；wallId 为 null
+    时 user 命名空间走字面（必然 miss → fallback 链，便于预览 / 模板路径）
+  - fallback 链 4 档：cached currentValue 非空 → inline `|fallback=` → `Variable.defaultValue` →
+    系统兜底 `"???"`；显式空 `|fallback=` 视为合法 "" 值不退档
+
+- **`plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`**：
+  - 新 volatile 字段 `interpolator` + `variableStore`（默认 null 不破坏老 fixture baseline）
+  - 新 setter `setVariableSupport(interp, store)` 在 onEnable 注入后才启用替换
+  - 新 overload `rasterize(state, wallId)`；旧 `rasterize(state)` = `rasterize(state, null)` 完全
+    等价（snapshot 测试 0 漂移）
+  - 新 helper `maybeInterpolateText(e, interp, wallId, accum)`：
+    TextElement.text 含 `${var:` 才分配 record 副本走 dispatch，其他元素 / 纯文本 passthrough
+  - `drawElementsTo` / `renderLayerToBuffer` 签名扩展 `interp + wallId + referencedAccum` 参数；
+    fast/slow path 都对 TextElement 透明替换
+  - 渲染末尾：`interp != null && store != null && wallId != null` 时 `store.markWallReferences(
+    wallId, referencedFullNames)`；异常隔离（不让倒排索引维护拖垮渲染主路径）
+  - **线程安全**：volatile 取 snapshot；referenced 累积器是 per-call 新分配，无共享可变状态
+
+- **`plugin/src/main/java/moe/hikari/canvas/render/CanvasProjector.java`**：
+  - `project(session, region)` 内 `compositor.rasterize(state)` → `rasterize(state, session.wallId())`；
+    SELECTING 阶段 wallId 为 null 时 compositor 内部走"无 user 变量解析 + 不写倒排索引"分支
+
+- **`plugin/src/main/java/moe/hikari/canvas/render/WallRestorer.java`**：
+  - 启动期 restore 同样传 `w.wallId()`；setVariableSupport 注入前 interpolator 为 null
+    走原行为，注入后再次 restore 也安全（极少见）
+
+- **`plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`**：
+  - 新 `addWallDeleteHook(hook)` + `wallDeleteHooks` 列表（CopyOnWriteArrayList 线程安全）
+  - `deleteWall` 完成 map 释放 + DB 删行后触发监听，异常隔离
+  - 用于 wall 删除时联动 `VariableStore.clearWallReferences(wallId)`，避免被删 wall 仍
+    挂在 referencedByWalls 上、变量值变化时给已不存在 wall 发 dirty
+
+- **`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`** onEnable：
+  - VariableStore 构造后立刻 `new VariableInterpolator(variableStore)` +
+    `compositor.setVariableSupport(...)`
+  - 注册 `sessionManager.addWallDeleteHook(wid -> variableStore.clearWallReferences(wid))`
+
+### 测试
+
+- **`plugin/src/test/java/moe/hikari/canvas/variable/VariableInterpolatorTest.java`**：
+  22 case / 全绿，覆盖：
+  - passthrough（null / 空 / 纯文本同引用短路）
+  - user namespace wallId 注入 + null wallId 字面查
+  - 插件 / 系统 namespace 字面 fullName
+  - fallback 链 4 档（cached / inline / default / `???`）+ 空 inline 是合法值
+  - 多占位符 / 混合文本 / 名字 trim
+  - `$` / `\` 转义防注入
+  - referenced 集合完整性 + interpolate 不写倒排索引（只读契约）
+
+- **`plugin/src/test/java/moe/hikari/canvas/render/CanvasCompositorVariableTest.java`**：
+  7 case / 全绿，覆盖：
+  - 未 setVariableSupport 不写倒排索引（baseline 兼容）
+  - setVariableSupport + 含占位符 → 倒排索引被精确 mark
+  - null wallId 不写索引
+  - 纯文本 rasterize 触发 diff 清理（清掉旧 mark）
+  - 多 TextElement 引用聚合
+  - 同 wallId 重复 rasterize 幂等
+  - clearWallReferences 还原索引
+
+- **全栈**：`./gradlew :plugin:test` 480 tests / 0 failures；snapshot fixture 14 条全绿
+  / 0 baseline 漂移（旧 `rasterize(state)` 路径 + 未注入 interpolator 时与 M0~M27 行为完全等价）
+
+### 决策固化
+
+1. **占位符替换 = 双 record copy 走 dispatch**：TextElement record immutable + Layer
+   elements list 不可变视图，所以替换走"分配新 TextElement → 渲染该 record"。源 record
+   完全不动；同一 state 多次 rasterize 行为幂等（每次替换得到等价 record）。`text.equals`
+   短路避免占位符 resolve 后字符串相同时的多余分配。
+
+2. **wallId == null 不写倒排索引**：模板 publish / 预览缩略图 / WallPreviewService 路径
+   传 null wallId（无 wall 上下文）；rasterize 仍正常替换（user/X 走 fallback → `???`），
+   但不污染 `byWall` 倒排索引（避免给 null wallId 写永远清不掉的 ghost 引用）。
+
+3. **rasterize 末尾 markWallReferences 异常隔离**：倒排索引维护只是 dirty 优化，崩了
+   也不该让用户看不到画面；catch Exception 仅丢观测（log 由 store 内部承担）。
+
+4. **wall 删除联动走 SessionManager.deleteWall hook 而非 WallRepo.delete**：persistence
+   层（WallRepo）不该耦合到内存索引；hook 在 SessionManager 触发更贴合"session 生命周期
+   事件"语义。`user_variables` 表的 DB 行由 V011 schema FK CASCADE 自动清，与内存索引
+   清理解耦。
+
+### 关联文件
+
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableInterpolator.java`（新）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasProjector.java`
+- `plugin/src/main/java/moe/hikari/canvas/render/WallRestorer.java`
+- `plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`
+- `plugin/src/test/java/moe/hikari/canvas/variable/VariableInterpolatorTest.java`（新）
+- `plugin/src/test/java/moe/hikari/canvas/render/CanvasCompositorVariableTest.java`（新）
+
+---
+
 ## 2026-05-19 · 0.4.0-P1-E：VariableProvider daemon 框架 + ProviderBootstrap
 
 P1 阶段"异步 Provider 调度框架"。**仅占位骨架**——具体 Provider（system / papi / scoreboard /

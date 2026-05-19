@@ -15,6 +15,8 @@ import moe.hikari.canvas.state.RenderMode;
 import moe.hikari.canvas.state.ShapeElement;
 import moe.hikari.canvas.state.TextElement;
 import moe.hikari.canvas.template.asset.TemplateAssetService;
+import moe.hikari.canvas.variable.VariableInterpolator;
+import moe.hikari.canvas.variable.VariableStore;
 
 import java.awt.AlphaComposite;
 import java.awt.Composite;
@@ -22,7 +24,9 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Logger;
 
 /**
@@ -64,6 +68,17 @@ public final class CanvasCompositor {
     private final RenderContext ctx;
     /** M13：图片加载器；null = 所有 ImageElement 走占位。 */
     private volatile ImageLoader imageLoader;
+    /**
+     * 0.4.0-P1-C：变量占位符替换器。null = 不做替换（snapshot 测试 / 老路径完全无侵入）。
+     * 由 {@code HikariCanvas.onEnable} 在 {@link VariableStore} 构造后注入。
+     * volatile 保证多线程可见。
+     */
+    private volatile VariableInterpolator interpolator;
+    /**
+     * 0.4.0-P1-C：变量存储（用于渲染结束时 {@code markWallReferences}）。
+     * 与 {@link #interpolator} 同时被 {@link #setVariableSupport} 注入；为 null 表示不联动倒排索引。
+     */
+    private volatile VariableStore variableStore;
 
     // 8 个 element renderer，构造时一次性 instantiate
     private final ElementRenderer textRenderer = new TextRenderer();
@@ -103,6 +118,21 @@ public final class CanvasCompositor {
     }
 
     /**
+     * 0.4.0-P1-C：启动期由 {@code HikariCanvas.onEnable} 在变量系统构造后注入。
+     *
+     * <p>注入后 {@link #rasterize(ProjectState, String)} 与
+     * {@link #rasterize(ProjectState)} 都会在 TextElement 路径上做 {@code ${var:X}} 替换；
+     * 未注入则保持 M0~M27 旧行为（snapshot baseline 不漂移）。</p>
+     *
+     * @param interpolator   占位符替换器；null 即关闭替换
+     * @param variableStore  与 interpolator 共用的 store（用于 {@code markWallReferences}）；null 即关闭倒排索引联动
+     */
+    public void setVariableSupport(VariableInterpolator interpolator, VariableStore variableStore) {
+        this.interpolator = interpolator;
+        this.variableStore = variableStore;
+    }
+
+    /**
      * 把 {@link ProjectState} 渲染到整张大画布。返回 {@code TYPE_INT_RGB}（无 alpha）。
      *
      * <p>大小 = {@code (widthMaps*128) × (heightMaps*128)}；2×2 = 64 KiB、8×4 = 1 MiB、10×10 = 6.5 MiB。</p>
@@ -120,12 +150,33 @@ public final class CanvasCompositor {
      * <p>层间 z-order = {@code state.layers()} 索引（0 = 底，越大越上）。</p>
      */
     public BufferedImage rasterize(ProjectState state) {
+        return rasterize(state, null);
+    }
+
+    /**
+     * 0.4.0-P1-C：带 wallId 的渲染入口。{@code wallId} 仅用于 {@code ${var:user/X}} 占位符
+     * 注入 + 渲染结束 {@link VariableStore#markWallReferences} 倒排索引维护。
+     *
+     * <p>预览 / 模板 publish / 测试路径传 null wallId（{@code ${var:user/X}} 走 fallback 链
+     * → "???"）；生产投影路径（{@code CanvasProjector.project} / {@code WallRestorer.restore}）
+     * 必须传非 null。</p>
+     *
+     * <p>未通过 {@link #setVariableSupport} 注入 interpolator 时本方法行为与 {@link #rasterize(ProjectState)}
+     * 完全一致 —— snapshot 测试 baseline 0 漂移依赖此性质。</p>
+     */
+    public BufferedImage rasterize(ProjectState state, String wallId) {
         ProjectState.Canvas canvas = state.canvas();
         int widthPx = canvas.widthMaps() * MAP_SIZE;
         int heightPx = canvas.heightMaps() * MAP_SIZE;
         // 主 buffer：TYPE_INT_RGB（无 alpha）—— MC 地图最终也无 alpha
         BufferedImage img = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
+        // 0.4.0-P1-C：snapshot 取 volatile，整段 rasterize 内不变
+        VariableInterpolator interp = this.interpolator;
+        VariableStore store = this.variableStore;
+        // 倒排索引累积容器；null = 本次 rasterize 不联动 store
+        Set<String> referencedFullNames = (interp != null && store != null && wallId != null)
+                ? new HashSet<>() : null;
         try {
             applyHints(g);
             // 背景：M17 F5 起 background 是 Fill 联合类型（solid / linear / radial），
@@ -142,14 +193,26 @@ public final class CanvasCompositor {
                 if (layer.elements().isEmpty()) continue;
 
                 if (canFastPath(layer, layerOpacity)) {
-                    drawElementsTo(g, layer.elements(), widthPx, heightPx);
+                    drawElementsTo(g, layer.elements(), widthPx, heightPx,
+                            interp, wallId, referencedFullNames);
                 } else {
-                    BufferedImage layerBuf = renderLayerToBuffer(layer, widthPx, heightPx);
+                    BufferedImage layerBuf = renderLayerToBuffer(layer, widthPx, heightPx,
+                            interp, wallId, referencedFullNames);
                     BlendModes.applyBlendModeOver(img, layerBuf, layerOpacity, layer.blendMode());
                 }
             }
         } finally {
             g.dispose();
+        }
+        // 0.4.0-P1-C：把本次实际引用的 fullName 写回倒排索引（同时清掉上次记录但本次不在的）。
+        // markWallReferences 是 ConcurrentHashMap 操作，幂等且线程安全 —— 多 session 同 wall
+        // 同时 rasterize 重复调不会错乱。
+        if (referencedFullNames != null) {
+            try {
+                store.markWallReferences(wallId, referencedFullNames);
+            } catch (Exception ignore) {
+                // 渲染主路径不应被倒排索引维护拖垮；warning 由 store 内部 log（如果有）
+            }
         }
         return img;
     }
@@ -185,37 +248,71 @@ public final class CanvasCompositor {
      * 这种做法保证 dither 仅作用于该 element 自身的像素，不污染相邻 element 或层背景。</p>
      */
     private void drawElementsTo(Graphics2D g, List<Element> elements,
-                                int widthPx, int heightPx) {
+                                int widthPx, int heightPx,
+                                VariableInterpolator interp, String wallId,
+                                Set<String> referencedAccumulator) {
         Composite baseComposite = g.getComposite();
         for (Element e : elements) {
             if (!e.visible()) continue;
+            // 0.4.0-P1-C：TextElement 替换 ${var:X} 占位符 → 用替换后的副本走后续 dispatch。
+            // 替换是位置不变的 record copy，rotation / opacity / dither 装饰路径完全不变。
+            Element rendered = maybeInterpolateText(e, interp, wallId, referencedAccumulator);
             // M16 P3.2：opacity 经 ElementValidator.parseOpacityNullable 入口已挡 NaN，
             // 但模板 raw_state 反序列化绕过路径可能漏；finiteOr 兜底到 1.0
-            float opacity = ElementValidator.finiteOr(e.effectiveOpacity(), 1.0f);
+            float opacity = ElementValidator.finiteOr(rendered.effectiveOpacity(), 1.0f);
             // clamp 入 [0, 1]：协议入口允许 [0,1]，这里防御性 clamp 保证 AlphaComposite 不抛
             if (opacity < 0f) opacity = 0f;
             else if (opacity > 1f) opacity = 1f;
 
-            if (e.effectiveRenderMode() == RenderMode.DITHER) {
-                drawDitheredElement(g, e, opacity, widthPx, heightPx);
+            if (rendered.effectiveRenderMode() == RenderMode.DITHER) {
+                drawDitheredElement(g, rendered, opacity, widthPx, heightPx);
                 continue;
             }
 
             AffineTransform savedTx = null;
             // rotation() 是 int 不会 NaN；只判 != 0 即可
-            if (e.rotation() != 0) {
+            if (rendered.rotation() != 0) {
                 savedTx = g.getTransform();
-                double cx = e.x() + e.w() / 2.0;
-                double cy = e.y() + e.h() / 2.0;
-                g.rotate(Math.toRadians(e.rotation()), cx, cy);
+                double cx = rendered.x() + rendered.w() / 2.0;
+                double cy = rendered.y() + rendered.h() / 2.0;
+                g.rotate(Math.toRadians(rendered.rotation()), cx, cy);
             }
             if (opacity < 1.0f) {
                 g.setComposite(AlphaComposite.SrcOver.derive(opacity));
             }
-            drawElementBody(g, e);
+            drawElementBody(g, rendered);
             if (opacity < 1.0f) g.setComposite(baseComposite);
             if (savedTx != null) g.setTransform(savedTx);
         }
+    }
+
+    /**
+     * 0.4.0-P1-C：TextElement 内含 {@code ${var:X}} 时返回替换后的 record 副本；其他元素 / 纯文本
+     * 直接返原 {@code e}。{@code interp == null} 或 {@code text} 空也走 passthrough。
+     *
+     * <p>{@code referencedAccumulator} 不为 null 时会把本次引用的 fullName 累计进去
+     * （供 rasterize 末尾 {@code markWallReferences}）。</p>
+     */
+    private static Element maybeInterpolateText(Element e, VariableInterpolator interp,
+                                                String wallId, Set<String> referencedAccumulator) {
+        if (interp == null) return e;
+        if (!(e instanceof TextElement t)) return e;
+        String src = t.text();
+        if (src == null || src.isEmpty() || src.indexOf("${var:") < 0) return e;
+        VariableInterpolator.Result r = interp.interpolate(src, wallId);
+        if (referencedAccumulator != null) {
+            referencedAccumulator.addAll(r.referencedFullNames());
+        }
+        // 替换文本相同 → 不分配新 record（极端情况：占位符全 resolve 出与原字符串等同的文本，罕见）
+        if (src.equals(r.text())) return e;
+        return new TextElement(
+                t.id(), t.x(), t.y(), t.w(), t.h(), t.rotation(),
+                t.locked(), t.visible(),
+                r.text(),
+                t.fontId(), t.fontSize(), t.color(), t.align(),
+                t.letterSpacing(), t.lineHeight(), t.vertical(),
+                t.effects(),
+                t.opacity(), t.blendMode(), t.renderMode());
     }
 
     /** 单 element 几何绘制 dispatch（不含 opacity / rotation / dither 装饰）。 */
@@ -297,12 +394,15 @@ public final class CanvasCompositor {
     }
 
     /** slow path：把 layer 内 element 画到独立 ARGB buffer（透明背景）。 */
-    private BufferedImage renderLayerToBuffer(Layer layer, int widthPx, int heightPx) {
+    private BufferedImage renderLayerToBuffer(Layer layer, int widthPx, int heightPx,
+                                              VariableInterpolator interp, String wallId,
+                                              Set<String> referencedAccumulator) {
         BufferedImage buf = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
         Graphics2D lg = buf.createGraphics();
         try {
             applyHints(lg);
-            drawElementsTo(lg, layer.elements(), widthPx, heightPx);
+            drawElementsTo(lg, layer.elements(), widthPx, heightPx,
+                    interp, wallId, referencedAccumulator);
         } finally {
             lg.dispose();
         }

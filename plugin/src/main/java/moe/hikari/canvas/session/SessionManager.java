@@ -82,9 +82,24 @@ public final class SessionManager {
     /** session forget 时调用，用于让 throttler / rate-limiter / WS ctx map 等清状态。 */
     private final List<Consumer<String>> forgetHooks = new CopyOnWriteArrayList<>();
 
+    /**
+     * 0.4.0-P1-C：wall 删除时调用，让 VariableStore 清掉 wall 的倒排索引（避免被删 wall 仍
+     * 出现在 referencedByWalls 列表里、变量值变更触发已不存在 wall 的 dirty）。
+     * callback 接收被删的 wallId；线程安全（CopyOnWriteArrayList）。
+     */
+    private final List<Consumer<String>> wallDeleteHooks = new CopyOnWriteArrayList<>();
+
     /** 注册 session forget 监听。callback 接收被 forget 的 sessionId。线程安全。 */
     public void addForgetHook(Consumer<String> hook) {
         forgetHooks.add(hook);
+    }
+
+    /**
+     * 0.4.0-P1-C：注册 wall 删除监听。callback 在 {@link #deleteWall} 完成 map 释放 + DB 删行后
+     * 触发，按 hook 注册顺序异常隔离逐个调用。
+     */
+    public void addWallDeleteHook(Consumer<String> hook) {
+        wallDeleteHooks.add(hook);
     }
 
     public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver,
@@ -651,6 +666,16 @@ public final class SessionManager {
         auditLog.record("WALL_DELETE", null, null, null, null,
                 Map.of("wall_id", wallId, "released_maps", released.size()));
         for (String id : forgottenIds) runForgetHooks(id);
+        // 0.4.0-P1-C：wall 删除完成 → 触发监听（VariableStore.clearWallReferences 等）。
+        // 异常隔离避免单个 hook 抛拖垮主路径。
+        for (Consumer<String> hook : wallDeleteHooks) {
+            try {
+                hook.accept(wallId);
+            } catch (Exception e) {
+                log.log(java.util.logging.Level.WARNING,
+                        "SessionManager.deleteWall: wallDeleteHook threw for " + wallId, e);
+            }
+        }
         return true;
     }
 
