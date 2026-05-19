@@ -233,4 +233,82 @@ describe('interpolator.interpolate', () => {
         expect(r.text).toBe(UNRESOLVED);
         expect(r.missingFullNames.has('wall.id')).toBe(true);
     });
+
+    // ──────────────────────────────────────────────────────────
+    //  M28-enhance：segments 字段（PreviewRenderer hint chip 用）
+    // ──────────────────────────────────────────────────────────
+
+    it('19. 纯文本 → segments 为空数组', () => {
+        const r = interpolate('Hello world', 'w-1', store);
+        expect(r.segments).toEqual([]);
+    });
+
+    it('20. null / undefined / 空字符串 → segments 为空数组', () => {
+        expect(interpolate(null, 'w-1', store).segments).toEqual([]);
+        expect(interpolate(undefined, 'w-1', store).segments).toEqual([]);
+        expect(interpolate('', 'w-1', store).segments).toEqual([]);
+    });
+
+    it('21. 单 placeholder → segments 长度 1 + start/end 指向替换后字符', () => {
+        store.set('user:w-1/x', mkVar('user:w-1', 'x', 'VALUE'));
+        const r = interpolate('A=${var:user/x}!', 'w-1', store);
+        expect(r.text).toBe('A=VALUE!');
+        expect(r.segments).toHaveLength(1);
+        const seg = r.segments[0];
+        expect(seg.start).toBe(2); // 'A=' 之后
+        expect(seg.end).toBe(7);   // 'A=VALUE'
+        expect(r.text.substring(seg.start, seg.end)).toBe('VALUE');
+        expect(seg.fullName).toBe('user:w-1/x');
+        expect(seg.raw).toBe('${var:user/x}');
+    });
+
+    it('22. 多 placeholder → segments 数量 + 各 range 精确', () => {
+        store.set('user:w-1/a', mkVar('user:w-1', 'a', '10'));
+        store.set('user:w-1/b', mkVar('user:w-1', 'b', '20'));
+        const r = interpolate('${var:user/a}+${var:user/b}=30', 'w-1', store);
+        expect(r.text).toBe('10+20=30');
+        expect(r.segments).toHaveLength(2);
+        expect(r.text.substring(r.segments[0].start, r.segments[0].end)).toBe('10');
+        expect(r.text.substring(r.segments[1].start, r.segments[1].end)).toBe('20');
+        expect(r.segments[0].fullName).toBe('user:w-1/a');
+        expect(r.segments[1].fullName).toBe('user:w-1/b');
+    });
+
+    it('23. unresolved placeholder（??? 兜底）segments 仍然记录', () => {
+        const r = interpolate('X${var:ghost}Y', 'w-1', store);
+        expect(r.text).toBe('X???Y');
+        expect(r.segments).toHaveLength(1);
+        expect(r.segments[0].start).toBe(1);
+        expect(r.segments[0].end).toBe(4);
+        expect(r.text.substring(r.segments[0].start, r.segments[0].end))
+            .toBe(UNRESOLVED);
+    });
+
+    it('24. fallback 替换后 segments range 对应 fallback 字符串', () => {
+        const r = interpolate('[${var:missing|fallback=N/A}]', 'w-1', store);
+        expect(r.text).toBe('[N/A]');
+        expect(r.segments).toHaveLength(1);
+        expect(r.text.substring(r.segments[0].start, r.segments[0].end))
+            .toBe('N/A');
+    });
+
+    it('25. 显式空 fallback → segments range 为零宽（start === end）', () => {
+        const r = interpolate('[${var:missing|fallback=}]', 'w-1', store);
+        expect(r.text).toBe('[]');
+        expect(r.segments).toHaveLength(1);
+        expect(r.segments[0].start).toBe(r.segments[0].end);
+    });
+
+    it('26. 长占位符替换为短值 → segments end 指向短值末尾（layout 不爆 bug 修复关键）', () => {
+        // 问题情境：${var:schedule/eta_minutes} 是 30 字符，替换为 "5" 1 字符。
+        // segments[0] 应指向短的 "5"，而非原 30 字符；这样 PreviewRenderer 画 hint 时
+        // 矩形宽度也是 1 字符宽，而非 30 字符宽
+        store.set('schedule:w-1/eta_minutes', mkVar('schedule:w-1', 'eta_minutes', '5'));
+        const r = interpolate('ETA ${var:schedule/eta_minutes} min', 'w-1', store);
+        expect(r.text).toBe('ETA 5 min');
+        expect(r.segments).toHaveLength(1);
+        expect(r.segments[0].start).toBe(4);
+        expect(r.segments[0].end).toBe(5);
+        expect(r.text.substring(r.segments[0].start, r.segments[0].end)).toBe('5');
+    });
 });

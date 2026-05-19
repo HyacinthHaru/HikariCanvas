@@ -9,6 +9,8 @@ import { applyBayerDither } from './BayerDither';
 import { getPaletteLut, type PaletteLut } from './PaletteLut';
 import { ensureLoaded, isLoaded } from './FontLoader';
 import { ensureLoaded as ensureIconLoaded, getCached as getCachedIcon, onIconLoaded } from './IconLoader';
+import { interpolate, type PlaceholderSegment } from '@/variable/interpolator';
+import type { useVariableStore } from '@/stores/variables';
 
 /**
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
@@ -705,6 +707,37 @@ function shouldUseNearestNeighbor(family: string): boolean {
     return !!(meta?.pixelated && meta.nativeSize > 0);
 }
 
+// ---------- Variable interpolation context（M28-enhance） ----------
+//
+// PreviewRenderer 是同步纯函数；运行时需要拿当前 wallId + Pinia variable store 解析 ${var:X}。
+// 上层 CanvasView mount 时调 setVariableContext 注入访问器，避免 PreviewRenderer 直接 import
+// useProjectStore / useVariableStore（保持渲染层与 Pinia 解耦，便于单测）。
+
+interface VariableContext {
+    wallId: string | null;
+    store: ReturnType<typeof useVariableStore>;
+}
+let variableContextProvider: (() => VariableContext | null) | null = null;
+export function setVariableContextProvider(fn: () => VariableContext | null) {
+    variableContextProvider = fn;
+}
+
+// chip hint 配色：Catppuccin Mauve（半透明），与编辑器主题协调。
+// 0.18 alpha 让背景轻微高亮但不刺眼；padding 给点上下气流防字形太顶。
+const HINT_FILL = 'rgba(203, 166, 247, 0.20)';   // ctp-mauve @ 0.20
+const HINT_BORDER = 'rgba(203, 166, 247, 0.50)';
+
+/** 解析 TextElement.text 中的 ${var:X}。fallback：无 context 时原文本 + 空 segments。 */
+function resolveTextForRender(t: TextElement): { rendered: string; segments: PlaceholderSegment[] } {
+    const text = t.text;
+    if (text == null || text.length === 0) return { rendered: '', segments: [] };
+    if (text.indexOf('${var:') < 0) return { rendered: text, segments: [] };
+    const ctx = variableContextProvider?.() ?? null;
+    if (!ctx) return { rendered: text, segments: [] };
+    const r = interpolate(text, ctx.wallId, ctx.store);
+    return { rendered: r.text, segments: r.segments };
+}
+
 // ---------- Text：4 层 glow → shadow → stroke → fill ----------
 
 function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
@@ -721,13 +754,27 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
 
-    const glyphs = layoutText(t);
+    // M28-enhance：渲染前先用 interpolator 解析 ${var:X}。layout 走替换后字符串，
+    // 避免编辑器画布上长占位符（如 "${var:schedule/eta_minutes}"）撑爆 layout
+    // 致使文字叠在一起。游戏内同源走后端 Compositor 已 interpolate；前端 hint 仅编辑期视觉提示。
+    const { rendered, segments } = resolveTextForRender(t);
+    // 用替换后的字符串临时构造 layout 输入；其他字段透传
+    const layoutInput: TextElement = rendered === t.text ? t : { ...t, text: rendered };
+    if (!layoutInput.text) return;
+
+    const glyphs = layoutText(layoutInput);
     if (glyphs.length === 0) return;
 
     const fx = t.effects;
     const useNN = shouldUseNearestNeighbor(family);
     const nativeSize = useNN ? FONT_META[family].nativeSize : 0;
     const nativeSpec = useNN ? `${nativeSize}px "${family}"` : '';
+
+    // 0. placeholder hint chip 背景（仅编辑器；segments 非空 → 有变量占位符）
+    //    游戏内后端 Compositor 不走本路径，无 hint，保持双端像素一致
+    if (segments.length > 0) {
+        drawPlaceholderHints(ctx, glyphs, segments, t.fontSize);
+    }
 
     // 1. glow（底层）
     if (fx?.glow && fx.glow.radius > 0) {
@@ -760,6 +807,67 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
             drawGlyphFill(ctx, g, t.fontSize, 0, 0);
         }
     }
+}
+
+/**
+ * M28-enhance：placeholder hint chip 风格背景。每个 segment 对应原 text 中的 ${var:X}
+ * 替换后的字符 range；通过 glyphs[].srcIndex 反查命中字符 → 按行分组 → 画半透明矩形。
+ *
+ * <p>视觉决策：Catppuccin Mauve 0.20 alpha 填充 + 0.50 alpha 边框（极薄），让用户能在编辑器
+ * 上区分"哪几个字是变量值"；hover tooltip 留 v1.x（Canvas 不易做 hover；需 DOM overlay）。</p>
+ */
+function drawPlaceholderHints(
+    ctx: CanvasRenderingContext2D,
+    glyphs: PositionedGlyph[],
+    segments: PlaceholderSegment[],
+    fontSize: number,
+): void {
+    if (segments.length === 0 || glyphs.length === 0) return;
+    ctx.save();
+    ctx.fillStyle = HINT_FILL;
+    ctx.strokeStyle = HINT_BORDER;
+    ctx.lineWidth = 1;
+    const ascent = Math.round(fontSize * ASCENT_RATIO);
+    const padX = 1;
+    const padTop = 2;
+    const padBot = 2;
+    for (const seg of segments) {
+        // 找命中本 seg 的 glyph 子集（按 srcIndex range）
+        const segGlyphs = glyphs.filter(g =>
+            g.srcIndex !== undefined && g.srcIndex >= seg.start && g.srcIndex < seg.end);
+        if (segGlyphs.length === 0) continue;
+        // 按行分组：同 baselineY 的 glyph 一组（一个 placeholder 可能 softWrap 跨多行）
+        const byLine = new Map<number, PositionedGlyph[]>();
+        for (const g of segGlyphs) {
+            const arr = byLine.get(g.baselineY);
+            if (arr) arr.push(g);
+            else byLine.set(g.baselineY, [g]);
+        }
+        for (const [baselineY, lineGlyphs] of byLine) {
+            // sort by x to compute left/right bounds
+            lineGlyphs.sort((a, b) => a.x - b.x);
+            const first = lineGlyphs[0];
+            const last = lineGlyphs[lineGlyphs.length - 1];
+            // 末尾字符宽度估算：本来该用 charAdvance，但 glyphs 不直接带 advance；
+            // 取 next glyph in line if exists, else 用 fontSize 兜底
+            const idx = glyphs.indexOf(last);
+            let lastAdv = fontSize;
+            if (idx >= 0 && idx + 1 < glyphs.length && glyphs[idx + 1].baselineY === baselineY) {
+                lastAdv = glyphs[idx + 1].x - last.x;
+            } else {
+                // ASCII 半角宽度 fallback；CJK 走 fontSize
+                const cp = last.ch.charCodeAt(0);
+                lastAdv = cp < 0x2E80 ? Math.round(fontSize * 0.5) : fontSize;
+            }
+            const x0 = first.x - padX;
+            const x1 = last.x + lastAdv + padX;
+            const y0 = baselineY - ascent - padTop;
+            const y1 = baselineY + (fontSize - ascent) + padBot;
+            ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+            ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0 - 1, y1 - y0 - 1);
+        }
+    }
+    ctx.restore();
 }
 
 /**

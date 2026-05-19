@@ -452,6 +452,74 @@ class VariableInterpolatorTest {
         assertEquals("X", r.text());
     }
 
+    // ──────────────────────────────────────────────────────────
+    //  M28-enhance：segments 字段（与前端镜像）
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void segments_emptyForPlainText() {
+        var r = interp.interpolate("Hello world", "w-1");
+        assertEquals(0, r.segments().size());
+    }
+
+    @Test
+    void segments_emptyForNullOrEmpty() {
+        assertEquals(0, interp.interpolate(null, "w-1").segments().size());
+        assertEquals(0, interp.interpolate("", "w-1").segments().size());
+    }
+
+    @Test
+    void segments_singlePlaceholderRange() {
+        store.create("user:w-1", "x", VarType.STRING, null, null);
+        store.setValue("user:w-1/x", "VALUE", null);
+        var r = interp.interpolate("A=${var:user/x}!", "w-1");
+        assertEquals("A=VALUE!", r.text());
+        assertEquals(1, r.segments().size());
+        var s = r.segments().get(0);
+        assertEquals(2, s.start());
+        assertEquals(7, s.end());
+        assertEquals("VALUE", r.text().substring(s.start(), s.end()));
+        assertEquals("user:w-1/x", s.fullName());
+        assertEquals("${var:user/x}", s.raw());
+    }
+
+    @Test
+    void segments_multiplePlaceholders_eachRangeAccurate() {
+        store.create("user:w-1", "a", VarType.NUMBER, null, null);
+        store.setValue("user:w-1/a", "10", null);
+        store.create("user:w-1", "b", VarType.NUMBER, null, null);
+        store.setValue("user:w-1/b", "20", null);
+        var r = interp.interpolate("${var:user/a}+${var:user/b}=30", "w-1");
+        assertEquals("10+20=30", r.text());
+        assertEquals(2, r.segments().size());
+        assertEquals("10", r.text().substring(r.segments().get(0).start(), r.segments().get(0).end()));
+        assertEquals("20", r.text().substring(r.segments().get(1).start(), r.segments().get(1).end()));
+    }
+
+    @Test
+    void segments_unresolvedPlaceholderStillRecorded() {
+        var r = interp.interpolate("X${var:ghost}Y", "w-1");
+        assertEquals("X???Y", r.text());
+        assertEquals(1, r.segments().size());
+        assertEquals(1, r.segments().get(0).start());
+        assertEquals(4, r.segments().get(0).end());
+        assertEquals(VariableInterpolator.UNRESOLVED,
+                r.text().substring(r.segments().get(0).start(), r.segments().get(0).end()));
+    }
+
+    @Test
+    void segments_longPlaceholderShortValue_rangeMatchesShortValue() {
+        // 长 placeholder（"${var:schedule/eta_minutes}"=27 char）替换为短值（"5"=1 char），
+        // segments range 应反映短值长度——前端 PreviewRenderer hint 宽度才正确
+        store.create("schedule:w-1", "eta_minutes", VarType.NUMBER, null, "schedule");
+        store.setValue("schedule:w-1/eta_minutes", "5", null);
+        var r = interp.interpolate("ETA ${var:schedule/eta_minutes} min", "w-1");
+        assertEquals("ETA 5 min", r.text());
+        assertEquals(1, r.segments().size());
+        assertEquals(4, r.segments().get(0).start());
+        assertEquals(5, r.segments().get(0).end());
+    }
+
     @Test
     void hit_doesNotTriggerDynamicLookupHook() {
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();

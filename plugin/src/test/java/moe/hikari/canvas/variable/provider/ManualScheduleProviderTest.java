@@ -64,17 +64,26 @@ class ManualScheduleProviderTest {
     }
 
     @Test
-    void declaredKeys_returnsSeven() {
-        // 0.4.0 bugfix（Bug 3+4）：扩展到 7 个 key
+    void declaredKeys_returnsFifteen() {
+        // M28-enhance：扩展到 15 个 key（7 原 + eta_mmss + 7 next2_*）
         List<DeclaredKey> keys = provider.declaredKeys();
-        assertEquals(7, keys.size());
+        assertEquals(15, keys.size());
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("next_departure")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("next_destination")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("eta_minutes")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("eta_seconds")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("eta_mmss")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("is_arriving")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("arrival_status")));
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("precision")));
+        // 第二班次
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("next2_departure")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("next2_destination")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("next2_eta_minutes")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("next2_eta_seconds")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("next2_eta_mmss")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("next2_is_arriving")));
+        assertTrue(keys.stream().anyMatch(k -> k.key().equals("next2_arrival_status")));
     }
 
     @Test
@@ -189,6 +198,12 @@ class ManualScheduleProviderTest {
         assertEquals("", currentValueOrNull(store, "schedule:w-empty/next_destination"));
         assertEquals("", currentValueOrNull(store, "schedule:w-empty/eta_minutes"));
         assertEquals("false", currentValueOrNull(store, "schedule:w-empty/is_arriving"));
+        // M28-enhance：next2_* 也应为空
+        assertEquals("", currentValueOrNull(store, "schedule:w-empty/next2_departure"));
+        assertEquals("", currentValueOrNull(store, "schedule:w-empty/next2_destination"));
+        assertEquals("", currentValueOrNull(store, "schedule:w-empty/next2_eta_seconds"));
+        assertEquals("", currentValueOrNull(store, "schedule:w-empty/eta_mmss"));
+        assertEquals("false", currentValueOrNull(store, "schedule:w-empty/next2_is_arriving"));
     }
 
     @Test
@@ -240,7 +255,7 @@ class ManualScheduleProviderTest {
 
     @Test
     void unregisterWall_removesAllVariables() {
-        // 0.4.0 bugfix（Bug 3+4）：扩展到 7 变量，unregister 全部清掉
+        // M28-enhance：扩展到 15 变量，unregister 全部清掉
         dataSource.now = LocalTime.of(8, 0);
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "08:30", "A", 0)));
@@ -253,9 +268,18 @@ class ManualScheduleProviderTest {
         assertFalse(store.get("schedule:w-1/next_destination").isPresent());
         assertFalse(store.get("schedule:w-1/eta_minutes").isPresent());
         assertFalse(store.get("schedule:w-1/eta_seconds").isPresent());
+        assertFalse(store.get("schedule:w-1/eta_mmss").isPresent());
         assertFalse(store.get("schedule:w-1/is_arriving").isPresent());
         assertFalse(store.get("schedule:w-1/arrival_status").isPresent());
         assertFalse(store.get("schedule:w-1/precision").isPresent());
+        // M28-enhance：next2_*
+        assertFalse(store.get("schedule:w-1/next2_departure").isPresent());
+        assertFalse(store.get("schedule:w-1/next2_destination").isPresent());
+        assertFalse(store.get("schedule:w-1/next2_eta_minutes").isPresent());
+        assertFalse(store.get("schedule:w-1/next2_eta_seconds").isPresent());
+        assertFalse(store.get("schedule:w-1/next2_eta_mmss").isPresent());
+        assertFalse(store.get("schedule:w-1/next2_is_arriving").isPresent());
+        assertFalse(store.get("schedule:w-1/next2_arrival_status").isPresent());
         assertFalse(provider.registeredWallsSnapshot().contains("w-1"));
     }
 
@@ -370,7 +394,7 @@ class ManualScheduleProviderTest {
 
         provider.ensureWallRegistered("w-1");
 
-        // 应至少有 7 个 CREATED 事件（schedule:w-1/<7 keys>）+ 7 个 VALUE_SET（pushValues 写所有 7 个）
+        // M28-enhance：15 个 CREATED + 15 个 VALUE_SET
         long createdCount = events.stream()
                 .filter(e -> e.type() == VariableStore.ChangeType.CREATED)
                 .filter(e -> e.fullName().startsWith("schedule:w-1/"))
@@ -379,10 +403,10 @@ class ManualScheduleProviderTest {
                 .filter(e -> e.type() == VariableStore.ChangeType.VALUE_SET)
                 .filter(e -> e.fullName().startsWith("schedule:w-1/"))
                 .count();
-        assertEquals(7, createdCount,
-                "ensureWallRegistered 应让 listener 接收 7 个 CREATED（7 schedule 变量）");
-        assertEquals(7, valueSetCount,
-                "ensureWallRegistered 后立即 pushValues 应让 listener 接收 7 个 VALUE_SET");
+        assertEquals(15, createdCount,
+                "ensureWallRegistered 应让 listener 接收 15 个 CREATED（15 schedule 变量）");
+        assertEquals(15, valueSetCount,
+                "ensureWallRegistered 后立即 pushValues 应让 listener 接收 15 个 VALUE_SET");
 
         // 验证 VALUE_SET 事件携带的 variable 含 currentValue
         var etaSecondsEvent = events.stream()
@@ -411,8 +435,8 @@ class ManualScheduleProviderTest {
                 .filter(e -> e.type() == VariableStore.ChangeType.DELETED)
                 .filter(e -> e.fullName().startsWith("schedule:w-1/"))
                 .count();
-        assertEquals(7, deletedCount,
-                "unregisterWall 应让 listener 接收 7 个 DELETED");
+        assertEquals(15, deletedCount,
+                "unregisterWall 应让 listener 接收 15 个 DELETED");
         // DELETED 事件 variable=null
         events.stream()
                 .filter(e -> e.type() == VariableStore.ChangeType.DELETED)
@@ -429,6 +453,136 @@ class ManualScheduleProviderTest {
         // 60s 阈值
         var c2 = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 60L);
         assertFalse(c2.isArriving()); // 300s > 60
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  M28-enhance：next2 第二班次 + eta_mmss
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void formatMmss_basicCases() {
+        assertEquals("00:00", ManualScheduleProvider.formatMmss(0L));
+        assertEquals("00:30", ManualScheduleProvider.formatMmss(30L));
+        assertEquals("01:30", ManualScheduleProvider.formatMmss(90L));
+        assertEquals("61:01", ManualScheduleProvider.formatMmss(3661L));
+        assertEquals("99:59", ManualScheduleProvider.formatMmss(99L * 60L + 59L));
+        // 超过 99 分钟仍 MM 累加（不卡 99 上限）
+        assertEquals("100:00", ManualScheduleProvider.formatMmss(6000L));
+        assertEquals("151:01", ManualScheduleProvider.formatMmss(9061L));
+        // 负数兜底 0
+        assertEquals("00:00", ManualScheduleProvider.formatMmss(-5L));
+    }
+
+    @Test
+    void computeNext_etaMmss_includedInComputed() {
+        // 08:00 → 08:01:30 = 90s = 01:30
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "08:01:30", "Test", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0, 0), 60L);
+        assertEquals("01:30", c.etaMmss());
+        assertEquals(90, (int) c.etaSeconds());
+    }
+
+    @Test
+    void computeNext_doubleEntry_next2PicksSecondFuture() {
+        // 08:00 当前；entries 09:00 / 10:30
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "09:00", "A", 0),
+                new ScheduleEntry(2, "w", "10:30", "B", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 60L);
+        assertEquals("09:00", c.nextDeparture());
+        assertEquals("A", c.nextDestination());
+        assertEquals("10:30", c.next2Departure());
+        assertEquals("B", c.next2Destination());
+        assertEquals(3600, (int) c.etaSeconds());
+        assertEquals(9000, (int) c.next2EtaSeconds()); // 2.5h
+        assertEquals("60:00", c.etaMmss());
+        assertEquals("150:00", c.next2EtaMmss());
+    }
+
+    @Test
+    void computeNext_singleEntry_next2LoopsToNextDay() {
+        // 单 entry：next2 = 该 entry（明天，ETA +24h）
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "09:00", "Loop", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 60L);
+        assertEquals("09:00", c.nextDeparture());
+        assertEquals("09:00", c.next2Departure(),
+                "单 entry：next2 = next 自身（明天）");
+        assertEquals("Loop", c.next2Destination());
+        assertEquals(3600, (int) c.etaSeconds());
+        // next2 = 24h 后 = 90000s（实际 3600 + 86400）
+        assertEquals(3600 + 86400, (int) c.next2EtaSeconds());
+    }
+
+    @Test
+    void computeNext_allEntriesPassed_doubleEntry_next2IsSecondTomorrow() {
+        // 当前 23:50；所有 entry 已过（07:00 / 09:00）
+        // next = 07:00（明天），next2 = 09:00（明天）
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "07:00", "Morning", 0),
+                new ScheduleEntry(2, "w", "09:00", "Mid", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(23, 50), 60L);
+        assertEquals("07:00", c.nextDeparture());
+        assertEquals("09:00", c.next2Departure());
+        // 23:50 → 24:00 = 10min = 600s；24:00 → 07:00 = 7h = 25200s；合计 25800
+        assertEquals(25800, (int) c.etaSeconds());
+        assertEquals(25800 + 7200, (int) c.next2EtaSeconds()); // 07:00 → 09:00 = 2h
+    }
+
+    @Test
+    void computeNext_allEntriesPassed_singleEntry_next2IsDayAfter() {
+        // 单 entry 已过：next = 该 entry（明天），next2 = 该 entry（后天，next + 24h）
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "07:00", "Only", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(23, 0), 60L);
+        assertEquals("07:00", c.nextDeparture());
+        assertEquals("07:00", c.next2Departure());
+        // 23:00 → 24:00 = 1h = 3600s；24:00 → 07:00 = 7h = 25200s；合计 28800
+        assertEquals(28800, (int) c.etaSeconds());
+        assertEquals(28800 + 86400, (int) c.next2EtaSeconds());
+    }
+
+    @Test
+    void computeNext_emptyEntries_next2AllNull() {
+        var c = ManualScheduleProvider.computeNext(List.of(), LocalTime.of(8, 0), 60L);
+        assertNull(c.nextDeparture());
+        assertNull(c.next2Departure());
+        assertNull(c.next2EtaSeconds());
+        assertNull(c.next2EtaMmss());
+        assertFalse(c.next2IsArriving());
+    }
+
+    @Test
+    void computeNext_tripleEntry_next2IsSecondFuture() {
+        // 08:00 当前；entries 07:00 / 09:00 / 10:30；next = 09:00, next2 = 10:30
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "07:00", "Past", 0),
+                new ScheduleEntry(2, "w", "09:00", "A", 0),
+                new ScheduleEntry(3, "w", "10:30", "B", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 60L);
+        assertEquals("09:00", c.nextDeparture());
+        assertEquals("10:30", c.next2Departure());
+    }
+
+    @Test
+    void refresh_publishesNext2Variables() {
+        // 端到端：通过 store 验证 next2_* 都被写
+        dataSource.now = LocalTime.of(8, 0);
+        dataSource.entriesByWall.put("w-1", List.of(
+                new ScheduleEntry(1, "w-1", "08:30", "Beijing", 0),
+                new ScheduleEntry(2, "w-1", "09:00", "Shanghai", 0)));
+        provider.ensureWallRegistered("w-1");
+
+        assertEquals("08:30", currentValueOrNull(store, "schedule:w-1/next_departure"));
+        assertEquals("09:00", currentValueOrNull(store, "schedule:w-1/next2_departure"));
+        assertEquals("Shanghai", currentValueOrNull(store, "schedule:w-1/next2_destination"));
+        // 08:00 → 09:00 = 3600s
+        assertEquals("3600", currentValueOrNull(store, "schedule:w-1/next2_eta_seconds"));
+        assertEquals("60", currentValueOrNull(store, "schedule:w-1/next2_eta_minutes"));
+        assertEquals("60:00", currentValueOrNull(store, "schedule:w-1/next2_eta_mmss"));
+        assertEquals("30:00", currentValueOrNull(store, "schedule:w-1/eta_mmss"));
+        assertEquals("false", currentValueOrNull(store, "schedule:w-1/next2_is_arriving"));
     }
 
     // ──────────────────────────────────────────────────────────

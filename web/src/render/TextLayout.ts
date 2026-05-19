@@ -11,6 +11,13 @@ export interface PositionedGlyph {
     baselineY: number;
     /** M5-C3 Part 2 竖排用：true 表示该字符应绕自己的绘制点旋转 90°（CJK 全角标点）。 */
     rotated?: boolean;
+    /**
+     * M28-enhance：该 glyph 在 {@link TextElement#text} 中的原 char index（输入字符串）。
+     * <p>仅前端字段——双端一致性不受影响（后端 Java {@code TextLayout.PositionedGlyph} 不带；
+     * 仅 PreviewRenderer placeholder hint 用 srcIndex 与 interpolator segments 做 char range
+     * 映射）。emoji surrogate pair / combining mark 暂按单 char index 处理。</p>
+     */
+    srcIndex?: number;
 }
 
 /** 跨字体统一的 ascent 比例（rendering.md §3.2）。 */
@@ -68,46 +75,55 @@ function layoutHorizontal(t: TextElement): PositionedGlyph[] {
     const ascentPx = Math.round(fontSize * ASCENT_RATIO);
     const lineHeightPx = Math.max(1, Math.round(fontSize * lineHeightMul));
 
-    // 1) 硬换行
-    const paragraphs = t.text.split('\n');
+    // 1) 硬换行（保留 srcIndex 起点，便于 step 2 / 4 透传到 PositionedGlyph.srcIndex）
+    type LineWithIndex = { text: string; srcStart: number };
+    const paragraphs: LineWithIndex[] = [];
+    {
+        let cursor = 0;
+        const parts = t.text.split('\n');
+        for (let pi = 0; pi < parts.length; pi++) {
+            paragraphs.push({ text: parts[pi], srcStart: cursor });
+            cursor += parts[pi].length + 1; // +1 for \n
+        }
+    }
 
     // 2) 软换行
-    const lines: string[] = [];
+    const lines: LineWithIndex[] = [];
     for (const para of paragraphs) {
-        if (para === '') {
-            lines.push('');
+        if (para.text === '') {
+            lines.push({ text: '', srcStart: para.srcStart });
         } else {
-            softWrap(para, fontId, fontSize, boxW, letterSpacing, lines);
+            softWrap(para.text, para.srcStart, fontId, fontSize, boxW, letterSpacing, lines);
         }
     }
 
     // 3) 行首禁则
     applyLineStartForbidden(lines);
 
-    // 4) align + 基线定位 + letterSpacing 逐字符累加
+    // 4) align + 基线定位 + letterSpacing 逐字符累加（同步携带 srcIndex）
     const out: PositionedGlyph[] = [];
     for (let li = 0; li < lines.length; li++) {
         const line = lines[li];
         const lineTopY = t.y + li * lineHeightPx;
         const baselineY = lineTopY + ascentPx;
-        const lineWidthPx = measureLineWidth(line, fontId, fontSize, letterSpacing);
+        const lineWidthPx = measureLineWidth(line.text, fontId, fontSize, letterSpacing);
         let startX = t.x;
         if (t.align === 'center') startX = t.x + Math.floor((boxW - lineWidthPx) / 2);
         else if (t.align === 'right') startX = t.x + boxW - lineWidthPx;
 
         let cursorX = startX;
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            out.push({ ch, x: cursorX, baselineY });
+        for (let i = 0; i < line.text.length; i++) {
+            const ch = line.text[i];
+            out.push({ ch, x: cursorX, baselineY, srcIndex: line.srcStart + i });
             cursorX += charAdvance(fontId, ch, fontSize);
-            if (i < line.length - 1) cursorX += Math.round(letterSpacing);
+            if (i < line.text.length - 1) cursorX += Math.round(letterSpacing);
         }
     }
     return out;
 }
 
-function softWrap(text: string, fontId: string, fontSize: number, maxW: number,
-                  letterSpacing: number, out: string[]): void {
+function softWrap(text: string, srcStart: number, fontId: string, fontSize: number, maxW: number,
+                  letterSpacing: number, out: { text: string; srcStart: number }[]): void {
     const n = text.length;
     let cursor = 0;
     while (cursor < n) {
@@ -137,32 +153,33 @@ function softWrap(text: string, fontId: string, fontSize: number, maxW: number,
         }
 
         if (breakOut < 0) {
-            out.push(text.substring(cursor));
+            out.push({ text: text.substring(cursor), srcStart: srcStart + cursor });
             return;
         }
 
         let nextStart: number;
         if (lastBreakEnd >= cursor && lastBreakEnd <= breakOut) {
             const endOfLine = breakAtWhitespace ? lastBreakEnd - 1 : lastBreakEnd;
-            out.push(text.substring(cursor, endOfLine));
+            out.push({ text: text.substring(cursor, endOfLine), srcStart: srcStart + cursor });
             nextStart = lastBreakEnd;
             while (nextStart < n && text[nextStart] === ' ') nextStart++;
         } else {
-            out.push(text.substring(cursor, breakOut));
+            out.push({ text: text.substring(cursor, breakOut), srcStart: srcStart + cursor });
             nextStart = breakOut;
         }
         cursor = nextStart;
     }
 }
 
-function applyLineStartForbidden(lines: string[]): void {
+function applyLineStartForbidden(lines: { text: string; srcStart: number }[]): void {
     for (let i = 1; i < lines.length; i++) {
         const line = lines[i];
-        if (line.length === 0) continue;
-        const first = line[0];
+        if (line.text.length === 0) continue;
+        const first = line.text[0];
         if (LINE_START_FORBIDDEN.indexOf(first) >= 0) {
-            lines[i - 1] = lines[i - 1] + first;
-            lines[i] = line.substring(1);
+            // \u628a\u9996\u5b57\u7b26\u56de\u632a\u5230\u4e0a\u4e00\u884c\u672b\u5c3e\u2014\u2014\u4e0a\u4e00\u884c\u4e0d\u52a8 srcStart\uff0c\u672c\u884c srcStart +1
+            lines[i - 1] = { text: lines[i - 1].text + first, srcStart: lines[i - 1].srcStart };
+            lines[i] = { text: line.text.substring(1), srcStart: line.srcStart + 1 };
         }
     }
 }
@@ -188,13 +205,20 @@ function layoutVertical(t: TextElement): PositionedGlyph[] {
     const ascentPx = Math.round(fontSize * ASCENT_RATIO);
     const boxH = t.h;
 
-    const paragraphs = t.text.split('\n');
-    const columns: string[][] = [];
-    for (const para of paragraphs) {
-        if (para === '') {
-            columns.push([]);
-        } else {
-            softWrapVertical(para, fontSize, letterSpacing, boxH, columns);
+    // 同 horizontal：携带 srcStart（每个 col 的起始 char 在原 t.text 中 index）
+    type Col = { chars: string[]; srcStart: number };
+    const columns: Col[] = [];
+    {
+        let cursor = 0;
+        const parts = t.text.split('\n');
+        for (let pi = 0; pi < parts.length; pi++) {
+            const para = parts[pi];
+            if (para === '') {
+                columns.push({ chars: [], srcStart: cursor });
+            } else {
+                softWrapVertical(para, cursor, fontSize, letterSpacing, boxH, columns);
+            }
+            cursor += para.length + 1;
         }
     }
 
@@ -202,9 +226,9 @@ function layoutVertical(t: TextElement): PositionedGlyph[] {
     const totalCols = columns.length;
     for (let ci = 0; ci < totalCols; ci++) {
         const col = columns[ci];
-        if (col.length === 0) continue;
+        if (col.chars.length === 0) continue;
         const colCenterX = t.x + t.w - ci * colStep - Math.floor(colStep / 2);
-        const cellsH = col.length;
+        const cellsH = col.chars.length;
         const totalH = cellsH * fontSize + Math.max(0, cellsH - 1) * letterSpacing;
         let startTopY: number;
         if (t.align === 'center') startTopY = t.y + Math.floor((boxH - totalH) / 2);
@@ -212,12 +236,14 @@ function layoutVertical(t: TextElement): PositionedGlyph[] {
         else startTopY = t.y;
 
         let cellTopY = startTopY;
-        for (const ch of col) {
+        for (let i = 0; i < col.chars.length; i++) {
+            const ch = col.chars[i];
+            const srcIndex = col.srcStart + i;
             if (isRotatableVertical(ch)) {
-                out.push({ ch, x: colCenterX, baselineY: cellTopY + Math.floor(fontSize / 2), rotated: true });
+                out.push({ ch, x: colCenterX, baselineY: cellTopY + Math.floor(fontSize / 2), rotated: true, srcIndex });
             } else {
                 const chW = charAdvance(fontId, ch, fontSize);
-                out.push({ ch, x: colCenterX - Math.floor(chW / 2), baselineY: cellTopY + ascentPx });
+                out.push({ ch, x: colCenterX - Math.floor(chW / 2), baselineY: cellTopY + ascentPx, srcIndex });
             }
             cellTopY += fontSize + letterSpacing;
         }
@@ -225,21 +251,22 @@ function layoutVertical(t: TextElement): PositionedGlyph[] {
     return out;
 }
 
-function softWrapVertical(text: string, fontSize: number, letterSpacing: number,
-                          maxH: number, cols: string[][]): void {
+function softWrapVertical(text: string, srcStart: number, fontSize: number, letterSpacing: number,
+                          maxH: number, cols: { chars: string[]; srcStart: number }[]): void {
     const n = text.length;
     let i = 0;
     while (i < n) {
-        const col: string[] = [];
+        const chars: string[] = [];
+        const colStartChar = i;
         let accH = 0;
         while (i < n) {
-            const step = fontSize + (col.length === 0 ? 0 : letterSpacing);
-            if (accH + step > maxH && col.length > 0) break;
-            col.push(text[i]);
+            const step = fontSize + (chars.length === 0 ? 0 : letterSpacing);
+            if (accH + step > maxH && chars.length > 0) break;
+            chars.push(text[i]);
             accH += step;
             i++;
         }
-        cols.push(col);
+        cols.push({ chars, srcStart: srcStart + colStartChar });
     }
 }
 

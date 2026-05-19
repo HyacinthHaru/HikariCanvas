@@ -36,17 +36,27 @@ import java.util.logging.Logger;
  * <h2>per-wall namespace</h2>
  *
  * <p>namespace = {@code "schedule:<wallId>"}（与 {@link SystemVariableProvider} per-wall
- * 同款）。7 key（0.4.0 bugfix 后扩展）：</p>
+ * 同款）。15 key（M28-enhance 扩展：第二班次 next2_* + MM:SS 格式 eta_mmss）：</p>
  * <ul>
  *   <li>{@code next_departure} (STRING) — 下一班车出发时间 {@code HH:mm} 或 {@code HH:mm:ss}
  *       （按 wall.precision；无 entry 时空字符串）</li>
  *   <li>{@code next_destination} (STRING) — 下一班车终点</li>
  *   <li>{@code eta_minutes} (NUMBER) — 距下一班车几分钟（向下兼容；过零点时计算明天）</li>
  *   <li>{@code eta_seconds} (NUMBER) — 距下一班车几秒（秒精度新增）</li>
+ *   <li>{@code eta_mmss} (STRING) — 距下一班车 {@code MM:SS} 格式（超过 99min 仍按 MM 累加，如 {@code "150:30"}）</li>
  *   <li>{@code is_arriving} (BOOLEAN) — eta ≤ 阈值（config 默认 60s）为 {@code "true"}</li>
  *   <li>{@code arrival_status} (STRING) — 进站中文案 / 空闲文案（config 可改）</li>
  *   <li>{@code precision} (STRING) — wall 当前精度 {@code "minute"} / {@code "second"}</li>
+ *   <li>{@code next2_departure} (STRING) — 第二班车出发时间</li>
+ *   <li>{@code next2_destination} (STRING) — 第二班车终点</li>
+ *   <li>{@code next2_eta_minutes} (NUMBER) — 距第二班车几分钟</li>
+ *   <li>{@code next2_eta_seconds} (NUMBER) — 距第二班车几秒</li>
+ *   <li>{@code next2_eta_mmss} (STRING) — 第二班车 MM:SS 格式</li>
+ *   <li>{@code next2_is_arriving} (BOOLEAN) — 第二班车 ETA ≤ 阈值</li>
+ *   <li>{@code next2_arrival_status} (STRING) — 第二班车进站文案 / 空闲文案</li>
  * </ul>
+ *
+ * <p>单 entry 时 next2 = 该 entry 明天循环（ETA +24h）；0 entry 时 next2 全 null。</p>
  *
  * <h2>注册时机</h2>
  *
@@ -154,12 +164,29 @@ public final class ManualScheduleProvider implements VariableProvider {
                         "距下一班车多少分钟（向下兼容）", REFRESH_INTERVAL_MS),
                 new DeclaredKey("eta_seconds", VarType.NUMBER,
                         "距下一班车多少秒（秒精度）", REFRESH_INTERVAL_MS),
+                new DeclaredKey("eta_mmss", VarType.STRING,
+                        "距下一班车 MM:SS 格式（如 01:30）", REFRESH_INTERVAL_MS),
                 new DeclaredKey("is_arriving", VarType.BOOLEAN,
                         "eta ≤ 阈值时为 true（阈值见 config，默认 60s）", REFRESH_INTERVAL_MS),
                 new DeclaredKey("arrival_status", VarType.STRING,
                         "进站文案（eta ≤ 阈值时）/ 空闲文案，config 可改", REFRESH_INTERVAL_MS),
                 new DeclaredKey("precision", VarType.STRING,
-                        "wall 当前精度（minute / second）", REFRESH_INTERVAL_MS));
+                        "wall 当前精度（minute / second）", REFRESH_INTERVAL_MS),
+                // M28-enhance：第二班次
+                new DeclaredKey("next2_departure", VarType.STRING,
+                        "第二班车出发时间（地铁屏标配）", REFRESH_INTERVAL_MS),
+                new DeclaredKey("next2_destination", VarType.STRING,
+                        "第二班车终点站", REFRESH_INTERVAL_MS),
+                new DeclaredKey("next2_eta_minutes", VarType.NUMBER,
+                        "距第二班车多少分钟", REFRESH_INTERVAL_MS),
+                new DeclaredKey("next2_eta_seconds", VarType.NUMBER,
+                        "距第二班车多少秒", REFRESH_INTERVAL_MS),
+                new DeclaredKey("next2_eta_mmss", VarType.STRING,
+                        "距第二班车 MM:SS 格式", REFRESH_INTERVAL_MS),
+                new DeclaredKey("next2_is_arriving", VarType.BOOLEAN,
+                        "第二班车 ETA ≤ 阈值", REFRESH_INTERVAL_MS),
+                new DeclaredKey("next2_arrival_status", VarType.STRING,
+                        "第二班车进站文案 / 空闲文案", REFRESH_INTERVAL_MS));
     }
 
     @Override
@@ -264,17 +291,24 @@ public final class ManualScheduleProvider implements VariableProvider {
         }
     }
 
+    /** 所有 schedule per-wall key 列表（注册 / 注销共用，避免漂移）。 */
+    static final String[] ALL_KEYS = new String[] {
+            "next_departure", "next_destination",
+            "eta_minutes", "eta_seconds", "eta_mmss",
+            "is_arriving", "arrival_status",
+            "precision",
+            // M28-enhance：第二班次
+            "next2_departure", "next2_destination",
+            "next2_eta_minutes", "next2_eta_seconds", "next2_eta_mmss",
+            "next2_is_arriving", "next2_arrival_status"};
+
     /** 注销 wall（删 schedule 变量）。同 wall 重复 / 未注册幂等。 */
     public void unregisterWall(String wallId) {
         if (wallId == null || wallId.isEmpty()) return;
         if (registeredWalls.remove(wallId) == null) return;
         lastPushAt.remove(wallId);
         String ns = NAMESPACE_PREFIX + ":" + wallId;
-        for (String key : new String[] {
-                "next_departure", "next_destination",
-                "eta_minutes", "eta_seconds",
-                "is_arriving", "arrival_status",
-                "precision"}) {
+        for (String key : ALL_KEYS) {
             try {
                 store.delete(ns + "/" + key);
             } catch (VariableException e) {
@@ -302,14 +336,23 @@ public final class ManualScheduleProvider implements VariableProvider {
                 ? List.of() : List.copyOf(entries);
         registeredWalls.put(wallId, snapshot);
         String ns = NAMESPACE_PREFIX + ":" + wallId;
-        // 0.4.0 bugfix（Bug 3）：扩展 7 个变量；旧 4 个保留向下兼容
+        // M28-enhance：15 变量（7 原 + eta_mmss + 7 next2_*）。旧 7 保留向下兼容
         tryCreate(ns, "next_departure", VarType.STRING);
         tryCreate(ns, "next_destination", VarType.STRING);
         tryCreate(ns, "eta_minutes", VarType.NUMBER);
         tryCreate(ns, "eta_seconds", VarType.NUMBER);
+        tryCreate(ns, "eta_mmss", VarType.STRING);
         tryCreate(ns, "is_arriving", VarType.BOOLEAN);
         tryCreate(ns, "arrival_status", VarType.STRING);
         tryCreate(ns, "precision", VarType.STRING);
+        // 第二班次
+        tryCreate(ns, "next2_departure", VarType.STRING);
+        tryCreate(ns, "next2_destination", VarType.STRING);
+        tryCreate(ns, "next2_eta_minutes", VarType.NUMBER);
+        tryCreate(ns, "next2_eta_seconds", VarType.NUMBER);
+        tryCreate(ns, "next2_eta_mmss", VarType.STRING);
+        tryCreate(ns, "next2_is_arriving", VarType.BOOLEAN);
+        tryCreate(ns, "next2_arrival_status", VarType.STRING);
     }
 
     private void tryCreate(String ns, String key, VarType type) {
@@ -324,7 +367,7 @@ public final class ManualScheduleProvider implements VariableProvider {
     }
 
     /**
-     * 算 next_* + eta_* + is_arriving + arrival_status + precision，写回 store。
+     * 算 next_* + next2_* + eta_* + is_arriving + arrival_status + precision，写回 store。
      */
     private void pushValues(String wallId, List<ScheduleEntry> entries, LocalTime now,
                             String precision) {
@@ -341,11 +384,27 @@ public final class ManualScheduleProvider implements VariableProvider {
                 c.etaMinutes == null ? "" : c.etaMinutes.toString(), ttl);
         tryWrite(ns + "/eta_seconds",
                 c.etaSeconds == null ? "" : c.etaSeconds.toString(), ttl);
+        tryWrite(ns + "/eta_mmss",
+                c.etaMmss == null ? "" : c.etaMmss, ttl);
         tryWrite(ns + "/is_arriving", Boolean.toString(c.isArriving), ttl);
         tryWrite(ns + "/arrival_status",
                 c.isArriving ? cfg.arrivingText() : cfg.idleText(), ttl);
         tryWrite(ns + "/precision",
                 precision == null ? WallSchedule.PRECISION_MINUTE : precision, ttl);
+        // M28-enhance：next2_*
+        tryWrite(ns + "/next2_departure",
+                c.next2Departure == null ? "" : c.next2Departure, ttl);
+        tryWrite(ns + "/next2_destination",
+                c.next2Destination == null ? "" : c.next2Destination, ttl);
+        tryWrite(ns + "/next2_eta_minutes",
+                c.next2EtaMinutes == null ? "" : c.next2EtaMinutes.toString(), ttl);
+        tryWrite(ns + "/next2_eta_seconds",
+                c.next2EtaSeconds == null ? "" : c.next2EtaSeconds.toString(), ttl);
+        tryWrite(ns + "/next2_eta_mmss",
+                c.next2EtaMmss == null ? "" : c.next2EtaMmss, ttl);
+        tryWrite(ns + "/next2_is_arriving", Boolean.toString(c.next2IsArriving), ttl);
+        tryWrite(ns + "/next2_arrival_status",
+                c.next2IsArriving ? cfg.arrivingText() : cfg.idleText(), ttl);
     }
 
     private void tryWrite(String fullName, String value, Duration ttl) {
@@ -370,15 +429,25 @@ public final class ManualScheduleProvider implements VariableProvider {
     }
 
     /**
-     * 计算下一班车信息（秒粒度）。entries 已按 sort_order / departure_time 排序；本方法二次
-     * 稳定排序（按 departureTime）以防输入未排好。过零点逻辑：所有 entry 都已过 → next 是
-     * 第一个 entry（明天），eta = (24h - now + nextTime).
+     * 计算下一班车 + 第二班次信息（秒粒度）。entries 已按 sort_order / departure_time 排序；
+     * 本方法二次稳定排序（按 departureTime）以防输入未排好。过零点逻辑：
+     * <ul>
+     *   <li>0 entry → 全 null（next 与 next2 都 null）</li>
+     *   <li>1 entry：
+     *     <ul>
+     *       <li>未过 → next = 该 entry，next2 = 该 entry（明天，ETA +86400）</li>
+     *       <li>已过 → next = 该 entry（明天），next2 = 该 entry（后天 = ETA +86400）</li>
+     *     </ul>
+     *   </li>
+     *   <li>n ≥ 2 entry：找 sorted 中前两个 t > now 的 entry；不够 2 个时从 sorted 头补（明天循环）</li>
+     * </ul>
      *
      * @param thresholdSeconds is_arriving 阈值（秒）
      */
     static Computed computeNext(List<ScheduleEntry> entries, LocalTime now, long thresholdSeconds) {
         if (entries == null || entries.isEmpty()) {
-            return new Computed(null, null, null, null, false);
+            return new Computed(null, null, null, null, null, false,
+                    null, null, null, null, null, false);
         }
         // 二次稳定排序：按 departure_time ASC（同 time 保留输入顺序，等价 sortOrder）
         List<ScheduleEntry> sorted = new ArrayList<>(entries);
@@ -389,36 +458,91 @@ public final class ManualScheduleProvider implements VariableProvider {
             return Integer.compare(a.sortOrder(), b.sortOrder());
         });
 
-        // 找第一个 departure_time > now 的 entry（秒级比较）
+        // 找前两个 departure_time > now 的 entry（秒级比较）
         ScheduleEntry next = null;
-        for (ScheduleEntry e : sorted) {
-            LocalTime t = safeParseTime(e.departureTime());
+        ScheduleEntry next2 = null;
+        long etaSeconds = 0L;
+        long eta2Seconds = 0L;
+        int futureIdx = -1;
+        for (int i = 0; i < sorted.size(); i++) {
+            LocalTime t = safeParseTime(sorted.get(i).departureTime());
             if (t.isAfter(now)) {
-                next = e;
-                break;
+                if (next == null) {
+                    next = sorted.get(i);
+                    etaSeconds = Duration.between(now, t).getSeconds();
+                    futureIdx = i;
+                } else {
+                    next2 = sorted.get(i);
+                    eta2Seconds = Duration.between(now, t).getSeconds();
+                    break;
+                }
             }
         }
-        long etaSeconds;
-        if (next != null) {
-            LocalTime t = safeParseTime(next.departureTime());
-            etaSeconds = Duration.between(now, t).getSeconds();
-        } else {
-            // 所有 entry 都已过 → 用第一个 entry（明天）
+
+        long secondsToMidnight = Duration.between(now, LocalTime.MAX).getSeconds() + 1;
+
+        if (next == null) {
+            // 所有 entry 都已过 → next = sorted[0]（明天），next2 = sorted[1]（明天，或 sorted[0]+1day）
             next = sorted.get(0);
             LocalTime t = safeParseTime(next.departureTime());
-            // 24h - now + t（秒）
-            long secondsToMidnight = Duration.between(now, LocalTime.MAX).getSeconds() + 1;
-            long secondsAfterMidnight = Duration.between(LocalTime.MIDNIGHT, t).getSeconds();
-            etaSeconds = secondsToMidnight + secondsAfterMidnight;
+            etaSeconds = secondsToMidnight + Duration.between(LocalTime.MIDNIGHT, t).getSeconds();
+            if (sorted.size() >= 2) {
+                next2 = sorted.get(1);
+                LocalTime t2 = safeParseTime(next2.departureTime());
+                eta2Seconds = secondsToMidnight + Duration.between(LocalTime.MIDNIGHT, t2).getSeconds();
+            } else {
+                // 单 entry：next2 = 该 entry 后天（= next + 24h）
+                next2 = next;
+                eta2Seconds = etaSeconds + 86_400L;
+            }
+        } else if (next2 == null) {
+            // 找到 1 个 future，0 个 next2 候选 → 从 sorted 头开始（明天循环）
+            if (sorted.size() == 1) {
+                // 单 entry：next2 = 该 entry 明天
+                next2 = next;
+                eta2Seconds = etaSeconds + 86_400L;
+            } else {
+                // n ≥ 2 entry：next2 = sorted[0]（明天，跳过当前 next 自身）
+                int candIdx = (futureIdx == 0) ? 1 : 0;
+                next2 = sorted.get(candIdx);
+                LocalTime t2 = safeParseTime(next2.departureTime());
+                eta2Seconds = secondsToMidnight + Duration.between(LocalTime.MIDNIGHT, t2).getSeconds();
+            }
         }
-        // 防误差：etaSeconds 负数兜底 0；超过 86400 截到 86400
+
+        // 防误差：负数兜底 0；最大 2 day（next2 跨日累加可能超 86400）
         if (etaSeconds < 0) etaSeconds = 0;
         if (etaSeconds > 86_400L) etaSeconds = 86_400L;
+        if (eta2Seconds < 0) eta2Seconds = 0;
+        if (eta2Seconds > 172_800L) eta2Seconds = 172_800L;
+
         long etaMinutes = etaSeconds / 60L;
         if (etaMinutes > 1440L) etaMinutes = 1440L;
+        long eta2Minutes = eta2Seconds / 60L;
+        if (eta2Minutes > 2880L) eta2Minutes = 2880L;
+
         boolean arriving = etaSeconds <= Math.max(0L, thresholdSeconds);
-        return new Computed(next.departureTime(), next.destination(),
-                (int) etaMinutes, (int) etaSeconds, arriving);
+        boolean arriving2 = eta2Seconds <= Math.max(0L, thresholdSeconds);
+
+        String etaMmss = formatMmss(etaSeconds);
+        String eta2Mmss = formatMmss(eta2Seconds);
+
+        return new Computed(
+                next.departureTime(), next.destination(),
+                (int) etaMinutes, (int) etaSeconds, etaMmss, arriving,
+                next2.departureTime(), next2.destination(),
+                (int) eta2Minutes, (int) eta2Seconds, eta2Mmss, arriving2);
+    }
+
+    /**
+     * MM:SS 格式化。超过 99min 仍按 MM 累加（如 {@code 9061s → "151:01"}）；
+     * 始终至少 2 位 MM。零秒返 {@code "00:00"}。
+     */
+    static String formatMmss(long totalSeconds) {
+        if (totalSeconds < 0) totalSeconds = 0;
+        long mm = totalSeconds / 60L;
+        long ss = totalSeconds % 60L;
+        return String.format(Locale.ROOT, "%02d:%02d", mm, ss);
     }
 
     /**
@@ -434,13 +558,21 @@ public final class ManualScheduleProvider implements VariableProvider {
         }
     }
 
-    /** 计算结果。 */
+    /** 计算结果（M28-enhance：加 eta_mmss + 第二班次 next2_*）。 */
     public record Computed(
             @Nullable String nextDeparture,
             @Nullable String nextDestination,
             @Nullable Integer etaMinutes,
             @Nullable Integer etaSeconds,
-            boolean isArriving
+            @Nullable String etaMmss,
+            boolean isArriving,
+            // 第二班次
+            @Nullable String next2Departure,
+            @Nullable String next2Destination,
+            @Nullable Integer next2EtaMinutes,
+            @Nullable Integer next2EtaSeconds,
+            @Nullable String next2EtaMmss,
+            boolean next2IsArriving
     ) {}
 
     /**

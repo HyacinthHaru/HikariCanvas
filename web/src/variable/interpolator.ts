@@ -26,16 +26,36 @@ export const UNRESOLVED = '???';
 const USER_NAMESPACE_PREFIX = 'user';
 
 /**
+ * 单个 placeholder 在<b>替换后</b>文本中的位置标记（M28-enhance 引入）。
+ *
+ * <p>由 {@link interpolate} 输出；用于编辑器 PreviewRenderer 在 Canvas 上画 "chip 风格"背景 hint
+ * 把替换后的字符按段着色，让用户区分"哪几个字是变量值"。游戏内 Compositor 不画 hint，所以这只是
+ * 前端编辑器层的额外信息。后端 {@code VariableInterpolator.Segment} 对称。</p>
+ */
+export interface PlaceholderSegment {
+    /** 在替换后 text 中的起始 char index（inclusive）。 */
+    start: number;
+    /** 在替换后 text 中的结束 char index（exclusive）。 */
+    end: number;
+    /** 内部 fullName（store 编码后；如 {@code user:w-1/X}）；hover tooltip 可用。 */
+    fullName: string;
+    /** 原始 placeholder 字符串（如 {@code "${var:user/X}"}）；调试用。 */
+    raw: string;
+}
+
+/**
  * 单次插值结果。
  *
  * - {@link text}：替换完成的最终文本（纯文本路径短路返原引用，未匹配则原样）
  * - {@link referencedFullNames}：本次解析引用到的所有内部 fullName 集合
  * - {@link missingFullNames}：referenced 中 store 查不到的子集（删除联动 / 警告用）
+ * - {@link segments}：每个 placeholder 在替换后 text 中的 char range；纯文本时为空数组
  */
 export interface InterpolateResult {
     text: string;
     referencedFullNames: Set<string>;
     missingFullNames: Set<string>;
+    segments: PlaceholderSegment[];
 }
 
 /**
@@ -103,31 +123,52 @@ export function interpolate(
     store: ReturnType<typeof useVariableStore>,
 ): InterpolateResult {
     if (text == null || text.length === 0) {
-        return { text: '', referencedFullNames: new Set(), missingFullNames: new Set() };
+        return { text: '', referencedFullNames: new Set(), missingFullNames: new Set(), segments: [] };
     }
     if (text.indexOf('${var:') < 0) {
-        return { text, referencedFullNames: new Set(), missingFullNames: new Set() };
+        return { text, referencedFullNames: new Set(), missingFullNames: new Set(), segments: [] };
     }
     const referenced = new Set<string>();
     const missing = new Set<string>();
-    // 用 matchAll 单趟扫描；不复用 PATTERN 实例避免 lastIndex 残留态影响多调用
+    const segments: PlaceholderSegment[] = [];
+    // 单趟扫描；手工累积输出 + 同步记录每个 placeholder 在替换后 text 中的 char range。
+    // 不用 String.replace 因为它不易暴露每段 placeholder 替换后的 char index（只有原字符串 offset）。
     const pattern = new RegExp(VARIABLE_PATTERN.source, 'g');
-    const out = text.replace(pattern, (_full, rawName: string, fallback: string | undefined) => {
+    let result = '';
+    let lastEnd = 0;
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(text)) !== null) {
+        const matchStart = m.index;
+        const matchEnd = matchStart + m[0].length;
+        // 1. 复制非 placeholder 段
+        result += text.substring(lastEnd, matchStart);
+        const rawName = m[1];
+        const fallback: string | undefined = m[2];
         const fullName = resolveFullName(rawName, wallId);
         referenced.add(fullName);
         const v = store.get(fullName);
+        let resolved: string;
         if (v) {
             const cur = v.currentValue;
-            if (cur != null && cur.length > 0) return cur;
-            if (fallback !== undefined) return fallback;
-            const def = v.defaultValue;
-            if (def != null) return def;
-            return UNRESOLVED;
+            if (cur != null && cur.length > 0) resolved = cur;
+            else if (fallback !== undefined) resolved = fallback;
+            else if (v.defaultValue != null) resolved = v.defaultValue;
+            else resolved = UNRESOLVED;
+        } else {
+            missing.add(fullName);
+            resolved = fallback !== undefined ? fallback : UNRESOLVED;
         }
-        // 变量不存在（被删 / 未声明 / 命名不匹配）
-        missing.add(fullName);
-        if (fallback !== undefined) return fallback;
-        return UNRESOLVED;
-    });
-    return { text: out, referencedFullNames: referenced, missingFullNames: missing };
+        const segStart = result.length;
+        result += resolved;
+        const segEnd = result.length;
+        segments.push({ start: segStart, end: segEnd, fullName, raw: m[0] });
+        lastEnd = matchEnd;
+        // 防御性：m[0].length === 0 会死循环（正常 placeholder 不会，但保险）
+        if (m[0].length === 0) pattern.lastIndex++;
+    }
+    // 复制末尾非 placeholder 段
+    if (lastEnd < text.length) {
+        result += text.substring(lastEnd);
+    }
+    return { text: result, referencedFullNames: referenced, missingFullNames: missing, segments };
 }

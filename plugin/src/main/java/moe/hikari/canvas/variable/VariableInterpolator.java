@@ -2,7 +2,9 @@ package moe.hikari.canvas.variable;
 
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -75,22 +77,34 @@ public final class VariableInterpolator {
      */
     public Result interpolate(@Nullable String text, @Nullable String wallId) {
         if (text == null || text.isEmpty() || text.indexOf("${var:") < 0) {
-            return new Result(text, Set.of());
+            return new Result(text, Set.of(), List.of());
         }
         Matcher m = PLACEHOLDER.matcher(text);
         StringBuilder out = new StringBuilder(text.length() + 16);
         Set<String> referenced = new HashSet<>();
+        List<Segment> segments = new ArrayList<>();
+        // 替换循环：手工累积输出字符串以记录每个 placeholder 在替换后串中的 char range。
+        // 不用 Matcher.appendReplacement 因为它对 $ / \ 做特殊解释；改为手工 append + escape-free
+        int prevEnd = 0;
         while (m.find()) {
+            // 1. 复制非 placeholder 段
+            out.append(text, prevEnd, m.start());
             String rawName = m.group(1).trim();
             String fallback = m.group(2); // null = 无 |fallback= 语法；"" = 显式空 fallback
             String fullName = resolveFullName(rawName, wallId);
             referenced.add(fullName);
             String resolved = resolveValue(fullName, fallback);
-            // quoteReplacement 防 $ / \ 在 appendReplacement 里被当反向引用 / 转义符
-            m.appendReplacement(out, Matcher.quoteReplacement(resolved));
+            int segStart = out.length();
+            out.append(resolved);
+            int segEnd = out.length();
+            segments.add(new Segment(segStart, segEnd, fullName, m.group()));
+            prevEnd = m.end();
         }
-        m.appendTail(out);
-        return new Result(out.toString(), referenced);
+        // 复制末尾非 placeholder 段
+        if (prevEnd < text.length()) {
+            out.append(text, prevEnd, text.length());
+        }
+        return new Result(out.toString(), referenced, List.copyOf(segments));
     }
 
     /**
@@ -181,7 +195,24 @@ public final class VariableInterpolator {
      * @param text                替换后的最终文本（纯文本路径下与入参完全相同的引用）
      * @param referencedFullNames 本次解析引用到的内部 fullName 集合；
      *                            供 {@link VariableStore#markWallReferences} 使用
+     * @param segments            每个 placeholder 在<b>替换后</b> {@link #text} 中的 char range +
+     *                            原始 fullName + 原 placeholder 字符串。M28-enhance 加入：游戏内
+     *                            Compositor 渲染时<b>忽略 segments</b>（保持双端像素一致），仅前端
+     *                            PreviewRenderer 用 segments 画 placeholder hint chip 风格背景。
+     *                            纯文本路径或无 placeholder 时为空列表
      */
-    public record Result(@Nullable String text, Set<String> referencedFullNames) {
+    public record Result(@Nullable String text, Set<String> referencedFullNames,
+                         List<Segment> segments) {
+    }
+
+    /**
+     * 单个 placeholder 在替换后文本中的位置标记（M28-enhance 引入）。
+     *
+     * @param start    替换后文本中起始 char index（inclusive）
+     * @param end      替换后文本中结束 char index（exclusive）
+     * @param fullName 内部 fullName（{@link VariableStore} 编码后；如 {@code user:w-1/X}）
+     * @param raw      原始 placeholder 字符串（如 {@code "${var:user/X}"}）；调试 / hover tooltip 用
+     */
+    public record Segment(int start, int end, String fullName, String raw) {
     }
 }

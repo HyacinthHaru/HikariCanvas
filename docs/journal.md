@@ -5,6 +5,82 @@
 
 ---
 
+## 2026-05-20 · M28-enhance：schedule next2 第二班次 + MM:SS 格式 + 编辑器 placeholder hint chip
+
+### 需求
+
+1. **地铁屏标配第二班次**：所有 schedule namespace 加 `next2_*` 7 变量（departure / destination / eta_minutes / eta_seconds / eta_mmss / is_arriving / arrival_status），让"下一班 5min / 之后 12min"列车屏典型样式开箱即用
+2. **MM:SS 格式 `eta_mmss`**：90s → `"01:30"`；超 99min 仍按 MM 累加（如 `"151:01"`），不卡上限
+3. **编辑器 placeholder 实时预览 + hint chip**：原 `${var:schedule/eta_minutes}` 长占位符在编辑器画布上撑爆 layout 致使文字叠在一起；改造前端 PreviewRenderer 接 interpolator → 渲染替换后字符串 + 半透明 mauve 背景矩形（chip 风格）标记哪几个字是变量值
+
+### 实现
+
+#### 1. ManualScheduleProvider 扩展（7 → 15 变量）
+
+- `Computed` record 加 6 字段：`etaMmss` + `next2Departure` / `next2Destination` / `next2EtaMinutes` / `next2EtaSeconds` / `next2EtaMmss` / `next2IsArriving`
+- `computeNext` 改成找前两个 `t > now` 的 entry：
+  - 0 entry → 全 null
+  - 1 entry → next2 = next 自身（明天，ETA +86400）
+  - n≥2，找到 1 个 future → next2 = sorted[0]（明天循环，跳过自身）
+  - n≥2，找到 2 个 → 正常 / 全过 → sorted[0,1]（明天）
+- `formatMmss(seconds)` 工具：`String.format("%02d:%02d", mm, ss)`，超 99min 仍 MM 累加
+- `pushValues` 增 7 个 next2_* + 1 eta_mmss 写入；`ALL_KEYS` 数组统一注册 / 注销避免漂移
+- `registerWallInternal` / `unregisterWall` / `declaredKeys` 全部 15 keys
+
+#### 2. VariableInterpolator 加 segments 字段（双端对称）
+
+- 后端 `Result` record 加 `List<Segment> segments`；`Segment(start, end, fullName, raw)`
+- 前端 `InterpolateResult` 加 `segments: PlaceholderSegment[]`
+- 替换循环改为手工累积 StringBuilder / string + 同步记录每个 placeholder 在替换后字符串中的 char range（不再用 `Matcher.appendReplacement`/`String.replace`，因后者不易暴露替换后 offset）
+- 替换值含 `$` / `\` 测试仍 PASS（手工 append 天然不解释反向引用）
+- 后端 `CanvasCompositor.maybeInterpolateText` 只用 `r.text()` + `r.referencedFullNames()`，segments 字段透传不影响游戏内渲染像素
+
+#### 3. PreviewRenderer：drawText 接 interpolator + 画 hint chip
+
+- 新 `setVariableContextProvider(() => { wallId, store })` 注入器，App.vue mount 时配
+- `drawText` 入口先 `interpolate(t.text, wallId, store)` → 用 `rendered` 字符串构造临时 TextElement → layout
+- 新 `drawPlaceholderHints(ctx, glyphs, segments, fontSize)`：按 `srcIndex` 反查命中 placeholder 的 glyph 子集 → 按 baselineY 行分组 → 每行画半透明 mauve 矩形（`rgba(203,166,247,0.20)` 填充 + 0.50 边框）
+- `TextLayout.PositionedGlyph` 加 `srcIndex?: number`（仅前端字段，不破坏双端一致性）；`layoutHorizontal` / `layoutVertical` / `softWrap` / `softWrapVertical` / `applyLineStartForbidden` 全程透传 srcStart → srcIndex
+- 游戏内后端 Compositor 不走 PreviewRenderer，无 hint，游戏中渲染替换后字符串保持双端像素一致
+
+#### 4. ScheduleManagerModal preview 段扩展
+
+- 加 `previewEtaMmss` 行（旧首班）
+- 新"第二班次"小节，6 行 `next2_*` 变量回显
+- i18n `previewEtaMmss` + `previewNext2Header` 双语
+
+### 测试
+
+- `ManualScheduleProviderTest`：8 新 case（formatMmss / 单 entry 循环 / 双 entry 第二班次 / 全过 / 三 entry / 空 entry next2 全 null / 端到端 15 变量），3 个旧 case 调 7→15 计数；total schedule provider tests 增 ~8
+- `VariableInterpolatorTest`：6 新 segments case（plain text / null / single / multi / unresolved / 长占位短值）
+- `interpolator.test.ts`（前端）：8 新 segments case 对称
+- backend total 742 test 全绿；frontend total 105 test 全绿（增 32 = 8 schedule provider + 6 backend segments + 8 frontend segments 等）
+- vite build 643 kB（gzip 195 kB）；shadowJar 重建成功
+
+### 关联文件
+
+- `plugin/src/main/java/moe/hikari/canvas/variable/provider/ManualScheduleProvider.java`
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableInterpolator.java`
+- `plugin/src/test/java/moe/hikari/canvas/variable/provider/ManualScheduleProviderTest.java`
+- `plugin/src/test/java/moe/hikari/canvas/variable/VariableInterpolatorTest.java`
+- `web/src/variable/interpolator.ts`
+- `web/src/variable/__tests__/interpolator.test.ts`
+- `web/src/render/PreviewRenderer.ts`
+- `web/src/render/TextLayout.ts`
+- `web/src/components/schedule/ScheduleManagerModal.vue`
+- `web/src/i18n/messages.ts`
+- `web/src/App.vue`
+
+### 兼容性
+
+- 旧 7 个 schedule 变量保留；旧 `${var:schedule.eta_seconds}` / `${var:schedule/eta_seconds}` 均工作如初
+- 后端 Compositor 渲染像素零变化（segments 字段透传不读，仍走 `r.text()`）
+- 前端 PreviewRenderer 对未含 `${var:` 的纯文本 O(1) 短路（interpolator + drawText 入口均检查）
+- TextLayout `srcIndex` 仅前端字段，未带 srcIndex 的 glyph 兼容旧路径（hint 路径 filter 不命中即跳过）
+- 双端 Renderer 一致性：游戏内 Compositor 用 interpolated text 渲染，与编辑器渲染的替换后字符串等价；hint chip 仅编辑器视觉提示，不影响游戏内像素
+
+---
+
 ## 2026-05-20 · M28-bugfix3：schedule 显示双 bug 修复（interpolator 斜杠语法 + Provider 推 state.patch）
 
 ### 症状

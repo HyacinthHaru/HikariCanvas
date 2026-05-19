@@ -153,7 +153,7 @@ function close(): void {
     ui.closeScheduleManager();
 }
 
-// schedule:* 变量 live preview。0.4.0 bugfix（Bug 3）：扩展 eta_seconds + arrival_status
+// schedule:* 变量 live preview。M28-enhance：next2_* 第二班次 + eta_mmss MM:SS 格式
 const previewVars = computed(() => {
     const wid = project.wallId;
     if (!wid) return null;
@@ -163,9 +163,18 @@ const previewVars = computed(() => {
         nextDestination: get('next_destination')?.currentValue ?? '',
         etaMinutes: get('eta_minutes')?.currentValue ?? '',
         etaSeconds: get('eta_seconds')?.currentValue ?? '',
+        etaMmss: get('eta_mmss')?.currentValue ?? '',
         isArriving: get('is_arriving')?.currentValue ?? 'false',
         arrivalStatus: get('arrival_status')?.currentValue ?? '',
         precision: get('precision')?.currentValue ?? schedule.precision,
+        // M28-enhance：第二班次
+        next2Departure: get('next2_departure')?.currentValue ?? '',
+        next2Destination: get('next2_destination')?.currentValue ?? '',
+        next2EtaMinutes: get('next2_eta_minutes')?.currentValue ?? '',
+        next2EtaSeconds: get('next2_eta_seconds')?.currentValue ?? '',
+        next2EtaMmss: get('next2_eta_mmss')?.currentValue ?? '',
+        next2IsArriving: get('next2_is_arriving')?.currentValue ?? 'false',
+        next2ArrivalStatus: get('next2_arrival_status')?.currentValue ?? '',
     };
 });
 </script>
@@ -301,6 +310,8 @@ const previewVars = computed(() => {
             <dd>{{ previewVars.etaSeconds || '—' }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaMinutes }}</dt>
             <dd>{{ previewVars.etaMinutes || '—' }}</dd>
+            <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaMmss }}</dt>
+            <dd>{{ previewVars.etaMmss || '—' }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewIsArriving }}</dt>
             <dd>{{ previewVars.isArriving }}</dd>
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewArrivalStatus }}</dt>
@@ -308,6 +319,27 @@ const previewVars = computed(() => {
             <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewPrecision }}</dt>
             <dd>{{ previewVars.precision }}</dd>
           </dl>
+
+          <!-- M28-enhance：第二班次 -->
+          <div class="mt-2 pt-2 border-t border-[color:var(--border)]">
+            <div class="font-medium mb-1 text-[color:var(--ctp-mauve)]">
+              {{ t.schedule.previewNext2Header }}
+            </div>
+            <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-xs">
+              <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewNextDeparture }}</dt>
+              <dd>{{ previewVars.next2Departure || '—' }}</dd>
+              <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewNextDestination }}</dt>
+              <dd>{{ previewVars.next2Destination || '—' }}</dd>
+              <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaSeconds }}</dt>
+              <dd>{{ previewVars.next2EtaSeconds || '—' }}</dd>
+              <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewEtaMmss }}</dt>
+              <dd>{{ previewVars.next2EtaMmss || '—' }}</dd>
+              <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewIsArriving }}</dt>
+              <dd>{{ previewVars.next2IsArriving }}</dd>
+              <dt class="text-[color:var(--muted-foreground)]">{{ t.schedule.previewArrivalStatus }}</dt>
+              <dd>{{ previewVars.next2ArrivalStatus || '—' }}</dd>
+            </dl>
+          </div>
         </section>
 
         <div v-if="schedule.lastError"

@@ -518,9 +518,11 @@ export const messages = {
             previewNextDestination: '终点',
             previewEtaMinutes: 'ETA（分钟）',
             previewEtaSeconds: 'ETA（秒）',
+            previewEtaMmss: 'ETA（MM:SS）',
             previewIsArriving: '即将到站',
             previewArrivalStatus: '到站文案',
             previewPrecision: '精度',
+            previewNext2Header: '第二班次',
             // 关闭
             close: '关闭',
             // 错误
@@ -1127,9 +1129,11 @@ export const messages = {
             previewNextDestination: 'Destination',
             previewEtaMinutes: 'ETA (minutes)',
             previewEtaSeconds: 'ETA (seconds)',
+            previewEtaMmss: 'ETA (MM:SS)',
             previewIsArriving: 'Arriving soon',
             previewArrivalStatus: 'Arrival status',
             previewPrecision: 'Precision',
+            previewNext2Header: 'Second departure',
             // Close
             close: 'Close',
             // Errors
