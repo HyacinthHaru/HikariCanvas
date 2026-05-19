@@ -715,6 +715,29 @@ public final class SessionManager {
         }
     }
 
+    /**
+     * 0.4.0-P1-B：找到所有绑定到 {@code wallId} 的活跃 session，对每个 submit 全画布 dirty
+     * 到 {@link moe.hikari.canvas.render.ProjectionThrottler}。
+     *
+     * <p>用例：变量值变化（{@link moe.hikari.canvas.variable.VariableStore} wallDirtyCallback）
+     * 触发引用该变量的所有 wall 重画。throttler 自动合并到下个 200ms 窗口（5fps 上限）。</p>
+     *
+     * <p>线程安全：只读 {@code byId} + per-session immutable getters；ProjectionThrottler.submit
+     * 自身线程安全。可以从任意线程调（VariableStore 的 setValue 多半在 async daemon 或 WS 线程）。</p>
+     */
+    public void submitFullCanvasDirtyByWall(String wallId,
+                                            moe.hikari.canvas.render.ProjectionThrottler throttler) {
+        if (wallId == null || throttler == null) return;
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (!wallId.equals(s.wallId())) continue;
+            moe.hikari.canvas.state.ProjectState ps = s.projectState();
+            if (ps == null) continue;
+            throttler.submit(s.id(),
+                    moe.hikari.canvas.render.DirtyRegion.fullCanvas(ps));
+        }
+    }
+
     // ---------- 超时扫描（M3-T2 Reaper 用） ----------
 
     /**

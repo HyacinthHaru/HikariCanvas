@@ -260,7 +260,12 @@ public final class HikariCanvas extends JavaPlugin {
         // 0.4.0-P1-A：变量系统底座。DAO + Store + 启动期 loadFromDb。
         // wallDirtyCallback 暂占位 noop —— B 任务接入 ProjectionThrottler 后注入真 hook。
         UserVariableDao userVariableDao = new UserVariableDao(getLogger(), database.jdbi());
-        variableStore = new VariableStore(userVariableDao, wallId -> { /* B 任务接 ProjectionThrottler#dirty */ });
+        variableStore = new VariableStore(userVariableDao,
+                wallId -> {
+                    if (sessionManager != null && projectionThrottler != null) {
+                        sessionManager.submitFullCanvasDirtyByWall(wallId, projectionThrottler);
+                    }
+                });
         variableStore.loadFromDb();
         getLogger().info("VariableStore: " + variableStore.size() + " user variable(s) loaded");
         // 0.4.0-P1-C：Compositor 接入变量替换 + 倒排索引联动。注入在 store 创建之后即生效；
@@ -334,7 +339,8 @@ public final class HikariCanvas extends JavaPlugin {
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
                 templateAssetService, wallPreviewService, uploadHandler,
-                templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry, this,
+                templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry,
+                variableStore, this,
                 version, this::paintAllSessionMaps,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();

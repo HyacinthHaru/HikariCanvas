@@ -91,6 +91,8 @@ public final class WebServer {
     private final BrushOpDispatcher brushOpDispatcher;
     private final WallOpDispatcher wallOpDispatcher;
     private final TemplateOpDispatcher templateOpDispatcher;
+    /** 0.4.0-P1-B：variable.* 五个 op 的分发；可为 null（VariableStore 未配置） */
+    private final VariableOpDispatcher variableOpDispatcher;
 
     /**
      * M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes。
@@ -139,6 +141,7 @@ public final class WebServer {
                      moe.hikari.canvas.storage.AuditLog auditLog,
                      FontRegistry fontRegistry,
                      IconRegistry iconRegistry,
+                     moe.hikari.canvas.variable.VariableStore variableStore,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler,
                      int wsAuthTimeoutSeconds,
@@ -180,6 +183,11 @@ public final class WebServer {
         this.wallOpDispatcher = new WallOpDispatcher(
                 sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog);
         this.templateOpDispatcher = new TemplateOpDispatcher(sessionManager, templatePublisher);
+        // 0.4.0-P1-B：VariableStore 启动期可能为 null（HikariCanvas onEnable 顺序不一致）；
+        // 但当前实现中 HikariCanvas 总是先于 WebServer 构造完 VariableStore，因此 non-null。
+        this.variableOpDispatcher = variableStore == null ? null
+                : new VariableOpDispatcher(sessionManager, rateLimiter, variableStore,
+                        wallRepo, push, auditLog);
     }
 
     public void start() {
@@ -667,6 +675,15 @@ public final class WebServer {
                     -> wallOpDispatcher.dispatch(ctx, in, bound);
             case "template.save", "template.delete", "template.feature", "template.unfeature"
                     -> templateOpDispatcher.dispatch(ctx, in, bound);
+            case "variable.create", "variable.update", "variable.set",
+                 "variable.delete", "variable.bind" -> {
+                if (variableOpDispatcher == null) {
+                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR",
+                            "variable system not initialized"));
+                } else {
+                    variableOpDispatcher.dispatch(ctx, in, bound);
+                }
+            }
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
     }

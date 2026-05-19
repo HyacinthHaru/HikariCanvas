@@ -1,6 +1,11 @@
 package moe.hikari.canvas.state;
 
 import moe.hikari.canvas.render.DirtyRegion;
+import moe.hikari.canvas.variable.VarType;
+import moe.hikari.canvas.variable.Variable;
+import moe.hikari.canvas.variable.VariableException;
+import moe.hikari.canvas.variable.VariablePatch;
+import moe.hikari.canvas.variable.VariableStore;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -1255,6 +1260,218 @@ public final class EditSession {
     // {@link ElementValidator}（2026-05-14 god class 拆分）。
     //
     // ValidationException：M11 提取为 top-level 同包类（让 FillValidator 共用），见 ValidationException.java。
+
+    // ---------- 0.4.0-P1 variable.* op handlers ----------
+    //
+    // user 变量按 per-wall 隔离：所有方法签名要 wallId（dispatcher 从 Session.wallId 传入）。
+    // 内部 namespace = "user:<wallId>"；对外协议 fullName = "user:<wallId>/<name>"。
+    // state.patch 走 /variables/<encoded-fullName>...（fullName 内 '/' 用 JSON Pointer 标准
+    // ~1 转义）。变量变更不算 element bbox 变化，dirty 由 VariableStore.wallDirtyCallback
+    // 在 setValue / update / bind / delete 时触发 → SessionManager 解耦到 ProjectionThrottler。
+
+    /**
+     * 把 fullName 编码成 JSON Pointer 段（RFC 6901 §3）：{@code ~} → {@code ~0}，
+     * {@code /} → {@code ~1}。其他字符保持原文。
+     */
+    private static String encodeJsonPointer(String s) {
+        return s.replace("~", "~0").replace("/", "~1");
+    }
+
+    private static String variablePath(String fullName) {
+        return "/variables/" + encodeJsonPointer(fullName);
+    }
+
+    /**
+     * 把 Variable record 序列化为 JSON Patch value 用的 Map（Jackson 自动处理 record →
+     * object）。把 referencedByWalls 视为 Set<String>，无需特殊处理。
+     */
+    private static Map<String, Object> variableToMap(Variable v) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("namespace", v.namespace());
+        m.put("key", v.key());
+        m.put("type", v.type().name());
+        if (v.defaultValue() != null) m.put("defaultValue", v.defaultValue());
+        if (v.currentValue() != null) m.put("currentValue", v.currentValue());
+        m.put("updatedAt", v.updatedAt());
+        m.put("ttl", v.ttl());
+        if (v.source() != null) m.put("source", v.source());
+        // referencedByWalls 是服务端倒排索引细节，前端不需要（前端是单 wall 视角）；不下发。
+        return m;
+    }
+
+    /**
+     * 校验 fullName 属于本 wall（防止 wall A 改 wall B 的 user 变量）。
+     * 必须以 {@code user:<thisWallId>/} 开头。
+     *
+     * @throws VariableException VARIABLE_NAMESPACE_DENIED 若不属于本 wall
+     */
+    private static void requireUserVarBelongsToWall(String fullName, String wallId) {
+        if (wallId == null) {
+            throw new VariableException(VariableException.Code.VARIABLE_NAMESPACE_DENIED,
+                    "session has no bound wall; user variable op rejected");
+        }
+        String expectedPrefix = "user:" + wallId + "/";
+        if (fullName == null || !fullName.startsWith(expectedPrefix)) {
+            throw new VariableException(VariableException.Code.VARIABLE_NAMESPACE_DENIED,
+                    "variable does not belong to this wall (expected prefix '"
+                            + expectedPrefix + "'): " + fullName);
+        }
+    }
+
+    /**
+     * 创建 user/* 变量（namespace 自动 {@code "user:<wallId>"}）。
+     * dispatcher 在调用前应做协议层权限检查（{@code canvas.var.write.own} 等）。
+     *
+     * <p>成功 → patch {@code add /variables/<encoded fullName> <Variable JSON>}。
+     * 变量变更不影响画布像素，因此 OpResult.Ok 的 dirty = null。</p>
+     */
+    public synchronized OpResult createVariable(VariableStore store, String wallId,
+                                                String name, VarType type,
+                                                String defaultValue) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        if (wallId == null) return err("WALL_NOT_FOUND", "session has no bound wall");
+        if (name == null || name.isEmpty()) return err("INVALID_PAYLOAD", "variable name missing");
+        if (type == null) return err("INVALID_PAYLOAD", "variable type missing");
+
+        Variable created;
+        try {
+            created = store.create("user:" + wallId, name, type, defaultValue, "manual");
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        StatePatch patch = new StatePatchBuilder()
+                .add(variablePath(created.fullName()), variableToMap(created))
+                .build(v);
+        return new OpResult.Ok(patch, null);
+    }
+
+    /** 更新 user/* 变量的 type / defaultValue。currentValue 走 {@link #setUserVariableValue}。 */
+    public synchronized OpResult updateUserVariable(VariableStore store, String wallId,
+                                                    String fullName, VariablePatch patch) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserVarBelongsToWall(fullName, wallId);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        if (patch == null) return err("INVALID_PAYLOAD", "patch missing");
+
+        Variable updated;
+        try {
+            updated = store.update(fullName, patch);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        // type / defaultValue 可能同时变；直接 replace 整个 Variable 节点最简明
+        StatePatch sp = new StatePatchBuilder()
+                .replace(variablePath(updated.fullName()), variableToMap(updated))
+                .build(v);
+        return new OpResult.Ok(sp, null);
+    }
+
+    /**
+     * 设当前值（user/* 手动 set）。TTL 由 store 沿用旧值（用户手动 set 默认永久；插件
+     * push 才传 TTL，那条路径走 store.setValue(..., ttl) 直调，不经此 op）。
+     */
+    public synchronized OpResult setUserVariableValue(VariableStore store, String wallId,
+                                                      String fullName, String value) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserVarBelongsToWall(fullName, wallId);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+
+        try {
+            store.setValue(fullName, value, null);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        // 只发 currentValue 增量；前端 mirror 用 JSON Patch 局部 replace
+        StatePatchBuilder b = new StatePatchBuilder();
+        String path = variablePath(fullName) + "/currentValue";
+        if (value == null) {
+            b.remove(path);
+        } else {
+            b.replace(path, value);
+        }
+        return new OpResult.Ok(b.build(v), null);
+    }
+
+    /** 删除 user/* 变量。引用该变量的 element 渲染期走 fallback 链。 */
+    public synchronized OpResult deleteUserVariable(VariableStore store, String wallId,
+                                                    String fullName) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserVarBelongsToWall(fullName, wallId);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+
+        try {
+            store.delete(fullName);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        StatePatch sp = new StatePatchBuilder()
+                .remove(variablePath(fullName))
+                .build(v);
+        return new OpResult.Ok(sp, null);
+    }
+
+    /**
+     * 绑定 user/* 变量到插件 namespace（{@code boundTo} = 插件 plain name），或解绑
+     * （{@code boundTo} = null）。{@code canvas.var.bind} 权限敏感，dispatcher 层做检查。
+     */
+    public synchronized OpResult bindUserVariable(VariableStore store, String wallId,
+                                                  String fullName, String boundTo) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserVarBelongsToWall(fullName, wallId);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+
+        try {
+            store.bind(fullName, boundTo);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        Variable updated = store.get(fullName).orElse(null);
+        long v = state.bumpVersion();
+        StatePatchBuilder b = new StatePatchBuilder();
+        if (updated != null) {
+            // source 字段承担 boundTo 语义（VariableStore.bind 写 source 槽位）
+            String path = variablePath(fullName) + "/source";
+            if (updated.source() == null) {
+                b.remove(path);
+            } else {
+                b.replace(path, updated.source());
+            }
+        }
+        return new OpResult.Ok(b.build(v), null);
+    }
+
+    /**
+     * VariableException 内部 8 个 code → 协议层 4 个错误码。其余视为 INVALID_PAYLOAD。
+     * 见 {@code docs/protocol.md §6.1} 错误码表 + {@code docs/dynamic-data.md §15}。
+     */
+    private static String mapVariableErrorCode(VariableException.Code c) {
+        return switch (c) {
+            case VARIABLE_NOT_FOUND -> "VARIABLE_NOT_FOUND";
+            case VARIABLE_EXISTS -> "VARIABLE_EXISTS";
+            case VARIABLE_TYPE_MISMATCH -> "VARIABLE_TYPE_MISMATCH";
+            case VARIABLE_NAMESPACE_DENIED -> "VARIABLE_NAMESPACE_DENIED";
+            case VARIABLE_NAME_INVALID,
+                 VARIABLE_VALUE_TOO_LONG,
+                 QUOTA_EXCEEDED,
+                 TTL_INVALID -> "INVALID_PAYLOAD";
+        };
+    }
 
     private static OpResult.Error err(String code, String msg) {
         return new OpResult.Error(code, msg);

@@ -5,6 +5,140 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P1-B：variable.* WS 协议 + EditSession 集成 + dirty callback
+
+P1 阶段"WS 协议路由"。把 Task A 交付的 `VariableStore` 串入 WS edit op 路径——
+5 个 `variable.*` op 经 EditSession 走完整 ack + state.patch + audit 流程；变量值变化
+通过 `wallDirtyCallback` → SessionManager → ProjectionThrottler 触发引用该变量的 wall 重画。
+
+### 主要变更
+
+- **EditSession.java**（新增 5 个同步方法 + helpers）：
+  - `createVariable(VariableStore, wallId, name, type, defaultValue)` →
+    namespace 内部组装 `"user:<wallId>"`，调 `store.create` + 出 `add /variables/<encoded>` patch
+  - `updateUserVariable(store, wallId, fullName, VariablePatch)` → 跨 wall 拒
+    + `store.update` + 出 `replace /variables/<encoded>` 整 Variable
+  - `setUserVariableValue(store, wallId, fullName, value)` → `store.setValue(..., null)`
+    沿用旧 TTL + 出 `replace /variables/<encoded>/currentValue`（value=null 走 remove）
+  - `deleteUserVariable(store, wallId, fullName)` → `store.delete` + `remove /variables/<encoded>`
+  - `bindUserVariable(store, wallId, fullName, boundTo)` → `store.bind` 写 `source` 字段
+    + `replace /variables/<encoded>/source`（null 走 remove）
+  - JSON Pointer 转义（`~` → `~0`、`/` → `~1`）+ `requireUserVarBelongsToWall` 防跨 wall
+  - `mapVariableErrorCode`：8 个 VariableException.Code → 4 个协议错误码
+    （`VARIABLE_NAME_INVALID / VARIABLE_VALUE_TOO_LONG / QUOTA_EXCEEDED / TTL_INVALID` 归
+    `INVALID_PAYLOAD`，与 `docs/protocol.md §5.11 / §6.1` 一致）
+  - 变量 op `OpResult.Ok.dirty = null`（像素层无变化）；wall 重画由 dirty callback 链触发
+
+- **VariableOpDispatcher.java**（新文件，与 EditOp / WallOp / BrushOp / TemplateOp 平级）：
+  - 5 个 op `variable.create / update / set / delete / bind` 路由 + payload 解析
+  - 限流（SessionRateLimiter）+ session 活跃性 + WallRepo owner 判定
+  - 权限：own / any 二分法 — owner 走 `canvas.var.write.own`（offline 视为已授权，与
+    paper-plugin.yml default=true 一致），非 owner 需 `canvas.var.write.any`；
+    `variable.bind` 统一查 `canvas.var.bind`（敏感，不分 own/any）
+  - 失败走 `Envelope.error(...)` + `PERMISSION_DENIED` audit
+  - 成功走 ack（create 时回 `fullName`）+ `pushPatch` + `recordAuditSuccess`
+    （`VARIABLE_CREATE / UPDATE / SET / DELETE / BIND` 五事件）
+
+- **WebServer.java**：
+  - 构造器新增 `VariableStore` 参数（位置在 IconRegistry 之后、plugin 之前）
+  - 实例化 `VariableOpDispatcher`（store=null 时不实例化）
+  - `handleMessage` switch 加 5 个 `variable.*` 分支
+
+- **SessionManager.java**：新增 `submitFullCanvasDirtyByWall(wallId, throttler)`：
+  扫 byId 找绑定到 wallId 的活跃 session，对每个 submit `DirtyRegion.fullCanvas(ps)`。
+  线程安全（只读 + 不可变 getters）；可从任意线程调（VariableStore async daemon 路径）。
+
+- **HikariCanvas.java**：
+  - VariableStore 构造时 wallDirtyCallback 从 noop 升级为
+    `wallId -> sessionManager.submitFullCanvasDirtyByWall(wallId, projectionThrottler)`
+    （lambda 体延迟执行，构造顺序无关）
+  - WebServer 构造调用补一个 `variableStore` 参数
+
+### 协议样例
+
+```jsonc
+// C→S 创建
+{ "op": "variable.create", "id": "c-1",
+  "payload": { "name": "red_score", "type": "NUMBER", "defaultValue": "0" } }
+
+// S→C ack（带 fullName 便于前端索引）
+{ "op": "ack", "id": "c-1",
+  "payload": { "version": 42, "fullName": "user:w-deadbeef/red_score" } }
+
+// S→C state.patch（同一 wall 所有连接收到）
+{ "op": "state.patch", "id": "s-7",
+  "payload": { "version": 42, "ops": [
+    { "op": "add", "path": "/variables/user:w-deadbeef~1red_score",
+      "value": { "namespace": "user:w-deadbeef", "key": "red_score",
+                 "type": "NUMBER", "defaultValue": "0",
+                 "updatedAt": 1747641722000, "ttl": 0, "source": "manual" } }
+  ] } }
+
+// C→S 改当前值
+{ "op": "variable.set", "id": "c-2",
+  "payload": { "fullName": "user:w-deadbeef/red_score", "value": "5" } }
+
+// S→C state.patch（precise currentValue replace）
+{ "op": "state.patch", "id": "s-8",
+  "payload": { "version": 43, "ops": [
+    { "op": "replace",
+      "path": "/variables/user:w-deadbeef~1red_score/currentValue",
+      "value": "5" }
+  ] } }
+```
+
+### 错误码映射
+
+| VariableException.Code | 协议错误码 |
+|---|---|
+| VARIABLE_NOT_FOUND | `VARIABLE_NOT_FOUND` |
+| VARIABLE_EXISTS | `VARIABLE_EXISTS` |
+| VARIABLE_TYPE_MISMATCH | `VARIABLE_TYPE_MISMATCH` |
+| VARIABLE_NAMESPACE_DENIED | `VARIABLE_NAMESPACE_DENIED` |
+| VARIABLE_NAME_INVALID / VARIABLE_VALUE_TOO_LONG / QUOTA_EXCEEDED / TTL_INVALID | `INVALID_PAYLOAD` |
+
+权限失败 → `PERMISSION_DENIED`；wall 缺失 → `WALL_NOT_FOUND`；
+session closing → `SESSION_CLOSED`；store 未初始化 → `INTERNAL_ERROR`。
+
+### 关键设计决策
+
+1. **fullName 校验严格 per-wall**：op 入参 `fullName` 必须以 `"user:<thisWallId>/"` 开头。
+   否则 `VARIABLE_NAMESPACE_DENIED`——防 wall A session 改 wall B 的 user 变量。
+2. **patch path JSON Pointer 标准转义**：`/` → `~1`、`~` → `~0`。前端 mirror 走标准
+   JSON Patch 反编码即可。`user:<wallId>/<key>` 形态下 wallId 不含 `~` / `/`，仅 ns-key
+   分隔符 `/` 被转义。
+3. **变量 op 不触发投影**：`OpResult.Ok.dirty = null`。dirty 由 store 内 wallDirtyCallback
+   单独触发——"create 时无 referencer 不触发"、"setValue 时按 referencedByWalls 精确触发"
+   语义清楚。
+4. **createVariable 不进 undo 栈**：bumpVersion 但不调 history.commitHistory。
+   变量是"配置"而非"画布内容"，与 layer.set-active 同等定位（也不进 undo）。
+5. **VariableOpDispatcher 走 wallRepo.loadById** 判定 owner_uuid：session 对象只有 wallId
+   不含 owner，wallRepo 已是 DAO + cache。
+6. **lambda body 延迟字段读**：VariableStore 构造期 sessionManager / projectionThrottler
+   还可能为 null，但 lambda 体只在运行期玩家手动改值时执行——此时字段已就位。
+
+### 测试
+
+`plugin/src/test/java/moe/hikari/canvas/state/EditSessionVariableTest.java` — 18 case，
+0.004s 全绿。覆盖：create + add patch / create 重复 / create 非法 name / create null wall
+/ create null store / update type+default / update missing / set currentValue 走
+`/currentValue` 路径 / set 触发 dirty callback（前置 markWallReferences）/ set 跨 wall 拒 /
+set 空值走 remove / delete 走 remove + path / delete 跨 wall 拒 / bind 写 source 字段 /
+unbind null 清 source + path 走 remove / bind 跨 wall 拒 / JSON Pointer 转义 / version bump。
+
+完整 `:plugin:test` 473 case 全绿。
+
+### 关联文件（创建 / 修改）
+
+- 新增：`plugin/src/main/java/moe/hikari/canvas/web/VariableOpDispatcher.java`
+- 新增：`plugin/src/test/java/moe/hikari/canvas/state/EditSessionVariableTest.java`
+- 改：`plugin/src/main/java/moe/hikari/canvas/state/EditSession.java`
+- 改：`plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`
+- 改：`plugin/src/main/java/moe/hikari/canvas/session/SessionManager.java`
+- 改：`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`
+
+---
+
 ## 2026-05-19 · 0.4.0-P1-C：VariableInterpolator + CanvasCompositor 渲染期 ${var:X} 替换
 
 P1 阶段"渲染期变量替换"。`VariableInterpolator` 把 TextElement.text 内的 `${var:X}` 或
