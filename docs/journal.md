@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P3-K：PapiVariableBridge（reflection 软依赖 + 动态注册）
+
+P3 Wave 2 之一：PAPI 桥接落地。**1 commit / ~430 行净增（含 1 新生产类 + 1 测试类）/ 556 backend test 全绿（+29 from P3-J 基线 527）**。
+
+### 改动一览
+
+1. **PapiVariableBridge**（{{provider/PapiVariableBridge.java}}, ~390 行）：
+   - 软依赖：通过 reflection 调 `me.clip.placeholderapi.PlaceholderAPI.setPlaceholders(OfflinePlayer, String)`——build.gradle **不**加 PAPI dep
+   - PAPI 未装：`accessor.initialize()` 检测 plugin 不存在 → `available=false`；`refreshInterval()` 返 `Duration.ZERO` → daemon 不调度（零开销）；`handleDynamic` short-circuit；`refresh` 返 false 不调 accessor
+   - 动态注册：玩家引用 `${var:papi:%xxx%}` → interpolator miss → `store.notifyDynamicLookup` → hook 解析 + 编码 + `store.create`
+   - **store key 编码层**：VariableStore key 正则 `[a-zA-Z0-9_.-]+` 不允许 `%`，本桥接把 `%player_name%` 编码为 `pct_player_name_pct` 后入 store；内部维护 `encoded → original placeholder` 映射；`refresh` 按 original 调 PAPI、按 encoded 写 store
+   - **PapiAccessor 抽象**（与 J 的 `DataSource` 同套路）：生产用 `ReflectionPapiAccessor`；测试注入 fake → 不依赖真实 PAPI 即可全覆盖
+   - refresh 跑 daemon 线程：PAPI 多 stateless thread-safe，per-key try-catch 让单个 placeholder 失败不阻断其他
+
+2. **ProviderBootstrap.initialize**（{{provider/ProviderBootstrap.java}}）：在 System + Scoreboard 之后、ManualSchedule 之前加 `daemon.register(new PapiVariableBridge(store, plugin))`。PAPI 未装时 daemon 也注册它，但 `refreshInterval=ZERO` 让其不调度
+
+3. **测试**（{{test:.../PapiVariableBridgeTest.java}}, 29 case）：
+   - PAPI 未装路径：initialize 不抛 / `refreshInterval=ZERO` / declaredKeys 空 / handleDynamic noop / refresh 不调 accessor / 不注册 hook
+   - PAPI 装了路径：hook 注册 / handleDynamic 编码 + create / dot + slash + encoded + raw 四种形态解析 / 多次幂等
+   - refresh：accessor.resolve 调用 + setValue / accessor 返 null 保留旧值 / accessor 抛异常不阻断其他 placeholder
+   - encode/decode 编码层：`%xxx%` ↔ `pct_xxx_pct` 双向 / 非法格式拒绝（空 / `%%` / 含空格 / 无 prefix-suffix）
+   - declaredKeys 反映已 tracked / shutdown 清 tracked + 调 accessor.shutdown
+
+4. **docs/dynamic-data.md §7.2** 重写：替换原 stub 伪代码为 P3-K 实装注释 + PapiAccessor 抽象 + store key 编码层说明（VariableStore key 正则不允许 `%` 的兼容处理）+ 线程模型说明
+
+### 关键决策（已固化）
+
+1. **PAPI 未装时 daemon 也注册 Bridge**：register 调 initialize → 内部检测 plugin 不存在 + 不注册 hook；refreshInterval=ZERO → daemon scheduleAtFixedRate 跳过（`VariableProviderDaemon` line ~76 的 `intervalMs > 0` 判断）；零开销 + 未来 PAPI 热装时 Bridge 已就位（虽然当前不支持 hot reload，但保持架构灵活）
+2. **store key 编码 `pct_<inner>_pct`**：VariableStore 校验 key 正则不允许 `%`——不修改 store 校验（不放宽 namespace 之外通用规则），改在 Bridge 边界编码。**P3-K 仅 Bridge 侧编码**，interpolator 侧解析 `${var:papi:%xxx%}` 语法的编码层留 P3-M 一同接入；当前 Bridge 已能接 dynamic lookup hook（store 处理 namespace 解析后只回调 namespace + fullName）。docs §7.2 已写明此实施边界
+3. **PapiAccessor 抽象**（与 J 的 `DataSource` 同套路）：生产 ReflectionPapiAccessor / 测试 FakePapiAccessor；reflection 隔离让单测无需 MockBukkit / 真实 PAPI 也可全覆盖
+4. **refresh daemon 线程跑**（不切主线程）：PAPI placeholder 多 stateless thread-safe；社区主流插件 thread-safe；per-key try-catch 单 placeholder 失败不阻其他；切主线程会让 PAPI 桥接大量时拖 TPS
+
+### 通用基线
+
+- shadow jar：未单独测（compile + test 全过即视为 OK；P3-K 不动 shadowJar relocate 链）
+- baseline 漂移：0（不动渲染路径，仅加 Provider）
+- 不动 NMS / 不引新依赖
+- 不开 dev server / runServer
+
+---
+
 ## 2026-05-19 · 0.4.0-P3-J：SystemProvider + ScoreboardProvider + Provider 接口扩展
 
 P3 Wave 1：基础设施 + 两个内置 Provider 落地。**1 commit / ~860 行净增（含 2 新生产

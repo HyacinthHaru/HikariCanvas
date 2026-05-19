@@ -420,29 +420,49 @@ public class BedWarsPlugin extends JavaPlugin {
 
 ### 7.2 Tier 4 PAPI 桥接
 
+**P3-K 实装**：`plugin/.../variable/provider/PapiVariableBridge.java`。软依赖 PAPI（不在 build.gradle 加 dep），通过 reflection 调 `me.clip.placeholderapi.PlaceholderAPI.setPlaceholders(OfflinePlayer, String)`。PAPI 未装时 `refreshInterval=ZERO` → daemon 不调度，整 `papi/*` namespace 不出现，**零开销**。
+
 ```java
-public final class PapiVariableBridge {
-    /** Plugin lifecycle: onEnable 检测 PAPI */
-    public void init() {
-        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) return;
-        registered = true;
+// 抽象：PapiAccessor（生产用 ReflectionPapiAccessor，测试注入 fake）
+public interface PapiAccessor {
+    void initialize();           // 检测 PAPI + 加载 reflection method
+    boolean isAvailable();
+    @Nullable String resolve(String placeholder);
+    default void shutdown() {}
+}
+
+public final class PapiVariableBridge implements VariableProvider {
+    @Override public String namespace() { return "papi"; }
+    @Override public boolean isDynamic() { return true; }
+    @Override public Duration refreshInterval() {
+        return accessor.isAvailable() ? Duration.ofMillis(5_000) : Duration.ZERO;
     }
-    
-    /** Tier 4 resolve hook */
-    public Optional<String> resolve(String papiPlaceholder, @Nullable Player wallOwner) {
-        if (!registered) return Optional.empty();
-        try {
-            String result = PlaceholderAPI.setPlaceholders(wallOwner, papiPlaceholder);
-            return Optional.of(result);
-        } catch (Exception e) {
-            log.warning("PAPI resolve failed for " + papiPlaceholder + ": " + e.getMessage());
-            return Optional.empty();
-        }
+
+    @Override public void initialize() {
+        accessor.initialize();
+        if (!accessor.isAvailable()) return;
+        store.registerDynamicLookupHook((fullName, ns) -> {
+            if ("papi".equals(ns)) handleDynamic(fullName);
+        });
     }
+    // refresh() 在 daemon 线程跑（PAPI placeholder 多 stateless thread-safe）；
+    // 失败 → log + 不写 value，保留旧 cached 让 fallback 链工作
 }
 ```
 
-PAPI placeholder 自动 wrap 为 `papi/<placeholder>` 变量；TTL 默认 5s（PAPI placeholder 通常是查询型）。
+**store key 编码层**：VariableStore key 校验正则 `[a-zA-Z0-9_.-]+` 不允许 `%`，所以本桥接对外形态：
+
+| 玩家语法 | store fullName | tracker 内 |
+|---|---|---|
+| `${var:papi:%player_name%}` | `papi/pct_player_name_pct` | 原文 `%player_name%` |
+
+`handleDynamic` 接受两种形态（编码 / 原文 dot+slash），统一编码为 `pct_<inner>_pct`；refresh 时按 tracker 内原文调 PAPI、按 encoded key 写 store。**P3-K 实装时 interpolator 侧未做编码层**——`${var:papi:%xxx%}` 语法的 interpolator 编码留 P3-M 一同接入。
+
+**ACL**：HikariCanvas 不做额外 ACL，完全信任 PAPI（详见 §9.3）。
+
+**线程模型**：`refresh()` 在 daemon 线程跑——不切主线程。理由：(a) PAPI placeholder 量大时切主线程会拖 TPS；(b) 社区主流 placeholder stateless；(c) 失败 catch + log，旧 cached 保留，不污染。失败 placeholder 不阻断同 tick 内其他 placeholder 的 refresh（per-key try-catch）。
+
+PAPI placeholder 自动 wrap 为 `papi/<encoded>` 变量；TTL 默认 5s（PAPI placeholder 通常是查询型）。
 
 ### 7.3 内置 Manual Schedule Provider（兜底列车功能）
 
