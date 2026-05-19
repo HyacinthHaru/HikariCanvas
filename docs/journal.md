@@ -5,6 +5,98 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P4 收尾：Plugin Push API + 示例插件完工
+
+P4 六子任务（O / P / Q / R / S / T）完工。**6 commit / 660 backend + 93 frontend test 全绿 /
+shadow jar 152 MB / 0 fixture baseline 漂移 / DemoTrainPlugin 4.8 KB + DemoScorePlugin 5.8 KB**。
+Wave 1 单跑（O 建立 API 包 + Impl + Registry）+ Wave 2 四 agent 并行（P / Q / R / S 实施限流 +
+生命周期 + 示例 + 文档）+ Wave 3 T 主控收尾（shadowJar 防御性注释 + 全测 + journal + push）。
+
+### Phase commit 时间线
+
+| Commit | Task | 范围 |
+|---|---|---|
+| `10eeda1` | P4-O Wave 1 | `moe.hikari.canvas.api` 包 + Impl + PluginNamespaceRegistry + PluginNamespaceProvider（+38 单测） |
+| `24c16f3` | P4-S Wave 2 | docs/api.md 660 行 + dynamic-data.md §4 回填 |
+| `3d8d214` | P4-P Wave 2 | PushRateLimiter（per-plugin 100/s + 全局 1000/s + 10s circuit break）+ config.yml 段（+15 单测） |
+| `e5158ce` | P4-R Wave 2 | DemoTrainPlugin + DemoScorePlugin Gradle subprojects + examples/README.md |
+| `b227b5c` | P4-Q Wave 2 | PluginCleanupListener + ServicesManager 注册 + HikariCanvas#getAPI()（+7 单测） |
+| `<本 commit>` | P4-T Wave 3 | shadowJar 防御性注释 + CLAUDE.md/journal P4 总览 |
+
+### 关键架构落地
+
+1. **API 包独立 + 路径冻结**（O）：`moe.hikari.canvas.api` 作为公开 API 包，**含独立 VarType enum**（不引用 internal `moe.hikari.canvas.variable.VarType`）。外部插件仅 `compileOnly` API 类即可，无需 import internal 包。shadowJar relocate 只对显式列出的第三方包生效，不影响项目自身包——T 任务确认 `moe/hikari/canvas/api/*` 7 个类在 shadow jar 中保持**原路径**
+2. **HikariCanvasAPIImpl 三档异常隔离**（O + P）：
+   - ACL 错误（namespace not registered / ACL denied） → 抛 `PluginNamespaceException`（调用方有义务正确接入，不能 catch 忽略）
+   - 限流 / value 长度 / TTL 非法 / 内部 VariableException → 静默 drop + log WARN
+   - 未预期错误（NPE 等） → log + drop，不传播给调用方
+3. **PushRateLimiter clock 注入 seam**（P）：测试用 `AtomicLong::get` 虚拟时钟 → 全部 15 单测零 `Thread.sleep` 完全确定性。生产用 `System::currentTimeMillis`
+4. **PluginCleanupListener DelayedScheduler 接口注入**（Q）：嵌套 `@FunctionalInterface` 让测试可注入 RecordingScheduler 不真跑；生产用 `Bukkit.getScheduler().runTaskLaterAsynchronously` 30s 后清。两个构造器：3 参（生产）+ 4 参（测试）
+5. **双入口设计**（O + Q）：外部插件可选 ServicesManager（推荐，零编译耦合）或 `((HikariCanvas) plugin).getAPI()`（直观但需 import 主类）。HikariCanvas onEnable 一次 `Bukkit.getServicesManager().register(...)`，Bukkit 自动反注册在 onDisable 时
+6. **保留 namespace 防御**（O）：`user / system / papi / scoreboard / schedule` 5 个 + `user: / system: / schedule:` 3 个前缀禁外部插件注册（IllegalArgumentException）；前缀防御避免插件用 `system:malicious` 伪造 per-wall 元数据
+7. **限流粒度按 entry 计费**（P）：`setVariables(ns, Map<5 entries>)` 算 5 token（防 setVariables 绕过 setVariable 限流），但 ACL check + tryAcquire 只一次（性能 + all-or-nothing 语义）
+8. **cleanup 30s 保留 cached**（Q 决策）：plugin disable 立即 unregister namespace（让别的插件能抢用同名）但 cached value 保留 30s。这样：
+   - plugin reload 窗口期间 wall 仍显示旧值不闪屏
+   - 30s 内重新 enable 同插件 → 用户体验无中断
+   - 30s 后才彻底清，防僵尸数据累积
+9. **Demo plugin compileOnly classes 目录**（R）：paperweight-userdev 把主 plugin `:jar` 任务 `enabled = false`（防生产部署 non-shadow jar），导致 `compileOnly(project(":plugin"))` 拿不到 classes。R 用 `compileOnly(files(... classes/java/main))` + `dependsOn(":plugin:compileJava")` workaround
+10. **journal 并行竞争**（S 顺手处理）：Wave 2 四 agent 都改 journal.md 顶部，S 提交时把 R / P 工作树未提交的 journal 段一并 squash 进 commit，后续 R / P / Q commit 时 journal 已就位仅提交代码改动——降低 rebase 摩擦
+
+### API 契约
+
+```java
+// 公开接口（moe.hikari.canvas.api）
+void registerNamespace(Plugin plugin, String namespace, NamespaceInfo info);
+void declareKey(Plugin plugin, String namespace, String key, VarType type, @Nullable String hint);
+void setVariable(Plugin plugin, String namespace, String key, String value, @Nullable Duration ttl);
+void setVariables(Plugin plugin, String namespace, Map<String, VariableUpdate> updates);
+void unsetVariable(Plugin plugin, String namespace, String key);
+```
+
+5 方法首参均为 `Plugin plugin`（spoof 防御 + cleanup hook）。dynamic-data.md §4.1 已回填。
+
+### 工时核对
+
+| Task | 估时 | 实际 wall-clock |
+|---|---:|---:|
+| P4-O API 包 + Impl + Registry + Provider | 5h | ~11min |
+| P4-P PushRateLimiter + config | 3h | ~19min |
+| P4-Q DisableListener + ServicesManager + getAPI | 3h | ~20min |
+| P4-R Demo 插件 Gradle subproject | 5h | ~17min |
+| P4-S docs/api.md + 回填 | 3h | ~12min |
+| P4-T 收尾整合 | 1h | ~10min |
+| 单测（散在各 task 内） | 3h | 内嵌 |
+| **总（wall-clock）** | **23h** | **~1.5h**（Wave 2 并行节约 ~10×） |
+
+### 0.4.0 累计进度（P1 + P2 + P3 + P4）
+
+- **总测试**：660 backend + 93 frontend = 753 test，0 failure / 0 error
+- **总 commit**：5(P1) + 4(P2) + 5(P3) + 6(P4) = 20 commit
+- **总工时**：62(P1) + 30(P2) + 20(P3) + 23(P4) = 135h（vs 0.4.0 预算 150h - P5 留 10h，剩 15h 弹性）
+- **wall-clock**：~3h（P1） + ~3h（P2） + ~1.5h（P3） + ~1.5h（P4） = ~9h（vs 计划 6-7 周）
+- **shadow jar**：152 MB（含 4 Provider + Push API + 22 字体 + 2060 icons）
+
+### 不做（留 P5 / 0.4.1+）
+
+- `/canvas var` 命令族 + 教程 docs → P5（10h）
+- 独立 `HikariCanvas-api.jar` Maven publish → 1.0
+- chip 编辑器（Notion-style contentEditable） → 0.4.1
+- 高级限流策略（per-server / 分桶 / 优先级） → v1.x
+- API 接口稳定性冻结 → 1.0
+
+### 下一步
+
+**P5 启动等用户通知**（`/canvas var` 命令族 + 教程 docs + 集成测试，10h）。P4 落地后**整个 0.4.0
+核心架构闭环**：
+- 玩家：在编辑器创建 user 变量 + 在 wall 文本里引用 `${var:user/X}`
+- 系统：自动暴露 server.time / wall.alias / scoreboard / PAPI 变量
+- 插件：用 HikariCanvasAPI 推自定义 namespace 变量（DemoTrain / DemoScore 已演示）
+- 玩家：用 Schedule Manager modal 配兜底列车时刻表
+
+P5 仅补命令族 + 教程文档，是收尾性质工作。
+
+---
+
 ## 2026-05-19 · 0.4.0-P4-Q：PluginDisableEvent listener + ServicesManager 注册 + getAPI()
 
 P4 Wave 2 生命周期接入。**1 commit / 660 backend test 全绿（+7）/ 0 fixture baseline 漂移**。

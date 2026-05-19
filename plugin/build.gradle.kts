@@ -600,6 +600,11 @@ tasks {
         relocate("org.eclipse.jetty", "moe.hikari.canvas.shaded.jetty")
         // jackson-dataformat-yaml 间接依赖 SnakeYAML；同步 relocate 避免半 shade
         relocate("org.yaml.snakeyaml", "moe.hikari.canvas.shaded.snakeyaml")
+        // M28-P4：moe.hikari.canvas.api.* 是公开 API 包，外部插件 import 路径不可变。
+        // relocate 仅对显式列出的第三方包 (com.fasterxml.jackson 等) 生效，不会自动 prefix-match
+        // 项目自身的 moe.hikari.canvas.*——所以 api 包天然安全。新增 relocate 时务必只列第三方包，
+        // 不要加 relocate("moe.hikari.canvas", ...)，否则 ServicesManager.load(HikariCanvasAPI.class)
+        // 在外部插件侧立即崩。详见 docs/api.md §2。
         mergeServiceFiles()
     }
 
