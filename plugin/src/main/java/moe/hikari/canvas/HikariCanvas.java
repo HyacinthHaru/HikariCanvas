@@ -38,6 +38,8 @@ import moe.hikari.canvas.template.asset.TemplateAssetService;
 import moe.hikari.canvas.template.preview.TemplatePreviewService;
 import moe.hikari.canvas.template.preview.WallPreviewService;
 import moe.hikari.canvas.variable.VariableStore;
+import moe.hikari.canvas.variable.provider.ProviderBootstrap;
+import moe.hikari.canvas.variable.provider.VariableProviderDaemon;
 import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.web.WebServer;
 import org.bukkit.Bukkit;
@@ -93,6 +95,9 @@ public final class HikariCanvas extends JavaPlugin {
     // 0.4.0-P1-A：变量系统底座（VariableStore + user_variables 持久化）。
     // wallDirtyCallback 暂为 noop，待 0.4.0-P1-B 接入 ProjectionThrottler。
     private VariableStore variableStore;
+    // 0.4.0-P1-E：异步 Provider 调度框架（守护线程 + 定时 refresh）。P1 阶段不注册任何
+    // provider；P3 在 ProviderBootstrap.initialize 内加 SystemVariableProvider / PapiVariableBridge 等。
+    private VariableProviderDaemon variableProviderDaemon;
     private volatile HikariCanvasConfig config;
 
     @Override
@@ -258,6 +263,9 @@ public final class HikariCanvas extends JavaPlugin {
         variableStore = new VariableStore(userVariableDao, wallId -> { /* B 任务接 ProjectionThrottler#dirty */ });
         variableStore.loadFromDb();
         getLogger().info("VariableStore: " + variableStore.size() + " user variable(s) loaded");
+        // 0.4.0-P1-E：Provider daemon 框架（守护线程池 + 定时调度）。
+        // P1 阶段不注册任何 provider；P3 在 ProviderBootstrap.initialize 内加 system / papi 等。
+        this.variableProviderDaemon = ProviderBootstrap.initialize(this.variableStore);
 
         // M14：模板元数据 DAO + 创意工坊协调器
         templateRepo = new TemplateRepo(getLogger(), database.jdbi());
@@ -359,6 +367,12 @@ public final class HikariCanvas extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        // 0.4.0-P1-E：先停 provider daemon，让守护线程池 awaitTermination 完成 + provider
+        // shutdown 钩子释放资源；放最前是因为 daemon 内部 refresh task 可能引用 store / DB。
+        if (variableProviderDaemon != null) {
+            variableProviderDaemon.shutdown();
+            variableProviderDaemon = null;
+        }
         if (sessionReaper != null) {
             sessionReaper.stop();
             sessionReaper = null;

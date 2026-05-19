@@ -5,6 +5,72 @@
 
 ---
 
+## 2026-05-19 · 0.4.0-P1-E：VariableProvider daemon 框架 + ProviderBootstrap
+
+P1 阶段"异步 Provider 调度框架"。**仅占位骨架**——具体 Provider（system / papi / scoreboard /
+schedule）留 P3 落地。让 P3 可直接 plug-in 而不动调度逻辑 / 守护线程池 / 异常隔离 / shutdown 流程。
+
+### 主要变更
+
+- **新包** `moe.hikari.canvas.variable.provider`：
+  - `VariableProvider.java` — 接口（`namespace` / `displayName` / `initialize` / `refresh` /
+    `refreshInterval` / `shutdown`）。`refresh()` 返 `boolean`（true = 本 tick push 成功 /
+    false = fallback 跳过），daemon 只记录不据此停调度。`refreshInterval()` ≤ 0 = 不调度
+    （provider 自管推送）。
+  - `VariableProviderDaemon.java` — 调度器。`ScheduledExecutorService.newScheduledThreadPool(2)`
+    + 守护线程（`hikari-canvas-var-resolve`，daemon=true）。`register` 流程 = putIfAbsent →
+    initialize → scheduleAtFixedRate；initialize 抛异常 → 回滚 + log warning + 不传播。
+    `refresh()` 抛异常 → log warning + 继续调度。`unregister` 取消定时任务 + 调 shutdown 钩子。
+    `shutdown()` 幂等 + awaitTermination 5s + shutdownNow fallback。shutdown 后 register 抛
+    `IllegalStateException`。
+  - `ProviderBootstrap.java` — 装配入口。P1 阶段 method body 内仅 `new VariableProviderDaemon()`
+    无 provider 注册；P3 阶段在此加 `daemon.register(new SystemVariableProvider(store))` 等 4
+    行（注释占位已就位）。
+
+- **HikariCanvas.java**（3 处最小化改动）：
+  - import `ProviderBootstrap` + `VariableProviderDaemon`
+  - 新字段 `private VariableProviderDaemon variableProviderDaemon`
+  - `onEnable` 在 VariableStore 构造之后 1 行：
+    `this.variableProviderDaemon = ProviderBootstrap.initialize(this.variableStore);`
+  - `onDisable` 最前面 4 行：`shutdown` 守护线程池（放最前因为内部 refresh task 引用 store / DB）
+
+### 关键设计决策
+
+1. **接口 vs abstract class**：选 interface——provider 实现可自由继承业务父类（如 PAPI bridge
+   需要 `extends PlaceholderExpansion`）；接口默认 method 不用，所有方法实现强制契约可读。
+2. **`refresh()` 返 boolean 不返 void**：让 P3 实现给 fallback chain 留语义钩子（如 PAPI
+   未加载 = 返 false；daemon 不据此停调度，但未来可加监控指标统计跳过率）。
+3. **`refreshInterval()` ≤ 0 = 不调度**：覆盖"Push-only" provider（如 ManualScheduleProvider
+   靠插件命令推送，不需要定时拉）。daemon 仅调 initialize / shutdown。
+4. **守护线程 daemon=true**：JVM 关停时不阻塞 server shutdown；同时 `awaitTermination(5s)`
+   给运行中 refresh 任务自然完成的机会，超时再 `shutdownNow()` interrupt。
+5. **异常隔离三层**：register 时 initialize 抛 → 回滚 putIfAbsent；refresh tick 抛 → log
+   warning 继续下个 tick；shutdown 抛 → swallow + log。三处都不传播，避免一个坏 provider
+   拖垮整个 daemon / plugin onDisable。
+
+### 测试
+
+`plugin/src/test/java/moe/hikari/canvas/variable/provider/VariableProviderDaemonTest.java` —
+10 case，0.979s 全绿。覆盖：register 成功 / register 重复 ns 抛 / initialize 抛异常不传播 /
+schedule 定时 fire（CountDownLatch ≥ 2 次）/ refresh 抛异常继续调度 / unregister 取消任务 +
+shutdown 钩子 / unregister 未知 ns 静默 / shutdown 全清 / shutdown 幂等 + 后续 register 抛 /
+provider.shutdown 抛被吞。FakeProvider 内联 mock + AtomicInteger 计数器 + 异常注入开关。
+
+完整 `:plugin:test` 433 case 全绿。
+
+### 关联文件
+
+- 新：`plugin/src/main/java/moe/hikari/canvas/variable/provider/{VariableProvider,VariableProviderDaemon,ProviderBootstrap}.java`
+- 新：`plugin/src/test/java/moe/hikari/canvas/variable/provider/VariableProviderDaemonTest.java`
+- 改：`plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（+11 行：import 2 + 字段 3 + onEnable 3 + onDisable 5）
+
+### P3 阶段开工提示
+
+P3 实施时只需在 `ProviderBootstrap.initialize` body 内加 register 调用 + 实现对应 Provider
+类（`extends VariableProvider`）。daemon 调度 / 异常 / 关停逻辑零改动。
+
+---
+
 ## 2026-05-19 · 0.4.0-P1-A：VariableStore 核心 + V011 user_variables 持久化
 
 0.4.0 动态接入路线 P1 阶段的"底座"——四类数据源（user / plugin / system / papi）共用的内存变量表
