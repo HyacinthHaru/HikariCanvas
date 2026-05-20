@@ -30,6 +30,7 @@ import { useLivePaint, gapToPathElement, elementToPolygon, pointInPolygon } from
 import type { GapPolygon } from '@/livepaint';
 import { usePaintBucketStore } from '@/stores/paintBucket';
 import { useNetworkStore } from '@/stores/network';
+import { useVariableStore } from '@/stores/variables';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -37,6 +38,7 @@ const ws = getWsClient();
 const { t } = useI18n();
 const paintBucket = usePaintBucketStore();
 const net = useNetworkStore();
+const variableStore = useVariableStore();
 
 // ---------- 核心 ref ----------
 const canvasEl = ref<HTMLCanvasElement | null>(null);
@@ -805,6 +807,10 @@ function onDragEnd(ev: DragEvt, id: string): void {
 // 重绘：state 或 editingId 变就重画 canvas
 watch(() => project.state, () => requestDraw(), { deep: true, immediate: true });
 watch(editingId, () => requestDraw());
+// 0.4.0 bugfix：变量值变化（Provider push / 玩家手动改 / state.patch 同步）触发画布重画，
+// 让 PreviewRenderer 内的 interpolator 重新计算占位符替换值。useVariableStore.set/remove/clear
+// 都走 `variables.value = new Map(...)` 替换整个 ref，无需 deep watch。
+watch(() => variableStore.variables, () => requestDraw());
 onMounted(() => {
     requestDraw();
     // M23：所有字体走 FontLoader（document.fonts 动态加载）。

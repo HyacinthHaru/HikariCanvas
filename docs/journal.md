@@ -5,6 +5,37 @@
 
 ---
 
+## 2026-05-20 · 前端 PreviewRenderer 监听 variableStore 触发重画
+
+### 症状
+
+用户报：游戏内变量实时更新（方案 B 主动发包），但**前端编辑器画布不跟随**。在 Schedule Manager
+改 entry，游戏内立刻刷新，但浏览器画布的 TextElement 仍显示旧值，需要手动改文本框才触发重画。
+
+### 根因
+
+`CanvasView.vue` 的 watch 只监听 `project.state`（line 806）触发 `requestDraw`，**遗漏了
+`useVariableStore.variables`**。bugfix3 已让后端 state.patch 把变量变更推给前端 mirror，
+`variables.value = new Map(...)` 替换整个 ref 触发 Pinia 响应；但 PreviewRenderer 本身不订阅
+Pinia store，没有 reactive 桥。
+
+### 修复
+
+1 行 watch：
+```typescript
+watch(() => variableStore.variables, () => requestDraw());
+```
+
+无需 deep（store 内 set/remove/clear 都走 `variables.value = next` 替换整个 Map ref）。
+
+### 验证
+
+- `npm run test` 105 全绿
+- `vite build` 通过
+- 用户操作：Schedule Manager 改 entry → 浏览器画布**立即跟随**显示新 ETA（与游戏内同步）
+
+---
+
 ## 2026-05-20 · M28-adaptive-fps：方案 B 自适应渲染（高频 wall 50ms + 主动推帧 chunk viewer）
 
 ### 背景
