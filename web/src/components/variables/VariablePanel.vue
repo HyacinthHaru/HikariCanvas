@@ -25,11 +25,13 @@ import { onClickOutside, useEventListener } from '@vueuse/core';
 import {
     X, Search, Plus, Users, Package, Globe, Plug,
     Minus, Pencil, Trash2, Link2, ChevronDown, ChevronRight,
+    Tag, Check, Eraser,
 } from 'lucide-vue-next';
 
 import { useUiStore } from '@/stores/ui';
 import { useProjectStore } from '@/stores/project';
 import { useVariableStore } from '@/stores/variables';
+import { useVariableAliasStore } from '@/stores/variableAliases';
 import { useNetworkStore } from '@/stores/network';
 import { useI18n } from '@/i18n';
 import { getWsClient } from '@/network/wsClient';
@@ -43,6 +45,7 @@ import NumberStepButton from './NumberStepButton.vue';
 const ui = useUiStore();
 const project = useProjectStore();
 const store = useVariableStore();
+const aliasStore = useVariableAliasStore();
 const net = useNetworkStore();
 const { t } = useI18n();
 const ws = getWsClient();
@@ -64,6 +67,12 @@ const showValueEditor = ref<{ fullName: string; variable: Variable } | null>(nul
 const showBindDialog = ref<{ fullName: string; variable: Variable } | null>(null);
 /** 当前展开 "删除确认" popover 的 fullName；null = 没在确认。 */
 const confirmingDeleteFor = ref<string | null>(null);
+/** 0.4.2：当前 inline 改别名的 fullName；null = 没在改。 */
+const editingAliasFor = ref<string | null>(null);
+const aliasDraft = ref('');
+const aliasError = ref<string | null>(null);
+const aliasSubmitting = ref(false);
+const ALIAS_MAX_LEN = 64;
 
 // ESC + onClickOutside 关闭
 useEventListener(window, 'keydown', (e: KeyboardEvent) => {
@@ -101,9 +110,13 @@ const myVariables = computed<Array<{ fullName: string; v: Variable }>>(() => {
 });
 
 function matchesKeyword(fullName: string, v: Variable, kw: string): boolean {
-    return fullName.toLowerCase().includes(kw) ||
-        v.namespace.toLowerCase().includes(kw) ||
-        v.key.toLowerCase().includes(kw);
+    if (fullName.toLowerCase().includes(kw)) return true;
+    if (v.namespace.toLowerCase().includes(kw)) return true;
+    if (v.key.toLowerCase().includes(kw)) return true;
+    // 0.4.2：alias 也参与命中
+    const alias = aliasStore.get(fullName);
+    if (alias && alias.toLowerCase().includes(kw)) return true;
+    return false;
 }
 
 function toggleGroup(g: 'mine' | 'plugin' | 'system' | 'papi') {
@@ -148,6 +161,60 @@ async function confirmDelete(fullName: string) {
     } catch (err) {
         net.pushLog('err', `variable.delete rejected: ${(err as Error).message}`);
         confirmingDeleteFor.value = null;
+    }
+}
+
+// ---------- 0.4.2：inline alias 编辑 ----------
+
+function openAliasEdit(fullName: string) {
+    editingAliasFor.value = fullName;
+    aliasDraft.value = aliasStore.get(fullName) ?? '';
+    aliasError.value = null;
+}
+
+function cancelAliasEdit() {
+    editingAliasFor.value = null;
+    aliasDraft.value = '';
+    aliasError.value = null;
+    aliasSubmitting.value = false;
+}
+
+async function submitAliasEdit() {
+    const fullName = editingAliasFor.value;
+    if (fullName == null) return;
+    const trimmed = aliasDraft.value.trim();
+    if (trimmed.length === 0) {
+        await clearAlias();
+        return;
+    }
+    if (trimmed.length > ALIAS_MAX_LEN) {
+        aliasError.value = t.value.variables.aliasErrorTooLong;
+        return;
+    }
+    aliasSubmitting.value = true;
+    aliasError.value = null;
+    try {
+        await ws.sendVariableAliasSet(fullName, trimmed);
+        cancelAliasEdit();
+    } catch (err) {
+        aliasError.value = (err as Error).message;
+    } finally {
+        aliasSubmitting.value = false;
+    }
+}
+
+async function clearAlias() {
+    const fullName = editingAliasFor.value;
+    if (fullName == null) return;
+    aliasSubmitting.value = true;
+    aliasError.value = null;
+    try {
+        await ws.sendVariableAliasClear(fullName);
+        cancelAliasEdit();
+    } catch (err) {
+        aliasError.value = (err as Error).message;
+    } finally {
+        aliasSubmitting.value = false;
     }
 }
 
@@ -239,13 +306,21 @@ function isHexColor(s: string | null): boolean {
             :key="entry.fullName"
             class="rounded-[var(--radius-sm)] border border-[color:var(--border)] bg-[color:var(--background)] p-2 space-y-1"
           >
-            <!-- 第 1 行：key + type chip -->
-            <div class="flex items-center gap-1.5">
+            <!-- 第 1 行：key + type chip + alias chip -->
+            <div class="flex items-center gap-1.5 flex-wrap">
               <span class="font-mono text-xs truncate" :title="entry.fullName">{{ entry.v.key }}</span>
               <span
                 class="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider font-medium shrink-0"
                 :class="typeChipClass(entry.v.type)"
               >{{ typeChipLabel(entry.v.type) }}</span>
+              <span
+                v-if="aliasStore.get(entry.fullName)"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-[color:var(--ctp-mauve)]/15 text-[color:var(--ctp-mauve)]"
+                :title="t.variables.aliasChipPrefix + ' ' + aliasStore.get(entry.fullName)"
+              >
+                <Tag class="size-2.5" />
+                <span class="truncate max-w-[120px]">{{ aliasStore.get(entry.fullName) }}</span>
+              </span>
             </div>
 
             <!-- 第 2 行：current + default 值显示 -->
@@ -270,8 +345,11 @@ function isHexColor(s: string | null): boolean {
               </span>
             </div>
 
-            <!-- 第 3 行：操作按钮 -->
-            <div v-if="confirmingDeleteFor !== entry.fullName" class="flex items-center gap-1 pt-0.5">
+            <!-- 第 3 行：操作按钮（与 alias 编辑、删除确认三者互斥） -->
+            <div
+              v-if="confirmingDeleteFor !== entry.fullName && editingAliasFor !== entry.fullName"
+              class="flex items-center gap-1 pt-0.5"
+            >
               <!-- +/- 只 NUMBER 显示 -->
               <template v-if="entry.v.type === 'NUMBER'">
                 <NumberStepButton
@@ -299,6 +377,13 @@ function isHexColor(s: string | null): boolean {
               </button>
               <button
                 class="hc-btn flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                :title="t.variables.actionEditAlias"
+                @click="openAliasEdit(entry.fullName)"
+              >
+                <Tag class="size-3" />
+              </button>
+              <button
+                class="hc-btn flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
                 :title="t.variables.actionBind"
                 @click="openBindDialog(entry.fullName, entry.v)"
               >
@@ -311,6 +396,51 @@ function isHexColor(s: string | null): boolean {
               >
                 <Trash2 class="size-3.5" />
               </button>
+            </div>
+
+            <!-- alias 编辑（inline） -->
+            <div
+              v-else-if="editingAliasFor === entry.fullName"
+              class="flex flex-col gap-1 p-2 rounded bg-[color:var(--accent)]/10 border border-[color:var(--accent)]/30"
+            >
+              <div class="flex items-center gap-1.5">
+                <Tag class="size-3 text-[color:var(--ctp-mauve)] shrink-0" />
+                <input
+                  type="text"
+                  class="hc-input flex-1"
+                  :placeholder="t.variables.dialogNewAliasPlaceholder"
+                  v-model="aliasDraft"
+                  :maxlength="ALIAS_MAX_LEN + 8"
+                  :disabled="aliasSubmitting"
+                  @keydown.enter.prevent="submitAliasEdit"
+                  @keydown.escape.prevent="cancelAliasEdit"
+                />
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] text-[color:var(--ctp-green,var(--primary))] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasSaveButton"
+                  :disabled="aliasSubmitting"
+                  @click="submitAliasEdit"
+                >
+                  <Check class="size-3" />
+                </button>
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasClearButton"
+                  :disabled="aliasSubmitting"
+                  @click="clearAlias"
+                >
+                  <Eraser class="size-3" />
+                </button>
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasCancelButton"
+                  :disabled="aliasSubmitting"
+                  @click="cancelAliasEdit"
+                >
+                  <X class="size-3" />
+                </button>
+              </div>
+              <span v-if="aliasError" class="text-[color:var(--destructive)] text-[10px]">{{ aliasError }}</span>
             </div>
 
             <!-- 删除确认 popover（inline） -->

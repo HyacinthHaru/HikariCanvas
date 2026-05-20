@@ -90,6 +90,49 @@ describe('buildGroups', () => {
         const groups = buildGroups(vars, 'w-abc', '   ');
         expect(totalCount(groups)).toBe(4);  // 不过滤
     });
+
+    // 0.4.2：alias 参与 keyword 命中
+    it('keyword 命中 alias（Record 形态）', () => {
+        const aliases: Record<string, string> = {
+            'system/server.time': '服务器时间',
+        };
+        const groups = buildGroups(vars, 'w-abc', '服务器', aliases);
+        // alias 命中 server.time
+        expect(totalCount(groups)).toBe(1);
+        expect(groups[2].items[0].key).toBe('server.time');
+    });
+
+    it('keyword 命中 alias（Map 形态）', () => {
+        const aliases = new Map<string, string>([
+            ['user:w-abc/my_red', '红队'],
+        ]);
+        const groups = buildGroups(vars, 'w-abc', '红队', aliases);
+        expect(totalCount(groups)).toBe(1);
+        expect(groups[0].items[0].key).toBe('my_red');
+    });
+
+    it('keyword 既命中 namespace 又命中 alias 不重复', () => {
+        const aliases: Record<string, string> = {
+            'bedwars/score': '得分',
+        };
+        // 关键字 "score" 命中 fullName，alias 不参与；只一条
+        const groups = buildGroups(vars, 'w-abc', 'score', aliases);
+        expect(totalCount(groups)).toBe(1);
+        expect(groups[1].items[0].key).toBe('score');
+    });
+
+    it('keyword 命中 alias 大小写不敏感', () => {
+        const aliases: Record<string, string> = {
+            'bedwars/score': 'SCORE-CN',
+        };
+        const groups = buildGroups(vars, 'w-abc', 'score-cn', aliases);
+        expect(totalCount(groups)).toBe(1);
+    });
+
+    it('aliases 为 null 时退化为旧逻辑（仅匹配 fullName）', () => {
+        const groups = buildGroups(vars, 'w-abc', '红队', null);
+        expect(totalCount(groups)).toBe(0);  // 没有 fullName 含 "红队"
+    });
 });
 
 describe('flattenGroups / totalCount', () => {

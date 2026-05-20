@@ -332,6 +332,8 @@ export interface ReadyPayload {
     templates?: import('./template').TemplateSpec[];
     // 0.4.0-P2-F：该 wall 当前所有变量快照（VariableDto 形式，referencedByWalls 已剔除）
     variables?: import('./variable').Variable[];
+    // 0.4.2：该 wall 的变量别名映射（fullName → alias）；前端 VariableAliasStore 初始化用。
+    aliases?: Record<string, string>;
 }
 
 // ---------- §6.1 error ----------

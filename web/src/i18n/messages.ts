@@ -446,11 +446,22 @@ export const messages = {
             dialogNewNameHint: '将自动加 user:<wallId>/ 前缀',
             dialogNewTypeLabel: '类型',
             dialogNewDefaultLabel: '默认值',
+            // 0.4.2：可选 alias 字段
+            dialogNewAliasLabel: '别名',
+            dialogNewAliasPlaceholder: '可选；起一个短名（≤ 64 字符）',
+            dialogNewAliasHint: '别名仅本 wall 内生效，不参与 ${var:} 解析',
             dialogNewSubmit: '创建',
             dialogNewCancel: '取消',
+            optional: '可选',
             nameErrorEmpty: '名称不能为空',
             nameErrorInvalid: '名称只能包含字母数字 _ . -，且 ≤ 64 字符',
             nameErrorTooLong: '名称太长（≤ 64 字符）',
+            aliasErrorTooLong: '别名最长 64 字符',
+            // 0.4.2：VariablePanel 行内别名 chip + 编辑入口
+            aliasChipPrefix: '别名:',
+            actionEditAlias: '改别名',
+            aliasEditTitle: '编辑别名',
+            aliasEmpty: '（无别名）',
             // 改值对话框
             dialogValueTitle: '修改当前值',
             dialogValueSubmit: '保存',
@@ -478,6 +489,17 @@ export const messages = {
                 keyboardHint: '↑↓ 选择，Enter 确认，Esc 关闭',
                 // P3-M：动态 namespace（如 scoreboard / papi）行内标记 tooltip
                 dynamicHint: '动态注册：引用时按 namespace 模板（如 scoreboard.<obj>.<player>）自动创建',
+                // 0.4.2：3 列表格 + 别名编辑
+                columnAlias: '别名',
+                columnValue: '数值',
+                columnName: '变量名',
+                emptyAliasPlaceholder: '—',
+                aliasEditTooltip: '编辑此变量在当前 wall 的别名',
+                aliasEditPlaceholder: '起一个简短名称',
+                aliasSaveButton: '保存',
+                aliasClearButton: '清空',
+                aliasCancelButton: '取消',
+                aliasTooLong: '别名最长 64 字符',
             },
             // P2-H：TextElement 下方 live preview + 删除警告
             hints: {
@@ -1071,11 +1093,22 @@ export const messages = {
             dialogNewNameHint: 'A user:<wallId>/ prefix will be added automatically',
             dialogNewTypeLabel: 'Type',
             dialogNewDefaultLabel: 'Default value',
+            // 0.4.2: optional alias field
+            dialogNewAliasLabel: 'Alias',
+            dialogNewAliasPlaceholder: 'Optional; short nickname (≤ 64 chars)',
+            dialogNewAliasHint: 'Alias only applies on this wall; not used in ${var:} resolution',
             dialogNewSubmit: 'Create',
             dialogNewCancel: 'Cancel',
+            optional: 'optional',
             nameErrorEmpty: 'Name cannot be empty',
             nameErrorInvalid: 'Name may only contain letters, digits, _ . -, and must be ≤ 64 chars',
             nameErrorTooLong: 'Name is too long (≤ 64 chars)',
+            aliasErrorTooLong: 'Alias must be ≤ 64 chars',
+            // 0.4.2: VariablePanel inline alias chip + edit entry
+            aliasChipPrefix: 'Alias:',
+            actionEditAlias: 'Edit alias',
+            aliasEditTitle: 'Edit alias',
+            aliasEmpty: '(no alias)',
             // value editor dialog
             dialogValueTitle: 'Edit current value',
             dialogValueSubmit: 'Save',
@@ -1103,6 +1136,17 @@ export const messages = {
                 keyboardHint: '↑↓ to choose, Enter to confirm, Esc to close',
                 // P3-M: dynamic namespace (e.g. scoreboard / papi) row marker tooltip
                 dynamicHint: 'Dynamic namespace: register on reference (e.g. scoreboard.<obj>.<player>)',
+                // 0.4.2: 3-column table + inline alias editor
+                columnAlias: 'Alias',
+                columnValue: 'Value',
+                columnName: 'Name',
+                emptyAliasPlaceholder: '—',
+                aliasEditTooltip: 'Edit this variable’s alias on the current wall',
+                aliasEditPlaceholder: 'Short nickname',
+                aliasSaveButton: 'Save',
+                aliasClearButton: 'Clear',
+                aliasCancelButton: 'Cancel',
+                aliasTooLong: 'Alias must be ≤ 64 chars',
             },
             // P2-H: TextElement live preview + deletion warning
             hints: {

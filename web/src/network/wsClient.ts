@@ -12,6 +12,7 @@ import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
 import { useVariableStore } from '@/stores/variables';
+import { useVariableAliasStore } from '@/stores/variableAliases';
 import { useScheduleStore } from '@/stores/schedule';
 import { messages } from '@/i18n/messages';
 
@@ -191,6 +192,22 @@ export class WsClient {
         return this.sendWithAck('variable.bind', { fullName, boundTo }).then(() => undefined);
     }
 
+    // ---------- 变量别名（0.4.2，全 namespace 通用，per-wall 隔离）----------
+    //
+    // 2 个写 op；ack 通道 + 服务端推 /aliases/<encoded> state.patch 更新 VariableAliasStore mirror。
+
+    /** {@code variable.alias.set}：给 fullName 起别名（覆盖已有）。alias 1..64 字符。 */
+    sendVariableAliasSet(fullName: string, alias: string): Promise<void> {
+        return this.sendWithAck('variable.alias.set', { fullName, alias })
+            .then(() => undefined);
+    }
+
+    /** {@code variable.alias.clear}：清掉 fullName 的别名（即使不存在也幂等）。 */
+    sendVariableAliasClear(fullName: string): Promise<void> {
+        return this.sendWithAck('variable.alias.clear', { fullName })
+            .then(() => undefined);
+    }
+
     // ---------- 列车时刻表（0.4.0-P3-L，协议契约见 docs/protocol.md §5.12）----------
     //
     // 5 个 op 都走 ack 通道；ScheduleStore mirror 由各方法返回的 payload 自己更新。
@@ -326,6 +343,8 @@ export class WsClient {
             ui.reset();
             // 0.4.0-P3-L：schedule 是 wall-scoped 元数据；wall 切换时清旧 wall 缓存
             useScheduleStore().reset();
+            // 0.4.2：alias 也是 wall-scoped；与 schedule 同款 reset
+            useVariableAliasStore().reset();
         }
         net.authenticated = true;
         net.sessionId = payload.sessionId;
@@ -347,6 +366,8 @@ export class WsClient {
         // 0.4.0-P2-I：用 ready payload 携带的 variables 快照一次性初始化 VariableStore mirror；
         // 后续变更走 state.patch /variables/<encoded> 路径（见 applyVariablePatches）。
         useVariableStore().initVariables(payload.variables ?? []);
+        // 0.4.2：变量别名快照（per-wall）；后续变更走 state.patch /aliases/<encoded>。
+        useVariableAliasStore().initAliases(payload.aliases ?? {});
         // rotate 过来的新 token 存 sessionStorage 供断线重连
         if (payload.reconnectToken) {
             try {
@@ -390,14 +411,20 @@ export class WsClient {
     private handlePatch(payload: StatePatchPayload): void {
         // 0.4.0-P1-D：variables 走 global VariableStore 而非 ProjectState；按 patch.path
         // 前缀分拣后再分别落 store。剩余 patch 仍走 project.applyPatch（既有路径不变）。
+        // 0.4.2：aliases 同款分拣到 VariableAliasStore。
         const variableOps: PatchOp[] = [];
+        const aliasOps: PatchOp[] = [];
         const projectOps: PatchOp[] = [];
         for (const op of payload.ops) {
             if (op.path.startsWith('/variables/')) variableOps.push(op);
+            else if (op.path.startsWith('/aliases/')) aliasOps.push(op);
             else projectOps.push(op);
         }
         if (variableOps.length > 0) {
             applyVariablePatches(variableOps);
+        }
+        if (aliasOps.length > 0) {
+            applyAliasPatches(aliasOps);
         }
         // 即便 projectOps 为空也要更新 version 号（version 是 wall-scoped 单调递增）
         useProjectStore().applyPatch(payload.version, projectOps);
@@ -609,4 +636,31 @@ function applyVariablePatches(ops: PatchOp[]): void {
 /** RFC 6901：{@code ~1} → {@code /}，{@code ~0} → {@code ~}（顺序必须先 ~1 再 ~0）。 */
 function decodeJsonPointerToken(token: string): string {
     return token.replace(/~1/g, '/').replace(/~0/g, '~');
+}
+
+// ---------- 别名 state.patch 路由（0.4.2）----------
+//
+// 后端 dispatcher 发 path 形如 {@code /aliases/<encoded fullName>}（同变量通道 RFC 6901
+// 编码 ~ → ~0, / → ~1）。支持：add / replace 携 alias 字符串；remove 不携 value。
+// 其他形态不支持，收到时静默忽略并 log。
+
+function applyAliasPatches(ops: PatchOp[]): void {
+    const store = useVariableAliasStore();
+    const net = useNetworkStore();
+    for (const op of ops) {
+        const rest = op.path.substring('/aliases/'.length);
+        if (rest.length === 0) {
+            net.pushLog('err', `alias patch: empty path ${op.path}`);
+            continue;
+        }
+        // alias 路径无子路径（最多就是 fullName 编码段），直接整段 decode
+        const fullName = decodeJsonPointerToken(rest);
+        if ((op.op === 'add' || op.op === 'replace') && typeof op.value === 'string') {
+            store.set(fullName, op.value);
+        } else if (op.op === 'remove') {
+            store.remove(fullName);
+        } else {
+            net.pushLog('err', `alias patch: unsupported ${op.op} ${op.path}`);
+        }
+    }
 }

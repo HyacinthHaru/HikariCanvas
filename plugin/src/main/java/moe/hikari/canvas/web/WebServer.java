@@ -95,6 +95,10 @@ public final class WebServer {
     private final VariableOpDispatcher variableOpDispatcher;
     /** 0.4.0-P3-L：schedule.* 五个 op 的分发；可为 null（ScheduleDao 未配置） */
     private final ScheduleOpDispatcher scheduleOpDispatcher;
+    /** 0.4.2：variable.alias.* 三个 op 的分发；可为 null（VariableAliasDao 未配置） */
+    private final VariableAliasDispatcher variableAliasDispatcher;
+    /** 0.4.2：ready payload 注入 aliases 快照；与 dispatcher 同生命周期。 */
+    private final moe.hikari.canvas.storage.VariableAliasDao variableAliasDao;
     /**
      * 0.4.0-P2-F：ready payload 注入 variables 快照需要直读 VariableStore。
      * 与 {@link #variableOpDispatcher} 同生命周期；可为 null（VariableStore 未配置时跳过注入）。
@@ -154,6 +158,7 @@ public final class WebServer {
                      moe.hikari.canvas.storage.ScheduleDao scheduleDao,
                      moe.hikari.canvas.variable.provider.ManualScheduleProvider manualScheduleProvider,
                      moe.hikari.canvas.variable.provider.VariableProviderDaemon variableProviderDaemon,
+                     moe.hikari.canvas.storage.VariableAliasDao variableAliasDao,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion, Runnable paintHandler,
                      int wsAuthTimeoutSeconds,
@@ -204,6 +209,11 @@ public final class WebServer {
         this.scheduleOpDispatcher = scheduleDao == null ? null
                 : new ScheduleOpDispatcher(sessionManager, rateLimiter, scheduleDao,
                         manualScheduleProvider, wallRepo, auditLog);
+        // 0.4.2：variable.alias.* dispatcher（VariableAliasDao 必传，否则禁用）
+        this.variableAliasDao = variableAliasDao;
+        this.variableAliasDispatcher = variableAliasDao == null ? null
+                : new VariableAliasDispatcher(sessionManager, rateLimiter, variableAliasDao,
+                        wallRepo, push, auditLog);
         // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
         this.variableStore = variableStore;
         // 0.4.0-P3-M：variable metadata 端点 handler；store/daemon/sessionManager 任一缺则禁用
@@ -724,6 +734,14 @@ public final class WebServer {
                     scheduleOpDispatcher.dispatch(ctx, in, bound);
                 }
             }
+            case "variable.alias.set", "variable.alias.clear", "variable.alias.list" -> {
+                if (variableAliasDispatcher == null) {
+                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR",
+                            "variable alias system not initialized"));
+                } else {
+                    variableAliasDispatcher.dispatch(ctx, in, bound);
+                }
+            }
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
     }
@@ -864,6 +882,13 @@ public final class WebServer {
             payload.put("variables", dtos);
         } else {
             payload.put("variables", java.util.List.of());
+        }
+        // 0.4.2：携带当前 wall 的全部变量别名（fullName → alias 字符串映射），让前端
+        // VariableAliasStore 一次性初始化。null wall 或 dao 未配时回空 map。
+        if (variableAliasDao != null && wallId != null) {
+            payload.put("aliases", variableAliasDao.loadByWall(wallId));
+        } else {
+            payload.put("aliases", java.util.Map.of());
         }
         ctx.send(Envelope.of("ready", in.id(), payload));
     }

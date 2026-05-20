@@ -5,6 +5,112 @@
 
 ---
 
+## 2026-05-20 · 0.4.2：变量别名（per-wall）+ VariablePicker 3 列表格
+
+### 背景
+
+0.4.1 chip editor 落地后，发现变量"实际名"（如 `user:w-abc/red_score`）对玩家不够友好；尤其是
+混用 user / schedule / system / papi 多 namespace 时 fullName 长且杂乱。用户要求：
+
+1. 所有变量都可加**别名**（含 user / schedule / system / papi / scoreboard 全 namespace）
+2. 别名 **per-wall**（同一变量在不同 wall 可起不同别名，互不干扰）
+3. VariablePicker 改 **3 列表格**：`别名 | 当前数值 | 变量名`，并 inline ✏ 编辑
+
+### 实施
+
+**V014 migration**：新增 `variable_aliases (wall_id, full_name, alias, created_at, updated_at)`，
+主键 `(wall_id, full_name)`，FK CASCADE 到 walls。alias 不要求 wall 内唯一（用户自负责）。
+
+**后端**：
+- `VariableAlias` record + `VariableAliasDao`（upsert / delete / deleteByWall / loadByWall / loadAll）
+- `VariableAliasDispatcher` 3 op：`variable.alias.set` / `variable.alias.clear` / `variable.alias.list`
+  - 权限：复用 `canvas.var.write.own/any`（默认 own=true）；list 是只读放行
+  - state.patch 推 `/aliases/<encoded fullName>`（与 `/variables/` 同款 JSON Pointer 编码）
+  - 校验：alias 非空且 trim 后 ≤ 64 字符；fullName ≤ 256
+- `WebServer` 在 ready payload 加 `aliases: Map<fullName, alias>` 字段（per-wall 隔离，复用现有
+  loadByWall）
+- `HikariCanvas.onEnable` 实例化 DAO + 注册 wall delete hook（显式 cascade，与 schedule 同款）
+- audit 事件：`VARIABLE_ALIAS_SET` / `VARIABLE_ALIAS_CLEAR`
+
+**前端**：
+- `useVariableAliasStore` Pinia store（fullName → alias Map + initAliases/get/set/remove/clear/reset）
+- `wsClient.handleReady` 接 `payload.aliases` 调 initAliases；`handlePatch` 加 `/aliases/` 分拣调
+  applyAliasPatches；onClose / 切 wall 时 reset
+- `wsClient.sendVariableAliasSet` / `sendVariableAliasClear` 两个 ack 方法
+- `VariablePicker.vue` 全改造为 3 列表格：`别名 | 数值 | 变量名 | ✏`；按组（mine/plugin/system/papi）
+  以 group-row 分隔。点 ✏ → 整行替换为 input + 保存/清空/取消按钮 → 提交走
+  `sendVariableAliasSet/Clear`。键盘 ↑↓/Enter/Esc 在编辑态下被 input 吞掉，picker 导航暂停
+- `pickerLogic.buildGroups` 加可选第 4 参数 `aliases`：keyword 搜索时也命中别名（"红队"也能搜到
+  `user:w-abc/red_score`），向下兼容（不传 aliases 时退化为旧逻辑）
+- `NewVariableDialog.vue` 加可选 `alias` 字段：提交时先 `variable.create` 再 `variable.alias.set`
+  （两步 ack 串联；alias 失败不阻塞 create 成功）；校验 ≤ 64 字符
+- `VariablePanel.vue` 每个变量行加紫色 alias chip（Tag icon + 截断 max 120px）+ 改别名按钮
+  （与 delete 确认互斥）+ inline 编辑 UI（搜索 keyword 也命中别名）
+- `VariableChipEditor.vue` chip 显示优先级改为 **alias > currentValue > fallback > defaultValue
+  > UNRESOLVED**；hover tooltip 加 `Alias:` 行（如有）；watch 依赖加 `aliasStore.aliases` 让别名变更
+  自动重渲
+
+**i18n**：22 keys 中英对照（picker 3 列表头 / 编辑按钮 + dialog 别名字段 / panel chip / 错误文案）。
+
+### 测试
+
+- 后端 `VariableAliasDaoTest`（14 case）：CRUD + 多 namespace + per-wall 隔离 + FK CASCADE + 排序
+  + timestamp 行为 + 不存在 wall 安全调用
+- 后端 `ReadyPayloadAliasTest`（5 case）：ready payload aliases 字段为 object / wall 隔离 /
+  空 store 返 `{}` / upsert 替换语义 / 多 namespace 共存
+- 前端 `pickerLogic.test.ts` +5 case：alias 命中（Record/Map 形态）/ keyword 不重复 / 大小写不敏感
+  / aliases=null 退化
+- 前端 `variableAliases.test.ts` 新文件 13 case：store 全 API + ref 引用变更触发响应
+- **后端 775 + 前端 155 全绿**；shadowJar 153 MB / vite build 666 kB（gzip 202 kB）
+
+### 关键决策
+
+- **alias 是 wall-scoped 元数据**：dispatcher 不走 EditSession，不增加 ProjectState version
+  （别名不影响渲染像素），自己产生 state.patch 推送
+- **alias 不参与 `${var:...}` 解析**：别名只在 UI 层（picker / panel / chip）展示用；底层
+  Compositor 仍按 fullName 解析变量值
+- **chip 显示优先 alias**：用户给变量起了别名后，chip 文本变稳定（alias 不会动态变），更可读；
+  数值 / fallback 仍可通过 hover tooltip 看到
+- **沿用 var write 权限**：不引入新权限节点（`canvas.var.alias.*`），别名是常规元数据写
+- **空别名 = 清除**：alias 编辑框留空 + 保存 = 触发 `variable.alias.clear`，UX 更直观
+
+### 版本号
+
+`0.4.1-SNAPSHOT → 0.4.2-SNAPSHOT`（5 处：build.gradle.kts / web/package.json + lock /
+paper-plugin.yml × 3）。schema 变更（V014）+ 新协议 op（3 个）按 semver 视为 minor 增量。
+
+### 关联文件
+
+**后端**（6 新 + 5 改）：
+- `plugin/src/main/resources/db-migrations/V014__variable_aliases.sql`（新）
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableAlias.java`（新 record）
+- `plugin/src/main/java/moe/hikari/canvas/storage/VariableAliasDao.java`（新 DAO）
+- `plugin/src/main/java/moe/hikari/canvas/web/VariableAliasDispatcher.java`（新 dispatcher）
+- `plugin/src/test/java/moe/hikari/canvas/storage/VariableAliasDaoTest.java`（新 14 case）
+- `plugin/src/test/java/moe/hikari/canvas/web/ReadyPayloadAliasTest.java`（新 5 case）
+- `plugin/src/main/java/moe/hikari/canvas/storage/MigrationRunner.java`（+ V014 注册）
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（+ DAO 实例化 + wall delete hook）
+- `plugin/src/main/java/moe/hikari/canvas/web/WebServer.java`（+ dispatcher 装配 + ready payload
+  aliases 字段 + op 路由）
+
+**前端**（1 新 + 6 改 + 1 测试新）：
+- `web/src/stores/variableAliases.ts`（新 Pinia store）
+- `web/src/stores/__tests__/variableAliases.test.ts`（新 13 case）
+- `web/src/network/wsClient.ts`（+ 2 op send 方法 + ready/patch alias 分拣 + onClose reset）
+- `web/src/types/protocol.ts`（ReadyPayload.aliases 字段）
+- `web/src/variable/pickerLogic.ts`（buildGroups 加 aliases 第 4 参）
+- `web/src/variable/__tests__/pickerLogic.test.ts`（+ 5 alias 命中 case）
+- `web/src/components/variables/VariablePicker.vue`（3 列表格大改造 + inline 编辑）
+- `web/src/components/variables/NewVariableDialog.vue`（+ alias 字段 + 两步提交）
+- `web/src/components/variables/VariablePanel.vue`（alias chip + 编辑入口 + 搜索匹配）
+- `web/src/components/variables/VariableChipEditor.vue`（chip 显示优先 alias + tooltip 加 alias 行）
+- `web/src/i18n/messages.ts`（+ 22 keys × 2 lang）
+
+**版本号** 5 处：build.gradle.kts / web/package.json / web/package-lock.json /
+plugin/.../paper-plugin.yml / examples/{demo-score,demo-train}/.../paper-plugin.yml
+
+---
+
 ## 2026-05-20 · 紧急修：chip editor 点击编辑框误弹 picker
 
 ### 症状

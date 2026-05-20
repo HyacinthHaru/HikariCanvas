@@ -276,6 +276,71 @@ VariablePanel 里删变量 → wall 内引用该变量的位置 **不会自动�
 
 > **删除不级联** 是按 `dynamic-data.md §16-5` 决策：避免变量误删导致 wall 整段文字消失。改 fallback 处理代替自动删 element。
 
+### 1.12 变量别名（0.4.2）
+
+变量的"内部 fullName"（如 `user:w-3a17/red_score` / `schedule:w-3a17/eta_seconds` / `system/server.time`）对玩家不友好；尤其混用多个 namespace 时屏幕信息密度大、可读性差。0.4.2 引入**别名**机制：
+
+- **所有 namespace 都可加别名**：user / schedule / system / papi / scoreboard / 第三方插件均支持
+- **per-wall**：同一变量在不同 wall 可起不同别名（个性化），互不干扰；同一 wall 内一个变量只能有一个别名
+- **仅 UI 显示用**：别名不参与 `${var:...}` 解析——文本中仍写 `${var:user/red_score}`，渲染时按原 fullName 取值；别名只在 picker / panel / chip 上替代展示原名
+- **chip 显示优先级**：alias > currentValue > fallback > defaultValue > UNRESOLVED（数值会变，别名稳定，更适合 chip）
+
+#### 怎么加别名
+
+**方式 A：新建变量时一并起**
+
+VariablePanel 「+ 新建变量」对话框最下面有可选 **别名** 字段（留空 = 不起）。创建成功后两步串联：先 `variable.create`，再 `variable.alias.set`。
+
+**方式 B：在 VariablePanel 里改**
+
+每个变量行末尾有 🏷 标签按钮 → 点击 → 行内变成 input + 保存/清空/取消三按钮。提交即时生效（别人打开同 wall 也立刻看到）。
+
+**方式 C：在 VariablePicker 里改**
+
+文本框打 `${` 触发 picker。picker 改成 3 列表格：
+
+| 别名 | 数值 | 变量名 |
+|---|---|---|
+| 红队 | 5 | user/red_score |
+| ETA秒 | 90 | schedule/eta_seconds |
+| — | 14:35 | system/server.time |
+
+每行末尾有 ✏ 按钮 → 整行替换为 inline 编辑器。**特别有用**：编辑文本时直接给陌生变量起一个易记名，不用回 VariablePanel。
+
+#### 怎么搜
+
+VariablePicker / VariablePanel 的搜索框现在**既匹配 fullName 又匹配别名**——给 `system/server.time` 起名 "服务器时间" 后，搜 "服务器" 也能命中。
+
+#### 协议层
+
+3 个 WS op（详见 `docs/protocol.md §5.13`）：
+
+- `variable.alias.set {fullName, alias}` — 起 / 改名
+- `variable.alias.clear {fullName}` — 删除别名
+- `variable.alias.list` — 查当前 wall 所有别名
+
+权限：复用 `canvas.var.write.own/any`（owner 默认放行，非 owner 需要 any）。list 是只读，任何能 `open` 该 wall 的玩家可调。
+
+state.patch 推 `/aliases/<encoded fullName>`（与变量通道同款 JSON Pointer 编码）；前端 `VariableAliasStore` 自动 mirror。
+
+#### 数据库 schema
+
+```sql
+CREATE TABLE variable_aliases (
+    wall_id     TEXT    NOT NULL,
+    full_name   TEXT    NOT NULL,
+    alias       TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (wall_id, full_name),
+    FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE
+);
+```
+
+- alias 长度 ≤ 64 字符（dispatcher 层校验）
+- 不要求别名 wall 内唯一（用户自己负责，UI 不报错）
+- wall 删除时 FK CASCADE 清；同时业务侧显式调 `deleteByWall` 兜底
+
 ---
 
 ## 第二部分：运维管理

@@ -22,14 +22,17 @@ import { X, Plus } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import { useNetworkStore } from '@/stores/network';
+import { useProjectStore } from '@/stores/project';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import type { VarType } from '@/types/variable';
+import { makeUserFullName } from '@/types/variable';
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'created', fullName: string): void }>();
 
 const { t } = useI18n();
 const ws = getWsClient();
 const net = useNetworkStore();
+const project = useProjectStore();
 
 /** 与 P1-A `Variable.NAME_REGEX`（{@code ^[a-zA-Z0-9_.-]+$}）一致；后端会再校一遍。 */
 const NAME_REGEX = /^[a-zA-Z0-9_.-]+$/;
@@ -41,6 +44,9 @@ const defaultValueStr = ref('');           // STRING 用
 const defaultValueNum = ref<number>(0);    // NUMBER 用
 const defaultValueBool = ref<boolean>(false); // BOOLEAN 用
 const defaultValueColor = ref('#FFFFFF');  // COLOR 用
+// 0.4.2：可选 alias 字段。创建成功后两步：先 variable.create 拿 fullName，再 variable.alias.set
+const aliasDraft = ref('');
+const ALIAS_MAX_LEN = 64;
 
 const submitting = ref(false);
 const submitError = ref<string | null>(null);
@@ -64,7 +70,16 @@ const showNameError = computed(() => {
     return name.value.length > 0 && !nameValidation.value.valid;
 });
 
-const formValid = computed(() => nameValidation.value.valid && !submitting.value);
+/** 别名校验：仅长度限制（≤64）；空串合法（表示不设别名）。 */
+const aliasValidation = computed<{ valid: boolean; errorKey: 'tooLong' | null }>(() => {
+    const v = aliasDraft.value.trim();
+    if (v.length === 0) return { valid: true, errorKey: null };
+    if (v.length > ALIAS_MAX_LEN) return { valid: false, errorKey: 'tooLong' };
+    return { valid: true, errorKey: null };
+});
+const showAliasError = computed(() => aliasDraft.value.length > 0 && !aliasValidation.value.valid);
+
+const formValid = computed(() => nameValidation.value.valid && aliasValidation.value.valid && !submitting.value);
 
 /** 当前 type 对应的默认值字符串（送 wire 用）。BOOLEAN 走 "true"/"false"；COLOR 走 hex；NUMBER 走 String(num)。 */
 function currentDefaultValueAsString(): string {
@@ -81,8 +96,23 @@ async function onSubmit() {
     submitting.value = true;
     submitError.value = null;
     const fullDefault = currentDefaultValueAsString();
+    const aliasTrimmed = aliasDraft.value.trim();
     try {
         await ws.sendVariableCreate(name.value, type.value, fullDefault);
+        // 0.4.2：若 alias 字段非空，create 成功后再发 variable.alias.set。
+        // user 变量 fullName = user:<wallId>/<name>；wallId 缺失（理论不应发生）则跳过。
+        if (aliasTrimmed.length > 0) {
+            const wallId = project.wallId;
+            if (wallId) {
+                const fullName = makeUserFullName(wallId, name.value);
+                try {
+                    await ws.sendVariableAliasSet(fullName, aliasTrimmed);
+                } catch (aliasErr) {
+                    // 别名失败不阻塞 create 成功 emit；只记 log
+                    net.pushLog('err', `variable.alias.set rejected: ${(aliasErr as Error).message}`);
+                }
+            }
+        }
         // 创建成功；server 会通过 state.patch 推 add /variables/...，VariablePanel 自动反映
         emit('created', name.value);
         emit('close');
@@ -205,6 +235,29 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
             </div>
           </div>
         </div>
+
+        <!-- 0.4.2：可选 alias 字段 -->
+        <label class="block">
+          <span class="text-xs text-[color:var(--muted-foreground)]">
+            {{ t.variables.dialogNewAliasLabel }}
+            <span class="opacity-60">（{{ t.variables.optional }}）</span>
+          </span>
+          <input
+            type="text"
+            class="hc-input mt-0.5"
+            :class="showAliasError ? 'hc-input-error' : ''"
+            :placeholder="t.variables.dialogNewAliasPlaceholder"
+            v-model="aliasDraft"
+            :maxlength="ALIAS_MAX_LEN + 8"
+          />
+          <span
+            v-if="showAliasError"
+            class="text-xs text-[color:var(--destructive)]"
+          >
+            {{ t.variables.aliasErrorTooLong }}
+          </span>
+          <span v-else class="text-xs text-[color:var(--muted-foreground)]">{{ t.variables.dialogNewAliasHint }}</span>
+        </label>
       </div>
 
       <footer class="px-4 py-3 border-t border-[color:var(--border)] flex items-center gap-2">

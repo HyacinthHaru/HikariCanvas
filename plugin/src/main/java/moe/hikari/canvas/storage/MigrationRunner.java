@@ -46,7 +46,9 @@ public final class MigrationRunner {
             new Migration(11, "db-migrations/V011__user_variables.sql"),
             new Migration(12, "db-migrations/V012__wall_schedules.sql"),
             // 0.4.0 bugfix（Bug 4）：per-wall schedule 精度（minute / second）
-            new Migration(13, "db-migrations/V013__schedule_precision.sql")
+            new Migration(13, "db-migrations/V013__schedule_precision.sql"),
+            // 0.4.2：变量别名（per-wall，全 namespace 通用）
+            new Migration(14, "db-migrations/V014__variable_aliases.sql")
     );
 
     private final Jdbi jdbi;

@@ -46,6 +46,7 @@ import { registerPlainText } from '@lexical/plain-text';
 import { registerHistory, createEmptyHistoryState } from '@lexical/history';
 import { mergeRegister } from '@lexical/utils';
 import { useVariableStore } from '@/stores/variables';
+import { useVariableAliasStore } from '@/stores/variableAliases';
 import { UNRESOLVED, resolveFullName } from '@/variable/interpolator';
 import { useI18n } from '@/i18n';
 import {
@@ -96,6 +97,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useVariableStore();
+const aliasStore = useVariableAliasStore();
 const { t } = useI18n();
 
 const rootRef = ref<HTMLDivElement | null>(null);
@@ -136,6 +138,8 @@ const tooltipDisplayValue = computed(() => {
 });
 const tooltipSource = computed(() => tooltipVariable.value?.source ?? null);
 const tooltipDeleted = computed(() => tooltipVariable.value == null);
+/** 0.4.2：tooltip 也展示别名（如有），让用户在 chip 上 hover 就能确认这块占位实际指向。 */
+const tooltipAlias = computed(() => aliasStore.get(tooltipFullName.value));
 
 // ----------- lexical editor 实例 -----------
 // 不用 ref（避免响应式遍历内部 Map/Set 触发 Vue 警告）；用普通变量。
@@ -275,7 +279,7 @@ watch(
 // ============================================================================
 
 watch(
-    () => [props.wallId, store.variables] as const,
+    () => [props.wallId, store.variables, aliasStore.aliases] as const,
     () => {
         refreshAllChipDisplays();
     },
@@ -292,15 +296,19 @@ function refreshAllChipDisplays(): void {
         const fallback = chip.getAttribute(CHIP_DATA_FALLBACK);
         const fullName = resolveFullName(rawName, props.wallId);
         const v = store.get(fullName);
+        // 0.4.2：chip 显示优先级 alias > currentValue > fallback > defaultValue > UNRESOLVED。
+        // 别名是用户自定义的"短名"，肉眼一致性优先 currentValue（数值可能动态变化，别名稳定）。
+        const alias = aliasStore.get(fullName);
         let displayValue: string;
         let deleted = false;
         if (v) {
-            if (v.currentValue != null && v.currentValue.length > 0) displayValue = v.currentValue;
+            if (alias != null && alias.length > 0) displayValue = alias;
+            else if (v.currentValue != null && v.currentValue.length > 0) displayValue = v.currentValue;
             else if (fallback != null) displayValue = fallback;
             else if (v.defaultValue != null) displayValue = v.defaultValue;
             else displayValue = UNRESOLVED;
         } else {
-            // 变量不存在 → 用 fallback 或 "???"，并加 deleted class
+            // 变量不存在 → 用 fallback 或 "???"，并加 deleted class（即便有 alias 也按缺失处理）
             displayValue = fallback != null ? fallback : UNRESOLVED;
             deleted = true;
         }
@@ -543,6 +551,10 @@ defineExpose({
           <span class="hc-tt-value" :class="{ 'hc-tt-deleted': tooltipDeleted }">
             {{ tooltipDisplayValue }}
           </span>
+        </div>
+        <div v-if="tooltipAlias" class="hc-tt-row">
+          <span class="hc-tt-label">{{ t.variables.aliasChipPrefix }}</span>
+          <span class="hc-tt-value">{{ tooltipAlias }}</span>
         </div>
         <div v-if="tooltipSource" class="hc-tt-row">
           <span class="hc-tt-label">{{ t.variables.chipEditor?.tooltipSource ?? 'Source' }}:</span>

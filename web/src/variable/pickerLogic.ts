@@ -173,6 +173,7 @@ export function buildGroups(
     variables: Iterable<Variable>,
     wallId: string | null,
     keyword: string,
+    aliases?: ReadonlyMap<string, string> | Record<string, string> | null,
 ): PickerGroup[] {
     const userNs = wallId ? `user:${wallId}` : null;
     const kw = keyword.trim().toLowerCase();
@@ -181,14 +182,26 @@ export function buildGroups(
     const system: Variable[] = [];
     const papi: Variable[] = [];
 
+    // 0.4.2：把 aliases（Map 或 plain Record）规范成 readonly fn，避免每行 lookup 重复 instanceof
+    const aliasLookup: (fullName: string) => string | null =
+        aliases == null
+            ? () => null
+            : aliases instanceof Map
+                ? (fn) => (aliases as ReadonlyMap<string, string>).get(fn) ?? null
+                : (fn) => (aliases as Record<string, string>)[fn] ?? null;
+
     for (const v of variables) {
         // 跨 wall 的 user 变量不显示（其他 wall 的私有变量）
         if (v.namespace.startsWith('user:') && userNs !== null && v.namespace !== userNs) continue;
         if (v.namespace.startsWith('user:') && userNs === null) continue;
 
         if (kw.length > 0) {
-            const hay = `${v.namespace}/${v.key}`.toLowerCase();
-            if (!hay.includes(kw)) continue;
+            const fullName = `${v.namespace}/${v.key}`;
+            const hay = fullName.toLowerCase();
+            // 0.4.2：alias 也参与 keyword 命中——让"红队"也能搜到 user:w-abc/red_score
+            const alias = aliasLookup(fullName);
+            const aliasHay = alias ? alias.toLowerCase() : '';
+            if (!hay.includes(kw) && !aliasHay.includes(kw)) continue;
         }
 
         switch (groupOf(v)) {

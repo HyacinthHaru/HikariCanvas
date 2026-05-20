@@ -108,6 +108,9 @@ public final class HikariCanvas extends JavaPlugin {
     private VariableProviderDaemon variableProviderDaemon;
     // 0.4.0-P3-L：兜底列车时刻表 DAO。WebServer schedule.* op + ManualScheduleProvider 共享。
     private moe.hikari.canvas.storage.ScheduleDao scheduleDao;
+    // 0.4.2：变量别名 DAO（per-wall fullName → alias 字符串映射）。WebServer 注入 dispatcher
+    // + ready payload；不参与渲染。
+    private moe.hikari.canvas.storage.VariableAliasDao variableAliasDao;
     // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
     // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -304,6 +307,12 @@ public final class HikariCanvas extends JavaPlugin {
         // P3-J 注册 system + scoreboard；P3-K 加 PAPI 桥接；P3-L 加 ManualScheduleProvider。
         // ScheduleDao 必须先于 ProviderBootstrap.initialize 构造（V012 migration 已跑）。
         this.scheduleDao = new moe.hikari.canvas.storage.ScheduleDao(getLogger(), database.jdbi());
+        // 0.4.2：变量别名 DAO（V014 migration 已跑）；WebServer 与 dispatcher 共享。
+        this.variableAliasDao = new moe.hikari.canvas.storage.VariableAliasDao(
+                getLogger(), database.jdbi());
+        // wall 删除时显式清掉别名（FK CASCADE 已配，显式调更稳，与 schedule 同款）
+        final moe.hikari.canvas.storage.VariableAliasDao variableAliasDaoForHook = this.variableAliasDao;
+        sessionManager.addWallDeleteHook(wid -> variableAliasDaoForHook.deleteByWall(wid));
         this.variableProviderDaemon =
                 ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo,
                         this.scheduleDao, config.scheduleConfig);
@@ -421,7 +430,7 @@ public final class HikariCanvas extends JavaPlugin {
                 templateAssetService, wallPreviewService, uploadHandler,
                 templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry,
                 variableStore, scheduleDao, manualScheduleProviderRef,
-                variableProviderDaemon, this,
+                variableProviderDaemon, variableAliasDao, this,
                 version, this::paintAllSessionMaps,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();
