@@ -735,7 +735,17 @@ function resolveTextForRender(t: TextElement): { rendered: string; segments: Pla
     const ctx = variableContextProvider?.() ?? null;
     if (!ctx) return { rendered: text, segments: [] };
     const r = interpolate(text, ctx.wallId, ctx.store);
-    return { rendered: r.text, segments: r.segments };
+    let rendered = r.text;
+    // 0.4.2 bugfix（Bug 1 兜底）：interpolator 已做二次扫描；若仍含 ${var:} 字面 = 数据损坏
+    // （嵌套 / 错乱字符 / depth limit 内无法收敛），强制全替换为 "???" 防 wall 显字面 placeholder。
+    if (rendered.indexOf('${var:') >= 0) {
+        rendered = rendered.replace(/\$\{var:[^}]*\}/g, '???');
+        if (import.meta.env.DEV) {
+            // eslint-disable-next-line no-console
+            console.warn('[PreviewRenderer] residual ${var:} after interpolate; replaced with ???');
+        }
+    }
+    return { rendered, segments: r.segments };
 }
 
 // ---------- Text：4 层 glow → shadow → stroke → fill ----------

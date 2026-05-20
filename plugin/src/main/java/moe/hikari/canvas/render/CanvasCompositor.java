@@ -64,6 +64,9 @@ public final class CanvasCompositor {
         BufferedImage load(String source);
     }
 
+    /** 0.4.2 bugfix（Bug 1 兜底）：静态 logger 用于 {@code maybeInterpolateText} 静态路径。 */
+    private static final Logger LOG = Logger.getLogger(CanvasCompositor.class.getName());
+
     private final PaletteLut paletteLut;
     private final RenderContext ctx;
     /** M13：图片加载器；null = 所有 ImageElement 走占位。 */
@@ -303,12 +306,20 @@ public final class CanvasCompositor {
         if (referencedAccumulator != null) {
             referencedAccumulator.addAll(r.referencedFullNames());
         }
+        String rendered = r.text();
+        // 0.4.2 bugfix（Bug 1 兜底）：interpolator 已做 MAX_INTERPOLATE_DEPTH 二次扫描；若仍含
+        // ${var:} 字面 = 数据损坏或无法收敛，强制全替换为 "???" 防 wall 显字面 placeholder。
+        if (rendered != null && rendered.indexOf("${var:") >= 0) {
+            rendered = rendered.replaceAll("\\$\\{var:[^}]*\\}", VariableInterpolator.UNRESOLVED);
+            LOG.warning("[CanvasCompositor] residual ${var:} after interpolate; replaced with "
+                    + VariableInterpolator.UNRESOLVED);
+        }
         // 替换文本相同 → 不分配新 record（极端情况：占位符全 resolve 出与原字符串等同的文本，罕见）
-        if (src.equals(r.text())) return e;
+        if (src.equals(rendered)) return e;
         return new TextElement(
                 t.id(), t.x(), t.y(), t.w(), t.h(), t.rotation(),
                 t.locked(), t.visible(),
-                r.text(),
+                rendered,
                 t.fontId(), t.fontSize(), t.color(), t.align(),
                 t.letterSpacing(), t.lineHeight(), t.vertical(),
                 t.effects(),

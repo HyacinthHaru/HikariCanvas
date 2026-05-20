@@ -113,11 +113,48 @@ export function resolveFullName(rawName: string, wallId: string | null): string 
  *
  * <p>性能：text 不含 {@code ${var:} 子串时 O(1) 短路返原引用；否则 O(n) regex 单趟扫描。</p>
  *
+ * <p>0.4.2 bugfix（Bug 1：服务器重启后字面 {@code ${var:} 残留）：把 {@link #doInterpolate}
+ * 拆成内部实现 + 外层 {@link interpolate} 做二次扫描 wrapper。当首次替换后输出仍含 {@code ${var:}
+ * 字面（典型场景：chip editor roundtrip 漏 escape / 数据写入了双重嵌套 {@code ${${var:X}}}），最多
+ * 再 interpolate 2 次兜底。DEV 模式下若触发二次解析 console.warn 帮排查根因。</p>
+ *
  * @param text   原始文本；null / undefined / '' 视为空字符串返空集合
  * @param wallId 当前 wall ID；非空时把 {@code ${var:user/X}} 注入成 {@code user:<wallId>/X}
  * @param store  Pinia VariableStore 响应式实例（组件内 useVariableStore() 拿）
  */
 export function interpolate(
+    text: string | null | undefined,
+    wallId: string | null,
+    store: ReturnType<typeof useVariableStore>,
+): InterpolateResult {
+    let result = doInterpolate(text, wallId, store);
+    let depth = 0;
+    while (result.text.indexOf('${var:') >= 0 && depth < 2) {
+        // 嵌套或损坏数据：再 interpolate 一次，accumulate referenced/missing/segments
+        const next = doInterpolate(result.text, wallId, store);
+        // 合并集合（segments 来自后一轮，更接近最终输出 char range；前轮 segments 已失效）
+        next.referencedFullNames.forEach((fn) => result.referencedFullNames.add(fn));
+        next.missingFullNames.forEach((fn) => result.missingFullNames.add(fn));
+        result = {
+            text: next.text,
+            referencedFullNames: result.referencedFullNames,
+            missingFullNames: result.missingFullNames,
+            segments: next.segments,
+        };
+        depth++;
+    }
+    if (depth > 0 && import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            '[interpolator] nested placeholder detected; depth=', depth,
+            'text=', (text ?? '').substring(0, 100),
+        );
+    }
+    return result;
+}
+
+/** 单次扫描实现；调用方（外层 {@link interpolate}）负责二次扫描兜底。 */
+function doInterpolate(
     text: string | null | undefined,
     wallId: string | null,
     store: ReturnType<typeof useVariableStore>,

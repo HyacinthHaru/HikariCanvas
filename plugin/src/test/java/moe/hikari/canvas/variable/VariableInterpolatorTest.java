@@ -533,6 +533,60 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  0.4.2 bugfix（Bug 1）：二次扫描兜底
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void nested_innerPlaceholderResolvedOnSecondPass() {
+        // outer 的 currentValue 字面含 ${var:user/inner}（数据损坏 / chip roundtrip 漏 escape）
+        store.create("user:w-1", "outer", VarType.STRING, null, null);
+        store.setValue("user:w-1/outer", "${var:user/inner}", null);
+        store.create("user:w-1", "inner", VarType.STRING, null, null);
+        store.setValue("user:w-1/inner", "INNER_VAL", null);
+
+        var r = interp.interpolate("${var:user/outer}", "w-1");
+        // 二次扫描应当把第一轮替换出的 ${var:user/inner} 解出 INNER_VAL
+        assertEquals("INNER_VAL", r.text());
+        assertFalse(r.text().contains("${var:"),
+                "二次扫描后应当无 ${var:} 字面残留");
+    }
+
+    @Test
+    void nested_innerMissingResolvedToUnresolvedOnSecondPass() {
+        store.create("user:w-1", "outer", VarType.STRING, null, null);
+        store.setValue("user:w-1/outer", "${var:user/ghost}", null);
+
+        var r = interp.interpolate("${var:user/outer}", "w-1");
+        assertEquals(VariableInterpolator.UNRESOLVED, r.text());
+        assertFalse(r.text().contains("${var:"));
+    }
+
+    @Test
+    void nested_depthLimitProtectsAgainstInfiniteLoop() {
+        // 双层互引：a→b, b→a。MAX_INTERPOLATE_DEPTH=2 内必收敛或留字面残留
+        // （由 CanvasCompositor / PreviewRenderer 兜底 replaceAll → ???）。
+        // 此测仅保证 interpolate 自身不死循环、不抛、且 depth ≤ 2 内停止。
+        store.create("user:w-1", "a", VarType.STRING, null, null);
+        store.setValue("user:w-1/a", "${var:user/b}", null);
+        store.create("user:w-1", "b", VarType.STRING, null, null);
+        store.setValue("user:w-1/b", "${var:user/a}", null);
+
+        var r = interp.interpolate("${var:user/a}", "w-1");
+        // 不会死循环——拿到非 null 结果即可。具体字面 / 残留交给 Compositor 兜底
+        assertNotNull(r.text());
+    }
+
+    @Test
+    void plainText_noSecondPass() {
+        // 纯文本短路保护：text.indexOf("${var:") < 0 → doInterpolate 立刻返原引用，
+        // 外层 while 条件 indexOf >= 0 不进，不浪费 cycle
+        String src = "hello world, no placeholders here";
+        var r = interp.interpolate(src, "w-1");
+        assertSame(src, r.text(), "纯文本应短路返回原引用，不重复扫描");
+        assertTrue(r.referencedFullNames().isEmpty());
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Helper：与 VariableStoreTest 同构的 fake DAO
     // ──────────────────────────────────────────────────────────
 

@@ -149,6 +149,15 @@ let unregisterAll: (() => void) | null = null;
 let writingExternal = false;
 /** 最近的 ${ 触发 anchor：textarea -> contenteditable 转换后由 caret 找最近 chip 容器。 */
 let lastDollarBraceAnchor: HTMLElement | null = null;
+/**
+ * 0.4.2 bugfix（Bug 3）：IME composition flag。中文 / 日文 / 韩文输入法在 compose 期间
+ * 会持续触发 update listener（每按一键 dirtyLeaves > 0），把临时拼音字符 emit('update:text')
+ * 后外层 watch 把它写回 lexical，**打断 composition** → 中文输入断流。
+ *
+ * <p>修法：监听 {@code compositionstart} / {@code compositionend}：composition 期间屏蔽
+ * emit；composition 结束后一次性 emit 最新文本。</p>
+ */
+let composing = false;
 
 // ============================================================================
 // 初始化 / 销毁
@@ -185,6 +194,10 @@ onMounted(() => {
         editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves }) => {
             // 忽略外部 write 触发的更新
             if (writingExternal) return;
+            // 0.4.2 bugfix（Bug 3）：IME composition 期间屏蔽 emit，避免临时拼音字符 commit 后
+            // 被外层 watch 写回 lexical 打断 composition；composition 结束在 onCompositionEnd
+            // 里一次性 emit 最终文本。
+            if (composing) return;
             // 没有真改时跳过（selection only 也会触发 update，但 dirty 集合空）
             if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
             editorState.read(() => {
@@ -192,13 +205,10 @@ onMounted(() => {
                 if (newText !== props.text) {
                     emit('update:text', newText);
                 }
-                // 0.4.1 bugfix：只在 dirtyLeaves 非空（实际 TextNode 文本改动）时才检测 ${。
-                // 之前在 dirtyElements > 0 但 dirtyLeaves = 0 时（如选择变化触发的段落 dirty）
-                // 也会跑 detect → 若 caret 落在文本内既存的 `${` 字面之后则误弹 picker，
-                // 表现为"用户只是点击编辑框就被跳转到变量选择页"。
-                if (dirtyLeaves.size > 0) {
-                    detectDollarBraceTrigger();
-                }
+                // 0.4.2 bugfix（Bug 2 彻底版）：${ 触发检测从 update listener 内移除，改用原生
+                // beforeinput event 在 onBeforeInput 内精确捕捉（inputType=insertText + data='{'
+                // 且前一字符是 $）。原 dirtyLeaves 守卫无效——lexical click 后 caret 落位仍标
+                // dirtyLeaves，会把"用户只是点击编辑框现有 ${ 字面后位置"误判为输入。
             });
             // 文本变了 → store 仍然可能没变；刷一遍 chip 显示
             refreshAllChipDisplays();
@@ -211,6 +221,10 @@ onMounted(() => {
     editableRef.value.addEventListener(CHIP_EVENT_LEAVE, onChipLeave as EventListener);
     editableRef.value.addEventListener('keydown', onEditableKeydown);
     editableRef.value.addEventListener('blur', onEditableBlur);
+    // 0.4.2 bugfix（Bug 2 + Bug 3）：beforeinput 精确捕捉 `${ ` 触发；composition 守 IME 输入
+    editableRef.value.addEventListener('beforeinput', onBeforeInput as EventListener);
+    editableRef.value.addEventListener('compositionstart', onCompositionStart);
+    editableRef.value.addEventListener('compositionend', onCompositionEnd);
 
     // 首次刷 chip 显示
     refreshAllChipDisplays();
@@ -228,6 +242,9 @@ onBeforeUnmount(() => {
         editableRef.value.removeEventListener(CHIP_EVENT_LEAVE, onChipLeave as EventListener);
         editableRef.value.removeEventListener('keydown', onEditableKeydown);
         editableRef.value.removeEventListener('blur', onEditableBlur);
+        editableRef.value.removeEventListener('beforeinput', onBeforeInput as EventListener);
+        editableRef.value.removeEventListener('compositionstart', onCompositionStart);
+        editableRef.value.removeEventListener('compositionend', onCompositionEnd);
     }
 });
 
@@ -386,6 +403,65 @@ function onEditableBlur() {
 // ============================================================================
 // ${ 触发检测：用户在 contenteditable 内打字 → 检查 caret 前两字符
 // ============================================================================
+
+/**
+ * 0.4.2 bugfix（Bug 2）：原生 beforeinput 监听精确捕捉 ${ 触发。
+ *
+ * <p>之前 detect 挂在 lexical update listener 内 + dirtyLeaves > 0 守卫，仍会在
+ * 用户点击编辑框（caret 落到现有 ${ 字面后位置）时误弹 picker——lexical 把 click
+ * 后 caret 落位标 dirtyLeaves。改用 {@code beforeinput} 只对实际"插入字符"event
+ * 触发：inputType=insertText + data='{' + 前一字符是 '$' 才弹 picker。</p>
+ *
+ * <p>注意：beforeinput 在浏览器把字符 commit 到 lexical **之前**触发，所以"前一字符"
+ * 直接读 lexical 当前 text 即可（{ 还没插入），用 {@code queueMicrotask} 延后实际
+ * picker 弹出确保 lexical 已 commit。</p>
+ */
+function onBeforeInput(ev: InputEvent) {
+    if (ev.inputType !== 'insertText') return;
+    if (ev.data !== '{') return;
+    if (!editor || props.disabled) return;
+    let prevIsDollar = false;
+    editor.read(() => {
+        const sel = $getSelection();
+        if (!$isRangeSelection(sel) || !sel.isCollapsed()) return;
+        const anchor = sel.anchor;
+        const node = anchor.getNode();
+        if (node.getType() !== 'text') return;
+        const text = node.getTextContent();
+        const offset = anchor.offset;
+        if (offset >= 1 && text.substring(offset - 1, offset) === '$') {
+            prevIsDollar = true;
+        }
+    });
+    if (!prevIsDollar) return;
+    // 异步弹 picker：让 `{` 已经被 lexical commit 到 EditorState 后，
+    // detectDollarBraceTrigger 内 caret offset 检测能命中 "${" 两字符。
+    queueMicrotask(() => detectDollarBraceTrigger());
+}
+
+/** 0.4.2 bugfix（Bug 3）：IME composition 开始 → 屏蔽 emit 防中断。 */
+function onCompositionStart() {
+    composing = true;
+}
+
+/**
+ * 0.4.2 bugfix（Bug 3）：IME composition 结束 → 一次性 emit 最新文本。
+ *
+ * <p>compositionend 在 lexical update listener 之前 / 之后触发顺序不确定，
+ * 为保险这里主动读 lexical 当前文本 emit；update listener 即使紧随其后也由
+ * {@code newText !== props.text} 去重。</p>
+ */
+function onCompositionEnd() {
+    composing = false;
+    if (!editor || writingExternal) return;
+    editor.read(() => {
+        const newText = lexicalRootToText();
+        if (newText !== props.text) {
+            emit('update:text', newText);
+        }
+    });
+    refreshAllChipDisplays();
+}
 
 function detectDollarBraceTrigger(): void {
     if (!editor) return;

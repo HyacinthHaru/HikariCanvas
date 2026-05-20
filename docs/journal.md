@@ -5,6 +5,61 @@
 
 ---
 
+## 2026-05-20 · 0.4.2 chip editor bugfix 三连（字面残留兜底 + 点击误弹 picker 彻底 + IME 中文输入）
+
+### 背景
+
+0.4.2 别名落地后实测发现 3 个 chip editor 副作用：
+
+1. **字面 `${var:` 残留**：服务器重启 / 数据损坏场景下，wall 上偶尔显示出 `${var:user/红队比分}`
+   字面字符串而非占位符 resolve 后的值。根因：interpolator 单次扫描；当某变量的 `currentValue`
+   本身含 `${var:...}` 字面（典型：chip roundtrip 漏 escape / 用户手输 ${var:} 并保存到 variable
+   value）时，首次替换出新占位符，但无二次扫描兜底。
+2. **点击编辑框误弹 picker**：上次 bugfix `dirtyLeaves.size > 0` 守卫无效——lexical 在 click
+   后 caret 落位仍标 dirtyLeaves（不是只 dirtyElements）。任何 caret 落在文本中既存 `${`
+   字面后位置 → detectDollarBraceTrigger 命中 → 误弹 picker。
+3. **IME 中文输入断流**：composing 期间临时拼音字符 emit('update:text') 后被外层 watch 写回
+   lexical，**打断 composition**；用户必须每打 1-2 字暂停才能稳定输入。
+
+### 实施
+
+**Bug 1（字面残留）**：interpolator 双端拆 `interpolate` → 内部 `doInterpolate` + 外层
+wrapper：首次替换后若仍含 `${var:` → 再 interpolate 一次（最多 MAX_INTERPOLATE_DEPTH=2 兜底）。
+DEV 模式 console.warn（前端）/ Logger.warning（后端）提示嵌套数据帮排查根因。**PreviewRenderer
++ CanvasCompositor 渲染兜底**：interpolator 返回后若仍含 `${var:` → 强制 replace 全部 `${var:...}`
+→ "???"，防 wall 显字面 placeholder。
+
+**Bug 2（点击误弹）**：detect 完全脱离 update listener，改用原生 `beforeinput` event：
+`inputType=insertText` + `data='{'` + 前一字符是 `$` → queueMicrotask 异步弹 picker（让 `{` 字符
+commit 到 lexical 后再走 detect）。**精确捕捉用户实际输入字符的瞬间**，与 click / focus / IME
+composition / paste 完全解耦。
+
+**Bug 3（IME 断流）**：监听 `compositionstart` / `compositionend` → composing flag；
+update listener 在 composing 期间屏蔽 emit；compositionend 一次性 emit 最终文本（外层 watch
+即使紧随其后也由 `newText !== props.text` 去重）。
+
+### 测试与构建
+
+后端 +4 case（`VariableInterpolatorTest`：嵌套 inner 解析 / 嵌套 inner missing / 互引死循环防御
+/ 纯文本无二次扫描）。前端 +4 case（`interpolator.test.ts` case 27-30：嵌套替换 / inner missing
+fallback / 三层深度收敛 / 纯文本短路）。
+
+**全测**：backend 779 / 0 failure；frontend 159 / 0 failure；bundle 666.99 kB（基线 666 kB
+持平）；shadow jar 153 MB。**0 baseline 漂移**（snapshot fixture 全 UP-TO-DATE）。
+
+### 关联文件
+
+- `web/src/variable/interpolator.ts`（wrapper + doInterpolate 拆分）
+- `plugin/src/main/java/moe/hikari/canvas/variable/VariableInterpolator.java`（同款 + MAX_INTERPOLATE_DEPTH）
+- `web/src/render/PreviewRenderer.ts`（residual `${var:` → `???` 兜底）
+- `plugin/src/main/java/moe/hikari/canvas/render/CanvasCompositor.java`（同款 + 静态 LOG）
+- `web/src/components/variables/VariableChipEditor.vue`（onBeforeInput + composition handlers
+  + composing flag + 删 update listener 内 detect）
+- `web/src/variable/__tests__/interpolator.test.ts`（+4 case）
+- `plugin/src/test/java/moe/hikari/canvas/variable/VariableInterpolatorTest.java`（+4 case）
+
+---
+
 ## 2026-05-20 · 0.4.2：变量别名（per-wall）+ VariablePicker 3 列表格
 
 ### 背景

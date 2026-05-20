@@ -311,4 +311,43 @@ describe('interpolator.interpolate', () => {
         expect(r.segments[0].end).toBe(5);
         expect(r.text.substring(r.segments[0].start, r.segments[0].end)).toBe('5');
     });
+
+    // ──────────────────────────────────────────────────────────
+    //  0.4.2 bugfix（Bug 1）：二次扫描兜底
+    // ──────────────────────────────────────────────────────────
+
+    it('27. 嵌套 ${${var:X}} → 第一轮替换出新 ${var:Y}，第二轮清理', () => {
+        // 数据损坏 / chip roundtrip 漏 escape：variable.currentValue 本身含 `${var:...}` 字面
+        store.set('user:w-1/outer', mkVar('user:w-1', 'outer', '${var:user/inner}'));
+        store.set('user:w-1/inner', mkVar('user:w-1', 'inner', 'INNER_VAL'));
+        const r = interpolate('${var:user/outer}', 'w-1', store);
+        // 二次扫描应当把 ${var:user/inner} 解出 INNER_VAL
+        expect(r.text).toBe('INNER_VAL');
+        // 残留检查（首层 outer + 二层 inner 都已替）
+        expect(r.text.indexOf('${var:')).toBe(-1);
+    });
+
+    it('28. 二层嵌套但内层指向 missing → 第二轮替换为 ???', () => {
+        store.set('user:w-1/outer', mkVar('user:w-1', 'outer', '${var:user/ghost}'));
+        const r = interpolate('${var:user/outer}', 'w-1', store);
+        expect(r.text).toBe(UNRESOLVED);
+        expect(r.text.indexOf('${var:')).toBe(-1);
+    });
+
+    it('29. 三层嵌套（depth=3 超 MAX_INTERPOLATE_DEPTH=2）→ 最后残留字面会被 PreviewRenderer 兜底', () => {
+        // 三层数据极端损坏：interpolate 内部扫到 depth=2 停；剩 ${var:...} 字面交给 PreviewRenderer 兜底
+        store.set('user:w-1/a', mkVar('user:w-1', 'a', '${var:user/b}'));
+        store.set('user:w-1/b', mkVar('user:w-1', 'b', '${var:user/c}'));
+        store.set('user:w-1/c', mkVar('user:w-1', 'c', 'FINAL'));
+        const r = interpolate('${var:user/a}', 'w-1', store);
+        // depth=2 把 a → b 一次 + b → c 一次 = 替到 FINAL。如果 c 还引 d 才会残留
+        expect(r.text).toBe('FINAL');
+    });
+
+    it('30. 纯文本无 ${var:} → 不触发二次扫描（性能不退化）', () => {
+        // 纯文本短路保护：text.indexOf 检查首次就拿到空 result，循环条件不进
+        const r = interpolate('hello world', 'w-1', store);
+        expect(r.text).toBe('hello world');
+        expect(r.referencedFullNames.size).toBe(0);
+    });
 });

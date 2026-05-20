@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -57,6 +58,11 @@ public final class VariableInterpolator {
     /** 系统兜底文案（fallback 链最后一档）。 */
     public static final String UNRESOLVED = "???";
 
+    /** 0.4.2 bugfix（Bug 1）：二次扫描最大深度，防止数据 / 算法异常下死循环。 */
+    private static final int MAX_INTERPOLATE_DEPTH = 2;
+
+    private static final Logger LOG = Logger.getLogger(VariableInterpolator.class.getName());
+
     private final VariableStore store;
 
     public VariableInterpolator(VariableStore store) {
@@ -69,6 +75,12 @@ public final class VariableInterpolator {
      * <p>对纯文本（不含 {@code ${var:}} 子串）走 O(1) 短路返原 text 与空 referenced 集合；
      * 否则 O(n) regex 单趟扫描。</p>
      *
+     * <p>0.4.2 bugfix（Bug 1：服务器重启后字面 {@code ${var:} 残留）：把 {@link #doInterpolate}
+     * 拆成内部实现 + 外层 wrapper 做二次扫描。当首次替换后输出仍含 {@code ${var:} 字面（典型场景：
+     * chip editor roundtrip 漏 escape / 数据写入了双重嵌套 {@code ${${var:X}}}），最多再 interpolate
+     * {@value #MAX_INTERPOLATE_DEPTH} 次兜底；若 depth>0 则 {@link Logger#warning} 提示用户数据可能
+     * 嵌套。前后端保持双端一致兜底语义。</p>
+     *
      * @param text   原始文本；可为 null（返 null + 空 referenced）
      * @param wallId 当前 wall ID；非空时把 {@code ${var:user/X}} 注入成 {@code user:<wallId>/X}；
      *               为 null 时 user 命名空间占位符按字面 {@code user/X} 查 store（必然 miss，
@@ -76,6 +88,27 @@ public final class VariableInterpolator {
      * @return 解析结果（替换后文本 + 被引用的内部 fullName 集合）
      */
     public Result interpolate(@Nullable String text, @Nullable String wallId) {
+        Result result = doInterpolate(text, wallId);
+        int depth = 0;
+        while (result.text() != null && result.text().indexOf("${var:") >= 0
+                && depth < MAX_INTERPOLATE_DEPTH) {
+            Result next = doInterpolate(result.text(), wallId);
+            Set<String> mergedRefs = new HashSet<>(result.referencedFullNames());
+            mergedRefs.addAll(next.referencedFullNames());
+            result = new Result(next.text(), mergedRefs, next.segments());
+            depth++;
+        }
+        if (depth > 0) {
+            String preview = text == null ? "(null)"
+                    : text.length() > 100 ? text.substring(0, 100) + "..." : text;
+            LOG.warning("[VariableInterpolator] nested placeholder detected; depth=" + depth
+                    + " text=" + preview);
+        }
+        return result;
+    }
+
+    /** 单次扫描实现；调用方（外层 {@link #interpolate}）负责二次扫描兜底。 */
+    private Result doInterpolate(@Nullable String text, @Nullable String wallId) {
         if (text == null || text.isEmpty() || text.indexOf("${var:") < 0) {
             return new Result(text, Set.of(), List.of());
         }
