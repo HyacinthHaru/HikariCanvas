@@ -1,4 +1,4 @@
-<img width="1983" height="793" alt="image" src="https://github.com/user-attachments/assets/fdbb574f-be6b-4d1d-b131-0049dfd9fe46" />
+<img width="1500" height="793" alt="image" src="https://github.com/user-attachments/assets/fdbb574f-be6b-4d1d-b131-0049dfd9fe46" />
 
 ## 欢迎使用 HikariCanvas
 
@@ -10,5 +10,4 @@
 
 感谢你的关注
 
-<img width="800" height="480" alt="a4f4b9516c367c34bdf50bc9d7977ed3" src="https://github.com/user-attachments/assets/f51d75a3-0687-4137-b690-ed49799b8cbf" />
-
+<img width="1200" height="603" alt="AF47EF820528B653C7675136221490FA" src="https://github.com/user-attachments/assets/8de08314-2594-42bb-9323-4ba2eaffd9a7" />
