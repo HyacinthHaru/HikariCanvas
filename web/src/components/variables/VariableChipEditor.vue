@@ -188,7 +188,13 @@ onMounted(() => {
                 if (newText !== props.text) {
                     emit('update:text', newText);
                 }
-                detectDollarBraceTrigger();
+                // 0.4.1 bugfix：只在 dirtyLeaves 非空（实际 TextNode 文本改动）时才检测 ${。
+                // 之前在 dirtyElements > 0 但 dirtyLeaves = 0 时（如选择变化触发的段落 dirty）
+                // 也会跑 detect → 若 caret 落在文本内既存的 `${` 字面之后则误弹 picker，
+                // 表现为"用户只是点击编辑框就被跳转到变量选择页"。
+                if (dirtyLeaves.size > 0) {
+                    detectDollarBraceTrigger();
+                }
             });
             // 文本变了 → store 仍然可能没变；刷一遍 chip 显示
             refreshAllChipDisplays();

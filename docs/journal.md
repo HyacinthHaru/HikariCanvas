@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-05-20 · 紧急修：chip editor 点击编辑框误弹 picker
+
+### 症状
+
+用户报：右侧 RightPanel 的文本框（chip editor）只要鼠标点击就弹 VariablePicker，无法正常编辑文本。
+画布双击就地编辑没问题，**只有 RightPanel 文本框被影响**。
+
+### 根因
+
+`VariableChipEditor.vue:181` 的 `editor.registerUpdateListener` 在 `dirtyElements.size > 0` 时
+就跑 `detectDollarBraceTrigger`。但 lexical 在 **selection-only update**（如点击 caret 落位）也
+会标段落 dirty（dirtyElements > 0 / dirtyLeaves = 0）。如果用户的 text 里含字面 `${` 字符
+（如旧版残留 / paste 入），点击该位置 caret 落在 `${` 后两字符就触发 picker，反复无解。
+
+### 修复
+
+仅在 `dirtyLeaves.size > 0`（实际 TextNode 文本改动）时调 `detectDollarBraceTrigger`：
+
+```typescript
+if (dirtyLeaves.size > 0) {
+    detectDollarBraceTrigger();
+}
+```
+
+selection-only update 不再触发；只有用户实际**输入字符**改 TextNode 时才检测 `${` 弹 picker。
+
+### 验证
+
+- 137 vitest 全绿（无回归）
+- vite build 通过
+- 用户操作：右侧文本框点击 caret 移位 → **不再弹 picker**；输入 `${` 仍正常弹
+
+### 关联文件
+
+- `web/src/components/variables/VariableChipEditor.vue`（+5 行注释 + 1 行 if guard）
+
+---
+
 ## 2026-05-20 · M28-0.4.1-P3+P4：chip 视觉打磨 + bundle 拆 chunk + 版本号 0.4.1-SNAPSHOT
 
 ### 背景
