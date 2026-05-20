@@ -1,4 +1,5 @@
-<img width="1500" height="793" alt="image" src="https://github.com/user-attachments/assets/fdbb574f-be6b-4d1d-b131-0049dfd9fe46" />
+<img width="1983" height="793" alt="image" src="https://github.com/user-attachments/assets/8721c5d5-ffe6-4664-806a-31d57b5e09b6" />
+
 
 ## 欢迎使用 HikariCanvas
 
@@ -6,8 +7,9 @@
 > 
 > 目前还在开发中，ETA 2026.06
 
-未来将变成一个实时在游戏内更新的地图画编辑系统，且支持模板、自定义字体、画笔、上传图片等功能。
+未来将变成一个实时在游戏内更新的地图画编辑系统，且支持模板、自定义字体、画笔、上传图片、动态数据等功能。
 
-感谢你的关注
+感谢你的关注！
 
-<img width="1200" height="603" alt="AF47EF820528B653C7675136221490FA" src="https://github.com/user-attachments/assets/8de08314-2594-42bb-9323-4ba2eaffd9a7" />
+<img width="3104" height="1806" alt="image" src="https://github.com/user-attachments/assets/1e0d9c9a-da5f-4bf9-a9ca-1484323219f9" />
+
