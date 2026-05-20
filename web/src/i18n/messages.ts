@@ -485,6 +485,14 @@ export const messages = {
                 deletedWarning: '变量 {names} 已被删除，引用此变量的文本将显示 "???"',
                 referencedHint: '此文本引用变量 {names}',
             },
+            // 0.4.1 chip 编辑器：hover tooltip / aria
+            chipEditor: {
+                tooltipRaw: '原始',
+                tooltipCurrent: '当前值',
+                tooltipSource: '来源',
+                tooltipDeleted: '变量已删除，最终渲染为 "???"',
+                ariaLabel: '文本编辑器（变量以芯片显示，点击芯片可改绑定）',
+            },
         },
         // 0.4.0-P3-L：列车 / 公交时刻表管理（兜底功能，零外部依赖）
         schedule: {
@@ -1095,6 +1103,14 @@ export const messages = {
                 previewLabel: 'Preview',
                 deletedWarning: 'Variable {names} has been deleted. Text referencing it will show "???"',
                 referencedHint: 'This text references variable {names}',
+            },
+            // 0.4.1 chip editor: hover tooltip / aria
+            chipEditor: {
+                tooltipRaw: 'Raw',
+                tooltipCurrent: 'Current',
+                tooltipSource: 'Source',
+                tooltipDeleted: 'Variable has been deleted — will render as "???"',
+                ariaLabel: 'Text editor (variables shown as chips; click a chip to rebind)',
             },
         },
         // 0.4.0-P3-L: train / bus schedule manager (built-in fallback, zero external dependency)

@@ -12,6 +12,7 @@ import { HelpCircle, Maximize2, Variable as VariableIcon } from 'lucide-vue-next
 import Tooltip from '@/components/ui/Tooltip.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import VariablePicker from '@/components/variables/VariablePicker.vue';
+import VariableChipEditor from '@/components/variables/VariableChipEditor.vue';
 import TextElementVariableHints from '@/components/variables/TextElementVariableHints.vue';
 import { layoutText, charAdvance, ASCENT_RATIO } from '@/render/TextLayout';
 import { ensureLoaded as ensureFontLoaded } from '@/render/FontLoader';
@@ -60,59 +61,59 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const project = useProjectStore();
 
-// ---------- P2-H：变量 picker 集成 ----------
-const textareaRef = ref<HTMLTextAreaElement | null>(null);
+// ---------- 0.4.1：chip 编辑器 + 变量 picker 集成 ----------
+// Notion-style chip 编辑器替代了 0.4.0 的 textarea：占位符 ${var:X} 渲染为 pill 而非字面字符串。
+// chip editor 内部以 lexical core 自包装；本组件作为 caller 只负责 picker 弹出 / chip 改绑定。
+const chipEditorRef = ref<InstanceType<typeof VariableChipEditor> | null>(null);
 const pickerOpen = ref(false);
-/** 触发 picker 时是 textarea 里输入 ${ 还是点击按钮（前者要把 ${ 删掉再插）。 */
-const triggeredByDollarBrace = ref(false);
+/** picker 触发上下文：插入新 chip / 改已有 chip 的 rawName。 */
+type PickerMode =
+    | { kind: 'insertNew' }
+    | { kind: 'replaceChip'; oldRawName: string };
+const pickerMode = ref<PickerMode>({ kind: 'insertNew' });
 
 function openPickerFromButton() {
-    triggeredByDollarBrace.value = false;
+    pickerMode.value = { kind: 'insertNew' };
+    pickerOpen.value = true;
+}
+
+function onChipEditorInsertRequest() {
+    pickerMode.value = { kind: 'insertNew' };
+    pickerOpen.value = true;
+}
+
+function onChipEditorEditRequest(payload: { rawName: string; fallback: string | null }) {
+    pickerMode.value = { kind: 'replaceChip', oldRawName: payload.rawName };
     pickerOpen.value = true;
 }
 
 function onPickerSelect(shortName: string) {
-    const placeholder = `\${var:${shortName}}`;
-    const ta = textareaRef.value;
-    if (!ta) {
+    const editor = chipEditorRef.value;
+    if (!editor) {
         pickerOpen.value = false;
-        triggeredByDollarBrace.value = false;
+        pickerMode.value = { kind: 'insertNew' };
         return;
     }
-    let start = ta.selectionStart ?? ta.value.length;
-    const end = ta.selectionEnd ?? start;
-    if (triggeredByDollarBrace.value && start >= 2 && ta.value.substring(start - 2, start) === '${') {
-        start -= 2;
+    if (pickerMode.value.kind === 'replaceChip') {
+        editor.replaceVariableChip(pickerMode.value.oldRawName, shortName, null);
+    } else {
+        editor.insertVariableChip(shortName, null);
     }
-    ta.setRangeText(placeholder, start, end, 'end');
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
     pickerOpen.value = false;
-    triggeredByDollarBrace.value = false;
-    ta.focus();
+    pickerMode.value = { kind: 'insertNew' };
+    editor.focus();
 }
 
 function onPickerClose() {
     pickerOpen.value = false;
-    triggeredByDollarBrace.value = false;
+    pickerMode.value = { kind: 'insertNew' };
 }
 
-function onTextChange(field: string, ev: Event) {
-    const v = (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
-    // eager optimistic：文本类输入立即更新 local element，下面的 fitTextHeight 能读到最新内容
-    (props.element as unknown as Record<string, unknown>)[field] = v;
-    emit('updateDebounced', { [field]: v });
-    if (field === 'text') {
-        autoFitHeightDebounced();
-        // 检测 caret 前 2 字符是 ${（用户刚刚 type 出来）→ 自动弹 picker
-        if (ev.target instanceof HTMLTextAreaElement) {
-            const ta = ev.target;
-            const caret = ta.selectionStart ?? 0;
-            if (caret >= 2 && ta.value.substring(caret - 2, caret) === '${') {
-                triggeredByDollarBrace.value = true;
-                pickerOpen.value = true;
-            }
-        }
-    }
+/** chip editor 把整段最新 text 通过 v-model:text 回传。 */
+function onTextChipUpdate(v: string) {
+    (props.element as unknown as Record<string, unknown>).text = v;
+    emit('updateDebounced', { text: v });
+    autoFitHeightDebounced();
 }
 
 const autoFitHeightDebounced = useDebounceFn(() => {
@@ -230,13 +231,18 @@ function patchGlow(partial: Partial<Glow>) {
               </button>
             </Tooltip>
           </span>
-          <textarea
-            ref="textareaRef"
-            rows="2"
-            class="hc-input font-mono resize-none"
-            :value="element.text"
-            @input="(e) => onTextChange('text', e)"
-          ></textarea>
+          <!-- 0.4.1：chip 编辑器替代 textarea；占位符以 pill 显示，hover 看当前值，
+               click 改绑定，输入 ${ 自动弹 picker。 -->
+          <VariableChipEditor
+            ref="chipEditorRef"
+            :text="element.text"
+            :wall-id="project.wallId"
+            :multi-line="true"
+            :disabled="locked"
+            @update:text="onTextChipUpdate"
+            @insert-variable-request="onChipEditorInsertRequest"
+            @edit-variable-request="onChipEditorEditRequest"
+          />
         </label>
         <!-- VariablePicker popover -->
         <VariablePicker

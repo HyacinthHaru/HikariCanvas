@@ -380,10 +380,9 @@ function onHitDblClick(ev: { cancelBubble?: boolean }, id: string): void {
     nextTick(() => inlineEditorRef.value?.focus());
 }
 
-function onEditInput(ev: Event) {
+function onEditTextUpdate(v: string) {
     const el = editingElement.value;
     if (!el) return;
-    const v = (ev.target as HTMLTextAreaElement).value;
     // optimistic
     (el as unknown as Record<string, unknown>).text = v;
     ws.send('element.update', { elementId: el.id, patch: { text: v } });
@@ -391,19 +390,6 @@ function onEditInput(ev: Event) {
 
 function finishEditing() {
     editingId.value = null;
-}
-
-function onEditKeydown(ev: KeyboardEvent) {
-    if (ev.key === 'Escape') {
-        ev.preventDefault();
-        finishEditing();
-        return;
-    }
-    // Enter = 完成；Shift+Enter = 换行（走默认行为）
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
-        ev.preventDefault();
-        finishEditing();
-    }
 }
 
 // ---------- stage mouse 路由 ----------
@@ -992,9 +978,10 @@ function requestDraw(): void {
           <TextInlineEditor
             ref="inlineEditorRef"
             :element="editingElement"
-            @input="onEditInput"
+            :wall-id="project.wallId"
+            @update:text="onEditTextUpdate"
             @finish="finishEditing"
-            @keydown="onEditKeydown"
+            @cancel="finishEditing"
           />
         </div>
       </div>

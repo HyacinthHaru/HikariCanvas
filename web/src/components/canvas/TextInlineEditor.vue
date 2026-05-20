@@ -1,9 +1,20 @@
 <script setup lang="ts">
+/**
+ * 双击文本元素弹出的就地编辑器（0.4.1 chip 化）。
+ *
+ * <p>0.4.1 把内部从 {@code <textarea>} 升级为 {@link VariableChipEditor}：占位符
+ * {@code ${var:X}} 在画布上直接渲染成 chip pill，而不是字面字符串。背景透明 +
+ * 字体继承 → 营造"直接在画布上编辑"观感不变。</p>
+ *
+ * <p>PreviewRenderer 由父组件传 hide set，跳过 editingId 对应的 element，避免画布底层
+ * 字形与本编辑器重影。</p>
+ *
+ * <p>原 textarea 的 input/keydown 事件路径换成 chip editor 的 update:text / submit /
+ * cancel：父组件收 update:text 后照旧 element.update 上行。</p>
+ */
 import { ref } from 'vue';
+import VariableChipEditor from '@/components/variables/VariableChipEditor.vue';
 import type { Element } from '@/types/protocol';
-
-// 双击文本元素弹出的就地编辑 textarea；背景透明 + 字体继承，营造"直接在画布上编辑"观感。
-// PreviewRenderer 由父组件传 hide set，跳过 editingId 对应的 element，避免画布底层字形与 textarea 重影。
 
 interface TextLike {
     id: string;
@@ -19,29 +30,44 @@ interface TextLike {
 
 const props = defineProps<{
     element: Element | null;
+    /** 当前 wall ID；chip 用它解析 user/X namespace。 */
+    wallId: string | null;
 }>();
 
 const emit = defineEmits<{
-    input: [ev: Event];
+    /** 新文本（chip 编辑器序列化后的字面 text）。 */
+    'update:text': [value: string];
+    /** Enter（单行）/ blur → 收编辑态。 */
     finish: [];
-    keydown: [ev: KeyboardEvent];
+    /** ESC → 父组件可选择恢复旧值；当前实现等同 finish。 */
+    cancel: [];
 }>();
 
-const textarea = ref<HTMLTextAreaElement | null>(null);
+const chipEditorRef = ref<InstanceType<typeof VariableChipEditor> | null>(null);
 
-defineExpose({ focus: () => textarea.value?.focus() });
+defineExpose({ focus: () => chipEditorRef.value?.focus() });
 
 function asText(el: Element | null): TextLike | null {
     return el && el.type === 'text' ? (el as unknown as TextLike) : null;
 }
+
+function onUpdateText(v: string) {
+    emit('update:text', v);
+}
+
+function onSubmit() {
+    emit('finish');
+}
+
+function onCancel() {
+    emit('cancel');
+}
 </script>
 
 <template>
-  <textarea
+  <div
     v-if="asText(props.element)"
-    ref="textarea"
-    class="hc-edit-textarea"
-    :value="asText(props.element)!.text"
+    class="hc-edit-host"
     :style="{
       left: `${asText(props.element)!.x}px`,
       top: `${asText(props.element)!.y}px`,
@@ -54,30 +80,54 @@ function asText(el: Element | null): TextLike | null {
       transform: `rotate(${asText(props.element)!.rotation}deg)`,
       transformOrigin: 'center center',
     }"
-    @input="(ev) => emit('input', ev)"
-    @blur="emit('finish')"
-    @keydown="(ev) => emit('keydown', ev)"
     @mousedown.stop
     @dblclick.stop
-  />
+  >
+    <VariableChipEditor
+      ref="chipEditorRef"
+      class="hc-edit-chip-editor"
+      :text="asText(props.element)!.text"
+      :wall-id="wallId"
+      :font-size="asText(props.element)!.fontSize"
+      :font-family="asText(props.element)!.fontId"
+      :multi-line="true"
+      :auto-focus="true"
+      @update:text="onUpdateText"
+      @submit="onSubmit"
+      @cancel="onCancel"
+    />
+  </div>
 </template>
 
 <style scoped>
-.hc-edit-textarea {
+.hc-edit-host {
     position: absolute;
     margin: 0;
     padding: 0;
-    border: 1px dashed var(--ring);
-    outline: none;
-    resize: none;
-    background: transparent;
     line-height: 1;
-    overflow: hidden;
-    caret-color: var(--ring);
-    white-space: pre-wrap;
-    word-break: break-word;
 }
-.hc-edit-textarea:focus {
+/* 让内部 chip editor 完全填满 + 看起来像 textarea：透明背景 + 虚线边框 */
+.hc-edit-host :deep(.hc-chip-editor) {
+    height: 100%;
+}
+.hc-edit-host :deep(.hc-chip-editable) {
+    width: 100%;
+    height: 100%;
+    min-height: unset;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    border: 1px dashed var(--ring);
+    border-radius: 0;
+    box-shadow: none;
+    font-size: inherit;
+    font-family: inherit;
+    line-height: 1;
+    caret-color: var(--ring);
+    overflow: hidden;
+}
+.hc-edit-host :deep(.hc-chip-editable:focus) {
     border-style: solid;
+    box-shadow: none;
 }
 </style>

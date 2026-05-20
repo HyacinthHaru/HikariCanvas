@@ -5,6 +5,120 @@
 
 ---
 
+## 2026-05-20 · M28-0.4.1-P1+P2：VariableChipEditor 原型 + 交互细化
+
+### 背景
+
+0.4.0 已上线变量系统：玩家在 TextElement 文本框输入 `${var:schedule/eta_seconds}` 占位符，
+wall 渲染时替换为实际值（90 秒）。痛点：textarea 显示**原始字符串**，长且乱（用户曾截图：
+长占位符撑爆编辑器 layout）。M28-enhance（7dd443c）已在 Canvas 渲染上加视觉 hint（背景蔓色矩形），
+但 textarea 输入体验本身没改。
+
+0.4.1 P1+P2 把 textarea 升级为 **Notion-style chip 编辑器**：占位符渲染为蓝紫色 pill chip，
+hover 显当前值，click 弹 Picker 改绑定。
+
+### Lexical 路线决策
+
+| 候选 | 结论 | 原因 |
+|---|---|---|
+| `lexical-vue` 0.14.1 | **放弃** | vue-vine 编译产物：`.js` 文件 runtime 兼容（用普通 defineComponent），但 `.d.ts` 全部 import 自 `vue-vine/internals`，vue-tsc 会报错；且 DecoratorNode 渲染管线被它封一层 portal，无法直接控制 chip DOM。 |
+| **`lexical` core 直接接 Vue** | **选用** | DecoratorNode `createDOM()` 直接返 HTMLElement，完全可控；reactive bridge 自己写（`editor.update` / `registerUpdateListener`）；零编译依赖。 |
+| `@tiptap/vue-3` fallback | 未触发 | 上一档已成功，无须降级 |
+
+### 实施
+
+#### 1. 数据模型 + 序列化（`web/src/variable/lexicalChip.ts`，~280 行）
+
+- **`VariablePlaceholderNode`**：继承 `DecoratorNode<null>`；`createDOM` 渲染 `<span class="hc-var-chip" contenteditable="false" data-hk-var-raw="X" data-hk-var-fallback="...">rawName</span>`；事件 listener 阻止 mousedown 默认 + click/hover/leave dispatch 自定义事件 `hk-chip-click/hover/leave` 让外层 Vue 组件代理。
+- **`getTextContent()` 返 `${var:X[|fallback=...]}`**：lexical 的 selection / copy / `root.getTextContent()` 路径自动 roundtrip——这是 chip ↔ element.text 字面字符串的核心桥梁。
+- **`textToLexicalNodes(text)`**：按 `\n` 拆 Paragraph，单行内用 regex 拆 TextNode / VariablePlaceholderNode 交替。
+- **`lexicalRootToText()`**：遍历 root → Paragraph join `\n`；段内 VariablePlaceholderNode 用 `toPlaceholderString()` 还原。
+- **`$insertVariableChipAtSelection(raw, fallback)`**：在当前 selection 插 chip + 追加空 TextNode 让光标可继续输入。
+
+#### 2. Vue 组件（`web/src/components/variables/VariableChipEditor.vue`，~530 行）
+
+公共 API（`defineExpose`）：
+- `insertVariableChip(rawName, fallback?)` —— 由外层 Picker 选中后调用；自动处理 `${` 触发场景（先删触发字符再插）
+- `replaceVariableChip(oldRaw, newRaw, fallback?)` —— chip click → picker → 改绑定
+- `focus()`
+- `getText()`
+
+props：`text` / `wallId` / `fontSize` / `fontFamily` / `multiLine` / `autoFocus` / `disabled` / `rootClass`。
+events：`update:text` / `submit`（仅 autoFocus 模式下 blur 触发）/ `cancel`（ESC）/ `insertVariableRequest(anchor)` / `editVariableRequest({rawName, fallback, anchor})`。
+
+关键细节：
+- 用 lexical core `createEditor` + `registerPlainText` + `registerHistory`（撤销/重做 free）+ `mergeRegister` 统一卸载
+- `writingExternal` flag 防 external watch ↔ internal update 循环
+- store / wallId 变化时 `refreshAllChipDisplays()` 扫所有 `.hc-var-chip` DOM 改 textContent 为 currentValue / fallback / "???"，并加 `.hc-chip-error` class 显示已删除态
+- chip hover → Teleport tooltip 到 body，显示 raw / current / source / 删除告警
+- `${` 检测：update listener 在 collapsed selection 时取 anchor TextNode 文本 + offset，前两字符为 `${` 即触发 `insertVariableRequest`
+- chip pill 样式用 Catppuccin Mauve（`var(--ctp-mauve)`）+ color-mix 调配；error 态用 `var(--destructive)` 红 + 删除线 + ⚠ 前缀
+
+#### 3. TextElementSection 集成（`web/src/components/properties/TextElementSection.vue`）
+
+- 删 textarea + `textareaRef` + `onTextChange` + `triggeredByDollarBrace` flag
+- 改成 `<VariableChipEditor ref="chipEditorRef" ... />`
+- picker 选中逻辑改 `pickerMode: { kind: 'insertNew' } | { kind: 'replaceChip', oldRawName }`，分别走 `insertVariableChip` / `replaceVariableChip`
+- chip editor 的 `insert-variable-request` / `edit-variable-request` 都打开 picker，模式不同
+
+#### 4. TextInlineEditor 集成（`web/src/components/canvas/TextInlineEditor.vue`）
+
+- 删 textarea + `TextLike.text` 直接绑定
+- 改 `<VariableChipEditor multi-line auto-focus />`，外层 host div 持 absolute 定位 + transform rotation + font 透传
+- `:deep(.hc-chip-editable)` 改 transparent 背景 + 虚线边框 + 内边距清零，让 chip editor 看起来像原 textarea
+- CanvasView：`onEditInput` 改 `onEditTextUpdate(v: string)`；`onEditKeydown` 删（chip editor 内部处理 Enter/Esc）；模板 `@input → @update:text`、`@keydown → @cancel`
+
+#### 5. vitest 单测（`web/src/variable/__tests__/lexicalChip.test.ts`，25 case）
+
+- roundtrip 字符级精确（17 case，含 fuzz 20 case 子集）：纯文本 / 多行 / chip 在开头/结尾/连续/含 fallback / 空 fallback / 含中文 emoji
+- node ops（8 case）：`toPlaceholderString`、`getTextContent`、`$isVariablePlaceholderNode` 守卫、`$insertVariableChipAtSelection`、`exportJSON/importJSON` roundtrip
+- 用 lexical headless editor + discrete update（无 DOM）
+
+#### 6. i18n 加 chipEditor 段（中英）
+
+`messages.ts` `variables.chipEditor.{tooltipRaw, tooltipCurrent, tooltipSource, tooltipDeleted, ariaLabel}`。
+
+### 验证
+
+- `npm run test` **130 全绿**（原 105 + 新 25 lexicalChip = 130）
+- `vite build` 通过；bundle 643.62 kB → **808.12 kB（+164.50 kB；gzip 195.59 → 248.33 kB，+52.74 kB）**
+- vue-tsc 不跑（CLAUDE.md 已知 Node 25 + TS 6 卡 typecheck，vite build 是唯一 gate）
+- 锁定 wall 透明（chip editor `:disabled` 切 contenteditable=false + 鼠标 not-allowed）
+
+### Bundle size 说明
+
+超 800 kB 阈值（CLAUDE.md 要求 commit message 注明）：lexical core + plain-text + history + utils 共 ~165 kB minified（gzip ~50 kB）。理论上可 dynamic import 把 chip editor 拆 chunk（用户首次进 TextElement 选择时再加载），P3+P4 视觉打磨阶段可一并优化。
+
+### 已知不足（留 P3+P4）
+
+- chip pill 视觉打磨：当前用 Mauve color-mix，不一定完美贴 Catppuccin 三 flavor 的 token 体系；P3 可换 `--ctp-mauve` 直引 + 显式 dark 适配
+- chip 跟 element.fontSize 缩放：当前 chip 字号 `0.85em` 跟随，但极小字号（< 8px）chip 可能比文本更显眼；P3 加 min/max 钳位
+- multi-line / 自动换行：lexical 默认 wrap 走 `white-space: pre-wrap`，但 chip 不可拆——超宽段落会出现 chip 被裁的视觉，P3 优化
+- 错误态 chip：当前红色 + 删除线 + ⚠；P3 可加 click 提示 "create" 一键补创
+- 内联编辑器 `${` 触发 picker 未接（CanvasView 不持有 picker 实例），用户需回 RightPanel 完整插入；P3 可在 inline editor 也挂 picker
+- 复制粘贴：当前依赖 lexical 默认 + DecoratorNode `getTextContent` 返字面占位符；HTML paste 自定义识别留 P3
+- docs/variables.md §1.7 更新留 P4
+
+### 关联文件
+
+新增：
+- `web/src/variable/lexicalChip.ts`
+- `web/src/variable/__tests__/lexicalChip.test.ts`
+- `web/src/components/variables/VariableChipEditor.vue`
+
+修改：
+- `web/src/components/properties/TextElementSection.vue`（替换 textarea，picker 模式拆 insertNew / replaceChip）
+- `web/src/components/canvas/TextInlineEditor.vue`（替换 textarea，外层 host + 透明样式）
+- `web/src/components/layout/CanvasView.vue`（onEditInput → onEditTextUpdate + 模板事件改）
+- `web/src/i18n/messages.ts`（中英 variables.chipEditor 段）
+- `web/package.json`（+ `lexical@^0.44.0`、`@lexical/plain-text`、`@lexical/history`、`@lexical/utils`）
+
+### 版本号
+
+**不动**（仍 0.3.0-SNAPSHOT，P3+P4 收尾时另一 agent 升 0.4.1-SNAPSHOT）。
+
+---
+
 ## 2026-05-20 · 前端 PreviewRenderer 监听 variableStore 触发重画
 
 ### 症状
