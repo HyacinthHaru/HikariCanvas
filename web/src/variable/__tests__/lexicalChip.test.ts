@@ -8,13 +8,14 @@
  * 行为由 e2e / 手动测试覆盖。本文件只覆盖："数据模型 ↔ 字符串"的纯逻辑。</p>
  */
 import { describe, expect, it } from 'vitest';
-import { createEditor, type LexicalEditor } from 'lexical';
+import { createEditor, $getRoot, $createTextNode, $createParagraphNode, type LexicalEditor } from 'lexical';
 import {
     VariablePlaceholderNode,
     $createVariablePlaceholderNode,
     $insertVariableChipAtSelection,
     $isVariablePlaceholderNode,
     lexicalRootToText,
+    registerVariablePasteTransform,
     textToLexicalNodes,
 } from '../lexicalChip';
 
@@ -266,5 +267,106 @@ describe('roundtrip 字符级精确（保护后端 .canvas / DB 不被 chip edit
         for (const s of cases) {
             expect(roundtrip(s)).toBe(s);
         }
+    });
+});
+
+// ---------- P3.6 paste transform：plain text → chip 升级 ----------
+
+/**
+ * 模拟 paste / 手打 plain text 场景：直接把字面 ${var:X} TextNode 塞进 root，
+ * 验证 transform 自动把它升级为 VariablePlaceholderNode。
+ *
+ * <p>真实环境是 lexical 在 paste 时拼 TextNode 串进 root，transform 在下一 microtask
+ * 被调用清理；headless 测试里 transform 是同步执行（lexical 内部 batch flush）。</p>
+ */
+function pasteThenRoundtrip(plainText: string): string {
+    const editor = makeEditor();
+    const unregister = editor.update(() => {
+        // 先注册（要在 update 闭包外，但需要 editor 实例）；下面把 unregister 调用收回到外部
+    }, { discrete: true });
+    void unregister; // satisfies linter
+    const cleanup = registerVariablePasteTransform(editor);
+    try {
+        editor.update(
+            () => {
+                const root = $getRoot();
+                root.clear();
+                const p = $createParagraphNode();
+                p.append($createTextNode(plainText));
+                root.append(p);
+            },
+            { discrete: true },
+        );
+        let result = '';
+        editor.read(() => {
+            result = lexicalRootToText();
+        });
+        return result;
+    } finally {
+        cleanup();
+    }
+}
+
+describe('P3.6 registerVariablePasteTransform：plain text → chip', () => {
+    it('粘贴单 chip 字面 → 升级为 chip 且 roundtrip 保字面', () => {
+        // transform 把 TextNode 拆为 chip；lexicalRootToText 还原相同字面
+        expect(pasteThenRoundtrip('${var:user/x}')).toBe('${var:user/x}');
+    });
+
+    it('粘贴含 fallback 占位符', () => {
+        expect(pasteThenRoundtrip('${var:schedule/eta|fallback=??}')).toBe('${var:schedule/eta|fallback=??}');
+    });
+
+    it('粘贴混合 plain text + chip', () => {
+        const s = 'pre ${var:user/a} mid ${var:user/b} post';
+        expect(pasteThenRoundtrip(s)).toBe(s);
+    });
+
+    it('粘贴连续多个 chip 无间隔', () => {
+        const s = '${var:a}${var:b}${var:c}';
+        expect(pasteThenRoundtrip(s)).toBe(s);
+    });
+
+    it('粘贴不含 ${var: 的纯文本：transform 无副作用', () => {
+        expect(pasteThenRoundtrip('hello world 123')).toBe('hello world 123');
+    });
+
+    it('粘贴 chip 升级后变成真实 VariablePlaceholderNode（非 TextNode）', () => {
+        const editor = makeEditor();
+        const cleanup = registerVariablePasteTransform(editor);
+        try {
+            editor.update(
+                () => {
+                    const root = $getRoot();
+                    root.clear();
+                    const p = $createParagraphNode();
+                    p.append($createTextNode('foo ${var:user/x} bar'));
+                    root.append(p);
+                },
+                { discrete: true },
+            );
+            let chipFound = false;
+            editor.read(() => {
+                const root = $getRoot();
+                const traverse = (n: import('lexical').LexicalNode): void => {
+                    if ($isVariablePlaceholderNode(n)) {
+                        chipFound = true;
+                        return;
+                    }
+                    const kids = (n as { getChildren?: () => import('lexical').LexicalNode[] }).getChildren?.();
+                    if (kids) kids.forEach(traverse);
+                };
+                traverse(root);
+            });
+            expect(chipFound).toBe(true);
+        } finally {
+            cleanup();
+        }
+    });
+
+    it('粘贴非完整模式（如 ${var: 残缺）→ 不触发升级', () => {
+        // pattern 要求 } 结尾，残缺的 ${var:foo 不匹配；保持 TextNode 字面
+        const s = 'half-open ${var:foo and not closed';
+        expect(pasteThenRoundtrip(s)).toBe(s);
     });
 });

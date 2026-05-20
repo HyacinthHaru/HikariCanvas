@@ -5,6 +5,138 @@
 
 ---
 
+## 2026-05-20 · M28-0.4.1-P3+P4：chip 视觉打磨 + bundle 拆 chunk + 版本号 0.4.1-SNAPSHOT
+
+### 背景
+
+P1+P2（commit `add7682`）完成 chip 编辑器原型 + lexical core 集成 + 25 vitest roundtrip。当时显式留了 7 项不足：chip pill 视觉打磨 / 字号联动 / multi-line 换行 / 错误态补创 / 内联编辑器 `${` picker 未接 / paste HTML 识别 / bundle 808 kB 超 800 阈值。本 commit P3 视觉 + 兼容性 + P4 收尾两阶段一次推完，单 commit 合并。
+
+### P3 实施（视觉打磨 + 兼容性）
+
+#### P3.1 Catppuccin Mauve 直引（chip pill 视觉）
+
+`VariableChipEditor.vue` unscoped block `.hc-var-chip` 重写：
+- `background-color: color-mix(in srgb, var(--ctp-mauve) 18%, transparent)` —— 三 flavor（latte / frappe / macchiato）自动切换，**不污染父背景**（透明 alpha 而非 mix base）。
+- `.dark` / `.theme-frappe` / `.theme-macchiato` 选择器把填充比从 18% 提到 24%、border 35% 提到 42%——dark 主题下 Mauve 色亮度衰减，需更高比例保 chip 可见度。
+- 错误态 `.hc-chip-error` 同套路：`var(--ctp-red)` + delete-line + ⚠ 前缀；dark 主题独立提比例。
+
+#### P3.2 字号 clamp 钳位
+
+- `font-size: clamp(10px, 0.85em, 16px)`：极小（fontSize=6）chip 不再比文本字号还大；极大（fontSize=120）chip 不会爆 4em。
+- 新增 prop-driven CSS 变量 `--chip-scale`：由 `props.fontSize / 14` 在 `[0.6, 1.2]` clamp；`padding` / `border-radius` 走 `calc(0.18em * var(--chip-scale))` 等表达式，让"非字体"的视觉度量（盒子大小 / 圆角）也跟着字号缩放。
+- TextElementSection 传 `:font-size="element.fontSize"` 让 RightPanel chip 编辑器也享受联动（之前 inline editor 已传，RightPanel 漏）。
+
+#### P3.3 multi-line 自动换行
+
+- chip `display: inline-block` + `white-space: nowrap`：chip 内部不可拆，但浏览器把 chip 当一个"长字"参与父段落 wrap，超宽自动换到下一行，**不会切 chip 内部 ⚡ 前缀 + rawName 两段**。
+- 父级 `.hc-chip-editable` 已是 `white-space: pre-wrap`（lexical 默认），与 chip inline-block 行为兼容——多行段落里 chip 与文字混排，行尾 chip 整体换行符合 Notion / Linear 风格。
+
+#### P3.4 错误态 chip 一键补创
+
+- chip click 路径：`VariableChipEditor.onChipClick` 检测 `target.classList.contains('hc-chip-error')`，红 chip 不再 emit `editVariableRequest`（缺失变量选啥都没意义），改 emit 新 event `createVariableRequest({rawName, anchor})`。
+- TextElementSection + CanvasView 都接 `@create-variable-request="onChipEditorCreateRequest"`：弹 native `window.confirm`（v1.x 升级精美 modal），用户点确定 → 走 `ws.send('variable.create', { name, type: 'STRING', defaultValue: '' })`。
+- 仅 `user/X` 短名补创；其他 namespace（`system/wall.X` / `scoreboard.X` / `papi/X` / `schedule.X` / `plugin/X`）由对应 Provider 自动注册，弹 alert 提示「请通过对应 Provider 注册」。
+
+#### P3.5 内联编辑器 `${` picker 接入
+
+- TextInlineEditor 之前不持有 picker，画布双击文本编辑时 `${` 触发但弹不出来，用户需要回 RightPanel 完整插入。
+- TextInlineEditor 接 chip editor 的三个 picker 事件 + `defineExpose` 出 `insertVariableChip` / `replaceVariableChip` 方法。
+- CanvasView 自持一个 VariablePicker overlay（`inlinePickerOpen / inlinePickerMode` ref）+ `onInlineInsertVariableRequest` / `onInlineEditVariableRequest` / `onInlineCreateVariableRequest` 三个 handler + `onInlinePickerSelect` 调 ref.insertVariableChip / replaceVariableChip。
+- picker 浮在画布右上角（CSS `position: absolute; top: 48px; right: 16px`）；与 RightPanel picker 不冲突（同一时刻只一个 editor 在焦点）。
+- `finishEditing()` 收编辑态时同时 close picker，防孤儿 popover。
+
+#### P3.6 paste transform（plain text → chip）
+
+- 新增 `lexicalChip.ts.registerVariablePasteTransform(editor)`：注册 lexical `registerNodeTransform(TextNode, fn)`，监听 TextNode 内容变化。
+- 检测到含 `${var:...}` 完整模式时 split 三段（leading / chip / trailing），中段 `replace` 为 VariablePlaceholderNode；尾段交给下一轮 transform 自动处理（lexical 内部 batch flush）。
+- 触发场景：复制 chip 从外部 plain text 粘贴回来 / 用户手打完整字面 `${var:X}`（不通过 picker）/ paste 其他源含字面占位符的文本。
+- VariableChipEditor 挂载时 `mergeRegister` 加入 `registerVariablePasteTransform(editor)`，与 `registerPlainText` / `registerHistory` 一起统一卸载。
+
+#### P3.7 vite manualChunks 拆 lexical chunk
+
+- `vite.config.ts.build.rollupOptions.output.manualChunks` 改 **function 形态**（Vite 8 / rolldown 不再支持 object map，会抛 `TypeError: manualChunks is not a function`）。
+- 把 `node_modules/lexical/` + `node_modules/@lexical/*` 全部归入 `lexical` 独立 chunk。
+- 结果：**main bundle 655.34 kB（gzip 199.87 kB）**（P1+P2 时 808 kB 超 800 阈值），**lexical chunk 154.92 kB（gzip 49.83 kB）**。main 回到 < 700 kB 目标，浏览器并发下载主 chunk + lexical chunk。
+- 不用 dynamic import 路径：避免首次进 TextElement 编辑时的延迟（chunk 拆完已经足够）。
+
+#### P3.8 i18n
+
+- 中英 `variables.chipError.{notFound, createConfirm, onlyUserCanCreate}` 3 key
+- 中：「变量 {name} 不存在。」「是否立即创建？（按确定即新建一个空字符串用户变量）」「只能在编辑器中手动创建 user/ 域变量；系统 / 插件 / PAPI 变量由对应 Provider 自动注册。」
+
+### P4 实施（收尾）
+
+#### P4.1 vitest 扩展（paste transform）
+
+`lexicalChip.test.ts` 加 `describe('P3.6 registerVariablePasteTransform...')` 7 case：
+- 粘贴单 chip 字面 → 升级 + roundtrip 保字面
+- 粘贴含 fallback 占位符
+- 粘贴混合 plain text + chip
+- 粘贴连续多 chip 无间隔
+- 粘贴不含 `${var:` 的纯文本 → transform 无副作用
+- 粘贴 chip 升级后 traverse root 验证真实 VariablePlaceholderNode（非 TextNode）
+- 粘贴残缺 `${var:foo and not closed` → 不触发升级
+
+**137 vitest 全绿（130 → 137 +7）/ 9 test files / 415ms**。
+
+#### P4.2 docs/variables.md
+
+- §1.5 加 0.4.1 起 chip 编辑器升级说明 + 画布内双击 inline 编辑也支持 `${` 触发（P3.5 起）
+- §1.5.1（新增）：chip 编辑器交互表格 —— hover / 改绑定 / 补创 / 整体删除 / 粘贴升级 / 复制 / 字号联动 7 行；chip 视觉色板（latte mauve + dark 提比例 + error red）；技术实现说明（lexical core + DecoratorNode + 拆 chunk）
+- §1.11 变量删除提示从单层 banner 改三层：(1) chip 红色 + 删除线 + ⚠ + click 补创对话框 (2) live preview 下方 banner (3) hover tooltip
+
+#### P4.3 版本号 0.3.0 → 0.4.1-SNAPSHOT
+
+5 处升级：
+- `build.gradle.kts`（allprojects.version）
+- `plugin/src/main/resources/paper-plugin.yml`
+- `examples/demo-train-plugin/src/main/resources/paper-plugin.yml`
+- `examples/demo-score-plugin/src/main/resources/paper-plugin.yml`
+- `web/package.json` + `web/package-lock.json`（双处 hikari-canvas-web 版本）
+
+`grep -rn "0.3.0-SNAPSHOT"` 全清。
+
+#### P4.4 shadow jar 验证
+
+`./gradlew :plugin:shadowJar` → `plugin/build/libs/HikariCanvas-0.4.1-SNAPSHOT.jar`（153 MB；文件名自动跟随 version）。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| `npm run test`（vitest） | **137 全绿**（9 file / 415ms） |
+| `vite build` | **main 655.34 kB（gzip 199.87 kB）+ lexical chunk 154.92 kB（gzip 49.83 kB）+ livePaintWorker 33.75 kB + css 65.77 kB** |
+| `./gradlew :plugin:shadowJar` | `HikariCanvas-0.4.1-SNAPSHOT.jar` 153 MB |
+| 0 baseline 漂移 | ✅（无 fixture / expected png 改动） |
+| 版本号一致性 | ✅（5 处 0.4.1-SNAPSHOT，0 个 0.3.0 残留） |
+
+### 关联文件
+
+修改：
+- `web/src/variable/lexicalChip.ts`（+ `registerVariablePasteTransform` ~50 行 / import `TextNode`）
+- `web/src/variable/__tests__/lexicalChip.test.ts`（+ 7 case / + `pasteThenRoundtrip` helper）
+- `web/src/components/variables/VariableChipEditor.vue`（chip pill 全套样式重写 / `chipScale` computed / `createVariableRequest` emit / `registerVariablePasteTransform` 挂载 / 模板 `--chip-scale` CSS 变量）
+- `web/src/components/properties/TextElementSection.vue`（`getWsClient` import + `onChipEditorCreateRequest` handler / chip editor `:font-size` 透传 / 模板 `@create-variable-request`）
+- `web/src/components/canvas/TextInlineEditor.vue`（picker 三事件 emit / `defineExpose` 加 insertVariableChip / replaceVariableChip）
+- `web/src/components/layout/CanvasView.vue`（VariablePicker import / `inlinePickerOpen / inlinePickerMode / inlinePickerAnchor` ref / 4 个 inline handler / 模板 inline picker overlay + 样式）
+- `web/src/i18n/messages.ts`（中英 `variables.chipError` 3 key）
+- `web/vite.config.ts`（function-form manualChunks 拆 lexical）
+- `docs/variables.md`（§1.5 + §1.5.1 新增 + §1.11 三层提示）
+- `build.gradle.kts` / `plugin/src/main/resources/paper-plugin.yml` / `examples/demo-*-plugin/src/main/resources/paper-plugin.yml` / `web/package.json` / `web/package-lock.json`（版本号）
+- `CLAUDE.md`（0.4.1 P3+P4 段 + 总里程碑行）
+
+### 已知不足（留 v1.x）
+
+- create-confirm 用 native `window.confirm` / `window.alert`（v1.x 升级精美 modal + autofocus 输入 default value）
+- inline picker 位置硬编码右上角，未做 anchor rect 精细定位（v1.x 跟 caret 位置浮）
+- chip editor 暂未做 ARIA live region 提示删除事件（screen reader 友好度待改善）
+
+### 版本号
+
+**0.3.0-SNAPSHOT → 0.4.1-SNAPSHOT**。
+
+---
+
 ## 2026-05-20 · M28-0.4.1-P1+P2：VariableChipEditor 原型 + 交互细化
 
 ### 背景

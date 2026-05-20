@@ -493,6 +493,12 @@ export const messages = {
                 tooltipDeleted: '变量已删除，最终渲染为 "???"',
                 ariaLabel: '文本编辑器（变量以芯片显示，点击芯片可改绑定）',
             },
+            // 0.4.1-P3 chip 错误态：点击红 chip 触发补创对话框
+            chipError: {
+                notFound: '变量 {name} 不存在。',
+                createConfirm: '是否立即创建？（按确定即新建一个空字符串用户变量）',
+                onlyUserCanCreate: '只能在编辑器中手动创建 user/ 域变量；系统 / 插件 / PAPI 变量由对应 Provider 自动注册。',
+            },
         },
         // 0.4.0-P3-L：列车 / 公交时刻表管理（兜底功能，零外部依赖）
         schedule: {
@@ -1111,6 +1117,12 @@ export const messages = {
                 tooltipSource: 'Source',
                 tooltipDeleted: 'Variable has been deleted — will render as "???"',
                 ariaLabel: 'Text editor (variables shown as chips; click a chip to rebind)',
+            },
+            // 0.4.1-P3 chip error state: clicking a red chip triggers create-confirm
+            chipError: {
+                notFound: 'Variable {name} does not exist.',
+                createConfirm: 'Create it now? (Confirm to create an empty STRING user variable.)',
+                onlyUserCanCreate: 'Only user/ namespace variables can be created from the editor; system / plugin / PAPI variables are auto-registered by their providers.',
             },
         },
         // 0.4.0-P3-L: train / bus schedule manager (built-in fallback, zero external dependency)

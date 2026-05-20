@@ -21,6 +21,7 @@
  */
 import {
     DecoratorNode,
+    TextNode,
     $createParagraphNode,
     $createTextNode,
     $getRoot,
@@ -353,4 +354,74 @@ export function $insertVariableChipAtSelection(
         }
         last.append(chip);
     }
+}
+
+// ===========================================================================
+// P3.6 paste transform：plain text `${var:X}` → chip
+// ===========================================================================
+
+/**
+ * 把 TextNode 里的字面占位符段（如 {@code "${var:X}"}）就地拆为 TextNode +
+ * VariablePlaceholderNode 序列。
+ *
+ * <p>触发场景：</p>
+ * <ul>
+ *   <li>从外部应用 / 其他 chip editor 复制 plain text {@code ${var:foo}} 粘贴进来</li>
+ *   <li>用户手打 {@code "${var:foo}"} 完整字符串（不通过 picker 路径）</li>
+ *   <li>{@link textToLexicalNodes} 已经在初始 load 时处理过；本 transform 是
+ *     <b>编辑期持续</b> 监听变化，保证后续输入 / 粘贴也能升级</li>
+ * </ul>
+ *
+ * <p>实现：注册 {@link LexicalEditor.registerNodeTransform} 监听 TextNode 变化；
+ * 检测到包含完整 {@code ${var:...}} 模式时用 {@code splitText} + {@code replace}
+ * 切片重组。transform 是 lexical 的官方机制，会自动持续运行直到所有 TextNode 都
+ * 稳定（无可拆模式），不需要手动循环。</p>
+ *
+ * <p>不破坏 selection：lexical transform 内部已做光标位置维护；从 paste 路径触发
+ * 时光标会停在最后一段 TextNode 的对应 offset。</p>
+ *
+ * <p>返回 unregister 函数（用于 component unmount 时清理）；典型用法：</p>
+ * <pre>
+ *   mergeRegister(
+ *     registerPlainText(editor),
+ *     registerVariablePasteTransform(editor),
+ *   );
+ * </pre>
+ */
+export function registerVariablePasteTransform(editor: LexicalEditor): () => void {
+    return editor.registerNodeTransform(TextNode, (node) => {
+        // 不动 chip 内部生成的 trailing 空 TextNode、不动已经空字符串
+        const text = node.getTextContent();
+        if (text.length === 0) return;
+        if (text.indexOf('${var:') < 0) return; // O(1) 短路
+        // 重新扫描；找第一个完整 placeholder 就拆，剩余部分交给 transform 下一轮处理
+        const pattern = new RegExp(CHIP_PARSE_PATTERN.source);
+        const m = pattern.exec(text);
+        if (!m) return;
+        const matchStart = m.index;
+        const matchEnd = matchStart + m[0].length;
+        const rawName = m[1];
+        const fallback: string | null = m[2] !== undefined ? m[2] : null;
+
+        // 切片：[0, matchStart) → leadingText（如果有）
+        //       [matchStart, matchEnd) → chip
+        //       [matchEnd, end) → trailingText（如果有，交给下一轮 transform）
+        // splitText 返回切片后的 TextNode 数组；我们逐个 replace。
+        let target: TextNode = node;
+        if (matchStart > 0) {
+            const splits = target.splitText(matchStart);
+            // splits[0] 是 leading；后面 splits[1] 是从 matchStart 开始的尾部
+            target = splits[1] ?? splits[0];
+        }
+        const trailingLength = text.length - matchEnd;
+        if (trailingLength > 0) {
+            // 从 target（已截到 [matchStart, end)）再 split：分出 [matchStart, matchEnd)
+            // splitText 的 offset 是相对当前 TextNode 的；matchEnd - matchStart 就是 chip 段长度
+            const splits2 = target.splitText(matchEnd - matchStart);
+            target = splits2[0];
+        }
+        // 现在 target 文本 == `${var:rawName[|fallback=...]}`；替换为 chip
+        const chip = $createVariablePlaceholderNode(rawName, fallback);
+        target.replace(chip);
+    });
 }

@@ -18,6 +18,7 @@ import { layoutText, charAdvance, ASCENT_RATIO } from '@/render/TextLayout';
 import { ensureLoaded as ensureFontLoaded } from '@/render/FontLoader';
 import { useI18n } from '@/i18n';
 import { useProjectStore } from '@/stores/project';
+import { getWsClient } from '@/network/wsClient';
 import type { TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
 // M23：字体下拉动态化 —— fetch /api/font/list 而非读硬编码 FONT_META 白名单。
@@ -60,6 +61,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const project = useProjectStore();
+const ws = getWsClient();
 
 // ---------- 0.4.1：chip 编辑器 + 变量 picker 集成 ----------
 // Notion-style chip 编辑器替代了 0.4.0 的 textarea：占位符 ${var:X} 渲染为 pill 而非字面字符串。
@@ -85,6 +87,33 @@ function onChipEditorInsertRequest() {
 function onChipEditorEditRequest(payload: { rawName: string; fallback: string | null }) {
     pickerMode.value = { kind: 'replaceChip', oldRawName: payload.rawName };
     pickerOpen.value = true;
+}
+
+/**
+ * P3.4：点击红色 (error) chip → 弹 native confirm "是否立即创建？"。
+ * 仅支持 user 域补创（短名无 / 或 user/X）；其他 namespace（system / scoreboard /
+ * papi / plugin / schedule）由对应 Provider 自动注册，不在编辑器手动路径。
+ */
+function onChipEditorCreateRequest(payload: { rawName: string }) {
+    if (typeof window === 'undefined') return;
+    const ok = window.confirm(
+        `${t.value.variables.chipError.notFound.replace('{name}', payload.rawName)}\n` +
+        `${t.value.variables.chipError.createConfirm}`,
+    );
+    if (!ok) return;
+    const trimmed = payload.rawName.trim();
+    let userKey: string;
+    if (trimmed.startsWith('user/')) userKey = trimmed.substring('user/'.length);
+    else if (trimmed.indexOf('/') < 0 && trimmed.indexOf('.') < 0) userKey = trimmed;
+    else {
+        window.alert(t.value.variables.chipError.onlyUserCanCreate);
+        return;
+    }
+    ws.send('variable.create', {
+        name: userKey,
+        type: 'STRING',
+        defaultValue: '',
+    });
 }
 
 function onPickerSelect(shortName: string) {
@@ -237,11 +266,13 @@ function patchGlow(partial: Partial<Glow>) {
             ref="chipEditorRef"
             :text="element.text"
             :wall-id="project.wallId"
+            :font-size="element.fontSize"
             :multi-line="true"
             :disabled="locked"
             @update:text="onTextChipUpdate"
             @insert-variable-request="onChipEditorInsertRequest"
             @edit-variable-request="onChipEditorEditRequest"
+            @create-variable-request="onChipEditorCreateRequest"
           />
         </label>
         <!-- VariablePicker popover -->

@@ -41,11 +41,21 @@ const emit = defineEmits<{
     finish: [];
     /** ESC → 父组件可选择恢复旧值；当前实现等同 finish。 */
     cancel: [];
+    /** P3.5：用户在 inline editor 输入 ${ 或点已有 chip 时，让 CanvasView 弹 picker。 */
+    insertVariableRequest: [];
+    editVariableRequest: [payload: { rawName: string; fallback: string | null }];
+    createVariableRequest: [payload: { rawName: string }];
 }>();
 
 const chipEditorRef = ref<InstanceType<typeof VariableChipEditor> | null>(null);
 
-defineExpose({ focus: () => chipEditorRef.value?.focus() });
+defineExpose({
+    focus: () => chipEditorRef.value?.focus(),
+    insertVariableChip: (rawName: string, fallback: string | null = null) =>
+        chipEditorRef.value?.insertVariableChip(rawName, fallback),
+    replaceVariableChip: (oldRaw: string, newRaw: string, newFallback: string | null = null) =>
+        chipEditorRef.value?.replaceVariableChip(oldRaw, newRaw, newFallback),
+});
 
 function asText(el: Element | null): TextLike | null {
     return el && el.type === 'text' ? (el as unknown as TextLike) : null;
@@ -95,6 +105,9 @@ function onCancel() {
       @update:text="onUpdateText"
       @submit="onSubmit"
       @cancel="onCancel"
+      @insert-variable-request="emit('insertVariableRequest')"
+      @edit-variable-request="(p) => emit('editVariableRequest', p)"
+      @create-variable-request="(p) => emit('createVariableRequest', p)"
     />
   </div>
 </template>

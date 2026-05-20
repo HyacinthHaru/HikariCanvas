@@ -99,7 +99,9 @@ NUMBER 类型变量在 VariablePanel 里有两组按钮：`-1` / `+1`。操作�
 
 ### 1.5 VariablePicker 自动补全
 
-在 TextElement textarea 里输入 `${`，**自动弹出 VariablePicker popover**——列出全部已知变量（按 namespace 分组）+ 搜索框。
+**0.4.1 起 TextElement 文本框升级为 chip 编辑器**（Notion 风格）：占位符 `${var:X}` 不再显示字面字符串，而是渲染成 Catppuccin Mauve 的胶囊 chip——hover 看当前值 / 来源 / 删除告警，click 弹 picker 改绑定。详见 §1.5.1。
+
+在 chip 编辑器内输入 `${`，**自动弹出 VariablePicker popover**——列出全部已知变量（按 namespace 分组）+ 搜索框。
 
 操作：
 
@@ -107,8 +109,29 @@ NUMBER 类型变量在 VariablePanel 里有两组按钮：`-1` / `+1`。操作�
 - **Enter** 插入（自动补全 `${var:NAME}` 后并把光标移到 `}` 后）
 - **Esc** 关闭
 - **左侧按钮触发** 也能手动召唤（不用打 `${`）
+- **画布内双击文本** 也进 chip 编辑器（inline 形态）；`${` 触发同样有效（0.4.1-P3.5 起）
 
 Picker 拉取的元数据来源：`GET /api/variable/list-all-namespaces`，包含 user / system / wall / scoreboard / papi / schedule / 插件 namespace 全部 declared keys。
+
+#### 1.5.1 chip 编辑器交互（0.4.1）
+
+| 行为 | 触发 | 结果 |
+|---|---|---|
+| 看变量当前值 | hover chip | 浮 tooltip：原始占位符 / 当前值 / 来源（user / system / plugin / papi） |
+| 改绑定 | 点击普通 chip（紫色） | 弹 VariablePicker，选新变量后整 chip 替换 |
+| 补创缺失变量 | 点击红色 chip（变量已删除 / 不存在） | 确认对话框「是否立即创建？」→ 自动新建空字符串 user 变量；非 user 域提示「请通过对应 Provider 注册」 |
+| 整体删除 chip | 光标停在 chip 边界按 Backspace / Delete | chip 一次性整体消失（不是拆字符） |
+| 粘贴升级 | 粘贴含 `${var:X}` 字面的 plain text | 自动识别并升级为 chip（无需手动重输 `${`） |
+| 复制 chip | 选中 chip + Ctrl/Cmd+C | clipboard 拿到字面占位符 `${var:X}`，粘贴到任何外部应用都是字符串 |
+| 字号联动 | 切 element.fontSize | chip 比例自动 clamp 在 0.6×~1.2× 之间（防极大 / 极小字号失控） |
+
+chip 视觉：
+
+- 默认（latte）：Mauve 紫色 pill + ⚡ 前缀
+- 暗色（frappe / macchiato）：相同 Mauve 但提高填充比例补偿色亮度衰减
+- 错误态（变量缺失）：destructive red 红色 + 删除线 + ⚠ 前缀
+
+技术实现走 `lexical` 0.44 core + `DecoratorNode` 自包装（不引 `lexical-vue` 编译产物），bundle 拆 `lexical` 独立 chunk（~155 kB / gzip ~50 kB）；main bundle 保持 ~655 kB。
 
 ### 1.6 系统自动变量
 
@@ -245,7 +268,11 @@ ${var:NAME|fallback=N/A}        显式 fallback → 当 currentValue / defaultVa
 
 VariablePanel 里删变量 → wall 内引用该变量的位置 **不会自动改文字**，但渲染时走 fallback `???`（除非占位符里写了 `|fallback=...`）。
 
-编辑器额外提示：被删变量的引用会在 TextElement 的 live preview 上标红 **banner**——警告 "Variable X was deleted, references will render as ???"，提醒玩家手动改文字。
+编辑器额外提示（三层）：
+
+1. **chip 编辑器** 内：被删变量对应的 chip 转为 **红色 + 删除线 + ⚠ 前缀**，点击红 chip 弹「是否立即创建？」确认对话框 → 一键补创 user 变量（0.4.1-P3.4 起）
+2. **TextElement live preview** 下方标红 **banner**——警告 "Variable X was deleted, references will render as ???"
+3. hover 红 chip 显 tooltip："变量已删除，最终渲染为 '???'"
 
 > **删除不级联** 是按 `dynamic-data.md §16-5` 决策：避免变量误删导致 wall 整段文字消失。改 fallback 处理代替自动删 element。
 

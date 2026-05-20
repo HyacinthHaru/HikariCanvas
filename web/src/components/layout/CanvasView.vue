@@ -16,6 +16,7 @@ import CanvasZoomBar from '@/components/canvas/CanvasZoomBar.vue';
 import TextInlineEditor from '@/components/canvas/TextInlineEditor.vue';
 import SnapGuideOverlay from '@/components/canvas/SnapGuideOverlay.vue';
 import LivePaintHoverOverlay from '@/components/canvas/LivePaintHoverOverlay.vue';
+import VariablePicker from '@/components/variables/VariablePicker.vue';
 
 import { useMarqueeSelection } from '@/composables/useMarqueeSelection';
 import { useDrawToCreate } from '@/composables/useDrawToCreate';
@@ -48,8 +49,24 @@ const transformerRef = ref<{ getNode(): unknown } | null>(null);
 const outerRef = ref<HTMLElement | null>(null);
 const brushHostRef = ref<HTMLElement | null>(null);
 const editingId = ref<string | null>(null);
-const inlineEditorRef = ref<{ focus: () => void } | null>(null);
+const inlineEditorRef = ref<{
+    focus: () => void;
+    insertVariableChip: (rawName: string, fallback?: string | null) => void;
+    replaceVariableChip: (oldRaw: string, newRaw: string, newFallback?: string | null) => void;
+} | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+
+// ---------- 0.4.1-P3.5：inline editor 的 VariablePicker 接入 ----------
+//
+// CanvasView 自持一个 picker overlay 实例：用户在画布内双击文本进入 chip 编辑器后，
+// 输入 `${` / 点击 chip 都触发 picker，不需要回到 RightPanel。
+// pickerMode 与 TextElementSection 行为一致（insertNew / replaceChip）。
+type InlinePickerMode =
+    | { kind: 'insertNew' }
+    | { kind: 'replaceChip'; oldRawName: string };
+const inlinePickerOpen = ref(false);
+const inlinePickerMode = ref<InlinePickerMode>({ kind: 'insertNew' });
+const inlinePickerAnchor = ref<{ x: number; y: number } | null>(null);
 
 const editingElement = computed(() => {
     if (!editingId.value) return null;
@@ -390,6 +407,67 @@ function onEditTextUpdate(v: string) {
 
 function finishEditing() {
     editingId.value = null;
+    inlinePickerOpen.value = false;
+    inlinePickerMode.value = { kind: 'insertNew' };
+}
+
+// ---------- 0.4.1-P3.5：inline editor 的 picker hooks ----------
+
+function onInlineInsertVariableRequest() {
+    inlinePickerMode.value = { kind: 'insertNew' };
+    inlinePickerOpen.value = true;
+}
+
+function onInlineEditVariableRequest(payload: { rawName: string; fallback: string | null }) {
+    inlinePickerMode.value = { kind: 'replaceChip', oldRawName: payload.rawName };
+    inlinePickerOpen.value = true;
+}
+
+function onInlineCreateVariableRequest(payload: { rawName: string }) {
+    // P3.4：缺失变量补创 — 简化 v1 用 native confirm；外观打磨留 v1.x
+    if (typeof window === 'undefined') return;
+    const ok = window.confirm(
+        `${t.value.variables.chipError.notFound.replace('{name}', payload.rawName)}\n` +
+        `${t.value.variables.chipError.createConfirm}`,
+    );
+    if (!ok) return;
+    // 仅支持 user/X 短名补创（其他 namespace 由 Provider 自动注册，不在此手动创建路径）
+    const trimmed = payload.rawName.trim();
+    let userKey: string;
+    if (trimmed.startsWith('user/')) userKey = trimmed.substring('user/'.length);
+    else if (trimmed.indexOf('/') < 0 && trimmed.indexOf('.') < 0) userKey = trimmed;
+    else {
+        // 非用户变量域（system / scoreboard / papi / schedule / plugin）：提示用户走对应路径
+        window.alert(t.value.variables.chipError.onlyUserCanCreate);
+        return;
+    }
+    ws.send('variable.create', {
+        name: userKey,
+        type: 'STRING',
+        defaultValue: '',
+    });
+}
+
+function onInlinePickerSelect(shortName: string) {
+    const editor = inlineEditorRef.value;
+    if (!editor) {
+        inlinePickerOpen.value = false;
+        inlinePickerMode.value = { kind: 'insertNew' };
+        return;
+    }
+    if (inlinePickerMode.value.kind === 'replaceChip') {
+        editor.replaceVariableChip(inlinePickerMode.value.oldRawName, shortName, null);
+    } else {
+        editor.insertVariableChip(shortName, null);
+    }
+    inlinePickerOpen.value = false;
+    inlinePickerMode.value = { kind: 'insertNew' };
+    editor.focus();
+}
+
+function onInlinePickerClose() {
+    inlinePickerOpen.value = false;
+    inlinePickerMode.value = { kind: 'insertNew' };
 }
 
 // ---------- stage mouse 路由 ----------
@@ -982,6 +1060,18 @@ function requestDraw(): void {
             @update:text="onEditTextUpdate"
             @finish="finishEditing"
             @cancel="finishEditing"
+            @insert-variable-request="onInlineInsertVariableRequest"
+            @edit-variable-request="onInlineEditVariableRequest"
+            @create-variable-request="onInlineCreateVariableRequest"
+          />
+          <!-- 0.4.1-P3.5：inline editor 触发的 VariablePicker（与 RightPanel 的 picker 不冲突，
+               同一时刻只有一个 editor 在焦点） -->
+          <VariablePicker
+            v-if="inlinePickerOpen && editingId"
+            :wall-id="project.wallId"
+            class="hc-inline-var-picker"
+            @select="onInlinePickerSelect"
+            @close="onInlinePickerClose"
           />
         </div>
       </div>
@@ -1036,5 +1126,15 @@ function requestDraw(): void {
    但会让 scrollWidth / scrollHeight 比 viewport 大 → outer.scrollLeft/Top 有空间走。 */
 .hc-canvas-padding {
     padding: 1024px;
+}
+
+/* P3.5：inline picker 浮在 inline editor 上方（VariablePicker 自身是 absolute / fixed 形态，
+   父容器有 relative 上下文即可让其捕获最近的 positioned ancestor）。这里让它定位到画布右上角，
+   不与画布 element 重叠；具体位置可在 v1.x 用 anchor rect 精细调整。 */
+.hc-inline-var-picker {
+    position: absolute;
+    top: 48px;
+    right: 16px;
+    z-index: 60;
 }
 </style>

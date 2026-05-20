@@ -58,6 +58,7 @@ import {
     VariablePlaceholderNode,
     lexicalRootToText,
     textToLexicalNodes,
+    registerVariablePasteTransform,
     $insertVariableChipAtSelection,
     $isVariablePlaceholderNode,
 } from '@/variable/lexicalChip';
@@ -90,6 +91,8 @@ const emit = defineEmits<{
     insertVariableRequest: [anchor: HTMLElement];
     /** 点击已有 chip → 外层弹 VariablePicker 改绑定。 */
     editVariableRequest: [payload: { rawName: string; fallback: string | null; anchor: HTMLElement }];
+    /** P3.4：点击红色 (error) chip → 外层弹 "create" 确认对话框（变量缺失补创）。 */
+    createVariableRequest: [payload: { rawName: string; anchor: HTMLElement }];
 }>();
 
 const store = useVariableStore();
@@ -104,6 +107,18 @@ const tooltipX = ref(0);
 const tooltipY = ref(0);
 const tooltipRawName = ref('');
 const tooltipFallback = ref<string | null>(null);
+
+/**
+ * P3.2：chip 缩放因子。根据 props.fontSize 在 [0.6, 1.2] 范围 clamp，让 chip
+ * pill 在极小（fontSize=6 → 0.6×）/ 极大（fontSize=120 → 1.2×）字号下都保持
+ * 视觉协调。CSS 通过 `--chip-scale` 变量消费（padding / border-radius 跟着缩）。
+ */
+const chipScale = computed(() => {
+    const f = props.fontSize;
+    if (!f || !Number.isFinite(f)) return 1;
+    const ratio = f / 14;
+    return Math.max(0.6, Math.min(1.2, ratio));
+});
 
 const tooltipFullName = computed(() =>
     resolveFullName(tooltipRawName.value, props.wallId),
@@ -158,10 +173,11 @@ onMounted(() => {
     );
     writingExternal = false;
 
-    // plain-text + history 插件
+    // plain-text + history 插件 + P3.6 paste transform（plain text `${var:...}` → chip）
     unregisterAll = mergeRegister(
         registerPlainText(editor),
         registerHistory(editor, createEmptyHistoryState(), 1000),
+        registerVariablePasteTransform(editor),
         editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves }) => {
             // 忽略外部 write 触发的更新
             if (writingExternal) return;
@@ -294,6 +310,16 @@ function refreshAllChipDisplays(): void {
 function onChipClick(ev: CustomEvent<{ rawName: string; fallback: string | null }>) {
     if (props.disabled) return;
     const target = ev.target as HTMLElement;
+    // P3.4：点击红 chip（error 态 = 变量缺失）→ 走 create 路径而非 editVariableRequest。
+    // edit picker 在缺失变量时帮不上忙（变量都不存在选啥），改弹"是否立即创建"。
+    const isError = target.classList.contains('hc-chip-error');
+    if (isError) {
+        emit('createVariableRequest', {
+            rawName: ev.detail.rawName,
+            anchor: target,
+        });
+        return;
+    }
     emit('editVariableRequest', {
         rawName: ev.detail.rawName,
         fallback: ev.detail.fallback,
@@ -487,6 +513,7 @@ defineExpose({
       :style="{
         fontSize: fontSize ? `${fontSize}px` : undefined,
         fontFamily: fontFamily,
+        '--chip-scale': chipScale,
       }"
     ></div>
 
@@ -524,27 +551,42 @@ defineExpose({
 </template>
 
 <style>
-/* 全局样式（unscoped）：chip 是 lexical 渲染的 DOM，scoped 选择器无法命中（lexical 不
-   带 data-v-xxx hash）。把样式挂在 :global 等价位置——直接 .hc-var-chip。 */
+/* ============================================================================
+   chip pill 全局样式（unscoped）。
+   chip 由 lexical DecoratorNode createDOM 渲染，scoped 选择器无法命中（lexical
+   不带 data-v-xxx hash），所以挂在 unscoped block。
+
+   设计要点（P3.1 + P3.2 + P3.3）：
+   - **Catppuccin Mauve 直引**：`var(--ctp-mauve)` 通过 latte/frappe/macchiato
+     三 flavor 自动切换；color-mix 仅做透明度调配（in srgb 与 token 体系一致）。
+   - **字号 clamp 钳位**：`font-size` 走 `clamp(10px, 0.85em, 16px)` 防极小 /
+     极大字号失控。padding / border-radius 同时跟 `--chip-scale`（由 props.fontSize
+     计算的 0.6..1.2 比例）联动。
+   - **multi-line 整体换行**：`display: inline-block` + `white-space: nowrap` →
+     chip 自身不拆，但浏览器把它当一个单位参与父段落换行（line-break 不会切 chip 内部）。
+   - **dark 主题适配**：`.dark &` 提高 mauve 透明度，让 frappe / macchiato 下
+     pill 不至于太黯淡（mauve dark 色比 light 浅，需要更高 fill ratio）。
+   ============================================================================ */
 .hc-var-chip {
-    display: inline-flex;
-    align-items: center;
-    height: 1.4em;
+    display: inline-block;
     line-height: 1;
-    padding: 0 0.4em;
+    padding: calc(0.18em * var(--chip-scale, 1)) calc(0.55em * var(--chip-scale, 1));
     margin: 0 1px;
-    border-radius: 999px;
-    background: color-mix(in oklab, var(--ctp-mauve, #8839ef) 18%, var(--background));
-    color: color-mix(in oklab, var(--ctp-mauve, #8839ef) 88%, var(--foreground));
-    border: 1px solid color-mix(in oklab, var(--ctp-mauve, #8839ef) 40%, var(--border));
-    font-size: 0.85em;
+    border-radius: calc(999px * var(--chip-scale, 1));
+    background-color: color-mix(in srgb, var(--ctp-mauve) 18%, transparent);
+    color: var(--ctp-mauve);
+    border: 1px solid color-mix(in srgb, var(--ctp-mauve) 35%, transparent);
+    font-size: clamp(10px, 0.85em, 16px);
     font-family: ui-sans-serif, system-ui, sans-serif;
     font-weight: 500;
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
-    vertical-align: middle;
-    transition: background 120ms, border-color 120ms, transform 80ms;
+    vertical-align: baseline;
+    transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease;
+    /* P3.3：chip 内部不换行（整体不可拆），但允许参与父段落的换行流：父段 white-space
+       是 pre-wrap，chip 作为 inline-block 是不可分单位 → 浏览器把 chip 看作一个"长字"，
+       超宽时换到下一行而不切 chip。 */
     white-space: nowrap;
     max-width: 16em;
     overflow: hidden;
@@ -554,24 +596,49 @@ defineExpose({
     content: '⚡';
     font-size: 0.8em;
     margin-right: 3px;
-    opacity: 0.7;
+    opacity: 0.85;
 }
 .hc-var-chip:hover {
-    background: color-mix(in oklab, var(--ctp-mauve, #8839ef) 30%, var(--background));
-    border-color: color-mix(in oklab, var(--ctp-mauve, #8839ef) 55%, var(--border));
+    background-color: color-mix(in srgb, var(--ctp-mauve) 30%, transparent);
+    border-color: color-mix(in srgb, var(--ctp-mauve) 50%, transparent);
 }
 .hc-var-chip:active {
     transform: scale(0.96);
 }
+/* dark 主题（Frappé / Macchiato）：mauve 本身偏浅，提高填充比例让 pill 更显著 */
+.dark .hc-var-chip,
+.theme-frappe .hc-var-chip,
+.theme-macchiato .hc-var-chip {
+    background-color: color-mix(in srgb, var(--ctp-mauve) 24%, transparent);
+    border-color: color-mix(in srgb, var(--ctp-mauve) 42%, transparent);
+}
+.dark .hc-var-chip:hover,
+.theme-frappe .hc-var-chip:hover,
+.theme-macchiato .hc-var-chip:hover {
+    background-color: color-mix(in srgb, var(--ctp-mauve) 36%, transparent);
+    border-color: color-mix(in srgb, var(--ctp-mauve) 58%, transparent);
+}
+/* P3.4：error 态（变量缺失）→ destructive red + 删除线 + ⚠ 前缀；click 走
+   createVariableRequest 路径（外层弹"是否立即创建"确认） */
 .hc-var-chip.hc-chip-error {
-    background: color-mix(in oklab, var(--destructive, #d20f39) 15%, var(--background));
-    color: var(--destructive, #d20f39);
-    border-color: color-mix(in oklab, var(--destructive, #d20f39) 45%, var(--border));
+    background-color: color-mix(in srgb, var(--ctp-red) 18%, transparent);
+    color: var(--ctp-red);
+    border-color: color-mix(in srgb, var(--ctp-red) 45%, transparent);
     text-decoration: line-through;
     text-decoration-thickness: 1px;
 }
 .hc-var-chip.hc-chip-error::before {
     content: '⚠';
+}
+.hc-var-chip.hc-chip-error:hover {
+    background-color: color-mix(in srgb, var(--ctp-red) 30%, transparent);
+    border-color: color-mix(in srgb, var(--ctp-red) 58%, transparent);
+}
+.dark .hc-var-chip.hc-chip-error,
+.theme-frappe .hc-var-chip.hc-chip-error,
+.theme-macchiato .hc-var-chip.hc-chip-error {
+    background-color: color-mix(in srgb, var(--ctp-red) 24%, transparent);
+    border-color: color-mix(in srgb, var(--ctp-red) 50%, transparent);
 }
 </style>
 
