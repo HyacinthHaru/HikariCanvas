@@ -258,19 +258,13 @@ public final class HikariCanvas extends JavaPlugin {
         // M5.5：启动末尾把所有 walls 的像素 compose 回对应 MapView
         // M16 P2.5：保留 restorer 引用，让 wand listener 能查"启动期 restore 失败的 wall"
         // 并给玩家 ActionBar 提示。
+        // 0.4.2 bugfix（Bug A，2026-05-21）：restore() 调用延迟到 setVariableSupport +
+        // ProviderBootstrap.initialize 之后（见下方）—— 之前 restore 时 compositor.interpolator
+        // 还是 null + store 内 schedule:wallId/* 变量为空，wall 像素被画成字面 ${var:...}，
+        // 后续没人触发重画一直显字面。修法：构造 restorer 在这里完成（依赖已具备），但 restore()
+        // 调用挪到 ProviderDaemon.initialize() 之后，让 interpolator 注入 + Provider 装入 store。
         WallRestorer wallRestorerInstance = new WallRestorer(getLogger(), wallRepo, mapPool,
                 canvasRenderer, compositor, placeholderRenderer);
-        try {
-            int restored = wallRestorerInstance.restore();
-            getLogger().info("Wall restore: " + restored + " wall(s) repainted");
-            if (!wallRestorerInstance.failedRestoreWallIds().isEmpty()) {
-                getLogger().warning("Wall restore: failed wall_ids = "
-                        + wallRestorerInstance.failedRestoreWallIds()
-                        + " (interactions will be blocked until next successful restart)");
-            }
-        } catch (Exception e) {
-            getLogger().log(java.util.logging.Level.WARNING, "WallRestorer failed (non-fatal)", e);
-        }
         this.wallRestorer = wallRestorerInstance;
 
         // M6-A：模板注册表。jar 内 /templates/*.yml + plugins/HikariCanvas/templates/ +
@@ -316,6 +310,21 @@ public final class HikariCanvas extends JavaPlugin {
         this.variableProviderDaemon =
                 ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo,
                         this.scheduleDao, config.scheduleConfig);
+        // 0.4.2 bugfix（Bug A）：现在所有依赖就位（compositor.interpolator 注入 + Provider 装入
+        // schedule:wallId/* + system:wallId/wall.* 等值），可以安全 restore wall 像素让 wall 上的
+        // ${var:...} placeholder 被正确替换为实际值（or fallback "???"）。之前在 line 261-274
+        // 早期 restore 时这些都还空，wall 显字面字符串直到下一次手动 dirty 触发。
+        try {
+            int restored = wallRestorerInstance.restore();
+            getLogger().info("Wall restore: " + restored + " wall(s) repainted (post-provider init)");
+            if (!wallRestorerInstance.failedRestoreWallIds().isEmpty()) {
+                getLogger().warning("Wall restore: failed wall_ids = "
+                        + wallRestorerInstance.failedRestoreWallIds()
+                        + " (interactions will be blocked until next successful restart)");
+            }
+        } catch (Exception e) {
+            getLogger().log(java.util.logging.Level.WARNING, "WallRestorer failed (non-fatal)", e);
+        }
         // P3-L：wall 删除时清掉 schedule_entries + wall_schedules（FK CASCADE 已配，显式调更稳；
         // 同时 unregister Provider 内存态 + store 内的 4 个 schedule:<wallId>/* 变量）。
         final ManualScheduleProvider manualScheduleProvider =

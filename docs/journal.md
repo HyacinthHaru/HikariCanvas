@@ -5,6 +5,54 @@
 
 ---
 
+## 2026-05-21 · WallRestorer 启动顺序修：服务器重启字面 ${var:} 残留真根因
+
+### 症状
+
+用户提供 image #6 截图：MC 游戏内 wall 上**显示字面 `${var:schedule/next_departure}`
+字符串**（而编辑器画布**正常**显示 chip 替换值 "23:00" / "22:55"）。前 4 次 fix 都没碰
+到真根因。
+
+### 真根因
+
+`HikariCanvas.onEnable` 启动顺序错乱：
+
+| 行 | 操作 |
+|---|---|
+| line 261-274 | **WallRestorer.restore()** ← 此时 compositor.interpolator 还是 null + store 空 |
+| line 301 | compositor.setVariableSupport(interpolator, store) |
+| line 316-318 | ProviderBootstrap.initialize() ← schedule:wallId/* 此刻才进 store |
+
+WallRestorer 触发 compositor.rasterize() → `maybeInterpolateText` 第一行 `if
+(interp == null) return e;` → **直接渲染原 element.text 字面字符串**到 wall 像素。
+
+然后 wall 没有 dirty 触发 → 不重画 → 一直显字面，直到玩家手动编辑触发 wall dirty。
+
+### 修复
+
+把 `wallRestorerInstance.restore()` 调用**延迟到 ProviderBootstrap.initialize() 之后**：
+- 原位置（line 261-274）只 `new WallRestorer(...)`，不调 restore
+- 移到 line ~318 之后（ProviderDaemon initialize 完毕）
+
+此时：
+- compositor.interpolator 已注入 ✓
+- ManualScheduleProvider.initialize() 同步跑完，store 内 schedule:wallId/* 已有值 ✓
+- SystemVariableProvider 注册 system:wallId/wall.* 值 ✓
+- restore 时 compositor.rasterize 调 interpolator.interpolate → 正确替换 placeholder → 渲染实际值
+
+### 验证
+
+- `./gradlew :plugin:test` BUILD SUCCESSFUL
+- compile OK
+- 用户重启服务器后应看到：MC wall 上**直接显示 "23:00" / "22:55" / "进站中" 等实际值**，
+  不再需要手动开编辑器触发
+
+### 关联
+
+- `plugin/src/main/java/moe/hikari/canvas/HikariCanvas.java`（restore 调用延后）
+
+---
+
 ## 2026-05-21 · 彻底修：chip editor 仅按钮触发 picker + store $subscribe
 
 ### 症状
