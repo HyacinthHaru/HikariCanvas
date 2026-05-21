@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-05-21 · 终极修：chip 单击不弹 picker（改双击改绑定）
+
+### 症状
+
+用户第 4 次报"右侧文字编辑器点击就跳变量选择页"。之前 3 次修复（`9da68ea` /
+`caf7042` 等）都聚焦在 `${` detect 路径（update listener / dirtyLeaves / beforeinput），
+但 picker 实际是从**完全不同路径**弹出的。
+
+### 真根因
+
+`lexicalChip.ts:164` chip span 注册的 `click` handler **直接** dispatch
+`CHIP_EVENT_CLICK` → 外层 `onChipClick` → `emit('editVariableRequest')` →
+`pickerOpen = true`。这是 P2 设计的"click chip = 改绑定"行为。
+
+但用户场景：**文字框完全由 chip 组成**（如 `${var:schedule/eta_seconds}`
+单 chip），点击任何位置都命中 chip → 立即弹 picker，**用户连进入编辑都做不到**。
+之前的 detect-path 修复无法触及这条链。
+
+### 修复
+
+`lexicalChip.ts` chip click 改 **dblclick**：
+- 单击 chip：noop（不 preventDefault，让 lexical 自然处理 caret 落位）
+- **双击** chip：dispatch CHIP_EVENT_CLICK → 弹 picker 改绑定
+- 错误态 chip（hc-chip-error）：保留单击 → 触发 create confirm（错误态需要快速 fix）
+
+UX 与"双击编辑"惯例对齐；单 chip 文本框现在可以正常进入编辑模式。
+
+### i18n 更新
+
+- 中：tooltipHint = "双击改绑定" / ariaLabel 更新
+- 英：tooltipHint = "Double-click to rebind" / ariaLabel 更新
+
+### 验证
+
+- 159 vitest 全绿（无回归；现有 chip 单测不涉及 dblclick UX）
+- vite build 通过
+- 用户操作：右侧 chip editor 单击 chip → **不再弹 picker**；双击 chip → 弹 picker 改绑定
+
+### 关联
+
+- `web/src/variable/lexicalChip.ts`（chip span click → dblclick）
+- `web/src/i18n/messages.ts`（中英 tooltipHint + ariaLabel）
+
+---
+
 ## 2026-05-20 · 0.4.2 chip editor bugfix 三连（字面残留兜底 + 点击误弹 picker 彻底 + IME 中文输入）
 
 ### 背景

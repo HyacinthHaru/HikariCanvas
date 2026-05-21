@@ -513,7 +513,8 @@ export const messages = {
                 tooltipCurrent: '当前值',
                 tooltipSource: '来源',
                 tooltipDeleted: '变量已删除，最终渲染为 "???"',
-                ariaLabel: '文本编辑器（变量以芯片显示，点击芯片可改绑定）',
+                tooltipHint: '双击改绑定',
+                ariaLabel: '文本编辑器（变量以芯片显示，双击芯片可改绑定）',
             },
             // 0.4.1-P3 chip 错误态：点击红 chip 触发补创对话框
             chipError: {
@@ -1160,7 +1161,8 @@ export const messages = {
                 tooltipCurrent: 'Current',
                 tooltipSource: 'Source',
                 tooltipDeleted: 'Variable has been deleted — will render as "???"',
-                ariaLabel: 'Text editor (variables shown as chips; click a chip to rebind)',
+                tooltipHint: 'Double-click to rebind',
+                ariaLabel: 'Text editor (variables shown as chips; double-click a chip to rebind)',
             },
             // 0.4.1-P3 chip error state: clicking a red chip triggers create-confirm
             chipError: {
