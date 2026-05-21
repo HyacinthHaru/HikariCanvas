@@ -95,8 +95,11 @@ async function onSave() {
             description: description.value || null,
             paramConfig: { textActions },
         }, 8000);
-        const payload = (ack as { payload?: { templateId?: string } })?.payload;
-        if (payload?.templateId) {
+        // 2026-05-21 bugfix: wsClient.handleAck 直接 resolve `envelope.payload`（不是整个 envelope）。
+        // 之前 `(ack as ...).payload?.templateId` 多剥一层永远是 undefined → 走 else 显"发布失败"，
+        // 即使 server 实际 publish 完全成功（log 含 "Templates reloaded: user=N"）。
+        const ackPayload = ack as { templateId?: string } | undefined;
+        if (ackPayload?.templateId) {
             emit('close');
         } else {
             submitError.value = t.value.workshop.saveFailedGeneric;

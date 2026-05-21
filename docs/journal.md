@@ -5,6 +5,65 @@
 
 ---
 
+## 2026-05-21 · 修：模板"发布失败"假象（前端取 ack 字段错位）
+
+### 症状
+
+用户报：模板发布显"发布失败"，但后端 log 明显是**成功的**：
+
+```
+Templates reloaded: builtin=7 server=0 user=1 overrides=0 failed=0
+```
+
+user=1 表示新模板已写入 + DB upsert + registry.reload 触发——`TemplatePublisher.publish`
+全流程走完返了 `Result.Ok`，后端 dispatcher 已 ack。
+
+### 根因
+
+`wsClient.handleAck:395` 直接 `pending.resolve(payload)` — resolve 的是 envelope 内的
+**payload 对象**（不是整个 envelope）。
+
+但 `SaveAsTemplateModal.vue:98-102` 又**多剥一层**：
+```typescript
+const ack = await ws.sendWithAck('template.save', ...);  // ack 已经是 payload {templateId: "..."}
+const payload = (ack as { payload?: { templateId?: string } })?.payload;  // ❌ 再取 .payload
+if (payload?.templateId) {       // ❌ 永远 undefined
+    emit('close');
+} else {
+    submitError.value = t.value.workshop.saveFailedGeneric;  // → 永远走这里
+}
+```
+
+`(ack).payload` 是 `undefined`（ack 本身就是 payload，不含 .payload 子字段），所以 if 永远
+false → 显示"发布失败" 4 字。**后端实际成功**，新模板已写入 DB / YAML 文件 / reload，
+用户后续刷新页面应能看到。
+
+### 修复
+
+```typescript
+const ackPayload = ack as { templateId?: string } | undefined;
+if (ackPayload?.templateId) { emit('close'); }
+```
+
+### 检查其他
+
+grep `\.payload\.` / `ack.payload` 排查仓库，无同款 bug（其他 ws op 调用都正确取字段）。
+
+### 验证
+
+- 159 vitest 全绿
+- vite build OK
+
+### 用户验证
+
+刷新浏览器后再次发布模板 → 应显示成功（modal 关闭），且 wall 列表能看到新模板。
+
+### 关联
+
+- `web/src/components/template/SaveAsTemplateModal.vue`（onSave ack 取字段修正 + 注释根因）
+
+---
+
 ## 2026-05-21 · 第 6 次终极修：label click delegation 自动转发到"插入变量"按钮
 
 ### 症状
