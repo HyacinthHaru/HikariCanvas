@@ -159,6 +159,9 @@ let lastDollarBraceAnchor: HTMLElement | null = null;
  */
 let composing = false;
 
+/** 0.4.2 bugfix（Bug A）：Pinia store.$subscribe 返回的反订阅函数，onBeforeUnmount 调。 */
+const storeUnsubscribers: Array<() => void> = [];
+
 // ============================================================================
 // 初始化 / 销毁
 // ============================================================================
@@ -216,15 +219,24 @@ onMounted(() => {
     );
 
     // chip 事件代理（mount 时挂在 editable root，捕获冒泡上来的自定义事件）
-    editableRef.value.addEventListener(CHIP_EVENT_CLICK, onChipClick as EventListener);
+    // 0.4.2 bugfix（Bug 2 彻底版）：chip span 不再 dispatch CHIP_EVENT_CLICK，
+    // 但 listener 仍保留作 no-op（不破坏 ParentChild contract）；hover/leave 是 tooltip 必需。
     editableRef.value.addEventListener(CHIP_EVENT_HOVER, onChipHover as EventListener);
     editableRef.value.addEventListener(CHIP_EVENT_LEAVE, onChipLeave as EventListener);
     editableRef.value.addEventListener('keydown', onEditableKeydown);
     editableRef.value.addEventListener('blur', onEditableBlur);
-    // 0.4.2 bugfix（Bug 2 + Bug 3）：beforeinput 精确捕捉 `${ ` 触发；composition 守 IME 输入
-    editableRef.value.addEventListener('beforeinput', onBeforeInput as EventListener);
+    // 0.4.2 bugfix（Bug 3 保留）：composition 守 IME 输入；
+    // 0.4.2 bugfix（Bug 2 彻底版）：移除 beforeinput → ${} 自动触发 picker 路径——
+    // 用户只想 "插入变量" 按钮触发（外层 TextElementSection openPickerFromButton）。
     editableRef.value.addEventListener('compositionstart', onCompositionStart);
     editableRef.value.addEventListener('compositionend', onCompositionEnd);
+
+    // 0.4.2 bugfix（Bug A 重启后 chip 显变量名）：Pinia store $subscribe 监听 mutation 立即
+    // refresh chip 显示。原 watch(() => [store.variables, aliasStore.aliases]) 不可靠：
+    // Pinia setup store 内 ref.value=new Map(...) 替换在 mount 顺序复杂时浅 watch 不触发。
+    // $subscribe 是 Pinia 官方推荐的 mutation 订阅 API，100% 触发。
+    storeUnsubscribers.push(store.$subscribe(() => refreshAllChipDisplays()));
+    storeUnsubscribers.push(aliasStore.$subscribe(() => refreshAllChipDisplays()));
 
     // 首次刷 chip 显示
     refreshAllChipDisplays();
@@ -237,15 +249,18 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
     if (editableRef.value) {
-        editableRef.value.removeEventListener(CHIP_EVENT_CLICK, onChipClick as EventListener);
         editableRef.value.removeEventListener(CHIP_EVENT_HOVER, onChipHover as EventListener);
         editableRef.value.removeEventListener(CHIP_EVENT_LEAVE, onChipLeave as EventListener);
         editableRef.value.removeEventListener('keydown', onEditableKeydown);
         editableRef.value.removeEventListener('blur', onEditableBlur);
-        editableRef.value.removeEventListener('beforeinput', onBeforeInput as EventListener);
         editableRef.value.removeEventListener('compositionstart', onCompositionStart);
         editableRef.value.removeEventListener('compositionend', onCompositionEnd);
     }
+    // 反订阅 store
+    for (const unsub of storeUnsubscribers) {
+        try { unsub(); } catch { /* ignore */ }
+    }
+    storeUnsubscribers.length = 0;
 });
 
 onUnmounted(() => {

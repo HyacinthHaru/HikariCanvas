@@ -159,41 +159,16 @@ export class VariablePlaceholderNode extends DecoratorNode<null> {
         span.textContent = this.__rawName;
         // 阻止 chip 内的点击冒泡为 Lexical 的 selection 改变；编辑期间 chip 不应"吃掉"
         // caret 落位，让用户能在 chip 周围正常移动光标 + 输入文字。
-        // 0.4.2 bugfix（Bug 2 终极修）：chip 单击 **不弹 picker**——用户报 3 次"点击文本框
-        // 就跳转变量选择页"，根因是 P2 设计的 "click chip = 改绑定" 与用户编辑期望冲突
-        // （文字框内只有 chip 时，单击任何位置都点中 chip 直接弹 picker）。
-        // 改为 **双击 chip 才弹 picker**（与"双击编辑"惯例一致）；单击让 lexical 自然处理
-        // selection（caret 移到 chip 边缘），不打扰编辑。错误态 (chip-error) 的 create
-        // confirm 路径仍走 click（错误态需要快速 fix）。
+        // 0.4.2 bugfix（Bug 2 终极版）：彻底关闭 chip click / dblclick 触发 picker
+        // 的全部路径。用户原话："点击文本框，正常编辑内容；点击文本框右上角的「插入变量」，
+        // 才弹出变量选择功能"——picker 触发唯一路径 = "插入变量"按钮。
+        // chip click / dblclick / 错误态 click 全部移除；改绑定 / create confirm 由后续
+        // UI（VariablePanel / 专用按钮）承接，v1.x 再补。
         span.addEventListener('mousedown', (ev) => {
             ev.preventDefault();
         });
-        span.addEventListener('click', (ev) => {
-            // 错误态：单击仍弹 create confirm（外层 onChipClick 判 hc-chip-error 路由）
-            if (span.classList.contains('hc-chip-error')) {
-                ev.preventDefault();
-                ev.stopPropagation();
-                span.dispatchEvent(
-                    new CustomEvent(CHIP_EVENT_CLICK, {
-                        bubbles: true,
-                        detail: { rawName: this.__rawName, fallback: this.__fallback },
-                    }),
-                );
-                return;
-            }
-            // 正常 chip：单击什么都不做（不 preventDefault 让 lexical 处理 caret 落位）
-        });
-        span.addEventListener('dblclick', (ev) => {
-            // 双击 chip → 弹 picker 改绑定
-            ev.preventDefault();
-            ev.stopPropagation();
-            span.dispatchEvent(
-                new CustomEvent(CHIP_EVENT_CLICK, {
-                    bubbles: true,
-                    detail: { rawName: this.__rawName, fallback: this.__fallback },
-                }),
-            );
-        });
+        // 注意：CHIP_EVENT_CLICK 自定义事件常量仍保留供 hover / 未来扩展用，但 chip span
+        // 不再在任何场景 dispatch 它。外层 listener（onChipClick）仍可挂；只是不会被触发。
         span.addEventListener('mouseenter', () => {
             span.dispatchEvent(
                 new CustomEvent(CHIP_EVENT_HOVER, {

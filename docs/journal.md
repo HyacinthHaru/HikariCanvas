@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-05-21 · 彻底修：chip editor 仅按钮触发 picker + store $subscribe
+
+### 症状
+
+用户第 5 次报"点击文本框就跳 picker"。原话：**"点击文本框，正常编辑内容；点击文本框右上角
+的「插入变量」，才弹出变量选择功能"** — 暗示 picker 触发只允许唯一路径 = 按钮。
+
+同时报 Bug A：**服务器重启后 chip 显变量名**（而非 currentValue / alias），必须手动操作
+文本框才更新。
+
+### 真根因 A
+
+`watch(() => [store.variables, aliasStore.aliases])` **不可靠**：
+- Pinia setup store 内 `ref.value = new Map(...)` 替换
+- 在 chip editor mount 与 wsClient.handleReady → initVariables 时序复杂时
+- Vue 浅 watch 可能错过这次 ref 替换 → refreshAllChipDisplays 不调 → chip 文本停在 rawName
+
+### 真根因 B
+
+之前 5 次修复都假设 picker 弹出是"`${` 误触发"或"chip click"。但用户场景：
+- 文本框含 chip + chip 显示 alias "郑州火车站"（长字符占满文本框）
+- 单击任何位置都点中 chip → P2 设计的 click → editVariableRequest → 弹 picker
+- 即使把 click 改成 dblclick，浏览器 cache / lexical chip DOM 持久化（不重 mount 不重建 listener）导致旧 listener 长存
+
+### 修复
+
+**Bug A**：`watch` → `store.$subscribe(() => refreshAllChipDisplays())`（Pinia 推荐的
+mutation 订阅 API，100% 触发）；onBeforeUnmount 反订阅。
+
+**Bug B**：picker 触发**唯一路径** = "插入变量"按钮（外层 TextElementSection
+openPickerFromButton）。**关闭所有自动触发路径**：
+- chip span 不再 dispatch CHIP_EVENT_CLICK（单击 / 双击 / 错误态 都 noop）
+- 移除 `beforeinput` → `${` 自动触发（用户原话仅按钮）
+- 移除 chip editor 内 CHIP_EVENT_CLICK listener 注册（不再消费）
+- hover/leave 保留（tooltip 不影响 picker）
+- 错误态 chip 点击不再弹 create confirm（v1.x 用专用 UI 按钮承接）
+- chip 改绑定功能暂去（v1.x 加 chip 旁 ✏ 按钮承接；当前删除原 chip + 重插即可）
+
+### 兼容性
+
+- `CHIP_EVENT_CLICK` 常量 + onChipClick handler 函数仍保留（不再被触发但 API 不破坏）
+- 外层 TextElementSection 的 `@edit-variable-request` event 现在不会被 chip 触发，
+  但绑定保留无副作用
+
+### 验证
+
+- 159 vitest 全绿（无回归）
+- vite build 通过 / bundle 667 kB（持平）
+
+### 用户验证
+
+刷新浏览器后：
+1. 点击文本框任何位置（包括 chip 上）→ **绝不弹 picker**，能正常移动光标编辑文字
+2. 点击"插入变量"按钮 → 弹 picker（唯一触发）
+3. 服务器重启后 → wall 文本框 chip 立刻显当前值 / 别名（不再需手动触发）
+
+### 关联
+
+- `web/src/variable/lexicalChip.ts`（chip span click/dblclick 全删 dispatch）
+- `web/src/components/variables/VariableChipEditor.vue`（移除 CHIP_EVENT_CLICK listener + beforeinput；加 store.$subscribe）
+
+---
+
 ## 2026-05-21 · 终极修：chip 单击不弹 picker（改双击改绑定）
 
 ### 症状
