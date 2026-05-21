@@ -222,30 +222,47 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 
 **0.4.3 总 ~13h ≈ 3 天 wall-clock**。
 
-## 0.4.4 路线（铁路网络：线路 + 站点 + 班次，规划完成 2026-05-21 / 待开干）
+## 0.4.4 路线（铁路网络：线路 / 站点 / **车次** / 时刻表，规划完成 2026-05-21 / 待开干）
 
 **目标**：0.4.0 P3-L ManualScheduleProvider 是纯 per-wall，100 个地铁屏 = 100 套独立配置。
-0.4.4 引入完整铁路网络抽象：玩家先定义线路 + 站点 + 班次，wall 编辑器下拉**选线路 +
-选本站 + 选方向**自动绑定该站时刻，**改一处全服同步**。
+0.4.4 引入完整铁路网络抽象 + **真实地铁运营语义**：玩家定义线路 + 站点 + **车次（含
+服务类型 / 编组 / 区间 / 备注）** + **每站详细时刻表**，wall 编辑器下拉**选线路 + 本站 +
+方向**自动绑定该站时刻，**改一处全服同步**。wall 上展示真实地铁屏标准信息：
+"A01 次 → 郑州东（6 节 大站快车）ETA 02:30"。
 
 **详细设计**：`docs/dynamic-data.md §18`（**实施前必读**）。
 
-**新表（V016 migration，4 个）**：`rail_lines` + `rail_stations` + `rail_runs` + `wall_rail_bindings`
+**已锁定 3 决策**（2026-05-21 用户确认）：
+1. **加车次概念**——含 run_number + service_type + cars + start/end_station + notes 全语义
+2. **timetable 自动生成 + 逐站调整**——创建车次时弹对话框（首站时间 + 站间秒 + 跳站集合 → 生成 rows）
+3. **service_type 4 内置 + custom 字符串兜底**——local/express/section/limited + 任意自定义
 
-**新 Provider**：`RailScheduleProvider` 接替 / 补充 `ManualScheduleProvider`，按 line+station+direction
-自动算 ETA（不删旧 ManualSchedule — `wall_rail_bindings.line_id IS NULL` 时 fallback 走旧路径）。
+**新表（V016 migration，5 个）**：
+- `rail_lines`（线路 + code + color + owner）
+- `rail_stations`（站点 + code + sort_order + is_terminus）
+- `rail_runs`（车次 + run_number + service_type + cars + start/end + notes）
+- **`rail_timetable`**（每车次每站精确到秒的到 / 发时间 + stops_here）
+- `wall_rail_bindings`（wall → line+station+direction）
 
-**新 9 WS op**：rail.line.{create,update,delete} + rail.station.{add,update,delete} + rail.run.{add,delete} + rail.wall.bind
+**新 Provider**：`RailScheduleProvider` 接替 / 补充 `ManualScheduleProvider`。从 timetable 精确查站时刻
+（非估算）。`wall_rail_bindings.line_id IS NULL` 时 fallback 旧路径。
 
-**6 个 phase（共 ~45h）**：
-- **P1（8h）** V016 4 表 migration + 4 DAO + record
-- **P2（10h）** RailScheduleProvider 计算 + 接替 ManualSchedule（保留 fallback）
-- **P3（6h）** 9 WS op + 5 个 `canvas.rail.*` 权限节点 + RailOpDispatcher + AuditLog
-- **P4（12h）** 前端铁路网络管理 modal（线路 / 站点 / 班次 CRUD + 拖动排序）
-- **P5（6h）** Schedule Manager modal 加铁路绑定段 + i18n + 单测 + docs
-- **P6（3h）** 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push
+**新暴露变量**（地铁屏语义）：
+- 兼容 0.4.0 `next_departure / next_terminus / eta_*`
+- 新增 `next_run_number / next_service_type / next_service_type_text / next_cars / next_notes / next_arrival`
+- next2 系列同样
 
-**0.4.4 总 ~45h ≈ 1-2 周 wall-clock**。
+**新 11 WS op**：rail.line.{create,update,delete} + rail.station.{add,update,delete} + rail.run.{create,update,delete} + rail.run.timetable.set + rail.wall.bind
+
+**6 个 phase（共 ~60h）**：
+- **P1（12h）** V016 5 表 + 5 DAO + record + Auto-generator helper（首站时间 + 站间秒 + 跳站集合 → timetable rows）
+- **P2（10h）** RailScheduleProvider 计算（按 timetable 精确查 + ManualSchedule fallback）
+- **P3（8h）** 11 WS op + 6 个 `canvas.rail.*` 权限节点 + RailOpDispatcher + AuditLog
+- **P4（16h）** 前端铁路网络管理 modal（线路 + 站点 + **车次** + 时刻表 + 自动生成对话框 + 拖动排序）
+- **P5（8h）** Schedule Manager modal 加铁路绑定段 + 车次语义变量预览 + i18n + 单测 + docs
+- **P6（6h）** 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push
+
+**0.4.4 总 ~60h ≈ 1.5-2.5 周 wall-clock**。
 
 ## 0.4.x 路线图速览（2026-05-21）
 
@@ -255,7 +272,7 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 | 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
 | 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
 | **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | 📋 规划完成 |
-| **0.4.4** | **铁路网络**（线路 + 站点 + 班次） | **45h** | 📋 规划完成 |
+| **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型） | **60h** | 📋 规划完成 |
 | 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
 | 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
 

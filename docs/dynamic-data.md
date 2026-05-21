@@ -943,53 +943,83 @@ wall-clock 估 **~3 天**（按 0.4.x 节奏 agent 并行 / 串干）。
 
 ---
 
-## 18. 0.4.4 铁路网络（线路 + 站点 + 班次）（规划，2026-05-21 定稿）
+## 18. 0.4.4 铁路网络（线路 / 站点 / 车次 / 时刻表）（规划，2026-05-21 定稿）
 
 ### 18.1 背景
 
 0.4.0 P3-L 的 ManualScheduleProvider 是**纯 per-wall**：每个 wall 独立配自己的时刻表，
 100 个地铁屏 = 100 套独立配置。无法共享"1 号线"概念。
 
-0.4.4 引入完整铁路网络抽象：玩家先定义线路 + 站点 + 班次，wall 编辑器内通过下拉
-**选线路 + 选本站 + 选方向** 自动绑定该站对应时刻，**改一处全服同步**。
+0.4.4 引入完整铁路网络抽象 + **真实地铁系统语义**：
+- 线路 / 站点 / **车次（含服务类型 / 编组 / 区间 / 备注）** / **每站详细时刻表**
+- wall 编辑器内下拉选**线路 + 本站 + 方向**自动绑定该站时刻，**改一处全服同步**
+- wall 上可展示"A01 次 → 郑州东（6 节 大站快车）"完整运营语义
 
-### 18.2 数据模型
-
-新表（V016 migration）：
+### 18.2 数据模型（5 表，V016 migration）
 
 ```sql
--- 线路（"1 号线" / "2 号线"）
+-- 线路（如 "1 号线" / "2 号线"）
 CREATE TABLE rail_lines (
-    id TEXT PRIMARY KEY,              -- 玩家可见 line_id，如 "line1" 或 UUID
-    name TEXT NOT NULL,               -- 显示名 "1 号线"
-    color TEXT,                       -- "#FF0000" 线路色（UI 主题）
+    id TEXT PRIMARY KEY,              -- "line1" 或 UUID
+    name TEXT NOT NULL,               -- "1 号线"
+    code TEXT,                        -- "L1" 短代号（可选）
+    color TEXT,                       -- "#FF0000" 线路主题色
     owner_uuid TEXT NOT NULL,
     owner_name TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
--- 站点（每线一组车站，有顺序）
+-- 站点（线路上的物理车站，有顺序）
 CREATE TABLE rail_stations (
     id TEXT PRIMARY KEY,
     line_id TEXT NOT NULL,
     name TEXT NOT NULL,               -- "郑州火车站"
-    sort_order INTEGER NOT NULL,      -- 0-indexed
-    dwell_seconds INTEGER NOT NULL DEFAULT 30,  -- 停靠秒数
+    code TEXT,                        -- "ZHF" 短代号（可选）
+    sort_order INTEGER NOT NULL,      -- 0..N 在线路上的顺序
+    is_terminus INTEGER NOT NULL DEFAULT 0,  -- 1 = 物理终点（首/末站）
     created_at INTEGER NOT NULL,
     FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE CASCADE
 );
+CREATE INDEX idx_rail_stations_line ON rail_stations(line_id);
 
--- 班次（一次行驶；含发车时间 + 方向）
+-- ★车次（一趟具体的车，含运营语义元数据）
 CREATE TABLE rail_runs (
     id TEXT PRIMARY KEY,
     line_id TEXT NOT NULL,
+    run_number TEXT NOT NULL,         -- "A01" / "B02" 车次号（同线唯一）
     direction TEXT NOT NULL,          -- "up" (sort_order 递增) / "down" (递减)
-    departure_time TEXT NOT NULL,     -- HH:mm:ss 从首站发车时间
-    travel_seconds INTEGER NOT NULL DEFAULT 90,  -- 两站间默认行驶秒数（站间相同）
+    service_type TEXT NOT NULL DEFAULT 'local',  -- 4 内置 + 自定义字符串：
+                                                  --   local（站站停）
+                                                  --   express（大站快车）
+                                                  --   section（区间车）
+                                                  --   limited（特快）
+                                                  --   <custom>（admin/owner 自定义）
+    cars INTEGER,                     -- 编组节数（如 6 / 8 / null=未指定）
+    start_station_id TEXT,            -- 起始站（区间车非首站；null = 线路首站）
+    end_station_id TEXT,              -- 终点站（区间车非末站；null = 线路末站）
+    notes TEXT,                       -- "末班车" / "节假日加开" 等备注（可空）
     created_at INTEGER NOT NULL,
-    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE CASCADE
+    updated_at INTEGER NOT NULL,
+    UNIQUE (line_id, run_number),
+    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE CASCADE,
+    FOREIGN KEY (start_station_id) REFERENCES rail_stations(id) ON DELETE SET NULL,
+    FOREIGN KEY (end_station_id) REFERENCES rail_stations(id) ON DELETE SET NULL
 );
+
+-- ★车次时刻表（每车次到每站的到/发时间明细，精确到秒）
+CREATE TABLE rail_timetable (
+    run_id TEXT NOT NULL,
+    station_id TEXT NOT NULL,
+    arrival_time TEXT,                -- HH:mm:ss 到站时间（首站可空）
+    departure_time TEXT,              -- HH:mm:ss 发车时间（末站可空）
+    stops_here INTEGER NOT NULL DEFAULT 1,  -- 0 = 大站快车跳过此站
+    PRIMARY KEY (run_id, station_id),
+    FOREIGN KEY (run_id) REFERENCES rail_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY (station_id) REFERENCES rail_stations(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_rail_timetable_run ON rail_timetable(run_id);
+CREATE INDEX idx_rail_timetable_station ON rail_timetable(station_id);
 
 -- wall 绑定到某线某站某方向
 CREATE TABLE wall_rail_bindings (
@@ -1006,98 +1036,175 @@ CREATE TABLE wall_rail_bindings (
 
 ### 18.3 计算逻辑
 
-`RailScheduleProvider`（接替或补充 `ManualScheduleProvider`）：
+`RailScheduleProvider`（接替 / 补充 `ManualScheduleProvider`）：
 
-对每个绑定的 wall（wall_rail_bindings 含 line + station + direction），从 `rail_runs` 找该线
-所有班次 → 算每班车到达本站的时间：
+对每个绑定的 wall（wall_rail_bindings 含 line + station + direction）：
+1. 查 `rail_timetable WHERE station_id = ? AND stops_here = 1`，按 arrival_time 排序
+2. 取前两班 ≥ 当前时刻（or 过零点回首班）
+3. JOIN `rail_runs` 拿 run_number / service_type / cars / end_station_id / notes
+4. JOIN `rail_stations` 拿 terminus name
+5. 暴露到 `schedule:<wallId>/*` 变量（兼容 0.4.0 schedule namespace）
+
+**关键**：每站时刻**精确从 rail_timetable 读**，不再走"travel_seconds 均匀推算"。
+这样支持站间不均匀（如长区间 vs 短区间）+ 大站快车跳站 + 区间车不到全线。
+
+### 18.4 暴露变量（含车次语义）
+
+兼容 0.4.0 已有的 `next_*` / `next2_*` 字段，新增车次语义字段：
+
+| 变量 | 例子 | 备注 |
+|---|---|---|
+| `schedule:<wallId>/next_run_number` | "A01" | 车次号 |
+| `schedule:<wallId>/next_service_type` | "express" / "local" / "section" | 服务类型枚举值 |
+| `schedule:<wallId>/next_service_type_text` | "大站快车" / "站站停" | i18n 友好显示文本（按 owner locale） |
+| `schedule:<wallId>/next_cars` | "6" / "" | 编组（null → 空字符串） |
+| `schedule:<wallId>/next_terminus` | "郑州东" | 终点站名（区间车显示中间终点） |
+| `schedule:<wallId>/next_notes` | "末班车" / "" | 备注（null → 空字符串） |
+| `schedule:<wallId>/next_arrival` | "06:02:30" | 该站精确到达时刻（从 timetable 读，非估算） |
+| `schedule:<wallId>/next_departure` | "06:03:00" | 该站精确发车时刻（兼容 0.4.0 含义微调）|
+| `schedule:<wallId>/next_eta_*` | 同 0.4.0 | 兼容旧 wall 引用 |
+| `next2_*` 同上 | 第二班 |
+| 旧 `is_arriving / arrival_status / precision` | 保留 | 兼容 |
+
+wall 文本示例：
+```
+下一班 ${var:schedule.next_run_number} 次 → ${var:schedule.next_terminus}
+（${var:schedule.next_cars} 节 ${var:schedule.next_service_type_text}）
+ETA ${var:schedule.next_eta_mmss}
+${var:schedule.next_notes}
+```
+
+### 18.5 UI
+
+#### 新 modal：铁路网络管理（TopBar 火车图标二级菜单）
 
 ```
-arrival_at_station = run.departure_time
-                   + (target_station_sort_order - first_station_sort_order)
-                     × (run.travel_seconds + station.dwell_seconds)
+┌─ 铁路网络 ──────────────────────────────────────────┐
+│ ▼ 线路列表                                            │
+│   ├ 1 号线（红色 L1）[✏][🗑][+ 站点][+ 车次]            │
+│   │  站点：                                          │
+│   │  ├ 郑州火车站 (ZHF, sort=0, 终点)                 │
+│   │  ├ 二七广场 (EQ, sort=1)                          │
+│   │  └ ...                                           │
+│   │  车次：                                          │
+│   │  ├ A01 ◊ up ◊ 大站快车 ◊ 6 节 [✏][🗑]            │
+│   │  ├ A02 ◊ up ◊ 站站停 ◊ 8 节                       │
+│   │  └ B01 ◊ down ◊ 区间车 (郑州→紫荆)                │
+│   └ 2 号线（蓝色 L2）                                 │
+└──────────────────────────────────────────────────────┘
 ```
 
-然后取前两班 ≥ 当前时刻 → 暴露 `schedule:<wallId>/next_departure` 等（兼容 0.4.0 schedule namespace）。
-
-### 18.4 UI
-
-#### 新 modal：铁路网络管理（TopBar 火车图标改两层）
+#### 车次详情编辑（modal 内子页 / inline 展开）
 
 ```
-┌─ 铁路网络 ────────────────────────────┐
-│ ▼ 线路列表                             │
-│   ├ 1 号线（红色）[✏][🗑]                │
-│   │  ├ 郑州火车站（sort=0，停 30s）       │
-│   │  ├ 二七广场（sort=1）                │
-│   │  └ ...                              │
-│   └ 2 号线（蓝色）                       │
-│                                         │
-│ ▼ 班次列表（按线分组）                    │
-│   1 号线 up 方向：                        │
-│   ├ 06:00:00（90s/站）                   │
-│   ├ 06:05:00                            │
-│   └ ...                                 │
-└─────────────────────────────────────────┘
+车次 A01 ◊ 1 号线 ◊ up 方向
+├ [服务类型 ▼]  大站快车 (express)        ← 4 内置 + admin/owner 自定义
+├ [编组]        6 节
+├ [区间起点]    郑州火车站 ▼              ← null = 线路首站（默认）
+├ [区间终点]    紫荆山 ▼                  ← null = 线路末站
+├ [备注]        末班车
+│
+└ 时刻表（按 station sort_order）：
+    郑州火车站   ── / 06:00:00 (发)        ← 首站无到达
+    二七广场     06:02:30 / 06:03:00
+    紫荆山       [☐ stops_here]            ← 大站快车跳站（uncheck）
+    民航路       06:08:00 / 06:08:30
+    郑州东       06:15:00 / ──    (到)    ← 末站（区间终点）
 ```
+
+**创建车次时弹"自动生成对话框"**（用户已决策）：
+- [首站发车时间] 06:00:00
+- [站间均匀时长] 90 秒
+- [停靠时长] 30 秒
+- [跳过站点] [☐][☐][☑][☐][☐] 勾选大站快车跳过的站
+- [区间起 / 止] 起 / 止站选择
+- → 生成所有 timetable rows，**预览后可逐站调整**
 
 #### Schedule Manager modal 改造（保持现状 + 加铁路绑定）
 
 顶部加 **"铁路网络绑定"** 段：
+- ☐ 启用铁路网络模式
 - [线路] 1 号线 ▼
 - [本站] 郑州火车站 ▼
 - [方向] up / down / both
-- ✓ 启用铁路网络模式（绑定后下方 entries 不可编辑，自动从 rail_runs 计算）
-- ✗ 关闭铁路模式 → 走 0.4.0 ManualSchedule
+- 启用后下方 entries 灰显（自动从 timetable 计算）；关闭则走 0.4.0 ManualSchedule
 
-### 18.5 ACL / 权限节点
+### 18.6 ACL / 权限节点
 
 - `canvas.rail.line.create` (default: true) — 任何玩家可建线路
 - `canvas.rail.line.edit.own` (default: true) — owner 可改
 - `canvas.rail.line.edit.any` (default: op) — admin
 - `canvas.rail.line.delete.own / .any` (default: true / op)
-- `canvas.rail.wall.bind` (default: true) — 绑定 wall 到自己 wall 的权限（wall 自身鉴权同 schedule）
+- `canvas.rail.run.edit.own / .any`  — 车次同款 ACL（继承线路 owner）
+- `canvas.rail.wall.bind` (default: true) — wall 绑定（wall 自身鉴权同 schedule）
 
-### 18.6 WS 协议（新 9 个 op）
+### 18.7 WS 协议（新 11 个 op）
 
 ```
-rail.line.create      { name, color }
-rail.line.update      { lineId, name?, color? }
-rail.line.delete      { lineId }
-rail.station.add      { lineId, name, sortOrder, dwellSeconds }
-rail.station.update   { stationId, ... }
-rail.station.delete   { stationId }
-rail.run.add          { lineId, direction, departureTime, travelSeconds }
-rail.run.delete       { runId }
-rail.wall.bind        { wallId, lineId?, stationId?, direction }
+rail.line.create        { name, code?, color? }
+rail.line.update        { lineId, name?, code?, color? }
+rail.line.delete        { lineId }
+
+rail.station.add        { lineId, name, code?, sortOrder, isTerminus? }
+rail.station.update     { stationId, name?, code?, sortOrder?, isTerminus? }
+rail.station.delete     { stationId }
+
+rail.run.create         { lineId, runNumber, direction, serviceType, cars?,
+                          startStationId?, endStationId?, notes?,
+                          generateOptions?: { firstDeparture, travelSeconds,
+                                              dwellSeconds, skipStationIds? } }
+                          ← generateOptions 非空 = 自动生成 timetable
+rail.run.update         { runId, runNumber?, serviceType?, cars?, ... }
+rail.run.delete         { runId }
+rail.run.timetable.set  { runId, entries: [{ stationId, arrival?, departure?, stopsHere }] }
+                          ← 批量更新该车次的所有 timetable rows
+
+rail.wall.bind          { wallId, lineId?, stationId?, direction }
 ```
 
-### 18.7 实施 Phase（~45h）
+### 18.8 实施 Phase（~60h）
 
 | Phase | 范围 | 工时 |
 |---|---|---:|
-| **P1** | V016 4 表 migration + DAO（LineDao / StationDao / RunDao / BindingDao）+ record | 8h |
-| **P2** | RailScheduleProvider 计算 + 接替 ManualSchedule（保留 fallback） | 10h |
-| **P3** | 9 个 WS op + 权限节点 + RailOpDispatcher + AuditLog | 6h |
-| **P4** | 前端铁路网络管理 modal（线路 / 站点 / 班次 CRUD + 拖动排序） | 12h |
-| **P5** | Schedule Manager modal 加铁路绑定段 + i18n + 单测 + docs | 6h |
-| **P6** | 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push | 3h |
-| **总** | 单 milestone 多 commit | **45h** |
+| **P1** | V016 5 表 migration + 5 DAO（LineDao / StationDao / RunDao / TimetableDao / BindingDao）+ record + Auto-generator helper（首站时间 + 站间秒 + 跳站集合 → timetable rows） | 12h |
+| **P2** | RailScheduleProvider 计算（按 timetable 精确查 + 兼容旧 ManualSchedule fallback） | 10h |
+| **P3** | 11 个 WS op + 6 个 `canvas.rail.*` 权限节点 + RailOpDispatcher + AuditLog | 8h |
+| **P4** | 前端铁路网络管理 modal（线路 + 站点 + 车次 + 时刻表 + 自动生成对话框 + 拖动排序） | 16h |
+| **P5** | Schedule Manager modal 加铁路绑定段 + 车次语义变量预览 + i18n + 单测 + docs | 8h |
+| **P6** | 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push | 6h |
+| **总** | 单 milestone 多 commit | **60h** |
 
-wall-clock 估 **~1-2 周**。
+wall-clock 估 **~1.5-2.5 周**。
 
-### 18.8 兼容性
+### 18.9 兼容性
 
-0.4.0 ManualScheduleProvider **不删**——`wall_rail_bindings.line_id IS NULL` 的 wall 仍走旧路径
-（玩家不强制升级到铁路网络模式）。
+- 0.4.0 ManualScheduleProvider **不删**——`wall_rail_bindings.line_id IS NULL` 的 wall 仍走旧路径
+- 旧 `schedule:<wallId>/next_departure` 等变量**保留**——RailScheduleProvider 也会写这些 key
+  让既有 wall 文本不需要改写
+- 新增 `next_run_number / next_service_type / next_cars / next_terminus / next_notes` 等**追加**变量
 
-### 18.9 单测覆盖
+### 18.10 服务类型 i18n
 
-- Line / Station / Run DAO 各 5+ case（CRUD + FK CASCADE + 排序）
-- RailScheduleProvider 计算（按时刻 + 按方向 + 站间累加 + 过零点）
-- RailOpDispatcher 9 op + 权限拒
-- 前端 RailNetworkManagerModal vitest 关键交互
+`service_type` 字段存内部 enum 值（local / express / section / limited 或 custom 字符串）。
+`next_service_type_text` 变量按 owner locale 查 i18n：
 
-至少 35 个新 case。
+| enum | 中文 | English |
+|---|---|---|
+| local | 站站停 | Local |
+| express | 大站快车 | Express |
+| section | 区间车 | Section |
+| limited | 特快 | Limited |
+| `<custom>` | 原样输出 | as-is |
+
+### 18.11 单测覆盖
+
+- 5 DAO 各 5+ case（CRUD + FK CASCADE + 排序）
+- Auto-generator 8+ case（首末站时间 / 跳站 / 区间车起止 / 边界）
+- RailScheduleProvider 计算 10+ case（按时刻 + 方向 + 大站快车跳站 + 区间车 + 过零点）
+- RailOpDispatcher 11 op + 权限拒 + 自动生成路径
+- 前端 RailNetworkManagerModal vitest 关键交互（线路 CRUD / 车次创建 + 时刻表编辑）
+
+至少 50 个新 case。
 
 ---
 
@@ -1109,6 +1216,6 @@ wall-clock 估 **~1-2 周**。
 | 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
 | 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
 | **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | 📋 规划完成 |
-| **0.4.4** | **铁路网络**（线路 + 站点 + 班次） | **45h** | 📋 规划完成 |
+| **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型）| **60h** | 📋 规划完成 |
 | 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
 | 0.6.0+ | Blockly 块脚本 | 200h | 远期 |

@@ -5,6 +5,67 @@
 
 ---
 
+## 2026-05-21 · 0.4.4 铁路网络扩展：加车次 / 服务类型 / 编组 / 时刻表（规划升级，未实施）
+
+### 背景
+
+之前（同日上午）的 0.4.4 §18 设计**过于简化**——`rail_runs` 只有
+`first_departure_time + travel_seconds`，假设站间均匀。用户提出加车次概念：
+- A01 / B02 车次号
+- 服务类型（local / express / section / limited）
+- 编组节数（6 / 8 节）
+- 区间车的 start/end_station
+- 每站精确到秒的到 / 发时间
+
+这是真实地铁系统的核心模型。原设计只能算 ETA，**没有车次 / 编组 / 服务类型语义**，
+wall 显示等于 1990 年代铁路屏。
+
+### 3 决策
+
+1. **加车次完整语义**（推荐采纳）—— rail_runs 加 5 字段 + 新表 rail_timetable + 6 个新变量
+2. **timetable 自动生成 + 逐站调整**——创建车次弹对话框（首站时间 + 站间秒 + 跳站集合 → 生成 rows）
+3. **service_type 4 内置 + 自定义字符串兜底**——local/express/section/limited + 任意 String
+
+### 数据模型升级
+
+| 表 | 老 §18 | 新 §18 |
+|---|---|---|
+| rail_lines | id+name+color | + code 短代号 |
+| rail_stations | id+line+name+sort_order+dwell | + code, is_terminus |
+| rail_runs | line+direction+departure+travel_sec | **+ run_number + service_type + cars + start/end_station_id + notes** |
+| **rail_timetable**（新） | — | **run_id + station_id + arrival + departure + stops_here** |
+| wall_rail_bindings | wall+line+station+direction | 不变 |
+
+5 表（原 4 表）。
+
+### 暴露变量升级
+
+新增 6 个车次语义变量：
+- `next_run_number` / `next_service_type` / `next_service_type_text`（i18n 友好）
+- `next_cars` / `next_terminus` / `next_notes` / `next_arrival`（精确到站时刻）
+- next2 系列同样
+
+兼容 0.4.0 已有 `next_departure / next_eta_*` 等。
+
+### 工时
+
+| 老 §18 | 新 §18 |
+|---:|---:|
+| ~45h | **~60h**（+15h，+33%）|
+
+P1: 8h → 12h（加 timetable DAO + Auto-generator）
+P3: 6h → 8h（WS op 从 9 → 11，加 timetable.set / run.update）
+P4: 12h → 16h（车次时刻表 inline 编辑 UI + 自动生成对话框）
+P5: 6h → 8h（i18n service_type_text + 单测扩展）
+P6: 3h → 6h（更多测试用例）
+
+### 关联文件
+
+- `docs/dynamic-data.md §18` 完全重写（11 子节）+ §19 速览表 60h 数字更新
+- `CLAUDE.md` 0.4.4 路线段重写 + 0.4.x 速览表 60h 更新
+
+---
+
 ## 2026-05-21 · 0.4.3 全局变量 + 0.4.4 铁路网络路线图定稿（规划，未实施）
 
 ### 0.4.3 全局用户变量（~13h）
