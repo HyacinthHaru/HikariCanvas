@@ -111,6 +111,9 @@ public final class HikariCanvas extends JavaPlugin {
     // 0.4.2：变量别名 DAO（per-wall fullName → alias 字符串映射）。WebServer 注入 dispatcher
     // + ready payload；不参与渲染。
     private moe.hikari.canvas.storage.VariableAliasDao variableAliasDao;
+    // 0.4.3：全局用户变量 DAO（userglobal/* namespace；name 全服唯一）。装配后注入
+    // VariableStore.configureUserGlobal —— EditSession.createGlobalVariable 路径走它持久化。
+    private moe.hikari.canvas.storage.UserGlobalVariableDao userGlobalVariableDao;
     // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
     // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -286,7 +289,15 @@ public final class HikariCanvas extends JavaPlugin {
                     }
                 });
         variableStore.loadFromDb();
-        getLogger().info("VariableStore: " + variableStore.size() + " user variable(s) loaded");
+        // 0.4.3 P1：全局用户变量 DAO + 配额装配。配额段在 config.yml `dynamic.variables.*`
+        // （P5 接入；这里先用默认值），加载持久化的 userglobal/* 变量到内存。
+        userGlobalVariableDao = new moe.hikari.canvas.storage.UserGlobalVariableDao(
+                getLogger(), database.jdbi());
+        variableStore.configureUserGlobal(userGlobalVariableDao,
+                config.userGlobalMaxPerOwner, config.userGlobalMaxTotal);
+        variableStore.loadGlobalsFromDb();
+        getLogger().info("VariableStore: " + variableStore.size()
+                + " variable(s) loaded (user + userglobal)");
         // 0.4.0-P1-C：Compositor 接入变量替换 + 倒排索引联动。注入在 store 创建之后即生效；
         // 此时 WallRestorer 已用旧 compositor 完成启动期 restore（restore 时占位符还没机会被注册），
         // 后续 CanvasProjector / 预览路径走有 interpolator 的渲染。注入幂等，volatile 多线程可见。
@@ -466,9 +477,22 @@ public final class HikariCanvas extends JavaPlugin {
                     }
                 };
         final SessionManager sessionManagerRef = this.sessionManager;
-        variableStore.registerChangeListener(event ->
-                sessionManagerRef.broadcastVariableChangeToWall(event, varPushCallback));
-        getLogger().info("VariableStore.ChangeListener registered (Provider→frontend mirror)");
+        // 0.4.3：让 SessionManager.variableToMap 能查 userglobal owner 信息（注入到 state.patch 的
+        // value），patch 收到端就能区分"我的全局 / 其他全局"。
+        sessionManagerRef.setVariableStoreRef(variableStore);
+        variableStore.registerChangeListener(event -> {
+            // 0.4.3：路由按 fullName 前缀 — userglobal/* 全 session 广播；其他走 per-wall 路由
+            String fullName = event.fullName();
+            boolean isGlobal = fullName != null
+                    && fullName.startsWith(VariableStore.USER_GLOBAL_NAMESPACE + "/");
+            if (isGlobal) {
+                sessionManagerRef.broadcastVariableChangeToAll(event, varPushCallback);
+            } else {
+                sessionManagerRef.broadcastVariableChangeToWall(event, varPushCallback);
+            }
+        });
+        getLogger().info("VariableStore.ChangeListener registered (Provider→frontend mirror, "
+                + "userglobal broadcasts to all sessions)");
 
         // 0.4.0 方案 B 自适应渲染：第二条 ChangeListener。任意变量 mutation 或 wall 引用集合变化都
         // 重新评估"该 wall 是否含高频变量"→ 给绑定该 wall 的所有 session 在 ProjectionThrottler

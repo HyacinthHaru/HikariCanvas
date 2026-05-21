@@ -877,7 +877,8 @@ public final class WebServer {
             java.util.List<moe.hikari.canvas.variable.VariableDto> dtos =
                     new java.util.ArrayList<>(vars.size());
             for (moe.hikari.canvas.variable.Variable v : vars) {
-                dtos.add(moe.hikari.canvas.variable.VariableDto.from(v));
+                // 0.4.3：注入 userglobal owner 信息供前端 Picker / Panel 区分"我的全局 / 其他全局"
+                dtos.add(moe.hikari.canvas.variable.VariableDto.from(v, variableStore));
             }
             payload.put("variables", dtos);
         } else {

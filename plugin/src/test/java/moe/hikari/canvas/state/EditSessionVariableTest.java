@@ -1,5 +1,6 @@
 package moe.hikari.canvas.state;
 
+import moe.hikari.canvas.storage.UserGlobalVariableDao;
 import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.variable.VarType;
 import moe.hikari.canvas.variable.Variable;
@@ -9,8 +10,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -306,6 +311,90 @@ class EditSessionVariableTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  0.4.3 全局用户变量路径
+    // ──────────────────────────────────────────────────────────
+
+    private static final UUID ALICE = UUID.fromString("11111111-1111-1111-1111-111111111111");
+
+    @Test
+    void createGlobalVariable_ok() {
+        FakeGlobalDao globalDao = new FakeGlobalDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+
+        EditSession.OpResult result = es.createGlobalVariable(store, ALICE, "Alice",
+                "red_score", VarType.NUMBER, "0");
+        EditSession.OpResult.Ok ok = assertInstanceOf(EditSession.OpResult.Ok.class, result);
+
+        Variable v = store.get("userglobal/red_score").orElseThrow();
+        assertEquals("userglobal", v.namespace());
+        assertEquals("red_score", v.key());
+        assertEquals(VarType.NUMBER, v.type());
+        // patch 形态：add /variables/userglobal~1red_score
+        assertEquals(1, ok.patch().ops().size());
+        assertEquals("add", ok.patch().ops().get(0).op());
+        assertEquals("/variables/userglobal~1red_score", ok.patch().ops().get(0).path());
+        // patch value 含 owner 信息
+        Object value = ok.patch().ops().get(0).value();
+        assertNotNull(value);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> m = (Map<String, Object>) value;
+        assertEquals(ALICE.toString(), m.get("ownerUuid"));
+        assertEquals("Alice", m.get("ownerName"));
+    }
+
+    @Test
+    void createGlobalVariable_nullOwnerUuid_returnsForbidden() {
+        FakeGlobalDao globalDao = new FakeGlobalDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        EditSession.OpResult result = es.createGlobalVariable(store, null, "Alice",
+                "red", VarType.STRING, null);
+        EditSession.OpResult.Error err = assertInstanceOf(EditSession.OpResult.Error.class, result);
+        assertEquals("FORBIDDEN", err.code());
+    }
+
+    @Test
+    void updateGlobalVariable_nonGlobalFullName_returnsNamespaceDenied() {
+        // 防越权：updateGlobalVariable 拒绝非 userglobal fullName
+        FakeGlobalDao globalDao = new FakeGlobalDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        // 创建一个 user 变量（per-wall），再用 updateGlobalVariable 越权改它
+        es.createVariable(store, WALL, "a", VarType.STRING, null);
+        EditSession.OpResult result = es.updateGlobalVariable(store,
+                "user:" + WALL + "/a",
+                new VariablePatch(VarType.NUMBER, null));
+        EditSession.OpResult.Error err = assertInstanceOf(EditSession.OpResult.Error.class, result);
+        assertEquals("VARIABLE_NAMESPACE_DENIED", err.code());
+    }
+
+    @Test
+    void setGlobalVariableValue_ok() {
+        FakeGlobalDao globalDao = new FakeGlobalDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        es.createGlobalVariable(store, ALICE, "Alice", "score", VarType.NUMBER, "0");
+
+        EditSession.OpResult result = es.setGlobalVariableValue(store,
+                "userglobal/score", "42");
+        EditSession.OpResult.Ok ok = assertInstanceOf(EditSession.OpResult.Ok.class, result);
+        // patch 形态：replace /variables/userglobal~1score/currentValue
+        assertEquals("replace", ok.patch().ops().get(0).op());
+        assertEquals("/variables/userglobal~1score/currentValue", ok.patch().ops().get(0).path());
+        assertEquals("42", ok.patch().ops().get(0).value());
+    }
+
+    @Test
+    void deleteGlobalVariable_ok() {
+        FakeGlobalDao globalDao = new FakeGlobalDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        es.createGlobalVariable(store, ALICE, "Alice", "score", VarType.STRING, null);
+
+        EditSession.OpResult result = es.deleteGlobalVariable(store, "userglobal/score");
+        EditSession.OpResult.Ok ok = assertInstanceOf(EditSession.OpResult.Ok.class, result);
+        assertEquals("remove", ok.patch().ops().get(0).op());
+        assertEquals("/variables/userglobal~1score", ok.patch().ops().get(0).path());
+        assertFalse(store.get("userglobal/score").isPresent());
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Fake DAO（同 VariableStoreTest 配方，避免共享 helper 文件）
     // ──────────────────────────────────────────────────────────
 
@@ -333,6 +422,55 @@ class EditSessionVariableTest {
         @Override
         public void delete(String wallId, String name) {
             deletes.add(new DeleteCall(wallId, name));
+        }
+
+        @Override
+        public List<Row> loadAll() {
+            return new ArrayList<>();
+        }
+    }
+
+    /** 0.4.3：UserGlobalVariableDao 内存 fake；最小够测试用。 */
+    private static final class FakeGlobalDao extends UserGlobalVariableDao {
+        final List<String> upsertedNames = new ArrayList<>();
+        final Set<String> deletedNames = new HashSet<>();
+        final Map<String, UUID> owners = new LinkedHashMap<>();
+
+        FakeGlobalDao() {
+            super(Logger.getLogger("test"), null);
+        }
+
+        @Override
+        public void upsert(String name, UUID ownerUuid, String ownerName, VarType type,
+                           String defaultValue, String currentValue, String boundTo,
+                           long createdAt, long updatedAt) {
+            upsertedNames.add(name);
+            owners.put(name, ownerUuid);
+            deletedNames.remove(name);
+        }
+
+        @Override
+        public void delete(String name) {
+            deletedNames.add(name);
+        }
+
+        @Override
+        public int countByOwner(UUID ownerUuid) {
+            int n = 0;
+            for (var e : owners.entrySet()) {
+                if (deletedNames.contains(e.getKey())) continue;
+                if (e.getValue().equals(ownerUuid)) n++;
+            }
+            return n;
+        }
+
+        @Override
+        public int countTotal() {
+            int n = 0;
+            for (String name : owners.keySet()) {
+                if (!deletedNames.contains(name)) n++;
+            }
+            return n;
         }
 
         @Override

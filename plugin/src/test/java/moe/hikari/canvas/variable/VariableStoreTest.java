@@ -1,5 +1,6 @@
 package moe.hikari.canvas.variable;
 
+import moe.hikari.canvas.storage.UserGlobalVariableDao;
 import moe.hikari.canvas.storage.UserVariableDao;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -632,7 +634,234 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  0.4.3：全局用户变量（userglobal/*）
+    // ──────────────────────────────────────────────────────────
+
+    private static final UUID ALICE = UUID.fromString("11111111-1111-1111-1111-111111111111");
+    private static final UUID BOB = UUID.fromString("22222222-2222-2222-2222-222222222222");
+
+    @Test
+    void createGlobal_throwsIfDaoNotConfigured() {
+        // store 默认 globalDao = null → createGlobal 立即拒
+        var ex = assertThrows(VariableException.class,
+                () -> store.createGlobal(ALICE, "Alice", "red_score", VarType.NUMBER, "0"));
+        assertEquals(VariableException.Code.QUOTA_EXCEEDED, ex.code());
+    }
+
+    @Test
+    void createGlobal_persistsAndRegistersOwner() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+
+        Variable v = store.createGlobal(ALICE, "Alice", "red_score", VarType.NUMBER, "0");
+
+        assertEquals("userglobal", v.namespace());
+        assertEquals("red_score", v.key());
+        assertEquals(VarType.NUMBER, v.type());
+        assertEquals("userglobal/red_score", v.fullName());
+
+        // DB upsert 写入
+        assertEquals(1, globalDao.upserts.size());
+        var row = globalDao.upserts.get(0);
+        assertEquals("red_score", row.name);
+        assertEquals(ALICE, row.ownerUuid);
+        assertEquals("Alice", row.ownerName);
+        assertEquals(VarType.NUMBER, row.type);
+        assertEquals("0", row.defaultValue);
+
+        // 内存 owner 表注册
+        var info = store.getGlobalOwner("red_score").orElseThrow();
+        assertEquals(ALICE, info.ownerUuid());
+        assertEquals("Alice", info.ownerName());
+    }
+
+    @Test
+    void createGlobal_perOwnerQuotaEnforced() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 2, 10_000);  // per-owner = 2
+        store.createGlobal(ALICE, "Alice", "a", VarType.STRING, null);
+        store.createGlobal(ALICE, "Alice", "b", VarType.STRING, null);
+        // 第 3 次拒（per-owner 配额）
+        var ex = assertThrows(VariableException.class,
+                () -> store.createGlobal(ALICE, "Alice", "c", VarType.STRING, null));
+        assertEquals(VariableException.Code.QUOTA_EXCEEDED, ex.code());
+        assertTrue(ex.getMessage().contains("owner"));
+    }
+
+    @Test
+    void createGlobal_globalQuotaEnforced() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 100, 2);  // global = 2
+        store.createGlobal(ALICE, "Alice", "a", VarType.STRING, null);
+        store.createGlobal(BOB, "Bob", "b", VarType.STRING, null);
+        // 第 3 次拒（global 配额）
+        var ex = assertThrows(VariableException.class,
+                () -> store.createGlobal(ALICE, "Alice", "c", VarType.STRING, null));
+        assertEquals(VariableException.Code.QUOTA_EXCEEDED, ex.code());
+        assertTrue(ex.getMessage().contains("globally"));
+    }
+
+    @Test
+    void createGlobal_duplicateNameRejected() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        store.createGlobal(ALICE, "Alice", "shared", VarType.STRING, null);
+        // 即使是别的玩家也不能用同 key 抢占
+        var ex = assertThrows(VariableException.class,
+                () -> store.createGlobal(BOB, "Bob", "shared", VarType.STRING, null));
+        assertEquals(VariableException.Code.VARIABLE_EXISTS, ex.code());
+    }
+
+    @Test
+    void deleteGlobal_removesOwnerEntryAndPersistsDelete() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        store.createGlobal(ALICE, "Alice", "shared", VarType.STRING, "x");
+        assertTrue(store.getGlobalOwner("shared").isPresent());
+
+        store.delete("userglobal/shared");
+
+        assertFalse(store.get("userglobal/shared").isPresent());
+        assertFalse(store.getGlobalOwner("shared").isPresent());
+        assertEquals(1, globalDao.deletes.size());
+        assertEquals("shared", globalDao.deletes.get(0));
+    }
+
+    @Test
+    void listGlobals_returnsOnlyUserGlobalNamespace() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        store.createGlobal(ALICE, "Alice", "red", VarType.STRING, null);
+        store.create("bedwars", "score", VarType.NUMBER, null, null);  // 干扰项
+        store.create("user:w-1", "local_red", VarType.STRING, null, null);  // 干扰项
+
+        List<Variable> globals = store.listGlobals();
+        assertEquals(1, globals.size());
+        assertEquals("userglobal", globals.get(0).namespace());
+        assertEquals("red", globals.get(0).key());
+    }
+
+    @Test
+    void loadGlobalsFromDb_restoresOwnersAndVariables() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        globalDao.preload.add(new UserGlobalVariableDao.Row(
+                "shared", ALICE, "Alice", VarType.STRING, "default", "current", null, 1L, 2L));
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        store.loadGlobalsFromDb();
+
+        var v = store.get("userglobal/shared").orElseThrow();
+        assertEquals(VarType.STRING, v.type());
+        assertEquals("default", v.defaultValue());
+        assertEquals("current", v.currentValue());
+        // owner 表也恢复
+        var info = store.getGlobalOwner("shared").orElseThrow();
+        assertEquals(ALICE, info.ownerUuid());
+        assertEquals("Alice", info.ownerName());
+    }
+
+    @Test
+    void setValueGlobal_persistsValue() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        store.createGlobal(ALICE, "Alice", "score", VarType.NUMBER, "0");
+        globalDao.upserts.clear();
+
+        store.setValue("userglobal/score", "42", null);
+
+        assertEquals(1, globalDao.upserts.size());
+        assertEquals("42", globalDao.upserts.get(0).currentValue);
+    }
+
+    @Test
+    void listVisibleToWall_includesUserGlobalForAnyWall() {
+        // 0.4.3 关键回归：listVisibleToWall 对 userglobal/* 跨 wall 可见
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        store.createGlobal(ALICE, "Alice", "shared", VarType.STRING, null);
+
+        var visibleA = store.listVisibleToWall("w-A");
+        var visibleB = store.listVisibleToWall("w-B");
+        assertTrue(visibleA.stream().anyMatch(v -> "userglobal".equals(v.namespace())));
+        assertTrue(visibleB.stream().anyMatch(v -> "userglobal".equals(v.namespace())));
+    }
+
+    @Test
+    void changeListener_firedForGlobalCreate() {
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+        List<VariableStore.VariableChangeEvent> events = new ArrayList<>();
+        store.registerChangeListener(events::add);
+        store.createGlobal(ALICE, "Alice", "shared", VarType.STRING, "x");
+
+        assertEquals(1, events.size());
+        assertEquals(VariableStore.ChangeType.CREATED, events.get(0).type());
+        assertEquals("userglobal/shared", events.get(0).fullName());
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Helper：内存 fake DAO
+    // ──────────────────────────────────────────────────────────
+
+    /**
+     * 0.4.3：UserGlobalVariableDao 内存 fake；同 FakeUserVariableDao 风格。
+     */
+    private static final class FakeUserGlobalVariableDao extends UserGlobalVariableDao {
+        record UpsertCall(String name, UUID ownerUuid, String ownerName, VarType type,
+                          String defaultValue, String currentValue, String boundTo,
+                          long createdAt, long updatedAt) {}
+
+        final List<UpsertCall> upserts = new ArrayList<>();
+        final List<String> deletes = new ArrayList<>();
+        final List<Row> preload = new ArrayList<>();
+
+        FakeUserGlobalVariableDao() {
+            super(Logger.getLogger("test"), null);
+        }
+
+        @Override
+        public void upsert(String name, UUID ownerUuid, String ownerName, VarType type,
+                           String defaultValue, String currentValue, String boundTo,
+                           long createdAt, long updatedAt) {
+            upserts.add(new UpsertCall(name, ownerUuid, ownerName, type,
+                    defaultValue, currentValue, boundTo, createdAt, updatedAt));
+        }
+
+        @Override
+        public void delete(String name) {
+            deletes.add(name);
+        }
+
+        @Override
+        public int countByOwner(UUID ownerUuid) {
+            // 当前 DB 状态 = upserts 中独立 name 但未被 delete 的、且 owner 匹配
+            java.util.Set<String> deleted = new java.util.HashSet<>(deletes);
+            java.util.Map<String, UpsertCall> lastByName = new java.util.LinkedHashMap<>();
+            for (UpsertCall u : upserts) lastByName.put(u.name(), u);  // 同 name 后写覆盖
+            int n = 0;
+            for (var entry : lastByName.entrySet()) {
+                if (deleted.contains(entry.getKey())) continue;
+                if (entry.getValue().ownerUuid().equals(ownerUuid)) n++;
+            }
+            return n;
+        }
+
+        @Override
+        public int countTotal() {
+            java.util.Set<String> deleted = new java.util.HashSet<>(deletes);
+            java.util.Set<String> alive = new java.util.HashSet<>();
+            for (UpsertCall u : upserts) alive.add(u.name());
+            alive.removeAll(deleted);
+            return alive.size();
+        }
+
+        @Override
+        public List<Row> loadAll() {
+            return new ArrayList<>(preload);
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Helper：内存 fake DAO（原 user_variables 用）
     // ──────────────────────────────────────────────────────────
 
     /**

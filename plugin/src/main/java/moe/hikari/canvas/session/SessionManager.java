@@ -65,6 +65,13 @@ public final class SessionManager {
     private final WallResolver wallResolver;
     private final AuditLog auditLog;
     private final WallRepo wallRepo;
+    /**
+     * 0.4.3：可选 VariableStore 引用 — 仅用于 broadcast 路径在 userglobal namespace 时
+     * 注入 ownerUuid / ownerName 字段到 patch value。setter 注入，未配置时 patch 不含 owner
+     * 字段（前端有兜底）。
+     */
+    @org.jetbrains.annotations.Nullable
+    private volatile moe.hikari.canvas.variable.VariableStore variableStoreRef;
     /** M15.3 P0-25：deleteWall 释放 map 后清除像素缓存，防 mapId 复用导致跨 wall 像素泄漏。可空（不强制依赖）。 */
     private final HikariCanvasRenderer canvasRenderer;
 
@@ -768,6 +775,51 @@ public final class SessionManager {
      * @param event 变更事件
      * @param push  OpPushCallback（由 WebServer 实现）
      */
+    /**
+     * 0.4.3：广播全局用户变量变更给<b>所有</b>活跃 session，不限 wall。
+     *
+     * <p>{@code userglobal/*} namespace 是全服共享的，任何画布都可能引用——必须给所有
+     * session 推 patch；与按 {@link #broadcastVariableChangeToWall} 的 per-wall 倒排索引
+     * 路由形成对比。详见 {@code docs/dynamic-data.md §17.7}。</p>
+     *
+     * <p>HikariCanvas onEnable 注入的 ChangeListener 按 fullName 前缀分流（{@code userglobal/}
+     * 走此方法，其他走 broadcastToWall），所以这里不重判 namespace，<b>来什么广播什么</b>。</p>
+     *
+     * @param event 变更事件
+     * @param push  OpPushCallback（由 WebServer 实现）
+     */
+    public void broadcastVariableChangeToAll(
+            moe.hikari.canvas.variable.VariableStore.VariableChangeEvent event,
+            moe.hikari.canvas.web.OpPushCallback push) {
+        if (event == null || push == null) return;
+        // WALL_REFS_UPDATED 是 markWallReferences 的副产品，不该出现在全局 namespace 路径；
+        // 不过为防御性起见仍早返（同 broadcastVariableChangeToWall）
+        if (event.type()
+                == moe.hikari.canvas.variable.VariableStore.ChangeType.WALL_REFS_UPDATED) {
+            return;
+        }
+        moe.hikari.canvas.state.PatchOp op = buildVariablePatchOp(event);
+        if (op == null) return;
+        java.util.List<moe.hikari.canvas.state.PatchOp> ops = java.util.List.of(op);
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (s.wallId() == null) continue;  // 没绑 wall 的 session 不需要 mirror 更新
+            moe.hikari.canvas.state.ProjectState ps = s.projectState();
+            long version = ps == null ? 0L : ps.version();
+            moe.hikari.canvas.state.StatePatch patch =
+                    new moe.hikari.canvas.state.StatePatch(version, ops);
+            try {
+                push.pushPatch(s.id(), patch);
+            } catch (Exception e) {
+                log.log(java.util.logging.Level.WARNING,
+                        "broadcastVariableChangeToAll push failed: session=" + s.id()
+                                + " event=" + event.type()
+                                + " fullName=" + event.fullName() + " err=" + e.getMessage(),
+                        e);
+            }
+        }
+    }
+
     public void broadcastVariableChangeToWall(
             moe.hikari.canvas.variable.VariableStore.VariableChangeEvent event,
             moe.hikari.canvas.web.OpPushCallback push) {
@@ -836,8 +888,17 @@ public final class SessionManager {
         return namespace.substring(colon + 1);
     }
 
+    /**
+     * 0.4.3：注入 VariableStore 引用让 broadcast 路径能查 userglobal owner 信息。
+     * HikariCanvas onEnable 装配后调用一次。
+     */
+    public void setVariableStoreRef(
+            moe.hikari.canvas.variable.VariableStore store) {
+        this.variableStoreRef = store;
+    }
+
     /** {@code VariableChangeEvent} → RFC 6902 PatchOp。形态与 EditSession 一致。 */
-    private static moe.hikari.canvas.state.PatchOp buildVariablePatchOp(
+    private moe.hikari.canvas.state.PatchOp buildVariablePatchOp(
             moe.hikari.canvas.variable.VariableStore.VariableChangeEvent event) {
         String path = "/variables/" + encodeJsonPointer(event.fullName());
         return switch (event.type()) {
@@ -869,9 +930,13 @@ public final class SessionManager {
 
     /**
      * 把 Variable 序列化为 patch value Map。与 {@link moe.hikari.canvas.state.EditSession#variableToMap}
-     * 形态完全一致 — 前端 wsClient.applyVariablePatches 路径已就位，无需特殊处理。
+     * 形态完全一致 — 前端 wsClient.applyVariablePatches 路径已就位。
+     *
+     * <p>0.4.3：{@code userglobal/*} namespace 时，从 {@link #variableStoreRef}
+     * 查 owner 信息并注入 {@code ownerUuid} / {@code ownerName} 字段，让前端 Picker / Panel
+     * 区分"我的全局 / 其他全局"。store 未注入或 owner 不存在时跳过 owner 字段。</p>
      */
-    private static java.util.Map<String, Object> variableToMap(
+    private java.util.Map<String, Object> variableToMap(
             moe.hikari.canvas.variable.Variable v) {
         java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
         if (v == null) return m;
@@ -884,6 +949,17 @@ public final class SessionManager {
         m.put("ttl", v.ttl());
         if (v.source() != null) m.put("source", v.source());
         // referencedByWalls 是服务端倒排索引细节，不下发（与 EditSession.variableToMap 一致）
+
+        // 0.4.3：userglobal 注入 owner 信息
+        if (moe.hikari.canvas.variable.VariableStore.USER_GLOBAL_NAMESPACE.equals(v.namespace())) {
+            moe.hikari.canvas.variable.VariableStore store = variableStoreRef;
+            if (store != null) {
+                store.getGlobalOwner(v.key()).ifPresent(info -> {
+                    m.put("ownerUuid", info.ownerUuid().toString());
+                    m.put("ownerName", info.ownerName());
+                });
+            }
+        }
         return m;
     }
 

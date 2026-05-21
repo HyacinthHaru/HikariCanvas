@@ -20,6 +20,7 @@ import { onClickOutside } from '@vueuse/core';
 import { Search, Pencil, Check, X as XIcon, Eraser } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useNetworkStore } from '@/stores/network';
+import { useProjectStore } from '@/stores/project';
 import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
 import { useI18n } from '@/i18n';
@@ -48,6 +49,7 @@ const emit = defineEmits<{
 const store = useVariableStore();
 const aliasStore = useVariableAliasStore();
 const network = useNetworkStore();
+const project = useProjectStore();
 const { t } = useI18n();
 const ws = getWsClient();
 
@@ -74,7 +76,9 @@ const editingSubmitting = ref(false);
 const merged = computed(() => mergeMetadata(store.variables.values(), metadata.value));
 
 const groups = computed<PickerGroup[]>(() =>
-    buildGroups(merged.value, props.wallId, keyword.value, aliasStore.aliases),
+    // 0.4.3：第 5 参 selfUuid 传入让 userglobal 分到 myGlobal / othersGlobal
+    buildGroups(merged.value, props.wallId, keyword.value, aliasStore.aliases,
+        project.selfUuid),
 );
 
 const flat = computed(() => flattenGroups(groups.value));
@@ -82,6 +86,8 @@ const total = computed(() => totalCount(groups.value));
 
 const groupTitleMap = computed<Record<PickerGroup['id'], string>>(() => ({
     mine: t.value.variables.picker.groupMine,
+    myGlobal: t.value.variables.picker.groupMyGlobal,
+    othersGlobal: t.value.variables.picker.groupOthersGlobal,
     plugin: t.value.variables.picker.groupPlugin,
     system: t.value.variables.picker.groupSystem,
     papi: t.value.variables.picker.groupPapi,

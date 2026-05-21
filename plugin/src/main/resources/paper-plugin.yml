@@ -1,5 +1,5 @@
 name: HikariCanvas
-version: '0.4.2-SNAPSHOT'
+version: '0.4.3-SNAPSHOT'
 main: moe.hikari.canvas.HikariCanvas
 api-version: '1.21'
 authors:
@@ -90,6 +90,21 @@ permissions:
     default: op
   canvas.var.command:
     description: 使用 /canvas var 命令族
+    default: op
+  canvas.var.global.create:
+    description: 创建全局用户变量（userglobal/*，跨 wall 共享，0.4.3）
+    default: true
+  canvas.var.global.write.own:
+    description: 修改自己创建的全局用户变量值 / type / defaultValue（0.4.3）
+    default: true
+  canvas.var.global.write.any:
+    description: 修改任意全局用户变量（管理员 override，0.4.3）
+    default: op
+  canvas.var.global.delete.own:
+    description: 删除自己创建的全局用户变量（0.4.3）
+    default: true
+  canvas.var.global.delete.any:
+    description: 删除任意全局用户变量（管理员 override，0.4.3）
     default: op
   canvas.schedule.own:
     description: 管理自己 wall 的列车 / 公交时刻表（0.4.0-P3-L）

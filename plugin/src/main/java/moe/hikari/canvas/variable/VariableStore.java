@@ -1,5 +1,6 @@
 package moe.hikari.canvas.variable;
 
+import moe.hikari.canvas.storage.UserGlobalVariableDao;
 import moe.hikari.canvas.storage.UserVariableDao;
 import org.jetbrains.annotations.Nullable;
 
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
@@ -54,6 +56,16 @@ public final class VariableStore {
     /** {@code "user"} = 用户变量保留 namespace 前缀；user:<wallId> 用冒号拓展。 */
     public static final String USER_NAMESPACE_PREFIX = "user";
 
+    /**
+     * 0.4.3：全局用户变量 namespace。不带冒号 + wallId 后缀（与 {@link #USER_NAMESPACE_PREFIX}
+     * 的 per-wall 区别）；fullName 形如 {@code userglobal/<key>}，全服共享。
+     */
+    public static final String USER_GLOBAL_NAMESPACE = "userglobal";
+
+    /** 0.4.3 默认配额（{@code docs/dynamic-data.md §17.4}）。config.yml 可覆盖。 */
+    public static final int DEFAULT_USERGLOBAL_PER_OWNER = 500;
+    public static final int DEFAULT_USERGLOBAL_TOTAL = 10_000;
+
     /** fullName → Variable 主表。 */
     private final ConcurrentHashMap<String, Variable> store = new ConcurrentHashMap<>();
     /** namespace → fullName set（per-namespace 配额计数）。 */
@@ -64,6 +76,33 @@ public final class VariableStore {
     private final UserVariableDao dao;
     /** 任意 wall dirty 通知（B 任务接到 ProjectionThrottler#dirty）；P1 阶段可为 noop。 */
     private final java.util.function.Consumer<String> wallDirtyCallback;
+
+    // ── 0.4.3：全局用户变量持久化 + owner 信息（namespace = userglobal） ──
+
+    /**
+     * 0.4.3：{@code userglobal/*} 持久化 DAO。装配期由 {@link #configureUserGlobal} 注入；
+     * 未注入时 {@link #createGlobal} 抛 INTERNAL；现有 user / 插件 / system / papi / schedule
+     * 路径完全不受影响。
+     */
+    @Nullable
+    private volatile UserGlobalVariableDao globalDao;
+
+    private volatile int maxUserGlobalPerOwner = DEFAULT_USERGLOBAL_PER_OWNER;
+    private volatile int maxUserGlobalTotal = DEFAULT_USERGLOBAL_TOTAL;
+
+    /**
+     * 0.4.3：全局变量 key → owner 信息（在内存）。
+     *
+     * <p>{@link Variable} record 的 {@code source} 字段已被 bind 语义占用（写 plugin namespace），
+     * 不能复用承载 owner。owner 仅 {@code userglobal} namespace 需要——独立内存表代价更小，
+     * 启动 {@link #loadGlobalsFromDb} 一次性填充，create / delete 主路径同步维护。</p>
+     *
+     * <p>读取入口：{@link #getGlobalOwner} —— 序列化路径（{@code VariableDto.from} /
+     * {@code SessionManager.broadcastVariableChangeToAll}）调用注入 ownerUuid / ownerName 给前端。</p>
+     */
+    public record GlobalOwnerInfo(UUID ownerUuid, String ownerName) {}
+
+    private final ConcurrentHashMap<String, GlobalOwnerInfo> globalOwners = new ConcurrentHashMap<>();
 
     /**
      * 0.4.0-P3-J：动态 namespace 注册 hook。
@@ -209,6 +248,131 @@ public final class VariableStore {
     }
 
     // ──────────────────────────────────────────────────────────────────
+    //  0.4.3：全局用户变量装配 + API
+    // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * 0.4.3：注入 {@link UserGlobalVariableDao} + 配额参数。装配期 HikariCanvas onEnable 调用
+     * 一次；如果不调 {@link #createGlobal} 直接抛 {@code QUOTA_EXCEEDED}，已有 user / 插件
+     * / system / papi 路径完全不受影响。
+     *
+     * @param dao            user_global_variables DAO（非空）
+     * @param maxPerOwner    每 owner 上限（默 {@link #DEFAULT_USERGLOBAL_PER_OWNER}）
+     * @param maxTotal       全服总上限（默 {@link #DEFAULT_USERGLOBAL_TOTAL}）
+     */
+    public void configureUserGlobal(UserGlobalVariableDao dao,
+                                    int maxPerOwner, int maxTotal) {
+        this.globalDao = Objects.requireNonNull(dao, "globalDao");
+        this.maxUserGlobalPerOwner = Math.max(1, maxPerOwner);
+        // 注意：不强制 maxTotal ≥ maxPerOwner —— 让 admin 直接信任输入。
+        // 若 admin 写反（total < per_owner），create 时 total 配额先触顶，per_owner 实际无效，
+        // 这是合理的"管理员意图优先"语义。
+        this.maxUserGlobalTotal = Math.max(1, maxTotal);
+    }
+
+    /**
+     * 0.4.3：创建全局用户变量 {@code userglobal/<key>}。owner 信息（UUID + 名）记录到内存
+     * {@link #globalOwners} 表 + 写 {@code user_global_variables} 表（持久化）。
+     *
+     * <p>配额检查（{@code docs/dynamic-data.md §17.4}）：</p>
+     * <ul>
+     *   <li>per-owner ≥ {@link #maxUserGlobalPerOwner} → {@code QUOTA_EXCEEDED}</li>
+     *   <li>全服总数 ≥ {@link #maxUserGlobalTotal} → {@code QUOTA_EXCEEDED}</li>
+     * </ul>
+     *
+     * @throws VariableException 名字非法 / 已存在 / 超配额 / 值过长 / dao 未装配
+     */
+    public Variable createGlobal(UUID ownerUuid, String ownerName,
+                                 String key, VarType type, @Nullable String defaultValue) {
+        Objects.requireNonNull(ownerUuid, "ownerUuid");
+        Objects.requireNonNull(ownerName, "ownerName");
+        if (globalDao == null) {
+            throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
+                    "user global variables not configured (call configureUserGlobal first)");
+        }
+        // 先做 key / type / value 校验（与 create 一致）
+        validateKey(key);
+        validateValueLength(defaultValue);
+        if (type == null) {
+            throw new VariableException(VariableException.Code.VARIABLE_TYPE_MISMATCH,
+                    "type must not be null");
+        }
+        // 配额：先 DB 查 count（不抢锁）+ compute 内还会有全局 MAX_GLOBAL 兜底
+        int ownerCount = globalDao.countByOwner(ownerUuid);
+        if (ownerCount >= maxUserGlobalPerOwner) {
+            throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
+                    "userglobal quota exceeded for owner ("
+                            + ownerCount + "/" + maxUserGlobalPerOwner + ")");
+        }
+        int totalCount = globalDao.countTotal();
+        if (totalCount >= maxUserGlobalTotal) {
+            throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
+                    "userglobal quota exceeded globally ("
+                            + totalCount + "/" + maxUserGlobalTotal + ")");
+        }
+
+        // 在 store.create 之前 put ownerInfo，让 persistIfUserGlobal 能读到 owner
+        // 注意：putIfAbsent 防 race；如已存在 — VARIABLE_EXISTS 检查会在 create 内拒
+        GlobalOwnerInfo info = new GlobalOwnerInfo(ownerUuid, ownerName);
+        GlobalOwnerInfo prev = globalOwners.putIfAbsent(key, info);
+        boolean ownerPlacedHere = (prev == null);
+        try {
+            // source = "manual" 同 user 变量；bind 后会改写
+            return create(USER_GLOBAL_NAMESPACE, key, type, defaultValue, "manual");
+        } catch (RuntimeException e) {
+            // create 失败回滚 owner 表（仅当本调用是首次 put 才回滚）
+            if (ownerPlacedHere) globalOwners.remove(key, info);
+            throw e;
+        }
+    }
+
+    /** 0.4.3：列所有 {@code userglobal/*} 变量（无序）。 */
+    public List<Variable> listGlobals() {
+        return listByNamespace(USER_GLOBAL_NAMESPACE);
+    }
+
+    /**
+     * 0.4.3：查 userglobal 变量的 owner 信息。
+     *
+     * <p>序列化路径（{@code VariableDto.from} / patchOp builder）调用注入 ownerUuid /
+     * ownerName 给前端。非 userglobal 变量 key 命中也可能返非空——调用方应先确认
+     * variable.namespace == userglobal 再用。</p>
+     *
+     * @param key 变量 key（不含 namespace 前缀）
+     */
+    public Optional<GlobalOwnerInfo> getGlobalOwner(String key) {
+        if (key == null) return Optional.empty();
+        return Optional.ofNullable(globalOwners.get(key));
+    }
+
+    /**
+     * 0.4.3：启动期一次性把 {@code user_global_variables} 加载到内存（同
+     * {@link #loadFromDb} 风格，绕过 create 配额校验，把 DB 视为合法基线）。
+     */
+    public void loadGlobalsFromDb() {
+        if (globalDao == null) return;
+        for (UserGlobalVariableDao.Row r : globalDao.loadAll()) {
+            try {
+                validateKey(r.name());
+                validateValueLength(r.defaultValue());
+                validateValueLength(r.currentValue());
+            } catch (VariableException e) {
+                continue;  // 跳过坏行
+            }
+            String fullName = USER_GLOBAL_NAMESPACE + "/" + r.name();
+            globalOwners.put(r.name(), new GlobalOwnerInfo(r.ownerUuid(), r.ownerName()));
+            Variable v = new Variable(USER_GLOBAL_NAMESPACE, r.name(), r.type(),
+                    r.defaultValue(), r.currentValue(),
+                    r.updatedAt(), 0L, r.boundTo(),
+                    Collections.unmodifiableSet(new HashSet<>()));
+            store.put(fullName, v);
+            byNamespace.computeIfAbsent(USER_GLOBAL_NAMESPACE,
+                            n -> ConcurrentHashMap.newKeySet())
+                    .add(fullName);
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
     //  增删改查
     // ──────────────────────────────────────────────────────────────────
 
@@ -273,6 +437,7 @@ public final class VariableStore {
         });
 
         persistIfUser(created, now, now);
+        persistIfUserGlobal(created, now, now);
         // 0.4.0 bugfix3（Bug B）：广播 CREATED 给 listener（HikariCanvas 注入的 listener 推
         // state.patch 给前端 mirror）。fireChange 在 compute 之外调，避免持锁回调。
         fireChange(fullName, created, ChangeType.CREATED);
@@ -311,6 +476,7 @@ public final class VariableStore {
         }
 
         persistIfUser(updated, createdAtHolder[0], now);
+        persistIfUserGlobal(updated, createdAtHolder[0], now);
         notifyReferencingWalls(updated);
         // 0.4.0 bugfix3（Bug B）
         fireChange(fullName, updated, ChangeType.UPDATED);
@@ -345,6 +511,7 @@ public final class VariableStore {
         }
 
         persistIfUser(updated, now, now);
+        persistIfUserGlobal(updated, now, now);
         notifyReferencingWalls(updated);
         // 0.4.0 bugfix3（Bug B）：Provider 写值的核心路径——ManualScheduleProvider /
         // SystemVariableProvider / PapiVariableBridge / ScoreboardVariableProvider 都靠
@@ -375,6 +542,13 @@ public final class VariableStore {
             String wallId = parseWallIdFromUserNamespace(removed.namespace());
             if (wallId != null) {
                 dao.delete(wallId, removed.key());
+            }
+        }
+        // 0.4.3：全局用户变量同样清持久化 + 内存 owner 表
+        if (USER_GLOBAL_NAMESPACE.equals(removed.namespace())) {
+            globalOwners.remove(removed.key());
+            if (globalDao != null) {
+                globalDao.delete(removed.key());
             }
         }
         notifyReferencingWalls(removed);
@@ -419,6 +593,7 @@ public final class VariableStore {
         }
 
         persistIfUser(updated, now, now);
+        persistIfUserGlobal(updated, now, now);
         notifyReferencingWalls(updated);
         // 0.4.0 bugfix3（Bug B）
         fireChange(fullName, updated, ChangeType.BOUND);
@@ -661,6 +836,26 @@ public final class VariableStore {
                 createdAt, updatedAt);
     }
 
+    /**
+     * 0.4.3：仅当 namespace = {@code userglobal} 时落库到 {@code user_global_variables} 表。
+     * owner 信息从 {@link #globalOwners} 内存表查；create 主路径在 {@link #createGlobal}
+     * 内先 put owner 再调 store.create，保证此时 globalOwners 一定含 key。
+     *
+     * <p>{@link #globalDao} 未注入（{@link #configureUserGlobal} 未调）时静默 noop —— 兼容
+     * 测试期不传 dao 的场景 + create 路径在 dao 未配时已先抛 QUOTA_EXCEEDED，所以这里
+     * 不会丢正常路径的数据。</p>
+     */
+    private void persistIfUserGlobal(Variable v, long createdAt, long updatedAt) {
+        if (!USER_GLOBAL_NAMESPACE.equals(v.namespace())) return;
+        UserGlobalVariableDao d = globalDao;
+        if (d == null) return;
+        GlobalOwnerInfo info = globalOwners.get(v.key());
+        if (info == null) return;
+        d.upsert(v.key(), info.ownerUuid(), info.ownerName(), v.type(),
+                v.defaultValue(), v.currentValue(), v.source(),
+                createdAt, updatedAt);
+    }
+
     /** {@code "user:w-3a17"} → {@code "w-3a17"}；非法格式返 null。 */
     private static @Nullable String parseWallIdFromUserNamespace(String namespace) {
         int colon = namespace.indexOf(':');
@@ -727,6 +922,7 @@ public final class VariableStore {
         store.clear();
         byNamespace.clear();
         byWall.clear();
+        globalOwners.clear();
     }
 
     /** 测试 / 调试：当前 wall 引用集合的不可变快照。 */

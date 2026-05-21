@@ -30,9 +30,16 @@ import java.util.regex.Pattern;
  */
 public final class PluginNamespaceRegistry {
 
-    /** 保留 namespace：HikariCanvas 内部使用，外部插件禁止注册。 */
+    /**
+     * 保留 namespace：HikariCanvas 内部使用，外部插件禁止注册。
+     *
+     * <p>0.4.3：{@code userglobal} 加入保留。理由：全局用户变量只能由玩家通过编辑器创建
+     * （走 EditSession.createGlobalVariable），插件想全服共享数据应用自己 namespace
+     * （如 {@code bedwars/score}），抢用 userglobal 等于绕开 ACL + 配额。详见
+     * {@code docs/dynamic-data.md §17.3}。</p>
+     */
     public static final Set<String> RESERVED_NAMESPACES =
-            Set.of("user", "system", "papi", "scoreboard", "schedule");
+            Set.of("user", "userglobal", "system", "papi", "scoreboard", "schedule");
 
     /** namespace 校验正则：{@code [a-zA-Z_][a-zA-Z0-9_]{0,31}}。与内部 VariableStore 一致，
      * 但<b>不允许</b> {@code :} {@code -}（这两个保留给 HikariCanvas 内部 user:&lt;wallId&gt; 形态用）。 */

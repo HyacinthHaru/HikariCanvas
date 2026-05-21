@@ -92,19 +92,36 @@ final class VariableOpDispatcher {
             return;
         }
 
-        // 权限检查：write 类 op vs bind op。
+        // 权限检查：write 类 op vs bind op；0.4.3 全局变量走独立权限节点。
         String op = in.op();
-        if (!checkPermission(ctx, in, sessionId, s, op)) return;
+        Map<String, Object> payloadForPerm = payload;
+        if (!checkPermission(ctx, in, sessionId, s, op, payloadForPerm)) return;
 
         EditSession es = s.editSession();
         String wallId = s.wallId();
 
+        // 0.4.3：scope='global' 走 createGlobalVariable；update/set/delete/bind 按 fullName
+        // 前缀（userglobal/）自动路由——dispatcher 不要求用户额外传 scope 字段，复用 fullName 形态
+        boolean isGlobalCreate = "global".equalsIgnoreCase(
+                String.valueOf(payload.getOrDefault("scope", "wall")));
+        boolean isGlobalMutate = !isGlobalCreate && isGlobalOpByFullName(op, payload);
+
         EditSession.OpResult result = switch (op) {
-            case "variable.create" -> handleCreate(es, wallId, payload);
-            case "variable.update" -> handleUpdate(es, wallId, payload);
-            case "variable.set" -> handleSet(es, wallId, payload);
-            case "variable.delete" -> handleDelete(es, wallId, payload);
-            case "variable.bind" -> handleBind(es, wallId, payload);
+            case "variable.create" -> isGlobalCreate
+                    ? handleCreateGlobal(es, s, payload)
+                    : handleCreate(es, wallId, payload);
+            case "variable.update" -> isGlobalMutate
+                    ? handleUpdateGlobal(es, payload)
+                    : handleUpdate(es, wallId, payload);
+            case "variable.set" -> isGlobalMutate
+                    ? handleSetGlobal(es, payload)
+                    : handleSet(es, wallId, payload);
+            case "variable.delete" -> isGlobalMutate
+                    ? handleDeleteGlobal(es, payload)
+                    : handleDelete(es, wallId, payload);
+            case "variable.bind" -> isGlobalMutate
+                    ? handleBindGlobal(es, payload)
+                    : handleBind(es, wallId, payload);
             default -> new EditSession.OpResult.Error("INVALID_OP",
                     "unknown variable op: " + op);
         };
@@ -212,37 +229,138 @@ final class VariableOpDispatcher {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  0.4.3 全局用户变量 handlers
+    // ──────────────────────────────────────────────────────────
+
+    private EditSession.OpResult handleCreateGlobal(EditSession es, Session s,
+                                                    Map<String, Object> payload) {
+        String name = stringOrNull(payload.get("name"));
+        VarType type = parseVarTypeOrNull(payload.get("type"));
+        if (type == null) {
+            return new EditSession.OpResult.Error("INVALID_PAYLOAD",
+                    "variable type required: STRING / NUMBER / BOOLEAN / COLOR");
+        }
+        String defaultValue = stringOrNull(payload.get("defaultValue"));
+        UUID owner = s.playerUuid();
+        String ownerName = s.playerName();
+        if (owner == null) {
+            return new EditSession.OpResult.Error("FORBIDDEN",
+                    "caller uuid required for userglobal variable");
+        }
+        return es.createGlobalVariable(variableStore, owner, ownerName,
+                name, type, defaultValue);
+    }
+
+    private EditSession.OpResult handleUpdateGlobal(EditSession es, Map<String, Object> payload) {
+        String fullName = stringOrNull(payload.get("fullName"));
+        Object patchRaw = payload.get("patch");
+        Map<?, ?> patchMap;
+        try {
+            patchMap = mapOrEmpty(patchRaw);
+        } catch (IllegalArgumentException iae) {
+            return new EditSession.OpResult.Error("INVALID_PAYLOAD", iae.getMessage());
+        }
+        VarType newType = patchMap.containsKey("type")
+                ? parseVarTypeOrNull(patchMap.get("type"))
+                : null;
+        if (patchMap.containsKey("type") && newType == null) {
+            return new EditSession.OpResult.Error("INVALID_PAYLOAD",
+                    "patch.type invalid: " + patchMap.get("type"));
+        }
+        String newDefault = patchMap.containsKey("defaultValue")
+                ? stringOrNull(patchMap.get("defaultValue"))
+                : null;
+        VariablePatch patch = new VariablePatch(newType, newDefault);
+        return es.updateGlobalVariable(variableStore, fullName, patch);
+    }
+
+    private EditSession.OpResult handleSetGlobal(EditSession es, Map<String, Object> payload) {
+        String fullName = stringOrNull(payload.get("fullName"));
+        Object raw = payload.get("value");
+        String value;
+        if (raw == null) {
+            value = null;
+        } else if (raw instanceof String s) {
+            value = s;
+        } else {
+            value = raw.toString();
+        }
+        return es.setGlobalVariableValue(variableStore, fullName, value);
+    }
+
+    private EditSession.OpResult handleDeleteGlobal(EditSession es, Map<String, Object> payload) {
+        String fullName = stringOrNull(payload.get("fullName"));
+        return es.deleteGlobalVariable(variableStore, fullName);
+    }
+
+    private EditSession.OpResult handleBindGlobal(EditSession es, Map<String, Object> payload) {
+        String fullName = stringOrNull(payload.get("fullName"));
+        Object raw = payload.get("boundTo");
+        String boundTo = raw == null ? null : (raw instanceof String s ? s : raw.toString());
+        return es.bindGlobalVariable(variableStore, fullName, boundTo);
+    }
+
+    /**
+     * 0.4.3：op + payload 形态判断当前操作是否针对 userglobal 变量。
+     * update/set/delete/bind 走 fullName 前缀；create 由 caller 处理（scope 字段）。
+     */
+    private static boolean isGlobalOpByFullName(String op, Map<String, Object> payload) {
+        if (op == null || !op.startsWith("variable.")) return false;
+        if ("variable.create".equals(op)) return false;
+        String fullName = stringOrNull(payload.get("fullName"));
+        return fullName != null && fullName.startsWith(EditSession.USERGLOBAL_PREFIX);
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  权限
     // ──────────────────────────────────────────────────────────
 
     /**
      * 检查权限。返 false 表示已发 error frame；调用方应直接 return。
      *
-     * <p>own / any 判定：caller 是 wall owner → 走 own 节点；否则走 any 节点（更严）。
-     * bind 单独 {@code canvas.var.bind}（不分 own/any，与 dynamic-data.md §9.1 一致）。</p>
+     * <p><b>per-wall user 变量</b>（默认路径）：own / any 判定 = caller 是否 wall owner；
+     * bind 单独 {@code canvas.var.bind}（不分 own/any）。</p>
+     *
+     * <p><b>0.4.3 全局用户变量</b>（{@code scope='global'} create 或 fullName 以
+     * {@code userglobal/} 开头的 mutation）：own / any 判定 = caller 是否 variable owner
+     * （{@code VariableStore.getGlobalOwner}）；create 单独 {@code canvas.var.global.create}；
+     * delete 单独 {@code .delete.own/any}；其他改 type/value/bind 走 {@code .write.own/any}。</p>
      */
     private boolean checkPermission(WsMessageContext ctx, Envelope in, String sessionId,
-                                    Session s, String op) {
+                                    Session s, String op, Map<String, Object> payload) {
         UUID callerUuid = s.playerUuid();
         Player player = callerUuid == null ? null : Bukkit.getPlayer(callerUuid);
-        // 判定 owner = playerUuid 等于 wall.owner_uuid
-        moe.hikari.canvas.storage.WallRepo.Wall wall = wallRepo.loadById(s.wallId()).orElse(null);
-        if (wall == null) {
-            ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
-            return false;
-        }
-        boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
+
+        // 路径区分：全局用户变量 vs per-wall user 变量
+        boolean isGlobalCreate = "variable.create".equals(op)
+                && "global".equalsIgnoreCase(String.valueOf(
+                        payload.getOrDefault("scope", "wall")));
+        boolean isGlobalMutate = !isGlobalCreate && isGlobalOpByFullName(op, payload);
+        boolean isGlobal = isGlobalCreate || isGlobalMutate;
 
         String requiredNode;
-        if ("variable.bind".equals(op)) {
-            requiredNode = "canvas.var.bind";
+        if (isGlobal) {
+            requiredNode = pickGlobalPermissionNode(op, callerUuid, payload);
         } else {
-            requiredNode = isOwnerOnly ? "canvas.var.write.own" : "canvas.var.write.any";
+            // 原有 per-wall user 变量逻辑（不变）
+            moe.hikari.canvas.storage.WallRepo.Wall wall =
+                    wallRepo.loadById(s.wallId()).orElse(null);
+            if (wall == null) {
+                ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
+                return false;
+            }
+            boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
+            if ("variable.bind".equals(op)) {
+                requiredNode = "canvas.var.bind";
+            } else {
+                requiredNode = isOwnerOnly ? "canvas.var.write.own" : "canvas.var.write.any";
+            }
         }
+
         boolean granted = player != null && player.hasPermission(requiredNode);
-        // own 节点 default=true（dynamic-data.md §9.1）；offline 玩家也允许 own 路径，
-        // 与 SessionManager.open 处理 paper-plugin.yml default 节点一致。
-        if (!granted && "canvas.var.write.own".equals(requiredNode)) {
+        // own / create 节点 default=true（paper-plugin.yml）；offline 玩家 / 测试期 mock
+        // 也允许 own / create 路径，与 SessionManager.open 处理 default 节点惯例一致。
+        if (!granted && isOwnNodeDefaultTrue(requiredNode)) {
             granted = true;
         }
         if (granted) return true;
@@ -253,6 +371,7 @@ final class VariableOpDispatcher {
             details.put("operation", op);
             details.put("required", requiredNode);
             details.put("wall_id", s.wallId());
+            if (isGlobal) details.put("scope", "global");
             auditLog.record("PERMISSION_DENIED",
                     callerUuid == null ? null : callerUuid.toString(),
                     s.playerName(), sessionId, null, details);
@@ -260,6 +379,55 @@ final class VariableOpDispatcher {
         ctx.send(Envelope.error(in.id(), "PERMISSION_DENIED",
                 "missing permission: " + requiredNode));
         return false;
+    }
+
+    /**
+     * 0.4.3：选 global 路径需要的权限节点。
+     *
+     * <ul>
+     *   <li>{@code variable.create} (scope=global) → {@code canvas.var.global.create}</li>
+     *   <li>{@code variable.delete} (userglobal/) → owner? {@code .delete.own} : {@code .delete.any}</li>
+     *   <li>{@code variable.update / set / bind} (userglobal/) → owner? {@code .write.own} : {@code .write.any}</li>
+     * </ul>
+     */
+    private String pickGlobalPermissionNode(String op, UUID callerUuid,
+                                            Map<String, Object> payload) {
+        if ("variable.create".equals(op)) {
+            return "canvas.var.global.create";
+        }
+        String fullName = stringOrNull(payload.get("fullName"));
+        boolean ownerOnly = isCallerGlobalOwner(callerUuid, fullName);
+        if ("variable.delete".equals(op)) {
+            return ownerOnly ? "canvas.var.global.delete.own" : "canvas.var.global.delete.any";
+        }
+        // update / set / bind 共用 write.own/.any（dynamic-data.md §17.3）
+        return ownerOnly ? "canvas.var.global.write.own" : "canvas.var.global.write.any";
+    }
+
+    /**
+     * 0.4.3：caller 是否本全局变量的 owner？变量不存在时返 false（让 .any 路径处理，
+     * 走 store 时再抛 VARIABLE_NOT_FOUND）。
+     */
+    private boolean isCallerGlobalOwner(UUID callerUuid, String fullName) {
+        if (callerUuid == null || fullName == null
+                || !fullName.startsWith(EditSession.USERGLOBAL_PREFIX)) {
+            return false;
+        }
+        String key = fullName.substring(EditSession.USERGLOBAL_PREFIX.length());
+        return variableStore.getGlobalOwner(key)
+                .map(info -> callerUuid.equals(info.ownerUuid()))
+                .orElse(false);
+    }
+
+    /**
+     * 哪些节点是 default=true（offline 玩家也通行）。
+     * 与 paper-plugin.yml 一致：{@code .own / .create} 节点默认通；{@code .any / .bind} 默认 op。
+     */
+    private static boolean isOwnNodeDefaultTrue(String node) {
+        return node.equals("canvas.var.write.own")
+                || node.equals("canvas.var.global.create")
+                || node.equals("canvas.var.global.write.own")
+                || node.equals("canvas.var.global.delete.own");
     }
 
     // ──────────────────────────────────────────────────────────
@@ -293,32 +461,46 @@ final class VariableOpDispatcher {
                                     Map<String, Object> payload,
                                     EditSession.OpResult.Ok ok) {
         if (auditLog == null) return;
+        // 0.4.3：global 事件单独命名前缀 VARIABLE_GLOBAL_*，让运维过滤 + 审计搜索更精准
+        boolean isGlobalCreate = "variable.create".equals(op)
+                && "global".equalsIgnoreCase(String.valueOf(
+                        payload.getOrDefault("scope", "wall")));
+        boolean isGlobalMutate = !isGlobalCreate && isGlobalOpByFullName(op, payload);
+        boolean isGlobal = isGlobalCreate || isGlobalMutate;
+
         Map<String, Object> details = new LinkedHashMap<>();
-        details.put("wall_id", s.wallId());
+        if (isGlobal) {
+            details.put("scope", "global");
+            // global 路径也带上发起端 wall_id（让审计能定位调用上下文）
+            if (s.wallId() != null) details.put("via_wall_id", s.wallId());
+        } else {
+            details.put("wall_id", s.wallId());
+        }
+        String prefix = isGlobal ? "VARIABLE_GLOBAL_" : "VARIABLE_";
         String event;
         switch (op) {
             case "variable.create" -> {
-                event = "VARIABLE_CREATE";
+                event = prefix + "CREATE";
                 details.put("name", stringOrNull(payload.get("name")));
                 details.put("type", stringOrNull(payload.get("type")));
                 details.put("defaultValue", stringOrNull(payload.get("defaultValue")));
             }
             case "variable.update" -> {
-                event = "VARIABLE_UPDATE";
+                event = prefix + "UPDATE";
                 details.put("fullName", stringOrNull(payload.get("fullName")));
                 details.put("patch", payload.get("patch"));
             }
             case "variable.set" -> {
-                event = "VARIABLE_SET";
+                event = prefix + "SET";
                 details.put("fullName", stringOrNull(payload.get("fullName")));
                 details.put("value", payload.get("value"));
             }
             case "variable.delete" -> {
-                event = "VARIABLE_DELETE";
+                event = prefix + "DELETE";
                 details.put("fullName", stringOrNull(payload.get("fullName")));
             }
             case "variable.bind" -> {
-                event = "VARIABLE_BIND";
+                event = prefix + "BIND";
                 details.put("fullName", stringOrNull(payload.get("fullName")));
                 details.put("boundTo", payload.get("boundTo"));
             }

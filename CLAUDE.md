@@ -194,33 +194,55 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 
 **0.4.2 总 ~6h**（单 commit 单日推完）。
 
-## 0.4.3 路线（全局用户变量，规划完成 2026-05-21 / 待开干）
+## 0.4.3 路线（全局用户变量 ✅ 2026-05-21 实施完成）
 
-**目标**：补 0.4.0 P1 决策 3 的遗留 — user 变量是 per-wall（`user:<wallId>/X`），不能跨画布共享。
+**目标达成**：补 0.4.0 P1 决策 3 的遗留 — user 变量 per-wall 不能跨画布共享。
 新增 `userglobal/<key>` namespace 让玩家自定义"全服可见、跨 wall 共享"的变量。
 
-**详细设计**：`docs/dynamic-data.md §17`（**实施前必读**）。
+**详细设计**：`docs/dynamic-data.md §17`。详细落地日志见 `docs/journal.md` 2026-05-21 条。
 
-**已锁定 4 决策**（2026-05-21 用户确认）：
-1. **外部插件禁推 `userglobal/*`** → 加入 PluginNamespaceRegistry.RESERVED_NAMESPACES
-2. **owner-only + admin override** → 5 个 `canvas.var.global.*` 权限节点
-3. **namespace 取名 `userglobal`** → 与 user 同谱系
-4. **配额 per-owner 500 + 全服 10000** → config.yml 可调
+**实施总览**（5 phase / 1 commit / 单日完成）：
+- **P1** V015 migration `user_global_variables` 表（PK = name 单字段全服唯一）+
+  UserGlobalVariableDao（CRUD + countByOwner + countTotal）+
+  `VariableStore.createGlobal/listGlobals/getGlobalOwner/loadGlobalsFromDb/configureUserGlobal`
+  + 内存 `GlobalOwnerInfo` 表（让序列化路径能注入 owner）
+- **P2** EditSession 5 个 `createGlobalVariable / updateGlobalVariable / setGlobalVariableValue
+  / deleteGlobalVariable / bindGlobalVariable` 方法 + VariableOpDispatcher 按
+  `scope='global'`（create）/ `fullName.startsWith("userglobal/")`（mutate）路由 +
+  `pickGlobalPermissionNode` / `isCallerGlobalOwner` + RESERVED_NAMESPACES 加 `userglobal`
+  + paper-plugin.yml 5 新权限（canvas.var.global.{create, write.own/any, delete.own/any}）+
+  AuditLog `VARIABLE_GLOBAL_*` 前缀
+- **P3** `SessionManager.broadcastVariableChangeToAll`（全 session 广播）+
+  HikariCanvas listener 按 fullName 前缀分流（userglobal → broadcastToAll）+
+  `VariableDto.from(v, store)` / `SessionManager.variableToMap` / `EditSession.variableToMap`
+  注入 ownerUuid + ownerName + 前端 `Variable` 接口扩 ownerUuid/ownerName +
+  `types/variable.ts` 加 USERGLOBAL_NAMESPACE / isUserGlobalNamespace /
+  makeUserGlobalFullName + interpolator `${var:userglobal/X}` 天然 fallthrough
+- **P4** `pickerLogic.buildGroups` 第 5 参 selfUuid → myGlobal / othersGlobal 分组 +
+  6 组新顺序（mine → myGlobal → othersGlobal → plugin → system → papi）+
+  `NewVariableDialog` scope toggle [本 wall \| 全局] + `wsClient.sendVariableCreate`
+  4 参 scope + `VariablePanel` 新「全局变量」section（Globe 图标 / owner badge / 我创建 chip /
+  非 owner 控件 disabled + "只读"标）+ i18n 中英 ~14 keys（dialogNewScope* / groupGlobal /
+  emptyGlobal / ownerBadgePrefix / ownerMineBadge / actionReadonly / picker.groupMyGlobal /
+  groupOthersGlobal）
+- **P5** config.yml `dynamic.variables.userglobal-max-{per-owner,total}` 段（默 500 / 10000）+
+  后端 15 新 case（10 VariableStore + 5 EditSession）+ 前端 6 新 case +
+  docs/variables.md §1.13 + 版本号 0.4.2→0.4.3-SNAPSHOT（5 处文件）
 
-**5 个 phase（共 ~13h）**：
-- **P1（3h）** V015 migration `user_global_variables` 表 + UserGlobalVariableDao + VariableStore.createGlobal/listGlobal
-- **P2（3h）** EditSession `scope='global'` 路径 + 5 个 `canvas.var.global.*` 权限 + AuditLog + 配额检查
-- **P3（2h）** broadcastVariableChangeToAll（全 session 广播，与现有 broadcastToWall 并列）+ ChangeListener 路由 + interpolator 双端测试
-- **P4（4h）** NewVariableDialog scope toggle + VariablePanel owner badge + Picker 加 "🌐 我的全局 / 其他全局" 分组
-- **P5（1h）** 配额 config 段 + 单测 + docs/variables.md §1.12 新节 + 版本号 0.4.2 → 0.4.3-SNAPSHOT + journal + push
+**关键架构纪律（已固化）**：
+1. **namespace = `userglobal`**（不带冒号 + wallId）— 与 user 同谱系但全局
+2. **外部插件禁推**：`userglobal` 加入 `PluginNamespaceRegistry.RESERVED_NAMESPACES`；
+   插件想全服共享应用自己 namespace（如 `bedwars/*`），不允许抢用
+3. **owner-only + admin override** 5 权限节点（own 默 true / any 默 op）
+4. **配额 per-owner 500 + 全服 10000**（config 可调；管理员意图优先 — 不再强制
+   total ≥ per_owner）
+5. **`.canvas` 工程文件不含 userglobal**（服务器级状态，跨服务器无意义；引用全局变量
+   的 wall 导入后该占位符走 fallback "???"）
+6. **state.patch 广播全 session**（HikariCanvas listener 按 fullName 前缀分流到
+   broadcastToAll / broadcastToWall；前端 mirror 不需感知 namespace 形态）
 
-**关键架构落地**：
-- name 全服 PRIMARY KEY（不与 wallId 组合）
-- state.patch 广播全 session（区别于 per-wall 变量按 wallId 路由）
-- .canvas 文件导出**不含**全局变量（服务器级状态，跨服务器无意义）
-- 别名复用 0.4.2 variable_aliases 表（per-wall 别名继续工作）
-
-**0.4.3 总 ~13h ≈ 3 天 wall-clock**。
+**测试结果**：后端 **795**（原 714 + 新 81）/ 前端 **161**（原 155 + 新 6） 全绿；
+shadow jar 153 MB / 0 baseline 漂移。**0.4.3 总 ~13h（单日推完）**。
 
 ## 0.4.4 路线（铁路网络：线路 / 站点 / **车次** / 时刻表，规划完成 2026-05-21 / 待开干）
 
@@ -271,7 +293,7 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 | 0.4.0 | 变量系统底座 + 4 Provider + Plugin API + 命令族 | 150h | ✅ |
 | 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
 | 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
-| **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | 📋 规划完成 |
+| **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | ✅ |
 | **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型） | **60h** | 📋 规划完成 |
 | 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
 | 0.6.0+ | Blockly 块脚本 | 200h | 远期 |

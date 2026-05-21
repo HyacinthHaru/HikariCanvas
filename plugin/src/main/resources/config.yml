@@ -156,3 +156,11 @@ dynamic:
     arriving-text: "进站中"
     # arrival_status 文案（eta > 阈值时）
     idle-text: ""
+
+  # 0.4.3：全局用户变量（userglobal/*）配额。详见 docs/dynamic-data.md §17.4
+  # 全局变量 = 玩家可创建的跨 wall 共享变量，与 user/* per-wall 隔离不同
+  variables:
+    # 每 owner 上限（创建超出此数 → QUOTA_EXCEEDED）
+    userglobal-max-per-owner: 500
+    # 全服总上限（任何 owner 加起来不超过此数）
+    userglobal-max-total: 10000

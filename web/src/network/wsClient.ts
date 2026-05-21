@@ -167,9 +167,28 @@ export class WsClient {
     /**
      * `variable.create`：在当前 wall 上创建用户变量。
      * 后端自动加 {@code user:<wallId>/} 前缀。
+     *
+     * <p>0.4.3：可选 {@code scope} 参数 — {@code 'wall'}（默认，per-wall user 变量）/
+     * {@code 'global'}（{@code userglobal/*}，跨 wall 全服共享）。后者由调用方走
+     * NewVariableDialog 的 scope toggle 决定。返 promise resolve 后可读 ack 拿
+     * {@code fullName}（前端 NewVariableDialog 已沿用名字字段拼 alias，需要 fullName
+     * 时调 {@link sendVariableCreateGlobal} 拿到带 ack）。</p>
      */
-    sendVariableCreate(name: string, type: VarType, defaultValue?: string | null): Promise<void> {
-        return this.sendWithAck('variable.create', { name, type, defaultValue }).then(() => undefined);
+    sendVariableCreate(name: string, type: VarType, defaultValue?: string | null,
+                       scope: 'wall' | 'global' = 'wall'): Promise<void> {
+        return this.sendWithAck('variable.create',
+            { name, type, defaultValue, scope }).then(() => undefined);
+    }
+
+    /**
+     * 0.4.3：创建全局用户变量（{@code userglobal/<name>}）并返 ack payload 含
+     * {@code fullName}（{@code 'userglobal/<name>'}）。调用方需要立即给变量起别名时用。
+     */
+    sendVariableCreateGlobalWithAck(
+        name: string, type: VarType, defaultValue?: string | null,
+    ): Promise<{ fullName?: string } | undefined> {
+        return this.sendWithAck('variable.create',
+            { name, type, defaultValue, scope: 'global' }) as Promise<{ fullName?: string } | undefined>;
     }
 
     /** `variable.update`：改 user/* 变量的 type / defaultValue。 */

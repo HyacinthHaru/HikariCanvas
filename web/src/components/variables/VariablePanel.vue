@@ -36,7 +36,7 @@ import { useNetworkStore } from '@/stores/network';
 import { useI18n } from '@/i18n';
 import { getWsClient } from '@/network/wsClient';
 import type { Variable, VarType } from '@/types/variable';
-import { isUserNamespace } from '@/types/variable';
+import { isUserNamespace, isUserGlobalNamespace } from '@/types/variable';
 import NewVariableDialog from './NewVariableDialog.vue';
 import VariableValueEditor from './VariableValueEditor.vue';
 import BindDialog from './BindDialog.vue';
@@ -54,8 +54,10 @@ const rootRef = ref<HTMLElement | null>(null);
 const searchKeyword = ref('');
 
 // 分组折叠态（默认全展开）
-const collapsed = ref<Record<'mine' | 'plugin' | 'system' | 'papi', boolean>>({
+// 0.4.3：新增 global 分组（userglobal/*）
+const collapsed = ref<Record<'mine' | 'global' | 'plugin' | 'system' | 'papi', boolean>>({
     mine: false,
+    global: false,
     plugin: false,
     system: false,
     papi: false,
@@ -119,9 +121,37 @@ function matchesKeyword(fullName: string, v: Variable, kw: string): boolean {
     return false;
 }
 
-function toggleGroup(g: 'mine' | 'plugin' | 'system' | 'papi') {
+function toggleGroup(g: 'mine' | 'global' | 'plugin' | 'system' | 'papi') {
     collapsed.value = { ...collapsed.value, [g]: !collapsed.value[g] };
 }
+
+/**
+ * 0.4.3：全局用户变量列表（{@code userglobal/*}），含 owner 区分。
+ * 行字段同 myVariables，加 {@code isMine}（owner = self） + {@code ownerName}（展示用）。
+ */
+const globalVariables = computed<Array<{
+    fullName: string;
+    v: Variable;
+    isMine: boolean;
+    ownerName: string | null;
+}>>(() => {
+    const selfUuid = project.selfUuid;
+    const kw = searchKeyword.value.trim().toLowerCase();
+    const result: Array<{ fullName: string; v: Variable; isMine: boolean; ownerName: string | null }> = [];
+    for (const v of store.all) {
+        if (!isUserGlobalNamespace(v.namespace)) continue;
+        const fullName = `${v.namespace}/${v.key}`;
+        if (kw && !matchesKeyword(fullName, v, kw)) continue;
+        const isMine = !!v.ownerUuid && !!selfUuid && v.ownerUuid === selfUuid;
+        result.push({ fullName, v, isMine, ownerName: v.ownerName ?? null });
+    }
+    // 我的全局排前；同组内字母序
+    result.sort((a, b) => {
+        if (a.isMine !== b.isMine) return a.isMine ? -1 : 1;
+        return a.v.key.localeCompare(b.v.key);
+    });
+    return result;
+});
 
 // ---------- 行操作 ----------
 
@@ -441,6 +471,159 @@ function isHexColor(s: string | null): boolean {
                 </button>
               </div>
               <span v-if="aliasError" class="text-[color:var(--destructive)] text-[10px]">{{ aliasError }}</span>
+            </div>
+
+            <!-- 删除确认 popover（inline） -->
+            <div
+              v-else
+              class="flex items-center gap-2 p-2 rounded bg-[color:var(--destructive)]/10 border border-[color:var(--destructive)]/30"
+            >
+              <span class="flex-1 text-[color:var(--destructive)] truncate" :title="entry.fullName">
+                {{ t.variables.deleteConfirm(entry.fullName) }}
+              </span>
+              <button
+                class="hc-btn px-2 py-0.5 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                @click="cancelDelete"
+              >
+                {{ t.variables.deleteConfirmNo }}
+              </button>
+              <button
+                class="hc-btn px-2 py-0.5 text-xs rounded bg-[color:var(--destructive)] text-white hover:opacity-90"
+                @click="confirmDelete(entry.fullName)"
+              >
+                {{ t.variables.deleteConfirmYes }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 1.5) 0.4.3 全局变量（userglobal/*）-->
+      <section>
+        <button
+          class="w-full flex items-center gap-1 py-1 px-1 rounded hover:bg-[color:var(--accent)] text-left"
+          @click="toggleGroup('global')"
+        >
+          <ChevronDown v-if="!collapsed.global" class="size-3.5 text-[color:var(--muted-foreground)]" />
+          <ChevronRight v-else class="size-3.5 text-[color:var(--muted-foreground)]" />
+          <Globe class="size-3.5 text-[color:var(--ctp-mauve)]" />
+          <span class="font-medium">{{ t.variables.groupGlobal }}</span>
+          <span class="ml-auto text-[color:var(--muted-foreground)] font-mono">{{ globalVariables.length }}</span>
+        </button>
+        <div v-if="!collapsed.global" class="mt-1 pl-2 space-y-1.5">
+          <div
+            v-if="globalVariables.length === 0"
+            class="p-3 rounded-[var(--radius-sm)] bg-[color:var(--muted)] text-[color:var(--muted-foreground)] text-center"
+          >
+            {{ t.variables.emptyGlobal }}
+          </div>
+          <div
+            v-for="entry in globalVariables"
+            :key="entry.fullName"
+            class="rounded-[var(--radius-sm)] border border-[color:var(--border)] bg-[color:var(--background)] p-2 space-y-1"
+            :class="{ 'opacity-80': !entry.isMine }"
+          >
+            <!-- 第 1 行：key + type chip + alias chip + owner badge -->
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span class="font-mono text-xs truncate" :title="entry.fullName">{{ entry.v.key }}</span>
+              <span
+                class="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider font-medium shrink-0"
+                :class="typeChipClass(entry.v.type)"
+              >{{ typeChipLabel(entry.v.type) }}</span>
+              <span
+                v-if="aliasStore.get(entry.fullName)"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-[color:var(--ctp-mauve)]/15 text-[color:var(--ctp-mauve)]"
+                :title="t.variables.aliasChipPrefix + ' ' + aliasStore.get(entry.fullName)"
+              >
+                <Tag class="size-2.5" />
+                <span class="truncate max-w-[120px]">{{ aliasStore.get(entry.fullName) }}</span>
+              </span>
+              <!-- 非 owner 时显示 owner 名 + 只读标 -->
+              <span
+                v-if="!entry.isMine && entry.ownerName"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 bg-[color:var(--muted)] text-[color:var(--muted-foreground)]"
+                :title="t.variables.ownerBadgePrefix + ' ' + entry.ownerName"
+              >
+                <Users class="size-2.5" />
+                <span class="truncate max-w-[100px]">{{ entry.ownerName }}</span>
+              </span>
+              <span v-if="entry.isMine"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-[color:var(--ctp-mauve)]/15 text-[color:var(--ctp-mauve)]"
+              >
+                {{ t.variables.ownerMineBadge }}
+              </span>
+            </div>
+
+            <!-- 第 2 行：current + default 值 -->
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[color:var(--muted-foreground)]">
+              <span class="flex items-center gap-1">
+                <span>{{ t.variables.currentLabel }}:</span>
+                <span
+                  v-if="entry.v.type === 'COLOR' && isHexColor(entry.v.currentValue)"
+                  class="inline-block size-3 rounded border border-[color:var(--border)]"
+                  :style="{ backgroundColor: entry.v.currentValue ?? '#000' }"
+                ></span>
+                <span class="font-mono text-[color:var(--foreground)]">{{ entry.v.currentValue ?? '∅' }}</span>
+              </span>
+              <span class="flex items-center gap-1">
+                <span>{{ t.variables.defaultLabel }}:</span>
+                <span
+                  v-if="entry.v.type === 'COLOR' && isHexColor(entry.v.defaultValue)"
+                  class="inline-block size-3 rounded border border-[color:var(--border)]"
+                  :style="{ backgroundColor: entry.v.defaultValue ?? '#000' }"
+                ></span>
+                <span class="font-mono">{{ entry.v.defaultValue ?? '∅' }}</span>
+              </span>
+            </div>
+
+            <!-- 第 3 行：操作按钮（非 owner 时禁编辑；admin 也不在此 UI 暴露 — 走 /canvas var 命令） -->
+            <div
+              v-if="confirmingDeleteFor !== entry.fullName"
+              class="flex items-center gap-1 pt-0.5"
+            >
+              <template v-if="entry.v.type === 'NUMBER' && entry.isMine">
+                <NumberStepButton
+                  :title="t.variables.actionDec"
+                  :delta="-1"
+                  :on-step="(d) => incVariable(entry.fullName, entry.v, d)"
+                >
+                  <Minus class="size-3" />
+                </NumberStepButton>
+                <NumberStepButton
+                  :title="t.variables.actionInc"
+                  :delta="1"
+                  :on-step="(d) => incVariable(entry.fullName, entry.v, d)"
+                >
+                  <Plus class="size-3" />
+                </NumberStepButton>
+              </template>
+              <button
+                class="hc-btn flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+                :title="entry.isMine ? t.variables.actionEdit : t.variables.actionReadonly"
+                :disabled="!entry.isMine"
+                @click="entry.isMine && openValueEditor(entry.fullName, entry.v)"
+              >
+                <Pencil class="size-3" />
+                <span>{{ t.variables.actionEdit }}</span>
+              </button>
+              <button
+                class="hc-btn flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                :title="t.variables.actionEditAlias"
+                @click="openAliasEdit(entry.fullName)"
+              >
+                <Tag class="size-3" />
+              </button>
+              <button
+                v-if="entry.isMine"
+                class="ml-auto hc-btn p-1 rounded text-[color:var(--destructive)] hover:bg-[color:var(--destructive)]/10"
+                :title="t.variables.actionDelete"
+                @click="askDelete(entry.fullName)"
+              >
+                <Trash2 class="size-3.5" />
+              </button>
+              <span v-else class="ml-auto text-[10px] text-[color:var(--muted-foreground)]">
+                {{ t.variables.actionReadonly }}
+              </span>
             </div>
 
             <!-- 删除确认 popover（inline） -->

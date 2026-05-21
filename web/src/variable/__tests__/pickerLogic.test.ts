@@ -58,32 +58,40 @@ describe('buildGroups', () => {
         mkVar('papi', '%player_name%'),
     ];
 
-    it('4 组分类 + 跨 wall user 隔离', () => {
+    // 0.4.3：按 id 查组，让测试不依赖 group 数组 index（未来加组无需逐一改测试）
+    function groupItems(groups: ReturnType<typeof buildGroups>, id: string) {
+        return groups.find((g) => g.id === id)?.items ?? [];
+    }
+
+    it('6 组分类 + 跨 wall user 隔离（0.4.3 新增 myGlobal / othersGlobal）', () => {
         const groups = buildGroups(vars, 'w-abc', '');
-        expect(groups.map((g) => g.id)).toEqual(['mine', 'plugin', 'system', 'papi']);
-        expect(groups[0].items.map((v) => v.key)).toEqual(['my_red']);
-        expect(groups[1].items.map((v) => v.key)).toEqual(['score']);
-        expect(groups[2].items.map((v) => v.key)).toEqual(['server.time']);
-        expect(groups[3].items.map((v) => v.key)).toEqual(['%player_name%']);
+        expect(groups.map((g) => g.id))
+            .toEqual(['mine', 'myGlobal', 'othersGlobal', 'plugin', 'system', 'papi']);
+        expect(groupItems(groups, 'mine').map((v) => v.key)).toEqual(['my_red']);
+        expect(groupItems(groups, 'plugin').map((v) => v.key)).toEqual(['score']);
+        expect(groupItems(groups, 'system').map((v) => v.key)).toEqual(['server.time']);
+        expect(groupItems(groups, 'papi').map((v) => v.key)).toEqual(['%player_name%']);
+        expect(groupItems(groups, 'myGlobal').length).toBe(0);
+        expect(groupItems(groups, 'othersGlobal').length).toBe(0);
     });
 
     it('wallId 为 null → mine 组为空（user 变量需要 wallId 上下文）', () => {
         const groups = buildGroups(vars, null, '');
-        expect(groups[0].items.length).toBe(0);
-        expect(groups[1].items.length).toBe(1);  // plugin 仍有
+        expect(groupItems(groups, 'mine').length).toBe(0);
+        expect(groupItems(groups, 'plugin').length).toBe(1);  // plugin 仍有
     });
 
     it('keyword filter 模糊匹配 namespace / key', () => {
         const groups = buildGroups(vars, 'w-abc', 'score');
         // 只 plugin 组的 "score" 命中
         expect(totalCount(groups)).toBe(1);
-        expect(groups[1].items[0].key).toBe('score');
+        expect(groupItems(groups, 'plugin')[0].key).toBe('score');
     });
 
     it('keyword 大小写不敏感', () => {
         const groups = buildGroups(vars, 'w-abc', 'SERVER');
         expect(totalCount(groups)).toBe(1);
-        expect(groups[2].items[0].key).toBe('server.time');
+        expect(groupItems(groups, 'system')[0].key).toBe('server.time');
     });
 
     it('keyword 空白 trim', () => {
@@ -99,7 +107,7 @@ describe('buildGroups', () => {
         const groups = buildGroups(vars, 'w-abc', '服务器', aliases);
         // alias 命中 server.time
         expect(totalCount(groups)).toBe(1);
-        expect(groups[2].items[0].key).toBe('server.time');
+        expect(groupItems(groups, 'system')[0].key).toBe('server.time');
     });
 
     it('keyword 命中 alias（Map 形态）', () => {
@@ -108,7 +116,7 @@ describe('buildGroups', () => {
         ]);
         const groups = buildGroups(vars, 'w-abc', '红队', aliases);
         expect(totalCount(groups)).toBe(1);
-        expect(groups[0].items[0].key).toBe('my_red');
+        expect(groupItems(groups, 'mine')[0].key).toBe('my_red');
     });
 
     it('keyword 既命中 namespace 又命中 alias 不重复', () => {
@@ -118,7 +126,7 @@ describe('buildGroups', () => {
         // 关键字 "score" 命中 fullName，alias 不参与；只一条
         const groups = buildGroups(vars, 'w-abc', 'score', aliases);
         expect(totalCount(groups)).toBe(1);
-        expect(groups[1].items[0].key).toBe('score');
+        expect(groupItems(groups, 'plugin')[0].key).toBe('score');
     });
 
     it('keyword 命中 alias 大小写不敏感', () => {
@@ -132,6 +140,30 @@ describe('buildGroups', () => {
     it('aliases 为 null 时退化为旧逻辑（仅匹配 fullName）', () => {
         const groups = buildGroups(vars, 'w-abc', '红队', null);
         expect(totalCount(groups)).toBe(0);  // 没有 fullName 含 "红队"
+    });
+
+    // 0.4.3：userglobal 分组 + owner 区分
+    it('userglobal 分到 myGlobal / othersGlobal（按 owner = selfUuid）', () => {
+        const SELF = '11111111-1111-1111-1111-111111111111';
+        const OTHER = '22222222-2222-2222-2222-222222222222';
+        const myGlobal = mkVar('userglobal', 'red_score');
+        (myGlobal as Variable).ownerUuid = SELF;
+        (myGlobal as Variable).ownerName = 'Alice';
+        const othersGlobal = mkVar('userglobal', 'blue_score');
+        (othersGlobal as Variable).ownerUuid = OTHER;
+        (othersGlobal as Variable).ownerName = 'Bob';
+
+        const groups = buildGroups([myGlobal, othersGlobal], 'w-abc', '', null, SELF);
+        expect(groupItems(groups, 'myGlobal').map((v) => v.key)).toEqual(['red_score']);
+        expect(groupItems(groups, 'othersGlobal').map((v) => v.key)).toEqual(['blue_score']);
+    });
+
+    it('userglobal 缺 selfUuid → 全归 othersGlobal（fallback）', () => {
+        const v = mkVar('userglobal', 'shared') as Variable;
+        v.ownerUuid = 'uuid-1';
+        const groups = buildGroups([v], 'w-abc', '', null, null);
+        expect(groupItems(groups, 'myGlobal').length).toBe(0);
+        expect(groupItems(groups, 'othersGlobal').map((vv) => vv.key)).toEqual(['shared']);
     });
 });
 
@@ -291,7 +323,10 @@ describe('isDynamicNamespace (P3-M)', () => {
 // ---------- buildGroups 接入 mergeMetadata 后行为不变 ----------
 
 describe('buildGroups + merged metadata (P3-M)', () => {
-    it('用 mergeMetadata 输出走 buildGroups 仍 4 组分类正确', () => {
+    function groupById(groups: ReturnType<typeof buildGroups>, id: string) {
+        return groups.find((g) => g.id === id)?.items ?? [];
+    }
+    it('用 mergeMetadata 输出走 buildGroups 仍按 id 分类正确（0.4.3 6 组）', () => {
         const metadata: NamespaceMetadata[] = [
             {
                 namespace: 'user:w-abc',
@@ -314,11 +349,12 @@ describe('buildGroups + merged metadata (P3-M)', () => {
         ];
         const merged = mergeMetadata([], metadata);
         const groups = buildGroups(merged, 'w-abc', '');
-        // mine: 1, plugin: 0, system: 1, papi: 0
-        expect(groups[0].items.map((v) => v.key)).toEqual(['red']);
-        expect(groups[1].items.length).toBe(0);
-        expect(groups[2].items.map((v) => v.key)).toEqual(['server.time']);
-        expect(groups[3].items.length).toBe(0);
+        expect(groupById(groups, 'mine').map((v) => v.key)).toEqual(['red']);
+        expect(groupById(groups, 'plugin').length).toBe(0);
+        expect(groupById(groups, 'system').map((v) => v.key)).toEqual(['server.time']);
+        expect(groupById(groups, 'papi').length).toBe(0);
+        expect(groupById(groups, 'myGlobal').length).toBe(0);
+        expect(groupById(groups, 'othersGlobal').length).toBe(0);
     });
 });
 

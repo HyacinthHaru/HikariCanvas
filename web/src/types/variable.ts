@@ -25,11 +25,13 @@ export type VarType = 'STRING' | 'NUMBER' | 'BOOLEAN' | 'COLOR';
 /**
  * Variable 完整记录（state.patch add value / list 端点返回的形态）。
  *
- * - {@link namespace}：{@code user:<wallId>} / {@code system} / 插件名 / {@code papi}
+ * - {@link namespace}：{@code user:<wallId>} / {@code userglobal}（0.4.3） / {@code system} /
+ *   插件名 / {@code papi}
  * - {@link ttl}：毫秒；0 = 永久；>0 = TTL（最小 100ms 由后端校验）
  * - {@link source}：human-readable 来源；用户手动改 = {@code "manual"}；插件 push = 插件名；
  *   系统 provider = {@code "system"}；PAPI 桥接 = {@code "papi"}
  * - {@link updatedAt}：epoch ms
+ * - {@link ownerUuid} / {@link ownerName}（0.4.3）：仅 {@code userglobal} namespace 有；其他 null
  */
 export interface Variable {
     namespace: string;
@@ -40,6 +42,8 @@ export interface Variable {
     updatedAt: number;
     ttl: number;
     source: string | null;
+    ownerUuid?: string | null;
+    ownerName?: string | null;
 }
 
 /** `variable.update` op 的 patch 字段；type / defaultValue 任一可省。 */
@@ -83,4 +87,15 @@ export function parseFullName(fullName: string): { namespace: string; key: strin
 /** 判 namespace 是否为某 wall 的 user 变量（前缀 {@code user:}）。 */
 export function isUserNamespace(namespace: string): boolean {
     return namespace.startsWith('user:');
+}
+
+/** 0.4.3：判 namespace 是否为全局用户变量（{@code userglobal}）。 */
+export const USERGLOBAL_NAMESPACE = 'userglobal';
+export function isUserGlobalNamespace(namespace: string): boolean {
+    return namespace === USERGLOBAL_NAMESPACE;
+}
+
+/** 0.4.3：拼全局用户变量 fullName，例如 {@code 'userglobal/red_score'}。 */
+export function makeUserGlobalFullName(key: string): string {
+    return `${USERGLOBAL_NAMESPACE}/${key}`;
 }

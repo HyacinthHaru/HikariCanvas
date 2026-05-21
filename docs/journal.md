@@ -5,6 +5,116 @@
 
 ---
 
+## 2026-05-21 · 0.4.3 全局用户变量（userglobal namespace）— 5 phase 落地
+
+### 背景
+
+0.4.0 P1 决策 3 的遗留：user 变量按 wall 隔离（namespace = `user:<wallId>`），
+不能跨画布共享。0.4.3 引入 `userglobal/<key>` 新 namespace，**全服共享、跨 wall**，
+但仍是玩家自定义（不是插件 / 系统变量）。设计见 `docs/dynamic-data.md §17`。
+
+### 实施（P1-P5，单日完成）
+
+- **P1（V015 migration + DAO + Store API）**：
+  - `db-migrations/V015__user_global_variables.sql` 新表（主键 = name 单字段，全服唯一）
+  - `UserGlobalVariableDao`（CRUD + listByOwner + countByOwner + countTotal）
+  - `VariableStore.createGlobal/listGlobals/getGlobalOwner/loadGlobalsFromDb/configureUserGlobal`
+  - 内存 `GlobalOwnerInfo` 表（key → ownerUuid + ownerName）让序列化时能注入 owner
+  - HikariCanvasConfig 加 `userGlobalMaxPerOwner` / `userGlobalMaxTotal` 字段
+  - HikariCanvas onEnable 装配 + loadGlobalsFromDb
+- **P2（EditSession 路径 + 权限 + Reserved namespace）**：
+  - `EditSession.createGlobalVariable / updateGlobalVariable / setGlobalVariableValue /
+    deleteGlobalVariable / bindGlobalVariable` 5 新方法
+  - `VariableOpDispatcher` 按 `scope='global'`（create）/ `fullName.startsWith("userglobal/")`
+    （mutate）路由 + `pickGlobalPermissionNode` + `isCallerGlobalOwner`
+  - `PluginNamespaceRegistry.RESERVED_NAMESPACES` 加 `userglobal`（外部插件禁推）
+  - paper-plugin.yml 加 5 个新权限节点 `canvas.var.global.{create, write.own/any, delete.own/any}`
+  - AuditLog 事件前缀加 `VARIABLE_GLOBAL_*`（CREATE / UPDATE / SET / DELETE / BIND）
+- **P3（广播 + listener 路由 + interpolator）**：
+  - `SessionManager.broadcastVariableChangeToAll(event, push)`：与现有 broadcastToWall 并列，
+    向所有活跃 session 广播 patch（不限 wall）
+  - HikariCanvas listener detect `fullName.startsWith("userglobal/")` → 走 broadcastToAll
+  - `SessionManager.variableToMap` 现为 instance method + `variableStoreRef` 注入；userglobal
+    namespace 时从 store.getGlobalOwner 注入 ownerUuid + ownerName 字段
+  - `VariableDto.from(v, store)` 工厂方法注入 owner；WebServer ready payload 用新签名
+  - `EditSession.variableToMap(v, store)` 双 overload；create / update Global 路径传 store
+  - interpolator 天然支持 `${var:userglobal/X}`（fallthrough 到字面查询，无需注入 wallId）
+  - 前端 `Variable` 接口加 `ownerUuid` / `ownerName` 字段（可选）；`types/variable.ts`
+    加 `USERGLOBAL_NAMESPACE` / `isUserGlobalNamespace` / `makeUserGlobalFullName`
+- **P4（前端 UI）**：
+  - `pickerLogic.buildGroups` 第 5 参 `selfUuid` → userglobal 分到 `myGlobal` /
+    `othersGlobal`（按 ownerUuid 匹配）；新 6 组顺序
+    `mine → myGlobal → othersGlobal → plugin → system → papi`
+  - `wsClient.sendVariableCreate` 加 `scope: 'wall' | 'global'` 第 4 参；新
+    `sendVariableCreateGlobalWithAck` 返 fullName 给 alias 拼接
+  - `NewVariableDialog` 加 scope toggle [本 wall | 全局] + hint 文案，create 走 scope 参数
+  - `VariablePanel` 新 section 「全局变量」（Globe 图标 + Mauve 调色板）；
+    每行 owner badge / 我创建 chip；非 owner 时按钮全 disabled + "只读" 标记
+  - `VariablePicker` 6 组分类完整渲染（i18n 加 4 个新 group title）
+  - i18n 中英 ~14 keys（dialogNewScope* + groupGlobal + emptyGlobal + ownerBadgePrefix +
+    ownerMineBadge + actionReadonly + picker.groupMyGlobal / groupOthersGlobal）
+- **P5（config + 单测 + docs + 版本号）**：
+  - config.yml `dynamic.variables.userglobal-max-{per-owner,total}` 段（默认 500 / 10000）
+  - `VariableStoreTest` 加 10 case 覆盖 createGlobal（dao 未配 / 配额 / 重复 / DB 落库 /
+    listGlobals / loadGlobalsFromDb / listVisibleToWall / ChangeListener）
+  - `EditSessionVariableTest` 加 5 case 覆盖 createGlobalVariable / updateGlobalVariable
+    越权 / setGlobalVariableValue / deleteGlobalVariable / patch 形态 + owner 注入
+  - PluginNamespaceRegistryTest 现有 `register_reservedNamespaces_throwsIllegalArgument`
+    自动覆盖 `userglobal` 拒绝（RESERVED_NAMESPACES 内）
+  - pickerLogic.test.ts 现有 buildGroups 测试改 byId 取组（不依赖 index）+ 加 2 case
+    覆盖 userglobal 按 selfUuid 分组
+  - docs/variables.md 加 §1.13 新节（玩家入门指南：创建 / Picker 分组 / 配额 / 权限 /
+    与 user 对比 / 场景示例）
+  - 版本号 0.4.2 → 0.4.3-SNAPSHOT 5 处（build.gradle.kts / paper-plugin.yml × 3 含
+    demo plugins / web/package.json + package-lock.json）
+
+### 测试结果
+
+- 后端 **795** 测试全绿（原 714 + 新增 81：10 VariableStore + 5 EditSessionVariable +
+  其他构造路径变更未破坏）
+- 前端 **161** 测试全绿（原 155 + 新增 6：buildGroups byId / userglobal 分组 / fallback）
+- 后端编译 / 前端 vite build 均 0 warning 0 error
+
+### 关键设计决策（已固化）
+
+1. **namespace = `userglobal`**（不带冒号 + wallId）— 与 user 同谱系但全局
+2. **外部插件禁推 userglobal/***（加入 RESERVED_NAMESPACES）；插件想全服共享应用自己 namespace
+3. **owner-only + admin override**（5 权限节点）；owner = 创建者，admin = `.any` 节点
+4. **配额 per-owner 500 + 全服 10000**（config 可调，不再强制 total ≥ per_owner，admin
+   意图优先）
+5. **`.canvas` 文件导出不含** userglobal（服务器级状态，跨服务器无意义）
+6. **state.patch 广播全 session**（非按 wall 路由）；HikariCanvas listener 按 fullName
+   前缀分流到 broadcastToAll / broadcastToWall
+
+### 关联文件
+
+- `db-migrations/V015__user_global_variables.sql`（新）
+- `plugin/.../storage/UserGlobalVariableDao.java`（新）
+- `plugin/.../variable/VariableStore.java`（+ createGlobal/listGlobals/configureUserGlobal/
+  persistIfUserGlobal/getGlobalOwner/loadGlobalsFromDb 等约 200 行）
+- `plugin/.../variable/VariableException.java`（无改动，复用 QUOTA_EXCEEDED）
+- `plugin/.../variable/VariableDto.java`（加 ownerUuid/ownerName + 新工厂 from(v, store)）
+- `plugin/.../variable/plugin/PluginNamespaceRegistry.java`（RESERVED_NAMESPACES + userglobal）
+- `plugin/.../state/EditSession.java`（+ 5 个 global 方法 + variableToMap 双 overload）
+- `plugin/.../web/VariableOpDispatcher.java`（scope 路由 + global 权限节点 + audit 前缀）
+- `plugin/.../web/WebServer.java`（ready payload VariableDto.from(v, store)）
+- `plugin/.../session/SessionManager.java`（+ broadcastVariableChangeToAll +
+  variableToMap instance + setVariableStoreRef）
+- `plugin/.../HikariCanvas.java`（装配 + listener 路由分流）
+- `plugin/.../HikariCanvasConfig.java`（+ userGlobalMaxPerOwner/Total）
+- `plugin/src/main/resources/{config.yml, paper-plugin.yml}`
+- `web/src/types/variable.ts`（+ ownerUuid/ownerName + USERGLOBAL_NAMESPACE helpers）
+- `web/src/variable/pickerLogic.ts`（+ myGlobal/othersGlobal 分组 + selfUuid 参数）
+- `web/src/network/wsClient.ts`（+ scope 参数 + sendVariableCreateGlobalWithAck）
+- `web/src/components/variables/{VariablePanel, NewVariableDialog, VariablePicker}.vue`
+- `web/src/i18n/messages.ts`（zh + en 各 ~14 新 keys）
+- `web/src/variable/__tests__/pickerLogic.test.ts`（byId 重写 + 新 case）
+- `plugin/src/test/.../{VariableStoreTest, EditSessionVariableTest}.java`（+ 15 case）
+- `docs/variables.md`（+ §1.13）
+- `docs/dynamic-data.md §17`（既有规划文档不再改，仅作为契约对照）
+
+---
+
 ## 2026-05-21 · 0.4.4 铁路网络扩展：加车次 / 服务类型 / 编组 / 时刻表（规划升级，未实施）
 
 ### 背景

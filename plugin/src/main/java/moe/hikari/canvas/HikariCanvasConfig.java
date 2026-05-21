@@ -100,6 +100,15 @@ public final class HikariCanvasConfig {
     public final ScheduleConfig scheduleConfig;
 
     /**
+     * 0.4.3：全局用户变量配额 per-owner（默 500）。配置段 {@code dynamic.variables.userglobal-max-per-owner}。
+     */
+    public final int userGlobalMaxPerOwner;
+    /**
+     * 0.4.3：全局用户变量配额全服总（默 10000）。配置段 {@code dynamic.variables.userglobal-max-total}。
+     */
+    public final int userGlobalMaxTotal;
+
+    /**
      * 0.4.0 bugfix（Bug 3）：兜底列车时刻表配置。
      *
      * @param arrivingThresholdSeconds 进站阈值（秒）。eta ≤ 阈值时 {@code is_arriving=true} +
@@ -158,6 +167,8 @@ public final class HikariCanvasConfig {
         this.databaseAutoBackup = b.databaseAutoBackup;
         this.pushRateLimitConfig = b.pushRateLimitConfig;
         this.scheduleConfig = b.scheduleConfig;
+        this.userGlobalMaxPerOwner = b.userGlobalMaxPerOwner;
+        this.userGlobalMaxTotal = b.userGlobalMaxTotal;
     }
 
     /**
@@ -290,6 +301,18 @@ public final class HikariCanvasConfig {
                     idleText == null ? schedDefaults.idleText() : idleText);
         }
 
+        // 0.4.3：dynamic.variables 段 — 全局用户变量配额（缺则用 VariableStore 默认值）
+        org.bukkit.configuration.ConfigurationSection varSec =
+                f.getConfigurationSection("dynamic.variables");
+        if (varSec != null) {
+            b.userGlobalMaxPerOwner = Math.max(1, varSec.getInt(
+                    "userglobal-max-per-owner",
+                    moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_PER_OWNER));
+            b.userGlobalMaxTotal = Math.max(1, varSec.getInt(
+                    "userglobal-max-total",
+                    moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL));
+        }
+
         return new HikariCanvasConfig(b);
     }
 
@@ -381,5 +404,9 @@ public final class HikariCanvasConfig {
                 moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
         ScheduleConfig scheduleConfig = ScheduleConfig.defaults();
         AdaptiveFpsConfig adaptiveFps = AdaptiveFpsConfig.defaults();
+        int userGlobalMaxPerOwner =
+                moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_PER_OWNER;
+        int userGlobalMaxTotal =
+                moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL;
     }
 }

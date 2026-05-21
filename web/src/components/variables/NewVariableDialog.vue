@@ -25,7 +25,10 @@ import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import type { VarType } from '@/types/variable';
-import { makeUserFullName } from '@/types/variable';
+import { makeUserFullName, makeUserGlobalFullName } from '@/types/variable';
+
+/** 0.4.3：变量作用域。'wall' = per-wall user 变量（默认）；'global' = userglobal 全服共享。 */
+type Scope = 'wall' | 'global';
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'created', fullName: string): void }>();
 
@@ -39,6 +42,7 @@ const NAME_REGEX = /^[a-zA-Z0-9_.-]+$/;
 const MAX_NAME_LEN = 64;
 
 const name = ref('');
+const scope = ref<Scope>('wall');  // 0.4.3：默认 wall（与 0.4.0 行为一致）
 const type = ref<VarType>('STRING');
 const defaultValueStr = ref('');           // STRING 用
 const defaultValueNum = ref<number>(0);    // NUMBER 用
@@ -98,13 +102,19 @@ async function onSubmit() {
     const fullDefault = currentDefaultValueAsString();
     const aliasTrimmed = aliasDraft.value.trim();
     try {
-        await ws.sendVariableCreate(name.value, type.value, fullDefault);
+        // 0.4.3：scope='global' 走 sendVariableCreate 第 4 参，后端 EditSession 路由到 createGlobalVariable
+        await ws.sendVariableCreate(name.value, type.value, fullDefault, scope.value);
         // 0.4.2：若 alias 字段非空，create 成功后再发 variable.alias.set。
-        // user 变量 fullName = user:<wallId>/<name>；wallId 缺失（理论不应发生）则跳过。
+        // user 变量 fullName = user:<wallId>/<name>；userglobal 变量 fullName = userglobal/<name>
         if (aliasTrimmed.length > 0) {
-            const wallId = project.wallId;
-            if (wallId) {
-                const fullName = makeUserFullName(wallId, name.value);
+            let fullName: string | null = null;
+            if (scope.value === 'global') {
+                fullName = makeUserGlobalFullName(name.value);
+            } else {
+                const wallId = project.wallId;
+                if (wallId) fullName = makeUserFullName(wallId, name.value);
+            }
+            if (fullName) {
                 try {
                     await ws.sendVariableAliasSet(fullName, aliasTrimmed);
                 } catch (aliasErr) {
@@ -184,6 +194,37 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
           </span>
           <span v-else class="text-xs text-[color:var(--muted-foreground)]">{{ t.variables.dialogNewNameHint }}</span>
         </label>
+
+        <!-- 0.4.3：scope toggle（作用域）：本 wall vs 全局 -->
+        <div class="block">
+          <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.variables.dialogNewScopeLabel }}</span>
+          <div class="mt-1 flex gap-1">
+            <button
+              type="button"
+              class="hc-btn flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)] border transition-colors"
+              :class="scope === 'wall'
+                ? 'border-[color:var(--primary)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)]'
+                : 'border-[color:var(--border)] hover:bg-[color:var(--accent)]'"
+              @click="scope = 'wall'"
+            >
+              {{ t.variables.dialogNewScopeWall }}
+            </button>
+            <button
+              type="button"
+              class="hc-btn flex-1 px-2 py-1 text-xs rounded-[var(--radius-sm)] border transition-colors"
+              :class="scope === 'global'
+                ? 'border-[color:var(--primary)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)]'
+                : 'border-[color:var(--border)] hover:bg-[color:var(--accent)]'"
+              @click="scope = 'global'"
+            >
+              {{ t.variables.dialogNewScopeGlobal }}
+            </button>
+          </div>
+          <span class="text-xs text-[color:var(--muted-foreground)] block mt-1">
+            <template v-if="scope === 'wall'">{{ t.variables.dialogNewScopeWallHint }}</template>
+            <template v-else>{{ t.variables.dialogNewScopeGlobalHint }}</template>
+          </span>
+        </div>
 
         <!-- 类型 button group -->
         <div class="block">

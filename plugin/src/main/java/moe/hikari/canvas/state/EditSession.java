@@ -1284,8 +1284,16 @@ public final class EditSession {
     /**
      * 把 Variable record 序列化为 JSON Patch value 用的 Map（Jackson 自动处理 record →
      * object）。把 referencedByWalls 视为 Set<String>，无需特殊处理。
+     *
+     * <p>0.4.3：方法签名加 store 参数（仅 createGlobal / updateGlobal 等路径传入）让
+     * {@code userglobal/*} 携带 owner 信息；其他路径透传 null store 即可，行为不变。</p>
      */
     private static Map<String, Object> variableToMap(Variable v) {
+        return variableToMap(v, null);
+    }
+
+    private static Map<String, Object> variableToMap(Variable v,
+            @org.jetbrains.annotations.Nullable VariableStore store) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("namespace", v.namespace());
         m.put("key", v.key());
@@ -1296,6 +1304,14 @@ public final class EditSession {
         m.put("ttl", v.ttl());
         if (v.source() != null) m.put("source", v.source());
         // referencedByWalls 是服务端倒排索引细节，前端不需要（前端是单 wall 视角）；不下发。
+        // 0.4.3：userglobal 注入 owner 信息（store 可空 → 不查 / 也不注入）
+        if (store != null
+                && VariableStore.USER_GLOBAL_NAMESPACE.equals(v.namespace())) {
+            store.getGlobalOwner(v.key()).ifPresent(info -> {
+                m.put("ownerUuid", info.ownerUuid().toString());
+                m.put("ownerName", info.ownerName());
+            });
+        }
         return m;
     }
 
@@ -1446,6 +1462,153 @@ public final class EditSession {
         StatePatchBuilder b = new StatePatchBuilder();
         if (updated != null) {
             // source 字段承担 boundTo 语义（VariableStore.bind 写 source 槽位）
+            String path = variablePath(fullName) + "/source";
+            if (updated.source() == null) {
+                b.remove(path);
+            } else {
+                b.replace(path, updated.source());
+            }
+        }
+        return new OpResult.Ok(b.build(v), null);
+    }
+
+    // ---------- 0.4.3 全局用户变量 op handlers (userglobal/*) ----------
+    //
+    // 与 user 变量（per-wall）的关键区别：
+    //   - namespace = "userglobal"（不含冒号 + wallId 后缀）
+    //   - 持久化主键 = name 单字段（全服唯一）；wall 删除不动它
+    //   - ACL 走 canvas.var.global.{create, write.own/any, delete.own/any}（PluginYml 已加）
+    //   - state.patch 广播 → 所有 session（不止本 wall），SessionManager P3 路由层完成
+    //
+    // 路径区分：
+    //   - createGlobalVariable：协议侧 payload scope='global' → dispatcher 调本方法
+    //   - update/set/delete/bindGlobalVariable：dispatcher 按 fullName.startsWith("userglobal/") 路由
+
+    /** 全局用户变量 fullName = {@code userglobal/<key>}。 */
+    public static final String USERGLOBAL_PREFIX = VariableStore.USER_GLOBAL_NAMESPACE + "/";
+
+    /** 校验 fullName 属于 userglobal namespace。 */
+    private static void requireUserGlobalNamespace(String fullName) {
+        if (fullName == null || !fullName.startsWith(USERGLOBAL_PREFIX)) {
+            throw new VariableException(VariableException.Code.VARIABLE_NAMESPACE_DENIED,
+                    "expected userglobal/* prefix: " + fullName);
+        }
+    }
+
+    /**
+     * 0.4.3：创建全局用户变量 {@code userglobal/<key>}。owner = 调用者（UUID + 名）。
+     * dispatcher 在调用前应做 {@code canvas.var.global.create} 权限检查。
+     */
+    public synchronized OpResult createGlobalVariable(VariableStore store,
+                                                      java.util.UUID ownerUuid,
+                                                      String ownerName,
+                                                      String key, VarType type,
+                                                      String defaultValue) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        if (ownerUuid == null) return err("FORBIDDEN", "caller uuid required for userglobal");
+        if (ownerName == null || ownerName.isEmpty()) ownerName = ownerUuid.toString();
+        if (key == null || key.isEmpty()) return err("INVALID_PAYLOAD", "variable name missing");
+        if (type == null) return err("INVALID_PAYLOAD", "variable type missing");
+
+        Variable created;
+        try {
+            created = store.createGlobal(ownerUuid, ownerName, key, type, defaultValue);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        StatePatch patch = new StatePatchBuilder()
+                .add(variablePath(created.fullName()), variableToMap(created, store))
+                .build(v);
+        return new OpResult.Ok(patch, null);
+    }
+
+    /** 0.4.3：更新 {@code userglobal/*} 的 type / defaultValue。 */
+    public synchronized OpResult updateGlobalVariable(VariableStore store,
+                                                      String fullName, VariablePatch patch) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserGlobalNamespace(fullName);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        if (patch == null) return err("INVALID_PAYLOAD", "patch missing");
+        Variable updated;
+        try {
+            updated = store.update(fullName, patch);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        StatePatch sp = new StatePatchBuilder()
+                .replace(variablePath(updated.fullName()), variableToMap(updated, store))
+                .build(v);
+        return new OpResult.Ok(sp, null);
+    }
+
+    /** 0.4.3：设当前值（{@code userglobal/*}）。 */
+    public synchronized OpResult setGlobalVariableValue(VariableStore store,
+                                                        String fullName, String value) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserGlobalNamespace(fullName);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        try {
+            store.setValue(fullName, value, null);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        StatePatchBuilder b = new StatePatchBuilder();
+        String path = variablePath(fullName) + "/currentValue";
+        if (value == null) {
+            b.remove(path);
+        } else {
+            b.replace(path, value);
+        }
+        return new OpResult.Ok(b.build(v), null);
+    }
+
+    /** 0.4.3：删除 {@code userglobal/*}。 */
+    public synchronized OpResult deleteGlobalVariable(VariableStore store, String fullName) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserGlobalNamespace(fullName);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        try {
+            store.delete(fullName);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        long v = state.bumpVersion();
+        StatePatch sp = new StatePatchBuilder()
+                .remove(variablePath(fullName))
+                .build(v);
+        return new OpResult.Ok(sp, null);
+    }
+
+    /** 0.4.3：把 {@code userglobal/*} 绑定到插件 namespace 或解绑。 */
+    public synchronized OpResult bindGlobalVariable(VariableStore store,
+                                                    String fullName, String boundTo) {
+        if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
+        try {
+            requireUserGlobalNamespace(fullName);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        try {
+            store.bind(fullName, boundTo);
+        } catch (VariableException ve) {
+            return err(mapVariableErrorCode(ve.code()), ve.getMessage());
+        }
+        Variable updated = store.get(fullName).orElse(null);
+        long v = state.bumpVersion();
+        StatePatchBuilder b = new StatePatchBuilder();
+        if (updated != null) {
             String path = variablePath(fullName) + "/source";
             if (updated.source() == null) {
                 b.remove(path);

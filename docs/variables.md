@@ -341,6 +341,75 @@ CREATE TABLE variable_aliases (
 - 不要求别名 wall 内唯一（用户自己负责，UI 不报错）
 - wall 删除时 FK CASCADE 清；同时业务侧显式调 `deleteByWall` 兜底
 
+### 1.13 全局用户变量（0.4.3）
+
+0.4.0 的 user 变量是 **per-wall** 的（namespace = `user:<wallId>`），跨画布不共享。
+0.4.3 加入 **全局用户变量**（namespace = `userglobal`），玩家自定义、**全服可见、跨 wall 共享**。
+
+#### 创建
+
+VariablePanel → `+ 新建变量` → 第 2 个 toggle 切到「全局」：
+
+| 选项 | 行为 |
+|---|---|
+| **本 wall** | 默认；创建 `user:<wallId>/<name>`，仅本画布可见，wall 删除时一并清 |
+| **全局** | 创建 `userglobal/<name>`，**全服共享**；wall 删除不影响它，只有你和管理员能修改 |
+
+文本里写 `${var:userglobal/red_score}` 即可引用（与 user 变量 `${var:user/X}` 同款写法，
+但不注入 wallId）。
+
+#### Picker 分组
+
+VariablePicker 把 userglobal 变量分到两组：
+
+- 🌐 **我的全局**：你创建的（owner = 当前玩家）
+- 🌐 **其他全局**：其他玩家创建的（只读显示 + 显示 owner 名）
+
+只有 owner（创建者）和管理员（`canvas.var.global.write.any` / `delete.any`）能修改 / 删除；
+其他玩家只能读取 / 引用 / 起别名。
+
+#### 配额
+
+config.yml `dynamic.variables` 段：
+
+```yaml
+dynamic:
+  variables:
+    userglobal-max-per-owner: 500   # 每 owner 上限
+    userglobal-max-total: 10000     # 全服总上限
+```
+
+超出抛 `QUOTA_EXCEEDED`。
+
+#### 权限节点（paper-plugin.yml）
+
+| 节点 | 默认 | 作用 |
+|---|---|---|
+| `canvas.var.global.create` | true | 创建全局变量 |
+| `canvas.var.global.write.own` | true | owner 改自己的全局变量 |
+| `canvas.var.global.write.any` | op | admin override：改任意全局变量 |
+| `canvas.var.global.delete.own` | true | owner 删自己的全局变量 |
+| `canvas.var.global.delete.any` | op | admin override：删任意全局变量 |
+
+#### 与 user 变量的对比
+
+| 项 | `user/X`（per-wall） | `userglobal/X`（全局，0.4.3） |
+|---|---|---|
+| 内部 namespace | `user:<wallId>` | `userglobal` |
+| 跨 wall 共享 | ❌ | ✅ |
+| wall 删除时 | FK CASCADE 一并删 | 保留（admin 可手动删） |
+| 同 namespace 内 key 唯一性 | per-wall 唯一 | **全服唯一**（任何 owner 抢用同 key 都拒 `VARIABLE_EXISTS`） |
+| 别名（0.4.2） | 复用同表，per-wall 独立别名 | 同上（每 wall 可对同一全局变量起不同别名） |
+| `.canvas` 工程导出 | 含 user 变量值 | **不含**（服务器级状态，跨服务器无意义） |
+| 外部插件可推 | ❌（namespace 保留） | ❌（`userglobal` 加入 RESERVED_NAMESPACES，**插件应用自己 namespace 实现全服共享**） |
+
+#### 玩家场景示例
+
+- 全服活动比分板：玩家 A 在画布 X 上创 `userglobal/red_score`，画布 Y / Z 都 ref 同一变量；
+  A 在 X 上修改值，Y / Z 实时同步
+- 公告状态：admin 创 `userglobal/announcement_text`，全服 wall 引用同一文案；
+  admin 用 `/canvas var set userglobal/announcement_text "维护中"` 即可全服更新
+
 ---
 
 ## 第二部分：运维管理

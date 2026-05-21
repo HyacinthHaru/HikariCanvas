@@ -21,7 +21,8 @@ import type { Variable } from '@/types/variable';
  * - {@link items}：组内变量列表（已 filter 过 keyword）
  */
 export interface PickerGroup {
-    id: 'mine' | 'plugin' | 'system' | 'papi';
+    /** 0.4.3：新增 {@code myGlobal} / {@code othersGlobal} 区分 userglobal 我的 / 其他玩家创建的。 */
+    id: 'mine' | 'myGlobal' | 'othersGlobal' | 'plugin' | 'system' | 'papi';
     items: Variable[];
 }
 
@@ -136,6 +137,7 @@ export function isDynamicNamespace(
  *
  * <ul>
  *   <li>user 变量：{@code user/<key>}（隐藏 wallId 部分，与文本中 {@code ${var:user/<key>}} 一致）</li>
+ *   <li>0.4.3 userglobal：{@code userglobal/<key>}（保留前缀，文本写法一致）</li>
  *   <li>其他：{@code <namespace>/<key>}</li>
  * </ul>
  */
@@ -146,9 +148,19 @@ export function displayName(v: Variable): string {
     return `${v.namespace}/${v.key}`;
 }
 
-/** 把 namespace 归类到 4 个组之一。 */
-function groupOf(v: Variable): PickerGroup['id'] {
+/**
+ * 把 namespace 归类到 6 个组之一（0.4.3 加 myGlobal / othersGlobal）。
+ *
+ * @param v       变量
+ * @param selfUuid 当前玩家 UUID（用于判 userglobal 是不是自己创建的）；可空时默认走 othersGlobal
+ */
+function groupOf(v: Variable, selfUuid: string | null): PickerGroup['id'] {
     if (v.namespace.startsWith('user:')) return 'mine';
+    if (v.namespace === 'userglobal') {
+        // owner = self → myGlobal；其他 / 缺 owner 字段 → othersGlobal
+        return v.ownerUuid && selfUuid && v.ownerUuid === selfUuid
+            ? 'myGlobal' : 'othersGlobal';
+    }
     if (v.namespace === 'system') return 'system';
     if (v.namespace === 'papi') return 'papi';
     return 'plugin';
@@ -174,10 +186,13 @@ export function buildGroups(
     wallId: string | null,
     keyword: string,
     aliases?: ReadonlyMap<string, string> | Record<string, string> | null,
+    selfUuid: string | null = null,
 ): PickerGroup[] {
     const userNs = wallId ? `user:${wallId}` : null;
     const kw = keyword.trim().toLowerCase();
     const mine: Variable[] = [];
+    const myGlobal: Variable[] = [];
+    const othersGlobal: Variable[] = [];
     const plugin: Variable[] = [];
     const system: Variable[] = [];
     const papi: Variable[] = [];
@@ -204,16 +219,21 @@ export function buildGroups(
             if (!hay.includes(kw) && !aliasHay.includes(kw)) continue;
         }
 
-        switch (groupOf(v)) {
+        switch (groupOf(v, selfUuid)) {
             case 'mine': mine.push(v); break;
+            case 'myGlobal': myGlobal.push(v); break;
+            case 'othersGlobal': othersGlobal.push(v); break;
             case 'plugin': plugin.push(v); break;
             case 'system': system.push(v); break;
             case 'papi': papi.push(v); break;
         }
     }
 
+    // 顺序：mine → myGlobal → othersGlobal → plugin → system → papi
     return [
         { id: 'mine', items: mine },
+        { id: 'myGlobal', items: myGlobal },
+        { id: 'othersGlobal', items: othersGlobal },
         { id: 'plugin', items: plugin },
         { id: 'system', items: system },
         { id: 'papi', items: papi },
