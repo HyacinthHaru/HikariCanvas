@@ -245,7 +245,15 @@ function patchGlow(partial: Partial<Glow>) {
     </summary>
     <div class="pt-1.5 space-y-2">
       <div class="hc-text-row">
-        <label class="flex flex-col gap-0.5">
+        <!--
+          0.4.2 bugfix（Bug B 第 6 次修，2026-05-21）：把外层 <label> 改为 <div>。
+          HTML <label> 的 click delegation：点击 label 内任何位置 → 浏览器自动转发 click
+          给 label 内首个 control（"插入变量"按钮也在 label 内）→ 直接触发 openPickerFromButton
+          → 弹 picker。这是用户报"点击文本框就弹 picker"的真根因——之前 5 次都查错路径
+          （chip click / detect / dirtyLeaves / dblclick 全无关）。
+          chip editor 内 contenteditable 本身已经处理 focus，不需要 label 关联。
+        -->
+        <div class="flex flex-col gap-0.5">
           <span class="text-xs text-[color:var(--muted-foreground)] flex items-center justify-between">
             <span>text</span>
             <Tooltip :text="t.variables.picker.insertButtonTooltip">
@@ -260,8 +268,7 @@ function patchGlow(partial: Partial<Glow>) {
               </button>
             </Tooltip>
           </span>
-          <!-- 0.4.1：chip 编辑器替代 textarea；占位符以 pill 显示，hover 看当前值，
-               click 改绑定，输入 ${ 自动弹 picker。 -->
+          <!-- 0.4.1：chip 编辑器替代 textarea；占位符以 pill 显示。 -->
           <VariableChipEditor
             ref="chipEditorRef"
             :text="element.text"
@@ -274,7 +281,7 @@ function patchGlow(partial: Partial<Glow>) {
             @edit-variable-request="onChipEditorEditRequest"
             @create-variable-request="onChipEditorCreateRequest"
           />
-        </label>
+        </div>
         <!-- VariablePicker popover -->
         <VariablePicker
           v-if="pickerOpen"

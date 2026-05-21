@@ -5,6 +5,76 @@
 
 ---
 
+## 2026-05-21 · 第 6 次终极修：label click delegation 自动转发到"插入变量"按钮
+
+### 症状
+
+用户**第 6 次**报告"点击 chip editor 文本框就弹 picker"。前 5 次修复（dirtyLeaves /
+beforeinput / dblclick / store.$subscribe / 完全关闭 chip click）都没解决。
+
+### 真根因（终于找到）
+
+`TextElementSection.vue:248` 的 HTML 结构：
+
+```html
+<label>
+  <span>text<button @click="openPickerFromButton">插入变量</button></span>
+  <VariableChipEditor ... />
+</label>
+```
+
+**HTML `<label>` 元素自带 click delegation**：点击 label 内任何**非交互区域**时，
+浏览器把 click **自动转发**给 label 内首个表单控件（input / button / textarea）。
+点击 chip editor 内的文字 → label 转发 → 触发"插入变量"按钮 click handler →
+`openPickerFromButton` → `pickerOpen = true`。
+
+前 5 次修都在追"chip 触发 / detect 触发"，**根本不是真凶**。
+
+### 修复
+
+把 `<label>` 改为 `<div>`：
+
+```html
+<div>
+  <span>text<button>插入变量</button></span>
+  <VariableChipEditor ... />
+</div>
+```
+
+chip editor 内 contenteditable 本身已经处理 focus 不需要 label 关联。无副作用。
+
+### 验证
+
+- 159 vitest 全绿
+- vite build 通过
+
+### 用户验证
+
+刷新浏览器后：
+1. 点击 chip editor 文本框内 "郑州火车站" 等普通文字 → **不再弹 picker**
+2. 点击右上"插入变量"按钮 → 弹 picker（唯一触发）
+
+### 6 次修复路径总结（自我教训）
+
+| # | Commit | 假设的根因 | 实际是否真因 |
+|---|---|---|---|
+| 1 | 9da68ea | dirtyLeaves 守卫 | ❌ |
+| 2 | caf7042 | beforeinput + composition | ❌ |
+| 3 | c95dd13 | chip click → dblclick | ❌ |
+| 4 | d34648b | 完全关闭所有自动触发 + Pinia $subscribe | ❌（但顺手修了 Bug A 一部分）|
+| 5 | 08610dd | WallRestorer 启动顺序（**Bug A 真因**） | ✅（Bug A）|
+| 6 | **本次** | **`<label>` click delegation** | ✅（Bug B 真因） |
+
+教训：**HTML 元素的语义副作用**（label / form / button type 等）是前端 bug 常见盲点。
+debugging 时应该早在 DevTools 看 click event 的 originalTarget vs target，而不是
+凭代码逻辑推断。
+
+### 关联
+
+- `web/src/components/properties/TextElementSection.vue`（label → div）
+
+---
+
 ## 2026-05-21 · WallRestorer 启动顺序修：服务器重启字面 ${var:} 残留真根因
 
 ### 症状
