@@ -194,6 +194,71 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 
 **0.4.2 总 ~6h**（单 commit 单日推完）。
 
+## 0.4.3 路线（全局用户变量，规划完成 2026-05-21 / 待开干）
+
+**目标**：补 0.4.0 P1 决策 3 的遗留 — user 变量是 per-wall（`user:<wallId>/X`），不能跨画布共享。
+新增 `userglobal/<key>` namespace 让玩家自定义"全服可见、跨 wall 共享"的变量。
+
+**详细设计**：`docs/dynamic-data.md §17`（**实施前必读**）。
+
+**已锁定 4 决策**（2026-05-21 用户确认）：
+1. **外部插件禁推 `userglobal/*`** → 加入 PluginNamespaceRegistry.RESERVED_NAMESPACES
+2. **owner-only + admin override** → 5 个 `canvas.var.global.*` 权限节点
+3. **namespace 取名 `userglobal`** → 与 user 同谱系
+4. **配额 per-owner 500 + 全服 10000** → config.yml 可调
+
+**5 个 phase（共 ~13h）**：
+- **P1（3h）** V015 migration `user_global_variables` 表 + UserGlobalVariableDao + VariableStore.createGlobal/listGlobal
+- **P2（3h）** EditSession `scope='global'` 路径 + 5 个 `canvas.var.global.*` 权限 + AuditLog + 配额检查
+- **P3（2h）** broadcastVariableChangeToAll（全 session 广播，与现有 broadcastToWall 并列）+ ChangeListener 路由 + interpolator 双端测试
+- **P4（4h）** NewVariableDialog scope toggle + VariablePanel owner badge + Picker 加 "🌐 我的全局 / 其他全局" 分组
+- **P5（1h）** 配额 config 段 + 单测 + docs/variables.md §1.12 新节 + 版本号 0.4.2 → 0.4.3-SNAPSHOT + journal + push
+
+**关键架构落地**：
+- name 全服 PRIMARY KEY（不与 wallId 组合）
+- state.patch 广播全 session（区别于 per-wall 变量按 wallId 路由）
+- .canvas 文件导出**不含**全局变量（服务器级状态，跨服务器无意义）
+- 别名复用 0.4.2 variable_aliases 表（per-wall 别名继续工作）
+
+**0.4.3 总 ~13h ≈ 3 天 wall-clock**。
+
+## 0.4.4 路线（铁路网络：线路 + 站点 + 班次，规划完成 2026-05-21 / 待开干）
+
+**目标**：0.4.0 P3-L ManualScheduleProvider 是纯 per-wall，100 个地铁屏 = 100 套独立配置。
+0.4.4 引入完整铁路网络抽象：玩家先定义线路 + 站点 + 班次，wall 编辑器下拉**选线路 +
+选本站 + 选方向**自动绑定该站时刻，**改一处全服同步**。
+
+**详细设计**：`docs/dynamic-data.md §18`（**实施前必读**）。
+
+**新表（V016 migration，4 个）**：`rail_lines` + `rail_stations` + `rail_runs` + `wall_rail_bindings`
+
+**新 Provider**：`RailScheduleProvider` 接替 / 补充 `ManualScheduleProvider`，按 line+station+direction
+自动算 ETA（不删旧 ManualSchedule — `wall_rail_bindings.line_id IS NULL` 时 fallback 走旧路径）。
+
+**新 9 WS op**：rail.line.{create,update,delete} + rail.station.{add,update,delete} + rail.run.{add,delete} + rail.wall.bind
+
+**6 个 phase（共 ~45h）**：
+- **P1（8h）** V016 4 表 migration + 4 DAO + record
+- **P2（10h）** RailScheduleProvider 计算 + 接替 ManualSchedule（保留 fallback）
+- **P3（6h）** 9 WS op + 5 个 `canvas.rail.*` 权限节点 + RailOpDispatcher + AuditLog
+- **P4（12h）** 前端铁路网络管理 modal（线路 / 站点 / 班次 CRUD + 拖动排序）
+- **P5（6h）** Schedule Manager modal 加铁路绑定段 + i18n + 单测 + docs
+- **P6（3h）** 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push
+
+**0.4.4 总 ~45h ≈ 1-2 周 wall-clock**。
+
+## 0.4.x 路线图速览（2026-05-21）
+
+| 版本 | 范围 | 工时 | 状态 |
+|---|---|---:|---|
+| 0.4.0 | 变量系统底座 + 4 Provider + Plugin API + 命令族 | 150h | ✅ |
+| 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
+| 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
+| **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | 📋 规划完成 |
+| **0.4.4** | **铁路网络**（线路 + 站点 + 班次） | **45h** | 📋 规划完成 |
+| 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
+| 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
+
 **0.5.0+** 动画 / 时间轴 / Blockly 脚本路线见 `docs/dynamic-data.md §13`。
 
 ## M8-M12 已完成（详见 docs/journal.md）

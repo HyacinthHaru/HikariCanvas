@@ -782,3 +782,333 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 8. **fallback 链**：cached → ${var:X|fallback=...} → default → "???"
 9. **TTL 全局 min 100ms**（防虐用）+ **默认 30s**
 10. **每 phase 可演示**（0.4.0-P1..P5 都是可用 milestone）
+
+---
+
+## 17. 0.4.3 全局用户变量（规划，2026-05-21 定稿）
+
+### 17.1 背景
+
+0.4.0 P1 决策 3 把 user 变量按 wall 持久化（namespace = `user:<wallId>/X`），不能跨画布共享。
+用户场景需要"全服可见、跨画布共享"的玩家自定义变量（如全服活动比分、公告状态等），
+独立 namespace `userglobal/<key>` 不带 wallId 后缀。
+
+### 17.2 数据模型
+
+新 namespace：`userglobal/<key>`（key 规则同 user 变量：`[a-zA-Z0-9_.-]+` ≤ 64）。
+
+**V015 migration** 新表 `user_global_variables`：
+
+```sql
+CREATE TABLE IF NOT EXISTS user_global_variables (
+    name TEXT PRIMARY KEY,            -- 不含 userglobal/ 前缀
+    owner_uuid TEXT NOT NULL,         -- 创建者
+    owner_name TEXT NOT NULL,         -- 创建时玩家名（用于 Picker UI 显示，不强一致）
+    type TEXT NOT NULL,               -- STRING / NUMBER / BOOLEAN / COLOR
+    default_value TEXT,
+    current_value TEXT,
+    bound_to TEXT,                    -- 绑定插件 namespace（可空）
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_user_global_variables_owner ON user_global_variables(owner_uuid);
+```
+
+注：name 是 PRIMARY KEY（全服唯一）— 全局变量名不能与其他玩家创建的重名。
+
+### 17.3 ACL（已锁定决策）
+
+- **外部插件禁推 `userglobal/*`**：`userglobal` 加入 `PluginNamespaceRegistry.RESERVED_NAMESPACES`。
+  插件 `registerNamespace("userglobal", ...)` 抛 IllegalArgumentException。插件仍可用自己
+  namespace 实现全服可见（如 `bedwars/X`），不需要也不应抢用 userglobal。
+- **owner-only + admin override**：
+  - `canvas.var.global.create` (default: true) — 任何玩家可创建
+  - `canvas.var.global.write.own` (default: true) — owner 可改自己的
+  - `canvas.var.global.write.any` (default: op) — **admin override**，可改任何
+  - `canvas.var.global.delete.own` (default: true)
+  - `canvas.var.global.delete.any` (default: op)
+- **类型冲突**：name 已存在（任意 owner 创建过）→ 拒 `VARIABLE_EXISTS`；只能删原 + 重建
+- **owner 离开后**：变量永久保留（同 user_variables 现状）；admin 可手动删
+
+### 17.4 配额（已锁定决策）
+
+```yaml
+dynamic:
+  variables:
+    userglobal-max-per-owner: 500     # 每玩家上限
+    userglobal-max-total: 10000       # 全服总上限
+```
+
+`VariableStore.createGlobal()` 检查：
+- 该 owner_uuid 已有 N ≥ 500 → 拒 `OWNER_QUOTA_EXCEEDED`
+- 全服总数 ≥ 10000 → 拒 `GLOBAL_QUOTA_EXCEEDED`
+
+### 17.5 WS 协议
+
+复用 0.4.0 `variable.*` 5 op，**加 `scope` 字段**：
+
+```typescript
+// variable.create payload
+{
+    "name": "red_score",
+    "type": "NUMBER",
+    "defaultValue": "0",
+    "scope": "global"   // 0.4.3 新增；缺省 "wall" 保留 0.4.0 行为（per-wall user 变量）
+}
+```
+
+`variable.update / set / delete / bind` 直接用 fullName 区分：
+- `user:w-xxx/red_score` → wall 局部
+- `userglobal/red_score` → 全局
+
+ack 含 `{ fullName: "userglobal/red_score" }`。
+
+### 17.6 interpolator 行为
+
+`${var:userglobal/X}` 字面查询 store（**不**注入 wallId）。同 user 变量风格：
+- `${var:user/X}` → `user:<wallId>/X`（注入）
+- `${var:userglobal/X}` → `userglobal/X`（字面）
+
+interpolator.resolveFullName 不动；天然支持（fallback 路径返字面）。
+
+### 17.7 state.patch 广播：所有 session
+
+per-wall 变量变更只推该 wallId 的 session。**全局变量变更要广播给所有连接的 session**：
+
+```java
+// SessionManager.broadcastVariableChangeToAll(event)
+// 与现有 broadcastVariableChangeToWall(wallId, event) 并列
+```
+
+VariableStore.ChangeListener 触发时，HikariCanvas listener 检测：
+- `event.fullName.startsWith("userglobal/")` → 走 broadcastToAll
+- 否则走 broadcastToWall（现有 referencingWalls 路由）
+
+### 17.8 Picker / UI 改造
+
+VariablePicker 新分组：
+- 👤 **我的**（wall 局部）
+- 🌐 **我的全局变量**（owner = self 的 userglobal/*）
+- 🌐 **其他全局变量**（owner ≠ self 的 userglobal/*，显示只读 + owner 名）
+- 🚂 列车 / 📦 插件 / 🔌 PAPI / 🎯 系统
+
+NewVariableDialog 加 **scope toggle**：
+- [ 本 wall | 全局 ]
+- 全局模式下提示文案："其他玩家可读取，但只有你和管理员能修改"
+
+VariablePanel 行内显示 owner_name（自己 = 不显，他人 = 显 owner badge）+ 只读时禁用编辑控件。
+
+### 17.9 别名（复用 0.4.2）
+
+`variable_aliases` 表已支持任意 fullName（含 userglobal）。每 wall 独立别名：
+- wall A 给 `userglobal/red_score` 起别名 "红队"
+- wall B 给同变量起别名 "Red Team"
+
+### 17.10 .canvas 文件
+
+**不入 .canvas 工程文件导出**。理由：全局变量是服务器级状态（owner_uuid + 跨 wall 共享），
+导入到另一服务器时无意义。引用全局变量的 wall 在导入后该占位符走 fallback "???"。
+
+### 17.11 删除联动
+
+owner / admin 删除 `userglobal/red_score`：
+1. DB DELETE FROM user_global_variables WHERE name = ?
+2. VariableStore.delete() → fireChange DELETED → state.patch 广播全 session
+3. 所有引用该变量的 wall 渲染时走 fallback "???"
+4. **不级联删除** wall 上引用它的 TextElement（与 user 变量同款规则）
+
+### 17.12 实施 Phase（~13h）
+
+| Phase | 范围 | 工时 |
+|---|---|---:|
+| **P1** | V015 migration + UserGlobalVariableDao + VariableStore.createGlobal/listGlobal | 3h |
+| **P2** | EditSession scope='global' 路径 + PluginNamespaceRegistry userglobal 保留 + 5 权限节点 + AuditLog | 3h |
+| **P3** | broadcastVariableChangeToAll + ChangeListener 路由 + interpolator 双端测试（已天然支持，加测）| 2h |
+| **P4** | NewVariableDialog scope toggle + VariablePanel owner 显示 + Picker 分组改造 + i18n | 4h |
+| **P5** | 配额 config + Quota 单测 + docs/variables.md §1.12 新节 + journal + 版本号 0.4.2 → 0.4.3-SNAPSHOT + push | 1h |
+| **总** | 单 commit 合 5 phase | **13h** |
+
+wall-clock 估 **~3 天**（按 0.4.x 节奏 agent 并行 / 串干）。
+
+### 17.13 单测覆盖
+
+- VariableStoreTest 加 createGlobal / listGlobal / userglobal namespace ACL
+- UserGlobalVariableDao 单测（CRUD + per-owner 隔离）
+- EditSessionTest 加 scope='global' 路径 + 配额拒
+- PluginNamespaceRegistryTest 加 reserved namespace 检查（userglobal）
+- broadcastVariableChangeToAll 单测（mock SessionManager）
+- 端到端 EndToEndSmokeTest 加 1 case：玩家 A 创全局变量 + 玩家 B 不同 wall 读
+
+至少 18 个新 case。
+
+---
+
+## 18. 0.4.4 铁路网络（线路 + 站点 + 班次）（规划，2026-05-21 定稿）
+
+### 18.1 背景
+
+0.4.0 P3-L 的 ManualScheduleProvider 是**纯 per-wall**：每个 wall 独立配自己的时刻表，
+100 个地铁屏 = 100 套独立配置。无法共享"1 号线"概念。
+
+0.4.4 引入完整铁路网络抽象：玩家先定义线路 + 站点 + 班次，wall 编辑器内通过下拉
+**选线路 + 选本站 + 选方向** 自动绑定该站对应时刻，**改一处全服同步**。
+
+### 18.2 数据模型
+
+新表（V016 migration）：
+
+```sql
+-- 线路（"1 号线" / "2 号线"）
+CREATE TABLE rail_lines (
+    id TEXT PRIMARY KEY,              -- 玩家可见 line_id，如 "line1" 或 UUID
+    name TEXT NOT NULL,               -- 显示名 "1 号线"
+    color TEXT,                       -- "#FF0000" 线路色（UI 主题）
+    owner_uuid TEXT NOT NULL,
+    owner_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- 站点（每线一组车站，有顺序）
+CREATE TABLE rail_stations (
+    id TEXT PRIMARY KEY,
+    line_id TEXT NOT NULL,
+    name TEXT NOT NULL,               -- "郑州火车站"
+    sort_order INTEGER NOT NULL,      -- 0-indexed
+    dwell_seconds INTEGER NOT NULL DEFAULT 30,  -- 停靠秒数
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE CASCADE
+);
+
+-- 班次（一次行驶；含发车时间 + 方向）
+CREATE TABLE rail_runs (
+    id TEXT PRIMARY KEY,
+    line_id TEXT NOT NULL,
+    direction TEXT NOT NULL,          -- "up" (sort_order 递增) / "down" (递减)
+    departure_time TEXT NOT NULL,     -- HH:mm:ss 从首站发车时间
+    travel_seconds INTEGER NOT NULL DEFAULT 90,  -- 两站间默认行驶秒数（站间相同）
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE CASCADE
+);
+
+-- wall 绑定到某线某站某方向
+CREATE TABLE wall_rail_bindings (
+    wall_id TEXT PRIMARY KEY,
+    line_id TEXT,                     -- null = 未绑定（fallback 到 0.4.0 ManualSchedule）
+    station_id TEXT,
+    direction TEXT,                   -- "up" / "down" / "both"
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE,
+    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE SET NULL,
+    FOREIGN KEY (station_id) REFERENCES rail_stations(id) ON DELETE SET NULL
+);
+```
+
+### 18.3 计算逻辑
+
+`RailScheduleProvider`（接替或补充 `ManualScheduleProvider`）：
+
+对每个绑定的 wall（wall_rail_bindings 含 line + station + direction），从 `rail_runs` 找该线
+所有班次 → 算每班车到达本站的时间：
+
+```
+arrival_at_station = run.departure_time
+                   + (target_station_sort_order - first_station_sort_order)
+                     × (run.travel_seconds + station.dwell_seconds)
+```
+
+然后取前两班 ≥ 当前时刻 → 暴露 `schedule:<wallId>/next_departure` 等（兼容 0.4.0 schedule namespace）。
+
+### 18.4 UI
+
+#### 新 modal：铁路网络管理（TopBar 火车图标改两层）
+
+```
+┌─ 铁路网络 ────────────────────────────┐
+│ ▼ 线路列表                             │
+│   ├ 1 号线（红色）[✏][🗑]                │
+│   │  ├ 郑州火车站（sort=0，停 30s）       │
+│   │  ├ 二七广场（sort=1）                │
+│   │  └ ...                              │
+│   └ 2 号线（蓝色）                       │
+│                                         │
+│ ▼ 班次列表（按线分组）                    │
+│   1 号线 up 方向：                        │
+│   ├ 06:00:00（90s/站）                   │
+│   ├ 06:05:00                            │
+│   └ ...                                 │
+└─────────────────────────────────────────┘
+```
+
+#### Schedule Manager modal 改造（保持现状 + 加铁路绑定）
+
+顶部加 **"铁路网络绑定"** 段：
+- [线路] 1 号线 ▼
+- [本站] 郑州火车站 ▼
+- [方向] up / down / both
+- ✓ 启用铁路网络模式（绑定后下方 entries 不可编辑，自动从 rail_runs 计算）
+- ✗ 关闭铁路模式 → 走 0.4.0 ManualSchedule
+
+### 18.5 ACL / 权限节点
+
+- `canvas.rail.line.create` (default: true) — 任何玩家可建线路
+- `canvas.rail.line.edit.own` (default: true) — owner 可改
+- `canvas.rail.line.edit.any` (default: op) — admin
+- `canvas.rail.line.delete.own / .any` (default: true / op)
+- `canvas.rail.wall.bind` (default: true) — 绑定 wall 到自己 wall 的权限（wall 自身鉴权同 schedule）
+
+### 18.6 WS 协议（新 9 个 op）
+
+```
+rail.line.create      { name, color }
+rail.line.update      { lineId, name?, color? }
+rail.line.delete      { lineId }
+rail.station.add      { lineId, name, sortOrder, dwellSeconds }
+rail.station.update   { stationId, ... }
+rail.station.delete   { stationId }
+rail.run.add          { lineId, direction, departureTime, travelSeconds }
+rail.run.delete       { runId }
+rail.wall.bind        { wallId, lineId?, stationId?, direction }
+```
+
+### 18.7 实施 Phase（~45h）
+
+| Phase | 范围 | 工时 |
+|---|---|---:|
+| **P1** | V016 4 表 migration + DAO（LineDao / StationDao / RunDao / BindingDao）+ record | 8h |
+| **P2** | RailScheduleProvider 计算 + 接替 ManualSchedule（保留 fallback） | 10h |
+| **P3** | 9 个 WS op + 权限节点 + RailOpDispatcher + AuditLog | 6h |
+| **P4** | 前端铁路网络管理 modal（线路 / 站点 / 班次 CRUD + 拖动排序） | 12h |
+| **P5** | Schedule Manager modal 加铁路绑定段 + i18n + 单测 + docs | 6h |
+| **P6** | 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push | 3h |
+| **总** | 单 milestone 多 commit | **45h** |
+
+wall-clock 估 **~1-2 周**。
+
+### 18.8 兼容性
+
+0.4.0 ManualScheduleProvider **不删**——`wall_rail_bindings.line_id IS NULL` 的 wall 仍走旧路径
+（玩家不强制升级到铁路网络模式）。
+
+### 18.9 单测覆盖
+
+- Line / Station / Run DAO 各 5+ case（CRUD + FK CASCADE + 排序）
+- RailScheduleProvider 计算（按时刻 + 按方向 + 站间累加 + 过零点）
+- RailOpDispatcher 9 op + 权限拒
+- 前端 RailNetworkManagerModal vitest 关键交互
+
+至少 35 个新 case。
+
+---
+
+## 19. 0.4.x 路线图速览（2026-05-21）
+
+| 版本 | 范围 | 工时 | 状态 |
+|---|---|---:|---|
+| 0.4.0 | 变量系统底座 + Provider + Plugin API + 命令族 | 150h | ✅ |
+| 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
+| 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
+| **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | 📋 规划完成 |
+| **0.4.4** | **铁路网络**（线路 + 站点 + 班次） | **45h** | 📋 规划完成 |
+| 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
+| 0.6.0+ | Blockly 块脚本 | 200h | 远期 |

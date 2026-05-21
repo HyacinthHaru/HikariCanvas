@@ -5,6 +5,74 @@
 
 ---
 
+## 2026-05-21 · 0.4.3 全局变量 + 0.4.4 铁路网络路线图定稿（规划，未实施）
+
+### 0.4.3 全局用户变量（~13h）
+
+补 0.4.0 P1 决策 3 的遗留——user 变量是 per-wall 不能跨画布共享。新增 `userglobal/<key>`
+namespace 让玩家自定义"全服可见、跨 wall 共享"的变量。
+
+**4 个固化决策**（用户已确认）：
+1. **外部插件禁推** `userglobal/*` → `PluginNamespaceRegistry.RESERVED_NAMESPACES` 加 userglobal
+2. **owner-only + admin override** → 5 个 `canvas.var.global.*` 权限节点
+3. **namespace 取名 `userglobal`** → 与 user 同谱系
+4. **配额 per-owner 500 + 全服 10000** → config.yml 可调
+
+**5 phase 拆解**：
+- P1 V015 migration + UserGlobalVariableDao + Store API（3h）
+- P2 EditSession scope='global' + 权限 + 配额（3h）
+- P3 broadcastVariableChangeToAll 全 session 广播（2h）
+- P4 NewVariableDialog scope + Picker 全局分组（4h）
+- P5 单测 + 版本号 0.4.3-SNAPSHOT + journal + push（1h）
+
+详见 `docs/dynamic-data.md §17`。
+
+### 0.4.4 铁路网络（~45h）
+
+地铁屏场景重大升级：从 per-wall 独立时刻表 → 全服线路 + 站点 + 班次抽象。
+wall 编辑器下拉选**线路 + 本站 + 方向**自动绑定，**改一处全服同步**。
+
+**新表 V016**（4 个）：
+- `rail_lines`（线路 id + name + color + owner）
+- `rail_stations`（线路下的站点 + 排序 + 停靠时长）
+- `rail_runs`（班次：发车时间 + 方向 + 行驶秒数）
+- `wall_rail_bindings`（wall → line+station+direction 绑定）
+
+**新 Provider**：`RailScheduleProvider`，按 line+station+direction 自动算 ETA（兼容旧
+ManualScheduleProvider — 未绑定的 wall 仍走旧路径）。
+
+**6 phase 拆解**（共 ~45h）：
+- P1 V016 + 4 DAO（8h）
+- P2 RailScheduleProvider 计算（10h）
+- P3 9 WS op + 权限 + dispatcher（6h）
+- P4 前端铁路网络管理 modal（12h）
+- P5 Schedule Manager 绑定段 + i18n + 单测（6h）
+- P6 收尾 + 版本号 0.4.4-SNAPSHOT（3h）
+
+详见 `docs/dynamic-data.md §18`。
+
+### 0.4.x 路线状态
+
+| 版本 | 状态 |
+|---|---|
+| 0.4.0 | ✅ |
+| 0.4.1 chip 编辑器 | ✅ |
+| 0.4.2 变量别名 | ✅ |
+| **0.4.3 全局变量** | 📋 规划完成 / 待开干 |
+| **0.4.4 铁路网络** | 📋 规划完成 / 待开干 |
+| 0.5.0 动画 + 时间轴 | 远期（120h） |
+| 0.6.0+ Blockly | 远期（200h） |
+
+### 关联文件
+
+- `docs/dynamic-data.md` 加 §17 / §18 / §19
+- `CLAUDE.md` 加 0.4.3 / 0.4.4 路线段 + 0.4.x 速览表
+- `docs/journal.md` 顶部（本条）
+
+**不写代码**——等用户通知开干。
+
+---
+
 ## 2026-05-21 · 修：模板"发布失败"假象（前端取 ack 字段错位）
 
 ### 症状
