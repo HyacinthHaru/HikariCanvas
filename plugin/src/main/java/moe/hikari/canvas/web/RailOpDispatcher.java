@@ -118,6 +118,7 @@ final class RailOpDispatcher {
 
         switch (op) {
             case "rail.line.list" -> handleLineList(ctx, in);
+            case "rail.line.detail" -> handleLineDetail(ctx, in, payload);
             case "rail.line.create" -> handleLineCreate(ctx, in, sessionId, s, payload);
             case "rail.line.update" -> handleLineUpdate(ctx, in, sessionId, s, payload);
             case "rail.line.delete" -> handleLineDelete(ctx, in, sessionId, s, payload);
@@ -141,6 +142,47 @@ final class RailOpDispatcher {
         List<RailLine> lines = dao.listAllLines();
         Map<String, Object> ack = new LinkedHashMap<>();
         ack.put("lines", lines.stream().map(RailOpDispatcher::lineToMap).toList());
+        ctx.send(Envelope.of("ack", in.id(), ack));
+    }
+
+    /**
+     * 0.4.5 P1：聚合视图 — 一次返该线路的 stations + runs + 各 run 的 timetable。
+     * 前端 RailNetworkModal.selectLine 调用避免 N+1 请求。
+     */
+    private void handleLineDetail(WsMessageContext ctx, Envelope in,
+                                  Map<String, Object> payload) {
+        String lineId = stringOrNull(payload.get("lineId"));
+        if (lineId == null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "lineId required"));
+            return;
+        }
+        RailLine line = dao.findLine(lineId).orElse(null);
+        if (line == null) {
+            ctx.send(Envelope.error(in.id(), "NOT_FOUND", "line not found"));
+            return;
+        }
+        var detail = dao.loadLineDetail(lineId);
+        Map<String, Object> ack = new LinkedHashMap<>();
+        ack.put("line", lineToMap(line));
+        ack.put("stations", detail.stations().stream()
+                .map(RailOpDispatcher::stationToMap).toList());
+        ack.put("runs", detail.runs().stream()
+                .map(RailOpDispatcher::runToMap).toList());
+        // timetableByRun: { runId: [{ stationId, arrival, departure, stopsHere }] }
+        Map<String, Object> ttMap = new LinkedHashMap<>();
+        for (var entry : detail.timetableByRun().entrySet()) {
+            List<Map<String, Object>> rows = new java.util.ArrayList<>(entry.getValue().size());
+            for (RailTimetableEntry te : entry.getValue()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("stationId", te.stationId());
+                if (te.arrivalTime() != null) row.put("arrival", te.arrivalTime());
+                if (te.departureTime() != null) row.put("departure", te.departureTime());
+                row.put("stopsHere", te.stopsHere());
+                rows.add(row);
+            }
+            ttMap.put(entry.getKey(), rows);
+        }
+        ack.put("timetableByRun", ttMap);
         ctx.send(Envelope.of("ack", in.id(), ack));
     }
 
@@ -537,8 +579,8 @@ final class RailOpDispatcher {
         UUID callerUuid = s.playerUuid();
         Player player = callerUuid == null ? null : Bukkit.getPlayer(callerUuid);
 
-        // 1. rail.line.list 完全开放（只读）
-        if ("rail.line.list".equals(op)) return true;
+        // 1. rail.line.list / detail 完全开放（只读）
+        if ("rail.line.list".equals(op) || "rail.line.detail".equals(op)) return true;
         // 2. rail.line.create → .create
         if ("rail.line.create".equals(op)) {
             return ensurePerm(ctx, in, sessionId, s, player, "canvas.rail.line.create", true);
@@ -674,6 +716,15 @@ final class RailOpDispatcher {
         m.put("createdAt", r.createdAt());
         m.put("updatedAt", r.updatedAt());
         return m;
+    }
+
+    /**
+     * 0.4.5 P3：包外（WebServer）查 wall 当前 binding。dispatcher 内部持有 dao，
+     * 包外不直接拿；走静态 helper 转发 dao.findBinding。
+     */
+    static @Nullable WallRailBinding lookupBinding(RailOpDispatcher self, String wallId) {
+        if (self == null || self.dao == null || wallId == null) return null;
+        return self.dao.findBinding(wallId).orElse(null);
     }
 
     private static Map<String, Object> bindingToMap(WallRailBinding b) {

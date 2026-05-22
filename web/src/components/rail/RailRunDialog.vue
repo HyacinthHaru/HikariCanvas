@@ -6,7 +6,7 @@
  * - 「自动生成」按钮 → 弹自动生成对话框（首站时间 + 站间秒 + 跳站集合）
  */
 import { computed, ref, watch, onMounted } from 'vue';
-import { X, Wand2, Save, Train } from 'lucide-vue-next';
+import { X, Wand2, Save, Train, Copy } from 'lucide-vue-next';
 import { getWsClient } from '@/network/wsClient';
 import { useRailStore } from '@/stores/rail';
 import { useNetworkStore } from '@/stores/network';
@@ -27,6 +27,23 @@ const run = computed(() => rail.runs.get(props.runId));
 const draftRunNumber = ref('');
 const draftDirection = ref<'up' | 'down'>('up');
 const draftServiceType = ref('local');
+// 0.4.5 P5：当 serviceType 不在 4 内置时，切换为 input 自由编辑
+const serviceTypeCustomMode = ref(false);
+
+function onServiceTypeSelect(e: Event) {
+    const v = (e.target as HTMLSelectElement).value;
+    if (v === '__custom__') {
+        serviceTypeCustomMode.value = true;
+        draftServiceType.value = '';  // 清空让用户输入
+    } else {
+        draftServiceType.value = v;
+    }
+}
+
+function exitCustomMode() {
+    serviceTypeCustomMode.value = false;
+    draftServiceType.value = 'local';
+}
 const draftCars = ref<number | ''>('');
 const draftStartId = ref<string>('');
 const draftEndId = ref<string>('');
@@ -40,6 +57,12 @@ const autoFirst = ref('06:00:00');
 const autoTravel = ref(90);
 const autoDwell = ref(30);
 const autoSkips = ref<Set<string>>(new Set());
+
+// 0.4.5 P6：车次复制对话框状态
+const showCopyDialog = ref(false);
+const copyRunNumber = ref('');
+const copyDirection = ref<'up' | 'down'>('up');
+const copySubmitting = ref(false);
 
 const error = ref<string | null>(null);
 const submitting = ref(false);
@@ -56,6 +79,8 @@ function syncDraftFromStore() {
     draftRunNumber.value = r.runNumber;
     draftDirection.value = r.direction;
     draftServiceType.value = r.serviceType;
+    // 0.4.5 P5：若 DB 中的 serviceType 不是 4 内置，自动进入 custom input 模式
+    serviceTypeCustomMode.value = !SERVICE_TYPE_ENUMS.includes(r.serviceType as never);
     draftCars.value = r.cars ?? '';
     draftStartId.value = r.startStationId ?? '';
     draftEndId.value = r.endStationId ?? '';
@@ -225,6 +250,61 @@ function toggleSkip(id: string) {
     autoSkips.value = next;
 }
 
+// 0.4.5 P6：车次复制 — 基于现有车次创建新车次（含所有字段 + timetable）
+function openCopyDialog() {
+    if (!run.value) return;
+    copyRunNumber.value = run.value.runNumber + '-copy';
+    copyDirection.value = run.value.direction;
+    showCopyDialog.value = true;
+}
+
+async function submitCopy() {
+    if (!run.value || !copyRunNumber.value.trim()) return;
+    copySubmitting.value = true;
+    error.value = null;
+    try {
+        const src = run.value;
+        // Step 1: 创建新车次（沿用 src 的所有字段，除 runNumber + direction）
+        const { run: newRun } = await ws.sendRailRunCreate({
+            lineId: src.lineId,
+            runNumber: copyRunNumber.value.trim(),
+            direction: copyDirection.value,
+            serviceType: src.serviceType,
+            cars: src.cars ?? null,
+            startStationId: src.startStationId ?? null,
+            endStationId: src.endStationId ?? null,
+            notes: src.notes ?? null,
+        });
+        rail.setRun(newRun);
+        // Step 2: 复制 timetable（如果有）
+        const srcTimetable = rail.timetableOf(src.id);
+        if (srcTimetable.length > 0) {
+            const rows = srcTimetable.map((e) => ({
+                stationId: e.stationId,
+                arrival: e.arrival ?? null,
+                departure: e.departure ?? null,
+                stopsHere: e.stopsHere,
+            }));
+            await ws.sendRailTimetableSet(newRun.id, rows);
+            rail.setTimetable(newRun.id, rows.map((r) => ({
+                runId: newRun.id,
+                stationId: r.stationId,
+                arrival: r.arrival,
+                departure: r.departure,
+                stopsHere: r.stopsHere,
+            })));
+        }
+        showCopyDialog.value = false;
+        // 切换到新车次的详情对话框 — 但这里关掉当前 dialog 让用户回主 modal 看新车次
+        emit('close');
+    } catch (e) {
+        error.value = (e as Error).message;
+        net.pushLog('err', `rail run copy rejected: ${(e as Error).message}`);
+    } finally {
+        copySubmitting.value = false;
+    }
+}
+
 function parseTime(s: string): number {
     const parts = s.split(':');
     const h = Number(parts[0] ?? '0');
@@ -248,6 +328,12 @@ function getRow(stationId: string) {
         timetableDraft.value.set(stationId, row);
     }
     return row;
+}
+
+/** 0.4.5 P4：HH:mm 或 HH:mm:ss 格式校验。空串视同合法（首/末站可空）。 */
+function isValidTime(v: string): boolean {
+    if (!v || v.length === 0) return true;
+    return /^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/.test(v);
 }
 </script>
 
@@ -285,11 +371,24 @@ function getRow(stationId: string) {
           </label>
           <label class="block">
             <span class="text-[color:var(--muted-foreground)]">{{ t.rail.serviceType }}</span>
-            <input type="text" class="hc-input mt-0.5" v-model="draftServiceType"
-                   :list="`svc-list-${runId}`" maxlength="32" />
-            <datalist :id="`svc-list-${runId}`">
-              <option v-for="t in SERVICE_TYPE_ENUMS" :key="t" :value="t" />
-            </datalist>
+            <!-- 0.4.5 P5：4 内置 + "自定义" 切换。custom 模式下显 input，否则 select -->
+            <select v-if="!serviceTypeCustomMode"
+                    class="hc-input mt-0.5"
+                    :value="draftServiceType"
+                    @change="onServiceTypeSelect">
+              <option value="local">{{ t.rail.serviceTypeLocal }}</option>
+              <option value="express">{{ t.rail.serviceTypeExpress }}</option>
+              <option value="section">{{ t.rail.serviceTypeSection }}</option>
+              <option value="limited">{{ t.rail.serviceTypeLimited }}</option>
+              <option value="__custom__">{{ t.rail.serviceTypeCustom }}</option>
+            </select>
+            <div v-else class="mt-0.5 flex gap-1">
+              <input type="text" class="hc-input flex-1" v-model="draftServiceType"
+                     maxlength="32" :placeholder="t.rail.serviceTypeCustomPlaceholder" />
+              <button type="button"
+                      class="hc-btn px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                      @click="exitCustomMode">↺</button>
+            </div>
           </label>
           <label class="block">
             <span class="text-[color:var(--muted-foreground)]">{{ t.rail.cars }}</span>
@@ -328,6 +427,12 @@ function getRow(stationId: string) {
             <Wand2 class="size-3" />
             <span>{{ t.rail.autoGenerate }}</span>
           </button>
+          <!-- 0.4.5 P6：车次复制按钮 -->
+          <button class="hc-btn flex items-center gap-1 px-3 py-1 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                  @click="openCopyDialog">
+            <Copy class="size-3" />
+            <span>{{ t.rail.copyRun }}</span>
+          </button>
         </div>
 
         <!-- 时刻表 inline -->
@@ -355,16 +460,17 @@ function getRow(stationId: string) {
                   class="border-t border-[color:var(--border)]">
                 <td class="py-1">{{ s.name }}</td>
                 <td class="py-1">
-                  <input type="text" class="hc-input font-mono"
+                  <!-- 0.4.5 P4：type="time" + step="1" HTML5 原生 picker 含秒；红边校验 -->
+                  <input type="time" step="1" class="hc-input font-mono"
+                         :class="isValidTime(getRow(s.id).arrival) ? '' : 'hc-input-error'"
                          :value="getRow(s.id).arrival"
-                         @input="(e: Event) => getRow(s.id).arrival = (e.target as HTMLInputElement).value"
-                         placeholder="HH:mm:ss" />
+                         @input="(e: Event) => getRow(s.id).arrival = (e.target as HTMLInputElement).value" />
                 </td>
                 <td class="py-1">
-                  <input type="text" class="hc-input font-mono"
+                  <input type="time" step="1" class="hc-input font-mono"
+                         :class="isValidTime(getRow(s.id).departure) ? '' : 'hc-input-error'"
                          :value="getRow(s.id).departure"
-                         @input="(e: Event) => getRow(s.id).departure = (e.target as HTMLInputElement).value"
-                         placeholder="HH:mm:ss" />
+                         @input="(e: Event) => getRow(s.id).departure = (e.target as HTMLInputElement).value" />
                 </td>
                 <td class="py-1 text-center">
                   <input type="checkbox"
@@ -425,6 +531,49 @@ function getRow(stationId: string) {
           </div>
         </div>
       </div>
+
+      <!-- 0.4.5 P6：车次复制对话框 -->
+      <div v-if="showCopyDialog"
+           class="absolute inset-0 z-[70] bg-[color:var(--ctp-crust)]/60 flex items-center justify-center p-4"
+           @click.self="showCopyDialog = false"
+           @keydown.escape.prevent="showCopyDialog = false">
+        <div class="bg-[color:var(--card)] rounded-[var(--radius)] shadow-md w-full max-w-md p-4 border border-[color:var(--border)] space-y-3">
+          <header class="flex items-center gap-2">
+            <Copy class="size-4 text-[color:var(--ctp-blue)]" />
+            <h3 class="font-semibold text-sm">{{ t.rail.copyDialogTitle }}</h3>
+          </header>
+          <p class="text-[10px] text-[color:var(--muted-foreground)]">
+            {{ t.rail.copyDialogHint }}
+          </p>
+          <label class="block text-xs">
+            <span class="text-[color:var(--muted-foreground)]">{{ t.rail.runNumber }}</span>
+            <input type="text"
+                   class="hc-input mt-0.5 font-mono"
+                   v-model="copyRunNumber"
+                   :placeholder="t.rail.runNumberPlaceholder"
+                   maxlength="64" />
+          </label>
+          <label class="block text-xs">
+            <span class="text-[color:var(--muted-foreground)]">{{ t.rail.direction }}</span>
+            <select class="hc-input mt-0.5" v-model="copyDirection">
+              <option value="up">{{ t.rail.directionUp }}</option>
+              <option value="down">{{ t.rail.directionDown }}</option>
+            </select>
+          </label>
+          <div class="flex justify-end gap-2 pt-2">
+            <button class="hc-btn px-3 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                    :disabled="copySubmitting"
+                    @click="showCopyDialog = false">
+              {{ t.rail.cancel }}
+            </button>
+            <button class="hc-btn px-3 py-1 text-xs rounded bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 disabled:opacity-40"
+                    :disabled="!copyRunNumber.trim() || copySubmitting"
+                    @click="submitCopy">
+              {{ copySubmitting ? '…' : t.rail.copyRun }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -444,5 +593,12 @@ function getRow(stationId: string) {
     outline: none;
     border-color: var(--ring);
     box-shadow: 0 0 0 1px var(--ring);
+}
+.hc-input-error {
+    border-color: var(--destructive);
+}
+.hc-input-error:focus {
+    border-color: var(--destructive);
+    box-shadow: 0 0 0 1px var(--destructive);
 }
 </style>

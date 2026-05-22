@@ -279,8 +279,44 @@ shadow jar 153 MB / 0 baseline 漂移。**0.4.3 总 ~13h（单日推完）**。
 **测试结果**：后端 **819** 测试全绿（原 795 + 新 24）/ 前端 **161** 测试全绿 / shadow jar
 HikariCanvas-0.4.4-SNAPSHOT.jar 154 MB / 0 baseline 漂移。**0.4.4 总 ~60h 估，实际单日推完**。
 
-**v0.4.5 留作的优化**：ScheduleManagerModal 加铁路绑定段 / RailNetworkModal 进入线路时自动拉详情 /
-拖动排序 / 时刻表更精致 inline 编辑。
+**v0.4.5 优化项**：已在 2026-05-22 单日推完，见下方 0.4.5 段。
+
+## 0.4.5 路线（打磨期 ✅ 2026-05-22 实施完成）
+
+**目标达成**：0.4.4 当日推完后实测发现 2 个 P0 可用性 bug + 数个 UX 粗糙点，
+0.4.5 集中打磨 0.4.3 全局变量 + 0.4.4 铁路网络两块新功能。**没有新功能 / 新协议**，
+全是体验提升 + bug 修。
+
+**实施总览**（8 phase / 1 commit / 单日完成）：
+- **P1** 修 0.4.4 P0：rail.line.detail op + RailNetworkModal selectLine 实际拉数据
+  （之前选线路看不到已存在 stations / runs / timetable）
+- **P2** 修 0.4.4 P0：替换 prompt/confirm 为 inline modal — 新车次内嵌对话框 +
+  3 个 inline 删除 confirm popover（同 VariablePanel 风格）
+- **P3** 收 0.4.4 spec §18.5：ScheduleManagerModal 加可折叠"铁路绑定"section
+  （线路 / 本站 / 方向 3 列下拉）+ ready payload 加 railBinding 字段 + 绑定时 entries 灰显
+- **P4** UX 打磨：HTML5 native drag-drop 拖动排序站点（替换 ↑↓ 按钮）+ 时刻表
+  `type="time" step="1"` 原生 picker + isValidTime regex 校验红边
+- **P5** UX 打磨：服务类型从 datalist 改 select（4 内置 + 「自定义」切换 input）+ i18n
+  友好文本；syncDraftFromStore 自动检测非内置值进入 custom 模式
+- **P6** 新功能：车次复制 — RailRunDialog 加 Copy 按钮 → 复制对话框（新 runNumber +
+  direction 可改）→ create + timetable.set 两步复制
+- **P7** RailNetworkModal 空状态 + 未选线路时显示 4 step 引导文案；加 0.4.3 bug 复查
+  测试 case（createGlobal byWall 反查路径正常，无 Bug 2 模式风险）
+- **P8** 版本号 0.4.4 → 0.4.5-SNAPSHOT（5 处文件）+ shadow jar 154 MB + journal + push
+
+**关键架构纪律（已固化）**：
+1. **rail.line.detail 走聚合查询**：单接口返 stations + runs + timetableByRun，timetable
+   用 IN 子句批量拉，避免 N+1
+2. **ready payload 携带 railBinding**：让 ScheduleManagerModal 一打开就知道状态，
+   不另加查询 op；wall 切换时 rail store reset
+3. **拖动排序批量更新**：落定后遍历重设 sortOrder = 0..N（仅 order 变化的项发请求）
+4. **serviceType custom 模式自动切换**：syncDraftFromStore 检测非内置 enum 自动进 custom input
+5. **车次复制 = create + timetable.set 两步**：不引入新协议 op
+6. **删除走 inline confirm popover**：`confirmingDelete: { type, id }` 状态机统一管理 3 种删除
+
+**测试结果**：后端 **820**（原 819 + 新 1 bug 复查 case）/ 前端 **161** 全绿；
+shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.5 总
+8 phase ~20h，实际单日推完**。
 
 ## 0.4.4 旧路线（已实施，记录为档案）
 
@@ -333,6 +369,7 @@ HikariCanvas-0.4.4-SNAPSHOT.jar 154 MB / 0 baseline 漂移。**0.4.4 总 ~60h �
 | 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
 | **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | ✅ |
 | **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型） | **60h** | ✅ |
+| **0.4.5** | **打磨期**（修 0.4.3/0.4.4 P0 + UX 优化 + 车次复制 + 引导文案） | **20h** | ✅ |
 | 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
 | 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
 

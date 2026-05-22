@@ -786,6 +786,25 @@ class VariableStoreTest {
     }
 
     @Test
+    void createGlobal_inheritsReferencedByWalls_fromMarkWallReferences() {
+        // 0.4.5 P7 复查：用户先在 wall 文本写 ${var:userglobal/red_score} 触发 markWallReferences，
+        // 后再 createGlobal — 期望 created variable 反查 byWall 注入 initialRefs，避免 Provider
+        // setValue 时 notifyReferencingWalls 漏 wall（同 0.4.0 Bug 2 同款风险）
+        FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
+        store.configureUserGlobal(globalDao, 500, 10_000);
+
+        // 先用 wall A 标记引用 userglobal/red_score（变量还不存在，markWallReferences 内部
+        // 会调 addWallToReferencedSet 但 store.compute 内 noop ——但 byWall 索引被记录了）
+        store.markWallReferences("w-A", Set.of("userglobal/red_score"));
+
+        // 再 createGlobal — 此时 store.create 内部 byWall 反查应注入 referencedByWalls={w-A}
+        Variable v = store.createGlobal(ALICE, "Alice", "red_score", VarType.NUMBER, "0");
+        assertTrue(v.referencedByWalls().contains("w-A"),
+                "createGlobal should inject initialRefs from byWall inverted index, "
+                        + "to fix 0.4.0 Bug 2 pattern for userglobal namespace");
+    }
+
+    @Test
     void changeListener_firedForGlobalCreate() {
         FakeUserGlobalVariableDao globalDao = new FakeUserGlobalVariableDao();
         store.configureUserGlobal(globalDao, 500, 10_000);

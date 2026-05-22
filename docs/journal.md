@@ -5,6 +5,101 @@
 
 ---
 
+## 2026-05-22 · 0.4.5 打磨期 — 修 0.4.3/0.4.4 实操可用性 + UX 大量优化
+
+### 背景
+
+0.4.4 当日推完铁路网络后，实测发现 2 个 P0 可用性 bug + 数个 UX 粗糙点。
+0.4.5 集中打磨 0.4.3 全局变量 + 0.4.4 铁路网络两块新功能。**没有新功能 / 新协议**，
+全是体验提升 + bug 修。
+
+### 8 phase（单日推完）
+
+- **P1（修 0.4.4 P0：RailNetworkModal 选线路看不到已存在的站点 / 车次）**
+  - 新 WS op `rail.line.detail`（一次返 stations + runs + 各 run 的 timetable 聚合视图，避免 N+1）
+  - `RailDao.loadLineDetail` + `LineDetail` record（用 IN 子句批量拉 timetable）
+  - `RailOpDispatcher.handleLineDetail` + 路由到 WebServer 13 op switch（rail 12 → 13）
+  - `wsClient.sendRailLineDetail` + `RailNetworkModal.selectLine` 实际调用并填充 store
+
+- **P2（修 0.4.4 P0：原生 prompt / confirm UX）**
+  - RailNetworkModal 创建车次走 inline modal（runNumber / direction / serviceType 完整字段）
+  - 3 个 `confirm()`（删除线路 / 站点 / 车次）改 inline confirm popover（同 VariablePanel 风格）
+
+- **P3（收 0.4.4 spec：ScheduleManagerModal 加铁路绑定段）**
+  - ready payload 加 `railBinding` 字段（line + station + direction 当前快照）
+  - wsClient.handleReady 接 → useRailStore.setBinding；wall 切换时 rail store reset
+  - `RailOpDispatcher.lookupBinding` 静态 helper 供 WebServer 调
+  - ScheduleManagerModal 顶部加可折叠"铁路绑定"section：3 列下拉（线路 / 本站 / 方向）+
+    启用/更新/解除按钮 + 状态 chip + entries 启用铁路时整段灰显 + hint 文案
+
+- **P4（UX：拖动排序 + 时刻表 inline 增强）**
+  - 站点 li HTML5 native drag-drop：onDragStart / Over / Leave / Drop 4 handler +
+    GripVertical 手柄 + 落定后批量 sendRailStationUpdate 重设 sortOrder = 0..N
+  - 时刻表 `input type="time" step="1"` HTML5 原生 picker 含秒 + `isValidTime` regex
+    校验 → invalid 时 hc-input-error 红边
+
+- **P5（UX：服务类型 select + i18n 友好文本）**
+  - RailRunDialog 服务类型从 input + datalist 改为 select（4 内置 + 「自定义」选项）
+  - 选「自定义」切换为 input + ↺ 按钮恢复 select；syncDraftFromStore 自动检测非内置值进入 custom 模式
+
+- **P6（UX：车次复制）**
+  - RailRunDialog 加 Copy 按钮 → 复制对话框（新 runNumber + direction 可改 + 其他字段沿用源车次）
+  - 走 rail.run.create + rail.run.timetable.set 两步复制 + 关闭当前 dialog 让用户回主 modal
+
+- **P7（admin 视图 / bug 复查 / 引导文案）**
+  - 0.4.3 bug 复查：加 `createGlobal_inheritsReferencedByWalls_fromMarkWallReferences`
+    测试 case 验"先 markWallReferences 后 createGlobal"的 byWall 反查路径正常（同 0.4.0 Bug 2 模式）→ **测试通过**，0.4.3 没此 bug
+  - RailNetworkModal 空状态加示例引导（4 步快速上手）+ 未选线路时显示 4 step ol
+  - 全局变量 admin 视图：当前 VariablePanel 「全局变量」section 已含所有 userglobal + owner badge，
+    admin 改其他玩家变量通过 `/canvas var set` 命令；不引入新 UI（避免 ready payload 加权限字段的复杂改动）
+
+- **P8（收尾）**
+  - 版本号 0.4.4 → 0.4.5-SNAPSHOT（5 处文件）+ shadow jar 154 MB
+  - journal + CLAUDE.md 0.4.5 段 + commit + push
+
+### 测试结果
+
+- 后端 **820** 测试全绿（原 819 + 新 1：createGlobal_inheritsReferencedByWalls）
+- 前端 **161** 测试全绿（无新增 case；P4-P7 是 UI 改动，rail UI 单测留 v0.4.x）
+- 前端 vite build 718 kB / 213 kB gzip（+8 kB rail UI 改动，可接受）
+
+### 关键架构决策（已固化）
+
+1. **rail.line.detail 走聚合查询**：单接口返 stations + runs + timetableByRun，避免 N+1；
+   timetable 用 IN 子句批量拉
+2. **ready payload 携带 railBinding**：让 ScheduleManagerModal 一打开就知道状态，
+   不另加查询 op；wall 切换时 rail store reset
+3. **拖动排序批量更新**：落定后遍历重设 sortOrder = 0..N（仅 order 变化的项发请求）
+4. **serviceType custom 模式自动切换**：syncDraftFromStore 检测非内置 enum 自动进 custom input，
+   减少用户配置摩擦
+5. **车次复制 = create + timetable.set 两步**：不引入新协议 op，复用现有接口
+6. **删除走 inline confirm popover**（同 VariablePanel 风格）：替换 confirm() —
+   `confirmingDelete: { type, id }` 状态机统一管理 line/station/run 三种删除
+
+### 关联文件
+
+- `plugin/.../storage/RailDao.java`（+ loadLineDetail + LineDetail record）
+- `plugin/.../web/RailOpDispatcher.java`（+ handleLineDetail + lookupBinding 静态 helper）
+- `plugin/.../web/WebServer.java`（+ rail.line.detail op 路由 + ready payload railBinding 字段）
+- `web/src/network/wsClient.ts`（+ sendRailLineDetail + handleReady railBinding 同步 +
+  reset 内 rail store reset + import useRailStore）
+- `web/src/components/rail/RailNetworkModal.vue`（重写 selectLine + 3 inline delete confirm +
+  新车次对话框 + 拖动排序 + 引导文案）
+- `web/src/components/rail/RailRunDialog.vue`（服务类型 select + 时刻表 time picker +
+  车次复制对话框）
+- `web/src/components/schedule/ScheduleManagerModal.vue`（+ 铁路绑定 section + entries 灰显）
+- `web/src/i18n/messages.ts`（zh + en 各 ~30 新 keys）
+- `plugin/src/test/.../variable/VariableStoreTest.java`（+ 1 bug 复查 case）
+
+### v0.4.x 后续优化（如果用户提需求）
+
+- 站点拖动用更精致的 sortable lib（当前 HTML5 native 在某些浏览器视觉抖动）
+- 时刻表行加 arrival ≤ departure 时序校验红边（当前只校验格式）
+- 全局变量 admin 视图 ready payload 加 permissions 字段（让 UI 区分能否改非自己变量）
+- RailNetworkModal 加"导入示例线路"按钮（一键填充郑州 1 号线示例数据）
+
+---
+
 ## 2026-05-22 · 0.4.4 铁路网络（线路 / 站点 / 车次 / 时刻表）— 6 phase 单日落地
 
 ### 背景

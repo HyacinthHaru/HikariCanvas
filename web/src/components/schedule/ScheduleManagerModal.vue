@@ -12,11 +12,13 @@
  * 单条 entry，按 wall.precision 决定时间输入是 HH:mm 还是 HH:mm:ss。</p>
  */
 import { computed, ref, watch } from 'vue';
-import { X, Train, Plus, Trash2, Pencil, Clock } from 'lucide-vue-next';
+import { X, Train, Plus, Trash2, Pencil, Clock, TrainTrack, ChevronDown, ChevronRight } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
 import { useProjectStore } from '@/stores/project';
 import { useScheduleStore } from '@/stores/schedule';
 import { useVariableStore } from '@/stores/variables';
+import { useRailStore } from '@/stores/rail';
+import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import ScheduleEntryDialog from './ScheduleEntryDialog.vue';
@@ -26,8 +28,19 @@ const ui = useUiStore();
 const project = useProjectStore();
 const schedule = useScheduleStore();
 const variables = useVariableStore();
+const rail = useRailStore();
+const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
+
+// 0.4.5 P3：铁路绑定段状态
+const railSectionExpanded = ref(false);
+const railLinesLoaded = ref(false);
+const railEnabled = computed<boolean>(() => !!rail.binding?.lineId);
+const railBindSubmitting = ref(false);
+const railLineDraft = ref<string>('');
+const railStationDraft = ref<string>('');
+const railDirectionDraft = ref<'up' | 'down' | 'both'>('both');
 
 const open = computed(() => ui.scheduleManagerOpen);
 
@@ -52,7 +65,82 @@ watch(open, async (v) => {
         schedule.setError((e as Error).message);
         schedule.setLoading(false);
     }
+    // 0.4.5 P3：同步 rail binding 草稿到 store（ready payload 已带 binding）
+    railLineDraft.value = rail.binding?.lineId ?? '';
+    railStationDraft.value = rail.binding?.stationId ?? '';
+    railDirectionDraft.value = (rail.binding?.direction as 'up' | 'down' | 'both' | null) ?? 'both';
 });
+
+const railStationsForDraftLine = computed(() =>
+    railLineDraft.value ? rail.stationsByLine(railLineDraft.value) : []);
+
+async function expandRailSection() {
+    railSectionExpanded.value = !railSectionExpanded.value;
+    if (railSectionExpanded.value && !railLinesLoaded.value) {
+        try {
+            const { lines } = await ws.sendRailLineList();
+            rail.setLines(lines);
+            railLinesLoaded.value = true;
+            // 若已绑定，自动拉线路详情（站点列表）
+            if (rail.binding?.lineId) {
+                const detail = await ws.sendRailLineDetail(rail.binding.lineId);
+                rail.setStations(detail.stations);
+            }
+        } catch (e) {
+            net.pushLog('err', `rail.line.list rejected: ${(e as Error).message}`);
+        }
+    }
+}
+
+async function onRailLineChange() {
+    // 切换线路时拉该线路的站点列表
+    const lineId = railLineDraft.value;
+    railStationDraft.value = '';  // 重置站点选择
+    if (!lineId) return;
+    try {
+        const detail = await ws.sendRailLineDetail(lineId);
+        rail.setStations(detail.stations);
+    } catch (e) {
+        net.pushLog('err', `rail.line.detail rejected: ${(e as Error).message}`);
+    }
+}
+
+async function applyRailBinding() {
+    if (railBindSubmitting.value) return;
+    if (!railLineDraft.value || !railStationDraft.value) return;
+    railBindSubmitting.value = true;
+    try {
+        const { binding } = await ws.sendRailWallBind({
+            lineId: railLineDraft.value,
+            stationId: railStationDraft.value,
+            direction: railDirectionDraft.value,
+        });
+        rail.setBinding(binding);
+    } catch (e) {
+        net.pushLog('err', `rail.wall.bind rejected: ${(e as Error).message}`);
+    } finally {
+        railBindSubmitting.value = false;
+    }
+}
+
+async function clearRailBinding() {
+    if (railBindSubmitting.value) return;
+    railBindSubmitting.value = true;
+    try {
+        const { binding } = await ws.sendRailWallBind({
+            lineId: null,
+            stationId: null,
+            direction: 'both',
+        });
+        rail.setBinding(binding);
+        railLineDraft.value = '';
+        railStationDraft.value = '';
+    } catch (e) {
+        net.pushLog('err', `rail.wall.bind clear rejected: ${(e as Error).message}`);
+    } finally {
+        railBindSubmitting.value = false;
+    }
+}
 
 async function saveStationName(): Promise<void> {
     if (stationSubmitting.value) return;
@@ -209,6 +297,83 @@ const previewVars = computed(() => {
           </div>
         </label>
 
+        <!-- 0.4.5 P3：铁路网络绑定段（可折叠） -->
+        <section class="border border-[color:var(--border)] rounded-[var(--radius-sm)]">
+          <button class="w-full flex items-center gap-1.5 px-3 py-2 hover:bg-[color:var(--accent)]/30 rounded-[var(--radius-sm)] text-left"
+                  @click="expandRailSection">
+            <ChevronDown v-if="railSectionExpanded" class="size-3.5 text-[color:var(--muted-foreground)]" />
+            <ChevronRight v-else class="size-3.5 text-[color:var(--muted-foreground)]" />
+            <TrainTrack class="size-3.5 text-[color:var(--ctp-mauve)]" />
+            <span class="font-medium">{{ t.schedule.railBindingTitle }}</span>
+            <span v-if="railEnabled"
+                  class="ml-auto px-2 py-0.5 rounded bg-[color:var(--ctp-mauve)]/15 text-[color:var(--ctp-mauve)] text-[10px]">
+              {{ t.schedule.railBindingEnabled }}
+            </span>
+            <span v-else
+                  class="ml-auto px-2 py-0.5 rounded bg-[color:var(--muted)] text-[color:var(--muted-foreground)] text-[10px]">
+              {{ t.schedule.railBindingDisabled }}
+            </span>
+          </button>
+          <div v-if="railSectionExpanded" class="p-3 pt-1 space-y-2 border-t border-[color:var(--border)]">
+            <p class="text-[10px] text-[color:var(--muted-foreground)]">
+              {{ t.schedule.railBindingHint }}
+            </p>
+            <div class="grid grid-cols-3 gap-2">
+              <label class="block">
+                <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.schedule.railBindingLine }}</span>
+                <select class="hc-input mt-0.5"
+                        v-model="railLineDraft"
+                        @change="onRailLineChange"
+                        :disabled="railBindSubmitting">
+                  <option value="">{{ t.schedule.railBindingNoLine }}</option>
+                  <option v-for="line in rail.allLines" :key="line.id" :value="line.id">
+                    {{ line.name }}{{ line.code ? ' (' + line.code + ')' : '' }}
+                  </option>
+                </select>
+              </label>
+              <label class="block">
+                <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.schedule.railBindingStation }}</span>
+                <select class="hc-input mt-0.5"
+                        v-model="railStationDraft"
+                        :disabled="!railLineDraft || railBindSubmitting">
+                  <option value="">{{ t.schedule.railBindingPickStation }}</option>
+                  <option v-for="s in railStationsForDraftLine" :key="s.id" :value="s.id">
+                    {{ s.name }}
+                  </option>
+                </select>
+              </label>
+              <label class="block">
+                <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.schedule.railBindingDirection }}</span>
+                <select class="hc-input mt-0.5"
+                        v-model="railDirectionDraft"
+                        :disabled="railBindSubmitting">
+                  <option value="both">{{ t.schedule.railBindingDirBoth }}</option>
+                  <option value="up">{{ t.rail.directionUp }}</option>
+                  <option value="down">{{ t.rail.directionDown }}</option>
+                </select>
+              </label>
+            </div>
+            <div class="flex gap-2">
+              <button class="hc-btn px-3 py-1 text-xs rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 disabled:opacity-40"
+                      :disabled="!railLineDraft || !railStationDraft || railBindSubmitting"
+                      @click="applyRailBinding">
+                {{ railEnabled ? t.schedule.railBindingUpdate : t.schedule.railBindingApply }}
+              </button>
+              <button v-if="railEnabled"
+                      class="hc-btn px-3 py-1 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                      :disabled="railBindSubmitting"
+                      @click="clearRailBinding">
+                {{ t.schedule.railBindingClear }}
+              </button>
+              <span v-if="railBindSubmitting" class="text-xs text-[color:var(--muted-foreground)] self-center">…</span>
+            </div>
+            <p v-if="railEnabled"
+               class="text-[10px] text-[color:var(--ctp-mauve)] bg-[color:var(--ctp-mauve)]/10 px-2 py-1 rounded">
+              {{ t.schedule.railBindingActiveHint }}
+            </p>
+          </div>
+        </section>
+
         <!-- 0.4.0 bugfix（Bug 4）：精度切换 -->
         <div class="block">
           <div class="flex items-center gap-2 mb-1">
@@ -242,15 +407,20 @@ const previewVars = computed(() => {
         </div>
 
         <!-- entries 列表 -->
-        <section class="space-y-2">
+        <section class="space-y-2" :class="railEnabled ? 'opacity-50 pointer-events-none' : ''">
           <div class="flex items-center gap-2">
             <span class="font-medium">{{ t.schedule.entriesHeader }}</span>
             <span class="text-xs text-[color:var(--muted-foreground)]">
               ({{ schedule.sortedEntries.length }})
             </span>
+            <span v-if="railEnabled"
+                  class="text-[10px] text-[color:var(--ctp-mauve)] italic">
+              {{ t.schedule.entriesDisabledHint }}
+            </span>
             <button class="ml-auto hc-btn px-2 py-1 text-xs rounded-[var(--radius-sm)]
                           bg-[color:var(--primary)] text-[color:var(--primary-foreground)]
-                          hover:opacity-90 flex items-center gap-1"
+                          hover:opacity-90 flex items-center gap-1 disabled:opacity-40"
+                    :disabled="railEnabled"
                     @click="openAddEntry">
               <Plus class="size-3" />
               {{ t.schedule.addEntry }}

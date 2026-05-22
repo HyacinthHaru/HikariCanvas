@@ -278,6 +278,54 @@ public class RailDao {
         }
     }
 
+    /**
+     * 0.4.5 P1：按线路一次性聚合 stations + runs + 各 run 的 timetable，给前端
+     * RailNetworkModal `selectLine` 调用避免 N+1 个独立请求。
+     *
+     * @return 聚合视图；线路不存在时返 empty
+     */
+    public LineDetail loadLineDetail(String lineId) {
+        if (lineId == null) return LineDetail.empty(null);
+        List<RailStation> sts = listStationsByLine(lineId);
+        List<RailRun> rs = listRunsByLine(lineId);
+        // 批量拉 timetable：一次查 WHERE run_id IN (...)。runs 通常 ≤ 50，单查无压力。
+        java.util.Map<String, List<RailTimetableEntry>> ttByRun = new java.util.LinkedHashMap<>();
+        if (rs.isEmpty()) {
+            return new LineDetail(lineId, sts, rs, ttByRun);
+        }
+        try {
+            jdbi.useHandle(h -> {
+                // 用 IN 子句拉所有 run 的 timetable（jdbi bindList）
+                List<String> runIds = rs.stream().map(RailRun::id).toList();
+                h.createQuery(
+                        "SELECT t.* FROM rail_timetable t "
+                                + "JOIN rail_stations s ON s.id = t.station_id "
+                                + "WHERE t.run_id IN (<rids>) "
+                                + "ORDER BY t.run_id, s.sort_order ASC")
+                        .bindList("rids", runIds)
+                        .map((rs2, ctx) -> mapTimetable(rs2))
+                        .forEach(te -> ttByRun
+                                .computeIfAbsent(te.runId(), k -> new ArrayList<>())
+                                .add(te));
+            });
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.loadLineDetail timetable fetch failed: " + lineId, e);
+        }
+        return new LineDetail(lineId, sts, rs, ttByRun);
+    }
+
+    /** {@link #loadLineDetail} 的聚合返回。 */
+    public record LineDetail(
+            String lineId,
+            List<RailStation> stations,
+            List<RailRun> runs,
+            java.util.Map<String, List<RailTimetableEntry>> timetableByRun
+    ) {
+        public static LineDetail empty(String lineId) {
+            return new LineDetail(lineId, List.of(), List.of(), java.util.Map.of());
+        }
+    }
+
     public List<RailTimetableEntry> listTimetableByRun(String runId) {
         try {
             return jdbi.withHandle(h -> h.createQuery(

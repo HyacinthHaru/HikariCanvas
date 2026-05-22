@@ -742,8 +742,9 @@ public final class WebServer {
                     scheduleOpDispatcher.dispatch(ctx, in, bound);
                 }
             }
-            // 0.4.4 rail.* 12 op（11 spec op + line.list 读取端点）
-            case "rail.line.list", "rail.line.create", "rail.line.update", "rail.line.delete",
+            // 0.4.4 rail.* 12 op + 0.4.5 rail.line.detail（共 13 op）
+            case "rail.line.list", "rail.line.detail",
+                 "rail.line.create", "rail.line.update", "rail.line.delete",
                  "rail.station.add", "rail.station.update", "rail.station.delete",
                  "rail.run.create", "rail.run.update", "rail.run.delete",
                  "rail.run.timetable.set", "rail.wall.bind" -> {
@@ -910,6 +911,29 @@ public final class WebServer {
             payload.put("aliases", variableAliasDao.loadByWall(wallId));
         } else {
             payload.put("aliases", java.util.Map.of());
+        }
+        // 0.4.5 P3：携带当前 wall 的铁路绑定（line + station + direction），让 ScheduleManagerModal
+        // 一打开就知道是否走 RailScheduleProvider 路径。未绑定时返 null。
+        if (railOpDispatcher != null && wallId != null) {
+            try {
+                // 直接 query RailDao（dispatcher 内部已持有）；这里复用 plugin 装配链
+                moe.hikari.canvas.rail.WallRailBinding b =
+                        moe.hikari.canvas.web.RailOpDispatcher.lookupBinding(railOpDispatcher, wallId);
+                if (b != null && b.lineId() != null) {
+                    java.util.Map<String, Object> bMap = new java.util.LinkedHashMap<>();
+                    bMap.put("wallId", b.wallId());
+                    bMap.put("lineId", b.lineId());
+                    if (b.stationId() != null) bMap.put("stationId", b.stationId());
+                    if (b.direction() != null) bMap.put("direction", b.direction());
+                    payload.put("railBinding", bMap);
+                } else {
+                    payload.put("railBinding", null);
+                }
+            } catch (Exception e) {
+                payload.put("railBinding", null);
+            }
+        } else {
+            payload.put("railBinding", null);
         }
         ctx.send(Envelope.of("ready", in.id(), payload));
     }

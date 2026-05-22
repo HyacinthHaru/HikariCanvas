@@ -13,6 +13,7 @@ import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
 import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
+import { useRailStore } from '@/stores/rail';
 import { useScheduleStore } from '@/stores/schedule';
 import { messages } from '@/i18n/messages';
 
@@ -285,6 +286,33 @@ export class WsClient {
                 .then((p) => p as { lines: import('@/types/rail').RailLine[] });
     }
 
+    /**
+     * 0.4.5 P1：聚合查询某线路的 stations + runs + 各 run 的 timetable。
+     * 前端 RailNetworkModal.selectLine 用此避免 N+1 请求。
+     */
+    sendRailLineDetail(lineId: string): Promise<{
+        line: import('@/types/rail').RailLine;
+        stations: import('@/types/rail').RailStation[];
+        runs: import('@/types/rail').RailRun[];
+        timetableByRun: Record<string, Array<{
+            stationId: string;
+            arrival?: string;
+            departure?: string;
+            stopsHere: boolean;
+        }>>;
+    }> {
+        return this.sendWithAck('rail.line.detail', { lineId }, 8000)
+                .then((p) => p as {
+                    line: import('@/types/rail').RailLine;
+                    stations: import('@/types/rail').RailStation[];
+                    runs: import('@/types/rail').RailRun[];
+                    timetableByRun: Record<string, Array<{
+                        stationId: string; arrival?: string;
+                        departure?: string; stopsHere: boolean;
+                    }>>;
+                });
+    }
+
     sendRailLineCreate(name: string, code: string | null, color: string | null):
             Promise<{ lineId: string; line: import('@/types/rail').RailLine }> {
         return this.sendWithAck('rail.line.create', { name, code, color })
@@ -460,6 +488,9 @@ export class WsClient {
             useScheduleStore().reset();
             // 0.4.2：alias 也是 wall-scoped；与 schedule 同款 reset
             useVariableAliasStore().reset();
+            // 0.4.5 P3：rail store 含 lines / stations / runs / timetables 内存缓存；wall 切换时全清，
+            // 下次打开 modal 时再拉
+            useRailStore().reset();
         }
         net.authenticated = true;
         net.sessionId = payload.sessionId;
@@ -483,6 +514,11 @@ export class WsClient {
         useVariableStore().initVariables(payload.variables ?? []);
         // 0.4.2：变量别名快照（per-wall）；后续变更走 state.patch /aliases/<encoded>。
         useVariableAliasStore().initAliases(payload.aliases ?? {});
+        // 0.4.5 P3：铁路绑定快照（当前 wall 是否绑了线路）；用于 ScheduleManagerModal /
+        // RailNetworkModal 一打开就显示绑定状态。null = 未绑定。
+        const railBinding = (payload as { railBinding?: import('@/types/rail').WallRailBinding | null })
+            .railBinding;
+        useRailStore().setBinding(railBinding ?? null);
         // rotate 过来的新 token 存 sessionStorage 供断线重连
         if (payload.reconnectToken) {
             try {
