@@ -60,8 +60,24 @@ public final class RailScheduleProvider implements VariableProvider {
 
     private static final Logger log = Logger.getLogger(RailScheduleProvider.class.getName());
 
-    /** 与 {@link ManualScheduleProvider#NAMESPACE_PREFIX} 相同 — 共享 namespace 让旧 wall 文本无感升级。 */
+    /**
+     * 对外暴露给 wall 的 namespace 前缀 — 与 {@link ManualScheduleProvider#NAMESPACE_PREFIX}
+     * 相同（"schedule"）让旧 wall 文本无感升级；rail-bound wall 的 ${var:schedule.X} 与
+     * 未绑定 wall 的 ${var:schedule.X} 文本完全一致。
+     */
     public static final String NAMESPACE_PREFIX = "schedule";
+
+    /**
+     * 0.4.6 hotfix：{@link VariableProvider#namespace()} 是 {@link VariableProviderDaemon}
+     * 内部用作 provider 实例 map 的 key（必须全局唯一）；这与"对外暴露的 store namespace
+     * 前缀"是两个独立概念。Rail 和 Manual 都暴露 {@code schedule:<wallId>/*} 给 wall（
+     * NAMESPACE_PREFIX），但在 daemon 内部必须用不同 key 区分实例——否则
+     * `daemon.register` 会抛 IllegalStateException("Provider for namespace 'schedule'
+     * already registered")。
+     *
+     * <p>这个值仅 daemon 内部用，不参与 store 写入 / interpolator 解析。</p>
+     */
+    public static final String DAEMON_KEY = "schedule_rail";
 
     public static final long REFRESH_INTERVAL_MS = 1_000L;
     public static final long MINUTE_INTERVAL_MS = 30_000L;
@@ -116,7 +132,7 @@ public final class RailScheduleProvider implements VariableProvider {
         if (locale != null) this.ownerLocale = locale;
     }
 
-    @Override public String namespace() { return NAMESPACE_PREFIX; }
+    @Override public String namespace() { return DAEMON_KEY; }
     @Override public String displayName() { return "Rail Schedule"; }
     @Override public Duration refreshInterval() { return Duration.ofMillis(REFRESH_INTERVAL_MS); }
 
