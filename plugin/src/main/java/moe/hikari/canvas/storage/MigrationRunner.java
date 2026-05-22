@@ -48,7 +48,16 @@ public final class MigrationRunner {
             // 0.4.0 bugfix（Bug 4）：per-wall schedule 精度（minute / second）
             new Migration(13, "db-migrations/V013__schedule_precision.sql"),
             // 0.4.2：变量别名（per-wall，全 namespace 通用）
-            new Migration(14, "db-migrations/V014__variable_aliases.sql")
+            new Migration(14, "db-migrations/V014__variable_aliases.sql"),
+            // 0.4.3：全局用户变量（userglobal/* namespace；name 全服唯一）
+            //
+            // 0.4.6 bugfix：原 0.4.3 实施时漏在此列表注册，导致 V015 / V016 SQL 文件存在但
+            // 永远不会被运行；服务器启动时 DB schema 停在 V14，代码 INSERT 这两表立即抛
+            // SQLITE_ERROR "no such table"。注释顶部"未来新增迁移时在 MIGRATIONS 列表末尾
+            // 追加条目"是必须的——这是显式声明而非目录扫描的代价。
+            new Migration(15, "db-migrations/V015__user_global_variables.sql"),
+            // 0.4.4：铁路网络（线路 / 站点 / 车次 / 时刻表 / wall 绑定）
+            new Migration(16, "db-migrations/V016__rail_network.sql")
     );
 
     private final Jdbi jdbi;
