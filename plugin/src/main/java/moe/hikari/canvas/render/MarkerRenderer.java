@@ -84,9 +84,22 @@ public final class MarkerRenderer {
     }
 
     /**
-     * 构造 arrow 三角形几何（不绘制）。供 {@link #drawArrow} 用，也供 CanvasCompositor 在
-     * 描边前从 stroke clip 中 subtract，避免「粗 stroke 在 arrow 锥尖处突破 arrow 边界」
-     * （2026-05-15 修 Bug）。
+     * 构造 arrow 三角形几何（不绘制）。
+     *
+     * <p><b>0.4.7 几何修正</b>：原实现把 path end 当 apex，base 朝 path 内部退 size 距离。
+     * 这导致 path stroke 矩形带（粗 strokeWidth、沿 path 方向）在 arrow 三角形内部画，
+     * 而等腰三角形从 apex 朝外 d 距离处宽度仅 d（两腰斜率 0.5），所以 d < strokeWidth 时
+     * stroke 矩形带必然超出三角形边缘 → 视觉上"V 形箭头被直线横穿"。</p>
+     *
+     * <p><b>新几何（SVG marker-end 标准做法）</b>：path end 当 <b>base center</b>，apex
+     * 在 path end <b>朝 dir 方向延伸 size</b>。这样 stroke 干净截止于 base center
+     * （配合 BUTT lineCap），arrow 三角形完全在 path end 之外，V 头清晰突出。</p>
+     *
+     * <p><b>参数 {@code apexX, apexY} 仍命名为 apex</b>（向下兼容 caller）—— 实际传入的
+     * 是 path end，函数内部把它当 base center 用，并算出真 apex = path end + dir × size。</p>
+     *
+     * <p><b>side effect</b>：arrow 现在画在 element bbox 之外（编辑器视觉上略溢出 bbox
+     * border，但 marker 本就是 path end 之外的装饰，是 SVG 标准行为）。</p>
      */
     public static Path2D.Double arrowShape(double apexX, double apexY,
                                            double dirX, double dirY, int size) {
@@ -95,8 +108,11 @@ public final class MarkerRenderer {
         if (len < 1e-9) return tri;
         double dx = dirX / len;
         double dy = dirY / len;
-        double bcx = apexX - dx * size;
-        double bcy = apexY - dy * size;
+        // apexX/Y 现在是"path end" = base center；真 apex 在 path end + dir × size
+        double bcx = apexX;
+        double bcy = apexY;
+        double realApexX = apexX + dx * size;
+        double realApexY = apexY + dy * size;
         double px = -dy;
         double py = dx;
         double halfBase = size * 0.5;
@@ -104,7 +120,7 @@ public final class MarkerRenderer {
         double leftY = bcy + py * halfBase;
         double rightX = bcx - px * halfBase;
         double rightY = bcy - py * halfBase;
-        tri.moveTo(apexX, apexY);
+        tri.moveTo(realApexX, realApexY);
         tri.lineTo(leftX, leftY);
         tri.lineTo(rightX, rightY);
         tri.closePath();

@@ -35,8 +35,15 @@ export function dotRadius(strokeWidth: number, elementDiagonal?: number): number
 }
 
 /**
- * 构造 arrow 三角形几何（不绘制）。drawArrow 内部用，也供 PreviewRenderer 在描边前
- * 从 stroke clip 中扣除（2026-05-15 修 Bug：粗 stroke 突破 arrow 锥尖）。
+ * 构造 arrow 三角形几何（不绘制）。
+ *
+ * 0.4.7 几何修正（与后端 MarkerRenderer.java arrowShape 同款）：
+ * - 原实现 path end 当 apex，base 朝 path 内部退 size → stroke 矩形带在三角形 apex
+ *   附近超出边缘（V 头被直线横穿）
+ * - 新实现 path end 当 **base center**，apex 朝 dir 方向延伸 size → stroke 干净截止
+ *   于 base center（配合 BUTT lineCap），arrow 在 path end 之外突出（SVG marker-end 标准）
+ *
+ * 参数 apexX/Y 仍命名 apex（向下兼容 caller）— 内部当 base center 用。
  */
 export function arrowShape(
     apexX: number, apexY: number,
@@ -47,13 +54,16 @@ export function arrowShape(
     if (len < 1e-9) return null;
     const dx = dirX / len;
     const dy = dirY / len;
-    const bcx = apexX - dx * size;
-    const bcy = apexY - dy * size;
+    // apexX/Y 是 path end = base center；真 apex 在 path end + dir × size
+    const bcx = apexX;
+    const bcy = apexY;
+    const realApexX = apexX + dx * size;
+    const realApexY = apexY + dy * size;
     const px = -dy;
     const py = dx;
     const halfBase = size * 0.5;
     const path = new Path2D();
-    path.moveTo(apexX, apexY);
+    path.moveTo(realApexX, realApexY);
     path.lineTo(bcx + px * halfBase, bcy + py * halfBase);
     path.lineTo(bcx - px * halfBase, bcy - py * halfBase);
     path.closePath();
