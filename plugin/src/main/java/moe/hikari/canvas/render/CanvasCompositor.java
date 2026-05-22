@@ -171,8 +171,11 @@ public final class CanvasCompositor {
         ProjectState.Canvas canvas = state.canvas();
         int widthPx = canvas.widthMaps() * MAP_SIZE;
         int heightPx = canvas.heightMaps() * MAP_SIZE;
-        // 主 buffer：TYPE_INT_RGB（无 alpha）—— MC 地图最终也无 alpha
-        BufferedImage img = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_RGB);
+        // 0.4.6 P2：主 buffer 升 TYPE_INT_ARGB 让背景 alpha 通道在 toPaletteSlice 时
+        // 能被读到（之前 TYPE_INT_RGB 强行合成不透明，导致 SolidFill("#00000000") 透明背景
+        // 被吃掉）。toPaletteSlice 内的 matchColor 4 参重载在 alpha < 128 时返 palette index 0
+        // （TRANSPARENT_INDEX），MC 地图渲染时该像素透出后方方块。内存 +33%（64→85 KiB 每 2×2 maps）
+        BufferedImage img = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
         // 0.4.0-P1-C：snapshot 取 volatile，整段 rasterize 内不变
         VariableInterpolator interp = this.interpolator;
@@ -323,7 +326,8 @@ public final class CanvasCompositor {
                 t.fontId(), t.fontSize(), t.color(), t.align(),
                 t.letterSpacing(), t.lineHeight(), t.vertical(),
                 t.effects(),
-                t.opacity(), t.blendMode(), t.renderMode());
+                t.opacity(), t.blendMode(), t.renderMode(),
+                t.bold(), t.italic());
     }
 
     /** 单 element 几何绘制 dispatch（不含 opacity / rotation / dither 装饰）。 */
@@ -440,10 +444,14 @@ public final class CanvasCompositor {
             int base = y * MAP_SIZE;
             for (int x = 0; x < MAP_SIZE; x++) {
                 int rgb = rowBuf[x];
+                int a = (rgb >>> 24) & 0xff;
                 int r = (rgb >> 16) & 0xff;
                 int gg = (rgb >> 8) & 0xff;
                 int b = rgb & 0xff;
-                out[base + x] = paletteLut.matchColor(r, gg, b);
+                // 0.4.6 P2：4 参 matchColor — alpha < ALPHA_THRESHOLD(128) 时返
+                // TRANSPARENT_INDEX(0)，MC 地图渲染时该像素透出 ItemFrame 后方方块。
+                // 不透明像素（alpha >= 128）走原 3 参 LUT 匹配路径，零差异。
+                out[base + x] = paletteLut.matchColor(r, gg, b, a);
             }
         }
         return out;

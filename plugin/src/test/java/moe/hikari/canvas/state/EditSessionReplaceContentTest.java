@@ -25,7 +25,7 @@ class EditSessionReplaceContentTest {
         return new TextElement(id, x, y, 100, 20, 0, false, true,
                 content, "ark_pixel", 12, "#000000", "left",
                 0f, 1.2f, false, null,
-                null, null, null);
+                null, null, null, null, null);
     }
 
     private static RectElement rect(String id) {

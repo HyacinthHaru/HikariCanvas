@@ -325,7 +325,7 @@ function closeRunDialog() {
                 </span>
                 <button class="hc-btn px-1.5 py-0.5 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] text-[10px]"
                         @click.stop="cancelDelete">{{ t.rail.cancel }}</button>
-                <button class="hc-btn px-1.5 py-0.5 rounded bg-[color:var(--destructive)] text-white hover:opacity-90 text-[10px]"
+                <button class="hc-btn px-1.5 py-0.5 rounded bg-[color:var(--destructive)] text-[color:var(--destructive-foreground)] hover:opacity-90 text-[10px]"
                         @click.stop="confirmDeleteLine(line.id)">{{ t.rail.deleteConfirmYes }}</button>
               </div>
               <div v-else
@@ -402,7 +402,7 @@ function closeRunDialog() {
                     </span>
                     <button class="hc-btn px-2 py-0.5 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] text-[10px]"
                             @click="cancelDelete">{{ t.rail.cancel }}</button>
-                    <button class="hc-btn px-2 py-0.5 rounded bg-[color:var(--destructive)] text-white hover:opacity-90 text-[10px]"
+                    <button class="hc-btn px-2 py-0.5 rounded bg-[color:var(--destructive)] text-[color:var(--destructive-foreground)] hover:opacity-90 text-[10px]"
                             @click="confirmDeleteStation(s.id)">{{ t.rail.deleteConfirmYes }}</button>
                   </li>
                   <li v-else
@@ -459,7 +459,7 @@ function closeRunDialog() {
                     </span>
                     <button class="hc-btn px-2 py-0.5 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] text-[10px]"
                             @click="cancelDelete">{{ t.rail.cancel }}</button>
-                    <button class="hc-btn px-2 py-0.5 rounded bg-[color:var(--destructive)] text-white hover:opacity-90 text-[10px]"
+                    <button class="hc-btn px-2 py-0.5 rounded bg-[color:var(--destructive)] text-[color:var(--destructive-foreground)] hover:opacity-90 text-[10px]"
                             @click="confirmDeleteRun(r.id)">{{ t.rail.deleteConfirmYes }}</button>
                   </li>
                   <li v-else

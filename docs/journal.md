@@ -5,6 +5,95 @@
 
 ---
 
+## 2026-05-22 · 0.4.6 体验打磨 — 字体加粗/斜体 + 透明背景 + 配色修复 + 文案优化
+
+### 背景
+
+用户提出 4 个体验打磨点：(1) 字体原生加粗/斜体；(2) 前端文案 + 排版更友好；
+(3) 透明背景；(4) 颜色对比度 bug。先做 4 路深入审计，再 5 phase 实施。
+
+### 审计核心发现
+
+1. **字体 bold/italic**：22 字体矩阵无 bold/italic variant；AWT synthetic bold 与
+   Canvas synthetic bold 算法不同，强行加 `Font.BOLD` 会导致双端像素不一致。
+   推荐方案：**stroke 包装 + shear transform**（双端等价）
+2. **透明背景**：M11 / M17 已埋好 80% 基础设施（PaletteLut.TRANSPARENT_INDEX +
+   matchColor 4 参 + palette 4 透明槽）；唯一缺陷是 CanvasCompositor 用
+   TYPE_INT_RGB buffer 把 alpha 吃掉
+3. **颜色 bug**：根因是 `--primary-foreground: var(--ctp-base)` 在深色主题下
+   ctp-base 是暗色，配亮色 primary 对比度仅 2:1（远低于 WCAG AA 4.5:1）
+4. **侧边栏文案**：10+ 个技术术语（strokeWidth / blendMode / innerRatio / dither）
+   需改友好
+
+### 5 phase 实施
+
+- **P1（颜色对比度修复）**：
+  - style.css 加 `.dark, .theme-frappe, .theme-macchiato { --primary-foreground:
+    var(--ctp-crust); --destructive-foreground: var(--ctp-crust); }` 让深色主题下
+    亮 primary/destructive 配深色 foreground（对比度 2:1 → 6:1+）
+  - 6 处 `bg-[color:var(--destructive)] text-white` → `text-[color:var(--destructive-foreground)]`
+    （VariablePanel × 2 / RailNetworkModal × 3 / CanvasView toast / IconLibrary tab）
+- **P2（透明背景）**：
+  - `CanvasCompositor.rasterize()` buffer TYPE_INT_RGB → TYPE_INT_ARGB
+  - `toPaletteSlice` 提取 alpha 调 4 参 `matchColor(r,g,b,a)`（alpha<128 返 palette
+    index 0 = TRANSPARENT，MC 地图渲染该像素透出 ItemFrame 后方方块）
+  - CanvasSettingsSection 加"设为透明背景"按钮（一键设 `#00000000`）
+- **P3（字体加粗 / 斜体）**：
+  - `TextElement` 加 `Boolean bold`, `Boolean italic` 字段（nullable，向下兼容）
+  - 后端 `TextRenderer.draw` 包装：italic 走 `g.shear(-0.2, 0)`（在元素 anchor 处）；
+    bold 走额外 stroke pass（width = max(1.5, fontSize * 0.08)，color = text color）
+  - 前端 `PreviewRenderer.drawText` 镜像：`ctx.transform(1, 0, -0.2, 1, ...)` italic +
+    `ctx.lineWidth + strokeText` bold（数学等价于 AWT 路径）
+  - `TextElementSection` UI 加 B / I 切换按钮（Material 风格紧凑工具栏）
+  - 像素字体（NN 路径）跳过 bold 描边以保持锐利
+- **P4（文案重排）**：
+  - 10+ 个技术化文案改友好：strokeWidth → 描边粗细 / blendMode → 混色模式 /
+    renderModeClean → 清晰 / renderModeDither → 柔和 / dither → 柔和过渡 /
+    innerRatio → 内凹度 (Pointiness) / Shape kind/sides 中文化
+  - GeometricElementSection 的 shape kind 选项 polygon/star 加 i18n（多边形/星形）
+  - 不引入大型分组重构（保留现有 `<details>` 折叠）
+- **P5（收尾）**：版本号 0.4.5 → 0.4.6-SNAPSHOT（5 处）+ shadow jar 155 MB +
+  journal + CLAUDE.md 0.4.6 段 + commit + push
+
+### 关键架构决策（已固化）
+
+1. **TYPE_INT_RGB → TYPE_INT_ARGB 主 buffer**：让 alpha 通道贯穿渲染链路到
+   `matchColor(r,g,b,a)`；内存 +33%（每 2×2 maps 64→85 KiB）可接受
+2. **italic = shear transform，bold = stroke 包装**：双端走数学等价的线性变换 +
+   stroke 描边——避免 synthetic bold 双端像素不一致
+3. **bold 像素字体跳过描边**：NN 路径走 BufferedImage mask 不是 outline；像素字体
+   本身已经够清晰，加描边反而破坏锐利感
+4. **deep mode foreground 走 ctp-crust**：1 行 CSS 改全局修复 Primary/Destructive
+   两类按钮对比度（影响约 20 处组件）
+5. **文案保持 `<details>` 折叠不强行重构**：现有结构已合理，重点改文案而非结构
+
+### 测试结果
+
+- 后端 **820** 测试全绿（baseline 无破坏 — TYPE_INT_RGB/ARGB 切换在 alpha=0xFF 像素下
+  与 3 参 matchColor 等价；测试 fixture 全是不透明 alpha）
+- 前端 vite build 通过（bundle 720 kB / 213 kB gzip）
+- shadow jar `HikariCanvas-0.4.6-SNAPSHOT.jar` 155 MB
+
+### 关联文件
+
+- `web/src/style.css`（+ 深色主题 foreground 覆盖）
+- `web/src/components/{variables/VariablePanel, rail/RailNetworkModal, layout/CanvasView, layout/IconLibrary}.vue`（6 处 text-white → token）
+- `plugin/.../render/CanvasCompositor.java`（TYPE_INT_RGB → ARGB + matchColor 4 参）
+- `web/src/components/properties/CanvasSettingsSection.vue`（+ 透明背景按钮）
+- `plugin/.../state/TextElement.java`（+ Boolean bold, italic 字段）
+- `plugin/.../state/ElementValidator.java`（+ boolFieldOrNull helper）
+- `plugin/.../state/EditSession.java`（buildText / applyTextPatch / cloneElementWithNewId 5 处 + 字段）
+- `plugin/.../template/TemplateInstantiator.java`（2 处 new TextElement 加 null, null）
+- `plugin/.../render/{CanvasCompositor, TextRenderer}.java`（textElement 重建 + bold/italic 渲染）
+- `plugin/src/test/.../{CanvasCompositorVariableTest, EditSessionReplaceContentTest}.java`（fixture +2 字段）
+- `web/src/types/protocol.ts`（TextElement 加 bold/italic 字段）
+- `web/src/render/PreviewRenderer.ts`（drawText 包 italic shear + bold stroke pass）
+- `web/src/components/properties/TextElementSection.vue`（+ B / I 切换按钮）
+- `web/src/components/properties/GeometricElementSection.vue`（shape kind/sides/innerRatio i18n）
+- `web/src/i18n/messages.ts`（zh + en 各 ~15 改 / 新增 keys）
+
+---
+
 ## 2026-05-22 · 0.4.5 打磨期 — 修 0.4.3/0.4.4 实操可用性 + UX 大量优化
 
 ### 背景

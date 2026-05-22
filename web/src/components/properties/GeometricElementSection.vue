@@ -117,22 +117,22 @@ function onNumberChange(field: string, ev: Event) {
       <template v-if="isShape">
         <div class="grid grid-cols-2 gap-2">
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">kind</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.shapeKind }}</span>
             <select class="hc-input" :value="(element as ShapeElement).kind"
                     @change="(e) => onSelectChange('kind', e)">
-              <option value="polygon">polygon</option>
-              <option value="star">star</option>
+              <option value="polygon">{{ t.properties.shapeKindPolygon }}</option>
+              <option value="star">{{ t.properties.shapeKindStar }}</option>
             </select>
           </label>
           <label class="flex flex-col gap-0.5">
-            <span class="text-xs text-[color:var(--muted-foreground)]">sides</span>
+            <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.shapeSides }}</span>
             <input type="number" min="3" max="32" class="hc-input"
                    :value="(element as ShapeElement).sides"
                    @input="(e) => onNumberChange('sides', e)">
           </label>
         </div>
         <label v-if="(element as ShapeElement).kind === 'star'" class="flex flex-col gap-0.5">
-          <span class="text-xs text-[color:var(--muted-foreground)]">innerRatio</span>
+          <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.shapeInnerRatio }}</span>
           <input type="range" min="0.1" max="0.95" step="0.05"
                  :value="(element as ShapeElement).innerRatio ?? 0.5"
                  @input="(e) => onNumberChange('innerRatio', e)">

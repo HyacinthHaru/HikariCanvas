@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static moe.hikari.canvas.state.ElementValidator.boolFieldOrDefault;
+import static moe.hikari.canvas.state.ElementValidator.boolFieldOrNull;
 import static moe.hikari.canvas.state.ElementValidator.boolValue;
 import static moe.hikari.canvas.state.ElementValidator.buildEffects;
 import static moe.hikari.canvas.state.ElementValidator.buildStroke;
@@ -664,10 +665,14 @@ public final class EditSession {
         validateLineHeight(lineHeight);
         boolean vertical = boolFieldOrDefault(p, "vertical", false);
         Effects effects = buildEffects(p.get("effects"));
+        // 0.4.6 P3：bold / italic 字段（向下兼容 null）
+        Boolean bold = boolFieldOrNull(p, "bold");
+        Boolean italic = boolFieldOrNull(p, "italic");
         return new TextElement(id, x, y, w, h, rotation, locked, visible,
                 text, fontId, fontSize, color, align,
                 letterSpacing, lineHeight, vertical, effects,
-                null, null, null);
+                null, null, null,
+                bold, italic);
     }
 
     private Element buildRect(String id, Map<String, Object> p) {
@@ -988,6 +993,8 @@ public final class EditSession {
         Float opacity = t.opacity();
         BlendMode blendMode = t.blendMode();
         RenderMode renderMode = t.renderMode();
+        Boolean bold = t.bold();
+        Boolean italic = t.italic();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -1015,6 +1022,9 @@ public final class EditSession {
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
                 case "renderMode" -> renderMode = parseRenderModeNullable(v);
+                // 0.4.6 P3：bold / italic patch 字段（null 视同 false / 关闭）
+                case "bold" -> bold = (v == null) ? null : boolValue(v, k);
+                case "italic" -> italic = (v == null) ? null : boolValue(v, k);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
                         "unknown text field: " + k);
             }
@@ -1022,7 +1032,7 @@ public final class EditSession {
         return new TextElement(t.id(), x, y, w, h, rotation, locked, visible,
                 text, fontId, fontSize, color, align,
                 letterSpacing, lineHeight, vertical, effects,
-                opacity, blendMode, renderMode);
+                opacity, blendMode, renderMode, bold, italic);
     }
 
     private RectElement applyRectPatch(RectElement r, Map<String, Object> patch) {
@@ -1221,7 +1231,8 @@ public final class EditSession {
                     t.x(), t.y(), t.w(), t.h(), t.rotation(), t.locked(), t.visible(),
                     t.text(), t.fontId(), t.fontSize(), t.color(), t.align(),
                     t.letterSpacing(), t.lineHeight(), t.vertical(), t.effects(),
-                    t.opacity(), t.blendMode(), t.renderMode());
+                    t.opacity(), t.blendMode(), t.renderMode(),
+                    t.bold(), t.italic());
             case RectElement r -> new RectElement(newId,
                     r.x(), r.y(), r.w(), r.h(), r.rotation(), r.locked(), r.visible(),
                     r.fill(), r.stroke(),

@@ -350,6 +350,30 @@ function patchGlow(partial: Partial<Glow>) {
             <option value="right">{{ t.properties.alignRight }}</option>
           </select>
         </label>
+        <!-- 0.4.6 P3：B / I 切换按钮（紧凑工具栏风格） -->
+        <div class="flex flex-col gap-0.5">
+          <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.styleLabel }}</span>
+          <div class="flex gap-1">
+            <button type="button"
+                    class="hc-input flex-1 font-bold transition-colors"
+                    :class="element.bold
+                        ? 'bg-[color:var(--primary)] text-[color:var(--primary-foreground)] border-[color:var(--primary)]'
+                        : 'hover:bg-[color:var(--accent)]'"
+                    :title="t.properties.boldTip"
+                    @click="emit('update', { bold: !element.bold })">
+              B
+            </button>
+            <button type="button"
+                    class="hc-input flex-1 italic transition-colors"
+                    :class="element.italic
+                        ? 'bg-[color:var(--primary)] text-[color:var(--primary-foreground)] border-[color:var(--primary)]'
+                        : 'hover:bg-[color:var(--accent)]'"
+                    :title="t.properties.italicTip"
+                    @click="emit('update', { italic: !element.italic })">
+              I
+            </button>
+          </div>
+        </div>
         <label class="flex flex-col gap-0.5">
           <span class="hc-field-label">
             {{ t.properties.colorLabel }}

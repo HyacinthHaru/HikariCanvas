@@ -273,7 +273,8 @@ public final class TemplateInstantiator {
             case TextElement t -> new TextElement(newId, t.x(), t.y(), t.w(), t.h(),
                     t.rotation(), t.locked(), t.visible(), t.text(), t.fontId(), t.fontSize(),
                     t.color(), t.align(), t.letterSpacing(), t.lineHeight(), t.vertical(),
-                    t.effects(), t.opacity(), t.blendMode(), t.renderMode());
+                    t.effects(), t.opacity(), t.blendMode(), t.renderMode(),
+                    t.bold(), t.italic());
             case RectElement r -> new RectElement(newId, r.x(), r.y(), r.w(), r.h(),
                     r.rotation(), r.locked(), r.visible(), r.fill(), r.stroke(),
                     r.opacity(), r.blendMode(), r.renderMode());
@@ -742,7 +743,8 @@ public final class TemplateInstantiator {
                     t.rotation(), false, true,
                     content, fontId, size, color, align,
                     letterSpacing, lineHeight, vertical, effects,
-                    null, null, null);
+                    null, null, null,
+                    null, null);
         }
         if (el instanceof TemplateElement.Rect r) {
             Fill fill = r.fill() == null ? null : new SolidFill(interp(r.fill(), params));

@@ -401,7 +401,7 @@ onClickOutside(rootRef, (e) => {
           :key="cat.id"
           class="px-2 py-1 text-[11px] rounded-[var(--radius-sm)] transition-colors border"
           :class="lib.activeCategory === cat.id
-            ? 'bg-[color:var(--primary)] text-white border-[color:var(--primary)]'
+            ? 'bg-[color:var(--primary)] text-[color:var(--primary-foreground)] border-[color:var(--primary)]'
             : 'bg-transparent text-[color:var(--muted-foreground)] border-[color:var(--border)] hover:bg-[color:var(--accent)]'"
           @click="lib.setCategory(cat.id)"
         >

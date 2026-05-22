@@ -38,6 +38,10 @@ public record TextElement(
         Effects effects,
         Float opacity,
         BlendMode blendMode,
-        RenderMode renderMode
+        RenderMode renderMode,
+        /** 0.4.6：加粗（自动转 stroke 模拟，避免 synthetic bold 双端差异）。null = 不加粗 */
+        Boolean bold,
+        /** 0.4.6：斜体（AWT shear / Canvas transform 矩阵线性变换双端一致）。null = 不斜体 */
+        Boolean italic
 ) implements Element {
 }

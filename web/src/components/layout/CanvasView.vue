@@ -1081,7 +1081,7 @@ function requestDraw(): void {
     <div
       v-if="uploadError || uploading"
       class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-[var(--radius-sm)] text-xs shadow-lg pointer-events-none"
-      :class="uploadError ? 'bg-[color:var(--destructive)]/95 text-white' : 'bg-[color:var(--ctp-blue)]/95 text-white'"
+      :class="uploadError ? 'bg-[color:var(--destructive)]/95 text-[color:var(--destructive-foreground)]' : 'bg-[color:var(--ctp-blue)]/95 text-white'"
     >
       {{ uploadError ?? t.image.uploading }}
     </div>

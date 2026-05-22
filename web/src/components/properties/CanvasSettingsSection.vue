@@ -12,7 +12,7 @@
  * path。
  */
 import { computed } from 'vue';
-import { Settings } from 'lucide-vue-next';
+import { Settings, Eraser } from 'lucide-vue-next';
 import FillInput from '@/components/ui/FillInput.vue';
 import { useProjectStore } from '@/stores/project';
 import { getWsClient } from '@/network/wsClient';
@@ -38,6 +38,18 @@ function onBgUpdate(next: Fill): void {
     ws.send('canvas.background', { fill: next });
 }
 
+/**
+ * 0.4.6 P2：一键设全透明背景（#00000000）。
+ *
+ * 后端 CanvasCompositor 在 0.4.6 升 TYPE_INT_ARGB buffer + toPaletteSlice 提 alpha 后，
+ * alpha < 128 的像素会被映射到 palette index 0（透明色），MC 地图渲染时该像素透出
+ * ItemFrame 后方方块。让玩家把 wall 放在风景或建筑前实现"信息悬浮"效果。
+ */
+function setTransparentBackground(): void {
+    const transparent: Fill = { type: 'solid', color: '#00000000' };
+    onBgUpdate(transparent);
+}
+
 /** 是否半透明 fill（任何 stop 或 solid 颜色含 alpha<FF） */
 const hasAlpha = computed(() => {
     const f = normalizeFill(bgFill.value);
@@ -60,6 +72,13 @@ const hasAlpha = computed(() => {
           <FillInput :model-value="bgFill" @update:model-value="onBgUpdate" />
         </div>
       </label>
+      <!-- 0.4.6 P2：一键设全透明背景 -->
+      <button class="hc-btn flex items-center gap-1 px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] w-full justify-center"
+              :title="t.canvas.transparentBgTooltip"
+              @click="setTransparentBackground">
+        <Eraser class="size-3" />
+        <span>{{ t.canvas.setTransparentBackground }}</span>
+      </button>
     </div>
   </section>
 </template>

@@ -28,6 +28,27 @@ public final class TextRenderer implements ElementRenderer {
         TextElement t = (TextElement) e;
         if (t.text() == null || t.text().isEmpty()) return;
 
+        // 0.4.6 P3：italic = AWT shear transform。在所有绘制 pass（glow / shadow / stroke / fill）
+        // 外面包 shear；shear sx=-0.2 让字形上半部分向右倾斜（标准 italic 视觉）。
+        // 与前端 Canvas 2D ctx.transform(1, 0, -0.2, 1, 0, 0) 数学等价 — 双端像素一致。
+        boolean italic = Boolean.TRUE.equals(t.italic());
+        java.awt.geom.AffineTransform savedItalic = null;
+        if (italic) {
+            savedItalic = g.getTransform();
+            // shear 锚点在文本 bbox 顶部（y=t.y()）让字形整体倾斜可控；y < anchor 处 x 左移，
+            // y > anchor 处 x 右移。这里用元素 y 作 baseline-ish 锚点（简化处理）
+            g.translate(t.x(), t.y());
+            g.shear(-0.2, 0);
+            g.translate(-t.x(), -t.y());
+        }
+        try {
+            drawInner(g, t, ctx);
+        } finally {
+            if (savedItalic != null) g.setTransform(savedItalic);
+        }
+    }
+
+    private void drawInner(Graphics2D g, TextElement t, RenderContext ctx) {
         FontRegistry.Registered reg = ctx.fontRegistry().getOrDefault(t.fontId());
         if (reg == null) {
             ctx.log().warning("CanvasCompositor: no font available (id=" + t.fontId()
@@ -72,6 +93,23 @@ public final class TextRenderer implements ElementRenderer {
             g.setStroke(new BasicStroke(strokeCfg.width(),
                     BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.setColor(FillPaintBuilder.parseColor(strokeCfg.color()));
+            for (TextLayout.PositionedGlyph pg : glyphs) {
+                drawGlyphOutline(g, pg, font, frc);
+            }
+            g.setStroke(prev);
+        }
+
+        // 0.4.6 P3：bold = 额外 stroke pass（color = text color，width = max(1.5, fontSize * 0.08)）。
+        // 字形 outline 描边 + fill 叠加产生"加粗"视觉效果；与 effects.stroke 独立可叠加。
+        // 像素字体（NN 路径）目前不支持 bold 描边（NN mask 路径走 BufferedImage 而非 outline）—
+        // 简单跳过，让像素字体 bold 走原样 fill（已经够清晰）。
+        if (Boolean.TRUE.equals(t.bold()) && !useNearest) {
+            float boldWidth = Math.max(1.5f, t.fontSize() * 0.08f);
+            FontRenderContext frc = g.getFontRenderContext();
+            java.awt.Stroke prev = g.getStroke();
+            g.setStroke(new BasicStroke(boldWidth,
+                    BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(FillPaintBuilder.parseColor(t.color()));
             for (TextLayout.PositionedGlyph pg : glyphs) {
                 drawGlyphOutline(g, pg, font, frc);
             }

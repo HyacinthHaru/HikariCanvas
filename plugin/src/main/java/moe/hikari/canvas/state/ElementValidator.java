@@ -471,6 +471,19 @@ public final class ElementValidator {
         return b;
     }
 
+    /**
+     * 0.4.6：可空 bool 字段（用于 TextElement.bold / italic 等向下兼容 null 字段）。
+     * 缺省返 null 让 record 走默认值（NON_NULL 序列化时跳过）。
+     */
+    public static Boolean boolFieldOrNull(Map<String, Object> m, String k) {
+        Object v = m.get(k);
+        if (v == null) return null;
+        if (!(v instanceof Boolean b)) {
+            throw new ValidationException("INVALID_PAYLOAD", k + " must be boolean");
+        }
+        return b;
+    }
+
     public static Number requireNumber(Map<?, ?> m, String k) {
         Object v = m.get(k);
         if (!(v instanceof Number n)) {

@@ -488,7 +488,7 @@ function isHexColor(s: string | null): boolean {
                 {{ t.variables.deleteConfirmNo }}
               </button>
               <button
-                class="hc-btn px-2 py-0.5 text-xs rounded bg-[color:var(--destructive)] text-white hover:opacity-90"
+                class="hc-btn px-2 py-0.5 text-xs rounded bg-[color:var(--destructive)] text-[color:var(--destructive-foreground)] hover:opacity-90"
                 @click="confirmDelete(entry.fullName)"
               >
                 {{ t.variables.deleteConfirmYes }}
@@ -641,7 +641,7 @@ function isHexColor(s: string | null): boolean {
                 {{ t.variables.deleteConfirmNo }}
               </button>
               <button
-                class="hc-btn px-2 py-0.5 text-xs rounded bg-[color:var(--destructive)] text-white hover:opacity-90"
+                class="hc-btn px-2 py-0.5 text-xs rounded bg-[color:var(--destructive)] text-[color:var(--destructive-foreground)] hover:opacity-90"
                 @click="confirmDelete(entry.fullName)"
               >
                 {{ t.variables.deleteConfirmYes }}

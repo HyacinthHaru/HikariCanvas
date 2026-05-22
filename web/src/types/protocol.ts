@@ -148,6 +148,10 @@ export interface TextElement extends BaseElement {
     lineHeight: number;
     vertical: boolean;
     effects?: Effects;
+    /** 0.4.6：加粗（内部自动转 stroke 描边模拟，避免 synthetic bold 双端差异） */
+    bold?: boolean | null;
+    /** 0.4.6：斜体（双端 shear transform 矩阵线性变换，像素一致） */
+    italic?: boolean | null;
 }
 
 export interface RectElement extends BaseElement {

@@ -281,6 +281,48 @@ HikariCanvas-0.4.4-SNAPSHOT.jar 154 MB / 0 baseline 漂移。**0.4.4 总 ~60h �
 
 **v0.4.5 优化项**：已在 2026-05-22 单日推完，见下方 0.4.5 段。
 
+## 0.4.6 路线（体验打磨 ✅ 2026-05-22 实施完成）
+
+**目标达成**：4 项用户提的体验打磨 — 字体加粗/斜体 + 透明背景 + 颜色对比度修复 + 文案优化。
+先做 4 路深入审计，再 5 phase 实施。
+
+**详细落地**：见 `docs/journal.md` 2026-05-22 0.4.6 段。
+
+**关键审计发现**：
+1. 字体 bold/italic 走 **stroke + shear transform**（双端等价；synthetic bold AWT vs Canvas
+   像素不一致是 nogo）
+2. 透明背景 80% 基础设施已埋好（M11 PaletteLut.TRANSPARENT_INDEX + matchColor 4 参）；
+   只缺 TYPE_INT_RGB → ARGB
+3. 颜色根因：`--primary-foreground: var(--ctp-base)` 在深色主题 ctp-base 是暗色，配亮
+   primary 对比度仅 2:1（远 < WCAG AA 4.5:1）— **1 行 CSS 修全局**
+
+**实施总览**（5 phase / 1 commit / 单日完成）：
+- **P1** 颜色对比度：style.css 加深色主题 `--primary-foreground: var(--ctp-crust)` +
+  `--destructive-foreground: var(--ctp-crust)` 覆盖；6 处 `text-white` → token
+- **P2** 透明背景：CanvasCompositor TYPE_INT_RGB→ARGB + toPaletteSlice 提 alpha
+  + CanvasSettingsSection 加"设为透明背景"快捷按钮
+- **P3** bold/italic：TextElement 加 Boolean bold/italic 字段（nullable）；
+  bold = stroke pass（color=text color, width=max(1.5, size*0.08)）；
+  italic = AWT shear(-0.2, 0) / Canvas transform(1, 0, -0.2, 1, ...)（数学等价双端一致）；
+  TextElementSection UI 加 B / I 切换按钮
+- **P4** 文案：10+ 技术术语改友好（strokeWidth→描边粗细 / blendMode→混色模式 /
+  innerRatio→内凹度 / dither→柔和过渡 / renderModeClean→清晰 / renderModeDither→柔和）
+- **P5** 版本号 0.4.5 → 0.4.6-SNAPSHOT + shadow jar 155 MB + journal + push
+
+**关键架构决策（已固化）**：
+1. **主 buffer TYPE_INT_ARGB**：让 alpha 通道贯穿到 toPaletteSlice 的 4 参 matchColor；
+   内存 +33% 可接受
+2. **italic = shear transform，bold = stroke 包装**：双端走数学等价的线性变换 +
+   stroke 描边路径——避免 synthetic bold 双端像素不一致
+3. **bold 像素字体跳过描边**：NN 路径走 BufferedImage mask 不是 outline；像素字体
+   本身已够清晰
+4. **深色主题 foreground 走 ctp-crust**：1 行 CSS token 修全局对比度（影响约 20 处按钮）
+5. **`<details>` 折叠保留不重构**：现有结构合理，重点改文案
+
+**测试结果**：后端 **820**（baseline 无破坏；alpha=0xFF 像素下 4 参 matchColor 与 3 参等价）/
+前端 vite build 720 kB / 213 kB gzip。shadow jar `HikariCanvas-0.4.6-SNAPSHOT.jar` 155 MB。
+**0.4.6 总 ~15h 估，实际单日推完**。
+
 ## 0.4.5 路线（打磨期 ✅ 2026-05-22 实施完成）
 
 **目标达成**：0.4.4 当日推完后实测发现 2 个 P0 可用性 bug + 数个 UX 粗糙点，
@@ -370,6 +412,7 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | ✅ |
 | **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型） | **60h** | ✅ |
 | **0.4.5** | **打磨期**（修 0.4.3/0.4.4 P0 + UX 优化 + 车次复制 + 引导文案） | **20h** | ✅ |
+| **0.4.6** | **体验打磨**（字体加粗/斜体 + 透明背景 + 颜色对比度 + 文案优化） | **15h** | ✅ |
 | 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
 | 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
 

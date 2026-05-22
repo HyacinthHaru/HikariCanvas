@@ -182,6 +182,19 @@
     --radius-lg-shadcn: var(--radius);
 }
 
+/*
+ * 0.4.6 P1：深色主题下 primary / destructive foreground 必须用 ctp-crust（深色）
+ * 而不是 ctp-base，因为深色主题下 primary / destructive 本身是浅亮色（mauve/red
+ * Catppuccin spec L=70-80%），亮底配亮 base 文字对比度 2:1 严重低于 WCAG AA。
+ * Audit: 修后对比度 6:1+（参考 docs/journal.md 2026-05-22 0.4.6 段）。
+ */
+.dark,
+.theme-frappe,
+.theme-macchiato {
+    --primary-foreground: var(--ctp-crust);
+    --destructive-foreground: var(--ctp-crust);
+}
+
 /* ---------- accent 切换（data-accent on <html>）---------- */
 
 [data-accent="mauve"]  { --primary: var(--ctp-mauve);  --ring: var(--ctp-mauve);  }

@@ -752,6 +752,24 @@ function resolveTextForRender(t: TextElement): { rendered: string; segments: Pla
 
 function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (!t.text) return;
+    // 0.4.6 P3：italic = shear transform。包裹整个 drawText 内部绘制。
+    // ctx.transform(1, 0, -0.2, 1, ...) 与 AWT AffineTransform.shear(-0.2, 0) 数学等价
+    // → 双端像素一致。在 ctx.save / restore 内安全嵌套不影响外层 transform。
+    const italic = t.italic === true;
+    if (italic) {
+        ctx.save();
+        ctx.translate(t.x, t.y);
+        ctx.transform(1, 0, -0.2, 1, 0, 0);
+        ctx.translate(-t.x, -t.y);
+    }
+    try {
+        drawTextInner(ctx, t);
+    } finally {
+        if (italic) ctx.restore();
+    }
+}
+
+function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
     // M23：fontId 直接当 family（删除 KNOWN 白名单 fallback）。未加载的 fontId 触发
     //     ensureLoaded 异步加载；首帧 ctx.font 走系统 fallback，加载完 onFontLoaded
     //     回调通知 CanvasView.requestDraw 重画一次切到真字形。
@@ -805,6 +823,16 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (fx?.stroke && fx.stroke.width > 0) {
         ctx.strokeStyle = fx.stroke.color;
         ctx.lineWidth = fx.stroke.width;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        for (const g of glyphs) drawGlyphStroke(ctx, g, t.fontSize);
+    }
+    // 0.4.6 P3：bold = 额外 stroke pass（color = text color，width = max(1.5, fontSize * 0.08)）。
+    // 与 effects.stroke 独立可叠加；像素字体（NN 路径）跳过保持锐利。
+    if (t.bold === true && !useNN) {
+        const boldWidth = Math.max(1.5, t.fontSize * 0.08);
+        ctx.strokeStyle = t.color;
+        ctx.lineWidth = boldWidth;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
         for (const g of glyphs) drawGlyphStroke(ctx, g, t.fontSize);

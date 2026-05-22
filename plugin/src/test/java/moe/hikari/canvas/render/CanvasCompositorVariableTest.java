@@ -188,7 +188,8 @@ class CanvasCompositorVariableTest {
                 "#000000", "left",
                 0f, 1.2f, false,
                 null,
-                null, BlendMode.NORMAL, RenderMode.CLEAN);
+                null, BlendMode.NORMAL, RenderMode.CLEAN,
+                null, null);
     }
 
     private static final class FakeUserVariableDao extends UserVariableDao {
