@@ -45,7 +45,17 @@ public final class PathRenderer implements ElementRenderer {
             strokeColor = FillPaintBuilder.parseColor(s.color());
             g.setColor(strokeColor);
             java.awt.Stroke prevStroke = g.getStroke();
-            g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            // 0.4.7 第二次修：path 有 arrow marker 时直线末端用 CAP_BUTT（平切端）
+            // 原 CAP_ROUND 在 path end (arrow apex) 处画一个 r=strokeWidth/2 的半圆，
+            // 半圆中心 = arrow apex 位置但伸出 apex 朝外，跟 arrow V 形顶尖**视觉重叠**，
+            // 粗 stroke 时整个箭头看起来"糊在一起"——这是用户报告"宽度调宽后箭头本体和
+            // 直线糊在一起"的真正根因。BUTT cap 让直线末端是平切矩形，跟 arrow base 对接
+            // 干净，无半圆突出；arrow 三角形 fill 完整覆盖直线末段，V 头清晰。
+            // 对无 arrow marker 的 path，ROUND cap 保留（避免改变其他 path 视觉）。
+            boolean hasArrowMarker = "arrow".equals(p.markerEnd())
+                    || "arrow".equals(p.markerStart());
+            int capStyle = hasArrowMarker ? BasicStroke.CAP_BUTT : BasicStroke.CAP_ROUND;
+            g.setStroke(new BasicStroke(strokeWidth, capStyle, BasicStroke.JOIN_ROUND));
 
             // 2026-05-15 修箭头 Bug：arrow marker 在 apex 处宽度 = 0（三角形收尖），
             // stroke 直线宽 strokeWidth。Visual：arrow tip 附近 distance < strokeWidth/3 范围内

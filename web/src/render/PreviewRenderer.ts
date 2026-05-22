@@ -282,7 +282,11 @@ function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
         strokeColor = p.stroke.color;
         ctx.strokeStyle = strokeColor;
         ctx.lineWidth = strokeWidth;
-        ctx.lineCap = 'round';
+        // 0.4.7 第二次修：path 有 arrow marker 时直线末端用 'butt'（平切端）
+        // 原 'round' 在 path end (arrow apex) 处画 r=strokeWidth/2 半圆，跟 arrow V 头
+        // 视觉重叠"糊一起"——粗 stroke 时尤其明显（详见后端 PathRenderer 同款修复注释）
+        const hasArrowMarker = p.markerEnd === 'arrow' || p.markerStart === 'arrow';
+        ctx.lineCap = hasArrowMarker ? 'butt' : 'round';
         ctx.lineJoin = 'round';
 
         // 2026-05-15 修箭头 Bug：arrow apex 处宽 0，粗 stroke 会从 arrow 锥尖戳出。

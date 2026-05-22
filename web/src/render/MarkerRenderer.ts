@@ -5,34 +5,33 @@
  * dot 圆心在端点。任何修改需同步两端。
  */
 
-/** 0.4.7：marker 大小上限与 element-length cap 比例。与后端 MarkerRenderer.java 一致。 */
-export const MAX_ARROW_SIZE = 40;
-export const MAX_DOT_RADIUS = 16;
-export const MARKER_MAX_RATIO_OF_LENGTH = 0.4;
+/** 0.4.7：marker 大小约束。与后端 MarkerRenderer.java 一致。 */
+export const MARKER_MAX_RATIO_OF_LENGTH = 0.5;
+export const MIN_ARROW_SIZE = 8;
+export const MIN_DOT_RADIUS = 3;
 
 /**
- * arrow size 公式（0.4.7 修）。
+ * arrow size 公式（0.4.7 第二次修）。
  *
- * 原 max(6, stroke × 3) 在 stroke 大时无上限增长（stroke=20 → 60，吞没 50px 短箭头）。
- * 新公式 clamp(6, stroke × 2.5 + 4, 40) 平滑增长 + 40px 上限。
+ * 关键比例：base width / stroke width ≥ 3，否则箭头 V 头跟直线粗矩形粘连难辨。
+ * stroke × 3 自然增长，无硬上限——element-aware cap 由调用方传 element 对角线限制。
  *
- * 可选 elementDiagonal 参数（hypot(w, h)）= element bbox 对角线，传入后做 element-aware
- * cap：marker ≤ diagonal × MARKER_MAX_RATIO_OF_LENGTH (0.4)，保证至少留 60% 给直线段。
+ * 视觉清晰底线：base ≥ stroke × 2，优先级 > element cap（宁可略溢出 bbox 也别糊）。
  */
 export function arrowSize(strokeWidth: number, elementDiagonal?: number): number {
-    const raw = Math.round(strokeWidth * 2.5 + 4);
-    const base = Math.max(6, Math.min(MAX_ARROW_SIZE, raw));
+    const base = Math.max(MIN_ARROW_SIZE, strokeWidth * 3);
     if (elementDiagonal === undefined || elementDiagonal <= 0) return base;
     const byLength = Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH);
-    return Math.max(6, Math.min(base, byLength));
+    const minByStroke = Math.max(MIN_ARROW_SIZE, strokeWidth * 2);
+    return Math.max(minByStroke, Math.min(base, byLength));
 }
 
 export function dotRadius(strokeWidth: number, elementDiagonal?: number): number {
-    const base = Math.max(2, Math.min(MAX_DOT_RADIUS, strokeWidth + 1));
+    const base = Math.max(MIN_DOT_RADIUS, strokeWidth + 1);
     if (elementDiagonal === undefined || elementDiagonal <= 0) return base;
-    // dot 直径 = 半径 × 2，所以 cap 是 ratio/2
     const byLength = Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH * 0.5);
-    return Math.max(2, Math.min(base, byLength));
+    const minByStroke = Math.max(MIN_DOT_RADIUS, strokeWidth);
+    return Math.max(minByStroke, Math.min(base, byLength));
 }
 
 /**

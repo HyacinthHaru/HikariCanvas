@@ -23,62 +23,64 @@ public final class MarkerRenderer {
 
     private MarkerRenderer() {}
 
-    /** arrow size 上限（像素）。超过此值视觉上箭头过大，与直线粗细不成比例。 */
-    public static final int MAX_ARROW_SIZE = 40;
-    /** dot radius 上限。 */
-    public static final int MAX_DOT_RADIUS = 16;
     /**
-     * marker 占用 element 对角线的最大比例。0.4 = 至少留 60% 给直线段，
-     * 避免 stroke 极粗时短箭头被 marker 完全吃掉。
+     * marker 占用 element 对角线的最大比例。0.5 = 让 marker 最多占元素的一半，
+     * 防短元素 + 粗 stroke 时 marker 完全溢出 element bbox。
      */
-    public static final double MARKER_MAX_RATIO_OF_LENGTH = 0.4;
+    public static final double MARKER_MAX_RATIO_OF_LENGTH = 0.5;
+    /** 最小 arrow size（让小 stroke 时箭头也可见）。 */
+    public static final int MIN_ARROW_SIZE = 8;
+    /** 最小 dot radius。 */
+    public static final int MIN_DOT_RADIUS = 3;
 
     /**
-     * arrow size 公式（0.4.7 修）。
+     * arrow size 公式（0.4.7 第二次修）。
      *
-     * <p>原 {@code max(6, stroke × 3)} 在 stroke 大时无上限增长，stroke=20 → 60，
-     * stroke=30 → 90，导致短箭头被 marker 完全吞没（用户拖 50px 直线 + stroke 20 →
-     * arrow 60 比直线还长）。</p>
+     * <p>关键比例：{@code base width / stroke width ≥ 3}，否则视觉上箭头 V 头跟
+     * 直线粗矩形粘连难辨。stroke=20 → arrow=60 (base 是 stroke 3 倍 = "明显比直线宽")，
+     * stroke=30 → arrow=90，让粗 stroke 时箭头随之放大保持清晰比例。</p>
      *
-     * <p>新公式：{@code clamp(6, stroke × 2.5 + 4, 40)} —— 平滑增长 + 40px 硬上限。
-     * stroke 1..20 平滑过渡到 6..54 → clamp 到 40；视觉上箭头大小与直线粗细保持
-     * 美观比例（约 2-4 倍粗细），不会无限放大。</p>
+     * <p>不带硬上限——硬限 40 在 stroke=30 时让 base=40/stroke=30 比例仅 1.33×，糊得
+     * 没法看；element-aware cap 由调用方传 element 对角线限制 marker 不溢出。</p>
      */
     public static int arrowSize(int strokeWidth) {
-        int raw = (int) Math.round(strokeWidth * 2.5 + 4);
-        return Math.max(6, Math.min(MAX_ARROW_SIZE, raw));
+        return Math.max(MIN_ARROW_SIZE, strokeWidth * 3);
     }
 
     /**
      * 0.4.7：element-aware cap 重载。
-     * caller 传 element 对角线（{@code hypot(p.w, p.h)}），marker 自动收缩不超过
-     * 长度的 {@link #MARKER_MAX_RATIO_OF_LENGTH}，保证短箭头不被吞没。
-     * 仍保留 {@code MIN=6} 让极短元素的箭头也可见（虽然占比可能 > 40%）。
+     *
+     * <p>caller 传 element 对角线，marker 自动 cap 到 {@code diag × MARKER_MAX_RATIO_OF_LENGTH}。
+     * 但**仍保证 base ≥ stroke × 2**（视觉清晰度底线，比 element 比例优先级高）——若元素
+     * 过短装不下，宁可让箭头略微溢出 bbox 也别糊掉。</p>
      */
     public static int arrowSize(int strokeWidth, double elementDiagonal) {
         int base = arrowSize(strokeWidth);
         if (elementDiagonal <= 0) return base;
         int byLength = (int) Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH);
-        return Math.max(6, Math.min(base, byLength));
+        // 视觉清晰底线：base 至少 stroke × 2（否则跟直线视觉粘连）。优先级 > element cap
+        int minByStroke = Math.max(MIN_ARROW_SIZE, strokeWidth * 2);
+        return Math.max(minByStroke, Math.min(base, byLength));
     }
 
     /**
-     * dot radius 公式（0.4.7 修）。
+     * dot radius 公式（0.4.7 第二次修）。
      *
-     * <p>原 {@code max(2, stroke + 1)} 同样无上限。改 {@code clamp(2, stroke+1, 16)}
-     * 让 stroke 极粗时 dot 半径锁定在 16px（直径 32px），与 arrow 上限协调。</p>
+     * <p>{@code stroke + 1} 让 dot 比直线略粗（明显），无硬上限——粗 stroke 时 dot 跟着
+     * 长大才能视觉对应。极短元素 + 粗 stroke 由 element-aware 重载处理。</p>
      */
     public static int dotRadius(int strokeWidth) {
-        return Math.max(2, Math.min(MAX_DOT_RADIUS, strokeWidth + 1));
+        return Math.max(MIN_DOT_RADIUS, strokeWidth + 1);
     }
 
-    /** 0.4.7：element-aware cap 重载，同 arrowSize。 */
+    /** 0.4.7：element-aware cap，同 arrowSize。 */
     public static int dotRadius(int strokeWidth, double elementDiagonal) {
         int base = dotRadius(strokeWidth);
         if (elementDiagonal <= 0) return base;
-        // dot 半径 cap 取对角线的一半再乘比例（dot 直径 = 半径 × 2，所以 cap 是 ratio/2）
+        // dot 直径 = 半径 × 2，所以 cap 是 ratio/2
         int byLength = (int) Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH * 0.5);
-        return Math.max(2, Math.min(base, byLength));
+        int minByStroke = Math.max(MIN_DOT_RADIUS, strokeWidth);
+        return Math.max(minByStroke, Math.min(base, byLength));
     }
 
     /**
