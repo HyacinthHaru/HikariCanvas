@@ -244,7 +244,45 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 **测试结果**：后端 **795**（原 714 + 新 81）/ 前端 **161**（原 155 + 新 6） 全绿；
 shadow jar 153 MB / 0 baseline 漂移。**0.4.3 总 ~13h（单日推完）**。
 
-## 0.4.4 路线（铁路网络：线路 / 站点 / **车次** / 时刻表，规划完成 2026-05-21 / 待开干）
+## 0.4.4 路线（铁路网络 ✅ 2026-05-22 实施完成）
+
+**目标达成**：完整铁路网络抽象 + 真实地铁运营语义（车次号 / 服务类型 / 编组 / 区间 / 备注 /
+每站精确时刻表）。100 个地铁屏定义一次"1 号线 + 车次 A01"，N wall 都绑同一网络自动同步。
+
+**详细设计**：`docs/dynamic-data.md §18`。详细落地日志见 `docs/journal.md` 2026-05-22 条。
+
+**实施总览**（6 phase / 1 commit / 单日完成）：
+- **P1** V016 5 表 + 6 record + ServiceType i18n + RailDao 统一 CRUD + AutoTimetableGenerator
+  纯函数 helper
+- **P2** RailScheduleProvider（共享 schedule namespace 接管 rail-bound wall + push 29 key 兼容 0.4.0
+  + 新 14 车次语义）+ ManualSchedule.skipWallPredicate 避免双写
+- **P3** RailOpDispatcher 12 op（11 spec + line.list） + 6 权限节点（canvas.rail.{line.create,
+  line.edit.own/any, line.delete.own/any, wall.bind}）+ ACL 按 line owner 判定 + AuditLog RAIL_* 9 事件
+- **P4** RailNetworkModal + RailRunDialog（车次详情 + 时刻表 inline + 自动生成对话框含跳站 checkbox）
+  + Pinia rail store + wsClient 12 sendRail* + TopBar TrainTrack 按钮 + i18n ~50 keys
+- **P5** 后端单测 24 case（9 AutoTimetable + 7 ServiceType + 8 RailScheduleProvider）+
+  docs/variables.md §1.13 新节
+- **P6** 版本号 5 处升级 + shadow jar 154 MB + journal + commit + push
+
+**关键架构纪律（已固化）**：
+1. **rail + manual 共享 `schedule:*` namespace + skip predicate 协调**：RailScheduleProvider 接管的
+   wall 自动让 ManualSchedule 跳过 push — 避免双写同 key
+2. **每站时刻 = `rail_timetable` 精确读**（不再走 travel_seconds 均匀推算）支持站间不均 +
+   大站快车跳站 + 区间车不到全线
+3. **service_type 4 内置 + 自定义字符串**：LOCAL/EXPRESS/SECTION/LIMITED 走 enum + i18n
+   友好文本；其他字符串原样存 + 显示
+4. **AutoTimetableGenerator 纯函数**：不依赖 DB / Bukkit / 主线程；单测 9 case 全覆盖
+5. **`wall_rail_bindings.line_id IS NULL` 走 fallback**：兼容只用 ManualSchedule 的旧 server
+6. **车次详情所有写操作 ACL 走 line owner**：rail.station.* / rail.run.* / rail.run.timetable.set
+   按 line.ownerUuid 判 own/any（不为每张子表配独立 owner 字段）
+
+**测试结果**：后端 **819** 测试全绿（原 795 + 新 24）/ 前端 **161** 测试全绿 / shadow jar
+HikariCanvas-0.4.4-SNAPSHOT.jar 154 MB / 0 baseline 漂移。**0.4.4 总 ~60h 估，实际单日推完**。
+
+**v0.4.5 留作的优化**：ScheduleManagerModal 加铁路绑定段 / RailNetworkModal 进入线路时自动拉详情 /
+拖动排序 / 时刻表更精致 inline 编辑。
+
+## 0.4.4 旧路线（已实施，记录为档案）
 
 **目标**：0.4.0 P3-L ManualScheduleProvider 是纯 per-wall，100 个地铁屏 = 100 套独立配置。
 0.4.4 引入完整铁路网络抽象 + **真实地铁运营语义**：玩家定义线路 + 站点 + **车次（含
@@ -294,7 +332,7 @@ shadow jar 153 MB / 0 baseline 漂移。**0.4.3 总 ~13h（单日推完）**。
 | 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
 | 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
 | **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | ✅ |
-| **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型） | **60h** | 📋 规划完成 |
+| **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型） | **60h** | ✅ |
 | 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
 | 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
 

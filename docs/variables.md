@@ -341,7 +341,115 @@ CREATE TABLE variable_aliases (
 - 不要求别名 wall 内唯一（用户自己负责，UI 不报错）
 - wall 删除时 FK CASCADE 清；同时业务侧显式调 `deleteByWall` 兜底
 
-### 1.13 全局用户变量（0.4.3）
+### 1.13 铁路网络（0.4.4）
+
+0.4.0 ManualScheduleProvider 是**纯 per-wall** — 每个 wall 独立配自己的时刻表，
+100 个地铁屏 = 100 套独立配置。
+
+0.4.4 引入**完整铁路网络抽象**：定义"线路 / 站点 / 车次 / 每站精确时刻表"一次，
+N 个 wall 都绑到该网络上自动同步。
+
+#### 入口
+
+TopBar 火车轨道图标 → **「铁路网络」** modal。
+
+#### 三层结构
+
+```
+线路（1 号线）
+  ├ 站点（按顺序排列）
+  │   郑州火车站 → 二七广场 → 紫荆山 → ...
+  └ 车次（一趟具体的车）
+      ├ A01 ◊ 上行 ◊ 大站快车 ◊ 6 节 [详情]
+      ├ A02 ◊ 上行 ◊ 站站停 ◊ 8 节
+      └ B01 ◊ 下行 ◊ 区间车（郑州→紫荆山）
+```
+
+每个车次有完整运营语义：
+
+| 字段 | 例子 | 备注 |
+|---|---|---|
+| 车次号 | `A01` | 同线唯一 |
+| 方向 | `上行` / `下行` | 决定站点排序 |
+| **服务类型** | `站站停` / `大站快车` / `区间车` / `特快` + 自定义 | 4 内置 enum + 任意字符串 |
+| 编组 | `6` 节 | 整数；可空 |
+| 区间起 / 止 | 郑州 → 紫荆山 | 区间车非首末站；null = 线路首站 / 末站 |
+| 备注 | "末班车" / "节假日加开" | |
+| **时刻表** | 每站精确到秒的到 / 发时间 + 是否停靠 | 支持站间不均 + 大站快车跳站 |
+
+#### 自动生成时刻表
+
+新建车次时点 **「自动生成时刻表」**：
+
+- 首站发车时间（HH:mm:ss）
+- 站间均匀秒数（如 90s）
+- 停靠秒数（如 30s）
+- 跳过的站集合（大站快车）
+
+→ 生成完整 timetable rows，**预览后可逐站手调**。
+
+#### wall 绑定铁路
+
+`rail.wall.bind` WS op（前端 UI 在 Schedule Manager modal 后续版本添加；
+v0.4.4 通过 `/canvas var inspect` 命令查看 wall 当前绑定）。
+
+绑定后 wall 的 `${var:schedule.next_*}` 自动来自 RailScheduleProvider，
+取代 0.4.0 ManualScheduleProvider 的 per-wall 配置。
+
+#### 新增 14 个铁路变量（共享 schedule namespace）
+
+| 变量 | 例子 | 来源 |
+|---|---|---|
+| `schedule:<wallId>/next_run_number` | "A01" | rail_runs.run_number |
+| `schedule:<wallId>/next_service_type` | "express" | enum 值 |
+| `schedule:<wallId>/next_service_type_text` | "大站快车" | i18n 友好（按 owner locale） |
+| `schedule:<wallId>/next_cars` | "6" | 编组 |
+| `schedule:<wallId>/next_terminus` | "郑州东" | run.end_station_id 站名（区间车显区间终点） |
+| `schedule:<wallId>/next_notes` | "末班车" | 备注 |
+| `schedule:<wallId>/next_arrival` | "06:02:30" | timetable.arrival_time（精确读，非估算） |
+| `next2_*` 同上 7 个 | 第二班 |
+
+兼容 0.4.0 的 `next_departure / eta_minutes / eta_seconds / eta_mmss / is_arriving /
+arrival_status / precision` 等保留（rail provider 也写这些 key 让旧 wall 文本无感升级）。
+
+#### wall 文本示例
+
+```
+下一班 ${var:schedule.next_run_number} 次 → ${var:schedule.next_terminus}
+${var:schedule.next_cars} 节 · ${var:schedule.next_service_type_text}
+ETA ${var:schedule.next_eta_mmss}
+${var:schedule.next_notes}
+```
+
+渲染结果：
+```
+下一班 A01 次 → 郑州东
+6 节 · 大站快车
+ETA 02:30
+末班车
+```
+
+#### 权限节点
+
+| 节点 | 默认 | 作用 |
+|---|---|---|
+| `canvas.rail.line.create` | true | 创建铁路线路 |
+| `canvas.rail.line.edit.own` | true | owner 编辑自己的线路 / 站点 / 车次 / 时刻表 |
+| `canvas.rail.line.edit.any` | op | admin override：编辑任意线路 |
+| `canvas.rail.line.delete.own / .any` | true / op | owner / admin 删除线路 |
+| `canvas.rail.wall.bind` | true | 把 wall 绑到铁路网络（wall owner 同款 schedule.own） |
+
+#### 与 0.4.0 ManualScheduleProvider 的关系
+
+- **共存**：`wall_rail_bindings.line_id IS NULL` 的 wall 仍走 0.4.0 旧路径
+- **共享 namespace**：都用 `schedule:<wallId>/*`，但 RailScheduleProvider 接管的 wall
+  自动让 ManualSchedule 跳过（避免双写同 key）
+- **旧 wall 文本零修改**：现有 `${var:schedule.next_departure}` 在铁路绑定后自动来自
+  RailScheduleProvider，**像素无差**
+
+---
+
+### 1.14 全局用户变量（0.4.3）
 
 0.4.0 的 user 变量是 **per-wall** 的（namespace = `user:<wallId>`），跨画布不共享。
 0.4.3 加入 **全局用户变量**（namespace = `userglobal`），玩家自定义、**全服可见、跨 wall 共享**。

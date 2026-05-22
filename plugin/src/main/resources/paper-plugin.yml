@@ -1,5 +1,5 @@
 name: HikariCanvas
-version: '0.4.3-SNAPSHOT'
+version: '0.4.4-SNAPSHOT'
 main: moe.hikari.canvas.HikariCanvas
 api-version: '1.21'
 authors:
@@ -112,3 +112,21 @@ permissions:
   canvas.schedule.any:
     description: 管理任意 wall 的时刻表（管理员）
     default: op
+  canvas.rail.line.create:
+    description: 创建铁路线路（0.4.4）
+    default: true
+  canvas.rail.line.edit.own:
+    description: 编辑自己创建的铁路线路 / 站点 / 车次 / 时刻表（0.4.4）
+    default: true
+  canvas.rail.line.edit.any:
+    description: 编辑任意铁路线路（管理员，0.4.4）
+    default: op
+  canvas.rail.line.delete.own:
+    description: 删除自己创建的铁路线路（0.4.4）
+    default: true
+  canvas.rail.line.delete.any:
+    description: 删除任意铁路线路（管理员，0.4.4）
+    default: op
+  canvas.rail.wall.bind:
+    description: 把 wall 绑定到铁路网络（0.4.4；wall owner 走 schedule.own）
+    default: true

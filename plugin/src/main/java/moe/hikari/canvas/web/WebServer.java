@@ -95,6 +95,8 @@ public final class WebServer {
     private final VariableOpDispatcher variableOpDispatcher;
     /** 0.4.0-P3-L：schedule.* 五个 op 的分发；可为 null（ScheduleDao 未配置） */
     private final ScheduleOpDispatcher scheduleOpDispatcher;
+    /** 0.4.4：rail.* 12 个 op 的分发；可为 null（RailDao 未配置） */
+    private final RailOpDispatcher railOpDispatcher;
     /** 0.4.2：variable.alias.* 三个 op 的分发；可为 null（VariableAliasDao 未配置） */
     private final VariableAliasDispatcher variableAliasDispatcher;
     /** 0.4.2：ready payload 注入 aliases 快照；与 dispatcher 同生命周期。 */
@@ -157,6 +159,8 @@ public final class WebServer {
                      moe.hikari.canvas.variable.VariableStore variableStore,
                      moe.hikari.canvas.storage.ScheduleDao scheduleDao,
                      moe.hikari.canvas.variable.provider.ManualScheduleProvider manualScheduleProvider,
+                     moe.hikari.canvas.storage.RailDao railDao,
+                     moe.hikari.canvas.variable.provider.RailScheduleProvider railScheduleProvider,
                      moe.hikari.canvas.variable.provider.VariableProviderDaemon variableProviderDaemon,
                      moe.hikari.canvas.storage.VariableAliasDao variableAliasDao,
                      org.bukkit.plugin.java.JavaPlugin plugin,
@@ -209,6 +213,10 @@ public final class WebServer {
         this.scheduleOpDispatcher = scheduleDao == null ? null
                 : new ScheduleOpDispatcher(sessionManager, rateLimiter, scheduleDao,
                         manualScheduleProvider, wallRepo, auditLog);
+        // 0.4.4：rail.* dispatcher（RailDao 必传；railScheduleProvider 可空）
+        this.railOpDispatcher = railDao == null ? null
+                : new RailOpDispatcher(sessionManager, rateLimiter, railDao,
+                        railScheduleProvider, wallRepo, auditLog);
         // 0.4.2：variable.alias.* dispatcher（VariableAliasDao 必传，否则禁用）
         this.variableAliasDao = variableAliasDao;
         this.variableAliasDispatcher = variableAliasDao == null ? null
@@ -732,6 +740,18 @@ public final class WebServer {
                             "schedule system not initialized"));
                 } else {
                     scheduleOpDispatcher.dispatch(ctx, in, bound);
+                }
+            }
+            // 0.4.4 rail.* 12 op（11 spec op + line.list 读取端点）
+            case "rail.line.list", "rail.line.create", "rail.line.update", "rail.line.delete",
+                 "rail.station.add", "rail.station.update", "rail.station.delete",
+                 "rail.run.create", "rail.run.update", "rail.run.delete",
+                 "rail.run.timetable.set", "rail.wall.bind" -> {
+                if (railOpDispatcher == null) {
+                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR",
+                            "rail system not initialized"));
+                } else {
+                    railOpDispatcher.dispatch(ctx, in, bound);
                 }
             }
             case "variable.alias.set", "variable.alias.clear", "variable.alias.list" -> {

@@ -114,6 +114,8 @@ public final class HikariCanvas extends JavaPlugin {
     // 0.4.3：全局用户变量 DAO（userglobal/* namespace；name 全服唯一）。装配后注入
     // VariableStore.configureUserGlobal —— EditSession.createGlobalVariable 路径走它持久化。
     private moe.hikari.canvas.storage.UserGlobalVariableDao userGlobalVariableDao;
+    // 0.4.4：铁路网络 DAO（V016；5 表统一 CRUD）。WebServer + RailScheduleProvider 共享。
+    private moe.hikari.canvas.storage.RailDao railDao;
     // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
     // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -318,9 +320,11 @@ public final class HikariCanvas extends JavaPlugin {
         // wall 删除时显式清掉别名（FK CASCADE 已配，显式调更稳，与 schedule 同款）
         final moe.hikari.canvas.storage.VariableAliasDao variableAliasDaoForHook = this.variableAliasDao;
         sessionManager.addWallDeleteHook(wid -> variableAliasDaoForHook.deleteByWall(wid));
+        // 0.4.4：铁路网络 DAO（V016 5 表）。RailScheduleProvider + WebServer 共享。
+        this.railDao = new moe.hikari.canvas.storage.RailDao(getLogger(), database.jdbi());
         this.variableProviderDaemon =
                 ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo,
-                        this.scheduleDao, config.scheduleConfig);
+                        this.scheduleDao, config.scheduleConfig, this.railDao);
         // 0.4.2 bugfix（Bug A）：现在所有依赖就位（compositor.interpolator 注入 + Provider 装入
         // schedule:wallId/* + system:wallId/wall.* 等值），可以安全 restore wall 像素让 wall 上的
         // ${var:...} placeholder 被正确替换为实际值（or fallback "???"）。之前在 line 261-274
@@ -347,6 +351,20 @@ public final class HikariCanvas extends JavaPlugin {
         sessionManager.addWallDeleteHook(wid -> {
             if (manualScheduleProvider != null) manualScheduleProvider.unregisterWall(wid);
             if (scheduleDaoForHook != null) scheduleDaoForHook.deleteByWall(wid);
+        });
+
+        // 0.4.4：wall 删除时清掉 rail binding + 反注册 RailScheduleProvider 内存态
+        // （wall_rail_bindings FK CASCADE 已配，显式调更稳；store 的 schedule:<wallId>/* 变量
+        // 由 RailScheduleProvider.unregisterWall 走 store.delete 清干净）
+        final moe.hikari.canvas.variable.provider.RailScheduleProvider railProviderRef =
+                (moe.hikari.canvas.variable.provider.RailScheduleProvider) this.variableProviderDaemon
+                        .registeredProviders().stream()
+                        .filter(p -> p instanceof moe.hikari.canvas.variable.provider.RailScheduleProvider)
+                        .findFirst().orElse(null);
+        final moe.hikari.canvas.storage.RailDao railDaoForHook = this.railDao;
+        sessionManager.addWallDeleteHook(wid -> {
+            if (railProviderRef != null) railProviderRef.unregisterWall(wid);
+            if (railDaoForHook != null) railDaoForHook.deleteBinding(wid);
         });
 
         // 0.4.0-P4-Q：HikariCanvasAPI 装配。依赖 VariableStore + VariableProviderDaemon，
@@ -443,6 +461,12 @@ public final class HikariCanvas extends JavaPlugin {
                 variableProviderDaemon.registeredProviders().stream()
                         .filter(p -> p instanceof ManualScheduleProvider)
                         .findFirst().orElse(null);
+        // 0.4.4：取出 RailScheduleProvider 引用让 WebServer 在 rail.wall.bind 后立即 register
+        moe.hikari.canvas.variable.provider.RailScheduleProvider railScheduleProviderRef =
+                (moe.hikari.canvas.variable.provider.RailScheduleProvider)
+                        variableProviderDaemon.registeredProviders().stream()
+                                .filter(p -> p instanceof moe.hikari.canvas.variable.provider.RailScheduleProvider)
+                                .findFirst().orElse(null);
         webServer = new WebServer(getLogger(), config.host, config.port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
@@ -450,6 +474,7 @@ public final class HikariCanvas extends JavaPlugin {
                 templateAssetService, wallPreviewService, uploadHandler,
                 templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry,
                 variableStore, scheduleDao, manualScheduleProviderRef,
+                railDao, railScheduleProviderRef,
                 variableProviderDaemon, variableAliasDao, this,
                 version, this::paintAllSessionMaps,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);

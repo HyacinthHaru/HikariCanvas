@@ -5,6 +5,120 @@
 
 ---
 
+## 2026-05-22 · 0.4.4 铁路网络（线路 / 站点 / 车次 / 时刻表）— 6 phase 单日落地
+
+### 背景
+
+0.4.0 ManualScheduleProvider 是**纯 per-wall** —— 100 个地铁屏 = 100 套独立配置。
+0.4.4 引入完整铁路网络抽象 + 真实地铁运营语义（车次号 / 服务类型 / 编组 / 区间 / 备注 / 每站精确时刻表）。
+设计见 `docs/dynamic-data.md §18`。
+
+### 实施（P1-P6，单日完成）
+
+- **P1（V016 5 表 + DAO + record + Auto-generator）**：
+  - `db-migrations/V016__rail_network.sql` 5 表（rail_lines / rail_stations / rail_runs
+    / rail_timetable / wall_rail_bindings 含 FK CASCADE）
+  - 6 record：`RailLine` / `RailStation` / `RailRun` / `RailTimetableEntry` /
+    `WallRailBinding` / `ServiceType`（含 i18n displayText）
+  - `RailDao`（统一 5 表 CRUD + `listStationStops` JOIN run + `replaceTimetable` 事务）
+  - `AutoTimetableGenerator`（首站时间 + 站间秒 + 跳站集合 + 区间起止 → timetable rows）
+- **P2（RailScheduleProvider）**：
+  - 共享 `schedule:<wallId>/*` namespace + 接管 rail-bound wall + 29 key push（兼容 0.4.0 旧 15
+    + 新车次语义 14：next/next2 各 7：run_number / service_type / service_type_text /
+    cars / terminus / notes / arrival）
+  - `ManualScheduleProvider.skipWallPredicate` 让 rail-bound wall 跳过 — 避免双写同 key
+  - `ProviderBootstrap.initialize` 6 参 overload 装配 RailScheduleProvider + 注入 predicate
+  - HikariCanvas onEnable 装配 RailDao + wall delete hook 清 binding
+- **P3（11 WS op + 6 权限 + AuditLog）**：
+  - `RailOpDispatcher`：12 op（11 spec + line.list 读取） rail.line.{create/update/delete/list}
+    + rail.station.{add/update/delete} + rail.run.{create/update/delete} + rail.run.timetable.set
+    + rail.wall.bind
+  - 6 权限节点：canvas.rail.{line.create, line.edit.own/any, line.delete.own/any, wall.bind}
+  - ACL：rail.line.create → 创建节点；rail.wall.bind → wall owner 走 schedule.own；
+    其他改类 op 按 line owner 判 own/any
+  - WebServer 装配 + 12 op 路由 + AuditLog RAIL_* 9 事件
+- **P4（前端管理 modal）**：
+  - `types/rail.ts`（6 接口）+ `stores/rail.ts` Pinia mirror
+  - `wsClient` 12 个 sendRail* 方法
+  - `RailNetworkModal.vue`（线路列表 + 创建表单 + 选中线路展开 站点 / 车次）
+  - `RailRunDialog.vue`（车次详情：runNumber / direction / serviceType / cars / 区间起止 / notes
+    + 时刻表 inline 编辑表格 + 自动生成对话框含跳站 checkbox）
+  - TopBar 加 TrainTrack 按钮 + ui.railNetworkOpen + App.vue 挂载 modal
+  - i18n 中英 ~50 keys（rail.modalTitle / line / station / run / direction / serviceType
+    / timetable / auto-generate / 4 confirm）
+- **P5（单测 + docs）**：
+  - `AutoTimetableGeneratorTest` 9 case（基础 / 空 / 单站 / 大站快车跳站 / 区间车 /
+    异常 start>end / 未知 startId fallback / 校验 / runId 注入）
+  - `ServiceTypeTest` 7 case（4 内置 enum / 自定义字符串 pass-through / zh-cn / en
+    locale / 空值 / dbValue 小写）
+  - `RailScheduleProviderTest` 8 case（22+ key 注册 / service_type / cars push 内容 /
+    hasWallBinding / 取消绑定 unregister / declaredKeys / 空 timetable / skipPredicate 集成）
+  - `docs/variables.md §1.13` 新增（铁路网络入口 + 三层结构 + 14 新变量 + 权限 +
+    与 ManualSchedule 关系）
+- **P6（收尾）**：
+  - 版本号 0.4.3 → 0.4.4-SNAPSHOT（5 处文件：build.gradle.kts / paper-plugin.yml × 3 含
+    demo plugins / web/package.json + package-lock.json）
+  - shadow jar HikariCanvas-0.4.4-SNAPSHOT.jar 154 MB
+  - journal + CLAUDE.md 0.4.4 状态 ✅ + commit + push 签名 verified
+
+### 测试结果
+
+- 后端 **819** 测试全绿（原 795 + 新 24：9 AutoTimetable + 7 ServiceType + 8 RailScheduleProvider）
+- 前端 **161** 测试全绿（无新增 case；rail UI 单测留 v0.4.5）
+- 后端编译 / 前端 vite build（704 kB / 210 kB gzip，+30 kB modal）/ 0 baseline 漂移
+
+### 关键架构决策（已固化）
+
+1. **rail + manual 共享 namespace + skip predicate 协调**：RailScheduleProvider 接管的
+   wall 自动让 ManualScheduleProvider 跳过 — 避免双写同 key。注入路径 = `ProviderBootstrap`
+   装配时 `manualProvider.setSkipWallPredicate(railProvider::hasWallBinding)`
+2. **每站时刻精确 = `rail_timetable` 读**：不再走"travel_seconds 均匀推算"，支持站间不均 +
+   大站快车跳站（stops_here=0）+ 区间车不到全线
+3. **service_type 4 内置 + 自定义字符串**：LOCAL/EXPRESS/SECTION/LIMITED 走 enum 路径 +
+   i18n 友好文本；其他字符串原样存 + 显示
+4. **AutoTimetableGenerator 纯函数**：不依赖 DB / Bukkit / 主线程，单测 9 case 覆盖
+5. **wall_rail_bindings.line_id IS NULL 走 fallback**：兼容只用 ManualSchedule 的旧服务器
+6. **车次详情的所有写操作 ACL 走 line owner**：rail.station.* / rail.run.* / rail.run.timetable.set
+   按 line.ownerUuid 判定 own/any（避免每张子表都配独立 owner_uuid 字段）
+
+### 关联文件
+
+- `db-migrations/V016__rail_network.sql`（新）
+- `plugin/.../rail/{RailLine, RailStation, RailRun, RailTimetableEntry, WallRailBinding,
+  ServiceType, AutoTimetableGenerator}.java`（7 新）
+- `plugin/.../storage/RailDao.java`（新，~530 行统一 5 表）
+- `plugin/.../variable/provider/RailScheduleProvider.java`（新，~530 行）
+- `plugin/.../variable/provider/ManualScheduleProvider.java`（+ setSkipWallPredicate /
+  shouldSkipWall + refresh 内跳过 rail-bound wall）
+- `plugin/.../variable/provider/ProviderBootstrap.java`（+ 6 参 overload + 装配 + 注入 predicate）
+- `plugin/.../web/RailOpDispatcher.java`（新，~510 行 / 12 op + ACL + AuditLog）
+- `plugin/.../web/WebServer.java`（+ railOpDispatcher 装配 + 12 op 路由）
+- `plugin/.../HikariCanvas.java`（+ railDao 字段 + 装配 + wall delete hook）
+- `plugin/src/main/resources/paper-plugin.yml`（+ 6 权限节点）
+- `web/src/types/rail.ts`（新）
+- `web/src/stores/rail.ts`（新 Pinia mirror）
+- `web/src/network/wsClient.ts`（+ 12 sendRail* 方法）
+- `web/src/components/rail/{RailNetworkModal, RailRunDialog}.vue`（新）
+- `web/src/components/layout/TopBar.vue`（+ TrainTrack 按钮）
+- `web/src/App.vue`（+ 挂载 RailNetworkModal）
+- `web/src/stores/ui.ts`（+ railNetworkOpen + toggleRailNetwork / closeRailNetwork）
+- `web/src/i18n/messages.ts`（+ rail.* + topbar.railNetwork zh + en ~50 keys）
+- `plugin/src/test/.../rail/{AutoTimetableGeneratorTest, ServiceTypeTest}.java`（新 16 case）
+- `plugin/src/test/.../variable/provider/RailScheduleProviderTest.java`（新 8 case）
+- `docs/variables.md §1.13`（铁路网络新节）
+- `docs/dynamic-data.md §18`（既有规划文档，作为契约对照）
+
+### v0.4.5 留作的优化
+
+- ScheduleManagerModal 顶部加铁路绑定段（line + station + direction 下拉，省去走 rail
+  modal 单独配 binding）+ 7+14 = 21 变量预览
+- RailNetworkModal 进入线路时自动拉 stations / runs / timetable 详情（当前需手动添加才有数据；
+  缺 `rail.line.detail` op）
+- 拖动排序站点（当前用 ↑↓ 按钮）
+- 时刻表表格更精致的 inline 编辑（时间 picker / 校验提示）
+
+---
+
 ## 2026-05-21 · 0.4.3 全局用户变量（userglobal namespace）— 5 phase 落地
 
 ### 背景

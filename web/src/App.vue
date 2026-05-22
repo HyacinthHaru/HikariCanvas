@@ -10,6 +10,7 @@ import StatusBar from '@/components/layout/StatusBar.vue';
 import LogDrawer from '@/components/layout/LogDrawer.vue';
 import VariablePanel from '@/components/variables/VariablePanel.vue';
 import ScheduleManagerModal from '@/components/schedule/ScheduleManagerModal.vue';
+import RailNetworkModal from '@/components/rail/RailNetworkModal.vue';
 import HomePage from '@/components/HomePage.vue';
 import TemplateGallery from '@/components/template/TemplateGallery.vue';
 import HelpModal from '@/components/HelpModal.vue';
@@ -191,5 +192,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     <VariablePanel />
     <!-- 0.4.0-P3-L：列车时刻表管理 modal -->
     <ScheduleManagerModal />
+    <!-- 0.4.4：铁路网络（线路 + 站点 + 车次 + 时刻表）管理 modal -->
+    <RailNetworkModal v-if="ui.railNetworkOpen" @close="ui.closeRailNetwork()" />
   </div>
 </template>

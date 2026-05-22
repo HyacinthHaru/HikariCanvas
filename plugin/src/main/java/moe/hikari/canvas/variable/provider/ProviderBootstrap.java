@@ -1,11 +1,14 @@
 package moe.hikari.canvas.variable.provider;
 
 import moe.hikari.canvas.HikariCanvasConfig;
+import moe.hikari.canvas.storage.RailDao;
 import moe.hikari.canvas.storage.ScheduleDao;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.variable.VariableStore;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.Nullable;
+
+import java.util.Locale;
 
 /**
  * 0.4.0-P1-E：VariableProviderDaemon 装配入口。
@@ -42,17 +45,52 @@ public final class ProviderBootstrap {
                                                     WallRepo wallRepo,
                                                     @Nullable ScheduleDao scheduleDao,
                                                     @Nullable HikariCanvasConfig.ScheduleConfig scheduleConfig) {
+        return initialize(store, plugin, wallRepo, scheduleDao, scheduleConfig, null);
+    }
+
+    /**
+     * 0.4.4：6 参数 overload，加 RailDao（铁路网络 Provider）。
+     *
+     * <p>装配顺序：</p>
+     * <ol>
+     *   <li>注册 system / scoreboard / papi / ManualScheduleProvider（同 0.4.0）</li>
+     *   <li>注册 RailScheduleProvider（共享 schedule namespace）</li>
+     *   <li>给 ManualScheduleProvider 注入 skipWallPredicate = railProvider.hasWallBinding
+     *       让 rail-bound wall 跳过 manual push</li>
+     * </ol>
+     *
+     * @param railDao 铁路网络 DAO；传 {@code null} 时不注册 RailScheduleProvider
+     *                （兼容只用 ManualSchedule 的旧服务器）
+     */
+    public static VariableProviderDaemon initialize(VariableStore store,
+                                                    JavaPlugin plugin,
+                                                    WallRepo wallRepo,
+                                                    @Nullable ScheduleDao scheduleDao,
+                                                    @Nullable HikariCanvasConfig.ScheduleConfig scheduleConfig,
+                                                    @Nullable RailDao railDao) {
         VariableProviderDaemon daemon = new VariableProviderDaemon();
         // P3-J：system + scoreboard
         daemon.register(new SystemVariableProvider(store, plugin, wallRepo));
         daemon.register(new ScoreboardVariableProvider(store, plugin));
         // P3-K：PAPI 桥接（软依赖；未装时 refreshInterval=ZERO，daemon 不调度）
         daemon.register(new PapiVariableBridge(store, plugin));
-        // P3-L：兜底列车时刻表
+        HikariCanvasConfig.ScheduleConfig cfg = scheduleConfig == null
+                ? HikariCanvasConfig.ScheduleConfig.defaults() : scheduleConfig;
+        // P3-L：兜底列车时刻表（per-wall manual）
+        ManualScheduleProvider manualProvider = null;
         if (scheduleDao != null) {
-            HikariCanvasConfig.ScheduleConfig cfg = scheduleConfig == null
-                    ? HikariCanvasConfig.ScheduleConfig.defaults() : scheduleConfig;
-            daemon.register(new ManualScheduleProvider(store, plugin, scheduleDao, cfg));
+            manualProvider = new ManualScheduleProvider(store, plugin, scheduleDao, cfg);
+            daemon.register(manualProvider);
+        }
+        // 0.4.4 P2：铁路网络（线路 + 站点 + 车次 + timetable）
+        if (railDao != null) {
+            RailScheduleProvider railProvider = new RailScheduleProvider(
+                    store, railDao, cfg, Locale.SIMPLIFIED_CHINESE);
+            daemon.register(railProvider);
+            // 让 ManualSchedule 跳过 rail-bound wall — 避免双写同 namespace
+            if (manualProvider != null) {
+                manualProvider.setSkipWallPredicate(railProvider::hasWallBinding);
+            }
         }
         return daemon;
     }

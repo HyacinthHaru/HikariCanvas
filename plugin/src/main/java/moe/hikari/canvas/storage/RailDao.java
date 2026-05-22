@@ -1,0 +1,512 @@
+package moe.hikari.canvas.storage;
+
+import moe.hikari.canvas.rail.RailLine;
+import moe.hikari.canvas.rail.RailRun;
+import moe.hikari.canvas.rail.RailStation;
+import moe.hikari.canvas.rail.RailTimetableEntry;
+import moe.hikari.canvas.rail.WallRailBinding;
+import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.Jdbi;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * 0.4.4 P1：铁路网络 5 表统一 DAO（与 {@link ScheduleDao} 单类风格一致）。
+ *
+ * <p>承担：{@code rail_lines} / {@code rail_stations} / {@code rail_runs} /
+ * {@code rail_timetable} / {@code wall_rail_bindings} 五表的 CRUD。FK 级联由 schema 自带
+ * （V016 migration），DAO 不重复触发显式 DELETE。</p>
+ *
+ * <p>所有方法异常被 catch + log，**不上抛**——业务层（{@code RailOpDispatcher}）走
+ * Optional / count 判定成功；保持与 ScheduleDao 风格一致。</p>
+ */
+public class RailDao {
+
+    private final Logger log;
+    private final Jdbi jdbi;
+
+    public RailDao(Logger log, Jdbi jdbi) {
+        this.log = log;
+        this.jdbi = jdbi;
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  rail_lines
+    // ────────────────────────────────────────────────────────────
+
+    public void upsertLine(RailLine line) {
+        try {
+            jdbi.useHandle(h -> h.createUpdate(
+                    "INSERT INTO rail_lines("
+                            + "id, name, code, color, owner_uuid, owner_name, "
+                            + "created_at, updated_at) "
+                            + "VALUES(:id, :name, :code, :color, :owner, :ownerName, :created, :updated) "
+                            + "ON CONFLICT(id) DO UPDATE SET "
+                            + "name = excluded.name, "
+                            + "code = excluded.code, "
+                            + "color = excluded.color, "
+                            + "updated_at = excluded.updated_at")
+                    .bind("id", line.id())
+                    .bind("name", line.name())
+                    .bind("code", line.code())
+                    .bind("color", line.color())
+                    .bind("owner", line.ownerUuid().toString())
+                    .bind("ownerName", line.ownerName())
+                    .bind("created", line.createdAt())
+                    .bind("updated", line.updatedAt())
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.upsertLine failed: " + line.id(), e);
+        }
+    }
+
+    public Optional<RailLine> findLine(String id) {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM rail_lines WHERE id = :id")
+                    .bind("id", id)
+                    .map((rs, ctx) -> mapLine(rs))
+                    .findOne());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.findLine failed: " + id, e);
+            return Optional.empty();
+        }
+    }
+
+    public List<RailLine> listAllLines() {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM rail_lines ORDER BY name")
+                    .map((rs, ctx) -> mapLine(rs))
+                    .list());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.listAllLines failed", e);
+            return List.of();
+        }
+    }
+
+    public int deleteLine(String id) {
+        try {
+            return jdbi.withHandle(h -> h.createUpdate(
+                    "DELETE FROM rail_lines WHERE id = :id")
+                    .bind("id", id)
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.deleteLine failed: " + id, e);
+            return 0;
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  rail_stations
+    // ────────────────────────────────────────────────────────────
+
+    public void upsertStation(RailStation s) {
+        try {
+            jdbi.useHandle(h -> h.createUpdate(
+                    "INSERT INTO rail_stations("
+                            + "id, line_id, name, code, sort_order, is_terminus, created_at) "
+                            + "VALUES(:id, :line, :name, :code, :sort, :term, :created) "
+                            + "ON CONFLICT(id) DO UPDATE SET "
+                            + "name = excluded.name, "
+                            + "code = excluded.code, "
+                            + "sort_order = excluded.sort_order, "
+                            + "is_terminus = excluded.is_terminus")
+                    .bind("id", s.id())
+                    .bind("line", s.lineId())
+                    .bind("name", s.name())
+                    .bind("code", s.code())
+                    .bind("sort", s.sortOrder())
+                    .bind("term", s.isTerminus() ? 1 : 0)
+                    .bind("created", s.createdAt())
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.upsertStation failed: " + s.id(), e);
+        }
+    }
+
+    public Optional<RailStation> findStation(String id) {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM rail_stations WHERE id = :id")
+                    .bind("id", id)
+                    .map((rs, ctx) -> mapStation(rs))
+                    .findOne());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.findStation failed: " + id, e);
+            return Optional.empty();
+        }
+    }
+
+    public List<RailStation> listStationsByLine(String lineId) {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM rail_stations WHERE line_id = :line "
+                            + "ORDER BY sort_order ASC, name ASC")
+                    .bind("line", lineId)
+                    .map((rs, ctx) -> mapStation(rs))
+                    .list());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.listStationsByLine failed: " + lineId, e);
+            return List.of();
+        }
+    }
+
+    public int deleteStation(String id) {
+        try {
+            return jdbi.withHandle(h -> h.createUpdate(
+                    "DELETE FROM rail_stations WHERE id = :id")
+                    .bind("id", id)
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.deleteStation failed: " + id, e);
+            return 0;
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  rail_runs
+    // ────────────────────────────────────────────────────────────
+
+    public void upsertRun(RailRun r) {
+        try {
+            jdbi.useHandle(h -> h.createUpdate(
+                    "INSERT INTO rail_runs("
+                            + "id, line_id, run_number, direction, service_type, cars, "
+                            + "start_station_id, end_station_id, notes, created_at, updated_at) "
+                            + "VALUES(:id, :line, :run, :dir, :type, :cars, :start, :end, :notes, "
+                            + ":created, :updated) "
+                            + "ON CONFLICT(id) DO UPDATE SET "
+                            + "run_number = excluded.run_number, "
+                            + "direction = excluded.direction, "
+                            + "service_type = excluded.service_type, "
+                            + "cars = excluded.cars, "
+                            + "start_station_id = excluded.start_station_id, "
+                            + "end_station_id = excluded.end_station_id, "
+                            + "notes = excluded.notes, "
+                            + "updated_at = excluded.updated_at")
+                    .bind("id", r.id())
+                    .bind("line", r.lineId())
+                    .bind("run", r.runNumber())
+                    .bind("dir", r.direction())
+                    .bind("type", r.serviceType())
+                    .bind("cars", r.cars())
+                    .bind("start", r.startStationId())
+                    .bind("end", r.endStationId())
+                    .bind("notes", r.notes())
+                    .bind("created", r.createdAt())
+                    .bind("updated", r.updatedAt())
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.upsertRun failed: " + r.id(), e);
+        }
+    }
+
+    public Optional<RailRun> findRun(String id) {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM rail_runs WHERE id = :id")
+                    .bind("id", id)
+                    .map((rs, ctx) -> mapRun(rs))
+                    .findOne());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.findRun failed: " + id, e);
+            return Optional.empty();
+        }
+    }
+
+    public List<RailRun> listRunsByLine(String lineId) {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM rail_runs WHERE line_id = :line "
+                            + "ORDER BY direction ASC, run_number ASC")
+                    .bind("line", lineId)
+                    .map((rs, ctx) -> mapRun(rs))
+                    .list());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.listRunsByLine failed: " + lineId, e);
+            return List.of();
+        }
+    }
+
+    public int deleteRun(String id) {
+        try {
+            return jdbi.withHandle(h -> h.createUpdate(
+                    "DELETE FROM rail_runs WHERE id = :id")
+                    .bind("id", id)
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.deleteRun failed: " + id, e);
+            return 0;
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  rail_timetable
+    // ────────────────────────────────────────────────────────────
+
+    /**
+     * 批量替换车次的 timetable：先删该 runId 的所有行，再批量 insert。事务内执行。
+     */
+    public void replaceTimetable(String runId, List<RailTimetableEntry> entries) {
+        try {
+            jdbi.useTransaction(h -> {
+                h.createUpdate("DELETE FROM rail_timetable WHERE run_id = :r")
+                        .bind("r", runId)
+                        .execute();
+                for (RailTimetableEntry e : entries) {
+                    h.createUpdate(
+                            "INSERT INTO rail_timetable("
+                                    + "run_id, station_id, arrival_time, departure_time, stops_here) "
+                                    + "VALUES(:r, :s, :arr, :dep, :stops)")
+                            .bind("r", e.runId())
+                            .bind("s", e.stationId())
+                            .bind("arr", e.arrivalTime())
+                            .bind("dep", e.departureTime())
+                            .bind("stops", e.stopsHere() ? 1 : 0)
+                            .execute();
+                }
+            });
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.replaceTimetable failed: run=" + runId, e);
+        }
+    }
+
+    public List<RailTimetableEntry> listTimetableByRun(String runId) {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT t.* FROM rail_timetable t "
+                            + "JOIN rail_stations s ON s.id = t.station_id "
+                            + "WHERE t.run_id = :r ORDER BY s.sort_order ASC")
+                    .bind("r", runId)
+                    .map((rs, ctx) -> mapTimetable(rs))
+                    .list());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.listTimetableByRun failed: " + runId, e);
+            return List.of();
+        }
+    }
+
+    /**
+     * 关键查询：某条线上、某方向、某站停靠的车次的下一班 / 下下班。
+     *
+     * <p>SQL：JOIN runs + timetable WHERE 站 = ? + 方向 = ? + stops_here = 1 + (direction
+     * 过滤) ORDER BY arrival_time（或 departure_time fallback） LIMIT N。</p>
+     *
+     * <p>过零点逻辑：不在 SQL 内处理（业务复杂）；Provider 拿"全天"班次 list 自己按 LocalTime
+     * 比较 + 过零点回首班。</p>
+     *
+     * @param stationId   本站
+     * @param direction   {@code "up"} / {@code "down"} / {@code "both"}（{@code "both"} 不过滤）
+     */
+    public List<TimetableJoinRow> listStationStops(String stationId, String direction) {
+        String dirClause = WallRailBinding.DIRECTION_BOTH.equals(direction)
+                ? ""
+                : " AND r.direction = :dir";
+        try {
+            return jdbi.withHandle(h -> {
+                var q = h.createQuery(
+                        "SELECT t.run_id, t.station_id, t.arrival_time, t.departure_time, "
+                                + "t.stops_here, r.id AS r_id, r.line_id AS r_line, "
+                                + "r.run_number, r.direction, r.service_type, r.cars, "
+                                + "r.start_station_id, r.end_station_id, r.notes, "
+                                + "r.created_at AS r_created, r.updated_at AS r_updated "
+                                + "FROM rail_timetable t "
+                                + "JOIN rail_runs r ON r.id = t.run_id "
+                                + "WHERE t.station_id = :s AND t.stops_here = 1"
+                                + dirClause + " "
+                                + "ORDER BY COALESCE(t.arrival_time, t.departure_time) ASC")
+                        .bind("s", stationId);
+                if (!WallRailBinding.DIRECTION_BOTH.equals(direction)) {
+                    q = q.bind("dir", direction);
+                }
+                return q.map((rs, ctx) -> {
+                    RailTimetableEntry te = new RailTimetableEntry(
+                            rs.getString("run_id"),
+                            rs.getString("station_id"),
+                            rs.getString("arrival_time"),
+                            rs.getString("departure_time"),
+                            rs.getInt("stops_here") != 0);
+                    Integer cars = rs.getObject("cars") == null
+                            ? null : rs.getInt("cars");
+                    RailRun run = new RailRun(
+                            rs.getString("r_id"),
+                            rs.getString("r_line"),
+                            rs.getString("run_number"),
+                            rs.getString("direction"),
+                            rs.getString("service_type"),
+                            cars,
+                            rs.getString("start_station_id"),
+                            rs.getString("end_station_id"),
+                            rs.getString("notes"),
+                            rs.getLong("r_created"),
+                            rs.getLong("r_updated"));
+                    return new TimetableJoinRow(te, run);
+                }).list();
+            });
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.listStationStops failed: station="
+                    + stationId + " dir=" + direction, e);
+            return List.of();
+        }
+    }
+
+    /** {@link #listStationStops} 的 JOIN 结果，timetable + run 一行一打包。 */
+    public record TimetableJoinRow(RailTimetableEntry entry, RailRun run) {}
+
+    // ────────────────────────────────────────────────────────────
+    //  wall_rail_bindings
+    // ────────────────────────────────────────────────────────────
+
+    public void upsertBinding(WallRailBinding b) {
+        try {
+            jdbi.useHandle(h -> h.createUpdate(
+                    "INSERT INTO wall_rail_bindings("
+                            + "wall_id, line_id, station_id, direction, updated_at) "
+                            + "VALUES(:w, :l, :s, :d, :u) "
+                            + "ON CONFLICT(wall_id) DO UPDATE SET "
+                            + "line_id = excluded.line_id, "
+                            + "station_id = excluded.station_id, "
+                            + "direction = excluded.direction, "
+                            + "updated_at = excluded.updated_at")
+                    .bind("w", b.wallId())
+                    .bind("l", b.lineId())
+                    .bind("s", b.stationId())
+                    .bind("d", b.direction())
+                    .bind("u", b.updatedAt())
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.upsertBinding failed: " + b.wallId(), e);
+        }
+    }
+
+    public Optional<WallRailBinding> findBinding(String wallId) {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM wall_rail_bindings WHERE wall_id = :w")
+                    .bind("w", wallId)
+                    .map((rs, ctx) -> new WallRailBinding(
+                            rs.getString("wall_id"),
+                            rs.getString("line_id"),
+                            rs.getString("station_id"),
+                            rs.getString("direction"),
+                            rs.getLong("updated_at")))
+                    .findOne());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.findBinding failed: " + wallId, e);
+            return Optional.empty();
+        }
+    }
+
+    public List<WallRailBinding> listAllBindings() {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT * FROM wall_rail_bindings")
+                    .map((rs, ctx) -> new WallRailBinding(
+                            rs.getString("wall_id"),
+                            rs.getString("line_id"),
+                            rs.getString("station_id"),
+                            rs.getString("direction"),
+                            rs.getLong("updated_at")))
+                    .list());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.listAllBindings failed", e);
+            return List.of();
+        }
+    }
+
+    public int deleteBinding(String wallId) {
+        try {
+            return jdbi.withHandle(h -> h.createUpdate(
+                    "DELETE FROM wall_rail_bindings WHERE wall_id = :w")
+                    .bind("w", wallId)
+                    .execute());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "RailDao.deleteBinding failed: " + wallId, e);
+            return 0;
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  事务感知重载（供 RailOpDispatcher 在外层事务调用）
+    // ────────────────────────────────────────────────────────────
+
+    public int deleteBindingOn(Handle h, String wallId) {
+        return h.createUpdate("DELETE FROM wall_rail_bindings WHERE wall_id = :w")
+                .bind("w", wallId)
+                .execute();
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  helpers
+    // ────────────────────────────────────────────────────────────
+
+    private static RailLine mapLine(java.sql.ResultSet rs) throws java.sql.SQLException {
+        UUID owner;
+        try {
+            owner = UUID.fromString(rs.getString("owner_uuid"));
+        } catch (IllegalArgumentException ex) {
+            owner = new UUID(0L, 0L);
+        }
+        return new RailLine(
+                rs.getString("id"),
+                rs.getString("name"),
+                rs.getString("code"),
+                rs.getString("color"),
+                owner,
+                rs.getString("owner_name"),
+                rs.getLong("created_at"),
+                rs.getLong("updated_at"));
+    }
+
+    private static RailStation mapStation(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new RailStation(
+                rs.getString("id"),
+                rs.getString("line_id"),
+                rs.getString("name"),
+                rs.getString("code"),
+                rs.getInt("sort_order"),
+                rs.getInt("is_terminus") != 0,
+                rs.getLong("created_at"));
+    }
+
+    private static RailRun mapRun(java.sql.ResultSet rs) throws java.sql.SQLException {
+        Object carsObj = rs.getObject("cars");
+        Integer cars = carsObj == null ? null : ((Number) carsObj).intValue();
+        return new RailRun(
+                rs.getString("id"),
+                rs.getString("line_id"),
+                rs.getString("run_number"),
+                rs.getString("direction"),
+                rs.getString("service_type"),
+                cars,
+                rs.getString("start_station_id"),
+                rs.getString("end_station_id"),
+                rs.getString("notes"),
+                rs.getLong("created_at"),
+                rs.getLong("updated_at"));
+    }
+
+    private static RailTimetableEntry mapTimetable(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new RailTimetableEntry(
+                rs.getString("run_id"),
+                rs.getString("station_id"),
+                rs.getString("arrival_time"),
+                rs.getString("departure_time"),
+                rs.getInt("stops_here") != 0);
+    }
+
+    @Nullable
+    @SuppressWarnings("unused")  // 供未来按 owner 列表用
+    private static String nullableString(java.sql.ResultSet rs, String col)
+            throws java.sql.SQLException {
+        String v = rs.getString(col);
+        return rs.wasNull() ? null : v;
+    }
+}

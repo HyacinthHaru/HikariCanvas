@@ -111,6 +111,15 @@ public final class ManualScheduleProvider implements VariableProvider {
     private final DataSource dataSource;
     /** 0.4.0 bugfix（Bug 3）：阈值 / 文案配置（不可变快照；reload config 后整体替换）。 */
     private volatile HikariCanvasConfig.ScheduleConfig config;
+    /**
+     * 0.4.4：让铁路路径接管的 wall 跳过本 provider 的 push。
+     *
+     * <p>RailScheduleProvider 与本 provider 共享 {@code schedule:<wallId>/*} namespace，
+     * 同时写会双 push 同 key。HikariCanvas 装配时注入此 predicate（{@code wallId ->
+     * railDao.findBinding(...).map(b -> b.lineId() != null).orElse(false)}）让 rail-bound
+     * wall 在 refresh 时跳过本 provider。未注入或返 false 时按 0.4.0 原行为不变。</p>
+     */
+    private volatile java.util.function.Predicate<String> skipWallPredicate;
 
     /** 已注册的 wall 集合（值 = 该 wall 当前 entries 快照）。 */
     private final ConcurrentHashMap<String, List<ScheduleEntry>> registeredWalls =
@@ -146,6 +155,22 @@ public final class ManualScheduleProvider implements VariableProvider {
     public void setConfig(HikariCanvasConfig.ScheduleConfig newConfig) {
         if (newConfig == null) return;
         this.config = newConfig;
+    }
+
+    /** 0.4.4：注入 rail-bound wall 跳过 predicate；null 关闭跳过逻辑。 */
+    public void setSkipWallPredicate(@Nullable java.util.function.Predicate<String> p) {
+        this.skipWallPredicate = p;
+    }
+
+    /** 0.4.4：predicate 安全调用，未注入时返 false（不跳过）。 */
+    private boolean shouldSkipWall(String wallId) {
+        java.util.function.Predicate<String> p = skipWallPredicate;
+        if (p == null) return false;
+        try {
+            return p.test(wallId);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     @Override public String namespace() { return NAMESPACE_PREFIX; }
@@ -208,6 +233,8 @@ public final class ManualScheduleProvider implements VariableProvider {
         for (java.util.Map.Entry<String, List<ScheduleEntry>> entry : registeredWalls.entrySet()) {
             String wallId = entry.getKey();
             try {
+                // 0.4.4：rail-bound wall 跳过（RailScheduleProvider 接管该 wall 的 push）
+                if (shouldSkipWall(wallId)) continue;
                 // 0.4.0 bugfix（Bug 4）：按 wall.precision 节流
                 String precision = currentPrecision(wallId);
                 long interval = WallSchedule.PRECISION_SECOND.equals(precision)

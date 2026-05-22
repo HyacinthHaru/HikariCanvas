@@ -277,6 +277,102 @@ export class WsClient {
                 .then((p) => p as { id: number });
     }
 
+    // ---------- 铁路网络（0.4.4，协议见 docs/dynamic-data.md §18.7）----------
+
+    /** 列所有线路（含 owner / color 等元数据）。 */
+    sendRailLineList(): Promise<{ lines: import('@/types/rail').RailLine[] }> {
+        return this.sendWithAck('rail.line.list', {}, 8000)
+                .then((p) => p as { lines: import('@/types/rail').RailLine[] });
+    }
+
+    sendRailLineCreate(name: string, code: string | null, color: string | null):
+            Promise<{ lineId: string; line: import('@/types/rail').RailLine }> {
+        return this.sendWithAck('rail.line.create', { name, code, color })
+                .then((p) => p as { lineId: string; line: import('@/types/rail').RailLine });
+    }
+
+    sendRailLineUpdate(lineId: string, patch: Partial<{ name: string; code: string | null;
+                                                        color: string | null }>):
+            Promise<{ line: import('@/types/rail').RailLine }> {
+        return this.sendWithAck('rail.line.update', { lineId, ...patch })
+                .then((p) => p as { line: import('@/types/rail').RailLine });
+    }
+
+    sendRailLineDelete(lineId: string): Promise<{ deleted: number }> {
+        return this.sendWithAck('rail.line.delete', { lineId })
+                .then((p) => p as { deleted: number });
+    }
+
+    sendRailStationAdd(lineId: string, name: string, code: string | null,
+                       sortOrder: number | null, isTerminus: boolean):
+            Promise<{ stationId: string; station: import('@/types/rail').RailStation }> {
+        return this.sendWithAck('rail.station.add',
+                { lineId, name, code, sortOrder, isTerminus })
+                .then((p) => p as { stationId: string;
+                                    station: import('@/types/rail').RailStation });
+    }
+
+    sendRailStationUpdate(stationId: string, patch: Partial<{
+        name: string; code: string | null; sortOrder: number; isTerminus: boolean;
+    }>): Promise<{ station: import('@/types/rail').RailStation }> {
+        return this.sendWithAck('rail.station.update', { stationId, ...patch })
+                .then((p) => p as { station: import('@/types/rail').RailStation });
+    }
+
+    sendRailStationDelete(stationId: string): Promise<{ deleted: number }> {
+        return this.sendWithAck('rail.station.delete', { stationId })
+                .then((p) => p as { deleted: number });
+    }
+
+    sendRailRunCreate(payload: {
+        lineId: string;
+        runNumber: string;
+        direction: 'up' | 'down';
+        serviceType: string;
+        cars?: number | null;
+        startStationId?: string | null;
+        endStationId?: string | null;
+        notes?: string | null;
+        generateOptions?: import('@/types/rail').AutoTimetableOptions;
+    }): Promise<{ runId: string; run: import('@/types/rail').RailRun }> {
+        return this.sendWithAck('rail.run.create', payload)
+                .then((p) => p as { runId: string; run: import('@/types/rail').RailRun });
+    }
+
+    sendRailRunUpdate(runId: string, patch: Partial<{
+        runNumber: string; direction: 'up' | 'down'; serviceType: string;
+        cars: number | null; startStationId: string | null; endStationId: string | null;
+        notes: string | null;
+    }>): Promise<{ run: import('@/types/rail').RailRun }> {
+        return this.sendWithAck('rail.run.update', { runId, ...patch })
+                .then((p) => p as { run: import('@/types/rail').RailRun });
+    }
+
+    sendRailRunDelete(runId: string): Promise<{ deleted: number }> {
+        return this.sendWithAck('rail.run.delete', { runId })
+                .then((p) => p as { deleted: number });
+    }
+
+    sendRailTimetableSet(runId: string,
+                         entries: Array<{ stationId: string; arrival?: string | null;
+                                          departure?: string | null;
+                                          stopsHere: boolean }>):
+            Promise<{ rows: number }> {
+        return this.sendWithAck('rail.run.timetable.set', { runId, entries })
+                .then((p) => p as { rows: number });
+    }
+
+    /** wallId 默认当前 session 绑定的 wall（后端自动注入）。 */
+    sendRailWallBind(payload: {
+        wallId?: string;
+        lineId?: string | null;
+        stationId?: string | null;
+        direction?: 'up' | 'down' | 'both';
+    }): Promise<{ binding: import('@/types/rail').WallRailBinding }> {
+        return this.sendWithAck('rail.wall.bind', payload)
+                .then((p) => p as { binding: import('@/types/rail').WallRailBinding });
+    }
+
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {

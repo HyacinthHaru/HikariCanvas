@@ -67,6 +67,8 @@ export const useUiStore = defineStore('ui', () => {
     const variablePanelOpen = ref(false);
     /** 0.4.0-P3-L：列车时刻表管理 modal 开关。TopBar Calendar 按钮触发。 */
     const scheduleManagerOpen = ref(false);
+    /** 0.4.4：铁路网络管理 modal 开关。TopBar Train 按钮 → 二级菜单触发。 */
+    const railNetworkOpen = ref(false);
 
     /** M8-F：所有当前选中的元素 id。size > 1 时为多选。 */
     const selectedIds = ref<Set<string>>(new Set());
@@ -147,6 +149,8 @@ export const useUiStore = defineStore('ui', () => {
     function closeVariablePanel() { variablePanelOpen.value = false; }
     function toggleScheduleManager() { scheduleManagerOpen.value = !scheduleManagerOpen.value; }
     function closeScheduleManager() { scheduleManagerOpen.value = false; }
+    function toggleRailNetwork() { railNetworkOpen.value = !railNetworkOpen.value; }
+    function closeRailNetwork() { railNetworkOpen.value = false; }
 
     function setZoom(z: number) {
         zoom.value = Math.max(0.25, Math.min(4, z));
@@ -215,17 +219,19 @@ export const useUiStore = defineStore('ui', () => {
         helpOpen.value = false;
         variablePanelOpen.value = false;
         scheduleManagerOpen.value = false;
+        railNetworkOpen.value = false;
     }
 
     return {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
-        variablePanelOpen, scheduleManagerOpen,
+        variablePanelOpen, scheduleManagerOpen, railNetworkOpen,
         selectedIds, selectedElementId, selectedCount, hasSelection,
         editingLayerId, zoom,
         snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapToDistribute, snapThreshold,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         toggleVariablePanel, closeVariablePanel,
         toggleScheduleManager, closeScheduleManager,
+        toggleRailNetwork, closeRailNetwork,
         setZoom, zoomIn, zoomOut, zoomReset,
         selectElement, toggleSelection, selectMany, addToSelection, clearSelection,
         isSelected,
