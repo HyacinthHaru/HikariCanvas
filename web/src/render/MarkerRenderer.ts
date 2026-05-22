@@ -5,12 +5,34 @@
  * dot 圆心在端点。任何修改需同步两端。
  */
 
-export function arrowSize(strokeWidth: number): number {
-    return Math.max(6, strokeWidth * 3);
+/** 0.4.7：marker 大小上限与 element-length cap 比例。与后端 MarkerRenderer.java 一致。 */
+export const MAX_ARROW_SIZE = 40;
+export const MAX_DOT_RADIUS = 16;
+export const MARKER_MAX_RATIO_OF_LENGTH = 0.4;
+
+/**
+ * arrow size 公式（0.4.7 修）。
+ *
+ * 原 max(6, stroke × 3) 在 stroke 大时无上限增长（stroke=20 → 60，吞没 50px 短箭头）。
+ * 新公式 clamp(6, stroke × 2.5 + 4, 40) 平滑增长 + 40px 上限。
+ *
+ * 可选 elementDiagonal 参数（hypot(w, h)）= element bbox 对角线，传入后做 element-aware
+ * cap：marker ≤ diagonal × MARKER_MAX_RATIO_OF_LENGTH (0.4)，保证至少留 60% 给直线段。
+ */
+export function arrowSize(strokeWidth: number, elementDiagonal?: number): number {
+    const raw = Math.round(strokeWidth * 2.5 + 4);
+    const base = Math.max(6, Math.min(MAX_ARROW_SIZE, raw));
+    if (elementDiagonal === undefined || elementDiagonal <= 0) return base;
+    const byLength = Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH);
+    return Math.max(6, Math.min(base, byLength));
 }
 
-export function dotRadius(strokeWidth: number): number {
-    return Math.max(2, strokeWidth + 1);
+export function dotRadius(strokeWidth: number, elementDiagonal?: number): number {
+    const base = Math.max(2, Math.min(MAX_DOT_RADIUS, strokeWidth + 1));
+    if (elementDiagonal === undefined || elementDiagonal <= 0) return base;
+    // dot 直径 = 半径 × 2，所以 cap 是 ratio/2
+    const byLength = Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH * 0.5);
+    return Math.max(2, Math.min(base, byLength));
 }
 
 /**

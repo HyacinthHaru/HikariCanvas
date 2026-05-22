@@ -300,18 +300,21 @@ function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
     }
 
     if (parsed.hasSegments && strokeColor) {
+        // 0.4.7：element-aware cap — 让 marker 大小不超过 element 对角线某比例，
+        // 避免 stroke 极粗时 marker 吞没短箭头（详见 MarkerRenderer.arrowSize 注释）
+        const diag = Math.hypot(p.w, p.h);
         if (p.markerEnd) {
             drawPathMarker(ctx, p.markerEnd,
                 parsed.endX, parsed.endY,
                 parsed.endTangentX, parsed.endTangentY,
-                strokeWidth, strokeColor);
+                strokeWidth, diag, strokeColor);
         }
         if (p.markerStart) {
             // markerStart 朝起点外 = startTangent 反向
             drawPathMarker(ctx, p.markerStart,
                 parsed.startX, parsed.startY,
                 -parsed.startTangentX, -parsed.startTangentY,
-                strokeWidth, strokeColor);
+                strokeWidth, diag, strokeColor);
         }
     }
 
@@ -323,12 +326,14 @@ function drawPathMarker(
     type: 'arrow' | 'dot',
     x: number, y: number,
     dirX: number, dirY: number,
-    strokeWidth: number, color: string,
+    strokeWidth: number,
+    elementDiagonal: number,
+    color: string,
 ): void {
     if (type === 'arrow') {
-        drawArrow(ctx, x, y, dirX, dirY, arrowSize(strokeWidth), color);
+        drawArrow(ctx, x, y, dirX, dirY, arrowSize(strokeWidth, elementDiagonal), color);
     } else if (type === 'dot') {
-        drawDot(ctx, x, y, dotRadius(strokeWidth), color);
+        drawDot(ctx, x, y, dotRadius(strokeWidth, elementDiagonal), color);
     }
 }
 
@@ -346,7 +351,9 @@ function buildArrowSubtractClip(
     if (!hasEndArrow && !hasStartArrow) return null;
     if (!parsed.hasSegments) return null;
 
-    const size = arrowSize(strokeWidth);
+    // 0.4.7：clip 减除 size 必须与实际绘制 size 一致，否则 stroke 末端从扣减区"漏出"
+    const diag = Math.hypot(p.w, p.h);
+    const size = arrowSize(strokeWidth, diag);
     const clip = new Path2D();
     // 外圈：大矩形（含 strokeWidth padding 防 AA gap）。坐标原点已 translate 到 p.(x,y)，
     // 所以本地坐标 0..p.w/p.h；padding 取 strokeWidth + size 足够外延。
