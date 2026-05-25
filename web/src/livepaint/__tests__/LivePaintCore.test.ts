@@ -75,8 +75,8 @@ describe('pointInPolygon', () => {
 });
 
 describe('buildGraph', () => {
-    it('空 element 列表 → 整画布单 gap（outer = canvas bbox, holes 空）', () => {
-        const graph = buildGraph([], 100, 50);
+    it('空 element 列表 → 整画布单 gap（outer = canvas bbox, holes 空）', async () => {
+        const graph = await buildGraph([], 100, 50);
         expect(graph.gaps.length).toBe(1);
         expect(graph.gaps[0].outer).toEqual([
             [0, 0],
@@ -90,11 +90,11 @@ describe('buildGraph', () => {
         expect(graph.degraded).toBeUndefined();
     });
 
-    it('一个 rect 元素居中 → polygon-clipping difference 产生外环 + 1 hole 或环绕结构', () => {
+    it('一个 rect 元素居中 → polygon-clipping difference 产生外环 + 1 hole 或环绕结构', async () => {
         // 50×50 画布，中心 10×10 rect → gap = "外环 + 内孔 rect" 或 "环形单 ring"
         // 实测 polygon-clipping 输出 = 单 polygon，外环 = 画布边界 + 内 hole = rect
         const elements: Element[] = [rect({ x: 20, y: 20, w: 10, h: 10 })];
-        const graph = buildGraph(elements, 50, 50);
+        const graph = await buildGraph(elements, 50, 50);
         expect(graph.degraded).toBeUndefined();
         expect(graph.gaps.length).toBeGreaterThanOrEqual(1);
         // 任一 gap 顶点都在 [0, 50]×[0, 50] 内
@@ -125,29 +125,29 @@ describe('buildGraph', () => {
         expect(hit).toBe(false);
     });
 
-    it('canvasWidth ≤ 0 / 非有限 → 空图（不抛）', () => {
-        const g1 = buildGraph([], 0, 100);
+    it('canvasWidth ≤ 0 / 非有限 → 空图（不抛）', async () => {
+        const g1 = await buildGraph([], 0, 100);
         expect(g1.gaps).toEqual([]);
         expect(g1.canvasWidth).toBe(0);
-        const g2 = buildGraph([], NaN, 100);
+        const g2 = await buildGraph([], NaN, 100);
         expect(g2.gaps).toEqual([]);
     });
 
-    it('单 rect 完全覆盖画布 → gaps 数 = 0', () => {
+    it('单 rect 完全覆盖画布 → gaps 数 = 0', async () => {
         const elements: Element[] = [rect({ x: 0, y: 0, w: 50, h: 50 })];
-        const graph = buildGraph(elements, 50, 50);
+        const graph = await buildGraph(elements, 50, 50);
         // rect 完全覆盖；polygon-clipping difference 输出 0 个 polygon
         expect(graph.gaps.length).toBe(0);
         expect(graph.degraded).toBeUndefined();
     });
 
-    it('两个不重叠 rect → 仍有 gap（剩余画布区）', () => {
+    it('两个不重叠 rect → 仍有 gap（剩余画布区）', async () => {
         // 100×100 画布，两个 10×10 rect 在角落
         const elements: Element[] = [
             rect({ id: 'r1', x: 0, y: 0, w: 10, h: 10 }),
             rect({ id: 'r2', x: 90, y: 90, w: 10, h: 10 }),
         ];
-        const graph = buildGraph(elements, 100, 100);
+        const graph = await buildGraph(elements, 100, 100);
         expect(graph.degraded).toBeUndefined();
         expect(graph.gaps.length).toBeGreaterThanOrEqual(1);
         // 中心 (50, 50) 应该在 gap 内

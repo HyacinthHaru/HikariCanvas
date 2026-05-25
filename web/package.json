@@ -1,6 +1,6 @@
 {
   "name": "hikari-canvas-web",
-  "version": "0.4.8-SNAPSHOT",
+  "version": "0.4.9-SNAPSHOT",
   "private": true,
   "type": "module",
   "scripts": {
@@ -32,6 +32,7 @@
     "@lexical/plain-text": "^0.44.0",
     "@lexical/utils": "^0.44.0",
     "@vueuse/core": "^12.8.2",
+    "fontkit": "^2.0.4",
     "konva": "^9.3.22",
     "lexical": "^0.44.0",
     "lucide-vue-next": "^0.468.0",

@@ -17,14 +17,22 @@ import polygonClipping from 'polygon-clipping';
 import type { Pair, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
 import type { Element } from '@/types/protocol';
 import type { GapPolygon, LivePaintGraph, Polygon } from './types';
-import { elementToPolygon } from './ElementToPolygon';
+import { elementToPolygon, elementToPolygonAsync } from './ElementToPolygon';
 
-/** 构建当前画布的 gap graph。同步主线程；M18-P2 会移到 Worker。 */
-export function buildGraph(
+/**
+ * 构建当前画布的 gap graph（async）。
+ *
+ * 0.4.9 Sub B 起改为 async：text 元素走 fontkit 真实 glyph 提取（dynamic import +
+ * fetch 字体文件）。其他元素类型仍同步。在 Worker 内调用——主线程通过 onmessage
+ * 接 graph 结果，不感知 async 切换。
+ *
+ * 旧同步入口仍保留 `buildGraphSync`，供单测与不需 glyph 精度的场景使用。
+ */
+export async function buildGraph(
     elements: Element[],
     canvasWidth: number,
     canvasHeight: number,
-): LivePaintGraph {
+): Promise<LivePaintGraph> {
     if (!isFinite(canvasWidth) || !isFinite(canvasHeight) || canvasWidth <= 0 || canvasHeight <= 0) {
         return { gaps: [], canvasWidth: 0, canvasHeight: 0 };
     }
@@ -34,10 +42,10 @@ export function buildGraph(
      *  低于这个面积的 gap 实际不可达。 */
     const MIN_GAP_AREA = 4;
 
-    // 收集 polygon
+    // 收集 polygon（text 元素 await 真实 glyph 提取；其他类型同步路径不会发起 await）
     const polys: Polygon[] = [];
     for (const el of elements) {
-        const p = elementToPolygon(el);
+        const p = await elementToPolygonAsync(el);
         if (p !== null && p.length >= 3) polys.push(p);
     }
 

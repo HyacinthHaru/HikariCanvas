@@ -18,8 +18,10 @@
  * 容忍但行为可能略偏。M18-P4 hover preview 期间会观察 corner case。
  */
 
-import type { Element } from '@/types/protocol';
+import type { BrushStrokeElement, Element, TextElement } from '@/types/protocol';
 import type { Polygon } from './types';
+import { brushStrokeToPolygon } from './BrushStrokeOffset';
+import { textElementToPolygon } from './TextGlyphExtractor';
 
 /** 椭圆采样点数。32 在 128 像素半径下视觉上几乎无棱角；更多会让 union 顶点爆炸。 */
 export const CIRCLE_SAMPLE_POINTS = 32;
@@ -39,9 +41,23 @@ export function elementToPolygon(el: Element): Polygon | null {
         case 'text':
         case 'icon':
         case 'image':
-        case 'brush':
             local = bboxPolygon(el.x, el.y, el.w, el.h);
             break;
+        case 'brush': {
+            // M18-P5+：brush 升级到真实 stroke offset polygon（替代 bbox 兜底）。
+            // points 是 element-local；这里加上 (el.x, el.y) 转全局。
+            const brush = el as BrushStrokeElement;
+            const globalPts = (brush.points ?? []).map(p => ({
+                x: brush.x + p.x,
+                y: brush.y + p.y,
+            }));
+            local = brushStrokeToPolygon(globalPts, brush.size);
+            if (local === null) {
+                // 退化几何（0 点 / size ≤ 0 / union 失败）→ fallback bbox 仍参与 union
+                local = bboxPolygon(el.x, el.y, el.w, el.h);
+            }
+            break;
+        }
         case 'circle':
             local = circlePolygon(el.x, el.y, el.w, el.h);
             break;
@@ -73,6 +89,47 @@ export function elementToPolygon(el: Element): Polygon | null {
         if (!isFinite(x) || !isFinite(y)) return null;
     }
     return rotated;
+}
+
+/**
+ * 0.4.9 Sub B：异步版本——text 元素走 fontkit 真实 glyph polygon；其他类型同步返回。
+ *
+ * 调用方（如 LivePaintCore.buildGraph）需 await；旧 sync `elementToPolygon` 保留以便
+ * 不需要 glyph 精度的场景沿用（向下兼容）。Worker 内 buildGraph 升级为 async 后调用本版本。
+ *
+ * 失败 / null fallback 与同步版本一致：调用方决定是 fallback bbox 还是丢弃。
+ */
+export async function elementToPolygonAsync(el: Element): Promise<Polygon | null> {
+    if (el.visible === false) return null;
+    if (!isFinite(el.x) || !isFinite(el.y) || !isFinite(el.w) || !isFinite(el.h)) return null;
+    if (el.w <= 0 || el.h <= 0) return null;
+
+    if (el.type === 'text') {
+        const textEl = el as TextElement;
+        let local: Polygon | null = null;
+        try {
+            local = await textElementToPolygon(textEl);
+        } catch {
+            local = null;
+        }
+        // glyph 提取失败 → fallback bbox（与同步版本对 text 的行为一致）
+        if (local === null || local.length < 3) {
+            local = [
+                [textEl.x, textEl.y],
+                [textEl.x + textEl.w, textEl.y],
+                [textEl.x + textEl.w, textEl.y + textEl.h],
+                [textEl.x, textEl.y + textEl.h],
+            ];
+        }
+        const rotation = (textEl.rotation ?? 0) % 360;
+        const rotated = rotation === 0 ? local : rotatePolygon(local, textEl.x + textEl.w / 2, textEl.y + textEl.h / 2, rotation);
+        for (const [x, y] of rotated) {
+            if (!isFinite(x) || !isFinite(y)) return null;
+        }
+        return rotated;
+    }
+    // 非 text → 直接走同步路径
+    return elementToPolygon(el);
 }
 
 // ---------- helpers ----------

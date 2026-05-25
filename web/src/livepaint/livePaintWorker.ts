@@ -38,11 +38,13 @@ export interface LivePaintWorkerResponseErr {
 
 export type LivePaintWorkerResponse = LivePaintWorkerResponseOk | LivePaintWorkerResponseErr;
 
-self.onmessage = (e: MessageEvent<LivePaintWorkerRequest>) => {
+self.onmessage = async (e: MessageEvent<LivePaintWorkerRequest>) => {
     const req = e.data;
     if (req.type !== 'build') return;
     try {
-        const graph = buildGraph(req.elements, req.canvasWidth, req.canvasHeight);
+        // 0.4.9 Sub B：buildGraph 升级为 async（text 元素走 fontkit dynamic import + fetch
+        // 字体二进制）。Worker 内 async 不阻塞主线程；race 保护由主线程 requestId 校对。
+        const graph = await buildGraph(req.elements, req.canvasWidth, req.canvasHeight);
         const resp: LivePaintWorkerResponseOk = { type: 'ok', requestId: req.requestId, graph };
         (self as unknown as Worker).postMessage(resp);
     } catch (err) {

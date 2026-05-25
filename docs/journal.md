@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-05-25 · 0.4.9 — Live Paint 真实形状收尾（brush + text glyph）
+
+### 背景
+
+0.4.8 推迟 2 项到 0.4.9：M18 brush 真实形状 + text glyph 真实形状。这是 Live Paint
+工具的"最后两块拼图"——之前 brush 和 text 元素在 polygon-clipping 路径走 bbox 兜底，
+意味着用户点击 brush 周围空白时 Live Paint 把整个 bbox 当占用区，识别出的 gap
+不准确。
+
+按用户选择「方案 A 务实小」18h 范围，0.4.9 只做这 2 项；B-advanced DCEL 38h 因覆盖
+4% 用例性价比低**确认弃做**；图层 mask/group/smart object 30h+ 独立立项 M30 大版本。
+
+### Sub A — M18 brush 真实形状（stroke offset polygon）
+
+- **新文件** `web/src/livepaint/BrushStrokeOffset.ts`（241 行）— `brushStrokeToPolygon(points, size)` 主入口
+- **算法**：per-point 圆盘 + per-segment 法向偏移矩形 → polygon-clipping `union` 合并
+- **子代理简化决策**：原 task 描述用 "端点 cap 半圆 + 接头 round join 圆弧" 分开，子代理用 **每点放完整圆盘**简化几何——圆盘凸性使 union 后自然形成正确的 round cap + round join 轮廓，多余背面半圆被矩形覆盖不影响外观。代码量 300 → 150 行，性能等价
+- **修 polygon-clipping 浮点退化**：垂直 / 水平 segment 上 disk vertex 与矩形角完全重合触发 `Unable to complete output ring` 错误。修法：disk polygon 加 `π/samples` 相位偏移让所有顶点错开半个采样段
+- **集成**：`ElementToPolygon.ts` brush case 升级 + null 时 fallback bbox 兜底
+- **vitest +18 case**（退化输入 / 单点 / 单 segment / 多 segment / 长 brush 性能 / 几何不变性）
+- **bundle**：worker chunk 36 kB，源码 +1-2 kB 增量 < 5 kB 目标
+
+### Sub B — text glyph 真实形状（fontkit 引入）
+
+- **新依赖**：`fontkit@^2.0.4`（前端 dev only；后端用 Java AWT 内置 `Font.createGlyphVector + getOutline`，但 Live Paint 是前端独占 — CLAUDE.md M18 §1 — 故后端不需要镜像，未动）
+- **新文件** `web/src/livepaint/TextGlyphExtractor.ts` — `textElementToPolygon(textEl)` async
+- **算法**：
+  - fontkit dynamic import + worker scope cache（每 fontId+size+text 一份 polygon LRU）
+  - fetch `/api/font/file?id=X` 拉字体 binary
+  - `font.layout(string)` → GlyphRun → 每 glyph 的 `glyph.path` (SVG path string)
+  - 解析 M/L/Q/C/Z 并 bezier 采样 → glyph polygon
+  - 多 glyph union → 单一 text polygon（仅取面积最大外环，多字符独立 polygon 形态不兼容 GapPolygon 单外环模型）
+- **vitest +16 case**（单字符 / 多字符 / CJK / 空文本 / vertical / fontSize≤0 / fetch fail / fontkit 模块抛错 / layout 返空 / 坐标偏移 / cache 命中 / async 集成 4）
+- **改 worker 异步**：`LivePaintCore.buildGraph` 改 async + `worker.onmessage` 改 async + `elementToPolygonAsync` 入口分离（同步 `elementToPolygon` 保留向下兼容）；改动 3 处不 invasive
+- **bundle**：main 749 kB 不变；worker chunk 34 → **400 kB**（fontkit + unicode-trie + brotli + dfa 子依赖被 rolldown 内联）。仅 Live Paint 工具激活时下载，主页面不受影响
+
+### v1 已知限制（已在代码文档化）
+
+- 不支持 box-width soft wrap（按 `\n` 拆行，超宽不 wrap）— v2 接 TextLayout.ts 复刻
+- 不支持 vertical 模式 → null fallback bbox
+- 多字符 union 仅取面积最大外环 — 短文本 OK，长文本会丢部分字符精度
+- 长 brush（>100 points）union 性能 ~5-20ms（Web Worker 隔离 + RDP 简化）
+
+### 测试结果
+
+- 后端 `:plugin:test` BUILD SUCCESSFUL（**855 全绿不变**，未动后端）
+- 前端 vitest **215 全绿**（181 baseline + 18 Sub A + 16 Sub B）
+- shadow jar `HikariCanvas-0.4.9-SNAPSHOT.jar` 165 MB（fontkit 在 web bundle，不入 jar）
+
+### 关键架构纪律（已固化）
+
+1. **Live Paint 是前端独占**（CLAUDE.md M18 §1）— text glyph 不双端镜像，后端不动；这是 rendering.md §1 双端镜像纪律的**显式例外**
+2. **fontkit dynamic import 进 worker 而非 main**：worker chunk 400 kB 仅在用户激活 Live Paint 时下载，主页面零影响
+3. **worker async 链改动小**：buildGraph async + onmessage async + elementToPolygonAsync 分离同步路径；不破坏 elementToPolygon 同步调用方
+4. **brush union 用整 disk 简化**：凸圆盘 union 矩形天然形成 round cap + round join，避免显式 cap/join 几何代码 ~150 行
+5. **0.4.9 弃做 / 推迟决策**：B-advanced DCEL（38h，4% 用例，性价比低）**确认永不做**；图层 mask/group/smart object（30h+）独立立项 M30 单独大版本
+
+### 实施工时
+
+约 18h 估，实际单日内完成（Sub A 1h + Sub B 2h + 主线 ~15min 版本号/journal/commit）。
+
+---
+
 ## 2026-05-25 · 0.4.8 — 打磨批（11 项 / M18 + M8 + M13 + Token rate limit）
 
 ### 背景
