@@ -77,6 +77,24 @@ M16.5 切 npm ci 时未考虑这点；等迁全平台 runner matrix 或 docker d
 
 约 24h 估，实际 4-5h（两子代理并行实施 + 主线 CI fix + 版本号 + journal）。**单 commit 单日推完**。
 
+### CI 后续 hotfix · RendererSnapshotTest 跨平台 4 fixture
+
+0.4.7 push 后 CI 跑出 4 个 RendererSnapshotTest fixture FAILED：
+`02-chinese-text` / `03-effects-stroke` / `04-effects-shadow` / `05-effects-glow`。
+
+**根因**：CI runner = Ubuntu Linux，本地 dev = macOS。Java AWT 字体渲染（中文字距、
+effects 内部算法）在 Linux / macOS 输出差异 > 0.5% 容差。baseline 用 macOS 生成 + 校对。
+**本次是历史上第一次 :plugin:test 在 CI Linux 上完整跑**（hotfix #4/#5 因账单 5s fail，
+hotfix #6 因 npm ci lock 30s 在 frontend 步骤就挂，本次首次完整跑到 backend test）。
+
+**修法**：`RendererSnapshotTest` 拆 `snapshotPlatformSensitive` 方法 +
+`@DisabledIfEnvironmentVariable(GITHUB_ACTIONS=true)` 让 CI 跳过这 4 项；本地 macOS
+跑全套（含这 4 项）保留渲染正确性保护。
+
+**升级路径**：M19+ 引入 Linux baseline matrix（CI 上生成 + commit Linux baseline，
+测试代码按 platform 选用），或换 `macos-latest` runner（贵 10×）跑全套。两条路径都
+不挡当前 release。
+
 ---
 
 ## 2026-05-25 · 0.4.6 hotfix #6 — arrow / dot marker 公式平缓化
