@@ -16,18 +16,21 @@ import java.awt.image.BufferedImage;
  *             else:         out = 1 - 2 * (1 - src) * (1 - dst)
  * </pre>
  *
- * <h2>合成（W3C blending 简化版）</h2>
+ * <h2>合成（W3C source-over 标准）</h2>
  * <pre>
  *   for each pixel:
  *     src_a = (srcAlpha / 255) * layerOpacity
  *     if src_a == 0: skip
+ *     dst_a = dstAlpha / 255
  *     blend_rgb = blendChannel(srcRGB, dstRGB, mode)   // per channel
- *     out_rgb   = blend_rgb * src_a + dst_rgb * (1 - src_a)
- *     out_a     = src_a + dst_a * (1 - src_a)         // dst 是主 buffer (RGB) → dst_a 视为 1
+ *     out_a   = src_a + dst_a * (1 - src_a)
+ *     out_rgb = (blend_rgb * src_a + dst_rgb * dst_a * (1 - src_a)) / out_a
+ *     # out_a == 0 → 输出全透明 #00000000
  * </pre>
  *
- * <p><b>注意：</b> 主 buffer 是 {@code TYPE_INT_RGB}（无 alpha 通道），合成时
- * 目标 alpha 视为 1。{@link #applyBlendModeOver} 输出永远是不透明 RGB。</p>
+ * <p><b>Ultrareview 2026-05-25 #7（0.4.6 P2 修正）：</b>主 buffer 已升 TYPE_INT_ARGB 支持
+ * 透明背景；slow path 必须按真 source-over 合成 alpha 通道，不能再强写 0xFF 不透明
+ * （之前 layer.opacity ≠ 1 / blendMode ≠ NORMAL 路径会把背景透明像素变成不透明黑）。</p>
  *
  * <h2>双端一致性</h2>
  * 前端 {@code web/src/render/BlendModes.ts} 必须与本类逐行公式一致；任何一边修改要
@@ -69,6 +72,7 @@ public final class BlendModes {
                 int sg = (srcArgb >> 8) & 0xff;
                 int sb = srcArgb & 0xff;
                 int dstArgb = dstRow[x];
+                int da = (dstArgb >>> 24) & 0xff;
                 int dr = (dstArgb >> 16) & 0xff;
                 int dg = (dstArgb >> 8) & 0xff;
                 int db = dstArgb & 0xff;
@@ -77,12 +81,24 @@ public final class BlendModes {
                 int bg = blendChannel(sg, dg, mode);
                 int bb = blendChannel(sb, db, mode);
 
-                // source-over with srcA: out = blend * srcA + dst * (1 - srcA)
+                // Ultrareview 2026-05-25 #7：W3C source-over 完整公式（含 alpha）。
+                // outA = srcA + dstA * (1 - srcA)
+                // outRGB = (blend * srcA + dst * dstA * (1 - srcA)) / outA
+                // 主 buffer 升 ARGB 后 alpha 必须真传递，不能强写 0xFF。
+                float dstAf = da / 255f;
                 float invA = 1f - srcA;
-                int outR = clamp255(Math.round(br * srcA + dr * invA));
-                int outG = clamp255(Math.round(bg * srcA + dg * invA));
-                int outB = clamp255(Math.round(bb * srcA + db * invA));
-                dstRow[x] = 0xff000000 | (outR << 16) | (outG << 8) | outB;
+                float outAf = srcA + dstAf * invA;
+                int outR, outG, outB, outA;
+                if (outAf <= 0f) {
+                    outR = outG = outB = outA = 0;  // 全透明像素
+                } else {
+                    float weight = dstAf * invA;
+                    outR = clamp255(Math.round((br * srcA + dr * weight) / outAf));
+                    outG = clamp255(Math.round((bg * srcA + dg * weight) / outAf));
+                    outB = clamp255(Math.round((bb * srcA + db * weight) / outAf));
+                    outA = clamp255(Math.round(outAf * 255f));
+                }
+                dstRow[x] = (outA << 24) | (outR << 16) | (outG << 8) | outB;
             }
             dst.setRGB(0, y, w, 1, dstRow, 0, w);
         }

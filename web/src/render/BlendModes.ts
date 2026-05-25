@@ -11,10 +11,14 @@ import type { BlendMode } from '@/types/protocol';
  * - overlay:  if dst < 0.5: out = 2 * src * dst
  *             else:         out = 1 - 2 * (1 - src) * (1 - dst)
  *
- * 合成：source-over with effective srcAlpha = (srcA/255) * layerOpacity
- *   out = blend * srcA + dst * (1 - srcA)
+ * 合成（W3C source-over 标准）：
+ *   srcA = (srcAlpha/255) * layerOpacity
+ *   dstA = dstAlpha/255
+ *   outA = srcA + dstA * (1 - srcA)
+ *   outRGB = (blend * srcA + dst * dstA * (1 - srcA)) / outA
  *
- * 主 buffer 视为不透明 RGB；layer buffer 为 ARGB。
+ * Ultrareview 2026-05-25 #7：主 buffer 已支持透明（0.4.6 P2 ARGB），
+ * 必须按真 source-over 合成 alpha，不能再强写 255。
  *
  * 任何修改要与后端 BlendModes.java 同步，否则双端预览像素漂移。
  */
@@ -66,16 +70,25 @@ export function applyBlendModeOver(
         const dr = dd[i];
         const dg = dd[i + 1];
         const db = dd[i + 2];
+        const da = dd[i + 3];
 
         const br = blendChannel(sr, dr, mode);
         const bg = blendChannel(sg, dg, mode);
         const bb = blendChannel(sb, db, mode);
 
+        // Ultrareview 2026-05-25 #7：W3C source-over with alpha pass-through。
+        const dstAf = da / 255;
         const invA = 1 - srcA;
-        dd[i]     = clamp255(Math.round(br * srcA + dr * invA));
-        dd[i + 1] = clamp255(Math.round(bg * srcA + dg * invA));
-        dd[i + 2] = clamp255(Math.round(bb * srcA + db * invA));
-        dd[i + 3] = 255;
+        const outAf = srcA + dstAf * invA;
+        if (outAf <= 0) {
+            dd[i] = dd[i + 1] = dd[i + 2] = dd[i + 3] = 0;
+        } else {
+            const weight = dstAf * invA;
+            dd[i]     = clamp255(Math.round((br * srcA + dr * weight) / outAf));
+            dd[i + 1] = clamp255(Math.round((bg * srcA + dg * weight) / outAf));
+            dd[i + 2] = clamp255(Math.round((bb * srcA + db * weight) / outAf));
+            dd[i + 3] = clamp255(Math.round(outAf * 255));
+        }
     }
 }
 

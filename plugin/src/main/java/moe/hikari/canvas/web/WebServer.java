@@ -47,7 +47,6 @@ import java.util.logging.Logger;
  * <ul>
  *   <li>{@code GET /api/session/:token} — HTTP 预握手，校验 token 并返回会话元信息</li>
  *   <li>{@code WS /ws} — auth-first 协议：首帧必须是 {@code op=auth}</li>
- *   <li>M1 demo {@code op=paint} 保留——待 T11 命令族与 WS 编辑协议族成熟后删</li>
  * </ul>
  *
  * <p>M3 已实装 token rotate（auth 成功后回发 {@code reconnectToken} 给前端，供 WS
@@ -67,7 +66,6 @@ public final class WebServer {
     private final TokenService tokenService;
     private final SessionManager sessionManager;
     private final String serverVersion;
-    private final Runnable paintHandler;  // M1 demo
     /** M16 P1.2：WS auth 超时秒。0 < x ≤ 60。 */
     private final int wsAuthTimeoutSeconds;
     /** M16 P1.3：除回环 + 同源外的额外 Origin 白名单（公网反代用）。 */
@@ -164,7 +162,7 @@ public final class WebServer {
                      moe.hikari.canvas.variable.provider.VariableProviderDaemon variableProviderDaemon,
                      moe.hikari.canvas.storage.VariableAliasDao variableAliasDao,
                      org.bukkit.plugin.java.JavaPlugin plugin,
-                     String serverVersion, Runnable paintHandler,
+                     String serverVersion,
                      int wsAuthTimeoutSeconds,
                      List<String> allowedOrigins) {
         this.log = log;
@@ -186,7 +184,6 @@ public final class WebServer {
         this.iconRegistry = iconRegistry;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
-        this.paintHandler = paintHandler;
 
         // M15.x god-class 拆分：dispatcher 通过 OpPushCallback 触发服务端主动推送，
         // 避免直接耦合 wsBySession 映射。
@@ -694,10 +691,6 @@ public final class WebServer {
         sessionManager.touch(bound);
         switch (in.op()) {
             case "ping" -> ctx.send(Envelope.pong(in.id()));
-            case "paint" -> {
-                paintHandler.run();  // M1 demo 通道；M3 保留作为回归测试通道，M7 polish 时删
-                ctx.send(Envelope.of("ack", in.id(), Map.of("submitted", true)));
-            }
             case "element.add",
                  "element.update",
                  "element.delete",
@@ -814,6 +807,41 @@ public final class WebServer {
             ctx.send(Envelope.error(in.id(), "AUTH_FAILED", "session not available"));
             closeAuthFailed(ctx, "session missing/closing");
             return;
+        }
+
+        // Ultrareview 2026-05-25 #3：auth 时重新校验 canvas.edit。token 签发后玩家被撤权
+        // （lp / pex / 配置 reload）→ 拒绝继续认证。Bukkit.hasPermission 必须主线程，
+        // 用 callSyncMethod 同步等待结果（auth 路径是 Jetty 线程，可阻塞少量时间）。
+        // 离线玩家放行（player == null）—— 玩家已不在线，token 又一次性，重连受 IP 绑定保护。
+        try {
+            Boolean allowed = org.bukkit.Bukkit.getScheduler().callSyncMethod(plugin, () -> {
+                org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(session.playerUuid());
+                if (live == null) return Boolean.TRUE;  // 玩家离线，放行
+                return live.hasPermission("canvas.edit");
+            }).get(2, java.util.concurrent.TimeUnit.SECONDS);
+            if (allowed == null || !allowed) {
+                log.warning("WS auth permission revoked sid=" + session.id()
+                        + " player=" + session.playerName() + " canvas.edit=false");
+                if (auditLog != null) {
+                    java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                    details.put("operation", "ws.auth");
+                    details.put("required", "canvas.edit");
+                    auditLog.record("PERMISSION_DENIED",
+                            session.playerUuid().toString(), session.playerName(),
+                            session.id(), null, details);
+                }
+                ctx.send(Envelope.error(in.id(), "PERMISSION_DENIED",
+                        "canvas.edit permission revoked"));
+                closePermissionRevoked(ctx, "canvas.edit_revoked");
+                return;
+            }
+        } catch (java.util.concurrent.TimeoutException te) {
+            // 主线程繁忙：保守放行，避免拒绝合法玩家
+            log.warning("WS auth permission check timeout sid=" + session.id()
+                    + "; allowing through (main thread busy)");
+        } catch (Exception pe) {
+            // 校验路径异常：保守放行，记日志
+            log.log(Level.WARNING, "WS auth permission check error sid=" + session.id(), pe);
         }
 
         // M16 P6.6：会话级 IP 绑定。首次 auth 时 sessionManager 写下 boundIp；reconnect 必须 IP 同源。
@@ -971,6 +999,15 @@ public final class WebServer {
     private void closeAuthFailed(WsContext ctx, String reason) {
         ctx.closeSession(4001, "AUTH_FAILED");
         log.info("WS closed 4001 AUTH_FAILED: " + reason);
+    }
+
+    /**
+     * Ultrareview 2026-05-25 #3：close 4003 = 认证后权限被撤销。沿用 session-takeover 同款
+     * 4003 close code（client 看到 4003 即放弃重连）。
+     */
+    private void closePermissionRevoked(WsContext ctx, String reason) {
+        ctx.closeSession(4003, "PERMISSION_REVOKED");
+        log.info("WS closed 4003 PERMISSION_REVOKED: " + reason);
     }
 
     /**

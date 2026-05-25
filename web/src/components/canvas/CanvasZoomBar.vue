@@ -115,6 +115,7 @@ function cancelZoomEdit() {
     <Tooltip :text="t.canvas.gridTip">
       <label class="flex items-center gap-1 pl-2 border-l border-[color:var(--border)] ml-1">
         <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.canvas.grid }}</span>
+        <!-- 2026-05-25 ultrareview #8：grid 改值是 canvas mutation，lock 时禁用 -->
         <input
           type="number"
           min="0"
@@ -122,6 +123,7 @@ function cancelZoomEdit() {
           step="1"
           class="hc-grid-input"
           :value="props.gridSize"
+          :disabled="project.isLocked"
           @change="(ev) => emit('gridChange', ev)"
         >
       </label>

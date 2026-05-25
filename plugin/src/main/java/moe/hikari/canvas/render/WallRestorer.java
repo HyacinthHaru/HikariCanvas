@@ -174,7 +174,8 @@ public final class WallRestorer {
     }
 
     private static boolean isPristine(ProjectState state) {
-        return state.elements().isEmpty() && isWhiteSolid(state.canvas().background());
+        // Ultrareview 2026-05-25 #6：见 CanvasProjector.isPristine 同款修复
+        return state.isPristineAcrossLayers() && isWhiteSolid(state.canvas().background());
     }
 
     /**

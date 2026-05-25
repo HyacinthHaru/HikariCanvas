@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue';
 import { isDrawTool, useUiStore, type ActiveTool } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
+import { useLockGuard } from './useLockGuard';
 
 /**
  * M9-E：drag-to-create（line / arrow / circle / star）+ drawDrag 状态 + commitDraw。
@@ -18,6 +19,9 @@ import { getWsClient } from '@/network/wsClient';
 export function useDrawToCreate() {
     const ui = useUiStore();
     const ws = getWsClient();
+    // 2026-05-25 ultrareview #8：lock 多入口 guard 内层防线（stage overlay 已挡 mousedown，
+    // 但用户先 mousedown 起拖再被远端 lock 时本地 mouseup 仍会走 commitDraw —— 此处兜底）
+    const lockGuard = useLockGuard();
 
     interface DrawDrag { x1: number; y1: number; x2: number; y2: number; shiftLocked: boolean; }
     const drawDrag = ref<DrawDrag | null>(null);
@@ -198,6 +202,10 @@ export function useDrawToCreate() {
         }
 
         if (type && props) {
+            if (!lockGuard.guardMutation('drawTool')) {
+                ui.setTool('select');
+                return;
+            }
             ws.send('element.add', { type, props });
         }
         ui.setTool('select');

@@ -90,6 +90,13 @@ public final class SessionManager {
     private final List<Consumer<String>> forgetHooks = new CopyOnWriteArrayList<>();
 
     /**
+     * Ultrareview 2026-05-25 #5：session forget <b>之前</b> 调用——session 仍在 byId 内，
+     * 让 throttler 等可以走"flush pending 尾帧"路径（discardSession 只 cancel + 清 pending，
+     * 会丢最后一次编辑落入节流窗口的尾帧）。
+     */
+    private final List<Consumer<String>> preForgetHooks = new CopyOnWriteArrayList<>();
+
+    /**
      * 0.4.0-P1-C：wall 删除时调用，让 VariableStore 清掉 wall 的倒排索引（避免被删 wall 仍
      * 出现在 referencedByWalls 列表里、变量值变更触发已不存在 wall 的 dirty）。
      * callback 接收被删的 wallId；线程安全（CopyOnWriteArrayList）。
@@ -99,6 +106,14 @@ public final class SessionManager {
     /** 注册 session forget 监听。callback 接收被 forget 的 sessionId。线程安全。 */
     public void addForgetHook(Consumer<String> hook) {
         forgetHooks.add(hook);
+    }
+
+    /**
+     * Ultrareview 2026-05-25 #5：注册"forget 前"监听。在 session 离开 byId 之前调，让
+     * ProjectionThrottler 等组件能 flush pending 尾帧（discardSession 只 cancel 不 flush）。
+     */
+    public void addPreForgetHook(Consumer<String> hook) {
+        preForgetHooks.add(hook);
     }
 
     /**
@@ -202,6 +217,11 @@ public final class SessionManager {
         record WallFailed(WallResolver.Result.Failed reason) implements ConfirmResult {}
         record WallOccupied(String otherSessionId, UUID otherPlayer) implements ConfirmResult {}
         record PoolExhausted(String message) implements ConfirmResult {}
+        /**
+         * Ultrareview 2026-05-25 #2：locked wall 二次编辑 + 非 owner + 无 bypass 权限 → 拒绝。
+         * 与 {@link OpenResult.Forbidden} 同款；调用方应给玩家显示 "wall is locked by owner"。
+         */
+        record Forbidden(String message) implements ConfirmResult {}
     }
 
     /**
@@ -273,6 +293,27 @@ public final class SessionManager {
         final java.util.Deque<Runnable> rollbacks = new java.util.ArrayDeque<>();
 
         try {
+            // Ultrareview 2026-05-25 #2：locked existing wall 二次编辑路径的 owner 校验
+            // —— 与 OpenResult 路径一致。/canvas edit + confirm 撞上别人的 locked wall：
+            // 非 owner + 无 canvas.admin.bypass-lock → Forbidden（防止绕过 /canvas open
+            // 已有的 lock 校验拿到编辑 token）。Bukkit.getPlayer 调用在 confirm assertMainThread
+            // 路径下安全，但放在锁外。
+            if (existing != null && existing.publishedAt() != null
+                    && !s.playerUuid().equals(existing.ownerUuid())) {
+                org.bukkit.entity.Player live = Bukkit.getPlayer(s.playerUuid());
+                boolean bypass = live != null && live.hasPermission("canvas.admin.bypass-lock");
+                if (!bypass) {
+                    LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+                    details.put("operation", "confirm");
+                    details.put("wall_id", existing.wallId());
+                    details.put("caller", s.playerUuid().toString());
+                    details.put("reason", "lock_owner_only");
+                    auditLog.record("PERMISSION_DENIED", s.playerUuid().toString(),
+                            s.playerName(), sessionId, null, details);
+                    return new ConfirmResult.Forbidden(
+                            "wall '" + existing.wallId() + "' is locked by its owner");
+                }
+            }
             if (hasFrames && existing != null && !existing.mapIds().isEmpty()
                     && mapPool.bindToWall(existing.wallId(), existing.mapIds(), wall.world())) {
                 // 自家画框 + walls 行齐全 → 二次编辑路径。bindToWall 接受 FREE 或同 wallId
@@ -620,6 +661,10 @@ public final class SessionManager {
         if (s == null) return;
         if (s.state() == SessionState.CLOSING) return;
 
+        // Ultrareview 2026-05-25 #5：先 flush pending 尾帧（session 还在 byId 才能 flush 成功），
+        // 再走 cancel 主流程。preForgetHooks 异常隔离避免单个 hook 拖垮 cancel。
+        runPreForgetHooks(sessionId);
+
         writeLock.lock();
         try {
             // 锁内再校验（防 race：另一线程已并发 cancel/forget）
@@ -734,7 +779,21 @@ public final class SessionManager {
      */
     public void submitFullCanvasDirtyByWall(String wallId,
                                             moe.hikari.canvas.render.ProjectionThrottler throttler) {
-        if (wallId == null || throttler == null) return;
+        submitFullCanvasDirtyByWallAndReport(wallId, throttler);
+    }
+
+    /**
+     * Ultrareview 2026-05-25 #1：同 {@link #submitFullCanvasDirtyByWall} 但返回是否找到任何
+     * 活跃 session 提交。{@code false} 表示该 wall 部署在游戏内但没人开编辑器，调用方应
+     * 走 deploy-only refresh 路径（{@link moe.hikari.canvas.render.CanvasProjector#projectByWall}）
+     * 让外部变量驱动的渲染不丢更新。
+     *
+     * @return true = 至少一个活跃 session 已被 submit；false = 无活跃 session
+     */
+    public boolean submitFullCanvasDirtyByWallAndReport(String wallId,
+                                                       moe.hikari.canvas.render.ProjectionThrottler throttler) {
+        if (wallId == null || throttler == null) return false;
+        boolean any = false;
         for (Session s : byId.values()) {
             if (s.state() == SessionState.CLOSING) continue;
             if (!wallId.equals(s.wallId())) continue;
@@ -742,7 +801,9 @@ public final class SessionManager {
             if (ps == null) continue;
             throttler.submit(s.id(),
                     moe.hikari.canvas.render.DirtyRegion.fullCanvas(ps));
+            any = true;
         }
+        return any;
     }
 
     /**
@@ -1067,6 +1128,20 @@ public final class SessionManager {
                 hook.accept(sessionId);
             } catch (RuntimeException e) {
                 log.warning("SessionManager: forget hook threw for " + sessionId + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Ultrareview 2026-05-25 #5：在 session forget <b>之前</b>跑（session 还在 byId 内）。
+     * 给 throttler 一个机会 flush pending 尾帧。锁外执行避免持锁回调反向 lock-order。
+     */
+    private void runPreForgetHooks(String sessionId) {
+        for (Consumer<String> hook : preForgetHooks) {
+            try {
+                hook.accept(sessionId);
+            } catch (RuntimeException e) {
+                log.warning("SessionManager: pre-forget hook threw for " + sessionId + ": " + e.getMessage());
             }
         }
     }

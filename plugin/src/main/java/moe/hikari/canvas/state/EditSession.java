@@ -668,10 +668,15 @@ public final class EditSession {
         // 0.4.6 P3：bold / italic 字段（向下兼容 null）
         Boolean bold = boolFieldOrNull(p, "bold");
         Boolean italic = boolFieldOrNull(p, "italic");
+        // Ultrareview 2026-05-25 #12：build 路径需保留 v2 BaseElement 通用字段
+        // （opacity / blendMode / renderMode），否则 element.add 携带的视觉字段被服务端丢弃。
+        Float opacity = parseOpacityNullable(p.get("opacity"));
+        BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
+        RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
         return new TextElement(id, x, y, w, h, rotation, locked, visible,
                 text, fontId, fontSize, color, align,
                 letterSpacing, lineHeight, vertical, effects,
-                null, null, null,
+                opacity, blendMode, renderMode,
                 bold, italic);
     }
 
@@ -688,8 +693,12 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "rect needs fill or non-zero stroke");
         }
+        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
+        Float opacity = parseOpacityNullable(p.get("opacity"));
+        BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
+        RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
         return new RectElement(id, x, y, w, h, rotation, locked, visible, fill, stroke,
-                null, null, null);
+                opacity, blendMode, renderMode);
     }
 
     // ---------- M9 PathElement ----------
@@ -711,9 +720,13 @@ public final class EditSession {
         }
         String markerStart = parseMarkerNullable(p.get("markerStart"));
         String markerEnd = parseMarkerNullable(p.get("markerEnd"));
+        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
+        Float opacity = parseOpacityNullable(p.get("opacity"));
+        BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
+        RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
         return new PathElement(id, x, y, w, h, rotation, locked, visible,
                 d, fill, stroke, markerStart, markerEnd,
-                null, null, null);
+                opacity, blendMode, renderMode);
     }
 
     private PathElement applyPathPatch(PathElement orig, Map<String, Object> patch) {
@@ -774,9 +787,13 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "circle needs fill or non-zero stroke");
         }
+        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
+        Float opacity = parseOpacityNullable(p.get("opacity"));
+        BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
+        RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
         return new CircleElement(id, x, y, w, h, rotation, locked, visible,
                 fill, stroke,
-                null, null, null);
+                opacity, blendMode, renderMode);
     }
 
     private CircleElement applyCirclePatch(CircleElement orig, Map<String, Object> patch) {
@@ -841,10 +858,14 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "shape needs fill or non-zero stroke");
         }
+        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
+        Float opacity = parseOpacityNullable(p.get("opacity"));
+        BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
+        RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
         return new ShapeElement(id, x, y, w, h, rotation, locked, visible,
                 kind, sides, innerRatio,
                 fill, stroke,
-                null, null, null);
+                opacity, blendMode, renderMode);
     }
 
     private ShapeElement applyShapePatch(ShapeElement orig, Map<String, Object> patch) {
@@ -1182,9 +1203,13 @@ public final class EditSession {
         String source = requireString(p, "source", true);
         validateImageSource(source);
         Mask mask = parseMaskNullable(p.get("mask"));
+        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
+        Float opacity = parseOpacityNullable(p.get("opacity"));
+        BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
+        RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
         return new ImageElement(id, x, y, w, h, rotation, locked, visible,
                 source, mask,
-                null, null, null);
+                opacity, blendMode, renderMode);
     }
 
     private ImageElement applyImagePatch(ImageElement orig, Map<String, Object> patch) {

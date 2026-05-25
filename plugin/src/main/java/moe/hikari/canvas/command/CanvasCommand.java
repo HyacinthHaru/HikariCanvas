@@ -514,6 +514,11 @@ public final class CanvasCommand {
                     NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
+        // Ultrareview 2026-05-25 #2：confirm 撞 locked + 非 owner + 无 bypass → Forbidden
+        if (result instanceof SessionManager.ConfirmResult.Forbidden fb) {
+            player.sendMessage(Component.text(fb.message(), NamedTextColor.RED));
+            return Command.SINGLE_SUCCESS;
+        }
 
         Session sessionAfter;
         WallResolver.Result.Ok wall;

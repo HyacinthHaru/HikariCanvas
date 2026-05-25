@@ -4,6 +4,7 @@ import { useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
 import type { Element, PathElement } from '@/types/protocol';
 import { scalePathD } from '@/render/pathScale';
+import { useLockGuard } from './useLockGuard';
 
 interface TransformEvt { target: {
     x: () => number; y: () => number;
@@ -34,6 +35,8 @@ export function useTransformerManager(opts: {
     const project = useProjectStore();
     const ui = useUiStore();
     const ws = getWsClient();
+    // 2026-05-25 ultrareview #8：transform 完成时再 guard 一次（mid-transform 远端 lock 兜底）
+    const lockGuard = useLockGuard();
 
     function attachTransformer(): void {
         const t = opts.transformerRef.value?.getNode() as undefined | { nodes(ns: unknown[]): void };
@@ -71,6 +74,8 @@ export function useTransformerManager(opts: {
         node.rotation(newRot);
         const el = project.elementById(id);
         if (!el) return;
+        // 2026-05-25 ultrareview #8 内层防线：node 状态已视觉重置；wall 远端被 lock 时不发 op
+        if (!lockGuard.guardMutation('transform')) return;
 
         // 2026-05-14 Bug 修：PathElement 的几何完全由 d 字符串 + stroke.width 决定。
         if (el.type === 'path') {

@@ -419,6 +419,12 @@ export const messages = {
             locked: '已锁定',
             wallStateTip: '可编辑 = 任何能进入这块画板的玩家都能改；已锁定 = 只有作者能解锁，其他人只读',
         },
+        // 2026-05-25 ultrareview #8：lock readonly 多入口 guard 提示。
+        // 通过 useLockGuard.guardMutation 在 mutation 函数入口拦截时显示。
+        lockGuard: {
+            blocked: '画板已锁定，无法编辑（请让作者先解锁）',
+            blockedWithAction: (action: string) => `画板已锁定 — ${action}不可用（请让作者先解锁）`,
+        },
         // 0.4.0-P2-G 新增：变量管理面板 / 对话框 / 错误文案。
         // H 任务会另加 picker / livePreview / hints 子段，最终合并为完整 variables section。
         variables: {
@@ -1186,6 +1192,12 @@ export const messages = {
             unlocked: 'Editable',
             locked: 'Locked',
             wallStateTip: 'Editable = anyone who can open this wall can edit it; Locked = only the owner can unlock, everyone else is read-only',
+        },
+        // 2026-05-25 ultrareview #8: lock readonly multi-entry guard messages.
+        // Shown when useLockGuard.guardMutation rejects a mutation while locked.
+        lockGuard: {
+            blocked: 'Wall is locked — editing blocked (ask the owner to unlock first)',
+            blockedWithAction: (action: string) => `Wall is locked — ${action} unavailable (ask the owner to unlock first)`,
         },
         // 0.4.0-P2-G: variable management panel / dialogs / error strings.
         // H task will add picker / livePreview / hints subsections; merge into one variables section.

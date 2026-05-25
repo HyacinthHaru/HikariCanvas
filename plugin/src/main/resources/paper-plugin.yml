@@ -1,5 +1,5 @@
 name: HikariCanvas
-version: '0.4.6-SNAPSHOT'
+version: '0.4.7-SNAPSHOT'
 main: moe.hikari.canvas.HikariCanvas
 api-version: '1.21'
 authors:

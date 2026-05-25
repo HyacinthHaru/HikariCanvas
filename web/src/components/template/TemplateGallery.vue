@@ -5,6 +5,7 @@ import { useTemplatesStore } from '@/stores/templates';
 import { useProjectStore } from '@/stores/project';
 import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
+import { useLockGuard } from '@/composables/useLockGuard';
 import { useI18n } from '@/i18n';
 import { evalBoolean } from '@/lib/templateExpr';
 import { FONT_META } from '@/render/PreviewRenderer';
@@ -15,6 +16,9 @@ const project = useProjectStore();
 const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
+// 2026-05-25 ultrareview #8：lock 时 apply 必须拒 — TemplateGallery 可被 LeftTools / TopBar 打开，
+// 但 apply 才是真正的 mutation（replaceContent + state.snapshot）。
+const lockGuard = useLockGuard();
 
 const selected = computed<TemplateSpec | null>(() =>
     templates.selectedId ? templates.byId.get(templates.selectedId) ?? null : null);
@@ -131,6 +135,11 @@ function resetParams() {
 async function applyNow() {
     const tpl = selected.value;
     if (!tpl) return;
+    // 2026-05-25 ultrareview #8：lock 状态下拒绝（同时把 confirmStage 清掉，避免按钮卡在 applying）
+    if (!lockGuard.guardMutation(t.value.templates.apply)) {
+        confirmStage.value = null;
+        return;
+    }
     if (hasExistingContent.value && confirmStage.value !== 'pending') {
         confirmStage.value = 'pending';
         return;
@@ -472,10 +481,12 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                 >{{ t.templates.applyConfirm }}</button>
               </template>
               <template v-else>
+                <!-- 2026-05-25 ultrareview #8：lock 状态下禁用 apply 按钮（hover tooltip 通过 :title 提示） -->
                 <button
                   type="button"
                   class="text-xs px-3 py-1.5 rounded bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
-                  :disabled="!net.authenticated || confirmStage === 'applying' || !fitsCurrentWall(selected)"
+                  :disabled="!net.authenticated || confirmStage === 'applying' || !fitsCurrentWall(selected) || lockGuard.readonly.value"
+                  :title="lockGuard.readonly.value ? t.lockGuard.blocked : undefined"
                   @click="applyNow"
                 >
                   <Sparkles class="size-3.5" />

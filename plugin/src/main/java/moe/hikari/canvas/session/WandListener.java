@@ -228,6 +228,10 @@ public final class WandListener implements Listener {
     // ---------- 选区共享逻辑 ----------
 
     private boolean shouldHandle(Player player, ItemStack hand) {
+        // Ultrareview 2026-05-25 #4：交互时重新校验 canvas.edit。曾经合法持有 wand 的玩家
+        // 被撤权（lp user xx permission unset canvas.edit）后仍可触发选区 / open 流程。
+        // 静默忽略 —— UX 上 wand 不响应。
+        if (!player.hasPermission("canvas.edit")) return false;
         boolean hasWand = CanvasWand.isWandFor(hand, player.getUniqueId(), plugin);
         Session existing = sessionManager.byPlayer(player.getUniqueId());
         boolean inSelecting = existing != null && existing.state() == SessionState.SELECTING;

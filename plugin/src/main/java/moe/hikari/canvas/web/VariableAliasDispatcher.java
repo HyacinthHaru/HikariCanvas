@@ -163,8 +163,11 @@ final class VariableAliasDispatcher {
         // 推 state.patch：path=/aliases/<encoded>，value=alias 字符串
         // 已存在的别名 → replace 语义；前端 mirror set(key, value) 幂等，统一用 add 即可。
         // 与 /variables/ 通道同款 RFC 6901 JSON Pointer 编码。
+        // Ultrareview 2026-05-25 #17：用当前 session ProjectState.version 不要写 0
+        // —— 前端 applyPatch 会把空 projectOps 的 patch.version 当作 state.version 覆盖，
+        // 写 0 会把 ProjectState.version 倒退到 0 影响后续 op 冲突判定。
         String path = "/aliases/" + encodeJsonPointer(fullName);
-        StatePatch patch = new StatePatch(0L, List.of(PatchOp.add(path, trimmed)));
+        StatePatch patch = new StatePatch(currentVersion(s), List.of(PatchOp.add(path, trimmed)));
         push.pushPatch(sessionId, patch);
 
         recordAudit("VARIABLE_ALIAS_SET", sessionId, s, wallId, Map.of(
@@ -192,8 +195,9 @@ final class VariableAliasDispatcher {
         int rows = dao.delete(wallId, fullName);
 
         // 即使 rows=0（别名不存在）也推 remove 让前端 mirror 保持一致——idempotent
+        // Ultrareview 2026-05-25 #17：用当前 session ProjectState.version 不要写 0
         String path = "/aliases/" + encodeJsonPointer(fullName);
-        StatePatch patch = new StatePatch(0L, List.of(PatchOp.remove(path)));
+        StatePatch patch = new StatePatch(currentVersion(s), List.of(PatchOp.remove(path)));
         push.pushPatch(sessionId, patch);
 
         recordAudit("VARIABLE_ALIAS_CLEAR", sessionId, s, wallId, Map.of(
@@ -263,6 +267,17 @@ final class VariableAliasDispatcher {
      */
     private static String encodeJsonPointer(String s) {
         return s.replace("~", "~0").replace("/", "~1");
+    }
+
+    /**
+     * Ultrareview 2026-05-25 #17：从 session 拿当前 ProjectState.version。
+     * 别名通道不改 ProjectState 像素 → 不 bump，但要保持前端 mirror 看到的版本号一致。
+     * session 无 ProjectState（极早期）回 0。
+     */
+    private static long currentVersion(Session s) {
+        if (s == null) return 0L;
+        moe.hikari.canvas.state.ProjectState ps = s.projectState();
+        return ps == null ? 0L : ps.version();
     }
 
     private void recordAudit(String event, String sessionId, Session s, String wallId,

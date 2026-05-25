@@ -43,7 +43,12 @@ jobs:
 
       - name: Frontend - install deps
         working-directory: web
-        run: npm ci
+        # 0.4.7 hotfix: macOS dev 用 npm install 时 platform-specific transitive
+        # deps（如 @emnapi/core@1.10.0、@rolldown/binding-* linux 变体）不写入
+        # package-lock.json；CI Linux + npm ci 严格校验失败。fallback 到 npm
+        # install 保证 CI 跑通。M16.5 切 npm ci 时未考虑跨平台 lock 差异；
+        # 等迁到全平台 CI runner matrix 或本地 docker dev 后再切回 npm ci。
+        run: npm ci || (echo "::warning::npm ci failed (likely platform-specific dep mismatch); falling back to npm install" && npm install --no-audit --no-fund)
 
       - name: Frontend - vitest (28 cases)
         working-directory: web

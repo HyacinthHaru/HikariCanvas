@@ -26,6 +26,7 @@ import { useCanvasShortcuts } from '@/composables/useCanvasShortcuts';
 import { usePanScroll } from '@/composables/usePanScroll';
 import { useCanvasUpload } from '@/composables/useCanvasUpload';
 import { useSnapManager, type SnapHints } from '@/composables/useSnapManager';
+import { useLockGuard } from '@/composables/useLockGuard';
 // M18 Live Paint：油漆桶工具支持
 import { useLivePaint, gapToPathElement, elementToPolygon, pointInPolygon } from '@/livepaint';
 import type { GapPolygon } from '@/livepaint';
@@ -40,6 +41,8 @@ const { t } = useI18n();
 const paintBucket = usePaintBucketStore();
 const net = useNetworkStore();
 const variableStore = useVariableStore();
+// 2026-05-25 ultrareview #8：lock 多入口 guard。CanvasView 接入 grid / paint-bucket / icon-drop。
+const lockGuard = useLockGuard();
 
 // ---------- 核心 ref ----------
 const canvasEl = ref<HTMLCanvasElement | null>(null);
@@ -200,6 +203,8 @@ const gridSize = computed(() => project.state?.canvas.gridSize ?? 0);
 function onGridChange(ev: Event): void {
     const v = parseInt((ev.target as HTMLInputElement).value, 10);
     const size = Number.isFinite(v) ? Math.max(0, Math.min(256, v)) : 0;
+    // 2026-05-25 ultrareview #8：lock 状态下 grid 也属于 canvas mutation，必须 guard
+    if (!lockGuard.guardMutation(t.value.canvas.grid)) return;
     ws.send('canvas.grid', { size });
 }
 
@@ -400,6 +405,9 @@ function onHitDblClick(ev: { cancelBubble?: boolean }, id: string): void {
 function onEditTextUpdate(v: string) {
     const el = editingElement.value;
     if (!el) return;
+    // 2026-05-25 ultrareview #8 内层防线：理论上 stage 内编辑触发不了（z-20 overlay 接走 dblclick），
+    // 但 TextInlineEditor 一旦已 focus 在那里时 wall 被远端 lock，本地仍可继续打字 —— guard 一下
+    if (!lockGuard.guardMutation(t.value.tools.addText)) return;
     // optimistic
     (el as unknown as Record<string, unknown>).text = v;
     ws.send('element.update', { elementId: el.id, patch: { text: v } });
@@ -821,6 +829,12 @@ function onDragMove(ev: DragEvt, id: string): void {
 }
 
 function onDragEnd(ev: DragEvt, id: string): void {
+    // 2026-05-25 ultrareview #8 内层防线：drag mid-flight 远端 lock 兜底（理论 overlay 已挡 mousedown）
+    if (!lockGuard.guardMutation('drag')) {
+        dragInitial.value = new Map();
+        activeSnapHints.value = null;
+        return;
+    }
     const node = ev.target;
     const w = node.width();
     const h = node.height();

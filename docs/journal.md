@@ -5,6 +5,80 @@
 
 ---
 
+## 2026-05-25 · 0.4.7 — ultrareview 修复批（12 项 + CI lock fallback）
+
+### 背景
+
+0.4.6 部署后用户跑了一轮 ultrareview（产出 `docs/ultrareview-2026-05-25.md`），扫出
+8 P0/P1 + 13 P2 + 2 P3。两个子代理（A 评估 P0/P1，B 粗筛 P2/P3）**12/12 全部 TRUE**，
+无虚报。0.4.7 范围定为「ultrareview 修复批」，原 M18 Live Paint v1.x 升级 / M8 远期 TODO
+推迟到后续版本。
+
+### CI 失败修复（lock 同步）
+
+0.4.6 hotfix #6 push 后 CI 失败 — `npm ci` 报 `Missing: @emnapi/core@1.10.0
+from lock file`。根因：macOS dev 跑 npm install 时 platform-specific transitive
+deps（emnapi linux 变体、rolldown wasm32 wasi 等）不写入 lock；CI Linux 严格校验失败。
+本地试 `npm install --package-lock-only` + `--force --include=optional` 都不能让
+lock 完全跨平台一致。**实际修法**：`.github/workflows/ci.yml` Frontend install 步骤
+改 `npm ci || npm install --no-audit --no-fund` fallback，并附 `::warning::` 提示。
+M16.5 切 npm ci 时未考虑这点；等迁全平台 runner matrix 或 docker dev 后再切回严格 ci。
+
+### 11 项后端修复（子代理 A，串行实施）
+
+| # | 描述 | 关键文件 |
+|--:|---|---|
+| 1 | 无活跃 session 时动态变量 wall 不重绘 | `CanvasProjector.projectByWall` + `SessionManager.submitFullCanvasDirtyByWallAndReport` + `HikariCanvas.wallDirtyCallback` |
+| 2 | `/canvas edit + confirm` 绕过 lock owner | `SessionManager.confirm` 加 `ConfirmResult.Forbidden` + owner/bypass-lock 校验 |
+| 3 | WS auth 不重检 `canvas.edit` | `WebServer.handleAuth` 加 `Player.hasPermission` 同步检查 + close 4003 PERMISSION_REVOKED |
+| 4 | Wand 撤权后仍可交互 | `WandListener.shouldHandle` 加 `canvas.edit` gate |
+| 5 | session cancel 尾帧丢失 | `ProjectionThrottler.flushNow` + `SessionManager.preForgetHooks` |
+| 6 | `isPristine` 多图层误判 | `ProjectState.isPristineAcrossLayers` + `CanvasProjector` / `WallRestorer` 接入 |
+| 7 | 透明背景 blend slow path 强写不透明 | `BlendModes` 双端（Java + TS）改 W3C source-over 真实 alpha |
+| 8 | 调试 paint op 删除（M1→0.4.6 残留） | `WebServer.case "paint"` + `HikariCanvas.paintAllSessionMaps` + 字段 / 构造参数 |
+| 9 | `element.add` 丢 v2 字段 | `EditSession.buildText/Rect/Path/Circle/Shape/Image` 读 `opacity/blendMode/renderMode` |
+| 10 | alias dispatcher version=0 覆盖 | `VariableAliasDispatcher.handleSet/Clear` 用 `s.projectState().version()` |
+| 11 | `VariableInterpolator` 不查 `isStale` | `resolveValue` 加 `!v.isStale(now)` 条件 — 过期值走 fallback 链 |
+
+### 前端 #8 修复（子代理 B）
+
+- **新建** `web/src/composables/useLockGuard.ts` — 抽 `isLocked` / `isOwner` / `isReadonly` /
+  `guardMutation(actionName)` 早 return helper，含 i18n `lockGuard.blocked*` toast + DEV-only console.warn
+- **接入** LeftTools 9 按钮 / TemplateGallery applyNow / CanvasZoomBar grid input /
+  CanvasView onGridChange + onEditTextUpdate + onDragEnd / useDrawToCreate.commitDraw /
+  useTransformerManager.onTransformEnd；已有 guard（useClipboard.paste / useCanvasUpload /
+  IconLibrary / App 全局快捷键）保留不动
+- **决策**：`isReadonly = isLocked`（与既有约定一致，owner 也需先解锁才编辑），不用
+  `isLocked && !isOwner`；variable / schedule / rail mutation 不冻结（跨 wall 共享语义）
+- **新增** 7 个 vitest case 覆盖 useLockGuard 各分支
+
+### 测试结果
+
+- 后端 `:plugin:test` BUILD SUCCESSFUL — **820** 全绿（fixture baseline 0 漂移，因
+  isPristine 短路 + 现有 fixture 全 alpha=255 不触发新 blend 公式）
+- 前端 `vitest --run` — **168** 全绿（原 161 + 新 7 useLockGuard）
+- shadow jar `HikariCanvas-0.4.7-SNAPSHOT.jar` ~155 MB
+- CI yaml fallback 验证：push 后看 GitHub Actions 走 `npm install` 路径
+
+### 关键架构纪律（已固化）
+
+1. **dirty callback 双路径**：动态变量 dirty 时若有活跃 session 走 session redraw；
+   无活跃 session hop 主线程调 `CanvasProjector.projectByWall` — 部署 wall 也能更新
+2. **lock 校验在所有 wall-acquire 入口**：open / confirm-into-existing 两条路径都需读
+   `published_at` + owner + bypass-lock；只在 open 加校验是 M5.5 lock-state 实施漏点
+3. **W3C source-over alpha 公式双端镜像**：`outA = srcA + dstA*(1-srcA)`，
+   `outRGB = (blend*srcA + dst*dstA*(1-srcA)) / outA`；删 `0xff000000 |` 强制不透明掩码
+4. **`useLockGuard` 是前端 lock 唯一执行点**：所有 mutation 入口接 `guardMutation` 早 return，
+   后端 op 仍透明放行（lock-state 设计第 2 + 5 条）
+5. **`isStale` 必须参与 fallback 链**：cached → `!isStale` → inline fallback → default → "???"，
+   过期值不返渲染路径
+
+### 实施工时
+
+约 24h 估，实际 4-5h（两子代理并行实施 + 主线 CI fix + 版本号 + journal）。**单 commit 单日推完**。
+
+---
+
 ## 2026-05-25 · 0.4.6 hotfix #6 — arrow / dot marker 公式平缓化
 
 ### 用户报告

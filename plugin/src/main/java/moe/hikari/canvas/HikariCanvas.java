@@ -61,12 +61,9 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.Arrays;
 
 @SuppressWarnings("UnstableApiUsage") // Paper Lifecycle API 标记为 experimental 但稳定可用
 public final class HikariCanvas extends JavaPlugin {
-
-    private static final byte RED_PALETTE = 18;
 
     private Database database;
     private AuditLog auditLog;
@@ -286,8 +283,16 @@ public final class HikariCanvas extends JavaPlugin {
         UserVariableDao userVariableDao = new UserVariableDao(getLogger(), database.jdbi());
         variableStore = new VariableStore(userVariableDao,
                 wallId -> {
-                    if (sessionManager != null && projectionThrottler != null) {
-                        sessionManager.submitFullCanvasDirtyByWall(wallId, projectionThrottler);
+                    if (sessionManager == null || projectionThrottler == null) return;
+                    boolean handled = sessionManager.submitFullCanvasDirtyByWallAndReport(
+                            wallId, projectionThrottler);
+                    // Ultrareview 2026-05-25 #1：无活跃 editor session 时走 deploy-only refresh，
+                    // 不让动态变量更新被"editor 关着"挡掉。CanvasProjector 内部线程安全（参见
+                    // 该类 javadoc），但 callback 是 VariableStore 后台线程触发——保守 hop 主线程
+                    // 避免与 ItemFrame / MapView 写入竞态。
+                    if (!handled && canvasProjector != null) {
+                        org.bukkit.Bukkit.getScheduler().runTask(this,
+                                () -> canvasProjector.projectByWall(wallId));
                     }
                 });
         variableStore.loadFromDb();
@@ -407,6 +412,9 @@ public final class HikariCanvas extends JavaPlugin {
                 projectionIntervalMs);
         rateLimiter = new SessionRateLimiter(config.inputBurst,
                 Math.max(1000L, (long) config.inputBurst * 1000 / Math.max(1, config.inputRatePerSecond)));
+        // Ultrareview 2026-05-25 #5：先 flushNow 把节流窗口内的 pending 尾帧落地，
+        // 再 discardSession 取消任务清状态——保证 session cancel 时游戏内地图不停在倒数第二帧。
+        sessionManager.addPreForgetHook(projectionThrottler::flushNow);
         sessionManager.addForgetHook(projectionThrottler::discardSession);
         sessionManager.addForgetHook(rateLimiter::discardSession);
 
@@ -476,7 +484,7 @@ public final class HikariCanvas extends JavaPlugin {
                 variableStore, scheduleDao, manualScheduleProviderRef,
                 railDao, railScheduleProviderRef,
                 variableProviderDaemon, variableAliasDao, this,
-                version, this::paintAllSessionMaps,
+                version,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins);
         webServer.start();
 
@@ -639,25 +647,4 @@ public final class HikariCanvas extends JavaPlugin {
         getLogger().info("HikariCanvas disabled");
     }
 
-    /**
-     * 被 WebServer 的 {@code paint} op 触发：把所有活跃会话的全部 mapIds 涂红。
-     * 走 {@link HikariCanvasRenderer#update} 存像素，Paper tick 自动同步给 viewer。
-     * M2 demo 一般只有 1 个会话，效果等同于"把该会话墙面全涂红"。
-     */
-    private void paintAllSessionMaps() {
-        Bukkit.getScheduler().runTask(this, () -> {
-            byte[] pixels = new byte[128 * 128];
-            Arrays.fill(pixels, RED_PALETTE);
-            int painted = 0;
-            for (String sid : sessionManager.liveSessionIds()) {
-                var s = sessionManager.byId(sid);
-                if (s == null || s.mapIds() == null) continue;
-                for (Integer mapId : s.mapIds()) {
-                    canvasRenderer.update(mapId, pixels);
-                    painted++;
-                }
-            }
-            getLogger().info("WS paint op: painted " + painted + " session maps");
-        });
-    }
 }

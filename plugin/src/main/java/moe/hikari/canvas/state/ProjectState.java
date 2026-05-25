@@ -200,6 +200,22 @@ public final class ProjectState {
         return Collections.unmodifiableList(activeLayer().elements());
     }
 
+    /**
+     * Ultrareview 2026-05-25 #6：多图层 pristine 判定。等价于"所有 layer 都不会贡献像素"——
+     * empty / hidden / opacity=0。
+     *
+     * <p>背景：旧 {@link #elements()} 只返回 active layer，多图层工程若 active layer 空但其他
+     * visible layer 有内容会被误判为 pristine，启动 restore / projector 走 placeholder 抹掉真实内容。</p>
+     */
+    public boolean isPristineAcrossLayers() {
+        for (Layer l : layers) {
+            if (!l.visible()) continue;
+            if (l.opacity() == 0f) continue;
+            if (!l.elements().isEmpty()) return false;
+        }
+        return true;
+    }
+
     public int indexOfElement(String elementId) {
         List<Element> es = activeLayer().elements();
         for (int i = 0; i < es.size(); i++) {

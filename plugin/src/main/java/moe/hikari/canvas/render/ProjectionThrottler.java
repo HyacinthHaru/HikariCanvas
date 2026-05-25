@@ -175,4 +175,26 @@ public final class ProjectionThrottler {
             b.pending = null;
         }
     }
+
+    /**
+     * Ultrareview 2026-05-25 #5：session cancel / 关闭前同步 flush pending region，
+     * 确保最后一帧编辑落到地图上。如果调用方紧接着会 {@link #discardSession}，
+     * 调用顺序应该是先 flushNow 后 discardSession——flushNow 持锁短暂跑 projector.project，
+     * 不影响 discardSession 的 Bukkit task cancel。
+     *
+     * <p>session 已不在 SessionManager 时（forget 已先发生）{@link #flushLocked} 内部
+     * 自然短路（{@code sessionManager.byId(sessionId) == null}），安全 no-op。</p>
+     */
+    public void flushNow(String sessionId) {
+        Bucket b = bySession.get(sessionId);
+        if (b == null) return;
+        synchronized (b) {
+            if (b.pending == null) return;
+            if (b.flushTask != null) {
+                b.flushTask.cancel();
+                b.flushTask = null;
+            }
+            flushLocked(sessionId, b, System.currentTimeMillis());
+        }
+    }
 }

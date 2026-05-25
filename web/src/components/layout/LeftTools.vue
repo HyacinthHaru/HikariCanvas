@@ -6,6 +6,7 @@ import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
 import { useIconLibraryStore } from '@/stores/iconLibrary';
+import { useLockGuard } from '@/composables/useLockGuard';
 import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
@@ -16,9 +17,22 @@ const templates = useTemplatesStore();
 const ui = useUiStore();
 const iconLibrary = useIconLibraryStore();
 const { t } = useI18n();
+// 2026-05-25 ultrareview #8：lock readonly 多入口 guard。
+// 工具切换（V/M/H/L/A/C/S/B/G/I）不属于 mutation —— 这些只改前端 UI 状态，
+// 不发 ws.send（select 工具下还能选元素看属性）。所以只 guard 真正下发 op 的按钮：
+// addText / addRect / openTemplates / undo / redo + IconLibrary toggle 之外的按钮。
+const guard = useLockGuard();
 
 function runOp(op: string, payload?: unknown) {
+    // 仅用于 undo / redo —— addText / addRect 走自己的 guard 路径
+    if (!guard.guardMutation(opNameForLog(op))) return;
     ws.send(op, payload);
+}
+
+function opNameForLog(op: string): string {
+    if (op === 'undo') return t.value.tools.undo;
+    if (op === 'redo') return t.value.tools.redo;
+    return op;
 }
 
 /** 居中坐标：避免新元素叠在角落看不见。 */
@@ -36,8 +50,9 @@ function centeredBox(w: number, h: number): { x: number; y: number; w: number; h
 }
 
 function addText() {
+    if (!guard.guardMutation(t.value.tools.addText)) return;
     const box = centeredBox(192, 48);
-    runOp('element.add', {
+    ws.send('element.add', {
         type: 'text',
         props: {
             text: 'TEXT',
@@ -51,11 +66,17 @@ function addText() {
 }
 
 function addRect() {
+    if (!guard.guardMutation(t.value.tools.addRect)) return;
     const box = centeredBox(80, 80);
-    runOp('element.add', {
+    ws.send('element.add', {
         type: 'rect',
         props: { x: box.x, y: box.y, w: box.w, h: box.h, fill: '#FF3366' },
     });
+}
+
+/** 打开模板库不属于 mutation（仅打开 UI）；apply 时 TemplateGallery 自身再 guard。 */
+function openTemplates() {
+    templates.openGallery();
 }
 </script>
 
@@ -185,19 +206,21 @@ function addRect() {
         <Shapes class="size-5" />
       </button>
     </Tooltip>
+    <!-- 模板库打开本身不是 mutation；只有 applyNow 才是（已在 TemplateGallery 内 guard） -->
     <Tooltip :text="t.tools.openTemplates">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="!net.authenticated"
-        @click="templates.openGallery()"
+        @click="openTemplates"
       >
         <Sparkles class="size-5" />
       </button>
     </Tooltip>
+    <!-- 2026-05-25 ultrareview #8：lock 时 disabled，避免视觉误以为可点 -->
     <Tooltip :text="t.tools.addText">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-        :disabled="!net.authenticated"
+        :disabled="!net.authenticated || guard.readonly.value"
         @click="addText"
       >
         <Type class="size-5" />
@@ -206,7 +229,7 @@ function addRect() {
     <Tooltip :text="t.tools.addRect">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-        :disabled="!net.authenticated"
+        :disabled="!net.authenticated || guard.readonly.value"
         @click="addRect"
       >
         <Square class="size-5" />
@@ -218,7 +241,7 @@ function addRect() {
     <Tooltip :text="t.tools.undo" shortcut="Ctrl+Z">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-        :disabled="!net.authenticated"
+        :disabled="!net.authenticated || guard.readonly.value"
         @click="runOp('undo', {})"
       >
         <Undo2 class="size-5" />
@@ -227,7 +250,7 @@ function addRect() {
     <Tooltip :text="t.tools.redo" shortcut="Ctrl+⇧Z">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
-        :disabled="!net.authenticated"
+        :disabled="!net.authenticated || guard.readonly.value"
         @click="runOp('redo', {})"
       >
         <Redo2 class="size-5" />

@@ -208,7 +208,12 @@ public final class VariableInterpolator {
         if (opt.isPresent()) {
             Variable v = opt.get();
             String cur = v.currentValue();
-            if (cur != null && !cur.isEmpty()) return cur;
+            // Ultrareview 2026-05-25 #18：TTL 过期后不再返回 cached value，走 fallback 链。
+            // ttl=0 表示永久；isStale 内已处理。stale 时与"变量不存在"语义一致：触发
+            // dynamic lookup hook 让 Provider 有机会刷新，再走 fallback / default / UNRESOLVED。
+            if (cur != null && !cur.isEmpty() && !v.isStale(System.currentTimeMillis())) {
+                return cur;
+            }
             if (inlineFallback != null) return inlineFallback;
             String def = v.defaultValue();
             if (def != null) return def;
