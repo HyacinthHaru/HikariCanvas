@@ -143,9 +143,14 @@ class EndToEndSmokeTest {
 
     @Test
     void endToEnd_rateLimitDropTail() {
-        // 5/s per-plugin（全局 5/s 同步限制让 per-plugin 也能完整触发）+ no circuit break
+        // 5/s per-plugin（全局 5/s 同步限制让 per-plugin 也能完整触发）+ no circuit break.
+        // 0.4.8 hotfix: 用 fake clock 锁定同窗口避免 CI 慢机器跨 1s 边界 flaky；
+        // 之前用 System.currentTimeMillis，CI Linux 上 5 次 setVariable 可能跨过秒，
+        // 第 6 次进入下一窗口 → 不 drop → assertEquals fail。
+        long fixedNow = 1_700_000_000_000L; // 任意固定毫秒（windowSec = 1_700_000_000）
         PushRateLimiter limiter = new PushRateLimiter(
-                new PushRateLimiter.Config(5, 1_000_000, 0L));
+                new PushRateLimiter.Config(5, 1_000_000, 0L),
+                () -> fixedNow);
         // 重建 API 用窄限流器
         HikariCanvasAPIImpl rlApi = new HikariCanvasAPIImpl(registry, store, daemon, limiter);
         Plugin pluginA = fakePlugin("PluginA");
@@ -157,7 +162,7 @@ class EndToEndSmokeTest {
         }
         assertEquals("5", store.get("test/k").orElseThrow().currentValue());
 
-        // 第 6 次同窗口内被 drop
+        // 第 6 次同窗口内被 drop（fake clock 锁定窗口 → 严格同秒）
         rlApi.setVariable(pluginA, "test", "k", "999", null);
         assertEquals("5", store.get("test/k").orElseThrow().currentValue(),
                 "6th push in same second should be dropped by per-plugin limiter");

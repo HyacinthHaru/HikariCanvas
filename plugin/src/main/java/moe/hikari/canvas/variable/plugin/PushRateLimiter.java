@@ -85,8 +85,11 @@ public final class PushRateLimiter {
         this(config, System::currentTimeMillis);
     }
 
-    /** 测试用构造器——注入自定义时钟。 */
-    PushRateLimiter(Config config, LongSupplier clock) {
+    /**
+     * 测试用构造器——注入自定义时钟（0.4.8 hotfix 起 public 化，让跨包单测可用）。
+     * 生产代码请用 {@link #PushRateLimiter(Config)} 单参版本。
+     */
+    public PushRateLimiter(Config config, LongSupplier clock) {
         this.config = Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
