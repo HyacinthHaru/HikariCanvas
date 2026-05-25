@@ -6,6 +6,7 @@ import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import { preloadImage } from '@/render/PreviewRenderer';
+import { useClipboard, CLIPBOARD_MAGIC } from '@/composables/useClipboard';
 
 /**
  * 2026-05-25 项 3：粘贴板纯文本是否为可下载的 URL。
@@ -56,6 +57,7 @@ export function useCanvasUpload(opts: {
     const net = useNetworkStore();
     const ws = getWsClient();
     const { t } = useI18n();
+    const clipboard = useClipboard();
 
     const uploadError = ref<string | null>(null);
     const uploading = ref(false);
@@ -150,38 +152,78 @@ export function useCanvasUpload(opts: {
         uploadAndPlace(file, e.clientX, e.clientY);
     }
 
+    /**
+     * 2026-05-25 paste 统一 dispatcher：native `paste` event 唯一入口，三路互斥分发。
+     *
+     * <ol>
+     *   <li><b>HikariCanvas magic text</b> → clipboard.paste(e) 处理元素粘贴（M17 F1）。
+     *       同步读 e.clipboardData，不走 async navigator.clipboard.readText（避开
+     *       Safari / FF 的 read permission 提示 + user gesture 要求）。</li>
+     *   <li><b>image File</b>（截图粘贴 / 复制图片粘贴）→ uploadAndPlace（M13-D）。</li>
+     *   <li><b>plain text URL</b>（http/https）→ uploadFromUrl（2026-05-25 项 3）。</li>
+     * </ol>
+     *
+     * <p>历史 bug（2026-05-25 修）：useCanvasShortcuts 在 keydown 阶段 preventDefault
+     * Ctrl+V，导致浏览器不再 fire `paste` event，本 handler 永远收不到事件——
+     * URL 粘贴 + image File 截图粘贴双失效。修法见 useCanvasShortcuts 注释。</p>
+     *
+     * <p>editable 焦点（input/textarea/contenteditable）保留浏览器默认 paste 行为（写入文本）；
+     * 但 HikariCanvas magic 仍接管——否则用户在 TextElementSection 的 input 里 Ctrl+V
+     * 会把 magic 字符串塞进 input 而非粘贴元素。</p>
+     */
     function onPasteImage(e: ClipboardEvent) {
-        if (project.isLocked) return;
-        if (document.activeElement instanceof HTMLTextAreaElement) return;
-        if (document.activeElement instanceof HTMLInputElement) return;
-        if (document.activeElement instanceof HTMLElement
-            && (document.activeElement.isContentEditable
-                || document.activeElement.getAttribute('contenteditable') === 'true')) {
+        if (!e.clipboardData) return;
+
+        const text = e.clipboardData.getData('text/plain') ?? '';
+
+        // 路径 a：HikariCanvas magic text —— 元素粘贴，跨 editable 焦点也接管
+        if (text.startsWith(CLIPBOARD_MAGIC)) {
+            e.preventDefault();
+            void clipboard.paste(e);
             return;
         }
-        const items = e.clipboardData?.items;
-        if (!items) return;
-        for (const item of items) {
-            if (item.kind === 'file' && item.type.startsWith('image/')) {
-                const file = item.getAsFile();
-                if (file) {
-                    uploadAndPlace(file);
-                    e.preventDefault();
-                    return;
+
+        // editable 焦点（input/textarea/contenteditable）下不接管 image File / URL，
+        // 让浏览器默认行为（写入文本框）正常进行。
+        if (isInEditable()) return;
+
+        if (project.isLocked) return;
+
+        // 路径 b：image File（截图 / 复制图片）
+        const items = e.clipboardData.items;
+        if (items) {
+            for (const item of items) {
+                if (item.kind === 'file' && item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    if (file) {
+                        uploadAndPlace(file);
+                        e.preventDefault();
+                        return;
+                    }
                 }
             }
         }
-        // 2026-05-25 项 3：URL 粘贴。文本剪贴板内容是图片 URL 时自动下载并走上传管线。
-        // 仅在没有 file 命中时尝试 URL 路径。
-        // 2026-05-25 bugfix：放宽匹配条件——任何 http(s):// URL 都尝试下载，不再要求
-        // 必须以 .png/.jpg 扩展名结尾（CDN / 签名 URL 几乎从不带扩展）。后端 Content-Type
-        // + magic-bytes + ImageIO 校验已足够 reject 非图片资源。
-        const text = e.clipboardData?.getData('text/plain');
-        const trimmed = text ? text.trim() : '';
+
+        // 路径 c：plain text URL → 自动下载并上传
+        // 2026-05-25 bugfix（0.4.9）：放宽匹配条件——任何 http(s):// URL 都尝试下载，
+        // 不再要求必须以 .png/.jpg 扩展名结尾（CDN / 签名 URL 几乎从不带扩展）。
+        // 后端 Content-Type + magic-bytes + ImageIO 校验已足够 reject 非图片资源。
+        const trimmed = text.trim();
         if (looksLikeHttpUrl(trimmed)) {
             uploadFromUrl(trimmed);
             e.preventDefault();
         }
+    }
+
+    function isInEditable(): boolean {
+        const a = document.activeElement;
+        if (a instanceof HTMLTextAreaElement) return true;
+        if (a instanceof HTMLInputElement) return true;
+        if (a instanceof HTMLElement
+            && (a.isContentEditable || a.getAttribute('contenteditable') === 'true')) {
+            return true;
+        }
+        return false;
     }
 
     /** 2026-05-25 项 3：从 URL 上传。后端 SSRF 校验 + 6 层校验栈复用。 */
@@ -248,5 +290,8 @@ export function useCanvasUpload(opts: {
         onFileInputChange,
         triggerFileInput,
         uploadFromUrl,
+        // 暴露 onPasteImage 供单测直接调用（避开 window listener 跨 test 残留问题）；
+        // 生产代码无需手动调用，已由 useEventListener(window, 'paste', ...) 自动挂载。
+        onPasteImage,
     };
 }

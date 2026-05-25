@@ -514,6 +514,239 @@ describe('elementToMultiPolygonAsync — 0.4.10', () => {
     });
 });
 
+/**
+ * 0.4.10-bugfix-advance-sync：双源 advance 不一致 bug 回归测试。
+ *
+ * Bug：computeLayoutMultiPolygon 原走 fontkit `font.layout(line).positions[i].xAdvance × scale`
+ * 摆位 glyph；PreviewRenderer 视觉位置走 TextLayout.layoutText + charAdvance（ASCII canonical
+ * = round(fontSize * 0.5) = 16 px/char @ fontSize=32 / metrics 表存在时 round(base × size /
+ * baseSize)）。fontkit hmtx 真实 advance ≈ 18 px/char @ fontSize=32 Inter → 5 字符累积偏差
+ * ~10 px > "O" 内孔半径 ~6 px → 用户点击视觉 O 中央时坐标落在 polygon hole 外，Live Paint
+ * 无法识别洞。
+ *
+ * 修法：computeLayoutMultiPolygon 改用 layoutText 同源摆位，只用 fontkit 拿 glyph.path。
+ *
+ * 回归断言：多字符 polygon 的字符簇中心 X ↔ layoutText PositionedGlyph[i].x + glyph_width/2
+ * 必须 ≤ 1 px 差。
+ */
+describe('TextGlyphExtractor — 0.4.10-bugfix-advance-sync 同源 advance', () => {
+    // mock fontkit advance 与 layoutText 不同步问题已修；本节专门防止回归到 fontkit advance。
+    //
+    // 注意：测试环境无字体 metrics 表 fetch（fetch 对 /fonts/*.metrics.json 不通），故
+    // layoutText 走 canonicalCharWidth fallback（ASCII = round(fontSize * 0.5)）。
+
+    it('多字符 polygon 簇位置与 layoutText 同源（即使 mock fontkit advance ≠ canonical 也对齐）', async () => {
+        mockFetchOk();
+        // mock 矩形 glyph：300 units / unitsPerEm 1000 / fontSize 32 → 9.6 px 宽。
+        // canonical advance = round(32*0.5) = 16，故字符间留 ~6.4 px 缝隙，避免相邻矩形
+        // 被 polygon-clipping union 合并成单 cluster（真实字体 glyph 也不会精确占满
+        // advance box）。故意把 fontkit advanceWidth 设为 800（≠ canonical 16 px）来证伪
+        // "用 fontkit advance 摆位"——若代码仍用 fontkit advance，cursorX 会按 25.6 px 步进
+        // 而不是 canonical 16 px。
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L300 0 L300 500 L0 500 Z',
+            advanceWidth: 800, // 故意偏离 canonical
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const multi = await textElementToMultiPolygon(makeText({
+            text: 'HELLO',
+            fontId: 'inter',
+            fontSize: 32,
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 50,
+        }));
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBeGreaterThanOrEqual(5);
+
+        // 取每个 polygon 簇的 X 范围中心（外环），按 X 排序便于按字符顺序比对
+        const clusters = multi!.map(poly => {
+            const ring = poly[0];
+            let minX = Infinity, maxX = -Infinity;
+            for (const [x] of ring) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+            }
+            return { minX, maxX, cx: (minX + maxX) / 2 };
+        }).sort((a, b) => a.cx - b.cx).slice(0, 5);
+
+        // canonical advance @ fontSize=32 = round(32 * 0.5) = 16；letterSpacing=0
+        // glyph 宽度 = 300/1000 * 32 = 9.6；故第 i 字符外环 = [i*16, i*16+9.6]，中心 i*16+4.8
+        for (let i = 0; i < 5; i++) {
+            const expectedCx = i * 16 + 9.6 / 2;
+            expect(Math.abs(clusters[i].cx - expectedCx)).toBeLessThan(1);
+        }
+    });
+
+    it('italic=true → polygon 被 horizontal shear（顶部相对底部左移 -0.2 × (yTop - yBot)）', async () => {
+        mockFetchOk();
+        // 简单矩形 glyph：fontkit (0,0) - (500, 500)，scale=fontSize/unitsPerEm。
+        // 屏幕 Y 翻转：originY=baselineY=round(fontSize*0.8)=80，glyph 屏幕 y 范围
+        // [80-500*0.1, 80] = [30, 80]
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L500 0 L500 500 L0 500 Z',
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const polyUpright = await textElementToMultiPolygon(makeText({
+            text: 'A',
+            fontSize: 100,
+            x: 0,
+            y: 0,
+            italic: false,
+        }));
+        __resetCachesForTest();
+        mockFetchOk();
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+        const polyItalic = await textElementToMultiPolygon(makeText({
+            text: 'A',
+            fontSize: 100,
+            x: 0,
+            y: 0,
+            italic: true,
+        }));
+
+        expect(polyUpright).not.toBeNull();
+        expect(polyItalic).not.toBeNull();
+
+        // 比对 bbox：upright 矩形 minX 应在两个 y 上相同；italic 后顶部（小 y）的 minX
+        // 应比底部（大 y）左移 (-0.2) × (yTop - yBot) = (-0.2) × (30 - 80) = 10
+        // 因为 italic shear localX' = localX - 0.2 * y，所以 y 越小 x 越大（top 右移 不是左移）。
+        // 重做：A 在屏幕 y=30(顶) 到 y=80(底)；shear x' = x - 0.2*y →
+        //   bot (y=80) shift = -16；top (y=30) shift = -6；故 top 比 bot 右移 10 px
+        const ringU = polyUpright![0][0];
+        const ringI = polyItalic![0][0];
+        // 计算 upright 矩形顶 / 底两个 y 的 minX：
+        const bboxU = computeBbox(ringU);
+        const bboxI = computeBbox(ringI);
+        // 高度应保持不变
+        expect(bboxI.maxY - bboxI.minY).toBeCloseTo(bboxU.maxY - bboxU.minY, 5);
+        // 宽度：italic 矩形被 shear → bbox 宽 = upright 宽 + 0.2 × 高
+        const heightU = bboxU.maxY - bboxU.minY;
+        const widthU = bboxU.maxX - bboxU.minX;
+        const widthI = bboxI.maxX - bboxI.minX;
+        expect(widthI).toBeCloseTo(widthU + 0.2 * heightU, 3);
+    });
+
+    // helper：算 ring bbox
+    function computeBbox(ring: Array<[number, number]>): { minX: number; maxX: number; minY: number; maxY: number } {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const [x, y] of ring) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        return { minX, maxX, minY, maxY };
+    }
+
+    it('align="center" → polygon 整体居中（与 layoutText 行内偏移一致）', async () => {
+        mockFetchOk();
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L300 0 L300 500 L0 500 Z', // 9.6 px 宽 < advance 16
+            advanceWidth: 800,
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        // text="AB", fontSize=32, canonical advance = 16，行宽 = 16 + 16 = 32
+        // boxW=100, center → startX = floor((100 - 32) / 2) = 34
+        const multi = await textElementToMultiPolygon(makeText({
+            text: 'AB',
+            fontSize: 32,
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 50,
+            align: 'center',
+        }));
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBeGreaterThanOrEqual(2);
+
+        // 簇按 x 排序后第 0 簇外环左边应贴 startX=34，第 1 簇贴 50
+        const clusters = multi!.map(poly => {
+            const ring = poly[0];
+            let minX = Infinity;
+            for (const [x] of ring) if (x < minX) minX = x;
+            return minX;
+        }).sort((a, b) => a - b);
+
+        expect(Math.abs(clusters[0] - 34)).toBeLessThan(1);
+        expect(Math.abs(clusters[1] - 50)).toBeLessThan(1);
+    });
+
+    it('letterSpacing=4 → 每字符 cursor 步进多 4 px', async () => {
+        mockFetchOk();
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L300 0 L300 500 L0 500 Z',  // 9.6 px 宽 < 16 + 4，相邻不合并
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        // fontSize=32 canonical=16; letterSpacing=4; "ABC"
+        // 字符 0 外环 [0, 9.6]；字符 1 cursor = 16 + 4 = 20，外环 [20, 29.6]；字符 2 cursor = 36 + 4 = 40
+        const multi = await textElementToMultiPolygon(makeText({
+            text: 'ABC',
+            fontSize: 32,
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 50,
+            letterSpacing: 4,
+        }));
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBeGreaterThanOrEqual(3);
+
+        const clusters = multi!.map(poly => {
+            const ring = poly[0];
+            let minX = Infinity;
+            for (const [x] of ring) if (x < minX) minX = x;
+            return minX;
+        }).sort((a, b) => a - b);
+
+        expect(Math.abs(clusters[0] - 0)).toBeLessThan(1);
+        expect(Math.abs(clusters[1] - 20)).toBeLessThan(1);
+        expect(Math.abs(clusters[2] - 40)).toBeLessThan(1);
+    });
+
+    it('layoutText PositionedGlyph[i].x + glyph_width/2 与 polygon cluster center 匹配 ±1 px', async () => {
+        // 这是任务说明里点名要求的"同源 advance"核心断言。
+        // 用任意非默认 mock advance 证伪"沿用 fontkit advance"。
+        mockFetchOk();
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L300 0 L300 500 L0 500 Z', // glyph 宽 9.6 px < advance 16 → 不合并
+            advanceWidth: 2222, // 远离 canonical 16 px
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const { layoutText } = await import('@/render/TextLayout');
+        const text = 'HELLO';
+        const fontSize = 32;
+        const tEl = makeText({ text, fontSize, x: 0, y: 0, w: 300, h: 50 });
+        const positioned = layoutText(tEl);
+        // mock glyph 屏幕宽度 = 300/1000 * 32 = 9.6 px
+        const glyphWidth = 9.6;
+
+        const multi = await textElementToMultiPolygon(tEl);
+        expect(multi).not.toBeNull();
+        const clusters = multi!.map(poly => {
+            const ring = poly[0];
+            let minX = Infinity, maxX = -Infinity;
+            for (const [x] of ring) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+            }
+            return (minX + maxX) / 2;
+        }).sort((a, b) => a - b);
+
+        // 5 字符——簇 i 中心应贴 positioned[i].x + glyphWidth/2（element-local 坐标 x=0 同 world）
+        for (let i = 0; i < 5; i++) {
+            const expected = positioned[i].x + glyphWidth / 2;
+            expect(Math.abs(clusters[i] - expected)).toBeLessThan(1);
+        }
+    });
+});
+
 describe('LivePaint buildGraph — 0.4.10 text hole gap 集成', () => {
     /**
      * 端到端验证 bug 修复：text "O" 内孔在 buildGraph 输出中应作为 gap 可命中。

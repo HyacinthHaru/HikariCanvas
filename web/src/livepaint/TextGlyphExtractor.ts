@@ -29,13 +29,14 @@
 import polygonClipping from 'polygon-clipping';
 import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
 import type { TextElement } from '@/types/protocol';
+import { layoutText } from '@/render/TextLayout';
 import type { Polygon } from './types';
 
 /** glyph path bezier 采样段数（与 ElementToPolygon PATH_CURVE_SAMPLES 一致）。 */
 export const GLYPH_CURVE_SAMPLES = 8;
 
-/** 多行文本 lineHeight 默认倍率，与 TextLayout.ts 一致。 */
-const DEFAULT_LINE_HEIGHT_MUL = 1.2;
+/** italic shear 系数，与 PreviewRenderer drawText `ctx.transform(1, 0, -0.2, 1, ...)` 一致。 */
+const ITALIC_SHEAR = -0.2;
 
 // ---------- fontkit 最小类型声明 ----------
 // fontkit 不提供 d.ts；仅声明本模块用到的部分接口。
@@ -43,8 +44,8 @@ const DEFAULT_LINE_HEIGHT_MUL = 1.2;
 interface FontkitGlyph {
     /** 已解析的 path 对象 */
     path: FontkitPath;
-    /** 设计单元下的 advanceWidth */
-    advanceWidth: number;
+    /** 设计单元下的 advanceWidth（unused after 0.4.10-bugfix-advance-sync——保留兼容声明） */
+    advanceWidth?: number;
 }
 
 interface FontkitPath {
@@ -54,6 +55,10 @@ interface FontkitPath {
     commands?: Array<{ command: string; args: number[] }>;
 }
 
+/**
+ * 0.4.10-bugfix-advance-sync 后保留 layout 类型仅为 mock 兼容性——本模块运行时不再调用
+ * font.layout()（advance 与 PreviewRenderer 不同源 bug 根因），改用 layoutText() 同源摆位。
+ */
 interface FontkitGlyphPosition {
     xAdvance: number;
     yAdvance: number;
@@ -70,10 +75,8 @@ interface FontkitFont {
     unitsPerEm: number;
     /** 单位 = font design units */
     glyphForCodePoint(cp: number): FontkitGlyph;
-    /**
-     * 复杂字形 layout（处理 GSUB/GPOS）。返回 GlyphRun。
-     */
-    layout(text: string, features?: string[]): FontkitGlyphRun;
+    /** 仅 mock 测试时可能被调用；运行路径走 glyphForCodePoint。 */
+    layout?(text: string, features?: string[]): FontkitGlyphRun;
 }
 
 interface FontkitModule {
@@ -179,7 +182,7 @@ export async function textElementToPolygon(textEl: TextElement): Promise<Polygon
     // fontSize ≤ 0 防御
     if (!Number.isFinite(textEl.fontSize) || textEl.fontSize <= 0) return null;
 
-    const key = `${textEl.fontId}|${textEl.fontSize}|${textEl.text}|${textEl.letterSpacing ?? 0}|${textEl.lineHeight ?? 0}`;
+    const key = buildLayoutCacheKey(textEl);
     let cached: Polygon | null | undefined = polygonCache.get(key);
     if (cached === undefined) {
         // 走 multi 路径再降级为"面积最大外环"——避免与 textElementToMultiPolygon 重复
@@ -252,7 +255,7 @@ export async function textElementToMultiPolygon(textEl: TextElement): Promise<PC
  * 与 polygonCache 共用同 key（fontId|size|text|letterSpacing|lineHeight）。
  */
 async function getOrComputeMultiLayout(textEl: TextElement): Promise<PCMultiPolygon | null> {
-    const key = `${textEl.fontId}|${textEl.fontSize}|${textEl.text}|${textEl.letterSpacing ?? 0}|${textEl.lineHeight ?? 0}`;
+    const key = buildLayoutCacheKey(textEl);
     if (multiPolygonCache.has(key)) {
         return multiPolygonCache.get(key) ?? null;
     }
@@ -293,12 +296,26 @@ function pickLargestOuterRing(multi: PCMultiPolygon): Polygon | null {
 }
 
 /**
- * 真正干活：fontkit layout → glyph paths → polygon-clipping union → 完整 MultiPolygon。
- * 输出以 (0,0) 为原点（baseline 起点）；caller 加 element 偏移。
+ * 真正干活：layoutText 同源摆位 → fontkit glyph paths → polygon-clipping union → 完整 MultiPolygon。
+ * 输出以 (0,0) 为原点（element-local 坐标，相当于 textEl.x = textEl.y = 0）；caller 加 element 偏移。
  *
  * 0.4.10 bugfix：原 computeLayoutPolygon 在 union 后取面积最大外环，丢失了 "O" / "你"
- * 等含内孔字符的 hole 以及多字符场景的非最大 polygon。改为返完整 MultiPolygon，调用方
- * 决定要降级为单环还是直接用 union。
+ * 等含内孔字符的 hole 以及多字符场景的非最大 polygon。改为返完整 MultiPolygon。
+ *
+ * **0.4.10-bugfix-advance-sync**：原实现走 `font.layout(line)` 拿 GlyphRun，用 fontkit
+ * `pos.xAdvance × scale`（hmtx 表真实 advance，对 fontSize=32 Inter "HELLO" ≈ 18 px/char）
+ * 摆位 glyph；但 PreviewRenderer 视觉摆位走 `TextLayout.layoutText` + `charAdvance`
+ * （ASCII canonical = 16 px/char，CJK = fontSize，metrics 表存在时 round(base × size / baseSize)）
+ * —— **双源 advance 不一致**。5 字符累积偏差 ~10 px > "O" 内孔半径 ~6 px，用户点击视觉
+ * O 中央时坐标落在 polygon hole 外，Live Paint 无法识别洞。
+ *
+ * 修复：layoutText() 同源摆位 + 只用 fontkit `glyphForCodePoint(cp).path` 拿 SVG d；
+ * align / softWrap / letterSpacing / lineHeight / vertical fallback 全自动正确（layoutText
+ * 已处理）。bold/italic 由调用方知道 textEl.bold/italic，shear 在 polygon 顶点上做仿射
+ * （与 PreviewRenderer `ctx.transform(1, 0, -0.2, 1, ...)` 数学等价）。
+ *
+ * bold (effects.stroke / textEl.bold) 让视觉 outline 比 path 大几 px，v1 接受不完美——
+ * polygon 是 glyph path 本身的 outline，bold 几 px 误差小于 hole 半径 6 px，可接受。
  */
 async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPolygon | null> {
     const font = await loadFont(textEl.fontId);
@@ -307,65 +324,66 @@ async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPo
     const fontSize = textEl.fontSize;
     /** font design units → pixel 缩放 */
     const scale = fontSize / unitsPerEm;
-    const lineHeightMul = textEl.lineHeight && textEl.lineHeight > 0 ? textEl.lineHeight : DEFAULT_LINE_HEIGHT_MUL;
-    const lineHeightPx = fontSize * lineHeightMul;
-    // letterSpacing 为额外像素间距（与 TextLayout.ts 一致）
-    const letterSpacing = textEl.letterSpacing ?? 0;
 
-    // 按 \n 拆行；每行独立 layout（v1：不做 box-width soft wrap）
-    const lines = textEl.text.split(/\r?\n/);
+    // 0.4.10-bugfix-advance-sync：用 layoutText 同源摆位，input 把 element 原点平移到
+    // (0, 0)，这样 PositionedGlyph.x / baselineY 直接是 element-local 坐标。其他字段
+    // （fontId / fontSize / align / letterSpacing / lineHeight / w / h / text）原样透传，
+    // 让 layoutText 的 softWrap + align + lineHeight + letterSpacing 行为与 PreviewRenderer 一致。
+    //
+    // vertical 模式在 textElementToPolygon / textElementToMultiPolygon 入口已早退，
+    // 这里再做一次防御保险。
+    if (textEl.vertical) return null;
+    const layoutInput: TextElement = { ...textEl, x: 0, y: 0 };
+    const positioned = layoutText(layoutInput);
+    if (positioned.length === 0) return null;
+
+    const italic = textEl.italic === true;
 
     const subPolygons: PCPolygon[] = [];
 
-    for (let li = 0; li < lines.length; li++) {
-        const line = lines[li];
-        if (line.length === 0) continue;
+    for (const g of positioned) {
+        // 取 BMP / Astral 通用 codepoint。layoutText 已按 char 拆，emoji surrogate pair
+        // 在 layoutText 内按单 char 处理（与 PreviewRenderer 一致），这里同样按 charCodeAt(0)
+        // 即可——若是 high surrogate 拿不到 glyph，fontkit 返 .notdef glyph，path 多半为空，
+        // glyphToPolygons 跳过。
+        const cp = g.ch.codePointAt(0);
+        if (cp === undefined) continue;
 
-        let run: FontkitGlyphRun;
+        let glyph: FontkitGlyph;
         try {
-            run = font.layout(line);
+            glyph = font.glyphForCodePoint(cp);
         } catch (e) {
             if (typeof console !== 'undefined' && import.meta.env && import.meta.env.DEV) {
-                console.warn('[TextGlyphExtractor] layout failed:', e);
+                console.warn('[TextGlyphExtractor] glyphForCodePoint failed:', e);
             }
             continue;
         }
+        if (!glyph || !glyph.path) continue;
 
-        // 基线 Y：第 li 行；baseline 大约在 font ascender 处
-        // 简化：取 fontSize × 0.8 作为 baseline 距 top 距离（与 TextLayout.ts drawText 对齐）
-        // TextLayout.ts 不指定 baseline，但 Canvas2D textBaseline='alphabetic' 默认下，
-        // text 顶部 ≈ baseline - fontSize × 0.8。这里反算 baselineY = lineTopY + fontSize × 0.8。
-        const baselineY = li * lineHeightPx + fontSize * 0.8;
+        // glyph 摆位：originX = g.x（layoutText 横坐标，左上 = 该 glyph 绘制起点），
+        // baselineY = g.baselineY（layoutText 已加 ascent）。parseSvgPathToPolygons 内
+        // 把 fontkit Y-up 翻成屏幕 Y-down 并做 scale。
+        const glyphPolygons = glyphToPolygons(glyph, scale, g.x, g.baselineY);
 
-        let cursorX = 0;
-        const glyphCount = Math.min(run.glyphs.length, run.positions.length);
-        for (let gi = 0; gi < glyphCount; gi++) {
-            const glyph = run.glyphs[gi];
-            const pos = run.positions[gi];
-            const advancePx = pos.xAdvance * scale;
-            const xOffsetPx = pos.xOffset * scale;
-            const yOffsetPx = pos.yOffset * scale;
-
-            const glyphPolygons = glyphToPolygons(glyph, scale, cursorX + xOffsetPx, baselineY - yOffsetPx);
-            // 0.4.10 bugfix：把一个 glyph 的所有 subpath 作为**同一 PCPolygon 内的多 ring**
-            // 推入 subPolygons。polygon-clipping 只有同 polygon 内的多 ring 才被识别为
-            // "外环 + holes"（独立 polygon union 时 inner 总被合并掉）—— 这是 "O"
-            // 内孔保留的关键。OpenType glyph 语义本就是"复合形状 = 1 个 polygon 含
-            // 外环 + 多 holes"，与 polygon-clipping 输入约定天然吻合。
-            //
-            // 不同 glyph 之间走独立 PCPolygon，让多字符 union 后保持独立 polygon（不连通），
-            // 避免被误合并成单一大外环。
-            const glyphRings: PCRing[] = [];
-            for (const poly of glyphPolygons) {
-                if (poly.length < 3) continue;
-                glyphRings.push(closeRing(toPCRing(poly)));
-            }
-            if (glyphRings.length > 0) {
-                subPolygons.push(glyphRings as PCPolygon);
-            }
-
-            cursorX += advancePx;
-            if (gi < glyphCount - 1) cursorX += letterSpacing;
+        // 0.4.10 bugfix：把一个 glyph 的所有 subpath 作为**同一 PCPolygon 内的多 ring**
+        // 推入 subPolygons。polygon-clipping 只有同 polygon 内的多 ring 才被识别为
+        // "外环 + holes"（独立 polygon union 时 inner 总被合并掉）—— "O" 内孔保留关键。
+        //
+        // 不同 glyph 之间走独立 PCPolygon，让多字符 union 后保持独立 polygon（不连通），
+        // 避免被误合并成单一大外环。
+        const glyphRings: PCRing[] = [];
+        for (const poly of glyphPolygons) {
+            if (poly.length < 3) continue;
+            // 0.4.10-bugfix-advance-sync：italic 应用 horizontal shear。PreviewRenderer
+            // 走 ctx.translate(t.x, t.y) → transform(1, 0, -0.2, 1, ...) → translate(-t.x, -t.y)，
+            // 复合矩阵作用为 worldX' = worldX - 0.2*(worldY - t.y)；化到 element-local
+            // 坐标（worldX = localX + t.x, worldY = localY + t.y）得到
+            // localX' = localX - 0.2 * localY，与 t.x/t.y 无关。
+            const sheared = italic ? applyItalicShear(poly) : poly;
+            glyphRings.push(closeRing(toPCRing(sheared)));
+        }
+        if (glyphRings.length > 0) {
+            subPolygons.push(glyphRings as PCPolygon);
         }
     }
 
@@ -656,6 +674,40 @@ function closeRing(ring: PCRing): PCRing {
     const last = ring[ring.length - 1];
     if (first[0] === last[0] && first[1] === last[1]) return ring;
     return [...ring, [first[0], first[1]] as Pair];
+}
+
+/**
+ * 0.4.10-bugfix-advance-sync：构建 layout cache key，覆盖所有影响 layoutText 输出 +
+ * italic 形状的字段。w/h 影响 softWrap + align；align 影响行内偏移；bold 不影响 polygon
+ * 形状（path 本身不变，bold 仅 stroke 包装视觉效果）所以不入 key——可显著增加 cache
+ * 命中率。
+ */
+function buildLayoutCacheKey(t: TextElement): string {
+    return [
+        t.fontId,
+        t.fontSize,
+        t.text,
+        t.letterSpacing ?? 0,
+        t.lineHeight ?? 0,
+        t.align ?? 'left',
+        t.w ?? 0,
+        t.h ?? 0,
+        t.italic === true ? '1' : '0',
+    ].join('|');
+}
+
+/**
+ * 0.4.10-bugfix-advance-sync：italic horizontal shear。在 element-local 坐标系下做。
+ * 与 PreviewRenderer `ctx.transform(1, 0, -0.2, 1, ...)` 数学等价（参见
+ * computeLayoutMultiPolygon 注释）。
+ */
+function applyItalicShear(poly: Polygon): Polygon {
+    const out: Polygon = new Array(poly.length);
+    for (let i = 0; i < poly.length; i++) {
+        const [x, y] = poly[i];
+        out[i] = [x + ITALIC_SHEAR * y, y];
+    }
+    return out;
 }
 
 function polygonArea(poly: Polygon): number {

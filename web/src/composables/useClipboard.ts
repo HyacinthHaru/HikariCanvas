@@ -28,7 +28,7 @@ interface ClipboardPayload {
 
 export function useClipboard(): {
     copy: () => Promise<void>;
-    paste: () => Promise<void>;
+    paste: (e?: ClipboardEvent) => Promise<void> | void;
 } {
     const project = useProjectStore();
     const ui = useUiStore();
@@ -72,24 +72,43 @@ export function useClipboard(): {
         }
     }
 
-    async function paste(): Promise<void> {
-        // 锁定 wall 拒绝粘贴
-        if (project.isLocked) {
-            net.pushLog('err', t.value.clipboard.pasteRejectedLocked);
-            return;
+    /**
+     * 2026-05-25 paste 统一化：接收可选 ClipboardEvent。
+     *
+     * <ul>
+     *   <li>带 e 参数：同步从 e.clipboardData.getData('text/plain') 读，
+     *       供 native paste event handler（useCanvasUpload.onPasteImage）调用。
+     *       这条路径不需要 user gesture / clipboard read permission，所以最稳。</li>
+     *   <li>不带 e 参数：fallback 走 async navigator.clipboard.readText（按钮触发 paste 等场景）。</li>
+     * </ul>
+     *
+     * <p>两路径相同的元素粘贴语义：解析 HikariCanvas magic + 校验 + 找可写 layer +
+     * 偏移 +10,+10 + 逐个 ws.send element.add。</p>
+     */
+    async function paste(e?: ClipboardEvent): Promise<void> {
+        let raw: string | null;
+        if (e) {
+            raw = e.clipboardData?.getData('text/plain') ?? null;
+        } else {
+            try {
+                raw = await navigator.clipboard.readText();
+            } catch (err) {
+                net.pushLog('err', `clipboard.read failed: ${(err as Error).message}`);
+                return;
+            }
         }
+        applyPasteText(raw);
+    }
 
-        let raw: string;
-        try {
-            raw = await navigator.clipboard.readText();
-        } catch (e) {
-            net.pushLog('err', `clipboard.read failed: ${(e as Error).message}`);
-            return;
-        }
-
+    function applyPasteText(raw: string | null): void {
         if (!raw || !raw.startsWith(CLIPBOARD_MAGIC)) {
             // 不是 HikariCanvas 数据 —— 静默忽略，让用户在文本框中的常规 paste 不受干扰。
-            // 这里到达说明 useCanvasShortcuts 已确认不在 editable 焦点；纯无操作即可。
+            // 调用方（useCanvasUpload.onPasteImage）已做 magic 预检，到这里也安全。
+            return;
+        }
+        // 锁定 wall 拒绝粘贴（magic 命中后才提示，避免对普通文本 paste 产生噪音 log）
+        if (project.isLocked) {
+            net.pushLog('err', t.value.clipboard.pasteRejectedLocked);
             return;
         }
 

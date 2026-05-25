@@ -34,11 +34,20 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+/**
+ * Renderer 版本号 — 任何渲染逻辑改动（letterbox / aspect ratio / 输出尺寸等）都 bump 此值
+ * 强制清空 stale cache。0.4.9 hotfix-2 #3 引入：用户实测仍看到旧 letterbox 缩略图，根因是
+ * `computeLayerHash` 只签 layer 内容不签 renderer 版本，hotfix #4 改了输出尺寸算法但 cache
+ * 仍返旧 dataURL。
+ */
+const RENDERER_VERSION = 'v2-aspect-ratio';
+
 /** 计算 layer 的"内容签名"：变了即缩略图需重 render。 */
 function computeLayerHash(layer: Layer): string {
     // 长度 + 每 element 的关键视觉字段拼接。不需 SHA；JS string compare 直接 O(n)。
     // 包含 visible（元素隐藏会让缩略图视觉变化）+ 几何（x/y/w/h/rotation）+ id 列表。
     const parts: string[] = [
+        `rv=${RENDERER_VERSION}`,
         `n=${layer.elements.length}`,
         `op=${layer.opacity}`,
         `bm=${layer.blendMode}`,

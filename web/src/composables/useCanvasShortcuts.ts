@@ -12,6 +12,13 @@ import { useClipboard } from '@/composables/useClipboard';
  *   - H 键激活 hand 工具
  *   - 按住 Space 临时切到 hand（Figma 标准）；松开恢复原工具。重复 keydown
  *     （OS 按住自动重复）只在首次触发时切换，避免覆盖用户中途的工具切换。
+ *
+ * 2026-05-25 paste 统一化：旧实现在 keydown 阶段 preventDefault Ctrl+V 截杀了
+ * 浏览器的 native `paste` event，导致 useCanvasUpload.onPasteImage 永远收不到事件
+ * （URL 粘贴 / image File 截图粘贴双失效）。修法：删 Ctrl+V keydown handler，
+ * 让 paste 路径统一走 native `paste` event，由 useCanvasUpload 内的 dispatcher
+ * 三路分发（HikariCanvas magic → clipboard.paste / image File → uploadAndPlace /
+ * URL → uploadFromUrl）。Ctrl+C 不受影响保留原行为。
  */
 export function useCanvasShortcuts() {
     const ui = useUiStore();
@@ -39,7 +46,8 @@ export function useCanvasShortcuts() {
 
     // PS 风格快捷键
     onKeyStroke(['v', 'V'], (e) => {
-        // Ctrl/Cmd+V 由下方 paste 处理；这里只接裸 V → select 工具
+        // Ctrl/Cmd+V 让 native `paste` event 接管（见上方 doc + useCanvasUpload.onPasteImage）。
+        // 裸 V → select 工具。
         if (e.ctrlKey || e.metaKey) return;
         if (!inEditable()) ui.setTool('select');
     });
@@ -60,14 +68,7 @@ export function useCanvasShortcuts() {
         }
         if (!inEditable()) ui.setTool('circle');
     });
-    onKeyStroke(['v', 'V'], (e) => {
-        if (!(e.ctrlKey || e.metaKey)) return;
-        // F1 Ctrl/Cmd+V：粘贴 clipboard 内的 HikariCanvas 数据
-        // 不在 editable 焦点（input/textarea/contenteditable）才接管；否则让浏览器走常规 paste
-        if (inEditable()) return;
-        e.preventDefault();
-        void clipboard.paste();
-    });
+    // Ctrl/Cmd+V 不在此处拦截——见 useCanvasUpload.onPasteImage 的 native `paste` 分发。
     onKeyStroke(['s', 'S'], (e) => {
         if (e.ctrlKey || e.metaKey) return;
         if (!inEditable()) ui.setTool('star');

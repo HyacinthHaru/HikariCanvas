@@ -93,6 +93,59 @@
 
 **测试结果**：后端 855 全绿（ProjectState 改未破回归）+ 前端 vitest **257 全绿**（215 baseline + 11 Sub B text holes + 31 Sub A URL）。
 
+### 0.4.9 hotfix-2 批（3 项实测仍未生效，深查后真根因 + 修法）
+
+第一轮 hotfix 后用户实测 3 项仍 broken（图片粘贴 / text glyph 洞 / 缩略图比例）。
+3 子代理深度调查找到**真根因都跟第一轮 hotfix 假设不同**：
+
+**Bug 1 真根因 — Ctrl+V keydown 拦截**：
+
+- `useCanvasShortcuts.ts:63-70` Ctrl+V handler 用 `preventDefault()` 拦截 keydown → 浏览器
+  **永远不 fire `paste` event** → `useCanvasUpload.onPasteImage` 根本进不来
+- M17 F1（useClipboard 元素粘贴）与 M13-D（useCanvasUpload 图片粘贴）两个 milestone
+  引入同一 keystroke 的两个独立 handler，F1 单方面截杀了 D 的 paste event。第一轮
+  hotfix 改了 URL regex 但 handler 进不来根本没用
+- 修法：
+  - 删 useCanvasShortcuts Ctrl+V keydown handler（Ctrl+C 保留）
+  - useClipboard.paste(e?) 改接 ClipboardEvent 参数（带 e 走 native；不带 e 走 async fallback）
+  - useCanvasUpload.onPasteImage 升级为三路 dispatcher：magic text → 元素粘贴 / image File → 上传 / URL → uploadFromUrl
+- vitest +18 case（7 paste dispatcher + 6 shortcuts paste + 5 其他）
+
+**Bug 2 真根因 — TextGlyphExtractor 与 PreviewRenderer 双源 advance 不一致**：
+
+- TextGlyphExtractor 用 fontkit `pos.xAdvance × scale`（字体 hmtx 真实 advance ≈ 18 px/char）
+- PreviewRenderer 走 `TextLayout.layoutText` + `charAdvance`（ASCII canonical = fontSize × 0.5 ≈ 16 px/char）
+- HELLO 5 字符累积偏差 ~10 px > "O" 内孔半径 ~6 px → 用户点击视觉 O 中央时坐标落在
+  glyph polygon hole 外 → Live Paint 不识别洞
+- 现有 11 vitest case 用**单字符 + mock fontkit**，cursorX=0 绕过 advance 偏差 → false-positive
+- 修法：TextGlyphExtractor 改用 `layoutText(textEl)` 拿 PositionedGlyph[] 摆位 glyph，
+  只用 fontkit 拿 `glyph.path` 不用其 layout/positions。align / softWrap / letterSpacing /
+  lineHeight 全自动正确（layoutText 已处理）；italic 加 shear 仿射 `x' = x - 0.2y`
+  与 Canvas `ctx.transform(1,0,-0.2,1,...)` 数学等价
+- vitest +5 case（多字符 cluster 同源 / italic shear / align / letterSpacing / position 匹配 ±1px）
+
+**Bug 3 真根因 — stale cache，代码本身正确**：
+
+- `LayerThumbnailRenderer.ts` aspect ratio 输出代码完全正确，无 width/height 颠倒
+- 真问题：`computeLayerHash` 只签 layer 内容**不签 renderer 版本** → 用户 layer 元素未变
+  → 永远返第一轮 hotfix 之前的 64×64 letterbox dataURL
+- 修法：加 `RENDERER_VERSION = 'v2-aspect-ratio'` 常量 + 签进 hash → 强制 invalidate
+
+### 测试结果
+
+后端 855 全绿（未动后端）+ 前端 vitest **275 全绿**（257 baseline + 18 新增）/ shadow
+jar 不变 / bundle main +98 B（dispatcher 几行）/ worker +4 kB（layoutText 进 worker 副本）。
+
+### 关键架构教训（已固化）
+
+1. **两 milestone 共享 keystroke 必须显式协调**：M17 F1 + M13-D 都监听 Ctrl+V 但用了
+   不同事件（keydown vs paste），keydown preventDefault 在 paste fire 前就截杀。修后
+   统一在 native paste event 内三路 dispatcher
+2. **双端镜像纪律的一致性边界**：TextGlyphExtractor + TextLayout 是同前端但**双源 advance**
+   也是漏洞——任何与渲染像素相关的几何计算必须用同一 advance 函数
+3. **cache hash 必须签 renderer 版本**：layer 内容签不到 renderer 算法变化，要 bump
+   version 强制 invalidate。所有缓存层（thumbnail / livepaint graph 等）适用
+
 ---
 
 ## 2026-05-25 · 0.4.8 — 打磨批（11 项 / M18 + M8 + M13 + Token rate limit）
