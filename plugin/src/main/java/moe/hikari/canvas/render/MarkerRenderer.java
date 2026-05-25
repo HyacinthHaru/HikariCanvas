@@ -34,17 +34,22 @@ public final class MarkerRenderer {
     public static final int MIN_DOT_RADIUS = 3;
 
     /**
-     * arrow size 公式（0.4.7 第二次修）。
+     * arrow size 公式（0.4.6 hotfix #6 — 平缓化）。
      *
-     * <p>关键比例：{@code base width / stroke width ≥ 3}，否则视觉上箭头 V 头跟
-     * 直线粗矩形粘连难辨。stroke=20 → arrow=60 (base 是 stroke 3 倍 = "明显比直线宽")，
-     * stroke=30 → arrow=90，让粗 stroke 时箭头随之放大保持清晰比例。</p>
+     * <p><b>从 {@code stroke × 3} 改成 {@code stroke × 2 + 4}</b>：</p>
+     * <ul>
+     *   <li>细 stroke (1-3) 几乎不变（保持原低端体验）</li>
+     *   <li>粗 stroke 增长显著平缓——stroke=10 → arrow=24 (旧:30)，stroke=20 → arrow=44 (旧:60)</li>
+     * </ul>
      *
-     * <p>不带硬上限——硬限 40 在 stroke=30 时让 base=40/stroke=30 比例仅 1.33×，糊得
-     * 没法看；element-aware cap 由调用方传 element 对角线限制 marker 不溢出。</p>
+     * <p><b>动机</b>：arrow 是三角形 (面积 ∝ size²)，stroke 是矩形带 (面积 ∝ stroke)；
+     * 旧公式让 stroke 调粗时 arrow 视觉面积按平方增长，stroke 5→10 = 直线面积 ×2，但
+     * arrow 面积 ×4 — 用户报"稍微一调宽就特别大"。新公式让 arrow 增速线性平缓。</p>
+     *
+     * <p>不带硬上限——element-aware cap 由调用方传 element 对角线限制 marker 不溢出。</p>
      */
     public static int arrowSize(int strokeWidth) {
-        return Math.max(MIN_ARROW_SIZE, strokeWidth * 3);
+        return Math.max(MIN_ARROW_SIZE, strokeWidth * 2 + 4);
     }
 
     /**
@@ -64,13 +69,19 @@ public final class MarkerRenderer {
     }
 
     /**
-     * dot radius 公式（0.4.7 第二次修）。
+     * dot radius 公式（0.4.6 hotfix #6 — 平缓化）。
      *
-     * <p>{@code stroke + 1} 让 dot 比直线略粗（明显），无硬上限——粗 stroke 时 dot 跟着
-     * 长大才能视觉对应。极短元素 + 粗 stroke 由 element-aware 重载处理。</p>
+     * <p><b>从 {@code stroke + 1} 改成 {@code stroke / 2 + 3}</b>（Java 整数除法 = floor）：</p>
+     * <ul>
+     *   <li>stroke=1 → r=3，stroke=2 → r=4 (旧:3)，stroke=5 → r=5 (旧:6)</li>
+     *   <li>stroke=10 → r=8 (旧:11)，stroke=20 → r=13 (旧:21)</li>
+     * </ul>
+     *
+     * <p><b>动机</b>：dot 是圆 (面积 ∝ r²)，旧公式让粗 stroke 时 dot 面积按平方膨胀 —
+     * 同 arrowSize 修复一致；粗 stroke 时圆形 marker 不抢直线视觉。</p>
      */
     public static int dotRadius(int strokeWidth) {
-        return Math.max(MIN_DOT_RADIUS, strokeWidth + 1);
+        return Math.max(MIN_DOT_RADIUS, strokeWidth / 2 + 3);
     }
 
     /** 0.4.7：element-aware cap，同 arrowSize。 */

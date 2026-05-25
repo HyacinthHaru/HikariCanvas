@@ -5,6 +5,66 @@
 
 ---
 
+## 2026-05-25 · 0.4.6 hotfix #6 — arrow / dot marker 公式平缓化
+
+### 用户报告
+
+「箭头本身可能不太能按比例来进行缩放，可能会出现稍微一放大，就放得特别大的情况。」
+
+### 根因诊断（用 2 个 Explore 子代理并行调查）
+
+**关键诊断不是"transform 缩放整个 element"**（这场景实测 OK：strokeWidth 和 diag 同步
+按 scale 倍数放大，arrow 公式 cap 由 diag 限制，比例稳定）。
+
+**真正的问题在 RightPanel 单独拖 strokeWidth 滑块**：diag 不变、stroke 单独调粗：
+
+- `arrowSize` 旧公式 = `max(8, stroke × 3)`：stroke 5→10，arrow 15→30 (size 翻倍)
+- arrow 是**三角形**（面积 ∝ size²）：arrow 面积 15²→30² = 4× 膨胀
+- 但直线是**矩形带**（面积 ∝ stroke）：直线面积仅 ×2
+
+**stroke 调粗 2 倍，箭头视觉面积膨胀 4 倍** — 平方膨胀感。dot（圆，面积 ∝ r²）同理。
+
+### 修法（方案 A：公式平缓化）
+
+双端公式同步改 1 行：
+
+| 公式 | 旧 | 新 |
+|---|---|---|
+| `arrowSize(stroke)` | `max(8, stroke × 3)` | `max(8, stroke × 2 + 4)` |
+| `dotRadius(stroke)` | `max(3, stroke + 1)` | `max(3, stroke / 2 + 3)` |
+
+数值对比：
+
+| stroke | 旧 arrow | 新 arrow | 旧 dot r | 新 dot r |
+|--:|--:|--:|--:|--:|
+| 1 | 8 | 8 | 3 | 3 |
+| 2 | 8 | 8 | 3 | 4 |
+| 5 | 15 | 14 | 6 | 5 |
+| 10 | 30 | **24** | 11 | **8** |
+| 20 | 50 | **44** | 21 | **13** |
+
+细 stroke (1-3) 几乎不变（保持原低端体验），粗 stroke 增速从平方膨胀降到线性平缓。
+
+### 修改文件
+
+- `plugin/.../render/MarkerRenderer.java` — 公式 + javadoc 解释面积膨胀根因
+- `web/src/render/MarkerRenderer.ts` — 同步（dot 用 `Math.floor(stroke / 2)` 对齐 Java 整数除法）
+
+element-aware cap 路径不变（`min(base, diag × 0.5)` + `minByStroke` 兜底）。
+
+### 测试结果
+
+- 后端 :plugin:test BUILD SUCCESSFUL（24s，fixture 06-path-line baseline 漂移 < 0.5% 容差内）
+- 前端 vitest 161/161 全绿（446ms，无 hard-coded arrowSize / dotRadius 期望数值）
+- shadow jar `HikariCanvas-0.4.6-SNAPSHOT.jar` 163 MB（16:16）
+
+### CI 验证
+
+push 到 main 触发 `.github/workflows/ci.yml`（用户 GitHub Actions 账单刚修好，首次跑 CI）。
+**不打 tag**，不触发 release.yml。
+
+---
+
 ## 2026-05-22 · 0.4.6 体验打磨 — 字体加粗/斜体 + 透明背景 + 配色修复 + 文案优化
 
 ### 背景

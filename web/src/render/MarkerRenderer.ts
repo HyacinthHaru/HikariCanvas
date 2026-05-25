@@ -11,23 +11,31 @@ export const MIN_ARROW_SIZE = 8;
 export const MIN_DOT_RADIUS = 3;
 
 /**
- * arrow size 公式（0.4.7 第二次修）。
+ * arrow size 公式（0.4.6 hotfix #6 — 平缓化）。
  *
- * 关键比例：base width / stroke width ≥ 3，否则箭头 V 头跟直线粗矩形粘连难辨。
- * stroke × 3 自然增长，无硬上限——element-aware cap 由调用方传 element 对角线限制。
+ * 从 stroke × 3 改成 stroke × 2 + 4：细 stroke 几乎不变，粗 stroke 增速线性平缓。
+ * 动机：arrow 是三角形（面积 ∝ size²），旧公式让 stroke 调粗时 arrow 面积平方膨胀。
+ * 新公式 stroke=10→arrow=24 (旧 30)，stroke=20→arrow=44 (旧 60)。
  *
  * 视觉清晰底线：base ≥ stroke × 2，优先级 > element cap（宁可略溢出 bbox 也别糊）。
  */
 export function arrowSize(strokeWidth: number, elementDiagonal?: number): number {
-    const base = Math.max(MIN_ARROW_SIZE, strokeWidth * 3);
+    const base = Math.max(MIN_ARROW_SIZE, strokeWidth * 2 + 4);
     if (elementDiagonal === undefined || elementDiagonal <= 0) return base;
     const byLength = Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH);
     const minByStroke = Math.max(MIN_ARROW_SIZE, strokeWidth * 2);
     return Math.max(minByStroke, Math.min(base, byLength));
 }
 
+/**
+ * dot radius 公式（0.4.6 hotfix #6 — 平缓化）。
+ *
+ * 从 stroke + 1 改成 floor(stroke / 2) + 3（与后端 Java 整数除法一致）。
+ * stroke=10 → r=8 (旧 11)，stroke=20 → r=13 (旧 21)；
+ * 动机：dot 是圆（面积 ∝ r²），同 arrowSize 思路平缓增长。
+ */
 export function dotRadius(strokeWidth: number, elementDiagonal?: number): number {
-    const base = Math.max(MIN_DOT_RADIUS, strokeWidth + 1);
+    const base = Math.max(MIN_DOT_RADIUS, Math.floor(strokeWidth / 2) + 3);
     if (elementDiagonal === undefined || elementDiagonal <= 0) return base;
     const byLength = Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH * 0.5);
     const minByStroke = Math.max(MIN_DOT_RADIUS, strokeWidth);
