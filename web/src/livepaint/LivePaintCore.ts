@@ -14,10 +14,10 @@
  */
 
 import polygonClipping from 'polygon-clipping';
-import type { Pair, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
+import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
 import type { Element } from '@/types/protocol';
 import type { GapPolygon, LivePaintGraph, Polygon } from './types';
-import { elementToPolygon, elementToPolygonAsync } from './ElementToPolygon';
+import { elementToPolygon, elementToMultiPolygonAsync } from './ElementToPolygon';
 
 /**
  * 构建当前画布的 gap graph（async）。
@@ -42,11 +42,17 @@ export async function buildGraph(
      *  低于这个面积的 gap 实际不可达。 */
     const MIN_GAP_AREA = 4;
 
-    // 收集 polygon（text 元素 await 真实 glyph 提取；其他类型同步路径不会发起 await）
-    const polys: Polygon[] = [];
+    // 0.4.10 bugfix：收集 element MultiPolygon（text 元素保留 holes + 多 glyph polygon；
+    // 非 text 元素是单 polygon 包成 MultiPolygon）。union 时直接 spread 即可——
+    // polygon-clipping 支持 GeoJSON-style MultiPolygon 输入，holes 自然被减去。
+    //
+    // 例：text "HELLO" → 5 个独立 polygon，每个 polygon = [外环, 可能 hole]；其中 "O"
+    // 的内孔作为 hole 参与 union → 占用区不包含 O 中心洞 → difference 时该洞作为 gap
+    // 保留 → Live Paint 用户点 "O" 中央能成功 fill。
+    const pcMultis: PCMultiPolygon[] = [];
     for (const el of elements) {
-        const p = await elementToPolygonAsync(el);
-        if (p !== null && p.length >= 3) polys.push(p);
+        const m = await elementToMultiPolygonAsync(el);
+        if (m !== null && m.length > 0) pcMultis.push(m);
     }
 
     // 整画布作为初始 gap
@@ -57,7 +63,7 @@ export async function buildGraph(
         [0, canvasHeight],
     ]))];
 
-    if (polys.length === 0) {
+    if (pcMultis.length === 0) {
         return {
             gaps: [{
                 outer: [[0, 0], [canvasWidth, 0], [canvasWidth, canvasHeight], [0, canvasHeight]],
@@ -68,13 +74,10 @@ export async function buildGraph(
         };
     }
 
-    // 转 polygon-clipping 输入：每个本模块 Polygon → 单 ring PCPolygon
-    const pcPolys: PCPolygon[] = polys.map(p => [closeRing(toPCRing(p))]);
-
     let gapsRaw: ReturnType<typeof polygonClipping.difference>;
     try {
-        // union 多个 polygon → MultiPolygon
-        const occupied = polygonClipping.union(pcPolys[0], ...pcPolys.slice(1));
+        // union 多个 MultiPolygon → MultiPolygon（holes 在每 polygon 内部自动 subtract）
+        const occupied = polygonClipping.union(pcMultis[0], ...pcMultis.slice(1));
         // canvas - occupied → 所有空隙
         gapsRaw = polygonClipping.difference(canvasRect, occupied);
     } catch (e) {

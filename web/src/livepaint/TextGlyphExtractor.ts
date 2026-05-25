@@ -27,7 +27,7 @@
  */
 
 import polygonClipping from 'polygon-clipping';
-import type { Pair, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
+import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
 import type { TextElement } from '@/types/protocol';
 import type { Polygon } from './types';
 
@@ -90,6 +90,12 @@ const fontCache = new Map<string, Promise<FontkitFont | null>>();
 /** polygon cache key = "fontId|fontSize|text|letterSpacing|lineHeight"。 */
 const polygonCache = new Map<string, Polygon | null>();
 
+/**
+ * 0.4.10 bugfix：MultiPolygon 形态缓存（保留 holes + 多 polygon），用于 Live Paint 占用区
+ * union 路径。结构以 (0, 0) 为原点；调用方加 element 偏移。
+ */
+const multiPolygonCache = new Map<string, PCMultiPolygon | null>();
+
 /** polygon cache 大小上限——超时 LRU；text 内容大量变化时防爆。 */
 const POLYGON_CACHE_MAX = 256;
 
@@ -117,6 +123,7 @@ export function __setFontkitModuleForTest(mod: FontkitModule | null): void {
 export function __resetCachesForTest(): void {
     fontCache.clear();
     polygonCache.clear();
+    multiPolygonCache.clear();
 }
 
 /** 加载 fontkit 模块（dynamic import；首次调用触发 chunk download）。 */
@@ -158,6 +165,11 @@ function loadFont(fontId: string): Promise<FontkitFont | null> {
  * 主入口：TextElement → polygon (单 ring)，以 element-local (el.x, el.y) 为原点偏移。
  *
  * 返回 null = 退化（未加载 / 空文本 / vertical / 字体不可用）→ 调用方 fallback bbox。
+ *
+ * **重要**：这是"取面积最大外环 + 丢 holes"的简化版本，仅适合点击命中检测等不需要
+ * 精确 hole / 多 glyph 拓扑的场景。Live Paint 占用区计算请用
+ * {@link textElementToMultiPolygon}（0.4.10 起新增）——它保留 holes（如 "O" 内孔）
+ * 和所有独立 glyph polygon。
  */
 export async function textElementToPolygon(textEl: TextElement): Promise<Polygon | null> {
     // 早退：vertical 模式 v1 不支持（layout 逻辑复杂）
@@ -170,7 +182,10 @@ export async function textElementToPolygon(textEl: TextElement): Promise<Polygon
     const key = `${textEl.fontId}|${textEl.fontSize}|${textEl.text}|${textEl.letterSpacing ?? 0}|${textEl.lineHeight ?? 0}`;
     let cached: Polygon | null | undefined = polygonCache.get(key);
     if (cached === undefined) {
-        cached = await computeLayoutPolygon(textEl);
+        // 走 multi 路径再降级为"面积最大外环"——避免与 textElementToMultiPolygon 重复
+        // 跑昂贵的 fontkit layout + union。
+        const multi = await getOrComputeMultiLayout(textEl);
+        cached = multi === null ? null : pickLargestOuterRing(multi);
         // LRU 简单实现：超阈值清最早 entry
         if (polygonCache.size >= POLYGON_CACHE_MAX) {
             const firstKey = polygonCache.keys().next().value;
@@ -190,10 +205,102 @@ export async function textElementToPolygon(textEl: TextElement): Promise<Polygon
 }
 
 /**
- * 真正干活：fontkit layout → glyph paths → polygon-clipping union → 单 ring。
- * 输出以 (0,0) 为原点（baseline 起点）；caller 加 element 偏移。
+ * 0.4.10 bugfix 新入口：TextElement → 完整 MultiPolygon（保留 holes + 多 polygon），
+ * 以 element-local (el.x, el.y) 为原点偏移。
+ *
+ * 对比 {@link textElementToPolygon}：
+ * - 旧函数只取面积最大外环——单字符 "O" 会丢内孔（用户点不出洞）；多字符 "Hello"
+ *   会丢 4 个字符
+ * - 本函数保留 polygon-clipping union 输出的完整结构 = 每 Polygon = [outer, ...holes]，
+ *   多个独立 Polygon 表示字与字间不连通的形状
+ *
+ * 用途：Live Paint 占用区计算（LivePaintCore.buildGraph）。union 时多 polygon 直接
+ * spread 即可（polygon-clipping union 支持 GeoJSON-style MultiPolygon 输入）。
+ *
+ * 返回 null = 退化（与 textElementToPolygon 同语义）。
  */
-async function computeLayoutPolygon(textEl: TextElement): Promise<Polygon | null> {
+export async function textElementToMultiPolygon(textEl: TextElement): Promise<PCMultiPolygon | null> {
+    if (textEl.vertical) return null;
+    if (!textEl.text || textEl.text.trim().length === 0) return null;
+    if (!Number.isFinite(textEl.fontSize) || textEl.fontSize <= 0) return null;
+
+    const multi = await getOrComputeMultiLayout(textEl);
+    if (multi === null) return null;
+
+    // 平移到全局坐标（每 ring 每点 +offset）
+    const ox = textEl.x;
+    const oy = textEl.y;
+    const out: PCMultiPolygon = [];
+    for (const poly of multi) {
+        const newPoly: PCPolygon = [];
+        for (const ring of poly) {
+            const newRing: PCRing = ring.map(([x, y]) => [x + ox, y + oy] as Pair);
+            // 校验 NaN/Infinity
+            let ringOk = true;
+            for (const [x, y] of newRing) {
+                if (!Number.isFinite(x) || !Number.isFinite(y)) { ringOk = false; break; }
+            }
+            if (ringOk) newPoly.push(newRing);
+        }
+        if (newPoly.length > 0) out.push(newPoly);
+    }
+    return out.length === 0 ? null : out;
+}
+
+/**
+ * 内部：取或算 MultiPolygon layout cache（以 (0,0) 为原点）。失败 / 空 → null。
+ * 与 polygonCache 共用同 key（fontId|size|text|letterSpacing|lineHeight）。
+ */
+async function getOrComputeMultiLayout(textEl: TextElement): Promise<PCMultiPolygon | null> {
+    const key = `${textEl.fontId}|${textEl.fontSize}|${textEl.text}|${textEl.letterSpacing ?? 0}|${textEl.lineHeight ?? 0}`;
+    if (multiPolygonCache.has(key)) {
+        return multiPolygonCache.get(key) ?? null;
+    }
+    const result = await computeLayoutMultiPolygon(textEl);
+    if (multiPolygonCache.size >= POLYGON_CACHE_MAX) {
+        const firstKey = multiPolygonCache.keys().next().value;
+        if (firstKey !== undefined) multiPolygonCache.delete(firstKey);
+    }
+    multiPolygonCache.set(key, result);
+    return result;
+}
+
+/**
+ * 从 MultiPolygon 中取面积最大的外环（丢 holes 与其他 polygon）。
+ * 仅供 {@link textElementToPolygon} 的向后兼容路径用。
+ */
+function pickLargestOuterRing(multi: PCMultiPolygon): Polygon | null {
+    let bestRing: PCRing | null = null;
+    let bestArea = -1;
+    for (const poly of multi) {
+        if (poly.length === 0) continue;
+        const ring = poly[0];
+        const polyOut = fromPCRing(ring);
+        if (polyOut.length < 3) continue;
+        const area = polygonArea(polyOut);
+        if (area > bestArea) {
+            bestArea = area;
+            bestRing = ring;
+        }
+    }
+    if (bestRing === null) return null;
+    const out = fromPCRing(bestRing);
+    if (out.length < 3) return null;
+    for (const [x, y] of out) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    }
+    return out;
+}
+
+/**
+ * 真正干活：fontkit layout → glyph paths → polygon-clipping union → 完整 MultiPolygon。
+ * 输出以 (0,0) 为原点（baseline 起点）；caller 加 element 偏移。
+ *
+ * 0.4.10 bugfix：原 computeLayoutPolygon 在 union 后取面积最大外环，丢失了 "O" / "你"
+ * 等含内孔字符的 hole 以及多字符场景的非最大 polygon。改为返完整 MultiPolygon，调用方
+ * 决定要降级为单环还是直接用 union。
+ */
+async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPolygon | null> {
     const font = await loadFont(textEl.fontId);
     if (!font) return null;
     const unitsPerEm = font.unitsPerEm || 1000;
@@ -240,9 +347,21 @@ async function computeLayoutPolygon(textEl: TextElement): Promise<Polygon | null
             const yOffsetPx = pos.yOffset * scale;
 
             const glyphPolygons = glyphToPolygons(glyph, scale, cursorX + xOffsetPx, baselineY - yOffsetPx);
+            // 0.4.10 bugfix：把一个 glyph 的所有 subpath 作为**同一 PCPolygon 内的多 ring**
+            // 推入 subPolygons。polygon-clipping 只有同 polygon 内的多 ring 才被识别为
+            // "外环 + holes"（独立 polygon union 时 inner 总被合并掉）—— 这是 "O"
+            // 内孔保留的关键。OpenType glyph 语义本就是"复合形状 = 1 个 polygon 含
+            // 外环 + 多 holes"，与 polygon-clipping 输入约定天然吻合。
+            //
+            // 不同 glyph 之间走独立 PCPolygon，让多字符 union 后保持独立 polygon（不连通），
+            // 避免被误合并成单一大外环。
+            const glyphRings: PCRing[] = [];
             for (const poly of glyphPolygons) {
                 if (poly.length < 3) continue;
-                subPolygons.push([closeRing(toPCRing(poly))]);
+                glyphRings.push(closeRing(toPCRing(poly)));
+            }
+            if (glyphRings.length > 0) {
+                subPolygons.push(glyphRings as PCPolygon);
             }
 
             cursorX += advancePx;
@@ -263,38 +382,32 @@ async function computeLayoutPolygon(textEl: TextElement): Promise<Polygon | null
     }
     if (!merged || merged.length === 0) return null;
 
-    // glyph union 通常多个独立外环（字与字间不连）；我们要单 ring polygon，
-    // 这里选面积最大的外环——其他独立字符 polygon 会丢失精度。
-    // 替代：把所有外环串联成一个"近似"polygon 即可——Live Paint 用途上，多字符 polygon
-    // 只是为了"占用"判定，union 后多个独立外环对 hit test 更精确，但当前 GapPolygon
-    // 模型只支持单外环 + holes，多外环结构无处可放。
+    // 0.4.10 bugfix：返完整 MultiPolygon = Polygon[] = Ring[][]
+    //   - 每 Polygon = [outerRing, hole1, hole2, ...]
+    //   - 单字符 "O" → 1 Polygon = [外环, 内孔]
+    //   - 多字符 "Hello" → 5 Polygon（每字符 1 个），各自可能含 hole
+    //   - CJK "你好" → 多 Polygon + 多 holes
     //
-    // 折中：把所有外环组合成"伪连接 polygon"——画一条非常细的回环把所有外环串起来。
-    // 但这会让 LivePaintCore 的 union/difference 行为变怪。
+    // 旧实现取面积最大外环导致：(a) "O" 的内孔被丢，Live Paint 无法识别洞为 gap；
+    // (b) "Hello" 4 个字符 polygon 被丢，只有面积最大那个字符参与占用计算。
+    // 现在直接返 union 输出，由调用方决定是降级为单环还是直接喂给上层 union。
     //
-    // 最佳实践：取面积最大外环——对单字符 / 短词 OK；长文本会丢失部分字符精度。
-    // 长文本几乎不会真用 Live Paint 命中（一般在 logo / 标志上用 = 1-3 字符），可接受。
-    let bestRing: PCRing | null = null;
-    let bestArea = -1;
+    // 校验：去掉空 ring / NaN ring；ring 长度 < 3 不参与。
+    const out: PCMultiPolygon = [];
     for (const poly of merged) {
         if (poly.length === 0) continue;
-        const ring = poly[0];
-        const polyOut = fromPCRing(ring);
-        if (polyOut.length < 3) continue;
-        const area = polygonArea(polyOut);
-        if (area > bestArea) {
-            bestArea = area;
-            bestRing = ring;
+        const cleanPoly: PCPolygon = [];
+        for (const ring of poly) {
+            if (ring.length < 3) continue;
+            let ok = true;
+            for (const [x, y] of ring) {
+                if (!Number.isFinite(x) || !Number.isFinite(y)) { ok = false; break; }
+            }
+            if (ok) cleanPoly.push(ring);
         }
+        if (cleanPoly.length > 0) out.push(cleanPoly);
     }
-    if (bestRing === null) return null;
-
-    const outer = fromPCRing(bestRing);
-    if (outer.length < 3) return null;
-    for (const [x, y] of outer) {
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    }
-    return outer;
+    return out.length === 0 ? null : out;
 }
 
 /**

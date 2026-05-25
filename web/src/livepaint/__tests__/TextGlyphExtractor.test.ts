@@ -19,12 +19,14 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
     textElementToPolygon,
+    textElementToMultiPolygon,
     __setFetchForTest,
     __setFontkitModuleForTest,
     __resetCachesForTest,
 } from '../TextGlyphExtractor';
-import { elementToPolygonAsync } from '../ElementToPolygon';
-import type { TextElement } from '@/types/protocol';
+import { elementToPolygonAsync, elementToMultiPolygonAsync } from '../ElementToPolygon';
+import { buildGraph, findGapAt } from '../LivePaintCore';
+import type { Element, TextElement } from '@/types/protocol';
 
 function makeText(over: Partial<TextElement> = {}): TextElement {
     return {
@@ -343,5 +345,259 @@ describe('elementToPolygonAsync — text 分支', () => {
         const el = makeText({ text: 'A', visible: false });
         const poly = await elementToPolygonAsync(el);
         expect(poly).toBeNull();
+    });
+});
+
+/**
+ * 0.4.10 bugfix：textElementToMultiPolygon 保留 holes + 多 polygon 测试。
+ *
+ * Bug 复现：用户点击 "HELLO" 中字母 "O" 内部洞，期望识别为 gap fill；旧代码只取面积
+ * 最大外环，丢失 "O" 的内孔，导致 Live Paint 把整个 text bbox 当占用区，洞内点击
+ * 落入"occupied"区被拒绝。
+ *
+ * 修复：multi 路径返完整 polygon-clipping MultiPolygon =
+ *   [[outerRing, hole1, hole2, ...], [outerRing2, ...], ...]
+ */
+describe('textElementToMultiPolygon — 0.4.10 holes + 多 polygon 保留', () => {
+    it('单字符 "O" mock 路径含内孔 → 输出 polygon 含 hole（≥2 ring）', async () => {
+        mockFetchOk();
+        // 模拟 "O" 字形：外环逆时针 + 内环顺时针（OpenType 通常这样表示挖洞）。
+        // SVG path：外圆方形 800×800 + 内圆方形 400×400 居中（200, 200..600, 600）。
+        // fontkit Y 轴向上：先 outer (M0 0 L800 0 L800 800 L0 800 Z)
+        // 再 inner (M200 200 L200 600 L600 600 L600 200 Z) — 反向以触发 even-odd hole
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L800 0 L800 800 L0 800 Z M200 200 L200 600 L600 600 L600 200 Z',
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const multi = await textElementToMultiPolygon(makeText({ text: 'O', x: 0, y: 0, fontSize: 100 }));
+        expect(multi).not.toBeNull();
+        // 应有至少一个 polygon
+        expect(multi!.length).toBeGreaterThanOrEqual(1);
+        // 至少一个 polygon 应含 hole（ring 数 ≥ 2）—— "O" 内孔是核心验证
+        const hasHole = multi!.some(poly => poly.length >= 2);
+        expect(hasHole).toBe(true);
+    });
+
+    it('多字符 "Hello" → 多个独立 polygon（保留全部字符）', async () => {
+        mockFetchOk();
+        const mockFont = makeMockFont({
+            // 简单矩形 glyph；多字符 layout 后 5 个矩形不连通 → 5 个独立 polygon
+            defaultPath: 'M0 0 L400 0 L400 500 L0 500 Z',
+            advanceWidth: 600,  // 字符间距 600 > glyph 宽 400，确保不重叠
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const multi = await textElementToMultiPolygon(makeText({ text: 'Hello', x: 0, y: 0, fontSize: 100 }));
+        expect(multi).not.toBeNull();
+        // 5 个字符 → 至少 5 个独立 polygon（旧实现只保留 1 个面积最大的）
+        expect(multi!.length).toBeGreaterThanOrEqual(5);
+    });
+
+    it('CJK "你好" 复杂 path → 不抛 + 返多 polygon', async () => {
+        mockFetchOk();
+        // 一个含内孔的复杂 glyph（外环 + 内环）；layout 两个字符 → 至少 2 个 polygon
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L800 0 L800 800 L0 800 Z M250 250 L250 550 L550 550 L550 250 Z',
+            advanceWidth: 1000,
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const multi = await textElementToMultiPolygon(makeText({
+            text: '你好',
+            fontId: 'source_han_sans',
+            fontSize: 100,
+        }));
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBeGreaterThanOrEqual(2);
+        // 每 polygon 都该至少 1 ring
+        for (const poly of multi!) {
+            expect(poly.length).toBeGreaterThanOrEqual(1);
+        }
+    });
+
+    it('空文本 / 退化输入 → null（与 textElementToPolygon 同语义）', async () => {
+        mockFetchOk();
+        const mockFont = makeMockFont({});
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        expect(await textElementToMultiPolygon(makeText({ text: '' }))).toBeNull();
+        expect(await textElementToMultiPolygon(makeText({ text: 'A', vertical: true }))).toBeNull();
+        expect(await textElementToMultiPolygon(makeText({ text: 'A', fontSize: 0 }))).toBeNull();
+    });
+
+    it('element.x / element.y 偏移正确应用到所有 ring 所有点', async () => {
+        mockFetchOk();
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L500 0 L500 500 L0 500 Z',
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const m1 = await textElementToMultiPolygon(makeText({ text: 'A', x: 0, y: 0 }));
+        __resetCachesForTest();
+        mockFetchOk();
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+        const m2 = await textElementToMultiPolygon(makeText({ text: 'A', x: 50, y: 30 }));
+
+        expect(m1).not.toBeNull();
+        expect(m2).not.toBeNull();
+        expect(m1!.length).toBe(m2!.length);
+        for (let pi = 0; pi < m1!.length; pi++) {
+            expect(m1![pi].length).toBe(m2![pi].length);
+            for (let ri = 0; ri < m1![pi].length; ri++) {
+                const r1 = m1![pi][ri];
+                const r2 = m2![pi][ri];
+                expect(r1.length).toBe(r2.length);
+                for (let i = 0; i < r1.length; i++) {
+                    expect(r2[i][0] - r1[i][0]).toBeCloseTo(50, 6);
+                    expect(r2[i][1] - r1[i][1]).toBeCloseTo(30, 6);
+                }
+            }
+        }
+    });
+});
+
+describe('elementToMultiPolygonAsync — 0.4.10', () => {
+    it('text 元素含内孔 → MultiPolygon 含 hole', async () => {
+        mockFetchOk();
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L800 0 L800 800 L0 800 Z M200 200 L200 600 L600 600 L600 200 Z',
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const el = makeText({ text: 'O', x: 10, y: 20, fontSize: 100 });
+        const multi = await elementToMultiPolygonAsync(el);
+        expect(multi).not.toBeNull();
+        const hasHole = multi!.some(poly => poly.length >= 2);
+        expect(hasHole).toBe(true);
+    });
+
+    it('text 元素 glyph 提取失败 → fallback bbox 单 polygon 单 ring（闭合）', async () => {
+        mockFetchFail();
+        const mockFont = makeMockFont({});
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const el = makeText({ text: 'A', x: 10, y: 20, w: 30, h: 40 });
+        const multi = await elementToMultiPolygonAsync(el);
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBe(1);
+        expect(multi![0].length).toBe(1);
+        // ring 末点 = 首点（已闭合，长度 5 而非 4）
+        const ring = multi!![0][0];
+        expect(ring.length).toBe(5);
+        expect(ring[0]).toEqual([10, 20]);
+        expect(ring[4]).toEqual([10, 20]);
+    });
+
+    it('非 text 元素 → 单 polygon 单 ring（包装 sync polygon）', async () => {
+        const el: Element = {
+            id: 'r1',
+            type: 'rect',
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            rotation: 0,
+            locked: false,
+            visible: true,
+        };
+        const multi = await elementToMultiPolygonAsync(el);
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBe(1);
+        expect(multi!![0].length).toBe(1);  // 单 ring（无 hole）
+    });
+
+    it('visible=false text → null', async () => {
+        const el = makeText({ text: 'A', visible: false });
+        const multi = await elementToMultiPolygonAsync(el);
+        expect(multi).toBeNull();
+    });
+});
+
+describe('LivePaint buildGraph — 0.4.10 text hole gap 集成', () => {
+    /**
+     * 端到端验证 bug 修复：text "O" 内孔在 buildGraph 输出中应作为 gap 可命中。
+     * 旧代码：text bbox 占用整个 50×50 → 内孔位置 (25, 25) 落入 occupied → 不在 gap
+     * 新代码：text glyph union 保留 hole → 内孔位置 (25, 25) 在 gap.holes 之外 +
+     *         gap.outer 之内 → findGapAt 命中
+     */
+    it('text 含内孔时 buildGraph 把内孔识别为 gap 可命中', async () => {
+        mockFetchOk();
+        // glyph 是 "O" 形：外 800×800 + 内 400×400 hole（fontkit 单位）
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L800 0 L800 800 L0 800 Z M200 200 L200 600 L600 600 L600 200 Z',
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        // text element：fontSize=50, unitsPerEm=1000 → scale=0.05
+        // glyph 外环占 0..40 px（800×0.05），内孔 10..30 px（200..600 ×0.05）
+        // baselineY = fontSize × 0.8 = 40；Y 翻转后外环屏幕 y = 0..40
+        // 加 element offset (10, 10) → 外环 10..50 × 10..50；内孔 20..40 × 20..40
+        // 内孔中心 = (30, 30) → 在 hole gap 内
+        const text: TextElement = {
+            id: 't1',
+            type: 'text',
+            text: 'O',
+            x: 10,
+            y: 10,
+            w: 40,
+            h: 40,
+            rotation: 0,
+            locked: false,
+            visible: true,
+            fontId: 'inter',
+            fontSize: 50,
+            color: '#000000',
+            align: 'left',
+            letterSpacing: 0,
+            lineHeight: 1.2,
+            vertical: false,
+        };
+        const graph = await buildGraph([text], 128, 128);
+        expect(graph.degraded).toBeUndefined();
+        // 内孔几何中心 = (30, 30) — 严格在 20..40 × 20..40 内部
+        const gap = findGapAt(graph, 30, 30);
+        // 修复前：findGapAt 返 null（中心点被 text bbox 占用）
+        // 修复后：findGapAt 返 text 内孔对应的 gap（非 null）
+        expect(gap).not.toBeNull();
+    });
+
+    it('无内孔的 text（如 mock "I" 实心矩形 glyph）→ 中心不被识别为 gap', async () => {
+        mockFetchOk();
+        // 无 hole 的简单 glyph
+        const mockFont = makeMockFont({
+            defaultPath: 'M0 0 L800 0 L800 800 L0 800 Z',
+        });
+        __setFontkitModuleForTest(makeMockFontkitModule(mockFont) as never);
+
+        const text: TextElement = {
+            id: 't1',
+            type: 'text',
+            text: 'I',
+            x: 10,
+            y: 10,
+            w: 60,
+            h: 60,
+            rotation: 0,
+            locked: false,
+            visible: true,
+            fontId: 'inter',
+            fontSize: 50,
+            color: '#000000',
+            align: 'left',
+            letterSpacing: 0,
+            lineHeight: 1.2,
+            vertical: false,
+        };
+        const graph = await buildGraph([text], 128, 128);
+        expect(graph.degraded).toBeUndefined();
+        // text 中心被 glyph 实心占用 → findGapAt 应返 null（命中 element 不是 gap）
+        // 取一个落在 glyph 上的点（baseline 上方一点）
+        // text bbox = 10..70 × 10..70；glyph 0..40 px × 上抬到 baseline = fontSize*0.8=40 px
+        // glyph 屏幕区 ≈ x ∈ [10, 50]，y ∈ [10 + 40 - 40, 10 + 40] = [10, 50]
+        // 取 (20, 30) 应在 glyph 内
+        const gap = findGapAt(graph, 20, 30);
+        // 实心 glyph 中心点应被识别为 occupied → 不在 gap 内
+        expect(gap).toBeNull();
     });
 });

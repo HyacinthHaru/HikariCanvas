@@ -66,6 +66,33 @@
 
 约 18h 估，实际单日内完成（Sub A 1h + Sub B 2h + 主线 ~15min 版本号/journal/commit）。
 
+### 0.4.9 hotfix 批（用户实测后 4 bug 一次性修完）
+
+**Bug 1 — URL 粘贴上传无响应**（Sub A）：
+
+- 根因：`useCanvasUpload.ts:14` `IMAGE_URL_RE` 强制 URL 以 `.png/.jpe?g/.gif/.webp` 扩展名结尾，但大多数现代图片 URL 没扩展名（Imgur 直链 / 带 fragment / 多 query / 服务化 URL）→ regex 不匹配 → `onPasteImage` 静默 return，零反馈
+- 修法：放宽为 `HTTP_URL_RE = /^https?:\/\/[^\s<>"'\`]+$/i` 接受任意 http(s) URL；安全由后端三层兜底（UrlFetchSafety SSRF + Content-Type 白名单 + ImageIO 解码超时）
+- +31 vitest case（合法 URL 16 / 非 URL 12 / 长度边界 3）
+
+**Bug 2 — layer.opacity=0 透明失效**（主线）：
+
+- 根因：`ProjectState.isPristineAcrossLayers` line 213 `if (l.opacity() == 0f) continue;` 把"opacity=0 但有元素"的 layer 跳过，所有 layer 都跳 → isPristine=true → WallRestorer / CanvasProjector 走 placeholder
+- 修法：删该 line。pristine 是数据视角不是视觉视角；用户 opacity=0 是有意透明该 layer（让背景方块透出），不是空工程
+- 影响：用户调整任意 layer.opacity 现在都映出背景方块
+
+**Bug 3 — text glyph 字符内部洞被丢**（Sub B）：
+
+- 根因：`TextGlyphExtractor.ts` 把 glyph 的每个 subpath 推为**独立 PCPolygon**（外环 + 内环分别成 polygon）。polygon-clipping 行为：独立 polygon union 时被完全包含的 inner 直接合并（不当 hole）；只有**同一 PCPolygon 内的多 ring** 才识别为 outer+holes。叠加 union 后只取面积最大外环 → "O" 内孔 + 多字符的非最大 polygon 全丢
+- 修法：glyph 的所有 subpath 合并为**单 PCPolygon 含多 ring**；新增 `textElementToMultiPolygon` 返完整 union 结果 (MultiPolygon = Polygon[]，每 Polygon = [outer, ...holes])；ElementToPolygon 加 `elementToMultiPolygonAsync`；LivePaintCore.buildGraph 改用 multi 路径，直接 spread 给 polygon-clipping union（holes 自然被减为 gap）
+- +11 vitest case（O 内孔 / Hello 多 polygon / CJK / 旋转偏移 / 实心字符 vs 含洞 / 端到端集成 2）
+
+**Bug 4 — 图层缩略图比例错**（主线）：
+
+- 根因：`LayerThumbnailRenderer.ts` 把内容 letterbox 到 64×64 dataURL（含巨大透明边），LayerPanel CSS `<img object-contain>` 把 dataURL 再 fit 28×28 → **double scale**（dataURL 自身 letterbox + CSS 再 contain），用户看到的内容只占容器一小部分
+- 修法：`THUMBNAIL_SIZE = 64` → `THUMBNAIL_MAX_SIDE = 64`；按 canvas aspect ratio 输出 dataURL（长边 = 64，短边按比例）。CSS object-contain 单次 fit 即可
+
+**测试结果**：后端 855 全绿（ProjectState 改未破回归）+ 前端 vitest **257 全绿**（215 baseline + 11 Sub B text holes + 31 Sub A URL）。
+
 ---
 
 ## 2026-05-25 · 0.4.8 — 打磨批（11 项 / M18 + M8 + M13 + Token rate limit）

@@ -19,7 +19,7 @@ import {
     X,
 } from 'lucide-vue-next';
 import type { BlendMode, Layer, LayerColorTag } from '@/types/protocol';
-import { renderLayerThumbnail, THUMBNAIL_SIZE } from '@/render/LayerThumbnailRenderer';
+import { renderLayerThumbnail } from '@/render/LayerThumbnailRenderer';
 
 const project = useProjectStore();
 const ui = useUiStore();

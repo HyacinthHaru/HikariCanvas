@@ -5,7 +5,7 @@
  * <ul>
  *   <li>复用 {@link renderProjectState} 单 layer 模式 —— 把目标 layer 包成"伪 ProjectState"
  *       渲染到全分辨率 off-canvas（透明背景：把 canvas.background 强制设为透明），
- *       再缩放到 {@link THUMBNAIL_SIZE}×{@link THUMBNAIL_SIZE} 输出 dataURL。</li>
+ *       再按 canvas aspect ratio 缩到长边 = {@link THUMBNAIL_MAX_SIDE} 的 dataURL。</li>
  *   <li>缓存 key = layerId；hash = elements 简单序列化签名（元素数量 + 各 id + 各
  *       x/y/w/h/rotation/visible 简化值）。任意元素增删改都会改 hash → 重 render。</li>
  *   <li>背景棋盘格交给 CSS（缩略图本身始终透明），节约一次重画。</li>
@@ -17,8 +17,15 @@
 import type { Element, Layer, ProjectState } from '@/types/protocol';
 import { renderProjectState } from './PreviewRenderer';
 
-/** 缩略图正方形尺寸（设备像素）。LayerPanel 默认 32×32 显示；2× DPR 屏幕仍清晰。 */
-export const THUMBNAIL_SIZE = 64;
+/**
+ * 缩略图长边像素数（dataURL 按画布 aspect ratio 输出，长边 = 此值，短边按比例）。
+ *
+ * <p><b>0.4.9 hotfix #4</b>：原 64×64 letterbox 输出导致 LayerPanel `<img object-contain>`
+ * 时 double scale（dataURL 自身含巨大透明边 + CSS 再 fit），用户看到的内容只占容器一小部分。
+ * 改为按 aspect ratio 输出真实尺寸，让 CSS 的 object-contain 做单次 fit，棋盘格 background
+ * 透过透明边自然显示。</p>
+ */
+export const THUMBNAIL_MAX_SIDE = 64;
 
 interface CacheEntry {
     hash: string;
@@ -102,21 +109,20 @@ export function renderLayerThumbnail(
     const synthetic = buildSyntheticState(state, layer);
     renderProjectState(fg, synthetic);
 
-    // 2) 缩放到 THUMBNAIL_SIZE×THUMBNAIL_SIZE（保持宽高比，居中 letterbox）
+    // 2) 缩放到 aspect ratio 的 thumb canvas（长边 = THUMBNAIL_MAX_SIDE）
+    //    0.4.9 hotfix #4：去 letterbox，让 CSS object-contain 做单次 fit，避免 double scale
+    const ratio = Math.min(THUMBNAIL_MAX_SIDE / widthPx, THUMBNAIL_MAX_SIDE / heightPx);
+    const thumbW = Math.max(1, Math.round(widthPx * ratio));
+    const thumbH = Math.max(1, Math.round(heightPx * ratio));
     const thumb = document.createElement('canvas');
-    thumb.width = THUMBNAIL_SIZE;
-    thumb.height = THUMBNAIL_SIZE;
+    thumb.width = thumbW;
+    thumb.height = thumbH;
     const tg = thumb.getContext('2d');
     if (!tg) return null;
     // 缩略图允许平滑（hi-quality）让缩小后视觉更柔；与渲染器主 path（imageSmoothingEnabled=false）独立
     tg.imageSmoothingEnabled = true;
     tg.imageSmoothingQuality = 'medium';
-    const ratio = Math.min(THUMBNAIL_SIZE / widthPx, THUMBNAIL_SIZE / heightPx);
-    const drawW = Math.max(1, Math.round(widthPx * ratio));
-    const drawH = Math.max(1, Math.round(heightPx * ratio));
-    const offX = Math.round((THUMBNAIL_SIZE - drawW) / 2);
-    const offY = Math.round((THUMBNAIL_SIZE - drawH) / 2);
-    tg.drawImage(full, offX, offY, drawW, drawH);
+    tg.drawImage(full, 0, 0, thumbW, thumbH);
 
     const dataUrl = thumb.toDataURL('image/png');
     cache.set(layer.id, { hash, dataUrl });

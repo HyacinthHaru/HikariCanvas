@@ -201,16 +201,19 @@ public final class ProjectState {
     }
 
     /**
-     * Ultrareview 2026-05-25 #6：多图层 pristine 判定。等价于"所有 layer 都不会贡献像素"——
-     * empty / hidden / opacity=0。
+     * Ultrareview 2026-05-25 #6：多图层 pristine 判定。等价于"工程是否完全空"——
+     * 所有 layer 都 empty 或 hidden。
      *
      * <p>背景：旧 {@link #elements()} 只返回 active layer，多图层工程若 active layer 空但其他
      * visible layer 有内容会被误判为 pristine，启动 restore / projector 走 placeholder 抹掉真实内容。</p>
+     *
+     * <p><b>0.4.9 hotfix #2</b>：删除 {@code opacity==0} 判定——用户 layer.opacity=0 是
+     * 有意为之（透明该 layer 让背景方块透出），不是空工程。pristine 是数据视角不是视觉视角；
+     * 不该把"有元素但视觉透明"的工程误判为 placeholder 应该显示。</p>
      */
     public boolean isPristineAcrossLayers() {
         for (Layer l : layers) {
             if (!l.visible()) continue;
-            if (l.opacity() == 0f) continue;
             if (!l.elements().isEmpty()) return false;
         }
         return true;

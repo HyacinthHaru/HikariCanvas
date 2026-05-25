@@ -13,8 +13,14 @@
  *   - P4：vector-fill 决策 A（点击 element 内部 → modify fill）+ 顶点 RDP 简化
  */
 
-export { elementToPolygon, elementToPolygonAsync, CIRCLE_SAMPLE_POINTS, PATH_CURVE_SAMPLES } from './ElementToPolygon';
-export { textElementToPolygon, GLYPH_CURVE_SAMPLES } from './TextGlyphExtractor';
+export {
+    elementToPolygon,
+    elementToPolygonAsync,
+    elementToMultiPolygonAsync,
+    CIRCLE_SAMPLE_POINTS,
+    PATH_CURVE_SAMPLES,
+} from './ElementToPolygon';
+export { textElementToPolygon, textElementToMultiPolygon, GLYPH_CURVE_SAMPLES } from './TextGlyphExtractor';
 export { brushStrokeToPolygon, RDP_THRESHOLD, RDP_TOLERANCE, CAP_SAMPLES, JOIN_SAMPLES } from './BrushStrokeOffset';
 export { buildGraph, findGapAt, pointInPolygon } from './LivePaintCore';
 export {

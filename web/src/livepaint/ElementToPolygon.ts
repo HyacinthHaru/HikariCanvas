@@ -18,10 +18,11 @@
  * 容忍但行为可能略偏。M18-P4 hover preview 期间会观察 corner case。
  */
 
+import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon } from 'polygon-clipping';
 import type { BrushStrokeElement, Element, TextElement } from '@/types/protocol';
 import type { Polygon } from './types';
 import { brushStrokeToPolygon } from './BrushStrokeOffset';
-import { textElementToPolygon } from './TextGlyphExtractor';
+import { textElementToPolygon, textElementToMultiPolygon } from './TextGlyphExtractor';
 
 /** 椭圆采样点数。32 在 128 像素半径下视觉上几乎无棱角；更多会让 union 顶点爆炸。 */
 export const CIRCLE_SAMPLE_POINTS = 32;
@@ -132,6 +133,59 @@ export async function elementToPolygonAsync(el: Element): Promise<Polygon | null
     return elementToPolygon(el);
 }
 
+/**
+ * 0.4.10 bugfix：Element → polygon-clipping MultiPolygon（保留 holes + 多 polygon）。
+ *
+ * 对比 {@link elementToPolygonAsync}：
+ * - 旧函数为 text 走 fontkit 但**只返单 ring polygon**——丢失 "O" 的内孔、丢失 "Hello"
+ *   的非最大字符 polygon，导致 Live Paint 把 text bbox 整片当占用，无法识别字符内部洞
+ *   或字符之间空白为 gap
+ * - 本函数对 text 走新的 {@link textElementToMultiPolygon}，保留完整结构；其他元素类型
+ *   仍是"单 polygon = 单 ring"，包装成 PCMultiPolygon 后形状不变
+ *
+ * 用途：LivePaintCore.buildGraph 收集占用区。union 时直接 spread 即可
+ * （polygon-clipping union 支持 GeoJSON-style MultiPolygon 输入）。
+ *
+ * 返回 null = element 不参与（visible=false / 退化）。返回的 ring 已闭合
+ * （末点 = 首点）以满足 polygon-clipping 输入约定。
+ */
+export async function elementToMultiPolygonAsync(el: Element): Promise<PCMultiPolygon | null> {
+    if (el.visible === false) return null;
+    if (!isFinite(el.x) || !isFinite(el.y) || !isFinite(el.w) || !isFinite(el.h)) return null;
+    if (el.w <= 0 || el.h <= 0) return null;
+
+    if (el.type === 'text') {
+        const textEl = el as TextElement;
+        let multi: PCMultiPolygon | null = null;
+        try {
+            multi = await textElementToMultiPolygon(textEl);
+        } catch {
+            multi = null;
+        }
+        if (multi !== null && multi.length > 0) {
+            // text 旋转：每 ring 每点绕 bbox 中心旋转
+            const rotation = (textEl.rotation ?? 0) % 360;
+            if (rotation === 0) return ensureClosedMulti(multi);
+            const cx = textEl.x + textEl.w / 2;
+            const cy = textEl.y + textEl.h / 2;
+            return ensureClosedMulti(rotateMulti(multi, cx, cy, rotation));
+        }
+        // glyph 提取失败 → fallback 单 ring bbox（与 elementToPolygonAsync 一致）
+        const bbox: PCPolygon = [closeRing([
+            [textEl.x, textEl.y],
+            [textEl.x + textEl.w, textEl.y],
+            [textEl.x + textEl.w, textEl.y + textEl.h],
+            [textEl.x, textEl.y + textEl.h],
+        ])];
+        return [bbox];
+    }
+
+    // 非 text → 走 sync 单 ring，包成 MultiPolygon
+    const single = elementToPolygon(el);
+    if (single === null) return null;
+    return [[closeRing(single.map(([x, y]) => [x, y] as Pair))]];
+}
+
 // ---------- helpers ----------
 
 function bboxPolygon(x: number, y: number, w: number, h: number): Polygon {
@@ -186,6 +240,32 @@ function shapePolygon(
         }
     }
     return out;
+}
+
+/** 旋转 MultiPolygon（每 ring 每点绕 (cx, cy) 旋转 degrees 度，与 rotatePolygon 同公式）。 */
+function rotateMulti(multi: PCMultiPolygon, cx: number, cy: number, degrees: number): PCMultiPolygon {
+    const rad = (degrees * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    return multi.map(poly => poly.map(ring => ring.map(([px, py]) => {
+        const dx = px - cx;
+        const dy = py - cy;
+        return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos] as Pair;
+    })));
+}
+
+/** 确保每 ring 末点 = 首点（polygon-clipping 输入约定）。 */
+function ensureClosedMulti(multi: PCMultiPolygon): PCMultiPolygon {
+    return multi.map(poly => poly.map(ring => closeRing(ring)));
+}
+
+/** 闭合 ring：若末点 ≠ 首点则追加首点拷贝。 */
+function closeRing(ring: Array<[number, number]>): Array<[number, number]> {
+    if (ring.length === 0) return ring;
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first[0] === last[0] && first[1] === last[1]) return ring;
+    return [...ring, [first[0], first[1]] as Pair];
 }
 
 function rotatePolygon(poly: Polygon, cx: number, cy: number, degrees: number): Polygon {
