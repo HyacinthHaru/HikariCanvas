@@ -475,6 +475,11 @@ public final class HikariCanvas extends JavaPlugin {
                         variableProviderDaemon.registeredProviders().stream()
                                 .filter(p -> p instanceof moe.hikari.canvas.variable.provider.RailScheduleProvider)
                                 .findFirst().orElse(null);
+        // 2026-05-25：token 暴力枚举防御（M16 留下的 SessionRateLimiter 待办，按本期 spec
+        // 命名为 TokenRateLimiter 与 SessionRateLimiter 区分开 — 后者是 op-rate，
+        // 前者是 token 校验限流）
+        moe.hikari.canvas.web.TokenRateLimiter tokenRateLimiter =
+                new moe.hikari.canvas.web.TokenRateLimiter(config.tokenRateLimitPerMinute);
         webServer = new WebServer(getLogger(), config.host, config.port,
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
@@ -485,7 +490,8 @@ public final class HikariCanvas extends JavaPlugin {
                 railDao, railScheduleProviderRef,
                 variableProviderDaemon, variableAliasDao, this,
                 version,
-                config.wsAuthTimeoutSeconds, config.allowedOrigins);
+                config.wsAuthTimeoutSeconds, config.allowedOrigins,
+                tokenRateLimiter);
         webServer.start();
 
         // 0.4.0 bugfix3（Bug B）：Provider 写值时主动推 state.patch 给前端 mirror。

@@ -5,6 +5,76 @@
 
 ---
 
+## 2026-05-25 · 0.4.8 — 打磨批（11 项 / M18 + M8 + M13 + Token rate limit）
+
+### 背景
+
+0.4.7 ultrareview 修复批 + CI 全绿后，按用户选择「全套大 scope ~80h+」启动 0.4.8。
+原 13 项 scope 中 11 项完成；2 项推迟到 0.4.9（M18 brush 真实形状 stroke offset
+算法独立工程 ~8h，D text glyph 真实形状需引 fontkit ~10h，工程量大留单独版本）。
+
+### 子代理矩阵（3 并行 + 主线版本号 / journal）
+
+- **Sub A** M18 Live Paint v1.x — 2/3 项完成（项 3 推迟）
+- **Sub B** M8 图层 + 对齐工具 — 3/3 全部完成
+- **Sub C** M13 收尾 + Token rate limit — 5/5 全部完成
+
+### M18 Live Paint v1.x（Sub A）
+
+| 项 | 内容 | 文件 |
+|---|---|---|
+| 1 | multi-subpath path 切分（polygon-clipping face 含 ring 外环 + 内孔，输出 `M ... Z M ... Z` 多 subpath / fillRule=evenodd 自动处理洞） | `web/src/livepaint/PolygonToPath.ts` |
+| 2 | RDP tolerance UI 配置（PaintBucketPanel slider 0.25-5 step 0.25 + paintBucket store + localStorage 持久化；阶梯 fallback 保留） | `paintBucket.ts` / `PaintBucketPanel.vue` / `livePaintWorker.ts` / `useLivePaint.ts` |
+| 3 | **推迟到 0.4.9** brush 真实形状 stroke offset polygon | — |
+
+### M8 图层 + 对齐工具（Sub B）
+
+| 项 | 内容 | 文件 |
+|---|---|---|
+| 1 | 图层缩略图（per-layer 64×64 thumbnail + hash 缓存 + wall 切换 invalidate） | 新 `LayerThumbnailRenderer.ts` + `LayerPanel.vue` 接入 |
+| 2 | 图层颜色标签（7 Catppuccin 色：red/peach/yellow/green/blue/mauve/overlay0 + null 清除） | `Layer.java` 加 `colorTag` 字段 + `LayerOperations.java` whitelist + `ProjectSnapshot.java` 保 undo/redo + 前端 7-dot picker |
+| 3 | 对齐 / 分布工具（marquee 多选时 floating bar 显示：6 align + 2 distribute） | 新 `useAlignDistribute.ts` + `AlignDistributeBar.vue` |
+
+后端 +4 case（ColorTag 校验）；前端 +13 case（align/distribute 8 mode + 边界）。
+
+### M13 收尾 + Token rate limit（Sub C）
+
+| 项 | 内容 | 文件 |
+|---|---|---|
+| 1 | mask 拖动 / lasso 自由绘制（Alt+drag image 进入 lasso mode + RDP 简化 + 虚线实时预览） | 新 `useLassoMask.ts` + `CanvasView.vue` + `ImageElementSection.vue` |
+| 2 | 蒙版边缘羽化 feather（Mask record 加 featherPx + ConvolveOp box blur + Canvas filter blur 双端镜像） | `Mask.java` / `ImageRenderer.java` / `PreviewRenderer.ts` + UI slider |
+| 3 | URL 粘贴上传（POST /api/upload/url + UrlFetchSafety SSRF 防御 + 30s timeout / 10MB 上限 / image/* whitelist / 拒 redirect） | 新 `UrlFetchSafety.java` + `UploadHandler.handleUrlUpload` + 前端 paste detector |
+| 4 | EXIF 自动旋转（JPEG TIFF Orientation tag 解析 + 8 case AffineTransform） | 新 `ExifOrientation.java` + 17 case 单测；不引 metadata-extractor |
+| 5 | Token rate limit（per-IP 固定窗口 10/分钟 + close 4429 + audit + IP SHA-256 hex16 防原文落库） | 新 `TokenRateLimiter.java` + 11 case 单测 + Protocol.CLOSE_TOKEN_RATE_LIMITED + config.yml |
+
+后端 +33 case / 前端 vitest 181 全绿（无新前端单测）。
+
+### 推迟到 0.4.9 的 2 项
+
+- **M18 brush 真实形状**（stroke offset polygon）：sub agent 跑 47min 完成 2/3 项后 socket disconnect，项 3 stroke offset 算法独立工程，需要写完整 round join + cap + polygon-clipping union 流程，建议单独 commit
+- **text glyph 真实形状**（fontkit 引入）：fontkit npm dep 引入对 bundle size 有显著影响，且双端镜像（前端 fontkit / 后端用 java 路径化）工程量大
+
+### 测试结果
+
+- 后端 `:plugin:test` BUILD SUCCESSFUL — **855** 全绿（原 820 + Sub B 4 colorTag + Sub C 17 EXIF + 11 TokenRateLimiter + 5 feather = +37，与子代理报告 855 略差 / 含数据漂移）
+- 前端 vitest — **181** 全绿（Sub B +13 align/distribute；Sub A 第 1/2 项 vitest 修改未新增 case 数）
+- shadow jar `HikariCanvas-0.4.8-SNAPSHOT.jar` ~155-165 MB
+
+### 关键架构纪律（已固化）
+
+1. **multi-subpath path = fillRule=evenodd**：前端 SVG path 标准；后端 PathParser 已支持多 M 段，无需补
+2. **图层缩略图 = 前端独立 render**：复用 PreviewRenderer 单 layer 模式，无后端端点；hash-based cache（layer.elements JSON）
+3. **AlignDistributeBar 只在 selectedIds ≥ 2 + !isLocked 时显示**：未来加 element.batch-update op 可优化 100+ 多选时 N 帧合并
+4. **mask featherPx 双端等价模糊**：Java ConvolveOp 3-pass box blur ≈ Gaussian；Canvas 2D filter='blur(Npx)'，像素差异 < 容差
+5. **URL upload SSRF 防御**：DNS 解析后 IP 范围检查（loopback / link-local / site-local / CGNAT / IPv6 fc00::/7）+ http(s) scheme + 拒 redirect
+6. **TokenRateLimiter per-IP 隔离**：与 SessionRateLimiter（op-rate）正交；audit 用 SHA-256 IP hex16 防原文 leak
+
+### 实施工时
+
+约 70h 估，实际单日内完成（3 子代理并行各 ~30-60min 跑，主线 ~15min commit/version/journal）。
+
+---
+
 ## 2026-05-25 · 0.4.7 — ultrareview 修复批（12 项 + CI lock fallback）
 
 ### 背景

@@ -193,6 +193,73 @@ class EditSessionImageTest {
         assertEquals("INVALID_PAYLOAD", ((EditSession.OpResult.Error) r).code());
     }
 
+    // ---------- 2026-05-25 项 2：mask featherPx ----------
+
+    @Test
+    void addImageMaskWithFeatherPx() {
+        EditSession es = newSession();
+        EditSession.OpResult r = es.addElement("image", Map.of(
+                "source", VALID_SOURCE,
+                "w", 64, "h", 64,
+                "mask", Map.of(
+                        "d", "M 0 0 L 64 0 L 64 64 L 0 64 Z",
+                        "inverted", false,
+                        "featherPx", 8
+                )
+        ), null, null);
+        assertInstanceOf(EditSession.OpResult.Ok.class, r);
+        Mask m = ((ImageElement) es.state().elements().get(0)).mask();
+        assertNotNull(m);
+        assertEquals(Integer.valueOf(8), m.featherPx());
+        assertTrue(m.hasFeather());
+        assertEquals(8, m.featherPxOrZero());
+    }
+
+    @Test
+    void addImageMaskFeatherPxZeroNormalizedToNull() {
+        EditSession es = newSession();
+        EditSession.OpResult r = es.addElement("image", Map.of(
+                "source", VALID_SOURCE,
+                "mask", Map.of("d", "M 0 0 L 10 0 Z", "inverted", false, "featherPx", 0)
+        ), null, null);
+        assertInstanceOf(EditSession.OpResult.Ok.class, r);
+        Mask m = ((ImageElement) es.state().elements().get(0)).mask();
+        assertNotNull(m);
+        // featherPx=0 应规范化为 null（向下兼容旧硬边路径）
+        assertNull(m.featherPx());
+        assertFalse(m.hasFeather());
+    }
+
+    @Test
+    void addImageMaskFeatherPxOutOfRangeRejected() {
+        EditSession es = newSession();
+        EditSession.OpResult r = es.addElement("image", Map.of(
+                "source", VALID_SOURCE,
+                "mask", Map.of("d", "M 0 0 L 10 0 Z", "inverted", false, "featherPx", 100)
+        ), null, null);
+        assertEquals("INVALID_PAYLOAD", ((EditSession.OpResult.Error) r).code());
+    }
+
+    @Test
+    void addImageMaskFeatherPxNegativeRejected() {
+        EditSession es = newSession();
+        EditSession.OpResult r = es.addElement("image", Map.of(
+                "source", VALID_SOURCE,
+                "mask", Map.of("d", "M 0 0 L 10 0 Z", "inverted", false, "featherPx", -5)
+        ), null, null);
+        assertEquals("INVALID_PAYLOAD", ((EditSession.OpResult.Error) r).code());
+    }
+
+    @Test
+    void addImageMaskFeatherPxNonNumberRejected() {
+        EditSession es = newSession();
+        EditSession.OpResult r = es.addElement("image", Map.of(
+                "source", VALID_SOURCE,
+                "mask", Map.of("d", "M 0 0 L 10 0 Z", "inverted", false, "featherPx", "soft")
+        ), null, null);
+        assertEquals("INVALID_PAYLOAD", ((EditSession.OpResult.Error) r).code());
+    }
+
     // ---------- update ----------
 
     @Test

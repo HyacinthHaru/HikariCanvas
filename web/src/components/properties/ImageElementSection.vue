@@ -28,7 +28,7 @@ const emit = defineEmits<{
 const net = useNetworkStore();
 const { t } = useI18n();
 
-type MaskPresetKind = 'none' | 'circle' | 'roundedRect' | 'ellipse';
+type MaskPresetKind = 'none' | 'circle' | 'roundedRect' | 'ellipse' | 'lasso';
 
 // M16 P1.1：缩略图 URL 也需带 sessionId，否则 401
 const thumbnailSrc = computed(() => {
@@ -38,6 +38,7 @@ const thumbnailSrc = computed(() => {
 
 const imageMaskKind = computed<MaskPresetKind>(() => detectMaskPreset(props.element));
 const imageMaskInverted = computed<boolean>(() => props.element.mask?.inverted ?? false);
+const imageMaskFeather = computed<number>(() => props.element.mask?.featherPx ?? 0);
 const isDither = computed(() => props.element.renderMode === 'dither');
 
 /**
@@ -53,7 +54,8 @@ function detectMaskPreset(im: ImageElement | null): MaskPresetKind {
         return im.w === im.h ? 'circle' : 'ellipse';
     }
     if (qCount === 4 && cCount === 0) return 'roundedRect';
-    return 'none';
+    // 2026-05-25 项 1：4 预设之外的任意 d 一律视作 lasso（自由 path / 拖动编辑）
+    return 'lasso';
 }
 
 /**
@@ -139,19 +141,58 @@ function onMaskKindChange(ev: Event) {
         emit('update', { mask: null });
         return;
     }
+    if (kind === 'lasso') {
+        // 仅切换标识 — 实际 path 等用户 Alt + 拖动绘制。若当前已是非预设 d 保留；
+        // 否则提示用户去画布上拖
+        return;
+    }
     let d = '';
     if (kind === 'circle') d = makeCircleD(im.w, im.h);
     else if (kind === 'roundedRect') d = makeRoundedRectD(im.w, im.h);
     else if (kind === 'ellipse') d = makeEllipseD(im.w, im.h);
     const inverted = im.mask?.inverted ?? false;
-    emit('update', { mask: { d, inverted } as Mask });
+    const featherPx = im.mask?.featherPx ?? null;
+    emit('update', { mask: { d, inverted, featherPx } as Mask });
 }
 
 function onMaskInvertedToggle(ev: Event) {
     const im = props.element;
     if (!im.mask) return;
     const inverted = (ev.target as HTMLInputElement).checked;
-    emit('update', { mask: { d: im.mask.d, inverted } });
+    emit('update', { mask: { d: im.mask.d, inverted, featherPx: im.mask.featherPx ?? null } });
+}
+
+/** 2026-05-25 项 2：羽化滑块。0 = 无羽化（featherPx=null）；1..32 = 渐变像素数。 */
+function onMaskFeatherChange(ev: Event) {
+    const im = props.element;
+    if (!im.mask) return;
+    const raw = parseInt((ev.target as HTMLInputElement).value, 10);
+    const v = Number.isFinite(raw) ? Math.max(0, Math.min(32, raw)) : 0;
+    emit('update', {
+        mask: {
+            d: im.mask.d,
+            inverted: im.mask.inverted,
+            featherPx: v === 0 ? null : v,
+        } as Mask,
+    });
+}
+
+/** 2026-05-25 项 1：清除蒙版 — emit mask=null 让后端落 ImageElement.mask=null。 */
+function onMaskClear() {
+    emit('update', { mask: null });
+}
+
+/**
+ * 2026-05-25 项 1：触发 lasso 编辑模式。仅是 UI hint —— 实际拖动绘制由 CanvasView /
+ * useLassoMask 监听全局 Alt + drag 事件捕获，不需要 RightPanel 改 store state。
+ * 这里只做用户教育（toast / hint）；按钮 click 主要为可发现性。
+ */
+function onMaskEditLasso() {
+    // 简化实装：alert 提示用户操作方式。生产可接 toast / hint overlay；
+    // 关键的实际编辑逻辑都在 useLassoMask composable 里，按钮非必需。
+    if (typeof window !== 'undefined') {
+        window.alert(t.value.image.maskEditLassoTip);
+    }
 }
 
 function toggleImageDither(ev: Event) {
@@ -167,12 +208,20 @@ watch(
         const im = props.element;
         if (!im.mask) return;
         const kind = detectMaskPreset(im);
+        // 2026-05-25 项 1：lasso 是用户自由 path，resize 时不重置（保持原 d）
+        if (kind === 'lasso') return;
         let regenerated = '';
         if (kind === 'circle') regenerated = makeCircleD(im.w, im.h);
         else if (kind === 'roundedRect') regenerated = makeRoundedRectD(im.w, im.h);
         else if (kind === 'ellipse') regenerated = makeEllipseD(im.w, im.h);
         if (regenerated && regenerated !== im.mask.d) {
-            emit('update', { mask: { d: regenerated, inverted: im.mask.inverted } });
+            emit('update', {
+                mask: {
+                    d: regenerated,
+                    inverted: im.mask.inverted,
+                    featherPx: im.mask.featherPx ?? null,
+                } as Mask,
+            });
         }
     },
 );
@@ -283,6 +332,7 @@ async function onReplaceFileChange(e: Event) {
             <option value="circle">{{ t.image.maskPresets.circle }}</option>
             <option value="roundedRect">{{ t.image.maskPresets.roundedRect }}</option>
             <option value="ellipse">{{ t.image.maskPresets.ellipse }}</option>
+            <option value="lasso">{{ t.image.maskPresets.lasso }}</option>
           </select>
         </div>
         <Tooltip v-if="imageMaskKind !== 'none'" :text="t.image.maskInvertedTip">
@@ -291,6 +341,43 @@ async function onReplaceFileChange(e: Event) {
             <input type="checkbox" :checked="imageMaskInverted" @change="onMaskInvertedToggle" />
           </label>
         </Tooltip>
+        <!-- 2026-05-25 项 2：羽化滑块 -->
+        <Tooltip v-if="imageMaskKind !== 'none'" :text="t.image.maskFeatherTip">
+          <label class="flex items-center gap-2 pl-1">
+            <span class="hc-field-label flex-shrink-0">{{ t.image.maskFeather }}</span>
+            <input
+              type="range"
+              min="0"
+              max="32"
+              step="1"
+              :value="imageMaskFeather"
+              :disabled="locked"
+              class="flex-1"
+              @input="onMaskFeatherChange"
+            />
+            <span class="hc-field-label tabular-nums w-10 text-right">{{ imageMaskFeather }} {{ t.image.maskFeatherUnit }}</span>
+          </label>
+        </Tooltip>
+        <!-- 2026-05-25 项 1：lasso 编辑触发 + 清除蒙版 -->
+        <div class="flex gap-1 pl-1">
+          <Tooltip :text="t.image.maskEditLassoTip">
+            <button
+              class="flex-1 px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+              :disabled="locked"
+              @click="onMaskEditLasso"
+            >
+              {{ t.image.maskEditLasso }}
+            </button>
+          </Tooltip>
+          <button
+            v-if="imageMaskKind !== 'none'"
+            class="px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--destructive)] hover:text-white disabled:opacity-40"
+            :disabled="locked"
+            @click="onMaskClear"
+          >
+            {{ t.image.maskClear }}
+          </button>
+        </div>
       </div>
 
       <!-- Dither -->

@@ -324,7 +324,7 @@ public final class ProjectState {
         for (Layer l : snap.layers()) {
             this.layers.add(new Layer(
                     l.id(), l.name(), l.visible(), l.locked(),
-                    l.opacity(), l.blendMode(),
+                    l.opacity(), l.blendMode(), l.colorTag(),
                     new ArrayList<>(l.elements())));
         }
         // activeLayerId 若 snapshot 里没了对应层，回退到第一层

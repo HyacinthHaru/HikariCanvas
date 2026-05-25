@@ -8,6 +8,12 @@ import { useI18n } from '@/i18n';
 import { preloadImage } from '@/render/PreviewRenderer';
 
 /**
+ * 2026-05-25 项 3：粘贴板纯文本是否为可下载的图片 URL。
+ * 限定 http(s) + 常见图片扩展（png/jpg/jpeg/gif/webp）；query string 允许。
+ */
+const IMAGE_URL_RE = /^https?:\/\/[^\s<>"]+?\.(png|jpe?g|gif|webp)(\?[^\s]*)?$/i;
+
+/**
  * M13-D：图片上传三入口（drop / paste / file input）。
  * - 调用方需提供 brushHostRef（用于 dropToCanvas 坐标换算）+ fileInputRef（隐藏 file input 元素的模板 ref）。
  * - useEventListener(window, 'paste', ...) 由本 composable 自动挂载。
@@ -119,6 +125,11 @@ export function useCanvasUpload(opts: {
         if (project.isLocked) return;
         if (document.activeElement instanceof HTMLTextAreaElement) return;
         if (document.activeElement instanceof HTMLInputElement) return;
+        if (document.activeElement instanceof HTMLElement
+            && (document.activeElement.isContentEditable
+                || document.activeElement.getAttribute('contenteditable') === 'true')) {
+            return;
+        }
         const items = e.clipboardData?.items;
         if (!items) return;
         for (const item of items) {
@@ -130,6 +141,56 @@ export function useCanvasUpload(opts: {
                     return;
                 }
             }
+        }
+        // 2026-05-25 项 3：URL 粘贴。文本剪贴板内容是图片 URL 时自动下载并走上传管线。
+        // 仅在没有 file 命中时尝试 URL 路径。
+        const text = e.clipboardData?.getData('text/plain');
+        if (text && IMAGE_URL_RE.test(text.trim())) {
+            uploadFromUrl(text.trim());
+            e.preventDefault();
+        }
+    }
+
+    /** 2026-05-25 项 3：从 URL 上传。后端 SSRF 校验 + 6 层校验栈复用。 */
+    async function uploadFromUrl(url: string, dropClientX?: number, dropClientY?: number) {
+        if (project.isLocked) { flashError(t.value.image.lockedDenied); return; }
+        if (!net.sessionId) { flashError(t.value.image.noSession); return; }
+        uploading.value = true;
+        try {
+            const resp = await fetch(`/api/upload/url?sessionId=${encodeURIComponent(net.sessionId)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url }),
+            });
+            if (!resp.ok) {
+                const body = await resp.json().catch(() => ({} as Record<string, string>));
+                flashError(t.value.image.uploadFailed(resp.status, body.message || body.error || t.value.image.uploadUrlFailed));
+                return;
+            }
+            const result = await resp.json() as { source: string; width: number; height: number; bytes: number };
+            const cv = project.state?.canvas;
+            if (!cv) return;
+            const cvW = cv.widthMaps * 128;
+            const cvH = cv.heightMaps * 128;
+            const limit = Math.floor(Math.min(cvW, cvH) * 0.8);
+            let w = result.width;
+            let h = result.height;
+            if (Math.max(w, h) > limit) {
+                const s = limit / Math.max(w, h);
+                w = Math.max(8, Math.round(w * s));
+                h = Math.max(8, Math.round(h * s));
+            }
+            const center = dropToCanvas(dropClientX, dropClientY) ?? { x: cvW / 2, y: cvH / 2 };
+            const x = Math.max(0, Math.min(cvW - w, Math.round(center.x - w / 2)));
+            const y = Math.max(0, Math.min(cvH - h, Math.round(center.y - h / 2)));
+            ws.send('element.add', {
+                type: 'image',
+                props: { x, y, w, h, source: result.source },
+            });
+        } catch (e) {
+            flashError(t.value.image.uploadFailed(0, (e as Error).message));
+        } finally {
+            uploading.value = false;
         }
     }
 
@@ -153,5 +214,6 @@ export function useCanvasUpload(opts: {
         onCanvasDrop,
         onFileInputChange,
         triggerFileInput,
+        uploadFromUrl,
     };
 }

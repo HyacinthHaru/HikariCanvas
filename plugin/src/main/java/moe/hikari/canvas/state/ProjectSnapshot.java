@@ -36,7 +36,7 @@ public record ProjectSnapshot(
             for (Layer l : layers) {
                 copied.add(new Layer(
                         l.id(), l.name(), l.visible(), l.locked(),
-                        l.opacity(), l.blendMode(),
+                        l.opacity(), l.blendMode(), l.colorTag(),
                         new ArrayList<>(l.elements())));
             }
             layers = List.copyOf(copied);

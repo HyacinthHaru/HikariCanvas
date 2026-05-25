@@ -341,7 +341,21 @@ public final class ElementValidator {
         } else {
             throw new ValidationException("INVALID_PAYLOAD", "mask.inverted must be boolean");
         }
-        return new Mask(d, inverted);
+        // 2026-05-25 项 2：featherPx 可选字段。null / 缺省 / 0 = 无羽化；范围 [1, 32]
+        Object fRaw = m.get("featherPx");
+        Integer feather = null;
+        if (fRaw != null) {
+            if (!(fRaw instanceof Number fNum)) {
+                throw new ValidationException("INVALID_PAYLOAD", "mask.featherPx must be number");
+            }
+            int fi = fNum.intValue();
+            if (fi < 0 || fi > 32) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "mask.featherPx out of range [0, 32]: " + fi);
+            }
+            feather = fi == 0 ? null : fi;
+        }
+        return new Mask(d, inverted, feather);
     }
 
     // ---------- stroke / effects 构造（纯静态，无 EditSession 依赖）----------

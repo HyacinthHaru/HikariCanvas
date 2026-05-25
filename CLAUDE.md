@@ -414,6 +414,8 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.5** | **打磨期**（修 0.4.3/0.4.4 P0 + UX 优化 + 车次复制 + 引导文案） | **20h** | ✅ |
 | **0.4.6** | **体验打磨**（字体加粗/斜体 + 透明背景 + 颜色对比度 + 文案优化） | **15h** | ✅ |
 | **0.4.7** | **ultrareview 修复批**（动态变量重绘 + lock confirm 绕过 + 透明背景 blend 真实 alpha + 前端 lock readonly 多入口 + 8 项更多 + CI lock fallback） | **24h** | ✅ |
+| **0.4.8** | **打磨批**（M18 multi-subpath + RDP UI / M8 图层缩略图 + 颜色标签 + 对齐分布 / M13 mask lasso + 羽化 + URL 粘贴 + EXIF / Token rate limit） | **70h** | ✅ |
+| 0.4.9 | M18 brush 真实形状 + text glyph 真实形状（fontkit）+ B-advanced DCEL + 图层 mask/group | 待估 | 远期 |
 | 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
 | 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
 

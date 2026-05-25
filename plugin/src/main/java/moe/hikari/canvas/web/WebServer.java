@@ -70,6 +70,11 @@ public final class WebServer {
     private final int wsAuthTimeoutSeconds;
     /** M16 P1.3：除回环 + 同源外的额外 Origin 白名单（公网反代用）。 */
     private final List<String> allowedOrigins;
+    /**
+     * 2026-05-25 token 暴力枚举防御：每 IP 每分钟最多 N 次 token 校验尝试，
+     * 超限 close 4429 + audit。详见 {@link TokenRateLimiter}。
+     */
+    private final TokenRateLimiter tokenRateLimiter;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final org.bukkit.plugin.java.JavaPlugin plugin;
     private final TemplateRegistry templateRegistry;
@@ -164,7 +169,8 @@ public final class WebServer {
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      String serverVersion,
                      int wsAuthTimeoutSeconds,
-                     List<String> allowedOrigins) {
+                     List<String> allowedOrigins,
+                     TokenRateLimiter tokenRateLimiter) {
         this.log = log;
         this.host = host;
         this.port = port;
@@ -173,6 +179,8 @@ public final class WebServer {
         this.wallRepo = wallRepo;
         this.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, wsAuthTimeoutSeconds));
         this.allowedOrigins = allowedOrigins == null ? List.of() : List.copyOf(allowedOrigins);
+        // 2026-05-25：token rate limiter；null = 不限流（测试 / 老代码）
+        this.tokenRateLimiter = tokenRateLimiter;
         this.templateRegistry = templateRegistry;
         this.templatePreviewService = templatePreviewService;
         this.templateAssetService = templateAssetService;
@@ -329,6 +337,9 @@ public final class WebServer {
             if (uploadHandler != null) {
                 cfg.routes.addEndpoint(new Endpoint(
                         HandlerType.POST, "/api/upload", uploadHandler::handleUpload));
+                // 2026-05-25 项 3：URL 粘贴上传（与 file upload 同款校验栈 + SSRF 防御）
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.POST, "/api/upload/url", uploadHandler::handleUrlUpload));
                 cfg.routes.addEndpoint(new Endpoint(
                         HandlerType.GET, "/api/upload/quota", uploadHandler::handleQuota));
                 cfg.routes.addEndpoint(new Endpoint(
@@ -763,6 +774,30 @@ public final class WebServer {
     // ---------- auth ----------
 
     private void handleAuth(WsMessageContext ctx, Envelope in) {
+        // 2026-05-25 token 暴力枚举防御：进入校验前先做 per-IP 速率限制。
+        // 注意：tokenRateLimiter 可能为 null（旧测试构造路径）— 那种情况下不限流。
+        // 在 protocol version / token 校验前限流的好处：哪怕攻击者发垃圾 payload 也消耗配额，
+        // 防止"先做 version 检查再试 token"绕过；缺点是合法 client 发错 client_v 也被算配额，
+        // 但合法 client 不会 retry 10 次 client_v，权衡上限流先行更安全。
+        String authIp = clientIp(ctx);
+        if (tokenRateLimiter != null && !tokenRateLimiter.tryConsume(authIp)) {
+            log.warning("WS auth rate limited: ip=" + authIp
+                    + " (≥" + tokenRateLimiter.perMinute() + "/min); close 4429");
+            if (auditLog != null) {
+                java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                details.put("perMinute", tokenRateLimiter.perMinute());
+                details.put("windowMs", tokenRateLimiter.windowMs());
+                // 注意：IP 是敏感数据 — 仅记 SHA-256 hash 防泄露；与 sessionManager.bindOrCheckIp
+                // 思路一致（详见 docs/security.md §11 audit 字段规范）
+                details.put("ipHash", sha256HexShort(authIp));
+                auditLog.record("TOKEN_RATE_LIMIT_EXCEEDED",
+                        null, null, null, sha256HexShort(authIp), details);
+            }
+            ctx.send(Envelope.error(in.id(), "RATE_LIMITED", null));
+            closeTokenRateLimited(ctx, "ip=" + authIp);
+            return;
+        }
+
         // 从 payload 取 token
         if (!(in.payload() instanceof Map<?, ?> pl)) {
             ctx.send(Envelope.error(in.id(), "AUTH_FAILED", "missing payload"));
@@ -847,7 +882,8 @@ public final class WebServer {
         // M16 P6.6：会话级 IP 绑定。首次 auth 时 sessionManager 写下 boundIp；reconnect 必须 IP 同源。
         // 不同 → 当作 AUTH_FAILED 拒（外部只看到 4001，不区分；服务器侧 log.warning 详细原因）。
         // 攻击者 XSS / 抓包拿到 reconnectToken 后从异机重连必撞 MISMATCH。
-        String presentedIp = clientIp(ctx);
+        // 2026-05-25：复用上方限流路径 capture 的 authIp，避免重复调用 clientIp(ctx)
+        String presentedIp = authIp;
         SessionManager.IpBindResult ipRes = sessionManager.bindOrCheckIp(session.id(), presentedIp);
         if (ipRes == SessionManager.IpBindResult.MISMATCH) {
             log.warning("WS auth IP mismatch sid=" + session.id()
@@ -1048,5 +1084,36 @@ public final class WebServer {
         ctx.closeSession(Protocol.CLOSE_PROTOCOL_VERSION_UNSUPPORTED, "protocol_version_unsupported");
         log.info("WS closed " + Protocol.CLOSE_PROTOCOL_VERSION_UNSUPPORTED
                 + " protocol_version_unsupported: " + reason);
+    }
+
+    /**
+     * 2026-05-25：close 4429 = token 暴力枚举超限。client 应显示"请稍后再试"
+     * 而不是自动重连（沿用 HTTP 429 语义）。
+     */
+    private void closeTokenRateLimited(WsContext ctx, String reason) {
+        try {
+            ctx.closeSession(Protocol.CLOSE_TOKEN_RATE_LIMITED, "token_rate_limited");
+        } catch (Exception ignored) {}
+        log.info("WS closed " + Protocol.CLOSE_TOKEN_RATE_LIMITED
+                + " token_rate_limited: " + reason);
+    }
+
+    /**
+     * 2026-05-25 token rate limit audit 助手：对 IP 算 sha-256 hex 取前 16 字符。
+     * 与 ImageStorage.sha256Hex16 同款短 hex；用 hash 防 IP 原文进 audit_log 表。
+     */
+    private static String sha256HexShort(String s) {
+        if (s == null) return null;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(16);
+            for (int i = 0; i < 8; i++) {
+                sb.append(String.format("%02x", digest[i] & 0xff));
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return null;
+        }
     }
 }

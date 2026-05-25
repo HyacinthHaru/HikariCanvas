@@ -634,6 +634,14 @@ function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
         return;
     }
 
+    // 2026-05-25 项 2：feather 路径走 off-screen canvas + filter='blur()' + DST_IN。
+    // 硬边路径（无 mask 或 featherPx=0）仍走原 clip 实现，保持向下兼容 / 性能 OK。
+    const feather = im.mask?.featherPx;
+    if (im.mask && typeof feather === 'number' && feather > 0) {
+        drawImageWithFeather(ctx, im, entry.img, feather);
+        return;
+    }
+
     ctx.save();
     try {
         ctx.translate(im.x, im.y);
@@ -653,6 +661,80 @@ function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
     } finally {
         ctx.restore();
     }
+}
+
+/**
+ * 2026-05-25 项 2：feather mask 路径。流程与后端 ImageRenderer.drawWithFeather 镜像：
+ * 1) image off-canvas 绘到 (w, h)
+ * 2) mask off-canvas 填白
+ * 3) mask 用 ctx.filter='blur(Npx)' 模糊
+ * 4) image off-canvas 用 globalCompositeOperation='destination-in' 复合 mask
+ * 5) drawImage 主 ctx
+ */
+function drawImageWithFeather(
+    ctx: CanvasRenderingContext2D,
+    im: ImageElement,
+    src: HTMLImageElement,
+    feather: number,
+): void {
+    const w = Math.max(1, Math.round(im.w));
+    const h = Math.max(1, Math.round(im.h));
+    const r = Math.max(0, Math.min(32, Math.round(feather)));
+    if (!im.mask) return;
+    // image off-canvas
+    const imgCanvas = document.createElement('canvas');
+    imgCanvas.width = w;
+    imgCanvas.height = h;
+    const ic = imgCanvas.getContext('2d');
+    if (!ic) return;
+    ic.drawImage(src, 0, 0, w, h);
+
+    // mask off-canvas
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = w;
+    maskCanvas.height = h;
+    const mc = maskCanvas.getContext('2d');
+    if (!mc) return;
+    try {
+        const parsed = parsePathD(im.mask.d);
+        if (im.mask.inverted) {
+            mc.fillStyle = '#ffffff';
+            mc.fillRect(0, 0, w, h);
+            mc.globalCompositeOperation = 'destination-out';
+            mc.fill(parsed.path);
+            mc.globalCompositeOperation = 'source-over';
+        } else {
+            mc.fillStyle = '#ffffff';
+            mc.fill(parsed.path);
+        }
+    } catch {
+        // mask 解析失败 → fallback 全部不透明（无 mask）
+        mc.fillStyle = '#ffffff';
+        mc.fillRect(0, 0, w, h);
+    }
+
+    // 模糊 mask（blur 半径与后端 box blur 3 遍近似等价）
+    if (r > 0) {
+        const blurCanvas = document.createElement('canvas');
+        blurCanvas.width = w;
+        blurCanvas.height = h;
+        const bc = blurCanvas.getContext('2d');
+        if (bc) {
+            bc.filter = `blur(${r}px)`;
+            bc.drawImage(maskCanvas, 0, 0);
+            // 用模糊版替换
+            mc.clearRect(0, 0, w, h);
+            mc.drawImage(blurCanvas, 0, 0);
+        }
+    }
+
+    // 复合 mask 到 image
+    ic.globalCompositeOperation = 'destination-in';
+    ic.drawImage(maskCanvas, 0, 0);
+    ic.globalCompositeOperation = 'source-over';
+
+    // 落到主 ctx
+    ctx.drawImage(imgCanvas, im.x, im.y);
 }
 
 function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {

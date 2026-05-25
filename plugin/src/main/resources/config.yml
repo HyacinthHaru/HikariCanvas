@@ -122,6 +122,15 @@ images:
   # 全服磁盘总配额（MiB）。超出 → 触发 LRU 清理直到腾出空间。0 = 不限。
   max-total-storage-mb: 1024
 
+# 安全（2026-05-25 token 暴力枚举防御）
+security:
+  # WS auth 帧 token 校验前的每 IP 尝试限流，防御 token 暴破 / 撞库。
+  # 合法用户重连 retry 远低于 10 次/分钟，超出几乎必然是攻击。
+  # 超限 → close 4429 + audit TOKEN_RATE_LIMIT_EXCEEDED；攻击者每分钟只能试 ≤10 次。
+  token-rate-limit:
+    # 每 IP 每分钟可尝试的 token 次数。下界 1（即每分钟只准 1 次，过严）。
+    per-minute: 10
+
 # 数据库 / 迁移（M15.4）
 database:
   # 跑 schema migration 前自动备份 data.db 到 data.db.pre-V<NNN>.bak。

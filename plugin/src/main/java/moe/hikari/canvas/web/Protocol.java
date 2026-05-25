@@ -30,6 +30,13 @@ public final class Protocol {
     /** 协议版本不匹配时关闭 WS 的 close code（与 4001 auth_timeout 同 4xxx 段）。 */
     public static final int CLOSE_PROTOCOL_VERSION_UNSUPPORTED = 4002;
 
+    /**
+     * Token 暴力枚举超过限流阈值时关闭 WS 的 close code（2026-05-25 引入，
+     * 配合 {@link TokenRateLimiter}）。沿用 HTTP 429 语义号段，client 看到 4429 应
+     * 显示"请稍后再试"而不是自动重连。
+     */
+    public static final int CLOSE_TOKEN_RATE_LIMITED = 4429;
+
     /** 版本是否在可接受范围内（含边界）。 */
     public static boolean isSupported(int clientVersion) {
         return clientVersion >= SUPPORTED_MIN && clientVersion <= SUPPORTED_MAX;

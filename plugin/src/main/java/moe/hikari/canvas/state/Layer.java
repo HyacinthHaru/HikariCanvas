@@ -1,6 +1,7 @@
 package moe.hikari.canvas.state;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.ArrayList;
@@ -23,8 +24,12 @@ import java.util.List;
  * @param locked    锁层；M8-C 起 element.* op 命中 locked 层时拒 {@code LAYER_LOCKED}
  * @param opacity   层级不透明度 0.0–1.0
  * @param blendMode 层级混合模式
+ * @param colorTag  M8-TODO：PS 风格颜色标签（仅 UI 显示用，不影响渲染）。
+ *                  允许 null / Catppuccin 色名（red / peach / yellow / green / blue / mauve / overlay0）。
+ *                  其他字符串校验由 {@code LayerOperations.updateLayer} 拦截。
  * @param elements  层内元素列表（z-order = index）；mutable
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record Layer(
         String id,
         String name,
@@ -32,6 +37,7 @@ public record Layer(
         boolean locked,
         float opacity,
         BlendMode blendMode,
+        String colorTag,
         List<Element> elements
 ) {
     public Layer {
@@ -43,7 +49,17 @@ public record Layer(
         if (blendMode == null) blendMode = BlendMode.NORMAL;
     }
 
-    /** Jackson 反序列化用：兼容缺字段（visible/locked/opacity/blendMode 缺省时给默认）。 */
+    /**
+     * 6-arg 兼容构造器：M8-TODO 之前的代码不传 {@code colorTag}，全代 null。
+     * 让现有 {@code new Layer(...)} 调用点（LayerOperations / ProjectState / ProjectSnapshot）
+     * 不必逐一改签名也能编译通过。
+     */
+    public Layer(String id, String name, boolean visible, boolean locked,
+                 float opacity, BlendMode blendMode, List<Element> elements) {
+        this(id, name, visible, locked, opacity, blendMode, null, elements);
+    }
+
+    /** Jackson 反序列化用：兼容缺字段（visible/locked/opacity/blendMode/colorTag 缺省时给默认）。 */
     @JsonCreator
     public static Layer fromJson(
             @JsonProperty("id") String id,
@@ -52,6 +68,7 @@ public record Layer(
             @JsonProperty("locked") Boolean locked,
             @JsonProperty("opacity") Float opacity,
             @JsonProperty("blendMode") BlendMode blendMode,
+            @JsonProperty("colorTag") String colorTag,
             @JsonProperty("elements") List<Element> elements) {
         return new Layer(
                 id,
@@ -60,6 +77,7 @@ public record Layer(
                 locked != null && locked,
                 opacity == null ? 1.0f : opacity,
                 blendMode == null ? BlendMode.NORMAL : blendMode,
+                colorTag,
                 elements
         );
     }

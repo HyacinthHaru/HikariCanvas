@@ -16,8 +16,10 @@ import {
     Copy,
     Trash2,
     HelpCircle,
+    X,
 } from 'lucide-vue-next';
-import type { BlendMode, Layer } from '@/types/protocol';
+import type { BlendMode, Layer, LayerColorTag } from '@/types/protocol';
+import { renderLayerThumbnail, THUMBNAIL_SIZE } from '@/render/LayerThumbnailRenderer';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -209,6 +211,28 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
     layer.blendMode = mode;
     ws.send('layer.update', { layerId: layer.id, patch: { blendMode: mode } });
 }
+
+// ---------- M8-TODO 项 2：colorTag color picker ----------
+
+const COLOR_TAGS: LayerColorTag[] = [
+    'red', 'peach', 'yellow', 'green', 'blue', 'mauve', 'overlay0',
+];
+
+/** 应用 / 切换颜色标签：同色再点 = 清除（PS / Figma 行为）。 */
+function setColorTag(layer: Layer, tag: LayerColorTag | null): void {
+    const next = layer.colorTag === tag ? null : tag;
+    // 后端期望 string；null → 传空串触发 clear（LayerOperations 支持）
+    const payload = next ?? '';
+    // 乐观更新本地
+    layer.colorTag = next;
+    ws.send('layer.update', { layerId: layer.id, patch: { colorTag: payload } });
+}
+
+// ---------- M8-TODO 项 1：thumbnail ----------
+
+function thumbnailFor(layer: Layer): string | null {
+    return renderLayerThumbnail(project.state, layer);
+}
 </script>
 
 <template>
@@ -233,13 +257,17 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
       <template v-for="(layer, uiIdx) in uiLayers" :key="layer.id">
         <li
           :draggable="ui.editingLayerId !== layer.id"
-          class="group flex items-center gap-1 px-2 py-1.5 text-xs cursor-pointer transition-colors border-l-2 border-l-transparent"
+          class="group relative flex items-center gap-1 px-2 py-1.5 text-xs cursor-pointer transition-colors border-l-2"
           :class="{
-            'bg-[color:var(--accent)] border-l-[color:var(--ring)]': isActive(layer.id),
+            // M8-TODO 项 2：colorTag 优先；无 tag 时退到 active ring 或透明（边色由 :style 注入 var）
+            'border-l-[color:var(--ring)]': !layer.colorTag && isActive(layer.id),
+            'border-l-transparent': !layer.colorTag && !isActive(layer.id),
+            'bg-[color:var(--accent)]': isActive(layer.id),
             'hover:bg-[color:var(--accent)]': !isActive(layer.id),
             'opacity-50': dragUiIdx === uiIdx,
             'ring-1 ring-[color:var(--ring)] ring-inset': dragOverUiIdx === uiIdx && dragUiIdx !== uiIdx,
           }"
+          :style="layer.colorTag ? { borderLeftColor: `var(--ctp-${layer.colorTag})` } : undefined"
           @click="selectLayer(layer.id)"
           @dragstart="(e) => onDragStart(e, uiIdx)"
           @dragover="(e) => onDragOver(e, uiIdx)"
@@ -247,6 +275,20 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
           @drop="(e) => onDrop(e, uiIdx)"
           @dragend="onDragEnd"
         >
+          <!-- M8-TODO 项 1：图层缩略图（32×32，带棋盘格透明提示）。
+               透明像素背景由 CSS 棋盘格显示；img 自身为渲染器输出的 PNG dataURL。 -->
+          <span
+            class="hc-layer-thumb shrink-0"
+            :title="t.layerPanel.thumbnailAlt(layer.name)"
+          >
+            <img
+              v-if="thumbnailFor(layer)"
+              :src="thumbnailFor(layer)!"
+              :alt="t.layerPanel.thumbnailAlt(layer.name)"
+              class="block w-full h-full object-contain"
+              draggable="false"
+            >
+          </span>
           <!-- visible toggle -->
           <button
             class="p-0.5 rounded hover:bg-[color:var(--background)] shrink-0"
@@ -348,7 +390,7 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
         </li>
         <li
           v-if="isActive(layer.id)"
-          class="px-2 pb-1.5 flex items-center gap-2 text-xs bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)] border-b border-[color:var(--border)]"
+          class="px-2 pb-1.5 flex items-center gap-2 text-xs bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)]"
         >
           <span class="text-[color:var(--muted-foreground)] shrink-0">{{ t.layerPanel.blendModeLabel }}</span>
           <select
@@ -360,6 +402,35 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
               {{ (t.layerPanel.blendModeOptions as Record<string, string>)[m] ?? m }}
             </option>
           </select>
+        </li>
+        <!-- M8-TODO 项 2：colorTag color picker（PS 风格 7 色点 + 清除按钮） -->
+        <li
+          v-if="isActive(layer.id)"
+          class="px-2 pb-1.5 flex items-center gap-1.5 text-xs bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)] border-b border-[color:var(--border)]"
+        >
+          <span class="text-[color:var(--muted-foreground)] shrink-0 mr-1">{{ t.layerPanel.colorTagLabel }}</span>
+          <button
+            v-for="tag in COLOR_TAGS"
+            :key="tag"
+            type="button"
+            class="hc-color-dot shrink-0"
+            :class="{ 'is-active': layer.colorTag === tag }"
+            :style="{ background: `var(--ctp-${tag})` }"
+            :title="(t.layerPanel.colorTagOptions as Record<string, string>)[tag] ?? tag"
+            @click.stop="setColorTag(layer, tag)"
+          />
+          <button
+            type="button"
+            class="hc-color-dot hc-color-clear shrink-0 ml-auto"
+            :class="{ 'is-active': !layer.colorTag }"
+            :title="t.layerPanel.colorTagClear"
+            @click.stop="setColorTag(layer, null)"
+          >
+            <X class="size-2.5" />
+          </button>
+          <Tooltip :text="t.layerPanel.colorTagHint">
+            <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 shrink-0" />
+          </Tooltip>
         </li>
       </template>
     </ul>
@@ -390,5 +461,49 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
     border-radius: var(--radius-sm);
     font-size: 11px;
     padding: 2px 5px;
+}
+/* M8-TODO 项 1：图层缩略图。固定 28×28；棋盘格背景显示透明像素。 */
+.hc-layer-thumb {
+    display: block;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    /* 8px 棋盘格 — 透明像素位置可见 */
+    background-image:
+        linear-gradient(45deg, var(--ctp-surface0) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--ctp-surface0) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--ctp-surface0) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--ctp-surface0) 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+    background-color: var(--ctp-mantle);
+}
+/* M8-TODO 项 2：颜色标签圆点按钮。selected 状态加白圈高亮。 */
+.hc-color-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in srgb, var(--ctp-base) 60%, transparent);
+    transition: transform 80ms ease, box-shadow 80ms ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.hc-color-dot:hover {
+    transform: scale(1.18);
+}
+.hc-color-dot.is-active {
+    box-shadow: 0 0 0 2px var(--background), 0 0 0 3.5px var(--foreground);
+}
+.hc-color-clear {
+    background: transparent;
+    color: var(--muted-foreground);
+    border-color: var(--border);
+}
+.hc-color-clear:hover {
+    background: var(--ctp-surface0);
+    color: var(--foreground);
 }
 </style>

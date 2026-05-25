@@ -27,6 +27,12 @@ final class LayerOperations {
 
     static final int MAX_LAYERS = 64;
     static final int MAX_LAYER_NAME = 64;
+    /**
+     * M8-TODO 项 2：图层颜色标签允许值（Catppuccin 色名）。null = 无标签。
+     * 任何其他字符串都会被 updateLayer 拒为 INVALID_PAYLOAD。
+     */
+    static final java.util.Set<String> ALLOWED_COLOR_TAGS = java.util.Set.of(
+            "red", "peach", "yellow", "green", "blue", "mauve", "overlay0");
 
     private final ProjectState state;
     private final HistoryStack history;
@@ -145,6 +151,8 @@ final class LayerOperations {
         boolean locked = cur.locked();
         float opacity = cur.opacity();
         BlendMode blendMode = cur.blendMode();
+        // M8-TODO 项 2：图层颜色标签（PS 风格，仅 UI 显示用）。
+        String colorTag = cur.colorTag();
 
         try {
             for (var e : patch.entrySet()) {
@@ -170,6 +178,24 @@ final class LayerOperations {
                         opacity = o;
                     }
                     case "blendMode" -> blendMode = parseBlendMode(v);
+                    case "colorTag" -> {
+                        // null = 清除标签；string 必须在白名单内（防 spam / 注入）
+                        if (v == null) {
+                            colorTag = null;
+                        } else if (v instanceof String s) {
+                            if (s.isEmpty()) {
+                                colorTag = null;
+                            } else if (!ALLOWED_COLOR_TAGS.contains(s)) {
+                                throw new ValidationException("INVALID_PAYLOAD",
+                                        "colorTag not in allowed set: " + s);
+                            } else {
+                                colorTag = s;
+                            }
+                        } else {
+                            throw new ValidationException("INVALID_PAYLOAD",
+                                    "colorTag must be string or null");
+                        }
+                    }
                     default -> throw new ValidationException("INVALID_PAYLOAD",
                             "unknown layer field: " + k);
                 }
@@ -179,7 +205,7 @@ final class LayerOperations {
         }
 
         Layer updated = new Layer(cur.id(), name, visible, locked, opacity, blendMode,
-                cur.elements());
+                colorTag, cur.elements());
 
         ProjectSnapshot pre = history.snapshotNow();
         state.replaceLayer(idx, updated);

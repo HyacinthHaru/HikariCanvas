@@ -53,6 +53,13 @@ export interface Guide {
     position: number; // 像素坐标
 }
 
+/**
+ * 图层颜色标签（M8 远期 TODO 项 2）。PS 风格辅助识别用，仅 UI 显示，不影响渲染。
+ * null = 无标签；其余为 Catppuccin 色名 — 与后端 LayerOperations.ALLOWED_COLOR_TAGS 对齐。
+ */
+export type LayerColorTag =
+    | 'red' | 'peach' | 'yellow' | 'green' | 'blue' | 'mauve' | 'overlay0';
+
 export interface Layer {
     id: string; // "l-<8hex>"
     name: string;
@@ -60,6 +67,8 @@ export interface Layer {
     locked: boolean;
     opacity: number; // 0..1
     blendMode: BlendMode;
+    /** M8 远期 TODO 项 2：PS 风格颜色标签；null / undefined = 无 */
+    colorTag?: LayerColorTag | null;
     elements: Element[]; // 层内 z-order = index
 }
 
@@ -250,13 +259,16 @@ export interface BrushStrokeElement extends BaseElement {
  * M13 Mask：ImageElement 的可选 SVG path 蒙版。
  * - d：M9 PathDValidator 子集（M/L/Q/C/Z），坐标相对 element bbox (0, 0)..(w, h)；4096 字符长度上限
  * - inverted：false=显示 mask 内（默认），true=显示 mask 外（用 bbox 减去 mask 形状）
+ * - featherPx：2026-05-25 引入。羽化半径（像素）；null / 缺省 / 0 = 无羽化（硬边），
+ *   [1, 32] = 边缘渐变过渡。详见 docs/rendering.md §4.4。
  *
- * v1 仅 RightPanel dropdown 暴露 4 预设（none / circle / roundedRect / ellipse）；
- * lasso / 拖动编辑 mask 形状 v2 再做（数据模型已留接口）。
+ * v1 RightPanel dropdown 暴露 4 预设（none / circle / roundedRect / ellipse）；
+ * 2026-05-25 新增 lasso 自由路径（Alt + 拖动 image element 在画布上直接画 mask）。
  */
 export interface Mask {
     d: string;
     inverted: boolean;
+    featherPx?: number | null;
 }
 
 /**

@@ -17,6 +17,7 @@ import TextInlineEditor from '@/components/canvas/TextInlineEditor.vue';
 import SnapGuideOverlay from '@/components/canvas/SnapGuideOverlay.vue';
 import LivePaintHoverOverlay from '@/components/canvas/LivePaintHoverOverlay.vue';
 import VariablePicker from '@/components/variables/VariablePicker.vue';
+import AlignDistributeBar from '@/components/toolbar/AlignDistributeBar.vue';
 
 import { useMarqueeSelection } from '@/composables/useMarqueeSelection';
 import { useDrawToCreate } from '@/composables/useDrawToCreate';
@@ -27,6 +28,7 @@ import { usePanScroll } from '@/composables/usePanScroll';
 import { useCanvasUpload } from '@/composables/useCanvasUpload';
 import { useSnapManager, type SnapHints } from '@/composables/useSnapManager';
 import { useLockGuard } from '@/composables/useLockGuard';
+import { useLassoMask } from '@/composables/useLassoMask';
 // M18 Live Paint：油漆桶工具支持
 import { useLivePaint, gapToPathElement, elementToPolygon, pointInPolygon } from '@/livepaint';
 import type { GapPolygon } from '@/livepaint';
@@ -257,6 +259,63 @@ const {
     onFileInputChange,
     triggerFileInput,
 } = useCanvasUpload({ brushHostRef, fileInputRef });
+
+// 2026-05-25 项 1：lasso mask 自由绘制。Alt + drag image element 在画布上画 mask。
+//
+// 触发：当前 select 工具 + 选中单 image element + Alt 按住 + pointer down 在 image 内。
+// 输出：M/L/Z subset 的 SVG path d → element.update mask 字段，featherPx 保留。
+const lassoGuide = ref<{ active: boolean; points: Array<[number, number]>; w: number; h: number } | null>(null);
+function getSelectedImage(): import('@/types/protocol').ImageElement | null {
+    const id = ui.selectedElementId;
+    if (!id) return null;
+    const el = project.elementById(id);
+    if (!el || el.type !== 'image') return null;
+    return el as import('@/types/protocol').ImageElement;
+}
+function clientToImageLocal(clientX: number, clientY: number): { lx: number; ly: number } | null {
+    const img = getSelectedImage();
+    if (!img) return null;
+    const cv = clientToCanvas(clientX, clientY);
+    if (!cv) return null;
+    // 注：暂不处理 rotation；image rotation === 0 是 v1 lasso 的假设
+    if (img.rotation && Math.abs(img.rotation) > 0.01) return null;
+    const lx = cv.x - img.x;
+    const ly = cv.y - img.y;
+    if (lx < 0 || ly < 0 || lx > img.w || ly > img.h) return null;
+    return { lx, ly };
+}
+/** 2026-05-25 项 1：lasso 预览用 — image element 的画布原点偏移。 */
+const lassoImageOffset = computed(() => {
+    const img = getSelectedImage();
+    if (!img) return null;
+    return { x: img.x, y: img.y };
+});
+/** lasso 当前点串 flatten 为 Konva v-line 用的 [x1, y1, x2, y2, ...] 一维数组。 */
+const lassoFlatPoints = computed<number[]>(() => {
+    const g = lassoGuide.value;
+    if (!g) return [];
+    const out: number[] = [];
+    for (const p of g.points) {
+        out.push(p[0], p[1]);
+    }
+    return out;
+});
+
+const lasso = useLassoMask({
+    selectedImageGetter: getSelectedImage,
+    activeToolGetter: () => ui.activeTool,
+    clientToElementLocal: clientToImageLocal,
+    onUpdateMask: (mask) => {
+        const img = getSelectedImage();
+        if (!img) return;
+        if (project.isLocked) return;
+        // 走标准 element.update patch；后端 ElementValidator.parseMaskNullable 校验
+        ws.send('element.update', { elementId: img.id, patch: { mask } });
+        // 乐观本地更新
+        (img as unknown as Record<string, unknown>).mask = mask;
+    },
+    drawingGuide: lassoGuide,
+});
 
 // ---------- M26.3 IconLibrary drop ----------
 //
@@ -611,7 +670,7 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
             return;
         }
 
-        const elementData = gapToPathElement(gap);
+        const elementData = gapToPathElement(gap, paintBucket.tolerance);
         if (elementData.w <= 0 || elementData.h <= 0 || !elementData.d) {
             net.pushLog('meta', t.value.livePaint.noGapFound);
             return;
@@ -683,6 +742,33 @@ function onStageMouseUp(): void {
     // committed：marqueeSel 内已处理 selectMany / addToSelection；这里仅在非 additive 时收编辑态
     if (!res.additive && editingId.value) finishEditing();
 }
+
+// 2026-05-25 项 1：lasso 全局 pointer 监听。挂在 window 上：
+//  - Alt 按住 + image 选中 + pointerdown 命中 image 局部坐标 → start 并 stopPropagation
+//    阻止 marquee / drag 启动
+//  - 后续 move/up 都由 lasso 自己处理（不影响其他 stage event）
+useEventListener(window, 'pointerdown', (e: PointerEvent) => {
+    if (project.isLocked) return;
+    if (!lasso.isAltDown.value) return;
+    if (ui.activeTool !== 'select') return;
+    if (!getSelectedImage()) return;
+    // capture 阶段 — lasso.start 内部已校验：tool === select + image 存在 + 在 bbox 内
+    if (lasso.start(e)) {
+        // 阻止 stage / element-hit / marquee 接管
+        e.stopPropagation();
+    }
+}, { capture: true });
+useEventListener(window, 'pointermove', (e: PointerEvent) => {
+    if (lasso.active.value) {
+        lasso.move(e);
+    }
+}, { capture: true });
+useEventListener(window, 'pointerup', () => {
+    if (lasso.active.value) lasso.end();
+}, { capture: true });
+useEventListener(window, 'pointercancel', () => {
+    lasso.cancel();
+}, { capture: true });
 
 // window 兜底：拖出窗口后松手时清掉 marquee / drawDrag
 useEventListener(window, 'mouseup', () => {
@@ -1064,6 +1150,22 @@ function requestDraw(): void {
             <!-- M18 Live Paint：paint-bucket 工具 hover 高亮。layer listening=false，
                  让 mousedown/move 直达 stage。 -->
             <LivePaintHoverOverlay :hovered-gap="hoveredGap" />
+            <!-- 2026-05-25 项 1：lasso 绘制中的虚线 path 预览 -->
+            <v-layer v-if="lassoGuide && lassoGuide.active" :listening="false">
+              <v-line
+                v-if="lassoGuide.points.length >= 2 && lassoImageOffset"
+                :config="{
+                  points: lassoFlatPoints,
+                  x: lassoImageOffset.x,
+                  y: lassoImageOffset.y,
+                  stroke: '#60a5fa',
+                  strokeWidth: 1.5,
+                  dash: [4, 3],
+                  closed: false,
+                  listening: false,
+                }"
+              />
+            </v-layer>
           </v-stage>
           <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。
                PreviewRenderer 会跳过 editingId 对应的 element，避免画布底层字形与 textarea 重影。 -->
@@ -1117,6 +1219,9 @@ function requestDraw(): void {
       class="hidden"
       @change="onFileInputChange"
     />
+
+    <!-- M8-TODO 项 3：对齐 / 分布工具栏（仅多选时显示） -->
+    <AlignDistributeBar />
 
     <!-- 右下角 zoom 控件（升级版） -->
     <CanvasZoomBar

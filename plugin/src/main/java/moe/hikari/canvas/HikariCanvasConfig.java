@@ -109,6 +109,13 @@ public final class HikariCanvasConfig {
     public final int userGlobalMaxTotal;
 
     /**
+     * 2026-05-25 token 暴力枚举防御：每 IP 每分钟可尝试 WS auth 的 token 次数。
+     * 配置段 {@code security.token-rate-limit.per-minute}（默 10）。详见
+     * {@link moe.hikari.canvas.web.TokenRateLimiter}。
+     */
+    public final int tokenRateLimitPerMinute;
+
+    /**
      * 0.4.0 bugfix（Bug 3）：兜底列车时刻表配置。
      *
      * @param arrivingThresholdSeconds 进站阈值（秒）。eta ≤ 阈值时 {@code is_arriving=true} +
@@ -169,6 +176,7 @@ public final class HikariCanvasConfig {
         this.scheduleConfig = b.scheduleConfig;
         this.userGlobalMaxPerOwner = b.userGlobalMaxPerOwner;
         this.userGlobalMaxTotal = b.userGlobalMaxTotal;
+        this.tokenRateLimitPerMinute = b.tokenRateLimitPerMinute;
     }
 
     /**
@@ -313,6 +321,15 @@ public final class HikariCanvasConfig {
                     moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL));
         }
 
+        // 2026-05-25：security.token-rate-limit 段 —— token 暴力枚举防御
+        org.bukkit.configuration.ConfigurationSection rlSec =
+                f.getConfigurationSection("security.token-rate-limit");
+        if (rlSec != null) {
+            b.tokenRateLimitPerMinute = Math.max(1, rlSec.getInt(
+                    "per-minute",
+                    moe.hikari.canvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE));
+        }
+
         return new HikariCanvasConfig(b);
     }
 
@@ -408,5 +425,7 @@ public final class HikariCanvasConfig {
                 moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_PER_OWNER;
         int userGlobalMaxTotal =
                 moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL;
+        int tokenRateLimitPerMinute =
+                moe.hikari.canvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE;
     }
 }

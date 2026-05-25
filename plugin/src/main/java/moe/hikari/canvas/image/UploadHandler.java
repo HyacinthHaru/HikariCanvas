@@ -123,6 +123,291 @@ public final class UploadHandler {
         decoderPool.shutdownNow();
     }
 
+    // ---------- POST /api/upload/url（2026-05-25 项 3）----------
+
+    /** URL fetch 上限：10 MB。超出立即 abort。 */
+    private static final long URL_MAX_BYTES = 10L * 1024 * 1024;
+    /** URL fetch 总超时：30s。建立连接 + 读取合计。 */
+    private static final int URL_TIMEOUT_MS = 30_000;
+
+    /**
+     * 2026-05-25 项 3：URL 粘贴上传。请求 body：{@code {"url": "https://..."}}（JSON）。
+     *
+     * <p>流程：</p>
+     * <ol>
+     *   <li>sessionId query 校验（同 file upload）</li>
+     *   <li>{@link UrlFetchSafety#check}：SSRF 防御 + http(s) 白名单</li>
+     *   <li>HttpURLConnection GET，30s 连接 / 读取超时，10 MB 上限</li>
+     *   <li>下载到内存 bytes，走 file upload 同款 6 层校验栈</li>
+     * </ol>
+     */
+    public void handleUrlUpload(io.javalin.http.Context ctx) {
+        // 1. sessionId
+        String sessionId = ctx.queryParam("sessionId");
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = ctx.formParam("sessionId");  // 兼容 client 用 form 传
+        }
+        moe.hikari.canvas.session.Session session = resolveSession(ctx, sessionId);
+        if (session == null) return;
+        UUID uploader = session.playerUuid();
+        String uploaderName = session.playerName();
+        Player player = Bukkit.getPlayer(uploader);
+        if (player != null && !player.hasPermission("canvas.upload")) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission_url");
+            reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
+            return;
+        }
+        boolean bypass = player != null && player.hasPermission("canvas.upload.bypass-limit");
+
+        // 2. body JSON parse
+        String url;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = ctx.bodyAsClass(Map.class);
+            Object u = body == null ? null : body.get("url");
+            if (!(u instanceof String us) || us.isBlank()) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "missing_url_field");
+                reject(ctx, 400, "INVALID_PAYLOAD", "missing 'url' field");
+                return;
+            }
+            url = us.trim();
+            if (url.length() > 2048) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "url_too_long");
+                reject(ctx, 400, "INVALID_PAYLOAD", "url too long");
+                return;
+            }
+        } catch (Exception e) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "url_body_parse");
+            reject(ctx, 400, "INVALID_PAYLOAD", "invalid JSON body");
+            return;
+        }
+
+        // 3. SSRF 防御
+        UrlFetchSafety.CheckResult safety = UrlFetchSafety.check(url);
+        if (!safety.ok()) {
+            // M16 P6.1：错误脱敏 — 不 echo URL 内容（可能含 token / id）
+            log.warning("url upload rejected: reason=" + safety.reason()
+                    + " (url redacted; detail=" + safety.detail() + ")");
+            auditUploadRejected(uploader, uploaderName, sessionId,
+                    "ssrf_" + safety.reason().name().toLowerCase(Locale.ROOT));
+            reject(ctx, 400, "UPLOAD_REJECTED",
+                    "URL not allowed (" + safety.reason() + ")");
+            return;
+        }
+
+        // 4. fetch（带超时 + 字节上限）
+        byte[] bytes;
+        String declaredMime;
+        try {
+            java.net.URL netUrl = java.net.URI.create(url).toURL();
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) netUrl.openConnection();
+            conn.setConnectTimeout(URL_TIMEOUT_MS / 2);
+            conn.setReadTimeout(URL_TIMEOUT_MS / 2);
+            conn.setInstanceFollowRedirects(false);  // 重定向需手工处理 — v1 不跟随防 SSRF
+            conn.setRequestProperty("User-Agent", "HikariCanvas-Uploader/0.4.7");
+            conn.setRequestProperty("Accept", "image/png,image/jpeg,image/webp");
+            int sc = conn.getResponseCode();
+            if (sc < 200 || sc >= 300) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "url_http_" + sc);
+                reject(ctx, 502, "UPLOAD_REJECTED", "remote returned status " + sc);
+                return;
+            }
+            declaredMime = conn.getContentType();
+            if (declaredMime != null) {
+                int sep = declaredMime.indexOf(';');
+                if (sep > 0) declaredMime = declaredMime.substring(0, sep).trim();
+                declaredMime = declaredMime.toLowerCase(Locale.ROOT);
+            }
+            if (declaredMime == null || !declaredMime.startsWith("image/")) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "url_mime_not_image");
+                reject(ctx, 415, "UPLOAD_REJECTED",
+                        "remote Content-Type is not image/*: " + declaredMime);
+                return;
+            }
+            if (!cfg.allowedMime().contains(declaredMime)) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "url_mime_not_allowed");
+                reject(ctx, 415, "UPLOAD_REJECTED",
+                        "Content-Type not allowed: " + declaredMime);
+                return;
+            }
+            long advertised = conn.getContentLengthLong();
+            if (advertised > 0 && advertised > URL_MAX_BYTES) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "url_too_large_advertised");
+                reject(ctx, 413, "UPLOAD_REJECTED",
+                        "remote file too large: " + advertised + " > " + URL_MAX_BYTES);
+                return;
+            }
+            try (InputStream is = conn.getInputStream();
+                 java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(
+                         advertised > 0 ? Math.min((int) advertised, 1 << 20) : 1 << 16)) {
+                byte[] buf = new byte[8192];
+                int n;
+                long total = 0;
+                while ((n = is.read(buf)) > 0) {
+                    total += n;
+                    if (total > URL_MAX_BYTES) {
+                        auditUploadRejected(uploader, uploaderName, sessionId, "url_too_large_stream");
+                        reject(ctx, 413, "UPLOAD_REJECTED",
+                                "remote file too large (>" + URL_MAX_BYTES + " bytes)");
+                        return;
+                    }
+                    baos.write(buf, 0, n);
+                }
+                bytes = baos.toByteArray();
+            }
+        } catch (java.net.SocketTimeoutException ste) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "url_timeout");
+            reject(ctx, 504, "UPLOAD_REJECTED", "remote fetch timeout");
+            return;
+        } catch (Exception e) {
+            log.log(Level.WARNING, "url fetch failed", e);
+            auditUploadRejected(uploader, uploaderName, sessionId, "url_fetch_failed");
+            reject(ctx, 502, "UPLOAD_REJECTED", "failed to fetch URL");
+            return;
+        }
+        if (bytes == null || bytes.length == 0) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "url_empty");
+            reject(ctx, 400, "UPLOAD_REJECTED", "remote returned empty body");
+            return;
+        }
+
+        // 5. 走相同 6 层校验栈（提取为 helper 复用 file path）
+        processDownloadedBytes(ctx, bytes, declaredMime, uploader, uploaderName, sessionId, bypass);
+    }
+
+    /**
+     * 2026-05-25 项 3：从 file upload 与 URL upload 共用的"已得到 bytes 之后"的处理路径。
+     * 校验 magic bytes / decode / EXIF / bbox / quota / 持久化。
+     */
+    private void processDownloadedBytes(io.javalin.http.Context ctx, byte[] bytes,
+                                         String declaredMime, UUID uploader,
+                                         String uploaderName, String sessionId, boolean bypass) {
+        // magic bytes
+        String actualMime = detectMagicMime(bytes);
+        if (actualMime == null || !actualMime.equals(declaredMime)) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "magic_mismatch_url");
+            reject(ctx, 400, "UPLOAD_REJECTED",
+                    "magic bytes mismatch: declared=" + declaredMime + " actual=" + actualMime);
+            return;
+        }
+
+        // decode
+        BufferedImage decoded;
+        try {
+            decoded = decodeWithTimeout(bytes);
+        } catch (TimeoutException te) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_timeout_url");
+            reject(ctx, 400, "UPLOAD_REJECTED", "decode timeout");
+            return;
+        } catch (Exception e) {
+            log.log(Level.WARNING, "url image decode failed", e);
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_failed_url");
+            reject(ctx, 400, "UPLOAD_REJECTED", "failed to decode image");
+            return;
+        }
+        if (decoded == null) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "decode_null_url");
+            reject(ctx, 400, "UPLOAD_REJECTED", "ImageIO returned null");
+            return;
+        }
+        if ("image/jpeg".equals(actualMime)) {
+            decoded = ExifOrientation.autoRotateJpeg(bytes, decoded, log);
+        }
+
+        int w = decoded.getWidth();
+        int h = decoded.getHeight();
+        if (w <= 0 || h <= 0 || w > BBOX_MAX_EDGE || h > BBOX_MAX_EDGE) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "bbox_out_of_range_url");
+            reject(ctx, 400, "UPLOAD_REJECTED", "bbox out of range: " + w + "x" + h);
+            return;
+        }
+        int maxEdge = cfg.downscaleMaxEdge();
+        if (Math.max(w, h) > maxEdge) {
+            decoded = downscale(decoded, maxEdge);
+        }
+
+        byte[] pngBytes;
+        try {
+            pngBytes = ImageStorage.encodePng(decoded);
+        } catch (IOException e) {
+            log.log(Level.WARNING, "url PNG encode failed", e);
+            auditUploadRejected(uploader, uploaderName, sessionId, "encode_failed_url");
+            reject(ctx, 500, "INTERNAL_ERROR", "encode failed");
+            return;
+        }
+        String hash = ImageStorage.sha256Hex16(pngBytes);
+        long pngLen = pngBytes.length;
+
+        ReentrantLock hashLock = storage.writeLockFor(hash);
+        hashLock.lock();
+        ImageQuotaService.QuotaResult qr;
+        ImageUploadDao.Row finalRow;
+        try {
+            final ImageUploadDao.Row candidate = new ImageUploadDao.Row(
+                    hash, pngLen, decoded.getWidth(), decoded.getHeight(),
+                    "image/png", uploader,
+                    System.currentTimeMillis(), System.currentTimeMillis());
+            Set<String> referenced = storage.collectReferencedHashes(wallRepo);
+            try {
+                qr = jdbi.inTransaction(TransactionIsolationLevel.SERIALIZABLE, handle -> {
+                    handle.execute("UPDATE image_uploads SET last_used_at = last_used_at "
+                            + "WHERE hash = '__locker__'");
+                    Optional<ImageUploadDao.Row> existing = imageDao.findByHashOn(handle, hash);
+                    return quota.tryReserveQuotaOn(handle, uploader, candidate, pngLen,
+                            existing.isPresent(), referenced, bypass);
+                });
+            } catch (Exception e) {
+                log.log(Level.WARNING, "url upload transaction failed", e);
+                auditUploadRejected(uploader, uploaderName, sessionId, "persist_failed_url");
+                reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
+                return;
+            }
+            if (qr instanceof ImageQuotaService.DeniedPerDay dp) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "quota_per_day_url");
+                reject(ctx, 429, "QUOTA_EXCEEDED",
+                        "per-day upload limit reached: " + dp.currentCount() + "/" + dp.limit());
+                return;
+            }
+            if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk_url");
+                reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
+                        "disk full; cannot free " + dd.bytesShort() + " more bytes");
+                return;
+            }
+            ImageQuotaService.Reserved ok = (ImageQuotaService.Reserved) qr;
+            if (ok.inserted()) {
+                try {
+                    storage.writeFileAtomic(hash, pngBytes);
+                } catch (IOException e) {
+                    log.log(Level.WARNING, "url writeFileAtomic failed; rolling back " + hash, e);
+                    try {
+                        jdbi.useTransaction(TransactionIsolationLevel.SERIALIZABLE,
+                                handle -> imageDao.deleteOn(handle, hash));
+                    } catch (Exception rb) {
+                        log.log(Level.SEVERE,
+                                "compensation DELETE failed; orphan DB row: " + hash, rb);
+                    }
+                    auditUploadRejected(uploader, uploaderName, sessionId, "write_failed_url");
+                    reject(ctx, 500, "INTERNAL_ERROR", "persist failed");
+                    return;
+                }
+            }
+            for (String evictedHash : ok.evictedHashes()) {
+                storage.deleteFileOnly(evictedHash);
+            }
+            finalRow = candidate;
+        } finally {
+            hashLock.unlock();
+        }
+
+        auditUploadOk(uploader, uploaderName, sessionId, hash, pngLen);
+        ctx.status(200).json(Map.of(
+                "source", hash,
+                "width", finalRow.width(),
+                "height", finalRow.height(),
+                "bytes", pngLen));
+    }
+
     // ---------- POST /api/upload ----------
 
     /**
@@ -218,6 +503,12 @@ public final class UploadHandler {
             auditUploadRejected(uploader, uploaderName, sessionId, "decode_null");
             reject(ctx, 400, "UPLOAD_REJECTED", "ImageIO returned null (unsupported format?)");
             return;
+        }
+
+        // 5.5. 2026-05-25 项 4：JPEG EXIF Orientation 自动旋转（手机照片常见 90°/180°/270°）。
+        // PNG / WebP 无 EXIF；ExifOrientation.read 走 JPEG magic 快速路径 fail-soft return 1。
+        if ("image/jpeg".equals(actualMime)) {
+            decoded = ExifOrientation.autoRotateJpeg(bytes, decoded, log);
         }
 
         // 6. bbox sanity + downscale

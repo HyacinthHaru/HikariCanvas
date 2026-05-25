@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ProjectState, Element, Layer, PatchOp } from '@/types/protocol';
 import { useVariableStore } from './variables';
+import { clearLayerThumbnailCache } from '@/render/LayerThumbnailRenderer';
 
 /** 兜底默认层（state 尚未到达时供 UI 渲染避免 null check 散落组件里）。 */
 const EMPTY_LAYER: Layer = {
@@ -11,6 +12,7 @@ const EMPTY_LAYER: Layer = {
     locked: false,
     opacity: 1,
     blendMode: 'normal',
+    colorTag: null,
     elements: [],
 };
 
@@ -124,6 +126,8 @@ export const useProjectStore = defineStore('project', () => {
         // 0.4.0-P1-D：variables 是 cross-wall 全局 store，切 wall 时一起清；
         // 重连同 wall 不会进 reset 分支（见 wsClient.handleReady 的 wallId diff 判断）
         useVariableStore().reset();
+        // M8-TODO 项 1：图层缩略图缓存（按 layerId 索引）跨 wall 不可复用，切 wall 时清。
+        clearLayerThumbnailCache();
     }
 
     return {

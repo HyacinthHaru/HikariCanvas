@@ -171,6 +171,48 @@ class EditSessionLayerOpsTest {
                 ((EditSession.OpResult.Error) r).code());
     }
 
+    // ---------- M8-TODO 项 2：colorTag ----------
+
+    @Test
+    void updateAcceptsValidColorTag() {
+        EditSession es = newSession();
+        String l0 = es.state().activeLayerId();
+        EditSession.OpResult.Ok r = (EditSession.OpResult.Ok)
+                es.updateLayer(l0, Map.of("colorTag", "red"));
+        assertEquals("red", es.state().layers().get(0).colorTag());
+        // patch 形态：/layers/0/colorTag replace
+        assertEquals("/layers/0/colorTag", r.patch().ops().get(0).path());
+        assertEquals("red", r.patch().ops().get(0).value());
+    }
+
+    @Test
+    void updateColorTagToEmptyStringClears() {
+        EditSession es = newSession();
+        String l0 = es.state().activeLayerId();
+        es.updateLayer(l0, Map.of("colorTag", "blue"));
+        // 空字符串 = 清除（前端 "X" 按钮路径）
+        es.updateLayer(l0, Map.of("colorTag", ""));
+        assertNotNull(es.state().layers().get(0));
+        assertTrue(es.state().layers().get(0).colorTag() == null,
+                "empty string should clear colorTag");
+    }
+
+    @Test
+    void updateColorTagRejectsUnknownValue() {
+        EditSession es = newSession();
+        String l0 = es.state().activeLayerId();
+        EditSession.OpResult r = es.updateLayer(l0, Map.of("colorTag", "fuchsia"));
+        assertEquals("INVALID_PAYLOAD",
+                ((EditSession.OpResult.Error) r).code());
+    }
+
+    @Test
+    void layerDefaultsColorTagToNull() {
+        EditSession es = newSession();
+        assertTrue(es.state().layers().get(0).colorTag() == null,
+                "fresh layer should have no colorTag");
+    }
+
     // ---------- layer.reorder ----------
 
     @Test
