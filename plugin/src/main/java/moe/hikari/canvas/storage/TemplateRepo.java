@@ -174,11 +174,24 @@ public final class TemplateRepo {
         }
     }
 
-    private static Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+    // P3-75：非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
+    private Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
         String ouuid = rs.getString("owner_uuid");
+        UUID owner = null; // builtin 时 null
+        if (ouuid != null) {
+            try {
+                owner = UUID.fromString(ouuid);
+            } catch (IllegalArgumentException ex) {
+                // P3-75：外部 DB 数据损坏的防御性降级（与 RailDao/UserGlobalVariableDao 看齐）——
+                // nil UUID 匹配 owner 失败更受限（安全），且单行坏数据不阻断整查询。
+                log.log(Level.WARNING, "TemplateRepo.mapRow owner_uuid parse failed, id="
+                        + rs.getString("template_id") + ", owner=" + ouuid, ex);
+                owner = new UUID(0L, 0L);
+            }
+        }
         return new Row(
                 rs.getString("template_id"),
-                ouuid == null ? null : UUID.fromString(ouuid),
+                owner,
                 rs.getString("owner_name"),
                 rs.getString("display_name"),
                 rs.getString("description"),

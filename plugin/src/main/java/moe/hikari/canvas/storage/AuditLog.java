@@ -47,7 +47,10 @@ public final class AuditLog {
                     ? null
                     : JSON.writeValueAsString(details);
         } catch (Exception e) {
-            detailsJson = null;
+            // P3-83：details 序列化失败不能静默——补 WARNING 日志（对齐本方法 DB-insert catch
+            // 与 insertSignRecord 既有 fallback 约定）；写可追溯 marker 而非纯 null，保留审计上下文。
+            log.log(Level.WARNING, "AuditLog details serialization failed for event=" + event, e);
+            detailsJson = "{\"_serialization_failed\":true}";
         }
         final String finalDetails = detailsJson;
         try {

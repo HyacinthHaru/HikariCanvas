@@ -8,7 +8,7 @@ import { fillToCanvasStyle } from './fill';
 import { applyBayerDither } from './BayerDither';
 import { getPaletteLut, type PaletteLut } from './PaletteLut';
 import { ensureLoaded, isLoaded } from './FontLoader';
-import { ensureLoaded as ensureIconLoaded, getCached as getCachedIcon, onIconLoaded } from './IconLoader';
+import { ensureLoaded as ensureIconLoaded, getCached as getCachedIcon, onIconLoaded, clearFailedIconCache } from './IconLoader';
 import { interpolate, type PlaceholderSegment } from '@/variable/interpolator';
 import type { useVariableStore } from '@/stores/variables';
 
@@ -27,6 +27,10 @@ export function renderProjectState(
     const widthPx = (state?.canvas.widthMaps ?? 1) * 128;
     const heightPx = (state?.canvas.heightMaps ?? 1) * 128;
 
+    // P1-10：先 clearRect 把画布清成全透明，再画背景。否则当 background 是半透明 Fill
+    // （alpha < 1）时，fillRect 走 source-over 不会覆盖上一帧像素 → 鬼影逐帧积累。
+    // 与后端每次 new BufferedImage 从空画布起绘的行为对齐。
+    ctx.clearRect(0, 0, widthPx, heightPx);
     // M17 F5：canvas.background 升级为 Fill 联合类型。镜像后端 FillPaintBuilder.fillToPaint：
     // solid → hex string；linear/radial → CanvasGradient（端点 / 中心由 bbox=整画布推）。
     const bgStyle = fillToCanvasStyle(ctx, state?.canvas.background, 0, 0, widthPx, heightPx);
@@ -62,7 +66,9 @@ function canFastPath(layer: Layer): boolean {
     if (layer.blendMode !== 'normal') return false;
     for (const e of layer.elements) {
         const op = e.opacity;
-        if (op !== undefined && op !== null && op < 1) return false;
+        // P3-63/P3-105：NaN/非有限 opacity 也视为非默认（避开 fast path），让 slow path 兜底 clamp，
+        // 对齐后端 CanvasCompositor.canFastPath 的 `op != null && (!Float.isFinite(op) || op < 1)`。
+        if (op !== undefined && op !== null && (!Number.isFinite(op) || op < 1)) return false;
         if (e.renderMode && e.renderMode !== 'clean') return false;
         // element-level blendMode 字段保留但 M8-E 不实装合成（M11 dither 一起）
     }
@@ -108,9 +114,11 @@ function drawElement(ctx: CanvasRenderingContext2D, e: Element, widthPx: number,
         ctx.translate(-cx, -cy);
     }
     // M8-E：element-level opacity 通过 globalAlpha 实装（同后端 SrcOver.derive）
+    // P3-105：NaN/非有限 opacity 兜底为 1（finiteOr），并 clamp 入 [0,1]，对齐后端 drawElementsTo
     const op = e.opacity;
-    if (op !== undefined && op !== null && op < 1) {
-        ctx.globalAlpha = ctx.globalAlpha * op;
+    if (op !== undefined && op !== null && (!Number.isFinite(op) || op < 1)) {
+        const safe = !Number.isFinite(op) ? 1 : Math.max(0, Math.min(1, op));
+        ctx.globalAlpha = ctx.globalAlpha * safe;
     }
     drawElementBody(ctx, e);
     ctx.restore();
@@ -182,17 +190,27 @@ function drawBrush(ctx: CanvasRenderingContext2D, b: BrushStrokeElement): void {
 
 let cachedPalette: PaletteLut | null = null;
 let paletteReadyHook: (() => void) | null = null;
+// P3-106：in-flight 守卫。未就绪时 getCachedPalette 每帧都会被调；若不挡，每帧都注册一个
+// 新的 getPaletteLut().then 回调，导致 palette resolve 时一次性触发 N 次 requestDraw。
+let paletteLoading = false;
 
 /** CanvasView 注册：PaletteLut 加载完成 → 请求重绘（dither element 首帧本来 fallback clean）。 */
 export function onPaletteReady(hook: () => void) { paletteReadyHook = hook; }
 
 function getCachedPalette(): PaletteLut | null {
     if (cachedPalette) return cachedPalette;
+    // P3-106：已有在途加载则直接返回 null，不再重复注册 .then
+    if (paletteLoading) return null;
+    paletteLoading = true;
     // 首次：发起 lazy load，本帧返回 null，加载完后 hook 触发重绘
     getPaletteLut().then((p) => {
         cachedPalette = p;
+        paletteLoading = false;
         paletteReadyHook?.();
-    }).catch(() => { /* palette 加载失败：dither element 永久 fallback 走 clean */ });
+    }).catch(() => {
+        // palette 加载失败：清守卫允许后续重试；dither element 本窗口 fallback 走 clean
+        paletteLoading = false;
+    });
     return null;
 }
 
@@ -229,12 +247,47 @@ function drawDitheredElement(
         ctx.restore();
         return;
     }
+    // P3-34：按 element bbox（含 rotation 外接圆 / italic shear padding）∩ canvas 分配 offscreen，
+    // 而非整张 canvas。镜像后端 CanvasCompositor.drawDitheredElement（M15.4 P0-Render-2）——
+    // 避免大画布上每个 dither element 都分配 W×H×ARGB transient buffer。
+    // 整数算术逐步骤镜像后端（Java int 除法向零截断，TS 用 Math.trunc）以保 clipX/Y 一致、
+    // dither 相位双端对齐。
+    let bbX: number, bbY: number, bbW: number, bbH: number;
+    if (e.rotation !== 0) {
+        const diagonal = Math.ceil(Math.hypot(e.w, e.h));
+        const cx = e.x + Math.trunc(e.w / 2);
+        const cy = e.y + Math.trunc(e.h / 2);
+        bbX = cx - Math.trunc(diagonal / 2);
+        bbY = cy - Math.trunc(diagonal / 2);
+        bbW = diagonal;
+        bbH = diagonal;
+    } else {
+        bbX = e.x;
+        bbY = e.y;
+        bbW = e.w;
+        bbH = e.h;
+        // P3-20：italic text 走 shear，左右各溢出 ceil(0.2*h)；扩 padding 与后端一致。
+        if (e.type === 'text' && e.italic === true) {
+            const shearPad = Math.ceil(0.2 * Math.abs(e.h));
+            bbX -= shearPad;
+            bbW += shearPad * 2;
+        }
+    }
+    // 与 canvas 相交
+    const clipX = Math.max(0, bbX);
+    const clipY = Math.max(0, bbY);
+    const clipW = Math.min(widthPx, bbX + bbW) - clipX;
+    const clipH = Math.min(heightPx, bbY + bbH) - clipY;
+    if (clipW <= 0 || clipH <= 0) return;
+
     const off = document.createElement('canvas');
-    off.width = widthPx;
-    off.height = heightPx;
+    off.width = clipW;
+    off.height = clipH;
     const og = off.getContext('2d');
     if (!og) return;
     og.imageSmoothingEnabled = false;
+    // buf 局部 (0,0) 对应原画 (clipX, clipY)，drawElementBody 仍用原画坐标
+    og.translate(-clipX, -clipY);
     if (e.rotation !== 0) {
         const cx = e.x + e.w / 2;
         const cy = e.y + e.h / 2;
@@ -244,8 +297,9 @@ function drawDitheredElement(
     }
     drawElementBody(og, e);
 
-    const img = og.getImageData(0, 0, widthPx, heightPx);
-    applyBayerDither(img, palette);
+    const img = og.getImageData(0, 0, clipW, clipH);
+    // phase = (clipX, clipY) 让 dither 图案以原画坐标为基准，与全画布 buffer 等价、双端相位对齐
+    applyBayerDither(img, palette, clipX, clipY);
     og.putImageData(img, 0, 0);
 
     // element.opacity 通过主 ctx.globalAlpha 起作用（drawImage 走 SrcOver）
@@ -254,7 +308,7 @@ function drawDitheredElement(
     if (op !== undefined && op !== null && op < 1) {
         ctx.globalAlpha = prevAlpha * op;
     }
-    ctx.drawImage(off, 0, 0);
+    ctx.drawImage(off, clipX, clipY);
     ctx.globalAlpha = prevAlpha;
 }
 
@@ -379,6 +433,9 @@ function buildArrowSubtractClip(
 
 /** 与后端 CanvasCompositor.drawCircle 镜像：bbox 推 cx/cy/rx/ry → ctx.ellipse。 */
 function drawCircle(ctx: CanvasRenderingContext2D, c: CircleElement): void {
+    // P2-57/P3-58/P3-62：渲染层兜底，对齐后端 CircleRenderer.java:21。w/h ≤ 0 时半径 ≤ 0，
+    // ctx.ellipse 负半径抛 IndexSizeError（整帧崩）→ 直接 return。
+    if (c.w <= 0 || c.h <= 0) return;
     const cx = c.x + c.w / 2;
     const cy = c.y + c.h / 2;
     const rx = c.w / 2;
@@ -404,6 +461,8 @@ function drawCircle(ctx: CanvasRenderingContext2D, c: CircleElement): void {
 
 /** 与后端 CanvasCompositor.drawShape / buildShapePath 镜像。 */
 function drawShape(ctx: CanvasRenderingContext2D, s: ShapeElement): void {
+    // P2-57/P3-62：渲染层兜底，对齐后端 ShapeRenderer.java:23。w/h ≤ 0 时外接圆半径退化 → 不画。
+    if (s.w <= 0 || s.h <= 0) return;
     const cx = s.x + s.w / 2;
     const cy = s.y + s.h / 2;
     const outerR = Math.min(s.w, s.h) / 2;
@@ -443,22 +502,38 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ShapeElement): void {
 // 是同步函数 —— 因此首次绘制时图未就绪，画占位 ?；图加载完毕调用 onIconReady() 回调，外层
 // CanvasView 的 requestDraw 会再触发一次完整重绘。
 
-interface IconCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; }
+// P2-70：失败条目记 failedAt 时间戳；重绘命中超过 TTL 的 failed 条目时重新发起加载，
+// 避免瞬时 404 / 401 / 网络抖动把资源永久钉死在占位 ?（原先 failed=true 一旦写入再不重试）。
+const FAILED_RETRY_TTL_MS = 10_000;
+
+interface IconCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; failedAt: number; }
 const iconCache = new Map<string, IconCacheEntry>();
 let iconReadyHook: (() => void) | null = null;
 
 /** CanvasView 注册：图标异步加载完成后请求重绘 */
 export function onIconReady(hook: () => void) { iconReadyHook = hook; }
 
+function startIconLoad(source: string, entry: IconCacheEntry): void {
+    entry.ready = false;
+    entry.failed = false;
+    entry.failedAt = 0;
+    entry.img.onload = () => { entry.ready = true; iconReadyHook?.(); };
+    entry.img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); iconReadyHook?.(); };
+    entry.img.src = `/api/template-asset/icons/${encodeURIComponent(source)}.png`;
+}
+
 function getIconImage(source: string): IconCacheEntry {
     let entry = iconCache.get(source);
-    if (entry) return entry;
-    const img = new Image();
-    entry = { img, ready: false, failed: false };
+    if (entry) {
+        // P2-70：失败条目超过 TTL → 重新加载（瞬时失败自愈，无需整页刷新）。
+        if (entry.failed && Date.now() - entry.failedAt > FAILED_RETRY_TTL_MS) {
+            startIconLoad(source, entry);
+        }
+        return entry;
+    }
+    entry = { img: new Image(), ready: false, failed: false, failedAt: 0 };
     iconCache.set(source, entry);
-    img.onload = () => { entry!.ready = true; iconReadyHook?.(); };
-    img.onerror = () => { entry!.failed = true; iconReadyHook?.(); };
-    img.src = `/api/template-asset/icons/${encodeURIComponent(source)}.png`;
+    startIconLoad(source, entry);
     return entry;
 }
 
@@ -579,7 +654,7 @@ function drawIconPlaceholder(ctx: CanvasRenderingContext2D, ic: IconElement): vo
 // 加载完毕调用同一 iconReadyHook → CanvasView.requestDraw 再触一次重绘。
 // mask 用 Canvas 2D ctx.clip(Path2D) 实装；inverted 用 even-odd fill rule 反相。
 
-interface ImageCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; }
+interface ImageCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; failedAt: number; }
 const imageCache = new Map<string, ImageCacheEntry>();
 
 // M16 P1.1：/api/upload/{hash} 后端鉴权要 sessionId query param；上层注入访问器避免
@@ -593,15 +668,27 @@ function buildUploadUrl(source: string): string {
     return sid ? `${base}?sessionId=${encodeURIComponent(sid)}` : base;
 }
 
+function startUploadLoad(source: string, entry: ImageCacheEntry): void {
+    entry.ready = false;
+    entry.failed = false;
+    entry.failedAt = 0;
+    entry.img.onload = () => { entry.ready = true; iconReadyHook?.(); };
+    entry.img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); iconReadyHook?.(); };
+    entry.img.src = buildUploadUrl(source);
+}
+
 function getUploadImage(source: string): ImageCacheEntry {
     let entry = imageCache.get(source);
-    if (entry) return entry;
-    const img = new Image();
-    entry = { img, ready: false, failed: false };
+    if (entry) {
+        // P2-70：失败条目超过 TTL → 重新加载（瞬时 404 / session 过期重连场景自愈）。
+        if (entry.failed && Date.now() - entry.failedAt > FAILED_RETRY_TTL_MS) {
+            startUploadLoad(source, entry);
+        }
+        return entry;
+    }
+    entry = { img: new Image(), ready: false, failed: false, failedAt: 0 };
     imageCache.set(source, entry);
-    img.onload = () => { entry!.ready = true; iconReadyHook?.(); };
-    img.onerror = () => { entry!.failed = true; iconReadyHook?.(); };
-    img.src = buildUploadUrl(source);
+    startUploadLoad(source, entry);
     return entry;
 }
 
@@ -609,11 +696,29 @@ function getUploadImage(source: string): ImageCacheEntry {
 export function preloadImage(source: string, dataUrl: string): void {
     if (imageCache.has(source)) return;
     const img = new Image();
-    const entry: ImageCacheEntry = { img, ready: false, failed: false };
+    const entry: ImageCacheEntry = { img, ready: false, failed: false, failedAt: 0 };
     imageCache.set(source, entry);
     img.onload = () => { entry.ready = true; iconReadyHook?.(); };
-    img.onerror = () => { entry.failed = true; iconReadyHook?.(); };
+    img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); iconReadyHook?.(); };
     img.src = dataUrl;
+}
+
+/**
+ * P2-70：丢弃图片 / 图标缓存中的失败（占位 ?）条目，并联动清 IconLoader 的失败 SVG 条目。
+ *
+ * <p>由 {@code project.reset()}（切 wall / 断线重连触发）调用，与 {@code clearLayerThumbnailCache}
+ * 并列。原先这两个模块级 Map 永不重置——瞬时网络错误把资源永久钉死占位 ?，只能整页刷新；
+ * 且跨多次 wall 切换累积历史资产带来内存增长。成功条目（内容寻址，可跨 wall 共享）保留不动，
+ * 仅丢弃失败条目让下次绘制重新发起加载。</p>
+ */
+export function resetImageCaches(): void {
+    for (const [k, v] of imageCache) {
+        if (v.failed) imageCache.delete(k);
+    }
+    for (const [k, v] of iconCache) {
+        if (v.failed) iconCache.delete(k);
+    }
+    clearFailedIconCache();
 }
 
 function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {

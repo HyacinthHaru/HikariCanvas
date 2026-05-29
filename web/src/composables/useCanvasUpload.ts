@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue';
+import { onScopeDispose, ref, type Ref } from 'vue';
 import { useEventListener } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
@@ -62,12 +62,20 @@ export function useCanvasUpload(opts: {
     const uploadError = ref<string | null>(null);
     const uploading = ref(false);
 
+    // P3-43/P3-42 同款约定：保存 timer 句柄，下一次 flashError 先清旧的，
+    // 并在 scope dispose 时兜底清除——避免卸载后挂起的 setTimeout 触碰 stale reactive ref。
+    let errorTimer: number | null = null;
     function flashError(msg: string) {
         uploadError.value = msg;
-        window.setTimeout(() => {
+        if (errorTimer !== null) clearTimeout(errorTimer);
+        errorTimer = window.setTimeout(() => {
+            errorTimer = null;
             if (uploadError.value === msg) uploadError.value = null;
         }, 6000);
     }
+    onScopeDispose(() => {
+        if (errorTimer !== null) clearTimeout(errorTimer);
+    });
 
     async function uploadAndPlace(file: File, dropClientX?: number, dropClientY?: number) {
         if (project.isLocked) { flashError(t.value.image.lockedDenied); return; }

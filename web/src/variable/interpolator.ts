@@ -26,6 +26,24 @@ export const UNRESOLVED = '???';
 const USER_NAMESPACE_PREFIX = 'user';
 
 /**
+ * P3-10：TTL 过期判定，镜像后端 {@code Variable.isStale}：{@code ttl > 0 && (now - updatedAt) > ttl}。
+ *
+ * <p>之前前端只判 {@code currentValue != null && length > 0} 就用 cached，从不判过期；
+ * 后端 {@code VariableInterpolator.resolveValue} 则 stale 时跳过 cached 走 fallback 链。
+ * 二者在 TTL 过期窗口对同一占位符产出不同文本（双端不一致）。此 helper 让前端对齐后端。</p>
+ *
+ * <p>注：staleness 时钟基准依赖 {@code updatedAt}（由 wsClient 接 state.patch 写入）。</p>
+ *
+ * <p>P3-10：导出供 VariableChipEditor 的 chip 显示 / tooltip 复用同一判定，保证三处
+ * （interpolate / chip 文本 / tooltip）的 stale 语义不分叉。</p>
+ */
+export function isStale(ttl: number | undefined, updatedAt: number | undefined, now: number): boolean {
+    if (typeof ttl !== 'number' || ttl <= 0) return false;
+    if (typeof updatedAt !== 'number') return false;
+    return now - updatedAt > ttl;
+}
+
+/**
  * 单个 placeholder 在<b>替换后</b>文本中的位置标记（M28-enhance 引入）。
  *
  * <p>由 {@link interpolate} 输出；用于编辑器 PreviewRenderer 在 Canvas 上画 "chip 风格"背景 hint
@@ -168,6 +186,8 @@ function doInterpolate(
     const referenced = new Set<string>();
     const missing = new Set<string>();
     const segments: PlaceholderSegment[] = [];
+    // P3-10：单次扫描内用同一 now，避免一段文本内多个占位符 staleness 判定时钟漂移。
+    const now = Date.now();
     // 单趟扫描；手工累积输出 + 同步记录每个 placeholder 在替换后 text 中的 char range。
     // 不用 String.replace 因为它不易暴露每段 placeholder 替换后的 char index（只有原字符串 offset）。
     const pattern = new RegExp(VARIABLE_PATTERN.source, 'g');
@@ -187,7 +207,8 @@ function doInterpolate(
         let resolved: string;
         if (v) {
             const cur = v.currentValue;
-            if (cur != null && cur.length > 0) resolved = cur;
+            // P3-10：cached 非空且未过期才用；stale（ttl 过期）则跳过 cached 走 fallback 链，与后端一致。
+            if (cur != null && cur.length > 0 && !isStale(v.ttl, v.updatedAt, now)) resolved = cur;
             else if (fallback !== undefined) resolved = fallback;
             else if (v.defaultValue != null) resolved = v.defaultValue;
             else resolved = UNRESOLVED;

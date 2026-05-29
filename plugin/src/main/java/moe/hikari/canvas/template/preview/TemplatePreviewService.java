@@ -41,7 +41,14 @@ public final class TemplatePreviewService {
     private final TemplateInstantiator instantiator = new TemplateInstantiator();
     private final ObjectMapper mapper = new ObjectMapper();
 
-    /** key = templateId；value = PNG bytes（null = 已尝试但失败，不再重试本轮） */
+    /**
+     * key = templateId；value = PNG bytes。
+     *
+     * <p>P3-38：渲染失败时 {@link #renderPreview} 返 {@code null}，而
+     * {@link ConcurrentHashMap#computeIfAbsent} 对 null 返回值不写表——即失败结果
+     * <b>不被缓存，下次请求会重新实例化重试</b>（与类 javadoc 策略一致）。
+     * 故此处不存在"失败负缓存、本轮不重试"语义。</p>
+     */
     private final ConcurrentHashMap<String, byte[]> cache = new ConcurrentHashMap<>();
 
     public TemplatePreviewService(Logger log, TemplateRegistry registry, CanvasCompositor compositor) {

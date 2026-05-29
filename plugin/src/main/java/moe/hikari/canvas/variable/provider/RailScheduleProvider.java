@@ -250,13 +250,22 @@ public final class RailScheduleProvider implements VariableProvider {
         }
     }
 
-    /** 取消铁路接管（业务侧 unbind / DELETE 后调）；删 7 + 7 = 14 个新增 key + 8 旧 key。 */
+    /**
+     * 取消铁路接管（业务侧 unbind / DELETE 后调）。
+     *
+     * <p>0.4.10 U-2：仅删 {@link #RAIL_ONLY_KEYS}（14 个 0.4.4 专属 key）。
+     * {@link #SHARED_BASE_KEYS}（15 个与 ManualSchedule 共享的 key）<b>保留</b>——unbind
+     * 后该 wall 若仍有 manual schedule，ManualScheduleProvider 会继续写这些 key；删掉只会
+     * 触发多余的 re-create + 在重建窗口闪占位符。manual 不再接管时这些 key 会随其
+     * TTL 自然失效或由 SessionManager wallDeleteHook → ManualScheduleProvider.unregisterWall
+     * 统一清理。</p>
+     */
     public void unregisterWall(String wallId) {
         if (wallId == null) return;
         if (registeredWalls.remove(wallId) == null) return;
         lastPushAt.remove(wallId);
         String ns = NAMESPACE_PREFIX + ":" + wallId;
-        for (String key : ALL_RAIL_KEYS) {
+        for (String key : RAIL_ONLY_KEYS) {
             try {
                 store.delete(ns + "/" + key);
             } catch (VariableException e) {
@@ -286,15 +295,31 @@ public final class RailScheduleProvider implements VariableProvider {
     //  内部
     // ────────────────────────────────────────────────────────────
 
-    /** 完整 key 列表（注册 / 注销共用）：8 旧基础 + 7 next2 旧 + 7 next 新 + 7 next2 新 = 29。 */
-    static final String[] ALL_RAIL_KEYS = new String[] {
+    /**
+     * 与 {@link ManualScheduleProvider} 共享的 15 个基础 key（8 base + 7 next2 base）。
+     *
+     * <p>0.4.10 U-2：这些 key 由 rail 和 manual 两个 provider 共同写。{@link #unregisterWall}
+     * <b>不能</b>删它们——unbind 后该 wall 可能退回 ManualSchedule 路径，删掉会让 manual
+     * 重新 create（多余）+ 在重建窗口内占位符闪 "???"。仅 register 时 create（幂等，
+     * manual 已 create 则跳过），unregister 时保留交给 manual。</p>
+     */
+    static final String[] SHARED_BASE_KEYS = new String[] {
             // 基础 8
             "next_departure", "next_destination", "eta_minutes", "eta_seconds",
             "eta_mmss", "is_arriving", "arrival_status", "precision",
             // next2 基础 7
             "next2_departure", "next2_destination",
             "next2_eta_minutes", "next2_eta_seconds", "next2_eta_mmss",
-            "next2_is_arriving", "next2_arrival_status",
+            "next2_is_arriving", "next2_arrival_status"
+    };
+
+    /**
+     * 0.4.4 引入的 14 个 rail 专属 key（7 next + 7 next2）。
+     *
+     * <p>这些 key 只有 rail provider 写。{@link #unregisterWall} 只删这 14 个——manual
+     * 不认识它们，删掉是干净的。</p>
+     */
+    static final String[] RAIL_ONLY_KEYS = new String[] {
             // 0.4.4 新 next 7
             "next_run_number", "next_service_type", "next_service_type_text",
             "next_cars", "next_terminus", "next_notes", "next_arrival",
@@ -303,9 +328,20 @@ public final class RailScheduleProvider implements VariableProvider {
             "next2_cars", "next2_terminus", "next2_notes", "next2_arrival"
     };
 
+    /** 完整 key 列表（注册共用）：15 shared base + 14 rail-only = 29。 */
+    static final String[] ALL_RAIL_KEYS = concatKeys(SHARED_BASE_KEYS, RAIL_ONLY_KEYS);
+
+    private static String[] concatKeys(String[] a, String[] b) {
+        String[] out = new String[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+
     private void registerWallInternal(String wallId, WallRailBinding binding) {
         registeredWalls.put(wallId, binding);
         String ns = NAMESPACE_PREFIX + ":" + wallId;
+        // create 全部 29 key（幂等，shared base 若 manual 已 create 则跳过）
         for (String key : ALL_RAIL_KEYS) {
             tryCreate(ns, key, varTypeOf(key));
         }

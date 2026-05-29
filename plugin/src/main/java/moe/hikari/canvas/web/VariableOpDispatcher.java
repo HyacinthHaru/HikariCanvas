@@ -8,8 +8,6 @@ import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.variable.VarType;
 import moe.hikari.canvas.variable.VariablePatch;
 import moe.hikari.canvas.variable.VariableStore;
-import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
 
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -46,19 +44,23 @@ final class VariableOpDispatcher {
     private final OpPushCallback push;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
+    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    private final org.bukkit.plugin.Plugin plugin;
 
     VariableOpDispatcher(SessionManager sessionManager,
                          SessionRateLimiter rateLimiter,
                          VariableStore variableStore,
                          moe.hikari.canvas.storage.WallRepo wallRepo,
                          OpPushCallback push,
-                         moe.hikari.canvas.storage.AuditLog auditLog) {
+                         moe.hikari.canvas.storage.AuditLog auditLog,
+                         org.bukkit.plugin.Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.variableStore = variableStore;
         this.wallRepo = wallRepo;
         this.push = push;
         this.auditLog = auditLog;
+        this.plugin = plugin;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -329,7 +331,6 @@ final class VariableOpDispatcher {
     private boolean checkPermission(WsMessageContext ctx, Envelope in, String sessionId,
                                     Session s, String op, Map<String, Object> payload) {
         UUID callerUuid = s.playerUuid();
-        Player player = callerUuid == null ? null : Bukkit.getPlayer(callerUuid);
 
         // 路径区分：全局用户变量 vs per-wall user 变量
         boolean isGlobalCreate = "variable.create".equals(op)
@@ -357,7 +358,9 @@ final class VariableOpDispatcher {
             }
         }
 
-        boolean granted = player != null && player.hasPermission(requiredNode);
+        // P2-26：主线程解析在线玩家权限（Bukkit.getPlayer + hasPermission 主线程专用），
+        // 复用 auth 路径同款 callSyncMethod；离线 / 超时 / 异常返 false（own 节点下方兜底放行）。
+        boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
         // own / create 节点 default=true（paper-plugin.yml）；offline 玩家 / 测试期 mock
         // 也允许 own / create 路径，与 SessionManager.open 处理 default 节点惯例一致。
         if (!granted && isOwnNodeDefaultTrue(requiredNode)) {

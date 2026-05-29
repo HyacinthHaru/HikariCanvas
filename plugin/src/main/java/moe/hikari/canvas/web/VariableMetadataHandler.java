@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -63,6 +64,13 @@ public final class VariableMetadataHandler {
     private final VariableProviderDaemon daemon;
     /** 鉴权检查：sessionId 是否对应活 session。生产传 {@code sessionManager::byId 非空判定}；测试注入 fake。 */
     private final Predicate<String> sessionAuthCheck;
+    /**
+     * P2-3：sessionId → 该 session 服务端绑定的 wallId（未绑定/无 session 返 null）。
+     * 生产由 {@code sessionManager.byId(sid).wallId()} 解析；测试注入 fake。
+     * <p>per-wall 隔离的唯一权威来源——客户端传的 {@code wallId} query param 一律忽略，
+     * 防 IDOR 跨 wall 枚举他人 user 变量元数据（与 WebServer ready payload 用 session 绑定 wallId 一致）。</p>
+     */
+    private final Function<String, String> sessionWallResolver;
     private final ObjectMapper jackson;
 
     /** 单 thread cache：JSON + 写入时刻。{@code volatile} 让读取者跨 thread 立即可见。 */
@@ -78,19 +86,38 @@ public final class VariableMetadataHandler {
                                    ObjectMapper jackson) {
         this(variableStore, daemon,
                 sid -> Objects.requireNonNull(sessionManager, "sessionManager").byId(sid) != null,
+                sid -> {
+                    moe.hikari.canvas.session.Session s =
+                            Objects.requireNonNull(sessionManager, "sessionManager").byId(sid);
+                    return s == null ? null : s.wallId();
+                },
                 jackson);
     }
 
     /**
-     * 测试构造：注入自定义鉴权 predicate（避免构造重 SessionManager）。
+     * 测试构造（旧 4-arg）：注入自定义鉴权 predicate。wall 解析默认返回 null（无 user namespace），
+     * 仅适用于不依赖 user namespace 的 provider 聚合 / cache 测试。需要 user namespace 的测试改用
+     * 5-arg 构造显式注入 {@code sessionWallResolver}。
      */
     VariableMetadataHandler(VariableStore variableStore,
                              VariableProviderDaemon daemon,
                              Predicate<String> sessionAuthCheck,
                              ObjectMapper jackson) {
+        this(variableStore, daemon, sessionAuthCheck, sid -> null, jackson);
+    }
+
+    /**
+     * 测试构造（5-arg）：注入鉴权 predicate + sessionId→wallId 解析器。
+     */
+    VariableMetadataHandler(VariableStore variableStore,
+                             VariableProviderDaemon daemon,
+                             Predicate<String> sessionAuthCheck,
+                             Function<String, String> sessionWallResolver,
+                             ObjectMapper jackson) {
         this.variableStore = Objects.requireNonNull(variableStore, "variableStore");
         this.daemon = Objects.requireNonNull(daemon, "daemon");
         this.sessionAuthCheck = Objects.requireNonNull(sessionAuthCheck, "sessionAuthCheck");
+        this.sessionWallResolver = Objects.requireNonNull(sessionWallResolver, "sessionWallResolver");
         this.jackson = Objects.requireNonNull(jackson, "jackson");
     }
 
@@ -127,8 +154,11 @@ public final class VariableMetadataHandler {
                     .result("{\"error\":\"UNAUTHORIZED\"}");
             return;
         }
-        String wallId = ctx.queryParam("wallId");
-        // wallId 缺省路径可命中 5s cache（避免高频前端轮询大压力）
+        // P2-3（IDOR 修复）：忽略客户端传的 wallId query param，改用 session 服务端绑定的 wallId。
+        // 这样任意已认证玩家无法把 wallId 改为他人 wall 枚举其 user 变量元数据，
+        // 与 WebServer ready payload 路径（用 session.wallId()）的 per-wall 隔离一致。
+        String wallId = sessionWallResolver.apply(sessionId);
+        // 无绑定 wall 路径可命中 5s cache（避免高频前端轮询大压力）
         boolean cacheable = wallId == null || wallId.isBlank();
         if (cacheable) {
             long now = System.currentTimeMillis();

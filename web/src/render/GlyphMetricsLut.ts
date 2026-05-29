@@ -29,8 +29,20 @@ const tables = new Map<string, Table | null>();  // null = 加载失败 / 不存
 const pendingLoads = new Map<string, Promise<void>>();
 const readyHandlers: (() => void)[] = [];
 
-export function onMetricsReady(fn: () => void): void {
+/**
+ * 注册回调，metrics 表加载完成后触发（CanvasView 接到后 requestDraw）。
+ * P3-40：返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用注销，避免 readyHandlers
+ * 数组只增不减（旧闭包泄漏 + 重复 requestDraw）。
+ */
+export function onMetricsReady(fn: () => void): () => void {
     readyHandlers.push(fn);
+    return () => offMetricsReady(fn);
+}
+
+/** P3-40：注销 onMetricsReady 注册的回调。 */
+export function offMetricsReady(fn: () => void): void {
+    const i = readyHandlers.indexOf(fn);
+    if (i >= 0) readyHandlers.splice(i, 1);
 }
 
 function emitReady(): void {
@@ -99,11 +111,7 @@ export function advance(fontId: string, ch: string, fontSize: number): number {
     return Math.round(base * fontSize / t.baseSize);
 }
 
-/** 字体 ascent（像素）@ baseSize；调用方按 fontSize 自己缩放。-1 = 表不存在。 */
-export function getAscent(fontId: string): number {
-    return tables.get(fontId)?.ascent ?? -1;
-}
-
-export function getDescent(fontId: string): number {
-    return tables.get(fontId)?.descent ?? -1;
-}
+// P3-95：删除 getAscent/getDescent 两个导出——它们零调用方（死代码导出且误导）。
+// 当前双端基线固定 0.8 倍 fontSize（见 rendering.md §3.2），不按逐字体 ascent/descent 计算。
+// RawTable / Table 仍保留 ascent/descent 字段以记录 .metrics.json 的实际形态（后端
+// serializeToJson 仍输出），但前端不提供读法，避免被误用于基线计算。

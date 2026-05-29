@@ -140,8 +140,8 @@ final class WallOpDispatcher {
                 var wall = wallOpt.get();
                 boolean isOwner = wall.ownerUuid().equals(s.playerUuid());
                 if (!isOwner) {
-                    org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(s.playerUuid());
-                    boolean canAny = live != null && live.hasPermission("canvas.alias.any");
+                    // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+                    boolean canAny = MainThreadPerms.hasPermission(plugin, s.playerUuid(), "canvas.alias.any");
                     if (!canAny) {
                         // M16 P6.4：非 owner 尝试改 alias 留痕——可观测异常尝试
                         if (auditLog != null) {
@@ -187,25 +187,35 @@ final class WallOpDispatcher {
                 final String ackId = in.id();
                 // 主线程跑（动方块 + spawn entity），完成后回 ack 到当前 WS ctx（Jetty 线程安全）
                 org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    moe.hikari.canvas.deploy.FrameDeployer.RepairResult result =
-                            frameDeployer.repairFor(wallId, geom, mapIds);
-                    if (s.projectState() != null) {
-                        throttler.submit(sessionId,
-                                moe.hikari.canvas.render.DirtyRegion.fullCanvas(s.projectState()));
-                    }
-                    plugin.getLogger().info("wall.refresh: wall=" + wallId
-                            + " framesRespawned=" + result.framesRespawned()
-                            + " framesReAttached=" + result.framesReAttached()
-                            + " wallBlocksReplaced=" + result.wallBlocksReplaced());
-                    java.util.LinkedHashMap<String, Object> ackPayload = new java.util.LinkedHashMap<>();
-                    // 给前端的"重挂"是 spawn 新 frame + 给空 frame 塞回 map 的总和
-                    ackPayload.put("framesRespawned", result.framesFixed());
-                    ackPayload.put("framesReAttached", result.framesReAttached());
-                    ackPayload.put("wallBlocksReplaced", result.wallBlocksReplaced());
+                    // P2-67：整个 task 体包 try/catch。repairFor 动方块/spawn entity 任一步抛
+                    // RuntimeException 时，原代码异常逃出 task 体 → 仅 Bukkit 默认日志，前端永不收 ack
+                    // → 8s ack_timeout 误报"无响应"。改为捕获后记 SEVERE + 回 INTERNAL_ERROR 让前端拿真错码。
                     try {
+                        moe.hikari.canvas.deploy.FrameDeployer.RepairResult result =
+                                frameDeployer.repairFor(wallId, geom, mapIds);
+                        if (s.projectState() != null) {
+                            throttler.submit(sessionId,
+                                    moe.hikari.canvas.render.DirtyRegion.fullCanvas(s.projectState()));
+                        }
+                        plugin.getLogger().info("wall.refresh: wall=" + wallId
+                                + " framesRespawned=" + result.framesRespawned()
+                                + " framesReAttached=" + result.framesReAttached()
+                                + " wallBlocksReplaced=" + result.wallBlocksReplaced());
+                        java.util.LinkedHashMap<String, Object> ackPayload = new java.util.LinkedHashMap<>();
+                        // 给前端的"重挂"是 spawn 新 frame + 给空 frame 塞回 map 的总和
+                        ackPayload.put("framesRespawned", result.framesFixed());
+                        ackPayload.put("framesReAttached", result.framesReAttached());
+                        ackPayload.put("wallBlocksReplaced", result.wallBlocksReplaced());
                         ctx.send(Envelope.of("ack", ackId, ackPayload));
-                    } catch (Exception ignored) {
-                        // WS 可能已断开；忽略
+                    } catch (Exception ex) {
+                        plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                                "wall.refresh repair failed for wall=" + wallId, ex);
+                        try {
+                            ctx.send(Envelope.error(ackId, "INTERNAL_ERROR",
+                                    "wall refresh failed"));
+                        } catch (Exception ignored) {
+                            // WS 可能已断开；忽略
+                        }
                     }
                 });
             }

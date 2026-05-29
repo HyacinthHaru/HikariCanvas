@@ -495,11 +495,16 @@ public class RailDao {
     //  helpers
     // ────────────────────────────────────────────────────────────
 
-    private static RailLine mapLine(java.sql.ResultSet rs) throws java.sql.SQLException {
+    // P3-84：非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
+    private RailLine mapLine(java.sql.ResultSet rs) throws java.sql.SQLException {
         UUID owner;
         try {
             owner = UUID.fromString(rs.getString("owner_uuid"));
         } catch (IllegalArgumentException ex) {
+            // P3-84：外部 DB 数据损坏的防御性降级——nil UUID 匹配 owner 失败更受限（安全）。
+            // 补 WARNING 日志便于运维排查 owner_uuid 被损坏的根因。
+            log.log(Level.WARNING, "RailDao.mapLine owner_uuid parse failed, id="
+                    + rs.getString("id") + ", owner=" + rs.getString("owner_uuid"), ex);
             owner = new UUID(0L, 0L);
         }
         return new RailLine(

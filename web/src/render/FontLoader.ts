@@ -27,9 +27,20 @@ interface LoadState {
 const loaded = new Map<string, LoadState>();
 const readyHandlers: ((fontId: string) => void)[] = [];
 
-/** 注册回调，加载完任意字体后触发（CanvasView 接到后 requestDraw）。 */
-export function onFontLoaded(fn: (fontId: string) => void): void {
+/**
+ * 注册回调，加载完任意字体后触发（CanvasView 接到后 requestDraw）。
+ * P3-40：返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用以注销，避免
+ * 组件多次挂载/卸载时 readyHandlers 数组只增不减（旧闭包持组件引用泄漏 + 重复 requestDraw）。
+ */
+export function onFontLoaded(fn: (fontId: string) => void): () => void {
     readyHandlers.push(fn);
+    return () => offFontLoaded(fn);
+}
+
+/** P3-40：注销 onFontLoaded 注册的回调。 */
+export function offFontLoaded(fn: (fontId: string) => void): void {
+    const i = readyHandlers.indexOf(fn);
+    if (i >= 0) readyHandlers.splice(i, 1);
 }
 
 /** 同步查询是否已加载完成（status==='loaded'）。 */

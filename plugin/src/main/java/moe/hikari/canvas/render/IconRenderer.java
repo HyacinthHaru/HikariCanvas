@@ -45,6 +45,9 @@ public final class IconRenderer implements ElementRenderer {
     // ---------- M7 legacy PNG 路径（行为完全不变） ----------
 
     private void renderLegacyPng(Graphics2D g, IconElement ic, RenderContext ctx) {
+        // P3-49：渲染层兜底（对齐 renderSvgPath:92 与 M16.3 兄弟 renderer 模式）；
+        // w/h ≤ 0 时 drawImage / BufferedImage 行为退化 → 直接 return
+        if (ic.w() <= 0 || ic.h() <= 0) return;
         if (ctx.assetService() == null) {
             ctx.log().warning("[compositor] IconElement '" + ic.id() + "' but no assetService bound");
             return;
@@ -91,7 +94,8 @@ public final class IconRenderer implements ElementRenderer {
         }
         if (ic.w() <= 0 || ic.h() <= 0) return;
 
-        // 1. parse path d → Path2D（PathParser 是 M9 引入，支持 M/L/Q/C/Z 子集；FA 用 M/L/C/Z 即可）
+        // 1. parse path d → Path2D（PathParser 支持完整 SVG 命令集 M/L/H/V/Q/T/C/S/A，M26-C 起引入；
+        //    A 弧用 ≤π/2 段 cubic bezier 近似——见 PathParser 类 doc）
         PathParser.Result parsed = PathParser.parse(pathD);
         Shape shape = parsed.path();
         if (shape == null) return;

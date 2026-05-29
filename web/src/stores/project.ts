@@ -2,7 +2,11 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ProjectState, Element, Layer, PatchOp } from '@/types/protocol';
 import { useVariableStore } from './variables';
+import { useScheduleStore } from './schedule';
+import { useVariableAliasStore } from './variableAliases';
+import { useRailStore } from './rail';
 import { clearLayerThumbnailCache } from '@/render/LayerThumbnailRenderer';
+import { resetImageCaches } from '@/render/PreviewRenderer';
 
 /** 兜底默认层（state 尚未到达时供 UI 渲染避免 null check 散落组件里）。 */
 const EMPTY_LAYER: Layer = {
@@ -126,8 +130,19 @@ export const useProjectStore = defineStore('project', () => {
         // 0.4.0-P1-D：variables 是 cross-wall 全局 store，切 wall 时一起清；
         // 重连同 wall 不会进 reset 分支（见 wsClient.handleReady 的 wallId diff 判断）
         useVariableStore().reset();
-        // M8-TODO 项 1：图层缩略图缓存（按 layerId 索引）跨 wall 不可复用，切 wall 时清。
+        // P3-103：wall-scoped store 的 reset 统一收进 project.reset()，单一调用点，
+        // 避免散在 wsClient.handleReady 里靠手动并列调用维护（漏一个就泄漏旧 wall 状态）。
+        // 0.4.0-P3-L：schedule 是 wall-scoped 元数据。
+        useScheduleStore().reset();
+        // 0.4.2：alias 也是 wall-scoped。
+        useVariableAliasStore().reset();
+        // 0.4.5 P3：rail store 含 lines / stations / runs / timetables 内存缓存。
+        useRailStore().reset();
+        // 图层缩略图缓存（按 layerId 索引）跨 wall 不可复用，切 wall 时清。
         clearLayerThumbnailCache();
+        // P2-70：丢弃 PreviewRenderer 的图片 / 图标失败缓存条目，让切 wall / 重连后
+        // 瞬时失败（404 / session 过期）的资源重新加载，不再永久占位 ?。
+        resetImageCaches();
     }
 
     return {
@@ -209,12 +224,16 @@ function applyOne(state: ProjectState, op: PatchOp): void {
     // ---------- /layers/<i> 层级操作（layer.create/delete/reorder/duplicate）----------
     if (tokens[0] === 'layers' && tokens.length === 2) {
         const idx = parseInt(tokens[1], 10);
-        if (Number.isNaN(idx)) return;
+        // P3-57：完整边界校验。负索引让 splice 反向定位（静默错位），越界插稀疏空洞。
+        if (!Number.isInteger(idx) || idx < 0) return;
         if (op.op === 'add' && op.value) {
+            if (idx > state.layers.length) return;  // add 允许追加到 length
             state.layers.splice(idx, 0, op.value as Layer);
         } else if (op.op === 'remove') {
+            if (idx >= state.layers.length) return;
             state.layers.splice(idx, 1);
         } else if (op.op === 'replace' && op.value) {
+            if (idx >= state.layers.length) return;
             state.layers.splice(idx, 1, op.value as Layer);
         }
         // 任何层数组突变都可能让 activeLayer 索引变化 → 重新链接 elements 引用
@@ -251,9 +270,14 @@ function applyElementMutation(
     fieldPath: string[],
     op: PatchOp,
 ): void {
+    // P3-57：完整边界校验，不只防 NaN。负索引会让 splice 从尾部反向定位（静默错位插入/删除），
+    // 越界会插到稀疏空洞。add 允许 idx == length（追加）；remove/replace 须 idx < length。
+    if (!Number.isInteger(idx) || idx < 0) return;
     if (op.op === 'add' && fieldPath.length === 0) {
+        if (idx > elements.length) return;
         elements.splice(idx, 0, op.value as Element);
     } else if (op.op === 'remove' && fieldPath.length === 0) {
+        if (idx >= elements.length) return;
         elements.splice(idx, 1);
     } else if (op.op === 'replace' && fieldPath.length >= 1) {
         const el = elements[idx];

@@ -79,9 +79,25 @@ public final class PaletteLut {
 
     public PaletteLut(List<PaletteEntry> paletteEntries) {
         this.entries = paletteEntries.toArray(new PaletteEntry[0]);
+        // P3-48：fail-fast 校验每项 rgb 合法（null / 长度 < 3 即 palette.json 损坏），
+        // 不再静默用单色 fallback 掩盖坏数据
+        for (int i = 0; i < entries.length; i++) {
+            PaletteEntry e = entries[i];
+            if (e == null || e.rgb == null || e.rgb.length < 3) {
+                throw new IllegalArgumentException(
+                        "palette entry " + i + " has malformed rgb (null or length < 3); "
+                                + "palette.json corrupt? run ./gradlew generatePalette");
+            }
+        }
         // 预筛非透明 palette 项；只有它们参与 RGB → index 匹配
         int opaqueCount = 0;
         for (PaletteEntry e : entries) if (e.alpha >= ALPHA_THRESHOLD) opaqueCount++;
+        // P3-48/P3-79：调色板无任何不透明项 → buildLut 全返 index 0，整张地图渲染成单一透明/黑
+        // 像素却无任何报错。改为启动期 fail-fast，把无声失败变成可见错误（由 onEnable try/catch 升级为启动失败）。
+        if (opaqueCount == 0) {
+            throw new IllegalStateException(
+                    "palette has no opaque entries; palette.json corrupt? run ./gradlew generatePalette");
+        }
         this.opaqueIndices = new int[opaqueCount];
         this.opaqueLabL = new double[opaqueCount];
         this.opaqueLabA = new double[opaqueCount];
@@ -126,6 +142,8 @@ public final class PaletteLut {
         int idx = Byte.toUnsignedInt(index);
         if (idx >= entries.length) return null;
         PaletteEntry e = entries[idx];
+        // P3-48：构造期已保证 rgb 合法，此处仍做防御性检查
+        if (e == null || e.rgb == null || e.rgb.length < 3) return null;
         return new Color(e.rgb[0], e.rgb[1], e.rgb[2], e.alpha);
     }
 

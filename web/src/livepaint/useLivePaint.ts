@@ -103,6 +103,10 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
         if (!opts.enabled.value) {
             graph.value = null;
             isBuilding.value = false;
+            // P2-30：让任何在途请求失效——递增 pendingRequestId 使其响应在 onmessage(73)
+            // 的 ID 比对被丢弃，永不把已清空的 graph 回填成陈旧拓扑（worker 升 async 后
+            // text+fontkit 路径慢请求可在禁用后才返回）。
+            pendingRequestId = ++nextRequestId;
             return;
         }
         const requestId = ++nextRequestId;

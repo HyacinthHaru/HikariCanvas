@@ -109,6 +109,17 @@ public final class SessionManager {
     }
 
     /**
+     * 0.4.10 P2-8：per-wall 图片配额上限。由 HikariCanvas 在装配后注入（config.images.maxPerWall）；
+     * 默认 {@link Integer#MAX_VALUE}（不限）保证未注入时无回归。confirm / open 新建 EditSession
+     * 时透传，让 EditSession.addElement 在加 image 元素时强制拒绝超额（上传期 quota 之外的第二道防线）。
+     */
+    private volatile int maxImagesPerWall = Integer.MAX_VALUE;
+
+    public void setMaxImagesPerWall(int n) {
+        this.maxImagesPerWall = n > 0 ? n : Integer.MAX_VALUE;
+    }
+
+    /**
      * Ultrareview 2026-05-25 #5：注册"forget 前"监听。在 session 离开 byId 之前调，让
      * ProjectionThrottler 等组件能 flush pending 尾帧（discardSession 只 cancel 不 flush）。
      */
@@ -331,7 +342,9 @@ public final class SessionManager {
             } else {
                 // 全空 → 新建。链路：reserve → INSERT walls → release(pending) + bind(wallId)
                 ps = new ProjectState(wall.width(), wall.height());
-                final String reserveOwnerWallId = "pending-" + UUID.randomUUID();
+                // P2-18：用 MapPool.PENDING_WALL_PREFIX，确保 detectLeaks 能识别并豁免这段
+                // reserve→bind 窗口期的临时预留（否则异步泄漏检测会误删正在创建的 wall maps）。
+                final String reserveOwnerWallId = MapPool.PENDING_WALL_PREFIX + UUID.randomUUID();
                 try {
                     mapIds = mapPool.reserveForWall(reserveOwnerWallId, wall.mapCount(), wall.world());
                 } catch (PoolExhaustedException e) {
@@ -369,15 +382,19 @@ public final class SessionManager {
             }
 
             // ---- 从此处起进入 in-memory 状态变更 ----
-            // Session 字段赋值不需要 writeLock：confirm 已 assertMainThread 保证主线程串行，
-            // 而异步线程拿到的 Session 对象引用是从 byId.get 来的——byWall.putIfAbsent
-            // 失败回滚时，session 也未发布到 byWall，外部读不到。
+            // P2-21：Session 的这些字段均为 volatile（见 Session.java），每次写都带发布屏障，
+            // 异步线程（daemon 节流 / broadcast / CanvasProjector）无锁读也观察到最新值，不会
+            // 看到半构造状态。confirm 已 assertMainThread 保证主线程串行写；后续 byWall.putIfAbsent
+            // 在 writeLock 临界区内，与这些 volatile 写形成 happens-before（主线程程序序），
+            // 使经 byWall → byId 拿到 session 的读者必然看见完整字段。
             s.wall(wall);
             s.mapIds(mapIds);
             s.wallKey(key);
             s.wallId(wallId);
             s.projectState(ps);
-            s.editSession(new EditSession(ps));
+            EditSession es = new EditSession(ps);
+            es.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
+            s.editSession(es);
             s.state(SessionState.ISSUED);
 
             // M16-P6.7：byWall race-free put。失败说明 confirm-vs-confirm race（实际不会
@@ -522,7 +539,9 @@ public final class SessionManager {
         s.wallId(w.wallId());
         s.mapIds(w.mapIds());
         s.projectState(w.state());
-        s.editSession(new EditSession(w.state()));
+        EditSession openEs = new EditSession(w.state());
+        openEs.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
+        s.editSession(openEs);
         // 2026-05-12 修：补回 wall geometry，否则 wall.refresh / frame ops 在 /canvas open 后空跑
         s.wall(rebuildWallGeometry(w));
         s.state(SessionState.ISSUED);
@@ -1048,6 +1067,11 @@ public final class SessionManager {
     public List<ExpiredSession> collectExpired(
             long now, long issuedTimeoutMs, long wsGraceMs, long activeIdleMs) {
         List<ExpiredSession> out = new ArrayList<>();
+        // P2-20：在 writeLock 临界区内做超时判定，与 confirm/cancel/forget 等生命周期 mutate
+        // 串行化——避免观察到正在被 forget（CLOSING 中途）的 session，或与 markActive 的
+        // 活跃刷新撕裂读。判定只读不副作用，持锁极短（无 Bukkit/IO）。
+        writeLock.lock();
+        try {
         for (Session s : byId.values()) {
             switch (s.state()) {
                 case ISSUED -> {
@@ -1056,16 +1080,23 @@ public final class SessionManager {
                     }
                 }
                 case ACTIVE -> {
-                    if (s.wsDisconnectedAt() > 0
-                            && now - s.wsDisconnectedAt() > wsGraceMs) {
+                    // P3-13：wsDisconnectedAt 是 volatile（见 Session.java），单次读快照避免
+                    // 第一次判定后并发 reconnect（markActive→touchActivity 置 -1）导致两次读不一致，
+                    // 走进既非 ws-reconnect 也非 idle 的"幽灵"分支或反之误杀。
+                    long disconnectedAt = s.wsDisconnectedAt();
+                    if (disconnectedAt > 0
+                            && now - disconnectedAt > wsGraceMs) {
                         out.add(new ExpiredSession(s.id(), "ws-reconnect-timeout"));
-                    } else if (s.wsDisconnectedAt() < 0
+                    } else if (disconnectedAt < 0
                             && now - s.lastActivityAt() > activeIdleMs) {
                         out.add(new ExpiredSession(s.id(), "idle-timeout"));
                     }
                 }
                 case SELECTING, CLOSING -> {}
             }
+        }
+        } finally {
+            writeLock.unlock();
         }
         return out;
     }

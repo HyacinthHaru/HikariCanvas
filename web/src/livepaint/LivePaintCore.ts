@@ -34,7 +34,10 @@ export async function buildGraph(
     canvasHeight: number,
 ): Promise<LivePaintGraph> {
     if (!isFinite(canvasWidth) || !isFinite(canvasHeight) || canvasWidth <= 0 || canvasHeight <= 0) {
-        return { gaps: [], canvasWidth: 0, canvasHeight: 0 };
+        // P3-85：尺寸非法是"空且不可信"状态——必须置 degraded（与 catch 分支对齐），
+        // 让 UI 走"不可用"文案而非误导性的 noGapFound（"没找到可填充区域"）。
+        // 保持"空 gap 必带 degraded"的不变量。
+        return { gaps: [], canvasWidth: 0, canvasHeight: 0, degraded: true };
     }
 
     /** 极小 gap 阈值（px²）。polygon-clipping 在数值精度边界偶尔输出近零面积 polygon；

@@ -39,6 +39,10 @@ function onNumberChange(field: string, ev: Event) {
     let v = parseFloat((ev.target as HTMLInputElement).value);
     if (!Number.isFinite(v)) return;
     if (field === 'rotation') v = ((Math.round(v) % 360) + 360) % 360;
+    // P2-57：w/h JS 层下限钳位。HTML `min="1"` 只约束 spinner/validity，不阻止手动键入负数；
+    // 负 w/h 乐观本地 mutate 后 PreviewRenderer.drawCircle/drawShape 收到负半径会抛
+    // IndexSizeError 中断整帧（后端 ElementValidator 也拒 v<=0，落地前先护住本地帧）。
+    if (field === 'w' || field === 'h') v = Math.max(1, v);
     emit('updateDebounced', { [field]: v });
 }
 

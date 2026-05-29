@@ -2,6 +2,7 @@ package moe.hikari.canvas.render;
 
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
+import moe.hikari.canvas.state.EditSession;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -54,9 +55,22 @@ public final class ProjectionThrottler {
 
     private static final class Bucket {
         DirtyRegion pending;
-        long lastProjectAt;
+        /**
+         * P3-54：上次 flush 的时间戳，单位 <b>纳秒</b>（{@link System#nanoTime()} 单调钟读数），
+         * 免疫 NTP 回拨 / VM 时间同步导致的 {@code since} 为负、帧被推迟问题。
+         *
+         * <p>注意：{@code nanoTime()} 原点任意（可负），仅差值有意义，故不能像旧
+         * {@code currentTimeMillis} 那样靠初值 0 推断「从未 flush」——首帧立即下发改由
+         * {@link #projectedOnce} 标志判定。</p>
+         */
+        long lastProjectAtNanos;
+        /** P3-54：是否已 flush 过一次。false 时下一次 submit 强制立即 flush（保「首帧立即」契约）。 */
+        boolean projectedOnce;
         BukkitTask flushTask;
     }
+
+    /** 节流间隔从毫秒换算到纳秒（{@link Bucket#lastProjectAtNanos} 同源单调钟比较）。 */
+    private static final long MS_TO_NANOS = 1_000_000L;
 
     public ProjectionThrottler(JavaPlugin plugin,
                                SessionManager sessionManager,
@@ -81,16 +95,20 @@ public final class ProjectionThrottler {
     public void submit(String sessionId, DirtyRegion region) {
         if (region == null) return;
         Bucket b = bySession.computeIfAbsent(sessionId, k -> new Bucket());
-        long effective = effectiveInterval(sessionId);
+        long effectiveMs = effectiveInterval(sessionId);
+        long effectiveNanos = effectiveMs * MS_TO_NANOS;
         synchronized (b) {
             b.pending = b.pending == null ? region : b.pending.union(region);
-            long now = System.currentTimeMillis();
-            long since = now - b.lastProjectAt;
-            if (since >= effective) {
+            long now = System.nanoTime();
+            // P3-54：nanoTime 单调，正常情况下 since >= 0；用 Math.max(0, ..) 兜底极端
+            // nanoTime 实现回绕（理论上 ~292 年才回绕，仍防御一手）。
+            long sinceNanos = Math.max(0L, now - b.lastProjectAtNanos);
+            // 首帧立即下发（nanoTime 原点任意，不能靠 lastProjectAtNanos==0 推断）。
+            if (!b.projectedOnce || sinceNanos >= effectiveNanos) {
                 flushLocked(sessionId, b, now);
             } else if (b.flushTask == null) {
-                long waitMs = Math.max(1, effective - since);
-                long delayTicks = Math.max(1, (waitMs + 49) / 50);
+                long waitMs = Math.max(1L, (effectiveNanos - sinceNanos) / MS_TO_NANOS);
+                long delayTicks = Math.max(1L, (waitMs + 49) / 50);
                 b.flushTask = Bukkit.getScheduler().runTaskLaterAsynchronously(
                         plugin, () -> onScheduledFlush(sessionId), delayTicks);
             }
@@ -141,23 +159,73 @@ public final class ProjectionThrottler {
         if (b == null) return;
         synchronized (b) {
             b.flushTask = null;
-            flushLocked(sessionId, b, System.currentTimeMillis());
+            flushLocked(sessionId, b, System.nanoTime());
         }
     }
 
-    /** 必须在持有 {@code b} 锁下调用。 */
-    private void flushLocked(String sessionId, Bucket b, long now) {
+    /**
+     * 必须在持有 {@code b} 锁下调用。
+     *
+     * <p>P2-11：{@code project()} 抛异常时不丢脏区域——只有成功返回后才清 {@code pending}
+     * 并推进 {@code lastProjectAt}；失败时把 {@code toProject} 通过 {@link DirtyRegion#union}
+     * 并回 {@code pending} 并保持 {@code lastProjectAt} 不变（不推进时间基），让下一次 submit
+     * 自动重投递该区域，兑现 architecture.md §5.1.5「session 关闭前最后一帧 100% 正确」承诺。</p>
+     *
+     * <p><b>P1-8（数据竞争修复）：</b>{@code project()} 内 {@code CanvasCompositor.rasterize}
+     * 会遍历 {@code ProjectState} 的 layers / 各 layer 的 elements live ArrayList。这些列表的
+     * 结构修改全部发生在 {@link EditSession} 的 {@code synchronized(this)} mutator 里，而
+     * rasterize 此前不持该监视器——两侧无共享锁，并发 WS 编辑 op 与变量驱动重画会对同一
+     * ArrayList 边改边迭代，抛 {@code ConcurrentModificationException} / 撕裂读。这里在
+     * {@code session.editSession()} 监视器内调 {@code project()}，让 rasterize 入口的
+     * {@code List.copyOf} 浅拷贝与 mutator 互斥（拷贝完成后即是不可变快照，后续迭代不再需要锁）。
+     * 锁顺序恒为 {@code Bucket → EditSession}（dispatcher 在 EditSession mutator 返回<b>后</b>才
+     * 调 {@code submit}，从不反向），无死锁；editSession 为 null（SELECTING 阶段）时无 live 列表
+     * 可竞争，直接 project。</p>
+     */
+    private void flushLocked(String sessionId, Bucket b, long nowNanos) {
         DirtyRegion toProject = b.pending;
-        b.pending = null;
-        b.lastProjectAt = now;
-        if (toProject == null) return;
+        if (toProject == null) {
+            // 无脏区域：推进时间基即可（保持原有「空 flush 也刷新窗口」语义）。
+            b.lastProjectAtNanos = nowNanos;
+            return;
+        }
         Session s = sessionManager.byId(sessionId);
-        if (s == null) return;  // 会话已消亡，丢弃
+        if (s == null) {
+            // 会话已消亡，丢弃脏区域并推进时间基。
+            b.pending = null;
+            b.lastProjectAtNanos = nowNanos;
+            b.projectedOnce = true;
+            return;
+        }
         try {
-            projector.project(s, toProject);
+            projectUnderEditLock(s, toProject);
+            // 成功：清 pending 并推进时间基。
+            b.pending = null;
+            b.lastProjectAtNanos = nowNanos;
+            b.projectedOnce = true;
         } catch (Exception e) {
+            // 失败：把脏区域并回 pending（与期间新并入的 region 合并），不推进时间基，
+            // 也不置 projectedOnce——下次 submit 会因 !projectedOnce 立即重试该帧，
+            // 避免像素永久陈旧。
+            b.pending = b.pending == null ? toProject : b.pending.union(toProject);
             plugin.getLogger().warning(
                     "ProjectionThrottler: flush failed sid=" + sessionId + " err=" + e.getMessage());
+        }
+    }
+
+    /**
+     * P1-8：在 session 的 {@link EditSession} 监视器内执行投影，让 {@code rasterize} 入口对
+     * layers / elements live 列表的浅拷贝与 EditSession mutator 互斥（消除 fail-fast 迭代撕裂）。
+     * editSession 为 null（SELECTING 阶段尚未 confirm）时无 live 列表可竞争，直接 project。
+     */
+    private void projectUnderEditLock(Session s, DirtyRegion toProject) {
+        EditSession es = s.editSession();
+        if (es == null) {
+            projector.project(s, toProject);
+            return;
+        }
+        synchronized (es) {
+            projector.project(s, toProject);
         }
     }
 
@@ -194,7 +262,7 @@ public final class ProjectionThrottler {
                 b.flushTask.cancel();
                 b.flushTask = null;
             }
-            flushLocked(sessionId, b, System.currentTimeMillis());
+            flushLocked(sessionId, b, System.nanoTime());
         }
     }
 }

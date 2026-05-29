@@ -19,6 +19,9 @@
  *   <li>启动 {@code initialDelay}（默认 300ms）定时器；</li>
  *   <li>超时后切换到 {@code interval}（默认 50ms）的 setInterval 持续 {@code onTick}；</li>
  *   <li>任意 up / leave / cancel → 清两层 timer；</li>
+ *   <li>window blur / document visibilitychange → 终止（P3-43：按钮未 setPointerCapture，
+ *       长按中切窗口浏览器不保证补发 pointerup/cancel，否则 repeatTimer 后台空转使值暴涨；
+ *       参照 {@code useBrushHost} 同款防护）；</li>
  *   <li>{@link onBeforeUnmount} 兜底清理（防组件销毁时残留 timer 泄漏）。</li>
  * </ul>
  */
@@ -94,11 +97,25 @@ export function useLongPressIncrement(opts: UseLongPressIncrementOptions): UseLo
         stop();
     }
 
+    // P3-43：长按期间切走窗口 / 标签页隐藏时，浏览器可能不补发 pointerup/leave/cancel，
+    // 导致 repeatTimer 持续后台 onTick 使变量值无人值守暴涨。监听 window blur +
+    // document visibilitychange 强制 stop()（idempotent，未按下时 no-op）。
+    function onWindowBlur(): void {
+        stop();
+    }
+    function onVisibilityChange(): void {
+        if (document.hidden) stop();
+    }
+    window.addEventListener('blur', onWindowBlur);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     onBeforeUnmount(() => {
         // 兜底：组件销毁时残留 timer 会继续跑 onTick 引用 stale closure 上的 reactive ref，
         // 严重时触发 "writing to undefined" warning。stop() 同时清两层 timer + 重置 pressing。
         clearTimers();
         pressing.value = false;
+        window.removeEventListener('blur', onWindowBlur);
+        document.removeEventListener('visibilitychange', onVisibilityChange);
     });
 
     return {

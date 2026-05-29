@@ -174,9 +174,10 @@ public final class VariableSubCommand {
         return Commands.literal("var")
                 .requires(src -> src.getSender().hasPermission(PERMISSION))
                 // list / list <namespace>
+                // P1-9: string() 而非 word()，namespace 含冒号/斜杠（如 user:w-xxxx）也可补
                 .then(Commands.literal("list")
                         .executes(ctx -> runExec(ctx, new String[]{"list"}))
-                        .then(Commands.argument("namespace", StringArgumentType.word())
+                        .then(Commands.argument("namespace", StringArgumentType.string())
                                 .suggests(this::suggestNamespaces)
                                 .executes(ctx -> runExec(ctx, new String[]{"list",
                                         StringArgumentType.getString(ctx, "namespace")}))))
@@ -187,8 +188,10 @@ public final class VariableSubCommand {
                                 .executes(ctx -> runExec(ctx, new String[]{"get",
                                         StringArgumentType.getString(ctx, "fullName")}))))
                 // set <fullName> <value...>
+                // P1-9: fullName 用 string()（含冒号/斜杠的真实变量名，如 user:w-xxxx/foo），
+                // value 仍是独立 greedyString 节点（无需手工 split）
                 .then(Commands.literal("set")
-                        .then(Commands.argument("fullName", StringArgumentType.word())
+                        .then(Commands.argument("fullName", StringArgumentType.string())
                                 .suggests(this::suggestFullNames)
                                 .then(Commands.argument("value", StringArgumentType.greedyString())
                                         .executes(ctx -> runExec(ctx, new String[]{"set",
@@ -242,7 +245,9 @@ public final class VariableSubCommand {
             sender.sendMessage("§cPermission denied: " + PERMISSION);
             return;
         }
-        if (args == null || args.length == 0) {
+        if (args == null || args.length == 0 || args[0] == null) {
+            // P3-76: null 首 token（理论上 Brigadier 不产生，但单测 / 外部调用可能传）
+            // 走 usage 脱敏分支，避免 args[0].toLowerCase() 裸 NPE。
             sendUsage(sender);
             return;
         }
@@ -562,6 +567,9 @@ public final class VariableSubCommand {
     private static String truncate(String s, int max) {
         if (s == null) return "";
         if (s.length() <= max) return s;
+        // P3-53: max < 3 时 max-3 为负，substring 抛 StringIndexOutOfBoundsException；
+        // 钳位：max < 3 直接硬截到 max 长度，不附省略号。
+        if (max < 3) return s.substring(0, Math.max(0, max));
         return s.substring(0, max - 3) + "...";
     }
 

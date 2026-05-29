@@ -212,7 +212,7 @@ function onBlendModeChange(layer: Layer, ev: Event): void {
     ws.send('layer.update', { layerId: layer.id, patch: { blendMode: mode } });
 }
 
-// ---------- M8-TODO 项 2：colorTag color picker ----------
+// ---------- 图层颜色标签 color picker ----------
 
 const COLOR_TAGS: LayerColorTag[] = [
     'red', 'peach', 'yellow', 'green', 'blue', 'mauve', 'overlay0',
@@ -228,7 +228,7 @@ function setColorTag(layer: Layer, tag: LayerColorTag | null): void {
     ws.send('layer.update', { layerId: layer.id, patch: { colorTag: payload } });
 }
 
-// ---------- M8-TODO 项 1：thumbnail ----------
+// ---------- 图层缩略图 ----------
 
 function thumbnailFor(layer: Layer): string | null {
     return renderLayerThumbnail(project.state, layer);
@@ -259,7 +259,7 @@ function thumbnailFor(layer: Layer): string | null {
           :draggable="ui.editingLayerId !== layer.id"
           class="group relative flex items-center gap-1 px-2 py-1.5 text-xs cursor-pointer transition-colors border-l-2"
           :class="{
-            // M8-TODO 项 2：colorTag 优先；无 tag 时退到 active ring 或透明（边色由 :style 注入 var）
+            // colorTag 优先；无 tag 时退到 active ring 或透明（边色由 :style 注入 var）
             'border-l-[color:var(--ring)]': !layer.colorTag && isActive(layer.id),
             'border-l-transparent': !layer.colorTag && !isActive(layer.id),
             'bg-[color:var(--accent)]': isActive(layer.id),
@@ -275,7 +275,7 @@ function thumbnailFor(layer: Layer): string | null {
           @drop="(e) => onDrop(e, uiIdx)"
           @dragend="onDragEnd"
         >
-          <!-- M8-TODO 项 1：图层缩略图（32×32，带棋盘格透明提示）。
+          <!-- 图层缩略图（32×32，带棋盘格透明提示）。
                透明像素背景由 CSS 棋盘格显示；img 自身为渲染器输出的 PNG dataURL。 -->
           <span
             class="hc-layer-thumb shrink-0"
@@ -403,7 +403,7 @@ function thumbnailFor(layer: Layer): string | null {
             </option>
           </select>
         </li>
-        <!-- M8-TODO 项 2：colorTag color picker（PS 风格 7 色点 + 清除按钮） -->
+        <!-- 图层颜色标签 color picker（PS 风格 7 色点 + 清除按钮） -->
         <li
           v-if="isActive(layer.id)"
           class="px-2 pb-1.5 flex items-center gap-1.5 text-xs bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)] border-b border-[color:var(--border)]"
@@ -462,7 +462,7 @@ function thumbnailFor(layer: Layer): string | null {
     font-size: 11px;
     padding: 2px 5px;
 }
-/* M8-TODO 项 1：图层缩略图。固定 28×28；棋盘格背景显示透明像素。 */
+/* 图层缩略图。固定 28×28；棋盘格背景显示透明像素。 */
 .hc-layer-thumb {
     display: block;
     width: 28px;
@@ -480,7 +480,7 @@ function thumbnailFor(layer: Layer): string | null {
     background-position: 0 0, 0 4px, 4px -4px, -4px 0;
     background-color: var(--ctp-mantle);
 }
-/* M8-TODO 项 2：颜色标签圆点按钮。selected 状态加白圈高亮。 */
+/* 颜色标签圆点按钮。selected 状态加白圈高亮。 */
 .hc-color-dot {
     width: 14px;
     height: 14px;

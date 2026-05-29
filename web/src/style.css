@@ -206,6 +206,30 @@
 [data-accent="lavender"] { --primary: var(--ctp-lavender); --ring: var(--ctp-lavender); }
 [data-accent="sapphire"] { --primary: var(--ctp-sapphire); --ring: var(--ctp-sapphire); }
 
+/*
+ * P2-86：Latte（浅色）主题下 primary 按钮文字对比度修复。
+ *
+ * 背景：latte 的 --primary-foreground 固定为 ctp-base（近白），配中亮 accent 时白字对比度
+ * 远低于 WCAG AA 4.5:1（实测 peach 2.64 / pink 2.34 / teal 3.21 / green 2.92 / lavender 2.82
+ * / sapphire 2.76）。深色主题（frappe/macchiato）的 accent 是浅 pastel，已用 ctp-crust 暗字
+ * 达 6:1+，不受影响。
+ *
+ * 修法：按 accent 亮度分档绑定 foreground（仅 latte 作用域 .theme-latte —— 它从不挂 .dark，
+ * 不与上方深色覆盖冲突）：
+ *   - 中亮 accent（teal/green/peach/pink/lavender/sapphire）→ 深色字 #11111b（实测 5.2~7.1，PASS）
+ *   - 偏深 accent（mauve/blue/red）保留白字（mauve 4.81 / red 4.82 PASS；blue 4.35 接近 AA，
+ *     深字 3.82 更差，故保留白字取较优值）
+ * destructive 在 latte 是 ctp-red（白字 4.82 PASS），无需改。
+ */
+.theme-latte[data-accent="teal"],
+.theme-latte[data-accent="green"],
+.theme-latte[data-accent="peach"],
+.theme-latte[data-accent="pink"],
+.theme-latte[data-accent="lavender"],
+.theme-latte[data-accent="sapphire"] {
+    --primary-foreground: #11111b;
+}
+
 /* ---------- radius 切换（data-radius on <html>）---------- */
 
 [data-radius="sm"]   { --radius: 6px;  }

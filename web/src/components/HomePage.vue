@@ -88,7 +88,8 @@ onMounted(() => {
 
 function fmtTime(ts: number): string {
     const d = new Date(ts);
-    // 简短：今天 → 14:23；本周 → 周三 14:23；更早 → 5月12日 14:23
+    // 简短：今天 → 14:23；本周 → 周三 14:23 / Wed 14:23；更早 → 5月12日 14:23 / May 12 14:23
+    // P2-85：星期 / 月日走 i18n（home.weekday / home.monthDay），en locale 不再泄漏中文。
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
     const hh = d.getHours().toString().padStart(2, '0');
@@ -96,10 +97,9 @@ function fmtTime(ts: number): string {
     if (sameDay) return `${hh}:${mm}`;
     const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
     if (diffDays < 7) {
-        const weekdays = ['日','一','二','三','四','五','六'];
-        return `周${weekdays[d.getDay()]} ${hh}:${mm}`;
+        return `${t.value.home.weekday(d.getDay())} ${hh}:${mm}`;
     }
-    return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+    return `${t.value.home.monthDay(d.getMonth() + 1, d.getDate())} ${hh}:${mm}`;
 }
 
 function copyOpenCmd(wallId: string) {

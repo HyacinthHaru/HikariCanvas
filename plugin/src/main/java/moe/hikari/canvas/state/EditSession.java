@@ -79,6 +79,15 @@ public final class EditSession {
 
     private final ProjectState state;
 
+    /**
+     * P2-8：单 wall image 元素数上限（按 {@code source} 去重，data-model.md §2.6）。
+     * {@code null} 或 {@code <= 0} = 不强制（缺省放行）—— 兼容未注入配置的测试 / SELECTING
+     * 阶段。生产路径由 {@code SessionManager} 经 {@link #setMaxImagesPerWall(int)} 注入
+     * {@code HikariCanvasConfig.ImageConfig.maxPerWall()}。强制点必须在此（element.add type=image
+     * 才真正把图片挂到 wall；上传仅入磁盘 / DB，详见 ImageQuotaService javadoc）。
+     */
+    private volatile Integer maxImagesPerWall;
+
     /** T11 历史栈（past + future + commit/undo/redo/mark）。2026-05-14 抽出。 */
     private final HistoryStack history;
 
@@ -97,6 +106,16 @@ public final class EditSession {
 
     public ProjectState state() {
         return state;
+    }
+
+    /**
+     * P2-8：注入单 wall image 元素数上限（按 {@code source} 去重）。{@code <= 0} = 不限。
+     * 由 {@code SessionManager} 在 confirm / open 构造 EditSession 后调用，传入
+     * {@code HikariCanvasConfig.ImageConfig.maxPerWall()}。未调用时字段为 null → 放行
+     * （测试 / 老路径行为不变）。
+     */
+    public void setMaxImagesPerWall(int maxPerWall) {
+        this.maxImagesPerWall = maxPerWall;
     }
 
     // ---------- 结果类型 ----------
@@ -221,6 +240,17 @@ public final class EditSession {
             return err(ve.code, ve.getMessage());
         }
 
+        // P2-8：服务端强制 images.max-per-wall（前端建议值之外的硬约束，防脚本客户端用
+        // element.add type=image 在单 wall 堆叠任意多 image 元素拖慢 rasterize）。统计目标 wall
+        // 跨所有 layer 的 image 元素，按 source 去重（data-model.md §2.6 v1 简化口径）；新增的
+        // source 若是全新文件且现有去重数已达上限则拒。强制点在此而非上传路径——上传仅入磁盘 / DB，
+        // 真正挂到 wall 的是本 op（见 ImageQuotaService javadoc）。maxImagesPerWall 未注入（null）
+        // 或 <= 0 时放行。
+        if (element instanceof ImageElement imgEl) {
+            OpResult quotaReject = checkImagePerWallQuota(imgEl.source());
+            if (quotaReject != null) return quotaReject;
+        }
+
         ProjectSnapshot pre = snapshotNow();
         target.elements().add(insertIdx, element);
         commitHistory(pre);
@@ -238,6 +268,36 @@ public final class EditSession {
             if (es.get(i).id().equals(elementId)) return i;
         }
         return -1;
+    }
+
+    /**
+     * P2-8：单 wall image 元素配额校验（按 {@code source} 去重）。
+     *
+     * <p>返回非 null 即拒绝（{@code QUOTA_PER_WALL}）；返回 null 表示放行。{@code maxImagesPerWall}
+     * 为 null 或 {@code <= 0} 时不限。统计当前工程跨所有 layer 的 ImageElement 去重 source 集合：
+     * 若 {@code incomingSource} 已存在于集合（复用已引用文件，不增加去重数）则始终放行；否则当
+     * 现有去重数 {@code >= max} 时拒（新增这一个会越界）。与 {@code ImageQuotaService.check} 的
+     * {@code imagesInTargetWall >= maxPerWall} 口径一致。</p>
+     */
+    private OpResult checkImagePerWallQuota(String incomingSource) {
+        Integer max = this.maxImagesPerWall;
+        if (max == null || max <= 0) return null;
+        java.util.Set<String> distinctSources = new java.util.HashSet<>();
+        for (Layer l : state.layers()) {
+            for (Element e : l.elements()) {
+                if (e instanceof ImageElement im && im.source() != null) {
+                    distinctSources.add(im.source());
+                }
+            }
+        }
+        // 复用已引用文件不增加去重数 → 放行（即便已达上限）。
+        if (incomingSource != null && distinctSources.contains(incomingSource)) return null;
+        if (distinctSources.size() >= max) {
+            return err("QUOTA_PER_WALL",
+                    "wall already references " + distinctSources.size()
+                            + " image file(s); max " + max);
+        }
+        return null;
     }
 
     // ---------- element.update ----------
@@ -1442,14 +1502,13 @@ public final class EditSession {
             return err(mapVariableErrorCode(ve.code()), ve.getMessage());
         }
         long v = state.bumpVersion();
-        // 只发 currentValue 增量；前端 mirror 用 JSON Patch 局部 replace
+        // 只发 currentValue 增量；前端 mirror 用 JSON Patch 局部 replace。
+        // P3-9：value==null 也用 replace(path, null)（与 SessionManager VALUE_SET 同形），
+        // 前端 applyVariablePatches 的 replace&&sub==='currentValue' 分支可处理；
+        // 旧的 remove .../currentValue 形态前端无对应分支会被丢弃，故消除该分叉。
         StatePatchBuilder b = new StatePatchBuilder();
         String path = variablePath(fullName) + "/currentValue";
-        if (value == null) {
-            b.remove(path);
-        } else {
-            b.replace(path, value);
-        }
+        b.replace(path, value);
         return new OpResult.Ok(b.build(v), null);
     }
 
@@ -1597,13 +1656,11 @@ public final class EditSession {
             return err(mapVariableErrorCode(ve.code()), ve.getMessage());
         }
         long v = state.bumpVersion();
+        // P3-9：与 setUserVariableValue 同步——value==null 也用 replace(path, null)，
+        // 对齐 SessionManager VALUE_SET wire 形态，前端可处理。
         StatePatchBuilder b = new StatePatchBuilder();
         String path = variablePath(fullName) + "/currentValue";
-        if (value == null) {
-            b.remove(path);
-        } else {
-            b.replace(path, value);
-        }
+        b.replace(path, value);
         return new OpResult.Ok(b.build(v), null);
     }
 

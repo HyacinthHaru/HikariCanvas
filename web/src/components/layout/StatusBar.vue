@@ -55,7 +55,7 @@ const wallStateLabel = computed(() => {
         <span class="flex items-center gap-1">
           <MousePointer2 v-if="ui.activeTool === 'select'" class="size-3" />
           <Move v-else class="size-3" />
-          {{ ui.activeTool === 'select' ? 'Select' : 'Move' }}
+          {{ ui.activeTool === 'select' ? t.status.toolSelect : t.status.toolMove }}
         </span>
       </Tooltip>
       <span v-if="net.wallSize" class="flex items-center gap-1">

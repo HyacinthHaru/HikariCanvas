@@ -111,9 +111,16 @@ public final class PushRateLimiter {
     /**
      * 尝试占用 N 个 push token（{@link HikariCanvasAPIImpl#setVariables} 批量路径用）。
      *
-     * <p>要么全成功要么全失败：先看 circuit break → 加 global → 加 per-plugin。
-     * 任一阶段超限即 reject。已加进 window 的 count 不 rollback——
+     * <p>要么全成功要么全失败：先看 circuit break → 超大单批 per-plugin 预拦截 → 加 global →
+     * 加 per-plugin。任一阶段超限即 reject。已加进 window 的 count 不 rollback——
      * fixed-window 在下个秒自动归零，最坏 1s 内 reject 后续。</p>
+     *
+     * <p>0.4.10 P2-25：新增"超大单批预拦截"——当单次 batch 的 {@code count} 本身就超过
+     * per-plugin 限额（默 100）时，直接按 per-plugin drop tail 拒绝，<b>不</b>计入全局窗口、
+     * <b>不</b>触发全服 10s 熔断。原实现先加全局：一个插件推一个超 global（默 1000）的大批
+     * 会无辜熔断全服所有插件的 push。本拦截仍把 count 记进 per-plugin 窗口（保持"同窗口后续
+     * 也 drop"语义）。注意：当 per-plugin 限额被配得 ≥ batch（如测试用 100_000）时，该批
+     * 不触发本拦截，仍会按正常流程计入全局并可能触发全局熔断——这是预期（真·全服总量超标）。</p>
      *
      * @param plugin 调用方插件（非 null）
      * @param count  请求 token 数（必须 &gt; 0）
@@ -133,8 +140,23 @@ public final class PushRateLimiter {
             return false;
         }
 
-        // 2. 全局限流
         long windowSec = now / 1000L;
+        Window w = perPlugin.computeIfAbsent(plugin.getName(), k -> new Window());
+
+        // 2. 0.4.10 P2-25：超大单批预拦截——count 本身超 per-plugin 限额 → 局部 drop，
+        //    不污染全局窗口、不触发全服熔断。仍把 count 记进 per-plugin 窗口（保持后续 drop）。
+        if (count > config.perPluginPerSecond) {
+            int pluginCount = w.addAndGet(windowSec, count);
+            int prev = pluginCount - count;
+            if (prev <= config.perPluginPerSecond) {
+                log.warning("[HikariCanvas] plugin '" + plugin.getName()
+                        + "' push batch exceeds per-plugin limit (" + count
+                        + " > " + config.perPluginPerSecond + "/s); drop tail (no global circuit break)");
+            }
+            return false;
+        }
+
+        // 3. 全局限流
         int globalCount = global.addAndGet(windowSec, count);
         if (globalCount > config.globalPerSecond) {
             // 触发全局保护期：CAS 防多线程并发 log
@@ -146,8 +168,7 @@ public final class PushRateLimiter {
             return false;
         }
 
-        // 3. per-plugin 限流
-        Window w = perPlugin.computeIfAbsent(plugin.getName(), k -> new Window());
+        // 4. per-plugin 限流
         int pluginCount = w.addAndGet(windowSec, count);
         if (pluginCount > config.perPluginPerSecond) {
             // 跨阈值时 log 一次（多次 over 不重复）

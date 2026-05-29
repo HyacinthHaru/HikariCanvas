@@ -34,6 +34,8 @@ final class EditOpDispatcher {
     private final OpPushCallback push;
     /** M16 P6.4：可空——给 template.apply 跨用户拒绝路径写 audit。 */
     private final moe.hikari.canvas.storage.AuditLog auditLog;
+    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    private final org.bukkit.plugin.Plugin plugin;
 
     EditOpDispatcher(SessionManager sessionManager,
                      ProjectionThrottler throttler,
@@ -41,7 +43,7 @@ final class EditOpDispatcher {
                      TemplateRegistry templateRegistry,
                      moe.hikari.canvas.storage.WallRepo wallRepo,
                      OpPushCallback push) {
-        this(sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, null);
+        this(sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, null, null);
     }
 
     EditOpDispatcher(SessionManager sessionManager,
@@ -51,6 +53,17 @@ final class EditOpDispatcher {
                      moe.hikari.canvas.storage.WallRepo wallRepo,
                      OpPushCallback push,
                      moe.hikari.canvas.storage.AuditLog auditLog) {
+        this(sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, auditLog, null);
+    }
+
+    EditOpDispatcher(SessionManager sessionManager,
+                     ProjectionThrottler throttler,
+                     SessionRateLimiter rateLimiter,
+                     TemplateRegistry templateRegistry,
+                     moe.hikari.canvas.storage.WallRepo wallRepo,
+                     OpPushCallback push,
+                     moe.hikari.canvas.storage.AuditLog auditLog,
+                     org.bukkit.plugin.Plugin plugin) {
         this.sessionManager = sessionManager;
         this.throttler = throttler;
         this.rateLimiter = rateLimiter;
@@ -58,6 +71,7 @@ final class EditOpDispatcher {
         this.wallRepo = wallRepo;
         this.push = push;
         this.auditLog = auditLog;
+        this.plugin = plugin;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -82,7 +96,12 @@ final class EditOpDispatcher {
             return;
         }
 
-        EditSession.OpResult result = switch (in.op()) {
+        // P2-66：整个 op 解析 switch 包 try/catch，与 BrushOpDispatcher.dispatch 形态对齐。
+        // mapOrEmpty（props/patch/params 类型错）等会抛 IllegalArgumentException，
+        // 不包则异常逃逸 → Javalin onError 只 log，前端拿不到 INVALID_PAYLOAD 而是 5s ack_timeout。
+        EditSession.OpResult result;
+        try {
+            result = switch (in.op()) {
             case "element.add" -> {
                 String type = stringOrNull(payload.get("type"));
                 @SuppressWarnings("unchecked")
@@ -194,13 +213,21 @@ final class EditOpDispatcher {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> tp = (Map<String, Object>) mapOrEmpty(payload.get("params"));
                 // M16 P1.6：跨用户隔离——查 caller 的 use-others bypass 权限
+                // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
                 java.util.UUID callerUuid = s.playerUuid();
-                org.bukkit.entity.Player p = org.bukkit.Bukkit.getPlayer(callerUuid);
-                boolean hasBypass = p != null && p.hasPermission("canvas.template.use-others");
+                boolean hasBypass = MainThreadPerms.hasPermission(plugin, callerUuid, "canvas.template.use-others");
                 yield applyTemplate(es, sessionId, tpl, tp, callerUuid, s.playerName(), hasBypass);
             }
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
-        };
+            };
+        } catch (IllegalArgumentException iae) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
+            return;
+        } catch (RuntimeException re) {
+            // 兜底：op 解析期任意运行期异常不应静默逃逸（前端会 5s ack_timeout）
+            ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "op processing failed"));
+            return;
+        }
 
         switch (result) {
             case EditSession.OpResult.Ok ok -> {

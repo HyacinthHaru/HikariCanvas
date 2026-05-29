@@ -29,8 +29,13 @@ public final class TextLayout {
     /** 跨字体统一的 ascent 比例，见 rendering.md §3.2。 */
     public static final double ASCENT_RATIO = 0.8;
 
-    /** 行首禁则：出现在行首的标点会被回溯到上一行末尾。半全角都收录。 */
-    private static final String LINE_START_FORBIDDEN = "）】」』。，、？！：；）】」』。，、？！：；)].,!?:;";
+    /**
+     * 行首禁则：出现在行首的标点会被回溯到上一行末尾。半全角都收录。
+     * P3-96：去重——原字面量把 11 个全角标点重复写了两遍（indexOf 成员判定对重复不敏感，
+     * 行为本就正确，仅冗余）。保留一组全角 + 一组半角。顺序：） 】 」 』 。 ， 、 ？ ！ ： ；。
+     * 与前端 TextLayout.ts 的 LINE_START_FORBIDDEN 逐字节一致（双端镜像硬约束）。
+     */
+    private static final String LINE_START_FORBIDDEN = "）】」』。，、？！：；)].,!?:;";
 
     /**
      * M5-D2 P2：前后端一致的"标准"字符宽度。

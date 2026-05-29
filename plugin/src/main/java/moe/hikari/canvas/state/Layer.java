@@ -24,7 +24,7 @@ import java.util.List;
  * @param locked    锁层；M8-C 起 element.* op 命中 locked 层时拒 {@code LAYER_LOCKED}
  * @param opacity   层级不透明度 0.0–1.0
  * @param blendMode 层级混合模式
- * @param colorTag  M8-TODO：PS 风格颜色标签（仅 UI 显示用，不影响渲染）。
+ * @param colorTag  PS 风格颜色标签（仅 UI 显示用，不影响渲染）。
  *                  允许 null / Catppuccin 色名（red / peach / yellow / green / blue / mauve / overlay0）。
  *                  其他字符串校验由 {@code LayerOperations.updateLayer} 拦截。
  * @param elements  层内元素列表（z-order = index）；mutable
@@ -50,7 +50,7 @@ public record Layer(
     }
 
     /**
-     * 6-arg 兼容构造器：M8-TODO 之前的代码不传 {@code colorTag}，全代 null。
+     * 6-arg 兼容构造器：colorTag 字段引入之前的代码不传 {@code colorTag}，全代 null。
      * 让现有 {@code new Layer(...)} 调用点（LayerOperations / ProjectState / ProjectSnapshot）
      * 不必逐一改签名也能编译通过。
      */

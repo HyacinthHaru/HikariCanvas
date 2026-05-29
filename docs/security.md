@@ -111,7 +111,13 @@ validateToken(t):
 - 全局失败率：**100 次 / 分钟 → 切换入「保守模式」**，所有新 token 签发延迟 1s
 - IP 的存储：SHA-256 哈希存 `audit_log.ip_hash`，配置允许加 salt
 
-> **当前实装状态（2026-05-16 M16 后）**：上述 `SessionRateLimiter` IP 级失败计数 + 全局保守模式 **未实装**。M16 仅落地会话级 IP 绑定（见 §2.5）。token 暴力枚举防御依赖 token 本体熵（256 bit · 单次使用 · 15min TTL）+ 反代层 rate-limit（nginx `limit_req_zone`）。SessionRateLimiter 留 v1.x 实装。
+> **当前实装状态（2026-05-25 起）**：`TokenRateLimiter` **已实装**——按源 IP 固定窗口限流（默认 **10 次 / 分钟**，`security.token-rate-limit.per-minute` 可配），在 **WS `auth` 帧 token 校验之前**拦截；超限 **close 4429** + `TOKEN_RATE_LIMIT_EXCEEDED` audit 事件。实现见 `web/TokenRateLimiter.java`（per-IP `ConcurrentHashMap` + 桶内 `synchronized`；P3-31 被动 sweep 每窗口清一次过期桶，内存 O(activeIp) 不无限增长），由 `WebServer.handleAuth` 调用 `tryConsume(authIp)`。
+>
+> **防御边界（明确）**：
+> - **仅覆盖 WS `auth` 帧**这一路径；**不**含 HTTP `GET /api/session/:token` peek（该端点不读 token 计数）。
+> - 反代部署下因 IP 绑定路径**不读 X-Forwarded-For**（见 §2.5 已知限制），`authIp` 退化为反代本机 IP，per-IP 桶变成「同一反代来源共享一个桶」——真实 IP 级限流仍需反代层 `limit_req_zone $binary_remote_addr` 弥补（与 §2.5 / §7.4 反代限制联动）。
+>
+> token 本体熵（256 bit · 单次使用 · 15min TTL）仍是第一道防线。**全局保守模式（100 次/分钟 → 延迟签发）+ `SessionRateLimiter` IP 级失败计数**这两项进阶防御仍 **未实装**，留 v1.x。
 
 ### 2.5 会话级 IP 绑定（M16-P6.6，2026-05-16）
 

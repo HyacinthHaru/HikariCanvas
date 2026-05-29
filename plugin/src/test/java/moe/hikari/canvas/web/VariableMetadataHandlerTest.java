@@ -136,16 +136,19 @@ class VariableMetadataHandlerTest {
         // wall B 的 user 变量不应出现在 wallId=w-aaa 的响应里
         store.create("user:w-bbb", "other_score", VarType.NUMBER, "0", "manual");
 
-        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid));
+        // P2-3：session 服务端绑定到 w-aaa；即便客户端 query 传 w-bbb 也只返 w-aaa 的变量
+        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid),
+                sid -> "v".equals(sid) ? "w-aaa" : null);
         JavalinTest.test(buildApp(handler), (server, client) -> {
             Response resp = client.get(
-                    "/api/variable/list-all-namespaces?sessionId=v&wallId=w-aaa");
+                    "/api/variable/list-all-namespaces?sessionId=v&wallId=w-bbb");
             assertEquals(200, resp.code());
             JsonNode root = mapper.readTree(resp.body().string());
             JsonNode namespaces = root.get("namespaces");
             assertEquals(2, namespaces.size());
             JsonNode userNs = namespaces.get(0);
-            assertEquals("user:w-aaa", userNs.get("namespace").asText(), "user ns 首位");
+            assertEquals("user:w-aaa", userNs.get("namespace").asText(),
+                    "user ns 首位 + 用 session 绑定 wall（忽略客户端 query wallId）");
             assertEquals("我的变量", userNs.get("displayName").asText());
             assertFalse(userNs.get("dynamic").asBoolean());
             JsonNode userKeys = userNs.get("keys");
@@ -163,7 +166,8 @@ class VariableMetadataHandlerTest {
     @Test
     void wallId_withNoUserVars_returnsEmptyKeys() {
         daemon.register(new FakeStaticProvider("system", "系统", List.of()));
-        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid));
+        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid),
+                sid -> "v".equals(sid) ? "w-empty" : null);
         JavalinTest.test(buildApp(handler), (server, client) -> {
             Response resp = client.get(
                     "/api/variable/list-all-namespaces?sessionId=v&wallId=w-empty");
@@ -205,7 +209,8 @@ class VariableMetadataHandlerTest {
                 "system", "系统",
                 List.of(new DeclaredKey("server.time", VarType.STRING, null, 1000L)),
                 declaredCalls));
-        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid));
+        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid),
+                sid -> "v".equals(sid) ? "w-a" : null);
 
         JavalinTest.test(buildApp(handler), (server, client) -> {
             Response r1 = client.get(
@@ -289,6 +294,12 @@ class VariableMetadataHandlerTest {
 
     private VariableMetadataHandler newHandler(java.util.function.Predicate<String> auth) {
         return new VariableMetadataHandler(store, daemon, auth, mapper);
+    }
+
+    /** P2-3：注入 sessionId→wallId 解析器（模拟 session 服务端绑定的 wall）。 */
+    private VariableMetadataHandler newHandler(java.util.function.Predicate<String> auth,
+                                               java.util.function.Function<String, String> wallResolver) {
+        return new VariableMetadataHandler(store, daemon, auth, wallResolver, mapper);
     }
 
     /** 静态 namespace fake provider。 */

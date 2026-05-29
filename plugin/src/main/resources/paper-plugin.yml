@@ -1,5 +1,5 @@
 name: HikariCanvas
-version: '0.4.9-SNAPSHOT'
+version: '0.4.10-SNAPSHOT'
 main: moe.hikari.canvas.HikariCanvas
 api-version: '1.21'
 authors:
@@ -43,9 +43,6 @@ permissions:
   canvas.delete.any:
     description: Delete any wall regardless of owner
     default: op
-  canvas.alias.own:
-    description: Set alias on walls you own
-    default: true
   canvas.alias.any:
     description: Set alias on any wall (moderation)
     default: op

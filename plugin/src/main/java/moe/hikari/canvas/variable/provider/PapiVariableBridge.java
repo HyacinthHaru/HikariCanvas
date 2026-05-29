@@ -334,7 +334,13 @@ public final class PapiVariableBridge implements VariableProvider {
         private static final String PAPI_CLASS_NAME = "me.clip.placeholderapi.PlaceholderAPI";
 
         private final JavaPlugin plugin;
-        private volatile boolean available = false;
+        /**
+         * 0.4.10 P3-19：把原 {@code available}（boolean）+ {@code setPlaceholdersMethod}
+         * （Method）两个独立 volatile 合成<b>单一</b> volatile 引用：{@code Method} 引用本身
+         * 不可变，{@code null} 即表示禁用（未装 PAPI / 反射失败 / shutdown 后）。{@link #resolve}
+         * 一次读到局部变量再判空 + invoke，消除"先读 available=true，再读 method 已被 shutdown
+         * 置 null"的撕裂读 + 半态可见。
+         */
         private volatile @Nullable Method setPlaceholdersMethod = null;
 
         ReflectionPapiAccessor(JavaPlugin plugin) {
@@ -346,12 +352,12 @@ public final class PapiVariableBridge implements VariableProvider {
             if (setPlaceholdersMethod != null) return; // 幂等
             try {
                 if (Bukkit.getPluginManager().getPlugin(PAPI_PLUGIN_NAME) == null) {
-                    available = false;
+                    setPlaceholdersMethod = null;
                     return;
                 }
             } catch (Exception e) {
                 // Bukkit 未启动（测试 / shutdown 路径）→ 当作未装
-                available = false;
+                setPlaceholdersMethod = null;
                 return;
             }
             try {
@@ -360,26 +366,27 @@ public final class PapiVariableBridge implements VariableProvider {
                         "setPlaceholders",
                         org.bukkit.OfflinePlayer.class,
                         String.class);
-                this.setPlaceholdersMethod = m;
-                this.available = true;
+                this.setPlaceholdersMethod = m; // 单次 volatile write 发布"可用 + method"原子状态
             } catch (ClassNotFoundException | NoSuchMethodException e) {
                 log.log(Level.WARNING,
                         "[HikariCanvas] PlaceholderAPI present but reflection failed; bridge disabled",
                         e);
-                available = false;
+                setPlaceholdersMethod = null;
             }
         }
 
         @Override
         public boolean isAvailable() {
-            return available;
+            return setPlaceholdersMethod != null;
         }
 
         @Override
         public @Nullable String resolve(String placeholder) {
-            if (!available || setPlaceholdersMethod == null) return null;
+            // 0.4.10 P3-19：单次读到局部变量，避免两次独立 volatile 读之间被 shutdown 置 null。
+            Method m = setPlaceholdersMethod;
+            if (m == null) return null;
             try {
-                Object out = setPlaceholdersMethod.invoke(null, null, placeholder);
+                Object out = m.invoke(null, null, placeholder);
                 return (out == null) ? null : out.toString();
             } catch (Exception e) {
                 log.log(Level.FINE,
@@ -391,7 +398,6 @@ public final class PapiVariableBridge implements VariableProvider {
 
         @Override
         public void shutdown() {
-            available = false;
             setPlaceholdersMethod = null;
         }
     }

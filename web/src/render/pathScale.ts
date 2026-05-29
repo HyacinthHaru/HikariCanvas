@@ -7,8 +7,11 @@
 // 算法：tokenize d → 按命令字母分组 → 把后续连续数字按 (x, y) 配对乘缩放系数。
 // Z/z 无坐标，原样保留。
 
-const CMD_RE = /[MLlQqCcZz]/;
-const TOKEN_RE = /[MLmlQqCcZz]|-?\d+(?:\.\d+)?/g;
+const CMD_RE = /[MLmlQqCcZz]/;
+// P3-26：数字部分扩展为可选整数位 + 可选小数 + 可选科学计数，与后端 PathDValidator.scanNumber
+// 及前端 PathParser.ts 的词法一致。裸 `-?\d+(?:\.\d+)?` 无法匹配 .5 / -.5 / 1e2 等合法 SVG
+// 数字（导入工程 / 模板 raw_state / 外部工具写入的 d 串会出现），导致缩放时坐标量级跳变 / 配对错位。
+const TOKEN_RE = /[MLmlQqCcZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g;
 
 /**
  * 缩放 d 字符串内所有坐标。

@@ -10,8 +10,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 单个编辑会话。可变 POJO；字段的可见性依赖 {@link SessionManager} 在
- * synchronized 段内访问。调用方不应在持锁外读写字段。
+ * 单个编辑会话。可变 POJO；写入路径由 {@link SessionManager} 在 writeLock 临界区内执行，
+ * 但读取可能发生在其他线程（Jetty WS 线程 / daemon 节流线程）。为保证跨线程发布可见性，
+ * 所有可变字段标记 {@code volatile}（P2-19 / P3-13）：volatile 不影响 lock-free 读性能，
+ * 仅补上写后发布屏障，消除撕裂读 / 陈旧读。复合不变量仍依赖 SessionManager 的锁来维护。
  *
  * <p>字段分阶段生效：</p>
  * <ul>
@@ -28,24 +30,24 @@ public final class Session {
     private final String playerName;
     private final long createdAt;
 
-    private SessionState state;
-    private Block pos1;
-    private Block pos2;
-    private BlockFace face;            // pos1/pos2 共用同一 normal
-    private WallResolver.Result.Ok wall;
-    private List<Integer> mapIds;
-    private WallKey wallKey;
-    private String wallId;             // M5.5：当前 session 编辑的 wall（confirm 后赋值）
-    private ProjectState projectState;
-    private EditSession editSession;
-    private long lastActivityAt;
-    private long wsDisconnectedAt = -1;
+    private volatile SessionState state;
+    private volatile Block pos1;
+    private volatile Block pos2;
+    private volatile BlockFace face;            // pos1/pos2 共用同一 normal
+    private volatile WallResolver.Result.Ok wall;
+    private volatile List<Integer> mapIds;
+    private volatile WallKey wallKey;
+    private volatile String wallId;             // M5.5：当前 session 编辑的 wall（confirm 后赋值）
+    private volatile ProjectState projectState;
+    private volatile EditSession editSession;
+    private volatile long lastActivityAt;
+    private volatile long wsDisconnectedAt = -1;
     /**
      * M16 P6.6：会话级 IP 绑定。首次 WS auth 成功时设值；后续 reconnect 必须 IP 同源。
      * null = 尚未首次 auth；非 null = 已绑定，认 IP 字符串严格相等。
      * 见 CLAUDE.md §lock-state 后的 IP 绑定决策。
      */
-    private String boundIp;
+    private volatile String boundIp;
 
     Session(String id, UUID playerUuid, String playerName, long now) {
         this.id = id;

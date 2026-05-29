@@ -126,6 +126,13 @@ public final class ManualScheduleProvider implements VariableProvider {
             new ConcurrentHashMap<>();
     /** 0.4.0 bugfix（Bug 4）：每 wall 上次 push 时间戳（用于按 precision 节流）。 */
     private final ConcurrentHashMap<String, Long> lastPushAt = new ConcurrentHashMap<>();
+    /**
+     * 0.4.10 P2-84：每 wall 的 precision 内存缓存（register / refreshWall / ensureWallRegistered
+     * 写路径主动刷新）。原 refresh() 每 tick 对每个 wall 查一次 DB（{@code loadByWallPrecision}）
+     * 来算节流间隔，而 DB 查询本身就发生在节流 continue 之前——minute 精度 wall 每 1s 白查一次。
+     * 缓存后 refresh() 零 DB 查询，DB 仅在 schedule 写操作时刷新。
+     */
+    private final ConcurrentHashMap<String, String> precisionCache = new ConcurrentHashMap<>();
 
     /** 生产构造：DAO 注入；默认 config。 */
     public ManualScheduleProvider(VariableStore store, JavaPlugin plugin, ScheduleDao dao) {
@@ -236,7 +243,8 @@ public final class ManualScheduleProvider implements VariableProvider {
                 // 0.4.4：rail-bound wall 跳过（RailScheduleProvider 接管该 wall 的 push）
                 if (shouldSkipWall(wallId)) continue;
                 // 0.4.0 bugfix（Bug 4）：按 wall.precision 节流
-                String precision = currentPrecision(wallId);
+                // 0.4.10 P2-84：从内存缓存读 precision（写路径已主动刷新），refresh() 零 DB 查询
+                String precision = cachedPrecision(wallId);
                 long interval = WallSchedule.PRECISION_SECOND.equals(precision)
                         ? SECOND_INTERVAL_MS : MINUTE_INTERVAL_MS;
                 Long last = lastPushAt.get(wallId);
@@ -273,6 +281,7 @@ public final class ManualScheduleProvider implements VariableProvider {
     public void shutdown() {
         registeredWalls.clear();
         lastPushAt.clear();
+        precisionCache.clear();
     }
 
     /**
@@ -334,6 +343,7 @@ public final class ManualScheduleProvider implements VariableProvider {
         if (wallId == null || wallId.isEmpty()) return;
         if (registeredWalls.remove(wallId) == null) return;
         lastPushAt.remove(wallId);
+        precisionCache.remove(wallId);
         String ns = NAMESPACE_PREFIX + ":" + wallId;
         for (String key : ALL_KEYS) {
             try {
@@ -398,6 +408,11 @@ public final class ManualScheduleProvider implements VariableProvider {
      */
     private void pushValues(String wallId, List<ScheduleEntry> entries, LocalTime now,
                             String precision) {
+        // 0.4.10 P2-6：单点拦截 rail-bound wall。refresh() tick 已在循环里 skip，但
+        // forceRefreshAll / ensureWallRegistered / refreshWall 三条立即推送路径之前未检查，
+        // 会与 RailScheduleProvider 双写同一 schedule:<wallId>/* key。在 pushValues 入口
+        // 统一拦截，覆盖全部调用方。
+        if (shouldSkipWall(wallId)) return;
         String ns = NAMESPACE_PREFIX + ":" + wallId;
         HikariCanvasConfig.ScheduleConfig cfg = config; // volatile snapshot
         Computed c = computeNext(entries, now, cfg.arrivingThresholdSeconds());
@@ -446,13 +461,27 @@ public final class ManualScheduleProvider implements VariableProvider {
         }
     }
 
-    /** 拿 wall 当前 precision；DAO 失败 / 行不存在时返默认 minute。 */
+    /** 拿 wall 当前 precision；DAO 失败 / 行不存在时返默认 minute。同时刷新内存缓存。 */
     private String currentPrecision(String wallId) {
+        String p;
         try {
-            return dataSource.loadByWallPrecision(wallId);
+            p = dataSource.loadByWallPrecision(wallId);
         } catch (Exception e) {
-            return WallSchedule.PRECISION_MINUTE;
+            p = WallSchedule.PRECISION_MINUTE;
         }
+        if (p == null) p = WallSchedule.PRECISION_MINUTE;
+        precisionCache.put(wallId, p);
+        return p;
+    }
+
+    /**
+     * 0.4.10 P2-84：refresh() 节流判定专用——优先读内存缓存（写路径已填充），
+     * 未命中（如启动后 refresh 先于任何写路径跑）才回退查 DB 并填缓存。避免每 tick 查 DB。
+     */
+    private String cachedPrecision(String wallId) {
+        String cached = precisionCache.get(wallId);
+        if (cached != null) return cached;
+        return currentPrecision(wallId);  // 懒填充缓存
     }
 
     /**
@@ -657,6 +686,8 @@ public final class ManualScheduleProvider implements VariableProvider {
                         .map(WallSchedule::precision)
                         .orElse(WallSchedule.PRECISION_MINUTE);
             } catch (Exception e) {
+                // 0.4.10 P3-82：与 loadAllSchedules / loadEntries 对齐，DB 故障不再静默降级
+                log.log(Level.WARNING, "loadByWallPrecision failed: " + wallId, e);
                 return WallSchedule.PRECISION_MINUTE;
             }
         }

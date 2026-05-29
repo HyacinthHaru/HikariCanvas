@@ -270,14 +270,20 @@ public final class TemplateLoader {
             if (t.content() == null) errors.add(tag + " missing 'content'");
             if (t.size() != null && t.size() <= 0) errors.add(tag + " size must be > 0");
             collectParamRefs(t.content(), paramIds, errors, tag + ".content");
-            checkColor(t.color(), errors, tag + ".color");
+            // P2-35：font 字段支持 ${param}（动态字体选择），声明必须存在。
+            collectParamRefs(t.font(), paramIds, errors, tag + ".font");
+            checkColor(t.color(), paramIds, errors, tag + ".color");
+            // P2-35：effects 块内 stroke/shadow/glow.color 同样可插值，补声明校验。
+            checkEffectsColors(t.effects(), paramIds, errors, tag + ".effects");
         } else if (el instanceof TemplateElement.Rect r) {
-            checkColor(r.fill(), errors, tag + ".fill");
-            if (r.stroke() != null) checkColor(r.stroke().color(), errors, tag + ".stroke.color");
+            checkColor(r.fill(), paramIds, errors, tag + ".fill");
+            if (r.stroke() != null) {
+                checkColor(r.stroke().color(), paramIds, errors, tag + ".stroke.color");
+            }
         } else if (el instanceof TemplateElement.Line l) {
             if (l.from() == null || l.from().size() != 2) errors.add(tag + " 'from' must be [x,y]");
             if (l.to() == null || l.to().size() != 2) errors.add(tag + " 'to' must be [x,y]");
-            checkColor(l.color(), errors, tag + ".color");
+            checkColor(l.color(), paramIds, errors, tag + ".color");
         } else if (el instanceof TemplateElement.Icon ic) {
             if (ic.source() == null || ic.source().isBlank()) {
                 errors.add(tag + " icon missing 'source'");
@@ -287,11 +293,20 @@ public final class TemplateLoader {
                 errors.add(tag + " icon source '" + ic.source()
                         + "' invalid (must match " + TemplateAssetService.SAFE_NAME.pattern() + ")");
             }
-            checkColor(ic.tint(), errors, tag + ".tint");
+            checkColor(ic.tint(), paramIds, errors, tag + ".tint");
             collectParamRefs(ic.source(), paramIds, errors, tag + ".source");
         }
         collectParamRefs(el.visibleWhen(), paramIds, errors, tag + ".visible_when");
         checkExpression(el.visibleWhen(), errors, tag + ".visible_when");
+    }
+
+    /** P2-35：扫 effects 块内三处 color 的 ${param} 声明 + 静态 hex 校验。 */
+    private static void checkEffectsColors(TemplateEffects eff, Set<String> paramIds,
+                                           List<String> errors, String where) {
+        if (eff == null) return;
+        if (eff.stroke() != null) checkColor(eff.stroke().color(), paramIds, errors, where + ".stroke.color");
+        if (eff.shadow() != null) checkColor(eff.shadow().color(), paramIds, errors, where + ".shadow.color");
+        if (eff.glow() != null) checkColor(eff.glow().color(), paramIds, errors, where + ".glow.color");
     }
 
     private static final ExpressionParser EXPR_PARSER = new ExpressionParser();
@@ -306,9 +321,16 @@ public final class TemplateLoader {
         }
     }
 
-    private static void checkColor(String value, List<String> errors, String where) {
+    /**
+     * P2-35：解耦『参数声明校验』与『颜色格式校验』。
+     * <p>即便含 {@code ${param}} 也先调 {@link #collectParamRefs} 拒未声明引用（§9 契约），
+     * 再对静态值跳过 hex 格式判定（留实例化期校验插值结果）。</p>
+     */
+    private static void checkColor(String value, Set<String> paramIds,
+                                   List<String> errors, String where) {
         if (value == null) return;
-        if (value.contains("${")) return;     // 含 placeholder，留实例化期判
+        collectParamRefs(value, paramIds, errors, where);
+        if (value.contains("${")) return;     // 含 placeholder，格式留实例化期判
         if (!COLOR_PATTERN.matcher(value).matches()) {
             errors.add(where + " '" + value + "' not a valid color");
         }

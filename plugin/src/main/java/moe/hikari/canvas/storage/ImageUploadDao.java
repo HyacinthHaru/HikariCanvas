@@ -217,14 +217,26 @@ public final class ImageUploadDao {
         }
     }
 
-    private static Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+    // P3-75：非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
+    private Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+        String uploaderRaw = rs.getString("uploader_uuid");
+        UUID uploader;
+        try {
+            uploader = UUID.fromString(uploaderRaw);
+        } catch (IllegalArgumentException ex) {
+            // P3-75：外部 DB 数据损坏的防御性降级（与 RailDao/UserGlobalVariableDao 看齐）——
+            // nil UUID 匹配 uploader 失败更受限（安全），且单行坏数据不阻断整查询。
+            log.log(Level.WARNING, "ImageUploadDao.mapRow uploader_uuid parse failed, hash="
+                    + rs.getString("hash") + ", uploader=" + uploaderRaw, ex);
+            uploader = new UUID(0L, 0L);
+        }
         return new Row(
                 rs.getString("hash"),
                 rs.getLong("bytes"),
                 rs.getInt("width"),
                 rs.getInt("height"),
                 rs.getString("mime"),
-                UUID.fromString(rs.getString("uploader_uuid")),
+                uploader,
                 rs.getLong("uploaded_at"),
                 rs.getLong("last_used_at"));
     }

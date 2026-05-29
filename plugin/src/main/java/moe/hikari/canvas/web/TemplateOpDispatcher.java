@@ -12,16 +12,42 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 /**
  * M14 创意工坊：{@code template.save / delete / feature / unfeature} 入口。
  * <p>鉴权用当前 session 的 player UUID 查 Bukkit live Player 拿 hasPermission。</p>
+ * <p>P2-26：{@code Bukkit.getPlayer} + {@code hasPermission} 主线程专用——经
+ * {@link MainThreadPerms#resolve} 一次主线程 hop 解析在线态 + 全部所需节点（复用 auth
+ * 路径同款 {@code callSyncMethod}），不再在 Jetty 线程裸调。</p>
  */
 final class TemplateOpDispatcher {
 
+    // P2-26：dispatch 一次性解析的节点顺序（与 Resolved.granted 下标对应）。
+    private static final int NODE_SAVE = 0;
+    private static final int NODE_BYPASS_LIMIT = 1;
+    private static final int NODE_DELETE_ANY = 2;
+    private static final int NODE_DELETE_OWN = 3;
+    private static final int NODE_FEATURE = 4;
+    private static final String[] PERM_NODES = {
+            "canvas.template.save",
+            "canvas.template.bypass-limit",
+            "canvas.template.delete.any",
+            "canvas.template.delete.own",
+            "canvas.template.feature",
+    };
+
     private final SessionManager sessionManager;
     private final moe.hikari.canvas.template.TemplatePublisher templatePublisher;
+    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    private final org.bukkit.plugin.Plugin plugin;
 
     TemplateOpDispatcher(SessionManager sessionManager,
                          moe.hikari.canvas.template.TemplatePublisher templatePublisher) {
+        this(sessionManager, templatePublisher, null);
+    }
+
+    TemplateOpDispatcher(SessionManager sessionManager,
+                         moe.hikari.canvas.template.TemplatePublisher templatePublisher,
+                         org.bukkit.plugin.Plugin plugin) {
         this.sessionManager = sessionManager;
         this.templatePublisher = templatePublisher;
+        this.plugin = plugin;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -37,24 +63,25 @@ final class TemplateOpDispatcher {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
             return;
         }
-        org.bukkit.entity.Player player = org.bukkit.Bukkit.getPlayer(s.playerUuid());
-        if (player == null) {
+        // P2-26：一次主线程 hop 解析在线态 + 全部节点；离线 / 超时 → online=false + 全节点 false。
+        MainThreadPerms.Resolved perms = MainThreadPerms.resolve(plugin, s.playerUuid(), PERM_NODES);
+        if (!perms.online()) {
             ctx.send(Envelope.error(in.id(), "FORBIDDEN", "player offline"));
             return;
         }
 
         switch (in.op()) {
-            case "template.save" -> handleTemplateSave(ctx, in, s, payload, player);
-            case "template.delete" -> handleTemplateDelete(ctx, in, s, payload, player);
-            case "template.feature" -> handleTemplateFeature(ctx, in, payload, player, true);
-            case "template.unfeature" -> handleTemplateFeature(ctx, in, payload, player, false);
+            case "template.save" -> handleTemplateSave(ctx, in, s, payload, perms);
+            case "template.delete" -> handleTemplateDelete(ctx, in, s, payload, perms);
+            case "template.feature" -> handleTemplateFeature(ctx, in, payload, perms, true);
+            case "template.unfeature" -> handleTemplateFeature(ctx, in, payload, perms, false);
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unreachable: " + in.op()));
         }
     }
 
     private void handleTemplateSave(WsMessageContext ctx, Envelope in, Session s,
-                                    Map<String, Object> payload, org.bukkit.entity.Player player) {
-        if (!player.hasPermission("canvas.template.save")) {
+                                    Map<String, Object> payload, MainThreadPerms.Resolved perms) {
+        if (!perms.granted(NODE_SAVE)) {
             ctx.send(Envelope.error(in.id(), "FORBIDDEN", "missing canvas.template.save"));
             return;
         }
@@ -68,7 +95,7 @@ final class TemplateOpDispatcher {
         String description = stringOrNull(payload.get("description"));
         moe.hikari.canvas.template.TemplateExporter.ParamConfig paramConfig =
                 parseParamConfig(payload.get("paramConfig"));
-        boolean bypass = player.hasPermission("canvas.template.bypass-limit");
+        boolean bypass = perms.granted(NODE_BYPASS_LIMIT);
 
         moe.hikari.canvas.template.TemplatePublisher.Result result = templatePublisher.publish(
                 s.playerUuid(), s.playerName(),
@@ -81,14 +108,14 @@ final class TemplateOpDispatcher {
     }
 
     private void handleTemplateDelete(WsMessageContext ctx, Envelope in, Session s,
-                                      Map<String, Object> payload, org.bukkit.entity.Player player) {
+                                      Map<String, Object> payload, MainThreadPerms.Resolved perms) {
         String templateId = stringOrNull(payload.get("templateId"));
         if (templateId == null) {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "templateId is required"));
             return;
         }
-        boolean isAdmin = player.hasPermission("canvas.template.delete.any");
-        boolean canDeleteOwn = player.hasPermission("canvas.template.delete.own");
+        boolean isAdmin = perms.granted(NODE_DELETE_ANY);
+        boolean canDeleteOwn = perms.granted(NODE_DELETE_OWN);
         if (!isAdmin && !canDeleteOwn) {
             ctx.send(Envelope.error(in.id(), "FORBIDDEN", "missing delete permission"));
             return;
@@ -104,8 +131,8 @@ final class TemplateOpDispatcher {
 
     private void handleTemplateFeature(WsMessageContext ctx, Envelope in,
                                        Map<String, Object> payload,
-                                       org.bukkit.entity.Player player, boolean featured) {
-        if (!player.hasPermission("canvas.template.feature")) {
+                                       MainThreadPerms.Resolved perms, boolean featured) {
+        if (!perms.granted(NODE_FEATURE)) {
             ctx.send(Envelope.error(in.id(), "FORBIDDEN", "missing canvas.template.feature"));
             return;
         }

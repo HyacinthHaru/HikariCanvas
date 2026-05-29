@@ -713,19 +713,122 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 ---
 
-## 13. 0.5.0+ 路线（动画 + 时间轴 + Blockly）
+## 13. 0.5.0+ 路线（性能 Benchmark → 时间轴 → 视觉运行时）
 
-**0.5.0**（~120h，5-6 周）：
-- AnimationLayer：keyframe 插值
-- 时间轴编辑器 UI（AE 风格简化版）
-- 元素事件（onTick / onVariableChange）
+> **2026-05-25 重订。** 原 §13 把 0.5.0 定为"动画+时间轴"、0.6.0 定为"Blockly 脚本"。经架构可行性评估（3 子代理深查现状 + 时间轴/Scratch 复杂度）后重排为：**先做性能 Benchmark 摸清硬件成本，再做时间轴（需 30fps 渲染管线），最后做视觉运行时（需时间轴的 action 底座）**。当前进度速览见 `CLAUDE.md` 路线图表；本节是详细设计。
 
-**0.6.0+ Blockly 脚本**（~200h，8-10 周）：
-- Blockly 块编辑器（Google MIT 库）
-- 编译为内部 DSL JSON（**不是 JS / Lua**，避代码沙盒 RCE）
-- HikariCanvas 解释器执行 JSON tree
-- 事件驱动：玩家走近 / 变量变化 / 定时器
-- 安全限制：单事件 1000 步上限 / 无递归 / 无文件 / 无网络
+### 13.0 设计哲学（前提）
+
+所有 0.5.0+ 路线遵守"工具不是保姆"哲学（`PROPOSAL.md §2.1`）：**数据透明不替服主决策 / 不自动降级 / 不擦屁股**。性能测评 4 原则见 `PROPOSAL.md §5.2.7`。
+
+**两个编辑器分支（终极愿景）**：未来画布二选一——
+- **分支 A（After Effects-like 时间轴）**：keyframe + easing 编排**已有内容**，做循环 / 非线性动画（如服务器入口墙的"欢迎介绍"循环播放）。
+- **分支 B（Scratch-like 视觉运行时）**：可视化积木 + 事件驱动条件分支，编排**未知 / 实时更新**的内容（如地铁站牌"车到→图标亮→红色闪"、PvP"有人被击杀→比分++→比赛结束出 MVP→播全屏特效"）。**无时间轴**。
+
+两者互补，一画布只能选一种分支。这样 MC 里既有逻辑判断又有预制动画系统。
+
+### 13.1 版本顺序与依赖
+
+| 版本 | 内容 | 为什么是这个顺序 |
+|---|---|---|
+| 0.4.10 | 修补批 + 哲学固化 | 外部 bug 审查后收口；为 0.5.0 留干净基线 |
+| 0.5.0 | 纯服务端性能 Benchmark | **数据先行**：时间轴/动画是高风险投入，立项前必须有真实 rasterize/GC 成本数据 |
+| 0.6.0 | 时间轴编辑器 | action（blink / play）是 0.7.0 Scratch 的依赖；且需把渲染管线推到 30fps |
+| 0.7.0 | Scratch-like 视觉运行时 | 复用 0.6.0 的动画 action + 已有 template.expr / ChangeListener |
+
+跳过 Benchmark 直接做时间轴 = 赌博（不知 30fps 在目标硬件上行不行）；跳过时间轴直接做 Scratch = action 集合缩水（只能改属性不能触发动画）。
+
+### 13.2 — 0.4.10 修补批（~15h）
+
+外部 bug 审查结果出来后的打磨 + 设计哲学固化（PROPOSAL §2.1/§5.2.7 已写）。范围按审查反馈定，不预设。可并入 0.5.0-P0。
+
+### 13.3 — 0.5.0 纯服务端性能 Benchmark（~191h）
+
+**目标**：让服主摸清"我这台服务器能撑多少画布"。production-grade，不做 MVP / 半成品。
+
+**4 原则**（详 `PROPOSAL.md §5.2.7`）：后台模拟不破坏世界 / 数据透明 / 测可控的 / 不测网络。
+
+**测什么（服务端可控成本）**：
+- `rasterize` 耗时 p50/p95/p99（含 element draw / text layout / dither）
+- `toPaletteSlice` 量化耗时
+- GC 分配速率（BufferedImage 是大头）
+- per-element-type 耗时分解（Text/Rect/Path/Image/Brush 各自 ms）
+- 模拟 viewer 数的 packet 序列化成本（每 viewer 一份序列化 = 服务端 CPU 成本，**不是网络成本**）
+
+**不测什么**：带宽 / 压缩比 / RTT / 丢包 / 服主的 zlib 配置——全砍（PROPOSAL §2.1 原则 3）。
+
+**基本单位推敲**：
+- 朴素单位"1 tile / 1 玩家 / 1 次刷新"方向对，但掩盖 2 类成本：rasterize 与 **wall 像素数**线性（5×5 一次 rasterize 比 5 个 1×1 便宜，因为一次性扫整 buffer），序列化与 **tile×fps** 线性；二者不能用同一单位 capture。
+- "4×4@5fps = 3×3@10fps" 作为粗略 rule-of-thumb 可以（80 vs 90 tile-refresh/s，差 ~12%），但精确换算需分开 RENDER（按 wall 像素）与 SERIALIZE（按 tile×fps）。
+- **50 mspt 预算公式**（给服主自算，不给结论）：
+  ```
+  主线程预算 = 50ms × 20tps = 1000 ms/s
+  可用份额 ≈ 30%（其余给 world tick / 其他插件）= 300 ms/s
+  单 wall×fps 主线程成本 = rasterize_p95 × fps（含安全 margin；系数由报告标定）
+  可载 wall 数 ≈ 300 ÷ (单 wall×fps 成本)
+  ```
+- 注：rasterize 走 async 线程，主线程只做 schedule + packet handoff；真正的主线程成本需 Benchmark 实测标定，公式系数由报告给出。
+
+**报告结构**：① 服务端可控部分（mspt / GC / per-element breakdown 三块 percentile）② 服主自算公式区（带宽自己 ping 自己测）。**给原料 + 公式，不给"你能开 N 个 wall"**。
+
+**Phase 分解**（每 phase 自身完整，非"TODO 待补"半成品）：
+- **P1（~50h）** Instrumentation（mspt / GC 采样钩子）+ 程序生成 scene 库（招牌 / 渐变 / dither / mixed）+ `/canvas bench` 命令骨架
+- **P2（~50h）** 压测 matrix runner（wall size × fps × scene × 模拟 viewer 数）+ async BenchmarkRunner + percentile 统计
+- **P3（~55h）** 报告生成（JSON / HTML / CLI summary）+ per-element breakdown + 50mspt 公式区
+- **P4（~36h）** CI micro-benchmark 防回归 + baseline drift 报警 + config 软上限文档化 + `docs/benchmark.md`
+
+### 13.4 — 0.6.0 时间轴编辑器（~365h；After Effects-like）
+
+**评估结论**：Medium-Risky。数据模型 + 协议升级路径清晰（同 v1→v2 / M17 background 升级），但**渲染管线 5fps→30fps 是颠覆性改动**，原 120h 估严重低估，真实 ~365h。立项前用 0.5.0 数据精确定 fps 目标。
+
+**新数据结构**：
+- `ProjectState.timelines: List<Timeline>` + `activeTimelineId`（nullable，向后兼容）
+- `Element.keyframes?: List<Keyframe>`（沿用 M8 v2 nullable 字段模式，Jackson 零迁移）
+- `Timeline { id, durationMs, fps, loopMode(ONCE/LOOP/PING_PONG), trigger }`
+- `Keyframe { property, timeMs, value(多态：Number/String/Fill), easing(LINEAR/EASE_IN/OUT/CUBIC_BEZIER+params) }`
+- `TriggerConfig { type(MANUAL/PLAYER_NEAR/VARIABLE_CHANGE/SCHEDULE), params }`
+
+**必须大改**：
+- `ProjectionThrottler` 反应式 → 新增 `AnimationTicker` 主动式定 cadence tick（独立 async 线程，与 throttler 解耦）
+- BufferedImage **池化复用**（30fps × 2048² ARGB ≈ 1.9 GB/s 分配，不池化必爆 G1 young gen）
+- dirty-region 失效（动画帧间脏区≈整画布）→ timeline-aware 增量渲染
+- `isPristineAcrossLayers` 纳入 timeline state（首帧 opacity=0 别误判 pristine 走 placeholder）
+- HistoryStack 100 步上限会被 keyframe 编辑打爆 → op coalescing
+- 现有 1500+ 测试假设 5fps → 30fps 路径必须**条件化**（仅含活跃 timeline 的 wall 启用，不全局升级）
+
+**主要风险**：30fps × 多 map packet 带宽（物理上限，服主自负，PROPOSAL §2.1，**我们不自动降级**）/ 主线程 tick budget / BufferedImage GC / 双端 cubic-bezier 数学一致性（须 snapshot CI）/ keyframe `${var}` 取值时机（tick 取最新值再插值 vs 插值后再 resolve）。
+
+**利好**：`ProjectionThrottler.setIntervalForSession` 已开 20fps 路径 / `projectByWall` 无 session 渲染入口 / rasterize 纯函数并发安全 / 变量倒排索引可驱动 keyframe `${var}`。
+
+**Phase**：P0 spike（30fps×4maps×10elem 实测 GC/mspt，15h，**必须先做**）→ 数据模型+协议 v3（40h）→ 池化+Ticker（60h）→ easing+插值器（80h）→ 前端 timeline panel（100h）→ trigger+loop（40h）→ 压测+双端一致（30h）。
+
+### 13.5 — 0.7.0 Scratch-like 视觉运行时（~360h）
+
+**评估结论**：Medium-Low。变量系统层准备好（push + cached + ChangeListener + dynamic lookup），**但事件系统层几乎为零**——现有 4 个 Provider 全 polling，0 个 Bukkit gameplay event listener。Scratch trigger 需从零搭建。原 200h（Blockly）估偏低，含条件 / sandbox / 多 trigger / 前端积木真实落地 ~360h。
+
+**重大利好**：`template/expr/*`（`Expr` AST + `ExpressionParser` + `ExpressionEvaluator`，~447 行）已是 Scratch condition 求值器的半成品，扩比较 / 算术运算仅 ~50 行。
+
+**新数据结构（独立 ScriptStore，不进 ProjectState）**：
+- 新表 `wall_scripts`（与渲染 / 编辑解耦，避免 state.patch 推送范围膨胀到脚本表达式）
+- `ScriptRule { id, wallId, enabled, name, trigger, condition?(复用 Expr), actions[], budget }`
+- `sealed Trigger { OnVariableChange / OnTimer / OnPlayerJoin / OnPlayerKill / OnCommand / OnLockChange / OnWallReady }`
+- `sealed Action { SetVariable / SetElementProperty / ExecuteCommand(白名单) / PlaySound / Blink / Delay(≤5s) / Log }`
+- `Budget { maxSteps:100, maxActions:50, maxInvocationsPerSecond:10, maxNestedDelayDepth:3 }`
+
+**必须新建**：ScriptStore + TriggerListenerRegistry（7-10 个 Bukkit listener + 路由）+ ConditionEvaluator（extend ExpressionEvaluator）+ ActionExecutor（白名单 + 主线程 hop，element.update 类必须走 EditSession 标准 op 路径不绕过 history/lock）+ ScriptRunner（执行管线 + budget + circuit break）+ 前端积木 UI。
+
+**主要风险**：
+1. **Sandbox/RCE**（最高）：`ExecuteCommand` 必须强制白名单 + 模板参数化，禁字符串拼接（防 `/op @s` 夺权）；`Delay` 防 ABA loop（A→setVar→触发 B→setVar→触发 A）。
+2. 主线程 hop（element.update / playSound / executeCommand 必须主线程；`onPlayerMove` 类高频 trigger 必须 sample，不能每 tick 跑）。
+3. 双端 schema 一致性（建议**后端唯一权威 + 前端积木仅 UI**，不做客户端执行预览，避免分叉）。
+4. ChangeListener 滥用（`fireChange` 是同步 for-loop，单 wall 挂 50 listener 会拖慢 → 改异步分发 + namespace/fullName index 路由）。
+5. action `blink / playAnimation` **依赖 0.6.0 时间轴**——这是顺序约束的根因。
+
+**ROI 提醒**：用户列举的场景（地铁站牌 / PvP 比分 / 倒计时）在 0.4.4 + 变量系统下已 **90% 可实现**（schedule + variable + textElement）；Scratch 只在"主动条件 + 副作用"超出展示层时才显著加值。**立项前再评估**。
+
+**积木库选择**：Blockly（Google MIT）vs 自写——待定。Blockly 双向 schema 同步是全期最大维护负担，自写积木可控但工程量大。0.7.0 立项时定。
+
+**Phase**：P0 spike（ChangeListener 挂 1 trigger + 主线程 hop + 1 action 走通端到端，30h）→ 5 trigger + 5 action 无条件分支命令行（80h）→ 条件分支 + sandbox（70h）→ 前端积木 UI（90h，工时大头）→ 剩余 trigger/action（60h）→ 压测+docs（30h）。
 
 ---
 
@@ -1215,7 +1318,12 @@ wall-clock 估 **~1.5-2.5 周**。
 | 0.4.0 | 变量系统底座 + Provider + Plugin API + 命令族 | 150h | ✅ |
 | 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
 | 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
-| **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | 📋 规划完成 |
-| **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型）| **60h** | 📋 规划完成 |
-| 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
-| 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
+| **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | ✅ |
+| **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型）| **60h** | ✅ |
+| 0.4.5–0.4.9 | 打磨 / 体验 / ultrareview / Live Paint 收尾 | — | ✅ |
+| 0.4.10 | 修补批 + 设计哲学固化 | ~15h | 📋 规划 |
+| 0.5.0 | 纯服务端性能 Benchmark（不测网络，见 §13.3 + PROPOSAL §2.1/§5.2.7） | ~191h | 📋 规划 |
+| 0.6.0 | 时间轴编辑器（AE-like，见 §13.4） | ~365h | 远期 |
+| 0.7.0 | Scratch-like 视觉运行时（见 §13.5） | ~360h | 远期 |
+
+> 路线图以 `CLAUDE.md` 速览表为准；本表为 dynamic-data 内部参考。原"0.5.0 动画 / 0.6.0 Blockly"已于 2026-05-25 重排（见 §13 重订说明）。

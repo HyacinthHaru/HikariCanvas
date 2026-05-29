@@ -75,6 +75,9 @@ export const messages = {
             updatedAt: (s: string) => `${s} 更新过`,
             copyHint: '点击复制打开命令',
             refresh: '刷新列表',
+            // P2-85：时间戳本地化（fmtTime 用）。i 为 0(周日)..6(周六)；m 为 1..12。
+            weekday: (i: number) => `周${['日', '一', '二', '三', '四', '五', '六'][i] ?? ''}`,
+            monthDay: (m: number, d: number) => `${m}月${d}日`,
         },
         tools: {
             selectTool: '选择工具（V）：点选元素后显示缩放 / 旋转手柄，可拖动',
@@ -400,7 +403,7 @@ export const messages = {
                 screen: '滤色',
                 overlay: '叠加',
             },
-            // M8-TODO 项 2：图层颜色标签（PS 风格）
+            // 图层颜色标签（PS 风格）
             colorTagLabel: '颜色标签',
             colorTagClear: '清除标签',
             colorTagHint: '给图层染色，方便快速识别（不影响渲染）',
@@ -413,10 +416,10 @@ export const messages = {
                 mauve: '紫',
                 overlay0: '灰',
             },
-            // M8-TODO 项 1：缩略图
+            // 缩略图
             thumbnailAlt: (name: string) => `${name} 的缩略图`,
         },
-        // M8-TODO 项 3：对齐 / 分布工具栏（多选时显示）
+        // 对齐 / 分布工具栏（多选时显示）
         alignDistribute: {
             barTitle: (n: number) => `已选 ${n} 个元素 · 对齐与分布`,
             alignLeft: '左对齐',
@@ -457,6 +460,9 @@ export const messages = {
             unlocked: '可编辑',
             locked: '已锁定',
             wallStateTip: '可编辑 = 任何能进入这块画板的玩家都能改；已锁定 = 只有作者能解锁，其他人只读',
+            // P3-112：状态栏当前工具短标签（区别于 tools.* 的长 tooltip 描述）。
+            toolSelect: '选择',
+            toolMove: '移动',
         },
         // 2026-05-25 ultrareview #8：lock readonly 多入口 guard 提示。
         // 通过 useLockGuard.guardMutation 在 mutation 函数入口拦截时显示。
@@ -671,6 +677,8 @@ export const messages = {
             tipStep2: '右侧添加 ≥ 2 个站点（拖动调整顺序）',
             tipStep3: '添加车次 → 点「详情」打开车次编辑',
             tipStep4: '车次详情里点「自动生成时刻表」一键生成',
+            // P2-14：自动生成参数非法（空 / NaN）时的提示
+            autoInvalidInput: '请填写有效的首站发车时间、站间时长和停靠时长（不能留空）',
         },
         // 0.4.0-P3-L：列车 / 公交时刻表管理（兜底功能，零外部依赖）
         schedule: {
@@ -888,6 +896,9 @@ export const messages = {
             updatedAt: (s: string) => `updated ${s}`,
             copyHint: 'Click to copy the open command',
             refresh: 'Refresh list',
+            // P2-85: localized timestamp parts (used by fmtTime). i = 0(Sun)..6(Sat); m = 1..12.
+            weekday: (i: number) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i] ?? '',
+            monthDay: (m: number, d: number) => `${['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m] ?? ''} ${d}`,
         },
         tools: {
             selectTool: 'Select tool (V): click to select; resize / rotate handles appear, drag to move',
@@ -1213,7 +1224,7 @@ export const messages = {
                 screen: 'Screen',
                 overlay: 'Overlay',
             },
-            // M8-TODO item 2: PS-style layer color tags
+            // PS-style layer color tags
             colorTagLabel: 'Color tag',
             colorTagClear: 'Clear tag',
             colorTagHint: 'Tag a layer with a color for quick identification (does not affect rendering)',
@@ -1226,10 +1237,10 @@ export const messages = {
                 mauve: 'Purple',
                 overlay0: 'Grey',
             },
-            // M8-TODO item 1: thumbnail
+            // thumbnail
             thumbnailAlt: (name: string) => `${name} thumbnail`,
         },
-        // M8-TODO item 3: align / distribute toolbar (visible during multi-select)
+        // align / distribute toolbar (visible during multi-select)
         alignDistribute: {
             barTitle: (n: number) => `${n} selected · align & distribute`,
             alignLeft: 'Align left',
@@ -1270,6 +1281,9 @@ export const messages = {
             unlocked: 'Editable',
             locked: 'Locked',
             wallStateTip: 'Editable = anyone who can open this wall can edit it; Locked = only the owner can unlock, everyone else is read-only',
+            // P3-112: short current-tool labels for the status bar (vs the long tools.* tooltip text).
+            toolSelect: 'Select',
+            toolMove: 'Move',
         },
         // 2026-05-25 ultrareview #8: lock readonly multi-entry guard messages.
         // Shown when useLockGuard.guardMutation rejects a mutation while locked.
@@ -1481,6 +1495,8 @@ export const messages = {
             tipStep2: 'Add ≥ 2 stations on the right (drag to reorder)',
             tipStep3: 'Add a run → click "Details" to edit',
             tipStep4: 'Inside run details, click "Auto-generate timetable"',
+            // P2-14: prompt when auto-generate inputs are empty / NaN
+            autoInvalidInput: 'Please enter a valid first departure time, travel seconds and dwell seconds (none may be blank)',
         },
         // 0.4.0-P3-L: train / bus schedule manager (built-in fallback, zero external dependency)
         schedule: {

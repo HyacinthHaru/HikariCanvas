@@ -159,6 +159,12 @@ public final class TemplateInstantiator {
         Object replaced;
         try {
             replaced = replacePlaceholders(raw, params);
+        } catch (Interpolator.MissingParamException mpe) {
+            // P2-65：raw_state 内引用了未声明 / 未填值的 param。与非 raw 路径
+            // resolveBackground 对齐，回 INVALID_PARAM（含缺失 param 名）而非让
+            // RuntimeException 逃逸到 WS dispatcher 变成 ack_timeout。
+            errors.add("rawState references missing param '" + mpe.paramName() + "'");
+            return new Result.Failed("INVALID_PARAM", errors);
         } catch (IllegalArgumentException iae) {
             // M16 P1.5：Interpolator 长度上限被触发（单参数 / 累计输出）
             errors.add(iae.getMessage());
@@ -748,9 +754,14 @@ public final class TemplateInstantiator {
         }
         if (el instanceof TemplateElement.Rect r) {
             Fill fill = r.fill() == null ? null : new SolidFill(interp(r.fill(), params));
-            Stroke stroke = r.stroke() == null ? null
-                    : new Stroke(asInt(r.stroke().width()) == null ? 1 : asInt(r.stroke().width()),
-                                  interp(r.stroke().color(), params));
+            Stroke stroke;
+            if (r.stroke() == null) {
+                stroke = null;
+            } else {
+                // P2-36：stroke.width 支持 ${param}，先插值再解析。
+                Integer sw = asIntInterp(r.stroke().width(), params);
+                stroke = new Stroke(sw == null ? 1 : sw, interp(r.stroke().color(), params));
+            }
             return new RectElement(
                     id, x, y, w, h,
                     r.rotation(), false, true,
@@ -778,17 +789,17 @@ public final class TemplateInstantiator {
         Shadow sh = null;
         Glow g = null;
         if (te.stroke() != null) {
-            Integer w = asInt(te.stroke().width());
+            Integer w = asIntInterp(te.stroke().width(), params);
             s = new Stroke(w == null ? 1 : w, interp(te.stroke().color(), params));
         }
         if (te.shadow() != null) {
-            Integer dx = asInt(te.shadow().dx());
-            Integer dy = asInt(te.shadow().dy());
+            Integer dx = asIntInterp(te.shadow().dx(), params);
+            Integer dy = asIntInterp(te.shadow().dy(), params);
             sh = new Shadow(dx == null ? 0 : dx, dy == null ? 0 : dy,
                     interp(te.shadow().color(), params));
         }
         if (te.glow() != null) {
-            Integer r = asInt(te.glow().radius());
+            Integer r = asIntInterp(te.glow().radius(), params);
             g = new Glow(r == null ? 0 : r, interp(te.glow().color(), params));
         }
         return new Effects(s, sh, g);
@@ -817,6 +828,25 @@ public final class TemplateInstantiator {
             }
         }
         return null;
+    }
+
+    /**
+     * P2-36：先插值再 asInt 的整数解析（复用 {@link #resolveDimension} 的
+     * 『String→interp→INT_NUMERIC 解析』+ MissingParam 回退模式）。TemplateEffects
+     * width/dx/dy/radius 与 Rect stroke.width 声明支持 {@code ${param}}，但 {@link #asInt}
+     * 直接对 {@code "${n}"} 返 null 会被静默当 0/默认；本 helper 先把 String 中的占位符
+     * 替换为实际值再解析，使参数化尺寸真正生效。缺值时与 {@link #resolveDimension} 一致
+     * 返 null 让上层走默认。
+     */
+    private static Integer asIntInterp(Object o, Map<String, Object> params) {
+        if (o instanceof String s) {
+            try {
+                return asInt(Interpolator.interpolate(s, params));
+            } catch (Interpolator.MissingParamException e) {
+                return null;
+            }
+        }
+        return asInt(o);
     }
 
     private static Double asDouble(Object o) {

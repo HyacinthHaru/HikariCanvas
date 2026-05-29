@@ -211,7 +211,10 @@ public final class HikariCanvasConfig {
         b.reaperScanTicks = 20L * Math.max(5, f.getLong("session.reaper-scan-seconds", 30));
         b.tokenPurgeTicks = 20L * 60 * Math.max(1, f.getLong("session.token-purge-minutes", 5));
 
-        b.mapPoolInitial = Math.max(0, f.getInt("map-pool.initial", 64));
+        // P3-44：map-pool.initial 下限钳到 1（不是 0）。MapPool 构造前置条件要求
+        // initialSize > 0，配 0 会在 onEnable 抛 IllegalArgumentException 崩插件。
+        // 上限 1024 与 docs/data-model.md §11 声明的 range 1-1024 对齐。
+        b.mapPoolInitial = Math.max(1, Math.min(1024, f.getInt("map-pool.initial", 64)));
         b.mapPoolMax = Math.max(b.mapPoolInitial, f.getInt("map-pool.max", 256));
         // M16 P2.3：可选 per-world 初始分配。yml 形如：
         //   map-pool:

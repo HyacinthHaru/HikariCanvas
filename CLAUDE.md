@@ -11,7 +11,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 | 包名 | `moe.hikari.canvas` |
 | 命令前缀 | `/canvas` |
 | 权限前缀 | `canvas.` |
-| PDC namespace | `hikari_canvas` |
+| PDC namespace | `hikaricanvas`（`NamespacedKey(plugin,…)` 取插件名小写） |
 | 工程文件扩展名 | `.canvas` |
 | 仓库 | https://github.com/HyacinthHaru/HikariCanvas（MIT） |
 
@@ -78,7 +78,8 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 - **预览地图池**是技术核心：编辑期间**只刷像素、不新建 MapView**，避免 `idcounts.dat` 膨胀——这一项做不好整个项目报废
 - **双端渲染一致性**：浏览器 Canvas 与 Java Graphics2D 用同一 TTF 文件、禁抗锯齿；TextLayout 两端走 **`charAdvance(fontId, ch, fontSize)`**（M20 起）—— 构建期 `generateGlyphMetrics` 用 AWT 算每个内置字体 BMP 范围 advance → 紧凑 JSON 双端共享（jar `/fonts/{id}.metrics.json` + `web/public/fonts/{id}.metrics.json`）；运行时 `advance = round(baseAdv × fontSize / baseSize)`。用户字体（`plugins/HikariCanvas/fonts/*`）启动期 `FontMetricsTable.registerRuntime` 现场用同款 AWT 算法计算 + 内存表 + `GET /api/font/metrics?id=...` 给前端。缺字 / 表未到位 fallback 旧 `canonicalCharWidth`（ASCII=0.5×fontSize, CJK=fontSize）。M5-D2 canonical 已被替换为 fallback，仅在首次渲染窗口或缺字时生效
-- **帧率策略**：静止 0fps · 输入防抖 100ms + 5fps 上限 · 提交全量
+- **帧率策略**：静止 0fps · 输入防抖 100ms + 5fps 上限 · 提交全量。**这是 v1 静态招牌默认值，不是硬上限**；0.6.0 时间轴会参数化到 30fps，但遵守"不自动降级"哲学（服主主动配，系统不偷偷压）
+- **性能哲学（"工具不是保姆"，2026-05-25 固化）**：默认服主有充足性能 + 知道自己在做什么。① 数据透明不替服主决策 ② 不自动降级（config 上限仅作安全上限，非自动调优）③ 不擦屁股（网络 / 带宽 / 压缩比 / 服主没开的配置一律不测不估）。详见 `PROPOSAL.md §2.1`（产品哲学）+ `§5.2.7`（Benchmark 4 原则）+ `docs/dynamic-data.md §13`
 - **网络默认绑 `127.0.0.1`**；公网部署必须 nginx/Caddy 反代 + TLS
 - **字体**：只打包 SIL OFL 1.1 协议字体；M22 起内置 **20 枚字体矩阵**：
   - 中文正文：`source_han_sans`（黑体）/ `source_han_serif`（宋体）/ `ark_pixel`（12px 像素）
@@ -416,10 +417,14 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.7** | **ultrareview 修复批**（动态变量重绘 + lock confirm 绕过 + 透明背景 blend 真实 alpha + 前端 lock readonly 多入口 + 8 项更多 + CI lock fallback） | **24h** | ✅ |
 | **0.4.8** | **打磨批**（M18 multi-subpath + RDP UI / M8 图层缩略图 + 颜色标签 + 对齐分布 / M13 mask lasso + 羽化 + URL 粘贴 + EXIF / Token rate limit） | **70h** | ✅ |
 | **0.4.9** | **Live Paint 收尾**（M18 brush 真实形状 stroke offset polygon + text glyph 真实形状 fontkit 引入） | **18h** | ✅ |
-| 0.5.0 | 动画 + 时间轴 | 120h | 远期 |
+| **0.4.10** | **ultrareview-2026-05-29 修复批**（独立深度审查 224 缺陷 → 修全部 168 个 DIRECT_FIX：data-integrity / concurrency 线程契约 / boundary 守卫 / 异常 ack / 双端一致 / 模板校验 等；TRADE_OFF 23 + NEEDS_DESIGN 30 暂不修）+ 设计哲学固化（"工具不是保姆" PROPOSAL §2.1/§5.2.7） | **~40h** | ✅ |
+| 0.5.0 | 纯服务端性能 Benchmark（后台模拟 rasterize/palette/GC + 程序生成 scene + `/canvas bench` 命令族 + 报告 + CI 防回归；**不测网络**，见 PROPOSAL §2.1/§5.2.7） | ~191h | 📋 规划 |
+| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；30fps 上限按 0.5.0 实测数据定，遵守"不自动降级"） | ~365h | 远期 |
+| 0.7.0 | Scratch-like 视觉运行时（积木逻辑 + 事件驱动 + 条件分支；复用 template.expr + ChangeListener；积木库 vs 自写待定） | ~360h | 远期 |
 | M30 | 图层 mask / group / smart object（PS-style）— 独立大版本 | 30h+ | 远期 |
 | 弃 | B-advanced DCEL 覆盖 4% Live Paint 用例 — 38h+ 性价比低 | — | 不做 |
-| 0.6.0+ | Blockly 块脚本 | 200h | 远期 |
+
+> **0.5.0+ 详细设计** 见 `docs/dynamic-data.md §13`（含版本顺序依赖、Benchmark 4 原则、时间轴/Scratch 数据结构与风险）。两分支互补，**一画布只能选一种**：时间轴 = 对已有内容做非线性动画；视觉运行时 = 对实时/未知数据做逻辑编排（无时间轴）。
 
 **0.5.0+** 动画 / 时间轴 / Blockly 脚本路线见 `docs/dynamic-data.md §13`。
 

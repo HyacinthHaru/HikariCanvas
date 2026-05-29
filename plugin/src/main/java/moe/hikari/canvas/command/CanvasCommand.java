@@ -161,7 +161,11 @@ public final class CanvasCommand {
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(this::runAlias)))
                 .then(Commands.literal("delete")
-                        .requires(src -> isPlayerWith(src, "canvas.delete.own"))
+                        // P3-3: 门禁与业务权限并集对齐——业务逻辑（runDeleteConfirm 等）允许
+                        // canvas.delete.any 删他人 wall，故门禁不能只认 .own，否则纯 .any
+                        // 管理员被挡在 Brigadier 节点外。
+                        .requires(src -> isPlayerWith(src, "canvas.delete.own")
+                                || isPlayerWith(src, "canvas.delete.any"))
                         .then(Commands.argument("wall_id", StringArgumentType.word())
                                 .executes(this::runDeleteFirstStep)
                                 .then(Commands.literal("confirm")
@@ -318,26 +322,27 @@ public final class CanvasCommand {
                     NamedTextColor.GRAY));
             return Command.SINGLE_SUCCESS;
         }
-        // 简单分组：published 在前
-        List<WallRepo.Summary> pub = walls.stream().filter(w -> w.publishedAt() != null).toList();
+        // P3-99: 术语对齐 lock-state 重设计——publishedAt 非 null = 已锁定（locked）。
+        // 数据语义不变，仅玩家可见文案从过时的 "published" 改为 "locked"。
+        List<WallRepo.Summary> locked = walls.stream().filter(w -> w.publishedAt() != null).toList();
         List<WallRepo.Summary> drafts = walls.stream().filter(w -> w.publishedAt() == null).toList();
         player.sendMessage(Component.text(
                 "Your canvas walls: " + walls.size() + " total ("
-                        + pub.size() + " published, " + drafts.size() + " editing)",
+                        + locked.size() + " locked, " + drafts.size() + " editing)",
                 NamedTextColor.GOLD));
-        for (WallRepo.Summary w : pub) sendWallLine(player, w, true);
+        for (WallRepo.Summary w : locked) sendWallLine(player, w, true);
         for (WallRepo.Summary w : drafts) sendWallLine(player, w, false);
         return Command.SINGLE_SUCCESS;
     }
 
-    private void sendWallLine(Player p, WallRepo.Summary w, boolean published) {
-        String tag = published ? "[P]" : "[D]";
+    private void sendWallLine(Player p, WallRepo.Summary w, boolean locked) {
+        String tag = locked ? "[L]" : "[D]";
         String aliasPart = w.alias() != null ? " '" + w.alias() + "'" : "";
         String label = String.format("  %s %s%s · %dx%d · %s (%d,%d,%d) %s",
                 tag, w.wallId(), aliasPart, w.widthMaps(), w.heightMaps(),
                 w.world(), w.originX(), w.originY(), w.originZ(), w.facing());
         Component line = Component.text(label,
-                published ? NamedTextColor.AQUA : NamedTextColor.GRAY)
+                locked ? NamedTextColor.AQUA : NamedTextColor.GRAY)
                 .clickEvent(ClickEvent.suggestCommand("/canvas open " + w.wallId()))
                 .hoverEvent(HoverEvent.showText(Component.text(
                         "Click to suggest /canvas open " + w.wallId())));
@@ -542,7 +547,18 @@ public final class CanvasCommand {
                 mounted = frameDeployer.deploy(sessionAfter, wall, mapIds);
             } catch (Exception e) {
                 plugin.getLogger().log(Level.SEVERE, "FrameDeployer.deploy failed", e);
-                sessionManager.cancel(sessionAfter.id(), "deploy-failed");
+                // 0.4.10 P2-47：部署失败必须原子回滚整个新建 wall，否则只 cancel 会留下
+                // walls 行 + 预留的 RESERVED map 不归还（cancel 故意不释放池）→ 孤儿 wall +
+                // idcounts.dat 漂移。removeForWall 清理可能已部署的部分 ItemFrame；deleteWall
+                // 释放池→FREE + 删 walls 行 + cancel 活跃 session（与正常 /canvas delete 同款逆操作）。
+                try {
+                    frameDeployer.removeForWall(wallId, wall.world());
+                    sessionManager.deleteWall(wallId);
+                } catch (Exception rollbackEx) {
+                    plugin.getLogger().log(Level.SEVERE,
+                            "deploy-failure rollback also failed for wall " + wallId, rollbackEx);
+                    sessionManager.cancel(sessionAfter.id(), "deploy-failed");  // 兜底至少结束 session
+                }
                 player.sendMessage(Component.text("Frame deployment failed: " + e.getMessage(),
                         NamedTextColor.RED));
                 return Command.SINGLE_SUCCESS;
@@ -580,15 +596,16 @@ public final class CanvasCommand {
         MapPool.Stats ps = mapPool.stats();
         int wallsCount = database.jdbi().withHandle(h -> h.createQuery(
                 "SELECT COUNT(*) FROM walls").mapTo(Integer.class).one());
-        int published = database.jdbi().withHandle(h -> h.createQuery(
+        // P3-99: published_at 非 null = 已锁定；统计标签术语对齐为 locked（DB 列名不变）。
+        int locked = database.jdbi().withHandle(h -> h.createQuery(
                 "SELECT COUNT(*) FROM walls WHERE published_at IS NOT NULL")
                 .mapTo(Integer.class).one());
         sender.sendMessage(Component.text(String.format(
                         "MapPool: total=%d  free=%d  reserved=%d   "
-                                + "|   Walls: %d (published=%d)   "
+                                + "|   Walls: %d (locked=%d)   "
                                 + "|   Sessions: %d   |   Tokens: %d",
                         ps.total(), ps.free(), ps.reserved(),
-                        wallsCount, published,
+                        wallsCount, locked,
                         sessionManager.size(), tokenService.activeCount()),
                 NamedTextColor.GOLD));
         return Command.SINGLE_SUCCESS;

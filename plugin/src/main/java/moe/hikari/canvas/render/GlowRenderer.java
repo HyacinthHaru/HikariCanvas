@@ -54,22 +54,36 @@ public final class GlowRenderer {
         FontMetrics fm = mainG.getFontMetrics(font);
         int ascent = fm.getAscent();
         int descent = fm.getDescent();
+        // P2-62：竖排可旋转标点 glow mask 需镜像 TextRenderer.drawGlyph 的 rotated 分支
+        // （之前 GlowRenderer 完全不处理 rotation，与前端旋转后的 glow 形状不一致）。
+        // 旋转 glyph 占 fontSize×fontSize 方格（与前端 PreviewRenderer.renderGlow bbox 对齐）。
+        int fontSize = font.getSize();
+        int rotatedAscent = (int) Math.round(fontSize * 0.8);
 
-        // 1) 外接矩形 + padding
-        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
-        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
+        // 1) 外接矩形 + padding。用 double 累计 + 末尾 floor/ceil 与前端一致；非旋转 glyph 的
+        //    minX/maxX 仍是整数，floor/ceil 为 no-op，snapshot baseline 不漂移。
+        double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
         for (TextLayout.PositionedGlyph pg : glyphs) {
-            int chW = fm.charWidth(pg.ch().charAt(0));
-            if (pg.x() < minX) minX = pg.x();
-            if (pg.x() + chW > maxX) maxX = pg.x() + chW;
-            if (pg.baselineY() - ascent < minY) minY = pg.baselineY() - ascent;
-            if (pg.baselineY() + descent > maxY) maxY = pg.baselineY() + descent;
+            if (pg.rotated()) {
+                // 方格 fontSize × fontSize，中心 = (pg.x, pg.baselineY)
+                minX = Math.min(minX, pg.x() - fontSize / 2.0);
+                maxX = Math.max(maxX, pg.x() + fontSize / 2.0);
+                minY = Math.min(minY, pg.baselineY() - fontSize / 2.0);
+                maxY = Math.max(maxY, pg.baselineY() + fontSize / 2.0);
+            } else {
+                int chW = fm.charWidth(pg.ch().charAt(0));
+                minX = Math.min(minX, pg.x());
+                maxX = Math.max(maxX, pg.x() + chW);
+                minY = Math.min(minY, pg.baselineY() - ascent);
+                maxY = Math.max(maxY, pg.baselineY() + descent);
+            }
         }
         int pad = radius + 1;
-        int bboxX = minX - pad;
-        int bboxY = minY - pad;
-        int bboxW = (maxX - minX) + pad * 2;
-        int bboxH = (maxY - minY) + pad * 2;
+        int bboxX = (int) Math.floor(minX - pad);
+        int bboxY = (int) Math.floor(minY - pad);
+        int bboxW = (int) Math.ceil(maxX - minX) + pad * 2;
+        int bboxH = (int) Math.ceil(maxY - minY) + pad * 2;
         if (bboxW <= 0 || bboxH <= 0) return;
 
         // 2) local ARGB image
@@ -83,7 +97,18 @@ public final class GlowRenderer {
             lg.setFont(font);
             lg.setColor(Color.WHITE);  // 任意不透明色；只关心 alpha 通道的形状
             for (TextLayout.PositionedGlyph pg : glyphs) {
-                lg.drawString(pg.ch(), pg.x() - bboxX, pg.baselineY() - bboxY);
+                if (pg.rotated()) {
+                    // P2-62：镜像 TextRenderer.drawGlyph rotated 分支 + 前端 renderGlow
+                    // translate 到方格中心 → rotate 90° → drawString 在 (-chW/2, ascent - fontSize/2)
+                    java.awt.geom.AffineTransform saved = lg.getTransform();
+                    lg.translate(pg.x() - bboxX, pg.baselineY() - bboxY);
+                    lg.rotate(Math.PI / 2);
+                    int chW = lg.getFontMetrics().stringWidth(pg.ch());
+                    lg.drawString(pg.ch(), -chW / 2, rotatedAscent - fontSize / 2);
+                    lg.setTransform(saved);
+                } else {
+                    lg.drawString(pg.ch(), pg.x() - bboxX, pg.baselineY() - bboxY);
+                }
             }
         } finally {
             lg.dispose();

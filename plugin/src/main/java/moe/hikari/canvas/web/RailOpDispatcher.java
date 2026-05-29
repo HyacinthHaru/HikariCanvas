@@ -12,8 +12,6 @@ import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionRateLimiter;
 import moe.hikari.canvas.storage.RailDao;
 import moe.hikari.canvas.variable.provider.RailScheduleProvider;
-import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.LocalTime;
@@ -73,19 +71,23 @@ final class RailOpDispatcher {
     private final @Nullable RailScheduleProvider provider;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
+    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    private final org.bukkit.plugin.Plugin plugin;
 
     RailOpDispatcher(SessionManager sessionManager,
                      SessionRateLimiter rateLimiter,
                      RailDao dao,
                      @Nullable RailScheduleProvider provider,
                      moe.hikari.canvas.storage.WallRepo wallRepo,
-                     moe.hikari.canvas.storage.AuditLog auditLog) {
+                     moe.hikari.canvas.storage.AuditLog auditLog,
+                     org.bukkit.plugin.Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.dao = dao;
         this.provider = provider;
         this.wallRepo = wallRepo;
         this.auditLog = auditLog;
+        this.plugin = plugin;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -196,12 +198,8 @@ final class RailOpDispatcher {
         String code = trimOrNull(stringOrNull(payload.get("code")));
         String color = trimOrNull(stringOrNull(payload.get("color")));
         long now = System.currentTimeMillis();
-        String id = "line-" + Long.toHexString(now).substring(Math.max(0,
-                Long.toHexString(now).length() - 8));
-        // 防 id 冲突：极端情况下加 random 后缀
-        if (dao.findLine(id).isPresent()) {
-            id = id + "-" + Integer.toHexString((int) (Math.random() * 0xFFFF));
-        }
+        // P3-6：do-while 唯一 id（冲突时追加 random 后缀并再次校验，根除同毫秒碰撞）
+        String id = generateUniqueId("line-", cand -> dao.findLine(cand).isPresent());
         UUID owner = s.playerUuid();
         if (owner == null) {
             ctx.send(Envelope.error(in.id(), "FORBIDDEN", "caller uuid required"));
@@ -246,11 +244,23 @@ final class RailOpDispatcher {
     private void handleLineDelete(WsMessageContext ctx, Envelope in, String sessionId,
                                   Session s, Map<String, Object> payload) {
         String id = stringOrNull(payload.get("lineId"));
+        // 0.4.10 P2-5：删线路前先收集绑定到该线路的 wall（FK CASCADE 会把 line_id SET NULL，
+        // 删后无法再反查），删后立即 unregister 让 RailScheduleProvider 释放接管、ManualSchedule
+        // 接手——否则 provider.refresh() 永不重读 binding，wall 永久卡在 rail 接管态显示旧值。
+        List<String> boundWalls = new ArrayList<>();
+        if (id != null) {
+            for (WallRailBinding b : dao.listAllBindings()) {
+                if (id.equals(b.lineId())) boundWalls.add(b.wallId());
+            }
+        }
         int n = dao.deleteLine(id);
+        if (provider != null) {
+            for (String wid : boundWalls) provider.unregisterWall(wid);
+        }
         audit(sessionId, s, "RAIL_LINE_DELETE",
                 Map.of("line_id", id == null ? "" : id, "rows", n));
         // FK CASCADE 会自动清 stations / runs / timetable；wall_rail_bindings.line_id SET NULL
-        // 这些 wall 走 fallback。RailScheduleProvider 不立即 unregister（下次 refresh 会发现 lineId null）
+        // 这些 wall 走 fallback（已 unregister，下次 ManualSchedule 接管）
         Map<String, Object> ack = new LinkedHashMap<>();
         ack.put("deleted", n);
         ctx.send(Envelope.of("ack", in.id(), ack));
@@ -280,11 +290,8 @@ final class RailOpDispatcher {
         }
         boolean terminus = Boolean.TRUE.equals(payload.get("isTerminus"));
         long now = System.currentTimeMillis();
-        String id = "stn-" + Long.toHexString(now).substring(Math.max(0,
-                Long.toHexString(now).length() - 8));
-        if (dao.findStation(id).isPresent()) {
-            id = id + "-" + Integer.toHexString((int) (Math.random() * 0xFFFF));
-        }
+        // P3-6：do-while 唯一 id（冲突时追加 random 后缀并再次校验）
+        String id = generateUniqueId("stn-", cand -> dao.findStation(cand).isPresent());
         RailStation st = new RailStation(id, lineId, name, code, sortOrder, terminus, now);
         dao.upsertStation(st);
         audit(sessionId, s, "RAIL_STATION_ADD",
@@ -366,30 +373,33 @@ final class RailOpDispatcher {
                     "notes too long (≤256)"));
             return;
         }
-        long now = System.currentTimeMillis();
-        String id = "run-" + Long.toHexString(now).substring(Math.max(0,
-                Long.toHexString(now).length() - 8));
-        if (dao.findRun(id).isPresent()) {
-            id = id + "-" + Integer.toHexString((int) (Math.random() * 0xFFFF));
+        // 0.4.10 P3-47：编组数范围校验（可选字段；提供时须 1..32，防退化/超长编组）
+        if (cars != null && (cars < 1 || cars > 32)) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "cars must be 1..32"));
+            return;
         }
-        RailRun run = new RailRun(id, lineId, runNumber, direction, serviceType,
-                cars, startId, endId, notes, now, now);
-        dao.upsertRun(run);
+        long now = System.currentTimeMillis();
+        // P3-6：do-while 唯一 id（冲突时追加 random 后缀并再次校验）
+        String id = generateUniqueId("run-", cand -> dao.findRun(cand).isPresent());
 
-        // 可选自动生成 timetable
+        // 0.4.10 P2-7/P2-64：先生成+校验 timetable（generateAutoTimetable 可能抛
+        // IllegalArgumentException），再写库——避免校验失败时 run 行已 upsert 留下孤儿。
+        List<RailTimetableEntry> autoEntries = null;
         Object genOpts = payload.get("generateOptions");
         if (genOpts instanceof Map<?, ?> opts) {
             try {
-                List<RailTimetableEntry> entries = generateAutoTimetable(id, lineId, direction,
-                        startId, endId, opts);
-                if (!entries.isEmpty()) {
-                    dao.replaceTimetable(id, entries);
-                }
+                autoEntries = generateAutoTimetable(id, lineId, direction, startId, endId, opts);
             } catch (IllegalArgumentException iae) {
                 ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
                         "generateOptions invalid: " + iae.getMessage()));
                 return;
             }
+        }
+        RailRun run = new RailRun(id, lineId, runNumber, direction, serviceType,
+                cars, startId, endId, notes, now, now);
+        dao.upsertRun(run);
+        if (autoEntries != null && !autoEntries.isEmpty()) {
+            dao.replaceTimetable(id, autoEntries);
         }
         audit(sessionId, s, "RAIL_RUN_CREATE",
                 Map.of("line_id", lineId, "run_id", id, "run_number", runNumber));
@@ -459,6 +469,11 @@ final class RailOpDispatcher {
         if (notes != null && notes.length() > NOTES_MAX_LEN) {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
                     "notes too long (≤256)"));
+            return;
+        }
+        // 0.4.10 P3-47：编组数范围校验（提供时须 1..32）
+        if (cars != null && (cars < 1 || cars > 32)) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "cars must be 1..32"));
             return;
         }
         RailRun updated = new RailRun(
@@ -577,13 +592,12 @@ final class RailOpDispatcher {
     private boolean checkPermission(WsMessageContext ctx, Envelope in, String sessionId,
                                     Session s, String op, Map<String, Object> payload) {
         UUID callerUuid = s.playerUuid();
-        Player player = callerUuid == null ? null : Bukkit.getPlayer(callerUuid);
 
         // 1. rail.line.list / detail 完全开放（只读）
         if ("rail.line.list".equals(op) || "rail.line.detail".equals(op)) return true;
         // 2. rail.line.create → .create
         if ("rail.line.create".equals(op)) {
-            return ensurePerm(ctx, in, sessionId, s, player, "canvas.rail.line.create", true);
+            return ensurePerm(ctx, in, sessionId, s, callerUuid, "canvas.rail.line.create", true);
         }
         // 3. rail.wall.bind → 复用 schedule.own/any（wall owner 判定）
         if ("rail.wall.bind".equals(op)) {
@@ -593,7 +607,7 @@ final class RailOpDispatcher {
                     ? null : wallRepo.loadById(wallId).orElse(null);
             boolean isOwner = wall != null && wall.ownerUuid().equals(callerUuid);
             String node = isOwner ? "canvas.rail.wall.bind" : "canvas.schedule.any";
-            return ensurePerm(ctx, in, sessionId, s, player, node, isOwner);
+            return ensurePerm(ctx, in, sessionId, s, callerUuid, node, isOwner);
         }
         // 4. 其他改类 op → 走 line owner 判定
         String lineId = resolveLineId(op, payload);
@@ -606,13 +620,14 @@ final class RailOpDispatcher {
         } else {
             node = isOwner ? "canvas.rail.line.edit.own" : "canvas.rail.line.edit.any";
         }
-        return ensurePerm(ctx, in, sessionId, s, player, node, isOwner);
+        return ensurePerm(ctx, in, sessionId, s, callerUuid, node, isOwner);
     }
 
     private boolean ensurePerm(WsMessageContext ctx, Envelope in, String sessionId,
-                               Session s, @Nullable Player player, String node,
+                               Session s, UUID callerUuid, String node,
                                boolean defaultTrue) {
-        boolean granted = player != null && player.hasPermission(node);
+        // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+        boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, node);
         if (!granted && defaultTrue) {
             // own / create 节点 default=true：offline 玩家也通行
             granted = true;
@@ -675,6 +690,33 @@ final class RailOpDispatcher {
         if (s == null) return null;
         String t = s.trim();
         return t.isEmpty() ? null : t;
+    }
+
+    /**
+     * P3-6：生成唯一 id（line/station/run 共用）。基础形态 = {@code prefix + 时间戳低 8 位 hex}；
+     * 若 {@code exists} 命中冲突则追加 random 后缀并 <b>再次校验</b>，循环到无冲突。
+     *
+     * <p>修复点：原代码冲突时只做单次 random 后缀且不二次 findX 校验——同毫秒并发 create 或
+     * 第二次仍撞 random 值时 id 可能与既有行相同，触发 upsert {@code ON CONFLICT(id) DO UPDATE}
+     * 静默覆盖既有行（数据丢失）。do-while 每次重生成后都 re-check，从根消除残留碰撞窗口。</p>
+     *
+     * <p>非安全敏感（仅做唯一性，非凭证），用 {@link Math#random()} 足够；64 次硬上限兜底防
+     * exists 实现异常导致死循环（实际首次或一次 random 即命中）。</p>
+     */
+    private static String generateUniqueId(String prefix, java.util.function.Predicate<String> exists) {
+        String hex = Long.toHexString(System.currentTimeMillis());
+        String base = prefix + hex.substring(Math.max(0, hex.length() - 8));
+        String id = base;
+        int attempts = 0;
+        while (exists.test(id)) {
+            id = base + "-" + Integer.toHexString((int) (Math.random() * 0xFFFF));
+            if (++attempts >= 64) {
+                // 极端兜底：拼一个长随机串几乎不可能再撞（亦防 exists 误判死循环）
+                id = base + "-" + Long.toHexString(Double.doubleToLongBits(Math.random()));
+                break;
+            }
+        }
+        return id;
     }
 
     private static Map<String, Object> lineToMap(RailLine l) {

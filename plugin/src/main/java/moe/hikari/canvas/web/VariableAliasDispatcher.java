@@ -7,8 +7,6 @@ import moe.hikari.canvas.session.SessionRateLimiter;
 import moe.hikari.canvas.state.PatchOp;
 import moe.hikari.canvas.state.StatePatch;
 import moe.hikari.canvas.storage.VariableAliasDao;
-import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -59,19 +57,23 @@ final class VariableAliasDispatcher {
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final OpPushCallback push;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
+    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    private final org.bukkit.plugin.Plugin plugin;
 
     VariableAliasDispatcher(SessionManager sessionManager,
                             SessionRateLimiter rateLimiter,
                             VariableAliasDao dao,
                             moe.hikari.canvas.storage.WallRepo wallRepo,
                             OpPushCallback push,
-                            moe.hikari.canvas.storage.AuditLog auditLog) {
+                            moe.hikari.canvas.storage.AuditLog auditLog,
+                            org.bukkit.plugin.Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.dao = dao;
         this.wallRepo = wallRepo;
         this.push = push;
         this.auditLog = auditLog;
+        this.plugin = plugin;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -224,7 +226,6 @@ final class VariableAliasDispatcher {
     private boolean checkPermission(WsMessageContext ctx, Envelope in, String sessionId,
                                     Session s, String op) {
         UUID callerUuid = s.playerUuid();
-        Player player = callerUuid == null ? null : Bukkit.getPlayer(callerUuid);
         moe.hikari.canvas.storage.WallRepo.Wall wall = wallRepo.loadById(s.wallId()).orElse(null);
         if (wall == null) {
             ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
@@ -236,7 +237,8 @@ final class VariableAliasDispatcher {
         }
         boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
         String requiredNode = isOwnerOnly ? "canvas.var.write.own" : "canvas.var.write.any";
-        boolean granted = player != null && player.hasPermission(requiredNode);
+        // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+        boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
         // own 节点 default=true（与 var write 一致）；offline 玩家 own 路径放行
         if (!granted && "canvas.var.write.own".equals(requiredNode)) {
             granted = true;
@@ -261,12 +263,9 @@ final class VariableAliasDispatcher {
     //  helpers
     // ──────────────────────────────────────────────────────────
 
-    /**
-     * JSON Pointer 段编码（RFC 6901 §3）：{@code ~} → {@code ~0}，{@code /} → {@code ~1}。
-     * 与 {@code EditSession.encodeJsonPointer} 同款。
-     */
+    /** 0.4.10 P3-114：JSON Pointer 段编码统一走 {@link WebHelpers#encodeJsonPointerSegment}。 */
     private static String encodeJsonPointer(String s) {
-        return s.replace("~", "~0").replace("/", "~1");
+        return WebHelpers.encodeJsonPointerSegment(s);
     }
 
     /**

@@ -190,19 +190,26 @@ public final class CanvasProjector {
         int wallChunkX = w.key().originX() >> 4;
         int wallChunkZ = w.key().originZ() >> 4;
         List<Player> out = new ArrayList<>();
-        for (Player p : world.getPlayers()) {
-            try {
-                org.bukkit.Location loc = p.getLocation();
-                int pChunkX = loc.getBlockX() >> 4;
-                int pChunkZ = loc.getBlockZ() >> 4;
-                int dx = Math.abs(pChunkX - wallChunkX);
-                int dz = Math.abs(pChunkZ - wallChunkZ);
-                if (dx + dz <= VIEWER_CHUNK_DISTANCE) {
-                    out.add(p);
+        // P2-11：world.getPlayers() 取列表 + for-each 迭代本身也包 try-catch，收窄非主线程
+        // 读 Bukkit 玩家列表时瞬态 CME/RuntimeException 的逃逸面（避免异常冒泡到
+        // ProjectionThrottler.flushLocked 把整帧投影判为失败）。返回已收集到的部分候选。
+        try {
+            for (Player p : world.getPlayers()) {
+                try {
+                    org.bukkit.Location loc = p.getLocation();
+                    int pChunkX = loc.getBlockX() >> 4;
+                    int pChunkZ = loc.getBlockZ() >> 4;
+                    int dx = Math.abs(pChunkX - wallChunkX);
+                    int dz = Math.abs(pChunkZ - wallChunkZ);
+                    if (dx + dz <= VIEWER_CHUNK_DISTANCE) {
+                        out.add(p);
+                    }
+                } catch (Exception ignored) {
+                    // 玩家瞬间下线 / 跨维度切换 → Location 可能短暂不可用；跳过该 viewer
                 }
-            } catch (Exception ignored) {
-                // 玩家瞬间下线 / 跨维度切换 → Location 可能短暂不可用；跳过该 viewer
             }
+        } catch (Exception ignored) {
+            // world.getPlayers() 与主线程 join/quit 并发时的瞬态迭代异常；返回已收集部分
         }
         return out;
     }

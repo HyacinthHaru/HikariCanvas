@@ -68,22 +68,30 @@ public final class HikariCanvas extends JavaPlugin {
     private Database database;
     private AuditLog auditLog;
     private TokenService tokenService;
+    // 0.4.10 P3-11：onDisable 置 true。tokenPurgeTask / mapPoolLeakTask 是 Bukkit 异步周期任务，
+    // cancel() 不等待 in-flight run 结束——若一次 run 正在跑而 onDisable 已 database.close()，
+    // 任务体读 wallRepo/mapPool（走 DB）会 use-after-close。任务体入口检查此 flag 提前 short-circuit。
+    private volatile boolean shuttingDown = false;
     private BukkitTask tokenPurgeTask;
     // M15.3 P0-24：MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。
     private BukkitTask mapPoolLeakTask;
     private MapPool mapPool;
     private WallResolver wallResolver;
-    private SessionManager sessionManager;
+    // 0.4.10 P2-16：daemon 线程（VariableStore wallDirtyCallback / ChangeListener、
+    // mapPoolLeakTask 异步任务）读这些单例字段；onEnable 在主线程写。无 volatile 时存在 JMM
+    // 可见性缺口（daemon 可能读到 null 或半构造引用）。volatile 写建立 happens-before，
+    // 与 config 字段（已 volatile）一致。
+    private volatile SessionManager sessionManager;
     private SessionReaper sessionReaper;
     private WallRepo wallRepo;
     /** M16 P2.5：启动期 wall 恢复器，wand listener 用它查"restore 失败"白名单。 */
     private WallRestorer wallRestorer;
-    private WebServer webServer;
+    private volatile WebServer webServer;
     private MapPacketSender mapPacketSender;
     private FrameDeployer frameDeployer;
     private HikariCanvasRenderer canvasRenderer;
-    private CanvasProjector canvasProjector;
-    private ProjectionThrottler projectionThrottler;
+    private volatile CanvasProjector canvasProjector;
+    private volatile ProjectionThrottler projectionThrottler;
     private SessionRateLimiter rateLimiter;
     private FontRegistry fontRegistry;
     /** M26：矢量图标注册表（FA Free + 用户 SVG）。 */
@@ -121,6 +129,11 @@ public final class HikariCanvas extends JavaPlugin {
     private PluginNamespaceRegistry pluginNamespaceRegistry;
     private HikariCanvasAPIImpl apiImpl;
     private volatile HikariCanvasConfig config;
+    // 0.4.10 P2-82：onEnable 从 JVM 全局 IIORegistry 注销的 ImageReaderSpi 实例列表。
+    // onDisable 逐个 registerServiceProvider 恢复——避免本插件（热）卸载后别的插件
+    // ImageIO.read GIF/BMP/TIFF 永久失败（IIORegistry 是进程级共享单例）。
+    private final java.util.List<javax.imageio.spi.ImageReaderSpi> deregisteredImageReaders =
+            new java.util.ArrayList<>();
 
     @Override
     public void onLoad() {
@@ -130,12 +143,26 @@ public final class HikariCanvas extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        // 0.4.10 P2-44：整段装配包进 try/catch(Throwable)。任一步失败（缺 palette.json /
+        // migration 失败 / schema 损坏 / 磁盘问题）时，catch 逆序清理已就位资源
+        // （HikariDataSource 连接池 + housekeeper 线程 / daemon 线程池 / WebServer Jetty /
+        // executor 等非 Bukkit 托管资源），再 rethrow 让 Bukkit 标记插件 disabled。
+        // 复用 cleanupResources()（与 onDisable 同一幂等清理），避免清理逻辑两处漂移。
+        try {
+        // 0.4.10 P2-44/P3-11：重置 shuttingDown——上一次 onEnable 失败走 cleanupResources 会置 true，
+        // PlugMan 重新 enable 时若不复位会让 mapPoolLeakTask 入口永久 short-circuit。
+        shuttingDown = false;
         PacketEvents.getAPI().init();
 
         // M15.4 P0-12：IIORegistry 防御 — 注销已知有 CVE 历史 / 不需要的 ImageIO reader。
-        // 我们 ImageStorage 只用 PNG / JPEG / WebP；其他格式（TIFF、BMP、GIF）attack surface
-        // 大且未用，启动期注销避免 ImageIO.read 触发它们的解码循环（Thread.interrupt
-        // 大多对 ImageIO 内部循环无效，唯一稳的防线是不让它们注册）。
+        // 我们 ImageStorage 只用 PNG / JPEG（"webp" 保留在白名单里只是占位——标准 JDK 无
+        // WebP reader，需第三方依赖才会出现；当前无该依赖故此项不匹配任何 SPI）；其他格式
+        // （TIFF、BMP、GIF）attack surface 大且未用，启动期注销避免 ImageIO.read 触发它们的
+        // 解码循环（Thread.interrupt 大多对 ImageIO 内部循环无效，唯一稳的防线是不让它们注册）。
+        //
+        // 0.4.10 P2-82：IIORegistry 是进程级 JVM 共享单例——注销会影响同 JVM 别的插件。
+        // 把被注销的 SPI 实例存到字段，onDisable 逐个 registerServiceProvider 恢复，避免本插件
+        // （热）卸载后别的依赖 JDK ImageIO 读 GIF/BMP/TIFF 的插件永久失败。
         try {
             javax.imageio.spi.IIORegistry registry = javax.imageio.spi.IIORegistry.getDefaultInstance();
             java.util.Iterator<javax.imageio.spi.ImageReaderSpi> readers = registry.getServiceProviders(
@@ -155,8 +182,10 @@ public final class HikariCanvas extends JavaPlugin {
                 if (!keep) toRemove.add(spi);
             }
             for (var spi : toRemove) registry.deregisterServiceProvider(spi);
+            deregisteredImageReaders.clear();
+            deregisteredImageReaders.addAll(toRemove);  // P2-82：留给 onDisable 恢复
             getLogger().info("IIORegistry: deregistered " + toRemove.size()
-                    + " unused image readers (kept PNG/JPEG/WebP)");
+                    + " unused image readers (kept PNG/JPEG)");
         } catch (Exception e) {
             getLogger().log(java.util.logging.Level.WARNING,
                     "IIORegistry deregistration failed (non-fatal)", e);
@@ -208,6 +237,7 @@ public final class HikariCanvas extends JavaPlugin {
         }
 
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo, canvasRenderer);
+        sessionManager.setMaxImagesPerWall(config.images.maxPerWall());  // 0.4.10 P2-8：per-wall 图片配额注入
 
         // 0.4.0 方案 B 自适应渲染：mapPacketSender 在 CanvasProjector 构造前才 new（见下方）。
         // PlaceholderRenderer 也注入 CanvasProjector，用于"state pristine 回 placeholder"语义
@@ -315,6 +345,11 @@ public final class HikariCanvas extends JavaPlugin {
         // map 释放 + walls 表删除后触发；user_variables 表通过 FK CASCADE 自动清。
         final VariableStore variableStoreForHook = variableStore;
         sessionManager.addWallDeleteHook(wid -> variableStoreForHook.clearWallReferences(wid));
+        // 0.4.10 P2-9：显式 deleteByWall hook 与三张兄弟表（variable_aliases / wall_schedules /
+        // wall_rail_bindings）对齐——user_variables 原本仅靠 FK CASCADE（foreign_keys=true 是
+        // per-connection pragma，单点依赖）。显式删 + CASCADE 双保险，规避 pragma 未兑现时孤儿行累积。
+        final UserVariableDao userVariableDaoForHook = userVariableDao;
+        sessionManager.addWallDeleteHook(wid -> userVariableDaoForHook.deleteByWall(wid));
         // 0.4.0-P1-E / P3-J/K/L：Provider daemon 框架（守护线程池 + 定时调度）。
         // P3-J 注册 system + scoreboard；P3-K 加 PAPI 桥接；P3-L 加 ManualScheduleProvider。
         // ScheduleDao 必须先于 ProviderBootstrap.initialize 构造（V012 migration 已跑）。
@@ -379,8 +414,9 @@ public final class HikariCanvas extends JavaPlugin {
         // 默认值，可在 config.yml dynamic.push-rate-limit 调）。
         this.pluginNamespaceRegistry = new PluginNamespaceRegistry();
         PushRateLimiter pushRateLimiter = new PushRateLimiter(config.pushRateLimitConfig);
+        // 0.4.10 P3-4：注入 auditLog 让 checkAcl 拒绝 namespace spoof 时记 PLUGIN_NAMESPACE_DENIED。
         this.apiImpl = new HikariCanvasAPIImpl(
-                pluginNamespaceRegistry, variableStore, variableProviderDaemon, pushRateLimiter);
+                pluginNamespaceRegistry, variableStore, variableProviderDaemon, pushRateLimiter, auditLog);
         // ServicesManager 注册：外部插件零编译耦合获取入口（推荐 docs/dynamic-data.md §4）。
         // plugin disable 时 Bukkit 自动反注册，无需手动 unregister。
         Bukkit.getServicesManager().register(
@@ -417,6 +453,12 @@ public final class HikariCanvas extends JavaPlugin {
         sessionManager.addPreForgetHook(projectionThrottler::flushNow);
         sessionManager.addForgetHook(projectionThrottler::discardSession);
         sessionManager.addForgetHook(rateLimiter::discardSession);
+        // 0.4.10 P3-32：session forget 时清 WebServer.wsBySession 映射，避免已 forget 的 session
+        // 在 map 里残留（webServer 装配在后，lambda 运行期惰性读 volatile 字段，null 时跳过）。
+        sessionManager.addForgetHook(sid -> {
+            WebServer ws = webServer;
+            if (ws != null) ws.forgetSession(sid);
+        });
 
         // 超时回收：ISSUED ttl（与 token TTL 一致）/ WS 断连 grace / ACTIVE idle
         sessionReaper = new SessionReaper(
@@ -568,6 +610,10 @@ public final class HikariCanvas extends JavaPlugin {
         mapPoolLeakTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this,
                 () -> {
+                    // 0.4.10 P3-11：onDisable 已置 shuttingDown 时 short-circuit——避免本 run 在
+                    // database.close() 之后才读 wallRepo.loadAll() / mapPool.detectLeaks（走 DB）
+                    // 触发 use-after-close。Bukkit cancel() 不等 in-flight run，这是唯一稳的兜底。
+                    if (shuttingDown || database == null) return;
                     java.util.Set<String> liveWallIds = wallRepo.loadAll().stream()
                             .map(w -> w.wallId())
                             .collect(java.util.stream.Collectors.toSet());
@@ -580,6 +626,23 @@ public final class HikariCanvas extends JavaPlugin {
                 20L * 60 * 5);   // 每 5 分钟一次
 
         getLogger().info("HikariCanvas enabled (skeleton)");
+        } catch (Throwable t) {
+            // 0.4.10 P2-44：装配中途失败——逆序清理已就位资源后 rethrow。Bukkit 在 onEnable 抛异常
+            // 时只 catch+log 并把插件留在 disabled 态（不调 onDisable），故必须在此主动释放
+            // HikariDataSource / daemon 线程池 / Jetty / executor 等非 Bukkit 托管资源。
+            getLogger().log(java.util.logging.Level.SEVERE,
+                    "onEnable failed mid-assembly; cleaning up partially-initialized resources", t);
+            try {
+                cleanupResources();
+            } catch (Throwable cleanupErr) {
+                getLogger().log(java.util.logging.Level.SEVERE,
+                        "cleanup after onEnable failure also threw", cleanupErr);
+            }
+            // rethrow 让 Bukkit 标记插件 disabled（IllegalStateException 包装受检异常）。
+            if (t instanceof RuntimeException re) throw re;
+            if (t instanceof Error err) throw err;
+            throw new IllegalStateException("HikariCanvas onEnable failed", t);
+        }
     }
 
     /**
@@ -587,8 +650,12 @@ public final class HikariCanvas extends JavaPlugin {
      * 池容量/超时等）已传给具体服务，必须重启才能真正生效。提示由命令侧打。
      *
      * <p>未来若有需要做 hot-apply，可在此扩展：给 TokenService/SessionReaper/MapPool 各加 setter。</p>
+     *
+     * <p>P3-90：不需要 {@code synchronized}——{@link #config} 字段已是 {@code volatile}，
+     * 单引用赋值的可见性由 volatile write 充分保证，且无并发写者（仅命令线程触发），无需互斥。
+     * 若未来扩展为多字段一致性更新可回头加锁。</p>
      */
-    public synchronized void applyConfig(HikariCanvasConfig fresh) {
+    public void applyConfig(HikariCanvasConfig fresh) {
         this.config = fresh;
         getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
     }
@@ -611,46 +678,113 @@ public final class HikariCanvas extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        // 0.4.0-P1-E：先停 provider daemon，让守护线程池 awaitTermination 完成 + provider
-        // shutdown 钩子释放资源；放最前是因为 daemon 内部 refresh task 可能引用 store / DB。
-        if (variableProviderDaemon != null) {
-            variableProviderDaemon.shutdown();
-            variableProviderDaemon = null;
-        }
-        if (sessionReaper != null) {
-            sessionReaper.stop();
-            sessionReaper = null;
-        }
+        cleanupResources();
+        getLogger().info("HikariCanvas disabled");
+    }
+
+    /**
+     * 0.4.10 P2-44 / P2-50：幂等资源清理。被 {@link #onDisable} 与 {@link #onEnable} 装配失败的
+     * catch 共用——避免清理逻辑两处漂移（fixApproach 推荐路径）。每步走 {@link #closeQuietly}
+     * 独立兜异常 + 全字段 null-guard，重复调用安全（已 null 的步骤跳过）。
+     *
+     * <p>顺序固化：先置 shuttingDown + cancel 异步周期任务 → daemon → reaper → webServer →
+     * upload → imageStorage → database.close → 恢复 IIORegistry → PacketEvents.terminate。
+     * database.close 必须在引用 DB 的任务 / daemon 之后。</p>
+     */
+    private void cleanupResources() {
+        // 0.4.10 P3-11：第一步置 shuttingDown，让 in-flight 的 mapPoolLeakTask run 在下次入口检查
+        // 时 short-circuit，避免它在 database.close() 之后才读 DB（use-after-close）。
+        shuttingDown = true;
+        // 0.4.10 P3-11：先 cancel 异步周期任务，再关 DB（顺序保证 cancel 后不会再有新 run 排进
+        // 队列触发 DB 访问）。Bukkit cancel() 不等 in-flight，shuttingDown flag 兜住已入队的 run。
         if (tokenPurgeTask != null) {
-            tokenPurgeTask.cancel();
+            closeQuietly("tokenPurgeTask.cancel", tokenPurgeTask::cancel);
             tokenPurgeTask = null;
         }
         if (mapPoolLeakTask != null) {
-            mapPoolLeakTask.cancel();
+            closeQuietly("mapPoolLeakTask.cancel", mapPoolLeakTask::cancel);
             mapPoolLeakTask = null;
         }
+        // 0.4.10 P2-50：每个资源 shutdown 步骤独立 try/catch（closeQuietly）——一个抛异常不
+        // 跳过后续释放，HikariDataSource / executor 等非 Bukkit 托管资源必须保证关到。
+        // 0.4.0-P1-E：先停 provider daemon，让守护线程池 awaitTermination 完成 + provider
+        // shutdown 钩子释放资源；放最前是因为 daemon 内部 refresh task 可能引用 store / DB。
+        if (variableProviderDaemon != null) {
+            closeQuietly("variableProviderDaemon.shutdown", variableProviderDaemon::shutdown);
+            variableProviderDaemon = null;
+        }
+        if (sessionReaper != null) {
+            closeQuietly("sessionReaper.stop", sessionReaper::stop);
+            sessionReaper = null;
+        }
         if (webServer != null) {
-            webServer.stop();
+            closeQuietly("webServer.stop", webServer::stop);
             webServer = null;
         }
         if (uploadHandler != null) {
-            uploadHandler.shutdown();
+            closeQuietly("uploadHandler.shutdown", uploadHandler::shutdown);
             uploadHandler = null;
         }
         if (imageStorage != null) {
-            imageStorage.shutdown();
+            closeQuietly("imageStorage.shutdown", imageStorage::shutdown);
             imageStorage = null;
         }
+        // 0.4.10 P3-29：停字体 metrics 后台 worker（中断 + join）+ 清 FontMetricsTable 内存表，
+        // 防（热）卸载后 worker 线程泄漏 / 旧 metrics 残留致下次 onEnable 双端布局不一致。
+        if (fontRegistry != null) {
+            closeQuietly("fontRegistry.shutdownMetricsWorker", fontRegistry::shutdownMetricsWorker);
+        }
+        closeQuietly("FontMetricsTable.clear", moe.hikari.canvas.render.FontMetricsTable::clear);
+        // database.close() 必须在异步任务 cancel + daemon shutdown 之后（它们可能引用 DB）。
         if (database != null) {
-            database.close();
+            closeQuietly("database.close", database::close);
             database = null;
+        }
+        // 0.4.10 P2-82：恢复 onEnable 从进程级 IIORegistry 注销的 ImageReaderSpi——否则同 JVM
+        // 别的插件读 GIF/BMP/TIFF 在本插件（热）卸载后永久失败。registerServiceProvider 即重新
+        // 可用（ordering 不还原无妨）。逐个 try/catch 防一个失败拖垮后续 + PacketEvents.terminate。
+        if (!deregisteredImageReaders.isEmpty()) {
+            try {
+                javax.imageio.spi.IIORegistry registry =
+                        javax.imageio.spi.IIORegistry.getDefaultInstance();
+                int restored = 0;
+                for (javax.imageio.spi.ImageReaderSpi spi : deregisteredImageReaders) {
+                    try {
+                        registry.registerServiceProvider(spi);
+                        restored++;
+                    } catch (Exception e) {
+                        getLogger().log(java.util.logging.Level.WARNING,
+                                "IIORegistry: failed to restore reader " + spi.getClass().getName(), e);
+                    }
+                }
+                getLogger().info("IIORegistry: restored " + restored + " image reader(s)");
+            } catch (Exception e) {
+                getLogger().log(java.util.logging.Level.WARNING,
+                        "IIORegistry restore failed (non-fatal)", e);
+            }
+            deregisteredImageReaders.clear();
         }
         try {
             PacketEvents.getAPI().terminate();
         } catch (Exception ignored) {
             // terminate 在未 init 时可能抛；M1 不关心
         }
-        getLogger().info("HikariCanvas disabled");
+    }
+
+    /**
+     * 0.4.10 P2-50：onDisable / onEnable-fail 用——执行一个 shutdown 动作，捕获并 WARNING 记录任何
+     * {@link Throwable}，保证后续资源释放步骤不被前面的异常跳过。
+     *
+     * @param name   动作名（仅用于日志定位）
+     * @param action 关闭动作（如 {@code database::close}）
+     */
+    private void closeQuietly(String name, Runnable action) {
+        try {
+            action.run();
+        } catch (Throwable t) {
+            getLogger().log(java.util.logging.Level.WARNING,
+                    "cleanup: " + name + " failed (continuing)", t);
+        }
     }
 
 }

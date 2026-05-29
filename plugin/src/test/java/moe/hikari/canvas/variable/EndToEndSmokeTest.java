@@ -2,6 +2,7 @@ package moe.hikari.canvas.variable;
 
 import moe.hikari.canvas.api.NamespaceInfo;
 import moe.hikari.canvas.api.PluginNamespaceException;
+import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.variable.plugin.HikariCanvasAPIImpl;
 import moe.hikari.canvas.variable.plugin.PluginCleanupListener;
@@ -53,6 +54,13 @@ class EndToEndSmokeTest {
     private VariableProviderDaemon daemon;
     private PluginNamespaceRegistry registry;
     private HikariCanvasAPIImpl api;
+    /**
+     * 0.4.10 P3-4：null jdbi 的 AuditLog —— record() 内 jdbi.useHandle 抛 NPE 被 catch，
+     * 走 log fallback（fire-and-forget），不破坏 checkAcl 拒绝路径。spoof 拒绝时执行
+     * recordNamespaceDenied → auditLog.record 这条新增路径，验证装配链通畅。
+     * （捕获 + 断言事件内容需给 AuditLog 加接口 —— storage/ 域，见 deferred。）
+     */
+    private AuditLog auditLog;
 
     @BeforeEach
     void setUp() {
@@ -61,8 +69,9 @@ class EndToEndSmokeTest {
         interp = new VariableInterpolator(store);
         daemon = new VariableProviderDaemon();
         registry = new PluginNamespaceRegistry();
+        auditLog = new AuditLog(null, Logger.getLogger("test"));
         api = new HikariCanvasAPIImpl(registry, store, daemon,
-                new PushRateLimiter(PushRateLimiter.Config.unlimited()));
+                new PushRateLimiter(PushRateLimiter.Config.unlimited()), auditLog);
     }
 
     @AfterEach
@@ -152,7 +161,7 @@ class EndToEndSmokeTest {
                 new PushRateLimiter.Config(5, 1_000_000, 0L),
                 () -> fixedNow);
         // 重建 API 用窄限流器
-        HikariCanvasAPIImpl rlApi = new HikariCanvasAPIImpl(registry, store, daemon, limiter);
+        HikariCanvasAPIImpl rlApi = new HikariCanvasAPIImpl(registry, store, daemon, limiter, auditLog);
         Plugin pluginA = fakePlugin("PluginA");
         rlApi.registerNamespace(pluginA, "test", new NamespaceInfo("Test", "PluginA", "1.0"));
 
@@ -174,6 +183,8 @@ class EndToEndSmokeTest {
         Plugin pluginB = fakePlugin("PluginB");
         api.registerNamespace(pluginA, "alpha", new NamespaceInfo("A", "PluginA", "1.0"));
 
+        // 0.4.10 P3-4：spoof 被拒走 recordNamespaceDenied → auditLog.record（null jdbi 下 fallback
+        // 到 log，不抛）—— 验证该路径不破坏拒绝语义。事件内容断言需 AuditLog 接口化（storage 域）。
         PluginNamespaceException ex = assertThrows(PluginNamespaceException.class,
                 () -> api.setVariable(pluginB, "alpha", "k", "v", null));
         assertEquals(PluginNamespaceException.Code.NAMESPACE_ACL_DENIED, ex.code());

@@ -5,6 +5,7 @@ import moe.hikari.canvas.api.NamespaceConflictException;
 import moe.hikari.canvas.api.NamespaceInfo;
 import moe.hikari.canvas.api.PluginNamespaceException;
 import moe.hikari.canvas.api.VariableUpdate;
+import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.variable.VarType;
 import moe.hikari.canvas.variable.Variable;
@@ -57,6 +58,8 @@ class HikariCanvasAPIImplTest {
     private VariableProviderDaemon daemon;
     private PluginNamespaceRegistry registry;
     private HikariCanvasAPIImpl api;
+    /** 0.4.10 P3-4：null jdbi 的 AuditLog —— record() 的 jdbi.useHandle 抛 NPE 被吞，走 log fallback。 */
+    private AuditLog auditLog;
     private Plugin pluginA;
     private Plugin pluginB;
 
@@ -66,8 +69,9 @@ class HikariCanvasAPIImplTest {
         store = new VariableStore(fakeDao, w -> { });
         daemon = new VariableProviderDaemon();
         registry = new PluginNamespaceRegistry();
+        auditLog = new AuditLog(null, Logger.getLogger("test"));
         api = new HikariCanvasAPIImpl(registry, store, daemon,
-                new PushRateLimiter(PushRateLimiter.Config.unlimited()));
+                new PushRateLimiter(PushRateLimiter.Config.unlimited()), auditLog);
         pluginA = fakePlugin("PluginA");
         pluginB = fakePlugin("PluginB");
     }
@@ -378,13 +382,15 @@ class HikariCanvasAPIImplTest {
     void constructor_nullArgs_throws() {
         PushRateLimiter fakeLimiter = new PushRateLimiter(PushRateLimiter.Config.unlimited());
         assertThrows(NullPointerException.class,
-                () -> new HikariCanvasAPIImpl(null, store, daemon, fakeLimiter));
+                () -> new HikariCanvasAPIImpl(null, store, daemon, fakeLimiter, auditLog));
         assertThrows(NullPointerException.class,
-                () -> new HikariCanvasAPIImpl(registry, null, daemon, fakeLimiter));
+                () -> new HikariCanvasAPIImpl(registry, null, daemon, fakeLimiter, auditLog));
         assertThrows(NullPointerException.class,
-                () -> new HikariCanvasAPIImpl(registry, store, null, fakeLimiter));
+                () -> new HikariCanvasAPIImpl(registry, store, null, fakeLimiter, auditLog));
         assertThrows(NullPointerException.class,
-                () -> new HikariCanvasAPIImpl(registry, store, daemon, null));
+                () -> new HikariCanvasAPIImpl(registry, store, daemon, null, auditLog));
+        assertThrows(NullPointerException.class,
+                () -> new HikariCanvasAPIImpl(registry, store, daemon, fakeLimiter, null));
     }
 
     // ──────────────────────────────────────────────────────────

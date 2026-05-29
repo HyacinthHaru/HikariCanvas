@@ -18,10 +18,13 @@
  *   <li>同步 text prop ↔ EditorState（避免 outer ↔ inner 互相打架的环：external watch 改 vs
  *     local update 改各自带 guard）</li>
  *   <li>chip hover：tooltip 显示原始 placeholder + currentValue + source</li>
- *   <li>chip click：emit editVariableRequest，外层弹 VariablePicker 改绑定</li>
- *   <li>{@code ${} 触发：监听 update listener 检测最近输入的 2 字符是否触发 picker</li>
- *   <li>store 变化时更新 chip DOM 文本（currentValue / fallback / "???"）</li>
+ *   <li>store 变化时更新 chip DOM 文本（alias / currentValue / fallback / "???"，stale 走 fallback 链）</li>
  * </ul>
+ *
+ * <p>P3-108：picker 仅由外层"插入变量"按钮触发（外层调 {@link insertVariableChip} 经
+ * defineExpose）；0.4.2 "Bug 2 彻底版" 已移除 chip click 改绑定 / 错误态补创 / {@code ${}
+ * 自动弹 picker 等内部触发路径。{@code insert/edit/createVariableRequest} 三个 emit 仍保留为
+ * 对外契约（外层 TextElementSection / TextInlineEditor 监听），但当前无内部 emit 触发点。</p>
  *
  * <h4>props 摘要</h4>
  * <ul>
@@ -47,13 +50,12 @@ import { registerHistory, createEmptyHistoryState } from '@lexical/history';
 import { mergeRegister } from '@lexical/utils';
 import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
-import { UNRESOLVED, resolveFullName } from '@/variable/interpolator';
+import { UNRESOLVED, resolveFullName, isStale } from '@/variable/interpolator';
 import { useI18n } from '@/i18n';
 import {
     CHIP_CLASS,
     CHIP_DATA_FALLBACK,
     CHIP_DATA_RAW_NAME,
-    CHIP_EVENT_CLICK,
     CHIP_EVENT_HOVER,
     CHIP_EVENT_LEAVE,
     VariablePlaceholderNode,
@@ -111,6 +113,17 @@ const tooltipRawName = ref('');
 const tooltipFallback = ref<string | null>(null);
 
 /**
+ * P3-10：墙钟节拍。带 TTL 的变量在 stale 窗口内（Provider / 插件停止刷新时）后端走 fallback，
+ * 但前端 mirror 的 currentValue 不会被动清掉。staleTick 由 mount 期定时器自增，驱动
+ * tooltipDisplayValue computed 与 refreshAllChipDisplays 重算，使过期值随墙钟到期自动切到
+ * fallback → default → UNRESOLVED，避免预览停滞在已过期旧值上（与后端展示一致）。
+ */
+const staleTick = ref(0);
+let staleTimer: ReturnType<typeof setInterval> | null = null;
+/** stale 重算节拍间隔（ms）。1s 足够细——TTL 多为秒级，过期可见延迟 ≤ 1s。 */
+const STALE_TICK_MS = 1000;
+
+/**
  * P3.2：chip 缩放因子。根据 props.fontSize 在 [0.6, 1.2] 范围 clamp，让 chip
  * pill 在极小（fontSize=6 → 0.6×）/ 极大（fontSize=120 → 1.2×）字号下都保持
  * 视觉协调。CSS 通过 `--chip-scale` 变量消费（padding / border-radius 跟着缩）。
@@ -130,8 +143,12 @@ const tooltipVariable = computed(() => {
     return store.get(tooltipFullName.value) ?? null;
 });
 const tooltipDisplayValue = computed(() => {
+    // staleTick 让此 computed 依赖墙钟节拍，TTL 过期后 tooltip 自动从 cached 切到 fallback。
+    void staleTick.value;
     const v = tooltipVariable.value;
-    if (v && v.currentValue != null && v.currentValue.length > 0) return v.currentValue;
+    // P3-10：cached 非空且未过期才显示；stale（ttl 过期）跳过走 fallback 链，与后端 / interpolate 一致。
+    if (v && v.currentValue != null && v.currentValue.length > 0
+            && !isStale(v.ttl, v.updatedAt, Date.now())) return v.currentValue;
     if (tooltipFallback.value != null) return tooltipFallback.value;
     if (v && v.defaultValue != null) return v.defaultValue;
     return UNRESOLVED;
@@ -147,8 +164,6 @@ let editor: ReturnType<typeof createEditor> | null = null;
 let unregisterAll: (() => void) | null = null;
 /** flag：external watch 在改 editor 内容，避免触发 onUpdate 回写 props.text 引起循环。 */
 let writingExternal = false;
-/** 最近的 ${ 触发 anchor：textarea -> contenteditable 转换后由 caret 找最近 chip 容器。 */
-let lastDollarBraceAnchor: HTMLElement | null = null;
 /**
  * 0.4.2 bugfix（Bug 3）：IME composition flag。中文 / 日文 / 韩文输入法在 compose 期间
  * 会持续触发 update listener（每按一键 dirtyLeaves > 0），把临时拼音字符 emit('update:text')
@@ -208,26 +223,20 @@ onMounted(() => {
                 if (newText !== props.text) {
                     emit('update:text', newText);
                 }
-                // 0.4.2 bugfix（Bug 2 彻底版）：${ 触发检测从 update listener 内移除，改用原生
-                // beforeinput event 在 onBeforeInput 内精确捕捉（inputType=insertText + data='{'
-                // 且前一字符是 $）。原 dirtyLeaves 守卫无效——lexical click 后 caret 落位仍标
-                // dirtyLeaves，会把"用户只是点击编辑框现有 ${ 字面后位置"误判为输入。
+                // P3-108：${} 自动弹 picker 已废弃（picker 仅由"插入变量"按钮触发，见顶部 JSDoc）。
             });
             // 文本变了 → store 仍然可能没变；刷一遍 chip 显示
             refreshAllChipDisplays();
         }),
     );
 
-    // chip 事件代理（mount 时挂在 editable root，捕获冒泡上来的自定义事件）
-    // 0.4.2 bugfix（Bug 2 彻底版）：chip span 不再 dispatch CHIP_EVENT_CLICK，
-    // 但 listener 仍保留作 no-op（不破坏 ParentChild contract）；hover/leave 是 tooltip 必需。
+    // chip 事件代理（mount 时挂在 editable root，捕获冒泡上来的自定义事件）。
+    // P3-108：chip 仅 dispatch hover / leave（tooltip 用），不再有 click 路径。
     editableRef.value.addEventListener(CHIP_EVENT_HOVER, onChipHover as EventListener);
     editableRef.value.addEventListener(CHIP_EVENT_LEAVE, onChipLeave as EventListener);
     editableRef.value.addEventListener('keydown', onEditableKeydown);
     editableRef.value.addEventListener('blur', onEditableBlur);
-    // 0.4.2 bugfix（Bug 3 保留）：composition 守 IME 输入；
-    // 0.4.2 bugfix（Bug 2 彻底版）：移除 beforeinput → ${} 自动触发 picker 路径——
-    // 用户只想 "插入变量" 按钮触发（外层 TextElementSection openPickerFromButton）。
+    // 0.4.2 bugfix（Bug 3 保留）：composition 守 IME 输入。
     editableRef.value.addEventListener('compositionstart', onCompositionStart);
     editableRef.value.addEventListener('compositionend', onCompositionEnd);
 
@@ -240,6 +249,13 @@ onMounted(() => {
 
     // 首次刷 chip 显示
     refreshAllChipDisplays();
+
+    // P3-10：定时重渲 — 让带 TTL 变量过期后 chip / tooltip 自动从 cached 切到 fallback。
+    // 仅自增 staleTick + 刷 chip DOM，无网络 / 无重排，开销可忽略。
+    staleTimer = setInterval(() => {
+        staleTick.value++;
+        refreshAllChipDisplays();
+    }, STALE_TICK_MS);
 
     if (props.autoFocus) {
         // setRootElement 完后下一 microtask focus 才稳
@@ -261,6 +277,11 @@ onBeforeUnmount(() => {
         try { unsub(); } catch { /* ignore */ }
     }
     storeUnsubscribers.length = 0;
+    // P3-10：清 stale 重渲定时器
+    if (staleTimer !== null) {
+        clearInterval(staleTimer);
+        staleTimer = null;
+    }
 });
 
 onUnmounted(() => {
@@ -321,6 +342,8 @@ watch(
 function refreshAllChipDisplays(): void {
     const root = editableRef.value;
     if (!root) return;
+    // P3-10：单次刷新内用同一 now，避免一段文本内多个 chip 的 staleness 判定时钟漂移。
+    const now = Date.now();
     const chips = root.querySelectorAll<HTMLElement>(`.${CHIP_CLASS}`);
     chips.forEach((chip) => {
         const rawName = chip.getAttribute(CHIP_DATA_RAW_NAME) ?? '';
@@ -334,8 +357,11 @@ function refreshAllChipDisplays(): void {
         let displayValue: string;
         let deleted = false;
         if (v) {
+            // P3-10：cached 非空且未过期才用；stale（ttl 过期）跳过走 fallback 链，与后端一致。
+            // alias 是用户命名，始终优先（与动态值新鲜度无关）。
             if (alias != null && alias.length > 0) displayValue = alias;
-            else if (v.currentValue != null && v.currentValue.length > 0) displayValue = v.currentValue;
+            else if (v.currentValue != null && v.currentValue.length > 0
+                    && !isStale(v.ttl, v.updatedAt, now)) displayValue = v.currentValue;
             else if (fallback != null) displayValue = fallback;
             else if (v.defaultValue != null) displayValue = v.defaultValue;
             else displayValue = UNRESOLVED;
@@ -350,28 +376,8 @@ function refreshAllChipDisplays(): void {
 }
 
 // ============================================================================
-// chip 事件处理（hover / click）
+// chip 事件处理（hover）
 // ============================================================================
-
-function onChipClick(ev: CustomEvent<{ rawName: string; fallback: string | null }>) {
-    if (props.disabled) return;
-    const target = ev.target as HTMLElement;
-    // P3.4：点击红 chip（error 态 = 变量缺失）→ 走 create 路径而非 editVariableRequest。
-    // edit picker 在缺失变量时帮不上忙（变量都不存在选啥），改弹"是否立即创建"。
-    const isError = target.classList.contains('hc-chip-error');
-    if (isError) {
-        emit('createVariableRequest', {
-            rawName: ev.detail.rawName,
-            anchor: target,
-        });
-        return;
-    }
-    emit('editVariableRequest', {
-        rawName: ev.detail.rawName,
-        fallback: ev.detail.fallback,
-        anchor: target,
-    });
-}
 
 function onChipHover(ev: CustomEvent<{ rawName: string; fallback: string | null }>) {
     const target = ev.target as HTMLElement;
@@ -416,43 +422,11 @@ function onEditableBlur() {
 }
 
 // ============================================================================
-// ${ 触发检测：用户在 contenteditable 内打字 → 检查 caret 前两字符
+// IME composition 守卫（中文 / 日文 / 韩文输入法）
 // ============================================================================
-
-/**
- * 0.4.2 bugfix（Bug 2）：原生 beforeinput 监听精确捕捉 ${ 触发。
- *
- * <p>之前 detect 挂在 lexical update listener 内 + dirtyLeaves > 0 守卫，仍会在
- * 用户点击编辑框（caret 落到现有 ${ 字面后位置）时误弹 picker——lexical 把 click
- * 后 caret 落位标 dirtyLeaves。改用 {@code beforeinput} 只对实际"插入字符"event
- * 触发：inputType=insertText + data='{' + 前一字符是 '$' 才弹 picker。</p>
- *
- * <p>注意：beforeinput 在浏览器把字符 commit 到 lexical **之前**触发，所以"前一字符"
- * 直接读 lexical 当前 text 即可（{ 还没插入），用 {@code queueMicrotask} 延后实际
- * picker 弹出确保 lexical 已 commit。</p>
- */
-function onBeforeInput(ev: InputEvent) {
-    if (ev.inputType !== 'insertText') return;
-    if (ev.data !== '{') return;
-    if (!editor || props.disabled) return;
-    let prevIsDollar = false;
-    editor.read(() => {
-        const sel = $getSelection();
-        if (!$isRangeSelection(sel) || !sel.isCollapsed()) return;
-        const anchor = sel.anchor;
-        const node = anchor.getNode();
-        if (node.getType() !== 'text') return;
-        const text = node.getTextContent();
-        const offset = anchor.offset;
-        if (offset >= 1 && text.substring(offset - 1, offset) === '$') {
-            prevIsDollar = true;
-        }
-    });
-    if (!prevIsDollar) return;
-    // 异步弹 picker：让 `{` 已经被 lexical commit 到 EditorState 后，
-    // detectDollarBraceTrigger 内 caret offset 检测能命中 "${" 两字符。
-    queueMicrotask(() => detectDollarBraceTrigger());
-}
+//
+// P3-108：原 onBeforeInput / detectDollarBraceTrigger（${} 自动弹 picker）已在 0.4.2
+// "Bug 2 彻底版"废弃并删除——picker 改由外层"插入变量"按钮触发（见顶部 JSDoc）。
 
 /** 0.4.2 bugfix（Bug 3）：IME composition 开始 → 屏蔽 emit 防中断。 */
 function onCompositionStart() {
@@ -476,46 +450,6 @@ function onCompositionEnd() {
         }
     });
     refreshAllChipDisplays();
-}
-
-function detectDollarBraceTrigger(): void {
-    if (!editor) return;
-    let triggered = false;
-    let anchorEl: HTMLElement | null = null;
-    editor.read(() => {
-        const sel = $getSelection();
-        if (!$isRangeSelection(sel) || !sel.isCollapsed()) return;
-        const anchor = sel.anchor;
-        const node = anchor.getNode();
-        if (node.getType() !== 'text') return;
-        const text = node.getTextContent();
-        const offset = anchor.offset;
-        if (offset >= 2 && text.substring(offset - 2, offset) === '${') {
-            triggered = true;
-        }
-    });
-    if (triggered && editableRef.value) {
-        // 取当前 caret 的 client rect 作 anchor
-        const domSel = window.getSelection();
-        if (domSel && domSel.rangeCount > 0) {
-            const range = domSel.getRangeAt(0);
-            const rects = range.getClientRects();
-            if (rects.length > 0) {
-                const rect = rects[0];
-                // 制造一个隐藏 anchor 元素，但实际我们直接 emit editable 容器
-                anchorEl = editableRef.value;
-                lastDollarBraceAnchor = anchorEl;
-                // 同时更新 anchor 内的位置（外层 picker 自行决定怎么 position）
-                anchorEl.dataset.caretX = String(rect.left);
-                anchorEl.dataset.caretY = String(rect.bottom);
-            } else {
-                anchorEl = editableRef.value;
-            }
-        } else {
-            anchorEl = editableRef.value;
-        }
-        emit('insertVariableRequest', anchorEl);
-    }
 }
 
 // ============================================================================
@@ -727,8 +661,8 @@ defineExpose({
     background-color: color-mix(in srgb, var(--ctp-mauve) 36%, transparent);
     border-color: color-mix(in srgb, var(--ctp-mauve) 58%, transparent);
 }
-/* P3.4：error 态（变量缺失）→ destructive red + 删除线 + ⚠ 前缀；click 走
-   createVariableRequest 路径（外层弹"是否立即创建"确认） */
+/* error 态（变量缺失）→ destructive red + 删除线 + ⚠ 前缀（视觉提示；P3-108：chip click
+   补创路径已废弃，缺失提示另见 TextElementVariableHints 红色 banner） */
 .hc-var-chip.hc-chip-error {
     background-color: color-mix(in srgb, var(--ctp-red) 18%, transparent);
     color: var(--ctp-red);

@@ -57,9 +57,14 @@ export function useMarqueeSelection() {
 
         const layer = project.activeLayer;
         const hits: string[] = [];
-        for (const el of layer.elements) {
-            if (!el.visible) continue;
-            if (bboxIntersects(el, minX, minY, maxX, maxY)) hits.push(el.id);
+        // P3-27：活动层被隐藏时其元素在画布上不渲染（PreviewRenderer `if(!layer.visible) continue`），
+        // 应同样不可框选——与 useSnapManager 的 `layer.visible && el.visible` 语义对齐，
+        // 避免"隐藏却可交互"的错乱。layer.visible 为真时再按 el.visible 逐元素过滤。
+        if (layer.visible !== false) {
+            for (const el of layer.elements) {
+                if (!el.visible) continue;
+                if (bboxIntersects(el, minX, minY, maxX, maxY)) hits.push(el.id);
+            }
         }
 
         if (m.additive) {

@@ -104,6 +104,37 @@ public final class TemplateRegistry {
         throw new ForbiddenTemplateException(id);
     }
 
+    /**
+     * P2-1：ready / list 端点用的可见性过滤，与 {@link #byIdForApply} 共用同一隔离判定。
+     *
+     * <p>背景：之前 ready 帧把全量 {@link TemplateSpec}（含 user-template 的完整
+     * {@code raw_state} 画布内容）下发给每个已认证 session，玩家 B 即可读取玩家 A 私有
+     * 模板的全部设计，使 {@code byIdForApply} 的 apply 端隔离形同虚设。</p>
+     *
+     * <p>规则（与 {@link #byIdForApply} 对齐）：</p>
+     * <ul>
+     *   <li>builtin / server 模板（{@code ownerUuid} empty）→ 始终可见</li>
+     *   <li>{@code hasBypass}（{@code canvas.template.use-others}）→ 全部可见</li>
+     *   <li>USER 模板且 {@code ownerUuid} == {@code callerUuid} → 可见</li>
+     *   <li>其余 USER 模板 → 整条剔除（不下发 spec / rawState）</li>
+     * </ul>
+     *
+     * @param callerUuid 请求方玩家 UUID；{@code null} 等同非 owner
+     * @param hasBypass  调用方是否持 {@code canvas.template.use-others}
+     * @return 调用方可见的 {@link TemplateEntry} 列表（读 volatile 快照一次，安全暴露）
+     */
+    public List<TemplateEntry> listVisibleTo(UUID callerUuid, boolean hasBypass) {
+        List<TemplateEntry> visible = new java.util.ArrayList<>();
+        for (TemplateEntry entry : entries.values()) {
+            Optional<UUID> owner = entry.ownerUuid();
+            if (owner.isEmpty() || hasBypass
+                    || (callerUuid != null && callerUuid.equals(owner.get()))) {
+                visible.add(entry);
+            }
+        }
+        return visible;
+    }
+
     public int size() {
         return entries.size();
     }

@@ -1,5 +1,5 @@
 /**
- * M8 远期 TODO 项 3：useAlignDistribute 纯函数测试。
+ * useAlignDistribute 纯函数测试。
  *
  * 覆盖：align left/center/right + top/middle/bottom + distribute h/v + 边界 case：
  *   - 1 元素返空

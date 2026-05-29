@@ -48,13 +48,14 @@ import java.util.stream.Collectors;
  * <p>per-wall {@code wall.*} 变量注册时机：</p>
  * <ol>
  *   <li>启动时 {@link #initialize()} 遍历 {@link DataSource#allWallIds()} 一次性注册；</li>
- *   <li>wall 删除时由 {@link VariableStore#clearWallReferences(String)} 上游 hook 联动清理
- *       变量本身（{@code system:<wid>/wall.*} 走 {@link #unregisterWall(String)}）。</li>
+ *   <li><b>运行期新建的 wall</b>（如 {@code /canvas confirm} 全空新建分支）走 dynamic-lookup
+ *       兜底：{@link #initialize()} 注册 {@link VariableStore#registerDynamicLookupHook} hook，
+ *       interpolator 遇 {@code system:<wid>/wall.*} miss → {@link VariableStore#notifyDynamicLookup}
+ *       → 本 Provider lazy {@link #registerWall(String)}（与 ScoreboardVariableProvider /
+ *       PapiVariableBridge 同款）。首次渲染走 fallback {@code "???"}，下一 tick 起有数据；</li>
+ *   <li>wall 删除时由 HikariCanvas#onEnable 挂的 wallDeleteHook 联动 {@link #unregisterWall(String)}
+ *       清理变量本身（{@code system:<wid>/wall.*}）。</li>
  * </ol>
- *
- * <p>nameSpace 创建 hook 暂无：新 wall 通过下一次 refresh tick 时检测 + 注册（或显式调
- * {@link #registerWall(String)}）。HikariCanvas#onEnable 装配时给 SessionManager 提供 hook
- * 转发——见 P3-J 的 ProviderBootstrap.initialize 装配。</p>
  *
  * @see docs/dynamic-data.md §7.1
  */
@@ -66,6 +67,8 @@ public final class SystemVariableProvider implements VariableProvider {
     public static final String NAMESPACE = "system";
     /** Daemon refresh interval（最小公约：server.tick = 1s）。 */
     public static final long BASE_REFRESH_INTERVAL_MS = 1000L;
+    /** per-wall alias 刷新节流间隔（与 wall.alias TTL=5s 一致；P2-83）。 */
+    public static final long PER_WALL_ALIAS_INTERVAL_MS = 5_000L;
 
     /** server.time 格式化器（24h HH:mm）。 */
     private static final DateTimeFormatter TIME_FMT =
@@ -99,6 +102,12 @@ public final class SystemVariableProvider implements VariableProvider {
     /** 已注册的 per-wall（wallId set）。Concurrent 让 registerWall / unregisterWall / refresh 共用。 */
     private final java.util.Set<String> registeredWalls =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /**
+     * P2-83：per-wall alias 上次 push 时刻（ms epoch）。refresh() 每 1s 跑一次（与 server.tick 同
+     * 公约），但 wall.alias TTL=5s + 极少变 —— 用此表把每 wall 的 DB 查询/刷新收到 5s 一次，
+     * 避免 N 个 wall × 1 SELECT/s 永续浪费 HikariCP 连接池。
+     */
+    private final Map<String, Long> lastAliasPushAt = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * 生产构造：注入 plugin + WallRepo。内部组装 {@link DataSource} 默认 Bukkit 实现。
@@ -150,6 +159,14 @@ public final class SystemVariableProvider implements VariableProvider {
     @Override
     public void initialize() {
         long now = System.currentTimeMillis();
+        // P2-32：运行期新建 wall 走 dynamic-lookup 兜底。interpolator 遇 system:<wid>/wall.* miss
+        // → notifyDynamicLookup("system:<wid>/wall.X")（namespace 提取为 "system:<wid>"）→ 本 hook
+        // 解析 wallId lazy registerWall。与 ScoreboardVariableProvider.handleDynamic 同款模式。
+        store.registerDynamicLookupHook((fullName, namespace) -> {
+            if (namespace != null && namespace.startsWith(NAMESPACE + ":")) {
+                handleDynamicWall(namespace.substring(NAMESPACE.length() + 1));
+            }
+        });
         // 全局：注册 8 个 system/<key>，立即填一次 next refresh 时刻
         for (SystemKey k : GLOBAL_KEYS) {
             String fullName = NAMESPACE + "/" + k.key;
@@ -190,9 +207,13 @@ public final class SystemVariableProvider implements VariableProvider {
                         "system var refresh failed: " + k.key + " — " + e.getMessage(), e);
             }
         }
-        // per-wall keys：所有已注册 wall 的 wall.alias 每 5s 刷新即可（其他 3 个永久变量没必要）
-        // 简化：每次 refresh 都尝试刷一遍 alias；其他永久 key 启动期已写，跳过
+        // per-wall keys：所有已注册 wall 的 wall.alias 每 5s 刷新即可（其他 3 个永久变量没必要）。
+        // P2-83：用 lastAliasPushAt 节流——refresh() 本身 1s 一跑，但 alias TTL=5s + 极少变，
+        // 不该每 tick 对每个 wall 发一条 SELECT * FROM walls；按 PER_WALL_ALIAS_INTERVAL_MS（5s）收敛。
         for (String wallId : registeredWalls) {
+            Long last = lastAliasPushAt.get(wallId);
+            if (last != null && now - last < PER_WALL_ALIAS_INTERVAL_MS) continue;
+            lastAliasPushAt.put(wallId, now);
             try {
                 pushPerWallAlias(wallId);
                 anyPushed = true;
@@ -209,6 +230,17 @@ public final class SystemVariableProvider implements VariableProvider {
     public void shutdown() {
         nextRefreshAt.clear();
         registeredWalls.clear();
+        lastAliasPushAt.clear();
+    }
+
+    /**
+     * P2-32：dynamic-lookup hook 上来的 per-wall 懒注册。namespace 形如 {@code system:<wallId>}，
+     * 此处 wallId 已是去掉 {@code "system:"} 前缀后的部分。registerWall 自带 add 幂等 + 永久值填充。
+     */
+    void handleDynamicWall(String wallId) {
+        if (wallId == null || wallId.isEmpty()) return;
+        if (registeredWalls.contains(wallId)) return; // 已注册，跳过 DB 往返
+        registerWall(wallId);
     }
 
     /**
@@ -255,6 +287,7 @@ public final class SystemVariableProvider implements VariableProvider {
     public void unregisterWall(String wallId) {
         if (wallId == null || wallId.isEmpty()) return;
         if (!registeredWalls.remove(wallId)) return;
+        lastAliasPushAt.remove(wallId);
         String ns = NAMESPACE + ":" + wallId;
         for (SystemKey k : PER_WALL_KEYS) {
             try {
@@ -278,9 +311,17 @@ public final class SystemVariableProvider implements VariableProvider {
             } catch (Exception e) {
                 log.log(Level.WARNING,
                         "system var compute failed: " + k.key, e);
+                // 0.4.10 P3-45：compute 异常也回退 nextRefreshAt 让下个 tick 重试，而非等满 TTL
+                nextRefreshAt.put(k.key, System.currentTimeMillis());
                 return;
             }
-            if (value == null) return;
+            if (value == null) {
+                // 0.4.10 P3-45：value 暂不可用（如 tick / tps 尚未就绪）。refresh() 已把
+                // nextRefreshAt 推进到 now+ttl —— 若不回退，这个 key 要等满一个 TTL（最长 1h）
+                // 才重试。回退到当前时刻 → 下个 1s tick 即重试。ConcurrentHashMap 幂等写。
+                nextRefreshAt.put(k.key, System.currentTimeMillis());
+                return;
+            }
             try {
                 store.setValue(NAMESPACE + "/" + k.key, value, Duration.ofMillis(k.ttlMs));
             } catch (VariableException e) {

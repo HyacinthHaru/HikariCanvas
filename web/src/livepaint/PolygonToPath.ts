@@ -61,7 +61,10 @@ function maybeSimplify(poly: Polygon, baseTolerance: number): Polygon {
             + ' Server may reject the path; consider deleting overlapping elements.',
         );
     }
-    return simplified;
+    // 与 ≤180 分支对齐：极端 tolerance 把 sliver 外环吸收到 2 点退化时，
+    // 兜底返回未简化原 polygon（上游已保证 ≥3 顶点且面积 ≥ MIN_GAP_AREA），
+    // 避免生成零面积退化路径 d（M..L..Z 仅两点）落库后渲染成不可见线段。
+    return simplified.length >= 3 ? simplified : poly;
 }
 
 /** 一个 GapPolygon → 多 subpath SVG d 字符串。坐标 = 输入坐标系。 */

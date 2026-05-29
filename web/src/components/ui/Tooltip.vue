@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue';
+import { computed, onUnmounted, ref } from 'vue';
 
-defineProps<{
+const props = defineProps<{
     /** 主标题文字。可省略（仅用 slot:body） */
     text?: string;
     /** 显示位置；默认 bottom（按钮在顶/左时改成相应方向） */
@@ -49,13 +49,32 @@ function show(ev: MouseEvent) {
     const target = ev.currentTarget as HTMLElement;
     showTimer = window.setTimeout(() => {
         if (!target) return;
-        // 取 placement，默认 bottom；若 trigger 靠近视口顶部 < 60px 则强制 bottom
-        // 这部分可以做更智能的视口边界检测；先简单点
-        computedPlacement.value = 'bottom';
+        // P3-110：尊重 placement prop（默认 bottom）。视口边界自动翻转留待后续。
+        computedPlacement.value = props.placement ?? 'bottom';
         position(target, computedPlacement.value);
         visible.value = true;
     }, DELAY_MS);
 }
+
+/**
+ * P3-110：按 placement 切换 transform 锚点。
+ * - top/bottom 用 translateX(-50%) 水平居中（left = trigger 中点）
+ * - left 用 translate(-100%, -50%) 贴 trigger 左侧（left = trigger 左边 - GAP）
+ * - right 用 translateY(-50%) 贴 trigger 右侧（left = trigger 右边 + GAP）
+ */
+const tooltipTransform = computed(() => {
+    switch (computedPlacement.value) {
+        case 'top':
+            return 'translate(-50%, -100%)';
+        case 'left':
+            return 'translate(-100%, -50%)';
+        case 'right':
+            return 'translateY(-50%)';
+        case 'bottom':
+        default:
+            return 'translateX(-50%)';
+    }
+});
 
 function hide() {
     if (showTimer) {
@@ -92,7 +111,7 @@ onUnmounted(() => {
       <div
         v-if="visible && !disabled && (text || $slots.body)"
         class="hc-tooltip"
-        :style="{ top: `${top}px`, left: `${left}px` }"
+        :style="{ top: `${top}px`, left: `${left}px`, transform: tooltipTransform }"
       >
         <span v-if="text">{{ text }}</span>
         <slot name="body" />
@@ -109,7 +128,7 @@ onUnmounted(() => {
     position: fixed;
     z-index: 100;
     pointer-events: none;
-    transform: translateX(-50%);
+    /* transform 由 :style 按 placement 动态注入（P3-110）；此处不再写死 translateX(-50%) */
     padding: 0.35rem 0.6rem;
     font-size: 11px;
     line-height: 1.3;
@@ -117,7 +136,9 @@ onUnmounted(() => {
     background: var(--ctp-surface0);
     color: var(--foreground);
     border: 1px solid var(--ctp-surface1);
-    white-space: nowrap;
+    /* P3-110：改 normal + overflow-wrap，让 max-width:280px 对长文本生效（原 nowrap 使其失效横向溢出） */
+    white-space: normal;
+    overflow-wrap: anywhere;
     max-width: 280px;
     display: inline-flex;
     gap: 6px;

@@ -667,7 +667,11 @@ public final class PathParser {
         char c = s.charAt(i);
         if (c == '0') { outEndIdx[0] = i + 1; return 0; }
         if (c == '1') { outEndIdx[0] = i + 1; return 1; }
-        // 非 flag 字符，按数字扫描兜底（容错）
-        return scanNumber(s, i, outEndIdx);
+        // P3-21: 非 '0'/'1' 字符不是合法 flag——不再 fall-through 到 scanNumber
+        // （否则会把后续坐标数字误吞为 flag、错位整段弧参数）。返回 outEndIdx 不前进
+        // （== i），让调用方 line 144 的 `endIdx[0] == i` 守卫停止解析，与 scanNumber
+        // 遇非数字时的行为一致。
+        outEndIdx[0] = i;
+        return 0;
     }
 }

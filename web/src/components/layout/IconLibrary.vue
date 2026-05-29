@@ -227,8 +227,11 @@ function unobserveCell(el: Element | null): void {
 
 // IconLoader 全局回调：任何 id 加载完都 tick 一下让 grid 重渲染
 const onLoaderHook = (_id: string) => { pathCacheTick.value++; };
+// P3-40：onIconLoaded 返回 unsubscribe 闭包；onBeforeUnmount 调用注销，避免 IconLoader
+// 模块级 readyHandlers 数组只增不减（IconLibrary 反复挂载会泄漏旧闭包 + 重复 tick）。
+let unsubscribeIconLoaded: (() => void) | null = null;
 onMounted(() => {
-    onIconLoaded(onLoaderHook);
+    unsubscribeIconLoaded = onIconLoaded(onLoaderHook);
     attachVisibilityObserver();
     // sentinelRef 在初次渲染后才挂载
     requestAnimationFrame(() => attachSentinelObserver());
@@ -236,6 +239,10 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    if (unsubscribeIconLoaded) {
+        unsubscribeIconLoaded();
+        unsubscribeIconLoaded = null;
+    }
     if (visibilityObserver) {
         visibilityObserver.disconnect();
         visibilityObserver = null;

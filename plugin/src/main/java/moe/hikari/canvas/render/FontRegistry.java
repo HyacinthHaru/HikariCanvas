@@ -126,6 +126,14 @@ public final class FontRegistry {
     private final Logger log;
     private final Map<String, Registered> fonts = new HashMap<>();
 
+    /**
+     * P3-29：后台 metrics worker 线程引用（{@link #spawnMetricsWorker}）。持有它让
+     * {@code HikariCanvas#onDisable} 能 {@link #shutdownMetricsWorker()} interrupt + join，
+     * 避免热重载时旧 worker 仍跑（每用户字体 ~1-2s × N）+ pin 住旧 classloader 延迟 GC。
+     * volatile：spawn / shutdown 可能跨线程读写。
+     */
+    private volatile Thread metricsWorker;
+
     public FontRegistry(Logger log) {
         this.log = log;
     }
@@ -182,6 +190,16 @@ public final class FontRegistry {
                 String lower = fileName.toLowerCase();
                 if (!lower.endsWith(".ttf") && !lower.endsWith(".otf")) return;
                 String id = fileName.substring(0, fileName.lastIndexOf('.'));
+                // P3-23/P3-51：派生的 fontId 必须与 /api/font/file、/api/font/metrics 端点的
+                // 正则 [a-zA-Z0-9_-]+ 同集。文件名含点（如 "My.Font.ttf" → id="My.Font"）/ 空格 /
+                // 非 ASCII / 隐藏文件（".DS_Store" 已被扩展名过滤，但 ".x.ttf" → id="" 空串）会
+                // 让 id 与端点正则不一致——listAll 暴露的 id 前端拉不到字体。拒载 + WARNING，不污染下游。
+                if (id.isEmpty() || !id.matches("[a-zA-Z0-9_-]+")) {
+                    log.warning("FontRegistry: skipping external font with invalid id '" + id
+                            + "' (from " + fileName + "); font id must match [a-zA-Z0-9_-]+ "
+                            + "(no dots / spaces / non-ASCII). Rename the file to load it.");
+                    return;
+                }
                 try (InputStream in = Files.newInputStream(path)) {
                     Font font = Font.createFont(Font.TRUETYPE_FONT, in);
                     // 外部字体默认 pixelated=false；M7 接入 config.yml 后可按文件名前缀或配置项区分
@@ -209,12 +227,21 @@ public final class FontRegistry {
     /**
      * 启动单个 daemon 线程后台逐字体跑 {@link FontMetricsTable#registerRuntime}。
      * daemon 防 plugin disable 后 JVM 仍挂住；逐字体而非并行—避免同时算 65k×N 把 GC 打爆。
+     *
+     * <p>P3-29：worker 引用存入 {@link #metricsWorker} 字段，供 {@link #shutdownMetricsWorker()}
+     * interrupt + join；循环内每字体前查 {@link Thread#isInterrupted()} 提前退出。</p>
      */
     private void spawnMetricsWorker(List<Map.Entry<String, Font>> pending) {
         Thread t = new Thread(() -> {
             long t0 = System.nanoTime();
             int done = 0;
             for (Map.Entry<String, Font> e : pending) {
+                // P3-29：disable 期 interrupt 后尽快收手，不再扫剩余字体的 65k codepoints
+                if (Thread.currentThread().isInterrupted()) {
+                    log.info("FontRegistry: metrics worker interrupted, stopping early ("
+                            + done + "/" + pending.size() + " fonts done)");
+                    return;
+                }
                 String id = e.getKey();
                 Font font = e.getValue();
                 try {
@@ -233,7 +260,25 @@ public final class FontRegistry {
         }, "HikariCanvas-FontMetrics-Worker");
         t.setDaemon(true);
         t.setPriority(Thread.NORM_PRIORITY - 1);
+        this.metricsWorker = t;
         t.start();
+    }
+
+    /**
+     * P3-29：停止后台 metrics worker（{@code HikariCanvas#onDisable} 调用）。
+     * interrupt 让 worker 在下一字体前退出，再 join 短超时回收，最后清字段断引用让旧
+     * classloader 可被 GC。worker 已结束 / 从未 spawn 时为 no-op。
+     */
+    public void shutdownMetricsWorker() {
+        Thread t = this.metricsWorker;
+        if (t == null) return;
+        t.interrupt();
+        try {
+            t.join(2_000L);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+        this.metricsWorker = null;
     }
 
     /** 返回指定 id 的字体；不存在返 null。 */

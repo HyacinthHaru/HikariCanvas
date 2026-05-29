@@ -1,5 +1,5 @@
 /**
- * M8 远期 TODO 项 3：对齐 / 分布工具。
+ * 对齐 / 分布工具（0.4.8 实现）。
  *
  * <p>纯计算 composable —— 输入选中 element 数组 + 操作类型，输出每个 element 的新 (x, y) patch。
  * 不直接 dispatch WS op，调用方（AlignDistributeBar）负责 element.update 批量发送。</p>

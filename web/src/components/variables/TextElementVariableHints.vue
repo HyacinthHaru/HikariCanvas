@@ -24,6 +24,7 @@ const result = ref<InterpolateResult>({
     text: props.text,
     referencedFullNames: new Set(),
     missingFullNames: new Set(),
+    segments: [],
 });
 
 function recompute() {

@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
@@ -204,29 +205,29 @@ public final class WebServer {
             }
         };
         this.editOpDispatcher = new EditOpDispatcher(
-                sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, auditLog);
+                sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, auditLog, plugin);
         this.brushOpDispatcher = new BrushOpDispatcher(sessionManager, throttler, push);
         this.wallOpDispatcher = new WallOpDispatcher(
                 sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog);
-        this.templateOpDispatcher = new TemplateOpDispatcher(sessionManager, templatePublisher);
+        this.templateOpDispatcher = new TemplateOpDispatcher(sessionManager, templatePublisher, plugin);
         // 0.4.0-P1-B：VariableStore 启动期可能为 null（HikariCanvas onEnable 顺序不一致）；
         // 但当前实现中 HikariCanvas 总是先于 WebServer 构造完 VariableStore，因此 non-null。
         this.variableOpDispatcher = variableStore == null ? null
                 : new VariableOpDispatcher(sessionManager, rateLimiter, variableStore,
-                        wallRepo, push, auditLog);
+                        wallRepo, push, auditLog, plugin);
         // 0.4.0-P3-L：schedule.* dispatcher（ScheduleDao 必传；manualScheduleProvider 可空）
         this.scheduleOpDispatcher = scheduleDao == null ? null
                 : new ScheduleOpDispatcher(sessionManager, rateLimiter, scheduleDao,
-                        manualScheduleProvider, wallRepo, auditLog);
+                        manualScheduleProvider, wallRepo, auditLog, plugin);
         // 0.4.4：rail.* dispatcher（RailDao 必传；railScheduleProvider 可空）
         this.railOpDispatcher = railDao == null ? null
                 : new RailOpDispatcher(sessionManager, rateLimiter, railDao,
-                        railScheduleProvider, wallRepo, auditLog);
+                        railScheduleProvider, wallRepo, auditLog, plugin);
         // 0.4.2：variable.alias.* dispatcher（VariableAliasDao 必传，否则禁用）
         this.variableAliasDao = variableAliasDao;
         this.variableAliasDispatcher = variableAliasDao == null ? null
                 : new VariableAliasDispatcher(sessionManager, rateLimiter, variableAliasDao,
-                        wallRepo, push, auditLog);
+                        wallRepo, push, auditLog, plugin);
         // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
         this.variableStore = variableStore;
         // 0.4.0-P3-M：variable metadata 端点 handler；store/daemon/sessionManager 任一缺则禁用
@@ -660,9 +661,19 @@ public final class WebServer {
         ctx.json(json);
     }
 
-    /** M6-D 协议 §3.2：ready / pre-handshake 一并下发全量 TemplateSpec 列表。 */
-    private List<TemplateSpec> listTemplates() {
-        return templateRegistry.templates().values().stream()
+    /**
+     * M6-D 协议 §3.2：ready 帧下发 TemplateSpec 列表。
+     *
+     * <p>P2-1：与 {@link TemplateRegistry#byIdForApply} 共用同一可见性判定——对 source==USER
+     * 且 ownerUuid 非 caller 且无 {@code canvas.template.use-others} bypass 的条目整条剔除，
+     * 防其他玩家私有模板的完整 {@code raw_state} 画布内容经 ready 帧外泄（apply 端隔离已有，
+     * 此前 list 端零过滤使其形同虚设）。builtin / server 模板始终可见。</p>
+     *
+     * @param callerUuid 请求方玩家 UUID；{@code null} 等同非 owner
+     * @param hasBypass  调用方是否持 {@code canvas.template.use-others}
+     */
+    private List<TemplateSpec> listTemplates(UUID callerUuid, boolean hasBypass) {
+        return templateRegistry.listVisibleTo(callerUuid, hasBypass).stream()
                 .map(TemplateEntry::spec)
                 .toList();
     }
@@ -848,13 +859,20 @@ public final class WebServer {
         // （lp / pex / 配置 reload）→ 拒绝继续认证。Bukkit.hasPermission 必须主线程，
         // 用 callSyncMethod 同步等待结果（auth 路径是 Jetty 线程，可阻塞少量时间）。
         // 离线玩家放行（player == null）—— 玩家已不在线，token 又一次性，重连受 IP 绑定保护。
+        // P2-1：同一主线程 hop 顺带解析 canvas.template.use-others（ready 帧模板可见性过滤用），
+        // 避免再起一次 callSyncMethod；离线玩家无 bypass（fail-closed，只看到自己的模板）。
+        boolean templateBypass = false;
         try {
-            Boolean allowed = org.bukkit.Bukkit.getScheduler().callSyncMethod(plugin, () -> {
+            boolean[] perms = org.bukkit.Bukkit.getScheduler().callSyncMethod(plugin, () -> {
                 org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(session.playerUuid());
-                if (live == null) return Boolean.TRUE;  // 玩家离线，放行
-                return live.hasPermission("canvas.edit");
+                if (live == null) return new boolean[]{true, false};  // 玩家离线：放行 + 无 bypass
+                return new boolean[]{
+                        live.hasPermission("canvas.edit"),
+                        live.hasPermission("canvas.template.use-others")};
             }).get(2, java.util.concurrent.TimeUnit.SECONDS);
-            if (allowed == null || !allowed) {
+            boolean allowed = perms != null && perms[0];
+            templateBypass = perms != null && perms[1];
+            if (!allowed) {
                 log.warning("WS auth permission revoked sid=" + session.id()
                         + " player=" + session.playerName() + " canvas.edit=false");
                 if (auditLog != null) {
@@ -871,12 +889,28 @@ public final class WebServer {
                 return;
             }
         } catch (java.util.concurrent.TimeoutException te) {
-            // 主线程繁忙：保守放行，避免拒绝合法玩家
+            // 主线程繁忙：保守放行，避免拒绝合法玩家（已文档化：Ultrareview 2026-05-25 #3）
             log.warning("WS auth permission check timeout sid=" + session.id()
                     + "; allowing through (main thread busy)");
-        } catch (Exception pe) {
-            // 校验路径异常：保守放行，记日志
-            log.log(Level.WARNING, "WS auth permission check error sid=" + session.id(), pe);
+        } catch (InterruptedException ie) {
+            // P3-2：复位中断标志，再 fail-closed 拒绝（不能在中断态下静默放行）
+            Thread.currentThread().interrupt();
+            log.log(Level.WARNING, "WS auth permission check interrupted sid=" + session.id(), ie);
+            ctx.send(Envelope.error(in.id(), "PERMISSION_DENIED",
+                    "permission check interrupted"));
+            closePermissionRevoked(ctx, "perm_check_interrupted");
+            return;
+        } catch (java.util.concurrent.ExecutionException
+                | java.util.concurrent.RejectedExecutionException
+                | java.util.concurrent.CancellationException pe) {
+            // P3-2：非超时异常（scheduler 关停/拒绝、callable 内部抛错）改 fail-closed 拒绝，
+            // 而非原先一律保守放行——避免被撤权玩家恰逢 scheduler 异常窗口绕过 canvas.edit 复查。
+            log.log(Level.WARNING, "WS auth permission check failed sid=" + session.id()
+                    + "; denying (fail-closed)", pe);
+            ctx.send(Envelope.error(in.id(), "PERMISSION_DENIED",
+                    "permission check failed"));
+            closePermissionRevoked(ctx, "perm_check_failed");
+            return;
         }
 
         // M16 P6.6：会话级 IP 绑定。首次 auth 时 sessionManager 写下 boundIp；reconnect 必须 IP 同源。
@@ -896,10 +930,23 @@ public final class WebServer {
 
         // M5.5：/canvas open 同 wall 路径下 session 已是 ACTIVE；只刷活跃时间，不再走 markActive 转移。
         // 只有首次 auth（ISSUED → ACTIVE）才调 markActive。
-        if (session.state() == SessionState.ISSUED) {
-            sessionManager.markActive(session.id());
-        } else {
-            sessionManager.touch(session.id());
+        // P3-71：极窄 TOCTOU——读 state 与 markActive 内部重读之间，主线程 reaper 可能恰好
+        // 以 issued-timeout cancel 本 session（state→CLOSING / byId 移除），markActive/touch 会抛
+        // IllegalState/IllegalArgumentException。原先无 try/catch 时异常逃逸到 Javalin onError 只 log，
+        // client 收不到 AUTH_FAILED 而是静默卡死。改为捕获后发 AUTH_FAILED + close，与 841 的
+        // null/CLOSING 检查同语义优雅降级。
+        try {
+            if (session.state() == SessionState.ISSUED) {
+                sessionManager.markActive(session.id());
+            } else {
+                sessionManager.touch(session.id());
+            }
+        } catch (IllegalStateException | IllegalArgumentException se) {
+            log.log(Level.WARNING, "WS auth markActive/touch failed sid=" + session.id()
+                    + " (session likely reaped concurrently)", se);
+            ctx.send(Envelope.error(in.id(), "AUTH_FAILED", "session not available"));
+            closeAuthFailed(ctx, "session reaped during auth");
+            return;
         }
         // 旧的 WS ctx（同 sessionId）若还在，关掉再覆盖，避免双连
         WsContext oldCtx = wsBySession.put(session.id(), ctx);
@@ -948,8 +995,10 @@ public final class WebServer {
         if (lockedAt != null) payload.put("lockedAt", lockedAt);
         if (ownerUuid != null) payload.put("ownerUuid", ownerUuid);
         payload.put("selfUuid", session.playerUuid().toString());
-        // M6-D 协议 §3.2：全量 TemplateSpec 下发，前端无需独立接口
-        payload.put("templates", listTemplates());
+        // M6-D 协议 §3.2：TemplateSpec 下发，前端无需独立接口
+        // P2-1：按 caller owner + canvas.template.use-others 过滤——只下发 builtin/server +
+        // 自己的 user 模板（或持 bypass 时全部），堵住其他玩家私有模板 rawState 经 ready 帧外泄。
+        payload.put("templates", listTemplates(session.playerUuid(), templateBypass));
         // 0.4.0-P2-F + 0.4.0 bugfix（Bug 1）：携带 wall 可见的变量快照，前端无需额外 HTTP round-trip
         // 初始化 VariableStore mirror。改用 listVisibleToWall（不依赖 byWall 倒排索引），
         // 解决 ready payload 鸡生蛋问题：wall 刚 open 时 Compositor 尚未渲染 → listByWall 返空 →
@@ -1029,6 +1078,25 @@ public final class WebServer {
         String id = "s-" + serverIdSeq.incrementAndGet();
         ctx.send(Envelope.of("state.patch", id, patch));
         return true;
+    }
+
+    /**
+     * P3-32：服务端主动 forget（/canvas delete / cancel / idle reaper）某 session 时，
+     * 立即清掉 {@link #wsBySession} 映射并断开陈旧 WS，不依赖 WS onClose 自然关闭。
+     *
+     * <p>设计为 {@code SessionManager.addForgetHook} 的回调目标（wiring 在 HikariCanvas
+     * onEnable 完成）。幂等：sessionId 不在映射里时是 no-op。广播路径迭代 byId（被 forget
+     * 的 session 已从 byId 移除），故无需改广播逻辑——本方法只补关闭陈旧连接这一步。</p>
+     *
+     * @param sessionId 被 forget 的登录态 sessionId；null 时直接返回
+     */
+    public void forgetSession(String sessionId) {
+        if (sessionId == null) return;
+        WsContext ctx = wsBySession.remove(sessionId);
+        if (ctx != null) {
+            // 服务端主动 forget 后该连接已无对应 session，关闭让 client 重新走 auth。
+            try { ctx.closeSession(4001, "session_forgotten"); } catch (Exception ignored) {}
+        }
     }
 
     /** 按 protocol.md §6.2: close 4001 = 认证失败。 */

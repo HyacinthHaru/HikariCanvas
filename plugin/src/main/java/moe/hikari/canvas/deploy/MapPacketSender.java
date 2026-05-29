@@ -4,6 +4,8 @@ import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerMapData;
 import org.bukkit.entity.Player;
 
+import java.util.Objects;
+
 /**
  * 所有 {@code ClientboundMapItemDataPacket} 级别的发包必须走这个类。
  *
@@ -25,9 +27,14 @@ public final class MapPacketSender {
      * @param pixels128x128 128×128 = 16384 字节，每字节是 MC map palette 索引
      */
     public void sendFullMap(Player player, int mapId, byte[] pixels128x128) {
-        if (pixels128x128.length != MAP_PIXELS) {
+        // P3-77：唯一发包入口的入参校验。null pixels 之前会在 .length 抛不可读的 NPE，
+        // 被上游 CanvasProjector.pushToViewers 的 catch(Exception) 吞成泛化日志；这里转为
+        // 明确的 IllegalArgumentException + 对 player 做 null 防御，保护新接入点。
+        Objects.requireNonNull(player, "player must not be null");
+        if (pixels128x128 == null || pixels128x128.length != MAP_PIXELS) {
             throw new IllegalArgumentException(
-                    "expected " + MAP_PIXELS + " pixels, got " + pixels128x128.length);
+                    "expected " + MAP_PIXELS + " pixels, got "
+                            + (pixels128x128 == null ? "null" : pixels128x128.length));
         }
         WrapperPlayServerMapData packet = new WrapperPlayServerMapData(
                 mapId,

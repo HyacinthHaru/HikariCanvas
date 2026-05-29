@@ -207,8 +207,12 @@ class EditSessionVariableTest {
                 "user:" + WALL + "/x", null);
         EditSession.OpResult.Ok ok = assertInstanceOf(EditSession.OpResult.Ok.class, r);
         assertNull(store.get("user:" + WALL + "/x").orElseThrow().currentValue());
-        // 走 remove 而非 replace
-        assertEquals("remove", ok.patch().ops().get(0).op());
+        // P3-9：null 清值改用 replace(path, null)（与 SessionManager VALUE_SET 同形，
+        // 前端 applyVariablePatches 的 replace && sub==='currentValue' 分支可处理），
+        // 不再发前端无对应分支的 remove .../currentValue。
+        assertEquals("replace", ok.patch().ops().get(0).op());
+        assertTrue(ok.patch().ops().get(0).path().endsWith("/currentValue"));
+        assertNull(ok.patch().ops().get(0).value());
     }
 
     // ──────────────────────────────────────────────────────────

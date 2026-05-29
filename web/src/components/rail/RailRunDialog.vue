@@ -154,6 +154,17 @@ async function saveTimetable() {
 
 async function runAutoGenerate() {
     if (!run.value) return;
+    // P2-14：v-model.number 在输入框被清空时把 ref 设为 ''（非 NaN），后续 `cursor += ''` 触发
+    // 字符串拼接 → 生成格式合法但语义错乱的时刻（21600 + '' = '21600' → '06:00:00' 等）写入
+    // rail_timetable 并经 RailScheduleProvider 推给全线绑定 wall。这里在生成前强转 Number +
+    // finite 校验，任一非有限数则拒绝、置 error 提示用户补齐，根除字符串污染。
+    const travel = Number(autoTravel.value);
+    const dwell = Number(autoDwell.value);
+    const firstSec = parseTime(String(autoFirst.value));
+    if (!Number.isFinite(travel) || !Number.isFinite(dwell) || !Number.isFinite(firstSec)) {
+        error.value = t.value.rail.autoInvalidInput;
+        return;
+    }
     submitting.value = true;
     error.value = null;
     try {
@@ -178,7 +189,8 @@ async function runAutoGenerate() {
         const segment = stations.slice(startIdx, endIdx + 1);
         const rows: Array<{ stationId: string; arrival: string | null;
                             departure: string | null; stopsHere: boolean }> = [];
-        let cursor = parseTime(autoFirst.value);
+        // P2-14：用上方校验过的 Number 值（travel / dwell / firstSec），避免 += 字符串拼接。
+        let cursor = firstSec;
         for (let i = 0; i < segment.length; i++) {
             const s = segment[i];
             const isFirst = i === 0;
@@ -191,7 +203,7 @@ async function runAutoGenerate() {
                     departure: isLast ? null : formatTime(cursor),
                     stopsHere: false,
                 });
-                cursor += autoTravel.value;
+                cursor += travel;
             } else if (isFirst) {
                 rows.push({
                     stationId: s.id,
@@ -199,7 +211,7 @@ async function runAutoGenerate() {
                     departure: formatTime(cursor),
                     stopsHere: true,
                 });
-                cursor += autoTravel.value;
+                cursor += travel;
             } else if (isLast) {
                 rows.push({
                     stationId: s.id,
@@ -211,10 +223,10 @@ async function runAutoGenerate() {
                 rows.push({
                     stationId: s.id,
                     arrival: formatTime(cursor),
-                    departure: formatTime(cursor + autoDwell.value),
+                    departure: formatTime(cursor + dwell),
                     stopsHere: true,
                 });
-                cursor += autoDwell.value + autoTravel.value;
+                cursor += dwell + travel;
             }
         }
         await ws.sendRailTimetableSet(props.runId, rows);

@@ -8,8 +8,6 @@ import moe.hikari.canvas.session.SessionManager;
 import moe.hikari.canvas.session.SessionRateLimiter;
 import moe.hikari.canvas.storage.ScheduleDao;
 import moe.hikari.canvas.variable.provider.ManualScheduleProvider;
-import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -66,19 +64,23 @@ final class ScheduleOpDispatcher {
     private final @Nullable ManualScheduleProvider provider;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
+    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    private final org.bukkit.plugin.Plugin plugin;
 
     ScheduleOpDispatcher(SessionManager sessionManager,
                          SessionRateLimiter rateLimiter,
                          ScheduleDao dao,
                          @Nullable ManualScheduleProvider provider,
                          moe.hikari.canvas.storage.WallRepo wallRepo,
-                         moe.hikari.canvas.storage.AuditLog auditLog) {
+                         moe.hikari.canvas.storage.AuditLog auditLog,
+                         org.bukkit.plugin.Plugin plugin) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.dao = dao;
         this.provider = provider;
         this.wallRepo = wallRepo;
         this.auditLog = auditLog;
+        this.plugin = plugin;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -201,12 +203,13 @@ final class ScheduleOpDispatcher {
                     "departureTime must be HH:mm (24h)"));
             return;
         }
-        String destination = sanitizeDestination(ctx, in, payload.get("destination"));
-        if (destination == null && payload.get("destination") != null
-                && payload.get("destination") instanceof String) {
+        DestResult destResult = sanitizeDestination(ctx, in, payload.get("destination"));
+        if (destResult instanceof DestResult.Error) {
             // sanitize 已发 error
             return;
         }
+        // P3-72：Empty → 合法 null（纯空白也正常插入 destination=null + 回 ack，不再静默丢弃）
+        String destination = destResult instanceof DestResult.Ok ok ? ok.value() : null;
         int sortOrder = intOrNullDefault(payload.get("sortOrder"), 0);
 
         // 业务侧确保 wall_schedules 元数据行存在（首次 add 时自动，默认 minute precision）
@@ -253,11 +256,12 @@ final class ScheduleOpDispatcher {
                     "departureTime must be HH:mm (24h)"));
             return;
         }
-        String destination = sanitizeDestination(ctx, in, payload.get("destination"));
-        if (destination == null && payload.get("destination") != null
-                && payload.get("destination") instanceof String) {
+        DestResult destResult = sanitizeDestination(ctx, in, payload.get("destination"));
+        if (destResult instanceof DestResult.Error) {
             return;
         }
+        // P3-72：Empty → 合法 null（纯空白也正常更新 destination=null + 回 ack）
+        String destination = destResult instanceof DestResult.Ok ok ? ok.value() : null;
         int sortOrder = intOrNullDefault(payload.get("sortOrder"), 0);
 
         // 跨 wall 拒：先按 id 拿 entry，校验 wallId 一致
@@ -318,7 +322,6 @@ final class ScheduleOpDispatcher {
     private boolean checkPermission(WsMessageContext ctx, Envelope in, String sessionId,
                                     Session s, String op) {
         UUID callerUuid = s.playerUuid();
-        Player player = callerUuid == null ? null : Bukkit.getPlayer(callerUuid);
         moe.hikari.canvas.storage.WallRepo.Wall wall = wallRepo.loadById(s.wallId()).orElse(null);
         if (wall == null) {
             ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
@@ -326,7 +329,8 @@ final class ScheduleOpDispatcher {
         }
         boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
         String requiredNode = isOwnerOnly ? "canvas.schedule.own" : "canvas.schedule.any";
-        boolean granted = player != null && player.hasPermission(requiredNode);
+        // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+        boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
         // own 节点 default=true（与 var write own 同款）；offline 玩家 own 路径放行
         if (!granted && "canvas.schedule.own".equals(requiredNode)) {
             granted = true;
@@ -379,22 +383,36 @@ final class ScheduleOpDispatcher {
         return false;
     }
 
-    /** 校验 destination：null / 空 → null；非空 → 校长度 + trim；超长发 error 返 null。 */
-    private @Nullable String sanitizeDestination(WsMessageContext ctx, Envelope in, Object raw) {
-        if (raw == null) return null;
+    /**
+     * P3-72：destination 校验三态结果。原先返单一 {@code null} 让调用方无法区分
+     * 「合法空 destination（应正常插入 null）」与「类型/长度非法（已发 error 应 return）」，
+     * 导致纯空白 destination 被守卫误判为已发 error → 既不写库也不回 ack/error 静默丢弃。
+     */
+    private sealed interface DestResult {
+        /** 合法非空 destination。 */
+        record Ok(String value) implements DestResult {}
+        /** 合法空 destination（null / 纯空白）——应正常插入 destination=null 并回 ack。 */
+        record Empty() implements DestResult {}
+        /** 非法（类型错 / 超长）——error 已发给客户端，调用方直接 return。 */
+        record Error() implements DestResult {}
+    }
+
+    /** 校验 destination：null / 空 → Empty；非空合法 → Ok(trim)；类型错 / 超长 → 发 error + 返 Error。 */
+    private DestResult sanitizeDestination(WsMessageContext ctx, Envelope in, Object raw) {
+        if (raw == null) return new DestResult.Empty();
         if (!(raw instanceof String str)) {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
                     "destination must be string or null"));
-            return null;
+            return new DestResult.Error();
         }
         String t = str.trim();
-        if (t.isEmpty()) return null;
+        if (t.isEmpty()) return new DestResult.Empty();
         if (t.length() > STR_MAX_LEN) {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
                     "destination too long (max " + STR_MAX_LEN + ")"));
-            return null;
+            return new DestResult.Error();
         }
-        return t;
+        return new DestResult.Ok(t);
     }
 
     private static int intOrNullDefault(Object raw, int def) {

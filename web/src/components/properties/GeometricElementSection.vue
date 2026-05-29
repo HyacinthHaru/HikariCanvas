@@ -66,8 +66,10 @@ function onSelectChange(field: string, ev: Event) {
     emit('update', { [field]: v });
 }
 function onNumberChange(field: string, ev: Event) {
-    const v = parseFloat((ev.target as HTMLInputElement).value);
+    let v = parseFloat((ev.target as HTMLInputElement).value);
     if (!Number.isFinite(v)) return;
+    // sides 必须是 [3,32] 的整数——避免退化多边形（< 3 边）/ 超采样（> 32）。
+    if (field === 'sides') v = Math.max(3, Math.min(32, Math.round(v)));
     emit('updateDebounced', { [field]: v });
 }
 </script>

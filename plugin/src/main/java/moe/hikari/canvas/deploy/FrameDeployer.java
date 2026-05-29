@@ -46,7 +46,7 @@ public final class FrameDeployer {
         this.plugin = plugin;
         this.placeholderRenderer = placeholderRenderer;
         this.canvasRenderer = canvasRenderer;
-        // 固定 namespace = hikari_canvas
+        // 固定 namespace = hikaricanvas（NamespacedKey(plugin,…) 取插件名小写，HikariCanvas → hikaricanvas）
         this.wallIdKey = new NamespacedKey(plugin, "wall_id");
         this.slotKey = new NamespacedKey(plugin, "slot");
     }

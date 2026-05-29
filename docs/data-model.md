@@ -214,19 +214,19 @@ CREATE TABLE image_uploads (
     mime            TEXT    NOT NULL,        -- 'image/png'（统一存储格式，jpeg/webp 上传时转）
     uploader_uuid   TEXT    NOT NULL,
     uploaded_at     INTEGER NOT NULL,
-    last_used_at    INTEGER NOT NULL,        -- ImageElement 引用时更新；LRU 清理依据
-    refcount        INTEGER NOT NULL         -- 当前被多少 ImageElement.source 引用；0 = 可 LRU 删
+    last_used_at    INTEGER NOT NULL         -- ImageElement 引用时更新；LRU 清理依据
 );
 
 CREATE INDEX idx_uploads_uploader ON image_uploads(uploader_uuid, uploaded_at DESC);
-CREATE INDEX idx_uploads_lru ON image_uploads(refcount, last_used_at) WHERE refcount = 0;
+CREATE INDEX idx_uploads_lru ON image_uploads(last_used_at);
 ```
+
+> **无 `refcount` 列**：M15.4 起引用计数改为运行期实时 sweep（见下方 LRU 清理）；原 `refcount INTEGER` 列已在 V010 DROP（详见 §6.5.1）。
 
 **关键字段语义：**
 
-- `refcount`：服务端在 `element.add type=image` / `element.update fill` / `element.delete` 时增减
 - `last_used_at`：每次 wall 重新打开 / element 被引用渲染时刷新
-- LRU 清理：`SELECT hash FROM image_uploads WHERE refcount=0 ORDER BY last_used_at ASC LIMIT N` → unlink 磁盘文件 + DELETE 表行
+- LRU 清理：不依赖 refcount 列，而是**实时 sweep** —— 遍历所有 `walls.project_json` 收集被引用的 image hash 集合（`ImageStorage.collectReferencedHashes`），再 `SELECT hash FROM image_uploads WHERE hash NOT IN (<被引用集合>) ORDER BY last_used_at ASC LIMIT N`（`ImageUploadDao.pickLruCandidates`）剔除孤儿 → unlink 磁盘文件 + DELETE 表行
 
 **配额查询（M13）：**
 
@@ -322,7 +322,7 @@ ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute';
 ### 3.1 命名空间
 
 所有 PDC key 使用插件命名空间：`NamespacedKey(plugin, "<key>")`。
-命名空间字符串固定：`"hikari_canvas"`。
+命名空间字符串固定：`"hikaricanvas"`（`NamespacedKey(plugin, key)` 取插件名小写，`HikariCanvas` → `hikaricanvas`）。
 
 ### 3.2 Key 表（M5.5 简化）
 

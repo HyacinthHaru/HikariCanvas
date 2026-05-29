@@ -4,7 +4,6 @@ import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.Stroke;
 
-import java.awt.BasicStroke;
 import java.awt.Graphics2D;
 
 /**
@@ -33,7 +32,6 @@ public final class RectRenderer implements ElementRenderer {
             g.fillRect(r.x(), r.y() + r.h() - sw, r.w(), sw);
             g.fillRect(r.x(), r.y(), sw, r.h());
             g.fillRect(r.x() + r.w() - sw, r.y(), sw, r.h());
-            g.setStroke(new BasicStroke(1)); // 还原默认
         }
     }
 }

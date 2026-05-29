@@ -556,10 +556,23 @@ public final class ElementValidator {
                 throw new ValidationException("INVALID_PAYLOAD", "path.d required");
             }
             validatePathD(p.d());
+            if (p.fill() != null) FillValidator.validate(p.fill());
         } else if (el instanceof BrushStrokeElement b) {
             if (b.points() == null) {
                 throw new ValidationException("INVALID_PAYLOAD", "brush.points required");
             }
+            if (b.fill() != null) FillValidator.validate(b.fill());
+        } else if (el instanceof ShapeElement sh) {
+            // P2-53：模板 raw_state 的 ShapeElement 走与 WS buildShape/applyShapePatch 同款校验。
+            validateShapeKind(sh.kind());
+            validateSides(sh.sides());
+            if (sh.innerRatio() != null) validateInnerRatio(sh.innerRatio());
+            if (sh.fill() != null) FillValidator.validate(sh.fill());
+        } else if (el instanceof RectElement r) {
+            // P3-56：raw_state Rect fill 含 NaN 渐变在反序列化期 fail-fast，而非渲染期。
+            if (r.fill() != null) FillValidator.validate(r.fill());
+        } else if (el instanceof CircleElement c) {
+            if (c.fill() != null) FillValidator.validate(c.fill());
         } else if (el instanceof ImageElement im) {
             if (im.source() == null || !IMAGE_SOURCE_RE.matcher(im.source()).matches()) {
                 throw new ValidationException("INVALID_PAYLOAD",

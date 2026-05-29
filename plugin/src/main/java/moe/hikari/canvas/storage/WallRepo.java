@@ -83,11 +83,11 @@ public final class WallRepo {
 
     /**
      * M15.3 P0-32 v1：原子地写一行 walls（含 mapIds）。confirm 路径先 reserve 拿 mapIds，
-     * 再一次性 INSERT，避免 create + updateMapIds 两步无事务半态（旧路径若 updateMapIds 失败，
-     * walls 行 mapIds 字段为空字符串，但 mapPool 已 reserve）。
+     * 再一次性 INSERT，避免旧的「先 create 后 updateMapIds」两步无事务半态（旧路径若第二步
+     * 失败，walls 行 mapIds 字段为空字符串，但 mapPool 已 reserve）。
      *
-     * <p>本方法替代旧的 {@code create + updateMapIds} 组合；旧 {@link #create} 保留以兼容
-     * 其他可能的调用方（如 templatePublisher / future restore paths）。</p>
+     * <p>P3-97：旧的两步 {@code create + updateMapIds} 方法为死代码，已删除——所有 wall
+     * 创建走本方法的单条原子 INSERT。</p>
      *
      * @return 生成的 wall_id；冲突 5 次则抛
      */
@@ -140,75 +140,8 @@ public final class WallRepo {
         throw new IllegalStateException("wall_id collision 5x; SecureRandom broken?");
     }
 
-    /**
-     * 创建一个新 wall 行，自动生成 wall_id。返回生成的 wall_id；冲突 5 次则抛。
-     * 调用方应在 confirm（新建路径）时一次调用，之后通过 {@link #updateState} 增量更新。
-     */
-    public String create(WallKey key, ProjectState state, List<Integer> mapIds,
-                         int widthMaps, int heightMaps, UUID ownerUuid, String ownerName) {
-        String json;
-        try {
-            json = mapper.writeValueAsString(state);
-        } catch (Exception e) {
-            throw new IllegalStateException("serialize ProjectState failed", e);
-        }
-        String mapIdsCsv = mapIds == null ? "" :
-                mapIds.stream().map(String::valueOf).collect(Collectors.joining(","));
-        long now = System.currentTimeMillis();
-
-        for (int attempt = 0; attempt < 5; attempt++) {
-            String wallId = generateWallId();
-            try {
-                jdbi.useHandle(h -> h.createUpdate(
-                        "INSERT INTO walls(wall_id, world, origin_x, origin_y, origin_z, facing, "
-                                + "width_maps, height_maps, map_ids, project_json, "
-                                + "owner_uuid, owner_name, alias, published_at, "
-                                + "template_id, template_version, created_at, updated_at) "
-                                + "VALUES(:id, :world, :ox, :oy, :oz, :facing, "
-                                + ":w, :h, :mapIds, :json, :ouuid, :oname, NULL, NULL, "
-                                + "NULL, NULL, :now, :now)")
-                        .bind("id", wallId)
-                        .bind("world", key.world())
-                        .bind("ox", key.originX())
-                        .bind("oy", key.originY())
-                        .bind("oz", key.originZ())
-                        .bind("facing", key.facing().name())
-                        .bind("w", widthMaps)
-                        .bind("h", heightMaps)
-                        .bind("mapIds", mapIdsCsv)
-                        .bind("json", json)
-                        .bind("ouuid", ownerUuid.toString())
-                        .bind("oname", ownerName)
-                        .bind("now", now)
-                        .execute());
-                return wallId;
-            } catch (Exception e) {
-                String msg = e.getMessage();
-                if (msg != null && (msg.contains("UNIQUE constraint failed: walls.wall_id"))) {
-                    continue; // wall_id 撞了重试
-                }
-                throw new IllegalStateException("create wall failed", e);
-            }
-        }
-        throw new IllegalStateException("wall_id collision 5x; SecureRandom broken?");
-    }
-
-    /** 更新 mapIds（confirm 流程：create 后 reserve 再回写）。 */
-    public void updateMapIds(String wallId, List<Integer> mapIds) {
-        String csv = mapIds == null ? "" :
-                mapIds.stream().map(String::valueOf).collect(Collectors.joining(","));
-        long now = System.currentTimeMillis();
-        try {
-            jdbi.useHandle(h -> h.createUpdate(
-                    "UPDATE walls SET map_ids = :csv, updated_at = :now WHERE wall_id = :id")
-                    .bind("csv", csv)
-                    .bind("now", now)
-                    .bind("id", wallId)
-                    .execute());
-        } catch (Exception e) {
-            log.log(Level.WARNING, "updateMapIds failed for " + wallId, e);
-        }
-    }
+    // P3-97：删除死代码 create(WallKey,...) 与 updateMapIds(...)——
+    // 旧的两步「create 后增量 updateMapIds」组合无调用方，已被 createWithMapIds 原子 INSERT 取代。
 
     /** 仅更新 ProjectState（每次 op 后由 SessionManager 调）。 */
     public void updateState(String wallId, ProjectState state) {
@@ -303,6 +236,18 @@ public final class WallRepo {
         }
     }
 
+    /**
+     * P2-24：事务感知 {@link #loadAll()}。在调用方已持有的 {@link org.jdbi.v3.core.Handle} 上跑同一查询，
+     * 让"读 walls 引用 → 删孤儿图"在单一 IMMEDIATE 写事务的一致视图内原子完成（图片上传 LRU
+     * evict 路径用）。与 {@link #loadAll()} 不同：本方法**不吞异常**——它跑在外层事务内，
+     * 异常应让外层事务回滚（宁可拒上传也不在不可信引用集下误删在用图）。
+     */
+    public List<Wall> loadAllOn(org.jdbi.v3.core.Handle h) {
+        return h.createQuery("SELECT * FROM walls")
+                .map((rs, ctx) -> mapRow(rs))
+                .list();
+    }
+
     /** 列全部 walls 的 Summary（首页用）。 */
     public List<Summary> listAll() {
         try {
@@ -318,7 +263,7 @@ public final class WallRepo {
                             rs.getInt("origin_x"), rs.getInt("origin_y"), rs.getInt("origin_z"),
                             rs.getString("facing"),
                             rs.getInt("width_maps"), rs.getInt("height_maps"),
-                            (Long) rs.getObject("published_at"),
+                            toLong(rs.getObject("published_at")),
                             rs.getLong("updated_at")))
                     .list());
         } catch (Exception e) {
@@ -342,7 +287,7 @@ public final class WallRepo {
                             rs.getInt("origin_x"), rs.getInt("origin_y"), rs.getInt("origin_z"),
                             rs.getString("facing"),
                             rs.getInt("width_maps"), rs.getInt("height_maps"),
-                            (Long) rs.getObject("published_at"),
+                            toLong(rs.getObject("published_at")),
                             rs.getLong("updated_at")))
                     .list());
         } catch (Exception e) {
@@ -534,6 +479,17 @@ public final class WallRepo {
                     rs.getInt("origin_z"),
                     BlockFace.valueOf(rs.getString("facing")));
             List<Integer> mapIds = parseMapIds(rs.getString("map_ids"));
+            String ownerRaw = rs.getString("owner_uuid");
+            UUID owner;
+            try {
+                owner = UUID.fromString(ownerRaw);
+            } catch (IllegalArgumentException ex) {
+                // P3-75：外部 DB 数据损坏的防御性降级（与 RailDao/UserGlobalVariableDao 看齐）——
+                // nil UUID 匹配 owner 失败更受限（安全），且单行坏数据不阻断整查询。
+                log.log(Level.WARNING, "WallRepo.mapRow owner_uuid parse failed, wallId="
+                        + rs.getString("wall_id") + ", owner=" + ownerRaw, ex);
+                owner = new UUID(0L, 0L);
+            }
             return new Wall(
                     rs.getString("wall_id"),
                     key,
@@ -541,15 +497,24 @@ public final class WallRepo {
                     mapIds,
                     rs.getInt("width_maps"),
                     rs.getInt("height_maps"),
-                    UUID.fromString(rs.getString("owner_uuid")),
+                    owner,
                     rs.getString("owner_name"),
                     rs.getString("alias"),
-                    (Long) rs.getObject("published_at"),
+                    toLong(rs.getObject("published_at")),
                     rs.getLong("created_at"),
                     rs.getLong("updated_at"));
         } catch (Exception e) {
             throw new java.sql.SQLException("mapRow failed", e);
         }
+    }
+
+    /**
+     * P2-56：robust nullable-long 读取。SQLite JDBC 对 {@code INTEGER} 列的
+     * {@code getObject} 不保证返回 {@link Long}（可能是 {@link Integer} / {@link java.math.BigDecimal}
+     * 等），直接 {@code (Long)} 强转会 ClassCastException。统一走 {@link Number#longValue()}。
+     */
+    private static Long toLong(Object o) {
+        return o == null ? null : ((Number) o).longValue();
     }
 
     private static List<Integer> parseMapIds(String csv) {

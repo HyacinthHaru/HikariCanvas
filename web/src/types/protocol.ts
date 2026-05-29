@@ -54,7 +54,7 @@ export interface Guide {
 }
 
 /**
- * 图层颜色标签（M8 远期 TODO 项 2）。PS 风格辅助识别用，仅 UI 显示，不影响渲染。
+ * 图层颜色标签。PS 风格辅助识别用，仅 UI 显示，不影响渲染。
  * null = 无标签；其余为 Catppuccin 色名 — 与后端 LayerOperations.ALLOWED_COLOR_TAGS 对齐。
  */
 export type LayerColorTag =
@@ -67,7 +67,7 @@ export interface Layer {
     locked: boolean;
     opacity: number; // 0..1
     blendMode: BlendMode;
-    /** M8 远期 TODO 项 2：PS 风格颜色标签；null / undefined = 无 */
+    /** PS 风格颜色标签；null / undefined = 无 */
     colorTag?: LayerColorTag | null;
     elements: Element[]; // 层内 z-order = index
 }

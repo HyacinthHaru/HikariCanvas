@@ -45,8 +45,9 @@ export function blendChannel(srcByte: number, dstByte: number, mode: BlendMode):
 }
 
 /**
- * 把 src（ARGB layer buffer ImageData）按 layerOpacity + blendMode 合到 dst（主 buffer ImageData）。
- * dst 假设是不透明 RGB（虽然 ImageData 仍是 RGBA，alpha 视为 255）。
+ * 把 src（ARGB layer buffer ImageData）按 layerOpacity + blendMode 合到 dst（ARGB 主 buffer ImageData）。
+ * P3-92：dst 是真 ARGB 主 buffer（0.4.6 P2 起支持透明背景），dst alpha（da = dd[i+3]）
+ * 真实参与 W3C source-over 合成——不再假设 255。与模块级 JSDoc 及实现一致。
  */
 export function applyBlendModeOver(
     dst: ImageData,

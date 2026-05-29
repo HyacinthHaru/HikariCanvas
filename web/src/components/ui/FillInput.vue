@@ -210,7 +210,10 @@ function removeStop(i: number): void {
             <Plus class="size-3" />
           </button>
         </div>
-        <div v-for="(s, i) in stops" :key="i" class="flex items-center gap-1">
+        <!-- P3-113：用 position+color 复合 key 替代数组下标——addStop 排序后下标 key
+             会让 ColorInput 内部编辑态（popover open / hexDraft）串到相邻 stop。
+             复合 key 按内容身份复用，重排后编辑态跟随正确的 stop。 -->
+        <div v-for="(s, i) in stops" :key="`${s.position}:${s.color}`" class="flex items-center gap-1">
           <input type="range" min="0" max="1" step="0.01" :value="s.position"
                  class="flex-1" @input="(e) => onStopPosition(i, e)" />
           <ColorInput :model-value="s.color" @update:model-value="(c) => onStopColor(i, c)" />
@@ -258,7 +261,10 @@ function removeStop(i: number): void {
             <Plus class="size-3" />
           </button>
         </div>
-        <div v-for="(s, i) in stops" :key="i" class="flex items-center gap-1">
+        <!-- P3-113：用 position+color 复合 key 替代数组下标——addStop 排序后下标 key
+             会让 ColorInput 内部编辑态（popover open / hexDraft）串到相邻 stop。
+             复合 key 按内容身份复用，重排后编辑态跟随正确的 stop。 -->
+        <div v-for="(s, i) in stops" :key="`${s.position}:${s.color}`" class="flex items-center gap-1">
           <input type="range" min="0" max="1" step="0.01" :value="s.position"
                  class="flex-1" @input="(e) => onStopPosition(i, e)" />
           <ColorInput :model-value="s.color" @update:model-value="(c) => onStopColor(i, c)" />

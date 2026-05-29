@@ -23,14 +23,35 @@ const cache = new Map<string, IconPathData | null>();
 const pending = new Map<string, Promise<void>>();
 const readyHandlers: ((id: string) => void)[] = [];
 
-/** 注册回调，加载完任意图标后触发（CanvasView 接到后 requestDraw）。 */
-export function onIconLoaded(fn: (id: string) => void): void {
+/**
+ * 注册回调，加载完任意图标后触发（CanvasView 接到后 requestDraw）。
+ * P3-40：返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用注销，避免 readyHandlers
+ * 数组只增不减（旧闭包泄漏 + 重复 requestDraw）。
+ */
+export function onIconLoaded(fn: (id: string) => void): () => void {
     readyHandlers.push(fn);
+    return () => offIconLoaded(fn);
+}
+
+/** P3-40：注销 onIconLoaded 注册的回调。 */
+export function offIconLoaded(fn: (id: string) => void): void {
+    const i = readyHandlers.indexOf(fn);
+    if (i >= 0) readyHandlers.splice(i, 1);
 }
 
 /** 同步查询；已加载（成功 / 失败均算"完成"）返 entry（成功）或 null（失败 / 不存在）。 */
 export function getCached(id: string): IconPathData | null | undefined {
     return cache.get(id);
+}
+
+/**
+ * P2-70：丢弃失败（cache 值为 null）条目，让 wall 切换 / 重连后能对瞬时 404 / 网络抖动
+ * 失败的图标重新发起加载。成功加载的图标（内容寻址，跨 wall 可共享）保留不动，避免无谓重拉。
+ */
+export function clearFailedIconCache(): void {
+    for (const [id, v] of cache) {
+        if (v === null) cache.delete(id);
+    }
 }
 
 /**

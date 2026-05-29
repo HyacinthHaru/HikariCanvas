@@ -174,6 +174,9 @@ class SystemVariableProviderTest {
         // 改 alias
         dataSource.wallMetas.put("w-1",
                 new SystemVariableProvider.WallMeta("w-1", "NewAlias", "P", "u"));
+        // P2-83：alias 刷新现在按 5s 节流（lastAliasPushAt）。initialize() 内的首次 refresh 已记一次
+        // push 时刻，紧接着的第二次 refresh 落在 5s 窗口内会被 skip。把节流表设回过去强制刷新。
+        forceAliasStale(provider);
         provider.refresh();
         assertEquals("NewAlias", store.get("system:w-1/wall.alias").get().currentValue());
     }
@@ -306,6 +309,22 @@ class SystemVariableProviderTest {
     private static void forceAllStale(SystemVariableProvider provider) {
         try {
             java.lang.reflect.Field f = SystemVariableProvider.class.getDeclaredField("nextRefreshAt");
+            f.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Long> map = (Map<String, Long>) f.get(provider);
+            long past = System.currentTimeMillis() - 1_000_000L;
+            for (String k : map.keySet()) {
+                map.put(k, past);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** P2-83：把所有 per-wall alias 节流时刻设回过去，强制下一次 refresh 重刷 alias。 */
+    private static void forceAliasStale(SystemVariableProvider provider) {
+        try {
+            java.lang.reflect.Field f = SystemVariableProvider.class.getDeclaredField("lastAliasPushAt");
             f.setAccessible(true);
             @SuppressWarnings("unchecked")
             Map<String, Long> map = (Map<String, Long>) f.get(provider);

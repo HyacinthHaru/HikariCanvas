@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import type { ScheduleEntry, SchedulePrecision, WallSchedule } from '@/types/schedule';
+import { useProjectStore } from '@/stores/project';
 
 /**
  * 0.4.0-P3-L：列车 / 公交时刻表前端镜像 store。
@@ -10,7 +11,8 @@ import type { ScheduleEntry, SchedulePrecision, WallSchedule } from '@/types/sch
  * {@code wsClient.sendScheduleList(wallId)} 一次性拉数据；后续 op 走 ack payload 自己更新本地
  * mirror（不像 variables 走 state.patch 广播，schedule 用户量小不值得多路推送）。</p>
  *
- * <p>wall 切换时 {@link reset} 清空（由 {@code project.reset()} 触发）；同 wall 重连保留。</p>
+ * <p>wall 切换时 {@link reset} 清空，统一由 {@code project.reset()} 调用（P3-103：不再在
+ * wsClient.handleReady 单独并列调），同 wall 重连保留。</p>
  *
  * <p>0.4.0 bugfix（Bug 4）：增加 precision 字段（minute / second），UI 切换控制 entry 时间
  * 输入精度 + Provider 刷新频率。</p>
@@ -28,10 +30,19 @@ export const useScheduleStore = defineStore('schedule', () => {
         lastError.value = null;
     }
 
+    /**
+     * P3-104：占位 WallSchedule 的 wallId 取 project store 当前真值，避免硬编码空串魔法值。
+     * project.wallId 在 ready handshake 设定，schedule modal 仅在已连接 wall 才可打开，故此处必有真值；
+     * 极端边角（未连接）退回 '' 与旧行为一致。
+     */
+    function currentWallId(): string {
+        return useProjectStore().wallId ?? '';
+    }
+
     function setStationName(stationName: string | null): void {
         if (!current.value) {
             current.value = {
-                wallId: '',
+                wallId: currentWallId(),
                 stationName,
                 updatedAt: Date.now(),
                 precision: 'minute',
@@ -46,7 +57,7 @@ export const useScheduleStore = defineStore('schedule', () => {
     function setPrecision(precision: SchedulePrecision): void {
         if (!current.value) {
             current.value = {
-                wallId: '',
+                wallId: currentWallId(),
                 stationName: null,
                 updatedAt: Date.now(),
                 precision,
@@ -60,7 +71,7 @@ export const useScheduleStore = defineStore('schedule', () => {
     function upsertEntry(entry: ScheduleEntry): void {
         if (!current.value) {
             current.value = {
-                wallId: '',
+                wallId: currentWallId(),
                 stationName: null,
                 updatedAt: Date.now(),
                 precision: 'minute',

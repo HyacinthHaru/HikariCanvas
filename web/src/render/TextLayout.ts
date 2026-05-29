@@ -55,8 +55,13 @@ export function charAdvance(fontId: string, ch: string, fontSize: number): numbe
     return canonicalCharWidth(ch, fontSize);
 }
 
-/** 行首禁则：半全角标点不许出现在行首，回溯到上一行末。 */
-const LINE_START_FORBIDDEN = '）】」』。，、？！：；）】」』。，、？！：；)].,!?:;';
+/**
+ * 行首禁则：半全角标点不许出现在行首，回溯到上一行末。
+ * P3-96：去重（原把 11 个全角标点重复写两遍，indexOf 判定对重复不敏感，仅冗余）。
+ * 保留一组全角 + 一组半角。顺序：） 】 」 』 。 ， 、 ？ ！ ： ；。
+ * 与后端 TextLayout.java 的 LINE_START_FORBIDDEN 逐字节一致（双端镜像硬约束）。
+ */
+const LINE_START_FORBIDDEN = '）】」』。，、？！：；)].,!?:;';
 
 export function layoutText(t: TextElement): PositionedGlyph[] {
     if (!t.text) return [];
@@ -108,7 +113,9 @@ function layoutHorizontal(t: TextElement): PositionedGlyph[] {
         const baselineY = lineTopY + ascentPx;
         const lineWidthPx = measureLineWidth(line.text, fontId, fontSize, letterSpacing);
         let startX = t.x;
-        if (t.align === 'center') startX = t.x + Math.floor((boxW - lineWidthPx) / 2);
+        // P2-33/P2-61: 用 Math.trunc（向零截断）匹配后端 Java 整数除法 `/2` 语义，
+        // 避免行宽溢出文本框（负奇数分子）时双端 startX 差 1px。
+        if (t.align === 'center') startX = t.x + Math.trunc((boxW - lineWidthPx) / 2);
         else if (t.align === 'right') startX = t.x + boxW - lineWidthPx;
 
         let cursorX = startX;
@@ -231,7 +238,8 @@ function layoutVertical(t: TextElement): PositionedGlyph[] {
         const cellsH = col.chars.length;
         const totalH = cellsH * fontSize + Math.max(0, cellsH - 1) * letterSpacing;
         let startTopY: number;
-        if (t.align === 'center') startTopY = t.y + Math.floor((boxH - totalH) / 2);
+        // P2-33/P2-61: 同横排——竖排 center 起点用 Math.trunc 匹配后端 `/2` 截断语义。
+        if (t.align === 'center') startTopY = t.y + Math.trunc((boxH - totalH) / 2);
         else if (t.align === 'right') startTopY = t.y + boxH - totalH;
         else startTopY = t.y;
 

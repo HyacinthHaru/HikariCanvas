@@ -36,7 +36,7 @@ import java.util.logging.Logger;
  * <h2>管线</h2>
  * <pre>
  *   ProjectState
- *      → {@link #rasterize} 产出 {@code widthMaps*128 × heightMaps*128} 的 RGB BufferedImage
+ *      → {@link #rasterize} 产出 {@code widthMaps*128 × heightMaps*128} 的 ARGB BufferedImage
  *      → {@link #toPaletteSlice} 按 mapIndex 切 128×128、逐像素 {@link PaletteLut#matchColor} 量化
  * </pre>
  *
@@ -136,9 +136,10 @@ public final class CanvasCompositor {
     }
 
     /**
-     * 把 {@link ProjectState} 渲染到整张大画布。返回 {@code TYPE_INT_RGB}（无 alpha）。
+     * 把 {@link ProjectState} 渲染到整张大画布。返回 {@code TYPE_INT_ARGB}（含 alpha；
+     * P3-93/0.4.6 P2 起，让透明背景的 alpha 通道贯穿到 {@link #toPaletteSlice}）。
      *
-     * <p>大小 = {@code (widthMaps*128) × (heightMaps*128)}；2×2 = 64 KiB、8×4 = 1 MiB、10×10 = 6.5 MiB。</p>
+     * <p>大小 = {@code (widthMaps*128) × (heightMaps*128)}；2×2 = 85 KiB、8×4 = 2 MiB、10×10 = 8.5 MiB。</p>
      *
      * <h3>M8-E 分层渲染</h3>
      * <ul>
@@ -190,20 +191,29 @@ public final class CanvasCompositor {
             g.setPaint(FillPaintBuilder.fillToPaint(canvas.background(), 0, 0, widthPx, heightPx));
             g.fillRect(0, 0, widthPx, heightPx);
 
+            // P1-8：不可变快照遍历，免疫 WS 编辑线程与变量驱动重画线程对 live ArrayList 的
+            // 并发结构修改（ConcurrentModificationException / 撕裂读）。state.layers() 已是
+            // unmodifiableList live 视图；这里 List.copyOf 锁住层引用，每层 elements 也各取
+            // 一次浅拷贝（Element 是 record 不可变，只需复制容器）。调用方
+            // ProjectionThrottler.flushLocked 在 EditSession 监视器内调本方法，保证这一步浅拷贝
+            // 自身不与结构修改并发——拷贝完成后即便锁释放，迭代也只看快照。
+            List<Layer> layerSnapshot = List.copyOf(state.layers());
+
             // M8-E：分层渲染
-            for (Layer layer : state.layers()) {
+            for (Layer layer : layerSnapshot) {
                 if (!layer.visible()) continue;
                 // M16 P3.2：NaN-aware opacity 兜底；layer.opacity 非 finite → fallback 1.0
                 float layerOpacity = ElementValidator.finiteOr(layer.opacity(), 1.0f);
                 if (layerOpacity <= 0f) continue;
-                if (layer.elements().isEmpty()) continue;
+                List<Element> elementSnapshot = List.copyOf(layer.elements());
+                if (elementSnapshot.isEmpty()) continue;
 
-                if (canFastPath(layer, layerOpacity)) {
-                    drawElementsTo(g, layer.elements(), widthPx, heightPx,
+                if (canFastPath(layer, layerOpacity, elementSnapshot)) {
+                    drawElementsTo(g, elementSnapshot, widthPx, heightPx,
                             interp, wallId, referencedFullNames);
                 } else {
-                    BufferedImage layerBuf = renderLayerToBuffer(layer, widthPx, heightPx,
-                            interp, wallId, referencedFullNames);
+                    BufferedImage layerBuf = renderLayerToBuffer(elementSnapshot,
+                            widthPx, heightPx, interp, wallId, referencedFullNames);
                     BlendModes.applyBlendModeOver(img, layerBuf, layerOpacity, layer.blendMode());
                 }
             }
@@ -232,10 +242,13 @@ public final class CanvasCompositor {
      * renderMode=DITHER 的 element 必须走 slow path（per-pixel 抖动）；这里提前堵口避免
      * 集成时漏判。当前 element.blendMode 即使非 NORMAL 也走 fast path 等价处理（无合成）。</p>
      */
-    private static boolean canFastPath(Layer layer, float sanitizedLayerOpacity) {
+    private static boolean canFastPath(Layer layer, float sanitizedLayerOpacity,
+                                       List<Element> elements) {
         if (sanitizedLayerOpacity < 1.0f) return false;
         if (layer.blendMode() != BlendMode.NORMAL) return false;
-        for (Element e : layer.elements()) {
+        // P1-8：遍历调用方已抓好的不可变快照（与本帧实际绘制的元素集合一致），
+        // 不再二次读 live layer.elements()。
+        for (Element e : elements) {
             Float op = e.opacity();
             // M16 P3.2：NaN opacity 视为非默认（避开 fast path），让 slow path 兜底 clamp
             if (op != null && (!Float.isFinite(op) || op < 1.0f)) return false;
@@ -313,7 +326,9 @@ public final class CanvasCompositor {
         // 0.4.2 bugfix（Bug 1 兜底）：interpolator 已做 MAX_INTERPOLATE_DEPTH 二次扫描；若仍含
         // ${var:} 字面 = 数据损坏或无法收敛，强制全替换为 "???" 防 wall 显字面 placeholder。
         if (rendered != null && rendered.indexOf("${var:") >= 0) {
-            rendered = rendered.replaceAll("\\$\\{var:[^}]*\\}", VariableInterpolator.UNRESOLVED);
+            // P3-74：闭合大括号设为可选 `}?`，让未闭合的 `${var:foo`（行尾缺 `}`）也被兜底替换，
+            // 否则残缺占位符会原样漏到 wall 显字面字符串。[^}]* 贪心吃到下一个 } 或行尾。
+            rendered = rendered.replaceAll("\\$\\{var:[^}]*\\}?", VariableInterpolator.UNRESOLVED);
             LOG.warning("[CanvasCompositor] residual ${var:} after interpolate; replaced with "
                     + VariableInterpolator.UNRESOLVED);
         }
@@ -377,6 +392,15 @@ public final class CanvasCompositor {
             bbY = e.y();
             bbW = e.w();
             bbH = e.h();
+            // P3-20：italic TextElement 走 shear(-0.2, 0) 变换，字形会在左右缘各溢出最多
+            // ceil(0.2 * h)（行高 20% 即最大水平偏移）。dither buffer 若只裁到元素 bbox 会切掉
+            // 倾斜后探出的字形像素。给非旋转分支的 italic 文本左右各扩 shear padding；
+            // translate(-clipX,-clipY) 与 BayerDither phase 仍按扩后坐标传入，dither 相位不变。
+            if (e instanceof TextElement t && Boolean.TRUE.equals(t.italic())) {
+                int shearPad = (int) Math.ceil(0.2 * Math.abs(e.h()));
+                bbX -= shearPad;
+                bbW += shearPad * 2;
+            }
         }
         // 与 canvas 相交
         int clipX = Math.max(0, bbX);
@@ -408,15 +432,23 @@ public final class CanvasCompositor {
         if (opacity < 1.0f) g.setComposite(prev);
     }
 
-    /** slow path：把 layer 内 element 画到独立 ARGB buffer（透明背景）。 */
-    private BufferedImage renderLayerToBuffer(Layer layer, int widthPx, int heightPx,
+    /**
+     * slow path：把 layer 内 element 画到独立 ARGB buffer（透明背景）。
+     *
+     * <p>P1-8：{@code elements} 是调用方已抓的不可变快照（{@link #rasterize} 内
+     * {@code List.copyOf(layer.elements())}），不再二次读 live {@code layer.elements()}，
+     * 保证 fast/slow path 渲染同一份元素集合且免疫并发结构修改。layer 级标量
+     * （blendMode / opacity）已在调用方 {@link #canFastPath} 处判过，这里不再需要。</p>
+     */
+    private BufferedImage renderLayerToBuffer(List<Element> elements,
+                                              int widthPx, int heightPx,
                                               VariableInterpolator interp, String wallId,
                                               Set<String> referencedAccumulator) {
         BufferedImage buf = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
         Graphics2D lg = buf.createGraphics();
         try {
             applyHints(lg);
-            drawElementsTo(lg, layer.elements(), widthPx, heightPx,
+            drawElementsTo(lg, elements, widthPx, heightPx,
                     interp, wallId, referencedAccumulator);
         } finally {
             lg.dispose();

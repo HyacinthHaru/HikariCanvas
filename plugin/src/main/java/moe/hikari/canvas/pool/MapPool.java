@@ -40,12 +40,21 @@ import java.util.logging.Logger;
  *   <li>{@link #initialize(World, Map)}</li>
  *   <li>{@link #reserveForWall(String, int, World)}（扩容时会 createMap）</li>
  * </ul>
- * {@link #detectLeaks} 可异步调用（只读状态不碰 Bukkit API）。
+ * {@link #detectLeaks} 可异步调用：它会 mutate 池状态并写 DB（{@code persist}），但归还
+ * 路径走 {@link #worldNameToUid} 内存缓存而<b>不</b>调 Bukkit API（P2-17 / P3-18 修复后），
+ * 且整段 {@code synchronized(this)} 与主线程 reserve/bind 互斥，DB 写在 HikariCP 连接上线程安全。
  */
 public final class MapPool {
 
     /** RESERVED 时 owner 字段的标准前缀。 */
     public static final String WALL_OWNER_PREFIX = "wall:";
+
+    /**
+     * P2-18：confirm() 在 reserve→bind 之间用的临时 wallId 前缀（owner 形如
+     * {@code wall:pending-<uuid>}）。{@link #detectLeaks} 据此豁免正在创建中的预留，
+     * 避免异步泄漏检测在窗口期误删。SessionManager.confirm 必须用此前缀生成临时 wallId。
+     */
+    public static final String PENDING_WALL_PREFIX = "pending-";
 
     private final Logger log;
     private final Jdbi jdbi;
@@ -57,6 +66,13 @@ public final class MapPool {
     private final Map<Integer, PooledMap> byId = new HashMap<>();
     /** FREE 队列按 world UUID 分桶。同一 world 的 FREE map 集中在一条 deque 里。 */
     private final Map<UUID, Deque<Integer>> freeByWorld = new HashMap<>();
+    /**
+     * P2-17 / P3-18：world name → UUID 缓存。每次 {@link #offerFree(int, World)} 拿到 live
+     * {@link World} 时填充。让 {@link #detectLeaks} 这类<b>异步</b>路径能用名字反查 UUID 桶，
+     * 而<b>不</b>调 {@link Bukkit#getWorld(String)}（Bukkit API 主线程专用）。
+     * 缓存 miss（极罕见：world 已卸载且从未在本进程 offerFree 过）才退化到 unknown 桶。
+     */
+    private final Map<String, UUID> worldNameToUid = new HashMap<>();
 
     public MapPool(Logger log, Jdbi jdbi, AuditLog auditLog,
                    HikariCanvasRenderer sharedRenderer,
@@ -103,11 +119,17 @@ public final class MapPool {
         int missingMapView = 0;
         int normalized = 0;
 
+        // P3-122：收集 DB 写工作，循环结束后用单个事务批量执行，消除每行独立 useHandle
+        // 各自 WAL fsync 的 O(N) 启动开销。Bukkit 调用（getMap / renderer / offerFree）
+        // 仍逐行做（主线程，不能进 DB 事务），但纯内存。
+        List<Integer> orphanDeletes = new ArrayList<>();
+        List<PooledMap> normalizedPersists = new ArrayList<>();
+
         for (PooledMap rec : persisted) {
             MapView view = Bukkit.getMap(rec.mapId());
             if (view == null) {
                 missingMapView++;
-                jdbi.useHandle(h -> h.execute("DELETE FROM pool_maps WHERE map_id = ?", rec.mapId()));
+                orphanDeletes.add(rec.mapId());
                 auditLog.record("POOL_ORPHAN_ROW", null, null, null, null,
                         Map.of("map_id", rec.mapId(), "state", rec.state().name()));
                 continue;
@@ -120,7 +142,7 @@ public final class MapPool {
             PooledMap normalizedRec = enforceInvariant(rec, now);
             if (!normalizedRec.equals(rec)) {
                 normalized++;
-                persist(normalizedRec);
+                normalizedPersists.add(normalizedRec);
             }
 
             byId.put(normalizedRec.mapId(), normalizedRec);
@@ -129,6 +151,11 @@ public final class MapPool {
             }
             recovered++;
         }
+
+        // P3-122：单事务批量 flush orphan DELETE + normalized INSERT/UPDATE。失败仅 SEVERE
+        // 日志（保持原 persist 吞异常的纪律），不阻断启动——in-memory 状态已就绪，下次
+        // 启动 / detectLeaks 可再收敛。
+        flushInitDbWork(orphanDeletes, normalizedPersists);
 
         log.info(String.format(
                 "MapPool recovered %d entries (free=%d reserved=%d; missing MapView=%d; normalized=%d)",
@@ -198,6 +225,11 @@ public final class MapPool {
         Objects.requireNonNull(wallId);
         Objects.requireNonNull(world, "world required (multi-world map pool)");
         if (count <= 0) throw new IllegalArgumentException("count must be > 0");
+
+        // P3-30：先把 unknown-world 桶里实际属于本 world 的 map 迁回。这些是 world 卸载期间
+        // offerFreeByName 暂存进 zero-UUID 桶的"僵尸 FREE"——world 重新加载后名字可重新匹配，
+        // 不该白白吃掉预算 / 触发不必要的 expand。
+        reclaimUnknownBucketForWorld(world);
 
         int haveInWorld = freeCountFor(world);
         int shortfall = count - haveInWorld;
@@ -331,6 +363,16 @@ public final class MapPool {
      * 泄漏检测：RESERVED 但 owner 非 "wall:*" 格式（旧版残留），或者 walls 表无对应行。
      * 当前简化策略：扫所有 RESERVED；非 "wall:" 前缀直接归还（视为旧 session: / draft: 残留）。
      * 后续可加"wall_id 不在 walls 表"的二次校验；调用方负责传 liveWallIds 集合。
+     *
+     * <p><b>P2-17 / P3-18：</b> 本方法可异步调用——内部 {@link #offerFreeByName} 走 name→UUID
+     * 内存缓存归还（{@link #worldNameToUid}），不触 Bukkit API。{@code persist} 的 DB 写在
+     * HikariCP 连接上线程安全。整段 {@code synchronized(this)} 与主线程 reserve/bind 互斥。</p>
+     *
+     * <p><b>P2-18：</b> 跳过 {@link #PENDING_WALL_PREFIX pending-} owner —— confirm() 在
+     * reserve（owner=wall:pending-&lt;uuid&gt;）与最终 bind 到真 wallId 之间有一个短暂窗口，
+     * 此间 maps 是 RESERVED 但 wallId 是临时的 pending-*，不在 liveWallIds 里。若不豁免，异步
+     * detectLeaks 恰好在该窗口运行会把正在创建的 wall 的 maps 强制 FREE，造成 confirm 内部
+     * bind race / 像素错乱。pending-* 是 transient 中间态，<b>不参与泄漏判定</b>。</p>
      */
     public synchronized int detectLeaks(java.util.Set<String> liveWallIds) {
         long now = System.currentTimeMillis();
@@ -348,6 +390,10 @@ public final class MapPool {
                 continue;
             }
             String wallId = owner.substring(WALL_OWNER_PREFIX.length());
+            // P2-18：pending-* 是 confirm() reserve→bind 之间的临时 owner，豁免泄漏检测
+            if (wallId.startsWith(PENDING_WALL_PREFIX)) {
+                continue;
+            }
             if (liveWallIds != null && !liveWallIds.contains(wallId)) {
                 leaked.add(m.mapId());
             }
@@ -401,30 +447,61 @@ public final class MapPool {
 
     private void expand(World world, int count) {
         long now = System.currentTimeMillis();
+        // P2-52：钳到 maxSize 上限。initialize 的 per-world 预热（perWorldInitial 求和可能 >
+        // maxSize）若不钳，会让池超过 max 不变式。reserveForWall 路径已提前校验 maxSize，
+        // 这里的钳位主要保护 initialize 预热路径，并作为 expand 的单点不变式守卫。
+        int room = Math.max(0, maxSize - byId.size());
+        if (count > room) {
+            log.warning("MapPool.expand: requested " + count + " new maps in world '"
+                    + world.getName() + "' but only " + room + " slots left under max="
+                    + maxSize + " (current total=" + byId.size() + "); clamping to " + room
+                    + ". Check map-pool.per-world config sums <= max-size.");
+            count = room;
+        }
+        int created = 0;
         for (int i = 0; i < count; i++) {
             MapView view = Bukkit.createMap(world);
             new java.util.ArrayList<>(view.getRenderers()).forEach(view::removeRenderer);
             view.addRenderer(sharedRenderer);
             int id = view.getId();
             PooledMap rec = new PooledMap(id, PoolState.FREE, null, world.getName(), now, now);
+            // P2-49：先持久化再注册到 in-memory 结构。persist 失败时不 byId.put/offerFree——
+            // 让该 map 成为一个"DB 不知道、内存也不知道"的真孤儿（下次 initialize/detectLeaks
+            // 通过 Bukkit.getMap 扫描可发现并规整），而不是"内存有、DB 没有"的幽灵（重启即丢，
+            // 借出去后 last_used 永不落盘，LRU/恢复逻辑全乱）。persist 在此路径必须抛而非吞。
+            persistStrict(rec);
             byId.put(id, rec);
             offerFree(id, world);
-            persist(rec);
+            created++;
         }
         auditLog.record("POOL_EXPAND", null, null, null, null,
-                Map.of("count", count, "world", world.getName(), "new_total", byId.size()));
+                Map.of("count", created, "world", world.getName(), "new_total", byId.size()));
     }
 
     /** 把 mapId 加入对应 world 的 FREE 队列。 */
     private void offerFree(int mapId, World world) {
+        // P2-17 / P3-18：记下 name→UUID，让异步 detectLeaks 路径可名字反查不调 Bukkit。
+        worldNameToUid.put(world.getName(), world.getUID());
         freeByWorld.computeIfAbsent(world.getUID(), k -> new ArrayDeque<>()).offer(mapId);
     }
 
     /**
      * 由 world 名字版本（用于 release 路径——PooledMap 只持 world name）。
      * 名字解析失败时打 warning 但不抛——map 仍然加进 byId，detectLeaks 后续可见。
+     *
+     * <p>P2-17 / P3-18：先查 {@link #worldNameToUid} 内存缓存（已 offerFree 过的 world 都有），
+     * 命中即直接入对应 UUID 桶，<b>零 Bukkit 调用</b>——这是让 {@link #detectLeaks} 能在异步
+     * 线程安全归还的关键。缓存 miss 才退化到 {@link Bukkit#getWorld}（仅 {@link #releaseWall} /
+     * {@link #releaseToFree} 等主线程路径会走到，主线程下 Bukkit 调用合法）。</p>
      */
     private void offerFreeByName(int mapId, String worldName) {
+        if (worldName != null) {
+            UUID cached = worldNameToUid.get(worldName);
+            if (cached != null) {
+                freeByWorld.computeIfAbsent(cached, k -> new ArrayDeque<>()).offer(mapId);
+                return;
+            }
+        }
         World w = worldName == null ? null : Bukkit.getWorld(worldName);
         if (w == null) {
             // World 已卸载（玩家删 multiverse world？）。fallback：放在一个"未知"桶里，
@@ -450,6 +527,32 @@ public final class MapPool {
     private int freeCountFor(World world) {
         Deque<Integer> q = freeByWorld.get(world.getUID());
         return q == null ? 0 : q.size();
+    }
+
+    /**
+     * P3-30：把 unknown-world 桶（zero UUID）里 {@link PooledMap#world()} 名字 == 目标 world
+     * 名的 FREE map 迁回该 world 的 UUID 桶。world 卸载窗口期 offerFreeByName 把归还的 map
+     * 暂存到 zero 桶；world 重新加载后调本方法即可回收，避免僵尸 FREE 永久占预算。
+     * 调用方须持 {@code synchronized(this)}。
+     */
+    private void reclaimUnknownBucketForWorld(World world) {
+        Deque<Integer> unknown = freeByWorld.get(new UUID(0L, 0L));
+        if (unknown == null || unknown.isEmpty()) return;
+        worldNameToUid.put(world.getName(), world.getUID());
+        String targetName = world.getName();
+        List<Integer> moved = new ArrayList<>();
+        for (Integer id : new ArrayList<>(unknown)) {
+            PooledMap m = byId.get(id);
+            if (m != null && targetName.equals(m.world())) {
+                unknown.remove(id);
+                freeByWorld.computeIfAbsent(world.getUID(), k -> new ArrayDeque<>()).offer(id);
+                moved.add(id);
+            }
+        }
+        if (!moved.isEmpty()) {
+            log.info("MapPool: reclaimed " + moved.size() + " map(s) from unknown-world bucket "
+                    + "back to world '" + targetName + "'. map_ids=" + moved);
+        }
     }
 
     private int totalFreeCount() {
@@ -484,20 +587,71 @@ public final class MapPool {
         return c;
     }
 
+    private static final String PERSIST_SQL =
+            "INSERT INTO pool_maps (map_id, state, reserved_by, world, created_at, last_used_at) "
+                    + "VALUES (?, ?, ?, ?, ?, ?) "
+                    + "ON CONFLICT(map_id) DO UPDATE SET "
+                    + "state = excluded.state, "
+                    + "reserved_by = excluded.reserved_by, "
+                    + "world = excluded.world, "
+                    + "last_used_at = excluded.last_used_at";
+
+    /** P3-122：named-param 版本，给 {@link #flushInitDbWork} 的 {@code createUpdate} 批量路径用。 */
+    private static final String PERSIST_NAMED_SQL =
+            "INSERT INTO pool_maps (map_id, state, reserved_by, world, created_at, last_used_at) "
+                    + "VALUES (:map_id, :state, :reserved_by, :world, :created_at, :last_used_at) "
+                    + "ON CONFLICT(map_id) DO UPDATE SET "
+                    + "state = excluded.state, "
+                    + "reserved_by = excluded.reserved_by, "
+                    + "world = excluded.world, "
+                    + "last_used_at = excluded.last_used_at";
+
     private void persist(PooledMap m) {
         try {
-            jdbi.useHandle(h -> h.execute(
-                    "INSERT INTO pool_maps (map_id, state, reserved_by, world, created_at, last_used_at) "
-                            + "VALUES (?, ?, ?, ?, ?, ?) "
-                            + "ON CONFLICT(map_id) DO UPDATE SET "
-                            + "state = excluded.state, "
-                            + "reserved_by = excluded.reserved_by, "
-                            + "world = excluded.world, "
-                            + "last_used_at = excluded.last_used_at",
-                    m.mapId(), m.state().name(), m.reservedBy(), m.world(),
-                    m.createdAt(), m.lastUsedAt()));
+            persistStrict(m);
         } catch (Exception e) {
             log.log(Level.SEVERE, "Failed to persist pool_maps row for map_id=" + m.mapId(), e);
         }
+    }
+
+    /**
+     * P3-122：把 {@link #initialize} 恢复阶段收集的孤儿行删除 + 规整行 upsert 收进<b>单个</b>
+     * 事务执行，取代每行独立 {@code useHandle}（各自 WAL fsync）的 O(N) 启动写压力——单事务
+     * 只在 commit 时 fsync 一次。失败吞为 SEVERE 日志（与 {@link #persist} 同纪律），不阻断启动。
+     */
+    private void flushInitDbWork(List<Integer> orphanDeletes, List<PooledMap> upserts) {
+        if (orphanDeletes.isEmpty() && upserts.isEmpty()) return;
+        try {
+            jdbi.useTransaction(h -> {
+                for (int id : orphanDeletes) {
+                    h.createUpdate("DELETE FROM pool_maps WHERE map_id = :id")
+                            .bind("id", id)
+                            .execute();
+                }
+                for (PooledMap m : upserts) {
+                    h.createUpdate(PERSIST_NAMED_SQL)
+                            .bind("map_id", m.mapId())
+                            .bind("state", m.state().name())
+                            .bind("reserved_by", m.reservedBy())
+                            .bind("world", m.world())
+                            .bind("created_at", m.createdAt())
+                            .bind("last_used_at", m.lastUsedAt())
+                            .execute();
+                }
+            });
+        } catch (Exception e) {
+            log.log(Level.SEVERE, "MapPool.initialize: batch DB flush failed (orphanDeletes="
+                    + orphanDeletes.size() + ", upserts=" + upserts.size() + ")", e);
+        }
+    }
+
+    /**
+     * P2-49：持久化并向调用方<b>抛出</b> DB 异常（不吞）。用于 {@link #expand} 的"先落盘再注册"
+     * 路径——新建 map 的 DB 写若失败，必须让调用方知道并避免把 map 注册进内存结构。
+     */
+    private void persistStrict(PooledMap m) {
+        jdbi.useHandle(h -> h.execute(PERSIST_SQL,
+                m.mapId(), m.state().name(), m.reservedBy(), m.world(),
+                m.createdAt(), m.lastUsedAt()));
     }
 }

@@ -28,7 +28,7 @@ final class LayerOperations {
     static final int MAX_LAYERS = 64;
     static final int MAX_LAYER_NAME = 64;
     /**
-     * M8-TODO 项 2：图层颜色标签允许值（Catppuccin 色名）。null = 无标签。
+     * 图层颜色标签允许值（Catppuccin 色名）。null = 无标签。
      * 任何其他字符串都会被 updateLayer 拒为 INVALID_PAYLOAD。
      */
     static final java.util.Set<String> ALLOWED_COLOR_TAGS = java.util.Set.of(
@@ -151,7 +151,7 @@ final class LayerOperations {
         boolean locked = cur.locked();
         float opacity = cur.opacity();
         BlendMode blendMode = cur.blendMode();
-        // M8-TODO 项 2：图层颜色标签（PS 风格，仅 UI 显示用）。
+        // 图层颜色标签（PS 风格，仅 UI 显示用）。
         String colorTag = cur.colorTag();
 
         try {

@@ -59,7 +59,7 @@ function levelClass(level: string): string {
       ref="logList"
       class="flex-1 overflow-y-auto px-3 py-2 font-mono text-xs leading-5 bg-[color:var(--background)]"
     >
-      <div v-for="line in displayLogs" :key="line.ts + line.text" :class="levelClass(line.level)">
+      <div v-for="line in displayLogs" :key="line.id" :class="levelClass(line.level)">
         <span class="text-[color:var(--muted-foreground)] mr-2">
           {{ new Date(line.ts).toISOString().slice(11, 23) }}
         </span>

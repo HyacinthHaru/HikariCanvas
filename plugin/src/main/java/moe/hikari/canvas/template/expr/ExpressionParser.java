@@ -159,13 +159,31 @@ public final class ExpressionParser {
 
     // ============================ Parser ============================
 
+    /**
+     * P3-52：递归下降嵌套深度上限。每层 {@code (} 进入 {@code parseOr}、每个 {@code !}
+     * 进入 {@code parseUnary} 都自增 depth，超限抛 {@link ParseException}（被
+     * {@code TemplateLoader.checkExpression} 正常 catch），把原本未设防的无界递归
+     * （海量 {@code (} / {@code !} → StackOverflowError 逃出 loader.reload）降级为
+     * 普通 §9 校验失败。64 远大于任何合理 visible_when 嵌套深度。
+     */
+    private static final int MAX_DEPTH = 64;
+
     private static final class Parser {
         private final List<Token> tokens;
         private int p = 0;
+        private int depth = 0;
 
         Parser(List<Token> tokens) { this.tokens = tokens; }
 
         Token peek() { return tokens.get(p); }
+
+        /** P3-52：进入一个会加深递归的层级，超 {@link #MAX_DEPTH} 抛 ParseException。 */
+        private void enterDepth() {
+            if (++depth > MAX_DEPTH) {
+                throw new ParseException("expression nesting too deep (> " + MAX_DEPTH + ")",
+                        peek().pos());
+            }
+        }
 
         private Token consume(TokenKind expected) {
             Token t = peek();
@@ -177,13 +195,18 @@ public final class ExpressionParser {
         }
 
         Expr parseOr() {
-            Expr left = parseAnd();
-            while (peek().kind() == TokenKind.OR) {
-                p++;
-                Expr right = parseAnd();
-                left = new Expr.Binary(Expr.Op.OR, left, right);
+            enterDepth();
+            try {
+                Expr left = parseAnd();
+                while (peek().kind() == TokenKind.OR) {
+                    p++;
+                    Expr right = parseAnd();
+                    left = new Expr.Binary(Expr.Op.OR, left, right);
+                }
+                return left;
+            } finally {
+                depth--;
             }
-            return left;
         }
 
         Expr parseAnd() {
@@ -209,8 +232,13 @@ public final class ExpressionParser {
 
         Expr parseUnary() {
             if (peek().kind() == TokenKind.NOT) {
-                p++;
-                return new Expr.Not(parseUnary());
+                enterDepth();
+                try {
+                    p++;
+                    return new Expr.Not(parseUnary());
+                } finally {
+                    depth--;
+                }
             }
             return parsePrimary();
         }

@@ -189,7 +189,12 @@ const elements = computed(() => project.state?.elements ?? []);
 // 只在 paint-bucket 工具激活时跑 worker；切走时 useLivePaint 内部跳过 send + 清空 graph。
 // visibleElements 过滤 visible=false 的 element（隐藏图层 / 隐藏元素不参与 gap 计算）。
 const livePaintEnabled = computed(() => ui.activeTool === 'paint-bucket');
-const visibleElements = computed(() => elements.value.filter((e) => e.visible !== false));
+// P3-27：elements 指向 activeLayer.elements；活动层被隐藏时画布不渲染这些元素，
+// 故它们也不应参与 findElementAt / marquee / Live Paint gap 命中——与 useSnapManager
+// 的 `layer.visible && el.visible` 语义对齐（隐藏即不可交互）。
+const visibleElements = computed(() =>
+    project.activeLayer.visible === false ? [] : elements.value.filter((e) => e.visible !== false),
+);
 const livePaint = useLivePaint({
     elements: visibleElements,
     canvasWidth: widthPx,
@@ -648,8 +653,10 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
         net.pushLog('meta', t.value.livePaint.wallLocked);
         return;
     }
-    // P0：graph 还没构建（首帧 / 大量 element rebuild 中）—— 提示用户稍等再点
-    if (!livePaint.graph.value) {
+    // P0：graph 还没构建（首帧 / 大量 element rebuild 中）—— 提示用户稍等再点。
+    // P2-30：加 isBuilding 门——重新启用工具后、新一轮 rebuild 完成前 graph 可能仍是
+    // 上一轮的陈旧拓扑，此时点击应被"请稍候"安全拒绝，而非对过期拓扑执行填充。
+    if (!livePaint.graph.value || livePaint.isBuilding.value) {
         net.pushLog('meta', t.value.livePaint.building);
         return;
     }
@@ -975,26 +982,33 @@ watch(editingId, () => requestDraw());
 // 让 PreviewRenderer 内的 interpolator 重新计算占位符替换值。useVariableStore.set/remove/clear
 // 都走 `variables.value = new Map(...)` 替换整个 ref，无需 deep watch。
 watch(() => variableStore.variables, () => requestDraw());
+
+// P3-40：FontLoader / IconLoader / GlyphMetricsLut 的 requestDraw 订阅 unsubscribe 闭包，
+// onBeforeUnmount 逐一调用注销（与 stage.destroy 清理并列）。
+const loaderUnsubscribers: Array<() => void> = [];
+
 onMounted(() => {
     requestDraw();
     // M23：所有字体走 FontLoader（document.fonts 动态加载）。
     //     ensureLoaded 是 PreviewRenderer drawText 调用的，这里只 preload 默认两个
     //     避免首帧空白；onFontLoaded 回调注册后任何 fontId 加载完都触发重画。
+    // P3-40：on*Loaded 返回 unsubscribe 闭包，存入 loaderUnsubscribers，onBeforeUnmount 逐一注销，
+    //        避免 FontLoader/IconLoader/GlyphMetricsLut 模块级 readyHandlers 数组只增不减（旧闭包泄漏）。
     ensureFontLoaded('ark_pixel');
     ensureFontLoaded('source_han_sans');
-    onFontLoaded(() => requestDraw());
+    loaderUnsubscribers.push(onFontLoaded(() => requestDraw()));
     // 图标异步加载就绪后请求重绘（每个新 source 第一次显示时占位 ?，加载完后真图替换）
     onIconReady(() => requestDraw());
     // M26.2：SVG 矢量图标 path d / viewBox 异步加载完成后请求重绘（同 onIconReady pattern；
     // 前者是 PNG 路径走 /api/template-asset，后者是 SVG path 走 /api/icon/paths）
-    onIconLoaded(() => requestDraw());
+    loaderUnsubscribers.push(onIconLoaded(() => requestDraw()));
     // M11-C：PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）
     onPaletteReady(() => requestDraw());
-    // M20-P3：GlyphMetricsLut 异步加载完成后请求重绘（text element 首帧走 canonicalCharWidth fallback，
+    // M20-P3：GlyphMetricsLut 异步加载完成后请求重绘（text element 首帧走 canonicalCharWidth fallback,
     // 加载完切到 per-font advance；与 onIconReady / onPaletteReady 同款 pattern）
     preloadMetrics('ark_pixel');
     preloadMetrics('source_han_sans');
-    onMetricsReady(() => requestDraw());
+    loaderUnsubscribers.push(onMetricsReady(() => requestDraw()));
 
     // M17 F4：1024px 虚空白边让 scrollWidth / scrollHeight 比 viewport 大；
     // 默认 scrollLeft/Top = 0 会停在 padding 区导致看不到画布。nextTick 后居中。
@@ -1016,6 +1030,11 @@ onBeforeUnmount(() => {
         cancelAnimationFrame(drawRafId);
         drawRafId = null;
     }
+    // P3-40：注销 loader requestDraw 订阅，避免模块级 readyHandlers 数组泄漏旧组件 scope。
+    for (const unsub of loaderUnsubscribers) {
+        try { unsub(); } catch (err) { console.warn('[CanvasView] loader unsubscribe failed', err); }
+    }
+    loaderUnsubscribers.length = 0;
     const stageNode = stageRef.value?.getNode() as undefined | { destroy(): void };
     if (stageNode && typeof stageNode.destroy === 'function') {
         try { stageNode.destroy(); } catch (err) { console.warn('[CanvasView] stage.destroy failed', err); }
@@ -1220,7 +1239,7 @@ function requestDraw(): void {
       @change="onFileInputChange"
     />
 
-    <!-- M8-TODO 项 3：对齐 / 分布工具栏（仅多选时显示） -->
+    <!-- 对齐 / 分布工具栏（仅多选时显示） -->
     <AlignDistributeBar />
 
     <!-- 右下角 zoom 控件（升级版） -->

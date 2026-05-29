@@ -72,6 +72,16 @@ public final class VariableStore {
     private final ConcurrentHashMap<String, Set<String>> byNamespace = new ConcurrentHashMap<>();
     /** wallId → fullName set（倒排索引；Compositor render 前 markWallReferences 维护）。 */
     private final ConcurrentHashMap<String, Set<String>> byWall = new ConcurrentHashMap<>();
+    /**
+     * 0.4.10 P2-23：markWallReferences 的 per-wallId 条带锁。
+     *
+     * <p>原 markWallReferences 的「快照 previous → 算 diff → 逐项写 bucket + referencedByWalls」
+     * 三步非原子：同一 wall 的两个并发 markWallReferences（如 Compositor render 线程 + ready
+     * payload 构造）交错执行会让 byWall 桶与各 Variable.referencedByWalls 互相不对称（一个有、
+     * 另一个无）。用 per-wallId monitor 把整段串行化，对外原子可见。markWallReferences 调用
+     * 频率低（仅渲染 / refresh 时），per-wall 锁开销可忽略。</p>
+     */
+    private final ConcurrentHashMap<String, Object> wallRefMonitors = new ConcurrentHashMap<>();
 
     private final UserVariableDao dao;
     /** 任意 wall dirty 通知（B 任务接到 ProjectionThrottler#dirty）；P1 阶段可为 noop。 */
@@ -89,6 +99,15 @@ public final class VariableStore {
 
     private volatile int maxUserGlobalPerOwner = DEFAULT_USERGLOBAL_PER_OWNER;
     private volatile int maxUserGlobalTotal = DEFAULT_USERGLOBAL_TOTAL;
+
+    /**
+     * 0.4.10 P2-22 / P3-14：createGlobal 配额检查（per-owner + total）与后续 create→persist
+     * 之间存在 TOCTOU 窗口——两个会话同一 owner 并发可双双过 count 检查越过上限。
+     * createGlobal 频率极低（玩家手动建全局变量），用一把锁串行化整个 count→create→persist
+     * 流程，强制 happens-before，开销可忽略。
+     */
+    private final java.util.concurrent.locks.ReentrantLock globalCreateLock =
+            new java.util.concurrent.locks.ReentrantLock();
 
     /**
      * 0.4.3：全局变量 key → owner 信息（在内存）。
@@ -297,32 +316,40 @@ public final class VariableStore {
             throw new VariableException(VariableException.Code.VARIABLE_TYPE_MISMATCH,
                     "type must not be null");
         }
-        // 配额：先 DB 查 count（不抢锁）+ compute 内还会有全局 MAX_GLOBAL 兜底
-        int ownerCount = globalDao.countByOwner(ownerUuid);
-        if (ownerCount >= maxUserGlobalPerOwner) {
-            throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
-                    "userglobal quota exceeded for owner ("
-                            + ownerCount + "/" + maxUserGlobalPerOwner + ")");
-        }
-        int totalCount = globalDao.countTotal();
-        if (totalCount >= maxUserGlobalTotal) {
-            throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
-                    "userglobal quota exceeded globally ("
-                            + totalCount + "/" + maxUserGlobalTotal + ")");
-        }
-
-        // 在 store.create 之前 put ownerInfo，让 persistIfUserGlobal 能读到 owner
-        // 注意：putIfAbsent 防 race；如已存在 — VARIABLE_EXISTS 检查会在 create 内拒
-        GlobalOwnerInfo info = new GlobalOwnerInfo(ownerUuid, ownerName);
-        GlobalOwnerInfo prev = globalOwners.putIfAbsent(key, info);
-        boolean ownerPlacedHere = (prev == null);
+        // 0.4.10 P2-22 / P3-14：整段 count→create→persist 在锁内串行，消除跨会话 TOCTOU。
+        globalCreateLock.lock();
         try {
-            // source = "manual" 同 user 变量；bind 后会改写
-            return create(USER_GLOBAL_NAMESPACE, key, type, defaultValue, "manual");
-        } catch (RuntimeException e) {
-            // create 失败回滚 owner 表（仅当本调用是首次 put 才回滚）
-            if (ownerPlacedHere) globalOwners.remove(key, info);
-            throw e;
+            // 配额：DB 查 count + compute 内还有全局 MAX_GLOBAL 兜底
+            int ownerCount = globalDao.countByOwner(ownerUuid);
+            if (ownerCount >= maxUserGlobalPerOwner) {
+                throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
+                        "userglobal quota exceeded for owner ("
+                                + ownerCount + "/" + maxUserGlobalPerOwner + ")");
+            }
+            int totalCount = globalDao.countTotal();
+            if (totalCount >= maxUserGlobalTotal) {
+                throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
+                        "userglobal quota exceeded globally ("
+                                + totalCount + "/" + maxUserGlobalTotal + ")");
+            }
+
+            // 在 store.create 之前 put ownerInfo，让 persistIfUserGlobal 能读到 owner
+            // 注意：putIfAbsent 防 race；如已存在 — VARIABLE_EXISTS 检查会在 create 内拒
+            GlobalOwnerInfo info = new GlobalOwnerInfo(ownerUuid, ownerName);
+            GlobalOwnerInfo prev = globalOwners.putIfAbsent(key, info);
+            boolean ownerPlacedHere = (prev == null);
+            try {
+                // source = "manual" 同 user 变量；bind 后会改写
+                // 0.4.10 P2-31：userglobal 跳过 per-namespace 配额（MAX_PER_NAMESPACE=1000），
+                // 改由 maxUserGlobalTotal（默 10000，已在上方校验）封顶，让 config 的 total 真正可达。
+                return create(USER_GLOBAL_NAMESPACE, key, type, defaultValue, "manual", true);
+            } catch (RuntimeException e) {
+                // create 失败回滚 owner 表（仅当本调用是首次 put 才回滚）
+                if (ownerPlacedHere) globalOwners.remove(key, info);
+                throw e;
+            }
+        } finally {
+            globalCreateLock.unlock();
         }
     }
 
@@ -383,6 +410,18 @@ public final class VariableStore {
      */
     public Variable create(String namespace, String key, VarType type,
                            @Nullable String defaultValue, @Nullable String source) {
+        return create(namespace, key, type, defaultValue, source, false);
+    }
+
+    /**
+     * 0.4.10 P2-31：内部 create，{@code skipNsQuota=true} 时跳过 per-namespace 配额
+     * （{@link #MAX_PER_NAMESPACE}）。仅 {@link #createGlobal}（userglobal namespace）用——
+     * 它自己用 {@link #maxUserGlobalTotal} 封顶，否则 MAX_PER_NAMESPACE=1000 会硬封 config
+     * 的 total（默 10000）使其不可达。全局 {@link #MAX_GLOBAL} 兜底始终生效。
+     */
+    private Variable create(String namespace, String key, VarType type,
+                            @Nullable String defaultValue, @Nullable String source,
+                            boolean skipNsQuota) {
         validateNamespace(namespace);
         validateKey(key);
         validateValueLength(defaultValue);
@@ -411,7 +450,7 @@ public final class VariableStore {
             }
             Set<String> nsBucket = byNamespace.computeIfAbsent(namespace,
                     n -> ConcurrentHashMap.newKeySet());
-            if (nsBucket.size() >= MAX_PER_NAMESPACE) {
+            if (!skipNsQuota && nsBucket.size() >= MAX_PER_NAMESPACE) {
                 throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
                         "namespace variable quota exceeded for " + namespace
                                 + ": " + MAX_PER_NAMESPACE);
@@ -528,7 +567,13 @@ public final class VariableStore {
         Set<String> nsBucket = byNamespace.get(removed.namespace());
         if (nsBucket != null) {
             nsBucket.remove(fullName);
-            // 不主动清空 nsBucket：留住 namespace 桶给将来同 ns 创建复用 set 对象。
+            // 0.4.10 P3-91(a)：桶空则原子移除空桶——否则 per-wall namespace（user:<wallId> /
+            // schedule:<wallId> 等）的桶在 wall 删除后永久驻留（内存泄漏，long-running server
+            // 上 byNamespace 单调增长）。用 2 参 remove(key, value) 防 race：仅当当前映射仍是
+            // 这个空桶才移除——若有并发 create 已重新填入，2 参 remove 会因值不等而跳过。
+            if (nsBucket.isEmpty()) {
+                byNamespace.remove(removed.namespace(), nsBucket);
+            }
         }
         // 0.4.0 bugfix3（Bug B）：删除前先抓住 referencedByWalls 快照——用于 fireChange 路由。
         // 接下来 byWall 清掉之后 removed.referencedByWalls() 仍是 mutation 前的 Set（record immutable），
@@ -689,30 +734,37 @@ public final class VariableStore {
         Set<String> normalized = referencedFullNames == null
                 ? Set.of() : Set.copyOf(referencedFullNames);
 
-        Set<String> bucket = byWall.computeIfAbsent(wallId,
-                w -> ConcurrentHashMap.newKeySet());
+        boolean changed;
+        // 0.4.10 P2-23：per-wallId 条带锁，把「快照→diff→双结构写」整段串行化。
+        Object monitor = wallRefMonitors.computeIfAbsent(wallId, w -> new Object());
+        synchronized (monitor) {
+            Set<String> bucket = byWall.computeIfAbsent(wallId,
+                    w -> ConcurrentHashMap.newKeySet());
 
-        // diff：先算出离开的 + 新加入的，逐项更新 store 内 Variable.referencedByWalls
-        Set<String> previous = new HashSet<>(bucket);
-        Set<String> removed = new HashSet<>(previous);
-        removed.removeAll(normalized);
-        Set<String> added = new HashSet<>(normalized);
-        added.removeAll(previous);
+            // diff：先算出离开的 + 新加入的，逐项更新 store 内 Variable.referencedByWalls
+            Set<String> previous = new HashSet<>(bucket);
+            Set<String> removed = new HashSet<>(previous);
+            removed.removeAll(normalized);
+            Set<String> added = new HashSet<>(normalized);
+            added.removeAll(previous);
 
-        for (String fn : removed) {
-            bucket.remove(fn);
-            removeWallFromReferencedSet(fn, wallId);
-        }
-        for (String fn : added) {
-            bucket.add(fn);
-            addWallToReferencedSet(fn, wallId);
+            for (String fn : removed) {
+                bucket.remove(fn);
+                removeWallFromReferencedSet(fn, wallId);
+            }
+            for (String fn : added) {
+                bucket.add(fn);
+                addWallToReferencedSet(fn, wallId);
+            }
+            changed = !removed.isEmpty() || !added.isEmpty();
         }
 
         // 0.4.0 方案 B 自适应渲染：引用集合有变化时通知 listener 重新评估高频状态。
         // 用 WALL_REFS_UPDATED 类型 + variable=null + fullName=占位符 让广播 listener 跳过 patch 推送
         // （SessionManager.broadcastVariableChangeToWall 拿到 null variable 时不构造 patch）；
         // HikariCanvas 注入的自适应 listener 据此调 ProjectionThrottler.setIntervalForSession。
-        if (!removed.isEmpty() || !added.isEmpty()) {
+        // fireWallRefsUpdated 在锁外调（避免持锁回调 listener）。
+        if (changed) {
             fireWallRefsUpdated(wallId);
         }
     }
@@ -741,14 +793,47 @@ public final class VariableStore {
     }
 
     /**
-     * Wall 删除时调用（B 任务在 walls 表 DELETE 后联动）：从所有变量的倒排索引清掉 wallId。
-     * 同时不清持久化 user_variables，由外部走 {@link UserVariableDao#deleteByWall} 或 FK CASCADE。
+     * Wall 删除时调用（B 任务在 walls 表 DELETE 后联动）：从所有变量的倒排索引清掉 wallId，
+     * 并删除该 wall 的 {@code user:<wallId>/*} 变量（内存 + 持久化）。
+     *
+     * <p>0.4.10 P3-91(b)：原实现只清倒排索引，不删 {@code user:<wallId>/*} 内存变量——
+     * wall 删除后这些变量在 store / byNamespace 永久驻留（DB FK CASCADE 清了行但内存不清，
+     * long-running server 内存泄漏）。改为对每个 user 变量调 {@link #delete}（内含 per-key
+     * {@code dao.delete}，与 FK CASCADE 幂等——walls 行已删时删 0 行无害），与
+     * ManualScheduleProvider / RailScheduleProvider 的 unregisterWall 删 per-wall 变量路径对齐。
+     * {@code schedule:/system:/rail} per-wall 变量由各自 provider 的 unregisterWall hook 清，
+     * 不在此重复。</p>
      */
     public void clearWallReferences(String wallId) {
-        Set<String> bucket = byWall.remove(wallId);
-        if (bucket == null) return;
-        for (String fn : bucket) {
-            removeWallFromReferencedSet(fn, wallId);
+        Objects.requireNonNull(wallId, "wallId");
+        // 0.4.10 P2-23：与 markWallReferences 共用 per-wall 锁，避免删除与 mark 交错。
+        Object monitor = wallRefMonitors.computeIfAbsent(wallId, w -> new Object());
+        synchronized (monitor) {
+            Set<String> bucket = byWall.remove(wallId);
+            if (bucket != null) {
+                for (String fn : bucket) {
+                    removeWallFromReferencedSet(fn, wallId);
+                }
+            }
+        }
+        wallRefMonitors.remove(wallId);
+
+        // 0.4.10 P3-91(b)：删本 wall 的 user:<wallId>/* 内存变量（先快照 fullName 避免迭代时改集合）。
+        String userNs = USER_NAMESPACE_PREFIX + ":" + wallId;
+        Set<String> userBucket = byNamespace.get(userNs);
+        if (userBucket != null) {
+            for (String fn : new ArrayList<>(userBucket)) {
+                try {
+                    delete(fn);
+                } catch (VariableException e) {
+                    // 已被并发删 / 不存在 → 忽略；其他 code 不该出现在内存删除路径
+                    if (e.code() != VariableException.Code.VARIABLE_NOT_FOUND) {
+                        java.util.logging.Logger.getLogger(VariableStore.class.getName())
+                                .log(java.util.logging.Level.WARNING,
+                                        "clearWallReferences delete failed: " + fn, e);
+                    }
+                }
+            }
         }
     }
 

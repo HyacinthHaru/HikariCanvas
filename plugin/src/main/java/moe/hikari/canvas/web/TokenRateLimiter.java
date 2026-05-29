@@ -1,8 +1,10 @@
 package moe.hikari.canvas.web;
 
 import java.time.Clock;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Token 暴力枚举防御限流器（M16 留下的待办，2026-05-25 实施）。
@@ -38,6 +40,8 @@ public final class TokenRateLimiter {
     private final long windowMs;
     private final Clock clock;
     private final ConcurrentMap<String, Bucket> buckets = new ConcurrentHashMap<>();
+    /** P3-31：上次被动清理时刻；限制 sweep 频率为最多每窗口一次，避免每帧扫全表。 */
+    private final AtomicLong lastSweepAt = new AtomicLong(0L);
 
     private static final class Bucket {
         long windowStart;
@@ -69,10 +73,12 @@ public final class TokenRateLimiter {
      * @return {@code true} = 放行；{@code false} = 超限，调用方应 close 4429 + audit
      */
     public boolean tryConsume(String ip) {
+        long now = clock.millis();
+        // P3-31：被动清理过期桶（最多每窗口一次），防 per-IP 桶在 direct-bind 部署下永久累积。
+        maybeSweep(now);
         String key = (ip == null || ip.isEmpty()) ? "unknown" : ip;
         Bucket b = buckets.computeIfAbsent(key, k -> new Bucket());
         synchronized (b) {
-            long now = clock.millis();
             if (now - b.windowStart >= windowMs) {
                 b.windowStart = now;
                 b.count = 0;
@@ -80,6 +86,26 @@ public final class TokenRateLimiter {
             if (b.count >= perMinute) return false;
             b.count++;
             return true;
+        }
+    }
+
+    /**
+     * P3-31：被动清理——若距上次 sweep 已过一个完整窗口，则移除所有窗口已彻底过期的桶。
+     * 用 CAS 确保同一时刻只有一个线程执行扫描（其余线程直接跳过，零阻塞）。
+     * 移除时在桶 monitor 内复检 windowStart，避免误删刚被并发刷新的活跃桶。
+     */
+    private void maybeSweep(long now) {
+        long last = lastSweepAt.get();
+        if (now - last < windowMs) return;
+        if (!lastSweepAt.compareAndSet(last, now)) return;  // 别的线程正在扫，跳过
+        for (Map.Entry<String, Bucket> e : buckets.entrySet()) {
+            Bucket b = e.getValue();
+            synchronized (b) {
+                if (now - b.windowStart >= windowMs) {
+                    // 仅当桶仍是这个实例时才移除（防 computeIfAbsent 并发换了新桶）
+                    buckets.remove(e.getKey(), b);
+                }
+            }
         }
     }
 

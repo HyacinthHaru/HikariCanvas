@@ -350,11 +350,11 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
                                   │
                        sha256[:16] = computeHash(pngBytes)
                                   │
-                       已存在 hash？─ 是 → refcount++ / last_used_at touch
+                       已存在 hash？─ 是 → last_used_at touch
                                   │
                                   否 → 写 plugins/HikariCanvas/uploads/<hash>.png
                                        INSERT image_uploads（uploader / bytes / mime / ...）
-                                       磁盘超总配额 → LRU 删 refcount=0 最老文件
+                                       磁盘超总配额 → LRU sweep 删未被任何 wall 引用的最老文件
                                   │
                                   ▼
                           ack { source: <hash>, width, height }
@@ -373,8 +373,8 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 
 **关键不变量：**
 - ImageStorage.load 内存缓存：图片首次解码后保留 60s（LRU MRU 队列）；过期重读磁盘
-- refcount：服务端在 element.add type=image / element.delete / wall.delete 时增减；refcount=0 才进 LRU 候选
-- 删 wall 不立即清磁盘（其他 wall 可能引用同 hash）；refcount-- 后由 LRU 自然回收
+- 引用统计走**实时 sweep**（无持久 refcount 列，原列已 V010 DROP，见 `docs/data-model.md §6.5.1`）：LRU 候选 = 遍历所有 `walls.project_json` 收集被引用 hash（`ImageStorage.collectReferencedHashes`）后 `NOT IN` 剔除孤儿（`ImageUploadDao.pickLruCandidates`）
+- 删 wall 不立即清磁盘（其他 wall 可能引用同 hash）；待下次 sweep 时若无任何 wall 引用该 hash 才由 LRU 自然回收
 - 客户端无路径控制：filename 仅日志，存储路径完全由 hash 决定（防路径穿越）
 
 ---
@@ -615,10 +615,10 @@ CI 集成：
 - `frame.setFixed(true)` ← 防止破坏/旋转
 - `frame.setInvisible(true)` 看场景需求（M2 实测发现 spawn-time 设 invisible 会与客户端 spawn-consumer 时序冲突，目前先 visible，M7 polish）
 
-PDC 标记：
-- `hikari_canvas:wall_id = <wall_id>` ← M5.5 起核心 key（替代旧的 `session` / `sign`）
-- `hikari_canvas:slot = <index>` ← 该 frame 在 wall 里的位置序号
-- `hikari_canvas:published_at = <ms>` ← 仅 publish 后写；nullable
+PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取插件名小写）：
+- `hikaricanvas:wall_id = <wall_id>` ← M5.5 起核心 key（替代旧的 `session` / `sign`）
+- `hikaricanvas:slot = <index>` ← 该 frame 在 wall 里的位置序号
+- `hikaricanvas:published_at = <ms>` ← 仅 publish 后写；nullable
 
 > **路径 B「打开已有 wall」（`/canvas open` 或 wand 二次点击 / 启动恢复）不走 7.2，物品框已存在不重新部署，直接 bind 池 + 写 ProjectState。**
 

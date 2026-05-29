@@ -201,7 +201,10 @@ public final class TemplateExporter {
         if (!(layersObj instanceof List<?> layers)) return;
         int flat = 0;
         for (Object layerObj : layers) {
-            if (!(layerObj instanceof Map<?, ?> layerMap)) { flat++; continue; }
+            // P3-24：layer 本身不计入 flat（与 collectTextElements 仅在 element 处 flat++
+            // 的口径一致）。非 Map layer 直接 continue 不递增 flat，否则会与
+            // collectTextElements 的索引错位，把 ${paramId} 写到错误的 text element。
+            if (!(layerObj instanceof Map<?, ?> layerMap)) continue;
             Object elementsObj = layerMap.get("elements");
             if (!(elementsObj instanceof List<?> elements)) continue;
             for (Object elObj : elements) {

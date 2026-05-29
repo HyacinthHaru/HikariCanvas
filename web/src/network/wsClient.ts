@@ -14,7 +14,6 @@ import { useUiStore } from '@/stores/ui';
 import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
 import { useRailStore } from '@/stores/rail';
-import { useScheduleStore } from '@/stores/schedule';
 import { messages } from '@/i18n/messages';
 
 /**
@@ -27,14 +26,19 @@ function localizeErrorCode(code: string, fallbackMessage?: string): string {
     const errs = messages[ui.locale]?.errors as Record<string, string> | undefined;
     if (errs && typeof errs[code] === 'string') return errs[code];
     if (errs && typeof errs.UNKNOWN === 'string') {
-        // 兜底文案 + 附原 code，便于排查 / 反馈
-        return fallbackMessage ? `${errs.UNKNOWN}（${code}）` : `${errs.UNKNOWN}（${code}）`;
+        // 兜底文案 + 附原 code，便于排查 / 反馈。P3-86：未映射 code 时优先展示
+        // 服务端人类可读说明（fallbackMessage），而非把它丢弃。
+        return fallbackMessage
+            ? `${fallbackMessage}（${code}）`
+            : `${errs.UNKNOWN}（${code}）`;
     }
     return fallbackMessage ?? code;
 }
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
+/** P2-69：open → ready 看门狗超时。超过仍未 authenticated 则强制断开走重连。 */
+const READY_TIMEOUT_MS = 10_000;
 /** 重连退避阶梯（秒）。超过最后一档就停。 */
 const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
 /**
@@ -65,6 +69,13 @@ export class WsClient {
     private seq = 0;
     private heartbeatTimer: number | null = null;
     private reconnectTimer: number | null = null;
+    /**
+     * P2-69：open 后等待 ready 的一次性看门狗。服务端 accept + auth 成功但 ready 构建/发送
+     * 挂起（DAO / 序列化故障 / 半开 TCP）时，客户端会永久卡在 'authenticating' 且无重连
+     * （重连只从 onClose 触发）。到时仍 !authenticated 则主动 close（非 1000 码）让
+     * onClose→scheduleReconnect 接管。handleReady 成功与任何失败 close 路径都清除它。
+     */
+    private readyTimer: number | null = null;
     private reconnectAttempt = 0;
     /** 最近一次成功连接时用的 token；onClose 触发重连时复用。 */
     private lastToken: string | null = null;
@@ -100,9 +111,11 @@ export class WsClient {
             this.ws = sock;
             net.connected = true;
             net.connecting = false;
-            this.reconnectAttempt = 0;
             net.pushLog('meta', 'ws open');
             this.sendAuth(token);
+            // P2-69：启动 ready 看门狗。注意 reconnectAttempt 不在 open 清零——若 ready 永不
+            // 到达而靠看门狗断开重连，过早清零会丢失退避进度；改在 handleReady 成功后清零。
+            this.startReadyWatchdog();
         });
         sock.addEventListener('message', (ev) => this.onMessage(ev.data as string));
         sock.addEventListener('close', (ev) => this.onClose(ev));
@@ -114,6 +127,7 @@ export class WsClient {
     close(reason = 'client close'): void {
         this.stopped = true;
         this.clearReconnect();
+        this.clearReadyWatchdog();
         this.stopHeartbeat();
         this.ws?.close(1000, reason);
     }
@@ -427,6 +441,29 @@ export class WsClient {
         }
     }
 
+    /**
+     * P2-69：启动一次性 ready 看门狗。到时仍未 authenticated（ready 未到达）则强制断开，
+     * 让 onClose→scheduleReconnect 接管退避重连，避免永久卡在 'authenticating'。
+     */
+    private startReadyWatchdog(): void {
+        this.clearReadyWatchdog();
+        this.readyTimer = window.setTimeout(() => {
+            this.readyTimer = null;
+            const net = useNetworkStore();
+            if (this.stopped || net.authenticated) return;
+            net.pushLog('err', `ready not received within ${READY_TIMEOUT_MS}ms; forcing reconnect`);
+            // 非 1000 码 → onClose 判定非 terminal → scheduleReconnect 接管。
+            try { this.ws?.close(4000, 'ready_timeout'); } catch { /* ignore */ }
+        }, READY_TIMEOUT_MS);
+    }
+
+    private clearReadyWatchdog(): void {
+        if (this.readyTimer !== null) {
+            window.clearTimeout(this.readyTimer);
+            this.readyTimer = null;
+        }
+    }
+
     private onMessage(text: string): void {
         const net = useNetworkStore();
         net.pushLog('recv', `← ${text}`);
@@ -439,26 +476,34 @@ export class WsClient {
             return;
         }
 
-        switch (env.op) {
-            case 'ready':
-                this.handleReady(env.payload as ReadyPayload);
-                break;
-            case 'state.snapshot':
-                this.handleSnapshot(env.payload as StateSnapshotPayload);
-                break;
-            case 'state.patch':
-                this.handlePatch(env.payload as StatePatchPayload);
-                break;
-            case 'error':
-                this.handleError(env.id, env.payload as ErrorPayload);
-                break;
-            case 'pong':
-                break;
-            case 'ack':
-                this.handleAck(env.id, env.payload);
-                break;
-            default:
-                net.pushLog('meta', `unhandled op: ${env.op}`);
+        // P2-68：handler dispatch 外层包 try/catch，隔离单帧异常。TS 类型断言运行时擦除，
+        // 服务端结构漂移帧（forward-compat / 后端 bug）可让 handler 中途抛 TypeError，
+        // 不捕获会逃逸出浏览器 'message' 回调（无 window.onerror 降级），污染后续帧。
+        // 捕获后记录并安全 return——后续帧与 pending ack 不受影响。
+        try {
+            switch (env.op) {
+                case 'ready':
+                    this.handleReady(env.payload as ReadyPayload);
+                    break;
+                case 'state.snapshot':
+                    this.handleSnapshot(env.payload as StateSnapshotPayload);
+                    break;
+                case 'state.patch':
+                    this.handlePatch(env.payload as StatePatchPayload);
+                    break;
+                case 'error':
+                    this.handleError(env.id, env.payload as ErrorPayload);
+                    break;
+                case 'pong':
+                    break;
+                case 'ack':
+                    this.handleAck(env.id, env.payload);
+                    break;
+                default:
+                    net.pushLog('meta', `unhandled op: ${env.op}`);
+            }
+        } catch (e) {
+            net.pushLog('err', `frame handler threw for op "${env.op}": ${e instanceof Error ? e.message : String(e)}`);
         }
     }
 
@@ -467,6 +512,8 @@ export class WsClient {
         const project = useProjectStore();
         const templates = useTemplatesStore();
         const ui = useUiStore();
+        // P2-69：ready 到达（无论成功或下方的协议错误 close 路径）都清掉看门狗。
+        this.clearReadyWatchdog();
         // M16 P6.2：双向校验业务协议版本——server 同意了 accepted_v 但若与 CLIENT_V
         // 不一致（如运维误装错版本），客户端主动断开避免后续 op 行为漂移。
         // 旧后端不发 accepted_v → undefined → 沿用 M8-C 的 v2 默认（信任 server）。
@@ -478,20 +525,27 @@ export class WsClient {
             try { this.ws?.close(4002, 'protocol_version_unsupported'); } catch { /* ignore */ }
             return;
         }
+        // P2-68：ready payload 运行时空值守卫。TS 类型断言不防 server 结构漂移，
+        // payload.projectState.canvas 缺失会让下方 widthMaps 读取抛 TypeError（且已设
+        // authenticated=true / 未启心跳的半态卡死）。缺失视为协议错误：记日志 + 主动 close
+        // （非 1000 码）让 onClose→scheduleReconnect 接管，而非半态继续。
+        if (!payload || !payload.projectState || !payload.projectState.canvas) {
+            net.lastError = 'ready payload 缺失 projectState/canvas（协议错误）';
+            net.pushLog('err', 'ready payload missing projectState/canvas; closing connection');
+            try { this.ws?.close(4000, 'malformed_ready'); } catch { /* ignore */ }
+            return;
+        }
         // M16 P4.2：切到新 wall 时清掉旧 wall 残留状态（selectedIds / lockedAt / state...）。
         // 同 wall 重连（wallId 不变）保留 UI 上下文，避免重连闪烁。
         const incomingWallId = payload.wallId ?? null;
         if (project.wallId !== null && project.wallId !== incomingWallId) {
+            // P3-103：schedule / alias / rail 等 wall-scoped store 的 reset 已收进
+            // project.reset() 单一调用点（见 stores/project.ts），此处不再并列手动调用。
             project.reset();
             ui.reset();
-            // 0.4.0-P3-L：schedule 是 wall-scoped 元数据；wall 切换时清旧 wall 缓存
-            useScheduleStore().reset();
-            // 0.4.2：alias 也是 wall-scoped；与 schedule 同款 reset
-            useVariableAliasStore().reset();
-            // 0.4.5 P3：rail store 含 lines / stations / runs / timetables 内存缓存；wall 切换时全清，
-            // 下次打开 modal 时再拉
-            useRailStore().reset();
         }
+        // P2-69：握手真正完成才清零退避计数（open 不再清零，见 connect open 回调注释）。
+        this.reconnectAttempt = 0;
         net.authenticated = true;
         net.sessionId = payload.sessionId;
         net.serverVersion = payload.serverVersion;
@@ -608,6 +662,7 @@ export class WsClient {
     private onClose(ev: CloseEvent): void {
         const net = useNetworkStore();
         this.stopHeartbeat();
+        this.clearReadyWatchdog();
         this.ws = null;
         net.closeCode = ev.code;
         net.reset();
@@ -727,9 +782,11 @@ function resolveWsUrl(): string {
 // RFC 6901 {@code ~1} 转义 {@code /} 后的字符串。本路由解码后落到 VariableStore。
 //
 // 支持的形态：
-//   - add    /variables/<encoded>              value = 完整 Variable JSON
+//   - add     /variables/<encoded>              value = 完整 Variable JSON
+//   - replace /variables/<encoded>              value = 完整 Variable JSON（整节点 UPDATED）
 //   - replace /variables/<encoded>/currentValue value = 新值（string | null）
-//   - remove /variables/<encoded>
+//   - replace /variables/<encoded>/<field>      value = 单字段新值（type / defaultValue 等）
+//   - remove  /variables/<encoded>
 // 其他 path 形态不支持（B 任务限定 patch 形态），收到时静默忽略并 log。
 
 function applyVariablePatches(ops: PatchOp[]): void {
@@ -756,6 +813,15 @@ function applyVariablePatches(ops: PatchOp[]): void {
             }
         } else if (op.op === 'remove' && sub === '') {
             store.remove(fullName);
+        } else if (op.op === 'replace' && sub === '') {
+            // P1-3：整 Variable JSON 节点 replace（UPDATED 事件，type / defaultValue 改动）。
+            // 与 add 分支同款落表逻辑——后端 SessionManager / EditSession 对 variable.update
+            // 发的是 replace 整节点（而非逐字段 patch），漏接会让 type/defaultValue 不同步。
+            if (op.value && typeof op.value === 'object') {
+                store.set(fullName, op.value as Variable);
+            } else {
+                net.pushLog('err', `variable patch replace: missing value for ${fullName}`);
+            }
         } else if (op.op === 'replace' && sub === 'currentValue') {
             const v = store.get(fullName);
             if (v) {

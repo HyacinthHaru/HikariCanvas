@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-05-30 · 0.4.10 — ultrareview-2026-05-29 修复批（168 DIRECT_FIX）
+
+### 背景
+
+独立第三方做了一轮全栈深度 ultrareview（`docs/ultrareview-2026-05-29.md`）：224 真实缺陷
+（P1×15 + P2×87 + P3×122）+ uncertain×4 + excused×21 + false-positive×30（已自行核验剔除）。
+13 个评估 agent 并行 triage 后分类：**168 DIRECT_FIX / 30 NEEDS_DESIGN / 23 TRADE_OFF /
+4 DUPLICATE / 3 疑似误报**。用户决定 0.4.10 只修 168 个 DIRECT_FIX，其余暂不修。
+
+### 实施方式（多波并行 + 主线收尾）
+
+文件域不相交分区，避免并行 agent 写冲突；agent 不跑构建（并发争 build dir），主 agent 统一编译+测试。
+
+- **Wave1（10 agent）**：按代码域（image/pool-session/deploy/variable/render/web/state/cmd/fe-state/fe-ui）分工，完成 118，defer 53 跨域。
+- **Wave2（2 agent）**：FE 组（12，前端补全）+ HikariCanvas 生命周期组（含 P3-4 APIImpl 4→5 参注入 AuditLog + 5 调用点）。
+- **Wave3（5 agent）**：WEB（P2-26 七 dispatcher 走 MainThreadPerms 主线程权限解析）/ STORAGE / STATE（P1-8 rasterize 读快照 + P2-8 EditSession 配额）/ VAR-RENDER（P2-32 dynamic-lookup + P2-83 节流 + P3-29 字体 worker shutdown 基建）/ DOCS-MISC。
+- **主线 solo（~12）**：rail dispatcher 4（P2-5/7/64/P3-47）+ WebHelpers（P2-12 brush 范围 + P3-114 JSON Pointer 单一来源）+ P2-47 部署失败原子回滚 + P3-100 删孤儿权限 + P3-7 PDC namespace 注释/CLAUDE 标识改 hikaricanvas + 3 处 HikariCanvas wiring（P3-32 forgetHook / P3-29 onDisable 字体清理 / P2-8 SessionManager 配额注入）。
+
+### 几个值得记的修复
+
+- **并发线程契约簇**（P2-26/27/28 等）：所有 WS dispatcher 的 `Bukkit.getPlayer/hasPermission`
+  从 Jetty 线程直调改走 `MainThreadPerms`（callSyncMethod 单次主线程 hop，TemplateOpDispatcher
+  批量 resolve 多节点）；off-main Bukkit API 是真 bug。顺带修了个既存编译错（VariableOpDispatcher
+  7 参 ctor 被 6 参调用）。
+- **LRU 数据完整性簇**（P1-1/P1-2/P2-24）：evict 失败回滚漏删磁盘文件、collectReferencedHashes
+  null source 守卫 + fail-closed 拒绝盲删、引用扫描移进 upload IMMEDIATE 事务同一致视图。
+- **rasterize 数据竞争**（P1-8）：CanvasCompositor 读 EditSession 锁内 `List.copyOf` 快照，
+  消除异步渲染与 WS 写的 ConcurrentModification / 撕裂读（Element record 不可变只 copy 容器）。
+- **透明背景 blend**（已在 0.4.7 修）+ 模板 raw_state fill 注入校验（P3-66/67/68 ElementValidator
+  对 rect/path/circle/shape/brush fill 全调 FillValidator）。
+
+### 验证
+
+- 后端 `:plugin:test --rerun-tasks` BUILD SUCCESSFUL（46s，全绿；含 wave2 P3-4 测试改 +
+  W3-VAR-RENDER 的 P2-83 测试节流更新）
+- 前端 vitest 275 全绿 + vite build EXIT=0（754 kB / gzip 224 kB）
+- 全量 `:plugin:compileJava :plugin:compileTestJava --rerun-tasks` 41s SUCCESSFUL（仅 1 个
+  既存无关 deprecation warning）——3 波并行 + solo 零编译错
+- shadow jar `HikariCanvas-0.4.10-SNAPSHOT.jar`
+
+### 暂不修（用户决定）
+
+- **23 TRADE_OFF**：需产品决策（安全鉴权 vs loopback-trust / WebP 加依赖 vs 删 / 双端 stale 语义 / ws-client 契约 等），评估见上一轮对话
+- **30 NEEDS_DESIGN**：18 补测试基建（MapPool/TokenService/WallRestorer 等核心零覆盖）+ god class 拆分（WebServer/EditSession）+ 图标弧线双端镜像 等
+- **3 疑似误报 + 4 重复**：不修
+
+### 关键架构纪律（已固化）
+
+1. **并行实施按文件域不相交分区 + 跨域 defer**：disjoint 约束只对并发 agent 有意义；
+   agent 不跑构建（争 build dir），主 agent 统一编译/测试/收尾跨域 wiring
+2. **off-main Bukkit API 一律 callSyncMethod**：`MainThreadPerms` 统一权限解析 seam
+3. **PDC namespace 实际是 `hikaricanvas`**（`NamespacedKey(plugin,…)` 取插件名小写），
+   文档/注释/CLAUDE 标识统一订正
+4. **per-wall 图片配额双道防线**：上传期 `UploadHandler.handleQuota` 真实计数 +
+   编辑期 `EditSession.addElement` 强制（SessionManager 注入 maxPerWall，缺省不限无回归）
+
+---
+
 ## 2026-05-25 · 0.4.9 — Live Paint 真实形状收尾（brush + text glyph）
 
 ### 背景

@@ -41,12 +41,15 @@ public final class BlendModes {
     private BlendModes() {}
 
     /**
-     * 把 src（ARGB layer buffer）按 layer.opacity + layer.blendMode 合成到 dst（RGB 主 buffer）。
+     * 把 src（ARGB layer buffer）按 layer.opacity + layer.blendMode 合成到 dst（ARGB 主 buffer）。
      *
      * <p>per-pixel 循环；对 8×4 wall（1024×512 = 524k 像素）约 ~3M 浮点 op，本机约 30ms。
      * 仅在 layer.opacity ≠ 1 / blendMode ≠ NORMAL 时调用（fast path 走 Graphics2D 原生合成）。</p>
      *
-     * @param dst          主 RGB BufferedImage（被 mutate）
+     * <p>P3-92：dst 是 TYPE_INT_ARGB 主 buffer（0.4.6 P2 起），da 真实参与 source-over 合成，
+     * 不强写 0xFF——措辞与实现一致。</p>
+     *
+     * @param dst          主 ARGB BufferedImage（被 mutate）
      * @param src          层 ARGB BufferedImage
      * @param layerOpacity 0.0–1.0
      * @param mode         混合模式

@@ -4,7 +4,6 @@ import moe.hikari.canvas.variable.VarType;
 import moe.hikari.canvas.variable.VariableException;
 import moe.hikari.canvas.variable.VariableStore;
 import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Score;
@@ -202,8 +201,10 @@ public final class ScoreboardVariableProvider implements VariableProvider {
                 Scoreboard sb = Bukkit.getScoreboardManager().getMainScoreboard();
                 Objective obj = sb.getObjective(objectiveName);
                 if (obj == null) return null;
-                OfflinePlayer op = Bukkit.getOfflinePlayer(playerName);
-                Score sc = obj.getScore(op);
+                // 0.4.10 P1-4/P2-28：scoreboard 以 entry 字符串为键，直接用 getScore(String)
+                // 重载读分数，零网络 I/O。原 Bukkit.getOfflinePlayer(String) 在主线程会触发
+                // 阻塞式 Mojang usercache/网络查询，卡服。
+                Score sc = obj.getScore(playerName);
                 if (sc == null) return null;
                 return sc.getScore();
             } catch (Exception e) {

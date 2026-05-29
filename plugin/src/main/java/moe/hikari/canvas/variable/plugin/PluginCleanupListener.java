@@ -163,10 +163,25 @@ public final class PluginCleanupListener implements Listener {
 
     /**
      * 30s 延迟任务体。单 namespace 抛异常隔离 —— 其他 namespace 仍要清理。
+     *
+     * <p>0.4.10 P1-7：grace 期内若同名 namespace 被新插件重新注册（disable → 立即
+     * unregister registry → 另一插件 register 抢走 → 30s 后本任务跑），则
+     * {@code registry.get(ns)} 已非空（指向新 owner 的 {@code Registration}）。此时
+     * 必须跳过 purge，否则会误删新插件刚推入的数据。{@code unregisterAllByPlugin} 已把
+     * 旧 owner 的 namespace 从 registry 移除，所以「存在」即等于「已被他人接管」。</p>
      */
     private void purgeAfterGrace(String pluginName, List<String> namespaces) {
         int purged = 0;
+        int skipped = 0;
         for (String ns : namespaces) {
+            // 重注册校验：grace 期内被新插件抢走 → 跳过 purge，保留其数据
+            if (registry.get(ns).isPresent()) {
+                skipped++;
+                log.info("[HikariCanvas] skip purge of namespace '" + ns
+                        + "' (re-registered by another plugin during grace period; "
+                        + "original plugin='" + pluginName + "')");
+                continue;
+            }
             try {
                 apiImpl.purgeNamespaceData(ns);
                 purged++;
@@ -178,6 +193,7 @@ public final class PluginCleanupListener implements Listener {
         }
         log.info("[HikariCanvas] purged " + purged + "/" + namespaces.size()
                 + " orphan namespace(s) after 30s grace period (plugin='"
-                + pluginName + "')");
+                + pluginName + "'" + (skipped > 0 ? ", " + skipped + " skipped (re-registered)" : "")
+                + ")");
     }
 }

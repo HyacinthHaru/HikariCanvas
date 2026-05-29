@@ -1,6 +1,7 @@
 package moe.hikari.canvas.variable.plugin;
 
 import moe.hikari.canvas.api.NamespaceInfo;
+import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.variable.VarType;
 import moe.hikari.canvas.variable.VariableStore;
@@ -55,9 +56,10 @@ class PluginCleanupListenerTest {
         daemon = new VariableProviderDaemon();
         registry = new PluginNamespaceRegistry();
         // P 任务接入后 HikariCanvasAPIImpl 构造需要 PushRateLimiter；测试用 unlimited
-        // 配置不影响 cleanup 行为
+        // 配置不影响 cleanup 行为。0.4.10 P3-4：再加 AuditLog（null jdbi → record fallback log）。
         PushRateLimiter limiter = new PushRateLimiter(PushRateLimiter.Config.unlimited());
-        api = new HikariCanvasAPIImpl(registry, store, daemon, limiter);
+        AuditLog auditLog = new AuditLog(null, Logger.getLogger("test"));
+        api = new HikariCanvasAPIImpl(registry, store, daemon, limiter, auditLog);
         scheduler = new RecordingScheduler();
         host = fakePlugin("HikariCanvas");
         listener = new PluginCleanupListener(registry, api, host, scheduler);
