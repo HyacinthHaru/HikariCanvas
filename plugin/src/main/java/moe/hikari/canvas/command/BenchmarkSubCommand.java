@@ -12,10 +12,15 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import moe.hikari.canvas.benchmark.BenchCompositor;
 import moe.hikari.canvas.benchmark.BenchmarkConfig;
+import moe.hikari.canvas.benchmark.BenchmarkReport;
+import moe.hikari.canvas.benchmark.BenchmarkRunner;
 import moe.hikari.canvas.benchmark.BenchmarkScene;
-import moe.hikari.canvas.benchmark.RasterizeSample;
+import moe.hikari.canvas.benchmark.EnvInfo;
+import moe.hikari.canvas.benchmark.GcSummary;
+import moe.hikari.canvas.benchmark.PerElementCost;
+import moe.hikari.canvas.benchmark.Percentiles;
 import moe.hikari.canvas.benchmark.SceneLibrary;
-import moe.hikari.canvas.benchmark.SceneTimer;
+import moe.hikari.canvas.benchmark.SceneResult;
 import moe.hikari.canvas.render.CanvasCompositor;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -29,9 +34,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -82,13 +85,11 @@ public final class BenchmarkSubCommand {
     /** {@code plugins/HikariCanvas/} 下存放报告的子目录名。 */
     private static final String BENCH_DIR = "benchmarks";
 
-    /** raw.json 文件名（List&lt;RasterizeSample&gt; 序列化）。 */
-    private static final String RAW_FILE = "raw.json";
+    /** report.json 文件名（{@link BenchmarkReport} 序列化——P2 聚合报告）。 */
+    private static final String REPORT_FILE = "report.json";
 
     /** summary.txt 文件名（人类可读摘要）。 */
     private static final String SUMMARY_FILE = "summary.txt";
-
-    private static final double BYTES_PER_MB = 1024.0 * 1024.0;
 
     private final JavaPlugin plugin;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -255,41 +256,33 @@ public final class BenchmarkSubCommand {
         });
     }
 
-    /** worker 线程：构造 compositor → 选场景 → 计时 → 写盘 → 回主线程发摘要。 */
+    /** worker 线程：构造 compositor → 跑聚合 runner → 写 report.json/summary.txt → 回主线程发摘要。 */
     private void runOnWorker(CommandSender sender, BenchmarkConfig cfg, String selector) throws IOException {
         CanvasCompositor compositor = BenchCompositor.create(plugin.getLogger());
-        List<BenchmarkScene> scenes = new SceneLibrary().select(selector);
-        if (scenes.isEmpty()) {
+        // 预检：selector 无匹配场景时早退，避免空跑空白基线。
+        if (new SceneLibrary().select(selector).isEmpty()) {
             runOnMain(() -> sender.sendMessage(Component.text(
                     "No scenes matched selector '" + selector
                             + "'. Try /canvas bench list.", NamedTextColor.RED)));
             return;
         }
 
-        List<RasterizeSample> allSamples = new ArrayList<>();
-        SceneTimer timer = new SceneTimer();
-        for (BenchmarkScene scene : scenes) {
-            allSamples.addAll(timer.time(compositor, scene, cfg));
-        }
+        // P2：BenchmarkRunner 内部 选场景 → 测同尺寸空白基线 → 逐场景计时 → 聚合 percentile +
+        // per-element + GC/env。generatedAtMillis 由命令层注入（runner 不读时钟保持可测）。
+        BenchmarkReport report = new BenchmarkRunner()
+                .run(compositor, new SceneLibrary(), cfg, System.currentTimeMillis());
 
-        // 写盘：benchmarks/<currentTimeMillis>/
-        long ts = System.currentTimeMillis();
-        Path outDir = benchRoot().resolve(Long.toString(ts));
+        // 写盘：benchmarks/<generatedAt>/{report.json, summary.txt}
+        Path outDir = benchRoot().resolve(Long.toString(report.generatedAtMillis()));
         Files.createDirectories(outDir);
         mapper.writerWithDefaultPrettyPrinter()
-                .writeValue(outDir.resolve(RAW_FILE).toFile(), allSamples);
-
-        List<SceneSummary> summaries = summarize(allSamples);
-        Files.writeString(outDir.resolve(SUMMARY_FILE), renderSummaryText(selector, summaries));
+                .writeValue(outDir.resolve(REPORT_FILE).toFile(), report);
+        Files.writeString(outDir.resolve(SUMMARY_FILE), renderReportText(selector, report));
 
         // 回主线程：发彩色摘要 + 保存路径
         runOnMain(() -> {
-            sender.sendMessage(Component.text(
-                    "Benchmark done — " + scenes.size() + " scene(s), "
-                            + allSamples.size() + " sample(s):", NamedTextColor.GOLD));
-            for (SceneSummary s : summaries) sendSummaryLine(sender, s);
-            sender.sendMessage(Component.text(
-                    "Saved to: " + outDir, NamedTextColor.GRAY));
+            sendReportToSender(sender, report);
+            sender.sendMessage(Component.text("Saved to: " + outDir, NamedTextColor.GRAY));
         });
     }
 
@@ -316,26 +309,23 @@ public final class BenchmarkSubCommand {
             }
             dir = latest.get();
         }
-        Path raw = dir.resolve(RAW_FILE);
-        if (!Files.isRegularFile(raw)) {
+        Path file = dir.resolve(REPORT_FILE);
+        if (!Files.isRegularFile(file)) {
             sender.sendMessage(Component.text(
-                    "Report missing " + RAW_FILE + ": " + dir.getFileName(), NamedTextColor.RED));
+                    "Report missing " + REPORT_FILE + ": " + dir.getFileName(), NamedTextColor.RED));
             return;
         }
-        List<RasterizeSample> samples;
+        BenchmarkReport report;
         try {
-            samples = mapper.readValue(raw.toFile(),
-                    mapper.getTypeFactory().constructCollectionType(List.class, RasterizeSample.class));
+            report = mapper.readValue(file.toFile(), BenchmarkReport.class);
         } catch (IOException e) {
             sender.sendMessage(Component.text(
                     "Failed to read report: " + e.getMessage(), NamedTextColor.RED));
             return;
         }
-        List<SceneSummary> summaries = summarize(samples);
         sender.sendMessage(Component.text(
-                "Report " + dir.getFileName() + " — " + summaries.size()
-                        + " scene(s), " + samples.size() + " sample(s):", NamedTextColor.GOLD));
-        for (SceneSummary s : summaries) sendSummaryLine(sender, s);
+                "Report " + dir.getFileName() + ":", NamedTextColor.GOLD));
+        sendReportToSender(sender, report);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -379,88 +369,89 @@ public final class BenchmarkSubCommand {
     //  per-scene 摘要计算（list / run / report 共享）
     // ──────────────────────────────────────────────────────────────────
 
-    /** 单场景聚合摘要（rasterize min/mean/max + palette mean + alloc MB/iter）。 */
-    private record SceneSummary(
-            String sceneId,
-            int samples,
-            double rasterizeMeanMs,
-            double rasterizeMinMs,
-            double rasterizeMaxMs,
-            double paletteMeanMs,
-            double allocMbPerIter
-    ) {}
-
-    /**
-     * 把原始样本按 sceneId 分组（保留首次出现顺序），逐组算 rasterizeMillis 的
-     * min/mean/max + paletteMillis 均值 + allocatedBytes 均值（→ MB；{@code <0} 的不支持
-     * 计数器样本排除在 alloc 均值外）。
-     */
-    private List<SceneSummary> summarize(List<RasterizeSample> samples) {
-        // LinkedHashMap 保插入顺序 → 摘要顺序与 generate() 场景顺序一致
-        Map<String, List<RasterizeSample>> byScene = new LinkedHashMap<>();
-        for (RasterizeSample s : samples) {
-            byScene.computeIfAbsent(s.sceneId(), k -> new ArrayList<>()).add(s);
+    /** 给 sender 发彩色聚合摘要：环境 + 逐场景 percentile + per-element + GC。run / report 共享。 */
+    private void sendReportToSender(CommandSender sender, BenchmarkReport report) {
+        EnvInfo env = report.env();
+        sender.sendMessage(Component.text(String.format(
+                "Benchmark done — %d scene(s)  ·  blank baseline %.3f ms",
+                report.scenes().size(), report.blankBaselineMs()), NamedTextColor.GOLD));
+        sender.sendMessage(Component.text(String.format(
+                "env: java %s · %d procs · Xmx %s · GC %s",
+                env.javaVersion(), env.availableProcessors(),
+                env.maxHeapMb() < 0 ? "?" : env.maxHeapMb() + "MB", env.gcNames()),
+                NamedTextColor.GRAY));
+        for (SceneResult r : report.scenes()) {
+            sendSceneLine(sender, r);
         }
-        List<SceneSummary> out = new ArrayList<>(byScene.size());
-        for (var e : byScene.entrySet()) {
-            List<RasterizeSample> list = e.getValue();
-            double sumR = 0, minR = Double.MAX_VALUE, maxR = -Double.MAX_VALUE, sumP = 0;
-            double sumAlloc = 0;
-            int allocCount = 0;
-            for (RasterizeSample s : list) {
-                double r = s.rasterizeMillis();
-                sumR += r;
-                if (r < minR) minR = r;
-                if (r > maxR) maxR = r;
-                sumP += s.paletteMillis();
-                if (s.hasAllocation()) {
-                    sumAlloc += s.allocatedBytes();
-                    allocCount++;
-                }
+        if (!report.perElement().isEmpty()) {
+            sender.sendMessage(Component.text(
+                    "per-element marginal (ms/elem, isolation − blank baseline):",
+                    NamedTextColor.GOLD));
+            for (PerElementCost p : report.perElement()) {
+                sender.sendMessage(Component.text(String.format(
+                        "  %-10s %.5f ms/elem  (×%d)",
+                        p.elementType(), p.marginalMsPerElement(), p.elementCount()),
+                        NamedTextColor.GRAY));
             }
-            int n = list.size();
-            double allocMb = allocCount == 0 ? -1.0 : (sumAlloc / allocCount) / BYTES_PER_MB;
-            out.add(new SceneSummary(
-                    e.getKey(), n,
-                    n == 0 ? 0 : sumR / n,
-                    n == 0 ? 0 : minR,
-                    n == 0 ? 0 : maxR,
-                    n == 0 ? 0 : sumP / n,
-                    allocMb));
         }
-        return out;
+        GcSummary gc = report.gc();
+        sender.sendMessage(Component.text(String.format(
+                "GC during run: %d collection(s), %d ms (incl. warmup)",
+                gc.collectionCount(), gc.collectionTimeMs()), NamedTextColor.GRAY));
     }
 
-    private void sendSummaryLine(CommandSender sender, SceneSummary s) {
-        String alloc = s.allocMbPerIter() < 0
-                ? "n/a"
-                : String.format("%.2f MB/it", s.allocMbPerIter());
+    /** 单场景一行：rasterize p50/p95/p99 + palette p50 + alloc MB/it。 */
+    private void sendSceneLine(CommandSender sender, SceneResult r) {
+        Percentiles ras = r.rasterizeMs();
+        String alloc = r.allocSupported()
+                ? String.format("%.2f MB/it", r.meanAllocMbPerIter())
+                : "n/a";
         sender.sendMessage(Component.text(String.format(
-                "  %s  raster %.3f/%.3f/%.3f ms (mean/min/max)  palette %.3f ms  alloc %s",
-                s.sceneId(),
-                s.rasterizeMeanMs(), s.rasterizeMinMs(), s.rasterizeMaxMs(),
-                s.paletteMeanMs(), alloc),
+                "  %s  raster %.3f/%.3f/%.3f ms (p50/p95/p99)  palette %.3f ms  alloc %s",
+                r.sceneId(), ras.p50(), ras.p95(), ras.p99(), r.paletteMs().p50(), alloc),
                 NamedTextColor.GRAY));
     }
 
-    private String renderSummaryText(String selector, List<SceneSummary> summaries) {
+    /** summary.txt 全文：环境 + config + 逐场景 percentile 表 + per-element 表 + GC + 基线。 */
+    private String renderReportText(String selector, BenchmarkReport report) {
+        EnvInfo env = report.env();
+        BenchmarkConfig cfg = report.config();
         StringBuilder sb = new StringBuilder();
-        sb.append("HikariCanvas benchmark summary\n");
+        sb.append("HikariCanvas benchmark report\n");
+        sb.append("schema:   ").append(report.schemaVersion()).append('\n');
         sb.append("selector: ").append(selector).append('\n');
-        sb.append("scenes:   ").append(summaries.size()).append('\n');
-        sb.append("---------------------------------------------------------------\n");
-        sb.append(String.format(
-                "%-28s %8s %8s %8s %8s %12s%n",
-                "scene", "raster", "min", "max", "palette", "alloc/it"));
-        for (SceneSummary s : summaries) {
-            String alloc = s.allocMbPerIter() < 0
-                    ? "n/a"
-                    : String.format("%.2fMB", s.allocMbPerIter());
-            sb.append(String.format(
-                    "%-28s %7.3f %7.3f %7.3f %7.3f %12s%n",
-                    s.sceneId(),
-                    s.rasterizeMeanMs(), s.rasterizeMinMs(), s.rasterizeMaxMs(),
-                    s.paletteMeanMs(), alloc));
+        sb.append("env:      java ").append(env.javaVersion())
+                .append(" / ").append(env.jvmName())
+                .append(" / ").append(env.osName()).append(' ').append(env.osArch()).append('\n');
+        sb.append("cpu:      ").append(env.availableProcessors()).append(" procs   Xmx ")
+                .append(env.maxHeapMb() < 0 ? "?" : env.maxHeapMb() + "MB").append('\n');
+        sb.append("gc:       ").append(env.gcNames()).append('\n');
+        sb.append("config:   ").append(cfg.measuredIterations()).append(" measured + ")
+                .append(cfg.warmupIterations()).append(" warmup   (fps=").append(cfg.fpsValues())
+                .append(", viewers=").append(cfg.viewerCounts())
+                .append(" — P3 公式参数，不参与测量)\n");
+        sb.append("baseline: blank rasterize ")
+                .append(String.format("%.4f", report.blankBaselineMs())).append(" ms\n");
+        sb.append("gc-run:   ").append(report.gc().collectionCount()).append(" collection(s), ")
+                .append(report.gc().collectionTimeMs()).append(" ms (incl. warmup)\n");
+        sb.append("=================================================================\n");
+        sb.append(String.format("%-28s  %-21s  %-21s  %10s%n",
+                "scene", "rasterize p50/95/99", "palette p50/95/99", "alloc/it"));
+        for (SceneResult r : report.scenes()) {
+            Percentiles ra = r.rasterizeMs();
+            Percentiles pa = r.paletteMs();
+            String alloc = r.allocSupported()
+                    ? String.format("%.2fMB", r.meanAllocMbPerIter()) : "n/a";
+            sb.append(String.format("%-28s  %6.3f/%6.3f/%6.3f  %6.3f/%6.3f/%6.3f  %10s%n",
+                    r.sceneId(), ra.p50(), ra.p95(), ra.p99(),
+                    pa.p50(), pa.p95(), pa.p99(), alloc));
+        }
+        sb.append("-----------------------------------------------------------------\n");
+        sb.append("per-element marginal cost (ms/element, isolation − blank baseline):\n");
+        for (PerElementCost p : report.perElement()) {
+            sb.append(String.format("  %-10s x%-4d  %.5f ms/elem   (isolation mean %.4f ms, %s)%n",
+                    p.elementType(), p.elementCount(), p.marginalMsPerElement(),
+                    p.isolationSceneMeanMs(), p.sceneId()));
         }
         return sb.toString();
     }

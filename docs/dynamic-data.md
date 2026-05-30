@@ -781,7 +781,7 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 **Phase 分解**（每 phase 自身完整，非"TODO 待补"半成品）：
 - **P1（~50h）✅ 2026-05-30**：Instrumentation（`ThreadMXBean` 分配计数 + GC bean 采样 + warmup）+ 全元素 `SceneLibrary`（21 确定性场景：9 单元素 + 5 特效 + 3 混合 + 4 尺寸梯度，固定 seed）+ `SceneTimer`（warmup→measure，rasterize/palette 分开计时 + blackhole 防 DCE）+ `BenchCompositor`（复刻 `RendererSnapshotTest` 无头装配 + 合成图片 loader 注入让 image+mask 渲真实像素）+ `/canvas bench list/run/report/clear` 命令族（async 守护线程 + JSON/CLI 输出 + 单 bench 守卫）+ 3 共享契约 record。10 单测含端到端 smoke（全 21 场景 headless 跑通，兼 P4 CI gate 种子）。**留 P2 精化**：IconElement 走占位（无 headless IconRegistry）、合成图固定 256² 代表性近似。
-- **P2（~50h）** 压测 matrix runner（wall size × fps × scene × 模拟 viewer 外推）+ async `BenchmarkRunner` + `ResultAggregator` percentile（p50/p95/p99）+ per-element 归因 + 真实 image/icon 成本精化
+- **P2（~50h）✅ 2026-05-30**：6 聚合 record（`Percentiles` 线性插值 p50/p95/p99 + mean/min/max/stddev / `SceneResult` / `PerElementCost` / `GcSummary` / `EnvInfo` / `BenchmarkReport`）+ `ResultAggregator`（聚合 + alloc 均值 + per-element 边际 = 隔离场景均值 − 同尺寸空白基线 ÷ 元素数）+ `BenchmarkRunner`（选场景 → 测空白基线 → 逐场景计时 → 聚合 → per-element → GC/env 组装报告）+ `/canvas bench` 改产 `report.json`（聚合）+ `summary.txt` + 控制台 percentile 表。**关键澄清（修正 §13.3 原“matrix”措辞）**：rasterize 成本<b>不依赖 fps/viewer</b>（canvas 尺寸已烘进每个场景），故每场景<b>只测一次</b>，fps/viewer 仅作 P3 公式参数随报告记录，<b>不</b>为每个组合重复测量（否则是在重复测同一个东西）。9 P2 单测（percentile 数学 + 聚合 + per-element + Jackson round-trip）。**留 P3+**：真实 icon 成本（需无头 IconRegistry）/ 合成图逐尺寸精化
 - **P3（~55h）** 报告生成（JSON baseline + CLI 表 + 自包含 HTML 内联 SVG 图）+ per-element breakdown + 50mspt 公式区
 - **P4（~20h，决策①砍了 ~16h）** CI 功能性 gate（bench 跑通即过，无数值断言）+ 本地 baseline JSON drift 人工复查 + config 软上限文档化 + `docs/benchmark.md`
 

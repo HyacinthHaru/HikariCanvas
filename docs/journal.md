@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-05-30 · 0.5.0-P2 — 聚合层（percentile + per-element 边际 + GC/env + report.json）
+
+### 背景
+
+P1 产出逐次原始样本；P2 把它收敛成<b>聚合报告</b>：rasterize/palette 的 p50/p95/p99 + per-element
+边际成本 + GC/内存/环境，产出 `report.json` + CLI percentile 表。
+
+### 关键设计澄清（修正 §13.3 原「matrix」措辞）
+
+rasterize 成本<b>只取决于场景</b>（canvas 尺寸已烘进每个场景），<b>不依赖 fps/viewer</b>。所以每场景
+<b>只测一次</b>——绝不为每个 fps/viewer 组合重复 rasterize（那是重复测同一个东西）。fps/viewer 仅作
+P3 公式参数随 `BenchmarkConfig` 记录在报告里。per-element 边际成本 = 单元素隔离场景均值 − 同尺寸
+<b>空白基线</b>（扣掉 buffer 分配 / clear / palette 固定开销）÷ 元素数。
+
+### 实施（手写契约 → Workflow 并行造 → 主线命令改写）
+
+- **主线手写 6 聚合 record**：`Percentiles`（线性插值 R-7 / PERCENTILE.INC 同款，数学 correctness-critical
+  故自写）/ `SceneResult` / `PerElementCost` / `GcSummary` / `EnvInfo`（JVM/OS/堆/GC 快照——数据透明）/
+  `BenchmarkReport`。
+- **Workflow 2 builder 并行** 造 `ResultAggregator`（aggregate + derivePerElement）+ `BenchmarkRunner`
+  （9 步编排）+ 1 对抗审查。审查：**crossSignatureConsistent / headlessSafe / percentileAndFormulaCorrect
+  三布尔位全 true，0 blocker / 0 warning，2 nit**——主线已修：① ResultAggregator elementCount 改<b>跨全图层</b>
+  求和（`ProjectState.elements()` 只返活动层，防未来多层场景漏算）② GcSummary javadoc 注明含 warmup。
+- **主线 solo 改写** `BenchmarkSubCommand`：`runOnWorker` 走 `BenchmarkRunner.run()` → 写 `report.json`
+  （取代 P1 `raw.json`）+ `summary.txt`；`doReport` 读 `report.json` → `BenchmarkReport`；`summarize`/
+  `SceneSummary` → 基于 `SceneResult` percentile + per-element + GC + env 的渲染器；清理 unused import。
+
+### 验证
+
+后端 **874 test 全绿（原 865 + 新 9：percentile 已知数据集精确比对 + 聚合 + per-element 边际 +
+BenchmarkReport Jackson round-trip）**；`:plugin:compileJava` + full `:plugin:test` BUILD SUCCESSFUL；
+0 baseline 漂移。版本仍 0.4.10-SNAPSHOT（0.5.0 末 phase 再升）。
+
+### 关联文件
+
+新增 `benchmark/{Percentiles,SceneResult,PerElementCost,GcSummary,EnvInfo,BenchmarkReport,ResultAggregator,BenchmarkRunner}.java`
++ `test/.../benchmark/BenchmarkP2Test.java`；改 `command/BenchmarkSubCommand.java` + `docs/dynamic-data.md §13.3`。
+
+---
+
 ## 2026-05-30 · 0.5.0-P1 — 性能 Benchmark 底座（scene 库 + 计时核心 + /canvas bench 骨架）
 
 ### 背景
