@@ -5,6 +5,51 @@
 
 ---
 
+## 2026-05-30 · 0.5.0-P3 — 报告可视化层（自包含 HTML + 内联 SVG 图 + 50mspt 交互计算器）
+
+### 背景
+
+P2 产出聚合 `BenchmarkReport`；P3 把它渲染成<b>自包含 HTML 报告</b>（内联 SVG 图表 + 交互式
+50mspt 预算计算器），服主浏览器打开即看。彻底贯彻「工具不是保姆」：报告给原料 + 公式，计算器由
+服主自己的输入驱动，绝不给「你能开 N 个 wall」的结论数字。
+
+### 落地组件
+
+- **`BudgetFormula`**（主线手写，公式 correctness-critical）：`availableMsPerSecond = mspt×tps×份额%`、
+  `projectedMaxWalls = 可用预算 ÷ (rasterize_p95 × fps)`。明确口径：这是<b>保守下界</b>——公式把整个
+  rasterize 当主线程成本，实际走 async、主线程只 schedule+handoff，真实能开更多；`DISCLAIMER` 常量随
+  计算器一起展示，防被当硬上限。
+- **`SvgBarChart`**（Workflow builder）：响应式内联 `<svg>` 横向条形图（viewBox + width:100%）；
+  退化输入守卫（空 / maxValue≤0 / 负值 / NaN/Inf）；`Locale.ROOT %.3f` 防逗号小数污染 SVG 坐标；
+  label 全转义。
+- **`HtmlReportRenderer`**（Workflow builder）：完整自包含 HTML5。环境卡 + config 卡（fps/viewer 标注
+  「P3 公式参数、不参与测量」）+ 逐场景 percentile 表 + rasterize p95 条形图（降序）+ per-element 边际
+  条形图 + GC 行 + **50mspt 交互计算器**（4 输入默认 50/20/30/5，内联 JS `recompute()` 逐场景算可载 wall
+  数）+ footer。时间戳由 `generatedAtMillis` 经 `Instant.ofEpochMilli + DateTimeFormatter(UTC)` 渲染，
+  不读时钟。**两层转义**：`esc()`（HTML/attr）+ `jsStr()`（JS 字符串，`<`→`<` 防 `</script>` 逃逸）。
+
+### 实施 + 审查（手写公式 → Workflow 并行造 → 多视角对抗审查）
+
+主线手写 `BudgetFormula` → **Workflow 2 builder 并行**造 `SvgBarChart` + `HtmlReportRenderer` + 1
+<b>三视角实证审查</b>。审查四布尔位全 true（自包含零外链 / 动态串全转义 / JS 公式与 BudgetFormula
+一致 / 签名+headless）、**0 issue**——且是真编译 + 用对抗性 XSS scene id 跑渲染 smoke + 数值验证
+Java/JS 公式一致（avail=300 / walls=24 双端相符）+ SVG 边界测试。唯一 `http://` 是 SVG `xmlns`
+命名空间 URI（不 fetch，false positive 已澄清）。无需修。
+
+### 接入 + 验证
+
+`BenchmarkSubCommand.runOnWorker` 加写 `report.html`（与 report.json/summary.txt 并列）。后端
+**878 test 全绿（原 874 + 新 4：公式数学 avail=300/walls=120 + SVG 边界 + HTML 自包含/转义对抗）**；
+`:plugin:compileJava` + full `:plugin:test` BUILD SUCCESSFUL；0 baseline 漂移。版本仍 0.4.10-SNAPSHOT
+（0.5.0 末 phase P4 再升）。
+
+### 关联文件
+
+新增 `benchmark/{BudgetFormula,SvgBarChart,HtmlReportRenderer}.java` + `test/.../benchmark/BenchmarkP3Test.java`；
+改 `command/BenchmarkSubCommand.java`（import + HTML_FILE 常量 + runOnWorker 写 html）+ `docs/dynamic-data.md §13.3`。
+
+---
+
 ## 2026-05-30 · 0.5.0-P2 — 聚合层（percentile + per-element 边际 + GC/env + report.json）
 
 ### 背景

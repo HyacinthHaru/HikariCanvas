@@ -17,6 +17,7 @@ import moe.hikari.canvas.benchmark.BenchmarkRunner;
 import moe.hikari.canvas.benchmark.BenchmarkScene;
 import moe.hikari.canvas.benchmark.EnvInfo;
 import moe.hikari.canvas.benchmark.GcSummary;
+import moe.hikari.canvas.benchmark.HtmlReportRenderer;
 import moe.hikari.canvas.benchmark.PerElementCost;
 import moe.hikari.canvas.benchmark.Percentiles;
 import moe.hikari.canvas.benchmark.SceneLibrary;
@@ -90,6 +91,9 @@ public final class BenchmarkSubCommand {
 
     /** summary.txt 文件名（人类可读摘要）。 */
     private static final String SUMMARY_FILE = "summary.txt";
+
+    /** report.html 文件名（P3 自包含 HTML 报告：内联 SVG 图 + 50mspt 公式计算器）。 */
+    private static final String HTML_FILE = "report.html";
 
     private final JavaPlugin plugin;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -278,6 +282,8 @@ public final class BenchmarkSubCommand {
         mapper.writerWithDefaultPrettyPrinter()
                 .writeValue(outDir.resolve(REPORT_FILE).toFile(), report);
         Files.writeString(outDir.resolve(SUMMARY_FILE), renderReportText(selector, report));
+        // P3：自包含 HTML 报告（内联 SVG 图 + 50mspt 公式交互计算器），服主浏览器打开即看。
+        Files.writeString(outDir.resolve(HTML_FILE), HtmlReportRenderer.render(report));
 
         // 回主线程：发彩色摘要 + 保存路径
         runOnMain(() -> {
