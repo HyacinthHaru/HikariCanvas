@@ -783,7 +783,9 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 - **P1（~50h）✅ 2026-05-30**：Instrumentation（`ThreadMXBean` 分配计数 + GC bean 采样 + warmup）+ 全元素 `SceneLibrary`（21 确定性场景：9 单元素 + 5 特效 + 3 混合 + 4 尺寸梯度，固定 seed）+ `SceneTimer`（warmup→measure，rasterize/palette 分开计时 + blackhole 防 DCE）+ `BenchCompositor`（复刻 `RendererSnapshotTest` 无头装配 + 合成图片 loader 注入让 image+mask 渲真实像素）+ `/canvas bench list/run/report/clear` 命令族（async 守护线程 + JSON/CLI 输出 + 单 bench 守卫）+ 3 共享契约 record。10 单测含端到端 smoke（全 21 场景 headless 跑通，兼 P4 CI gate 种子）。**留 P2 精化**：IconElement 走占位（无 headless IconRegistry）、合成图固定 256² 代表性近似。
 - **P2（~50h）✅ 2026-05-30**：6 聚合 record（`Percentiles` 线性插值 p50/p95/p99 + mean/min/max/stddev / `SceneResult` / `PerElementCost` / `GcSummary` / `EnvInfo` / `BenchmarkReport`）+ `ResultAggregator`（聚合 + alloc 均值 + per-element 边际 = 隔离场景均值 − 同尺寸空白基线 ÷ 元素数）+ `BenchmarkRunner`（选场景 → 测空白基线 → 逐场景计时 → 聚合 → per-element → GC/env 组装报告）+ `/canvas bench` 改产 `report.json`（聚合）+ `summary.txt` + 控制台 percentile 表。**关键澄清（修正 §13.3 原“matrix”措辞）**：rasterize 成本<b>不依赖 fps/viewer</b>（canvas 尺寸已烘进每个场景），故每场景<b>只测一次</b>，fps/viewer 仅作 P3 公式参数随报告记录，<b>不</b>为每个组合重复测量（否则是在重复测同一个东西）。9 P2 单测（percentile 数学 + 聚合 + per-element + Jackson round-trip）。**留 P3+**：真实 icon 成本（需无头 IconRegistry）/ 合成图逐尺寸精化
 - **P3（~55h）✅ 2026-05-30**：`HtmlReportRenderer`（自包含 HTML5，<b>零外链</b>，Catppuccin Latte，仅内联 `<style>`+`<script>`）+ `SvgBarChart`（响应式内联 SVG 横向条形图，Locale.ROOT 防逗号小数 + 退化输入守卫）+ `BudgetFormula`（50mspt 预算公式 + 保守下界 disclaimer）。HTML 报告含：环境卡（机器/JVM/堆/GC 透明）+ config + 逐场景 percentile 表 + rasterize p95 条形图 + per-element 边际条形图 + GC + **50mspt 交互计算器**（服主填 mspt/tps/份额/fps，内联 JS 镜像 `BudgetFormula` 实时算每场景「可载 wall 数」）+ footer「给原料+公式不给结论」。两层转义（`esc` HTML + `jsStr` 防 `</script>` 逃逸）。`/canvas bench run` 现产 `report.json` + `summary.txt` + `report.html` 三件。4 P3 单测（公式数学 + SVG 边界 + HTML 自包含/转义对抗）。
-- **P4（~20h，决策①砍了 ~16h）** CI 功能性 gate（bench 跑通即过，无数值断言）+ 本地 baseline JSON drift 人工复查 + config 软上限文档化 + `docs/benchmark.md`
+- **P4（~20h）✅ 2026-05-30**：`BenchmarkPipelineSmokeTest`（CI 功能性 gate——compositor→runner→HTML 全管线 headless 跑通，只断言「能跑通 + 不崩 + 产出非空报告」，<b>0 性能数值断言</b>，随 `:plugin:test` 在 CI 每次 push/PR 跑）+ `docs/benchmark.md`（281 行运维指南：命令族 / 报告怎么读 / 50mspt 公式与交互计算器 / 为什么没有自动门禁 / 用实测容量设 config 软上限 / 4 原则）+ 版本号 0.4.10→0.5.0-SNAPSHOT（7 处）。**无自动 drift 报警 / 不提交 baseline**（数字机器特定、不跨机迁移，由服主在自己机器对比 report.json 人工复查）；**无自动 prune**（`/canvas bench clear` 手动清理，符合「不擦屁股」）。
+
+> **0.5.0 完工（2026-05-30）**：P1 底座 + P2 聚合 + P3 HTML 报告 + P4 CI gate/docs 全部落地。后端 879 test 全绿 / shadow jar 159 MB / 0 baseline 漂移。下一步 0.6.0 时间轴需先做 P0 spike（30fps×4maps 实测 GC/mspt），用本期 Benchmark 工具量化。
 
 ### 13.4 — 0.6.0 时间轴编辑器（~365h；After Effects-like）
 
@@ -1329,8 +1331,8 @@ wall-clock 估 **~1.5-2.5 周**。
 | **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | ✅ |
 | **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型）| **60h** | ✅ |
 | 0.4.5–0.4.9 | 打磨 / 体验 / ultrareview / Live Paint 收尾 | — | ✅ |
-| 0.4.10 | 修补批 + 设计哲学固化 | ~15h | 📋 规划 |
-| 0.5.0 | 纯服务端性能 Benchmark（不测网络，见 §13.3 + PROPOSAL §2.1/§5.2.7） | ~191h | 📋 规划 |
+| 0.4.10 | 修补批 + 设计哲学固化 | ~40h | ✅ |
+| 0.5.0 | 纯服务端性能 Benchmark（不测网络，见 §13.3 + PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
 | 0.6.0 | 时间轴编辑器（AE-like，见 §13.4） | ~365h | 远期 |
 | 0.7.0 | Scratch-like 视觉运行时（见 §13.5） | ~360h | 远期 |
 

@@ -5,6 +5,52 @@
 
 ---
 
+## 2026-05-30 · 0.5.0-P4 + 0.5.0 完工 — CI 功能性 gate + benchmark.md + 版本号
+
+### P4 范围（收尾）
+
+- **CI 功能性 gate**：`BenchmarkPipelineSmokeTest`——跑完整 `/canvas bench run` 管线（compositor →
+  runner → HTML）headless 端到端，<b>只断言「能跑通 + 不崩 + 产出非空报告 + HTML 自包含含每个 scene
+  id」</b>，<b>0 性能数值断言</b>（决策①）。随 `:plugin:test` 在 CI 每次 push/PR 跑——某次改动若弄坏
+  scene 构造 / rasterize / 聚合 / 报告渲染，CI 立刻红。
+- **`docs/benchmark.md`**（281 行运维指南，子代理起草 + 主线核验定稿）：命令族 / 三件产物怎么读 /
+  逐场景 percentile / per-element 边际 / 环境卡 / 50mspt 公式与<b>交互计算器</b>（保守下界口径）/
+  为什么没有自动门禁·自动降级 / 用实测容量设 config 软上限 / 4 原则 / P4+ 精化。
+- **版本号 0.4.10 → 0.5.0-SNAPSHOT**（7 处 / 6 文件：build.gradle.kts + web/package.json +
+  package-lock×2 + 3 paper-plugin.yml）+ CLAUDE.md / dynamic-data §13.3·§19 路线表标 0.5.0 ✅。
+
+### 固化决策（P4 收尾，不可越界）
+
+- **不提交 baseline / 无自动 drift 报警**：rasterize 绝对耗时机器特定、不跨机迁移，提交 baseline 会误导；
+  性能回归由服主在<b>自己机器</b>上对比历次 `report.json` 人工复查。
+- **无自动 prune**：benchmark 报告目录累积由 `/canvas bench clear` <b>手动</b>清理，系统不自动删——
+  符合「不擦屁股」（不替服主管理他自己的输出文件）。
+- **CI 只断言「能跑通」**：共享 runner ±2-3x 抖动 + 0.4.7/0.4.8/0.4.9 三次 flaky 史，性能数值门禁
+  要么松到没用要么紧到 flaky。
+
+### 0.5.0 完工总览（P1–P4）
+
+| phase | 内容 |
+|---|---|
+| P1 | 底座：SceneLibrary(21 确定性场景全元素) + Instrumentation + SceneTimer + BenchCompositor + `/canvas bench` 命令骨架 + 3 契约 record |
+| P2 | 聚合：6 record(Percentiles 线性插值 等) + ResultAggregator(percentile + per-element 边际) + BenchmarkRunner(测一次) + report.json |
+| P3 | 可视化：BudgetFormula + SvgBarChart + HtmlReportRenderer(自包含 HTML + 内联 SVG + 50mspt 交互计算器) |
+| P4 | 收尾：CI 功能性 gate + docs/benchmark.md + 版本号 |
+
+**贯穿哲学**「工具不是保姆」：数据透明不替服主决策 / 不自动降级 / 不擦屁股（不测网络）。**测什么**：
+rasterize/palette percentile + 内存/GC + per-element 边际；**测一次**（rasterize 不依赖 fps/viewer）。
+后端 **879 test 全绿** / shadow jar `HikariCanvas-0.5.0-SNAPSHOT.jar` 159 MB / 0 baseline 漂移。
+4 commit（P1 `b837f9b` / P2 `cb1079b` / P3 `17a6b6a` / P4 `<本 commit>`）。
+
+**下一步**：0.6.0 时间轴（AE-like）须先做 P0 spike（30fps×4maps 实测 GC/mspt），正好用本期 Benchmark 工具量化。
+
+### 关联文件
+
+新增 `test/.../benchmark/BenchmarkPipelineSmokeTest.java` + `docs/benchmark.md`；改 6 个版本文件 +
+`CLAUDE.md` + `docs/dynamic-data.md`（§13.3 P4 ✅ + 0.5.0 完工 note + §19 表）。
+
+---
+
 ## 2026-05-30 · 0.5.0-P3 — 报告可视化层（自包含 HTML + 内联 SVG 图 + 50mspt 交互计算器）
 
 ### 背景
