@@ -435,7 +435,7 @@ public final class BenchmarkSubCommand {
         sb.append("config:   ").append(cfg.measuredIterations()).append(" measured + ")
                 .append(cfg.warmupIterations()).append(" warmup   (fps=").append(cfg.fpsValues())
                 .append(", viewers=").append(cfg.viewerCounts())
-                .append(" — P3 公式参数，不参与测量)\n");
+                .append("  — 帧率/观看人数仅用于预算公式，不影响渲染耗时)\n");
         sb.append("baseline: blank rasterize ")
                 .append(String.format("%.4f", report.blankBaselineMs())).append(" ms\n");
         sb.append("gc-run:   ").append(report.gc().collectionCount()).append(" collection(s), ")

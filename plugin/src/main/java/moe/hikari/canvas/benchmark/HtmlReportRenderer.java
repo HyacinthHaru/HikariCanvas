@@ -151,13 +151,13 @@ public final class HtmlReportRenderer {
         sb.append("<section class=\"card\">\n<h2>压测配置</h2>\n<dl class=\"kv\">\n");
         kv(sb, "测量轮数", String.valueOf(cfg.measuredIterations()));
         kv(sb, "预热轮数", String.valueOf(cfg.warmupIterations()));
-        kv(sb, "fps 档", joinInts(cfg.fpsValues()));
-        kv(sb, "viewer 档", joinInts(cfg.viewerCounts()));
+        kv(sb, "帧率", joinInts(cfg.fpsValues()));
+        kv(sb, "观看人数", joinInts(cfg.viewerCounts()));
         kv(sb, "场景选择", cfg.sceneSelector());
         kv(sb, "空白基线", String.format(Locale.ROOT, "%.3f ms", report.blankBaselineMs()));
         sb.append("</dl>\n");
-        sb.append("<p class=\"note\">fps / viewer 是 <b>P3 公式参数</b>，不参与测量——")
-                .append("rasterize 成本本身不依赖 fps / viewer（为每个组合重复测量是测同一个东西）。</p>\n");
+        sb.append("<p class=\"note\">帧率和观看人数<b>只用于下方的预算计算器</b>，不影响上面测出的渲染耗时——")
+                .append("画一面墙花多少毫秒，跟你设多少帧率、有多少人看无关。</p>\n");
         sb.append("</section>\n");
     }
 
