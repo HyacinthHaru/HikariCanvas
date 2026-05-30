@@ -75,6 +75,8 @@ public final class CanvasCommand {
     private final String editorUrlTemplate;
     /** 0.4.0-P5：{@code /canvas var} 子命令族（7 子命令）。null = 主插件未传，跳过注册。 */
     private final VariableSubCommand variableSubCommand;
+    /** 0.5.0-P1：{@code /canvas bench} 命令族（list/run/report/clear）。null = 主插件未传，跳过注册。 */
+    private final BenchmarkSubCommand benchmarkSubCommand;
 
     /**
      * M16-P2.6：玩家最近的 /canvas delete <wallId> 待确认条目。
@@ -103,7 +105,8 @@ public final class CanvasCommand {
                          TemplateRegistry templateRegistry,
                          TemplatePreviewService templatePreviewService,
                          String editorUrlTemplate,
-                         VariableSubCommand variableSubCommand) {
+                         VariableSubCommand variableSubCommand,
+                         BenchmarkSubCommand benchmarkSubCommand) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
         this.frameDeployer = frameDeployer;
@@ -115,6 +118,7 @@ public final class CanvasCommand {
         this.templatePreviewService = templatePreviewService;
         this.editorUrlTemplate = editorUrlTemplate;
         this.variableSubCommand = variableSubCommand;
+        this.benchmarkSubCommand = benchmarkSubCommand;
         // M16-P2.6：注册 PlayerQuit 监听清 pendingDeletes，避免玩家退出后 bucket 长期挂着
         plugin.getServer().getPluginManager().registerEvents(
                 new QuitListener(), plugin);
@@ -133,6 +137,10 @@ public final class CanvasCommand {
         if (variableSubCommand != null) {
             // 0.4.0-P5：/canvas var <sub> 命令族
             root = root.then(variableSubCommand.build());
+        }
+        if (benchmarkSubCommand != null) {
+            // 0.5.0-P1：/canvas bench <sub> 命令族
+            root = root.then(benchmarkSubCommand.build());
         }
         return root
                 .then(Commands.literal("edit")

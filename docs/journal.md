@@ -5,6 +5,74 @@
 
 ---
 
+## 2026-05-30 · 0.5.0-P1 — 性能 Benchmark 底座（scene 库 + 计时核心 + /canvas bench 骨架）
+
+### 背景
+
+0.4.x 收口后开 0.5.0「纯服务端性能 Benchmark」（PROPOSAL §2.1/§5.2.7「工具不是保姆」+ 4 原则；
+设计 `docs/dynamic-data.md §13.3`）。目标：让服主摸清「我这台机器能撑多少画布」——给原料 + 公式，
+不给「你能开 N 个」结论。本次推 P1（底座）。
+
+### brainstorming：4 个锁定决策（先设计后写码）
+
+走 superpowers:brainstorming 流程，AskUserQuestion 逐个定：
+1. **CI 不做性能数值门禁**——本地 baseline JSON + CI 只断言「能跑通」（0.4.7/0.4.8/0.4.9 三次 CI
+   flaky 全栽在 perf/平台敏感断言，共享 runner ±2-3x 抖动）。P4 因此从 ~36h 砍到 ~20h。
+2. **viewer 只测纯渲染管线**——核实 `MapPacketSender`：16KB 像素对同 tile 所有 viewer 是同一份，
+   per-viewer 只剩重复 encode + send（网络边界）。故测 `rasterize→toPaletteSlice→byte[]`，viewer
+   当线性外推乘数，不碰 PacketEvents（也正是这条让核心能 headless）。
+3. **报告 = JSON + CLI 表 + 独立自包含 HTML**（内联 SVG 图）。
+4. **scene 全元素覆盖**。
+   **运行模型 = 方案 A：单一 headless 核心 + 两适配器**（命令 / CI 跑同一套数字不分叉）。
+
+### 实施方式（scout → 手写契约 → Workflow 并行造 → 主线接入）
+
+- **3 并行 Explore scout** 摸集成面（ProjectState/Element/Fill 全 record 字段序、`rasterize`/
+  `toPaletteSlice` 签名、Brigadier 命令/config/async 惯例）→ 精确签名。
+- **主线手写 3 共享契约 record**（`BenchmarkScene`/`BenchmarkConfig`/`RasterizeSample`）——最关键接口必须精确。
+- **Workflow 4 builder 并行**（文件域不相交）造 `SceneLibrary`/`Instrumentation`+`SceneTimer`/
+  `BenchCompositor`/`BenchmarkSubCommand` + 1 对抗审查 agent。审查：**crossSignatureConsistent /
+  headlessSafe / deterministic 三布尔位全 true，0 blocker / 0 warning，仅 2 nit**（BenchCompositor
+  一段永不触发的 try/catch；Instrumentation.gcSnapshot 是 P2 预留——均故意保留）。
+- **主线 solo 接入 + 单测**。
+
+### 落地组件
+
+- **核心（headless，零 Bukkit）**：`SceneLibrary`（21 确定性场景：9 单元素饱和 + 5 特效 + 3 真实混合
+  + 4 尺寸梯度；单一固定 seed `0x4849_4B41_5249L` + per-scene offset 重播种，内容与生成顺序无关）/
+  `Instrumentation`（`com.sun.management.ThreadMXBean` 分配计数，不支持优雅降级 -1 + GC bean 采样）/
+  `SceneTimer`（warmup→measure，rasterize/palette 分开计时 + static volatile sink 防 DCE）/
+  `BenchCompositor`（复刻 `RendererSnapshotTest` 3 参无头装配 + `setImageLoader` SAM 注入合成 256²
+  渐变图，让 image+mask 渲真实像素）。
+- **命令适配层**：`BenchmarkSubCommand`（`/canvas bench list/run/report/clear`；run 异步守护线程
+  `hikari-canvas-bench` + volatile running 守卫 + 回主线程发消息 + `benchmarks/<ts>/{raw.json,summary.txt}`
+  输出 + tab 补全）。
+- **接入**：`CanvasCommand`（构造参 + `build()` 节点，仿 variableSubCommand）/ `HikariCanvas`
+  （字段 + line 496 构造 + `cleanupResources` 加 `benchmarkSubCommand.shutdown` closeQuietly）/
+  `paper-plugin.yml` 新权限 `canvas.bench`（default op）。
+- **单测**：`BenchmarkP1Test` 10 case——SceneLibrary 确定性（逐元素类型序列）+ 全元素覆盖 + select/byId
+  + Config 默认/归一化 + Instrumentation 优雅降级/单调 + **端到端 smoke（全 21 场景 headless 跑通，
+  兼 P4 CI 功能性 gate 种子）**。
+
+### 留 P2 精化（非 TODO 半成品，是范围切分）
+
+IconElement 走占位（无 headless IconRegistry）；合成图固定 256² 代表性近似；`Instrumentation.gcSnapshot`
++ percentile 聚合 + matrix runner 全在 P2。
+
+### 验证
+
+后端 **865 test 全绿（0 fail / 0 error，含 10 新）**；`:plugin:compileJava` + `:plugin:compileTestJava`
++ full `:plugin:test` BUILD SUCCESSFUL；0 baseline 漂移（benchmark 加法、不碰渲染）。版本号仍 0.4.10-SNAPSHOT
+（按惯例 0.5.0 末 phase 再升）。
+
+### 关联文件
+
+新增 `plugin/.../benchmark/{BenchmarkScene,BenchmarkConfig,RasterizeSample,SceneLibrary,Instrumentation,SceneTimer,BenchCompositor}.java`
++ `command/BenchmarkSubCommand.java` + `test/.../benchmark/BenchmarkP1Test.java`；改
+`command/CanvasCommand.java` + `HikariCanvas.java` + `resources/paper-plugin.yml` + `docs/dynamic-data.md §13.3`。
+
+---
+
 ## 2026-05-30 · 0.4.10 — ultrareview-2026-05-29 修复批（168 DIRECT_FIX）
 
 ### 背景

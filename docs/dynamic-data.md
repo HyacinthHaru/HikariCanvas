@@ -771,11 +771,19 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 **报告结构**：① 服务端可控部分（mspt / GC / per-element breakdown 三块 percentile）② 服主自算公式区（带宽自己 ping 自己测）。**给原料 + 公式，不给"你能开 N 个 wall"**。
 
+**4 个已锁定决策（2026-05-30 brainstorming，不可越界）**：
+1. **CI 不做性能数值门禁**——本地 commit baseline JSON + CI 只断言「bench 能跑通 + 不崩 + 在 timeout 内」功能性检查；性能 drift 人工复查。理由：0.4.7/0.4.8/0.4.9 三次 CI flaky 全栽在 perf/平台敏感断言，共享 runner ±2-3x 抖动，数值门禁要么松到没用要么紧到 flaky。
+2. **viewer 缩放只测纯渲染管线**——16KB 像素 byte 对同 tile 所有 viewer 是<b>同一份</b>（rasterize 产物共享），per-viewer 只剩「重复 encode 同样 16KB + send」，而 send 是网络边界。故 benchmark 测 `rasterize → toPaletteSlice → byte[16384]`，viewer 数当作「encode 重复次数」的线性<b>外推</b>乘数，**不实跑 PacketEvents**；报告诚实标注「非实测」。
+3. **报告 = JSON + CLI 表 + 独立自包含 HTML**（内联 SVG 图表，无外链依赖）。JSON 是 CI baseline + 服主自有工具的原料，CLI 给控制台人读，HTML 给可视化——图表只可视化原料、不给「推荐配置」结论。
+4. **scene 全元素覆盖**——text/rect/circle/shape/path/image+mask/brush/icon/变量插值 text + 特效 + 真实混合，per-element 分解是核心价值。
+
+**运行模型 = 方案 A：单一 headless 核心 + 两适配器**。核心（`SceneTimer`/`SceneLibrary`/`BenchCompositor`/`Instrumentation`）零 Bukkit/PacketEvents（rasterize 本就是纯函数）；适配器 1 = `/canvas bench` 命令（活服务器 async 线程），适配器 2 = JUnit/gradle harness（CI headless）。两上下文跑同一套数字、不分叉——正是决策②（不碰 PacketEvents）解锁的。
+
 **Phase 分解**（每 phase 自身完整，非"TODO 待补"半成品）：
-- **P1（~50h）** Instrumentation（mspt / GC 采样钩子）+ 程序生成 scene 库（招牌 / 渐变 / dither / mixed）+ `/canvas bench` 命令骨架
-- **P2（~50h）** 压测 matrix runner（wall size × fps × scene × 模拟 viewer 数）+ async BenchmarkRunner + percentile 统计
-- **P3（~55h）** 报告生成（JSON / HTML / CLI summary）+ per-element breakdown + 50mspt 公式区
-- **P4（~36h）** CI micro-benchmark 防回归 + baseline drift 报警 + config 软上限文档化 + `docs/benchmark.md`
+- **P1（~50h）✅ 2026-05-30**：Instrumentation（`ThreadMXBean` 分配计数 + GC bean 采样 + warmup）+ 全元素 `SceneLibrary`（21 确定性场景：9 单元素 + 5 特效 + 3 混合 + 4 尺寸梯度，固定 seed）+ `SceneTimer`（warmup→measure，rasterize/palette 分开计时 + blackhole 防 DCE）+ `BenchCompositor`（复刻 `RendererSnapshotTest` 无头装配 + 合成图片 loader 注入让 image+mask 渲真实像素）+ `/canvas bench list/run/report/clear` 命令族（async 守护线程 + JSON/CLI 输出 + 单 bench 守卫）+ 3 共享契约 record。10 单测含端到端 smoke（全 21 场景 headless 跑通，兼 P4 CI gate 种子）。**留 P2 精化**：IconElement 走占位（无 headless IconRegistry）、合成图固定 256² 代表性近似。
+- **P2（~50h）** 压测 matrix runner（wall size × fps × scene × 模拟 viewer 外推）+ async `BenchmarkRunner` + `ResultAggregator` percentile（p50/p95/p99）+ per-element 归因 + 真实 image/icon 成本精化
+- **P3（~55h）** 报告生成（JSON baseline + CLI 表 + 自包含 HTML 内联 SVG 图）+ per-element breakdown + 50mspt 公式区
+- **P4（~20h，决策①砍了 ~16h）** CI 功能性 gate（bench 跑通即过，无数值断言）+ 本地 baseline JSON drift 人工复查 + config 软上限文档化 + `docs/benchmark.md`
 
 ### 13.4 — 0.6.0 时间轴编辑器（~365h；After Effects-like）
 

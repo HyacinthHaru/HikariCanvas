@@ -31,6 +31,9 @@ permissions:
   canvas.admin.bypass-limit:
     description: Bypass rate limits and canvas size caps
     default: op
+  canvas.bench:
+    description: Run the server-side render benchmark (/canvas bench list/run/report/clear)（0.5.0）
+    default: op
   canvas.upload:
     description: Upload images for use as ImageElement
     default: true

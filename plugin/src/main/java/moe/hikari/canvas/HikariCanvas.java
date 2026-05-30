@@ -3,6 +3,7 @@ package moe.hikari.canvas;
 import com.github.retrooper.packetevents.PacketEvents;
 import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
+import moe.hikari.canvas.command.BenchmarkSubCommand;
 import moe.hikari.canvas.command.CanvasCommand;
 import moe.hikari.canvas.command.VariableSubCommand;
 import moe.hikari.canvas.deploy.FrameDeployer;
@@ -128,6 +129,8 @@ public final class HikariCanvas extends JavaPlugin {
     // namespace + 30s 后清 store 变量。
     private PluginNamespaceRegistry pluginNamespaceRegistry;
     private HikariCanvasAPIImpl apiImpl;
+    /** 0.5.0-P1：/canvas bench 命令族；持守护线程 executor，onDisable 须 shutdown。 */
+    private BenchmarkSubCommand benchmarkSubCommand;
     private volatile HikariCanvasConfig config;
     // 0.4.10 P2-82：onEnable 从 JVM 全局 IIORegistry 注销的 ImageReaderSpi 实例列表。
     // onDisable 逐个 registerServiceProvider 恢复——避免本插件（热）卸载后别的插件
@@ -493,12 +496,14 @@ public final class HikariCanvas extends JavaPlugin {
                     apiImplRef.setRateLimiter(newLimiter);
                     return fresh.pushRateLimitConfig;
                 });
+        // 0.5.0-P1：/canvas bench 命令族。持守护线程 executor，存字段供 onDisable shutdown。
+        benchmarkSubCommand = new BenchmarkSubCommand(this);
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
                 event.registrar().register(
                         new CanvasCommand(this, sessionManager, frameDeployer,
                                 tokenService, mapPool, database, wallRepo,
                                 templateRegistry, templatePreviewService, editorUrlTemplate,
-                                variableSubCommand).build()));
+                                variableSubCommand, benchmarkSubCommand).build()));
 
         // M13：UploadHandler 需要 sessionManager / wallRepo，所以晚于它们装配
         // M16 P2.1/P2.2：还需要 imageDao + jdbi 做事务化 quota+insert+evict
@@ -728,6 +733,11 @@ public final class HikariCanvas extends JavaPlugin {
         if (imageStorage != null) {
             closeQuietly("imageStorage.shutdown", imageStorage::shutdown);
             imageStorage = null;
+        }
+        // 0.5.0-P1：关停 /canvas bench 守护线程 executor（shutdownNow 中断 in-flight 压测）。
+        if (benchmarkSubCommand != null) {
+            closeQuietly("benchmarkSubCommand.shutdown", benchmarkSubCommand::shutdown);
+            benchmarkSubCommand = null;
         }
         // 0.4.10 P3-29：停字体 metrics 后台 worker（中断 + join）+ 清 FontMetricsTable 内存表，
         // 防（热）卸载后 worker 线程泄漏 / 旧 metrics 残留致下次 onEnable 双端布局不一致。
