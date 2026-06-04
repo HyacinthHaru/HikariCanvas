@@ -178,6 +178,29 @@ v2 形态:
 
 **实施位置：** `MigrationRunner` V006 + `WallRepo.migrateProjectJsonV1ToV2` 静态方法。M8-B 子阶段实施。
 
+### 2.4.2 `project_json` v2 → v3 加法（0.6）
+
+0.6 时间轴在 `ProjectState` 顶层加两个 **nullable** 字段（依据 `timeline.md §2.6/§2.7`）：
+
+| 字段 | 类型 | 缺省 | 语义 |
+| --- | --- | --- | --- |
+| `timelines` | `List<Timeline>` | `null` | 工程下所有时间轴；每条含 `tracks: Map<elementId, List<Keyframe>>`（方案 B：关键帧轨压平进 timeline，不进 Element） |
+| `activeTimelineId` | `String` | `null` | 当前激活时间轴 id；`null` = 静态画板（本节加法不生效） |
+
+`Timeline` / `Keyframe` / `Easing` / `TriggerConfig` record 形态以 `timeline.md §2.1–§2.5` 为权威。
+
+**与 v1→v2（§2.4.1）的关键区别：v2→v3 是纯加法，不重构结构、不需主动 rewrite 迁移。** v1→v2 把 `elements[]` 包进 `layers[]`、改了树形结构，故走启动期全库扫描回写（方案 A）；v2→v3 只是顶层多两个字段，沿用 **M8 v2 nullable 加法范式**：旧 v2 blob 无这两字段 → Jackson 反序列化填 `null` → `timelines == null` 走完全静态行为、baseline 零漂移（`ProjectState` 的 `@JsonCreator` 入口加两个 `@JsonProperty` 参数，缺失退 `null`）。
+
+**`Element` 8 个 record 零改动**——这是方案 B 的核心好处：关键帧不进 Element，故 sealed permits 与全部元素字段不动，`.canvas` / `project_json` 里既有 element 的序列化形态完全不变。
+
+**`protocolVersion` 内部字段 2 → 3**，但**不主动回写**旧 blob：
+
+- 不做启动期扫描升级（无结构变更，无须 rewrite）。
+- 运行期代码**同时接受 2 与 3**：读到 v2（无 `timelines`）按静态处理，读到 v3 按带时间轴处理。
+- **lazy on-write**：某 wall 下次保存时 `project_json` 自然写成 `protocolVersion: 3`，无显式迁移步骤。
+
+**无新 SQLite 表 / 无新 schema 版本。** `timelines` 以及每元素关键帧轨（`Timeline.tracks: Map<elementId, List<Keyframe>>`）全部序列化进 `walls.project_json` blob，与 `layers` / `elements` 同级。**0.6 不加 DB schema 版本、不加表、不做 `ALTER`**——本次变更全在 `project_json` blob 层（与 §6 的 schema 版本约定对照见 §6.2 末）。
+
 ### 2.5 表：`audit_log`
 
 安全/操作审计日志。
@@ -393,6 +416,8 @@ mysign.canvas
 
 直接包含 `protocol.md §7` 定义的 `ProjectState` 对象。v2 起为 layered 形态（含 `layers[]` / `activeLayerId` / `canvas.gridSize` / `canvas.guides` / 元素级 `opacity` / `blendMode` / `renderMode`）。导入老的 v1 `project.json`（含 `elements[]`）时自动 migrate（见 §2.4.1）。
 
+v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引入，见 §2.4.2）。导入老的 v1/v2 `project.json`（无这两个字段）时按静态处理（`timelines` 读为 `null`），无须迁移。时间轴是工程状态的一部分（序列化进 `ProjectState`），故 `.canvas` 导出天然带上它，无需 `assets/` 之类外置资源承载。
+
 ### 4.4 导入语义
 
 玩家在编辑器选「导入 `.canvas`」：
@@ -400,6 +425,7 @@ mysign.canvas
 2. 加载 `project.json` 替换当前工程状态
 3. 若 `project.canvas` 超出当前会话墙面尺寸 → 提示并中止，让玩家开新会话
 4. 若包含 `assets/`（v1.x 图标功能），文件由插件临时保存，会话结束清理
+5. （0.6 引入）若 `project.json` 含 `timelines[]`，其 `tracks` 的 key 是 elementId。导入到当前工程时若某条 track 引用了**不存在的 elementId**（孤儿关键帧轨，常见于只导入了部分元素或元素被删过的工程），处理方式**留实现期回填**（见 §10）。**建议默认**：丢弃孤儿轨 + `log warn`，不让坏引用进运行期（Ticker 按 elementId 查不到元素会空插值）；但此为待定项，最终丢弃 vs 保留以 §10 回填为准。
 
 ### 4.5 导出语义
 
@@ -461,6 +487,8 @@ src/main/resources/db-migrations/
 2. 查找文件系统中 `V(N+1)__*.sql` ... 按序应用
 3. 每应用一个脚本 → 在 `schema_version` 表插入新 row
 4. 全流程在一个事务里；失败则回滚并拒绝启动
+
+**0.6 例外（无 schema 变更）：** 0.6 时间轴把协议版本由 2 升至 3（详见 `protocol.md`），但**不引入新的 DB schema 版本**——无新表、无 `ALTER`，`timelines` / 关键帧轨全在 `walls.project_json` blob 层加（§2.4.2）。与历来"每次 DB 变更 +1"（§6.1）的惯例对照：本次变更不触碰任何表结构，故 `schema_version` 不动；版本演进体现在 `project_json` 内部的 `protocolVersion` 字段（lazy on-write 写成 3），而非 schema 整数。
 
 ### 6.3 破坏性变更处理
 
@@ -609,3 +637,5 @@ LIMIT 10;
 - [ ] **M5.5 引入**：wall delete 时是否需要保留 audit log 一份 project_json 备份（防误删）
 - [ ] `audit_log` 是否分库以免主 DB 膨胀
 - [ ] 多服务器共享 DB 的场景（暂不支持，但考虑未来是否兼容）
+- [ ] **0.6 引入**：孤儿关键帧轨（导入的 `timelines[].tracks` 引用当前工程不存在的 elementId）丢弃 vs 保留（§4.4；建议默认丢弃 + log warn，待回填裁决）
+- [ ] **0.6 引入**：`timelines` 含大量关键帧时 `project_json` blob 体积是否需要上限约束（单 wall 一个 blob，关键帧数无天然边界；与 `limits.*` config 段的关系待定）

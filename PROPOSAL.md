@@ -150,7 +150,7 @@ Placeholder 地图样式：**浅灰底 + 顶部 "HikariCanvas" 水印 + 底部�
 - 模板市场：玩家间分享 `.canvas` 包
 - 多语言字体后备链（中文、日文、韩文、emoji）
 - 在线协作：多玩家同时编辑同一招牌（类似 Figma）
-- **时间轴动画**（0.6.0 规划）：keyframe + easing 编排已有内容做非线性动画（After Effects-like）——"对已有内容进行编排"
+- **时间轴动画**（0.6.0 规划，设计总纲 `docs/timeline.md`）：keyframe + easing 编排已有内容做非线性动画（After Effects-like）——"对已有内容进行编排"
 - **视觉运行时**（0.7.0 规划）：Scratch-like 积木逻辑，事件驱动条件分支编排实时/常更新数据（如地铁到站亮灯、PvP MVP 播特效）——"对未知/实时内容进行编排"，无时间轴
 - 3D 排布：多面墙体的整体设计与一次性部署
 

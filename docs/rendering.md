@@ -479,22 +479,166 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 
 ---
 
-## 9. 性能
+## 9. 时间轴插值与缓动（0.6 引入）
 
-### 9.1 目标
+时间轴给渲染管线加一个**时间维前置层**：给定一条 `Timeline` 与查询时刻 `timeMs`，先把每个带关键帧的
+元素属性插值成瞬时值，产出一个临时 `ProjectState`（record copy，只改值不改结构），再走 §4 Rasterize
+起的原管线，后续各层不变。即
+
+```
+输出帧 = Rasterize( Interpolate(state, timeMs) )
+```
+
+无 `timeline` 的静态画板走原路径，本节不生效（`activeTimelineId == null`）。
+
+后端 `KeyframeInterpolator` 是唯一权威；前端 `interpolation.ts` 是编辑器预览镜像。两端照**本节同一份
+定义**实现，逐位等价是硬纪律（同 §6 字体/禁抗锯齿）。
+
+### 9.1 关键帧取值
+
+每个元素的每个属性是一串按 `timeMs` 升序的关键帧。给定查询时刻 `t`：
+
+- `t ≤ 首帧.timeMs`：取首帧值（**不外插**）。
+- `t ≥ 末帧.timeMs`：取末帧值（**不外插**）。
+- 落在区间 `[kf_i, kf_{i+1})`：先算线性局部进度
+
+  ```
+  local = (t − kf_i.timeMs) / (kf_{i+1}.timeMs − kf_i.timeMs)      // ∈ [0,1)
+  ```
+
+  再经 `kf_i.easing` 映射成 `eased`（§9.3），按属性类别（§9.2）用 `eased` 插值。
+- 区间两端 `timeMs` 相等（重合帧）：取后一帧值，`local` 不计算（除零保护）。
+
+`easing` 永远取**区间左端帧**的，末帧的 `easing` 无意义。
+
+### 9.2 逐类型插值规则
+
+| property 类 | 属性 | 规则 |
+|---|---|---|
+| 数值 | `x`/`y`/`w`/`h`/`rotation`/`opacity` | `v = a + (b − a) × eased`，`a`/`b` 为左右帧值 |
+| 颜色 / Fill | `color`/`fill` | sRGB 线性空间分量插值（§9.4） |
+| 离散 | `text`/`fontId` 等 | **step**：取 `timeMs ≤ t` 的最近关键帧，不插值，`eased` 不参与 |
+
+**字形级动画不做**：逐字 advance 量化是双端已知痛点（§2、CLAUDE.md M20）。文本只做整体属性（位置 /
+缩放 / 旋转 / 不透明度）插值 + 内容 step 切换，不做字形级 morph。
+
+### 9.3 缓动函数（双端逐位等价）
+
+```
+enum EasingType { LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT, CUBIC_BEZIER }
+```
+
+`LINEAR`：`eased = local`。
+
+`EASE_IN` / `EASE_OUT` / `EASE_IN_OUT` 是 `CUBIC_BEZIER` 的预设控制点（取 CSS 同名关键字标准值）：
+
+| 预设 | 控制点 (x1, y1, x2, y2) |
+|---|---|
+| `EASE_IN` | (0.42, 0, 1, 1) |
+| `EASE_OUT` | (0, 0, 0.58, 1) |
+| `EASE_IN_OUT` | (0.42, 0, 0.58, 1) |
+
+`CUBIC_BEZIER`：标准三次贝塞尔缓动，端点固定 `P0=(0,0)`、`P3=(1,1)`，控制点 `P1=(x1,y1)`、
+`P2=(x2,y2)`。约束 `x1, x2 ∈ [0,1]`（保证 `Bx` 在 `[0,1]` 单调，与 CSS 一致；`y` 不限）。
+
+**求值**：输入 `local` 是横轴（时间）进度，先解 `Bx(u) = local` 得参数 `u`，再求 `eased = By(u)`。
+两端用**同一套定点系数 + 同一迭代策略**（WebKit `UnitBezier` 形式）：
+
+```
+cx = 3·x1
+bx = 3·(x2 − x1) − cx
+ax = 1 − cx − bx
+cy = 3·y1
+by = 3·(y2 − y1) − cy
+ay = 1 − cy − by
+
+sampleX(u)  = ((ax·u + bx)·u + cx)·u
+sampleY(u)  = ((ay·u + by)·u + cy)·u
+sampleDX(u) = (3·ax·u + 2·bx)·u + cx      // dBx/du
+
+solveU(local):
+    u = local                              // 初值
+    重复 NEWTON_ITER=8 次:
+        d = sampleX(u) − local
+        if |d| ≤ EPS: return u
+        dx = sampleDX(u)
+        if |dx| < 1e-6: break              // 导数退化，转二分
+        u = u − d / dx
+    // 二分兜底（固定上限，区间 [0,1]）
+    lo = 0, hi = 1, u = local
+    重复 BISECT_MAX=32 次:
+        x = sampleX(u)
+        if |x − local| ≤ EPS: return u
+        if x < local: lo = u else hi = u
+        u = (lo + hi) / 2
+    return u
+
+eased = sampleY(solveU(local))
+```
+
+**两端写死相同的常量**：`NEWTON_ITER = 8`、`BISECT_MAX = 32`、`EPS = 1e-6`。
+
+**禁引第三方 easing 库**（D8）：第三方浮点实现与本式对不齐，会让多帧 snapshot 在边界像素抖动。
+
+### 9.4 色彩插值空间
+
+颜色 / Fill 的分量插值统一在 **sRGB 线性空间**（双端一处）：8-bit sRGB 分量 → 线性（gamma 解码）→
+线性插值 → 编码回 sRGB → 交 §6 量化。直接在 8-bit sRGB 上线性插值会让中间色偏暗，故约定线性空间。
+
+gamma 解码 / 编码用标准 sRGB 传递函数，两端写死相同（分量先归一化到 `[0,1]`）：
+
+```
+decode(c) = (c ≤ 0.04045) ? c / 12.92 : ((c + 0.055) / 1.055)^2.4
+encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
+```
+
+- RGB 三分量各自 `decode → lerp(eased) → encode`，结果四舍五入回 8-bit。
+- **alpha 直接线性插值**（不经 gamma）。
+- **Fill（渐变）插值**：仅当左右帧 Fill **同类型（solid/linear/radial）且同 stop 数**时，逐 stop 插值
+  （stop 位置线性、stop 颜色按上式）；类型或 stop 数不一致 → 降级为 **step**（取左端帧），不做歧义插值。
+
+### 9.5 取值时机（关键帧引用变量）
+
+关键帧 `value` 可为 `${var:X}` 字符串：
+
+- **数值 / Fill 类引用变量**：Ticker 在**插值前**先把 `${var:X}` resolve 成当前值，再对数值做 easing 插值
+  （`VariableInterpolator` 加 `resolveAsNumber`，非数值时按 fallback 链取，最终 `0`）。
+- **字符串 / 离散类**：step 取最近帧后，由 Rasterize 既有的 `maybeInterpolateText` 每帧统一 resolve（取
+  最新值，免费）。
+
+变量 cached 值在异步线程读取安全（见 `architecture.md`；0.4.10 已证）。
+
+### 9.6 一致性验证（接 §8）
+
+现有 `RendererSnapshotTest` 无时间维（读 fixture → `rasterize(state)` 一次 → 比单张 PNG），**测不了
+缓动双端一致**。新增两层防线：
+
+1. **缓动测试向量** `easing.json`：每条 = `{ type 或控制点, 一批输入 t }` → `expected eased`（容差 `1e-6`）。
+   Java 端与 TS 端各跑同一向量并比对 expected。纯算术、跨平台稳定，进 CI gate。
+2. **多帧 snapshot**：新增 `rasterize(state, timeMs)` 路径 + 带 `timeline` 的 fixture；同一 timeline 在
+   `t = 0 / 250 / 500 / 750ms` 各出一张 PNG 比基线。缓动 fixture **只用纯几何元素**（文本 fixture 因 AWT
+   度量差已在 CI 跳过，§8.4 同因）。
+
+像素容差沿用 §8.2。
+
+---
+
+## 10. 性能
+
+### 10.1 目标
 
 - 渲染 8×4 招牌（1024×512 像素）< 100ms
 - 局部重渲染（脏矩形 128×128）< 10ms
 - 调色板量化 1024×512 < 30ms
 
-### 9.2 优化
+### 10.2 优化
 
 - **增量重渲染**：EditSession 记录每个元素的前后包围盒，只重渲染受影响的区域
 - **元素级缓存**：静态元素（未改动）缓存其 RGBA bitmap，改动时失效
 - **调色板 LUT 复用**：进程内单例
 - **多线程**：元素栅格化可并行（元素间无依赖），合成阶段串行
 
-### 9.3 线程
+### 10.3 线程
 
 - **渲染全部在异步线程**（插件专属 `ExecutorService`）
 - 不访问 Bukkit API
@@ -502,7 +646,7 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 
 ---
 
-## 10. 边界条件
+## 11. 边界条件
 
 | 情形 | 行为 |
 | --- | --- |
@@ -515,9 +659,11 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 
 ---
 
-## 11. 未决问题
+## 12. 未决问题
 
 - [ ] 非像素字体是否需要提供「强制像素化」选项（字号任意 → 量化到 1px 网格）
 - [ ] Dithering 是否值得做（v1.0 不做，但预留配置）
 - [ ] 效果组合（描边+阴影+发光）的性能 budget
 - [ ] 中文字体的 emoji / 符号缺字处理（fallback chain）
+- [ ] 多帧 snapshot fixture 的关键帧密度与采样时刻（§9.6；t=0/250/500/750 是否够覆盖缓动曲线拐点）
+- [ ] 渐变 Fill 跨类型插值（solid↔linear）是否值得做平滑过渡，还是永久保持 step 降级（§9.4）

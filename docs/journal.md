@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-06-04 · 0.6.0 文档先行 — timeline.md 设计总纲 + 四份契约扩展（2026-06-03~04 两日打磨定稿）
+
+0.6.0 时间轴编辑器动工前的完整契约批（「文档先行」纪律：先文档后代码）：
+
+- **`docs/timeline.md`（新，~450 行设计总纲）**：D1–D9 决策表（owner 拍板：方案 B 独立 KeyframeTrack
+  挂 `Timeline.tracks` / 默认 20fps + `timeline.max-fps` 默 60 宽松阀 / MVP 仅 LINEAR / 三触发器
+  PLAYER_NEAR→0.7 / 专用 keyframe.* op / coalescing 路线 A + 16→64 / 零新依赖 / 后端唯一权威）+
+  数据结构 / 渲染管线（AnimationTicker / 池化 / per-map diff / 帧率策略）/ 双端插值缓动 / 触发器 /
+  协议 v3 / 撤销 / 前端 / 风险登记 / **6 段分期**（spike 折进 P2，一道 MVP 闸）/ ~360h。
+  打磨轮已砍：成本估算 UI / 自动校准 / 单机容量断言（按 owner 产品哲学：工具只管渲染，性能服主自负）。
+- **`docs/rendering.md` 新 §9 时间轴插值与缓动（数学权威）**：取值规则（不外插 / 重合帧取后）/
+  逐类型插值 / **cubic-bezier 双端逐位等价**（WebKit UnitBezier 系数 + 牛顿 8 步 + 二分 32 步兜底 +
+  EPS=1e-6 两端写死）/ sRGB 线性空间色彩插值 / 变量取值时机 / easing.json + 多帧 snapshot 双层防线。
+  原 §9–§11 顺移 §10–§12。
+- **`docs/protocol.md`**：v2→v3 变更总览（**干净切换**，前端由插件分发版本恒匹配；双层版本注：
+  Envelope.v 壳恒 2）+ §5.12 timeline.* / §5.13 keyframe.* op 表 + §7 八个 v3 TS 类型（enum wire
+  形态 camelCase）+ 4 错误码 + ack 形态对齐（id 经 state.patch，同 element.add 范式）。
+- **`docs/data-model.md` §2.4.2**：project_json v2→v3 纯加法（nullable / Element 零改 / 不加表不加
+  schema 版本 / protocolVersion lazy on-write 3）+ §4.3/§4.4 .canvas 语义 + 孤儿轨未决。
+- **`docs/architecture.md`**：§5.1 两条产帧路径 + 分流 gate + §5.5 AnimationTicker（线程模型 /
+  viewer-gated / 池化约束 / 帧率三条）+ §10.2 线程模型 + §11 config `timeline:` 段 + §13.3
+  「Ticker 不属于 P-2 反模式」澄清。
+- **指针**：PROPOSAL §4.3 + dynamic-data §13.4 瘦身（纸面设想 6 处错误纠正记录）+ CLAUDE.md
+  契约清单 + 路线表。
+
+关联：`docs/{timeline,rendering,protocol,data-model,architecture,dynamic-data}.md` `PROPOSAL.md` `CLAUDE.md`
+
+---
+
 ## 2026-06-04 · 0.5.0 hotfix-2 — 用户可见文案全面去 AI 味（2026-06-03 实施，按指示暂缓提交至今）
 
 用户实测 report.html 后反馈：报告 / 计算器 / 命令消息里大量「向用户解释设计意图」（"数据透明：…"

@@ -787,30 +787,27 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 > **0.5.0 完工（2026-05-30）**：P1 底座 + P2 聚合 + P3 HTML 报告 + P4 CI gate/docs 全部落地。后端 879 test 全绿 / shadow jar 159 MB / 0 baseline 漂移。下一步 0.6.0 时间轴需先做 P0 spike（30fps×4maps 实测 GC/mspt），用本期 Benchmark 工具量化。
 
-### 13.4 — 0.6.0 时间轴编辑器（~365h；After Effects-like）
+### 13.4 — 0.6.0 时间轴编辑器（~360h；After Effects-like）
 
-**评估结论**：Medium-Risky。数据模型 + 协议升级路径清晰（同 v1→v2 / M17 background 升级），但**渲染管线 5fps→30fps 是颠覆性改动**，原 120h 估严重低估，真实 ~365h。立项前用 0.5.0 数据精确定 fps 目标。
+> **本节原为纸面设想，已被 `docs/timeline.md`（设计总纲）取代。** 数据结构 / 协议 v3 / 渲染管线 /
+> 插值缓动数学 / 触发器 / 分期 / 工时一切以 timeline.md 为权威；配套契约见 `rendering.md §9`（插值+缓动）、
+> `protocol.md`（v2→v3）、`data-model.md §2.4.2`（project_json v3）、`architecture.md §5.5`（AnimationTicker）。
 
-**新数据结构**：
-- `ProjectState.timelines: List<Timeline>` + `activeTimelineId`（nullable，向后兼容）
-- `Element.keyframes?: List<Keyframe>`（沿用 M8 v2 nullable 字段模式，Jackson 零迁移）
-- `Timeline { id, durationMs, fps, loopMode(ONCE/LOOP/PING_PONG), trigger }`
-- `Keyframe { property, timeMs, value(多态：Number/String/Fill), easing(LINEAR/EASE_IN/OUT/CUBIC_BEZIER+params) }`
-- `TriggerConfig { type(MANUAL/PLAYER_NEAR/VARIABLE_CHANGE/SCHEDULE), params }`
+定稿时对本节纸面设想做了几处更正，列此以免后人按旧设想实现：
 
-**必须大改**：
-- `ProjectionThrottler` 反应式 → 新增 `AnimationTicker` 主动式定 cadence tick（独立 async 线程，与 throttler 解耦）
-- BufferedImage **池化复用**（30fps × 2048² ARGB ≈ 1.9 GB/s 分配，不池化必爆 G1 young gen）
-- dirty-region 失效（动画帧间脏区≈整画布）→ timeline-aware 增量渲染
-- `isPristineAcrossLayers` 纳入 timeline state（首帧 opacity=0 别误判 pristine 走 placeholder）
-- HistoryStack 100 步上限会被 keyframe 编辑打爆 → op coalescing
-- 现有 1500+ 测试假设 5fps → 30fps 路径必须**条件化**（仅含活跃 timeline 的 wall 启用，不全局升级）
-
-**主要风险**：30fps × 多 map packet 带宽（物理上限，服主自负，PROPOSAL §2.1，**我们不自动降级**）/ 主线程 tick budget / BufferedImage GC / 双端 cubic-bezier 数学一致性（须 snapshot CI）/ keyframe `${var}` 取值时机（tick 取最新值再插值 vs 插值后再 resolve）。
-
-**利好**：`ProjectionThrottler.setIntervalForSession` 已开 20fps 路径 / `projectByWall` 无 session 渲染入口 / rasterize 纯函数并发安全 / 变量倒排索引可驱动 keyframe `${var}`。
-
-**Phase**：P0 spike（30fps×4maps×10elem 实测 GC/mspt，15h，**必须先做**）→ 数据模型+协议 v3（40h）→ 池化+Ticker（60h）→ easing+插值器（80h）→ 前端 timeline panel（100h）→ trigger+loop（40h）→ 压测+双端一致（30h）。
+- **Keyframe 存法取方案 B，不进 Element。** 原写 `Element.keyframes?`（方案 A）已否决；关键帧压平进
+  `Timeline.tracks: Map<elementId, List<Keyframe>>`，`Element` 8 record 零改动（timeline.md D1/§2.2）。
+- **默认帧率 20fps（config `timeline.max-fps` 默 60 安全阀），不是统一 30fps。** 不做成本估算 / 自动校准 /
+  自动降级（timeline.md D3/§3.5）。
+- **`rasterize` 走异步线程，不占主线程 tick budget。** 原"主线程 tick budget"风险不成立；约束是渲染线程
+  算力 + 发包 + GC（timeline.md §3.5）。
+- **HistoryStack 上限是 16，不是 100**（`HistoryStack.MAX_HISTORY=16`）；keyframe 连续拖动靠 coalesce 合并 +
+  有 timeline 时 16→64（timeline.md D7/§7）。
+- **0.6 触发器 = MANUAL + VARIABLE_CHANGE + SCHEDULE；PLAYER_NEAR 推迟 0.7**（需从零建事件层，与 0.7 Scratch
+  触发系统重叠，timeline.md D5/§5）。
+- **分期 6 段**（独立 P0 spike 折进 P2 首任务，一道 MVP 闸）：P1 数据模型+协议 v3+撤销(60) → P2 Ticker+池化
+  +MVP(50) → P3 缓动+双端插值器+一致性 CI(70) → P4 前端 AE panel(100) → P5 触发器(35) → P6 一致性 CI+收尾(15)。
+  详见 timeline.md §10/§11。
 
 ### 13.5 — 0.7.0 Scratch-like 视觉运行时（~360h）
 
@@ -1333,7 +1330,7 @@ wall-clock 估 **~1.5-2.5 周**。
 | 0.4.5–0.4.9 | 打磨 / 体验 / ultrareview / Live Paint 收尾 | — | ✅ |
 | 0.4.10 | 修补批 + 设计哲学固化 | ~40h | ✅ |
 | 0.5.0 | 纯服务端性能 Benchmark（不测网络，见 §13.3 + PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
-| 0.6.0 | 时间轴编辑器（AE-like，见 §13.4） | ~365h | 远期 |
+| 0.6.0 | 时间轴编辑器（AE-like，设计总纲 `docs/timeline.md`，摘要见 §13.4） | ~360h | 远期 |
 | 0.7.0 | Scratch-like 视觉运行时（见 §13.5） | ~360h | 远期 |
 
 > 路线图以 `CLAUDE.md` 速览表为准；本表为 dynamic-data 内部参考。原"0.5.0 动画 / 0.6.0 Blockly"已于 2026-05-25 重排（见 §13 重订说明）。

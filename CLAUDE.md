@@ -46,6 +46,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 - `docs/data-model.md` — SQLite / PDC / `.canvas` 格式
 - `docs/security.md` — 威胁模型与安全规范
 - `docs/dynamic-data.md` — 0.4.0 变量系统 + Push API + 四层数据源（2026-05-19 规划）
+- `docs/timeline.md` — 0.6.0 时间轴编辑器设计总纲（2026-06-03 规划；配套 rendering.md §9 / protocol.md v3 / data-model.md §2.4.2 / architecture.md §5.5）
 
 **操作类（M1 之后按需写，先写易过时）：** `deployment.md` / `development.md` / `api.md` / `troubleshooting.md`
 
@@ -419,7 +420,7 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.9** | **Live Paint 收尾**（M18 brush 真实形状 stroke offset polygon + text glyph 真实形状 fontkit 引入） | **18h** | ✅ |
 | **0.4.10** | **ultrareview-2026-05-29 修复批**（独立深度审查 224 缺陷 → 修全部 168 个 DIRECT_FIX：data-integrity / concurrency 线程契约 / boundary 守卫 / 异常 ack / 双端一致 / 模板校验 等；TRADE_OFF 23 + NEEDS_DESIGN 30 暂不修）+ 设计哲学固化（"工具不是保姆" PROPOSAL §2.1/§5.2.7） | **~40h** | ✅ |
 | **0.5.0** | **纯服务端性能 Benchmark**（后台模拟 rasterize/palette/GC + 21 程序生成 scene + `/canvas bench` 命令族 + report.json/summary.txt/report.html 三件 + 50mspt 交互计算器 + CI 功能性 gate；**不测网络**，见 PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
-| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；30fps 上限按 0.5.0 实测数据定，遵守"不自动降级"） | ~365h | 远期 |
+| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md`） | ~360h | 远期 |
 | 0.7.0 | Scratch-like 视觉运行时（积木逻辑 + 事件驱动 + 条件分支；复用 template.expr + ChangeListener；积木库 vs 自写待定） | ~360h | 远期 |
 | M30 | 图层 mask / group / smart object（PS-style）— 独立大版本 | 30h+ | 远期 |
 | 弃 | B-advanced DCEL 覆盖 4% Live Paint 用例 — 38h+ 性价比低 | — | 不做 |

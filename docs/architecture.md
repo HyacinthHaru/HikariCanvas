@@ -514,6 +514,15 @@ M5.5 起 `/canvas cleanup` 语义改为：扫 walls 表，对每行验证 `(worl
 - **输入中**：100ms 防抖 + 5 fps 节流。
 - **session 关闭前最后一帧**：一次完整（非差分）推送，确保最终帧 100% 正确（M5.5 前称"提交时全量"，新模型下不存在显式 commit，改为 cancel/disconnect 前 ProjectionThrottler flush）。
 
+**两条产帧路径（0.6 引入）。** 上面描述的是**反应式路径**；时间轴动画引入第二条**主动 cadence 路径**。两条按 wall 是否有活跃动画分流：
+
+| 路径 | 适用 wall | 驱动 | 静止行为 |
+| --- | --- | --- | --- |
+| 反应式（原 ProjectionThrottler） | 静态 / 编辑中 wall | 事件驱动（op / 变量变化） | 无事件 0fps |
+| 主动 cadence（AnimationTicker，0.6 引入） | 活跃动画 wall | 按 `timeline.fps` 定 cadence 主动产帧（§5.5） | 由 Ticker 主驱，不依赖外部事件 |
+
+**分流 gate（不可越界）：** 当某 wall 既有活跃动画、又同时在编辑器里被编辑时，两条路径会对同一 wallId 重复写 `HikariCanvasRenderer.update(mapId)`。装配层按 wallId gate：动画接管期间，编辑 op 产生的 reactive flush 退让给 Ticker，由 Ticker 出帧（详见 `timeline.md §3.2`）。`ProjectionThrottler.setIntervalForSession` 只**放宽节流上限**、不自驱产帧——**不能**当 Ticker 用，它仅用于编辑器内预览动画时把节流放宽。
+
 ### 5.2 脏矩形计算
 
 每次收到 op 后：
@@ -541,6 +550,39 @@ M5.5 起 `/canvas cleanup` 语义改为：扫 walls 表，对每行验证 `(worl
 - **WebSocket（浏览器 ↔ 插件）：** 启用 `permessage-deflate`（Javalin 支持）。JSON 指令压缩率 3~8x。
 - **MC 协议（插件 ↔ 客户端）：** MC 原生协议层 zlib（默认 256B 阈值自动压）。
 - **不自行再加一层。**
+
+### 5.5 AnimationTicker（0.6 引入）
+
+时间轴动画的产帧引擎。详细设计见 `timeline.md §3`；本节固化其在投影管线中的定位与约束。
+
+**定位：** 独立 `ScheduledExecutorService`，按 `timeline.fps` 定 cadence 主动产帧（反应式路径 §5.1 无活跃动画 wall 时彻底静止，给不出"按时间推进"的帧）。
+
+- **不用 Bukkit 定时器。** Bukkit scheduler 最细 1 tick = 50ms（= 20fps 整），给不出高于 20fps 的刷新率。统一用独立 `ScheduledExecutorService` 覆盖到 config `timeline.max-fps` 全范围。
+- **照 `VariableProviderDaemon` 范式造**：`ScheduledExecutorService` + `scheduleAtFixedRate` + 三层异常隔离 + 幂等关停，是现成参考实现。
+
+**每 tick 流程：**
+
+```
+对每个活跃动画 wall:
+    findViewersForWall(wallId) 为空 → 跳过该 wall（viewer-gated，§下）
+    按 loopMode（ONCE / LOOP / PING_PONG）推进 timeMs
+    KeyframeInterpolator 算插值后的临时 ProjectState（record copy，只改值不改结构）
+    CanvasProjector.projectByWall(wallId) 出帧 → MapPacketSender 发送
+```
+
+插值数学的权威定义在 `rendering.md §9`（输出帧 = `Rasterize(Interpolate(state, timeMs))`）；临时 ProjectState 只改值不改结构，不 mutate 持久化状态（§13.3）。
+
+**viewer-gated：** `findViewersForWall(wallId)` 返空就停该 wall 的 tick——空墙不烧 CPU，符合"数据透明、不替服主决策"的一贯原则。
+
+**`BufferedImage` 池化：** `rasterize` 每帧 `new BufferedImage(...TYPE_INT_ARGB)`，其并发安全靠"每次 new"保证。动机墙是 8×8 多墙叠加 + 蒙版图（蒙版图约 42MB/帧，高 fps 物理不可行，池化前禁动画）。**池化只在 Ticker 单线程内做**：Ticker 单线程串行出帧，每帧借一张、量化完归还（`Graphics2D.clearRect` 复用而非 new），**不跨线程借还**，不破坏 rasterize "每次 new 保证并发安全"的契约。
+
+**帧率策略：**
+
+1. `Timeline.fps` 是服主显式参数，**默认 20fps**（= 一个 Bukkit tick 50ms）。每墙刷新率由服主自改。
+2. config `timeline.max-fps` 是**服务器级安全阀**（默 **60**）：管理员保护多租户服务器、防单墙极端 fps 拖垮渲染线程 / 网络的总阀门。`Timeline.fps` 受此阀钳。
+3. **不做成本估算、不自动校准、不自动降级。** 服主自负性能，工具不替其决策（"数据透明、不替服主决策"原则的延续，见 §13）。想知道单机承载，服主自跑 `/canvas bench`（0.5.0，与时间轴解耦）。
+
+**帧间脏区：** 动画帧间脏区 ≈ 整画布，§5.2 的 dirty-region 增量基本失效。改做 **per-map 帧间 diff**：只发"像素变了的 map"（不是变了的像素）——逐 map 比对相邻两帧，未变 map 不发包。这是基本不浪费的优化，直接做，不 gate 在实测上。
 
 ---
 
@@ -712,6 +754,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 
 - **主线程（Bukkit）**：物品框操作、PDC、MapView 生命周期
 - **异步线程（插件 executor）**：渲染、调色板映射、WS I/O、SQLite
+- **AnimationTicker（0.6 引入）**：独立 `ScheduledExecutorService`，按 `timeline.fps` 主动产帧（§5.5）；不访问非线程安全 Bukkit API（viewer 查询走 `world.getPlayers()` / `Player.getLocation()` 线程安全只读路径，双层 try-catch 收窄瞬态异常——与 ProjectionThrottler async 线程同纪律）；产帧后经 MapPacketSender 发送
 - **推送**：异步线程构造 packet → PacketEvents 内部处理发送
 
 **禁止**在异步线程调用 Bukkit API（除明确标注线程安全的）。
@@ -859,6 +902,11 @@ render:
   default-font: "sourcehan"
   palette-lut: "built-in"           # built-in | custom-path
 
+timeline:                           # 0.6 引入
+  default-fps: 20                   # 新建 timeline 的默认帧率（= 一个 Bukkit tick 50ms）
+  max-fps: 60                       # 服务器级安全阀：单墙 fps 的硬上限，钳每条 timeline 的 fps
+                                    #   （多租户保护，防单墙极端 fps 拖垮渲染线程 / 网络；不做自动降级）
+
 limits:
   ws-messages-per-second: 20
   text-max-length: 256
@@ -883,6 +931,7 @@ logging:
 - [x] **M5.5 引入**：协作编辑（多 client 同时编辑同一 wall_id）—— **永久不做**。`byWall` 排他锁阻止，玩家接力编辑（前一玩家 cancel 后下一玩家 `/canvas open <wall_id>`）已是现状
 - [ ] **M8 引入**：图层数 / 层内元素数上限（暂无；建议 layers ≤ 32、单层 elements ≤ 200 作为软上限做 warn 不做 hard cap）
 - [ ] **M8 引入**：blendMode v1 选 normal/multiply/screen/overlay 4 个；其他 PS 风格 mode 等用户呼声
+- [ ] **0.6 引入**：AnimationTicker 与编辑 op 并发改 state 的锁范式落点——倾向进 EditSession monitor、复用 `ProjectionThrottler.projectUnderEditLock`（`ProjectionThrottler.java:221`，`synchronized (es)`）的锁范式；实现时确认是否需要单列。对齐 `timeline.md §9` 风险登记
 
 这些问题实现时根据实际情况回填本文档。
 
@@ -923,6 +972,8 @@ logging:
 **不允许** — 会撞 lock-aware open 鉴权 + 撑爆 history 栈 + 产生大量 WS 流量。
 
 变量系统取代这条死路。
+
+**AnimationTicker（0.6，§5.5）不属于 P-2 反模式。** 它在 Ticker 线程内算**临时**插值 ProjectState 直接渲染（与 P-1 用 cached 变量值渲染同路），**从不** mutate 持久化 ProjectState、不进 history 栈、不发 WS 编辑流量。与被禁的"后台 task 定时 `EditSession.updateElement`"有本质区别。
 
 详见 `docs/journal.md` 2026-05-16 M15.3 / M15.4 + 2026-05-19 0.4.0 规划条目。
 

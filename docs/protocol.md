@@ -20,6 +20,26 @@
 
 ---
 
+## v2 → v3 变更总览（0.6）
+
+时间轴编辑器（`docs/timeline.md`）给工程加时间维：`Timeline` + 关键帧（`Keyframe`）+ 缓动（`Easing`），由服务端 `AnimationTicker` 定 cadence 逐帧渲染。协议随之升 v3。
+
+| 维度 | v2 | v3 |
+|---|---|---|
+| ProjectState 顶层 | `layers` / `activeLayerId` | **新增** `timelines?: Timeline[]` / `activeTimelineId?: string` |
+| op 族 | element.* / layer.* / canvas.* / variable.* 等 | **新增** `timeline.*`（§5.12）+ `keyframe.*`（§5.13） |
+| state.patch path | `/layers/<i>/elements/<j>/...` 等 | **新增** `/timelines/<i>/...` 与 `/timelines/<i>/tracks/<elementId>/<k>/...`（§5.2） |
+| 客户端协商 | auth payload `clientProtocolVersion: 2` | auth payload **必须**带 `clientProtocolVersion: 3`；服务端遇 `< 3` 直接 reject `VERSION_MISMATCH` + close 4002 |
+| v2 客户端兼容 | — | **不兼容**，取干净切换（不维持 v2 双轨） |
+
+**为什么取干净切换、不维持 v2 双轨**（与 M8 的 v1→v2 同样处理）：前端 bundle 由插件自带分发，客户端与服务端协议版本在实际部署中永远匹配；版本协商设施（`Protocol.SUPPORTED_MIN/MAX`，M16.6 已建）只作安全校验，非用于支撑混版运行。timeline 字段在形态上虽是 nullable 加法（v2 工程读为 null = 静态画板），但若让 v2 编辑器打开含 timeline 的 v3 工程，保存时会按 v2 schema 丢弃 `timelines`（数据丢失）。故取干净切换：服务端遇 `client_v < 3` 直接 reject，避免混版导致的静默数据丢失。
+
+> **双层版本注**（M16.6 设计，见 `web/Protocol.java`）：本次升的是 **business protocol**
+> （`client_v` / `accepted_v`，校验 `Protocol.SUPPORTED_MIN/MAX = 3`）。消息壳 `Envelope.v`
+> 是独立的 envelope schema version，0.6 未改信封字段（`v / op / id / ts / payload`），故仍为 `2`。
+
+---
+
 ## 1. 传输层
 
 | 项 | 约定 |
@@ -195,6 +215,8 @@ S → C:  { op: "error", id: "c-17",
 | `state.patch` | S→C | 增量补丁（JSON Patch RFC 6902 子集） |
 | `project.load` | C→S | 载入既有 wall 进行二次编辑（M5.5 起：`/canvas open` 已经在握手前完成 load，此 op 实际可能不再需要，待 P2 实施时确认） |
 
+**state.patch 时间轴路径（v3 新增）**：v3 起 `state.patch` 新增 `/timelines/<i>/...`（时间轴属性，如 `/timelines/0/durationMs`）与 `/timelines/<i>/tracks/<elementId>/<k>/...`（某元素第 `k` 个关键帧的字段，如 `/timelines/0/tracks/e-abc/2/timeMs`）两类路径。沿用现有 JSON Pointer 分拣，与 `/layers/<i>/elements/<j>/...` 同构（前端 `project.ts` applier 多认一段 token）；keyframe 数组的增删 = 列表项 `add` / `remove`（与现有 elements 数组 patch 完全一致）。
+
 ### 5.3 元素编辑类
 
 所有元素编辑均通过 `element.*` 族 op。服务端是权威状态持有者，客户端发意图、服务端算结果。
@@ -311,6 +333,36 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形如 `/variables/<encoded-fullName>/currentValue`。
 
+### 5.12 时间轴（v3 新增）
+
+时间轴的增删改走 `timeline.*` op，落 DB（序列化进 `project_json`，见 `docs/data-model.md` v3）+ 进 history。播放控制（`play/pause/seek`）单独一档，**不落 DB、不进 history**——它只在真实部署 wall 上启停 / 定位后端 `AnimationTicker`。
+
+| op | 方向 | payload | 说明 |
+| --- | --- | --- | --- |
+| `timeline.create` | C→S | `{ name, durationMs, fps, loopMode, trigger }` | 新建时间轴；`ack { version }`，新 timeline（含 id）经 `state.patch` 的 `add /timelines/<i>` 下发（同 `element.add` 范式）。`fps` 受 config `timeline.max-fps` 钳（默 60），超出按上限截断 |
+| `timeline.update` | C→S | `{ timelineId, patch: { name?, durationMs?, fps?, loopMode?, trigger? } }` | 部分更新；`fps` 同样受 max-fps 钳；任何字段显式传 `null` 拒 `INVALID_PAYLOAD`（不支持「null = 清字段」语义，含 `trigger`）；`durationMs` 缩短到低于现有关键帧时刻拒 `INVALID_KEYFRAME_TIME`；`error TIMELINE_NOT_FOUND` |
+| `timeline.delete` | C→S | `{ timelineId }` | 删除时间轴及其 tracks；`error TIMELINE_NOT_FOUND` |
+| `timeline.play` | C→S | `{ timelineId }` | 在部署 wall 上启动后端 Ticker；**不落 DB、不进 history**；`ack` |
+| `timeline.pause` | C→S | `{ timelineId }` | 停止后端 Ticker；**不落 DB、不进 history**；`ack` |
+| `timeline.seek` | C→S | `{ timelineId, atMs? }` | 定位后端 Ticker 到 `atMs`（缺省 = 0）；**不落 DB、不进 history**；`ack` |
+
+> 编辑器内 scrubber 拖动的本地预览是**纯前端、不发 WS**（60fps 跟手，见 `docs/timeline.md §6.3`）。`timeline.play/pause/seek` 仅用于操控真实部署 wall 上的后端 Ticker；游戏内最终输出永远以后端为权威（`docs/timeline.md` D9）。
+
+### 5.13 关键帧（v3 新增）
+
+关键帧是高频编辑（一次拖动一秒几十条），仿 `element.*` 的 ack 模型走专用 `keyframe.*` op（`docs/timeline.md` D6）。
+
+| op | 方向 | payload | 说明 |
+| --- | --- | --- | --- |
+| `keyframe.add` | C→S | `{ timelineId, elementId, property, timeMs, value, easing }` | 在指定元素属性轨上加关键帧；`ack { version }`，新 keyframe（含 id）经 `state.patch` 下发（同 `element.add` 范式）；`error TIMELINE_NOT_FOUND / INVALID_ELEMENT`（elementId 不存在）`/ INVALID_KEYFRAME_TIME / INVALID_EASING / INVALID_PAYLOAD`（property 不在白名单 / 配额超限 / 值类型不匹配） |
+| `keyframe.update` | C→S | `{ timelineId, keyframeId, patch: { timeMs?, value?, easing? } }` | 部分更新；`error KEYFRAME_NOT_FOUND / INVALID_KEYFRAME_TIME / INVALID_EASING` |
+| `keyframe.delete` | C→S | `{ timelineId, keyframeId }` | 删除关键帧；`error KEYFRAME_NOT_FOUND` |
+| `keyframe.move` | C→S | `{ timelineId, keyframeId, timeMs }` | 仅挪时刻的高频快捷；拖动期前端本地 mutate，`dragend` 发一条；`error KEYFRAME_NOT_FOUND / INVALID_KEYFRAME_TIME` |
+
+> `property` 取值集合（`x`/`y`/`w`/`h`/`rotation`/`opacity`/`color`/`fill`/`text` 等）与其插值类别（数值 / 颜色 / 离散）见 `docs/rendering.md §9.2`；`easing` 结构（`type` + 可选 `bezier` 控制点）见 `docs/rendering.md §9.3`。
+>
+> 撤销侧 keyframe 连续拖动会按 coalesce key 合并（`docs/timeline.md §7`），协议层无需感知——前端在 `dragend` 才发终值一条 op，服务端按常规处理。
+
 ### 5.8 服务端主动推送
 
 | op | 方向 | 说明 |
@@ -366,6 +418,10 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 | `VARIABLE_EXISTS` | 0.4.0：variable.create 同名已存在 | ❌ |
 | `VARIABLE_TYPE_MISMATCH` | 0.4.0：variable.set 值与声明 type 不符 | ❌ |
 | `VARIABLE_NAMESPACE_DENIED` | 0.4.0：HikariCanvasAPI.setVariable 试图推非注册 namespace | ❌ |
+| `TIMELINE_NOT_FOUND` | 0.6：timeline.* / keyframe.* op 指向不存在的 timelineId | ❌ |
+| `KEYFRAME_NOT_FOUND` | 0.6：keyframe.update / delete / move 指向不存在的 keyframeId | ❌ |
+| `INVALID_EASING` | 0.6：cubicBezier 控制点 x 越界 `[0,1]`，或缺 bezier 字段 | ❌ |
+| `INVALID_KEYFRAME_TIME` | 0.6：keyframe timeMs 为负值或超出所属 timeline 的 durationMs | ❌ |
 | `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
 | `QUOTA_PER_WALL` | M13/M14：当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
 | `QUOTA_PER_DAY` | M13/M14：玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
@@ -408,6 +464,8 @@ type ProjectState = {
   };
   layers: Layer[];            // 至少 1 个；层间 z-order = index（大 = 上）
   activeLayerId: string;      // 当前 UI 操作层；服务端中继 + element.add 缺 layerId 时用
+  timelines?: Timeline[];     // v3 新增；缺省/null = 静态画板
+  activeTimelineId?: string;  // v3 新增；缺省/null = 无激活时间轴
   history: { undoDepth, redoDepth };
 };
 
@@ -487,6 +545,53 @@ type ImageElement = BaseElement & {
     inverted: boolean;     // false=显示 mask 内（默认），true=显示 mask 外
   };
 };
+
+// === 时间轴（v3 新增） ===
+// 形态对应后端 record（docs/timeline.md §2）；enum 字段的 wire 形态由后端 record 的
+// @JsonProperty 显式映射为 camelCase（同 BlendMode 范式：Java enum 常量 + @JsonProperty
+// 注解），双端对齐，非 Java enum name 直出。
+
+type Timeline = {
+  id: string;                    // "tl-<8hex>"
+  name: string;                  // 用户可读名
+  durationMs: number;            // 总时长
+  fps: number;                   // 该条时间轴帧率（默认 20，受 config timeline.max-fps 钳）
+  loopMode: LoopMode;
+  trigger: TriggerConfig;        // 触发方式
+  tracks: Record<string, Keyframe[]>;  // key = elementId
+};
+
+// tracks 的 key 是 elementId，值是该元素**所有属性混在一起**、按 timeMs 升序的关键帧列表。
+// 前端按 (elementId, property) 二级分组渲染成多条属性子轨（方案 B，见 docs/timeline.md §2.2）。
+
+type LoopMode = "once" | "loop" | "pingPong";
+
+type Keyframe = {
+  id: string;                    // "kf-<8hex>"，coalesce / patch 定位用
+  property: string;              // "x"/"y"/"w"/"h"/"rotation"/"opacity"/"color"/"fill"/"text" 等
+  timeMs: number;                // 在 timeline 内的时刻
+  value: KfValue;                // 见下
+  easing: Easing;                // 到**下一个**关键帧的缓动（末帧的 easing 无意义）
+};
+
+// value 多态：数值 / 字符串 / Fill。复用 element fill 的 FillDeserializer 多态范式
+// （string→Solid / object 按 type 分流），不需新序列化基建；亦可为 `${var:X}` 字符串。
+type KfValue = number | string | Fill;
+
+type Easing = {
+  type: EasingType;
+  bezier?: [number, number, number, number];  // 仅 cubicBezier 用：[x1,y1,x2,y2]
+};
+
+type EasingType = "linear" | "easeIn" | "easeOut" | "easeInOut" | "cubicBezier";
+
+type TriggerConfig = {
+  type: TriggerType;
+  params: Record<string, string>;   // 各 trigger 的参数（如 variableChange 的 fullName）
+};
+
+// playerNear 留 0.7（需从零建事件层 + 与 0.7 Scratch 触发系统重叠，见 docs/timeline.md D5）
+type TriggerType = "manual" | "variableChange" | "schedule";
 ```
 
 ---
@@ -655,6 +760,7 @@ type ImageElement = BaseElement & {
 - **不兼容变更**：改字段类型、改必填字段、改语义 — `v` +1
 - 插件拒绝 `v < minSupported` 的客户端：`error: VERSION_MISMATCH` + close 4002
 - 协议版本协商在 `auth` 帧进行；客户端用多大的 `v` 作为上限由握手时 `serverVersion` 决定
+- **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「v2 → v3 变更总览（0.6）」）。`auth` 帧 `clientProtocolVersion: 3`；服务端遇 `client_v < 3` reject `VERSION_MISMATCH` + close 4002，沿用 M16.6 既有版本协商路径
 
 ---
 
@@ -674,6 +780,8 @@ type ImageElement = BaseElement & {
 
 - [ ] 是否支持 batch op（多个操作打包一次发送，减少延迟）
 - [ ] 历史 `history.mark` 的 label 是否持久化到 walls.project_json（M5.5 决策：当前 walls 不存 history，cancel 后 redo/undo 栈丢失；如要保留可 M7 加 `walls.history_json`）
+- [ ] **0.6**：`timeline.play/pause/seek` 是否需在服务端持久化"上次播放位置"，还是每次从 0 起（与 `docs/timeline.md §12` 同一项对齐，不另造结论）
+- [ ] **0.6**：触发器 `variableChange` 绑高频变量（如 `eta_seconds` 每秒变）时的去抖策略是否需要在协议层可见（`trigger.params` 暴露去抖窗口），还是纯服务端状态机内部决策（`docs/timeline.md §5.2`）
 - [ ] 画布 resize 是否允许缩小（需处理越界元素）
 - [x] template.apply 是否支持保留现有自由元素（merge 语义）—— **M6 v1 不做**，沿用 replace（清空 elements + 替换 background）；UI 上加"应用模板会覆盖当前内容"提示。merge 留 v2+
 - [x] 多人协作（v2）时的协议扩展（是否需要 CRDT）—— **永久不做**。接力编辑（前一玩家 cancel 后下一玩家 /canvas open）已满足需求
