@@ -66,7 +66,7 @@ public final class HtmlReportRenderer {
         sb.append("<head>\n");
         sb.append("<meta charset=\"utf-8\">\n");
         sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-        sb.append("<title>HikariCanvas Benchmark Report</title>\n");
+        sb.append("<title>HikariCanvas 性能测试报告</title>\n");
         sb.append("<style>\n").append(css()).append("\n</style>\n");
         sb.append("</head>\n");
     }
@@ -117,9 +117,9 @@ public final class HtmlReportRenderer {
 
     private static void appendHeader(StringBuilder sb, BenchmarkReport report) {
         String when = TIME_FMT.format(Instant.ofEpochMilli(report.generatedAtMillis()));
-        sb.append("<h1>HikariCanvas Benchmark Report</h1>\n");
-        sb.append("<p class=\"sub\">generated ").append(esc(when))
-                .append(" &middot; schema v").append(report.schemaVersion()).append("</p>\n");
+        sb.append("<h1>HikariCanvas 性能测试报告</h1>\n");
+        sb.append("<p class=\"sub\">生成时间 ").append(esc(when))
+                .append(" &middot; 报告格式 v").append(report.schemaVersion()).append("</p>\n");
     }
 
     // ---------------------------------------------------------------- env
@@ -129,14 +129,12 @@ public final class HtmlReportRenderer {
         String xmx = env.maxHeapMb() < 0 ? "?" : String.format(Locale.ROOT, "%d MB", env.maxHeapMb());
         sb.append("<section class=\"card\">\n<h2>运行环境</h2>\n<dl class=\"kv\">\n");
         kv(sb, "Java 版本", env.javaVersion());
-        kv(sb, "JVM", env.jvmName());
-        kv(sb, "OS / Arch", env.osName() + " / " + env.osArch());
+        kv(sb, "系统 / 架构", env.osName() + " / " + env.osArch());
         kv(sb, "可用处理器", String.valueOf(env.availableProcessors()));
-        kv(sb, "最大堆 (Xmx)", xmx);
-        kv(sb, "GC", env.gcNames().isEmpty() ? "?" : String.join(", ", env.gcNames()));
+        kv(sb, "最大内存", xmx);
+        kv(sb, "内存回收方式", env.gcNames().isEmpty() ? "?" : String.join(", ", env.gcNames()));
         sb.append("</dl>\n");
-        sb.append("<p class=\"note\">数据透明：这些数字仅代表<b>这台机器、这个 JVM</b> 的测量结果——")
-                .append("换硬件 / 堆大小 / GC 算法后须重新压测，不可跨机直接套用。</p>\n");
+        sb.append("<p class=\"note\">这些数字只代表这台机器。换一台服务器、改内存大小后要重新测一遍。</p>\n");
         sb.append("</section>\n");
     }
 
@@ -154,10 +152,9 @@ public final class HtmlReportRenderer {
         kv(sb, "帧率", joinInts(cfg.fpsValues()));
         kv(sb, "观看人数", joinInts(cfg.viewerCounts()));
         kv(sb, "场景选择", cfg.sceneSelector());
-        kv(sb, "空白基线", String.format(Locale.ROOT, "%.3f ms", report.blankBaselineMs()));
+        kv(sb, "空白画面耗时", String.format(Locale.ROOT, "%.3f ms", report.blankBaselineMs()));
         sb.append("</dl>\n");
-        sb.append("<p class=\"note\">帧率和观看人数<b>只用于下方的预算计算器</b>，不影响上面测出的渲染耗时——")
-                .append("画一面墙花多少毫秒，跟你设多少帧率、有多少人看无关。</p>\n");
+        sb.append("<p class=\"note\">帧率和观看人数只用在下方的计算器里，不影响上面测出来的渲染耗时。</p>\n");
         sb.append("</section>\n");
     }
 
@@ -178,12 +175,12 @@ public final class HtmlReportRenderer {
     // ---------------------------------------------------------------- scene table
 
     private static void appendSceneTable(StringBuilder sb, BenchmarkReport report) {
-        sb.append("<section class=\"card\">\n<h2>各场景成本</h2>\n");
+        sb.append("<section class=\"card\">\n<h2>各场景耗时</h2>\n");
         sb.append("<table>\n<thead>\n<tr>")
-                .append("<th>scene id</th>")
-                .append("<th>raster p50</th><th>p95</th><th>p99</th>")
-                .append("<th>palette p50</th><th>p95</th><th>p99</th>")
-                .append("<th>alloc MB/it</th><th>elements</th><th>tiles</th>")
+                .append("<th>场景</th>")
+                .append("<th>渲染 一般</th><th>偏慢</th><th>最慢</th>")
+                .append("<th>调色板 一般</th><th>偏慢</th><th>最慢</th>")
+                .append("<th>内存 MB/轮</th><th>元素数</th><th>地图块数</th>")
                 .append("</tr>\n</thead>\n<tbody>\n");
         for (SceneResult s : report.scenes()) {
             Percentiles r = s.rasterizeMs();
@@ -217,7 +214,7 @@ public final class HtmlReportRenderer {
             bars.add(new SvgBarChart.Bar(s.sceneId(), s.rasterizeMs().p95()));
         }
         sb.append("<section class=\"card\">\n");
-        sb.append(SvgBarChart.horizontal("rasterize p95 by scene (ms)", bars, "ms"));
+        sb.append(SvgBarChart.horizontal("各场景渲染耗时（偏慢情况，毫秒）", bars, "ms"));
         sb.append("\n</section>\n");
     }
 
@@ -241,7 +238,7 @@ public final class HtmlReportRenderer {
             bars.add(new SvgBarChart.Bar(label, c.marginalMsPerElement()));
         }
         sb.append("<section class=\"card\">\n");
-        sb.append(SvgBarChart.horizontal("per-element marginal cost (ms/element)", bars, "ms/elem"));
+        sb.append(SvgBarChart.horizontal("每个元素的额外耗时（毫秒/个）", bars, "ms"));
         sb.append("\n</section>\n");
     }
 
@@ -249,9 +246,9 @@ public final class HtmlReportRenderer {
 
     private static void appendGcLine(StringBuilder sb, BenchmarkReport report) {
         GcSummary gc = report.gc();
-        sb.append("<section class=\"card\">\n<h2>GC 增量</h2>\n");
-        sb.append("<p><b>").append(gc.collectionCount()).append("</b> 次回收，累计 <b>")
-                .append(gc.collectionTimeMs()).append("</b> ms（覆盖整段 run，含 warmup 迭代）。</p>\n");
+        sb.append("<section class=\"card\">\n<h2>内存回收</h2>\n");
+        sb.append("<p>测试期间共回收内存 <b>").append(gc.collectionCount()).append("</b> 次，累计耗时 <b>")
+                .append(gc.collectionTimeMs()).append("</b> 毫秒。</p>\n");
         sb.append("</section>\n");
     }
 
@@ -259,26 +256,26 @@ public final class HtmlReportRenderer {
 
     private static void appendCalculator(StringBuilder sb, BenchmarkReport report) {
         BudgetFormula.Inputs d = BudgetFormula.Inputs.defaults();
-        sb.append("<section class=\"card\">\n<h2>50mspt 预算计算器</h2>\n");
+        sb.append("<section class=\"card\">\n<h2>性能预算计算器</h2>\n");
         sb.append("<p class=\"sub\" style=\"margin-bottom:14px\">")
-                .append("代入<b>你自己</b>的预算参数实时试算每个场景的「可载 wall 数」保守下界。</p>\n");
+                .append("填入你服务器的参数，估算每个场景大概能放多少面墙。</p>\n");
 
         // 表单
         sb.append("<div class=\"calc-form\">\n");
-        numberInput(sb, "calc-mspt", "mspt 预算 (ms)", d.msptBudgetMs(), "1", "0");
+        numberInput(sb, "calc-mspt", "每 tick 预算（毫秒）", d.msptBudgetMs(), "1", "0");
         numberInput(sb, "calc-tps", "目标 tps", d.tps(), "1", "1");
-        numberInput(sb, "calc-share", "主线程份额 (%)", d.mainThreadSharePct(), "1", "0");
-        numberInput(sb, "calc-fps", "目标 fps", d.fps(), "1", "1");
+        numberInput(sb, "calc-share", "分给本插件的性能份额（%）", d.mainThreadSharePct(), "1", "0");
+        numberInput(sb, "calc-fps", "目标帧率", d.fps(), "1", "1");
         sb.append("</div>\n");
 
         // 公式 + disclaimer
-        sb.append("<p class=\"formula\">可用预算 = mspt &times; tps &times; 份额% &nbsp;&nbsp;|&nbsp;&nbsp;")
-                .append("可载 wall &asymp; 可用预算 &divide; (p95 &times; fps)</p>\n");
+        sb.append("<p class=\"formula\">可用预算 = 每 tick 预算 &times; tps &times; 份额% &nbsp;&nbsp;|&nbsp;&nbsp;")
+                .append("能放的墙数 &asymp; 可用预算 &divide; (单墙偏慢耗时 &times; 帧率)</p>\n");
         sb.append("<p class=\"disclaimer\">").append(esc(BudgetFormula.DISCLAIMER)).append("</p>\n");
 
         // 结果表
         sb.append("<table style=\"margin-top:16px\">\n<thead>\n<tr>")
-                .append("<th>scene id</th><th>rasterize p95 (ms)</th><th>可载 wall 数</th>")
+                .append("<th>场景</th><th>单墙偏慢耗时（毫秒）</th><th>能放的墙数</th>")
                 .append("</tr>\n</thead>\n<tbody>\n");
         for (SceneResult s : report.scenes()) {
             sb.append("<tr data-scene=\"").append(esc(s.sceneId())).append("\">")
@@ -347,8 +344,7 @@ public final class HtmlReportRenderer {
     // ---------------------------------------------------------------- footer
 
     private static void appendFooter(StringBuilder sb) {
-        sb.append("<p class=\"foot\">HikariCanvas Benchmark &middot; 给原料 + 公式，不给结论 ")
-                .append("&mdash; 服主用自己的预算自己判断。</p>\n");
+        sb.append("<p class=\"foot\">HikariCanvas 性能测试</p>\n");
     }
 
     // ---------------------------------------------------------------- helpers

@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-04 · 0.5.0 hotfix-2 — 用户可见文案全面去 AI 味（2026-06-03 实施，按指示暂缓提交至今）
+
+用户实测 report.html 后反馈：报告 / 计算器 / 命令消息里大量「向用户解释设计意图」（"数据透明：…"
+"保守下界：公式把…"）与开发黑话（raster / p50/p95/p99 / GC / JVM / Xmx / 主线程）——服主和玩家
+看不懂也不需要懂。审计后重写全部用户可见面：
+
+- **`docs/benchmark.md`**：删设计意图章节（原 §1 一句话哲学 / §5 / §6 强调段 / §7 整章）并重排
+  §1–§6；列名与术语全面口语化（rasterize→渲染、p50/p95/p99→一般/偏慢/最慢、GC→内存回收）。
+- **`HtmlReportRenderer`**：环境注记改「这些数字只代表这台机器…」；JVM/Xmx/GC 标签改 删/最大内存/
+  内存回收方式；表头去黑话；图表单位 ms/elem→ms；设计理由仅保留在类 Javadoc（面向开发者）。
+- **`BudgetFormula`**：免责声明改「这个数偏保守，实际通常能放得更多。它只是个大概参考，别当成硬上限。」
+- **`BenchmarkSubCommand`**：14 条用户可见英文消息中文化（log 保留英文；格式占位符不动）。
+
+固化纪律：**对玩家 / 服主 / 贡献者直接可见的内容，禁止解释设计意图、禁止内部阶段编号与开发黑话**；
+内部设计文档（journal / dynamic-data / timeline.md）不受限。
+
+关联：`docs/benchmark.md` `benchmark/{HtmlReportRenderer,BudgetFormula}.java`
+`command/BenchmarkSubCommand.java`
+
+---
+
 ## 2026-05-30 · 0.5.0-P4 + 0.5.0 完工 — CI 功能性 gate + benchmark.md + 版本号
 
 ### P4 范围（收尾）

@@ -23,9 +23,7 @@ public final class BudgetFormula {
 
     /** 必须随计算器一起展示的口径说明。 */
     public static final String DISCLAIMER =
-            "保守下界：公式把整个 rasterize 成本算作主线程成本，"
-            + "而实际 rasterize 在 async 线程、主线程只做 schedule + packet handoff，"
-            + "真实成本更低、实际能开更多。这是原料 + 公式，不是推荐配置。";
+            "这个数偏保守，实际通常能放得更多。它只是个大概参考，别当成硬上限。";
 
     /**
      * 计算器输入。默认值取自 §13.3 示例（mspt 50 / tps 20 / 主线程份额 30% / fps 5 = v1 静态招牌默认）。
