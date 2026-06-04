@@ -39,8 +39,8 @@ import java.util.UUID;
 )
 public final class ProjectState {
 
-    /** 协议版本字段，序列化输出固定 2（M8 起切断 v1）。 */
-    public static final int PROTOCOL_VERSION = 2;
+    /** 协议版本字段，序列化输出固定 3（0.6 起切断 v2，同 M8 切 v1 的干净切换；见 docs/protocol.md「v2 → v3 变更总览」）。 */
+    public static final int PROTOCOL_VERSION = 3;
 
     /** 默认层名（创建 wall / v1 migrate / template.apply 都用同一文案）。 */
     public static final String DEFAULT_LAYER_NAME = "Default Layer";
@@ -102,12 +102,22 @@ public final class ProjectState {
     public record History(int undoDepth, int redoDepth) {}
 
     private long version;
-    /** 始终输出 2（@JsonProperty 字段名固定）。 */
+    /** 始终输出 {@link #PROTOCOL_VERSION}（@JsonProperty 字段名固定）。 */
     private final int protocolVersion = PROTOCOL_VERSION;
     private Canvas canvas;
     private final List<Layer> layers;
     private String activeLayerId;
     private History history;
+    /**
+     * 0.6 v3：时间轴列表（docs/data-model.md §2.4.2）。空 = 静态画板；序列化省略
+     * （{@code NON_EMPTY}），旧 v2 blob 无此字段 → 读为空 → 完全静态行为、零迁移。
+     * 列表本体可变（同 layers 范式），元素 {@link Timeline} record 不可变。
+     */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private final List<Timeline> timelines = new ArrayList<>();
+    /** 0.6 v3：当前激活时间轴 id；null = 无（序列化省略）。 */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String activeTimelineId;
 
     public ProjectState(int widthMaps, int heightMaps) {
         this(widthMaps, heightMaps, "#FFFFFF");
@@ -144,7 +154,9 @@ public final class ProjectState {
             @JsonProperty("elements") List<Element> v1Elements,
             @JsonProperty("layers") List<Layer> v2Layers,
             @JsonProperty("activeLayerId") String activeLayerId,
-            @JsonProperty("history") History history) {
+            @JsonProperty("history") History history,
+            @JsonProperty("timelines") List<Timeline> timelines,
+            @JsonProperty("activeTimelineId") String activeTimelineId) {
         this.version = version;
         this.canvas = canvas != null ? canvas : new Canvas(1, 1, Fill.solid("#FFFFFF"));
         this.history = history != null ? history : new History(0, 0);
@@ -161,10 +173,23 @@ public final class ProjectState {
             this.layers.add(def);
             this.activeLayerId = def.id();
         }
+
+        // 0.6 v3 加法：旧 v2 blob 两字段缺失 → 走默认（空列表 / null）= 静态画板
+        if (timelines != null) {
+            this.timelines.addAll(timelines);
+        }
+        this.activeTimelineId =
+                (activeTimelineId != null && containsTimeline(activeTimelineId))
+                        ? activeTimelineId : null;
     }
 
     private boolean containsLayer(String id) {
         for (Layer l : layers) if (l.id().equals(id)) return true;
+        return false;
+    }
+
+    private boolean containsTimeline(String id) {
+        for (Timeline t : timelines) if (t.id().equals(id)) return true;
         return false;
     }
 
@@ -182,6 +207,20 @@ public final class ProjectState {
 
     public List<Layer> layers() { return Collections.unmodifiableList(layers); }
     public String activeLayerId() { return activeLayerId; }
+
+    /** 0.6 v3：时间轴只读视图；空列表 = 静态画板。 */
+    public List<Timeline> timelines() { return Collections.unmodifiableList(timelines); }
+
+    /** 0.6 v3：当前激活时间轴 id；null = 无。 */
+    public String activeTimelineId() { return activeTimelineId; }
+
+    /** 按 id 找时间轴在列表中的 index（state.patch 路径 {@code /timelines/<i>} 用）；不存在返 -1。 */
+    public int indexOfTimeline(String timelineId) {
+        for (int i = 0; i < timelines.size(); i++) {
+            if (timelines.get(i).id().equals(timelineId)) return i;
+        }
+        return -1;
+    }
 
     /** 取当前活动层；activeLayerId 不存在时（应被构造器修正）回退到第一层。 */
     public Layer activeLayer() {
@@ -280,6 +319,29 @@ public final class ProjectState {
         this.activeLayerId = newActiveLayerId;
     }
 
+    // ---------- 0.6 v3：timeline 级 mutator（TimelineOperations 使用）----------
+
+    /** 追加时间轴到列表末尾。 */
+    public void addTimeline(Timeline t) {
+        timelines.add(t);
+    }
+
+    /** 删除指定 index 的时间轴；调用方负责处理 activeTimelineId 转移（若必要）。 */
+    public Timeline removeTimelineAt(int index) {
+        return timelines.remove(index);
+    }
+
+    /** 替换指定 index 的时间轴（同 id 的属性 / tracks 更新）。 */
+    public void replaceTimelineAt(int index, Timeline t) {
+        timelines.set(index, t);
+    }
+
+    /** 设置激活时间轴；id 不存在或为 null 时置 null。 */
+    public void activeTimelineId(String timelineId) {
+        this.activeTimelineId =
+                (timelineId != null && containsTimeline(timelineId)) ? timelineId : null;
+    }
+
     public void addElement(Element e) {
         activeLayer().elements().add(e);
     }
@@ -336,5 +398,13 @@ public final class ProjectState {
         } else if (!this.layers.isEmpty()) {
             this.activeLayerId = this.layers.get(0).id();
         }
+
+        // 0.6 v3：timelines 一并还原 —— Timeline record 不可变（tracks 深冻结），
+        // 按引用共享即安全，无须再深拷贝（与 layers 的 element ArrayList 不同）
+        this.timelines.clear();
+        this.timelines.addAll(snap.timelines());
+        this.activeTimelineId =
+                (snap.activeTimelineId() != null && containsTimeline(snap.activeTimelineId()))
+                        ? snap.activeTimelineId() : null;
     }
 }

@@ -31,6 +31,10 @@ export interface ProjectState {
      * 时建立。组件仍可读写 {@code state.elements}，M8-C 起新协议路径直接走 {@code layers}。
      */
     elements?: Element[];
+    /** v3 新增（0.6）：工程内时间轴；缺省 / null = 静态画板。 */
+    timelines?: Timeline[];
+    /** v3 新增（0.6）：当前激活时间轴 id；缺省 / null = 无激活时间轴。 */
+    activeTimelineId?: string;
 }
 
 export interface Canvas {
@@ -414,4 +418,79 @@ export interface VariableBindPayload {
     fullName: string;
     /** 插件名（与 NamespaceInfo.pluginName 对齐）；null = 解绑 */
     boundTo: string | null;
+}
+
+// ---------- §7 时间轴（v3 新增）----------
+//
+// 形态对应后端 record（docs/timeline.md §2 / docs/protocol.md §7）；enum 字段（loopMode /
+// easing.type / trigger.type）的 wire 形态由后端 record 的 @JsonProperty 显式映射为 camelCase
+// （同 BlendMode 范式：Java enum 常量 + @JsonProperty 注解），双端对齐，非 Java enum name 直出。
+
+/** 时间轴播放模式（docs/protocol.md §7）。 */
+export type LoopMode = 'once' | 'loop' | 'pingPong';
+
+/**
+ * 缓动函数类型（docs/protocol.md §7 / docs/rendering.md §9.3）。
+ * {@code easeIn / easeOut / easeInOut} 是 {@code cubicBezier} 的 CSS 同名预设控制点。
+ */
+export type EasingType = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | 'cubicBezier';
+
+/**
+ * 触发方式（docs/protocol.md §7 / docs/timeline.md §5）。0.6 范围 = 三种；
+ * {@code playerNear} 留 0.7（需从零建事件层）。
+ */
+export type TriggerType = 'manual' | 'variableChange' | 'schedule';
+
+/**
+ * 关键帧缓动。{@code bezier} 仅 {@code cubicBezier} 用：{@code [x1, y1, x2, y2]} 四元，
+ * 约束 {@code x1, x2 ∈ [0, 1]}（与 CSS 一致）。非 cubicBezier 类型 {@code bezier} 省略。
+ * 缺省缓动 wire 形态为 {@code { type: 'linear' }}。
+ */
+export interface Easing {
+    type: EasingType;
+    bezier?: [number, number, number, number];
+}
+
+/**
+ * 关键帧值的多态联合：数值 / 字符串 / Fill。复用 element fill 的多态范式
+ * （string → Solid / object 按 type 分流），亦可为 {@code ${var:X}} 字符串。
+ * - number：数值类属性（x/y/w/h/rotation/opacity）
+ * - string：离散类 text、颜色 hex、或变量模板
+ * - Fill：fill 属性（solid / linear / radial）
+ */
+export type KfValue = number | string | Fill;
+
+/**
+ * 关键帧（docs/protocol.md §7 / docs/timeline.md §2.3）。
+ * {@code easing} 是到<b>下一个</b>关键帧的缓动 —— 末帧的 easing 无意义（rendering.md §9.1）。
+ */
+export interface Keyframe {
+    id: string; // "kf-<8hex>"，coalesce / patch 定位用
+    property: string; // "x"/"y"/"w"/"h"/"rotation"/"opacity"/"color"/"fill"/"text" 等
+    timeMs: number; // 在 timeline 内的时刻
+    value: KfValue;
+    easing: Easing;
+}
+
+/** 触发配置（docs/protocol.md §7）。{@code params} 按 trigger 类型携带参数。 */
+export interface TriggerConfig {
+    type: TriggerType;
+    params: Record<string, string>; // 如 variableChange 的 fullName
+}
+
+/**
+ * 时间轴（docs/protocol.md §7 / docs/timeline.md §2.1）。
+ *
+ * <p>{@code tracks} 的 key 是 elementId，值是该元素<b>所有属性混在一起</b>、按 {@code timeMs}
+ * 升序的关键帧列表。前端按 {@code (elementId, property)} 二级分组渲染成多条属性子轨
+ * （方案 B，见 docs/timeline.md §2.2）。</p>
+ */
+export interface Timeline {
+    id: string; // "tl-<8hex>"
+    name: string; // 用户可读名
+    durationMs: number; // 总时长
+    fps: number; // 该条时间轴帧率（默认 20，受 config timeline.max-fps 钳）
+    loopMode: LoopMode;
+    trigger: TriggerConfig; // 触发方式
+    tracks: Record<string, Keyframe[]>; // key = elementId
 }

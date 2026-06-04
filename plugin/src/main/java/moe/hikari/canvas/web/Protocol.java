@@ -13,19 +13,20 @@ package moe.hikari.canvas.web;
  *       帧回 {@code accepted_v}；不匹配 close 4002。新增 op / 改字段语义就升这个号。</li>
  * </ul>
  *
- * <p>升级流程：v1 → v2 时把 {@code SUPPORTED_MIN=2 SUPPORTED_MAX=2} 改成
- * {@code SUPPORTED_MIN=2 SUPPORTED_MAX=3} 即可在过渡期同时接 v2 + v3 client；
- * 待 v2 client 全部升级再把 MIN 提到 3。</p>
+ * <p>升级流程支持两种：过渡双轨（如 {@code MIN=2 MAX=3} 同时接两版 client）或干净切换
+ * （MIN=MAX 同步提升）。<b>0.6 v3 取干净切换</b>（docs/protocol.md「v2 → v3 变更总览」）：
+ * 前端 bundle 由插件自带分发，客户端与服务端版本在实际部署中永远匹配；且 v2 编辑器打开含
+ * timeline 的工程会在保存时丢弃 {@code timelines}（数据丢失），不留双轨窗口。</p>
  */
 public final class Protocol {
 
     private Protocol() {}
 
     /** 服务端可接受的最小 business protocol 版本。 */
-    public static final int SUPPORTED_MIN = 2;
+    public static final int SUPPORTED_MIN = 3;
 
     /** 服务端可接受的最大 business protocol 版本。 */
-    public static final int SUPPORTED_MAX = 2;
+    public static final int SUPPORTED_MAX = 3;
 
     /** 协议版本不匹配时关闭 WS 的 close code（与 4001 auth_timeout 同 4xxx 段）。 */
     public static final int CLOSE_PROTOCOL_VERSION_UNSUPPORTED = 4002;

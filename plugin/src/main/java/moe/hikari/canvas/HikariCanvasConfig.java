@@ -116,6 +116,11 @@ public final class HikariCanvasConfig {
     public final int tokenRateLimitPerMinute;
 
     /**
+     * 0.6：时间轴帧率参数。配置段 {@code timeline}（docs/architecture.md §5.5 / §11）。
+     */
+    public final TimelineConfig timelineConfig;
+
+    /**
      * 0.4.0 bugfix（Bug 3）：兜底列车时刻表配置。
      *
      * @param arrivingThresholdSeconds 进站阈值（秒）。eta ≤ 阈值时 {@code is_arriving=true} +
@@ -131,6 +136,19 @@ public final class HikariCanvasConfig {
     ) {
         public static ScheduleConfig defaults() {
             return new ScheduleConfig(60L, "进站中", "");
+        }
+    }
+
+    /**
+     * 0.6：时间轴帧率参数（docs/architecture.md §5.5；config 段 {@code timeline}）。
+     *
+     * @param defaultFps 新建 timeline 的默认帧率（默 20 = 一个 Bukkit tick 50ms）
+     * @param maxFps     服务器级安全阀：单墙 fps 硬上限，op 层 clamp 每条 timeline 的 fps
+     *                   （默 60；管理员保护多租户服务器的总阀门，不做自动降级）
+     */
+    public record TimelineConfig(int defaultFps, int maxFps) {
+        public static TimelineConfig defaults() {
+            return new TimelineConfig(20, 60);
         }
     }
 
@@ -177,6 +195,7 @@ public final class HikariCanvasConfig {
         this.userGlobalMaxPerOwner = b.userGlobalMaxPerOwner;
         this.userGlobalMaxTotal = b.userGlobalMaxTotal;
         this.tokenRateLimitPerMinute = b.tokenRateLimitPerMinute;
+        this.timelineConfig = b.timelineConfig;
     }
 
     /**
@@ -333,6 +352,19 @@ public final class HikariCanvasConfig {
                     moe.hikari.canvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE));
         }
 
+        // 0.6：timeline 段 —— 时间轴帧率参数（default-fps 钳到 max-fps 之内）
+        org.bukkit.configuration.ConfigurationSection tlSec =
+                f.getConfigurationSection("timeline");
+        TimelineConfig tlDefaults = TimelineConfig.defaults();
+        if (tlSec == null) {
+            b.timelineConfig = tlDefaults;
+        } else {
+            int maxFps = Math.max(1, tlSec.getInt("max-fps", tlDefaults.maxFps()));
+            int defFps = Math.min(maxFps,
+                    Math.max(1, tlSec.getInt("default-fps", tlDefaults.defaultFps())));
+            b.timelineConfig = new TimelineConfig(defFps, maxFps);
+        }
+
         return new HikariCanvasConfig(b);
     }
 
@@ -430,5 +462,6 @@ public final class HikariCanvasConfig {
                 moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL;
         int tokenRateLimitPerMinute =
                 moe.hikari.canvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE;
+        TimelineConfig timelineConfig = TimelineConfig.defaults();
     }
 }

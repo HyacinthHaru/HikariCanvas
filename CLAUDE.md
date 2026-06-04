@@ -404,6 +404,29 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 
 **0.4.4 总 ~60h ≈ 1.5-2.5 周 wall-clock**。
 
+## 0.6.0 路线（时间轴编辑器 · 进行中；P1+P2 ✅ 2026-06-04）
+
+**契约**：`docs/timeline.md`（总纲 / D1-D9 固化决策 / 6 段分期）+ `rendering.md §9`（双端插值缓动数学权威）+
+`protocol.md` v3 + `data-model.md §2.4.2` + `architecture.md §5.1/§5.5`。**实施前必读总纲。**
+
+- **P1 ✅（2026-06-04）数据模型+协议 v3+撤销**：Timeline/Keyframe/KfValue（number|string|Fill 三态多态，照
+  FillDeserializer 范式）/Easing/三枚举（wire camelCase）records；ProjectState 加 timelines+activeTimelineId
+  （nullable 加法，Element 零改，不加表）；协议 v3 干净切换（SUPPORTED=3/3，Envelope.v 壳恒 2）；
+  `timeline.create/update/delete` + `keyframe.add/update/delete/move` 7 op 走 EditSession（进 undo/redo）；
+  HistoryStack coalescing（key=elementId:keyframeId:property + 500ms 窗 + 容量粘性解锁 16→64）；前端 v3
+  类型 + `/timelines/` applier + CLIENT_V=3。对抗审查 5 真问题修（容量骤降 trim/trigger:null/int 回绕/坏
+  blob NPE×2）。
+- **P2 ✅（2026-06-04）Ticker+池化+MVP**：KeyframeInterpolator（LINEAR 6 数值属性 + ONCE/LOOP/PING_PONG
+  时间映射；关键帧属性覆盖基值，未建轨属性编辑 ≤1 帧反映）；AnimationTicker（单线程 SES，Wall 缓存 +
+  persistWall→invalidate，LOOP 自动播 = 启动扫描/编辑器关闭/重启恢复，ONCE 播完渲末帧自动注销，幂等关停）；
+  BufferPool（线程限定 owner=Ticker，外线程退化 new 不破 rasterize 并发契约）；renderFrame（per-map 帧间
+  diff + 新观察者全量补发 + viewer-gated 不 rasterize）；分流 gate（reactive 三路退让 + onReactiveYield→
+  invalidate 全量补发）；`timeline.play/pause/seek` + TIMELINE_* audit；前端 TimelineManagerModal（最简
+  关键帧列表，非 AE panel）。对抗审查 14 真问题修（孤儿任务 TOCTOU/FrameDiff 竞态/变量路径绕 gate/删墙
+  不注销等）。**MVP 闸已过**（用户实测：循环淡入淡出 + 关浏览器/重启自动续播）。
+- **待做**：P3 缓动+双端插值器+一致性 CI（~70h）→ P4 前端 AE panel（~100h）→ P5 触发器（~35h）→
+  P6 收尾（~15h）。测试基线：后端 1014 / 前端 320 / 0 baseline 漂移。
+
 ## 0.4.x 路线图速览（2026-05-21）
 
 | 版本 | 范围 | 工时 | 状态 |
@@ -420,7 +443,7 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.9** | **Live Paint 收尾**（M18 brush 真实形状 stroke offset polygon + text glyph 真实形状 fontkit 引入） | **18h** | ✅ |
 | **0.4.10** | **ultrareview-2026-05-29 修复批**（独立深度审查 224 缺陷 → 修全部 168 个 DIRECT_FIX：data-integrity / concurrency 线程契约 / boundary 守卫 / 异常 ack / 双端一致 / 模板校验 等；TRADE_OFF 23 + NEEDS_DESIGN 30 暂不修）+ 设计哲学固化（"工具不是保姆" PROPOSAL §2.1/§5.2.7） | **~40h** | ✅ |
 | **0.5.0** | **纯服务端性能 Benchmark**（后台模拟 rasterize/palette/GC + 21 程序生成 scene + `/canvas bench` 命令族 + report.json/summary.txt/report.html 三件 + 50mspt 交互计算器 + CI 功能性 gate；**不测网络**，见 PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
-| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md`） | ~360h | 远期 |
+| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md`） | ~360h | 🔄 P1+P2 ✅（2026-06-04，MVP 闸已过） |
 | 0.7.0 | Scratch-like 视觉运行时（积木逻辑 + 事件驱动 + 条件分支；复用 template.expr + ChangeListener；积木库 vs 自写待定） | ~360h | 远期 |
 | M30 | 图层 mask / group / smart object（PS-style）— 独立大版本 | 30h+ | 远期 |
 | 弃 | B-advanced DCEL 覆盖 4% Live Paint 用例 — 38h+ 性价比低 | — | 不做 |

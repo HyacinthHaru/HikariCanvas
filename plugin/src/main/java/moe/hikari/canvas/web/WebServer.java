@@ -92,6 +92,14 @@ public final class WebServer {
 
     // ---------- 拆分后的 dispatcher（M15.x god-class 拆分）----------
     private final EditOpDispatcher editOpDispatcher;
+
+    /**
+     * 0.6 P2：把 AnimationTicker 转交给 editOpDispatcher（timeline.play/pause/seek 三 op 用）。
+     * Ticker 在 WebServer 之后构造（依赖 CanvasProjector），故走 setter 而非构造器参数。
+     */
+    public void setAnimationTicker(moe.hikari.canvas.render.AnimationTicker ticker) {
+        editOpDispatcher.setAnimationTicker(ticker);
+    }
     private final BrushOpDispatcher brushOpDispatcher;
     private final WallOpDispatcher wallOpDispatcher;
     private final TemplateOpDispatcher templateOpDispatcher;
@@ -729,6 +737,16 @@ public final class WebServer {
                  "canvas.background",
                  "canvas.grid",
                  "canvas.guides.set",
+                 "timeline.create",
+                 "timeline.update",
+                 "timeline.delete",
+                 "timeline.play",
+                 "timeline.pause",
+                 "timeline.seek",
+                 "keyframe.add",
+                 "keyframe.update",
+                 "keyframe.delete",
+                 "keyframe.move",
                  "undo",
                  "redo",
                  "history.mark",
@@ -984,7 +1002,7 @@ public final class WebServer {
         java.util.LinkedHashMap<String, Object> payload = new java.util.LinkedHashMap<>();
         payload.put("sessionId", session.id());
         payload.put("serverVersion", serverVersion);
-        payload.put("protocolVersion", 2);
+        payload.put("protocolVersion", ProjectState.PROTOCOL_VERSION);
         // M16 P6.2：accepted_v = server 实际同意的 business protocol 版本（来自 auth 中
         // 协商的 client_v，目前固定 2）。client 收到后应双向校验：accepted_v !== CLIENT_V → 断开。
         payload.put("accepted_v", negotiatedV);

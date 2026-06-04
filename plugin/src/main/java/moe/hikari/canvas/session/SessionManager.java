@@ -120,6 +120,37 @@ public final class SessionManager {
     }
 
     /**
+     * 0.6 P2：时间轴动画产帧引擎引用（HikariCanvas 装配后注入）。两处用途：
+     * <ul>
+     *   <li>{@link #persistWall} 内编辑持久化（{@code wallRepo.updateState}）完成后调
+     *       {@code invalidate(wallId)}——Ticker 缓存的 state 下一 tick 重载，编辑可见延迟 ≤ 1 帧。
+     *       {@code updateState} 同步执行，故在其后调 invalidate 时新 state 已落库，无重载到旧态之虞。</li>
+     *   <li>{@link #cancel} 内 session 结束后调 {@code refreshAutoPlay(wallId)}——编辑器关闭后
+     *       LOOP 墙自动续播（docs/timeline.md §5.2）。</li>
+     * </ul>
+     * 默认 null（未注入）时两处均跳过——测试零侵入。
+     */
+    private volatile moe.hikari.canvas.render.AnimationTicker animationTicker;
+
+    public void setAnimationTicker(moe.hikari.canvas.render.AnimationTicker ticker) {
+        this.animationTicker = ticker;
+    }
+
+    /**
+     * 0.6 P1：时间轴帧率配置（config 段 {@code timeline}）。由 HikariCanvas 在装配后注入
+     * （{@code HikariCanvasConfig.TimelineConfig.{defaultFps(), maxFps()}}）；默认 null（未注入）
+     * 时 EditSession / TimelineOperations 退回常量缺省 20 / 60，保证无回归。confirm / open 新建
+     * EditSession 时透传，让 timeline.create / update 的 fps 钳到 {@code [1, maxFps]}。
+     */
+    private volatile Integer timelineDefaultFps;
+    private volatile Integer timelineMaxFps;
+
+    public void setTimelineFpsLimits(Integer defaultFps, Integer maxFps) {
+        this.timelineDefaultFps = defaultFps;
+        this.timelineMaxFps = maxFps;
+    }
+
+    /**
      * Ultrareview 2026-05-25 #5：注册"forget 前"监听。在 session 离开 byId 之前调，让
      * ProjectionThrottler 等组件能 flush pending 尾帧（discardSession 只 cancel 不 flush）。
      */
@@ -394,6 +425,7 @@ public final class SessionManager {
             s.projectState(ps);
             EditSession es = new EditSession(ps);
             es.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
+            es.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 0.6 P1：注入时间轴 fps 配置
             s.editSession(es);
             s.state(SessionState.ISSUED);
 
@@ -541,6 +573,7 @@ public final class SessionManager {
         s.projectState(w.state());
         EditSession openEs = new EditSession(w.state());
         openEs.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
+        openEs.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 0.6 P1：注入时间轴 fps 配置
         s.editSession(openEs);
         // 2026-05-12 修：补回 wall geometry，否则 wall.refresh / frame ops 在 /canvas open 后空跑
         s.wall(rebuildWallGeometry(w));
@@ -628,6 +661,12 @@ public final class SessionManager {
         Session s = byId.get(sessionId);
         if (s == null || s.wallId() == null || s.projectState() == null) return;
         wallRepo.updateState(s.wallId(), s.projectState());
+        // 0.6 P2：updateState 同步落库后失效 Ticker 缓存（必须在 updateState 之后，否则 Ticker
+        // 下一 tick 重载到旧 state）。timeline / keyframe 编辑 op 走此路径，动画下一帧即用新值。
+        moe.hikari.canvas.render.AnimationTicker ticker = this.animationTicker;
+        if (ticker != null) {
+            ticker.invalidate(s.wallId());
+        }
     }
 
     /**
@@ -679,6 +718,10 @@ public final class SessionManager {
         Session s = byId.get(sessionId);
         if (s == null) return;
         if (s.state() == SessionState.CLOSING) return;
+        // 0.6 P2：在 forget 把 wallId 从 session 摘掉之前捕获——cancel 完成后据此让 LOOP 墙自动续播。
+        // cancel 是所有 session 关闭路径的唯一汇聚点（/canvas cancel、WS grace 超时、idle 超时
+        // 的 SessionReaper 都走此处），故一处挂钩覆盖全部"编辑器关闭"场景。
+        final String closingWallId = s.wallId();
 
         // Ultrareview 2026-05-25 #5：先 flush pending 尾帧（session 还在 byId 才能 flush 成功），
         // 再走 cancel 主流程。preForgetHooks 异常隔离避免单个 hook 拖垮 cancel。
@@ -700,6 +743,12 @@ public final class SessionManager {
         auditLog.record("SESSION_CANCEL", s.playerUuid().toString(), s.playerName(),
                 sessionId, null, Map.of("reason", reason == null ? "" : reason));
         runForgetHooks(sessionId);
+        // 0.6 P2：锁外触发——编辑器关闭后让该 wall 的 LOOP 动画自动续播（refreshAutoPlay 内部
+        // 若 wall 不存在 / 非 LOOP / 已注册则 no-op；与上方 runForgetHooks 同样在 writeLock 外执行）。
+        moe.hikari.canvas.render.AnimationTicker ticker = this.animationTicker;
+        if (ticker != null && closingWallId != null) {
+            ticker.refreshAutoPlay(closingWallId);
+        }
     }
 
     /**

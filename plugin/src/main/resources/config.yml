@@ -173,3 +173,11 @@ dynamic:
     userglobal-max-per-owner: 500
     # 全服总上限（任何 owner 加起来不超过此数）
     userglobal-max-total: 10000
+
+# 0.6：时间轴动画（docs/timeline.md / docs/architecture.md §5.5）
+timeline:
+  # 新建 timeline 的默认帧率（20 = 一个 Bukkit tick）
+  default-fps: 20
+  # 服务器级安全阀：单墙 fps 硬上限，钳每条 timeline 的 fps。
+  # 这是管理员保护整台服务器的总阀门；插件不做成本估算、不自动校准、不自动降级。
+  max-fps: 60

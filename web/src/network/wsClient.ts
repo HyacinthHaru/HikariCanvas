@@ -42,12 +42,28 @@ const READY_TIMEOUT_MS = 10_000;
 /** 重连退避阶梯（秒）。超过最后一档就停。 */
 const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
 /**
- * M16 P6.2：business protocol version（区别于 envelope.v 消息壳版本）。
- * auth 帧携这个值发给 server，server 在范围内则 ready 回 {@code accepted_v}；
- * client 收到 ready 后再次校验 {@code accepted_v === CLIENT_V}，不匹配则断开。
- * 升级时与 {@code plugin/.../Protocol.java SUPPORTED_MIN/MAX} 同步改。
+ * 双层版本说明（M16 P6.2 引入双层；0.6 起 business 升 3）：
+ *
+ * <ul>
+ *   <li><b>信封壳 {@code Envelope.v}</b>：消息容器格式版本，恒为 {@link ENVELOPE_V}（=2，
+ *       后端 {@code Protocol.Envelope.of} 固定 2 不随业务升级，见
+ *       {@code plugin/.../web/Protocol.java} javadoc）。auth / ping 等所有出帧用它做 {@code v}。</li>
+ *   <li><b>业务协议版本 {@code CLIENT_V}</b>：ProjectState schema / op 族契约版本。auth 帧 payload
+ *       携 {@code client_v} 发给 server，server 在 [SUPPORTED_MIN, SUPPORTED_MAX] 范围内则 ready
+ *       回 {@code accepted_v}；client 收到后校验 {@code accepted_v === CLIENT_V}，不匹配则断开。
+ *       0.6 起 = 3（v3 时间轴；干净切换，不维持 v2 双轨，见 docs/protocol.md「v2 → v3」）。</li>
+ * </ul>
+ *
+ * 两者解耦：升业务版本只动 {@link CLIENT_V}，不动 {@link ENVELOPE_V}。
+ * {@link CLIENT_V} 升级时与 {@code plugin/.../Protocol.java SUPPORTED_MIN/MAX} 同步改。
  */
-const CLIENT_V = 2;
+const CLIENT_V = 3;
+
+/**
+ * 信封壳版本（消息容器格式）。所有出帧的 {@code Envelope.v} 用它；与业务协议版本
+ * {@link CLIENT_V} 解耦，业务升级时此值不动。
+ */
+const ENVELOPE_V = 2;
 
 /**
  * WS 协议客户端单例封装（M5-A3）。
@@ -140,8 +156,9 @@ export class WsClient {
             return null;
         }
         const id = `c-${this.seq++}`;
-        // M8-C：协议 v2，envelope.v=2；auth 帧负载需带 clientProtocolVersion=2
-        const env: Envelope = { v: 2, op, id, ts: Date.now(), payload };
+        // 信封壳 v 恒为 ENVELOPE_V（=2，与业务协议版本 CLIENT_V 解耦，见常量 javadoc）；
+        // 业务版本（client_v / accepted_v）走 auth payload，0.6 起 = 3。
+        const env: Envelope = { v: ENVELOPE_V, op, id, ts: Date.now(), payload };
         const text = JSON.stringify(env);
         this.ws.send(text);
         // 不记 auth 原文（token 敏感）
@@ -415,6 +432,128 @@ export class WsClient {
                 .then((p) => p as { binding: import('@/types/rail').WallRailBinding });
     }
 
+    // ---------- 时间轴 / 关键帧（0.6，协议契约见 docs/protocol.md §5.12 / §5.13）----------
+    //
+    // 两族 op 都走 ack 通道。timeline.create / keyframe.add 的 ack 只含 {version}——新生成的
+    // id（tl-* / kf-*）由后端经 state.patch 的 add /timelines/<i>（整 Timeline）/
+    // add /timelines/<i>/tracks/<eid>/<k>（整 Keyframe）回下发（同 element.add 范式，
+    // protocol.md §5.12 "新 timeline（含 id）经 state.patch 下发"）。本地 mirror 由
+    // project.applyPatch 的 applyTimelineMutation 落地（P1 已实装），故这些 send 方法不预测性
+    // mutate store，保持 server-as-truth。
+    //
+    // play / pause / seek 不落 DB / 不进 history（protocol.md §5.12）；ack 形态为空 {}，
+    // 这三个方法 resolve 为 void。
+
+    /**
+     * {@code timeline.create}：新建时间轴。{@code name} 留空时后端补默认名；
+     * {@code fps} 受 config {@code timeline.max-fps} 钳。{@code trigger} MVP 固定
+     * {@code { type: 'manual', params: {} }}（触发器 UI 留 P5）。ack 只含 {@code version}，
+     * 新 timeline（含 id）经 state.patch 回下发。
+     */
+    sendTimelineCreate(
+        name: string,
+        durationMs: number,
+        fps: number,
+        loopMode: import('@/types/protocol').LoopMode,
+        trigger: import('@/types/protocol').TriggerConfig,
+    ): Promise<void> {
+        return this.sendWithAck('timeline.create',
+            { name, durationMs, fps, loopMode, trigger }).then(() => undefined);
+    }
+
+    /**
+     * {@code timeline.update}：部分更新时间轴字段。{@code patch} 仅含要改的字段
+     * （name / durationMs / fps / loopMode / trigger）；显式传 {@code null} 后端拒
+     * {@code INVALID_PAYLOAD}（不支持 "null = 清字段"，见 §5.12）。
+     */
+    sendTimelineUpdate(
+        timelineId: string,
+        patch: Partial<{
+            name: string;
+            durationMs: number;
+            fps: number;
+            loopMode: import('@/types/protocol').LoopMode;
+            trigger: import('@/types/protocol').TriggerConfig;
+        }>,
+    ): Promise<void> {
+        return this.sendWithAck('timeline.update', { timelineId, patch }).then(() => undefined);
+    }
+
+    /** {@code timeline.delete}：删除时间轴及其全部 tracks。 */
+    sendTimelineDelete(timelineId: string): Promise<void> {
+        return this.sendWithAck('timeline.delete', { timelineId }).then(() => undefined);
+    }
+
+    /**
+     * {@code timeline.play}：在部署 wall 上启动后端 AnimationTicker（§5.12）。
+     * 不落 DB / 不进 history。{@code timelineId} 缺省时由后端用 activeTimelineId（payload 不带该键）。
+     */
+    sendTimelinePlay(timelineId?: string): Promise<void> {
+        const payload = timelineId != null ? { timelineId } : {};
+        return this.sendWithAck('timeline.play', payload).then(() => undefined);
+    }
+
+    /** {@code timeline.pause}：停止后端 Ticker。payload 无参 {@code {}}（§5.12 op 表）。 */
+    sendTimelinePause(): Promise<void> {
+        return this.sendWithAck('timeline.pause', {}).then(() => undefined);
+    }
+
+    /**
+     * {@code timeline.seek}：定位后端 Ticker 到 {@code atMs}（§5.12）。
+     * {@code timelineId} 缺省时由后端用 activeTimelineId。
+     */
+    sendTimelineSeek(atMs: number, timelineId?: string): Promise<void> {
+        const payload: { atMs: number; timelineId?: string } = { atMs };
+        if (timelineId != null) payload.timelineId = timelineId;
+        return this.sendWithAck('timeline.seek', payload).then(() => undefined);
+    }
+
+    /**
+     * {@code keyframe.add}：在指定元素属性轨上加关键帧（§5.13）。ack 只含 {@code version}，
+     * 新 keyframe（含 id）经 state.patch 回下发。{@code value} 形态因 property 而异
+     * （number / string / Fill）；{@code easing} MVP 固定 {@code { type: 'linear' }}。
+     */
+    sendKeyframeAdd(
+        timelineId: string,
+        elementId: string,
+        property: string,
+        timeMs: number,
+        value: import('@/types/protocol').KfValue,
+        easing: import('@/types/protocol').Easing,
+    ): Promise<void> {
+        return this.sendWithAck('keyframe.add',
+            { timelineId, elementId, property, timeMs, value, easing }).then(() => undefined);
+    }
+
+    /** {@code keyframe.update}：部分更新关键帧（timeMs / value / easing，§5.13）。 */
+    sendKeyframeUpdate(
+        timelineId: string,
+        keyframeId: string,
+        patch: Partial<{
+            timeMs: number;
+            value: import('@/types/protocol').KfValue;
+            easing: import('@/types/protocol').Easing;
+        }>,
+    ): Promise<void> {
+        return this.sendWithAck('keyframe.update',
+            { timelineId, keyframeId, patch }).then(() => undefined);
+    }
+
+    /** {@code keyframe.delete}：删除关键帧（§5.13）。 */
+    sendKeyframeDelete(timelineId: string, keyframeId: string): Promise<void> {
+        return this.sendWithAck('keyframe.delete',
+            { timelineId, keyframeId }).then(() => undefined);
+    }
+
+    /**
+     * {@code keyframe.move}：仅挪时刻的高频快捷（§5.13）；拖动期前端本地 mutate，
+     * dragend 发一条。
+     */
+    sendKeyframeMove(timelineId: string, keyframeId: string, timeMs: number): Promise<void> {
+        return this.sendWithAck('keyframe.move',
+            { timelineId, keyframeId, timeMs }).then(() => undefined);
+    }
+
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
@@ -429,7 +568,7 @@ export class WsClient {
         this.heartbeatTimer = window.setInterval(() => {
             const net = useNetworkStore();
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !net.authenticated) return;
-            const env: Envelope = { v: 2, op: 'ping', id: `c-hb-${this.seq++}`, ts: Date.now() };
+            const env: Envelope = { v: ENVELOPE_V, op: 'ping', id: `c-hb-${this.seq++}`, ts: Date.now() };
             this.ws.send(JSON.stringify(env));
         }, HEARTBEAT_INTERVAL_MS);
     }

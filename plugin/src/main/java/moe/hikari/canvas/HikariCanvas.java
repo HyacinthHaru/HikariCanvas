@@ -11,6 +11,8 @@ import moe.hikari.canvas.deploy.FrameProtectionListener;
 import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
+import moe.hikari.canvas.render.AnimationTicker;
+import moe.hikari.canvas.render.BufferPool;
 import moe.hikari.canvas.render.CanvasCompositor;
 import moe.hikari.canvas.render.CanvasProjector;
 import moe.hikari.canvas.render.WallRestorer;
@@ -93,6 +95,10 @@ public final class HikariCanvas extends JavaPlugin {
     private HikariCanvasRenderer canvasRenderer;
     private volatile CanvasProjector canvasProjector;
     private volatile ProjectionThrottler projectionThrottler;
+    // 0.6 P2：时间轴动画产帧引擎（单线程 daemon + BufferPool 池化）。装配在 webServer 之后
+    // （setAnimationTicker seam 需 dispatcher 就位）；cleanupResources 与 variableProviderDaemon
+    // 同段关停（两者都是引用 DB 的 daemon，须早于 database.close）。
+    private volatile AnimationTicker animationTicker;
     private SessionRateLimiter rateLimiter;
     private FontRegistry fontRegistry;
     /** M26：矢量图标注册表（FA Free + 用户 SVG）。 */
@@ -241,6 +247,8 @@ public final class HikariCanvas extends JavaPlugin {
 
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo, canvasRenderer);
         sessionManager.setMaxImagesPerWall(config.images.maxPerWall());  // 0.4.10 P2-8：per-wall 图片配额注入
+        sessionManager.setTimelineFpsLimits(  // 0.6 P1：时间轴 fps 配置注入（config 段 timeline）
+                config.timelineConfig.defaultFps(), config.timelineConfig.maxFps());
 
         // 0.4.0 方案 B 自适应渲染：mapPacketSender 在 CanvasProjector 构造前才 new（见下方）。
         // PlaceholderRenderer 也注入 CanvasProjector，用于"state pristine 回 placeholder"语义
@@ -317,6 +325,12 @@ public final class HikariCanvas extends JavaPlugin {
         variableStore = new VariableStore(userVariableDao,
                 wallId -> {
                     if (sessionManager == null || projectionThrottler == null) return;
+                    // 0.6 P2 审查确认项 #5：wall 由 AnimationTicker 主动产帧时整条变量
+                    // 重画路径退让——变量在 rasterize 期逐帧 resolve（cached 值），Ticker 的
+                    // 下一帧自然带上新值 + per-map diff 检测推送；这里再走 projectByWall
+                    // 会与 Ticker 双写同一 mapId（帧交错 + diff 基准失步）。
+                    AnimationTicker t = animationTicker;
+                    if (t != null && t.isWallAnimating(wallId)) return;
                     boolean handled = sessionManager.submitFullCanvasDirtyByWallAndReport(
                             wallId, projectionThrottler);
                     // Ultrareview 2026-05-25 #1：无活跃 editor session 时走 deploy-only refresh，
@@ -541,6 +555,38 @@ public final class HikariCanvas extends JavaPlugin {
                 tokenRateLimiter);
         webServer.start();
 
+        // 0.6 P2：时间轴动画产帧引擎装配（docs/architecture.md §5.5 / docs/timeline.md §3）。
+        // 装配点选在 webServer.start() 之后：① setAnimationTicker seam 把 ticker 转交给
+        // editOpDispatcher（timeline.play/pause/seek 用），dispatcher 在 WebServer 构造时才就位；
+        // ② autoRegisterAll 须晚于上方 wallRestorerInstance.restore()（启动期像素已落地）；
+        // ③ 依赖项 wallRepo / canvasProjector / config / compositor 此刻均已非 null。
+        // CanvasProjector 已实现 AnimationTicker.FrameRenderer（hasViewers / renderFrame），直接传。
+        BufferPool bufferPool = new BufferPool();
+        AnimationTicker ticker = new AnimationTicker(
+                AnimationTicker.fromRepo(wallRepo), canvasProjector,
+                config.timelineConfig.maxFps(), getLogger());
+        this.animationTicker = ticker;
+        // BufferPool 绑定到 Ticker 单线程（owner）：ticker 出帧路径经 compositor 借/还，
+        // 非 owner 线程（reactive flush / restore）退化为 new BufferedImage，零行为变化。
+        ticker.bindBufferPool(bufferPool);
+        compositor.setBufferPool(bufferPool);
+        // ProjectionThrottler 分流 gate：wall 播放期间编辑 op 的 reactive flush 退让给 ticker。
+        projectionThrottler.setAnimationGate(ticker);
+        // editOpDispatcher 持 ticker 引用，timeline.play/pause/seek 三 op 用。
+        webServer.setAnimationTicker(ticker);
+        // SessionManager 持 ticker 引用：编辑持久化后 invalidate（缓存重载）+ session 关闭后
+        // refreshAutoPlay（编辑器关了 LOOP 墙自动播）。null-guard 在 SessionManager 侧（测试零侵入）。
+        sessionManager.setAnimationTicker(ticker);
+        // wall 删除钩子（P2 审查确认项 #10）：/canvas delete 后立即注销播放——mapIds 已
+        // releaseToFree，孤悬的播放条目会向可能被复用的 mapId 写像素（跨墙串台）。
+        sessionManager.addWallDeleteHook(ticker::stopWall);
+        // 启动期全库扫描：activeTimelineId 且 LOOP 的 wall 自动播（timeline.md §5.2）。
+        // 排除 restore 失败墙（P2 审查确认项 #7：其 mapIds 已归还，不得注册播放）。
+        int autoPlayed = ticker.autoRegisterAll(wallRestorer.failedRestoreWallIds());
+        if (autoPlayed > 0) {
+            getLogger().info("AnimationTicker: " + autoPlayed + " wall(s) auto-playing (LOOP)");
+        }
+
         // 0.4.0 bugfix3（Bug B）：Provider 写值时主动推 state.patch 给前端 mirror。
         // EditSession op 路径走 OpResult.dirty + dispatcher 调 push.pushPatch；
         // Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge）
@@ -717,6 +763,12 @@ public final class HikariCanvas extends JavaPlugin {
         if (variableProviderDaemon != null) {
             closeQuietly("variableProviderDaemon.shutdown", variableProviderDaemon::shutdown);
             variableProviderDaemon = null;
+        }
+        // 0.6 P2：停时间轴产帧引擎（单线程 daemon awaitTermination）。与 variableProviderDaemon
+        // 同段关停——两者都是引用 wallRepo / DB 的 daemon，须早于下方 database.close。
+        if (animationTicker != null) {
+            closeQuietly("animationTicker.shutdown", animationTicker::shutdown);
+            animationTicker = null;
         }
         if (sessionReaper != null) {
             closeQuietly("sessionReaper.stop", sessionReaper::stop);

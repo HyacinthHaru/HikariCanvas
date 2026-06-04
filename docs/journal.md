@@ -5,6 +5,70 @@
 
 ---
 
+## 2026-06-04 · 0.6.0-P1+P2 — 时间轴数据模型+协议 v3+coalescing / AnimationTicker+池化+MVP（单日推完，MVP 闸已过）
+
+两个 phase 一次提交（同批文件交织：dispatcher / WebServer / SessionManager / HikariCanvas / wsClient
+都含两阶段改动，hunk 级拆分风险大于收益）。每阶段都走「侦察 → 主线写契约 → 并行建造 → 多视角对抗
+审查（独立怀疑者逐条核验）→ 全量回归」流程。
+
+### P1 数据模型 + 协议 v3 + 撤销（~60h 当量）
+
+- **新 records**（state 包 10 文件）：`Timeline`（tracks 深冻结不可变）/ `Keyframe`（PROPERTIES 白名单）/
+  `KfValue` number|string|Fill 三态多态（照 FillDeserializer string/object 分流范式，自定义双向序列化器）/
+  `Easing`（坏 blob 宽容降级）/ `LoopMode`/`EasingType`/`TriggerType`（@JsonProperty camelCase wire 形态，
+  同 BlendMode 范式）/ `TriggerConfig`（params 滤 null 项防整墙加载失败）。
+- **ProjectState v3**：`timelines` + `activeTimelineId` nullable 加法（NON_EMPTY/NON_NULL 序列化省略 →
+  旧 v2 blob 零迁移 / 静态工程 JSON 形态不变）；`PROTOCOL_VERSION=3`；restore 还原时间轴；
+  `ProjectSnapshot` 扩展（缺了 undo 会丢时间轴）。
+- **协议 v3 干净切换**：`Protocol.SUPPORTED_MIN/MAX=3/3`（双层版本：`Envelope.v` 壳恒 2）；前端
+  `CLIENT_V=3` + `ENVELOPE_V=2` 拆分。
+- **7 个编辑 op**：`timeline.create/update/delete` + `keyframe.add/update/delete/move`，走 EditSession
+  mutator（新 `TimelineOperations`，照 LayerOperations 范式）→ 进 undo/redo + state.patch + persistWall；
+  fps clamp 到 config `timeline.max-fps`；全量校验（容量 16/2048/256、durationMs 不得缩到关键帧之下、
+  bezier x∈[0,1]、int 越界回绕守卫）。
+- **HistoryStack coalescing（D7 路线 A）**：key=`elementId:keyframeId:property` + 500ms 窗口合并 +
+  **容量粘性解锁 16→64**（一旦有过激活时间轴保持 64——否则删最后一条时间轴的 commit 自身会当场
+  trim 掉最多 48 条历史；审查确认项）+ clock 注入 seam。
+- **前端**：v3 TS 类型 + `project.ts` `/timelines/...` 六类路径 applier（指针解码对称）。
+- **对抗审查**（4+1 视角 20 agents）：13 发现 → 确认 5 全修 / 驳回 6 / 双端一致补审 0 发现。
+
+### P2 AnimationTicker + 池化 + MVP（~50h 当量）
+
+- **KeyframeInterpolator**（render 包，纯函数）：LINEAR × 6 数值属性；ONCE 钳/LOOP 模/PING_PONG 三角
+  时间映射；rendering.md §9.1 取值规则（不外插/重合帧取后）；8 型 record 重建。**固化语义**：关键帧
+  属性播放期覆盖基值（动画软件标准），未建轨属性/内容编辑后 ≤1 帧反映。
+- **AnimationTicker**：单线程 ScheduledExecutorService（照 VariableProviderDaemon：daemon 线程/任务级
+  异常隔离/幂等关停）；**Wall 缓存 + persistWall(同步落库)→invalidate**（不每 tick 读 DB）；LOOP 自动播
+  （启动 autoRegisterAll 排除 restore 失败墙 / session cancel→refreshAutoPlay / 重启恢复）；ONCE 播完渲
+  末帧自动注销；WallSource+FrameRenderer 双 seam 全确定性可测。
+- **BufferPool**：线程限定（owner=Ticker 单线程，外线程 acquire 退化 new——rasterize「每次 new 并发
+  安全」契约对反应式路径不变）；主+layer buffer 借还；AlphaComposite.Clear 清零像素等价；异常路径归还。
+- **CanvasProjector.renderFrame**：per-map 帧间 diff（只发像素变了的 map）+ 新观察者全量补发 +
+  viewer-gated（无人不 rasterize）+ 池归还点。
+- **分流 gate**：`ProjectionThrottler.submit` + 延迟尾帧 flush + 变量 wallDirtyCallback 三条 reactive
+  路径在动画接管期全退让；被吸收的意图经 `onReactiveYield→invalidate` 转为下一帧重载+全量补发。
+- **播放控制**：`timeline.play/pause/seek`（dispatcher 特判，不走 OpResult 流，不落 DB 不进 history，
+  与编辑 op 同权）+ TIMELINE_PLAY/PAUSE/SEEK audit；wall 删除钩子立即 stopWall（防向已归还 mapId 写）。
+- **前端**：TopBar Film 按钮 + TimelineManagerModal（时间轴列表/新建/关键帧按元素分组/给选中元素加
+  关键帧/播放控制）+ wsClient 11 send 方法 + i18n 中英 + timelineLogic 纯函数。
+- **对抗审查**（4 视角 24 agents）：20 发现 → 确认 14 全修 / 驳回 6。最重四项：play‖stopWall TOCTOU
+  孤儿任务（锁内成员资格复核关死）/ FrameDiff 跨线程竞态（diffResetPending 标志，diff 只许 Ticker 线程
+  触碰）/ 变量路径绕 gate 双写 / `/canvas delete` 不注销跨墙串台。
+- **MVP 闸 ✅ 用户实测**：欢迎墙 opacity 0→1→0 循环淡入淡出 20fps；关浏览器续播；重启服务器自动恢复。
+
+**测试**：后端 879 → **1014**（+135：P1 op/records/coalescing 66 + P2 interpolator/pool/ticker/dispatch
+65 + 审查回归 9 - 调整 5）；前端 294 → **320**（+26）；0 baseline 漂移；vite build 过。
+
+关联：`state/{Timeline,Keyframe,KfValue,KfValueSerializer,KfValueDeserializer,Easing,EasingType,LoopMode,
+TriggerConfig,TriggerType,TimelineOperations,ProjectState,ProjectSnapshot,HistoryStack,StatePatchBuilder,
+EditSession}.java` `render/{AnimationTicker,AnimationTickerGate,BufferPool,KeyframeInterpolator,
+CanvasProjector,CanvasCompositor,ProjectionThrottler}.java `web/{EditOpDispatcher,WebServer,WebHelpers,
+Protocol}.java` `session/SessionManager.java` `HikariCanvas{,Config}.java` `config.yml`
+`web/src/{types/protocol.ts,stores/{project,ui}.ts,network/wsClient.ts,components/timeline/*,
+components/layout/TopBar.vue,App.vue,i18n/messages.ts}` + 11 个测试文件
+
+---
+
 ## 2026-06-04 · 0.6.0 文档先行 — timeline.md 设计总纲 + 四份契约扩展（2026-06-03~04 两日打磨定稿）
 
 0.6.0 时间轴编辑器动工前的完整契约批（「文档先行」纪律：先文档后代码）：

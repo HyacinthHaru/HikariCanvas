@@ -10,22 +10,31 @@ import java.util.List;
  * 引入 layer.* op 后单层快照不够，必须存整棵 layers 树 + activeLayerId 才能完整恢复
  * 跨层操作的状态。</p>
  *
+ * <p><b>0.6 v3 形态升级：</b> 加 {@code timelines + activeTimelineId} —— 缺了它们，
+ * timeline / keyframe op 的 undo 无法还原时间轴，且元素 op 的 undo 会把时间轴改动一并
+ * 滚丢（docs/timeline.md §7）。</p>
+ *
  * <p><b>深拷贝语义：</b> 紧凑构造器把传入的 layers 全部克隆一份（每个 Layer 重建 +
  * elements list 重建为新 ArrayList），保证快照与 live state 不再共享任何可变集合。
  * 这一步是 undo 正确性的关键 —— 缺了它，后续对 live state 的 mutation 会污染历史栈。</p>
  *
- * <p>Element 自身是 record，不可变，无需深拷贝。</p>
+ * <p>Element 自身是 record，不可变，无需深拷贝。{@link Timeline} 同理（tracks 在其
+ * canonical 构造器里深冻结），timelines 只需复制外层列表引用（{@link List#copyOf}）。</p>
  *
- * @param canvas        快照时刻的 canvas（含 gridSize / guides；record 本身不可变）
- * @param layers        深拷贝后的层树；外层 {@link List#copyOf} 锁住引用
- * @param activeLayerId 快照时刻的活动层 id
- * @param label         {@code null} = 常规 op 产生的匿名快照；非 null = {@code history.mark}
- *                      产生的命名检查点
+ * @param canvas           快照时刻的 canvas（含 gridSize / guides；record 本身不可变）
+ * @param layers           深拷贝后的层树；外层 {@link List#copyOf} 锁住引用
+ * @param activeLayerId    快照时刻的活动层 id
+ * @param timelines        快照时刻的时间轴列表（0.6 v3；Timeline record 不可变，浅拷外层）
+ * @param activeTimelineId 快照时刻的激活时间轴 id（0.6 v3；null = 无）
+ * @param label            {@code null} = 常规 op 产生的匿名快照；非 null = {@code history.mark}
+ *                         产生的命名检查点
  */
 public record ProjectSnapshot(
         ProjectState.Canvas canvas,
         List<Layer> layers,
         String activeLayerId,
+        List<Timeline> timelines,
+        String activeTimelineId,
         String label
 ) {
     public ProjectSnapshot {
@@ -41,6 +50,7 @@ public record ProjectSnapshot(
             }
             layers = List.copyOf(copied);
         }
+        timelines = timelines == null ? List.of() : List.copyOf(timelines);
     }
 
     /**

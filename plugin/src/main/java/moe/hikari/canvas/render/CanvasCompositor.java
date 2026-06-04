@@ -50,6 +50,12 @@ import java.util.logging.Logger;
  * <h2>线程模型</h2>
  * 无可变状态（除 {@link #imageLoader} volatile 引用）；{@link #rasterize} 每次分配新 BufferedImage，
  * 多线程并发调用安全。{@link PaletteLut} / {@link FontRegistry} 都在构造时传入、稳态只读。
+ *
+ * <p><b>0.6 P2 池化注：</b>装配 {@link BufferPool} 后，<b>仅池 owner 线程（AnimationTicker
+ * 单线程）</b>的 rasterize 借用复用 buffer（主 + slow-path layer），其余线程
+ * {@code acquire} 退化为 new —— 上述「每次 new 保证并发安全」契约对反应式路径不变。
+ * 主 buffer 逃逸出本方法，Ticker 路径由调用方（{@code CanvasProjector.renderFrame}）
+ * 用完经 {@link #releaseToPool} 归还。见 docs/architecture.md §5.5。</p>
  */
 public final class CanvasCompositor {
 
@@ -82,6 +88,12 @@ public final class CanvasCompositor {
      * 与 {@link #interpolator} 同时被 {@link #setVariableSupport} 注入；为 null 表示不联动倒排索引。
      */
     private volatile VariableStore variableStore;
+
+    /**
+     * 0.6 P2：BufferedImage 复用池（线程限定，见类注释「池化注」）。null = 不池化，
+     * 所有路径每次 new —— snapshot 测试 / 旧装配零侵入。
+     */
+    private volatile BufferPool bufferPool;
 
     // 8 个 element renderer，构造时一次性 instantiate
     private final ElementRenderer textRenderer = new TextRenderer();
@@ -136,6 +148,30 @@ public final class CanvasCompositor {
     }
 
     /**
+     * 0.6 P2：装配 {@link BufferPool}（由 {@code HikariCanvas.onEnable} 注入；测试可不注）。
+     * 池是线程限定的——仅 owner 线程（AnimationTicker）真正复用，其余线程行为不变。
+     */
+    public void setBufferPool(BufferPool pool) {
+        this.bufferPool = pool;
+    }
+
+    /** 0.6 P2：借 buffer（无池 / 非 owner 线程 → new，行为与池化前一致）。 */
+    private BufferedImage acquireBuffer(int w, int h) {
+        BufferPool pool = this.bufferPool;
+        return pool != null ? pool.acquire(w, h)
+                : new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+    }
+
+    /**
+     * 0.6 P2：归还 rasterize 借出的 buffer（主 buffer 由调用方在切片完成后调；
+     * layer buffer 在 rasterize 内部合成后调）。无池 / 非 owner 线程 / null → no-op。
+     */
+    public void releaseToPool(BufferedImage img) {
+        BufferPool pool = this.bufferPool;
+        if (pool != null) pool.release(img);
+    }
+
+    /**
      * 把 {@link ProjectState} 渲染到整张大画布。返回 {@code TYPE_INT_ARGB}（含 alpha；
      * P3-93/0.4.6 P2 起，让透明背景的 alpha 通道贯穿到 {@link #toPaletteSlice}）。
      *
@@ -176,7 +212,21 @@ public final class CanvasCompositor {
         // 能被读到（之前 TYPE_INT_RGB 强行合成不透明，导致 SolidFill("#00000000") 透明背景
         // 被吃掉）。toPaletteSlice 内的 matchColor 4 参重载在 alpha < 128 时返 palette index 0
         // （TRANSPARENT_INDEX），MC 地图渲染时该像素透出后方方块。内存 +33%（64→85 KiB 每 2×2 maps）
-        BufferedImage img = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
+        // 0.6 P2：经池借用（仅 Ticker 线程命中池；其余线程等价 new，见类注释「池化注」）。
+        // 渲染中途抛异常时归还借出的 buffer（审查确认项 #2/#4——否则池利用率随异常缓降）再重抛。
+        BufferedImage img = acquireBuffer(widthPx, heightPx);
+        try {
+            return rasterizeInto(img, state, wallId, widthPx, heightPx);
+        } catch (RuntimeException | Error ex) {
+            releaseToPool(img);
+            throw ex;
+        }
+    }
+
+    /** {@link #rasterize(ProjectState, String)} 的渲染主体（拆出以便异常路径统一归还 buffer）。 */
+    private BufferedImage rasterizeInto(BufferedImage img, ProjectState state, String wallId,
+                                        int widthPx, int heightPx) {
+        ProjectState.Canvas canvas = state.canvas();
         Graphics2D g = img.createGraphics();
         // 0.4.0-P1-C：snapshot 取 volatile，整段 rasterize 内不变
         VariableInterpolator interp = this.interpolator;
@@ -214,7 +264,12 @@ public final class CanvasCompositor {
                 } else {
                     BufferedImage layerBuf = renderLayerToBuffer(elementSnapshot,
                             widthPx, heightPx, interp, wallId, referencedFullNames);
-                    BlendModes.applyBlendModeOver(img, layerBuf, layerOpacity, layer.blendMode());
+                    try {
+                        BlendModes.applyBlendModeOver(img, layerBuf, layerOpacity, layer.blendMode());
+                    } finally {
+                        // 0.6 P2：layer buffer 不逃逸 rasterize，合成完即归还（非池路径 no-op）
+                        releaseToPool(layerBuf);
+                    }
                 }
             }
         } finally {
@@ -444,12 +499,17 @@ public final class CanvasCompositor {
                                               int widthPx, int heightPx,
                                               VariableInterpolator interp, String wallId,
                                               Set<String> referencedAccumulator) {
-        BufferedImage buf = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
+        // 0.6 P2：经池借用（调用方 rasterize 在合成后 releaseToPool；非池路径等价 new）。
+        // 绘制中途抛异常 → 归还后重抛（审查确认项 #2/#4）。
+        BufferedImage buf = acquireBuffer(widthPx, heightPx);
         Graphics2D lg = buf.createGraphics();
         try {
             applyHints(lg);
             drawElementsTo(lg, elements, widthPx, heightPx,
                     interp, wallId, referencedAccumulator);
+        } catch (RuntimeException | Error ex) {
+            releaseToPool(buf);
+            throw ex;
         } finally {
             lg.dispose();
         }

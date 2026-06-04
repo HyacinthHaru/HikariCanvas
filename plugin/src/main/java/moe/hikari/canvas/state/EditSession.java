@@ -97,11 +97,15 @@ public final class EditSession {
     /** M12 brush.* op 状态机模块。2026-05-14 抽出。 */
     private final BrushSession brushOps;
 
+    /** 0.6 P1：timeline.* / keyframe.* op 模块。 */
+    private final TimelineOperations timelineOps;
+
     public EditSession(ProjectState state) {
         this.state = state;
         this.history = new HistoryStack(state);
         this.layerOps = new LayerOperations(state, history);
         this.brushOps = new BrushSession(state, history);
+        this.timelineOps = new TimelineOperations(state, history);
     }
 
     public ProjectState state() {
@@ -116,6 +120,17 @@ public final class EditSession {
      */
     public void setMaxImagesPerWall(int maxPerWall) {
         this.maxImagesPerWall = maxPerWall;
+    }
+
+    /**
+     * 0.6 P1：注入时间轴 fps 配置（config 段 {@code timeline}）。由 {@code SessionManager}
+     * 在 confirm / open 构造 EditSession 后调用，传入
+     * {@code HikariCanvasConfig.TimelineConfig.{defaultFps(), maxFps()}}。任一参数为 null
+     * 时该项退回 {@link TimelineOperations} 的常量缺省（20 / 60），与未注入行为一致
+     * （测试 / 老路径不受影响）。
+     */
+    public void setTimelineFpsLimits(Integer defaultFps, Integer maxFps) {
+        this.timelineOps.setFpsLimits(defaultFps, maxFps);
     }
 
     // ---------- 结果类型 ----------
@@ -526,6 +541,49 @@ public final class EditSession {
     /** 见 {@link LayerOperations#setActiveLayer(String)}。 */
     public synchronized OpResult setActiveLayer(String layerId) {
         return layerOps.setActiveLayer(layerId);
+    }
+
+    // ---------- 0.6 P1：timeline.* / keyframe.* op（实现见 {@link TimelineOperations}） ----------
+    //
+    // timeline.play / pause / seek 留 P2（AnimationTicker 未建）：dispatcher 不加这些 case，
+    // 落到现有 INVALID_OP 路径即可。
+
+    /** 见 {@link TimelineOperations#createTimeline(String, Integer, Integer, String, Map)}。 */
+    public synchronized OpResult createTimeline(String name, Integer durationMs, Integer fps,
+                                                String loopMode, Map<String, Object> trigger) {
+        return timelineOps.createTimeline(name, durationMs, fps, loopMode, trigger);
+    }
+
+    /** 见 {@link TimelineOperations#updateTimeline(String, Map)}。 */
+    public synchronized OpResult updateTimeline(String timelineId, Map<String, Object> patch) {
+        return timelineOps.updateTimeline(timelineId, patch);
+    }
+
+    /** 见 {@link TimelineOperations#deleteTimeline(String)}。 */
+    public synchronized OpResult deleteTimeline(String timelineId) {
+        return timelineOps.deleteTimeline(timelineId);
+    }
+
+    /** 见 {@link TimelineOperations#addKeyframe(String, String, String, Integer, Object, Object)}。 */
+    public synchronized OpResult addKeyframe(String timelineId, String elementId, String property,
+                                             Integer timeMs, Object value, Object easing) {
+        return timelineOps.addKeyframe(timelineId, elementId, property, timeMs, value, easing);
+    }
+
+    /** 见 {@link TimelineOperations#updateKeyframe(String, String, Map)}。 */
+    public synchronized OpResult updateKeyframe(String timelineId, String keyframeId,
+                                                Map<String, Object> patch) {
+        return timelineOps.updateKeyframe(timelineId, keyframeId, patch);
+    }
+
+    /** 见 {@link TimelineOperations#deleteKeyframe(String, String)}。 */
+    public synchronized OpResult deleteKeyframe(String timelineId, String keyframeId) {
+        return timelineOps.deleteKeyframe(timelineId, keyframeId);
+    }
+
+    /** 见 {@link TimelineOperations#moveKeyframe(String, String, Integer)}。 */
+    public synchronized OpResult moveKeyframe(String timelineId, String keyframeId, Integer timeMs) {
+        return timelineOps.moveKeyframe(timelineId, keyframeId, timeMs);
     }
 
     // ---------- canvas.resize ----------

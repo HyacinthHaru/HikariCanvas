@@ -73,6 +73,11 @@ public final class StatePatchBuilder {
      *       M5-D4 修过 element.add bug 的根因即此）</li>
      *   <li>{@link Layer}（M8-C 引入；layer.create / duplicate 时 patch.value 是整个 Layer
      *       record。前端 applyPatch 当 Map 处理，所以这里也提前转，保持测试与运行时一致）</li>
+     *   <li>{@link Timeline} / {@link Keyframe} / {@code List<Keyframe>}（0.6 v3 引入；
+     *       timeline.create 的 patch.value 是整个 Timeline、keyframe.add 是单个 Keyframe、
+     *       轨道重排（timeMs 变更后整轨 replace）是 List&lt;Keyframe&gt;。{@code KfValue}
+     *       的自定义序列化靠类注解、任何 mapper 都生效，但统一提前转 Map，与
+     *       Element / Layer 保持同一形态，前端与测试侧都按 Map 断言）</li>
      * </ul>
      * 其他类型（基本类型 / String / List<Map> 之类）原样返回。
      */
@@ -92,6 +97,20 @@ public final class StatePatchBuilder {
             } catch (Exception ex) {
                 throw new IllegalStateException("failed to serialize Layer", ex);
             }
+        }
+        if (value instanceof Timeline || value instanceof Keyframe) {
+            try {
+                String json = ELEMENT_MAPPER.writeValueAsString(value);
+                return ELEMENT_MAPPER.readValue(json, Map.class);
+            } catch (Exception ex) {
+                throw new IllegalStateException(
+                        "failed to serialize " + value.getClass().getSimpleName(), ex);
+            }
+        }
+        if (value instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Keyframe) {
+            List<Object> out = new ArrayList<>(list.size());
+            for (Object o : list) out.add(normalize(o));
+            return out;
         }
         return value;
     }

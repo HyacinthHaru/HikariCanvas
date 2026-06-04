@@ -69,6 +69,8 @@ export const useUiStore = defineStore('ui', () => {
     const scheduleManagerOpen = ref(false);
     /** 0.4.4：铁路网络管理 modal 开关。TopBar Train 按钮 → 二级菜单触发。 */
     const railNetworkOpen = ref(false);
+    /** 0.6 P2（B3）：时间轴管理 modal 开关。TopBar Film 按钮触发。 */
+    const timelineManagerOpen = ref(false);
 
     /** M8-F：所有当前选中的元素 id。size > 1 时为多选。 */
     const selectedIds = ref<Set<string>>(new Set());
@@ -151,6 +153,8 @@ export const useUiStore = defineStore('ui', () => {
     function closeScheduleManager() { scheduleManagerOpen.value = false; }
     function toggleRailNetwork() { railNetworkOpen.value = !railNetworkOpen.value; }
     function closeRailNetwork() { railNetworkOpen.value = false; }
+    function toggleTimelineManager() { timelineManagerOpen.value = !timelineManagerOpen.value; }
+    function closeTimelineManager() { timelineManagerOpen.value = false; }
 
     function setZoom(z: number) {
         zoom.value = Math.max(0.25, Math.min(4, z));
@@ -220,11 +224,12 @@ export const useUiStore = defineStore('ui', () => {
         variablePanelOpen.value = false;
         scheduleManagerOpen.value = false;
         railNetworkOpen.value = false;
+        timelineManagerOpen.value = false;
     }
 
     return {
         theme, locale, activeTool, leftCollapsed, rightCollapsed, logDrawerOpen, helpOpen,
-        variablePanelOpen, scheduleManagerOpen, railNetworkOpen,
+        variablePanelOpen, scheduleManagerOpen, railNetworkOpen, timelineManagerOpen,
         selectedIds, selectedElementId, selectedCount, hasSelection,
         editingLayerId, zoom,
         snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapToDistribute, snapThreshold,
@@ -232,6 +237,7 @@ export const useUiStore = defineStore('ui', () => {
         toggleVariablePanel, closeVariablePanel,
         toggleScheduleManager, closeScheduleManager,
         toggleRailNetwork, closeRailNetwork,
+        toggleTimelineManager, closeTimelineManager,
         setZoom, zoomIn, zoomOut, zoomReset,
         selectElement, toggleSelection, selectMany, addToSelection, clearSelection,
         isSelected,

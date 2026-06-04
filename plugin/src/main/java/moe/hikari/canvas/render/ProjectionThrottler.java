@@ -53,6 +53,14 @@ public final class ProjectionThrottler {
      */
     private final ConcurrentMap<String, Long> sessionIntervalOverride = new ConcurrentHashMap<>();
 
+    /**
+     * 0.6 P2 分流 gate（docs/architecture.md §5.1「两条产帧路径」）：动画接管期间，
+     * 编辑 op 产生的 reactive flush 退让给 AnimationTicker（编辑可见性由
+     * 「持久化完成 → ticker.invalidate → 下一 tick 重载」保证，延迟 ≤ 1 帧）。
+     * null = 无 gate（旧装配 / 测试零侵入）。
+     */
+    private volatile AnimationTickerGate animationGate;
+
     private static final class Bucket {
         DirtyRegion pending;
         /**
@@ -88,12 +96,30 @@ public final class ProjectionThrottler {
         this.minIntervalMs = minIntervalMs;
     }
 
+    /** 0.6 P2：装配层注入分流 gate（HikariCanvas.onEnable；测试 / 旧路径不注 = 无 gate）。 */
+    public void setAnimationGate(AnimationTickerGate gate) {
+        this.animationGate = gate;
+    }
+
     /**
      * 提交一次脏矩形。立刻 flush 或与已有 pending 合并并调度尾帧。
      * {@code region == null} 时 no-op。
+     *
+     * <p>0.6 P2：wall 被 AnimationTicker 接管（播放中）时整次 submit 退让——不入 pending、
+     * 不调度（避免两条产帧路径对同一 mapId 交错写）。暂停 / 注销后 reactive 路径自然恢复。</p>
      */
     public void submit(String sessionId, DirtyRegion region) {
         if (region == null) return;
+        AnimationTickerGate gate = this.animationGate;
+        if (gate != null) {
+            var s = sessionManager.byId(sessionId);
+            String wallId = s != null ? s.wallId() : null;
+            if (wallId != null && gate.isWallAnimating(wallId)) {
+                // 被吸收的渲染意图转给 Ticker（invalidate → 下一帧重载 + 全量补发）
+                gate.onReactiveYield(wallId);
+                return;
+            }
+        }
         Bucket b = bySession.computeIfAbsent(sessionId, k -> new Bucket());
         long effectiveMs = effectiveInterval(sessionId);
         long effectiveNanos = effectiveMs * MS_TO_NANOS;
@@ -192,6 +218,16 @@ public final class ProjectionThrottler {
         Session s = sessionManager.byId(sessionId);
         if (s == null) {
             // 会话已消亡，丢弃脏区域并推进时间基。
+            b.pending = null;
+            b.lastProjectAtNanos = nowNanos;
+            b.projectedOnce = true;
+            return;
+        }
+        // 0.6 P2 审查确认项 #6：尾帧延迟 flush 也要查 gate——submit 时未播放、flush 执行前
+        // play 落在延迟窗口内的情形，否则这次 reactive 直写会与 Ticker 抢同一 mapId。
+        AnimationTickerGate gate = this.animationGate;
+        if (gate != null && s.wallId() != null && gate.isWallAnimating(s.wallId())) {
+            gate.onReactiveYield(s.wallId());
             b.pending = null;
             b.lastProjectAtNanos = nowNanos;
             b.projectedOnce = true;

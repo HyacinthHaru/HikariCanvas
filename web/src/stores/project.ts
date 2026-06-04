@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { ProjectState, Element, Layer, PatchOp } from '@/types/protocol';
+import type { ProjectState, Element, Layer, PatchOp, Timeline, Keyframe } from '@/types/protocol';
 import { useVariableStore } from './variables';
 import { useScheduleStore } from './schedule';
 import { useVariableAliasStore } from './variableAliases';
@@ -255,6 +255,131 @@ function applyOne(state: ProjectState, op: PatchOp): void {
         }
         return;
     }
+
+    // ---------- /activeTimelineId（timeline.create / delete 的副带 replace）----------
+    // v3 新增：与 /activeLayerId 同构的单 token 顶层标量。timeline.delete 后可能为 null。
+    if (tokens.length === 1 && tokens[0] === 'activeTimelineId' && op.op === 'replace') {
+        state.activeTimelineId = (op.value as string | null) ?? undefined;
+        return;
+    }
+    if (tokens.length === 1 && tokens[0] === 'activeTimelineId' && op.op === 'remove') {
+        state.activeTimelineId = undefined;
+        return;
+    }
+
+    // ---------- /timelines/...（v3 新增）----------
+    // 后端 patch 形态见 docs/protocol.md §5.2 / §5.12 / §5.13：
+    //   timeline.create → add /timelines/<i>（整 Timeline）+ replace /activeTimelineId
+    //   timeline.update → replace /timelines/<i>/<field>
+    //   timeline.delete → remove /timelines/<i> + replace /activeTimelineId
+    //   keyframe.*     → /timelines/<i>/tracks/<eid>[/<k>[/<field>]]（eid 段 JSON Pointer 编码）
+    // 全部分支对缺失对象 / 越界索引做无 throw 的静默 return（与上方 applyOne 容错风格一致）。
+    if (tokens[0] === 'timelines') {
+        applyTimelineMutation(state, tokens.slice(1), op);
+        return;
+    }
+}
+
+/**
+ * /timelines/<i>... 子树的突变（v3）。{@code rest} 已剥去首段 'timelines'（applyOne 传入
+ * {@code tokens.slice(1)}），故下方索引比 docs/protocol.md 用全路径计的 len 少 1：
+ *
+ * <ul>
+ *   <li>rest.length===1：/timelines/&lt;i&gt;（整 Timeline 数组项 add / remove / replace）</li>
+ *   <li>rest.length===2：/timelines/&lt;i&gt;/&lt;field&gt;（timeline.update 单字段 replace）</li>
+ *   <li>rest.length===3：/timelines/&lt;i&gt;/tracks/&lt;eid&gt;（整轨 add / replace / remove）</li>
+ *   <li>rest.length===4：/timelines/&lt;i&gt;/tracks/&lt;eid&gt;/&lt;k&gt;（关键帧项）</li>
+ *   <li>rest.length&gt;=5：/timelines/&lt;i&gt;/tracks/&lt;eid&gt;/&lt;k&gt;/&lt;field&gt;（关键帧单字段）</li>
+ * </ul>
+ */
+function applyTimelineMutation(state: ProjectState, rest: string[], op: PatchOp): void {
+    if (rest.length === 0) return;
+
+    // /timelines/<i>：整 Timeline 数组项
+    const idx = parseInt(rest[0], 10);
+    if (!Number.isInteger(idx) || idx < 0) return;
+
+    if (rest.length === 1) {
+        // 列表懒初始化；首条 timeline add 时 timelines 可能为 undefined。
+        if (op.op === 'add' && op.value) {
+            if (idx > (state.timelines?.length ?? 0)) return; // add 允许追加到 length
+            if (!state.timelines) state.timelines = [];
+            state.timelines.splice(idx, 0, op.value as Timeline);
+        } else if (op.op === 'remove') {
+            if (!state.timelines || idx >= state.timelines.length) return;
+            state.timelines.splice(idx, 1);
+        } else if (op.op === 'replace' && op.value) {
+            if (!state.timelines || idx >= state.timelines.length) return;
+            state.timelines.splice(idx, 1, op.value as Timeline);
+        }
+        return;
+    }
+
+    // 以下分支都需要定位到已存在的 timeline 对象。
+    const timeline = state.timelines?.[idx];
+    if (!timeline) return;
+
+    // /timelines/<i>/<field>：timeline.update 单字段（name / durationMs / fps / loopMode / trigger）
+    if (rest.length === 2) {
+        const field = rest[1];
+        if (field === 'tracks') return; // tracks 整替走不到这里（后端按轨 / 帧粒度发）
+        if (op.op === 'replace') {
+            (timeline as unknown as Record<string, unknown>)[field] = op.value;
+        }
+        return;
+    }
+
+    // /timelines/<i>/tracks/...
+    if (rest[1] !== 'tracks') return;
+
+    // tracks ??= {} 防御（理论上 canonical Timeline 必有，但 forward-compat 守一手）。
+    if (!timeline.tracks) timeline.tracks = {};
+    // elementId 段须 JSON Pointer 解码（~1 → / 、~0 → ~）；轨道 key 是 elementId，可能含转义。
+    const eid = decodeJsonPointerToken(rest[2]);
+
+    // /timelines/<i>/tracks/<eid>：整轨增删（keyframe.add 新轨 / keyframe.move 整轨重排 / 轨空 remove）
+    if (rest.length === 3) {
+        if (op.op === 'add' || op.op === 'replace') {
+            timeline.tracks[eid] = op.value as Keyframe[];
+        } else if (op.op === 'remove') {
+            delete timeline.tracks[eid];
+        }
+        return;
+    }
+
+    // /timelines/<i>/tracks/<eid>/<k>[/<field>]：单关键帧项
+    const k = parseInt(rest[3], 10);
+    if (!Number.isInteger(k) || k < 0) return;
+
+    if (rest.length === 4) {
+        // 关键帧项的 add / remove / replace。add 允许 k === length（追加）。
+        if (op.op === 'add') {
+            // track ??= [] 防御：新轨可能先发整轨 add 也可能逐项 add。
+            if (!timeline.tracks[eid]) timeline.tracks[eid] = [];
+            const arr = timeline.tracks[eid];
+            if (k > arr.length) return;
+            arr.splice(k, 0, op.value as Keyframe);
+        } else if (op.op === 'remove') {
+            const arr = timeline.tracks[eid];
+            if (!arr || k >= arr.length) return;
+            arr.splice(k, 1);
+        } else if (op.op === 'replace' && op.value) {
+            const arr = timeline.tracks[eid];
+            if (!arr || k >= arr.length) return;
+            arr.splice(k, 1, op.value as Keyframe);
+        }
+        return;
+    }
+
+    // /timelines/<i>/tracks/<eid>/<k>/<field>：关键帧单字段 replace（timeMs / value / easing 等）
+    if (op.op === 'replace') {
+        const arr = timeline.tracks[eid];
+        if (!arr) return;
+        const kf = arr[k];
+        if (!kf) return;
+        const field = rest[4];
+        (kf as unknown as Record<string, unknown>)[field] = op.value;
+    }
 }
 
 function ensureActiveElements(state: ProjectState): Element[] {
@@ -296,4 +421,16 @@ function applyElementMutation(
 function parsePath(path: string): string[] {
     if (!path.startsWith('/')) return [];
     return path.slice(1).split('/');
+}
+
+/**
+ * RFC 6901 单 token 解码：{@code ~1} → {@code /}，{@code ~0} → {@code ~}（顺序必须先 ~1 再 ~0）。
+ *
+ * <p>v3 timeline tracks 的 key 是 elementId（"e-&lt;8hex&gt;" 形态，实践中不含转义字符），
+ * 但后端 StatePatchBuilder 走 JSON Pointer 编码出 path，前端镜像保持解码对称。
+ * wsClient.ts 内有同名 module-private 实现（用于 /variables/ 与 /aliases/ 分拣），
+ * 此处本地复制一份避免跨文件 export 耦合。</p>
+ */
+function decodeJsonPointerToken(token: string): string {
+    return token.replace(/~1/g, '/').replace(/~0/g, '~');
 }

@@ -25,8 +25,12 @@ import java.util.logging.Logger;
  * <p><b>线程：</b> {@link HikariCanvasRenderer#update} 线程安全（ConcurrentMap）；
  * {@link CanvasCompositor} 每次分配独立 BufferedImage。可在 Jetty WS 线程或 BukkitScheduler
  * async task 里调用，不必切主线程。</p>
+ *
+ * <p><b>0.6 P2：</b>实现 {@link AnimationTicker.FrameRenderer}——AnimationTicker 的逐帧出口
+ * （{@link #hasViewers} / {@link #renderFrame}，含 per-map 帧间 diff + 新观察者全量补发），
+ * 见 docs/architecture.md §5.5。</p>
  */
-public final class CanvasProjector {
+public final class CanvasProjector implements AnimationTicker.FrameRenderer {
 
     private final HikariCanvasRenderer canvasRenderer;
     private final CanvasCompositor compositor;
@@ -184,7 +188,16 @@ public final class CanvasProjector {
         } catch (Exception e) {
             return List.of();
         }
-        if (w == null || w.key() == null) return List.of();
+        return findViewersFor(w);
+    }
+
+    /**
+     * 0.6 P2：已持有 Wall 元数据时的 viewer 查询重载——AnimationTicker 缓存 Wall 后逐帧调，
+     * 免去 {@link #findViewersForWall} 内的 loadById（20fps 下每 tick 一次 DB 读不可接受，
+     * docs/architecture.md §5.5 状态缓存）。线程安全性与原方法一致（只读 Bukkit API）。
+     */
+    private List<Player> findViewersFor(WallRepo.Wall w) {
+        if (w == null || w.key() == null || mapPacketSender == null) return List.of();
         World world = Bukkit.getWorld(w.key().world());
         if (world == null) return List.of();
         int wallChunkX = w.key().originX() >> 4;
@@ -319,5 +332,81 @@ public final class CanvasProjector {
     /** Pristine 判定的背景部分，等同 {@link #isPristine}/{@link #isWhiteSolid} 但只看背景。 */
     private static boolean isWhitePristineBg(ProjectState state) {
         return isWhiteSolid(state.canvas().background());
+    }
+
+    // ---------- 0.6 P2：AnimationTicker.FrameRenderer 实现（仅 Ticker 线程调） ----------
+
+    /**
+     * 动画逐帧出口（docs/architecture.md §5.5）：viewer 查询（空且非 force → 跳过，
+     * <b>不 rasterize</b>——viewer-gated 真正省 CPU 的点；单次扫描，审查确认项 #9）→
+     * rasterize 插值帧 → per-map 量化 → <b>帧间 diff</b>（只 update / 只发像素变了的 map，
+     * §3.4「基本的不浪费」）→ 新观察者出现时全量补发（diff 跳过的 map 对新 viewer 是缺帧）。
+     *
+     * <p>主 buffer 经 {@link CanvasCompositor#rasterize} 借自 {@link BufferPool}
+     * （Ticker 线程 = 池 owner），切片完归还 —— 这是池化的释放点（buffer 逃逸出
+     * rasterize，须由本方法 finally 归还）。</p>
+     */
+    @Override
+    public int renderFrame(WallRepo.Wall wall, ProjectState frame,
+                           AnimationTicker.FrameDiff diff, boolean force) {
+        if (wall == null || frame == null) return 0;
+        List<Integer> mapIds = wall.mapIds();
+        if (mapIds == null || mapIds.isEmpty()) return 0;
+        int widthMaps = frame.canvas().widthMaps();
+        String wallId = wall.wallId();
+
+        List<Player> viewers = findViewersFor(wall);
+        if (viewers.isEmpty() && !force) {
+            return -1;   // viewer-gated：跳帧不渲染（位置在 Ticker 侧按墙钟推进）
+        }
+        // 新观察者出现 → 本帧全量补发（unchanged map 对新 viewer 是缺帧）
+        boolean forceFullPush = force;
+        java.util.Set<java.util.UUID> viewerIds = new java.util.HashSet<>(viewers.size());
+        for (Player p : viewers) viewerIds.add(p.getUniqueId());
+        if (diff.lastViewerIds == null || !diff.lastViewerIds.containsAll(viewerIds)) {
+            forceFullPush = true;
+        }
+        diff.lastViewerIds = viewerIds;
+
+        int total = mapIds.size();
+        if (diff.lastFrames == null || diff.lastFrames.length != total) {
+            diff.lastFrames = new byte[total][];
+            forceFullPush = true;
+        }
+
+        BufferedImage img;
+        try {
+            img = compositor.rasterize(frame, wallId);
+        } catch (Exception e) {
+            log.warning("CanvasProjector.renderFrame: rasterize failed wallId=" + wallId
+                    + " err=" + e.getMessage());
+            return 0;
+        }
+        int updated = 0;
+        try {
+            for (int i = 0; i < total; i++) {
+                int mapId = mapIds.get(i);
+                try {
+                    byte[] pixels = compositor.toPaletteSlice(img, i, widthMaps);
+                    boolean changed = diff.lastFrames[i] == null
+                            || !java.util.Arrays.equals(diff.lastFrames[i], pixels);
+                    if (changed) {
+                        canvasRenderer.update(mapId, pixels);
+                        diff.lastFrames[i] = pixels;
+                        updated++;
+                    }
+                    if (changed || forceFullPush) {
+                        pushToViewers(viewers, mapId, diff.lastFrames[i]);
+                    }
+                } catch (Exception e) {
+                    log.warning("CanvasProjector.renderFrame: quantize failed mapIndex=" + i
+                            + " mapId=" + mapId + " wallId=" + wallId
+                            + " err=" + e.getMessage());
+                }
+            }
+        } finally {
+            compositor.releaseToPool(img);
+        }
+        return updated;
     }
 }

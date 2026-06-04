@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
@@ -332,6 +332,16 @@ function showRefreshFlash(msg: string) {
           @click="ui.toggleRailNetwork()"
         >
           <TrainTrack class="size-4" />
+        </button>
+      </Tooltip>
+      <!-- 0.6 P2（B3）：时间轴（关键帧动画）管理 -->
+      <Tooltip :text="t.topbar.timelineManager">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
+          :class="ui.timelineManagerOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="ui.toggleTimelineManager()"
+        >
+          <Film class="size-4" />
         </button>
       </Tooltip>
       <Tooltip :text="t.topbar.help" shortcut="?">

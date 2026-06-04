@@ -11,6 +11,7 @@ import LogDrawer from '@/components/layout/LogDrawer.vue';
 import VariablePanel from '@/components/variables/VariablePanel.vue';
 import ScheduleManagerModal from '@/components/schedule/ScheduleManagerModal.vue';
 import RailNetworkModal from '@/components/rail/RailNetworkModal.vue';
+import TimelineManagerModal from '@/components/timeline/TimelineManagerModal.vue';
 import HomePage from '@/components/HomePage.vue';
 import TemplateGallery from '@/components/template/TemplateGallery.vue';
 import HelpModal from '@/components/HelpModal.vue';
@@ -194,5 +195,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     <ScheduleManagerModal />
     <!-- 0.4.4：铁路网络（线路 + 站点 + 车次 + 时刻表）管理 modal -->
     <RailNetworkModal v-if="ui.railNetworkOpen" @close="ui.closeRailNetwork()" />
+    <!-- 0.6 P2（B3）：时间轴（关键帧动画）管理 modal -->
+    <TimelineManagerModal />
   </div>
 </template>

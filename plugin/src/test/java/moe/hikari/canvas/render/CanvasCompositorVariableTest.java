@@ -174,7 +174,7 @@ class CanvasCompositorVariableTest {
         Layer l = new Layer(s.activeLayer().id(), s.activeLayer().name(),
                 true, false, 1.0f, BlendMode.NORMAL, elements);
         return new ProjectState(s.version(), s.canvas(), null,
-                List.of(l), l.id(), s.history());
+                List.of(l), l.id(), s.history(), null, null);
     }
 
     private static TextElement makeText(String id, String text) {

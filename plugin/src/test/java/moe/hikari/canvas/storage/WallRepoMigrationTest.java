@@ -96,7 +96,9 @@ class WallRepoMigrationTest {
         assertTrue(root.has("layers"), "missing layers");
         assertTrue(root.has("activeLayerId"), "missing activeLayerId");
         assertTrue(root.has("protocolVersion"), "missing protocolVersion");
-        assertEquals(2, root.get("protocolVersion").asInt());
+        // 0.6 v3：migrate 走 ProjectState round-trip 序列化，protocolVersion 跟随
+        // ProjectState.PROTOCOL_VERSION（v2→v3 干净切换）；引常量避免下次升版再扫。
+        assertEquals(ProjectState.PROTOCOL_VERSION, root.get("protocolVersion").asInt());
         assertEquals(1, root.get("layers").size(), "should wrap into single Default Layer");
     }
 

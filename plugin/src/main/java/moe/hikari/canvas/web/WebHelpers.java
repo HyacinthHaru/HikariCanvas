@@ -52,7 +52,16 @@ public final class WebHelpers {
     }
 
     static Integer intOrNull(Object v) {
-        return (v instanceof Number n) ? n.intValue() : null;
+        if (!(v instanceof Number n)) return null;
+        // 0.6 P1：越界 / 非有限值返 null（调用方按字段缺失走 INVALID_PAYLOAD），
+        // 防 Long/Double 超出 int 范围时 intValue() 静默回绕绕过语义范围检查
+        long l = n.longValue();
+        double d = n.doubleValue();
+        if (l > Integer.MAX_VALUE || l < Integer.MIN_VALUE
+                || Double.isNaN(d) || Double.isInfinite(d)) {
+            return null;
+        }
+        return n.intValue();
     }
 
     /** 解析 brush.point 的 payload {@code points: [[x, y, pressure], ...]} 为 {@link BrushPoint} 列表。 */

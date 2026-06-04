@@ -27,6 +27,7 @@ export const messages = {
             variableManager: '变量管理（动态数据）',
             scheduleManager: '列车时刻表（动态站牌）',
             railNetwork: '铁路网络（线路 / 站点 / 车次 / 时刻表）',
+            timelineManager: '时间轴（关键帧动画）',
         },
         wall: {
             copyId: (id: string) => `点击复制画板 ID：${id}`,
@@ -739,6 +740,72 @@ export const messages = {
             errorBadTimeFormat: '出发时间格式无效（应为 HH:mm 或 HH:mm:ss 24 小时制）',
             errorEmptyDestination: '终点不能为空',
         },
+        // 0.6 P2（B3）：时间轴最简面板（关键帧动画）。AE 风完整面板留 P4。
+        timeline: {
+            // Modal / 入口
+            manager: '时间轴（关键帧动画）',
+            modalTitle: '时间轴管理',
+            close: '关闭',
+            // 区块 1：时间轴列表
+            listHeader: '时间轴',
+            emptyList: '还没有时间轴。下面新建一条，就能给画板上的元素做动画了。',
+            durationLabel: '时长',
+            fpsLabel: '每秒帧数',
+            loopLabel: '播放方式',
+            selectAria: '选中这条时间轴',
+            deleteAria: '删除这条时间轴',
+            deleteConfirm: (name: string) => `删除时间轴「${name}」？它的所有关键帧都会一起没掉。`,
+            deleteConfirmYes: '删除',
+            deleteConfirmNo: '取消',
+            // 区块 2：新建表单
+            newHeader: '新建时间轴',
+            newName: '名称',
+            newNamePlaceholder: '留空自动起名',
+            newDuration: '时长（毫秒）',
+            newFps: '每秒帧数',
+            newLoop: '播放方式',
+            newSubmit: '新建',
+            // 播放方式选项（大白话）
+            loopOnce: '播放一次',
+            loopLoop: '循环播放',
+            loopPingPong: '来回播',
+            // 区块 3：关键帧列表
+            keyframesHeader: '关键帧',
+            emptyKeyframes: '这条时间轴还没有关键帧。在画布上选一个元素，用下面的表单加第一个关键帧。',
+            elementMissing: '（元素已删除）',
+            kfPropertyHeader: '属性',
+            kfTimeHeader: '时刻（毫秒）',
+            kfValueHeader: '数值',
+            kfDeleteAria: '删除这个关键帧',
+            // 区块 4：给选中元素加关键帧
+            addHeader: '给选中元素加关键帧',
+            addNoSelection: '先在画布上选中一个元素',
+            addMultiSelection: '一次只能给一个元素加关键帧（请单选）',
+            addProperty: '属性',
+            addTime: '时刻（毫秒）',
+            addValue: '数值',
+            addSubmit: '加关键帧',
+            // 属性大白话名
+            propX: '横坐标 X',
+            propY: '纵坐标 Y',
+            propW: '宽度',
+            propH: '高度',
+            propRotation: '旋转角度',
+            propOpacity: '不透明度',
+            // 区块 5：播放控制
+            playbackHeader: '播放控制',
+            play: '播放',
+            pause: '暂停',
+            rewind: '回到开头',
+            playbackHint: '播放控制会驱动游戏里真实画板的动画；编辑器内预览随后做。',
+            // 校验 / 错误（reason key 与 timelineLogic.validateCreateForm 对齐）
+            errDurationPositive: '时长必须是大于 0 的整数（毫秒）',
+            errDurationTooLong: '时长太长了（上限 600000 毫秒 = 10 分钟）',
+            errFpsPositive: '每秒帧数必须是大于 0 的整数',
+            errFpsTooHigh: '每秒帧数太高了（上限 240）',
+            errLoopMode: '播放方式无效',
+            errKeyframeTime: (max: number) => `时刻要落在 0 到 ${max} 毫秒之间`,
+        },
         // M24-A 新增：错误码 → 用户友好提示。M24-B 整修时挂到 wsClient / upload error handler
         errors: {
             // WebSocket / 协议级
@@ -848,6 +915,7 @@ export const messages = {
             variableManager: 'Variable manager (dynamic data)',
             scheduleManager: 'Train schedule (dynamic departure board)',
             railNetwork: 'Rail network (lines / stations / runs / timetable)',
+            timelineManager: 'Timeline (keyframe animation)',
         },
         wall: {
             copyId: (id: string) => `Click to copy wall id: ${id}`,
@@ -1556,6 +1624,72 @@ export const messages = {
             // Errors
             errorBadTimeFormat: 'Invalid time format (use HH:mm or HH:mm:ss 24h)',
             errorEmptyDestination: 'Destination cannot be empty',
+        },
+        // 0.6 P2 (B3): minimal timeline panel (keyframe animation). Full AE-style panel lands in P4.
+        timeline: {
+            // Modal / entry
+            manager: 'Timeline (keyframe animation)',
+            modalTitle: 'Timeline manager',
+            close: 'Close',
+            // Section 1: timeline list
+            listHeader: 'Timelines',
+            emptyList: 'No timelines yet. Create one below to start animating elements on the wall.',
+            durationLabel: 'Duration',
+            fpsLabel: 'Frames per second',
+            loopLabel: 'Playback',
+            selectAria: 'Select this timeline',
+            deleteAria: 'Delete this timeline',
+            deleteConfirm: (name: string) => `Delete timeline "${name}"? All of its keyframes go with it.`,
+            deleteConfirmYes: 'Delete',
+            deleteConfirmNo: 'Cancel',
+            // Section 2: create form
+            newHeader: 'New timeline',
+            newName: 'Name',
+            newNamePlaceholder: 'Leave blank to auto-name',
+            newDuration: 'Duration (ms)',
+            newFps: 'Frames per second',
+            newLoop: 'Playback',
+            newSubmit: 'Create',
+            // Playback options (plain wording)
+            loopOnce: 'Play once',
+            loopLoop: 'Loop',
+            loopPingPong: 'Back and forth',
+            // Section 3: keyframe list
+            keyframesHeader: 'Keyframes',
+            emptyKeyframes: 'No keyframes on this timeline yet. Select an element on the canvas and add the first one below.',
+            elementMissing: '(element deleted)',
+            kfPropertyHeader: 'Property',
+            kfTimeHeader: 'Time (ms)',
+            kfValueHeader: 'Value',
+            kfDeleteAria: 'Delete this keyframe',
+            // Section 4: add keyframe for the selected element
+            addHeader: 'Add keyframe for the selected element',
+            addNoSelection: 'Select an element on the canvas first',
+            addMultiSelection: 'Only one element at a time (please single-select)',
+            addProperty: 'Property',
+            addTime: 'Time (ms)',
+            addValue: 'Value',
+            addSubmit: 'Add keyframe',
+            // Property plain names
+            propX: 'X position',
+            propY: 'Y position',
+            propW: 'Width',
+            propH: 'Height',
+            propRotation: 'Rotation',
+            propOpacity: 'Opacity',
+            // Section 5: playback control
+            playbackHeader: 'Playback control',
+            play: 'Play',
+            pause: 'Pause',
+            rewind: 'Back to start',
+            playbackHint: 'Playback drives the animation on the real in-game wall; editor preview comes later.',
+            // Validation / errors (reason keys align with timelineLogic.validateCreateForm)
+            errDurationPositive: 'Duration must be a positive integer (ms)',
+            errDurationTooLong: 'Duration is too long (max 600000 ms = 10 minutes)',
+            errFpsPositive: 'Frames per second must be a positive integer',
+            errFpsTooHigh: 'Frames per second is too high (max 240)',
+            errLoopMode: 'Invalid playback mode',
+            errKeyframeTime: (max: number) => `Time must be between 0 and ${max} ms`,
         },
         // M24-A: error code → user-friendly message. Wire into wsClient / upload error handler in M24-B
         errors: {
