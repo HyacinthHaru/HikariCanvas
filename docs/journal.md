@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-05 · 0.6.0-P4 hotfix — dock 实测 3 bug（空 timeline 无从下手 / 设置不可见）
+
+用户实测 P4 dock，发现 3 个静态审查（4 视角 agent）漏掉的运行时/交互缺陷——agent 验证了代码逻辑
+（参数对不对 / 会不会崩），但没走"新建后用户怎么开始用"的完整操作流：
+
+- **新建 timeline 后 dock 空、无属性行、双击无反应**：`flatRows` 只列 `timeline.tracks` 里已有关键帧
+  轨的元素，新 timeline tracks 空 → 左树永远空 → 死锁（加帧入口在属性行 / 属性行需元素在 tracks /
+  元素进 tracks 需先加帧）。**dock 根本没接 `ui.selectedIds`**。修：`flatRows` 改 `ui.selectedIds ∪
+  tracks`——选中画布元素即在 dock 显示其全可动画属性（AE 工作流：选图层 → timeline 显示属性 → 加帧），
+  从无轨属性点 + / 双击建轨。
+- **点设置 popover 看不见（"没反应/dock 消失"）**：settings/easing popover 用 `bottom-full` 弹到 dock
+  上方画布区 + `z-30` 被 CanvasView overlay 盖住。修：settings 改 dock 内 header 下方（`top-11` +
+  `max-h` + overflow）确保在 dock 范围内可见；两 popover `z-30→z-50`。
+- **空 timeline 无引导**：主体 `flatRows` 空时显示提示（`dockSelectHint` i18n 中英）。
+
+**教训**：纯静态审查能抓代码逻辑 bug，抓不到"新建后怎么开始用"这类需走完整用户旅程的交互设计缺陷
+——这类要么实测、要么审查时显式推演端到端旅程。前端 474 不变 / vite build 过 / main 773 kB / 0 漂移。
+关联：`components/timeline/TimelineDock.vue` `i18n/messages.ts`
+
+---
+
 ## 2026-06-05 · 0.6.0-P4 — 前端 AE 风时间轴 dock（4 段实现 + 4 视角对抗审查修 4 major）
 
 把 P2 的"最简关键帧列表 modal"升级为 After Effects 风底部 dock。纯前端（后端 0 改动）；先 5 路侦察

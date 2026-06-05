@@ -18,6 +18,7 @@ import {
     Play, Pause, SkipBack, Plus, ChevronRight, ChevronDown, Film, X, Trash2, Spline, Settings,
 } from 'lucide-vue-next';
 import { useProjectStore } from '@/stores/project';
+import { useUiStore } from '@/stores/ui';
 import { useTimelineStore } from '@/stores/timeline';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
@@ -37,6 +38,7 @@ import EasingCurveEditor from './EasingCurveEditor.vue';
 import type { Easing, LoopMode, TriggerConfig } from '@/types/protocol';
 
 const project = useProjectStore();
+const ui = useUiStore();
 const store = useTimelineStore();
 const ws = getWsClient();
 const { t } = useI18n();
@@ -86,15 +88,22 @@ interface FlatRow {
 }
 const flatRows = computed<FlatRow[]>(() => {
     const t0 = tl.value;
-    if (!t0 || !t0.tracks) return [];
+    if (!t0) return [];
+    // 选中的画布元素 ∪ 已有轨道的元素——空 timeline 也能从选中元素加首帧建轨（AE 工作流：选图层 →
+    // timeline 显示其可动画属性 → 加关键帧）。否则 tracks 空时 dock 永远空、无属性行、无从下手。
+    const ids = new Set<string>([...ui.selectedIds, ...Object.keys(t0.tracks ?? {})]);
     const rows: FlatRow[] = [];
-    for (const elementId of Object.keys(t0.tracks).sort()) {
+    for (const elementId of [...ids].sort()) {
         const el = project.elementById(elementId);
         const elementType = el?.type ?? null;
         rows.push({ kind: 'element', elementId, elementType });
         if (store.isExpanded(elementId)) {
-            const trackKfs = t0.tracks[elementId] ?? [];
-            for (const property of keyframeablePropertiesFor(el)) {
+            const trackKfs = t0.tracks?.[elementId] ?? [];
+            // 元素存在 → 列全可动画属性（含无轨，可点 + 建轨）；元素已删（孤儿轨）→ 仅列已有轨属性
+            const props = el
+                ? keyframeablePropertiesFor(el)
+                : [...new Set(trackKfs.map(k => k.property))];
+            for (const property of props) {
                 const keyframes = trackKfs
                     .filter(k => k.property === property)
                     .map(k => ({ id: k.id, timeMs: k.timeMs }))
@@ -485,6 +494,12 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
         <!-- 轨道行（关键帧块可选中 / 拖拽；双击空白加帧） -->
         <div ref="tracksScrollRef" class="flex-1 overflow-y-auto overflow-x-hidden relative" @scroll="onTracksScroll">
           <div
+            v-if="flatRows.length === 0"
+            class="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-[color:var(--muted-foreground)] pointer-events-none"
+          >
+            {{ t.timeline.dockSelectHint }}
+          </div>
+          <div
             v-for="(row, i) in flatRows"
             :key="i"
             class="relative border-b border-[color:var(--border)]/40"
@@ -521,7 +536,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
     <!-- P4c：缓动曲线编辑器 popover（选中关键帧 + header 曲线按钮打开；向上弹出避屏幕底裁切） -->
     <div
       v-if="easingEditorOpen && hasSelectedKf"
-      class="absolute left-2 bottom-full mb-1 z-30 rounded-[var(--radius)] border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg"
+      class="absolute left-2 bottom-full mb-1 z-50 rounded-[var(--radius)] border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg"
     >
       <EasingCurveEditor :model-value="selectedEasing" @update:model-value="onEasingUpdate" />
     </div>
@@ -529,7 +544,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
     <!-- P4d：timeline 设置 popover（向上弹出） -->
     <div
       v-if="settingsOpen && tl"
-      class="absolute right-2 bottom-full mb-1 z-30 w-64 p-3 flex flex-col gap-2 rounded-[var(--radius)] border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg text-xs"
+      class="absolute right-2 top-11 z-50 w-64 max-h-[calc(100%-3.5rem)] overflow-y-auto p-3 flex flex-col gap-2 rounded-[var(--radius)] border border-[color:var(--border)] bg-[color:var(--card)] shadow-lg text-xs"
     >
       <label class="flex flex-col gap-1">
         <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.newName }}</span>
