@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-06-05 · 0.6.0-P4 hotfix-2 follow-up — dock 渲染 smoke test（客观验证 + 防回归）
+
+为根治"我没法在本地跑编辑器（要 MC 服务器）→ 漏运行时崩溃 → 用户当小白鼠"这个系统性问题，引入
+组件渲染 smoke test：`@vue/test-utils` + `happy-dom`，真实 mount `TimelineDock` + `EasingCurveEditor`，
+触发展开属性行 / 打开设置 / 渲染缓动预设（即 hotfix-2 崩溃的三条 propertyLabel / loopModeLabel /
+presetLabel 路径）。4 case 全绿——**客观证明 t.value 解包修复有效**（首跑时因 happy-dom locale 默认 en
+断言中文不匹配，但报错是 assertion 而非 error，正说明函数已正常返回文案、没崩；回退 `t.timeline`
+则会变 undefined error）。这类运行时崩溃以后 vitest/CI 就能拦。前端 474 → **478**（+4）。
+关联：`__tests__/TimelineDock.smoke.test.ts`（新）+ `package.json`（devDep @vue/test-utils + happy-dom）。
+
+---
+
 ## 2026-06-05 · 0.6.0-P4 hotfix-2 — dock 一展开就崩消失的真根因（ComputedRef 未解包）
 
 上一个 hotfix 修了 flatRows 死锁 + popover 定位，但用户实测 dock 仍"一点展开三角形就整栏消失"。
