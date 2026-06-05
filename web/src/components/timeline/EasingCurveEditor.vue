@@ -93,7 +93,8 @@ function onHandleUp(e: PointerEvent): void {
 }
 
 function presetLabel(type: string): string {
-    const m = t.timeline as unknown as Record<string, string>;
+    // t 是 ComputedRef（useI18n），script 内须 .value 解包——直接 t.timeline 是 undefined。
+    const m = t.value.timeline as unknown as Record<string, string>;
     const map: Record<string, string> = {
         linear: m.easingLinear, easeIn: m.easingEaseIn, easeOut: m.easingEaseOut, easeInOut: m.easingEaseInOut,
     };

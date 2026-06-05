@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-06-05 · 0.6.0-P4 hotfix-2 — dock 一展开就崩消失的真根因（ComputedRef 未解包）
+
+上一个 hotfix 修了 flatRows 死锁 + popover 定位，但用户实测 dock 仍"一点展开三角形就整栏消失"。
+拿到 console 报错 `Cannot read properties of undefined (reading 'propX')` / `'loopOnce'` 定位真根因：
+
+- **`useI18n()` 返回 `{ t: ComputedRef<Messages> }`，t 是 ComputedRef**。模板里 `t.timeline.x` 被 Vue
+  自动解包成 `t.value.timeline.x`（所以 header 正常显示），但 script 函数 `propertyLabel` / `loopModeLabel`
+  （dock）+ `presetLabel`（EasingCurveEditor）里写的 `const m = t.timeline` 拿到的是 ComputedRef 对象的
+  不存在属性 = **undefined** → 渲染属性行 / settings / 曲线编辑器时 `m['propX']` / `x.loopOnce` 抛错 →
+  Vue 渲染异常 → 整个 dock 崩溃消失。组件内 computed（tl/flatRows/durationMs）我都正确 `.value` 了，唯独
+  把外部来的 t 当成模板那样直接 `.timeline`。修：3 处 `t.timeline` → `t.value.timeline`（grep 扫全项目
+  确认无其他同类）。修后上一个 hotfix 的 flatRows/popover/提示才真正生效。
+
+**为什么 vite build / vitest / 对抗审查都没抓到**：① esbuild/rolldown 只转译不做完整类型检查，vue-tsc 在
+Node 25 跑不了（CLAUDE.md 已知），所以 `t.timeline`（ComputedRef 上不存在该属性）这种类型错误编译期静默；
+② vitest 测纯函数不渲染组件；③ 审查 agent 读代码看逻辑、不实际运行，没注意 ref 解包。**这类只有运行时
+或 vue-tsc 能抓**。教训：script 访问外部 ComputedRef 必须 `.value`；端到端交互改动应实测或加组件渲染
+smoke test，不能只靠"vite build 过"。
+
+前端 474 / vite build 过 / 0 baseline 漂移。关联：`TimelineDock.vue` `EasingCurveEditor.vue`
+
+---
+
 ## 2026-06-05 · 0.6.0-P4 hotfix — dock 实测 3 bug（空 timeline 无从下手 / 设置不可见）
 
 用户实测 P4 dock，发现 3 个静态审查（4 视角 agent）漏掉的运行时/交互缺陷——agent 验证了代码逻辑

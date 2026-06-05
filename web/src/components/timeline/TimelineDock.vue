@@ -326,7 +326,9 @@ function deleteTimeline(): void {
     settingsOpen.value = false;
 }
 function loopModeLabel(m: string): string {
-    const x = t.timeline as unknown as Record<string, string>;
+    // t 是 ComputedRef（useI18n），script 内必须 .value 解包——直接 t.timeline 是 undefined，
+    // 渲染时 x.loopOnce 抛 "reading 'loopOnce' of undefined" 致整个 dock 崩溃消失。
+    const x = t.value.timeline as unknown as Record<string, string>;
     const map: Record<string, string> = { once: x.loopOnce, loop: x.loopLoop, pingPong: x.loopPingPong };
     return map[m] ?? m;
 }
@@ -334,7 +336,8 @@ watch(settingsOpen, (open) => { if (!open) confirmDeleteTimeline.value = false; 
 
 // ---------- 标签 ----------
 function propertyLabel(p: string): string {
-    const m = t.timeline as unknown as Record<string, string>;
+    // t 是 ComputedRef，script 内须 .value 解包（同 loopModeLabel；否则展开属性行即崩）。
+    const m = t.value.timeline as unknown as Record<string, string>;
     return m['prop' + p.charAt(0).toUpperCase() + p.slice(1)] ?? p;
 }
 function elementLabel(row: FlatRow): string {
