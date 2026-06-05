@@ -792,6 +792,9 @@ export const messages = {
             propH: '高度',
             propRotation: '旋转角度',
             propOpacity: '不透明度',
+            propColor: '文字颜色',
+            propText: '文字内容',
+            propFill: '填充',
             // 区块 5：播放控制
             playbackHeader: '播放控制',
             play: '播放',
@@ -805,6 +808,14 @@ export const messages = {
             errFpsTooHigh: '每秒帧数太高了（上限 240）',
             errLoopMode: '播放方式无效',
             errKeyframeTime: (max: number) => `时刻要落在 0 到 ${max} 毫秒之间`,
+            // 区块 4：缓动方式（P3；大白话，不暴露贝塞尔术语）
+            addEasing: '缓动方式',
+            easingLinear: '匀速',
+            easingEaseIn: '由慢到快',
+            easingEaseOut: '由快到慢',
+            easingEaseInOut: '两头慢中间快',
+            easingCustom: '自定义曲线',
+            fillHint: '关键帧会记下元素当前的填充；想换填充先在右侧面板改好元素，再加关键帧。',
         },
         // M24-A 新增：错误码 → 用户友好提示。M24-B 整修时挂到 wsClient / upload error handler
         errors: {
@@ -1677,6 +1688,9 @@ export const messages = {
             propH: 'Height',
             propRotation: 'Rotation',
             propOpacity: 'Opacity',
+            propColor: 'Text color',
+            propText: 'Text content',
+            propFill: 'Fill',
             // Section 5: playback control
             playbackHeader: 'Playback control',
             play: 'Play',
@@ -1690,6 +1704,14 @@ export const messages = {
             errFpsTooHigh: 'Frames per second is too high (max 240)',
             errLoopMode: 'Invalid playback mode',
             errKeyframeTime: (max: number) => `Time must be between 0 and ${max} ms`,
+            // Section 4: easing (P3; plain wording, no bezier jargon)
+            addEasing: 'Easing',
+            easingLinear: 'Constant speed',
+            easingEaseIn: 'Slow then fast',
+            easingEaseOut: 'Fast then slow',
+            easingEaseInOut: 'Slow at both ends',
+            easingCustom: 'Custom curve',
+            fillHint: 'The keyframe captures the element\'s current fill; to change it, edit the element in the right panel first, then add the keyframe.',
         },
         // M24-A: error code → user-friendly message. Wire into wsClient / upload error handler in M24-B
         errors: {

@@ -3,6 +3,7 @@ package moe.hikari.canvas.render;
 import moe.hikari.canvas.state.BrushStrokeElement;
 import moe.hikari.canvas.state.CircleElement;
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.ImageElement;
 import moe.hikari.canvas.state.Keyframe;
@@ -13,6 +14,7 @@ import moe.hikari.canvas.state.PathElement;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.ShapeElement;
+import moe.hikari.canvas.state.StrictNumber;
 import moe.hikari.canvas.state.TextElement;
 import moe.hikari.canvas.state.Timeline;
 
@@ -23,28 +25,42 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 关键帧插值器（0.6 P2 引入）。数学权威定义见 {@code docs/rendering.md §9}；
- * 管线定位见 {@code docs/architecture.md §5.5}（输出帧 = Rasterize(Interpolate(state, timeMs))）。
+ * 关键帧插值器（0.6 P2 引入，P3 补全缓动 + 颜色/Fill/离散轨 + 变量 resolve）。
+ * 数学权威定义见 {@code docs/rendering.md §9}；管线定位见 {@code docs/architecture.md §5.5}
+ * （输出帧 = Rasterize(Interpolate(state, timeMs))）。
  *
  * <p><b>纯函数</b>：不依赖 Bukkit / DB / 时钟，任意线程可调；输出是临时 {@link ProjectState}
- * （record copy，只改值不改结构、不含 timelines、不持久化），与 {@code CanvasCompositor.maybeInterpolateText}
- * 的「record copy」范式一致。</p>
+ * （record copy，只改值不改结构、不含 timelines、不持久化）。变量支持经 {@link NumberResolver}
+ * seam 注入（生产 = {@code VariableInterpolator::resolveAsNumber} 经 AnimationTicker 按 wall
+ * 绑定；测试 / snapshot 路径不注 = 无变量支持）。</p>
  *
- * <p><b>P2 范围</b>（docs/timeline.md §10 / D4）：仅数值类属性
- * （{@link Keyframe#NUMERIC_PROPERTIES}：x/y/w/h/rotation/opacity）+ LINEAR 缓动。
- * 其余降级语义、P3 接管：</p>
+ * <p><b>P3 范围</b>（rendering.md §9.2–§9.5）：</p>
  * <ul>
- *   <li>非 LINEAR 缓动（EASE_* / CUBIC_BEZIER）一律按 LINEAR 求值（P3 落 cubic-bezier 双端求解器）</li>
- *   <li>颜色 / Fill / 离散类（text）属性轨整轨跳过（保持元素基值；P3 落 sRGB 线性插值与 step）</li>
- *   <li>数值轨中含 {@code ${var:X}} 字符串值（{@link KfValue.Str}）→ 整轨跳过（P3 接
- *       {@code VariableInterpolator.resolveAsNumber} 后参与插值，rendering.md §9.5）</li>
+ *   <li>缓动：{@link EasingSolver}（LINEAR / EASE_* 预设 / CUBIC_BEZIER，双端逐位等价）</li>
+ *   <li>数值轨（x/y/w/h/rotation/opacity）：{@code v = a + (b−a)×eased}；{@code ${var:X}} /
+ *       数字字符串值经 resolver 求值（无 resolver 时纯数字仍可用、变量引用退 0——§9.5 链终点）</li>
+ *   <li>颜色轨（{@code color}，仅 TextElement）：sRGB 线性空间插值（{@link ColorLerp}）；
+ *       含 {@code ${var:}} 的颜色值 P3 不支持，整轨跳过</li>
+ *   <li>Fill 轨（6 类几何/图标/笔刷元素）：同类型同 stop 数逐 stop 插值，否则 step</li>
+ *   <li>离散轨（{@code text}，仅 TextElement）：step 取 {@code timeMs ≤ t} 最近帧（首帧前取
+ *       首帧）；内容里的 {@code ${var:X}} 由 rasterize 的 {@code maybeInterpolateText} 统一 resolve</li>
  * </ul>
  *
- * <p>前端镜像 {@code interpolation.ts} 在 P3/P4 落地（编辑器本地预览）；游戏内输出以本类为唯一权威（D9）。</p>
+ * <p>前端镜像：{@code web/src/timeline/interpolation.ts}（编辑器本地预览用）；游戏内输出以
+ * 本类为唯一权威（D9）。</p>
  */
 public final class KeyframeInterpolator {
 
     private KeyframeInterpolator() {}
+
+    /**
+     * 数值轨 {@link KfValue.Str} 值（{@code ${var:X}} 模板 / 数字字符串）的求值 seam。
+     * 生产装配 {@code VariableInterpolator::resolveAsNumber}（已按 wall 绑定）；null = 无变量支持。
+     */
+    @FunctionalInterface
+    public interface NumberResolver {
+        double resolve(String raw);
+    }
 
     /**
      * loopMode 时间映射：把从播放起点累计的墙钟位置 {@code posMs} 映射进 {@code [0, durationMs]}。
@@ -70,43 +86,149 @@ public final class KeyframeInterpolator {
         };
     }
 
+    // ---------- 取值核心（rendering.md §9.1） ----------
+
     /**
-     * 求单条属性轨在时刻 {@code t} 的插值数值（rendering.md §9.1 取值规则）：
-     *
-     * <ul>
-     *   <li>{@code t ≤ 首帧.timeMs} → 首帧值；{@code t ≥ 末帧.timeMs} → 末帧值（不外插）</li>
-     *   <li>区间内：{@code local = (t − a.timeMs) / (b.timeMs − a.timeMs)}，
-     *       {@code v = a + (b − a) × local}（P2 一律 LINEAR）</li>
-     *   <li>重合帧（相邻 timeMs 相等）：取后一帧值（实现上「最大的 timeMs ≤ t」天然落在重合组末位，
-     *       区间右端严格大于 t，无除零）</li>
-     * </ul>
-     *
-     * @param kfs 单 (element, property) 轨，按 timeMs 升序（P1 op 层保证）
-     * @return 插值结果；轨为空 / 含非 {@link KfValue.Num} 值时返回 {@code null}（整轨跳过，P2 降级语义）
+     * 区间定位结果：{@code b == null} 表示边界命中（直接取 {@code a} 的值，不插值）；
+     * 否则 {@code eased} 为经 {@code a.easing()} 映射后的进度。{@code ai} 是 {@code a}
+     * 在轨内的真实索引（镜像 TS 端 Span.ai——P3 审查确认项 #0/#4：用 equals 反查
+     * indexOf 在全等重合帧下会错位，双端取值分叉）。
      */
-    static Double sampleNumeric(List<Keyframe> kfs, int t) {
-        if (kfs == null || kfs.isEmpty()) return null;
-        for (Keyframe k : kfs) {
-            if (!(k.value() instanceof KfValue.Num)) return null;   // 含变量引用/错型值 → 整轨跳过（P3 接管）
-        }
+    private record Span(Keyframe a, int ai, Keyframe b, double eased) {}
+
+    /**
+     * §9.1 取值规则的共享实现：首帧前 / 末帧后取端帧（不外插）；区间内算
+     * {@code local = (t − a.timeMs) / (b.timeMs − a.timeMs)} 并经左端帧 easing 映射；
+     * 重合帧组天然取末位（最大的 {@code timeMs ≤ t}），区间右端严格大于 t，无除零。
+     */
+    private static Span spanAt(List<Keyframe> kfs, int t) {
         Keyframe first = kfs.get(0);
         Keyframe last = kfs.get(kfs.size() - 1);
-        if (t <= first.timeMs()) return ((KfValue.Num) first.value()).value();
-        if (t >= last.timeMs()) return ((KfValue.Num) last.value()).value();
-
-        // 找最大的 i 使 kfs[i].timeMs <= t；重合组中天然取末位（取后一帧语义）
+        if (t <= first.timeMs()) return new Span(first, 0, null, 0.0);
+        if (t >= last.timeMs()) return new Span(last, kfs.size() - 1, null, 0.0);
         int i = 0;
         for (int j = 1; j < kfs.size(); j++) {
             if (kfs.get(j).timeMs() <= t) i = j;
             else break;
         }
         Keyframe a = kfs.get(i);
-        Keyframe b = kfs.get(i + 1);   // 必存在且 b.timeMs > t >= a.timeMs（上面末帧分支兜住）
+        Keyframe b = kfs.get(i + 1);   // 必存在且 b.timeMs > t >= a.timeMs（末帧分支兜住）
         double local = (t - a.timeMs()) / (double) (b.timeMs() - a.timeMs());
-        double va = ((KfValue.Num) a.value()).value();
-        double vb = ((KfValue.Num) b.value()).value();
-        // P2：所有 easing 按 LINEAR 求值（eased = local）；P3 落 rendering.md §9.3 求解器
-        return va + (vb - va) * local;
+        return new Span(a, i, b, EasingSolver.ease(a.easing(), local));
+    }
+
+    /**
+     * 求单条数值属性轨在时刻 {@code t} 的插值结果。值可为 {@link KfValue.Num} 或
+     * {@link KfValue.Str}（经 {@code resolver} 求值；无 resolver 时纯数字字符串本地解析、
+     * 变量引用退 0）。含 {@link KfValue.FillV} 等错型值 → 整轨跳过（返 null）。
+     */
+    static Double sampleNumeric(List<Keyframe> kfs, int t, NumberResolver resolver) {
+        if (kfs == null || kfs.isEmpty()) return null;
+        double[] values = new double[kfs.size()];
+        for (int i = 0; i < kfs.size(); i++) {
+            Double v = numericValueOf(kfs.get(i).value(), resolver);
+            if (v == null) return null;   // 错型值 → 整轨跳过
+            values[i] = v;
+        }
+        Span s = spanAt(kfs, t);
+        if (s.b() == null) return values[s.ai()];
+        double va = values[s.ai()];
+        double vb = values[s.ai() + 1];
+        return va + (vb - va) * s.eased();
+    }
+
+    private static Double numericValueOf(KfValue v, NumberResolver resolver) {
+        if (v instanceof KfValue.Num n) return n.value();
+        if (v instanceof KfValue.Str s) {
+            String raw = s.value();
+            if (resolver != null) return resolver.resolve(raw);
+            // 无变量支持：纯数字字符串仍可用；变量引用退 fallback 链终点 0（§9.5）
+            if (raw != null && raw.indexOf("${var:") >= 0) return 0.0;
+            return StrictNumber.parse(raw);
+        }
+        return null;
+    }
+
+    /**
+     * 颜色轨采样（仅 TextElement.color 用）。全轨必须是 hex 字符串（{@link KfValue.Str}）；
+     * 含 {@code ${var:}} 或错型 → 整轨跳过（P3 不支持变量颜色）。区间内
+     * {@link ColorLerp#lerpHex}（内部解析失败自然 step）。
+     */
+    static String sampleColor(List<Keyframe> kfs, int t) {
+        if (kfs == null || kfs.isEmpty()) return null;
+        for (Keyframe k : kfs) {
+            if (!(k.value() instanceof KfValue.Str s)) return null;
+            if (s.value() == null || s.value().indexOf("${var:") >= 0) return null;
+        }
+        Span sp = spanAt(kfs, t);
+        String a = ((KfValue.Str) kfs.get(sp.ai()).value()).value();
+        if (sp.b() == null) return a;
+        String b = ((KfValue.Str) kfs.get(sp.ai() + 1).value()).value();
+        return ColorLerp.lerpHex(a, b, sp.eased());
+    }
+
+    /**
+     * Fill 轨采样。值为 {@link KfValue.FillV}，或 {@link KfValue.Str} hex（归一化为 SolidFill，
+     * P1 op 层允许的形态）；含 {@code ${var:}} 或错型 → 整轨跳过。区间内
+     * {@link ColorLerp#lerpFill}（类型 / stop 数不一致内部自然 step）。
+     */
+    static Fill sampleFill(List<Keyframe> kfs, int t) {
+        if (kfs == null || kfs.isEmpty()) return null;
+        Fill[] fills = new Fill[kfs.size()];
+        for (int i = 0; i < kfs.size(); i++) {
+            KfValue v = kfs.get(i).value();
+            if (v instanceof KfValue.FillV f && f.fill() != null) {
+                fills[i] = f.fill();
+            } else if (v instanceof KfValue.Str s && s.value() != null
+                    && s.value().indexOf("${var:") < 0) {
+                fills[i] = Fill.solid(s.value());
+            } else {
+                return null;
+            }
+        }
+        Span sp = spanAt(kfs, t);
+        if (sp.b() == null) return fills[sp.ai()];
+        return ColorLerp.lerpFill(fills[sp.ai()], fills[sp.ai() + 1], sp.eased());
+    }
+
+    /**
+     * 离散轨采样（text）：step 取 {@code timeMs ≤ t} 的最近帧；首帧前取首帧（§9.2 边界）。
+     * 全轨必须是 {@link KfValue.Str}（内容可含 {@code ${var:X}}——由 rasterize 的
+     * {@code maybeInterpolateText} 每帧统一 resolve，§9.5）。
+     */
+    static String sampleText(List<Keyframe> kfs, int t) {
+        if (kfs == null || kfs.isEmpty()) return null;
+        for (Keyframe k : kfs) {
+            if (!(k.value() instanceof KfValue.Str)) return null;
+        }
+        Keyframe pick = kfs.get(0);
+        for (Keyframe k : kfs) {
+            if (k.timeMs() <= t) pick = k;
+            else break;
+        }
+        return ((KfValue.Str) pick.value()).value();
+    }
+
+    // ---------- 入口 ----------
+
+    /** 每元素的插值结果集（has* 区分「未动画」与「动画到 null」——后者不会发生但防御留位）。 */
+    static final class AnimatedValues {
+        Map<String, Double> numbers;
+        String color;
+        boolean hasColor;
+        Fill fill;
+        boolean hasFill;
+        String text;
+        boolean hasText;
+
+        boolean isEmpty() {
+            return (numbers == null || numbers.isEmpty()) && !hasColor && !hasFill && !hasText;
+        }
+    }
+
+    /** P2 兼容入口：无变量支持（snapshot / 测试路径）。 */
+    public static ProjectState interpolate(ProjectState base, Timeline timeline, int timeMs) {
+        return interpolate(base, timeline, timeMs, null);
     }
 
     /**
@@ -117,27 +239,60 @@ public final class KeyframeInterpolator {
      *
      * <p>返回的临时 state 不含 timelines / activeTimelineId（rasterize 不读它们），
      * <b>不得</b>持久化或交给 EditSession。</p>
+     *
+     * @param resolver 数值轨变量求值 seam（AnimationTicker 注入按 wall 绑定的
+     *                 {@code VariableInterpolator::resolveAsNumber}）；null = 无变量支持
      */
-    public static ProjectState interpolate(ProjectState base, Timeline timeline, int timeMs) {
+    public static ProjectState interpolate(ProjectState base, Timeline timeline, int timeMs,
+                                           NumberResolver resolver) {
         if (base == null || timeline == null || timeline.tracks().isEmpty()) return base;
 
-        // elementId → (property → 插值结果)
-        Map<String, Map<String, Double>> animated = new HashMap<>();
+        // P3 审查确认项 #5：帧内同一 raw 只 resolve 一次（memo）——变量 push 落在两次读
+        // 之间会让同帧的 va/vb 取自不同快照（单帧撕裂）；memo 保证整帧读同一变量快照
+        if (resolver != null) {
+            NumberResolver delegate = resolver;
+            Map<String, Double> memo = new HashMap<>();
+            resolver = raw -> memo.computeIfAbsent(raw, delegate::resolve);
+        }
+
+        Map<String, AnimatedValues> animated = new HashMap<>();
         for (Map.Entry<String, List<Keyframe>> track : timeline.tracks().entrySet()) {
             // 同元素轨内多属性混排（方案 B）：按 property 分组后逐属性求值
             Map<String, List<Keyframe>> byProp = new LinkedHashMap<>();
             for (Keyframe k : track.getValue()) {
-                if (!Keyframe.NUMERIC_PROPERTIES.contains(k.property())) continue;  // P2 仅数值类
+                if (!Keyframe.PROPERTIES.contains(k.property())) continue;
                 byProp.computeIfAbsent(k.property(), p -> new ArrayList<>()).add(k);
             }
-            Map<String, Double> values = null;
+            AnimatedValues out = new AnimatedValues();
             for (Map.Entry<String, List<Keyframe>> prop : byProp.entrySet()) {
-                Double v = sampleNumeric(prop.getValue(), timeMs);
-                if (v == null || !Double.isFinite(v)) continue;
-                if (values == null) values = new HashMap<>();
-                values.put(prop.getKey(), v);
+                String name = prop.getKey();
+                List<Keyframe> kfs = prop.getValue();
+                if (Keyframe.NUMERIC_PROPERTIES.contains(name)) {
+                    Double v = sampleNumeric(kfs, timeMs, resolver);
+                    if (v == null || !Double.isFinite(v)) continue;
+                    if (out.numbers == null) out.numbers = new HashMap<>();
+                    out.numbers.put(name, v);
+                } else if ("color".equals(name)) {
+                    String c = sampleColor(kfs, timeMs);
+                    if (c != null) {
+                        out.color = c;
+                        out.hasColor = true;
+                    }
+                } else if ("fill".equals(name)) {
+                    Fill f = sampleFill(kfs, timeMs);
+                    if (f != null) {
+                        out.fill = f;
+                        out.hasFill = true;
+                    }
+                } else if ("text".equals(name)) {
+                    String s = sampleText(kfs, timeMs);
+                    if (s != null) {
+                        out.text = s;
+                        out.hasText = true;
+                    }
+                }
             }
-            if (values != null) animated.put(track.getKey(), values);
+            if (!out.isEmpty()) animated.put(track.getKey(), out);
         }
         if (animated.isEmpty()) return base;
 
@@ -148,10 +303,10 @@ public final class KeyframeInterpolator {
             List<Element> src = l.elements();
             for (int i = 0; i < src.size(); i++) {
                 Element e = src.get(i);
-                Map<String, Double> props = animated.get(e.id());
-                if (props == null) continue;
+                AnimatedValues v = animated.get(e.id());
+                if (v == null) continue;
                 if (replaced == null) replaced = new ArrayList<>(src);
-                replaced.set(i, withAnimated(e, props));
+                replaced.set(i, withAnimated(e, v));
                 any = true;
             }
             outLayers.add(replaced == null ? l
@@ -164,25 +319,30 @@ public final class KeyframeInterpolator {
                 outLayers, base.activeLayerId(), base.history(), null, null);
     }
 
-    // ---------- 元素重建（8 sealed 子类逐型替换数值属性）----------
+    // ---------- 元素重建（8 sealed 子类逐型替换） ----------
 
     private static int ix(Map<String, Double> p, String key, int fallback) {
+        if (p == null) return fallback;
         Double v = p.get(key);
-        return v == null ? fallback : (int) Math.round(v);
+        return v == null ? fallback : StrictNumber.clampInt(Math.round(v));
     }
 
     private static Float opacityOf(Map<String, Double> p, Float fallback) {
+        if (p == null) return fallback;
         Double v = p.get("opacity");
         if (v == null) return fallback;
         return (float) Math.min(1.0, Math.max(0.0, v));
     }
 
     /**
-     * 用插值结果重建元素 record（仅 x/y/w/h/rotation/opacity 六数值属性；其余字段原样保留）。
-     * x/y/w/h/rotation 四舍五入回 int（record 字段类型）；opacity 钳 [0,1]。
-     * w/h 插出非正值不钳——渲染器入口已有 {@code w<=0} 守卫（M16.3），语义为「元素暂不可见」。
+     * 用插值结果重建元素 record。数值六属性全类型适用；{@code color}/{@code text} 仅
+     * TextElement；{@code fill} 仅 Rect/Icon/Path/Circle/Shape/Brush（按 record 字段
+     * 适用性，错配的轨静默忽略——op 层不做属性×类型校验，渲染侧兜底）。
+     * x/y/w/h/rotation 四舍五入回 int；opacity 钳 [0,1]。w/h 插出非正值不钳——渲染器
+     * 入口已有 {@code w<=0} 守卫（M16.3），语义为「元素暂不可见」。
      */
-    static Element withAnimated(Element e, Map<String, Double> p) {
+    static Element withAnimated(Element e, AnimatedValues v) {
+        Map<String, Double> p = v.numbers;
         int x = ix(p, "x", e.x());
         int y = ix(p, "y", e.y());
         int w = ix(p, "w", e.w());
@@ -191,27 +351,36 @@ public final class KeyframeInterpolator {
         Float opacity = opacityOf(p, e.opacity());
         return switch (e) {
             case TextElement t -> new TextElement(t.id(), x, y, w, h, rotation,
-                    t.locked(), t.visible(), t.text(), t.fontId(), t.fontSize(), t.color(),
+                    t.locked(), t.visible(),
+                    v.hasText ? v.text : t.text(),
+                    t.fontId(), t.fontSize(),
+                    v.hasColor ? v.color : t.color(),
                     t.align(), t.letterSpacing(), t.lineHeight(), t.vertical(), t.effects(),
                     opacity, t.blendMode(), t.renderMode(), t.bold(), t.italic());
             case RectElement r -> new RectElement(r.id(), x, y, w, h, rotation,
-                    r.locked(), r.visible(), r.fill(), r.stroke(),
-                    opacity, r.blendMode(), r.renderMode());
+                    r.locked(), r.visible(),
+                    v.hasFill ? v.fill : r.fill(),
+                    r.stroke(), opacity, r.blendMode(), r.renderMode());
             case IconElement ic -> new IconElement(ic.id(), x, y, w, h, rotation,
                     ic.locked(), ic.visible(), ic.source(), ic.tint(),
-                    opacity, ic.blendMode(), ic.renderMode(), ic.fill());
+                    opacity, ic.blendMode(), ic.renderMode(),
+                    v.hasFill ? v.fill : ic.fill());
             case PathElement pa -> new PathElement(pa.id(), x, y, w, h, rotation,
-                    pa.locked(), pa.visible(), pa.d(), pa.fill(), pa.stroke(),
-                    pa.markerStart(), pa.markerEnd(),
+                    pa.locked(), pa.visible(), pa.d(),
+                    v.hasFill ? v.fill : pa.fill(),
+                    pa.stroke(), pa.markerStart(), pa.markerEnd(),
                     opacity, pa.blendMode(), pa.renderMode());
             case CircleElement c -> new CircleElement(c.id(), x, y, w, h, rotation,
-                    c.locked(), c.visible(), c.fill(), c.stroke(),
-                    opacity, c.blendMode(), c.renderMode());
+                    c.locked(), c.visible(),
+                    v.hasFill ? v.fill : c.fill(),
+                    c.stroke(), opacity, c.blendMode(), c.renderMode());
             case ShapeElement sh -> new ShapeElement(sh.id(), x, y, w, h, rotation,
                     sh.locked(), sh.visible(), sh.kind(), sh.sides(), sh.innerRatio(),
-                    sh.fill(), sh.stroke(), opacity, sh.blendMode(), sh.renderMode());
+                    v.hasFill ? v.fill : sh.fill(),
+                    sh.stroke(), opacity, sh.blendMode(), sh.renderMode());
             case BrushStrokeElement br -> new BrushStrokeElement(br.id(), x, y, w, h, rotation,
-                    br.locked(), br.visible(), br.points(), br.size(), br.fill(),
+                    br.locked(), br.visible(), br.points(), br.size(),
+                    v.hasFill ? v.fill : br.fill(),
                     br.pressureSize(), br.pressureOpacity(),
                     opacity, br.blendMode(), br.renderMode());
             case ImageElement im -> new ImageElement(im.id(), x, y, w, h, rotation,

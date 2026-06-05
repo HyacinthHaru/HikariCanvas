@@ -22,17 +22,17 @@ import { useProjectStore } from '@/stores/project';
 import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
-import type { Element, Timeline, TriggerConfig } from '@/types/protocol';
+import type { EasingType, Element, KfValue, Timeline, TriggerConfig } from '@/types/protocol';
 import {
     CREATE_FORM_DEFAULTS,
-    KEYFRAMEABLE_PROPERTIES,
+    EASING_TYPES,
     LOOP_MODES,
     type CreateFormInput,
-    type KeyframeProperty,
-    defaultValueFor,
+    defaultValueForExtended,
     formatKeyframeValue,
     groupKeyframesByElement,
     isValidKeyframeTime,
+    keyframeablePropertiesFor,
     shortElementId,
     validateCreateForm,
 } from './timelineLogic';
@@ -146,14 +146,48 @@ const selectedElementId = computed<string | null>(() =>
 const selectedElement = computed<Element | null>(() =>
     selectedElementId.value ? project.elementById(selectedElementId.value) : null);
 
-const addProperty = ref<KeyframeProperty>('opacity');
+const addProperty = ref<string>('opacity');
 const addTimeMs = ref<number>(0);
+const addEasing = ref<EasingType>('linear');
 const addSubmitting = ref(false);
 const addError = ref<string | null>(null);
 
-/** 默认值随 property / 选中元素变化自动取元素当前属性值（opacity null → 1）。 */
-const addDefaultValue = computed<number>(() =>
-    defaultValueFor(selectedElement.value, addProperty.value));
+/** 选中元素可加关键帧的属性列表（按类型：text 加 color/text，几何加 fill，image 仅数值）。 */
+const addPropertyOptions = computed<string[]>(() =>
+    keyframeablePropertiesFor(selectedElement.value));
+
+// 选中元素切换后，若当前 addProperty 已不在新列表里（如从 text 切到 rect），回落到 opacity。
+watch(addPropertyOptions, (opts) => {
+    if (!opts.includes(addProperty.value)) addProperty.value = 'opacity';
+});
+
+/**
+ * 默认值随 property / 选中元素变化自动取元素当前属性值。color/text 可由用户改写，故另存
+ * editableColor / editableText 两个本地态（property 变化时从默认值重置）。
+ */
+const addDefaultValue = computed<KfValue>(() =>
+    defaultValueForExtended(selectedElement.value, addProperty.value));
+
+const editableColor = ref<string>('#000000');
+const editableText = ref<string>('');
+
+// property 或选中元素切换 → 用新默认值重置可编辑态（color/text）。
+watch([addProperty, selectedElement], () => {
+    const dv = defaultValueForExtended(selectedElement.value, addProperty.value);
+    if (addProperty.value === 'color' && typeof dv === 'string') editableColor.value = dv;
+    if (addProperty.value === 'text' && typeof dv === 'string') editableText.value = dv;
+}, { immediate: true });
+
+/** 当前 property 的展示分类（控制区块 4 用哪种值输入控件）。 */
+const addValueKind = computed<'numeric' | 'color' | 'text' | 'fill'>(() => {
+    if (addProperty.value === 'color') return 'color';
+    if (addProperty.value === 'text') return 'text';
+    if (addProperty.value === 'fill') return 'fill';
+    return 'numeric';
+});
+
+/** fill 属性时的当前填充只读展示文本（P3 不做 fill 编辑器，直传元素当前 fill）。 */
+const currentFillLabel = computed<string>(() => formatKeyframeValue(addDefaultValue.value));
 
 /** 禁用条件：无 timeline / 无单选元素。tooltip 文案由模板按情形选。 */
 const addDisabled = computed<boolean>(() =>
@@ -177,10 +211,19 @@ async function submitAddKeyframe(): Promise<void> {
     addError.value = null;
     addSubmitting.value = true;
     try {
-        // MVP：value 取元素当前属性值（数值类）；easing 固定 linear。
+        // value 按 property 类别构造：color/text 取可编辑态，fill 直传元素当前 fill，
+        // 数值取默认值；easing 取下拉选择（P3）。
+        let value: KfValue;
+        if (addProperty.value === 'color') {
+            value = editableColor.value;
+        } else if (addProperty.value === 'text') {
+            value = editableText.value;
+        } else {
+            value = addDefaultValue.value;   // fill（直传 Fill）或数值
+        }
         await ws.sendKeyframeAdd(
             tl.id, eid, addProperty.value, addTimeMs.value,
-            addDefaultValue.value, { type: 'linear' },
+            value, { type: addEasing.value },
         );
     } catch (e) {
         addError.value = (e as Error).message;
@@ -255,7 +298,21 @@ function propertyLabel(property: string): string {
         case 'h': return t.value.timeline.propH;
         case 'rotation': return t.value.timeline.propRotation;
         case 'opacity': return t.value.timeline.propOpacity;
+        case 'color': return t.value.timeline.propColor;
+        case 'text': return t.value.timeline.propText;
+        case 'fill': return t.value.timeline.propFill;
         default: return property;
+    }
+}
+
+/** easing 裸值 → 大白话短文案（linear 在列表行不显示，见模板）。 */
+function easingLabel(easing: string): string {
+    switch (easing) {
+        case 'easeIn': return t.value.timeline.easingEaseIn;
+        case 'easeOut': return t.value.timeline.easingEaseOut;
+        case 'easeInOut': return t.value.timeline.easingEaseInOut;
+        case 'cubicBezier': return t.value.timeline.easingCustom;   // P3 下拉无此项；自定义曲线标签
+        default: return t.value.timeline.easingLinear;
     }
 }
 
@@ -423,6 +480,10 @@ watch(activeTimelineId, () => {
                   <span class="w-24 truncate">{{ propertyLabel(kf.property) }}</span>
                   <span class="w-20 font-mono text-[color:var(--muted-foreground)]">{{ kf.timeMs }}ms</span>
                   <span class="flex-1 truncate font-mono">{{ formatKeyframeValue(kf.value) }}</span>
+                  <span v-if="kf.easing && kf.easing.type !== 'linear'"
+                        class="px-1.5 py-0.5 rounded bg-[color:var(--secondary)] text-[10px] text-[color:var(--muted-foreground)]">
+                    {{ easingLabel(kf.easing.type) }}
+                  </span>
                   <button class="p-1 rounded hover:bg-[color:var(--destructive)]/20"
                           @click="deleteKeyframe(kf.id)"
                           :disabled="kfDeleteSubmittingId === kf.id"
@@ -441,11 +502,11 @@ watch(activeTimelineId, () => {
           <p v-if="addDisabled" class="text-[10px] text-[color:var(--muted-foreground)] italic">
             {{ addDisabledReason }}
           </p>
-          <div class="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
+          <div class="grid grid-cols-[1fr_1fr] gap-2 items-end">
             <label class="block">
               <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.timeline.addProperty }}</span>
               <select class="hc-input mt-0.5" v-model="addProperty" :disabled="addDisabled">
-                <option v-for="p in KEYFRAMEABLE_PROPERTIES" :key="p" :value="p">{{ propertyLabel(p) }}</option>
+                <option v-for="p in addPropertyOptions" :key="p" :value="p">{{ propertyLabel(p) }}</option>
               </select>
             </label>
             <label class="block">
@@ -455,6 +516,41 @@ watch(activeTimelineId, () => {
                      :disabled="addDisabled"
                      min="0" :max="selectedTimeline.durationMs" step="1" />
             </label>
+            <label class="block">
+              <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.timeline.addEasing }}</span>
+              <select class="hc-input mt-0.5" v-model="addEasing" :disabled="addDisabled">
+                <option v-for="e in EASING_TYPES" :key="e" :value="e">{{ easingLabel(e) }}</option>
+              </select>
+            </label>
+            <!-- 值输入：随 property 类别切换控件 -->
+            <label class="block">
+              <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ t.timeline.addValue }}</span>
+              <!-- color：取色器 + hex 文本 -->
+              <div v-if="addValueKind === 'color'" class="flex items-center gap-1 mt-0.5">
+                <input type="color" class="h-7 w-9 rounded border border-[color:var(--border)] bg-[color:var(--background)]"
+                       v-model="editableColor" :disabled="addDisabled" />
+                <input type="text" class="hc-input font-mono"
+                       v-model="editableColor" :disabled="addDisabled" maxlength="9" />
+              </div>
+              <!-- text：文本输入 -->
+              <input v-else-if="addValueKind === 'text'" type="text" class="hc-input mt-0.5"
+                     v-model="editableText" :disabled="addDisabled" maxlength="256" />
+              <!-- fill：只读展示元素当前填充（P3 不做 fill 编辑器） -->
+              <div v-else-if="addValueKind === 'fill'"
+                   class="hc-input mt-0.5 flex items-center text-[color:var(--muted-foreground)] font-mono">
+                {{ currentFillLabel }}
+              </div>
+              <!-- numeric：只读展示当前数值 -->
+              <div v-else
+                   class="hc-input mt-0.5 flex items-center font-mono">
+                {{ addDefaultValue }}
+              </div>
+            </label>
+          </div>
+          <p v-if="addValueKind === 'fill' && !addDisabled" class="text-[10px] text-[color:var(--muted-foreground)] italic">
+            {{ t.timeline.fillHint }}
+          </p>
+          <div class="flex items-center gap-2">
             <button class="hc-btn px-3 py-1 text-xs rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 flex items-center gap-1 disabled:opacity-40"
                     :disabled="addDisabled || addSubmitting"
                     :title="addDisabled ? addDisabledReason : ''"
@@ -462,11 +558,8 @@ watch(activeTimelineId, () => {
               <Plus class="size-3" />
               {{ t.timeline.addSubmit }}
             </button>
+            <span v-if="addError" class="text-[color:var(--destructive)] text-[10px]">{{ addError }}</span>
           </div>
-          <p v-if="!addDisabled" class="text-[10px] text-[color:var(--muted-foreground)]">
-            {{ t.timeline.addValue }}: <span class="font-mono">{{ addDefaultValue }}</span>
-          </p>
-          <span v-if="addError" class="text-[color:var(--destructive)] text-[10px]">{{ addError }}</span>
         </section>
 
         <!-- 区块 5：播放控制 -->

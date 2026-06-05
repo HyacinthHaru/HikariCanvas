@@ -100,21 +100,21 @@ class KeyframeInterpolatorTest {
     @Test
     void sampleNumeric_beforeFirstAndAfterLastNoExtrapolation() {
         List<Keyframe> kfs = List.of(numKf(100, 10.0), numKf(300, 30.0));
-        assertEquals(10.0, KeyframeInterpolator.sampleNumeric(kfs, 0), 1e-9, "首帧前 → 首帧值");
-        assertEquals(10.0, KeyframeInterpolator.sampleNumeric(kfs, 100), 1e-9, "正好首帧 → 首帧值");
-        assertEquals(30.0, KeyframeInterpolator.sampleNumeric(kfs, 300), 1e-9, "正好末帧 → 末帧值");
-        assertEquals(30.0, KeyframeInterpolator.sampleNumeric(kfs, 9999), 1e-9, "末帧后 → 末帧值（不外插）");
+        assertEquals(10.0, KeyframeInterpolator.sampleNumeric(kfs, 0, null), 1e-9, "首帧前 → 首帧值");
+        assertEquals(10.0, KeyframeInterpolator.sampleNumeric(kfs, 100, null), 1e-9, "正好首帧 → 首帧值");
+        assertEquals(30.0, KeyframeInterpolator.sampleNumeric(kfs, 300, null), 1e-9, "正好末帧 → 末帧值");
+        assertEquals(30.0, KeyframeInterpolator.sampleNumeric(kfs, 9999, null), 1e-9, "末帧后 → 末帧值（不外插）");
     }
 
     @Test
     void sampleNumeric_linearWithinSegment() {
         List<Keyframe> kfs = List.of(numKf(0, 0.0), numKf(1000, 100.0));
         // local = (250-0)/(1000-0) = 0.25 → 0 + 100*0.25 = 25
-        assertEquals(25.0, KeyframeInterpolator.sampleNumeric(kfs, 250), 1e-9, "区间内 LINEAR 手算");
-        assertEquals(50.0, KeyframeInterpolator.sampleNumeric(kfs, 500), 1e-9, "区间中点");
+        assertEquals(25.0, KeyframeInterpolator.sampleNumeric(kfs, 250, null), 1e-9, "区间内 LINEAR 手算");
+        assertEquals(50.0, KeyframeInterpolator.sampleNumeric(kfs, 500, null), 1e-9, "区间中点");
         // 三帧：区间 [1000,2000] 上 t=1750 → local=0.75 → 100+(40-100)*0.75 = 55
         List<Keyframe> three = List.of(numKf(0, 0.0), numKf(1000, 100.0), numKf(2000, 40.0));
-        assertEquals(55.0, KeyframeInterpolator.sampleNumeric(three, 1750), 1e-9, "第二段 LINEAR 手算");
+        assertEquals(55.0, KeyframeInterpolator.sampleNumeric(three, 1750, null), 1e-9, "第二段 LINEAR 手算");
     }
 
     @Test
@@ -123,23 +123,42 @@ class KeyframeInterpolatorTest {
         List<Keyframe> kfs = List.of(numKf(0, 0.0), numKf(500, 10.0), numKf(500, 90.0), numKf(1000, 100.0));
         // t=500 命中重合组：返回最大 i 使 timeMs<=500 的帧，但 t 不是首/末帧 → 进区间逻辑；
         // i 落在第二个 500（index 2），区间 [500(idx2)=90, 1000=100]，local=(500-500)/(1000-500)=0 → 90
-        assertEquals(90.0, KeyframeInterpolator.sampleNumeric(kfs, 500), 1e-9, "重合帧取后一帧值");
+        assertEquals(90.0, KeyframeInterpolator.sampleNumeric(kfs, 500, null), 1e-9, "重合帧取后一帧值");
     }
 
     @Test
-    void sampleNumeric_trackWithStrValueReturnsNull() {
-        // 数值轨中混入 KfValue.Str（变量引用 / 错型）→ 整轨跳过（P2 降级，P3 接管）
+    void sampleNumeric_strValuesResolved() {
+        // P3（§9.5）：Str 值参与求值——无 resolver 时变量引用退 0、纯数字字符串本地解析
         List<Keyframe> kfs = List.of(
                 numKf(0, 0.0),
                 new Keyframe("kf-str", "x", 500, KfValue.of("${var:foo}"), Easing.LINEAR),
                 numKf(1000, 100.0));
-        assertNull(KeyframeInterpolator.sampleNumeric(kfs, 300), "含 Str 值 → 整轨 null");
+        // 区间 [0,500)：0 → 0（${var:foo} 无 resolver 退 0），t=300 → 0
+        assertEquals(0.0, KeyframeInterpolator.sampleNumeric(kfs, 300, null), 1e-9,
+                "无 resolver 变量引用退 0");
+        // 注入 resolver：${var:foo} → 50 → 区间 [0,500) 在 t=250 → 25
+        assertEquals(25.0, KeyframeInterpolator.sampleNumeric(kfs, 250, raw -> 50.0), 1e-9,
+                "resolver 注入后变量值参与插值");
+
+        // 纯数字字符串无 resolver 也可用
+        List<Keyframe> plain = List.of(
+                new Keyframe("k0", "x", 0, KfValue.of("10"), Easing.LINEAR),
+                new Keyframe("k1", "x", 1000, KfValue.of("20"), Easing.LINEAR));
+        assertEquals(15.0, KeyframeInterpolator.sampleNumeric(plain, 500, null), 1e-9,
+                "纯数字字符串本地解析");
+
+        // 错型（FillV）仍整轨跳过
+        List<Keyframe> bad = List.of(
+                numKf(0, 0.0),
+                new Keyframe("kf-fill", "x", 1000,
+                        KfValue.of(moe.hikari.canvas.state.Fill.solid("#FF0000")), Easing.LINEAR));
+        assertNull(KeyframeInterpolator.sampleNumeric(bad, 500, null), "FillV 错型 → 整轨 null");
     }
 
     @Test
     void sampleNumeric_emptyOrNullTrackReturnsNull() {
-        assertNull(KeyframeInterpolator.sampleNumeric(List.of(), 100), "空轨 → null");
-        assertNull(KeyframeInterpolator.sampleNumeric(null, 100), "null 轨 → null");
+        assertNull(KeyframeInterpolator.sampleNumeric(List.of(), 100, null), "空轨 → null");
+        assertNull(KeyframeInterpolator.sampleNumeric(null, 100, null), "null 轨 → null");
     }
 
     // ---------- interpolate ----------
@@ -232,11 +251,11 @@ class KeyframeInterpolatorTest {
         assertSame(base, KeyframeInterpolator.interpolate(base, tlNoElem, 500),
                 "无可应用动画 → 返回 base 同一引用");
 
-        // 整轨非数值属性（color）→ animated 空 → 返回 base 同引用
-        Timeline tlColor = timeline(1000, "e-1",
-                new Keyframe("kc", "color", 0, KfValue.of("#FF0000"), Easing.LINEAR));
-        assertSame(base, KeyframeInterpolator.interpolate(base, tlColor, 500),
-                "仅含非数值轨 → 返回 base 同一引用");
+        // P3：color 轨已生效；改用「变量颜色轨」（P3 不支持 → 整轨跳过）验证 base 同引用
+        Timeline tlVarColor = timeline(1000, "e-1",
+                new Keyframe("kc", "color", 0, KfValue.of("${var:c}"), Easing.LINEAR));
+        assertSame(base, KeyframeInterpolator.interpolate(base, tlVarColor, 500),
+                "变量颜色轨 P3 跳过 → 返回 base 同一引用");
 
         // 空 tracks timeline → 直接返回 base
         Timeline empty = new Timeline("tl-e", "E", 1000, 20, LoopMode.LOOP, TriggerConfig.MANUAL, Map.of());
@@ -262,8 +281,8 @@ class KeyframeInterpolatorTest {
     }
 
     @Test
-    void interpolate_nonNumericTrackDoesNotMutateElement() {
-        // 元素同时有数值轨（x）与非数值轨（color）：color 不动元素 color 字段，仅 x 变
+    void interpolate_colorTrackAppliesP3() {
+        // 元素同时有数值轨（x）与 color 轨：P3 起两者都生效
         TextElement t = text("e-1", 0, 0, 100, 50, 0, 1.0f);
         ProjectState base = state(layer("l-1", t));
         Timeline tl = timeline(1000, "e-1",
@@ -274,7 +293,9 @@ class KeyframeInterpolatorTest {
         ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
         TextElement e = (TextElement) out.layers().get(0).elements().get(0);
         assertEquals(30, e.x(), "x 数值轨生效");
-        assertEquals("#000000", e.color(), "非数值 color 轨被跳过，元素 color 字段保留基值");
+        // P3：color 轨生效——#FF0000→#00FF00 中点（sRGB 线性空间，共享向量同源算法）
+        assertEquals(moe.hikari.canvas.render.ColorLerp.lerpHex("#FF0000", "#00FF00", 0.5),
+                e.color(), "P3 起 color 轨参与插值");
     }
 
     @Test
@@ -302,7 +323,7 @@ class KeyframeInterpolatorTest {
     // ---------- withAnimated：8 子类各一 case ----------
 
     /** 六数值属性全覆盖的 props，用于断言动画字段被改。 */
-    private static Map<String, Double> allProps() {
+    private static KeyframeInterpolator.AnimatedValues allProps() {
         Map<String, Double> p = new LinkedHashMap<>();
         p.put("x", 11.0);
         p.put("y", 22.0);
@@ -310,7 +331,9 @@ class KeyframeInterpolatorTest {
         p.put("h", 44.0);
         p.put("rotation", 55.0);
         p.put("opacity", 0.5);
-        return p;
+        KeyframeInterpolator.AnimatedValues v = new KeyframeInterpolator.AnimatedValues();
+        v.numbers = p;
+        return v;
     }
 
     private static void assertNumericApplied(Element e) {
@@ -422,9 +445,9 @@ class KeyframeInterpolatorTest {
     void withAnimated_partialPropsKeepUnlistedFromBase() {
         // 仅给 x：y/w/h/rotation/opacity 应保留元素基值
         TextElement src = text("e", 7, 8, 9, 10, 11, 0.3f);
-        Map<String, Double> p = new LinkedHashMap<>();
-        p.put("x", 99.0);
-        Element out = KeyframeInterpolator.withAnimated(src, p);
+        KeyframeInterpolator.AnimatedValues v = new KeyframeInterpolator.AnimatedValues();
+        v.numbers = Map.of("x", 99.0);
+        Element out = KeyframeInterpolator.withAnimated(src, v);
         assertEquals(99, out.x(), "x 被覆盖");
         assertEquals(8, out.y(), "y 保留基值");
         assertEquals(9, out.w(), "w 保留基值");

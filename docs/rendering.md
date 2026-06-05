@@ -517,7 +517,7 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 |---|---|---|
 | 数值 | `x`/`y`/`w`/`h`/`rotation`/`opacity` | `v = a + (b − a) × eased`，`a`/`b` 为左右帧值 |
 | 颜色 / Fill | `color`/`fill` | sRGB 线性空间分量插值（§9.4） |
-| 离散 | `text`/`fontId` 等 | **step**：取 `timeMs ≤ t` 的最近关键帧，不插值，`eased` 不参与 |
+| 离散 | `text`/`fontId` 等 | **step**：取 `timeMs ≤ t` 的最近关键帧（`t` 在首帧之前取首帧，与 §9.1 边界一致），不插值，`eased` 不参与 |
 
 **字形级动画不做**：逐字 advance 量化是双端已知痛点（§2、CLAUDE.md M20）。文本只做整体属性（位置 /
 缩放 / 旋转 / 不透明度）插值 + 内容 step 切换，不做字形级 morph。
@@ -577,6 +577,7 @@ eased = sampleY(solveU(local))
 ```
 
 **两端写死相同的常量**：`NEWTON_ITER = 8`、`BISECT_MAX = 32`、`EPS = 1e-6`。
+**边界捷径（两端相同）**：`local <= 0 → 0`、`local >= 1 → 1`（与求解结果一致，但保证端点精确）。
 
 **禁引第三方 easing 库**（D8）：第三方浮点实现与本式对不齐，会让多帧 snapshot 在边界像素抖动。
 
@@ -594,8 +595,17 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
 
 - RGB 三分量各自 `decode → lerp(eased) → encode`，结果四舍五入回 8-bit。
 - **alpha 直接线性插值**（不经 gamma）。
+- **逐位等价细则（两端写死相同）**：
+  - lerp 一律用 `v = a + (b − a) × eased` 形式（与 §9.2 数值插值同式；不得写成
+    `a×(1−t) + b×t`——浮点上两式不等价）。
+  - 8-bit 回写 = `round(x × 255)` 半数进位（Java `Math.round` 与 JS `Math.round` 对正数一致），
+    钳 `[0, 255]`。
+  - 输入接受 `#RRGGBB` / `#RRGGBBAA`（大小写不敏感）；缺省 alpha 按 `FF`。**输出含 alpha 通道
+    当且仅当任一输入含 alpha**；输出大写 hex 带 `#`。
+  - 解析失败（非法 hex）→ **step**（取左端帧值原样返回），不抛错。
 - **Fill（渐变）插值**：仅当左右帧 Fill **同类型（solid/linear/radial）且同 stop 数**时，逐 stop 插值
-  （stop 位置线性、stop 颜色按上式）；类型或 stop 数不一致 → 降级为 **step**（取左端帧），不做歧义插值。
+  （stop 位置线性、stop 颜色按上式；linear 的 `angle`、radial 的 `cx/cy/r` 线性）；类型或 stop 数
+  不一致 → 降级为 **step**（取左端帧），不做歧义插值。
 
 ### 9.5 取值时机（关键帧引用变量）
 
@@ -603,6 +613,20 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
 
 - **数值 / Fill 类引用变量**：Ticker 在**插值前**先把 `${var:X}` resolve 成当前值，再对数值做 easing 插值
   （`VariableInterpolator` 加 `resolveAsNumber`，非数值时按 fallback 链取，最终 `0`）。
+  **帧内快照**：同一帧内同一 raw 只 resolve 一次（memo）——变量 push 落在两次读之间不得造成
+  单帧内 va/vb 取自不同快照（单帧撕裂）。
+  **数值字符串严格文法（两端写死相同，唯一权威 `StrictNumber`）**：`[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?`
+  （trim 后整串匹配）——不依赖 `Double.parseDouble`（接受 `0x1p4` / 尾随 `d|f`）或 `parseFloat`（接受
+  `12abc` 前缀）的宿主宽松语义；不匹配 / 非有限 → `0`。**`resolveAsNumber`（变量 resolve 后的最终解析）
+  与渲染层纯数字解析共用此文法**——任一侧私自 `parseDouble` 都会让"变量值 vs 字面值""有 resolver vs 无
+  resolver"出现解析分叉。**trim 语义两端对齐为剥 `≤U+0020`**：Java `String.trim()` 原生即此；JS
+  `String.trim()` 会多剥 NBSP / 全角空格等全 Unicode 空白，故前端改用 `[\x00-\x20]` strip 对齐。op 层
+  （`timeline.*` 入口）对非模板字符串同文法校验、对 `color`/`fill` 的字符串值做 hex 形态校验
+  （`#RRGGBB[AA]`），非法拒 `INVALID_PAYLOAD` 堵在源头。
+  **数值属性写回 int 钳位（两端一致，`StrictNumber.clampInt`）**：`x/y/w/h/rotation` 是 record `int`
+  字段，插值 / 变量 resolve 出的值 `round` 后须钳到 `[Integer.MIN_VALUE, Integer.MAX_VALUE]` 再写回——
+  否则 Java `(int)` 收窄会静默回绕（`3e9 → −1294967296`）而 JS number 不回绕，双端分叉。op 层只校验
+  `isFinite`（拦不住有限越界值），且变量 resolve 值 op 层无从校验，故钳位落在渲染层；`opacity` 另钳 `[0,1]`。
 - **字符串 / 离散类**：step 取最近帧后，由 Rasterize 既有的 `maybeInterpolateText` 每帧统一 resolve（取
   最新值，免费）。
 

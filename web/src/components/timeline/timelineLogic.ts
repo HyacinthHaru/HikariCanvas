@@ -9,7 +9,7 @@
  * <p>本面板是 MVP 关键帧列表（非 AE 风 panel —— 那是 P4）：分组展示 + 表单校验 +
  * 选中元素当前属性值取默认 —— 全是无副作用纯函数。</p>
  */
-import type { Element, Keyframe, LoopMode, Timeline } from '@/types/protocol';
+import type { EasingType, Element, Fill, KfValue, Keyframe, LoopMode, Timeline } from '@/types/protocol';
 
 /** 关键帧可加的属性白名单（数值类，MVP 范围）。与 docs/timeline.md §4.2 数值类对齐。 */
 export const KEYFRAMEABLE_PROPERTIES = ['x', 'y', 'w', 'h', 'rotation', 'opacity'] as const;
@@ -17,6 +17,44 @@ export type KeyframeProperty = typeof KEYFRAMEABLE_PROPERTIES[number];
 
 /** loopMode 候选集（i18n 文案在 messages.ts，逻辑层只认裸值）。 */
 export const LOOP_MODES: LoopMode[] = ['once', 'loop', 'pingPong'];
+
+/**
+ * 缓动方式候选集（P3 modal 缓动下拉用；i18n 文案在 messages.ts）。
+ * cubicBezier 不在 MVP 下拉（需控制点四元 UI，留 P4）；这 4 个覆盖常用「匀速 / 由慢到快 /
+ * 由快到慢 / 两头慢中间快」，与 rendering.md §9.3 预设对齐。
+ */
+export const EASING_TYPES = ['linear', 'easeIn', 'easeOut', 'easeInOut'] as const;
+export type EasingPreset = typeof EASING_TYPES[number];
+
+/**
+ * fill 轨适用的元素类型（与渲染侧 FILLABLE_TYPES / 后端 withAnimated 字段适用性对齐）。
+ * image 仅数值轨（mask / source 不做关键帧）。
+ */
+const FILLABLE_TYPES = new Set(['rect', 'icon', 'path', 'circle', 'shape', 'brush']);
+
+/**
+ * 给定选中元素能加关键帧的属性列表（P3 扩展，rendering.md §9.2 逐类型规则）：
+ * - 全类型：数值六属性 x/y/w/h/rotation/opacity
+ * - text：追加 color（颜色轨）+ text（离散轨）
+ * - rect/icon/path/circle/shape/brush：追加 fill（Fill 轨）
+ * - image：仅数值（无 color/text/fill 轨）
+ *
+ * @param element 选中元素；null → 仅数值六属性（无元素上下文时的安全默认）
+ */
+export function keyframeablePropertiesFor(element: Element | null | undefined): string[] {
+    const props: string[] = [...KEYFRAMEABLE_PROPERTIES];
+    if (!element) return props;
+    if (element.type === 'text') {
+        props.push('color', 'text');
+    }
+    if (FILLABLE_TYPES.has(element.type)) {
+        // P3 审查 #9：元素当前无填充（空心框等）时不放行 fill 轨——「无填充就不能给
+        // 填充加关键帧」，否则会静默注入白色实心填充
+        const fill = (element as { fill?: unknown }).fill;
+        if (fill != null) props.push('fill');
+    }
+    return props;
+}
 
 /** 新建表单的字段默认值（MVP 决策：durationMs 5000 / fps 20 / loop / 名字空 → 后端补默认）。 */
 export const CREATE_FORM_DEFAULTS = {
@@ -106,6 +144,41 @@ export function defaultValueFor(
     }
     const raw = element ? (element as unknown as Record<string, unknown>)[property] : undefined;
     return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+}
+
+/**
+ * 取选中元素某属性的当前值作为「加关键帧」表单默认 {@link KfValue}（P3 扩展含非数值轨）：
+ * - color：{@code element.color ?? '#000000'}（字符串轨）
+ * - text：{@code element.text ?? ''}（离散字符串轨）
+ * - fill：{@code element.fill ?? {type:'solid',color:'#FFFFFF'}}；元素 fill 为旧 string
+ *   形态时包成 SolidFill（与 protocol FillCompat 归一化一致）
+ * - 数值六属性：沿用 {@link defaultValueFor}（返 number）
+ *
+ * @returns property 类别决定 number / string / Fill；未知属性按数值兜底
+ */
+export function defaultValueForExtended(
+    element: Element | null | undefined,
+    property: string,
+): KfValue {
+    if (property === 'color') {
+        const v = element && element.type === 'text' ? element.color : undefined;
+        return typeof v === 'string' && v.length > 0 ? v : '#000000';
+    }
+    if (property === 'text') {
+        const v = element && element.type === 'text' ? element.text : undefined;
+        return typeof v === 'string' ? v : '';
+    }
+    if (property === 'fill') {
+        const raw = element ? (element as unknown as Record<string, unknown>).fill : undefined;
+        if (typeof raw === 'string' && raw.length > 0) {
+            return { type: 'solid', color: raw } as Fill;   // 旧 string 形态 → SolidFill
+        }
+        if (raw && typeof raw === 'object' && 'type' in raw) {
+            return raw as Fill;
+        }
+        return { type: 'solid', color: '#FFFFFF' } as Fill;
+    }
+    return defaultValueFor(element, property as KeyframeProperty);
 }
 
 /** 新建时间轴表单的输入态（modal 区块 2 v-model 绑定）。 */

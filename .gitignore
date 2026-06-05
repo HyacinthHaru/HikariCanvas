@@ -109,3 +109,7 @@ run/
 rendering-test/actual-java/
 rendering-test/actual-web/
 rendering-test/diff/
+
+# Python（rendering-test 一致性向量生成器的编译缓存）
+__pycache__/
+*.pyc

@@ -572,6 +572,8 @@ public final class HikariCanvas extends JavaPlugin {
         compositor.setBufferPool(bufferPool);
         // ProjectionThrottler 分流 gate：wall 播放期间编辑 op 的 reactive flush 退让给 ticker。
         projectionThrottler.setAnimationGate(ticker);
+        // 0.6 P3：数值轨 ${var:X} 求值（rendering.md §9.5）——Ticker 在插值前按 wall resolve。
+        ticker.setNumberResolver(variableInterpolator::resolveAsNumber);
         // editOpDispatcher 持 ticker 引用，timeline.play/pause/seek 三 op 用。
         webServer.setAnimationTicker(ticker);
         // SessionManager 持 ticker 引用：编辑持久化后 invalidate（缓存重载）+ session 关闭后

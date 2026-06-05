@@ -149,6 +149,28 @@ public final class AnimationTicker implements AnimationTickerGate {
     /** 时钟注入 seam（测试用）。 */
     private volatile LongSupplier nanoClock = System::nanoTime;
 
+    /**
+     * 0.6 P3（rendering.md §9.5）：数值轨 {@code ${var:X}} 求值 seam（raw + wallId → 数值）。
+     * 装配层注 {@code VariableInterpolator::resolveAsNumber}；null = 无变量支持
+     * （Str 关键帧里的纯数字仍可用、变量引用退 0）。
+     */
+    public interface WallNumberResolver {
+        double resolve(String raw, String wallId);
+    }
+
+    private volatile WallNumberResolver numberResolver;
+
+    /** 0.6 P3 装配 seam（见 {@link WallNumberResolver}）。 */
+    public void setNumberResolver(WallNumberResolver resolver) {
+        this.numberResolver = resolver;
+    }
+
+    /** 按 wall 绑定的 per-tick resolver；无全局 resolver 时返 null（插值器本地解析纯数字）。 */
+    private KeyframeInterpolator.NumberResolver resolverFor(String wallId) {
+        WallNumberResolver r = this.numberResolver;
+        return r == null ? null : raw -> r.resolve(raw, wallId);
+    }
+
     /** 测试 seam：直接驱动一次 tick（绕开 scheduler）。 */
     void tickOnceForTest(String wallId) {
         PlaybackEntry e = entries.get(wallId);
@@ -423,10 +445,12 @@ public final class AnimationTicker implements AnimationTickerGate {
             // #1：diff 只在 Ticker 线程触碰；单线程 scheduler 串行保证与 renderFrame 不交错
             if (resetDiff) e.diff.reset();
 
+            KeyframeInterpolator.NumberResolver resolver = resolverFor(e.wallId);
+
             if (tl.loopMode() == LoopMode.ONCE && posMs >= tl.durationMs()) {
                 // 末帧渲染一次（force：无视 viewer——更新像素缓存让后到的观察者看到终态）后注销
                 ProjectState frame = KeyframeInterpolator.interpolate(
-                        w.state(), tl, tl.durationMs());
+                        w.state(), tl, tl.durationMs(), resolver);
                 renderer.renderFrame(w, frame, e.diff, true);
                 stopWall(e.wallId);
                 return;
@@ -435,7 +459,7 @@ public final class AnimationTicker implements AnimationTickerGate {
             // viewer-gated 在 renderFrame 实现侧（无观察者返 -1 不 rasterize，#9 免双扫描）；
             // 位置按墙钟推进，观察者回来时动画在正确时刻
             int t = KeyframeInterpolator.mapTime(posMs, tl.durationMs(), tl.loopMode());
-            ProjectState frame = KeyframeInterpolator.interpolate(w.state(), tl, t);
+            ProjectState frame = KeyframeInterpolator.interpolate(w.state(), tl, t, resolver);
             renderer.renderFrame(w, frame, e.diff, false);
         } catch (Throwable th) {
             // 任务级异常隔离：单帧失败不杀 cadence（照 VariableProviderDaemon 范式）

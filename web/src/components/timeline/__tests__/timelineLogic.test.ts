@@ -14,15 +14,18 @@
 import { describe, expect, it } from 'vitest';
 import {
     CREATE_FORM_DEFAULTS,
+    EASING_TYPES,
     defaultValueFor,
+    defaultValueForExtended,
     formatKeyframeValue,
     groupKeyframesByElement,
     isValidKeyframeTime,
+    keyframeablePropertiesFor,
     shortElementId,
     validateCreateForm,
     type CreateFormInput,
 } from '../timelineLogic';
-import type { Element, Keyframe, Timeline } from '@/types/protocol';
+import type { Element, Fill, Keyframe, Timeline } from '@/types/protocol';
 
 function mkKf(property: string, timeMs: number, value: number = 0): Keyframe {
     return {
@@ -219,5 +222,125 @@ describe('shortElementId', () => {
     });
     it('returns id without prefix unchanged', () => {
         expect(shortElementId('abcdef')).toBe('abcdef');
+    });
+});
+
+// ---------- P3 扩展：keyframeablePropertiesFor ----------
+
+/** 给定 type 造一个最简元素（只需 type + base 字段够分类）。 */
+function mkEl(type: string, over: Partial<Element> = {}): Element {
+    return {
+        id: `e-${type}`,
+        type,
+        x: 0, y: 0, w: 10, h: 10, rotation: 0,
+        locked: false, visible: true,
+        ...over,
+    } as Element;
+}
+
+const NUMERIC_SIX = ['x', 'y', 'w', 'h', 'rotation', 'opacity'];
+
+describe('keyframeablePropertiesFor', () => {
+    it('returns the six numeric props for null element', () => {
+        expect(keyframeablePropertiesFor(null)).toEqual(NUMERIC_SIX);
+    });
+
+    it('text adds color + text on top of numerics', () => {
+        expect(keyframeablePropertiesFor(mkEl('text')))
+            .toEqual([...NUMERIC_SIX, 'color', 'text']);
+    });
+
+    it('rect adds fill (有填充时)', () => {
+        expect(keyframeablePropertiesFor(mkEl('rect', { fill: { type: 'solid', color: '#FFFFFF' } } as Partial<Element>)))
+            .toEqual([...NUMERIC_SIX, 'fill']);
+    });
+
+    it.each(['rect', 'icon', 'path', 'circle', 'shape', 'brush'])(
+        '%s is fillable (adds fill, no color/text)',
+        (type) => {
+            const props = keyframeablePropertiesFor(
+                mkEl(type, { fill: { type: 'solid', color: '#FFFFFF' } } as Partial<Element>));
+            expect(props).toEqual([...NUMERIC_SIX, 'fill']);
+            expect(props).not.toContain('color');
+            expect(props).not.toContain('text');
+        },
+    );
+
+    it('P3 审查 #9：元素当前 fill 为 null/缺失时不放行 fill 轨（空心框不能加填充关键帧）', () => {
+        expect(keyframeablePropertiesFor(mkEl('rect'))).toEqual(NUMERIC_SIX);
+        expect(keyframeablePropertiesFor(mkEl('circle', { fill: null } as unknown as Partial<Element>)))
+            .toEqual(NUMERIC_SIX);
+    });
+
+    it('image gets only the numeric six (no fill/color/text)', () => {
+        expect(keyframeablePropertiesFor(mkEl('image', { source: 'abc' } as Partial<Element>)))
+            .toEqual(NUMERIC_SIX);
+    });
+
+    it('covers all 8 element types deterministically', () => {
+        // text(8) / rect 带填充(7) / image(6)
+        expect(keyframeablePropertiesFor(mkEl('text')).length).toBe(8);
+        expect(keyframeablePropertiesFor(
+            mkEl('rect', { fill: { type: 'solid', color: '#FFFFFF' } } as Partial<Element>)).length).toBe(7);
+        expect(keyframeablePropertiesFor(mkEl('image', { source: 'a' } as Partial<Element>)).length).toBe(6);
+    });
+});
+
+// ---------- P3 扩展：defaultValueForExtended ----------
+
+describe('defaultValueForExtended', () => {
+    it('numeric props delegate to defaultValueFor (number)', () => {
+        const el = mkEl('rect', { x: 12, opacity: 0.4 } as Partial<Element>);
+        expect(defaultValueForExtended(el, 'x')).toBe(12);
+        expect(defaultValueForExtended(el, 'opacity')).toBe(0.4);
+        expect(defaultValueForExtended(mkEl('rect'), 'opacity')).toBe(1);
+    });
+
+    it('color reads element.color, defaulting to #000000', () => {
+        expect(defaultValueForExtended(mkEl('text', { color: '#FF8800' } as Partial<Element>), 'color'))
+            .toBe('#FF8800');
+        expect(defaultValueForExtended(mkEl('text'), 'color')).toBe('#000000');
+        // 非 text 元素无 color → 默认黑
+        expect(defaultValueForExtended(mkEl('rect'), 'color')).toBe('#000000');
+    });
+
+    it('text reads element.text, defaulting to empty string', () => {
+        expect(defaultValueForExtended(mkEl('text', { text: 'hi' } as Partial<Element>), 'text'))
+            .toBe('hi');
+        expect(defaultValueForExtended(mkEl('text'), 'text')).toBe('');
+        // 空字符串元素 text 原样返回（不退默认）
+        expect(defaultValueForExtended(mkEl('text', { text: '' } as Partial<Element>), 'text')).toBe('');
+    });
+
+    it('fill reads element.fill object, defaulting to white solid', () => {
+        const el = mkEl('rect', { fill: { type: 'solid', color: '#123456' } } as Partial<Element>);
+        expect(defaultValueForExtended(el, 'fill')).toEqual({ type: 'solid', color: '#123456' });
+        expect(defaultValueForExtended(mkEl('rect'), 'fill')).toEqual({ type: 'solid', color: '#FFFFFF' });
+    });
+
+    it('fill wraps a legacy string fill into a SolidFill', () => {
+        const el = mkEl('rect', { fill: '#abcdef' as unknown as Fill } as Partial<Element>);
+        expect(defaultValueForExtended(el, 'fill')).toEqual({ type: 'solid', color: '#abcdef' });
+    });
+
+    it('fill preserves a linear gradient object', () => {
+        const grad: Fill = {
+            type: 'linear', angle: 45,
+            stops: [{ position: 0, color: '#000' }, { position: 1, color: '#fff' }],
+        };
+        const el = mkEl('rect', { fill: grad } as Partial<Element>);
+        expect(defaultValueForExtended(el, 'fill')).toBe(grad);
+    });
+});
+
+// ---------- P3：EASING_TYPES 常量完整性 ----------
+
+describe('EASING_TYPES', () => {
+    it('lists the four MVP presets in order (no cubicBezier in the dropdown)', () => {
+        expect(EASING_TYPES).toEqual(['linear', 'easeIn', 'easeOut', 'easeInOut']);
+    });
+
+    it('starts with linear (default)', () => {
+        expect(EASING_TYPES[0]).toBe('linear');
     });
 });

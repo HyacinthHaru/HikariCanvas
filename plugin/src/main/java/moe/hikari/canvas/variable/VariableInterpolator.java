@@ -1,5 +1,6 @@
 package moe.hikari.canvas.variable;
 
+import moe.hikari.canvas.state.StrictNumber;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -105,6 +106,27 @@ public final class VariableInterpolator {
                     + " text=" + preview);
         }
         return result;
+    }
+
+    /**
+     * 0.6 P3（rendering.md §9.5）：数值关键帧轨的 {@code ${var:X}} 求值。
+     * 把 {@code raw}（单个模板 / 含模板的字符串 / 纯数字字符串）经标准 fallback 链
+     * （cached → inline fallback → default → "???"）resolve 后解析为 double；
+     * 非数值（含 "???"）/ 非有限值 / 解析失败一律落到链终点 {@code 0.0}。
+     *
+     * <p>由 {@code AnimationTicker} 在<b>插值前</b>调用（Ticker 线程；store cached 值
+     * 异步读安全，0.4.10 已证），插值器拿到的是纯数值——变量变化经 per-map diff 自然
+     * 反映到下一帧。</p>
+     */
+    public double resolveAsNumber(@Nullable String raw, @Nullable String wallId) {
+        if (raw == null || raw.isEmpty()) return 0.0;
+        String resolved = raw;
+        if (raw.indexOf("${var:") >= 0) {
+            resolved = interpolate(raw, wallId).text();
+        }
+        // §9.5：与渲染层 / op 层共用严格文法，不私自 parseDouble（否则变量值会接受
+        // 0x1p4 / 5d 等而字面值不接受，且与 TS 端分叉）
+        return StrictNumber.parse(resolved);
     }
 
     /** 单次扫描实现；调用方（外层 {@link #interpolate}）负责二次扫描兜底。 */

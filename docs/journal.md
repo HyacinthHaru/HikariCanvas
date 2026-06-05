@@ -5,6 +5,56 @@
 
 ---
 
+## 2026-06-05 · 0.6.0-P3 — 缓动 + 双端插值器 + 一致性 CI（提交前再审修 3 双端数字分叉后落地）
+
+P3 在工作区完成后、提交前做了一道独立再审（3 路并行 agent：双端逐位等价 / 数学+向量+快照 /
+集成+回归 + 主线自复核），抓出并修掉 3 个对抗审查级双端数字分叉再提交。
+
+### P3 核心交付
+
+- **EasingSolver**（新）：cubic-bezier 双端逐位等价（WebKit UnitBezier + Newton 8 + bisect 32 +
+  EPS 1e-6 + 边界捷径 local≤0→0 / ≥1→1）；EASE 预设 = CSS 标准控制点；坏 blob 降级 LINEAR。
+- **ColorLerp**（新）：sRGB 线性空间色彩 / Fill 插值（gamma decode→lerp→encode，alpha 线性不经
+  gamma；round(x×255) 半数进位；输出含 alpha 当且仅当任一输入含；解析失败 / 类型不一致 step）。
+- **KeyframeInterpolator P3 重写**：color（仅 text，sRGB）/ fill（同类型同 stop 数逐 stop）/ text
+  （离散 step）三新轨 + 缓动接入 + 数值轨 `${var:X}` resolve（AnimationTicker 注入
+  `VariableInterpolator::resolveAsNumber` seam）；Span.ai 真实索引（镜像 TS，全等重合帧不经 equals
+  反查错位）；帧内 resolve memo（防单帧撕裂）。
+- **一致性 CI**：`rendering-test/` 第三方 Python 参照实现（IEEE754 double = Java/JS）生成 easing /
+  color-lerp 向量，Java + TS 各跑同一份 JSON（color 精确字符串 / easing 1e-6）；多帧 snapshot fixture
+  `14-timeline-easing.json`（纯几何）× t=0/250/500/750 四 baseline（人工核验四类插值可辨）。
+- **rendering.md §9** 数学权威落地；前端镜像 `web/src/timeline/{easing,colorLerp,interpolation}.ts`。
+
+### 提交前再审 — 3 个双端数字分叉（全确认全修）
+
+- **#1（major）`resolveAsNumber` 私自 `Double.parseDouble` 绕严格文法**：变量 resolve 出
+  `"0x1p4"`/`"5d"`/`"3.14f"` 时 Java 得 16.0/5.0/3.14 而 §9.5 严格文法应得 0，且 Java 自身
+  「有 resolver vs 无 resolver」同值分叉。
+- **#2（major）`ix()` int 收窄静默回绕**：数值属性 `x=3e9`（finite，op 层只校验 isFinite 放行）
+  Java `(int)Math.round` 回绕 −1294967296 而 TS number 不回绕；变量 resolve 出的大数 op 层亦拦不住。
+- **#3（minor）trim 语义分叉**：Java `trim()` 剥 ≤U+0020 / JS `trim()` 剥全 Unicode 空白，
+  NBSP+数字 → Java 0 / TS 5。
+- **修法**：抽 `state/StrictNumber.java` 作双端唯一权威（`parse` 严格解析 + `clampInt` int 钳位 +
+  `PATTERN`），后端三处散落 STRICT_NUMBER 正则（KeyframeInterpolator / TimelineOperations /
+  resolveAsNumber）归一；渲染层两端 `ix`/`withAnimated` 加 int clamp（覆盖字面值 + 变量值两来源）；
+  前端 `parsePlainNumber` trim 改 `[\x00-\x20]` strip 对齐 Java；`rendering.md §9.5` 补全三条细则。
+
+### 测试
+
+后端 **1274** / 前端 **463** / vite build 过（index 780 kB / gzip 230 kB）/ 0 baseline 漂移。
+再审新增 7 后端（StrictNumberTest 4 + P3Test int-clamp 1 + ResolveAsNumberTest 2）+ 3 前端
+（sampleNumeric 严格文法 + trim + interpolate int-clamp）case 钉住三发现。再审 Agent 2/3 各 0 major
+（数学/向量/快照可信、被改测试无掩盖弱化），Agent 1 报 2 major + 1 minor 经自复核全属实全修。
+
+关联：`render/{EasingSolver,ColorLerp,KeyframeInterpolator,AnimationTicker}.java`
+`state/{StrictNumber,TimelineOperations}.java` `variable/VariableInterpolator.java` `HikariCanvas.java`
+`docs/rendering.md §9` `web/src/timeline/{easing,colorLerp,interpolation}.ts`
+`web/src/components/timeline/{timelineLogic.ts,TimelineManagerModal.vue}` `i18n/messages.ts` + 测试
+（EasingSolverTest / ColorLerpTest / KeyframeInterpolatorP3Test / StrictNumberTest / ResolveAsNumberTest
+/ RendererSnapshotTimelineTest + 向量 + fixture + 4 baseline）
+
+---
+
 ## 2026-06-04 · 0.6.0-P1+P2 — 时间轴数据模型+协议 v3+coalescing / AnimationTicker+池化+MVP（单日推完，MVP 闸已过）
 
 两个 phase 一次提交（同批文件交织：dispatcher / WebServer / SessionManager / HikariCanvas / wsClient

@@ -248,6 +248,24 @@ final class TimelineOperations {
      *       {@link FillValidator} 校验）→ {@link KfValue.FillV}；String → {@link KfValue.Str}</li>
      * </ul>
      */
+
+    /** hex 颜色形态校验（#RRGGBB / #RRGGBBAA，与 ColorLerp.parseHex 白名单同源）。 */
+    private static boolean isValidHexColor(String s) {
+        if (s == null || s.isEmpty() || s.charAt(0) != '#') return false;
+        int len = s.length() - 1;
+        if (len != 6 && len != 8) return false;
+        for (int i = 1; i < s.length(); i++) {
+            char c = s.charAt(i);
+            boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            if (!hex) return false;
+        }
+        return true;
+    }
+
+    private static boolean isVarTemplate(String s) {
+        return s != null && s.indexOf("${var:") >= 0;
+    }
+
     private static KfValue parseValue(String property, Object valueRaw) {
         if (Keyframe.NUMERIC_PROPERTIES.contains(property)) {
             if (valueRaw instanceof Number n) {
@@ -259,17 +277,35 @@ final class TimelineOperations {
                 return new KfValue.Num(d);
             }
             if (valueRaw instanceof String s) {
+                // P3 审查 #3：非变量模板的字符串必须是严格数值文法——否则双端渲染期
+                // 静默退 0 且 Java/TS 解析语义分叉；堵在 op 入口
+                if (!isVarTemplate(s) && !StrictNumber.PATTERN.matcher(s.trim()).matches()) {
+                    throw new ValidationException("INVALID_PAYLOAD",
+                            "numeric keyframe string must be a number or ${var:...}: " + property);
+                }
                 return strValue(s);
             }
             throw new ValidationException("INVALID_PAYLOAD",
                     "numeric property '" + property + "' value must be number or string");
         }
-        if ("color".equals(property) || "text".equals(property)) {
+        if ("color".equals(property)) {
+            if (valueRaw instanceof String s) {
+                // P3 审查 #2/#6：非法 hex 会在渲染期静默退化（step / 白色），堵在 op 入口
+                if (!isVarTemplate(s) && !isValidHexColor(s)) {
+                    throw new ValidationException("INVALID_PAYLOAD",
+                            "color keyframe value must be #RRGGBB / #RRGGBBAA or ${var:...}");
+                }
+                return strValue(s);
+            }
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "property 'color' value must be string");
+        }
+        if ("text".equals(property)) {
             if (valueRaw instanceof String s) {
                 return strValue(s);
             }
             throw new ValidationException("INVALID_PAYLOAD",
-                    "property '" + property + "' value must be string");
+                    "property 'text' value must be string");
         }
         if ("fill".equals(property)) {
             if (valueRaw instanceof Map<?, ?>) {
@@ -281,6 +317,11 @@ final class TimelineOperations {
                 return new KfValue.FillV(fill);
             }
             if (valueRaw instanceof String s) {
+                // 同 color：String 形态会归一化为 SolidFill 走 lerpHex，hex 必须合法
+                if (!isVarTemplate(s) && !isValidHexColor(s)) {
+                    throw new ValidationException("INVALID_PAYLOAD",
+                            "fill keyframe string must be #RRGGBB / #RRGGBBAA or ${var:...}");
+                }
                 return strValue(s);
             }
             throw new ValidationException("INVALID_PAYLOAD",

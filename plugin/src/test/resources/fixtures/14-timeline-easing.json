@@ -1,0 +1,98 @@
+{
+  "version": 0,
+  "canvas": {"widthMaps": 2, "heightMaps": 2, "background": "#202830"},
+  "elements": [
+    {
+      "type": "rect",
+      "id": "e-mover",
+      "x": 0, "y": 16, "w": 64, "h": 48,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": "#FF0000"
+    },
+    {
+      "type": "circle",
+      "id": "e-fader",
+      "x": 96, "y": 16, "w": 64, "h": 64,
+      "rotation": 0, "locked": false, "visible": true,
+      "fill": "#FFCC00"
+    },
+    {
+      "type": "shape",
+      "id": "e-grower",
+      "x": 80, "y": 120, "w": 40, "h": 40,
+      "rotation": 0, "locked": false, "visible": true,
+      "kind": "star",
+      "sides": 5,
+      "innerRatio": 0.5,
+      "fill": "#33CC66"
+    },
+    {
+      "type": "path",
+      "id": "e-grad",
+      "x": 8, "y": 208, "w": 240, "h": 40,
+      "rotation": 0, "locked": false, "visible": true,
+      "d": "M 0 0 L 240 0 L 240 40 L 0 40 Z",
+      "fill": {
+        "type": "linear",
+        "angle": 0,
+        "stops": [
+          {"position": 0.0, "color": "#FF0000"},
+          {"position": 1.0, "color": "#0000FF"}
+        ]
+      }
+    }
+  ],
+  "timelines": [
+    {
+      "id": "tl-easing",
+      "name": "easing-snapshot",
+      "durationMs": 1000,
+      "fps": 20,
+      "loopMode": "loop",
+      "trigger": {"type": "manual"},
+      "tracks": {
+        "e-mover": [
+          {"id": "k-mx0", "property": "x", "timeMs": 0, "value": 0, "easing": {"type": "linear"}},
+          {"id": "k-mx1", "property": "x", "timeMs": 1000, "value": 160, "easing": {"type": "linear"}},
+          {"id": "k-mf0", "property": "fill", "timeMs": 0, "value": "#FF0000", "easing": {"type": "linear"}},
+          {"id": "k-mf1", "property": "fill", "timeMs": 1000, "value": "#0000FF", "easing": {"type": "linear"}}
+        ],
+        "e-fader": [
+          {"id": "k-fo0", "property": "opacity", "timeMs": 0, "value": 1.0, "easing": {"type": "easeInOut"}},
+          {"id": "k-fo1", "property": "opacity", "timeMs": 1000, "value": 0.2, "easing": {"type": "linear"}}
+        ],
+        "e-grower": [
+          {"id": "k-gw0", "property": "w", "timeMs": 0, "value": 40, "easing": {"type": "easeOut"}},
+          {"id": "k-gw1", "property": "w", "timeMs": 1000, "value": 120, "easing": {"type": "linear"}},
+          {"id": "k-gh0", "property": "h", "timeMs": 0, "value": 40, "easing": {"type": "easeOut"}},
+          {"id": "k-gh1", "property": "h", "timeMs": 1000, "value": 120, "easing": {"type": "linear"}}
+        ],
+        "e-grad": [
+          {
+            "id": "k-gd0", "property": "fill", "timeMs": 0,
+            "value": {
+              "type": "linear", "angle": 0,
+              "stops": [
+                {"position": 0.0, "color": "#FF0000"},
+                {"position": 1.0, "color": "#0000FF"}
+              ]
+            },
+            "easing": {"type": "linear"}
+          },
+          {
+            "id": "k-gd1", "property": "fill", "timeMs": 1000,
+            "value": {
+              "type": "linear", "angle": 0,
+              "stops": [
+                {"position": 0.0, "color": "#00FF00"},
+                {"position": 1.0, "color": "#FFFF00"}
+              ]
+            },
+            "easing": {"type": "linear"}
+          }
+        ]
+      }
+    }
+  ],
+  "activeTimelineId": "tl-easing"
+}
