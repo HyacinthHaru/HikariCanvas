@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-06-05 · 0.6.0-P4.5a — 整体关键帧（实测反馈：缓动把轨迹掰弯 + 逐属性打帧太难用）
+
+用户实测 P4 dock 报 3 个交互问题，确认方向（几何变换整体帧 + 拖动自动加帧 + 保留展开）后做 P4.5a 核心：
+
+- **问题 1 根因 + 修复**：dock 把 x/y 拆成独立轨道、各自缓动；改一个关键帧的缓动只影响一个属性 →
+  x/y 进度不同步 → 本该直线的运动被掰弯（用户诊断准确）。**整体关键帧**（按 timeMs 聚合元素所有
+  transform 几何属性 x/y/w/h/rotation/opacity 的关键帧）+ 缓动统一应用到该组所有 transform → x/y
+  进度同步 → 轨迹保持直线（只速度按缓动变）。
+- **整体帧交互**：元素行直接显示/选/删/缓动整体帧块（不用展开逐属性）；Shift 多选；选中 1 个开缓动
+  曲线编辑器（同步该组所有 keyframeId 的 easing）；Del 批量删；元素行 + 按钮在播放头 upsert 整体帧
+  （同 timeMs 已有则更新值不重复）。展开元素看 per-property 子轨（P4.5a 只读灰显，单属性微调留 P4.5b）。
+- **timelineLogic**：aggregateTransformKeyframes（按 timeMs 聚合 + 统一缓动）+ transformKeyframeKey。
+- **timeline store**：selectedGroups（整体帧 key 多选）+ selectGroup/clearGroups/isGroupSelected。
+- **App.vue**：Delete 守卫加 selectedGroups（dock 选整体帧时 Delete 归 dock，不误删画布元素）。
+
+**待 P4.5b**：拖画布元素自动加帧（"拉就设"，问题 2 核心）+ 框选批量删（问题 3）+ 整体块时间轴拖动 +
+per-property 微调。
+
+前端 478 → **485**（+7：整体帧聚合 5 + dock smoke 整体帧 2）/ vite build 过 / main 774 kB / 0 漂移。
+关联：`components/timeline/{TimelineDock.vue,timelineLogic.ts,__tests__/}` `stores/timeline.ts`
+`i18n/messages.ts` `App.vue`
+
+---
+
 ## 2026-06-05 · 0.6.0-P4 hotfix-2 follow-up — dock 渲染 smoke test（客观验证 + 防回归）
 
 为根治"我没法在本地跑编辑器（要 MC 服务器）→ 漏运行时崩溃 → 用户当小白鼠"这个系统性问题，引入

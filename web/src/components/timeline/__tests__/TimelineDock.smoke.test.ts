@@ -55,6 +55,19 @@ function makeState(): ProjectState {
     } as unknown as ProjectState;
 }
 
+/** 带一个整体关键帧（e-1 的 x/y/opacity @ t=0）的 state，用于测整体帧渲染/选中。 */
+function makeStateWithKf(): ProjectState {
+    const s = makeState() as unknown as { timelines: { tracks: Record<string, unknown> }[] };
+    s.timelines[0].tracks = {
+        'e-1': [
+            { id: 'kx', property: 'x', timeMs: 0, value: 0, easing: { type: 'linear' } },
+            { id: 'ky', property: 'y', timeMs: 0, value: 0, easing: { type: 'linear' } },
+            { id: 'ko', property: 'opacity', timeMs: 0, value: 1, easing: { type: 'linear' } },
+        ],
+    };
+    return s as unknown as ProjectState;
+}
+
 describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
@@ -99,6 +112,35 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         await nextTick();
         // settings popover 的 loop select 渲染了 option（loopModeLabel 不崩）
         expect(wrapper.findAll('option').length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('整体关键帧块渲染 + 点选不崩（P4.5）', async () => {
+        useProjectStore().setSnapshot(makeStateWithKf());
+        useUiStore().selectMany(['e-1']);
+        const timeline = useTimelineStore();
+        timeline.openDock();
+        const wrapper = mount(TimelineDock);
+        await nextTick();
+        // element row 把 x/y/opacity @ t=0 聚合成一个整体关键帧块（菱形 rotate-45）
+        const blocks = wrapper.findAll('.rotate-45');
+        expect(blocks.length).toBeGreaterThan(0);
+        await blocks[0].trigger('click');
+        await nextTick();
+        expect(timeline.selectedGroups.has('e-1:0')).toBe(true);
+    });
+
+    it('加帧按钮选中新整体帧，不崩（P4.5）', async () => {
+        useProjectStore().setSnapshot(makeStateWithKf());
+        useUiStore().selectMany(['e-1']);
+        const timeline = useTimelineStore();
+        timeline.openDock();
+        const wrapper = mount(TimelineDock);
+        await nextTick();
+        const addBtn = wrapper.find('[title="在播放头给这个元素打一个关键帧"]');
+        expect(addBtn.exists()).toBe(true);
+        await addBtn.trigger('click');
+        await nextTick();
+        expect(timeline.selectedGroups.has('e-1:0')).toBe(true);
     });
 });
 

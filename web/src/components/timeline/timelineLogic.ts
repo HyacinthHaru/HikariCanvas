@@ -9,7 +9,7 @@
  * <p>含分组展示 / 表单校验 / 默认值（P2）+ AE dock 的时间↔像素映射 / 二级属性子轨拆分 /
  * 标尺刻度 / 帧吸附（P4）—— 全是无副作用纯函数。</p>
  */
-import type { EasingType, Element, Fill, KfValue, Keyframe, LoopMode, Timeline } from '@/types/protocol';
+import type { Easing, EasingType, Element, Fill, KfValue, Keyframe, LoopMode, Timeline } from '@/types/protocol';
 
 /** 关键帧可加的属性白名单（数值类，MVP 范围）。与 docs/timeline.md §4.2 数值类对齐。 */
 export const KEYFRAMEABLE_PROPERTIES = ['x', 'y', 'w', 'h', 'rotation', 'opacity'] as const;
@@ -353,4 +353,55 @@ export function computeRulerTicks(
         ticks.push({ timeMs: tm, x: msToPx(tm, pxPerMs, scrollMs), label: formatTimeLabel(tm), major: true });
     }
     return ticks;
+}
+
+// ──────────────────────────────────────────────────────────
+//  P4.5：整体关键帧（transform 几何变换聚合，AE/PR 风——一个关键帧记录元素整组变换）
+// ──────────────────────────────────────────────────────────
+
+/** 整体关键帧：某元素某 timeMs 的一组 transform 属性关键帧 + 统一缓动。 */
+export interface TransformKeyframe {
+    elementId: string;
+    timeMs: number;
+    /** 该 timeMs 该元素的 transform 关键帧 id 列表（批量移动 / 删除 / 缓动同步用）。 */
+    keyframeIds: string[];
+    /** 统一缓动（整体帧缓动同步到所有 transform 属性；取该组第一个关键帧的）。 */
+    easing: Easing;
+    /** 该 timeMs 实际有关键帧的 transform 属性（< 6 表示部分属性尚未建轨）。 */
+    properties: string[];
+}
+
+/** 整体关键帧的稳定 key（选中 / 比较用）。 */
+export function transformKeyframeKey(elementId: string, timeMs: number): string {
+    return `${elementId}:${timeMs}`;
+}
+
+/**
+ * 把某元素的 transform（{@link KEYFRAMEABLE_PROPERTIES} 六属性）关键帧按 timeMs 聚合成"整体关键帧"
+ * 列表（timeMs 升序）。AE/PR 风：元素行直接操作整体帧（加 / 删 / 拖 / 缓动），缓动统一应用到该时刻
+ * 所有 transform 属性 → x/y 进度同步 → 运动轨迹保持直线（只速度按缓动变，解决"调缓动把轨迹掰弯"）。
+ * color/text/fill 不计入整体帧（展开子轨单独打）。
+ */
+export function aggregateTransformKeyframes(
+    timeline: Timeline | null | undefined,
+    elementId: string,
+): TransformKeyframe[] {
+    const kfs = timeline?.tracks?.[elementId] ?? [];
+    const transformSet = new Set<string>(KEYFRAMEABLE_PROPERTIES);
+    const byTime = new Map<number, Keyframe[]>();
+    for (const k of kfs) {
+        if (!transformSet.has(k.property)) continue;
+        if (!byTime.has(k.timeMs)) byTime.set(k.timeMs, []);
+        byTime.get(k.timeMs)!.push(k);
+    }
+    return [...byTime.keys()].sort((a, b) => a - b).map(timeMs => {
+        const group = byTime.get(timeMs)!;
+        return {
+            elementId,
+            timeMs,
+            keyframeIds: group.map(k => k.id),
+            easing: group[0].easing,
+            properties: group.map(k => k.property),
+        };
+    });
 }

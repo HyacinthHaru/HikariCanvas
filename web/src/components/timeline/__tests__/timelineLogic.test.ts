@@ -30,6 +30,8 @@ import {
     shortElementId,
     snapToFrame,
     splitTracksByProperty,
+    aggregateTransformKeyframes,
+    transformKeyframeKey,
     validateCreateForm,
     type CreateFormInput,
 } from '../timelineLogic';
@@ -437,5 +439,52 @@ describe('computeRulerTicks (P4)', () => {
             expect(tk.timeMs).toBeLessThanOrEqual(1000);
             expect(tk.x).toBeCloseTo(tk.timeMs * 0.5, 6);
         }
+    });
+});
+
+describe('aggregateTransformKeyframes (P4.5 整体关键帧)', () => {
+    function tlWith(tracks: Record<string, Keyframe[]>): Timeline {
+        return {
+            id: 'tl-1', name: 't', durationMs: 1000, fps: 20, loopMode: 'loop',
+            trigger: { type: 'manual', params: {} }, tracks,
+        } as unknown as Timeline;
+    }
+    function kfE(id: string, property: string, timeMs: number, easing: Keyframe['easing'] = { type: 'linear' }): Keyframe {
+        return { id, property, timeMs, value: 0, easing };
+    }
+
+    it('returns [] for missing element / null timeline', () => {
+        expect(aggregateTransformKeyframes(tlWith({}), 'e-x')).toEqual([]);
+        expect(aggregateTransformKeyframes(null, 'e-x')).toEqual([]);
+    });
+
+    it('groups transform keyframes by timeMs ascending', () => {
+        const tl = tlWith({
+            'e-1': [
+                kfE('k1', 'x', 0), kfE('k2', 'y', 0), kfE('k3', 'opacity', 0),
+                kfE('k4', 'x', 500), kfE('k5', 'y', 500),
+            ],
+        });
+        const groups = aggregateTransformKeyframes(tl, 'e-1');
+        expect(groups.map(g => g.timeMs)).toEqual([0, 500]);
+        expect(groups[0].keyframeIds.slice().sort()).toEqual(['k1', 'k2', 'k3']);
+        expect(groups[0].properties.slice().sort()).toEqual(['opacity', 'x', 'y']);
+        expect(groups[1].keyframeIds.slice().sort()).toEqual(['k4', 'k5']);
+    });
+
+    it('excludes non-transform properties (color/text/fill)', () => {
+        const tl = tlWith({ 'e-1': [kfE('k1', 'x', 0), kfE('kc', 'color', 0), kfE('kf', 'fill', 0)] });
+        const groups = aggregateTransformKeyframes(tl, 'e-1');
+        expect(groups.length).toBe(1);
+        expect(groups[0].properties).toEqual(['x']);
+    });
+
+    it('takes group easing from first keyframe', () => {
+        const tl = tlWith({ 'e-1': [kfE('k1', 'x', 0, { type: 'easeInOut' }), kfE('k2', 'y', 0)] });
+        expect(aggregateTransformKeyframes(tl, 'e-1')[0].easing.type).toBe('easeInOut');
+    });
+
+    it('transformKeyframeKey is stable', () => {
+        expect(transformKeyframeKey('e-1', 500)).toBe('e-1:500');
     });
 });

@@ -100,7 +100,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
         // 0.6 P4：时间轴 dock 选中关键帧时，Delete 归 dock 删帧（不误删画布元素，两套选中独立）
-        if (timeline.dockOpen && timeline.selectedKeyframeId) {
+        if (timeline.dockOpen && (timeline.selectedGroups.size > 0 || timeline.selectedKeyframeId)) {
             e.preventDefault();
             return;
         }

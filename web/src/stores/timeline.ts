@@ -30,8 +30,10 @@ export const useTimelineStore = defineStore('timeline', () => {
     const scrollMs = ref(0);
     /** 展开了属性子轨的元素 id 集合。 */
     const expandedElements = ref<Set<string>>(new Set());
-    /** 当前选中的关键帧 id（单选；P4b 用于改值 / 删除 / 曲线编辑）。 */
+    /** 当前选中的关键帧 id（单选；P4.5b 展开子轨微调单帧用）。 */
     const selectedKeyframeId = ref<string | null>(null);
+    /** P4.5：选中的整体关键帧 key（elementId:timeMs）集合，多选。缓动 / 删除 / 拖动主操作单位。 */
+    const selectedGroups = ref<Set<string>>(new Set());
 
     /** 所有时间轴（project.state mirror）。 */
     const timelines = computed<Timeline[]>(() => project.state?.timelines ?? []);
@@ -72,6 +74,22 @@ export const useTimelineStore = defineStore('timeline', () => {
 
     function selectKeyframe(id: string | null) { selectedKeyframeId.value = id; }
 
+    /** P4.5 整体关键帧选中。additive（Shift）= 切换；否则单选替换。同时清单帧选中。 */
+    function selectGroup(key: string, additive = false) {
+        if (additive) {
+            const next = new Set(selectedGroups.value);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            selectedGroups.value = next;
+        } else {
+            selectedGroups.value = new Set([key]);
+        }
+        selectedKeyframeId.value = null;
+    }
+    function selectGroups(keys: string[]) { selectedGroups.value = new Set(keys); }
+    function clearGroups() { selectedGroups.value = new Set(); }
+    function isGroupSelected(key: string): boolean { return selectedGroups.value.has(key); }
+
     /** 清时间轴编辑态（dock 开关 + 播放态 + 缩放 + 选中 + 展开）。 */
     function reset() {
         dockOpen.value = false;
@@ -82,6 +100,7 @@ export const useTimelineStore = defineStore('timeline', () => {
         scrollMs.value = 0;
         expandedElements.value = new Set();
         selectedKeyframeId.value = null;
+        selectedGroups.value = new Set();
     }
 
     // 切 wall：project.reset() 置 state=null（project.reset 本身不碰时间轴编辑态）→ 自动清。
@@ -96,12 +115,13 @@ export const useTimelineStore = defineStore('timeline', () => {
 
     return {
         dockOpen, dockHeight, playheadMs, previewActive, playing, pxPerMs, scrollMs,
-        expandedElements, selectedKeyframeId,
+        expandedElements, selectedKeyframeId, selectedGroups,
         timelines, activeTimeline,
         timelineById,
         openDock, closeDock, toggleDock, setDockHeight,
         setPlayhead, setPreviewActive, setPlaying, setPxPerMs, setScrollMs,
         toggleExpanded, expandAll, isExpanded, selectKeyframe,
+        selectGroup, selectGroups, clearGroups, isGroupSelected,
         reset,
     };
 });
