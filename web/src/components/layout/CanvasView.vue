@@ -35,6 +35,8 @@ import type { GapPolygon } from '@/livepaint';
 import { usePaintBucketStore } from '@/stores/paintBucket';
 import { useNetworkStore } from '@/stores/network';
 import { useVariableStore } from '@/stores/variables';
+import { useTimelineStore } from '@/stores/timeline';
+import { interpolate } from '@/timeline/interpolation';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -43,6 +45,7 @@ const { t } = useI18n();
 const paintBucket = usePaintBucketStore();
 const net = useNetworkStore();
 const variableStore = useVariableStore();
+const timelineStore = useTimelineStore();
 // 2026-05-25 ultrareview #8：lock 多入口 guard。CanvasView 接入 grid / paint-bucket / icon-drop。
 const lockGuard = useLockGuard();
 
@@ -982,6 +985,10 @@ watch(editingId, () => requestDraw());
 // 让 PreviewRenderer 内的 interpolator 重新计算占位符替换值。useVariableStore.set/remove/clear
 // 都走 `variables.value = new Map(...)` 替换整个 ref，无需 deep watch。
 watch(() => variableStore.variables, () => requestDraw());
+// P4：播放头 / 预览开关变化 → 重绘（浅 watch 标量，绕开 :979 的 project.state deep watch；
+// scrubber 60fps 拖动每帧只付 1 rAF + 1 interpolate 浅拷贝 + 1 Canvas2D 全画，无深度 diff）。
+watch(() => timelineStore.playheadMs, () => requestDraw());
+watch(() => timelineStore.previewActive, () => requestDraw());
 
 // P3-40：FontLoader / IconLoader / GlyphMetricsLut 的 requestDraw 订阅 unsubscribe 闭包，
 // onBeforeUnmount 逐一调用注销（与 stage.destroy 清理并列）。
@@ -1058,7 +1065,14 @@ function requestDraw(): void {
         const ctx = el.getContext('2d');
         if (!ctx) return;
         const hide = editingId.value ? new Set([editingId.value]) : undefined;
-        renderProjectState(ctx, project.state, hide);
+        // P4：scrub / 本地播放期喂插值后的临时 state（仅本地预览，不写回 store / 不发 WS；
+        // 变量数值轨此处无 resolver → 退 0，§9.5，编辑期可接受）。
+        let toRender = project.state;
+        if (toRender && timelineStore.previewActive) {
+            const tl = timelineStore.activeTimeline;
+            if (tl) toRender = interpolate(toRender, tl, timelineStore.playheadMs);
+        }
+        renderProjectState(ctx, toRender, hide);
     });
 }
 </script>

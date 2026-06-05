@@ -430,8 +430,12 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
   t=0/250/500/750）；rendering.md §9 数学权威落地 + 前端镜像 web/src/timeline/。提交前再审（3 路 agent
   + 自复核）修 3 双端数字分叉：resolveAsNumber 绕严格文法 / int 收窄回绕 / trim 语义——抽 StrictNumber
   单一权威（三处后端正则归一）+ 两端 int clamp + §9.5 补全。
-- **待做**：P4 前端 AE panel（~100h）→ P5 触发器（~35h）→ P6 收尾（~15h）。测试基线：后端 1274 /
-  前端 463 / 0 baseline 漂移。
+- **P4 ✅（2026-06-05）前端 AE 风 dock**：底部 dock（压缩画布 + 可拖 resize）+ 时间标尺 + 每元素每属性
+  子轨 + 关键帧块拖拽/选中/删除/加帧/建轨 + scrubber 60fps 本地预览（useTimelinePlayback 持局部 playheadMs
+  绕 project.state deep watch）+ 本地播放（按 loopMode）+ 缓动曲线编辑器（SVG cubic-bezier）+ timeline 设置 +
+  懒加载拆 chunk；删旧 modal。4 视角对抗审查修 4 major（scrub 不暂停播放 / 双击重复帧 / duration 校验越界 /
+  Delete 误删元素）+ 1 minor（滚动条错位）。
+- **待做**：P5 触发器（~35h）→ P6 收尾（~15h）。测试基线：后端 1274 / 前端 474 / 0 baseline 漂移。
 
 ## 0.4.x 路线图速览（2026-05-21）
 
@@ -449,7 +453,7 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.9** | **Live Paint 收尾**（M18 brush 真实形状 stroke offset polygon + text glyph 真实形状 fontkit 引入） | **18h** | ✅ |
 | **0.4.10** | **ultrareview-2026-05-29 修复批**（独立深度审查 224 缺陷 → 修全部 168 个 DIRECT_FIX：data-integrity / concurrency 线程契约 / boundary 守卫 / 异常 ack / 双端一致 / 模板校验 等；TRADE_OFF 23 + NEEDS_DESIGN 30 暂不修）+ 设计哲学固化（"工具不是保姆" PROPOSAL §2.1/§5.2.7） | **~40h** | ✅ |
 | **0.5.0** | **纯服务端性能 Benchmark**（后台模拟 rasterize/palette/GC + 21 程序生成 scene + `/canvas bench` 命令族 + report.json/summary.txt/report.html 三件 + 50mspt 交互计算器 + CI 功能性 gate；**不测网络**，见 PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
-| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md`） | ~360h | 🔄 P1+P2+P3 ✅（P3 2026-06-05，双端一致性 CI 就位） |
+| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md`） | ~360h | 🔄 P1~P4 ✅（P4 2026-06-05，AE 风 dock 就位；余 P5 触发器 / P6 收尾） |
 | 0.7.0 | Scratch-like 视觉运行时（积木逻辑 + 事件驱动 + 条件分支；复用 template.expr + ChangeListener；积木库 vs 自写待定） | ~360h | 远期 |
 | M30 | 图层 mask / group / smart object（PS-style）— 独立大版本 | 30h+ | 远期 |
 | 弃 | B-advanced DCEL 覆盖 4% Live Paint 用例 — 38h+ 性价比低 | — | 不做 |

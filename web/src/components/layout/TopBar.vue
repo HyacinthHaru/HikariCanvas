@@ -7,6 +7,7 @@ import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
+import { useTimelineStore } from '@/stores/timeline';
 import { useI18n } from '@/i18n';
 import { getWsClient } from '@/network/wsClient';
 import Tooltip from '@/components/ui/Tooltip.vue';
@@ -14,6 +15,7 @@ import Tooltip from '@/components/ui/Tooltip.vue';
 const ui = useUiStore();
 const net = useNetworkStore();
 const project = useProjectStore();
+const timeline = useTimelineStore();
 const { t } = useI18n();
 const ws = getWsClient();
 
@@ -334,12 +336,12 @@ function showRefreshFlash(msg: string) {
           <TrainTrack class="size-4" />
         </button>
       </Tooltip>
-      <!-- 0.6 P2（B3）：时间轴（关键帧动画）管理 -->
+      <!-- 0.6 P4：时间轴（关键帧动画）AE 风底部 dock -->
       <Tooltip :text="t.topbar.timelineManager">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
-          :class="ui.timelineManagerOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
-          @click="ui.toggleTimelineManager()"
+          :class="timeline.dockOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="timeline.toggleDock()"
         >
           <Film class="size-4" />
         </button>

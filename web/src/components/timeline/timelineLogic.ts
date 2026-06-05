@@ -1,13 +1,13 @@
 /**
- * 0.6 P2（B3）：时间轴最简面板的可测纯逻辑。
+ * 0.6 时间轴面板的可测纯逻辑（P2 引入，P4 扩展 AE dock 时间映射）。
  *
- * <p>{@link TimelineManagerModal} 把所有"不依赖 Vue 响应式 / DOM / WS"的计算抽到本文件，
- * 单测（{@code __tests__/timelineLogic.test.ts}）直接 node 跑覆盖，组件只做绑定 + 发包。
- * 形态依据 docs/protocol.md §7 + docs/timeline.md §2，类型镜像 {@code types/protocol.ts}
- * 的 {@link Timeline} / {@link Keyframe}。</p>
+ * <p>{@code TimelineDock}（P4，替代 P2 已删的最简 modal）把所有"不依赖 Vue 响应式 / DOM / WS"
+ * 的计算抽到本文件，单测（{@code __tests__/timelineLogic.test.ts}）直接 node 跑覆盖，组件只做
+ * 绑定 + 发包。形态依据 docs/protocol.md §7 + docs/timeline.md §2，类型镜像
+ * {@code types/protocol.ts} 的 {@link Timeline} / {@link Keyframe}。</p>
  *
- * <p>本面板是 MVP 关键帧列表（非 AE 风 panel —— 那是 P4）：分组展示 + 表单校验 +
- * 选中元素当前属性值取默认 —— 全是无副作用纯函数。</p>
+ * <p>含分组展示 / 表单校验 / 默认值（P2）+ AE dock 的时间↔像素映射 / 二级属性子轨拆分 /
+ * 标尺刻度 / 帧吸附（P4）—— 全是无副作用纯函数。</p>
  */
 import type { EasingType, Element, Fill, KfValue, Keyframe, LoopMode, Timeline } from '@/types/protocol';
 
@@ -230,4 +230,127 @@ export function isValidKeyframeTime(timeMs: number, durationMs: number): boolean
 /** elementId 短形态（"e-1a2b3c4d" → "1a2b3c4d"；无前缀则原样），用于分组标题省空间。 */
 export function shortElementId(elementId: string): string {
     return elementId.startsWith('e-') ? elementId.slice(2) : elementId;
+}
+
+// ──────────────────────────────────────────────────────────
+//  P4：AE 风 dock 的时间↔像素映射 + 二级 (elementId, property) 属性子轨拆分（纯函数，可测）
+// ──────────────────────────────────────────────────────────
+
+/** 一条按 (elementId, property) 拆出的属性子轨。{@code keyframes} 已按 timeMs 升序。 */
+export interface PropertyTrack {
+    property: string;
+    keyframes: Keyframe[];
+}
+
+/** 一个元素的轨道组：主行 + 其下每属性一条子轨（AE 风左侧属性树）。 */
+export interface ElementTrackGroup {
+    elementId: string;
+    elementType: string | null;
+    /** 该元素所有属性子轨，按 property 字典序。 */
+    properties: PropertyTrack[];
+}
+
+/**
+ * 把 {@code timeline.tracks}（每元素所有属性混排）拆成 (elementId, property) 二级结构，供 AE dock
+ * 左侧属性树 + 右侧轨道行渲染（docs/timeline.md §2.2 方案 B）。elementId 升序、property 字典序、
+ * 子轨内 timeMs 升序。{@link groupKeyframesByElement} 的二级版（旧 modal 用一级，dock 用二级）。
+ */
+export function splitTracksByProperty(
+    timeline: Timeline | null | undefined,
+    resolveElementType: (elementId: string) => string | null,
+): ElementTrackGroup[] {
+    if (!timeline || !timeline.tracks) return [];
+    const out: ElementTrackGroup[] = [];
+    for (const elementId of Object.keys(timeline.tracks).sort()) {
+        const list = timeline.tracks[elementId] ?? [];
+        const byProp = new Map<string, Keyframe[]>();
+        for (const kf of list) {
+            if (!byProp.has(kf.property)) byProp.set(kf.property, []);
+            byProp.get(kf.property)!.push(kf);
+        }
+        const properties: PropertyTrack[] = [];
+        for (const property of [...byProp.keys()].sort()) {
+            const keyframes = byProp.get(property)!.slice().sort((a, b) => a.timeMs - b.timeMs);
+            properties.push({ property, keyframes });
+        }
+        out.push({ elementId, elementType: resolveElementType(elementId), properties });
+    }
+    return out;
+}
+
+/** 时间(ms) → 标尺 X 像素。{@code scrollMs} = 标尺左缘对应时刻（横滚），{@code pxPerMs} = 缩放。 */
+export function msToPx(timeMs: number, pxPerMs: number, scrollMs = 0): number {
+    return (timeMs - scrollMs) * pxPerMs;
+}
+
+/** 标尺 X 像素 → 时间(ms)（{@link msToPx} 逆；pxPerMs≤0 兜底返 scrollMs）。 */
+export function pxToMs(px: number, pxPerMs: number, scrollMs = 0): number {
+    return pxPerMs <= 0 ? scrollMs : px / pxPerMs + scrollMs;
+}
+
+/** 每帧时长(ms)。fps≤0 兜底 20fps。 */
+export function frameMs(fps: number): number {
+    return 1000 / (fps > 0 ? fps : 20);
+}
+
+/** 钳时刻到 [0, durationMs]（取整）。 */
+export function clampTimeMs(timeMs: number, durationMs: number): number {
+    const t = Math.round(timeMs);
+    if (t < 0) return 0;
+    if (t > durationMs) return durationMs;
+    return t;
+}
+
+/** 把时刻吸附到最近整帧边界（按 fps），再钳到 [0, durationMs]。 */
+export function snapToFrame(timeMs: number, fps: number, durationMs: number): number {
+    const fm = frameMs(fps);
+    return clampTimeMs(Math.round(timeMs / fm) * fm, durationMs);
+}
+
+/** 标尺刻度。{@code major} = 主刻度（带标签）。 */
+export interface RulerTick {
+    timeMs: number;
+    x: number;
+    label: string;
+    major: boolean;
+}
+
+/** 取 ≥ raw 的"好看"步长：1/2/5 × 10^n（避免 37ms 这类难读刻度）。 */
+function niceStep(raw: number): number {
+    if (raw <= 0) return 1;
+    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    const norm = raw / pow;                          // [1, 10)
+    const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+    return Math.max(1, nice * pow);
+}
+
+/** 时刻标签：≥1000ms 用 s（去尾0），否则 ms。 */
+export function formatTimeLabel(timeMs: number): string {
+    if (timeMs >= 1000) {
+        const s = timeMs / 1000;
+        return (Number.isInteger(s) ? String(s) : String(Number(s.toFixed(2)))) + 's';
+    }
+    return Math.round(timeMs) + 'ms';
+}
+
+/**
+ * 算时间标尺主刻度：在可见宽度内按"好看间隔"（1/2/5×10^n ms，目标间距 ≈80px）布主刻度（带标签）。
+ * 不超过 {@code durationMs}。
+ */
+export function computeRulerTicks(
+    durationMs: number,
+    pxPerMs: number,
+    widthPx: number,
+    scrollMs = 0,
+): RulerTick[] {
+    if (pxPerMs <= 0 || widthPx <= 0 || durationMs <= 0) return [];
+    const step = niceStep(80 / pxPerMs);
+    const ticks: RulerTick[] = [];
+    const startMs = Math.max(0, Math.floor(scrollMs / step) * step);
+    const endMs = Math.min(durationMs, scrollMs + widthPx / pxPerMs);
+    for (let t = startMs; t <= endMs + 0.5 && t <= durationMs; t += step) {
+        const tm = Math.round(t);
+        ticks.push({ timeMs: tm, x: msToPx(tm, pxPerMs, scrollMs), label: formatTimeLabel(tm), major: true });
+    }
+    return ticks;
 }

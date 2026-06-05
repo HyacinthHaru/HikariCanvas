@@ -15,13 +15,21 @@ import { describe, expect, it } from 'vitest';
 import {
     CREATE_FORM_DEFAULTS,
     EASING_TYPES,
+    clampTimeMs,
+    computeRulerTicks,
     defaultValueFor,
     defaultValueForExtended,
     formatKeyframeValue,
+    formatTimeLabel,
+    frameMs,
     groupKeyframesByElement,
     isValidKeyframeTime,
     keyframeablePropertiesFor,
+    msToPx,
+    pxToMs,
     shortElementId,
+    snapToFrame,
+    splitTracksByProperty,
     validateCreateForm,
     type CreateFormInput,
 } from '../timelineLogic';
@@ -342,5 +350,92 @@ describe('EASING_TYPES', () => {
 
     it('starts with linear (default)', () => {
         expect(EASING_TYPES[0]).toBe('linear');
+    });
+});
+
+// ──────────────────────────────────────────────────────────
+//  P4：AE dock 时间↔像素映射 + 二级属性子轨拆分
+// ──────────────────────────────────────────────────────────
+
+describe('splitTracksByProperty (P4 二级拆分)', () => {
+    it('returns [] for null timeline', () => {
+        expect(splitTracksByProperty(null, () => null)).toEqual([]);
+    });
+
+    it('groups by elementId asc → property asc → timeMs asc', () => {
+        const timeline = {
+            id: 'tl-1', name: 't', durationMs: 1000, fps: 20, loopMode: 'loop',
+            trigger: { type: 'manual', params: {} },
+            tracks: {
+                'e-b': [mkKf('y', 500), mkKf('x', 300), mkKf('x', 100)],
+                'e-a': [mkKf('opacity', 0)],
+            },
+        } as unknown as Timeline;
+        const groups = splitTracksByProperty(timeline, (id) => (id === 'e-a' ? 'rect' : 'text'));
+        expect(groups.map(g => g.elementId)).toEqual(['e-a', 'e-b']);   // elementId 升序
+        expect(groups[0].elementType).toBe('rect');
+        const eb = groups[1];
+        expect(eb.properties.map(p => p.property)).toEqual(['x', 'y']);   // property 字典序
+        expect(eb.properties[0].keyframes.map(k => k.timeMs)).toEqual([100, 300]);   // timeMs 升序
+    });
+});
+
+describe('time <-> pixel mapping (P4)', () => {
+    it('msToPx / pxToMs round-trip with scroll offset', () => {
+        expect(msToPx(500, 0.1, 0)).toBe(50);
+        expect(msToPx(500, 0.1, 100)).toBeCloseTo(40, 6);
+        expect(pxToMs(50, 0.1, 0)).toBeCloseTo(500, 6);
+        expect(pxToMs(40, 0.1, 100)).toBeCloseTo(500, 6);
+    });
+
+    it('pxToMs guards pxPerMs<=0 → returns scrollMs', () => {
+        expect(pxToMs(123, 0, 50)).toBe(50);
+    });
+
+    it('clampTimeMs clamps + rounds to [0, duration]', () => {
+        expect(clampTimeMs(-5, 1000)).toBe(0);
+        expect(clampTimeMs(1500, 1000)).toBe(1000);
+        expect(clampTimeMs(499.6, 1000)).toBe(500);
+    });
+
+    it('frameMs handles fps<=0 (fallback 20fps)', () => {
+        expect(frameMs(20)).toBe(50);
+        expect(frameMs(0)).toBe(50);
+    });
+
+    it('snapToFrame snaps to nearest frame + clamps', () => {
+        expect(snapToFrame(123, 20, 1000)).toBe(100);     // round(123/50)=2 → 100
+        expect(snapToFrame(130, 20, 1000)).toBe(150);     // round(130/50)=3 → 150
+        expect(snapToFrame(99999, 20, 1000)).toBe(1000);  // clamp
+    });
+});
+
+describe('formatTimeLabel (P4)', () => {
+    it('uses ms below 1s', () => {
+        expect(formatTimeLabel(0)).toBe('0ms');
+        expect(formatTimeLabel(500)).toBe('500ms');
+    });
+    it('uses s at/above 1s (trim trailing 0)', () => {
+        expect(formatTimeLabel(1000)).toBe('1s');
+        expect(formatTimeLabel(1500)).toBe('1.5s');
+        expect(formatTimeLabel(2250)).toBe('2.25s');
+    });
+});
+
+describe('computeRulerTicks (P4)', () => {
+    it('returns [] for degenerate input', () => {
+        expect(computeRulerTicks(0, 0.1, 100)).toEqual([]);
+        expect(computeRulerTicks(1000, 0, 100)).toEqual([]);
+        expect(computeRulerTicks(1000, 0.1, 0)).toEqual([]);
+    });
+    it('produces nice-stepped ticks within duration, x = timeMs*pxPerMs', () => {
+        const ticks = computeRulerTicks(1000, 0.5, 500, 0);
+        expect(ticks.length).toBeGreaterThan(0);
+        expect(ticks[0].timeMs).toBe(0);
+        for (const tk of ticks) {
+            expect(tk.timeMs).toBeGreaterThanOrEqual(0);
+            expect(tk.timeMs).toBeLessThanOrEqual(1000);
+            expect(tk.x).toBeCloseTo(tk.timeMs * 0.5, 6);
+        }
     });
 });

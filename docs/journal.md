@@ -5,6 +5,60 @@
 
 ---
 
+## 2026-06-05 · 0.6.0-P4 — 前端 AE 风时间轴 dock（4 段实现 + 4 视角对抗审查修 4 major）
+
+把 P2 的"最简关键帧列表 modal"升级为 After Effects 风底部 dock。纯前端（后端 0 改动）；先 5 路侦察
+摸清接口地图，再 4 段实现，最后 4 视角对抗审查 + 主线复核。
+
+### P4a 布局骨架 + scrubber 预览管线（性能命门先打通）
+
+- **新 timeline store**（编辑态单一来源）：dockOpen / dockHeight / playheadMs / previewActive / playing /
+  pxPerMs / scrollMs / expandedElements / selectedKeyframeId + activeTimeline/timelineById computed；
+  playheadMs 等播放态刻意放此而非 project.state，使 scrubber 不触发 CanvasView 的 `{deep:true}` watch。
+- **useTimelinePlayback**：本地播放 rAF 循环（按 loopMode mapTime，ONCE 停末帧 / LOOP / pingPong；
+  onScopeDispose 清理）。
+- **CanvasView 接通**：scrub/播放期把喂 renderProjectState 的 project.state 换成
+  `interpolate(state, tl, playheadMs)` 临时 state + 加浅 watch(playheadMs/previewActive)→requestDraw，
+  绕开 deep watch（docs/timeline.md §8.2）。interpolation.ts（P3 孤儿模块）首次接生产。
+- **TimelineDock**：底部 flex 兄弟（压缩画布非遮挡）+ 可拖 resize + 时间标尺 + 每元素每属性子轨 +
+  关键帧块 + 播放头 + 播放控制；懒加载 defineAsyncComponent 拆独立 chunk。timelineLogic 加时间↔像素
+  映射 / 二级属性拆分 / 标尺刻度 / 帧吸附纯函数。
+
+### P4b 关键帧交互
+
+关键帧块拖拽改 timeMs（本地 override 跟手 / dragend 发一条 sendKeyframeMove，照 onDragMove 节流）+
+选中高亮 + header 删除 + 双击轨道 / + 按钮加帧（建轨）+ 左树列全可动画属性。
+
+### P4c 缓动曲线编辑器
+
+EasingCurveEditor（SVG cubic-bezier）：4 预设 + 拖两控制点产生自定义 cubicBezier（x 钳 [0,1] / y 不钳
+overshoot）；本地 draft 跟手、松手发一条 sendKeyframeUpdate；曲线用 ease() 双端权威采样。
+
+### P4d 收尾
+
+dock timeline 设置 popover（name/duration/fps/loop 编辑 + 删除）+ 删旧 TimelineManagerModal（App 引用 +
+文件 + ui store 5 处 orphan flag 彻底清）。
+
+### 4 视角对抗审查（4 agent）→ 修 4 major + 1 minor
+
+- **scrub 不暂停播放**（rAF 与 scrub 每帧互覆 playhead）→ onScrubDown 抢占 pause
+- **双击已有关键帧块静默新建重复帧**（stopPropagation 拦不住 dblclick、后端不去重）→ 菱形 @dblclick.stop
+- **settings duration 校验上界 600000 ≪ 后端 3.6M / 下界 1≠100**（合法输入被静默吞）→ 对齐 [100, 3_600_000]
+- **dock 选帧后 Delete 误删画布元素**（两套选中独立）→ dock 拦 Delete 删帧 + App 守卫
+- **竖滚动条占位致关键帧块与标尺错位**（minor）→ pxPerMs 改用 tracksScroll 内容盒宽
+- 撤回项：perf M2（accMs 从 store.playheadMs 重派生，正确）；保留项：fps 后端 clamp 良性 / fit 不自动触发
+  （避免重置用户 zoom）/ exitPreview 双调幂等无害。
+
+**测试**：前端 460 → **474**（+14：P4 时间映射 / 二级拆分 / snapToFrame / 标尺刻度纯函数）；后端 1274
+不变（纯前端）；vite build 过 / **main 773 kB（删 modal 后比 P3 的 780 还低）** / TimelineDock 独立 chunk
+20.1 kB（gzip 6.65 kB）懒加载 / 0 baseline 漂移。
+
+关联：`stores/{timeline,ui}.ts` `composables/useTimelinePlayback.ts`
+`components/timeline/{TimelineDock,EasingCurveEditor}.vue（新）+ timelineLogic.ts + __tests__/timelineLogic.test.ts`
+`components/layout/{CanvasView,TopBar}.vue` `App.vue` `i18n/messages.ts`（删 `TimelineManagerModal.vue`）
+
+---
+
 ## 2026-06-05 · 0.6.0-P3 — 缓动 + 双端插值器 + 一致性 CI（提交前再审修 3 双端数字分叉后落地）
 
 P3 在工作区完成后、提交前做了一道独立再审（3 路并行 agent：双端逐位等价 / 数学+向量+快照 /

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { useEventListener } from '@vueuse/core';
 import TopBar from '@/components/layout/TopBar.vue';
 import LeftTools from '@/components/layout/LeftTools.vue';
@@ -11,7 +11,6 @@ import LogDrawer from '@/components/layout/LogDrawer.vue';
 import VariablePanel from '@/components/variables/VariablePanel.vue';
 import ScheduleManagerModal from '@/components/schedule/ScheduleManagerModal.vue';
 import RailNetworkModal from '@/components/rail/RailNetworkModal.vue';
-import TimelineManagerModal from '@/components/timeline/TimelineManagerModal.vue';
 import HomePage from '@/components/HomePage.vue';
 import TemplateGallery from '@/components/template/TemplateGallery.vue';
 import HelpModal from '@/components/HelpModal.vue';
@@ -19,6 +18,7 @@ import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useVariableStore } from '@/stores/variables';
+import { useTimelineStore } from '@/stores/timeline';
 import { createWsClient, pickInitialToken } from '@/network/wsClient';
 import { setUploadAuthProvider, setVariableContextProvider } from '@/render/PreviewRenderer';
 
@@ -26,6 +26,9 @@ const ui = useUiStore();
 const net = useNetworkStore();
 const project = useProjectStore();
 const variables = useVariableStore();
+const timeline = useTimelineStore();
+// 0.6 P4：时间轴 dock 懒加载拆独立 chunk（仿 lexical；首次开 dock 才下载，守住 700KB 线）。
+const TimelineDock = defineAsyncComponent(() => import('@/components/timeline/TimelineDock.vue'));
 
 // M5.5：URL 没 token → 显示首页（HomePage 列出 walls）；有 token → 走编辑器
 const showHomePage = ref(false);
@@ -96,6 +99,11 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     }
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
+        // 0.6 P4：时间轴 dock 选中关键帧时，Delete 归 dock 删帧（不误删画布元素，两套选中独立）
+        if (timeline.dockOpen && timeline.selectedKeyframeId) {
+            e.preventDefault();
+            return;
+        }
         // M8-F：多选批量删
         if (ui.selectedCount > 1) {
             e.preventDefault();
@@ -186,6 +194,8 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
       <RightPanel v-if="!ui.rightCollapsed" />
       <LogDrawer />
     </div>
+    <!-- 0.6 P4：时间轴 AE 风底部 dock（布局流兄弟，压缩画布可视区；懒加载拆 chunk） -->
+    <TimelineDock v-if="timeline.dockOpen" />
     <StatusBar />
     <TemplateGallery />
     <HelpModal />
@@ -195,7 +205,5 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     <ScheduleManagerModal />
     <!-- 0.4.4：铁路网络（线路 + 站点 + 车次 + 时刻表）管理 modal -->
     <RailNetworkModal v-if="ui.railNetworkOpen" @close="ui.closeRailNetwork()" />
-    <!-- 0.6 P2（B3）：时间轴（关键帧动画）管理 modal -->
-    <TimelineManagerModal />
   </div>
 </template>
