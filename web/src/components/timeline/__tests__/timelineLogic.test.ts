@@ -32,10 +32,13 @@ import {
     splitTracksByProperty,
     aggregateTransformKeyframes,
     transformKeyframeKey,
+    applyDragOverride,
+    planTransformUpsert,
     validateCreateForm,
     type CreateFormInput,
+    type TransformSnapshot,
 } from '../timelineLogic';
-import type { Element, Fill, Keyframe, Timeline } from '@/types/protocol';
+import type { Element, Fill, Keyframe, ProjectState, Timeline } from '@/types/protocol';
 
 function mkKf(property: string, timeMs: number, value: number = 0): Keyframe {
     return {
@@ -486,5 +489,92 @@ describe('aggregateTransformKeyframes (P4.5 整体关键帧)', () => {
 
     it('transformKeyframeKey is stable', () => {
         expect(transformKeyframeKey('e-1', 500)).toBe('e-1:500');
+    });
+});
+
+describe('planTransformUpsert (P4.5b 自动加帧计划)', () => {
+    it('all-add when no keyframes exist at timeMs, values from element current geometry', () => {
+        const rect = mkRect();   // x10 y20 w30 h40 rot0, opacity 缺省→1
+        const plan = planTransformUpsert(mkTimeline({}), rect, 0);
+        expect(plan.timeMs).toBe(0);
+        expect(plan.updates).toEqual([]);
+        // 6 个 transform 属性全 add，值取元素当前几何（opacity 缺省 1）
+        const byProp = Object.fromEntries(plan.adds.map(a => [a.property, a.value]));
+        expect(byProp).toEqual({ x: 10, y: 20, w: 30, h: 40, rotation: 0, opacity: 1 });
+    });
+
+    it('all-update when every transform prop already has a frame at timeMs', () => {
+        const rect = mkRect();
+        const tl = mkTimeline({
+            [rect.id]: [
+                mkKf('x', 0), mkKf('y', 0), mkKf('w', 0),
+                mkKf('h', 0), mkKf('rotation', 0), mkKf('opacity', 0),
+            ],
+        });
+        const plan = planTransformUpsert(tl, rect, 0);
+        expect(plan.adds).toEqual([]);
+        expect(plan.updates.map(u => u.property).sort())
+            .toEqual(['h', 'opacity', 'rotation', 'w', 'x', 'y']);
+        // update 带正确 keyframeId（mkKf id = kf-<prop>-<timeMs>）+ 元素当前值
+        const x = plan.updates.find(u => u.property === 'x')!;
+        expect(x.keyframeId).toBe('kf-x-0');
+        expect(x.value).toBe(10);
+    });
+
+    it('partial: existing props → update, missing props → add (只在同 timeMs 命中)', () => {
+        const rect = mkRect();
+        const tl = mkTimeline({ [rect.id]: [mkKf('x', 0), mkKf('y', 0), mkKf('x', 500)] });
+        const plan = planTransformUpsert(tl, rect, 0);
+        expect(plan.updates.map(u => u.property).sort()).toEqual(['x', 'y']);
+        expect(plan.adds.map(a => a.property).sort()).toEqual(['h', 'opacity', 'rotation', 'w']);
+        // 不同 timeMs 的 x@500 不参与 timeMs=0 的命中
+        expect(plan.updates.find(u => u.property === 'x')!.keyframeId).toBe('kf-x-0');
+    });
+});
+
+describe('applyDragOverride (P4.5b 拖动期跟手覆盖)', () => {
+    function mkState(elements: Element[]): ProjectState {
+        return {
+            version: 3,
+            canvas: { w: 128, h: 128, background: { type: 'solid', color: '#ffffff' } },
+            layers: [{
+                id: 'L', name: 'L', visible: true, locked: false, opacity: 1,
+                blendMode: 'normal', colorTag: null, elements,
+            }],
+            activeLayerId: 'L',
+            history: { undoDepth: 0, redoDepth: 0 },
+            timelines: [],
+            activeTimelineId: null,
+        } as unknown as ProjectState;
+    }
+    const snap: TransformSnapshot = { x: 111, y: 222, w: 33, h: 44, rotation: 5, opacity: 0.5 };
+
+    it('empty overrides → returns same reference (无副本)', () => {
+        const s = mkState([mkRect()]);
+        expect(applyDragOverride(s, new Map())).toBe(s);
+    });
+
+    it('null state → null', () => {
+        expect(applyDragOverride(null, new Map([['e-1a2b3c4d', snap]]))).toBe(null);
+    });
+
+    it('no matching element → returns same reference', () => {
+        const s = mkState([mkRect()]);
+        expect(applyDragOverride(s, new Map([['nope', snap]]))).toBe(s);
+    });
+
+    it('applies snapshot to matched element as a new object', () => {
+        const s = mkState([mkRect()]);
+        const out = applyDragOverride(s, new Map([['e-1a2b3c4d', snap]]))!;
+        expect(out).not.toBe(s);
+        const el = out.layers[0].elements[0] as unknown as Record<string, number>;
+        expect([el.x, el.y, el.w, el.h, el.rotation, el.opacity]).toEqual([111, 222, 33, 44, 5, 0.5]);
+    });
+
+    it('does not mutate the input state (immutability)', () => {
+        const s = mkState([mkRect()]);
+        applyDragOverride(s, new Map([['e-1a2b3c4d', snap]]));
+        const orig = s.layers[0].elements[0] as unknown as Record<string, number>;
+        expect([orig.x, orig.y]).toEqual([10, 20]);   // 原 state 元素纹丝不动
     });
 });

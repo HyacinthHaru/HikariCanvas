@@ -9,7 +9,7 @@
  * <p>含分组展示 / 表单校验 / 默认值（P2）+ AE dock 的时间↔像素映射 / 二级属性子轨拆分 /
  * 标尺刻度 / 帧吸附（P4）—— 全是无副作用纯函数。</p>
  */
-import type { Easing, EasingType, Element, Fill, KfValue, Keyframe, LoopMode, Timeline } from '@/types/protocol';
+import type { Easing, EasingType, Element, Fill, KfValue, Keyframe, LoopMode, ProjectState, Timeline } from '@/types/protocol';
 
 /** 关键帧可加的属性白名单（数值类，MVP 范围）。与 docs/timeline.md §4.2 数值类对齐。 */
 export const KEYFRAMEABLE_PROPERTIES = ['x', 'y', 'w', 'h', 'rotation', 'opacity'] as const;
@@ -404,4 +404,76 @@ export function aggregateTransformKeyframes(
             properties: group.map(k => k.property),
         };
     });
+}
+
+// ──────────────────────────────────────────────────────────
+//  P4.5b：拖画布元素自动加帧（"拉就设"）—— 加帧计划 + 拖动期跟手覆盖（纯函数，可测）
+// ──────────────────────────────────────────────────────────
+
+/** 元素一组 transform 几何值快照（拖动期跟手覆盖用）。 */
+export interface TransformSnapshot {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    rotation: number;
+    opacity: number;
+}
+
+/**
+ * 拖动期把"正在拖的元素"的实时几何值覆盖到插值结果上，保证 previewActive 时被拖元素跟手——
+ * 否则有帧的元素会被 {@link interpolate} 钉在帧值位置、看起来拖不动。不可变重建：只复制含覆盖
+ * 元素的 layer，其余 layer / element 保持原引用（与 interpolate 同范式，绝不污染传入的 base state）。
+ *
+ * @param state     interpolate 产出的临时渲染 state（可能与 base 同引用）
+ * @param overrides elementId → 实时几何快照（来自 onDragMove 已乐观 mutate 的 store 元素）
+ * @returns 有覆盖命中则返回新 state，否则原样返回（含 overrides 为空 / 无匹配元素）
+ */
+export function applyDragOverride(
+    state: ProjectState | null,
+    overrides: Map<string, TransformSnapshot>,
+): ProjectState | null {
+    if (!state || overrides.size === 0) return state;
+    let any = false;
+    const layers = state.layers.map(layer => {
+        let replaced: Element[] | null = null;
+        layer.elements.forEach((el, i) => {
+            const ov = overrides.get(el.id);
+            if (!ov) return;
+            if (!replaced) replaced = [...layer.elements];
+            replaced[i] = { ...el, x: ov.x, y: ov.y, w: ov.w, h: ov.h, rotation: ov.rotation, opacity: ov.opacity } as Element;
+            any = true;
+        });
+        return replaced ? { ...layer, elements: replaced } : layer;
+    });
+    return any ? { ...state, layers } : state;
+}
+
+/** 整体帧 upsert 计划：timeMs 已有该属性帧 → update（带 keyframeId）；缺的属性 → add 新帧。 */
+export interface TransformUpsertPlan {
+    timeMs: number;
+    adds: { property: string; value: number }[];
+    updates: { keyframeId: string; property: string; value: number }[];
+}
+
+/**
+ * 算"在 timeMs 给元素打一个整体关键帧"要发的操作：遍历 6 个 transform 属性，取元素当前值
+ * （{@link defaultValueFor}）；该属性在 timeMs 已有帧 → update 其 value，否则 add 新帧。
+ * dock 的 + 按钮（{@code addTransformKeyframe}）与画布拖动自动加帧共用此计划，消两处逻辑分叉。
+ */
+export function planTransformUpsert(
+    timeline: Timeline | null | undefined,
+    element: Element,
+    timeMs: number,
+): TransformUpsertPlan {
+    const existing = timeline?.tracks?.[element.id] ?? [];
+    const adds: { property: string; value: number }[] = [];
+    const updates: { keyframeId: string; property: string; value: number }[] = [];
+    for (const property of KEYFRAMEABLE_PROPERTIES) {
+        const value = defaultValueFor(element, property);
+        const ex = existing.find(k => k.property === property && k.timeMs === timeMs);
+        if (ex) updates.push({ keyframeId: ex.id, property, value });
+        else adds.push({ property, value });
+    }
+    return { timeMs, adds, updates };
 }

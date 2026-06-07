@@ -5,6 +5,32 @@
 
 ---
 
+## 2026-06-07 · 0.6.0-P4.5b-1 — 拖画布元素自动加帧（"拉就设"，实测反馈问题 2 核心）
+
+P4.5a 整体关键帧实测通过后做 P4.5b 第一刀：把 AE/PR 的"自动关键帧"搬进来——开着开关，在画布上
+拖动 / 缩放元素就在播放头记下一个整体帧，不用再点元素行的 + 按钮，真正"拉一下就设起点 / 终点"。
+
+- **统一执行器**：`useTimelineAuthoring.upsertTransformKeyframe`——dock 的 + 按钮与画布拖动共用一套
+  upsert（消两处分叉）。纯计划 `planTransformUpsert`（timeMs 已有该属性帧 → update，缺的 → add，值取
+  元素当前几何）算要发什么；执行器发 WS + **乐观本地改已有帧 value**（消"改已有帧"的 WS 往返闪烁；
+  新增帧那刻该属性本无帧、interpolate passthrough 当前值，天然不闪）。
+- **触发条件**：dock 开 + 自动加帧开关 ON + 有激活时间轴 + wall 未锁（`shouldAutoKeyframe`）。满足时
+  onDragStart 记拖动元素集 + 切 previewActive；onDragEnd 给每个元素在 playhead upsert 整体帧 + 选中；
+  resize/rotate 走 onElementTransformEnd 同样 upsert（值取 onTransformEnd 已 mutate 的最终几何）。
+- **拖动期跟手**：`applyDragOverride` 把被拖元素的实时几何覆盖到 interpolate 结果上——否则有帧的元素
+  会被插值钉在帧值位置、看着拖不动。不可变重建（只复制含覆盖元素的 layer，不污染 base state）。
+- **dock**：header 加红点 toggle（亮=自动加帧 ON，仿 PR）；addTransformKeyframe 瘦身改调执行器。
+- **store**：autoKeyframe（默认 ON）+ draggingElementIds + setters；reset / 切 wall 归位。
+
+前端 485 → **494**（+9：planTransformUpsert 3 + applyDragOverride 5 + dock smoke autoKeyframe 1）/
+vite build 过 / main 778 kB（+useTimelineAuthoring）/ TimelineDock chunk 19 kB / 0 漂移。
+关联：`composables/useTimelineAuthoring.ts`（新）`components/timeline/{timelineLogic.ts,TimelineDock.vue,__tests__/}`
+`components/layout/CanvasView.vue` `stores/timeline.ts` `i18n/messages.ts`
+
+**待 P4.5b 余下**：整体帧块时间轴上横向拖动改时刻 + 框选批量删（问题 3）+ per-property 子轨微调。
+
+---
+
 ## 2026-06-05 · 0.6.0-P4.5a — 整体关键帧（实测反馈：缓动把轨迹掰弯 + 逐属性打帧太难用）
 
 用户实测 P4 dock 报 3 个交互问题，确认方向（几何变换整体帧 + 拖动自动加帧 + 保留展开）后做 P4.5a 核心：

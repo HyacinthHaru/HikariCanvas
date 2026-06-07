@@ -11,7 +11,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useEventListener } from '@vueuse/core';
 import {
-    Play, Pause, SkipBack, Plus, ChevronRight, ChevronDown, Film, X, Trash2, Spline, Settings,
+    Play, Pause, SkipBack, Plus, ChevronRight, ChevronDown, Film, X, Trash2, Spline, Settings, CircleDot,
 } from 'lucide-vue-next';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
@@ -21,18 +21,17 @@ import { useI18n } from '@/i18n';
 import { useTimelinePlayback } from '@/composables/useTimelinePlayback';
 import {
     keyframeablePropertiesFor,
-    defaultValueFor,
     computeRulerTicks,
     msToPx,
     pxToMs,
     formatTimeLabel,
     clampTimeMs,
     LOOP_MODES,
-    KEYFRAMEABLE_PROPERTIES,
     aggregateTransformKeyframes,
     transformKeyframeKey,
     type TransformKeyframe,
 } from './timelineLogic';
+import { useTimelineAuthoring } from '@/composables/useTimelineAuthoring';
 import EasingCurveEditor from './EasingCurveEditor.vue';
 import type { Easing, LoopMode, TriggerConfig } from '@/types/protocol';
 
@@ -42,9 +41,9 @@ const store = useTimelineStore();
 const ws = getWsClient();
 const { t } = useI18n();
 const playback = useTimelinePlayback();
+const { upsertTransformKeyframe } = useTimelineAuthoring();
 
 const MANUAL_TRIGGER: TriggerConfig = { type: 'manual', params: {} };
-const LINEAR_EASING = { type: 'linear' as const };
 const ROW_H = 28;
 const RULER_H = 24;
 const LABEL_W = 220;
@@ -168,20 +167,12 @@ function deleteSelectedGroups(): void {
 }
 /**
  * 在播放头给元素所有 transform 属性各加/更新一帧（值=元素当前值），组成一个整体关键帧。
- * 同 timeMs 已有该属性帧 → 更新值（不重复加）；否则新增。
+ * 与画布拖动自动加帧共用 {@code useTimelineAuthoring}：同 timeMs 已有该属性帧 → 更新值（不重复加）；否则新增。
  */
 function addTransformKeyframe(elementId: string): void {
     if (!tl.value) return;
-    const el = project.elementById(elementId);
-    if (!el) return;
     const timeMs = store.playheadMs;
-    const existing = tl.value.tracks?.[elementId] ?? [];
-    for (const property of KEYFRAMEABLE_PROPERTIES) {
-        const value = defaultValueFor(el, property);
-        const ex = existing.find(k => k.property === property && k.timeMs === timeMs);
-        if (ex) ws.sendKeyframeUpdate(tl.value.id, ex.id, { value }).catch(() => { /* wsClient 日志 */ });
-        else ws.sendKeyframeAdd(tl.value.id, elementId, property, timeMs, value, LINEAR_EASING).catch(() => { /* wsClient 日志 */ });
-    }
+    upsertTransformKeyframe(tl.value, elementId, timeMs);
     store.selectGroup(transformKeyframeKey(elementId, timeMs));
 }
 
@@ -324,6 +315,12 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
         <div class="mx-2 h-4 w-px bg-[color:var(--border)]" />
         <span class="text-xs truncate max-w-[180px]">{{ tl.name }}</span>
         <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ tl.fps }}fps</span>
+        <div class="mx-1 h-4 w-px bg-[color:var(--border)]" />
+        <button
+          class="hc-btn p-1 rounded-[var(--radius-sm)] transition-colors"
+          :class="store.autoKeyframe ? 'bg-[color:var(--accent)] text-[color:var(--ctp-red)]' : 'text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
+          :title="t.timeline.autoKeyframe" @click="store.toggleAutoKeyframe()"
+        ><CircleDot class="size-4" /></button>
         <button
           class="hc-btn p-1 rounded-[var(--radius-sm)] transition-colors"
           :class="settingsOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"

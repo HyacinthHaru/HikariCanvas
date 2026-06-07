@@ -37,6 +37,8 @@ import { useNetworkStore } from '@/stores/network';
 import { useVariableStore } from '@/stores/variables';
 import { useTimelineStore } from '@/stores/timeline';
 import { interpolate } from '@/timeline/interpolation';
+import { applyDragOverride, transformKeyframeKey, type TransformSnapshot } from '@/components/timeline/timelineLogic';
+import { useTimelineAuthoring } from '@/composables/useTimelineAuthoring';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -46,8 +48,20 @@ const paintBucket = usePaintBucketStore();
 const net = useNetworkStore();
 const variableStore = useVariableStore();
 const timelineStore = useTimelineStore();
+const { upsertTransformKeyframe } = useTimelineAuthoring();
 // 2026-05-25 ultrareview #8：lock 多入口 guard。CanvasView 接入 grid / paint-bucket / icon-drop。
 const lockGuard = useLockGuard();
+
+/**
+ * 0.6 P4.5b：是否对画布拖动 / resize 自动加帧（"拉就设"）。需 dock 开 + 自动加帧开关 ON +
+ * 有激活时间轴 + wall 未锁。满足时拖元素在 playhead 自动打整体帧。
+ */
+function shouldAutoKeyframe(): boolean {
+    return timelineStore.dockOpen
+        && timelineStore.autoKeyframe
+        && timelineStore.activeTimeline != null
+        && !project.isLocked;
+}
 
 // ---------- 核心 ref ----------
 const canvasEl = ref<HTMLCanvasElement | null>(null);
@@ -249,6 +263,16 @@ const { onTransformEnd } = useTransformerManager({
 function onElementTransformEnd(ev: Parameters<typeof onTransformEnd>[0], id: string): void {
     onTransformEnd(ev, id);
     activeSnapHints.value = null;
+    // P4.5b：resize / rotate 落定也 upsert 整体帧（值取 onTransformEnd 已 mutate 的 el 最终几何）。
+    //   transform 无拖动期跟手覆盖（沿用 M17 行为，松手生效），故不设 draggingElementIds。
+    if (shouldAutoKeyframe()) {
+        const tlNow = timelineStore.activeTimeline;
+        if (tlNow) {
+            timelineStore.setPreviewActive(true);
+            upsertTransformKeyframe(tlNow, id, timelineStore.playheadMs);
+            timelineStore.selectGroups([transformKeyframeKey(id, timelineStore.playheadMs)]);
+        }
+    }
 }
 useCanvasShortcuts();
 const {
@@ -857,6 +881,13 @@ function onDragStart(id: string): void {
         if (el) init.set(id, { x: el.x, y: el.y });
     }
     dragInitial.value = init;
+
+    // P4.5b：自动加帧模式——记录拖动元素集（渲染期跟手覆盖 + dragend upsert 用），并切预览态让
+    //   画布显示 playhead 处画面，被拖元素的实时值覆盖在其上跟手（见 :renderProjectState 前的覆盖）。
+    if (shouldAutoKeyframe()) {
+        timelineStore.setPreviewActive(true);
+        timelineStore.setDraggingElementIds(new Set(init.keys()));
+    }
 }
 
 interface DragEvt { target: {
@@ -928,6 +959,7 @@ function onDragEnd(ev: DragEvt, id: string): void {
     // 2026-05-25 ultrareview #8 内层防线：drag mid-flight 远端 lock 兜底（理论 overlay 已挡 mousedown）
     if (!lockGuard.guardMutation('drag')) {
         dragInitial.value = new Map();
+        timelineStore.setDraggingElementIds(new Set());
         activeSnapHints.value = null;
         return;
     }
@@ -973,6 +1005,21 @@ function onDragEnd(ev: DragEvt, id: string): void {
             }
         }
     }
+    // P4.5b：拖动落定 → 给所有拖动元素在 playhead upsert 整体帧（"拉就设"），并选中这些整体帧。
+    //   值取 onDragMove 已乐观 mutate 的 el 当前几何；update 路径乐观改本地 value 消 WS 往返闪烁。
+    if (timelineStore.draggingElementIds.size > 0) {
+        const tlNow = timelineStore.activeTimeline;
+        if (tlNow) {
+            const timeMs = timelineStore.playheadMs;
+            const keys: string[] = [];
+            for (const did of timelineStore.draggingElementIds) {
+                upsertTransformKeyframe(tlNow, did, timeMs);
+                keys.push(transformKeyframeKey(did, timeMs));
+            }
+            timelineStore.selectGroups(keys);
+        }
+        timelineStore.setDraggingElementIds(new Set());
+    }
     dragInitial.value = new Map();
     // M17.4：drag 结束立刻清 hints（无 fade，v1.x 再加）
     activeSnapHints.value = null;
@@ -989,6 +1036,8 @@ watch(() => variableStore.variables, () => requestDraw());
 // scrubber 60fps 拖动每帧只付 1 rAF + 1 interpolate 浅拷贝 + 1 Canvas2D 全画，无深度 diff）。
 watch(() => timelineStore.playheadMs, () => requestDraw());
 watch(() => timelineStore.previewActive, () => requestDraw());
+// P4.5b：拖动元素集变化（自动加帧开始 set / 结束 clear）→ 重绘，叠加/撤掉拖动期跟手覆盖。
+watch(() => timelineStore.draggingElementIds, () => requestDraw());
 
 // P3-40：FontLoader / IconLoader / GlyphMetricsLut 的 requestDraw 订阅 unsubscribe 闭包，
 // onBeforeUnmount 逐一调用注销（与 stage.destroy 清理并列）。
@@ -1070,7 +1119,22 @@ function requestDraw(): void {
         let toRender = project.state;
         if (toRender && timelineStore.previewActive) {
             const tl = timelineStore.activeTimeline;
-            if (tl) toRender = interpolate(toRender, tl, timelineStore.playheadMs);
+            if (tl) {
+                toRender = interpolate(toRender, tl, timelineStore.playheadMs);
+                // P4.5b：拖动期被拖元素用实时几何覆盖插值结果，保证有帧元素也跟手（否则被插值钉在帧值、拖不动）。
+                const dragIds = timelineStore.draggingElementIds;
+                if (dragIds.size > 0) {
+                    const ov = new Map<string, TransformSnapshot>();
+                    for (const did of dragIds) {
+                        const el = project.elementById(did);
+                        if (el) ov.set(did, {
+                            x: el.x, y: el.y, w: el.w, h: el.h,
+                            rotation: el.rotation ?? 0, opacity: el.opacity ?? 1,
+                        });
+                    }
+                    toRender = applyDragOverride(toRender, ov);
+                }
+            }
         }
         renderProjectState(ctx, toRender, hide);
     });

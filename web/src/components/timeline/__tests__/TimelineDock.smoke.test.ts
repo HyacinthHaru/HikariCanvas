@@ -142,6 +142,19 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         await nextTick();
         expect(timeline.selectedGroups.has('e-1:0')).toBe(true);
     });
+
+    it('自动加帧 toggle 切 store.autoKeyframe（P4.5b）', async () => {
+        useProjectStore().setSnapshot(makeState());
+        const timeline = useTimelineStore();
+        timeline.openDock();
+        const wrapper = mount(TimelineDock);
+        await nextTick();
+        expect(timeline.autoKeyframe).toBe(true);   // 默认开
+        const btn = wrapper.find('[title^="自动加帧"]');
+        expect(btn.exists()).toBe(true);
+        await btn.trigger('click');
+        expect(timeline.autoKeyframe).toBe(false);
+    });
 });
 
 describe('EasingCurveEditor 渲染 smoke', () => {

@@ -34,6 +34,10 @@ export const useTimelineStore = defineStore('timeline', () => {
     const selectedKeyframeId = ref<string | null>(null);
     /** P4.5：选中的整体关键帧 key（elementId:timeMs）集合，多选。缓动 / 删除 / 拖动主操作单位。 */
     const selectedGroups = ref<Set<string>>(new Set());
+    /** P4.5b：自动加帧开关（PR 风"自动关键帧"）。ON + dock 开 + 有 timeline 时，画布拖元素在 playhead 自动打整体帧。 */
+    const autoKeyframe = ref(true);
+    /** P4.5b：正在拖动且会自动加帧的元素 id 集（渲染期跟手覆盖 + dragend upsert 用；非自动加帧拖动时恒空）。 */
+    const draggingElementIds = ref<Set<string>>(new Set());
 
     /** 所有时间轴（project.state mirror）。 */
     const timelines = computed<Timeline[]>(() => project.state?.timelines ?? []);
@@ -90,6 +94,10 @@ export const useTimelineStore = defineStore('timeline', () => {
     function clearGroups() { selectedGroups.value = new Set(); }
     function isGroupSelected(key: string): boolean { return selectedGroups.value.has(key); }
 
+    function setAutoKeyframe(on: boolean) { autoKeyframe.value = on; }
+    function toggleAutoKeyframe() { autoKeyframe.value = !autoKeyframe.value; }
+    function setDraggingElementIds(ids: Set<string>) { draggingElementIds.value = ids; }
+
     /** 清时间轴编辑态（dock 开关 + 播放态 + 缩放 + 选中 + 展开）。 */
     function reset() {
         dockOpen.value = false;
@@ -101,6 +109,8 @@ export const useTimelineStore = defineStore('timeline', () => {
         expandedElements.value = new Set();
         selectedKeyframeId.value = null;
         selectedGroups.value = new Set();
+        autoKeyframe.value = true;
+        draggingElementIds.value = new Set();
     }
 
     // 切 wall：project.reset() 置 state=null（project.reset 本身不碰时间轴编辑态）→ 自动清。
@@ -115,13 +125,14 @@ export const useTimelineStore = defineStore('timeline', () => {
 
     return {
         dockOpen, dockHeight, playheadMs, previewActive, playing, pxPerMs, scrollMs,
-        expandedElements, selectedKeyframeId, selectedGroups,
+        expandedElements, selectedKeyframeId, selectedGroups, autoKeyframe, draggingElementIds,
         timelines, activeTimeline,
         timelineById,
         openDock, closeDock, toggleDock, setDockHeight,
         setPlayhead, setPreviewActive, setPlaying, setPxPerMs, setScrollMs,
         toggleExpanded, expandAll, isExpanded, selectKeyframe,
         selectGroup, selectGroups, clearGroups, isGroupSelected,
+        setAutoKeyframe, toggleAutoKeyframe, setDraggingElementIds,
         reset,
     };
 });
