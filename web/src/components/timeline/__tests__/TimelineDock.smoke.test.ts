@@ -114,19 +114,38 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(wrapper.findAll('option').length).toBeGreaterThanOrEqual(3);
     });
 
-    it('整体关键帧块渲染 + 点选不崩（P4.5）', async () => {
+    it('整体关键帧块渲染 + pointer 点选不崩（P4.5 / P4.5b 块改 pointer 拖动）', async () => {
         useProjectStore().setSnapshot(makeStateWithKf());
         useUiStore().selectMany(['e-1']);
         const timeline = useTimelineStore();
         timeline.openDock();
         const wrapper = mount(TimelineDock);
         await nextTick();
-        // element row 把 x/y/opacity @ t=0 聚合成一个整体关键帧块（菱形 rotate-45）
+        timeline.setPxPerMs(0.1);   // happy-dom 无布局 → 手动给缩放，让块 pointer 选中路径可走
+        // element row 把 x/y/opacity @ t=0 聚合成一个整体关键帧块（菱形 rotate-45）；P4.5b 选中走 pointerup
         const blocks = wrapper.findAll('.rotate-45');
         expect(blocks.length).toBeGreaterThan(0);
-        await blocks[0].trigger('click');
+        await blocks[0].trigger('pointerdown', { clientX: 50, button: 0 });
+        await blocks[0].trigger('pointerup', { clientX: 50, button: 0 });   // 同 X → moved=false → 当点击
         await nextTick();
         expect(timeline.selectedGroups.has('e-1:0')).toBe(true);
+    });
+
+    it('展开后点击 per-property 关键帧 → selectKeyframe（P4.5b）', async () => {
+        useProjectStore().setSnapshot(makeStateWithKf());
+        useUiStore().selectMany(['e-1']);
+        const timeline = useTimelineStore();
+        timeline.openDock();
+        const wrapper = mount(TimelineDock);
+        await nextTick();
+        timeline.toggleExpanded('e-1');
+        await nextTick();
+        // per-property 块用 cursor-pointer（整体帧块是 cursor-ew-resize），点其一 → 选中单帧
+        const propBlocks = wrapper.findAll('.cursor-pointer.rotate-45');
+        expect(propBlocks.length).toBeGreaterThan(0);
+        await propBlocks[0].trigger('click');
+        expect(timeline.selectedKeyframeId).toBeTruthy();
+        expect(timeline.selectedGroups.size).toBe(0);   // 与整体帧选中互斥
     });
 
     it('加帧按钮选中新整体帧，不崩（P4.5）', async () => {

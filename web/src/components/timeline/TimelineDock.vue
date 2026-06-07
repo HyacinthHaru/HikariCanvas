@@ -27,8 +27,10 @@ import {
     formatTimeLabel,
     clampTimeMs,
     LOOP_MODES,
+    snapToFrame,
     aggregateTransformKeyframes,
     transformKeyframeKey,
+    groupsInMarquee,
     type TransformKeyframe,
 } from './timelineLogic';
 import { useTimelineAuthoring } from '@/composables/useTimelineAuthoring';
@@ -124,14 +126,111 @@ function onScrubUp(e: PointerEvent): void {
     scrubPointerId = -1;
 }
 
-// ---------- 整体关键帧：选中 / 缓动同步 / 删除 / 加帧 ----------
-function onGroupClick(e: MouseEvent, elementId: string, timeMs: number): void {
-    store.selectGroup(transformKeyframeKey(elementId, timeMs), e.shiftKey);
-}
+// ---------- 整体关键帧：选中 / 拖动改时刻 / 缓动同步 / 删除 / 加帧 ----------
 function isGroupSel(elementId: string, timeMs: number): boolean {
     return store.isGroupSelected(transformKeyframeKey(elementId, timeMs));
 }
 const hasSelectedGroup = computed(() => store.selectedGroups.size > 0);
+
+function groupKeyframeIds(elementId: string, timeMs: number): string[] {
+    if (!tl.value) return [];
+    return aggregateTransformKeyframes(tl.value, elementId).find(g => g.timeMs === timeMs)?.keyframeIds ?? [];
+}
+
+// 整体帧块 pointer 拖动改时刻：拖过阈值 = move，否则 = 点击选中。拖动期只给被拖块加视觉偏移
+// （blockLeft，不改 timeMs → :key 稳定、不丢 pointer capture）；松手才乐观挪 + 发 keyframe.move。
+const blockDrag = ref<{ elementId: string; origTimeMs: number; startX: number; curTimeMs: number; moved: boolean; keyframeIds: string[] } | null>(null);
+let blockPointerId = -1;
+function onBlockPointerDown(e: PointerEvent, elementId: string, timeMs: number): void {
+    if (!tl.value || store.pxPerMs <= 0) return;
+    e.stopPropagation();   // 不触发轨道区框选
+    blockDrag.value = {
+        elementId, origTimeMs: timeMs, startX: e.clientX, curTimeMs: timeMs,
+        moved: false, keyframeIds: groupKeyframeIds(elementId, timeMs),
+    };
+    blockPointerId = e.pointerId;
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+}
+function onBlockPointerMove(e: PointerEvent): void {
+    const d = blockDrag.value;
+    if (!d) return;
+    const dxPx = e.clientX - d.startX;
+    if (!d.moved && Math.abs(dxPx) < 3) return;
+    d.moved = true;
+    d.curTimeMs = snapToFrame(d.origTimeMs + dxPx / store.pxPerMs, tl.value?.fps ?? 20, durationMs.value);
+}
+function onBlockPointerUp(e: PointerEvent): void {
+    const d = blockDrag.value;
+    if (!d) return;
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(blockPointerId); } catch { /* ignore */ }
+    blockPointerId = -1;
+    if (d.moved && d.curTimeMs !== d.origTimeMs && tl.value) {
+        const track = tl.value.tracks?.[d.elementId];
+        for (const kfId of d.keyframeIds) {
+            const kf = track?.find(k => k.id === kfId);
+            if (kf) (kf as { timeMs: number }).timeMs = d.curTimeMs;   // 乐观本地挪，消 keyframe.move 往返闪烁
+            ws.sendKeyframeMove(tl.value.id, kfId, d.curTimeMs).catch(() => { /* wsClient 日志 */ });
+        }
+        store.selectGroup(transformKeyframeKey(d.elementId, d.curTimeMs));
+    } else if (!d.moved) {
+        store.selectGroup(transformKeyframeKey(d.elementId, d.origTimeMs), e.shiftKey);
+    }
+    blockDrag.value = null;
+}
+/** 整体帧块的 left：被拖块用拖动期临时时刻（视觉跟手，不改 timeMs 保 key 稳定），其余用真实 timeMs。 */
+function blockLeft(elementId: string, timeMs: number): number {
+    const d = blockDrag.value;
+    if (d && d.elementId === elementId && d.origTimeMs === timeMs) return kfX(d.curTimeMs);
+    return kfX(timeMs);
+}
+
+// ---------- 框选批量选中整体帧（问题 3：拉框 → Del 批量删） ----------
+const marquee = ref<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+let marqueePointerId = -1;
+function tracksContentXY(e: PointerEvent): { x: number; y: number } | null {
+    const el = tracksScrollRef.value;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top + el.scrollTop };
+}
+function onTracksPointerDown(e: PointerEvent): void {
+    if (e.button !== 0 || !tl.value) return;   // 仅左键；块 / 属性帧 pointerdown 已 stopPropagation
+    const p = tracksContentXY(e);
+    if (!p) return;
+    marquee.value = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    marqueePointerId = e.pointerId;
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+}
+function onTracksPointerMove(e: PointerEvent): void {
+    if (!marquee.value) return;
+    const p = tracksContentXY(e);
+    if (!p) return;
+    marquee.value = { ...marquee.value, x1: p.x, y1: p.y };
+}
+function onTracksPointerUp(e: PointerEvent): void {
+    const m = marquee.value;
+    if (!m) return;
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(marqueePointerId); } catch { /* ignore */ }
+    marqueePointerId = -1;
+    const moved = Math.abs(m.x1 - m.x0) > 3 || Math.abs(m.y1 - m.y0) > 3;
+    if (moved) {
+        store.selectGroups(groupsInMarquee(flatRows.value, m, store.pxPerMs, store.scrollMs, ROW_H));
+    } else {
+        store.clearGroups();
+        store.selectKeyframe(null);
+    }
+    marquee.value = null;
+}
+const marqueeStyle = computed(() => {
+    const m = marquee.value;
+    if (!m) return null;
+    return {
+        left: Math.min(m.x0, m.x1) + 'px',
+        top: Math.min(m.y0, m.y1) + 'px',
+        width: Math.abs(m.x1 - m.x0) + 'px',
+        height: Math.abs(m.y1 - m.y0) + 'px',
+    };
+});
 
 /** 恰好选中一个整体帧时返回它（缓动编辑用；多选时 null）。 */
 const selectedGroupKf = computed<TransformKeyframe | null>(() => {
@@ -183,11 +282,18 @@ watch(() => store.selectedGroups.size, (n) => { if (n === 0) easingEditorOpen.va
 // ---------- Delete 删选中整体帧（dock 打开 + 有选中 + 焦点不在输入框）----------
 useEventListener(window, 'keydown', (e: KeyboardEvent) => {
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-    if (!store.dockOpen || store.selectedGroups.size === 0) return;
+    if (!store.dockOpen) return;
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    deleteSelectedGroups();
-    e.preventDefault();
+    if (store.selectedGroups.size > 0) {
+        deleteSelectedGroups();
+        e.preventDefault();
+    } else if (store.selectedKeyframeId && tl.value) {
+        // per-property 子轨选中的单个关键帧
+        ws.sendKeyframeDelete(tl.value.id, store.selectedKeyframeId).catch(() => { /* wsClient 日志 */ });
+        store.selectKeyframe(null);
+        e.preventDefault();
+    }
 });
 
 // ---------- dock 高度 resize ----------
@@ -383,8 +489,11 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
           </div>
         </div>
 
-        <!-- 轨道 -->
-        <div ref="tracksScrollRef" class="flex-1 overflow-y-auto overflow-x-hidden relative" @scroll="onTracksScroll">
+        <!-- 轨道（空白拉框选整体帧；块 / 属性帧 pointerdown 已 stopPropagation 不触发框选） -->
+        <div
+          ref="tracksScrollRef" class="flex-1 overflow-y-auto overflow-x-hidden relative" @scroll="onTracksScroll"
+          @pointerdown="onTracksPointerDown" @pointermove="onTracksPointerMove" @pointerup="onTracksPointerUp" @pointercancel="onTracksPointerUp"
+        >
           <div v-if="flatRows.length === 0" class="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-[color:var(--muted-foreground)] pointer-events-none">{{ t.timeline.dockSelectHint }}</div>
           <div
             v-for="(row, i) in flatRows"
@@ -393,31 +502,42 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
             :class="row.kind === 'element' ? 'bg-[color:var(--muted)]/20' : ''"
             :style="{ height: ROW_H + 'px' }"
           >
-            <!-- 元素行：整体关键帧块（可选 / 删 / 缓动） -->
+            <!-- 元素行：整体关键帧块（点选 / Shift 多选 / 横拖改时刻 / 删 / 缓动） -->
             <template v-if="row.kind === 'element'">
               <div
                 v-for="g in row.groups"
                 :key="g.timeMs"
-                class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-pointer border"
+                class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-ew-resize border"
                 :class="isGroupSel(row.elementId, g.timeMs)
                   ? 'bg-[color:var(--ctp-yellow)] border-[color:var(--foreground)] z-10'
                   : 'bg-[color:var(--ctp-mauve)] border-[color:var(--card)]'"
-                :style="{ left: kfX(g.timeMs) + 'px' }"
+                :style="{ left: blockLeft(row.elementId, g.timeMs) + 'px' }"
                 :title="formatTimeLabel(g.timeMs)"
-                @click="onGroupClick($event, row.elementId, g.timeMs)"
+                @pointerdown="onBlockPointerDown($event, row.elementId, g.timeMs)"
+                @pointermove="onBlockPointerMove"
+                @pointerup="onBlockPointerUp"
+                @pointercancel="onBlockPointerUp"
                 @dblclick.stop
               />
             </template>
-            <!-- 属性子行：per-property 关键帧块（P4.5a 只读灰显，单属性微调留 P4.5b） -->
+            <!-- 属性子行：per-property 关键帧块（P4.5b 可点选，选中后 Del 删单帧） -->
             <template v-else>
               <div
                 v-for="kf in row.keyframes"
                 :key="kf.id"
-                class="absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 bg-[color:var(--muted-foreground)]/50 border border-[color:var(--card)]"
+                class="absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-pointer border"
+                :class="store.selectedKeyframeId === kf.id
+                  ? 'bg-[color:var(--ctp-yellow)] border-[color:var(--foreground)] z-10'
+                  : 'bg-[color:var(--muted-foreground)]/60 border-[color:var(--card)]'"
                 :style="{ left: kfX(kf.timeMs) + 'px' }"
+                :title="formatTimeLabel(kf.timeMs)"
+                @pointerdown.stop
+                @click.stop="store.selectKeyframe(kf.id)"
               />
             </template>
           </div>
+          <!-- 框选矩形（轨道内容坐标，随内容滚动） -->
+          <div v-if="marqueeStyle" class="absolute border border-[color:var(--ctp-blue)] bg-[color:var(--ctp-blue)]/10 pointer-events-none z-20" :style="marqueeStyle" />
         </div>
 
         <!-- 播放头竖线（贯穿标尺 + 轨道） -->

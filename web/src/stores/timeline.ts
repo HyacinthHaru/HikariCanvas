@@ -76,7 +76,10 @@ export const useTimelineStore = defineStore('timeline', () => {
     function expandAll(ids: string[]) { expandedElements.value = new Set(ids); }
     function isExpanded(elementId: string): boolean { return expandedElements.value.has(elementId); }
 
-    function selectKeyframe(id: string | null) { selectedKeyframeId.value = id; }
+    function selectKeyframe(id: string | null) {
+        selectedKeyframeId.value = id;
+        if (id) selectedGroups.value = new Set();   // 单属性帧与整体帧选中互斥
+    }
 
     /** P4.5 整体关键帧选中。additive（Shift）= 切换；否则单选替换。同时清单帧选中。 */
     function selectGroup(key: string, additive = false) {

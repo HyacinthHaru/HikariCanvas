@@ -477,3 +477,47 @@ export function planTransformUpsert(
     }
     return { timeMs, adds, updates };
 }
+
+/** 框选矩形（轨道内容坐标系，px；含 scrollTop，未归一化——x0/y0 起点、x1/y1 当前点）。 */
+export interface MarqueeRect {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+}
+
+/** dock 框选用的最简行视图（只需 kind / elementId / 整体帧块 timeMs）。 */
+export interface MarqueeRowView {
+    kind: string;
+    elementId: string;
+    groups?: { timeMs: number }[];
+}
+
+/**
+ * 算框选矩形命中的整体帧 key 列表（问题 3：拉框选中后 Del 批量删）。rows 按渲染顺序、每行高
+ * rowH；只考虑 element 行的整体帧块，块中心 x = {@link msToPx}(timeMs)、y = 行中线；命中 = 块中心
+ * 落在归一化后的矩形内。纯函数，不依赖 DOM。
+ */
+export function groupsInMarquee(
+    rows: MarqueeRowView[],
+    rect: MarqueeRect,
+    pxPerMs: number,
+    scrollMs: number,
+    rowH: number,
+): string[] {
+    const xMin = Math.min(rect.x0, rect.x1);
+    const xMax = Math.max(rect.x0, rect.x1);
+    const yMin = Math.min(rect.y0, rect.y1);
+    const yMax = Math.max(rect.y0, rect.y1);
+    const keys: string[] = [];
+    rows.forEach((row, i) => {
+        if (row.kind !== 'element' || !row.groups) return;
+        const yc = i * rowH + rowH / 2;
+        if (yc < yMin || yc > yMax) return;
+        for (const g of row.groups) {
+            const xc = msToPx(g.timeMs, pxPerMs, scrollMs);
+            if (xc >= xMin && xc <= xMax) keys.push(transformKeyframeKey(row.elementId, g.timeMs));
+        }
+    });
+    return keys;
+}

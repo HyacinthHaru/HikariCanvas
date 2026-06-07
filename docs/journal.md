@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-06-07 · 0.6.0-P4.5b-2/3/4 — dock 关键帧直接操作（框选批量删 + 块拖动改时刻 + per-property 选删）
+
+P4.5b 收口：把 dock 里关键帧从"只能点 + 加 / 点块选"补成可框选、可拖、可逐属性操作。
+
+- **框选批量删（问题 3，显式诉求）**：轨道空白处拉框 → 框中所有整体帧块选中 → Del 一次全删。
+  纯函数 `groupsInMarquee`（块中心 x=msToPx(timeMs) / y=行中线，命中归一化矩形）；dock 在
+  tracksScrollRef 上接 pointer 框选 + 蓝色选框 overlay（轨道内容坐标，随滚动）；空白单击 = 清选。
+- **整体帧块横拖改时刻**：块改 pointer 交互（拖过 3px=move，否则=点击选中 / Shift 多选）。拖动期只
+  给被拖块加视觉偏移（`blockLeft`，**不改 timeMs → :key 稳定、不丢 pointer capture**）；松手才乐观挪
+  本地 timeMs + 发 `keyframe.move`（整组所有 transform 帧）。snapToFrame 吸帧。注：拖到同元素已有帧的
+  timeMs 会并存冗余帧（后端 move 不去重、interpolate 按"重合取后"，前后端一致不崩；去重留后续）。
+- **per-property 子轨选删**：展开后单属性帧从只读变可点选（黄色高亮）；选中后 Del 删单帧；与整体帧
+  选中互斥（store.selectKeyframe 选单帧即清 selectedGroups）。dock keydown：整体帧优先，否则删单帧。
+- **块 / 属性帧 pointerdown 都 stopPropagation** 不触发框选；框选仅左键起。
+
+前端 494 → **500**（+6：groupsInMarquee 5 + per-property 选中 smoke 1；块选中 smoke 改 pointer 路径）/
+vite build 过 / main 778 kB / TimelineDock chunk 21.7 kB / 0 漂移。
+关联：`components/timeline/{timelineLogic.ts,TimelineDock.vue,__tests__/}` `stores/timeline.ts`
+
+**P4.5b 完工**：缓动轨迹（P4.5a）+ 拉就设（b-1）+ 框选删 / 块拖 / 逐属性（b-2/3/4）三个实测反馈全闭环。
+
+---
+
 ## 2026-06-07 · 0.6.0-P4.5b-1 — 拖画布元素自动加帧（"拉就设"，实测反馈问题 2 核心）
 
 P4.5a 整体关键帧实测通过后做 P4.5b 第一刀：把 AE/PR 的"自动关键帧"搬进来——开着开关，在画布上

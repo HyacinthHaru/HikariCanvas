@@ -34,9 +34,11 @@ import {
     transformKeyframeKey,
     applyDragOverride,
     planTransformUpsert,
+    groupsInMarquee,
     validateCreateForm,
     type CreateFormInput,
     type TransformSnapshot,
+    type MarqueeRowView,
 } from '../timelineLogic';
 import type { Element, Fill, Keyframe, ProjectState, Timeline } from '@/types/protocol';
 
@@ -576,5 +578,40 @@ describe('applyDragOverride (P4.5b 拖动期跟手覆盖)', () => {
         applyDragOverride(s, new Map([['e-1a2b3c4d', snap]]));
         const orig = s.layers[0].elements[0] as unknown as Record<string, number>;
         expect([orig.x, orig.y]).toEqual([10, 20]);   // 原 state 元素纹丝不动
+    });
+});
+
+describe('groupsInMarquee (P4.5b 框选批量选中)', () => {
+    // pxPerMs=0.1 → timeMs 0→x0, 500→x50, 1000→x100；rowH=28 → 行中线 i*28+14
+    const rows: MarqueeRowView[] = [
+        { kind: 'element', elementId: 'e-1', groups: [{ timeMs: 0 }, { timeMs: 1000 }] }, // i0 yc14
+        { kind: 'property', elementId: 'e-1' },                                            // i1 yc42（无 groups，跳过）
+        { kind: 'element', elementId: 'e-2', groups: [{ timeMs: 500 }] },                  // i2 yc70
+    ];
+
+    it('rect covering everything → all element-row group keys', () => {
+        const keys = groupsInMarquee(rows, { x0: -10, y0: -10, x1: 200, y1: 200 }, 0.1, 0, 28);
+        expect(keys.sort()).toEqual(['e-1:0', 'e-1:1000', 'e-2:500']);
+    });
+
+    it('rect bounded by row 0 + x≤50 → only e-1:0', () => {
+        // y 0..28 只含 row0（yc14）；x 0..50 只含 timeMs 0（x0），不含 timeMs 1000（x100）
+        const keys = groupsInMarquee(rows, { x0: 0, y0: 0, x1: 50, y1: 28 }, 0.1, 0, 28);
+        expect(keys).toEqual(['e-1:0']);
+    });
+
+    it('rect over second element row → e-2:500', () => {
+        const keys = groupsInMarquee(rows, { x0: 0, y0: 56, x1: 100, y1: 84 }, 0.1, 0, 28);
+        expect(keys).toEqual(['e-2:500']);
+    });
+
+    it('non-overlapping rect → []', () => {
+        const keys = groupsInMarquee(rows, { x0: 300, y0: 0, x1: 400, y1: 200 }, 0.1, 0, 28);
+        expect(keys).toEqual([]);
+    });
+
+    it('normalizes reversed drag (x1<x0 / y1<y0)', () => {
+        const keys = groupsInMarquee(rows, { x0: 50, y0: 28, x1: 0, y1: 0 }, 0.1, 0, 28);
+        expect(keys).toEqual(['e-1:0']);
     });
 });
