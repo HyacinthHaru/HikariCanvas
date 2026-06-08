@@ -1025,6 +1025,12 @@ function onDragEnd(ev: DragEvt, id: string): void {
     activeSnapHints.value = null;
 }
 
+// requestDraw 的 rAF 去抖标志：**必须在下面 immediate watch 之前声明**——否则该 watch 在 setup 期
+// 同步调 requestDraw 时 drawPending 仍在 TDZ → "Cannot access 'drawPending' before initialization"，
+// CanvasView 启动即崩（M5 起潜伏，旧 minifier 恰好提升了声明所以没显形，0.6 P5 重打包后暴露）。
+let drawPending = false;
+let drawRafId: number | null = null;
+
 // 重绘：state 或 editingId 变就重画 canvas
 watch(() => project.state, () => requestDraw(), { deep: true, immediate: true });
 watch(editingId, () => requestDraw());
@@ -1076,8 +1082,7 @@ onMounted(() => {
     });
 });
 
-let drawPending = false;
-let drawRafId: number | null = null;
+// （drawPending / drawRafId 已上移到 immediate watch 之前声明，见上方注释）
 
 // M16 P4.2 Konva 清理：组件 unmount 时显式 destroy stage（级联清理 Layer / Transformer
 // 内部的 listeners + 2D context + cached image data）。Vue Konva 不主动 destroy node。

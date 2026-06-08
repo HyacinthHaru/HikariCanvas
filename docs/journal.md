@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-08 · 0.6.0-P5 hotfix — CanvasView 启动 TDZ（潜伏 bug 被 P5 重打包暴露）
+
+用户实测 P5：点设置里「变量变了就播」没反应 + 控制台 `Cannot access 'pt' before initialization`。
+**根因不在触发器**——是 CanvasView 一个从 M5 就潜伏的 TDZ：`requestDraw` 的 rAF 去抖标志 `let
+drawPending`（+ `drawRafId`）声明在那个 `watch(()=>project.state, ()=>requestDraw(), {deep, immediate})`
+**之后**；immediate 在 setup 期同步调 requestDraw 读 drawPending → TDZ → CanvasView 启动即崩 → 整个画布
+坏掉、点啥都没反应。M5 起一直这样写，旧 minifier 恰好把 `let` 提升到函数顶所以没显形；0.6 P5 加了模块
+后 rolldown 重新优化、这次没提升，bug 暴露。
+
+- **修**：把 `drawPending` / `drawRafId` 两个 `let` 上移到 immediate watch 之前声明（函数 hoisted 不用动）。
+  源码层面声明先于使用，minifier 无论怎么排都不会再 TDZ。
+- **客观验证**：解码新产物 `index-vVcHQrM6.js` 确认 `let`（minified `ft`）偏移 564835 < immediate watch
+  偏移 564868——声明已在 watch 前。另扫全前端其余 3 个 immediate watch（dock 时间映射 / dock 触发类型 /
+  useLivePaint），回调要么用更早声明的 ref/computed、要么调 hoisted 函数，均无同类隐患。
+- **教训**：`immediate: true` 的 watch 回调里同步用到的 `let`/`const` 必须声明在 watch 之前（hoisted
+  function 例外）；这类 minifier-相关潜伏 TDZ 只在打包产物显形，vitest 不打包抓不到。
+
+前端 509 全绿 / vite build 过 / 0 漂移。关联：`components/layout/CanvasView.vue`。
+
+---
+
 ## 2026-06-08 · 0.6.0-P5 触发器（变量变化 / 到点 → 时间轴自动播；a/b/c 一起做）
 
 时间轴的"何时播"补完：招牌按游戏数据自己反应。地基全复用（变量监听 + Ticker + schedule 变量），
