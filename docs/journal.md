@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-06-08 · 0.6.0-P5 诊断日志 — 排查"重启前动画/触发不工作、重启后正常"
+
+用户实测：墙动画 / 触发器在**重启服务器后正常，重启前不工作**。这指向运行时注册状态问题（启动的
+`autoRegisterAll` / `rebuildAll` 全量扫描正确，运行时 `rebuildForWall` / `refreshAutoPlay` 增量路径可疑）。
+代码静态审查（WallRepo 无缓存层、loadById 直查 DB、persistWall→rebuildForWall 与 cancel→refreshAutoPlay
+hook 都已接、autoLoopEligible 对 LOOP+MANUAL 放行）没看出确定 bug——这类无法本地复现的运行时状态问题，
+加诊断日志让下次实测的服务器控制台直接定位卡点。
+
+- **TimelineTriggerRegistry**：绑定注册成功 → INFO「已绑定：墙 X 时间轴 Y ← 监听变量 <解析后fullName>」；
+  变量变化命中绑定 → INFO「变量 X 变化 → 播放墙 Y」；去抖跳过 → FINE。这三条能区分：绑定没注册 /
+  变量名没匹配 / 去抖吞掉 / play 抛错。
+- **AnimationTicker.refreshAutoPlay**：自动播分支 → INFO「墙 X 自动播放循环动画（编辑器关闭/刷新触发）」。
+  配合启动期已有的「N wall(s) auto-playing」，能看出正常循环动画在运行时是否自动播。
+- 这些 INFO 日志也是运维长期想要的"触发器何时点火"可观测性（PROPOSAL §2.1 数据透明），保留。
+
+后端 compile + 触发器/Ticker 测试全过 / 行为不变（纯日志）。关联：`render/{TimelineTriggerRegistry,AnimationTicker}.java`。
+**下次实测**：重启挂新 jar → 设触发器看「已绑定」→ 改变量看「变量变化 → 播放」→ 把控制台对应行发我。
+
+---
+
 ## 2026-06-08 · 0.6.0-P5 hotfix-2 — 触发方式下拉点了弹回默认（picker 自动开被 onClickOutside 立即关）
 
 CanvasView TDZ 修好、画布起来后，用户实测：点「变量变了就播」/「到点就播」下拉**没反应、卡在默认项**。
