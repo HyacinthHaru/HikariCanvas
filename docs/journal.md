@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-06-07 · 0.6.0-P4.5b 实测 3 bug 修复（撤回粒度 / 时间数字闪烁 / 时长缩短无反馈）
+
+用户实测 P4.5b 报 3 个小 bug，逐一定位根因后修：
+
+- **Bug 2（撤回不回收旧帧 + 出现两个帧，最严重）**：根因 = 一次"拉就设 / 加帧 / 整体块拖动"
+  写元素 6 个 transform 属性 = 6 条 `keyframe.*` op，各自 `commitHistory` → **6 个独立 undo 步**。
+  ctrl+z 只撤 1/6，整体帧块（6 帧聚合）看着没消失；若元素原本别处有帧，就剩"原帧 + 没撤干净的
+  新帧"两个块。修：`keyframe.add/update/move` 加**可选 `coalesceKey`**，前端给一组 op 传同一个 key
+  （`integ:{eid}:{ms}` / `integ-move:{eid}:{ms}`）→ 后端 `commitHistoryCoalesced` 合并成一步撤销。
+  **向后兼容**：缺省回退原行为（add 各一步 / update·move 按单帧键 `eid:kfId:prop` 合并），靠**方法重载**
+  让所有旧调用方零改动。后端 restore() 本就正确还原 timelines（全量 snapshot 下行），故只是粒度问题。
+- **Bug 1（时间数字闪烁）**：播放头读数用 `formatTimeLabel` 去尾 0（2.4s / 2.33s）+ ms↔s 切换 →
+  宽度抖动一闪一闪。新 `formatClock` 定宽 `m:ss.mmm`（秒 / 毫秒零填充）+ tabular-nums → 彻底不抖。
+  标尺刻度仍用 formatTimeLabel（刻度静态、去尾 0 更易读）。
+- **Bug 3（时长 5000→4000 没反应、→6000 可以）**：根因 = 后端拒"时长短于最后一个关键帧"
+  （`INVALID_KEYFRAME_TIME`），前端 `.catch` 静默吞 → "没反应"。修：dock 设置预校验 `maxKeyframeMs`
+  （前端算全轨最大帧时刻），缩到帧之下 → inline 红字提示"时长不能短于最后一个关键帧（X），先移走/删掉它"
+  + 输入框回弹到当前有效值；超范围同样提示。
+
+后端 1274 → **1277**（+3：批量 add / move 合并撤销 + 无 key 各自撤销 + 兼容旧签名）/ 前端 500 → **503**
+（formatClock 3）/ vite build 过 / 0 漂移。
+契约：`protocol.md §5.13`（coalesceKey 可选字段）+ `timeline.md §7.2`（coalesce key 整体帧批量）。
+关联：`state/{TimelineOperations,EditSession}.java` `web/EditOpDispatcher.java` `network/wsClient.ts`
+`composables/useTimelineAuthoring.ts` `components/timeline/{timelineLogic.ts,TimelineDock.vue}` `i18n/messages.ts`
+
+---
+
 ## 2026-06-07 · 0.6.0-P4.5b-2/3/4 — dock 关键帧直接操作（框选批量删 + 块拖动改时刻 + per-property 选删）
 
 P4.5b 收口：把 dock 里关键帧从"只能点 + 加 / 点块选"补成可框选、可拖、可逐属性操作。

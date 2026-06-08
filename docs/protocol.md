@@ -354,12 +354,14 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 
 | op | 方向 | payload | 说明 |
 | --- | --- | --- | --- |
-| `keyframe.add` | C→S | `{ timelineId, elementId, property, timeMs, value, easing }` | 在指定元素属性轨上加关键帧；`ack { version }`，新 keyframe（含 id）经 `state.patch` 下发（同 `element.add` 范式）；`error TIMELINE_NOT_FOUND / INVALID_ELEMENT`（elementId 不存在）`/ INVALID_KEYFRAME_TIME / INVALID_EASING / INVALID_PAYLOAD`（property 不在白名单 / 配额超限 / 值类型不匹配） |
-| `keyframe.update` | C→S | `{ timelineId, keyframeId, patch: { timeMs?, value?, easing? } }` | 部分更新；`error KEYFRAME_NOT_FOUND / INVALID_KEYFRAME_TIME / INVALID_EASING` |
+| `keyframe.add` | C→S | `{ timelineId, elementId, property, timeMs, value, easing, coalesceKey? }` | 在指定元素属性轨上加关键帧；`ack { version }`，新 keyframe（含 id）经 `state.patch` 下发（同 `element.add` 范式）；`error TIMELINE_NOT_FOUND / INVALID_ELEMENT`（elementId 不存在）`/ INVALID_KEYFRAME_TIME / INVALID_EASING / INVALID_PAYLOAD`（property 不在白名单 / 配额超限 / 值类型不匹配） |
+| `keyframe.update` | C→S | `{ timelineId, keyframeId, patch: { timeMs?, value?, easing? }, coalesceKey? }` | 部分更新；`error KEYFRAME_NOT_FOUND / INVALID_KEYFRAME_TIME / INVALID_EASING` |
 | `keyframe.delete` | C→S | `{ timelineId, keyframeId }` | 删除关键帧；`error KEYFRAME_NOT_FOUND` |
-| `keyframe.move` | C→S | `{ timelineId, keyframeId, timeMs }` | 仅挪时刻的高频快捷；拖动期前端本地 mutate，`dragend` 发一条；`error KEYFRAME_NOT_FOUND / INVALID_KEYFRAME_TIME` |
+| `keyframe.move` | C→S | `{ timelineId, keyframeId, timeMs, coalesceKey? }` | 仅挪时刻的高频快捷；拖动期前端本地 mutate，`dragend` 发一条；`error KEYFRAME_NOT_FOUND / INVALID_KEYFRAME_TIME` |
 
 > `property` 取值集合（`x`/`y`/`w`/`h`/`rotation`/`opacity`/`color`/`fill`/`text` 等）与其插值类别（数值 / 颜色 / 离散）见 `docs/rendering.md §9.2`；`easing` 结构（`type` + 可选 `bezier` 控制点）见 `docs/rendering.md §9.3`。
+>
+> **`coalesceKey`（可选，0.6 P4.5b 新增）**：一个用户动作映射到多条 `keyframe.*` op 时（"整体帧"——拉就设 / 加帧 / 整体块拖动一次性写元素全部 transform 属性）让它们共享一个撤销步。同 `coalesceKey` 的连续 op 在历史栈按 `commitHistoryCoalesced` 合并为一步（窗口 500ms，见 `timeline.md §7.2`），一次撤销整组回收。**缺省（不传）= 保持单帧粒度**（`add` 各自一步；`update`/`move` 按默认键 `{elementId}:{keyframeId}:{property}` 合并连续拖动），向后兼容。
 >
 > 撤销侧 keyframe 连续拖动会按 coalesce key 合并（`docs/timeline.md §7`），协议层无需感知——前端在 `dragend` 才发终值一条 op，服务端按常规处理。
 

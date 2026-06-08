@@ -804,6 +804,8 @@ export const messages = {
             // 校验 / 错误（reason key 与 timelineLogic.validateCreateForm 对齐）
             errDurationPositive: '时长必须是大于 0 的整数（毫秒）',
             errDurationTooLong: '时长太长了（上限 600000 毫秒 = 10 分钟）',
+            errDurationRange: '时长要在 100 到 3600000 毫秒之间',
+            errDurationBelowKeyframe: '时长不能短于最后一个关键帧（{t}）。先把它往前拖或删掉，再缩短时长。',
             errFpsPositive: '每秒帧数必须是大于 0 的整数',
             errFpsTooHigh: '每秒帧数太高了（上限 240）',
             errLoopMode: '播放方式无效',
@@ -1712,6 +1714,8 @@ export const messages = {
             // Validation / errors (reason keys align with timelineLogic.validateCreateForm)
             errDurationPositive: 'Duration must be a positive integer (ms)',
             errDurationTooLong: 'Duration is too long (max 600000 ms = 10 minutes)',
+            errDurationRange: 'Duration must be between 100 and 3600000 ms',
+            errDurationBelowKeyframe: 'Duration can\'t be shorter than the last keyframe ({t}). Move or delete it first, then shrink the duration.',
             errFpsPositive: 'Frames per second must be a positive integer',
             errFpsTooHigh: 'Frames per second is too high (max 240)',
             errLoopMode: 'Invalid playback mode',

@@ -31,6 +31,7 @@ import {
     aggregateTransformKeyframes,
     transformKeyframeKey,
     groupsInMarquee,
+    formatClock,
     type TransformKeyframe,
 } from './timelineLogic';
 import { useTimelineAuthoring } from '@/composables/useTimelineAuthoring';
@@ -166,10 +167,12 @@ function onBlockPointerUp(e: PointerEvent): void {
     blockPointerId = -1;
     if (d.moved && d.curTimeMs !== d.origTimeMs && tl.value) {
         const track = tl.value.tracks?.[d.elementId];
+        // 整组帧共享 coalesceKey → 后端合并成一步撤销（与拉就设同理，Bug 2）
+        const coalesceKey = `integ-move:${d.elementId}:${d.origTimeMs}`;
         for (const kfId of d.keyframeIds) {
             const kf = track?.find(k => k.id === kfId);
             if (kf) (kf as { timeMs: number }).timeMs = d.curTimeMs;   // 乐观本地挪，消 keyframe.move 往返闪烁
-            ws.sendKeyframeMove(tl.value.id, kfId, d.curTimeMs).catch(() => { /* wsClient 日志 */ });
+            ws.sendKeyframeMove(tl.value.id, kfId, d.curTimeMs, coalesceKey).catch(() => { /* wsClient 日志 */ });
         }
         store.selectGroup(transformKeyframeKey(d.elementId, d.curTimeMs));
     } else if (!d.moved) {
@@ -339,13 +342,38 @@ async function createTimeline(): Promise<void> {
 // ---------- timeline 设置 ----------
 const settingsOpen = ref(false);
 const confirmDeleteTimeline = ref(false);
+const settingsError = ref<string | null>(null);   // duration 等校验失败的 inline 提示
+/** 该 timeline 全轨最大关键帧时刻——时长不能缩到它以下（与后端 maxKeyframeTime 校验对齐，提前给反馈）。 */
+const maxKeyframeMs = computed(() => {
+    const t0 = tl.value;
+    if (!t0?.tracks) return 0;
+    let max = 0;
+    for (const track of Object.values(t0.tracks)) {
+        for (const kf of track) if (kf.timeMs > max) max = kf.timeMs;
+    }
+    return max;
+});
 function updateTimeline(patch: Partial<{ name: string; durationMs: number; fps: number; loopMode: LoopMode }>): void {
     if (tl.value) ws.sendTimelineUpdate(tl.value.id, patch).catch(() => { /* wsClient 日志 */ });
 }
 function onNameChange(e: Event): void { updateTimeline({ name: (e.target as HTMLInputElement).value }); }
 function onDurationChange(e: Event): void {
-    const v = parseInt((e.target as HTMLInputElement).value, 10);
-    if (Number.isInteger(v) && v >= 100 && v <= 3_600_000) updateTimeline({ durationMs: v });
+    const input = e.target as HTMLInputElement;
+    const v = parseInt(input.value, 10);
+    settingsError.value = null;
+    const m = t.value.timeline as unknown as Record<string, string>;
+    if (!Number.isInteger(v) || v < 100 || v > 3_600_000) {
+        settingsError.value = m.errDurationRange;
+        input.value = String(tl.value?.durationMs ?? '');   // 回弹到当前有效值
+        return;
+    }
+    // 时长不能短于最后一个关键帧（后端会拒 INVALID_KEYFRAME_TIME，这里提前给清楚的原因）
+    if (v < maxKeyframeMs.value) {
+        settingsError.value = m.errDurationBelowKeyframe.replace('{t}', formatTimeLabel(maxKeyframeMs.value));
+        input.value = String(tl.value?.durationMs ?? '');
+        return;
+    }
+    updateTimeline({ durationMs: v });
 }
 function onFpsChange(e: Event): void {
     const v = parseInt((e.target as HTMLInputElement).value, 10);
@@ -363,7 +391,7 @@ function loopModeLabel(m: string): string {
     const map: Record<string, string> = { once: x.loopOnce, loop: x.loopLoop, pingPong: x.loopPingPong };
     return map[m] ?? m;
 }
-watch(settingsOpen, (open) => { if (!open) confirmDeleteTimeline.value = false; });
+watch(settingsOpen, (open) => { if (!open) { confirmDeleteTimeline.value = false; settingsError.value = null; } });
 
 // ---------- 标签 ----------
 function propertyLabel(p: string): string {
@@ -417,7 +445,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
         <button class="hc-btn p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)]" :title="playing ? t.timeline.pause : t.timeline.play" @click="togglePlay">
           <Pause v-if="playing" class="size-4" /><Play v-else class="size-4" />
         </button>
-        <span class="ml-1 text-xs tabular-nums text-[color:var(--muted-foreground)]">{{ formatTimeLabel(store.playheadMs) }} / {{ formatTimeLabel(durationMs) }}</span>
+        <span class="ml-1 text-xs tabular-nums text-[color:var(--muted-foreground)]">{{ formatClock(store.playheadMs) }} / {{ formatClock(durationMs) }}</span>
         <div class="mx-2 h-4 w-px bg-[color:var(--border)]" />
         <span class="text-xs truncate max-w-[180px]">{{ tl.name }}</span>
         <span class="text-[10px] text-[color:var(--muted-foreground)]">{{ tl.fps }}fps</span>
@@ -574,6 +602,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
           <input :value="tl.fps" type="number" min="1" max="240" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onFpsChange" />
         </label>
       </div>
+      <p v-if="settingsError" class="text-[10px] text-[color:var(--destructive)] leading-snug">{{ settingsError }}</p>
       <label class="flex flex-col gap-1">
         <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.newLoop }}</span>
         <select :value="tl.loopMode" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onLoopChange">

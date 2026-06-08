@@ -333,8 +333,13 @@ keyframe 拖动是高频小改（一秒几十次 op），不处理会**瞬间填
 
 ### 7.2 coalescing（D7 路线 A）
 
-- **coalesce key** = `{elementId}:{keyframeId}:{property}`。同 key 的连续 op 在 `commitHistory` 处**合并**
-  （不 push 新快照，只更新栈顶 + `future.clear()`），加一个时间窗（如 500ms 内算同一次拖动）。
+- **coalesce key**：默认 `{elementId}:{keyframeId}:{property}`（单属性连续拖动 / 滑块合并）。同 key 的连续 op
+  在 `commitHistory` 处**合并**（不 push 新快照，只更新栈顶 + `future.clear()`），加一个时间窗（500ms 内算
+  同一次拖动）。
+- **整体帧批量 op（P4.5b）**：一个用户动作（拉就设 / 加帧 / 整体块拖动）一次性写元素全部 transform 属性 =
+  多条 `keyframe.*` op。前端给这组 op 传**同一个** `coalesceKey`（如 `integ:{elementId}:{timeMs}`），后端优先用
+  它合并 → 一次撤销整组回收。**缺省回退**到上面的单帧默认键，向后兼容（见 `protocol.md §5.13`）。这修了
+  "整体帧 6 个属性各成一步撤销 → ctrl+z 只回收 1/6、整体帧块不消失"的实测 Bug。
 - `MAX_HISTORY` 条件提升：有 `activeTimelineId` 的工程 16→64。**提升是会话内粘性的**——一旦观察到激活
   时间轴即保持 64，不随时间轴删除回落；否则「删最后一条时间轴」的 commit 自身会按 16 当场 trim，
   瞬间丢弃最多 48 条真实历史（P1 审查确认项，2026-06-04 实装时固化）。

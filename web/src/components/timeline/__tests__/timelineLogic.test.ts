@@ -21,6 +21,7 @@ import {
     defaultValueForExtended,
     formatKeyframeValue,
     formatTimeLabel,
+    formatClock,
     frameMs,
     groupKeyframesByElement,
     isValidKeyframeTime,
@@ -426,6 +427,23 @@ describe('formatTimeLabel (P4)', () => {
         expect(formatTimeLabel(1000)).toBe('1s');
         expect(formatTimeLabel(1500)).toBe('1.5s');
         expect(formatTimeLabel(2250)).toBe('2.25s');
+    });
+});
+
+describe('formatClock (P4.5 fix Bug1 定宽时钟)', () => {
+    it('zero-pads seconds + millis to fixed m:ss.mmm', () => {
+        expect(formatClock(0)).toBe('0:00.000');
+        expect(formatClock(2333)).toBe('0:02.333');
+        expect(formatClock(5000)).toBe('0:05.000');
+        expect(formatClock(65432)).toBe('1:05.432');
+    });
+    it('clamps negative to 0', () => {
+        expect(formatClock(-100)).toBe('0:00.000');
+    });
+    it('keeps constant width across decimal changes (anti-flicker)', () => {
+        // 2.40s vs 2.33s：formatTimeLabel 去尾0 会变宽抖动；formatClock 恒 8 字符
+        expect(formatClock(2400).length).toBe(formatClock(2333).length);
+        expect(formatClock(2400)).toBe('0:02.400');
     });
 });
 

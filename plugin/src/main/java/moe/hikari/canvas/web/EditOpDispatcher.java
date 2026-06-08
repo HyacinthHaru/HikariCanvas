@@ -267,14 +267,17 @@ final class EditOpDispatcher {
                 // value / easing 形态因 property 而异（number / string / object），原样透传
                 Object value = payload.get("value");
                 Object easing = payload.get("easing");
-                yield es.addKeyframe(tid, eid, property, timeMs, value, easing);
+                // 0.6 P4.5b：可选 coalesceKey——整体帧批量加帧（拉就设 / + 按钮）共享一步撤销
+                String ck = stringOrNull(payload.get("coalesceKey"));
+                yield es.addKeyframe(tid, eid, property, timeMs, value, easing, ck);
             }
             case "keyframe.update" -> {
                 String tid = stringOrNull(payload.get("timelineId"));
                 String kid = stringOrNull(payload.get("keyframeId"));
                 @SuppressWarnings("unchecked")
                 Map<String, Object> kp = (Map<String, Object>) mapOrEmpty(payload.get("patch"));
-                yield es.updateKeyframe(tid, kid, kp);
+                String ck = stringOrNull(payload.get("coalesceKey"));
+                yield es.updateKeyframe(tid, kid, kp, ck);
             }
             case "keyframe.delete" -> {
                 String tid = stringOrNull(payload.get("timelineId"));
@@ -285,7 +288,8 @@ final class EditOpDispatcher {
                 String tid = stringOrNull(payload.get("timelineId"));
                 String kid = stringOrNull(payload.get("keyframeId"));
                 Integer timeMs = intOrNull(payload.get("timeMs"));
-                yield es.moveKeyframe(tid, kid, timeMs);
+                String ck = stringOrNull(payload.get("coalesceKey"));
+                yield es.moveKeyframe(tid, kid, timeMs, ck);
             }
             // ---- history / template ----
             case "undo" -> es.undo();

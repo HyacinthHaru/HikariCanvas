@@ -27,15 +27,18 @@ export function useTimelineAuthoring() {
         if (!el) return;
         const plan = planTransformUpsert(timeline, el, timeMs);
         const track = timeline.tracks?.[elementId];
+        // 整体帧 = 一个用户动作。6 个属性 op 共享同一 coalesceKey → 后端合并成一步撤销
+        // （修"撤回只回收 1/6 属性、整体帧块不消失"，实测反馈 Bug 2）。
+        const coalesceKey = `integ:${elementId}:${timeMs}`;
         for (const u of plan.updates) {
             // 乐观：直接改 mirror 里该 kf 的 value（reactive → 触发画布重绘）；patch 回来值一致无害
             const kf = track?.find(k => k.id === u.keyframeId);
             if (kf) (kf as { value: number }).value = u.value;
-            ws.sendKeyframeUpdate(timeline.id, u.keyframeId, { value: u.value })
+            ws.sendKeyframeUpdate(timeline.id, u.keyframeId, { value: u.value }, coalesceKey)
                 .catch(() => { /* wsClient 已日志 */ });
         }
         for (const a of plan.adds) {
-            ws.sendKeyframeAdd(timeline.id, elementId, a.property, timeMs, a.value, LINEAR_EASING)
+            ws.sendKeyframeAdd(timeline.id, elementId, a.property, timeMs, a.value, LINEAR_EASING, coalesceKey)
                 .catch(() => { /* wsClient 已日志 */ });
         }
     }

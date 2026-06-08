@@ -564,16 +564,29 @@ public final class EditSession {
         return timelineOps.deleteTimeline(timelineId);
     }
 
-    /** 见 {@link TimelineOperations#addKeyframe(String, String, String, Integer, Object, Object)}。 */
+    /** 见 {@link TimelineOperations#addKeyframe}。{@code coalesceKey} 可空（整体帧批量加帧合并撤销）。 */
     public synchronized OpResult addKeyframe(String timelineId, String elementId, String property,
-                                             Integer timeMs, Object value, Object easing) {
-        return timelineOps.addKeyframe(timelineId, elementId, property, timeMs, value, easing);
+                                             Integer timeMs, Object value, Object easing,
+                                             String coalesceKey) {
+        return timelineOps.addKeyframe(timelineId, elementId, property, timeMs, value, easing, coalesceKey);
     }
 
-    /** 见 {@link TimelineOperations#updateKeyframe(String, String, Map)}。 */
+    /** 兼容旧签名（无 coalesceKey）：单帧加帧不合并撤销。 */
+    public synchronized OpResult addKeyframe(String timelineId, String elementId, String property,
+                                             Integer timeMs, Object value, Object easing) {
+        return addKeyframe(timelineId, elementId, property, timeMs, value, easing, null);
+    }
+
+    /** 见 {@link TimelineOperations#updateKeyframe}。{@code coalesceKey} 可空（整体帧批量改值合并撤销）。 */
+    public synchronized OpResult updateKeyframe(String timelineId, String keyframeId,
+                                                Map<String, Object> patch, String coalesceKey) {
+        return timelineOps.updateKeyframe(timelineId, keyframeId, patch, coalesceKey);
+    }
+
+    /** 兼容旧签名（无 coalesceKey）：单帧改值按默认单帧键合并。 */
     public synchronized OpResult updateKeyframe(String timelineId, String keyframeId,
                                                 Map<String, Object> patch) {
-        return timelineOps.updateKeyframe(timelineId, keyframeId, patch);
+        return updateKeyframe(timelineId, keyframeId, patch, null);
     }
 
     /** 见 {@link TimelineOperations#deleteKeyframe(String, String)}。 */
@@ -581,9 +594,15 @@ public final class EditSession {
         return timelineOps.deleteKeyframe(timelineId, keyframeId);
     }
 
-    /** 见 {@link TimelineOperations#moveKeyframe(String, String, Integer)}。 */
+    /** 见 {@link TimelineOperations#moveKeyframe}。{@code coalesceKey} 可空（整体块拖动合并撤销）。 */
+    public synchronized OpResult moveKeyframe(String timelineId, String keyframeId, Integer timeMs,
+                                              String coalesceKey) {
+        return timelineOps.moveKeyframe(timelineId, keyframeId, timeMs, coalesceKey);
+    }
+
+    /** 兼容旧签名（无 coalesceKey）：单帧移动按默认单帧键合并。 */
     public synchronized OpResult moveKeyframe(String timelineId, String keyframeId, Integer timeMs) {
-        return timelineOps.moveKeyframe(timelineId, keyframeId, timeMs);
+        return moveKeyframe(timelineId, keyframeId, timeMs, null);
     }
 
     // ---------- canvas.resize ----------

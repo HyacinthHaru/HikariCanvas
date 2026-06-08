@@ -324,13 +324,27 @@ function niceStep(raw: number): number {
     return Math.max(1, nice * pow);
 }
 
-/** 时刻标签：≥1000ms 用 s（去尾0），否则 ms。 */
+/** 时刻标签：≥1000ms 用 s（去尾0），否则 ms。标尺刻度用——刻度位置静态，去尾0 更易读。 */
 export function formatTimeLabel(timeMs: number): string {
     if (timeMs >= 1000) {
         const s = timeMs / 1000;
         return (Number.isInteger(s) ? String(s) : String(Number(s.toFixed(2)))) + 's';
     }
     return Math.round(timeMs) + 'ms';
+}
+
+/**
+ * 固定宽度时钟 {@code m:ss.mmm}（播放头读数用）。播放期每帧变化，{@link formatTimeLabel} 的
+ * 去尾0（2.4s / 2.33s）+ ms↔s 切换会让宽度抖动、数字一闪一闪（实测反馈 Bug 1）；这里秒 / 毫秒
+ * 一律零填充定宽，配 tabular-nums 彻底不抖。
+ */
+export function formatClock(timeMs: number): string {
+    const t = Math.max(0, Math.round(timeMs));
+    const totalSec = Math.floor(t / 1000);
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    const millis = t % 1000;
+    return `${min}:${String(sec).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
 }
 
 /**

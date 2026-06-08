@@ -520,12 +520,17 @@ export class WsClient {
         timeMs: number,
         value: import('@/types/protocol').KfValue,
         easing: import('@/types/protocol').Easing,
+        coalesceKey?: string,
     ): Promise<void> {
-        return this.sendWithAck('keyframe.add',
-            { timelineId, elementId, property, timeMs, value, easing }).then(() => undefined);
+        const payload: Record<string, unknown> = { timelineId, elementId, property, timeMs, value, easing };
+        if (coalesceKey != null) payload.coalesceKey = coalesceKey;
+        return this.sendWithAck('keyframe.add', payload).then(() => undefined);
     }
 
-    /** {@code keyframe.update}：部分更新关键帧（timeMs / value / easing，§5.13）。 */
+    /**
+     * {@code keyframe.update}：部分更新关键帧（timeMs / value / easing，§5.13）。
+     * {@code coalesceKey} 可选——整体帧批量改值（拉就设 update 分支）共享一步撤销（P4.5b）。
+     */
     sendKeyframeUpdate(
         timelineId: string,
         keyframeId: string,
@@ -534,9 +539,11 @@ export class WsClient {
             value: import('@/types/protocol').KfValue;
             easing: import('@/types/protocol').Easing;
         }>,
+        coalesceKey?: string,
     ): Promise<void> {
-        return this.sendWithAck('keyframe.update',
-            { timelineId, keyframeId, patch }).then(() => undefined);
+        const payload: Record<string, unknown> = { timelineId, keyframeId, patch };
+        if (coalesceKey != null) payload.coalesceKey = coalesceKey;
+        return this.sendWithAck('keyframe.update', payload).then(() => undefined);
     }
 
     /** {@code keyframe.delete}：删除关键帧（§5.13）。 */
@@ -546,12 +553,14 @@ export class WsClient {
     }
 
     /**
-     * {@code keyframe.move}：仅挪时刻的高频快捷（§5.13）；拖动期前端本地 mutate，
-     * dragend 发一条。
+     * {@code keyframe.move}：仅挪时刻的高频快捷（§5.13）；拖动期前端本地 mutate，dragend 发一条。
+     * {@code coalesceKey} 可选——整体块拖动的 N 帧共享一步撤销（P4.5b）。
      */
-    sendKeyframeMove(timelineId: string, keyframeId: string, timeMs: number): Promise<void> {
-        return this.sendWithAck('keyframe.move',
-            { timelineId, keyframeId, timeMs }).then(() => undefined);
+    sendKeyframeMove(timelineId: string, keyframeId: string, timeMs: number,
+                     coalesceKey?: string): Promise<void> {
+        const payload: Record<string, unknown> = { timelineId, keyframeId, timeMs };
+        if (coalesceKey != null) payload.coalesceKey = coalesceKey;
+        return this.sendWithAck('keyframe.move', payload).then(() => undefined);
     }
 
     // ---------- 内部 ----------

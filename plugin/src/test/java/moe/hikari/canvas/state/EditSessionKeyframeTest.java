@@ -363,4 +363,62 @@ class EditSessionKeyframeTest {
         assertEquals("KEYFRAME_NOT_FOUND",
                 ((EditSession.OpResult.Error) es.moveKeyframe(tid, "kf-nope", 100)).code());
     }
+
+    // ---------- 整体帧批量 op 合并撤销（P4.5b 实测反馈 Bug 2）----------
+
+    @Test
+    void batchedAddsWithCoalesceKeyUndoAsOneStep() {
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+
+        // 模拟"拉就设"：6 个 transform 属性同 coalesceKey 在同一时刻加帧（进程内 sub-ms 落 500ms 窗）
+        String ck = "integ:" + eid + ":2000";
+        for (String p : List.of("x", "y", "w", "h", "rotation", "opacity")) {
+            assertInstanceOf(EditSession.OpResult.Ok.class,
+                    es.addKeyframe(tid, eid, p, 2000, 1, null, ck));
+        }
+        assertEquals(6, track(es, eid).size());
+
+        // 一次 undo → 整组 6 帧一起回收（合并成一步），而非只撤 1/6
+        assertInstanceOf(EditSession.OpResult.OkSnapshot.class, es.undo());
+        assertNull(track(es, eid), "整体帧 6 个属性应一步撤销、轨道清空（Bug 2 核心）");
+    }
+
+    @Test
+    void addsWithoutCoalesceKeyUndoSeparately() {
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+
+        // 无 coalesceKey（单帧 add / 兼容旧签名）：各自一步撤销，行为不变
+        es.addKeyframe(tid, eid, "x", 100, 1, null);
+        es.addKeyframe(tid, eid, "y", 100, 2, null);
+        assertEquals(2, track(es, eid).size());
+
+        es.undo();
+        assertEquals(1, track(es, eid).size(), "无 coalesceKey 应各自一步撤销（兼容旧行为）");
+    }
+
+    @Test
+    void batchedMovesWithCoalesceKeyUndoAsOneStep() {
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+        // 同时刻整体帧两属性
+        es.addKeyframe(tid, eid, "x", 1000, 10, null);
+        es.addKeyframe(tid, eid, "y", 1000, 20, null);
+        String kx = track(es, eid).stream().filter(k -> k.property().equals("x")).findFirst().get().id();
+        String ky = track(es, eid).stream().filter(k -> k.property().equals("y")).findFirst().get().id();
+
+        // 整体块从 1000 拖到 3000：两帧同 coalesceKey 各发一条 move
+        String ck = "integ-move:" + eid + ":1000";
+        assertInstanceOf(EditSession.OpResult.Ok.class, es.moveKeyframe(tid, kx, 3000, ck));
+        assertInstanceOf(EditSession.OpResult.Ok.class, es.moveKeyframe(tid, ky, 3000, ck));
+        for (Keyframe k : track(es, eid)) assertEquals(3000, k.timeMs());
+
+        // 一次 undo → 两帧一起回到 1000
+        assertInstanceOf(EditSession.OpResult.OkSnapshot.class, es.undo());
+        for (Keyframe k : track(es, eid)) assertEquals(1000, k.timeMs(), "整体块拖动应一步撤销回原时刻");
+    }
 }

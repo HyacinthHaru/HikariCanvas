@@ -549,7 +549,8 @@ final class TimelineOperations {
     // ---------- keyframe.add ----------
 
     EditSession.OpResult addKeyframe(String timelineId, String elementId, String property,
-                                     Integer timeMs, Object valueRaw, Object easingRaw) {
+                                     Integer timeMs, Object valueRaw, Object easingRaw,
+                                     String coalesceKey) {
         int idx = state.indexOfTimeline(timelineId);
         if (idx < 0) return err("TIMELINE_NOT_FOUND", "timeline not found: " + timelineId);
         if (!elementExists(elementId)) {
@@ -606,7 +607,10 @@ final class TimelineOperations {
 
         ProjectSnapshot pre = history.snapshotNow();
         state.replaceTimelineAt(idx, updated);
-        history.commitHistory(pre);
+        // 整体帧批量加帧（拉就设 / + 按钮）由前端传 coalesceKey，让 6 个属性 add 合并成一步撤销；
+        // 缺省（单帧 add）走常规非合并 commit（与历史行为一致）。
+        if (coalesceKey != null) history.commitHistoryCoalesced(pre, coalesceKey);
+        else history.commitHistory(pre);
         long v = state.bumpVersion();
 
         StatePatchBuilder b = new StatePatchBuilder();
@@ -622,18 +626,19 @@ final class TimelineOperations {
     // ---------- keyframe.update ----------
 
     EditSession.OpResult updateKeyframe(String timelineId, String keyframeId,
-                                        Map<String, Object> patch) {
+                                        Map<String, Object> patch, String coalesceKey) {
         if (patch == null || patch.isEmpty()) return err("INVALID_PAYLOAD", "empty patch");
-        return mutateKeyframe(timelineId, keyframeId, patch);
+        return mutateKeyframe(timelineId, keyframeId, patch, coalesceKey);
     }
 
     // ---------- keyframe.move ----------
 
-    EditSession.OpResult moveKeyframe(String timelineId, String keyframeId, Integer timeMs) {
+    EditSession.OpResult moveKeyframe(String timelineId, String keyframeId, Integer timeMs,
+                                      String coalesceKey) {
         // 语义 = 仅改 timeMs 的 update；复用同一私有实现，共享 coalesce key
         Map<String, Object> patch = new LinkedHashMap<>();
         patch.put("timeMs", timeMs);
-        return mutateKeyframe(timelineId, keyframeId, patch);
+        return mutateKeyframe(timelineId, keyframeId, patch, coalesceKey);
     }
 
     /** keyframe 在某 timeline 内的定位：所属轨 elementId + 轨内 index + 引用。 */
@@ -655,10 +660,11 @@ final class TimelineOperations {
     /**
      * keyframe.update / keyframe.move 的共用实现。允许键 {@code timeMs / value / easing}。
      * timeMs 变化 → 重排该轨 → 整轨 replace patch；否则单帧 replace。
-     * coalesce key = {@code elementId:keyframeId:property}（D7，timeline.md §7.2）。
+     * coalesce key：前端传 {@code coalesceKey}（整体帧批量 op 共享一步撤销）优先；缺省回退
+     * 单帧键 {@code elementId:keyframeId:property}（单属性连续拖 / 滑块，D7，timeline.md §7.2）。
      */
     private EditSession.OpResult mutateKeyframe(String timelineId, String keyframeId,
-                                               Map<String, Object> patch) {
+                                               Map<String, Object> patch, String coalesceKey) {
         int idx = state.indexOfTimeline(timelineId);
         if (idx < 0) return err("TIMELINE_NOT_FOUND", "timeline not found: " + timelineId);
         Timeline cur = state.timelines().get(idx);
@@ -714,9 +720,10 @@ final class TimelineOperations {
 
         ProjectSnapshot pre = history.snapshotNow();
         state.replaceTimelineAt(idx, updated);
-        // D7：keyframe 拖动高频，合并键 = elementId:keyframeId:property（timeline.md §7.2）
-        history.commitHistoryCoalesced(pre,
-                loc.elementId() + ":" + orig.id() + ":" + orig.property());
+        // D7：keyframe 拖动高频合并。整体帧批量 op（整体块拖动 / 拉就设的 update 分支）由前端传
+        //   coalesceKey 让多帧共享一步撤销；缺省回退单帧键 elementId:keyframeId:property（单属性拖 / 滑块）。
+        history.commitHistoryCoalesced(pre, coalesceKey != null ? coalesceKey
+                : loc.elementId() + ":" + orig.id() + ":" + orig.property());
         long v = state.bumpVersion();
 
         StatePatchBuilder b = new StatePatchBuilder();
