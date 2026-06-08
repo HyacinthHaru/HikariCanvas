@@ -409,11 +409,12 @@ function onTriggerTypeChange(): void {
         triggerPickerOpen.value = false;
         return;
     }
-    // 变量变化 / 到点：已绑变量 → 直接换 type 保留变量；否则弹 picker 先选变量（空 fullName 后端会拒）
+    // 非手动：已绑变量 → 直接换 type 保留变量并持久化；否则只改草稿（select 停在选的项），等用户点
+    //   下面「选择变量」按钮再开 picker。⚠ 不在 change 里自动弹 picker——select 的 change 会被 picker 的
+    //   onClickOutside 当外部点击立即关掉、cancel 又把下拉重置回 manual，表现为"点了没反应、弹回默认"。
+    //   显式按钮开（与 TextElementSection 同款可用模式，onClickOutside 会忽略开启那一下）。
     if (triggerFullName.value) {
         updateTimeline({ trigger: buildTrigger(type, triggerFullName.value) });
-    } else {
-        triggerPickerOpen.value = true;
     }
 }
 function onTriggerVariableSelect(fullName: string): void {
@@ -422,8 +423,6 @@ function onTriggerVariableSelect(fullName: string): void {
 }
 function cancelTriggerPicker(): void {
     triggerPickerOpen.value = false;
-    // 没选成变量 → 草稿拉回后端实际 type，避免下拉停在未生效的类型
-    if (!triggerFullName.value) draftTriggerType.value = (tl.value?.trigger?.type ?? 'manual') as TriggerType;
 }
 function triggerTypeLabel(ty: string): string {
     const m = t.value.timeline as unknown as Record<string, string>;
@@ -674,8 +673,9 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
       </button>
     </div>
 
-    <!-- 触发变量选择器（P5）：复用 VariablePicker，选中即写入 trigger.params.fullName -->
-    <div v-if="triggerPickerOpen" class="absolute right-2 top-11 z-[60]">
+    <!-- 触发变量选择器（P5）：VariablePicker 自身向下展开（CSS top:100%），而 dock 在屏幕底部，
+         直接放 dock 内会溢出到视口外看不见。用 fixed 居中浮层给它一个有宽度的定位父级，在可见区展开。 -->
+    <div v-if="triggerPickerOpen" class="fixed left-1/2 -translate-x-1/2 top-20 w-[min(420px,90vw)] z-[100]">
       <VariablePicker :wall-id="project.wallId" @select="onTriggerVariableSelect" @close="cancelTriggerPicker" />
     </div>
   </div>

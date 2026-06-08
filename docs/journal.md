@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-06-08 · 0.6.0-P5 hotfix-2 — 触发方式下拉点了弹回默认（picker 自动开被 onClickOutside 立即关）
+
+CanvasView TDZ 修好、画布起来后，用户实测：点「变量变了就播」/「到点就播」下拉**没反应、卡在默认项**。
+根因 = 我在 select 的 `@change` 里**自动弹 VariablePicker**，而 picker 的 `onClickOutside` 把"选 select
+选项"这一下当成外部点击 → 立即 `emit('close')` → `cancelTriggerPicker` 又把下拉**重置回 manual**。
+表现就是点完弹回默认。TextElementSection 能用是因为它通过**按钮**开 picker（onClickOutside 忽略开启那次
+点击），不是 select-change。
+
+- **修**：select 的 change 只管改触发类型（草稿停在选的项，已绑变量则持久化）；不再自动弹 picker。
+  picker 改由下方「点这里选要监听的变量」按钮显式打开（与 TextElementSection 同款可用模式）。
+  `cancelTriggerPicker` 不再重置下拉。
+- **定位同修**：VariablePicker 自身 `position:absolute; top:100%` 向下展开，dock 在屏幕底部会溢出视口；
+  改用 `fixed` 居中浮层（top-20）给它有宽度的定位父级，在可见区展开。
+- **smoke 验证**：新增 case——选 variableChange → 不自动弹 + 出现选变量按钮；点按钮 → `.hc-variable-picker`
+  出现。前端 509 → **510**。
+
+前端 510 全绿 / vite build 过 / 0 漂移。关联：`components/timeline/{TimelineDock.vue,__tests__/}`。
+
+---
+
 ## 2026-06-08 · 0.6.0-P5 hotfix — CanvasView 启动 TDZ（潜伏 bug 被 P5 重打包暴露）
 
 用户实测 P5：点设置里「变量变了就播」没反应 + 控制台 `Cannot access 'pt' before initialization`。

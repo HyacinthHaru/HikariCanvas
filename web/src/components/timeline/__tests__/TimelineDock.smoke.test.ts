@@ -126,6 +126,27 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(wrapper.text()).toContain('变量变了就播');
     });
 
+    it('选「变量变了就播」→ 下拉停住 + 出现选变量按钮，点按钮才开 picker（P5）', async () => {
+        useProjectStore().setSnapshot(makeState());
+        useTimelineStore().openDock();
+        const wrapper = mount(TimelineDock);
+        await nextTick();
+        await wrapper.find('[title="时间轴设置"]').trigger('click');
+        await nextTick();
+        const trigSel = wrapper.findAll('select').find(s => s.text().includes('变量变了就播'));
+        expect(trigSel).toBeTruthy();
+        await trigSel!.setValue('variableChange');
+        await nextTick();
+        // 选非手动 → 不自动弹 picker（避免 onClickOutside 立即关 + 弹回默认），但出现选变量提示按钮
+        expect(wrapper.find('.hc-variable-picker').exists()).toBe(false);
+        const pickBtn = wrapper.findAll('button').find(b => b.text().includes('点这里选要监听的变量'));
+        expect(pickBtn).toBeTruthy();
+        // 显式点按钮 → picker 出现
+        await pickBtn!.trigger('click');
+        await nextTick();
+        expect(wrapper.find('.hc-variable-picker').exists()).toBe(true);
+    });
+
     it('整体关键帧块渲染 + pointer 点选不崩（P4.5 / P4.5b 块改 pointer 拖动）', async () => {
         useProjectStore().setSnapshot(makeStateWithKf());
         useUiStore().selectMany(['e-1']);
