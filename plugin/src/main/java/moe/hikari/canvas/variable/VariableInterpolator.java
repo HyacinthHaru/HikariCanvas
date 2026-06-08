@@ -179,7 +179,7 @@ public final class VariableInterpolator {
      *       编辑器 Picker 使用 slash 形式；点分号 alias 完整支持留 0.4.1+）</li>
      * </ul>
      */
-    static String resolveFullName(String rawName, @Nullable String wallId) {
+    public static String resolveFullName(String rawName, @Nullable String wallId) {
         if (wallId != null && !wallId.isEmpty()
                 && rawName.startsWith(VariableStore.USER_NAMESPACE_PREFIX + "/")) {
             // ${var:user/X} → user:<wallId>/X

@@ -12,6 +12,7 @@ import moe.hikari.canvas.deploy.MapPacketSender;
 import moe.hikari.canvas.deploy.WallResolver;
 import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.render.AnimationTicker;
+import moe.hikari.canvas.render.TimelineTriggerRegistry;
 import moe.hikari.canvas.render.BufferPool;
 import moe.hikari.canvas.render.CanvasCompositor;
 import moe.hikari.canvas.render.CanvasProjector;
@@ -588,6 +589,31 @@ public final class HikariCanvas extends JavaPlugin {
         if (autoPlayed > 0) {
             getLogger().info("AnimationTicker: " + autoPlayed + " wall(s) auto-playing (LOOP)");
         }
+
+        // 0.6 P5：时间轴触发器路由（VARIABLE_CHANGE / SCHEDULE，timeline.md §5.2）。变量变化 →
+        // 播放绑定该变量的 wall 时间轴。player = ticker::play（任意线程安全，自带 entry 锁）；
+        // resolver = VariableInterpolator.resolveFullName（把 trigger 配的 user/X 注入 wallId →
+        // 内部形式 user:<wallId>/X 才能与变化事件 fullName 匹配，§5.2 一致性坑 R）。
+        final AnimationTicker tickerForTrigger = ticker;
+        TimelineTriggerRegistry triggerRegistry = new TimelineTriggerRegistry(
+                AnimationTicker.fromRepo(wallRepo),
+                moe.hikari.canvas.variable.VariableInterpolator::resolveFullName,
+                tickerForTrigger::play,
+                getLogger());
+        triggerRegistry.rebuildAll();
+        sessionManager.setTimelineTriggerRegistry(triggerRegistry);
+        // wall 删除：注销其触发绑定（与 ticker::stopWall 同源 hook）。
+        sessionManager.addWallDeleteHook(triggerRegistry::removeWall);
+        final TimelineTriggerRegistry triggerRegistryRef = triggerRegistry;
+        variableStore.registerChangeListener(event -> {
+            // 只在"值真的变了"时触发（VALUE_SET / UPDATED / CREATED）；WALL_REFS_UPDATED / DELETED 不播。
+            VariableStore.ChangeType ct = event.type();
+            if (ct == VariableStore.ChangeType.VALUE_SET || ct == VariableStore.ChangeType.UPDATED
+                    || ct == VariableStore.ChangeType.CREATED) {
+                triggerRegistryRef.onVariableChange(event.fullName());
+            }
+        });
+        getLogger().info("TimelineTriggerRegistry: registered (variable/schedule change → timeline play)");
 
         // 0.4.0 bugfix3（Bug B）：Provider 写值时主动推 state.patch 给前端 mirror。
         // EditSession op 路径走 OpResult.dirty + dispatcher 调 push.pushPatch；

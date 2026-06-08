@@ -37,6 +37,9 @@ import {
     planTransformUpsert,
     groupsInMarquee,
     validateCreateForm,
+    TRIGGER_TYPES,
+    buildTrigger,
+    triggerNeedsVariable,
     type CreateFormInput,
     type TransformSnapshot,
     type MarqueeRowView,
@@ -596,6 +599,28 @@ describe('applyDragOverride (P4.5b 拖动期跟手覆盖)', () => {
         applyDragOverride(s, new Map([['e-1a2b3c4d', snap]]));
         const orig = s.layers[0].elements[0] as unknown as Record<string, number>;
         expect([orig.x, orig.y]).toEqual([10, 20]);   // 原 state 元素纹丝不动
+    });
+});
+
+describe('trigger helpers (P5)', () => {
+    it('triggerNeedsVariable: 仅 variableChange / schedule 需变量', () => {
+        expect(triggerNeedsVariable('manual')).toBe(false);
+        expect(triggerNeedsVariable('variableChange')).toBe(true);
+        expect(triggerNeedsVariable('schedule')).toBe(true);
+    });
+    it('buildTrigger manual → 空 params（即使传了 fullName）', () => {
+        expect(buildTrigger('manual', 'user/hp')).toEqual({ type: 'manual', params: {} });
+    });
+    it('buildTrigger variableChange → fullName（去空白）', () => {
+        expect(buildTrigger('variableChange', '  user/hp ')).toEqual({
+            type: 'variableChange', params: { fullName: 'user/hp' },
+        });
+    });
+    it('buildTrigger schedule + null fullName → 空串', () => {
+        expect(buildTrigger('schedule', null)).toEqual({ type: 'schedule', params: { fullName: '' } });
+    });
+    it('TRIGGER_TYPES 顺序固定', () => {
+        expect(TRIGGER_TYPES).toEqual(['manual', 'variableChange', 'schedule']);
     });
 });
 

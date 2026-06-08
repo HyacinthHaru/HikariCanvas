@@ -9,7 +9,7 @@
  * <p>含分组展示 / 表单校验 / 默认值（P2）+ AE dock 的时间↔像素映射 / 二级属性子轨拆分 /
  * 标尺刻度 / 帧吸附（P4）—— 全是无副作用纯函数。</p>
  */
-import type { Easing, EasingType, Element, Fill, KfValue, Keyframe, LoopMode, ProjectState, Timeline } from '@/types/protocol';
+import type { Easing, EasingType, Element, Fill, KfValue, Keyframe, LoopMode, ProjectState, Timeline, TriggerConfig, TriggerType } from '@/types/protocol';
 
 /** 关键帧可加的属性白名单（数值类，MVP 范围）。与 docs/timeline.md §4.2 数值类对齐。 */
 export const KEYFRAMEABLE_PROPERTIES = ['x', 'y', 'w', 'h', 'rotation', 'opacity'] as const;
@@ -17,6 +17,25 @@ export type KeyframeProperty = typeof KEYFRAMEABLE_PROPERTIES[number];
 
 /** loopMode 候选集（i18n 文案在 messages.ts，逻辑层只认裸值）。 */
 export const LOOP_MODES: LoopMode[] = ['once', 'loop', 'pingPong'];
+
+/**
+ * 触发方式候选（0.6 P5，i18n 文案在 messages.ts）。
+ * - manual：玩家 / 命令 / 编辑器播放（+ wall ready 自动播 LOOP 的简化默认）
+ * - variableChange：绑定变量变化时播
+ * - schedule：到点播（= 绑定一个 schedule:* 变量的 variableChange，语义化标签）
+ */
+export const TRIGGER_TYPES: TriggerType[] = ['manual', 'variableChange', 'schedule'];
+
+/** 非 manual 触发需要绑定一个变量（trigger.params.fullName）。 */
+export function triggerNeedsVariable(type: string): boolean {
+    return type === 'variableChange' || type === 'schedule';
+}
+
+/** 构造 trigger（manual → 空 params；variableChange/schedule → {fullName}）。 */
+export function buildTrigger(type: TriggerType, fullName: string | null | undefined): TriggerConfig {
+    if (!triggerNeedsVariable(type)) return { type: 'manual', params: {} };
+    return { type, params: { fullName: (fullName ?? '').trim() } };
+}
 
 /**
  * 缓动方式候选集（P3 modal 缓动下拉用；i18n 文案在 messages.ts）。

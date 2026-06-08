@@ -594,6 +594,10 @@ type TriggerConfig = {
 
 // playerNear 留 0.7（需从零建事件层 + 与 0.7 Scratch 触发系统重叠，见 docs/timeline.md D5）
 type TriggerType = "manual" | "variableChange" | "schedule";
+// 0.6 P5 落地：variableChange / schedule 必须带 params.fullName（绑定的变量 rawName，如 user/hp /
+// schedule/eta_seconds），缺失 / 空白 → timeline.create/update 拒 INVALID_PAYLOAD。fullName 用
+// 与 ${var:X} 同款 rawName 形态，后端 TimelineTriggerRegistry 注册时经 resolveFullName 注入 wallId 匹配
+// 变化事件；同一 (wall,timeline) 触发去抖窗 200ms（服务端状态机内部决策，不在协议层暴露，见 timeline.md §5.2）。
 ```
 
 ---

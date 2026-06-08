@@ -32,11 +32,15 @@ import {
     transformKeyframeKey,
     groupsInMarquee,
     formatClock,
+    TRIGGER_TYPES,
+    buildTrigger,
+    triggerNeedsVariable,
     type TransformKeyframe,
 } from './timelineLogic';
 import { useTimelineAuthoring } from '@/composables/useTimelineAuthoring';
 import EasingCurveEditor from './EasingCurveEditor.vue';
-import type { Easing, LoopMode, TriggerConfig } from '@/types/protocol';
+import VariablePicker from '@/components/variables/VariablePicker.vue';
+import type { Easing, LoopMode, TriggerConfig, TriggerType } from '@/types/protocol';
 
 const project = useProjectStore();
 const ui = useUiStore();
@@ -353,7 +357,7 @@ const maxKeyframeMs = computed(() => {
     }
     return max;
 });
-function updateTimeline(patch: Partial<{ name: string; durationMs: number; fps: number; loopMode: LoopMode }>): void {
+function updateTimeline(patch: Partial<{ name: string; durationMs: number; fps: number; loopMode: LoopMode; trigger: TriggerConfig }>): void {
     if (tl.value) ws.sendTimelineUpdate(tl.value.id, patch).catch(() => { /* wsClient 日志 */ });
 }
 function onNameChange(e: Event): void { updateTimeline({ name: (e.target as HTMLInputElement).value }); }
@@ -391,7 +395,45 @@ function loopModeLabel(m: string): string {
     const map: Record<string, string> = { once: x.loopOnce, loop: x.loopLoop, pingPong: x.loopPingPong };
     return map[m] ?? m;
 }
-watch(settingsOpen, (open) => { if (!open) { confirmDeleteTimeline.value = false; settingsError.value = null; } });
+
+// ---------- 触发方式（P5）：手动 / 变量变化 / 到点 ----------
+const triggerFullName = computed(() => tl.value?.trigger?.params?.fullName ?? '');
+const draftTriggerType = ref<TriggerType>('manual');
+watch(() => tl.value?.trigger?.type, (ty) => { draftTriggerType.value = (ty ?? 'manual') as TriggerType; }, { immediate: true });
+const triggerPickerOpen = ref(false);
+
+function onTriggerTypeChange(): void {
+    const type = draftTriggerType.value;
+    if (!triggerNeedsVariable(type)) {
+        updateTimeline({ trigger: buildTrigger('manual', null) });
+        triggerPickerOpen.value = false;
+        return;
+    }
+    // 变量变化 / 到点：已绑变量 → 直接换 type 保留变量；否则弹 picker 先选变量（空 fullName 后端会拒）
+    if (triggerFullName.value) {
+        updateTimeline({ trigger: buildTrigger(type, triggerFullName.value) });
+    } else {
+        triggerPickerOpen.value = true;
+    }
+}
+function onTriggerVariableSelect(fullName: string): void {
+    updateTimeline({ trigger: buildTrigger(draftTriggerType.value, fullName) });
+    triggerPickerOpen.value = false;
+}
+function cancelTriggerPicker(): void {
+    triggerPickerOpen.value = false;
+    // 没选成变量 → 草稿拉回后端实际 type，避免下拉停在未生效的类型
+    if (!triggerFullName.value) draftTriggerType.value = (tl.value?.trigger?.type ?? 'manual') as TriggerType;
+}
+function triggerTypeLabel(ty: string): string {
+    const m = t.value.timeline as unknown as Record<string, string>;
+    const map: Record<string, string> = {
+        manual: m.triggerManual, variableChange: m.triggerVariableChange, schedule: m.triggerSchedule,
+    };
+    return map[ty] ?? ty;
+}
+
+watch(settingsOpen, (open) => { if (!open) { confirmDeleteTimeline.value = false; settingsError.value = null; triggerPickerOpen.value = false; } });
 
 // ---------- 标签 ----------
 function propertyLabel(p: string): string {
@@ -609,12 +651,32 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
           <option v-for="m in LOOP_MODES" :key="m" :value="m">{{ loopModeLabel(m) }}</option>
         </select>
       </label>
+      <!-- 触发方式（P5）：手动 / 变量变化 / 到点 -->
+      <label class="flex flex-col gap-1">
+        <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.triggerLabel }}</span>
+        <select v-model="draftTriggerType" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onTriggerTypeChange">
+          <option v-for="ty in TRIGGER_TYPES" :key="ty" :value="ty">{{ triggerTypeLabel(ty) }}</option>
+        </select>
+      </label>
+      <div v-if="triggerNeedsVariable(draftTriggerType)" class="flex flex-col gap-1">
+        <button
+          class="px-2 py-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] text-left truncate"
+          :class="triggerFullName ? '' : 'text-[color:var(--muted-foreground)] italic'"
+          @click="triggerPickerOpen = true"
+        >{{ triggerFullName || t.timeline.triggerPickHint }}</button>
+        <span class="text-[10px] text-[color:var(--muted-foreground)] leading-snug">{{ t.timeline.triggerVarHint }}</span>
+      </div>
       <button
         class="mt-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded border-t border-[color:var(--border)] text-[color:var(--destructive)] hover:bg-[color:var(--destructive)]/15"
         @click="confirmDeleteTimeline ? deleteTimeline() : (confirmDeleteTimeline = true)"
       >
         <Trash2 class="size-3.5" />{{ confirmDeleteTimeline ? t.timeline.dockDeleteConfirm : t.timeline.dockDelete }}
       </button>
+    </div>
+
+    <!-- 触发变量选择器（P5）：复用 VariablePicker，选中即写入 trigger.params.fullName -->
+    <div v-if="triggerPickerOpen" class="absolute right-2 top-11 z-[60]">
+      <VariablePicker :wall-id="project.wallId" @select="onTriggerVariableSelect" @close="cancelTriggerPicker" />
     </div>
   </div>
 </template>

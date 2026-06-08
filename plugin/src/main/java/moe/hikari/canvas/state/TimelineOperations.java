@@ -230,6 +230,14 @@ final class TimelineOperations {
             }
             params = out;
         }
+        // 0.6 P5：VARIABLE_CHANGE / SCHEDULE 必须带 params.fullName（绑定的变量），否则触发器无从匹配。
+        if (type == TriggerType.VARIABLE_CHANGE || type == TriggerType.SCHEDULE) {
+            String fn = params.get("fullName");
+            if (fn == null || fn.isBlank()) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        type.wire() + " trigger requires non-empty params.fullName");
+            }
+        }
         return new TriggerConfig(type, params);
     }
 

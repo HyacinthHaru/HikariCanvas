@@ -5,6 +5,38 @@
 
 ---
 
+## 2026-06-08 · 0.6.0-P5 触发器（变量变化 / 到点 → 时间轴自动播；a/b/c 一起做）
+
+时间轴的"何时播"补完：招牌按游戏数据自己反应。地基全复用（变量监听 + Ticker + schedule 变量），
+新增的就是把它们接起来。**PLAYER_NEAR 仍留 0.7**（与 Scratch 事件层重叠，D5）。
+
+- **P5-a 后端核心**：新 `render/TimelineTriggerRegistry`——薄索引 `解析后fullName → Set<(wallId,timelineId)>`
+  + 监听。全 seam 注入（player / resolver / wallSource / clock），不耦合 AnimationTicker/VariableStore 具体类
+  （§5.3 让 0.7 统一触发路由能吸收）。`onVariableChange(fullName)` 命中 → `ticker.play`（重播 = ONCE
+  「每次变化重播」，用户定）；**去抖 200ms** per-(wall,timeline) 挡 eta_seconds 等高频 thrash。
+  - **fullName 一致性坑（§5.2 R）**：trigger 配 `user/X` 经 `VariableInterpolator.resolveFullName`（改 public）
+    注入 wallId → `user:<wallId>/X` 才匹配变化事件。user 走注入、schedule 已含 wallId 走 passthrough。
+  - **自动播门控**：`AnimationTicker` 的「wall ready 自动播 LOOP」加 `autoLoopEligible`——只对 MANUAL 触发
+    生效；VARIABLE_CHANGE/SCHEDULE 不自动播、改登记进 registry。
+  - **校验**：`validateTrigger` 加 VARIABLE_CHANGE/SCHEDULE 必须带 params.fullName（缺失拒 INVALID_PAYLOAD）。
+  - **接线**：HikariCanvas.onEnable 构造 registry + rebuildAll + 第 3 个 ChangeListener（VALUE_SET/UPDATED/
+    CREATED 才触发）+ wall 删除 hook；SessionManager 编辑持久化 / session 关闭处加 `rebuildForWall`（与
+    ticker invalidate/refreshAutoPlay 同源点）。`play` 任意线程安全，不用 hop 主线程。
+- **P5-b 前端**：dock 设置加「什么时候播」下拉（手动/变量变了就播/到点）；非手动 → 复用 `VariablePicker`
+  选变量写 `trigger.params.fullName`（displayName 即 rawName，两端匹配）。draftTriggerType 草稿 + 取消回弹；
+  timelineLogic 加 `buildTrigger`/`triggerNeedsVariable`/`TRIGGER_TYPES`；i18n 中英 6 key。
+- **P5-c 收尾**：protocol.md（trigger params.fullName 必填 + 去抖说明）+ timeline.md §5.2 落地注记。
+
+后端 1277 → **1286**（registry 6 + Ticker 门控 2 + validateTrigger 1）/ 前端 503 → **509**（trigger helper 5 +
+dock smoke 1）/ vite build 过 / main 780 kB / 0 漂移。
+契约：`docs/{protocol.md,timeline.md}`。关联后端：`render/{TimelineTriggerRegistry.java(新),AnimationTicker.java}`
+`state/TimelineOperations.java` `variable/VariableInterpolator.java` `session/SessionManager.java`
+`HikariCanvas.java`；前端：`components/timeline/{timelineLogic.ts,TimelineDock.vue,__tests__/}` `i18n/messages.ts`。
+
+**0.6.0 仅剩 P6 收尾**（~15h：一致性 CI + 文档 + 版本号）。
+
+---
+
 ## 2026-06-07 · 0.6.0-P4.5b 实测 3 bug 修复（撤回粒度 / 时间数字闪烁 / 时长缩短无反馈）
 
 用户实测 P4.5b 报 3 个小 bug，逐一定位根因后修：

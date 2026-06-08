@@ -131,9 +131,15 @@ public final class SessionManager {
      * 默认 null（未注入）时两处均跳过——测试零侵入。
      */
     private volatile moe.hikari.canvas.render.AnimationTicker animationTicker;
+    /** 0.6 P5：时间轴触发器索引。编辑持久化 / session 关闭后重建该 wall 的触发绑定。可空（测试零侵入）。 */
+    private volatile moe.hikari.canvas.render.TimelineTriggerRegistry timelineTriggerRegistry;
 
     public void setAnimationTicker(moe.hikari.canvas.render.AnimationTicker ticker) {
         this.animationTicker = ticker;
+    }
+
+    public void setTimelineTriggerRegistry(moe.hikari.canvas.render.TimelineTriggerRegistry registry) {
+        this.timelineTriggerRegistry = registry;
     }
 
     /**
@@ -667,6 +673,11 @@ public final class SessionManager {
         if (ticker != null) {
             ticker.invalidate(s.wallId());
         }
+        // 0.6 P5：编辑落库后重建该 wall 的触发绑定（timeline.trigger / activeTimelineId 可能刚改）。
+        moe.hikari.canvas.render.TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
+        if (trig != null) {
+            trig.rebuildForWall(s.wallId());
+        }
     }
 
     /**
@@ -748,6 +759,11 @@ public final class SessionManager {
         moe.hikari.canvas.render.AnimationTicker ticker = this.animationTicker;
         if (ticker != null && closingWallId != null) {
             ticker.refreshAutoPlay(closingWallId);
+        }
+        // 0.6 P5：编辑器关闭后重建触发绑定（最终态落库；与 refreshAutoPlay 同源 hook）。
+        moe.hikari.canvas.render.TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
+        if (trig != null && closingWallId != null) {
+            trig.rebuildForWall(closingWallId);
         }
     }
 

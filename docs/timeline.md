@@ -293,6 +293,16 @@ sRGB 直接线性插值"导致的中间色偏暗。这条写进 `rendering.md`�
 - **SCHEDULE**：复用 `ManualScheduleProvider` / `RailScheduleProvider` 的 schedule 变量 + 挂
   VARIABLE_CHANGE listener，不造新调度器。
 
+> **实装（P5，2026-06-08）**：核心 = `render/TimelineTriggerRegistry`（薄索引 `解析后fullName →
+> Set<(wallId,timelineId)>` + 监听）。装配在 `HikariCanvas.onEnable` 加第 3 个 `VariableChangeListener`，
+> 只在 VALUE_SET / UPDATED / CREATED 时调 `onVariableChange`；命中 → `AnimationTicker.play`（任意线程安全，
+> 重播 = ONCE「每次变化重播」语义）。**去抖 200ms**（per-(wall,timeline)，挡 `eta_seconds` 等高频变量 thrash）。
+> trigger 配的 `user/X` 经 `VariableInterpolator.resolveFullName` 注入 wallId → `user:<wallId>/X` 才匹配
+> 事件 fullName（§5.2 一致性坑 R）。**自动播门控**：`AnimationTicker` 的「wall ready 自动播 LOOP」改为只对
+> `MANUAL` 触发生效；VARIABLE_CHANGE / SCHEDULE 不自动播、改登记进 registry。索引随编辑持久化 / session
+> 关闭 / wall 删除增量重建（挂 `SessionManager` 现有 ticker hook 同源点）。编辑器内预览不受触发器影响
+> （始终手动 / 本地 scrubber）。
+
 ### 5.3 与 0.7 Scratch 的收敛
 
 0.6 的 VARIABLE_CHANGE 是"注册一个 ChangeListener"的简单版；0.7 的 `TriggerListenerRegistry` 会泛化为

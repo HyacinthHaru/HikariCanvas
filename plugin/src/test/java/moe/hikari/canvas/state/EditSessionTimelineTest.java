@@ -102,6 +102,18 @@ class EditSessionTimelineTest {
     }
 
     @Test
+    void variableChangeTriggerWithoutFullNameRejected() {
+        EditSession es = newSession();
+        // 0.6 P5：VARIABLE_CHANGE / SCHEDULE 必须带 params.fullName，否则触发器无从匹配
+        Map<String, Object> noFullName = Map.of("type", "variableChange");
+        assertEquals("INVALID_PAYLOAD",
+                ((EditSession.OpResult.Error) es.createTimeline("x", 1000, 30, null, noFullName)).code());
+        Map<String, Object> blank = Map.of("type", "schedule", "params", Map.of("fullName", "  "));
+        assertEquals("INVALID_PAYLOAD",
+                ((EditSession.OpResult.Error) es.createTimeline("x", 1000, 30, null, blank)).code());
+    }
+
+    @Test
     void createDurationOutOfRangeRejected() {
         EditSession es = newSession();
         assertEquals("INVALID_PAYLOAD",

@@ -769,6 +769,13 @@ export const messages = {
             loopOnce: '播放一次',
             loopLoop: '循环播放',
             loopPingPong: '来回播',
+            // 触发方式（P5）：这段动画什么时候在游戏里播
+            triggerLabel: '什么时候播',
+            triggerManual: '手动 / 循环（墙加载就播）',
+            triggerVariableChange: '变量变了就播',
+            triggerSchedule: '到点就播（时刻表）',
+            triggerPickHint: '点这里选要监听的变量',
+            triggerVarHint: '绑定的变量一变化，这段动画就在游戏里播一遍。',
             // 区块 3：关键帧列表
             keyframesHeader: '关键帧',
             emptyKeyframes: '这条时间轴还没有关键帧。在画布上选一个元素，用下面的表单加第一个关键帧。',
@@ -1679,6 +1686,12 @@ export const messages = {
             loopOnce: 'Play once',
             loopLoop: 'Loop',
             loopPingPong: 'Back and forth',
+            triggerLabel: 'When to play',
+            triggerManual: 'Manual / loop (plays on wall load)',
+            triggerVariableChange: 'When a variable changes',
+            triggerSchedule: 'On schedule (timetable)',
+            triggerPickHint: 'Click to pick the variable to watch',
+            triggerVarHint: 'When the bound variable changes, this animation plays once in-game.',
             // Section 3: keyframe list
             keyframesHeader: 'Keyframes',
             emptyKeyframes: 'No keyframes on this timeline yet. Select an element on the canvas and add the first one below.',

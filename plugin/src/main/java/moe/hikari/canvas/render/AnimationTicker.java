@@ -3,6 +3,8 @@ package moe.hikari.canvas.render;
 import moe.hikari.canvas.state.LoopMode;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.Timeline;
+import moe.hikari.canvas.state.TriggerConfig;
+import moe.hikari.canvas.state.TriggerType;
 import moe.hikari.canvas.storage.WallRepo;
 
 import java.util.List;
@@ -358,9 +360,20 @@ public final class AnimationTicker implements AnimationTickerGate {
         String activeId = w.state().activeTimelineId();
         if (activeId == null) return;
         Timeline tl = resolveTimeline(w.state(), activeId);
-        if (tl != null && tl.loopMode() == LoopMode.LOOP) {
+        if (autoLoopEligible(tl)) {
             play(wallId, activeId);
         }
+    }
+
+    /**
+     * 0.6 P5：wall-ready 自动 LOOP 播仅对 {@code MANUAL} 触发生效。{@code VARIABLE_CHANGE} /
+     * {@code SCHEDULE} 触发的时间轴不在此自动播——改由 {@link TimelineTriggerRegistry} 在绑定变量
+     * 变化时驱动 {@link #play}（timeline.md §5.2）。
+     */
+    private static boolean autoLoopEligible(Timeline tl) {
+        if (tl == null || tl.loopMode() != LoopMode.LOOP) return false;
+        TriggerConfig trig = tl.trigger();
+        return trig == null || trig.type() == TriggerType.MANUAL;
     }
 
     /**
@@ -378,7 +391,7 @@ public final class AnimationTicker implements AnimationTickerGate {
             ProjectState s = w.state();
             if (s == null || s.activeTimelineId() == null) continue;
             Timeline tl = resolveTimeline(s, s.activeTimelineId());
-            if (tl != null && tl.loopMode() == LoopMode.LOOP) {
+            if (autoLoopEligible(tl)) {
                 if (play(w.wallId(), tl.id()) == Result.OK) n++;
             }
         }

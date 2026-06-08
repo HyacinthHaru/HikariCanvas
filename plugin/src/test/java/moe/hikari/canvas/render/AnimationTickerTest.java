@@ -13,6 +13,7 @@ import moe.hikari.canvas.state.RenderMode;
 import moe.hikari.canvas.state.TextElement;
 import moe.hikari.canvas.state.Timeline;
 import moe.hikari.canvas.state.TriggerConfig;
+import moe.hikari.canvas.state.TriggerType;
 import moe.hikari.canvas.storage.WallRepo;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -120,6 +121,11 @@ class AnimationTickerTest {
 
     /** 单文本元素 + 单 LOOP/ONCE timeline 的 wall state；x 轨设计为 x(t) == t（t∈[0,1000]）。 */
     private static ProjectState stateWith(String elementId, LoopMode mode, String timelineId, int fps) {
+        return stateWith(elementId, mode, timelineId, fps, TriggerConfig.MANUAL);
+    }
+
+    private static ProjectState stateWith(String elementId, LoopMode mode, String timelineId, int fps,
+                                          TriggerConfig trigger) {
         TextElement t = new TextElement(elementId, 0, 0, 100, 50, 0, false, true,
                 "hi", "inter", 24, "#000000", "left", 0f, 1.2f, false, null,
                 1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null, null);
@@ -130,7 +136,7 @@ class AnimationTickerTest {
         tracks.put(elementId, List.of(
                 new Keyframe("k0", "x", 0, KfValue.of(0.0), Easing.LINEAR),
                 new Keyframe("k1", "x", 1000, KfValue.of(1000.0), Easing.LINEAR)));
-        Timeline tl = new Timeline(timelineId, "T", 1000, fps, mode, TriggerConfig.MANUAL, tracks);
+        Timeline tl = new Timeline(timelineId, "T", 1000, fps, mode, trigger, tracks);
 
         List<Layer> layers = new ArrayList<>(List.of(layer));
         return new ProjectState(1L,
@@ -188,6 +194,26 @@ class AnimationTickerTest {
         AnimationTicker t = newTicker(src, new FakeRenderer());
         assertEquals(AnimationTicker.Result.OK, t.play("w-1", null),
                 "timelineId null → 取 activeTimelineId");
+        assertTrue(t.isWallAnimating("w-1"));
+    }
+
+    @Test
+    void autoRegisterAll_skipsNonManualTrigger() {
+        FakeWallSource src = new FakeWallSource();
+        // 0.6 P5：VARIABLE_CHANGE + LOOP 启动期不自动播（由 TimelineTriggerRegistry 在变量变化时驱动）
+        TriggerConfig vc = new TriggerConfig(TriggerType.VARIABLE_CHANGE, Map.of("fullName", "user/hp"));
+        src.walls.put("w-1", wall("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1, vc)));
+        AnimationTicker t = newTicker(src, new FakeRenderer());
+        assertEquals(0, t.autoRegisterAll(null), "VARIABLE_CHANGE 触发不自动播");
+        assertFalse(t.isWallAnimating("w-1"));
+    }
+
+    @Test
+    void autoRegisterAll_playsManualLoop() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-1", wall("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));   // MANUAL + LOOP
+        AnimationTicker t = newTicker(src, new FakeRenderer());
+        assertEquals(1, t.autoRegisterAll(null), "MANUAL + LOOP 仍自动播");
         assertTrue(t.isWallAnimating("w-1"));
     }
 

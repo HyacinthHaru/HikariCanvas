@@ -114,6 +114,18 @@ describe('TimelineDock 渲染 smoke（防 ComputedRef 解包崩溃）', () => {
         expect(wrapper.findAll('option').length).toBeGreaterThanOrEqual(3);
     });
 
+    it('设置里渲染触发方式选项（P5，triggerTypeLabel 正确解包 t.value）', async () => {
+        useProjectStore().setSnapshot(makeState());
+        useTimelineStore().openDock();
+        const wrapper = mount(TimelineDock);
+        await nextTick();
+        await wrapper.find('[title="时间轴设置"]').trigger('click');
+        await nextTick();
+        // triggerLabel + triggerVariableChange 文案出现 → triggerTypeLabel 读到 t.value.timeline，不崩
+        expect(wrapper.text()).toContain('什么时候播');
+        expect(wrapper.text()).toContain('变量变了就播');
+    });
+
     it('整体关键帧块渲染 + pointer 点选不崩（P4.5 / P4.5b 块改 pointer 拖动）', async () => {
         useProjectStore().setSnapshot(makeStateWithKf());
         useUiStore().selectMany(['e-1']);
