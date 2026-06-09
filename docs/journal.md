@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-06-09 · 0.6.0-P6 收尾 + **0.6.0 完工**（一致性 CI 确认 / 用户文档 / 版本号）
+
+P6 余下三件，**0.6.0 时间轴编辑器正式收工**。
+
+- **P6-2 双端一致性 CI**：确认已是完成态（P3 建的）。`rendering-test/easing-vectors.json`（第三方
+  Python 参照实现生成、已入库）被 Java `EasingSolverTest` 和前端 `easing.test.ts` + `colorLerp` 双端
+  **对同一组向量断言**（tol 1e-6）；CI 跑 vitest + :plugin:test 时两边都验——任一端插值器分叉即 CI 红。
+  无需新建。
+- **P6-3 用户文档**：新增 `docs/timeline-guide.md`——大白话教程（做第一个动画 / 拉就设 / 缓动 / 整体帧 /
+  框选删 / 播放方式 / 触发器三种 / 编辑期 vs 游戏内 / 双端一致 / fps / 一分钟清单），与 `variables.md`
+  同谱系（`timeline.md` 仍是技术设计总纲）。
+- **P6-4 版本号**：`0.5.0 → 0.6.0-SNAPSHOT`（build.gradle.kts allprojects / paper-plugin.yml /
+  web package.json + package-lock.json）；CLAUDE.md 路线图标 0.6.0 完工。
+
+**0.6.0 总览**：P1 数模+协议 v3+撤销 coalescing → P2 AnimationTicker+池化+MVP → P3 缓动+双端插值器+一致
+CI → P4 AE 风 dock + P4.5 整体帧/拉就设/框选删/块拖/逐属性 → P5 触发器（变量变化/到点→自动播）→ P6
+编辑期自动播+文档+收尾。约 25 commit（含 5 轮实测 hotfix + 2 个 TDZ/UX hotfix + 诊断日志）。
+后端 **1286** / 前端 **510** 全绿 / vite build 过 / 双端 0 漂移。**从"静态招牌"到"会动 + 按数据反应的
+信息屏"。**
+
+**已知小账（不阻塞，记录）**：触发器/动画的运行时注册偶发现象——P6-1 已把"新建动画要重启"的主因
+（只在关闭/启动起播）改成"落库即起播"；若仍有残留待实测进一步定位（诊断日志已埋）。
+
+关联：`docs/timeline-guide.md`（新）`build.gradle.kts` `plugin/.../paper-plugin.yml` `web/package*.json` `CLAUDE.md`。
+
+---
+
 ## 2026-06-09 · 0.6.0-P6-1 — 编辑期也让游戏里的墙自动播（同时修"新建动画要重启才动"毛刺）
 
 P6 收尾开篇。把"编辑期游戏里的墙不动、要关编辑器/重启才动"这个老行为改掉——它也是上次那个

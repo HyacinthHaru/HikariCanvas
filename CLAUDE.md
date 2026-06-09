@@ -453,7 +453,7 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.9** | **Live Paint 收尾**（M18 brush 真实形状 stroke offset polygon + text glyph 真实形状 fontkit 引入） | **18h** | ✅ |
 | **0.4.10** | **ultrareview-2026-05-29 修复批**（独立深度审查 224 缺陷 → 修全部 168 个 DIRECT_FIX：data-integrity / concurrency 线程契约 / boundary 守卫 / 异常 ack / 双端一致 / 模板校验 等；TRADE_OFF 23 + NEEDS_DESIGN 30 暂不修）+ 设计哲学固化（"工具不是保姆" PROPOSAL §2.1/§5.2.7） | **~40h** | ✅ |
 | **0.5.0** | **纯服务端性能 Benchmark**（后台模拟 rasterize/palette/GC + 21 程序生成 scene + `/canvas bench` 命令族 + report.json/summary.txt/report.html 三件 + 50mspt 交互计算器 + CI 功能性 gate；**不测网络**，见 PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
-| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md`） | ~360h | 🔄 P1~P4 ✅（P4 2026-06-05，AE 风 dock 就位；余 P5 触发器 / P6 收尾） |
+| 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md` + 用户教程 `docs/timeline-guide.md`） | ~360h | ✅ **完工**（2026-06-09 升 0.6.0-SNAPSHOT；P1 数模+协议 v3 / P2 Ticker+MVP / P3 缓动+双端一致 CI / P4 AE dock + P4.5 整体帧+拉就设 / P5 触发器 / P6 编辑期自动播+文档+收尾。后端 1286 / 前端 510） |
 | 0.7.0 | Scratch-like 视觉运行时（积木逻辑 + 事件驱动 + 条件分支；复用 template.expr + ChangeListener；积木库 vs 自写待定） | ~360h | 远期 |
 | M30 | 图层 mask / group / smart object（PS-style）— 独立大版本 | 30h+ | 远期 |
 | 弃 | B-advanced DCEL 覆盖 4% Live Paint 用例 — 38h+ 性价比低 | — | 不做 |
