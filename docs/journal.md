@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-09 · 0.6.0-P6-1 — 编辑期也让游戏里的墙自动播（同时修"新建动画要重启才动"毛刺）
+
+P6 收尾开篇。把"编辑期游戏里的墙不动、要关编辑器/重启才动"这个老行为改掉——它也是上次那个
+"重启前不工作、重启后正常"毛刺的根因：墙原本只在**启动扫描**（autoRegisterAll）和**会话关闭**
+（cancel→refreshAutoPlay）时才自动播；而浏览器关闭不一定立刻触发 cancel（要等 SessionReaper 回收
+空闲会话），所以新建的循环动画常常得等重启全量扫描才动。
+
+- **修**：`SessionManager.persistWall` 落库后——已在播 → `invalidate`（廉价刷缓存）；**没在播但有
+  activeTimeline → `refreshAutoPlay`**（编辑期首次落库即在游戏里起播）；静态墙（无 timeline）→ 不碰
+  Ticker（避免每次编辑多一次 loadWall 的 DB 读）。LOOP 动画首帧落库即起播、之后编辑走 invalidate
+  （DB 读只发生一次，非每次编辑）；ONCE 不自动播（autoLoopEligible 只放行 LOOP，不变）；
+  variableChange/schedule 仍等触发器（registry 编辑期也活跃，变量变了就播）。
+- **效果**：① 编辑期游戏里的墙就动了（不必关编辑器）；② 新建动画不再要重启——落库即起播。
+- 核心行为 `refreshAutoPlay` 启动未播合格墙已有单测（`AnimationTickerTest.refreshAutoPlay_loopAutoPlays`）；
+  persistWall 是简单条件分支 + 后端 1286 全量回归无破坏。SessionManager 无现成测试基建，不为 3 行
+  改动从零搭 session+repo 整合测试（live 播放行为最终靠实测）。
+
+后端 1286 全绿 / 行为改进。关联：`session/SessionManager.java`。
+
+---
+
 ## 2026-06-08 · 0.6.0-P5 诊断日志 — 排查"重启前动画/触发不工作、重启后正常"
 
 用户实测：墙动画 / 触发器在**重启服务器后正常，重启前不工作**。这指向运行时注册状态问题（启动的

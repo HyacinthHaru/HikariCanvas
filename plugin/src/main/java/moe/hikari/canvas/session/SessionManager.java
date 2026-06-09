@@ -667,11 +667,19 @@ public final class SessionManager {
         Session s = byId.get(sessionId);
         if (s == null || s.wallId() == null || s.projectState() == null) return;
         wallRepo.updateState(s.wallId(), s.projectState());
-        // 0.6 P2：updateState 同步落库后失效 Ticker 缓存（必须在 updateState 之后，否则 Ticker
-        // 下一 tick 重载到旧 state）。timeline / keyframe 编辑 op 走此路径，动画下一帧即用新值。
+        // 0.6 P2/P6：updateState 同步落库后处理 Ticker。
+        //  - 已在播 → invalidate（廉价刷缓存，下一帧即用新 state，编辑可见延迟 ≤1 帧）。
+        //  - 没在播但有 activeTimeline → refreshAutoPlay：**编辑期就让游戏里的墙自动播**（P6 改进），
+        //    不必等编辑器关闭 / 会话回收 / 重启全量扫描——这也是"新建动画要重启才动"那个毛刺的根因
+        //    （浏览器关闭不一定立刻 cancel→refreshAutoPlay，旧逻辑只在关闭/启动才起播）。
+        //  - 静态墙（无 activeTimeline）→ 不碰 Ticker（避免每次编辑多一次 loadWall 的 DB 读）。
         moe.hikari.canvas.render.AnimationTicker ticker = this.animationTicker;
         if (ticker != null) {
-            ticker.invalidate(s.wallId());
+            if (ticker.isWallAnimating(s.wallId())) {
+                ticker.invalidate(s.wallId());
+            } else if (s.projectState().activeTimelineId() != null) {
+                ticker.refreshAutoPlay(s.wallId());
+            }
         }
         // 0.6 P5：编辑落库后重建该 wall 的触发绑定（timeline.trigger / activeTimelineId 可能刚改）。
         moe.hikari.canvas.render.TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
