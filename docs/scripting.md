@@ -333,7 +333,12 @@ StrictNumber / coalesce / 协议切换机制——抵掉 ~20h)。wall-clock 按�
 
 ## 10. 未决问题(实现时回填)
 
-- [ ] `setElementProperty` headless 路径(墙没开编辑器时)的 persistWall 节流策略——每 action 落库太勤,P2 实测定(候选:复用 ProjectionThrottler 节流窗)
+- [x] ~~`setElementProperty` headless 路径的 persistWall 节流策略~~ → **P2 拍板:每 action 直落,不节流**。
+  理由:Budget 三闸已封顶(10 runs/s × 50 actions/run),且与编辑器 session 路径的 persistWall
+  频率同级;同 run 内连续多个 setElementProperty 是 N 次 load+save,成本上限已知可接受
+  (ElementPropertyApplier javadoc 记账)。**已知竞态(可接受)**:headless 写入与编辑器
+  open/close 瞬间并发时,脚本改动可能被 session 的旧 state persist 覆盖——单属性丢一次
+  更新,低频低危,下游 ultrareview 勿当新缺陷重报
 - [ ] `timer` 触发器在墙未部署时是否照跑(脚本副作用与渲染无关,倾向照跑;P2 定)
 - [ ] playerNear 采样间隔 config 默认值(10 tick 起步,P6 压测回填)
 - [ ] 积木画布 pan/zoom 手势与浏览器缩放冲突处理(P4 实测定)

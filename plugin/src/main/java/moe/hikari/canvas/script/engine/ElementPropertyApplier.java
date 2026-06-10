@@ -123,6 +123,15 @@ public final class ElementPropertyApplier {
     /**
      * 路径 B：headless 直改。临时 EditSession 复用 {@code updateElement} 的校验 +
      * immutable 重建（其 history / patch 产物即弃），落库后照 persistWall 链处理 Ticker。
+     *
+     * <p><b>成本记账（scripting.md §10 P2 拍板：每 action 直落，不节流）</b>：每次 apply =
+     * 一次 loadById（全量 JSON 反序列化）+ 一次 updateState（全量序列化落库）；同 run 内
+     * 连续 N 个 setElementProperty 即 N 次往返。上限受 Budget 三闸封顶（10 runs/s ×
+     * 50 actions），与编辑器 persistWall 频率同级，可接受。</p>
+     *
+     * <p><b>已知竞态（可接受，勿当新缺陷重报）</b>：与编辑器 session open/close 瞬间并发时
+     * （路径 A 查无 session → 本路径写 DB → 新 session 持旧 state 首次 persist 覆盖；或
+     * CLOSING session 的最终 persist 覆盖），脚本改动可能丢一次——单属性、低频低危。</p>
      */
     private TraceStep applyHeadless(String wallId, String blockId, String elementId,
                                     String property, Map<String, Object> patch) {
