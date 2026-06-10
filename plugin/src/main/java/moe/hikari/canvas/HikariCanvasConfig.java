@@ -158,14 +158,23 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.7：墙脚本参数（docs/scripting.md §2；config 段 {@code scripts}）。
+     * 0.7：墙脚本参数（docs/scripting.md §2 / §2.4；config 段 {@code scripts} +
+     * 嵌套 {@code scripts.budget}）。
      *
-     * @param maxRulesPerWall 单墙脚本规则数上限（默 16；{@code /canvas reload} 热更走
-     *                        {@link moe.hikari.canvas.script.ScriptStore#setMaxRulesPerWall}）
+     * <p>budget 三闸的另两项（{@code max-delay-depth} / {@code max-delay-ms}）是
+     * {@link moe.hikari.canvas.script.ScriptRuleValidator} 静态校验项，不在此重复。</p>
+     *
+     * @param maxRulesPerWall  单墙脚本规则数上限（默 16；{@code /canvas reload} 热更走
+     *                         {@link moe.hikari.canvas.script.ScriptStore#setMaxRulesPerWall}）
+     * @param maxActionsPerRun 单次触发展开执行的动作总数（含嵌套；默 50；热更走
+     *                         {@code ScriptBudget.applyConfig}，批次 3 接线）
+     * @param maxRunsPerSecond 单规则触发频率上限（超出丢弃 + audit RUN_BLOCKED；默 10）
+     * @param maxChainDepth    ABA 熔断链深（脚本写变量→触发别的脚本；默 8）
      */
-    public record ScriptsConfig(int maxRulesPerWall) {
+    public record ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
+                                int maxRunsPerSecond, int maxChainDepth) {
         public static ScriptsConfig defaults() {
-            return new ScriptsConfig(16);
+            return new ScriptsConfig(16, 50, 10, 8);
         }
     }
 
@@ -392,7 +401,18 @@ public final class HikariCanvasConfig {
         } else {
             int maxRules = Math.max(1, scSec.getInt(
                     "max-rules-per-wall", scDefaults.maxRulesPerWall()));
-            b.scriptsConfig = new ScriptsConfig(maxRules);
+            // 0.7.0-P2：scripts.budget 嵌套段（照 dynamic.schedule 范式；缺段全 default）
+            org.bukkit.configuration.ConfigurationSection budSec =
+                    scSec.getConfigurationSection("budget");
+            int maxActions = scDefaults.maxActionsPerRun();
+            int maxRuns = scDefaults.maxRunsPerSecond();
+            int maxChain = scDefaults.maxChainDepth();
+            if (budSec != null) {
+                maxActions = Math.max(1, budSec.getInt("max-actions-per-run", maxActions));
+                maxRuns = Math.max(1, budSec.getInt("max-runs-per-second", maxRuns));
+                maxChain = Math.max(1, budSec.getInt("max-chain-depth", maxChain));
+            }
+            b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain);
         }
 
         return new HikariCanvasConfig(b);

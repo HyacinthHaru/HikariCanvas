@@ -187,3 +187,12 @@ scripts:
   # 单面墙可挂的脚本规则数上限（防玩家堆几百条规则拖慢服务器）。
   # /canvas reload 可热更，只影响后续创建，不裁剪已有规则。
   max-rules-per-wall: 16
+  # 执行预算三闸（docs/scripting.md §2.4；/canvas reload 可热更）。
+  budget:
+    # 单次触发展开执行的动作总数（含嵌套 if 分支与 wait 续接累计）。
+    max-actions-per-run: 50
+    # 单条规则每秒最多触发次数（超出的触发直接丢弃 + 审计记录）。
+    max-runs-per-second: 10
+    # 链式熔断：脚本写变量又触发别的脚本，链深达到此值时掐断本次执行。
+    # 只掐断不自动禁用脚本——日志和审计会告诉你是哪条规则在转圈。
+    max-chain-depth: 8
