@@ -752,6 +752,15 @@ export const messages = {
             zoom: '缩放',
             paletteTitle: '积木库',
             palettePlaceholder: '积木列表即将上线',
+            // 0.7.0-P4-D2：palette 分组标题 + 无选中规则提示
+            paletteNeedRule: '先在上面选一条规则，再把积木拖到画布上',
+            paletteGroup: {
+                trigger: '触发',
+                action: '动作',
+                timeline: '时间轴',
+                control: '控制',
+                danger: '命令',
+            },
             // 拖块入 if 槽的空槽占位（任务 C）
             emptySlot: '把积木拖到这里',
             // 未知积木类型兜底（数据里出现没有定义的 kind 时）
@@ -1765,6 +1774,15 @@ export const messages = {
             zoom: 'Zoom',
             paletteTitle: 'Blocks',
             palettePlaceholder: 'Block list coming soon',
+            // 0.7.0-P4-D2: palette group titles + no-rule-selected hint
+            paletteNeedRule: 'Pick a rule above first, then drag blocks onto the canvas',
+            paletteGroup: {
+                trigger: 'Triggers',
+                action: 'Actions',
+                timeline: 'Timeline',
+                control: 'Control',
+                danger: 'Commands',
+            },
             emptySlot: 'Drag a block here',
             unknownBlock: 'Unknown block',
             // ---- 0.7.0-P4-D1 edit session ----

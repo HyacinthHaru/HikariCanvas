@@ -19,6 +19,8 @@
  * </ul>
  */
 
+import type { ScriptAction, ScriptTrigger } from '@/types/protocol';
+
 /**
  * 参数字段类型。{@code statements} 是 if 的 then/else 子序列槽（不是表单控件，由
  * BlockNode 递归渲染子积木）；{@code condition} 是条件构建器（任务 G）。其余为
@@ -300,4 +302,70 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
  */
 export function defFor(kind: string): BlockDef | null {
     return ACTION_DEFS[kind] ?? TRIGGER_DEFS[kind] ?? null;
+}
+
+// ---------- 新积木默认值（D2：palette 拖出 / 新建规则用）----------
+
+/**
+ * 造一个指定 kind 的合法默认动作（palette 拖出新块时用）。
+ *
+ * <p>每个字段取一个<b>合法且无害</b>的默认（在后端 validator 范围内）：引用类字段（变量名 /
+ * 元素 id / 时间轴 id / 命令模板 id）默认空串——空引用不会"误触"既有对象，用户拖出后必须自己
+ * 选；数值默认取范围内的常用值（如 timer 间隔 10s / 靠近 8 格 / 等待 500ms）；枚举默认取首项
+ * （op=play / scope=near / property=x）。if 的 then/else 默认空数组（非 null，wire 契约）。</p>
+ *
+ * <p>未知 kind → 兜底返一个 {@code log} 动作（绝不抛，调用方拿到的总是合法 ScriptAction）。
+ * 返回值的 {@code type} 是窄化好的字面量联合分支，可直接喂 {@code insertAt} / setActions。</p>
+ */
+export function makeDefaultAction(kind: string): ScriptAction {
+    switch (kind) {
+        case 'setVariable':
+            return { type: 'setVariable', fullName: '', value: '' };
+        case 'incrementVariable':
+            return { type: 'incrementVariable', fullName: '', delta: 1 };
+        case 'setElementProperty':
+            return { type: 'setElementProperty', elementId: '', property: 'x', value: '' };
+        case 'playTimeline':
+            // seekMs 仅 op=seek 携带——默认 op=play 故省略（不上 wire）。
+            return { type: 'playTimeline', timelineId: '', op: 'play' };
+        case 'playSound':
+            return { type: 'playSound', soundId: '', volume: 1, pitch: 1, scope: 'near' };
+        case 'wait':
+            return { type: 'wait', ms: 500 };
+        case 'runCommand':
+            return { type: 'runCommand', templateId: '', params: {} };
+        case 'log':
+            return { type: 'log', message: '' };
+        case 'if':
+            return { type: 'if', condition: '', then: [], else: [] };
+        default:
+            // 未知 kind 兜底：给个最简单的 log 动作（保证返回合法 ScriptAction）。
+            return { type: 'log', message: '' };
+    }
+}
+
+/**
+ * 造一个指定 kind 的合法默认触发器（新建规则 / 切触发器类型时用）。
+ *
+ * <p>无数据字段的触发器（{@code playerJoin} / {@code playerKill} / {@code wallReady}）只带
+ * type；带字段的给范围内默认（timer 间隔 10s / playerNear 8 格 / variableChange 空变量名待选）。
+ * 未知 kind → 兜底 {@code wallReady}（最无害的"画板就绪即触发"）。</p>
+ */
+export function makeDefaultTrigger(kind: string): ScriptTrigger {
+    switch (kind) {
+        case 'variableChange':
+            return { type: 'variableChange', fullName: '' };
+        case 'timer':
+            return { type: 'timer', intervalSeconds: 10 };
+        case 'playerJoin':
+            return { type: 'playerJoin' };
+        case 'playerKill':
+            return { type: 'playerKill' };
+        case 'playerNear':
+            return { type: 'playerNear', rangeBlocks: 8 };
+        case 'wallReady':
+            return { type: 'wallReady' };
+        default:
+            return { type: 'wallReady' };
+    }
 }

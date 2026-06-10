@@ -5,6 +5,61 @@
 
 ---
 
+## 2026-06-11 · 0.7.0-P4-D2：积木拖拽吸附 + palette + 移堆（P4 完）
+
+把积木编辑器接上拖拽：palette 拖出新块 / 画布拖已有块（序列重排 / 跨堆 / 进 if 槽）/ 拖帽子移整堆。
+D2 只管"算出树操作 → 调 D1 入口（`setActions` / `setStackPos`）"，编辑模型（working copy / undo /
+debounce save / lock 守卫）全在 D1 store 内，D2 不重复实现。**P4 引擎层完工**。
+
+- **`web/src/script/model/blockDefs.ts`**：加 `makeDefaultAction(kind)` / `makeDefaultTrigger(kind)`——
+  palette 拖出 / 新建规则时造合法默认对象（每字段取后端 validator 范围内的合理默认：引用类
+  fullName/elementId/timelineId/templateId 空串待选；数值 intervalSeconds=10 / rangeBlocks=8 /
+  ms=500 / volume=pitch=1 / delta=1；枚举取白名单首项 op=play / scope=near / property=x；if 的
+  then/else 空数组非 null；playTimeline 默认 op=play 不带 seekMs）。未知 kind 兜底（log / wallReady）。
+- **`web/src/script/canvas/useBlockDrag.ts`**（新）：拖拽核心（决策 K-UI-3）。
+  - **`buildSlots(measured, draggingPath, bandH)` 纯函数**（无 DOM）：把"已测块矩形"推导成候选插槽
+    SlotRect[]——真实块按"所属序列"分组（**键含 ruleId**，否则两堆顶层 `actions` 序列错并）→ 每块上沿
+    一个 before 插槽 + 组末一个尾插槽（index=末块+1）；空容器占位（`data-slot-path`）→ 单 index=0 槽；
+    **排除被拖块自身及其子树**（剔除 parentPath 以 draggingPath 为前缀的槽——画布源不能拖进自己里面）。
+  - **`collectSlots(canvasEl, draggingPath)`**：遍历 `[data-block-path]`（trigger=hat / 其余=block）+
+    `[data-slot-path]`（emptySlot）`getBoundingClientRect` 测 viewport 矩形，ruleId 取最近祖先
+    `[data-rule-id]`，再调 buildSlots。
+  - **`useBlockDrag` composable**：三类拖拽源——`startPaletteDrag(kind, e)`（拖出新块）/
+    `startBlockDrag(stackRuleId, blockPath, e)`（拖已有块，隐含 selectRule）/ `startStackDrag(ruleId, e)`
+    （拖帽子移堆，world 坐标差量驱动，松手 `setStackPos`）。拖动中跟手浮层 + `findDropTarget`（阈值 ~40）
+    高亮命中槽；松手：palette 源命中→`insertAt`+`setActions`，画布源命中→`moveNode`+`setActions`
+    （toParentPath/toIndex 直传——`collectSlots` 在 pointerdown 测 = "移动前渲染树"，与 blockTree.moveNode
+    下标补偿契约对齐），无命中→还原（palette 不创建 / 画布不拆堆）。
+  - **生命周期借 useBrushHost 范式**：setPointerCapture + move/up/cancel **挂 window**（palette 项的 capture
+    目标在 viewport DOM 之外，挂 window 三类源都收得到）+ pointercancel / blur / visibilitychange /
+    onScopeDispose 全 abort（还原 + releaseCapture）。**lock 守卫**：`project.isLocked` 时所有 start* return。
+- **`web/src/script/canvas/dragInjection.ts`**（新）：`BLOCK_DRAG_KEY` provide/inject 契约——BlockCanvas
+  持唯一 useBlockDrag 实例，把"拖块 / 移堆"两句柄 provide 给递归子组件（BlockNode / BlockStack 注入）；
+  含 `NOOP_DRAG_HANDLES` 默认值（组件单独 mount 时安全兜底）。
+- **`web/src/script/canvas/BlockPalette.vue`**（新）：左侧积木库，按 category 分组列 9 个可拖动作积木
+  （含 if；触发器**不在 palette**——帽子从"新建规则"来）；项 pointerdown（仅左键）→ emit `paletteDown`；
+  lock 态 `pointer-events:none` + 灰显。配色读 BlockDef.colorVar（与画布块同色）。
+- **接入改动**：
+  - **BlockCanvas.vue**：instantiate useBlockDrag + provide 句柄 + defineExpose `startPaletteDrag`；
+    渲染**跟手浮层 + 吸附指示线**（Teleport 到 body，用 viewport 坐标 fixed 定位绕开 world transform）；
+    移堆拖动中用 `drag.stackDragPos` 覆盖该堆坐标即时跟随；pan 守卫（拖块 / 移堆中不启动 pan）。
+  - **BlockStack.vue**：帽子左键 pointerdown → 移堆 + 选中；堆体 click → selectRule；当前编辑规则
+    mauve 描边光环；空 actions 占位加 `data-slot-path="actions"`（顶层空序列落点）。
+  - **BlockNode.vue**：块根 pointerdown（仅左键、跳过表单元素）→ startBlockDrag（ruleId 从最近
+    `[data-rule-id]` 现取，stopPropagation 让最深块独占）；空 then/else 占位加 `data-slot-path`。
+  - **ScriptEditorOverlay.vue**：palette 占位换 `<BlockPalette @palette-down>` → 转发到
+    `canvasRef.startPaletteDrag`；无选中规则时提示先选/建规则。
+  - **i18n messages.ts**：`script.paletteGroup.{trigger,action,timeline,control,danger}` +
+    `script.paletteNeedRule` 中英。
+- **测试（+51，前端 688→739 全绿）**：`blockDefaults.test.ts`（makeDefaultAction/Trigger 全 kind 合法 +
+  范围/枚举/空数组校验 + 未知兜底）/ `useBlockDrag.test.ts`（buildSlots 序列枚举 / 尾槽 / if 子槽 /
+  空槽 / **排除自身子树** / 多堆独立 + collectSlots happy-dom 接线）/ `useBlockDrag.tree.test.ts`
+  （effectScope + happy-dom 落树集成：palette insert 顶层 / 画布 move 同序列重排 / 落回原位不变 /
+  进 if 槽 / 无命中还原 / lock no-op）/ `BlockPalette.smoke.test.ts` / `BlockCanvas.drag.smoke.test.ts`
+  （pointer 序列不崩 + 浮层出现 + 选中）。vite build 通过（script-engine chunk 112.7 kB / main 565 kB）。
+
+---
+
 ## 2026-06-11 · 0.7.0-P4-D1：积木编辑会话模型（working copy + 本地 undo + debounce save）
 
 把积木编辑做成"本地改 working copy + 自动保存"心智（K-UI-11），不每个像素发请求。新建编辑会话

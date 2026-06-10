@@ -15,11 +15,12 @@
  * trace blockId 高亮定位。lock 态（project.isLocked）下本阶段仍静态渲染（拖拽 / 交互在
  * 任务 D 接，按 K-UI-12 守卫）。</p>
  */
-import { computed } from 'vue';
+import { computed, inject } from 'vue';
 import type { ScriptAction } from '@/types/protocol';
 import { useI18n } from '@/i18n';
 import { defFor, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
+import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
 
 const props = defineProps<{
     /** 本块对应的动作（含 if）。 */
@@ -29,6 +30,30 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+/** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
+const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
+
+/**
+ * 块根 pointerdown：启动"拖已有块"。只接管主键（左键）。ruleId 从最近祖先 [data-rule-id] 现取
+ * （BlockNode 递归不显式持 ruleId，避免一路透传 prop）。{@code startBlockDrag} 内部会
+ * stopPropagation——嵌套块时只有<b>指针正下方最深的那块</b>启动拖动，外层不抢。
+ *
+ * <p>C/F 阶段块内会有参数输入框：表单元素聚焦不应触发拖块（避免点输入框就拖走）。这里
+ * 跳过 input/textarea/select/contentEditable 目标（pointerdown 落在它们上时不拖）。</p>
+ */
+function onBlockPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    if (isFormTarget(e.target)) return;
+    const host = (e.currentTarget as HTMLElement).closest('[data-rule-id]');
+    const ruleId = host?.getAttribute('data-rule-id');
+    if (!ruleId) return;
+    dragHandles.startBlockDrag(ruleId, props.path, e);
+}
+
+function isFormTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    return !!el && (el.matches?.('input, textarea, select, button') || el.isContentEditable);
+}
 
 /** 本块的声明定义；未知 kind → null（兜底显示 unknownBlock）。 */
 const def = computed(() => defFor(props.action.type));
@@ -101,6 +126,7 @@ const conditionText = computed(() =>
     class="hc-block-node"
     :data-block-path="path"
     :style="{ borderLeftColor: colorVar }"
+    @pointerdown="onBlockPointerDown"
   >
     <!-- 头部：标题 + 标量参数槽（占位：字段名 + 原始值） -->
     <div class="hc-block-head">
@@ -132,7 +158,12 @@ const conditionText = computed(() =>
             :action="child"
             :path="`${path}/then/${i}`"
           />
-          <div v-if="thenActions.length === 0" class="hc-empty-slot">
+          <!-- 空 then 槽：data-slot-path 让 collectSlots 当 index=0 落点 -->
+          <div
+            v-if="thenActions.length === 0"
+            class="hc-empty-slot"
+            :data-slot-path="`${path}/then`"
+          >
             {{ resolveLabelKey(t, 'script.emptySlot') }}
           </div>
         </div>
@@ -148,7 +179,12 @@ const conditionText = computed(() =>
             :action="child"
             :path="`${path}/else/${i}`"
           />
-          <div v-if="elseActions.length === 0" class="hc-empty-slot">
+          <!-- 空 else 槽：data-slot-path 让 collectSlots 当 index=0 落点 -->
+          <div
+            v-if="elseActions.length === 0"
+            class="hc-empty-slot"
+            :data-slot-path="`${path}/else`"
+          >
             {{ resolveLabelKey(t, 'script.emptySlot') }}
           </div>
         </div>
@@ -166,6 +202,11 @@ const conditionText = computed(() =>
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
     padding: 6px 8px 6px 10px;
     user-select: none;
+    /* 块可拖动重排 / 跨堆 / 入 if 槽 */
+    cursor: grab;
+}
+.hc-block-node:active {
+    cursor: grabbing;
 }
 .hc-block-head {
     display: flex;

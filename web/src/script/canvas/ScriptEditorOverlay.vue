@@ -23,6 +23,7 @@ import { useScriptEditStore } from '@/stores/scriptEdit';
 import { useProjectStore } from '@/stores/project';
 import { useI18n } from '@/i18n';
 import BlockCanvas from './BlockCanvas.vue';
+import BlockPalette from './BlockPalette.vue';
 
 const ui = useUiStore();
 const scripts = useScriptStore();
@@ -46,6 +47,15 @@ const zoomPct = computed(() => {
 
 function resetView(): void {
     canvasRef.value?.resetView();
+}
+
+/**
+ * palette 项 pointerdown 转发到 BlockCanvas 的拖拽实例（palette 在侧栏、拖拽实例在画布——
+ * 经此一跳把"拖出新块"接到画布的 useBlockDrag）。无选中规则时也允许拖（落下时 insertAt 需有
+ * workingCopy，故 useBlockDrag 在松手时若 workingCopy 为空会安全早退——但更友好是先建/选规则）。
+ */
+function onPaletteDown(kind: string, e: PointerEvent): void {
+    canvasRef.value?.startPaletteDrag(kind, e);
 }
 
 function close(): void {
@@ -238,10 +248,13 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
           </li>
         </ul>
 
-        <!-- palette 占位空壳（真 palette 任务 D2） -->
+        <!-- 积木库（D2：拖出新块）。无选中规则时提示先选/建一条。 -->
         <div class="hc-side-section-title mt-2">{{ t.script.paletteTitle }}</div>
-        <div class="px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-          {{ t.script.palettePlaceholder }}
+        <div v-if="!edit.workingCopy" class="px-3 py-1 text-xs text-[color:var(--muted-foreground)]">
+          {{ t.script.paletteNeedRule }}
+        </div>
+        <div class="px-2 pb-3">
+          <BlockPalette @palette-down="onPaletteDown" />
         </div>
       </aside>
 

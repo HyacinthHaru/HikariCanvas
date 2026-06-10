@@ -10,11 +10,13 @@
  * blockLayout 解析后通过 props.x / props.y 传入。规则名本阶段只显示（编辑留后续）。
  * 触发器帽子 path = {@code 'trigger'}（trace 中触发器步的 blockId）。</p>
  */
-import { computed } from 'vue';
+import { computed, inject } from 'vue';
 import type { ScriptRule } from '@/types/protocol';
 import { useI18n } from '@/i18n';
 import { TRIGGER_DEFS, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
+import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
+import { useScriptEditStore } from '@/stores/scriptEdit';
 import BlockNode from './BlockNode.vue';
 
 const props = defineProps<{
@@ -27,6 +29,23 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const edit = useScriptEditStore();
+/** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
+const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
+
+/**
+ * 帽子 pointerdown：选中本规则 + 启动移堆（拖帽子移整堆）。只接管主键（左键）。
+ * 中键留给 pan（不 stopPropagation 让其冒泡到 viewport）。
+ */
+function onHatPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return; // 仅左键：移堆 + 选中
+    dragHandles.startStackDrag(props.rule.id, e);
+}
+
+/** 堆体（非帽子区）点击：选中本规则进入编辑（不拖动）。 */
+function onStackClick(): void {
+    if (edit.selectedRuleId !== props.rule.id) edit.selectRule(props.rule.id);
+}
 
 /** 触发器定义；未知 type → null（兜底显示触发器 type 字面量）。 */
 const triggerDef = computed(() => TRIGGER_DEFS[props.rule.trigger.type] ?? null);
@@ -65,12 +84,20 @@ const stackStyle = computed(() => ({
 </script>
 
 <template>
-  <div class="hc-block-stack" :style="stackStyle" :data-rule-id="rule.id">
-    <!-- 触发器帽子（梯形 + peach 底，显规则名 + 触发器） -->
+  <div
+    class="hc-block-stack"
+    :style="stackStyle"
+    :data-rule-id="rule.id"
+    :class="rule.id === edit.selectedRuleId ? 'hc-block-stack-active' : ''"
+    @pointerdown.stop
+    @click="onStackClick"
+  >
+    <!-- 触发器帽子（梯形 + peach 底，显规则名 + 触发器）；左键拖 = 移堆 -->
     <div
       class="hc-stack-hat"
       data-block-path="trigger"
       :style="{ background: `color-mix(in srgb, ${triggerColor} 22%, var(--card))`, borderColor: triggerColor }"
+      @pointerdown="onHatPointerDown"
     >
       <div class="hc-hat-row">
         <span class="hc-hat-name">{{ rule.name }}</span>
@@ -97,7 +124,8 @@ const stackStyle = computed(() => ({
         :action="action"
         :path="`actions/${i}`"
       />
-      <div v-if="rule.actions.length === 0" class="hc-stack-empty">
+      <!-- 空 actions 序列：data-slot-path="actions" 让 collectSlots 把它当顶层 index=0 落点 -->
+      <div v-if="rule.actions.length === 0" class="hc-stack-empty" data-slot-path="actions">
         {{ t.script.emptySlot }}
       </div>
     </div>
@@ -112,6 +140,12 @@ const stackStyle = computed(() => ({
     flex-direction: column;
     gap: 5px;
 }
+.hc-block-stack-active {
+    /* 当前编辑规则：淡 mauve 描边光环（与左侧列表高亮同色系） */
+    outline: 2px solid color-mix(in srgb, var(--ctp-mauve, var(--primary)) 55%, transparent);
+    outline-offset: 3px;
+    border-radius: 14px;
+}
 .hc-stack-hat {
     border: 2px solid;
     /* 帽子视觉：上圆角大、下圆角小，像 Scratch 触发帽 */
@@ -119,6 +153,11 @@ const stackStyle = computed(() => ({
     padding: 7px 10px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
     user-select: none;
+    /* 帽子可拖动移整堆 */
+    cursor: grab;
+}
+.hc-stack-hat:active {
+    cursor: grabbing;
 }
 .hc-hat-row {
     display: flex;
