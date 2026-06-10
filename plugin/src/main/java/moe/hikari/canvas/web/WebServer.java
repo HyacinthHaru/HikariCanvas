@@ -113,6 +113,10 @@ public final class WebServer {
     private final VariableAliasDispatcher variableAliasDispatcher;
     /** 0.4.2：ready payload 注入 aliases 快照；与 dispatcher 同生命周期。 */
     private final moe.hikari.canvas.storage.VariableAliasDao variableAliasDao;
+    /** 0.7.0 P1：script.* 五个 op 的分发；可为 null（ScriptStore 未配置）。 */
+    private final ScriptOpDispatcher scriptOpDispatcher;
+    /** 0.7.0 P1：ready payload 注入 scripts 快照；与 dispatcher 同生命周期。 */
+    private final moe.hikari.canvas.script.ScriptStore scriptStore;
     /**
      * 0.4.0-P2-F：ready payload 注入 variables 快照需要直读 VariableStore。
      * 与 {@link #variableOpDispatcher} 同生命周期；可为 null（VariableStore 未配置时跳过注入）。
@@ -179,7 +183,8 @@ public final class WebServer {
                      String serverVersion,
                      int wsAuthTimeoutSeconds,
                      List<String> allowedOrigins,
-                     TokenRateLimiter tokenRateLimiter) {
+                     TokenRateLimiter tokenRateLimiter,
+                     moe.hikari.canvas.script.ScriptStore scriptStore) {
         this.log = log;
         this.host = host;
         this.port = port;
@@ -235,6 +240,11 @@ public final class WebServer {
         this.variableAliasDao = variableAliasDao;
         this.variableAliasDispatcher = variableAliasDao == null ? null
                 : new VariableAliasDispatcher(sessionManager, rateLimiter, variableAliasDao,
+                        wallRepo, push, auditLog, plugin);
+        // 0.7.0 P1：script.* dispatcher（ScriptStore 必传，否则禁用；测试装配传 null 容忍）
+        this.scriptStore = scriptStore;
+        this.scriptOpDispatcher = scriptStore == null ? null
+                : new ScriptOpDispatcher(sessionManager, rateLimiter, scriptStore,
                         wallRepo, push, auditLog, plugin);
         // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
         this.variableStore = variableStore;
@@ -796,6 +806,16 @@ public final class WebServer {
                     variableAliasDispatcher.dispatch(ctx, in, bound);
                 }
             }
+            // 0.7.0 P1：script.* 5 op（协议 v4）
+            case "script.create", "script.update", "script.delete",
+                 "script.enable", "script.test" -> {
+                if (scriptOpDispatcher == null) {
+                    ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR",
+                            "script system not initialized"));
+                } else {
+                    scriptOpDispatcher.dispatch(ctx, in, bound);
+                }
+            }
             default -> ctx.send(Envelope.error(in.id(), "INVALID_OP", "unknown op: " + in.op()));
         }
     }
@@ -1043,6 +1063,10 @@ public final class WebServer {
         } else {
             payload.put("aliases", java.util.Map.of());
         }
+        // 0.7.0 P1：携带当前 wall 的脚本规则快照（ScriptRule 列表，wire 形态由注解 serializer
+        // 决定），让前端 ScriptStore mirror 一次性初始化。null wall 或 store 未配时回空 list。
+        payload.put("scripts", (scriptStore != null && wallId != null)
+                ? scriptStore.listByWall(wallId) : java.util.List.of());
         // 0.4.5 P3：携带当前 wall 的铁路绑定（line + station + direction），让 ScheduleManagerModal
         // 一打开就知道是否走 RailScheduleProvider 路径。未绑定时返 null。
         if (railOpDispatcher != null && wallId != null) {

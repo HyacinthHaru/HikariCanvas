@@ -130,3 +130,15 @@ permissions:
   canvas.rail.wall.bind:
     description: 把 wall 绑定到铁路网络（0.4.4；wall owner 走 schedule.own）
     default: true
+  canvas.script.edit:
+    description: 给自己能打开的墙编排积木脚本(0.7.0)
+    default: true
+  canvas.script.trigger.global:
+    description: 使用全服事件触发器(玩家进服/被击杀)(0.7.0)
+    default: true
+  canvas.script.sound:
+    description: 在脚本里使用"播放声音"积木(0.7.0)
+    default: true
+  canvas.script.command:
+    description: 在脚本里使用"执行命令模板"积木(0.7.0,危险面)
+    default: op

@@ -129,6 +129,9 @@ public final class HikariCanvas extends JavaPlugin {
     private moe.hikari.canvas.storage.UserGlobalVariableDao userGlobalVariableDao;
     // 0.4.4：铁路网络 DAO（V016；5 表统一 CRUD）。WebServer + RailScheduleProvider 共享。
     private moe.hikari.canvas.storage.RailDao railDao;
+    // 0.7.0 P1：墙脚本内存镜像（V017 wall_scripts 持久化）。WebServer script.* op +
+    // ready payload 注入；P2 ScriptRunner 引擎也走它。
+    private moe.hikari.canvas.script.ScriptStore scriptStore;
     // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
     // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -380,6 +383,15 @@ public final class HikariCanvas extends JavaPlugin {
         sessionManager.addWallDeleteHook(wid -> variableAliasDaoForHook.deleteByWall(wid));
         // 0.4.4：铁路网络 DAO（V016 5 表）。RailScheduleProvider + WebServer 共享。
         this.railDao = new moe.hikari.canvas.storage.RailDao(getLogger(), database.jdbi());
+        // 0.7.0 P1：墙脚本 DAO + 内存镜像（V017 migration 已跑）。装配须早于 WebServer 构造
+        // （script.* dispatcher + ready payload scripts 字段都依赖它）。
+        moe.hikari.canvas.storage.ScriptDao scriptDao =
+                new moe.hikari.canvas.storage.ScriptDao(getLogger(), database.jdbi());
+        scriptStore = new moe.hikari.canvas.script.ScriptStore(
+                getLogger(), scriptDao, config.scriptsConfig.maxRulesPerWall());
+        scriptStore.loadFromDb();
+        // wall 删除时清掉内存镜像（DB 行由 wall_scripts FK CASCADE 自动清）
+        sessionManager.addWallDeleteHook(scriptStore::clearWall);
         this.variableProviderDaemon =
                 ProviderBootstrap.initialize(this.variableStore, this, this.wallRepo,
                         this.scheduleDao, config.scheduleConfig, this.railDao);
@@ -553,7 +565,7 @@ public final class HikariCanvas extends JavaPlugin {
                 variableProviderDaemon, variableAliasDao, this,
                 version,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins,
-                tokenRateLimiter);
+                tokenRateLimiter, scriptStore);
         webServer.start();
 
         // 0.6 P2：时间轴动画产帧引擎装配（docs/architecture.md §5.5 / docs/timeline.md §3）。

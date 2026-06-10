@@ -57,7 +57,7 @@ const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
  * 两者解耦：升业务版本只动 {@link CLIENT_V}，不动 {@link ENVELOPE_V}。
  * {@link CLIENT_V} 升级时与 {@code plugin/.../Protocol.java SUPPORTED_MIN/MAX} 同步改。
  */
-const CLIENT_V = 3;
+const CLIENT_V = 4;
 
 /**
  * 信封壳版本（消息容器格式）。所有出帧的 {@code Envelope.v} 用它；与业务协议版本

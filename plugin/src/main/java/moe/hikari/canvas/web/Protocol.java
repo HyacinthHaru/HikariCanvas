@@ -17,16 +17,19 @@ package moe.hikari.canvas.web;
  * （MIN=MAX 同步提升）。<b>0.6 v3 取干净切换</b>（docs/protocol.md「v2 → v3 变更总览」）：
  * 前端 bundle 由插件自带分发，客户端与服务端版本在实际部署中永远匹配；且 v2 编辑器打开含
  * timeline 的工程会在保存时丢弃 {@code timelines}（数据丢失），不留双轨窗口。</p>
+ *
+ * <p>v4 = 0.7.0 script.*（2026-06-10）：墙脚本 5 op + ready payload {@code scripts} 字段，
+ * 同样干净切换。</p>
  */
 public final class Protocol {
 
     private Protocol() {}
 
     /** 服务端可接受的最小 business protocol 版本。 */
-    public static final int SUPPORTED_MIN = 3;
+    public static final int SUPPORTED_MIN = 4;
 
     /** 服务端可接受的最大 business protocol 版本。 */
-    public static final int SUPPORTED_MAX = 3;
+    public static final int SUPPORTED_MAX = 4;
 
     /** 协议版本不匹配时关闭 WS 的 close code（与 4001 auth_timeout 同 4xxx 段）。 */
     public static final int CLOSE_PROTOCOL_VERSION_UNSUPPORTED = 4002;

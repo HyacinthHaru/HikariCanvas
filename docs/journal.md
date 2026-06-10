@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P1-7 批次 3：协议 v4 干净切换 + script 系统装配
+
+- **协议 v4**：`Protocol.SUPPORTED_MIN/MAX 3→4`（javadoc 加 v4 = 0.7.0 script.* 说明）+
+  前端 `wsClient.ts CLIENT_V 3→4`（干净切换，照 0.6 v3 先例；前端 bundle 插件自带分发，
+  部署中两端版本永远匹配）。注：批次说明里写 CLIENT_V 在 `types/protocol.ts`，实际定义
+  在 `network/wsClient.ts:60`，按实际位置改。
+- **WebServer 装配**：构造参数尾追加 `ScriptStore scriptStore`（null 容忍，唯一调用点
+  HikariCanvas 补传）；构造区按 alias dispatcher 范式建 `scriptOpDispatcher`；路由 switch
+  加 `script.create/update/delete/enable/test` 5 case（null → INTERNAL_ERROR）；
+  handleAuth ready payload aliases 旁注入 `scripts`（`scriptStore.listByWall(wallId)`，
+  null wall / store 回空 list）。
+- **HikariCanvas.onEnable**：railDao 之后、WebServer 之前装配 `ScriptDao + ScriptStore +
+  loadFromDb + sessionManager.addWallDeleteHook(scriptStore::clearWall)`（DB 行靠
+  wall_scripts FK CASCADE，内存镜像靠 hook）。
+- **paper-plugin.yml**：rail 节点后追加 `canvas.script.{edit, trigger.global, sound}`
+  （default true）+ `canvas.script.command`（default op，危险面）。
+- **测试**：新增 `ReadyPayloadScriptsTest` 3 case（2 规则 → scripts size 2 + 首条含
+  id/name/trigger wire 形态 / store null → 空 list / wall 隔离）。后端全量 + 前端
+  vite build 烟测全绿。
+
+关联文件：`plugin/src/main/java/moe/hikari/canvas/{web/{Protocol.java,WebServer.java},
+HikariCanvas.java}` / `plugin/src/main/resources/paper-plugin.yml` /
+`web/src/network/wsClient.ts` / `plugin/src/test/java/moe/hikari/canvas/web/ReadyPayloadScriptsTest.java`
+
+---
+
+## 2026-06-10 · 0.7.0-P1-6 批次 3：ScriptOpDispatcher（script.* 5 op）
+
+- **新建 `web/ScriptOpDispatcher`**（package-private，照 VariableAliasDispatcher 范式：
+  rateLimiter → session → wall → store 判空 → payload → 权限 → switch）：
+  - `script.create {rule}`：payload.rule 经类内单例 ObjectMapper convertValue（先覆写
+    id 占位 + wallId=session、enabled 缺省 true、blockLayout 缺省 "{}"）→
+    ScriptRuleValidator 拒则 `SCRIPT_INVALID`（validator 信息原样作 message）→ 面权限 →
+    store.create → ack `{rule}` + patch `add /scripts/<encoded ruleId>` → audit SCRIPT_CREATE
+  - `script.update {ruleId, rule}`：**先 store.find 确认 ruleId 属本 wall（防跨墙改）**，
+    其余同链；NotFoundException → `SCRIPT_NOT_FOUND`
+  - `script.delete {ruleId}`：规则不存在也推 remove patch（幂等，照 alias clear 先例）；
+    ack `{ruleId, removed}`
+  - `script.enable {ruleId, enabled}`：翻转开关，ack `{rule}` + patch add
+  - `script.test {ruleId}`：P1 固定 `SCRIPT_ENGINE_UNAVAILABLE`；留 `ScriptTestSeam`
+    （volatile + setTestSeam），P2 ScriptRunner 注入后返回值作 ack
+- **权限两层**：基础节点 `canvas.script.edit` 恒查（default true，offline 兜底放行照
+  alias own 节点写法）；create/update 对 `ScriptPermissions.requiredFacets` 批量
+  MainThreadPerms.resolve 一次 hop 逐面查，**面节点无兜底**（服主收回必须真拒），缺 →
+  `PERMISSION_DENIED`（message 含缺节点）+ audit。**不读 wall lock**（lock-state 纪律）。
+- **patch version**：携 `currentVersion(s)` 不写 0（Ultrareview 2026-05-25 #17 注释先例）。
+- **audit**：SCRIPT_CREATE/UPDATE/DELETE/ENABLE，details 含 wall_id/rule_id/rule_name，
+  create/update 另含 facets（排序逗号串接，空集省略）。
+- **可测性**：`parseIncomingRule(payload, wallId)` 包级静态 + `record ParsedRule(rule, error)`；
+  新增 `ScriptOpDispatcherLogicTest` 8 case（最小合法 rule / 缺 trigger 解析过但 validator 拒 /
+  非法 trigger type / enabled 缺省 true + 显式 false 保留 / blockLayout 缺省 / 假 id+wallId
+  覆写 / actions 非数组 / rule 缺失或非 object）。
+
+关联文件：`plugin/src/main/java/moe/hikari/canvas/web/ScriptOpDispatcher.java` /
+`plugin/src/test/java/moe/hikari/canvas/web/ScriptOpDispatcherLogicTest.java`
+
+---
+
 ## 2026-06-10 · 0.7.0-P1-5b 批次 2 质量修复（loadAll 失败外响 + DB 失败零污染契约测试 + 注释对齐）
 
 0.7.0-P1 批次 2 代码质量审查逐项修复（修法已定，不发散）：
