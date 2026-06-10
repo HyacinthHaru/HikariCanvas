@@ -4,21 +4,40 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 模板表达式解析器。文法见 {@code docs/template-spec.md §6.2}（已扩充为有优先级版本）：
+ * 模板/脚本表达式解析器。文法（0.7.0-P2 扩充版，K2；模板 {@code visible_when}
+ * 拿到无破坏超集）：
  *
  * <pre>
- *   or       := and  ( "||" and )*
- *   and      := equ  ( "&&" equ )*
- *   equ      := unary ( ("==" | "!=") unary )*
- *   unary    := "!" unary | primary
- *   primary  := ident | number | string | "true" | "false" | "(" or ")"
+ *   or      := and ( "||" and )*
+ *   and     := equ ( "&&" equ )*
+ *   equ     := cmp ( ("==" | "!=") cmp )*
+ *   cmp     := add ( ("&lt;" | "&lt;=" | "&gt;" | "&gt;=") add )?     —— 禁止连串（见下）
+ *   add     := mul ( ("+" | "-") mul )*
+ *   mul     := unary ( ("*" | "/") unary )*
+ *   unary   := "!" unary | "-" unary | primary
+ *   primary := "var" "(" string ")" | ident | number | string
+ *            | "true" | "false" | "(" or ")"
  * </pre>
  *
- * <p>优先级（高 → 低）：{@code !} → {@code ==} / {@code !=} → {@code &&} → {@code ||}。
- * 与 C 系语言一致，避免 {@code "a == true && b == false"} 写出反直觉的结合。</p>
+ * <p>优先级（高 → 低）：{@code ! -}（一元）→ {@code * /} → {@code + -} →
+ * 比较 → {@code == !=} → {@code &&} → {@code ||}。与 C 系语言一致。</p>
+ *
+ * <p><b>cmp 禁止连串</b>：{@code 1 < 2 < 3} 直接 parse error——左结合会得出
+ * {@code (1<2)<3} = {@code true<3} 的布尔参与比较语义，最干净的处理是禁写。</p>
+ *
+ * <p><b>{@code var} 关键字函数</b>：{@code var("user/score")} 解析为
+ * {@link Expr.VarRef}；裸 {@code var}（后面不跟 {@code (}）直接拒——脚本条件里
+ * {@code var} 是保留字，不允许当参数标识符（防 typo 静默当 Identifier 走
+ * UndeclaredParam 路径）。</p>
+ *
+ * <p><b>负号</b>：lexer 不再把 {@code -3} 整体读成负数 token（否则 {@code 1-2}
+ * 会被切成 {@code 1} 和 {@code -2} 两个 NUMBER 破坏二元减法），统一发 MINUS token
+ * 由 {@code unary} 处理；数字字面量上的一元负号在 parser 内常量折叠为
+ * {@code Literal(-n)}，保持既有 AST 形态（{@code parse("-1.5")} 仍是 Literal）。</p>
  *
  * <p><b>失败行为：</b> 任何 lex/parse 错误抛 {@link ParseException}，
- * 调用方（{@link moe.hikari.canvas.template.TemplateLoader}）应把它当 §9 校验失败处理。</p>
+ * 调用方（{@link moe.hikari.canvas.template.TemplateLoader} / 0.7.0
+ * {@code script.engine.ConditionEvaluator}）应把它当校验失败处理。</p>
  *
  * <p>实例无状态，可安全复用。</p>
  */
@@ -52,7 +71,9 @@ public final class ExpressionParser {
 
     private enum TokenKind {
         IDENT, NUMBER, STRING, TRUE, FALSE,
-        EQ, NE, AND, OR, NOT, LPAREN, RPAREN, EOF
+        EQ, NE, AND, OR, NOT,
+        LT, LE, GT, GE, PLUS, MINUS, STAR, SLASH,
+        LPAREN, RPAREN, EOF
     }
 
     private record Token(TokenKind kind, String text, int pos) {}
@@ -70,8 +91,9 @@ public final class ExpressionParser {
                 if (Character.isWhitespace(c)) { i++; continue; }
                 int start = i;
                 if (c == '"' || c == '\'') { out.add(readString(c, start)); continue; }
+                // 0.7.0-P2：负号不再并入数字（见类注释），数字仅从 digit / '.' 开始
                 if (Character.isDigit(c)
-                        || (c == '-' && i + 1 < src.length() && Character.isDigit(src.charAt(i + 1)))) {
+                        || (c == '.' && i + 1 < src.length() && Character.isDigit(src.charAt(i + 1)))) {
                     out.add(readNumber(start));
                     continue;
                 }
@@ -80,6 +102,14 @@ public final class ExpressionParser {
                 if (c == '!' && peek(1) == '=') { i += 2; out.add(new Token(TokenKind.NE, "!=", start)); continue; }
                 if (c == '&' && peek(1) == '&') { i += 2; out.add(new Token(TokenKind.AND, "&&", start)); continue; }
                 if (c == '|' && peek(1) == '|') { i += 2; out.add(new Token(TokenKind.OR, "||", start)); continue; }
+                if (c == '<' && peek(1) == '=') { i += 2; out.add(new Token(TokenKind.LE, "<=", start)); continue; }
+                if (c == '>' && peek(1) == '=') { i += 2; out.add(new Token(TokenKind.GE, ">=", start)); continue; }
+                if (c == '<') { i++; out.add(new Token(TokenKind.LT, "<", start)); continue; }
+                if (c == '>') { i++; out.add(new Token(TokenKind.GT, ">", start)); continue; }
+                if (c == '+') { i++; out.add(new Token(TokenKind.PLUS, "+", start)); continue; }
+                if (c == '-') { i++; out.add(new Token(TokenKind.MINUS, "-", start)); continue; }
+                if (c == '*') { i++; out.add(new Token(TokenKind.STAR, "*", start)); continue; }
+                if (c == '/') { i++; out.add(new Token(TokenKind.SLASH, "/", start)); continue; }
                 if (c == '!') { i++; out.add(new Token(TokenKind.NOT, "!", start)); continue; }
                 if (c == '(') { i++; out.add(new Token(TokenKind.LPAREN, "(", start)); continue; }
                 if (c == ')') { i++; out.add(new Token(TokenKind.RPAREN, ")", start)); continue; }
@@ -116,7 +146,6 @@ public final class ExpressionParser {
 
         private Token readNumber(int start) {
             int j = i;
-            if (src.charAt(j) == '-') j++;
             while (j < src.length() && Character.isDigit(src.charAt(j))) j++;
             if (j < src.length() && src.charAt(j) == '.') {
                 j++;
@@ -160,11 +189,11 @@ public final class ExpressionParser {
     // ============================ Parser ============================
 
     /**
-     * P3-52：递归下降嵌套深度上限。每层 {@code (} 进入 {@code parseOr}、每个 {@code !}
+     * P3-52：递归下降嵌套深度上限。每层 {@code (} 进入 {@code parseOr}、每个 {@code !}/{@code -}
      * 进入 {@code parseUnary} 都自增 depth，超限抛 {@link ParseException}（被
      * {@code TemplateLoader.checkExpression} 正常 catch），把原本未设防的无界递归
      * （海量 {@code (} / {@code !} → StackOverflowError 逃出 loader.reload）降级为
-     * 普通 §9 校验失败。64 远大于任何合理 visible_when 嵌套深度。
+     * 普通 §9 校验失败。64 远大于任何合理表达式嵌套深度。
      */
     private static final int MAX_DEPTH = 64;
 
@@ -220,9 +249,57 @@ public final class ExpressionParser {
         }
 
         Expr parseEquality() {
-            Expr left = parseUnary();
+            Expr left = parseComparison();
             while (peek().kind() == TokenKind.EQ || peek().kind() == TokenKind.NE) {
                 Expr.Op op = peek().kind() == TokenKind.EQ ? Expr.Op.EQ : Expr.Op.NE;
+                p++;
+                Expr right = parseComparison();
+                left = new Expr.Binary(op, left, right);
+            }
+            return left;
+        }
+
+        /** 0.7.0-P2(K2)：比较层。禁止连串——第二个比较符直接 parse error（见类注释）。 */
+        Expr parseComparison() {
+            Expr left = parseAdditive();
+            Expr.Op op = cmpOp(peek().kind());
+            if (op == null) return left;
+            p++;
+            Expr right = parseAdditive();
+            Expr result = new Expr.Binary(op, left, right);
+            Token next = peek();
+            if (cmpOp(next.kind()) != null) {
+                throw new ParseException(
+                        "chained comparison is not allowed (use && to combine)", next.pos());
+            }
+            return result;
+        }
+
+        private static Expr.Op cmpOp(TokenKind k) {
+            return switch (k) {
+                case LT -> Expr.Op.LT;
+                case LE -> Expr.Op.LE;
+                case GT -> Expr.Op.GT;
+                case GE -> Expr.Op.GE;
+                default -> null;
+            };
+        }
+
+        Expr parseAdditive() {
+            Expr left = parseMultiplicative();
+            while (peek().kind() == TokenKind.PLUS || peek().kind() == TokenKind.MINUS) {
+                Expr.Op op = peek().kind() == TokenKind.PLUS ? Expr.Op.ADD : Expr.Op.SUB;
+                p++;
+                Expr right = parseMultiplicative();
+                left = new Expr.Binary(op, left, right);
+            }
+            return left;
+        }
+
+        Expr parseMultiplicative() {
+            Expr left = parseUnary();
+            while (peek().kind() == TokenKind.STAR || peek().kind() == TokenKind.SLASH) {
+                Expr.Op op = peek().kind() == TokenKind.STAR ? Expr.Op.MUL : Expr.Op.DIV;
                 p++;
                 Expr right = parseUnary();
                 left = new Expr.Binary(op, left, right);
@@ -236,6 +313,20 @@ public final class ExpressionParser {
                 try {
                     p++;
                     return new Expr.Not(parseUnary());
+                } finally {
+                    depth--;
+                }
+            }
+            if (peek().kind() == TokenKind.MINUS) {
+                enterDepth();
+                try {
+                    p++;
+                    Expr inner = parseUnary();
+                    // 数字字面量常量折叠：parse("-1.5") 仍是 Literal(-1.5)（既有 AST 形态）
+                    if (inner instanceof Expr.Literal lit && lit.value() instanceof Double d) {
+                        return new Expr.Literal(-d);
+                    }
+                    return new Expr.Neg(inner);
                 } finally {
                     depth--;
                 }
@@ -257,7 +348,23 @@ public final class ExpressionParser {
                     }
                 }
                 case STRING -> { p++; return new Expr.Literal(t.text()); }
-                case IDENT -> { p++; return new Expr.Identifier(t.text()); }
+                case IDENT -> {
+                    // 0.7.0-P2(K2)：var 是保留字函数——var("fullName") → VarRef；
+                    // 裸 var（不跟 LPAREN）直接拒，不退化成 Identifier
+                    if ("var".equals(t.text())) {
+                        p++;
+                        if (peek().kind() != TokenKind.LPAREN) {
+                            throw new ParseException(
+                                    "'var' is reserved; expected var(\"fullName\")", t.pos());
+                        }
+                        p++; // consume LPAREN
+                        Token arg = consume(TokenKind.STRING);
+                        consume(TokenKind.RPAREN);
+                        return new Expr.VarRef(arg.text());
+                    }
+                    p++;
+                    return new Expr.Identifier(t.text());
+                }
                 case LPAREN -> {
                     p++;
                     Expr inner = parseOr();
