@@ -174,10 +174,11 @@ public final class VariableSubCommand {
         return Commands.literal("var")
                 .requires(src -> src.getSender().hasPermission(PERMISSION))
                 // list / list <namespace>
-                // P1-9: string() 而非 word()，namespace 含冒号/斜杠（如 user:w-xxxx）也可补
+                // 0.7.0-P2 修：string() 不带引号时只认 [0-9A-Za-z_.+-]，真实 namespace
+                // 含冒号/斜杠（user:w-xxxx）会报"参数后应有空格分隔"——尾参改 greedyString
                 .then(Commands.literal("list")
                         .executes(ctx -> runExec(ctx, new String[]{"list"}))
-                        .then(Commands.argument("namespace", StringArgumentType.string())
+                        .then(Commands.argument("namespace", StringArgumentType.greedyString())
                                 .suggests(this::suggestNamespaces)
                                 .executes(ctx -> runExec(ctx, new String[]{"list",
                                         StringArgumentType.getString(ctx, "namespace")}))))
@@ -188,15 +189,22 @@ public final class VariableSubCommand {
                                 .executes(ctx -> runExec(ctx, new String[]{"get",
                                         StringArgumentType.getString(ctx, "fullName")}))))
                 // set <fullName> <value...>
-                // P1-9: fullName 用 string()（含冒号/斜杠的真实变量名，如 user:w-xxxx/foo），
-                // value 仍是独立 greedyString 节点（无需手工 split）
+                // 0.7.0-P2 修：fullName 原用 string()——不带引号时冒号/斜杠直接 parse error
+                // （游戏内 /canvas var set user:w-xxxx/score 5 报"参数后应有空格分隔"）。
+                // Brigadier 中段参数无法既不带引号又收任意字符，改成整尾 greedyString +
+                // 手工按第一个空格切 fullName / value（value 仍可含空格）。
                 .then(Commands.literal("set")
-                        .then(Commands.argument("fullName", StringArgumentType.string())
+                        .then(Commands.argument("args", StringArgumentType.greedyString())
                                 .suggests(this::suggestFullNames)
-                                .then(Commands.argument("value", StringArgumentType.greedyString())
-                                        .executes(ctx -> runExec(ctx, new String[]{"set",
-                                                StringArgumentType.getString(ctx, "fullName"),
-                                                StringArgumentType.getString(ctx, "value")})))))
+                                .executes(ctx -> {
+                                    String raw = StringArgumentType.getString(ctx, "args").trim();
+                                    int sp = raw.indexOf(' ');
+                                    String[] args = (sp < 0)
+                                            ? new String[]{"set", raw}
+                                            : new String[]{"set", raw.substring(0, sp),
+                                                    raw.substring(sp + 1).trim()};
+                                    return runExec(ctx, args);
+                                })))
                 // delete <fullName>
                 .then(Commands.literal("delete")
                         .then(Commands.argument("fullName", StringArgumentType.greedyString())

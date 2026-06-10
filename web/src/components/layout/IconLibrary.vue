@@ -469,9 +469,13 @@ onClickOutside(rootRef, (e) => {
             {{ cell.pathData === null ? '!' : '·' }}
           </span>
 
-          <!-- 收藏 star 角标（hover / 已收藏时显示） -->
-          <button
-            class="absolute top-0.5 right-0.5 p-0.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--card)] transition-opacity"
+          <!-- 收藏 star 角标（hover / 已收藏时显示）。
+               span+role 而非 <button>：外层 cell 已是 <button>，HTML 禁止 button 嵌套
+               （vite dev warning，hydration 风险）；键盘焦点留给外层 cell，角标是
+               hover 辅助入口（title 已带说明）。 -->
+          <span
+            role="button"
+            class="absolute top-0.5 right-0.5 p-0.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--card)] transition-opacity cursor-pointer"
             :class="lib.isFavorite(cell.icon.id)
               ? 'opacity-100 text-[color:var(--ctp-yellow)]'
               : 'opacity-0 group-hover:opacity-100 text-[color:var(--muted-foreground)]'"
@@ -482,7 +486,7 @@ onClickOutside(rootRef, (e) => {
               class="size-3"
               :fill="lib.isFavorite(cell.icon.id) ? 'currentColor' : 'none'"
             />
-          </button>
+          </span>
         </button>
       </div>
 

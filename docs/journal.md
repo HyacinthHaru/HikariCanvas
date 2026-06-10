@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-06-10 · P2 实测反馈修复（var 命令冒号断参 / 嵌套 button 警告）
+
+用户 MVP 实测（测试 1、2 通过）反馈 4 项摩擦，2 项是代码 bug 修掉：
+
+- **`/canvas var set user:w-xxx/score 5` 报"参数后应有空格分隔"**：`set` 的 fullName 用
+  Brigadier `string()`——不带引号只认 `[0-9A-Za-z_.+-]`，真实变量名的冒号/斜杠直接断参。
+  Brigadier 中段参数无法既免引号又收任意字符 → `set` 改整尾 `greedyString` + 手工按第一个
+  空格切 fullName/value（value 仍可含空格，缺 value 走既有 usage 提示）；`list <namespace>`
+  尾参同病同修（`get`/`delete` 本就是 greedyString 无此问题）。
+- **vite dev 嵌套 `<button>` 警告**（IconLibrary.vue 收藏 star 角标）：外层 icon cell 已是
+  button，HTML 禁嵌套 → 角标改 `<span role="button">`（stopPropagation 已有，键盘焦点留外层）。
+- 另外两项非 bug：变量名两种形态（`user/X` 短形 = 自动注入本墙 / `user:<wallId>/X` 全名 =
+  面板复制即用）在脚本/条件/插值里**都通**（resolveFullName 对全名字面透传）；dev 端口实为
+  9173（vite.config 配置，测试方案笔误 5173）。
+
+后端 1515 / 前端构建过。关联：`command/VariableSubCommand.java` / `components/layout/IconLibrary.vue`
+
+---
+
 ## 2026-06-10 · 0.7.0-P2 收口：**P2 执行引擎完工**（MVP 闸待游戏内实测）
 
 P2 三批次（8 commit）全部落地，收口杂项：
