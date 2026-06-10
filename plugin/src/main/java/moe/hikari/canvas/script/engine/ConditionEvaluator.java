@@ -137,8 +137,11 @@ public final class ConditionEvaluator {
     /**
      * 默认 lookup：照 {@code VariableInterpolator.resolveValue} 的 fallback 链
      * （cached fresh → default → null）,去掉 inline fallback 档。
+     *
+     * <p>包级共享：{@code ActionExecutor.incrementVariable} 读当前值用同款链
+     * （T4——保证条件判定与累加起算值取自同一语义）。</p>
      */
-    private static Function<String, String> storeLookup(VariableStore store) {
+    static Function<String, String> storeLookup(VariableStore store) {
         return fullName -> {
             Optional<Variable> opt = store.get(fullName);
             if (opt.isPresent()) {

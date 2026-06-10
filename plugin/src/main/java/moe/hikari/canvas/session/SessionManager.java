@@ -689,6 +689,67 @@ public final class SessionManager {
     }
 
     /**
+     * 0.7.0-P2（T4）：脚本 {@code setElementProperty} 路径 A——墙开着编辑器时走
+     * {@link moe.hikari.canvas.state.EditSession#updateElement} 标准链，并照
+     * {@code EditOpDispatcher} case {@code "element.update"} 的收尾链：推 state.patch
+     * （前端实时可见）+ ProjectionThrottler 脏区投影 + {@link #persistWall}（其内含
+     * Ticker invalidate/refreshAutoPlay + TimelineTriggerRegistry rebuild）。
+     *
+     * <p>与 dispatcher 的差异：无 ack（脚本无 WS 请求方）；push / throttler 由批次 3
+     * 装配层闭包绑入（本类不长期持有两引用，照 {@code broadcastVariableChangeToWall}
+     * 传参先例）。</p>
+     *
+     * <p>线程：任意线程可调（EditSession synchronized；persistWall 非主线程 OK；
+     * throttler.submit / push.pushPatch 自身线程安全）——ScriptRunner 线程直调，无需
+     * 主线程 hop。</p>
+     *
+     * @return NO_SESSION = 该墙无活跃 session（调用方走 headless 路径）；
+     *         APPLIED = 已应用并收尾；FAILED = op 被拒（detail 含错误码）
+     */
+    public moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome
+    applyScriptElementPatch(String wallId, String elementId,
+                            Map<String, Object> patch,
+                            moe.hikari.canvas.web.OpPushCallback push,
+                            moe.hikari.canvas.render.ProjectionThrottler throttler) {
+        if (wallId == null || elementId == null || patch == null || patch.isEmpty()) {
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed("invalid script element patch args");
+        }
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (!wallId.equals(s.wallId())) continue;
+            moe.hikari.canvas.state.EditSession es = s.editSession();
+            if (es == null) continue;
+            moe.hikari.canvas.state.EditSession.OpResult r = es.updateElement(elementId, patch);
+            if (r instanceof moe.hikari.canvas.state.EditSession.OpResult.Ok ok) {
+                if (push != null && !ok.patch().ops().isEmpty()) {
+                    try {
+                        push.pushPatch(s.id(), ok.patch());
+                    } catch (Exception e) {
+                        log.log(java.util.logging.Level.WARNING,
+                                "applyScriptElementPatch push failed: session=" + s.id()
+                                        + " wall=" + wallId + " err=" + e.getMessage(), e);
+                    }
+                }
+                if (throttler != null && ok.dirty() != null) {
+                    throttler.submit(s.id(), ok.dirty());
+                }
+                persistWall(s.id());
+                return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                        .SessionOutcome.applied();
+            }
+            if (r instanceof moe.hikari.canvas.state.EditSession.OpResult.Error er) {
+                return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                        .SessionOutcome.failed(er.code() + ": " + er.message());
+            }
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed("unexpected op result: "
+                            + r.getClass().getSimpleName());
+        }
+        return moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+    }
+
+    /**
      * M16 P6.6：会话级 IP 绑定判定。
      * <ul>
      *   <li>session 不存在 → {@link IpBindResult#NO_SESSION}（调用方应已 closeAuthFailed，
