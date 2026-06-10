@@ -187,11 +187,11 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
 
 | op | payload | 权限 | 备注 |
 |---|---|---|---|
-| `script.create` | `{rule}`(完整 ScriptRule,id 服务端发) | script.edit + 按 trigger/action 检查面权限 | 进 undo |
-| `script.update` | `{ruleId, patch}`(全量 rule 替换,积木编辑粒度太碎不做 patch op) | 同上 | 进 undo;连续保存 coalesce(key=ruleId,500ms 窗,照 0.6 范式) |
-| `script.delete` | `{ruleId}` | script.edit | 进 undo |
-| `script.enable` | `{ruleId, enabled}` | script.edit | 进 undo |
-| `script.test` | `{ruleId, mockTrigger?}` | script.edit(**试跑也过 command/sound 面权限**) | **不进 undo**;真实执行(D5),audit 标 TEST;返回执行轨迹 |
+| `script.create` | `{rule}`(完整 ScriptRule,id 服务端发) | script.edit + 按 trigger/action 检查面权限 | 不进画布 undo(见 §4.3) |
+| `script.update` | `{ruleId, rule}`(全量 rule 替换,积木编辑粒度太碎不做 patch op) | 同上 | 不进画布 undo;保存粒度低频,无需 coalesce |
+| `script.delete` | `{ruleId}` | script.edit | 不进画布 undo;前端走 inline confirm(0.4.5 范式) |
+| `script.enable` | `{ruleId, enabled}` | script.edit | 不进画布 undo |
+| `script.test` | `{ruleId}` | script.edit(**试跑也过 command/sound 面权限**) | 真实执行(D5),audit 标 TEST;返回执行轨迹 |
 
 - 面权限检查在 create/update 时按规则内容逐积木判:含全服帽子 → 需 trigger.global;
   含 playSound → 需 sound;含 runCommand → 需 command。**保存时检查,执行时不再检查**
@@ -211,10 +211,14 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
   blockId 由前端在序列化时给每个积木分配并存进 rule_json,后端执行时原样回填——
   后端不理解坐标,只按树路径对应。
 
-### 4.3 撤销
+### 4.3 撤销(2026-06-10 P1 实施期修订)
 
-脚本 CRUD 进 HistoryStack(照 keyframe 范式);积木画布内的**未保存编辑**由前端本地
-undo(画布编辑态是草稿,保存时一次 `script.update`)。后端 history 只见保存粒度。
+**脚本 op 不进画布 undo/redo。** 原因:D7 决定脚本不在 ProjectState,而 HistoryStack 快照的是
+ProjectSnapshot——「脚本 CRUD 进 HistoryStack」与 D7 矛盾。且项目先例一致:alias / schedule /
+rail 这族「不进 ProjectState 的 per-wall 资源」全部不走 EditSession/history。
+
+- 积木画布内的**未保存编辑**由前端引擎层本地 undo(画布编辑态是草稿,保存时一次 `script.update`)。
+- `script.delete` 前端走 inline confirm popover(0.4.5 删除范式),弥补不可撤销。
 
 ---
 
@@ -308,7 +312,7 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 
 | 段 | 内容 | 闸 | 估时 |
 |---|---|---:|---:|
-| **P1** | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + undo/coalesce + ready/patch | 后端单测全绿 | ~50h |
+| **P1** | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + ready/patch + 前端镜像(types/wsClient/store) | 后端单测全绿 | ~50h |
 | **P2** | 执行引擎:TriggerRouter + ScriptRunner + ActionExecutor + Budget/熔断 + ConditionEvaluator(扩 expr)+ 先接 3 个无 Bukkit 事件触发器(变量/定时/墙就绪)。**P0 spike 折进首任务**(1 trigger + 1 action 端到端) | **MVP 闸:JSON 建规则游戏内生效(用户实测)** | ~70h |
 | **P3** | 游戏事件层:GameEventListenerHub(进服/击杀)+ playerNear 采样器 + 命令模板系统 + script.test 轨迹 | 6 触发 8 动作全通(单测) | ~50h |
 | **P4** | 积木引擎层:画布/拖拽/吸附/嵌套/序列化/本地 undo,2-3 个假积木验收 | 引擎可拖可嵌可存(用户实测) | ~70h |
