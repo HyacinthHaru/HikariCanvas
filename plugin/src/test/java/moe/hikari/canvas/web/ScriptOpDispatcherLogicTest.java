@@ -100,6 +100,22 @@ class ScriptOpDispatcherLogicTest {
         assertFalse(parsedOff.rule().enabled(), "显式 enabled=false 应保留");
     }
 
+    /** 0.7.0-P1-7b #7：enabled 存在但非 Boolean（字符串 "false"）→ 真拒，不静默默认 true。 */
+    @Test
+    void enabledStringIsRejectedNotCoerced() {
+        Map<String, Object> payload = Map.of("rule", Map.of(
+                "name", "r",
+                "enabled", "false",
+                "trigger", Map.of("type", "wallReady"),
+                "actions", List.of(Map.of("type", "log", "message", "x"))));
+        ScriptOpDispatcher.ParsedRule parsed =
+                ScriptOpDispatcher.parseIncomingRule(payload, WALL);
+
+        assertNull(parsed.rule());
+        assertNotNull(parsed.error(), "enabled 类型错必须拒（不能被默认成 true）");
+        assertTrue(parsed.error().contains("enabled"), "错误信息应点名 enabled: " + parsed.error());
+    }
+
     /** blockLayout 缺省 = "{}"。 */
     @Test
     void blockLayoutDefaultsToEmptyObject() {

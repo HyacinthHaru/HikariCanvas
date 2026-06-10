@@ -245,7 +245,7 @@ public final class WebServer {
         this.scriptStore = scriptStore;
         this.scriptOpDispatcher = scriptStore == null ? null
                 : new ScriptOpDispatcher(sessionManager, rateLimiter, scriptStore,
-                        wallRepo, push, auditLog, plugin);
+                        wallRepo, push, auditLog, plugin, log);
         // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
         this.variableStore = variableStore;
         // 0.4.0-P3-M：variable metadata 端点 handler；store/daemon/sessionManager 任一缺则禁用

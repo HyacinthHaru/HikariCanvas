@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P1-7b 批次 3 质量修复（edit 权限真拒在线收回 / 异常入日志 / 跨墙 guard 回归测试 / reload 接线）
+
+- **#1（安全）NODE_EDIT fail-open 修复**：`ScriptOpDispatcher.checkBasePermission` 原
+  `if (!granted) granted = true` 无条件放行，服主收回 `canvas.script.edit` 形同虚设。改用
+  `MainThreadPerms.resolve`（有 `online` 标志）：`online && !granted` → 真拒
+  （PERMISSION_DENIED + audit，照 checkFacets 形态）；仅 offline（含主线程超时 / 解析失败，
+  online=false）走 default-true 兜底——与 alias / 模板的 own 兜底等价语义。
+- **#2 dispatch catch-all 不再静默吞异常**：构造器加 `Logger log` 参数（WebServer 传自家
+  log 字段），catch 内 `log.log(WARNING, "script op failed: " + op, e)`；client 仍回固定
+  INTERNAL_ERROR（M16 脱敏不变）。
+- **#3 dispatcher 行为级最小测试**：handlers 重构为返回 `Envelope`（dispatch 统一
+  ctx.send，照 TimelinePlaybackDispatchTest 绕 final WsMessageContext 的范式）；新
+  `ScriptOpDispatchBehaviorTest` 5 case（update 跨墙 ruleId → SCRIPT_NOT_FOUND 回归 /
+  create 超配额 → SCRIPT_QUOTA_EXCEEDED / delete 不存在 → ack removed=false 仍推 remove
+  patch 幂等 / delete 存在 → removed=true / test 缺 ruleId 不触达 seam）+ 新
+  `session/SessionTestFactory`（test sourceset 同 package 桥 package-private 构造）。
+- **#4 reload 热更接线**：`HikariCanvas.applyConfig` 加
+  `scriptStore.setMaxRulesPerWall(fresh.scriptsConfig.maxRulesPerWall())`。
+- **#5 rootMessage 脱敏**：message 截到第一个换行符（首行即自定义 deserializer 可读文案）；
+  完整异常经 `ParsedRule.cause` + `logParseFailure` 进 server 日志（FINE）。
+- **#6 handleTest 防御**：seam 调用前 `store.find(wallId, ruleId).isEmpty()` →
+  SCRIPT_NOT_FOUND；ScriptTestSeam javadoc 注明 P2 决策点（test 触发 sound/command 的
+  facet 语义归属）。
+- **#7 enabled 类型混淆**：parseIncomingRule 里 enabled 存在但非 Boolean → INVALID_PAYLOAD
+  （不再静默默认成 true）；缺失才默 true。LogicTest 补 1 case（`enabled:"false"` 字符串被拒）。
+- **#8 paper-plugin.yml 标点**：4 个 script 节点 description 半角 `(0.7.0)` 等改全角
+  `（0.7.0）`，与同文件风格一致。
+- **测试**：后端 1377 全绿（基线 1371 + 新增 6：LogicTest 1 + BehaviorTest 5）。
+
+关联文件：`plugin/src/main/java/moe/hikari/canvas/{web/{ScriptOpDispatcher.java,WebServer.java},
+HikariCanvas.java}` / `plugin/src/main/resources/paper-plugin.yml` /
+`plugin/src/test/java/moe/hikari/canvas/{web/{ScriptOpDispatchBehaviorTest.java,
+ScriptOpDispatcherLogicTest.java},session/SessionTestFactory.java}`
+
+---
+
 ## 2026-06-10 · 0.7.0-P1-7 批次 3：协议 v4 干净切换 + script 系统装配
 
 - **协议 v4**：`Protocol.SUPPORTED_MIN/MAX 3→4`（javadoc 加 v4 = 0.7.0 script.* 说明）+

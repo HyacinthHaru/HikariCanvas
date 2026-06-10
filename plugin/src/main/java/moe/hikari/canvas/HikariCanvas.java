@@ -748,6 +748,10 @@ public final class HikariCanvas extends JavaPlugin {
      */
     public void applyConfig(HikariCanvasConfig fresh) {
         this.config = fresh;
+        // 0.7.0-P1-7b #4：脚本配额热更（只影响后续 create，不裁剪已有——ScriptStore javadoc）
+        if (scriptStore != null) {
+            scriptStore.setMaxRulesPerWall(fresh.scriptsConfig.maxRulesPerWall());
+        }
         getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
     }
 
