@@ -24,6 +24,7 @@ import { defFor, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
 import BlockParamInput, { type CommandValue } from '../params/BlockParamInput.vue';
+import ConditionBuilder from '../params/ConditionBuilder.vue';
 
 const props = defineProps<{
     /** 本块对应的动作（含 if）。 */
@@ -162,10 +163,15 @@ const elseActions = computed<ScriptAction[]>(() =>
     props.action.type === 'if' ? props.action.else : [],
 );
 
-/** condition 字段的原始串（占位显示）。 */
+/** condition 字段的原始串（喂给 ConditionBuilder）。 */
 const conditionText = computed(() =>
     props.action.type === 'if' ? props.action.condition : '',
 );
+
+/** if 的 condition 改值回写（G：ConditionBuilder emit 出 build 后的 / 高级模式原串）。 */
+function onConditionUpdate(value: string): void {
+    edit.updateActionField(props.path, { condition: value } as Partial<ScriptAction>);
+}
 </script>
 
 <template>
@@ -205,7 +211,11 @@ const conditionText = computed(() =>
     <template v-if="isIf">
       <div v-if="conditionField" class="hc-block-condition">
         <span class="hc-param-label">{{ fieldLabel(conditionField) }}:</span>
-        <span class="hc-param-value hc-condition-text">{{ conditionText || '—' }}</span>
+        <ConditionBuilder
+          :condition="conditionText"
+          :wall-id="project.wallId"
+          @update="onConditionUpdate"
+        />
       </div>
 
       <!-- then 子槽 -->

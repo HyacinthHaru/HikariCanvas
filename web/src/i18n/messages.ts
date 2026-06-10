@@ -855,6 +855,25 @@ export const messages = {
                 noCommandTemplates: '服主还没配命令模板',
                 soundPlaceholder: '输入或选择声音',
             },
+            // 0.7.0-P5-G：if 条件可视构建器文案（操作数类型 / joiner / 高级文本框切换）。
+            condition: {
+                kindVar: '变量',
+                kindNumber: '数字',
+                kindString: '文本',
+                kindBool: '对错',
+                boolTrue: '对',
+                boolFalse: '错',
+                pickVariable: '选变量…',
+                addRow: '加条件',
+                removeRow: '删除这行',
+                joinAnd: '且',
+                joinOr: '或',
+                toAdvanced: '高级（写表达式）',
+                tryVisual: '试着切回可视',
+                tooComplex: '表达式较复杂，继续用文本框',
+                advancedHint: '直接写条件表达式',
+                advancedPlaceholder: '例如：var("user/score") >= 10 && var("user/team") == "red"',
+            },
             // 0.7.0-P5-F（K-UI-7）：常用声音的中文友好名（datalist 候选显示）。
             soundNames: {
                 uiButtonClick: '按钮点击',
@@ -1905,6 +1924,25 @@ export const messages = {
                 noElements: 'This wall has no elements yet',
                 noCommandTemplates: 'No command templates configured',
                 soundPlaceholder: 'Type or pick a sound',
+            },
+            // 0.7.0-P5-G: if-condition visual builder strings.
+            condition: {
+                kindVar: 'Variable',
+                kindNumber: 'Number',
+                kindString: 'Text',
+                kindBool: 'Bool',
+                boolTrue: 'true',
+                boolFalse: 'false',
+                pickVariable: 'Pick variable…',
+                addRow: 'Add condition',
+                removeRow: 'Remove this row',
+                joinAnd: 'AND',
+                joinOr: 'OR',
+                toAdvanced: 'Advanced (write expression)',
+                tryVisual: 'Try switching back to visual',
+                tooComplex: 'Expression is complex, keep using the text box',
+                advancedHint: 'Write the condition expression directly',
+                advancedPlaceholder: 'e.g. var("user/score") >= 10 && var("user/team") == "red"',
             },
             // 0.7.0-P5-F (K-UI-7): friendly names for common sounds (datalist hints).
             soundNames: {

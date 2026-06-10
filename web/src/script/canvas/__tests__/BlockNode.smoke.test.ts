@@ -151,8 +151,9 @@ describe('BlockNode if 递归 + path 同构', () => {
         const w = mountNode(ifAction, 'actions/0');
         await nextTick();
 
-        // 条件串占位渲染（F 不碰 condition，留 G）
-        expect(w.text()).toContain('var("user/score") > 5');
+        // G：condition 字段接 ConditionBuilder（可视模式解析 `var(...) > 5` 成行），
+        // 不再是原始串占位 —— 验证构建器根元素已挂载而非裸串。
+        expect(w.find('.hc-cond').exists()).toBe(true);
         // then 子块精确 path
         expect(w.find('[data-block-path="actions/0/then/0"]').exists()).toBe(true);
         // else 子块精确 path
