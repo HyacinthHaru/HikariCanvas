@@ -74,6 +74,7 @@ describe('scriptStore', () => {
         const s = useScriptStore();
         const initial = s.rules;
         s.upsert(makeRule('sr-1'));
+        // 锁的是响应性契约（Map 重建触发 watch）而非实现细节
         expect(s.rules).not.toBe(initial);
     });
 
@@ -91,6 +92,7 @@ describe('scriptStore', () => {
         s.upsert(makeRule('sr-1'));
         const before = s.rules;
         s.removeRule('sr-nonexistent');
+        // 锁的是响应性契约（noop 不重建 Map → 不触发 watch）而非实现细节
         expect(s.rules).toBe(before);
         expect(s.size).toBe(1);
     });

@@ -48,8 +48,9 @@ describe('applyScriptPatches', () => {
 
     it('replace 也收下（兼容形态）', () => {
         const store = useScriptStore();
-        applyScriptPatches([{ op: 'replace', path: '/scripts/sr-2', value: makeRule('sr-2') }]);
-        expect(store.get('sr-2')).not.toBe(null);
+        const rule = makeRule('sr-2');
+        applyScriptPatches([{ op: 'replace', path: '/scripts/sr-2', value: rule }]);
+        expect(store.get('sr-2')).toEqual(rule);
     });
 
     it('remove → 删除规则', () => {
@@ -80,8 +81,29 @@ describe('applyScriptPatches', () => {
         // ruleId 实际不会含 / ，但路由层必须与 alias 通道同款 decode（防御性契约）
         const rule = makeRule('sr~odd/id');
         applyScriptPatches([{ op: 'add', path: '/scripts/sr~0odd~1id', value: rule }]);
+        // add 后必须按 decode 后的原始 id 可查到（证明 decode 真的发生了，而不是空转）
+        expect(store.get('sr~odd/id')).not.toBe(null);
         // remove 同样按 decode 后的 id 定位
         applyScriptPatches([{ op: 'remove', path: '/scripts/sr~0odd~1id' }]);
         expect(store.size).toBe(0);
+    });
+
+    it('value 缺 id → store 不变 + 不抛', () => {
+        const store = useScriptStore();
+        const { id: _drop, ...noId } = makeRule('sr-1');
+        applyScriptPatches([{ op: 'add', path: '/scripts/sr-1', value: noId }]);
+        expect(store.size).toBe(0);
+        expect(store.get('sr-1')).toBe(null);
+    });
+
+    it('value.id 与 path 段失配 → 按 value.id 落表（且无 undefined key）', () => {
+        const store = useScriptStore();
+        const rule = makeRule('sr-real');
+        applyScriptPatches([{ op: 'add', path: '/scripts/sr-path-id', value: rule }]);
+        // 可观测优先：log err 后仍按 value.id 收（path 段 id 不落表）
+        expect(store.get('sr-real')).toEqual(rule);
+        expect(store.get('sr-path-id')).toBe(null);
+        expect(store.size).toBe(1);
+        expect(store.order).toEqual(['sr-real']);
     });
 });

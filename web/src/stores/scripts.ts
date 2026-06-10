@@ -81,8 +81,8 @@ export const useScriptStore = defineStore('scripts', () => {
             .map((id) => rules.value.get(id))
             .filter((r): r is ScriptRule => r != null));
 
-    /** 规则总数；UI badge 用。 */
-    const size = computed(() => rules.value.size);
+    /** 规则总数；UI badge 用。与 listSorted 同口径，防 order/rules desync 时 badge 数与列表数不一。 */
+    const size = computed(() => listSorted.value.length);
 
     return {
         rules, order,

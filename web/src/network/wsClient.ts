@@ -1103,8 +1103,13 @@ export function applyScriptPatches(ops: PatchOp[]): void {
         }
         // script 路径无子路径（仅 ruleId 编码段），直接整段 decode
         const ruleId = decodeJsonPointerToken(rest);
-        if ((op.op === 'add' || op.op === 'replace') && op.value && typeof op.value === 'object') {
-            store.upsert(op.value as import('@/types/protocol').ScriptRule);
+        // value 必须是携 string id 的普通对象；畸形对象 / 数组 / 缺 id 落 else 分支 log err
+        const v = op.value as Partial<import('@/types/protocol').ScriptRule> | null;
+        if ((op.op === 'add' || op.op === 'replace')
+                && v && typeof v === 'object' && !Array.isArray(v) && typeof v.id === 'string') {
+            // id 失配只可能是后端 bug：log 后仍按 value.id 收（可观测优先，不静默丢数据）
+            if (v.id !== ruleId) net.pushLog('err', `script patch: id mismatch ${op.path} vs ${v.id}`);
+            store.upsert(v as import('@/types/protocol').ScriptRule);
         } else if (op.op === 'remove') {
             store.removeRule(ruleId);
         } else {

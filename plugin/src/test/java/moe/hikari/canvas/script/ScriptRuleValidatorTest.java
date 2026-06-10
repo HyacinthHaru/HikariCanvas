@@ -187,6 +187,14 @@ class ScriptRuleValidatorTest {
     }
 
     @Test
+    void blocklayout_null_coerced_to_empty_json() {
+        // 紧凑构造器把 null 收敛为 "{}"（前端 blockLayout 类型是 string 非 nullable）
+        ScriptRule r = new ScriptRule("r-1", "w-1", true, "测试规则",
+                okTrigger(), okActions(), null);
+        assertEquals("{}", r.blockLayout());
+    }
+
+    @Test
     void set_variable_empty_value_ok_null_rejected() {
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.SetVariable("user/score", "")))));
