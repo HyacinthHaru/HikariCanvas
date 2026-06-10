@@ -5,6 +5,32 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P1-3b 批次 1 质量修复（if 分支 null NPE / delta finite / 权限 switch 穷尽 / 文案）
+
+0.7.0-P1 批次 1 代码质量审查逐项修复（修法已定，不发散）：
+
+- **I-1 可达 NPE**：`ActionDeserializer.readBranch` 对分支元素 `null / NullNode` 先
+  `reportInputMismatch`（之前 `readTreeAsValue(NullNode)` 返 null → `If` 构造器 `List.copyOf`
+  裸 NPE，违反"畸形输入一律 reportInputMismatch"契约）；顺手按 M-5 把分支元素改为直接递归
+  `fromNode(elem, ctxt)`（省一层 TreeTraversingParser），类 javadoc 同步对齐。
+- **I-2 finite 纪律**：`ScriptRuleValidator` IncrementVariable 加 `!Double.isFinite(delta)` 拒绝
+  （"累加步长必须是有限数值"）；PlaySound volume/pitch 区间判改 `!(v >= MIN && v <= MAX)`
+  取反写法连带拒 NaN（正常输入行为不变）。
+- **I-3 权限 switch 穷尽性**：`ScriptPermissions.scanActions` 删 `default -> {}`，显式列出全部
+  6 个无权限面子类——未来新增 Action 子类时编译器强制来补权限判定（类注释已注明有意为之）。
+- **M-1**：RunCommand 参数检查删不可达的 `e.getValue() == null ||`（Map.copyOf 已保证非 null）。
+- **M-2**：`requireLong` / `optionalLong` 报错文案 int → long。
+- **M-4 回归测试 +4**：`ifBranchNullElementRejected` / `setVariableMissingFieldRejected`
+  （ActionWireTest，断言 JsonMappingException 非 NPE）+ `wait_bounds_ok` /
+  `increment_delta_infinite_rejected`（ScriptRuleValidatorTest）。
+
+测试：script 包 55 case 全绿（ActionWire 13 / ScriptPermissions 7 / ScriptRuleValidator 29 / TriggerWire 6）。
+
+关联文件：`plugin/src/main/java/moe/hikari/canvas/script/{ActionDeserializer,ScriptRuleValidator,ScriptPermissions}.java` /
+`plugin/src/test/java/moe/hikari/canvas/script/{ActionWireTest,ScriptRuleValidatorTest}.java` / `docs/journal.md`
+
+---
+
 ## 2026-06-10 · 0.7.0 立项：视觉运行时设计总纲 `docs/scripting.md`（D1-D8 固化）
 
 0.7.0 Scratch-like 视觉运行时 brainstorming 定稿（6 个决策用户逐一拍板），文档先行落 3 处：

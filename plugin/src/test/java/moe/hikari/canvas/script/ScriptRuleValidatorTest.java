@@ -201,6 +201,22 @@ class ScriptRuleValidatorTest {
     }
 
     @Test
+    void wait_bounds_ok() {
+        // 边界值恰在 [50, 5000] 上 —— 合法
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Wait(50)))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Wait(5000)))));
+    }
+
+    @Test
+    void increment_delta_infinite_rejected() {
+        // I-2 回归：累加步长非有限数值（Infinity / NaN）被拒
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.IncrementVariable("user/x", Double.POSITIVE_INFINITY)))).isPresent());
+    }
+
+    @Test
     void run_command_param_too_long_rejected() {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.RunCommand("announce", Map.of("msg", "x".repeat(257)))))).isPresent());

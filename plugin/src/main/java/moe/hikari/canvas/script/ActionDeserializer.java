@@ -17,8 +17,8 @@ import java.util.Map;
  * （不抛 NPE、不给默认值）。
  *
  * <p>特殊点：{@code playTimeline.seekMs} 可选（缺失 = null）；{@code if} 的
- * {@code then} / {@code else} 数组逐元素 {@code ctxt.readTreeAsValue} 递归，
- * 缺分支按空 list。</p>
+ * {@code then} / {@code else} 数组逐元素直接递归 {@code fromNode}，
+ * 缺分支按空 list，分支元素为 null 一律拒绝。</p>
  */
 public final class ActionDeserializer extends JsonDeserializer<Action> {
 
@@ -107,7 +107,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         JsonNode v = node.get(field);
         if (v == null || !v.canConvertToLong()) {
             return ctxt.reportInputMismatch(Action.class,
-                    "action '" + type + "' requires int field '" + field + "'");
+                    "action '" + type + "' requires long field '" + field + "'");
         }
         return v.asLong();
     }
@@ -121,7 +121,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         }
         if (!v.canConvertToLong()) {
             return ctxt.reportInputMismatch(Action.class,
-                    "action '" + type + "' field '" + field + "' must be int");
+                    "action '" + type + "' field '" + field + "' must be long");
         }
         return v.asLong();
     }
@@ -150,7 +150,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         return out;
     }
 
-    /** if 分支数组逐元素递归；缺分支按空 list。 */
+    /** if 分支数组逐元素递归（直接走 {@link #fromNode}）；缺分支按空 list；元素为 null 拒绝。 */
     private List<Action> readBranch(DeserializationContext ctxt, JsonNode node,
                                     String field, String type) throws IOException {
         JsonNode v = node.get(field);
@@ -163,7 +163,11 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         }
         List<Action> out = new ArrayList<>(v.size());
         for (JsonNode elem : v) {
-            out.add(ctxt.readTreeAsValue(elem, Action.class));
+            if (elem == null || elem.isNull()) {
+                return ctxt.reportInputMismatch(Action.class,
+                        "action '" + type + "' field '" + field + "' 分支元素不能为 null");
+            }
+            out.add(fromNode(elem, ctxt));
         }
         return out;
     }

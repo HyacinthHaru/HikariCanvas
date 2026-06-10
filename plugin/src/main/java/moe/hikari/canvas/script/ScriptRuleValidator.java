@@ -150,9 +150,15 @@ public final class ScriptRuleValidator {
                 }
                 yield Optional.empty();
             }
-            case Action.IncrementVariable a -> blank(a.fullName())
-                    ? Optional.of("累加变量的变量名不能为空")
-                    : Optional.empty();
+            case Action.IncrementVariable a -> {
+                if (blank(a.fullName())) {
+                    yield Optional.of("累加变量的变量名不能为空");
+                }
+                if (!Double.isFinite(a.delta())) {
+                    yield Optional.of("累加步长必须是有限数值");
+                }
+                yield Optional.empty();
+            }
             case Action.SetElementProperty a -> {
                 if (blank(a.elementId())) {
                     yield Optional.of("设置元素属性缺少元素 ID");
@@ -184,10 +190,11 @@ public final class ScriptRuleValidator {
                 if (blank(a.soundId()) || a.soundId().length() > SOUND_ID_MAX) {
                     yield Optional.of("声音 ID 不能为空且最多 " + SOUND_ID_MAX + " 字符");
                 }
-                if (a.volume() < VOLUME_MIN || a.volume() > VOLUME_MAX) {
+                // 取反区间写法：NaN 任何比较都为 false，连带被拒（finite 纪律）
+                if (!(a.volume() >= VOLUME_MIN && a.volume() <= VOLUME_MAX)) {
                     yield Optional.of("音量需在 " + VOLUME_MIN + ".." + VOLUME_MAX + " 之间");
                 }
-                if (a.pitch() < PITCH_MIN || a.pitch() > PITCH_MAX) {
+                if (!(a.pitch() >= PITCH_MIN && a.pitch() <= PITCH_MAX)) {
                     yield Optional.of("音调需在 " + PITCH_MIN + ".." + PITCH_MAX + " 之间");
                 }
                 if (a.scope() == null || !SOUND_SCOPES.contains(a.scope())) {
@@ -203,7 +210,8 @@ public final class ScriptRuleValidator {
                     yield Optional.of("执行命令缺少模板 ID");
                 }
                 for (Map.Entry<String, String> e : a.params().entrySet()) {
-                    if (e.getValue() == null || e.getValue().length() > COMMAND_PARAM_MAX) {
+                    // Map.copyOf 已保证 value 非 null，这里只查长度
+                    if (e.getValue().length() > COMMAND_PARAM_MAX) {
                         yield Optional.of("命令参数 '" + e.getKey() + "' 超长（最多 "
                                 + COMMAND_PARAM_MAX + " 字符）");
                     }

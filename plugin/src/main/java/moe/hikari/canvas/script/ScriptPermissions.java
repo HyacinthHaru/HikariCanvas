@@ -10,6 +10,9 @@ import java.util.Set;
  * <p>{@link #requiredFacets(ScriptRule)} 递归扫描规则，返回该规则除基础节点
  * {@link #NODE_EDIT} 之外还需要的权限节点集合（dispatcher 侧逐一查 caller 权限）。
  * {@code NODE_EDIT} 是恒查的基础节点，不进返回值。</p>
+ *
+ * <p>注意：{@code scanActions} 的 switch 有意不写 {@code default}、显式穷举全部
+ * Action 子类——未来新增子类时编译器会强制到这里补权限面判定（编译期守门）。</p>
  */
 public final class ScriptPermissions {
 
@@ -48,7 +51,13 @@ public final class ScriptPermissions {
                     scanActions(iff.then(), facets);
                     scanActions(iff.elseActions(), facets);
                 }
-                default -> { }
+                // 以下子类无附加权限面（显式列出而非 default，保证穷尽性）
+                case Action.SetVariable ignored -> { }
+                case Action.IncrementVariable ignored -> { }
+                case Action.SetElementProperty ignored -> { }
+                case Action.PlayTimeline ignored -> { }
+                case Action.Wait ignored -> { }
+                case Action.Log ignored -> { }
             }
         }
     }

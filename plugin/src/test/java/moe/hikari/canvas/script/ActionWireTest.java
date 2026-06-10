@@ -65,4 +65,17 @@ class ActionWireTest {
         assertThrows(Exception.class,
                 () -> mapper.readValue("{\"type\":\"loop\"}", Action.class));
     }
+
+    /** I-1 回归：if 分支元素为 null 必须走 reportInputMismatch（Jackson 异常），不能裸 NPE。 */
+    @Test void ifBranchNullElementRejected() {
+        String json = "{\"type\":\"if\",\"condition\":\"x\",\"then\":[null],\"else\":[]}";
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue(json, Action.class));
+    }
+
+    /** M-4 回归：setVariable 缺 value 字段被拒。 */
+    @Test void setVariableMissingFieldRejected() {
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue("{\"type\":\"setVariable\",\"fullName\":\"x\"}", Action.class));
+    }
 }
