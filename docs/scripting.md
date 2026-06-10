@@ -103,6 +103,11 @@ record ScriptRule(
 - 条件求值:**复用 `template/expr/*`**(Expr AST + ExpressionParser + ExpressionEvaluator),
   扩比较(`> >= < <= == !=`)/ 算术(`+ - * /`)/ 逻辑(`&& || !`)/ 变量取值函数 `var("...")`。
   数值语义走 0.6 `StrictNumber` 单一权威,杜绝双端/多处解析分叉。
+- `==` / `!=` 对**双侧均为数值形态**的操作数走数值等值(`var("score") == 42` 直接可用,
+  `"3.50" == 3.5` 为 true);任一侧非数值形态仍走原链(Boolean truthy / toString 等值),
+  故 `"abc" == 0` / `"" == 0` 恒 false(P2-2b 契约修订,规格审查者建议采纳)。
+- 条件里的数字字面量不支持科学计数法(`1e3` 是 parse error);变量值字符串按 `StrictNumber`
+  文法(含指数形态)可被数值比较。
 
 ### 2.4 `Budget`(config `scripts.budget` 段,全部可调)
 

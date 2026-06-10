@@ -12,14 +12,16 @@ import java.util.logging.Logger;
  * {@link Expr} 求值器。给定参数值映射，把 AST 解释为 {@link Object}（原值）或
  * {@code boolean}（条件分支）。
  *
- * <p>语义与 {@code docs/template-spec.md §6.2} 一致（{@code == != && || !} 部分
- * <b>0.7.0-P2 后保持不动</b>，回归红线）：</p>
+ * <p>语义与 {@code docs/template-spec.md §6.2} 一致（{@code && || !} 与 truthy 链
+ * <b>0.7.0-P2 后保持不动</b>，回归红线；{@code ==} / {@code !=} 于 P2-2b 契约修订）：</p>
  * <ul>
  *   <li><b>truthy</b>（用于 {@code &&} / {@code ||} / {@code !} / {@code visible_when} 顶层）：
  *       {@code null = false}；{@code Boolean} 取自身；{@code Number != 0 → true}；
  *       {@code String 非空 → true}；其他类型 → true</li>
- *   <li><b>{@code ==} / {@code !=} 相等</b>：两侧都是 {@code Number} 时按 double 比较，
- *       一边 Boolean 时按 boolean 比较，否则 {@code Objects.toString} 后 string 比较</li>
+ *   <li><b>{@code ==} / {@code !=} 相等</b>（0.7.0-P2-2b 契约修订）：<b>双侧均为数值形态</b>
+ *       （{@code Number} 或整串匹配 {@link StrictNumber#PATTERN} 的字符串）时走数值等值
+ *       （{@code var("score") == 42} 直接可用）；其余链不动——一边 Boolean 时按 truthy
+ *       比较，否则 {@code Objects.toString} 后 string 比较</li>
  *   <li><b>{@code Identifier}</b>：从 {@code params} 取值；未声明 → 抛
  *       {@link UndeclaredParamException}（loader 阶段应已拦截，这里是兜底）</li>
  * </ul>
@@ -93,9 +95,7 @@ public final class ExpressionEvaluator {
             return !truthy(eval(n.inner(), params));
         }
         if (expr instanceof Expr.Neg neg) {
-            double n = -toNumber(eval(neg.inner(), params));
-            // 归一 -0.0 → 0.0：防 Double.compare(-0.0, 0.0) = -1 让 "-var(x) < 0" 假阳
-            return n == 0d ? 0.0 : n;
+            return norm(-toNumber(eval(neg.inner(), params)));
         }
         if (expr instanceof Expr.Binary b) {
             return switch (b.op()) {
@@ -107,9 +107,10 @@ public final class ExpressionEvaluator {
                 case LE  -> compare(eval(b.left(), params), eval(b.right(), params)) <= 0;
                 case GT  -> compare(eval(b.left(), params), eval(b.right(), params)) > 0;
                 case GE  -> compare(eval(b.left(), params), eval(b.right(), params)) >= 0;
-                case ADD -> toNumber(eval(b.left(), params)) + toNumber(eval(b.right(), params));
-                case SUB -> toNumber(eval(b.left(), params)) - toNumber(eval(b.right(), params));
-                case MUL -> toNumber(eval(b.left(), params)) * toNumber(eval(b.right(), params));
+                // 四则结果统一过 norm：MUL 可产 -0.0（-1 * 0），ADD/SUB/MUL 可溢出 ±Infinity
+                case ADD -> norm(toNumber(eval(b.left(), params)) + toNumber(eval(b.right(), params)));
+                case SUB -> norm(toNumber(eval(b.left(), params)) - toNumber(eval(b.right(), params)));
+                case MUL -> norm(toNumber(eval(b.left(), params)) * toNumber(eval(b.right(), params)));
                 case DIV -> divide(toNumber(eval(b.left(), params)),
                                    toNumber(eval(b.right(), params)));
             };
@@ -127,8 +128,11 @@ public final class ExpressionEvaluator {
 
     static boolean equals(Object a, Object b) {
         if (a == null || b == null) return a == b;
-        if (a instanceof Number na && b instanceof Number nb) {
-            return Double.compare(na.doubleValue(), nb.doubleValue()) == 0;
+        // 0.7.0-P2-2b 契约修订：双侧均为数值形态 → 数值等值（含 Number-Number 老分支，
+        // 被此分支语义覆盖收编）。注意必须"双侧"——若任一侧即走数值，"abc" == 0 会因
+        // StrictNumber parse 失败强转 0.0 而误判 true
+        if (isNumeric(a) && isNumeric(b)) {
+            return Double.compare(toNumber(a), toNumber(b)) == 0;
         }
         if (a instanceof Boolean || b instanceof Boolean) {
             return truthy(a) == truthy(b);
@@ -164,7 +168,21 @@ public final class ExpressionEvaluator {
     private static double toNumber(Object v) {
         double d = (v instanceof Number n) ? n.doubleValue()
                 : StrictNumber.parse(v == null ? null : v.toString());
-        // 归一 -0.0 → 0.0（"-0" 字符串等路径），防 Double.compare 把 ±0 分出大小
+        return norm(d);
+    }
+
+    /**
+     * 数值归一单点（0.7.0-P2-2b，M-1/M-2 收口）：
+     * <ul>
+     *   <li>{@code -0.0 → 0.0}（"-0" 字符串 / {@code -1 * 0} 等路径），防
+     *       {@code Double.compare} 把 ±0 分出大小让 {@code "-var(x) < 0"} 假阳</li>
+     *   <li>非有限值（超长字面量溢出 / 运算溢出的 ±Infinity / NaN）→ {@code 0.0}，
+     *       与 StrictNumber.parse 的 fallback 终点一致，不外泄</li>
+     * </ul>
+     * 所有数值产出口（toNumber / Neg / 四则结果）统一走这里，归一逻辑不再散点重复。
+     */
+    private static double norm(double d) {
+        if (!Double.isFinite(d)) return 0.0;
         return d == 0d ? 0.0 : d;
     }
 
@@ -180,8 +198,7 @@ public final class ExpressionEvaluator {
             }
             return 0.0;
         }
-        double r = a / b;
-        // 防御：±Infinity / NaN 不外泄（如极小除数溢出），统一收敛 0.0
-        return Double.isFinite(r) ? r : 0.0;
+        // 溢出 ±Infinity / NaN（如极小除数）/ -0.0 统一走 norm 收敛
+        return norm(a / b);
     }
 }

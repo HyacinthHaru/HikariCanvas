@@ -59,7 +59,7 @@ public final class ConditionEvaluator {
 
     /** condition 串 → {@link Expr} 或 {@link #PARSE_FAILED}。 */
     private final ConcurrentHashMap<String, Object> parseCache = new ConcurrentHashMap<>();
-    /** 已 WARN 过的条件串（每串只刷一次日志）。 */
+    /** 已 WARN 过的条件串（每串只刷一次日志；I-1：同受 {@link #CACHE_MAX} 上界约束）。 */
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
     /** 实际 parse 次数（缓存生效的单测侧证;非公开契约）。 */
     private final AtomicInteger parseCount = new AtomicInteger();
@@ -84,8 +84,10 @@ public final class ConditionEvaluator {
         Object cached = parseCache.get(condition);
         if (cached == null) {
             if (parseCache.size() >= CACHE_MAX) {
-                // 极端防御：缓存撑爆整体重建（正常规则量级远到不了这里）
+                // 极端防御：缓存撑爆整体重建（正常规则量级远到不了这里）。
+                // I-1：warned 与 parseCache 同按条件串记账，同步清防两者漂移
                 parseCache.clear();
+                warned.clear();
             }
             cached = parseCache.computeIfAbsent(condition, c -> {
                 parseCount.incrementAndGet();
@@ -121,6 +123,11 @@ public final class ConditionEvaluator {
     }
 
     private void warnOnce(String condition, String stage, RuntimeException e) {
+        // I-1：warned 自身设独立上界——eval 失败的条件串不进 parseCache 负缓存，
+        // 单靠 parseCache 超限同步清不足以约束 warned 的增长
+        if (warned.size() >= CACHE_MAX) {
+            warned.clear();
+        }
         if (warned.add(condition)) {
             log.log(Level.WARNING, "脚本条件" + stage + "（该条件后续恒为 false,只警告一次）: "
                     + condition + " — " + e.getMessage());

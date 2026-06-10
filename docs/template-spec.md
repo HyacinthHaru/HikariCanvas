@@ -273,6 +273,11 @@ fill: "${line_color}"
 
 不支持函数调用、算术、字段访问。
 
+`==` / `!=` 语义（0.7.0-P2-2b 契约修订，实现与脚本条件共用 `ExpressionEvaluator`）：
+**双侧均为数值形态**（数字字面量或整串匹配 StrictNumber 文法的字符串）时走数值等值
+（`"3.50" == 3.5` 为 true）；任一侧非数值形态走 Boolean truthy / 字符串等值链
+（`"abc" == 0` 为 false）。
+
 例：
 ```yaml
 visible_when: "show_english == true && name != \"\""

@@ -199,12 +199,35 @@ class ExpressionEvaluatorTest {
     }
 
     @Test
-    void equalityRegressionUnchangedByExtension() {
-        // 回归红线:== / != 语义不动(数字宽容等值 / Boolean truthy 等值 / 字符串等值);
-        // 数值形态字符串在 == 下仍走 toString 等值(不是 StrictNumber):"3.50" != "3.5"
+    void equalityNumericFormUsesNumericEquals() {
+        // 0.7.0-P2-2b 契约修订:== / != 对双侧均为数值形态(Number 或整串匹配
+        // StrictNumber 文法的字符串)走数值等值;其余链(Boolean truthy / toString)不动。
+        // "3.50" == 3.5 由旧 toString 等值的 false 变为数值等值的 true
+        assertTrue(run("s == 3.5", of("s", "3.50")));
+        // resolver 给 "42" 的变量直接可与数字字面量等值——核心可用性诉求
+        assertTrue(runVar("var(\"score\") == 42", Map.of("score", "42")));
+        // 必须双侧数值形态:"abc" 非数值形态,不强转 0,仍走 toString 等值 → false
+        assertFalse(run("s == 0", of("s", "abc")));
+        // 空串也非数值形态(StrictNumber 不匹配空串),不与 0 等值
+        assertFalse(run("s == 0", of("s", "")));
+        // 回归红线:Number 等值 / Boolean truthy 等值 / 字符串等值链不动
         assertTrue(run("a == b", of("a", 3, "b", 3.0)));
         assertTrue(run("flag == true", of("flag", true)));
         assertTrue(run("s == \"yes\"", of("s", "yes")));
-        assertFalse(run("s == 3.5", of("s", "3.50")));
+        assertTrue(run("s != \"yes\"", of("s", "no")));
+    }
+
+    @Test
+    void numericNormalizationSinglePoint() {
+        // M-1:四则结果统一归一 -0.0 → 0.0(-1 * 0 在 IEEE 754 下产 -0.0,
+        // 不归一会让 Double.compare 把它与 0 分出大小)
+        assertTrue(run("-1 * 0 == 0", of()));
+        assertFalse(run("-1 * 0 < 0", of()));
+        // M-2:超长数字字面量(400 个 9)parser 不拒——Double.parseDouble 溢出
+        // 不抛 NumberFormatException 而是返 Infinity;toNumber/norm 把非有限值
+        // 收敛 0.0(与 StrictNumber.parse fallback 终点一致),不外泄 Infinity
+        String huge = "9".repeat(400);
+        assertTrue(run(huge + " + 1 == 1", of()));
+        assertFalse(run(huge + " * 2", of()));
     }
 }

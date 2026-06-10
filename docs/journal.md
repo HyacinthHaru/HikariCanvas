@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P2-2b 批次 1 审查留账（== 数值等值契约修订 / warned 上限 / 数值归一单点）
+
+- **`==`/`!=` 数值等值（契约修订，规格审查者建议采纳）**：`ExpressionEvaluator.equals()`
+  开头加**双侧均为数值形态**（isNumeric）→ `Double.compare(toNumber(a), toNumber(b)) == 0`
+  分支（收编原 Number-Number 老分支）；其余链（Boolean truthy / toString）不动。注意必须
+  "双侧"——任一侧即走数值会让 `"abc" == 0` 因 parse 失败强转 0 误判 true。效果：
+  `var("score") == 42`（resolver 给 "42"）直接可用，`"3.50" == 3.5` 由 false 变 true
+- **I-1 `warned` 无上界**：`ConditionEvaluator` parseCache 超限 clear 处同步
+  `warned.clear()`；`warnOnce` 入口加独立 `warned.size() >= CACHE_MAX → clear`（eval
+  失败的条件串不进 parse 负缓存，单靠前者不足以约束 warned 增长）
+- **M-1+M-2 数值归一单点化**：抽 `private static double norm(double)`（`-0.0→0.0` +
+  `!isFinite→0.0` 一并收口）；toNumber / Neg / ADD/SUB/MUL 结果 / divide 全走它，
+  归一逻辑不再散点重复。超长字面量（400 个 9）Double.parseDouble 溢出产的 Infinity
+  也被 norm 收敛 0.0
+- **测试**：`equalityRegressionUnchangedByExtension` 重命名为
+  `equalityNumericFormUsesNumericEquals`（含契约修订 4 case + 回归红线 4 断言）+
+  新增 `numericNormalizationSinglePoint`（`-1 * 0 == 0` true / 400 个 9 字面量参与
+  运算结果 0.0 语义）
+- **docs**：scripting.md §2.3 加 == 数值等值 + 数字字面量不支持科学计数法（1e3 parse
+  error）两条；template-spec.md §6.2 同步 == 语义段
+
+后端 **1426** test 全绿（原 1425，-1 旧测试 +2 新测试）。
+
+关联文件：`plugin/.../template/expr/ExpressionEvaluator.java` /
+`plugin/.../script/engine/ConditionEvaluator.java` /
+`plugin/.../template/expr/ExpressionEvaluatorTest.java` / `docs/scripting.md` /
+`docs/template-spec.md`
+
+---
+
 ## 2026-06-10 · 0.7.0-P1 收口：**P1 完工**（终审 2 必修 + 契约回填 protocol v4 / data-model V017）
 
 P1（数据模型 + 协议 v4）四批次全部落地后做全程对抗终审（跨批次集成缝隙专项），收口：
