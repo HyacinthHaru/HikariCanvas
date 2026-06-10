@@ -5,6 +5,50 @@
 
 ---
 
+## 2026-06-11 · 0.7.0-P5-F：积木参数表单（BlockParamInput 全类型 + 下拉数据源）
+
+把 C 阶段 BlockNode 的参数占位（字段名 + 原始值文本）换成按 FieldDef.type 渲染的真表单控件，
+改值经 D 阶段编辑模型（`edit.updateActionField`）回写 working copy。**不碰 condition（留 G 的
+ConditionBuilder）与 statements（C 的 BlockNode 递归子槽）。**
+
+- **`web/src/script/params/BlockParamInput.vue`**（新）：通用参数控件，props `{field, value, actionKind, disabled}`，
+  emit `update(value)`。按 type 渲染：
+  - `number` → `<input type=number>`（min/max/step 来自 FieldDef，镜像后端 validator）；改值钳到 [min,max] 后
+    **emit number**（空/非有限数不 emit，保留旧值——不把字段写空）；
+  - `text` → `<input type=text>` emit string；`select`/`op`/`scope` → `<select>` over options emit string；
+  - `variable` → 「选变量」按钮显当前 fullName → click 开 VariablePicker。**memory 约束双落**：① 按钮 click
+    触发（非 select-change，否则 picker 的 onClickOutside 同一次点击立即关）；② picker **Teleport 到 body +
+    fixed 浮层**（按钮 getBoundingClientRect 算位），绕开 BlockCanvas world 的 `transform: scale()` +
+    `overflow:hidden` 裁切（与 BlockCanvas 拖拽指示线同款逃逸手法）；可清空 emit `''`；
+  - `timeline` → `<select>` over `project.state.timelines`（label=name‖id），空列表提示「这个画板还没有时间轴」；
+  - `element` → `<select>` over `project.allElements`（新 computed），空列表提示「这个画板还没有元素」；
+  - `sound` → `<input list>` + datalist（`SOUND_SUGGESTIONS` 24 常用声音，带中文友好名）；用户也可手填任意 id；
+  - `command`（**唯一复合字段**）→ 模板下拉 + 选中后按模板 params 动态渲染 text 子输入（maxLength 钳位）。
+    runCommand 有 templateId + params 两个 wire 字段，本控件整体处理：emit `{templateId, params}` 复合值。
+    切模板保留同名旧 param 值。无模板配置提示「服主还没配命令模板」。
+- **`web/src/script/params/useCommandTemplates.ts`**（新）：`GET /api/script/command-templates?sessionId=<sid>`
+  fetch + **模块级单例缓存**（按 sessionId；模板跟随 config 不必每次开积木重拉）。失败（401/网络/解析）→ 空列表
+  不抛。`load()` 幂等复用缓存 promise / `refresh()` 强制重拉 / 换 session 自动作废。`__resetCommandTemplatesCache()`
+  测试钩子。后端端点 E 阶段已建（不泄 command 原文）。
+- **`web/src/script/params/soundSuggestions.ts`**（新，K-UI-7）：24 个常用声音常量（id + i18n labelKey）——UI 反馈 /
+  音符盒 / 经验 / 互动机关 / 戏剧音效；datalist 显「id —— 中文名」，i18n 缺失退纯 id。**非白名单**（后端按 Registry 校验）。
+- **`web/src/script/canvas/BlockNode.vue`**：参数槽接 BlockParamInput——scalarFields（排 statements/condition + runCommand
+  的 command 字段）逐个渲染控件，`@update` 调 `edit.updateActionField(path, {[name]:v})`；runCommand 单独渲染一个
+  复合 command 控件（templateId + 动态 params），`onCommandUpdate` 合并回写两字段。`disabled` 绑 `project.isLocked`
+  （锁定墙参数只读；D 的 updateActionField 内另有 lock no-op，防御双层）。condition 占位保留（留 G）。
+- **`web/src/stores/project.ts`**：加 `allElements` computed（跨层展平 `{id, type, label}`，保留 z-order；label =
+  文本元素截前 16 字正文‖`类型 · 短码`）+ 内部 `elementLabel` helper。
+- **i18n**：`script.param.*`（7 key：选变量/清空/请选择/空时间轴/空元素/空命令模板/声音占位）+ `script.soundNames.*`
+  （24 声音中文名）中英对照。
+- **测试**：后端不涉；前端 **+37**（baseline 739 → 776 全绿）：
+  `BlockParamInput.smoke` 20（各 type 渲染 + emit 值类型 number/string/复合 + number 钳位 + variable picker 开关 +
+  element/timeline 选项来自 store + command 选模板→params 子输入→改值 + disabled）/ `useCommandTemplates` 9
+  （成功/空/缺字段/401/网络错/缓存命中/refresh/换 session/未鉴权）/ `projectAllElements` 6（展平 + 顺序 + label 各形态）/
+  `BlockNode.smoke` 改 9→11（占位断言改控件断言 + 字段改值调 updateActionField + number 回写 number）。
+  vite build 干净（556 kB index / script-engine chunk 含 BlockParamInput）。
+- **关联文件**：见上。**疑虑**：vue-tsc 本机 `_tsc.js` 缺失（既有工具链问题，非本次引入）——用 vite build（rolldown）
+  作类型门，CI Node 22 下 vue-tsc 正常。
+
 ## 2026-06-11 · 0.7.0-P4-D2：积木拖拽吸附 + palette + 移堆（P4 完）
 
 把积木编辑器接上拖拽：palette 拖出新块 / 画布拖已有块（序列重排 / 跨堆 / 进 if 槽）/ 拖帽子移整堆。

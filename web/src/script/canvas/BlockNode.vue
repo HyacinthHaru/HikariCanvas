@@ -18,9 +18,12 @@
 import { computed, inject } from 'vue';
 import type { ScriptAction } from '@/types/protocol';
 import { useI18n } from '@/i18n';
+import { useProjectStore } from '@/stores/project';
+import { useScriptEditStore } from '@/stores/scriptEdit';
 import { defFor, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
+import BlockParamInput, { type CommandValue } from '../params/BlockParamInput.vue';
 
 const props = defineProps<{
     /** 本块对应的动作（含 if）。 */
@@ -30,6 +33,8 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const project = useProjectStore();
+const edit = useScriptEditStore();
 /** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
 
@@ -71,15 +76,35 @@ const colorVar = computed(() => (def.value ? `var(${def.value.colorVar})` : 'var
 /** 是否 if 块（C 形布局：条件 + then/else 子槽）。 */
 const isIf = computed(() => props.action.type === 'if');
 
+/** 锁定态：true 时所有参数控件 disabled（透传给 BlockParamInput）。 */
+const locked = computed(() => project.isLocked);
+
+/** 是否 runCommand 块（command 复合字段特殊处理：templateId + params 合一控件）。 */
+const isRunCommand = computed(() => props.action.type === 'runCommand');
+
 /**
- * 头部要渲染的“标量参数槽”字段：排除 statements（then/else 由 C 形子槽渲染）
- * 与 condition（if 的条件单独行渲染）。占位阶段只读原始值。
+ * 头部要渲染的“标量参数槽”字段（F：换成 {@link BlockParamInput} 真控件）：排除 statements
+ * （then/else 由 C 形子槽渲染）与 condition（if 的条件单独行，留任务 G 的 ConditionBuilder）。
+ *
+ * <p><b>runCommand 特殊</b>：它有 templateId + params 两个 {@code command} 字段，但二者由<b>同一
+ * 个</b> command 控件整体处理（见模板 {@code commandField} 分支）。故这里把 runCommand 的所有
+ * command 字段从 scalarFields 排掉，避免重复渲染。</p>
  */
 const scalarFields = computed<FieldDef[]>(() =>
-    (def.value?.fields ?? []).filter((f) => f.type !== 'statements' && f.type !== 'condition'),
+    (def.value?.fields ?? []).filter((f) => {
+        if (f.type === 'statements' || f.type === 'condition') return false;
+        // runCommand 的 command 字段交给专用复合控件，不在通用 scalarFields 里渲染。
+        if (isRunCommand.value && f.type === 'command') return false;
+        return true;
+    }),
 );
 
-/** if 块的 condition 字段（单独占位行）。 */
+/** runCommand 的复合 command 字段（取首个 command 字段作为控件锚——templateId）。 */
+const commandField = computed<FieldDef | null>(() =>
+    isRunCommand.value ? (def.value?.fields.find((f) => f.type === 'command') ?? null) : null,
+);
+
+/** if 块的 condition 字段（单独占位行；真构建器留任务 G）。 */
 const conditionField = computed<FieldDef | null>(
     () => def.value?.fields.find((f) => f.type === 'condition') ?? null,
 );
@@ -90,21 +115,43 @@ function fieldLabel(field: FieldDef): string {
 }
 
 /**
- * 取某字段在当前 action 上的原始值文本（占位显示用）。
- * 缺失 / undefined → 空串；对象（如 runCommand.params）→ JSON.stringify 兜底。
+ * 取某字段在当前 action 上的原始值（喂给 BlockParamInput 的 {@code value}）。
+ * 标量字段返原值（string / number）；缺失 → undefined（控件按类型退默认）。
  */
-function rawValue(field: FieldDef): string {
-    const raw = (props.action as unknown as Record<string, unknown>)[field.name];
-    if (raw === undefined || raw === null) return '';
-    if (typeof raw === 'object') {
-        try {
-            return JSON.stringify(raw);
-        } catch {
-            return String(raw);
-        }
-    }
-    return String(raw);
+function fieldValue(field: FieldDef): unknown {
+    return (props.action as unknown as Record<string, unknown>)[field.name];
 }
+
+/**
+ * 标量字段改值回写：调 {@code edit.updateActionField(path, {[name]: value})}。
+ * command 类型不走这（runCommand 用 {@link onCommandUpdate}），但函数对 command 也安全
+ * （不会被调用到）。
+ */
+function onFieldUpdate(field: FieldDef, value: unknown): void {
+    edit.updateActionField(props.path, { [field.name]: value } as Partial<ScriptAction>);
+}
+
+/**
+ * runCommand 的复合 command 控件改值：BlockParamInput emit {@link CommandValue}
+ * （templateId + params 一起），整体回写到 action 的两个字段。
+ */
+function onCommandUpdate(value: unknown): void {
+    const v = value as CommandValue;
+    if (!v || typeof v !== 'object') return;
+    edit.updateActionField(props.path, {
+        templateId: v.templateId,
+        params: v.params,
+    } as Partial<ScriptAction>);
+}
+
+/**
+ * runCommand 当前的复合值（{ templateId, params }）喂给 command 控件。
+ * 非 runCommand 块返空壳（控件不会被渲染，仅类型安全）。
+ */
+const commandValue = computed<CommandValue>(() => {
+    if (props.action.type !== 'runCommand') return { templateId: '', params: {} };
+    return { templateId: props.action.templateId, params: props.action.params };
+});
 
 /** if 的 then 子序列（非 if 块为空，不渲染子槽）。 */
 const thenActions = computed<ScriptAction[]>(() =>
@@ -128,17 +175,30 @@ const conditionText = computed(() =>
     :style="{ borderLeftColor: colorVar }"
     @pointerdown="onBlockPointerDown"
   >
-    <!-- 头部：标题 + 标量参数槽（占位：字段名 + 原始值） -->
+    <!-- 头部：标题 + 标量参数槽（F：真表单控件 BlockParamInput） -->
     <div class="hc-block-head">
       <span class="hc-block-title" :style="{ color: colorVar }">{{ title }}</span>
-      <span
+      <BlockParamInput
         v-for="f in scalarFields"
         :key="f.name"
-        class="hc-block-param"
-      >
-        <span class="hc-param-label">{{ fieldLabel(f) }}:</span>
-        <span class="hc-param-value">{{ rawValue(f) || '—' }}</span>
-      </span>
+        class="hc-block-param-input"
+        :field="f"
+        :value="fieldValue(f)"
+        :action-kind="action.type"
+        :disabled="locked"
+        @update="(v: unknown) => onFieldUpdate(f, v)"
+      />
+    </div>
+
+    <!-- runCommand 复合 command 控件（templateId + 动态 params 子输入） -->
+    <div v-if="commandField" class="hc-block-command">
+      <BlockParamInput
+        :field="commandField"
+        :value="commandValue"
+        :action-kind="action.type"
+        :disabled="locked"
+        @update="onCommandUpdate"
+      />
     </div>
 
     <!-- if 块 C 形：条件 + then/else 子序列槽 -->
@@ -219,15 +279,19 @@ const conditionText = computed(() =>
     font-weight: 600;
     white-space: nowrap;
 }
-.hc-block-param {
+/* F：每个标量参数控件（BlockParamInput）外包一层浅底，与标题区分。 */
+.hc-block-param-input {
     display: inline-flex;
-    align-items: baseline;
-    gap: 3px;
-    font-size: 11px;
+    align-items: center;
     padding: 1px 6px;
     border-radius: 4px;
-    background: color-mix(in srgb, var(--muted) 60%, transparent);
-    max-width: 220px;
+    background: color-mix(in srgb, var(--muted) 45%, transparent);
+    max-width: 100%;
+}
+/* runCommand 复合 command 控件：占整行（模板下拉 + 动态 params 子表单纵向铺开）。 */
+.hc-block-command {
+    margin-top: 5px;
+    width: 100%;
 }
 .hc-param-label {
     color: var(--muted-foreground);

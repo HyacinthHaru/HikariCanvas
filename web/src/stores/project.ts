@@ -67,6 +67,26 @@ export const useProjectStore = defineStore('project', () => {
     /** 是否活动层被锁；M8-D：UI 用它禁用 element 列表的 element op 按钮 + element 在 canvas 上的拖拽。 */
     const activeLayerLocked = computed(() => activeLayer.value.locked);
 
+    /**
+     * 0.7.0-P5-F：把所有图层的元素展平成 {@code {id, type, label}} 列表，供积木编辑器
+     * （setElementProperty 的 elementId 下拉）选元素用。label 是人类可读名——文本元素截
+     * 前 16 字正文，其余用 {@code 类型 · id 短码}（id 取 {@code e-} 后的短 hash 显示）。
+     *
+     * <p>跨层 z-order 顺序（图层 index + 层内 index）保留，让下拉里的顺序与画布一致。state
+     * 未就绪 → 空数组。</p>
+     */
+    const allElements = computed<{ id: string; type: string; label: string }[]>(() => {
+        const s = state.value;
+        if (!s || !s.layers) return [];
+        const out: { id: string; type: string; label: string }[] = [];
+        for (const layer of s.layers) {
+            for (const el of layer.elements ?? []) {
+                out.push({ id: el.id, type: el.type, label: elementLabel(el) });
+            }
+        }
+        return out;
+    });
+
     function setSnapshot(snapshot: ProjectState) {
         state.value = snapshot;
         // 兼容视图：state.elements 指向 activeLayer.elements 同一引用
@@ -154,7 +174,7 @@ export const useProjectStore = defineStore('project', () => {
         wallId, alias, lockedAt, ownerUuid, selfUuid,
         isLocked, isOwner, canEdit,
         canvasPixelWidth, canvasPixelHeight,
-        activeLayer, activeLayerLocked,
+        activeLayer, activeLayerLocked, allElements,
         setSnapshot, setWallMeta, applyPatch,
         elementById, layerById,
         reset,
@@ -162,6 +182,28 @@ export const useProjectStore = defineStore('project', () => {
 });
 
 // ---------- 内部辅助 ----------
+
+/**
+ * 0.7.0-P5-F：单个元素的人类可读名（积木 elementId 下拉显示用）。
+ *
+ * <ul>
+ *   <li>文本元素：有正文 → 取前 16 字（超出加省略号）；空正文 → 退 {@code 文本 · 短码}；</li>
+ *   <li>其他元素：{@code 类型 · 短码}（短码 = id 去掉 {@code e-} 前缀的头 6 位，避免太长）。</li>
+ * </ul>
+ *
+ * <p>注意：返回的是<b>展示文案</b>（含类型词），写回 wire 的始终是 {@code element.id}。</p>
+ */
+function elementLabel(el: Element): string {
+    const shortId = el.id.replace(/^e-/, '').slice(0, 6);
+    if (el.type === 'text') {
+        const text = (el as { text?: string }).text;
+        if (typeof text === 'string' && text.trim().length > 0) {
+            const trimmed = text.trim();
+            return trimmed.length > 16 ? `${trimmed.slice(0, 16)}…` : trimmed;
+        }
+    }
+    return `${el.type} · ${shortId}`;
+}
 
 function activeLayerOf(state: ProjectState): Layer | null {
     if (!state.layers || state.layers.length === 0) return null;

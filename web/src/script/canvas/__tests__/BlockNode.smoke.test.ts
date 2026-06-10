@@ -1,18 +1,24 @@
 // @vitest-environment happy-dom
 /**
- * 0.7.0-P4-C：BlockNode 递归渲染 smoke。
+ * 0.7.0-P4-C → P5-F：BlockNode 递归渲染 smoke。
  *
- * <p>核心验证：① 各类 action 渲染不崩 + 标题 / 参数占位文案出现；② if 嵌套递归渲染；
- * ③ {@code data-block-path} <b>与后端 trace blockId 同构</b>（嵌套子块 path 精确）。
- * 照 ScriptEditorOverlay.smoke 范式：happy-dom + pinia + 锁中文 locale。</p>
+ * <p>核心验证：① 各类 action 渲染不崩 + 标题出现 + 参数槽换成真控件（P5-F：BlockParamInput）；
+ * ② if 嵌套递归渲染；③ {@code data-block-path} <b>与后端 trace blockId 同构</b>（嵌套子块 path
+ * 精确）；④ 改字段触发 {@code edit.updateActionField}（P5-F 接入）。
+ * happy-dom + pinia + 锁中文 locale。</p>
+ *
+ * <p>P5-F 起 BlockNode 用 project / scriptEdit store，故 mount 前 setActivePinia。参数槽不再是
+ * 「字段名: 原始值」纯文本占位，而是 input / select / 变量按钮——断言改为查控件与值。</p>
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mount, flushPromises } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { nextTick } from 'vue';
 
 import BlockNode from '../BlockNode.vue';
+import { __resetCommandTemplatesCache } from '../../params/useCommandTemplates';
 import { useUiStore } from '@/stores/ui';
+import { useScriptEditStore } from '@/stores/scriptEdit';
 import type { ScriptAction } from '@/types/protocol';
 
 function mountNode(action: ScriptAction, path = 'actions/0') {
@@ -23,41 +29,34 @@ describe('BlockNode 渲染 smoke', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
     });
 
-    it('setVariable 渲染：标题 + 字段占位（变量名 + 值）', async () => {
+    it('setVariable 渲染：标题 + 变量按钮（当前 fullName）+ value 文本框', async () => {
         const w = mountNode({ type: 'setVariable', fullName: 'user/score', value: '42' });
         await nextTick();
         expect(w.text()).toContain('设置变量');
-        expect(w.text()).toContain('变量:');
+        // 变量字段 → 变量按钮显示当前 fullName
         expect(w.text()).toContain('user/score');
-        expect(w.text()).toContain('42');
+        // value 字段 → text input，值 = 42
+        const textInputs = w.findAll('input[type="text"]');
+        const has42 = textInputs.some((i) => (i.element as HTMLInputElement).value === '42');
+        expect(has42).toBe(true);
     });
 
-    it('playTimeline 渲染：含 op 原始值 + seekMs 缺省占位 —', async () => {
-        const w = mountNode({ type: 'playTimeline', timelineId: 'tl-1', op: 'play' });
+    it('playTimeline 渲染：op select（值 play）+ seekMs number input', async () => {
+        const w = mountNode({ type: 'playTimeline', timelineId: '', op: 'play' });
         await nextTick();
         expect(w.text()).toContain('播放时间轴');
-        expect(w.text()).toContain('tl-1');
-        expect(w.text()).toContain('play');
-        // seekMs 未携带 → 占位 —
-        expect(w.text()).toContain('—');
+        // op 字段 → select，值 play
+        const selects = w.findAll('select');
+        const opSelect = selects.find((s) => (s.element as HTMLSelectElement).value === 'play');
+        expect(opSelect).toBeTruthy();
+        // seekMs 字段 → number input 存在
+        expect(w.find('input[type="number"]').exists()).toBe(true);
     });
 
-    it('runCommand 渲染：params 对象 JSON 占位不崩', async () => {
-        const w = mountNode({
-            type: 'runCommand',
-            templateId: 'tpl-x',
-            params: { who: 'red', n: '1' },
-        });
-        await nextTick();
-        expect(w.text()).toContain('执行命令');
-        expect(w.text()).toContain('tpl-x');
-        // params 对象 → JSON 文本占位
-        expect(w.text()).toContain('red');
-    });
-
-    it('playSound 渲染：四字段全显（声音/音量/音调/范围）', async () => {
+    it('playSound 渲染：声音 input + 音量/音调 number + 范围 select', async () => {
         const w = mountNode({
             type: 'playSound',
             soundId: 'block.note_block.harp',
@@ -67,10 +66,29 @@ describe('BlockNode 渲染 smoke', () => {
         });
         await nextTick();
         expect(w.text()).toContain('播放声音');
-        expect(w.text()).toContain('block.note_block.harp');
-        expect(w.text()).toContain('音量:');
-        expect(w.text()).toContain('音调:');
-        expect(w.text()).toContain('范围:');
+        // 声音 input（datalist）值
+        const soundInput = w.find('input[list="hc-sound-suggest"]');
+        expect(soundInput.exists()).toBe(true);
+        expect((soundInput.element as HTMLInputElement).value).toBe('block.note_block.harp');
+        // 两个 number（音量 / 音调）
+        expect(w.findAll('input[type="number"]').length).toBe(2);
+    });
+
+    it('runCommand 渲染：复合 command 控件不崩（templateId 锚 + 区域存在）', async () => {
+        // command 字段挂载会 fetch 模板——stub 返空（无 session 也走空路径）
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true, json: async () => ({ templates: [] }),
+        } as unknown as Response)));
+        const w = mountNode({
+            type: 'runCommand',
+            templateId: 'tpl-x',
+            params: { who: 'red', n: '1' },
+        });
+        await flushPromises();
+        expect(w.text()).toContain('执行命令');
+        // 复合控件容器存在
+        expect(w.find('.hc-block-command').exists()).toBe(true);
+        vi.unstubAllGlobals();
     });
 
     it('未知 kind → 兜底未知积木文案不崩', async () => {
@@ -87,10 +105,40 @@ describe('BlockNode 渲染 smoke', () => {
     });
 });
 
+describe('BlockNode P5-F：字段改值回写 updateActionField', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
+    });
+
+    it('改 text 字段 → 调 edit.updateActionField(path, {字段: 新值})', async () => {
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'updateActionField');
+        const w = mountNode({ type: 'log', message: 'old' }, 'actions/2');
+        await nextTick();
+        await w.find('input[type="text"]').setValue('new');
+        expect(spy).toHaveBeenCalledWith('actions/2', { message: 'new' });
+    });
+
+    it('改 number 字段 → emit number（非字符串）回写', async () => {
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'updateActionField');
+        const w = mountNode({ type: 'wait', ms: 100 }, 'actions/0');
+        await nextTick();
+        await w.find('input[type="number"]').setValue('250');
+        expect(spy).toHaveBeenCalledWith('actions/0', { ms: 250 });
+        // 值类型断言：第二参 ms 是 number
+        const arg = spy.mock.calls[spy.mock.calls.length - 1][1] as { ms: unknown };
+        expect(typeof arg.ms).toBe('number');
+    });
+});
+
 describe('BlockNode if 递归 + path 同构', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
     });
 
     it('if 嵌套：then 子块 path = actions/0/then/0（与后端 trace blockId 同构）', async () => {
@@ -103,14 +151,12 @@ describe('BlockNode if 递归 + path 同构', () => {
         const w = mountNode(ifAction, 'actions/0');
         await nextTick();
 
-        // 条件串占位渲染
+        // 条件串占位渲染（F 不碰 condition，留 G）
         expect(w.text()).toContain('var("user/score") > 5');
         // then 子块精确 path
         expect(w.find('[data-block-path="actions/0/then/0"]').exists()).toBe(true);
         // else 子块精确 path
         expect(w.find('[data-block-path="actions/0/else/0"]').exists()).toBe(true);
-        // 子块内容渲染
-        expect(w.text()).toContain('in-then');
     });
 
     it('深层嵌套 if-in-if：path 逐层拼接 actions/0/then/0/then/0', async () => {
@@ -132,7 +178,6 @@ describe('BlockNode if 递归 + path 同构', () => {
         expect(w.find('[data-block-path="actions/0/then/0"]').exists()).toBe(true);
         // 内层 if 的 then 第 0 块
         expect(w.find('[data-block-path="actions/0/then/0/then/0"]').exists()).toBe(true);
-        expect(w.text()).toContain('deep');
     });
 
     it('if 空分支：显示空槽占位提示', async () => {
