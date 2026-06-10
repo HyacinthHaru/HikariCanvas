@@ -63,6 +63,19 @@ public final class ScriptRunner {
     }
 
     /**
+     * 0.7.0-P3 A1：当前 run 的 ruleKey（{@code wallId:ruleId}）ThreadLocal。
+     * 与 {@link #CHAIN_DEPTH} 同生命周期（runFrames 置位 / finally 清）；
+     * {@code ActionExecutor.runCommand} 的 SCRIPT_COMMAND_EXECUTED audit 读它记
+     * "来源规则"（scripting.md §5.2）——ActionSink 接口不为此扩参。
+     */
+    static final ThreadLocal<String> RULE_KEY = new ThreadLocal<>();
+
+    /** 包级读取入口：当前线程 run 的 ruleKey；无 run 上下文返 null。 */
+    static @Nullable String currentRuleKey() {
+        return RULE_KEY.get();
+    }
+
+    /**
      * 调度 seam：生产 = 单线程 SES；测试注同步直跑替身（wait 续接 / 计数延续可同步验证）。
      */
     interface TaskScheduler {
@@ -176,6 +189,7 @@ public final class ScriptRunner {
      */
     private void runFrames(RunState st, Deque<Frame> stack) {
         CHAIN_DEPTH.set(st.ctx.chainDepth());
+        RULE_KEY.set(ruleKey(st.wallId, st.rule));
         try {
             outer:
             while (!stack.isEmpty()) {
@@ -242,6 +256,7 @@ public final class ScriptRunner {
                     + " err=" + t.getMessage(), t);
         } finally {
             CHAIN_DEPTH.remove();
+            RULE_KEY.remove();
         }
     }
 

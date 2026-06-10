@@ -196,3 +196,23 @@ scripts:
     # 链式熔断：脚本写变量又触发别的脚本，链深达到此值时掐断本次执行。
     # 只掐断不自动禁用脚本——日志和审计会告诉你是哪条规则在转圈。
     max-chain-depth: 8
+  # 脚本"执行命令"积木的命令模板白名单（docs/scripting.md §5.2）。
+  # 插件不内置任何模板——这里没写的模板，脚本里引用了也不会执行（安全设计）。
+  # 规则：
+  #   - command 是真正执行的命令全文，{参数名} 是占位符，由脚本作者填值
+  #   - 每个占位符必须在 params 里声明；填进来的值会自动剥掉换行和 § 颜色码
+  #   - 值里带 @（目标选择器）一律拒绝执行，除非该参数声明 type: online-player
+  #     （此时值必须是某个在线玩家的名字，杜绝 @a / @e 选择器夺权）
+  #   - max-length 是单个参数值的长度上限，默认 64
+  #   - 命令以服务器控制台身份执行（模板是你写的，等于你授权了这些命令）
+  #   - 每次执行都会进审计日志（事件 SCRIPT_COMMAND_EXECUTED，含替换后的命令全文）
+  # 示例（去掉注释即可用）：
+  # command-templates:
+  #   announce:
+  #     command: "say [招牌] {msg}"
+  #     params:
+  #       msg: { max-length: 64 }
+  #   give-reward:
+  #     command: "give {player} diamond 1"
+  #     params:
+  #       player: { type: online-player }

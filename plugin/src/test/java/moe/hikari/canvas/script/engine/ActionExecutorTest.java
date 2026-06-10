@@ -261,14 +261,48 @@ class ActionExecutorTest {
         assertTrue(step.detail().contains("wall"), step.detail());
     }
 
-    // ---------- runCommand（K4） ----------
+    // ---------- runCommand（0.7.0-P3 A1：命令模板系统接线） ----------
 
     @Test
-    void runCommand_blockedStep() {
+    void runCommand_withoutTemplates_blockedStep() {
+        // 旧 6 参构造（templates supplier 缺）→ 模板恒查无 → blocked
         TraceStep step = executor().execute(WALL, "b",
                 new Action.RunCommand("give-reward", Map.of("player", "Bob")));
         assertEquals("blocked", step.result());
-        assertTrue(step.detail().contains("0.7.0-P3"), step.detail());
+        assertTrue(step.detail().contains("give-reward"), step.detail());
+    }
+
+    @Test
+    void runCommand_renderError_errorStep() {
+        var tpls = Map.of("announce", new moe.hikari.canvas.HikariCanvasConfig.CommandTemplate(
+                "say {msg}", Map.of("msg",
+                        moe.hikari.canvas.HikariCanvasConfig.ParamSpec.defaults())));
+        ActionExecutor ex = new ActionExecutor(null, null, null, null, null,
+                () -> tpls, java.util.List::of, null, log);
+        // 参数缺失 → error step（不 blocked——模板在，是规则方填错）
+        TraceStep step = ex.execute(WALL, "b",
+                new Action.RunCommand("announce", Map.of()));
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("msg"), step.detail());
+    }
+
+    @Test
+    void runCommand_renderOk_okStep_andDispatchFailureContained() {
+        var tpls = Map.of("announce", new moe.hikari.canvas.HikariCanvasConfig.CommandTemplate(
+                "say {msg}", Map.of("msg",
+                        moe.hikari.canvas.HikariCanvasConfig.ParamSpec.defaults())));
+        ActionExecutor ex = new ActionExecutor(null, null, null, null, null,
+                () -> tpls, java.util.List::of, null, log);
+        // plugin=null 直跑：Bukkit.dispatchCommand 在单测无 server 环境抛 → work 内自吞
+        // （三层隔离），step 仍 ok（提交语义；同 playSound 范式）
+        TraceStep step = ex.execute(WALL, "b",
+                new Action.RunCommand("announce", Map.of("msg", "hello")));
+        assertEquals("ok", step.result());
+        assertTrue(step.detail().contains("announce"), step.detail());
+        boolean warned = logRecords.stream().anyMatch(r ->
+                r.getLevel() == Level.WARNING
+                        && r.getMessage().contains("runCommand 执行失败"));
+        assertTrue(warned, "无 Bukkit server 环境 dispatch 失败应留 WARNING 不上抛");
     }
 
     // ---------- log ----------

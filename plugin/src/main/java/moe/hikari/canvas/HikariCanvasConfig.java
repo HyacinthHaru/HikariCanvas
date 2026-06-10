@@ -159,7 +159,7 @@ public final class HikariCanvasConfig {
 
     /**
      * 0.7：墙脚本参数（docs/scripting.md §2 / §2.4；config 段 {@code scripts} +
-     * 嵌套 {@code scripts.budget}）。
+     * 嵌套 {@code scripts.budget} + {@code scripts.command-templates}）。
      *
      * <p>budget 三闸的另两项（{@code max-delay-depth} / {@code max-delay-ms}）是
      * {@link moe.hikari.canvas.script.ScriptRuleValidator} 静态校验项，不在此重复。</p>
@@ -170,11 +170,59 @@ public final class HikariCanvasConfig {
      *                         {@code ScriptBudget.applyConfig}，批次 3 接线）
      * @param maxRunsPerSecond 单规则触发频率上限（超出丢弃 + audit RUN_BLOCKED；默 10）
      * @param maxChainDepth    ABA 熔断链深（脚本写变量→触发别的脚本；默 8）
+     * @param commandTemplates 0.7.0-P3 A1：runCommand 命令模板白名单（templateId → 模板；
+     *                         服主手写进 config，插件不内置任何模板——docs/scripting.md §5.2）。
+     *                         热更：执行侧经 supplier 惰性读 volatile config 引用，
+     *                         {@code /canvas reload} 后下一次执行即生效
      */
     public record ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
-                                int maxRunsPerSecond, int maxChainDepth) {
+                                int maxRunsPerSecond, int maxChainDepth,
+                                java.util.Map<String, CommandTemplate> commandTemplates) {
+        public ScriptsConfig {
+            commandTemplates = commandTemplates == null
+                    ? java.util.Map.of() : java.util.Map.copyOf(commandTemplates);
+        }
+
+        /** 兼容旧 4 参形态（既有单测 / budget 路径不关心模板）：模板表为空。 */
+        public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
+                             int maxRunsPerSecond, int maxChainDepth) {
+            this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
+                    java.util.Map.of());
+        }
+
         public static ScriptsConfig defaults() {
             return new ScriptsConfig(16, 50, 10, 8);
+        }
+    }
+
+    /**
+     * 0.7.0-P3 A1：runCommand 命令模板（docs/scripting.md §5.2；K13）。
+     *
+     * @param command 命令全文，可含 {@code {param}} 占位符（不带前导 {@code /}，
+     *                执行侧会防御性剥掉一个）
+     * @param params  参数名 → 校验规格；只有声明过的参数会被替换进命令
+     */
+    public record CommandTemplate(String command, java.util.Map<String, ParamSpec> params) {
+        public CommandTemplate {
+            params = params == null ? java.util.Map.of() : java.util.Map.copyOf(params);
+        }
+    }
+
+    /**
+     * 命令模板单参数规格（K13）。
+     *
+     * @param maxLength 替换值长度上限（默 64；config 解析期 clamp ≥1）
+     * @param type      {@code "text"}（默；值含 {@code @} 整体拒）或
+     *                  {@code "online-player"}（值必须精确命中在线玩家名）
+     */
+    public record ParamSpec(int maxLength, String type) {
+        /** online-player 类型常量（其余字符串一律按 text 处理）。 */
+        public static final String TYPE_ONLINE_PLAYER = "online-player";
+        public static final String TYPE_TEXT = "text";
+        public static final int DEFAULT_MAX_LENGTH = 64;
+
+        public static ParamSpec defaults() {
+            return new ParamSpec(DEFAULT_MAX_LENGTH, TYPE_TEXT);
         }
     }
 
@@ -412,7 +460,60 @@ public final class HikariCanvasConfig {
                 maxRuns = Math.max(1, budSec.getInt("max-runs-per-second", maxRuns));
                 maxChain = Math.max(1, budSec.getInt("max-chain-depth", maxChain));
             }
-            b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain);
+            // 0.7.0-P3 A1：scripts.command-templates 段（docs/scripting.md §5.2）。
+            // 形如：
+            //   command-templates:
+            //     announce:
+            //       command: "say [招牌] {msg}"
+            //       params:
+            //         msg: { max-length: 64 }
+            // command 缺失 / 空白的模板条目跳过 + severe（服主写错要看得见）。
+            java.util.Map<String, CommandTemplate> templates = new java.util.LinkedHashMap<>();
+            org.bukkit.configuration.ConfigurationSection ctSec =
+                    scSec.getConfigurationSection("command-templates");
+            if (ctSec != null) {
+                for (String tplId : ctSec.getKeys(false)) {
+                    org.bukkit.configuration.ConfigurationSection tplSec =
+                            ctSec.getConfigurationSection(tplId);
+                    if (tplSec == null) {
+                        plugin.getLogger().severe("scripts.command-templates." + tplId
+                                + " 不是配置段，已跳过");
+                        continue;
+                    }
+                    String command = tplSec.getString("command", "");
+                    if (command == null || command.isBlank()) {
+                        plugin.getLogger().severe("scripts.command-templates." + tplId
+                                + ".command 缺失或为空，已跳过该模板");
+                        continue;
+                    }
+                    java.util.Map<String, ParamSpec> params = new java.util.LinkedHashMap<>();
+                    org.bukkit.configuration.ConfigurationSection psSec =
+                            tplSec.getConfigurationSection("params");
+                    if (psSec != null) {
+                        for (String pName : psSec.getKeys(false)) {
+                            org.bukkit.configuration.ConfigurationSection pSec =
+                                    psSec.getConfigurationSection(pName);
+                            int maxLen = ParamSpec.DEFAULT_MAX_LENGTH;
+                            String type = ParamSpec.TYPE_TEXT;
+                            if (pSec != null) {
+                                maxLen = Math.max(1, pSec.getInt("max-length", maxLen));
+                                String rawType = pSec.getString("type", type);
+                                if (ParamSpec.TYPE_ONLINE_PLAYER.equals(rawType)) {
+                                    type = ParamSpec.TYPE_ONLINE_PLAYER;
+                                } else if (!ParamSpec.TYPE_TEXT.equals(rawType)) {
+                                    plugin.getLogger().severe("scripts.command-templates."
+                                            + tplId + ".params." + pName + ".type 未知值 '"
+                                            + rawType + "'，按 text 处理");
+                                }
+                            }
+                            params.put(pName, new ParamSpec(maxLen, type));
+                        }
+                    }
+                    templates.put(tplId, new CommandTemplate(command.trim(), params));
+                }
+            }
+            b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain,
+                    templates);
         }
 
         return new HikariCanvasConfig(b);

@@ -721,10 +721,18 @@ public final class HikariCanvas extends JavaPlugin {
                         (wid, eid, patch) -> smForScript.applyScriptElementPatch(
                                 wid, eid, patch, varPushCallback, throttlerForScript),
                         wallRepo, tickerControl, getLogger());
+        // 0.7.0-P3 A1：命令模板表惰性读 volatile config 引用——/canvas reload 后下一次
+        // runCommand 即用新模板，无需重新接线。在线玩家名供 online-player 参数校验
+        // （CraftBukkit playerView 是 CopyOnWriteArrayList 视图，runner 线程迭代安全）。
         moe.hikari.canvas.script.engine.ActionExecutor actionExecutor =
                 new moe.hikari.canvas.script.engine.ActionExecutor(
                         variableStore, tickerControl, propertyApplier, wallRepo,
-                        this, getLogger());
+                        this,
+                        () -> config().scriptsConfig.commandTemplates(),
+                        () -> Bukkit.getOnlinePlayers().stream()
+                                .map(org.bukkit.entity.Player::getName)
+                                .toList(),
+                        auditLog, getLogger());
         this.scriptRunner = new moe.hikari.canvas.script.engine.ScriptRunner(
                 scriptConditions, actionExecutor, scriptBudget, auditLog, getLogger());
         moe.hikari.canvas.script.engine.TriggerRouter routerForScript =

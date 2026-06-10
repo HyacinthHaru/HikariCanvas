@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P3-1：命令模板系统（A1）
+
+runCommand 第 8 动作真实化（docs/scripting.md §5.2；计划 K13）：
+
+- **HikariCanvasConfig**：`ScriptsConfig` 加 `commandTemplates`（保留 4 参兼容构造）+
+  新 record `CommandTemplate(command, params)` / `ParamSpec(maxLength, type)`；
+  `scripts.command-templates` 段解析（command 空白跳过 + severe / max-length clamp ≥1 /
+  type 未知按 text + severe）。
+- **CommandTemplateEngine 新建**（script/engine；纯函数零 Bukkit）：K13 转义逐条——
+  模板查无 → Blocked；参数缺失/超长 → Error；替换值剥换行+`§`；text 参数含 `@` 整体拒；
+  `type: online-player` 放行 `@` 检查但值必须精确命中在线玩家名（大小写敏感）；
+  渲染结果剥前导 `/`；未声明占位符原样保留（服主笔误进 audit 可见）。
+- **ActionExecutor.runCommand 真实化**：9 参构造新增 templates supplier（惰性读 volatile
+  config → reload 热更免接线）+ onlineNames supplier + AuditLog；render Ok → audit
+  `SCRIPT_COMMAND_EXECUTED`（template_id + 替换后全文 + rule_key + wall_id + block_id）
+  → 主线程 hop `Bukkit.dispatchCommand(console, cmd)`（plugin=null 直跑，work 内自吞）。
+- **ScriptRunner**：新 `RULE_KEY` ThreadLocal（与 CHAIN_DEPTH 同生命周期）供 audit 记
+  "来源规则"——ActionSink 接口不为此扩参。
+- **config.yml**：command-templates 注释段（announce / give-reward 示例 + 大白话规则说明）。
+- 测试：CommandTemplateEngineTest 17 case + ActionExecutorTest runCommand 3 case +
+  ActionExecutorCommandAuditTest 2 case（真 DB 直读 audit 断言）。后端 **1537** 全绿。
+
+关联：`HikariCanvasConfig.java` / `script/engine/{CommandTemplateEngine,ActionExecutor,ScriptRunner}.java` /
+`HikariCanvas.java` / `config.yml`
+
+---
+
 ## 2026-06-10 · P2 实测反馈修复（var 命令冒号断参 / 嵌套 button 警告）
 
 用户 MVP 实测（测试 1、2 通过）反馈 4 项摩擦，2 项是代码 bug 修掉：

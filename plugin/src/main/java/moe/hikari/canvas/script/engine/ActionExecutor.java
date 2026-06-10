@@ -1,8 +1,10 @@
 package moe.hikari.canvas.script.engine;
 
+import moe.hikari.canvas.HikariCanvasConfig;
 import moe.hikari.canvas.render.AnimationTicker;
 import moe.hikari.canvas.script.Action;
 import moe.hikari.canvas.state.StrictNumber;
+import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.variable.VariableException;
 import moe.hikari.canvas.variable.VariableInterpolator;
@@ -16,7 +18,11 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -31,7 +37,10 @@ import java.util.logging.Logger;
  *   <li>{@code playTimeline} → {@link TickerControl}（AnimationTicker 线程安全入口直调）</li>
  *   <li>{@code playSound} → 同步解析（wall 坐标 / scope / soundId）后主线程 hop
  *       {@code Bukkit.getScheduler().runTask}；plugin == null（测试路径）直跑</li>
- *   <li>{@code runCommand} → K4：P2 固定 blocked step（命令模板系统 0.7.0-P3）</li>
+ *   <li>{@code runCommand} → 0.7.0-P3 A1：{@link CommandTemplateEngine} 渲染（K13 转义 /
+ *       校验全在纯函数侧）→ 主线程 hop {@code Bukkit.dispatchCommand(console, cmd)} +
+ *       audit {@code SCRIPT_COMMAND_EXECUTED}；模板未配置 → blocked step，参数校验失败
+ *       → error step</li>
  *   <li>{@code log} → {@code logger.info}；<b>不进 audit</b>（玩家级高频会刷库——与
  *       scripting.md §2.3 的偏差已在计划记账，P2 收口改契约）</li>
  *   <li>{@code wait / if} 由 {@link ScriptRunner} 处理；进到这里是防御 → error step</li>
@@ -55,13 +64,40 @@ public final class ActionExecutor implements ActionSink {
     private final @Nullable ElementPropertyApplier applier;
     private final @Nullable WallRepo wallRepo;
     private final @Nullable Plugin plugin;
+    /**
+     * 0.7.0-P3 A1：命令模板表 supplier（惰性读 volatile config 引用 → reload 热更免接线）。
+     * null / 返回空表 → runCommand 恒 blocked（模板未配置）。
+     */
+    private final @Nullable Supplier<Map<String, HikariCanvasConfig.CommandTemplate>> templates;
+    /**
+     * 在线玩家名 supplier（online-player 参数校验）。生产 lambda 读
+     * {@code Bukkit.getOnlinePlayers()}（CraftBukkit playerView 是 CopyOnWriteArrayList
+     * 视图，异步迭代安全——与 SystemVariableProvider server.online 同口径）；
+     * null（测试）→ 视作无人在线。
+     */
+    private final @Nullable Supplier<Collection<String>> onlineNames;
+    /** SCRIPT_COMMAND_EXECUTED audit（fire-and-forget；可 null）。 */
+    private final @Nullable AuditLog audit;
     private final Logger log;
+
+    /** 兼容旧 6 参形态（既有单测沿用）：无命令模板 / 无 audit → runCommand 恒 blocked。 */
+    public ActionExecutor(@Nullable VariableStore store,
+                          @Nullable TickerControl ticker,
+                          @Nullable ElementPropertyApplier applier,
+                          @Nullable WallRepo wallRepo,
+                          @Nullable Plugin plugin,
+                          Logger log) {
+        this(store, ticker, applier, wallRepo, plugin, null, null, null, log);
+    }
 
     public ActionExecutor(@Nullable VariableStore store,
                           @Nullable TickerControl ticker,
                           @Nullable ElementPropertyApplier applier,
                           @Nullable WallRepo wallRepo,
                           @Nullable Plugin plugin,
+                          @Nullable Supplier<Map<String, HikariCanvasConfig.CommandTemplate>> templates,
+                          @Nullable Supplier<Collection<String>> onlineNames,
+                          @Nullable AuditLog audit,
                           Logger log) {
         this.store = store;
         this.interpolator = store == null ? null : new VariableInterpolator(store);
@@ -70,6 +106,9 @@ public final class ActionExecutor implements ActionSink {
         this.applier = applier;
         this.wallRepo = wallRepo;
         this.plugin = plugin;
+        this.templates = templates;
+        this.onlineNames = onlineNames;
+        this.audit = audit;
         this.log = log;
     }
 
@@ -256,14 +295,66 @@ public final class ActionExecutor implements ActionSink {
                 "sound " + a.soundId() + " scope=" + a.scope());
     }
 
-    // ---------- 命令（K4：P2 blocked） ----------
+    // ---------- 命令（0.7.0-P3 A1：命令模板系统真实化；docs/scripting.md §5.2） ----------
 
     private TraceStep doRunCommand(String wallId, String blockId, Action.RunCommand a) {
-        if (log.isLoggable(Level.FINE)) {
-            log.fine("[脚本] runCommand 被拦（命令模板系统 0.7.0-P3）: wall=" + wallId
-                    + " template=" + a.templateId());
+        Map<String, HikariCanvasConfig.CommandTemplate> tpls =
+                templates == null ? Map.of() : templates.get();
+        Collection<String> names = onlineNames == null ? java.util.List.of() : onlineNames.get();
+        CommandTemplateEngine.Result r = CommandTemplateEngine.render(
+                a.templateId(), a.params(), tpls, names);
+        switch (r) {
+            case CommandTemplateEngine.Result.Blocked b -> {
+                if (log.isLoggable(Level.FINE)) {
+                    log.fine("[脚本] runCommand blocked: wall=" + wallId
+                            + " template=" + a.templateId() + " — " + b.reason());
+                }
+                return TraceStep.blocked(blockId, b.reason());
+            }
+            case CommandTemplateEngine.Result.Error err -> {
+                return TraceStep.error(blockId, "runCommand: " + err.reason());
+            }
+            case CommandTemplateEngine.Result.Ok ok -> {
+                // audit 记"提交执行"（templateId + 替换后全文 + 来源规则；scripting.md §5.2）。
+                // ruleKey 从 ScriptRunner ThreadLocal 读（runner 线程恒有；直调路径 null 省略）
+                recordCommandAudit(wallId, blockId, a.templateId(), ok.command());
+                Runnable work = () -> {
+                    try {
+                        // 执行身份 = console sender（模板是服主写的，服主授权；§5.2）
+                        Bukkit.dispatchCommand(Bukkit.getConsoleSender(), ok.command());
+                    } catch (Throwable t) {
+                        // 主线程任务内异常只 log（trace step 已发出，无法回填——同 playSound）
+                        log.log(Level.WARNING, "[脚本] runCommand 执行失败: template="
+                                + a.templateId() + " err=" + t.getMessage(), t);
+                    }
+                };
+                if (plugin == null) {
+                    work.run(); // 测试路径直跑
+                } else {
+                    Bukkit.getScheduler().runTask(plugin, work); // 主线程 hop（线程纪律 §3.2）
+                }
+                return TraceStep.ok(blockId, "action", "command " + a.templateId());
+            }
         }
-        return TraceStep.blocked(blockId, "命令模板系统 0.7.0-P3");
+    }
+
+    /** SCRIPT_COMMAND_EXECUTED audit（fire-and-forget；audit null 时跳过）。 */
+    private void recordCommandAudit(String wallId, String blockId,
+                                    String templateId, String command) {
+        if (audit == null) return;
+        try {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("wall_id", wallId);
+            details.put("template_id", templateId);
+            details.put("command", command);
+            String ruleKey = ScriptRunner.currentRuleKey();
+            if (ruleKey != null) details.put("rule_key", ruleKey);
+            details.put("block_id", blockId);
+            audit.record("SCRIPT_COMMAND_EXECUTED", null, null, null, null, details);
+        } catch (RuntimeException e) {
+            log.log(Level.WARNING, "[脚本] SCRIPT_COMMAND_EXECUTED audit 失败: "
+                    + e.getMessage(), e);
+        }
     }
 
     // ---------- 日志 ----------
