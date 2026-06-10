@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P5-E：命令模板列表端点 `GET /api/script/command-templates`
+
+积木编辑器（P4/P5）的 runCommand 积木需要列出服主在 config 配的命令模板下拉。新增只读 HTTP
+端点，**只下发 id + params（name/type/maxLength），绝不泄 command 原文**（安全核心，对齐
+scripting.md §5.2 / 行 303 契约）。
+
+- **新 handler** `web/CommandTemplateHandler.java`：照 `VariableMetadataHandler` 范式（自治
+  handler + 测试友好 seam）。`sessionId` query 鉴权（`sessionManager.byId` 非空，缺则也接受
+  K-UI-10 规格写的 `session` 别名）；命令模板经 `Supplier<Map<String,CommandTemplate>>` 惰性读
+  volatile config → `/canvas reload` 后下次请求即生效（与 ActionExecutor 读模板范式一致）。
+  `buildJson()` 只取 id + params，command 字段永不进结果；template id 与 param name 因
+  `Map.copyOf` 不保证声明序，一律按字母序稳定输出。无模板 → `{"templates":[]}`。401 形态
+  `{"error":"UNAUTHORIZED"}`，短缓存 `max-age=60`（同 /api/font/list）。
+- **WebServer 接线**：新增构造参数 `commandTemplatesSupplier`（null = 旧测试装配禁用端点）+
+  `commandTemplateHandler` 字段 + start() 内一行路由注册（保持 god-class 拆分纪律）。
+- **HikariCanvas 装配**：传 `() -> config().scriptsConfig.commandTemplates()`。
+- **测试** `CommandTemplateHandlerTest`（10 case，JavalinTest）：401×3（缺/空/未知 session）/
+  有模板返列表且 **body 不含 command 原文/片段/`"command"` 字段**（多重反向断言）/ params 形态
+  name·type·maxLength + 字母序 / `session` 别名 / 空配置 + null 供给 → `[]` / 无参数模板 /
+  buildJson 直测。
+- **基线**：后端 **1585**（1575 + 10）/ 0 failure / 0 baseline 漂移。
+
+关联文件：`plugin/.../web/CommandTemplateHandler.java`（新）/ `plugin/.../web/WebServer.java` /
+`plugin/.../HikariCanvas.java` / `plugin/src/test/.../web/CommandTemplateHandlerTest.java`（新）。
+
+---
+
 ## 2026-06-10 · 0.7.0-P3 收口：**P3 游戏事件层完工**（6 触发器 8 动作全通）
 
 P3 六个 commit 收口（计划 + A1 命令模板 / A2 试跑异步+预 parse / B1 进服击杀 / B2 playerNear /

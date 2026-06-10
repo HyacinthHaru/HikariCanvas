@@ -124,6 +124,11 @@ public final class WebServer {
     private final moe.hikari.canvas.variable.VariableStore variableStore;
     /** 0.4.0-P3-M：/api/variable/list-all-namespaces 端点 handler，聚合 Provider declaredKeys。可为 null。 */
     private final VariableMetadataHandler variableMetadataHandler;
+    /**
+     * 0.7.0-P5-E（K-UI-10）：/api/script/command-templates 端点 handler。
+     * 只下发 id + params（绝不泄 command 原文）。可为 null（测试装配未传模板供给时禁用端点）。
+     */
+    private final CommandTemplateHandler commandTemplateHandler;
 
     /**
      * M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes。
@@ -184,7 +189,10 @@ public final class WebServer {
                      int wsAuthTimeoutSeconds,
                      List<String> allowedOrigins,
                      TokenRateLimiter tokenRateLimiter,
-                     moe.hikari.canvas.script.ScriptStore scriptStore) {
+                     moe.hikari.canvas.script.ScriptStore scriptStore,
+                     java.util.function.Supplier<Map<String,
+                             moe.hikari.canvas.HikariCanvasConfig.CommandTemplate>>
+                             commandTemplatesSupplier) {
         this.log = log;
         this.host = host;
         this.port = port;
@@ -256,6 +264,13 @@ public final class WebServer {
                 ? null
                 : new VariableMetadataHandler(
                         variableStore, variableProviderDaemon, sessionManager,
+                        new com.fasterxml.jackson.databind.ObjectMapper());
+        // 0.7.0-P5-E：命令模板端点 handler；模板供给缺（旧测试装配）则禁用端点。
+        // 供给惰性读 volatile config → /canvas reload 热更友好。
+        this.commandTemplateHandler = commandTemplatesSupplier == null
+                ? null
+                : new CommandTemplateHandler(
+                        sessionManager, commandTemplatesSupplier,
                         new com.fasterxml.jackson.databind.ObjectMapper());
     }
 
@@ -481,6 +496,14 @@ public final class WebServer {
                 cfg.routes.addEndpoint(new Endpoint(
                         HandlerType.GET, "/api/variable/list-all-namespaces",
                         variableMetadataHandler::handle));
+            }
+
+            // 0.7.0-P5-E（K-UI-10）：命令模板列表端点（积木 runCommand 下拉用）。
+            // sessionId 鉴权 + 只返 id/params，绝不泄 command 原文。
+            if (commandTemplateHandler != null) {
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.GET, "/api/script/command-templates",
+                        commandTemplateHandler::handle));
             }
 
             // M16 P1.3：WS upgrade Origin 白名单。在 upgrade 前拒绝跨站 WS 攻击（CSWSH）。

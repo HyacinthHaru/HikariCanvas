@@ -582,7 +582,10 @@ public final class HikariCanvas extends JavaPlugin {
                 variableProviderDaemon, variableAliasDao, this,
                 version,
                 config.wsAuthTimeoutSeconds, config.allowedOrigins,
-                tokenRateLimiter, scriptStore);
+                tokenRateLimiter, scriptStore,
+                // 0.7.0-P5-E：命令模板表惰性读 volatile config → /canvas reload 即生效，
+                // 与 ActionExecutor 读模板范式一致（绝不泄 command 原文由 handler 保证）。
+                () -> config().scriptsConfig.commandTemplates());
         webServer.start();
 
         // 0.6 P2：时间轴动画产帧引擎装配（docs/architecture.md §5.5 / docs/timeline.md §3）。
