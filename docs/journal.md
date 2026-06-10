@@ -5,6 +5,48 @@
 
 ---
 
+## 2026-06-11 · 0.7.0-P4-C：积木渲染（真规则上画布）
+
+把 P4-B 的假积木堆换成真渲染：声明式 `blockDefs` 驱动 BlockStack（触发器帽子）+ BlockNode
+（递归动作 / if）渲染 store 里的真 ScriptRule。**本阶段参数槽渲染占位**（显字段名 + 原始值
+文本），真表单控件留任务 F；拖拽 / lock 守卫留任务 D。
+
+- **`web/src/script/model/blockDefs.ts`**（新）：声明式积木定义。`TRIGGER_DEFS`（6 触发器）+
+  `ACTION_DEFS`（9 动作 = 8 + if）。每 `BlockDef` = kind 判别 + category（决定配色）+ colorVar
+  （Catppuccin token）+ labelKey + `FieldDef[]`。字段逐一对应 wire（protocol.ts ScriptTrigger/
+  ScriptAction），**字段顺序 = 表单顺序**；number 字段带 min/max/step 镜像后端 validator
+  （timer 1..86400 / near 1..32 / wait 50..5000 / volume 0..2 / pitch 0.5..2）；select/op/scope
+  options 的 value 对齐后端白名单（ELEMENT_PROPERTIES 8 / TIMELINE_OPS / SOUND_SCOPES）。
+  category→colorVar：trigger=peach / action=blue / control(if)=green / danger(runCommand)=red /
+  timeline(playTimeline)=mauve。`defFor(kind)` 先查动作再查触发器，未知→null。
+- **`web/src/script/canvas/BlockNode.vue`**（新）：递归积木块。块根挂 `data-block-path`（= path，
+  供 D 测量 / H 高亮）+ 左色条按 category。头部 = label + 标量参数占位（字段名: 原始值）。
+  **if 块 C 形**：condition 单独占位行 + then/else 用本组件递归——子块 path 拼
+  `${path}/then/${i}` / `${path}/else/${i}`，**与后端 ScriptRunner trace blockId 逐字符同构**
+  （`actions/` 前缀 + `/then/`·`/else/` 分支，权威 ScriptRunner.java L207/226/244）。空槽显占位。
+- **`web/src/script/canvas/BlockStack.vue`**（新）：单规则积木堆 = 触发器帽子（读 TRIGGER_DEFS，
+  梯形 peach 底 + 规则名 + 触发器参数占位，`data-block-path="trigger"`）+ 动作序列（BlockNode，
+  顶层 path = `actions/i`）。`position:absolute` 读 props.x/y。
+- **`web/src/script/canvas/labelKey.ts`**（新）：把 blockDefs 的点分 i18n key（如
+  `script.blocks.variableChange`）在 t.value 上逐段下钻取文案，找不到→返 key 本身（degrade 不崩）；
+  BlockNode/BlockStack 共用，避免重复。
+- **`BlockCanvas.vue`**：删假堆，`v-for` over `scripts.listSorted` → BlockStack，坐标来自各规则
+  自身 blockLayout 的 `stacks[rule.id]`，缺坐标统一交 autoLayout 纵向排布兜底。
+- **`ScriptEditorOverlay.vue`**：空画布提示改 `v-if="scripts.size === 0"`（有规则即隐藏）。
+- **`i18n/messages.ts`**：script 段补积木 label（15）+ 字段 label（21）+ select 选项（13）+
+  emptySlot / unknownBlock，中英对照（Messages 类型以 zh 为准，build 校验 en 结构对齐）。
+- **测试**：blockDefs 完整性 17 case（每 kind 有 def + 字段恰好覆盖 wire 全字段 + 配色映射 +
+  number 范围 + select 白名单 + defFor）/ BlockNode smoke 9（各动作 + if 递归 + data-block-path
+  同构 `actions/0/then/0` / 深嵌 `.../then/0/then/0` / 空槽占位 / 未知兜底）/ BlockStack smoke 7 /
+  BlockCanvas smoke 5（N 规则→N 堆 + 显式/autoLayout/混合坐标 + 空 store）。**前端 649**（613 + 36）
+  全绿 / vite build 出 `script-engine` chunk 33.46 kB + 4.88 kB CSS / 0 baseline 漂移。
+
+关联文件：`web/src/script/model/blockDefs.ts`（新）/ `web/src/script/canvas/{BlockNode,BlockStack}.vue`
+（新）/ `web/src/script/canvas/labelKey.ts`（新）/ `web/src/script/canvas/BlockCanvas.vue` /
+`web/src/script/canvas/ScriptEditorOverlay.vue` / `web/src/i18n/messages.ts` + 4 测试文件。
+
+---
+
 ## 2026-06-10 · 0.7.0-P5-E：命令模板列表端点 `GET /api/script/command-templates`
 
 积木编辑器（P4/P5）的 runCommand 积木需要列出服主在 config 配的命令模板下拉。新增只读 HTTP

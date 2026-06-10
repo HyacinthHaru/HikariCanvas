@@ -14,10 +14,12 @@ import { computed, ref } from 'vue';
 import { useEventListener } from '@vueuse/core';
 import { X, Puzzle, Plus, RotateCcw } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
+import { useScriptStore } from '@/stores/scripts';
 import { useI18n } from '@/i18n';
 import BlockCanvas from './BlockCanvas.vue';
 
 const ui = useUiStore();
+const scripts = useScriptStore();
 const { t } = useI18n();
 
 const canvasRef = ref<InstanceType<typeof BlockCanvas> | null>(null);
@@ -88,8 +90,8 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
       <!-- 主体画布 -->
       <main class="hc-script-canvas-host">
         <BlockCanvas ref="canvasRef" />
-        <!-- 空画布提示（B 阶段始终显示，任务 C/D 接真规则后按需隐藏） -->
-        <div class="hc-script-empty-hint">
+        <!-- 空画布提示：无规则时显示（C 阶段接真规则后，有规则即隐藏） -->
+        <div v-if="scripts.size === 0" class="hc-script-empty-hint">
           {{ t.script.empty }}
         </div>
       </main>

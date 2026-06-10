@@ -1,18 +1,24 @@
 <script setup lang="ts">
 /**
- * 0.7.0-P4-B：积木画布（无限画布 viewport + world）。
+ * 0.7.0-P4-C：积木画布（无限画布 viewport + world）。
  *
  * <p>viewport（overflow hidden）内一个 world div，用 {@link useBlockCanvas} 的 worldStyle
- * 做 translate+scale。积木堆 `position:absolute` 定位在 world 坐标系。<b>B 阶段</b>先在 world
- * 里渲染 2-3 个假积木堆（纯色块标 trigger / action），验证 pan/zoom 跟手；真规则渲染留任务 C。</p>
+ * 做 translate+scale。积木堆 `position:absolute` 定位在 world 坐标系。<b>C 阶段</b>把 B 阶段的
+ * 假积木堆换成真渲染：{@code v-for} over {@code scripts.listSorted} → {@link BlockStack}，
+ * 坐标来自每条规则自己的 {@code blockLayout}（{@link parseBlockLayout}），缺坐标走
+ * {@link autoLayout} 纵向排布兜底。</p>
  *
  * <p>pan 触发：空格按住拖 / 中键拖 / 拖空白处。空格按住状态本组件维护（keydown/keyup Space，
- * 跳过表单元素聚焦时）。缩放 = ctrl/meta + wheel 以光标为锚。</p>
+ * 跳过表单元素聚焦时）。缩放 = ctrl/meta + wheel 以光标为锚。拖块 / 拖帽子留任务 D。</p>
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useBlockCanvas } from './useBlockCanvas';
+import { useScriptStore } from '@/stores/scripts';
+import { parseBlockLayout, autoLayout, type BlockLayout } from '../model/serialize';
+import BlockStack from './BlockStack.vue';
 
 const viewportRef = ref<HTMLElement | null>(null);
+const scripts = useScriptStore();
 
 /** 空格按住态（pan 触发条件之一）。表单聚焦时不接管空格（留给输入）。 */
 const spaceDown = ref(false);
@@ -24,6 +30,28 @@ const canvas = useBlockCanvas({
 
 // 暴露给父级（ScriptEditorOverlay 头部显示 zoom% + reset 按钮）。
 defineExpose({ zoom: canvas.zoom, resetView: canvas.resetView });
+
+/**
+ * 每条规则在画布上的坐标：先各自解析 {@code rule.blockLayout} 取 {@code stacks[rule.id]}，
+ * 缺坐标的规则统一交给 {@link autoLayout} 纵向排布兜底（按 listSorted 顺序）。
+ * 返回 {@code {rule, x, y}[]}。
+ */
+const positionedStacks = computed(() => {
+    const rules = scripts.listSorted;
+    // 收集已显式带坐标的规则（从其自身 blockLayout 读 stacks[rule.id]）。
+    const explicit: BlockLayout = { stacks: {} };
+    for (const rule of rules) {
+        const layout = parseBlockLayout(rule.blockLayout);
+        const coord = layout.stacks[rule.id];
+        if (coord) explicit.stacks[rule.id] = coord;
+    }
+    // 给缺坐标的补纵向排布坐标。
+    const merged = autoLayout(rules.map((r) => r.id), explicit);
+    return rules.map((rule) => {
+        const c = merged.stacks[rule.id] ?? { x: 40, y: 40 };
+        return { rule, x: c.x, y: c.y };
+    });
+});
 
 function isFormTarget(t: EventTarget | null): boolean {
     const el = t as HTMLElement | null;
@@ -41,16 +69,9 @@ function onKeyUp(e: KeyboardEvent): void {
 }
 
 function onPointerDown(e: PointerEvent): void {
-    // B 阶段：viewport 任意空白处都可拖动 pan（假积木块标了 stop，不冒泡到这）。
+    // C 阶段：viewport 任意空白处都可拖动 pan（积木堆标了 stop，不冒泡到这）。
     canvas.onPanPointerDown(e, true);
 }
-
-// B 阶段假积木堆（验证 pan/zoom 跟手）；真渲染留任务 C。
-const fakeStacks = [
-    { id: 'demo-1', x: 80, y: 60, kind: 'trigger', label: '当变量变化', color: 'var(--ctp-peach)' },
-    { id: 'demo-2', x: 80, y: 130, kind: 'action', label: '设变量', color: 'var(--ctp-blue)' },
-    { id: 'demo-3', x: 360, y: 220, kind: 'action', label: '播放时间轴', color: 'var(--ctp-mauve)' },
-];
 </script>
 
 <template>
@@ -68,17 +89,15 @@ const fakeStacks = [
     @keyup="onKeyUp"
   >
     <div class="hc-block-world" :style="canvas.worldStyle.value">
-      <!-- B 阶段假积木堆（任务 C 替换为真 BlockStack） -->
-      <div
-        v-for="s in fakeStacks"
-        :key="s.id"
-        class="hc-fake-block"
-        :style="{ left: s.x + 'px', top: s.y + 'px', borderColor: s.color, background: `color-mix(in srgb, ${s.color} 16%, var(--card))` }"
+      <!-- C 阶段：真规则上画布（每条 ScriptRule → 一个积木堆） -->
+      <BlockStack
+        v-for="entry in positionedStacks"
+        :key="entry.rule.id"
+        :rule="entry.rule"
+        :x="entry.x"
+        :y="entry.y"
         @pointerdown.stop
-      >
-        <span class="hc-fake-kind" :style="{ color: s.color }">{{ s.kind }}</span>
-        <span class="hc-fake-label">{{ s.label }}</span>
-      </div>
+      />
     </div>
   </div>
 </template>
@@ -102,27 +121,5 @@ const fakeStacks = [
     width: 0;
     height: 0;
     will-change: transform;
-}
-.hc-fake-block {
-    position: absolute;
-    width: 200px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    border: 2px solid;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    user-select: none;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
-}
-.hc-fake-kind {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-.hc-fake-label {
-    font-size: 13px;
-    color: var(--foreground);
 }
 </style>
