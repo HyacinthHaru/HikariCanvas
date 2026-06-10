@@ -756,6 +756,28 @@ export const messages = {
             emptySlot: '把积木拖到这里',
             // 未知积木类型兜底（数据里出现没有定义的 kind 时）
             unknownBlock: '未知积木',
+            // ---- 0.7.0-P4-D1 编辑会话 ----
+            // 左侧规则列表
+            rulesTitle: '规则列表',
+            rulesEmpty: '还没有规则',
+            ruleUnnamed: '未命名规则',
+            defaultRuleName: '新规则',
+            // 头部当前规则编辑控件
+            ruleNamePlaceholder: '规则名',
+            enabledOn: '已启用',
+            enabledOff: '已停用',
+            toggleEnabled: '启用 / 停用这条规则',
+            undo: '撤销',
+            redo: '重做',
+            deleteRule: '删除这条规则',
+            deleteRuleConfirm: '删除这条规则？',
+            deleteConfirmYes: '删除',
+            deleteConfirmNo: '取消',
+            test: '试跑',
+            testPlaceholder: '试跑功能即将上线',
+            // lock 提示
+            lockedHint: '这面墙已锁定，脚本只读',
+            selectRuleHint: '在左侧选一条规则来编辑，或点「新建规则」',
             // 积木标题文案（每种触发器 / 动作）。多为"动宾"短句，读起来像在描述这块做什么。
             blocks: {
                 variableChange: '当 变量变化',
@@ -1745,6 +1767,25 @@ export const messages = {
             palettePlaceholder: 'Block list coming soon',
             emptySlot: 'Drag a block here',
             unknownBlock: 'Unknown block',
+            // ---- 0.7.0-P4-D1 edit session ----
+            rulesTitle: 'Rules',
+            rulesEmpty: 'No rules yet',
+            ruleUnnamed: 'Unnamed rule',
+            defaultRuleName: 'New rule',
+            ruleNamePlaceholder: 'Rule name',
+            enabledOn: 'Enabled',
+            enabledOff: 'Disabled',
+            toggleEnabled: 'Enable / disable this rule',
+            undo: 'Undo',
+            redo: 'Redo',
+            deleteRule: 'Delete this rule',
+            deleteRuleConfirm: 'Delete this rule?',
+            deleteConfirmYes: 'Delete',
+            deleteConfirmNo: 'Cancel',
+            test: 'Test run',
+            testPlaceholder: 'Test run coming soon',
+            lockedHint: 'This wall is locked; scripts are read-only',
+            selectRuleHint: 'Pick a rule on the left to edit, or click "New rule"',
             blocks: {
                 variableChange: 'When variable changes',
                 timer: 'Every interval',

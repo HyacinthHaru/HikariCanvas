@@ -14,6 +14,7 @@ import { nextTick } from 'vue';
 
 import ScriptEditorOverlay from '../ScriptEditorOverlay.vue';
 import { useUiStore } from '@/stores/ui';
+import { useScriptStore } from '@/stores/scripts';
 
 describe('ScriptEditorOverlay 渲染 smoke', () => {
     beforeEach(() => {
@@ -29,12 +30,34 @@ describe('ScriptEditorOverlay 渲染 smoke', () => {
         expect(wrapper.text()).toContain('还没有脚本规则');
     });
 
-    it('"新建规则"按钮 B 阶段占位禁用', async () => {
+    it('"新建规则"按钮 D1 起启用（未锁定墙）', async () => {
         const wrapper = mount(ScriptEditorOverlay);
         await nextTick();
         const newBtn = wrapper.findAll('button').find(b => b.text().includes('新建规则'));
         expect(newBtn).toBeTruthy();
-        expect((newBtn!.element as HTMLButtonElement).disabled).toBe(true);
+        // D1 接通后按钮启用（lock 时才禁用，此 smoke 默认未锁定）
+        expect((newBtn!.element as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it('D1：选规则后头部出现名称输入 + 列表高亮当前', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([{
+            id: 'sr-1', wallId: 'w-x', enabled: true, name: '我的规则',
+            trigger: { type: 'wallReady' }, actions: [], blockLayout: '{}',
+        }]);
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        // 列表项渲染规则名
+        expect(wrapper.text()).toContain('我的规则');
+        // 点列表项进入编辑
+        const item = wrapper.findAll('.hc-rule-item').find(li => li.text().includes('我的规则'));
+        expect(item).toBeTruthy();
+        await item!.trigger('click');
+        await nextTick();
+        // 头部出现名称输入框，值 = 规则名
+        const nameInput = wrapper.find('input.hc-rule-name');
+        expect(nameInput.exists()).toBe(true);
+        expect((nameInput.element as HTMLInputElement).value).toBe('我的规则');
     });
 
     it('点 X 调 ui.closeScriptEditor（scriptEditorOpen → false）', async () => {

@@ -5,6 +5,55 @@
 
 ---
 
+## 2026-06-11 · 0.7.0-P4-D1：积木编辑会话模型（working copy + 本地 undo + debounce save）
+
+把积木编辑做成"本地改 working copy + 自动保存"心智（K-UI-11），不每个像素发请求。新建编辑会话
+store + 接通 ScriptEditorOverlay 的新建 / 删除 / 选规则 / 名称 / 启停 / 撤销重做。**拖拽 / palette
+留 D2**（D2 算出新 actions 树后调本 store 的 `setActions` 等变更入口）。
+
+- **`web/src/stores/scriptEdit.ts`**（新）：`useScriptEditStore` 编辑会话。
+  - state：`selectedRuleId` / `workingCopy`（深拷的本地编辑对象）/ `dirty` / `undoStack` /
+    `redoStack`（cap 50）。
+  - `selectRule`：从 `scripts.get` **深拷**（JSON 往返——入参可能是 reactive proxy，
+    structuredClone 会抛 DataCloneError）进 workingCopy，清 undo/redo + dirty；切规则前先 flush
+    上一条待保存改动。`closeEditing`：flush → 清空。
+  - 变更入口（统一 `mutate` 包装：lock no-op + pushUndo + 改 workingCopy + dirty + scheduleSave）：
+    `setActions`（D2 拖拽写这里）/ `setTrigger` / `setName` / `setStackPos`（改 blockLayout.stacks）/
+    `updateActionField`（path 定位 + immutable 重建，F 阶段参数表单调）。`setEnabled` **不进 debounce**——
+    即时 `sendScriptEnable` + 即时更新 workingCopy.enabled（开关期望立即生效，不标脏）。
+  - `newRule`：构造默认规则（`trigger=wallReady` / `actions=[]` / `enabled=true` / 空 blockLayout）→
+    `sendScriptCreate` → **可靠拿 server 发的 id**：发送前快照 `scripts.order` 已知 id 集合，await ack
+    （后端先 apply state.patch 再 ack，故 ack resolve 时新规则**通常已**在 store）后比对 order 找新 id；
+    边缘（patch 晚于 ack）则 watch `scripts.order` 等新增，5s 超时放弃 → selectRule 进编辑。
+  - `deleteRule`：lock no-op；删当前编辑规则时取消 pending save + 清编辑态（避免删后又把缓存写回）
+    再 `sendScriptDelete`。inline confirm 在 UI 层。
+  - `undo`/`redo`：swap working copy 与栈顶 + scheduleSave。
+  - 自动保存：`scheduleSave` debounce **800ms** → 脏 + 有选中规则 → `sendScriptUpdate(stripIdWall)`；
+    乐观清脏，失败标回脏（下次重试）+ toast 不丢改动。`flushSave` 立即存（closeEditing / 切规则前）。
+  - **server-as-truth 协调**：watch `scripts.get(selectedRuleId)`（deep）——非脏 → 用 server 版刷新
+    workingCopy（回显他人改动 / 自己 save 后权威态）；脏 → 保留本地不覆盖；规则被 server 删 →
+    closeEditing。watch `project.wallId` 变 → closeEditing（wall 切换清会话）。
+  - **lock 守卫（K-UI-12）**：`project.isLocked` 时所有变更入口 + newRule / deleteRule + doSave 全 no-op。
+- **`web/src/script/canvas/ScriptEditorOverlay.vue`**：接通编辑模型。"新建规则"按钮启用（lock 时禁用）；
+  左侧侧栏顶部加**规则列表**（点选 → selectRule，当前项 mauve 高亮 + enabled 绿点）+ 保留 palette 占位
+  （D2 替换）；头部当前规则编辑控件（名称 input → setName / 启停 toggle → setEnabled / undo·redo 按钮 /
+  删除 inline confirm popover / 试跑占位禁用 H 阶段）；Ctrl+Z 撤销 / Ctrl+Y(或 Ctrl+Shift+Z) 重做 keydown
+  （表单聚焦时不接管，留给输入框）；Esc 关闭先 flush；lock 时编辑控件全 disabled。BlockCanvas 堆点击
+  选中接 selectRule 留 D2。
+- **`i18n/messages.ts`**：script 段补 D1 key（规则列表 / 名称占位 / 启停文案 / 撤销重做 / 删除确认 /
+  试跑占位 / lock 提示 / 选规则提示）中英 ~22 key。
+- **测试**：`scriptEdit.test.ts` 38 case（深拷隔离 / 变更入口 + dirty + undo / undo-redo + cap50 /
+  debounce save 合并 + 成功清脏 + 失败标回脏 + flush 立即 / setEnabled 即时不进 debounce / lock no-op
+  全入口 / server-as-truth 非脏刷新 vs 脏保留 + 删除→closeEditing + wall 切换→closeEditing / newRule
+  默认形态 + patch 先于/晚于 ack 拿 id + send 失败 + 超时 / deleteRule 当前→closeEditing 不写回）+
+  ScriptEditorOverlay smoke 更新（新建按钮启用 + 选规则后头部名称输入 + 列表高亮）。
+- **结果**：前端 **688**（基线 649 + scriptEdit 38 + overlay smoke +1）全绿 / vite build 成功
+  （script-engine chunk 101 kB / main 565 kB，0 显著膨胀）。`npm run typecheck`（vue-tsc）本机工具链
+  损坏（typescript 6.0.3 缺 `_tsc.js`，与 vue-tsc 3.2.7 / 原生 tsc CLI 均不兼容——已知 Node 25 工具链
+  陷阱，非本次代码问题）；CI 只跑 vitest + vite build（不跑 typecheck），两者均过。
+
+---
+
 ## 2026-06-11 · 0.7.0-P4-C：积木渲染（真规则上画布）
 
 把 P4-B 的假积木堆换成真渲染：声明式 `blockDefs` 驱动 BlockStack（触发器帽子）+ BlockNode
