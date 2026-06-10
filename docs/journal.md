@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-06-10 · 0.7.0 立项：视觉运行时设计总纲 `docs/scripting.md`（D1-D8 固化）
+
+0.7.0 Scratch-like 视觉运行时 brainstorming 定稿（6 个决策用户逐一拍板），文档先行落 3 处：
+
+- **新建 `docs/scripting.md` 设计总纲**（契约，照 timeline.md 范式）：D1-D8 决策摘要 /
+  ScriptRule + sealed Trigger(6)/Action(8+if) 数据结构 / V017 wall_scripts / 执行管线
+  （TriggerRouter→ScriptRunner→ActionExecutor，单线程队列 + Budget 三闸 + ABA 链深熔断）/
+  协议 v3→v4（script.create/update/delete/enable/test 5 op + 试跑轨迹回推）/ 安全
+  （命令白名单模板 + 填参转义 + 7 audit 事件）/ 自写积木引擎双层架构（engine/defs 解耦）/
+  风险登记 / 6 段分期 ~340h（P2 MVP 闸 + P4 引擎闸 + P5 完整实测闸）。
+- **关键决策**：D1 自写积木画布（Blockly 否决：schema 双向同步税 + 风格不合 + bundle）；
+  D2 **"一画布二选一"作废**——脚本是上层、时间轴是被编排素材（playTimeline），同画布共存，
+  0.6 触发器保留；D3 标准集 6 触发器（变量/定时/进服/击杀/玩家靠近周期采样/墙就绪）；
+  D4 动作全集 8 个含执行命令（服主 config 白名单模板 + 填参，禁拼接，独立权限默 op）；
+  D5 后端唯一执行器 + 真试跑（script.test 走真实管线，轨迹逐积木高亮，零双端分叉）；
+  D6 分级放权（edit/trigger.global/sound 默 true + command 默 op）；D7 独立 ScriptStore
+  不进 ProjectState，`.canvas` 含脚本、模板按名引用缺失灰显；D8 熔断不自动禁用（工具不是保姆）。
+- **`docs/dynamic-data.md`**：§13.0 愿景改"分层共存" + §13.5 标记被 scripting.md 取代（档案保留，
+  列 6 处定稿更正——事件层"几乎为零"已过时，0.6 P5 的 TimelineTriggerRegistry 即 TriggerRouter 范式）。
+- **`CLAUDE.md`**：路线图 0.7.0 行改"进行中"（~340h / 6 段）+ "二选一"注记作废说明。
+
+关联文件：`docs/scripting.md`（新）/ `docs/dynamic-data.md` / `CLAUDE.md` / `docs/journal.md`
+
+---
+
 ## 2026-06-09 · 0.6.0-P6 收尾 + **0.6.0 完工**（一致性 CI 确认 / 用户文档 / 版本号）
 
 P6 余下三件，**0.6.0 时间轴编辑器正式收工**。

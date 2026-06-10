@@ -721,11 +721,12 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 所有 0.5.0+ 路线遵守"工具不是保姆"哲学（`PROPOSAL.md §2.1`）：**数据透明不替服主决策 / 不自动降级 / 不擦屁股**。性能测评 4 原则见 `PROPOSAL.md §5.2.7`。
 
-**两个编辑器分支（终极愿景）**：未来画布二选一——
-- **分支 A（After Effects-like 时间轴）**：keyframe + easing 编排**已有内容**，做循环 / 非线性动画（如服务器入口墙的"欢迎介绍"循环播放）。
-- **分支 B（Scratch-like 视觉运行时）**：可视化积木 + 事件驱动条件分支，编排**未知 / 实时更新**的内容（如地铁站牌"车到→图标亮→红色闪"、PvP"有人被击杀→比分++→比赛结束出 MVP→播全屏特效"）。**无时间轴**。
+**两个编辑器分支（终极愿景；2026-06-10 0.7.0 立项时修订）**：
+- **层 A（After Effects-like 时间轴，0.6.0 已落地）**：keyframe + easing 编排**已有内容**，做循环 / 非线性动画（如服务器入口墙的"欢迎介绍"循环播放）。
+- **层 B（Scratch-like 视觉运行时，0.7.0）**：可视化积木 + 事件驱动条件分支，编排**未知 / 实时更新**的内容（如地铁站牌"车到→图标亮→红色闪"、PvP"有人被击杀→比分++→比赛结束出 MVP→播全屏特效"）。
 
-两者互补，一画布只能选一种分支。这样 MC 里既有逻辑判断又有预制动画系统。
+> **原"一画布二选一"已作废（scripting.md D2）**：脚本是上层，时间轴是被编排的素材（脚本可
+> playTimeline/pause/seek），同画布共存；0.6 的三种触发器原样保留给简单场景。
 
 ### 13.1 版本顺序与依赖
 
@@ -810,6 +811,14 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
   详见 timeline.md §10/§11。
 
 ### 13.5 — 0.7.0 Scratch-like 视觉运行时（~360h）
+
+> **本节原为纸面预估，已被 `docs/scripting.md`（0.7.0 设计总纲，2026-06-10 定稿）取代。**
+> 数据结构 / 触发器 / 动作 / 安全模型 / 协议 v4 / 分期工时一切以 scripting.md 为权威；本节保留为档案。
+> 定稿时的主要更正：① 事件系统层"几乎为零"已过时——0.6 P5 建成 TimelineTriggerRegistry（变量→播放
+> 路由 + debounce），0.7 TriggerRouter 照其范式扩展；② action blink/playAnimation 依赖已就位
+> （AnimationTicker.play/pause/seek）；③ "一画布二选一"作废，改为分层共存（scripting.md D2）；
+> ④ 积木库选 **自写积木画布**，Blockly 否决（D1）；⑤ ExecuteCommand 走服主白名单模板 + 填参（D4）；
+> ⑥ 工时 360h → ~340h（0.6 资产抵扣）。
 
 **评估结论**：Medium-Low。变量系统层准备好（push + cached + ChangeListener + dynamic lookup），**但事件系统层几乎为零**——现有 4 个 Provider 全 polling，0 个 Bukkit gameplay event listener。Scratch trigger 需从零搭建。原 200h（Blockly）估偏低，含条件 / sandbox / 多 trigger / 前端积木真实落地 ~360h。
 

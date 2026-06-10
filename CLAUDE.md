@@ -454,11 +454,11 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.4.10** | **ultrareview-2026-05-29 修复批**（独立深度审查 224 缺陷 → 修全部 168 个 DIRECT_FIX：data-integrity / concurrency 线程契约 / boundary 守卫 / 异常 ack / 双端一致 / 模板校验 等；TRADE_OFF 23 + NEEDS_DESIGN 30 暂不修）+ 设计哲学固化（"工具不是保姆" PROPOSAL §2.1/§5.2.7） | **~40h** | ✅ |
 | **0.5.0** | **纯服务端性能 Benchmark**（后台模拟 rasterize/palette/GC + 21 程序生成 scene + `/canvas bench` 命令族 + report.json/summary.txt/report.html 三件 + 50mspt 交互计算器 + CI 功能性 gate；**不测网络**，见 PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
 | 0.6.0 | 时间轴编辑器（AE-like：keyframe + easing + AnimationTicker；默认 20fps + config max-fps 默 60 安全阀，不做成本估算/自动校准/自动降级；设计总纲 `docs/timeline.md` + 用户教程 `docs/timeline-guide.md`） | ~360h | ✅ **完工**（2026-06-09 升 0.6.0-SNAPSHOT；P1 数模+协议 v3 / P2 Ticker+MVP / P3 缓动+双端一致 CI / P4 AE dock + P4.5 整体帧+拉就设 / P5 触发器 / P6 编辑期自动播+文档+收尾。后端 1286 / 前端 510） |
-| 0.7.0 | Scratch-like 视觉运行时（积木逻辑 + 事件驱动 + 条件分支；复用 template.expr + ChangeListener；积木库 vs 自写待定） | ~360h | 远期 |
+| 0.7.0 | Scratch-like 视觉运行时（**自写积木画布**，Blockly 否决；6 触发器 + 8 动作 + 条件分支；后端唯一执行器 + 真试跑轨迹高亮；命令走服主白名单模板；设计总纲 `docs/scripting.md`，D1-D8 已固化 2026-06-10） | ~340h | **进行中**（P1 数模+协议 v4 → P2 执行引擎+MVP 闸 → P3 游戏事件层 → P4 积木引擎 → P5 积木内容 → P6 收尾） |
 | M30 | 图层 mask / group / smart object（PS-style）— 独立大版本 | 30h+ | 远期 |
 | 弃 | B-advanced DCEL 覆盖 4% Live Paint 用例 — 38h+ 性价比低 | — | 不做 |
 
-> **0.5.0+ 详细设计** 见 `docs/dynamic-data.md §13`（含版本顺序依赖、Benchmark 4 原则、时间轴/Scratch 数据结构与风险）。两分支互补，**一画布只能选一种**：时间轴 = 对已有内容做非线性动画；视觉运行时 = 对实时/未知数据做逻辑编排（无时间轴）。
+> **0.5.0+ 详细设计** 见 `docs/dynamic-data.md §13`（版本顺序依赖、Benchmark 4 原则）+ `docs/scripting.md`（0.7.0 总纲）。**原"一画布二选一"已作废（2026-06-10，scripting.md D2）**：脚本是上层（条件分支 + 副作用），时间轴是被编排的素材（脚本可 playTimeline），同画布共存；0.6 三种触发器原样保留给简单场景。
 
 **0.5.0+** 动画 / 时间轴 / Blockly 脚本路线见 `docs/dynamic-data.md §13`。
 
