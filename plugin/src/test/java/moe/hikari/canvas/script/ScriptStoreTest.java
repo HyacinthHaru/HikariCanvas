@@ -109,6 +109,28 @@ class ScriptStoreTest {
         assertEquals(2, dao.loadByWall("w-test-1").size());
     }
 
+    /**
+     * 核心契约:DB 失败 → 内存零污染。对不存在的 wall create,FK violation 从
+     * compute 传播;之后内存快照 / 反查索引都不该留任何痕迹(孤儿)。
+     */
+    @Test
+    void dao_failure_leaves_memory_untouched() {
+        // walls 表无 w-nonexistent 行 → wall_scripts FK violation,异常从 compute 传播
+        RuntimeException thrown = assertThrows(RuntimeException.class,
+                () -> store.create("w-nonexistent", incoming("孤儿候选")));
+        // 不是 Store 自己的业务异常(配额 / NotFound),而是 Dao 层 DB 异常
+        assertFalse(thrown instanceof ScriptStore.QuotaExceededException, "应为 DB 异常: " + thrown);
+        assertFalse(thrown instanceof ScriptStore.NotFoundException, "应为 DB 异常: " + thrown);
+
+        // ① byWall 快照不变:该墙仍为空
+        assertTrue(store.listByWall("w-nonexistent").isEmpty());
+        // ② wallByRule 反查索引没留孤儿:用 incoming 的 id 反查 → NotFound
+        assertThrows(ScriptStore.NotFoundException.class,
+                () -> store.update("FAKE-ID", incoming("x")));
+        // DB 同样无残留
+        assertTrue(new ScriptDao(log, database.jdbi()).loadByWall("w-nonexistent").isEmpty());
+    }
+
     // ──────────────────────────────────────────────────────────
     //  update / delete / setEnabled
     // ──────────────────────────────────────────────────────────

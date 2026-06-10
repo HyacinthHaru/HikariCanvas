@@ -28,7 +28,8 @@ import java.util.logging.Logger;
  *
  * <p><b>写路径异常传播</b>：与 {@link ScheduleDao} 的"吞 + log"不同，insert/update/delete/
  * setEnabled 不捕获——{@link moe.hikari.canvas.script.ScriptStore} 依赖"先落库再换内存"，
- * DAO 抛异常时内存不动。读路径（loadByWall/loadAll）保持防御式：整体失败返回空。</p>
+ * DAO 抛异常时内存不动。读路径分两档：{@link #loadByWall} 整体失败防御式返回空（运行期
+ * 单墙加载不拖垮全局）；{@link #loadAll} 整体失败<b>异常传播</b>（启动期失败应外响）。</p>
  */
 public class ScriptDao {
 
@@ -122,31 +123,27 @@ public class ScriptDao {
 
     /**
      * 启动期一次性加载所有规则，按 wall 分桶；每墙内与 {@link #loadByWall} 同序。
-     * 坏 blob 跳过 + SEVERE。
+     * 坏 blob 单行跳过 + SEVERE；<b>整体查询失败异常传播</b>——启动期 DB 不可用
+     * 应与 MigrationRunner 失败同级响起来，不静默吞成"零规则"。
      */
     public Map<String, List<ScriptRule>> loadAll() {
-        try {
-            List<Row> rows = jdbi.withHandle(h -> h.createQuery(
-                    "SELECT id, wall_id, enabled, rule_json FROM wall_scripts "
-                            + "ORDER BY wall_id, sort_order ASC, created_at ASC")
-                    .map((rs, ctx) -> new Row(
-                            rs.getString("id"),
-                            rs.getString("wall_id"),
-                            rs.getInt("enabled") != 0,
-                            rs.getString("rule_json")))
-                    .list());
-            Map<String, List<ScriptRule>> out = new LinkedHashMap<>();
-            for (Row row : rows) {
-                ScriptRule rule = parseRow(row);
-                if (rule != null) {
-                    out.computeIfAbsent(row.wallId, k -> new ArrayList<>()).add(rule);
-                }
+        List<Row> rows = jdbi.withHandle(h -> h.createQuery(
+                "SELECT id, wall_id, enabled, rule_json FROM wall_scripts "
+                        + "ORDER BY wall_id, sort_order ASC, created_at ASC")
+                .map((rs, ctx) -> new Row(
+                        rs.getString("id"),
+                        rs.getString("wall_id"),
+                        rs.getInt("enabled") != 0,
+                        rs.getString("rule_json")))
+                .list());
+        Map<String, List<ScriptRule>> out = new LinkedHashMap<>();
+        for (Row row : rows) {
+            ScriptRule rule = parseRow(row);
+            if (rule != null) {
+                out.computeIfAbsent(row.wallId, k -> new ArrayList<>()).add(rule);
             }
-            return out;
-        } catch (Exception e) {
-            log.log(Level.WARNING, "ScriptDao.loadAll failed", e);
-            return Map.of();
         }
+        return out;
     }
 
     /** 该墙当前最大 sort_order；无规则返 -1（ScriptStore 用 +1 追加到尾部）。 */

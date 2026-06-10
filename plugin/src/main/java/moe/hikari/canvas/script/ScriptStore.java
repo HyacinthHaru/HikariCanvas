@@ -18,7 +18,7 @@ import java.util.logging.Logger;
  * <p><b>结构</b>:{@code byWall} 存每墙规则的不可变快照({@code List.copyOf});
  * {@code wallByRule} 是 ruleId → wallId 反查索引,让 {@link #update} 不带 wallId 也能定位。
  * 所有写操作走 {@code byWall.compute(wallId, ...)},同一面墙的写天然串行,
- * 不同墙互不阻塞;compute 内抛异常时 mapping 不变(ConcurrentHashMap 契约),
+ * 不同墙通常并行(hash 撞同 bin 时会串行,可接受);compute 内抛异常时 mapping 不变(ConcurrentHashMap 契约),
  * 配合"compute 内先调 Dao"实现 DB 失败 → 内存零污染。</p>
  *
  * <p><b>dao 可空</b>:纯内存测试装配传 null,所有持久化调用跳过,
@@ -162,7 +162,8 @@ public final class ScriptStore {
     }
 
     /**
-     * 启动期从 DB 全量替换内存。坏 blob 已在 Dao 层跳过 + SEVERE。
+     * 启动期从 DB 全量替换内存。坏 blob 已在 Dao 层单行跳过 + SEVERE;
+     * 整体查询失败由 {@link ScriptDao#loadAll} 异常传播(启动期失败应外响,不静默吞)。
      * 非并发安全 vs 同时写——只应在 onEnable 装配期调用。
      */
     public void loadFromDb() {
@@ -197,7 +198,11 @@ public final class ScriptStore {
         return -1;
     }
 
-    /** "sr-" + 8 hex;对全局反查索引查重,碰撞重生成。 */
+    /**
+     * "sr-" + 8 hex;对全局反查索引查重,碰撞重生成。
+     * 跨墙并发碰撞穿透时(两墙同时 compute、查重都通过)由 DB PRIMARY KEY 兜底:
+     * 第二条 insert 抛 → compute 传播,内存不动。
+     */
     private String freshId() {
         while (true) {
             String id = String.format("sr-%08x", RANDOM.nextInt());

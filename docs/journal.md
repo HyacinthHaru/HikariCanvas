@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P1-5b 批次 2 质量修复（loadAll 失败外响 + DB 失败零污染契约测试 + 注释对齐）
+
+0.7.0-P1 批次 2 代码质量审查逐项修复（修法已定，不发散）：
+
+- **I-1 补核心契约测试**：`ScriptStoreTest` 新增 `dao_failure_leaves_memory_untouched`——
+  对不存在的 wall 调 `store.create("w-nonexistent", …)` → FK violation 从 compute 传播
+  （assertThrows RuntimeException + 断言非 Quota/NotFound 业务异常）→ 断言 ① `listByWall`
+  仍为空 ② `update("FAKE-ID")` 抛 NotFoundException（wallByRule 反查索引没留孤儿）③ DB 无残留。
+- **I-2 loadAll 失败不再静默吞**：`ScriptDao.loadAll()` 删外层 try-catch，整体查询失败
+  异常传播（启动期失败应与 MigrationRunner 失败同级响起来）；坏 blob 单行跳过 + SEVERE
+  保留不动；`loadByWall` 整体防御式保留不动。ScriptDao 类注释错误处理段 +
+  `ScriptStore.loadFromDb` javadoc 各对齐一句（读路径分两档语义）。
+- **M-1 注释**：`ScriptStore.freshId` javadoc 补"跨墙并发碰撞穿透时由 DB PRIMARY KEY
+  兜底（第二条 insert 抛 → 内存不动）"。
+- **M-2 注释**：ScriptStore 类注释"不同墙互不阻塞"改准确——"不同墙通常并行
+  （hash 撞同 bin 时会串行，可接受）"。
+
+测试：`:plugin:test` 全量 **1360 全绿**（script + ScriptDao 目标批先单跑确认）。
+
+关联文件：`plugin/src/main/java/moe/hikari/canvas/{script/ScriptStore.java,storage/ScriptDao.java}` /
+`plugin/src/test/java/moe/hikari/canvas/script/ScriptStoreTest.java` / `docs/journal.md`
+
+---
+
 ## 2026-06-10 · 0.7.0-P1-3b 批次 1 质量修复（if 分支 null NPE / delta finite / 权限 switch 穷尽 / 文案）
 
 0.7.0-P1 批次 1 代码质量审查逐项修复（修法已定，不发散）：
