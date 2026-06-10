@@ -185,6 +185,41 @@ class ScriptOpDispatchBehaviorTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  ③.5 0.7.0-P2-1：update 缺 enabled 继承现值（dispatch 全链）
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void updateWithoutEnabledKeepsDisabledRuleDisabled() {
+        ScriptRule rule = seedRule(store, WALL, "已禁用的");
+        store.setEnabled(WALL, rule.id(), false);
+
+        // 第三方 WS 客户端式 update：payload 不带 enabled 字段
+        Map<String, Object> payload = new LinkedHashMap<>(rulePayload("改名了"));
+        payload.put("ruleId", rule.id());
+        Envelope env = dispatcher.handleUpdate(envelope("script.update"),
+                SESSION_ID, session, WALL, payload);
+
+        assertEquals("ack", env.op());
+        ScriptRule after = store.find(WALL, rule.id()).orElseThrow();
+        assertEquals("改名了", after.name(), "其余字段应正常更新");
+        assertFalse(after.enabled(), "缺 enabled 的 update 不得悄悄重启已禁用规则");
+
+        // 对照：显式 enabled=true 才能重新启用
+        Map<String, Object> ruleOn = new LinkedHashMap<>();
+        ruleOn.put("name", "再启用");
+        ruleOn.put("enabled", true);
+        ruleOn.put("trigger", Map.of("type", "wallReady"));
+        ruleOn.put("actions", List.of(Map.of("type", "log", "message", "x")));
+        Map<String, Object> payloadOn = new LinkedHashMap<>();
+        payloadOn.put("ruleId", rule.id());
+        payloadOn.put("rule", ruleOn);
+        Envelope envOn = dispatcher.handleUpdate(envelope("script.update"),
+                SESSION_ID, session, WALL, payloadOn);
+        assertEquals("ack", envOn.op());
+        assertTrue(store.find(WALL, rule.id()).orElseThrow().enabled());
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  ④ test 的 seam 前守卫（#6）
     // ──────────────────────────────────────────────────────────
 

@@ -232,4 +232,91 @@ class ScriptStoreTest {
         assertTrue(store.find("w-test-1", "sr-deadbeef").isEmpty());
         assertTrue(store.find("w-nonexistent", created.id()).isEmpty());
     }
+
+    // ──────────────────────────────────────────────────────────
+    //  0.7.0-P2-1:snapshotAll + Listener
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void snapshotAll_contains_all_walls_and_is_immutable() {
+        insertWall("w-test-2");
+        ScriptRule a = store.create("w-test-1", incoming("a"));
+        ScriptRule b = store.create("w-test-2", incoming("b"));
+
+        java.util.Map<String, List<ScriptRule>> snap = store.snapshotAll();
+        assertEquals(2, snap.size());
+        assertEquals(List.of(a), snap.get("w-test-1"));
+        assertEquals(List.of(b), snap.get("w-test-2"));
+        // 外层 map 不可变
+        assertThrows(UnsupportedOperationException.class,
+                () -> snap.put("w-evil", List.of()));
+        // 值 list 不可变
+        assertThrows(UnsupportedOperationException.class,
+                () -> snap.get("w-test-1").add(incoming("c")));
+        // 快照语义:snapshot 后再 create 不影响已取快照
+        store.create("w-test-1", incoming("c"));
+        assertEquals(1, snap.get("w-test-1").size());
+    }
+
+    @Test
+    void listener_notified_on_all_five_mutations() {
+        List<String> events = new java.util.ArrayList<>();
+        store.addListener(events::add);
+
+        ScriptRule created = store.create("w-test-1", incoming("a"));        // ① create
+        store.update(created.id(), incoming("a改"));                          // ② update
+        store.setEnabled("w-test-1", created.id(), false);                   // ③ setEnabled
+        store.delete("w-test-1", created.id());                              // ④ delete
+        ScriptRule again = store.create("w-test-1", incoming("b"));
+        store.clearWall("w-test-1");                                         // ⑤ clearWall
+        assertEquals(List.of("w-test-1", "w-test-1", "w-test-1", "w-test-1",
+                "w-test-1", "w-test-1"), events,
+                "5 种 mutation(+1 次重建 create)应各通知一次: " + events + " again=" + again.id());
+    }
+
+    @Test
+    void listener_notified_per_wall_after_loadFromDb() {
+        insertWall("w-test-2");
+        store.create("w-test-1", incoming("a"));
+        store.create("w-test-2", incoming("b"));
+
+        ScriptStore restarted = new ScriptStore(log, new ScriptDao(log, database.jdbi()), 16);
+        java.util.Set<String> notified = new java.util.HashSet<>();
+        restarted.addListener(notified::add);
+        restarted.loadFromDb();
+        assertEquals(java.util.Set.of("w-test-1", "w-test-2"), notified,
+                "loadFromDb 应对加载到的每面墙各通知一次");
+    }
+
+    @Test
+    void listener_failure_does_not_break_store_or_other_listeners() {
+        List<String> survived = new java.util.ArrayList<>();
+        store.addListener(wallId -> { throw new IllegalStateException("listener 故意炸"); });
+        store.addListener(survived::add);
+
+        // 抛异常的 listener 不影响 store 操作结果,也不影响后续 listener
+        ScriptRule created = store.create("w-test-1", incoming("a"));
+        assertEquals(1, store.listByWall("w-test-1").size());
+        assertEquals(List.of("w-test-1"), survived);
+
+        store.delete("w-test-1", created.id());
+        assertTrue(store.listByWall("w-test-1").isEmpty());
+        assertEquals(List.of("w-test-1", "w-test-1"), survived);
+    }
+
+    @Test
+    void listener_not_notified_when_mutation_fails() {
+        List<String> events = new java.util.ArrayList<>();
+        ScriptStore small = new ScriptStore(log, dao, 1);
+        small.addListener(events::add);
+        small.create("w-test-1", incoming("a"));
+        assertEquals(1, events.size());
+        // 配额拒绝 → 状态未变,不应通知
+        assertThrows(ScriptStore.QuotaExceededException.class,
+                () -> small.create("w-test-1", incoming("b")));
+        assertEquals(1, events.size(), "失败的 mutation 不应触发通知");
+        // 无规则墙 clearWall 是 no-op,不通知
+        small.clearWall("w-nonexistent");
+        assertEquals(1, events.size());
+    }
 }

@@ -78,4 +78,17 @@ class ActionWireTest {
         assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
                 () -> mapper.readValue("{\"type\":\"setVariable\",\"fullName\":\"x\"}", Action.class));
     }
+
+    /** 0.7.0-P2-1(K8)：wait.ms 非整数值（100.5）→ 拒，不静默截断。 */
+    @Test void waitFractionalMsRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"wait\",\"ms\":100.5}", Action.class));
+        // 整值浮点 500.0 同拒
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"wait\",\"ms\":500.0}", Action.class));
+        // playTimeline.seekMs（可选字段）存在但非整数同拒
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"playTimeline\",\"timelineId\":\"tl-1\",\"op\":\"seek\",\"seekMs\":1000.5}",
+                Action.class));
+    }
 }

@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -36,6 +38,15 @@ public final class ScriptStore {
         public NotFoundException(String message) { super(message); }
     }
 
+    /**
+     * 0.7.0-P2(K7):墙级 mutation 监听。任何 create / update / delete / setEnabled /
+     * clearWall 成功后(compute 外、状态已落定)+ loadFromDb 加载到的每面墙各通知一次。
+     * TriggerRouter 收到即整墙 rebuild(≤16 规则,O(墙)便宜),不做 per-rule 增量。
+     */
+    public interface Listener {
+        void onWallScriptsChanged(String wallId);
+    }
+
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final Logger log;
@@ -47,6 +58,9 @@ public final class ScriptStore {
     private final ConcurrentHashMap<String, List<ScriptRule>> byWall = new ConcurrentHashMap<>();
     /** ruleId → wallId 反查索引。 */
     private final ConcurrentHashMap<String, String> wallByRule = new ConcurrentHashMap<>();
+
+    /** 0.7.0-P2(K7):墙级 mutation 监听者(照 SessionManager wallDeleteHooks 风格)。 */
+    private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
 
     /** @param dao 可 null(纯内存测试装配) */
     public ScriptStore(Logger log, @Nullable ScriptDao dao, int maxRulesPerWall) {
@@ -83,6 +97,7 @@ public final class ScriptStore {
             out[0] = rule;
             return List.copyOf(next);
         });
+        notifyWall(wallId);
         return out[0];
     }
 
@@ -106,6 +121,7 @@ public final class ScriptStore {
             out[0] = merged;
             return List.copyOf(next);
         });
+        notifyWall(wallId);
         return out[0];
     }
 
@@ -121,6 +137,7 @@ public final class ScriptStore {
             wallByRule.remove(ruleId);
             return next.isEmpty() ? null : List.copyOf(next);
         });
+        notifyWall(wallId);
     }
 
     /** 翻转 enabled。不存在 → {@link NotFoundException}。返回更新后的规则。 */
@@ -138,12 +155,26 @@ public final class ScriptStore {
             out[0] = flipped;
             return List.copyOf(next);
         });
+        notifyWall(wallId);
         return out[0];
     }
 
     /** 该墙规则不可变快照;无墙返回空 list(同样不可变)。 */
     public List<ScriptRule> listByWall(String wallId) {
         return byWall.getOrDefault(wallId, List.of());
+    }
+
+    /**
+     * 0.7.0-P2:全墙不可变快照(TriggerRouter rebuildAll / wallReady 直查用)。
+     * {@code Map.copyOf} 浅拷贝即不可变——值本就是 {@code List.copyOf} 快照。
+     */
+    public Map<String, List<ScriptRule>> snapshotAll() {
+        return Map.copyOf(byWall);
+    }
+
+    /** 0.7.0-P2(K7):注册墙级 mutation 监听(装配期调用;CopyOnWriteArrayList 线程安全)。 */
+    public void addListener(Listener l) {
+        listeners.add(l);
     }
 
     public Optional<ScriptRule> find(String wallId, String ruleId) {
@@ -158,6 +189,8 @@ public final class ScriptStore {
         List<ScriptRule> removed = byWall.remove(wallId);
         if (removed != null) {
             for (ScriptRule r : removed) wallByRule.remove(r.id());
+            // 状态真有变化才通知(无规则的墙 clear 是 no-op)
+            notifyWall(wallId);
         }
     }
 
@@ -179,6 +212,10 @@ public final class ScriptStore {
         }
         log.info("ScriptStore loaded " + wallByRule.size() + " rule(s) across "
                 + byWall.size() + " wall(s)");
+        // 0.7.0-P2(K7):对加载到的每面墙各通知一次(启动恢复让 Router 建索引)
+        for (String wallId : byWall.keySet()) {
+            notifyWall(wallId);
+        }
     }
 
     /** /canvas reload 热更配额(只影响后续 create,不裁剪已有)。 */
@@ -189,6 +226,22 @@ public final class ScriptStore {
     // ──────────────────────────────────────────────────────────
     //  内部
     // ──────────────────────────────────────────────────────────
+
+    /**
+     * 0.7.0-P2(K7):mutation 落定后(compute 外)逐 listener 通知;
+     * 异常 try-catch 隔离 + WARNING(照 SessionManager wallDeleteHooks 风格),
+     * 单个 listener 抛不影响 store 操作结果与其余 listener。
+     */
+    private void notifyWall(String wallId) {
+        for (Listener l : listeners) {
+            try {
+                l.onWallScriptsChanged(wallId);
+            } catch (Exception e) {
+                log.log(Level.WARNING,
+                        "ScriptStore listener threw for wall " + wallId, e);
+            }
+        }
+    }
 
     private int indexOf(@Nullable List<ScriptRule> list, String ruleId) {
         if (list == null) return -1;

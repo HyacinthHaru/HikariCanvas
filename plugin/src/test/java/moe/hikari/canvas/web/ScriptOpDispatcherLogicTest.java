@@ -100,6 +100,35 @@ class ScriptOpDispatcherLogicTest {
         assertFalse(parsedOff.rule().enabled(), "显式 enabled=false 应保留");
     }
 
+    /**
+     * 0.7.0-P2-1：三参版 enabledFallback——update 路径缺 enabled 时继承现值
+     * （fallback=FALSE 的 false 规则保持 false），不再被缺省 true 悄悄重启。
+     * 显式给 enabled 时 fallback 不生效。
+     */
+    @Test
+    void enabledFallbackInheritsCurrentValueWhenMissing() {
+        Map<String, Object> noEnabled = Map.of("rule", Map.of(
+                "name", "r",
+                "trigger", Map.of("type", "wallReady"),
+                "actions", List.of(Map.of("type", "log", "message", "x"))));
+        // update 语义：现有规则 enabled=false → 缺字段继承 false
+        ScriptOpDispatcher.ParsedRule inherited =
+                ScriptOpDispatcher.parseIncomingRule(noEnabled, WALL, Boolean.FALSE);
+        assertNull(inherited.error());
+        assertFalse(inherited.rule().enabled(), "缺 enabled 应继承 fallback=false");
+
+        // 显式 enabled=true 优先于 fallback
+        Map<String, Object> explicitOn = Map.of("rule", Map.of(
+                "name", "r",
+                "enabled", true,
+                "trigger", Map.of("type", "wallReady"),
+                "actions", List.of(Map.of("type", "log", "message", "x"))));
+        ScriptOpDispatcher.ParsedRule explicit =
+                ScriptOpDispatcher.parseIncomingRule(explicitOn, WALL, Boolean.FALSE);
+        assertNull(explicit.error());
+        assertTrue(explicit.rule().enabled(), "显式 enabled=true 应覆盖 fallback");
+    }
+
     /** 0.7.0-P1-7b #7：enabled 存在但非 Boolean（字符串 "false"）→ 真拒，不静默默认 true。 */
     @Test
     void enabledStringIsRejectedNotCoerced() {

@@ -49,4 +49,17 @@ class TriggerWireTest {
         assertThrows(Exception.class,
                 () -> mapper.readValue("{\"fullName\":\"x\"}", Trigger.class));
     }
+
+    /** 0.7.0-P2-1(K8)：intervalSeconds 非整数值（1.9）→ 拒，不静默截断成 1。 */
+    @Test
+    void timerFractionalIntervalRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"timer\",\"intervalSeconds\":1.9}", Trigger.class));
+        // 整值浮点 30.0 同拒（wire 形态必须是 JSON 整数）
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"timer\",\"intervalSeconds\":30.0}", Trigger.class));
+        // rangeBlocks 同理
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"playerNear\",\"rangeBlocks\":8.5}", Trigger.class));
+    }
 }

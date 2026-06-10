@@ -185,7 +185,8 @@ final class ScriptOpDispatcher {
 
     Envelope handleCreate(Envelope in, String sessionId,
                           Session s, String wallId, Map<String, Object> payload) {
-        ParsedRule parsed = parseIncomingRule(payload, wallId);
+        // create 路径 enabled 缺省 true（显式传 fallback，与 update 的"继承现值"区分）
+        ParsedRule parsed = parseIncomingRule(payload, wallId, Boolean.TRUE);
         if (parsed.error() != null) {
             logParseFailure("script.create", parsed);
             return Envelope.error(in.id(), "INVALID_PAYLOAD", parsed.error());
@@ -219,11 +220,13 @@ final class ScriptOpDispatcher {
         }
         // 防跨墙改：ruleId 必须属于本 session 的 wall（store.update 仅按反查索引定位，
         // 不带 wall 校验——这里先 find 把"别人墙的 ruleId"挡掉）
-        if (store.find(wallId, ruleId).isEmpty()) {
+        ScriptRule existing = store.find(wallId, ruleId).orElse(null);
+        if (existing == null) {
             return Envelope.error(in.id(), "SCRIPT_NOT_FOUND",
                     "script rule not found: " + ruleId);
         }
-        ParsedRule parsed = parseIncomingRule(payload, wallId);
+        // P2-1：update 缺 enabled 时继承现值（不再缺省 true）
+        ParsedRule parsed = parseIncomingRule(payload, wallId, existing.enabled());
         if (parsed.error() != null) {
             logParseFailure("script.update", parsed);
             return Envelope.error(in.id(), "INVALID_PAYLOAD", parsed.error());
@@ -337,17 +340,29 @@ final class ScriptOpDispatcher {
     // ──────────────────────────────────────────────────────────
 
     /**
+     * 兼容入口：{@code enabledFallback = TRUE}（create 语义；既有单测沿用）。
+     * update 路径必须走三参版传现有 rule 的 enabled——见 P1 终审记账 §11。
+     */
+    static ParsedRule parseIncomingRule(Map<String, Object> payload, String wallId) {
+        return parseIncomingRule(payload, wallId, Boolean.TRUE);
+    }
+
+    /**
      * 把 {@code payload.rule} 解析为 {@link ScriptRule}：
      * <ul>
      *   <li>id / wallId 服务端权威——客户端给了也覆写（id 占位，store.create 再生成；
      *       wallId = session 的 wall）</li>
-     *   <li>enabled 缺省 true；存在但非 Boolean（如字符串 {@code "false"}）→ 拒
-     *       （批次3 #7：不静默改写成 true，防类型混淆）；blockLayout 缺省 {@code "{}"}</li>
+     *   <li>enabled 缺省取 {@code enabledFallback}（create 路径 = TRUE；update 路径 =
+     *       现有 rule 的 enabled——P2-1：缺字段时<b>继承现值</b>，防第三方 WS 客户端
+     *       update 不带 enabled 悄悄重启已禁用规则）；存在但非 Boolean（如字符串
+     *       {@code "false"}）→ 拒（批次3 #7：不静默改写，防类型混淆）；
+     *       blockLayout 缺省 {@code "{}"}</li>
      *   <li>trigger / actions 经各自多态 deserializer；非法 type / 非数组等 →
      *       {@code ParsedRule.error}（INVALID_PAYLOAD message）</li>
      * </ul>
      */
-    static ParsedRule parseIncomingRule(Map<String, Object> payload, String wallId) {
+    static ParsedRule parseIncomingRule(Map<String, Object> payload, String wallId,
+                                        Boolean enabledFallback) {
         Object raw = payload.get("rule");
         if (!(raw instanceof Map<?, ?> ruleRaw)) {
             return new ParsedRule(null, "rule (object) required", null);
@@ -363,7 +378,7 @@ final class ScriptOpDispatcher {
         m.put("wallId", wallId);
         Object enabledRaw = m.get("enabled");
         if (enabledRaw == null) {
-            m.put("enabled", Boolean.TRUE);
+            m.put("enabled", enabledFallback);
         } else if (!(enabledRaw instanceof Boolean)) {
             // 批次3 #7：enabled 存在但类型错（"false" / 0 / ...）→ 真拒，不默认成 true
             return new ParsedRule(null, "enabled must be a boolean", null);
@@ -396,8 +411,11 @@ final class ScriptOpDispatcher {
      * <b>在线但被服主显式收回节点的必须真拒</b>（PERMISSION_DENIED + audit，照
      * {@link #checkFacets} 的 audit 形态）。旧实现无条件 {@code granted=true}
      * 是 fail-open，服主收回 {@code canvas.script.edit} 形同虚设。</p>
+     *
+     * <p>package-private：P2-1 权限拒绝路径 dispatch 级测试直接驱动（照 handleCreate
+     * 等 handler 的既有范式，绕开 final 的 SessionManager 全装配）。</p>
      */
-    private Envelope checkBasePermission(Envelope in, String sessionId, Session s) {
+    Envelope checkBasePermission(Envelope in, String sessionId, Session s) {
         UUID callerUuid = s.playerUuid();
         moe.hikari.canvas.storage.WallRepo.Wall wall =
                 wallRepo == null ? null : wallRepo.loadById(s.wallId()).orElse(null);

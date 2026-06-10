@@ -56,13 +56,19 @@ public final class TriggerDeserializer extends JsonDeserializer<Trigger> {
         return v.asText();
     }
 
-    /** 必填整数字段；缺失 / 非整数 → reportInputMismatch（不给默认值）。 */
+    /**
+     * 必填整数字段；缺失 / 非整数 → reportInputMismatch（不给默认值）。
+     *
+     * <p>0.7.0-P2(K8)：{@code canConvertToInt} 只查范围，会把 {@code 1.9} 静默截断成
+     * {@code 1}——再查 {@code isIntegralNumber()}，wire 给非整数值（含 {@code 1.0}
+     * 这种整值浮点）一律拒，双端语义零漂移。</p>
+     */
     private static int requireInt(DeserializationContext ctxt, JsonNode node,
                                   String field, String type) throws IOException {
         JsonNode v = node.get(field);
-        if (v == null || !v.canConvertToInt()) {
+        if (v == null || !v.isIntegralNumber() || !v.canConvertToInt()) {
             return ctxt.reportInputMismatch(Trigger.class,
-                    "trigger '" + type + "' requires int field '" + field + "'");
+                    "trigger '" + type + "' field '" + field + "' must be an integer");
         }
         return v.asInt();
     }

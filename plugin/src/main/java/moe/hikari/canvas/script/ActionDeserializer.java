@@ -101,27 +101,33 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         return v.asDouble();
     }
 
-    /** 必填长整数字段；缺失 / 非整数 → reportInputMismatch。 */
+    /**
+     * 必填长整数字段；缺失 / 非整数 → reportInputMismatch。
+     *
+     * <p>0.7.0-P2(K8)：{@code canConvertToLong} 只查范围，会把 {@code 100.5} 静默截断——
+     * 再查 {@code isIntegralNumber()}，wire 给非整数值（含 {@code 100.0} 整值浮点）一律拒。
+     * {@code delta} 不走本方法（本就是 double）。</p>
+     */
     private static long requireLong(DeserializationContext ctxt, JsonNode node,
                                     String field, String type) throws IOException {
         JsonNode v = node.get(field);
-        if (v == null || !v.canConvertToLong()) {
+        if (v == null || !v.isIntegralNumber() || !v.canConvertToLong()) {
             return ctxt.reportInputMismatch(Action.class,
-                    "action '" + type + "' requires long field '" + field + "'");
+                    "action '" + type + "' field '" + field + "' must be an integer");
         }
         return v.asLong();
     }
 
-    /** 可选长整数字段；缺失 = null，存在但非整数 → reportInputMismatch。 */
+    /** 可选长整数字段；缺失 = null，存在但非整数（K8 含整值浮点）→ reportInputMismatch。 */
     private static Long optionalLong(DeserializationContext ctxt, JsonNode node,
                                      String field, String type) throws IOException {
         JsonNode v = node.get(field);
         if (v == null || v.isNull()) {
             return null;
         }
-        if (!v.canConvertToLong()) {
+        if (!v.isIntegralNumber() || !v.canConvertToLong()) {
             return ctxt.reportInputMismatch(Action.class,
-                    "action '" + type + "' field '" + field + "' must be long");
+                    "action '" + type + "' field '" + field + "' must be an integer");
         }
         return v.asLong();
     }
