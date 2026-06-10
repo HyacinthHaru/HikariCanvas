@@ -181,3 +181,9 @@ timeline:
   # 服务器级安全阀：单墙 fps 硬上限，钳每条 timeline 的 fps。
   # 这是管理员保护整台服务器的总阀门；插件不做成本估算、不自动校准、不自动降级。
   max-fps: 60
+
+# 0.7：墙脚本（视觉运行时；docs/scripting.md）
+scripts:
+  # 单面墙可挂的脚本规则数上限（防玩家堆几百条规则拖慢服务器）。
+  # /canvas reload 可热更，只影响后续创建，不裁剪已有规则。
+  max-rules-per-wall: 16

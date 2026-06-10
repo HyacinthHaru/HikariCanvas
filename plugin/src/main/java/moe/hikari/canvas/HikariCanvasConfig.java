@@ -121,6 +121,11 @@ public final class HikariCanvasConfig {
     public final TimelineConfig timelineConfig;
 
     /**
+     * 0.7：墙脚本参数。配置段 {@code scripts}（docs/scripting.md §2）。
+     */
+    public final ScriptsConfig scriptsConfig;
+
+    /**
      * 0.4.0 bugfix（Bug 3）：兜底列车时刻表配置。
      *
      * @param arrivingThresholdSeconds 进站阈值（秒）。eta ≤ 阈值时 {@code is_arriving=true} +
@@ -149,6 +154,18 @@ public final class HikariCanvasConfig {
     public record TimelineConfig(int defaultFps, int maxFps) {
         public static TimelineConfig defaults() {
             return new TimelineConfig(20, 60);
+        }
+    }
+
+    /**
+     * 0.7：墙脚本参数（docs/scripting.md §2；config 段 {@code scripts}）。
+     *
+     * @param maxRulesPerWall 单墙脚本规则数上限（默 16；{@code /canvas reload} 热更走
+     *                        {@link moe.hikari.canvas.script.ScriptStore#setMaxRulesPerWall}）
+     */
+    public record ScriptsConfig(int maxRulesPerWall) {
+        public static ScriptsConfig defaults() {
+            return new ScriptsConfig(16);
         }
     }
 
@@ -196,6 +213,7 @@ public final class HikariCanvasConfig {
         this.userGlobalMaxTotal = b.userGlobalMaxTotal;
         this.tokenRateLimitPerMinute = b.tokenRateLimitPerMinute;
         this.timelineConfig = b.timelineConfig;
+        this.scriptsConfig = b.scriptsConfig;
     }
 
     /**
@@ -365,6 +383,18 @@ public final class HikariCanvasConfig {
             b.timelineConfig = new TimelineConfig(defFps, maxFps);
         }
 
+        // 0.7：scripts 段 —— 墙脚本参数
+        org.bukkit.configuration.ConfigurationSection scSec =
+                f.getConfigurationSection("scripts");
+        ScriptsConfig scDefaults = ScriptsConfig.defaults();
+        if (scSec == null) {
+            b.scriptsConfig = scDefaults;
+        } else {
+            int maxRules = Math.max(1, scSec.getInt(
+                    "max-rules-per-wall", scDefaults.maxRulesPerWall()));
+            b.scriptsConfig = new ScriptsConfig(maxRules);
+        }
+
         return new HikariCanvasConfig(b);
     }
 
@@ -463,5 +493,6 @@ public final class HikariCanvasConfig {
         int tokenRateLimitPerMinute =
                 moe.hikari.canvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE;
         TimelineConfig timelineConfig = TimelineConfig.defaults();
+        ScriptsConfig scriptsConfig = ScriptsConfig.defaults();
     }
 }
