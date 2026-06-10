@@ -14,6 +14,7 @@ import { useUiStore } from '@/stores/ui';
 import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
 import { useRailStore } from '@/stores/rail';
+import { useScriptStore } from '@/stores/scripts';
 import { messages } from '@/i18n/messages';
 
 /**
@@ -563,6 +564,52 @@ export class WsClient {
         return this.sendWithAck('keyframe.move', payload).then(() => undefined);
     }
 
+    // ---------- 墙脚本（0.7.0 P1，协议契约见 docs/scripting.md §2）----------
+    //
+    // 5 op 都走 ack 通道。create / update / enable 的新 / 改后 rule（含服务端权威的 id /
+    // wallId）经 state.patch 的 add /scripts/<encoded ruleId> 回下发（replace 语义统一发
+    // add，见 ScriptOpDispatcher javadoc）；delete 推 remove。本地 mirror 由
+    // applyScriptPatches 落 ScriptStore，故这些 send 方法不预测性 mutate store，
+    // 保持 server-as-truth。
+
+    /**
+     * {@code script.create}：新建脚本规则。{@code id / wallId} 服务端权威，payload 的
+     * rule 不带这两个字段；新 rule（含 id）经 state.patch 回下发。
+     */
+    sendScriptCreate(rule: Omit<import('@/types/protocol').ScriptRule, 'id' | 'wallId'>): Promise<void> {
+        return this.sendWithAck('script.create', { rule }).then(() => undefined);
+    }
+
+    /**
+     * {@code script.update}：全量替换规则（非逐字段 patch；后端先 find 确认属本 wall，
+     * 防跨墙改）。改后 rule 经 state.patch 回下发。
+     */
+    sendScriptUpdate(
+        ruleId: string,
+        rule: Omit<import('@/types/protocol').ScriptRule, 'id' | 'wallId'>,
+    ): Promise<void> {
+        return this.sendWithAck('script.update', { ruleId, rule }).then(() => undefined);
+    }
+
+    /** {@code script.delete}：删除规则。不存在也推 remove patch（幂等，照 alias clear 先例）。 */
+    sendScriptDelete(ruleId: string): Promise<void> {
+        return this.sendWithAck('script.delete', { ruleId }).then(() => undefined);
+    }
+
+    /** {@code script.enable}：翻转规则开关。改后 rule 经 state.patch 回下发。 */
+    sendScriptEnable(ruleId: string, enabled: boolean): Promise<void> {
+        return this.sendWithAck('script.enable', { ruleId, enabled }).then(() => undefined);
+    }
+
+    /**
+     * {@code script.test}：试运行规则。P1 后端固定回 {@code SCRIPT_ENGINE_UNAVAILABLE}
+     * （引擎 P2 落地）；P2 起 ack resolve 执行轨迹，故返回 {@code Promise<unknown>}
+     * 不丢 payload。
+     */
+    sendScriptTest(ruleId: string): Promise<unknown> {
+        return this.sendWithAck('script.test', { ruleId });
+    }
+
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
@@ -716,6 +763,8 @@ export class WsClient {
         useVariableStore().initVariables(payload.variables ?? []);
         // 0.4.2：变量别名快照（per-wall）；后续变更走 state.patch /aliases/<encoded>。
         useVariableAliasStore().initAliases(payload.aliases ?? {});
+        // 0.7.0 P1：脚本规则快照（per-wall，服务端顺序）；后续变更走 state.patch /scripts/<encoded>。
+        useScriptStore().initScripts(payload.scripts ?? []);
         // 0.4.5 P3：铁路绑定快照（当前 wall 是否绑了线路）；用于 ScheduleManagerModal /
         // RailNetworkModal 一打开就显示绑定状态。null = 未绑定。
         const railBinding = (payload as { railBinding?: import('@/types/rail').WallRailBinding | null })
@@ -765,12 +814,15 @@ export class WsClient {
         // 0.4.0-P1-D：variables 走 global VariableStore 而非 ProjectState；按 patch.path
         // 前缀分拣后再分别落 store。剩余 patch 仍走 project.applyPatch（既有路径不变）。
         // 0.4.2：aliases 同款分拣到 VariableAliasStore。
+        // 0.7.0 P1：scripts 同款分拣到 ScriptStore。
         const variableOps: PatchOp[] = [];
         const aliasOps: PatchOp[] = [];
+        const scriptOps: PatchOp[] = [];
         const projectOps: PatchOp[] = [];
         for (const op of payload.ops) {
             if (op.path.startsWith('/variables/')) variableOps.push(op);
             else if (op.path.startsWith('/aliases/')) aliasOps.push(op);
+            else if (op.path.startsWith('/scripts/')) scriptOps.push(op);
             else projectOps.push(op);
         }
         if (variableOps.length > 0) {
@@ -778,6 +830,9 @@ export class WsClient {
         }
         if (aliasOps.length > 0) {
             applyAliasPatches(aliasOps);
+        }
+        if (scriptOps.length > 0) {
+            applyScriptPatches(scriptOps);
         }
         // 即便 projectOps 为空也要更新 version 号（version 是 wall-scoped 单调递增）
         useProjectStore().applyPatch(payload.version, projectOps);
@@ -1026,6 +1081,34 @@ function applyAliasPatches(ops: PatchOp[]): void {
             store.remove(fullName);
         } else {
             net.pushLog('err', `alias patch: unsupported ${op.op} ${op.path}`);
+        }
+    }
+}
+
+// ---------- 脚本 state.patch 路由（0.7.0 P1）----------
+//
+// 后端 ScriptOpDispatcher 发 path 形如 {@code /scripts/<encoded ruleId>}（RFC 6901 段编码，
+// 同变量 / 别名通道）。支持：add / replace 携完整 ScriptRule 对象（后端 create / update /
+// enable 统一发 add，replace 收下兼容）；remove 不携 value。其他形态不支持，
+// 收到时静默忽略并 log。导出供单测独立验证（applyAliasPatches 无独立测试的教训）。
+
+export function applyScriptPatches(ops: PatchOp[]): void {
+    const store = useScriptStore();
+    const net = useNetworkStore();
+    for (const op of ops) {
+        const rest = op.path.substring('/scripts/'.length);
+        if (rest.length === 0) {
+            net.pushLog('err', `script patch: empty path ${op.path}`);
+            continue;
+        }
+        // script 路径无子路径（仅 ruleId 编码段），直接整段 decode
+        const ruleId = decodeJsonPointerToken(rest);
+        if ((op.op === 'add' || op.op === 'replace') && op.value && typeof op.value === 'object') {
+            store.upsert(op.value as import('@/types/protocol').ScriptRule);
+        } else if (op.op === 'remove') {
+            store.removeRule(ruleId);
+        } else {
+            net.pushLog('err', `script patch: unsupported ${op.op} ${op.path}`);
         }
     }
 }

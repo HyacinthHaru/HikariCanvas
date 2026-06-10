@@ -5,6 +5,7 @@ import { useVariableStore } from './variables';
 import { useScheduleStore } from './schedule';
 import { useVariableAliasStore } from './variableAliases';
 import { useRailStore } from './rail';
+import { useScriptStore } from './scripts';
 import { clearLayerThumbnailCache } from '@/render/LayerThumbnailRenderer';
 import { resetImageCaches } from '@/render/PreviewRenderer';
 
@@ -138,6 +139,8 @@ export const useProjectStore = defineStore('project', () => {
         useVariableAliasStore().reset();
         // 0.4.5 P3：rail store 含 lines / stations / runs / timetables 内存缓存。
         useRailStore().reset();
+        // 0.7.0 P1：脚本规则是 wall-scoped 镜像。
+        useScriptStore().reset();
         // 图层缩略图缓存（按 layerId 索引）跨 wall 不可复用，切 wall 时清。
         clearLayerThumbnailCache();
         // P2-70：丢弃 PreviewRenderer 的图片 / 图标失败缓存条目，让切 wall / 重连后

@@ -354,6 +354,8 @@ export interface ReadyPayload {
     variables?: import('./variable').Variable[];
     // 0.4.2：该 wall 的变量别名映射（fullName → alias）；前端 VariableAliasStore 初始化用。
     aliases?: Record<string, string>;
+    // 0.7.0 P1：该 wall 当前所有脚本规则快照（服务端顺序）；前端 ScriptStore 初始化用。
+    scripts?: ScriptRule[];
 }
 
 // ---------- §6.1 error ----------
@@ -493,4 +495,55 @@ export interface Timeline {
     loopMode: LoopMode;
     trigger: TriggerConfig; // 触发方式
     tracks: Record<string, Keyframe[]>; // key = elementId
+}
+
+// ---------- §8 墙脚本（0.7.0 P1，协议 v4 新增）----------
+//
+// 形态对应后端 record（docs/scripting.md §2.1 / §2.2）；wire 为扁平字段 + {@code type}
+// 判别（camelCase），由后端 Trigger/Action 自定义 Serializer/Deserializer 双向映射，
+// 与 KfValue / Timeline.trigger 同范式。本文件只镜像 wire 形态，结构校验在后端
+// ScriptRuleValidator；前端镜像层（store）不做语义校验。
+
+/**
+ * 脚本触发器多态联合（docs/scripting.md §2.2，六种触发时机）。
+ * {@code playerJoin / playerKill} 是全局事件面（需 {@code canvas.script.trigger.global}）。
+ */
+export type ScriptTrigger =
+    | { type: 'variableChange'; fullName: string }
+    | { type: 'timer'; intervalSeconds: number }
+    | { type: 'playerJoin' }
+    | { type: 'playerKill' }
+    | { type: 'playerNear'; rangeBlocks: number }
+    | { type: 'wallReady' };
+
+/**
+ * 脚本动作多态联合（docs/scripting.md §2.2，8 种动作 + {@code if} 条件分支可递归嵌套）。
+ * {@code if} 的两个分支 wire 字段名为 {@code then} / {@code else}（后端 Java 侧
+ * {@code elseActions} 仅为避开关键字，wire 上仍是 {@code else}）；空分支 = 空数组（非 null）。
+ * {@code playTimeline.seekMs} 仅 {@code op = 'seek'} 时携带，其余省略不上 wire。
+ */
+export type ScriptAction =
+    | { type: 'setVariable'; fullName: string; value: string }
+    | { type: 'incrementVariable'; fullName: string; delta: number }
+    | { type: 'setElementProperty'; elementId: string; property: string; value: string }
+    | { type: 'playTimeline'; timelineId: string; op: 'play' | 'pause' | 'seek'; seekMs?: number }
+    | { type: 'playSound'; soundId: string; volume: number; pitch: number; scope: 'near' | 'all' }
+    | { type: 'wait'; ms: number }
+    | { type: 'runCommand'; templateId: string; params: Record<string, string> }
+    | { type: 'log'; message: string }
+    | { type: 'if'; condition: string; then: ScriptAction[]; else: ScriptAction[] };
+
+/**
+ * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。
+ * {@code blockLayout} 是前端积木 UI 的坐标 JSON 字符串——镜像层与后端都不解析，
+ * 仅 P4/P5 积木编辑器读写。
+ */
+export interface ScriptRule {
+    id: string; // "sr-<8hex>"
+    wallId: string;
+    enabled: boolean;
+    name: string;
+    trigger: ScriptTrigger;
+    actions: ScriptAction[];
+    blockLayout: string;
 }
