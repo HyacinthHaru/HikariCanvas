@@ -37,6 +37,18 @@ export default defineConfig({
                     ) {
                         return 'lexical';
                     }
+                    // 0.7.0 P4：i18n 表（messages.ts ~1900 行中英）被首屏 TopBar 等同步组件
+                    // 与异步组件（TimelineDock / ScriptEditorOverlay）共享。引入 script-engine
+                    // 异步入口后，rolldown 会把共享的 messages 下沉到 script-engine，导致首屏
+                    // 反向拉取整个 script chunk。显式钉到独立 i18n chunk（index 同步加载它，
+                    // 异步 chunk 仅引用它）破除下沉。
+                    if (id.includes('src/i18n/')) {
+                        return 'i18n';
+                    }
+                    // 0.7.0 P4：积木脚本编辑器拆独立 chunk（懒加载，首次开编辑器才下载）。
+                    if (id.includes('src/script/')) {
+                        return 'script-engine';
+                    }
                     return undefined;
                 },
             },

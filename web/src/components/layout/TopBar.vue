@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film, Puzzle } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
@@ -344,6 +344,16 @@ function showRefreshFlash(msg: string) {
           @click="timeline.toggleDock()"
         >
           <Film class="size-4" />
+        </button>
+      </Tooltip>
+      <!-- 0.7.0 P4：积木脚本编辑器（按条件做事）全屏 overlay -->
+      <Tooltip :text="t.topbar.scriptEditor">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
+          :class="ui.scriptEditorOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="ui.toggleScriptEditor()"
+        >
+          <Puzzle class="size-4" />
         </button>
       </Tooltip>
       <Tooltip :text="t.topbar.help" shortcut="?">

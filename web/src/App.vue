@@ -29,6 +29,8 @@ const variables = useVariableStore();
 const timeline = useTimelineStore();
 // 0.6 P4：时间轴 dock 懒加载拆独立 chunk（仿 lexical；首次开 dock 才下载，守住 700KB 线）。
 const TimelineDock = defineAsyncComponent(() => import('@/components/timeline/TimelineDock.vue'));
+// 0.7.0 P4：积木脚本编辑器全屏 overlay 懒加载拆 script-engine chunk（首次开才下载）。
+const ScriptEditorOverlay = defineAsyncComponent(() => import('@/script/canvas/ScriptEditorOverlay.vue'));
 
 // M5.5：URL 没 token → 显示首页（HomePage 列出 walls）；有 token → 走编辑器
 const showHomePage = ref(false);
@@ -205,5 +207,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     <ScheduleManagerModal />
     <!-- 0.4.4：铁路网络（线路 + 站点 + 车次 + 时刻表）管理 modal -->
     <RailNetworkModal v-if="ui.railNetworkOpen" @close="ui.closeRailNetwork()" />
+    <!-- 0.7.0 P4：积木脚本编辑器全屏 overlay（懒加载拆 script-engine chunk） -->
+    <ScriptEditorOverlay v-if="ui.scriptEditorOpen" />
   </div>
 </template>

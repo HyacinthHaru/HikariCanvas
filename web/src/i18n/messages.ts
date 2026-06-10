@@ -28,6 +28,7 @@ export const messages = {
             scheduleManager: '列车时刻表（动态站牌）',
             railNetwork: '铁路网络（线路 / 站点 / 车次 / 时刻表）',
             timelineManager: '时间轴（关键帧动画）',
+            scriptEditor: '积木脚本（按条件做事）',
         },
         wall: {
             copyId: (id: string) => `点击复制画板 ID：${id}`,
@@ -741,6 +742,17 @@ export const messages = {
             errorEmptyDestination: '终点不能为空',
         },
         // 0.6 P2（B3）：时间轴最简面板（关键帧动画）。AE 风完整面板留 P4。
+        // 0.7.0 P4：积木脚本编辑器（按条件做事）。B 阶段仅骨架 key，内容层任务 H 补全。
+        script: {
+            editorTitle: '积木脚本',
+            newRule: '新建规则',
+            empty: '还没有脚本规则，点「新建规则」开始',
+            close: '关闭',
+            resetView: '回到原始视图',
+            zoom: '缩放',
+            paletteTitle: '积木库',
+            palettePlaceholder: '积木列表即将上线',
+        },
         timeline: {
             // Modal / 入口
             manager: '时间轴（关键帧动画）',
@@ -948,6 +960,7 @@ export const messages = {
             scheduleManager: 'Train schedule (dynamic departure board)',
             railNetwork: 'Rail network (lines / stations / runs / timetable)',
             timelineManager: 'Timeline (keyframe animation)',
+            scriptEditor: 'Block scripts',
         },
         wall: {
             copyId: (id: string) => `Click to copy wall id: ${id}`,
@@ -1658,6 +1671,17 @@ export const messages = {
             errorEmptyDestination: 'Destination cannot be empty',
         },
         // 0.6 P2 (B3): minimal timeline panel (keyframe animation). Full AE-style panel lands in P4.
+        // 0.7.0 P4: block script editor. B-stage skeleton keys only; full content in task H.
+        script: {
+            editorTitle: 'Block scripts',
+            newRule: 'New rule',
+            empty: 'No script rules yet. Click "New rule" to start.',
+            close: 'Close',
+            resetView: 'Reset view',
+            zoom: 'Zoom',
+            paletteTitle: 'Blocks',
+            palettePlaceholder: 'Block list coming soon',
+        },
         timeline: {
             // Modal / entry
             manager: 'Timeline (keyframe animation)',
