@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P3-5：审查修复（世界 UUID 快照表免异步 getWorld + 后加载世界自动补登记 + §5.2 对齐）
+
+P3 审查 4 项收口（1/2 必须修，3/4 记账）：
+
+- **①（必须）originSource WS 线程调 Bukkit.getWorld**：script.create/update 经 WS
+  线程 → ScriptStore listener → rebuildWall → originSource lambda 跑在 Jetty 线程，
+  异步读 CraftServer.worlds（普通 LinkedHashMap）官方不保证线程安全。修法：
+  HikariCanvas 新私有字段 `scriptWorldUuidByName`（ConcurrentHashMap<世界名, UUID>），
+  onEnable 用 `Bukkit.getWorlds()` 全量种子；originSource lambda 改读快照表（零
+  Bukkit 调用，任意线程安全）。GameEventListenerHub 加 WorldLoadEvent（put +
+  `onWorldChange.run()`）/ WorldUnloadEvent（remove）两个 MONITOR handler——构造注入
+  map + Runnable，转发体抽包私有 `handleWorldLoad/handleWorldUnload` 可单测。
+  **顺手真解掉"世界后加载的 near 规则需重保存才登记"记账**：onWorldChange 生产装配
+  = `router::rebuildAll`（主线程调，便宜），后加载世界的 playerNear 规则自动补登记。
+  改正 HikariCanvas 原"rebuild 都在主线程"失实注释 + TriggerRouter 两处 javadoc 记账
+  同步（WallOriginSource / registerRuleLocked near 分支）。
+- **②（必须）scripting.md §5.2 转义文字对齐实现**：原文"剥行内 `/`、`@` 选择器字符"
+  与 CommandTemplateEngine 实际不符。改写为：替换值剥换行（\n/\r）与 `§`；text 参数
+  含 `@` 整体拒（error）；online-player 参数必须精确命中在线玩家名（大小写敏感）；
+  渲染结果剥一个前导 `/`；默认 max-length 64。
+- **③（记账）config.yml** 模板注释加一条："参数值可含空格，会成为命令的额外参数——
+  设计模板时把自由文本参数放命令末尾"。
+- **④（记账）CommandTemplateEngine javadoc** 加一条：参数值字面含 `{其他参数名}` 时
+  替换结果依迭代序，两值过同一净化，不构成注入面。
+- 测试：新增 `GameEventListenerHubTest` 3 case（worldLoad 登记 + 补登记回调 / 重载
+  覆盖 UUID / unload 摘表不 rebuild / null 回调不抛）→ 后端 **1575** 全绿（1572+3）。
+- 关联文件：`HikariCanvas.java` / `GameEventListenerHub.java` / `TriggerRouter.java` /
+  `CommandTemplateEngine.java` / `config.yml` / `docs/scripting.md` /
+  `GameEventListenerHubTest.java`
+
 ## 2026-06-10 · 0.7.0-P3-2：script.test 异步轨迹（K11）+ 条件预 parse（K16）（A2）
 
 P1 同步 ScriptTestSeam 阻塞 Jetty worker（合法规则可串 wait 至分钟级，5s ack 超时必爆）

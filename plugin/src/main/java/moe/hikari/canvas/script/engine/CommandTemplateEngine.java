@@ -27,6 +27,10 @@ import java.util.Map;
  *       （进不了命令文本，无注入面）；模板 command 里没有对应声明的 {@code {x}}
  *       占位符原样保留（服主配置笔误，进 audit 全文可见）</li>
  *   <li>渲染结果剥一个前导 {@code /}（Bukkit.dispatchCommand 不吃前导斜杠）</li>
+ *   <li>参数值字面含 {@code {其他参数名}} 时，替换结果依参数迭代序而定（先替换的
+ *       参数值里的占位符文本可能被后续轮替换）——两个值都已过同一套净化（剥换行 /
+ *       {@code §} + {@code @} 检查 + 长度上限），不构成新的注入面，仅是文本拼接
+ *       顺序差异（记账，不修）</li>
  * </ul>
  */
 public final class CommandTemplateEngine {

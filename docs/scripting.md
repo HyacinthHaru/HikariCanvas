@@ -269,8 +269,11 @@ scripts:
         player: { type: online-player }   # 只接受在线玩家名,杜绝选择器
 ```
 
-- `{param}` 替换前转义:剥行内 `/`、换行、`@` 选择器字符(除 `type: online-player` 显式放行
-  玩家名白名单),长度上限默 64。
+- `{param}` 替换前净化(与 `CommandTemplateEngine` 实现逐条对齐):替换值剥换行(`\n` / `\r`)
+  与 `§` 颜色码;text 参数(默认)值剥后仍含 `@` → 整条命令拒绝执行(error,杜绝 `@a` / `@e`
+  选择器注入);`type: online-player` 参数值必须**精确命中**某个在线玩家名(大小写敏感——MC
+  玩家名大小写固定);单参数长度上限默 64(`max-length` 可调)。渲染结果整体剥一个前导 `/`
+  (Bukkit dispatchCommand 不吃前导斜杠)。
 - 执行身份 = console sender(模板是服主写的,服主授权);audit `SCRIPT_COMMAND_EXECUTED`
   记 templateId + 替换后全文 + 来源规则。
 

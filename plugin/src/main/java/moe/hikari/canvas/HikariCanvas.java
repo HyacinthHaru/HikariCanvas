@@ -142,6 +142,13 @@ public final class HikariCanvas extends JavaPlugin {
     // volatile 跳帧计数；applyConfig 热更采样间隔）。
     private moe.hikari.canvas.script.engine.PlayerNearSampler playerNearSampler;
     private BukkitTask playerNearTask;
+    // 0.7.0-P3-5：世界名 → UUID 快照表。playerNear 原点解析（originSource）可能在
+    // 任意线程跑（WS 脚本 op → ScriptStore listener → rebuildWall 在 Jetty 线程），
+    // 不能异步调 Bukkit.getWorld（读 CraftServer.worlds 普通 LinkedHashMap，官方不
+    // 保证线程安全）。onEnable 用 Bukkit.getWorlds() 全量种子；之后由
+    // GameEventListenerHub 的 WorldLoad/WorldUnloadEvent handler（主线程）增量维护。
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.UUID>
+            scriptWorldUuidByName = new java.util.concurrent.ConcurrentHashMap<>();
     // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
     // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -739,19 +746,28 @@ public final class HikariCanvas extends JavaPlugin {
                         auditLog, getLogger());
         this.scriptRunner = new moe.hikari.canvas.script.engine.ScriptRunner(
                 scriptConditions, actionExecutor, scriptBudget, auditLog, getLogger());
-        // 0.7.0-P3 B2（K14）：墙原点源——WallRepo.loadById 拿 Wall.key（world 是名字字符串）
-        // → Bukkit.getWorld 换世界 UUID。rebuild 触发点（onEnable 启动 / WS 脚本 op 经
-        // ScriptStore listener / wall delete hook）都在主线程，Bukkit.getWorld 安全；
-        // 墙不存在 / 世界未加载返 null（Router 跳过该 near 规则 + warning）。
+        // 0.7.0-P3 B2（K14）+ P3-5 修正：墙原点源——WallRepo.loadById 拿 Wall.key
+        // （world 是名字字符串）→ 查 scriptWorldUuidByName 快照表换世界 UUID。
+        // rebuild 触发点并不全在主线程：onEnable 启动 / wall delete hook 是主线程，
+        // 但 WS 脚本 op（script.create/update 等）经 ScriptStore listener →
+        // rebuildWall 跑在 Jetty 线程——异步调 Bukkit.getWorld 不安全（读
+        // CraftServer.worlds 普通 LinkedHashMap）。快照表零 Bukkit 调用，任意线程
+        // 安全；表本身由主线程维护（onEnable 种子 + Hub 的世界事件 handler 增删）。
+        // 墙不存在 / 世界未加载返 null（Router 跳过该 near 规则 + warning；世界
+        // 随后加载时 Hub 的 WorldLoadEvent → rebuildAll 自动补登记）。
+        for (org.bukkit.World w : Bukkit.getWorlds()) {
+            scriptWorldUuidByName.put(w.getName(), w.getUID());
+        }
         final moe.hikari.canvas.storage.WallRepo wallRepoForNear = wallRepo;
+        final java.util.Map<String, java.util.UUID> worldUuidSnapshot = scriptWorldUuidByName;
         moe.hikari.canvas.script.engine.TriggerRouter.WallOriginSource wallOriginSource =
                 wallId -> {
                     var wall = wallRepoForNear.loadById(wallId).orElse(null);
                     if (wall == null) return null;
-                    org.bukkit.World world = Bukkit.getWorld(wall.key().world());
-                    if (world == null) return null;
+                    java.util.UUID worldUid = worldUuidSnapshot.get(wall.key().world());
+                    if (worldUid == null) return null;
                     return new moe.hikari.canvas.script.engine.TriggerRouter.WallOrigin(
-                            world.getUID(), wall.key().originX(),
+                            worldUid, wall.key().originX(),
                             wall.key().originY(), wall.key().originZ());
                 };
         moe.hikari.canvas.script.engine.TriggerRouter routerForScript =
@@ -776,10 +792,14 @@ public final class HikariCanvas extends JavaPlugin {
                 .filter(id -> !failedRestoreForScript.contains(id))
                 .toList();
         routerForScript.fireWallReadyAll(scriptReadyWalls);
-        // 0.7.0-P3 B1（K15）：进服 / 击杀事件入口——Hub 只转发，索引遍历 + 最新规则
-        // 判定全在 Router（可单测）。MONITOR 优先级观察语义，不改事件结果。
+        // 0.7.0-P3 B1（K15）+ P3-5：进服 / 击杀 / 世界增删事件入口——Hub 只转发，
+        // 索引遍历 + 最新规则判定全在 Router（可单测）。MONITOR 优先级观察语义，
+        // 不改事件结果。世界事件维护 scriptWorldUuidByName 快照表；WorldLoadEvent
+        // 额外 rebuildAll 让后加载世界的 playerNear 规则自动补登记。
         getServer().getPluginManager().registerEvents(
-                new moe.hikari.canvas.script.engine.GameEventListenerHub(routerForScript), this);
+                new moe.hikari.canvas.script.engine.GameEventListenerHub(
+                        routerForScript, scriptWorldUuidByName,
+                        routerForScript::rebuildAll), this);
         // 0.7.0-P3 B2（K14）：playerNear 周期采样——主线程 task 固定 2 tick 周期（启动后
         // 1s 首跑），Sampler 内部按 scripts.player-near-sample-ticks（默 10）跳帧计数；
         // 热更走 applyConfig → setSampleTicks（volatile，无需重 schedule）。Sampler 本体

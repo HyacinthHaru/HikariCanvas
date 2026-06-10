@@ -82,9 +82,12 @@ public final class TriggerRouter {
 
     /**
      * 墙原点数据源 seam（0.7.0-P3 B2；照 {@code AnimationTicker.WallSource} 范式）：
-     * 生产 = {@code WallRepo.loadById} 拿 {@code Wall.key} + {@code Bukkit.getWorld}
-     * 换世界 UUID（装配层 lambda，本类零 Bukkit）；墙不存在 / 世界未加载返 null
-     * （该规则跳过登记 + warning——世界随后加载需重保存规则或重启重建索引，javadoc 记账）。
+     * 生产 = {@code WallRepo.loadById} 拿 {@code Wall.key} + 查装配层的
+     * 世界名 → UUID 快照表（P3-5：rebuild 可能跑在 WS / Jetty 线程，异步调
+     * {@code Bukkit.getWorld} 不安全；快照表零 Bukkit 调用，任意线程安全）；
+     * 墙不存在 / 世界未加载返 null（该规则跳过登记 + warning——世界随后加载时
+     * 生产装配的 {@code GameEventListenerHub} WorldLoadEvent → {@link #rebuildAll}
+     * 自动补登记，无需重保存规则或重启）。
      */
     @FunctionalInterface
     public interface WallOriginSource {
@@ -377,7 +380,7 @@ public final class TriggerRouter {
         } else if (t instanceof Trigger.PlayerNear pn) {
             // B2/K14：原点在 rebuild 期解析一次（Sampler 每轮只比距离平方）。
             // 解析失败（墙不存在 / 世界未加载 / originSource 未注入）→ 跳过 + warning：
-            // 该规则在世界加载后需重保存（触发 rebuild）或重启才生效。
+            // 世界随后加载时生产装配的 WorldLoadEvent → rebuildAll 会自动补登记（P3-5）。
             WallOrigin origin = originSource == null ? null : originSource.load(wallId);
             if (origin == null) {
                 log.warning("TriggerRouter: playerNear 原点解析失败（墙不存在或世界未加载），"
