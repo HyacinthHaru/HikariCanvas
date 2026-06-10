@@ -10,12 +10,14 @@
  * blockLayout 解析后通过 props.x / props.y 传入。规则名本阶段只显示（编辑留后续）。
  * 触发器帽子 path = {@code 'trigger'}（trace 中触发器步的 blockId）。</p>
  */
-import { computed, inject } from 'vue';
+import { computed, inject, ref } from 'vue';
 import type { ScriptRule } from '@/types/protocol';
 import { useI18n } from '@/i18n';
 import { TRIGGER_DEFS, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
+import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
+import { resultColorVar, type HighlightMap } from './traceHighlight';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 import BlockNode from './BlockNode.vue';
 
@@ -32,6 +34,16 @@ const { t } = useI18n();
 const edit = useScriptEditStore();
 /** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
+/** H 试跑高亮（帽子 blockId = 'trigger'）；单独 mount 走空 map 兜底。 */
+const EMPTY_HIGHLIGHT: HighlightInject = {
+    results: ref<HighlightMap>(new Map()),
+    details: ref<Map<string, string>>(new Map()),
+};
+const highlight = inject(BLOCK_HIGHLIGHT_KEY, EMPTY_HIGHLIGHT);
+/** 帽子（trigger）的试跑结果态。 */
+const hatResult = computed(() => highlight.results.value.get('trigger'));
+/** 帽子的 trace detail（作 title）。 */
+const hatDetail = computed(() => highlight.details.value.get('trigger'));
 
 /**
  * 帽子 pointerdown：选中本规则 + 启动移堆（拖帽子移整堆）。只接管主键（左键）。
@@ -81,6 +93,24 @@ const stackStyle = computed(() => ({
     left: `${props.x}px`,
     top: `${props.y}px`,
 }));
+
+/**
+ * 帽子样式：默认走触发器色（peach 系底 + 描边）；试跑高亮命中时改用结果色描边 + 外发光环，
+ * 让"触发器步命中 / 阻塞 / 错误"一眼可见。背景仍保留触发器色（仅描边 + 阴影变）。
+ */
+const hatStyle = computed(() => {
+    const base: Record<string, string> = {
+        background: `color-mix(in srgb, ${triggerColor.value} 22%, var(--card))`,
+        borderColor: triggerColor.value,
+    };
+    const r = hatResult.value;
+    if (r) {
+        const v = `var(${resultColorVar(r)})`;
+        base.borderColor = v;
+        base.boxShadow = `0 0 0 2px color-mix(in srgb, ${v} 60%, transparent), 0 1px 3px rgba(0,0,0,0.18)`;
+    }
+    return base;
+});
 </script>
 
 <template>
@@ -96,7 +126,9 @@ const stackStyle = computed(() => ({
     <div
       class="hc-stack-hat"
       data-block-path="trigger"
-      :style="{ background: `color-mix(in srgb, ${triggerColor} 22%, var(--card))`, borderColor: triggerColor }"
+      :data-hl-result="hatResult || null"
+      :title="hatDetail || undefined"
+      :style="hatStyle"
       @pointerdown="onHatPointerDown"
     >
       <div class="hc-hat-row">
@@ -155,6 +187,8 @@ const stackStyle = computed(() => ({
     user-select: none;
     /* 帽子可拖动移整堆 */
     cursor: grab;
+    /* H：试跑高亮描边 / 发光柔和过渡 */
+    transition: box-shadow 0.12s ease, border-color 0.12s ease;
 }
 .hc-stack-hat:active {
     cursor: grabbing;

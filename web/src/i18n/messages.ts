@@ -784,6 +784,17 @@ export const messages = {
             deleteConfirmNo: '取消',
             test: '试跑',
             testPlaceholder: '试跑功能即将上线',
+            // ---- 0.7.0-P5-H：试跑高亮 + 校验 ----
+            testing: '试跑中…',
+            testBlockedByErrors: '规则有问题，先修好下面的错误再试跑',
+            testFailed: '试跑请求失败',
+            // 校验错误 banner
+            validationTitle: '这条规则还有问题（修好才会自动保存）：',
+            // 试跑高亮图例（每种执行结果对应一种边框色）
+            legendOk: '执行了',
+            legendSkipped: '跳过了',
+            legendBlocked: '被拦下',
+            legendError: '出错了',
             // lock 提示
             lockedHint: '这面墙已锁定，脚本只读',
             selectRuleHint: '在左侧选一条规则来编辑，或点「新建规则」',
@@ -1043,6 +1054,11 @@ export const messages = {
             VARIABLE_EXISTS: '变量已存在',
             VARIABLE_TYPE_MISMATCH: '变量类型不匹配',
             VARIABLE_NAMESPACE_DENIED: '无权限操作该命名空间的变量',
+            // 墙脚本（0.7.0）
+            SCRIPT_INVALID: '脚本规则有问题，请按提示检查后再保存',
+            SCRIPT_NOT_FOUND: '找不到这条脚本规则，可能已经被删除了',
+            SCRIPT_QUOTA_EXCEEDED: '这块画板的脚本数量已达上限，先删几条再加',
+            SCRIPT_ENGINE_UNAVAILABLE: '脚本功能暂时不可用，请联系服主或稍后再试',
             // 兜底
             UNKNOWN: '出了点小问题，请稍后再试',
         },
@@ -1858,6 +1874,17 @@ export const messages = {
             deleteConfirmNo: 'Cancel',
             test: 'Test run',
             testPlaceholder: 'Test run coming soon',
+            // ---- 0.7.0-P5-H: test-run highlight + validation ----
+            testing: 'Testing…',
+            testBlockedByErrors: 'Fix the errors below before running a test',
+            testFailed: 'Test request failed',
+            // validation error banner
+            validationTitle: 'This rule still has problems (auto-save resumes once fixed):',
+            // test-run highlight legend (each result maps to a border color)
+            legendOk: 'Ran',
+            legendSkipped: 'Skipped',
+            legendBlocked: 'Blocked',
+            legendError: 'Error',
             lockedHint: 'This wall is locked; scripts are read-only',
             selectRuleHint: 'Pick a rule on the left to edit, or click "New rule"',
             blocks: {
@@ -2112,6 +2139,11 @@ export const messages = {
             VARIABLE_EXISTS: 'Variable already exists',
             VARIABLE_TYPE_MISMATCH: 'Variable type mismatch',
             VARIABLE_NAMESPACE_DENIED: 'Permission denied for that variable namespace',
+            // Wall scripts (0.7.0)
+            SCRIPT_INVALID: 'This script rule has a problem — check the hints and save again',
+            SCRIPT_NOT_FOUND: 'This script rule can\'t be found — it may have been deleted',
+            SCRIPT_QUOTA_EXCEEDED: 'This wall has hit its script limit — delete a few before adding more',
+            SCRIPT_ENGINE_UNAVAILABLE: 'Scripting is temporarily unavailable — contact the admin or try later',
             // Fallback
             UNKNOWN: 'Something went wrong — please try again in a moment',
         },

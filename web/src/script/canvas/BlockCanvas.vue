@@ -21,12 +21,21 @@ import { computed, provide, ref } from 'vue';
 import { useBlockCanvas } from './useBlockCanvas';
 import { useBlockDrag } from './useBlockDrag';
 import { BLOCK_DRAG_KEY } from './dragInjection';
+import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
 import { useScriptStore } from '@/stores/scripts';
 import { useI18n } from '@/i18n';
 import { defFor } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { parseBlockLayout, autoLayout, type BlockLayout } from '../model/serialize';
 import BlockStack from './BlockStack.vue';
+
+const props = defineProps<{
+    /**
+     * H：试跑高亮（result + detail map ref）。由 overlay 持有 stepper 更新后传入；本组件
+     * provide 给递归子组件。缺省（其它挂载点 / smoke 不传）时不 provide，子组件走空 map 兜底。
+     */
+    highlight?: HighlightInject;
+}>();
 
 const viewportRef = ref<HTMLElement | null>(null);
 const scripts = useScriptStore();
@@ -51,6 +60,11 @@ provide(BLOCK_DRAG_KEY, {
     startBlockDrag: drag.startBlockDrag,
     startStackDrag: drag.startStackDrag,
 });
+
+// H：把试跑高亮 map provide 给递归子组件（缺省时不传，子组件走 inject 默认空 map）。
+if (props.highlight) {
+    provide(BLOCK_HIGHLIGHT_KEY, props.highlight);
+}
 
 // 暴露给父级：zoom% + reset 视图 + palette 源拖出入口。
 defineExpose({

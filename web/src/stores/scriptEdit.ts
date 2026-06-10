@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { ScriptRule, ScriptTrigger, ScriptAction } from '@/types/protocol';
 import { useScriptStore } from './scripts';
 import { useProjectStore } from './project';
@@ -7,6 +7,7 @@ import { useNetworkStore } from './network';
 import { getWsClient } from '@/network/wsClient';
 import { getAt, parsePath } from '@/script/model/blockTree';
 import { parseBlockLayout, stringifyBlockLayout } from '@/script/model/serialize';
+import { validateRule, type ValidationError } from '@/script/model/validator';
 
 /**
  * 0.7.0-P4-D1：积木编辑会话 store（决策 K-UI-11 / K-UI-12）。
@@ -68,6 +69,15 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     const undoStack = ref<ScriptRule[]>([]);
     /** redo 栈：undo 后存被撤销的态。 */
     const redoStack = ref<ScriptRule[]>([]);
+
+    /**
+     * H（K-UI-9）：对当前 workingCopy 跑前端 validator 镜像得所有错误（空数组 = 合法）。
+     * 无 workingCopy → 空数组。UI（ScriptEditorOverlay）读它显红字 banner；{@link doSave}
+     * 在 send 前也读它——有错则<b>不 send 且保留 dirty</b>（防"拖完保存才被后端打回"）。
+     */
+    const validationErrors = computed<ValidationError[]>(() =>
+        workingCopy.value ? validateRule(workingCopy.value) : [],
+    );
 
     /** 防抖 save 的 timer 句柄（自实现，便于 flushSave 立即触发 + 测试 fake timer 控制）。 */
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -414,6 +424,9 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         const cur = workingCopy.value;
         if (ruleId === null || cur === null) return;
         if (project.isLocked) return;
+        // H（K-UI-9）：有校验错误 → 不 send，保留 dirty（让 UI 红字提示用户修；改完再次
+        // scheduleSave / flush 时 validationErrors 变空即可发出）。防"拖完保存才被后端打回"。
+        if (validationErrors.value.length > 0) return;
         // 乐观清脏：发出去就当本地无未保存改动；失败回调里再标回脏。
         dirty.value = false;
         getWsClient().sendScriptUpdate(ruleId, stripIdWall(cur)).catch((e) => {
@@ -459,6 +472,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
 
     return {
         selectedRuleId, workingCopy, dirty, undoStack, redoStack,
+        validationErrors,
         selectRule, closeEditing,
         newRule, deleteRule,
         setActions, setTrigger, setName, setEnabled, setStackPos, updateActionField,

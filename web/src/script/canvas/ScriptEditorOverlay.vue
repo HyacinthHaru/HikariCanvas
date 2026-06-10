@@ -14,14 +14,23 @@
  * <p>挂 {@code ui.scriptEditorOpen}（App.vue 末尾 v-if 懒加载挂载）。Esc 关闭（先 flush 保存）。
  * 配色走 Catppuccin token。i18n 在 script setup 里用 {@code t.value.xxx}。</p>
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch, onScopeDispose } from 'vue';
 import { useEventListener } from '@vueuse/core';
-import { X, Puzzle, Plus, RotateCcw, Undo2, Redo2, Trash2, Play, Power } from 'lucide-vue-next';
+import { X, Puzzle, Plus, RotateCcw, Undo2, Redo2, Trash2, Play, Power, AlertTriangle } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
 import { useScriptStore } from '@/stores/scripts';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 import { useProjectStore } from '@/stores/project';
+import { useNetworkStore } from '@/stores/network';
+import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
+import {
+    createHighlightStepper,
+    resultColorVar,
+    type HighlightMap,
+    type StepResult,
+} from './traceHighlight';
+import type { HighlightInject } from './highlightInjection';
 import BlockCanvas from './BlockCanvas.vue';
 import BlockPalette from './BlockPalette.vue';
 
@@ -29,6 +38,7 @@ const ui = useUiStore();
 const scripts = useScriptStore();
 const edit = useScriptEditStore();
 const project = useProjectStore();
+const net = useNetworkStore();
 const { t } = useI18n();
 
 const canvasRef = ref<InstanceType<typeof BlockCanvas> | null>(null);
@@ -38,6 +48,126 @@ const confirmingDelete = ref<string | null>(null);
 
 /** 锁定态：编辑控件全禁用（K-UI-12）。 */
 const locked = computed(() => project.isLocked);
+
+// ---------- H：保存前校验（K-UI-9）----------
+
+/**
+ * 当前 workingCopy 的校验错误列表（空 = 合法）。直接读 scriptEdit store 的 {@code validationErrors}
+ * computed（单一权威——store 的 doSave 也读同一份阻止 send），UI 这里只负责展示与试跑前判。
+ */
+const validationErrors = computed(() => edit.validationErrors);
+/** 是否有校验错误（试跑 disabled / 红字 banner 显隐用）。 */
+const hasErrors = computed(() => validationErrors.value.length > 0);
+
+// ---------- H：试跑高亮（K-UI-8）----------
+
+/** 高亮 result map（blockId → result）；overlay 局部态，provide 给画布递归子组件。 */
+const highlightResults = ref<HighlightMap>(new Map());
+/** 高亮 detail map（blockId → step.detail）；作积木 title。 */
+const highlightDetails = ref<Map<string, string>>(new Map());
+/** 传给 BlockCanvas 的高亮聚合（result + detail 两个 ref）。 */
+const highlightInject: HighlightInject = {
+    results: highlightResults,
+    details: highlightDetails,
+};
+
+/**
+ * 步进高亮控制器：每帧把 result map 赋给 highlightResults。detail map 在 start 时一次性建好
+ * （随 result 同步亮——detail 是静态附注，不必逐帧）。
+ */
+const stepper = createHighlightStepper({
+    apply: (map) => {
+        highlightResults.value = map;
+        // result 清空（末帧 hold 结束）时一并清 detail。
+        if (map.size === 0) highlightDetails.value = new Map();
+    },
+});
+
+/** 正在试跑（ack 受理后到 trace 到达 / 步进结束的窗口）；UI 给"试跑中…"反馈。 */
+const testing = ref(false);
+
+/**
+ * 监听 scripts.lastTrace：仅当 trace 的 ruleId === 当前编辑规则时启动步进高亮。
+ * 别的规则的 trace（理论上不会，但 store 是全局）不影响当前编辑器。
+ */
+watch(
+    () => scripts.lastTrace,
+    (trace) => {
+        if (!trace) return;
+        if (trace.ruleId !== edit.selectedRuleId) return;
+        // 先建 detail map（一次性），再启动 result 步进。
+        const details = new Map<string, string>();
+        for (const step of trace.steps) {
+            if (step.blockId && step.detail) details.set(step.blockId, step.detail);
+        }
+        highlightDetails.value = details;
+        stepper.start(trace.steps);
+        testing.value = false;
+    },
+);
+
+/**
+ * 切换编辑规则 → 清高亮（上一条规则的试跑结果不该残留到新规则）。
+ * 关闭 overlay（组件卸载）→ onScopeDispose 清。
+ */
+watch(
+    () => edit.selectedRuleId,
+    () => {
+        stepper.clear();
+        testing.value = false;
+    },
+);
+
+onScopeDispose(() => {
+    stepper.clear();
+});
+
+/**
+ * 点"试跑"：先跑校验（有错不试跑——拖完没填全就别浪费一次 server run），通过则
+ * sendScriptTest（ack 仅受理；轨迹另走 script.trace 推送，由上面的 watch 消费启动高亮）。
+ */
+function onTest(): void {
+    const ruleId = edit.selectedRuleId;
+    if (ruleId === null || !edit.workingCopy) return;
+    if (hasErrors.value) {
+        net.lastError = t.value.script.testBlockedByErrors;
+        return;
+    }
+    // 清旧高亮，进入"试跑中"。
+    stepper.clear();
+    testing.value = true;
+    getWsClient()
+        .sendScriptTest(ruleId)
+        .catch((e) => {
+            testing.value = false;
+            net.lastError = `${t.value.script.testFailed}：${e instanceof Error ? e.message : String(e)}`;
+        });
+}
+
+/** 错误项点击：定位到对应积木（best-effort——滚动到 data-block-path 元素）。 */
+function onErrorClick(blockId: string | undefined): void {
+    if (!blockId) return;
+    const el = document.querySelector(`[data-block-path="${cssEscape(blockId)}"]`);
+    if (el && 'scrollIntoView' in el) {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+/** CSS 属性选择器转义（blockId 含 '/'，需转义才能用在 querySelector）。 */
+function cssEscape(s: string): string {
+    const c = (window as unknown as { CSS?: { escape?: (v: string) => string } }).CSS;
+    return c?.escape ? c.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
+}
+
+/** 高亮图例项（试跑结果色 → 文案），步进时底部小图例用。 */
+const legendItems = computed<{ result: StepResult; label: string; color: string }[]>(() => [
+    { result: 'ok', label: t.value.script.legendOk, color: `var(${resultColorVar('ok')})` },
+    { result: 'skipped', label: t.value.script.legendSkipped, color: `var(${resultColorVar('skipped')})` },
+    { result: 'blocked', label: t.value.script.legendBlocked, color: `var(${resultColorVar('blocked')})` },
+    { result: 'error', label: t.value.script.legendError, color: `var(${resultColorVar('error')})` },
+]);
+/** 是否有任意高亮在显示（控制图例显隐）。 */
+const showLegend = computed(() => highlightResults.value.size > 0 || testing.value);
 
 /** 头部 zoom 百分比显示（读 BlockCanvas 暴露的 zoom ref）。 */
 const zoomPct = computed(() => {
@@ -189,11 +319,13 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         >
           <Redo2 class="size-4" />
         </button>
-        <!-- 试跑：H 阶段接真逻辑，D1 占位禁用 -->
+        <!-- 试跑：H 阶段接真逻辑。有校验错误 / 锁定 / 试跑中 → 禁用。 -->
         <button
-          class="hc-script-icon-btn opacity-50 cursor-not-allowed"
-          disabled
-          :title="t.script.testPlaceholder"
+          class="hc-script-icon-btn hc-rule-test"
+          :class="testing ? 'hc-rule-test-busy' : ''"
+          :disabled="locked || hasErrors || testing"
+          :title="hasErrors ? t.script.testBlockedByErrors : (testing ? t.script.testing : t.script.test)"
+          @click="onTest"
         >
           <Play class="size-4" />
         </button>
@@ -230,6 +362,25 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
       </div>
     </header>
 
+    <!-- H：校验错误 banner（有 workingCopy 且有错时显示；点条目可定位积木） -->
+    <div v-if="edit.workingCopy && hasErrors" class="hc-script-errors" role="alert">
+      <AlertTriangle class="size-4 shrink-0" />
+      <div class="hc-script-errors-body">
+        <span class="hc-script-errors-title">{{ t.script.validationTitle }}</span>
+        <ul class="hc-script-errors-list">
+          <li
+            v-for="(err, i) in validationErrors"
+            :key="i"
+            class="hc-script-error-item"
+            :class="err.blockId ? 'hc-script-error-clickable' : ''"
+            @click="onErrorClick(err.blockId)"
+          >
+            {{ err.message }}
+          </li>
+        </ul>
+      </div>
+    </div>
+
     <div class="hc-script-body">
       <aside class="hc-script-palette">
         <!-- D1：规则列表（点选进入编辑） -->
@@ -260,7 +411,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 
       <!-- 主体画布 -->
       <main class="hc-script-canvas-host">
-        <BlockCanvas ref="canvasRef" />
+        <BlockCanvas ref="canvasRef" :highlight="highlightInject" />
         <!-- 空画布提示：无规则时显示 -->
         <div v-if="scripts.size === 0" class="hc-script-empty-hint">
           {{ t.script.empty }}
@@ -268,6 +419,15 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         <!-- 有规则但未选中编辑：提示选一条 -->
         <div v-else-if="!edit.workingCopy" class="hc-script-empty-hint">
           {{ t.script.selectRuleHint }}
+        </div>
+
+        <!-- H：试跑高亮图例（试跑中 / 有高亮时显示，底部居中） -->
+        <div v-if="showLegend" class="hc-script-legend">
+          <span v-if="testing" class="hc-legend-testing">{{ t.script.testing }}</span>
+          <span v-for="item in legendItems" :key="item.result" class="hc-legend-item">
+            <span class="hc-legend-dot" :style="{ background: item.color }" />
+            {{ item.label }}
+          </span>
         </div>
       </main>
     </div>
@@ -365,6 +525,93 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 }
 .hc-del-yes:hover {
     opacity: 0.9;
+}
+/* H：校验错误 banner（destructive 系，列出每条错误，可点定位） */
+.hc-script-errors {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--destructive) 30%, transparent);
+    color: var(--destructive);
+    flex-shrink: 0;
+    max-height: 7.5rem;
+    overflow-y: auto;
+}
+.hc-script-errors-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+}
+.hc-script-errors-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.hc-script-errors-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.hc-script-error-item {
+    font-size: 0.75rem;
+    color: var(--foreground);
+}
+.hc-script-error-clickable {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+.hc-script-error-clickable:hover {
+    color: var(--destructive);
+}
+.hc-rule-test {
+    color: var(--ctp-green, var(--primary));
+}
+.hc-rule-test-busy {
+    color: var(--muted-foreground);
+    animation: hc-test-pulse 1s ease-in-out infinite;
+}
+@keyframes hc-test-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+/* H：试跑高亮图例（底部居中 pill） */
+.hc-script-legend {
+    position: absolute;
+    bottom: 0.75rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.3125rem 0.75rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--card) 92%, transparent);
+    border: 1px solid var(--border);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    font-size: 0.6875rem;
+    color: var(--muted-foreground);
+    pointer-events: none;
+    z-index: 5;
+}
+.hc-legend-testing {
+    font-weight: 600;
+    color: var(--ctp-green, var(--foreground));
+}
+.hc-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+.hc-legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
 }
 .hc-script-body {
     flex: 1;

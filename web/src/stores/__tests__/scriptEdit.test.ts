@@ -536,3 +536,60 @@ describe('scriptEditStore — deleteRule', () => {
         expect(sendScriptDelete).toHaveBeenCalledWith('sr-2');
     });
 });
+
+// ---------- 0.7.0-P5-H：validationErrors 阻止 save（K-UI-9）----------
+
+describe('scriptEditStore — validationErrors 预校验阻止 save', () => {
+    function setup() {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        return { edit };
+    }
+
+    it('合法规则 → validationErrors 空', () => {
+        const { edit } = setup();
+        expect(edit.validationErrors).toEqual([]);
+    });
+
+    it('改成非法（名称空）→ validationErrors 非空 + 不 send（保留 dirty）', () => {
+        const { edit } = setup();
+        edit.setName('   '); // 名称空 = 非法
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        expect(edit.dirty).toBe(true);
+        // debounce 到点也不发（有校验错误）
+        vi.advanceTimersByTime(800);
+        expect(sendScriptUpdate).not.toHaveBeenCalled();
+        // 仍脏（等用户修）
+        expect(edit.dirty).toBe(true);
+    });
+
+    it('改成非法动作（wait 越界）→ 不 send', () => {
+        const { edit } = setup();
+        edit.setActions([{ type: 'wait', ms: 1 } as ScriptAction]);
+        expect(edit.validationErrors.some((e) => e.message.includes('等待时长'))).toBe(true);
+        vi.advanceTimersByTime(800);
+        expect(sendScriptUpdate).not.toHaveBeenCalled();
+    });
+
+    it('修好后再次 schedule → 正常 send', () => {
+        const { edit } = setup();
+        edit.setName(''); // 先非法
+        vi.advanceTimersByTime(800);
+        expect(sendScriptUpdate).not.toHaveBeenCalled();
+        // 修好名称 → 合法
+        edit.setName('好名字');
+        expect(edit.validationErrors).toEqual([]);
+        vi.advanceTimersByTime(800);
+        expect(sendScriptUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('非法时 flushSave 也不发', () => {
+        const { edit } = setup();
+        edit.setActions([]); // 动作列表空 = 非法
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        edit.flushSave();
+        expect(sendScriptUpdate).not.toHaveBeenCalled();
+    });
+});

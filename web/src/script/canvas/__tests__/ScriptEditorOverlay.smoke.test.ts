@@ -15,6 +15,19 @@ import { nextTick } from 'vue';
 import ScriptEditorOverlay from '../ScriptEditorOverlay.vue';
 import { useUiStore } from '@/stores/ui';
 import { useScriptStore } from '@/stores/scripts';
+import { useScriptEditStore } from '@/stores/scriptEdit';
+
+// H：试跑按钮点击会调 getWsClient().sendScriptTest——mock 掉（含 scriptEdit 用到的 send*）。
+const sendScriptTest = vi.fn(() => Promise.resolve({ accepted: true, ruleId: 'sr-1' }));
+vi.mock('@/network/wsClient', () => ({
+    getWsClient: () => ({
+        sendScriptTest,
+        sendScriptCreate: vi.fn(() => Promise.resolve()),
+        sendScriptUpdate: vi.fn(() => Promise.resolve()),
+        sendScriptDelete: vi.fn(() => Promise.resolve()),
+        sendScriptEnable: vi.fn(() => Promise.resolve()),
+    }),
+}));
 
 describe('ScriptEditorOverlay 渲染 smoke', () => {
     beforeEach(() => {
@@ -103,5 +116,90 @@ describe('ScriptEditorOverlay 渲染 smoke', () => {
         ui.scriptEditorOpen = true;
         ui.closeScriptEditor();
         expect(ui.scriptEditorOpen).toBe(false);
+    });
+});
+
+describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        sendScriptTest.mockClear();
+    });
+
+    function selectValidRule() {
+        const scripts = useScriptStore();
+        scripts.initScripts([{
+            id: 'sr-1', wallId: 'w-x', enabled: true, name: '合法规则',
+            trigger: { type: 'wallReady' }, actions: [{ type: 'log', message: 'hi' }], blockLayout: '{}',
+        }]);
+    }
+
+    it('合法规则：试跑按钮启用 + 无错误 banner', async () => {
+        selectValidRule();
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        await nextTick();
+        // 试跑按钮（title=试跑）存在且未禁用
+        const testBtn = wrapper.find('button.hc-rule-test');
+        expect(testBtn.exists()).toBe(true);
+        expect((testBtn.element as HTMLButtonElement).disabled).toBe(false);
+        // 无校验错误 banner
+        expect(wrapper.find('.hc-script-errors').exists()).toBe(false);
+    });
+
+    it('点试跑 → 调 sendScriptTest(ruleId)', async () => {
+        selectValidRule();
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        useScriptEditStore().selectRule('sr-1');
+        await nextTick();
+        await wrapper.find('button.hc-rule-test').trigger('click');
+        expect(sendScriptTest).toHaveBeenCalledWith('sr-1');
+    });
+
+    it('非法规则（名称空）：错误 banner 显示 + 试跑按钮禁用', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([{
+            id: 'sr-1', wallId: 'w-x', enabled: true, name: '占位',
+            trigger: { type: 'wallReady' }, actions: [{ type: 'log', message: 'x' }], blockLayout: '{}',
+        }]);
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('   '); // 改成空名 = 非法
+        await nextTick();
+        // 错误 banner 出现 + 含校验标题
+        const banner = wrapper.find('.hc-script-errors');
+        expect(banner.exists()).toBe(true);
+        expect(banner.text()).toContain('规则名称不能为空');
+        // 试跑按钮禁用
+        expect((wrapper.find('button.hc-rule-test').element as HTMLButtonElement).disabled).toBe(true);
+        // 点试跑不触发 send
+        await wrapper.find('button.hc-rule-test').trigger('click');
+        expect(sendScriptTest).not.toHaveBeenCalled();
+    });
+
+    it('trace 推送（ruleId 匹配）→ 高亮不崩 + result map 更新到画布', async () => {
+        selectValidRule();
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        await nextTick();
+        const scripts = useScriptStore();
+        // 推一条匹配当前规则的 trace
+        scripts.setLastTrace({
+            ruleId: 'sr-1',
+            steps: [
+                { blockId: 'trigger', kind: 'trigger', result: 'ok' },
+                { blockId: 'actions/0', kind: 'action', result: 'ok' },
+            ],
+        });
+        await nextTick();
+        // 不崩；图例出现（高亮中）
+        expect(wrapper.find('.hc-script-legend').exists()).toBe(true);
     });
 });

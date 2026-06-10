@@ -20,9 +20,12 @@ import type { ScriptAction } from '@/types/protocol';
 import { useI18n } from '@/i18n';
 import { useProjectStore } from '@/stores/project';
 import { useScriptEditStore } from '@/stores/scriptEdit';
+import { ref } from 'vue';
 import { defFor, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
+import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
+import { resultColorVar, type HighlightMap } from './traceHighlight';
 import BlockParamInput, { type CommandValue } from '../params/BlockParamInput.vue';
 import ConditionBuilder from '../params/ConditionBuilder.vue';
 
@@ -38,6 +41,15 @@ const project = useProjectStore();
 const edit = useScriptEditStore();
 /** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
+/**
+ * H 阶段试跑高亮（overlay provide；单独 mount 时走空 map 兜底——查不到高亮，静态渲染）。
+ * 用常量空 ref 作默认值，避免每个未注入场景都新建 ref。
+ */
+const EMPTY_HIGHLIGHT: HighlightInject = {
+    results: ref<HighlightMap>(new Map()),
+    details: ref<Map<string, string>>(new Map()),
+};
+const highlight = inject(BLOCK_HIGHLIGHT_KEY, EMPTY_HIGHLIGHT);
 
 /**
  * 块根 pointerdown：启动"拖已有块"。只接管主键（左键）。ruleId 从最近祖先 [data-rule-id] 现取
@@ -82,6 +94,29 @@ const locked = computed(() => project.isLocked);
 
 /** 是否 runCommand 块（command 复合字段特殊处理：templateId + params 合一控件）。 */
 const isRunCommand = computed(() => props.action.type === 'runCommand');
+
+// ---------- H：试跑高亮（按本块 path 查高亮 map）----------
+
+/** 本块的试跑结果态（未命中 → undefined，不高亮）。 */
+const highlightResult = computed(() => highlight.results.value.get(props.path));
+/** 本块的 trace detail 文案（作 title 提示；无则 undefined）。 */
+const highlightDetail = computed(() => highlight.details.value.get(props.path));
+/**
+ * 高亮态的边框色：命中 step 时用结果色（ok=green/skipped=overlay/blocked=yellow/error=red），
+ * 否则用 def 的 category 色条色（与原静态渲染一致）。
+ */
+const effectiveBorderColor = computed(() =>
+    highlightResult.value ? `var(${resultColorVar(highlightResult.value)})` : colorVar.value,
+);
+/** 高亮态时整块加一圈外发光描边（让"正在执行 / 命中"更醒目）。 */
+const highlightStyle = computed(() => {
+    const r = highlightResult.value;
+    if (!r) return {};
+    const v = `var(${resultColorVar(r)})`;
+    return {
+        boxShadow: `0 0 0 2px color-mix(in srgb, ${v} 60%, transparent), 0 1px 2px rgba(0,0,0,0.12)`,
+    };
+});
 
 /**
  * 头部要渲染的“标量参数槽”字段（F：换成 {@link BlockParamInput} 真控件）：排除 statements
@@ -177,8 +212,11 @@ function onConditionUpdate(value: string): void {
 <template>
   <div
     class="hc-block-node"
+    :class="highlightResult ? 'hc-block-node-hl' : ''"
     :data-block-path="path"
-    :style="{ borderLeftColor: colorVar }"
+    :data-hl-result="highlightResult || null"
+    :title="highlightDetail || undefined"
+    :style="{ borderLeftColor: effectiveBorderColor, ...highlightStyle }"
     @pointerdown="onBlockPointerDown"
   >
     <!-- 头部：标题 + 标量参数槽（F：真表单控件 BlockParamInput） -->
@@ -274,6 +312,8 @@ function onConditionUpdate(value: string): void {
     user-select: none;
     /* 块可拖动重排 / 跨堆 / 入 if 槽 */
     cursor: grab;
+    /* H：试跑高亮边框 / 描边渐变切换，步进时柔和过渡 */
+    transition: box-shadow 0.12s ease, border-left-color 0.12s ease;
 }
 .hc-block-node:active {
     cursor: grabbing;
