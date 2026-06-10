@@ -105,6 +105,10 @@ public class ScriptBudget {
         return maxChainDepth;
     }
 
+    public int maxRunsPerSecond() {
+        return maxRunsPerSecond;
+    }
+
     /**
      * K5 audit 限频：per-rule 10s 窗内只放行 1 条 {@code SCRIPT_RUN_BLOCKED}。
      * compute 原子换 stamp，无 race 双记。

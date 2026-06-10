@@ -196,11 +196,14 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
 | `script.update` | `{ruleId, rule}`(全量 rule 替换,积木编辑粒度太碎不做 patch op) | 同上 | 不进画布 undo;保存粒度低频,无需 coalesce |
 | `script.delete` | `{ruleId}` | script.edit | 不进画布 undo;前端走 inline confirm(0.4.5 范式) |
 | `script.enable` | `{ruleId, enabled}` | script.edit | 不进画布 undo |
-| `script.test` | `{ruleId}` | script.edit(**试跑也过 command/sound 面权限**) | 真实执行(D5),audit 标 TEST;返回执行轨迹 |
+| `script.test` | `{ruleId}` | script.edit(**试跑也过 command/sound 面权限**) | 真实执行(D5),audit 标 TEST;**0.7.0-P3 起异步**(K11)——ack 立即 `{accepted:true, ruleId}`,轨迹经 S→C op `script.trace` 推送(见 §4.2) |
 
 - 面权限检查在 create/update 时按规则内容逐积木判:含全服帽子 → 需 trigger.global;
   含 playSound → 需 sound;含 runCommand → 需 command。**保存时检查,执行时不再检查**
   (规则是 owner 权限快照;owner 失权后旧规则照跑,服主可 disable——与 wall 所有权语义一致)。
+- create/update 校验链(0.7.0-P3,K16):结构校验(ScriptRuleValidator)后,所有
+  `if.condition` 过 `ConditionEvaluator.checkSyntax`(parse-only)预检——坏条件保存期即拒
+  `SCRIPT_INVALID`(parse 错误信息首行 + blockId 定位),不等运行期静默 false。
 - 锁定墙(lockedAt ≠ null):前端积木画布 readonly(同 lock-state 纪律,后端 op 不读 lock)。
 
 ### 4.2 ready payload + state.patch
@@ -208,14 +211,23 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
 - ready 加 `scripts: ScriptRuleDto[]`(本墙全部规则)。
 - 脚本变更走 state.patch `/scripts/<ruleId>` 路径分拣(照 0.4.2 `/aliases/` 范式),
   广播到本墙全部 session。
-- `script.test` 轨迹**不走 patch**,作为该 op 的 ack result 直接返回:
+- `script.test` 轨迹**不走 patch、也不走 ack**(0.7.0-P3 实施期修订,K11——P1 原设计
+  "轨迹作 ack result 同步返回"会让 dispatcher 同步等 ScriptRunner 阻塞 Jetty worker,
+  合法规则可串 wait 至分钟级,5s ack 超时必爆):
+  - ack **立即**返 `{ "accepted": true, "ruleId": "..." }`(受理回执;TEST run 照过
+    Budget 全闸——K12 不豁免);
+  - run 结束后(含 wait 续接跨段的最终段 / Budget 掐断 / 投递闸拒——闸拒回单步
+    blocked trigger step)由 runner 线程经推送通道发 **S→C op `script.trace`**
+    给发起 session(session 断了静默丢):
   ```json
-  { "steps": [ {"blockId":"...", "kind":"trigger|condition|action",
-                "result":"ok|skipped|blocked|error", "detail":"条件值/错误信息"} ] }
+  { "ruleId": "sr-xxxxxxxx",
+    "steps": [ {"blockId":"...", "kind":"trigger|condition|action",
+                "result":"ok|skipped|blocked|error", "detail":"条件值/错误信息(null 省略)"} ] }
   ```
   blockId = **动作树路径**(如 `trigger` / `actions/0` / `actions/2/then/1`),由后端执行期
   按树位置生成(P2 实施期修订——P1 数据模型无 per-action id,树路径与前端积木树天然同构,
-  前端无需在 rule_json 里存 id 即可定位高亮)。
+  前端无需在 rule_json 里存 id 即可定位高亮)。前端收到后落 scripts store `lastTrace`
+  (P5 积木高亮消费)。
 
 ### 4.3 撤销(2026-06-10 P1 实施期修订)
 

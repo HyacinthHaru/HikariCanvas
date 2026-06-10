@@ -197,6 +197,34 @@ class ConditionEvaluatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  0.7.0-P3 A2（K16）：checkSyntax 保存期预 parse
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void checkSyntax_validConditions_empty() {
+        assertTrue(ConditionEvaluator.checkSyntax("1 == 1").isEmpty());
+        assertTrue(ConditionEvaluator.checkSyntax("var(\"user/score\") >= 10").isEmpty());
+        assertTrue(ConditionEvaluator.checkSyntax(
+                "var(\"user/a\") == 1 && var(\"user/b\") != 2").isEmpty());
+    }
+
+    @Test
+    void checkSyntax_badConditions_firstLineMessage() {
+        var err = ConditionEvaluator.checkSyntax("((((");
+        assertTrue(err.isPresent(), "坏条件保存期必须拒");
+        assertFalse(err.get().contains("\n"), "外发信息只留首行");
+        assertTrue(ConditionEvaluator.checkSyntax("&&&&").isPresent());
+        assertTrue(ConditionEvaluator.checkSyntax("1 ==").isPresent());
+    }
+
+    @Test
+    void checkSyntax_nullOrBlank_empty_validatorOwnsNonBlank() {
+        // 非空校验是 ScriptRuleValidator 的职责——这里不重复拒
+        assertTrue(ConditionEvaluator.checkSyntax(null).isEmpty());
+        assertTrue(ConditionEvaluator.checkSyntax("   ").isEmpty());
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  fakes
     // ──────────────────────────────────────────────────────────
 

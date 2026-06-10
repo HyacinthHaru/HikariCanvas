@@ -395,13 +395,18 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 | `script.update` | C→S | `{ ruleId, rule: {...同上全量} }` | 全量替换（积木编辑粒度太碎不做 patch op）；ruleId 必须属本 session 的 wall（跨墙 → `SCRIPT_NOT_FOUND`）。ack `{ rule }` + patch add |
 | `script.delete` | C→S | `{ ruleId }` | ack `{ ruleId, removed }`；不存在也推 `remove /scripts/<id>` 幂等 |
 | `script.enable` | C→S | `{ ruleId, enabled }` | 启停开关。ack `{ rule }` + patch add |
-| `script.test` | C→S | `{ ruleId }` | 试跑即真实执行（D5）：过 sound/command 面权限 + audit `SCRIPT_TEST`；P1 引擎未落地恒回 `SCRIPT_ENGINE_UNAVAILABLE`，P2 起 ack 返回执行轨迹 `{ steps: [...] }` |
+| `script.test` | C→S | `{ ruleId }` | **0.7.0-P3 起异步**（K11）：试跑即真实执行（D5）——过 sound/command 面权限 + audit `SCRIPT_TEST` + Budget 全闸（K12：TEST 不豁免）；ack **立即**返 `{ accepted: true, ruleId }`（受理回执，不等执行——合法规则可串 wait 至分钟级）；轨迹在 run 结束后经 `script.trace` 推送。引擎未装配恒回 `SCRIPT_ENGINE_UNAVAILABLE` |
+| `script.trace` | S→C | `{ ruleId, steps: [{ blockId, kind, result, detail? }] }` | `script.test` 的异步执行轨迹，推给发起 session（session 断了静默丢，不补发）。run 最终段结束（含 wait 续接）/ Budget 掐断 / 投递闸拒（blocked trigger step）都恰推一次。`blockId` = 动作树路径（`trigger` / `actions/0` / `actions/2/then/1`）；`kind` ∈ trigger\|condition\|action；`result` ∈ ok\|skipped\|blocked\|error；`detail` 为 null 时省略 |
 
 权限（保存时检查，执行时不查——scripting.md §4.1）：5 op 恒查 `canvas.script.edit`
 （default true；在线被显式收回**真拒**，仅离线/解析失败走 default 兜底）；create/update/test
 按规则内容加查面节点——全服事件帽子 → `canvas.script.trigger.global`、播声音 →
 `canvas.script.sound`、执行命令 → `canvas.script.command`（默 op）。**不读 wall lock**
 （lock-state 纪律）。脚本 op 不进画布 undo/redo（§4.3）。
+
+create/update 校验链（0.7.0-P3 起，K16）：`ScriptRuleValidator` 结构校验后，所有
+`if.condition` 过 `ConditionEvaluator.checkSyntax`（parse-only）预检——坏条件保存时即
+`SCRIPT_INVALID`（错误信息首行 + blockId 定位），不等运行期静默 false。
 
 `trigger` / `actions` 的 wire 多态形态（type 判别 + 扁平字段、if 的 then/else 递归、
 playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为权威。

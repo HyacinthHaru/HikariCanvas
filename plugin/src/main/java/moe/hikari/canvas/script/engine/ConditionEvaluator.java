@@ -122,6 +122,29 @@ public final class ConditionEvaluator {
         return parseCount.get();
     }
 
+    /**
+     * 0.7.0-P3 A2（K16）：保存期条件语法预检（parse-only，不求值不查变量）。
+     * {@code ScriptOpDispatcher} 在 create / update 校验链（Validator 后）对所有
+     * {@code if.condition} 逐条调——坏条件在保存时就拒（SCRIPT_INVALID），
+     * 不等运行期静默 false。
+     *
+     * @return empty = 语法合法；present = parse 错误信息<b>首行</b>（外发脱敏纪律，
+     *         照 dispatcher rootMessage 先例）。null / 空白条件返 empty
+     *         （非空校验是 {@code ScriptRuleValidator} 的职责，不在此重复拒）
+     */
+    public static Optional<String> checkSyntax(@Nullable String condition) {
+        if (condition == null || condition.isBlank()) return Optional.empty();
+        try {
+            new ExpressionParser().parse(condition);
+            return Optional.empty();
+        } catch (RuntimeException e) {
+            String msg = e.getMessage() == null ? "语法错误" : e.getMessage();
+            int nl = msg.indexOf('\n');
+            if (nl >= 0) msg = msg.substring(0, nl);
+            return Optional.of(msg.length() > 300 ? msg.substring(0, 300) : msg);
+        }
+    }
+
     private void warnOnce(String condition, String stage, RuntimeException e) {
         // I-1：warned 自身设独立上界——eval 失败的条件串不进 parseCache 负缓存，
         // 单靠 parseCache 超限同步清不足以约束 warned 的增长

@@ -113,10 +113,24 @@ public final class ScriptRunner {
     }
 
     /**
-     * 投递一次 run（任意线程可调；TriggerRouter / script.test 路径用）。
+     * 投递一次 run（任意线程可调；TriggerRouter 路径用）。
      * 两闸（chain / rate）在投递侧判定，重活全在 runner 线程。
      */
     public void submit(String wallId, ScriptRule rule, TriggerContext ctx) {
+        submit(wallId, rule, ctx, null);
+    }
+
+    /**
+     * 0.7.0-P3 A2（K11）：带 trace callback 的投递（{@code script.test} 路径）。
+     *
+     * <p><b>callback 契约——恰一次</b>：run 最终段结束（含 wait 续接跨段后的真正末尾）/
+     * Budget 掐断（actions 超限）/ 投递侧两闸拒（chain / rate，回 blocked trigger step）/
+     * run 级异常，都恰好回调一次。例外：shutdown 竞态丢弃（关服路径，session 已死）
+     * 不回调。callback 在 runner 线程（闸拒路径在调用线程）执行；callback 自身抛异常
+     * 被吞 + WARNING，不杀 runner。</p>
+     */
+    public void submit(String wallId, ScriptRule rule, TriggerContext ctx,
+                       @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback) {
         if (shutdown || wallId == null || rule == null || ctx == null) return;
         String ruleKey = ruleKey(wallId, rule);
 
@@ -127,6 +141,8 @@ public final class ScriptRunner {
                     + " source=" + ctx.source()
                     + (ctx.detail() == null ? "" : " detail=" + ctx.detail()));
             auditBlocked(ruleKey, wallId, rule, "chain", ctx);
+            fireTrace(traceCallback, List.of(TraceStep.blocked("trigger",
+                    "链深熔断（depth=" + ctx.chainDepth() + "/" + budget.maxChainDepth() + "）")));
             return;
         }
 
@@ -137,13 +153,15 @@ public final class ScriptRunner {
                         + " outcome=blocked steps=[trigger=blocked(rate)]");
             }
             auditBlocked(ruleKey, wallId, rule, "rate", ctx);
+            fireTrace(traceCallback, List.of(TraceStep.blocked("trigger",
+                    "触发频率超限（" + budget.maxRunsPerSecond() + "/s）")));
             return;
         }
 
         try {
-            scheduler.execute(() -> startRun(wallId, rule, ctx));
+            scheduler.execute(() -> startRun(wallId, rule, ctx, traceCallback));
         } catch (RejectedExecutionException e) {
-            // shutdown 竞态：静默丢弃（关服路径不需要补跑）
+            // shutdown 竞态：静默丢弃（关服路径不需要补跑，callback 不回调——契约例外）
         }
     }
 
@@ -161,21 +179,28 @@ public final class ScriptRunner {
         final String wallId;
         final ScriptRule rule;
         final TriggerContext ctx;
+        /** K11：trace callback（wait 续接经本对象延续传递）；可 null。 */
+        final @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback;
         final List<TraceStep> trace = new ArrayList<>();
         int actionCount;
+        /** callback 恰一次保险（finish 与 run 级异常路径互斥触发）。 */
+        boolean callbackFired;
 
-        RunState(String wallId, ScriptRule rule, TriggerContext ctx) {
+        RunState(String wallId, ScriptRule rule, TriggerContext ctx,
+                 @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback) {
             this.wallId = wallId;
             this.rule = rule;
             this.ctx = ctx;
+            this.traceCallback = traceCallback;
         }
     }
 
     /** 执行帧：actions 列表 + 续接下标 + blockId 树路径前缀（如 "actions/" / "actions/2/then/"）。 */
     private record Frame(List<Action> actions, int index, String prefix) {}
 
-    private void startRun(String wallId, ScriptRule rule, TriggerContext ctx) {
-        RunState st = new RunState(wallId, rule, ctx);
+    private void startRun(String wallId, ScriptRule rule, TriggerContext ctx,
+                          @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback) {
+        RunState st = new RunState(wallId, rule, ctx, traceCallback);
         st.trace.add(TraceStep.ok("trigger", "trigger",
                 ctx.source() + (ctx.detail() == null ? "" : " " + ctx.detail())));
         Deque<Frame> stack = new ArrayDeque<>();
@@ -254,14 +279,19 @@ public final class ScriptRunner {
             // 任务级异常隔离：单 run 失败不杀 runner 线程（照 AnimationTicker.tick 范式）
             log.log(Level.WARNING, "[脚本] run 失败: rule=" + ruleKey(st.wallId, st.rule)
                     + " err=" + t.getMessage(), t);
+            // K11：异常掐断也要恰一次回调（finish 未到达——callbackFired 防 finish 后
+            // 续接段异常的双发竞态）
+            st.trace.add(TraceStep.error("run", "run 失败: " + t.getMessage()));
+            fireTraceOnce(st);
         } finally {
             CHAIN_DEPTH.remove();
             RULE_KEY.remove();
         }
     }
 
-    /** run 结束（正常 / blocked）：trace 进 FINE log 一行 summary（K10）。 */
+    /** run 结束（正常 / blocked）：trace callback 恰一次（K11）+ FINE log 一行 summary（K10）。 */
     private void finish(RunState st, String outcome) {
+        fireTraceOnce(st);
         if (!log.isLoggable(Level.FINE)) return;
         StringBuilder sb = new StringBuilder(128);
         sb.append("[脚本 trace] rule=").append(ruleKey(st.wallId, st.rule))
@@ -280,6 +310,24 @@ public final class ScriptRunner {
         }
         sb.append(']');
         log.fine(sb.toString());
+    }
+
+    /** RunState 级 callback 恰一次触发（trace 防御性快照拷贝；callback 抛被吞）。 */
+    private void fireTraceOnce(RunState st) {
+        if (st.callbackFired) return;
+        st.callbackFired = true;
+        fireTrace(st.traceCallback, List.copyOf(st.trace));
+    }
+
+    /** callback 调用统一兜底（K11：callback 抛异常不杀 runner / 不影响投递方）。 */
+    private void fireTrace(@Nullable java.util.function.Consumer<List<TraceStep>> cb,
+                           List<TraceStep> steps) {
+        if (cb == null) return;
+        try {
+            cb.accept(steps);
+        } catch (RuntimeException e) {
+            log.log(Level.WARNING, "[脚本] trace callback 抛异常（已吞）: " + e.getMessage(), e);
+        }
     }
 
     /** audit {@code SCRIPT_RUN_BLOCKED}（K5 per-rule 10s 限频；DB 失败由 AuditLog 自吞）。 */

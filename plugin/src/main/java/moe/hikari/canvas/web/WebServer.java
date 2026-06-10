@@ -216,6 +216,9 @@ public final class WebServer {
             @Override public boolean pushPatch(String sid, StatePatch p) {
                 return WebServer.this.pushPatch(sid, p);
             }
+            @Override public boolean pushOp(String sid, String op, Object payload) {
+                return WebServer.this.pushOp(sid, op, payload);
+            }
         };
         this.editOpDispatcher = new EditOpDispatcher(
                 sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, auditLog, plugin);
@@ -1120,6 +1123,32 @@ public final class WebServer {
         String id = "s-" + serverIdSeq.incrementAndGet();
         ctx.send(Envelope.of("state.patch", id, patch));
         return true;
+    }
+
+    /**
+     * 0.7.0-P3 A2（K11）：推任意服务端主动 op（首个消费者 {@code script.trace}——
+     * ScriptRunner 线程在试跑结束时经 {@link OpPushCallback#pushOp} 调到这里；
+     * {@code WsContext.send} 线程安全，与 pushPatch 的跨线程使用同纪律）。
+     *
+     * @return 是否成功发送（false = 该 session 没有活跃 WS 连接，调用方静默丢）
+     */
+    public boolean pushOp(String sessionId, String op, Object payload) {
+        WsContext ctx = wsBySession.get(sessionId);
+        if (ctx == null) return false;
+        String id = "s-" + serverIdSeq.incrementAndGet();
+        ctx.send(Envelope.of(op, id, payload));
+        return true;
+    }
+
+    /**
+     * 0.7.0-P3 A2：转交 {@code script.test} 试跑入口（HikariCanvas onEnable 在
+     * ScriptRunner 装配完成后注入；dispatcher 侧 volatile 可见）。
+     * scriptStore 未配置（dispatcher 为 null）时 no-op。
+     */
+    public void setScriptTestLauncher(moe.hikari.canvas.script.engine.ScriptTestLauncher launcher) {
+        if (scriptOpDispatcher != null) {
+            scriptOpDispatcher.setTestLauncher(launcher);
+        }
     }
 
     /**

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
-import type { ScriptRule } from '@/types/protocol';
+import type { ScriptRule, ScriptTracePayload } from '@/types/protocol';
 
 /**
  * ScriptStore 前端镜像（0.7.0 P1，契约 docs/scripting.md §2）。
@@ -21,6 +21,11 @@ export const useScriptStore = defineStore('scripts', () => {
     const rules = ref<Map<string, ScriptRule>>(new Map());
     /** ruleId 顺序表（保持服务端下发顺序；upsert 新增追加，已存在原位不动）。 */
     const order = ref<string[]>([]);
+    /**
+     * 0.7.0-P3 A2（K11）：最近一次 {@code script.trace} 推送（试跑轨迹）。
+     * wsClient 收到 S→C op 时写入；P5 积木高亮消费。wall 切换 reset 清。
+     */
+    const lastTrace = ref<ScriptTracePayload | null>(null);
 
     /**
      * 批量初始化：用 ready payload.scripts 一次性赋值（全量替换旧内容）。
@@ -68,8 +73,14 @@ export const useScriptStore = defineStore('scripts', () => {
         return rules.value.get(ruleId) ?? null;
     }
 
+    /** script.trace 推送落表（覆盖式——只留最近一次试跑轨迹）。 */
+    function setLastTrace(payload: ScriptTracePayload | null): void {
+        lastTrace.value = payload;
+    }
+
     /** wall 切换时由 project.reset() 调用。 */
     function reset(): void {
+        lastTrace.value = null;
         if (rules.value.size === 0 && order.value.length === 0) return;
         rules.value = new Map();
         order.value = [];
@@ -85,8 +96,8 @@ export const useScriptStore = defineStore('scripts', () => {
     const size = computed(() => listSorted.value.length);
 
     return {
-        rules, order,
-        initScripts, upsert, removeRule, get, reset,
+        rules, order, lastTrace,
+        initScripts, upsert, removeRule, get, setLastTrace, reset,
         listSorted, size,
     };
 });

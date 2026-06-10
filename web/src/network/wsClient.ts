@@ -5,6 +5,7 @@ import type {
     StatePatchPayload,
     StateSnapshotPayload,
     PatchOp,
+    ScriptTracePayload,
 } from '@/types/protocol';
 import type { Variable, VariablePatch, VarType } from '@/types/variable';
 import { useNetworkStore } from '@/stores/network';
@@ -602,9 +603,10 @@ export class WsClient {
     }
 
     /**
-     * {@code script.test}：试运行规则。P1 后端固定回 {@code SCRIPT_ENGINE_UNAVAILABLE}
-     * （引擎 P2 落地）；P2 起 ack resolve 执行轨迹，故返回 {@code Promise<unknown>}
-     * 不丢 payload。
+     * {@code script.test}：试运行规则（0.7.0-P3 A2 起异步——K11）。ack 立即 resolve
+     * {@code {accepted: true, ruleId}}（受理回执，不等执行：合法规则可串 wait 至分钟级）；
+     * 执行轨迹在 run 结束后由服务端主动推 S→C op {@code script.trace}，本类路由进
+     * scripts store 的 {@code lastTrace}（P5 积木高亮消费）。
      */
     sendScriptTest(ruleId: string): Promise<unknown> {
         return this.sendWithAck('script.test', { ruleId });
@@ -693,6 +695,9 @@ export class WsClient {
                     break;
                 case 'ack':
                     this.handleAck(env.id, env.payload);
+                    break;
+                case 'script.trace':
+                    this.handleScriptTrace(env.payload as ScriptTracePayload);
                     break;
                 default:
                     net.pushLog('meta', `unhandled op: ${env.op}`);
@@ -836,6 +841,15 @@ export class WsClient {
         }
         // 即便 projectOps 为空也要更新 version 号（version 是 wall-scoped 单调递增）
         useProjectStore().applyPatch(payload.version, projectOps);
+    }
+
+    /**
+     * 0.7.0-P3 A2（K11）：S→C op {@code script.trace}——{@code script.test} 的异步轨迹
+     * （ack 只回受理；run 真正结束后才推这条）。逻辑在独立导出 {@link applyScriptTrace}
+     * （照 applyScriptPatches 可独测范式）。
+     */
+    private handleScriptTrace(payload: ScriptTracePayload): void {
+        applyScriptTrace(payload);
     }
 
     private handleError(errId: string | undefined, payload: ErrorPayload): void {
@@ -1116,4 +1130,20 @@ export function applyScriptPatches(ops: PatchOp[]): void {
             net.pushLog('err', `script patch: unsupported ${op.op} ${op.path}`);
         }
     }
+}
+
+// ---------- script.trace 路由（0.7.0-P3 A2，K11）----------
+//
+// S→C op {@code script.trace {ruleId, steps}}：script.test 的异步轨迹（ack 只回受理）。
+// 落 scripts store 的 lastTrace（覆盖式）+ meta log 一条；畸形 payload（后端结构漂移 /
+// forward-compat 帧）log err 不落表。导出供单测独立验证（同 applyScriptPatches 范式）。
+
+export function applyScriptTrace(payload: ScriptTracePayload | null | undefined): void {
+    const net = useNetworkStore();
+    if (!payload || typeof payload.ruleId !== 'string' || !Array.isArray(payload.steps)) {
+        net.pushLog('err', 'script.trace: malformed payload');
+        return;
+    }
+    useScriptStore().setLastTrace(payload);
+    net.pushLog('meta', `script.trace: rule=${payload.ruleId} steps=${payload.steps.length}`);
 }

@@ -282,6 +282,90 @@ class ScriptRunnerTest {
         assertEquals(1, sink.blockIds.size(), "chain 掐断不占用 runs/s 窗额度");
     }
 
+    // ---------- 0.7.0-P3 A2（K11）：trace callback 恰一次 ----------
+
+    @Test
+    void traceCallback_normalRun_firesExactlyOnce_withSteps() {
+        ScriptRunner r = runner();
+        List<List<TraceStep>> received = new ArrayList<>();
+        r.submit(WALL, rule("r1", List.of(new Action.Log("a"), new Action.Log("b"))),
+                ctx(0), received::add);
+        assertEquals(1, received.size(), "正常结束恰一次回调");
+        List<TraceStep> steps = received.get(0);
+        assertEquals(3, steps.size(), "trigger + 2 action");
+        assertEquals("trigger", steps.get(0).blockId());
+        assertEquals("actions/0", steps.get(1).blockId());
+        assertEquals("actions/1", steps.get(2).blockId());
+    }
+
+    @Test
+    void traceCallback_waitContinuation_firesOnceAtFinalSegment() {
+        ScriptRunner r = runner();
+        List<List<TraceStep>> received = new ArrayList<>();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Log("a"), new Action.Wait(100), new Action.Log("b"))),
+                ctx(0), received::add);
+        assertEquals(0, received.size(), "wait 续接挂起期间不回调（最终段才回）");
+        scheduler.runPending();
+        assertEquals(1, received.size(), "续接段结束恰一次回调");
+        // trigger + log + wait + log = 4 step（跨段 trace 经 RunState 延续）
+        assertEquals(4, received.get(0).size());
+        assertEquals("actions/2", received.get(0).get(3).blockId());
+    }
+
+    @Test
+    void traceCallback_rateBlocked_firesOnceWithBlockedTriggerStep() {
+        ScriptBudget one = new ScriptBudget(
+                new HikariCanvasConfig.ScriptsConfig(16, 50, 1, 8), clock::get);
+        ScriptRunner r = runner(one);
+        ScriptRule ru = rule("r1", List.of(new Action.Log("x")));
+        r.submit(WALL, ru, ctx(0)); // 占满 1/s 窗（无 callback）
+        List<List<TraceStep>> received = new ArrayList<>();
+        r.submit(WALL, ru, ctx(0), received::add);
+        assertEquals(1, received.size(), "rate 闸拒也恰一次回调");
+        assertEquals(1, received.get(0).size());
+        TraceStep step = received.get(0).get(0);
+        assertEquals("trigger", step.blockId());
+        assertEquals("blocked", step.result());
+        assertTrue(step.detail().contains("频率"), step.detail());
+    }
+
+    @Test
+    void traceCallback_chainBlocked_firesOnceWithBlockedTriggerStep() {
+        ScriptRunner r = runner();
+        List<List<TraceStep>> received = new ArrayList<>();
+        r.submit(WALL, rule("r1", List.of(new Action.Log("x"))), ctx(8), received::add);
+        assertEquals(1, received.size());
+        assertEquals("blocked", received.get(0).get(0).result());
+        assertTrue(received.get(0).get(0).detail().contains("链深"),
+                received.get(0).get(0).detail());
+    }
+
+    @Test
+    void traceCallback_actionsExceeded_firesOnceWithBlockedStep() {
+        ScriptBudget small = new ScriptBudget(
+                new HikariCanvasConfig.ScriptsConfig(16, 1, 10, 8), clock::get);
+        ScriptRunner r = runner(small);
+        List<List<TraceStep>> received = new ArrayList<>();
+        r.submit(WALL, rule("r1", List.of(new Action.Log("a"), new Action.Log("b"))),
+                ctx(0), received::add);
+        assertEquals(1, received.size(), "actions 掐断恰一次回调");
+        List<TraceStep> steps = received.get(0);
+        assertEquals("blocked", steps.get(steps.size() - 1).result(), "末步是掐断 blocked");
+    }
+
+    @Test
+    void traceCallback_throwing_isSwallowed_runnerSurvives() {
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(new Action.Log("a"))), ctx(0),
+                steps -> { throw new IllegalStateException("cb boom"); });
+        // callback 抛被吞——runner 还能继续接活
+        clock.addAndGet(1000L);
+        List<List<TraceStep>> received = new ArrayList<>();
+        r.submit(WALL, rule("r2", List.of(new Action.Log("b"))), ctx(0), received::add);
+        assertEquals(1, received.size(), "上一个 callback 抛异常不影响后续 run");
+    }
+
     // ---------- shutdown ----------
 
     @Test

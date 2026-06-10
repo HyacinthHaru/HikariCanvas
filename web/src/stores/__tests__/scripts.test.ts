@@ -7,7 +7,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useScriptStore } from '../scripts';
-import type { ScriptRule } from '@/types/protocol';
+import type { ScriptRule, ScriptTracePayload } from '@/types/protocol';
 
 beforeEach(() => {
     setActivePinia(createPinia());
@@ -126,5 +126,52 @@ describe('scriptStore', () => {
         };
         s.upsert(rule);
         expect(s.get('sr-full')).toEqual(rule);
+    });
+
+    // ---------- 0.7.0-P3 A2（K11）：lastTrace ----------
+
+    it('lastTrace 初始 null；setLastTrace 落表（detail 缺省 step 兼容）', () => {
+        const s = useScriptStore();
+        expect(s.lastTrace).toBe(null);
+        const payload: ScriptTracePayload = {
+            ruleId: 'sr-1',
+            steps: [
+                { blockId: 'trigger', kind: 'trigger', result: 'ok', detail: 'TEST test' },
+                { blockId: 'actions/0', kind: 'action', result: 'ok' }, // detail 省略不上 wire
+                { blockId: 'actions/1', kind: 'action', result: 'error', detail: 'boom' },
+            ],
+        };
+        s.setLastTrace(payload);
+        expect(s.lastTrace).toEqual(payload);
+        expect(s.lastTrace!.steps[1].detail).toBeUndefined();
+    });
+
+    it('setLastTrace 覆盖式——只留最近一次试跑', () => {
+        const s = useScriptStore();
+        s.setLastTrace({ ruleId: 'sr-old', steps: [] });
+        s.setLastTrace({
+            ruleId: 'sr-new',
+            steps: [{ blockId: 'trigger', kind: 'trigger', result: 'blocked', detail: '频率超限' }],
+        });
+        expect(s.lastTrace!.ruleId).toBe('sr-new');
+        expect(s.lastTrace!.steps).toHaveLength(1);
+    });
+
+    it('reset 清 lastTrace（wall 切换不残留上一面墙的轨迹）', () => {
+        const s = useScriptStore();
+        s.setLastTrace({ ruleId: 'sr-1', steps: [] });
+        s.reset();
+        expect(s.lastTrace).toBe(null);
+        // 即便 rules 已空，reset 也要清 lastTrace（reset 早退分支回归）
+        s.setLastTrace({ ruleId: 'sr-2', steps: [] });
+        s.reset();
+        expect(s.lastTrace).toBe(null);
+    });
+
+    it('setLastTrace(null) 显式清空', () => {
+        const s = useScriptStore();
+        s.setLastTrace({ ruleId: 'sr-1', steps: [] });
+        s.setLastTrace(null);
+        expect(s.lastTrace).toBe(null);
     });
 });

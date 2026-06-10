@@ -33,8 +33,9 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
  *   <li>{@code script.update {ruleId, rule}} — 全量替换（先 find 确认属本 wall，防跨墙改）</li>
  *   <li>{@code script.delete {ruleId}} — 删除；不存在也推 remove patch（幂等，照 alias clear 先例）</li>
  *   <li>{@code script.enable {ruleId, enabled}} — 翻转开关</li>
- *   <li>{@code script.test {ruleId}} — P1 固定 {@code SCRIPT_ENGINE_UNAVAILABLE}；
- *       P2 经 {@link ScriptTestSeam} 接 ScriptRunner</li>
+ *   <li>{@code script.test {ruleId}} — 0.7.0-P3 A2（K11）异步试跑：ack 立即返
+ *       {@code {accepted:true, ruleId}}；轨迹完成后 S→C 推 {@code script.trace}
+ *       （经 {@link moe.hikari.canvas.script.engine.ScriptTestLauncher} seam）</li>
  * </ul>
  *
  * <h2>权限</h2>
@@ -66,19 +67,6 @@ final class ScriptOpDispatcher {
     private static final String PENDING_ID = "sr-pending";
 
     /**
-     * P2 seam：脚本试运行入口。P1 不实现引擎，seam 为 null 时 {@code script.test}
-     * 固定回 {@code SCRIPT_ENGINE_UNAVAILABLE}；P2 ScriptRunner 落地后注入，
-     * 返回值整体作为 ack payload。
-     *
-     * <p><b>facet 语义（契约 scripting.md §4.1 已定）</b>：试跑即真实执行（D5），
-     * 因此 {@code seam.run} 前同样过 {@link #checkFacets}（sound / command 面缺失真拒），
-     * 并记 {@code SCRIPT_TEST} audit——P2 接 ScriptRunner 时此层已就位，引擎侧无需重查。</p>
-     */
-    interface ScriptTestSeam {
-        Map<String, Object> run(String wallId, String ruleId);
-    }
-
-    /**
      * 解析结果：error 非 null 即 INVALID_PAYLOAD message（此时 rule 为 null）；
      * cause 是解析期原始异常（仅 error 路径非 null，供 server 日志记完整堆栈——
      * 批次3 #5：外发 message 只留首行，细节进日志）。
@@ -95,7 +83,16 @@ final class ScriptOpDispatcher {
     private final org.bukkit.plugin.Plugin plugin;
     /** server 日志（批次3 #2：catch-all 不再静默吞异常）；可为 null（兜底跳过记录）。 */
     private final java.util.logging.Logger log;
-    private volatile ScriptTestSeam testSeam;
+    /**
+     * 0.7.0-P3 A2（K11）：异步试跑入口（取代 P1 同步 ScriptTestSeam——同步等待阻塞
+     * Jetty worker，合法规则可串 wait 至分钟级，5s ack 超时必爆）。null = 引擎未装配，
+     * {@code script.test} 回 {@code SCRIPT_ENGINE_UNAVAILABLE}。
+     *
+     * <p><b>facet 语义（契约 scripting.md §4.1）</b>：试跑即真实执行（D5），
+     * {@code launch} 前同样过 {@link #checkFacets}（sound / command 面缺失真拒）+
+     * {@code SCRIPT_TEST} audit；K12：TEST run 不豁免 Budget（runner 投递侧统一过闸）。</p>
+     */
+    private volatile moe.hikari.canvas.script.engine.ScriptTestLauncher testLauncher;
 
     ScriptOpDispatcher(SessionManager sessionManager,
                        SessionRateLimiter rateLimiter,
@@ -115,9 +112,9 @@ final class ScriptOpDispatcher {
         this.log = log;
     }
 
-    /** P2 ScriptRunner 落地后注入；volatile 多线程可见。 */
-    void setTestSeam(ScriptTestSeam seam) {
-        this.testSeam = seam;
+    /** A2：试跑入口注入（HikariCanvas onEnable 引擎装配后经 WebServer 转交）；volatile 可见。 */
+    void setTestLauncher(moe.hikari.canvas.script.engine.ScriptTestLauncher launcher) {
+        this.testLauncher = launcher;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -195,6 +192,11 @@ final class ScriptOpDispatcher {
         if (invalid.isPresent()) {
             return Envelope.error(in.id(), "SCRIPT_INVALID", invalid.get());
         }
+        // K16：所有 if.condition 保存期预 parse——坏条件保存时就拒，不等运行期静默 false
+        Optional<String> badCondition = checkConditionSyntax(parsed.rule().actions());
+        if (badCondition.isPresent()) {
+            return Envelope.error(in.id(), "SCRIPT_INVALID", badCondition.get());
+        }
         Set<String> facets = ScriptPermissions.requiredFacets(parsed.rule());
         Envelope facetDenied = checkFacets(in, sessionId, s, "script.create", facets);
         if (facetDenied != null) return facetDenied;
@@ -234,6 +236,11 @@ final class ScriptOpDispatcher {
         Optional<String> invalid = ScriptRuleValidator.validate(parsed.rule());
         if (invalid.isPresent()) {
             return Envelope.error(in.id(), "SCRIPT_INVALID", invalid.get());
+        }
+        // K16：同 create——update 全量替换也逐 if.condition 预 parse
+        Optional<String> badCondition = checkConditionSyntax(parsed.rule().actions());
+        if (badCondition.isPresent()) {
+            return Envelope.error(in.id(), "SCRIPT_INVALID", badCondition.get());
         }
         Set<String> facets = ScriptPermissions.requiredFacets(parsed.rule());
         Envelope facetDenied = checkFacets(in, sessionId, s, "script.update", facets);
@@ -305,19 +312,24 @@ final class ScriptOpDispatcher {
         return Envelope.of("ack", in.id(), Map.of("rule", ruleMap));
     }
 
+    /**
+     * K11：异步试跑——ack 立即返 {@code {accepted:true, ruleId}}（不等执行；合法规则
+     * 可串 wait 至分钟级）；轨迹完成后由 runner 线程经 {@link OpPushCallback#pushOp}
+     * 推 S→C op {@code script.trace {ruleId, steps}} 给发起 session（session 没了静默丢）。
+     */
     Envelope handleTest(Envelope in, String sessionId, Session s,
                         String wallId, Map<String, Object> payload) {
         String ruleId = stringOrNull(payload.get("ruleId"));
         if (ruleId == null || ruleId.isEmpty()) {
             return Envelope.error(in.id(), "INVALID_PAYLOAD", "ruleId required");
         }
-        ScriptTestSeam seam = this.testSeam;
-        if (seam == null) {
-            // P1：引擎未落地，固定拒——P2 接 ScriptRunner 后注入 seam
+        moe.hikari.canvas.script.engine.ScriptTestLauncher launcher = this.testLauncher;
+        if (launcher == null) {
+            // 引擎未装配（启动早期 / 测试装配缺）固定拒
             return Envelope.error(in.id(), "SCRIPT_ENGINE_UNAVAILABLE",
-                    "script engine lands in 0.7.0-P2");
+                    "script engine not wired");
         }
-        // 批次3 #6：seam 调用前守卫 ruleId 存在性（含跨墙——find 按本 wall 查），
+        // 批次3 #6：launch 前守卫 ruleId 存在性（含跨墙——find 按本 wall 查），
         // 不把"不存在的 ruleId"透传给引擎
         Optional<ScriptRule> rule = store.find(wallId, ruleId);
         if (rule.isEmpty()) {
@@ -329,10 +341,31 @@ final class ScriptOpDispatcher {
         Envelope facetDenied = checkFacets(in, sessionId, s, "script.test", facets);
         if (facetDenied != null) return facetDenied;
 
-        Map<String, Object> trace = seam.run(wallId, ruleId);
-        // 契约 scripting.md §5.3：试跑真实执行须留痕（audit 标 TEST 与常规触发区分）
+        // 契约 scripting.md §5.3：试跑真实执行须留痕（audit 标 TEST 与常规触发区分）。
+        // audit 在 launch 前记（受理即留痕；执行结果另有 trace / RUN_BLOCKED 各自留痕）
         recordAudit("SCRIPT_TEST", sessionId, s, wallId, rule.get(), facets);
-        return Envelope.of("ack", in.id(), trace);
+        launcher.launch(wallId, ruleId, steps ->
+                push.pushOp(sessionId, "script.trace",
+                        Map.of("ruleId", ruleId, "steps", stepsToWire(steps))));
+        Map<String, Object> ack = new LinkedHashMap<>();
+        ack.put("accepted", true);
+        ack.put("ruleId", ruleId);
+        return Envelope.of("ack", in.id(), ack);
+    }
+
+    /** TraceStep → wire（{@code {blockId, kind, result, detail}} 原样 Map 化；detail 可 null）。 */
+    static List<Map<String, Object>> stepsToWire(
+            List<moe.hikari.canvas.script.engine.TraceStep> steps) {
+        List<Map<String, Object>> wire = new java.util.ArrayList<>(steps.size());
+        for (moe.hikari.canvas.script.engine.TraceStep st : steps) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("blockId", st.blockId());
+            m.put("kind", st.kind());
+            m.put("result", st.result());
+            if (st.detail() != null) m.put("detail", st.detail());
+            wire.add(m);
+        }
+        return wire;
     }
 
     // ──────────────────────────────────────────────────────────
@@ -391,6 +424,34 @@ final class ScriptOpDispatcher {
         } catch (IllegalArgumentException iae) {
             return new ParsedRule(null, "rule malformed: " + rootMessage(iae), iae);
         }
+    }
+
+    /**
+     * K16：递归走动作树，对每个 {@code if.condition} 调
+     * {@link moe.hikari.canvas.script.engine.ConditionEvaluator#checkSyntax}（parse-only）。
+     * 返回首个失败的错误信息（含 blockId 定位）；全通过返 empty。
+     */
+    static Optional<String> checkConditionSyntax(List<moe.hikari.canvas.script.Action> actions) {
+        return checkConditionSyntax(actions, "actions/");
+    }
+
+    private static Optional<String> checkConditionSyntax(
+            List<moe.hikari.canvas.script.Action> actions, String prefix) {
+        if (actions == null) return Optional.empty();
+        for (int i = 0; i < actions.size(); i++) {
+            if (!(actions.get(i) instanceof moe.hikari.canvas.script.Action.If iff)) continue;
+            String blockId = prefix + i;
+            Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
+                    .checkSyntax(iff.condition());
+            if (err.isPresent()) {
+                return Optional.of("if 条件语法错误（" + blockId + "）: " + err.get());
+            }
+            Optional<String> sub = checkConditionSyntax(iff.then(), blockId + "/then/");
+            if (sub.isPresent()) return sub;
+            sub = checkConditionSyntax(iff.elseActions(), blockId + "/else/");
+            if (sub.isPresent()) return sub;
+        }
+        return Optional.empty();
     }
 
     /** rule → wire 形态 Map（注解自带 serializer，trigger/actions 扁平 + type 判别）。 */

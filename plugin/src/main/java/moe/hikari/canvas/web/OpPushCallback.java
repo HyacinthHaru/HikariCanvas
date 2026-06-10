@@ -13,4 +13,16 @@ import moe.hikari.canvas.state.StatePatch;
 public interface OpPushCallback {
     boolean pushSnapshot(String sessionId, ProjectState state);
     boolean pushPatch(String sessionId, StatePatch patch);
+
+    /**
+     * 0.7.0-P3 A2（K11）：推任意服务端主动 op（首个消费者 {@code script.trace}）。
+     * Envelope id 由 WebServer 侧统一发号（{@code s-N}，与 snapshot / patch 同纪律）；
+     * dispatcher 只给 op 名 + payload。
+     *
+     * <p>default false：既有测试 fake / 不支持主动推送的装配不必实现；
+     * 调用方按"session 没了静默丢"语义对待 false。</p>
+     */
+    default boolean pushOp(String sessionId, String op, Object payload) {
+        return false;
+    }
 }

@@ -547,3 +547,26 @@ export interface ScriptRule {
     actions: ScriptAction[];
     blockLayout: string;
 }
+
+/**
+ * 0.7.0-P3 A2（K11）：试跑单步轨迹（S→C 推送 op {@code script.trace} 的 steps 项）。
+ * {@code blockId} 是动作树路径（{@code trigger} / {@code actions/0} /
+ * {@code actions/2/then/1}，与积木树同构——P5 积木高亮按此定位）；
+ * {@code detail} 为 null 时后端省略不上 wire。
+ */
+export interface ScriptTraceStep {
+    blockId: string;
+    kind: 'trigger' | 'condition' | 'action';
+    result: 'ok' | 'skipped' | 'blocked' | 'error';
+    detail?: string;
+}
+
+/**
+ * S→C op {@code script.trace} 的 payload（{@code script.test} ack 只回
+ * {@code {accepted, ruleId}}；轨迹在 run 真正结束后推这条——合法规则可串 wait
+ * 至分钟级，同步等待不可行）。
+ */
+export interface ScriptTracePayload {
+    ruleId: string;
+    steps: ScriptTraceStep[];
+}

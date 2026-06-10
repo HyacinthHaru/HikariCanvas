@@ -757,6 +757,26 @@ public final class HikariCanvas extends JavaPlugin {
                 .filter(id -> !failedRestoreForScript.contains(id))
                 .toList();
         routerForScript.fireWallReadyAll(scriptReadyWalls);
+        // 0.7.0-P3 A2（K11）：script.test 异步试跑入口——dispatcher ack 立即返，轨迹经
+        // callback 推 script.trace。K12：TEST 不豁免 Budget（submit 投递侧统一过闸）。
+        // find 与 launch 之间规则被并发删 → 回 error step（callback 契约恰一次）。
+        final moe.hikari.canvas.script.ScriptStore storeForTest = scriptStore;
+        final moe.hikari.canvas.script.engine.ScriptRunner runnerForTest = scriptRunner;
+        webServer.setScriptTestLauncher((wallId, ruleId, traceCallback) -> {
+            java.util.Optional<moe.hikari.canvas.script.ScriptRule> r =
+                    storeForTest.find(wallId, ruleId);
+            if (r.isEmpty()) {
+                traceCallback.accept(java.util.List.of(
+                        moe.hikari.canvas.script.engine.TraceStep.error(
+                                "trigger", "规则不存在: " + ruleId)));
+                return;
+            }
+            runnerForTest.submit(wallId, r.get(),
+                    new moe.hikari.canvas.script.engine.TriggerContext(
+                            moe.hikari.canvas.script.engine.TriggerContext.Source.TEST,
+                            0, "test"),
+                    traceCallback);
+        });
         getLogger().info("Script engine: runner + trigger router registered ("
                 + scriptReadyWalls.size() + " wall(s) wallReady fired)");
 

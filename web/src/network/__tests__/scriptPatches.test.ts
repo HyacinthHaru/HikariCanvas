@@ -8,9 +8,9 @@
  */
 import { describe, expect, it, beforeEach } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { applyScriptPatches } from '../wsClient';
+import { applyScriptPatches, applyScriptTrace } from '../wsClient';
 import { useScriptStore } from '@/stores/scripts';
-import type { PatchOp, ScriptRule } from '@/types/protocol';
+import type { PatchOp, ScriptRule, ScriptTracePayload } from '@/types/protocol';
 
 beforeEach(() => {
     setActivePinia(createPinia());
@@ -105,5 +105,41 @@ describe('applyScriptPatches', () => {
         expect(store.get('sr-path-id')).toBe(null);
         expect(store.size).toBe(1);
         expect(store.order).toEqual(['sr-real']);
+    });
+});
+
+// ---------- 0.7.0-P3 A2（K11）：script.trace 路由 ----------
+
+describe('applyScriptTrace', () => {
+    it('合法 payload → lastTrace 落表', () => {
+        const store = useScriptStore();
+        const payload: ScriptTracePayload = {
+            ruleId: 'sr-1',
+            steps: [
+                { blockId: 'trigger', kind: 'trigger', result: 'ok', detail: 'TEST test' },
+                { blockId: 'actions/0', kind: 'action', result: 'ok' },
+            ],
+        };
+        applyScriptTrace(payload);
+        expect(store.lastTrace).toEqual(payload);
+    });
+
+    it('畸形 payload（缺 ruleId / steps 非数组 / null）→ 不落表不抛', () => {
+        const store = useScriptStore();
+        applyScriptTrace(null);
+        applyScriptTrace(undefined);
+        applyScriptTrace({ steps: [] } as unknown as ScriptTracePayload);
+        applyScriptTrace({ ruleId: 'sr-1', steps: 'oops' } as unknown as ScriptTracePayload);
+        expect(store.lastTrace).toBe(null);
+    });
+
+    it('连续推送覆盖式——只留最近一次', () => {
+        const store = useScriptStore();
+        applyScriptTrace({ ruleId: 'sr-old', steps: [] });
+        applyScriptTrace({
+            ruleId: 'sr-new',
+            steps: [{ blockId: 'trigger', kind: 'trigger', result: 'blocked', detail: '链深熔断' }],
+        });
+        expect(store.lastTrace!.ruleId).toBe('sr-new');
     });
 });

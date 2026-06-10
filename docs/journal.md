@@ -5,6 +5,48 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P3-2：script.test 异步轨迹（K11）+ 条件预 parse（K16）（A2）
+
+P1 同步 ScriptTestSeam 阻塞 Jetty worker（合法规则可串 wait 至分钟级，5s ack 超时必爆）
+→ 异步化全链：
+
+- **ScriptRunner**：`submit` 4 参重载加 `Consumer<List<TraceStep>> traceCallback`——
+  **恰一次契约**：最终段结束（wait 续接经 RunState 延续传递）/ actions 掐断 / 投递闸拒
+  （chain / rate 回单步 blocked trigger step）/ run 级异常，各恰回调一次（callbackFired
+  防双发；callback 抛被吞 + WARNING 不杀 runner）；shutdown 竞态丢弃不回调（契约例外）。
+  ScriptBudget 补 `maxRunsPerSecond()` 访问器。
+- **新 seam `ScriptTestLauncher`**（script/engine 顶级接口）取代 ScriptTestSeam（已删，
+  含 dispatcher 字段 / setter / 测试消费点）；HikariCanvas 装配：find 规则 → submit
+  `TriggerContext(TEST, 0, "test")`（K12 不豁免 Budget）；find 与 launch 间并发删 →
+  回 error step。
+- **推送通道**：OpPushCallback 加 `default boolean pushOp(sessionId, op, payload)`
+  （default false 不破既有 fake）+ WebServer 实现（`s-N` 发号与 snapshot/patch 同纪律；
+  WsContext.send 线程安全，runner 线程直推）。计划原写 `pushEnvelope(sessionId, Envelope)`，
+  实施改 pushOp 形态——id 发号留在 WebServer 侧，dispatcher 不碰 server id 序列。
+- **ScriptOpDispatcher.handleTest**：ack 立即 `{accepted:true, ruleId}`；callback 里
+  steps 转 wire（`{blockId, kind, result, detail}`，detail null 省略）推 S→C op
+  **`script.trace {ruleId, steps}`** 给发起 session（session 没了静默丢）。
+- **K16 条件预 parse**：`ConditionEvaluator.checkSyntax(condition)` 静态 parse-only
+  （错误信息首行）；dispatcher create/update 在 Validator 后递归走动作树逐 if.condition
+  调——坏条件保存期 `SCRIPT_INVALID`（带 blockId 定位），不等运行期静默 false。
+- **前端**：wsClient 消息路由加 `script.trace` case → 导出 `applyScriptTrace`
+  （照 applyScriptPatches 可独测范式：畸形 payload log err 不落表）→ scripts store 新
+  `lastTrace` ref + `setLastTrace`（覆盖式；reset 清）+ meta pushLog 一条；
+  `sendScriptTest` 注释改异步语义；types 加 `ScriptTraceStep` / `ScriptTracePayload`。
+- **文档**：protocol.md §5.14 script.test 行改异步 + 新增 script.trace 行 + K16 校验链段；
+  scripting.md §4.1/§4.2 异步语义改写（"轨迹不走 ack"实施期修订记账）。
+- 测试：后端 +14（ScriptRunner trace callback 6——正常/wait 续接/rate/chain/actions/
+  callback 抛吞；ConditionEvaluator checkSyntax 3；dispatcher 异步 ack 形态 / trace wire
+  推送 / launcher 前守卫 / K16 create 拒 + 嵌套定位 5）→ **1551**；前端 +7（store
+  lastTrace 4 + applyScriptTrace 路由 3）→ **536**；vite build 过。
+
+关联：`script/engine/{ScriptRunner,ScriptBudget,ConditionEvaluator,ScriptTestLauncher}.java` /
+`web/{ScriptOpDispatcher,OpPushCallback,WebServer}.java` / `HikariCanvas.java` /
+`web/src/network/wsClient.ts` / `web/src/stores/scripts.ts` / `web/src/types/protocol.ts` /
+`docs/{protocol,scripting}.md`
+
+---
+
 ## 2026-06-10 · 0.7.0-P3-1：命令模板系统（A1）
 
 runCommand 第 8 动作真实化（docs/scripting.md §5.2；计划 K13）：
