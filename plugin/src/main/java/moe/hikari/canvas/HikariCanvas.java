@@ -138,6 +138,10 @@ public final class HikariCanvas extends JavaPlugin {
     private moe.hikari.canvas.script.engine.ScriptBudget scriptBudget;
     private moe.hikari.canvas.script.engine.ScriptRunner scriptRunner;
     private moe.hikari.canvas.script.engine.TriggerRouter scriptTriggerRouter;
+    // 0.7.0-P3 B2（K14）：playerNear 周期采样器（主线程 task，2 tick 底层周期 +
+    // volatile 跳帧计数；applyConfig 热更采样间隔）。
+    private moe.hikari.canvas.script.engine.PlayerNearSampler playerNearSampler;
+    private BukkitTask playerNearTask;
     // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
     // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -735,11 +739,26 @@ public final class HikariCanvas extends JavaPlugin {
                         auditLog, getLogger());
         this.scriptRunner = new moe.hikari.canvas.script.engine.ScriptRunner(
                 scriptConditions, actionExecutor, scriptBudget, auditLog, getLogger());
+        // 0.7.0-P3 B2（K14）：墙原点源——WallRepo.loadById 拿 Wall.key（world 是名字字符串）
+        // → Bukkit.getWorld 换世界 UUID。rebuild 触发点（onEnable 启动 / WS 脚本 op 经
+        // ScriptStore listener / wall delete hook）都在主线程，Bukkit.getWorld 安全；
+        // 墙不存在 / 世界未加载返 null（Router 跳过该 near 规则 + warning）。
+        final moe.hikari.canvas.storage.WallRepo wallRepoForNear = wallRepo;
+        moe.hikari.canvas.script.engine.TriggerRouter.WallOriginSource wallOriginSource =
+                wallId -> {
+                    var wall = wallRepoForNear.loadById(wallId).orElse(null);
+                    if (wall == null) return null;
+                    org.bukkit.World world = Bukkit.getWorld(wall.key().world());
+                    if (world == null) return null;
+                    return new moe.hikari.canvas.script.engine.TriggerRouter.WallOrigin(
+                            world.getUID(), wall.key().originX(),
+                            wall.key().originY(), wall.key().originZ());
+                };
         moe.hikari.canvas.script.engine.TriggerRouter routerForScript =
                 new moe.hikari.canvas.script.engine.TriggerRouter(
                         scriptStore, scriptRunner,
                         moe.hikari.canvas.variable.VariableInterpolator::resolveFullName,
-                        getLogger());
+                        wallOriginSource, getLogger());
         this.scriptTriggerRouter = routerForScript;
         // 监听接线：变量变化（K1 链深在 Router 内读 runner ThreadLocal）/ 脚本增删改（K7
         // 墙级 rebuild）/ 墙删除（清索引 + cancel timer）/ 部署完成（K9② wallReady）。
@@ -761,6 +780,33 @@ public final class HikariCanvas extends JavaPlugin {
         // 判定全在 Router（可单测）。MONITOR 优先级观察语义，不改事件结果。
         getServer().getPluginManager().registerEvents(
                 new moe.hikari.canvas.script.engine.GameEventListenerHub(routerForScript), this);
+        // 0.7.0-P3 B2（K14）：playerNear 周期采样——主线程 task 固定 2 tick 周期（启动后
+        // 1s 首跑），Sampler 内部按 scripts.player-near-sample-ticks（默 10）跳帧计数；
+        // 热更走 applyConfig → setSampleTicks（volatile，无需重 schedule）。Sampler 本体
+        // 零 Bukkit：玩家位置 / near 条目 / 触发投递全 lambda 注入。
+        moe.hikari.canvas.script.engine.PlayerNearSampler nearSampler =
+                new moe.hikari.canvas.script.engine.PlayerNearSampler(
+                        () -> {
+                            var online = Bukkit.getOnlinePlayers();
+                            if (online.isEmpty()) return java.util.List.of();
+                            java.util.List<moe.hikari.canvas.script.engine.PlayerNearSampler.PlayerPos>
+                                    list = new java.util.ArrayList<>(online.size());
+                            for (Player p : online) {
+                                org.bukkit.Location loc = p.getLocation();
+                                list.add(new moe.hikari.canvas.script.engine
+                                        .PlayerNearSampler.PlayerPos(
+                                        p.getName(), p.getWorld().getUID(),
+                                        loc.getX(), loc.getY(), loc.getZ()));
+                            }
+                            return list;
+                        },
+                        routerForScript::nearRules,
+                        routerForScript::firePlayerNear,
+                        getLogger(),
+                        config.scriptsConfig.playerNearSampleTicks());
+        this.playerNearSampler = nearSampler;
+        this.playerNearTask = Bukkit.getScheduler().runTaskTimer(
+                this, nearSampler::tick, 20L, 2L);
         // 0.7.0-P3 A2（K11）：script.test 异步试跑入口——dispatcher ack 立即返，轨迹经
         // callback 推 script.trace。K12：TEST 不豁免 Budget（submit 投递侧统一过闸）。
         // find 与 launch 之间规则被并发删 → 回 error step（callback 契约恰一次）。
@@ -844,6 +890,10 @@ public final class HikariCanvas extends JavaPlugin {
         if (scriptBudget != null) {
             scriptBudget.applyConfig(fresh.scriptsConfig);
         }
+        // 0.7.0-P3 B2：playerNear 采样间隔热更（volatile 跳帧计数，无需重 schedule）
+        if (playerNearSampler != null) {
+            playerNearSampler.setSampleTicks(fresh.scriptsConfig.playerNearSampleTicks());
+        }
         getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
     }
 
@@ -891,6 +941,13 @@ public final class HikariCanvas extends JavaPlugin {
         if (mapPoolLeakTask != null) {
             closeQuietly("mapPoolLeakTask.cancel", mapPoolLeakTask::cancel);
             mapPoolLeakTask = null;
+        }
+        // 0.7.0-P3 B2：playerNear 采样是主线程同步任务，onDisable 也在主线程——cancel 后
+        // 不可能再有 in-flight tick；放 Router shutdown 之前停掉新触发来源。
+        if (playerNearTask != null) {
+            closeQuietly("playerNearTask.cancel", playerNearTask::cancel);
+            playerNearTask = null;
+            playerNearSampler = null;
         }
         // 0.4.10 P2-50：每个资源 shutdown 步骤独立 try/catch（closeQuietly）——一个抛异常不
         // 跳过后续释放，HikariDataSource / executor 等非 Bukkit 托管资源必须保证关到。

@@ -353,7 +353,12 @@ StrictNumber / coalesce / 协议切换机制——抵掉 ~20h)。wall-clock 按�
   open/close 瞬间并发时,脚本改动可能被 session 的旧 state persist 覆盖——单属性丢一次
   更新,低频低危,下游 ultrareview 勿当新缺陷重报
 - [ ] `timer` 触发器在墙未部署时是否照跑(脚本副作用与渲染无关,倾向照跑;P2 定)
-- [ ] playerNear 采样间隔 config 默认值(10 tick 起步,P6 压测回填)
+- [x] ~~playerNear 采样间隔 config 默认值(10 tick 起步,P6 压测回填)~~ → **P3-B2 落地:
+  config `scripts.player-near-sample-ticks` 默认 10(load 期 clamp 1..200)。机制:底层
+  Bukkit 主线程 task 固定 2 tick 周期跑 `PlayerNearSampler.tick()`,内部按 volatile
+  `sampleTicks` 做跳帧计数——累计游戏 tick 到设定值才真采样,其余调用 O(1) 返回;
+  `/canvas reload` 热更走 `setSampleTicks`(无需重 schedule),实际分辨率受 2 tick 底层
+  周期限制(填 1 与 2 等效)。**默认值是否回调留 P6 压测定**(规则 × 玩家交叉量实测)
 - [ ] 积木画布 pan/zoom 手势与浏览器缩放冲突处理(P4 实测定)
 
 ## 11. P1 终审记账(2026-06-10;后续 phase 必读)

@@ -174,20 +174,36 @@ public final class HikariCanvasConfig {
      *                         服主手写进 config，插件不内置任何模板——docs/scripting.md §5.2）。
      *                         热更：执行侧经 supplier 惰性读 volatile config 引用，
      *                         {@code /canvas reload} 后下一次执行即生效
+     * @param playerNearSampleTicks 0.7.0-P3 B2（K14）：playerNear 触发器的采样间隔
+     *                         （游戏 tick；默 10 = 0.5s；load 期 clamp 1..200）。热更走
+     *                         {@code PlayerNearSampler.setSampleTicks}（volatile 跳帧计数，
+     *                         无需重 schedule）；实际分辨率受底层 task 周期 2 tick 限制
      */
     public record ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                                 int maxRunsPerSecond, int maxChainDepth,
-                                java.util.Map<String, CommandTemplate> commandTemplates) {
+                                java.util.Map<String, CommandTemplate> commandTemplates,
+                                int playerNearSampleTicks) {
+        /** playerNear 采样间隔默认值（tick）；P6 压测后可能回调（docs/scripting.md §10）。 */
+        public static final int DEFAULT_PLAYER_NEAR_SAMPLE_TICKS = 10;
+
         public ScriptsConfig {
             commandTemplates = commandTemplates == null
                     ? java.util.Map.of() : java.util.Map.copyOf(commandTemplates);
         }
 
-        /** 兼容旧 4 参形态（既有单测 / budget 路径不关心模板）：模板表为空。 */
+        /** 兼容旧 4 参形态（既有单测 / budget 路径不关心模板与采样间隔）：模板表为空。 */
         public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                              int maxRunsPerSecond, int maxChainDepth) {
             this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
-                    java.util.Map.of());
+                    java.util.Map.of(), DEFAULT_PLAYER_NEAR_SAMPLE_TICKS);
+        }
+
+        /** 兼容 0.7.0-P3 A1 的 5 参形态（采样间隔走默认）。 */
+        public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
+                             int maxRunsPerSecond, int maxChainDepth,
+                             java.util.Map<String, CommandTemplate> commandTemplates) {
+            this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
+                    commandTemplates, DEFAULT_PLAYER_NEAR_SAMPLE_TICKS);
         }
 
         public static ScriptsConfig defaults() {
@@ -512,8 +528,13 @@ public final class HikariCanvasConfig {
                     templates.put(tplId, new CommandTemplate(command.trim(), params));
                 }
             }
+            // 0.7.0-P3 B2（K14）：playerNear 采样间隔（tick；clamp 1..200——下限防主线程
+            // 每 tick 全量扫，上限 10s 再迟钝就失去"靠近"语义）。
+            int nearTicks = Math.min(200, Math.max(1, scSec.getInt(
+                    "player-near-sample-ticks",
+                    ScriptsConfig.DEFAULT_PLAYER_NEAR_SAMPLE_TICKS)));
             b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain,
-                    templates);
+                    templates, nearTicks);
         }
 
         return new HikariCanvasConfig(b);

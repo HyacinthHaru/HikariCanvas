@@ -41,6 +41,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EndToEndScriptTest {
 
     private static final Logger LOG = Logger.getLogger("test");
+    /** B2：fake 墙原点所在世界（near 全链 case 共用；原点固定 (100,64,100)）。 */
+    private static final java.util.UUID WORLD_ID =
+            java.util.UUID.fromString("00000000-0000-0000-0000-0000000000e2");
 
     private final AtomicLong clock = new AtomicLong(1_000_000L);
     private VariableStore variableStore;
@@ -67,7 +70,9 @@ class EndToEndScriptTest {
                 new AuditLog(null, LOG), LOG, scheduler);
         timers = new TriggerRouterTest.FakeTimerScheduler();
         router = new TriggerRouter(scriptStore, runner,
-                VariableInterpolator::resolveFullName, LOG, timers);
+                VariableInterpolator::resolveFullName,
+                wallId -> new TriggerRouter.WallOrigin(WORLD_ID, 100, 64, 100),
+                LOG, timers);
         // 全链监听接线（与 HikariCanvas.onEnable 装配一致）
         variableStore.registerChangeListener(router::onVariableChange);
         scriptStore.addListener(router::rebuildWall);
@@ -246,6 +251,50 @@ class EndToEndScriptTest {
 
         assertEquals("1", value("user:w-1/joins"), "全局索引跨墙触发");
         assertEquals("1", value("user:w-2/joins"), "enabled 规则各跑一次；disabled 跳过");
+    }
+
+    // ── ⑨ playerNear 全链（0.7.0-P3 B2：Sampler 状态机 → Router firePlayerNear → 执行） ──
+
+    @Test
+    void playerNear_edgeTriggeredViaSamplerAndRouter() {
+        variableStore.create("user:w-1", "visits", VarType.NUMBER, "0", null);
+        addRule("w-1", true, new Trigger.PlayerNear(8),
+                List.of(new Action.IncrementVariable("user/visits", 1)));
+
+        // fake 玩家位置源（可变 list 模拟移动）；nearRules / sink 全接真 Router
+        java.util.List<PlayerNearSampler.PlayerPos> world =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        PlayerNearSampler sampler = new PlayerNearSampler(
+                () -> List.copyOf(world), router::nearRules, router::firePlayerNear,
+                LOG, 1);   // sampleTicks=1：每次 tick 都真采样
+
+        // 远处（原点 (100,64,100)，距离 > 8）→ 不触发
+        world.add(new PlayerNearSampler.PlayerPos("Steve", WORLD_ID, 120, 64, 100));
+        sampler.tick();
+        assertNull(value("user:w-1/visits"), "范围外不触发");
+
+        // 走进范围 → 进入沿触发一次；停留不重复
+        world.set(0, new PlayerNearSampler.PlayerPos("Steve", WORLD_ID, 103, 64, 100));
+        sampler.tick();
+        assertEquals("1", value("user:w-1/visits"), "进入沿经 Router 全链执行动作");
+        sampler.tick();
+        assertEquals("1", value("user:w-1/visits"), "持续在内不重复触发");
+
+        // 离开 → 重置；再进 → 再触发
+        world.set(0, new PlayerNearSampler.PlayerPos("Steve", WORLD_ID, 120, 64, 100));
+        sampler.tick();
+        world.set(0, new PlayerNearSampler.PlayerPos("Steve", WORLD_ID, 100, 64, 102));
+        sampler.tick();
+        assertEquals("2", value("user:w-1/visits"), "离开重置后再进入再触发");
+
+        // 规则禁用（store.setEnabled → listener rebuild → 快照清空）→ Sampler 不再产生触发
+        ScriptRule rule = scriptStore.listByWall("w-1").get(0);
+        scriptStore.setEnabled("w-1", rule.id(), false);
+        world.set(0, new PlayerNearSampler.PlayerPos("Steve", WORLD_ID, 120, 64, 100));
+        sampler.tick();
+        world.set(0, new PlayerNearSampler.PlayerPos("Steve", WORLD_ID, 100, 64, 100));
+        sampler.tick();
+        assertEquals("2", value("user:w-1/visits"), "禁用后快照清空，不再触发");
     }
 
     // ──────────────────────────────────────────────────────────

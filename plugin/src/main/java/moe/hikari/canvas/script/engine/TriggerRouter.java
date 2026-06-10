@@ -77,6 +77,27 @@ public final class TriggerRouter {
         void submit(String wallId, ScriptRule rule, TriggerContext ctx);
     }
 
+    /** 墙原点（世界 UUID + 坐标；B2 playerNear 距离判定基准点）。 */
+    public record WallOrigin(java.util.UUID worldId, double x, double y, double z) {}
+
+    /**
+     * 墙原点数据源 seam（0.7.0-P3 B2；照 {@code AnimationTicker.WallSource} 范式）：
+     * 生产 = {@code WallRepo.loadById} 拿 {@code Wall.key} + {@code Bukkit.getWorld}
+     * 换世界 UUID（装配层 lambda，本类零 Bukkit）；墙不存在 / 世界未加载返 null
+     * （该规则跳过登记 + warning——世界随后加载需重保存规则或重启重建索引，javadoc 记账）。
+     */
+    @FunctionalInterface
+    public interface WallOriginSource {
+        WallOrigin load(String wallId);
+    }
+
+    /**
+     * playerNear 规则条目（B2/K14）：墙原点已在 rebuild 期解析好，
+     * {@link PlayerNearSampler} 每轮采样只做距离平方比较，零查库零 Bukkit。
+     */
+    public record NearEntry(String wallId, String ruleId, int rangeBlocks,
+                            java.util.UUID worldId, double x, double y, double z) {}
+
     /**
      * timer 调度 seam：生产 = 自持单线程 daemon SES（{@code hikari-script-trigger}）；
      * 测试注手动 tick 替身。
@@ -94,6 +115,8 @@ public final class TriggerRouter {
     private final ScriptStore store;
     private final RunSubmitter runner;
     private final FullNameResolver resolver;
+    /** 墙原点源（B2；可 null = 不支持 playerNear，near 规则登记时 warning 跳过）。 */
+    private final WallOriginSource originSource;
     private final Logger log;
     private final TimerScheduler timers;
     private volatile boolean shutdown;
@@ -112,25 +135,34 @@ public final class TriggerRouter {
     private final Set<RuleRef> joinRules = ConcurrentHashMap.newKeySet();
     /** 0.7.0-P3 B1（K15）：playerKill 全局触发索引（同 {@link #joinRules} 纪律）。 */
     private final Set<RuleRef> killRules = ConcurrentHashMap.newKeySet();
+    /** 0.7.0-P3 B2（K14）：wallId → 该墙的 playerNear 条目（rebuild 期解析好原点）。 */
+    private final Map<String, java.util.List<NearEntry>> nearByWall = new ConcurrentHashMap<>();
+    /**
+     * near 条目扁平快照（volatile 整体替换，照 byFullName 的快照替换纪律）：
+     * {@link PlayerNearSampler} 每轮采样无锁读 {@link #nearRules}，不碰结构锁。
+     */
+    private volatile java.util.List<NearEntry> nearSnapshot = java.util.List.of();
 
     /** 生产装配：自建单线程 daemon 调度器（线程名 {@code hikari-script-trigger}）。 */
-    public TriggerRouter(ScriptStore store, ScriptRunner runner,
-                         FullNameResolver resolver, Logger log) {
-        this(store, (RunSubmitter) runner::submit, resolver, log, new SesTimerScheduler());
+    public TriggerRouter(ScriptStore store, ScriptRunner runner, FullNameResolver resolver,
+                         WallOriginSource originSource, Logger log) {
+        this(store, (RunSubmitter) runner::submit, resolver, originSource, log,
+                new SesTimerScheduler());
     }
 
     /** 测试装配：注入 timer 调度替身（投递走真 runner）。 */
-    TriggerRouter(ScriptStore store, ScriptRunner runner,
-                  FullNameResolver resolver, Logger log, TimerScheduler timers) {
-        this(store, (RunSubmitter) runner::submit, resolver, log, timers);
+    TriggerRouter(ScriptStore store, ScriptRunner runner, FullNameResolver resolver,
+                  WallOriginSource originSource, Logger log, TimerScheduler timers) {
+        this(store, (RunSubmitter) runner::submit, resolver, originSource, log, timers);
     }
 
     /** 测试装配：注入投递替身（B1，ctx 形态可断言）+ timer 调度替身。 */
-    TriggerRouter(ScriptStore store, RunSubmitter runner,
-                  FullNameResolver resolver, Logger log, TimerScheduler timers) {
+    TriggerRouter(ScriptStore store, RunSubmitter runner, FullNameResolver resolver,
+                  WallOriginSource originSource, Logger log, TimerScheduler timers) {
         this.store = store;
         this.runner = runner;
         this.resolver = resolver;
+        this.originSource = originSource;
         this.log = log;
         this.timers = timers;
     }
@@ -147,11 +179,15 @@ public final class TriggerRouter {
     public synchronized void rebuildWall(String wallId) {
         if (wallId == null) return;
         clearWallLocked(wallId);
-        if (shutdown) return;
+        if (shutdown) {
+            refreshNearSnapshotLocked();
+            return;
+        }
         for (ScriptRule r : store.listByWall(wallId)) {
             if (!r.enabled()) continue;       // disabled 规则不进索引、不调度
             registerRuleLocked(wallId, r);
         }
+        refreshNearSnapshotLocked();
     }
 
     /** 全量重建（启动期，restore + autoRegisterAll 之后调一次）。 */
@@ -161,7 +197,11 @@ public final class TriggerRouter {
         wallKeys.clear();
         joinRules.clear();
         killRules.clear();
-        if (shutdown) return;
+        nearByWall.clear();
+        if (shutdown) {
+            refreshNearSnapshotLocked();
+            return;
+        }
         int n = 0;
         for (Map.Entry<String, java.util.List<ScriptRule>> e : store.snapshotAll().entrySet()) {
             for (ScriptRule r : e.getValue()) {
@@ -170,6 +210,7 @@ public final class TriggerRouter {
                 n++;
             }
         }
+        refreshNearSnapshotLocked();
         if (n > 0) log.info("TriggerRouter: " + n + " 条 enabled 脚本规则已登记");
     }
 
@@ -177,6 +218,7 @@ public final class TriggerRouter {
     public synchronized void removeWall(String wallId) {
         if (wallId == null) return;
         clearWallLocked(wallId);
+        refreshNearSnapshotLocked();
     }
 
     /** 幂等关停（onDisable）：cancel 全部 timer + 关调度器；之后所有入口 no-op。 */
@@ -188,6 +230,8 @@ public final class TriggerRouter {
         wallKeys.clear();
         joinRules.clear();
         killRules.clear();
+        nearByWall.clear();
+        refreshNearSnapshotLocked();
         timers.shutdown();
     }
 
@@ -263,6 +307,31 @@ public final class TriggerRouter {
     }
 
     /**
+     * 玩家进入墙范围（B2/K14；{@link PlayerNearSampler} 进入沿回调，主线程调）。
+     * 与其他 fire 入口同纪律：{@code store.find} 拿<b>最新</b>规则——索引残留 / 已禁用 /
+     * 已换型（NearEntry 在 rebuild 竞态窗口里可能 stale）一律跳过。事件来源非脚本，
+     * 链深恒 0；detail = 玩家名（K17：只进 trace / audit，不注入动作参数）。
+     */
+    public void firePlayerNear(String wallId, String ruleId, String playerName) {
+        if (shutdown || wallId == null || ruleId == null) return;
+        ScriptRule latest = store.find(wallId, ruleId).orElse(null);
+        if (latest == null || !latest.enabled()
+                || !(latest.trigger() instanceof Trigger.PlayerNear)) {
+            return;   // 索引残留 / 已禁用 / 已换型 → 跳过
+        }
+        runner.submit(wallId, latest,
+                new TriggerContext(TriggerContext.Source.PLAYER_NEAR, 0, playerName));
+    }
+
+    /**
+     * near 条目扁平快照（B2；{@link PlayerNearSampler} 每轮采样无锁读）。
+     * volatile 整体替换 + 不可变 List——采样线程读到的永远是某次 rebuild 的完整一致视图。
+     */
+    public java.util.List<NearEntry> nearRules() {
+        return nearSnapshot;
+    }
+
+    /**
      * 全局触发公共路径：遍历索引 → {@code store.find} 最新规则（防 stale）→
      * enabled 且触发器仍是期望类型才投递（rebuild 竞态窗口里换型规则不误触发）。
      */
@@ -305,8 +374,20 @@ public final class TriggerRouter {
             joinRules.add(new RuleRef(wallId, rule.id()));
         } else if (t instanceof Trigger.PlayerKill) {
             killRules.add(new RuleRef(wallId, rule.id()));
+        } else if (t instanceof Trigger.PlayerNear pn) {
+            // B2/K14：原点在 rebuild 期解析一次（Sampler 每轮只比距离平方）。
+            // 解析失败（墙不存在 / 世界未加载 / originSource 未注入）→ 跳过 + warning：
+            // 该规则在世界加载后需重保存（触发 rebuild）或重启才生效。
+            WallOrigin origin = originSource == null ? null : originSource.load(wallId);
+            if (origin == null) {
+                log.warning("TriggerRouter: playerNear 原点解析失败（墙不存在或世界未加载），"
+                        + "规则跳过登记 wall=" + wallId + " rule=" + rule.id());
+                return;
+            }
+            nearByWall.computeIfAbsent(wallId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                    .add(new NearEntry(wallId, rule.id(), pn.rangeBlocks(),
+                            origin.worldId(), origin.x(), origin.y(), origin.z()));
         }
-        // playerNear：0.7.0-P3 B2（PlayerNearSampler）；
         // wallReady 不进索引（fireWallReady 直查 store）。
     }
 
@@ -357,6 +438,7 @@ public final class TriggerRouter {
     private void clearWallLocked(String wallId) {
         joinRules.removeIf(ref -> ref.wallId().equals(wallId));
         killRules.removeIf(ref -> ref.wallId().equals(wallId));
+        nearByWall.remove(wallId);
         Set<String> keys = wallKeys.remove(wallId);
         if (keys != null) {
             for (String fn : keys) {
@@ -375,6 +457,19 @@ public final class TriggerRouter {
                 it.remove();
             }
         }
+    }
+
+    /** 重建 near 扁平快照（B2；任何 nearByWall 结构变更后调，仅 synchronized 内）。 */
+    private void refreshNearSnapshotLocked() {
+        if (nearByWall.isEmpty()) {
+            nearSnapshot = java.util.List.of();
+            return;
+        }
+        java.util.List<NearEntry> flat = new java.util.ArrayList<>();
+        for (java.util.List<NearEntry> entries : nearByWall.values()) {
+            flat.addAll(entries);
+        }
+        nearSnapshot = java.util.List.copyOf(flat);
     }
 
     private void cancelAllTimersLocked() {

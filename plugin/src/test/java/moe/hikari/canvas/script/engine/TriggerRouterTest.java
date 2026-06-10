@@ -35,6 +35,12 @@ class TriggerRouterTest {
 
     private static final Logger LOG = Logger.getLogger("test");
     private static final String WALL = "w-rt";
+    /** B2：fake 墙原点所在世界（near 测试共用）。 */
+    private static final java.util.UUID WORLD_ID =
+            java.util.UUID.fromString("00000000-0000-0000-0000-000000000001");
+    /** B2：fake 原点源——所有墙原点固定 (0,0,0)。 */
+    private static final TriggerRouter.WallOriginSource ORIGIN_AT_ZERO =
+            wallId -> new TriggerRouter.WallOrigin(WORLD_ID, 0, 0, 0);
 
     private final AtomicLong clock = new AtomicLong(1_000_000L);
     private ScriptStore scriptStore;
@@ -54,7 +60,7 @@ class TriggerRouterTest {
         runner = new ScriptRunner(conditions, sink, budget, null, LOG, new InlineScheduler());
         fakeTimers = new FakeTimerScheduler();
         router = new TriggerRouter(scriptStore, runner,
-                VariableInterpolator::resolveFullName, LOG, fakeTimers);
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG, fakeTimers);
     }
 
     private ScriptRule addRule(String wallId, boolean enabled, Trigger trigger) {
@@ -246,7 +252,8 @@ class TriggerRouterTest {
     void firePlayerJoin_submitsWithJoinContext() {
         RecordingSubmitter rec = new RecordingSubmitter();
         TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
-                VariableInterpolator::resolveFullName, LOG, new FakeTimerScheduler());
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG,
+                new FakeTimerScheduler());
         addRule(WALL, true, new Trigger.PlayerJoin());
         r2.rebuildWall(WALL);
         r2.firePlayerJoin("Steve");
@@ -261,7 +268,8 @@ class TriggerRouterTest {
     void firePlayerKill_detailIsVictimArrowKiller() {
         RecordingSubmitter rec = new RecordingSubmitter();
         TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
-                VariableInterpolator::resolveFullName, LOG, new FakeTimerScheduler());
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG,
+                new FakeTimerScheduler());
         addRule(WALL, true, new Trigger.PlayerKill());
         r2.rebuildWall(WALL);
         r2.firePlayerKill("Alex", "Steve");
@@ -306,6 +314,73 @@ class TriggerRouterTest {
         assertEquals(0, router.joinRuleCount(), "关停清空全局索引");
         router.firePlayerJoin("Steve");
         assertEquals(1, sink.blockIds.size(), "关停后 fire no-op");
+    }
+
+    // ---------- playerNear 索引 + firePlayerNear（0.7.0-P3 B2 / K14） ----------
+
+    @Test
+    void nearIndex_rebuildAssemblesEntryWithOrigin() {
+        ScriptRule near = addRule(WALL, true, new Trigger.PlayerNear(8));
+        addRule(WALL, false, new Trigger.PlayerNear(16));   // disabled 不进
+        addRule(WALL, true, new Trigger.Timer(30));         // 别的触发型不进
+        router.rebuildWall(WALL);
+        List<TriggerRouter.NearEntry> entries = router.nearRules();
+        assertEquals(1, entries.size(), "仅 enabled 的 near 规则进快照");
+        TriggerRouter.NearEntry e = entries.get(0);
+        assertEquals(WALL, e.wallId());
+        assertEquals(near.id(), e.ruleId());
+        assertEquals(8, e.rangeBlocks());
+        assertEquals(WORLD_ID, e.worldId(), "原点在 rebuild 期经 originSource 解析");
+        assertEquals(0.0, e.x());
+        // removeWall → 快照清空
+        router.removeWall(WALL);
+        assertTrue(router.nearRules().isEmpty(), "删墙后 near 快照清空");
+    }
+
+    @Test
+    void nearIndex_originUnresolved_skippedWithoutEntry() {
+        // ① originSource 注入但解析返 null（墙不存在 / 世界未加载）→ 跳过登记
+        TriggerRouter rNull = new TriggerRouter(scriptStore, runner,
+                VariableInterpolator::resolveFullName, wallId -> null, LOG,
+                new FakeTimerScheduler());
+        addRule(WALL, true, new Trigger.PlayerNear(8));
+        rNull.rebuildWall(WALL);
+        assertTrue(rNull.nearRules().isEmpty(), "原点解析失败 → near 规则跳过登记");
+        // ② originSource 本身 null（装配不支持 playerNear）→ 同样跳过、不抛
+        TriggerRouter rNoSource = new TriggerRouter(scriptStore, runner,
+                VariableInterpolator::resolveFullName, null, LOG, new FakeTimerScheduler());
+        assertDoesNotThrow(() -> rNoSource.rebuildWall(WALL));
+        assertTrue(rNoSource.nearRules().isEmpty());
+    }
+
+    @Test
+    void firePlayerNear_submitsContext_staleDisabledAndShutdownSkipped() {
+        RecordingSubmitter rec = new RecordingSubmitter();
+        TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG,
+                new FakeTimerScheduler());
+        ScriptRule near = addRule(WALL, true, new Trigger.PlayerNear(8));
+        r2.rebuildWall(WALL);
+        r2.firePlayerNear(WALL, near.id(), "Steve");
+        assertEquals(1, rec.contexts.size());
+        assertEquals(TriggerContext.Source.PLAYER_NEAR, rec.contexts.get(0).source());
+        assertEquals(0, rec.contexts.get(0).chainDepth(), "事件来源链深恒 0");
+        assertEquals("Steve", rec.contexts.get(0).detail(), "detail = 玩家名");
+        // store 内禁用（不经 listener rebuild）→ fire 时刻 find 最新 → 跳过
+        scriptStore.setEnabled(WALL, near.id(), false);
+        r2.firePlayerNear(WALL, near.id(), "Steve");
+        assertEquals(1, rec.contexts.size(), "disabled 规则不投递");
+        // 换型（near → timer）→ 不被 near 事件误触发
+        scriptStore.setEnabled(WALL, near.id(), true);
+        scriptStore.update(near.id(), new ScriptRule(null, null, true, "r",
+                new Trigger.Timer(30), List.of(new Action.Log("x")), "{}"));
+        r2.firePlayerNear(WALL, near.id(), "Steve");
+        assertEquals(1, rec.contexts.size(), "换型规则不被旧型事件误触发");
+        // shutdown 后 no-op + 快照清空
+        r2.shutdown();
+        r2.firePlayerNear(WALL, near.id(), "Steve");
+        assertEquals(1, rec.contexts.size(), "关停后 fire no-op");
+        assertTrue(r2.nearRules().isEmpty(), "关停清空 near 快照");
     }
 
     // ---------- wallReady ----------

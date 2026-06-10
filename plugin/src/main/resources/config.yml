@@ -187,6 +187,11 @@ scripts:
   # 单面墙可挂的脚本规则数上限（防玩家堆几百条规则拖慢服务器）。
   # /canvas reload 可热更，只影响后续创建，不裁剪已有规则。
   max-rules-per-wall: 16
+  # "玩家靠近"触发器的采样间隔（游戏 tick，20 tick = 1 秒；默认 10 = 半秒扫一次）。
+  # 数字越小反应越灵敏，但服务器主线程扫描越频繁（每轮 = 靠近规则数 × 在线玩家数次
+  # 距离比较）；范围 1..200，/canvas reload 可热更。底层任务固定每 2 tick 跑一次，
+  # 所以填 1 和 2 效果一样。
+  player-near-sample-ticks: 10
   # 执行预算三闸（docs/scripting.md §2.4；/canvas reload 可热更）。
   budget:
     # 单次触发展开执行的动作总数（含嵌套 if 分支与 wait 续接累计）。
