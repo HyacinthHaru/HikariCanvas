@@ -57,7 +57,9 @@ public final class MigrationRunner {
             // 追加条目"是必须的——这是显式声明而非目录扫描的代价。
             new Migration(15, "db-migrations/V015__user_global_variables.sql"),
             // 0.4.4：铁路网络（线路 / 站点 / 车次 / 时刻表 / wall 绑定）
-            new Migration(16, "db-migrations/V016__rail_network.sql")
+            new Migration(16, "db-migrations/V016__rail_network.sql"),
+            // 0.7.0 P1：墙脚本（视觉运行时；rule_json 整体存 ScriptRule）
+            new Migration(17, "db-migrations/V017__wall_scripts.sql")
     );
 
     private final Jdbi jdbi;
