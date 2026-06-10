@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-06-11 · 0.7.0 P4+P5 收口：**积木编辑器完工**（待用户完整实测）
+
+P4 引擎层 + P5 内容层全部落地（9 个子任务并/串行 + 集成审查修 2 阻断）。把 0.7 脚本从
+"浏览器 console JSON" 升级为 Scratch 风可视化积木编辑器。**这是 0.7.0 P5 末完整实测闸——前端
+UI 第一次能真正操作脚本。**
+
+- **波次 1（并行）**：A 引擎纯逻辑（blockTree 树操作 path 与后端 trace blockId 同构 / serialize
+  blockLayout / dropTarget 吸附几何）/ B 画布骨架（viewport+world transform pan-zoom / 全屏 overlay /
+  TopBar Puzzle 入口 / script-engine chunk）/ E 后端命令模板端点（`GET /api/script/command-templates`
+  鉴权 + 不泄 command 原文）
+- **波次 2（串行）**：C 积木渲染（blockDefs 声明式 6 触发器+9 动作 / BlockStack 帽子 + BlockNode 递归
+  if C 形）/ D1 编辑会话（working copy + 本地 undo + debounce 800ms 自动保存 + newRule 拿 server id +
+  server-as-truth dirty 协调 + lock 守卫）/ D2 拖拽吸附（buildSlots/collectSlots 测量 + findDropTarget +
+  BlockPalette 拖出 + 移堆 + 排除自身子树）
+- **波次 3（串行）**：F 参数表单（BlockParamInput 全类型 + 变量 VariablePicker Teleport / 时间轴 / 元素 /
+  声音 datalist / 命令模板复合控件）/ G 条件可视构建器（SimpleCondition ↔ 字符串双向 + 高级文本框
+  fallback + 转义与后端 ExpressionParser 一致）/ H 试跑高亮（trace blockId 树路径定位 + 120ms 步进 +
+  validator 镜像复刻后端全常量 + 4 错误码 i18n）
+- **集成审查修 2 阻断**（测试因 mock 绕过后端校验未覆盖）：① newRule 草稿 `actions:[]` 被后端
+  validator 拒（空动作）→ 新建规则必然失败、入口走不通 → 改带默认 log 动作；② BlockStack 帽子触发器
+  只读 → 所有规则永久卡 wallReady → 帽子改可编辑（6 类型 select + setTrigger + 参数 BlockParamInput）
+- **测试基线**：前端 **536 → 877**（+341）/ 后端 **1575 → 1585**（E 端点 +10）/ 0 baseline 漂移 /
+  script-engine 独立 chunk ~152KB（懒加载不进首屏）
+- **主控无法本地运行编辑器**（只有 vitest + vite build + 组件 smoke），视觉手感（吸附阈值/浮层/
+  动画）留用户 P5 末实测微调；纯逻辑（树操作/吸附几何/序列化/条件↔串/validator）重点 vitest 覆盖
+
+0.7.0 进度：P1 ✅ P2 ✅ P3 ✅ P4 ✅ P5 ✅ → **P6 触发器/动作补全 + 收尾**（待 P5 实测反馈后定）。
+契约 §6 已回填落地形态（`web/src/script/` 而非纸面 `web/src/blocks/`）。
+
+关联文件：`web/src/script/**`（model/canvas/params 三层 ~25 文件）/ `stores/scriptEdit.ts` /
+`stores/{ui,project}.ts` / `App.vue` / `TopBar.vue` / `vite.config.ts` / `i18n/messages.ts` /
+`web/WebServer.java` + `CommandTemplateHandler.java` / `docs/scripting.md` §6/§8/§11 / `CLAUDE.md`
+
+---
+
 ## 2026-06-11 · 0.7.0-P5-F：积木参数表单（BlockParamInput 全类型 + 下拉数据源）
 
 把 C 阶段 BlockNode 的参数占位（字段名 + 原始值文本）换成按 FieldDef.type 渲染的真表单控件，

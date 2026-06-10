@@ -286,6 +286,14 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 
 ## 6. 前端积木引擎(自写,D1)
 
+> **落地形态(2026-06-11 P4+P5 实现后回填)**:实际目录是 `web/src/script/`(非纸面 `web/src/blocks/`)——
+> `model/`(blockTree 树操作 / serialize blockLayout / blockDefs 声明式 / dropTarget 吸附几何 /
+> validator 镜像 / condition 条件↔串)、`canvas/`(useBlockCanvas pan-zoom / useBlockDrag 拖拽 /
+> ScriptEditorOverlay / BlockCanvas / BlockStack / BlockNode / BlockPalette)、`params/`(BlockParamInput /
+> ConditionBuilder / useCommandTemplates)。编辑会话状态在 `stores/scriptEdit.ts`(working copy + 本地
+> undo + debounce 自动保存,**非纸面"保存按钮"**——K-UI-11)。blockId = 动作树路径(`actions/2/then/1`,
+> 后端执行期生成,前端不在 rule_json 存 id),非纸面"创建积木时分配"。独立 chunk `script-engine`。
+
 ### 6.1 分层(引擎与内容解耦)
 
 **引擎层 `web/src/blocks/engine/`**(不知道任何业务积木):
@@ -336,8 +344,8 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 | **P1** ✅ 2026-06-10 | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + ready/patch + 前端镜像(types/wsClient/store)。4 批次 + 3 轮质量修复 + 全程对抗终审;后端 1378 / 前端 529 全绿 | 后端单测全绿 ✅ | ~50h |
 | **P2** ✅ 2026-06-10 | 执行引擎:TriggerRouter(变量/定时/墙就绪 3 触发器,无 debounce——Budget 即节流)+ ScriptRunner(单线程帧栈 + wait 续接 + K1 ThreadLocal 链深)+ ActionExecutor(8 动作,setElementProperty 双路径)+ Budget 三闸/ABA 熔断 + ConditionEvaluator(expr 扩比较/算术/var() + == 数值等值修订)。3 批次 + MVP 集成测试 7 case;后端 1515 / 前端 529 全绿 | **MVP 闸:JSON 建规则游戏内生效(待用户实测)** | ~70h |
 | **P3** ✅ 2026-06-10 | 游戏事件层:GameEventListenerHub(进服/击杀 MONITOR + 世界 UUID 快照表)+ playerNear 采样器(K14 进入沿状态机/跳帧热更)+ 命令模板系统(K13 转义/online-player 校验 + SCRIPT_COMMAND_EXECUTED audit)+ script.test 异步轨迹(K11 ack 受理 + script.trace 推送)+ 条件保存期预 parse(K16)。后端 1575 / 前端 536 全绿 | 6 触发 8 动作全通(单测)✅ | ~50h |
-| **P4** | 积木引擎层:画布/拖拽/吸附/嵌套/序列化/本地 undo,2-3 个假积木验收 | 引擎可拖可嵌可存(用户实测) | ~70h |
-| **P5** | 积木内容层:全部积木 def + 下拉集成 + 试跑高亮 + 全屏 overlay + i18n | **完整用户实测闸** | ~70h |
+| **P4** ✅ 2026-06-11 | 积木引擎层:无限画布 pan/zoom(viewport+world transform)+ Scratch 式拖拽吸附(SlotRect 几何 + findDropTarget)+ if C 形嵌套 + blockTree 树操作/blockLayout 序列化 + 编辑会话(working copy + 本地 undo + debounce 自动保存)。波次 A/B/C/D1/D2 | 引擎可拖可嵌可存(待用户实测) | ~70h |
+| **P5** ✅ 2026-06-11 | 积木内容层:6 触发器(帽子可编辑)+ 9 动作积木真表单 + 条件可视构建器(↔ 字符串双向 + 高级文本框)+ 下拉(变量/时间轴/元素/声音/命令模板端点)+ 试跑高亮(trace blockId 树路径定位 + 120ms 步进)+ validator 镜像 + i18n。波次 E/F/G/H + 集成审查修 2 阻断(新建带默认动作 / 帽子触发器可编辑)。前端 877 / 后端 1585 | **完整用户实测闸(待测)** | ~70h |
 | **P6** | 对抗审查(恶意脚本/熔断/采样器压测)+ 大白话教程 `docs/scripting-guide.md` + security.md/architecture.md 回填 + 版本号 + 收尾 | 全绿收口 | ~30h |
 
 节奏照 0.6:每段一闸可演示;P2 / P4 / P5 三道用户实测闸。
@@ -379,11 +387,11 @@ P1 全程对抗终审排出的设计债,按归属 phase 记账:
 - [x] 数值字段小数静默截断(P2-1 ✅ K8 收紧:非整数值拒 INVALID_PAYLOAD)(`intervalSeconds=1.9→1`,canConvertToInt 只查范围):P2 决定收紧或接受
 
 **P4/P5 记账**:
-- [ ] 4 个错误码 i18n key(`SCRIPT_INVALID / SCRIPT_NOT_FOUND / SCRIPT_QUOTA_EXCEEDED /
+- [x] 4 个错误码 i18n key(P5-H ✅ 中英)(`SCRIPT_INVALID / SCRIPT_NOT_FOUND / SCRIPT_QUOTA_EXCEEDED /
   SCRIPT_ENGINE_UNAVAILABLE`),目前 ack reject 回退 raw code
-- [ ] 前端 validator 镜像(本地预校验,别让用户拖完积木保存才被打回)+ `setElementProperty.property`
+- [x] 前端 validator 镜像(P5-H ✅ validator.ts 复刻全常量 + save 前拦)(本地预校验)+ `setElementProperty.property`
   TS 窄化到 8 白名单 union
-- [ ] blockLayout 实际预算须低于 WS 入帧 64KB(BLOCK_LAYOUT_MAX 与帧限同值,贴限必 1009 断连);
+- [ ] blockLayout 实际预算须低于 WS 入帧 64KB(BLOCK_LAYOUT_MAX 与帧限同值,贴限必 1009 断连;v1 仅存每堆 x/y 坐标,量级远低于上限,实测无虞——留观察);
   前端发送前长度检查
 
 **已澄清(防后人误判)**:
