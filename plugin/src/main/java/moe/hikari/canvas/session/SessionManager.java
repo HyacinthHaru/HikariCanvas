@@ -103,6 +103,13 @@ public final class SessionManager {
      */
     private final List<Consumer<String>> wallDeleteHooks = new CopyOnWriteArrayList<>();
 
+    /**
+     * 0.7.0-P2（K9）：wall 部署完成（{@link #confirm} 成功）监听。callback 接收就绪的
+     * wallId；TriggerRouter 据此投递 wallReady 脚本规则。线程安全（CopyOnWriteArrayList），
+     * 异常隔离逐个调用——照 {@link #wallDeleteHooks} 一模一样的风格。
+     */
+    private final List<Consumer<String>> wallReadyHooks = new CopyOnWriteArrayList<>();
+
     /** 注册 session forget 监听。callback 接收被 forget 的 sessionId。线程安全。 */
     public void addForgetHook(Consumer<String> hook) {
         forgetHooks.add(hook);
@@ -170,6 +177,14 @@ public final class SessionManager {
      */
     public void addWallDeleteHook(Consumer<String> hook) {
         wallDeleteHooks.add(hook);
+    }
+
+    /**
+     * 0.7.0-P2（K9）：注册"wall 部署完成"监听。callback 在 {@link #confirm} 成功
+     * （新建 / 二次编辑两路径）后触发；编辑器 persistWall <b>不算</b>就绪（那是改稿）。
+     */
+    public void addWallReadyHook(Consumer<String> hook) {
+        wallReadyHooks.add(hook);
     }
 
     public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver,
@@ -453,6 +468,9 @@ public final class SessionManager {
                     Map.of("wall_id", wallId, "new_wall", newWall, "map_count", mapIds.size(),
                             "world", wall.world().getName()));
 
+            // 0.7.0-P2（K9②）：部署完成 → wallReady 脚本触发点（异常隔离，hook 抛不影响 confirm）
+            fireWallReadyHooks(wallId);
+
             return newWall
                     ? new ConfirmResult.OkNewWall(s, wall, mapIds, wallId)
                     : new ConfirmResult.OkExistingWall(s, wall, mapIds, wallId);
@@ -480,6 +498,18 @@ public final class SessionManager {
             super("wall race lost to session " + holderSessionId);
             this.holderSessionId = holderSessionId;
             this.holderPlayer = holderPlayer;
+        }
+    }
+
+    /** 0.7.0-P2（K9）：逐 hook 通知 wall 就绪；异常隔离（照 wallDeleteHooks 纪律）。 */
+    private void fireWallReadyHooks(String wallId) {
+        for (Consumer<String> hook : wallReadyHooks) {
+            try {
+                hook.accept(wallId);
+            } catch (Exception e) {
+                log.log(Level.WARNING,
+                        "SessionManager.confirm: wallReadyHook threw for " + wallId, e);
+            }
         }
     }
 

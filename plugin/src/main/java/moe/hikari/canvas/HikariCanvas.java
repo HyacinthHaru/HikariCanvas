@@ -132,6 +132,12 @@ public final class HikariCanvas extends JavaPlugin {
     // 0.7.0 P1：墙脚本内存镜像（V017 wall_scripts 持久化）。WebServer script.* op +
     // ready payload 注入；P2 ScriptRunner 引擎也走它。
     private moe.hikari.canvas.script.ScriptStore scriptStore;
+    // 0.7.0 P2-5：脚本执行引擎三件（装配在 AnimationTicker 之后——ActionExecutor 依赖 ticker）。
+    // budget 留引用供 /canvas reload 热更（applyConfig）；runner / router 是 daemon 类资源，
+    // onDisable 须 shutdown（router 先关停 timer 投递，runner 再关执行队列）。
+    private moe.hikari.canvas.script.engine.ScriptBudget scriptBudget;
+    private moe.hikari.canvas.script.engine.ScriptRunner scriptRunner;
+    private moe.hikari.canvas.script.engine.TriggerRouter scriptTriggerRouter;
     // 0.4.0-P4-O / P4-Q：外部插件 namespace 注册表 + Push API impl。
     // Q 任务装配：onEnable 实例化 + Bukkit.getServicesManager().register（让外部插件
     // 通过 ServicesManager.load(HikariCanvasAPI.class) 零编译耦合拿到 API）。
@@ -696,6 +702,56 @@ public final class HikariCanvas extends JavaPlugin {
         getLogger().info("VariableStore.ChangeListener registered (adaptive-fps high-freq detection,"
                 + " default=" + defaultIntervalMs + "ms high-freq=" + highFreqIntervalMs + "ms)");
 
+        // ── 0.7.0 P2-5：脚本执行引擎全链装配（docs/scripting.md §3） ─────────────
+        // 装配点说明：计划原定"scriptStore 段之后、WebServer 之前"，但 ActionExecutor 依赖
+        // AnimationTicker（webServer.start() 之后才建）——与其给 executor 加 setter 注入半装态，
+        // 不如把整条链后移到 ticker / varPushCallback / projectionThrottler 全部就位之后
+        // （WebServer 不依赖本链，后移无副作用；侵入最小）。
+        this.scriptBudget = new moe.hikari.canvas.script.engine.ScriptBudget(config.scriptsConfig);
+        moe.hikari.canvas.script.engine.ConditionEvaluator scriptConditions =
+                new moe.hikari.canvas.script.engine.ConditionEvaluator(getLogger(), variableStore);
+        // setElementProperty 路径 A（墙开着编辑器）：标准 element.update 链 + 前端 patch +
+        // 投影节流；路径 B（headless）在 Applier 内部走 WallRepo + ticker。
+        final SessionManager smForScript = this.sessionManager;
+        final ProjectionThrottler throttlerForScript = this.projectionThrottler;
+        moe.hikari.canvas.script.engine.TickerControl tickerControl =
+                moe.hikari.canvas.script.engine.TickerControl.of(ticker);
+        moe.hikari.canvas.script.engine.ElementPropertyApplier propertyApplier =
+                new moe.hikari.canvas.script.engine.ElementPropertyApplier(
+                        (wid, eid, patch) -> smForScript.applyScriptElementPatch(
+                                wid, eid, patch, varPushCallback, throttlerForScript),
+                        wallRepo, tickerControl, getLogger());
+        moe.hikari.canvas.script.engine.ActionExecutor actionExecutor =
+                new moe.hikari.canvas.script.engine.ActionExecutor(
+                        variableStore, tickerControl, propertyApplier, wallRepo,
+                        this, getLogger());
+        this.scriptRunner = new moe.hikari.canvas.script.engine.ScriptRunner(
+                scriptConditions, actionExecutor, scriptBudget, auditLog, getLogger());
+        moe.hikari.canvas.script.engine.TriggerRouter routerForScript =
+                new moe.hikari.canvas.script.engine.TriggerRouter(
+                        scriptStore, scriptRunner,
+                        moe.hikari.canvas.variable.VariableInterpolator::resolveFullName,
+                        getLogger());
+        this.scriptTriggerRouter = routerForScript;
+        // 监听接线：变量变化（K1 链深在 Router 内读 runner ThreadLocal）/ 脚本增删改（K7
+        // 墙级 rebuild）/ 墙删除（清索引 + cancel timer）/ 部署完成（K9② wallReady）。
+        variableStore.registerChangeListener(routerForScript::onVariableChange);
+        scriptStore.addListener(routerForScript::rebuildWall);
+        sessionManager.addWallDeleteHook(routerForScript::removeWall);
+        sessionManager.addWallReadyHook(routerForScript::fireWallReady);
+        // K9①：启动期——restore + autoRegisterAll 已完成（上方），全量建索引后对全部
+        // 恢复成功的墙（全墙 − failedRestoreWallIds）各发一次 wallReady。
+        routerForScript.rebuildAll();
+        final java.util.Set<String> failedRestoreForScript =
+                wallRestorerInstance.failedRestoreWallIds();
+        java.util.List<String> scriptReadyWalls = wallRepo.loadAll().stream()
+                .map(w -> w.wallId())
+                .filter(id -> !failedRestoreForScript.contains(id))
+                .toList();
+        routerForScript.fireWallReadyAll(scriptReadyWalls);
+        getLogger().info("Script engine: runner + trigger router registered ("
+                + scriptReadyWalls.size() + " wall(s) wallReady fired)");
+
         // M15.3 P0-24：MapPool 泄漏检测周期任务（5 分钟）。idcounts.dat 防膨胀的最后防线。
         // 同 tokenPurgeTask 模式：异步周期跑；扫所有 RESERVED 找 owner 已不在 walls 表的强制 FREE。
         mapPoolLeakTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
@@ -752,6 +808,10 @@ public final class HikariCanvas extends JavaPlugin {
         if (scriptStore != null) {
             scriptStore.setMaxRulesPerWall(fresh.scriptsConfig.maxRulesPerWall());
         }
+        // 0.7.0-P2-5：脚本执行预算三闸热更（已开的 1s 窗不重置，下个窗起生效——ScriptBudget javadoc）
+        if (scriptBudget != null) {
+            scriptBudget.applyConfig(fresh.scriptsConfig);
+        }
         getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
     }
 
@@ -807,6 +867,18 @@ public final class HikariCanvas extends JavaPlugin {
         if (variableProviderDaemon != null) {
             closeQuietly("variableProviderDaemon.shutdown", variableProviderDaemon::shutdown);
             variableProviderDaemon = null;
+        }
+        // 0.7.0-P2-5：停脚本引擎——先 Router（cancel 全部 timer + 关 hikari-script-trigger
+        // 调度线程，停掉新投递），再 Runner（关 hikari-script-runner 执行队列）。须早于
+        // animationTicker / database 关停：脚本动作会触碰 ticker（playTimeline）与 DB
+        // （setVariable 持久化 / persistWall）。
+        if (scriptTriggerRouter != null) {
+            closeQuietly("scriptTriggerRouter.shutdown", scriptTriggerRouter::shutdown);
+            scriptTriggerRouter = null;
+        }
+        if (scriptRunner != null) {
+            closeQuietly("scriptRunner.shutdown", scriptRunner::shutdown);
+            scriptRunner = null;
         }
         // 0.6 P2：停时间轴产帧引擎（单线程 daemon awaitTermination）。与 variableProviderDaemon
         // 同段关停——两者都是引用 wallRepo / DB 的 daemon，须早于下方 database.close。
