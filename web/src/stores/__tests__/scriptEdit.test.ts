@@ -449,7 +449,8 @@ describe('scriptEditStore — newRule 拿 server 发的 id', () => {
             const r = rule as Omit<ScriptRule, 'id' | 'wallId'>;
             expect(r.enabled).toBe(true);
             expect(r.trigger).toEqual({ type: 'wallReady' });
-            expect(r.actions).toEqual([]);
+            // 草稿必须带一个默认 log 动作（后端拒空 actions）——空 message 合法过校验。
+            expect(r.actions).toEqual([{ type: 'log', message: '' }]);
             // 模拟 server state.patch：新规则落 store
             scripts.upsert(makeRule('sr-NEW', { name: r.name }));
             return Promise.resolve();

@@ -127,6 +127,8 @@ onScopeDispose(() => {
  * sendScriptTest（ack 仅受理；轨迹另走 script.trace 推送，由上面的 watch 消费启动高亮）。
  */
 function onTest(): void {
+    // lock 守卫（与其它入口双层守卫一致）：按钮已 disabled，这里是冗余保险，锁定的墙不试跑。
+    if (locked.value) return;
     const ruleId = edit.selectedRuleId;
     if (ruleId === null || !edit.workingCopy) return;
     if (hasErrors.value) {

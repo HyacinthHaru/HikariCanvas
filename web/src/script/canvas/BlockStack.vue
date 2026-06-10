@@ -11,15 +11,17 @@
  * 触发器帽子 path = {@code 'trigger'}（trace 中触发器步的 blockId）。</p>
  */
 import { computed, inject, ref } from 'vue';
-import type { ScriptRule } from '@/types/protocol';
+import type { ScriptRule, ScriptTrigger } from '@/types/protocol';
 import { useI18n } from '@/i18n';
-import { TRIGGER_DEFS, type FieldDef } from '../model/blockDefs';
+import { TRIGGER_DEFS, makeDefaultTrigger, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
 import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
 import { resultColorVar, type HighlightMap } from './traceHighlight';
+import { useProjectStore } from '@/stores/project';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 import BlockNode from './BlockNode.vue';
+import BlockParamInput from '../params/BlockParamInput.vue';
 
 const props = defineProps<{
     /** 本堆对应的规则。 */
@@ -31,7 +33,10 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const project = useProjectStore();
 const edit = useScriptEditStore();
+/** 锁定态：true 时帽子的触发类型 select + 参数控件全禁用（K-UI-12，锁定的墙只读）。 */
+const locked = computed(() => project.isLocked);
 /** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
 /** H 试跑高亮（帽子 blockId = 'trigger'）；单独 mount 走空 map 兜底。 */
@@ -48,10 +53,21 @@ const hatDetail = computed(() => highlight.details.value.get('trigger'));
 /**
  * 帽子 pointerdown：选中本规则 + 启动移堆（拖帽子移整堆）。只接管主键（左键）。
  * 中键留给 pan（不 stopPropagation 让其冒泡到 viewport）。
+ *
+ * <p>帽子里现在有触发类型 select + 参数控件（H2）：pointerdown 落在表单元素上时不应启动
+ * 移堆（否则点下拉 / 输入框就把整堆拖走）。照 BlockNode.onBlockPointerDown 范式，跳过
+ * input/textarea/select/button/contentEditable 目标。</p>
  */
 function onHatPointerDown(e: PointerEvent): void {
     if (e.button !== 0) return; // 仅左键：移堆 + 选中
+    if (isFormTarget(e.target)) return;
     dragHandles.startStackDrag(props.rule.id, e);
+}
+
+/** pointerdown 目标是否表单元素（命中则不启动移堆，留给控件自身交互）。 */
+function isFormTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    return !!el && (el.matches?.('input, textarea, select, button') || el.isContentEditable);
 }
 
 /** 堆体（非帽子区）点击：选中本规则进入编辑（不拖动）。 */
@@ -59,33 +75,56 @@ function onStackClick(): void {
     if (edit.selectedRuleId !== props.rule.id) edit.selectRule(props.rule.id);
 }
 
-/** 触发器定义；未知 type → null（兜底显示触发器 type 字面量）。 */
+/** 触发器定义；未知 type → null（兜底退灰色条）。H2 起标题文案改由 select 当前 option 承载。 */
 const triggerDef = computed(() => TRIGGER_DEFS[props.rule.trigger.type] ?? null);
-
-/** 触发器帽子标题文案。 */
-const triggerTitle = computed(() =>
-    triggerDef.value
-        ? resolveLabelKey(t.value, triggerDef.value.labelKey)
-        : `${resolveLabelKey(t.value, 'script.unknownBlock')}: ${props.rule.trigger.type}`,
-);
 
 /** 触发器帽子色条（peach；无 def 退灰）。 */
 const triggerColor = computed(() =>
     triggerDef.value ? `var(${triggerDef.value.colorVar})` : 'var(--border)',
 );
 
-/** 触发器标量参数（占位：字段名 + 原始值）。触发器字段无 statements/condition。 */
+/**
+ * 触发器标量参数字段（H2：换成 {@link BlockParamInput} 真控件）。触发器字段都是标量
+ * （variableChange→fullName / timer→intervalSeconds / playerNear→rangeBlocks），无
+ * statements/condition，故整张 fields 表直接喂控件。playerJoin/playerKill/wallReady 为空。
+ */
 const triggerFields = computed<FieldDef[]>(() => triggerDef.value?.fields ?? []);
 
-function fieldLabel(field: FieldDef): string {
-    return resolveLabelKey(t.value, field.labelKey);
+/**
+ * 六种触发类型选项（select over TRIGGER_DEFS）：value = kind，label 走 def.labelKey
+ * （= {@code script.blocks.<kind>}，与帽子标题同口径）。
+ */
+const triggerKindOptions = computed<{ kind: string; label: string }[]>(() =>
+    Object.values(TRIGGER_DEFS).map((def) => ({
+        kind: def.kind,
+        label: resolveLabelKey(t.value, def.labelKey),
+    })),
+);
+
+/**
+ * 改触发类型：用 {@link makeDefaultTrigger} 造该类型的合法默认 trigger（带范围内默认参数 /
+ * 空引用），整体替换。lock 时 no-op（控件已 disabled，这里再守一手）。
+ */
+function onTriggerKindChange(e: Event): void {
+    if (locked.value) return;
+    const kind = (e.target as HTMLSelectElement).value;
+    if (kind === props.rule.trigger.type) return;
+    edit.setTrigger(makeDefaultTrigger(kind));
 }
 
-/** 取触发器某字段原始值文本。 */
-function triggerRawValue(field: FieldDef): string {
-    const raw = (props.rule.trigger as unknown as Record<string, unknown>)[field.name];
-    if (raw === undefined || raw === null) return '';
-    return String(raw);
+/** 取触发器某字段当前值（喂给 BlockParamInput 的 value）。缺失 → undefined（控件退默认）。 */
+function triggerFieldValue(field: FieldDef): unknown {
+    return (props.rule.trigger as unknown as Record<string, unknown>)[field.name];
+}
+
+/**
+ * 改触发器某字段值：immutable 在当前 trigger 上覆盖该单字段后整体 setTrigger
+ * （setTrigger 接收完整 ScriptTrigger）。不改 type（type 由 {@link onTriggerKindChange} 切）。
+ */
+function onTriggerFieldUpdate(field: FieldDef, value: unknown): void {
+    if (locked.value) return;
+    const next = { ...props.rule.trigger, [field.name]: value } as ScriptTrigger;
+    edit.setTrigger(next);
 }
 
 /** 堆的 absolute 定位样式。 */
@@ -135,16 +174,32 @@ const hatStyle = computed(() => {
         <span class="hc-hat-name">{{ rule.name }}</span>
         <span v-if="!rule.enabled" class="hc-hat-disabled">{{ t.script.close }}</span>
       </div>
+      <!-- H2：可编辑触发器 —— 触发类型 select + 当前类型参数控件（lock 时 disabled） -->
       <div class="hc-hat-row hc-hat-trigger">
-        <span class="hc-hat-trigger-label" :style="{ color: triggerColor }">{{ triggerTitle }}</span>
-        <span
+        <label class="hc-hat-trigger-kind">
+          <span class="hc-param-label">{{ t.script.triggerKindLabel }}</span>
+          <select
+            class="hc-hat-kind-select"
+            :style="{ color: triggerColor, borderColor: triggerColor }"
+            :value="rule.trigger.type"
+            :disabled="locked"
+            @change="onTriggerKindChange"
+          >
+            <option v-for="opt in triggerKindOptions" :key="opt.kind" :value="opt.kind">
+              {{ opt.label }}
+            </option>
+          </select>
+        </label>
+        <BlockParamInput
           v-for="f in triggerFields"
           :key="f.name"
           class="hc-hat-param"
-        >
-          <span class="hc-param-label">{{ fieldLabel(f) }}:</span>
-          <span class="hc-param-value">{{ triggerRawValue(f) || '—' }}</span>
-        </span>
+          :field="f"
+          :value="triggerFieldValue(f)"
+          :action-kind="rule.trigger.type"
+          :disabled="locked"
+          @update="(v: unknown) => onTriggerFieldUpdate(f, v)"
+        />
       </div>
     </div>
 
@@ -214,28 +269,38 @@ const hatStyle = computed(() => {
 .hc-hat-trigger {
     margin-top: 2px;
 }
-.hc-hat-trigger-label {
+/* H2：触发类型 select（label + 下拉），下拉描边随触发色 */
+.hc-hat-trigger-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+}
+.hc-hat-kind-select {
     font-size: 11px;
     font-weight: 600;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--background);
+    cursor: pointer;
+    max-width: 150px;
 }
+.hc-hat-kind-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+/* H2：触发参数控件（BlockParamInput）外包浅底，与 select 区分 */
 .hc-hat-param {
     display: inline-flex;
-    align-items: baseline;
-    gap: 3px;
-    font-size: 11px;
+    align-items: center;
     padding: 1px 6px;
     border-radius: 4px;
-    background: color-mix(in srgb, var(--muted) 60%, transparent);
+    background: color-mix(in srgb, var(--muted) 50%, transparent);
     max-width: 200px;
 }
 .hc-param-label {
     color: var(--muted-foreground);
-    white-space: nowrap;
-}
-.hc-param-value {
-    color: var(--foreground);
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
 .hc-stack-actions {

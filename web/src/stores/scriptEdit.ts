@@ -8,6 +8,7 @@ import { getWsClient } from '@/network/wsClient';
 import { getAt, parsePath } from '@/script/model/blockTree';
 import { parseBlockLayout, stringifyBlockLayout } from '@/script/model/serialize';
 import { validateRule, type ValidationError } from '@/script/model/validator';
+import { makeDefaultAction } from '@/script/model/blockDefs';
 
 /**
  * 0.7.0-P4-D1：积木编辑会话 store（决策 K-UI-11 / K-UI-12）。
@@ -141,7 +142,10 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             enabled: true,
             name,
             trigger: { type: 'wallReady' },
-            actions: [],
+            // 必须带至少一个动作：后端 ScriptRuleValidator 拒空 actions（SCRIPT_INVALID
+            // 「动作列表不能为空」），空数组会让 create 直接报错、走不通编辑器入口。默认给
+            // 一个空 message 的 log 动作——合法过校验、对游戏无害，用户进编辑器后再改 / 拖别的。
+            actions: [makeDefaultAction('log')],
             // 坐标先空——BlockCanvas 的 autoLayout 会给缺坐标规则纵向排布兜底（D2 拖帽子再写实坐标）。
             blockLayout: stringifyBlockLayout({ stacks: {} }),
         };

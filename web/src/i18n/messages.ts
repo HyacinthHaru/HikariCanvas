@@ -798,6 +798,8 @@ export const messages = {
             // lock 提示
             lockedHint: '这面墙已锁定，脚本只读',
             selectRuleHint: '在左侧选一条规则来编辑，或点「新建规则」',
+            // 0.7.0-P5-H2：触发器帽子里"选触发类型"下拉的前缀标签。
+            triggerKindLabel: '什么时候触发',
             // 积木标题文案（每种触发器 / 动作）。多为"动宾"短句，读起来像在描述这块做什么。
             blocks: {
                 variableChange: '当 变量变化',
@@ -1887,6 +1889,8 @@ export const messages = {
             legendError: 'Error',
             lockedHint: 'This wall is locked; scripts are read-only',
             selectRuleHint: 'Pick a rule on the left to edit, or click "New rule"',
+            // 0.7.0-P5-H2: prefix label for the "trigger type" select in the hat block.
+            triggerKindLabel: 'When to trigger',
             blocks: {
                 variableChange: 'When variable changes',
                 timer: 'Every interval',
