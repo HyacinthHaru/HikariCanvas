@@ -40,6 +40,28 @@
 
 ---
 
+## v3 → v4 变更总览（0.7）
+
+视觉运行时（`docs/scripting.md`）给墙加脚本规则（ScriptRule = 触发器 + 动作树）。协议随之升 v4。
+
+| 维度 | v3 | v4 |
+|---|---|---|
+| op 族 | timeline.* / keyframe.* 等 | **新增** `script.*` 5 op（§5.14） |
+| ready payload | aliases / variables / railBinding 等 | **新增** `scripts: ScriptRule[]`（本墙全部规则快照；store 未配或无墙回 `[]`） |
+| state.patch path | `/timelines/...` 等 | **新增** `/scripts/<encoded ruleId>`（add=完整 rule 对象，replace 语义统一用 add；remove 幂等） |
+| 客户端协商 | `clientProtocolVersion: 3` | **必须** `4`；服务端遇 `< 4` reject + close 4002 |
+| v3 客户端兼容 | — | **不兼容**，干净切换（同 v2→v3 理由） |
+
+要点：
+- **脚本不进 ProjectState**（scripting.md D7）——`ProjectState.PROTOCOL_VERSION` 仍为 3 是**有意为之**：
+  该常量只描述 project_json schema（v4 未改其形态），且仅作序列化输出、无导入校验。v2/v3 两次升版
+  恰逢 ProjectState schema 变化才同步 bump，本次不变。
+- 脚本 op **不进画布 undo/redo**（scripting.md §4.3；alias/schedule/rail 族同例）。
+- `script.*` patch 推送沿用 alias 通道纪律：`StatePatch.version` 取当前 `ProjectState.version` 不写 0
+  （Ultrareview 2026-05-25 #17）；一墙一活跃 session（byWall 排他锁），单 session push 等价全墙广播。
+
+---
+
 ## 1. 传输层
 
 | 项 | 约定 |
@@ -365,6 +387,25 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 >
 > 撤销侧 keyframe 连续拖动会按 coalesce key 合并（`docs/timeline.md §7`），协议层无需感知——前端在 `dragend` 才发终值一条 op，服务端按常规处理。
 
+### 5.14 墙脚本（v4 新增；契约 `docs/scripting.md`）
+
+| op | 方向 | payload | 说明 |
+| --- | --- | --- | --- |
+| `script.create` | C→S | `{ rule: { name, enabled?, trigger, actions, blockLayout? } }` | id / wallId 服务端权威（客户端给了也覆写）；enabled 缺省 true（**存在但非布尔 → INVALID_PAYLOAD**，不静默纠正）；blockLayout 缺省 `"{}"`。ack `{ rule }`（含服务端 id）+ patch `add /scripts/<id>` |
+| `script.update` | C→S | `{ ruleId, rule: {...同上全量} }` | 全量替换（积木编辑粒度太碎不做 patch op）；ruleId 必须属本 session 的 wall（跨墙 → `SCRIPT_NOT_FOUND`）。ack `{ rule }` + patch add |
+| `script.delete` | C→S | `{ ruleId }` | ack `{ ruleId, removed }`；不存在也推 `remove /scripts/<id>` 幂等 |
+| `script.enable` | C→S | `{ ruleId, enabled }` | 启停开关。ack `{ rule }` + patch add |
+| `script.test` | C→S | `{ ruleId }` | 试跑即真实执行（D5）：过 sound/command 面权限 + audit `SCRIPT_TEST`；P1 引擎未落地恒回 `SCRIPT_ENGINE_UNAVAILABLE`，P2 起 ack 返回执行轨迹 `{ steps: [...] }` |
+
+权限（保存时检查，执行时不查——scripting.md §4.1）：5 op 恒查 `canvas.script.edit`
+（default true；在线被显式收回**真拒**，仅离线/解析失败走 default 兜底）；create/update/test
+按规则内容加查面节点——全服事件帽子 → `canvas.script.trigger.global`、播声音 →
+`canvas.script.sound`、执行命令 → `canvas.script.command`（默 op）。**不读 wall lock**
+（lock-state 纪律）。脚本 op 不进画布 undo/redo（§4.3）。
+
+`trigger` / `actions` 的 wire 多态形态（type 判别 + 扁平字段、if 的 then/else 递归、
+playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为权威。
+
 ### 5.8 服务端主动推送
 
 | op | 方向 | 说明 |
@@ -424,6 +465,10 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 | `KEYFRAME_NOT_FOUND` | 0.6：keyframe.update / delete / move 指向不存在的 keyframeId | ❌ |
 | `INVALID_EASING` | 0.6：cubicBezier 控制点 x 越界 `[0,1]`，或缺 bezier 字段 | ❌ |
 | `INVALID_KEYFRAME_TIME` | 0.6：keyframe timeMs 为负值或超出所属 timeline 的 durationMs | ❌ |
+| `SCRIPT_INVALID` | 0.7：ScriptRuleValidator 结构校验拒（message 为人读原因首行；细节进 server 日志） | ❌ |
+| `SCRIPT_NOT_FOUND` | 0.7：script.update / delete / enable / test 指向不存在或非本墙的 ruleId | ❌ |
+| `SCRIPT_QUOTA_EXCEEDED` | 0.7：单墙规则数超 `scripts.max-rules-per-wall`（默 16） | ❌ |
+| `SCRIPT_ENGINE_UNAVAILABLE` | 0.7-P1：script.test 在执行引擎落地（P2）前恒回此码 | ❌ |
 | `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
 | `QUOTA_PER_WALL` | M13/M14：当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
 | `QUOTA_PER_DAY` | M13/M14：玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
@@ -767,6 +812,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 - 插件拒绝 `v < minSupported` 的客户端：`error: VERSION_MISMATCH` + close 4002
 - 协议版本协商在 `auth` 帧进行；客户端用多大的 `v` 作为上限由握手时 `serverVersion` 决定
 - **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「v2 → v3 变更总览（0.6）」）。`auth` 帧 `clientProtocolVersion: 3`；服务端遇 `client_v < 3` reject `VERSION_MISMATCH` + close 4002，沿用 M16.6 既有版本协商路径
+- **0.7 起协议升至 v4**（墙脚本 `script.*`；同样干净切换，见「v3 → v4 变更总览（0.7）」）。`auth` 帧 `clientProtocolVersion: 4`；`ProjectState.PROTOCOL_VERSION` 留 3 是有意（脚本不进 ProjectState，project_json schema 未变）
 
 ---
 

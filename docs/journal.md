@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P1 收口：**P1 完工**（终审 2 必修 + 契约回填 protocol v4 / data-model V017）
+
+P1（数据模型 + 协议 v4）四批次全部落地后做全程对抗终审（跨批次集成缝隙专项），收口：
+
+- **终审必修 #1**：`script.test` 与契约三处分叉——补 `checkFacets`（试跑即真实执行 D5，
+  sound/command 面缺失真拒）+ `SCRIPT_TEST` audit + ScriptTestSeam javadoc 改"已定"
+  （原写"P2 定夺"与 scripting.md §4.1 定稿矛盾）；handleTest 签名加 sessionId/Session，
+  BehaviorTest 两处调用点同步
+- **终审必修 #2**：wsClient.ts 三处版本注释还写"0.6 起 = 3"（P1-7 切 v4 时漏改）
+- **契约回填**：protocol.md 新增「v3 → v4 变更总览」+ §5.14 script.* 5 op 表 + 4 错误码
+  + §10 版本化 v4 行（含 ProjectState.PROTOCOL_VERSION 留 3 是有意的说明）；
+  data-model.md 新增 §2.10 wall_scripts（V017 / rule_json 整体存 / enabled 列权威 /
+  坏 blob 两档防御 / 三层级联清理 / 配额）
+- **scripting.md**：§8 P1 行标 ✅ + 新增 §11 P1 终审记账（P2 首任务清单：ScriptStore
+  暴露面 / ScriptTestSeam 异步化 / update enabled 继承 / 权限拒绝路径 dispatch 级测试;
+  P4/P5 账:错误码 i18n / 前端 validator 镜像 / blockLayout 帧预算;2 条已澄清防误判）
+- **CLAUDE.md** 0.7.0 路线行 P1 标 ✅
+
+**P1 总览**：13 commit（4 批次实施 + 3 轮质量修复 + 收口）/ 终审「真问题」仅 2 条且均为
+契约一致性级、0 运行时缺陷 / 后端 **1378** + 前端 **529** 全绿 / vite build 过 / 0 baseline 漂移。
+新增面：`script/` 包 9 类（sealed Trigger 6 + Action 8+if 双向 wire 多态 / Validator /
+Permissions / Store）+ V017 + ScriptDao + ScriptOpDispatcher 5 op + 协议 v4 干净切换 +
+4 权限节点 + 前端 types/wsClient/Pinia 镜像。
+
+关联文件：`docs/protocol.md` / `docs/data-model.md` / `docs/scripting.md` / `CLAUDE.md` /
+`plugin/.../web/ScriptOpDispatcher.java` / `web/src/network/wsClient.ts` / 测试 2 处
+
+---
+
 ## 2026-06-10 · 0.7.0-P1-7b 批次 3 质量修复（edit 权限真拒在线收回 / 异常入日志 / 跨墙 guard 回归测试 / reload 接线）
 
 - **#1（安全）NODE_EDIT fail-open 修复**：`ScriptOpDispatcher.checkBasePermission` 原

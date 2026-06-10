@@ -197,7 +197,7 @@ class ScriptOpDispatchBehaviorTest {
         });
 
         Envelope env = dispatcher.handleTest(envelope("script.test"),
-                WALL, Map.of("ruleId", "sr-missing1"));
+                SESSION_ID, session, WALL, Map.of("ruleId", "sr-missing1"));
 
         assertEquals("error", env.op());
         assertEquals("SCRIPT_NOT_FOUND", codeOf(env));
@@ -206,7 +206,7 @@ class ScriptOpDispatchBehaviorTest {
         // 存在的 ruleId 正常透传 seam
         ScriptRule rule = seedRule(store, WALL, "可试运行");
         Envelope ok = dispatcher.handleTest(envelope("script.test"),
-                WALL, Map.of("ruleId", rule.id()));
+                SESSION_ID, session, WALL, Map.of("ruleId", rule.id()));
         assertEquals("ack", ok.op());
         assertTrue(seamCalled[0]);
         assertNotNull(ok.payload());

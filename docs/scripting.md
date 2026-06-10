@@ -312,7 +312,7 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 
 | 段 | 内容 | 闸 | 估时 |
 |---|---|---:|---:|
-| **P1** | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + ready/patch + 前端镜像(types/wsClient/store) | 后端单测全绿 | ~50h |
+| **P1** ✅ 2026-06-10 | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + ready/patch + 前端镜像(types/wsClient/store)。4 批次 + 3 轮质量修复 + 全程对抗终审;后端 1378 / 前端 529 全绿 | 后端单测全绿 ✅ | ~50h |
 | **P2** | 执行引擎:TriggerRouter + ScriptRunner + ActionExecutor + Budget/熔断 + ConditionEvaluator(扩 expr)+ 先接 3 个无 Bukkit 事件触发器(变量/定时/墙就绪)。**P0 spike 折进首任务**(1 trigger + 1 action 端到端) | **MVP 闸:JSON 建规则游戏内生效(用户实测)** | ~70h |
 | **P3** | 游戏事件层:GameEventListenerHub(进服/击杀)+ playerNear 采样器 + 命令模板系统 + script.test 轨迹 | 6 触发 8 动作全通(单测) | ~50h |
 | **P4** | 积木引擎层:画布/拖拽/吸附/嵌套/序列化/本地 undo,2-3 个假积木验收 | 引擎可拖可嵌可存(用户实测) | ~70h |
@@ -332,3 +332,31 @@ StrictNumber / coalesce / 协议切换机制——抵掉 ~20h)。wall-clock 按�
 - [ ] `timer` 触发器在墙未部署时是否照跑(脚本副作用与渲染无关,倾向照跑;P2 定)
 - [ ] playerNear 采样间隔 config 默认值(10 tick 起步,P6 压测回填)
 - [ ] 积木画布 pan/zoom 手势与浏览器缩放冲突处理(P4 实测定)
+
+## 11. P1 终审记账(2026-06-10;后续 phase 必读)
+
+P1 全程对抗终审排出的设计债,按归属 phase 记账:
+
+**P2 首任务清单**:
+- [ ] **ScriptStore 暴露面**:补「枚举全部墙规则」snapshot API + mutation 监听钩子(照 VariableStore
+  ChangeListener 范式)——TriggerRouter 要建 `(triggerType → wallId → ruleId)` 索引并增量维护;
+  byTriggerType 索引放 Router 侧,store 保持哑存储
+- [ ] **ScriptTestSeam 必须异步化**:现同步签名阻塞 Jetty WS worker,而合法规则可串 wait 至分钟级,
+  前端 sendWithAck 5s 超时必爆。P2 改先 ack 受理 + 轨迹另走帧(或试跑压缩 wait)
+- [ ] **script.update 缺 enabled 默 true** → 改继承现值(防第三方 WS 客户端悄悄重启已禁用规则)
+- [ ] **权限拒绝路径 dispatch 级测试**:checkBasePermission 在线真拒 / checkFacets 拒绝 + audit
+  全链零测试(批次3 #1 修的正是这条路径)——P2 用 MockBukkit 在线玩家 deny case 补
+- [ ] 数值字段小数静默截断(`intervalSeconds=1.9→1`,canConvertToInt 只查范围):P2 决定收紧或接受
+
+**P4/P5 记账**:
+- [ ] 4 个错误码 i18n key(`SCRIPT_INVALID / SCRIPT_NOT_FOUND / SCRIPT_QUOTA_EXCEEDED /
+  SCRIPT_ENGINE_UNAVAILABLE`),目前 ack reject 回退 raw code
+- [ ] 前端 validator 镜像(本地预校验,别让用户拖完积木保存才被打回)+ `setElementProperty.property`
+  TS 窄化到 8 白名单 union
+- [ ] blockLayout 实际预算须低于 WS 入帧 64KB(BLOCK_LAYOUT_MAX 与帧限同值,贴限必 1009 断连);
+  前端发送前长度检查
+
+**已澄清(防后人误判)**:
+- `ProjectState.PROTOCOL_VERSION` 留 3 是**有意**(D7 脚本不进 ProjectState,project_json schema
+  未变;该常量仅序列化输出无导入校验)
+- patch 只推 caller session ≠ 漏广播:byWall 排他锁一墙一活跃 session,等价全墙广播(alias 同例)

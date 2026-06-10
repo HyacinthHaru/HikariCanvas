@@ -43,7 +43,7 @@ const READY_TIMEOUT_MS = 10_000;
 /** 重连退避阶梯（秒）。超过最后一档就停。 */
 const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
 /**
- * 双层版本说明（M16 P6.2 引入双层；0.6 起 business 升 3）：
+ * 双层版本说明（M16 P6.2 引入双层；0.6 升 3、0.7 升 4）：
  *
  * <ul>
  *   <li><b>信封壳 {@code Envelope.v}</b>：消息容器格式版本，恒为 {@link ENVELOPE_V}（=2，
@@ -52,7 +52,7 @@ const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
  *   <li><b>业务协议版本 {@code CLIENT_V}</b>：ProjectState schema / op 族契约版本。auth 帧 payload
  *       携 {@code client_v} 发给 server，server 在 [SUPPORTED_MIN, SUPPORTED_MAX] 范围内则 ready
  *       回 {@code accepted_v}；client 收到后校验 {@code accepted_v === CLIENT_V}，不匹配则断开。
- *       0.6 起 = 3（v3 时间轴；干净切换，不维持 v2 双轨，见 docs/protocol.md「v2 → v3」）。</li>
+ *       0.7 起 = 4（v4 墙脚本 script.*；v3 时间轴同为干净切换，见 docs/protocol.md「v3 → v4」）。</li>
  * </ul>
  *
  * 两者解耦：升业务版本只动 {@link CLIENT_V}，不动 {@link ENVELOPE_V}。
@@ -158,7 +158,7 @@ export class WsClient {
         }
         const id = `c-${this.seq++}`;
         // 信封壳 v 恒为 ENVELOPE_V（=2，与业务协议版本 CLIENT_V 解耦，见常量 javadoc）；
-        // 业务版本（client_v / accepted_v）走 auth payload，0.6 起 = 3。
+        // 业务版本（client_v / accepted_v）走 auth payload，0.7 起 = 4。
         const env: Envelope = { v: ENVELOPE_V, op, id, ts: Date.now(), payload };
         const text = JSON.stringify(env);
         this.ws.send(text);

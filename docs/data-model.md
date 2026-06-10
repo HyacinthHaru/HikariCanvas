@@ -338,6 +338,36 @@ ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute';
 - **migration V013**：现有 wall 行 ALTER ADD COLUMN DEFAULT 'minute'，无数据丢失，向下兼容
 - **级联删除**：wall 删除时 cascade（FK CASCADE 已声明；ScheduleDao.deleteByWall 显式调用兜底）
 
+### 2.10 表：`wall_scripts`（0.7.0 引入，V017）
+
+墙脚本规则（视觉运行时；契约 `docs/scripting.md §2`）。脚本不进 ProjectState（D7），
+独立表 + `ScriptStore` 内存镜像（onEnable `loadFromDb` 全量加载）。
+
+```sql
+-- V017
+CREATE TABLE IF NOT EXISTS wall_scripts (
+    id         TEXT    PRIMARY KEY,                -- "sr-<8hex>"
+    wall_id    TEXT    NOT NULL REFERENCES walls(wall_id) ON DELETE CASCADE,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    name       TEXT    NOT NULL,
+    rule_json  TEXT    NOT NULL,                   -- ScriptRule 整体 Jackson 序列化
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wall_scripts_wall ON wall_scripts(wall_id);
+```
+
+- **rule_json 整体存**（照 project_json 范式不拆列）：trigger / actions / blockLayout 全在内。
+  积木树是深嵌套结构，拆列无查询价值
+- **enabled / id / wall_id 列权威**：load 时若 blob 内值与列不符，以列重建 record——
+  `script.enable` 只翻列不重写 blob，避免两处漂移
+- **坏 blob 防御**：单行解析失败跳过 + SEVERE log，不拖垮整墙；`loadAll` 整体查询失败
+  异常外响（启动期与 migration 失败同级），`loadByWall` 保持整体防御返空
+- **级联删除三层**：FK CASCADE 删 DB 行 + SessionManager wallDeleteHook → `ScriptStore.clearWall`
+  清内存 + 前端 `project.reset()` → `useScriptStore().reset()`
+- **配额**：单墙 ≤ `scripts.max-rules-per-wall`（config，默 16）
+
 ---
 
 ## 3. PersistentDataContainer 约定

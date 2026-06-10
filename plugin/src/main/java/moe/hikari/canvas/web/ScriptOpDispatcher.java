@@ -70,9 +70,9 @@ final class ScriptOpDispatcher {
      * 固定回 {@code SCRIPT_ENGINE_UNAVAILABLE}；P2 ScriptRunner 落地后注入，
      * 返回值整体作为 ack payload。
      *
-     * <p><b>P2 决策点</b>：test 触发 sound / command 动作时的 facet 语义归属——
-     * 试运行算不算"使用"危险面（即 seam.run 前是否也要 checkFacets）尚未定，
-     * P2 接 ScriptRunner 时一并定夺；P1 仅做 ruleId 存在性守卫。</p>
+     * <p><b>facet 语义（契约 scripting.md §4.1 已定）</b>：试跑即真实执行（D5），
+     * 因此 {@code seam.run} 前同样过 {@link #checkFacets}（sound / command 面缺失真拒），
+     * 并记 {@code SCRIPT_TEST} audit——P2 接 ScriptRunner 时此层已就位，引擎侧无需重查。</p>
      */
     interface ScriptTestSeam {
         Map<String, Object> run(String wallId, String ruleId);
@@ -166,7 +166,7 @@ final class ScriptOpDispatcher {
                 case "script.update" -> handleUpdate(in, sessionId, s, wallId, payload);
                 case "script.delete" -> handleDelete(in, sessionId, s, wallId, payload);
                 case "script.enable" -> handleEnable(in, sessionId, s, wallId, payload);
-                case "script.test" -> handleTest(in, wallId, payload);
+                case "script.test" -> handleTest(in, sessionId, s, wallId, payload);
                 default -> Envelope.error(in.id(), "INVALID_OP",
                         "unknown script op: " + op);
             };
@@ -302,7 +302,8 @@ final class ScriptOpDispatcher {
         return Envelope.of("ack", in.id(), Map.of("rule", ruleMap));
     }
 
-    Envelope handleTest(Envelope in, String wallId, Map<String, Object> payload) {
+    Envelope handleTest(Envelope in, String sessionId, Session s,
+                        String wallId, Map<String, Object> payload) {
         String ruleId = stringOrNull(payload.get("ruleId"));
         if (ruleId == null || ruleId.isEmpty()) {
             return Envelope.error(in.id(), "INVALID_PAYLOAD", "ruleId required");
@@ -315,11 +316,20 @@ final class ScriptOpDispatcher {
         }
         // 批次3 #6：seam 调用前守卫 ruleId 存在性（含跨墙——find 按本 wall 查），
         // 不把"不存在的 ruleId"透传给引擎
-        if (store.find(wallId, ruleId).isEmpty()) {
+        Optional<ScriptRule> rule = store.find(wallId, ruleId);
+        if (rule.isEmpty()) {
             return Envelope.error(in.id(), "SCRIPT_NOT_FOUND",
                     "script rule not found: " + ruleId);
         }
-        return Envelope.of("ack", in.id(), seam.run(wallId, ruleId));
+        // 契约 scripting.md §4.1：试跑即真实执行（D5），同样过 sound/command 面权限
+        Set<String> facets = ScriptPermissions.requiredFacets(rule.get());
+        Envelope facetDenied = checkFacets(in, sessionId, s, "script.test", facets);
+        if (facetDenied != null) return facetDenied;
+
+        Map<String, Object> trace = seam.run(wallId, ruleId);
+        // 契约 scripting.md §5.3：试跑真实执行须留痕（audit 标 TEST 与常规触发区分）
+        recordAudit("SCRIPT_TEST", sessionId, s, wallId, rule.get(), facets);
+        return Envelope.of("ack", in.id(), trace);
     }
 
     // ──────────────────────────────────────────────────────────
