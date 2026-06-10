@@ -335,7 +335,7 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 |---|---|---:|---:|
 | **P1** ✅ 2026-06-10 | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + ready/patch + 前端镜像(types/wsClient/store)。4 批次 + 3 轮质量修复 + 全程对抗终审;后端 1378 / 前端 529 全绿 | 后端单测全绿 ✅ | ~50h |
 | **P2** ✅ 2026-06-10 | 执行引擎:TriggerRouter(变量/定时/墙就绪 3 触发器,无 debounce——Budget 即节流)+ ScriptRunner(单线程帧栈 + wait 续接 + K1 ThreadLocal 链深)+ ActionExecutor(8 动作,setElementProperty 双路径)+ Budget 三闸/ABA 熔断 + ConditionEvaluator(expr 扩比较/算术/var() + == 数值等值修订)。3 批次 + MVP 集成测试 7 case;后端 1515 / 前端 529 全绿 | **MVP 闸:JSON 建规则游戏内生效(待用户实测)** | ~70h |
-| **P3** | 游戏事件层:GameEventListenerHub(进服/击杀)+ playerNear 采样器 + 命令模板系统 + script.test 轨迹 | 6 触发 8 动作全通(单测) | ~50h |
+| **P3** ✅ 2026-06-10 | 游戏事件层:GameEventListenerHub(进服/击杀 MONITOR + 世界 UUID 快照表)+ playerNear 采样器(K14 进入沿状态机/跳帧热更)+ 命令模板系统(K13 转义/online-player 校验 + SCRIPT_COMMAND_EXECUTED audit)+ script.test 异步轨迹(K11 ack 受理 + script.trace 推送)+ 条件保存期预 parse(K16)。后端 1575 / 前端 536 全绿 | 6 触发 8 动作全通(单测)✅ | ~50h |
 | **P4** | 积木引擎层:画布/拖拽/吸附/嵌套/序列化/本地 undo,2-3 个假积木验收 | 引擎可拖可嵌可存(用户实测) | ~70h |
 | **P5** | 积木内容层:全部积木 def + 下拉集成 + 试跑高亮 + 全屏 overlay + i18n | **完整用户实测闸** | ~70h |
 | **P6** | 对抗审查(恶意脚本/熔断/采样器压测)+ 大白话教程 `docs/scripting-guide.md` + security.md/architecture.md 回填 + 版本号 + 收尾 | 全绿收口 | ~30h |
@@ -372,8 +372,7 @@ P1 全程对抗终审排出的设计债,按归属 phase 记账:
 - [x] **ScriptStore 暴露面**(P2-1 ✅ snapshotAll + Listener):补「枚举全部墙规则」snapshot API + mutation 监听钩子(照 VariableStore
   ChangeListener 范式)——TriggerRouter 要建 `(triggerType → wallId → ruleId)` 索引并增量维护;
   byTriggerType 索引放 Router 侧,store 保持哑存储
-- [ ] **ScriptTestSeam 必须异步化**:现同步签名阻塞 Jetty WS worker,而合法规则可串 wait 至分钟级,
-  前端 sendWithAck 5s 超时必爆。P2 改先 ack 受理 + 轨迹另走帧(或试跑压缩 wait)
+- [x] **ScriptTestSeam 必须异步化**(P3-A2 ✅ K11:ScriptTestLauncher + ack `{accepted}` + `script.trace` S→C 推送,旧 seam 已删)
 - [x] **script.update 缺 enabled 默 true**(P2-1 ✅ 继承现值) → 改继承现值(防第三方 WS 客户端悄悄重启已禁用规则)
 - [x] **权限拒绝路径 dispatch 级测试**(P2-1 ✅ MainThreadPerms.testResolver seam + 5 case):checkBasePermission 在线真拒 / checkFacets 拒绝 + audit
   全链零测试(批次3 #1 修的正是这条路径)——P2 用 MockBukkit 在线玩家 deny case 补

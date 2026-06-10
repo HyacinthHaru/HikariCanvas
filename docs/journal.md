@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P3 收口：**P3 游戏事件层完工**（6 触发器 8 动作全通）
+
+P3 六个 commit 收口（计划 + A1 命令模板 / A2 试跑异步+预 parse / B1 进服击杀 / B2 playerNear /
+审查修复），单轮合并审查（按用户要求压缩审查轮次）抓出 2 必修已修：
+
+- **A1 命令模板**：CommandTemplateEngine 纯函数（K13 转义：剥换行+§ / text 含 @ 整体拒 /
+  online-player 精确命中 / 前导 / 剥除）+ runCommand 真实化（console dispatch +
+  SCRIPT_COMMAND_EXECUTED audit）+ config `scripts.command-templates` 段
+- **A2 试跑异步**（K11/K16）：ScriptTestLauncher 取代同步 seam；ack 立即 `{accepted}`，
+  轨迹经新 `OpPushCallback.pushOp` 推 `script.trace`（callback 恰一次全路径）；
+  条件保存期预 parse（坏条件 SCRIPT_INVALID 带 blockId）；前端 lastTrace store
+- **B1/B2 游戏事件**（K14/K15）：GameEventListenerHub（MONITOR 纯转发）+ Router 全局索引
+  （join/kill）+ PlayerNearSampler（零 Bukkit 进入沿状态机 + 跳帧热更）+ 世界 UUID 快照表
+  （修 WS 线程异步 getWorld + WorldLoadEvent 自动补登记后加载世界的 near 规则）
+- **基线**：后端 **1575**（P2 末 1515 → +60）/ 前端 **536** 全绿 / vite build 过
+- §8 P3 标 ✅ / §11 ScriptTestSeam 异步化勾账 / §10 采样间隔回填
+
+0.7.0 进度：P1 ✅ P2 ✅ P3 ✅ → P4 积木引擎（前端工时大头）→ P5 积木内容 + 完整实测闸 → P6 收尾。
+
+---
+
 ## 2026-06-10 · 0.7.0-P3-5：审查修复（世界 UUID 快照表免异步 getWorld + 后加载世界自动补登记 + §5.2 对齐）
 
 P3 审查 4 项收口（1/2 必须修，3/4 记账）：
