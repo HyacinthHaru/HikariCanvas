@@ -757,6 +757,10 @@ public final class HikariCanvas extends JavaPlugin {
                 .filter(id -> !failedRestoreForScript.contains(id))
                 .toList();
         routerForScript.fireWallReadyAll(scriptReadyWalls);
+        // 0.7.0-P3 B1（K15）：进服 / 击杀事件入口——Hub 只转发，索引遍历 + 最新规则
+        // 判定全在 Router（可单测）。MONITOR 优先级观察语义，不改事件结果。
+        getServer().getPluginManager().registerEvents(
+                new moe.hikari.canvas.script.engine.GameEventListenerHub(routerForScript), this);
         // 0.7.0-P3 A2（K11）：script.test 异步试跑入口——dispatcher ack 立即返，轨迹经
         // callback 推 script.trace。K12：TEST 不豁免 Budget（submit 投递侧统一过闸）。
         // find 与 launch 之间规则被并发删 → 回 error step（callback 契约恰一次）。

@@ -211,6 +211,103 @@ class TriggerRouterTest {
         assertTrue(fakeTimers.entries.get(0).future.cancelled);
     }
 
+    // ---------- playerJoin / playerKill 全局索引（0.7.0-P3 B1 / K15） ----------
+
+    @Test
+    void globalIndex_rebuildAddsAndRemoves() {
+        ScriptRule join = addRule(WALL, true, new Trigger.PlayerJoin());
+        addRule(WALL, true, new Trigger.PlayerKill());
+        addRule("w-other", true, new Trigger.PlayerJoin());
+        router.rebuildWall(WALL);
+        router.rebuildWall("w-other");
+        assertEquals(2, router.joinRuleCount());
+        assertEquals(1, router.killRuleCount());
+        // 规则换型 → rebuild 后 join 索引出、kill 索引进
+        scriptStore.update(join.id(), new ScriptRule(null, null, true, "r",
+                new Trigger.PlayerKill(), List.of(new Action.Log("x")), "{}"));
+        router.rebuildWall(WALL);
+        assertEquals(1, router.joinRuleCount(), "换型后旧 join 条目清掉");
+        assertEquals(2, router.killRuleCount());
+    }
+
+    @Test
+    void globalIndex_disabledRuleNotIndexed() {
+        addRule(WALL, false, new Trigger.PlayerJoin());
+        addRule(WALL, false, new Trigger.PlayerKill());
+        router.rebuildWall(WALL);
+        assertEquals(0, router.joinRuleCount());
+        assertEquals(0, router.killRuleCount());
+        router.firePlayerJoin("Steve");
+        router.firePlayerKill("Alex", "Steve");
+        assertEquals(0, sink.blockIds.size(), "disabled → 不索引不触发");
+    }
+
+    @Test
+    void firePlayerJoin_submitsWithJoinContext() {
+        RecordingSubmitter rec = new RecordingSubmitter();
+        TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
+                VariableInterpolator::resolveFullName, LOG, new FakeTimerScheduler());
+        addRule(WALL, true, new Trigger.PlayerJoin());
+        r2.rebuildWall(WALL);
+        r2.firePlayerJoin("Steve");
+        assertEquals(1, rec.contexts.size(), "join 规则被投递");
+        assertEquals(WALL, rec.wallIds.get(0));
+        assertEquals(TriggerContext.Source.PLAYER_JOIN, rec.contexts.get(0).source());
+        assertEquals(0, rec.contexts.get(0).chainDepth(), "事件来源链深恒 0");
+        assertEquals("Steve", rec.contexts.get(0).detail(), "detail = 玩家名");
+    }
+
+    @Test
+    void firePlayerKill_detailIsVictimArrowKiller() {
+        RecordingSubmitter rec = new RecordingSubmitter();
+        TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
+                VariableInterpolator::resolveFullName, LOG, new FakeTimerScheduler());
+        addRule(WALL, true, new Trigger.PlayerKill());
+        r2.rebuildWall(WALL);
+        r2.firePlayerKill("Alex", "Steve");
+        assertEquals(1, rec.contexts.size());
+        assertEquals(TriggerContext.Source.PLAYER_KILL, rec.contexts.get(0).source());
+        assertEquals(0, rec.contexts.get(0).chainDepth());
+        assertEquals("Alex→Steve", rec.contexts.get(0).detail(), "detail = victim→killer");
+        // join 事件不触发 kill 规则
+        r2.firePlayerJoin("Steve");
+        assertEquals(1, rec.contexts.size());
+    }
+
+    @Test
+    void globalIndex_staleEntry_latestRuleWins() {
+        ScriptRule r = addRule(WALL, true, new Trigger.PlayerJoin());
+        router.rebuildWall(WALL);
+        // 索引未重建（不经 listener）：store 内禁用 → fire 时刻 find 最新 → 跳过
+        scriptStore.setEnabled(WALL, r.id(), false);
+        router.firePlayerJoin("Steve");
+        assertEquals(0, sink.blockIds.size(), "stale 索引条目不执行已禁用规则");
+        // store 内换型（join → kill）但索引残留 join 条目 → join 事件不误触发
+        scriptStore.setEnabled(WALL, r.id(), true);
+        scriptStore.update(r.id(), new ScriptRule(null, null, true, "r",
+                new Trigger.PlayerKill(), List.of(new Action.Log("x")), "{}"));
+        router.firePlayerJoin("Steve");
+        assertEquals(0, sink.blockIds.size(), "换型规则不被旧型事件误触发");
+    }
+
+    @Test
+    void globalIndex_removeWallAndShutdownClear() {
+        addRule(WALL, true, new Trigger.PlayerJoin());
+        addRule(WALL, true, new Trigger.PlayerKill());
+        addRule("w-other", true, new Trigger.PlayerJoin());
+        router.rebuildWall(WALL);
+        router.rebuildWall("w-other");
+        router.removeWall(WALL);
+        assertEquals(1, router.joinRuleCount(), "删墙只清本墙条目");
+        assertEquals(0, router.killRuleCount());
+        router.firePlayerJoin("Steve");
+        assertEquals(1, sink.blockIds.size(), "别的墙照常触发");
+        router.shutdown();
+        assertEquals(0, router.joinRuleCount(), "关停清空全局索引");
+        router.firePlayerJoin("Steve");
+        assertEquals(1, sink.blockIds.size(), "关停后 fire no-op");
+    }
+
     // ---------- wallReady ----------
 
     @Test
@@ -263,6 +360,18 @@ class TriggerRouterTest {
 
         @Override
         public void shutdown() {
+        }
+    }
+
+    /** 记录投递的 RunSubmitter 替身（B1：ctx 形态断言）。 */
+    private static final class RecordingSubmitter implements TriggerRouter.RunSubmitter {
+        final List<String> wallIds = new ArrayList<>();
+        final List<TriggerContext> contexts = new ArrayList<>();
+
+        @Override
+        public void submit(String wallId, ScriptRule rule, TriggerContext ctx) {
+            wallIds.add(wallId);
+            contexts.add(ctx);
         }
     }
 

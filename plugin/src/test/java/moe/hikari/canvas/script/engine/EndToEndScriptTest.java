@@ -228,6 +228,26 @@ class EndToEndScriptTest {
         assertEquals("2", value("user:w-1/hits"), "新 fullName 触发");
     }
 
+    // ── ⑧ 进服事件全链（0.7.0-P3 B1：Hub 转发语义 → Router 全局索引 → 执行） ──
+
+    @Test
+    void playerJoin_firesGlobalRulesAcrossWalls() {
+        variableStore.create("user:w-1", "joins", VarType.NUMBER, "0", null);
+        variableStore.create("user:w-2", "joins", VarType.NUMBER, "0", null);
+        addRule("w-1", true, new Trigger.PlayerJoin(),
+                List.of(new Action.IncrementVariable("user/joins", 1)));
+        addRule("w-2", true, new Trigger.PlayerJoin(),
+                List.of(new Action.IncrementVariable("user/joins", 1)));
+        addRule("w-2", false, new Trigger.PlayerJoin(),
+                List.of(new Action.IncrementVariable("user/joins", 1)));
+
+        // GameEventListenerHub.onPlayerJoin 的转发语义 = router.firePlayerJoin(name)
+        router.firePlayerJoin("Steve");
+
+        assertEquals("1", value("user:w-1/joins"), "全局索引跨墙触发");
+        assertEquals("1", value("user:w-2/joins"), "enabled 规则各跑一次；disabled 跳过");
+    }
+
     // ──────────────────────────────────────────────────────────
     //  fakes
     // ──────────────────────────────────────────────────────────

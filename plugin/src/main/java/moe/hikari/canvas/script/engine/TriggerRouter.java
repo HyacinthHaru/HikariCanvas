@@ -34,6 +34,11 @@ import java.util.logging.Logger;
  *       runner 单线程串行执行重活，timer 到期不该排在 wait 续接后面才投递。</li>
  *   <li><b>wallReady</b>：不进索引——{@link #fireWallReady} 时直查 {@code store.listByWall}
  *       （K9 两触发点：启动恢复成功墙 + {@code SessionManager.confirm} 部署完成）。</li>
+ *   <li><b>playerJoin / playerKill</b>（0.7.0-P3 B1 / K15）：全局触发索引
+ *       {@code Set<RuleRef>} 两枚——事件不带墙语义，到达时遍历全服该型规则
+ *       （规则量受 per-wall 配额约束，O(全服规则) 可接受）。事件入口集中在
+ *       {@link GameEventListenerHub}（主线程 MONITOR），本类 fire 方法只做
+ *       store.find 最新 + enabled 判定 + submit。</li>
  * </ul>
  *
  * <p><b>索引只存引用（防 stale rule）</b>：{@code RuleRef = (wallId, ruleId)}，触发时刻
@@ -64,6 +69,15 @@ public final class TriggerRouter {
     }
 
     /**
+     * 投递 seam（0.7.0-P3 B1）：生产 = {@code ScriptRunner::submit}；测试注记录替身
+     * 可直接断言 TriggerContext 形态（source / chainDepth / detail）。
+     */
+    @FunctionalInterface
+    interface RunSubmitter {
+        void submit(String wallId, ScriptRule rule, TriggerContext ctx);
+    }
+
+    /**
      * timer 调度 seam：生产 = 自持单线程 daemon SES（{@code hikari-script-trigger}）；
      * 测试注手动 tick 替身。
      */
@@ -78,7 +92,7 @@ public final class TriggerRouter {
     private record RuleRef(String wallId, String ruleId) {}
 
     private final ScriptStore store;
-    private final ScriptRunner runner;
+    private final RunSubmitter runner;
     private final FullNameResolver resolver;
     private final Logger log;
     private final TimerScheduler timers;
@@ -90,15 +104,29 @@ public final class TriggerRouter {
     private final Map<String, Set<String>> wallKeys = new ConcurrentHashMap<>();
     /** {@code wallId:ruleId} → 该 timer 规则的周期任务。 */
     private final Map<String, ScheduledFuture<?>> timerTasks = new ConcurrentHashMap<>();
+    /**
+     * 0.7.0-P3 B1（K15）：playerJoin 全局触发索引。规则量受 per-wall 配额约束，
+     * 事件到达时 O(全服 join 规则) 遍历可接受；与 byFullName 同纪律——只存引用，
+     * fire 时刻 {@code store.find} 拿最新规则。
+     */
+    private final Set<RuleRef> joinRules = ConcurrentHashMap.newKeySet();
+    /** 0.7.0-P3 B1（K15）：playerKill 全局触发索引（同 {@link #joinRules} 纪律）。 */
+    private final Set<RuleRef> killRules = ConcurrentHashMap.newKeySet();
 
     /** 生产装配：自建单线程 daemon 调度器（线程名 {@code hikari-script-trigger}）。 */
     public TriggerRouter(ScriptStore store, ScriptRunner runner,
                          FullNameResolver resolver, Logger log) {
-        this(store, runner, resolver, log, new SesTimerScheduler());
+        this(store, (RunSubmitter) runner::submit, resolver, log, new SesTimerScheduler());
     }
 
-    /** 测试装配：注入 timer 调度替身。 */
+    /** 测试装配：注入 timer 调度替身（投递走真 runner）。 */
     TriggerRouter(ScriptStore store, ScriptRunner runner,
+                  FullNameResolver resolver, Logger log, TimerScheduler timers) {
+        this(store, (RunSubmitter) runner::submit, resolver, log, timers);
+    }
+
+    /** 测试装配：注入投递替身（B1，ctx 形态可断言）+ timer 调度替身。 */
+    TriggerRouter(ScriptStore store, RunSubmitter runner,
                   FullNameResolver resolver, Logger log, TimerScheduler timers) {
         this.store = store;
         this.runner = runner;
@@ -131,6 +159,8 @@ public final class TriggerRouter {
         cancelAllTimersLocked();
         byFullName.clear();
         wallKeys.clear();
+        joinRules.clear();
+        killRules.clear();
         if (shutdown) return;
         int n = 0;
         for (Map.Entry<String, java.util.List<ScriptRule>> e : store.snapshotAll().entrySet()) {
@@ -156,6 +186,8 @@ public final class TriggerRouter {
         cancelAllTimersLocked();
         byFullName.clear();
         wallKeys.clear();
+        joinRules.clear();
+        killRules.clear();
         timers.shutdown();
     }
 
@@ -211,6 +243,42 @@ public final class TriggerRouter {
         }
     }
 
+    /**
+     * 玩家进服（B1/K15；{@code GameEventListenerHub.onPlayerJoin} 接入，主线程调）→
+     * 遍历全局 join 索引投递。事件来源非脚本，链深恒 0；detail = 玩家名（K17：
+     * 只进 trace / audit，不注入动作参数）。
+     */
+    public void firePlayerJoin(String playerName) {
+        fireGlobal(joinRules, Trigger.PlayerJoin.class,
+                TriggerContext.Source.PLAYER_JOIN, playerName);
+    }
+
+    /**
+     * 玩家被击杀（B1/K15；{@code GameEventListenerHub.onPlayerDeath}，killer 非 null
+     * 才到这里）→ 遍历全局 kill 索引投递。detail = {@code victim→killer}。
+     */
+    public void firePlayerKill(String victimName, String killerName) {
+        fireGlobal(killRules, Trigger.PlayerKill.class,
+                TriggerContext.Source.PLAYER_KILL, victimName + "→" + killerName);
+    }
+
+    /**
+     * 全局触发公共路径：遍历索引 → {@code store.find} 最新规则（防 stale）→
+     * enabled 且触发器仍是期望类型才投递（rebuild 竞态窗口里换型规则不误触发）。
+     */
+    private void fireGlobal(Set<RuleRef> refs, Class<? extends Trigger> expectedType,
+                            TriggerContext.Source source, String detail) {
+        if (shutdown || refs.isEmpty()) return;
+        for (RuleRef ref : refs) {
+            ScriptRule latest = store.find(ref.wallId(), ref.ruleId()).orElse(null);
+            if (latest == null || !latest.enabled()
+                    || !expectedType.isInstance(latest.trigger())) {
+                continue;   // 索引残留 / 已禁用 / 已换型 → 跳过
+            }
+            runner.submit(ref.wallId(), latest, new TriggerContext(source, 0, detail));
+        }
+    }
+
     // ──────────────────────────────────────────────────────────
     //  内部（*Locked 方法仅在 synchronized 内调）
     // ──────────────────────────────────────────────────────────
@@ -233,8 +301,12 @@ public final class TriggerRouter {
             wallKeys.computeIfAbsent(wallId, k -> ConcurrentHashMap.newKeySet()).add(resolved);
         } else if (t instanceof Trigger.Timer timer) {
             scheduleTimerLocked(wallId, rule.id(), timer.intervalSeconds());
+        } else if (t instanceof Trigger.PlayerJoin) {
+            joinRules.add(new RuleRef(wallId, rule.id()));
+        } else if (t instanceof Trigger.PlayerKill) {
+            killRules.add(new RuleRef(wallId, rule.id()));
         }
-        // playerJoin / playerKill / playerNear：0.7.0-P3（GameEventListenerHub）；
+        // playerNear：0.7.0-P3 B2（PlayerNearSampler）；
         // wallReady 不进索引（fireWallReady 直查 store）。
     }
 
@@ -283,6 +355,8 @@ public final class TriggerRouter {
     }
 
     private void clearWallLocked(String wallId) {
+        joinRules.removeIf(ref -> ref.wallId().equals(wallId));
+        killRules.removeIf(ref -> ref.wallId().equals(wallId));
         Set<String> keys = wallKeys.remove(wallId);
         if (keys != null) {
             for (String fn : keys) {
@@ -325,6 +399,16 @@ public final class TriggerRouter {
     /** 某 timer 规则当前是否有调度条目。 */
     boolean hasTimer(String wallId, String ruleId) {
         return timerTasks.containsKey(timerKey(wallId, ruleId));
+    }
+
+    /** 全局 join 索引当前条目数（B1）。 */
+    int joinRuleCount() {
+        return joinRules.size();
+    }
+
+    /** 全局 kill 索引当前条目数（B1）。 */
+    int killRuleCount() {
+        return killRules.size();
     }
 
     /** 生产调度器：单线程 daemon SES（照 {@code ScriptRunner.SesScheduler} 关停纪律）。 */
