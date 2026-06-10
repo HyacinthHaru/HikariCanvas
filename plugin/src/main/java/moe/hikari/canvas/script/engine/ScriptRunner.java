@@ -41,8 +41,9 @@ import java.util.logging.Logger;
  * <p><b>ABA 链深（K1）</b>：执行段全程 {@link #CHAIN_DEPTH} ThreadLocal 置
  * {@code ctx.chainDepth()}（finally 必清）。脚本动作 setVariable →
  * {@code VariableStore.fireChange} 同步发生在 runner 线程 → TriggerRouter（批次 3）
- * 的 listener 读 {@link #currentChainDepth()} 得 depth，投递下游 run 时 +1——零
- * VariableStore API 改动。</p>
+ * 的 listener <b>直读 {@code CHAIN_DEPTH.get()}</b>：null（非脚本来源）→ depth 0；
+ * 非 null（runner 线程脚本写变量）→ +1。不能用 currentChainDepth()+1——它把无上下文
+ * 折叠成 0 会让非脚本来源被错算成 depth 1。零 VariableStore API 改动。</p>
  *
  * <p><b>trace（K10）</b>：每 run 收集 {@code List<TraceStep>}，结束后 FINE log 一行
  * summary；P3 接 {@code script.test} ack。</p>

@@ -96,7 +96,7 @@ record ScriptRule(
 | `playSound` | `soundId, volume(0-2), pitch(0.5-2), scope`(near=墙周 16 格 / all=全服) | 主线程 hop | sound |
 | `wait` | `ms`(50-5000) | 调度续接(不占线程睡眠) | edit |
 | `runCommand` | `templateId, params: Map<String,String>` | 主线程 hop,console sender | **command(默 op)** |
-| `log` | `message`(插值后入 plugin logger + audit) | async | edit |
+| `log` | `message`(插值后入 plugin logger;**不进 audit**——玩家级高频动作进 audit 会刷库,P2 实施期修订;SCRIPT_* 管理事件照常入 audit) | async | edit |
 | `if` | `condition: Expr 源串, then: List<Action>, else: List<Action>` | — | edit |
 
 - `if` 嵌套深度 ≤ 4(校验期拒绝);`wait` 嵌套深度 ≤ 3(Budget)。
@@ -213,8 +213,9 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
   { "steps": [ {"blockId":"...", "kind":"trigger|condition|action",
                 "result":"ok|skipped|blocked|error", "detail":"条件值/错误信息"} ] }
   ```
-  blockId 由前端在序列化时给每个积木分配并存进 rule_json,后端执行时原样回填——
-  后端不理解坐标,只按树路径对应。
+  blockId = **动作树路径**(如 `trigger` / `actions/0` / `actions/2/then/1`),由后端执行期
+  按树位置生成(P2 实施期修订——P1 数据模型无 per-action id,树路径与前端积木树天然同构,
+  前端无需在 rule_json 里存 id 即可定位高亮)。
 
 ### 4.3 撤销(2026-06-10 P1 实施期修订)
 
@@ -318,7 +319,7 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 | 段 | 内容 | 闸 | 估时 |
 |---|---|---:|---:|
 | **P1** ✅ 2026-06-10 | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + ready/patch + 前端镜像(types/wsClient/store)。4 批次 + 3 轮质量修复 + 全程对抗终审;后端 1378 / 前端 529 全绿 | 后端单测全绿 ✅ | ~50h |
-| **P2** | 执行引擎:TriggerRouter + ScriptRunner + ActionExecutor + Budget/熔断 + ConditionEvaluator(扩 expr)+ 先接 3 个无 Bukkit 事件触发器(变量/定时/墙就绪)。**P0 spike 折进首任务**(1 trigger + 1 action 端到端) | **MVP 闸:JSON 建规则游戏内生效(用户实测)** | ~70h |
+| **P2** ✅ 2026-06-10 | 执行引擎:TriggerRouter(变量/定时/墙就绪 3 触发器,无 debounce——Budget 即节流)+ ScriptRunner(单线程帧栈 + wait 续接 + K1 ThreadLocal 链深)+ ActionExecutor(8 动作,setElementProperty 双路径)+ Budget 三闸/ABA 熔断 + ConditionEvaluator(expr 扩比较/算术/var() + == 数值等值修订)。3 批次 + MVP 集成测试 7 case;后端 1515 / 前端 529 全绿 | **MVP 闸:JSON 建规则游戏内生效(待用户实测)** | ~70h |
 | **P3** | 游戏事件层:GameEventListenerHub(进服/击杀)+ playerNear 采样器 + 命令模板系统 + script.test 轨迹 | 6 触发 8 动作全通(单测) | ~50h |
 | **P4** | 积木引擎层:画布/拖拽/吸附/嵌套/序列化/本地 undo,2-3 个假积木验收 | 引擎可拖可嵌可存(用户实测) | ~70h |
 | **P5** | 积木内容层:全部积木 def + 下拉集成 + 试跑高亮 + 全屏 overlay + i18n | **完整用户实测闸** | ~70h |
@@ -348,15 +349,15 @@ StrictNumber / coalesce / 协议切换机制——抵掉 ~20h)。wall-clock 按�
 P1 全程对抗终审排出的设计债,按归属 phase 记账:
 
 **P2 首任务清单**:
-- [ ] **ScriptStore 暴露面**:补「枚举全部墙规则」snapshot API + mutation 监听钩子(照 VariableStore
+- [x] **ScriptStore 暴露面**(P2-1 ✅ snapshotAll + Listener):补「枚举全部墙规则」snapshot API + mutation 监听钩子(照 VariableStore
   ChangeListener 范式)——TriggerRouter 要建 `(triggerType → wallId → ruleId)` 索引并增量维护;
   byTriggerType 索引放 Router 侧,store 保持哑存储
 - [ ] **ScriptTestSeam 必须异步化**:现同步签名阻塞 Jetty WS worker,而合法规则可串 wait 至分钟级,
   前端 sendWithAck 5s 超时必爆。P2 改先 ack 受理 + 轨迹另走帧(或试跑压缩 wait)
-- [ ] **script.update 缺 enabled 默 true** → 改继承现值(防第三方 WS 客户端悄悄重启已禁用规则)
-- [ ] **权限拒绝路径 dispatch 级测试**:checkBasePermission 在线真拒 / checkFacets 拒绝 + audit
+- [x] **script.update 缺 enabled 默 true**(P2-1 ✅ 继承现值) → 改继承现值(防第三方 WS 客户端悄悄重启已禁用规则)
+- [x] **权限拒绝路径 dispatch 级测试**(P2-1 ✅ MainThreadPerms.testResolver seam + 5 case):checkBasePermission 在线真拒 / checkFacets 拒绝 + audit
   全链零测试(批次3 #1 修的正是这条路径)——P2 用 MockBukkit 在线玩家 deny case 补
-- [ ] 数值字段小数静默截断(`intervalSeconds=1.9→1`,canConvertToInt 只查范围):P2 决定收紧或接受
+- [x] 数值字段小数静默截断(P2-1 ✅ K8 收紧:非整数值拒 INVALID_PAYLOAD)(`intervalSeconds=1.9→1`,canConvertToInt 只查范围):P2 决定收紧或接受
 
 **P4/P5 记账**:
 - [ ] 4 个错误码 i18n key(`SCRIPT_INVALID / SCRIPT_NOT_FOUND / SCRIPT_QUOTA_EXCEEDED /

@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-06-10 · 0.7.0-P2 收口：**P2 执行引擎完工**（MVP 闸待游戏内实测）
+
+P2 三批次（8 commit）全部落地，收口杂项：
+
+- **ScriptRunner 过期 javadoc 修正**（批次 3 规格审查指出）：ABA 链深读取的真实形态是
+  Router 直读 `CHAIN_DEPTH.get()`（null=非脚本来源→depth 0 / 非 null→+1），不是
+  `currentChainDepth()+1`（会把玩家/Provider 来源错算成 depth 1）。
+- **契约回订 3 处（scripting.md）**：§2.3 log 动作不进 audit（玩家级高频会刷库）；
+  §4.2 blockId = 动作树路径（`actions/2/then/1`，后端执行期生成，P1 无 per-action id，
+  与前端积木树天然同构）；§8 P2 标 ✅ + §11 账单勾掉 4 项（剩 ScriptTestSeam 异步化留 P3）。
+- **P2 全貌**：批次 1 = P1 账单清欠（Store snapshotAll+Listener / enabled 继承 /
+  权限拒绝 dispatch 级测试 / K8 整数收紧）+ 条件文法（expr 扩比较/算术/var()，7 层
+  递归下降，== 双侧数值形态走数值等值，StrictNumber 单一权威，ConditionEvaluator
+  parse 缓存+负缓存）；批次 2 = ScriptRunner（单线程帧栈迭代 + wait 整栈拷贝续接 +
+  Budget 三闸 runs/s·actions·chainDepth + K5 audit 限频 + K1 ThreadLocal）+
+  ActionExecutor（8 动作 + TickerControl 门面 + 三层异常隔离）+ ElementPropertyApplier
+  （路径 A = SessionManager.applyScriptElementPatch 标准链 / 路径 B = headless 临时
+  EditSession 单一权威 + persistWall 同构 Ticker 分支）；批次 3 = TriggerRouter
+  （变量倒排索引防 stale + timer 独立 SES 自清 + wallReady 双触发点 K9 +
+  SessionManager.wallReadyHooks）+ 全链装配（4 路监听 + reload 热更 + 关停顺序）+
+  MVP 集成测试 7 case（含 ABA 链深精确演进断言）。
+- **测试基线**：后端 **1515**（P1 末 1378 → +137）/ 前端 **529** 全绿 / 0 baseline 漂移。
+
+关联文件：`script/engine/`（ConditionEvaluator/TriggerContext/TraceStep/ActionSink/
+ScriptBudget/ScriptRunner/TickerControl/ActionExecutor/ElementPropertyApplier/TriggerRouter）
+/ `template/expr/*` / `SessionManager` / `HikariCanvas` / `HikariCanvasConfig` /
+`docs/scripting.md` / `CLAUDE.md`
+
+---
+
 ## 2026-06-10 · 0.7.0-P2-2b 批次 1 审查留账（== 数值等值契约修订 / warned 上限 / 数值归一单点）
 
 - **`==`/`!=` 数值等值（契约修订，规格审查者建议采纳）**：`ExpressionEvaluator.equals()`
