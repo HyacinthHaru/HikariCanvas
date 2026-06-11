@@ -194,3 +194,68 @@ describe('BlockNode if 递归 + path 同构', () => {
         expect(w.text()).toContain('把积木拖到这里');
     });
 });
+
+describe('BlockNode 待完善角标（次要问题 1：扩展到 variable / condition / sound）', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
+    });
+
+    /** 角标存在性 + hover 文案命中某字段名。 */
+    function badge(w: ReturnType<typeof mountNode>) {
+        return w.find('.hc-block-need-select');
+    }
+
+    it('setVariable：fullName 空 → 显示待完善角标', async () => {
+        const w = mountNode({ type: 'setVariable', fullName: '', value: '' });
+        await nextTick();
+        expect(badge(w).exists()).toBe(true);
+        // fullName 字段友好名 = "变量"
+        expect(badge(w).attributes('title')).toContain('变量');
+    });
+
+    it('setVariable：fullName 有值 → 不显示角标', async () => {
+        const w = mountNode({ type: 'setVariable', fullName: 'user/score', value: '' });
+        await nextTick();
+        expect(badge(w).exists()).toBe(false);
+    });
+
+    it('incrementVariable：fullName 空 → 显示角标', async () => {
+        const w = mountNode({ type: 'incrementVariable', fullName: '   ', delta: 1 });
+        await nextTick();
+        expect(badge(w).exists()).toBe(true);
+    });
+
+    it('playSound：soundId 空 → 显示角标（命中"声音"）', async () => {
+        const w = mountNode({ type: 'playSound', soundId: '', volume: 1, pitch: 1, scope: 'near' });
+        await nextTick();
+        expect(badge(w).exists()).toBe(true);
+        expect(badge(w).attributes('title')).toContain('声音');
+    });
+
+    it('if：condition 空 → 显示角标（命中"条件"）', async () => {
+        const w = mountNode({ type: 'if', condition: '', then: [], else: [] });
+        await nextTick();
+        expect(badge(w).exists()).toBe(true);
+        expect(badge(w).attributes('title')).toContain('条件');
+    });
+
+    it('if：condition 有值 → 不显示角标', async () => {
+        const w = mountNode({ type: 'if', condition: 'var("user/score") > 0', then: [], else: [] });
+        await nextTick();
+        expect(badge(w).exists()).toBe(false);
+    });
+
+    it('setElementProperty：elementId 空 → 显示角标（原 element 类仍覆盖）', async () => {
+        const w = mountNode({ type: 'setElementProperty', elementId: '', property: 'x', value: 'v' });
+        await nextTick();
+        expect(badge(w).exists()).toBe(true);
+    });
+
+    it('log：message 空也不报"待完善"（log 无必填引用字段，空 message 合法）', async () => {
+        const w = mountNode({ type: 'log', message: '' });
+        await nextTick();
+        expect(badge(w).exists()).toBe(false);
+    });
+});

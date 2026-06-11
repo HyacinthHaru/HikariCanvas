@@ -186,7 +186,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         expect(sendScriptTest).not.toHaveBeenCalled();
     });
 
-    it('点头部温和指示不崩（定位到第一处错误积木；根因 1）', async () => {
+    it('点头部温和指示 → 定位到第一处错误积木（querySelector 命中 + scrollIntoView；根因 1 + 主根因联动）', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([{
             id: 'sr-1', wallId: 'w-x', enabled: true, name: '规则',
@@ -198,11 +198,36 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         const edit = useScriptEditStore();
         edit.selectRule('sr-1');
         await nextTick();
+        // 主根因联动：积木渲染自 workingCopy → 待完善积木的 data-block-path DOM 存在，能被 querySelector 找到。
+        const blockEl = document.querySelector('[data-block-path="actions/0"]') as HTMLElement | null;
+        expect(blockEl).not.toBeNull();
+        const scrollSpy = vi.spyOn(blockEl as HTMLElement, 'scrollIntoView').mockImplementation(() => {});
         const hint = wrapper.find('.hc-validation-hint');
         expect(hint.exists()).toBe(true);
-        // 点击不抛（scrollIntoView 在 happy-dom 上可能 no-op，但不应崩）
         await hint.trigger('click');
-        expect(wrapper.find('.hc-validation-hint').exists()).toBe(true);
+        // 点击真的滚动定位到了那个积木（不是"点了没反应"）
+        expect(scrollSpy).toHaveBeenCalled();
+        wrapper.unmount();
+    });
+
+    it('trigger 字段错误：点指示定位到帽子（data-block-path="trigger"）', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([{
+            id: 'sr-1', wallId: 'w-x', enabled: true, name: '规则',
+            // variableChange 触发器 fullName 空 → 错误 blockId='trigger'（帽子）
+            trigger: { type: 'variableChange', fullName: '' },
+            actions: [{ type: 'log', message: 'ok' }], blockLayout: '{}',
+        }]);
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        await nextTick();
+        const hatEl = document.querySelector('[data-block-path="trigger"]') as HTMLElement | null;
+        expect(hatEl).not.toBeNull();
+        const scrollSpy = vi.spyOn(hatEl as HTMLElement, 'scrollIntoView').mockImplementation(() => {});
+        await wrapper.find('.hc-validation-hint').trigger('click');
+        expect(scrollSpy).toHaveBeenCalled();
         wrapper.unmount();
     });
 

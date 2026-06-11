@@ -58,14 +58,30 @@ const highlight = inject(BLOCK_HIGHLIGHT_KEY, EMPTY_HIGHLIGHT);
  *
  * <p>C/F 阶段块内会有参数输入框：表单元素聚焦不应触发拖块（避免点输入框就拖走）。这里
  * 跳过 input/textarea/select/contentEditable 目标（pointerdown 落在它们上时不拖）。</p>
+ *
+ * <p>0.7.0-P5 实测修复（变量选择器打开可靠性，次要根因 2）：pointerdown 落在表单控件上时虽不拖块，
+ * 但要<b>在此处先选中本规则</b>。理由：变量「选变量」按钮的 click 会冒泡到 BlockStack 的
+ * {@code onStackClick} 触发 {@code selectRule}；若规则原本未选中，这次 selectRule 会在<b>同一次点击</b>
+ * 里替换 workingCopy 触发画布重渲，与刚弹出的 picker 抢时序 → 用户感觉"多点几次才开"。提前在
+ * pointerdown（早于 click）选好，click 时 onStackClick 命中 guard 不再重选 → 不重渲 → picker 一次到位。</p>
  */
 function onBlockPointerDown(e: PointerEvent): void {
     if (e.button !== 0) return;
-    if (isFormTarget(e.target)) return;
+    if (isFormTarget(e.target)) {
+        selectOwningRule(e);
+        return;
+    }
     const host = (e.currentTarget as HTMLElement).closest('[data-rule-id]');
     const ruleId = host?.getAttribute('data-rule-id');
     if (!ruleId) return;
     dragHandles.startBlockDrag(ruleId, props.path, e);
+}
+
+/** 取本块所属规则 id（最近 [data-rule-id] 祖先）并选中它（已是当前编辑规则则 selectRule 内部无副作用）。 */
+function selectOwningRule(e: PointerEvent): void {
+    const host = (e.currentTarget as HTMLElement).closest('[data-rule-id]');
+    const ruleId = host?.getAttribute('data-rule-id');
+    if (ruleId && edit.selectedRuleId !== ruleId) edit.selectRule(ruleId);
 }
 
 function isFormTarget(target: EventTarget | null): boolean {
@@ -211,34 +227,43 @@ function onConditionUpdate(value: string): void {
 // ---------- 视觉：必填引用字段未填的"待选择"角标（不改逻辑，只读判定）----------
 
 /**
- * 本块里"必填但还没填"的引用字段（仅 element / timeline / command 三类——它们依赖墙上
- * 有什么，{@code makeDefaultAction} 故意留空，用户必须从下拉里选）。空 = 值是空串 / 缺失。
+ * 本块里"必填但还没填"的字段（一眼提示用户哪个积木哪个字段要填）。0.7.0-P5 实测修复（次要问题 1）：
+ * 从原来仅 element / timeline / command 三类，扩展到也覆盖 <b>variable（变量名）/ condition（if 条件）/
+ * sound（声音）</b>——这些字段虽有合理默认（拖出即合法），但用户可清空 / 删空，空了就该提示。
  *
- * <p>纯读 def.fields + action 当前值，不碰 validator / 默认值逻辑。返回字段友好名数组，
- * 喂给角标 hover 提示（"还需选择：元素"）。command 复合字段只看 templateId 是否空。</p>
+ * <p>判定（空 = 空串 / 缺失，与 validator 的 blank 同口径）：</p>
+ * <ul>
+ *   <li>{@code element} / {@code timeline}：依赖墙上有什么，必填——空则标；</li>
+ *   <li>{@code variable}：变量名必填（setVariable / incrementVariable / variableChange 的 fullName）——空则标；</li>
+ *   <li>{@code sound}：playSound 的 soundId 必填——空则标；</li>
+ *   <li>{@code condition}：if 的条件必填——空则标（condition 字段不走 scalarFields，单独判）；</li>
+ *   <li>{@code command}（runCommand 复合）：只看 templateId 是否空。</li>
+ * </ul>
+ * <p>纯读 def.fields + action 当前值，不碰 validator / 默认值逻辑。返回字段友好名数组喂角标 hover
+ * 提示（"还需填写：变量名 / 条件"）。</p>
  */
 const missingRefFields = computed<string[]>(() => {
     const out: string[] = [];
+    const rec = props.action as unknown as Record<string, unknown>;
+    const blank = (name: string): boolean => {
+        const v = rec[name];
+        return typeof v !== 'string' || v.trim() === '';
+    };
     for (const f of def.value?.fields ?? []) {
-        if (f.type === 'element' || f.type === 'timeline') {
-            const v = (props.action as unknown as Record<string, unknown>)[f.name];
-            if (typeof v !== 'string' || v.trim() === '') {
-                out.push(resolveLabelKey(t.value, f.labelKey));
-            }
+        if (f.type === 'element' || f.type === 'timeline' || f.type === 'variable'
+            || f.type === 'sound' || f.type === 'condition') {
+            if (blank(f.name)) out.push(resolveLabelKey(t.value, f.labelKey));
         } else if (f.type === 'command' && isRunCommand.value && f.name === 'templateId') {
-            const v = (props.action as unknown as Record<string, unknown>).templateId;
-            if (typeof v !== 'string' || v.trim() === '') {
-                out.push(resolveLabelKey(t.value, f.labelKey));
-            }
+            if (blank('templateId')) out.push(resolveLabelKey(t.value, f.labelKey));
         }
     }
     return out;
 });
 
-/** 是否显示"待选择"角标（有空的必填引用字段且未被试跑高亮占用时）。 */
+/** 是否显示"待完善"角标（有空的必填字段时）。 */
 const showNeedSelect = computed(() => missingRefFields.value.length > 0);
 
-/** 角标 hover 提示文案（"还需选择：元素 / 时间轴"）。 */
+/** 角标 hover 提示文案（"还需填写：变量名 / 条件"）。 */
 const needSelectTitle = computed(() =>
     t.value.script.param.needSelect.replace('{field}', missingRefFields.value.join(' / ')),
 );

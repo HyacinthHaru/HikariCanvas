@@ -23,6 +23,7 @@ import { useBlockDrag } from './useBlockDrag';
 import { BLOCK_DRAG_KEY } from './dragInjection';
 import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
 import { useScriptStore } from '@/stores/scripts';
+import { useScriptEditStore } from '@/stores/scriptEdit';
 import { useI18n } from '@/i18n';
 import { defFor } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
@@ -39,6 +40,7 @@ const props = defineProps<{
 
 const viewportRef = ref<HTMLElement | null>(null);
 const scripts = useScriptStore();
+const editStore = useScriptEditStore();
 const { t } = useI18n();
 
 /** 空格按住态（pan 触发条件之一）。表单聚焦时不接管空格（留给输入）。 */
@@ -74,16 +76,38 @@ defineExpose({
 });
 
 /**
- * 每条规则在画布上的<b>静态基坐标</b>：先各自解析 {@code rule.blockLayout} 取 {@code stacks[rule.id]}，
- * 缺坐标的规则统一交给 {@link autoLayout} 纵向排布兜底（按 listSorted 顺序）。
+ * 渲染用的规则列表：<b>当前正在编辑的那条规则用 {@code editStore.workingCopy}（本地副本），
+ * 其余规则用 {@code scripts.listSorted}（server 镜像）。</b>
  *
- * <p>P5 实测修复（根因 4）：本 computed <b>不依赖 {@code drag.stackDragPos}</b>——移堆拖动中
- * 它保持稳定（不重算），避免每帧把所有堆的定位全部重算 + 触发整条 v-for 重渲（拖不跟手）。
- * 被拖堆的实时坐标由 {@link liveStackPos} 在<b>绑定级</b>单独覆盖：只有被拖堆的 :x/:y 值会变，
- * Vue 据此只 patch 那一个 BlockStack，其余堆 props 不变 → 不重渲。</p>
+ * <p>0.7.0-P5 实测修复（渲染数据源主根因）：所有编辑（拖积木 setActions / 改字段 updateActionField /
+ * 改触发器 setTrigger）都改 workingCopy，但要 800ms debounce 后才 save 回 server；空字段积木还会被
+ * validator 拦着不 save → server 永不更新。若画布只读 server 镜像，新拖的积木 / 刚改的字段就要等
+ * save 成功才显示，空字段积木则<b>永远不显示</b>（出现"拖了没反应 / 永远停在待完善"）。让被编辑的
+ * 那条规则直读 workingCopy，编辑即时反映；workingCopy 为 null（没选规则）或非当前规则一律读 server。</p>
+ *
+ * <p><b>reactive 依赖</b>：computed 读 {@code editStore.workingCopy} + {@code selectedRuleId} 建立依赖
+ * → setActions 等 immutable 替换 workingCopy 时本 computed 重算 → 对应 BlockStack 收到新 rule → 新积木 /
+ * 改动立即渲染。</p>
+ *
+ * <p><b>不破坏拖堆跟手（根因 4 仍成立）</b>：本 computed 仍<b>不依赖 {@code drag.stackDragPos}</b>——移堆
+ * 拖动<b>过程中</b>只改 stackDragPos（由 {@link liveStackPos} 在绑定级覆盖被拖堆 :x/:y），不改 workingCopy
+ * → 本 computed 不重算 → 其余堆静止；松手才 setStackPos（改 workingCopy.blockLayout）触发一次重算。</p>
+ */
+const renderRules = computed(() => {
+    const wc = editStore.workingCopy;
+    const editingId = editStore.selectedRuleId;
+    return scripts.listSorted.map((r) =>
+        wc && editingId === r.id ? wc : r,
+    );
+});
+
+/**
+ * 每条规则在画布上的<b>静态基坐标</b>：先各自解析 {@code rule.blockLayout} 取 {@code stacks[rule.id]}，
+ * 缺坐标的规则统一交给 {@link autoLayout} 纵向排布兜底（按渲染顺序）。规则对象来自 {@link renderRules}
+ * （被编辑规则 = workingCopy / 其余 = server 镜像）。
  */
 const basePositionedStacks = computed(() => {
-    const rules = scripts.listSorted;
+    const rules = renderRules.value;
     const explicit: BlockLayout = { stacks: {} };
     for (const rule of rules) {
         const layout = parseBlockLayout(rule.blockLayout);

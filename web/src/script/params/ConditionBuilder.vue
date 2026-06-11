@@ -241,6 +241,9 @@ const pickerStyle = ref<Record<string, string>>({});
  */
 function openPicker(idx: number, side: 'lhs' | 'rhs', e: MouseEvent): void {
     if (disabled.value) return;
+    // 0.7.0-P5 实测修复（次要根因 2）：截断"打开"click 冒泡到祖先（onStackClick / 画布 pan /
+    // 其它 picker 的 onClickOutside），避免同一次点击开了又被外层处理掉。规则选中已在 pointerdown 完成。
+    e.stopPropagation();
     const btn = (e.currentTarget as HTMLElement) ?? null;
     if (btn) {
         const r = btn.getBoundingClientRect();

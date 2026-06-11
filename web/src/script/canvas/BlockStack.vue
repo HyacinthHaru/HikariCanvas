@@ -60,7 +60,13 @@ const hatDetail = computed(() => highlight.details.value.get('trigger'));
  */
 function onHatPointerDown(e: PointerEvent): void {
     if (e.button !== 0) return; // 仅左键：移堆 + 选中
-    if (isFormTarget(e.target)) return;
+    if (isFormTarget(e.target)) {
+        // 0.7.0-P5 实测修复（次要根因 2）：pointerdown 落在帽子里的控件（触发类型 select /
+        // variableChange 的变量按钮）上时不移堆，但要先选中本规则——早于变量按钮的 click，
+        // 避免 onStackClick 在同一次点击里 selectRule 重渲与 picker 抢时序。
+        if (edit.selectedRuleId !== props.rule.id) edit.selectRule(props.rule.id);
+        return;
+    }
     dragHandles.startStackDrag(props.rule.id, e);
 }
 

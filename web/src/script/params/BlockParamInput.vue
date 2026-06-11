@@ -136,9 +136,15 @@ const pickerStyle = ref<Record<string, string>>({});
  * 打开变量 picker。memory 约束：① 必须按钮 click 打开（不能 select-change，否则 picker
  * 的 onClickOutside 会被同一次点击立即触发关闭）；② picker 向下展开 + 在 overlay 里要确保
  * 浮层不被裁切——这里 Teleport 到 body + 用按钮屏幕坐标 fixed 定位 picker 容器。
+ *
+ * <p>0.7.0-P5 实测修复（次要根因 2）：{@code stopPropagation} 阻止这次"打开"click 继续冒泡到
+ * 祖先（BlockStack.onStackClick / 画布 pan / 其它 picker 的 onClickOutside 窗口监听），杜绝同一次
+ * 点击里"开了又被外层处理掉"。规则选中已提前在 BlockNode/BlockStack 的 pointerdown 完成，故这里
+ * 截断 click 冒泡不影响进入编辑态。</p>
  */
-function openPicker(): void {
+function openPicker(e?: Event): void {
     if (props.disabled) return;
+    e?.stopPropagation();
     const btn = varBtnRef.value;
     if (btn) {
         const r = btn.getBoundingClientRect();
@@ -328,7 +334,7 @@ onMounted(() => {
         class="hc-pf-var-btn"
         :class="{ 'hc-pf-var-empty': !variableValue }"
         :disabled="disabled"
-        @click="openPicker"
+        @click="openPicker($event)"
       >
         <span class="hc-pf-var-text">{{ variableValue || t.script.param.pickVariable }}</span>
       </button>
