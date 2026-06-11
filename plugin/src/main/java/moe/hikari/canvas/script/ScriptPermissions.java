@@ -18,7 +18,11 @@ public final class ScriptPermissions {
 
     /** 基础节点：编辑脚本（恒查，不进 requiredFacets 返回值）。 */
     public static final String NODE_EDIT = "canvas.script.edit";
-    /** 全局触发面：playerJoin / playerKill（影响全服而非 wall 附近）。 */
+    /**
+     * 全局触发面：playerJoin / playerKill / playerQuit / rightClickWall（影响全服而非
+     * wall 附近——进服 / 击杀 / 退服是全服事件，右键墙虽带墙语义但属"任意玩家可触"，
+     * 同列全局面）。0.7.1 加 playerQuit / rightClickWall。
+     */
     public static final String NODE_TRIGGER_GLOBAL = "canvas.script.trigger.global";
     /** 播放声音面。 */
     public static final String NODE_SOUND = "canvas.script.sound";
@@ -33,8 +37,11 @@ public final class ScriptPermissions {
      */
     public static Set<String> requiredFacets(ScriptRule rule) {
         Set<String> facets = new HashSet<>();
+        // playerLeaveRange 不加（墙级，同 PlayerNear，仅基础 NODE_EDIT）
         if (rule.trigger() instanceof Trigger.PlayerJoin
-                || rule.trigger() instanceof Trigger.PlayerKill) {
+                || rule.trigger() instanceof Trigger.PlayerKill
+                || rule.trigger() instanceof Trigger.PlayerQuit
+                || rule.trigger() instanceof Trigger.RightClickWall) {
             facets.add(NODE_TRIGGER_GLOBAL);
         }
         scanActions(rule.actions(), facets);
@@ -51,6 +58,8 @@ public final class ScriptPermissions {
                     scanActions(iff.then(), facets);
                     scanActions(iff.elseActions(), facets);
                 }
+                // 0.7.1：Repeat 递归扫 body（循环体内动作的权限面照常生效）
+                case Action.Repeat rep -> scanActions(rep.body(), facets);
                 // 以下子类无附加权限面（显式列出而非 default，保证穷尽性）
                 case Action.SetVariable ignored -> { }
                 case Action.IncrementVariable ignored -> { }

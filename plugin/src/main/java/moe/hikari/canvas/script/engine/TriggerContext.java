@@ -15,5 +15,6 @@ package moe.hikari.canvas.script.engine;
  * 只进 trace / audit。</p>
  */
 public record TriggerContext(Source source, int chainDepth, String detail) {
-    public enum Source { VARIABLE, TIMER, WALL_READY, TEST, PLAYER_JOIN, PLAYER_KILL, PLAYER_NEAR }
+    public enum Source { VARIABLE, TIMER, WALL_READY, TEST, PLAYER_JOIN, PLAYER_KILL, PLAYER_NEAR,
+            RIGHT_CLICK_WALL, PLAYER_LEAVE_RANGE, PLAYER_QUIT }
 }

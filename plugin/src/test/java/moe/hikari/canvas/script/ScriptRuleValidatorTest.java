@@ -70,6 +70,34 @@ class ScriptRuleValidatorTest {
         assertTrue(ScriptRuleValidator.validate(rule(new Trigger.PlayerNear(33), okActions())).isPresent());
     }
 
+    // ---------- 0.7.1：3 个新触发器 ----------
+
+    @Test
+    void leave_range_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(new Trigger.PlayerLeaveRange(8), okActions())));
+    }
+
+    @Test
+    void leave_range_low_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(new Trigger.PlayerLeaveRange(0), okActions())).isPresent());
+    }
+
+    @Test
+    void leave_range_high_rejected() {
+        assertTrue(ScriptRuleValidator.validate(
+                rule(new Trigger.PlayerLeaveRange(33), okActions())).isPresent());
+    }
+
+    @Test
+    void right_click_wall_and_player_quit_no_fields_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(new Trigger.RightClickWall(), okActions())));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(
+                rule(new Trigger.PlayerQuit(), okActions())));
+    }
+
     @Test
     void varchange_fullname_blank() {
         assertTrue(ScriptRuleValidator.validate(
@@ -399,5 +427,59 @@ class ScriptRuleValidatorTest {
     void play_timeline_await_blank_id_rejected() {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.PlayTimelineAwait(" ")))).isPresent());
+    }
+
+    // ---------- 0.7.1：Repeat 有界循环 ----------
+
+    @Test
+    void repeat_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Repeat(3, List.of(new Action.Log("loop")))))));
+    }
+
+    @Test
+    void repeat_count_low_rejected() {
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Repeat(0, List.of(new Action.Log("x"))))));
+        assertTrue(err.isPresent());
+        assertTrue(err.get().contains("1..100"), err.get());
+    }
+
+    @Test
+    void repeat_count_high_rejected() {
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Repeat(101, List.of(new Action.Log("x"))))));
+        assertTrue(err.isPresent());
+        assertTrue(err.get().contains("1..100"), err.get());
+    }
+
+    @Test
+    void repeat_empty_body_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Repeat(3, List.of())))).isPresent());
+    }
+
+    @Test
+    void repeat_body_recursively_validated() {
+        // body 内含非法动作（wait 太短）→ repeat 校验递归到 body 报错
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Repeat(3, List.of(new Action.Wait(10)))))).isPresent());
+    }
+
+    @Test
+    void repeat_body_counts_toward_total_blocks_notMultiplied() {
+        // countBlocks 计 body 节点（不乘 count）：repeat(1) + 48 body 动作 = 49 ≤ 50 合法
+        List<Action> body = java.util.stream.IntStream.range(0, 48)
+                .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Repeat(100, body)))),
+                "repeat count=100 但 countBlocks 不乘 count：1 + 48 = 49 ≤ 50");
+        // body 50 节点 → repeat(1) + 50 = 51 > 50 拒
+        List<Action> body51 = java.util.stream.IntStream.range(0, 50)
+                .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.Repeat(2, body51))));
+        assertTrue(err.isPresent());
+        assertTrue(err.get().contains("50"), err.get());
     }
 }

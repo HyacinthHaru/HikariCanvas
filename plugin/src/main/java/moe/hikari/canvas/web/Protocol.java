@@ -20,16 +20,19 @@ package moe.hikari.canvas.web;
  *
  * <p>v4 = 0.7.0 script.*（2026-06-10）：墙脚本 5 op + ready payload {@code scripts} 字段，
  * 同样干净切换。</p>
+ *
+ * <p>v5 = 0.7.1（2026-06-12）：3 个新触发器（rightClickWall / playerLeaveRange /
+ * playerQuit）+ Repeat 动作（有界循环）。Trigger / Action wire union 扩展，同样干净切换。</p>
  */
 public final class Protocol {
 
     private Protocol() {}
 
     /** 服务端可接受的最小 business protocol 版本。 */
-    public static final int SUPPORTED_MIN = 4;
+    public static final int SUPPORTED_MIN = 5;
 
     /** 服务端可接受的最大 business protocol 版本。 */
-    public static final int SUPPORTED_MAX = 4;
+    public static final int SUPPORTED_MAX = 5;
 
     /** 协议版本不匹配时关闭 WS 的 close code（与 4001 auth_timeout 同 4xxx 段）。 */
     public static final int CLOSE_PROTOCOL_VERSION_UNSUPPORTED = 4002;

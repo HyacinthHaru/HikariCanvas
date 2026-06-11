@@ -1,13 +1,17 @@
 package moe.hikari.canvas.script.engine;
 
+import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.WorldLoadEvent;
 import org.bukkit.event.world.WorldUnloadEvent;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.Map;
 import java.util.UUID;
@@ -34,6 +38,18 @@ import java.util.UUID;
  * 不触发。两个 fire 都在主线程同步调，Router 内只做索引遍历 + submit（重活
  * 全在 runner 线程），主线程成本可忽略。</p>
  *
+ * <p><b>0.7.1 新增两个 handler</b>：</p>
+ * <ul>
+ *   <li><b>onPlayerQuit</b>（PlayerQuitEvent，不可取消）→ {@link #handlePlayerQuit}
+ *       转发到 {@code router.firePlayerQuit}（全局 quit 索引）。</li>
+ *   <li><b>onPlayerInteractEntity</b>（PlayerInteractEntityEvent，可取消）→ 右键目标是
+ *       {@link ItemFrame} 时经 {@link WallIdLookup}（生产 = {@code FrameDeployer::wallIdOf}，
+ *       PDC 反查）拿 wallId，非 HikariCanvas 画框反查得 null → 跳过；命中 →
+ *       {@code router.fireRightClickWall}（按墙索引）。{@link WallIdLookup} 是 Bukkit-type-free
+ *       的注入 seam——{@code handleRightClickByWallId} 可纯 JVM 单测（不构造 ItemFrame），
+ *       与 worldLoad/worldUnload 转发体同纪律。</li>
+ * </ul>
+ *
  * <p><b>世界名 → UUID 快照表维护（0.7.0-P3-5）</b>：playerNear 的墙原点解析
  * （originSource）可能在任意线程跑（WS 脚本 op 经 ScriptStore listener →
  * rebuildWall 在 Jetty 线程），不能调 {@code Bukkit.getWorld}（异步读
@@ -46,18 +62,32 @@ import java.util.UUID;
  */
 public final class GameEventListenerHub implements Listener {
 
+    /**
+     * 0.7.1：ItemFrame → wallId 反查 seam（生产 = {@code FrameDeployer::wallIdOf}，PDC 读）。
+     * 非 HikariCanvas 画框返 null。注入式 seam 让 {@code script.engine} 不依赖 {@code deploy}
+     * 包，且右键转发体可纯 JVM 单测（不构造 ItemFrame）。
+     */
+    @FunctionalInterface
+    public interface WallIdLookup {
+        @Nullable String wallIdOf(ItemFrame frame);
+    }
+
     private final TriggerRouter router;
     /** 世界名 → UUID 快照表（装配层持有；originSource 异步读，本类主线程写）。 */
     private final Map<String, UUID> worldUuidByName;
     /** 世界加载后的补登记回调（生产 = {@code TriggerRouter::rebuildAll}；可 null）。 */
     private final Runnable onWorldChange;
+    /** 0.7.1：右键墙 ItemFrame 反查 wallId（生产 = {@code FrameDeployer::wallIdOf}；可 null）。 */
+    private final @Nullable WallIdLookup wallIdLookup;
 
     public GameEventListenerHub(TriggerRouter router,
                                 Map<String, UUID> worldUuidByName,
-                                Runnable onWorldChange) {
+                                Runnable onWorldChange,
+                                @Nullable WallIdLookup wallIdLookup) {
         this.router = router;
         this.worldUuidByName = worldUuidByName;
         this.onWorldChange = onWorldChange;
+        this.wallIdLookup = wallIdLookup;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -70,6 +100,45 @@ public final class GameEventListenerHub implements Listener {
         Player killer = event.getEntity().getKiller();
         if (killer == null) return;   // 环境死亡不算击杀
         router.firePlayerKill(event.getEntity().getName(), killer.getName());
+    }
+
+    /** 0.7.1：玩家退服（PlayerQuitEvent 不可取消，ignoreCancelled 对它 no-op）。 */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        handlePlayerQuit(event.getPlayer().getName());
+    }
+
+    /** 包私有转发体（单测直调）：退服 → 全局 quit 索引。 */
+    void handlePlayerQuit(String playerName) {
+        if (router != null) router.firePlayerQuit(playerName);
+    }
+
+    /**
+     * 0.7.1：玩家右键实体——只关心右键 {@link ItemFrame}（HikariCanvas 画框）。MONITOR +
+     * ignoreCancelled：别的插件取消了交互（如保护插件）就不触发脚本。右键墙是观察语义，
+     * 不改事件结果。
+     *
+     * <p><b>仅主手</b>：PlayerInteractEntityEvent 每次右键对主手 + 副手各派发一次——只认
+     * {@code HAND} 避免一次右键触发脚本两次（副手事件丢弃）。</p>
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
+        if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) return;
+        if (!(event.getRightClicked() instanceof ItemFrame frame)) return;
+        handleRightClick(frame, event.getPlayer().getName());
+    }
+
+    /** 半私有转发体：ItemFrame → wallId 反查（{@link WallIdLookup}）→ 按墙 fire。 */
+    void handleRightClick(ItemFrame frame, String playerName) {
+        if (wallIdLookup == null || router == null) return;
+        String wallId = wallIdLookup.wallIdOf(frame);   // 非 HikariCanvas 画框 → null
+        handleRightClickByWallId(wallId, playerName);
+    }
+
+    /** 包私有 Bukkit-free 转发核心（单测直调）：wallId 命中则 fire；null → 跳过。 */
+    void handleRightClickByWallId(@Nullable String wallId, String playerName) {
+        if (router == null || wallId == null) return;   // 非 HikariCanvas frame → 不触发
+        router.fireRightClickWall(wallId, playerName);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

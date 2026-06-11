@@ -38,6 +38,38 @@ class TriggerWireTest {
         assertEquals(new Trigger.PlayerNear(8), mapper.readValue(json, Trigger.class));
     }
 
+    // ---------- 0.7.1：3 个新触发器 round-trip ----------
+
+    @Test
+    void rightClickWallRoundtrip() throws Exception {
+        Trigger t = new Trigger.RightClickWall();
+        assertEquals(t, mapper.readValue(mapper.writeValueAsString(t), Trigger.class));
+        assertTrue(mapper.writeValueAsString(t).contains("\"type\":\"rightClickWall\""));
+    }
+
+    @Test
+    void playerLeaveRangeRoundtrip() throws Exception {
+        Trigger t = new Trigger.PlayerLeaveRange(8);
+        assertEquals(t, mapper.readValue(mapper.writeValueAsString(t), Trigger.class));
+        assertTrue(mapper.writeValueAsString(t).contains("\"type\":\"playerLeaveRange\""));
+    }
+
+    @Test
+    void playerQuitRoundtrip() throws Exception {
+        Trigger t = new Trigger.PlayerQuit();
+        assertEquals(t, mapper.readValue(mapper.writeValueAsString(t), Trigger.class));
+        assertTrue(mapper.writeValueAsString(t).contains("\"type\":\"playerQuit\""));
+    }
+
+    /** 0.7.1：playerLeaveRange 的 rangeBlocks 非整数值 → 拒（同 playerNear K8 纪律）。 */
+    @Test
+    void playerLeaveRangeFractionalRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"playerLeaveRange\",\"rangeBlocks\":8.5}", Trigger.class));
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"playerLeaveRange\",\"rangeBlocks\":8.0}", Trigger.class));
+    }
+
     @Test
     void unknownTypeRejected() {
         assertThrows(Exception.class,

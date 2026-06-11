@@ -23,12 +23,20 @@ import java.util.logging.Logger;
  * 才真采样，其余调用 O(1) 直接返回。实际采样分辨率因此受底层 2 tick 周期限制
  * （sampleTicks=1 与 2 等效）。</p>
  *
- * <p><b>进入沿状态机（edge-trigger）</b>：状态 key = {@code playerName + "|" + wallId + ":"
- * + ruleId}。同世界且距离平方 ≤ range² 视为"在内"；<b>从不在内变为在内的那一轮</b>才
- * {@code sink.fire}（进入范围触发一次），持续在内不重复触发，离开后重置（再进再触发）。
- * 每轮采样用"本轮观察到的 (规则 × 玩家) 全集"<b>整体替换</b>状态表——离线玩家与已删 /
+ * <p><b>边沿状态机（edge-trigger）</b>：状态 key = {@code playerName + "|" + wallId + ":"
+ * + ruleId}。同世界且距离平方 ≤ range² 视为"在内"。每个 {@link TriggerRouter.NearEntry}
+ * 按 {@code leaveEdge} 分沿（0.7.1）：</p>
+ * <ul>
+ *   <li><b>{@code leaveEdge=false}（playerNear）</b>：<b>从不在内变为在内的那一轮</b>触发
+ *       （进入范围一次），持续在内不重复，离开后重置（再进再触发）。</li>
+ *   <li><b>{@code leaveEdge=true}（playerLeaveRange）</b>：<b>从在内变为不在内的那一轮</b>
+ *       触发（离开范围一次）。离开沿要求该 (玩家,规则) 此前确曾被记录 in=true——首次出现在
+ *       范围外不触发。</li>
+ * </ul>
+ * <p>每轮采样用"本轮观察到的 (规则 × 玩家) 全集"<b>整体替换</b>状态表——离线玩家与已删 /
  * 已禁用规则（不再出现在 {@code nearRules()} 快照里）的旧条目随之自然清掉，状态表不会
- * 无界膨胀；玩家离线后重新上线视同首次进入（在范围内即触发一次，符合"靠近"语义）。</p>
+ * 无界膨胀；玩家离线后重新上线视同首次进入（playerNear 在范围内即触发一次；playerLeaveRange
+ * 因丢失了 in=true 记录，下次走出范围才触发）。</p>
  *
  * <p><b>主线程成本</b>：每轮 O(规则数 × 在线玩家数) 次距离平方比较（零开方 / 零查库——
  * 墙原点已在 {@code TriggerRouter} rebuild 期解析进 {@link TriggerRouter.NearEntry}）；
@@ -126,8 +134,14 @@ public final class PlayerNearSampler {
                     in = dx * dx + dy * dy + dz * dz <= rangeSq;   // 边界含等于
                 }
                 String key = p.name() + "|" + rule.wallId() + ":" + rule.ruleId();
-                if (in && !Boolean.TRUE.equals(inside.get(key))) {
-                    // 进入沿：上轮不在内（false / 无条目 = 离线刚回 / 新规则）→ 触发一次
+                Boolean wasIn = inside.get(key);
+                boolean enter = in && !Boolean.TRUE.equals(wasIn);
+                // 离开沿要求上轮确曾记录 in=true；首次出现在范围外（wasIn=null）不触发
+                // leave（Boolean.TRUE.equals(null)=false，已正确）。
+                boolean leave = !in && Boolean.TRUE.equals(wasIn);
+                // playerNear（leaveEdge=false）只在进入沿触发；
+                // playerLeaveRange（leaveEdge=true）只在离开沿触发。
+                if ((!rule.leaveEdge() && enter) || (rule.leaveEdge() && leave)) {
                     try {
                         sink.fire(rule.wallId(), rule.ruleId(), p.name());
                     } catch (RuntimeException e) {

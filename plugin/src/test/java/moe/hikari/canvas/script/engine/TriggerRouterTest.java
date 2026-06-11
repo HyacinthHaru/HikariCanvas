@@ -316,6 +316,140 @@ class TriggerRouterTest {
         assertEquals(1, sink.blockIds.size(), "关停后 fire no-op");
     }
 
+    // ---------- 0.7.1：playerQuit 全局索引 ----------
+
+    @Test
+    void quitIndex_rebuildAddsAndRemoves() {
+        ScriptRule quit = addRule(WALL, true, new Trigger.PlayerQuit());
+        addRule("w-other", true, new Trigger.PlayerQuit());
+        router.rebuildWall(WALL);
+        router.rebuildWall("w-other");
+        assertEquals(2, router.quitRuleCount());
+        // 换型 quit → join → rebuild 后 quit 索引出
+        scriptStore.update(quit.id(), new ScriptRule(null, null, true, "r",
+                new Trigger.PlayerJoin(), List.of(new Action.Log("x")), "{}"));
+        router.rebuildWall(WALL);
+        assertEquals(1, router.quitRuleCount(), "换型后旧 quit 条目清掉");
+    }
+
+    @Test
+    void firePlayerQuit_submitsWithQuitContext() {
+        RecordingSubmitter rec = new RecordingSubmitter();
+        TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG,
+                new FakeTimerScheduler());
+        addRule(WALL, true, new Trigger.PlayerQuit());
+        r2.rebuildWall(WALL);
+        r2.firePlayerQuit("Steve");
+        assertEquals(1, rec.contexts.size(), "quit 规则被投递");
+        assertEquals(WALL, rec.wallIds.get(0));
+        assertEquals(TriggerContext.Source.PLAYER_QUIT, rec.contexts.get(0).source());
+        assertEquals(0, rec.contexts.get(0).chainDepth(), "事件来源链深恒 0");
+        assertEquals("Steve", rec.contexts.get(0).detail(), "detail = 玩家名");
+    }
+
+    @Test
+    void quitIndex_disabledNotIndexed_removeWallAndShutdownClear() {
+        addRule(WALL, false, new Trigger.PlayerQuit());
+        router.rebuildWall(WALL);
+        assertEquals(0, router.quitRuleCount(), "disabled 不索引");
+        ScriptRule quit = addRule(WALL, true, new Trigger.PlayerQuit());
+        router.rebuildWall(WALL);
+        assertEquals(1, router.quitRuleCount());
+        router.removeWall(WALL);
+        assertEquals(0, router.quitRuleCount(), "删墙清本墙 quit 条目");
+        router.rebuildWall(WALL);
+        assertEquals(1, router.quitRuleCount());
+        router.shutdown();
+        assertEquals(0, router.quitRuleCount(), "关停清空 quit 索引");
+        router.firePlayerQuit("Steve");
+        assertEquals(0, sink.blockIds.size(), "关停后 fire no-op");
+    }
+
+    // ---------- 0.7.1：rightClickWall 按墙索引 ----------
+
+    @Test
+    void rightClickWall_perWallIndex_firesOnlyMatchingWall() {
+        RecordingSubmitter rec = new RecordingSubmitter();
+        TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG,
+                new FakeTimerScheduler());
+        addRule(WALL, true, new Trigger.RightClickWall());
+        addRule("w-other", true, new Trigger.RightClickWall());
+        r2.rebuildWall(WALL);
+        r2.rebuildWall("w-other");
+        assertEquals(1, r2.rightClickRuleCount(WALL));
+        r2.fireRightClickWall(WALL, "Steve");
+        assertEquals(1, rec.contexts.size(), "右键本墙触发");
+        assertEquals(WALL, rec.wallIds.get(0));
+        assertEquals(TriggerContext.Source.RIGHT_CLICK_WALL, rec.contexts.get(0).source());
+        assertEquals("Steve", rec.contexts.get(0).detail());
+        // 右键无登记规则的墙 → 不触发
+        r2.fireRightClickWall("w-nobody", "Steve");
+        assertEquals(1, rec.contexts.size(), "无规则墙右键不触发");
+    }
+
+    @Test
+    void rightClickWall_staleDisabledAndShutdownSkipped() {
+        ScriptRule rc = addRule(WALL, true, new Trigger.RightClickWall());
+        router.rebuildWall(WALL);
+        router.fireRightClickWall(WALL, "Steve");
+        assertEquals(1, sink.blockIds.size());
+        // store 内禁用（不经 listener rebuild）→ fire 时刻 find 最新 → 跳过
+        scriptStore.setEnabled(WALL, rc.id(), false);
+        router.fireRightClickWall(WALL, "Steve");
+        assertEquals(1, sink.blockIds.size(), "stale 索引条目不执行已禁用规则");
+        // 换型（rightClickWall → timer）→ 不被右键事件误触发
+        scriptStore.setEnabled(WALL, rc.id(), true);
+        scriptStore.update(rc.id(), new ScriptRule(null, null, true, "r",
+                new Trigger.Timer(30), List.of(new Action.Log("x")), "{}"));
+        router.fireRightClickWall(WALL, "Steve");
+        assertEquals(1, sink.blockIds.size(), "换型规则不被右键事件误触发");
+        // removeWall 清本墙 + shutdown no-op
+        router.shutdown();
+        router.fireRightClickWall(WALL, "Steve");
+        assertEquals(1, sink.blockIds.size(), "关停后 fire no-op");
+        assertEquals(0, router.rightClickRuleCount(WALL), "关停清空 rightClick 索引");
+    }
+
+    // ---------- 0.7.1：playerLeaveRange 进 NearEntry（leaveEdge=true） ----------
+
+    @Test
+    void playerLeaveRange_indexedAsNearEntryWithLeaveEdge() {
+        addRule(WALL, true, new Trigger.PlayerLeaveRange(8));
+        router.rebuildWall(WALL);
+        List<TriggerRouter.NearEntry> entries = router.nearRules();
+        assertEquals(1, entries.size(), "playerLeaveRange 进 near 快照");
+        assertTrue(entries.get(0).leaveEdge(), "playerLeaveRange 的 NearEntry leaveEdge=true");
+        assertEquals(8, entries.get(0).rangeBlocks());
+    }
+
+    @Test
+    void playerNear_nearEntryLeaveEdgeIsFalse() {
+        addRule(WALL, true, new Trigger.PlayerNear(8));
+        router.rebuildWall(WALL);
+        List<TriggerRouter.NearEntry> entries = router.nearRules();
+        assertEquals(1, entries.size());
+        assertFalse(entries.get(0).leaveEdge(), "playerNear 的 NearEntry leaveEdge=false");
+    }
+
+    @Test
+    void firePlayerNear_dispatchesSourceByRuleType() {
+        RecordingSubmitter rec = new RecordingSubmitter();
+        TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG,
+                new FakeTimerScheduler());
+        ScriptRule near = addRule(WALL, true, new Trigger.PlayerNear(8));
+        ScriptRule leave = addRule(WALL, true, new Trigger.PlayerLeaveRange(8));
+        r2.rebuildWall(WALL);
+        r2.firePlayerNear(WALL, near.id(), "Steve");
+        assertEquals(TriggerContext.Source.PLAYER_NEAR, rec.contexts.get(0).source(),
+                "playerNear 规则 → PLAYER_NEAR source");
+        r2.firePlayerNear(WALL, leave.id(), "Steve");
+        assertEquals(TriggerContext.Source.PLAYER_LEAVE_RANGE, rec.contexts.get(1).source(),
+                "playerLeaveRange 规则 → PLAYER_LEAVE_RANGE source");
+    }
+
     // ---------- playerNear 索引 + firePlayerNear（0.7.0-P3 B2 / K14） ----------
 
     @Test

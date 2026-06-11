@@ -41,6 +41,29 @@ class ScriptPermissionsTest {
         assertEquals(Set.of(), ScriptPermissions.requiredFacets(r));
     }
 
+    // ---------- 0.7.1：3 个新触发器权限面 ----------
+
+    @Test
+    void global_rightClickWall() {
+        ScriptRule r = rule(new Trigger.RightClickWall(), List.of(new Action.Log("hi")));
+        assertEquals(Set.of(ScriptPermissions.NODE_TRIGGER_GLOBAL),
+                ScriptPermissions.requiredFacets(r));
+    }
+
+    @Test
+    void global_playerQuit() {
+        ScriptRule r = rule(new Trigger.PlayerQuit(), List.of(new Action.Log("hi")));
+        assertEquals(Set.of(ScriptPermissions.NODE_TRIGGER_GLOBAL),
+                ScriptPermissions.requiredFacets(r));
+    }
+
+    @Test
+    void leaveRange_is_not_global() {
+        // playerLeaveRange 是墙级（同 playerNear），仅基础 NODE_EDIT
+        ScriptRule r = rule(new Trigger.PlayerLeaveRange(8), List.of(new Action.Log("hi")));
+        assertEquals(Set.of(), ScriptPermissions.requiredFacets(r));
+    }
+
     @Test
     void sound_nested() {
         Action iff = new Action.If("1 > 0",

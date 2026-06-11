@@ -95,6 +95,10 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeNumberField("factor", a.factor());
             }
             case Action.PlayTimelineAwait a -> gen.writeStringField("timelineId", a.timelineId());
+            case Action.Repeat a -> {
+                gen.writeNumberField("count", a.count());
+                writeActions(gen, provider, "body", a.body());  // 复用 if 分支递归写出
+            }
         }
         gen.writeEndObject();
     }

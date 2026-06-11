@@ -40,6 +40,11 @@ public final class TriggerDeserializer extends JsonDeserializer<Trigger> {
             case "playerNear" -> new Trigger.PlayerNear(
                     requireInt(ctxt, node, "rangeBlocks", type));
             case "wallReady" -> new Trigger.WallReady();
+            // 0.7.1：3 个新触发器
+            case "rightClickWall" -> new Trigger.RightClickWall();
+            case "playerLeaveRange" -> new Trigger.PlayerLeaveRange(
+                    requireInt(ctxt, node, "rangeBlocks", type));
+            case "playerQuit" -> new Trigger.PlayerQuit();
             default -> ctxt.reportInputMismatch(Trigger.class,
                     "unknown trigger type: " + type);
         };

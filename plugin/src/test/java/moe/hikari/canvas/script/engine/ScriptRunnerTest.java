@@ -266,6 +266,92 @@ class ScriptRunnerTest {
         assertEquals(0, scheduler.scheduledDelays.size());
     }
 
+    // ---------- 0.7.1：Repeat 有界循环展开 ----------
+
+    @Test
+    void repeat_expandsBodyCountTimes_sameBlockIdPrefix() {
+        ScriptRunner r = runner();
+        // repeat 3x [log] → body 执行 3 次，blockId 都是 actions/0/body/0（守同构，不带 round）
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Repeat(3, List.of(new Action.Log("loop"))))), ctx(0));
+        assertEquals(List.of("actions/0/body/0", "actions/0/body/0", "actions/0/body/0"),
+                sink.blockIds, "body 展开 3 次，blockId 同 prefix 不带 round（前后端同构）");
+    }
+
+    @Test
+    void repeat_multiBody_preservesInnerOrderEachRound() {
+        ScriptRunner r = runner();
+        // repeat 2x [log, log] → 每轮 body[0] body[1] 按序；blockId body/0 body/1 重复 2 轮
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Repeat(2, List.of(new Action.Log("a"), new Action.Log("b"))))), ctx(0));
+        assertEquals(List.of(
+                "actions/0/body/0", "actions/0/body/1",
+                "actions/0/body/0", "actions/0/body/1"), sink.blockIds,
+                "多动作 body 每轮内部按序，整体重复 count 次");
+    }
+
+    @Test
+    void repeat_withTailAction_runsAfterAllRounds() {
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Repeat(2, List.of(new Action.Log("loop"))),
+                new Action.Log("tail"))), ctx(0));
+        assertEquals(List.of("actions/0/body/0", "actions/0/body/0", "actions/1"),
+                sink.blockIds, "循环展开后外层后续动作正常执行");
+    }
+
+    @Test
+    void repeat_bodyWithWait_continuesAcrossSegments() {
+        ScriptRunner r = runner();
+        // repeat 2x [log, wait, log] → 第一轮 log 后遇 wait 挂起；续接跑完所有轮 + 续接段
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Repeat(2, List.of(
+                        new Action.Log("a"), new Action.Wait(100), new Action.Log("b"))))), ctx(0));
+        // wait 前只执行了第一轮 body[0]
+        assertEquals(List.of("actions/0/body/0"), sink.blockIds, "首轮 wait 前 body[0]");
+        assertEquals(List.of(100L), scheduler.scheduledDelays);
+        scheduler.runPending();
+        // 续接：第一轮 body[2] + 第二轮 body[0] body[2]（第二轮的 wait 也续接）
+        assertTrue(sink.blockIds.contains("actions/0/body/2"), "wait 续接执行 body[2]");
+        assertTrue(scheduler.scheduledDelays.size() >= 1, "第二轮 wait 也挂起");
+    }
+
+    @Test
+    void repeat_nestedInIf_thenBranch() {
+        ScriptRunner r = runner();
+        Action.If iff = new Action.If("var(\"user/score\") == 10",
+                List.of(new Action.Repeat(2, List.of(new Action.Log("x")))),
+                List.of());
+        r.submit(WALL, rule("r1", List.of(iff)), ctx(0));
+        // if then 内 repeat：blockId actions/0/then/0/body/0 重复 2 次
+        assertEquals(List.of("actions/0/then/0/body/0", "actions/0/then/0/body/0"),
+                sink.blockIds, "if 分支内 repeat 树路径 + 展开");
+    }
+
+    @Test
+    void repeat_100x2Actions_hitsMaxActionsBudget_blocked() {
+        // 默认 max-actions-per-run=50。repeat 自身计 1 + 100×[2 动作] 展开 → 累计撞 50 熔断
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Repeat(100, List.of(new Action.Log("a"), new Action.Log("b"))))), ctx(0));
+        // repeat 自身占第 1 个动作额度，之后 body 动作累计到第 50 个掐断 → 执行 49 个 body 动作
+        assertEquals(49, sink.blockIds.size(),
+                "repeat(1) + 49 body 动作 = 50；第 50 个 body（总第 51）被掐断");
+    }
+
+    @Test
+    void repeat_budgetCutoff_traceEndsWithBlocked() {
+        ScriptRunner r = runner();
+        List<List<TraceStep>> received = new ArrayList<>();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Repeat(100, List.of(new Action.Log("a"), new Action.Log("b"))))),
+                ctx(0), received::add);
+        assertEquals(1, received.size());
+        List<TraceStep> steps = received.get(0);
+        assertEquals("blocked", steps.get(steps.size() - 1).result(),
+                "展开撞 max-actions → 末步 blocked（试跑 trace 可见）");
+    }
+
     // ---------- 0.7.1：TRIGGER_DETAIL 透传 ----------
 
     @Test

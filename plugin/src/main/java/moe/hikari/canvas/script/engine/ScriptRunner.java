@@ -257,6 +257,22 @@ public final class ScriptRunner {
                                 blockId + (cond ? "/then/" : "/else/")));
                         continue outer;
                     }
+                    if (a instanceof Action.Repeat rep) {
+                        // 0.7.1：有界循环展开。repeat 自身计 1 个动作（上方 actionCount++ 已计）；
+                        // 展开后的 body 动作各自再计入 —— 超 max-actions-per-run 自然熔断。
+                        st.trace.add(TraceStep.ok(blockId, "action", "repeat " + rep.count() + "x"));
+                        // 先押回当前帧剩余（含外层后续），再押 count 轮 body 帧。
+                        stack.push(new Frame(acts, i + 1, f.prefix()));
+                        // 关键（守 0.7.0 同构）：bodyPrefix 不含 round —— count 轮的 body[j] 的
+                        // blockId 都是 <blockId>/body/<j>，与前端 body 子块 path 一致。各轮 body
+                        // 帧完全相同（同 body / 同 prefix / index 0），LIFO 弹出顺序对可观察行为
+                        // 无影响（相同副作用、相同 trace blockId 序列，仅重复 count 次）。
+                        String bodyPrefix = blockId + "/body/";
+                        for (int round = 0; round < rep.count(); round++) {
+                            stack.push(new Frame(rep.body(), 0, bodyPrefix));
+                        }
+                        continue outer;
+                    }
                     if (a instanceof Action.Wait wt) {
                         st.trace.add(TraceStep.ok(blockId, "action", "wait " + wt.ms() + "ms"));
                         // 剩余动作（含外层 if 后续——已在栈里）打包成 continuation。

@@ -124,6 +124,48 @@ class ActionWireTest {
         assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
     }
 
+    // ---------- 0.7.1：Repeat 有界循环 round-trip ----------
+
+    @Test void repeat_roundTrip() throws Exception {
+        Action a = new Action.Repeat(3, List.of(new Action.Log("loop")));
+        String json = mapper.writeValueAsString(a);
+        assertEquals(a, mapper.readValue(json, Action.class));
+        assertTrue(json.contains("\"type\":\"repeat\""), json);
+        assertTrue(json.contains("\"count\":3"), json);
+    }
+
+    @Test void repeat_nestedBody_roundTrip() throws Exception {
+        // body 含 if 嵌套（递归 round-trip）
+        String json = "{\"type\":\"repeat\",\"count\":5,\"body\":["
+                + "{\"type\":\"log\",\"message\":\"a\"},"
+                + "{\"type\":\"if\",\"condition\":\"1 > 0\","
+                + "\"then\":[{\"type\":\"wait\",\"ms\":100}],\"else\":[]}]}";
+        Action a = mapper.readValue(json, Action.class);
+        assertInstanceOf(Action.Repeat.class, a);
+        Action.Repeat rep = (Action.Repeat) a;
+        assertEquals(5, rep.count());
+        assertEquals(2, rep.body().size());
+        assertEquals(mapper.readTree(json), mapper.readTree(mapper.writeValueAsString(a)));
+    }
+
+    /** repeat.count 非整数值 → 拒（K8 纪律）。 */
+    @Test void repeat_fractionalCountRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"repeat\",\"count\":3.5,\"body\":[]}", Action.class));
+    }
+
+    /** repeat 缺 count → 拒。 */
+    @Test void repeat_missingCountRejected() {
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue("{\"type\":\"repeat\",\"body\":[]}", Action.class));
+    }
+
+    /** repeat body 缺失 → 空 list（合法 wire 形态；结构校验在 validator）。 */
+    @Test void repeat_missingBody_emptyList() throws Exception {
+        Action a = mapper.readValue("{\"type\":\"repeat\",\"count\":2}", Action.class);
+        assertEquals(new Action.Repeat(2, List.of()), a);
+    }
+
     /** setElementProperties 缺 elementId → 拒。 */
     @Test void setElementProperties_missingElementId_rejected() {
         assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,

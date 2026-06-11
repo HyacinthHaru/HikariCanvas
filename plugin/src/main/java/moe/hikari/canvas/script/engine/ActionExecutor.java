@@ -143,9 +143,10 @@ public final class ActionExecutor implements ActionSink {
                 // playTimelineAwait：Runner 调本 sink 执行 play（副作用），再据 durationMs 决定挂起。
                 // 即本方法做 play、Runner 做"等播完"——故这里真正执行（非防御 error）。
                 case Action.PlayTimelineAwait a -> doPlayTimelineAwait(wallId, blockId, a);
-                // wait / if 由 Runner 处理；进到这里是 Runner 实现 bug → 防御 error
+                // wait / if / repeat 由 Runner 处理；进到这里是 Runner 实现 bug → 防御 error
                 case Action.Wait a -> TraceStep.error(blockId, "wait 应由 ScriptRunner 处理");
                 case Action.If a -> TraceStep.error(blockId, "if 应由 ScriptRunner 处理");
+                case Action.Repeat a -> TraceStep.error(blockId, "repeat 应由 ScriptRunner 处理");
             };
         } catch (RuntimeException e) {
             // 三层隔离兜底：单动作失败不断链

@@ -96,6 +96,9 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireDouble(ctxt, node, "factor", type));
             case "playTimelineAwait" -> new Action.PlayTimelineAwait(
                     requireText(ctxt, node, "timelineId", type));
+            case "repeat" -> new Action.Repeat(
+                    requireInt(ctxt, node, "count", type),
+                    readBranch(ctxt, node, "body", type));   // 复用 if 分支递归读取
             default -> ctxt.reportInputMismatch(Action.class,
                     "unknown action type: " + type);
         };
@@ -121,6 +124,21 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     "action '" + type + "' requires numeric field '" + field + "'");
         }
         return v.asDouble();
+    }
+
+    /**
+     * 必填整数字段（int）；缺失 / 非整数 → reportInputMismatch。0.7.1 repeat.count 用，
+     * 同 {@link #requireLong} 的 K8 纪律（{@code canConvertToInt} 查范围 + {@code
+     * isIntegralNumber} 拒整值浮点 {@code 3.0}）。
+     */
+    private static int requireInt(DeserializationContext ctxt, JsonNode node,
+                                  String field, String type) throws IOException {
+        JsonNode v = node.get(field);
+        if (v == null || !v.isIntegralNumber() || !v.canConvertToInt()) {
+            return ctxt.reportInputMismatch(Action.class,
+                    "action '" + type + "' field '" + field + "' must be an integer");
+        }
+        return v.asInt();
     }
 
     /**

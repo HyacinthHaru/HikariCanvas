@@ -95,11 +95,14 @@ public final class TriggerRouter {
     }
 
     /**
-     * playerNear 规则条目（B2/K14）：墙原点已在 rebuild 期解析好，
-     * {@link PlayerNearSampler} 每轮采样只做距离平方比较，零查库零 Bukkit。
+     * playerNear / playerLeaveRange 规则条目（B2/K14；0.7.1 加 {@code leaveEdge}）：墙原点
+     * 已在 rebuild 期解析好，{@link PlayerNearSampler} 每轮采样只做距离平方比较，零查库零
+     * Bukkit。{@code leaveEdge=false}（playerNear）只在进入沿触发；{@code leaveEdge=true}
+     * （playerLeaveRange）只在离开沿触发——两者共享同一采样器与状态表，按本字段分沿。
      */
     public record NearEntry(String wallId, String ruleId, int rangeBlocks,
-                            java.util.UUID worldId, double x, double y, double z) {}
+                            java.util.UUID worldId, double x, double y, double z,
+                            boolean leaveEdge) {}
 
     /**
      * timer 调度 seam：生产 = 自持单线程 daemon SES（{@code hikari-script-trigger}）；
@@ -138,6 +141,13 @@ public final class TriggerRouter {
     private final Set<RuleRef> joinRules = ConcurrentHashMap.newKeySet();
     /** 0.7.0-P3 B1（K15）：playerKill 全局触发索引（同 {@link #joinRules} 纪律）。 */
     private final Set<RuleRef> killRules = ConcurrentHashMap.newKeySet();
+    /** 0.7.1：playerQuit 全局触发索引（同 {@link #joinRules} 纪律）。 */
+    private final Set<RuleRef> quitRules = ConcurrentHashMap.newKeySet();
+    /**
+     * 0.7.1：wallId → rightClickWall 规则集合（右键墙触发携带墙语义，按墙索引——
+     * 与 nearByWall 同纪律，事件到达时只看该墙的规则）。
+     */
+    private final Map<String, Set<RuleRef>> rightClickByWall = new ConcurrentHashMap<>();
     /** 0.7.0-P3 B2（K14）：wallId → 该墙的 playerNear 条目（rebuild 期解析好原点）。 */
     private final Map<String, java.util.List<NearEntry>> nearByWall = new ConcurrentHashMap<>();
     /**
@@ -200,6 +210,8 @@ public final class TriggerRouter {
         wallKeys.clear();
         joinRules.clear();
         killRules.clear();
+        quitRules.clear();
+        rightClickByWall.clear();
         nearByWall.clear();
         if (shutdown) {
             refreshNearSnapshotLocked();
@@ -233,6 +245,8 @@ public final class TriggerRouter {
         wallKeys.clear();
         joinRules.clear();
         killRules.clear();
+        quitRules.clear();
+        rightClickByWall.clear();
         nearByWall.clear();
         refreshNearSnapshotLocked();
         timers.shutdown();
@@ -310,20 +324,52 @@ public final class TriggerRouter {
     }
 
     /**
-     * 玩家进入墙范围（B2/K14；{@link PlayerNearSampler} 进入沿回调，主线程调）。
+     * 0.7.1：玩家退服（{@code GameEventListenerHub.onPlayerQuit} 接入，主线程调）→
+     * 遍历全局 quit 索引投递。detail = 玩家名（K17：只进 trace / audit）。
+     */
+    public void firePlayerQuit(String playerName) {
+        fireGlobal(quitRules, Trigger.PlayerQuit.class,
+                TriggerContext.Source.PLAYER_QUIT, playerName);
+    }
+
+    /**
+     * 0.7.1：玩家右键墙的 ItemFrame（{@code GameEventListenerHub.onPlayerInteractEntity}
+     * 经 FrameDeployer 反查 wallId 后调，主线程）→ 该墙的 rightClickWall 规则投递。与其他
+     * fire 入口同纪律：{@code store.find} 拿<b>最新</b>规则——索引残留 / 已禁用 / 已换型一律跳过。
+     */
+    public void fireRightClickWall(String wallId, String playerName) {
+        if (shutdown || wallId == null) return;
+        for (RuleRef ref : rightClickByWall.getOrDefault(wallId, Set.of())) {
+            ScriptRule latest = store.find(ref.wallId(), ref.ruleId()).orElse(null);
+            if (latest == null || !latest.enabled()
+                    || !(latest.trigger() instanceof Trigger.RightClickWall)) {
+                continue;   // 索引残留 / 已禁用 / 已换型 → 跳过
+            }
+            runner.submit(wallId, latest,
+                    new TriggerContext(TriggerContext.Source.RIGHT_CLICK_WALL, 0, playerName));
+        }
+    }
+
+    /**
+     * 玩家进入 / 离开墙范围（B2/K14；{@link PlayerNearSampler} 进入沿 / 离开沿回调，主线程调）。
      * 与其他 fire 入口同纪律：{@code store.find} 拿<b>最新</b>规则——索引残留 / 已禁用 /
-     * 已换型（NearEntry 在 rebuild 竞态窗口里可能 stale）一律跳过。事件来源非脚本，
-     * 链深恒 0；detail = 玩家名（K17：只进 trace / audit，不注入动作参数）。
+     * 已换型（NearEntry 在 rebuild 竞态窗口里可能 stale）一律跳过。0.7.1：按规则触发器类型
+     * 定 source——{@link Trigger.PlayerNear} → PLAYER_NEAR；{@link Trigger.PlayerLeaveRange}
+     * → PLAYER_LEAVE_RANGE；其余（已换型）跳过。事件来源非脚本，链深恒 0；detail = 玩家名。
      */
     public void firePlayerNear(String wallId, String ruleId, String playerName) {
         if (shutdown || wallId == null || ruleId == null) return;
         ScriptRule latest = store.find(wallId, ruleId).orElse(null);
-        if (latest == null || !latest.enabled()
-                || !(latest.trigger() instanceof Trigger.PlayerNear)) {
-            return;   // 索引残留 / 已禁用 / 已换型 → 跳过
+        if (latest == null || !latest.enabled()) return;   // 索引残留 / 已禁用 → 跳过
+        TriggerContext.Source src;
+        if (latest.trigger() instanceof Trigger.PlayerNear) {
+            src = TriggerContext.Source.PLAYER_NEAR;
+        } else if (latest.trigger() instanceof Trigger.PlayerLeaveRange) {
+            src = TriggerContext.Source.PLAYER_LEAVE_RANGE;
+        } else {
+            return;   // 已换型 → 跳过
         }
-        runner.submit(wallId, latest,
-                new TriggerContext(TriggerContext.Source.PLAYER_NEAR, 0, playerName));
+        runner.submit(wallId, latest, new TriggerContext(src, 0, playerName));
     }
 
     /**
@@ -377,21 +423,40 @@ public final class TriggerRouter {
             joinRules.add(new RuleRef(wallId, rule.id()));
         } else if (t instanceof Trigger.PlayerKill) {
             killRules.add(new RuleRef(wallId, rule.id()));
+        } else if (t instanceof Trigger.PlayerQuit) {
+            // 0.7.1：playerQuit 全局索引（同 join/kill）。
+            quitRules.add(new RuleRef(wallId, rule.id()));
+        } else if (t instanceof Trigger.RightClickWall) {
+            // 0.7.1：rightClickWall 按墙索引（事件携带墙语义）。
+            rightClickByWall.computeIfAbsent(wallId, k -> ConcurrentHashMap.newKeySet())
+                    .add(new RuleRef(wallId, rule.id()));
         } else if (t instanceof Trigger.PlayerNear pn) {
-            // B2/K14：原点在 rebuild 期解析一次（Sampler 每轮只比距离平方）。
-            // 解析失败（墙不存在 / 世界未加载 / originSource 未注入）→ 跳过 + warning：
-            // 世界随后加载时生产装配的 WorldLoadEvent → rebuildAll 会自动补登记（P3-5）。
-            WallOrigin origin = originSource == null ? null : originSource.load(wallId);
-            if (origin == null) {
-                log.warning("TriggerRouter: playerNear 原点解析失败（墙不存在或世界未加载），"
-                        + "规则跳过登记 wall=" + wallId + " rule=" + rule.id());
-                return;
-            }
-            nearByWall.computeIfAbsent(wallId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
-                    .add(new NearEntry(wallId, rule.id(), pn.rangeBlocks(),
-                            origin.worldId(), origin.x(), origin.y(), origin.z()));
+            registerNearLocked(wallId, rule, pn.rangeBlocks(), false);
+        } else if (t instanceof Trigger.PlayerLeaveRange pl) {
+            // 0.7.1：playerLeaveRange 复用 near 采样器（leaveEdge=true 离开沿触发）。
+            registerNearLocked(wallId, rule, pl.rangeBlocks(), true);
         }
         // wallReady 不进索引（fireWallReady 直查 store）。
+    }
+
+    /**
+     * 0.7.1：playerNear / playerLeaveRange 共用的 near 条目登记（B2/K14）。原点在 rebuild
+     * 期解析一次（Sampler 每轮只比距离平方）。解析失败（墙不存在 / 世界未加载 / originSource
+     * 未注入）→ 跳过 + warning：世界随后加载时生产装配的 WorldLoadEvent → rebuildAll 会自动
+     * 补登记（P3-5）。{@code leaveEdge} 决定沿（false 进入沿 / true 离开沿）。
+     */
+    private void registerNearLocked(String wallId, ScriptRule rule, int rangeBlocks,
+                                    boolean leaveEdge) {
+        WallOrigin origin = originSource == null ? null : originSource.load(wallId);
+        if (origin == null) {
+            log.warning("TriggerRouter: " + (leaveEdge ? "playerLeaveRange" : "playerNear")
+                    + " 原点解析失败（墙不存在或世界未加载），规则跳过登记 wall="
+                    + wallId + " rule=" + rule.id());
+            return;
+        }
+        nearByWall.computeIfAbsent(wallId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                .add(new NearEntry(wallId, rule.id(), rangeBlocks,
+                        origin.worldId(), origin.x(), origin.y(), origin.z(), leaveEdge));
     }
 
     private void scheduleTimerLocked(String wallId, String ruleId, int intervalSeconds) {
@@ -441,6 +506,8 @@ public final class TriggerRouter {
     private void clearWallLocked(String wallId) {
         joinRules.removeIf(ref -> ref.wallId().equals(wallId));
         killRules.removeIf(ref -> ref.wallId().equals(wallId));
+        quitRules.removeIf(ref -> ref.wallId().equals(wallId));
+        rightClickByWall.remove(wallId);
         nearByWall.remove(wallId);
         Set<String> keys = wallKeys.remove(wallId);
         if (keys != null) {
@@ -507,6 +574,17 @@ public final class TriggerRouter {
     /** 全局 kill 索引当前条目数（B1）。 */
     int killRuleCount() {
         return killRules.size();
+    }
+
+    /** 0.7.1：全局 quit 索引当前条目数。 */
+    int quitRuleCount() {
+        return quitRules.size();
+    }
+
+    /** 0.7.1：某墙 rightClickWall 索引当前条目数。 */
+    int rightClickRuleCount(String wallId) {
+        Set<RuleRef> set = rightClickByWall.get(wallId);
+        return set == null ? 0 : set.size();
     }
 
     /** 生产调度器：单线程 daemon SES（照 {@code ScriptRunner.SesScheduler} 关停纪律）。 */

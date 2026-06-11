@@ -68,6 +68,9 @@ public final class ScriptRuleValidator {
     public static final Set<String> MESSAGE_CHANNELS = Set.of("chat", "actionbar", "title");
     /** 0.7.1 ScaleVariable.op 白名单。 */
     public static final Set<String> SCALE_OPS = Set.of("multiply", "divide");
+    /** 0.7.1 Repeat.count 范围（次）。 */
+    public static final int REPEAT_MIN = 1;
+    public static final int REPEAT_MAX = 100;
 
     private ScriptRuleValidator() {
     }
@@ -120,16 +123,29 @@ public final class ScriptRuleValidator {
             case Trigger.PlayerJoin ignored -> Optional.empty();
             case Trigger.PlayerKill ignored -> Optional.empty();
             case Trigger.WallReady ignored -> Optional.empty();
+            // 0.7.1：3 个新触发器。playerLeaveRange 复用 NEAR_MIN..NEAR_MAX（与 playerNear
+            // 同半径语义）；rightClickWall / playerQuit 无字段。
+            case Trigger.PlayerLeaveRange t -> (t.rangeBlocks() < NEAR_MIN || t.rangeBlocks() > NEAR_MAX)
+                    ? Optional.of("玩家离开半径需在 " + NEAR_MIN + ".." + NEAR_MAX + " 方块之间")
+                    : Optional.empty();
+            case Trigger.RightClickWall ignored -> Optional.empty();
+            case Trigger.PlayerQuit ignored -> Optional.empty();
         };
     }
 
-    /** 递归积木计数：每个 Action 计 1，If 自身计 1 再加两分支。 */
+    /**
+     * 递归积木计数：每个 Action 计 1，If 自身计 1 再加两分支，Repeat 自身计 1 再加 body
+     * （0.7.1：<b>不乘 count</b>——这是积木<i>树节点数</i>硬限 {@value #MAX_TOTAL_BLOCKS}，
+     * 非展开后的动作数；展开数由运行时 Budget 熔断，见 scripting-0.7.1.md §9）。
+     */
     private static int countBlocks(List<Action> actions) {
         int count = 0;
         for (Action action : actions) {
             count++;
             if (action instanceof Action.If iff) {
                 count += countBlocks(iff.then()) + countBlocks(iff.elseActions());
+            } else if (action instanceof Action.Repeat rep) {
+                count += countBlocks(rep.body());
             }
         }
         return count;
@@ -331,6 +347,16 @@ public final class ScriptRuleValidator {
             case Action.PlayTimelineAwait a -> blank(a.timelineId())
                     ? Optional.of("播时间轴缺少时间轴 ID")
                     : Optional.empty();
+            case Action.Repeat a -> {
+                if (a.count() < REPEAT_MIN || a.count() > REPEAT_MAX) {
+                    yield Optional.of("重复次数需在 " + REPEAT_MIN + ".." + REPEAT_MAX + " 之间");
+                }
+                if (a.body().isEmpty()) {
+                    yield Optional.of("重复循环体不能为空");
+                }
+                // body 递归（ifDepth 不变——repeat 不增 if 嵌套深度）
+                yield validateActions(a.body(), ifDepth);
+            }
         };
     }
 

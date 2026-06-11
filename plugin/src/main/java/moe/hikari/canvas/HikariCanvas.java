@@ -818,7 +818,7 @@ public final class HikariCanvas extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new moe.hikari.canvas.script.engine.GameEventListenerHub(
                         routerForScript, scriptWorldUuidByName,
-                        routerForScript::rebuildAll), this);
+                        routerForScript::rebuildAll, frameDeployer::wallIdOf), this);
         // 0.7.0-P3 B2（K14）：playerNear 周期采样——主线程 task 固定 2 tick 周期（启动后
         // 1s 首跑），Sampler 内部按 scripts.player-near-sample-ticks（默 10）跳帧计数；
         // 热更走 applyConfig → setSampleTicks（volatile，无需重 schedule）。Sampler 本体

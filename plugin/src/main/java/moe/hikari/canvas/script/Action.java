@@ -21,7 +21,8 @@ public sealed interface Action permits
         Action.PlayTimeline, Action.PlaySound, Action.Wait,
         Action.RunCommand, Action.Log, Action.If,
         Action.SetElementProperties, Action.NudgeElement, Action.SendMessage,
-        Action.SetRandomVariable, Action.ScaleVariable, Action.PlayTimelineAwait {
+        Action.SetRandomVariable, Action.ScaleVariable, Action.PlayTimelineAwait,
+        Action.Repeat {
 
     /** wire 判别字段 {@code type} 的取值（camelCase）。 */
     String wireType();
@@ -110,5 +111,18 @@ public sealed interface Action permits
     /** 0.7.1：播放时间轴并等播完（等一轮 durationMs，由 Runner 挂起续接）。 */
     record PlayTimelineAwait(String timelineId) implements Action {
         @Override public String wireType() { return "playTimelineAwait"; }
+    }
+
+    /**
+     * 0.7.1：有界循环「重复 N 次」。count ∈ [1,100]（范围校验在 {@link ScriptRuleValidator}）；
+     * body 为每轮执行的动作，由 {@code ScriptRunner} 展开 count 轮。展开时每轮 body[i] 的
+     * blockId 用<b>同一 prefix</b> {@code <blockId>/body/<i>}（不带 round）——前端 body 只一份，
+     * 守 0.7.0 前后端同构；trace 同 blockId 重复 = 执行多次高亮多次（正确语义）。
+     */
+    record Repeat(int count, java.util.List<Action> body) implements Action {
+        @Override public String wireType() { return "repeat"; }
+        public Repeat {
+            body = body == null ? java.util.List.of() : java.util.List.copyOf(body);
+        }
     }
 }

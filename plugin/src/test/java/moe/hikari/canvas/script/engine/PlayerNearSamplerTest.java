@@ -48,9 +48,16 @@ class PlayerNearSamplerTest {
         return sampler(1);
     }
 
+    /** 进入沿规则（leaveEdge=false；playerNear 语义）。 */
     private void rule(String wallId, String ruleId, int range, UUID worldId,
                       double x, double y, double z) {
-        rules.add(new TriggerRouter.NearEntry(wallId, ruleId, range, worldId, x, y, z));
+        rules.add(new TriggerRouter.NearEntry(wallId, ruleId, range, worldId, x, y, z, false));
+    }
+
+    /** 离开沿规则（leaveEdge=true；playerLeaveRange 语义）。 */
+    private void leaveRule(String wallId, String ruleId, int range, UUID worldId,
+                           double x, double y, double z) {
+        rules.add(new TriggerRouter.NearEntry(wallId, ruleId, range, worldId, x, y, z, true));
     }
 
     private void player(String name, UUID worldId, double x, double y, double z) {
@@ -237,5 +244,65 @@ class PlayerNearSamplerTest {
         assertDoesNotThrow(throwing::tick);
         assertEquals(2, fired.size(), "异常规则不影响同轮其他规则触发");
         assertEquals("w-2:r-2@Steve", fired.get(1));
+    }
+
+    // ── 0.7.1：离开沿（leaveEdge=true / playerLeaveRange） ──────────────
+
+    /** ⑪ 离开沿：先在范围内（不触发，离开沿不管进入），走出范围 → 触发一次。 */
+    @Test
+    void leaveEdge_firesOnExitNotOnEnter() {
+        leaveRule("w-1", "r-1", 8, WORLD_A, 0, 0, 0);
+        player("Steve", WORLD_A, 3, 0, 0);
+        PlayerNearSampler s = eagerSampler();
+        s.tick();                                  // 在内 → 离开沿不触发
+        assertEquals(0, fired.size(), "leaveEdge 进入范围不触发");
+        player("Steve", WORLD_A, 100, 0, 0);
+        s.tick();                                  // 走出 → 离开沿触发一次
+        assertEquals(List.of("w-1:r-1@Steve"), fired, "走出范围 = 离开沿，触发一次");
+    }
+
+    /** ⑫ 离开沿：持续在范围外不重复触发（已离开后不再每轮触发）。 */
+    @Test
+    void leaveEdge_stayOutside_noRefire() {
+        leaveRule("w-1", "r-1", 8, WORLD_A, 0, 0, 0);
+        player("Steve", WORLD_A, 3, 0, 0);
+        PlayerNearSampler s = eagerSampler();
+        s.tick();                                  // 在内
+        player("Steve", WORLD_A, 100, 0, 0);
+        s.tick();                                  // 离开 → 1 次
+        s.tick();                                  // 持续在外
+        s.tick();
+        assertEquals(1, fired.size(), "已离开后持续在外不重复触发");
+    }
+
+    /** ⑬ 离开沿：玩家首次出现就在范围外（从未 in=true）→ 不触发。 */
+    @Test
+    void leaveEdge_firstSeenOutside_noFire() {
+        leaveRule("w-1", "r-1", 8, WORLD_A, 0, 0, 0);
+        player("Steve", WORLD_A, 100, 0, 0);       // 一上来就在范围外
+        PlayerNearSampler s = eagerSampler();
+        s.tick();
+        assertEquals(0, fired.size(), "从未进入过范围 → 离开沿不触发");
+        // 进入再离开 → 触发一次
+        player("Steve", WORLD_A, 3, 0, 0);
+        s.tick();                                  // 进入（leaveEdge 不触发）
+        player("Steve", WORLD_A, 100, 0, 0);
+        s.tick();                                  // 离开 → 触发
+        assertEquals(1, fired.size());
+    }
+
+    /** ⑭ 进入沿 + 离开沿混合：同墙两规则各自按沿独立触发。 */
+    @Test
+    void enterAndLeaveEdges_independentOnSameWall() {
+        rule("w-1", "near", 8, WORLD_A, 0, 0, 0);        // 进入沿
+        leaveRule("w-1", "leave", 8, WORLD_A, 0, 0, 0);  // 离开沿
+        player("Steve", WORLD_A, 3, 0, 0);
+        PlayerNearSampler s = eagerSampler();
+        s.tick();                                  // 进入：near 触发，leave 不触发
+        assertEquals(List.of("w-1:near@Steve"), fired);
+        player("Steve", WORLD_A, 100, 0, 0);
+        s.tick();                                  // 离开：leave 触发，near 不触发
+        assertEquals(2, fired.size());
+        assertEquals("w-1:leave@Steve", fired.get(1));
     }
 }
