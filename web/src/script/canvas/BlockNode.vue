@@ -21,7 +21,7 @@ import { useI18n } from '@/i18n';
 import { useProjectStore } from '@/stores/project';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 import { ref } from 'vue';
-import { defFor, type FieldDef } from '../model/blockDefs';
+import { defFor, FRIENDLY_ELEMENT_DEFS, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
 import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
@@ -92,15 +92,63 @@ function isFormTarget(target: EventTarget | null): boolean {
 /** 本块的声明定义；未知 kind → null（兜底显示 unknownBlock）。 */
 const def = computed(() => defFor(props.action.type));
 
-/** 块标题文案（def.labelKey 解析；无 def 时显示未知积木兜底）。 */
-const title = computed(() =>
-    def.value
-        ? resolveLabelKey(t.value, def.value.labelKey)
-        : `${resolveLabelKey(t.value, 'script.unknownBlock')}: ${props.action.type}`,
+// ---------- 0.7.1：友好元素积木皮肤（setElementProperties 路线乙）----------
+
+/**
+ * 是否友好元素积木（{@code setElementProperties}）。这类块在 ACTION_DEFS 里没有 def
+ * （走 FRIENDLY_ELEMENT_DEFS 皮肤），故 {@code def} 为 null——本分支接管标题 / 字段渲染。
+ */
+const isFriendly = computed(() => props.action.type === 'setElementProperties');
+
+/**
+ * 友好皮肤声明（按 {@code action.kind} 查 FRIENDLY_ELEMENT_DEFS）。kind 未知 / 缺失 → null
+ * （标题退通用名、字段空——不崩）。仅 friendly 块有值。
+ */
+const friendlyDef = computed(() =>
+    isFriendly.value
+        ? (FRIENDLY_ELEMENT_DEFS[(props.action as { kind?: string }).kind ?? ''] ?? null)
+        : null,
 );
 
-/** 色条颜色（无 def → 用边框灰）。 */
-const colorVar = computed(() => (def.value ? `var(${def.value.colorVar})` : 'var(--border)'));
+/** friendly 块当前 patch（读 action.patch；非 friendly 返空对象）。 */
+const friendlyPatch = computed<Record<string, string>>(() =>
+    isFriendly.value
+        ? ((props.action as { patch?: Record<string, string> }).patch ?? {})
+        : {},
+);
+
+/** friendly 块的可编辑字段（皮肤的 fields；show/hide 为空数组——只渲染元素下拉）。 */
+const friendlyFields = computed<FieldDef[]>(() => friendlyDef.value?.fields ?? []);
+
+/**
+ * friendly 块的「元素」字段（所有友好积木都先选元素）。复用 ACTION_DEFS 里 element 字段
+ * 标签 key（{@code script.fields.elementId}），交给现有 element 控件渲染。
+ */
+const FRIENDLY_ELEMENT_FIELD: FieldDef = {
+    name: 'elementId',
+    type: 'element',
+    labelKey: 'script.fields.elementId',
+};
+
+/** friendly 块标题：皮肤 labelKey；kind 未知 → 通用名（已存在的"设置元素属性"，不崩）。 */
+const friendlyTitle = computed(() =>
+    resolveLabelKey(t.value, friendlyDef.value?.labelKey ?? 'script.blocks.setElementProperty'),
+);
+
+/** 块标题文案（friendly → 皮肤名；def.labelKey 解析；无 def 时显示未知积木兜底）。 */
+const title = computed(() => {
+    if (isFriendly.value) return friendlyTitle.value;
+    return def.value
+        ? resolveLabelKey(t.value, def.value.labelKey)
+        : `${resolveLabelKey(t.value, 'script.unknownBlock')}: ${props.action.type}`;
+});
+
+/** 色条颜色（friendly 块走动作蓝；无 def → 用边框灰）。 */
+const colorVar = computed(() => {
+    if (def.value) return `var(${def.value.colorVar})`;
+    if (isFriendly.value) return 'var(--ctp-blue)';
+    return 'var(--border)';
+});
 
 /** 是否 if 块（C 形布局：条件 + then/else 子槽）。 */
 const isIf = computed(() => props.action.type === 'if');
@@ -183,6 +231,44 @@ function onFieldUpdate(field: FieldDef, value: unknown): void {
     edit.updateActionField(props.path, { [field.name]: value } as Partial<ScriptAction>);
 }
 
+// ---------- 0.7.1：friendly 块字段读写（值落 action.patch，elementId 落顶层）----------
+
+/**
+ * friendly 块某 patch 字段的当前值（喂 BlockParamInput）。patch 存的是 string
+ * （{@code Record<string,string>}），但 BlockParamInput 的 number 控件按 {@code typeof===number}
+ * 受控显示——故 number 字段在此<b>转成 number</b>（非有限 → undefined 让控件显空）；其余字段原样
+ * 返 string。缺失 → undefined（控件退默认）。写回时 {@link onFriendlyFieldUpdate} 再 String() 回 patch。
+ */
+function friendlyFieldValue(field: FieldDef): unknown {
+    const v = friendlyPatch.value[field.name];
+    if (v === undefined) return undefined;
+    if (field.type === 'number') {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+    }
+    return v;
+}
+
+/**
+ * friendly 块 patch 字段改值回写：<b>整体替换 patch</b>（{@code { ...action.patch, [name]: String(v) }}），
+ * 调 {@code updateActionField(path, { patch })}。复用现有 updateActionField immutable 重建链路——
+ * patch 作为 action 的普通字段被 merge，blockId（path）不变（1 积木 1 path，同构守住）。
+ */
+function onFriendlyFieldUpdate(field: FieldDef, value: unknown): void {
+    const nextPatch = { ...friendlyPatch.value, [field.name]: String(value) };
+    edit.updateActionField(props.path, { patch: nextPatch } as Partial<ScriptAction>);
+}
+
+/** friendly 块「元素」字段当前值（action.elementId）。 */
+const friendlyElementValue = computed(() =>
+    isFriendly.value ? ((props.action as { elementId?: string }).elementId ?? '') : '',
+);
+
+/** friendly 块改元素：elementId 落顶层（非 patch），复用 updateActionField。 */
+function onFriendlyElementUpdate(value: unknown): void {
+    edit.updateActionField(props.path, { elementId: String(value) } as Partial<ScriptAction>);
+}
+
 /**
  * runCommand 的复合 command 控件改值：BlockParamInput emit {@link CommandValue}
  * （templateId + params 一起），整体回写到 action 的两个字段。
@@ -249,6 +335,13 @@ const missingRefFields = computed<string[]>(() => {
         const v = rec[name];
         return typeof v !== 'string' || v.trim() === '';
     };
+    // friendly 块（setElementProperties）：def 为 null，必填引用字段是 elementId——空则标。
+    if (isFriendly.value) {
+        if (blank('elementId')) {
+            out.push(resolveLabelKey(t.value, FRIENDLY_ELEMENT_FIELD.labelKey));
+        }
+        return out;
+    }
     for (const f of def.value?.fields ?? []) {
         if (f.type === 'element' || f.type === 'timeline' || f.type === 'variable'
             || f.type === 'sound' || f.type === 'condition') {
@@ -290,8 +383,34 @@ const needSelectTitle = computed(() =>
     <!-- 头部：标题 + 标量参数槽（F：真表单控件 BlockParamInput） -->
     <div class="hc-block-head">
       <span class="hc-block-title">{{ title }}</span>
+
+      <!-- 0.7.1 友好元素积木：先元素下拉，再皮肤字段（值落 action.patch）。
+           show/hide 的 friendlyFields 为空 → 只渲染元素下拉。 -->
+      <template v-if="isFriendly">
+        <BlockParamInput
+          class="hc-block-param-input"
+          :field="FRIENDLY_ELEMENT_FIELD"
+          :value="friendlyElementValue"
+          :action-kind="action.type"
+          :disabled="locked"
+          @update="onFriendlyElementUpdate"
+        />
+        <BlockParamInput
+          v-for="f in friendlyFields"
+          :key="f.name"
+          class="hc-block-param-input"
+          :field="f"
+          :value="friendlyFieldValue(f)"
+          :action-kind="action.type"
+          :disabled="locked"
+          @update="(v: unknown) => onFriendlyFieldUpdate(f, v)"
+        />
+      </template>
+
+      <!-- 常规块：按 def.fields 渲染标量参数槽 -->
       <BlockParamInput
         v-for="f in scalarFields"
+        v-else
         :key="f.name"
         class="hc-block-param-input"
         :field="f"

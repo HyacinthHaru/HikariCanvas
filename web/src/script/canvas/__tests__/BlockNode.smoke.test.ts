@@ -259,3 +259,94 @@ describe('BlockNode 待完善角标（次要问题 1：扩展到 variable / cond
         expect(badge(w).exists()).toBe(false);
     });
 });
+
+describe('BlockNode 0.7.1 友好元素皮肤渲染（setElementProperties）', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
+    });
+
+    /** 友好积木：moveTo（patch x/y）。 */
+    function friendlyMoveTo(elementId = 'e-1', x = '128', y = '64'): ScriptAction {
+        return { type: 'setElementProperties', kind: 'moveTo', elementId, patch: { x, y } } as ScriptAction;
+    }
+
+    it('moveTo 渲染：标题「移到」+ 元素下拉 + 两个 number 值 128/64', async () => {
+        const project = (await import('@/stores/project')).useProjectStore();
+        // 给画布一个元素让 element 下拉非空（否则只渲染 noElements 提示）。
+        project.setSnapshot({
+            canvas: { width: 128, height: 128, background: '#000' },
+            layers: [{ id: 'l1', name: 'L', visible: true, locked: false, opacity: 1, elements: [
+                { id: 'e-1', type: 'rect', x: 0, y: 0, w: 10, h: 10, fill: '#fff' },
+            ] }],
+            activeLayerId: 'l1', gridSize: 8, guides: [], timelines: [], activeTimelineId: null,
+        } as never);
+        const w = mountNode(friendlyMoveTo(), 'actions/0');
+        await nextTick();
+        expect(w.text()).toContain('移到');
+        // 两个 number input，值 128 / 64
+        const nums = w.findAll('input[type="number"]').map((i) => (i.element as HTMLInputElement).value);
+        expect(nums).toContain('128');
+        expect(nums).toContain('64');
+        // 元素下拉存在（element 字段 → select，选中 e-1）
+        const sel = w.find('select');
+        expect(sel.exists()).toBe(true);
+        expect((sel.element as HTMLSelectElement).value).toBe('e-1');
+        // data-block-path 不变（1 积木 1 path）
+        expect(w.find('[data-block-path="actions/0"]').exists()).toBe(true);
+    });
+
+    it('改 x 字段 → updateActionField(path, { patch: 整体替换 })', async () => {
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'updateActionField');
+        const w = mountNode(friendlyMoveTo('e-1', '128', '64'), 'actions/2');
+        await nextTick();
+        // 找到值为 128 的 number input（x）改成 200
+        const xInput = w.findAll('input[type="number"]').find(
+            (i) => (i.element as HTMLInputElement).value === '128',
+        )!;
+        await xInput.setValue('200');
+        // patch 整体替换：{ x:'200', y:'64' }（y 保留）
+        expect(spy).toHaveBeenCalledWith('actions/2', { patch: { x: '200', y: '64' } });
+    });
+
+    it('show（fields 空）：只渲染标题「显示」+ 元素下拉，无额外参数输入', async () => {
+        const w = mountNode(
+            { type: 'setElementProperties', kind: 'show', elementId: 'e-1', patch: { opacity: '1' } } as ScriptAction,
+            'actions/0',
+        );
+        await nextTick();
+        expect(w.text()).toContain('显示');
+        // show 无可编辑 patch 字段 → 没有 number / text 输入（仅元素 select）
+        expect(w.findAll('input[type="number"]').length).toBe(0);
+        expect(w.findAll('input[type="text"]').length).toBe(0);
+    });
+
+    it('未知 kind → fallback 通用名不崩（仍渲染元素下拉区，data-block-path 不变）', async () => {
+        const w = mountNode(
+            { type: 'setElementProperties', kind: 'totallyUnknownKind', elementId: 'e-1', patch: {} } as ScriptAction,
+            'actions/1',
+        );
+        await nextTick();
+        // 不崩：渲染出块根
+        expect(w.find('[data-block-path="actions/1"]').exists()).toBe(true);
+        // 通用名 fallback（设置元素属性）——不显示原始 i18n key 字符串
+        expect(w.text()).not.toContain('script.blocks');
+        expect(w.text()).toContain('设置元素属性');
+    });
+
+    it('elementId 空 → 显示待完善角标（命中"元素"）', async () => {
+        const w = mountNode(friendlyMoveTo('', '0', '0'), 'actions/0');
+        await nextTick();
+        const badge = w.find('.hc-block-need-select');
+        expect(badge.exists()).toBe(true);
+        expect(badge.attributes('title')).toContain('元素');
+    });
+
+    it('elementId 有值 → 不显示待完善角标', async () => {
+        const w = mountNode(friendlyMoveTo('e-1', '0', '0'), 'actions/0');
+        await nextTick();
+        expect(w.find('.hc-block-need-select').exists()).toBe(false);
+    });
+});

@@ -14,7 +14,10 @@ import { nextTick } from 'vue';
 import BlockPalette from '../BlockPalette.vue';
 import { useUiStore } from '@/stores/ui';
 import { useProjectStore } from '@/stores/project';
-import { ACTION_DEFS } from '../../model/blockDefs';
+import { ACTION_DEFS, FRIENDLY_PALETTE_KINDS } from '../../model/blockDefs';
+
+/** nudgeElement 只在「友好元素」分组出现，从常规动作分组过滤掉（与组件 FRIENDLY_ONLY_ACTION_KINDS 一致）。 */
+const FRIENDLY_ONLY_ACTION_KINDS = new Set(['nudgeElement']);
 
 describe('BlockPalette 渲染 smoke', () => {
     beforeEach(() => {
@@ -22,15 +25,36 @@ describe('BlockPalette 渲染 smoke', () => {
         useUiStore().locale = 'zh';
     });
 
-    it('挂载不崩 + 渲染全部 9 个动作积木项', async () => {
+    it('挂载不崩 + 渲染全部常规动作积木 + 友好元素分组', async () => {
         const w = mount(BlockPalette);
         await nextTick();
         const items = w.findAll('.hc-palette-item');
-        expect(items.length).toBe(Object.keys(ACTION_DEFS).length); // 9
-        // 各 kind 都有对应 data-block-kind
-        for (const kind of Object.keys(ACTION_DEFS)) {
+        // 常规分组（ACTION_DEFS 去掉 friendly-only 的 nudgeElement）+ 友好元素分组（FRIENDLY_PALETTE_KINDS）
+        const regularKinds = Object.keys(ACTION_DEFS).filter((k) => !FRIENDLY_ONLY_ACTION_KINDS.has(k));
+        expect(items.length).toBe(regularKinds.length + FRIENDLY_PALETTE_KINDS.length);
+        // 常规动作 kind 都有对应 data-block-kind
+        for (const kind of regularKinds) {
             expect(w.find(`[data-block-kind="${kind}"]`).exists()).toBe(true);
         }
+        // 友好元素 kind 都有对应 data-block-kind
+        for (const kind of FRIENDLY_PALETTE_KINDS) {
+            expect(w.find(`[data-block-kind="${kind}"]`).exists()).toBe(true);
+        }
+    });
+
+    it('0.7.1：友好元素分组渲染 9 项（含 nudgeElement）+ nudgeElement 不重复', async () => {
+        const w = mount(BlockPalette);
+        await nextTick();
+        // 友好元素分组标题
+        expect(w.text()).toContain('元素动作');
+        // nudgeElement 在 palette 里恰好出现 1 次（只在友好元素分组，不在动作分组重复）
+        expect(w.findAll('[data-block-kind="nudgeElement"]').length).toBe(1);
+        // 友好皮肤标题示例：移到 / 显示 / 隐藏
+        expect(w.text()).toContain('移到');
+        expect(w.text()).toContain('显示');
+        expect(w.text()).toContain('隐藏');
+        // 「移动一点」= nudgeElement 的 ACTION_DEFS 标题
+        expect(w.text()).toContain('移动一点');
     });
 
     it('触发器不在 palette（无 data-block-kind="wallReady"）', async () => {
@@ -48,6 +72,7 @@ describe('BlockPalette 渲染 smoke', () => {
         expect(text).toContain('时间轴');
         expect(text).toContain('控制');
         expect(text).toContain('命令');
+        expect(text).toContain('元素动作');
     });
 
     it('项 pointerdown（左键）→ emit paletteDown(kind, ev)', async () => {

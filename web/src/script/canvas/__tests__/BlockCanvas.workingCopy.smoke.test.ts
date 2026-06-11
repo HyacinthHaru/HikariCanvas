@@ -19,6 +19,8 @@ import BlockCanvas from '../BlockCanvas.vue';
 import { useUiStore } from '@/stores/ui';
 import { useScriptStore } from '@/stores/scripts';
 import { useScriptEditStore } from '@/stores/scriptEdit';
+import { insertAt } from '@/script/model/blockTree';
+import { makeDefaultAction } from '@/script/model/blockDefs';
 import type { ScriptRule, ScriptAction } from '@/types/protocol';
 
 // mock wsClient：编辑链路不真发网络（setActions/setTrigger 走 debounce save，会调 sendScriptUpdate）。
@@ -141,6 +143,37 @@ describe('BlockCanvas 渲染当前编辑规则用 workingCopy（主根因回归�
         expect(w.findAll('.hc-block-stack').length).toBe(2);
         // server 镜像的动作渲染
         expect(w.find('[data-rule-id="sr-1"] [data-block-path="actions/0"]').exists()).toBe(true);
+        w.unmount();
+    });
+
+    it('0.7.1：palette 拖友好积木「移到」→ workingCopy 多一条 setElementProperties{kind:moveTo} → 画布立即渲染「移到」', async () => {
+        // 验证 0.7.0「渲染数据源」根因修复在 friendly 路径也成立：palette 落块走 insertAt +
+        // makeDefaultAction（与 useBlockDrag.onPointerUp palette 分支同款），改 workingCopy 立即上屏。
+        const scripts = useScriptStore();
+        scripts.initScripts([makeRule('sr-1')]); // server 镜像只有 actions/0（log）
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        const w = mount(BlockCanvas);
+        await nextTick();
+
+        expect(w.find('[data-block-path="actions/1"]').exists()).toBe(false);
+
+        // 模拟 palette 落「移到」到 actions 末尾（onPointerUp palette 分支的等价调用）。
+        const wc = edit.workingCopy!;
+        const newAction = makeDefaultAction('moveTo');
+        expect(newAction.type).toBe('setElementProperties');
+        expect((newAction as { kind?: string }).kind).toBe('moveTo');
+        edit.setActions(insertAt(wc.actions, ['actions'], wc.actions.length, newAction));
+        await nextTick();
+
+        // 画布立即出现该 friendly 积木（actions/1）+ 标题「移到」，server 镜像没动。
+        const block = w.find('[data-block-path="actions/1"]');
+        expect(block.exists()).toBe(true);
+        expect(block.text()).toContain('移到');
+        expect(scripts.get('sr-1')!.actions.length).toBe(1); // server 镜像仍 1 条
+        // workingCopy 里确实多了一条 setElementProperties{kind:moveTo}
+        expect(edit.workingCopy!.actions.length).toBe(2);
+        expect(edit.workingCopy!.actions[1].type).toBe('setElementProperties');
         w.unmount();
     });
 
