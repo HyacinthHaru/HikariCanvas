@@ -56,8 +56,10 @@ const locked = computed(() => project.isLocked);
  * computed（单一权威——store 的 doSave 也读同一份阻止 send），UI 这里只负责展示与试跑前判。
  */
 const validationErrors = computed(() => edit.validationErrors);
-/** 是否有校验错误（试跑 disabled / 红字 banner 显隐用）。 */
+/** 是否有校验错误（试跑 disabled / 头部温和指示显隐用）。 */
 const hasErrors = computed(() => validationErrors.value.length > 0);
+/** 头部温和指示文案：「⚠ N 处待完善」（N = 错误条数）。 */
+const validationHintText = computed(() => t.value.script.validationHint.replace('{n}', String(validationErrors.value.length)));
 
 // ---------- H：试跑高亮（K-UI-8）----------
 
@@ -146,12 +148,19 @@ function onTest(): void {
         });
 }
 
-/** 错误项点击：定位到对应积木（best-effort——滚动到 data-block-path 元素）。 */
-function onErrorClick(blockId: string | undefined): void {
-    if (!blockId) return;
-    const el = document.querySelector(`[data-block-path="${cssEscape(blockId)}"]`);
-    if (el && 'scrollIntoView' in el) {
-        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+/**
+ * P5 实测修复（根因 1）：点头部「待完善」温和指示 → 定位到<b>第一个带 blockId 的错误积木</b>
+ * （best-effort——滚动到 data-block-path 元素居中）。循环找首个有 blockId 的错误（规则级错误如
+ * 名称空 / 动作列表空无 blockId，跳过它们找到第一个能定位的积木）。无任何可定位错误 → 静默。
+ */
+function onIndicatorClick(): void {
+    for (const err of validationErrors.value) {
+        if (!err.blockId) continue;
+        const el = document.querySelector(`[data-block-path="${cssEscape(err.blockId)}"]`);
+        if (el && 'scrollIntoView' in el) {
+            (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
     }
 }
 
@@ -349,6 +358,19 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
             <button class="hc-del-yes" @click="confirmDelete(edit.selectedRuleId!)">{{ t.script.deleteConfirmYes }}</button>
           </span>
         </template>
+
+        <!-- P5 实测修复（根因 1）：校验问题的温和 inline 指示（橙色小字，不占新行 / 不挤画布）。
+             点它滚动定位到第一个可定位的错误积木。validationErrors 为空时不显示。 -->
+        <button
+          v-if="hasErrors"
+          type="button"
+          class="hc-validation-hint"
+          :title="t.script.validationTitle"
+          @click="onIndicatorClick"
+        >
+          <AlertTriangle class="size-3.5" />
+          <span>{{ validationHintText }}</span>
+        </button>
       </div>
 
       <div class="ml-auto flex items-center gap-2">
@@ -363,25 +385,6 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         </button>
       </div>
     </header>
-
-    <!-- H：校验错误 banner（有 workingCopy 且有错时显示；点条目可定位积木） -->
-    <div v-if="edit.workingCopy && hasErrors" class="hc-script-errors" role="alert">
-      <AlertTriangle class="size-4 shrink-0" />
-      <div class="hc-script-errors-body">
-        <span class="hc-script-errors-title">{{ t.script.validationTitle }}</span>
-        <ul class="hc-script-errors-list">
-          <li
-            v-for="(err, i) in validationErrors"
-            :key="i"
-            class="hc-script-error-item"
-            :class="err.blockId ? 'hc-script-error-clickable' : ''"
-            @click="onErrorClick(err.blockId)"
-          >
-            {{ err.message }}
-          </li>
-        </ul>
-      </div>
-    </div>
 
     <div class="hc-script-body">
       <aside class="hc-script-palette">
@@ -528,48 +531,24 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 .hc-del-yes:hover {
     opacity: 0.9;
 }
-/* H：校验错误 banner（destructive 系，列出每条错误，可点定位） */
-.hc-script-errors {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    background: color-mix(in srgb, var(--destructive) 10%, transparent);
-    border-bottom: 1px solid color-mix(in srgb, var(--destructive) 30%, transparent);
-    color: var(--destructive);
-    flex-shrink: 0;
-    max-height: 7.5rem;
-    overflow-y: auto;
-}
-.hc-script-errors-body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    min-width: 0;
-}
-.hc-script-errors-title {
+/* P5 实测修复（根因 1）：头部 inline 温和指示（橙色小字，不占新行 / 不挤画布）。
+   点它定位到第一个可定位的错误积木。替代原来的整行红 banner（布局位移元凶）。 */
+.hc-validation-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.5rem;
     font-size: 0.75rem;
-    font-weight: 600;
-}
-.hc-script-errors-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-.hc-script-error-item {
-    font-size: 0.75rem;
-    color: var(--foreground);
-}
-.hc-script-error-clickable {
+    line-height: 1.2;
+    white-space: nowrap;
+    border-radius: var(--radius-sm);
+    color: var(--ctp-peach, var(--foreground));
+    border: 1px solid color-mix(in srgb, var(--ctp-peach, var(--border)) 40%, transparent);
+    background: color-mix(in srgb, var(--ctp-peach, var(--muted)) 12%, transparent);
     cursor: pointer;
-    text-decoration: underline dotted;
-    text-underline-offset: 2px;
 }
-.hc-script-error-clickable:hover {
-    color: var(--destructive);
+.hc-validation-hint:hover {
+    background: color-mix(in srgb, var(--ctp-peach, var(--muted)) 22%, transparent);
 }
 .hc-rule-test {
     color: var(--ctp-green, var(--primary));

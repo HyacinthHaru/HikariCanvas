@@ -424,6 +424,53 @@ describe('scriptEditStore — server-as-truth dirty 协调', () => {
         expect(edit.workingCopy).toBe(null);
     });
 
+    // ---- P5 实测修复（根因 3）：拖拽中冻结整树替换 ----
+
+    it('dragging=true 时 server 回声不替换 workingCopy（防 v-for 重建打断 capture）', async () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1', { name: 'v0' }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        expect(edit.dirty).toBe(false); // 非脏：正常情况下回声会替换
+        // 进入拖拽：冻结整树替换
+        edit.setDragging(true);
+        expect(edit.dragging).toBe(true);
+        scripts.upsert(makeRule('sr-1', { name: 'server拖拽中改了' }));
+        await nextTick();
+        // 拖拽中：即便非脏也保留本地（不被整树替换）
+        expect(edit.workingCopy?.name).toBe('v0');
+    });
+
+    it('dragging=false 后恢复 server-as-truth（回声重新替换 workingCopy）', async () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1', { name: 'v0' }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setDragging(true);
+        scripts.upsert(makeRule('sr-1', { name: '拖拽中(被冻结)' }));
+        await nextTick();
+        expect(edit.workingCopy?.name).toBe('v0'); // 冻结
+        // 松手：恢复 server-as-truth
+        edit.setDragging(false);
+        expect(edit.dragging).toBe(false);
+        scripts.upsert(makeRule('sr-1', { name: '松手后server权威' }));
+        await nextTick();
+        expect(edit.workingCopy?.name).toBe('松手后server权威');
+    });
+
+    it('dragging=true 但规则被 server 删除 → 仍 closeEditing（删不受 dragging 守卫）', async () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setDragging(true);
+        scripts.removeRule('sr-1');
+        await nextTick();
+        // 规则真没了：退出编辑（松手时 useBlockDrag 取 workingCopy=null 会安全早退）
+        expect(edit.selectedRuleId).toBe(null);
+        expect(edit.workingCopy).toBe(null);
+    });
+
     it('wall 切换（wallId 变）→ closeEditing', async () => {
         const scripts = useScriptStore();
         scripts.upsert(makeRule('sr-1'));

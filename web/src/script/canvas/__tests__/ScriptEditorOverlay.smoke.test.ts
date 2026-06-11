@@ -134,7 +134,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         }]);
     }
 
-    it('合法规则：试跑按钮启用 + 无错误 banner', async () => {
+    it('合法规则：试跑按钮启用 + 无校验指示 + 无 banner 块（根因 1）', async () => {
         selectValidRule();
         const wrapper = mount(ScriptEditorOverlay);
         await nextTick();
@@ -145,8 +145,10 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         const testBtn = wrapper.find('button.hc-rule-test');
         expect(testBtn.exists()).toBe(true);
         expect((testBtn.element as HTMLButtonElement).disabled).toBe(false);
-        // 无校验错误 banner
+        // 根因 1：红 banner 块已删除（任何情况下都不存在）
         expect(wrapper.find('.hc-script-errors').exists()).toBe(false);
+        // 合法时头部温和指示也不显示
+        expect(wrapper.find('.hc-validation-hint').exists()).toBe(false);
     });
 
     it('点试跑 → 调 sendScriptTest(ruleId)', async () => {
@@ -159,7 +161,7 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         expect(sendScriptTest).toHaveBeenCalledWith('sr-1');
     });
 
-    it('非法规则（名称空）：错误 banner 显示 + 试跑按钮禁用', async () => {
+    it('非法规则（名称空）：头部温和指示显示（不是整行 banner）+ 试跑按钮禁用（根因 1）', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([{
             id: 'sr-1', wallId: 'w-x', enabled: true, name: '占位',
@@ -171,15 +173,37 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         edit.selectRule('sr-1');
         edit.setName('   '); // 改成空名 = 非法
         await nextTick();
-        // 错误 banner 出现 + 含校验标题
-        const banner = wrapper.find('.hc-script-errors');
-        expect(banner.exists()).toBe(true);
-        expect(banner.text()).toContain('规则名称不能为空');
+        // 根因 1：不再有整行红 banner（布局位移元凶已删）
+        expect(wrapper.find('.hc-script-errors').exists()).toBe(false);
+        // 改为头部 inline 温和指示，显示「N 处待完善」
+        const hint = wrapper.find('.hc-validation-hint');
+        expect(hint.exists()).toBe(true);
+        expect(hint.text()).toContain('待完善');
         // 试跑按钮禁用
         expect((wrapper.find('button.hc-rule-test').element as HTMLButtonElement).disabled).toBe(true);
         // 点试跑不触发 send
         await wrapper.find('button.hc-rule-test').trigger('click');
         expect(sendScriptTest).not.toHaveBeenCalled();
+    });
+
+    it('点头部温和指示不崩（定位到第一处错误积木；根因 1）', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([{
+            id: 'sr-1', wallId: 'w-x', enabled: true, name: '规则',
+            // 一个非法动作（wait 越界）→ 该错误带 blockId=actions/0 可定位
+            trigger: { type: 'wallReady' }, actions: [{ type: 'wait', ms: 1 }], blockLayout: '{}',
+        }]);
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        await nextTick();
+        const hint = wrapper.find('.hc-validation-hint');
+        expect(hint.exists()).toBe(true);
+        // 点击不抛（scrollIntoView 在 happy-dom 上可能 no-op，但不应崩）
+        await hint.trigger('click');
+        expect(wrapper.find('.hc-validation-hint').exists()).toBe(true);
+        wrapper.unmount();
     });
 
     it('trace 推送（ruleId 匹配）→ 高亮不崩 + result map 更新到画布', async () => {

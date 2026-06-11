@@ -74,11 +74,15 @@ defineExpose({
 });
 
 /**
- * 每条规则在画布上的坐标：先各自解析 {@code rule.blockLayout} 取 {@code stacks[rule.id]}，
+ * 每条规则在画布上的<b>静态基坐标</b>：先各自解析 {@code rule.blockLayout} 取 {@code stacks[rule.id]}，
  * 缺坐标的规则统一交给 {@link autoLayout} 纵向排布兜底（按 listSorted 顺序）。
- * <b>移堆拖动中</b>：被拖堆的坐标用 {@code drag.stackDragPos} 实时覆盖（松手才提交 setStackPos）。
+ *
+ * <p>P5 实测修复（根因 4）：本 computed <b>不依赖 {@code drag.stackDragPos}</b>——移堆拖动中
+ * 它保持稳定（不重算），避免每帧把所有堆的定位全部重算 + 触发整条 v-for 重渲（拖不跟手）。
+ * 被拖堆的实时坐标由 {@link liveStackPos} 在<b>绑定级</b>单独覆盖：只有被拖堆的 :x/:y 值会变，
+ * Vue 据此只 patch 那一个 BlockStack，其余堆 props 不变 → 不重渲。</p>
  */
-const positionedStacks = computed(() => {
+const basePositionedStacks = computed(() => {
     const rules = scripts.listSorted;
     const explicit: BlockLayout = { stacks: {} };
     for (const rule of rules) {
@@ -87,16 +91,26 @@ const positionedStacks = computed(() => {
         if (coord) explicit.stacks[rule.id] = coord;
     }
     const merged = autoLayout(rules.map((r) => r.id), explicit);
-    const live = drag.stackDragPos.value;
     return rules.map((rule) => {
-        // 移堆拖动中：覆盖被拖堆坐标，让它即时跟随指针。
-        if (live && live.ruleId === rule.id) {
-            return { rule, x: live.x, y: live.y };
-        }
         const c = merged.stacks[rule.id] ?? { x: 40, y: 40 };
         return { rule, x: c.x, y: c.y };
     });
 });
+
+/**
+ * 取某条规则当前应渲染的坐标：移堆拖动中且就是被拖堆 → 用 {@code drag.stackDragPos} 实时坐标
+ * （让它即时跟随指针，松手才提交 setStackPos）；否则用静态基坐标。
+ *
+ * <p>在模板 :x/:y 绑定里调用——它只读 {@code drag.stackDragPos.value}（reactive），故拖动中仅
+ * "被拖堆的绑定结果"会变化，其余堆返回与上帧相同的基坐标对象值 → Vue 不 patch（根因 4 核心）。</p>
+ */
+function liveStackPos(entry: { rule: { id: string }; x: number; y: number }): { x: number; y: number } {
+    const live = drag.stackDragPos.value;
+    if (live && live.ruleId === entry.rule.id) {
+        return { x: live.x, y: live.y };
+    }
+    return { x: entry.x, y: entry.y };
+}
 
 /** 跟手浮层显示的块标题（palette / block 源的 kind → label）。 */
 const ghostLabel = computed(() => {
@@ -151,13 +165,14 @@ function onPointerDown(e: PointerEvent): void {
     @keyup="onKeyUp"
   >
     <div class="hc-block-world" :style="canvas.worldStyle.value">
-      <!-- 每条 ScriptRule → 一个积木堆 -->
+      <!-- 每条 ScriptRule → 一个积木堆。基坐标稳定（不依赖拖动），:x/:y 经 liveStackPos
+           只对被拖堆做实时覆盖 → 拖动时仅被拖堆 patch，其余堆静止（根因 4）。 -->
       <BlockStack
-        v-for="entry in positionedStacks"
+        v-for="entry in basePositionedStacks"
         :key="entry.rule.id"
         :rule="entry.rule"
-        :x="entry.x"
-        :y="entry.y"
+        :x="liveStackPos(entry).x"
+        :y="liveStackPos(entry).y"
         @pointerdown.stop
       />
     </div>
@@ -174,13 +189,13 @@ function onPointerDown(e: PointerEvent): void {
         width: `${drag.activeSlot.value.w}px`,
       }"
     />
-    <!-- 跟手浮层（palette / block 源拖动中）。 -->
+    <!-- 跟手浮层（palette / block 源拖动中）。用 transform 定位（GPU 合成，拖动中不触发 layout
+         reflow）；left/top 固定 0，每帧只改 transform（根因 4：让浮层跟手不卡）。 -->
     <div
       v-if="drag.ghost.value"
       class="hc-drag-ghost"
       :style="{
-        left: `${drag.ghost.value.x}px`,
-        top: `${drag.ghost.value.y}px`,
+        transform: `translate3d(${drag.ghost.value.x}px, ${drag.ghost.value.y}px, 0)`,
         borderLeftColor: ghostColor,
       }"
     >
@@ -223,6 +238,9 @@ function onPointerDown(e: PointerEvent): void {
 }
 .hc-drag-ghost {
     position: fixed;
+    /* transform 定位的原点：固定在视口左上，由 :style 的 translate3d 偏移到指针处。 */
+    left: 0;
+    top: 0;
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -236,6 +254,7 @@ function onPointerDown(e: PointerEvent): void {
     opacity: 0.92;
     font-size: 0.8125rem;
     white-space: nowrap;
+    will-change: transform;
 }
 .hc-drag-ghost-dot {
     width: 8px;

@@ -12,7 +12,7 @@
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { effectScope } from 'vue';
+import { effectScope, nextTick } from 'vue';
 
 import { useBlockDrag } from '../useBlockDrag';
 import { useScriptEditStore } from '@/stores/scriptEdit';
@@ -141,7 +141,8 @@ describe('palette 源 → insertAt 顶层', () => {
 
         const acts = edit.workingCopy!.actions;
         expect(acts).toHaveLength(2);
-        expect(acts[0]).toEqual({ type: 'if', condition: '', then: [], else: [] });
+        // P5 实测修复（根因 2）：palette 拖出的 if 带非空合法默认 condition（拖出即合法）。
+        expect(acts[0]).toEqual({ type: 'if', condition: 'var("user/score") > 0', then: [], else: [] });
         expect(acts[1]).toEqual({ type: 'wait', ms: 100 });
     });
 
@@ -265,6 +266,87 @@ describe('画布源 → moveNode', () => {
         window.dispatchEvent(pointerEvt('pointerup', 140, 900));
 
         expect(edit.workingCopy!.actions.map((x) => (x.type === 'log' ? x.message : x.type))).toEqual(['A', 'B']);
+    });
+});
+
+describe('拖拽期冻结 server 回声（根因 3）', () => {
+    it('startBlockDrag → edit.dragging=true；松手 → false', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule([
+            { type: 'log', message: 'A' },
+            { type: 'log', message: 'B' },
+        ]));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        const stack = el({ 'data-rule-id': 'sr-1' }, { left: 0, top: 100, width: 280, height: 80 });
+        const a = el({ 'data-block-path': 'actions/0' }, { left: 10, top: 100, width: 260, height: 30 });
+        stack.appendChild(a);
+        stack.appendChild(el({ 'data-block-path': 'actions/1' }, { left: 10, top: 140, width: 260, height: 30 }));
+        canvasEl.appendChild(stack);
+
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        // 拖拽中：dragging 为真
+        expect(edit.dragging).toBe(true);
+        // 松手（任意位置）→ abortDrag 复位 dragging
+        window.dispatchEvent(pointerEvt('pointerup', 140, 900));
+        expect(edit.dragging).toBe(false);
+    });
+
+    it('startPaletteDrag → dragging=true；松手 → false', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule([{ type: 'wait', ms: 100 }]));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        const stack = el({ 'data-rule-id': 'sr-1' }, { left: 0, top: 100, width: 280, height: 40 });
+        stack.appendChild(el({ 'data-block-path': 'actions/0' }, { left: 10, top: 100, width: 260, height: 30 }));
+        canvasEl.appendChild(stack);
+
+        const drag = makeDrag();
+        const down = pointerEvt('pointerdown', 50, 50);
+        Object.defineProperty(down, 'currentTarget', { value: canvasEl });
+        drag.startPaletteDrag('log', down);
+        expect(edit.dragging).toBe(true);
+        window.dispatchEvent(pointerEvt('pointerup', 140, 900));
+        expect(edit.dragging).toBe(false);
+    });
+
+    it('pointercancel（中断）也复位 dragging=false', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule([{ type: 'log', message: 'A' }]));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        const stack = el({ 'data-rule-id': 'sr-1' }, { left: 0, top: 100, width: 280, height: 40 });
+        const a = el({ 'data-block-path': 'actions/0' }, { left: 10, top: 100, width: 260, height: 30 });
+        stack.appendChild(a);
+        canvasEl.appendChild(stack);
+
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        expect(edit.dragging).toBe(true);
+        window.dispatchEvent(pointerEvt('pointercancel', 0, 0));
+        expect(edit.dragging).toBe(false);
+    });
+
+    it('拖拽进行中 store patch 回来不替换 workingCopy；拖完恢复', async () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule([{ type: 'log', message: 'A' }]));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        const stack = el({ 'data-rule-id': 'sr-1' }, { left: 0, top: 100, width: 280, height: 40 });
+        const a = el({ 'data-block-path': 'actions/0' }, { left: 10, top: 100, width: 260, height: 30 });
+        stack.appendChild(a);
+        canvasEl.appendChild(stack);
+
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        // 拖拽中 server patch 回来（改 name）：不该替换本地 workingCopy（仍为 makeRule 给的 'r'）。
+        scripts.upsert({ ...makeRule([{ type: 'log', message: 'A' }]), name: 'server拖拽中' });
+        await nextTick();
+        expect(edit.workingCopy?.name).toBe('r');
+        // 松手落空白（不提交）→ dragging=false，恢复 server-as-truth
+        window.dispatchEvent(pointerEvt('pointerup', 140, 900));
+        expect(edit.dragging).toBe(false);
     });
 });
 

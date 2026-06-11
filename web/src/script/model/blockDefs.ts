@@ -309,10 +309,19 @@ export function defFor(kind: string): BlockDef | null {
 /**
  * 造一个指定 kind 的合法默认动作（palette 拖出新块时用）。
  *
- * <p>每个字段取一个<b>合法且无害</b>的默认（在后端 validator 范围内）：引用类字段（变量名 /
- * 元素 id / 时间轴 id / 命令模板 id）默认空串——空引用不会"误触"既有对象，用户拖出后必须自己
- * 选；数值默认取范围内的常用值（如 timer 间隔 10s / 靠近 8 格 / 等待 500ms）；枚举默认取首项
- * （op=play / scope=near / property=x）。if 的 then/else 默认空数组（非 null，wire 契约）。</p>
+ * <p>每个字段取一个<b>合法且无害</b>的默认（在后端 validator 范围内）。分两类对待引用类字段：</p>
+ * <ul>
+ *   <li><b>不依赖墙状态</b>的引用（变量名 {@code fullName} / 声音 {@code soundId} / if 条件
+ *       {@code condition}）：给一个<b>非空合理默认</b>（{@code user/score} / {@code entity.player.levelup}
+ *       / {@code var("user/score") > 0}）。理由：拖出新块的瞬间属于"中间态"，若引用字段给空串则
+ *       前端 validator + 后端 ScriptRuleValidator 都立刻判非法 → 红字轰炸 + 自动保存被卡。给一个
+ *       合法占位让积木"拖出即合法"，用户再按需改成自己的变量 / 声音；</li>
+ *   <li><b>依赖墙上有什么</b>的引用（元素 {@code elementId} / 时间轴 {@code timelineId} / 命令模板
+ *       {@code templateId}）：仍给空串——这些没有通用合法默认（墙上有哪些元素 / 时间轴是动态的），
+ *       用户必须从下拉里选；视觉层会把空引用标"请选择"（不在本任务范围）。</li>
+ * </ul>
+ * <p>数值默认取范围内常用值（timer 间隔 10s / 靠近 8 格 / 等待 500ms）；枚举取首项（op=play /
+ * scope=near / property=x）。if 的 then/else 默认空数组（非 null，wire 契约）。</p>
  *
  * <p>未知 kind → 兜底返一个 {@code log} 动作（绝不抛，调用方拿到的总是合法 ScriptAction）。
  * 返回值的 {@code type} 是窄化好的字面量联合分支，可直接喂 {@code insertAt} / setActions。</p>
@@ -320,24 +329,29 @@ export function defFor(kind: string): BlockDef | null {
 export function makeDefaultAction(kind: string): ScriptAction {
     switch (kind) {
         case 'setVariable':
-            return { type: 'setVariable', fullName: '', value: '' };
+            // fullName 给非空默认（拖出即合法）；value 空串后端合法，保持空。
+            return { type: 'setVariable', fullName: 'user/score', value: '' };
         case 'incrementVariable':
-            return { type: 'incrementVariable', fullName: '', delta: 1 };
+            return { type: 'incrementVariable', fullName: 'user/score', delta: 1 };
         case 'setElementProperty':
+            // elementId 依赖墙上元素，无通用默认 → 留空让用户选。
             return { type: 'setElementProperty', elementId: '', property: 'x', value: '' };
         case 'playTimeline':
-            // seekMs 仅 op=seek 携带——默认 op=play 故省略（不上 wire）。
+            // timelineId 依赖墙上时间轴 → 留空让用户选。seekMs 仅 op=seek 携带——默认 op=play 故省略。
             return { type: 'playTimeline', timelineId: '', op: 'play' };
         case 'playSound':
-            return { type: 'playSound', soundId: '', volume: 1, pitch: 1, scope: 'near' };
+            // soundId 给一个内置音效默认（拖出即合法），用户可改。
+            return { type: 'playSound', soundId: 'entity.player.levelup', volume: 1, pitch: 1, scope: 'near' };
         case 'wait':
             return { type: 'wait', ms: 500 };
         case 'runCommand':
+            // templateId 依赖已配命令模板 → 留空让用户选。
             return { type: 'runCommand', templateId: '', params: {} };
         case 'log':
             return { type: 'log', message: '' };
         case 'if':
-            return { type: 'if', condition: '', then: [], else: [] };
+            // condition 给一个能被 tryParseCondition 解析回可视模式的合法默认（var 比较），拖出即合法。
+            return { type: 'if', condition: 'var("user/score") > 0', then: [], else: [] };
         default:
             // 未知 kind 兜底：给个最简单的 log 动作（保证返回合法 ScriptAction）。
             return { type: 'log', message: '' };
@@ -348,13 +362,15 @@ export function makeDefaultAction(kind: string): ScriptAction {
  * 造一个指定 kind 的合法默认触发器（新建规则 / 切触发器类型时用）。
  *
  * <p>无数据字段的触发器（{@code playerJoin} / {@code playerKill} / {@code wallReady}）只带
- * type；带字段的给范围内默认（timer 间隔 10s / playerNear 8 格 / variableChange 空变量名待选）。
- * 未知 kind → 兜底 {@code wallReady}（最无害的"画板就绪即触发"）。</p>
+ * type；带字段的给范围内默认（timer 间隔 10s / playerNear 8 格 / variableChange 给非空变量名
+ * {@code user/score} 让切换/拖出即合法，用户再改）。未知 kind → 兜底 {@code wallReady}
+ * （最无害的"画板就绪即触发"）。</p>
  */
 export function makeDefaultTrigger(kind: string): ScriptTrigger {
     switch (kind) {
         case 'variableChange':
-            return { type: 'variableChange', fullName: '' };
+            // fullName 给非空默认（切到此触发器即合法），用户可改成自己关注的变量。
+            return { type: 'variableChange', fullName: 'user/score' };
         case 'timer':
             return { type: 'timer', intervalSeconds: 10 };
         case 'playerJoin':

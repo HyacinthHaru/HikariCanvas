@@ -66,6 +66,15 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     const workingCopy = ref<ScriptRule | null>(null);
     /** 有未保存本地改动（脏）；脏时拒绝 server 回声覆盖 workingCopy。 */
     const dirty = ref(false);
+    /**
+     * 正在拖拽（拖块 / palette 拖出 / 移堆）；为真时 server 回声<b>不替换整树</b> workingCopy。
+     *
+     * <p>P5 实测修复（根因 3）：拖拽进行中若 server.patch 回来（如刚 selectRule 触发的回声 / 别处
+     * 改动），server-as-truth 的 deep watch 会 deepClone 整棵 server 树替换 workingCopy → v-for
+     * key 重建被拖块的 DOM → pointer capture 丢失（拖不动 / 偶尔变"复制"）。像 dirty 保护那样，
+     * 拖拽期跳过整树替换；松手（setDragging(false)）后恢复 server-as-truth。</p>
+     */
+    const dragging = ref(false);
     /** undo 栈：workingCopy 的历史快照（push 改动前态）。 */
     const undoStack = ref<ScriptRule[]>([]);
     /** redo 栈：undo 后存被撤销的态。 */
@@ -350,6 +359,18 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         scheduleSave();
     }
 
+    // ---------- 拖拽期冻结（根因 3）----------
+
+    /**
+     * 标记拖拽进行中 / 结束。useBlockDrag 的 start*（拖块 / palette / 移堆）调
+     * {@code setDragging(true)}，松手 / abort（pointerup / cancel / blur / dispose）调
+     * {@code setDragging(false)}。为真时 server-as-truth 的 deep watch 跳过整树替换 workingCopy
+     * （防 v-for 重建打断 pointer capture）。不受 lock 影响——这是纯 UI 状态标记，不发任何 op。
+     */
+    function setDragging(value: boolean): void {
+        dragging.value = value;
+    }
+
     // ---------- undo / redo ----------
 
     /** push 一份快照进 undo 栈（cap 50，超出丢最旧）；清 redo（新分支）。 */
@@ -444,9 +465,13 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
 
     /**
      * watch server 镜像里当前编辑规则的变化：
+     * - 拖拽中 → 跳过整树替换（根因 3：v-for 重建会打断 pointer capture）；
      * - 非脏 → 用 server 版刷新 workingCopy（回显他人改动 / 自己 save 成功后的权威态）；
      * - 脏   → 保留本地不覆盖（用户正在编辑，server 回声不能踩掉手上的活）。
      * 当前编辑规则被 server 删掉（get 返 null）→ closeEditing（无可编辑对象）。
+     *
+     * <p>注意 closeEditing（规则被删）<b>不受 dragging 守卫</b>：规则真没了就该退出编辑，
+     * 拖一个不存在的规则没有意义；松手时 useBlockDrag 取 workingCopy 为 null 会安全早退。</p>
      */
     watch(
         () => (selectedRuleId.value !== null ? scripts.get(selectedRuleId.value) : null),
@@ -457,6 +482,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
                 closeEditing();
                 return;
             }
+            if (dragging.value) return; // 拖拽中：保留本地（防整树替换打断 capture）
             if (dirty.value) return; // 脏：保留本地
             workingCopy.value = deepCloneRule(serverRule);
         },
@@ -475,11 +501,12 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     );
 
     return {
-        selectedRuleId, workingCopy, dirty, undoStack, redoStack,
+        selectedRuleId, workingCopy, dirty, dragging, undoStack, redoStack,
         validationErrors,
         selectRule, closeEditing,
         newRule, deleteRule,
         setActions, setTrigger, setName, setEnabled, setStackPos, updateActionField,
+        setDragging,
         undo, redo,
         scheduleSave, flushSave,
     };

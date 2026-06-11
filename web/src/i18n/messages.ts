@@ -788,8 +788,10 @@ export const messages = {
             testing: '试跑中…',
             testBlockedByErrors: '规则有问题，先修好下面的错误再试跑',
             testFailed: '试跑请求失败',
-            // 校验错误 banner
-            validationTitle: '这条规则还有问题（修好才会自动保存）：',
+            // 校验提示。validationTitle 现作头部温和指示的 hover 提示（tooltip）；
+            // validationHint 是指示本身的小字（{n} = 待完善的问题条数）。
+            validationTitle: '这条规则还有问题，修好才会自动保存（点这里跳到第一处）',
+            validationHint: '⚠ {n} 处待完善',
             // 试跑高亮图例（每种执行结果对应一种边框色）
             legendOk: '执行了',
             legendSkipped: '跳过了',
@@ -1880,8 +1882,10 @@ export const messages = {
             testing: 'Testing…',
             testBlockedByErrors: 'Fix the errors below before running a test',
             testFailed: 'Test request failed',
-            // validation error banner
-            validationTitle: 'This rule still has problems (auto-save resumes once fixed):',
+            // validation hint. validationTitle is now the hover tooltip on the header hint;
+            // validationHint is the small inline text itself ({n} = number of issues to finish).
+            validationTitle: 'This rule still has issues; auto-save resumes once fixed (click to jump to the first)',
+            validationHint: '⚠ {n} to finish',
             // test-run highlight legend (each result maps to a border color)
             legendOk: 'Ran',
             legendSkipped: 'Skipped',
