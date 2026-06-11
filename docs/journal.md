@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-06-11 · 0.7.0-P5 实测反馈修复（第二轮）：画布渲染数据源主根因
+
+用户二轮实测的关键线索——"没放上去的积木块其实放上来了，随便拖动画布才看到；能放上的也不是
+100% 拖了就显示"——指向**渲染数据源缺陷**（第一轮没抓到，被"不跟手/复制"表象掩盖）。
+
+**主根因（C/D 阶段起潜伏）**：`BlockCanvas.basePositionedStacks` 用 `scripts.listSorted`
+（**server 镜像**）渲染，`:rule` 传 server 态；但所有编辑（setActions/updateActionField/
+setTrigger）改 `scriptEdit.workingCopy`（**本地副本**）。BlockStack/BlockNode 纯 props 驱动 →
+改 workingCopy 后画布不变，要等 800ms save 回 server 才显示；**空字段积木（设置元素属性/执行
+命令的 elementId/templateId 空）被 validator 拦保存 → server 永不更新 → 画布永远不显示**，但
+workingCopy 有它 → validator 一直报"待完善"。smoke 测试只测单组件渲染，测不到"编辑 store →
+画布反映"的端到端反馈链，故潜伏到实测才暴露。
+
+**修复（c745261）**：
+- **主根因**：BlockCanvas 新增 `renderRules` computed——当前编辑规则（selectedRuleId）渲染
+  `workingCopy`，其余渲染 scripts 镜像。建立 workingCopy 响应依赖 → 拖积木/改字段/改触发器
+  **立即反映**。6 端到端 smoke（含空 elementId 积木立即渲染 = bug 报告场景）。不破坏拖堆跟手
+  （renderRules 不依赖 stackDragPos，拖堆中 workingCopy.blockLayout 不变 → 不重算）。
+- **次要1「待完善不知哪里 + 点击无反应」**：主根因修复后待完善积木能渲染 → onIndicatorClick
+  的 querySelector 命中 DOM → scrollIntoView 定位生效（"点了没反应"本质是积木没渲染）；
+  待完善角标从 element/timeline/command 扩展到 variable/condition/sound 空。
+- **次要2「变量选择器多点几次才开」**：pointerdown（早于 click）先选中本规则 + openPicker
+  截断 click 冒泡（memory 约束）。**happy-dom 无法确定性复现，是防御性加固，需真实浏览器实测确认。**
+
+**第一轮（7e2f401 逻辑 + 1c8ca9a 视觉）的修复仍有效**（banner 布局位移 / 拖出默认值 / capture /
+拖堆 / Scratch 视觉）——只是不完整，第二轮补上核心渲染源。systematic-debugging「修复未完全解决 →
+回 Phase 1 重新分析」走通。**前端 899→917 全绿 / vite build 过 / 0 漂移。**
+
+---
+
 ## 2026-06-11 · 0.7.0-P5 实测反馈修复（积木编辑器 4 类问题，systematic-debugging 根因优先）
 
 用户首轮 UI 实测报 4 类问题。主控本地跑不了编辑器 → 走"读代码 + 逻辑推理定位根因"替代复现，
