@@ -521,8 +521,9 @@ function tryBackToVisual(): void {
 }
 .hc-cond-joiner-tag {
     font-size: 10px;
-    font-weight: 600;
-    color: var(--ctp-mauve, var(--muted-foreground));
+    font-weight: 700;
+    /* if 块（绿）上：用块前景柔和色，缺省退 mauve */
+    color: var(--hc-block-fg-soft, var(--ctp-mauve, var(--muted-foreground)));
     text-transform: uppercase;
     letter-spacing: 0.03em;
     margin-right: 2px;
@@ -532,31 +533,34 @@ function tryBackToVisual(): void {
     align-items: center;
     gap: 3px;
 }
+/* 条件控件统一胶囊：白底 + 圆角 + 内阴影，浮在绿色 if 块上 */
 .hc-cond-kind,
 .hc-cond-cmp,
 .hc-cond-input {
     font-size: 11px;
-    padding: 2px 5px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    font-weight: 500;
+    padding: 3px 8px;
+    border: 1px solid color-mix(in srgb, #000 14%, transparent);
+    border-radius: var(--radius-full, 9999px);
+    background: var(--card);
     color: var(--foreground);
     outline: none;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 .hc-cond-kind {
     cursor: pointer;
-    color: var(--muted-foreground);
+    color: var(--foreground);
 }
 .hc-cond-cmp {
     cursor: pointer;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-weight: 600;
+    font-weight: 700;
 }
 .hc-cond-input:focus,
 .hc-cond-kind:focus,
 .hc-cond-cmp:focus {
     border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent);
 }
 .hc-cond-input:disabled,
 .hc-cond-kind:disabled,
@@ -571,41 +575,57 @@ function tryBackToVisual(): void {
     cursor: pointer;
 }
 .hc-cond-var-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 11px;
+    font-weight: 600;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    padding: 2px 8px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    padding: 3px 10px;
+    border: 1px solid color-mix(in srgb, #000 16%, transparent);
+    border-radius: var(--radius-full, 9999px);
+    background: var(--card);
     color: var(--foreground);
     cursor: pointer;
     max-width: 150px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.hc-cond-var-btn::before {
+    content: "◆";
+    font-size: 9px;
+    color: var(--ctp-mauve, var(--primary));
 }
 .hc-cond-var-btn:hover:not(:disabled) {
     border-color: var(--ring);
-    background: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 35%, transparent);
 }
 .hc-cond-var-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
 }
 .hc-cond-var-empty {
-    color: var(--muted-foreground);
-    font-style: italic;
+    color: var(--ctp-mauve, var(--primary));
+    font-style: normal;
     font-family: inherit;
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--ctp-mauve, var(--primary)) 55%, transparent);
+}
+.hc-cond-var-empty::before {
+    content: "＋";
+    font-size: 11px;
 }
 .hc-cond-del {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    width: 19px;
+    height: 19px;
+    border: 1px solid color-mix(in srgb, #000 14%, transparent);
+    border-radius: 50%;
+    background: var(--card);
     color: var(--muted-foreground);
     cursor: pointer;
     font-size: 13px;
@@ -626,52 +646,56 @@ function tryBackToVisual(): void {
 }
 .hc-cond-add {
     font-size: 11px;
-    padding: 2px 8px;
-    border: 1px dashed var(--border);
-    border-radius: 4px;
-    background: transparent;
-    color: var(--foreground);
+    font-weight: 600;
+    padding: 3px 10px;
+    border: 1px dashed color-mix(in srgb, var(--hc-block-fg, var(--border)) 45%, transparent);
+    border-radius: var(--radius-full, 9999px);
+    background: color-mix(in srgb, var(--card) 55%, transparent);
+    color: var(--hc-block-fg, var(--foreground));
     cursor: pointer;
 }
 .hc-cond-add:hover:not(:disabled) {
-    border-color: var(--ring);
-    background: var(--accent);
+    border-color: var(--card);
+    background: var(--card);
+    color: var(--foreground);
 }
 .hc-cond-joiner-switch {
     display: inline-flex;
     gap: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, #000 14%, transparent);
+    border-radius: var(--radius-full, 9999px);
     overflow: hidden;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 .hc-cond-joiner-switch button {
     font-size: 11px;
-    padding: 2px 10px;
+    padding: 3px 11px;
     border: none;
-    background: var(--background);
+    background: var(--card);
     color: var(--muted-foreground);
     cursor: pointer;
 }
 .hc-cond-joiner-switch button.active {
     background: var(--ctp-mauve, var(--accent));
-    color: var(--background);
-    font-weight: 600;
+    color: #fff;
+    font-weight: 700;
 }
 .hc-cond-joiner-switch button:not(:last-child) {
-    border-right: 1px solid var(--border);
+    border-right: 1px solid color-mix(in srgb, #000 12%, transparent);
 }
 .hc-cond-advanced-link {
     font-size: 11px;
+    font-weight: 600;
     padding: 2px 6px;
     border: none;
     background: transparent;
-    color: var(--ctp-blue, var(--ring));
+    color: var(--hc-block-fg, var(--ctp-blue));
     cursor: pointer;
     text-decoration: underline;
     margin-left: auto;
 }
 .hc-cond-advanced-link:hover:not(:disabled) {
-    color: var(--foreground);
+    color: #fff;
 }
 .hc-cond-advanced-link:disabled {
     opacity: 0.5;
@@ -679,7 +703,7 @@ function tryBackToVisual(): void {
 }
 .hc-cond-advanced-hint {
     font-size: 10px;
-    color: var(--muted-foreground);
+    color: var(--hc-block-fg-soft, var(--muted-foreground));
     font-style: italic;
 }
 
@@ -688,18 +712,19 @@ function tryBackToVisual(): void {
     width: 100%;
     font-size: 11px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    padding: 4px 6px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    padding: 5px 8px;
+    border: 1px solid color-mix(in srgb, #000 14%, transparent);
+    border-radius: 8px;
+    background: var(--card);
     color: var(--foreground);
     outline: none;
     resize: vertical;
     min-height: 36px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 .hc-cond-raw:focus {
     border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent);
 }
 .hc-cond-raw:disabled {
     opacity: 0.5;

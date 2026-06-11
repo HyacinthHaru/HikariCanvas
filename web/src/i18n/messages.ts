@@ -869,6 +869,9 @@ export const messages = {
                 noElements: '这个画板还没有元素',
                 noCommandTemplates: '服主还没配命令模板',
                 soundPlaceholder: '输入或选择声音',
+                // 0.7.0-P5（视觉）：积木上必填引用字段还没选时，角标的 hover 提示。
+                // {field} = 待选择字段的友好名（元素 / 时间轴 / 命令）。
+                needSelect: '还需选择：{field}',
             },
             // 0.7.0-P5-G：if 条件可视构建器文案（操作数类型 / joiner / 高级文本框切换）。
             condition: {
@@ -1959,6 +1962,9 @@ export const messages = {
                 noElements: 'This wall has no elements yet',
                 noCommandTemplates: 'No command templates configured',
                 soundPlaceholder: 'Type or pick a sound',
+                // 0.7.0-P5 (visual): hover hint for the corner badge when a required
+                // reference field on the block is still empty. {field} = friendly field name.
+                needSelect: 'Still need to pick: {field}',
             },
             // 0.7.0-P5-G: if-condition visual builder strings.
             condition: {

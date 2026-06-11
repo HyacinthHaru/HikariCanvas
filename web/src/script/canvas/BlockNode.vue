@@ -207,21 +207,64 @@ const conditionText = computed(() =>
 function onConditionUpdate(value: string): void {
     edit.updateActionField(props.path, { condition: value } as Partial<ScriptAction>);
 }
+
+// ---------- 视觉：必填引用字段未填的"待选择"角标（不改逻辑，只读判定）----------
+
+/**
+ * 本块里"必填但还没填"的引用字段（仅 element / timeline / command 三类——它们依赖墙上
+ * 有什么，{@code makeDefaultAction} 故意留空，用户必须从下拉里选）。空 = 值是空串 / 缺失。
+ *
+ * <p>纯读 def.fields + action 当前值，不碰 validator / 默认值逻辑。返回字段友好名数组，
+ * 喂给角标 hover 提示（"还需选择：元素"）。command 复合字段只看 templateId 是否空。</p>
+ */
+const missingRefFields = computed<string[]>(() => {
+    const out: string[] = [];
+    for (const f of def.value?.fields ?? []) {
+        if (f.type === 'element' || f.type === 'timeline') {
+            const v = (props.action as unknown as Record<string, unknown>)[f.name];
+            if (typeof v !== 'string' || v.trim() === '') {
+                out.push(resolveLabelKey(t.value, f.labelKey));
+            }
+        } else if (f.type === 'command' && isRunCommand.value && f.name === 'templateId') {
+            const v = (props.action as unknown as Record<string, unknown>).templateId;
+            if (typeof v !== 'string' || v.trim() === '') {
+                out.push(resolveLabelKey(t.value, f.labelKey));
+            }
+        }
+    }
+    return out;
+});
+
+/** 是否显示"待选择"角标（有空的必填引用字段且未被试跑高亮占用时）。 */
+const showNeedSelect = computed(() => missingRefFields.value.length > 0);
+
+/** 角标 hover 提示文案（"还需选择：元素 / 时间轴"）。 */
+const needSelectTitle = computed(() =>
+    t.value.script.param.needSelect.replace('{field}', missingRefFields.value.join(' / ')),
+);
 </script>
 
 <template>
   <div
     class="hc-block-node"
-    :class="highlightResult ? 'hc-block-node-hl' : ''"
+    :class="[isIf ? 'hc-block-node-if' : '', highlightResult ? 'hc-block-node-hl' : '']"
     :data-block-path="path"
     :data-hl-result="highlightResult || null"
     :title="highlightDetail || undefined"
-    :style="{ borderLeftColor: effectiveBorderColor, ...highlightStyle }"
+    :style="{ '--hc-block-color': effectiveBorderColor, ...highlightStyle }"
     @pointerdown="onBlockPointerDown"
   >
+    <!-- 视觉：必填引用字段（元素 / 时间轴 / 命令）还没填时的温和橙色待选角标 -->
+    <span
+      v-if="showNeedSelect"
+      class="hc-block-need-select"
+      :title="needSelectTitle"
+      aria-hidden="true"
+    />
+
     <!-- 头部：标题 + 标量参数槽（F：真表单控件 BlockParamInput） -->
     <div class="hc-block-head">
-      <span class="hc-block-title" :style="{ color: colorVar }">{{ title }}</span>
+      <span class="hc-block-title">{{ title }}</span>
       <BlockParamInput
         v-for="f in scalarFields"
         :key="f.name"
@@ -245,10 +288,10 @@ function onConditionUpdate(value: string): void {
       />
     </div>
 
-    <!-- if 块 C 形：条件 + then/else 子序列槽 -->
+    <!-- if 块 C 形：条件 + then/else 子序列槽（实色左臂实体包裹，非虚线引导线） -->
     <template v-if="isIf">
       <div v-if="conditionField" class="hc-block-condition">
-        <span class="hc-param-label">{{ fieldLabel(conditionField) }}:</span>
+        <span class="hc-param-label">{{ fieldLabel(conditionField) }}</span>
         <ConditionBuilder
           :condition="conditionText"
           :wall-id="project.wallId"
@@ -256,7 +299,7 @@ function onConditionUpdate(value: string): void {
         />
       </div>
 
-      <!-- then 子槽 -->
+      <!-- then 子槽（实色 C 臂 + 实体托底，子积木嵌在臂内） -->
       <div class="hc-block-branch">
         <span class="hc-branch-label">{{ resolveLabelKey(t, 'script.fields.then') }}</span>
         <div class="hc-branch-slot">
@@ -297,23 +340,61 @@ function onConditionUpdate(value: string): void {
           </div>
         </div>
       </div>
+
+      <!-- C 形底托：闭合左臂，视觉上把 then/else 包成 C（实体托底条） -->
+      <div class="hc-block-if-foot" aria-hidden="true" />
     </template>
   </div>
 </template>
 
 <style scoped>
+/*
+ * 0.7.0-P5（视觉）：Scratch 风积木块。
+ *
+ * 设计要点：
+ *   - 实色块：背景直填分类色 --hc-block-color（由模板内联给，= trace 高亮色或分类色），
+ *     文字走 --hc-block-fg（浅主题白 / 深主题深），对比清晰；不再 color-mix 淡化成 IDE 风。
+ *   - 咬合感：::before 在块顶画一个小凸榫（Scratch 块顶的凸起），配合 BlockStack 里 gap≈0
+ *     的焊接堆叠，凸榫"插进"上一块底部，连成一摞。
+ *   - 立体感：轻微 box-shadow（块在画布上浮起一点）+ 顶部高光内描边。
+ */
+
+/* 块顶凸榫尺寸（与 BlockStack 焊接堆叠的负 margin 协调） */
 .hc-block-node {
+    --hc-notch-w: 18px;
+    --hc-notch-h: 5px;
+    --hc-notch-x: 14px;
     position: relative;
-    border-left: 4px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-    padding: 6px 8px 6px 10px;
+    border-radius: 7px;
+    /* 实色块：分类色直填（模板给 --hc-block-color）；缺省退边框灰 */
+    background: var(--hc-block-color, var(--border));
+    color: var(--hc-block-fg);
+    /* 立体：底部投影 + 顶部内高光（让块面有体积感） */
+    box-shadow:
+        0 2px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 62%, #000),
+        0 3px 6px rgba(0, 0, 0, 0.22),
+        inset 0 1px 0 color-mix(in srgb, #fff 26%, transparent);
+    padding: 7px 10px 8px 11px;
     user-select: none;
     /* 块可拖动重排 / 跨堆 / 入 if 槽 */
     cursor: grab;
-    /* H：试跑高亮边框 / 描边渐变切换，步进时柔和过渡 */
-    transition: box-shadow 0.12s ease, border-left-color 0.12s ease;
+    /* H：试跑高亮描边 / 背景色切换，步进时柔和过渡 */
+    transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease;
+}
+/* 块顶凸榫：一个小圆角凸起，叠在上一块底部缝里，造"咬合"观感 */
+.hc-block-node::before {
+    content: "";
+    position: absolute;
+    top: calc(var(--hc-notch-h) * -1 + 1px);
+    left: var(--hc-notch-x);
+    width: var(--hc-notch-w);
+    height: var(--hc-notch-h);
+    background: var(--hc-block-color, var(--border));
+    border-radius: 3px 3px 0 0;
+    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent);
+}
+.hc-block-node:hover {
+    filter: brightness(1.05);
 }
 .hc-block-node:active {
     cursor: grabbing;
@@ -322,76 +403,119 @@ function onConditionUpdate(value: string): void {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
 }
 .hc-block-title {
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 12.5px;
+    font-weight: 700;
     white-space: nowrap;
+    color: var(--hc-block-fg);
+    /* 让标题在饱和块面上更立体（细微暗描边） */
+    text-shadow: 0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 55%, #000);
 }
-/* F：每个标量参数控件（BlockParamInput）外包一层浅底，与标题区分。 */
+/* F：参数控件（BlockParamInput）外壳——不再加浅底块，胶囊样式由控件自身承载；
+ * 这里只保证内联排版 + 不撑破块宽。 */
 .hc-block-param-input {
     display: inline-flex;
     align-items: center;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--muted) 45%, transparent);
     max-width: 100%;
 }
 /* runCommand 复合 command 控件：占整行（模板下拉 + 动态 params 子表单纵向铺开）。 */
 .hc-block-command {
-    margin-top: 5px;
+    margin-top: 6px;
     width: 100%;
 }
+/* 块面上的字段标签（如 if 条件 / then / else 前缀）走块前景色的柔和版 */
 .hc-param-label {
-    color: var(--muted-foreground);
+    color: var(--hc-block-fg-soft);
     white-space: nowrap;
 }
 .hc-param-value {
-    color: var(--foreground);
+    color: var(--hc-block-fg);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* ---------- 待选择角标（必填引用字段未填）---------- */
+.hc-block-need-select {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--ctp-peach, #f59e0b);
+    border: 1.5px solid var(--card);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    z-index: 3;
+    cursor: help;
+}
+
+/* ---------- if = 实体 C 形 ---------- */
+/* if 块整体：底部不收圆角（由底托闭合），padding 左侧让出实色臂宽 */
+.hc-block-node-if {
+    padding-bottom: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
 .hc-block-condition {
-    margin-top: 5px;
+    margin-top: 6px;
     display: flex;
-    align-items: baseline;
-    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
     font-size: 11px;
 }
-.hc-condition-text {
-    font-family: var(--font-mono, monospace);
-    color: var(--ctp-green, var(--foreground));
-}
 .hc-block-branch {
-    margin-top: 5px;
+    margin-top: 6px;
 }
 .hc-branch-label {
     display: inline-block;
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--muted-foreground);
-    margin-bottom: 3px;
+    letter-spacing: 0.05em;
+    color: var(--hc-block-fg-soft);
+    margin-bottom: 4px;
 }
+/* C 臂：实色竖条把 then/else 子序列实体包进去（非虚线引导线）。
+ * 左侧负 margin 把臂铺到块左边缘（抵消块的 11px 左 padding），右侧抵消 10px 右 padding；
+ * 子积木相对臂内缩 18px，左边露出的实色即 C 的左臂。 */
 .hc-branch-slot {
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    /* C 形：子序列内缩 + 左侧引导线，视觉上"嵌"在 if 里 */
-    margin-left: 10px;
-    padding-left: 8px;
-    border-left: 2px dashed color-mix(in srgb, var(--ctp-green, var(--border)) 50%, transparent);
-    min-height: 22px;
+    /* 子积木焊接堆叠：小缝 + 块顶凸榫(::before)桥接，读作"咬在一起" */
+    gap: 3px;
+    margin-left: -11px;
+    margin-right: -10px;
+    padding: 4px 8px 6px 18px;
+    /* 实色左臂 + 顶部一小段条，形成 C 的内拐角 */
+    background: var(--hc-block-color, var(--border));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, #000 14%, transparent);
+    min-height: 26px;
+}
+/* C 形底托：实色横条闭合左臂，整体收下圆角 */
+.hc-block-if-foot {
+    height: 12px;
+    margin-left: -11px;
+    margin-right: -10px;
+    background: var(--hc-block-color, var(--border));
+    border-radius: 0 0 7px 7px;
+    box-shadow:
+        0 2px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 62%, #000),
+        0 3px 6px rgba(0, 0, 0, 0.22);
 }
 .hc-empty-slot {
     font-size: 11px;
-    color: var(--muted-foreground);
+    color: var(--hc-block-fg-soft);
     font-style: italic;
-    padding: 3px 6px;
-    border: 1px dashed var(--border);
-    border-radius: 4px;
+    padding: 5px 8px;
+    /* 浅色凹槽提示空槽（半透明深底 + 内阴影，像块里"挖空"了一格） */
+    background: var(--hc-block-slot);
+    border: 1px dashed color-mix(in srgb, var(--hc-block-fg) 35%, transparent);
+    border-radius: 5px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 </style>

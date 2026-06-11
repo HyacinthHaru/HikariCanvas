@@ -450,79 +450,126 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/*
+ * 0.7.0-P5（视觉）：积木参数控件统一"胶囊"风。
+ *
+ * 控件嵌在饱和实色积木块里，必须明显可点 / 可填：白底（深主题随 card）+ 大圆角胶囊 +
+ * 清晰边框 + 内阴影，与彩色块面对比强烈。变量"选变量"按钮做成显眼胶囊（显当前变量名或
+ * 「点击选择」提示 + 图标），不再是不起眼的灰小字。
+ *
+ * 字段标签（label）落在彩色块面上 → 用块前景色 --hc-block-fg-soft（由块组件透传到此处的
+ * CSS 自定义属性；BlockParamInput 不持主题判定，直接吃继承下来的变量）。
+ */
 .hc-pf {
     font-size: 11px;
 }
 .hc-pf-inline {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
 }
 .hc-pf-label {
-    color: var(--muted-foreground);
+    /* 块面上的字段名：吃块组件继承下来的前景色（缺省退 muted） */
+    color: var(--hc-block-fg-soft, var(--muted-foreground));
+    font-weight: 600;
     white-space: nowrap;
 }
+/* 通用胶囊输入：白底 + 大圆角 + 内阴影，浮在彩色块上 */
 .hc-pf-input {
     font-size: 11px;
-    padding: 2px 6px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    font-weight: 500;
+    padding: 3px 9px;
+    border: 1px solid color-mix(in srgb, #000 14%, transparent);
+    border-radius: var(--radius-full, 9999px);
+    background: var(--card);
     color: var(--foreground);
     outline: none;
     max-width: 180px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+    transition: box-shadow 0.1s ease, border-color 0.1s ease;
+}
+.hc-pf-input:hover:not(:disabled) {
+    border-color: color-mix(in srgb, #000 24%, transparent);
 }
 .hc-pf-input:focus {
     border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent);
 }
 .hc-pf-input:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
 }
 .hc-pf-number {
-    width: 80px;
+    width: 72px;
+    text-align: center;
 }
 .hc-pf-select {
     cursor: pointer;
     max-width: 160px;
+    /* select 留点右侧给箭头，圆角胶囊不裁切原生箭头 */
+    padding-right: 6px;
 }
 .hc-pf-empty {
+    /* 空列表提示也做成浅胶囊，提示"这里要选但还没得选" */
     color: var(--muted-foreground);
     font-style: italic;
     font-size: 10px;
+    padding: 3px 9px;
+    border-radius: var(--radius-full, 9999px);
+    background: color-mix(in srgb, var(--card) 70%, transparent);
+    border: 1px dashed var(--border);
 }
 
-/* variable */
+/* variable —— 显眼"选变量"胶囊（症状 3b：原 11px 灰小字极不显眼） */
 .hc-pf-var-row {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
 }
 .hc-pf-var-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: 11px;
+    font-weight: 600;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    padding: 2px 8px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    padding: 3px 10px;
+    border: 1px solid color-mix(in srgb, #000 16%, transparent);
+    border-radius: var(--radius-full, 9999px);
+    background: var(--card);
     color: var(--foreground);
     cursor: pointer;
-    max-width: 160px;
+    max-width: 168px;
     overflow: hidden;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    transition: filter 0.1s ease, border-color 0.1s ease, box-shadow 0.1s ease;
+}
+/* 前缀小图标（◆），让按钮"看起来就是个能点的变量芯片" */
+.hc-pf-var-btn::before {
+    content: "◆";
+    font-size: 9px;
+    color: var(--ctp-mauve, var(--primary));
+    flex: 0 0 auto;
 }
 .hc-pf-var-btn:hover:not(:disabled) {
     border-color: var(--ring);
-    background: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 35%, transparent);
 }
 .hc-pf-var-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
 }
+/* 空值态：换更醒目的"点击选择"提示 + 虚线描边，引导用户它需要填 */
 .hc-pf-var-empty {
-    color: var(--muted-foreground);
-    font-style: italic;
+    color: var(--ctp-mauve, var(--primary));
+    font-style: normal;
     font-family: inherit;
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--ctp-mauve, var(--primary)) 55%, transparent);
+}
+.hc-pf-var-empty::before {
+    content: "＋";
+    font-size: 11px;
 }
 .hc-pf-var-text {
     overflow: hidden;
@@ -535,11 +582,11 @@ onMounted(() => {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    width: 19px;
+    height: 19px;
+    border: 1px solid color-mix(in srgb, #000 14%, transparent);
+    border-radius: 50%;
+    background: var(--card);
     color: var(--muted-foreground);
     cursor: pointer;
     font-size: 13px;
@@ -560,16 +607,17 @@ onMounted(() => {
 .hc-pf-command {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
     width: 100%;
 }
 .hc-pf-cmd-params {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    margin-left: 12px;
-    padding-left: 8px;
-    border-left: 2px dashed color-mix(in srgb, var(--ctp-red, var(--border)) 45%, transparent);
+    gap: 4px;
+    margin-left: 10px;
+    padding-left: 10px;
+    /* 子参数缩进：实色块上用半透明前景色细条引导（不再 IDE 风红虚线） */
+    border-left: 2px solid color-mix(in srgb, var(--hc-block-fg, var(--border)) 35%, transparent);
 }
 .hc-pf-cmd-param-label {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

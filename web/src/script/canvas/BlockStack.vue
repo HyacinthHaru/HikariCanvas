@@ -134,19 +134,18 @@ const stackStyle = computed(() => ({
 }));
 
 /**
- * 帽子样式：默认走触发器色（peach 系底 + 描边）；试跑高亮命中时改用结果色描边 + 外发光环，
- * 让"触发器步命中 / 阻塞 / 错误"一眼可见。背景仍保留触发器色（仅描边 + 阴影变）。
+ * 帽子样式（视觉：Scratch 事件帽风）：默认实色填触发器色（饱和 peach），文字走块前景色；
+ * 试跑高亮命中时整顶改用结果色 + 外发光环，让"触发器步命中 / 阻塞 / 错误"一眼可见。
+ *
+ * <p>用 CSS 变量 {@code --hc-block-color} 把当前底色（触发色 or 高亮结果色）传给 scoped CSS，
+ * 由它驱动背景 / 凸榫 / 阴影一致着色。</p>
  */
 const hatStyle = computed(() => {
-    const base: Record<string, string> = {
-        background: `color-mix(in srgb, ${triggerColor.value} 22%, var(--card))`,
-        borderColor: triggerColor.value,
-    };
     const r = hatResult.value;
+    const color = r ? `var(${resultColorVar(r)})` : triggerColor.value;
+    const base: Record<string, string> = { '--hc-block-color': color };
     if (r) {
-        const v = `var(${resultColorVar(r)})`;
-        base.borderColor = v;
-        base.boxShadow = `0 0 0 2px color-mix(in srgb, ${v} 60%, transparent), 0 1px 3px rgba(0,0,0,0.18)`;
+        base.boxShadow = `0 0 0 2px color-mix(in srgb, ${color} 60%, transparent), 0 4px 8px rgba(0,0,0,0.22)`;
     }
     return base;
 });
@@ -180,7 +179,6 @@ const hatStyle = computed(() => {
           <span class="hc-param-label">{{ t.script.triggerKindLabel }}</span>
           <select
             class="hc-hat-kind-select"
-            :style="{ color: triggerColor, borderColor: triggerColor }"
             :value="rule.trigger.type"
             :disabled="locked"
             @change="onTriggerKindChange"
@@ -220,30 +218,46 @@ const hatStyle = computed(() => {
 </template>
 
 <style scoped>
+/*
+ * 0.7.0-P5（视觉）：Scratch 风积木堆 = 事件帽 + 焊接动作序列。
+ *   - 帽子（hat）：顶部大圆角圆顶 + 实色饱和触发色，明显区别于方角动作块。
+ *   - 动作序列：与帽子无缝相接（负 margin 让首块咬住帽子底）+ 块间 gap≈3px 焊接堆叠。
+ * 块上文字走 --hc-block-fg（浅主题白 / 深主题深 crust），饱和块面上对比清晰。
+ */
 .hc-block-stack {
     position: absolute;
     width: 280px;
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 0;
 }
 .hc-block-stack-active {
     /* 当前编辑规则：淡 mauve 描边光环（与左侧列表高亮同色系） */
     outline: 2px solid color-mix(in srgb, var(--ctp-mauve, var(--primary)) 55%, transparent);
-    outline-offset: 3px;
-    border-radius: 14px;
+    outline-offset: 4px;
+    border-radius: 16px;
 }
 .hc-stack-hat {
-    border: 2px solid;
-    /* 帽子视觉：上圆角大、下圆角小，像 Scratch 触发帽 */
-    border-radius: 12px 12px 6px 6px;
-    padding: 7px 10px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+    position: relative;
+    /* 事件帽：顶部大圆顶、底部直角（与下方动作序列焊接） */
+    border-radius: 16px 16px 5px 5px;
+    /* 实色帽：饱和触发色直填（模板内联 --hc-block-color） */
+    background: var(--hc-block-color, var(--ctp-peach));
+    color: var(--hc-block-fg);
+    padding: 9px 12px 11px;
+    /* 立体：底部投影 + 顶部内高光 */
+    box-shadow:
+        0 2px 0 color-mix(in srgb, var(--hc-block-color, var(--ctp-peach)) 60%, #000),
+        0 4px 8px rgba(0, 0, 0, 0.2),
+        inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent);
     user-select: none;
     /* 帽子可拖动移整堆 */
     cursor: grab;
     /* H：试跑高亮描边 / 发光柔和过渡 */
-    transition: box-shadow 0.12s ease, border-color 0.12s ease;
+    transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease;
+}
+.hc-stack-hat:hover {
+    filter: brightness(1.05);
 }
 .hc-stack-hat:active {
     cursor: grabbing;
@@ -255,67 +269,74 @@ const hatStyle = computed(() => {
     gap: 6px;
 }
 .hc-hat-name {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--foreground);
+    font-size: 13.5px;
+    font-weight: 800;
+    color: var(--hc-block-fg);
+    text-shadow: 0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--ctp-peach)) 55%, #000);
 }
 .hc-hat-disabled {
     font-size: 10px;
-    padding: 0 5px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--muted) 70%, transparent);
-    color: var(--muted-foreground);
+    padding: 1px 6px;
+    border-radius: var(--radius-full, 9999px);
+    background: rgba(0, 0, 0, 0.22);
+    color: var(--hc-block-fg);
 }
 .hc-hat-trigger {
-    margin-top: 2px;
+    margin-top: 4px;
 }
-/* H2：触发类型 select（label + 下拉），下拉描边随触发色 */
+/* H2：触发类型 select（label + 下拉），胶囊白底浮在帽面上 */
 .hc-hat-trigger-kind {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     font-size: 11px;
 }
 .hc-hat-kind-select {
     font-size: 11px;
     font-weight: 600;
-    padding: 2px 6px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    padding: 3px 9px;
+    border: 1px solid color-mix(in srgb, #000 12%, transparent);
+    /* 胶囊：白底 / 深主题随 card，浮在帽面上 */
+    border-radius: var(--radius-full, 9999px);
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
     cursor: pointer;
     max-width: 150px;
 }
 .hc-hat-kind-select:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
 }
-/* H2：触发参数控件（BlockParamInput）外包浅底，与 select 区分 */
+/* H2：触发参数控件（BlockParamInput）——胶囊样式由控件自身承载，这里只排版 */
 .hc-hat-param {
     display: inline-flex;
     align-items: center;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--muted) 50%, transparent);
     max-width: 200px;
 }
 .hc-param-label {
-    color: var(--muted-foreground);
+    color: var(--hc-block-fg-soft);
     white-space: nowrap;
 }
 .hc-stack-actions {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    /* 块间焊接：小缝 + 块顶凸榫桥接 */
+    gap: 3px;
+    /* 首块负 margin 上提，咬住帽子底部（无缝相接） */
+    margin-top: -1px;
+    padding-top: 4px;
     /* 序列相对帽子略内缩，视觉上"挂"在帽子下 */
-    margin-left: 4px;
+    margin-left: 6px;
 }
 .hc-stack-empty {
     font-size: 11px;
     color: var(--muted-foreground);
     font-style: italic;
-    padding: 4px 8px;
+    padding: 5px 9px;
+    background: color-mix(in srgb, var(--muted) 40%, transparent);
     border: 1px dashed var(--border);
-    border-radius: 4px;
+    border-radius: 6px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.18);
 }
 </style>

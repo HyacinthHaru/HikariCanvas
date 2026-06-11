@@ -195,6 +195,30 @@
     --destructive-foreground: var(--ctp-crust);
 }
 
+/*
+ * 0.7.0-P5（视觉）：Scratch 风积木"块上文字"颜色 token。
+ *
+ * 积木块改用饱和实色背景（分类色直填），块标题 / 字段标签要在彩色块面上清晰可读：
+ *   - Latte（浅色）：分类色是中深饱和色（peach L=52% / blue 54% / green 40% / red 44% /
+ *     mauve 58%），白字对比度足 → 用近白 ctp-base；
+ *   - Frappé / Macchiato（深色）：分类色是浅 pastel（L≈70~80%），同 primary-foreground
+ *     的处理，亮底配深字 → 用最深的 ctp-crust。
+ * 槽位 / 凹陷底色 --hc-block-slot 给一层半透明黑/白叠在彩色块上，做"嵌进去"的凹槽感。
+ */
+:root,
+.theme-latte {
+    --hc-block-fg: var(--ctp-base);
+    --hc-block-fg-soft: color-mix(in srgb, var(--ctp-base) 78%, transparent);
+    --hc-block-slot: rgba(0, 0, 0, 0.16);
+}
+.dark,
+.theme-frappe,
+.theme-macchiato {
+    --hc-block-fg: var(--ctp-crust);
+    --hc-block-fg-soft: color-mix(in srgb, var(--ctp-crust) 72%, transparent);
+    --hc-block-slot: rgba(0, 0, 0, 0.22);
+}
+
 /* ---------- accent 切换（data-accent on <html>）---------- */
 
 [data-accent="mauve"]  { --primary: var(--ctp-mauve);  --ring: var(--ctp-mauve);  }
