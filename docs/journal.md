@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-06-11 · 0.7.0-P5 实测反馈修复（积木编辑器 4 类问题，systematic-debugging 根因优先）
+
+用户首轮 UI 实测报 4 类问题。主控本地跑不了编辑器 → 走"读代码 + 逻辑推理定位根因"替代复现，
+诊断到行后精确修（未瞎改）。**两条贯穿主因 + 逐症状根因**：
+
+- **症状 1「触发器下拉点不动/跳到报错」**：根因不是 select bug（select 回显正确、切换已生效），
+  而是切到 variableChange→空 fullName→`validationErrors`（实时 computed）非空→顶部红 banner
+  作为 `flex-shrink:0` 块**瞬间插入把画布整体下挤**，观感"点了没用/界面跳走"。
+- **症状 3a「拖出积木全报空值错」**：`makeDefaultAction` 引用字段给空串 + 前后端 validator 都拒空
+  → 拖出瞬间 banner 轰炸 + 自动保存被拦。3b「找不到填值处」：控件确实渲染，但 variable 是 11px
+  灰小按钮极不显眼 + 红 banner 抢镜。
+- **症状 2b「偶尔复制出新积木」**：`startBlockDrag` 在 tryCapture **之前**调 selectRule（替换
+  workingCopy 触发重渲→捕获 DOM 被 v-for key 重建→capture 丢失）+ doSave 乐观清 dirty 后
+  server echo deep watch 整树 deepClone 替换 workingCopy。`moveNode` 本身无误。
+  2a「不跟手」：拖堆时 stackDragPos 每帧变→positionedStacks 全量重算 + 所有 BlockStack 重定位。
+- **症状 4「不像 Scratch」**：四角圆角矩形+左 4px 色条（无咬合）/ gap 有缝 / if 虚线引导线 /
+  Catppuccin color-mix 淡化低饱和 / 裸方角 input。
+
+**修复（2 commit）**：
+- **逻辑（7e2f401）**：① 删顶部红 banner（布局位移元凶）→ 改头部 inline 温和「⚠ N 处待完善」
+  指示（不挤画布，点击循环定位）② makeDefaultAction/Trigger 给非空合理默认（fullName=user/score /
+  soundId=entity.player.levelup / if condition 默认合法可解析）→ 中间态不再误报 ③ scriptEdit 加
+  `dragging` flag：拖拽期间冻结 server echo 整树替换 + startBlockDrag 先 capture 后 select →
+  capture 不丢/不复制 ④ BlockCanvas `basePositionedStacks`（不依赖 stackDragPos）+ 被拖堆局部
+  覆盖 + ghost translate3d → 拖动时仅被拖对象重渲。前端 877→899。
+- **视觉（1c8ca9a）**：实色块 + 对比文字（删 color-mix 淡化，3 主题 `--hc-block-fg` token）/
+  焊接式堆叠（gap≈0 + 凸榫 + 负 margin 咬合）/ if 实体 C 形左臂+底托（删虚线）/ 参数控件统一
+  圆角胶囊 + 变量"选变量"做成显眼 mauve 芯片（修 3b）/ 未填角标（element/timeline/command 空值
+  橙点温和提示）。仅改 CSS/视觉结构/配色，data-block-path 等拖拽高亮依赖属性原位。
+
+**视觉待用户实测微调**（主控无法本地预览）：凸榫咬合观感 / C 形臂宽度 / 深层嵌套 / 饱和度是否够亮 /
+序列缩进。**前端 899 全绿 / vite build 过 / 0 漂移**。
+
+---
+
 ## 2026-06-11 · 0.7.0 P4+P5 收口：**积木编辑器完工**（待用户完整实测）
 
 P4 引擎层 + P5 内容层全部落地（9 个子任务并/串行 + 集成审查修 2 阻断）。把 0.7 脚本从
