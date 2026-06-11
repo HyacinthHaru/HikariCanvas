@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-06-12 · 0.7.1-P2 完工：3 新触发器 + 有界循环 + 协议 v5
+
+subagent-driven（波 1 后端 Task 1-7 + 前端 Task 8-11 并行 → 合并审查「可提交，0 finding」→ 提交）。
+
+**后端 3 新触发器**：
+- `rightClickWall`（右键墙 ItemFrame）：GameEventListenerHub.onPlayerInteractEntity + FrameDeployer.wallIdOf
+  PDC 反查 wallId + **off-hand guard** 防一次右键双手双触发；TriggerRouter `rightClickByWall` 按墙索引；
+  权限 trigger.global。
+- `playerLeaveRange`（离开靠近区域）：复用 PlayerNearSampler，NearEntry 加 `leaveEdge` 标记，sample 分沿
+  `(!leaveEdge && enter) || (leaveEdge && leave)`；玩家首次在范围外不误触发；权限墙级 edit。
+- `playerQuit`（退服）：PlayerQuitEvent + TriggerRouter `quitRules` 全局索引；权限 trigger.global。
+- GameEventListenerHub 用 `WallIdLookup` functional seam（避 script.engine→deploy 包依赖 + 纯 JVM 可测）。
+
+**Repeat 有界循环**：Action.Repeat(count, body)；ScriptRunner 展开 count 轮 body，**blockId 用同一 prefix
+`<blockId>/body/<i>` 不带 round**——守 0.7.0 前后端同构（带 round 会让试跑高亮错位）；每轮 body 动作计入
+Budget actionCount，超 max-actions-per-run(50) 熔断（100×[2 动作] → 49 body + blocked）；count 1..100 + body 递归。
+
+**协议 v5**：Protocol SUPPORTED_MIN/MAX 4→5 干净切换，前端 CLIENT_V 5，旧 v4 被 4002 拒。
+
+**前端**：protocol Trigger +3/Action repeat；blockDefs trigger defs + Repeat blockDef（control）；BlockNode
+Repeat C 形渲染（照 if then 单臂，body path `${path}/body/${i}` 同构）；validator +3 trigger + Repeat（文案
+逐字）+ countBlocks（body 不乘 count）；i18n。**blockTree.ts 泛化**（计划外但必需）：硬编码 if/then/else →
+`NESTED_SEQ_KEYS=['then','else','body']` + getChildSeq/withChildSeq，否则 repeat 拖入 body 静默 no-op；
+if then/else 无回归（+11 树导航测试）。**§9 预警决策**：不做前端展开预估，靠运行时 Budget 熔断（工具不是保姆）。
+
+测试：后端 1656→1702（+46）/ 前端 955→987（+32）全绿；shadow jar `HikariCanvas-0.6.0-SNAPSHOT.jar`
+167 MB（P2 不升 jar 版本，仍 0.6.0）；0 baseline 漂移。合并审查 0 finding。3 commit（启动 + 后端 + 前端）。
+
+关联文件：`plugin/.../script/{Trigger,Action,Trigger(De)serializer,Action(De)serializer,ScriptPermissions,
+ScriptRuleValidator}` + `engine/{ScriptRunner,TriggerRouter,PlayerNearSampler,GameEventListenerHub,
+TriggerContext,ActionExecutor}` + `web/Protocol` + `HikariCanvas`；`web/src/{types/protocol,network/wsClient,
+script/model/{blockTree,validator,blockDefs}, script/canvas/{BlockNode,useBlockDrag}, i18n/messages}`
+
+---
+
 ## 2026-06-12 · 0.7.1-P2 启动：实施计划（3 新触发器 + 有界循环 + 协议 v5）
 
 2 路 Explore 摸清 0.7.0 触发器体系（Trigger sealed + TriggerRouter 倒排/全局索引 + PlayerNearSampler
