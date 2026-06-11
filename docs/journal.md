@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-06-11 · 0.7.1-P1 完工：友好元素积木 + 低风险新动作（6 新 Action 子类 + 友好皮肤渲染）
+
+按 P1 计划用 subagent-driven 执行（波 1 后端全链路 + 前端契约并行 → 合并审查 → fix → 波 2 前端 UI）。
+
+**后端 6 个新 Action 子类**（`plugin/.../script`）：
+- `setElementProperties(elementId, patch, kind)` — 7 个友好积木的序列化目标，一条 action 批量设多
+  属性（底层 `updateElement` 已支持 patch map）。**1 积木=1 条 action 守 0.7.0 blockId 同构**（试跑
+  高亮/undo/P4 幽灵拖动天然正确）。`kind` 前端皮肤标记，后端执行忽略。
+- `nudgeElement(elementId, dx, dy)` — 相对移动，运行时读当前 x/y + 增量；session 锁内原子 /
+  headless 升 long 防 int 回绕。
+- `sendMessage(text, channel)` — 给触发玩家发消息（chat/actionbar/title），经 `TRIGGER_DETAIL`
+  ThreadLocal 拿触发玩家名（照 `RULE_KEY` 范式），主线程 hop + Adventure。
+- `setRandomVariable / scaleVariable` — 随机数（RNG seam 可测）/ 变量乘除（除零防御）。
+- `playTimelineAwait(timelineId)` — 播时间轴并等播完，经 `ActionSink.timelineDurationMs` + Runner
+  特判复用 wait 续接挂起 durationMs（封顶 10 分钟）。
+- 4 处穷尽 switch（executor/validator/permissions/serializer）编译期守门，一次加全。
+
+**前端**：`protocol.ts` union +6；`blockDefs` `FRIENDLY_ELEMENT_DEFS`（8 kind：移到/改大小/旋转/
+透明度/显示/隐藏/改文字/改颜色）+ 5 新动作 blockDef；`validator.ts` 镜像 6 case（文案逐字一致）；
+i18n 中英；`BlockNode` 按 `action.kind` 选友好皮肤渲染（字段读写 patch，number string↔number
+round-trip，`data-block-path` 不变守同构）；`BlockPalette`「元素动作」友好分组（nudgeElement 去重）。
+
+**审查修 3 点**：I1 放宽 setElementProperties 对 `text` 键的空值校验（空文字是合法内容，双端同步）；
+M1 headless nudge 升 long 防回绕；M2 nudge 读锁外低危竞态记账注释。
+
+测试：后端 1585 → 1656+（+71）/ 前端 917 → 955（+38）全绿；shadow jar
+`HikariCanvas-0.6.0-SNAPSHOT.jar` 166 MB（P1 不升版本，仍 0.6.0；协议 v5 升版留 P2）；0 baseline 漂移。
+4 commit（启动文档 + 后端 + 前端契约 + 前端 UI）。
+
+关联文件：`plugin/.../script/{Action,ActionDeserializer,ActionSerializer,ActionExecutor,ScriptRunner,
+ElementPropertyApplier,ActionSink,ScriptRuleValidator,ScriptPermissions}` / `session/SessionManager` /
+`HikariCanvas`；`web/src/{types/protocol, script/model/{blockDefs,validator}, i18n/messages,
+script/canvas/{BlockNode,BlockPalette}}`
+
+---
+
 ## 2026-06-11 · 0.7.1-P1 启动：E6 决策回填 + 实施计划（友好积木走「批量设属性 action」）
 
 写 P1 实施计划前，3 路 Explore 摸清 0.7.0 脚本系统代码形态，暴露一个 brainstorming 没下探到的
