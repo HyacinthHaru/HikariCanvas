@@ -79,6 +79,12 @@ public final class ActionExecutor implements ActionSink {
     /** SCRIPT_COMMAND_EXECUTED audit（fire-and-forget；可 null）。 */
     private final @Nullable AuditLog audit;
     private final Logger log;
+    /**
+     * 0.7.1：setRandomVariable 的随机源。生产默认 {@code ThreadLocalRandom.current()}
+     * （runner 单线程，无竞争）；单测经 {@link #setRngForTest} 注 seeded {@code Random} 确定性。
+     */
+    private volatile java.util.random.RandomGenerator rng =
+            java.util.concurrent.ThreadLocalRandom.current();
 
     /** 兼容旧 6 参形态（既有单测沿用）：无命令模板 / 无 audit → runCommand 恒 blocked。 */
     public ActionExecutor(@Nullable VariableStore store,
@@ -112,6 +118,11 @@ public final class ActionExecutor implements ActionSink {
         this.log = log;
     }
 
+    /** 0.7.1 测试 seam：注入确定性随机源（生产不调用）。 */
+    void setRngForTest(java.util.random.RandomGenerator r) {
+        this.rng = r;
+    }
+
     @Override
     public TraceStep execute(String wallId, String blockId, Action action) {
         try {
@@ -123,6 +134,15 @@ public final class ActionExecutor implements ActionSink {
                 case Action.PlaySound a -> doPlaySound(wallId, blockId, a);
                 case Action.RunCommand a -> doRunCommand(wallId, blockId, a);
                 case Action.Log a -> doLog(wallId, blockId, a);
+                // 0.7.1：6 个新 Action 子类
+                case Action.SetElementProperties a -> doSetElementProperties(wallId, blockId, a);
+                case Action.NudgeElement a -> doNudge(wallId, blockId, a);
+                case Action.SendMessage a -> doSendMessage(wallId, blockId, a);
+                case Action.SetRandomVariable a -> doSetRandom(wallId, blockId, a);
+                case Action.ScaleVariable a -> doScale(wallId, blockId, a);
+                // playTimelineAwait：Runner 调本 sink 执行 play（副作用），再据 durationMs 决定挂起。
+                // 即本方法做 play、Runner 做"等播完"——故这里真正执行（非防御 error）。
+                case Action.PlayTimelineAwait a -> doPlayTimelineAwait(wallId, blockId, a);
                 // wait / if 由 Runner 处理；进到这里是 Runner 实现 bug → 防御 error
                 case Action.Wait a -> TraceStep.error(blockId, "wait 应由 ScriptRunner 处理");
                 case Action.If a -> TraceStep.error(blockId, "if 应由 ScriptRunner 处理");
@@ -366,5 +386,151 @@ public final class ActionExecutor implements ActionSink {
         // 收口改契约该行——计划已记账）
         log.info("[脚本 " + wallId + "] " + msg);
         return TraceStep.ok(blockId, "action", "log");
+    }
+
+    // ---------- 0.7.1：6 个新动作 ----------
+
+    /** 批量设元素属性（友好积木）→ {@link ElementPropertyApplier#applyMany}（kind 仅前端皮肤，忽略）。 */
+    private TraceStep doSetElementProperties(String wallId, String blockId,
+                                             Action.SetElementProperties a) {
+        if (applier == null) {
+            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+        }
+        return applier.applyMany(wallId, blockId, a.elementId(), a.patch());
+    }
+
+    /** 相对移动 → {@link ElementPropertyApplier#applyNudge}（运行时读当前 x/y + delta）。 */
+    private TraceStep doNudge(String wallId, String blockId, Action.NudgeElement a) {
+        if (applier == null) {
+            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+        }
+        return applier.applyNudge(wallId, blockId, a.elementId(), a.dx(), a.dy());
+    }
+
+    /**
+     * 给触发玩家发消息。触发玩家名 = {@link ScriptRunner#currentTriggerDetail}（仅 player*
+     * 触发器有值）。无触发玩家 / 离线 → ok step skip（非错误）。text 过 {@code ${var:X}} 插值。
+     * 主线程 hop 发（Adventure {@code Component} / {@code Title}，禁 NMS）。
+     */
+    private TraceStep doSendMessage(String wallId, String blockId, Action.SendMessage a) {
+        String channel = a.channel();
+        if (!"chat".equals(channel) && !"actionbar".equals(channel) && !"title".equals(channel)) {
+            return TraceStep.error(blockId, "未知 channel: " + channel);
+        }
+        String who = ScriptRunner.currentTriggerDetail();
+        if (who == null || who.isBlank()) {
+            return TraceStep.ok(blockId, "action", "无触发玩家，跳过");
+        }
+        String msg = interpolator == null ? a.text()
+                : interpolator.interpolate(a.text(), wallId).text();
+        Runnable work = () -> {
+            try {
+                Player p = Bukkit.getPlayerExact(who);
+                if (p == null) return; // 离线
+                switch (channel) {
+                    case "actionbar" -> p.sendActionBar(
+                            net.kyori.adventure.text.Component.text(msg));
+                    case "title" -> p.showTitle(net.kyori.adventure.title.Title.title(
+                            net.kyori.adventure.text.Component.text(msg),
+                            net.kyori.adventure.text.Component.empty()));
+                    default -> p.sendMessage(net.kyori.adventure.text.Component.text(msg));
+                }
+            } catch (Throwable t) {
+                log.log(Level.WARNING, "[脚本] sendMessage 失败: " + t.getMessage(), t);
+            }
+        };
+        if (plugin == null) {
+            work.run();
+        } else {
+            Bukkit.getScheduler().runTask(plugin, work);
+        }
+        return TraceStep.ok(blockId, "action", "msg→" + who + " (" + channel + ")");
+    }
+
+    /** 随机数 [min,max] 闭区间。min&gt;max → error。两端皆整 → 整数随机（含 max，roll dice 体验）。 */
+    private TraceStep doSetRandom(String wallId, String blockId, Action.SetRandomVariable a) {
+        if (store == null) {
+            return TraceStep.error(blockId, "VariableStore 未装配");
+        }
+        if (!Double.isFinite(a.min()) || !Double.isFinite(a.max()) || a.min() > a.max()) {
+            return TraceStep.error(blockId, "随机区间非法: " + a.min() + ".." + a.max());
+        }
+        double v = a.min() + rng.nextDouble() * (a.max() - a.min());
+        // 两端皆整 + 跨度可装进 int → 取整数随机（含 max）；否则保留上面的连续采样（防 int 溢出）
+        if (a.min() == Math.rint(a.min()) && a.max() == Math.rint(a.max())
+                && (a.max() - a.min()) <= (double) (Integer.MAX_VALUE - 1)) {
+            v = a.min() + rng.nextInt((int) (a.max() - a.min()) + 1);
+        }
+        String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String formatted = formatNumber(v);
+        try {
+            store.setValue(fullName, formatted, null);
+        } catch (VariableException e) {
+            return TraceStep.error(blockId, "setRandom " + fullName + ": " + e.getMessage());
+        }
+        return TraceStep.ok(blockId, "action", fullName + " = " + formatted);
+    }
+
+    /** 变量乘 / 除。读当前值（StrictNumber，非数值作 0）→ × / ÷ → 写回。divide by 0 → error。 */
+    private TraceStep doScale(String wallId, String blockId, Action.ScaleVariable a) {
+        if (store == null || storeLookup == null) {
+            return TraceStep.error(blockId, "VariableStore 未装配");
+        }
+        boolean mul = "multiply".equals(a.op());
+        if (!mul && !"divide".equals(a.op())) {
+            return TraceStep.error(blockId, "未知 op: " + a.op());
+        }
+        if (!Double.isFinite(a.factor())) {
+            return TraceStep.error(blockId, "factor 必须有限");
+        }
+        if (!mul && a.factor() == 0.0) {
+            return TraceStep.error(blockId, "除数不能为 0");
+        }
+        String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        double base = StrictNumber.parse(storeLookup.apply(fullName));
+        double result = mul ? base * a.factor() : base / a.factor();
+        String formatted = formatNumber(result);
+        try {
+            store.setValue(fullName, formatted, null);
+        } catch (VariableException e) {
+            return TraceStep.error(blockId, "scaleVariable " + fullName + ": " + e.getMessage());
+        }
+        return TraceStep.ok(blockId, "action", fullName + " = " + formatted);
+    }
+
+    /** 播时间轴：触发 play（挂起 durationMs 由 Runner 经 {@link #timelineDurationMs} 处理）。 */
+    private TraceStep doPlayTimelineAwait(String wallId, String blockId, Action.PlayTimelineAwait a) {
+        if (ticker == null) {
+            return TraceStep.error(blockId, "AnimationTicker 未装配");
+        }
+        if (a.timelineId() == null || a.timelineId().isBlank()) {
+            return TraceStep.error(blockId, "缺 timelineId");
+        }
+        AnimationTicker.Result r = ticker.play(wallId, a.timelineId());
+        if (r != AnimationTicker.Result.OK) {
+            return TraceStep.error(blockId, "play 失败: " + r);
+        }
+        return TraceStep.ok(blockId, "action", "playAwait " + a.timelineId());
+    }
+
+    /**
+     * 0.7.1 {@link ActionSink#timelineDurationMs}：从 wallRepo 读 timeline 一轮时长（ms）。
+     * 查无 / wallRepo 缺 → 0（Runner 据此不挂起）。封顶 10 分钟防异常 duration 卡死续接。
+     */
+    @Override
+    public long timelineDurationMs(String wallId, String timelineId) {
+        if (wallRepo == null || timelineId == null) {
+            return 0L;
+        }
+        WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
+        if (wall == null || wall.state() == null) {
+            return 0L;
+        }
+        for (var tl : wall.state().timelines()) {
+            if (tl.id().equals(timelineId)) {
+                return Math.max(0L, Math.min(tl.durationMs(), 600_000L));
+            }
+        }
+        return 0L;
     }
 }

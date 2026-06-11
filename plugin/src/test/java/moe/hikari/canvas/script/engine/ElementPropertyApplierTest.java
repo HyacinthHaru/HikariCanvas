@@ -238,6 +238,133 @@ class ElementPropertyApplierTest {
         assertEquals("error", step.result());
     }
 
+    // ---------- 0.7.1：applyMany（批量设属性） ----------
+
+    @Test
+    void applyMany_headless_setsMultipleProps() {
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyMany(wallId, "b", "e-1",
+                Map.of("x", "128", "y", "64"));
+        assertEquals("ok", step.result(), () -> "应成功: " + step.detail());
+        TextElement el = findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1");
+        assertEquals(128, el.x());
+        assertEquals(64, el.y());
+    }
+
+    @Test
+    void applyMany_emptyPatch_errorStep() {
+        TraceStep step = headlessApplier().applyMany("w-any", "b", "e-1", Map.of());
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("patch"), step.detail());
+    }
+
+    @Test
+    void applyMany_badProperty_errorStep_beforeDb() {
+        // 非白名单属性 → buildPatch 抛 → error step（不落库）
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyMany(wallId, "b", "e-1",
+                Map.of("x", "5", "fontSize", "12"));
+        assertEquals("error", step.result());
+        // 原 x 不变（整批拒，无部分落地）
+        assertEquals(10, findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1").x());
+    }
+
+    @Test
+    void applyMany_missingElementId_errorStep() {
+        TraceStep step = headlessApplier().applyMany("w-any", "b", "", Map.of("x", "1"));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void applyMany_sessionPath_mergesPatch() {
+        List<Map<String, Object>> seen = new ArrayList<>();
+        ElementPropertyApplier a = new ElementPropertyApplier((w, e, p) -> {
+            seen.add(p);
+            return ElementPropertyApplier.SessionOutcome.applied();
+        }, wallRepo, ticker, LOG);
+        TraceStep step = a.applyMany("w-1", "b", "e-1", Map.of("x", "9", "y", "7"));
+        assertEquals("ok", step.result());
+        assertEquals(1, seen.size());
+        assertEquals(9, seen.get(0).get("x"), "x 合进单一 patch");
+        assertEquals(7, seen.get(0).get("y"), "y 合进单一 patch");
+    }
+
+    // ---------- 0.7.1：applyNudge（相对移动） ----------
+
+    @Test
+    void applyNudge_headless_readsCurrentPlusDelta() {
+        // fixture x=10,y=20；nudge(+5,-3) → x=15,y=17
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyNudge(wallId, "b", "e-1", 5.0, -3.0);
+        assertEquals("ok", step.result(), () -> "应成功: " + step.detail());
+        TextElement el = findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1");
+        assertEquals(15, el.x());
+        assertEquals(17, el.y());
+    }
+
+    @Test
+    void applyNudge_roundsFractionalDelta() {
+        // x=10,y=20；nudge(+2.6,-0.4) → round → +3,-0 → x=13,y=20
+        String wallId = createWall(stateWithText("e-1", false));
+        headlessApplier().applyNudge(wallId, "b", "e-1", 2.6, -0.4);
+        TextElement el = findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1");
+        assertEquals(13, el.x());
+        assertEquals(20, el.y());
+    }
+
+    @Test
+    void applyNudge_nonFiniteDelta_errorStep() {
+        TraceStep step = headlessApplier().applyNudge("w-any", "b", "e-1", Double.NaN, 1.0);
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("有限"), step.detail());
+    }
+
+    @Test
+    void applyNudge_elementNotFound_errorStep() {
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyNudge(wallId, "b", "e-MISSING", 1.0, 1.0);
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("元素不存在"), step.detail());
+    }
+
+    @Test
+    void applyNudge_sessionPath_usesNudgeSeam() {
+        List<int[]> seen = new ArrayList<>();
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        throw new AssertionError("nudge 不应走 apply()");
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome nudge(
+                            String w, String e, int dx, int dy) {
+                        seen.add(new int[]{dx, dy});
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, wallRepo, ticker, LOG);
+        TraceStep step = a.applyNudge("w-1", "b", "e-1", 5.4, -3.6);
+        assertEquals("ok", step.result());
+        assertEquals(1, seen.size());
+        assertEquals(5, seen.get(0)[0], "dx round");
+        assertEquals(-4, seen.get(0)[1], "dy round");
+    }
+
+    @Test
+    void applyNudge_sessionNoSession_fallsThroughHeadless() {
+        // 无活跃 session（apply + 默认 nudge 都返 noSession）→ nudge 走 headless 读改写，
+        // 其内部 applyMany 也因 noSession 落 DB（x=10 +1 → 11）
+        String wallId = createWall(stateWithText("e-1", false));
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                (w, e, p) -> ElementPropertyApplier.SessionOutcome.noSession(),
+                wallRepo, ticker, LOG);
+        TraceStep step = a.applyNudge(wallId, "b", "e-1", 1.0, 1.0);
+        assertEquals("ok", step.result());
+        assertEquals(11, findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1").x());
+    }
+
     // ---------- 路径 A：session seam ----------
 
     @Test

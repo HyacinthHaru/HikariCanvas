@@ -62,6 +62,19 @@ class ScriptPermissionsTest {
     }
 
     @Test
+    void new_071_actions_no_extra_facets() {
+        // 0.7.1 的 6 个新 action 均无附加权限面（仅走基础 canvas.script.edit）
+        ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(
+                new Action.SetElementProperties("e-1", Map.of("x", "1"), "moveTo"),
+                new Action.NudgeElement("e-1", 1.0, 1.0),
+                new Action.SendMessage("hi", "chat"),
+                new Action.SetRandomVariable("user/roll", 1.0, 6.0),
+                new Action.ScaleVariable("user/score", "multiply", 2.0),
+                new Action.PlayTimelineAwait("tl-1")));
+        assertEquals(Set.of(), ScriptPermissions.requiredFacets(r));
+    }
+
+    @Test
     void all_three() {
         // PlayerKill(全局触发面) + PlaySound + RunCommand → 共 3 个节点
         ScriptRule r = rule(new Trigger.PlayerKill(), List.of(

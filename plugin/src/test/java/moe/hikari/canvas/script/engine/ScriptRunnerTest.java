@@ -227,6 +227,73 @@ class ScriptRunnerTest {
         assertNull(ScriptRunner.CHAIN_DEPTH.get());
     }
 
+    // ---------- 0.7.1：playTimelineAwait 挂起续接 ----------
+
+    @Test
+    void playTimelineAwait_durationPositive_suspendsThenContinues() {
+        sink.timelineDuration = 1000L;
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.PlayTimelineAwait("tl-1"), new Action.Log("after"))), ctx(0));
+        // play 已执行（actions/0），但 after 还没——挂起 1000ms
+        assertEquals(List.of("actions/0"), sink.blockIds, "play 执行后挂起，after 未执行");
+        assertEquals(List.of(1000L), scheduler.scheduledDelays, "挂起 durationMs=1000");
+        scheduler.runPending();
+        assertEquals(List.of("actions/0", "actions/1"), sink.blockIds, "续接执行 after");
+    }
+
+    @Test
+    void playTimelineAwait_durationZero_doesNotSuspend() {
+        sink.timelineDuration = 0L; // 查无 timeline / 不支持 → 不挂起
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.PlayTimelineAwait("tl-x"), new Action.Log("after"))), ctx(0));
+        assertEquals(List.of("actions/0", "actions/1"), sink.blockIds,
+                "dur=0 不挂起，after 紧接执行");
+        assertEquals(0, scheduler.scheduledDelays.size(), "无调度");
+    }
+
+    @Test
+    void playTimelineAwait_playFailure_doesNotSuspend() {
+        // play 失败 → execute 返 error → dur 不查（恒 0）→ 不挂起，after 继续
+        sink.timelineDuration = 5000L;
+        sink.errorOn = "actions/0";
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.PlayTimelineAwait("tl-1"), new Action.Log("after"))), ctx(0));
+        assertEquals(List.of("actions/0", "actions/1"), sink.blockIds,
+                "play 失败不挂起（dur 不查），链继续");
+        assertEquals(0, scheduler.scheduledDelays.size());
+    }
+
+    // ---------- 0.7.1：TRIGGER_DETAIL 透传 ----------
+
+    @Test
+    void triggerDetail_setDuringRun_clearedAfter() {
+        ScriptRunner r = runner();
+        List<String> seen = new ArrayList<>();
+        sink.onExecute = () -> seen.add(ScriptRunner.TRIGGER_DETAIL.get());
+        ScriptRule ru = new ScriptRule("r1", WALL, true, "r-1",
+                new Trigger.PlayerJoin(), List.of(new Action.Log("x")), "{}");
+        r.submit(WALL, ru, new TriggerContext(TriggerContext.Source.PLAYER_JOIN, 0, "Alice"));
+        assertEquals(List.of("Alice"), seen, "执行期 TRIGGER_DETAIL = ctx.detail（触发玩家名）");
+        assertNull(ScriptRunner.TRIGGER_DETAIL.get(), "run 结束 finally 清 ThreadLocal");
+        assertNull(ScriptRunner.currentTriggerDetail(), "无上下文时读到 null");
+    }
+
+    @Test
+    void triggerDetail_waitContinuation_restored() {
+        ScriptRunner r = runner();
+        List<String> seen = new ArrayList<>();
+        sink.onExecute = () -> seen.add(ScriptRunner.TRIGGER_DETAIL.get());
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Log("a"), new Action.Wait(100), new Action.Log("b"))),
+                new TriggerContext(TriggerContext.Source.PLAYER_JOIN, 0, "Bob"));
+        scheduler.runPending();
+        assertEquals(List.of("Bob", "Bob"), seen, "续接段 TRIGGER_DETAIL 延续");
+        assertNull(ScriptRunner.TRIGGER_DETAIL.get());
+    }
+
     // ---------- sink 异常兜底 ----------
 
     @Test
@@ -421,12 +488,16 @@ class ScriptRunnerTest {
         }
     }
 
-    /** 记录调用序的 ActionSink；可指定某 blockId 抛异常（兜底路径测试）。 */
+    /** 记录调用序的 ActionSink；可指定某 blockId 抛异常 / 返 error（兜底 + playTimelineAwait 路径测试）。 */
     private static final class RecordingSink implements ActionSink {
         final List<String> blockIds = new ArrayList<>();
         final List<String> wallIds = new ArrayList<>();
         Runnable onExecute;
         String throwOn;
+        /** 0.7.1：playTimelineAwait 续接路径——某 blockId execute 返 error step（不抛）。 */
+        String errorOn;
+        /** 0.7.1：timelineDurationMs 返回值（>0 → Runner 挂起续接）。 */
+        long timelineDuration = 0L;
 
         @Override
         public TraceStep execute(String wallId, String blockId, Action action) {
@@ -436,7 +507,15 @@ class ScriptRunnerTest {
             if (blockId.equals(throwOn)) {
                 throw new IllegalStateException("boom");
             }
+            if (blockId.equals(errorOn)) {
+                return TraceStep.error(blockId, "forced error");
+            }
             return TraceStep.ok(blockId, "action", null);
+        }
+
+        @Override
+        public long timelineDurationMs(String wallId, String timelineId) {
+            return timelineDuration;
         }
 
         void reset() {

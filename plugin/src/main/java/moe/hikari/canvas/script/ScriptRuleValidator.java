@@ -58,6 +58,16 @@ public final class ScriptRuleValidator {
     /** PlaySound.pitch 范围。 */
     public static final double PITCH_MIN = 0.5;
     public static final double PITCH_MAX = 2.0;
+    /** 0.7.1 SendMessage.text 最大长度。 */
+    public static final int MESSAGE_MAX = 256;
+    /** 0.7.1 SetElementProperties.patch 最大键数。 */
+    public static final int PATCH_MAX_KEYS = 8;
+    /** 0.7.1 SetElementProperties.kind 最大长度。 */
+    public static final int KIND_MAX = 32;
+    /** 0.7.1 SendMessage.channel 白名单。 */
+    public static final Set<String> MESSAGE_CHANNELS = Set.of("chat", "actionbar", "title");
+    /** 0.7.1 ScaleVariable.op 白名单。 */
+    public static final Set<String> SCALE_OPS = Set.of("multiply", "divide");
 
     private ScriptRuleValidator() {
     }
@@ -244,6 +254,83 @@ public final class ScriptRuleValidator {
                 }
                 yield validateActions(a.elseActions(), depth);
             }
+            // 0.7.1：6 个新 Action 子类
+            case Action.SetElementProperties a -> {
+                if (blank(a.elementId())) {
+                    yield Optional.of("设置元素属性缺少元素 ID");
+                }
+                if (a.patch().isEmpty()) {
+                    yield Optional.of("批量设属性的 patch 不能为空");
+                }
+                if (a.patch().size() > PATCH_MAX_KEYS) {
+                    yield Optional.of("patch 属性数超过 " + PATCH_MAX_KEYS);
+                }
+                if (a.kind() != null && a.kind().length() > KIND_MAX) {
+                    yield Optional.of("kind 超长");
+                }
+                for (Map.Entry<String, String> e : a.patch().entrySet()) {
+                    if (!ELEMENT_PROPERTIES.contains(e.getKey())) {
+                        yield Optional.of("元素属性不在允许范围：" + e.getKey());
+                    }
+                    // text 空串是合法内容（ElementPropertyApplier.buildPatch 接受空文字）；
+                    // 其余键（x/y/w/h/rotation/opacity/fill）空串会静默变 0 或 hex 失败，仍查空
+                    if (!"text".equals(e.getKey()) && blank(e.getValue())) {
+                        yield Optional.of("属性 " + e.getKey() + " 的值不能为空");
+                    }
+                }
+                yield Optional.empty();
+            }
+            case Action.NudgeElement a -> {
+                if (blank(a.elementId())) {
+                    yield Optional.of("相对移动缺少元素 ID");
+                }
+                if (!Double.isFinite(a.dx()) || !Double.isFinite(a.dy())) {
+                    yield Optional.of("相对移动的 dx/dy 必须是有限数值");
+                }
+                yield Optional.empty();
+            }
+            case Action.SendMessage a -> {
+                if (a.text() == null) {
+                    yield Optional.of("发消息内容不能为 null");
+                }
+                if (a.text().length() > MESSAGE_MAX) {
+                    yield Optional.of("发消息内容超长（最多 " + MESSAGE_MAX + "）");
+                }
+                if (a.channel() == null || !MESSAGE_CHANNELS.contains(a.channel())) {
+                    yield Optional.of("消息渠道不在允许范围：" + a.channel());
+                }
+                yield Optional.empty();
+            }
+            case Action.SetRandomVariable a -> {
+                if (blank(a.fullName())) {
+                    yield Optional.of("随机数变量名不能为空");
+                }
+                if (!Double.isFinite(a.min()) || !Double.isFinite(a.max())) {
+                    yield Optional.of("随机区间必须是有限数值");
+                }
+                if (a.min() > a.max()) {
+                    yield Optional.of("随机区间 min 不能大于 max");
+                }
+                yield Optional.empty();
+            }
+            case Action.ScaleVariable a -> {
+                if (blank(a.fullName())) {
+                    yield Optional.of("乘除变量名不能为空");
+                }
+                if (a.op() == null || !SCALE_OPS.contains(a.op())) {
+                    yield Optional.of("运算不在允许范围：" + a.op());
+                }
+                if (!Double.isFinite(a.factor())) {
+                    yield Optional.of("乘除系数必须是有限数值");
+                }
+                if ("divide".equals(a.op()) && a.factor() == 0.0) {
+                    yield Optional.of("除数不能为 0");
+                }
+                yield Optional.empty();
+            }
+            case Action.PlayTimelineAwait a -> blank(a.timelineId())
+                    ? Optional.of("播时间轴缺少时间轴 ID")
+                    : Optional.empty();
         };
     }
 

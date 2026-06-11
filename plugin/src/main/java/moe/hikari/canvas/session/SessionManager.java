@@ -780,6 +780,78 @@ public final class SessionManager {
     }
 
     /**
+     * 0.7.1：脚本 {@code nudgeElement} 路径 A——墙开着编辑器时，在<b>同一次 session 迭代</b>内
+     * 读元素当前 x/y + delta 写回，走与 {@link #applyScriptElementPatch} 相同的标准
+     * element.update 链（state.patch 推送 + 投影节流 + persistWall）。读 + 写在同一 EditSession
+     * 引用上顺序进行，避免脚本 nudge 与编辑器互相覆盖。
+     *
+     * <p>无活跃 session → {@code NO_SESSION}（调用方走 headless 读改写）。元素不存在 →
+     * {@code FAILED}（不回退 headless，避免双路径语义分叉——同 patch 路径）。</p>
+     */
+    public moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome
+    applyScriptElementNudge(String wallId, String elementId, int dx, int dy,
+                            moe.hikari.canvas.web.OpPushCallback push,
+                            moe.hikari.canvas.render.ProjectionThrottler throttler) {
+        if (wallId == null || elementId == null) {
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed("invalid script element nudge args");
+        }
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (!wallId.equals(s.wallId())) continue;
+            moe.hikari.canvas.state.EditSession es = s.editSession();
+            if (es == null) continue;
+            // 读当前 x/y（同 EditSession 引用，写紧随其后）。
+            // 已知低危竞态（勿当新缺陷重报）：本读发生在下方 synchronized updateElement 之外，
+            // 唯一竞争者是编辑器主线程 WS op 恰在此读与写之间插入一次移动——后果仅这一拍 nudge
+            // 基于略旧 x/y，下一拍即自愈，不破坏数据完整性；与 applyScriptElementPatch 并发契约同档。
+            Integer curX = null;
+            Integer curY = null;
+            for (var layer : es.state().layers()) {
+                for (var el : layer.elements()) {
+                    if (el.id().equals(elementId)) {
+                        curX = el.x();
+                        curY = el.y();
+                    }
+                }
+            }
+            if (curX == null) {
+                return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                        .SessionOutcome.failed("元素不存在: " + elementId);
+            }
+            Map<String, Object> patch = Map.of(
+                    "x", moe.hikari.canvas.state.StrictNumber.clampInt((long) curX + dx),
+                    "y", moe.hikari.canvas.state.StrictNumber.clampInt((long) curY + dy));
+            moe.hikari.canvas.state.EditSession.OpResult r = es.updateElement(elementId, patch);
+            if (r instanceof moe.hikari.canvas.state.EditSession.OpResult.Ok ok) {
+                if (push != null && !ok.patch().ops().isEmpty()) {
+                    try {
+                        push.pushPatch(s.id(), ok.patch());
+                    } catch (Exception e) {
+                        log.log(java.util.logging.Level.WARNING,
+                                "applyScriptElementNudge push failed: session=" + s.id()
+                                        + " wall=" + wallId + " err=" + e.getMessage(), e);
+                    }
+                }
+                if (throttler != null && ok.dirty() != null) {
+                    throttler.submit(s.id(), ok.dirty());
+                }
+                persistWall(s.id());
+                return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                        .SessionOutcome.applied();
+            }
+            if (r instanceof moe.hikari.canvas.state.EditSession.OpResult.Error er) {
+                return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                        .SessionOutcome.failed(er.code() + ": " + er.message());
+            }
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed("unexpected op result: "
+                            + r.getClass().getSimpleName());
+        }
+        return moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+    }
+
+    /**
      * M16 P6.6：会话级 IP 绑定判定。
      * <ul>
      *   <li>session 不存在 → {@link IpBindResult#NO_SESSION}（调用方应已 closeAuthFailed，

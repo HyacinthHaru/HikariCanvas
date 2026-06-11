@@ -64,6 +64,14 @@ public final class ElementPropertyApplier {
      */
     public interface SessionPatchApplier {
         SessionOutcome apply(String wallId, String elementId, Map<String, Object> patch);
+
+        /**
+         * 0.7.1 nudge 原子：session 锁内读当前 x/y + delta 写回。无 session 返 noSession。
+         * default = noSession（旧 fake / 调用方自动走 headless 读改写）。
+         */
+        default SessionOutcome nudge(String wallId, String elementId, int dx, int dy) {
+            return SessionOutcome.noSession();
+        }
     }
 
     private final @Nullable SessionPatchApplier sessionApplier;
@@ -93,7 +101,39 @@ public final class ElementPropertyApplier {
         } catch (IllegalArgumentException e) {
             return TraceStep.error(blockId, e.getMessage());
         }
+        return applyPatch(wallId, blockId, elementId, patch, property);
+    }
 
+    /**
+     * 0.7.1：批量设属性（friendly 积木）。{@code rawPatch} 每个 (key,val) 过
+     * {@link #buildPatch} 合并成一个 element.update patch，一次落地（同 session/headless
+     * 双路径，同 {@link #apply}）。任一键非法 → error step（链不断）。
+     */
+    public TraceStep applyMany(String wallId, String blockId, String elementId,
+                               Map<String, String> rawPatch) {
+        if (elementId == null || elementId.isEmpty()) {
+            return TraceStep.error(blockId, "elementId 缺失");
+        }
+        if (rawPatch == null || rawPatch.isEmpty()) {
+            return TraceStep.error(blockId, "patch 为空");
+        }
+        Map<String, Object> merged = new java.util.LinkedHashMap<>();
+        try {
+            for (Map.Entry<String, String> e : rawPatch.entrySet()) {
+                merged.putAll(buildPatch(e.getKey(), e.getValue()));
+            }
+        } catch (IllegalArgumentException ex) {
+            return TraceStep.error(blockId, ex.getMessage());
+        }
+        return applyPatch(wallId, blockId, elementId, merged, "patch" + merged.keySet());
+    }
+
+    /**
+     * patch 落地核心（单属性 / 批量共用）：路径 A 活跃 session 标准链 → 否则 headless。
+     * {@code desc} 仅进 trace 文案。
+     */
+    private TraceStep applyPatch(String wallId, String blockId, String elementId,
+                                 Map<String, Object> patch, String desc) {
         // 路径 A：活跃 session 标准链
         if (sessionApplier != null) {
             SessionOutcome outcome;
@@ -108,7 +148,7 @@ public final class ElementPropertyApplier {
                 switch (outcome.status()) {
                     case APPLIED -> {
                         return TraceStep.ok(blockId, "action",
-                                property + " → session(element.update)");
+                                desc + " → session(element.update)");
                     }
                     case FAILED -> {
                         return TraceStep.error(blockId, String.valueOf(outcome.detail()));
@@ -117,7 +157,72 @@ public final class ElementPropertyApplier {
                 }
             }
         }
-        return applyHeadless(wallId, blockId, elementId, property, patch);
+        return applyHeadless(wallId, blockId, elementId, desc, patch);
+    }
+
+    /**
+     * 0.7.1：相对移动。dx/dy round 成 int 增量。session 路径锁内原子读改写；
+     * headless 路径读 DB state 当前 x/y + 增量（已知低危竞态同 {@link #applyHeadless} 注释）。
+     */
+    public TraceStep applyNudge(String wallId, String blockId, String elementId,
+                                double dx, double dy) {
+        if (elementId == null || elementId.isEmpty()) {
+            return TraceStep.error(blockId, "elementId 缺失");
+        }
+        if (!Double.isFinite(dx) || !Double.isFinite(dy)) {
+            return TraceStep.error(blockId, "dx/dy 必须有限");
+        }
+        int idx = (int) Math.round(dx);
+        int idy = (int) Math.round(dy);
+        // 路径 A：session 原子 nudge
+        if (sessionApplier != null) {
+            SessionOutcome outcome;
+            try {
+                outcome = sessionApplier.nudge(wallId, elementId, idx, idy);
+            } catch (RuntimeException e) {
+                log.log(Level.WARNING, "[脚本] session nudge 异常: wall=" + wallId
+                        + " element=" + elementId + " err=" + e.getMessage(), e);
+                outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
+            }
+            if (outcome != null) {
+                switch (outcome.status()) {
+                    case APPLIED -> {
+                        return TraceStep.ok(blockId, "action",
+                                "nudge → session(+" + idx + "," + idy + ")");
+                    }
+                    case FAILED -> {
+                        return TraceStep.error(blockId, String.valueOf(outcome.detail()));
+                    }
+                    case NO_SESSION -> { /* fall through headless */ }
+                }
+            }
+        }
+        // 路径 B：headless 读 state 当前 x/y + 增量
+        if (wallRepo == null) {
+            return TraceStep.error(blockId, "headless 路径不可用（WallRepo 未装配）");
+        }
+        WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
+        if (wall == null || wall.state() == null) {
+            return TraceStep.error(blockId, "wall 不存在或无 state: " + wallId);
+        }
+        Integer curX = null;
+        Integer curY = null;
+        for (var layer : wall.state().layers()) {
+            for (var el : layer.elements()) {
+                if (el.id().equals(elementId)) {
+                    curX = el.x();
+                    curY = el.y();
+                }
+            }
+        }
+        if (curX == null) {
+            return TraceStep.error(blockId, "元素不存在: " + elementId);
+        }
+        // 升 long 相加防 int 回绕（idx 可接近 Integer.MAX_VALUE），与 session 路径
+        // SessionManager.applyScriptElementNudge 的 (long) 升级对齐；下游 clampInt 收窄
+        return applyMany(wallId, blockId, elementId,
+                Map.of("x", String.valueOf((long) curX + idx),
+                        "y", String.valueOf((long) curY + idy)));
     }
 
     /**

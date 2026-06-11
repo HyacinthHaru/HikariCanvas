@@ -229,4 +229,175 @@ class ScriptRuleValidatorTest {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.RunCommand("announce", Map.of("msg", "x".repeat(257)))))).isPresent());
     }
+
+    // ---------- 0.7.1：6 个新 Action 子类校验 ----------
+
+    @Test
+    void set_element_properties_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1",
+                        Map.of("x", "128", "y", "64"), "moveTo")))));
+    }
+
+    @Test
+    void set_element_properties_empty_patch_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1", Map.of(), "show")))).isPresent());
+    }
+
+    @Test
+    void set_element_properties_blank_element_id_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties(" ", Map.of("x", "1"), "moveTo")))).isPresent());
+    }
+
+    @Test
+    void set_element_properties_non_whitelisted_key_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1",
+                        Map.of("fontSize", "12"), "moveTo")))).isPresent());
+    }
+
+    @Test
+    void set_element_properties_too_many_keys_rejected() {
+        Map<String, String> tooMany = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < 9; i++) tooMany.put("k" + i, "1"); // 9 > PATCH_MAX_KEYS(8)
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1", tooMany, "moveTo")))).isPresent());
+    }
+
+    @Test
+    void set_element_properties_blank_value_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1",
+                        Map.of("x", " "), "moveTo")))).isPresent());
+    }
+
+    @Test
+    void set_element_properties_blank_text_value_ok() {
+        // text 空串是合法内容（setText 友好积木 defaultPatch={text:''}）；其余键空仍拒（见上一用例）
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1",
+                        Map.of("text", ""), "setText")))));
+    }
+
+    @Test
+    void set_element_properties_kind_too_long_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1",
+                        Map.of("x", "1"), "k".repeat(33))))).isPresent());
+    }
+
+    @Test
+    void nudge_element_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.NudgeElement("e-1", 5.0, -3.0)))));
+    }
+
+    @Test
+    void nudge_element_blank_id_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.NudgeElement("", 1.0, 1.0)))).isPresent());
+    }
+
+    @Test
+    void nudge_element_nan_delta_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.NudgeElement("e-1", Double.NaN, 1.0)))).isPresent());
+    }
+
+    @Test
+    void send_message_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage("hi", "chat")))));
+        // 空串合法
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage("", "actionbar")))));
+    }
+
+    @Test
+    void send_message_null_text_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage(null, "chat")))).isPresent());
+    }
+
+    @Test
+    void send_message_too_long_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage("x".repeat(257), "chat")))).isPresent());
+    }
+
+    @Test
+    void send_message_bad_channel_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage("hi", "hologram")))).isPresent());
+    }
+
+    @Test
+    void set_random_variable_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetRandomVariable("user/roll", 1.0, 6.0)))));
+    }
+
+    @Test
+    void set_random_variable_blank_name_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetRandomVariable(" ", 1.0, 6.0)))).isPresent());
+    }
+
+    @Test
+    void set_random_variable_min_gt_max_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetRandomVariable("user/roll", 6.0, 1.0)))).isPresent());
+    }
+
+    @Test
+    void set_random_variable_nan_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetRandomVariable("user/roll", Double.NaN, 6.0)))).isPresent());
+    }
+
+    @Test
+    void scale_variable_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.ScaleVariable("user/score", "multiply", 2.0)))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.ScaleVariable("user/score", "divide", 2.0)))));
+    }
+
+    @Test
+    void scale_variable_blank_name_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.ScaleVariable("", "multiply", 2.0)))).isPresent());
+    }
+
+    @Test
+    void scale_variable_bad_op_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.ScaleVariable("user/score", "modulo", 2.0)))).isPresent());
+    }
+
+    @Test
+    void scale_variable_nan_factor_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.ScaleVariable("user/score", "multiply", Double.NaN)))).isPresent());
+    }
+
+    @Test
+    void scale_variable_divide_by_zero_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.ScaleVariable("user/score", "divide", 0.0)))).isPresent());
+    }
+
+    @Test
+    void play_timeline_await_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.PlayTimelineAwait("tl-1")))));
+    }
+
+    @Test
+    void play_timeline_await_blank_id_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.PlayTimelineAwait(" ")))).isPresent());
+    }
 }

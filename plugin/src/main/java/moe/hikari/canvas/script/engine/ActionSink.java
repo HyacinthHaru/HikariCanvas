@@ -21,4 +21,12 @@ public interface ActionSink {
      * @return 本步轨迹；不得返回 null
      */
     TraceStep execute(String wallId, String blockId, Action action);
+
+    /**
+     * 0.7.1 playTimelineAwait：返回时间轴一轮时长（ms），&gt;0 时 Runner 挂起续接。
+     * 查无 / 不支持 → 0（不挂起）。default 0 让既有 fake 不破。
+     */
+    default long timelineDurationMs(String wallId, String timelineId) {
+        return 0L;
+    }
 }

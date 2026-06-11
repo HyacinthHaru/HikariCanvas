@@ -19,7 +19,9 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 public sealed interface Action permits
         Action.SetVariable, Action.IncrementVariable, Action.SetElementProperty,
         Action.PlayTimeline, Action.PlaySound, Action.Wait,
-        Action.RunCommand, Action.Log, Action.If {
+        Action.RunCommand, Action.Log, Action.If,
+        Action.SetElementProperties, Action.NudgeElement, Action.SendMessage,
+        Action.SetRandomVariable, Action.ScaleVariable, Action.PlayTimelineAwait {
 
     /** wire 判别字段 {@code type} 的取值（camelCase）。 */
     String wireType();
@@ -73,5 +75,40 @@ public sealed interface Action permits
             then = then == null ? java.util.List.of() : java.util.List.copyOf(then);
             elseActions = elseActions == null ? java.util.List.of() : java.util.List.copyOf(elseActions);
         }
+    }
+
+    /** 0.7.1：批量设元素属性（友好积木的序列化目标）。patch 键 = 属性名（白名单），
+     * 值 = 字符串值；kind = 前端皮肤标记（moveTo/resize/...），后端执行忽略，仅透传存储。 */
+    record SetElementProperties(String elementId, java.util.Map<String, String> patch,
+                                String kind) implements Action {
+        @Override public String wireType() { return "setElementProperties"; }
+        public SetElementProperties {
+            patch = patch == null ? java.util.Map.of() : java.util.Map.copyOf(patch);
+        }
+    }
+
+    /** 0.7.1：相对移动元素（运行时读当前 x/y + 增量）。 */
+    record NudgeElement(String elementId, double dx, double dy) implements Action {
+        @Override public String wireType() { return "nudgeElement"; }
+    }
+
+    /** 0.7.1：给触发该脚本的玩家发消息。channel = chat|actionbar|title。 */
+    record SendMessage(String text, String channel) implements Action {
+        @Override public String wireType() { return "sendMessage"; }
+    }
+
+    /** 0.7.1：设随机数变量（min..max 闭区间均匀采样，输出整数若两端皆整）。 */
+    record SetRandomVariable(String fullName, double min, double max) implements Action {
+        @Override public String wireType() { return "setRandomVariable"; }
+    }
+
+    /** 0.7.1：变量乘 / 除（读当前值 × / ÷ factor）。op = multiply|divide。 */
+    record ScaleVariable(String fullName, String op, double factor) implements Action {
+        @Override public String wireType() { return "scaleVariable"; }
+    }
+
+    /** 0.7.1：播放时间轴并等播完（等一轮 durationMs，由 Runner 挂起续接）。 */
+    record PlayTimelineAwait(String timelineId) implements Action {
+        @Override public String wireType() { return "playTimelineAwait"; }
     }
 }

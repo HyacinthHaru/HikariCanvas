@@ -76,6 +76,18 @@ public final class ScriptRunner {
     }
 
     /**
+     * 0.7.1：当前 run 的触发玩家名（{@link TriggerContext#detail()}，仅 player* 触发器有值）。
+     * 与 {@link #RULE_KEY} 同生命周期（runFrames 置位 / finally 清）。
+     * {@code ActionExecutor.doSendMessage} 读它拿触发玩家——ActionSink 接口不为此扩参。
+     */
+    static final ThreadLocal<String> TRIGGER_DETAIL = new ThreadLocal<>();
+
+    /** 包级读取入口：当前线程触发玩家名；无 run 上下文返 null。 */
+    static @Nullable String currentTriggerDetail() {
+        return TRIGGER_DETAIL.get();
+    }
+
+    /**
      * 调度 seam：生产 = 单线程 SES；测试注同步直跑替身（wait 续接 / 计数延续可同步验证）。
      */
     interface TaskScheduler {
@@ -215,6 +227,7 @@ public final class ScriptRunner {
     private void runFrames(RunState st, Deque<Frame> stack) {
         CHAIN_DEPTH.set(st.ctx.chainDepth());
         RULE_KEY.set(ruleKey(st.wallId, st.rule));
+        TRIGGER_DETAIL.set(st.ctx.detail());   // 0.7.1：触发玩家名（player* 触发器有值）→ sendMessage
         try {
             outer:
             while (!stack.isEmpty()) {
@@ -259,6 +272,37 @@ public final class ScriptRunner {
                         }
                         return;
                     }
+                    if (a instanceof Action.PlayTimelineAwait pta) {
+                        // 先 play（副作用走 sink），再据 durationMs 决定是否挂起续接（复用 wait 范式）。
+                        // play 失败 / 查无 timeline（dur==0）→ 不挂起，紧接下一动作。
+                        TraceStep step;
+                        try {
+                            step = sink.execute(st.wallId, blockId, pta);
+                        } catch (RuntimeException e) {
+                            log.log(Level.WARNING, "[脚本] playTimelineAwait 执行异常（链继续）: rule="
+                                    + ruleKey(st.wallId, st.rule) + " block=" + blockId
+                                    + " err=" + e.getMessage(), e);
+                            step = TraceStep.error(blockId, String.valueOf(e.getMessage()));
+                        }
+                        if (step == null) step = TraceStep.error(blockId, "ActionSink 返回 null step");
+                        st.trace.add(step);
+                        long dur = "ok".equals(step.result())
+                                ? sink.timelineDurationMs(st.wallId, pta.timelineId()) : 0L;
+                        if (dur > 0) {
+                            stack.push(new Frame(acts, i + 1, f.prefix()));
+                            Deque<Frame> cont = new ArrayDeque<>(stack);
+                            if (!shutdown) {
+                                try {
+                                    scheduler.schedule(() -> runFrames(st, cont), dur);
+                                } catch (RejectedExecutionException e) {
+                                    // shutdown 竞态：续接丢弃
+                                }
+                            }
+                            return;
+                        }
+                        i++; // 不挂起：继续下一动作
+                        continue;
+                    }
                     // 普通动作 → ActionSink（实现侧三层隔离；此处兜底防御）
                     TraceStep step;
                     try {
@@ -286,6 +330,7 @@ public final class ScriptRunner {
         } finally {
             CHAIN_DEPTH.remove();
             RULE_KEY.remove();
+            TRIGGER_DETAIL.remove();
         }
     }
 

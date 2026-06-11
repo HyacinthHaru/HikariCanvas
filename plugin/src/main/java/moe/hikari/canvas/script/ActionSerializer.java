@@ -64,6 +64,37 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 writeActions(gen, provider, "then", a.then());
                 writeActions(gen, provider, "else", a.elseActions());
             }
+            // 0.7.1：6 个新 Action 子类
+            case Action.SetElementProperties a -> {
+                gen.writeStringField("elementId", a.elementId());
+                gen.writeObjectFieldStart("patch");
+                for (Map.Entry<String, String> e : a.patch().entrySet()) {
+                    gen.writeStringField(e.getKey(), e.getValue());
+                }
+                gen.writeEndObject();
+                // kind 为 null 写成 ""（deserializer 读回 null；round-trip 语义见 ActionWireTest）
+                gen.writeStringField("kind", a.kind() == null ? "" : a.kind());
+            }
+            case Action.NudgeElement a -> {
+                gen.writeStringField("elementId", a.elementId());
+                gen.writeNumberField("dx", a.dx());
+                gen.writeNumberField("dy", a.dy());
+            }
+            case Action.SendMessage a -> {
+                gen.writeStringField("text", a.text());
+                gen.writeStringField("channel", a.channel());
+            }
+            case Action.SetRandomVariable a -> {
+                gen.writeStringField("fullName", a.fullName());
+                gen.writeNumberField("min", a.min());
+                gen.writeNumberField("max", a.max());
+            }
+            case Action.ScaleVariable a -> {
+                gen.writeStringField("fullName", a.fullName());
+                gen.writeStringField("op", a.op());
+                gen.writeNumberField("factor", a.factor());
+            }
+            case Action.PlayTimelineAwait a -> gen.writeStringField("timelineId", a.timelineId());
         }
         gen.writeEndObject();
     }

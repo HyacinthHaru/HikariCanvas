@@ -68,6 +68,13 @@ class ActionExecutorTest {
         return new ActionExecutor(null, null, null, null, null, log);
     }
 
+    /** 0.7.1：注入确定性随机源（setRandomVariable 测试用）。 */
+    private ActionExecutor executorWithRng(java.util.random.RandomGenerator rng) {
+        ActionExecutor ex = new ActionExecutor(store, ticker, null, null, null, log);
+        ex.setRngForTest(rng);
+        return ex;
+    }
+
     private String valueOf(String fullName) {
         return store.get(fullName).orElseThrow().currentValue();
     }
@@ -325,6 +332,222 @@ class ActionExecutorTest {
         assertEquals("ok", step.result());
         assertTrue(logRecords.stream().anyMatch(r ->
                 r.getMessage().equals("[脚本 w-1] raw ${var:user/n}")));
+    }
+
+    // ---------- 0.7.1：setElementProperties / nudge（委托 applier） ----------
+
+    @Test
+    void setElementProperties_delegatesToApplyMany() {
+        // 真 ElementPropertyApplier + 记录型 SessionPatchApplier（applyMany 经路径 A 走 apply(patch)）
+        List<Map<String, Object>> seenPatch = new ArrayList<>();
+        ElementPropertyApplier applier = new ElementPropertyApplier((w, e, p) -> {
+            seenPatch.add(p);
+            return ElementPropertyApplier.SessionOutcome.applied();
+        }, null, null, log);
+        ActionExecutor ex = new ActionExecutor(store, ticker, applier, null, null, log);
+        TraceStep step = ex.execute(WALL, "b", new Action.SetElementProperties(
+                "e-1", Map.of("x", "128", "y", "64"), "moveTo"));
+        assertEquals("ok", step.result());
+        assertEquals(1, seenPatch.size());
+        assertEquals(128, seenPatch.get(0).get("x"), "kind 透传忽略，patch 合并 x/y");
+        assertEquals(64, seenPatch.get(0).get("y"));
+    }
+
+    @Test
+    void setElementProperties_withoutApplier_errorStep() {
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.SetElementProperties("e-1", Map.of("x", "1"), "moveTo"));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void nudge_delegatesToApplyNudge() {
+        // 真 ElementPropertyApplier + 记录型 nudge seam（applyNudge 经路径 A 走 nudge(dx,dy)）
+        List<int[]> seen = new ArrayList<>();
+        ElementPropertyApplier applier = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        return ElementPropertyApplier.SessionOutcome.noSession();
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome nudge(
+                            String w, String e, int dx, int dy) {
+                        seen.add(new int[]{dx, dy});
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, null, null, log);
+        ActionExecutor ex = new ActionExecutor(store, ticker, applier, null, null, log);
+        TraceStep step = ex.execute(WALL, "b", new Action.NudgeElement("e-1", 5.0, -3.0));
+        assertEquals("ok", step.result());
+        assertEquals(1, seen.size());
+        assertEquals(5, seen.get(0)[0], "dx 透传 round");
+        assertEquals(-3, seen.get(0)[1], "dy 透传 round");
+    }
+
+    @Test
+    void nudge_withoutApplier_errorStep() {
+        TraceStep step = executor().execute(WALL, "b", new Action.NudgeElement("e-1", 1, 1));
+        assertEquals("error", step.result());
+    }
+
+    // ---------- 0.7.1：sendMessage ----------
+
+    @Test
+    void sendMessage_noTriggerPlayer_okSkip() {
+        ScriptRunner.TRIGGER_DETAIL.remove(); // 无触发玩家
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.SendMessage("hi", "chat"));
+        assertEquals("ok", step.result());
+        assertTrue(step.detail().contains("无触发玩家"), step.detail());
+    }
+
+    @Test
+    void sendMessage_badChannel_errorStep() {
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.SendMessage("hi", "hologram"));
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("channel"), step.detail());
+    }
+
+    @Test
+    void sendMessage_withTriggerPlayer_okStep_dispatchContained() {
+        // 触发玩家有值，plugin=null 直跑：Bukkit.getPlayerExact 无 server 抛 → work 内自吞（三层隔离）
+        ScriptRunner.TRIGGER_DETAIL.set("Alice");
+        try {
+            TraceStep step = executor().execute(WALL, "b",
+                    new Action.SendMessage("hi", "chat"));
+            assertEquals("ok", step.result());
+            assertTrue(step.detail().contains("Alice"), step.detail());
+        } finally {
+            ScriptRunner.TRIGGER_DETAIL.remove();
+        }
+    }
+
+    // ---------- 0.7.1：setRandomVariable ----------
+
+    @Test
+    void setRandomVariable_seeded_deterministic() {
+        store.create("user:w-1", "roll", VarType.NUMBER, "0", "manual");
+        ActionExecutor ex = executorWithRng(new java.util.Random(42));
+        TraceStep step = ex.execute(WALL, "b",
+                new Action.SetRandomVariable("user/roll", 1.0, 1.0));
+        assertEquals("ok", step.result());
+        assertEquals("1", valueOf("user:w-1/roll"), "min==max==1 → 恒 1（整数 roll 含 max）");
+    }
+
+    @Test
+    void setRandomVariable_integerRange_inBounds() {
+        store.create("user:w-1", "roll", VarType.NUMBER, "0", "manual");
+        ActionExecutor ex = executorWithRng(new java.util.Random(7));
+        for (int i = 0; i < 50; i++) {
+            ex.execute(WALL, "b", new Action.SetRandomVariable("user/roll", 0.0, 10.0));
+            int v = Integer.parseInt(valueOf("user:w-1/roll"));
+            assertTrue(v >= 0 && v <= 10, "结果在 [0,10]: " + v);
+        }
+    }
+
+    @Test
+    void setRandomVariable_minGreaterThanMax_errorStep() {
+        store.create("user:w-1", "roll", VarType.NUMBER, "0", "manual");
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.SetRandomVariable("user/roll", 6.0, 1.0));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void setRandomVariable_storeMissing_errorStep() {
+        TraceStep step = bare().execute(WALL, "b",
+                new Action.SetRandomVariable("user/x", 1.0, 2.0));
+        assertEquals("error", step.result());
+    }
+
+    // ---------- 0.7.1：scaleVariable ----------
+
+    @Test
+    void scaleVariable_multiply() {
+        store.create("user:w-1", "score", VarType.NUMBER, "10", "manual");
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.ScaleVariable("user/score", "multiply", 2.0));
+        assertEquals("ok", step.result());
+        assertEquals("20", valueOf("user:w-1/score"));
+    }
+
+    @Test
+    void scaleVariable_divide() {
+        store.create("user:w-1", "score", VarType.NUMBER, "10", "manual");
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.ScaleVariable("user/score", "divide", 2.0));
+        assertEquals("ok", step.result());
+        assertEquals("5", valueOf("user:w-1/score"));
+    }
+
+    @Test
+    void scaleVariable_divideByZero_errorStep() {
+        store.create("user:w-1", "score", VarType.NUMBER, "10", "manual");
+        store.setValue("user:w-1/score", "10", null); // 写 currentValue（create 仅设 default）
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.ScaleVariable("user/score", "divide", 0.0));
+        assertEquals("error", step.result());
+        assertEquals("10", valueOf("user:w-1/score"), "除零拒绝，值不变");
+    }
+
+    @Test
+    void scaleVariable_nonNumericCurrent_treatedAsZero() {
+        store.create("user:w-1", "label", VarType.STRING, "abc", "manual");
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.ScaleVariable("user/label", "multiply", 5.0));
+        assertEquals("ok", step.result());
+        assertEquals("0", valueOf("user:w-1/label"), "非数值按 0 → 0*5=0（StrictNumber 链）");
+    }
+
+    @Test
+    void scaleVariable_badOp_errorStep() {
+        store.create("user:w-1", "score", VarType.NUMBER, "10", "manual");
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.ScaleVariable("user/score", "modulo", 2.0));
+        assertEquals("error", step.result());
+    }
+
+    // ---------- 0.7.1：playTimelineAwait（execute 做 play；挂起由 Runner） ----------
+
+    @Test
+    void playTimelineAwait_play_ok() {
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.PlayTimelineAwait("tl-1"));
+        assertEquals("ok", step.result());
+        assertEquals(List.of("w-1:tl-1"), ticker.plays);
+    }
+
+    @Test
+    void playTimelineAwait_playFailure_errorStep() {
+        ticker.playResult = AnimationTicker.Result.TIMELINE_NOT_FOUND;
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.PlayTimelineAwait("tl-x"));
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("TIMELINE_NOT_FOUND"), step.detail());
+    }
+
+    @Test
+    void playTimelineAwait_blankId_errorStep() {
+        TraceStep step = executor().execute(WALL, "b", new Action.PlayTimelineAwait("  "));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void playTimelineAwait_tickerMissing_errorStep() {
+        TraceStep step = bare().execute(WALL, "b", new Action.PlayTimelineAwait("tl-1"));
+        assertEquals("error", step.result());
+    }
+
+    // ---------- 0.7.1：timelineDurationMs ----------
+
+    @Test
+    void timelineDurationMs_noWallRepo_returnsZero() {
+        assertEquals(0L, executor().timelineDurationMs(WALL, "tl-1"),
+                "wallRepo 缺 → 0（Runner 据此不挂起）");
     }
 
     // ---------- 防御 + 三层隔离 ----------

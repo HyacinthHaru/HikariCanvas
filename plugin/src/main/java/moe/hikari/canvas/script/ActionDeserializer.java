@@ -74,6 +74,28 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireText(ctxt, node, "condition", type),
                     readBranch(ctxt, node, "then", type),
                     readBranch(ctxt, node, "else", type));
+            // 0.7.1：6 个新 Action 子类
+            case "setElementProperties" -> new Action.SetElementProperties(
+                    requireText(ctxt, node, "elementId", type),
+                    readStringMap(ctxt, node, "patch", type),
+                    optionalText(node, "kind"));   // kind 可空 → optionalText 返 null（record 透传）
+            case "nudgeElement" -> new Action.NudgeElement(
+                    requireText(ctxt, node, "elementId", type),
+                    requireDouble(ctxt, node, "dx", type),
+                    requireDouble(ctxt, node, "dy", type));
+            case "sendMessage" -> new Action.SendMessage(
+                    requireText(ctxt, node, "text", type),
+                    requireText(ctxt, node, "channel", type));
+            case "setRandomVariable" -> new Action.SetRandomVariable(
+                    requireText(ctxt, node, "fullName", type),
+                    requireDouble(ctxt, node, "min", type),
+                    requireDouble(ctxt, node, "max", type));
+            case "scaleVariable" -> new Action.ScaleVariable(
+                    requireText(ctxt, node, "fullName", type),
+                    requireText(ctxt, node, "op", type),
+                    requireDouble(ctxt, node, "factor", type));
+            case "playTimelineAwait" -> new Action.PlayTimelineAwait(
+                    requireText(ctxt, node, "timelineId", type));
             default -> ctxt.reportInputMismatch(Action.class,
                     "unknown action type: " + type);
         };
@@ -130,6 +152,40 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     "action '" + type + "' field '" + field + "' must be an integer");
         }
         return v.asLong();
+    }
+
+    /** 可选文本字段；缺失 / null / 非文本 → null（0.7.1 setElementProperties.kind 用）。 */
+    private static String optionalText(JsonNode node, String field) {
+        JsonNode v = node.get(field);
+        return (v == null || !v.isTextual()) ? null : v.asText();
+    }
+
+    /**
+     * 0.7.1：通用 string map object → {@code Map<String,String>}（缺失当空 map；
+     * 值必须全是 string）。范式同 {@link #readParams}，参数化字段名供 setElementProperties.patch 用。
+     */
+    private static Map<String, String> readStringMap(DeserializationContext ctxt, JsonNode node,
+                                                     String field, String type) throws IOException {
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return Map.of();
+        }
+        if (!v.isObject()) {
+            return ctxt.reportInputMismatch(Action.class,
+                    "action '" + type + "' field '" + field + "' must be an object");
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        var it = v.fields();
+        while (it.hasNext()) {
+            var e = it.next();
+            if (!e.getValue().isTextual()) {
+                return ctxt.reportInputMismatch(Action.class,
+                        "action '" + type + "' field '" + field + "' value '"
+                                + e.getKey() + "' must be string");
+            }
+            out.put(e.getKey(), e.getValue().asText());
+        }
+        return out;
     }
 
     /** runCommand 的 params object → Map（缺失当空 map；值必须全是 string）。 */

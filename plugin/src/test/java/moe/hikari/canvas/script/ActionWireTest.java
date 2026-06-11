@@ -79,6 +79,58 @@ class ActionWireTest {
                 () -> mapper.readValue("{\"type\":\"setVariable\",\"fullName\":\"x\"}", Action.class));
     }
 
+    // ---------- 0.7.1：6 个新 Action 子类 round-trip ----------
+
+    @Test void setElementProperties_roundTrip() throws Exception {
+        Action a = new Action.SetElementProperties(
+                "e-1", Map.of("x", "128", "y", "64"), "moveTo");
+        String json = mapper.writeValueAsString(a);
+        Action back = mapper.readValue(json, Action.class);
+        assertEquals(a, back);
+        assertTrue(json.contains("\"type\":\"setElementProperties\""), json);
+    }
+
+    /** kind=null 序列化成 ""，反序列化读回 ""（null→"" 单向折叠；kind 仅前端皮肤标记，无语义损失）。 */
+    @Test void setElementProperties_nullKind_serializesEmptyReadsEmpty() throws Exception {
+        Action a = new Action.SetElementProperties("e-1", Map.of("opacity", "0.5"), null);
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"kind\":\"\""), json);
+        Action back = mapper.readValue(json, Action.class);
+        assertEquals(new Action.SetElementProperties("e-1", Map.of("opacity", "0.5"), ""), back);
+    }
+
+    @Test void nudgeElement_roundTrip() throws Exception {
+        Action a = new Action.NudgeElement("e-1", 5.0, -3.0);
+        assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
+    }
+
+    @Test void sendMessage_roundTrip() throws Exception {
+        Action a = new Action.SendMessage("hi ${var:user/name}", "actionbar");
+        assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
+    }
+
+    @Test void setRandomVariable_roundTrip() throws Exception {
+        Action a = new Action.SetRandomVariable("user/roll", 1.0, 6.0);
+        assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
+    }
+
+    @Test void scaleVariable_roundTrip() throws Exception {
+        Action a = new Action.ScaleVariable("user/score", "multiply", 2.0);
+        assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
+    }
+
+    @Test void playTimelineAwait_roundTrip() throws Exception {
+        Action a = new Action.PlayTimelineAwait("t-1");
+        assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
+    }
+
+    /** setElementProperties 缺 elementId → 拒。 */
+    @Test void setElementProperties_missingElementId_rejected() {
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue(
+                        "{\"type\":\"setElementProperties\",\"patch\":{\"x\":\"1\"}}", Action.class));
+    }
+
     /** 0.7.0-P2-1(K8)：wait.ms 非整数值（100.5）→ 拒，不静默截断。 */
     @Test void waitFractionalMsRejected() {
         assertThrows(Exception.class, () -> mapper.readValue(

@@ -58,6 +58,13 @@ public final class ScriptPermissions {
                 case Action.PlayTimeline ignored -> { }
                 case Action.Wait ignored -> { }
                 case Action.Log ignored -> { }
+                // 0.7.1：6 个新 Action 子类，均无附加权限面（仍走基础 canvas.script.edit）
+                case Action.SetElementProperties ignored -> { }
+                case Action.NudgeElement ignored -> { }
+                case Action.SendMessage ignored -> { }
+                case Action.SetRandomVariable ignored -> { }
+                case Action.ScaleVariable ignored -> { }
+                case Action.PlayTimelineAwait ignored -> { }
             }
         }
     }

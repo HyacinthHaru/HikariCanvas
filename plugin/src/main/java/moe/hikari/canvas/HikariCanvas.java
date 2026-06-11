@@ -732,8 +732,24 @@ public final class HikariCanvas extends JavaPlugin {
                 moe.hikari.canvas.script.engine.TickerControl.of(ticker);
         moe.hikari.canvas.script.engine.ElementPropertyApplier propertyApplier =
                 new moe.hikari.canvas.script.engine.ElementPropertyApplier(
-                        (wid, eid, patch) -> smForScript.applyScriptElementPatch(
-                                wid, eid, patch, varPushCallback, throttlerForScript),
+                        new moe.hikari.canvas.script.engine
+                                .ElementPropertyApplier.SessionPatchApplier() {
+                            @Override
+                            public moe.hikari.canvas.script.engine
+                                    .ElementPropertyApplier.SessionOutcome apply(
+                                    String wid, String eid, java.util.Map<String, Object> patch) {
+                                return smForScript.applyScriptElementPatch(
+                                        wid, eid, patch, varPushCallback, throttlerForScript);
+                            }
+
+                            @Override
+                            public moe.hikari.canvas.script.engine
+                                    .ElementPropertyApplier.SessionOutcome nudge(
+                                    String wid, String eid, int dx, int dy) {
+                                return smForScript.applyScriptElementNudge(
+                                        wid, eid, dx, dy, varPushCallback, throttlerForScript);
+                            }
+                        },
                         wallRepo, tickerControl, getLogger());
         // 0.7.0-P3 A1：命令模板表惰性读 volatile config 引用——/canvas reload 后下一次
         // runCommand 即用新模板，无需重新接线。在线玩家名供 online-player 参数校验
