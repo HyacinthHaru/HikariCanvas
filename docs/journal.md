@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-11 · 0.7.1-P1 启动：E6 决策回填 + 实施计划（友好积木走「批量设属性 action」）
+
+写 P1 实施计划前，3 路 Explore 摸清 0.7.0 脚本系统代码形态，暴露一个 brainstorming 没下探到的
+架构张力：友好积木「移到 (x,y)」「改大小 (w,h)」要一次设 2 个属性，但 0.7.0 的 setElementProperty
+一条只设 1 个属性，且试跑高亮 / undo / P4 幽灵拖动全靠「1 积木=1 条 action」blockId 同构。
+
+**用户拍板路线乙（回填 E6）**：新增后端复合 action `setElementProperties(elementId, patch, kind)`，
+7 个友好积木全序列化成它，1 积木=1 条 action 守同构（底层 updateElement 已支持批量 patch）；相对
+移动走 `nudgeElement`（运行时读当前值+增量）；显示/隐藏用 opacity 0/1。`kind` 是前端皮肤标记，
+后端执行忽略。E6 原「协议零改」细化为「P1 加 setElementProperties 1 个 action」。
+
+**P1 计划**：6 个新后端 Action（setElementProperties / nudgeElement / sendMessage /
+setRandomVariable / scaleVariable / playTimelineAwait）+ 友好积木前端适配层（BlockNode 按 kind 选
+皮肤 + palette 友好分组）。playTimelineAwait 经 ActionSink.timelineDurationMs + Runner 特判复用 wait
+续接挂起；发消息经 TRIGGER_DETAIL ThreadLocal 拿触发玩家。P1 不升协议（仍 v4），v5 升版留 P2。
+
+关联文件：`docs/scripting-0.7.1.md`（E6/§3/§4/§7 回填）/
+`docs/superpowers/plans/2026-06-11-0.7.1-P1-friendly-blocks-and-actions.md`（新）
+
+---
+
 ## 2026-06-11 · 0.7.1 立项：体验优化设计总纲 `docs/scripting-0.7.1.md`（brainstorming E1-E9）
 
 0.7.0 积木编辑器核心数据流实测通过后，用户提 0.7.1 体验优化方向（新积木/动作 + 画布预览框

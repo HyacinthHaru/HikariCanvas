@@ -20,7 +20,7 @@
 | **E3** | 深度3是否碰后端 | **纯前端**:幽灵拖动只是积木 x/y 字段的设值 UI，不改数据模型、不碰协议。积木"移到 xy"的 xy 仍是普通数字 | 降低复杂度——深度3是前端交互工程，后端零感知 |
 | **E4** | 元素绑定方式 | **下拉 + 预览点选**:积木"元素"字段既可下拉选 elementId(人类可读名)，也可在预览点选高亮，两者同步 | 兼顾键盘/可视两种习惯 |
 | **E5** | 多移动动作的虚影显示 | **只显当前选中积木的虚影**:点哪个移动积木，预览只显那一个的目标虚影；切积木切虚影 | 一条脚本多个"移到"时不乱；脚本有 if 分支，多目标连线语义不准 |
-| **E6** | 友好元素积木实现 | **绝对设值的 7 个纯前端糖**(移到/改大小/旋转/透明度/显示隐藏/改文字/改颜色)全映射现有 `setElementProperty`(协议零改)；**相对移动 (+dx,+dy)** 因需运行时读当前值，归 §4 后端动作(P1 定)；保留万能"改元素属性"积木 | 直观积木一次到位，纯设值零后端成本 |
+| **E6** | 友好元素积木实现 | **8 个友好积木**(移到/改大小/旋转/透明度/显示隐藏/改文字/改颜色/相对移动)。前 7 个绝对设值序列化成**新后端 action `setElementProperties`**(elementId + patch map + kind 皮肤标记；底层 updateElement 已支持批量 patch，1 积木=1 条 action 守 blockId 同构)；**相对移动 (+dx,+dy)** 走 `nudgeElement`（运行时读当前值 + 增量）。保留万能"改元素属性"积木(setElementProperty 单数) | 1 积木=1 action 守同构(P4 幽灵拖动/试跑高亮/undo 天然正确)；E6 原"协议零改"细化为"P1 加 setElementProperties 1 个 action"——P1 本就加发消息/nudge 等后端动作，顺势(2026-06-11 拍板) |
 | **E7** | 新动作/触发器协议 | **升 v4 → v5 干净切换**(前端 CLIENT_V=5)：新 Action/Trigger 子类扩了 wire 内容，照 0.6/0.7 先例 | 旧前端(理论不存在)遇新 type 不报错；一致性 |
 | **E8** | 循环积木 | **有界「重复 N 次」**:N ≤ 100 硬上限 + 走 Budget(动作数/链深计入)+ 熔断；循环体含 wait 走 0.7.0 调度续接不阻塞线程 | v1 砍循环防失控；有上限版可控，能做跑马灯/批量效果 |
 | **E9** | OnCommand 触发器 | **推迟 0.7.2**:动态注册命令 + 防冲突 + 权限的安全设计成本高，单独做 | 不拖慢 0.7.1 主线 |
@@ -85,22 +85,22 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 
 ---
 
-## 3. 友好元素积木(E6，前端糖)
+## 3. 友好元素积木(E6)
 
-新增 8 个积木，全部前端序列化为现有 `setElementProperty`(可能一个友好积木 = 多条 setElementProperty，如"移到 xy" = 设 x + 设 y)。**协议/后端零改**。
+新增 8 个友好积木。**前 7 个绝对设值** → 序列化成新后端 action `setElementProperties`(elementId + patch map + kind 皮肤标记)；**相对移动** → `nudgeElement`。一个友好积木 = 一条 action(守 0.7.0 blockId 同构；P4 幽灵拖动 / 试跑高亮 / undo 天然正确)。`kind` 让前端按友好皮肤渲染并消除 patch 推断歧义(后端执行忽略 kind)。万能「改元素属性」仍用 `setElementProperty`(单数)。
 
-| 友好积木 | 映射 | 字段 |
+| 友好积木 | 序列化 → action | 字段 |
 |---|---|---|
-| 移动元素到 (x, y) | setElementProperty ×2 (x, y) | elementId + x + y(幽灵拖) |
-| 移动元素 (+dx, +dy) | 读当前值 + 增量(运行时？见下) | elementId + dx + dy |
-| 改变元素大小 (w, h) | setElementProperty ×2 (w, h) | elementId + w + h |
-| 旋转元素到 N° | setElementProperty (rotation) | elementId + angle |
-| 设透明度 / 淡入 / 淡出 | setElementProperty (opacity) | elementId + opacity |
-| 显示 / 隐藏元素 | setElementProperty (opacity 0/1 或 visible) | elementId |
-| 改文字内容 | setElementProperty (text) | elementId + text(变量插值) |
-| 改颜色 / 填充 | setElementProperty (fill) | elementId + fill |
+| 移动元素到 (x, y) | setElementProperties patch{x,y} kind=moveTo | elementId + x + y(P4 幽灵拖) |
+| 移动元素 (+dx, +dy) | nudgeElement(运行时读当前 + 增量) | elementId + dx + dy |
+| 改变元素大小 (w, h) | setElementProperties patch{w,h} kind=resize | elementId + w + h |
+| 旋转元素到 N° | setElementProperties patch{rotation} kind=rotateTo | elementId + angle |
+| 设透明度 / 淡入 / 淡出 | setElementProperties patch{opacity} kind=setOpacity | elementId + opacity |
+| 显示 / 隐藏元素 | setElementProperties patch{opacity:1/0} kind=show/hide | elementId |
+| 改文字内容 | setElementProperties patch{text} kind=setText | elementId + text(变量插值) |
+| 改颜色 / 填充 | setElementProperties patch{fill} kind=setColor | elementId + fill(hex) |
 
-**未决(P1 实现时定)**:"移动 (+dx,+dy)"相对移动——setElementProperty 是绝对设值，相对移动需运行时读当前值 + 增量。两个选择:① 新增后端 Action `nudgeElement`(相对)②前端不做相对、只做绝对(移到 xy)。倾向 ① 但归入"新动作"(§4)而非纯前端糖。P1 拍板。
+**已定(P1，2026-06-11)**:做 ① —— 新增后端 Action `nudgeElement`(相对移动，运行时读当前值 + 增量)，归入"新动作"(§4)，不是纯前端糖。「显示/隐藏元素」用 opacity 0/1(零 schema 改)。
 
 ---
 
@@ -116,7 +116,8 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 | 重复 N 次 | count(≤100) + body: Action[] | 调度续接 | edit | E8，见 §5 |
 | 等待直到条件 | condition + timeoutMs | 调度轮询 | edit | 复用 ConditionEvaluator + 超时 |
 | 停止本脚本 | — | — | edit | 中止当前 run |
-| nudgeElement(相对移动，§3 未决) | elementId + dx + dy | EditSession op | edit | 运行时读当前 + 增量 |
+| nudgeElement(相对移动) | elementId + dx + dy | EditSession op(读当前+增量) | edit | §3 友好积木「相对移动」的后端 |
+| setElementProperties(友好积木批量设属性) | elementId + patch map + kind | EditSession op | edit | §3 前 7 个友好积木的序列化目标；1 积木=1 条守同构；kind 后端忽略 |
 
 §3 友好积木里"发消息""相对移动"等若需运行时逻辑，归这里(后端 Action)；纯属性设值的归 §3 前端糖。
 
@@ -142,7 +143,7 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 
 - 升 `Protocol.SUPPORTED_MIN/MAX = 5/5`，前端 `CLIENT_V = 5`，干净切换(4002 拒旧)。
 - 新 Action 子类(发消息/粒子/随机/乘除/播完等待/重复/等待直到/停止/nudge)+ 新 Trigger 子类(右键墙/离开区域/退服)加进 sealed 接口 + 双向 wire 多态 + validator + 前端 blockDefs + TS 类型镜像。
-- friendly 元素积木(§3 纯前端糖)**不升协议**(产出仍是 setElementProperty)——v5 升版只为 §4/§6 的新后端子类。
+- friendly 元素积木(§3)序列化成新 action `setElementProperties` / `nudgeElement`(§4)——属 v5 新后端子类；万能「改元素属性」仍用 `setElementProperty`(单数，v4 已有)。
 - `script.*` 5 op 形态不变，ready/patch 路径不变。
 
 ## 8. 分期(~150h)
@@ -159,8 +160,8 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 
 ## 9. 未决问题(实现时回填)
 
-- [ ] §3「移动 (+dx,+dy)」相对移动:新后端 nudge Action vs 不做(P1 定)
-- [ ] 显示/隐藏元素:用 opacity 0/1 还是给 Element 加 visible 字段(倾向 opacity，零 schema 改；P1 定)
+- [x] §3「移动 (+dx,+dy)」相对移动:**做后端 `nudgeElement` Action**(运行时读当前值 + 增量)(P1 已定 2026-06-11)
+- [x] 显示/隐藏元素:**用 opacity 0/1**，零 schema 改(P1 已定 2026-06-11)
 - [ ] 粒子动作权限面:复用 `canvas.script.sound` 还是新 `canvas.script.particle`(P5 定)
 - [ ] PreviewPane 预览渲染性能:每次 project 变化重渲整墙，元素多时是否需脏区(P3 实测定)
 - [ ] 幽灵拖动在折叠态/极小预览框时的最小可用尺寸(P4 实测定)
