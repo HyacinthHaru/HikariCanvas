@@ -165,4 +165,4 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 - [ ] 粒子动作权限面:复用 `canvas.script.sound` 还是新 `canvas.script.particle`(P5 定)
 - [ ] PreviewPane 预览渲染性能:每次 project 变化重渲整墙，元素多时是否需脏区(P3 实测定)
 - [ ] 幽灵拖动在折叠态/极小预览框时的最小可用尺寸(P4 实测定)
-- [ ] 重复 N 次撞 max-actions-per-run(50)的用户提示:前端 validator 是否预警"重复次数 × 体内动作 > 50 会被熔断"(P2 定)
+- [x] 重复 N 次撞 max-actions-per-run(50)的用户提示:**不做前端预估警告**——靠运行时 Budget 熔断(超 50 动作 → blocked + 试跑 trace 可见),符合"工具不是保姆"哲学(展开数含 if 分支难准估,运行时数据透明更诚实)。`countBlocks` 仍计 repeat body 节点(积木树硬限 50，非展开数)(P2 已定 2026-06-12)

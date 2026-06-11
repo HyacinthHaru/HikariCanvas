@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-06-12 · 0.7.1-P2 启动：实施计划（3 新触发器 + 有界循环 + 协议 v5）
+
+2 路 Explore 摸清 0.7.0 触发器体系（Trigger sealed + TriggerRouter 倒排/全局索引 + PlayerNearSampler
+进入沿 + GameEventListenerHub 事件层 + FrameDeployer ItemFrame→wallId PDC 反查 + 协议版本握手）。写 P2 计划。
+
+**关键纠正 / 决策**：① 命名 rightClickWall / playerLeaveRange / playerQuit / repeat；② playerLeaveRange
+复用 PlayerNearSampler 加「离开沿」（NearEntry `leaveEdge` 标记，in: true→false 触发）；③ **Repeat
+blockId 不带 round**——展开 count 轮 body 用同一 prefix `<blockId>/body/<i>`，守 0.7.0 前后端同构（带
+round 会破坏试跑高亮）；④ §9 预警回填「不做前端预估，靠运行时 Budget 熔断 + 试跑 trace」（工具不是
+保姆）；⑤ 权限：rightClickWall / playerQuit → trigger.global，playerLeaveRange → 墙级 edit。
+
+关联文件：`docs/scripting-0.7.1.md`（§9 回填）/
+`docs/superpowers/plans/2026-06-12-0.7.1-P2-triggers-loop-protocol.md`（新）
+
+---
+
 ## 2026-06-11 · 0.7.1-P1 完工：友好元素积木 + 低风险新动作（6 新 Action 子类 + 友好皮肤渲染）
 
 按 P1 计划用 subagent-driven 执行（波 1 后端全链路 + 前端契约并行 → 合并审查 → fix → 波 2 前端 UI）。
