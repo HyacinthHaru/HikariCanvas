@@ -79,6 +79,12 @@ export const MESSAGE_CHANNELS: ReadonlySet<string> = new Set(['chat', 'actionbar
 /** ScaleVariable.op 白名单。后端 {@code SCALE_OPS}。 */
 export const SCALE_OPS: ReadonlySet<string> = new Set(['multiply', 'divide']);
 
+// ---------- 0.7.1-P2 repeat 常量（逐一对照 ScriptRuleValidator.java）----------
+
+/** Repeat.count 范围（重复次数）。后端 {@code REPEAT_MIN} / {@code REPEAT_MAX}。 */
+export const REPEAT_MIN = 1;
+export const REPEAT_MAX = 100;
+
 // ---------- 返回类型 ----------
 
 /**
@@ -174,10 +180,21 @@ function validateTrigger(trigger: ScriptTrigger, errors: ValidationError[]): voi
                 });
             }
             break;
-        // playerJoin / playerKill / wallReady 无字段（后端 Optional.empty）。
+        // 0.7.1-P2：playerLeaveRange 范围校验同 playerNear（复用 NEAR_MIN/MAX），文案"玩家离开半径"。
+        case 'playerLeaveRange':
+            if (trigger.rangeBlocks < NEAR_MIN || trigger.rangeBlocks > NEAR_MAX) {
+                errors.push({
+                    blockId: 'trigger',
+                    message: `玩家离开半径需在 ${NEAR_MIN}..${NEAR_MAX} 方块之间`,
+                });
+            }
+            break;
+        // 无字段触发器（后端 Optional.empty）。0.7.1-P2 加 rightClickWall / playerQuit。
         case 'playerJoin':
         case 'playerKill':
         case 'wallReady':
+        case 'rightClickWall':
+        case 'playerQuit':
             break;
     }
 }
@@ -402,18 +419,37 @@ function validateAction(
             }
             break;
         }
+        // ---- 0.7.1-P2：repeat 有界循环（文案与后端 ScriptRuleValidator 逐字一致）----
+        case 'repeat': {
+            if (typeof action.count !== 'number' || action.count < REPEAT_MIN || action.count > REPEAT_MAX) {
+                errors.push({ blockId: path, message: `重复次数需在 ${REPEAT_MIN}..${REPEAT_MAX} 之间` });
+            }
+            if (!action.body || action.body.length === 0) {
+                errors.push({ blockId: path, message: '重复循环体不能为空' });
+            }
+            // body 递归（ifDepth 不变——repeat 不增 if 深度）；blockId 路径 `${path}/body`
+            // 与后端 ScriptRunner 展开同构（不带 round，前端只一份 body）。
+            validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
+            break;
+        }
     }
 }
 
 // ---------- 内部辅助 ----------
 
-/** 镜像后端 {@code countBlocks}：每个动作计 1；if 自身计 1 再加 then + else 递归。 */
+/**
+ * 镜像后端 {@code countBlocks}：每个动作计 1；if 自身计 1 再加 then + else 递归；
+ * 0.7.1-P2 repeat 自身计 1 再加 body 递归——<b>不乘 count</b>（硬限 50 是积木树节点数，
+ * 不是展开后的执行动作数；展开数超 50 靠运行时 Budget 熔断，§9 决策）。
+ */
 function countBlocks(actions: ScriptAction[]): number {
     let count = 0;
     for (const action of actions) {
         count++;
         if (action.type === 'if') {
             count += countBlocks(action.then ?? []) + countBlocks(action.else ?? []);
+        } else if (action.type === 'repeat') {
+            count += countBlocks(action.body ?? []);
         }
     }
     return count;

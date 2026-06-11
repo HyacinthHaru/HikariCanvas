@@ -195,6 +195,64 @@ describe('BlockNode if 递归 + path 同构', () => {
     });
 });
 
+describe('BlockNode 0.7.1-P2 repeat C 形渲染', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
+    });
+
+    it('repeat 渲染：标题「重复」+ count number input（值 5）+ body 空槽占位 data-slot-path=actions/0/body', async () => {
+        const w = mountNode({ type: 'repeat', count: 5, body: [] }, 'actions/0');
+        await nextTick();
+        expect(w.text()).toContain('重复');
+        // count 字段 → number input，值 5
+        const nums = w.findAll('input[type="number"]').map((i) => (i.element as HTMLInputElement).value);
+        expect(nums).toContain('5');
+        // 空 body 槽：data-slot-path = actions/0/body（collectSlots index=0 落点）
+        expect(w.find('[data-slot-path="actions/0/body"]').exists()).toBe(true);
+        // 空槽占位文案
+        expect(w.text()).toContain('把积木拖到这里');
+    });
+
+    it('repeat body 子块 path = actions/0/body/0（与后端 ScriptRunner 展开 blockId 同构）', async () => {
+        const w = mountNode(
+            { type: 'repeat', count: 3, body: [{ type: 'log', message: 'in-body' }] },
+            'actions/0',
+        );
+        await nextTick();
+        // body 子块精确 path（不带 round——前后端同构）
+        expect(w.find('[data-block-path="actions/0/body/0"]').exists()).toBe(true);
+        // 有 body 子块时不再渲染空槽占位
+        expect(w.find('[data-slot-path="actions/0/body"]').exists()).toBe(false);
+    });
+
+    it('改 count number → updateActionField(path, { count: 新值 number })', async () => {
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'updateActionField');
+        const w = mountNode({ type: 'repeat', count: 3, body: [] }, 'actions/2');
+        await nextTick();
+        await w.find('input[type="number"]').setValue('10');
+        expect(spy).toHaveBeenCalledWith('actions/2', { count: 10 });
+        const arg = spy.mock.calls[spy.mock.calls.length - 1][1] as { count: unknown };
+        expect(typeof arg.count).toBe('number');
+    });
+
+    it('repeat 嵌套 if：body 内 if 的 then 子块 path = actions/0/body/0/then/0', async () => {
+        const w = mountNode(
+            {
+                type: 'repeat',
+                count: 2,
+                body: [{ type: 'if', condition: 'true', then: [{ type: 'log', message: 'x' }], else: [] }],
+            },
+            'actions/0',
+        );
+        await nextTick();
+        expect(w.find('[data-block-path="actions/0/body/0"]').exists()).toBe(true);
+        expect(w.find('[data-block-path="actions/0/body/0/then/0"]').exists()).toBe(true);
+    });
+});
+
 describe('BlockNode 待完善角标（次要问题 1：扩展到 variable / condition / sound）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());

@@ -53,13 +53,14 @@ const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
  *   <li><b>业务协议版本 {@code CLIENT_V}</b>：ProjectState schema / op 族契约版本。auth 帧 payload
  *       携 {@code client_v} 发给 server，server 在 [SUPPORTED_MIN, SUPPORTED_MAX] 范围内则 ready
  *       回 {@code accepted_v}；client 收到后校验 {@code accepted_v === CLIENT_V}，不匹配则断开。
- *       0.7 起 = 4（v4 墙脚本 script.*；v3 时间轴同为干净切换，见 docs/protocol.md「v3 → v4」）。</li>
+ *       0.7.1 起 = 5（v5 新触发器 rightClickWall/playerLeaveRange/playerQuit + 有界循环 repeat；
+ *       v4 墙脚本 script.* / v3 时间轴均为干净切换，见 docs/scripting-0.7.1.md §7）。</li>
  * </ul>
  *
  * 两者解耦：升业务版本只动 {@link CLIENT_V}，不动 {@link ENVELOPE_V}。
  * {@link CLIENT_V} 升级时与 {@code plugin/.../Protocol.java SUPPORTED_MIN/MAX} 同步改。
  */
-const CLIENT_V = 4;
+const CLIENT_V = 5;
 
 /**
  * 信封壳版本（消息容器格式）。所有出帧的 {@code Envelope.v} 用它；与业务协议版本
@@ -159,7 +160,7 @@ export class WsClient {
         }
         const id = `c-${this.seq++}`;
         // 信封壳 v 恒为 ENVELOPE_V（=2，与业务协议版本 CLIENT_V 解耦，见常量 javadoc）；
-        // 业务版本（client_v / accepted_v）走 auth payload，0.7 起 = 4。
+        // 业务版本（client_v / accepted_v）走 auth payload，0.7.1 起 = 5。
         const env: Envelope = { v: ENVELOPE_V, op, id, ts: Date.now(), payload };
         const text = JSON.stringify(env);
         this.ws.send(text);

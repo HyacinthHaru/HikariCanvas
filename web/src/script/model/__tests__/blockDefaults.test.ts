@@ -129,6 +129,16 @@ describe('makeDefaultAction — 全 kind 合法', () => {
         expect(makeDefaultAction('playTimelineAwait')).toEqual({ type: 'playTimelineAwait', timelineId: '' });
     });
 
+    // ---- 0.7.1-P2：repeat（count=3 + 空 body；空 body 由用户拖块填，故拖出态会提示"循环体不能为空"）----
+    it('repeat：count=3 + 空 body 数组（非 null）', () => {
+        const a = makeDefaultAction('repeat');
+        expect(a).toEqual({ type: 'repeat', count: 3, body: [] });
+        if (a.type === 'repeat') {
+            expect(Array.isArray(a.body)).toBe(true);
+            expect(a.body).toHaveLength(0);
+        }
+    });
+
     it('if：非空合法 condition（拖出即合法）+ then/else 为空数组（非 null）', () => {
         const a = makeDefaultAction('if');
         expect(a).toEqual({ type: 'if', condition: 'var("user/score") > 0', then: [], else: [] });
@@ -194,6 +204,21 @@ describe('makeDefaultTrigger — 全 kind 合法', () => {
         expect(makeDefaultTrigger('wallReady')).toEqual({ type: 'wallReady' });
     });
 
+    // ---- 0.7.1-P2：3 个新触发器默认 ----
+    it('rightClickWall / playerQuit：无字段，只带 type', () => {
+        expect(makeDefaultTrigger('rightClickWall')).toEqual({ type: 'rightClickWall' });
+        expect(makeDefaultTrigger('playerQuit')).toEqual({ type: 'playerQuit' });
+    });
+
+    it('playerLeaveRange：rangeBlocks=8（落 1..32，同 playerNear）', () => {
+        const tr = makeDefaultTrigger('playerLeaveRange');
+        expect(tr).toEqual({ type: 'playerLeaveRange', rangeBlocks: 8 });
+        if (tr.type === 'playerLeaveRange') {
+            expect(tr.rangeBlocks).toBeGreaterThanOrEqual(1);
+            expect(tr.rangeBlocks).toBeLessThanOrEqual(32);
+        }
+    });
+
     it('未知 kind → 兜底 wallReady', () => {
         expect(makeDefaultTrigger('nope')).toEqual({ type: 'wallReady' });
     });
@@ -231,7 +256,11 @@ describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule�
     }
 
     // variableChange 触发器（带非空默认变量名）切换瞬间也应合法。
-    const SELF_VALID_TRIGGERS = ['variableChange', 'timer', 'playerNear', 'playerJoin', 'playerKill', 'wallReady'] as const;
+    // 0.7.1-P2：rightClickWall / playerQuit（无字段）+ playerLeaveRange（rangeBlocks 默认 8）也即合法。
+    const SELF_VALID_TRIGGERS = [
+        'variableChange', 'timer', 'playerNear', 'playerJoin', 'playerKill', 'wallReady',
+        'rightClickWall', 'playerLeaveRange', 'playerQuit',
+    ] as const;
     for (const kind of SELF_VALID_TRIGGERS) {
         it(`makeDefaultTrigger('${kind}') 切换即合法（validateRule 无错）`, () => {
             const errors = validateRule(ruleWithTrigger(makeDefaultTrigger(kind)));
@@ -255,5 +284,8 @@ describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule�
             .some((e) => e.message.includes('元素 ID'))).toBe(true);
         expect(validateRule(ruleWithAction(makeDefaultAction('playTimelineAwait')))
             .some((e) => e.message.includes('时间轴 ID'))).toBe(true);
+        // 0.7.1-P2：repeat 默认 body 空 → 拖出态报"循环体不能为空"（用户须往 body 拖块）。
+        expect(validateRule(ruleWithAction(makeDefaultAction('repeat')))
+            .some((e) => e.message.includes('循环体不能为空'))).toBe(true);
     });
 });

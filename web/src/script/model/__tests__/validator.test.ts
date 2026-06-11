@@ -159,6 +159,26 @@ describe('validateRule — 触发器字段（blockId=trigger）', () => {
         expect(validateRule(rule({ trigger: mk(0) })).length).toBeGreaterThan(0);
         expect(validateRule(rule({ trigger: mk(NEAR_MAX + 1) })).length).toBeGreaterThan(0);
     });
+
+    // ---- 0.7.1-P2：3 个新触发器 ----
+    it('playerLeaveRange 边界 1 / 32 合法，0 / 33 报错（同 playerNear，文案"玩家离开半径"）', () => {
+        const mk = (n: number): ScriptTrigger => ({ type: 'playerLeaveRange', rangeBlocks: n });
+        expect(validateRule(rule({ trigger: mk(NEAR_MIN) }))).toEqual([]);
+        expect(validateRule(rule({ trigger: mk(NEAR_MAX) }))).toEqual([]);
+        const lo = validateRule(rule({ trigger: mk(0) }));
+        const hi = validateRule(rule({ trigger: mk(NEAR_MAX + 1) }));
+        expect(lo.length).toBeGreaterThan(0);
+        expect(hi.length).toBeGreaterThan(0);
+        // 文案与后端逐字一致 + blockId=trigger
+        const e = lo.find((x) => x.message.includes('玩家离开半径'));
+        expect(e?.message).toBe(`玩家离开半径需在 ${NEAR_MIN}..${NEAR_MAX} 方块之间`);
+        expect(e?.blockId).toBe('trigger');
+    });
+
+    it('rightClickWall / playerQuit 无字段：合法不报错', () => {
+        expect(validateRule(rule({ trigger: { type: 'rightClickWall' } }))).toEqual([]);
+        expect(validateRule(rule({ trigger: { type: 'playerQuit' } }))).toEqual([]);
+    });
 });
 
 // ---------- 动作字段 ----------
@@ -374,6 +394,57 @@ describe('validateRule — if 嵌套深度 + 条件', () => {
         const errs = validateRule(rule({ actions: [a] }));
         const waitErr = errs.find((e) => e.message.includes('等待时长'));
         expect(waitErr?.blockId).toBe('actions/0/then/0');
+    });
+});
+
+// ---------- 0.7.1-P2：repeat 有界循环 ----------
+
+describe('validateRule — repeat 有界循环（count 1..100 + body 非空 + 递归）', () => {
+    /** 造一个 repeat（count + body）。 */
+    function mk(count: number, body: ScriptAction[]): ScriptAction {
+        return { type: 'repeat', count, body };
+    }
+    const oneLog: ScriptAction[] = [{ type: 'log', message: 'x' }];
+
+    it('count 边界 1 / 100 合法（body 非空），文案与后端逐字一致', () => {
+        expect(validateRule(rule({ actions: [mk(1, oneLog)] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [mk(100, oneLog)] }))).toEqual([]);
+    });
+
+    it('count 0 / 101 报错（文案"重复次数需在 1..100 之间"）', () => {
+        const lo = validateRule(rule({ actions: [mk(0, oneLog)] }));
+        const hi = validateRule(rule({ actions: [mk(101, oneLog)] }));
+        expect(lo.some((e) => e.message === '重复次数需在 1..100 之间' && e.blockId === 'actions/0')).toBe(true);
+        expect(hi.some((e) => e.message === '重复次数需在 1..100 之间')).toBe(true);
+    });
+
+    it('body 空 → 报错（文案"重复循环体不能为空"）', () => {
+        const errs = validateRule(rule({ actions: [mk(3, [])] }));
+        expect(errs.some((e) => e.message === '重复循环体不能为空' && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('body 内动作错误带正确 blockId 路径 actions/0/body/0（与后端 ScriptRunner 展开同构）', () => {
+        const errs = validateRule(rule({ actions: [mk(3, [{ type: 'wait', ms: 1 }])] }));
+        const waitErr = errs.find((e) => e.message.includes('等待时长'));
+        expect(waitErr?.blockId).toBe('actions/0/body/0');
+    });
+
+    it('repeat 不增 if 深度：body 内放深 4 的 if 合法（不因外层 repeat 撞 if 深度上限）', () => {
+        let inner: ScriptAction[] = [{ type: 'log', message: 'x' }];
+        for (let i = 0; i < MAX_IF_DEPTH; i++) {
+            inner = [{ type: 'if', condition: 'true', then: inner, else: [] }];
+        }
+        expect(validateRule(rule({ actions: [mk(2, inner)] }))).toEqual([]);
+    });
+
+    it('countBlocks 计 repeat 自身 + body 节点但不乘 count（硬限 50 是树节点数）', () => {
+        // repeat（计 1）+ body 内 49 个 log = 50，合法（不因 count=100 乘成 4900）。
+        const body49: ScriptAction[] = Array.from({ length: 49 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
+        expect(validateRule(rule({ actions: [mk(100, body49)] }))).toEqual([]); // 1 + 49 = 50
+        // 再加 1 → 51 超上限。
+        const body50: ScriptAction[] = Array.from({ length: 50 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
+        expect(validateRule(rule({ actions: [mk(100, body50)] }))
+            .some((e) => e.message.includes('积木总数'))).toBe(true); // 51
     });
 });
 

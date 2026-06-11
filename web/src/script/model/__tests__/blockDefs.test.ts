@@ -25,6 +25,10 @@ const EXPECTED_TRIGGER_FIELDS: Record<string, string[]> = {
     playerKill: [],
     playerNear: ['rangeBlocks'],
     wallReady: [],
+    // 0.7.1-P2：3 个新触发器。
+    rightClickWall: [],
+    playerLeaveRange: ['rangeBlocks'],
+    playerQuit: [],
 };
 
 /** 期望的动作字段集（手抄自 protocol.ts ScriptAction，含 if 的 condition/then/else）。 */
@@ -44,6 +48,8 @@ const EXPECTED_ACTION_FIELDS: Record<string, string[]> = {
     setRandomVariable: ['fullName', 'min', 'max'],
     scaleVariable: ['fullName', 'op', 'factor'],
     playTimelineAwait: ['timelineId'],
+    // 0.7.1-P2：有界循环（control category，count + body statements 子序列槽）。
+    repeat: ['count', 'body'],
 };
 
 function fieldNames(def: BlockDef): string[] {
@@ -51,7 +57,7 @@ function fieldNames(def: BlockDef): string[] {
 }
 
 describe('blockDefs.TRIGGER_DEFS', () => {
-    it('恰好 6 个触发器（与 protocol.ts ScriptTrigger 同数）', () => {
+    it('恰好 9 个触发器（0.7.0 6 个 + 0.7.1-P2 3 个，与 protocol.ts ScriptTrigger 同数）', () => {
         expect(Object.keys(TRIGGER_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_TRIGGER_FIELDS).sort(),
         );
@@ -75,7 +81,7 @@ describe('blockDefs.TRIGGER_DEFS', () => {
 });
 
 describe('blockDefs.ACTION_DEFS', () => {
-    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1 5 个新动作 = 14）', () => {
+    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat = 15）', () => {
         expect(Object.keys(ACTION_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_ACTION_FIELDS).sort(),
         );
@@ -169,6 +175,20 @@ describe('blockDefs.ACTION_DEFS', () => {
         const op = ACTION_DEFS.scaleVariable.fields.find((f) => f.name === 'op')!;
         expect(op.options?.map((o) => o.value)).toEqual(['multiply', 'divide']);
         expect(op.options?.map((o) => o.value).sort()).toEqual([...SCALE_OPS].sort());
+    });
+
+    // ---- 0.7.1-P2：repeat（有界循环，control category，count + body 子序列槽）----
+    it('repeat def：category=control / colorVar=green / 字段 count(number 1..100) + body(statements)', () => {
+        const def = ACTION_DEFS.repeat;
+        expect(def.kind).toBe('repeat');
+        expect(def.category).toBe('control');
+        expect(def.colorVar).toBe('--ctp-green');
+        expect(def.fields.map((f) => f.name)).toEqual(['count', 'body']);
+        const count = def.fields.find((f) => f.name === 'count')!;
+        expect(count.type).toBe('number');
+        expect([count.min, count.max]).toEqual([1, 100]);
+        const body = def.fields.find((f) => f.name === 'body')!;
+        expect(body.type).toBe('statements');
     });
 });
 

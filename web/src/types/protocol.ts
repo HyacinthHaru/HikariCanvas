@@ -505,8 +505,10 @@ export interface Timeline {
 // ScriptRuleValidator；前端镜像层（store）不做语义校验。
 
 /**
- * 脚本触发器多态联合（docs/scripting.md §2.2，六种触发时机）。
- * {@code playerJoin / playerKill} 是全局事件面（需 {@code canvas.script.trigger.global}）。
+ * 脚本触发器多态联合（docs/scripting.md §2.2 + scripting-0.7.1.md §6，0.7.0 六种 + 0.7.1 三种）。
+ * {@code playerJoin / playerKill / playerQuit / rightClickWall} 是全局事件面
+ * （需 {@code canvas.script.trigger.global}）；{@code playerNear / playerLeaveRange} 是墙级
+ * （仅基础编辑权限，同 PlayerNearSampler）。
  */
 export type ScriptTrigger =
     | { type: 'variableChange'; fullName: string }
@@ -514,7 +516,11 @@ export type ScriptTrigger =
     | { type: 'playerJoin' }
     | { type: 'playerKill' }
     | { type: 'playerNear'; rangeBlocks: number }
-    | { type: 'wallReady' };
+    | { type: 'wallReady' }
+    // 0.7.1-P2：3 个新触发器（右键墙 / 玩家离开靠近区域 / 玩家退服）。
+    | { type: 'rightClickWall' }
+    | { type: 'playerLeaveRange'; rangeBlocks: number }
+    | { type: 'playerQuit' };
 
 /**
  * 脚本动作多态联合（docs/scripting.md §2.2，8 种动作 + {@code if} 条件分支可递归嵌套）。
@@ -541,7 +547,10 @@ export type ScriptAction =
     | { type: 'sendMessage'; text: string; channel: 'chat' | 'actionbar' | 'title' }
     | { type: 'setRandomVariable'; fullName: string; min: number; max: number }
     | { type: 'scaleVariable'; fullName: string; op: 'multiply' | 'divide'; factor: number }
-    | { type: 'playTimelineAwait'; timelineId: string };
+    | { type: 'playTimelineAwait'; timelineId: string }
+    // 0.7.1-P2：有界循环「重复 N 次」。count ∈ [1,100]；body 为每轮执行的动作（由后端
+    // ScriptRunner 展开 count 轮，blockId 用 `${path}/body/${i}` 不带 round——前后端同构）。
+    | { type: 'repeat'; count: number; body: ScriptAction[] };
 
 /**
  * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。

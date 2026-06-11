@@ -812,6 +812,10 @@ export const messages = {
                 playerKill: '当 玩家击杀',
                 playerNear: '当 玩家靠近',
                 wallReady: '当 画板就绪',
+                // 0.7.1-P2：3 个新触发器。
+                rightClickWall: '当 右键画板',
+                playerLeaveRange: '当 玩家离开范围',
+                playerQuit: '当 玩家退出游戏',
                 setVariable: '设置变量',
                 incrementVariable: '变量增加',
                 setElementProperty: '设置元素属性',
@@ -827,6 +831,8 @@ export const messages = {
                 setRandomVariable: '设随机数',
                 scaleVariable: '变量乘除',
                 playTimelineAwait: '播放并等待',
+                // 0.7.1-P2：有界循环。
+                repeat: '重复',
             },
             // 0.7.1：友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
             friendly: {
@@ -871,6 +877,10 @@ export const messages = {
                 max: '最大',
                 scaleOp: '运算',
                 factor: '倍数',
+                // 0.7.1-P2：重复循环字段标签。
+                repeatCount: '重复次数',
+                body: '循环体',
+                times: '次',
             },
             // select / 切换 类字段的选项友好文案。
             fieldOptions: {
@@ -1941,6 +1951,10 @@ export const messages = {
                 playerKill: 'When player kills',
                 playerNear: 'When player is near',
                 wallReady: 'When wall is ready',
+                // 0.7.1-P2: three new triggers.
+                rightClickWall: 'When wall right-clicked',
+                playerLeaveRange: 'When player leaves range',
+                playerQuit: 'When player quits',
                 setVariable: 'Set variable',
                 incrementVariable: 'Increment variable',
                 setElementProperty: 'Set element property',
@@ -1956,6 +1970,8 @@ export const messages = {
                 setRandomVariable: 'Set random number',
                 scaleVariable: 'Multiply / divide variable',
                 playTimelineAwait: 'Play and wait',
+                // 0.7.1-P2: bounded loop.
+                repeat: 'Repeat',
             },
             // 0.7.1: friendly element block titles.
             friendly: {
@@ -1999,6 +2015,10 @@ export const messages = {
                 max: 'Max',
                 scaleOp: 'Operation',
                 factor: 'Factor',
+                // 0.7.1-P2: repeat loop field labels.
+                repeatCount: 'Repeat count',
+                body: 'Loop body',
+                times: 'times',
             },
             fieldOptions: {
                 opPlay: 'Play',

@@ -126,9 +126,10 @@ const SCALE_OP_OPTIONS: FieldOption[] = [
 ];
 
 /**
- * 六种触发器定义（kind ∈ ScriptTrigger.type）。
+ * 九种触发器定义（kind ∈ ScriptTrigger.type，0.7.0 六种 + 0.7.1-P2 三种）。
  * 字段覆盖各 wire 数据字段：variableChange→fullName / timer→intervalSeconds /
- * playerNear→rangeBlocks；playerJoin / playerKill / wallReady 无数据字段。
+ * playerNear→rangeBlocks / playerLeaveRange→rangeBlocks；playerJoin / playerKill /
+ * wallReady / rightClickWall / playerQuit 无数据字段。
  */
 export const TRIGGER_DEFS: Record<string, BlockDef> = {
     variableChange: {
@@ -193,11 +194,42 @@ export const TRIGGER_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.wallReady',
         fields: [],
     },
+    // ---- 0.7.1-P2：3 个新触发器（右键墙 / 玩家离开靠近区域 / 玩家退服）----
+    rightClickWall: {
+        kind: 'rightClickWall',
+        category: 'trigger',
+        colorVar: CATEGORY_COLOR_VAR.trigger,
+        labelKey: 'script.blocks.rightClickWall',
+        fields: [],
+    },
+    playerLeaveRange: {
+        kind: 'playerLeaveRange',
+        category: 'trigger',
+        colorVar: CATEGORY_COLOR_VAR.trigger,
+        labelKey: 'script.blocks.playerLeaveRange',
+        fields: [
+            {
+                name: 'rangeBlocks',
+                type: 'number',
+                labelKey: 'script.fields.rangeBlocks',
+                min: 1,
+                max: 32,
+                step: 1,
+            },
+        ],
+    },
+    playerQuit: {
+        kind: 'playerQuit',
+        category: 'trigger',
+        colorVar: CATEGORY_COLOR_VAR.trigger,
+        labelKey: 'script.blocks.playerQuit',
+        fields: [],
+    },
 };
 
 /**
- * 九种动作定义（kind ∈ ScriptAction.type，8 动作 + if）。
- * 字段逐一对应 wire 数据字段；if 用 condition + then/else（statements 子序列槽）。
+ * 动作定义（kind ∈ ScriptAction.type）：0.7.0 8 动作 + if，0.7.1-P1 5 新动作，0.7.1-P2 repeat。
+ * 字段逐一对应 wire 数据字段；if 用 condition + then/else、repeat 用 count + body（statements 子序列槽）。
  * playTimeline.seekMs 标 optional（仅 op=seek 携带）；runCommand.params 是动态键值
  * （type=command，由所选模板的 params 驱动子输入，任务 F）。
  */
@@ -358,6 +390,17 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'condition', type: 'condition', labelKey: 'script.fields.condition' },
             { name: 'then', type: 'statements', labelKey: 'script.fields.then' },
             { name: 'else', type: 'statements', labelKey: 'script.fields.else' },
+        ],
+    },
+    // ---- 0.7.1-P2：有界循环「重复 N 次」（control category，count + body 子序列槽）----
+    repeat: {
+        kind: 'repeat',
+        category: 'control',
+        colorVar: CATEGORY_COLOR_VAR.control,
+        labelKey: 'script.blocks.repeat',
+        fields: [
+            { name: 'count', type: 'number', labelKey: 'script.fields.repeatCount', min: 1, max: 100, step: 1 },
+            { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
 };
@@ -554,6 +597,10 @@ export function makeDefaultAction(kind: string): ScriptAction {
         case 'if':
             // condition 给一个能被 tryParseCondition 解析回可视模式的合法默认（var 比较），拖出即合法。
             return { type: 'if', condition: 'var("user/score") > 0', then: [], else: [] };
+        case 'repeat':
+            // 0.7.1-P2：count 默认 3（落 1..100）；body 空数组——由用户往循环体拖块填，
+            // 拖出态会提示"循环体不能为空"（与 if 的空分支不同：repeat 要求 body 非空）。
+            return { type: 'repeat', count: 3, body: [] };
         default:
             // 未知 kind 兜底：给个最简单的 log 动作（保证返回合法 ScriptAction）。
             return { type: 'log', message: '' };
@@ -563,10 +610,10 @@ export function makeDefaultAction(kind: string): ScriptAction {
 /**
  * 造一个指定 kind 的合法默认触发器（新建规则 / 切触发器类型时用）。
  *
- * <p>无数据字段的触发器（{@code playerJoin} / {@code playerKill} / {@code wallReady}）只带
- * type；带字段的给范围内默认（timer 间隔 10s / playerNear 8 格 / variableChange 给非空变量名
- * {@code user/score} 让切换/拖出即合法，用户再改）。未知 kind → 兜底 {@code wallReady}
- * （最无害的"画板就绪即触发"）。</p>
+ * <p>无数据字段的触发器（{@code playerJoin} / {@code playerKill} / {@code wallReady} /
+ * {@code rightClickWall} / {@code playerQuit}）只带 type；带字段的给范围内默认（timer 间隔 10s /
+ * playerNear / playerLeaveRange 8 格 / variableChange 给非空变量名 {@code user/score} 让切换/拖出
+ * 即合法，用户再改）。未知 kind → 兜底 {@code wallReady}（最无害的"画板就绪即触发"）。</p>
  */
 export function makeDefaultTrigger(kind: string): ScriptTrigger {
     switch (kind) {
@@ -583,6 +630,14 @@ export function makeDefaultTrigger(kind: string): ScriptTrigger {
             return { type: 'playerNear', rangeBlocks: 8 };
         case 'wallReady':
             return { type: 'wallReady' };
+        // ---- 0.7.1-P2：3 个新触发器 ----
+        case 'rightClickWall':
+            return { type: 'rightClickWall' };
+        case 'playerLeaveRange':
+            // rangeBlocks 默认 8 格（同 playerNear，落 1..32）。
+            return { type: 'playerLeaveRange', rangeBlocks: 8 };
+        case 'playerQuit':
+            return { type: 'playerQuit' };
         default:
             return { type: 'wallReady' };
     }

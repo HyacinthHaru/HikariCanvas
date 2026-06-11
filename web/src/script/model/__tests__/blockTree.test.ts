@@ -293,3 +293,101 @@ describe('blockTree.ifDepth', () => {
         expect(ifDepth(a)).toBe(3);
     });
 });
+
+// ---------- 0.7.1-P2：repeat 的 body 子序列（第三个嵌套序列键，与后端 ScriptRunner 同构）----------
+
+const repeatBlock = (count: number, body: ScriptAction[]): ScriptAction =>
+    ({ type: 'repeat', count, body });
+
+describe('blockTree.repeat body 导航（getAt / insertAt / removeAt / moveNode / walk / countBlocks）', () => {
+    /**
+     * 构造含 repeat 的树：
+     *   actions/0  log A
+     *   actions/1  repeat 3
+     *     actions/1/body/0  log B0
+     *     actions/1/body/1  if c
+     *       actions/1/body/1/then/0  log deep
+     */
+    function withRepeat(): ScriptAction[] {
+        return [
+            log('A'),
+            repeatBlock(3, [log('B0'), ifBlock('c', [log('deep')], [])]),
+        ];
+    }
+
+    it('getAt 取 repeat body 子项 + body 内 if 的 then（path = actions/1/body/1/then/0）', () => {
+        const a = withRepeat();
+        expect(getAt(a, ['actions', '1', 'body', '0'])).toMatchObject({ message: 'B0' });
+        expect(getAt(a, ['actions', '1', 'body', '1', 'then', '0'])).toMatchObject({ message: 'deep' });
+    });
+
+    it('getAt 越界 / 非 repeat 下钻 body → null', () => {
+        const a = withRepeat();
+        expect(getAt(a, ['actions', '1', 'body', '9'])).toBeNull(); // body 越界
+        expect(getAt(a, ['actions', '0', 'body', '0'])).toBeNull(); // log 不是 repeat
+    });
+
+    it('insertAt 往 repeat body 槽插入（immutable，不改原树）', () => {
+        const a = withRepeat();
+        const next = insertAt(a, ['actions', '1', 'body'], 0, log('INS'));
+        expect(getAt(next, ['actions', '1', 'body', '0'])).toMatchObject({ message: 'INS' });
+        expect(getAt(next, ['actions', '1', 'body', '1'])).toMatchObject({ message: 'B0' });
+        // 原树未变（结构共享 immutable）
+        const origRepeat = a[1] as Extract<ScriptAction, { type: 'repeat' }>;
+        expect(origRepeat.body.length).toBe(2);
+    });
+
+    it('insertAt 往空 body 槽插入', () => {
+        const a: ScriptAction[] = [repeatBlock(5, [])];
+        const next = insertAt(a, ['actions', '0', 'body'], 0, log('X'));
+        expect(getAt(next, ['actions', '0', 'body', '0'])).toMatchObject({ message: 'X' });
+    });
+
+    it('removeAt 删 repeat body 子项', () => {
+        const a = withRepeat();
+        const next = removeAt(a, ['actions', '1', 'body', '0']);
+        expect(getAt(next, ['actions', '1', 'body', '0'])).toMatchObject({ type: 'if' });
+    });
+
+    it('moveNode 顶层块 → repeat body 槽（跨容器入 body）', () => {
+        const a = withRepeat();
+        // 把 actions/0（log A）移入 repeat body 末尾（body index=2）
+        const next = moveNode(a, ['actions', '0'], ['actions', '1', 'body'], 2);
+        // 移除后顶层只剩 repeat（原 actions/1 → actions/0）
+        expect(getAt(next, ['actions', '0'])).toMatchObject({ type: 'repeat' });
+        // log A 进了 body（body 末尾，源容器在外、目标更深 → 路径补偿后 body index 2）
+        expect(getAt(next, ['actions', '0', 'body', '2'])).toMatchObject({ message: 'A' });
+    });
+
+    it('moveNode repeat body 内块 → 顶层（出 body）', () => {
+        const a = withRepeat();
+        const next = moveNode(a, ['actions', '1', 'body', '0'], ['actions'], 0);
+        // body 内 B0 移到顶层 index 0
+        expect(getAt(next, ['actions', '0'])).toMatchObject({ message: 'B0' });
+    });
+
+    it('walk 前序遍历下钻 repeat body（含 body 内 if 的 then）', () => {
+        const a = withRepeat();
+        const paths: string[] = [];
+        walk(a, (_n, p) => paths.push(p));
+        expect(paths).toContain('actions/1');
+        expect(paths).toContain('actions/1/body/0');
+        expect(paths).toContain('actions/1/body/1');
+        expect(paths).toContain('actions/1/body/1/then/0');
+    });
+
+    it('countBlocks 计 repeat 自身 + body 递归（不乘 count）', () => {
+        // log A(1) + repeat(1) + body[ log B0(1), if c(1) + then[ log deep(1) ] ] = 5
+        expect(countBlocks(withRepeat())).toBe(5);
+        // count 100 不影响节点计数（仍 5）
+        const a: ScriptAction[] = [repeatBlock(100, [log('x'), log('y')])];
+        expect(countBlocks(a)).toBe(3); // repeat(1) + 2 body
+    });
+
+    it('ifDepth 不因 repeat 增加，但 body 内 if 仍计深度', () => {
+        // repeat 自身不是 if → 不增深度；body 内单层 if → 深度 1
+        expect(ifDepth([repeatBlock(2, [ifBlock('c', [log('x')], [])])])).toBe(1);
+        // 纯 repeat 无 if → 0
+        expect(ifDepth([repeatBlock(2, [log('x')])])).toBe(0);
+    });
+});

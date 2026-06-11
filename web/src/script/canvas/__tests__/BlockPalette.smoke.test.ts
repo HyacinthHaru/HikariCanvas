@@ -62,6 +62,26 @@ describe('BlockPalette 渲染 smoke', () => {
         await nextTick();
         expect(w.find('[data-block-kind="wallReady"]').exists()).toBe(false);
         expect(w.find('[data-block-kind="timer"]').exists()).toBe(false);
+        // 0.7.1-P2：3 个新触发器也不在 palette（帽子从「新建规则」来，不从 palette 拖）。
+        expect(w.find('[data-block-kind="rightClickWall"]').exists()).toBe(false);
+        expect(w.find('[data-block-kind="playerLeaveRange"]').exists()).toBe(false);
+        expect(w.find('[data-block-kind="playerQuit"]').exists()).toBe(false);
+    });
+
+    it('0.7.1-P2：repeat 在「控制」分组（与 if 同组，control category）', async () => {
+        const w = mount(BlockPalette);
+        await nextTick();
+        // repeat 可拖项存在
+        const repeatItem = w.find('[data-block-kind="repeat"]');
+        expect(repeatItem.exists()).toBe(true);
+        // 控制分组标题 + repeat 标题「重复」
+        expect(w.text()).toContain('控制');
+        expect(w.text()).toContain('重复');
+        // pointerdown 左键 → emit paletteDown('repeat')
+        await repeatItem.trigger('pointerdown', { button: 0 });
+        const emitted = w.emitted('paletteDown');
+        expect(emitted).toBeTruthy();
+        expect(emitted!.some((e) => e[0] === 'repeat')).toBe(true);
     });
 
     it('分组标题渲染（中文）', async () => {

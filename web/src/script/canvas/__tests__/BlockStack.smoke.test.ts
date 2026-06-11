@@ -56,11 +56,11 @@ describe('BlockStack 渲染 smoke', () => {
         const w = mount(BlockStack, { props: { rule: makeRule(), x: 10, y: 20 } });
         await nextTick();
         expect(w.text()).toContain('我的规则');
-        // H2：触发类型 select —— 6 个 option（label 走 script.blocks.<kind>），当前值 = timer
+        // H2：触发类型 select —— 9 个 option（0.7.0 6 + 0.7.1-P2 3，label 走 script.blocks.<kind>），当前值 = timer
         const kindSelect = w.find('.hc-hat-kind-select');
         expect(kindSelect.exists()).toBe(true);
         expect((kindSelect.element as HTMLSelectElement).value).toBe('timer');
-        expect(kindSelect.findAll('option')).toHaveLength(6);
+        expect(kindSelect.findAll('option')).toHaveLength(9);
         expect(w.text()).toContain('每隔一段时间'); // timer label（select option）
         // 触发参数控件（BlockParamInput number）：label '间隔（秒）' + input 受控值 = 30
         expect(w.text()).toContain('间隔（秒）');
@@ -166,5 +166,42 @@ describe('BlockStack 渲染 smoke', () => {
         await nextTick();
         expect((w.find('.hc-hat-kind-select').element as HTMLSelectElement).disabled).toBe(true);
         expect((w.find('.hc-hat-param input[type="number"]').element as HTMLInputElement).disabled).toBe(true);
+    });
+
+    // ---- 0.7.1-P2：3 个新触发器进帽子 select ----
+    it('触发类型 select 含 3 个新触发器选项（右键画板 / 玩家离开范围 / 玩家退出游戏）', async () => {
+        const w = mount(BlockStack, { props: { rule: makeRule(), x: 0, y: 0 } });
+        await nextTick();
+        const optValues = w.findAll('.hc-hat-kind-select option').map((o) => (o.element as HTMLOptionElement).value);
+        expect(optValues).toContain('rightClickWall');
+        expect(optValues).toContain('playerLeaveRange');
+        expect(optValues).toContain('playerQuit');
+        const text = w.text();
+        expect(text).toContain('右键画板');
+        expect(text).toContain('玩家离开范围');
+        expect(text).toContain('玩家退出游戏');
+    });
+
+    it('切到 playerLeaveRange → setTrigger(rangeBlocks:8) + 渲染范围 number 控件', async () => {
+        const scripts = (await import('@/stores/scripts')).useScriptStore();
+        const rule = makeRule({ trigger: { type: 'wallReady' } });
+        scripts.upsert(rule);
+        const edit = useScriptEditStore();
+        edit.selectRule(rule.id);
+        const spy = vi.spyOn(edit, 'setTrigger');
+        const w = mount(BlockStack, { props: { rule, x: 0, y: 0 } });
+        await nextTick();
+        await w.find('.hc-hat-kind-select').setValue('playerLeaveRange');
+        expect(spy.mock.calls[0][0]).toEqual({ type: 'playerLeaveRange', rangeBlocks: 8 });
+
+        // 直接渲染 playerLeaveRange 规则：范围（方块）number 控件出现，值 8。
+        const w2 = mount(BlockStack, {
+            props: { rule: makeRule({ trigger: { type: 'playerLeaveRange', rangeBlocks: 8 } }), x: 0, y: 0 },
+        });
+        await nextTick();
+        expect(w2.text()).toContain('范围（方块）');
+        const num = w2.find('.hc-hat-param input[type="number"]');
+        expect(num.exists()).toBe(true);
+        expect((num.element as HTMLInputElement).value).toBe('8');
     });
 });

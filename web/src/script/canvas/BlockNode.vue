@@ -11,6 +11,10 @@
  * {@code `${path}/else/${i}`}，<b>与后端 trace blockId 逐字符同构</b>（权威
  * blockTree.ts 头注 / ScriptRunner.java）。空槽显占位提示。</p>
  *
+ * <p><b>repeat 块 = C 形（单臂，0.7.1-P2）</b>：count 标量在头部由 BlockParamInput 渲染（number），
+ * {@code body} 子序列槽递归渲染 —— 子积木 path 拼 {@code `${path}/body/${i}`}，<b>与后端
+ * ScriptRunner 展开 blockId 同构</b>（展开 count 轮但 blockId 不带 round，前端只一份 body）。</p>
+ *
  * <p>块根挂 {@code data-block-path}（= props.path）——供任务 D 测量插槽矩形、任务 H 按
  * trace blockId 高亮定位。lock 态（project.isLocked）下本阶段仍静态渲染（拖拽 / 交互在
  * 任务 D 接，按 K-UI-12 守卫）。</p>
@@ -152,6 +156,12 @@ const colorVar = computed(() => {
 
 /** 是否 if 块（C 形布局：条件 + then/else 子槽）。 */
 const isIf = computed(() => props.action.type === 'if');
+
+/**
+ * 是否 repeat 块（0.7.1-P2，C 形单臂布局：count 标量 + body 子序列槽）。count 字段走
+ * scalarFields 在头部由 BlockParamInput 渲染（number），body 是 statements 子槽（C 臂）。
+ */
+const isRepeat = computed(() => props.action.type === 'repeat');
 
 /** 锁定态：true 时所有参数控件 disabled（透传给 BlockParamInput）。 */
 const locked = computed(() => project.isLocked);
@@ -299,6 +309,14 @@ const thenActions = computed<ScriptAction[]>(() =>
 const elseActions = computed<ScriptAction[]>(() =>
     props.action.type === 'if' ? props.action.else : [],
 );
+/**
+ * repeat 的 body 子序列（0.7.1-P2；非 repeat 块为空）。子块 path 拼
+ * {@code `${path}/body/${i}`}——<b>与后端 ScriptRunner 展开 blockId 逐字符同构</b>
+ * （展开 count 轮但 blockId 不带 round，前端只一份 body）。
+ */
+const bodyActions = computed<ScriptAction[]>(() =>
+    props.action.type === 'repeat' ? props.action.body : [],
+);
 
 /** condition 字段的原始串（喂给 ConditionBuilder）。 */
 const conditionText = computed(() =>
@@ -365,7 +383,7 @@ const needSelectTitle = computed(() =>
 <template>
   <div
     class="hc-block-node"
-    :class="[isIf ? 'hc-block-node-if' : '', highlightResult ? 'hc-block-node-hl' : '']"
+    :class="[(isIf || isRepeat) ? 'hc-block-node-if' : '', highlightResult ? 'hc-block-node-hl' : '']"
     :data-block-path="path"
     :data-hl-result="highlightResult || null"
     :title="highlightDetail || undefined"
@@ -486,6 +504,33 @@ const needSelectTitle = computed(() =>
       </div>
 
       <!-- C 形底托：闭合左臂，视觉上把 then/else 包成 C（实体托底条） -->
+      <div class="hc-block-if-foot" aria-hidden="true" />
+    </template>
+
+    <!-- 0.7.1-P2 repeat 块 C 形（单臂）：count 标量在头部已渲染，这里只画 body 子序列槽。
+         子块 path = `${path}/body/${i}`，与后端 ScriptRunner 展开 blockId 同构（不带 round）。 -->
+    <template v-if="isRepeat">
+      <div class="hc-block-branch">
+        <span class="hc-branch-label">{{ resolveLabelKey(t, 'script.fields.body') }}</span>
+        <div class="hc-branch-slot">
+          <BlockNode
+            v-for="(child, i) in bodyActions"
+            :key="`${path}/body/${i}`"
+            :action="child"
+            :path="`${path}/body/${i}`"
+          />
+          <!-- 空 body 槽：data-slot-path 让 collectSlots 当 index=0 落点 -->
+          <div
+            v-if="bodyActions.length === 0"
+            class="hc-empty-slot"
+            :data-slot-path="`${path}/body`"
+          >
+            {{ resolveLabelKey(t, 'script.emptySlot') }}
+          </div>
+        </div>
+      </div>
+
+      <!-- C 形底托：闭合左臂，视觉上把 body 包成 C（实体托底条） -->
       <div class="hc-block-if-foot" aria-hidden="true" />
     </template>
   </div>

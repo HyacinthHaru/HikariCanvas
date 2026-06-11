@@ -25,6 +25,15 @@ export const IF_BRANCH_KEYS = ['then', 'else'] as const;
 export type IfBranchKey = (typeof IF_BRANCH_KEYS)[number];
 
 /**
+ * 0.7.1-P2：所有「带嵌套子序列」的容器块的序列键全集（if 的 then/else + repeat 的 body）。
+ * path 段在 (idx, seqKey) 二元组里出现的 seqKey 必属此集；与后端 ScriptRunner 展开 blockId
+ * 前缀逐字符同构（repeat body 不带 round）。新增带子序列的块（如未来 forEach）在此扩集 +
+ * {@link getChildSeq} / {@link withChildSeq} 加分支即可，导航 / 变换 / 遍历自动覆盖。
+ */
+export const NESTED_SEQ_KEYS = ['then', 'else', 'body'] as const;
+export type NestedSeqKey = (typeof NESTED_SEQ_KEYS)[number];
+
+/**
  * 解析后端 trace blockId 字符串为 path 段数组。
  *
  * - {@code "actions/2/then/1"} → {@code ['actions','2','then','1']}
@@ -46,6 +55,49 @@ function isIf(
     node: ScriptAction,
 ): node is Extract<ScriptAction, { type: 'if' }> {
     return node.type === 'if';
+}
+
+/** {@code repeat} 类型守卫——窄化到带 body 的有界循环。 */
+function isRepeat(
+    node: ScriptAction,
+): node is Extract<ScriptAction, { type: 'repeat' }> {
+    return node.type === 'repeat';
+}
+
+/**
+ * 0.7.1-P2：取容器块 {@code node} 在序列键 {@code key} 下的子序列引用（只读，不复制）。
+ * if → then/else；repeat → body。非容器块 / 键不属该块 → {@code null}。这是 blockTree
+ * 所有"下钻嵌套序列"路径的<b>唯一</b>分支点（resolveSequence / transformSequence 共用）。
+ */
+function getChildSeq(node: ScriptAction, key: string): ScriptAction[] | null {
+    if (isIf(node)) {
+        if (key === 'then') return node.then;
+        if (key === 'else') return node.else;
+        return null;
+    }
+    if (isRepeat(node)) {
+        if (key === 'body') return node.body;
+        return null;
+    }
+    return null;
+}
+
+/**
+ * 0.7.1-P2：immutable 重写容器块 {@code node} 在序列键 {@code key} 下的子序列为
+ * {@code newSeq}，返回克隆后的新节点。键不属该块 → 原样返回 node（防御）。
+ * 与 {@link getChildSeq} 对偶，是 transformSequence 唯一回写点。
+ */
+function withChildSeq(node: ScriptAction, key: string, newSeq: ScriptAction[]): ScriptAction {
+    if (isIf(node)) {
+        if (key === 'then') return { ...node, then: newSeq };
+        if (key === 'else') return { ...node, else: newSeq };
+        return node;
+    }
+    if (isRepeat(node)) {
+        if (key === 'body') return { ...node, body: newSeq };
+        return node;
+    }
+    return node;
 }
 
 /**
@@ -176,7 +228,8 @@ function adjustParentPathAfterRemoval(
 /**
  * 前序遍历整棵树，对每个动作回调 {@code visitor(node, path)}。
  * path 是字符串路径（如 {@code "actions/2/then/1"}，与后端 trace 同构）。
- * if 块先回调自身，再依次下钻 then、else 子序列。
+ * 容器块先回调自身，再按 {@link NESTED_SEQ_KEYS} 顺序下钻各子序列
+ * （if → then、else；repeat → body）。
  */
 export function walk(
     actions: ScriptAction[],
@@ -194,24 +247,27 @@ function walkSeq(
         const node = seq[i];
         const path = `${prefix}/${i}`;
         visitor(node, path);
-        if (isIf(node)) {
-            walkSeq(node.then, `${path}/then`, visitor);
-            walkSeq(node.else, `${path}/else`, visitor);
+        // 按固定键序下钻所有子序列（if then/else、repeat body）；非容器块 getChildSeq 返 null。
+        for (const key of NESTED_SEQ_KEYS) {
+            const child = getChildSeq(node, key);
+            if (child !== null) walkSeq(child, `${path}/${key}`, visitor);
         }
     }
 }
 
 /**
- * 镜像后端 {@code ScriptRuleValidator.countBlocks}：每个动作计 1；
- * {@code if} 自身计 1（含在通用 +1）再加 then + else 递归。
+ * 镜像后端 {@code ScriptRuleValidator.countBlocks}：每个动作计 1；容器块自身计 1
+ * （含在通用 +1）再加所有子序列递归（if then/else + 0.7.1-P2 repeat body）。
+ * <b>repeat 不乘 count</b>——硬限 50 是积木树节点数，不是展开后执行动作数。
  * 用于前端 MAX_TOTAL_BLOCKS 预校验。
  */
 export function countBlocks(actions: ScriptAction[]): number {
     let count = 0;
     for (const node of actions) {
         count++;
-        if (isIf(node)) {
-            count += countBlocks(node.then) + countBlocks(node.else);
+        for (const key of NESTED_SEQ_KEYS) {
+            const child = getChildSeq(node, key);
+            if (child !== null) count += countBlocks(child);
         }
     }
     return count;
@@ -220,14 +276,22 @@ export function countBlocks(actions: ScriptAction[]): number {
 /**
  * 最深 {@code if} 嵌套层数（镜像后端 ifDepth 语义：顶层 if = 1，if-in-if = 2 ...）。
  * 无 if → 0。用于前端 MAX_IF_DEPTH 预校验。
+ *
+ * <p>0.7.1-P2：{@code repeat} 自身<b>不增</b> if 深度（与后端 validateActions 一致——repeat
+ * 递归 body 时 ifDepth 不变），但仍下钻 body 找其中的 if。故对每个容器块的所有子序列取
+ * 子深度，只在节点是 if 时 +1。</p>
  */
 export function ifDepth(actions: ScriptAction[]): number {
     let max = 0;
     for (const node of actions) {
-        if (isIf(node)) {
-            const childDepth = Math.max(ifDepth(node.then), ifDepth(node.else));
-            max = Math.max(max, 1 + childDepth);
+        // 子序列里的最深 if 层数（if 与 repeat 都下钻；非容器块无子序列贡献 0）。
+        let childMax = 0;
+        for (const key of NESTED_SEQ_KEYS) {
+            const child = getChildSeq(node, key);
+            if (child !== null) childMax = Math.max(childMax, ifDepth(child));
         }
+        // 仅 if 节点本身让深度 +1；repeat 把 body 的深度原样上传（不 +1）。
+        max = Math.max(max, isIf(node) ? 1 + childMax : childMax);
     }
     return max;
 }
@@ -280,8 +344,8 @@ function resolveSequenceForLeaf(
  * 解析 parentPath（以序列键结尾）指向的序列引用（只读，不复制）。
  *
  * <p>形态校验：第 0 段必须是 {@code 'actions'}；之后每个 {@code (idx, seqKey)} 二元组
- * 表示"进入 actions[idx] 这个 if 的 seqKey 分支"。任一步不是 if / 越界 / 键非
- * then|else → null。</p>
+ * 表示"进入 actions[idx] 这个容器块的 seqKey 子序列"（if → then/else；0.7.1-P2
+ * repeat → body）。任一步该块没有此子序列（非容器 / 键不匹配）/ 越界 → null。</p>
  */
 function resolveSequence(actions: ScriptAction[], parentPath: string[]): ScriptAction[] | null {
     if (parentPath.length === 0 || parentPath[0] !== 'actions') return null;
@@ -294,15 +358,9 @@ function resolveSequence(actions: ScriptAction[], parentPath: string[]): ScriptA
         const idx = toIndex(parentPath[cursor]);
         const branchKey = parentPath[cursor + 1];
         if (idx === null || idx < 0 || idx >= seq.length) return null;
-        const node = seq[idx];
-        if (!isIf(node)) return null;
-        if (branchKey === 'then') {
-            seq = node.then;
-        } else if (branchKey === 'else') {
-            seq = node.else;
-        } else {
-            return null;
-        }
+        const child = getChildSeq(seq[idx], branchKey);
+        if (child === null) return null; // 非容器块 / 键不属该块（如 log 下钻 body、repeat 下钻 then）
+        seq = child;
         cursor += 2;
     }
     return seq;
@@ -310,7 +368,8 @@ function resolveSequence(actions: ScriptAction[], parentPath: string[]): ScriptA
 
 /**
  * immutable 地用 {@code fn} 重写 parentPath 指向的序列，回写整棵树。
- * parentPath 非法 → 原样返回 actions。沿途路径结构共享 + 仅克隆改动链上的 if 节点。
+ * parentPath 非法 → 原样返回 actions。沿途路径结构共享 + 仅克隆改动链上的容器块
+ * （if / 0.7.1-P2 repeat）。
  */
 function transformSequence(
     actions: ScriptAction[],
@@ -325,24 +384,19 @@ function transformSequence(
         return fn(actions);
     }
 
-    // 进入 actions[idx] 的 if，递归改其某分支后克隆回写。
+    // 进入 actions[idx] 的容器块，递归改其某子序列后克隆回写。
     const idx = toIndex(parentPath[1]);
     const branchKey = parentPath[2];
     if (idx === null || idx < 0 || idx >= actions.length) return actions;
     const node = actions[idx];
-    if (!isIf(node)) return actions;
-    if (branchKey !== 'then' && branchKey !== 'else') return actions;
+    const branchSeq = getChildSeq(node, branchKey);
+    if (branchSeq === null) return actions; // 非容器块 / 键不属该块
 
     const innerParent = ['actions', ...parentPath.slice(3)];
-    const branchSeq = branchKey === 'then' ? node.then : node.else;
     const newBranch = transformSequence(branchSeq, innerParent, fn);
     if (newBranch === branchSeq) return actions; // 无改动，结构共享
 
-    const newIf: ScriptAction =
-        branchKey === 'then'
-            ? { ...node, then: newBranch }
-            : { ...node, else: newBranch };
     const next = actions.slice();
-    next[idx] = newIf;
+    next[idx] = withChildSeq(node, branchKey, newBranch);
     return next;
 }
