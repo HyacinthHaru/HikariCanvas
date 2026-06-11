@@ -11,7 +11,13 @@
  * 可视模式」两组断言守这个行为。</p>
  */
 import { describe, expect, it } from 'vitest';
-import { ACTION_DEFS, TRIGGER_DEFS, makeDefaultAction, makeDefaultTrigger } from '../blockDefs';
+import {
+    ACTION_DEFS,
+    TRIGGER_DEFS,
+    FRIENDLY_ELEMENT_DEFS,
+    makeDefaultAction,
+    makeDefaultTrigger,
+} from '../blockDefs';
 import { validateRule } from '../validator';
 import { tryParseCondition } from '../condition';
 import type { ScriptRule } from '@/types/protocol';
@@ -70,6 +76,57 @@ describe('makeDefaultAction — 全 kind 合法', () => {
 
     it('log：空 message', () => {
         expect(makeDefaultAction('log')).toEqual({ type: 'log', message: '' });
+    });
+
+    // ---- 0.7.1-P1：友好元素积木默认（kind → setElementProperties，patch 取 FRIENDLY_ELEMENT_DEFS 默认）----
+    it('moveTo：setElementProperties{kind:moveTo, elementId:"", patch:{x:0,y:0}}', () => {
+        expect(makeDefaultAction('moveTo')).toEqual({
+            type: 'setElementProperties', elementId: '', patch: { x: '0', y: '0' }, kind: 'moveTo',
+        });
+    });
+
+    it('show / hide：patch 取 opacity 1 / 0（拖出即定值）', () => {
+        expect(makeDefaultAction('show')).toEqual({
+            type: 'setElementProperties', elementId: '', patch: { opacity: '1' }, kind: 'show',
+        });
+        expect(makeDefaultAction('hide')).toEqual({
+            type: 'setElementProperties', elementId: '', patch: { opacity: '0' }, kind: 'hide',
+        });
+    });
+
+    it('全 8 个友好 kind 都产 setElementProperties + kind 一致 + patch 等于 def.defaultPatch', () => {
+        for (const [kind, def] of Object.entries(FRIENDLY_ELEMENT_DEFS)) {
+            const a = makeDefaultAction(kind);
+            expect(a.type).toBe('setElementProperties');
+            if (a.type === 'setElementProperties') {
+                expect(a.kind).toBe(kind);
+                expect(a.elementId).toBe('');
+                expect(a.patch).toEqual(def.defaultPatch);
+                // patch 是拷贝（改之不污染 def）。
+                expect(a.patch).not.toBe(def.defaultPatch);
+            }
+        }
+    });
+
+    // ---- 0.7.1-P1：4 个低风险新动作 + nudge 默认 ----
+    it('nudgeElement：elementId 留空 + dx/dy 默认 0', () => {
+        expect(makeDefaultAction('nudgeElement')).toEqual({ type: 'nudgeElement', elementId: '', dx: 0, dy: 0 });
+    });
+
+    it('sendMessage：空 text（后端合法）+ channel=chat（首项）', () => {
+        expect(makeDefaultAction('sendMessage')).toEqual({ type: 'sendMessage', text: '', channel: 'chat' });
+    });
+
+    it('setRandomVariable：非空 fullName + 区间 1..6（骰子）', () => {
+        expect(makeDefaultAction('setRandomVariable')).toEqual({ type: 'setRandomVariable', fullName: 'user/roll', min: 1, max: 6 });
+    });
+
+    it('scaleVariable：非空 fullName + op=multiply（首项）+ factor=2', () => {
+        expect(makeDefaultAction('scaleVariable')).toEqual({ type: 'scaleVariable', fullName: 'user/score', op: 'multiply', factor: 2 });
+    });
+
+    it('playTimelineAwait：timelineId 留空（依赖墙上时间轴）', () => {
+        expect(makeDefaultAction('playTimelineAwait')).toEqual({ type: 'playTimelineAwait', timelineId: '' });
     });
 
     it('if：非空合法 condition（拖出即合法）+ then/else 为空数组（非 null）', () => {
@@ -162,7 +219,10 @@ function ruleWithTrigger(trigger: ScriptRule['trigger']): ScriptRule {
 
 describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule（根因 2）', () => {
     // 这些 kind 的引用字段都有非空合法默认（或本就无引用字段），拖出/切换瞬间不该报错。
-    const SELF_VALID_ACTIONS = ['setVariable', 'incrementVariable', 'playSound', 'wait', 'log', 'if'] as const;
+    // 0.7.1 新增：sendMessage（text 空串后端合法）/ setRandomVariable / scaleVariable（变量名非空默认）。
+    const SELF_VALID_ACTIONS =
+        ['setVariable', 'incrementVariable', 'playSound', 'wait', 'log', 'if',
+            'sendMessage', 'setRandomVariable', 'scaleVariable'] as const;
     for (const kind of SELF_VALID_ACTIONS) {
         it(`makeDefaultAction('${kind}') 拖出即合法（validateRule 无错）`, () => {
             const errors = validateRule(ruleWithAction(makeDefaultAction(kind)));
@@ -188,5 +248,12 @@ describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule�
             .some((e) => e.message.includes('时间轴 ID'))).toBe(true);
         expect(validateRule(ruleWithAction(makeDefaultAction('runCommand')))
             .some((e) => e.message.includes('模板 ID'))).toBe(true);
+        // 0.7.1：友好元素积木 / nudge（elementId 空）+ playTimelineAwait（timelineId 空）同理。
+        expect(validateRule(ruleWithAction(makeDefaultAction('moveTo')))
+            .some((e) => e.message.includes('元素 ID'))).toBe(true);
+        expect(validateRule(ruleWithAction(makeDefaultAction('nudgeElement')))
+            .some((e) => e.message.includes('元素 ID'))).toBe(true);
+        expect(validateRule(ruleWithAction(makeDefaultAction('playTimelineAwait')))
+            .some((e) => e.message.includes('时间轴 ID'))).toBe(true);
     });
 });

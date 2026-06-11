@@ -11,8 +11,11 @@ import {
     ACTION_DEFS,
     defFor,
     CATEGORY_COLOR_VAR,
+    FRIENDLY_ELEMENT_DEFS,
+    FRIENDLY_PALETTE_KINDS,
     type BlockDef,
 } from '../blockDefs';
+import { ELEMENT_PROPERTIES, MESSAGE_CHANNELS, SCALE_OPS } from '../validator';
 
 /** 期望的触发器字段集（手抄自 protocol.ts ScriptTrigger，含无数据字段的空集）。 */
 const EXPECTED_TRIGGER_FIELDS: Record<string, string[]> = {
@@ -35,6 +38,12 @@ const EXPECTED_ACTION_FIELDS: Record<string, string[]> = {
     runCommand: ['templateId', 'params'],
     log: ['message'],
     if: ['condition', 'then', 'else'],
+    // 0.7.1-P1：4 个低风险新动作 + 相对移动（setElementProperties 走 FRIENDLY_ELEMENT_DEFS，不进 ACTION_DEFS）。
+    nudgeElement: ['elementId', 'dx', 'dy'],
+    sendMessage: ['text', 'channel'],
+    setRandomVariable: ['fullName', 'min', 'max'],
+    scaleVariable: ['fullName', 'op', 'factor'],
+    playTimelineAwait: ['timelineId'],
 };
 
 function fieldNames(def: BlockDef): string[] {
@@ -66,7 +75,7 @@ describe('blockDefs.TRIGGER_DEFS', () => {
 });
 
 describe('blockDefs.ACTION_DEFS', () => {
-    it('恰好 9 个动作（8 动作 + if，与 protocol.ts ScriptAction 同数）', () => {
+    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1 5 个新动作 = 14）', () => {
         expect(Object.keys(ACTION_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_ACTION_FIELDS).sort(),
         );
@@ -137,6 +146,83 @@ describe('blockDefs.ACTION_DEFS', () => {
     it('playTimeline.seekMs 标记 optional（仅 op=seek 携带）', () => {
         const seek = ACTION_DEFS.playTimeline.fields.find((f) => f.name === 'seekMs')!;
         expect(seek.optional).toBe(true);
+    });
+
+    // ---- 0.7.1-P1：5 个新动作的 def 形态 + select 选项与后端白名单一致 ----
+    it('5 个新动作 def 存在 + kind/category/colorVar 正确', () => {
+        expect(ACTION_DEFS.nudgeElement.category).toBe('action');
+        expect(ACTION_DEFS.sendMessage.category).toBe('action');
+        expect(ACTION_DEFS.setRandomVariable.category).toBe('action');
+        expect(ACTION_DEFS.scaleVariable.category).toBe('action');
+        // playTimelineAwait 归 timeline 分类（与 playTimeline 同配色 mauve）。
+        expect(ACTION_DEFS.playTimelineAwait.category).toBe('timeline');
+        expect(ACTION_DEFS.playTimelineAwait.colorVar).toBe('--ctp-mauve');
+    });
+
+    it('sendMessage.channel 选项与后端 MESSAGE_CHANNELS 一致', () => {
+        const channel = ACTION_DEFS.sendMessage.fields.find((f) => f.name === 'channel')!;
+        expect(channel.options?.map((o) => o.value)).toEqual(['chat', 'actionbar', 'title']);
+        expect(channel.options?.map((o) => o.value).sort()).toEqual([...MESSAGE_CHANNELS].sort());
+    });
+
+    it('scaleVariable.op 选项与后端 SCALE_OPS 一致', () => {
+        const op = ACTION_DEFS.scaleVariable.fields.find((f) => f.name === 'op')!;
+        expect(op.options?.map((o) => o.value)).toEqual(['multiply', 'divide']);
+        expect(op.options?.map((o) => o.value).sort()).toEqual([...SCALE_OPS].sort());
+    });
+});
+
+describe('blockDefs.FRIENDLY_ELEMENT_DEFS', () => {
+    const EXPECTED_FRIENDLY = ['moveTo', 'resize', 'rotateTo', 'setOpacity', 'show', 'hide', 'setText', 'setColor'];
+
+    it('恰好 8 个友好元素 kind', () => {
+        expect(Object.keys(FRIENDLY_ELEMENT_DEFS).sort()).toEqual([...EXPECTED_FRIENDLY].sort());
+    });
+
+    it('每个 def 的 kind 与 map key 一致 + labelKey 指向 script.friendly.*', () => {
+        for (const [key, def] of Object.entries(FRIENDLY_ELEMENT_DEFS)) {
+            expect(def.kind).toBe(key);
+            expect(def.labelKey).toBe(`script.friendly.${key}`);
+        }
+    });
+
+    it('每个 def 的 defaultPatch 键都在后端 ELEMENT_PROPERTIES 白名单内（拖出即合法）', () => {
+        for (const def of Object.values(FRIENDLY_ELEMENT_DEFS)) {
+            for (const k of Object.keys(def.defaultPatch)) {
+                expect(ELEMENT_PROPERTIES.has(k)).toBe(true);
+            }
+            // 可编辑字段名也必须落白名单（字段值 = patch 键）。
+            for (const f of def.fields) {
+                expect(ELEMENT_PROPERTIES.has(f.name)).toBe(true);
+            }
+        }
+    });
+
+    it('show / hide 无可编辑字段（拖出即定值 opacity 1 / 0）', () => {
+        expect(FRIENDLY_ELEMENT_DEFS.show.fields).toEqual([]);
+        expect(FRIENDLY_ELEMENT_DEFS.show.defaultPatch).toEqual({ opacity: '1' });
+        expect(FRIENDLY_ELEMENT_DEFS.hide.fields).toEqual([]);
+        expect(FRIENDLY_ELEMENT_DEFS.hide.defaultPatch).toEqual({ opacity: '0' });
+    });
+
+    it('moveTo 字段 = x / y（patch 键），默认 0 / 0', () => {
+        expect(FRIENDLY_ELEMENT_DEFS.moveTo.fields.map((f) => f.name)).toEqual(['x', 'y']);
+        expect(FRIENDLY_ELEMENT_DEFS.moveTo.defaultPatch).toEqual({ x: '0', y: '0' });
+    });
+});
+
+describe('blockDefs.FRIENDLY_PALETTE_KINDS', () => {
+    it('含 9 项（8 友好 kind + nudgeElement）', () => {
+        expect(FRIENDLY_PALETTE_KINDS).toEqual(
+            ['moveTo', 'nudgeElement', 'resize', 'rotateTo', 'setOpacity', 'show', 'hide', 'setText', 'setColor'],
+        );
+    });
+
+    it('除 nudgeElement 外，其余项都在 FRIENDLY_ELEMENT_DEFS 里', () => {
+        for (const kind of FRIENDLY_PALETTE_KINDS) {
+            if (kind === 'nudgeElement') continue;
+            expect(FRIENDLY_ELEMENT_DEFS[kind]).toBeDefined();
+        }
     });
 });
 

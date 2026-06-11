@@ -531,7 +531,17 @@ export type ScriptAction =
     | { type: 'wait'; ms: number }
     | { type: 'runCommand'; templateId: string; params: Record<string, string> }
     | { type: 'log'; message: string }
-    | { type: 'if'; condition: string; then: ScriptAction[]; else: ScriptAction[] };
+    | { type: 'if'; condition: string; then: ScriptAction[]; else: ScriptAction[] }
+    // 0.7.1-P1：友好元素积木的序列化目标 + 4 个低风险新动作。
+    // setElementProperties = 批量设元素属性（友好积木皮肤 kind 透传，后端执行忽略）；
+    // nudgeElement = 相对移动；sendMessage = 给触发玩家发消息；setRandomVariable = 设随机数；
+    // scaleVariable = 变量乘/除；playTimelineAwait = 播时间轴并等播完（Runner 挂起续接）。
+    | { type: 'setElementProperties'; elementId: string; patch: Record<string, string>; kind: string }
+    | { type: 'nudgeElement'; elementId: string; dx: number; dy: number }
+    | { type: 'sendMessage'; text: string; channel: 'chat' | 'actionbar' | 'title' }
+    | { type: 'setRandomVariable'; fullName: string; min: number; max: number }
+    | { type: 'scaleVariable'; fullName: string; op: 'multiply' | 'divide'; factor: number }
+    | { type: 'playTimelineAwait'; timelineId: string };
 
 /**
  * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。

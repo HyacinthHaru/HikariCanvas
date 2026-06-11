@@ -29,6 +29,11 @@ import {
     ELEMENT_PROPERTIES,
     TIMELINE_OPS,
     SOUND_SCOPES,
+    MESSAGE_MAX,
+    PATCH_MAX_KEYS,
+    KIND_MAX,
+    MESSAGE_CHANNELS,
+    SCALE_OPS,
 } from '../validator';
 import type { ScriptRule, ScriptAction, ScriptTrigger } from '@/types/protocol';
 
@@ -74,6 +79,13 @@ describe('validator 常量与后端 ScriptRuleValidator.java 一致', () => {
         );
         expect([...TIMELINE_OPS].sort()).toEqual(['pause', 'play', 'seek']);
         expect([...SOUND_SCOPES].sort()).toEqual(['all', 'near']);
+    });
+    it('0.7.1 新动作常量与后端一致', () => {
+        expect(MESSAGE_MAX).toBe(256);
+        expect(PATCH_MAX_KEYS).toBe(8);
+        expect(KIND_MAX).toBe(32);
+        expect([...MESSAGE_CHANNELS].sort()).toEqual(['actionbar', 'chat', 'title']);
+        expect([...SCALE_OPS].sort()).toEqual(['divide', 'multiply']);
     });
 });
 
@@ -234,6 +246,95 @@ describe('validateRule — 动作字段（blockId=actions/i）', () => {
     });
     it('log message 256 合法', () => {
         expect(validateRule(rule({ actions: [{ type: 'log', message: 'a'.repeat(LOG_MESSAGE_MAX) }] }))).toEqual([]);
+    });
+});
+
+// ---------- 0.7.1-P1 新动作字段（文案与后端逐字一致）----------
+
+describe('validateRule — 0.7.1 新动作字段', () => {
+    it('setElementProperties 合法（kind=moveTo + patch{x,y}）', () => {
+        const a: ScriptAction = { type: 'setElementProperties', elementId: 'el-1', patch: { x: '1', y: '2' }, kind: 'moveTo' };
+        expect(validateRule(rule({ actions: [a] }))).toEqual([]);
+    });
+    it('setElementProperties text 空串合法（setText 友好积木 defaultPatch={text:\'\'}）', () => {
+        const a: ScriptAction = { type: 'setElementProperties', elementId: 'el-1', patch: { text: '' }, kind: 'setText' };
+        expect(validateRule(rule({ actions: [a] }))).toEqual([]);
+    });
+    it('setElementProperties 空 elementId / 空 patch / 非白名单键 / 空值 / 键超 8 / kind 超长', () => {
+        const emptyId: ScriptAction = { type: 'setElementProperties', elementId: '', patch: { x: '1' }, kind: 'moveTo' };
+        expect(validateRule(rule({ actions: [emptyId] })).some((e) => e.message === '设置元素属性缺少元素 ID')).toBe(true);
+        const emptyPatch: ScriptAction = { type: 'setElementProperties', elementId: 'el', patch: {}, kind: 'moveTo' };
+        expect(validateRule(rule({ actions: [emptyPatch] })).some((e) => e.message === '批量设属性的 patch 不能为空')).toBe(true);
+        const bogusKey: ScriptAction = { type: 'setElementProperties', elementId: 'el', patch: { bogus: '1' }, kind: 'x' };
+        expect(validateRule(rule({ actions: [bogusKey] })).some((e) => e.message === '元素属性不在允许范围：bogus')).toBe(true);
+        const emptyVal: ScriptAction = { type: 'setElementProperties', elementId: 'el', patch: { x: '  ' }, kind: 'x' };
+        expect(validateRule(rule({ actions: [emptyVal] })).some((e) => e.message === '属性 x 的值不能为空')).toBe(true);
+        // 9 个键（全合法名但超 8）→ 报超数 + 仍逐键检查。用合法白名单内键凑 9 不可能（仅 8 个），改用重复构造越界检验路径：
+        const tooMany: ScriptAction = {
+            type: 'setElementProperties', elementId: 'el',
+            patch: { x: '1', y: '1', w: '1', h: '1', rotation: '1', opacity: '1', text: 't', fill: '#fff', extra: 'z' },
+            kind: 'x',
+        };
+        expect(validateRule(rule({ actions: [tooMany] })).some((e) => e.message === `patch 属性数超过 ${PATCH_MAX_KEYS}`)).toBe(true);
+        const longKind: ScriptAction = { type: 'setElementProperties', elementId: 'el', patch: { x: '1' }, kind: 'k'.repeat(KIND_MAX + 1) };
+        expect(validateRule(rule({ actions: [longKind] })).some((e) => e.message === 'kind 超长')).toBe(true);
+    });
+
+    it('nudgeElement 合法 / 空 elementId / dx 非有限', () => {
+        const ok: ScriptAction = { type: 'nudgeElement', elementId: 'el', dx: 5, dy: -3 };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        const emptyId: ScriptAction = { type: 'nudgeElement', elementId: '', dx: 1, dy: 1 };
+        expect(validateRule(rule({ actions: [emptyId] })).some((e) => e.message === '相对移动缺少元素 ID')).toBe(true);
+        const nan = { type: 'nudgeElement', elementId: 'el', dx: NaN, dy: 0 } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [nan] })).some((e) => e.message === '相对移动的 dx/dy 必须是有限数值')).toBe(true);
+    });
+
+    it('sendMessage 合法 / text=null / text 超长 / 非法 channel', () => {
+        const ok: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'actionbar' };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        // 空串合法（text != null）。
+        expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: '', channel: 'chat' }] }))).toEqual([]);
+        const nul = { type: 'sendMessage', text: null, channel: 'chat' } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [nul] })).some((e) => e.message === '发消息内容不能为 null')).toBe(true);
+        const long: ScriptAction = { type: 'sendMessage', text: 'a'.repeat(MESSAGE_MAX + 1), channel: 'chat' };
+        expect(validateRule(rule({ actions: [long] })).some((e) => e.message === `发消息内容超长（最多 ${MESSAGE_MAX}）`)).toBe(true);
+        const badCh = { type: 'sendMessage', text: 'hi', channel: 'boss' } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [badCh] })).some((e) => e.message === '消息渠道不在允许范围：boss')).toBe(true);
+        // text 256 合法。
+        expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: 'a'.repeat(MESSAGE_MAX), channel: 'title' }] }))).toEqual([]);
+    });
+
+    it('setRandomVariable 合法 / 空 fullName / min>max / NaN', () => {
+        const ok: ScriptAction = { type: 'setRandomVariable', fullName: 'user/roll', min: 1, max: 6 };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        const emptyName: ScriptAction = { type: 'setRandomVariable', fullName: '', min: 1, max: 6 };
+        expect(validateRule(rule({ actions: [emptyName] })).some((e) => e.message === '随机数变量名不能为空')).toBe(true);
+        const minGtMax: ScriptAction = { type: 'setRandomVariable', fullName: 'user/r', min: 9, max: 1 };
+        expect(validateRule(rule({ actions: [minGtMax] })).some((e) => e.message === '随机区间 min 不能大于 max')).toBe(true);
+        const nan = { type: 'setRandomVariable', fullName: 'user/r', min: NaN, max: 6 } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [nan] })).some((e) => e.message === '随机区间必须是有限数值')).toBe(true);
+    });
+
+    it('scaleVariable 合法 / 空 fullName / 非法 op / NaN factor / divide by 0', () => {
+        const ok: ScriptAction = { type: 'scaleVariable', fullName: 'user/score', op: 'multiply', factor: 2 };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        const emptyName: ScriptAction = { type: 'scaleVariable', fullName: '', op: 'multiply', factor: 2 };
+        expect(validateRule(rule({ actions: [emptyName] })).some((e) => e.message === '乘除变量名不能为空')).toBe(true);
+        const badOp = { type: 'scaleVariable', fullName: 'user/s', op: 'add', factor: 2 } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [badOp] })).some((e) => e.message === '运算不在允许范围：add')).toBe(true);
+        const nan = { type: 'scaleVariable', fullName: 'user/s', op: 'multiply', factor: NaN } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [nan] })).some((e) => e.message === '乘除系数必须是有限数值')).toBe(true);
+        const divZero: ScriptAction = { type: 'scaleVariable', fullName: 'user/s', op: 'divide', factor: 0 };
+        expect(validateRule(rule({ actions: [divZero] })).some((e) => e.message === '除数不能为 0')).toBe(true);
+        // divide 非零合法。
+        expect(validateRule(rule({ actions: [{ type: 'scaleVariable', fullName: 'user/s', op: 'divide', factor: 2 }] }))).toEqual([]);
+    });
+
+    it('playTimelineAwait 合法 / 空 timelineId', () => {
+        const ok: ScriptAction = { type: 'playTimelineAwait', timelineId: 'tl-1' };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        const empty: ScriptAction = { type: 'playTimelineAwait', timelineId: '' };
+        expect(validateRule(rule({ actions: [empty] })).some((e) => e.message === '播时间轴缺少时间轴 ID')).toBe(true);
     });
 });
 

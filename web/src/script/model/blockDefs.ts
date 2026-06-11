@@ -112,6 +112,19 @@ const ELEMENT_PROPERTY_OPTIONS: FieldOption[] = [
     { value: 'fill', labelKey: 'script.fieldOptions.propFill' },
 ];
 
+/** 0.7.1：SendMessage.channel 白名单（镜像后端 MESSAGE_CHANNELS）。 */
+const MESSAGE_CHANNEL_OPTIONS: FieldOption[] = [
+    { value: 'chat', labelKey: 'script.fieldOptions.channelChat' },
+    { value: 'actionbar', labelKey: 'script.fieldOptions.channelActionbar' },
+    { value: 'title', labelKey: 'script.fieldOptions.channelTitle' },
+];
+
+/** 0.7.1：ScaleVariable.op 白名单（镜像后端 SCALE_OPS）。 */
+const SCALE_OP_OPTIONS: FieldOption[] = [
+    { value: 'multiply', labelKey: 'script.fieldOptions.opMultiply' },
+    { value: 'divide', labelKey: 'script.fieldOptions.opDivide' },
+];
+
 /**
  * 六种触发器定义（kind ∈ ScriptTrigger.type）。
  * 字段覆盖各 wire 数据字段：variableChange→fullName / timer→intervalSeconds /
@@ -283,6 +296,59 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'message', type: 'text', labelKey: 'script.fields.message' },
         ],
     },
+    // ---- 0.7.1-P1：4 个低风险新动作 + 相对移动（友好元素积木走 FRIENDLY_ELEMENT_DEFS，不在此）----
+    nudgeElement: {
+        kind: 'nudgeElement',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.nudgeElement',
+        fields: [
+            { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
+            { name: 'dx', type: 'number', labelKey: 'script.fields.dx', step: 1 },
+            { name: 'dy', type: 'number', labelKey: 'script.fields.dy', step: 1 },
+        ],
+    },
+    sendMessage: {
+        kind: 'sendMessage',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.sendMessage',
+        fields: [
+            { name: 'text', type: 'text', labelKey: 'script.fields.messageText' },
+            { name: 'channel', type: 'select', labelKey: 'script.fields.channel', options: MESSAGE_CHANNEL_OPTIONS },
+        ],
+    },
+    setRandomVariable: {
+        kind: 'setRandomVariable',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.setRandomVariable',
+        fields: [
+            { name: 'fullName', type: 'variable', labelKey: 'script.fields.fullName' },
+            { name: 'min', type: 'number', labelKey: 'script.fields.min', step: 1 },
+            { name: 'max', type: 'number', labelKey: 'script.fields.max', step: 1 },
+        ],
+    },
+    scaleVariable: {
+        kind: 'scaleVariable',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.scaleVariable',
+        fields: [
+            { name: 'fullName', type: 'variable', labelKey: 'script.fields.fullName' },
+            { name: 'op', type: 'select', labelKey: 'script.fields.scaleOp', options: SCALE_OP_OPTIONS },
+            { name: 'factor', type: 'number', labelKey: 'script.fields.factor', step: 1 },
+        ],
+    },
+    playTimelineAwait: {
+        kind: 'playTimelineAwait',
+        category: 'timeline',
+        colorVar: CATEGORY_COLOR_VAR.timeline,
+        labelKey: 'script.blocks.playTimelineAwait',
+        fields: [
+            { name: 'timelineId', type: 'timeline', labelKey: 'script.fields.timelineId' },
+        ],
+    },
     if: {
         kind: 'if',
         category: 'control',
@@ -295,6 +361,112 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         ],
     },
 };
+
+// ---------- 0.7.1-P1：友好元素积木皮肤（路线乙——8 个友好积木都序列化成一条 setElementProperties）----------
+
+/**
+ * 友好元素积木皮肤声明。{@code kind} → 标题（{@code labelKey}）+ 该 kind 对应的可编辑字段
+ * （{@code fields}，name = patch 键）+ 拖出时的默认 patch（{@code defaultPatch}）。
+ *
+ * <p>BlockNode 渲染 {@code setElementProperties} 动作时按 {@code action.kind} 查此表选皮肤：
+ * 字段值读写 {@code action.patch[field.name]}。{@code fields} 为空数组（如 show / hide）= 无可编辑
+ * 字段，拖出即定值（show = opacity 1 / hide = opacity 0）。</p>
+ *
+ * <p>这是 0.7.0「1 积木 = 1 条 action」blockId 同构纪律的延续——一个友好积木只产一条 action，
+ * 试跑高亮 / undo / 幽灵拖动天然正确。{@code kind} 仅前端皮肤标记，后端执行忽略。</p>
+ */
+export interface FriendlyElementDef {
+    kind: string;
+    labelKey: string;
+    /** 可编辑字段（name = patch 键）。show / hide 为空数组（拖出即定值）。 */
+    fields: FieldDef[];
+    /** 默认 patch（拖出时写入 action.patch）。 */
+    defaultPatch: Record<string, string>;
+}
+
+/**
+ * 友好元素积木皮肤表（kind → 皮肤）。8 个 kind：moveTo / resize / rotateTo / setOpacity /
+ * show / hide / setText / setColor。字段标签复用现有 {@code script.fieldOptions.prop*} key
+ * （横坐标 X / 纵坐标 Y / 宽度 / 高度 / 旋转 / 不透明度 / 文字 / 填充）。
+ *
+ * <p>{@code setColor} 用 {@code text} 字段输 hex（P1 从简，颜色选择器留后续）；{@code setText}
+ * 用 {@code text} 字段（支持手打 {@code ${var:X}}）。每个 patch 键都在后端 {@code ELEMENT_PROPERTIES}
+ * 白名单内（x/y/w/h/rotation/opacity/text/fill），保证「拖出即合法」。</p>
+ */
+export const FRIENDLY_ELEMENT_DEFS: Record<string, FriendlyElementDef> = {
+    moveTo: {
+        kind: 'moveTo',
+        labelKey: 'script.friendly.moveTo',
+        fields: [
+            { name: 'x', type: 'number', labelKey: 'script.fieldOptions.propX' },
+            { name: 'y', type: 'number', labelKey: 'script.fieldOptions.propY' },
+        ],
+        defaultPatch: { x: '0', y: '0' },
+    },
+    resize: {
+        kind: 'resize',
+        labelKey: 'script.friendly.resize',
+        fields: [
+            { name: 'w', type: 'number', labelKey: 'script.fieldOptions.propW', min: 1 },
+            { name: 'h', type: 'number', labelKey: 'script.fieldOptions.propH', min: 1 },
+        ],
+        defaultPatch: { w: '64', h: '64' },
+    },
+    rotateTo: {
+        kind: 'rotateTo',
+        labelKey: 'script.friendly.rotateTo',
+        fields: [
+            { name: 'rotation', type: 'number', labelKey: 'script.fieldOptions.propRotation', min: 0, max: 359 },
+        ],
+        defaultPatch: { rotation: '0' },
+    },
+    setOpacity: {
+        kind: 'setOpacity',
+        labelKey: 'script.friendly.setOpacity',
+        fields: [
+            { name: 'opacity', type: 'number', labelKey: 'script.fieldOptions.propOpacity', min: 0, max: 1, step: 0.1 },
+        ],
+        defaultPatch: { opacity: '1' },
+    },
+    show: {
+        kind: 'show',
+        labelKey: 'script.friendly.show',
+        fields: [],
+        defaultPatch: { opacity: '1' },
+    },
+    hide: {
+        kind: 'hide',
+        labelKey: 'script.friendly.hide',
+        fields: [],
+        defaultPatch: { opacity: '0' },
+    },
+    setText: {
+        kind: 'setText',
+        labelKey: 'script.friendly.setText',
+        fields: [
+            { name: 'text', type: 'text', labelKey: 'script.fieldOptions.propText' },
+        ],
+        defaultPatch: { text: '' },
+    },
+    setColor: {
+        kind: 'setColor',
+        labelKey: 'script.friendly.setColor',
+        fields: [
+            { name: 'fill', type: 'text', labelKey: 'script.fieldOptions.propFill' },
+        ],
+        defaultPatch: { fill: '#FFFFFF' },
+    },
+};
+
+/**
+ * palette「友好元素」分组的可拖项（kind 即拖出标识，{@code makeDefaultAction(kind)} 生成 action）。
+ *
+ * <p>{@code nudgeElement} 混在友好元素分组里——它对用户是「移动一点」的元素操作，虽走独立
+ * {@code nudgeElement} action（不是 setElementProperties）。其余 8 项是 FRIENDLY_ELEMENT_DEFS 的 kind。</p>
+ */
+export const FRIENDLY_PALETTE_KINDS: string[] = [
+    'moveTo', 'nudgeElement', 'resize', 'rotateTo', 'setOpacity', 'show', 'hide', 'setText', 'setColor',
+];
 
 /**
  * 按 kind 取积木定义（先查动作再查触发器）。未知 kind → {@code null}。
@@ -349,6 +521,36 @@ export function makeDefaultAction(kind: string): ScriptAction {
             return { type: 'runCommand', templateId: '', params: {} };
         case 'log':
             return { type: 'log', message: '' };
+        // 友好元素积木：kind 在 FRIENDLY_ELEMENT_DEFS 里 → 序列化成一条 setElementProperties，
+        // patch 取该 kind 的默认（白名单内，拖出即合法）；elementId 依赖墙上元素 → 留空让用户选。
+        case 'moveTo':
+        case 'resize':
+        case 'rotateTo':
+        case 'setOpacity':
+        case 'show':
+        case 'hide':
+        case 'setText':
+        case 'setColor': {
+            const def = FRIENDLY_ELEMENT_DEFS[kind];
+            return { type: 'setElementProperties', elementId: '', patch: { ...def.defaultPatch }, kind };
+        }
+        // 0.7.1 4 个低风险新动作 + nudge。引用字段给非空合理默认（拖出即合法）：
+        // nudge / 随机 / 乘除给变量名或 dx/dy；sendMessage text 空串后端合法（非引用字段）。
+        case 'nudgeElement':
+            // elementId 依赖墙上元素 → 留空让用户选；dx/dy 默认 0（合法，验证只查有限）。
+            return { type: 'nudgeElement', elementId: '', dx: 0, dy: 0 };
+        case 'sendMessage':
+            // text 空串后端合法（非引用字段，不触发"待完善"角标）；channel 取首项 chat。
+            return { type: 'sendMessage', text: '', channel: 'chat' };
+        case 'setRandomVariable':
+            // fullName 给非空默认（user/roll），区间 1..6（骰子体验）。
+            return { type: 'setRandomVariable', fullName: 'user/roll', min: 1, max: 6 };
+        case 'scaleVariable':
+            // fullName 给非空默认；op 取首项 multiply；factor 默认 2。
+            return { type: 'scaleVariable', fullName: 'user/score', op: 'multiply', factor: 2 };
+        case 'playTimelineAwait':
+            // timelineId 依赖墙上时间轴 → 留空让用户选。
+            return { type: 'playTimelineAwait', timelineId: '' };
         case 'if':
             // condition 给一个能被 tryParseCondition 解析回可视模式的合法默认（var 比较），拖出即合法。
             return { type: 'if', condition: 'var("user/score") > 0', then: [], else: [] };

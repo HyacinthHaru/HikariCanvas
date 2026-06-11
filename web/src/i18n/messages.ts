@@ -760,6 +760,8 @@ export const messages = {
                 timeline: '时间轴',
                 control: '控制',
                 danger: '命令',
+                // 0.7.1：友好元素积木分组（移到 / 改大小 / 显示 / 隐藏 等）。
+                friendly: '元素动作',
             },
             // 拖块入 if 槽的空槽占位（任务 C）
             emptySlot: '把积木拖到这里',
@@ -819,6 +821,23 @@ export const messages = {
                 runCommand: '执行命令',
                 log: '记录日志',
                 if: '如果',
+                // 0.7.1：4 个低风险新动作 + 相对移动。
+                nudgeElement: '移动一点',
+                sendMessage: '发消息',
+                setRandomVariable: '设随机数',
+                scaleVariable: '变量乘除',
+                playTimelineAwait: '播放并等待',
+            },
+            // 0.7.1：友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
+            friendly: {
+                moveTo: '移到',
+                resize: '改大小',
+                rotateTo: '旋转到',
+                setOpacity: '设透明度',
+                show: '显示',
+                hide: '隐藏',
+                setText: '改文字',
+                setColor: '改颜色',
             },
             // 积木内字段标签（参数槽前缀）。
             fields: {
@@ -843,6 +862,15 @@ export const messages = {
                 condition: '条件',
                 then: '那么',
                 else: '否则',
+                // 0.7.1：新动作字段标签。
+                dx: '横向移动',
+                dy: '纵向移动',
+                messageText: '消息内容',
+                channel: '发到哪',
+                min: '最小',
+                max: '最大',
+                scaleOp: '运算',
+                factor: '倍数',
             },
             // select / 切换 类字段的选项友好文案。
             fieldOptions: {
@@ -859,6 +887,12 @@ export const messages = {
                 propOpacity: '不透明度',
                 propText: '文字',
                 propFill: '填充',
+                // 0.7.1：发消息渠道 + 乘除运算。
+                channelChat: '聊天框',
+                channelActionbar: '动作栏',
+                channelTitle: '标题',
+                opMultiply: '乘以',
+                opDivide: '除以',
             },
             // 0.7.0-P5-F：积木参数表单控件文案（下拉占位 / 空列表提示 / 变量按钮）。
             param: {
@@ -1861,6 +1895,8 @@ export const messages = {
                 timeline: 'Timeline',
                 control: 'Control',
                 danger: 'Commands',
+                // 0.7.1: friendly element block group.
+                friendly: 'Element actions',
             },
             emptySlot: 'Drag a block here',
             unknownBlock: 'Unknown block',
@@ -1914,6 +1950,23 @@ export const messages = {
                 runCommand: 'Run command',
                 log: 'Log',
                 if: 'If',
+                // 0.7.1: four low-risk new actions + relative move.
+                nudgeElement: 'Move a bit',
+                sendMessage: 'Send message',
+                setRandomVariable: 'Set random number',
+                scaleVariable: 'Multiply / divide variable',
+                playTimelineAwait: 'Play and wait',
+            },
+            // 0.7.1: friendly element block titles.
+            friendly: {
+                moveTo: 'Move to',
+                resize: 'Resize',
+                rotateTo: 'Rotate to',
+                setOpacity: 'Set opacity',
+                show: 'Show',
+                hide: 'Hide',
+                setText: 'Set text',
+                setColor: 'Set color',
             },
             fields: {
                 fullName: 'Variable',
@@ -1937,6 +1990,15 @@ export const messages = {
                 condition: 'Condition',
                 then: 'Then',
                 else: 'Else',
+                // 0.7.1: new action field labels.
+                dx: 'Move X',
+                dy: 'Move Y',
+                messageText: 'Message text',
+                channel: 'Send to',
+                min: 'Min',
+                max: 'Max',
+                scaleOp: 'Operation',
+                factor: 'Factor',
             },
             fieldOptions: {
                 opPlay: 'Play',
@@ -1952,6 +2014,12 @@ export const messages = {
                 propOpacity: 'Opacity',
                 propText: 'Text',
                 propFill: 'Fill',
+                // 0.7.1: message channel + scale op.
+                channelChat: 'Chat',
+                channelActionbar: 'Action bar',
+                channelTitle: 'Title',
+                opMultiply: 'Multiply by',
+                opDivide: 'Divide by',
             },
             // 0.7.0-P5-F: block param form control strings.
             param: {

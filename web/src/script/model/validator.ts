@@ -66,6 +66,19 @@ export const TIMELINE_OPS: ReadonlySet<string> = new Set(['play', 'pause', 'seek
 /** PlaySound.scope 白名单（后端 {@code SOUND_SCOPES}）。 */
 export const SOUND_SCOPES: ReadonlySet<string> = new Set(['near', 'all']);
 
+// ---------- 0.7.1-P1 新动作常量（逐一对照 ScriptRuleValidator.java）----------
+
+/** SendMessage.text 最大长度。后端 {@code MESSAGE_MAX}。 */
+export const MESSAGE_MAX = 256;
+/** SetElementProperties.patch 最大键数。后端 {@code PATCH_MAX_KEYS}。 */
+export const PATCH_MAX_KEYS = 8;
+/** SetElementProperties.kind 最大长度。后端 {@code KIND_MAX}。 */
+export const KIND_MAX = 32;
+/** SendMessage.channel 白名单。后端 {@code MESSAGE_CHANNELS}。 */
+export const MESSAGE_CHANNELS: ReadonlySet<string> = new Set(['chat', 'actionbar', 'title']);
+/** ScaleVariable.op 白名单。后端 {@code SCALE_OPS}。 */
+export const SCALE_OPS: ReadonlySet<string> = new Set(['multiply', 'divide']);
+
 // ---------- 返回类型 ----------
 
 /**
@@ -309,6 +322,84 @@ function validateAction(
             // 递归两分支（depth 已 +1，与后端一致）。
             validateActions(action.then ?? [], depth, `${path}/then`, errors);
             validateActions(action.else ?? [], depth, `${path}/else`, errors);
+            break;
+        }
+        // ---- 0.7.1-P1：6 个新 action（文案与后端 ScriptRuleValidator 逐字一致）----
+        case 'setElementProperties': {
+            if (isBlank(action.elementId)) {
+                errors.push({ blockId: path, message: '设置元素属性缺少元素 ID' });
+            }
+            const keys = Object.keys(action.patch ?? {});
+            if (keys.length === 0) {
+                errors.push({ blockId: path, message: '批量设属性的 patch 不能为空' });
+            }
+            if (keys.length > PATCH_MAX_KEYS) {
+                errors.push({ blockId: path, message: `patch 属性数超过 ${PATCH_MAX_KEYS}` });
+            }
+            if (action.kind != null && action.kind.length > KIND_MAX) {
+                errors.push({ blockId: path, message: 'kind 超长' });
+            }
+            for (const [k, v] of Object.entries(action.patch ?? {})) {
+                if (!ELEMENT_PROPERTIES.has(k)) {
+                    errors.push({ blockId: path, message: `元素属性不在允许范围：${k}` });
+                }
+                // text 空串是合法内容（后端 ElementPropertyApplier.buildPatch 接受空文字）；
+                // 其余键空串会静默变 0 或 hex 失败，仍查空——与后端逐字一致。
+                if (k !== 'text' && isBlank(v)) {
+                    errors.push({ blockId: path, message: `属性 ${k} 的值不能为空` });
+                }
+            }
+            break;
+        }
+        case 'nudgeElement': {
+            if (isBlank(action.elementId)) {
+                errors.push({ blockId: path, message: '相对移动缺少元素 ID' });
+            }
+            if (!Number.isFinite(action.dx) || !Number.isFinite(action.dy)) {
+                errors.push({ blockId: path, message: '相对移动的 dx/dy 必须是有限数值' });
+            }
+            break;
+        }
+        case 'sendMessage': {
+            if (action.text == null) {
+                errors.push({ blockId: path, message: '发消息内容不能为 null' });
+            } else if (action.text.length > MESSAGE_MAX) {
+                errors.push({ blockId: path, message: `发消息内容超长（最多 ${MESSAGE_MAX}）` });
+            }
+            if (action.channel == null || !MESSAGE_CHANNELS.has(action.channel)) {
+                errors.push({ blockId: path, message: `消息渠道不在允许范围：${action.channel}` });
+            }
+            break;
+        }
+        case 'setRandomVariable': {
+            if (isBlank(action.fullName)) {
+                errors.push({ blockId: path, message: '随机数变量名不能为空' });
+            }
+            if (!Number.isFinite(action.min) || !Number.isFinite(action.max)) {
+                errors.push({ blockId: path, message: '随机区间必须是有限数值' });
+            } else if (action.min > action.max) {
+                errors.push({ blockId: path, message: '随机区间 min 不能大于 max' });
+            }
+            break;
+        }
+        case 'scaleVariable': {
+            if (isBlank(action.fullName)) {
+                errors.push({ blockId: path, message: '乘除变量名不能为空' });
+            }
+            if (action.op == null || !SCALE_OPS.has(action.op)) {
+                errors.push({ blockId: path, message: `运算不在允许范围：${action.op}` });
+            }
+            if (!Number.isFinite(action.factor)) {
+                errors.push({ blockId: path, message: '乘除系数必须是有限数值' });
+            } else if (action.op === 'divide' && action.factor === 0) {
+                errors.push({ blockId: path, message: '除数不能为 0' });
+            }
+            break;
+        }
+        case 'playTimelineAwait': {
+            if (isBlank(action.timelineId)) {
+                errors.push({ blockId: path, message: '播时间轴缺少时间轴 ID' });
+            }
             break;
         }
     }
