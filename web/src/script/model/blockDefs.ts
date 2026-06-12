@@ -502,6 +502,25 @@ export const FRIENDLY_ELEMENT_DEFS: Record<string, FriendlyElementDef> = {
 };
 
 /**
+ * 0.7.1-P3 波2：友好元素积木 {@code kind} → 「点选元素时该从元素当前态取哪些值填进 patch」。
+ *
+ * <p>预览框点选命中元素后（深度2），除回填 {@code elementId}，对<b>坐标/尺寸/旋转/透明度</b>类
+ * 友好积木顺带把元素的当前几何填进 {@code patch}——免去用户手抄坐标。映射的字段名（{@code x/y/
+ * w/h/rotation/opacity}）<b>与后端 ELEMENT_PROPERTIES 白名单 + FRIENDLY_ELEMENT_DEFS 的 patch
+ * 键逐字符一致</b>（moveTo→x/y，resize→w/h，rotateTo→rotation，setOpacity→opacity）。</p>
+ *
+ * <p>不在表内的 kind（{@code show} / {@code hide} / {@code setText} / {@code setColor}）= 只回填
+ * elementId 不取几何（显隐 / 文字 / 颜色与元素当前坐标无关）。值取自 Element 的同名属性
+ * （{@code rotation} / {@code opacity} 可能缺省，取值方按需兜底）。</p>
+ */
+export const FRIENDLY_KIND_CURRENT_FIELDS: Record<string, string[]> = {
+    moveTo: ['x', 'y'],
+    resize: ['w', 'h'],
+    rotateTo: ['rotation'],
+    setOpacity: ['opacity'],
+};
+
+/**
  * palette「友好元素」分组的可拖项（kind 即拖出标识，{@code makeDefaultAction(kind)} 生成 action）。
  *
  * <p>{@code nudgeElement} 混在友好元素分组里——它对用户是「移动一点」的元素操作，虽走独立

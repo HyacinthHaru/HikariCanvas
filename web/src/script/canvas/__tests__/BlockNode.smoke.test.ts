@@ -407,4 +407,67 @@ describe('BlockNode 0.7.1 友好元素皮肤渲染（setElementProperties）', (
         await nextTick();
         expect(w.find('.hc-block-need-select').exists()).toBe(false);
     });
+
+    it('0.7.1-P3 波2：friendly 元素下拉 focusin → setActiveElementBinding(path)', async () => {
+        const project = (await import('@/stores/project')).useProjectStore();
+        project.setSnapshot({
+            canvas: { width: 128, height: 128, background: '#000' },
+            layers: [{ id: 'l1', name: 'L', visible: true, locked: false, opacity: 1, elements: [
+                { id: 'e-1', type: 'rect', x: 0, y: 0, w: 10, h: 10, fill: '#fff' },
+            ] }],
+            activeLayerId: 'l1', gridSize: 8, guides: [], timelines: [], activeTimelineId: null,
+        } as never);
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'setActiveElementBinding');
+        const w = mountNode(friendlyMoveTo('e-1', '0', '0'), 'actions/3');
+        await nextTick();
+        // 元素下拉 focusin（focus 冒泡）→ 记本积木 path
+        const sel = w.find('select');
+        expect(sel.exists()).toBe(true);
+        await sel.trigger('focusin');
+        expect(spy).toHaveBeenCalledWith('actions/3');
+    });
+});
+
+describe('BlockNode 0.7.1-P3 波2：常规块元素字段 focusin 绑定', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
+    });
+
+    async function seedOneElement() {
+        const project = (await import('@/stores/project')).useProjectStore();
+        project.setSnapshot({
+            canvas: { width: 128, height: 128, background: '#000' },
+            layers: [{ id: 'l1', name: 'L', visible: true, locked: false, opacity: 1, elements: [
+                { id: 'e-1', type: 'rect', x: 0, y: 0, w: 10, h: 10, fill: '#fff' },
+            ] }],
+            activeLayerId: 'l1', gridSize: 8, guides: [], timelines: [], activeTimelineId: null,
+        } as never);
+    }
+
+    it('setElementProperty（万能积木）元素下拉 focusin → setActiveElementBinding(path)', async () => {
+        await seedOneElement();
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'setActiveElementBinding');
+        const w = mountNode({ type: 'setElementProperty', elementId: 'e-1', property: 'x', value: '0' }, 'actions/5');
+        await nextTick();
+        const sel = w.find('select');
+        expect(sel.exists()).toBe(true);
+        await sel.trigger('focusin');
+        expect(spy).toHaveBeenCalledWith('actions/5');
+    });
+
+    it('非元素字段（setVariable 的 value 文本框）focusin 不记绑定', async () => {
+        await seedOneElement();
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'setActiveElementBinding');
+        const w = mountNode({ type: 'setVariable', fullName: 'user/score', value: '0' }, 'actions/0');
+        await nextTick();
+        const textInput = w.find('input[type="text"]');
+        expect(textInput.exists()).toBe(true);
+        await textInput.trigger('focusin');
+        expect(spy).not.toHaveBeenCalled();
+    });
 });

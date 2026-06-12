@@ -291,6 +291,23 @@ function onFriendlyElementUpdate(value: unknown): void {
 }
 
 /**
+ * 0.7.1-P3 波2：本块的「元素」字段获得焦点 → 记下本积木 path 到 {@code activeElementBinding}，
+ * 让预览框（PreviewPane）点选元素时知道把命中的 elementId（及当前坐标值）填到哪条积木。
+ *
+ * <p>挂在元素字段控件外层 {@code @focusin}（focus 会冒泡，故 focusin 而非 focus）：用户点元素
+ * 下拉 / 给它 tab 焦点即标记。纯 UI 焦点态，不发 op、不受 lock 影响。常规块的 element 字段
+ * （setElementProperty / nudgeElement 的 elementId）与友好块的 elementId 字段共用此入口。</p>
+ */
+function onElementFieldFocus(): void {
+    edit.setActiveElementBinding(props.path);
+}
+
+/** 某字段是否「元素」类型（决定要不要给它挂 element-binding 焦点钩子）。 */
+function isElementField(field: FieldDef): boolean {
+    return field.type === 'element';
+}
+
+/**
  * runCommand 的复合 command 控件改值：BlockParamInput emit {@link CommandValue}
  * （templateId + params 一起），整体回写到 action 的两个字段。
  */
@@ -416,14 +433,16 @@ const needSelectTitle = computed(() =>
       <!-- 0.7.1 友好元素积木：先元素下拉，再皮肤字段（值落 action.patch）。
            show/hide 的 friendlyFields 为空 → 只渲染元素下拉。 -->
       <template v-if="isFriendly">
-        <BlockParamInput
-          class="hc-block-param-input"
-          :field="FRIENDLY_ELEMENT_FIELD"
-          :value="friendlyElementValue"
-          :action-kind="action.type"
-          :disabled="locked"
-          @update="onFriendlyElementUpdate"
-        />
+        <!-- 0.7.1-P3 波2：元素字段外层 @focusin → 记 activeElementBinding（预览点选填到本积木） -->
+        <span class="hc-block-param-input" @focusin="onElementFieldFocus">
+          <BlockParamInput
+            :field="FRIENDLY_ELEMENT_FIELD"
+            :value="friendlyElementValue"
+            :action-kind="action.type"
+            :disabled="locked"
+            @update="onFriendlyElementUpdate"
+          />
+        </span>
         <BlockParamInput
           v-for="f in friendlyFields"
           :key="f.name"
@@ -436,18 +455,28 @@ const needSelectTitle = computed(() =>
         />
       </template>
 
-      <!-- 常规块：按 def.fields 渲染标量参数槽 -->
-      <BlockParamInput
-        v-for="f in scalarFields"
-        v-else
-        :key="f.name"
-        class="hc-block-param-input"
-        :field="f"
-        :value="fieldValue(f)"
-        :action-kind="action.type"
-        :disabled="locked"
-        @update="(v: unknown) => onFieldUpdate(f, v)"
-      />
+      <!-- 常规块：按 def.fields 渲染标量参数槽。元素字段（setElementProperty / nudgeElement 的
+           elementId）外层 @focusin → 记 activeElementBinding（预览点选填到本积木）。 -->
+      <template v-else v-for="f in scalarFields" :key="f.name">
+        <span v-if="isElementField(f)" class="hc-block-param-input" @focusin="onElementFieldFocus">
+          <BlockParamInput
+            :field="f"
+            :value="fieldValue(f)"
+            :action-kind="action.type"
+            :disabled="locked"
+            @update="(v: unknown) => onFieldUpdate(f, v)"
+          />
+        </span>
+        <BlockParamInput
+          v-else
+          class="hc-block-param-input"
+          :field="f"
+          :value="fieldValue(f)"
+          :action-kind="action.type"
+          :disabled="locked"
+          @update="(v: unknown) => onFieldUpdate(f, v)"
+        />
+      </template>
     </div>
 
     <!-- runCommand 复合 command 控件（templateId + 动态 params 子输入） -->

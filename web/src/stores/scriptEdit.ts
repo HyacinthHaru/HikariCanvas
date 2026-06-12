@@ -81,6 +81,27 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     const redoStack = ref<ScriptRule[]>([]);
 
     /**
+     * 0.7.1-P3 波2：当前聚焦的「元素」字段所属积木的 path（如 {@code 'actions/0'} /
+     * {@code 'actions/2/then/1'}）；null = 当前没有任何元素字段在聚焦。
+     *
+     * <p>用途：让预览框（PreviewPane）的"点选元素 = 绑定"知道把命中的 {@code elementId}（及当前
+     * 坐标值）填到<b>哪条积木</b>。BlockNode 的元素下拉获得焦点（{@code @focusin}）时
+     * {@link setActiveElementBinding} 记下该积木 path；切规则 / 清焦点时清 null。纯 UI 焦点态，
+     * 不发任何 op、不受 lock 影响。</p>
+     */
+    const activeElementBinding = ref<string | null>(null);
+
+    /** 记下当前活跃的元素字段所属积木 path（null = 清除）。BlockNode 元素字段 focusin 调。 */
+    function setActiveElementBinding(path: string | null): void {
+        activeElementBinding.value = path;
+    }
+
+    /** 清除当前活跃元素字段绑定（元素下拉失焦 / 退出编辑时调）。 */
+    function clearActiveElementBinding(): void {
+        activeElementBinding.value = null;
+    }
+
+    /**
      * H（K-UI-9）：对当前 workingCopy 跑前端 validator 镜像得所有错误（空数组 = 合法）。
      * 无 workingCopy → 空数组。UI（ScriptEditorOverlay）读它显红字 banner；{@link doSave}
      * 在 send 前也读它——有错则<b>不 send 且保留 dirty</b>（防"拖完保存才被后端打回"）。
@@ -114,6 +135,8 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         undoStack.value = [];
         redoStack.value = [];
         dirty.value = false;
+        // 0.7.1-P3 波2：切规则 → 清元素字段绑定（上一规则的积木 path 在新规则里无意义）。
+        activeElementBinding.value = null;
     }
 
     /**
@@ -127,6 +150,8 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         undoStack.value = [];
         redoStack.value = [];
         dirty.value = false;
+        // 0.7.1-P3 波2：退出编辑也清元素字段绑定。
+        activeElementBinding.value = null;
     }
 
     // ---------- 新建 / 删除规则 ----------
@@ -528,10 +553,12 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
 
     return {
         selectedRuleId, workingCopy, dirty, dragging, undoStack, redoStack,
+        activeElementBinding,
         validationErrors,
         selectRule, closeEditing,
         newRule, deleteRule,
         setActions, setTrigger, setName, setEnabled, setStackPos, updateActionField, removeAction,
+        setActiveElementBinding, clearActiveElementBinding,
         setDragging,
         undo, redo,
         scheduleSave, flushSave,

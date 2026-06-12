@@ -741,3 +741,38 @@ describe('scriptEditStore — validationErrors 预校验阻止 save', () => {
         expect(sendScriptUpdate).not.toHaveBeenCalled();
     });
 });
+
+describe('scriptEditStore — activeElementBinding（0.7.1-P3 波2 T4）', () => {
+    it('默认 null', () => {
+        const edit = useScriptEditStore();
+        expect(edit.activeElementBinding).toBe(null);
+    });
+
+    it('setActiveElementBinding 设值 / 清空', () => {
+        const edit = useScriptEditStore();
+        edit.setActiveElementBinding('actions/0');
+        expect(edit.activeElementBinding).toBe('actions/0');
+        edit.setActiveElementBinding(null);
+        expect(edit.activeElementBinding).toBe(null);
+    });
+
+    it('clearActiveElementBinding 清空', () => {
+        const edit = useScriptEditStore();
+        edit.setActiveElementBinding('actions/2/then/0');
+        expect(edit.activeElementBinding).toBe('actions/2/then/0');
+        edit.clearActiveElementBinding();
+        expect(edit.activeElementBinding).toBe(null);
+    });
+
+    it('selectRule 切规则时清 null（避免把上一规则的元素字段绑定带过去）', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        scripts.upsert(makeRule('sr-2'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setActiveElementBinding('actions/0');
+        expect(edit.activeElementBinding).toBe('actions/0');
+        edit.selectRule('sr-2');
+        expect(edit.activeElementBinding).toBe(null);
+    });
+});
