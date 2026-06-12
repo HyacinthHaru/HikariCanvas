@@ -100,7 +100,11 @@ function renderLayerSlowPath(
     dstCtx.putImageData(dstImg, 0, 0);
 }
 
-function drawElement(ctx: CanvasRenderingContext2D, e: Element, widthPx: number, heightPx: number): void {
+/**
+ * 渲染单个元素到 ctx（已含 rotation 绕中心 + opacity globalAlpha 复合）。0.7.1-P4 导出供
+ * PreviewPane 画半透明虚影复用（调用方包 save + globalAlpha=0.5 + drawElement + restore）。
+ */
+export function drawElement(ctx: CanvasRenderingContext2D, e: Element, widthPx: number, heightPx: number): void {
     if (e.renderMode === 'dither') {
         drawDitheredElement(ctx, e, widthPx, heightPx);
         return;

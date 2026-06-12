@@ -48,3 +48,26 @@ export function wallToPreview(t: PreviewTransform, x: number, y: number): { x: n
 export function previewToWall(t: PreviewTransform, px: number, py: number): { x: number; y: number } {
     return { x: (px - t.offsetX) / t.scale, y: (py - t.offsetY) / t.scale };
 }
+
+/**
+ * 0.7.1-P4：指针 client 坐标 → 墙坐标，<b>以 canvas 真实 rect 为原点比例映射</b>。
+ *
+ * <p>消除 P3 审查 M1：{@link computePreviewTransform} 的 offset/scale 用<b>未 round</b> 的尺寸算，
+ * 但 canvas CSS 宽是 {@code round(wallW*scale)}，flex 居中下 canvas 真实左上角与 transform 原点
+ * 差 ~0.5px。本函数不经 transform——直接用 {@code crect.width/height}（= round 后真实 CSS 尺寸）
+ * 把 client 像素线性映回墙像素（canvas 内部分辨率 = 墙像素，1:1）。crect 任一维 ≤ 0 或墙未就绪
+ * → null（canvas 尚未布局，调用方应早退不拖动）。</p>
+ */
+export function clientToWall(
+    crect: { left: number; top: number; width: number; height: number },
+    wallW: number,
+    wallH: number,
+    clientX: number,
+    clientY: number,
+): { x: number; y: number } | null {
+    if (crect.width <= 0 || crect.height <= 0 || wallW <= 0 || wallH <= 0) return null;
+    return {
+        x: ((clientX - crect.left) * wallW) / crect.width,
+        y: ((clientY - crect.top) * wallH) / crect.height,
+    };
+}
