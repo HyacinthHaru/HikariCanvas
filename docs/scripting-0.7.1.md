@@ -71,7 +71,7 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 1. 用户点某个"移到 (x,y)"积木 → 该积木成为"当前坐标编辑积木"(编辑器局部 ref `activeCoordBlock`)
 2. PreviewPane 显示:实体元素(现状，不动)+ 若该积木已有 x/y → 一个半透明虚影在 (x,y) 处标"积木N目标"
 3. 用户在预览里拖虚影(或拖元素的虚影副本)→ 虚影跟手移动，实体不动
-4. 松手 → 虚影坐标 `previewToWall` → 写回积木 x/y(走 `edit.updateActionField`)→ 虚影留在新目标处
+4. 松手 → 虚影坐标 `previewToWall` → 写回积木 x/y(走 `edit.updateActionField`)→ 虚影留在新目标处。**⚠️ P3 审查 M1**：`computePreviewTransform.offsetX/Y` 用未 round 的 canvas 尺寸算，但 canvas CSS 宽用 `round(wallW*scale)`，flex 居中下实际原点差 ~0.5px → previewToWall 在 scale<1 时有 ≤1 墙像素偏差。**P4 写回坐标前**要么 round offset 对齐渲染、要么用 canvas 真实 `getBoundingClientRect()` 而非 host rect 喂 previewToWall。
 5. 切到别的积木 → `activeCoordBlock` 变 → 预览只显新积木的虚影(E5)
 
 ### 2.4 元素绑定(E4)
@@ -152,7 +152,7 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 |---|---|---|---:|
 | **P1** ✅ | 友好元素积木(§3，8 个)+ 低风险新动作(发消息/随机/乘除/播完等待) + nudge 相对移动(走后端 setElementProperties/nudgeElement) | 实测 | ~30h |
 | **P2** ✅ | 新触发器(右键墙/离开区域/退服)+ 有界循环「重复N次」+ 协议 v5 升版 | 实测 | ~30h |
-| **P3** | 预览框布局重构(左右分栏)+ PreviewPane 渲染 + 元素点选取当前值(深度2) | 实测 | ~40h |
+| **P3** ✅ | 预览框布局重构(左右分栏)+ PreviewPane 渲染 + 元素点选取当前值(深度2) | 实测 | ~40h |
 | **P4** | 幽灵拖动设目标坐标(深度3核心)+ 坐标系换算 + 虚影标记 | **完整实测闸** | ~30h |
 | **P5** | 剩余动作(粒子/等待直到/停止)+ i18n + validator 镜像补 + 收尾 | 全绿收口 | ~20h |
 

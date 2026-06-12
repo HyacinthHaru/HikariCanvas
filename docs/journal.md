@@ -5,6 +5,37 @@
 
 ---
 
+## 2026-06-12 · 0.7.1-P3 完工：预览框左右分栏 + 元素点选取当前值
+
+subagent-driven（波1 布局+渲染 Task 1-3 → 提交 → 波2 点选+取值 Task 4-6 → 合并审查「可提交，0
+blocker/important」→ 修 M2 → 提交）。纯前端，不碰协议/后端。
+
+**波1（布局 + 渲染 + 坐标系）**：ui store `scriptPreviewCollapsed`+`scriptPreviewWidthPct`(clamp[20,70])
+localStorage 持久化；ScriptEditorOverlay `canvas-host` 横向 flex 分栏（左 BlockCanvas + 中分隔条 col-resize
++ 右 PreviewPane），拖宽照 TimelineDock setPointerCapture，折叠 v-if 卸载；PreviewPane 复用
+`renderProjectState` 渲当前墙（canvas 墙像素分辨率 + CSS scale + pixelated → **显示与 hit-test 同源**），
+全量重绘 RAF 合并；`previewCoords.ts` `computePreviewTransform` fit-scale + 居中，`wallToPreview`/
+`previewToWall` 互逆（TDD round-trip <0.5px，**P4 幽灵拖动用**）。
+
+**波2（点选 + 取当前值，深度2）**：`scriptEdit.activeElementBinding`（当前聚焦 elementId 字段积木 path）+
+BlockNode element 字段 @focusin set（**不在 blur 清**——点预览会先 blur select，blur 清会清掉 binding；
+只在 selectRule/真删时清）；PreviewPane @pointerdown 点选 previewToWall（同源）→ `findElementAt`（复用
+Live Paint `elementToPolygon`/`pointInPolygon` 倒序 z-order）→ 填 elementId（下拉天然同步）；取当前值
+`FRIENDLY_KIND_CURRENT_FIELDS`（moveTo→x/y / resize→w/h / rotateTo→rotation / setOpacity→opacity），
+show/hide/setText/setColor + 万能 setElementProperty 只填 elementId；绑定元素描边高亮（墙坐标同 ctx +
+线宽 2/scale 补偿）。
+
+**审查修**：M2 hit-test 镜像渲染的 `layer.opacity<=0` 守卫（否则隐形层可点中绑定不可见元素）。**M1 留给
+P4**（previewCoords offset 未 round 的 ~0.5px 偏差，幽灵拖动写回坐标前要对齐——已记 §2.3）。M3 旋转高亮
+轴对齐 / M4 无需，留。
+
+测试：前端 1041→1078（+37）全绿；后端不变；0 baseline 漂移。3 commit（波1 / 波2+M2 / 收尾）。
+
+关联文件：`web/src/script/canvas/{PreviewPane, previewCoords, ScriptEditorOverlay, BlockNode}` +
+`stores/{ui, scriptEdit}` + `script/model/blockDefs` + i18n
+
+---
+
 ## 2026-06-12 · 0.7.1-P3 启动：预览框左右分栏实施计划
 
 2 路 Explore 摸清 0.7.0 渲染/坐标/布局基础（`PreviewRenderer.renderProjectState` 复用渲墙 + Live Paint
