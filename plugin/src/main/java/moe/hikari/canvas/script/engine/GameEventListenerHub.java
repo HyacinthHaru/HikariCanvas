@@ -31,7 +31,11 @@ import java.util.UUID;
  * <p><b>MONITOR 优先级 + ignoreCancelled</b>：脚本触发是"观察"语义，不改事件结果；
  * 别的插件取消了进服 / 死亡（Paper 的 PlayerDeathEvent 可取消）就不该触发脚本。
  * PlayerJoinEvent / WorldLoadEvent 不可取消，ignoreCancelled 对它们是 no-op；
- * WorldUnloadEvent 可取消——取消的卸载不能把世界从快照表里删掉。</p>
+ * WorldUnloadEvent 可取消——取消的卸载不能把世界从快照表里删掉。
+ * <b>唯一例外</b>：{@link #onPlayerInteractEntity}（右键墙）必须 {@code
+ * ignoreCancelled=false}——HikariCanvas 自己的 {@code FrameProtectionListener}
+ * 必然 cancel 所有 wall frame 右键，脚本 hub 不观察已取消事件就永远收不到右键墙
+ * （见该 handler Javadoc）。</p>
  *
  * <p><b>击杀语义（scripting.md §2.2）</b>：playerKill = 玩家死亡且
  * {@code getKiller() != null}（被另一名玩家击杀）；环境死亡（摔落 / 岩浆等）
@@ -42,7 +46,8 @@ import java.util.UUID;
  * <ul>
  *   <li><b>onPlayerQuit</b>（PlayerQuitEvent，不可取消）→ {@link #handlePlayerQuit}
  *       转发到 {@code router.firePlayerQuit}（全局 quit 索引）。</li>
- *   <li><b>onPlayerInteractEntity</b>（PlayerInteractEntityEvent，可取消）→ 右键目标是
+ *   <li><b>onPlayerInteractEntity</b>（PlayerInteractEntityEvent，可取消——但本 handler 故意
+ *       观察已取消事件，见下）→ 右键目标是
  *       {@link ItemFrame} 时经 {@link WallIdLookup}（生产 = {@code FrameDeployer::wallIdOf}，
  *       PDC 反查）拿 wallId，非 HikariCanvas 画框反查得 null → 跳过；命中 →
  *       {@code router.fireRightClickWall}（按墙索引）。{@link WallIdLookup} 是 Bukkit-type-free
@@ -114,14 +119,24 @@ public final class GameEventListenerHub implements Listener {
     }
 
     /**
-     * 0.7.1：玩家右键实体——只关心右键 {@link ItemFrame}（HikariCanvas 画框）。MONITOR +
-     * ignoreCancelled：别的插件取消了交互（如保护插件）就不触发脚本。右键墙是观察语义，
-     * 不改事件结果。
+     * 0.7.1：玩家右键实体——只关心右键 {@link ItemFrame}（HikariCanvas 画框）。
+     *
+     * <p><b>MONITOR 但 {@code ignoreCancelled = false}（必须观察已取消事件）</b>：
+     * HikariCanvas 自己的 {@code FrameProtectionListener.onPlayerInteractEntity}
+     * （priority=HIGH）会对每一个 wall frame 右键 {@code setCancelled(true)}——这是
+     * 防玩家旋转 / 改画框内容的保护逻辑，wall frame 在游戏内是惰性（inert）的。若本
+     * handler 用 {@code ignoreCancelled=true}，右键墙事件永远被那个保护 cancel 挡掉，
+     * {@code rightClickWall} 触发器永不触发（0.7.1 实测 bug 根因）。MONITOR 是"观察不
+     * 修改"优先级，读取已被取消的事件正是其用途——脚本只 fire 不改事件结果，wall frame
+     * 旋转早已被锁，观察这次右键无副作用。<br>
+     * （边缘：玩家持 wand 时 {@code WandListener} 也会 cancel wall frame 右键——改成
+     * 观察已取消事件后，持 wand 右键墙同样会触发脚本。判定可接受：wand 是编辑期工具，
+     * 玩家正常游玩不持 wand，且本类在 {@code script.engine} 包不应耦合 wand 逻辑。）</p>
      *
      * <p><b>仅主手</b>：PlayerInteractEntityEvent 每次右键对主手 + 副手各派发一次——只认
      * {@code HAND} 避免一次右键触发脚本两次（副手事件丢弃）。</p>
      */
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
     public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
         if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) return;
         if (!(event.getRightClicked() instanceof ItemFrame frame)) return;

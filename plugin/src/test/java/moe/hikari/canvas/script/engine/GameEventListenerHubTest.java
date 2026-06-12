@@ -5,8 +5,12 @@ import moe.hikari.canvas.script.ScriptRule;
 import moe.hikari.canvas.script.ScriptStore;
 import moe.hikari.canvas.script.Trigger;
 import moe.hikari.canvas.variable.VariableInterpolator;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -16,6 +20,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -153,5 +158,51 @@ class GameEventListenerHubTest {
         f.router().rebuildAll();
         f.hub().handleRightClickByWallId(null, "Steve");
         assertEquals(0, f.rec().contexts.size(), "wallId=null（非本插件画框）→ 不触发");
+    }
+
+    // ---------- 回归：FrameProtectionListener cancel × hub ignoreCancelled 交互 ----------
+    //
+    // 0.7.1 实测 bug「右键画板触发器完全不触发」的根因：
+    //   1. FrameProtectionListener.onPlayerInteractEntity（@EventHandler priority=HIGH）对
+    //      每个 wall frame 右键 setCancelled(true)，防玩家旋转 / 改画框内容。
+    //   2. GameEventListenerHub.onPlayerInteractEntity 原本 @EventHandler(MONITOR,
+    //      ignoreCancelled=true) → 已取消事件被 Bukkit 派发层跳过 → rightClickWall 永不触发。
+    //   两个 listener 靠同一组 wall_id PDC 的 frame 互锁。
+    //
+    // 上面那批 handleRightClickByWallId_* / handleRightClick_* 测试直调转发体，绕过真实
+    // @EventHandler 派发，抓不到这个 priority/ignoreCancelled 交互——bug 正是从那个缝隙
+    // 溜过去的。
+    //
+    // 本想用 MockBukkit 注册两个真 listener + 派发真实 PlayerInteractEntityEvent 做端到端
+    // 回归（MockBukkit.PluginManagerMock.callEvent 委托真 Bukkit RegisteredListener，会按
+    // priority 排序 + 尊重每个 handler 的 ignoreCancelled，能如实复现此交互）。但本仓 classpath
+    // 的 MockBukkit-v1.21:3.123.0 与 Paper API 版本错配：ServerMock.<init> 里 InternalTag
+    // .loadInternalTags 解析自带 tag JSON 时抛 "Invalid namespace key minecraft:chain"，mock()
+    // 直接构造失败（全仓零 ServerMock 实跑先例 + ScriptOpPermissionDispatchTest 早已记录此风险）。
+    // 故退而求其次用反射钉死 @EventHandler 注解契约——直接守住「不能把 ignoreCancelled 改回
+    // true」，改回即重现 bug。
+
+    /**
+     * 契约守卫（反射，零 Bukkit 构造成本）：直接钉死
+     * {@code GameEventListenerHub.onPlayerInteractEntity} 的
+     * {@code @EventHandler.ignoreCancelled() == false}。
+     *
+     * <p>HikariCanvas 自己的 {@code FrameProtectionListener}（HIGH）必然 cancel 所有 wall
+     * frame 右键，脚本 hub 不观察已取消事件就永远收不到 {@code rightClickWall}。这是 0.7.1
+     * bug 根因——本测试守住修复不被回退。同时校验它仍是 MONITOR（"观察不修改"语义，读取
+     * 已取消事件正当用途）。</p>
+     */
+    @Test
+    void onPlayerInteractEntity_mustObserveCancelledEvents() throws Exception {
+        Method m = GameEventListenerHub.class.getMethod(
+                "onPlayerInteractEntity", PlayerInteractEntityEvent.class);
+        EventHandler ann = m.getAnnotation(EventHandler.class);
+        assertNotNull(ann, "onPlayerInteractEntity 必须带 @EventHandler");
+        assertFalse(ann.ignoreCancelled(),
+                "ignoreCancelled 必须为 false：HikariCanvas 自己的 FrameProtectionListener "
+                        + "必然 cancel 所有 wall frame 右键，脚本 hub 不观察已取消事件就永远"
+                        + "收不到 rightClickWall（0.7.1 bug 根因）");
+        assertEquals(EventPriority.MONITOR, ann.priority(),
+                "右键墙是观察语义（不改事件结果），应保持 MONITOR——读取已取消事件正是 MONITOR 的用途");
     }
 }
