@@ -29,6 +29,8 @@ import { defFor } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { parseBlockLayout, autoLayout, type BlockLayout } from '../model/serialize';
 import BlockStack from './BlockStack.vue';
+import ScriptVariableWatch from './ScriptVariableWatch.vue';
+import DeleteDropZone from './DeleteDropZone.vue';
 
 const props = defineProps<{
     /**
@@ -200,6 +202,13 @@ function onPointerDown(e: PointerEvent): void {
         @pointerdown.stop
       />
     </div>
+
+    <!-- 0.7.1：拖动作积木时的「删除区」垃圾桶（viewport 内 absolute，不随缩放/平移）。
+         几何与 useBlockDrag.computeDeleteZoneRect 同源对齐。 -->
+    <DeleteDropZone :active="drag.deleteZoneActive.value" :hot="drag.deleteZoneHot.value" />
+
+    <!-- 0.7.1：右下角「本脚本变量实时预览」常驻面板（读当前编辑规则涉及的变量 + 实时值）。 -->
+    <ScriptVariableWatch />
   </div>
 
   <!-- 吸附指示线（命中插槽时，viewport 坐标 fixed 定位）。Teleport 到 body 绕开 world transform。 -->

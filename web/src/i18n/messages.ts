@@ -804,6 +804,17 @@ export const messages = {
             selectRuleHint: '在左侧选一条规则来编辑，或点「新建规则」',
             // 0.7.0-P5-H2：触发器帽子里"选触发类型"下拉的前缀标签。
             triggerKindLabel: '什么时候触发',
+            // 0.7.1：积木画布右下角「本脚本变量实时预览」面板。
+            varWatch: {
+                title: '本脚本用到的变量',
+                noRule: '先选一条规则，这里会列出它用到的变量',
+                noVars: '这条规则还没用到变量',
+            },
+            // 0.7.1：拖积木到「删除区」删单个积木。
+            deleteZone: {
+                hint: '拖到这里删除',
+                release: '松手删除这块',
+            },
             // 积木标题文案（每种触发器 / 动作）。多为"动宾"短句，读起来像在描述这块做什么。
             blocks: {
                 variableChange: '当 变量变化',
@@ -1944,6 +1955,17 @@ export const messages = {
             selectRuleHint: 'Pick a rule on the left to edit, or click "New rule"',
             // 0.7.0-P5-H2: prefix label for the "trigger type" select in the hat block.
             triggerKindLabel: 'When to trigger',
+            // 0.7.1: "variables used by this script" live-preview panel (bottom-right of block canvas).
+            varWatch: {
+                title: 'Variables in this script',
+                noRule: 'Pick a rule to see the variables it uses',
+                noVars: 'This rule doesn\'t use any variables yet',
+            },
+            // 0.7.1: drag a block onto the "delete zone" to remove a single block.
+            deleteZone: {
+                hint: 'Drag here to delete',
+                release: 'Release to delete this block',
+            },
             blocks: {
                 variableChange: 'When variable changes',
                 timer: 'Every interval',

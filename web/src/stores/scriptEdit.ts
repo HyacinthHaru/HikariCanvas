@@ -5,7 +5,7 @@ import { useScriptStore } from './scripts';
 import { useProjectStore } from './project';
 import { useNetworkStore } from './network';
 import { getWsClient } from '@/network/wsClient';
-import { getAt, parsePath, replaceAt } from '@/script/model/blockTree';
+import { getAt, parsePath, removeAt, replaceAt } from '@/script/model/blockTree';
 import { parseBlockLayout, stringifyBlockLayout } from '@/script/model/serialize';
 import { validateRule, type ValidationError } from '@/script/model/validator';
 import { makeDefaultAction } from '@/script/model/blockDefs';
@@ -361,6 +361,30 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         scheduleSave();
     }
 
+    /**
+     * 0.7.1：删除 {@code path}（如 {@code 'actions/2'} / {@code 'actions/2/then/1'} /
+     * {@code 'actions/0/body/0'}）指向的<b>单个动作积木</b>（含其整棵子树）。用于「拖到删除区删积木」
+     * —— 搭错一步不必删整堆重搭。复用 {@link removeAt} immutable 重建（统一支持 if then/else +
+     * repeat body 容器）。lock no-op。
+     *
+     * <p>定位失败（path 非法 / 越界）或删除后 actions 引用未变（无该节点）→ 整体 no-op
+     * （不标脏、不 push undo）。注意：删空 actions 后 server 端 ScriptRuleValidator 会拒"动作列表
+     * 为空"——这与现有 setActions 删到空一致，doSave 会被 validationErrors 挡住保留 dirty，用户补一个
+     * 动作即可保存（画布即时反映删除，不阻塞编辑）。</p>
+     */
+    function removeAction(path: string): void {
+        if (project.isLocked) return;
+        const cur = workingCopy.value;
+        if (!cur) return;
+        const segs = parsePath(path);
+        const nextActions = removeAt(cur.actions, segs);
+        if (nextActions === cur.actions) return; // path 非法 / 越界 / 无变化
+        pushUndo(cur);
+        workingCopy.value = { ...deepCloneRule(cur), actions: nextActions };
+        dirty.value = true;
+        scheduleSave();
+    }
+
     // ---------- 拖拽期冻结（根因 3）----------
 
     /**
@@ -507,7 +531,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         validationErrors,
         selectRule, closeEditing,
         newRule, deleteRule,
-        setActions, setTrigger, setName, setEnabled, setStackPos, updateActionField,
+        setActions, setTrigger, setName, setEnabled, setStackPos, updateActionField, removeAction,
         setDragging,
         undo, redo,
         scheduleSave, flushSave,

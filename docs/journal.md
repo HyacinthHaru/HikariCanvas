@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-06-12 · 0.7.1-P2 实测修复批 + 2 体验 feature
+
+用户实测 P1+P2 打回 2 真 bug + 提 2 feature。systematic-debugging 定位根因后修，再加 feature。
+
+**Bug 1：右键墙触发器完全不触发**。根因：`FrameProtectionListener`（HIGH 优先级，防玩家旋转/破坏画板）
+对每个 wall frame `setCancelled(true)`，而 `GameEventListenerHub.onPlayerInteractEntity`（MONITOR）设
+`ignoreCancelled=true` 跳过已取消事件 → 右键墙永远收不到。两 listener 锁同一组 wall_id PDC frame。单测测
+转发核心绕过真实派发，抓不到 priority×ignoreCancelled 交互。修：hub 改 `ignoreCancelled=false`（MONITOR
+观察已取消事件正是其用途；wall frame 旋转已锁 inert 观察无副作用）+ 反射守护测试（TDD red-proof）。
+MockBukkit 端到端不可行（MockBukkit↔Paper 版本偏移）故 fallback 反射守护。
+
+**Bug 2：循环体编辑丢失（消息空白/变量不增）**。根因：`scriptEdit.ts` 有一套平行手写树操作
+（`replaceActionAt`/`replaceInSeq`）只认 if then/else，漏 repeat body。P2 泛化了 `blockTree`
+（NESTED_SEQ_KEYS）但这套平行实现没同步 → 编辑 repeat body 内积木字段被静默丢弃（不更新不保存），跑默认值
+（空 text / user/score）→ 玩家收空白消息 + 变量不增。修：`blockTree` 加 `replaceAt`（走泛化逻辑覆盖
+then/else/body），`scriptEdit.updateActionField` 改调它，删平行实现 ~52 行 → **单一真相源** + 4 repeat-body
+TDD 测试。（count 10000 非 bug：前端钳 100 + 运行时熔断，行为正确，用户认可。）
+
+**Feature 1：积木画布变量实时预览**。`ScriptVariableWatch.vue` 右下角可折叠浮层 + `extractReferencedVariables`
+helper（递归扫 trigger+actions 含 if/repeat 收集变量 fullName + `${var:X}`）+ resolveFullName + variable
+store 实时值 + alias 优先。不用频繁切变量面板。
+
+**Feature 2：单积木拖动删除**。拖动作积木时右下角现垃圾桶删除区（`DeleteDropZone.vue` + useBlockDrag 纯函数
+几何 hit-test），松手删除该积木（`scriptEdit.removeAction` + `blockTree.removeAt` + undo）。帽子积木不走。
+独立浮层（palette 跨组件树 + pointer capture 收不到 drop）。
+
+测试：后端 1702→1703（+1）/ 前端 987→1028（+41：bug 12 + feature 29）全绿；0 baseline 漂移。4 commit
+（右键墙 / 循环体 / feature / 收尾）。
+
+关联文件：`plugin/.../script/engine/GameEventListenerHub` + 测试；`web/src/script/model/{blockTree,extractVars}`
++ `stores/scriptEdit` + `script/canvas/{useBlockDrag,BlockCanvas,DeleteDropZone,ScriptVariableWatch}` + i18n
+
+---
+
 ## 2026-06-12 · 0.7.1-P2 完工：3 新触发器 + 有界循环 + 协议 v5
 
 subagent-driven（波 1 后端 Task 1-7 + 前端 Task 8-11 并行 → 合并审查「可提交，0 finding」→ 提交）。
