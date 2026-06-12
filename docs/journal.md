@@ -5,6 +5,45 @@
 
 ---
 
+## 2026-06-13 · 0.7.1-P4 完工：幽灵拖动设目标坐标（移到 / 改大小 / 旋转）
+
+预览框里拖元素半透明虚影设三种目标几何，松手写回积木 patch，部署墙触发后元素真变。纯前端、后端零改。
+
+**纯逻辑（可单测）**：
+- `ghostDrag.ts`：buildGhostElement（原元素 + patch 覆盖目标几何）/ rotatePoint（屏幕系顺时针，与
+  drawElement 的 ctx.rotate 同向）/ ghostHandlePos（resize SE 角 + rotate 上方手柄，随 rotation 转）/
+  hitGhostHandle（moveTo 判 bbox 反旋、resize/rotate 判圆点）/ applyGhostDrag（move 平移 / resizeSE
+  左上锚定 / rotate 中心→指针角+90°）
+- `previewCoords.clientToWall`：M1 正解——以 canvas getBoundingClientRect 为原点
+  `(clientX−left)*wallW/width` 比例映射，消 ~0.5px round 偏差、绕开 transform.offset
+
+**渲染 + 交互（PreviewPane.vue）**：导出 `PreviewRenderer.drawElement` 渲虚影副本 + globalAlpha=0.5
+（强制非 dither 绕过 early-return 不透明 bug）；`activeCoordBlock` computed（复用 activeElementBinding，
+判 moveTo/resize/rotateTo + 已绑元素）；按 kind 画 handle + 旋转连杆；onPointerDown 虚影 hit-test
+优先于 P3 点选；window pointermove/up 拖动（照 splitter 范式防 capture 丢失）。BlockNode 坐标字段
+focusin → 显虚影（E12 聚焦即显，复用 onElementFieldFocus）。
+
+**对抗审查（2 视角并行）抓 1 阻断 + 2 重要**：
+- 【阻断】undo 栈被单次拖动占满（60fps 每帧 pushUndo 塞满 cap 50、毁掉之前历史）→ scriptEdit 加
+  `snapshotForUndo`（起拖 1 份）+ `updateActionField(.., coalesce=true)`（拖动逐帧不入栈）；一次拖动
+  = 一个可撤销步
+- 【重要】lock 态虚影可拖但写不动（"看着能拖实际无反馈"困惑）→ `activeCoordBlock` lock 时返 null（不显虚影）
+- 【重要】拖动期不冻结整树 + 写错积木边缘 → 起拖 `setDragging(true)` + move 加 `activeElementBinding
+  !== path` 守卫 + 松手 false
+- 几何核心（旋转方向 / handle 定位 / hit-test 中心 / M1 反算）经独立推导 + 数值仿真确认正确
+- 留实测（§9）：resize 旋转态视觉漂移（rotation=0 精确、w/h 值始终对、有数字表单兜底）/ moveTo bbox
+  拦改绑 / rotate handle 贴顶越界（表单兜底）
+
+**测试**：前端 **1122**（基线 1086 + ghostDrag 22 + previewCoords 12 + scriptEdit coalesce/lock 2），
+后端不变（纯前端）。shadowJar 168M（前端产物经 processResources 进 jar）。4 commit（纯逻辑 `2a93f76`
+/ Vue `636ab06` / 审查修复 `459237c` / 完工本条）。P4a/b/c 三批一次推完，待用户实测核心闸。
+
+关联：`web/src/script/canvas/ghostDrag.ts(+test)` / `previewCoords.ts(+test)` / `PreviewPane.vue` /
+`BlockNode.vue` / `web/src/render/PreviewRenderer.ts` / `web/src/stores/scriptEdit.ts(+test)` /
+`i18n/messages.ts` / `docs/scripting-0.7.1.md §9`。
+
+---
+
 ## 2026-06-13 · 0.7.1-P4 立项：幽灵拖动设目标坐标（设计 backfill + 实施计划）
 
 P4 是 0.7.1 的灵魂——预览框里拖元素半透明虚影设"移到 / 改大小 / 旋转"目标坐标。3 决策用户拍板：
