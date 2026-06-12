@@ -370,7 +370,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
      *
      * <p>定位失败（path 非法 / 越界）→ 整体 no-op（不标脏、不 push undo），避免脏写。</p>
      */
-    function updateActionField(path: string, patch: Partial<ScriptAction>): void {
+    function updateActionField(path: string, patch: Partial<ScriptAction>, coalesce = false): void {
         if (project.isLocked) return;
         const cur = workingCopy.value;
         if (!cur) return;
@@ -380,10 +380,23 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         // 先算出新 actions（无变化则返回原引用 → 跳过，避免无意义快照 / 保存）。
         const nextActions = replaceAt(cur.actions, segs, patch);
         if (nextActions === cur.actions) return;
-        pushUndo(cur);
+        // 0.7.1-P4：coalesce=true（幽灵拖动逐帧写回）跳过入栈——起拖已 snapshotForUndo 存了一份拖动前
+        // 快照，60fps 连续帧若每帧 pushUndo 会瞬间塞满 cap 50、毁掉之前全部历史（Ctrl+Z 失效）。
+        if (!coalesce) pushUndo(cur);
         workingCopy.value = { ...deepCloneRule(cur), actions: nextActions };
         dirty.value = true;
         scheduleSave();
+    }
+
+    /**
+     * 0.7.1-P4：拖动起手存一份 undo 快照。之后拖动中的逐帧写回走 {@code updateActionField(.., true)}
+     * （coalesce）不再入栈——一次拖动 = 一个可撤销步。lock / 无 workingCopy → no-op。
+     */
+    function snapshotForUndo(): void {
+        if (project.isLocked) return;
+        const cur = workingCopy.value;
+        if (!cur) return;
+        pushUndo(cur);
     }
 
     /**
@@ -559,7 +572,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         newRule, deleteRule,
         setActions, setTrigger, setName, setEnabled, setStackPos, updateActionField, removeAction,
         setActiveElementBinding, clearActiveElementBinding,
-        setDragging,
+        setDragging, snapshotForUndo,
         undo, redo,
         scheduleSave, flushSave,
     };

@@ -181,4 +181,7 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 - [x] P4 进入拖拽:**选中坐标积木(聚焦其字段)自动显虚影可拖**，绑元素仍走 P3 准星(P4 已定 2026-06-13)
 - [x] P4 坐标反算 M1:**以 canvas `getBoundingClientRect()` 为原点比例映射** `wallX=(clientX−crect.left)×wallW/crect.width`，消 round 偏差、绕开 `transform.offset`(P4 已定 2026-06-13)
 - [ ] 幽灵拖动在折叠态/极小预览框时的最小可用尺寸(P4 实测定)
+- [ ] P4 resize 旋转态视觉漂移：rotation≠0 时拖角改大小，SE 角与指针有漂移（写回绕 startG 固定中心反旋，但写回后元素中心随 w/h 移动 → 渲染绕新中心转）。**rotation=0 精确、w/h 值始终对、有数字表单兜底**。对抗审查确认（2026-06-13）；留实测，困扰则旋转态隐藏 resize handle + 文案引导
+- [ ] P4 moveTo 虚影 bbox 拦截改绑：moveTo 虚影拦整个 bbox（拖整块），被盖住的元素点不到改绑（resize/rotate 只拦小圆点 handle 不受影响）。留实测，困扰则 moveTo 改"中心拖动把手"+ bbox 其它区落回点选
+- [ ] P4 rotate handle 贴墙顶越界：元素贴顶时旋转手柄在 y<0（canvas 外）抓不到，有 rotation 数字表单兜底。留实测，困扰则 handle 夹到画布内
 - [x] 重复 N 次撞 max-actions-per-run(50)的用户提示:**不做前端预估警告**——靠运行时 Budget 熔断(超 50 动作 → blocked + 试跑 trace 可见),符合"工具不是保姆"哲学(展开数含 if 分支难准估,运行时数据透明更诚实)。`countBlocks` 仍计 repeat body 节点(积木树硬限 50，非展开数)(P2 已定 2026-06-12)

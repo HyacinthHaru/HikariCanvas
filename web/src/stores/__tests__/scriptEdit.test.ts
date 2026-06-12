@@ -153,6 +153,24 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
         expect(edit.undoStack.length).toBe(1);
     });
 
+    it('updateActionField coalesce=true：写回生效但不入 undo 栈（0.7.1-P4 幽灵拖动逐帧防爆栈）', () => {
+        const { edit } = setup();
+        const original = (edit.workingCopy!.actions[0] as { message: string }).message; // 'hi'
+        // 模拟幽灵拖动：起拖存 1 份快照，逐帧 coalesce 写回。
+        edit.snapshotForUndo();
+        expect(edit.undoStack.length).toBe(1);
+        for (let i = 0; i < 30; i++) {
+            edit.updateActionField('actions/0', { message: `f${i}` } as Partial<ScriptAction>, true);
+        }
+        // 30 帧后是末帧值，但 undo 栈仍只有起拖那 1 份（没被逐帧塞满 cap 50、毁掉之前历史）。
+        expect((edit.workingCopy!.actions[0] as { message: string }).message).toBe('f29');
+        expect(edit.dirty).toBe(true);
+        expect(edit.undoStack.length).toBe(1);
+        // 撤销一次直接回到拖动前（而非按 30 次）。
+        edit.undo();
+        expect((edit.workingCopy!.actions[0] as { message: string }).message).toBe(original);
+    });
+
     it('updateActionField 改嵌套 if 分支内的 action', () => {
         const scripts = useScriptStore();
         scripts.upsert(makeRule('sr-if', {
@@ -461,6 +479,14 @@ describe('scriptEditStore — lock 守卫（K-UI-12）', () => {
         expect(edit.undoStack.length).toBe(0);
         expect(sendScriptUpdate).not.toHaveBeenCalled();
         expect(sendScriptEnable).not.toHaveBeenCalled();
+    });
+
+    it('lock 时 snapshotForUndo + coalesce updateActionField no-op（0.7.1-P4 幽灵拖动）', () => {
+        const { edit } = lockedSetup();
+        edit.snapshotForUndo();
+        edit.updateActionField('actions/0', { message: 'x' } as Partial<ScriptAction>, true);
+        expect(edit.undoStack.length).toBe(0); // snapshotForUndo lock 守卫不入栈
+        expect(edit.dirty).toBe(false); // coalesce 写回也被 lock 挡
     });
 
     it('lock 时 newRule no-op 返 null', async () => {

@@ -177,6 +177,9 @@ function drawBindingHighlight(ctx: CanvasRenderingContext2D, scale: number): voi
 const activeCoordBlock = computed<
     { path: string; kind: CoordKind; baseEl: Element; patch: Record<string, string> } | null
 >(() => {
+    // lock 守卫：锁定墙只读，不显可拖虚影（否则虚影 + move 光标可点但写回被 updateActionField 挡 →
+    // 拖了纹丝不动，"看着能拖实际无反馈"困惑）。lock 时连示意都不给。
+    if (project.isLocked) return null;
     const path = edit.activeElementBinding;
     const rule = edit.workingCopy;
     if (!path || !rule) return null;
@@ -294,6 +297,8 @@ function onPointerDown(e: PointerEvent): void {
             const handle = hitGhostHandle(g, cb.kind, w.x, w.y, rWall);
             if (handle) {
                 ghostDrag = { handle, path: cb.path, kind: cb.kind, startG: g, startWx: w.x, startWy: w.y };
+                edit.snapshotForUndo();  // 起拖存 1 份 undo（拖动中逐帧 coalesce 不再入栈，防爆栈）
+                edit.setDragging(true);  // 冻结 server 整树替换（堵第一帧前回声替换树写错积木的边缘）
                 window.addEventListener('pointermove', onGhostPointerMove);
                 window.addEventListener('pointerup', onGhostPointerUp);
                 window.addEventListener('pointercancel', onGhostPointerUp);
@@ -314,6 +319,8 @@ function onPointerDown(e: PointerEvent): void {
 /** P4：虚影拖动中。算新 patch（走唯一写回入口 updateActionField，本地 mutate 让虚影跟手）。 */
 function onGhostPointerMove(e: PointerEvent): void {
     if (!ghostDrag) return;
+    // 绑定已不指向本积木（切积木 / server 替换树）→ 本次拖动作废写回，防把坐标写到别的积木。
+    if (edit.activeElementBinding !== ghostDrag.path) return;
     const w = clientToWallCoord(e.clientX, e.clientY);
     if (!w) return;
     const patch = applyGhostDrag(
@@ -322,14 +329,16 @@ function onGhostPointerMove(e: PointerEvent): void {
     );
     if (Object.keys(patch).length === 0) return;
     const basePatch = activeCoordBlock.value?.patch ?? {};
+    // coalesce=true：拖动逐帧不入 undo 栈（起拖已 snapshotForUndo 一份）。
     edit.updateActionField(ghostDrag.path, {
         patch: { ...basePatch, ...patch },
-    } as Partial<ScriptAction>);
+    } as Partial<ScriptAction>, true);
 }
 
-/** P4：松手 / 取消——解绑 window 监听，结束拖动会话（写回已在 move 里逐帧落，debounce save 收口）。 */
+/** P4：松手 / 取消——解绑 window 监听 + 解冻 server 同步，结束拖动会话（写回已逐帧落，debounce save 收口）。 */
 function onGhostPointerUp(): void {
     ghostDrag = null;
+    edit.setDragging(false);
     window.removeEventListener('pointermove', onGhostPointerMove);
     window.removeEventListener('pointerup', onGhostPointerUp);
     window.removeEventListener('pointercancel', onGhostPointerUp);
