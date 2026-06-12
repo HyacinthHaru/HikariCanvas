@@ -13,6 +13,7 @@ import {
     getAt,
     insertAt,
     removeAt,
+    replaceAt,
     moveNode,
     walk,
     countBlocks,
@@ -177,6 +178,62 @@ describe('blockTree.removeAt', () => {
         const a = nested();
         expect(removeAt(a, ['actions', '9'])).toBe(a);
         expect(removeAt(a, ['actions'])).toBe(a);
+    });
+});
+
+describe('blockTree.replaceAt', () => {
+    it('merge 顶层叶子字段（immutable，不改原树）', () => {
+        const a = nested();
+        const next = replaceAt(a, ['actions', '0'], { message: 'A2' } as Partial<ScriptAction>);
+        expect(next).not.toBe(a);
+        expect(getAt(next, ['actions', '0'])).toEqual({ type: 'log', message: 'A2' });
+        // 原树不变
+        expect(getAt(a, ['actions', '0'])).toEqual({ type: 'log', message: 'A' });
+    });
+
+    it('merge if then 分支内叶子', () => {
+        const a = nested();
+        const next = replaceAt(a, ['actions', '1', 'then', '0'], { message: 'T0!' } as Partial<ScriptAction>);
+        expect(getAt(next, ['actions', '1', 'then', '0'])).toEqual({ type: 'log', message: 'T0!' });
+    });
+
+    it('merge if else 分支内叶子', () => {
+        const a = nested();
+        const next = replaceAt(a, ['actions', '1', 'else', '0'], { message: 'E0!' } as Partial<ScriptAction>);
+        expect(getAt(next, ['actions', '1', 'else', '0'])).toEqual({ type: 'log', message: 'E0!' });
+    });
+
+    it('merge repeat body 内叶子（0.7.1 bug 根因覆盖）', () => {
+        const a: ScriptAction[] = [
+            repeatBlock(3, [{ type: 'incrementVariable', fullName: 'user/score', delta: 1 }]),
+        ];
+        const next = replaceAt(a, ['actions', '0', 'body', '0'], { fullName: 'user/gold' } as Partial<ScriptAction>);
+        expect(getAt(next, ['actions', '0', 'body', '0'])).toEqual({
+            type: 'incrementVariable', fullName: 'user/gold', delta: 1,
+        });
+    });
+
+    it('merge 深层 repeat body → if then 叶子', () => {
+        const a: ScriptAction[] = [
+            repeatBlock(2, [ifBlock('c', [log('old')], [])]),
+        ];
+        const next = replaceAt(a, ['actions', '0', 'body', '0', 'then', '0'], { message: 'new' } as Partial<ScriptAction>);
+        expect(getAt(next, ['actions', '0', 'body', '0', 'then', '0'])).toEqual({ type: 'log', message: 'new' });
+    });
+
+    it('patch 带 type 不改判别符（以 old.type 兜底）', () => {
+        const a = nested();
+        const next = replaceAt(a, ['actions', '0'], { type: 'wait', message: 'still log' } as unknown as Partial<ScriptAction>);
+        expect(getAt(next, ['actions', '0'])).toEqual({ type: 'log', message: 'still log' });
+    });
+
+    it('path 非法 / 越界 / 中途非容器 → 原样返回（同一引用）', () => {
+        const a = nested();
+        expect(replaceAt(a, ['actions', '9'], { message: 'x' } as Partial<ScriptAction>)).toBe(a); // 顶层越界
+        expect(replaceAt(a, ['actions'], { message: 'x' } as Partial<ScriptAction>)).toBe(a); // 非叶子
+        expect(replaceAt(a, ['actions', '0', 'then', '0'], { message: 'x' } as Partial<ScriptAction>)).toBe(a); // log 不是 if
+        expect(replaceAt(a, ['actions', '1', 'then', '9'], { message: 'x' } as Partial<ScriptAction>)).toBe(a); // 分支越界
+        expect(replaceAt(a, [], { message: 'x' } as Partial<ScriptAction>)).toBe(a);
     });
 });
 

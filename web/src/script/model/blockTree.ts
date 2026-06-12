@@ -153,6 +153,42 @@ export function removeAt(actions: ScriptAction[], path: string[]): ScriptAction[
 }
 
 /**
+ * immutable 地把 leafPath 指向的动作用 {@code {...old, ...patch}} 合并替换，回写整棵树。
+ *
+ * <p>leafPath 以 {@code [seqKey, idx]} 结尾（指向具体动作）。沿 {@link transformSequence}
+ * 下钻（已正确支持 if 的 then/else 与 repeat 的 body），定位到末端节点所在的父序列后在该
+ * 下标处 merge patch。<b>type 保护</b>：合并后 type 以原节点为准（patch 即便带了 type 也不
+ * 改判别符，防破坏多态联合）。</p>
+ *
+ * <p>path 非法 / 越界 / 中途遇非容器块下钻 → 原样返回 actions（无变化也返回原引用，调用方
+ * 可用 {@code === } 判跳过）。这是参数表单（F 阶段）改字段的<b>唯一</b>树写入点，取代
+ * scriptEdit 旧有的平行手写递归。</p>
+ *
+ * @param actions  顶层动作树。
+ * @param leafPath 指向被改动作的 path 段数组（如 {@code ['actions','0','body','0']}）。
+ * @param patch    要合并进该动作的部分字段。
+ */
+export function replaceAt(
+    actions: ScriptAction[],
+    leafPath: string[],
+    patch: Partial<ScriptAction>,
+): ScriptAction[] {
+    if (leafPath.length < 2 || leafPath.length % 2 !== 0) return actions;
+    const parentPath = leafPath.slice(0, leafPath.length - 1);
+    const idx = toIndex(leafPath[leafPath.length - 1]);
+    if (idx === null) return actions;
+    return transformSequence(actions, parentPath, (seq) => {
+        if (idx < 0 || idx >= seq.length) return seq;
+        const old = seq[idx];
+        // 保留 type：patch 不应改判别符，即便带了也以 old.type 兜底防破坏多态。
+        const merged = { ...old, ...patch, type: old.type } as ScriptAction;
+        const next = seq.slice();
+        next[idx] = merged;
+        return next;
+    });
+}
+
+/**
  * 把 fromPath 的动作移动到 toParentPath 的 toIndex 处（immutable，先 remove 后 insert）。
  *
  * <p><b>下标 / 路径校正</b>：toParentPath 与 toIndex 由调用方按<b>移动前</b>渲染树测量

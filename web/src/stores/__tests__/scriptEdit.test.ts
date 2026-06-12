@@ -171,6 +171,106 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
         expect(inner).toEqual({ type: 'log', message: 'new' });
     });
 
+    it('updateActionField 改嵌套 if else 分支内的 action（回归保护：else 路径）', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-if2', {
+            actions: [
+                {
+                    type: 'if', condition: 'true',
+                    then: [],
+                    else: [{ type: 'sendMessage', text: '', channel: 'chat' }],
+                },
+            ],
+        }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-if2');
+        edit.updateActionField('actions/0/else/0', { text: 'hi' } as Partial<ScriptAction>);
+        const inner = (edit.workingCopy!.actions[0] as Extract<ScriptAction, { type: 'if' }>).else[0];
+        expect(inner).toEqual({ type: 'sendMessage', text: 'hi', channel: 'chat' });
+    });
+
+    // ---- 0.7.1 bug 修复：repeat body 里的积木编辑被静默丢弃（根因：scriptEdit 平行实现只认 if）----
+
+    it('updateActionField 改 repeat body 内 incrementVariable 的 fullName（不被丢弃）', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-rep', {
+            actions: [
+                {
+                    type: 'repeat', count: 3,
+                    body: [{ type: 'incrementVariable', fullName: 'user/score', delta: 1 }],
+                },
+            ],
+        }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-rep');
+        edit.updateActionField('actions/0/body/0', { fullName: 'user/gold' } as Partial<ScriptAction>);
+        const inner = (edit.workingCopy!.actions[0] as Extract<ScriptAction, { type: 'repeat' }>).body[0];
+        expect(inner).toEqual({ type: 'incrementVariable', fullName: 'user/gold', delta: 1 });
+        expect(edit.dirty).toBe(true);
+        expect(edit.undoStack.length).toBe(1);
+    });
+
+    it('updateActionField 改 repeat body 内 incrementVariable 的 delta（不被丢弃）', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-rep2', {
+            actions: [
+                {
+                    type: 'repeat', count: 5,
+                    body: [{ type: 'incrementVariable', fullName: 'user/score', delta: 1 }],
+                },
+            ],
+        }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-rep2');
+        edit.updateActionField('actions/0/body/0', { delta: 10 } as Partial<ScriptAction>);
+        const inner = (edit.workingCopy!.actions[0] as Extract<ScriptAction, { type: 'repeat' }>).body[0];
+        expect(inner).toEqual({ type: 'incrementVariable', fullName: 'user/score', delta: 10 });
+        expect(edit.dirty).toBe(true);
+    });
+
+    it('updateActionField 改 repeat body 内 sendMessage 的 text（不被丢弃）', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-rep3', {
+            actions: [
+                {
+                    type: 'repeat', count: 2,
+                    body: [{ type: 'sendMessage', text: '', channel: 'chat' }],
+                },
+            ],
+        }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-rep3');
+        edit.updateActionField('actions/0/body/0', { text: '你好' } as Partial<ScriptAction>);
+        const inner = (edit.workingCopy!.actions[0] as Extract<ScriptAction, { type: 'repeat' }>).body[0];
+        expect(inner).toEqual({ type: 'sendMessage', text: '你好', channel: 'chat' });
+        expect(edit.dirty).toBe(true);
+    });
+
+    it('updateActionField 改 repeat body 内 if 的 then 子项（深层嵌套 body → then）', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-rep4', {
+            actions: [
+                {
+                    type: 'repeat', count: 2,
+                    body: [
+                        {
+                            type: 'if', condition: 'true',
+                            then: [{ type: 'log', message: 'old' }],
+                            else: [],
+                        },
+                    ],
+                },
+            ],
+        }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-rep4');
+        edit.updateActionField('actions/0/body/0/then/0', { message: 'new' } as Partial<ScriptAction>);
+        const repeat = edit.workingCopy!.actions[0] as Extract<ScriptAction, { type: 'repeat' }>;
+        const ifNode = repeat.body[0] as Extract<ScriptAction, { type: 'if' }>;
+        expect(ifNode.then[0]).toEqual({ type: 'log', message: 'new' });
+        expect(edit.dirty).toBe(true);
+    });
+
     it('updateActionField path 非法 → no-op（不标脏）', () => {
         const { edit } = setup();
         edit.updateActionField('actions/9', { message: 'x' } as Partial<ScriptAction>);

@@ -5,7 +5,7 @@ import { useScriptStore } from './scripts';
 import { useProjectStore } from './project';
 import { useNetworkStore } from './network';
 import { getWsClient } from '@/network/wsClient';
-import { getAt, parsePath } from '@/script/model/blockTree';
+import { getAt, parsePath, replaceAt } from '@/script/model/blockTree';
 import { parseBlockLayout, stringifyBlockLayout } from '@/script/model/serialize';
 import { validateRule, type ValidationError } from '@/script/model/validator';
 import { makeDefaultAction } from '@/script/model/blockDefs';
@@ -338,8 +338,10 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
 
     /**
      * 改某个 action 的字段值（F 阶段参数表单调）。{@code path} 是 blockTree path 字符串
-     * （如 {@code 'actions/2'} / {@code 'actions/2/then/1'}）；用 getAt 定位 + immutable 重建
-     * 整棵树（沿途 if 节点克隆，未改子树结构共享）。
+     * （如 {@code 'actions/2'} / {@code 'actions/2/then/1'} / {@code 'actions/0/body/0'}）；
+     * 复用 {@link replaceAt} 定位 + immutable 重建整棵树（沿途容器节点克隆，未改子树结构
+     * 共享）。replaceAt 走 blockTree 已泛化的 transformSequence，<b>统一支持</b> if 的 then/else
+     * 与 repeat 的 body——避免 scriptEdit 维护平行实现漏掉新容器键（0.7.1 body 编辑被丢弃的根因）。
      *
      * <p>定位失败（path 非法 / 越界）→ 整体 no-op（不标脏、不 push undo），避免脏写。</p>
      */
@@ -350,8 +352,8 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         const segs = parsePath(path);
         const target = getAt(cur.actions, segs);
         if (target === null) return;
-        // 先算出新 actions（不变则跳过，避免无意义快照 / 保存）。
-        const nextActions = replaceActionAt(cur.actions, segs, patch);
+        // 先算出新 actions（无变化则返回原引用 → 跳过，避免无意义快照 / 保存）。
+        const nextActions = replaceAt(cur.actions, segs, patch);
         if (nextActions === cur.actions) return;
         pushUndo(cur);
         workingCopy.value = { ...deepCloneRule(cur), actions: nextActions };
@@ -511,65 +513,3 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         scheduleSave, flushSave,
     };
 });
-
-// ---------- 内部纯函数 ----------
-
-/**
- * immutable 地把 path 指向的 action 用 {@code {...old, ...patch}} 替换，回写整棵树。
- * 复用 blockTree 的容器解析逻辑——但 blockTree 未导出"替换单节点"，这里自实现一个
- * 沿 path 克隆链 + 末端 merge 的小递归（与 blockTree.transformSequence 同构思路）。
- * path 非法 / 越界 / 中途遇非 if → 原样返回（getAt 已在调用方校验存在性）。
- */
-function replaceActionAt(
-    actions: ScriptAction[],
-    path: string[],
-    patch: Partial<ScriptAction>,
-): ScriptAction[] {
-    if (path.length < 2 || path.length % 2 !== 0) return actions;
-    if (path[0] !== 'actions') return actions;
-    return replaceInSeq(actions, path.slice(1), patch);
-}
-
-/**
- * rest 形如 {@code [idx]} 或 {@code [idx, branchKey, idx, ...]}（已剥去首段 'actions'）。
- * 末端是叶子下标时直接 merge；否则进入对应 if 分支递归。
- */
-function replaceInSeq(
-    seq: ScriptAction[],
-    rest: string[],
-    patch: Partial<ScriptAction>,
-): ScriptAction[] {
-    const idx = toIdx(rest[0]);
-    if (idx === null || idx < 0 || idx >= seq.length) return seq;
-
-    // 末端叶子：rest 仅剩 [idx]。
-    if (rest.length === 1) {
-        const old = seq[idx];
-        // merge 时保留 type（patch 不应改 type；即便带了也以 old.type 兜底防破坏判别）。
-        const merged = { ...old, ...patch, type: old.type } as ScriptAction;
-        const next = seq.slice();
-        next[idx] = merged;
-        return next;
-    }
-
-    // 还要下钻：rest = [idx, branchKey, ...]。
-    const branchKey = rest[1];
-    const node = seq[idx];
-    if (node.type !== 'if') return seq;
-    if (branchKey !== 'then' && branchKey !== 'else') return seq;
-    const branchSeq = branchKey === 'then' ? node.then : node.else;
-    const newBranch = replaceInSeq(branchSeq, rest.slice(2), patch);
-    if (newBranch === branchSeq) return seq;
-    const newIf: ScriptAction =
-        branchKey === 'then' ? { ...node, then: newBranch } : { ...node, else: newBranch };
-    const next = seq.slice();
-    next[idx] = newIf;
-    return next;
-}
-
-/** 单段字符串 → 非负整数下标；非法 null。 */
-function toIdx(seg: string | undefined): number | null {
-    if (seg === undefined || !/^\d+$/.test(seg)) return null;
-    const n = Number(seg);
-    return Number.isSafeInteger(n) ? n : null;
-}
