@@ -927,6 +927,8 @@ export const messages = {
                 // 0.7.0-P5（视觉）：积木上必填字段还没填时，角标的 hover 提示。
                 // {field} = 待填字段的友好名（元素 / 时间轴 / 命令 / 变量名 / 条件 / 声音）。
                 needSelect: '还需填写：{field}',
+                // 0.7.1-P3：元素字段旁的「从预览点选」靶心按钮提示。点它后去右侧预览框点元素即可填入。
+                pickFromPreview: '从预览点选元素',
             },
             // 0.7.0-P5-G：if 条件可视构建器文案（操作数类型 / joiner / 高级文本框切换）。
             condition: {
@@ -2083,6 +2085,9 @@ export const messages = {
                 // field on the block is still empty. {field} = friendly field name
                 // (element / timeline / command / variable / condition / sound).
                 needSelect: 'Still need to fill in: {field}',
+                // 0.7.1-P3: crosshair button next to the element field. Click it, then
+                // click an element in the right-side preview to fill it in.
+                pickFromPreview: 'Pick from preview',
             },
             // 0.7.0-P5-G: if-condition visual builder strings.
             condition: {

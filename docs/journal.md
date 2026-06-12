@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-06-13 · 0.7.1-P3 实测修复：分隔条卡死 + 点选被原生下拉挡
+
+用户实测 P3 报 2 bug，systematic-debugging 定位（都是 vitest 测不到的真实浏览器行为）：
+
+**Bug 分隔条拖过一次后 hover 持续触发（越拖越大）**。根因：`ScriptEditorOverlay` 分隔条 @pointermove/up
+绑在分隔条元素，靠 setPointerCapture retarget，但触控板 capture 不可靠 → 鼠标拖出分隔条松手时 pointerup
+不在分隔条触发 → onSplitterUp 没调 → `splitterDragging` 卡 true → 之后 hover 继续改宽。修：改 **window
+监听**（照 useBlockDrag attach/detach），pointerup 在 window 一定触发清 dragging；template 只绑
+@pointerdown；删 setPointerCapture；onScopeDispose 摘监听兜底。
+
+**Bug 点 element 下拉后点预览没选中**。根因：element 字段是原生 `<select>`，点它弹浏览器原生下拉 overlay；
+点预览时浏览器先关下拉、**吃掉这次点击**，PreviewPane 收不到 pointerdown。修：加独立「**从预览点选**」
+crosshair 按钮（element select 旁，friendly + 常规块都加），点它 `setActiveElementBinding`（不碰 select、
+不展开下拉）+ active 时 mauve 高亮提示；用户点按钮再去预览点（无下拉遮挡）→ 正常填 elementId + 取当前值。
+原生 select 保留（列表/键盘选）。
+
+测试：前端 1078→1086（+8）全绿；vite build 绿。
+
+关联文件：`web/src/script/canvas/{ScriptEditorOverlay, BlockNode}` + i18n
+
+---
+
 ## 2026-06-12 · 0.7.1-P3 完工：预览框左右分栏 + 元素点选取当前值
 
 subagent-driven（波1 布局+渲染 Task 1-3 → 提交 → 波2 点选+取值 Task 4-6 → 合并审查「可提交，0

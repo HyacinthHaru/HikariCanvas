@@ -301,3 +301,93 @@ describe('ScriptEditorOverlay 左右分栏 + 预览框（0.7.1-P3-T2）', () => 
         expect(ui.scriptPreviewCollapsed).toBe(true);
     });
 });
+
+/**
+ * 0.7.1-P3 实测 Bug 2：预览框分隔条拖过一次后 hover 持续触发（越拖越大）。
+ *
+ * <p>根因：分隔条 pointerup 绑在分隔条元素上、靠 setPointerCapture retarget。鼠标拖出分隔条再
+ * 松手时 pointerup 不在分隔条触发 → splitterDragging 卡 true；之后 hover 分隔条 → pointermove
+ * 触发 → 继续改宽。修复照 useBlockDrag 范式：拖动期间挂 window 监听，松手在 window 一定收到、
+ * 一定清 dragging + 摘监听；模板分隔条只留 @pointerdown。</p>
+ *
+ * <p>可观测信号：{@code splitterDragging} 经 {@code hc-script-splitter-active} class 反映。
+ * 断言"按下 → active；window pointerup → active 清除"，并验证 window pointerup 后 hover
+ * （pointermove 落分隔条元素）不再改宽（越拖越大已治）。</p>
+ */
+describe('ScriptEditorOverlay 分隔条拖动 window 监听（Bug 2：松手必清 dragging）', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+    });
+
+    /** 造一个 pointer 事件（happy-dom 默认不带 client/pointerId）。 */
+    function ptr(type: string, clientX = 0, clientY = 0): PointerEvent {
+        const ev = new Event(type, { bubbles: true }) as unknown as PointerEvent;
+        Object.defineProperty(ev, 'clientX', { value: clientX });
+        Object.defineProperty(ev, 'clientY', { value: clientY });
+        Object.defineProperty(ev, 'pointerId', { value: 1 });
+        return ev;
+    }
+
+    it('分隔条 pointerdown → 进入拖动态（hc-script-splitter-active）', async () => {
+        const ui = useUiStore();
+        ui.scriptPreviewCollapsed = false;
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const splitter = wrapper.find('.hc-script-splitter');
+        expect(splitter.exists()).toBe(true);
+        await splitter.trigger('pointerdown');
+        await nextTick();
+        expect(wrapper.find('.hc-script-splitter').classes()).toContain('hc-script-splitter-active');
+        wrapper.unmount();
+    });
+
+    it('window pointerup（指针已拖出分隔条）→ 退出拖动态（active 清除）', async () => {
+        const ui = useUiStore();
+        ui.scriptPreviewCollapsed = false;
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const splitter = wrapper.find('.hc-script-splitter');
+        await splitter.trigger('pointerdown');
+        await nextTick();
+        // 模拟"鼠标拖出分隔条再松手"——pointerup 落在 window，不在分隔条元素上。
+        window.dispatchEvent(ptr('pointerup', 500, 300));
+        await nextTick();
+        // 修复后：window 监听一定收到 → splitterDragging 清 false → active class 消失。
+        expect(wrapper.find('.hc-script-splitter').classes()).not.toContain('hc-script-splitter-active');
+        wrapper.unmount();
+    });
+
+    it('window pointerup 后再 hover 分隔条（pointermove 落元素）不改宽（越拖越大已治）', async () => {
+        const ui = useUiStore();
+        ui.scriptPreviewCollapsed = false;
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const splitter = wrapper.find('.hc-script-splitter');
+        await splitter.trigger('pointerdown');
+        // 松手在 window（指针已离开分隔条）。
+        window.dispatchEvent(ptr('pointerup', 500, 300));
+        await nextTick();
+        const widthAfterRelease = ui.scriptPreviewWidthPct;
+        // 之后纯 hover：pointermove 落在分隔条元素上——不应再改宽（dragging 已清 + 元素无 @pointermove）。
+        await splitter.trigger('pointermove', { clientX: 50, clientY: 50 });
+        await nextTick();
+        expect(ui.scriptPreviewWidthPct).toBe(widthAfterRelease);
+        wrapper.unmount();
+    });
+
+    it('卸载组件兜底：拖动中卸载后 window pointermove 不再改宽（监听已摘）', async () => {
+        const ui = useUiStore();
+        ui.scriptPreviewCollapsed = false;
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const splitter = wrapper.find('.hc-script-splitter');
+        await splitter.trigger('pointerdown');
+        await nextTick();
+        const widthBefore = ui.scriptPreviewWidthPct;
+        wrapper.unmount();
+        // 卸载后任何 window pointermove 都不应再驱动改宽（监听在卸载时摘掉）。
+        window.dispatchEvent(ptr('pointermove', 9, 9));
+        expect(ui.scriptPreviewWidthPct).toBe(widthBefore);
+    });
+});

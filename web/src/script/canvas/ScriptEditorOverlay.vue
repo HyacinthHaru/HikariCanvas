@@ -123,6 +123,10 @@ watch(
 
 onScopeDispose(() => {
     stepper.clear();
+    // Bug 2 兜底：拖动中卸载组件（如关编辑器）→ 摘掉 window 分隔条监听，杜绝卸载后 window
+    // pointermove 仍驱动改宽（onSplitterUp 已 idempotent，这里直接 detach + 复位 dragging）。
+    splitterDragging.value = false;
+    detachSplitterListeners();
 });
 
 /**
@@ -200,17 +204,38 @@ function onPaletteDown(kind: string, e: PointerEvent): void {
     canvasRef.value?.startPaletteDrag(kind, e);
 }
 
-// ---------- 0.7.1-P3：右侧预览框拖宽分隔条（照 TimelineDock setPointerCapture 范例）----------
+// ---------- 0.7.1-P3：右侧预览框拖宽分隔条（拖动期间挂 window 监听，照 useBlockDrag 范式）----------
 // hostRef = 横向 flex 容器（左 BlockCanvas + 分隔条 + 右 PreviewPane）。拖动时按指针在容器内
 // 的位置反算右框占宽 %：widthPct = (hostRight - clientX) / hostWidth * 100，交给 ui store clamp。
+//
+// 实测 Bug 2 修复：原实现把 pointermove/up 绑在分隔条元素上、靠 setPointerCapture retarget。
+// 触控板上 capture 不可靠——鼠标拖出分隔条再松手时 pointerup 不在分隔条触发 → onSplitterUp 不调 →
+// splitterDragging 卡 true → 之后 hover 分隔条触发 pointermove 继续改宽（越拖越大）。改成拖动期间
+// 在 window 挂 pointermove/up/cancel：pointerup 在 window 一定收到 → dragging 一定清 + 监听一定摘。
+// 模板分隔条只留 @pointerdown，不再依赖 capture retarget。
 const hostRef = ref<HTMLElement | null>(null);
 const splitterDragging = ref(false);
-let splitterPointerId = -1;
+let splitterListenersAttached = false;
+
+function attachSplitterListeners(): void {
+    if (splitterListenersAttached) return;
+    window.addEventListener('pointermove', onSplitterMove);
+    window.addEventListener('pointerup', onSplitterUp);
+    window.addEventListener('pointercancel', onSplitterUp);
+    splitterListenersAttached = true;
+}
+function detachSplitterListeners(): void {
+    if (!splitterListenersAttached) return;
+    window.removeEventListener('pointermove', onSplitterMove);
+    window.removeEventListener('pointerup', onSplitterUp);
+    window.removeEventListener('pointercancel', onSplitterUp);
+    splitterListenersAttached = false;
+}
+
 function onSplitterDown(e: PointerEvent): void {
     splitterDragging.value = true;
-    splitterPointerId = e.pointerId;
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
     e.preventDefault();
+    attachSplitterListeners();
 }
 function onSplitterMove(e: PointerEvent): void {
     if (!splitterDragging.value) return;
@@ -221,11 +246,10 @@ function onSplitterMove(e: PointerEvent): void {
     const pct = (rect.right - e.clientX) / rect.width * 100;
     ui.setScriptPreviewWidthPct(pct);
 }
-function onSplitterUp(e: PointerEvent): void {
-    if (!splitterDragging.value) return;
+function onSplitterUp(): void {
+    if (!splitterDragging.value && !splitterListenersAttached) return;
     splitterDragging.value = false;
-    try { (e.currentTarget as HTMLElement).releasePointerCapture(splitterPointerId); } catch { /* ignore */ }
-    splitterPointerId = -1;
+    detachSplitterListeners();
 }
 
 function close(): void {
@@ -477,15 +501,13 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
           </button>
         </div>
 
-        <!-- 中：拖宽分隔条（仅未折叠时显示） -->
+        <!-- 中：拖宽分隔条（仅未折叠时显示）。只绑 @pointerdown——拖动期间的 move/up/cancel 由
+             onSplitterDown 在 window 上挂（Bug 2：松手在 window 一定收到，dragging 一定清）。 -->
         <div
           v-if="!ui.scriptPreviewCollapsed"
           class="hc-script-splitter"
           :class="splitterDragging ? 'hc-script-splitter-active' : ''"
           @pointerdown="onSplitterDown"
-          @pointermove="onSplitterMove"
-          @pointerup="onSplitterUp"
-          @pointercancel="onSplitterUp"
         />
 
         <!-- 右：墙面预览框（未折叠时按 widthPct 占宽） -->

@@ -471,3 +471,73 @@ describe('BlockNode 0.7.1-P3 波2：常规块元素字段 focusin 绑定', () =>
         expect(spy).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * 0.7.1-P3 实测 Bug 1：点 element 字段下拉后去点预览元素 → 下拉关但没选中。
+ *
+ * <p>根因：element 字段是原生 select，展开浏览器原生下拉时点预览，浏览器先关下拉、吃掉这次
+ * 点击，PreviewPane.onPointerDown 收不到 → 没填。修复：在元素字段旁加独立「从预览点选」按钮，
+ * 点它直接 {@code edit.setActiveElementBinding(path)} 进入预览点选态（不碰 select、不展开下拉）。</p>
+ *
+ * <p>断言按钮存在 + 点击调 setActiveElementBinding(本积木 path)；常规块（setElementProperty /
+ * nudgeElement）与友好块（setElementProperties）的元素字段都有此按钮。</p>
+ */
+describe('BlockNode 0.7.1-P3 Bug 1：「从预览点选」按钮（不依赖 select 展开）', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
+    });
+
+    async function seedOneElement() {
+        const project = (await import('@/stores/project')).useProjectStore();
+        project.setSnapshot({
+            canvas: { width: 128, height: 128, background: '#000' },
+            layers: [{ id: 'l1', name: 'L', visible: true, locked: false, opacity: 1, elements: [
+                { id: 'e-1', type: 'rect', x: 0, y: 0, w: 10, h: 10, fill: '#fff' },
+            ] }],
+            activeLayerId: 'l1', gridSize: 8, guides: [], timelines: [], activeTimelineId: null,
+        } as never);
+    }
+
+    it('常规块 setElementProperty：元素字段旁有「从预览点选」按钮', async () => {
+        await seedOneElement();
+        const w = mountNode({ type: 'setElementProperty', elementId: 'e-1', property: 'x', value: '0' }, 'actions/5');
+        await nextTick();
+        expect(w.find('.hc-pick-from-preview').exists()).toBe(true);
+    });
+
+    it('常规块：点「从预览点选」→ setActiveElementBinding(path)（不依赖 select 展开）', async () => {
+        await seedOneElement();
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'setActiveElementBinding');
+        const w = mountNode({ type: 'setElementProperty', elementId: 'e-1', property: 'x', value: '0' }, 'actions/5');
+        await nextTick();
+        const btn = w.find('.hc-pick-from-preview');
+        expect(btn.exists()).toBe(true);
+        await btn.trigger('click');
+        expect(spy).toHaveBeenCalledWith('actions/5');
+    });
+
+    it('友好块 moveTo：元素字段旁有「从预览点选」按钮 + 点击 setActiveElementBinding(path)', async () => {
+        await seedOneElement();
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'setActiveElementBinding');
+        const w = mountNode(
+            { type: 'setElementProperties', kind: 'moveTo', elementId: 'e-1', patch: { x: '0', y: '0' } } as ScriptAction,
+            'actions/3',
+        );
+        await nextTick();
+        const btn = w.find('.hc-pick-from-preview');
+        expect(btn.exists()).toBe(true);
+        await btn.trigger('click');
+        expect(spy).toHaveBeenCalledWith('actions/3');
+    });
+
+    it('非元素积木（setVariable）不出现「从预览点选」按钮', async () => {
+        await seedOneElement();
+        const w = mountNode({ type: 'setVariable', fullName: 'user/score', value: '0' }, 'actions/0');
+        await nextTick();
+        expect(w.find('.hc-pick-from-preview').exists()).toBe(false);
+    });
+});

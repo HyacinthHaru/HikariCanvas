@@ -20,6 +20,7 @@
  * 任务 D 接，按 K-UI-12 守卫）。</p>
  */
 import { computed, inject } from 'vue';
+import { Crosshair } from 'lucide-vue-next';
 import type { ScriptAction } from '@/types/protocol';
 import { useI18n } from '@/i18n';
 import { useProjectStore } from '@/stores/project';
@@ -302,6 +303,30 @@ function onElementFieldFocus(): void {
     edit.setActiveElementBinding(props.path);
 }
 
+/**
+ * 0.7.1-P3 实测 Bug 1 修复：「从预览点选」按钮的点击处理。
+ *
+ * <p>根因：element 字段是原生 {@code <select>}，展开浏览器原生下拉时去点预览元素，浏览器会
+ * <b>先关下拉、吃掉这次点击</b>，PreviewPane 的 {@code onPointerDown} 收不到 → 没填。修复是在
+ * 元素字段旁加一个独立小按钮：点它直接 {@code setActiveElementBinding(本积木 path)} 进入"预览
+ * 点选态"（不碰 select、不展开原生下拉），用户随后去预览点元素时<b>没有下拉遮挡</b>，
+ * PreviewPane.onPointerDown 正常触发回填 elementId + 当前值。原生 select 仍保留（下拉列表 /
+ * 键盘选）。</p>
+ *
+ * <p>{@code stopPropagation}：拦住这次 click 冒泡到 BlockStack.onStackClick（避免重渲与
+ * 进入点选态抢时序，与变量 picker 打开同理）。纯 UI 焦点态，不发 op、不受 lock 影响。</p>
+ */
+function onPickFromPreview(e: Event): void {
+    e.stopPropagation();
+    edit.setActiveElementBinding(props.path);
+}
+
+/**
+ * 本积木是否处于"预览点选态"（activeElementBinding 指向本 path）——给「从预览点选」按钮高亮。
+ * 点选填完（用户去预览点了元素 → 下拉与点选同步改 elementId，焦点态可能仍在）这里只反映绑定指向。
+ */
+const isPickingForThis = computed(() => edit.activeElementBinding === props.path);
+
 /** 某字段是否「元素」类型（决定要不要给它挂 element-binding 焦点钩子）。 */
 function isElementField(field: FieldDef): boolean {
     return field.type === 'element';
@@ -442,6 +467,19 @@ const needSelectTitle = computed(() =>
             :disabled="locked"
             @update="onFriendlyElementUpdate"
           />
+          <!-- Bug 1：独立「从预览点选」按钮——点它进入预览点选态（不展开原生下拉，绕开"点预览被
+               下拉吃掉"）。 -->
+          <button
+            type="button"
+            class="hc-pick-from-preview"
+            :class="{ 'hc-pick-active': isPickingForThis }"
+            :disabled="locked"
+            :title="t.script.param.pickFromPreview"
+            :aria-label="t.script.param.pickFromPreview"
+            @click="onPickFromPreview"
+          >
+            <Crosshair class="size-3" />
+          </button>
         </span>
         <BlockParamInput
           v-for="f in friendlyFields"
@@ -466,6 +504,18 @@ const needSelectTitle = computed(() =>
             :disabled="locked"
             @update="(v: unknown) => onFieldUpdate(f, v)"
           />
+          <!-- Bug 1：独立「从预览点选」按钮（同友好块路径，绕开原生下拉吃点击）。 -->
+          <button
+            type="button"
+            class="hc-pick-from-preview"
+            :class="{ 'hc-pick-active': isPickingForThis }"
+            :disabled="locked"
+            :title="t.script.param.pickFromPreview"
+            :aria-label="t.script.param.pickFromPreview"
+            @click="onPickFromPreview"
+          >
+            <Crosshair class="size-3" />
+          </button>
         </span>
         <BlockParamInput
           v-else
@@ -643,11 +693,46 @@ const needSelectTitle = computed(() =>
     text-shadow: 0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 55%, #000);
 }
 /* F：参数控件（BlockParamInput）外壳——不再加浅底块，胶囊样式由控件自身承载；
- * 这里只保证内联排版 + 不撑破块宽。 */
+ * 这里只保证内联排版 + 不撑破块宽。元素字段壳里还含一个「从预览点选」小按钮，留点间距。 */
 .hc-block-param-input {
     display: inline-flex;
     align-items: center;
+    gap: 4px;
     max-width: 100%;
+}
+
+/* Bug 1：「从预览点选」靶心小按钮（紧贴元素下拉右侧）。圆形胶囊，与参数控件同视觉语言。
+ * 点它进入"预览点选态"（不展开原生下拉），高亮态（hc-pick-active）= 当前积木正等着去预览点元素。 */
+.hc-pick-from-preview {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border: 1px solid color-mix(in srgb, #000 16%, transparent);
+    border-radius: 50%;
+    background: var(--card);
+    color: var(--foreground);
+    cursor: pointer;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    transition: filter 0.1s ease, border-color 0.1s ease, box-shadow 0.1s ease, background-color 0.1s ease;
+}
+.hc-pick-from-preview:hover:not(:disabled) {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 35%, transparent);
+}
+.hc-pick-from-preview:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+/* 高亮态：当前积木正处于预览点选态（activeElementBinding 指向本块）——靶心按钮点亮 mauve，
+ * 提示"现在去右侧预览点元素就会填到这条积木"。 */
+.hc-pick-active {
+    background: var(--ctp-mauve, var(--primary));
+    color: var(--card);
+    border-color: var(--ctp-mauve, var(--primary));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ctp-mauve, var(--primary)) 40%, transparent);
 }
 /* runCommand 复合 command 控件：占整行（模板下拉 + 动态 params 子表单纵向铺开）。 */
 .hc-block-command {
