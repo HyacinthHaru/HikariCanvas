@@ -982,6 +982,7 @@ export const messages = {
                 expand: '展开预览',
                 collapse: '折叠预览',
                 noWall: '未选择墙',
+                ghostHint: '拖虚影设目标：移到拖中心、改大小拖角、旋转转手柄',
             },
         },
         timeline: {
@@ -2141,6 +2142,7 @@ export const messages = {
                 expand: 'Show preview',
                 collapse: 'Hide preview',
                 noWall: 'No wall selected',
+                ghostHint: 'Drag the ghost to set target: move = center, resize = corner, rotate = handle',
             },
         },
         timeline: {

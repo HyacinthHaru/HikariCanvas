@@ -481,16 +481,22 @@ const needSelectTitle = computed(() =>
             <Crosshair class="size-3" />
           </button>
         </span>
-        <BlockParamInput
+        <!-- 0.7.1-P4(E12)：皮肤字段(moveTo/resize/rotateTo 的 x/y/w/h/rotation) focusin →
+             setActiveElementBinding(本积木)，让预览自动显该坐标积木虚影可拖（复用元素字段同 setter）。 -->
+        <span
           v-for="f in friendlyFields"
           :key="f.name"
           class="hc-block-param-input"
-          :field="f"
-          :value="friendlyFieldValue(f)"
-          :action-kind="action.type"
-          :disabled="locked"
-          @update="(v: unknown) => onFriendlyFieldUpdate(f, v)"
-        />
+          @focusin="onElementFieldFocus"
+        >
+          <BlockParamInput
+            :field="f"
+            :value="friendlyFieldValue(f)"
+            :action-kind="action.type"
+            :disabled="locked"
+            @update="(v: unknown) => onFriendlyFieldUpdate(f, v)"
+          />
+        </span>
       </template>
 
       <!-- 常规块：按 def.fields 渲染标量参数槽。元素字段（setElementProperty / nudgeElement 的
