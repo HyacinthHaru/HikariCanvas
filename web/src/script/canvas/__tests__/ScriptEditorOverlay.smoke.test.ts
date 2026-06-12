@@ -252,3 +252,52 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         expect(wrapper.find('.hc-script-legend').exists()).toBe(true);
     });
 });
+
+describe('ScriptEditorOverlay 左右分栏 + 预览框（0.7.1-P3-T2）', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+    });
+
+    it('未折叠：BlockCanvas + 分隔条 + PreviewPane 同时存在', async () => {
+        const ui = useUiStore();
+        ui.scriptPreviewCollapsed = false;
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        // 左积木画布 host 仍在
+        expect(wrapper.find('.hc-script-canvas-host').exists()).toBe(true);
+        // 分隔条（拖宽）存在
+        expect(wrapper.find('.hc-script-splitter').exists()).toBe(true);
+        // 右预览框存在（PreviewPane 根 class）
+        expect(wrapper.find('.hc-preview-pane').exists()).toBe(true);
+        // 预览标题渲染（证明 t.value.script.preview 解包）
+        expect(wrapper.text()).toContain('预览');
+    });
+
+    it('折叠态：只剩 BlockCanvas，分隔条 / 预览框隐藏 + 展开按钮出现', async () => {
+        const ui = useUiStore();
+        ui.scriptPreviewCollapsed = true;
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        // 折叠时分隔条不渲染
+        expect(wrapper.find('.hc-script-splitter').exists()).toBe(false);
+        // PreviewPane 不渲染（折叠走 v-if 卸载，避免后台重绘）
+        expect(wrapper.find('.hc-preview-pane').exists()).toBe(false);
+        // 展开按钮存在（title=展开预览）
+        const expandBtn = wrapper.find('button[title="展开预览"]');
+        expect(expandBtn.exists()).toBe(true);
+    });
+
+    it('点折叠按钮 → 调 ui.toggleScriptPreview（collapsed 翻转）', async () => {
+        const ui = useUiStore();
+        ui.scriptPreviewCollapsed = false;
+        const spy = vi.spyOn(ui, 'toggleScriptPreview');
+        const wrapper = mount(ScriptEditorOverlay);
+        await nextTick();
+        const collapseBtn = wrapper.find('button[title="折叠预览"]');
+        expect(collapseBtn.exists()).toBe(true);
+        await collapseBtn.trigger('click');
+        expect(spy).toHaveBeenCalled();
+        expect(ui.scriptPreviewCollapsed).toBe(true);
+    });
+});

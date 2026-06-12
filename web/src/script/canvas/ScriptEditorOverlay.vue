@@ -16,7 +16,7 @@
  */
 import { computed, ref, watch, onScopeDispose } from 'vue';
 import { useEventListener } from '@vueuse/core';
-import { X, Puzzle, Plus, RotateCcw, Undo2, Redo2, Trash2, Play, Power, AlertTriangle } from 'lucide-vue-next';
+import { X, Puzzle, Plus, RotateCcw, Undo2, Redo2, Trash2, Play, Power, AlertTriangle, PanelRightClose, PanelRightOpen } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
 import { useScriptStore } from '@/stores/scripts';
 import { useScriptEditStore } from '@/stores/scriptEdit';
@@ -33,6 +33,7 @@ import {
 import type { HighlightInject } from './highlightInjection';
 import BlockCanvas from './BlockCanvas.vue';
 import BlockPalette from './BlockPalette.vue';
+import PreviewPane from './PreviewPane.vue';
 
 const ui = useUiStore();
 const scripts = useScriptStore();
@@ -197,6 +198,34 @@ function resetView(): void {
  */
 function onPaletteDown(kind: string, e: PointerEvent): void {
     canvasRef.value?.startPaletteDrag(kind, e);
+}
+
+// ---------- 0.7.1-P3：右侧预览框拖宽分隔条（照 TimelineDock setPointerCapture 范例）----------
+// hostRef = 横向 flex 容器（左 BlockCanvas + 分隔条 + 右 PreviewPane）。拖动时按指针在容器内
+// 的位置反算右框占宽 %：widthPct = (hostRight - clientX) / hostWidth * 100，交给 ui store clamp。
+const hostRef = ref<HTMLElement | null>(null);
+const splitterDragging = ref(false);
+let splitterPointerId = -1;
+function onSplitterDown(e: PointerEvent): void {
+    splitterDragging.value = true;
+    splitterPointerId = e.pointerId;
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    e.preventDefault();
+}
+function onSplitterMove(e: PointerEvent): void {
+    if (!splitterDragging.value) return;
+    const host = hostRef.value;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const pct = (rect.right - e.clientX) / rect.width * 100;
+    ui.setScriptPreviewWidthPct(pct);
+}
+function onSplitterUp(e: PointerEvent): void {
+    if (!splitterDragging.value) return;
+    splitterDragging.value = false;
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(splitterPointerId); } catch { /* ignore */ }
+    splitterPointerId = -1;
 }
 
 function close(): void {
@@ -414,25 +443,65 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         </div>
       </aside>
 
-      <!-- 主体画布 -->
-      <main class="hc-script-canvas-host">
-        <BlockCanvas ref="canvasRef" :highlight="highlightInject" />
-        <!-- 空画布提示：无规则时显示 -->
-        <div v-if="scripts.size === 0" class="hc-script-empty-hint">
-          {{ t.script.empty }}
-        </div>
-        <!-- 有规则但未选中编辑：提示选一条 -->
-        <div v-else-if="!edit.workingCopy" class="hc-script-empty-hint">
-          {{ t.script.selectRuleHint }}
+      <!-- 主体：左积木画布 + 分隔条 + 右墙面预览框（0.7.1-P3） -->
+      <main ref="hostRef" class="hc-script-canvas-host">
+        <!-- 左：积木画布（含空态提示 / 试跑图例 / 折叠时的展开按钮） -->
+        <div class="hc-script-canvas-main">
+          <BlockCanvas ref="canvasRef" :highlight="highlightInject" />
+          <!-- 空画布提示：无规则时显示 -->
+          <div v-if="scripts.size === 0" class="hc-script-empty-hint">
+            {{ t.script.empty }}
+          </div>
+          <!-- 有规则但未选中编辑：提示选一条 -->
+          <div v-else-if="!edit.workingCopy" class="hc-script-empty-hint">
+            {{ t.script.selectRuleHint }}
+          </div>
+
+          <!-- H：试跑高亮图例（试跑中 / 有高亮时显示，底部居中） -->
+          <div v-if="showLegend" class="hc-script-legend">
+            <span v-if="testing" class="hc-legend-testing">{{ t.script.testing }}</span>
+            <span v-for="item in legendItems" :key="item.result" class="hc-legend-item">
+              <span class="hc-legend-dot" :style="{ background: item.color }" />
+              {{ item.label }}
+            </span>
+          </div>
+
+          <!-- 折叠时：右上角一个小箭头按钮把预览展开回来 -->
+          <button
+            v-if="ui.scriptPreviewCollapsed"
+            class="hc-preview-expand-btn"
+            :title="t.script.preview.expand"
+            @click="ui.toggleScriptPreview()"
+          >
+            <PanelRightOpen class="size-4" />
+          </button>
         </div>
 
-        <!-- H：试跑高亮图例（试跑中 / 有高亮时显示，底部居中） -->
-        <div v-if="showLegend" class="hc-script-legend">
-          <span v-if="testing" class="hc-legend-testing">{{ t.script.testing }}</span>
-          <span v-for="item in legendItems" :key="item.result" class="hc-legend-item">
-            <span class="hc-legend-dot" :style="{ background: item.color }" />
-            {{ item.label }}
-          </span>
+        <!-- 中：拖宽分隔条（仅未折叠时显示） -->
+        <div
+          v-if="!ui.scriptPreviewCollapsed"
+          class="hc-script-splitter"
+          :class="splitterDragging ? 'hc-script-splitter-active' : ''"
+          @pointerdown="onSplitterDown"
+          @pointermove="onSplitterMove"
+          @pointerup="onSplitterUp"
+          @pointercancel="onSplitterUp"
+        />
+
+        <!-- 右：墙面预览框（未折叠时按 widthPct 占宽） -->
+        <div
+          v-if="!ui.scriptPreviewCollapsed"
+          class="hc-script-preview-wrap"
+          :style="{ flex: `0 0 ${ui.scriptPreviewWidthPct}%` }"
+        >
+          <button
+            class="hc-preview-collapse-btn"
+            :title="t.script.preview.collapse"
+            @click="ui.toggleScriptPreview()"
+          >
+            <PanelRightClose class="size-4" />
+          </button>
+          <PreviewPane />
         </div>
       </main>
     </div>
@@ -660,8 +729,54 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 }
 .hc-script-canvas-host {
     flex: 1;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+}
+/* 左：积木画布区（原 canvas-host 的定位 / 提示容器语义搬到这里） */
+.hc-script-canvas-main {
+    flex: 1 1 auto;
     position: relative;
     min-width: 0;
+}
+/* 中：拖宽分隔条（col-resize，hover / 拖动时高亮） */
+.hc-script-splitter {
+    flex: 0 0 5px;
+    cursor: col-resize;
+    background: var(--border);
+    transition: background-color 0.12s;
+}
+.hc-script-splitter:hover,
+.hc-script-splitter-active {
+    background: color-mix(in srgb, var(--ctp-mauve, var(--primary)) 60%, var(--border));
+}
+/* 右：预览框外壳（按 widthPct 占宽 + 左边框 + 内嵌折叠按钮定位父） */
+.hc-script-preview-wrap {
+    position: relative;
+    min-width: 0;
+    border-left: 1px solid var(--border);
+    overflow: hidden;
+}
+/* 折叠 / 展开按钮（小图标按钮，浮在角上） */
+.hc-preview-collapse-btn,
+.hc-preview-expand-btn {
+    position: absolute;
+    top: 0.25rem;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    border-radius: var(--radius-sm);
+    color: var(--muted-foreground);
+    background: color-mix(in srgb, var(--card) 88%, transparent);
+}
+.hc-preview-collapse-btn { right: 0.25rem; }
+.hc-preview-expand-btn { right: 0.25rem; }
+.hc-preview-collapse-btn:hover,
+.hc-preview-expand-btn:hover {
+    background: var(--accent);
+    color: var(--foreground);
 }
 .hc-script-empty-hint {
     position: absolute;

@@ -974,6 +974,13 @@ export const messages = {
                 villagerYes: '村民同意',
                 villagerNo: '村民拒绝',
             },
+            // 0.7.1-P3：右侧墙面预览框（显示当前墙现状，可折叠 / 拖宽）。
+            preview: {
+                title: '预览',
+                expand: '展开预览',
+                collapse: '折叠预览',
+                noWall: '未选择墙',
+            },
         },
         timeline: {
             // Modal / 入口
@@ -2122,6 +2129,13 @@ export const messages = {
                 fireworkLaunch: 'Firework launch',
                 villagerYes: 'Villager yes',
                 villagerNo: 'Villager no',
+            },
+            // 0.7.1-P3: right-side wall preview pane (shows current wall, collapsible / resizable).
+            preview: {
+                title: 'Preview',
+                expand: 'Show preview',
+                collapse: 'Hide preview',
+                noWall: 'No wall selected',
             },
         },
         timeline: {

@@ -5,6 +5,8 @@ import { useThemeStore } from './theme';
 const LOCALE_KEY = 'hikari-canvas:locale';
 const TOOL_KEY = 'hikari-canvas:active-tool';
 const SNAP_KEY = 'hikari-canvas:snap';
+/** 0.7.1-P3：积木编辑器右侧预览框的折叠态 + 占宽 %（持久化，照 SNAP_KEY 范式）。 */
+const SCRIPT_PREVIEW_KEY = 'hikari-canvas:script-preview';
 
 interface SnapPrefs {
     enabled: boolean;
@@ -124,6 +126,26 @@ export const useUiStore = defineStore('ui', () => {
         try { localStorage.setItem(TOOL_KEY, v); } catch { /* ignore */ }
     });
 
+    // ---------- 0.7.1-P3：积木编辑器右侧预览框（折叠 + 拖宽，持久化）----------
+    // collapsed = 是否折叠（右框收起，左积木全宽）；widthPct = 右框占整体宽度的百分比，clamp [20,70]。
+    // 照 SNAP_KEY 范式：load 函数带默认兜底 + ref + watch 写回 localStorage。
+    const scriptPreviewCollapsed = ref(loadScriptPreviewCollapsed());
+    const scriptPreviewWidthPct = ref(loadScriptPreviewWidthPct());
+    watch([scriptPreviewCollapsed, scriptPreviewWidthPct], () => {
+        try {
+            localStorage.setItem(SCRIPT_PREVIEW_KEY, JSON.stringify({
+                collapsed: scriptPreviewCollapsed.value,
+                widthPct: scriptPreviewWidthPct.value,
+            }));
+        } catch { /* ignore */ }
+    });
+    function setScriptPreviewWidthPct(pct: number): void {
+        scriptPreviewWidthPct.value = Math.max(20, Math.min(70, pct));
+    }
+    function toggleScriptPreview(): void {
+        scriptPreviewCollapsed.value = !scriptPreviewCollapsed.value;
+    }
+
     // M24-B：theme DOM 应用已迁到 themeStore（applyFlavor/Accent/Radius）。
     // 此处不再单独写 .dark class，避免双写竞态。
 
@@ -232,6 +254,7 @@ export const useUiStore = defineStore('ui', () => {
         selectedIds, selectedElementId, selectedCount, hasSelection,
         editingLayerId, zoom,
         snapEnabled, snapToGrid, snapToCanvas, snapToElement, snapToDistribute, snapThreshold,
+        scriptPreviewCollapsed, scriptPreviewWidthPct, setScriptPreviewWidthPct, toggleScriptPreview,
         toggleTheme, toggleLocale, toggleLeft, toggleRight, toggleLogDrawer,
         toggleVariablePanel, closeVariablePanel,
         toggleScheduleManager, closeScheduleManager,
@@ -260,6 +283,26 @@ function loadSnap(): SnapPrefs {
                 ? parsed.threshold : SNAP_DEFAULT.threshold,
         };
     } catch { return { ...SNAP_DEFAULT }; }
+}
+
+/** 0.7.1-P3：预览框折叠态。坏值 / 缺失 → 默认 false（展开）。 */
+function loadScriptPreviewCollapsed(): boolean {
+    try {
+        const raw = localStorage.getItem(SCRIPT_PREVIEW_KEY);
+        if (!raw) return false;
+        const p = JSON.parse(raw) as { collapsed?: unknown };
+        return typeof p.collapsed === 'boolean' ? p.collapsed : false;
+    } catch { return false; }
+}
+
+/** 0.7.1-P3：预览框占宽 %。坏值 / 缺失 → 默认 35；越界 clamp 到 [20,70]。 */
+function loadScriptPreviewWidthPct(): number {
+    try {
+        const raw = localStorage.getItem(SCRIPT_PREVIEW_KEY);
+        if (!raw) return 35;
+        const p = JSON.parse(raw) as { widthPct?: unknown };
+        return typeof p.widthPct === 'number' ? Math.max(20, Math.min(70, p.widthPct)) : 35;
+    } catch { return 35; }
 }
 
 function loadLocale(): Locale {
