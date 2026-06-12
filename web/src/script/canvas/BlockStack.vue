@@ -70,10 +70,18 @@ function onHatPointerDown(e: PointerEvent): void {
     dragHandles.startStackDrag(props.rule.id, e);
 }
 
-/** pointerdown 目标是否表单元素（命中则不启动移堆，留给控件自身交互）。 */
+/**
+ * pointerdown 目标是否落在交互控件（命中则不启动移堆，留给控件自身交互）。
+ *
+ * <p>0.7.1 触控板敏感度修复（修复 A）：用 {@code closest} 而非 {@code matches}——帽子里的变量按钮
+ * 等控件有子元素，点击落在子节点时 {@code matches} 会漏判。改 closest 沿祖先链命中交互元素，
+ * 凡落在其内（含子节点）一律视为表单目标（与 BlockNode.isFormTarget 同口径）。</p>
+ */
 function isFormTarget(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
-    return !!el && (el.matches?.('input, textarea, select, button') || el.isContentEditable);
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    return !!el.closest?.('input, textarea, select, button, [role="button"], [contenteditable], label');
 }
 
 /** 堆体（非帽子区）点击：选中本规则进入编辑（不拖动）。 */

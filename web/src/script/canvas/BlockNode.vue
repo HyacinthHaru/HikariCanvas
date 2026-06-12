@@ -88,9 +88,20 @@ function selectOwningRule(e: PointerEvent): void {
     if (ruleId && edit.selectedRuleId !== ruleId) edit.selectRule(ruleId);
 }
 
+/**
+ * pointerdown 目标是否落在交互控件（命中则不启动拖块，留给控件自身的 click / focus）。
+ *
+ * <p>0.7.1 触控板敏感度修复（修复 A）：用 {@code closest} 而非 {@code matches}。变量「选变量」按钮
+ * 内有子元素（{@code <button><span>选变量…</span></button>}），点击实际落在子 {@code span} 上——
+ * {@code span.matches('button')} 为 false 会漏判成"可拖" → 点不到字段就被拖走。{@code closest} 会
+ * 沿祖先链找到那个 {@code button}/{@code input}，凡落在交互元素内（含其子节点）一律视为表单目标。
+ * 同时扩展覆盖 {@code [role="button"]} / {@code label} / {@code contenteditable}。</p>
+ */
 function isFormTarget(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
-    return !!el && (el.matches?.('input, textarea, select, button') || el.isContentEditable);
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    return !!el.closest?.('input, textarea, select, button, [role="button"], [contenteditable], label');
 }
 
 /** 本块的声明定义；未知 kind → null（兜底显示 unknownBlock）。 */

@@ -56,6 +56,8 @@ describe('BlockCanvas 拖拽接入 smoke', () => {
         const block = w.find('[data-block-path="actions/0"]');
         expect(block.exists()).toBe(true);
         await block.trigger('pointerdown', { button: 0, clientX: 50, clientY: 50, pointerId: 1 });
+        // 0.7.1 拖动阈值：pointerdown 仅 arm pending，需一次超阈值位移才真正启动拖动。
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
         // 跟手浮层 Teleport 到 body
         expect(document.querySelector('.hc-drag-ghost')).toBeTruthy();
@@ -77,6 +79,8 @@ describe('BlockCanvas 拖拽接入 smoke', () => {
         const hat = w.find('[data-block-path="trigger"]');
         expect(hat.exists()).toBe(true);
         await hat.trigger('pointerdown', { button: 0, clientX: 30, clientY: 30, pointerId: 1 });
+        // 0.7.1 拖动阈值：移堆同样需超阈值位移才启动（pointerdown 仅 arm pending）。
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
         expect(useScriptEditStore().selectedRuleId).toBe('sr-1');
 

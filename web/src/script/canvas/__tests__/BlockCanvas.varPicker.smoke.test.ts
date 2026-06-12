@@ -101,4 +101,56 @@ describe('变量选择器打开可靠性（次要根因 2）', () => {
         expect(document.querySelector('.hc-pf-picker-host')).not.toBeNull();
         w.unmount();
     });
+
+    // ---- 0.7.1 触控板敏感度修复（修复 A：isFormTarget 用 closest）----
+    // 变量按钮内有子 <span class="hc-pf-var-text">；pointerdown 实际落在子 span 上。
+    // 旧 isFormTarget 用 el.matches('button') 看不到子节点 → 误判可拖；修复后用 closest 命中 button。
+
+    it('pointerdown 落在变量按钮的子 span → 不启动拖块（无跟手浮层）+ 仍选中规则', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([makeRule('sr-1')]);
+        const edit = useScriptEditStore();
+        expect(edit.selectedRuleId).toBeNull();
+        const w = mount(BlockCanvas, { attachTo: document.body });
+        useNetworkStore().sessionId = '';
+        await nextTick();
+
+        // 真实点击落点：按钮内的文本 span（不是 button 本身）。
+        const span = w.find('.hc-pf-var-text');
+        expect(span.exists()).toBe(true);
+        const spanEl = span.element as HTMLElement;
+        // 派发到 span：移动一大段后松手——若被误判可拖，会出现跟手浮层 .hc-drag-ghost。
+        spanEl.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0, clientX: 50, clientY: 50 }));
+        await nextTick();
+        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 200, clientY: 200 }));
+        await nextTick();
+
+        // 修复后：落在表单目标（button 子节点）→ 不进拖动，无跟手浮层
+        expect(document.querySelector('.hc-drag-ghost')).toBeNull();
+        expect(edit.dragging).toBe(false);
+        // 但仍要选中本规则（selectOwningRule，早于 click，让 picker 一次到位）
+        expect(edit.selectedRuleId).toBe('sr-1');
+
+        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 200, clientY: 200 }));
+        await nextTick();
+        w.unmount();
+    });
+
+    it('完整手势从子 span 起手也能一次打开 picker（不被误拖打断）', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([makeRule('sr-1')]);
+        const w = mount(BlockCanvas, { attachTo: document.body });
+        useNetworkStore().sessionId = '';
+        await nextTick();
+
+        expect(document.querySelector('.hc-pf-picker-host')).toBeNull();
+        // 起手点在子 span 上，完整 pointerdown→up→click 手势
+        fullGesture(w.find('.hc-pf-var-text').element as HTMLElement);
+        await nextTick();
+        await nextTick();
+
+        expect(document.querySelector('.hc-pf-picker-host')).not.toBeNull();
+        expect(document.querySelector('.hc-drag-ghost')).toBeNull();
+        w.unmount();
+    });
 });

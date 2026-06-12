@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-12 · 0.7.1 实测修复：触控板点字段误触发拖动
+
+用户实测：Mac 触控板点积木字段（变量选择器 / 文本框）想编辑时太敏感，一不小心触发积木拖动。
+systematic-debugging 两个根因：① `useBlockDrag.startBlockDrag`/`startStackDrag` 在 pointerdown 立即
+capture+拖动，**无阈值**——触控板按下必带微移即误判拖动；② `BlockNode`/`BlockStack` 的 `isFormTarget`
+用 `matches` 只看 target 自身，变量选择器按钮是 `<button><span>选变量…</span></button>`，点中落在子
+span → `matches('button')` 漏 → 误拖。
+
+修：① **拖动阈值** `DRAG_THRESHOLD=5`——`armDrag` 共用 helper 延迟启动（pending 期不 capture / 不
+select / 不 preventDefault，指针移动 >5px 才真拖；阈值内松手 = 点击，字段 click/focus 正常）；保住
+P5「capture 先于 selectRule」不变性（pending 期不 select，onCross.target 仍 pointerdown 原 DOM，测试
+显式断言 capture 计数==1）。② `isFormTarget` 改 `closest` + 扩展（`[role="button"]`/contenteditable/
+label）覆盖交互元素子节点。palette 源不加阈值（拖出本就是拖动意图）。
+
+测试：前端 1028→1041（+24：阈值 16 + picker 子节点 2 + 适配）全绿；含 capture-先于-select 不变性断言。
+vite build 绿。
+
+关联文件：`web/src/script/canvas/{useBlockDrag, BlockNode, BlockStack}`
+
+---
+
 ## 2026-06-12 · 0.7.1-P2 实测修复批 + 2 体验 feature
 
 用户实测 P1+P2 打回 2 真 bug + 提 2 feature。systematic-debugging 定位根因后修，再加 feature。

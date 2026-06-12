@@ -150,6 +150,8 @@ describe('BlockCanvas 端到端：拖积木到删除区', () => {
         // 拖 actions/1（wait）
         const block = w.find('[data-block-path="actions/1"]');
         await block.trigger('pointerdown', { button: 0, clientX: 50, clientY: 50, pointerId: 1 });
+        // 0.7.1 拖动阈值：需超阈值位移才真正启动拖动（删除区才 active）。
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
         // 删除区出现（拖动作积木时 active）
         expect(w.find('.hc-delete-zone').exists()).toBe(true);
@@ -182,6 +184,8 @@ describe('BlockCanvas 端到端：拖积木到删除区', () => {
 
         const block = w.find('[data-block-path="actions/1"]');
         await block.trigger('pointerdown', { button: 0, clientX: 50, clientY: 50, pointerId: 1 });
+        // 0.7.1 拖动阈值：需超阈值位移才真正启动拖动。
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200 }));
         await nextTick();
 
         // 松手在顶部（远离删除区 + 远离任何插槽）→ 既不删也不重排

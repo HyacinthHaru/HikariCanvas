@@ -64,6 +64,15 @@ function pointerEvt(type: string, clientX: number, clientY: number, target?: HTM
     return ev;
 }
 
+/**
+ * 0.7.1 拖动阈值：block/stack 源 pointerdown 后须有一次"超阈值位移"才真正启动拖动。本 helper
+ * 派发一个远超 {@link DRAG_THRESHOLD} 的 window pointermove，把 pending 推进成真拖动态，之后才能
+ * 走原有的"松手落树"断言。（不影响 palette 源——palette 无阈值。）
+ */
+function crossThreshold(fromX = 9999, fromY = 9999): void {
+    window.dispatchEvent(pointerEvt('pointermove', fromX, fromY));
+}
+
 let scope: ReturnType<typeof effectScope>;
 let canvasEl: HTMLElement;
 
@@ -185,6 +194,7 @@ describe('画布源 → moveNode', () => {
         const drag = makeDrag();
         // 拖 actions/0（块 A）
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
         // 落到顶层尾插槽 index=2（块 actions/1 下沿 y≈140+30-14=156，中心≈163）
         window.dispatchEvent(pointerEvt('pointerup', 140, 163));
 
@@ -208,6 +218,7 @@ describe('画布源 → moveNode', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
         // 落到 before-0 槽（块 A 顶，中心≈107）= 自身原位
         window.dispatchEvent(pointerEvt('pointerup', 140, 107));
 
@@ -234,6 +245,7 @@ describe('画布源 → moveNode', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
         // 落到 then 空槽中心（top 170, h 22, 中心 181；x 在 [30,260]）
         window.dispatchEvent(pointerEvt('pointerup', 140, 181));
 
@@ -263,6 +275,7 @@ describe('画布源 → moveNode', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
         window.dispatchEvent(pointerEvt('pointerup', 140, 900));
 
         expect(edit.workingCopy!.actions.map((x) => (x.type === 'log' ? x.message : x.type))).toEqual(['A', 'B']);
@@ -286,6 +299,7 @@ describe('拖拽期冻结 server 回声（根因 3）', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
         // 拖拽中：dragging 为真
         expect(edit.dragging).toBe(true);
         // 松手（任意位置）→ abortDrag 复位 dragging
@@ -323,6 +337,7 @@ describe('拖拽期冻结 server 回声（根因 3）', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
         expect(edit.dragging).toBe(true);
         window.dispatchEvent(pointerEvt('pointercancel', 0, 0));
         expect(edit.dragging).toBe(false);
@@ -340,6 +355,7 @@ describe('拖拽期冻结 server 回声（根因 3）', () => {
 
         const drag = makeDrag();
         drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a));
+        crossThreshold(); // 超阈值才真正启动拖动（0.7.1）
         // 拖拽中 server patch 回来（改 name）：不该替换本地 workingCopy（仍为 makeRule 给的 'r'）。
         scripts.upsert({ ...makeRule([{ type: 'log', message: 'A' }]), name: 'server拖拽中' });
         await nextTick();
