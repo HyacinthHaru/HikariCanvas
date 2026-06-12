@@ -163,6 +163,6 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 - [x] §3「移动 (+dx,+dy)」相对移动:**做后端 `nudgeElement` Action**(运行时读当前值 + 增量)(P1 已定 2026-06-11)
 - [x] 显示/隐藏元素:**用 opacity 0/1**，零 schema 改(P1 已定 2026-06-11)
 - [ ] 粒子动作权限面:复用 `canvas.script.sound` 还是新 `canvas.script.particle`(P5 定)
-- [ ] PreviewPane 预览渲染性能:每次 project 变化重渲整墙，元素多时是否需脏区(P3 实测定)
+- [x] PreviewPane 预览渲染性能:**先全量重绘**(watch project.state → renderProjectState，requestAnimationFrame 合并避免同帧多次)，元素多时脏区优化**留实测**(工具不是保姆，简单优先；P3 实测闸看卡不卡再定)(P3 已定 2026-06-12)
 - [ ] 幽灵拖动在折叠态/极小预览框时的最小可用尺寸(P4 实测定)
 - [x] 重复 N 次撞 max-actions-per-run(50)的用户提示:**不做前端预估警告**——靠运行时 Budget 熔断(超 50 动作 → blocked + 试跑 trace 可见),符合"工具不是保姆"哲学(展开数含 if 分支难准估,运行时数据透明更诚实)。`countBlocks` 仍计 repeat body 节点(积木树硬限 50，非展开数)(P2 已定 2026-06-12)

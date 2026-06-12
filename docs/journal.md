@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-06-12 · 0.7.1-P3 启动：预览框左右分栏实施计划
+
+2 路 Explore 摸清 0.7.0 渲染/坐标/布局基础（`PreviewRenderer.renderProjectState` 复用渲墙 + Live Paint
+`elementToPolygon`/`pointInPolygon` 复用 hit-test + `TimelineDock` ResizeObserver/setPointerCapture 拖宽
+范例 + ui store SNAP_KEY 持久化范例 + scriptEdit 缺「当前活跃字段」追踪）。写 P3 计划（纯前端，不碰协议/后端）。
+
+**范围**：① ScriptEditorOverlay 左右分栏（左积木 + 右 PreviewPane，可拖宽 + 折叠，ui store 持久化）；
+② PreviewPane 复用 `renderProjectState` 渲当前墙现状（只读）+ 坐标系 `previewToWall`/`wallToPreview`（P4 幽灵
+拖动用）；③ 元素点选取当前值（深度2）——点预览元素 → 填 `scriptEdit.activeElementBinding` 记录的当前积木
+elementId + 按 friendly kind 取元素当前 x/y/w/h/rotation/opacity；下拉与点选同步 + 绑定元素描边高亮。
+
+**§9 性能决策回填**：PreviewPane 先全量重绘（requestAnimationFrame 合并），脏区优化留实测（工具不是保姆）。
+
+关联文件：`docs/scripting-0.7.1.md`（§9 回填）/ `docs/superpowers/plans/2026-06-12-0.7.1-P3-preview-pane.md`（新）
+
+---
+
 ## 2026-06-12 · 0.7.1 实测修复：触控板点字段误触发拖动
 
 用户实测：Mac 触控板点积木字段（变量选择器 / 文本框）想编辑时太敏感，一不小心触发积木拖动。
