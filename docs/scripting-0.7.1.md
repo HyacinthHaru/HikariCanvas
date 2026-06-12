@@ -24,6 +24,9 @@
 | **E7** | 新动作/触发器协议 | **升 v4 → v5 干净切换**(前端 CLIENT_V=5)：新 Action/Trigger 子类扩了 wire 内容，照 0.6/0.7 先例 | 旧前端(理论不存在)遇新 type 不报错；一致性 |
 | **E8** | 循环积木 | **有界「重复 N 次」**:N ≤ 100 硬上限 + 走 Budget(动作数/链深计入)+ 熔断；循环体含 wait 走 0.7.0 调度续接不阻塞线程 | v1 砍循环防失控；有上限版可控，能做跑马灯/批量效果 |
 | **E9** | OnCommand 触发器 | **推迟 0.7.2**:动态注册命令 + 防冲突 + 权限的安全设计成本高，单独做 | 不拖慢 0.7.1 主线 |
+| **E10** | P4 虚影形态 | **元素半透明真样子**:导出 `PreviewRenderer.drawElement` 渲绑定元素副本(按 patch 覆盖目标 x/y/w/h/rotation)+ `globalAlpha=0.5`，画在墙像素 canvas 上。非抽象方框/连线 | 所见即所得——拖到哪、变多大、转多少角，半透明真样子直接看出效果(2026-06-13 拍板) |
+| **E11** | P4 支持的坐标积木 | **移到 + 改大小 + 旋转全 transform**:moveTo 拖虚影中心设 x/y；resize 拖角 handle 设 w/h(左上锚定)；rotateTo 转手柄设 rotation。复用主画布 Transformer 数学(`newSize=oldSize×距离比`、度数 normalize、`rotatePolygon` 旋转矩阵)。P4 内部分 a/b/c 三批各自独立实测 | 三种目标几何都值得可视化拖；分批让"移到"核心闸先到(2026-06-13 拍板) |
+| **E12** | P4 进入拖拽 | **选中坐标积木自动显虚影可拖**:聚焦 moveTo/resize/rotateTo 积木(其任意字段 focusin)→ 该积木成 `activeCoordBlock`(复用 scriptEdit `activeElementBinding` 扩展)→ 预览自动显其虚影 + 控制点，直接拖。绑元素仍走 P3「从预览点选」准星，不加额外按钮 | 少一步"进取点模式"；选中即拖最直接，与 E1 原"点字段进取点"统一为"聚焦即显"(2026-06-13 拍板) |
 
 ---
 
@@ -67,12 +70,21 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 - **交互层**(叠在渲染层上):元素 hit-test(点选高亮)+ 幽灵拖动。
 - **坐标系**:PreviewPane 有自适应缩放(墙像素 → 预览像素)+ 偏移；`previewToWall(px,py)` / `wallToPreview(x,y)` 互换。幽灵松手坐标经 `previewToWall` 换算回墙像素坐标填积木。
 
-### 2.3 幽灵拖动流程(E1/E5)
-1. 用户点某个"移到 (x,y)"积木 → 该积木成为"当前坐标编辑积木"(编辑器局部 ref `activeCoordBlock`)
-2. PreviewPane 显示:实体元素(现状，不动)+ 若该积木已有 x/y → 一个半透明虚影在 (x,y) 处标"积木N目标"
-3. 用户在预览里拖虚影(或拖元素的虚影副本)→ 虚影跟手移动，实体不动
-4. 松手 → 虚影坐标 `previewToWall` → 写回积木 x/y(走 `edit.updateActionField`)→ 虚影留在新目标处。**⚠️ P3 审查 M1**：`computePreviewTransform.offsetX/Y` 用未 round 的 canvas 尺寸算，但 canvas CSS 宽用 `round(wallW*scale)`，flex 居中下实际原点差 ~0.5px → previewToWall 在 scale<1 时有 ≤1 墙像素偏差。**P4 写回坐标前**要么 round offset 对齐渲染、要么用 canvas 真实 `getBoundingClientRect()` 而非 host rect 喂 previewToWall。
-5. 切到别的积木 → `activeCoordBlock` 变 → 预览只显新积木的虚影(E5)
+### 2.3 幽灵拖动流程(E1/E5/E10/E11/E12，P4)
+
+**进入(E12)**:聚焦某个坐标积木(moveTo/resize/rotateTo 的任意字段 focusin)→ 该积木 path 记入 `activeCoordBlock`（复用 scriptEdit `activeElementBinding` 扩展：坐标 friendly 积木的元素字段 / 坐标字段 focusin 都设 path）。切积木 / 失焦 → 换虚影(E5：只显当前积木那一个)。
+
+**虚影渲染(E10)**:积木已绑元素 → PreviewPane 在墙像素 canvas 上叠画该元素的**半透明真样子**——构造元素副本(原元素 + patch 覆盖目标几何：moveTo 改 x/y、resize 改 w/h、rotateTo 改 rotation)，`ctx.save()` + `globalAlpha=0.5` + 导出的 `drawElement` + `restore()`。实体元素仍由底层 `renderProjectState` 正常画(现状，不动)；虚影是"该积木目标"的预览叠层。
+
+**控制点 + 拖动(E11)**，按 `activeCoordBlock` 的 kind 显示对应 handle(墙坐标空间画，handle 半径 `R/scale` 墙像素 → 显示恒定)：
+- **moveTo**:整个虚影可拖(命中虚影 bbox)→ 拖动改虚影中心 → 写 patch `{x,y}`(左上 = 中心 − w/2，round 取整)
+- **resize**:虚影右下角一个 handle → 拖它改 w/h(左上 x/y 锚定，`newW=max(1,round(指针墙X − x))`、`newH` 同理)
+- **rotateTo**:虚影中心正上方一个旋转手柄 → 绕中心 `atan2(py−cy, px−cx)` 算角度 → 写 patch `{rotation}`(normalize 0..359)
+- 松手 → `edit.updateActionField(activeCoordBlock, {patch})` 写回(值 String 化)；拖动中本地 mutate patch 让虚影跟手
+
+**坐标反算(P3 审查 M1 正解)**:指针 client 坐标 → 墙坐标，**以 canvas 自己的 `getBoundingClientRect()` 为原点**：`wallX=(e.clientX−crect.left)×wallW/crect.width`、`wallY=(e.clientY−crect.top)×wallH/crect.height`。`crect.width` 就是 `round(wallW*scale)` 后的真实 CSS 宽，比例映射天然消掉 ~0.5px 居中 round 偏差，**不再经 `transform.offset/scale`**。P3 点选也统一改走此式(顺手消 ≤1px 偏差)。
+
+**hit-test 优先级**:onPointerDown 先判虚影控制点(handle / moveTo 虚影 bbox)→ 命中进拖动；否则落回 P3 元素点选(`findElementAt` → 改绑 elementId)。虚影拖动与点选改绑同屏共存、互不抢。
 
 ### 2.4 元素绑定(E4)
 - 积木的"元素"字段(setElementProperty 及友好积木的 elementId)：
@@ -81,7 +93,7 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 - 元素字段空(未绑)→ 幽灵拖动禁用 + 提示"先选元素"
 
 ### 2.5 不碰后端(E3)
-幽灵拖动、预览框全是前端编辑辅助；产出仍是普通 `setElementProperty {elementId, property:'x', value:'128'}`。后端零改。
+幽灵拖动、预览框全是前端编辑辅助；产出是友好积木 `setElementProperties {elementId, patch, kind}`(P1 已加的后端 action)的 patch 设值——拖虚影 = 改 patch 的 x/y/w/h/rotation。**P4 不新增任何协议 / 数据模型**:后端 action 形态 P1 已定，P4 只给它的 patch 提供"可视化拖"的设值 UI（唯一写回入口 `edit.updateActionField`）。
 
 ---
 
@@ -153,7 +165,7 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 | **P1** ✅ | 友好元素积木(§3，8 个)+ 低风险新动作(发消息/随机/乘除/播完等待) + nudge 相对移动(走后端 setElementProperties/nudgeElement) | 实测 | ~30h |
 | **P2** ✅ | 新触发器(右键墙/离开区域/退服)+ 有界循环「重复N次」+ 协议 v5 升版 | 实测 | ~30h |
 | **P3** ✅ | 预览框布局重构(左右分栏)+ PreviewPane 渲染 + 元素点选取当前值(深度2) | 实测 | ~40h |
-| **P4** | 幽灵拖动设目标坐标(深度3核心)+ 坐标系换算 + 虚影标记 | **完整实测闸** | ~30h |
+| **P4** | 幽灵拖动设目标坐标(深度3核心，全 transform)：**P4a 移到**(拖虚影中心设 x/y + 虚影渲染基建 + 坐标反算 M1 修 + `activeCoordBlock`)/ **P4b 改大小**(角 handle 设 w/h)/ **P4c 旋转**(手柄设 rotation) | **完整实测闸**(P4a 核心) | ~50h |
 | **P5** | 剩余动作(粒子/等待直到/停止)+ i18n + validator 镜像补 + 收尾 | 全绿收口 | ~20h |
 
 节奏照 0.7.0:每段一闸、可演示；P1/P3/P4 三道用户实测闸(P4 是核心)。
@@ -164,5 +176,9 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 - [x] 显示/隐藏元素:**用 opacity 0/1**，零 schema 改(P1 已定 2026-06-11)
 - [ ] 粒子动作权限面:复用 `canvas.script.sound` 还是新 `canvas.script.particle`(P5 定)
 - [x] PreviewPane 预览渲染性能:**先全量重绘**(watch project.state → renderProjectState，requestAnimationFrame 合并避免同帧多次)，元素多时脏区优化**留实测**(工具不是保姆，简单优先；P3 实测闸看卡不卡再定)(P3 已定 2026-06-12)
+- [x] P4 虚影形态:**元素半透明真样子**(导出 `drawElement` 渲绑定元素副本 + `globalAlpha=0.5`，按 patch 覆盖目标几何)——非抽象方框/连线(P4 已定 2026-06-13)
+- [x] P4 支持的坐标积木:**移到 + 改大小 + 旋转全 transform**(拖中心 / 拖角 / 转手柄)，P4 内部分 a/b/c 三批(P4 已定 2026-06-13)
+- [x] P4 进入拖拽:**选中坐标积木(聚焦其字段)自动显虚影可拖**，绑元素仍走 P3 准星(P4 已定 2026-06-13)
+- [x] P4 坐标反算 M1:**以 canvas `getBoundingClientRect()` 为原点比例映射** `wallX=(clientX−crect.left)×wallW/crect.width`，消 round 偏差、绕开 `transform.offset`(P4 已定 2026-06-13)
 - [ ] 幽灵拖动在折叠态/极小预览框时的最小可用尺寸(P4 实测定)
 - [x] 重复 N 次撞 max-actions-per-run(50)的用户提示:**不做前端预估警告**——靠运行时 Budget 熔断(超 50 动作 → blocked + 试跑 trace 可见),符合"工具不是保姆"哲学(展开数含 if 分支难准估,运行时数据透明更诚实)。`countBlocks` 仍计 repeat body 节点(积木树硬限 50，非展开数)(P2 已定 2026-06-12)

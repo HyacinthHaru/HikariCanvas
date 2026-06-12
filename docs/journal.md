@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-06-13 · 0.7.1-P4 立项：幽灵拖动设目标坐标（设计 backfill + 实施计划）
+
+P4 是 0.7.1 的灵魂——预览框里拖元素半透明虚影设"移到 / 改大小 / 旋转"目标坐标。3 决策用户拍板：
+
+- **E10 虚影 = 元素半透明真样子**：导出 `PreviewRenderer.drawElement` 渲绑定元素副本（按 patch 覆盖
+  目标 x/y/w/h/rotation）+ `globalAlpha=0.5`。非抽象方框 / 连线。
+- **E11 全 transform**：移到拖中心(x/y) + 改大小拖角(w/h) + 旋转转手柄(rotation)，P4 内部分 a/b/c
+  三批各自独立实测（P4a 移到 = 核心闸）。
+- **E12 聚焦即显**：选中坐标积木（聚焦其任意字段）→ `activeCoordBlock`（复用 scriptEdit
+  `activeElementBinding` 扩展）→ 自动显虚影可拖；绑元素仍走 P3「从预览点选」准星，不加按钮。
+
+**M1 坐标偏差正解**（P3 审查遗留）：反算以 canvas `getBoundingClientRect()` 为原点比例映射
+`wallX=(clientX−crect.left)×wallW/crect.width`，消 ~0.5px round 偏差、绕开 `transform.offset`。
+
+**调研落定**：`drawElement`(PreviewRenderer.ts:103) 私有、rotation 绕中心 + opacity `globalAlpha`
+乘法可复用；三积木 patch 键 moveTo`{x,y}` / resize`{w,h}` / rotateTo`{rotation}`（全 string，经
+`updateActionField` 写回）；主画布 Transformer 数学（`newSize=oldSize×距离比` / `normalizeRotation`
+/ `rotatePolygon`）参照。纯前端，后端零改。
+
+关联：`docs/scripting-0.7.1.md`（§0 E10–E12 + §2.3 重写 + §2.5 + §8 拆 a/b/c + §9 回填）、
+`docs/superpowers/plans/2026-06-13-0.7.1-P4-ghost-drag.md`（11 task / 三批）。
+
+---
+
 ## 2026-06-13 · 0.7.1-P3 实测修复：分隔条卡死 + 点选被原生下拉挡
 
 用户实测 P3 报 2 bug，systematic-debugging 定位（都是 vitest 测不到的真实浏览器行为）：
