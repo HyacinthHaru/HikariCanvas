@@ -116,11 +116,20 @@ if t >= 1:
 - 颜色：`ColorLerp.lerpHex(from, to, eased)`（sRGB 线性空间，调研点 4）。
 - fill：复用 `KeyframeInterpolator` 的 fill 插值（同类型同 stop 数逐 stop，否则 step，调研点 3）。
 
-### 3.4 落盘 + 渲染（v1：每帧 `ElementPropertyApplier`）
-- 每帧对所有 target 调 **`ElementPropertyApplier.applyMany`**（双路径：编辑器开着走 session-patch + 广播；headless 走 `WallRepo` + `updateState` + `ticker.invalidate`）。
-- **这同时完成**：① 改 state 基准值（落 DB）② 广播前端 mirror（编辑器开着时实时反映）③ 触发渲染（`ticker.invalidate`，与时间轴叠加见 §5）。
-- **为何每帧落 state 而非末帧**：见 §5 —— 与时间轴共存要求时间轴能读到补间的基准值（时间轴 `reloadLocked` 从 `wallSource.load` 读 DB），故补间必须每帧落 DB，时间轴下一帧 reload 才叠加得到。
-- DB 写压力是架构 A 的已知代价（§9 缓解 + 开放优化）。
+### 3.4 落盘 + 渲染（P2 落地：路径 Z 分情况，比原计划「每帧落 DB」更优）
+
+> **实施修正**：调研发现**路径 Z**（给 `AnimationTicker` 加「渲静态墙一帧」轻量入口 `renderStatic`），
+> 补间得以**渲临时态不落 DB**。原 §3.4/§5 写的「每帧落 DB」只在「有时间轴的墙」才必要；静态墙（补间主场景）
+> 省掉了每帧 DB 写。按 wall 有无时间轴分两路：
+
+- **静态墙（无 timeline，补间主场景）= P2 已实现**：补间引擎自持插值 frame（内存），每帧
+  `ticker.renderStatic(wallId, frame)` 渲临时态（Ticker 线程、复用 renderFrame 的 viewer-gated + diff、
+  **不落 DB**）；**末帧** `ElementPropertyApplier.applyMany` 落 DB（目标值永久）。`renderStatic` 内 `entries`
+  守卫——有 timeline entry 时 no-op，不抢 Ticker。
+- **有时间轴的墙（共存场景）= P3 实现**：补间改走**每帧 `applyMany` 落 DB**（updateState + invalidate），
+  让时间轴下一帧 reload 读到补间基准值 + 叠加关键帧（见 §5）。这条 wall 数通常少，DB 写压力可接受。
+
+§9 的「渲临时覆盖层省 DB」优化在静态墙**已由路径 Z 在 P2 兑现**（原列为 future）。
 
 ### 3.5 挂起 + 续接（复用 `ScriptRunner` 挂起机制）
 - 「在 X 秒内」是**挂起式 Action**（照 `PlayTimelineAwait` 范式，调研点 2）：`ActionExecutor` 触发补间注册后，`ScriptRunner` 据 `durationMs` 挂起（不阻塞线程，帧栈续接）。
@@ -155,13 +164,14 @@ if t >= 1:
 - 补间：改 wall **base state** 本身（落 DB）。
 - 二者正交：时间轴的关键帧是「相对 base 的动画」，补间改的是 base。时间轴下一帧 reload 新 base + 叠加关键帧 → 自然叠加（调研点 6 A 评估「二者不冲突」）。
 
-**「每帧落盘」的由来（T7 诚实修正）**：
-- 时间轴 `reloadLocked` 在 invalidate 时从 `wallSource.load(wallId)` 读 **DB** 的 base state（调研点 7）。
-- 若补间只末帧落 DB、中间渲临时层 → 时间轴 reload 读到的是**旧 base**，叠加不到补间的中间值 → **共存失败**。
-- 故 v1 补间**每帧落 state**（`ElementPropertyApplier` → `updateState` → `ticker.invalidate`），时间轴下一帧 reload 才能叠加到补间中间值。
-- 代价：DB 写压力（§9）。「渲临时覆盖层让时间轴读覆盖层、省每帧 DB」需改 Ticker/Interpolator 读补间层 → 违背 T2「不碰 Ticker」→ 留 future 优化。
-
-**wall 无时间轴时**：补间每帧 `ticker.invalidate` 后 Ticker 无该 wall entry、不渲 → 补间引擎需自己触发渲染（`FrameRenderer.renderFrame`）。**实施关键点**：补间引擎统一调一个「渲染 wall 当前 state」入口（内部判断有无时间轴叠加），见 §10 开放问题。
+**落盘策略（P2 落地路径 Z，按有无时间轴分两路）**：
+- **静态墙（无 timeline）= P2 已实现**：补间渲临时态（`renderStatic`）不每帧落 DB，**末帧才落**。省 DB
+  （路径 Z；原计划「每帧落 DB」在静态墙不必要）。
+- **有时间轴的墙 = P3**：要让时间轴叠加补间中间值——时间轴 `reloadLocked` 从 `wallSource.load` 读 DB base
+  （调研点 7），故这条 wall 的补间**每帧 `applyMany` 落 DB**（updateState + invalidate），时间轴下一帧
+  reload 才叠加得到。wall 数少、DB 压力可接受。
+- **分流依据**：`ticker.isWallAnimating(wallId)`——true（有 timeline 在播）走每帧落 DB；false（静态）走
+  `renderStatic` 渲临时态 + 末帧落。补间引擎按此在 tick 内分流，不碰 Ticker 内部（守 T2）。
 
 ---
 
@@ -217,9 +227,9 @@ if t >= 1:
 
 | 段 | 内容 | 闸 |
 |---|---|---|
-| **P1** | 数据模型 + 协议：`Action.TweenBlock` + 序列化/校验/permissions + 协议升版 + 前端类型镜像 | 编译 + 单测 |
-| **P2** | 补间引擎 MVP：`TweenScheduler`（单线程 SES + TweenTask + 每帧 EasingSolver 算值 + `ElementPropertyApplier` 落盘）+ `ScriptRunner` 挂起接入 + **单属性（移动）能跑** | 实测：玩家进服招牌 1.5s 滑入 |
-| **P3** | 全属性 + 缓动 + 共存：多属性并行 + color/fill 轨 + 缓动接入 + **与时间轴共存验证**（背景 LOOP + 补间滑入同时）+ 冲突接管（T8） | 实测：组合动画 + 共存 |
+| **P1 ✅** | 数据模型 + 协议：`Action.TweenBlock` + 序列化/校验/permissions + 协议升 v6 + 前端类型镜像 | 编译 + 单测 |
+| **P2 ✅** | 补间引擎 MVP：`TweenScheduler`（单线程 SES + TweenTask + EasingSolver 算值）+ **路径 Z `renderStatic` 渲临时态省 DB** + 挂起 + 最简前端可拼 + **per-wall 帧率**（tweenFps + 节流）+ 缓动两层 bug 修 | ✅ 实测过：招牌滑入 + 缓动 + 挂起 + 帧率可调 |
+| **P3**（进行中） | 全属性 + 缓动 + 共存：多属性并行 + **color/fill 轨**（ColorLerp + fill 插值）+ 全 EasingType + **与时间轴共存**（有 timeline 墙走每帧 applyMany，§5 分流）+ 冲突接管（T8） | 实测：组合动画 + 共存 |
 | **P4** | 前端 C 形包裹积木 UI + 缓动选择器（下拉 + 自定义曲线）+ body 拖入限制 + i18n | 实测：编辑器拼补间积木 |
 | **P5** | config 限并发 + fps + 性能透明 + 收尾（docs / journal / 版本号） | 实测 + 收口 |
 

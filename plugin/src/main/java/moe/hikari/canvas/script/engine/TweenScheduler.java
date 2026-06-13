@@ -1,12 +1,23 @@
 package moe.hikari.canvas.script.engine;
 
+import moe.hikari.canvas.render.ColorLerp;
 import moe.hikari.canvas.render.EasingSolver;
 import moe.hikari.canvas.script.Action;
+import moe.hikari.canvas.state.BrushStrokeElement;
+import moe.hikari.canvas.state.CircleElement;
 import moe.hikari.canvas.state.Easing;
 import moe.hikari.canvas.state.EditSession;
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.ElementValidator;
+import moe.hikari.canvas.state.Fill;
+import moe.hikari.canvas.state.IconElement;
+import moe.hikari.canvas.state.PathElement;
 import moe.hikari.canvas.state.ProjectState;
+import moe.hikari.canvas.state.RectElement;
+import moe.hikari.canvas.state.ShapeElement;
+import moe.hikari.canvas.state.SolidFill;
 import moe.hikari.canvas.state.StrictNumber;
+import moe.hikari.canvas.state.TextElement;
 import moe.hikari.canvas.storage.WallRepo; // 生产构造用
 
 import java.util.ArrayList;
@@ -37,8 +48,13 @@ import java.util.logging.Logger;
  * immutable（List.copyOf），构造后不修改，跨线程传递安全；frame（ProjectState）为 Java record
  * immutable，跨线程安全。</p>
  *
- * <p><b>MVP 限制</b>：一墙一补间（同 wallId 后来者接管旧任务，T8 简化版）；仅数值属性
- * （x/y/w/h/rotation/opacity）；颜色/fill 补间在 P3 接入。</p>
+ * <p><b>P3 属性支持</b>：数值（x/y/w/h/rotation/opacity）/ 颜色（TextElement.color,
+ * {@link ColorLerp#lerpHex}）/ fill（几何元素 {@link ColorLerp#lerpFill}）；含 {@code ${var:}}
+ * 的颜色/fill 退化末帧瞬切（不每帧 resolve）。一墙一补间（同 wallId 后来者接管，T8 简化版）。</p>
+ *
+ * <p><b>P3 共存分流</b>（§5）：每 tick 现查 {@link TickerControl#isWallAnimating(String)}；
+ * 有时间轴 → 每渲帧 {@link ApplyManyFn} 落 DB（让 Ticker reload 叠加关键帧）；
+ * 静态墙 → renderStatic 渲临时态 + 末帧落 DB。</p>
  */
 public final class TweenScheduler {
 
@@ -67,9 +83,43 @@ public final class TweenScheduler {
     // ---------- 数据模型 ----------
 
     /**
-     * 单属性补间目标。{@code from} / {@code to} 均为 double（数值属性）。
+     * 单属性补间目标（P3 三态 sealed interface）。所有实现均 immutable record。
+     *
+     * <ul>
+     *   <li>{@link NumericTarget} — 数值属性（x/y/w/h/rotation/opacity），double 插值</li>
+     *   <li>{@link ColorTarget} — 颜色属性（TextElement.color），{@link ColorLerp#lerpHex}；
+     *       含 {@code ${var:}} 的颜色不插值（退化末帧瞬切，见 §4 规则）</li>
+     *   <li>{@link FillTarget} — fill 属性（Rect/Icon/Path/Circle/Shape/Brush），
+     *       {@link ColorLerp#lerpFill}；snap = true 时同样末帧瞬切</li>
+     * </ul>
+     *
+     * <p>三线程契约：所有字段 final immutable，构造后不修改，跨 enqueue/tick 线程传递安全。</p>
      */
-    public record PropTarget(String elementId, String property, double from, double to) {}
+    public sealed interface PropTarget permits TweenScheduler.NumericTarget,
+            TweenScheduler.ColorTarget, TweenScheduler.FillTarget {
+        String elementId();
+        String property();
+    }
+
+    /** 数值属性补间目标（x/y/w/h/rotation/opacity）。 */
+    public record NumericTarget(String elementId, String property,
+                                double from, double to) implements PropTarget {}
+
+    /**
+     * 颜色属性补间目标（TextElement.color）。
+     * {@code snap=true} 表示 from/to 含变量占位符，不做中间插值（末帧瞬切）。
+     */
+    public record ColorTarget(String elementId, String property,
+                              String from, String to,
+                              boolean snap) implements PropTarget {}
+
+    /**
+     * fill 属性补间目标（几何/图标/笔刷元素）。
+     * {@code snap=true} 表示含变量，不做插值（末帧瞬切）。
+     */
+    public record FillTarget(String elementId, String property,
+                             Fill from, Fill to,
+                             boolean snap) implements PropTarget {}
 
     /**
      * 活跃补间任务。所有字段 final；frame baseState 是 immutable record；targets 是 List.copyOf。
@@ -186,6 +236,8 @@ public final class TweenScheduler {
 
         // 收集 PropTarget（从 body 的 SetElementProperties 解析 to + 读当前值 from）
         List<PropTarget> targets = new ArrayList<>();
+        TweenTask existingForTakeover = active.get(wallId); // 接管快照（接管时从当前插值位作新 from，T8）
+        long nowForTakeover = clock.getAsLong();
         for (Action a : tb.body()) {
             if (!(a instanceof Action.SetElementProperties sep)) {
                 // 非属性动作（校验层应已拦截，运行层防御性跳过）
@@ -196,23 +248,18 @@ public final class TweenScheduler {
             for (Map.Entry<String, String> entry : sep.patch().entrySet()) {
                 String property = entry.getKey();
                 String toStr = entry.getValue();
-                // 仅支持数值属性（P2 MVP）
-                if (!isNumericProperty(property)) {
-                    return TraceStep.error(blockId, "补间 P2 仅支持数值属性（x/y/w/h/rotation/opacity），不支持: " + property);
+                // P3：支持数值 + color + fill 属性
+                if (!isTweenableProperty(property)) {
+                    return TraceStep.error(blockId, "补间不支持属性: " + property
+                            + "（支持: x/y/w/h/rotation/opacity/color/fill）");
                 }
-                // 读当前 from 值
-                double from = readCurrentValue(baseState, elementId, property, blockId);
-                // 解析 to 值（StrictNumber，与 ElementPropertyApplier.buildPatch 同语义）
-                double to = StrictNumber.parse(toStr);
-                if (!Double.isFinite(to)) {
-                    return TraceStep.error(blockId, "补间目标值非有限数: property=" + property + " value=" + toStr);
+                PropTarget target = buildTarget(baseState, existingForTakeover, nowForTakeover,
+                        elementId, property, toStr, blockId);
+                if (target == null) {
+                    return TraceStep.error(blockId, "补间 target 构建失败: property=" + property
+                            + " elementId=" + elementId);
                 }
-                // 同 wall 已有补间 → 接管：从当前插值位置作新 from（T8）
-                TweenTask existing = active.get(wallId);
-                if (existing != null) {
-                    from = interpolatedValue(existing, elementId, property, clock.getAsLong());
-                }
-                targets.add(new PropTarget(elementId, property, from, to));
+                targets.add(target);
             }
         }
         if (targets.isEmpty()) {
@@ -266,16 +313,22 @@ public final class TweenScheduler {
                 : Math.min(1.0, Math.max(0.0, (double) elapsed / task.durationMs()));
         double eased = EasingSolver.ease(task.easing(), local);
 
+        // P3 共存分流：每 tick 现查（不缓存——补间期间用户可能开/关时间轴）
+        boolean animating = ticker.isWallAnimating(wallId);
+
         if (local >= 1.0) {
-            // 末帧：总是渲 + 落 DB（目标值，按 elementId 分组合并 patch） + 清 diff + 注销
-            ProjectState finalFrame = buildInterpolatedFrame(task, eased);
-            if (finalFrame != null) {
-                ticker.renderStatic(wallId, finalFrame);
+            // 末帧：两种墙都落 DB（目标值，按 elementId 分组合并 patch） + 清 diff + 注销
+            // 静态墙额外渲末帧（防止末帧前的节流导致画面停在中间值）
+            if (!animating) {
+                ProjectState finalFrame = buildInterpolatedFrame(task, eased);
+                if (finalFrame != null) {
+                    ticker.renderStatic(wallId, finalFrame);
+                }
             }
             Map<String, Map<String, String>> byElement = new java.util.LinkedHashMap<>();
             for (PropTarget pt : task.targets()) {
                 byElement.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
-                         .put(pt.property(), formatFinalValue(pt.property(), pt.to()));
+                         .put(pt.property(), formatFinalValue(pt));
             }
             for (Map.Entry<String, Map<String, String>> el : byElement.entrySet()) {
                 try {
@@ -287,19 +340,37 @@ public final class TweenScheduler {
             }
             active.remove(wallId, task);
             lastRenderAt.remove(wallId);
-            ticker.clearStaticDiff(wallId);
+            if (!animating) ticker.clearStaticDiff(wallId);
             return;
         }
 
-        // 中间帧：per-wall fps 节流 renderStatic（进度计算不受节流影响）
+        // 中间帧：per-wall fps 节流（进度计算不受节流影响）
         long renderIntervalMs = Math.max(1L, Math.round(1000.0 / task.fps()));
         Long last = lastRenderAt.get(wallId);
         if (last == null || now - last >= renderIntervalMs) {
-            ProjectState frame = buildInterpolatedFrame(task, eased);
-            if (frame != null) {
-                ticker.renderStatic(wallId, frame);
-                lastRenderAt.put(wallId, now);
+            if (animating) {
+                // 有时间轴：每渲帧 applyMany 落 DB，让时间轴下帧 reload 叠加（§5 共存方案）
+                Map<String, Map<String, String>> byElement = new java.util.LinkedHashMap<>();
+                for (PropTarget pt : task.targets()) {
+                    byElement.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
+                             .put(pt.property(), interpolatedValueStr(pt, eased));
+                }
+                for (Map.Entry<String, Map<String, String>> el : byElement.entrySet()) {
+                    try {
+                        applyFn.apply(wallId, task.blockId(), el.getKey(), el.getValue());
+                    } catch (Exception e) {
+                        log.log(Level.WARNING, "[补间] 中间帧 applyMany 失败 wallId=" + wallId
+                                + " elementId=" + el.getKey() + ": " + e.getMessage(), e);
+                    }
+                }
+            } else {
+                // 静态墙：渲临时态不落 DB（路径 Z）
+                ProjectState frame = buildInterpolatedFrame(task, eased);
+                if (frame != null) {
+                    ticker.renderStatic(wallId, frame);
+                }
             }
+            lastRenderAt.put(wallId, now);
         }
         // else: 节流跳过本次渲染，进度照旧推进（下次 tick 继续算 eased）
     }
@@ -333,7 +404,54 @@ public final class TweenScheduler {
 
     // ---------- 内部 helper ----------
 
-    /** 是否数值属性（P2 MVP 支持范围）。 */
+    /** P3：是否可补间属性（数值 + color + fill）。 */
+    private static boolean isTweenableProperty(String property) {
+        return switch (property) {
+            case "x", "y", "w", "h", "rotation", "opacity", "color", "fill" -> true;
+            default -> false;
+        };
+    }
+
+    /**
+     * 构建单个 PropTarget（按属性类型分流）。返回 null 表示构建失败（enqueue 返 error）。
+     */
+    private static PropTarget buildTarget(ProjectState baseState, TweenTask existing,
+                                          long nowForTakeover,
+                                          String elementId, String property,
+                                          String toStr, String blockId) {
+        if (isNumericProperty(property)) {
+            double from = readNumericValue(baseState, elementId, property);
+            double to = StrictNumber.parse(toStr);
+            if (!Double.isFinite(to)) return null;
+            // 接管：从旧补间当前插值位置作新 from（T8 平滑接管）
+            if (existing != null) {
+                double takeover = interpolatedNumeric(existing, elementId, property, nowForTakeover);
+                if (Double.isFinite(takeover)) from = takeover;
+            }
+            return new NumericTarget(elementId, property, from, to);
+        }
+        if ("color".equals(property)) {
+            // toStr 是 hex 字符串（setColor 积木 → fill 键，但颜色用 color 键）
+            boolean snapTo = containsVar(toStr);
+            String from = readColorValue(baseState, elementId);
+            boolean snapFrom = from != null && containsVar(from);
+            boolean snap = snapTo || snapFrom;
+            if (from == null) from = "#FFFFFF"; // 元素不存在或非 text，fallback
+            return new ColorTarget(elementId, property, from, toStr, snap);
+        }
+        if ("fill".equals(property)) {
+            // toStr 是 #RRGGBB 字符串（setColor 积木 defaultPatch = fill: #FFFFFF）
+            boolean snap = containsVar(toStr);
+            Fill fromFill = readFillValue(baseState, elementId);
+            if (fromFill == null) fromFill = new SolidFill(toStr); // 元素不存在 fallback
+            Fill toFill = parseFillSafe(toStr);
+            if (toFill == null) return null; // 非法 fill 字符串
+            return new FillTarget(elementId, property, fromFill, toFill, snap);
+        }
+        return null;
+    }
+
+    /** 是否数值属性（x/y/w/h/rotation/opacity）。 */
     private static boolean isNumericProperty(String property) {
         return switch (property) {
             case "x", "y", "w", "h", "rotation", "opacity" -> true;
@@ -341,81 +459,121 @@ public final class TweenScheduler {
         };
     }
 
+    /** 检测字符串是否含变量占位符 {@code ${var:}}。 */
+    private static boolean containsVar(String s) {
+        return s != null && s.contains("${var:");
+    }
+
     /**
-     * 从 base state 读元素的当前属性值（仅数值属性）。
-     * 元素/属性不存在时 → fallback 0.0（后续 target 解析无 from 值时给 0）。
+     * 从 base state 读元素的数值属性值（仅数值属性）。
+     * 元素/属性不存在时 → fallback 0.0。
      */
-    private static double readCurrentValue(ProjectState state, String elementId,
-                                           String property, String blockId) {
+    private static double readNumericValue(ProjectState state, String elementId, String property) {
         for (var layer : state.layers()) {
             for (Element el : layer.elements()) {
                 if (!el.id().equals(elementId)) continue;
-                return readElementProperty(el, property);
+                return switch (property) {
+                    case "x" -> el.x();
+                    case "y" -> el.y();
+                    case "w" -> el.w();
+                    case "h" -> el.h();
+                    case "rotation" -> el.rotation();
+                    case "opacity" -> el.effectiveOpacity();
+                    default -> 0.0;
+                };
             }
         }
-        return 0.0; // 元素不存在，to-from delta 仍正确工作
-    }
-
-    /** 从单个 Element record 读数值属性（仅已知数值属性有语义，其他 0.0）。 */
-    private static double readElementProperty(Element el, String property) {
-        return switch (property) {
-            case "x" -> el.x();
-            case "y" -> el.y();
-            case "w" -> el.w();
-            case "h" -> el.h();
-            case "rotation" -> el.rotation();
-            case "opacity" -> el.effectiveOpacity();
-            default -> 0.0;
-        };
+        return 0.0;
     }
 
     /**
-     * 同 wall 接管时：从旧 TweenTask 插值当前值，作新 from（T8 平滑接管）。
-     * 找不到 target 时 fallback 读 base state 当前值（由 enqueue 外层处理）。
+     * 从 base state 读 TextElement 的 color（String）。非 TextElement 或不存在 → null。
      */
-    private static double interpolatedValue(TweenTask task, String elementId,
-                                            String property, long now) {
+    private static String readColorValue(ProjectState state, String elementId) {
+        for (var layer : state.layers()) {
+            for (Element el : layer.elements()) {
+                if (!el.id().equals(elementId)) continue;
+                if (el instanceof TextElement t) return t.color();
+                return null; // 非 text 元素无 color
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从 base state 读元素的 fill（Fill）。不支持 fill 的元素类型（TextElement/ImageElement）→ null。
+     */
+    private static Fill readFillValue(ProjectState state, String elementId) {
+        for (var layer : state.layers()) {
+            for (Element el : layer.elements()) {
+                if (!el.id().equals(elementId)) continue;
+                return switch (el) {
+                    case RectElement r -> r.fill();
+                    case IconElement ic -> ic.fill();
+                    case PathElement p -> p.fill();
+                    case CircleElement c -> c.fill();
+                    case ShapeElement sh -> sh.fill();
+                    case BrushStrokeElement br -> br.fill();
+                    default -> null;
+                };
+            }
+        }
+        return null;
+    }
+
+    /** 安全解析 fill 字符串（#RRGGBB → SolidFill）；失败返 null。 */
+    private static Fill parseFillSafe(String s) {
+        if (s == null || s.isBlank()) return null;
+        try {
+            return ElementValidator.parseFillNullable(s);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 同 wall 接管时：从旧 TweenTask 中插值当前数值，作新 from（T8 平滑接管）。
+     * 找不到 NumericTarget 时返 NaN（调用方 fallback 读 base state）。
+     */
+    private static double interpolatedNumeric(TweenTask task, String elementId,
+                                              String property, long now) {
         long elapsed = now - task.startMs();
         double local = task.durationMs() <= 0 ? 1.0
                 : Math.min(1.0, Math.max(0.0, (double) elapsed / task.durationMs()));
         double eased = EasingSolver.ease(task.easing(), local);
         for (PropTarget pt : task.targets()) {
-            if (pt.elementId().equals(elementId) && pt.property().equals(property)) {
-                return pt.from() + (pt.to() - pt.from()) * eased;
+            if (pt instanceof NumericTarget n
+                    && n.elementId().equals(elementId) && n.property().equals(property)) {
+                return n.from() + (n.to() - n.from()) * eased;
             }
         }
-        return readCurrentValue(task.baseState(), elementId, property, "");
+        return Double.NaN;
     }
 
     /**
-     * 构造插值帧（纯内存，immutable ProjectState；不落 DB）。
+     * 构造插值帧（纯内存，immutable ProjectState；不落 DB）。P3 三态分流。
      *
-     * <p>选择路径：使用临时 {@link EditSession} + {@code updateElement}——EditSession 是纯重建
-     * （修改 {@code HistoryStack} 内部 state record，<b>不</b>发包、<b>不</b>落 DB、<b>不</b>碰 Ticker），
-     * 其 history/patch 产物即弃，仅取 {@code es.state()} 作输出 ProjectState。
-     * 确认无副作用：{@link EditSession#updateElement} 是 {@code synchronized(this)} 纯 record 重建；
-     * 网络推送 / 持久化均在 {@code SessionManager.persistWall} 链，本处不经过 SessionManager。</p>
+     * <p>使用临时 {@link EditSession} + {@code updateElement}——EditSession 纯 record 重建，
+     * <b>不</b>发包、<b>不</b>落 DB、<b>不</b>碰 Ticker；产物即弃，仅取 {@code es.state()}。</p>
      *
-     * <p>对多个 target 属性，逐一在同一 EditSession 上叠加 updateElement（同一 elementId 可多次，
-     * 每次是完整 patch map 里的部分属性；若属性来自不同元素则逐元素各调一次）。</p>
-     *
-     * @param eased  已经过缓动函数映射的插值进度 [0,1]
+     * @param eased 已经过缓动函数映射的插值进度 [0,1]
      */
     private static ProjectState buildInterpolatedFrame(TweenTask task, double eased) {
         // 按 elementId 分组，把同一元素的多属性合并到一次 updateElement 调用
         Map<String, Map<String, Object>> patches = new java.util.LinkedHashMap<>();
         for (PropTarget pt : task.targets()) {
-            double value = pt.from() + (pt.to() - pt.from()) * eased;
-            Object v = buildPatchValue(pt.property(), value);
+            Object v = buildPatchValue(pt, eased);
+            if (v == null) continue; // snap 目标（末帧瞬切）或插值失败，中间帧跳过
             patches.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
                    .put(pt.property(), v);
         }
+        if (patches.isEmpty()) return task.baseState();
 
         EditSession es = new EditSession(task.baseState());
         for (Map.Entry<String, Map<String, Object>> entry : patches.entrySet()) {
             EditSession.OpResult r = es.updateElement(entry.getKey(), entry.getValue());
-            if (r instanceof EditSession.OpResult.Error er) {
-                // updateElement 校验拒绝（如类型错配）：跳过该元素，不崩 tick
+            if (r instanceof EditSession.OpResult.Error) {
+                // 校验拒绝（如 color 给非 text 元素）：退回 baseState，不崩 tick
                 return task.baseState();
             }
         }
@@ -423,27 +581,122 @@ public final class TweenScheduler {
     }
 
     /**
-     * 数值属性值 double → patch Object（同 {@link ElementPropertyApplier#buildPatch} 格式）。
-     * x/y/w/h/rotation → int（round + clamp）；opacity → float [0,1]。
+     * 按 PropTarget 类型计算当前插值 patch 值（Object 格式，传给 EditSession.updateElement）。
+     * snap=true 的 ColorTarget/FillTarget → null（中间帧不渲，末帧瞬切）。
      */
-    private static Object buildPatchValue(String property, double value) {
-        return switch (property) {
-            case "x", "y", "w", "h", "rotation" -> StrictNumber.clampInt(Math.round(value));
-            case "opacity" -> (float) Math.min(1.0, Math.max(0.0, value));
-            default -> StrictNumber.clampInt(Math.round(value));
+    private static Object buildPatchValue(PropTarget pt, double eased) {
+        return switch (pt) {
+            case NumericTarget n -> {
+                double value = n.from() + (n.to() - n.from()) * eased;
+                yield switch (n.property()) {
+                    case "x", "y", "w", "h", "rotation" -> StrictNumber.clampInt(Math.round(value));
+                    case "opacity" -> (float) Math.min(1.0, Math.max(0.0, value));
+                    default -> StrictNumber.clampInt(Math.round(value));
+                };
+            }
+            case ColorTarget c -> {
+                if (c.snap()) yield null; // 含变量，中间帧不渲
+                yield ColorLerp.lerpHex(c.from(), c.to(), eased);
+            }
+            case FillTarget f -> {
+                if (f.snap()) yield null; // 含变量，中间帧不渲
+                Fill interpolated = ColorLerp.lerpFill(f.from(), f.to(), eased);
+                if (interpolated == null) yield null;
+                // Fill → Map（parseFillNullable 接受 Map<?,?> 形态）
+                yield fillToMap(interpolated);
+            }
         };
     }
 
     /**
-     * 末帧落盘的字符串值（同 ElementPropertyApplier.buildPatch 输入格式）。
-     * x/y/w/h/rotation → round(to) int string；opacity → double string [0,1]。
+     * 按 PropTarget 类型计算插值中间帧的字符串值（用于 animating 墙的 applyFn.apply）。
+     * snap=true 的目标返 toStr（瞬切目标值）。
      */
-    private static String formatFinalValue(String property, double to) {
-        return switch (property) {
-            case "x", "y", "w", "h", "rotation" -> String.valueOf(StrictNumber.clampInt(Math.round(to)));
-            case "opacity" -> String.valueOf(Math.min(1.0, Math.max(0.0, to)));
-            default -> String.valueOf(StrictNumber.clampInt(Math.round(to)));
+    private static String interpolatedValueStr(PropTarget pt, double eased) {
+        return switch (pt) {
+            case NumericTarget n -> {
+                double value = n.from() + (n.to() - n.from()) * eased;
+                yield switch (n.property()) {
+                    case "x", "y", "w", "h", "rotation" ->
+                            String.valueOf(StrictNumber.clampInt(Math.round(value)));
+                    case "opacity" ->
+                            String.valueOf(Math.min(1.0, Math.max(0.0, value)));
+                    default ->
+                            String.valueOf(StrictNumber.clampInt(Math.round(value)));
+                };
+            }
+            case ColorTarget c -> c.snap() ? c.to() : ColorLerp.lerpHex(c.from(), c.to(), eased);
+            case FillTarget f -> {
+                if (f.snap()) yield fillToString(f.to());
+                Fill interpolated = ColorLerp.lerpFill(f.from(), f.to(), eased);
+                yield fillToString(interpolated != null ? interpolated : f.to());
+            }
         };
+    }
+
+    /**
+     * 末帧落盘字符串值（ElementPropertyApplier.applyFn.apply 接受 Map<String,String> rawPatch）。
+     */
+    private static String formatFinalValue(PropTarget pt) {
+        return switch (pt) {
+            case NumericTarget n -> switch (n.property()) {
+                case "x", "y", "w", "h", "rotation" ->
+                        String.valueOf(StrictNumber.clampInt(Math.round(n.to())));
+                case "opacity" -> String.valueOf(Math.min(1.0, Math.max(0.0, n.to())));
+                default -> String.valueOf(StrictNumber.clampInt(Math.round(n.to())));
+            };
+            case ColorTarget c -> c.to();
+            case FillTarget f -> fillToString(f.to());
+        };
+    }
+
+    /**
+     * Fill → JSON object 形态 Map（parseFillNullable 接受的 Map<?,?> 格式）。
+     * 序列化失败 → null（调用方 skip）。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Map<String, Object> fillToMap(Fill fill) {
+        if (fill == null) return null;
+        try {
+            return (Map<String, Object>) ElementValidator.FILL_MAPPER.convertValue(fill, Map.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Fill → 字符串（applyFn.apply rawPatch 格式）。
+     * SolidFill → color hex；其他 → JSON 字符串（ElementPropertyApplier.buildPatch 接受
+     * HEX_FILL 正则；渐变 fill 在 applyMany 路径下走 parseFillNullable(Map) 兼容）。
+     * 降级：JSON 序列化失败 → "#FFFFFF"。
+     */
+    private static String fillToString(Fill fill) {
+        if (fill == null) return "#FFFFFF";
+        if (fill instanceof SolidFill sf) {
+            return sf.color() != null ? sf.color() : "#FFFFFF";
+        }
+        // LinearGradient / RadialGradient：applyMany → buildPatch("fill", jsonStr) 目前只接受 HEX
+        // 须直接走 applyMany 的 merged patch（Map<String,Object>）路径。
+        // applyFn.apply 的 rawPatch 是 Map<String,String>，fill 值只能是字符串。
+        // 渐变 fill 退化：取首 stop 颜色作 SolidFill（保证落盘）
+        return extractFirstStopColor(fill);
+    }
+
+    /** 从渐变 fill 提取首个 stop 颜色（fallback SolidFill 字符串）。 */
+    private static String extractFirstStopColor(Fill fill) {
+        if (fill instanceof moe.hikari.canvas.state.LinearGradient lg
+                && lg.stops() != null && !lg.stops().isEmpty()
+                && lg.stops().get(0) != null) {
+            String c = lg.stops().get(0).color();
+            return c != null ? c : "#FFFFFF";
+        }
+        if (fill instanceof moe.hikari.canvas.state.RadialGradient rg
+                && rg.stops() != null && !rg.stops().isEmpty()
+                && rg.stops().get(0) != null) {
+            String c = rg.stops().get(0).color();
+            return c != null ? c : "#FFFFFF";
+        }
+        return "#FFFFFF";
     }
 
     // ---------- 测试辅助（包级可见） ----------

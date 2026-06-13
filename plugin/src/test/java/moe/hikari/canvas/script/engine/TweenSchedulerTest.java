@@ -8,6 +8,7 @@ import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.Layer;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.RectElement;
+import moe.hikari.canvas.state.TextElement;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -17,10 +18,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -76,11 +79,13 @@ class TweenSchedulerTest {
     static class FakeTicker implements TickerControl {
         final List<String> renderCalls = new ArrayList<>();
         final List<String> clearCalls = new ArrayList<>();
+        /** P3：可控的 isWallAnimating 返回值（true = 有时间轴）。 */
+        final AtomicBoolean animating = new AtomicBoolean(false);
 
         @Override public AnimationTicker.Result play(String w, String t) { return AnimationTicker.Result.OK; }
         @Override public void pause(String w) {}
         @Override public AnimationTicker.Result seek(String w, String t, long ms) { return AnimationTicker.Result.OK; }
-        @Override public boolean isWallAnimating(String w) { return false; }
+        @Override public boolean isWallAnimating(String w) { return animating.get(); }
         @Override public void invalidate(String w) {}
         @Override public void refreshAutoPlay(String w) {}
 
@@ -405,7 +410,234 @@ class TweenSchedulerTest {
         assertEquals(1, state.effectiveTweenFps(), "effectiveTweenFps 应 clamp 到 1");
     }
 
+    // ---------- P3 测试用例 ----------
+
+    /** P3：color 补间（TextElement.color，hex from/to → ColorLerp 中间帧）。 */
+    @Test
+    void p3_color_tween_midframe_renders_interpolated_hex() {
+        fakeState = stateWithText(ELEMENT, "#000000");
+        Action.SetElementProperties setColor = new Action.SetElementProperties(
+                ELEMENT, Map.of("color", "#FFFFFF"), "setColor");
+        Action.TweenBlock tb = new Action.TweenBlock(1000L, Easing.LINEAR, List.of(setColor));
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+
+        // local = 0.5 → 中间帧
+        clock.set(500L);
+        scheduler.tickForTest();
+
+        // renderStatic 被调（静态墙，中间帧）
+        assertFalse(ticker.renderCalls.isEmpty(), "color 补间中间帧应 renderStatic");
+        // applyFn 未调（未到末帧）
+        assertTrue(applyFn.log.isEmpty(), "color 补间中间帧不应落盘");
+        assertTrue(scheduler.hasActive(WALL), "中间帧 active 仍存在");
+    }
+
+    /** P3：color 补间末帧落盘，颜色值为目标 hex。 */
+    @Test
+    void p3_color_tween_final_applies_target_color() {
+        fakeState = stateWithText(ELEMENT, "#000000");
+        Action.SetElementProperties setColor = new Action.SetElementProperties(
+                ELEMENT, Map.of("color", "#FF0000"), "setColor");
+        Action.TweenBlock tb = new Action.TweenBlock(500L, Easing.LINEAR, List.of(setColor));
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+        clock.set(500L);
+        scheduler.tickForTest(); // 末帧
+
+        assertFalse(applyFn.log.isEmpty(), "color 末帧应 applyFn");
+        String entry = applyFn.log.get(0);
+        assertTrue(entry.contains("#FF0000") || entry.contains("color"),
+                "末帧颜色值应含目标 #FF0000: " + entry);
+        assertFalse(scheduler.hasActive(WALL), "末帧后 active 清空");
+    }
+
+    /** P3：fill 补间（RectElement.fill SolidFill，hex from/to → lerpFill 中间帧）。 */
+    @Test
+    void p3_fill_tween_midframe_renders_and_no_applyMany() {
+        fakeState = stateWithRect(0, 0); // fill = #FF0000
+        Action.SetElementProperties setFill = new Action.SetElementProperties(
+                ELEMENT, Map.of("fill", "#0000FF"), "setColor");
+        Action.TweenBlock tb = new Action.TweenBlock(1000L, Easing.LINEAR, List.of(setFill));
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+        clock.set(500L);
+        scheduler.tickForTest(); // local = 0.5
+
+        assertFalse(ticker.renderCalls.isEmpty(), "fill 补间中间帧应 renderStatic");
+        assertTrue(applyFn.log.isEmpty(), "fill 补间中间帧不应落盘");
+    }
+
+    /** P3：fill 补间末帧落盘。 */
+    @Test
+    void p3_fill_tween_final_applies_target_fill() {
+        fakeState = stateWithRect(0, 0); // fill = #FF0000
+        Action.SetElementProperties setFill = new Action.SetElementProperties(
+                ELEMENT, Map.of("fill", "#0000FF"), "setColor");
+        Action.TweenBlock tb = new Action.TweenBlock(500L, Easing.LINEAR, List.of(setFill));
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+        clock.set(500L);
+        scheduler.tickForTest(); // 末帧
+
+        assertFalse(applyFn.log.isEmpty(), "fill 末帧应 applyFn");
+        String entry = applyFn.log.get(0);
+        assertTrue(entry.contains("fill") || entry.contains("#0000FF"),
+                "末帧 fill 值应含目标: " + entry);
+        assertFalse(scheduler.hasActive(WALL));
+    }
+
+    /**
+     * P3：共存分流——有时间轴的墙（animating=true）。
+     * 中间帧应走 applyFn（落 DB），不走 renderStatic。
+     */
+    @Test
+    void p3_coexist_animating_wall_uses_applyMany_not_renderStatic() {
+        fakeState = stateWithRect(0, 0);
+        ticker.animating.set(true); // 模拟该 wall 有时间轴在播
+        Action.TweenBlock tb = tweenMove(1000L, 100, 0);
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+        clock.set(500L);
+        scheduler.tickForTest(); // 中间帧
+
+        // animating 墙：applyFn 被调（落 DB）
+        assertFalse(applyFn.log.isEmpty(), "animating 墙中间帧应 applyFn");
+        // renderStatic 不调
+        assertTrue(ticker.renderCalls.isEmpty(), "animating 墙中间帧不应 renderStatic");
+    }
+
+    /**
+     * P3：共存分流——静态墙（animating=false）。
+     * 中间帧应走 renderStatic，不走 applyFn。
+     */
+    @Test
+    void p3_coexist_static_wall_uses_renderStatic_not_applyMany() {
+        fakeState = stateWithRect(0, 0);
+        ticker.animating.set(false); // 静态墙
+        Action.TweenBlock tb = tweenMove(1000L, 100, 0);
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+        clock.set(500L);
+        scheduler.tickForTest(); // 中间帧
+
+        // 静态墙：renderStatic 被调
+        assertFalse(ticker.renderCalls.isEmpty(), "静态墙中间帧应 renderStatic");
+        // applyFn 未调
+        assertTrue(applyFn.log.isEmpty(), "静态墙中间帧不应 applyFn");
+    }
+
+    /**
+     * P3：共存末帧——无论 animating=true/false，末帧都 applyFn 落 DB。
+     */
+    @Test
+    void p3_coexist_both_walls_applyMany_on_final() {
+        // 测试 animating=true 的末帧
+        fakeState = stateWithRect(0, 0);
+        ticker.animating.set(true);
+        Action.TweenBlock tb = tweenMove(500L, 100, 0);
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+        clock.set(500L);
+        scheduler.tickForTest();
+
+        assertFalse(applyFn.log.isEmpty(), "animating 墙末帧应 applyFn 落 DB");
+        assertFalse(scheduler.hasActive(WALL), "末帧后 active 清空");
+
+        // 重置，测试 animating=false 的末帧
+        applyFn.log.clear();
+        ticker.renderCalls.clear();
+        ticker.animating.set(false);
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+        clock.set(500L);
+        scheduler.tickForTest();
+
+        assertFalse(applyFn.log.isEmpty(), "静态墙末帧也应 applyFn 落 DB");
+    }
+
+    /**
+     * P3：animating 状态每 tick 现查（不缓存）。
+     * 补间中途 animating 从 false 变 true → 后续 tick 切换路径。
+     */
+    @Test
+    void p3_animating_checked_each_tick_not_cached() {
+        fakeState = stateWithRect(0, 0);
+        ticker.animating.set(false); // 初始静态
+
+        Action.TweenBlock tb = tweenMove(1000L, 100, 0);
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+
+        // 第一次 tick（静态）→ renderStatic
+        clock.set(250L);
+        scheduler.tickForTest();
+        int renderCountAfterFirst = ticker.renderCalls.size();
+        assertTrue(renderCountAfterFirst > 0, "第一次 tick（静态）应 renderStatic");
+        assertTrue(applyFn.log.isEmpty(), "第一次 tick 不应 applyFn");
+
+        // 切换为 animating
+        ticker.animating.set(true);
+        applyFn.log.clear();
+        ticker.renderCalls.clear();
+
+        // 第二次 tick（animating）→ applyFn，不 renderStatic
+        clock.set(600L);
+        scheduler.tickForTest();
+        assertFalse(applyFn.log.isEmpty(), "切换 animating 后 tick 应 applyFn");
+        assertTrue(ticker.renderCalls.isEmpty(), "切换 animating 后不应 renderStatic");
+    }
+
+    /**
+     * P3：${var:} 颜色退化末帧瞬切——enqueue 成功（不报错），但 toStr 含变量。
+     * 中间帧 renderStatic 被调（snap=true → buildPatchValue 返 null → 中间帧无 color patch，
+     * 但 buildInterpolatedFrame 其他属性仍正常）；末帧 applyFn 落盘含变量字符串。
+     */
+    @Test
+    void p3_color_with_var_snaps_to_final_on_end() {
+        fakeState = stateWithText(ELEMENT, "#000000");
+        Action.SetElementProperties setColor = new Action.SetElementProperties(
+                ELEMENT, Map.of("color", "${var:user/mycolor}"), "setColor");
+        Action.TweenBlock tb = new Action.TweenBlock(500L, Easing.LINEAR, List.of(setColor));
+
+        clock.set(0L);
+        TraceStep step = scheduler.enqueue(WALL, BLOCK, tb);
+        // snap 目标：enqueue 仍应成功（不报错）
+        assertEquals("ok", step.result(), "含变量的 color 补间 enqueue 应成功");
+
+        clock.set(500L);
+        scheduler.tickForTest(); // 末帧
+
+        assertFalse(applyFn.log.isEmpty(), "含变量 color 末帧应 applyFn");
+        String entry = applyFn.log.get(0);
+        // 末帧值 = 目标字符串（含变量，原样落盘，由 VariableInterpolator resolve）
+        assertTrue(entry.contains("${var:user/mycolor}"),
+                "含变量颜色末帧应落变量字符串: " + entry);
+    }
+
     // ---------- 辅助 helper ----------
+
+    /** 构建包含一个 TextElement（指定 color）的 ProjectState。 */
+    private static ProjectState stateWithText(String elementId, String color) {
+        TextElement text = new TextElement(elementId, 10, 10, 200, 50, 0,
+                false, true, "Hello", "inter", 20, color,
+                "left", 0.0f, 1.2f, false, null,
+                null, null, null, null, null);
+        Layer layer = new Layer("l-1", "L", true, false, 1.0f, BlendMode.NORMAL, null,
+                List.of(text));
+        return new ProjectState(1L,
+                new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
+                null, List.of(layer), "l-1",
+                new ProjectState.History(0, 0), null, null, null);
+    }
 
     /** 构建带 tweenFps 的 ProjectState。 */
     private static ProjectState stateWithRectWithFps(int x, int y, int fps) {

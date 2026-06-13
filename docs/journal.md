@@ -5,6 +5,34 @@
 
 ---
 
+## 2026-06-13 · 补间动画 P3 完工：全属性（颜色/fill）+ 与时间轴共存（实测通过）
+
+补间扩展到颜色/渐变属性 + 与用户预排时间轴在同一招牌共存，用户实测过：颜色平滑过渡 + 多属性并行 +
+补间和时间轴叠加。
+
+**全属性**：`TweenScheduler` PropTarget 重构成 **sealed interface**（NumericTarget/ColorTarget/FillTarget，
+三态 immutable）；`isNumericProperty` → `isTweenableProperty`（加 color/fill）；插值分流——numeric 线性 /
+color `ColorLerp.lerpHex` / fill `ColorLerp.lerpFill`；含 `${var:}` 的颜色/fill 退化末帧瞬切（snap=true，
+中间帧不渲、不每帧 resolve）。前端无改（setColor 积木已用 fill 键，isTweenableProperty("fill")=true）。
+
+**与时间轴共存（架构 A 核心）**：`tickOne` 按 `ticker.isWallAnimating(wallId)`（每 tick 现查、不缓存）分流——
+有时间轴 → 每渲帧 `applyMany` 落 base DB（时间轴下帧 reload 叠加关键帧）；静态墙 → `renderStatic` 渲临时态
+（P2 路径 Z）。末帧两种墙都 `applyMany` 落终值。`TickerControl` 加 `isWallAnimating` 转发。
+
+**已知边界（标注 + TODO）**：applyFn rawPatch 是 `Map<String,String>`，animating 墙中间帧的渐变 fill 退化
+首 stop 颜色（主场景纯色无此问题；future 让 applyMany 收 Fill 对象）。
+
+**文档回填**：scripting-tween.md §3.4/§5 反映路径 Z 分情况（静态墙渲临时态省 DB / 有 timeline 墙每帧
+applyMany），§10 标 P1/P2 ✅ + P3 共存方案。
+
+**测试**：后端 **1850**（P3 +12 case：颜色/fill 补间 + 共存分流 + snap）全绿。**P4 待做**：前端 UI 完善
+（自定义缓动曲线 + body 拖入限制 + C 形视觉打磨）。
+
+关联：`engine/TweenScheduler`（PropTarget sealed + 共存分流 + 颜色/fill）+ `engine/TickerControl`
+（isWallAnimating）+ TweenSchedulerTest + scripting-tween.md（回填）+ plans/2026-06-13-tween-P3*.md。
+
+---
+
 ## 2026-06-13 · 补间动画 MVP 完工：P1 数模+协议 / P2 引擎 / per-wall 帧率（架构 A 实测通过）
 
 脚本「在 X 秒内」+ 缓动 MVP 全链路打通，用户实测过：玩家触发 → 静态招牌元素平滑滑动 → 停目标 →
