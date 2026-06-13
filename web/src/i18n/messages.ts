@@ -848,6 +848,11 @@ export const messages = {
                 stopScript: '停止脚本',
                 playParticle: '播放粒子',
                 waitUntil: '等待条件',
+                // 0.7.2-P2：元素 / 变量积木。
+                copyVariable: '变量复制',
+                appendVariable: '文本拼接',
+                cloneElement: '克隆元素',
+                deleteElement: '删除元素',
             },
             // 0.7.1：友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
             friendly: {
@@ -903,6 +908,11 @@ export const messages = {
                 offsetY: '纵向偏移',
                 offsetZ: '竖向偏移',
                 timeoutMs: '超时（毫秒）',
+                // 0.7.2-P2：变量积木字段。
+                copySource: '从',
+                copyTarget: '到',
+                appendTarget: '追加到',
+                appendText: '内容',
             },
             // select / 切换 类字段的选项友好文案。
             fieldOptions: {
@@ -2034,6 +2044,11 @@ export const messages = {
                 stopScript: 'Stop script',
                 playParticle: 'Play particle',
                 waitUntil: 'Wait until',
+                // 0.7.2-P2: element / variable blocks.
+                copyVariable: 'Copy variable',
+                appendVariable: 'Append text',
+                cloneElement: 'Clone element',
+                deleteElement: 'Delete element',
             },
             // 0.7.1: friendly element block titles.
             friendly: {
@@ -2088,6 +2103,11 @@ export const messages = {
                 offsetY: 'Offset Y',
                 offsetZ: 'Offset Z',
                 timeoutMs: 'Timeout (ms)',
+                // 0.7.2-P2: variable block fields.
+                copySource: 'From',
+                copyTarget: 'To',
+                appendTarget: 'Append to',
+                appendText: 'Text',
             },
             fieldOptions: {
                 opPlay: 'Play',

@@ -72,12 +72,36 @@ public final class ElementPropertyApplier {
         default SessionOutcome nudge(String wallId, String elementId, int dx, int dy) {
             return SessionOutcome.noSession();
         }
+
+        /**
+         * 0.7.2-P2：活跃 session 克隆元素（新 id + 偏移）→ 标准 element.add 链 + 前端 patch。
+         * 无 session 返 noSession（调用方走 headless）。default = noSession（旧 fake 兼容）。
+         */
+        default SessionOutcome clone(String wallId, String elementId, int offsetX, int offsetY) {
+            return SessionOutcome.noSession();
+        }
+
+        /**
+         * 0.7.2-P2：活跃 session 删除元素 → 标准 element.delete 链 + 前端 patch。
+         * 无 session 返 noSession。default = noSession（旧 fake 兼容）。
+         */
+        default SessionOutcome delete(String wallId, String elementId) {
+            return SessionOutcome.noSession();
+        }
     }
 
     private final @Nullable SessionPatchApplier sessionApplier;
     private final @Nullable WallRepo wallRepo;
     private final @Nullable TickerControl ticker;
     private final Logger log;
+
+    /**
+     * 0.7.2-P2（F10）：headless 克隆路径的单 wall 元素数上限。由 HikariCanvas 装配后注入
+     * （{@code ScriptsConfig.maxElementsPerWall()}）；{@code <= 0} = 不限。路径 A（活跃 session）
+     * 的配额由 session 自己的 EditSession 在 open/confirm 时注入，不读此字段。默认 0（未注入）
+     * → headless 不限，测试零侵入。{@code /canvas reload} 经 {@link #setMaxElementsPerWall} 热更。
+     */
+    private volatile int maxElementsPerWall;
 
     public ElementPropertyApplier(@Nullable SessionPatchApplier sessionApplier,
                                   @Nullable WallRepo wallRepo,
@@ -87,6 +111,11 @@ public final class ElementPropertyApplier {
         this.wallRepo = wallRepo;
         this.ticker = ticker;
         this.log = log;
+    }
+
+    /** 0.7.2-P2（F10）：注入 headless 克隆路径的元素数上限（{@code <= 0} = 不限）。 */
+    public void setMaxElementsPerWall(int max) {
+        this.maxElementsPerWall = max;
     }
 
     /** 入口（Runner 线程）。任何失败 → error step，不抛。 */
@@ -223,6 +252,121 @@ public final class ElementPropertyApplier {
         return applyMany(wallId, blockId, elementId,
                 Map.of("x", String.valueOf((long) curX + idx),
                         "y", String.valueOf((long) curY + idy)));
+    }
+
+    /**
+     * 0.7.2-P2（F5/F10）：克隆元素（新 id + 偏移）。双路径同 {@link #apply}：路径 A 活跃 session
+     * 走 {@code EditSession.cloneElement} 标准链（前端 add patch 实时可见）；NO_SESSION → headless。
+     */
+    public TraceStep applyClone(String wallId, String blockId, String elementId,
+                                int offsetX, int offsetY) {
+        if (elementId == null || elementId.isEmpty()) {
+            return TraceStep.error(blockId, "elementId 缺失");
+        }
+        if (sessionApplier != null) {
+            SessionOutcome outcome;
+            try {
+                outcome = sessionApplier.clone(wallId, elementId, offsetX, offsetY);
+            } catch (RuntimeException e) {
+                log.log(Level.WARNING, "[脚本] session clone 异常: wall=" + wallId
+                        + " element=" + elementId + " err=" + e.getMessage(), e);
+                outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
+            }
+            if (outcome != null) {
+                switch (outcome.status()) {
+                    case APPLIED -> {
+                        return TraceStep.ok(blockId, "action", "clone " + elementId
+                                + " (+" + offsetX + "," + offsetY + ") → session");
+                    }
+                    case FAILED -> {
+                        return TraceStep.error(blockId, String.valueOf(outcome.detail()));
+                    }
+                    case NO_SESSION -> { /* fall through headless */ }
+                }
+            }
+        }
+        return cloneHeadless(wallId, blockId, elementId, offsetX, offsetY);
+    }
+
+    /**
+     * 0.7.2-P2（F5）：删除元素。双路径同 {@link #apply}：路径 A 活跃 session 走
+     * {@code EditSession.deleteElement} 标准链（前端 remove patch）；NO_SESSION → headless。
+     */
+    public TraceStep applyDelete(String wallId, String blockId, String elementId) {
+        if (elementId == null || elementId.isEmpty()) {
+            return TraceStep.error(blockId, "elementId 缺失");
+        }
+        if (sessionApplier != null) {
+            SessionOutcome outcome;
+            try {
+                outcome = sessionApplier.delete(wallId, elementId);
+            } catch (RuntimeException e) {
+                log.log(Level.WARNING, "[脚本] session delete 异常: wall=" + wallId
+                        + " element=" + elementId + " err=" + e.getMessage(), e);
+                outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
+            }
+            if (outcome != null) {
+                switch (outcome.status()) {
+                    case APPLIED -> {
+                        return TraceStep.ok(blockId, "action", "delete " + elementId + " → session");
+                    }
+                    case FAILED -> {
+                        return TraceStep.error(blockId, String.valueOf(outcome.detail()));
+                    }
+                    case NO_SESSION -> { /* fall through headless */ }
+                }
+            }
+        }
+        return deleteHeadless(wallId, blockId, elementId);
+    }
+
+    /** 路径 B：headless 克隆（临时 EditSession 注入 F10 配额 → cloneElement → updateState + Ticker）。 */
+    private TraceStep cloneHeadless(String wallId, String blockId, String elementId,
+                                    int offsetX, int offsetY) {
+        return runHeadless(wallId, blockId, "clone " + elementId, es -> {
+            es.setMaxElementsPerWall(maxElementsPerWall);
+            return es.cloneElement(elementId, offsetX, offsetY);
+        });
+    }
+
+    /** 路径 B：headless 删除（临时 EditSession → deleteElement → updateState + Ticker）。 */
+    private TraceStep deleteHeadless(String wallId, String blockId, String elementId) {
+        return runHeadless(wallId, blockId, "delete " + elementId,
+                es -> es.deleteElement(elementId));
+    }
+
+    /**
+     * 路径 B 通用骨架（clone / delete 共用，照 {@link #applyHeadless} 的 loadById → 临时
+     * EditSession → updateState → Ticker 链）：{@code op} 在临时 session 上执行一次结构变更
+     * （history / patch 产物即弃，仅 state 落库）。成本 / 已知竞态同 {@link #applyHeadless} 注释。
+     */
+    private TraceStep runHeadless(String wallId, String blockId, String desc,
+                                  java.util.function.Function<EditSession,
+                                          EditSession.OpResult> op) {
+        if (wallRepo == null) {
+            return TraceStep.error(blockId, "headless 路径不可用（WallRepo 未装配）");
+        }
+        WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
+        if (wall == null || wall.state() == null) {
+            return TraceStep.error(blockId, "wall 不存在或无 state: " + wallId);
+        }
+        EditSession es = new EditSession(wall.state());
+        EditSession.OpResult r = op.apply(es);
+        if (r instanceof EditSession.OpResult.Error er) {
+            return TraceStep.error(blockId, er.code() + ": " + er.message());
+        }
+        if (!(r instanceof EditSession.OpResult.Ok)) {
+            return TraceStep.error(blockId, "意外的 op 结果: " + r.getClass().getSimpleName());
+        }
+        wallRepo.updateState(wallId, es.state());
+        if (ticker != null) {
+            if (ticker.isWallAnimating(wallId)) {
+                ticker.invalidate(wallId);
+            } else if (es.state().activeTimelineId() != null) {
+                ticker.refreshAutoPlay(wallId);
+            }
+        }
+        return TraceStep.ok(blockId, "action", desc + " → headless(updateState)");
     }
 
     /**

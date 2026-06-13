@@ -661,20 +661,71 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
-    // ---------- 0.7.2-P2：cloneElement / deleteElement（占位 error，真实现走后续 Task） ----------
+    // ---------- 0.7.2-P2：cloneElement / deleteElement（dispatch 到 ElementPropertyApplier） ----------
 
     @Test
-    void cloneElement_placeholderError() {
+    void cloneElement_noApplier_error() {
+        // executor() 的 applier 为 null → error step（未装配）
         TraceStep step = executor().execute(WALL, "actions/0",
                 new Action.CloneElement("e-1", 10, 10));
         assertEquals("error", step.result());
+        assertTrue(step.detail().contains("ElementPropertyApplier"), step.detail());
     }
 
     @Test
-    void deleteElement_placeholderError() {
+    void deleteElement_noApplier_error() {
         TraceStep step = executor().execute(WALL, "actions/0",
                 new Action.DeleteElement("e-1"));
         assertEquals("error", step.result());
+        assertTrue(step.detail().contains("ElementPropertyApplier"), step.detail());
+    }
+
+    @Test
+    void cloneElement_dispatchesToApplier_clone() {
+        // 真 ElementPropertyApplier + 记录调用的 SessionPatchApplier seam（APPLIED → 不落 headless）
+        List<String> cloneCalls = new ArrayList<>();
+        ElementPropertyApplier applier = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        throw new AssertionError("clone 不应走 apply()");
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome clone(
+                            String w, String e, int ox, int oy) {
+                        cloneCalls.add(e + ":" + ox + "," + oy);
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, null, ticker, log);
+        ActionExecutor ex = new ActionExecutor(store, ticker, applier, null, null, log);
+        TraceStep step = ex.execute(WALL, "actions/0", new Action.CloneElement("e-7", 3, 4));
+        assertEquals("ok", step.result(), () -> String.valueOf(step.detail()));
+        assertEquals(List.of("e-7:3,4"), cloneCalls, "applyClone 经 seam 落到 clone()");
+    }
+
+    @Test
+    void deleteElement_dispatchesToApplier_delete() {
+        List<String> deleteCalls = new ArrayList<>();
+        ElementPropertyApplier applier = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        throw new AssertionError("delete 不应走 apply()");
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome delete(String w, String e) {
+                        deleteCalls.add(e);
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, null, ticker, log);
+        ActionExecutor ex = new ActionExecutor(store, ticker, applier, null, null, log);
+        TraceStep step = ex.execute(WALL, "actions/0", new Action.DeleteElement("e-9"));
+        assertEquals("ok", step.result(), () -> String.valueOf(step.detail()));
+        assertEquals(List.of("e-9"), deleteCalls, "applyDelete 经 seam 落到 delete()");
     }
 
     @Test

@@ -145,12 +145,11 @@ public final class ActionExecutor implements ActionSink {
                 case Action.PlayTimelineAwait a -> doPlayTimelineAwait(wallId, blockId, a);
                 // 0.7.1-P5：粒子真正执行（主线程 hop + 墙坐标，同 playSound 范式）
                 case Action.PlayParticle a -> doPlayParticle(wallId, blockId, a);
-                // 0.7.2-P2：变量积木真实现；元素积木（克隆/删除）走 ElementPropertyApplier 双路径，
-                // 由后续 Task 接，这里先占位返 error 让 switch 穷尽
+                // 0.7.2-P2：变量积木 + 元素积木（克隆/删除）真实现
                 case Action.CopyVariable a -> doCopyVariable(wallId, blockId, a);
                 case Action.AppendVariable a -> doAppendVariable(wallId, blockId, a);
-                case Action.CloneElement a -> TraceStep.error(blockId, "cloneElement 由后续 Task 接（占位）");
-                case Action.DeleteElement a -> TraceStep.error(blockId, "deleteElement 由后续 Task 接（占位）");
+                case Action.CloneElement a -> doCloneElement(wallId, blockId, a);
+                case Action.DeleteElement a -> doDeleteElement(wallId, blockId, a);
                 // wait / if / repeat / stopScript / waitUntil 由 Runner 处理；进到这里是 Runner
                 // 实现 bug → 防御 error（stopScript/waitUntil 真实现在 Runner，本批次外）
                 case Action.Wait a -> TraceStep.error(blockId, "wait 应由 ScriptRunner 处理");
@@ -514,6 +513,22 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
         }
         return applier.applyNudge(wallId, blockId, a.elementId(), a.dx(), a.dy());
+    }
+
+    /** 0.7.2-P2：克隆元素 → {@link ElementPropertyApplier#applyClone}（双路径 + F10 配额）。 */
+    private TraceStep doCloneElement(String wallId, String blockId, Action.CloneElement a) {
+        if (applier == null) {
+            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+        }
+        return applier.applyClone(wallId, blockId, a.elementId(), a.offsetX(), a.offsetY());
+    }
+
+    /** 0.7.2-P2：删除元素 → {@link ElementPropertyApplier#applyDelete}（双路径）。 */
+    private TraceStep doDeleteElement(String wallId, String blockId, Action.DeleteElement a) {
+        if (applier == null) {
+            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+        }
+        return applier.applyDelete(wallId, blockId, a.elementId());
     }
 
     /**

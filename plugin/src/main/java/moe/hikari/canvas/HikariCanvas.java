@@ -138,6 +138,8 @@ public final class HikariCanvas extends JavaPlugin {
     private moe.hikari.canvas.script.engine.ScriptBudget scriptBudget;
     private moe.hikari.canvas.script.engine.ScriptRunner scriptRunner;
     private moe.hikari.canvas.script.engine.TriggerRouter scriptTriggerRouter;
+    // 0.7.2-P2 F10：留引用供 /canvas reload 热更 headless 克隆元素配额（applyConfig）。
+    private moe.hikari.canvas.script.engine.ElementPropertyApplier scriptPropertyApplier;
     // 0.7.0-P3 B2（K14）：playerNear 周期采样器（主线程 task，2 tick 底层周期 +
     // volatile 跳帧计数；applyConfig 热更采样间隔）。
     private moe.hikari.canvas.script.engine.PlayerNearSampler playerNearSampler;
@@ -268,6 +270,7 @@ public final class HikariCanvas extends JavaPlugin {
 
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo, canvasRenderer);
         sessionManager.setMaxImagesPerWall(config.images.maxPerWall());  // 0.4.10 P2-8：per-wall 图片配额注入
+        sessionManager.setMaxElementsPerWall(config.scriptsConfig.maxElementsPerWall());  // 0.7.2-P2 F10：per-wall 元素配额注入（路径 A）
         sessionManager.setTimelineFpsLimits(  // 0.6 P1：时间轴 fps 配置注入（config 段 timeline）
                 config.timelineConfig.defaultFps(), config.timelineConfig.maxFps());
 
@@ -749,8 +752,29 @@ public final class HikariCanvas extends JavaPlugin {
                                 return smForScript.applyScriptElementNudge(
                                         wid, eid, dx, dy, varPushCallback, throttlerForScript);
                             }
+
+                            @Override
+                            public moe.hikari.canvas.script.engine
+                                    .ElementPropertyApplier.SessionOutcome clone(
+                                    String wid, String eid, int offsetX, int offsetY) {
+                                return smForScript.applyScriptElementClone(
+                                        wid, eid, offsetX, offsetY,
+                                        varPushCallback, throttlerForScript);
+                            }
+
+                            @Override
+                            public moe.hikari.canvas.script.engine
+                                    .ElementPropertyApplier.SessionOutcome delete(
+                                    String wid, String eid) {
+                                return smForScript.applyScriptElementDelete(
+                                        wid, eid, varPushCallback, throttlerForScript);
+                            }
                         },
                         wallRepo, tickerControl, getLogger());
+        // 0.7.2-P2（F10）：headless 克隆路径的元素配额（路径 A 配额由 SessionManager 注入到
+        // 活跃 session 的 EditSession；此处只管 headless 临时 EditSession）。
+        propertyApplier.setMaxElementsPerWall(config.scriptsConfig.maxElementsPerWall());
+        this.scriptPropertyApplier = propertyApplier;  // 留引用供 reload 热更
         // 0.7.0-P3 A1：命令模板表惰性读 volatile config 引用——/canvas reload 后下一次
         // runCommand 即用新模板，无需重新接线。在线玩家名供 online-player 参数校验
         // （CraftBukkit playerView 是 CopyOnWriteArrayList 视图，runner 线程迭代安全）。
@@ -932,6 +956,15 @@ public final class HikariCanvas extends JavaPlugin {
         // 0.7.0-P3 B2：playerNear 采样间隔热更（volatile 跳帧计数，无需重 schedule）
         if (playerNearSampler != null) {
             playerNearSampler.setSampleTicks(fresh.scriptsConfig.playerNearSampleTicks());
+        }
+        // 0.7.2-P2 F10：脚本克隆元素配额热更——路径 A（活跃 session 新建的 EditSession）经
+        // SessionManager 透传、headless 临时 EditSession 经 ElementPropertyApplier。两处都 volatile，
+        // /canvas reload 后下一次克隆即生效（已开的 session 内已注入的旧值不变，下次 open 起新值）。
+        if (sessionManager != null) {
+            sessionManager.setMaxElementsPerWall(fresh.scriptsConfig.maxElementsPerWall());
+        }
+        if (scriptPropertyApplier != null) {
+            scriptPropertyApplier.setMaxElementsPerWall(fresh.scriptsConfig.maxElementsPerWall());
         }
         getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
     }

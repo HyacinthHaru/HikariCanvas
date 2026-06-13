@@ -178,13 +178,22 @@ public final class HikariCanvasConfig {
      *                         （游戏 tick；默 10 = 0.5s；load 期 clamp 1..200）。热更走
      *                         {@code PlayerNearSampler.setSampleTicks}（volatile 跳帧计数，
      *                         无需重 schedule）；实际分辨率受底层 task 周期 2 tick 限制
+     * @param maxElementsPerWall 0.7.2-P2（F10）：单墙元素总数上限（脚本"克隆元素"积木反复
+     *                         克隆是唯一能无界堆元素的入口；默 200）。热更：confirm/open 新建
+     *                         EditSession 时透传 + headless 经
+     *                         {@code ElementPropertyApplier.setMaxElementsPerWall}，
+     *                         {@code /canvas reload} 后下一次克隆即生效
      */
     public record ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                                 int maxRunsPerSecond, int maxChainDepth,
                                 java.util.Map<String, CommandTemplate> commandTemplates,
-                                int playerNearSampleTicks) {
+                                int playerNearSampleTicks,
+                                int maxElementsPerWall) {
         /** playerNear 采样间隔默认值（tick）；P6 压测后可能回调（docs/scripting.md §10）。 */
         public static final int DEFAULT_PLAYER_NEAR_SAMPLE_TICKS = 10;
+
+        /** 0.7.2-P2（F10）：单墙元素总数上限默认值。 */
+        public static final int DEFAULT_MAX_ELEMENTS_PER_WALL = 200;
 
         public ScriptsConfig {
             commandTemplates = commandTemplates == null
@@ -195,7 +204,8 @@ public final class HikariCanvasConfig {
         public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                              int maxRunsPerSecond, int maxChainDepth) {
             this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
-                    java.util.Map.of(), DEFAULT_PLAYER_NEAR_SAMPLE_TICKS);
+                    java.util.Map.of(), DEFAULT_PLAYER_NEAR_SAMPLE_TICKS,
+                    DEFAULT_MAX_ELEMENTS_PER_WALL);
         }
 
         /** 兼容 0.7.0-P3 A1 的 5 参形态（采样间隔走默认）。 */
@@ -203,7 +213,17 @@ public final class HikariCanvasConfig {
                              int maxRunsPerSecond, int maxChainDepth,
                              java.util.Map<String, CommandTemplate> commandTemplates) {
             this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
-                    commandTemplates, DEFAULT_PLAYER_NEAR_SAMPLE_TICKS);
+                    commandTemplates, DEFAULT_PLAYER_NEAR_SAMPLE_TICKS,
+                    DEFAULT_MAX_ELEMENTS_PER_WALL);
+        }
+
+        /** 兼容 0.7.0-P3 B2 的 6 参形态（元素配额走默认）。 */
+        public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
+                             int maxRunsPerSecond, int maxChainDepth,
+                             java.util.Map<String, CommandTemplate> commandTemplates,
+                             int playerNearSampleTicks) {
+            this(maxRulesPerWall, maxActionsPerRun, maxRunsPerSecond, maxChainDepth,
+                    commandTemplates, playerNearSampleTicks, DEFAULT_MAX_ELEMENTS_PER_WALL);
         }
 
         public static ScriptsConfig defaults() {
@@ -533,8 +553,11 @@ public final class HikariCanvasConfig {
             int nearTicks = Math.min(200, Math.max(1, scSec.getInt(
                     "player-near-sample-ticks",
                     ScriptsConfig.DEFAULT_PLAYER_NEAR_SAMPLE_TICKS)));
+            // 0.7.2-P2（F10）：单墙元素总数上限（脚本克隆元素强制）。clamp ≥1。
+            int maxElements = Math.max(1, scSec.getInt("max-elements-per-wall",
+                    ScriptsConfig.DEFAULT_MAX_ELEMENTS_PER_WALL));
             b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain,
-                    templates, nearTicks);
+                    templates, nearTicks, maxElements);
         }
 
         return new HikariCanvasConfig(b);

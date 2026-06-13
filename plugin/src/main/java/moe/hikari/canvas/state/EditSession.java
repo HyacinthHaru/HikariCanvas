@@ -88,6 +88,16 @@ public final class EditSession {
      */
     private volatile Integer maxImagesPerWall;
 
+    /**
+     * 0.7.2-P2（F10）：单 wall 元素总数上限（克隆元素时强制）。{@code null} 或 {@code <= 0} =
+     * 不强制（缺省放行）—— 兼容未注入配置的测试 / SELECTING 阶段。生产路径由
+     * {@code SessionManager} 经 {@link #setMaxElementsPerWall(int)} 注入
+     * {@code HikariCanvasConfig.ScriptsConfig.maxElementsPerWall()}。强制点在 {@link #cloneElement}
+     * （脚本反复克隆是唯一能无界堆元素的入口；普通 element.add 由前端交互天然有界，不在此强制
+     * 以免限制正常编辑）。
+     */
+    private volatile Integer maxElementsPerWall;
+
     /** T11 历史栈（past + future + commit/undo/redo/mark）。2026-05-14 抽出。 */
     private final HistoryStack history;
 
@@ -120,6 +130,16 @@ public final class EditSession {
      */
     public void setMaxImagesPerWall(int maxPerWall) {
         this.maxImagesPerWall = maxPerWall;
+    }
+
+    /**
+     * 0.7.2-P2（F10）：注入单 wall 元素总数上限。{@code <= 0} = 不限。由 {@code SessionManager}
+     * 在 confirm / open 构造 EditSession 后调用（路径 A 活跃 session），以及 headless 路径
+     * （{@code ElementPropertyApplier} 临时 EditSession）注入，传入
+     * {@code HikariCanvasConfig.ScriptsConfig.maxElementsPerWall()}。未调用时字段为 null → 放行。
+     */
+    public void setMaxElementsPerWall(int max) {
+        this.maxElementsPerWall = max;
     }
 
     /**
@@ -390,6 +410,107 @@ public final class EditSession {
         return new OpResult.Ok(
                 new StatePatchBuilder().remove(elementPath(loc.layerIdx, loc.elementIdx)).build(v),
                 DirtyRegion.of(loc.element));
+    }
+
+    // ---------- element.clone（0.7.2-P2 脚本克隆元素） ----------
+
+    /**
+     * 0.7.2-P2（F10）：克隆元素（新 id + 位置偏移 {@code offsetX/offsetY}），副本追加到
+     * <b>源元素所在 layer 末尾</b>（非 activeLayer——脚本无"当前层"概念，跟随源元素最直观）。
+     *
+     * <p>复用 {@link #cloneElementWithNewId}（深拷贝 + 重生成 id）→ {@link #withOffset} 把
+     * 副本 x/y 平移；x/y 超 {@code [-MAX_COORD, MAX_COORD]} 钳回边界（不拒绝——脚本批量克隆
+     * 偏移累加易越界，钳位比报错友好且不破坏数据）。</p>
+     *
+     * <p>F10 配额：每墙元素总数达 {@code maxElementsPerWall} 时拒 {@code QUOTA_EXCEEDED}
+     * （脚本反复克隆是唯一能无界堆元素的入口）。layer.locked 拒 {@code LAYER_LOCKED}。</p>
+     *
+     * @return {@code INVALID_ELEMENT} 元素不存在；{@code LAYER_LOCKED} 源层锁定；
+     *         {@code QUOTA_EXCEEDED} 元素数超上限；否则 {@code Ok}（add patch）
+     */
+    public synchronized OpResult cloneElement(String elementId, int offsetX, int offsetY) {
+        if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
+        Locator loc = findElement(elementId);
+        if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
+        Integer max = this.maxElementsPerWall;
+        if (max != null && max > 0 && totalElements() >= max) {
+            return err("QUOTA_EXCEEDED", "wall already has " + totalElements()
+                    + " element(s); max " + max);
+        }
+
+        Element cloned = withOffset(cloneElementWithNewId(loc.element), offsetX, offsetY);
+
+        ProjectSnapshot pre = snapshotNow();
+        loc.layer.elements().add(cloned); // 追加到源元素所在 layer 末尾
+        commitHistory(pre);
+        long v = state.bumpVersion();
+
+        int newIdx = loc.layer.elements().size() - 1;
+        StatePatch patch = new StatePatchBuilder()
+                .add(elementPath(loc.layerIdx, newIdx), cloned)
+                .build(v);
+        return new OpResult.Ok(patch, DirtyRegion.of(cloned));
+    }
+
+    /** 单 wall 跨所有 layer 的元素总数（F10 配额判定）。 */
+    private int totalElements() {
+        int n = 0;
+        for (Layer l : state.layers()) {
+            n += l.elements().size();
+        }
+        return n;
+    }
+
+    /**
+     * 把元素 x/y 平移 {@code (dx, dy)}，钳回 {@code [-MAX_COORD, MAX_COORD]}（升 long 防 int
+     * 回绕）。逐类型 record 重建（镜像 {@link #cloneElementWithNewId} 的 sealed switch，仅改
+     * x/y，其余字段原样透传）。
+     */
+    private static Element withOffset(Element src, int dx, int dy) {
+        int nx = (int) Math.max(-ElementValidator.MAX_COORD,
+                Math.min(ElementValidator.MAX_COORD, (long) src.x() + dx));
+        int ny = (int) Math.max(-ElementValidator.MAX_COORD,
+                Math.min(ElementValidator.MAX_COORD, (long) src.y() + dy));
+        if (nx == src.x() && ny == src.y()) return src; // 偏移 0（或全被钳到同值）免重建
+        return switch (src) {
+            case TextElement t -> new TextElement(t.id(),
+                    nx, ny, t.w(), t.h(), t.rotation(), t.locked(), t.visible(),
+                    t.text(), t.fontId(), t.fontSize(), t.color(), t.align(),
+                    t.letterSpacing(), t.lineHeight(), t.vertical(), t.effects(),
+                    t.opacity(), t.blendMode(), t.renderMode(),
+                    t.bold(), t.italic());
+            case RectElement r -> new RectElement(r.id(),
+                    nx, ny, r.w(), r.h(), r.rotation(), r.locked(), r.visible(),
+                    r.fill(), r.stroke(),
+                    r.opacity(), r.blendMode(), r.renderMode());
+            case IconElement ic -> new IconElement(ic.id(),
+                    nx, ny, ic.w(), ic.h(), ic.rotation(), ic.locked(), ic.visible(),
+                    ic.source(), ic.tint(),
+                    ic.opacity(), ic.blendMode(), ic.renderMode(), ic.fill());
+            case PathElement p -> new PathElement(p.id(),
+                    nx, ny, p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
+                    p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
+                    p.opacity(), p.blendMode(), p.renderMode());
+            case CircleElement c -> new CircleElement(c.id(),
+                    nx, ny, c.w(), c.h(), c.rotation(), c.locked(), c.visible(),
+                    c.fill(), c.stroke(),
+                    c.opacity(), c.blendMode(), c.renderMode());
+            case ShapeElement sh -> new ShapeElement(sh.id(),
+                    nx, ny, sh.w(), sh.h(), sh.rotation(), sh.locked(), sh.visible(),
+                    sh.kind(), sh.sides(), sh.innerRatio(),
+                    sh.fill(), sh.stroke(),
+                    sh.opacity(), sh.blendMode(), sh.renderMode());
+            case BrushStrokeElement b -> new BrushStrokeElement(b.id(),
+                    nx, ny, b.w(), b.h(), b.rotation(), b.locked(), b.visible(),
+                    b.points(), b.size(), b.fill(),
+                    b.pressureSize(), b.pressureOpacity(),
+                    b.opacity(), b.blendMode(), b.renderMode());
+            case ImageElement im -> new ImageElement(im.id(),
+                    nx, ny, im.w(), im.h(), im.rotation(), im.locked(), im.visible(),
+                    im.source(), im.mask(),
+                    im.opacity(), im.blendMode(), im.renderMode());
+        };
     }
 
     // ---------- element.reorder ----------

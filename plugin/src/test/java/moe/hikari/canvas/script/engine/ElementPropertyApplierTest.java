@@ -365,6 +365,228 @@ class ElementPropertyApplierTest {
         assertEquals(11, findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1").x());
     }
 
+    // ---------- 0.7.2-P2：applyClone / applyDelete（headless 双路径） ----------
+
+    private static int elementCount(ProjectState st) {
+        int n = 0;
+        for (Layer l : st.layers()) n += l.elements().size();
+        return n;
+    }
+
+    @Test
+    void applyClone_headless_addsElement_withOffset_andNewId() {
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyClone(wallId, "b", "e-1", 5, 7);
+        assertEquals("ok", step.result(), () -> "应成功: " + step.detail());
+        ProjectState reloaded = wallRepo.loadById(wallId).orElseThrow().state();
+        assertEquals(2, elementCount(reloaded), "落库后元素 +1");
+        // 找到不是 e-1 的那个（副本）
+        TextElement copy = null;
+        for (Layer l : reloaded.layers()) {
+            for (Element e : l.elements()) {
+                if (!e.id().equals("e-1")) copy = (TextElement) e;
+            }
+        }
+        assertEquals(15, copy.x(), "x 偏移生效（10+5）");
+        assertEquals(27, copy.y(), "y 偏移生效（20+7）");
+        assertNotEquals("e-1", copy.id(), "副本新 id");
+    }
+
+    @Test
+    void applyClone_headless_quotaExceeded_errorStep() {
+        String wallId = createWall(stateWithText("e-1", false));
+        ElementPropertyApplier a = headlessApplier();
+        a.setMaxElementsPerWall(1); // 已有 1 个元素 = 上限
+        TraceStep step = a.applyClone(wallId, "b", "e-1", 1, 1);
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("QUOTA_EXCEEDED"), step.detail());
+        assertEquals(1, elementCount(wallRepo.loadById(wallId).orElseThrow().state()),
+                "拒绝后未落库");
+    }
+
+    @Test
+    void applyClone_headless_quotaUnset_allowsClone() {
+        String wallId = createWall(stateWithText("e-1", false));
+        // 默认 maxElementsPerWall=0（未注入）→ 不限
+        TraceStep step = headlessApplier().applyClone(wallId, "b", "e-1", 0, 0);
+        assertEquals("ok", step.result());
+        assertEquals(2, elementCount(wallRepo.loadById(wallId).orElseThrow().state()));
+    }
+
+    @Test
+    void applyClone_headless_missingElement_errorStep() {
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyClone(wallId, "b", "e-MISSING", 1, 1);
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("INVALID_ELEMENT"), step.detail());
+        assertEquals(1, elementCount(wallRepo.loadById(wallId).orElseThrow().state()));
+    }
+
+    @Test
+    void applyClone_emptyElementId_errorStep() {
+        TraceStep step = headlessApplier().applyClone("w-any", "b", "", 1, 1);
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void applyClone_animatingWall_invalidates() {
+        String wallId = createWall(stateWithText("e-1", true));
+        ticker.animating = true;
+        headlessApplier().applyClone(wallId, "b", "e-1", 1, 1);
+        assertEquals(List.of(wallId), ticker.invalidates, "在播 → invalidate（persistWall 链）");
+    }
+
+    @Test
+    void applyDelete_headless_removesElement() {
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyDelete(wallId, "b", "e-1");
+        assertEquals("ok", step.result(), () -> "应成功: " + step.detail());
+        assertEquals(0, elementCount(wallRepo.loadById(wallId).orElseThrow().state()),
+                "落库后元素 -1");
+    }
+
+    @Test
+    void applyDelete_headless_missingElement_errorStep() {
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().applyDelete(wallId, "b", "e-MISSING");
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("INVALID_ELEMENT"), step.detail());
+        assertEquals(1, elementCount(wallRepo.loadById(wallId).orElseThrow().state()),
+                "拒绝后元素不变");
+    }
+
+    @Test
+    void applyDelete_emptyElementId_errorStep() {
+        TraceStep step = headlessApplier().applyDelete("w-any", "b", "");
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void applyDelete_wallNotFound_errorStep() {
+        TraceStep step = headlessApplier().applyDelete("w-nope", "b", "e-1");
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void applyDelete_repoMissing_errorStep() {
+        ElementPropertyApplier a = new ElementPropertyApplier(null, null, null, LOG);
+        TraceStep step = a.applyDelete("w-1", "b", "e-1");
+        assertEquals("error", step.result());
+    }
+
+    // ---------- 0.7.2-P2：applyClone / applyDelete（session seam 路径 A） ----------
+
+    @Test
+    void applyClone_sessionPath_usesCloneSeam() {
+        List<int[]> seen = new ArrayList<>();
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        throw new AssertionError("clone 不应走 apply()");
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome clone(
+                            String w, String e, int ox, int oy) {
+                        seen.add(new int[]{ox, oy});
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = a.applyClone(wallId, "b", "e-1", 8, 9);
+        assertEquals("ok", step.result());
+        assertEquals(1, seen.size());
+        assertEquals(8, seen.get(0)[0]);
+        assertEquals(9, seen.get(0)[1]);
+        // session APPLIED → 不落 headless（DB 仍 1 个元素）
+        assertEquals(1, elementCount(wallRepo.loadById(wallId).orElseThrow().state()),
+                "session 路径吞掉后不再走 headless");
+    }
+
+    @Test
+    void applyClone_sessionFailed_errorStep_noHeadlessFallback() {
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        return ElementPropertyApplier.SessionOutcome.noSession();
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome clone(
+                            String w, String e, int ox, int oy) {
+                        return ElementPropertyApplier.SessionOutcome.failed("QUOTA_EXCEEDED: x");
+                    }
+                }, wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = a.applyClone(wallId, "b", "e-1", 1, 1);
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("QUOTA_EXCEEDED"));
+        assertEquals(1, elementCount(wallRepo.loadById(wallId).orElseThrow().state()),
+                "session 拒绝不回退 headless");
+    }
+
+    @Test
+    void applyClone_sessionNoSession_fallsThroughHeadless() {
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                (w, e, p) -> ElementPropertyApplier.SessionOutcome.noSession(),
+                wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = a.applyClone(wallId, "b", "e-1", 0, 0);
+        assertEquals("ok", step.result());
+        assertEquals(2, elementCount(wallRepo.loadById(wallId).orElseThrow().state()),
+                "noSession → headless 落库");
+    }
+
+    @Test
+    void applyDelete_sessionPath_usesDeleteSeam() {
+        List<String> seen = new ArrayList<>();
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        throw new AssertionError("delete 不应走 apply()");
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome delete(String w, String e) {
+                        seen.add(e);
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = a.applyDelete(wallId, "b", "e-1");
+        assertEquals("ok", step.result());
+        assertEquals(List.of("e-1"), seen);
+        assertEquals(1, elementCount(wallRepo.loadById(wallId).orElseThrow().state()),
+                "session 吞掉后不走 headless 删");
+    }
+
+    @Test
+    void applyDelete_sessionApplierThrows_errorStep_chainSafe() {
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        return ElementPropertyApplier.SessionOutcome.noSession();
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome delete(String w, String e) {
+                        throw new IllegalStateException("boom");
+                    }
+                }, wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = a.applyDelete(wallId, "b", "e-1");
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("boom"));
+    }
+
     // ---------- 路径 A：session seam ----------
 
     @Test

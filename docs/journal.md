@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-06-13 · 0.7.2-P2 完工：元素积木 + 变量积木（克隆 / 删除 / 复制 / 拼接）
+
+4 个全栈动作。子代理（后端地基 + 前端 + 元素双路径）+ 对抗审查。
+
+**变量积木**：`CopyVariable`（读 source cached → setValue target）+ `AppendVariable`（读 target +
+interpolate(text) 拼接 → setValue），复用 doSetVariable 路径，async 无主线程 hop。
+
+**元素积木**（双路径，照 setElementProperties/nudgeElement）：
+- **删除**复用 `EditSession.deleteElement`（已有）；**克隆**新增 `EditSession.cloneElement`（复用
+  `cloneElementWithNewId` + `withOffset` clamp ±10000 + F10 配额，加到源元素所在 layer）
+- 路径 A（编辑器开）：`SessionManager.applyScriptElementClone/Delete` + `finishScriptElementStructuralOp`
+  （pushPatch 广播 + throttler + persistWall，逐行照 applyScriptElementPatch）
+- 路径 B（headless）：`ElementPropertyApplier.runHeadless`（new EditSession + updateState + Ticker invalidate）
+- **F10 配额**：`scripts.max-elements-per-wall` 默 200（config + `/canvas reload` 热更），session/headless
+  两路都 enforce、编辑器开着也绕不过
+
+**对抗审查**（8 验证点全对：session 广播 / headless Ticker / 删除悬空引用 error 不崩 / 克隆 fire-and-forget
+语义 / 配额双路径一致 / offset clamp long 防回绕 / synchronized 并发 / locked+缺失边界）。1 次要留 §8 未决：
+编辑器开着时脚本克隆会抢用户选中焦点（App.vue auto-select，仅 LOOP 克隆 + 开着编辑器才显现，不丢数据 / 不崩
+/ 不影响 headless 运行时）。
+
+**测试**：后端 **1781**（基线 1753 + 序列化/validator/permissions/executor + EditSessionCloneElement 10 +
+applyClone/Delete 16，− 2 占位）/ 前端 **1135**。shadowJar 170M。i18n 中英 8 key。
+
+关联：`Action.java`/序列化/validator/permissions/`ActionExecutor` / `EditSession.cloneElement` /
+`ElementPropertyApplier`(applyClone/Delete) / `SessionManager`(seam) / `HikariCanvas`/`HikariCanvasConfig`/
+`config.yml` / 前端 `protocol.ts`+`blockDefs.ts`+`validator.ts`+`i18n/messages.ts`。
+
+---
+
 ## 2026-06-13 · 0.7.2-P2 立项：元素积木 + 变量积木（实施计划）
 
 P2 加 4 动作（克隆元素 / 删除元素 / 变量复制 / 文本拼接）。调研落定：**删除**复用 `EditSession.deleteElement`

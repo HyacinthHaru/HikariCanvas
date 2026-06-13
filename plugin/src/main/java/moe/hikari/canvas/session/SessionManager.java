@@ -127,6 +127,18 @@ public final class SessionManager {
     }
 
     /**
+     * 0.7.2-P2（F10）：per-wall 元素总数上限（脚本克隆元素时强制）。由 HikariCanvas 装配后注入
+     * （{@code config.scriptsConfig.maxElementsPerWall}）；默认 {@link Integer#MAX_VALUE}（不限）
+     * 保证未注入时无回归。confirm / open 新建 EditSession 时透传，让路径 A（活跃 session）的
+     * {@code EditSession.cloneElement} 强制配额。
+     */
+    private volatile int maxElementsPerWall = Integer.MAX_VALUE;
+
+    public void setMaxElementsPerWall(int n) {
+        this.maxElementsPerWall = n > 0 ? n : Integer.MAX_VALUE;
+    }
+
+    /**
      * 0.6 P2：时间轴动画产帧引擎引用（HikariCanvas 装配后注入）。两处用途：
      * <ul>
      *   <li>{@link #persistWall} 内编辑持久化（{@code wallRepo.updateState}）完成后调
@@ -446,6 +458,7 @@ public final class SessionManager {
             s.projectState(ps);
             EditSession es = new EditSession(ps);
             es.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
+            es.setMaxElementsPerWall(maxElementsPerWall);  // 0.7.2-P2 F10：注入 per-wall 元素配额
             es.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 0.6 P1：注入时间轴 fps 配置
             s.editSession(es);
             s.state(SessionState.ISSUED);
@@ -609,6 +622,7 @@ public final class SessionManager {
         s.projectState(w.state());
         EditSession openEs = new EditSession(w.state());
         openEs.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
+        openEs.setMaxElementsPerWall(maxElementsPerWall);  // 0.7.2-P2 F10：注入 per-wall 元素配额
         openEs.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 0.6 P1：注入时间轴 fps 配置
         s.editSession(openEs);
         // 2026-05-12 修：补回 wall geometry，否则 wall.refresh / frame ops 在 /canvas open 后空跑
@@ -849,6 +863,97 @@ public final class SessionManager {
                             + r.getClass().getSimpleName());
         }
         return moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+    }
+
+    /**
+     * 0.7.2-P2（F5/F10）：脚本 {@code cloneElement} 路径 A——墙开着编辑器时走
+     * {@link moe.hikari.canvas.state.EditSession#cloneElement} 标准链，并照
+     * {@link #applyScriptElementPatch} 的收尾链：推 state.patch（前端实时多出副本）+
+     * ProjectionThrottler 脏区投影 + {@link #persistWall}。F10 配额由 session 自己的
+     * EditSession 在 open/confirm 时注入的 {@code maxElementsPerWall} 强制（超额 → FAILED）。
+     *
+     * <p>无活跃 session → {@code NO_SESSION}（调用方走 headless）。元素不存在 / 配额超限 →
+     * {@code FAILED}（不回退 headless，避免双路径语义分叉——同 patch 路径）。</p>
+     */
+    public moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome
+    applyScriptElementClone(String wallId, String elementId, int offsetX, int offsetY,
+                            moe.hikari.canvas.web.OpPushCallback push,
+                            moe.hikari.canvas.render.ProjectionThrottler throttler) {
+        if (wallId == null || elementId == null) {
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed("invalid script element clone args");
+        }
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (!wallId.equals(s.wallId())) continue;
+            moe.hikari.canvas.state.EditSession es = s.editSession();
+            if (es == null) continue;
+            moe.hikari.canvas.state.EditSession.OpResult r =
+                    es.cloneElement(elementId, offsetX, offsetY);
+            return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
+                    "applyScriptElementClone");
+        }
+        return moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+    }
+
+    /**
+     * 0.7.2-P2（F5）：脚本 {@code deleteElement} 路径 A——墙开着编辑器时走
+     * {@link moe.hikari.canvas.state.EditSession#deleteElement} 标准链 + 收尾链（推
+     * state.patch 移除元素 + 投影 + persistWall）。无活跃 session → {@code NO_SESSION}；
+     * 元素不存在 → {@code FAILED}（不回退 headless，同 patch 路径）。
+     */
+    public moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome
+    applyScriptElementDelete(String wallId, String elementId,
+                             moe.hikari.canvas.web.OpPushCallback push,
+                             moe.hikari.canvas.render.ProjectionThrottler throttler) {
+        if (wallId == null || elementId == null) {
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed("invalid script element delete args");
+        }
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (!wallId.equals(s.wallId())) continue;
+            moe.hikari.canvas.state.EditSession es = s.editSession();
+            if (es == null) continue;
+            moe.hikari.canvas.state.EditSession.OpResult r = es.deleteElement(elementId);
+            return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
+                    "applyScriptElementDelete");
+        }
+        return moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+    }
+
+    /**
+     * clone / delete 路径 A 的共用收尾（照 {@link #applyScriptElementPatch} 的 Ok 分支）：
+     * Ok → 推 patch（非空）+ 投影脏区 + persistWall → APPLIED；Error → FAILED（含错误码）。
+     */
+    private moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome
+    finishScriptElementStructuralOp(Session s, String wallId,
+            moe.hikari.canvas.state.EditSession.OpResult r,
+            moe.hikari.canvas.web.OpPushCallback push,
+            moe.hikari.canvas.render.ProjectionThrottler throttler, String label) {
+        if (r instanceof moe.hikari.canvas.state.EditSession.OpResult.Ok ok) {
+            if (push != null && !ok.patch().ops().isEmpty()) {
+                try {
+                    push.pushPatch(s.id(), ok.patch());
+                } catch (Exception e) {
+                    log.log(java.util.logging.Level.WARNING,
+                            label + " push failed: session=" + s.id()
+                                    + " wall=" + wallId + " err=" + e.getMessage(), e);
+                }
+            }
+            if (throttler != null && ok.dirty() != null) {
+                throttler.submit(s.id(), ok.dirty());
+            }
+            persistWall(s.id());
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.applied();
+        }
+        if (r instanceof moe.hikari.canvas.state.EditSession.OpResult.Error er) {
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed(er.code() + ": " + er.message());
+        }
+        return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                .SessionOutcome.failed("unexpected op result: " + r.getClass().getSimpleName());
     }
 
     /**
