@@ -126,6 +126,11 @@ public final class HikariCanvasConfig {
     public final ScriptsConfig scriptsConfig;
 
     /**
+     * 0.7.1：补间动画引擎参数。配置段 {@code scripts.tween}。
+     */
+    public final TweenConfig tweenConfig;
+
+    /**
      * 0.4.0 bugfix（Bug 3）：兜底列车时刻表配置。
      *
      * @param arrivingThresholdSeconds 进站阈值（秒）。eta ≤ 阈值时 {@code is_arriving=true} +
@@ -154,6 +159,18 @@ public final class HikariCanvasConfig {
     public record TimelineConfig(int defaultFps, int maxFps) {
         public static TimelineConfig defaults() {
             return new TimelineConfig(20, 60);
+        }
+    }
+
+    /**
+     * 0.7.1：per-wall 补间动画引擎参数（config 段 {@code scripts.tween}）。
+     *
+     * @param maxFps        SES cadence 上限兼 enqueue 时 fps clamp 上界（默 60；admin 保护阀门，不自动降级）
+     * @param maxConcurrent 同时活跃补间上限（默 16；超限新补间返 error）
+     */
+    public record TweenConfig(int maxFps, int maxConcurrent) {
+        public static TweenConfig defaults() {
+            return new TweenConfig(60, 16);
         }
     }
 
@@ -307,6 +324,7 @@ public final class HikariCanvasConfig {
         this.tokenRateLimitPerMinute = b.tokenRateLimitPerMinute;
         this.timelineConfig = b.timelineConfig;
         this.scriptsConfig = b.scriptsConfig;
+        this.tweenConfig = b.tweenConfig;
     }
 
     /**
@@ -558,6 +576,15 @@ public final class HikariCanvasConfig {
                     ScriptsConfig.DEFAULT_MAX_ELEMENTS_PER_WALL));
             b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain,
                     templates, nearTicks, maxElements);
+            // 0.7.1：scripts.tween 嵌套段——补间引擎 maxFps / maxConcurrent
+            org.bukkit.configuration.ConfigurationSection tweenSec =
+                    scSec.getConfigurationSection("tween");
+            if (tweenSec != null) {
+                TweenConfig td = TweenConfig.defaults();
+                int tMaxFps = Math.max(1, tweenSec.getInt("max-fps", td.maxFps()));
+                int tMaxConc = Math.max(1, tweenSec.getInt("max-concurrent", td.maxConcurrent()));
+                b.tweenConfig = new TweenConfig(tMaxFps, tMaxConc);
+            }
         }
 
         return new HikariCanvasConfig(b);
@@ -659,5 +686,6 @@ public final class HikariCanvasConfig {
                 moe.hikari.canvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE;
         TimelineConfig timelineConfig = TimelineConfig.defaults();
         ScriptsConfig scriptsConfig = ScriptsConfig.defaults();
+        TweenConfig tweenConfig = TweenConfig.defaults();
     }
 }

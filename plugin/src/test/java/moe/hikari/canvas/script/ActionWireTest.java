@@ -1,6 +1,8 @@
 package moe.hikari.canvas.script;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import moe.hikari.canvas.state.Easing;
+import moe.hikari.canvas.state.EasingType;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
@@ -319,5 +321,74 @@ class ActionWireTest {
         String legacy = "{\"type\":\"sendMessage\",\"text\":\"x\",\"channel\":\"chat\"}";
         Action a = mapper.readValue(legacy, Action.class);
         assertEquals("trigger", ((Action.SendMessage) a).target());
+    }
+
+    // ---------- tween：补间动画包裹 round-trip ----------
+
+    /** 基础 roundtrip：LINEAR 缓动 + moveTo body。 */
+    @Test void tweenBlock_linear_roundtrip() throws Exception {
+        Action body = new Action.SetElementProperties("e-1", Map.of("x", "100", "y", "200"), "moveTo");
+        Action a = new Action.TweenBlock(1500L, Easing.LINEAR, List.of(body));
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"tweenBlock\""), json);
+        assertTrue(json.contains("\"durationMs\":1500"), json);
+        assertTrue(json.contains("\"type\":\"linear\""), json);
+        Action back = mapper.readValue(json, Action.class);
+        assertInstanceOf(Action.TweenBlock.class, back);
+        Action.TweenBlock tb = (Action.TweenBlock) back;
+        assertEquals(1500L, tb.durationMs());
+        assertEquals(EasingType.LINEAR, tb.easing().type());
+        assertNull(tb.easing().bezier());
+        assertEquals(1, tb.body().size());
+        assertEquals(body, tb.body().get(0));
+    }
+
+    /** easeOut 缓动 roundtrip。 */
+    @Test void tweenBlock_easeOut_roundtrip() throws Exception {
+        Action a = new Action.TweenBlock(2000L, new Easing(EasingType.EASE_OUT, null),
+                List.of(new Action.SetElementProperties("e-1", Map.of("opacity", "0"), "setOpacity")));
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"easeOut\""), json);
+        Action back = mapper.readValue(json, Action.class);
+        assertEquals(EasingType.EASE_OUT, ((Action.TweenBlock) back).easing().type());
+        assertEquals(2000L, ((Action.TweenBlock) back).durationMs());
+    }
+
+    /** cubicBezier 缓动 roundtrip：4 控制点逐字段等。 */
+    @Test void tweenBlock_cubicBezier_roundtrip() throws Exception {
+        Easing bz = new Easing(EasingType.CUBIC_BEZIER, List.of(0.25, 0.1, 0.25, 1.0));
+        Action a = new Action.TweenBlock(800L, bz,
+                List.of(new Action.SetElementProperties("e-2", Map.of("rotation", "90"), "rotateTo")));
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"bezier\":[0.25,0.1,0.25,1.0]"), json);
+        Action back = mapper.readValue(json, Action.class);
+        Action.TweenBlock tb = (Action.TweenBlock) back;
+        assertEquals(EasingType.CUBIC_BEZIER, tb.easing().type());
+        assertEquals(List.of(0.25, 0.1, 0.25, 1.0), tb.easing().bezier());
+    }
+
+    /** easing 字段缺失 → fallback LINEAR（Easing.LINEAR 等价）。 */
+    @Test void tweenBlock_missingEasing_defaultsLinear() throws Exception {
+        String json = "{\"type\":\"tweenBlock\",\"durationMs\":500,"
+                + "\"body\":[{\"type\":\"setElementProperties\","
+                + "\"elementId\":\"e-1\",\"patch\":{\"opacity\":\"1\"},\"kind\":\"setOpacity\"}]}";
+        Action a = mapper.readValue(json, Action.class);
+        assertInstanceOf(Action.TweenBlock.class, a);
+        Action.TweenBlock tb = (Action.TweenBlock) a;
+        assertEquals(EasingType.LINEAR, tb.easing().type());
+    }
+
+    /** durationMs 非整数值 → 拒（K8 纪律）。 */
+    @Test void tweenBlock_fractionalDurationRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"tweenBlock\",\"durationMs\":1500.5,\"easing\":{\"type\":\"linear\"},"
+                + "\"body\":[]}", Action.class));
+    }
+
+    /** tweenBlock 缺 durationMs → 拒。 */
+    @Test void tweenBlock_missingDurationRejected() {
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue("{\"type\":\"tweenBlock\","
+                        + "\"easing\":{\"type\":\"linear\"},\"body\":[]}", Action.class));
     }
 }

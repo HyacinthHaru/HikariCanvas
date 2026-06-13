@@ -142,7 +142,7 @@ class AnimationTickerTest {
         return new ProjectState(1L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, layers, "l-1", new ProjectState.History(0, 0),
-                List.of(tl), timelineId);
+                List.of(tl), timelineId, null);
     }
 
     private static WallRepo.Wall wall(String wallId, ProjectState state) {
@@ -378,7 +378,7 @@ class AnimationTickerTest {
         ProjectState s2 = new ProjectState(2L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, layers, "l-1", new ProjectState.History(0, 0),
-                List.of(tl2), "tl-1");
+                List.of(tl2), "tl-1", null);
         src.walls.put("w-1", wall("w-1", s2));
         t.invalidate("w-1");
 
@@ -426,7 +426,7 @@ class AnimationTickerTest {
         ProjectState noTl = new ProjectState(2L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, layers, "l-1", new ProjectState.History(0, 0),
-                null, null);   // 无 timelines
+                null, null, null);   // 无 timelines
         src.walls.put("w-1", wall("w-1", noTl));
         t.invalidate("w-1");
         t.tickOnceForTest("w-1");
@@ -444,7 +444,7 @@ class AnimationTickerTest {
         ProjectState noActive = new ProjectState(1L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, new ArrayList<>(List.of(new Layer("l-1", "L", true, false, 1.0f, BlendMode.NORMAL, null, new ArrayList<>()))),
-                "l-1", new ProjectState.History(0, 0), null, null);
+                "l-1", new ProjectState.History(0, 0), null, null, null);
         src.walls.put("w-static", wall("w-static", noActive));
 
         AnimationTicker t = newTicker(src, new FakeRenderer());
@@ -583,7 +583,7 @@ class AnimationTickerTest {
                 null, new ArrayList<>(List.of(
                         new Layer("l-1", "L", true, false, 1.0f, BlendMode.NORMAL, null,
                                 new ArrayList<>()))),
-                "l-1", new ProjectState.History(0, 0), null, null);
+                "l-1", new ProjectState.History(0, 0), null, null, null);
         src.walls.put("w-1", wall("w-1", noTl));
         t.invalidate("w-1");
         assertEquals(0, t.registeredCount(), "暂停态 stale 条目被当场清理");

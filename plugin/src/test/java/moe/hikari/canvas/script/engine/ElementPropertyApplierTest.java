@@ -99,7 +99,7 @@ class ElementPropertyApplierTest {
         return new ProjectState(1L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, new ArrayList<>(List.of(layer)), "l-1",
-                new ProjectState.History(0, 0), timelines, activeId);
+                new ProjectState.History(0, 0), timelines, activeId, null);
     }
 
     private String createWall(ProjectState state) {
@@ -687,6 +687,14 @@ class ElementPropertyApplierTest {
         @Override
         public void refreshAutoPlay(String wallId) {
             refreshes.add(wallId);
+        }
+
+        @Override
+        public void renderStatic(String wallId, moe.hikari.canvas.state.ProjectState frame) {
+        }
+
+        @Override
+        public void clearStaticDiff(String wallId) {
         }
     }
 }

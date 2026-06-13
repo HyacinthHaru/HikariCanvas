@@ -19,7 +19,8 @@
  * <p>纯逻辑、零 Vue / 零 DOM。{@link validateRule} 只读 {@link ScriptRule}，不改入参。</p>
  */
 
-import type { ScriptRule, ScriptTrigger, ScriptAction } from '@/types/protocol';
+import type { ScriptRule, ScriptTrigger, ScriptAction, EasingType } from '@/types/protocol';
+import { TWEENABLE_KINDS } from './blockDefs';
 
 // ---------- 常量（逐一对照 ScriptRuleValidator.java，数值 / 集合必须一致）----------
 
@@ -93,6 +94,17 @@ export const REPEAT_MAX = 100;
  * （后端同样复用 repeat 的 1..100 硬上限，不另加 config）。
  */
 export const MESSAGE_TARGETS: ReadonlySet<string> = new Set(['trigger', 'all']);
+
+// ---------- tween-P1 常量（补间包裹，逐一对照 ScriptRuleValidator.java）----------
+
+/** TweenBlock.durationMs 最小值（毫秒）。后端 {@code TWEEN_DURATION_MIN}。 */
+export const TWEEN_DURATION_MIN = 1;
+/** TweenBlock.durationMs 最大值（毫秒）。后端 {@code TWEEN_DURATION_MAX}。 */
+export const TWEEN_DURATION_MAX = 60000;
+/** Easing.type 合法值集合（对应 EasingType）。后端 {@code EasingType} enum 4 成员。 */
+export const VALID_EASING_TYPES: ReadonlySet<EasingType> = new Set<EasingType>([
+    'linear', 'easeIn', 'easeOut', 'easeInOut', 'cubicBezier',
+]);
 
 // ---------- 0.7.1-P5 常量（停止 / 粒子 / 等待直到，逐一对照 ScriptRuleValidator.java）----------
 
@@ -539,6 +551,40 @@ function validateAction(
             }
             break;
         }
+        // ---- tween-P1：补间包裹积木（文案与后端 ScriptRuleValidator 逐字一致）----
+        case 'tweenBlock': {
+            // durationMs 范围。
+            if (typeof action.durationMs !== 'number' || action.durationMs < TWEEN_DURATION_MIN || action.durationMs > TWEEN_DURATION_MAX) {
+                errors.push({ blockId: path, message: `补间时长需在 ${TWEEN_DURATION_MIN}..${TWEEN_DURATION_MAX} 毫秒之间` });
+            }
+            // easing 合法性——type 必须在白名单内；cubicBezier 时 bezier 必须是 4 元数组且 x 坐标 ∈ [0,1]。
+            const easing = action.easing;
+            if (easing == null || !VALID_EASING_TYPES.has(easing.type as EasingType)) {
+                errors.push({ blockId: path, message: '补间缓动类型不合法' });
+            } else if (easing.type === 'cubicBezier') {
+                const b = easing.bezier;
+                if (!b || b.length !== 4 || !(b[0] >= 0 && b[0] <= 1) || !(b[2] >= 0 && b[2] <= 1)) {
+                    errors.push({ blockId: path, message: '自定义缓动的控制点不合法（x1,x2 需在 0..1 之间）' });
+                }
+            }
+            // body 非空。
+            if (!action.body || action.body.length === 0) {
+                errors.push({ blockId: path, message: '补间里至少要放一个动作' });
+            }
+            // body 每条只允许属性动作（setElementProperties，kind ∈ TWEENABLE_KINDS）。
+            for (let bi = 0; bi < (action.body ?? []).length; bi++) {
+                const bAction = action.body[bi];
+                const bPath = `${path}/body/${bi}`;
+                if (bAction.type !== 'setElementProperties') {
+                    errors.push({ blockId: bPath, message: '补间里只能放移动/缩放/转动/透明度/变色' });
+                } else if (!TWEENABLE_KINDS.has(bAction.kind)) {
+                    errors.push({ blockId: bPath, message: `补间里只能放移动/缩放/转动/透明度/变色（不支持 kind=${bAction.kind}）` });
+                }
+            }
+            // body 每条属性动作自身的字段校验（递归，但 ifDepth 不变——tweenBlock 不增 if 深度）。
+            validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
+            break;
+        }
     }
 }
 
@@ -555,9 +601,9 @@ function countBlocks(actions: ScriptAction[]): number {
         count++;
         if (action.type === 'if') {
             count += countBlocks(action.then ?? []) + countBlocks(action.else ?? []);
-        } else if (action.type === 'repeat' || action.type === 'repeatUntil') {
+        } else if (action.type === 'repeat' || action.type === 'repeatUntil' || action.type === 'tweenBlock') {
             // 0.7.2-P3：repeatUntil 与 repeat 同——自身计 1 + body 节点递归（不乘轮数；
-            // 展开数超 50 靠运行时 Budget 熔断，§9 决策）。
+            // 展开数超 50 靠运行时 Budget 熔断，§9 决策）。tween-P1：tweenBlock 同。
             count += countBlocks(action.body ?? []);
         }
     }

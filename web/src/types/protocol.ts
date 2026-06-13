@@ -35,6 +35,11 @@ export interface ProjectState {
     timelines?: Timeline[];
     /** v3 新增（0.6）：当前激活时间轴 id；缺省 / null = 无激活时间轴。 */
     activeTimelineId?: string;
+    /**
+     * 脚本「在 X 秒内」补间动画的每秒帧数（1..60）。
+     * 缺省 / null → 前端读作 30fps。后端 `canvas.tweenFps` op 写入，`state.patch /tweenFps` 回推。
+     */
+    tweenFps?: number;
 }
 
 export interface Canvas {
@@ -571,7 +576,12 @@ export type ScriptAction =
     | { type: 'copyVariable'; target: string; source: string }
     | { type: 'appendVariable'; fullName: string; text: string }
     | { type: 'cloneElement'; elementId: string; offsetX: number; offsetY: number }
-    | { type: 'deleteElement'; elementId: string };
+    | { type: 'deleteElement'; elementId: string }
+    // tween-P1：挂起式补间包裹积木（"在 X 秒内"）。durationMs ∈ [1, 60000]；
+    // easing 复用 0.6 timeline Easing（同 Keyframe.easing）；
+    // body 只放属性动作（setElementProperties，kind ∈ tweenable 集合）。
+    // P1 后端 ScriptRunner 占位分支（trace + 跳过，P2 替换真引擎）。
+    | { type: 'tweenBlock'; durationMs: number; easing: Easing; body: ScriptAction[] };
 
 /**
  * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。

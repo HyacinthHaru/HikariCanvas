@@ -118,6 +118,13 @@ public final class ProjectState {
     /** 0.6 v3：当前激活时间轴 id；null = 无（序列化省略）。 */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String activeTimelineId;
+    /**
+     * 0.7.1：per-wall 补间帧率（scripts.tween.max-fps 硬上限；null = 未设置 → 引擎默认 30）。
+     * Jackson 加法兼容：旧工程无此字段 → 反序列化为 null → effectiveTweenFps() 返默认值 30。
+     * 序列化省略 null（{@code NON_NULL}），减小 blob 体积。
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private Integer tweenFps;
 
     public ProjectState(int widthMaps, int heightMaps) {
         this(widthMaps, heightMaps, "#FFFFFF");
@@ -156,7 +163,8 @@ public final class ProjectState {
             @JsonProperty("activeLayerId") String activeLayerId,
             @JsonProperty("history") History history,
             @JsonProperty("timelines") List<Timeline> timelines,
-            @JsonProperty("activeTimelineId") String activeTimelineId) {
+            @JsonProperty("activeTimelineId") String activeTimelineId,
+            @JsonProperty("tweenFps") Integer tweenFps) {
         this.version = version;
         this.canvas = canvas != null ? canvas : new Canvas(1, 1, Fill.solid("#FFFFFF"));
         this.history = history != null ? history : new History(0, 0);
@@ -181,6 +189,8 @@ public final class ProjectState {
         this.activeTimelineId =
                 (activeTimelineId != null && containsTimeline(activeTimelineId))
                         ? activeTimelineId : null;
+        // 0.7.1 加法：per-wall 补间帧率；旧工程缺字段 → null → effectiveTweenFps() 取默认
+        this.tweenFps = tweenFps;
     }
 
     private boolean containsLayer(String id) {
@@ -213,6 +223,18 @@ public final class ProjectState {
 
     /** 0.6 v3：当前激活时间轴 id；null = 无。 */
     public String activeTimelineId() { return activeTimelineId; }
+
+    /** 0.7.1：per-wall 补间帧率原始值；null = 未设置（调用方通过 {@link #effectiveTweenFps} 取有效值）。 */
+    public Integer tweenFps() { return tweenFps; }
+
+    /**
+     * 0.7.1：有效补间帧率——null → 默认 30fps；否则 clamp [1, 60]。
+     * 上限 60 是协议约定，与 scripts.tween.max-fps config 做第二次 clamp（引擎侧）相互独立保证安全。
+     */
+    public int effectiveTweenFps() {
+        if (tweenFps == null) return 30;
+        return Math.max(1, Math.min(60, tweenFps));
+    }
 
     /** 按 id 找时间轴在列表中的 index（state.patch 路径 {@code /timelines/<i>} 用）；不存在返 -1。 */
     public int indexOfTimeline(String timelineId) {
@@ -340,6 +362,11 @@ public final class ProjectState {
     public void activeTimelineId(String timelineId) {
         this.activeTimelineId =
                 (timelineId != null && containsTimeline(timelineId)) ? timelineId : null;
+    }
+
+    /** 0.7.1：设置 per-wall 补间帧率（null = 清回默认 30）。 */
+    public void tweenFps(Integer fps) {
+        this.tweenFps = fps;
     }
 
     public void addElement(Element e) {

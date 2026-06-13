@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-06-13 · 补间动画 MVP 完工：P1 数模+协议 / P2 引擎 / per-wall 帧率（架构 A 实测通过）
+
+脚本「在 X 秒内」+ 缓动 MVP 全链路打通，用户实测过：玩家触发 → 静态招牌元素平滑滑动 → 停目标 →
+挂起续接 + 帧率可调。
+
+**P1 数模+协议**：`Action.TweenBlock`（durationMs + easing[复用 0.6 `state.Easing`] + body[仅属性动作]）
++ permits + 序列化/校验/permissions case + ScriptRunner P1 占位 + 协议升 **v6** + 前端镜像。
+TWEENABLE_KINDS = moveTo/resize/rotateTo/setOpacity/setColor。
+
+**P2 引擎（架构 A 独立补间引擎）**：`TweenScheduler`（单线程 SES + TweenTask + EasingSolver 算值 +
+buildInterpolatedFrame[EditSession 纯重建]）；**路径 Z**——`AnimationTicker.renderStatic`（Ticker 线程渲
+临时态、不落 DB、`entries` 守卫不抢有 timeline 的 wall）；末帧 `ElementPropertyApplier.applyMany` 落盘；
+`ScriptRunner` TweenBlock 分支复用 playTimelineAwait 挂起。最简前端：BlockNode tweenBlock C 形 +
+makeDefaultAction 默认带「移动到」。
+
+**实测 bug 修（systematic-debugging）**：① 缓动两层根因——easing 是 Easing 对象但字段用普通 select
+（当字符串）→ 显示字面 + 写成字符串 → validator 拒 → 无法触发；修 BlockNode fieldValue/onFieldUpdate
+特判（读 .type / 写 {type}）。② labelKey 指错块——TWEEN_EASING_OPTIONS 用 `script.fieldOptions.easingXxx`，
+实际 key 在 timeline 块 → 改 `timeline.easingXxx`。
+
+**per-wall 帧率（实测加）**：ProjectState 加 `tweenFps`（nullable 默 30 clamp[1,60]）+
+`EditSession.setTweenFps` + `canvas.tweenFps` op；TweenScheduler SES cadence 改 1000/maxFps（config
+`scripts.tween.max-fps` 默 60）+ TweenTask.fps 按 wall 节流 renderStatic（末帧总渲+落盘，中间帧节流）；
+前端 ScriptEditorOverlay 顶部「动画帧率」控件（Gauge + 20/30/45/60）。**对抗审查抓并发 bug**：lastRenderAt
+跨 enqueue(Runner)/tick(tween) → `HashMap` 改 `ConcurrentHashMap`。
+
+**测试**：后端 **1841** / 前端 **1175** 全绿。架构 A 实测验证通过。scripting-tween.md T7/§5 待回填（静态墙
+渲临时态省 DB，比文档「每帧落 DB」更优）。**P3 待做**：全属性（颜色/fill）+ 全 EasingType 缓动接入 +
+与时间轴共存。
+
+关联：plans/2026-06-13-tween-P1/P2*.md + 后端 `script/{Action,*Deserializer,*Serializer,ScriptRuleValidator,
+ScriptPermissions}` + `engine/{TweenScheduler[新],ScriptRunner,ActionExecutor,TickerControl}` +
+`render/AnimationTicker` + `state/{ProjectState,EditSession}` + `web/{EditOpDispatcher,Protocol}` +
+`HikariCanvas{,Config}` + config.yml + 前端 `script/{model,canvas}/*` + `types/protocol` + `stores/project` +
+`network/wsClient` + `i18n/messages` + `ScriptEditorOverlay.vue`。
+
+---
+
 ## 2026-06-13 · 补间动画设计总纲（scripting-tween.md）：brainstorming 定 10 决策
 
 0.7.2「稳的」版完工后单独 brainstorming 补间动画（脚本「在 X 秒内」+ 非线性缓动）。先派调研代理摸 0.6

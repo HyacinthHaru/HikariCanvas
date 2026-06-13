@@ -372,6 +372,14 @@ class EndToEndScriptTest {
         @Override
         public void refreshAutoPlay(String wallId) {
         }
+
+        @Override
+        public void renderStatic(String wallId, moe.hikari.canvas.state.ProjectState frame) {
+        }
+
+        @Override
+        public void clearStaticDiff(String wallId) {
+        }
     }
 
     /** 记录 shouldAuditBlock 的 budget（照 ScriptRunnerTest.RecordingBudget）。 */

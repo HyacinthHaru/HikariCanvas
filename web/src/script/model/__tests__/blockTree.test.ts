@@ -515,3 +515,79 @@ describe('blockTree.repeatUntil body 导航（与 repeat 同走 isBodyContainer�
         expect(ifDepth([repeatUntilBlock('c', 2, [log('x')])])).toBe(0);
     });
 });
+
+// ---------- tween-P1：tweenBlock 的 body 子序列（照 repeatUntil 范式，共用 isBodyContainer）----------
+
+import type { Easing } from '@/types/protocol';
+
+const tweenBlock = (durationMs: number, body: ScriptAction[]): ScriptAction => ({
+    type: 'tweenBlock',
+    durationMs,
+    easing: { type: 'easeInOut' } as Easing,
+    body,
+});
+
+describe('blockTree.tweenBlock body 导航（与 repeat/repeatUntil 同走 isBodyContainer）', () => {
+    /**
+     * 构造含 tweenBlock 的树：
+     *   actions/0  log A
+     *   actions/1  tweenBlock 1000ms
+     *     actions/1/body/0  log B0
+     *     actions/1/body/1  if c
+     *       actions/1/body/1/then/0  log deep
+     */
+    function withTween(): ScriptAction[] {
+        return [
+            log('A'),
+            tweenBlock(1000, [log('B0'), ifBlock('c', [log('deep')], [])]),
+        ];
+    }
+
+    it('tweenBlock 是 body 容器——getAt 取 body 子项 + body 内 if 的 then', () => {
+        const a = withTween();
+        expect(getAt(a, ['actions', '1', 'body', '0'])).toMatchObject({ message: 'B0' });
+        expect(getAt(a, ['actions', '1', 'body', '1', 'then', '0'])).toMatchObject({ message: 'deep' });
+    });
+
+    it('log 不是 body 容器 → null', () => {
+        const a = withTween();
+        expect(getAt(a, ['actions', '0', 'body', '0'])).toBeNull();
+    });
+
+    it('insertAt 往 tweenBlock body 槽插入（immutable，不改原树）', () => {
+        const a = withTween();
+        const next = insertAt(a, ['actions', '1', 'body'], 0, log('INS'));
+        expect(getAt(next, ['actions', '1', 'body', '0'])).toMatchObject({ message: 'INS' });
+        expect(getAt(next, ['actions', '1', 'body', '1'])).toMatchObject({ message: 'B0' });
+        const orig = a[1] as Extract<ScriptAction, { type: 'tweenBlock' }>;
+        expect(orig.body.length).toBe(2);
+    });
+
+    it('removeAt 删 tweenBlock body 子项', () => {
+        const a = withTween();
+        const next = removeAt(a, ['actions', '1', 'body', '0']);
+        expect(getAt(next, ['actions', '1', 'body', '0'])).toMatchObject({ type: 'if' });
+    });
+
+    it('moveNode 顶层块 → tweenBlock body 槽（跨容器入 body）', () => {
+        const a = withTween();
+        const next = moveNode(a, ['actions', '0'], ['actions', '1', 'body'], 2);
+        expect(getAt(next, ['actions', '0'])).toMatchObject({ type: 'tweenBlock' });
+        expect(getAt(next, ['actions', '0', 'body', '2'])).toMatchObject({ message: 'A' });
+    });
+
+    it('walk + countBlocks 下钻 tweenBlock body', () => {
+        const a = withTween();
+        const paths: string[] = [];
+        walk(a, (_n, p) => paths.push(p));
+        expect(paths).toContain('actions/1/body/0');
+        expect(paths).toContain('actions/1/body/1/then/0');
+        // log A(1) + tweenBlock(1) + body[ log B0(1), if c(1) + then[ log deep(1) ] ] = 5
+        expect(countBlocks(a)).toBe(5);
+    });
+
+    it('ifDepth 不因 tweenBlock 增加，但 body 内 if 仍计深度', () => {
+        expect(ifDepth([tweenBlock(500, [ifBlock('c', [log('x')], [])])])).toBe(1);
+        expect(ifDepth([tweenBlock(500, [log('x')])])).toBe(0);
+    });
+});

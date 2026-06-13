@@ -160,6 +160,9 @@ public final class ActionExecutor implements ActionSink {
                 // 0.7.2-P3：repeatUntil 真实现在 ScriptRunner（动态循环 + RunState 轮数）；
                 // 进到这里是 Runner 实现 bug → 防御 error。
                 case Action.RepeatUntil a -> TraceStep.error(blockId, "repeatUntil 由 ScriptRunner 处理（占位）");
+                // tween P1 占位：TweenBlock 由 ScriptRunner（P1）/ TweenScheduler（P2）处理；
+                // 进到这里是 Runner 实现 bug → 防御 error。
+                case Action.TweenBlock a -> TraceStep.error(blockId, "tweenBlock 由 ScriptRunner 处理（P2 替换为 TweenScheduler）");
             };
         } catch (RuntimeException e) {
             // 三层隔离兜底：单动作失败不断链

@@ -777,6 +777,26 @@ public final class EditSession {
                 DirtyRegion.fullCanvas(state));
     }
 
+    // ---------- canvas.tweenFps ----------
+
+    /**
+     * 0.7.1：per-wall 补间帧率。payload {@code fps} [1,60]，超范围 clamp + INVALID_PAYLOAD；
+     * null / 0 → 清回默认（projectState.tweenFps = null → effectiveTweenFps() = 30）。
+     * 不进 undo 历史（同 activeTimelineId 语义；属运行时配置非内容编辑）。
+     * 广播 state.patch {@code /tweenFps}。
+     */
+    public synchronized OpResult setTweenFps(Integer fps) {
+        if (fps != null && fps != 0 && (fps < 1 || fps > 60)) {
+            return err("INVALID_PAYLOAD", "tweenFps out of range [1, 60]: " + fps);
+        }
+        Integer normalized = (fps == null || fps == 0) ? null : fps;
+        state.tweenFps(normalized);
+        long v = state.bumpVersion();
+        return new OpResult.Ok(
+                new StatePatchBuilder().replace("/tweenFps", normalized).build(v),
+                null);
+    }
+
     // ---------- canvas.grid ----------
 
     /** {@code size} = 0 / null → 关闭网格。 */

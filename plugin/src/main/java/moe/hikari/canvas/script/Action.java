@@ -25,7 +25,7 @@ public sealed interface Action permits
         Action.Repeat,
         Action.StopScript, Action.PlayParticle, Action.WaitUntil,
         Action.CopyVariable, Action.AppendVariable, Action.CloneElement, Action.DeleteElement,
-        Action.RepeatUntil {
+        Action.RepeatUntil, Action.TweenBlock {
 
     /** wire 判别字段 {@code type} 的取值（camelCase）。 */
     String wireType();
@@ -185,6 +185,32 @@ public sealed interface Action permits
                        java.util.List<Action> body) implements Action {
         @Override public String wireType() { return "repeatUntil"; }
         public RepeatUntil {
+            body = body == null ? java.util.List.of() : java.util.List.copyOf(body);
+        }
+    }
+
+    /**
+     * 补间动画包裹（T1-T6；设计总纲 {@code docs/scripting-tween.md}）：在 {@code durationMs}
+     * 毫秒内，将 {@code body} 里的属性动作从当前值插值到目标值，以 {@code easing} 函数缓动。
+     *
+     * <p><b>语义</b>：挂起式执行——脚本走到本动作后挂起 durationMs，补间完成才继续后续动作
+     * （照 {@link PlayTimelineAwait} 范式）。{@link moe.hikari.canvas.script.engine.TweenScheduler}
+     * 在 P2 实现执行侧；P1 仅数模 + 校验 + 协议。</p>
+     *
+     * <p><b>body 约束</b>：只放「属性动作」白名单——{@link SetElementProperties}，且
+     * {@code kind} ∈ {@link ScriptRuleValidator#TWEENABLE_KINDS}（moveTo / resize /
+     * rotateTo / setOpacity / setColor）。非属性动作（发消息 / 播声音 / 改变量等）放包裹外。
+     * 校验在 {@link ScriptRuleValidator}；wire 不限制（允许未知 kind 存储但校验期拒）。</p>
+     *
+     * <p><b>easing</b>：复用 {@link moe.hikari.canvas.state.Easing}（0.6 时间轴现成；
+     * {@code null} 表现为 {@link moe.hikari.canvas.state.Easing#LINEAR}，校验层拒 null）。</p>
+     *
+     * <p>{@code durationMs ∈ [1, 60_000]}（校验常量 {@link ScriptRuleValidator#TWEEN_DURATION_MAX}）。</p>
+     */
+    record TweenBlock(long durationMs, moe.hikari.canvas.state.Easing easing,
+                      java.util.List<Action> body) implements Action {
+        @Override public String wireType() { return "tweenBlock"; }
+        public TweenBlock {
             body = body == null ? java.util.List.of() : java.util.List.copyOf(body);
         }
     }

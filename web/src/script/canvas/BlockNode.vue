@@ -183,10 +183,17 @@ const isRepeat = computed(() => props.action.type === 'repeat');
 const isRepeatUntil = computed(() => props.action.type === 'repeatUntil');
 
 /**
- * 是否带 {@code body} C 臂的循环块（repeat 或 repeatUntil）——决定要不要渲染 body 子序列槽
- * + C 形底托。统一二者的 C 形渲染分支，避免模板里写两段近乎一致的 body 槽。
+ * 是否 tweenBlock（tween-P1，C 形单臂布局：durationMs + easing 标量 + body 子序列槽）。
+ * durationMs / easing 字段走 scalarFields 由 BlockParamInput 渲染（number / select），
+ * body 是 statements 子槽（C 臂），与 repeat / repeatUntil 共用 {@link hasBodySlot} 分支。
  */
-const hasBodySlot = computed(() => isRepeat.value || isRepeatUntil.value);
+const isTweenBlock = computed(() => props.action.type === 'tweenBlock');
+
+/**
+ * 是否带 {@code body} C 臂的循环块（repeat / repeatUntil / tweenBlock）——决定要不要渲染
+ * body 子序列槽 + C 形底托。统一三者的 C 形渲染分支，避免模板里写多段近乎一致的 body 槽。
+ */
+const hasBodySlot = computed(() => isRepeat.value || isRepeatUntil.value || isTweenBlock.value);
 
 /** 锁定态：true 时所有参数控件 disabled（透传给 BlockParamInput）。 */
 const locked = computed(() => project.isLocked);
@@ -254,6 +261,13 @@ function fieldLabel(field: FieldDef): string {
  * 标量字段返原值（string / number）；缺失 → undefined（控件按类型退默认）。
  */
 function fieldValue(field: FieldDef): unknown {
+    // tweenBlock 的 easing 字段：数据是 Easing 对象 {type, bezier?}，但用 select（字符串）渲染。
+    // 读出 type 给 select 当受控值；写回时 onFieldUpdate 再包回对象。MVP 仅预设（无 bezier）；
+    // P4 缓动选择器重构为专用控件（type + 自定义 cubicBezier 曲线）。
+    if (field.name === 'easing') {
+        const e = (props.action as unknown as { easing?: { type?: string } }).easing;
+        return e?.type ?? 'linear';
+    }
     return (props.action as unknown as Record<string, unknown>)[field.name];
 }
 
@@ -263,6 +277,12 @@ function fieldValue(field: FieldDef): unknown {
  * （不会被调用到）。
  */
 function onFieldUpdate(field: FieldDef, value: unknown): void {
+    // easing：select emit 字符串 type，包回 Easing 对象 {type}（否则 easing 被写成字符串，
+    // 后端/前端 validator 的 easing.type 取不到 → 校验拒 → 脚本无法保存/触发）。
+    if (field.name === 'easing') {
+        edit.updateActionField(props.path, { easing: { type: value } } as unknown as Partial<ScriptAction>);
+        return;
+    }
     edit.updateActionField(props.path, { [field.name]: value } as Partial<ScriptAction>);
 }
 
@@ -381,7 +401,9 @@ const elseActions = computed<ScriptAction[]>(() =>
  * （blockId 不带轮数，前端只一份 body）。
  */
 const bodyActions = computed<ScriptAction[]>(() =>
-    (props.action.type === 'repeat' || props.action.type === 'repeatUntil') ? props.action.body : [],
+    (props.action.type === 'repeat' || props.action.type === 'repeatUntil' || props.action.type === 'tweenBlock')
+        ? props.action.body
+        : [],
 );
 
 /**

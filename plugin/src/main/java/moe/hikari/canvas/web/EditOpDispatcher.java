@@ -223,6 +223,15 @@ final class EditOpDispatcher {
                 }
                 yield es.setBackground(stringOrNull(payload.get("color")));
             }
+            case "canvas.tweenFps" -> {
+                // 0.7.1：per-wall 补间帧率。fps=[1,60]；0/null → 清回默认（effectiveTweenFps=30）。
+                Object fpsRaw = payload.get("fps");
+                if (fpsRaw != null && !(fpsRaw instanceof Number)) {
+                    yield new EditSession.OpResult.Error("INVALID_PAYLOAD",
+                            "fps must be number or null");
+                }
+                yield es.setTweenFps(fpsRaw == null ? null : ((Number) fpsRaw).intValue());
+            }
             case "canvas.grid" -> {
                 Object sz = payload.get("size");
                 if (sz != null && !(sz instanceof Number)) {

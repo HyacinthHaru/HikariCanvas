@@ -140,6 +140,9 @@ public final class HikariCanvas extends JavaPlugin {
     private moe.hikari.canvas.script.engine.TriggerRouter scriptTriggerRouter;
     // 0.7.2-P2 F10：留引用供 /canvas reload 热更 headless 克隆元素配额（applyConfig）。
     private moe.hikari.canvas.script.engine.ElementPropertyApplier scriptPropertyApplier;
+    // 补间动画引擎 P2：独立单线程 SES，渲临时帧（不落 DB）+ 末帧 applyMany 落盘。
+    // 须在 scriptRunner.shutdown() 之后、animationTicker.shutdown() 之前关停。
+    private moe.hikari.canvas.script.engine.TweenScheduler tweenScheduler;
     // 0.7.0-P3 B2（K14）：playerNear 周期采样器（主线程 task，2 tick 底层周期 +
     // volatile 跳帧计数；applyConfig 热更采样间隔）。
     private moe.hikari.canvas.script.engine.PlayerNearSampler playerNearSampler;
@@ -789,6 +792,17 @@ public final class HikariCanvas extends JavaPlugin {
                         auditLog, getLogger());
         this.scriptRunner = new moe.hikari.canvas.script.engine.ScriptRunner(
                 scriptConditions, actionExecutor, scriptBudget, auditLog, getLogger());
+        // 补间动画引擎 0.7.1：独立 SES（hikari-canvas-tween），渲临时帧（不落 DB）+ 末帧落盘。
+        // maxFps = config scripts.tween.max-fps（默 60）；per-wall fps 存 ProjectState.tweenFps。
+        final int tweenMaxFps = config.tweenConfig.maxFps();
+        final int tweenMaxConcurrent = config.tweenConfig.maxConcurrent();
+        moe.hikari.canvas.script.engine.TweenScheduler ts =
+                new moe.hikari.canvas.script.engine.TweenScheduler(
+                        propertyApplier, tickerControl, wallRepo,
+                        System::currentTimeMillis,
+                        tweenMaxConcurrent, tweenMaxFps, getLogger());
+        this.tweenScheduler = ts;
+        this.scriptRunner.setTweenScheduler(ts);
         // 0.7.0-P3 B2（K14）+ P3-5 修正：墙原点源——WallRepo.loadById 拿 Wall.key
         // （world 是名字字符串）→ 查 scriptWorldUuidByName 快照表换世界 UUID。
         // rebuild 触发点并不全在主线程：onEnable 启动 / wall delete hook 是主线程，
@@ -1040,6 +1054,11 @@ public final class HikariCanvas extends JavaPlugin {
         if (scriptRunner != null) {
             closeQuietly("scriptRunner.shutdown", scriptRunner::shutdown);
             scriptRunner = null;
+        }
+        // 补间动画引擎 P2：scriptRunner 停后、animationTicker 停前关停（补间依赖 ticker.renderStatic）。
+        if (tweenScheduler != null) {
+            closeQuietly("tweenScheduler.shutdown", tweenScheduler::shutdown);
+            tweenScheduler = null;
         }
         // 0.6 P2：停时间轴产帧引擎（单线程 daemon awaitTermination）。与 variableProviderDaemon
         // 同段关停——两者都是引用 wallRepo / DB 的 daemon，须早于下方 database.close。

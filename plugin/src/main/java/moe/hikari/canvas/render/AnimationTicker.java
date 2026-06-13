@@ -146,6 +146,12 @@ public final class AnimationTicker implements AnimationTickerGate {
 
     private final ScheduledExecutorService scheduler;
     private final Map<String, PlaybackEntry> entries = new ConcurrentHashMap<>();
+    /**
+     * 补间引擎（TweenScheduler）专用 per-wall diff 表。key = wallId。
+     * 仅 Ticker 线程（scheduler）读写（renderStatic 经 scheduler.execute 投递到 Ticker 线程），
+     * 契约同 {@link PlaybackEntry#diff}——线程限定安全。
+     */
+    private final Map<String, FrameDiff> staticDiffs = new ConcurrentHashMap<>();
     private volatile boolean shutdown;
 
     /** 时钟注入 seam（测试用）。 */
@@ -397,6 +403,37 @@ public final class AnimationTicker implements AnimationTickerGate {
             }
         }
         return n;
+    }
+
+    /**
+     * 补间引擎用：渲染某 wall 的一帧补间中间态（不落 DB；Ticker 线程执行保 BufferPool/diff 契约）。
+     *
+     * <p>该 wall 已有 timeline 播放 entry 时本方法静默 no-op（timeline tick 优先，
+     * 补间和时间轴共存策略在 P3 完善；P2 仅静态墙生效）。wall 不存在 / shutdown 也 no-op。</p>
+     *
+     * <p>任意线程可调（投递 scheduler.execute 到 Ticker 线程）；frame 必须 immutable 不可变。</p>
+     */
+    public void renderStatic(String wallId, ProjectState frame) {
+        if (shutdown || wallId == null || frame == null) return;
+        scheduler.execute(() -> {
+            try {
+                // 有 timeline entry（含暂停态）→ 本帧不抢，ticker 自己产帧
+                if (entries.containsKey(wallId)) return;
+                WallRepo.Wall wall = wallSource.load(wallId);
+                if (wall == null) return;
+                FrameDiff diff = staticDiffs.computeIfAbsent(wallId, k -> new FrameDiff());
+                renderer.renderFrame(wall, frame, diff, false);
+            } catch (Throwable t) {
+                log.log(Level.WARNING, "renderStatic failed wallId=" + wallId + ": " + t.getMessage(), t);
+            }
+        });
+    }
+
+    /**
+     * 补间引擎用：补间结束（或中途取消）后清理 per-wall 静态 diff，防内存泄漏。任意线程可调。
+     */
+    public void clearStaticDiff(String wallId) {
+        if (wallId != null) staticDiffs.remove(wallId);
     }
 
     /** 幂等关停（onDisable，DB close 之前）。 */

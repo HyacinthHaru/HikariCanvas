@@ -42,8 +42,10 @@ import {
     REPEAT_MIN,
     REPEAT_MAX,
     MESSAGE_TARGETS,
+    TWEEN_DURATION_MIN,
+    TWEEN_DURATION_MAX,
 } from '../validator';
-import type { ScriptRule, ScriptAction, ScriptTrigger } from '@/types/protocol';
+import type { ScriptRule, ScriptAction, ScriptTrigger, Easing } from '@/types/protocol';
 
 function rule(over: Partial<ScriptRule> = {}): ScriptRule {
     return {
@@ -663,6 +665,99 @@ describe('validateRule — 积木总数上限', () => {
         const then51: ScriptAction[] = Array.from({ length: 50 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
         const over: ScriptAction = { type: 'if', condition: 'true', then: then51, else: [] };
         expect(validateRule(rule({ actions: [over] })).some((e) => e.message.includes('积木总数'))).toBe(true); // 51
+    });
+});
+
+// ---------- tween-P1：tweenBlock 补间包裹积木 ----------
+
+describe('validateRule — tweenBlock 补间包裹（durationMs + easing + body 属性动作白名单）', () => {
+    const easeInOut: Easing = { type: 'easeInOut' };
+    /** 合法的 setElementProperties body 条目（moveTo kind，白名单内）。 */
+    const moveToAction: ScriptAction = {
+        type: 'setElementProperties',
+        elementId: 'el-abc',
+        patch: { x: '10', y: '20' },
+        kind: 'moveTo',
+    };
+
+    function mkTween(durationMs: number, body: ScriptAction[], easing: Easing = easeInOut): ScriptAction {
+        return { type: 'tweenBlock', durationMs, easing, body };
+    }
+
+    it('合法 tweenBlock（1ms..60000ms，easeInOut，moveTo body）返空', () => {
+        expect(validateRule(rule({ actions: [mkTween(1000, [moveToAction])] }))).toEqual([]);
+    });
+
+    it('durationMs 边界 1 / 60000 合法', () => {
+        expect(validateRule(rule({ actions: [mkTween(TWEEN_DURATION_MIN, [moveToAction])] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [mkTween(TWEEN_DURATION_MAX, [moveToAction])] }))).toEqual([]);
+    });
+
+    it('durationMs = 0 报错（"补间时长需在 1..60000 毫秒之间"）', () => {
+        const errs = validateRule(rule({ actions: [mkTween(0, [moveToAction])] }));
+        expect(errs.some((e) => e.message.includes('补间时长') && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('body 空 → 报错（"补间里至少要放一个动作"）', () => {
+        const errs = validateRule(rule({ actions: [mkTween(1000, [])] }));
+        expect(errs.some((e) => e.message === '补间里至少要放一个动作' && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('body 放非属性动作（sendMessage）→ 报错（"补间里只能放移动/缩放/转动/透明度/变色"）', () => {
+        const badAction: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'chat', target: 'trigger' };
+        const errs = validateRule(rule({ actions: [mkTween(1000, [badAction])] }));
+        expect(errs.some((e) => e.message === '补间里只能放移动/缩放/转动/透明度/变色' && e.blockId === 'actions/0/body/0')).toBe(true);
+    });
+
+    it('body 放 setElementProperties 但 kind 不在 TWEENABLE（setText）→ 报错', () => {
+        const textAction: ScriptAction = {
+            type: 'setElementProperties',
+            elementId: 'el-abc',
+            patch: { text: 'hi' },
+            kind: 'setText',  // setText 不可补间（离散跳变）
+        };
+        const errs = validateRule(rule({ actions: [mkTween(1000, [textAction])] }));
+        expect(errs.some((e) => e.message.includes('补间里只能放移动/缩放/转动/透明度/变色') && e.blockId === 'actions/0/body/0')).toBe(true);
+    });
+
+    it('easing linear / easeIn / easeOut / easeInOut 都合法', () => {
+        for (const t of ['linear', 'easeIn', 'easeOut', 'easeInOut'] as const) {
+            expect(validateRule(rule({ actions: [mkTween(500, [moveToAction], { type: t })] }))).toEqual([]);
+        }
+    });
+
+    it('cubicBezier 合法（4 参 + x ∈ [0,1]）', () => {
+        const bezierEasing: Easing = { type: 'cubicBezier', bezier: [0.42, 0, 0.58, 1] };
+        expect(validateRule(rule({ actions: [mkTween(500, [moveToAction], bezierEasing)] }))).toEqual([]);
+    });
+
+    it('cubicBezier x 越界（x1=1.5）→ 报错', () => {
+        const bad: Easing = { type: 'cubicBezier', bezier: [1.5, 0, 0.58, 1] };
+        const errs = validateRule(rule({ actions: [mkTween(500, [moveToAction], bad)] }));
+        expect(errs.some((e) => e.message.includes('控制点不合法') && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('tweenBlock body blockId 路径正确（actions/0/body/0）', () => {
+        const badAction: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'chat', target: 'trigger' };
+        const errs = validateRule(rule({ actions: [mkTween(1000, [badAction])] }));
+        expect(errs.some((e) => e.blockId === 'actions/0/body/0')).toBe(true);
+    });
+
+    it('tweenBlock 不增 if 深度：body 内放深 4 的 if 合法', () => {
+        let inner: ScriptAction[] = [moveToAction];
+        for (let i = 0; i < MAX_IF_DEPTH; i++) {
+            // tweenBlock body 只允许属性动作；if 放在 tweenBlock body 会被 body 白名单拒
+            // → 实际用例是 if 在 tweenBlock 外层，tweenBlock 在 if 分支内。
+            // 测 tweenBlock 不增 if 深度：外层 4 层 if 嵌套，最内层有 tweenBlock（合法）。
+            inner = [{ type: 'if', condition: 'true', then: inner, else: [] }];
+        }
+        // 4 层 if 嵌套内包 tweenBlock（body=moveToAction）应合法（tweenBlock 不计 if 深度）。
+        const tweenInner: ScriptAction = mkTween(500, [moveToAction]);
+        let outerActions: ScriptAction[] = [tweenInner];
+        for (let i = 0; i < MAX_IF_DEPTH; i++) {
+            outerActions = [{ type: 'if', condition: 'true', then: outerActions, else: [] }];
+        }
+        expect(validateRule(rule({ actions: outerActions }))).toEqual([]);
     });
 });
 

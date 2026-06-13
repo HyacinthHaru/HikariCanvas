@@ -79,7 +79,7 @@ class KeyframeInterpolatorP3Test {
         return new ProjectState(1L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, ls, layers[0].id(),
-                new ProjectState.History(0, 0), null, null);
+                new ProjectState.History(0, 0), null, null, null);
     }
 
     private static Timeline timeline(int durationMs, String elementId, Keyframe... kfs) {

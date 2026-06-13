@@ -316,7 +316,7 @@ public final class KeyframeInterpolator {
         if (!any) return base;
 
         return new ProjectState(base.version(), base.canvas(), null,
-                outLayers, base.activeLayerId(), base.history(), null, null);
+                outLayers, base.activeLayerId(), base.history(), null, null, null);
     }
 
     // ---------- 元素重建（8 sealed 子类逐型替换） ----------

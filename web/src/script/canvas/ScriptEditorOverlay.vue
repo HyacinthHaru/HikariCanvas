@@ -16,7 +16,7 @@
  */
 import { computed, ref, watch, onScopeDispose } from 'vue';
 import { useEventListener } from '@vueuse/core';
-import { X, Puzzle, Plus, RotateCcw, Undo2, Redo2, Trash2, Play, Power, AlertTriangle, PanelRightClose, PanelRightOpen } from 'lucide-vue-next';
+import { X, Puzzle, Plus, RotateCcw, Undo2, Redo2, Trash2, Play, Power, AlertTriangle, PanelRightClose, PanelRightOpen, Gauge } from 'lucide-vue-next';
 import { useUiStore } from '@/stores/ui';
 import { useScriptStore } from '@/stores/scripts';
 import { useScriptEditStore } from '@/stores/scriptEdit';
@@ -258,6 +258,30 @@ function close(): void {
     ui.closeScriptEditor();
 }
 
+// ---------- 补间动画帧率（per-wall；canvas.tweenFps op）----------
+
+/** 当前 tweenFps（缺省 30，范围 1-60）。 */
+const tweenFps = computed(() => project.state?.tweenFps ?? 30);
+
+/**
+ * 帧率下拉预设。覆盖常见用法（20fps 默认值 / 30 流畅 / 60 最顺；
+ * 直接输入 input 允许 1-60 任意值）。
+ */
+const FPS_PRESETS = [20, 30, 45, 60] as const;
+
+/**
+ * 改帧率：乐观写 store + 发 canvas.tweenFps op。
+ * clamp [1,60] 与后端一致（后端 EditSession 也 clamp，这里是前端守卫）。
+ */
+function onTweenFpsChange(raw: number): void {
+    if (!project.state) return;
+    const fps = Math.max(1, Math.min(60, Math.round(raw)));
+    if (fps === tweenFps.value) return;
+    // 乐观更新（失败无回滚——后端 canvas.tweenFps 不走 ack，state.patch 会覆盖回来）
+    project.state.tweenFps = fps;
+    getWsClient().send('canvas.tweenFps', { fps });
+}
+
 // ---------- 规则列表 / 新建 / 删除 ----------
 
 function onSelectRule(ruleId: string): void {
@@ -427,6 +451,33 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
       </div>
 
       <div class="ml-auto flex items-center gap-2">
+        <!-- 补间动画帧率（仅 wall 存有 tweenFps 的场合可调；lock 时只读） -->
+        <div
+          class="hc-tween-fps-wrap"
+          :title="t.script.tweenFpsTooltip"
+        >
+          <Gauge class="size-3.5 text-[color:var(--muted-foreground)] flex-shrink-0" />
+          <span class="text-xs text-[color:var(--muted-foreground)] whitespace-nowrap">
+            {{ t.script.tweenFpsLabel }}
+          </span>
+          <select
+            class="hc-fps-select"
+            :value="tweenFps"
+            :disabled="locked"
+            @change="onTweenFpsChange(parseInt(($event.target as HTMLSelectElement).value, 10))"
+          >
+            <option v-for="p in FPS_PRESETS" :key="p" :value="p">{{ p }}</option>
+            <!-- 当前值不在预设里时，动态加一条精确显示 -->
+            <option
+              v-if="!FPS_PRESETS.includes(tweenFps as typeof FPS_PRESETS[number])"
+              :value="tweenFps"
+            >{{ tweenFps }}</option>
+          </select>
+          <span class="text-xs text-[color:var(--muted-foreground)]">fps</span>
+        </div>
+
+        <div class="w-px h-4 bg-[color:var(--border)] flex-shrink-0" />
+
         <span class="text-xs text-[color:var(--muted-foreground)] tabular-nums w-12 text-right">
           {{ zoomPct }}%
         </span>
@@ -840,5 +891,30 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 .hc-script-icon-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+/* 补间动画帧率控件容器 */
+.hc-tween-fps-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+}
+.hc-fps-select {
+    padding: 0.1875rem 1.25rem 0.1875rem 0.375rem;
+    font-size: 0.75rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--foreground);
+    cursor: pointer;
+    /* 原生 select 箭头保留（浏览器默认），不定制 */
+    appearance: auto;
+}
+.hc-fps-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.hc-fps-select:focus {
+    outline: 2px solid color-mix(in srgb, var(--ctp-mauve, var(--primary)) 60%, transparent);
+    outline-offset: 1px;
 }
 </style>

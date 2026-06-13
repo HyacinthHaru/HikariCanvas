@@ -1,5 +1,7 @@
 package moe.hikari.canvas.script;
 
+import moe.hikari.canvas.state.EasingType;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -81,6 +83,16 @@ public final class ScriptRuleValidator {
     public static final long WAIT_UNTIL_TIMEOUT_MAX = 60_000L;
     /** 0.7.2-P2 CloneElement.offsetX/Y 绝对值上限（合理偏移，方块/像素同量级）。 */
     public static final int ELEMENT_OFFSET_MAX = 4096;
+    /** TweenBlock.durationMs 上限（毫秒；1 ms 下限直接比较）。 */
+    public static final long TWEEN_DURATION_MAX = 60_000L;
+    /**
+     * TweenBlock.body 每条 {@link Action.SetElementProperties} 的 {@code kind} 白名单
+     * （补间属性动作种类；对齐前端 {@code FRIENDLY_ELEMENT_DEFS}）。
+     * 含：moveTo / resize / rotateTo / setOpacity / setColor（共 5 种数值/颜色属性可补间；
+     * show / hide / setText 是离散状态，不进补间范围；nudgeElement 是相对移动，单独走 NudgeElement）。
+     */
+    public static final Set<String> TWEENABLE_KINDS =
+            Set.of("moveTo", "resize", "rotateTo", "setOpacity", "setColor");
     /** 0.7.1-P5 PlayParticle.particle 白名单（14 个，双端对齐）。 */
     public static final Set<String> PARTICLE_WHITELIST = Set.of(
             "minecraft:flame", "minecraft:smoke", "minecraft:heart", "minecraft:happy_villager",
@@ -165,6 +177,9 @@ public final class ScriptRuleValidator {
             } else if (action instanceof Action.RepeatUntil ru) {
                 // 0.7.2-P3：repeatUntil body 计入节点数（同 Repeat，不乘轮数——动态轮数由 Budget 兜底）
                 count += countBlocks(ru.body());
+            } else if (action instanceof Action.TweenBlock tb) {
+                // tween body 计入节点数（body 里的属性动作都是树节点）
+                count += countBlocks(tb.body());
             }
         }
         return count;
@@ -446,6 +461,58 @@ public final class ScriptRuleValidator {
                 }
                 // body 递归（ifDepth 不变——repeatUntil 不增 if 嵌套深度，同 Repeat）
                 yield validateActions(a.body(), ifDepth);
+            }
+            // tween：补间动画包裹（docs/scripting-tween.md T1-T6）
+            case Action.TweenBlock a -> {
+                // durationMs 范围 [1, TWEEN_DURATION_MAX]
+                if (a.durationMs() < 1 || a.durationMs() > TWEEN_DURATION_MAX) {
+                    yield Optional.of("补间时长需在 1.." + TWEEN_DURATION_MAX + " 毫秒之间");
+                }
+                // easing 非 null（wire 层缺失已 fallback LINEAR；但 record 构造后 null 是坏状态）
+                if (a.easing() == null) {
+                    yield Optional.of("补间缓动不能为空");
+                }
+                // easing.type 合法
+                if (a.easing().type() == null) {
+                    yield Optional.of("补间缓动类型未知");
+                }
+                // CUBIC_BEZIER 时 bezier 必须是 4 个有限参数，且 x1/x2 ∈ [0,1]
+                if (a.easing().type() == EasingType.CUBIC_BEZIER) {
+                    List<Double> bz = a.easing().bezier();
+                    if (bz == null || bz.size() != 4) {
+                        yield Optional.of("cubicBezier 缓动需要 4 个控制点参数");
+                    }
+                    for (double v : bz) {
+                        if (!Double.isFinite(v)) {
+                            yield Optional.of("cubicBezier 控制点必须是有限数值");
+                        }
+                    }
+                    double x1 = bz.get(0), x2 = bz.get(2);
+                    if (x1 < 0.0 || x1 > 1.0 || x2 < 0.0 || x2 > 1.0) {
+                        yield Optional.of("cubicBezier x1/x2 需在 [0,1] 范围内");
+                    }
+                } else if (a.easing().bezier() != null) {
+                    yield Optional.of("bezier 参数仅允许 cubicBezier 缓动");
+                }
+                // body 不能为空
+                if (a.body().isEmpty()) {
+                    yield Optional.of("补间里至少要有一个属性动作");
+                }
+                // body 每条必须是属性动作白名单（SetElementProperties + kind ∈ TWEENABLE_KINDS）
+                for (Action bodyAction : a.body()) {
+                    if (!(bodyAction instanceof Action.SetElementProperties sep)) {
+                        yield Optional.of("补间里只能放移动/缩放/转动/透明度/变色动作");
+                    }
+                    String kind = sep.kind();
+                    if (kind == null || kind.isBlank() || !TWEENABLE_KINDS.contains(kind)) {
+                        yield Optional.of("补间里只能放移动/缩放/转动/透明度/变色动作（kind=" + kind + " 不支持）");
+                    }
+                    // body 里的属性动作自身递归校验
+                    Optional<String> bodyErr = validateAction(bodyAction, ifDepth);
+                    if (bodyErr.isPresent()) yield bodyErr;
+                }
+                // TODO P3: 同属性在 body 里重复警告（v1 先放行，P3 补）
+                yield Optional.empty();
             }
         };
     }

@@ -3,6 +3,8 @@ package moe.hikari.canvas.script;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.SerializerProvider;
+import moe.hikari.canvas.state.Easing;
+import moe.hikari.canvas.state.EasingType;
 
 import java.io.IOException;
 import java.util.List;
@@ -134,6 +136,12 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeNumberField("maxIterations", a.maxIterations());
                 writeActions(gen, provider, "body", a.body());  // 复用 if/repeat 分支递归写出
             }
+            // tween：补间动画包裹（docs/scripting-tween.md T1-T6）
+            case Action.TweenBlock a -> {
+                gen.writeNumberField("durationMs", a.durationMs());
+                writeEasing(gen, a.easing());                    // 与 0.6 timeline Easing 同 serde
+                writeActions(gen, provider, "body", a.body());
+            }
         }
         gen.writeEndObject();
     }
@@ -146,5 +154,26 @@ public final class ActionSerializer extends JsonSerializer<Action> {
             serialize(a, gen, provider);
         }
         gen.writeEndArray();
+    }
+
+    /**
+     * 写出 {@link Easing}（字段名 {@code "easing"}）：与 0.6 timeline Easing 同 wire 格式
+     * ——{@code {"type":"linear"}} / {@code {"type":"cubicBezier","bezier":[x1,y1,x2,y2]}}。
+     * null easing 按 {@link Easing#LINEAR} 写出（校验层保证到这里 easing 已不 null）。
+     */
+    private static void writeEasing(JsonGenerator gen, Easing easing) throws IOException {
+        if (easing == null) easing = Easing.LINEAR;
+        gen.writeObjectFieldStart("easing");
+        EasingType type = easing.type() != null ? easing.type() : EasingType.LINEAR;
+        gen.writeStringField("type", type.wire());
+        if (type == EasingType.CUBIC_BEZIER && easing.bezier() != null
+                && easing.bezier().size() == 4) {
+            gen.writeArrayFieldStart("bezier");
+            for (Double v : easing.bezier()) {
+                gen.writeNumber(v);
+            }
+            gen.writeEndArray();
+        }
+        gen.writeEndObject();
     }
 }

@@ -1,13 +1,15 @@
 package moe.hikari.canvas.script.engine;
 
 import moe.hikari.canvas.render.AnimationTicker;
+import moe.hikari.canvas.state.ProjectState;
 
 /**
  * {@link AnimationTicker} 的脚本侧门面 seam（T4）。
  *
- * <p>{@code AnimationTicker} 是 final 具象类，引擎侧只用到 6 个入口——抽接口让
+ * <p>{@code AnimationTicker} 是 final 具象类，引擎侧只用到 8 个入口——抽接口让
  * {@code ActionExecutor}（play/pause/seek）与 {@code ElementPropertyApplier}
- * （isWallAnimating/invalidate/refreshAutoPlay）可注 fake 断言调用，生产装配
+ * （isWallAnimating/invalidate/refreshAutoPlay）以及 {@code TweenScheduler}
+ * （renderStatic/clearStaticDiff）可注 fake 断言调用，生产装配
  * {@link #of(AnimationTicker)} 一行包装。所有方法沿用 Ticker 的线程契约：任意线程可调。</p>
  */
 public interface TickerControl {
@@ -23,6 +25,18 @@ public interface TickerControl {
     void invalidate(String wallId);
 
     void refreshAutoPlay(String wallId);
+
+    /**
+     * 补间引擎用：渲染某 wall 的一帧补间中间态（不落 DB）。任意线程可调。
+     * 详见 {@link AnimationTicker#renderStatic}。
+     */
+    void renderStatic(String wallId, ProjectState frame);
+
+    /**
+     * 补间引擎用：清除 per-wall 静态 diff（补间结束时调）。任意线程可调。
+     * 详见 {@link AnimationTicker#clearStaticDiff}。
+     */
+    void clearStaticDiff(String wallId);
 
     /** 生产装配：直通 {@link AnimationTicker}。 */
     static TickerControl of(AnimationTicker ticker) {
@@ -55,6 +69,16 @@ public interface TickerControl {
             @Override
             public void refreshAutoPlay(String wallId) {
                 ticker.refreshAutoPlay(wallId);
+            }
+
+            @Override
+            public void renderStatic(String wallId, ProjectState frame) {
+                ticker.renderStatic(wallId, frame);
+            }
+
+            @Override
+            public void clearStaticDiff(String wallId) {
+                ticker.clearStaticDiff(wallId);
             }
         };
     }

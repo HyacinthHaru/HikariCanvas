@@ -108,6 +108,12 @@ public final class ScriptRunner {
     private volatile boolean shutdown;
     /** 0.7.1-P5：时间源（WaitUntil 超时判定）。生产 {@code System::currentTimeMillis}；测试注入可控时钟。 */
     private final java.util.function.LongSupplier clock;
+    /**
+     * 补间引擎（TweenScheduler）注入 seam。{@code null} = 未装配（P1 占位行为：记 trace 跳过）。
+     * 生产由 {@link moe.hikari.canvas.HikariCanvas} onEnable 经 {@link #setTweenScheduler} 注入；
+     * 测试可注 fake。
+     */
+    private volatile @Nullable TweenScheduler tweenScheduler;
 
     /** 0.7.1-P5：WaitUntil 轮询间隔（ms）。 */
     private static final long WAIT_UNTIL_TICK_MS = 100L;
@@ -135,6 +141,14 @@ public final class ScriptRunner {
         this.log = log;
         this.scheduler = scheduler;
         this.clock = clock;
+    }
+
+    /**
+     * 注入补间引擎（onEnable 装配后调；热更不需要，TweenScheduler 本身持 config 引用）。
+     * volatile write 对 runner 线程的后续读可见。
+     */
+    public void setTweenScheduler(TweenScheduler ts) {
+        this.tweenScheduler = ts;
     }
 
     /**
@@ -369,6 +383,32 @@ public final class ScriptRunner {
                         }
                         i++; // 不挂起：继续下一动作
                         continue;
+                    }
+                    if (a instanceof Action.TweenBlock tb) {
+                        // P2：补间引擎接入（TweenScheduler）
+                        TweenScheduler ts = tweenScheduler;
+                        if (ts == null) {
+                            // 未装配（测试 / P1 降级）：记 trace 跳过 body，不崩 runner
+                            st.trace.add(TraceStep.ok(blockId, "action", "补间引擎未装配，跳过"));
+                            i++; continue;
+                        }
+                        TraceStep step = ts.enqueue(st.wallId, blockId, tb);
+                        st.trace.add(step);
+                        if ("ok".equals(step.result()) && tb.durationMs() > 0) {
+                            // 挂起：把剩余动作打包成 continuation，tb.durationMs() 后续接
+                            stack.push(new Frame(acts, i + 1, f.prefix()));
+                            Deque<Frame> cont = new ArrayDeque<>(stack);
+                            if (!shutdown) {
+                                try {
+                                    scheduler.schedule(() -> runFrames(st, cont), tb.durationMs());
+                                } catch (RejectedExecutionException e) {
+                                    // shutdown 竞态：续接丢弃
+                                }
+                            }
+                            return;
+                        }
+                        // enqueue 失败 / duration=0 → 不挂起，链继续
+                        i++; continue;
                     }
                     if (a instanceof Action.WaitUntil wu) {
                         // 0.7.1-P5：轮询条件，满足/超时才续接。不阻塞 runner 线程——首次计 1 个 action

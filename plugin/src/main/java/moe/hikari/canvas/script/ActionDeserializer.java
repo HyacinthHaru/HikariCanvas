@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonNode;
+import moe.hikari.canvas.state.Easing;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -129,6 +130,11 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireText(ctxt, node, "condition", type),
                     requireInt(ctxt, node, "maxIterations", type),
                     readBranch(ctxt, node, "body", type));   // 复用 if/repeat 分支递归读取
+            // tween：补间动画包裹（docs/scripting-tween.md T1-T6）
+            case "tweenBlock" -> new Action.TweenBlock(
+                    requireLong(ctxt, node, "durationMs", type),
+                    readEasing(ctxt, node, "easing", type),
+                    readBranch(ctxt, node, "body", type));
             default -> ctxt.reportInputMismatch(Action.class,
                     "unknown action type: " + type);
         };
@@ -264,6 +270,26 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
             out.put(e.getKey(), e.getValue().asText());
         }
         return out;
+    }
+
+    /**
+     * 从 JSON 对象的字段读取 {@link Easing}，缺失 / null → {@link Easing#LINEAR}，
+     * 存在但格式错误 → reportInputMismatch。复用 {@link moe.hikari.canvas.state.Easing}
+     * 的 Jackson 注解（{@code @JsonProperty type + bezier}）通过 {@code ctxt.readTreeAsValue}
+     * 反序列化——与 0.6 timeline 路径同款 serde（保证双端 Easing 一致）。
+     */
+    private static Easing readEasing(DeserializationContext ctxt, JsonNode node,
+                                     String field, String type) throws IOException {
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return Easing.LINEAR;
+        }
+        if (!v.isObject()) {
+            return ctxt.reportInputMismatch(Action.class,
+                    "action '" + type + "' field '" + field + "' must be an object");
+        }
+        // Easing 有 @JsonInclude + @JsonIgnoreProperties；ctxt.readTreeAsValue 走 Jackson 注解路径
+        return ctxt.readTreeAsValue(v, Easing.class);
     }
 
     /** if 分支数组逐元素递归（直接走 {@link #fromNode}）；缺分支按空 list；元素为 null 拒绝。 */

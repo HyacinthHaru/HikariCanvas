@@ -58,15 +58,15 @@ function isIf(
 }
 
 /**
- * 「带 {@code body} 子序列」容器块类型守卫——窄化到 repeat（有界循环，0.7.1-P2）与
- * repeatUntil（动态循环，0.7.2-P3）。两者的 body 序列键同名（{@code body}），故下钻 / 回写
- * 共用一条分支（getChildSeq / withChildSeq）。新增带 {@code body} 的块（如未来 forEach）只需
- * 在此并入判别即可，导航 / 变换 / 遍历自动覆盖。
+ * 「带 {@code body} 子序列」容器块类型守卫——窄化到 repeat（有界循环，0.7.1-P2）、
+ * repeatUntil（动态循环，0.7.2-P3）与 tweenBlock（补间包裹，tween-P1）。
+ * 三者的 body 序列键同名（{@code body}），故下钻 / 回写共用一条分支（getChildSeq /
+ * withChildSeq）。新增带 {@code body} 的块在此并入判别即可，导航 / 变换 / 遍历自动覆盖。
  */
 function isBodyContainer(
     node: ScriptAction,
-): node is Extract<ScriptAction, { type: 'repeat' } | { type: 'repeatUntil' }> {
-    return node.type === 'repeat' || node.type === 'repeatUntil';
+): node is Extract<ScriptAction, { type: 'repeat' } | { type: 'repeatUntil' } | { type: 'tweenBlock' }> {
+    return node.type === 'repeat' || node.type === 'repeatUntil' || node.type === 'tweenBlock';
 }
 
 /**

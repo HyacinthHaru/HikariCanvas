@@ -1,5 +1,7 @@
 package moe.hikari.canvas.script;
 
+import moe.hikari.canvas.state.Easing;
+import moe.hikari.canvas.state.EasingType;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -642,5 +644,98 @@ class ScriptRuleValidatorTest {
                 List.of(new Action.SendMessage("x", "chat", "all")))));
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.SendMessage("x", "chat", "trigger")))));
+    }
+
+    // ---------- tween：补间动画包裹 validator ----------
+
+    /** 辅助：造合法 TweenBlock（LINEAR 缓动 + moveTo body）。 */
+    private static Action.TweenBlock okTween() {
+        return new Action.TweenBlock(1500L, Easing.LINEAR,
+                List.of(new Action.SetElementProperties("e-1", Map.of("x", "100", "y", "200"), "moveTo")));
+    }
+
+    @Test
+    void tween_ok_linear() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(), List.of(okTween()))));
+    }
+
+    @Test
+    void tween_ok_easeOut() {
+        Action a = new Action.TweenBlock(500L, new Easing(EasingType.EASE_OUT, null),
+                List.of(new Action.SetElementProperties("e-1", Map.of("opacity", "0"), "setOpacity")));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))));
+    }
+
+    @Test
+    void tween_ok_cubicBezier() {
+        Easing bz = new Easing(EasingType.CUBIC_BEZIER, List.of(0.25, 0.1, 0.25, 1.0));
+        Action a = new Action.TweenBlock(1000L, bz,
+                List.of(new Action.SetElementProperties("e-1", Map.of("rotation", "90"), "rotateTo")));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))));
+    }
+
+    @Test
+    void tween_durationMs_zero_rejected() {
+        Action a = new Action.TweenBlock(0L, Easing.LINEAR,
+                List.of(new Action.SetElementProperties("e-1", Map.of("x", "0"), "moveTo")));
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
+    }
+
+    @Test
+    void tween_durationMs_over_max_rejected() {
+        Action a = new Action.TweenBlock(ScriptRuleValidator.TWEEN_DURATION_MAX + 1, Easing.LINEAR,
+                List.of(new Action.SetElementProperties("e-1", Map.of("x", "0"), "moveTo")));
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
+    }
+
+    @Test
+    void tween_body_empty_rejected() {
+        Action a = new Action.TweenBlock(500L, Easing.LINEAR, List.of());
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
+    }
+
+    @Test
+    void tween_body_non_property_action_rejected() {
+        // body 里放 sendMessage（非属性动作）→ 拒
+        Action a = new Action.TweenBlock(500L, Easing.LINEAR,
+                List.of(new Action.SendMessage("hi", "chat", "trigger")));
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(a)));
+        assertTrue(err.isPresent());
+        assertTrue(err.get().contains("补间") || err.get().contains("移动"));
+    }
+
+    @Test
+    void tween_body_untweennable_kind_rejected() {
+        // kind = show（不在 TWEENABLE_KINDS）→ 拒
+        Action a = new Action.TweenBlock(500L, Easing.LINEAR,
+                List.of(new Action.SetElementProperties("e-1", Map.of("opacity", "1"), "show")));
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(a)));
+        assertTrue(err.isPresent());
+    }
+
+    @Test
+    void tween_easing_null_rejected() {
+        // easing = null → 拒（record 允许 null 存储，校验层拒）
+        Action a = new Action.TweenBlock(500L, null,
+                List.of(new Action.SetElementProperties("e-1", Map.of("x", "0"), "moveTo")));
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
+    }
+
+    @Test
+    void tween_cubicBezier_missing_bezier_rejected() {
+        // cubicBezier 类型但 bezier=null → 拒
+        Easing bad = new Easing(EasingType.CUBIC_BEZIER, null);
+        Action a = new Action.TweenBlock(500L, bad,
+                List.of(new Action.SetElementProperties("e-1", Map.of("x", "0"), "moveTo")));
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
+    }
+
+    @Test
+    void tween_cubicBezier_x_out_of_range_rejected() {
+        // x1 = 1.5（超 [0,1]）→ 拒
+        Easing bad = new Easing(EasingType.CUBIC_BEZIER, List.of(1.5, 0.1, 0.25, 1.0));
+        Action a = new Action.TweenBlock(500L, bad,
+                List.of(new Action.SetElementProperties("e-1", Map.of("x", "0"), "moveTo")));
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
     }
 }

@@ -802,6 +802,9 @@ export const messages = {
             // lock 提示
             lockedHint: '这面墙已锁定，脚本只读',
             selectRuleHint: '在左侧选一条规则来编辑，或点「新建规则」',
+            // 补间动画帧率（per-wall，canvas.tweenFps op）
+            tweenFpsLabel: '动画帧率',
+            tweenFpsTooltip: '这面招牌里「在 X 秒内」补间动画的流畅度：数字越高越顺滑，但服务器负担也越高（范围 1-60）',
             // 0.7.0-P5-H2：触发器帽子里"选触发类型"下拉的前缀标签。
             triggerKindLabel: '什么时候触发',
             // 0.7.1：积木画布右下角「本脚本变量实时预览」面板。
@@ -855,6 +858,8 @@ export const messages = {
                 appendVariable: '文本拼接',
                 cloneElement: '克隆元素',
                 deleteElement: '删除元素',
+                // tween-P1：补间包裹积木。
+                tweenBlock: '在 X 秒内',
             },
             // 0.7.1：友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
             friendly: {
@@ -918,6 +923,10 @@ export const messages = {
                 // 0.7.2-P3：重复直到 / 发消息字段。
                 maxIterations: '最多次数',
                 msgTarget: '发给',
+                // tween-P1：补间包裹字段。
+                tweenDurationMs: '时长（毫秒）',
+                tweenEasing: '缓动',
+                tweenBody: '动作列表',
             },
             // select / 切换 类字段的选项友好文案。
             fieldOptions: {
@@ -2007,6 +2016,9 @@ export const messages = {
             legendError: 'Error',
             lockedHint: 'This wall is locked; scripts are read-only',
             selectRuleHint: 'Pick a rule on the left to edit, or click "New rule"',
+            // Tween animation frame rate (per-wall, canvas.tweenFps op)
+            tweenFpsLabel: 'Animation frame rate',
+            tweenFpsTooltip: 'How smooth the "over X seconds" tween animations look on this sign — higher is smoother but uses more server resources (range 1–60)',
             // 0.7.0-P5-H2: prefix label for the "trigger type" select in the hat block.
             triggerKindLabel: 'When to trigger',
             // 0.7.1: "variables used by this script" live-preview panel (bottom-right of block canvas).
@@ -2059,6 +2071,8 @@ export const messages = {
                 appendVariable: 'Append text',
                 cloneElement: 'Clone element',
                 deleteElement: 'Delete element',
+                // tween-P1: tween wrapper block.
+                tweenBlock: 'Over X seconds',
             },
             // 0.7.1: friendly element block titles.
             friendly: {
@@ -2121,6 +2135,10 @@ export const messages = {
                 // 0.7.2-P3: repeat-until / send-message fields.
                 maxIterations: 'Max times',
                 msgTarget: 'Send to',
+                // tween-P1: tween wrapper fields.
+                tweenDurationMs: 'Duration (ms)',
+                tweenEasing: 'Easing',
+                tweenBody: 'Actions',
             },
             fieldOptions: {
                 opPlay: 'Play',

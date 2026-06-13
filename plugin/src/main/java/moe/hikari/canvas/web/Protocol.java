@@ -23,16 +23,20 @@ package moe.hikari.canvas.web;
  *
  * <p>v5 = 0.7.1（2026-06-12）：3 个新触发器（rightClickWall / playerLeaveRange /
  * playerQuit）+ Repeat 动作（有界循环）。Trigger / Action wire union 扩展，同样干净切换。</p>
+ *
+ * <p>v6 = tween（2026-06-13）：{@link moe.hikari.canvas.script.Action.TweenBlock} 补间动画
+ * 包裹积木。Action wire union 新增 {@code "tweenBlock"}（durationMs + easing + body）。
+ * 干净切换（MIN=MAX=6），设计总纲 {@code docs/scripting-tween.md} T1-T6。</p>
  */
 public final class Protocol {
 
     private Protocol() {}
 
     /** 服务端可接受的最小 business protocol 版本。 */
-    public static final int SUPPORTED_MIN = 5;
+    public static final int SUPPORTED_MIN = 6;
 
     /** 服务端可接受的最大 business protocol 版本。 */
-    public static final int SUPPORTED_MAX = 5;
+    public static final int SUPPORTED_MAX = 6;
 
     /** 协议版本不匹配时关闭 WS 的 close code（与 4001 auth_timeout 同 4xxx 段）。 */
     public static final int CLOSE_PROTOCOL_VERSION_UNSUPPORTED = 4002;

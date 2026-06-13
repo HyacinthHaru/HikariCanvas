@@ -64,6 +64,8 @@ const EXPECTED_ACTION_FIELDS: Record<string, string[]> = {
     appendVariable: ['fullName', 'text'],
     cloneElement: ['elementId', 'offsetX', 'offsetY'],
     deleteElement: ['elementId'],
+    // tween-P1：补间包裹积木（control category，durationMs + easing select + body statements）。
+    tweenBlock: ['durationMs', 'easing', 'body'],
 };
 
 function fieldNames(def: BlockDef): string[] {
@@ -95,7 +97,7 @@ describe('blockDefs.TRIGGER_DEFS', () => {
 });
 
 describe('blockDefs.ACTION_DEFS', () => {
-    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat + 0.7.1-P5 3 个 + 0.7.2-P2 4 个 + 0.7.2-P3 repeatUntil = 23）', () => {
+    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat + 0.7.1-P5 3 个 + 0.7.2-P2 4 个 + 0.7.2-P3 repeatUntil + tween-P1 tweenBlock = 24）', () => {
         expect(Object.keys(ACTION_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_ACTION_FIELDS).sort(),
         );

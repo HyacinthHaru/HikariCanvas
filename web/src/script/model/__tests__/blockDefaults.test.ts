@@ -291,5 +291,9 @@ describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule�
         // 仅 body 空，用户须往 body 拖块；与 repeat 同文案）。
         expect(validateRule(ruleWithAction(makeDefaultAction('repeatUntil')))
             .some((e) => e.message === '重复循环体不能为空')).toBe(true);
+        // tween-P1：tweenBlock 默认 body 含 moveTo（elementId 空）→ 拖出态报元素 ID 缺失
+        // （body 非空，durationMs/easing 合法，仅 body[0].elementId 空需用户点选）。
+        expect(validateRule(ruleWithAction(makeDefaultAction('tweenBlock')))
+            .some((e) => e.message.includes('元素 ID'))).toBe(true);
     });
 });

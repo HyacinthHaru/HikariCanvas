@@ -85,6 +85,8 @@ public final class ScriptPermissions {
                 case Action.AppendVariable ignored -> { }
                 case Action.CloneElement ignored -> { }
                 case Action.DeleteElement ignored -> { }
+                // tween：递归扫 body（body 里的属性动作权限面照常生效；包裹本身无附加权限面）
+                case Action.TweenBlock tb -> scanActions(tb.body(), facets);
             }
         }
     }

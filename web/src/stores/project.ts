@@ -301,6 +301,17 @@ function applyOne(state: ProjectState, op: PatchOp): void {
         return;
     }
 
+    // ---------- /tweenFps（canvas.tweenFps op 的 state.patch 回推）----------
+    // 顶层标量，与 /activeLayerId / /activeTimelineId 同构。缺省时前端回退 30fps。
+    if (tokens.length === 1 && tokens[0] === 'tweenFps' && op.op === 'replace') {
+        state.tweenFps = typeof op.value === 'number' ? op.value : undefined;
+        return;
+    }
+    if (tokens.length === 1 && tokens[0] === 'tweenFps' && op.op === 'remove') {
+        state.tweenFps = undefined;
+        return;
+    }
+
     // ---------- /activeTimelineId（timeline.create / delete 的副带 replace）----------
     // v3 新增：与 /activeLayerId 同构的单 token 顶层标量。timeline.delete 后可能为 null。
     if (tokens.length === 1 && tokens[0] === 'activeTimelineId' && op.op === 'replace') {

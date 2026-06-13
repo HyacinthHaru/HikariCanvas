@@ -156,6 +156,30 @@ const PARTICLE_OPTIONS: FieldOption[] = [
 ];
 
 /**
+ * tween-P1：补间缓动选项（4 预设，wire 值对应 Easing.type；复用 protocol.ts EasingType）。
+ * P1 不含 cubicBezier（贝塞尔编辑器留 P4），拖出默认 easeInOut。
+ * i18n key 复用 timeline P3 的 easingXxx 文案（用户已熟悉）。
+ */
+const TWEEN_EASING_OPTIONS: FieldOption[] = [
+    // i18n key 在 timeline 块（0.6 P3 缓动文案），不在 script.fieldOptions——故路径用 timeline.*。
+    { value: 'linear', labelKey: 'timeline.easingLinear' },
+    { value: 'easeIn', labelKey: 'timeline.easingEaseIn' },
+    { value: 'easeOut', labelKey: 'timeline.easingEaseOut' },
+    { value: 'easeInOut', labelKey: 'timeline.easingEaseInOut' },
+];
+
+/**
+ * tween-P1：补间 body 中允许的 setElementProperties.kind 集合。
+ * 对应「可平滑插值的属性」：位置 / 尺寸 / 旋转 / 不透明度 / 颜色——与后端
+ * {@code ScriptRuleValidator.TWEENABLE_KINDS} 逐字一致（两端必须同步）。
+ * setText 不可补间（文字离散跳变）；show/hide 是 opacity 快捷，合并为 setOpacity；
+ * nudgeElement 走独立 action（不是 setElementProperties），不在此集合。
+ */
+export const TWEENABLE_KINDS: ReadonlySet<string> = new Set([
+    'moveTo', 'resize', 'rotateTo', 'setOpacity', 'setColor',
+]);
+
+/**
  * 九种触发器定义（kind ∈ ScriptTrigger.type，0.7.0 六种 + 0.7.1-P2 三种）。
  * 字段覆盖各 wire 数据字段：variableChange→fullName / timer→intervalSeconds /
  * playerNear→rangeBlocks / playerLeaveRange→rangeBlocks；playerJoin / playerKill /
@@ -526,6 +550,21 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
         ],
     },
+    // ---- tween-P1：补间包裹积木「在 X 秒内」（control 绿，带 body 子序列槽）----
+    // body 只放属性动作（setElementProperties，kind ∈ TWEENABLE_KINDS）。
+    // P1 UI 占位：durationMs = number，easing = select（4 预设），body = statements。
+    // C 形积木皮肤留 P4 细化；校验镜像 ScriptRuleValidator.TweenBlock case。
+    tweenBlock: {
+        kind: 'tweenBlock',
+        category: 'control',
+        colorVar: CATEGORY_COLOR_VAR.control,
+        labelKey: 'script.blocks.tweenBlock',
+        fields: [
+            { name: 'durationMs', type: 'number', labelKey: 'script.fields.tweenDurationMs', min: 1, max: 60000, step: 100 },
+            { name: 'easing', type: 'select', labelKey: 'script.fields.tweenEasing', options: TWEEN_EASING_OPTIONS },
+            { name: 'body', type: 'statements', labelKey: 'script.fields.tweenBody' },
+        ],
+    },
 };
 
 // ---------- 0.7.1-P1：友好元素积木皮肤（路线乙——8 个友好积木都序列化成一条 setElementProperties）----------
@@ -771,6 +810,18 @@ export function makeDefaultAction(kind: string): ScriptAction {
             return { type: 'cloneElement', elementId: '', offsetX: 10, offsetY: 10 };
         case 'deleteElement':
             return { type: 'deleteElement', elementId: '' };
+        // ---- tween-P1：补间包裹积木默认（1000ms / easeInOut / body 含一条 moveTo 默认）。
+        case 'tweenBlock':
+            // durationMs 1000ms（落 1..60000 合法）；easing 默 easeInOut（最常见）；
+            // body 给一条 setElementProperties(moveTo) 占位——validator 要求 body 非空 + 每条必须是
+            // TWEENABLE_KINDS 内的 setElementProperties，空 body 拖出即报错（validator 不允许）。
+            // elementId 留空让用户点选（与 makeDefaultAction('moveTo') 同策略），x/y 默 '0'/'0'。
+            return {
+                type: 'tweenBlock',
+                durationMs: 1000,
+                easing: { type: 'easeInOut' },
+                body: [{ type: 'setElementProperties', elementId: '', patch: { x: '0', y: '0' }, kind: 'moveTo' }],
+            };
         default:
             // 未知 kind 兜底：给个最简单的 log 动作（保证返回合法 ScriptAction）。
             return { type: 'log', message: '' };

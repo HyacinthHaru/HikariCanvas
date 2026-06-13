@@ -181,7 +181,7 @@ class KeyframeInterpolatorTest {
         return new ProjectState(1L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, ls, layers[0].id(),
-                new ProjectState.History(0, 0), null, null);
+                new ProjectState.History(0, 0), null, null, null);
     }
 
     /** 单元素单轨 timeline；tracks key = elementId，value = 该元素的混排关键帧。 */
@@ -311,7 +311,7 @@ class KeyframeInterpolatorTest {
         ProjectState base = new ProjectState(1L,
                 new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
                 null, ls, "l-1", new ProjectState.History(0, 0),
-                List.of(tl), "tl-1");
+                List.of(tl), "tl-1", null);
         assertEquals(1, base.timelines().size(), "前置：base 含一条 timeline");
 
         ProjectState out = KeyframeInterpolator.interpolate(base, tl, 500);
