@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-06-13 · 0.7.2-P2 立项：元素积木 + 变量积木（实施计划）
+
+P2 加 4 动作（克隆元素 / 删除元素 / 变量复制 / 文本拼接）。调研落定：**删除**复用 `EditSession.deleteElement`
+（已有）；**克隆**新增 `EditSession.cloneElement`（复用已有 `cloneElementWithNewId` + 偏移 + F10 配额）；
+元素动作走 `ElementPropertyApplier` 双路径（session seam + headless，照 `applyNudge` 范式）；**变量复制/拼接**
+直接复用 `doSetVariable` 的 `store.get`+`store.setValue`+`interpolator.interpolate`，async 无主线程 hop。
+
+8 task：后端地基（record/序列化/validator/permissions/变量 executor）+ 前端派子代理；元素双路径（Task 5
+EditSession.cloneElement + applyClone/applyDelete）是难点自盯。wire 字段名定死 copyVariable`{target,source}`
+/ appendVariable`{fullName,text}` / cloneElement`{elementId,offsetX,offsetY}` / deleteElement`{elementId}`。
+
+关联：`docs/superpowers/plans/2026-06-13-0.7.2-P2-element-variable-blocks.md`。
+
+---
+
 ## 2026-06-13 · 0.7.2-P1 完工：2 小修 + 变量预览 +1/-1（纯前端）
 
 - **F3 变量预览扫条件**：`extractVars` 加 `collectFromCondition`（正则抓条件文本里 `var("X")` 双/单引号
