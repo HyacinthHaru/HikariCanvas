@@ -145,6 +145,12 @@ public final class ActionExecutor implements ActionSink {
                 case Action.PlayTimelineAwait a -> doPlayTimelineAwait(wallId, blockId, a);
                 // 0.7.1-P5：粒子真正执行（主线程 hop + 墙坐标，同 playSound 范式）
                 case Action.PlayParticle a -> doPlayParticle(wallId, blockId, a);
+                // 0.7.2-P2：变量积木真实现；元素积木（克隆/删除）走 ElementPropertyApplier 双路径，
+                // 由后续 Task 接，这里先占位返 error 让 switch 穷尽
+                case Action.CopyVariable a -> doCopyVariable(wallId, blockId, a);
+                case Action.AppendVariable a -> doAppendVariable(wallId, blockId, a);
+                case Action.CloneElement a -> TraceStep.error(blockId, "cloneElement 由后续 Task 接（占位）");
+                case Action.DeleteElement a -> TraceStep.error(blockId, "deleteElement 由后续 Task 接（占位）");
                 // wait / if / repeat / stopScript / waitUntil 由 Runner 处理；进到这里是 Runner
                 // 实现 bug → 防御 error（stopScript/waitUntil 真实现在 Runner，本批次外）
                 case Action.Wait a -> TraceStep.error(blockId, "wait 应由 ScriptRunner 处理");
@@ -197,6 +203,52 @@ public final class ActionExecutor implements ActionSink {
                     + ": " + e.getMessage());
         }
         return TraceStep.ok(blockId, "action", fullName + " = " + formatted);
+    }
+
+    /**
+     * 0.7.2-P2：把 source 变量的当前值复制到 target 变量（照 {@link #doSetVariable} 范式：
+     * store.get 取值 + store.setValue 写入；async 安全无主线程 hop）。源变量缺失 → error；
+     * source.currentValue 为 null 时退 defaultValue，再退空串。
+     */
+    private TraceStep doCopyVariable(String wallId, String blockId, Action.CopyVariable a) {
+        if (store == null) {
+            return TraceStep.error(blockId, "VariableStore 未装配");
+        }
+        String src = VariableInterpolator.resolveFullName(a.source(), wallId);
+        String dst = VariableInterpolator.resolveFullName(a.target(), wallId);
+        var srcVar = store.get(src).orElse(null);
+        if (srcVar == null) {
+            return TraceStep.error(blockId, "源变量不存在: " + src);
+        }
+        String value = srcVar.currentValue() != null ? srcVar.currentValue()
+                : (srcVar.defaultValue() != null ? srcVar.defaultValue() : "");
+        try {
+            store.setValue(dst, value, null);
+        } catch (VariableException e) {
+            return TraceStep.error(blockId, "copyVariable " + dst + ": " + e.getMessage());
+        }
+        return TraceStep.ok(blockId, "action", dst + " ← " + src);
+    }
+
+    /**
+     * 0.7.2-P2：把 text（过 {@code ${var:X}} 插值）追加到 fullName 变量末尾（读当前值 +
+     * 拼接 + 写回；currentValue 缺失从空串起拼）。async 安全。
+     */
+    private TraceStep doAppendVariable(String wallId, String blockId, Action.AppendVariable a) {
+        if (store == null || interpolator == null) {
+            return TraceStep.error(blockId, "VariableStore 未装配");
+        }
+        String dst = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String add = interpolator.interpolate(a.text(), wallId).text();
+        String cur = store.get(dst)
+                .map(v -> v.currentValue() != null ? v.currentValue() : "")
+                .orElse("");
+        try {
+            store.setValue(dst, cur + add, null);
+        } catch (VariableException e) {
+            return TraceStep.error(blockId, "appendVariable " + dst + ": " + e.getMessage());
+        }
+        return TraceStep.ok(blockId, "action", dst + " += ...");
     }
 
     /** 整数值输出无小数点（"42" 而非 "42.0"）；否则 {@code String.valueOf}。 */

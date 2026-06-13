@@ -476,6 +476,36 @@ function validateAction(
             }
             break;
         }
+        // ---- 0.7.2-P2：变量积木 + 元素积木（文案与后端 ScriptRuleValidator 逐字一致）----
+        // 注：克隆偏移这层只查"有限数值"；上界（ELEMENT_OFFSET_MAX）由后端 validator 兜底
+        // （前端从简——offset 在表单里就是普通数字输入，越界由 server 打回）。
+        case 'copyVariable': {
+            if (isBlank(action.target) || isBlank(action.source)) {
+                errors.push({ blockId: path, message: '变量复制的目标 / 来源不能为空' });
+            }
+            break;
+        }
+        case 'appendVariable': {
+            if (isBlank(action.fullName)) {
+                errors.push({ blockId: path, message: '文本拼接的目标变量不能为空' });
+            }
+            break;
+        }
+        case 'cloneElement': {
+            if (isBlank(action.elementId)) {
+                errors.push({ blockId: path, message: '克隆元素的目标不能为空' });
+            }
+            if (!Number.isFinite(action.offsetX) || !Number.isFinite(action.offsetY)) {
+                errors.push({ blockId: path, message: '克隆偏移必须是有限数值' });
+            }
+            break;
+        }
+        case 'deleteElement': {
+            if (isBlank(action.elementId)) {
+                errors.push({ blockId: path, message: '删除元素的目标不能为空' });
+            }
+            break;
+        }
     }
 }
 

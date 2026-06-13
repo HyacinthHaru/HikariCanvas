@@ -458,6 +458,49 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'timeoutMs', type: 'number', labelKey: 'script.fields.timeoutMs', min: 50, max: 60000, step: 50 },
         ],
     },
+    // ---- 0.7.2-P2：4 个新动作（变量复制 / 文本拼接 / 克隆元素 / 删除元素，都是副作用 → 'action' 蓝）----
+    // 变量字段走 type:'variable'（现有 VariablePicker）；元素字段走 type:'element'（现有元素下拉）；
+    // offsetX/Y 走 type:'number'。palette 由 ACTION_DEFS 按 category 自动分组（蓝组），无需另登记。
+    copyVariable: {
+        kind: 'copyVariable',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.copyVariable',
+        fields: [
+            { name: 'source', type: 'variable', labelKey: 'script.fields.copySource' },
+            { name: 'target', type: 'variable', labelKey: 'script.fields.copyTarget' },
+        ],
+    },
+    appendVariable: {
+        kind: 'appendVariable',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.appendVariable',
+        fields: [
+            { name: 'fullName', type: 'variable', labelKey: 'script.fields.appendTarget' },
+            { name: 'text', type: 'text', labelKey: 'script.fields.appendText' },
+        ],
+    },
+    cloneElement: {
+        kind: 'cloneElement',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.cloneElement',
+        fields: [
+            { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
+            { name: 'offsetX', type: 'number', labelKey: 'script.fields.offsetX', step: 1 },
+            { name: 'offsetY', type: 'number', labelKey: 'script.fields.offsetY', step: 1 },
+        ],
+    },
+    deleteElement: {
+        kind: 'deleteElement',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.deleteElement',
+        fields: [
+            { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
+        ],
+    },
 };
 
 // ---------- 0.7.1-P1：友好元素积木皮肤（路线乙——8 个友好积木都序列化成一条 setElementProperties）----------
@@ -685,6 +728,18 @@ export function makeDefaultAction(kind: string): ScriptAction {
         case 'waitUntil':
             // condition 给能被 tryParseCondition 解析回可视模式的合法默认（同 if）；timeoutMs 5000（落 50..60000）。
             return { type: 'waitUntil', condition: 'var("user/score") > 0', timeoutMs: 5000 };
+        // ---- 0.7.2-P2：变量积木默认（source/target 留空——拖出态提示"目标 / 来源不能为空"，用户从 picker 选）。
+        // 与 setVariable 不同：copy/append 两端都是用户要点选的具体变量，没有通用合理默认，故空串。
+        case 'copyVariable':
+            return { type: 'copyVariable', source: '', target: '' };
+        case 'appendVariable':
+            // fullName 留空（用户选追加目标）；text 空串后端合法（拼接内容由用户填）。
+            return { type: 'appendVariable', fullName: '', text: '' };
+        // ---- 0.7.2-P2：元素积木默认（elementId 依赖墙上元素 → 留空让用户选；偏移默认 10,10 错开可见）。
+        case 'cloneElement':
+            return { type: 'cloneElement', elementId: '', offsetX: 10, offsetY: 10 };
+        case 'deleteElement':
+            return { type: 'deleteElement', elementId: '' };
         default:
             // 未知 kind 兜底：给个最简单的 log 动作（保证返回合法 ScriptAction）。
             return { type: 'log', message: '' };

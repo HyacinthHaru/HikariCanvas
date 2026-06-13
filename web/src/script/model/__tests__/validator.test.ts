@@ -421,6 +421,53 @@ describe('validateRule — 0.7.1-P5 新动作字段', () => {
     });
 });
 
+// ---------- 0.7.2-P2：变量积木 + 元素积木（文案与后端逐字一致）----------
+
+describe('validateRule — 0.7.2-P2 新动作字段（copy / append / clone / delete）', () => {
+    it('copyVariable 合法 / 空 target / 空 source', () => {
+        const ok: ScriptAction = { type: 'copyVariable', target: 'user/dst', source: 'user/src' };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        const emptyTarget: ScriptAction = { type: 'copyVariable', target: '', source: 'user/src' };
+        expect(validateRule(rule({ actions: [emptyTarget] }))
+            .some((e) => e.message === '变量复制的目标 / 来源不能为空' && e.blockId === 'actions/0')).toBe(true);
+        const emptySource: ScriptAction = { type: 'copyVariable', target: 'user/dst', source: '' };
+        expect(validateRule(rule({ actions: [emptySource] }))
+            .some((e) => e.message === '变量复制的目标 / 来源不能为空')).toBe(true);
+    });
+
+    it('appendVariable 合法 / 空 fullName', () => {
+        const ok: ScriptAction = { type: 'appendVariable', fullName: 'user/log', text: 'x=${var:user/x}' };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        // text 空串合法（仅校验目标变量名非空）。
+        expect(validateRule(rule({ actions: [{ type: 'appendVariable', fullName: 'user/log', text: '' }] }))).toEqual([]);
+        const emptyName: ScriptAction = { type: 'appendVariable', fullName: '', text: 'x' };
+        expect(validateRule(rule({ actions: [emptyName] }))
+            .some((e) => e.message === '文本拼接的目标变量不能为空' && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('cloneElement 合法 / 空 elementId / offset 非有限', () => {
+        const ok: ScriptAction = { type: 'cloneElement', elementId: 'e-1', offsetX: 5, offsetY: 5 };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        const emptyId: ScriptAction = { type: 'cloneElement', elementId: '', offsetX: 0, offsetY: 0 };
+        expect(validateRule(rule({ actions: [emptyId] }))
+            .some((e) => e.message === '克隆元素的目标不能为空' && e.blockId === 'actions/0')).toBe(true);
+        const nan = { type: 'cloneElement', elementId: 'e-1', offsetX: NaN, offsetY: 0 } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [nan] }))
+            .some((e) => e.message === '克隆偏移必须是有限数值')).toBe(true);
+        const inf = { type: 'cloneElement', elementId: 'e-1', offsetX: 0, offsetY: Infinity } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [inf] }))
+            .some((e) => e.message === '克隆偏移必须是有限数值')).toBe(true);
+    });
+
+    it('deleteElement 合法 / 空 elementId', () => {
+        const ok: ScriptAction = { type: 'deleteElement', elementId: 'e-xyz' };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        const emptyId: ScriptAction = { type: 'deleteElement', elementId: '' };
+        expect(validateRule(rule({ actions: [emptyId] }))
+            .some((e) => e.message === '删除元素的目标不能为空' && e.blockId === 'actions/0')).toBe(true);
+    });
+});
+
 // ---------- if 嵌套深度 / 条件 ----------
 
 describe('validateRule — if 嵌套深度 + 条件', () => {

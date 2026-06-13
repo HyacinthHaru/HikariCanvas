@@ -223,4 +223,48 @@ class ActionWireTest {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"waitUntil\",\"condition\":\"x>0\",\"timeoutMs\":5000.5}", Action.class));
     }
+
+    // ---------- 0.7.2-P2：copy / append / clone / delete 4 个新 Action 子类 round-trip ----------
+
+    @Test void copyVariable_roundtrip() throws Exception {
+        Action a = new Action.CopyVariable("user/dst", "user/src");
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"copyVariable\""), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    @Test void appendVariable_roundtrip() throws Exception {
+        Action a = new Action.AppendVariable("user/log", "事件 ${var:user/x}");
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"appendVariable\""), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    @Test void cloneElement_roundtrip() throws Exception {
+        Action a = new Action.CloneElement("e-abc", 10, 20);
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"cloneElement\""), json);
+        assertTrue(json.contains("\"offsetX\":10"), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    @Test void deleteElement_roundtrip() throws Exception {
+        Action a = new Action.DeleteElement("e-xyz");
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"deleteElement\""), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    /** copyVariable 缺 source → 拒。 */
+    @Test void copyVariable_missingSourceRejected() {
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue("{\"type\":\"copyVariable\",\"target\":\"user/d\"}", Action.class));
+    }
+
+    /** cloneElement.offsetX 非整数值（K8 纪律）→ 拒。 */
+    @Test void cloneElement_fractionalOffsetRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"cloneElement\",\"elementId\":\"e-1\",\"offsetX\":1.5,\"offsetY\":2}",
+                Action.class));
+    }
 }

@@ -110,6 +110,19 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
             case "waitUntil" -> new Action.WaitUntil(
                     requireText(ctxt, node, "condition", type),
                     requireLong(ctxt, node, "timeoutMs", type));
+            // 0.7.2-P2：copy / append / clone / delete
+            case "copyVariable" -> new Action.CopyVariable(
+                    requireText(ctxt, node, "target", type),
+                    requireText(ctxt, node, "source", type));
+            case "appendVariable" -> new Action.AppendVariable(
+                    requireText(ctxt, node, "fullName", type),
+                    requireText(ctxt, node, "text", type));
+            case "cloneElement" -> new Action.CloneElement(
+                    requireText(ctxt, node, "elementId", type),
+                    requireInt(ctxt, node, "offsetX", type),
+                    requireInt(ctxt, node, "offsetY", type));
+            case "deleteElement" -> new Action.DeleteElement(
+                    requireText(ctxt, node, "elementId", type));
             default -> ctxt.reportInputMismatch(Action.class,
                     "unknown action type: " + type);
         };

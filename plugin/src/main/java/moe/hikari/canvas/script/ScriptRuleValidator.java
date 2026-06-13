@@ -77,6 +77,8 @@ public final class ScriptRuleValidator {
     /** 0.7.1-P5 WaitUntil.timeoutMs 范围（毫秒）。 */
     public static final long WAIT_UNTIL_TIMEOUT_MIN = 50L;
     public static final long WAIT_UNTIL_TIMEOUT_MAX = 60_000L;
+    /** 0.7.2-P2 CloneElement.offsetX/Y 绝对值上限（合理偏移，方块/像素同量级）。 */
+    public static final int ELEMENT_OFFSET_MAX = 4096;
     /** 0.7.1-P5 PlayParticle.particle 白名单（14 个，双端对齐）。 */
     public static final Set<String> PARTICLE_WHITELIST = Set.of(
             "minecraft:flame", "minecraft:smoke", "minecraft:heart", "minecraft:happy_villager",
@@ -395,6 +397,33 @@ public final class ScriptRuleValidator {
                 }
                 yield Optional.empty();
             }
+            // 0.7.2-P2：copy / append / clone / delete
+            case Action.CopyVariable a -> (blank(a.target()) || blank(a.source()))
+                    ? Optional.of("变量复制的目标 / 来源不能为空")
+                    : Optional.empty();
+            case Action.AppendVariable a -> {
+                if (blank(a.fullName())) {
+                    yield Optional.of("文本拼接的目标变量不能为空");
+                }
+                // text 复用 SetVariable 值长度上限（= VariableStore.MAX_VALUE_LENGTH，4096）
+                if (a.text() != null && a.text().length() > SET_VALUE_MAX) {
+                    yield Optional.of("拼接文本超长（最多 " + SET_VALUE_MAX + " 字符）");
+                }
+                yield Optional.empty();
+            }
+            case Action.CloneElement a -> {
+                if (blank(a.elementId())) {
+                    yield Optional.of("克隆元素的目标不能为空");
+                }
+                if (!(Math.abs(a.offsetX()) <= ELEMENT_OFFSET_MAX
+                        && Math.abs(a.offsetY()) <= ELEMENT_OFFSET_MAX)) {
+                    yield Optional.of("克隆偏移超范围（绝对值最多 " + ELEMENT_OFFSET_MAX + "）");
+                }
+                yield Optional.empty();
+            }
+            case Action.DeleteElement a -> blank(a.elementId())
+                    ? Optional.of("删除元素的目标不能为空")
+                    : Optional.empty();
         };
     }
 

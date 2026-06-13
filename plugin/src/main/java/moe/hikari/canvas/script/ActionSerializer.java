@@ -112,6 +112,21 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeStringField("condition", a.condition());
                 gen.writeNumberField("timeoutMs", a.timeoutMs());
             }
+            // 0.7.2-P2：copy / append / clone / delete
+            case Action.CopyVariable a -> {
+                gen.writeStringField("target", a.target());
+                gen.writeStringField("source", a.source());
+            }
+            case Action.AppendVariable a -> {
+                gen.writeStringField("fullName", a.fullName());
+                gen.writeStringField("text", a.text());
+            }
+            case Action.CloneElement a -> {
+                gen.writeStringField("elementId", a.elementId());
+                gen.writeNumberField("offsetX", a.offsetX());
+                gen.writeNumberField("offsetY", a.offsetY());
+            }
+            case Action.DeleteElement a -> gen.writeStringField("elementId", a.elementId());
         }
         gen.writeEndObject();
     }

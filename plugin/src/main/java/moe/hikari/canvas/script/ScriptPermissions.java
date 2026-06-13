@@ -78,6 +78,11 @@ public final class ScriptPermissions {
                 case Action.PlayParticle ignored -> facets.add(NODE_SOUND);
                 case Action.StopScript ignored -> { }
                 case Action.WaitUntil ignored -> { }
+                // 0.7.2-P2：copy / append / clone / delete 均无附加权限面（仅基础 canvas.script.edit）
+                case Action.CopyVariable ignored -> { }
+                case Action.AppendVariable ignored -> { }
+                case Action.CloneElement ignored -> { }
+                case Action.DeleteElement ignored -> { }
             }
         }
     }

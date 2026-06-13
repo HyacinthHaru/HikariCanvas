@@ -557,7 +557,15 @@ export type ScriptAction =
     // waitUntil 轮询 condition（复用 if 条件文法），满足或 timeoutMs 超时才续接（ScriptRunner pollWaitUntil）。
     | { type: 'stopScript' }
     | { type: 'playParticle'; particle: string; count: number; offsetX: number; offsetY: number; offsetZ: number }
-    | { type: 'waitUntil'; condition: string; timeoutMs: number };
+    | { type: 'waitUntil'; condition: string; timeoutMs: number }
+    // 0.7.2-P2：变量积木（复制 / 拼接）+ 元素积木（克隆 / 删除）。
+    // copyVariable = 把 source 变量当前值复制进 target（{target,source} 与后端 record 同序）；
+    // appendVariable = 把 text（可含 ${var:X}）插值后追加到 fullName 变量末尾；
+    // cloneElement = 克隆元素到同 layer（新 id + 位置偏移 offsetX/offsetY）；deleteElement = 删除元素。
+    | { type: 'copyVariable'; target: string; source: string }
+    | { type: 'appendVariable'; fullName: string; text: string }
+    | { type: 'cloneElement'; elementId: string; offsetX: number; offsetY: number }
+    | { type: 'deleteElement'; elementId: string };
 
 /**
  * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。

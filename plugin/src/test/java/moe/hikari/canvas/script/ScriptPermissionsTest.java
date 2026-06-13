@@ -137,4 +137,19 @@ class ScriptPermissionsTest {
         ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(iff));
         assertEquals(Set.of(ScriptPermissions.NODE_SOUND), ScriptPermissions.requiredFacets(r));
     }
+
+    // ---------- 0.7.2-P2：copy / append / clone / delete 均只走基础 edit ----------
+
+    @Test
+    void p2_actions_only_base_edit() {
+        for (Action a : List.of(
+                new Action.CopyVariable("user/d", "user/s"),
+                new Action.AppendVariable("user/l", "x"),
+                new Action.CloneElement("e-1", 0, 0),
+                new Action.DeleteElement("e-1"))) {
+            ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(a));
+            Set<String> f = ScriptPermissions.requiredFacets(r);
+            assertEquals(Set.of(), f, "0.7.2-P2 动作无附加权限面: " + a.wireType());
+        }
+    }
 }

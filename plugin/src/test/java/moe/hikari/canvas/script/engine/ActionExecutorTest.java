@@ -593,6 +593,90 @@ class ActionExecutorTest {
         assertEquals("error", step.result());
     }
 
+    // ---------- 0.7.2-P2：copyVariable / appendVariable（变量积木真实现） ----------
+
+    @Test
+    void copyVariable_copiesSourceToTarget() {
+        store.create("user:w-1", "src", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/src", "42", null);
+        store.create("user:w-1", "dst", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/dst", "0", null);
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.CopyVariable("user/dst", "user/src"));
+        assertEquals("ok", step.result(), () -> String.valueOf(step.detail()));
+        assertEquals("42", valueOf("user:w-1/dst"));
+    }
+
+    @Test
+    void copyVariable_usesDefaultWhenCurrentNull() {
+        store.create("user:w-1", "src", VarType.STRING, "fromDefault", "manual");
+        store.create("user:w-1", "dst", VarType.STRING, null, "manual");
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.CopyVariable("user/dst", "user/src"));
+        assertEquals("ok", step.result());
+        assertEquals("fromDefault", valueOf("user:w-1/dst"),
+                "currentValue 空 → 用 defaultValue");
+    }
+
+    @Test
+    void copyVariable_missingSource_error() {
+        store.create("user:w-1", "dst", VarType.STRING, null, "manual");
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.CopyVariable("user/dst", "user/nope"));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void copyVariable_storeMissing_error() {
+        TraceStep step = bare().execute(WALL, "actions/0",
+                new Action.CopyVariable("user/dst", "user/src"));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void appendVariable_appendsInterpolatedText() {
+        store.create("user:w-1", "log", VarType.STRING, null, "manual");
+        store.setValue("user:w-1/log", "[", null);
+        store.create("user:w-1", "x", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/x", "9", null);
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.AppendVariable("user/log", "x=${var:user/x}"));
+        assertEquals("ok", step.result());
+        assertEquals("[x=9", valueOf("user:w-1/log"));
+    }
+
+    @Test
+    void appendVariable_missingTargetCurrent_appendsFromEmpty() {
+        store.create("user:w-1", "log", VarType.STRING, null, "manual");
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.AppendVariable("user/log", "abc"));
+        assertEquals("ok", step.result());
+        assertEquals("abc", valueOf("user:w-1/log"), "currentValue 空 → 从空串拼");
+    }
+
+    @Test
+    void appendVariable_storeMissing_error() {
+        TraceStep step = bare().execute(WALL, "actions/0",
+                new Action.AppendVariable("user/log", "x"));
+        assertEquals("error", step.result());
+    }
+
+    // ---------- 0.7.2-P2：cloneElement / deleteElement（占位 error，真实现走后续 Task） ----------
+
+    @Test
+    void cloneElement_placeholderError() {
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.CloneElement("e-1", 10, 10));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void deleteElement_placeholderError() {
+        TraceStep step = executor().execute(WALL, "actions/0",
+                new Action.DeleteElement("e-1"));
+        assertEquals("error", step.result());
+    }
+
     @Test
     void actionThrow_isolatedToErrorStep_withWarning() {
         ticker.throwOnPlay = true;

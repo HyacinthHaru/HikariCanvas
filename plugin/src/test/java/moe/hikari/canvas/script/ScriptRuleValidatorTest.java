@@ -538,4 +538,54 @@ class ScriptRuleValidatorTest {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.WaitUntil("var(\"user/x\")>0", 999999)))).isPresent()); // > MAX
     }
+
+    // ---------- 0.7.2-P2：copy / append / clone / delete ----------
+
+    @Test
+    void copyVariable_rejects_blank() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.CopyVariable("", "user/s")))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.CopyVariable("user/d", "")))).isPresent());
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.CopyVariable("user/d", "user/s")))));
+    }
+
+    @Test
+    void appendVariable_rejects_blank_name() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.AppendVariable("", "x")))).isPresent());
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.AppendVariable("user/log", "x")))));
+    }
+
+    @Test
+    void appendVariable_rejects_overlong_text() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.AppendVariable("user/log", "x".repeat(4097))))).isPresent());
+    }
+
+    @Test
+    void cloneElement_rejects_blank_id() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.CloneElement("", 0, 0)))).isPresent());
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.CloneElement("e-1", 5, 5)))));
+    }
+
+    @Test
+    void cloneElement_rejects_offset_out_of_range() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.CloneElement("e-1", 5000, 0)))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.CloneElement("e-1", 0, -5000)))).isPresent());
+    }
+
+    @Test
+    void deleteElement_rejects_blank_id() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.DeleteElement("")))).isPresent());
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.DeleteElement("e-1")))));
+    }
 }

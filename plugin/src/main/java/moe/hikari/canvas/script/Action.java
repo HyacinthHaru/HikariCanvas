@@ -23,7 +23,8 @@ public sealed interface Action permits
         Action.SetElementProperties, Action.NudgeElement, Action.SendMessage,
         Action.SetRandomVariable, Action.ScaleVariable, Action.PlayTimelineAwait,
         Action.Repeat,
-        Action.StopScript, Action.PlayParticle, Action.WaitUntil {
+        Action.StopScript, Action.PlayParticle, Action.WaitUntil,
+        Action.CopyVariable, Action.AppendVariable, Action.CloneElement, Action.DeleteElement {
 
     /** wire 判别字段 {@code type} 的取值（camelCase）。 */
     String wireType();
@@ -145,5 +146,25 @@ public sealed interface Action permits
     /** 0.7.1-P5：轮询条件，满足或 {@code timeoutMs} 超时才继续。condition 复用 {@link If} 的条件文法。 */
     record WaitUntil(String condition, long timeoutMs) implements Action {
         @Override public String wireType() { return "waitUntil"; }
+    }
+
+    /** 0.7.2-P2：把 source 变量的当前值复制到 target 变量。 */
+    record CopyVariable(String target, String source) implements Action {
+        @Override public String wireType() { return "copyVariable"; }
+    }
+
+    /** 0.7.2-P2：把 text（可含 ${var:X}）追加到 fullName 变量末尾。 */
+    record AppendVariable(String fullName, String text) implements Action {
+        @Override public String wireType() { return "appendVariable"; }
+    }
+
+    /** 0.7.2-P2：克隆元素（新 id + 位置偏移 offsetX/Y）到同 layer。 */
+    record CloneElement(String elementId, int offsetX, int offsetY) implements Action {
+        @Override public String wireType() { return "cloneElement"; }
+    }
+
+    /** 0.7.2-P2：删除元素。 */
+    record DeleteElement(String elementId) implements Action {
+        @Override public String wireType() { return "deleteElement"; }
     }
 }
