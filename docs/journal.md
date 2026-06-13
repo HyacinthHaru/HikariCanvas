@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-06-13 · 0.7.2-P1 完工：2 小修 + 变量预览 +1/-1（纯前端）
+
+- **F3 变量预览扫条件**：`extractVars` 加 `collectFromCondition`（正则抓条件文本里 `var("X")` 双/单引号
+  引用）+ `if`/`waitUntil` case → 等待/如果条件里的变量进右下角预览。根因：旧 extractVars 只扫"结构字段"
+  型 fullName（setVariable 等），漏了 condition 的 `var()` 函数文法引用（它不是 `${var:X}` 占位符）。
+- **F2 停止/等待归控制类**：blockDefs `stopScript`/`waitUntil`/`wait` 的 category `action`→`control`
+  （绿，与 if/repeat 同组）；`playParticle` 留 `action`（副作用蓝）。
+- **F4 变量预览 +1/-1**：新 `VarWatchRow` 子组件（每行独立 `useLongPressIncrement` 单击±1/长按连加 +
+  乐观本地累加，按压期不被 server 回声覆盖防抖动）+ ScriptVariableWatch 接 `sendVariableSet`；仅
+  **user/userglobal 可写 + 当前值是有限数**才显 stepper（只读 system/papi/schedule + 文本变量不显）。
+
+**测试**：前端 **1131**（基线 1127 + extractVars F3 4 测试）。纯前端、后端不变、shadowJar 169M。
+
+关联：`web/src/script/model/extractVars.ts`(+test) / `blockDefs.ts` / `canvas/VarWatchRow.vue`(新) /
+`canvas/ScriptVariableWatch.vue`。
+
+---
+
 ## 2026-06-13 · 0.7.2 立项：视觉运行时打磨 + 积木扩充（设计总纲）
 
 0.7.1 完工实测后用户提 2 个小问题 + 一批"稳的"新功能。决策：**先做稳的**（2 修 + 变量±1 + 6 积木 +

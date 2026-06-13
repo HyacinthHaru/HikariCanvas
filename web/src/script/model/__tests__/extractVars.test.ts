@@ -81,7 +81,9 @@ describe('extractReferencedVariables', () => {
                 ],
             },
         ]);
-        // then 的 fullName + 文本占位符，再 else 的 fullName。注意 condition 串本身不抓（设计：只看占位符 / 字段）。
+        // then 的 fullName + 文本占位符，再 else 的 fullName。本例 condition 用无引号 var(user/hp)
+        // （历史数据）；0.7.2-F3 的 var("X") 提取要双引号，故此例 condition 不产出——真实带引号条件见
+        // 下方 F3 专项用例。
         expect(extractReferencedVariables(r)).toEqual(['user/alive', 'user/hp', 'user/deaths']);
     });
 
@@ -132,5 +134,35 @@ describe('extractReferencedVariables', () => {
             { type: 'incrementVariable', fullName: '', delta: 1 },
         ]);
         expect(extractReferencedVariables(r)).toEqual([]);
+    });
+
+    // ---------- 0.7.2-F3：条件文本里的 var("X") 进预览 ----------
+
+    it('F3：if 条件文本里的 var("X")（双引号）进集合', () => {
+        const r = rule([{ type: 'if', condition: 'var("user/hp") > 0', then: [], else: [] }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/hp']);
+    });
+
+    it('F3：waitUntil 条件文本里的 var("X") 进集合', () => {
+        const r = rule([{ type: 'waitUntil', condition: 'var("user/ready") == 1', timeoutMs: 5000 }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/ready']);
+    });
+
+    it('F3：条件含多个 var() + 与分支内变量去重', () => {
+        const r = rule([
+            {
+                type: 'if',
+                condition: 'var("user/a") > var("user/b")',
+                then: [{ type: 'incrementVariable', fullName: 'user/a', delta: 1 }],
+                else: [],
+            },
+        ]);
+        // 条件抓 a、b；then 的 a 去重（a 先出现）。
+        expect(extractReferencedVariables(r)).toEqual(['user/a', 'user/b']);
+    });
+
+    it('F3：单引号 var(\'X\') 也兼容', () => {
+        const r = rule([{ type: 'waitUntil', condition: "var('user/x') > 0", timeoutMs: 1000 }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/x']);
     });
 });

@@ -47,6 +47,19 @@ function collectFromText(text: unknown, out: Set<string>): void {
     }
 }
 
+/**
+ * 0.7.2-F3：从条件文本（ConditionEvaluator 文法）抓出所有 {@code var("rawName")} 引用的 rawName。
+ * 条件里的变量是函数调用形态（{@code var("user/x") > 0}），不是 {@code ${var:X}} 占位符，故单独一条正则。
+ */
+function collectFromCondition(condition: unknown, out: Set<string>): void {
+    if (typeof condition !== 'string' || condition.indexOf('var(') < 0) return;
+    const re = /var\(\s*["']([^"']+)["']\s*\)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(condition)) !== null) {
+        collectName(m[1], out);
+    }
+}
+
 /** 把一个值当作"变量名字段"加入（trim 后非空才加）。 */
 function collectName(name: unknown, out: Set<string>): void {
     if (typeof name === 'string') {
@@ -74,6 +87,12 @@ function collectFromAction(action: ScriptAction, out: Set<string>): void {
             break;
         case 'sendMessage':
             collectFromText(action.text, out);
+            break;
+        case 'if':
+        case 'waitUntil':
+            // 0.7.2-F3：条件文本（var("X") 文法）里的变量引用也进预览。if 的 then/else 子序列由
+            // walk 下钻；这里只扫 condition 字段本身。
+            collectFromCondition((action as { condition?: string }).condition, out);
             break;
         case 'setElementProperties':
             // 友好积木「改文字」(kind=setText) 的目标文本可含 ${var:X}（其余 kind 的 patch 是数值 / 颜色，

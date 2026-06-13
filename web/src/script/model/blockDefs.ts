@@ -323,8 +323,8 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
     },
     wait: {
         kind: 'wait',
-        category: 'action',
-        colorVar: CATEGORY_COLOR_VAR.action,
+        category: 'control',
+        colorVar: CATEGORY_COLOR_VAR.control,
         labelKey: 'script.blocks.wait',
         fields: [
             { name: 'ms', type: 'number', labelKey: 'script.fields.ms', min: 50, max: 5000, step: 50 },
@@ -425,12 +425,13 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         ],
     },
     // ---- 0.7.1-P5：3 个剩余动作（停止脚本 / 播放粒子 / 等待直到）----
-    // 三者 category='action'（动作蓝）——palette 由 ACTION_DEFS 按 category 自动分组，故无需另登记
-    // 「可拖出清单」即出现在「动作」分组。waitUntil 的条件字段用 type:'condition' 复用 ConditionBuilder。
+    // palette 由 ACTION_DEFS 按 category 自动分组。0.7.2-F2：停止脚本 / 等待直到是控制流 → category
+    // 'control'（绿，与 if/repeat/wait 同组）；播放粒子是副作用 → 留 'action'（蓝）。
+    // waitUntil 的条件字段用 type:'condition' 复用 ConditionBuilder。
     stopScript: {
         kind: 'stopScript',
-        category: 'action',
-        colorVar: CATEGORY_COLOR_VAR.action,
+        category: 'control',
+        colorVar: CATEGORY_COLOR_VAR.control,
         labelKey: 'script.blocks.stopScript',
         fields: [],
     },
@@ -449,8 +450,8 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
     },
     waitUntil: {
         kind: 'waitUntil',
-        category: 'action',
-        colorVar: CATEGORY_COLOR_VAR.action,
+        category: 'control',
+        colorVar: CATEGORY_COLOR_VAR.control,
         labelKey: 'script.blocks.waitUntil',
         fields: [
             { name: 'condition', type: 'condition', labelKey: 'script.fields.condition' },

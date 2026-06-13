@@ -20,15 +20,19 @@ import { useScriptEditStore } from '@/stores/scriptEdit';
 import { useProjectStore } from '@/stores/project';
 import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
+import { useNetworkStore } from '@/stores/network';
 import { useI18n } from '@/i18n';
 import { extractReferencedVariables } from '../model/extractVars';
 import { resolveFullName, isStale, UNRESOLVED } from '@/variable/interpolator';
+import { getWsClient } from '@/network/wsClient';
 import { Eye, ChevronDown, ChevronUp } from 'lucide-vue-next';
+import VarWatchRow from './VarWatchRow.vue';
 
 const edit = useScriptEditStore();
 const project = useProjectStore();
 const variables = useVariableStore();
 const aliases = useVariableAliasStore();
+const net = useNetworkStore();
 const { t } = useI18n();
 
 /** localStorage 键：折叠态跨会话记忆（UI-only，不入 store）。 */
@@ -68,6 +72,10 @@ interface WatchRow {
     display: string;
     value: string;
     missing: boolean;
+    /** 0.7.2-F4：可写（user/userglobal）+ 当前值是有限数 → 行内 ±1 快捷调。 */
+    editable: boolean;
+    /** 当前数值（editable 时有效，传给 VarWatchRow 做乐观累加基准）。 */
+    numValue: number;
 }
 
 const rows = computed<WatchRow[]>(() => {
@@ -94,12 +102,25 @@ const rows = computed<WatchRow[]>(() => {
             value = UNRESOLVED;
             missing = true;
         }
-        return { raw, fullName, display, value, missing };
+        // 0.7.2-F4：可写(user:/userglobal/) + 当前值是有限数 → 行内 ±1。其余（system/papi/schedule
+        // 只读、文本变量）不显 stepper。
+        const writable = fullName.startsWith('user:') || fullName.startsWith('userglobal/');
+        const numParsed = Number(value);
+        const numeric = !missing && value !== UNRESOLVED && value.length > 0 && Number.isFinite(numParsed);
+        const editable = writable && numeric;
+        return { raw, fullName, display, value, missing, editable, numValue: editable ? numParsed : 0 };
     });
 });
 
 /** 是否有变量行（控制空状态 vs 列表）。 */
 const hasVars = computed(() => rows.value.length > 0);
+
+/** 0.7.2-F4：行内 ±1 写回变量（发 variable.set）。失败设 lastError；乐观本地值由行组件松手后同步纠正。 */
+function onSet(fullName: string, value: string): void {
+    getWsClient().sendVariableSet(fullName, value).catch((e) => {
+        net.lastError = `改变量失败：${e instanceof Error ? e.message : String(e)}`;
+    });
+}
 </script>
 
 <template>
@@ -120,17 +141,17 @@ const hasVars = computed(() => rows.value.length > 0);
       <div v-else-if="!hasVars" class="hc-var-watch-empty">{{ t.script.varWatch.noVars }}</div>
       <!-- 变量行 -->
       <ul v-else class="hc-var-watch-list">
-        <li
+        <VarWatchRow
           v-for="row in rows"
           :key="row.fullName"
-          class="hc-var-watch-row"
-          :class="row.missing ? 'hc-var-watch-row-missing' : ''"
-          :title="row.fullName"
-        >
-          <span class="hc-var-watch-name">{{ row.display }}</span>
-          <span class="hc-var-watch-eq">=</span>
-          <span class="hc-var-watch-val">{{ row.value }}</span>
-        </li>
+          :display="row.display"
+          :value="row.value"
+          :full-name="row.fullName"
+          :missing="row.missing"
+          :editable="row.editable"
+          :num-value="row.numValue"
+          @set="(v: string) => onSet(row.fullName, v)"
+        />
       </ul>
     </div>
   </div>
