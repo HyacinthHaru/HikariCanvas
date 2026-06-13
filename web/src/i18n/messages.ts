@@ -844,6 +844,10 @@ export const messages = {
                 playTimelineAwait: '播放并等待',
                 // 0.7.1-P2：有界循环。
                 repeat: '重复',
+                // 0.7.1-P5：3 个剩余动作。
+                stopScript: '停止脚本',
+                playParticle: '播放粒子',
+                waitUntil: '等待条件',
             },
             // 0.7.1：友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
             friendly: {
@@ -892,6 +896,13 @@ export const messages = {
                 repeatCount: '重复次数',
                 body: '循环体',
                 times: '次',
+                // 0.7.1-P5：粒子 / 等待直到字段。
+                particle: '粒子种类',
+                particleCount: '粒子数量',
+                offsetX: '横向偏移',
+                offsetY: '纵向偏移',
+                offsetZ: '竖向偏移',
+                timeoutMs: '超时（毫秒）',
             },
             // select / 切换 类字段的选项友好文案。
             fieldOptions: {
@@ -900,6 +911,21 @@ export const messages = {
                 opSeek: '跳到',
                 scopeNear: '附近玩家',
                 scopeAll: '全服玩家',
+                // 0.7.1-P5：14 个内置粒子。
+                particleFlame: '火焰',
+                particleSmoke: '烟雾',
+                particleHeart: '爱心',
+                particleHappy: '开心村民',
+                particleCrit: '暴击',
+                particleEnchant: '附魔',
+                particlePortal: '传送门',
+                particleFirework: '烟花',
+                particleNote: '音符',
+                particleCloud: '云',
+                particleLava: '熔岩',
+                particleDripWater: '水滴',
+                particleEndRod: '末地烛',
+                particleTotem: '图腾',
                 propX: '横坐标 X',
                 propY: '纵坐标 Y',
                 propW: '宽度',
@@ -2004,6 +2030,10 @@ export const messages = {
                 playTimelineAwait: 'Play and wait',
                 // 0.7.1-P2: bounded loop.
                 repeat: 'Repeat',
+                // 0.7.1-P5: three remaining actions.
+                stopScript: 'Stop script',
+                playParticle: 'Play particle',
+                waitUntil: 'Wait until',
             },
             // 0.7.1: friendly element block titles.
             friendly: {
@@ -2051,6 +2081,13 @@ export const messages = {
                 repeatCount: 'Repeat count',
                 body: 'Loop body',
                 times: 'times',
+                // 0.7.1-P5: particle / wait-until fields.
+                particle: 'Particle',
+                particleCount: 'Count',
+                offsetX: 'Offset X',
+                offsetY: 'Offset Y',
+                offsetZ: 'Offset Z',
+                timeoutMs: 'Timeout (ms)',
             },
             fieldOptions: {
                 opPlay: 'Play',
@@ -2058,6 +2095,21 @@ export const messages = {
                 opSeek: 'Seek',
                 scopeNear: 'Nearby players',
                 scopeAll: 'All players',
+                // 0.7.1-P5: 14 built-in particles.
+                particleFlame: 'Flame',
+                particleSmoke: 'Smoke',
+                particleHeart: 'Heart',
+                particleHappy: 'Happy villager',
+                particleCrit: 'Crit',
+                particleEnchant: 'Enchant',
+                particlePortal: 'Portal',
+                particleFirework: 'Firework',
+                particleNote: 'Note',
+                particleCloud: 'Cloud',
+                particleLava: 'Lava',
+                particleDripWater: 'Dripping water',
+                particleEndRod: 'End rod',
+                particleTotem: 'Totem',
                 propX: 'X',
                 propY: 'Y',
                 propW: 'Width',

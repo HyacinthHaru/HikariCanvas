@@ -45,11 +45,11 @@ class ScriptRunnerTest {
     }
 
     private ScriptRunner runner() {
-        return new ScriptRunner(conditions, sink, budget, null, LOG, scheduler);
+        return new ScriptRunner(conditions, sink, budget, null, LOG, scheduler, clock::get);
     }
 
     private ScriptRunner runner(ScriptBudget b) {
-        return new ScriptRunner(conditions, sink, b, null, LOG, scheduler);
+        return new ScriptRunner(conditions, sink, b, null, LOG, scheduler, clock::get);
     }
 
     private static ScriptRule rule(String id, List<Action> actions) {
@@ -264,6 +264,75 @@ class ScriptRunnerTest {
         assertEquals(List.of("actions/0", "actions/1"), sink.blockIds,
                 "play 失败不挂起（dur 不查），链继续");
         assertEquals(0, scheduler.scheduledDelays.size());
+    }
+
+    // ---------- 0.7.1-P5：StopScript 中止 ----------
+
+    @Test
+    void stopScript_abortsRemainingActions() {
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.Log("a"), new Action.StopScript(), new Action.Log("b"))), ctx(0));
+        // a 走 sink；stopScript 由 runner 拦截清栈；b 不执行
+        assertEquals(List.of("actions/0"), sink.blockIds, "stopScript 后续动作 b 被中止");
+    }
+
+    // ---------- 0.7.1-P5：WaitUntil 轮询 ----------
+
+    @Test
+    void waitUntil_satisfiedImmediately_continues() {
+        // setUp lookup: score=10 → "var(\"user/score\") > 5" 立即 true
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.WaitUntil("var(\"user/score\") > 5", 5000),
+                new Action.Log("after"))), ctx(0));
+        scheduler.runPending(); // WaitUntil 同步评估 true → schedule(runFrames,0)；after 在续接里
+        assertTrue(sink.blockIds.contains("actions/1"), "条件立即满足，after 执行");
+    }
+
+    @Test
+    void waitUntil_pollsUntilConditionTrue() {
+        // 前 2 次评估 false（score=0），第 3 次起 true（score=10）——可变 lookup
+        java.util.concurrent.atomic.AtomicInteger evals = new java.util.concurrent.atomic.AtomicInteger();
+        ConditionEvaluator polling = new ConditionEvaluator(LOG,
+                fullName -> fullName.endsWith("/score") ? (evals.incrementAndGet() >= 3 ? "10" : "0") : null);
+        ScriptRunner r = new ScriptRunner(polling, sink, budget, null, LOG, scheduler, clock::get);
+        r.submit(WALL, rule("r1", List.of(
+                new Action.WaitUntil("var(\"user/score\") > 5", 30000),
+                new Action.Log("after"))), ctx(0));
+        // runPending drain：eval#1 false→schedule poll；poll eval#2 false→poll eval#3 true→续接 runFrames
+        scheduler.runPending();
+        assertTrue(sink.blockIds.contains("actions/1"), "轮询至条件满足后 after 执行");
+    }
+
+    @Test
+    void waitUntil_timeout_continuesAnyway() {
+        // 条件永 false（score=10, > 50）；timeoutMs=100；推进 clock 过 deadline → 超时续接
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.WaitUntil("var(\"user/score\") > 50", 100),
+                new Action.Log("after"))), ctx(0));
+        assertEquals(List.of(), sink.blockIds, "未超时前 after 不执行（WaitUntil 不走 sink）");
+        clock.addAndGet(200); // 过 deadline 1_000_100
+        scheduler.runPending(); // poll → false + 超时 → schedule runFrames → after
+        assertTrue(sink.blockIds.contains("actions/1"), "超时后 after 照常执行");
+    }
+
+    @Test
+    void waitUntil_pollingDoesNotExhaustBudget() {
+        // 前 4 次 false 后 true；max-actions=3。WaitUntil(1)+after(2) ≤ 3。
+        // 若轮询每次计费，5+ 次会超 3 → blocked；断言 after 执行证明轮询不计 Budget。
+        java.util.concurrent.atomic.AtomicInteger evals = new java.util.concurrent.atomic.AtomicInteger();
+        ConditionEvaluator polling = new ConditionEvaluator(LOG,
+                fullName -> fullName.endsWith("/score") ? (evals.incrementAndGet() >= 5 ? "10" : "0") : null);
+        ScriptBudget small = new ScriptBudget(
+                new HikariCanvasConfig.ScriptsConfig(16, 3, 10, 8), clock::get);
+        ScriptRunner r = new ScriptRunner(polling, sink, small, null, LOG, scheduler, clock::get);
+        r.submit(WALL, rule("r1", List.of(
+                new Action.WaitUntil("var(\"user/score\") > 5", 30000),
+                new Action.Log("after"))), ctx(0));
+        scheduler.runPending();
+        assertTrue(sink.blockIds.contains("actions/1"), "轮询不计 Budget，after 未被掐断执行");
     }
 
     // ---------- 0.7.1：Repeat 有界循环展开 ----------

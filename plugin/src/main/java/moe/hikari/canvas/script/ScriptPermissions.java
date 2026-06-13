@@ -74,6 +74,10 @@ public final class ScriptPermissions {
                 case Action.SetRandomVariable ignored -> { }
                 case Action.ScaleVariable ignored -> { }
                 case Action.PlayTimelineAwait ignored -> { }
+                // 0.7.1-P5：粒子复用声音面（喷粒子是音视效果同档）；停止 / 等待直到仅基础 edit
+                case Action.PlayParticle ignored -> facets.add(NODE_SOUND);
+                case Action.StopScript ignored -> { }
+                case Action.WaitUntil ignored -> { }
             }
         }
     }

@@ -71,6 +71,18 @@ public final class ScriptRuleValidator {
     /** 0.7.1 Repeat.count 范围（次）。 */
     public static final int REPEAT_MIN = 1;
     public static final int REPEAT_MAX = 100;
+    /** 0.7.1-P5 PlayParticle.count 范围（个）。 */
+    public static final int PARTICLE_COUNT_MIN = 1;
+    public static final int PARTICLE_COUNT_MAX = 1000;
+    /** 0.7.1-P5 WaitUntil.timeoutMs 范围（毫秒）。 */
+    public static final long WAIT_UNTIL_TIMEOUT_MIN = 50L;
+    public static final long WAIT_UNTIL_TIMEOUT_MAX = 60_000L;
+    /** 0.7.1-P5 PlayParticle.particle 白名单（14 个，双端对齐）。 */
+    public static final Set<String> PARTICLE_WHITELIST = Set.of(
+            "minecraft:flame", "minecraft:smoke", "minecraft:heart", "minecraft:happy_villager",
+            "minecraft:crit", "minecraft:enchant", "minecraft:portal", "minecraft:firework",
+            "minecraft:note", "minecraft:cloud", "minecraft:lava", "minecraft:dripping_water",
+            "minecraft:end_rod", "minecraft:totem_of_undying");
 
     private ScriptRuleValidator() {
     }
@@ -356,6 +368,32 @@ public final class ScriptRuleValidator {
                 }
                 // body 递归（ifDepth 不变——repeat 不增 if 嵌套深度）
                 yield validateActions(a.body(), ifDepth);
+            }
+            // 0.7.1-P5：停止 / 粒子 / 等待直到
+            case Action.StopScript ignored -> Optional.empty();
+            case Action.PlayParticle a -> {
+                if (a.particle() == null || !PARTICLE_WHITELIST.contains(a.particle())) {
+                    yield Optional.of("粒子种类不在允许范围：" + a.particle());
+                }
+                if (!(a.count() >= PARTICLE_COUNT_MIN && a.count() <= PARTICLE_COUNT_MAX)) {
+                    yield Optional.of("粒子数量需在 " + PARTICLE_COUNT_MIN + ".." + PARTICLE_COUNT_MAX + " 之间");
+                }
+                if (!(Double.isFinite(a.offsetX()) && Double.isFinite(a.offsetY())
+                        && Double.isFinite(a.offsetZ()))) {
+                    yield Optional.of("粒子偏移必须是有限数值");
+                }
+                yield Optional.empty();
+            }
+            case Action.WaitUntil a -> {
+                if (blank(a.condition()) || a.condition().length() > CONDITION_MAX) {
+                    yield Optional.of("等待条件不能为空且最多 " + CONDITION_MAX + " 字符");
+                }
+                if (!(a.timeoutMs() >= WAIT_UNTIL_TIMEOUT_MIN
+                        && a.timeoutMs() <= WAIT_UNTIL_TIMEOUT_MAX)) {
+                    yield Optional.of("超时时长需在 " + WAIT_UNTIL_TIMEOUT_MIN + ".."
+                            + WAIT_UNTIL_TIMEOUT_MAX + " 毫秒之间");
+                }
+                yield Optional.empty();
             }
         };
     }

@@ -482,4 +482,60 @@ class ScriptRuleValidatorTest {
         assertTrue(err.isPresent());
         assertTrue(err.get().contains("50"), err.get());
     }
+
+    // ---------- 0.7.1-P5：停止 / 粒子 / 等待直到 ----------
+
+    @Test
+    void stop_script_always_valid() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.StopScript()))));
+    }
+
+    @Test
+    void play_particle_accepts_valid() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.PlayParticle("minecraft:flame", 10, 0.5, 0.5, 0.5)))));
+    }
+
+    @Test
+    void play_particle_rejects_unknown_particle() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.PlayParticle("minecraft:nonexist", 10, 0, 0, 0)))).isPresent());
+    }
+
+    @Test
+    void play_particle_rejects_count_out_of_range() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.PlayParticle("minecraft:flame", 0, 0, 0, 0)))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.PlayParticle("minecraft:flame", 2000, 0, 0, 0)))).isPresent());
+    }
+
+    @Test
+    void play_particle_rejects_nonfinite_offset() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.PlayParticle("minecraft:flame", 10, Double.NaN, 0, 0)))).isPresent());
+    }
+
+    @Test
+    void wait_until_accepts_valid() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.WaitUntil("var(\"user/x\")>0", 5000)))));
+    }
+
+    @Test
+    void wait_until_rejects_blank_condition() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.WaitUntil("", 5000)))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.WaitUntil("  ", 5000)))).isPresent());
+    }
+
+    @Test
+    void wait_until_rejects_bad_timeout() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.WaitUntil("var(\"user/x\")>0", 10)))).isPresent()); // < MIN
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.WaitUntil("var(\"user/x\")>0", 999999)))).isPresent()); // > MAX
+    }
 }

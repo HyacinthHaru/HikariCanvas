@@ -371,10 +371,16 @@ const bodyActions = computed<ScriptAction[]>(() =>
     props.action.type === 'repeat' ? props.action.body : [],
 );
 
-/** condition 字段的原始串（喂给 ConditionBuilder）。 */
-const conditionText = computed(() =>
-    props.action.type === 'if' ? props.action.condition : '',
-);
+/**
+ * condition 字段的原始串（喂给 ConditionBuilder）。0.7.1-P5：从 if-only 泛化为「任何带
+ * condition 字段的动作」——if 与 waitUntil 都有 type:'condition' 字段（{@link conditionField}
+ * 已按 type 自动识别）；读值时按 action 上的 {@code condition} 属性取，二者同名故统一读。
+ * 写回走 {@link onConditionUpdate} 的 {@code updateActionField}（本就泛化，不限 if）。
+ */
+const conditionText = computed(() => {
+    const a = props.action as unknown as { condition?: string };
+    return typeof a.condition === 'string' ? a.condition : '';
+});
 
 /** if 的 condition 改值回写（G：ConditionBuilder emit 出 build 后的 / 高级模式原串）。 */
 function onConditionUpdate(value: string): void {
@@ -543,6 +549,17 @@ const needSelectTitle = computed(() =>
         :action-kind="action.type"
         :disabled="locked"
         @update="onCommandUpdate"
+      />
+    </div>
+
+    <!-- 0.7.1-P5：非 C 形动作（waitUntil）的条件行——复用 ConditionBuilder（同 if 的条件控件）。
+         if 的条件行在下方 C 形块里渲染，故这里仅当有 conditionField 且非 if 时渲染，避免重复。 -->
+    <div v-if="conditionField && !isIf" class="hc-block-condition">
+      <span class="hc-param-label">{{ fieldLabel(conditionField) }}</span>
+      <ConditionBuilder
+        :condition="conditionText"
+        :wall-id="project.wallId"
+        @update="onConditionUpdate"
       />
     </div>
 

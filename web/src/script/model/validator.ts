@@ -85,6 +85,25 @@ export const SCALE_OPS: ReadonlySet<string> = new Set(['multiply', 'divide']);
 export const REPEAT_MIN = 1;
 export const REPEAT_MAX = 100;
 
+// ---------- 0.7.1-P5 常量（停止 / 粒子 / 等待直到，逐一对照 ScriptRuleValidator.java）----------
+
+/** PlayParticle.count 范围。后端 {@code PARTICLE_COUNT_MIN} / {@code PARTICLE_COUNT_MAX}。 */
+export const PARTICLE_COUNT_MIN = 1;
+export const PARTICLE_COUNT_MAX = 1000;
+/** WaitUntil.timeoutMs 范围（毫秒）。后端 {@code WAIT_UNTIL_TIMEOUT_MIN} / {@code WAIT_UNTIL_TIMEOUT_MAX}。 */
+export const WAITUNTIL_TIMEOUT_MIN = 50;
+export const WAITUNTIL_TIMEOUT_MAX = 60000;
+/**
+ * PlayParticle.particle 白名单（14 个，逐字镜像后端 {@code PARTICLE_WHITELIST}）。
+ * wire 字段名是 {@code particle}（与后端 record 字段同名）。
+ */
+export const PARTICLES: ReadonlySet<string> = new Set([
+    'minecraft:flame', 'minecraft:smoke', 'minecraft:heart', 'minecraft:happy_villager',
+    'minecraft:crit', 'minecraft:enchant', 'minecraft:portal', 'minecraft:firework',
+    'minecraft:note', 'minecraft:cloud', 'minecraft:lava', 'minecraft:dripping_water',
+    'minecraft:end_rod', 'minecraft:totem_of_undying',
+]);
+
 // ---------- 返回类型 ----------
 
 /**
@@ -430,6 +449,31 @@ function validateAction(
             // body 递归（ifDepth 不变——repeat 不增 if 深度）；blockId 路径 `${path}/body`
             // 与后端 ScriptRunner 展开同构（不带 round，前端只一份 body）。
             validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
+            break;
+        }
+        // ---- 0.7.1-P5：停止 / 粒子 / 等待直到（文案与后端 ScriptRuleValidator 逐字一致）----
+        case 'stopScript':
+            // 无字段——永远合法（后端 Optional.empty）。
+            break;
+        case 'playParticle': {
+            if (action.particle == null || !PARTICLES.has(action.particle)) {
+                errors.push({ blockId: path, message: `粒子种类不在允许范围: ${action.particle}` });
+            }
+            if (typeof action.count !== 'number' || action.count < PARTICLE_COUNT_MIN || action.count > PARTICLE_COUNT_MAX) {
+                errors.push({ blockId: path, message: `粒子数量需在 ${PARTICLE_COUNT_MIN}..${PARTICLE_COUNT_MAX} 之间` });
+            }
+            if (!Number.isFinite(action.offsetX) || !Number.isFinite(action.offsetY) || !Number.isFinite(action.offsetZ)) {
+                errors.push({ blockId: path, message: '粒子偏移必须是有限数值' });
+            }
+            break;
+        }
+        case 'waitUntil': {
+            if (isBlank(action.condition) || action.condition.length > CONDITION_MAX) {
+                errors.push({ blockId: path, message: `等待条件不能为空且最多 ${CONDITION_MAX} 字符` });
+            }
+            if (typeof action.timeoutMs !== 'number' || action.timeoutMs < WAITUNTIL_TIMEOUT_MIN || action.timeoutMs > WAITUNTIL_TIMEOUT_MAX) {
+                errors.push({ blockId: path, message: `超时时长需在 ${WAITUNTIL_TIMEOUT_MIN}..${WAITUNTIL_TIMEOUT_MAX} 毫秒之间` });
+            }
             break;
         }
     }

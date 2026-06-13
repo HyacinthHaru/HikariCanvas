@@ -108,4 +108,33 @@ class ScriptPermissionsTest {
                 ScriptPermissions.NODE_SOUND,
                 ScriptPermissions.NODE_COMMAND), ScriptPermissions.requiredFacets(r));
     }
+
+    // ---------- 0.7.1-P5：停止 / 粒子 / 等待直到 ----------
+
+    @Test
+    void playParticle_requires_sound_facet() {
+        ScriptRule r = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.PlayParticle("minecraft:flame", 10, 0, 0, 0)));
+        assertEquals(Set.of(ScriptPermissions.NODE_SOUND), ScriptPermissions.requiredFacets(r));
+    }
+
+    @Test
+    void stopScript_and_waitUntil_only_base_edit() {
+        ScriptRule r1 = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.StopScript()));
+        ScriptRule r2 = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.WaitUntil("x>0", 5000)));
+        assertEquals(Set.of(), ScriptPermissions.requiredFacets(r1));
+        assertEquals(Set.of(), ScriptPermissions.requiredFacets(r2));
+    }
+
+    @Test
+    void playParticle_nested_in_if() {
+        // if 分支内的 playParticle 也需 sound 面（递归扫描）
+        Action iff = new Action.If("1 > 0",
+                List.of(new Action.PlayParticle("minecraft:heart", 5, 0, 0, 0)),
+                List.of());
+        ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(iff));
+        assertEquals(Set.of(ScriptPermissions.NODE_SOUND), ScriptPermissions.requiredFacets(r));
+    }
 }

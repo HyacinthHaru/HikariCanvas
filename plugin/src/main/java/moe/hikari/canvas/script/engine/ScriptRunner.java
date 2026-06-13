@@ -106,6 +106,11 @@ public final class ScriptRunner {
     private final Logger log;
     private final TaskScheduler scheduler;
     private volatile boolean shutdown;
+    /** 0.7.1-P5：时间源（WaitUntil 超时判定）。生产 {@code System::currentTimeMillis}；测试注入可控时钟。 */
+    private final java.util.function.LongSupplier clock;
+
+    /** 0.7.1-P5：WaitUntil 轮询间隔（ms）。 */
+    private static final long WAIT_UNTIL_TICK_MS = 100L;
 
     /** 生产装配：自建单线程 daemon SES（线程名 {@code hikari-script-runner}）。 */
     public ScriptRunner(ConditionEvaluator conditions, ActionSink sink, ScriptBudget budget,
@@ -113,15 +118,23 @@ public final class ScriptRunner {
         this(conditions, sink, budget, audit, log, new SesScheduler());
     }
 
-    /** 测试装配：注入调度替身。 */
+    /** 测试装配：注入调度替身（时钟用 System 默认）。 */
     ScriptRunner(ConditionEvaluator conditions, ActionSink sink, ScriptBudget budget,
                  @Nullable AuditLog audit, Logger log, TaskScheduler scheduler) {
+        this(conditions, sink, budget, audit, log, scheduler, System::currentTimeMillis);
+    }
+
+    /** 测试装配：注入调度替身 + 时钟（0.7.1-P5 WaitUntil 超时测试）。 */
+    ScriptRunner(ConditionEvaluator conditions, ActionSink sink, ScriptBudget budget,
+                 @Nullable AuditLog audit, Logger log, TaskScheduler scheduler,
+                 java.util.function.LongSupplier clock) {
         this.conditions = conditions;
         this.sink = sink;
         this.budget = budget;
         this.audit = audit;
         this.log = log;
         this.scheduler = scheduler;
+        this.clock = clock;
     }
 
     /**
@@ -273,6 +286,12 @@ public final class ScriptRunner {
                         }
                         continue outer;
                     }
+                    if (a instanceof Action.StopScript) {
+                        // 0.7.1-P5：中止当前 run——清空帧栈，外层 while 见栈空退出 → finish(st,"ok")。
+                        st.trace.add(TraceStep.ok(blockId, "action", "stopScript"));
+                        stack.clear();
+                        continue outer;
+                    }
                     if (a instanceof Action.Wait wt) {
                         st.trace.add(TraceStep.ok(blockId, "action", "wait " + wt.ms() + "ms"));
                         // 剩余动作（含外层 if 后续——已在栈里）打包成 continuation。
@@ -319,6 +338,17 @@ public final class ScriptRunner {
                         i++; // 不挂起：继续下一动作
                         continue;
                     }
+                    if (a instanceof Action.WaitUntil wu) {
+                        // 0.7.1-P5：轮询条件，满足/超时才续接。不阻塞 runner 线程——首次计 1 个 action
+                        // （上方 actionCount++ 已计）+ 压栈后续（i+1）+ 启动独立 pollWaitUntil 递归。
+                        // 轮询走独立调度、不重入 action 循环 → 不重复计 actionCount、不被 Budget 误拦。
+                        st.trace.add(TraceStep.ok(blockId, "action", "waitUntil 开始"));
+                        long deadline = clock.getAsLong() + wu.timeoutMs();
+                        stack.push(new Frame(acts, i + 1, f.prefix()));
+                        Deque<Frame> cont = new ArrayDeque<>(stack);
+                        pollWaitUntil(st, wu, deadline, cont, blockId);
+                        return;
+                    }
                     // 普通动作 → ActionSink（实现侧三层隔离；此处兜底防御）
                     TraceStep step;
                     try {
@@ -347,6 +377,47 @@ public final class ScriptRunner {
             CHAIN_DEPTH.remove();
             RULE_KEY.remove();
             TRIGGER_DETAIL.remove();
+        }
+    }
+
+    /**
+     * 0.7.1-P5：WaitUntil 轮询——每 tick 评估 condition，满足 / 超时 → 续接后续动作（cont），否则
+     * tick 后再评估。走<b>独立调度</b>，不重入 runFrames 的 action 循环，故轮询不重复计 actionCount、
+     * 不被 Budget 误拦。shutdown / 调度拒绝 → 安静放弃（同 wait 续接容错）。
+     */
+    private void pollWaitUntil(RunState st, Action.WaitUntil wu, long deadline,
+                               Deque<Frame> cont, String blockId) {
+        if (shutdown) return;
+        try {
+            boolean satisfied;
+            try {
+                satisfied = conditions.eval(wu.condition(), st.wallId);
+            } catch (RuntimeException e) {
+                satisfied = false; // 评估异常按未满足，靠超时兜底（坏条件不卡死链）
+            }
+            boolean timedOut = clock.getAsLong() >= deadline;
+            if (satisfied || timedOut) {
+                st.trace.add(TraceStep.ok(blockId, "action",
+                        satisfied ? "waitUntil 满足" : "waitUntil 超时"));
+                try {
+                    scheduler.schedule(() -> runFrames(st, cont), 0L); // 续接后续动作
+                } catch (RejectedExecutionException ignored) {
+                    // shutdown 竞态：续接丢弃
+                }
+                return;
+            }
+            try {
+                scheduler.schedule(() -> pollWaitUntil(st, wu, deadline, cont, blockId), WAIT_UNTIL_TICK_MS);
+            } catch (RejectedExecutionException ignored) {
+                // shutdown 竞态：轮询停止
+            }
+        } catch (Throwable t) {
+            // poll 走独立调度（不在 runFrames 的 try 内）——兜底防 Throwable 孤儿化 run：记 error +
+            // callback 恰一次（照 runFrames catch 范式），与 WaitUntil 的"恰一次"契约对齐。
+            log.log(Level.WARNING, "[脚本] waitUntil 轮询失败: rule=" + ruleKey(st.wallId, st.rule)
+                    + " block=" + blockId + " err=" + t.getMessage(), t);
+            st.trace.add(TraceStep.error(blockId, "waitUntil 轮询失败: " + t.getMessage()));
+            fireTraceOnce(st);
         }
     }
 

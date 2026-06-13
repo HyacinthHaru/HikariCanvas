@@ -143,10 +143,15 @@ public final class ActionExecutor implements ActionSink {
                 // playTimelineAwait：Runner 调本 sink 执行 play（副作用），再据 durationMs 决定挂起。
                 // 即本方法做 play、Runner 做"等播完"——故这里真正执行（非防御 error）。
                 case Action.PlayTimelineAwait a -> doPlayTimelineAwait(wallId, blockId, a);
-                // wait / if / repeat 由 Runner 处理；进到这里是 Runner 实现 bug → 防御 error
+                // 0.7.1-P5：粒子真正执行（主线程 hop + 墙坐标，同 playSound 范式）
+                case Action.PlayParticle a -> doPlayParticle(wallId, blockId, a);
+                // wait / if / repeat / stopScript / waitUntil 由 Runner 处理；进到这里是 Runner
+                // 实现 bug → 防御 error（stopScript/waitUntil 真实现在 Runner，本批次外）
                 case Action.Wait a -> TraceStep.error(blockId, "wait 应由 ScriptRunner 处理");
                 case Action.If a -> TraceStep.error(blockId, "if 应由 ScriptRunner 处理");
                 case Action.Repeat a -> TraceStep.error(blockId, "repeat 应由 ScriptRunner 处理");
+                case Action.StopScript a -> TraceStep.error(blockId, "stopScript 应由 ScriptRunner 处理");
+                case Action.WaitUntil a -> TraceStep.error(blockId, "waitUntil 应由 ScriptRunner 处理");
             };
         } catch (RuntimeException e) {
             // 三层隔离兜底：单动作失败不断链
@@ -314,6 +319,57 @@ public final class ActionExecutor implements ActionSink {
         }
         return TraceStep.ok(blockId, "action",
                 "sound " + a.soundId() + " scope=" + a.scope());
+    }
+
+    // ---------- 0.7.1-P5：粒子（主线程 hop + 墙坐标，照 doPlaySound 范式） ----------
+
+    private TraceStep doPlayParticle(String wallId, String blockId, Action.PlayParticle a) {
+        if (wallRepo == null) {
+            return TraceStep.error(blockId, "playParticle 不可用（WallRepo 未装配）");
+        }
+        WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
+        if (wall == null || wall.key() == null) {
+            return TraceStep.error(blockId, "wall 不存在: " + wallId);
+        }
+        // 解析 particle → Particle（Registry 只读表，任意线程读安全；同 playSound 的 Registry.SOUNDS 范式）
+        org.bukkit.Particle particle;
+        try {
+            NamespacedKey key = NamespacedKey.fromString(
+                    a.particle().toLowerCase(java.util.Locale.ROOT));
+            particle = key == null ? null : org.bukkit.Registry.PARTICLE_TYPE.get(key);
+        } catch (RuntimeException | NoClassDefFoundError | ExceptionInInitializerError e) {
+            // 无 Bukkit server 环境（纯单测路径）Registry 静态初始化会失败——归为解析失败
+            return TraceStep.error(blockId, "粒子解析失败: " + a.particle()
+                    + " (" + e.getClass().getSimpleName() + ")");
+        }
+        if (particle == null) {
+            return TraceStep.error(blockId, "粒子不存在: " + a.particle());
+        }
+        WallRepo.Wall w = wall;
+        org.bukkit.Particle p = particle;
+        Runnable work = () -> {
+            try {
+                World world = Bukkit.getWorld(w.key().world());
+                if (world == null) {
+                    log.warning("[脚本] playParticle 跳过：世界未加载 " + w.key().world());
+                    return;
+                }
+                Location origin = new Location(world,
+                        w.key().originX() + a.offsetX(),
+                        w.key().originY() + a.offsetY(),
+                        w.key().originZ() + a.offsetZ());
+                world.spawnParticle(p, origin, a.count());
+            } catch (Throwable t) {
+                // 主线程任务内异常只 log（trace step 已发出，无法回填——同 playSound）
+                log.log(Level.WARNING, "[脚本] playParticle 执行失败: " + t.getMessage(), t);
+            }
+        };
+        if (plugin == null) {
+            work.run(); // 测试路径直跑
+        } else {
+            Bukkit.getScheduler().runTask(plugin, work); // 主线程 hop（线程纪律 §3.2）
+        }
+        return TraceStep.ok(blockId, "action", "particle " + a.particle() + " x" + a.count());
     }
 
     // ---------- 命令（0.7.0-P3 A1：命令模板系统真实化；docs/scripting.md §5.2） ----------

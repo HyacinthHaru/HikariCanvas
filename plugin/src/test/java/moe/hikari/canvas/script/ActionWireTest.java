@@ -185,4 +185,42 @@ class ActionWireTest {
                 "{\"type\":\"playTimeline\",\"timelineId\":\"tl-1\",\"op\":\"seek\",\"seekMs\":1000.5}",
                 Action.class));
     }
+
+    // ---------- 0.7.1-P5：停止 / 粒子 / 等待直到 3 个新 Action 子类 round-trip ----------
+
+    @Test void stopScript_roundTrip() throws Exception {
+        Action a = new Action.StopScript();
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"stopScript\""), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    @Test void playParticle_roundTrip() throws Exception {
+        // wire 字段名是 particle（双端同名约束）
+        Action a = new Action.PlayParticle("minecraft:flame", 10, 0.5, 0.5, 0.5);
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"playParticle\""), json);
+        assertTrue(json.contains("\"particle\":\"minecraft:flame\""), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    @Test void waitUntil_roundTrip() throws Exception {
+        Action a = new Action.WaitUntil("var(\"user/x\") > 0", 5000L);
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"waitUntil\""), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    /** playParticle 缺 particle 字段 → 拒。 */
+    @Test void playParticle_missingParticleRejected() {
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue("{\"type\":\"playParticle\",\"count\":10,"
+                        + "\"offsetX\":0,\"offsetY\":0,\"offsetZ\":0}", Action.class));
+    }
+
+    /** waitUntil.timeoutMs 非整数值（K8 纪律）→ 拒。 */
+    @Test void waitUntil_fractionalTimeoutRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"waitUntil\",\"condition\":\"x>0\",\"timeoutMs\":5000.5}", Action.class));
+    }
 }

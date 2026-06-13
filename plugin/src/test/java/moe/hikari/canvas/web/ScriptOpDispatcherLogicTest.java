@@ -202,4 +202,29 @@ class ScriptOpDispatcherLogicTest {
         assertNull(notObject.rule());
         assertNotNull(notObject.error());
     }
+
+    // ---------- 0.7.1-P5：WaitUntil 条件保存期预检（K16，对抗审查补）----------
+
+    @Test
+    void checkConditionSyntax_waitUntilBadCondition_rejected() {
+        var actions = List.<Action>of(new Action.WaitUntil("(((", 5000));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
+                "WaitUntil 坏条件应被保存期预检拒（与 if 一致，不留运行期静默等满超时）");
+    }
+
+    @Test
+    void checkConditionSyntax_waitUntilGoodCondition_passes() {
+        var actions = List.<Action>of(new Action.WaitUntil("var(\"user/x\") > 0", 5000));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isEmpty(),
+                "WaitUntil 合法条件通过预检");
+    }
+
+    @Test
+    void checkConditionSyntax_recursesIntoRepeatBody() {
+        // repeat body 里的坏条件也要被预检（P5 补的递归——0.7.0-P2 既存遗漏）
+        var inner = List.<Action>of(new Action.If("(((", List.of(), List.of()));
+        var actions = List.<Action>of(new Action.Repeat(2, inner));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
+                "repeat body 内坏条件也应被预检拒");
+    }
 }

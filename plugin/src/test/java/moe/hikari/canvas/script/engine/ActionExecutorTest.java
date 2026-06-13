@@ -559,6 +559,40 @@ class ActionExecutorTest {
                 new Action.If("1 == 1", List.of(), List.of())).result());
     }
 
+    // ---------- 0.7.1-P5：playParticle / stopScript / waitUntil ----------
+
+    @Test
+    void playParticle_repoMissing_errorStep() {
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.PlayParticle("minecraft:flame", 10, 0, 0, 0));
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void playParticle_unknownWall_errorStep() {
+        // null-jdbi WallRepo：loadById 内部吞异常返 empty → wall 不存在 → error
+        WallRepo repo = new WallRepo(log, null);
+        ActionExecutor ex = new ActionExecutor(store, ticker, null, repo, null, log);
+        TraceStep step = ex.execute(WALL, "b",
+                new Action.PlayParticle("minecraft:flame", 10, 0, 0, 0));
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("wall"), step.detail());
+    }
+
+    @Test
+    void stopScript_inExecutor_returnsError_handledByRunner() {
+        // StopScript 应由 ScriptRunner 处理；Executor 收到返 error（同 Wait/If/Repeat 防御）
+        TraceStep step = executor().execute(WALL, "b", new Action.StopScript());
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void waitUntil_inExecutor_returnsError_handledByRunner() {
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.WaitUntil("x>0", 5000));
+        assertEquals("error", step.result());
+    }
+
     @Test
     void actionThrow_isolatedToErrorStep_withWarning() {
         ticker.throwOnPlay = true;

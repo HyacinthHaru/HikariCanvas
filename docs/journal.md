@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-06-13 · 0.7.1-P5 完工：剩余动作（停止 / 粒子 / 等待直到）—— 0.7.1 功能完工
+
+补齐 0.7.1 脚本动作最后 3 个。后端为主：子代理做地基 + 自盯 runner 难点 + 对抗审查。
+
+**3 动作**：
+- **停止本脚本**：ScriptRunner 内 `stack.clear()` + `continue outer` → 自然 `finish(ok)`，后续动作舍弃
+  （嵌 if/repeat 内也中止整个 run，符合"停止本脚本"语义）
+- **播放粒子**：`ActionExecutor.doPlayParticle` 照 PlaySound——主线程 hop + `wall.key()` 墙坐标 + offset，
+  `Registry.PARTICLE_TYPE` 解析，14 个内置白名单（审查用 1.21.11 字节码逐个核实全走 Void dataType，
+  无 `spawnParticle` IllegalArgumentException 风险）；权限复用 `canvas.script.sound`
+- **等待直到条件**：ScriptRunner 独立 `pollWaitUntil` 递归调度——首次计 1 action + 压栈后续 + 轮询
+  （每 100ms eval condition，满足 / 超时续接），走独立调度**不重入 action 循环 → 不重复计 Budget**；
+  加 clock seam（LongSupplier，测试注入可控时钟）
+
+**前端**：3 个 union + blockDefs（粒子 `select` 下拉 14 项 + 等待复用 `if` 的 condition 构建器）+
+validator 镜像 + i18n 中英 23 key；palette 自动从 ACTION_DEFS 派生。子代理修了 BlockNode condition 渲染
+**if-only 的遗漏**（泛化让 waitUntil 条件框可见，否则不可见且恒空）。
+
+**实施方式**：后端地基 + 前端并行派子代理（不同目录无冲突，实现+测试不 commit、我审后统一提交）；runner 难点
+（StopScript + WaitUntil 状态机）自盯。子代理抓出计划 3 处错误（particleId→particle wire 名 / Task4 测试
+API / 测试类名 ActionWireTest）。
+
+**对抗审查**（后端正确性 + 双端一致）：6 验证点全对（callback 恰一次 / 嵌套续接 / StopScript 中止语义 /
+粒子白名单兼容 / wire 字段名 / shutdown+坏条件兜底）。修 2：① 【重要】WaitUntil condition 漏 K16 保存期
+语法预检（`checkConditionSyntax` 只认 If）→ 扩展到 WaitUntil + 顺手递归 repeat.body（补 0.7.0-P2 遗漏），
+否则坏条件运行期静默等满超时、无报错，与 if 不一致；② 【次要】`pollWaitUntil` 包 Throwable 兜底防独立
+调度路径抛 Error 孤儿化 run。
+
+**测试**：后端 **1731**（基线 1703 + 序列化5/validator8/executor4/permissions3/runner5/审查3）/ 前端 **1127**
+（基线 1122 + 5）。shadowJar 169M。**0.7.1 五阶段（P1/P2/P3/P4/P5）全部完工**——待 0.7 整体收尾单独评估
+（版本号 / 用户文档 / 0.7.0 P6）。
+
+关联：`Action.java` / `ActionDeserializer` / `ActionSerializer` / `ScriptRuleValidator` / `ScriptPermissions`
+/ `engine/ActionExecutor` / `engine/ScriptRunner` / `web/ScriptOpDispatcher`(K16) / 前端
+`protocol.ts`+`blockDefs.ts`+`validator.ts`+`BlockNode.vue`+`i18n/messages.ts`。
+
+---
+
 ## 2026-06-13 · 0.7.1-P5 立项：剩余动作（停止 / 粒子 / 等待直到）设计回填 + 实施计划
 
 用户拍板：P5 三个动作**全做**（停止本脚本 / 播放粒子 / 等待直到条件）；0.7 整体收尾（版本号 / 用户文档 /

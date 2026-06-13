@@ -22,7 +22,8 @@ public sealed interface Action permits
         Action.RunCommand, Action.Log, Action.If,
         Action.SetElementProperties, Action.NudgeElement, Action.SendMessage,
         Action.SetRandomVariable, Action.ScaleVariable, Action.PlayTimelineAwait,
-        Action.Repeat {
+        Action.Repeat,
+        Action.StopScript, Action.PlayParticle, Action.WaitUntil {
 
     /** wire 判别字段 {@code type} 的取值（camelCase）。 */
     String wireType();
@@ -124,5 +125,25 @@ public sealed interface Action permits
         public Repeat {
             body = body == null ? java.util.List.of() : java.util.List.copyOf(body);
         }
+    }
+
+    /** 0.7.1-P5：中止当前脚本运行（{@code ScriptRunner} 清帧栈，后续动作不执行）。无字段。 */
+    record StopScript() implements Action {
+        @Override public String wireType() { return "stopScript"; }
+    }
+
+    /**
+     * 0.7.1-P5：在墙世界坐标播放粒子。{@code particle = minecraft:xxx}（白名单见
+     * {@link ScriptRuleValidator}）；{@code count} 个；{@code offset*} 为墙原点的偏移格。
+     * wire 字段名 {@code particle}（双端同名）。
+     */
+    record PlayParticle(String particle, int count, double offsetX, double offsetY, double offsetZ)
+            implements Action {
+        @Override public String wireType() { return "playParticle"; }
+    }
+
+    /** 0.7.1-P5：轮询条件，满足或 {@code timeoutMs} 超时才继续。condition 复用 {@link If} 的条件文法。 */
+    record WaitUntil(String condition, long timeoutMs) implements Action {
+        @Override public String wireType() { return "waitUntil"; }
     }
 }

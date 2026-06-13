@@ -126,6 +126,27 @@ const SCALE_OP_OPTIONS: FieldOption[] = [
 ];
 
 /**
+ * 0.7.1-P5：PlayParticle.particle 白名单（14 个，逐字镜像后端 ScriptRuleValidator 的
+ * {@code PARTICLE_WHITELIST}）。value 上 wire（{@code minecraft:xxx}），与后端集合<b>逐字符一致</b>。
+ */
+const PARTICLE_OPTIONS: FieldOption[] = [
+    { value: 'minecraft:flame', labelKey: 'script.fieldOptions.particleFlame' },
+    { value: 'minecraft:smoke', labelKey: 'script.fieldOptions.particleSmoke' },
+    { value: 'minecraft:heart', labelKey: 'script.fieldOptions.particleHeart' },
+    { value: 'minecraft:happy_villager', labelKey: 'script.fieldOptions.particleHappy' },
+    { value: 'minecraft:crit', labelKey: 'script.fieldOptions.particleCrit' },
+    { value: 'minecraft:enchant', labelKey: 'script.fieldOptions.particleEnchant' },
+    { value: 'minecraft:portal', labelKey: 'script.fieldOptions.particlePortal' },
+    { value: 'minecraft:firework', labelKey: 'script.fieldOptions.particleFirework' },
+    { value: 'minecraft:note', labelKey: 'script.fieldOptions.particleNote' },
+    { value: 'minecraft:cloud', labelKey: 'script.fieldOptions.particleCloud' },
+    { value: 'minecraft:lava', labelKey: 'script.fieldOptions.particleLava' },
+    { value: 'minecraft:dripping_water', labelKey: 'script.fieldOptions.particleDripWater' },
+    { value: 'minecraft:end_rod', labelKey: 'script.fieldOptions.particleEndRod' },
+    { value: 'minecraft:totem_of_undying', labelKey: 'script.fieldOptions.particleTotem' },
+];
+
+/**
  * 九种触发器定义（kind ∈ ScriptTrigger.type，0.7.0 六种 + 0.7.1-P2 三种）。
  * 字段覆盖各 wire 数据字段：variableChange→fullName / timer→intervalSeconds /
  * playerNear→rangeBlocks / playerLeaveRange→rangeBlocks；playerJoin / playerKill /
@@ -403,6 +424,39 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
+    // ---- 0.7.1-P5：3 个剩余动作（停止脚本 / 播放粒子 / 等待直到）----
+    // 三者 category='action'（动作蓝）——palette 由 ACTION_DEFS 按 category 自动分组，故无需另登记
+    // 「可拖出清单」即出现在「动作」分组。waitUntil 的条件字段用 type:'condition' 复用 ConditionBuilder。
+    stopScript: {
+        kind: 'stopScript',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.stopScript',
+        fields: [],
+    },
+    playParticle: {
+        kind: 'playParticle',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.playParticle',
+        fields: [
+            { name: 'particle', type: 'select', labelKey: 'script.fields.particle', options: PARTICLE_OPTIONS },
+            { name: 'count', type: 'number', labelKey: 'script.fields.particleCount', min: 1, max: 1000, step: 1 },
+            { name: 'offsetX', type: 'number', labelKey: 'script.fields.offsetX', step: 0.5 },
+            { name: 'offsetY', type: 'number', labelKey: 'script.fields.offsetY', step: 0.5 },
+            { name: 'offsetZ', type: 'number', labelKey: 'script.fields.offsetZ', step: 0.5 },
+        ],
+    },
+    waitUntil: {
+        kind: 'waitUntil',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.waitUntil',
+        fields: [
+            { name: 'condition', type: 'condition', labelKey: 'script.fields.condition' },
+            { name: 'timeoutMs', type: 'number', labelKey: 'script.fields.timeoutMs', min: 50, max: 60000, step: 50 },
+        ],
+    },
 };
 
 // ---------- 0.7.1-P1：友好元素积木皮肤（路线乙——8 个友好积木都序列化成一条 setElementProperties）----------
@@ -620,6 +674,16 @@ export function makeDefaultAction(kind: string): ScriptAction {
             // 0.7.1-P2：count 默认 3（落 1..100）；body 空数组——由用户往循环体拖块填，
             // 拖出态会提示"循环体不能为空"（与 if 的空分支不同：repeat 要求 body 非空）。
             return { type: 'repeat', count: 3, body: [] };
+        // ---- 0.7.1-P5：3 个剩余动作 ----
+        case 'stopScript':
+            // 无字段——拖出即合法（清栈中止本次 run）。
+            return { type: 'stopScript' };
+        case 'playParticle':
+            // particle 取首项火焰（白名单内，拖出即合法）；count 10；偏移 0（合法，validator 只查有限）。
+            return { type: 'playParticle', particle: 'minecraft:flame', count: 10, offsetX: 0, offsetY: 0, offsetZ: 0 };
+        case 'waitUntil':
+            // condition 给能被 tryParseCondition 解析回可视模式的合法默认（同 if）；timeoutMs 5000（落 50..60000）。
+            return { type: 'waitUntil', condition: 'var("user/score") > 0', timeoutMs: 5000 };
         default:
             // 未知 kind 兜底：给个最简单的 log 动作（保证返回合法 ScriptAction）。
             return { type: 'log', message: '' };

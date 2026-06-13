@@ -99,6 +99,19 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeNumberField("count", a.count());
                 writeActions(gen, provider, "body", a.body());  // 复用 if 分支递归写出
             }
+            // 0.7.1-P5：停止 / 粒子 / 等待直到
+            case Action.StopScript a -> { /* 仅 type 字段，已写 */ }
+            case Action.PlayParticle a -> {
+                gen.writeStringField("particle", a.particle());
+                gen.writeNumberField("count", a.count());
+                gen.writeNumberField("offsetX", a.offsetX());
+                gen.writeNumberField("offsetY", a.offsetY());
+                gen.writeNumberField("offsetZ", a.offsetZ());
+            }
+            case Action.WaitUntil a -> {
+                gen.writeStringField("condition", a.condition());
+                gen.writeNumberField("timeoutMs", a.timeoutMs());
+            }
         }
         gen.writeEndObject();
     }

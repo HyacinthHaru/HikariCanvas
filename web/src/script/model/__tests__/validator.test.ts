@@ -34,6 +34,11 @@ import {
     KIND_MAX,
     MESSAGE_CHANNELS,
     SCALE_OPS,
+    PARTICLES,
+    PARTICLE_COUNT_MIN,
+    PARTICLE_COUNT_MAX,
+    WAITUNTIL_TIMEOUT_MIN,
+    WAITUNTIL_TIMEOUT_MAX,
 } from '../validator';
 import type { ScriptRule, ScriptAction, ScriptTrigger } from '@/types/protocol';
 
@@ -355,6 +360,64 @@ describe('validateRule — 0.7.1 新动作字段', () => {
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
         const empty: ScriptAction = { type: 'playTimelineAwait', timelineId: '' };
         expect(validateRule(rule({ actions: [empty] })).some((e) => e.message === '播时间轴缺少时间轴 ID')).toBe(true);
+    });
+});
+
+// ---------- 0.7.1-P5：停止 / 粒子 / 等待直到（文案与后端逐字一致）----------
+
+describe('validateRule — 0.7.1-P5 新动作字段', () => {
+    it('PARTICLES 白名单 14 个与后端逐字一致', () => {
+        expect([...PARTICLES].sort()).toEqual([
+            'minecraft:cloud', 'minecraft:crit', 'minecraft:dripping_water', 'minecraft:enchant',
+            'minecraft:end_rod', 'minecraft:firework', 'minecraft:flame', 'minecraft:happy_villager',
+            'minecraft:heart', 'minecraft:lava', 'minecraft:note', 'minecraft:portal',
+            'minecraft:smoke', 'minecraft:totem_of_undying',
+        ]);
+    });
+    it('P5 范围常量与后端一致', () => {
+        expect(PARTICLE_COUNT_MIN).toBe(1);
+        expect(PARTICLE_COUNT_MAX).toBe(1000);
+        expect(WAITUNTIL_TIMEOUT_MIN).toBe(50);
+        expect(WAITUNTIL_TIMEOUT_MAX).toBe(60000);
+    });
+
+    it('stopScript 永远合法', () => {
+        expect(validateRule(rule({ actions: [{ type: 'stopScript' }] }))).toEqual([]);
+    });
+
+    it('playParticle 合法（火焰 ×10）/ 非白名单粒子 / count 越界 / offset 非有限', () => {
+        const ok: ScriptAction = { type: 'playParticle', particle: 'minecraft:flame', count: 10, offsetX: 0.5, offsetY: 0.5, offsetZ: 0.5 };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        // count 边界 1 / 1000 合法。
+        expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:heart', count: PARTICLE_COUNT_MIN, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:heart', count: PARTICLE_COUNT_MAX, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))).toEqual([]);
+        // 非白名单粒子。
+        const badParticle = { type: 'playParticle', particle: 'minecraft:nope', count: 10, offsetX: 0, offsetY: 0, offsetZ: 0 } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [badParticle] })).some((e) => e.message === '粒子种类不在允许范围: minecraft:nope')).toBe(true);
+        // count 越界（0 / 2000）。
+        expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:flame', count: 0, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))
+            .some((e) => e.message === `粒子数量需在 ${PARTICLE_COUNT_MIN}..${PARTICLE_COUNT_MAX} 之间`)).toBe(true);
+        expect(validateRule(rule({ actions: [{ type: 'playParticle', particle: 'minecraft:flame', count: 2000, offsetX: 0, offsetY: 0, offsetZ: 0 }] }))
+            .some((e) => e.message.includes('粒子数量需在'))).toBe(true);
+        // offset 非有限。
+        const nanOffset = { type: 'playParticle', particle: 'minecraft:flame', count: 10, offsetX: NaN, offsetY: 0, offsetZ: 0 } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [nanOffset] })).some((e) => e.message === '粒子偏移必须是有限数值')).toBe(true);
+    });
+
+    it('waitUntil 合法 / 空条件 / timeout 越界', () => {
+        const ok: ScriptAction = { type: 'waitUntil', condition: 'var("user/x") > 0', timeoutMs: 5000 };
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        // timeout 边界 50 / 60000 合法。
+        expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: WAITUNTIL_TIMEOUT_MIN }] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: WAITUNTIL_TIMEOUT_MAX }] }))).toEqual([]);
+        // 空条件。
+        expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: '', timeoutMs: 5000 }] }))
+            .some((e) => e.message === `等待条件不能为空且最多 ${CONDITION_MAX} 字符`)).toBe(true);
+        // timeout 越界（10 / 999999）。
+        expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: 10 }] }))
+            .some((e) => e.message === `超时时长需在 ${WAITUNTIL_TIMEOUT_MIN}..${WAITUNTIL_TIMEOUT_MAX} 毫秒之间`)).toBe(true);
+        expect(validateRule(rule({ actions: [{ type: 'waitUntil', condition: 'var("user/x")>0', timeoutMs: 999999 }] }))
+            .some((e) => e.message.includes('超时时长需在'))).toBe(true);
     });
 });
 

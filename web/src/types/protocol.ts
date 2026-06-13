@@ -550,7 +550,14 @@ export type ScriptAction =
     | { type: 'playTimelineAwait'; timelineId: string }
     // 0.7.1-P2：有界循环「重复 N 次」。count ∈ [1,100]；body 为每轮执行的动作（由后端
     // ScriptRunner 展开 count 轮，blockId 用 `${path}/body/${i}` 不带 round——前后端同构）。
-    | { type: 'repeat'; count: number; body: ScriptAction[] };
+    | { type: 'repeat'; count: number; body: ScriptAction[] }
+    // 0.7.1-P5：3 个剩余动作（停止脚本 / 播放粒子 / 等待直到条件满足或超时）。
+    // stopScript = 清帧栈中止本次 run（ScriptRunner 处理）；playParticle 在墙世界坐标喷粒子
+    // （particle 为白名单 minecraft:xxx，wire 字段名是 particle，与后端 record 同名）；
+    // waitUntil 轮询 condition（复用 if 条件文法），满足或 timeoutMs 超时才续接（ScriptRunner pollWaitUntil）。
+    | { type: 'stopScript' }
+    | { type: 'playParticle'; particle: string; count: number; offsetX: number; offsetY: number; offsetZ: number }
+    | { type: 'waitUntil'; condition: string; timeoutMs: number };
 
 /**
  * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。

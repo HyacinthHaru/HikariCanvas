@@ -439,17 +439,31 @@ final class ScriptOpDispatcher {
             List<moe.hikari.canvas.script.Action> actions, String prefix) {
         if (actions == null) return Optional.empty();
         for (int i = 0; i < actions.size(); i++) {
-            if (!(actions.get(i) instanceof moe.hikari.canvas.script.Action.If iff)) continue;
+            moe.hikari.canvas.script.Action a = actions.get(i);
             String blockId = prefix + i;
-            Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
-                    .checkSyntax(iff.condition());
-            if (err.isPresent()) {
-                return Optional.of("if 条件语法错误（" + blockId + "）: " + err.get());
+            if (a instanceof moe.hikari.canvas.script.Action.If iff) {
+                Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
+                        .checkSyntax(iff.condition());
+                if (err.isPresent()) {
+                    return Optional.of("if 条件语法错误（" + blockId + "）: " + err.get());
+                }
+                Optional<String> sub = checkConditionSyntax(iff.then(), blockId + "/then/");
+                if (sub.isPresent()) return sub;
+                sub = checkConditionSyntax(iff.elseActions(), blockId + "/else/");
+                if (sub.isPresent()) return sub;
+            } else if (a instanceof moe.hikari.canvas.script.Action.WaitUntil wu) {
+                // 0.7.1-P5：WaitUntil 的 condition 同样走保存期 parse-only 预检（与 if 一致）；
+                // 否则坏条件运行期静默恒 false 等满超时、无任何报错，破坏 K16 契约。
+                Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
+                        .checkSyntax(wu.condition());
+                if (err.isPresent()) {
+                    return Optional.of("等待条件语法错误（" + blockId + "）: " + err.get());
+                }
+            } else if (a instanceof moe.hikari.canvas.script.Action.Repeat rep) {
+                // 0.7.1-P5：递归进 repeat body（补 0.7.0-P2 既存遗漏——body 里的 if/waitUntil 条件也预检）。
+                Optional<String> sub = checkConditionSyntax(rep.body(), blockId + "/body/");
+                if (sub.isPresent()) return sub;
             }
-            Optional<String> sub = checkConditionSyntax(iff.then(), blockId + "/then/");
-            if (sub.isPresent()) return sub;
-            sub = checkConditionSyntax(iff.elseActions(), blockId + "/else/");
-            if (sub.isPresent()) return sub;
         }
         return Optional.empty();
     }

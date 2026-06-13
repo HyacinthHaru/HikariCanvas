@@ -99,6 +99,17 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
             case "repeat" -> new Action.Repeat(
                     requireInt(ctxt, node, "count", type),
                     readBranch(ctxt, node, "body", type));   // 复用 if 分支递归读取
+            // 0.7.1-P5：停止 / 粒子 / 等待直到
+            case "stopScript" -> new Action.StopScript();
+            case "playParticle" -> new Action.PlayParticle(
+                    requireText(ctxt, node, "particle", type),
+                    requireInt(ctxt, node, "count", type),
+                    requireDouble(ctxt, node, "offsetX", type),
+                    requireDouble(ctxt, node, "offsetY", type),
+                    requireDouble(ctxt, node, "offsetZ", type));
+            case "waitUntil" -> new Action.WaitUntil(
+                    requireText(ctxt, node, "condition", type),
+                    requireLong(ctxt, node, "timeoutMs", type));
             default -> ctxt.reportInputMismatch(Action.class,
                     "unknown action type: " + type);
         };
