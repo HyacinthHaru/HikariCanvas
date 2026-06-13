@@ -119,6 +119,15 @@ const MESSAGE_CHANNEL_OPTIONS: FieldOption[] = [
     { value: 'title', labelKey: 'script.fieldOptions.channelTitle' },
 ];
 
+/**
+ * 0.7.2-P3：SendMessage.target 白名单（镜像后端 MESSAGE_TARGETS）。{@code trigger} 给触发玩家
+ * （默认）/ {@code all} 全服广播。下拉走 scope-like 控件（同 PlaySound.scope）。
+ */
+const MESSAGE_TARGET_OPTIONS: FieldOption[] = [
+    { value: 'trigger', labelKey: 'script.fieldOptions.targetTrigger' },
+    { value: 'all', labelKey: 'script.fieldOptions.targetAll' },
+];
+
 /** 0.7.1：ScaleVariable.op 白名单（镜像后端 SCALE_OPS）。 */
 const SCALE_OP_OPTIONS: FieldOption[] = [
     { value: 'multiply', labelKey: 'script.fieldOptions.opMultiply' },
@@ -369,6 +378,8 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         fields: [
             { name: 'text', type: 'text', labelKey: 'script.fields.messageText' },
             { name: 'channel', type: 'select', labelKey: 'script.fields.channel', options: MESSAGE_CHANNEL_OPTIONS },
+            // 0.7.2-P3：发给（触发玩家 / 全服）。scope-like 下拉，与 PlaySound.scope 同控件。
+            { name: 'target', type: 'scope', labelKey: 'script.fields.msgTarget', options: MESSAGE_TARGET_OPTIONS },
         ],
     },
     setRandomVariable: {
@@ -421,6 +432,20 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.repeat',
         fields: [
             { name: 'count', type: 'number', labelKey: 'script.fields.repeatCount', min: 1, max: 100, step: 1 },
+            { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
+        ],
+    },
+    // ---- 0.7.2-P3：动态循环「重复直到条件」（C 形 control 绿，照 repeat：condition + maxIterations
+    // + body statements 子序列槽）。condition 走 ConditionBuilder（type:'condition'，同 if/waitUntil）；
+    // maxIterations 是安全阀（1..100），body 是每轮执行的子序列槽（C 臂）。----
+    repeatUntil: {
+        kind: 'repeatUntil',
+        category: 'control',
+        colorVar: CATEGORY_COLOR_VAR.control,
+        labelKey: 'script.blocks.repeatUntil',
+        fields: [
+            { name: 'condition', type: 'condition', labelKey: 'script.fields.condition' },
+            { name: 'maxIterations', type: 'number', labelKey: 'script.fields.maxIterations', min: 1, max: 100, step: 1 },
             { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
@@ -700,8 +725,9 @@ export function makeDefaultAction(kind: string): ScriptAction {
             // elementId 依赖墙上元素 → 留空让用户选；dx/dy 默认 0（合法，验证只查有限）。
             return { type: 'nudgeElement', elementId: '', dx: 0, dy: 0 };
         case 'sendMessage':
-            // text 空串后端合法（非引用字段，不触发"待完善"角标）；channel 取首项 chat。
-            return { type: 'sendMessage', text: '', channel: 'chat' };
+            // text 空串后端合法（非引用字段，不触发"待完善"角标）；channel 取首项 chat；
+            // 0.7.2-P3：target 默认 trigger（发给触发玩家，向后兼容旧语义）。
+            return { type: 'sendMessage', text: '', channel: 'chat', target: 'trigger' };
         case 'setRandomVariable':
             // fullName 给非空默认（user/roll），区间 1..6（骰子体验）。
             return { type: 'setRandomVariable', fullName: 'user/roll', min: 1, max: 6 };
@@ -718,6 +744,11 @@ export function makeDefaultAction(kind: string): ScriptAction {
             // 0.7.1-P2：count 默认 3（落 1..100）；body 空数组——由用户往循环体拖块填，
             // 拖出态会提示"循环体不能为空"（与 if 的空分支不同：repeat 要求 body 非空）。
             return { type: 'repeat', count: 3, body: [] };
+        case 'repeatUntil':
+            // 0.7.2-P3：condition 给能被 tryParseCondition 解析回可视模式的合法默认（同 if/waitUntil，
+            // 拖出即合法）；maxIterations 默 10（安全阀，落 1..100）；body 空数组——由用户往循环体拖块填，
+            // 拖出态提示"重复体不能为空"（与 if 空分支不同：repeatUntil 要求 body 非空）。
+            return { type: 'repeatUntil', condition: 'var("user/x") > 0', maxIterations: 10, body: [] };
         // ---- 0.7.1-P5：3 个剩余动作 ----
         case 'stopScript':
             // 无字段——拖出即合法（清栈中止本次 run）。

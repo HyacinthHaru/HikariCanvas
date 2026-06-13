@@ -335,6 +335,70 @@ class ScriptRunnerTest {
         assertTrue(sink.blockIds.contains("actions/1"), "轮询不计 Budget，after 未被掐断执行");
     }
 
+    // ---------- 0.7.2-P3：RepeatUntil 动态循环 ----------
+
+    @Test
+    void repeatUntil_loopsUntilConditionTrue() {
+        // 可变 lookup：前 2 次 score="0"（>5 false），第 3 次起 "10"（true）
+        java.util.concurrent.atomic.AtomicInteger evals = new java.util.concurrent.atomic.AtomicInteger();
+        ConditionEvaluator polling = new ConditionEvaluator(LOG,
+                fullName -> fullName.endsWith("/score") ? (evals.incrementAndGet() >= 3 ? "10" : "0") : null);
+        ScriptRunner r = new ScriptRunner(polling, sink, budget, null, LOG, scheduler, clock::get);
+        r.submit(WALL, rule("r1", List.of(
+                new Action.RepeatUntil("var(\"user/score\") > 5", 10, List.of(new Action.Log("body"))),
+                new Action.Log("after"))), ctx(0));
+        // while 语义：eval#1 false→body，eval#2 false→body，eval#3 true→跳出。body 2 轮。
+        assertEquals(2, sink.blockIds.stream().filter("actions/0/body/0"::equals).count(), "body 执行 2 轮");
+        assertTrue(sink.blockIds.contains("actions/1"), "跳出后 after 执行");
+    }
+
+    @Test
+    void repeatUntil_stopsAtMaxIterations() {
+        // condition 永 false（setUp score=10，> 50 false），maxIterations=3 → body 3 轮停
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.RepeatUntil("var(\"user/score\") > 50", 3, List.of(new Action.Log("body"))),
+                new Action.Log("after"))), ctx(0));
+        assertEquals(3, sink.blockIds.stream().filter("actions/0/body/0"::equals).count(), "body 3 轮(达 maxIter)");
+        assertTrue(sink.blockIds.contains("actions/1"), "after 执行");
+    }
+
+    @Test
+    void repeatUntil_conditionTrueImmediately_zeroBody() {
+        // condition 一开始就 true（score=10 > 5），while 语义 → body 0 次
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.RepeatUntil("var(\"user/score\") > 5", 10, List.of(new Action.Log("body"))),
+                new Action.Log("after"))), ctx(0));
+        assertEquals(0, sink.blockIds.stream().filter("actions/0/body/0"::equals).count(), "条件立即满足 body 0 次");
+        assertTrue(sink.blockIds.contains("actions/1"), "after 执行");
+    }
+
+    @Test
+    void repeatUntil_bodyWithWait_continuesAcrossSegments() {
+        // body 含 wait → 帧栈续接；condition 永 false，maxIter=2
+        ScriptRunner r = runner();
+        r.submit(WALL, rule("r1", List.of(
+                new Action.RepeatUntil("var(\"user/score\") > 50", 2,
+                        List.of(new Action.Log("a"), new Action.Wait(100), new Action.Log("b"))),
+                new Action.Log("after"))), ctx(0));
+        scheduler.runPending();
+        assertEquals(2, sink.blockIds.stream().filter("actions/0/body/0"::equals).count(), "a 执行 2 轮");
+        assertEquals(2, sink.blockIds.stream().filter("actions/0/body/2"::equals).count(), "b 执行 2 轮(跨 wait 续接)");
+        assertTrue(sink.blockIds.contains("actions/1"), "after 执行");
+    }
+
+    @Test
+    void repeatUntil_budgetCaps() {
+        // condition 永 false + maxIterations=100 + max-actions=5 → Budget 熔断，远不到 100 轮
+        ScriptBudget small = new ScriptBudget(
+                new HikariCanvasConfig.ScriptsConfig(16, 5, 10, 8), clock::get);
+        ScriptRunner r = runner(small);
+        r.submit(WALL, rule("r1", List.of(
+                new Action.RepeatUntil("var(\"user/score\") > 50", 100, List.of(new Action.Log("body"))))), ctx(0));
+        assertTrue(sink.blockIds.stream().filter("actions/0/body/0"::equals).count() < 100, "Budget 熔断不到 100 轮");
+    }
+
     // ---------- 0.7.1：Repeat 有界循环展开 ----------
 
     @Test

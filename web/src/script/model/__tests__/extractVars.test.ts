@@ -49,7 +49,7 @@ describe('extractReferencedVariables', () => {
     });
 
     it('sendMessage.text 里的 ${var:X}（含 |fallback= 也只取 rawName）', () => {
-        const r = rule([{ type: 'sendMessage', text: '欢迎 ${var:user/name|fallback=玩家}', channel: 'chat' }]);
+        const r = rule([{ type: 'sendMessage', text: '欢迎 ${var:user/name|fallback=玩家}', channel: 'chat', target: 'trigger' }]);
         expect(extractReferencedVariables(r)).toEqual(['user/name']);
     });
 
@@ -74,7 +74,7 @@ describe('extractReferencedVariables', () => {
                 condition: 'var(user/hp) > 0',
                 then: [
                     { type: 'setVariable', fullName: 'user/alive', value: '1' },
-                    { type: 'sendMessage', text: '存活 ${var:user/hp}', channel: 'actionbar' },
+                    { type: 'sendMessage', text: '存活 ${var:user/hp}', channel: 'actionbar', target: 'trigger' },
                 ],
                 else: [
                     { type: 'incrementVariable', fullName: 'user/deaths', delta: 1 },
@@ -94,7 +94,7 @@ describe('extractReferencedVariables', () => {
                 count: 3,
                 body: [
                     { type: 'incrementVariable', fullName: 'user/counter', delta: 1 },
-                    { type: 'sendMessage', text: '第 ${var:user/counter} 次', channel: 'chat' },
+                    { type: 'sendMessage', text: '第 ${var:user/counter} 次', channel: 'chat', target: 'trigger' },
                 ],
             },
         ]);
@@ -123,7 +123,7 @@ describe('extractReferencedVariables', () => {
         const r = rule([
             { type: 'setVariable', fullName: 'user/x', value: '${var:user/x}' },
             { type: 'incrementVariable', fullName: 'user/x', delta: 1 },
-            { type: 'sendMessage', text: '${var:user/x} 和 ${var:user/y}', channel: 'chat' },
+            { type: 'sendMessage', text: '${var:user/x} 和 ${var:user/y}', channel: 'chat', target: 'trigger' },
         ]);
         expect(extractReferencedVariables(r)).toEqual(['user/x', 'user/y']);
     });

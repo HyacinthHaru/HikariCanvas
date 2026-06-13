@@ -18,6 +18,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -399,7 +400,7 @@ class ActionExecutorTest {
     void sendMessage_noTriggerPlayer_okSkip() {
         ScriptRunner.TRIGGER_DETAIL.remove(); // 无触发玩家
         TraceStep step = executor().execute(WALL, "b",
-                new Action.SendMessage("hi", "chat"));
+                new Action.SendMessage("hi", "chat", "trigger"));
         assertEquals("ok", step.result());
         assertTrue(step.detail().contains("无触发玩家"), step.detail());
     }
@@ -407,7 +408,7 @@ class ActionExecutorTest {
     @Test
     void sendMessage_badChannel_errorStep() {
         TraceStep step = executor().execute(WALL, "b",
-                new Action.SendMessage("hi", "hologram"));
+                new Action.SendMessage("hi", "hologram", "trigger"));
         assertEquals("error", step.result());
         assertTrue(step.detail().contains("channel"), step.detail());
     }
@@ -418,12 +419,56 @@ class ActionExecutorTest {
         ScriptRunner.TRIGGER_DETAIL.set("Alice");
         try {
             TraceStep step = executor().execute(WALL, "b",
-                    new Action.SendMessage("hi", "chat"));
+                    new Action.SendMessage("hi", "chat", "trigger"));
             assertEquals("ok", step.result());
             assertTrue(step.detail().contains("Alice"), step.detail());
         } finally {
             ScriptRunner.TRIGGER_DETAIL.remove();
         }
+    }
+
+    // ---------- 0.7.2-P3：sendMessage target 分流（trigger / all 广播）----------
+
+    /**
+     * target=all：不读 TRIGGER_DETAIL（即使无触发玩家也不"跳过"），走 {@code
+     * Bukkit.getOnlinePlayers()} 广播分支。plugin=null 直跑：无 server 时
+     * getOnlinePlayers 抛 → work 内自吞（三层隔离）→ 仍返 ok（detail 标 broadcast/all）。
+     * 结构性断言：detail <b>不含</b>"无触发玩家"，证明走了广播分支而非 trigger-skip。
+     */
+    @Test
+    void sendMessage_targetAll_takesBroadcastBranch_notTriggerSkip() {
+        ScriptRunner.TRIGGER_DETAIL.remove(); // 无触发玩家
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.SendMessage("大家好", "chat", "all"));
+        assertEquals("ok", step.result());
+        assertFalse(step.detail().contains("无触发玩家"),
+                "target=all 应走广播分支，不应因无触发玩家而跳过: " + step.detail());
+    }
+
+    /** target=all 即使有触发玩家也走广播分支（不只发触发者）。 */
+    @Test
+    void sendMessage_targetAll_withTriggerPlayer_stillBroadcast() {
+        ScriptRunner.TRIGGER_DETAIL.set("Alice");
+        try {
+            TraceStep step = executor().execute(WALL, "b",
+                    new Action.SendMessage("大家好", "actionbar", "all"));
+            assertEquals("ok", step.result());
+            // 广播 detail 不应是 trigger 玩家专属的 "msg→Alice"
+            assertFalse(step.detail().contains("Alice"),
+                    "target=all 广播 detail 不应标触发玩家名: " + step.detail());
+        } finally {
+            ScriptRunner.TRIGGER_DETAIL.remove();
+        }
+    }
+
+    /** target=trigger 无触发玩家仍按现有逻辑跳过（向后兼容回归）。 */
+    @Test
+    void sendMessage_targetTrigger_noPlayer_okSkip() {
+        ScriptRunner.TRIGGER_DETAIL.remove();
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.SendMessage("hi", "chat", "trigger"));
+        assertEquals("ok", step.result());
+        assertTrue(step.detail().contains("无触发玩家"), step.detail());
     }
 
     // ---------- 0.7.1：setRandomVariable ----------

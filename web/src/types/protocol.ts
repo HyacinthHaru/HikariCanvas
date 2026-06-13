@@ -544,13 +544,19 @@ export type ScriptAction =
     // scaleVariable = 变量乘/除；playTimelineAwait = 播时间轴并等播完（Runner 挂起续接）。
     | { type: 'setElementProperties'; elementId: string; patch: Record<string, string>; kind: string }
     | { type: 'nudgeElement'; elementId: string; dx: number; dy: number }
-    | { type: 'sendMessage'; text: string; channel: 'chat' | 'actionbar' | 'title' }
+    // 0.7.2-P3：sendMessage 加 target（'trigger' 给触发玩家 / 'all' 全服广播）。后端 Deserializer
+    // optionalText 默 'trigger'（向后兼容旧 payload 无 target）；executor doSendMessage 按 target 分流。
+    | { type: 'sendMessage'; text: string; channel: 'chat' | 'actionbar' | 'title'; target: 'trigger' | 'all' }
     | { type: 'setRandomVariable'; fullName: string; min: number; max: number }
     | { type: 'scaleVariable'; fullName: string; op: 'multiply' | 'divide'; factor: number }
     | { type: 'playTimelineAwait'; timelineId: string }
     // 0.7.1-P2：有界循环「重复 N 次」。count ∈ [1,100]；body 为每轮执行的动作（由后端
     // ScriptRunner 展开 count 轮，blockId 用 `${path}/body/${i}` 不带 round——前后端同构）。
     | { type: 'repeat'; count: number; body: ScriptAction[] }
+    // 0.7.2-P3：动态循环「重复直到条件」（while 语义：每轮先查 condition，满足/达 maxIterations
+    // 上限/Budget 熔断才停）。maxIterations ∈ [1,100] 默 10；body 为每轮执行的动作（后端 ScriptRunner
+    // 动态压栈，不预展开，blockId 用 `${path}/body/${i}` 不带轮数——前后端同构，照 repeat 范式）。
+    | { type: 'repeatUntil'; condition: string; maxIterations: number; body: ScriptAction[] }
     // 0.7.1-P5：3 个剩余动作（停止脚本 / 播放粒子 / 等待直到条件满足或超时）。
     // stopScript = 清帧栈中止本次 run（ScriptRunner 处理）；playParticle 在墙世界坐标喷粒子
     // （particle 为白名单 minecraft:xxx，wire 字段名是 particle，与后端 record 同名）；

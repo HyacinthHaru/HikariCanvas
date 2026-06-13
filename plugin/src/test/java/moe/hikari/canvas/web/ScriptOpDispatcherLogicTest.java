@@ -227,4 +227,31 @@ class ScriptOpDispatcherLogicTest {
         assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
                 "repeat body 内坏条件也应被预检拒");
     }
+
+    // ---------- 0.7.2-P3：repeatUntil 条件保存期预检（K16，照 WaitUntil）----------
+
+    @Test
+    void checkConditionSyntax_repeatUntilBadCondition_rejected() {
+        var actions = List.<Action>of(new Action.RepeatUntil("(((", 10,
+                List.of(new Action.Log("x"))));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
+                "RepeatUntil 坏条件应被保存期预检拒（与 if/waitUntil 一致）");
+    }
+
+    @Test
+    void checkConditionSyntax_repeatUntilGoodCondition_passes() {
+        var actions = List.<Action>of(new Action.RepeatUntil("var(\"user/x\") > 0", 10,
+                List.of(new Action.Log("x"))));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isEmpty(),
+                "RepeatUntil 合法条件通过预检");
+    }
+
+    @Test
+    void checkConditionSyntax_recursesIntoRepeatUntilBody() {
+        // repeatUntil body 里的坏条件也要被预检（递归 body）
+        var inner = List.<Action>of(new Action.If("(((", List.of(), List.of()));
+        var actions = List.<Action>of(new Action.RepeatUntil("var(\"user/x\") > 0", 5, inner));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
+                "repeatUntil body 内坏条件也应被预检拒");
+    }
 }

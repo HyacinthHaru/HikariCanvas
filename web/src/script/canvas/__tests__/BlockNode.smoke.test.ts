@@ -253,6 +253,57 @@ describe('BlockNode 0.7.1-P2 repeat C 形渲染', () => {
     });
 });
 
+describe('BlockNode 0.7.2-P3 repeatUntil C 形渲染（condition + maxIterations + body）', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+        __resetCommandTemplatesCache();
+    });
+
+    it('repeatUntil 渲染：C 形（hc-block-node-if）+ maxIterations number(值 10) + condition 行 + body 空槽 data-slot-path=actions/0/body', async () => {
+        const w = mountNode(
+            { type: 'repeatUntil', condition: 'var("user/x") > 0', maxIterations: 10, body: [] },
+            'actions/0',
+        );
+        await nextTick();
+        // C 形容器（与 repeat / if 同壳）
+        expect(w.find('.hc-block-node-if').exists()).toBe(true);
+        // maxIterations 字段 → number input，值 10
+        const nums = w.findAll('input[type="number"]').map((i) => (i.element as HTMLInputElement).value);
+        expect(nums).toContain('10');
+        // condition 行（ConditionBuilder，同 if/waitUntil）渲染
+        expect(w.find('.hc-block-condition').exists()).toBe(true);
+        // 空 body 槽：data-slot-path = actions/0/body（collectSlots index=0 落点）
+        expect(w.find('[data-slot-path="actions/0/body"]').exists()).toBe(true);
+        expect(w.text()).toContain('把积木拖到这里');
+    });
+
+    it('repeatUntil body 子块 path = actions/0/body/0（与后端 ScriptRunner 动态压栈 blockId 同构）', async () => {
+        const w = mountNode(
+            { type: 'repeatUntil', condition: 'var("user/x") > 0', maxIterations: 5, body: [{ type: 'log', message: 'in-body' }] },
+            'actions/0',
+        );
+        await nextTick();
+        expect(w.find('[data-block-path="actions/0/body/0"]').exists()).toBe(true);
+        // 有 body 子块时不再渲染空槽占位
+        expect(w.find('[data-slot-path="actions/0/body"]').exists()).toBe(false);
+    });
+
+    it('改 maxIterations number → updateActionField(path, { maxIterations: 新值 number })', async () => {
+        const edit = useScriptEditStore();
+        const spy = vi.spyOn(edit, 'updateActionField');
+        const w = mountNode(
+            { type: 'repeatUntil', condition: 'var("user/x") > 0', maxIterations: 10, body: [] },
+            'actions/2',
+        );
+        await nextTick();
+        await w.find('input[type="number"]').setValue('20');
+        expect(spy).toHaveBeenCalledWith('actions/2', { maxIterations: 20 });
+        const arg = spy.mock.calls[spy.mock.calls.length - 1][1] as { maxIterations: unknown };
+        expect(typeof arg.maxIterations).toBe('number');
+    });
+});
+
 describe('BlockNode 待完善角标（次要问题 1：扩展到 variable / condition / sound）', () => {
     beforeEach(() => {
         setActivePinia(createPinia());

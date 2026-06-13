@@ -196,7 +196,7 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
                 {
                     type: 'if', condition: 'true',
                     then: [],
-                    else: [{ type: 'sendMessage', text: '', channel: 'chat' }],
+                    else: [{ type: 'sendMessage', text: '', channel: 'chat', target: 'trigger' }],
                 },
             ],
         }));
@@ -204,7 +204,7 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
         edit.selectRule('sr-if2');
         edit.updateActionField('actions/0/else/0', { text: 'hi' } as Partial<ScriptAction>);
         const inner = (edit.workingCopy!.actions[0] as Extract<ScriptAction, { type: 'if' }>).else[0];
-        expect(inner).toEqual({ type: 'sendMessage', text: 'hi', channel: 'chat' });
+        expect(inner).toEqual({ type: 'sendMessage', text: 'hi', channel: 'chat', target: 'trigger' });
     });
 
     // ---- 0.7.1 bug 修复：repeat body 里的积木编辑被静默丢弃（根因：scriptEdit 平行实现只认 if）----
@@ -252,7 +252,7 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
             actions: [
                 {
                     type: 'repeat', count: 2,
-                    body: [{ type: 'sendMessage', text: '', channel: 'chat' }],
+                    body: [{ type: 'sendMessage', text: '', channel: 'chat', target: 'trigger' }],
                 },
             ],
         }));
@@ -260,7 +260,7 @@ describe('scriptEditStore — 变更入口 + dirty + undo', () => {
         edit.selectRule('sr-rep3');
         edit.updateActionField('actions/0/body/0', { text: '你好' } as Partial<ScriptAction>);
         const inner = (edit.workingCopy!.actions[0] as Extract<ScriptAction, { type: 'repeat' }>).body[0];
-        expect(inner).toEqual({ type: 'sendMessage', text: '你好', channel: 'chat' });
+        expect(inner).toEqual({ type: 'sendMessage', text: '你好', channel: 'chat', target: 'trigger' });
         expect(edit.dirty).toBe(true);
     });
 

@@ -15,7 +15,7 @@ import {
     FRIENDLY_PALETTE_KINDS,
     type BlockDef,
 } from '../blockDefs';
-import { ELEMENT_PROPERTIES, MESSAGE_CHANNELS, SCALE_OPS } from '../validator';
+import { ELEMENT_PROPERTIES, MESSAGE_CHANNELS, SCALE_OPS, MESSAGE_TARGETS } from '../validator';
 
 /** 期望的触发器字段集（手抄自 protocol.ts ScriptTrigger，含无数据字段的空集）。 */
 const EXPECTED_TRIGGER_FIELDS: Record<string, string[]> = {
@@ -44,12 +44,15 @@ const EXPECTED_ACTION_FIELDS: Record<string, string[]> = {
     if: ['condition', 'then', 'else'],
     // 0.7.1-P1：4 个低风险新动作 + 相对移动（setElementProperties 走 FRIENDLY_ELEMENT_DEFS，不进 ACTION_DEFS）。
     nudgeElement: ['elementId', 'dx', 'dy'],
-    sendMessage: ['text', 'channel'],
+    // 0.7.2-P3：sendMessage 加 target（trigger 默认 / all 全服）。
+    sendMessage: ['text', 'channel', 'target'],
     setRandomVariable: ['fullName', 'min', 'max'],
     scaleVariable: ['fullName', 'op', 'factor'],
     playTimelineAwait: ['timelineId'],
     // 0.7.1-P2：有界循环（control category，count + body statements 子序列槽）。
     repeat: ['count', 'body'],
+    // 0.7.2-P3：重复直到条件（control category，condition + maxIterations + body statements 子序列槽）。
+    repeatUntil: ['condition', 'maxIterations', 'body'],
     // 0.7.1-P5：3 个剩余动作（停止 / 粒子 / 等待直到）。stopScript 无字段；
     // playParticle wire 字段名 particle（与后端 record 同名）+ count + 3 offset；
     // waitUntil 复用 condition 字段（type:'condition'）+ timeoutMs。
@@ -92,7 +95,7 @@ describe('blockDefs.TRIGGER_DEFS', () => {
 });
 
 describe('blockDefs.ACTION_DEFS', () => {
-    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat + 0.7.1-P5 3 个 + 0.7.2-P2 4 个 = 22）', () => {
+    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat + 0.7.1-P5 3 个 + 0.7.2-P2 4 个 + 0.7.2-P3 repeatUntil = 23）', () => {
         expect(Object.keys(ACTION_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_ACTION_FIELDS).sort(),
         );
@@ -200,6 +203,30 @@ describe('blockDefs.ACTION_DEFS', () => {
         expect([count.min, count.max]).toEqual([1, 100]);
         const body = def.fields.find((f) => f.name === 'body')!;
         expect(body.type).toBe('statements');
+    });
+
+    // ---- 0.7.2-P3：repeatUntil（重复直到，C 形 control，condition + maxIterations + body）----
+    it('repeatUntil def：category=control / colorVar=green / 字段 condition(condition) + maxIterations(number 1..100) + body(statements)', () => {
+        const def = ACTION_DEFS.repeatUntil;
+        expect(def.kind).toBe('repeatUntil');
+        expect(def.category).toBe('control');
+        expect(def.colorVar).toBe('--ctp-green');
+        expect(def.fields.map((f) => f.name)).toEqual(['condition', 'maxIterations', 'body']);
+        const cond = def.fields.find((f) => f.name === 'condition')!;
+        expect(cond.type).toBe('condition');
+        const maxIter = def.fields.find((f) => f.name === 'maxIterations')!;
+        expect(maxIter.type).toBe('number');
+        expect([maxIter.min, maxIter.max]).toEqual([1, 100]);
+        const body = def.fields.find((f) => f.name === 'body')!;
+        expect(body.type).toBe('statements');
+    });
+
+    // ---- 0.7.2-P3：sendMessage 加 target 下拉（trigger / all，与后端 MESSAGE_TARGETS 一致）----
+    it('sendMessage.target 选项与后端 MESSAGE_TARGETS 一致（trigger / all）', () => {
+        const target = ACTION_DEFS.sendMessage.fields.find((f) => f.name === 'target')!;
+        expect(target.type).toBe('scope');
+        expect(target.options?.map((o) => o.value)).toEqual(['trigger', 'all']);
+        expect(target.options?.map((o) => o.value).sort()).toEqual([...MESSAGE_TARGETS].sort());
     });
 });
 

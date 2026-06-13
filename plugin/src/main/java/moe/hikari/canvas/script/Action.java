@@ -24,7 +24,8 @@ public sealed interface Action permits
         Action.SetRandomVariable, Action.ScaleVariable, Action.PlayTimelineAwait,
         Action.Repeat,
         Action.StopScript, Action.PlayParticle, Action.WaitUntil,
-        Action.CopyVariable, Action.AppendVariable, Action.CloneElement, Action.DeleteElement {
+        Action.CopyVariable, Action.AppendVariable, Action.CloneElement, Action.DeleteElement,
+        Action.RepeatUntil {
 
     /** wire 判别字段 {@code type} 的取值（camelCase）。 */
     String wireType();
@@ -95,8 +96,12 @@ public sealed interface Action permits
         @Override public String wireType() { return "nudgeElement"; }
     }
 
-    /** 0.7.1：给触发该脚本的玩家发消息。channel = chat|actionbar|title。 */
-    record SendMessage(String text, String channel) implements Action {
+    /**
+     * 0.7.1：发消息。channel = chat|actionbar|title。0.7.2-P3 加 target：
+     * {@code "trigger"}（默认，发给触发该脚本的玩家）/ {@code "all"}（全服广播，见 F7）。
+     * 旧 payload 无 target → Deserializer 默 {@code "trigger"}（向后兼容）。
+     */
+    record SendMessage(String text, String channel, String target) implements Action {
         @Override public String wireType() { return "sendMessage"; }
     }
 
@@ -166,5 +171,21 @@ public sealed interface Action permits
     /** 0.7.2-P2：删除元素。 */
     record DeleteElement(String elementId) implements Action {
         @Override public String wireType() { return "deleteElement"; }
+    }
+
+    /**
+     * 0.7.2-P3：重复执行 body 直到 condition 满足（while 语义：先查后做）或达 maxIterations
+     * 上限。与 {@link Repeat}（固定 count 预展开）不同——本动作<b>不预展开</b>，由
+     * {@code ScriptRunner} 动态调度（每轮查 condition 决定是否再来一轮，轮数记在 RunState）。
+     * maxIterations ∈ [1,100]（范围校验在 {@link ScriptRuleValidator}，复用 repeat 上限）；
+     * 与 Budget 双闸防失控。body[j] 的 blockId 用同一 prefix {@code <blockId>/body/<j>}
+     * （不带轮数，守 0.7.0 前后端同构，照 Repeat 范式）。
+     */
+    record RepeatUntil(String condition, int maxIterations,
+                       java.util.List<Action> body) implements Action {
+        @Override public String wireType() { return "repeatUntil"; }
+        public RepeatUntil {
+            body = body == null ? java.util.List.of() : java.util.List.copyOf(body);
+        }
     }
 }

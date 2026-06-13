@@ -83,6 +83,7 @@ public final class ActionSerializer extends JsonSerializer<Action> {
             case Action.SendMessage a -> {
                 gen.writeStringField("text", a.text());
                 gen.writeStringField("channel", a.channel());
+                gen.writeStringField("target", a.target());   // 0.7.2-P3
             }
             case Action.SetRandomVariable a -> {
                 gen.writeStringField("fullName", a.fullName());
@@ -127,6 +128,12 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeNumberField("offsetY", a.offsetY());
             }
             case Action.DeleteElement a -> gen.writeStringField("elementId", a.elementId());
+            // 0.7.2-P3：重复直到条件
+            case Action.RepeatUntil a -> {
+                gen.writeStringField("condition", a.condition());
+                gen.writeNumberField("maxIterations", a.maxIterations());
+                writeActions(gen, provider, "body", a.body());  // 复用 if/repeat 分支递归写出
+            }
         }
         gen.writeEndObject();
     }

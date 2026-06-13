@@ -463,6 +463,15 @@ final class ScriptOpDispatcher {
                 // 0.7.1-P5：递归进 repeat body（补 0.7.0-P2 既存遗漏——body 里的 if/waitUntil 条件也预检）。
                 Optional<String> sub = checkConditionSyntax(rep.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
+            } else if (a instanceof moe.hikari.canvas.script.Action.RepeatUntil ru) {
+                // 0.7.2-P3：repeatUntil 自身 condition 预检（照 WaitUntil）+ 递归 body。
+                Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
+                        .checkSyntax(ru.condition());
+                if (err.isPresent()) {
+                    return Optional.of("重复条件语法错误（" + blockId + "）: " + err.get());
+                }
+                Optional<String> sub = checkConditionSyntax(ru.body(), blockId + "/body/");
+                if (sub.isPresent()) return sub;
             }
         }
         return Optional.empty();

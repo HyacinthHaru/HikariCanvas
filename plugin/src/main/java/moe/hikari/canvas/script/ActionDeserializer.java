@@ -85,7 +85,8 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireDouble(ctxt, node, "dy", type));
             case "sendMessage" -> new Action.SendMessage(
                     requireText(ctxt, node, "text", type),
-                    requireText(ctxt, node, "channel", type));
+                    requireText(ctxt, node, "channel", type),
+                    optionalText(node, "target", "trigger"));  // 0.7.2-P3：缺省 trigger（向后兼容旧 payload）
             case "setRandomVariable" -> new Action.SetRandomVariable(
                     requireText(ctxt, node, "fullName", type),
                     requireDouble(ctxt, node, "min", type),
@@ -123,6 +124,11 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireInt(ctxt, node, "offsetY", type));
             case "deleteElement" -> new Action.DeleteElement(
                     requireText(ctxt, node, "elementId", type));
+            // 0.7.2-P3：重复直到条件（动态循环，Runner 调度）
+            case "repeatUntil" -> new Action.RepeatUntil(
+                    requireText(ctxt, node, "condition", type),
+                    requireInt(ctxt, node, "maxIterations", type),
+                    readBranch(ctxt, node, "body", type));   // 复用 if/repeat 分支递归读取
             default -> ctxt.reportInputMismatch(Action.class,
                     "unknown action type: " + type);
         };
@@ -200,6 +206,12 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
     private static String optionalText(JsonNode node, String field) {
         JsonNode v = node.get(field);
         return (v == null || !v.isTextual()) ? null : v.asText();
+    }
+
+    /** 可选文本字段带默认；缺失 / null / 非文本 → {@code def}（0.7.2-P3 sendMessage.target 向后兼容用）。 */
+    private static String optionalText(JsonNode node, String field, String def) {
+        JsonNode v = node.get(field);
+        return (v == null || !v.isTextual()) ? def : v.asText();
     }
 
     /**

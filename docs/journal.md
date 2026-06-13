@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-06-13 · 0.7.2-P3 完工：重复直到条件 + 全服广播
+
+2 个动作。子代理（后端地基 + 前端）+ 自盯 RepeatUntil ScriptRunner + 对抗审查（7 点全对、无必修）。
+
+**RepeatUntil**（流程控制，**while 语义**动态循环）：runFrames 遇 RepeatUntil → 查 condition（满足 / 达
+maxIterations → `i++` 跳出后续）；否则轮数+1（RunState `Map<blockId,int>`）+ 压回 `Frame(acts,i)`（含后续）+
+压 body（LIFO 先执行）→ body 完弹回再查。**跳出 `remove(blockId)`**——同 run 内 Repeat 包 RepeatUntil 时清
+残留轮数（关键，审查验证必需充分）。Budget 50 / maxIter 100 双闸 + K16 预检。轮数 Map 跨 wait 续接靠
+RunState 延续。
+
+**全服广播**：SendMessage 加 `target` 字段（trigger 默认 / all），doSendMessage 按 target 分流（all →
+`getOnlinePlayers` 广播、不读触发玩家，非玩家触发器也能广播）。改既有 record，Deserializer optionalText
+默 trigger 向后兼容（旧 payload 无 target）；grep 补 11 个构造点。
+
+**前端**：repeatUntil C 形（control 绿）——BlockNode 泛化 `hasBodySlot`（repeat+repeatUntil）+ blockTree
+`getChildSeq` 泛化 `isBodyContainer`（计划漏列但 drop container 必需，子代理补上）；sendMessage 加 target 下拉。
+
+**对抗审查**（7 点全对：while 语义压回自身帧栈 / Map 跨 wait 续接 / 嵌套 RepeatUntil / 轮数残留 remove 必需 /
+Budget 兜底不死循环 / blockId 同构 / target 分流+向后兼容）。无 P0/P1/P2 缺陷、无必修。
+
+**测试**：后端 **1807**（基线 1781 + 子代理 21 + RepeatUntil 5）/ 前端 **1157**（基线 1135 + 22）。shadowJar
+170M。i18n 中英 5 key。
+
+关联：`ScriptRunner`（RepeatUntil 分支 + RunState Map）/ `Action`/序列化/validator/permissions/
+`ScriptOpDispatcher`(K16) / `ActionExecutor`(doSendMessage target) / 前端 `protocol`+`blockDefs`+`blockTree`
++`BlockNode`+`validator`+`i18n`。
+
+---
+
 ## 2026-06-13 · 0.7.2-P3 立项：重复直到条件 + 全服广播（实施计划）
 
 P3 加 2 个：**RepeatUntil**（流程控制，ScriptRunner 动态循环）+ **全服广播**（sendMessage 加 target）。

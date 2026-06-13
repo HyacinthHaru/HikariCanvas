@@ -157,6 +157,9 @@ public final class ActionExecutor implements ActionSink {
                 case Action.Repeat a -> TraceStep.error(blockId, "repeat 应由 ScriptRunner 处理");
                 case Action.StopScript a -> TraceStep.error(blockId, "stopScript 应由 ScriptRunner 处理");
                 case Action.WaitUntil a -> TraceStep.error(blockId, "waitUntil 应由 ScriptRunner 处理");
+                // 0.7.2-P3：repeatUntil 真实现在 ScriptRunner（动态循环 + RunState 轮数）；
+                // 进到这里是 Runner 实现 bug → 防御 error。
+                case Action.RepeatUntil a -> TraceStep.error(blockId, "repeatUntil 由 ScriptRunner 处理（占位）");
             };
         } catch (RuntimeException e) {
             // 三层隔离兜底：单动作失败不断链
@@ -532,33 +535,47 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /**
-     * 给触发玩家发消息。触发玩家名 = {@link ScriptRunner#currentTriggerDetail}（仅 player*
-     * 触发器有值）。无触发玩家 / 离线 → ok step skip（非错误）。text 过 {@code ${var:X}} 插值。
-     * 主线程 hop 发（Adventure {@code Component} / {@code Title}，禁 NMS）。
+     * 发消息。0.7.2-P3：按 {@link Action.SendMessage#target()} 分流——
+     * {@code "all"} → 全服广播（{@code Bukkit.getOnlinePlayers()} 逐个发，不依赖触发玩家）；
+     * 否则（{@code "trigger"}）→ 触发玩家名 = {@link ScriptRunner#currentTriggerDetail}（仅
+     * player* 触发器有值），无触发玩家 / 离线 → ok step skip（非错误）。text 过
+     * {@code ${var:X}} 插值。主线程 hop 发（Adventure {@code Component} / {@code Title}，禁 NMS）。
      */
     private TraceStep doSendMessage(String wallId, String blockId, Action.SendMessage a) {
         String channel = a.channel();
         if (!"chat".equals(channel) && !"actionbar".equals(channel) && !"title".equals(channel)) {
             return TraceStep.error(blockId, "未知 channel: " + channel);
         }
+        String msg = interpolator == null ? a.text()
+                : interpolator.interpolate(a.text(), wallId).text();
+        if ("all".equals(a.target())) {
+            // 全服广播：不读触发玩家，主线程 hop 内遍历在线玩家逐个发
+            Runnable work = () -> {
+                try {
+                    for (Player p : Bukkit.getOnlinePlayers()) {
+                        sendTo(p, channel, msg);
+                    }
+                } catch (Throwable t) {
+                    log.log(Level.WARNING, "[脚本] sendMessage 广播失败: " + t.getMessage(), t);
+                }
+            };
+            if (plugin == null) {
+                work.run();
+            } else {
+                Bukkit.getScheduler().runTask(plugin, work);
+            }
+            return TraceStep.ok(blockId, "action", "msg→全服 (" + channel + ")");
+        }
+        // target=trigger（默认）：发给触发该脚本的玩家
         String who = ScriptRunner.currentTriggerDetail();
         if (who == null || who.isBlank()) {
             return TraceStep.ok(blockId, "action", "无触发玩家，跳过");
         }
-        String msg = interpolator == null ? a.text()
-                : interpolator.interpolate(a.text(), wallId).text();
         Runnable work = () -> {
             try {
                 Player p = Bukkit.getPlayerExact(who);
                 if (p == null) return; // 离线
-                switch (channel) {
-                    case "actionbar" -> p.sendActionBar(
-                            net.kyori.adventure.text.Component.text(msg));
-                    case "title" -> p.showTitle(net.kyori.adventure.title.Title.title(
-                            net.kyori.adventure.text.Component.text(msg),
-                            net.kyori.adventure.text.Component.empty()));
-                    default -> p.sendMessage(net.kyori.adventure.text.Component.text(msg));
-                }
+                sendTo(p, channel, msg);
             } catch (Throwable t) {
                 log.log(Level.WARNING, "[脚本] sendMessage 失败: " + t.getMessage(), t);
             }
@@ -569,6 +586,17 @@ public final class ActionExecutor implements ActionSink {
             Bukkit.getScheduler().runTask(plugin, work);
         }
         return TraceStep.ok(blockId, "action", "msg→" + who + " (" + channel + ")");
+    }
+
+    /** 按 channel 把已插值的 msg 发给单个玩家（chat/actionbar/title）。须在主线程调用。 */
+    private static void sendTo(Player p, String channel, String msg) {
+        switch (channel) {
+            case "actionbar" -> p.sendActionBar(net.kyori.adventure.text.Component.text(msg));
+            case "title" -> p.showTitle(net.kyori.adventure.title.Title.title(
+                    net.kyori.adventure.text.Component.text(msg),
+                    net.kyori.adventure.text.Component.empty()));
+            default -> p.sendMessage(net.kyori.adventure.text.Component.text(msg));
+        }
     }
 
     /** 随机数 [min,max] 闭区间。min&gt;max → error。两端皆整 → 整数随机（含 max，roll dice 体验）。 */

@@ -90,7 +90,7 @@ class ScriptPermissionsTest {
         ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(
                 new Action.SetElementProperties("e-1", Map.of("x", "1"), "moveTo"),
                 new Action.NudgeElement("e-1", 1.0, 1.0),
-                new Action.SendMessage("hi", "chat"),
+                new Action.SendMessage("hi", "chat", "trigger"),
                 new Action.SetRandomVariable("user/roll", 1.0, 6.0),
                 new Action.ScaleVariable("user/score", "multiply", 2.0),
                 new Action.PlayTimelineAwait("tl-1")));
@@ -151,5 +151,24 @@ class ScriptPermissionsTest {
             Set<String> f = ScriptPermissions.requiredFacets(r);
             assertEquals(Set.of(), f, "0.7.2-P2 动作无附加权限面: " + a.wireType());
         }
+    }
+
+    // ---------- 0.7.2-P3：repeatUntil body 递归扫描 ----------
+
+    @Test
+    void repeatUntil_recursesIntoBody() {
+        // body 里的 playSound → 递归 scan 出 NODE_SOUND（repeatUntil 本身仅基础 edit）
+        ScriptRule r = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.RepeatUntil("var(\"user/x\")>0", 5,
+                        List.of(new Action.PlaySound("s", 1, 1, "near")))));
+        assertEquals(Set.of(ScriptPermissions.NODE_SOUND), ScriptPermissions.requiredFacets(r));
+    }
+
+    @Test
+    void repeatUntil_emptyBody_onlyBaseEdit() {
+        ScriptRule r = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.RepeatUntil("var(\"user/x\")>0", 5,
+                        List.of(new Action.Log("x")))));
+        assertEquals(Set.of(), ScriptPermissions.requiredFacets(r));
     }
 }

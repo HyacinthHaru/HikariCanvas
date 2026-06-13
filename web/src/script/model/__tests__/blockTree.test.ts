@@ -448,3 +448,70 @@ describe('blockTree.repeat body 导航（getAt / insertAt / removeAt / moveNode 
         expect(ifDepth([repeatBlock(2, [log('x')])])).toBe(0);
     });
 });
+
+// ---------- 0.7.2-P3：repeatUntil 的 body 子序列（与 repeat 共用 'body' 键 + isBodyContainer 泛化）----------
+
+const repeatUntilBlock = (condition: string, maxIterations: number, body: ScriptAction[]): ScriptAction =>
+    ({ type: 'repeatUntil', condition, maxIterations, body });
+
+describe('blockTree.repeatUntil body 导航（与 repeat 同走 isBodyContainer）', () => {
+    /**
+     * 构造含 repeatUntil 的树：
+     *   actions/0  log A
+     *   actions/1  repeatUntil
+     *     actions/1/body/0  log B0
+     *     actions/1/body/1  if c
+     *       actions/1/body/1/then/0  log deep
+     */
+    function withRepeatUntil(): ScriptAction[] {
+        return [
+            log('A'),
+            repeatUntilBlock('var("user/x") > 0', 10, [log('B0'), ifBlock('c', [log('deep')], [])]),
+        ];
+    }
+
+    it('getAt 取 repeatUntil body 子项 + body 内 if 的 then', () => {
+        const a = withRepeatUntil();
+        expect(getAt(a, ['actions', '1', 'body', '0'])).toMatchObject({ message: 'B0' });
+        expect(getAt(a, ['actions', '1', 'body', '1', 'then', '0'])).toMatchObject({ message: 'deep' });
+    });
+
+    it('insertAt 往 repeatUntil body 槽插入（immutable）', () => {
+        const a = withRepeatUntil();
+        const next = insertAt(a, ['actions', '1', 'body'], 0, log('INS'));
+        expect(getAt(next, ['actions', '1', 'body', '0'])).toMatchObject({ message: 'INS' });
+        expect(getAt(next, ['actions', '1', 'body', '1'])).toMatchObject({ message: 'B0' });
+        const orig = a[1] as Extract<ScriptAction, { type: 'repeatUntil' }>;
+        expect(orig.body.length).toBe(2);
+    });
+
+    it('removeAt 删 repeatUntil body 子项', () => {
+        const a = withRepeatUntil();
+        const next = removeAt(a, ['actions', '1', 'body', '0']);
+        expect(getAt(next, ['actions', '1', 'body', '0'])).toMatchObject({ type: 'if' });
+    });
+
+    it('moveNode 顶层块 → repeatUntil body 槽（跨容器入 body）', () => {
+        const a = withRepeatUntil();
+        const next = moveNode(a, ['actions', '0'], ['actions', '1', 'body'], 2);
+        expect(getAt(next, ['actions', '0'])).toMatchObject({ type: 'repeatUntil' });
+        expect(getAt(next, ['actions', '0', 'body', '2'])).toMatchObject({ message: 'A' });
+    });
+
+    it('walk + countBlocks 下钻 repeatUntil body（不乘 maxIterations）', () => {
+        const a = withRepeatUntil();
+        const paths: string[] = [];
+        walk(a, (_n, p) => paths.push(p));
+        expect(paths).toContain('actions/1/body/0');
+        expect(paths).toContain('actions/1/body/1/then/0');
+        // log A(1) + repeatUntil(1) + body[ log B0(1), if c(1) + then[ log deep(1) ] ] = 5
+        expect(countBlocks(a)).toBe(5);
+        // maxIterations 100 不影响节点计数
+        expect(countBlocks([repeatUntilBlock('c', 100, [log('x'), log('y')])])).toBe(3);
+    });
+
+    it('ifDepth 不因 repeatUntil 增加，但 body 内 if 仍计深度', () => {
+        expect(ifDepth([repeatUntilBlock('c', 2, [ifBlock('c', [log('x')], [])])])).toBe(1);
+        expect(ifDepth([repeatUntilBlock('c', 2, [log('x')])])).toBe(0);
+    });
+});

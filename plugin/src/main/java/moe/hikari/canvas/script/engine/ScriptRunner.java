@@ -210,6 +210,11 @@ public final class ScriptRunner {
         int actionCount;
         /** callback 恰一次保险（finish 与 run 级异常路径互斥触发）。 */
         boolean callbackFired;
+        /**
+         * 0.7.2-P3：RepeatUntil 每个 blockId 的已执行轮数（while 语义动态循环计数）。嵌套
+         * RepeatUntil 各 blockId 独立；跳出（满足 / 达上限）时 remove 该 blockId；run 结束随 RunState 弃。
+         */
+        final java.util.Map<String, Integer> repeatUntilRounds = new java.util.HashMap<>();
 
         RunState(String wallId, ScriptRule rule, TriggerContext ctx,
                  @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback) {
@@ -284,6 +289,33 @@ public final class ScriptRunner {
                         for (int round = 0; round < rep.count(); round++) {
                             stack.push(new Frame(rep.body(), 0, bodyPrefix));
                         }
+                        continue outer;
+                    }
+                    if (a instanceof Action.RepeatUntil ru) {
+                        // 0.7.2-P3：动态 while 循环——先查 condition（满足 / 达 maxIterations → 跳出），
+                        // 否则轮数+1 + 压回自身（Frame(acts,i) 含其后续）+ 压一轮 body（LIFO body 先执行）。
+                        // body 执行完弹回 Frame(acts,i) → 重新进入 RepeatUntil 再查 condition。轮数 Map 记、
+                        // 跳出清。RepeatUntil 自身每轮进入计 1 actionCount（循环顶 ++）+ body 计入 → Budget 50
+                        // 先于 maxIterations 100 兜底（防 condition 永 false 失控）。blockId 同构不带轮数。
+                        int rounds = st.repeatUntilRounds.getOrDefault(blockId, 0);
+                        boolean cond;
+                        try {
+                            cond = conditions.eval(ru.condition(), st.wallId);
+                        } catch (RuntimeException e) {
+                            cond = false; // 坏条件按未满足，靠 maxIterations 兜底
+                        }
+                        if (cond || rounds >= ru.maxIterations()) {
+                            st.repeatUntilRounds.remove(blockId);
+                            st.trace.add(TraceStep.ok(blockId, "action",
+                                    cond ? "repeatUntil 条件满足" : "repeatUntil 达上限"));
+                            i++; // 跳出循环，内层 while 继续后续 acts[i+1]
+                            continue;
+                        }
+                        st.repeatUntilRounds.put(blockId, rounds + 1);
+                        st.trace.add(TraceStep.ok(blockId, "action",
+                                "repeatUntil 第 " + (rounds + 1) + " 轮"));
+                        stack.push(new Frame(acts, i, f.prefix())); // 压回自身（i 不变，含后续）
+                        stack.push(new Frame(ru.body(), 0, blockId + "/body/")); // body 先执行
                         continue outer;
                     }
                     if (a instanceof Action.StopScript) {

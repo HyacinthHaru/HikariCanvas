@@ -57,16 +57,21 @@ function isIf(
     return node.type === 'if';
 }
 
-/** {@code repeat} 类型守卫——窄化到带 body 的有界循环。 */
-function isRepeat(
+/**
+ * 「带 {@code body} 子序列」容器块类型守卫——窄化到 repeat（有界循环，0.7.1-P2）与
+ * repeatUntil（动态循环，0.7.2-P3）。两者的 body 序列键同名（{@code body}），故下钻 / 回写
+ * 共用一条分支（getChildSeq / withChildSeq）。新增带 {@code body} 的块（如未来 forEach）只需
+ * 在此并入判别即可，导航 / 变换 / 遍历自动覆盖。
+ */
+function isBodyContainer(
     node: ScriptAction,
-): node is Extract<ScriptAction, { type: 'repeat' }> {
-    return node.type === 'repeat';
+): node is Extract<ScriptAction, { type: 'repeat' } | { type: 'repeatUntil' }> {
+    return node.type === 'repeat' || node.type === 'repeatUntil';
 }
 
 /**
  * 0.7.1-P2：取容器块 {@code node} 在序列键 {@code key} 下的子序列引用（只读，不复制）。
- * if → then/else；repeat → body。非容器块 / 键不属该块 → {@code null}。这是 blockTree
+ * if → then/else；repeat / repeatUntil → body。非容器块 / 键不属该块 → {@code null}。这是 blockTree
  * 所有"下钻嵌套序列"路径的<b>唯一</b>分支点（resolveSequence / transformSequence 共用）。
  */
 function getChildSeq(node: ScriptAction, key: string): ScriptAction[] | null {
@@ -75,7 +80,7 @@ function getChildSeq(node: ScriptAction, key: string): ScriptAction[] | null {
         if (key === 'else') return node.else;
         return null;
     }
-    if (isRepeat(node)) {
+    if (isBodyContainer(node)) {
         if (key === 'body') return node.body;
         return null;
     }
@@ -93,7 +98,7 @@ function withChildSeq(node: ScriptAction, key: string, newSeq: ScriptAction[]): 
         if (key === 'else') return { ...node, else: newSeq };
         return node;
     }
-    if (isRepeat(node)) {
+    if (isBodyContainer(node)) {
         if (key === 'body') return { ...node, body: newSeq };
         return node;
     }
@@ -265,7 +270,7 @@ function adjustParentPathAfterRemoval(
  * 前序遍历整棵树，对每个动作回调 {@code visitor(node, path)}。
  * path 是字符串路径（如 {@code "actions/2/then/1"}，与后端 trace 同构）。
  * 容器块先回调自身，再按 {@link NESTED_SEQ_KEYS} 顺序下钻各子序列
- * （if → then、else；repeat → body）。
+ * （if → then、else；repeat / repeatUntil → body）。
  */
 export function walk(
     actions: ScriptAction[],

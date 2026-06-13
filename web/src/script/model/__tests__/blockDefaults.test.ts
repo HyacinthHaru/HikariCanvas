@@ -113,8 +113,8 @@ describe('makeDefaultAction — 全 kind 合法', () => {
         expect(makeDefaultAction('nudgeElement')).toEqual({ type: 'nudgeElement', elementId: '', dx: 0, dy: 0 });
     });
 
-    it('sendMessage：空 text（后端合法）+ channel=chat（首项）', () => {
-        expect(makeDefaultAction('sendMessage')).toEqual({ type: 'sendMessage', text: '', channel: 'chat' });
+    it('sendMessage：空 text（后端合法）+ channel=chat（首项）+ target=trigger（默认发给触发玩家）', () => {
+        expect(makeDefaultAction('sendMessage')).toEqual({ type: 'sendMessage', text: '', channel: 'chat', target: 'trigger' });
     });
 
     it('setRandomVariable：非空 fullName + 区间 1..6（骰子）', () => {
@@ -287,5 +287,9 @@ describe('拖出新块即合法 — 不依赖墙状态的 kind 过 validateRule�
         // 0.7.1-P2：repeat 默认 body 空 → 拖出态报"循环体不能为空"（用户须往 body 拖块）。
         expect(validateRule(ruleWithAction(makeDefaultAction('repeat')))
             .some((e) => e.message.includes('循环体不能为空'))).toBe(true);
+        // 0.7.2-P3：repeatUntil 默认 body 空 → 拖出态报"重复循环体不能为空"（condition 有合法默认，
+        // 仅 body 空，用户须往 body 拖块；与 repeat 同文案）。
+        expect(validateRule(ruleWithAction(makeDefaultAction('repeatUntil')))
+            .some((e) => e.message === '重复循环体不能为空')).toBe(true);
     });
 });

@@ -337,28 +337,28 @@ class ScriptRuleValidatorTest {
     @Test
     void send_message_ok() {
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
-                List.of(new Action.SendMessage("hi", "chat")))));
+                List.of(new Action.SendMessage("hi", "chat", "trigger")))));
         // 空串合法
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
-                List.of(new Action.SendMessage("", "actionbar")))));
+                List.of(new Action.SendMessage("", "actionbar", "trigger")))));
     }
 
     @Test
     void send_message_null_text_rejected() {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
-                List.of(new Action.SendMessage(null, "chat")))).isPresent());
+                List.of(new Action.SendMessage(null, "chat", "trigger")))).isPresent());
     }
 
     @Test
     void send_message_too_long_rejected() {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
-                List.of(new Action.SendMessage("x".repeat(257), "chat")))).isPresent());
+                List.of(new Action.SendMessage("x".repeat(257), "chat", "trigger")))).isPresent());
     }
 
     @Test
     void send_message_bad_channel_rejected() {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
-                List.of(new Action.SendMessage("hi", "hologram")))).isPresent());
+                List.of(new Action.SendMessage("hi", "hologram", "trigger")))).isPresent());
     }
 
     @Test
@@ -587,5 +587,60 @@ class ScriptRuleValidatorTest {
                 List.of(new Action.DeleteElement("")))).isPresent());
         assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.DeleteElement("e-1")))));
+    }
+
+    // ---------- 0.7.2-P3：repeatUntil + sendMessage target 白名单 ----------
+
+    @Test
+    void repeatUntil_ok() {
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.RepeatUntil("var(\"user/x\")>0", 10,
+                        List.of(new Action.Log("x")))))));
+    }
+
+    @Test
+    void repeatUntil_blank_condition_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.RepeatUntil("", 10, List.of(new Action.Log("x")))))).isPresent());
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.RepeatUntil("   ", 10, List.of(new Action.Log("x")))))).isPresent());
+    }
+
+    @Test
+    void repeatUntil_maxIterations_low_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.RepeatUntil("var(\"user/x\")>0", 0,
+                        List.of(new Action.Log("x")))))).isPresent());
+    }
+
+    @Test
+    void repeatUntil_maxIterations_high_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.RepeatUntil("var(\"user/x\")>0", 200,
+                        List.of(new Action.Log("x")))))).isPresent());
+    }
+
+    @Test
+    void repeatUntil_empty_body_rejected() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.RepeatUntil("var(\"user/x\")>0", 10, List.of())))).isPresent());
+    }
+
+    @Test
+    void repeatUntil_body_recursively_validated() {
+        // body 内含非法动作（wait 太短）→ 校验递归到 body 报错
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.RepeatUntil("var(\"user/x\")>0", 10,
+                        List.of(new Action.Wait(10)))))).isPresent());
+    }
+
+    @Test
+    void sendMessage_target_whitelist() {
+        assertTrue(ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage("x", "chat", "nope")))).isPresent());
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage("x", "chat", "all")))));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SendMessage("x", "chat", "trigger")))));
     }
 }

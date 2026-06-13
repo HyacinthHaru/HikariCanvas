@@ -844,6 +844,8 @@ export const messages = {
                 playTimelineAwait: '播放并等待',
                 // 0.7.1-P2：有界循环。
                 repeat: '重复',
+                // 0.7.2-P3：重复直到条件。
+                repeatUntil: '重复直到',
                 // 0.7.1-P5：3 个剩余动作。
                 stopScript: '停止脚本',
                 playParticle: '播放粒子',
@@ -913,6 +915,9 @@ export const messages = {
                 copyTarget: '到',
                 appendTarget: '追加到',
                 appendText: '内容',
+                // 0.7.2-P3：重复直到 / 发消息字段。
+                maxIterations: '最多次数',
+                msgTarget: '发给',
             },
             // select / 切换 类字段的选项友好文案。
             fieldOptions: {
@@ -921,6 +926,9 @@ export const messages = {
                 opSeek: '跳到',
                 scopeNear: '附近玩家',
                 scopeAll: '全服玩家',
+                // 0.7.2-P3：发消息对象。
+                targetTrigger: '触发的玩家',
+                targetAll: '全服玩家',
                 // 0.7.1-P5：14 个内置粒子。
                 particleFlame: '火焰',
                 particleSmoke: '烟雾',
@@ -2040,6 +2048,8 @@ export const messages = {
                 playTimelineAwait: 'Play and wait',
                 // 0.7.1-P2: bounded loop.
                 repeat: 'Repeat',
+                // 0.7.2-P3: repeat until condition.
+                repeatUntil: 'Repeat until',
                 // 0.7.1-P5: three remaining actions.
                 stopScript: 'Stop script',
                 playParticle: 'Play particle',
@@ -2108,6 +2118,9 @@ export const messages = {
                 copyTarget: 'To',
                 appendTarget: 'Append to',
                 appendText: 'Text',
+                // 0.7.2-P3: repeat-until / send-message fields.
+                maxIterations: 'Max times',
+                msgTarget: 'Send to',
             },
             fieldOptions: {
                 opPlay: 'Play',
@@ -2115,6 +2128,9 @@ export const messages = {
                 opSeek: 'Seek',
                 scopeNear: 'Nearby players',
                 scopeAll: 'All players',
+                // 0.7.2-P3: send-message target.
+                targetTrigger: 'Triggering player',
+                targetAll: 'Everyone',
                 // 0.7.1-P5: 14 built-in particles.
                 particleFlame: 'Flame',
                 particleSmoke: 'Smoke',

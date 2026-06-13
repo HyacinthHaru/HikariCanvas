@@ -85,6 +85,15 @@ export const SCALE_OPS: ReadonlySet<string> = new Set(['multiply', 'divide']);
 export const REPEAT_MIN = 1;
 export const REPEAT_MAX = 100;
 
+// ---------- 0.7.2-P3 常量（sendMessage target / repeatUntil，逐一对照 ScriptRuleValidator.java）----------
+
+/**
+ * SendMessage.target 白名单。后端 {@code MESSAGE_TARGETS}。{@code trigger} 给触发玩家（默认）/
+ * {@code all} 全服广播。repeatUntil 的 maxIterations 范围复用 {@link REPEAT_MIN} / {@link REPEAT_MAX}
+ * （后端同样复用 repeat 的 1..100 硬上限，不另加 config）。
+ */
+export const MESSAGE_TARGETS: ReadonlySet<string> = new Set(['trigger', 'all']);
+
 // ---------- 0.7.1-P5 常量（停止 / 粒子 / 等待直到，逐一对照 ScriptRuleValidator.java）----------
 
 /** PlayParticle.count 范围。后端 {@code PARTICLE_COUNT_MIN} / {@code PARTICLE_COUNT_MAX}。 */
@@ -405,6 +414,12 @@ function validateAction(
             if (action.channel == null || !MESSAGE_CHANNELS.has(action.channel)) {
                 errors.push({ blockId: path, message: `消息渠道不在允许范围：${action.channel}` });
             }
+            // 0.7.2-P3：target 白名单（trigger / all）。后端 Deserializer 缺省默 'trigger'，故
+            // <b>缺失（旧 payload）当 trigger 放行</b>（向后兼容）；非空但不在白名单才拒。
+            // 文案与后端 ScriptRuleValidator 逐字一致（"发送对象不在允许范围："）。
+            if (action.target != null && !MESSAGE_TARGETS.has(action.target)) {
+                errors.push({ blockId: path, message: `发送对象不在允许范围：${action.target}` });
+            }
             break;
         }
         case 'setRandomVariable': {
@@ -448,6 +463,24 @@ function validateAction(
             }
             // body 递归（ifDepth 不变——repeat 不增 if 深度）；blockId 路径 `${path}/body`
             // 与后端 ScriptRunner 展开同构（不带 round，前端只一份 body）。
+            validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
+            break;
+        }
+        // ---- 0.7.2-P3：repeatUntil 动态循环（while 语义；文案与后端 ScriptRuleValidator 逐字一致）----
+        // 与 repeat 部分措辞有别：condition 报"重复条件…"、maxIterations 报"重复次数上限…"；
+        // body 空与 repeat 同文案"重复循环体不能为空"。
+        case 'repeatUntil': {
+            if (isBlank(action.condition) || action.condition.length > CONDITION_MAX) {
+                errors.push({ blockId: path, message: `重复条件不能为空且最多 ${CONDITION_MAX} 字符` });
+            }
+            if (typeof action.maxIterations !== 'number' || action.maxIterations < REPEAT_MIN || action.maxIterations > REPEAT_MAX) {
+                errors.push({ blockId: path, message: `重复次数上限需在 ${REPEAT_MIN}..${REPEAT_MAX} 之间` });
+            }
+            if (!action.body || action.body.length === 0) {
+                errors.push({ blockId: path, message: '重复循环体不能为空' });
+            }
+            // body 递归（ifDepth 不变——repeatUntil 不增 if 深度）；blockId 路径 `${path}/body`
+            // 与后端 ScriptRunner 动态压栈 blockId 同构（不带轮数，前端只一份 body）。
             validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
             break;
         }
@@ -522,7 +555,9 @@ function countBlocks(actions: ScriptAction[]): number {
         count++;
         if (action.type === 'if') {
             count += countBlocks(action.then ?? []) + countBlocks(action.else ?? []);
-        } else if (action.type === 'repeat') {
+        } else if (action.type === 'repeat' || action.type === 'repeatUntil') {
+            // 0.7.2-P3：repeatUntil 与 repeat 同——自身计 1 + body 节点递归（不乘轮数；
+            // 展开数超 50 靠运行时 Budget 熔断，§9 决策）。
             count += countBlocks(action.body ?? []);
         }
     }

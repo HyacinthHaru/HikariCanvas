@@ -39,6 +39,9 @@ import {
     PARTICLE_COUNT_MAX,
     WAITUNTIL_TIMEOUT_MIN,
     WAITUNTIL_TIMEOUT_MAX,
+    REPEAT_MIN,
+    REPEAT_MAX,
+    MESSAGE_TARGETS,
 } from '../validator';
 import type { ScriptRule, ScriptAction, ScriptTrigger } from '@/types/protocol';
 
@@ -91,6 +94,11 @@ describe('validator 常量与后端 ScriptRuleValidator.java 一致', () => {
         expect(KIND_MAX).toBe(32);
         expect([...MESSAGE_CHANNELS].sort()).toEqual(['actionbar', 'chat', 'title']);
         expect([...SCALE_OPS].sort()).toEqual(['divide', 'multiply']);
+    });
+    it('0.7.2-P3 常量与后端一致（target 白名单 + repeatUntil 范围复用 repeat）', () => {
+        expect([...MESSAGE_TARGETS].sort()).toEqual(['all', 'trigger']);
+        // repeatUntil maxIterations 复用 repeat 的 count 硬上限（1..100，不另加 config）。
+        expect([REPEAT_MIN, REPEAT_MAX]).toEqual([1, 100]);
     });
 });
 
@@ -315,18 +323,32 @@ describe('validateRule — 0.7.1 新动作字段', () => {
     });
 
     it('sendMessage 合法 / text=null / text 超长 / 非法 channel', () => {
-        const ok: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'actionbar' };
+        const ok: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'actionbar', target: 'trigger' };
         expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
         // 空串合法（text != null）。
-        expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: '', channel: 'chat' }] }))).toEqual([]);
-        const nul = { type: 'sendMessage', text: null, channel: 'chat' } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: '', channel: 'chat', target: 'trigger' }] }))).toEqual([]);
+        const nul = { type: 'sendMessage', text: null, channel: 'chat', target: 'trigger' } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [nul] })).some((e) => e.message === '发消息内容不能为 null')).toBe(true);
-        const long: ScriptAction = { type: 'sendMessage', text: 'a'.repeat(MESSAGE_MAX + 1), channel: 'chat' };
+        const long: ScriptAction = { type: 'sendMessage', text: 'a'.repeat(MESSAGE_MAX + 1), channel: 'chat', target: 'trigger' };
         expect(validateRule(rule({ actions: [long] })).some((e) => e.message === `发消息内容超长（最多 ${MESSAGE_MAX}）`)).toBe(true);
-        const badCh = { type: 'sendMessage', text: 'hi', channel: 'boss' } as unknown as ScriptAction;
+        const badCh = { type: 'sendMessage', text: 'hi', channel: 'boss', target: 'trigger' } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [badCh] })).some((e) => e.message === '消息渠道不在允许范围：boss')).toBe(true);
         // text 256 合法。
-        expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: 'a'.repeat(MESSAGE_MAX), channel: 'title' }] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [{ type: 'sendMessage', text: 'a'.repeat(MESSAGE_MAX), channel: 'title', target: 'trigger' }] }))).toEqual([]);
+    });
+
+    // ---- 0.7.2-P3：sendMessage 加 target（trigger 默认 / all 全服），白名单与后端逐字一致 ----
+    it('sendMessage target 白名单：trigger / all 合法，其他报错', () => {
+        const trigger: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'chat', target: 'trigger' };
+        expect(validateRule(rule({ actions: [trigger] }))).toEqual([]);
+        const all: ScriptAction = { type: 'sendMessage', text: 'hi', channel: 'chat', target: 'all' };
+        expect(validateRule(rule({ actions: [all] }))).toEqual([]);
+        const bad = { type: 'sendMessage', text: 'hi', channel: 'chat', target: 'nope' } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [bad] }))
+            .some((e) => e.message === '发送对象不在允许范围：nope' && e.blockId === 'actions/0')).toBe(true);
+        // target 缺失（旧 payload）→ 当 trigger 不报错（向后兼容，与后端 Deserializer 默 trigger 同口径）。
+        const legacy = { type: 'sendMessage', text: 'hi', channel: 'chat' } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [legacy] }))).toEqual([]);
     });
 
     it('setRandomVariable 合法 / 空 fullName / min>max / NaN', () => {
@@ -554,6 +576,71 @@ describe('validateRule — repeat 有界循环（count 1..100 + body 非空 + �
         // 再加 1 → 51 超上限。
         const body50: ScriptAction[] = Array.from({ length: 50 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
         expect(validateRule(rule({ actions: [mk(100, body50)] }))
+            .some((e) => e.message.includes('积木总数'))).toBe(true); // 51
+    });
+});
+
+// ---------- 0.7.2-P3：repeatUntil 动态循环（while 语义；condition + maxIterations + body）----------
+
+describe('validateRule — repeatUntil 重复直到（condition 非空 + maxIterations 1..100 + body 非空 + 递归）', () => {
+    /** 造一个 repeatUntil（condition + maxIterations + body）。 */
+    function mk(condition: string, maxIterations: number, body: ScriptAction[]): ScriptAction {
+        return { type: 'repeatUntil', condition, maxIterations, body };
+    }
+    const cond = 'var("user/x") > 0';
+    const oneLog: ScriptAction[] = [{ type: 'log', message: 'x' }];
+
+    it('合法（condition 非空 + maxIterations 落界 + body 非空）返空', () => {
+        expect(validateRule(rule({ actions: [mk(cond, 10, oneLog)] }))).toEqual([]);
+    });
+
+    it('maxIterations 边界 1 / 100 合法', () => {
+        expect(validateRule(rule({ actions: [mk(cond, REPEAT_MIN, oneLog)] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [mk(cond, REPEAT_MAX, oneLog)] }))).toEqual([]);
+    });
+
+    it('空 condition → 报错（文案"重复条件不能为空且最多 512 字符"）', () => {
+        const errs = validateRule(rule({ actions: [mk('  ', 10, oneLog)] }));
+        expect(errs.some((e) => e.message === `重复条件不能为空且最多 ${CONDITION_MAX} 字符` && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('condition 512 合法 / 513 超长', () => {
+        expect(validateRule(rule({ actions: [mk('a'.repeat(CONDITION_MAX), 10, oneLog)] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [mk('a'.repeat(CONDITION_MAX + 1), 10, oneLog)] }))
+            .some((e) => e.message === `重复条件不能为空且最多 ${CONDITION_MAX} 字符`)).toBe(true);
+    });
+
+    it('maxIterations 0 / 101 报错（文案"重复次数上限需在 1..100 之间"）', () => {
+        const lo = validateRule(rule({ actions: [mk(cond, 0, oneLog)] }));
+        const hi = validateRule(rule({ actions: [mk(cond, 101, oneLog)] }));
+        expect(lo.some((e) => e.message === `重复次数上限需在 ${REPEAT_MIN}..${REPEAT_MAX} 之间` && e.blockId === 'actions/0')).toBe(true);
+        expect(hi.some((e) => e.message === `重复次数上限需在 ${REPEAT_MIN}..${REPEAT_MAX} 之间`)).toBe(true);
+    });
+
+    it('body 空 → 报错（文案"重复循环体不能为空"，与 repeat 同口径）', () => {
+        const errs = validateRule(rule({ actions: [mk(cond, 10, [])] }));
+        expect(errs.some((e) => e.message === '重复循环体不能为空' && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('body 内动作错误带正确 blockId 路径 actions/0/body/0（与后端 ScriptRunner 同构）', () => {
+        const errs = validateRule(rule({ actions: [mk(cond, 10, [{ type: 'wait', ms: 1 }])] }));
+        const waitErr = errs.find((e) => e.message.includes('等待时长'));
+        expect(waitErr?.blockId).toBe('actions/0/body/0');
+    });
+
+    it('repeatUntil 不增 if 深度：body 内放深 4 的 if 合法', () => {
+        let inner: ScriptAction[] = [{ type: 'log', message: 'x' }];
+        for (let i = 0; i < MAX_IF_DEPTH; i++) {
+            inner = [{ type: 'if', condition: 'true', then: inner, else: [] }];
+        }
+        expect(validateRule(rule({ actions: [mk(cond, 5, inner)] }))).toEqual([]);
+    });
+
+    it('countBlocks 计 repeatUntil 自身 + body 节点（硬限 50 是树节点数）', () => {
+        const body49: ScriptAction[] = Array.from({ length: 49 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
+        expect(validateRule(rule({ actions: [mk(cond, 100, body49)] }))).toEqual([]); // 1 + 49 = 50
+        const body50: ScriptAction[] = Array.from({ length: 50 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
+        expect(validateRule(rule({ actions: [mk(cond, 100, body50)] }))
             .some((e) => e.message.includes('积木总数'))).toBe(true); // 51
     });
 });

@@ -175,6 +175,19 @@ const isIf = computed(() => props.action.type === 'if');
  */
 const isRepeat = computed(() => props.action.type === 'repeat');
 
+/**
+ * 是否 repeatUntil 块（0.7.2-P3，C 形单臂布局：condition + maxIterations 标量 + body 子序列槽）。
+ * condition 走下方 {@code conditionField && !isIf} 行的 ConditionBuilder（同 waitUntil）；
+ * maxIterations 走 scalarFields 在头部由 BlockParamInput 渲染（number）；body 是 statements 子槽（C 臂）。
+ */
+const isRepeatUntil = computed(() => props.action.type === 'repeatUntil');
+
+/**
+ * 是否带 {@code body} C 臂的循环块（repeat 或 repeatUntil）——决定要不要渲染 body 子序列槽
+ * + C 形底托。统一二者的 C 形渲染分支，避免模板里写两段近乎一致的 body 槽。
+ */
+const hasBodySlot = computed(() => isRepeat.value || isRepeatUntil.value);
+
 /** 锁定态：true 时所有参数控件 disabled（透传给 BlockParamInput）。 */
 const locked = computed(() => project.isLocked);
 
@@ -363,12 +376,12 @@ const elseActions = computed<ScriptAction[]>(() =>
     props.action.type === 'if' ? props.action.else : [],
 );
 /**
- * repeat 的 body 子序列（0.7.1-P2；非 repeat 块为空）。子块 path 拼
- * {@code `${path}/body/${i}`}——<b>与后端 ScriptRunner 展开 blockId 逐字符同构</b>
- * （展开 count 轮但 blockId 不带 round，前端只一份 body）。
+ * repeat / repeatUntil 的 body 子序列（0.7.1-P2 / 0.7.2-P3；无 body 块为空）。子块 path 拼
+ * {@code `${path}/body/${i}`}——<b>与后端 ScriptRunner 展开 / 动态压栈 blockId 逐字符同构</b>
+ * （blockId 不带轮数，前端只一份 body）。
  */
 const bodyActions = computed<ScriptAction[]>(() =>
-    props.action.type === 'repeat' ? props.action.body : [],
+    (props.action.type === 'repeat' || props.action.type === 'repeatUntil') ? props.action.body : [],
 );
 
 /**
@@ -442,7 +455,7 @@ const needSelectTitle = computed(() =>
 <template>
   <div
     class="hc-block-node"
-    :class="[(isIf || isRepeat) ? 'hc-block-node-if' : '', highlightResult ? 'hc-block-node-hl' : '']"
+    :class="[(isIf || hasBodySlot) ? 'hc-block-node-if' : '', highlightResult ? 'hc-block-node-hl' : '']"
     :data-block-path="path"
     :data-hl-result="highlightResult || null"
     :title="highlightDetail || undefined"
@@ -620,9 +633,10 @@ const needSelectTitle = computed(() =>
       <div class="hc-block-if-foot" aria-hidden="true" />
     </template>
 
-    <!-- 0.7.1-P2 repeat 块 C 形（单臂）：count 标量在头部已渲染，这里只画 body 子序列槽。
-         子块 path = `${path}/body/${i}`，与后端 ScriptRunner 展开 blockId 同构（不带 round）。 -->
-    <template v-if="isRepeat">
+    <!-- 0.7.1-P2 repeat / 0.7.2-P3 repeatUntil 块 C 形（单臂）：标量（count / maxIterations）+
+         repeatUntil 的 condition 行均在上方已渲染，这里只画 body 子序列槽。
+         子块 path = `${path}/body/${i}`，与后端 ScriptRunner 展开 / 动态压栈 blockId 同构（不带轮数）。 -->
+    <template v-if="hasBodySlot">
       <div class="hc-block-branch">
         <span class="hc-branch-label">{{ resolveLabelKey(t, 'script.fields.body') }}</span>
         <div class="hc-branch-slot">

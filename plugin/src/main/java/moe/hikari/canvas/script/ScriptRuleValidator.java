@@ -66,6 +66,8 @@ public final class ScriptRuleValidator {
     public static final int KIND_MAX = 32;
     /** 0.7.1 SendMessage.channel 白名单。 */
     public static final Set<String> MESSAGE_CHANNELS = Set.of("chat", "actionbar", "title");
+    /** 0.7.2-P3 SendMessage.target 白名单（trigger=触发玩家 / all=全服广播）。 */
+    public static final Set<String> MESSAGE_TARGETS = Set.of("trigger", "all");
     /** 0.7.1 ScaleVariable.op 白名单。 */
     public static final Set<String> SCALE_OPS = Set.of("multiply", "divide");
     /** 0.7.1 Repeat.count 范围（次）。 */
@@ -160,6 +162,9 @@ public final class ScriptRuleValidator {
                 count += countBlocks(iff.then()) + countBlocks(iff.elseActions());
             } else if (action instanceof Action.Repeat rep) {
                 count += countBlocks(rep.body());
+            } else if (action instanceof Action.RepeatUntil ru) {
+                // 0.7.2-P3：repeatUntil body 计入节点数（同 Repeat，不乘轮数——动态轮数由 Budget 兜底）
+                count += countBlocks(ru.body());
             }
         }
         return count;
@@ -329,6 +334,10 @@ public final class ScriptRuleValidator {
                 if (a.channel() == null || !MESSAGE_CHANNELS.contains(a.channel())) {
                     yield Optional.of("消息渠道不在允许范围：" + a.channel());
                 }
+                // 0.7.2-P3：target 白名单（trigger / all）
+                if (a.target() == null || !MESSAGE_TARGETS.contains(a.target())) {
+                    yield Optional.of("发送对象不在允许范围：" + a.target());
+                }
                 yield Optional.empty();
             }
             case Action.SetRandomVariable a -> {
@@ -424,6 +433,20 @@ public final class ScriptRuleValidator {
             case Action.DeleteElement a -> blank(a.elementId())
                     ? Optional.of("删除元素的目标不能为空")
                     : Optional.empty();
+            // 0.7.2-P3：重复直到条件（condition 非空 + maxIterations∈[1,100] + body 非空递归）
+            case Action.RepeatUntil a -> {
+                if (blank(a.condition()) || a.condition().length() > CONDITION_MAX) {
+                    yield Optional.of("重复条件不能为空且最多 " + CONDITION_MAX + " 字符");
+                }
+                if (a.maxIterations() < REPEAT_MIN || a.maxIterations() > REPEAT_MAX) {
+                    yield Optional.of("重复次数上限需在 " + REPEAT_MIN + ".." + REPEAT_MAX + " 之间");
+                }
+                if (a.body().isEmpty()) {
+                    yield Optional.of("重复循环体不能为空");
+                }
+                // body 递归（ifDepth 不变——repeatUntil 不增 if 嵌套深度，同 Repeat）
+                yield validateActions(a.body(), ifDepth);
+            }
         };
     }
 

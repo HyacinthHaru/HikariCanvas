@@ -60,6 +60,8 @@ public final class ScriptPermissions {
                 }
                 // 0.7.1：Repeat 递归扫 body（循环体内动作的权限面照常生效）
                 case Action.Repeat rep -> scanActions(rep.body(), facets);
+                // 0.7.2-P3：RepeatUntil 递归扫 body（同 Repeat）
+                case Action.RepeatUntil ru -> scanActions(ru.body(), facets);
                 // 以下子类无附加权限面（显式列出而非 default，保证穷尽性）
                 case Action.SetVariable ignored -> { }
                 case Action.IncrementVariable ignored -> { }

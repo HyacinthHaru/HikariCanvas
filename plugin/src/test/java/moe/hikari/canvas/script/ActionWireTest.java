@@ -105,7 +105,7 @@ class ActionWireTest {
     }
 
     @Test void sendMessage_roundTrip() throws Exception {
-        Action a = new Action.SendMessage("hi ${var:user/name}", "actionbar");
+        Action a = new Action.SendMessage("hi ${var:user/name}", "actionbar", "trigger");
         assertEquals(a, mapper.readValue(mapper.writeValueAsString(a), Action.class));
     }
 
@@ -266,5 +266,58 @@ class ActionWireTest {
         assertThrows(Exception.class, () -> mapper.readValue(
                 "{\"type\":\"cloneElement\",\"elementId\":\"e-1\",\"offsetX\":1.5,\"offsetY\":2}",
                 Action.class));
+    }
+
+    // ---------- 0.7.2-P3：repeatUntil round-trip + sendMessage 加 target ----------
+
+    @Test void repeatUntil_roundtrip() throws Exception {
+        Action a = new Action.RepeatUntil("var(\"user/x\") > 5", 10,
+                List.of(new Action.Log("loop")));
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"type\":\"repeatUntil\""), json);
+        assertTrue(json.contains("\"maxIterations\":10"), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    /** repeatUntil body 含 if 嵌套（递归 round-trip）。 */
+    @Test void repeatUntil_nestedBody_roundtrip() throws Exception {
+        String json = "{\"type\":\"repeatUntil\",\"condition\":\"1 > 0\",\"maxIterations\":5,"
+                + "\"body\":[{\"type\":\"log\",\"message\":\"a\"},"
+                + "{\"type\":\"if\",\"condition\":\"2 > 1\",\"then\":[{\"type\":\"wait\",\"ms\":100}],"
+                + "\"else\":[]}]}";
+        Action a = mapper.readValue(json, Action.class);
+        assertInstanceOf(Action.RepeatUntil.class, a);
+        Action.RepeatUntil ru = (Action.RepeatUntil) a;
+        assertEquals(5, ru.maxIterations());
+        assertEquals(2, ru.body().size());
+        assertEquals(mapper.readTree(json), mapper.readTree(mapper.writeValueAsString(a)));
+    }
+
+    /** repeatUntil.maxIterations 非整数值 → 拒（K8 纪律）。 */
+    @Test void repeatUntil_fractionalMaxIterationsRejected() {
+        assertThrows(Exception.class, () -> mapper.readValue(
+                "{\"type\":\"repeatUntil\",\"condition\":\"x>0\",\"maxIterations\":3.5,\"body\":[]}",
+                Action.class));
+    }
+
+    /** repeatUntil 缺 condition → 拒。 */
+    @Test void repeatUntil_missingConditionRejected() {
+        assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                () -> mapper.readValue(
+                        "{\"type\":\"repeatUntil\",\"maxIterations\":3,\"body\":[]}", Action.class));
+    }
+
+    @Test void sendMessage_withTarget_roundtrip() throws Exception {
+        Action a = new Action.SendMessage("hi", "chat", "all");
+        String json = mapper.writeValueAsString(a);
+        assertTrue(json.contains("\"target\":\"all\""), json);
+        assertEquals(a, mapper.readValue(json, Action.class));
+    }
+
+    /** 旧 payload 无 target → 反序列化默 "trigger"（向后兼容）。 */
+    @Test void sendMessage_legacyNoTarget_defaultsToTrigger() throws Exception {
+        String legacy = "{\"type\":\"sendMessage\",\"text\":\"x\",\"channel\":\"chat\"}";
+        Action a = mapper.readValue(legacy, Action.class);
+        assertEquals("trigger", ((Action.SendMessage) a).target());
     }
 }
