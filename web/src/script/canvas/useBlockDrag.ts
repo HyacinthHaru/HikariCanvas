@@ -3,7 +3,7 @@ import { useScriptEditStore } from '@/stores/scriptEdit';
 import { useProjectStore } from '@/stores/project';
 import { insertAt, moveNode, parsePath, pathToString } from '@/script/model/blockTree';
 import { findDropTarget, type SlotRect } from '@/script/model/dropTarget';
-import { makeDefaultAction } from '@/script/model/blockDefs';
+import { makeDefaultAction, TWEENABLE_KINDS } from '@/script/model/blockDefs';
 
 /**
  * 0.7.0-P4-D2：积木拖拽吸附核心（决策 K-UI-3）。
@@ -89,12 +89,16 @@ export function pointInRect(
  * - {@code ruleId}：所属积木堆（规则）id；
  * - {@code kind}：{@code 'block'}（真实动作块）/ {@code 'hat'}（触发器帽子，不在 actions 序列内）/
  *   {@code 'emptySlot'}（空容器占位，path 即该容器序列的 parentPath）；
+ * - {@code blockType}：{@code data-block-type} 属性值（真实块的 action.type，如 'tweenBlock' /
+ *   'if' / 'repeat'）；hat / emptySlot 无此值；
  * - {@code rect}：viewport（屏幕）坐标矩形。
  */
 export interface MeasuredBlock {
     path: string;
     ruleId: string;
     kind: 'block' | 'hat' | 'emptySlot';
+    /** 块的 action.type（由 data-block-type 读入；非 block 类型为 undefined）。 */
+    blockType?: string;
     rect: { left: number; top: number; width: number; height: number };
 }
 
@@ -127,6 +131,25 @@ export function buildSlots(
 ): SlotRect[] {
     const slots: SlotRect[] = [];
 
+    // 0) 建 blockType 查表：block path → blockType（供子序列插槽标 containerBlockType）。
+    const blockTypeMap = new Map<string, string>();
+    for (const m of measured) {
+        if (m.kind === 'block' && m.blockType) {
+            blockTypeMap.set(m.path, m.blockType);
+        }
+    }
+
+    /**
+     * 从 parentPath 推断容器块 type：末段若为 body/then/else，则去掉末段得到容器块 path，查 blockTypeMap。
+     * 顶层 actions 序列无容器块，返 undefined。
+     */
+    function containerTypeOf(parentPath: string[]): string | undefined {
+        const lastSeg = parentPath[parentPath.length - 1];
+        if (lastSeg !== 'body' && lastSeg !== 'then' && lastSeg !== 'else') return undefined;
+        const containerPath = pathToString(parentPath.slice(0, parentPath.length - 1));
+        return blockTypeMap.get(containerPath);
+    }
+
     // 1) 空容器占位 → 单 index=0 插槽。
     for (const m of measured) {
         if (m.kind !== 'emptySlot') continue;
@@ -140,6 +163,7 @@ export function buildSlots(
             y: m.rect.top,
             w: m.rect.width,
             h: m.rect.height,
+            containerBlockType: containerTypeOf(parentPath),
         });
     }
 
@@ -165,6 +189,7 @@ export function buildSlots(
 
     // 3) 每组：before 插槽（块上沿）+ 尾插槽（末块下沿）。
     for (const g of bySeq.values()) {
+        const contType = containerTypeOf(g.parentPath);
         g.entries.sort((a, b) => a.index - b.index);
         for (const e of g.entries) {
             slots.push({
@@ -175,6 +200,7 @@ export function buildSlots(
                 y: e.m.rect.top,
                 w: e.m.rect.width,
                 h: bandH,
+                containerBlockType: contType,
             });
         }
         // 尾插槽：末块下沿，index = 末块 index + 1。
@@ -187,6 +213,7 @@ export function buildSlots(
             y: last.m.rect.top + last.m.rect.height - bandH,
             w: last.m.rect.width,
             h: bandH,
+            containerBlockType: contType,
         });
     }
 
@@ -218,6 +245,7 @@ export function collectSlots(canvasEl: HTMLElement, draggingPath: string[] | nul
             path,
             ruleId,
             kind: path === 'trigger' ? 'hat' : 'block',
+            blockType: el.getAttribute('data-block-type') ?? undefined,
             rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
         });
     });
@@ -284,6 +312,34 @@ type DragState =
     | { mode: 'palette'; kind: string; grabDx: number; grabDy: number }
     | { mode: 'block'; ruleId: string; path: string[]; kind: string; grabDx: number; grabDy: number }
     | { mode: 'stack'; ruleId: string; startX: number; startY: number; x0: number; y0: number };
+
+/**
+ * tween-P4：判断「被拖积木是否允许落入目标插槽」。
+ *
+ * tweenBlock body 只允许 setElementProperties（kind ∈ TWEENABLE_KINDS），其他积木一律不可落。
+ * 顶层序列 / if / repeat / repeatUntil 无此限制，直接返 true。
+ *
+ * @param draggingKind  被拖积木 kind（palette 源从 kind 直接取；block 源从 action.type 取）。
+ * @param slot          目标插槽。
+ * @param draggingActionKind  palette 源友好积木的 kind（如 'moveTo'）；非 setElementProperties 时同 draggingKind。
+ */
+export function isTweenBodySlotAllowed(
+    draggingKind: string,
+    slot: SlotRect,
+    draggingActionKind?: string,
+): boolean {
+    if (slot.containerBlockType !== 'tweenBlock') return true;
+    // tweenBlock body 要求：必须是 setElementProperties 且 kind ∈ TWEENABLE_KINDS。
+    // setElementProperties（友好积木）：draggingKind = 'setElementProperties'，actionKind = friendly kind。
+    // palette 拖出时 draggingKind 是 friendly kind（如 'moveTo'），需用 FRIENDLY_ELEMENT_DEFS 推断。
+    const effectiveKind = draggingActionKind ?? draggingKind;
+    if (draggingKind === 'setElementProperties') {
+        return TWEENABLE_KINDS.has(effectiveKind);
+    }
+    // 友好积木 kind（moveTo/resize/rotateTo/setOpacity/setColor）直接在 TWEENABLE_KINDS 里。
+    // setText/show/hide 不在 TWEENABLE_KINDS 里，会被排除。
+    return TWEENABLE_KINDS.has(draggingKind);
+}
 
 export function useBlockDrag(opts: {
     /** 画布 viewport DOM（collectSlots 测量根 + setPointerCapture 目标兜底）。 */
@@ -464,7 +520,9 @@ export function useBlockDrag(opts: {
     /** 拖动中更新跟手浮层 + 吸附命中（palette / block 源共用）。 */
     function updateDrag(clientX: number, clientY: number, grabDx: number, grabDy: number, kind: string): void {
         ghost.value = { kind, x: clientX - grabDx, y: clientY - grabDy };
-        activeSlot.value = findDropTarget(cachedSlots, clientX, clientY, DROP_THRESHOLD);
+        // tween-P4：过滤不允许落入 tweenBlock body 的插槽（isTweenBodySlotAllowed 语义校验）。
+        const allowedSlots = cachedSlots.filter((s) => isTweenBodySlotAllowed(kind, s));
+        activeSlot.value = findDropTarget(allowedSlots, clientX, clientY, DROP_THRESHOLD);
     }
 
     // ----- palette 源：拖出新块 -----
@@ -682,8 +740,10 @@ export function useBlockDrag(opts: {
             return;
         }
 
-        // palette / block：按命中插槽落树。
-        const hit = findDropTarget(cachedSlots, e.clientX, e.clientY, DROP_THRESHOLD);
+        // palette / block：按命中插槽落树。tween-P4：同 updateDrag，过滤 tweenBlock body 约束。
+        const dragKind = s.mode === 'palette' ? s.kind : s.kind;
+        const allowedSlotsUp = cachedSlots.filter((slot) => isTweenBodySlotAllowed(dragKind, slot));
+        const hit = findDropTarget(allowedSlotsUp, e.clientX, e.clientY, DROP_THRESHOLD);
         if (hit === null) {
             // 无命中：palette 源丢弃（不创建）；画布源还原（不拆堆）。两者都只是 abort。
             abortDrag();

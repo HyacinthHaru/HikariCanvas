@@ -166,6 +166,8 @@ const TWEEN_EASING_OPTIONS: FieldOption[] = [
     { value: 'easeIn', labelKey: 'timeline.easingEaseIn' },
     { value: 'easeOut', labelKey: 'timeline.easingEaseOut' },
     { value: 'easeInOut', labelKey: 'timeline.easingEaseInOut' },
+    // tween-P4：自定义贝塞尔曲线（复用 EasingCurveEditor；i18n key 复用 timeline.easingCustom）。
+    { value: 'cubicBezier', labelKey: 'timeline.easingCustom' },
 ];
 
 /**

@@ -22,7 +22,10 @@
  * - {@code parentPath}：容纳序列的 path（{@code blockTree} 的 parentPath，如顶层
  *   {@code ['actions']} 或 if 槽 {@code ['actions','2','then']}）；
  * - {@code index}：在该序列中的插入下标；
- * - {@code x/y/w/h}：插槽间隙的屏幕矩形（像素）。
+ * - {@code x/y/w/h}：插槽间隙的屏幕矩形（像素）；
+ * - {@code containerBlockType}：该插槽所在容器块的 type（仅 body/then/else 子序列槽有值；
+ *   顶层 actions 无容器块，值为 undefined）。供外部做拖入类型限制（如 tweenBlock body 只
+ *   允许放 setElementProperties + TWEENABLE_KINDS）。
  */
 export interface SlotRect {
     stackRuleId: string;
@@ -32,6 +35,8 @@ export interface SlotRect {
     y: number;
     w: number;
     h: number;
+    /** 该插槽所在容器块 type（仅子序列槽有值，顶层为 undefined）。 */
+    containerBlockType?: string;
 }
 
 /**

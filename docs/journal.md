@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-06-14 · 补间动画 P4 完工：前端 UI 完善（body 拖入限制 + 自定义缓动曲线 + 视觉）
+
+补间前端 UI 完善，用户实测过：视觉完美 + 曲线拖动 bug 修复。
+
+**body 拖入限制（防呆）**：`dropTarget` SlotRect 加 `containerBlockType`；`useBlockDrag` collectSlots 读
+`data-block-type` + buildSlots 派生 containerBlockType + `isTweenBodySlotAllowed`（tweenBlock body 只接受
+属性动作 setElementProperties + TWEENABLE_KINDS）；updateDrag/onPointerUp filter slots。拖非属性动作进
+「在 X 秒内」直接不高亮（而非保存才拒）。
+
+**自定义缓动曲线**：TWEEN_EASING_OPTIONS 加 cubicBezier（labelKey `timeline.easingCustom`）；BlockNode
+复用 0.6 `EasingCurveEditor.vue`（`:model-value=tweenEasing` + `@update:model-value=onTweenEasingCurveUpdate`，
+只读 computed + 写回 handler 解耦，非 v-model）；onFieldUpdate easing 切 cubicBezier 初始化 bezier
+`[0.25,0.1,0.25,1]`。
+
+**实测 bug 修（systematic-debugging）**：EasingCurveEditor 是 SVG，`isFormTarget` 不认 → pointerdown 冒泡到
+块根 onBlockPointerDown 当拖块 → 把整块拖走。修 `isFormTarget` 加 `.hc-tween-curve-editor` 到「不拖块」白名单。
+
+**视觉**：tweenBlock category control（绿）；C 形复用 hasBodySlot；hc-tween-curve-editor 包装。用户实测视觉完美。
+
+**测试**：前端 **1197**（P4 +20 tweenP4.test.ts）全绿。**P5 待做**：性能透明 + 文档 + 版本号 + 收口。
+
+关联：blockDefs（TWEEN_EASING_OPTIONS cubicBezier + TWEENABLE_KINDS）+ BlockNode（EasingCurveEditor +
+isFormTarget 修 + easing 特判扩展）+ dropTarget（containerBlockType）+ useBlockDrag（isTweenBodySlotAllowed）
++ i18n + tweenP4.test.ts + plans/2026-06-13-tween-P4*.md。
+
+---
+
 ## 2026-06-13 · 补间动画 P3 完工：全属性（颜色/fill）+ 与时间轴共存（实测通过）
 
 补间扩展到颜色/渐变属性 + 与用户预排时间轴在同一招牌共存，用户实测过：颜色平滑过渡 + 多属性并行 +

@@ -33,6 +33,8 @@ import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection'
 import { resultColorVar, type HighlightMap } from './traceHighlight';
 import BlockParamInput, { type CommandValue } from '../params/BlockParamInput.vue';
 import ConditionBuilder from '../params/ConditionBuilder.vue';
+import EasingCurveEditor from '@/components/timeline/EasingCurveEditor.vue';
+import type { Easing } from '@/types/protocol';
 
 const props = defineProps<{
     /** 本块对应的动作（含 if）。 */
@@ -102,7 +104,9 @@ function isFormTarget(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
     if (!el) return false;
     if (el.isContentEditable) return true;
-    return !!el.closest?.('input, textarea, select, button, [role="button"], [contenteditable], label');
+    // tween-P4 实测修复：自定义缓动曲线编辑器（.hc-tween-curve-editor 内的 SVG 拖控制点）也算交互区——
+    // pointerdown 落它上时不启动拖块，否则拖曲线会被块根 onBlockPointerDown 当成拖积木、把整块拖走。
+    return !!el.closest?.('input, textarea, select, button, [role="button"], [contenteditable], label, .hc-tween-curve-editor');
 }
 
 /** 本块的声明定义；未知 kind → null（兜底显示 unknownBlock）。 */
@@ -261,9 +265,8 @@ function fieldLabel(field: FieldDef): string {
  * 标量字段返原值（string / number）；缺失 → undefined（控件按类型退默认）。
  */
 function fieldValue(field: FieldDef): unknown {
-    // tweenBlock 的 easing 字段：数据是 Easing 对象 {type, bezier?}，但用 select（字符串）渲染。
-    // 读出 type 给 select 当受控值；写回时 onFieldUpdate 再包回对象。MVP 仅预设（无 bezier）；
-    // P4 缓动选择器重构为专用控件（type + 自定义 cubicBezier 曲线）。
+    // tweenBlock 的 easing 字段：数据是 Easing 对象 {type, bezier?}，用 select 渲染 type 部分。
+    // tween-P4：select 受控值仍是 type 字符串（含 'cubicBezier'）；bezier 由 tweenEasingBezier 单独暴露。
     if (field.name === 'easing') {
         const e = (props.action as unknown as { easing?: { type?: string } }).easing;
         return e?.type ?? 'linear';
@@ -272,18 +275,46 @@ function fieldValue(field: FieldDef): unknown {
 }
 
 /**
+ * tween-P4：当前 tweenBlock easing 对象（完整，含 bezier；非 tweenBlock 时为 linear）。
+ * 供 EasingCurveEditor v-model 读取完整 Easing，不只是 type 字符串。
+ */
+const tweenEasing = computed<Easing>(() => {
+    if (!isTweenBlock.value) return { type: 'linear' };
+    const e = (props.action as unknown as { easing?: Easing }).easing;
+    return e ?? { type: 'easeInOut' };
+});
+
+/** tween-P4：当前 easing 是否为 cubicBezier（控制曲线编辑器显隐）。 */
+const isTweenEasingCustom = computed(() => tweenEasing.value.type === 'cubicBezier');
+
+/**
  * 标量字段改值回写：调 {@code edit.updateActionField(path, {[name]: value})}。
  * command 类型不走这（runCommand 用 {@link onCommandUpdate}），但函数对 command 也安全
  * （不会被调用到）。
  */
 function onFieldUpdate(field: FieldDef, value: unknown): void {
-    // easing：select emit 字符串 type，包回 Easing 对象 {type}（否则 easing 被写成字符串，
-    // 后端/前端 validator 的 easing.type 取不到 → 校验拒 → 脚本无法保存/触发）。
+    // easing：select emit 字符串 type，包回 Easing 对象。
+    // tween-P4：切到 cubicBezier 时保留/初始化 bezier（默 ease [0.25,0.1,0.25,1]）；
+    // 切到其他预设时丢掉 bezier（非 cubicBezier 类型无 bezier 字段）。
     if (field.name === 'easing') {
-        edit.updateActionField(props.path, { easing: { type: value } } as unknown as Partial<ScriptAction>);
+        const newType = value as string;
+        if (newType === 'cubicBezier') {
+            const existingBezier = tweenEasing.value.bezier ?? [0.25, 0.1, 0.25, 1] as [number, number, number, number];
+            edit.updateActionField(props.path, { easing: { type: 'cubicBezier', bezier: existingBezier } } as unknown as Partial<ScriptAction>);
+        } else {
+            edit.updateActionField(props.path, { easing: { type: newType } } as unknown as Partial<ScriptAction>);
+        }
         return;
     }
     edit.updateActionField(props.path, { [field.name]: value } as Partial<ScriptAction>);
+}
+
+/**
+ * tween-P4：EasingCurveEditor emit update:modelValue 时回写完整 Easing 对象。
+ * 仅 tweenBlock 的 easing 字段用到。
+ */
+function onTweenEasingCurveUpdate(newEasing: Easing): void {
+    edit.updateActionField(props.path, { easing: newEasing } as unknown as Partial<ScriptAction>);
 }
 
 // ---------- 0.7.1：friendly 块字段读写（值落 action.patch，elementId 落顶层）----------
@@ -479,6 +510,7 @@ const needSelectTitle = computed(() =>
     class="hc-block-node"
     :class="[(isIf || hasBodySlot) ? 'hc-block-node-if' : '', highlightResult ? 'hc-block-node-hl' : '']"
     :data-block-path="path"
+    :data-block-type="action.type"
     :data-hl-result="highlightResult || null"
     :title="highlightDetail || undefined"
     :style="{ '--hc-block-color': effectiveBorderColor, ...highlightStyle }"
@@ -573,6 +605,17 @@ const needSelectTitle = computed(() =>
           :disabled="locked"
           @update="(v: unknown) => onFieldUpdate(f, v)"
         />
+        <!-- tween-P4：缓动字段选到「自定义曲线」时额外渲染 EasingCurveEditor（复用 0.6 SVG 编辑器）。
+             data 是完整 Easing 对象（含 bezier），emit 也写完整 Easing 对象。 -->
+        <div
+          v-if="f.name === 'easing' && isTweenBlock && isTweenEasingCustom"
+          class="hc-tween-curve-editor"
+        >
+          <EasingCurveEditor
+            :model-value="tweenEasing"
+            @update:model-value="onTweenEasingCurveUpdate"
+          />
+        </div>
       </template>
     </div>
 
@@ -825,6 +868,15 @@ const needSelectTitle = computed(() =>
 .hc-block-command {
     margin-top: 6px;
     width: 100%;
+}
+/* tween-P4：自定义缓动曲线编辑器容器（tweenBlock 选 cubicBezier 时展开）。
+ * 占块整宽，与积木头部 flex-wrap 同行后换行展开。背景用半透明深底适配积木实色面。 */
+.hc-tween-curve-editor {
+    width: 100%;
+    margin-top: 6px;
+    background: color-mix(in srgb, #000 18%, transparent);
+    border-radius: var(--bn-radius-sm);
+    padding: 2px;
 }
 /* 块面上的字段标签（如 if 条件 / then / else 前缀）走块前景色的柔和版 */
 .hc-param-label {

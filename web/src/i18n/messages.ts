@@ -765,6 +765,8 @@ export const messages = {
             },
             // 拖块入 if 槽的空槽占位（任务 C）
             emptySlot: '把积木拖到这里',
+            // tween-P4：tweenBlock body 只允许属性动作（拖动时防呆提示，暂未渲染在 UI 上，留作工具提示用）。
+            tweenBodyOnlyHint: '这里只能放移动、缩放、转动、透明度或变色',
             // 未知积木类型兜底（数据里出现没有定义的 kind 时）
             unknownBlock: '未知积木',
             // ---- 0.7.0-P4-D1 编辑会话 ----
@@ -1983,6 +1985,8 @@ export const messages = {
                 friendly: 'Element actions',
             },
             emptySlot: 'Drag a block here',
+            // tween-P4: tweenBlock body only allows property actions.
+            tweenBodyOnlyHint: 'Only move, resize, rotate, opacity or color blocks allowed here',
             unknownBlock: 'Unknown block',
             // ---- 0.7.0-P4-D1 edit session ----
             rulesTitle: 'Rules',
