@@ -5,6 +5,31 @@
 
 ---
 
+## 2026-06-14 · 补间动画 P5 完工 + 补间功能收官（文档收尾）
+
+补间动画 5 phase 全部完工。P5 纯文档 / 收口（代码 P2-P4 已做）。
+
+**P5 收尾**：
+- scripting-tween.md §10 标 P3/P4 ✅、P5 收官；§11 开放问题回填（渲染统一入口 / 渲临时层省 DB /
+  DB 写压力实测 / 缓动 category 配色 **4 项 done**；同属性 body 重复 / 非挂起变体 / 渐变 fill animating /
+  版本号 留 future）；§12 新增「给玩家：怎么用补间动画」大白话用法。
+- config 确认：`scripts.tween`（max-fps 60 / max-concurrent 16）P2 已加；单补间时长上限走 validator
+  `TWEEN_DURATION_MAX` 60s 常量。
+- 性能透明：静态墙渲临时态不每帧落 DB（路径 Z）、有 timeline 墙每帧 applyMany（wall 少）；DB 写压力
+  P2/P3 实测可接受。
+
+**补间功能总览（P1-P5）**：Scratch 式「在 X 秒内」C 形包裹积木 + **架构 A 独立 `TweenScheduler`**（路径 Z
+`renderStatic` 省 DB + 挂起复用 playTimelineAwait）+ 全属性（数值 / 颜色 ColorLerp / 渐变 fill）+ 全
+EasingType（含自定义曲线 EasingCurveEditor）+ **与时间轴共存**（`isWallAnimating` 分流）+ **per-wall 帧率** +
+body 拖入限制。后端 **1850** / 前端 **1197**。5 phase + MVP 一路用户实测通过。
+
+**待 0.7.x 整体盘点**：版本号（一路 `0.6.0-SNAPSHOT`，补间完是否 bump 0.7.3）+ 挂账触发器
+（OnCommand / OnLockChange）+ 0.7.0 P6（压测 / 文档）。
+
+关联：scripting-tween.md（§10/§11/§12 回填）+ 补间 P1-P4 各 plan。
+
+---
+
 ## 2026-06-14 · 补间动画 P4 完工：前端 UI 完善（body 拖入限制 + 自定义缓动曲线 + 视觉）
 
 补间前端 UI 完善，用户实测过：视觉完美 + 曲线拖动 bug 修复。

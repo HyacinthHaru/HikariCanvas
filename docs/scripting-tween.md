@@ -229,18 +229,42 @@ if t >= 1:
 |---|---|---|
 | **P1 ✅** | 数据模型 + 协议：`Action.TweenBlock` + 序列化/校验/permissions + 协议升 v6 + 前端类型镜像 | 编译 + 单测 |
 | **P2 ✅** | 补间引擎 MVP：`TweenScheduler`（单线程 SES + TweenTask + EasingSolver 算值）+ **路径 Z `renderStatic` 渲临时态省 DB** + 挂起 + 最简前端可拼 + **per-wall 帧率**（tweenFps + 节流）+ 缓动两层 bug 修 | ✅ 实测过：招牌滑入 + 缓动 + 挂起 + 帧率可调 |
-| **P3**（进行中） | 全属性 + 缓动 + 共存：多属性并行 + **color/fill 轨**（ColorLerp + fill 插值）+ 全 EasingType + **与时间轴共存**（有 timeline 墙走每帧 applyMany，§5 分流）+ 冲突接管（T8） | 实测：组合动画 + 共存 |
-| **P4** | 前端 C 形包裹积木 UI + 缓动选择器（下拉 + 自定义曲线）+ body 拖入限制 + i18n | 实测：编辑器拼补间积木 |
-| **P5** | config 限并发 + fps + 性能透明 + 收尾（docs / journal / 版本号） | 实测 + 收口 |
+| **P3 ✅** | 全属性 + 缓动 + 共存：多属性并行 + **color/fill 轨**（ColorLerp.lerpHex/lerpFill）+ 全 EasingType + **与时间轴共存**（`isWallAnimating` 分流：有 timeline 墙每帧 applyMany / 静态墙 renderStatic）+ 冲突接管（T8）+ `${var}` 颜色末帧瞬切 | ✅ 实测过：颜色补间 + 多属性并行 + 补间和时间轴叠加 |
+| **P4 ✅** | 前端 C 形包裹积木 + 缓动选择器（下拉预设 + 自定义曲线复用 0.6 `EasingCurveEditor`）+ body 拖入限制（`isTweenBodySlotAllowed`）+ i18n + 曲线拖动 bug 修 | ✅ 实测过：视觉完美 + body 限制 + 自定义曲线 |
+| **P5**（进行中） | config（`max-fps`/`max-concurrent` 已 P2 加）+ 性能透明 + 收尾（docs / journal / 版本号 / 用户用法） | 收口 |
 
 ---
 
 ## 11. 开放问题（实施时回填）
 
-- [ ] **渲染触发统一入口**：补间引擎对「有时间轴 / 无时间轴」的 wall 统一调「渲染 wall 当前 state（可选叠加时间轴）」——具体复用 `FrameRenderer.renderFrame` 还是新入口？`ticker.invalidate` 对无 entry 的 wall 无效，补间引擎要自渲。P2 定。
-- [ ] **「渲临时覆盖层省 DB」优化**：补间期间维护内存覆盖层、时间轴读覆盖层叠加 → 省每帧 DB。要改 Ticker/Interpolator（违背 T2），收益 vs 复杂度，留 future 评估。
-- [ ] **DB 写压力实测**：P2/P3 实测每帧 `ElementPropertyApplier` 在 N 并发补间下的 DB 写频 + mspt 影响，决定 config 默认值。
-- [ ] **同属性 body 内重复**：保存期警告 vs 拒绝 vs 运行期后者胜，P1 定。
-- [ ] **缓动 category 配色**：tweenBlock 归 `control`（绿）还是新 `tween`（紫），P4 定。
+- [x] **渲染触发统一入口**：P2 路径 Z——`AnimationTicker.renderStatic`（静态墙渲临时态）+ P3 共存分流（有 timeline 墙每帧 applyMany 让 Ticker reload 叠加）。不需统一入口，按 `isWallAnimating` 在 tick 内分流。（P2/P3 定）
+- [x] **「渲临时覆盖层省 DB」优化**：静态墙已由路径 Z 在 P2 兑现（原列 future，提前）；有 timeline 墙每帧 applyMany（wall 数少可接受）。（P2/P3）
+- [x] **DB 写压力实测**：P2/P3 用户实测过（招牌滑入 + 共存），config 默认 per-wall fps 30 / max-fps 60 / max-concurrent 16，静态墙渲临时态不每帧落 DB，写压力可接受。（P2/P3）
+- [ ] **同属性 body 内重复**：P1 放行（运行期后者覆盖），保存期警告留 future。
+- [x] **缓动 category 配色**：P4 定 `control`（绿），用户实测视觉完美。（P4）
 - [ ] **非挂起变体**：future「启动补间后脚本不等」的积木形态（独立动作 vs 包裹加 toggle）。
-- [ ] **版本号**：补间作为 0.7.x 哪个子版本 / 是否触发 0.7.0 整体 release bump，收尾定。
+- [ ] **渐变 fill 在 animating 墙**：applyFn rawPatch 是 `Map<String,String>`，animating 墙中间帧渐变 fill 退化首 stop 颜色（主场景纯色无此问题）；future 让 applyMany 收 Fill 对象。
+- [ ] **版本号**：补间作为 0.7.x 哪个子版本 / 是否触发 0.7.0 整体 release bump——P5 后 0.7.x 整体盘点定。
+
+---
+
+## 12. 给玩家：怎么用补间动画（大白话）
+
+「**在 X 秒内**」积木让招牌上的元素**平滑动起来**——不再是瞬间跳到新位置/新颜色，而是用一段时间慢慢过渡。
+
+**怎么拼**：
+1. 脚本积木编辑器里，拖一个「在 X 秒内」进规则。
+2. 设**时长**（毫秒，如 1500 = 1.5 秒）+ 选**缓动方式**（匀速 / 由慢到快 / 由快到慢 / 两头慢中间快 / 自定义曲线）。
+3. 往它**里面**拖属性动作（移动到 / 缩放到 / 转到 / 透明度到 / 变色到），选元素 + 目标值。
+4. 可以放**多个**，会同时动（边移动边放大边变色）。
+
+**触发后**：元素在你设的时长内平滑过渡到目标，过渡完**停在目标**（永久）。脚本会**等补间做完**才走下一个动作。
+
+**动画帧率**：脚本积木画布顶部有「动画帧率」（默 30，可调 20-60）——这个招牌的所有补间用这个帧率。
+高 = 更顺但更耗性能，按你服务器情况调。**每个招牌独立**。
+
+**和时间轴一起用**：补间和你预排的时间轴动画能**同时**在一个招牌上跑（比如背景时间轴循环 + 脚本触发的
+滑入），互不打断。
+
+**注意**：「在 X 秒内」里面**只能放属性动作**（移动/缩放/转动/透明度/变色）；放别的（发消息等）会拖不进去——
+那些放在补间**外面**。
