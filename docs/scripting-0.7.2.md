@@ -138,6 +138,7 @@
 
 - [x] 克隆元素的每墙元素总数上限默认值：**`scripts.max-elements-per-wall` 默 200**（config 可调 + `/canvas reload` 热更 headless 路径与后续新开 session）(P2 已定 2026-06-13)
 - [ ] P2 克隆/删除在编辑器开着时抢用户选中焦点：`App.vue` watch `lastAddedElementId`，脚本克隆的 add patch 也触发 auto-select → LOOP 克隆 + 编辑器开着时反复夺走用户选中。对抗审查发现（次要，不丢数据 / 不崩 / 不影响 headless 运行时）；留实测确认烦扰度，修则区分"本地 op-ack add（auto-select）"vs"远端推送 add（不抢焦点）"
-- [ ] RepeatUntil 的 maxIterations 上限默认值 + 是否独立 config 还是复用 repeat 的 count 上限（100）——P3 定
+- [x] RepeatUntil：maxIterations ∈ [1, 100]（复用 repeat 的 count 硬上限 100，不另加 config）；默认 10；condition 接 K16 保存期预检（照 WaitUntil 审查修）；**轮数用 RunState 的 `Map<blockId,int>` 记**（嵌套 RepeatUntil 各 blockId 独立，run 结束随 RunState 弃）；RepeatUntil 自身每轮进入计 1 actionCount + body 计入 → Budget 50 兜底先于 maxIterations 到(P3 已定 2026-06-13)
+- [x] 全服广播：**sendMessage 加 `target` 字段下拉**（"trigger 给触发玩家" 默认 / "all 全服"），不单独「广播」积木（避免 sendMessage 一型两皮肤的复杂）；executor 按 target 分流（all → `Bukkit.getOnlinePlayers`），向后兼容旧 payload 无 target=trigger(P3 已定 2026-06-13)
 - [ ] 变量预览 +1/-1 的"数值型"判定口径（按变量 VarType metadata？字符串能 parse 成数？）——P1 定
 - [ ] UI 打磨具体改哪些（圆角值/阴影/配色 token）——P4 按现有样式系统细化

@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-06-13 · 0.7.2-P3 立项：重复直到条件 + 全服广播（实施计划）
+
+P3 加 2 个：**RepeatUntil**（流程控制，ScriptRunner 动态循环）+ **全服广播**（sendMessage 加 target）。
+§8 决策：RepeatUntil **while 语义**（先查 condition、可能 0 次 body）+ maxIterations∈[1,100] 默 10 +
+RunState `Map<blockId,int>` 记轮数 + Budget 50/maxIter 100 双闸 + K16 保存期预检；sendMessage 加 `target`
+下拉（trigger 默认 / all），executor 按 target 分流、向后兼容旧 payload 无 target。
+
+7 task：后端地基（record/序列化/validator/permissions/sendMessage executor）+ 前端派子代理；**RepeatUntil
+ScriptRunner 动态循环**（压回 `Frame(acts,i)` 含后续 + 压 body LIFO，body 执行完弹回再查 condition）自盯。
+**SendMessage 加 target 要 grep 补所有 `new Action.SendMessage(` 构造点**（改既有 record）。
+
+关联：`docs/superpowers/plans/2026-06-13-0.7.2-P3-repeatuntil-broadcast.md`。
+
+---
+
 ## 2026-06-13 · 0.7.2-P2 完工：元素积木 + 变量积木（克隆 / 删除 / 复制 / 拼接）
 
 4 个全栈动作。子代理（后端地基 + 前端 + 元素双路径）+ 对抗审查。
