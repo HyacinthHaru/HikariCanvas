@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-06-13 · 补间动画设计总纲（scripting-tween.md）：brainstorming 定 10 决策
+
+0.7.2「稳的」版完工后单独 brainstorming 补间动画（脚本「在 X 秒内」+ 非线性缓动）。先派调研代理摸 0.6
+时间轴 / Ticker / EasingSolver / ColorLerp / 落盘 的可复用性，再逐决策定。
+
+**10 决策**：① Scratch 式「在 X 秒内」C 形包裹积木 ② **架构 A 独立补间引擎**（脚本侧自跑、改元素基准值，
+不碰 final `AnimationTicker`；补间改基准、时间轴读基准叠加，正交共存——优于架构 B 复用 Ticker：补间纯服务端
+不需双端预览，B 的「复用渲染链保双端一致」卖点用不上）③ 只放属性动作并行补间（非属性动作放包裹外）
+④ 6 数值 + color + fill 复用现有插值轨 ⑤ 缓动复用 `EasingSolver`（下拉预设 + 自定义曲线）⑥ 挂起式（glide）
+⑦ **每帧落 state**（诚实修正：末帧落盘与时间轴共存矛盾——时间轴每帧从 DB 读基准叠加，补间只末帧落则读不到
+中间值）⑧ 同元素同属性后者接管 ⑨ 正交共存 ⑩ config 限并发 + fps、透明不降级。
+
+**调研依据**：`EasingSolver`/`ColorLerp` 双端镜像可复用 / `KeyframeInterpolator` 6 数值 + color + fill 轨 /
+时间轴播放不落 state / `ElementPropertyApplier` 双路径落盘 / `ScriptRunner` 挂起（`playTimelineAwait` 范式）/
+一墙一时刻约束（架构 A 绕开，不抢 Ticker entry）。
+
+**5 phase**：P1 数模 + 协议 → P2 引擎 MVP（单属性滑入）→ P3 全属性 + 缓动 + 共存 → P4 前端 C 形 UI →
+P5 config + 收尾。
+
+关联：`docs/scripting-tween.md`（新）。
+
+---
+
 ## 2026-06-13 · 0.7.2-P4 完工：积木 UI 打磨（Scratch 实色风精修，纯前端 3 轮）
 
 0.7.2「稳的」版收尾段。纯视觉、不碰数据/协议。**先对齐定方向**：当前是 P5 做的「实色饱和 Scratch 风」
