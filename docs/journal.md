@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-06-13 · 0.7.1-P5 立项：剩余动作（停止 / 粒子 / 等待直到）设计回填 + 实施计划
+
+用户拍板：P5 三个动作**全做**（停止本脚本 / 播放粒子 / 等待直到条件）；0.7 整体收尾（版本号 / 用户文档 /
+0.7.0 P6）P5 完工后**单独评估**。
+
+两路调研（后端执行引擎 + 前端动作定义）落定改动面：后端 5 文件（Action record + 序列化 + Validator +
+Executor + Permissions + Runner）/ 前端 4 文件（protocol + blockDefs + validator + i18n）。前端高度复用——
+粒子 = `select` 下拉、等待条件 = 复用 `if` 的 ConditionBuilder、表单组件零改。
+
+**§9 固化 4 个实现决策**：
+- 粒子权限面**复用 `canvas.script.sound`**（不另立节点）
+- **WaitUntil 不阻塞线程**：独立 `pollWaitUntil` 递归调度（deadline 作方法参数 + 不重入 action 循环 →
+  天然不重复计 Budget）。**否决**"deadline 存 RunState + 续接重评估"——`actionCount++` 在循环顶、Budget
+  检查在动作分支前，续接每帧都会 ++ 被 Budget 误拦
+- **StopScript**：runFrames 内 `stack.clear()` → 自然 `finish(ok)`
+- **粒子白名单 14 个**（双端对齐 + `Registry.PARTICLE_TYPE` 解析，同 PlaySound 范式）
+
+关联：`docs/scripting-0.7.1.md §9` / `docs/superpowers/plans/2026-06-13-0.7.1-P5-remaining-actions.md`
+（9 task，WaitUntil 是难点，需时钟 seam + fake scheduler 测试）。
+
+---
+
 ## 2026-06-13 · 0.7.1-P4 完工：幽灵拖动设目标坐标（移到 / 改大小 / 旋转）
 
 预览框里拖元素半透明虚影设三种目标几何，松手写回积木 patch，部署墙触发后元素真变。纯前端、后端零改。

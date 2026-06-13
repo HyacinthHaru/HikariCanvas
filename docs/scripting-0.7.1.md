@@ -174,7 +174,10 @@ P4 末:用户在预览框里拖虚影设"移到 xy"的目标坐标 → 积木记
 
 - [x] §3「移动 (+dx,+dy)」相对移动:**做后端 `nudgeElement` Action**(运行时读当前值 + 增量)(P1 已定 2026-06-11)
 - [x] 显示/隐藏元素:**用 opacity 0/1**，零 schema 改(P1 已定 2026-06-11)
-- [ ] 粒子动作权限面:复用 `canvas.script.sound` 还是新 `canvas.script.particle`(P5 定)
+- [x] 粒子动作权限面:**复用 `canvas.script.sound`**（粒子 / 声音同属环境效果，不另立节点）(P5 已定 2026-06-13)
+- [x] P5 **WaitUntil 不阻塞线程**:首次进入计 1 个 action + 压栈后续（i+1）+ 启动**独立 `pollWaitUntil` 递归调度**（deadline 作方法参数，不污染 RunState）——每 tick `conditions.eval`，满足 / 超时 → `scheduler.schedule(() -> runFrames(st, cont), 0)` 续接后续动作，否则 `scheduler.schedule(pollWaitUntil, tickMs)` 再等。轮询走独立递归**不重入 action 循环**，天然不重复计 actionCount（只首次计 1）；shutdown 守卫 + RejectedExecutionException 兜底。**否决**"deadline 存 RunState + 续接重评估"方案：`actionCount++` 在循环顶、Budget 检查在动作分支前，续接重评估每帧都会 ++ 被 Budget 误拦(P5 已定 2026-06-13)
+- [x] P5 **StopScript 中止**:runFrames 内 `stack.clear()` → 自然走 `finish(st,"ok")`，后续动作舍弃；ActionExecutor 对 StopScript 返 error 防御（应由 Runner 处理，同 Wait/If/Repeat）(P5 已定 2026-06-13)
+- [x] P5 **粒子白名单**:内置约 14 个常用粒子（flame/smoke/heart/happy_villager/crit/enchant/portal/firework/note/cloud/lava/dripping_water/end_rod/totem_of_undying），后端 `Registry.PARTICLE_TYPE` 解析（同 PlaySound 的 Registry.SOUNDS 范式）+ 前端 `select` 下拉对齐；非白名单拒(P5 已定 2026-06-13)
 - [x] PreviewPane 预览渲染性能:**先全量重绘**(watch project.state → renderProjectState，requestAnimationFrame 合并避免同帧多次)，元素多时脏区优化**留实测**(工具不是保姆，简单优先；P3 实测闸看卡不卡再定)(P3 已定 2026-06-12)
 - [x] P4 虚影形态:**元素半透明真样子**(导出 `drawElement` 渲绑定元素副本 + `globalAlpha=0.5`，按 patch 覆盖目标几何)——非抽象方框/连线(P4 已定 2026-06-13)
 - [x] P4 支持的坐标积木:**移到 + 改大小 + 旋转全 transform**(拖中心 / 拖角 / 转手柄)，P4 内部分 a/b/c 三批(P4 已定 2026-06-13)
