@@ -140,13 +140,12 @@ function onItemPointerDown(kind: string, e: PointerEvent): void {
           class="hc-palette-item"
           :data-block-kind="item.kind"
           :style="{
-            borderLeftColor: `var(${item.colorVar})`,
-            background: `color-mix(in srgb, var(${item.colorVar}) 12%, var(--card))`,
+            '--hc-pi-color': `var(${item.colorVar})`,
           }"
           :title="locked ? t.script.lockedHint : itemLabel(item)"
           @pointerdown="onItemPointerDown(item.kind, $event)"
         >
-          <span class="hc-palette-dot" :style="{ background: `var(${item.colorVar})` }" />
+          <span class="hc-palette-dot" />
           <span class="hc-palette-label">{{ itemLabel(item) }}</span>
         </div>
       </div>
@@ -155,6 +154,20 @@ function onItemPointerDown(kind: string, e: PointerEvent): void {
 </template>
 
 <style scoped>
+/*
+ * 0.7.2-P4 第 3 轮：palette 条目与画布积木视觉语言统一。
+ *
+ * 设计：
+ *   - 实色饱和底（~65% 分类色 mix card），与画布块同色语言；不再是 12% 淡灰底的 IDE 卡片。
+ *   - 圆角 8px 与画布块 --bn-radius 一致。
+ *   - 左侧色条改为宽色条（4px），与 border-radius 配合给"积木皮肤"感。
+ *   - depth 阴影 + 顶部白高光 inset，与画布块立体感同节奏（轻化版，palette 更小）。
+ *   - hover：translateY(-1px) 上浮 + brightness(1.06)，"积木被轻轻拿起"手感。
+ *   - 文字：--hc-block-fg（全局 style.css 定义：浅主题 ctp-base 近白 / 深主题 ctp-crust），
+ *     在饱和背景上对比清晰，与画布块标题同色系。
+ *   - 色点：改为稍大 10px 方块 + 顶部白内描边，让"分类色 → 积木"的关联更直觉。
+ */
+
 .hc-palette {
     display: flex;
     flex-direction: column;
@@ -182,31 +195,56 @@ function onItemPointerDown(kind: string, e: PointerEvent): void {
     gap: 4px;
 }
 .hc-palette-item {
+    /* 局部变量：分类色（模板内联 --hc-pi-color；缺省退边框灰） */
+    --_c: var(--hc-pi-color, var(--border));
+
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    padding: 0.3125rem 0.5rem;
-    border-left: 3px solid var(--border);
-    border-radius: var(--radius-sm);
+    padding: 5px 8px 5px 10px;
+    /* 实色饱和底：~65% 分类色 + card 中性底，在 palette 侧栏里既有 Scratch 颜色感又不刺眼 */
+    background: color-mix(in srgb, var(--_c) 65%, var(--card));
+    /* 左侧宽色条：4px 实色，与画布块 border-left 精神一致，皮肤感 */
+    border-left: 4px solid var(--_c);
+    /* 圆角 8px = 画布块 --bn-radius，统一节奏 */
+    border-radius: 8px;
     cursor: grab;
     font-size: 0.8125rem;
     user-select: none;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    /* 轻立体：底部窄投影 + 顶部白高光 inset（轻化版，palette 条目比画布块小） */
+    box-shadow:
+        0 1px 0 color-mix(in srgb, var(--_c) 55%, #000),
+        0 2px 5px rgba(0, 0, 0, 0.16),
+        inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent);
+    /* hover 上浮 + 高亮一起过渡 */
+    transition: filter 0.1s ease, transform 0.1s ease, box-shadow 0.1s ease;
 }
 .hc-palette-item:active {
     cursor: grabbing;
 }
+/* hover：上浮 1px + 亮度微增 + 阴影加深，「拿起积木」手感 */
 .hc-palette-item:hover {
-    filter: brightness(1.04);
+    filter: brightness(1.07);
+    transform: translateY(-1px);
+    box-shadow:
+        0 2px 0 color-mix(in srgb, var(--_c) 55%, #000),
+        0 4px 8px rgba(0, 0, 0, 0.22),
+        inset 0 1px 0 color-mix(in srgb, #fff 24%, transparent);
 }
+/* 分类色色点：稍大 10px 方块 + 顶部白内描边（与块面高光同语言） */
 .hc-palette-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
     flex-shrink: 0;
+    background: var(--_c);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 35%, transparent);
 }
+/* 文字用 --hc-block-fg（全局定义：浅主题 ≈ 白系 / 深主题 ≈ crust 深），
+ * 在饱和彩色背景上对比清晰，与画布块标题同色系；缺省退 foreground 兜底 */
 .hc-palette-label {
-    color: var(--foreground);
+    color: var(--hc-block-fg, var(--foreground));
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

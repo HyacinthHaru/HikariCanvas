@@ -233,11 +233,24 @@ const hatStyle = computed(() => {
 
 <style scoped>
 /*
- * 0.7.0-P5（视觉）：Scratch 风积木堆 = 事件帽 + 焊接动作序列。
- *   - 帽子（hat）：顶部大圆角圆顶 + 实色饱和触发色，明显区别于方角动作块。
+ * 0.7.0-P5（视觉）→ 0.7.2-P4（精修）：Scratch 风积木堆 = 事件帽 + 焊接动作序列。
+ *   - 帽子（hat）：顶部大圆顶 + 实色饱和触发色，明显区别于方角动作块。
  *   - 动作序列：与帽子无缝相接（负 margin 让首块咬住帽子底）+ 块间 gap≈3px 焊接堆叠。
+ *   - hover 上浮：translateY(-1px) + 阴影加深，「积木堆被拿起」手感。
  * 块上文字走 --hc-block-fg（浅主题白 / 深主题深 crust），饱和块面上对比清晰。
  */
+
+/* ===== 0.7.2-P4 节奏变量（与 BlockNode 保持一致命名）===== */
+.hc-stack-hat {
+    /* 帽子圆角：顶大圆 14px / 底小角 6px（衔接动作块） */
+    --bn-hat-radius-top: 14px;
+    --bn-hat-radius-bot: 6px;
+    --bn-px: 12px;
+    --bn-py-t: 9px;
+    --bn-py-b: 11px;
+    --bn-gap: 6px;
+}
+
 .hc-block-stack {
     position: absolute;
     width: 280px;
@@ -253,25 +266,32 @@ const hatStyle = computed(() => {
 }
 .hc-stack-hat {
     position: relative;
-    /* 事件帽：顶部大圆顶、底部直角（与下方动作序列焊接） */
-    border-radius: 16px 16px 5px 5px;
+    /* 事件帽：顶部大圆顶 14px、底部收小 6px（与下方动作序列衔接更顺滑） */
+    border-radius: var(--bn-hat-radius-top) var(--bn-hat-radius-top) var(--bn-hat-radius-bot) var(--bn-hat-radius-bot);
     /* 实色帽：饱和触发色直填（模板内联 --hc-block-color） */
     background: var(--hc-block-color, var(--ctp-peach));
     color: var(--hc-block-fg);
-    padding: 9px 12px 11px;
-    /* 立体：底部投影 + 顶部内高光 */
+    padding: var(--bn-py-t) var(--bn-px) var(--bn-py-b);
+    /* 立体：底部投影 + 顶部内高光（强化至 34%） */
     box-shadow:
         0 2px 0 color-mix(in srgb, var(--hc-block-color, var(--ctp-peach)) 60%, #000),
         0 4px 8px rgba(0, 0, 0, 0.2),
-        inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent);
+        inset 0 1px 0 color-mix(in srgb, #fff 34%, transparent);
     user-select: none;
-    /* 帽子可拖动移整堆 */
     cursor: grab;
-    /* H：试跑高亮描边 / 发光柔和过渡 */
-    transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease;
+    /* H：试跑高亮描边 / 发光 + hover 上浮一起过渡 */
+    transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease, transform 0.1s ease;
 }
+
+/* hover 上浮：translateY(-1px) + 底部阴影加深（「拿起整堆」手感）。
+ * 拖拽系统不给帽子加 class（setPointerCapture + ghost overlay），:active 处理 grabbing cursor。 */
 .hc-stack-hat:hover {
-    filter: brightness(1.05);
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+    box-shadow:
+        0 3px 0 color-mix(in srgb, var(--hc-block-color, var(--ctp-peach)) 60%, #000),
+        0 6px 12px rgba(0, 0, 0, 0.26),
+        inset 0 1px 0 color-mix(in srgb, #fff 34%, transparent);
 }
 .hc-stack-hat:active {
     cursor: grabbing;
@@ -280,13 +300,16 @@ const hatStyle = computed(() => {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: var(--bn-gap);
 }
 .hc-hat-name {
-    font-size: 13.5px;
+    font-size: 13px;
     font-weight: 800;
     color: var(--hc-block-fg);
-    text-shadow: 0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--ctp-peach)) 55%, #000);
+    /* 饱和帽面文字立体感：暗描边 + 轻扩散 */
+    text-shadow:
+        0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--ctp-peach)) 60%, #000),
+        0 0 3px color-mix(in srgb, #000 12%, transparent);
 }
 .hc-hat-disabled {
     font-size: 10px;

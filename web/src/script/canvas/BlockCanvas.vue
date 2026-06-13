@@ -213,6 +213,18 @@ function onPointerDown(e: PointerEvent): void {
 
   <!-- 吸附指示线（命中插槽时，viewport 坐标 fixed 定位）。Teleport 到 body 绕开 world transform。 -->
   <Teleport to="body">
+    <!-- 槽位高亮：极淡半透明矩形点亮「会插这里」，z-index 介于块和拖影之间。 -->
+    <div
+      v-if="drag.activeSlot.value"
+      class="hc-drop-slot-highlight"
+      :style="{
+        left: `${drag.activeSlot.value.x}px`,
+        top: `${drag.activeSlot.value.y}px`,
+        width: `${drag.activeSlot.value.w}px`,
+        height: `${drag.activeSlot.value.h}px`,
+      }"
+    />
+    <!-- 插入线：渲染在槽位中线，带端点圆头伪元素（Scratch 风醒目插入线）。 -->
     <div
       v-if="drag.activeSlot.value"
       class="hc-drop-indicator"
@@ -223,16 +235,16 @@ function onPointerDown(e: PointerEvent): void {
       }"
     />
     <!-- 跟手浮层（palette / block 源拖动中）。用 transform 定位（GPU 合成，拖动中不触发 layout
-         reflow）；left/top 固定 0，每帧只改 transform（根因 4：让浮层跟手不卡）。 -->
+         reflow）；left/top 固定 0，每帧只改 transform（根因 4：让浮层跟手不卡）。
+         实色块语言：background 填 ghostColor（分类色），文字用 --hc-block-fg（白系）。 -->
     <div
       v-if="drag.ghost.value"
       class="hc-drag-ghost"
       :style="{
         transform: `translate3d(${drag.ghost.value.x}px, ${drag.ghost.value.y}px, 0)`,
-        borderLeftColor: ghostColor,
+        background: ghostColor,
       }"
     >
-      <span class="hc-drag-ghost-dot" :style="{ background: ghostColor }" />
       <span class="hc-drag-ghost-label">{{ ghostLabel }}</span>
     </div>
   </Teleport>
@@ -259,16 +271,47 @@ function onPointerDown(e: PointerEvent): void {
     will-change: transform;
 }
 /* Teleport 到 body 的浮层用全局类（scoped 下需 :deep 或全局；这里用 fixed + 独立类名避免冲突）。 */
+
+/* 槽位高亮：z-index 69（块之上、插入线之下），极淡不喧宾夺主。 */
+.hc-drop-slot-highlight {
+    position: fixed;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--ctp-blue, var(--primary)) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ctp-blue, var(--primary)) 30%, transparent);
+    pointer-events: none;
+    z-index: 69;
+}
+
+/* 插入线：4px 主线 + 端点圆头（::before / ::after 各一个圆点）+ 更强发光。 */
 .hc-drop-indicator {
     position: fixed;
-    height: 3px;
+    height: 4px;
     border-radius: 2px;
-    background: var(--ctp-blue, var(--primary));
-    box-shadow: 0 0 6px color-mix(in srgb, var(--ctp-blue, var(--primary)) 70%, transparent);
+    background: var(--ctp-sky, var(--ctp-blue, var(--primary)));
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--ctp-sky, var(--ctp-blue, var(--primary))) 40%, transparent),
+        0 0 10px 2px color-mix(in srgb, var(--ctp-sky, var(--ctp-blue, var(--primary))) 55%, transparent);
     pointer-events: none;
     z-index: 70;
     transform: translateY(-50%);
 }
+/* 端点圆头：左圆点 */
+.hc-drop-indicator::before,
+.hc-drop-indicator::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--ctp-sky, var(--ctp-blue, var(--primary)));
+    transform: translateY(-50%);
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--ctp-sky, var(--ctp-blue, var(--primary))) 60%, transparent);
+}
+.hc-drop-indicator::before { left: -3px; }
+.hc-drop-indicator::after  { right: -3px; }
+
+/* 拖影：实色积木语言——background 填分类色（ghostColor），圆角/阴影与块同手感。 */
 .hc-drag-ghost {
     position: fixed;
     /* transform 定位的原点：固定在视口左上，由 :style 的 translate3d 偏移到指针处。 */
@@ -276,25 +319,27 @@ function onPointerDown(e: PointerEvent): void {
     top: 0;
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.55rem;
-    border-left: 3px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--card);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+    padding: 0.3rem 0.65rem;
+    border-radius: 8px;
+    /* background 由 :style 的 ghostColor 填充（分类色），此处为初始占位防闪。 */
+    background: var(--border);
+    /* 顶部 inset 白高光（与块同语言）。 */
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.22),
+        0 6px 16px rgba(0, 0, 0, 0.32),
+        0 2px 6px rgba(0, 0, 0, 0.18);
     pointer-events: none;
     z-index: 71;
-    opacity: 0.92;
+    /* 略透表示「拖动中」，不是完全实体。 */
+    opacity: 0.9;
     font-size: 0.8125rem;
+    font-weight: 600;
     white-space: nowrap;
     will-change: transform;
 }
-.hc-drag-ghost-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
-}
 .hc-drag-ghost-label {
-    color: var(--foreground);
+    /* 实色饱和底上用白系文字 + 轻暗描边，与块标题同手感（复用 --hc-block-fg）。 */
+    color: var(--hc-block-fg, #fff);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 </style>

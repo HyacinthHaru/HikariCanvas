@@ -665,39 +665,54 @@ const needSelectTitle = computed(() =>
 
 <style scoped>
 /*
- * 0.7.0-P5（视觉）：Scratch 风积木块。
+ * 0.7.0-P5（视觉）→ 0.7.2-P4（精修）：Scratch 风积木块。
  *
  * 设计要点：
  *   - 实色块：背景直填分类色 --hc-block-color（由模板内联给，= trace 高亮色或分类色），
  *     文字走 --hc-block-fg（浅主题白 / 深主题深），对比清晰；不再 color-mix 淡化成 IDE 风。
- *   - 咬合感：::before 在块顶画一个小凸榫（Scratch 块顶的凸起），配合 BlockStack 里 gap≈0
+ *   - 咬合感：::before 在块顶画梯形榫头（Scratch 块顶的凸起），配合 BlockStack 里 gap≈0
  *     的焊接堆叠，凸榫"插进"上一块底部，连成一摞。
- *   - 立体感：轻微 box-shadow（块在画布上浮起一点）+ 顶部高光内描边。
+ *   - 立体感：轻微 box-shadow（块在画布上浮起一点）+ 顶部高光内描边（强化白高光）。
+ *   - 节奏统一：CSS 变量控制圆角 / 内距 / 凸榫尺寸，消除散乱硬编码。
+ *   - hover 上浮：translateY(-1px) + 阴影加深，「积木被拿起」手感；transition 含 transform。
  */
 
-/* 块顶凸榫尺寸（与 BlockStack 焊接堆叠的负 margin 协调） */
+/* ===== 0.7.2-P4 节奏变量（块级本地；BlockStack 各自定义一套同名变量保持一致）===== */
 .hc-block-node {
-    --hc-notch-w: 18px;
+    /* 圆角节奏 */
+    --bn-radius: 8px;
+    --bn-radius-sm: 5px;
+    /* 凸榫尺寸 */
+    --hc-notch-w: 20px;
     --hc-notch-h: 5px;
     --hc-notch-x: 14px;
+    /* 内距节奏 */
+    --bn-px: 11px;
+    --bn-py-t: 8px;
+    --bn-py-b: 9px;
+    /* 焊接间隙（与 BlockStack.hc-stack-actions gap 一致） */
+    --bn-gap: 7px;
+
     position: relative;
-    border-radius: 7px;
+    border-radius: var(--bn-radius);
     /* 实色块：分类色直填（模板给 --hc-block-color）；缺省退边框灰 */
     background: var(--hc-block-color, var(--border));
     color: var(--hc-block-fg);
-    /* 立体：底部投影 + 顶部内高光（让块面有体积感） */
+    /* 立体：底部投影 + 顶部内高光（强化白高光至 32%） */
     box-shadow:
         0 2px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 62%, #000),
         0 3px 6px rgba(0, 0, 0, 0.22),
-        inset 0 1px 0 color-mix(in srgb, #fff 26%, transparent);
-    padding: 7px 10px 8px 11px;
+        inset 0 1px 0 color-mix(in srgb, #fff 32%, transparent);
+    padding: var(--bn-py-t) var(--bn-px) var(--bn-py-b) var(--bn-px);
     user-select: none;
-    /* 块可拖动重排 / 跨堆 / 入 if 槽 */
     cursor: grab;
-    /* H：试跑高亮描边 / 背景色切换，步进时柔和过渡 */
-    transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease;
+    /* H：试跑高亮 + hover 上浮一起过渡 */
+    transition: box-shadow 0.12s ease, background-color 0.12s ease, filter 0.12s ease, transform 0.1s ease;
 }
-/* 块顶凸榫：一个小圆角凸起，叠在上一块底部缝里，造"咬合"观感 */
+
+/* 块顶凸榫：梯形榫头（clip-path 剪成 Scratch 经典梯形，下宽 20px / 上宽 13px / 高 5px）。
+ * 实色同 --hc-block-color，高光内描边与块面协调。
+ * top 偏移：把榫头大部分压进块顶之上（-h+2px 留 2px 可见），对接上一块底部。 */
 .hc-block-node::before {
     content: "";
     position: absolute;
@@ -706,11 +721,22 @@ const needSelectTitle = computed(() =>
     width: var(--hc-notch-w);
     height: var(--hc-notch-h);
     background: var(--hc-block-color, var(--border));
-    border-radius: 3px 3px 0 0;
-    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent);
+    /* 梯形榫头：根部（贴块的下边 y=100%）全宽 20、尖端（凸出的上边 y=0%）两侧各收 3.5px → 上宽 13。
+     * 注：::before top 为负、向上凸，故 y=100% 是贴块根部、y=0% 是凸出尖端 → 根宽尖窄的正榫头。 */
+    clip-path: polygon(0% 100%, 100% 100%, calc(100% - 3.5px) 0%, 3.5px 0%);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 28%, transparent);
 }
+
+/* hover 上浮：translateY(-1px) + 底部阴影加深。
+ * 拖拽系统不给块加 class（setPointerCapture + ghost overlay），:active 处理 grabbing cursor，
+ * :hover 在 pointer 已被 capture 时通常不匹配，故无需额外排除选择器。 */
 .hc-block-node:hover {
-    filter: brightness(1.05);
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+    box-shadow:
+        0 3px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 62%, #000),
+        0 5px 10px rgba(0, 0, 0, 0.28),
+        inset 0 1px 0 color-mix(in srgb, #fff 32%, transparent);
 }
 .hc-block-node:active {
     cursor: grabbing;
@@ -719,15 +745,17 @@ const needSelectTitle = computed(() =>
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 7px;
+    gap: var(--bn-gap);
 }
 .hc-block-title {
     font-size: 12.5px;
     font-weight: 700;
     white-space: nowrap;
     color: var(--hc-block-fg);
-    /* 让标题在饱和块面上更立体（细微暗描边） */
-    text-shadow: 0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 55%, #000);
+    /* 饱和块面上文字立体感：暗描边（底部 1px 暗 + 轻微 Y 方向扩散），不过重不发糊 */
+    text-shadow:
+        0 1px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 60%, #000),
+        0 0 3px color-mix(in srgb, #000 12%, transparent);
 }
 /* F：参数控件（BlockParamInput）外壳——不再加浅底块，胶囊样式由控件自身承载；
  * 这里只保证内联排版 + 不撑破块宽。元素字段壳里还含一个「从预览点选」小按钮，留点间距。 */
@@ -815,7 +843,7 @@ const needSelectTitle = computed(() =>
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 5px;
+    gap: var(--bn-radius-sm);
     font-size: 11px;
 }
 .hc-block-branch {
@@ -831,7 +859,7 @@ const needSelectTitle = computed(() =>
     margin-bottom: 4px;
 }
 /* C 臂：实色竖条把 then/else 子序列实体包进去（非虚线引导线）。
- * 左侧负 margin 把臂铺到块左边缘（抵消块的 11px 左 padding），右侧抵消 10px 右 padding；
+ * 左侧负 margin 把臂铺到块左边缘（抵消块的 --bn-px 左 padding），右侧同；
  * 子积木相对臂内缩 18px，左边露出的实色即 C 的左臂。 */
 .hc-branch-slot {
     position: relative;
@@ -839,21 +867,21 @@ const needSelectTitle = computed(() =>
     flex-direction: column;
     /* 子积木焊接堆叠：小缝 + 块顶凸榫(::before)桥接，读作"咬在一起" */
     gap: 3px;
-    margin-left: -11px;
-    margin-right: -10px;
+    margin-left: calc(var(--bn-px) * -1);
+    margin-right: calc(var(--bn-px) * -1);
     padding: 4px 8px 6px 18px;
-    /* 实色左臂 + 顶部一小段条，形成 C 的内拐角 */
+    /* 实色左臂 + 顶部内阴影，形成 C 的内拐角 */
     background: var(--hc-block-color, var(--border));
     box-shadow: inset 0 1px 0 color-mix(in srgb, #000 14%, transparent);
     min-height: 26px;
 }
-/* C 形底托：实色横条闭合左臂，整体收下圆角 */
+/* C 形底托：实色横条闭合左臂，整体收下圆角（使用节奏变量） */
 .hc-block-if-foot {
     height: 12px;
-    margin-left: -11px;
-    margin-right: -10px;
+    margin-left: calc(var(--bn-px) * -1);
+    margin-right: calc(var(--bn-px) * -1);
     background: var(--hc-block-color, var(--border));
-    border-radius: 0 0 7px 7px;
+    border-radius: 0 0 var(--bn-radius) var(--bn-radius);
     box-shadow:
         0 2px 0 color-mix(in srgb, var(--hc-block-color, var(--border)) 62%, #000),
         0 3px 6px rgba(0, 0, 0, 0.22);

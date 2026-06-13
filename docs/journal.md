@@ -5,6 +5,37 @@
 
 ---
 
+## 2026-06-13 · 0.7.2-P4 完工：积木 UI 打磨（Scratch 实色风精修，纯前端 3 轮）
+
+0.7.2「稳的」版收尾段。纯视觉、不碰数据/协议。**先对齐定方向**：当前是 P5 做的「实色饱和 Scratch 风」
+（整块填分类色 + 凸榫 + 焊接堆叠），用户实测确认**保持这个风、只提精致度、不推翻 P5**（曾否决的浅卡片
+IDE 风不走回头路）。3 轮各一闸、用户截图验（开发机跑不了编辑器，视觉靠实测）。
+
+**第 1 轮 块本身**（BlockNode/BlockStack）：散乱圆角/padding/gap/字号收成一套 CSS 变量节奏（块圆角 8px /
+帽子顶 14px / 内距 8·11px / 焊接 gap 3px）；凸榫圆角矩形 → 梯形榫头（clip-path，根宽尖窄——子代理写反成
+倒梯形、review 修正）；hover 从单纯变亮 → `translateY(-1px)` 上浮 + 阴影加深；顶部 inset 白高光强化
+（26%→32%）+ text-shadow 微调；**body 实色一点没动**（守硬约束）。
+
+**第 2 轮 拖拽落位手感**（BlockCanvas/DeleteDropZone；`useBlockDrag` 纯逻辑不动）：拖影从「浅卡片 + 左色条」
+IDE 风 → **迷你实色块**（填 ghostColor + 白字 + 8px 圆角 + 强浮起阴影 + opacity 0.9）；落点插入线 3px 蓝 →
+**4px 天蓝 ctp-sky + 两端圆头 + 外晕发光**；新增**槽位高亮 div**（读 activeSlot{x,y,w,h}，z-index 69 极淡点亮
+「会插这里」、不碰逻辑）；删除区圆角 10→8px 统一。
+
+**第 3 轮 palette**（BlockPalette）：item 背景 12% 淡灰底 → **65% 饱和实色底** + 4px 分类色条 + 8px 圆角 +
+hover `translateY(-1px)`，label 用全局 `--hc-block-fg`（深浅主题适配），与画布块同色语言。
+
+**收尾**：前端 **1157** 全绿（`useCanvasPasteDispatcher` 路径 b 是已知并发 flaky，完整跑全过、非本次引入）；
+vite build 通过；shadowJar 重打包。**版本号保持 `0.6.0-SNAPSHOT`**（0.7.x 大版本未 release、0.7.0 P6 也挂着，
+一路 SNAPSHOT 下迭代）。
+
+子代理策略：纯视觉 + 改同批联动文件 + 看不到运行时 → **每轮 1 个子代理串行**（视觉规格主控自定保统一手感、
+子代理执行 + 跑测试不 commit、review 后主控 commit），区别于 P1-P3 的并行——视觉统一性 > 并行隔离。
+
+关联：`web/src/script/canvas/{BlockNode,BlockStack,BlockCanvas,DeleteDropZone,BlockPalette}.vue` +
+`web/src/style.css`（--hc-block-fg 全局）/ `docs/scripting-0.7.2.md` §5。
+
+---
+
 ## 2026-06-13 · 0.7.2-P3 完工：重复直到条件 + 全服广播
 
 2 个动作。子代理（后端地基 + 前端）+ 自盯 RepeatUntil ScriptRunner + 对抗审查（7 点全对、无必修）。

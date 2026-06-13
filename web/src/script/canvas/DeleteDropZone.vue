@@ -65,7 +65,7 @@ const label = computed(() =>
     gap: 0.25rem;
     /* 只作视觉指示，命中由 composable 用 client 坐标算（拖动 pointer 已 capture）。 */
     pointer-events: none;
-    border-radius: var(--radius-md, 10px);
+    border-radius: 8px;
     border: 2px dashed color-mix(in srgb, var(--destructive) 55%, transparent);
     background: color-mix(in srgb, var(--destructive) 10%, var(--card));
     color: var(--destructive);
