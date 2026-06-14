@@ -95,6 +95,22 @@ export const REPEAT_MAX = 100;
  */
 export const MESSAGE_TARGETS: ReadonlySet<string> = new Set(['trigger', 'all']);
 
+// ---------- 0.7.3 常量（4 个新积木，逐一对照 ScriptRuleValidator.java）----------
+
+/** RandomBranch.probability 范围（百分比整数）。后端 {@code PROBABILITY_MIN} / {@code PROBABILITY_MAX}。 */
+export const PROBABILITY_MIN = 0;
+export const PROBABILITY_MAX = 100;
+/** SetElementLayer.mode 白名单。后端 {@code ELEMENT_LAYER_MODES}。 */
+export const ELEMENT_LAYER_MODES: ReadonlySet<string> = new Set(['front', 'back']);
+/** RoundVariable.mode 白名单。后端 {@code ROUND_MODES}。 */
+export const ROUND_MODES: ReadonlySet<string> = new Set(['round', 'floor', 'ceil']);
+/** ShowTitle.title / subtitle 各自最大长度（后端 {@code TITLE_MAX}）。 */
+export const TITLE_MAX = 256;
+/** ShowTitle.fadeInMs / fadeOutMs 上限（毫秒）。后端 {@code TITLE_FADE_MAX}。 */
+export const TITLE_FADE_MAX = 10000;
+/** ShowTitle.stayMs 上限（毫秒）。后端 {@code TITLE_STAY_MAX}。 */
+export const TITLE_STAY_MAX = 60000;
+
 // ---------- tween-P1 常量（补间包裹，逐一对照 ScriptRuleValidator.java）----------
 
 /** TweenBlock.durationMs 最小值（毫秒）。后端 {@code TWEEN_DURATION_MIN}。 */
@@ -551,6 +567,66 @@ function validateAction(
             }
             break;
         }
+        // ---- 0.7.3：4 个新积木（文案与后端 ScriptRuleValidator 逐字一致）----
+        case 'randomBranch': {
+            // probability 必须在 [0,100] 之间（整数，后端 int 存储）。
+            if (typeof action.probability !== 'number' || action.probability < PROBABILITY_MIN || action.probability > PROBABILITY_MAX) {
+                errors.push({ blockId: path, message: `随机概率需在 ${PROBABILITY_MIN}..${PROBABILITY_MAX} 之间` });
+            }
+            // then/else 递归（ifDepth +1，与 if 同语义——randomBranch 也算一层条件分支深度）。
+            const depth = ifDepth + 1;
+            if (depth > MAX_IF_DEPTH) {
+                errors.push({ blockId: path, message: `分支嵌套超过 ${MAX_IF_DEPTH} 层（depth=${depth}）` });
+            }
+            validateActions(action.then ?? [], depth, `${path}/then`, errors);
+            validateActions(action.else ?? [], depth, `${path}/else`, errors);
+            break;
+        }
+        case 'setElementLayer': {
+            if (isBlank(action.elementId)) {
+                errors.push({ blockId: path, message: '元素置层缺少元素 ID' });
+            }
+            if (action.mode == null || !ELEMENT_LAYER_MODES.has(action.mode)) {
+                errors.push({ blockId: path, message: `置层方向不在允许范围：${action.mode}` });
+            }
+            break;
+        }
+        case 'roundVariable': {
+            if (isBlank(action.fullName)) {
+                errors.push({ blockId: path, message: '取整变量名不能为空' });
+            }
+            if (action.mode == null || !ROUND_MODES.has(action.mode)) {
+                errors.push({ blockId: path, message: `取整方式不在允许范围：${action.mode}` });
+            }
+            break;
+        }
+        case 'showTitle': {
+            // title 和 subtitle 至少一个非空（后端同校验）。
+            const titleBlank = isBlank(action.title);
+            const subtitleBlank = isBlank(action.subtitle);
+            if (titleBlank && subtitleBlank) {
+                errors.push({ blockId: path, message: '标题和副标题不能同时为空' });
+            }
+            if (!titleBlank && action.title.length > TITLE_MAX) {
+                errors.push({ blockId: path, message: `标题超长（最多 ${TITLE_MAX} 字符）` });
+            }
+            if (!subtitleBlank && action.subtitle.length > TITLE_MAX) {
+                errors.push({ blockId: path, message: `副标题超长（最多 ${TITLE_MAX} 字符）` });
+            }
+            if (typeof action.fadeInMs !== 'number' || action.fadeInMs < 0 || action.fadeInMs > TITLE_FADE_MAX) {
+                errors.push({ blockId: path, message: `淡入时长需在 0..${TITLE_FADE_MAX} 毫秒之间` });
+            }
+            if (typeof action.stayMs !== 'number' || action.stayMs < 0 || action.stayMs > TITLE_STAY_MAX) {
+                errors.push({ blockId: path, message: `停留时长需在 0..${TITLE_STAY_MAX} 毫秒之间` });
+            }
+            if (typeof action.fadeOutMs !== 'number' || action.fadeOutMs < 0 || action.fadeOutMs > TITLE_FADE_MAX) {
+                errors.push({ blockId: path, message: `淡出时长需在 0..${TITLE_FADE_MAX} 毫秒之间` });
+            }
+            if (action.target == null || !MESSAGE_TARGETS.has(action.target)) {
+                errors.push({ blockId: path, message: `弹窗发送对象不在允许范围：${action.target}` });
+            }
+            break;
+        }
         // ---- tween-P1：补间包裹积木（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'tweenBlock': {
             // durationMs 范围。
@@ -599,7 +675,8 @@ function countBlocks(actions: ScriptAction[]): number {
     let count = 0;
     for (const action of actions) {
         count++;
-        if (action.type === 'if') {
+        if (action.type === 'if' || action.type === 'randomBranch') {
+            // 0.7.3：randomBranch 与 if 同——自身计 1 + then/else 节点递归。
             count += countBlocks(action.then ?? []) + countBlocks(action.else ?? []);
         } else if (action.type === 'repeat' || action.type === 'repeatUntil' || action.type === 'tweenBlock') {
             // 0.7.2-P3：repeatUntil 与 repeat 同——自身计 1 + body 节点递归（不乘轮数；

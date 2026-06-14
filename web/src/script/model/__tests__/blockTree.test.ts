@@ -591,3 +591,68 @@ describe('blockTree.tweenBlock body 导航（与 repeat/repeatUntil 同走 isBod
         expect(ifDepth([tweenBlock(500, [log('x')])])).toBe(0);
     });
 });
+
+// ---------- 0.7.3：randomBranch 双臂容器（照 if，then/else 路径同构）----------
+
+describe('blockTree — randomBranch 双臂容器', () => {
+    /** 构造 randomBranch 节点。 */
+    function rb(probability: number, thenA: ScriptAction[], elseA: ScriptAction[] = []): ScriptAction {
+        return { type: 'randomBranch', probability, then: thenA, else: elseA };
+    }
+
+    /** 构造测试树：[log A, randomBranch(50, [log T0], [log E0]), log Z] */
+    function withRb(): ScriptAction[] {
+        return [log('A'), rb(50, [log('T0')], [log('E0')]), log('Z')];
+    }
+
+    it('getAt 取 randomBranch then/else 子项（路径与 if 同构）', () => {
+        const a = withRb();
+        expect(getAt(a, ['actions', '1', 'then', '0'])).toMatchObject({ message: 'T0' });
+        expect(getAt(a, ['actions', '1', 'else', '0'])).toMatchObject({ message: 'E0' });
+    });
+
+    it('insertAt 往 randomBranch then 槽插入（immutable）', () => {
+        const a = withRb();
+        const next = insertAt(a, ['actions', '1', 'then'], 0, log('INS'));
+        expect(getAt(next, ['actions', '1', 'then', '0'])).toMatchObject({ message: 'INS' });
+        expect(getAt(next, ['actions', '1', 'then', '1'])).toMatchObject({ message: 'T0' });
+        // 原树不变
+        const orig = a[1] as Extract<ScriptAction, { type: 'randomBranch' }>;
+        expect(orig.then.length).toBe(1);
+    });
+
+    it('removeAt 删 randomBranch else 子项', () => {
+        const a = withRb();
+        const next = removeAt(a, ['actions', '1', 'else', '0']);
+        const node = next[1] as Extract<ScriptAction, { type: 'randomBranch' }>;
+        expect(node.else).toEqual([]);
+    });
+
+    it('walk 下钻 randomBranch then/else', () => {
+        const a = withRb();
+        const paths: string[] = [];
+        walk(a, (_n, p) => paths.push(p));
+        expect(paths).toContain('actions/1/then/0');
+        expect(paths).toContain('actions/1/else/0');
+    });
+
+    it('countBlocks 计 randomBranch 自身 + then/else 子节点', () => {
+        const a = withRb();
+        // log A(1) + randomBranch(1) + then[log T0(1)] + else[log E0(1)] + log Z(1) = 5
+        expect(countBlocks(a)).toBe(5);
+    });
+
+    it('ifDepth 对 randomBranch 增 1（与 if 同语义，属于条件分支深度）', () => {
+        expect(ifDepth([rb(50, [log('x')], [])])).toBe(1);
+        // 嵌套 randomBranch-in-if
+        expect(ifDepth([ifBlock('c', [rb(50, [log('x')], [])], [])])).toBe(2);
+        // randomBranch-in-randomBranch
+        expect(ifDepth([rb(50, [rb(30, [log('x')], [])], [])])).toBe(2);
+    });
+
+    it('moveNode 顶层块 → randomBranch then 槽（跨容器）', () => {
+        const a = withRb();
+        const next = moveNode(a, ['actions', '0'], ['actions', '1', 'then'], 0);
+        expect(getAt(next, ['actions', '0', 'then', '0'])).toMatchObject({ message: 'A' });
+    });
+});

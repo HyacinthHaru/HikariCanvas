@@ -50,11 +50,15 @@ export function pathToString(path: string[]): string {
     return path.join('/');
 }
 
-/** {@code if} 类型守卫——窄化到带 then/else 的分支。 */
+/**
+ * 「带 {@code then/else} 子序列」容器块类型守卫——窄化到 if（条件分支）与 randomBranch（随机分支，
+ * 0.7.3）。两者的 then/else 序列键完全同名，路径 blockId 形态也完全一致（`/then/i` / `/else/i`）。
+ * getChildSeq / withChildSeq / BlockNode C 形渲染共用此一条分支，不为 randomBranch 单独再写分支。
+ */
 function isIf(
     node: ScriptAction,
-): node is Extract<ScriptAction, { type: 'if' }> {
-    return node.type === 'if';
+): node is Extract<ScriptAction, { type: 'if' }> | Extract<ScriptAction, { type: 'randomBranch' }> {
+    return node.type === 'if' || node.type === 'randomBranch';
 }
 
 /**

@@ -5,6 +5,39 @@
 
 ---
 
+## 2026-06-14 · 0.7.3 备选积木批完工：4 个新积木 + 版本号 bump 0.7.3-SNAPSHOT
+
+补间动画完工后补一批轻量备选积木（brainstorming 用户选 4 个全做）。后端 + 前端子代理并行。
+
+**4 个新积木**：
+- **随机分支** `RandomBranch(probability, then, else)`：控制流，照 if——ScriptRunner 随机选臂（`rng`
+  IntSupplier 注入 seam + setRngForTest；`rng.getAsInt() < probability`，blockId `/then/` `/else/` 照 if
+  逐字符同构）。
+- **元素置顶/置底** `SetElementLayer(elementId, mode front/back)`：结构性改 state——`EditSession`
+  moveElementToFront/Back（复用 reorderElement size-1 / 0）+ `ElementPropertyApplier.applySetElementLayer`
+  双路径（session reorderToEdge / headless）。
+- **变量取整** `RoundVariable(fullName, mode round/floor/ceil)`：async，照 scaleVariable（读变量 →
+  Math.round/floor/ceil → setValue）。
+- **标题弹窗** `ShowTitle(title, subtitle, fadeInMs/stayMs/fadeOutMs, target)`：主线程 player.sendTitle
+  （ms→tick /50），照 sendMessage（target 分流 + `${var}` 插值 + TRIGGER_DETAIL 拿触发玩家）。
+
+**协议升 v7**（Protocol SUPPORTED 6→7 + 前端 CLIENT_V 6→7）。
+
+**版本号 bump**：0.6.0 → **0.7.3-SNAPSHOT**（5 处：build.gradle.kts allprojects / paper-plugin.yml /
+web/package.json + package-lock×2）——0.7.x 一路 0.6.0-SNAPSHOT 首次 bump，标记 0.7.x 进度。
+
+**前端**：blockTree `isIf` 扩 randomBranch（then/else 容器照 if）+ BlockNode `isIf` computed 含
+randomBranch（C 形 then/else，probability 走 scalarFields）+ 3 个简单积木字段镜像 + i18n。
+
+**测试**：后端 **1905**（+55）/ 前端 **1231** 全绿。设计 `docs/scripting-0.7.3.md`（G1-G4 决策固化）。
+
+关联：后端 Action（4 record）+ Deserializer/Serializer/Validator/Permissions + ScriptRunner（RandomBranch +
+rng seam）+ ActionExecutor（3 doXxx）+ EditSession（moveElementToFront/Back）+ ElementPropertyApplier
+（applySetElementLayer）+ Protocol v7；前端 protocol/blockDefs/blockTree/BlockNode/validator/wsClient/i18n；
+版本号 5 处；docs/scripting-0.7.3.md。
+
+---
+
 ## 2026-06-14 · 补间动画 P5 完工 + 补间功能收官（文档收尾）
 
 补间动画 5 phase 全部完工。P5 纯文档 / 收口（代码 P2-P4 已做）。

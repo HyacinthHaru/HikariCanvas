@@ -170,8 +170,12 @@ const colorVar = computed(() => {
     return 'var(--border)';
 });
 
-/** 是否 if 块（C 形布局：条件 + then/else 子槽）。 */
-const isIf = computed(() => props.action.type === 'if');
+/**
+ * 是否「带 then/else 双臂」块（C 形布局：if 条件分支 + 0.7.3 randomBranch 随机分支）。
+ * 两者渲染路径完全相同（条件/概率行 + then/else 子槽 + C 形底托），共用模板。
+ * if 的条件行走 ConditionBuilder（conditionField 存在）；randomBranch 的 probability 走 scalarFields。
+ */
+const isIf = computed(() => props.action.type === 'if' || props.action.type === 'randomBranch');
 
 /**
  * 是否 repeat 块（0.7.1-P2，C 形单臂布局：count 标量 + body 子序列槽）。count 字段走
@@ -418,13 +422,13 @@ const commandValue = computed<CommandValue>(() => {
     return { templateId: props.action.templateId, params: props.action.params };
 });
 
-/** if 的 then 子序列（非 if 块为空，不渲染子槽）。 */
+/** if / randomBranch 的 then 子序列（非双臂块为空，不渲染子槽）。 */
 const thenActions = computed<ScriptAction[]>(() =>
-    props.action.type === 'if' ? props.action.then : [],
+    (props.action.type === 'if' || props.action.type === 'randomBranch') ? props.action.then : [],
 );
-/** if 的 else 子序列。 */
+/** if / randomBranch 的 else 子序列。 */
 const elseActions = computed<ScriptAction[]>(() =>
-    props.action.type === 'if' ? props.action.else : [],
+    (props.action.type === 'if' || props.action.type === 'randomBranch') ? props.action.else : [],
 );
 /**
  * repeat / repeatUntil 的 body 子序列（0.7.1-P2 / 0.7.2-P3；无 body 块为空）。子块 path 拼

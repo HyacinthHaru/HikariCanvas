@@ -581,7 +581,16 @@ export type ScriptAction =
     // easing 复用 0.6 timeline Easing（同 Keyframe.easing）；
     // body 只放属性动作（setElementProperties，kind ∈ tweenable 集合）。
     // P1 后端 ScriptRunner 占位分支（trace + 跳过，P2 替换真引擎）。
-    | { type: 'tweenBlock'; durationMs: number; easing: Easing; body: ScriptAction[] };
+    | { type: 'tweenBlock'; durationMs: number; easing: Easing; body: ScriptAction[] }
+    // 0.7.3：4 个新积木（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗）。
+    // randomBranch = 控制流（C 形双臂，照 if）；probability ∈ [0,100] 百分比；then/else 可递归。
+    | { type: 'randomBranch'; probability: number; then: ScriptAction[]; else: ScriptAction[] }
+    // setElementLayer = 结构性改 state（把元素移到所属 layer 最前/最后）；mode ∈ {front, back}。
+    | { type: 'setElementLayer'; elementId: string; mode: 'front' | 'back' }
+    // roundVariable = 变量取整（读→Math.round/floor/ceil→setValue）；mode ∈ {round, floor, ceil}。
+    | { type: 'roundVariable'; fullName: string; mode: 'round' | 'floor' | 'ceil' }
+    // showTitle = 标题弹窗（主线程 hop + target 分流）；time fields in ms；target ∈ {trigger, all}。
+    | { type: 'showTitle'; title: string; subtitle: string; fadeInMs: number; stayMs: number; fadeOutMs: number; target: 'trigger' | 'all' };
 
 /**
  * 脚本规则（docs/scripting.md §2.1）。{@code id / wallId} 服务端权威（create 时不带）。

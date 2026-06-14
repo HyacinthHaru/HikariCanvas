@@ -93,6 +93,21 @@ public final class ScriptRuleValidator {
      */
     public static final Set<String> TWEENABLE_KINDS =
             Set.of("moveTo", "resize", "rotateTo", "setOpacity", "setColor");
+    /** 0.7.3 RandomBranch.probability 范围（百分比，含边界）。 */
+    public static final int RANDOM_BRANCH_PROB_MIN = 0;
+    public static final int RANDOM_BRANCH_PROB_MAX = 100;
+    /** 0.7.3 SetElementLayer.mode 白名单。 */
+    public static final Set<String> ELEMENT_LAYER_MODES = Set.of("front", "back");
+    /** 0.7.3 RoundVariable.mode 白名单。 */
+    public static final Set<String> ROUND_MODES = Set.of("round", "floor", "ceil");
+    /** 0.7.3 ShowTitle 时长上限（毫秒）。 */
+    public static final int SHOW_TITLE_FADE_MAX_MS = 10_000;   // fadeIn / fadeOut ≤ 10s
+    public static final int SHOW_TITLE_STAY_MAX_MS = 60_000;   // stay ≤ 60s
+    /** 0.7.3 ShowTitle.target 白名单（复用 SendMessage 的 target 集合）。 */
+    public static final Set<String> TITLE_TARGETS = Set.of("trigger", "all");
+    /** 0.7.3 ShowTitle title / subtitle 最大长度（单个字段）。 */
+    public static final int TITLE_TEXT_MAX = 256;
+
     /** 0.7.1-P5 PlayParticle.particle 白名单（14 个，双端对齐）。 */
     public static final Set<String> PARTICLE_WHITELIST = Set.of(
             "minecraft:flame", "minecraft:smoke", "minecraft:heart", "minecraft:happy_villager",
@@ -180,6 +195,9 @@ public final class ScriptRuleValidator {
             } else if (action instanceof Action.TweenBlock tb) {
                 // tween body 计入节点数（body 里的属性动作都是树节点）
                 count += countBlocks(tb.body());
+            } else if (action instanceof Action.RandomBranch rb) {
+                // 0.7.3：随机分支 then/else 计入节点数（同 If）
+                count += countBlocks(rb.then()) + countBlocks(rb.elseActions());
             }
         }
         return count;
@@ -461,6 +479,64 @@ public final class ScriptRuleValidator {
                 }
                 // body 递归（ifDepth 不变——repeatUntil 不增 if 嵌套深度，同 Repeat）
                 yield validateActions(a.body(), ifDepth);
+            }
+            // 0.7.3：随机分支 / 置顶置底 / 取整 / 标题弹窗
+            case Action.RandomBranch a -> {
+                if (a.probability() < RANDOM_BRANCH_PROB_MIN
+                        || a.probability() > RANDOM_BRANCH_PROB_MAX) {
+                    yield Optional.of("随机概率需在 " + RANDOM_BRANCH_PROB_MIN + ".."
+                            + RANDOM_BRANCH_PROB_MAX + " 之间（百分比）");
+                }
+                // then / else 都可为空（与 If 同语义）；递归校验
+                Optional<String> thenErr = validateActions(a.then(), ifDepth);
+                if (thenErr.isPresent()) yield thenErr;
+                yield validateActions(a.elseActions(), ifDepth);
+            }
+            case Action.SetElementLayer a -> {
+                if (blank(a.elementId())) {
+                    yield Optional.of("元素置顶/置底缺少元素 ID");
+                }
+                if (a.mode() == null || !ELEMENT_LAYER_MODES.contains(a.mode())) {
+                    yield Optional.of("置顶/置底模式不在允许范围：" + a.mode());
+                }
+                yield Optional.empty();
+            }
+            case Action.RoundVariable a -> {
+                if (blank(a.fullName())) {
+                    yield Optional.of("变量取整的变量名不能为空");
+                }
+                if (a.mode() == null || !ROUND_MODES.contains(a.mode())) {
+                    yield Optional.of("取整模式不在允许范围：" + a.mode());
+                }
+                yield Optional.empty();
+            }
+            case Action.ShowTitle a -> {
+                // title 和 subtitle 至少一个非空
+                boolean titleEmpty = a.title() == null || a.title().isBlank();
+                boolean subtitleEmpty = a.subtitle() == null || a.subtitle().isBlank();
+                if (titleEmpty && subtitleEmpty) {
+                    yield Optional.of("标题弹窗的主标题和副标题不能同时为空");
+                }
+                if (a.title() != null && a.title().length() > TITLE_TEXT_MAX) {
+                    yield Optional.of("标题超长（最多 " + TITLE_TEXT_MAX + " 字符）");
+                }
+                if (a.subtitle() != null && a.subtitle().length() > TITLE_TEXT_MAX) {
+                    yield Optional.of("副标题超长（最多 " + TITLE_TEXT_MAX + " 字符）");
+                }
+                // 时长 ≥ 0 + 上限
+                if (a.fadeInMs() < 0 || a.fadeInMs() > SHOW_TITLE_FADE_MAX_MS) {
+                    yield Optional.of("淡入时长需在 0.." + SHOW_TITLE_FADE_MAX_MS + " 毫秒之间");
+                }
+                if (a.stayMs() < 0 || a.stayMs() > SHOW_TITLE_STAY_MAX_MS) {
+                    yield Optional.of("停留时长需在 0.." + SHOW_TITLE_STAY_MAX_MS + " 毫秒之间");
+                }
+                if (a.fadeOutMs() < 0 || a.fadeOutMs() > SHOW_TITLE_FADE_MAX_MS) {
+                    yield Optional.of("淡出时长需在 0.." + SHOW_TITLE_FADE_MAX_MS + " 毫秒之间");
+                }
+                if (a.target() == null || !TITLE_TARGETS.contains(a.target())) {
+                    yield Optional.of("发送对象不在允许范围：" + a.target());
+                }
+                yield Optional.empty();
             }
             // tween：补间动画包裹（docs/scripting-tween.md T1-T6）
             case Action.TweenBlock a -> {

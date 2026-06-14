@@ -862,6 +862,11 @@ export const messages = {
                 deleteElement: '删除元素',
                 // tween-P1：补间包裹积木。
                 tweenBlock: '在 X 秒内',
+                // 0.7.3：4 个新积木。
+                randomBranch: '随机分支',
+                setElementLayer: '元素置顶/置底',
+                roundVariable: '变量取整',
+                showTitle: '弹出标题',
             },
             // 0.7.1：友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
             friendly: {
@@ -929,6 +934,15 @@ export const messages = {
                 tweenDurationMs: '时长（毫秒）',
                 tweenEasing: '缓动',
                 tweenBody: '动作列表',
+                // 0.7.3：新积木字段。
+                probability: '概率（%）',
+                layerMode: '方向',
+                roundMode: '取整方式',
+                titleText: '主标题',
+                subtitleText: '副标题',
+                fadeInMs: '淡入时长（毫秒）',
+                stayMs: '停留时长（毫秒）',
+                fadeOutMs: '淡出时长（毫秒）',
             },
             // select / 切换 类字段的选项友好文案。
             fieldOptions: {
@@ -969,6 +983,12 @@ export const messages = {
                 channelTitle: '标题',
                 opMultiply: '乘以',
                 opDivide: '除以',
+                // 0.7.3：元素置层方向 + 变量取整方式。
+                layerFront: '置顶（最上层）',
+                layerBack: '置底（最下层）',
+                roundRound: '四舍五入',
+                roundFloor: '向下取整',
+                roundCeil: '向上取整',
             },
             // 0.7.0-P5-F：积木参数表单控件文案（下拉占位 / 空列表提示 / 变量按钮）。
             param: {
@@ -2077,6 +2097,11 @@ export const messages = {
                 deleteElement: 'Delete element',
                 // tween-P1: tween wrapper block.
                 tweenBlock: 'Over X seconds',
+                // 0.7.3: four new blocks.
+                randomBranch: 'Random branch',
+                setElementLayer: 'Move element to front / back',
+                roundVariable: 'Round variable',
+                showTitle: 'Show title',
             },
             // 0.7.1: friendly element block titles.
             friendly: {
@@ -2143,6 +2168,15 @@ export const messages = {
                 tweenDurationMs: 'Duration (ms)',
                 tweenEasing: 'Easing',
                 tweenBody: 'Actions',
+                // 0.7.3: new block fields.
+                probability: 'Probability (%)',
+                layerMode: 'Direction',
+                roundMode: 'Rounding',
+                titleText: 'Title',
+                subtitleText: 'Subtitle',
+                fadeInMs: 'Fade in (ms)',
+                stayMs: 'Stay (ms)',
+                fadeOutMs: 'Fade out (ms)',
             },
             fieldOptions: {
                 opPlay: 'Play',
@@ -2182,6 +2216,12 @@ export const messages = {
                 channelTitle: 'Title',
                 opMultiply: 'Multiply by',
                 opDivide: 'Divide by',
+                // 0.7.3: element layer mode + round mode.
+                layerFront: 'Front (top)',
+                layerBack: 'Back (bottom)',
+                roundRound: 'Round',
+                roundFloor: 'Floor',
+                roundCeil: 'Ceil',
             },
             // 0.7.0-P5-F: block param form control strings.
             param: {

@@ -546,6 +546,32 @@ public final class EditSession {
         return new OpResult.Ok(patch, DirtyRegion.of(moved));
     }
 
+    /**
+     * 0.7.3：把元素移到所在层末尾（front = 最后渲染 = 显示最上）。
+     * 已在末尾则仍 bump version 返 Ok（幂等）。layer.locked → LAYER_LOCKED。
+     * 元素不存在 → INVALID_ELEMENT。
+     */
+    public synchronized OpResult moveElementToFront(String elementId) {
+        if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
+        Locator loc = findElement(elementId);
+        if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
+        return reorderElement(elementId, loc.layer.elements().size() - 1);
+    }
+
+    /**
+     * 0.7.3：把元素移到所在层开头（back = 最先渲染 = 显示最下）。
+     * 已在开头则仍 bump version 返 Ok（幂等）。layer.locked → LAYER_LOCKED。
+     * 元素不存在 → INVALID_ELEMENT。
+     */
+    public synchronized OpResult moveElementToBack(String elementId) {
+        if (elementId == null) return err("INVALID_PAYLOAD", "elementId missing");
+        Locator loc = findElement(elementId);
+        if (loc == null) return err("INVALID_ELEMENT", "element not found: " + elementId);
+        if (loc.layer.locked()) return err("LAYER_LOCKED", "owning layer is locked");
+        return reorderElement(elementId, 0);
+    }
+
     // ---------- element.transform ----------
 
     /**

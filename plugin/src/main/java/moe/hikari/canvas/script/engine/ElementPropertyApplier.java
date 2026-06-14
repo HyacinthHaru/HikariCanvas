@@ -88,6 +88,15 @@ public final class ElementPropertyApplier {
         default SessionOutcome delete(String wallId, String elementId) {
             return SessionOutcome.noSession();
         }
+
+        /**
+         * 0.7.3：活跃 session 置顶/置底元素 → reorderElement 标准链 + 前端 patch。
+         * mode = "front"（末尾）/ "back"（开头）。无 session 返 noSession。
+         * default = noSession（旧 fake 兼容）。
+         */
+        default SessionOutcome reorderToEdge(String wallId, String elementId, String mode) {
+            return SessionOutcome.noSession();
+        }
     }
 
     private final @Nullable SessionPatchApplier sessionApplier;
@@ -318,6 +327,49 @@ public final class ElementPropertyApplier {
             }
         }
         return deleteHeadless(wallId, blockId, elementId);
+    }
+
+    /**
+     * 0.7.3：元素置顶/置底（双路径，照 {@link #applyClone}/{@link #applyDelete}）。
+     * 路径 A：session 内 reorderElement 标准链；NO_SESSION → headless。
+     */
+    public TraceStep applySetElementLayer(String wallId, String blockId,
+                                          String elementId, String mode) {
+        if (elementId == null || elementId.isEmpty()) {
+            return TraceStep.error(blockId, "elementId 缺失");
+        }
+        if (sessionApplier != null) {
+            SessionOutcome outcome;
+            try {
+                outcome = sessionApplier.reorderToEdge(wallId, elementId, mode);
+            } catch (RuntimeException e) {
+                log.log(java.util.logging.Level.WARNING,
+                        "[脚本] session reorderToEdge 异常: wall=" + wallId
+                                + " element=" + elementId + " err=" + e.getMessage(), e);
+                outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
+            }
+            if (outcome != null) {
+                switch (outcome.status()) {
+                    case APPLIED -> {
+                        return TraceStep.ok(blockId, "action",
+                                "setElementLayer " + mode + " → session");
+                    }
+                    case FAILED -> {
+                        return TraceStep.error(blockId, String.valueOf(outcome.detail()));
+                    }
+                    case NO_SESSION -> { /* fall through headless */ }
+                }
+            }
+        }
+        return setElementLayerHeadless(wallId, blockId, elementId, mode);
+    }
+
+    /** 路径 B：headless 置顶/置底（临时 EditSession → moveElementToFront/Back → updateState + Ticker）。 */
+    private TraceStep setElementLayerHeadless(String wallId, String blockId,
+                                              String elementId, String mode) {
+        boolean front = "front".equals(mode);
+        return runHeadless(wallId, blockId, "setElementLayer(" + mode + ") " + elementId,
+                es -> front ? es.moveElementToFront(elementId) : es.moveElementToBack(elementId));
     }
 
     /** 路径 B：headless 克隆（临时 EditSession 注入 F10 配额 → cloneElement → updateState + Ticker）。 */

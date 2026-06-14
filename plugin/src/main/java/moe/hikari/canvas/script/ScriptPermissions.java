@@ -87,6 +87,14 @@ public final class ScriptPermissions {
                 case Action.DeleteElement ignored -> { }
                 // tween：递归扫 body（body 里的属性动作权限面照常生效；包裹本身无附加权限面）
                 case Action.TweenBlock tb -> scanActions(tb.body(), facets);
+                // 0.7.3：随机分支递归扫 then/else；其余 3 个无附加权限面
+                case Action.RandomBranch rb -> {
+                    scanActions(rb.then(), facets);
+                    scanActions(rb.elseActions(), facets);
+                }
+                case Action.SetElementLayer ignored -> { }
+                case Action.RoundVariable ignored -> { }
+                case Action.ShowTitle ignored -> { }
             }
         }
     }

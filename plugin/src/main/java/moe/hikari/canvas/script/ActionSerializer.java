@@ -142,6 +142,28 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 writeEasing(gen, a.easing());                    // 与 0.6 timeline Easing 同 serde
                 writeActions(gen, provider, "body", a.body());
             }
+            // 0.7.3：随机分支 / 置顶置底 / 取整 / 标题弹窗
+            case Action.RandomBranch a -> {
+                gen.writeNumberField("probability", a.probability());
+                writeActions(gen, provider, "then", a.then());
+                writeActions(gen, provider, "else", a.elseActions());
+            }
+            case Action.SetElementLayer a -> {
+                gen.writeStringField("elementId", a.elementId());
+                gen.writeStringField("mode", a.mode());
+            }
+            case Action.RoundVariable a -> {
+                gen.writeStringField("fullName", a.fullName());
+                gen.writeStringField("mode", a.mode());
+            }
+            case Action.ShowTitle a -> {
+                gen.writeStringField("title", a.title());
+                gen.writeStringField("subtitle", a.subtitle());
+                gen.writeNumberField("fadeInMs", a.fadeInMs());
+                gen.writeNumberField("stayMs", a.stayMs());
+                gen.writeNumberField("fadeOutMs", a.fadeOutMs());
+                gen.writeStringField("target", a.target());
+            }
         }
         gen.writeEndObject();
     }

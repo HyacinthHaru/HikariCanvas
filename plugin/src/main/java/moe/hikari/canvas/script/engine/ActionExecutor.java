@@ -150,6 +150,10 @@ public final class ActionExecutor implements ActionSink {
                 case Action.AppendVariable a -> doAppendVariable(wallId, blockId, a);
                 case Action.CloneElement a -> doCloneElement(wallId, blockId, a);
                 case Action.DeleteElement a -> doDeleteElement(wallId, blockId, a);
+                // 0.7.3：置顶置底 / 取整 / 标题弹窗（真实现）
+                case Action.SetElementLayer a -> doSetElementLayer(wallId, blockId, a);
+                case Action.RoundVariable a -> doRoundVariable(wallId, blockId, a);
+                case Action.ShowTitle a -> doShowTitle(wallId, blockId, a);
                 // wait / if / repeat / stopScript / waitUntil 由 Runner 处理；进到这里是 Runner
                 // 实现 bug → 防御 error（stopScript/waitUntil 真实现在 Runner，本批次外）
                 case Action.Wait a -> TraceStep.error(blockId, "wait 应由 ScriptRunner 处理");
@@ -163,6 +167,8 @@ public final class ActionExecutor implements ActionSink {
                 // tween P1 占位：TweenBlock 由 ScriptRunner（P1）/ TweenScheduler（P2）处理；
                 // 进到这里是 Runner 实现 bug → 防御 error。
                 case Action.TweenBlock a -> TraceStep.error(blockId, "tweenBlock 由 ScriptRunner 处理（P2 替换为 TweenScheduler）");
+                // 0.7.3：RandomBranch 由 ScriptRunner 处理（控制流）；进到这里是 Runner 实现 bug。
+                case Action.RandomBranch a -> TraceStep.error(blockId, "randomBranch 应由 ScriptRunner 处理");
             };
         } catch (RuntimeException e) {
             // 三层隔离兜底：单动作失败不断链
@@ -666,6 +672,103 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.error(blockId, "play 失败: " + r);
         }
         return TraceStep.ok(blockId, "action", "playAwait " + a.timelineId());
+    }
+
+    // ---------- 0.7.3：置顶置底 / 取整 / 标题弹窗 ----------
+
+    /** 元素置顶/置底 → {@link ElementPropertyApplier#applySetElementLayer}（双路径）。 */
+    private TraceStep doSetElementLayer(String wallId, String blockId, Action.SetElementLayer a) {
+        if (applier == null) {
+            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+        }
+        return applier.applySetElementLayer(wallId, blockId, a.elementId(), a.mode());
+    }
+
+    /**
+     * 变量取整（照 {@link #doScale}：async，读当前值 → Double.parse → 取整 → setValue）。
+     * 非数值 → error step（解析失败不是程序错误，让链继续）。
+     */
+    private TraceStep doRoundVariable(String wallId, String blockId, Action.RoundVariable a) {
+        if (store == null || storeLookup == null) {
+            return TraceStep.error(blockId, "VariableStore 未装配");
+        }
+        String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String raw = storeLookup.apply(fullName);
+        double parsed;
+        try {
+            if (raw == null || raw.isBlank()) {
+                return TraceStep.error(blockId, "变量 " + fullName + " 无值，无法取整");
+            }
+            parsed = Double.parseDouble(raw.trim());
+        } catch (NumberFormatException e) {
+            return TraceStep.error(blockId, "变量 " + fullName + " 非数值: " + raw);
+        }
+        double result = switch (a.mode()) {
+            case "floor" -> Math.floor(parsed);
+            case "ceil" -> Math.ceil(parsed);
+            default -> (double) Math.round(parsed);  // "round"（validator 已校验白名单）
+        };
+        String formatted = formatNumber(result);
+        try {
+            store.setValue(fullName, formatted, null);
+        } catch (VariableException e) {
+            return TraceStep.error(blockId, "roundVariable " + fullName + ": " + e.getMessage());
+        }
+        return TraceStep.ok(blockId, "action", fullName + " = " + formatted
+                + " (" + a.mode() + ")");
+    }
+
+    /**
+     * 标题弹窗（主线程 hop + target 分流，照 {@link #doSendMessage}）。
+     * title / subtitle 过 {@code ${var:X}} 插值；ms → tick = ms/50（整除，向下截断）。
+     * target=all → 全服广播；target=trigger → 触发玩家（{@link ScriptRunner#TRIGGER_DETAIL}）。
+     */
+    private TraceStep doShowTitle(String wallId, String blockId, Action.ShowTitle a) {
+        String titleText = interpolator == null ? (a.title() == null ? "" : a.title())
+                : interpolator.interpolate(a.title() == null ? "" : a.title(), wallId).text();
+        String subtitleText = interpolator == null ? (a.subtitle() == null ? "" : a.subtitle())
+                : interpolator.interpolate(a.subtitle() == null ? "" : a.subtitle(), wallId).text();
+        int fadeInTicks = a.fadeInMs() / 50;
+        int stayTicks = a.stayMs() / 50;
+        int fadeOutTicks = a.fadeOutMs() / 50;
+
+        if ("all".equals(a.target())) {
+            Runnable work = () -> {
+                try {
+                    for (Player p : Bukkit.getOnlinePlayers()) {
+                        p.sendTitle(titleText, subtitleText, fadeInTicks, stayTicks, fadeOutTicks);
+                    }
+                } catch (Throwable t) {
+                    log.log(Level.WARNING, "[脚本] showTitle 广播失败: " + t.getMessage(), t);
+                }
+            };
+            if (plugin == null) {
+                work.run();
+            } else {
+                Bukkit.getScheduler().runTask(plugin, work);
+            }
+            return TraceStep.ok(blockId, "action", "title→全服");
+        }
+        // target=trigger：发给触发玩家
+        String who = ScriptRunner.currentTriggerDetail();
+        if (who == null || who.isBlank()) {
+            return TraceStep.ok(blockId, "action", "无触发玩家，showTitle 跳过");
+        }
+        Runnable work = () -> {
+            try {
+                Player p = Bukkit.getPlayerExact(who);
+                if (p == null) return; // 离线
+                p.sendTitle(titleText, subtitleText, fadeInTicks, stayTicks, fadeOutTicks);
+            } catch (Throwable t) {
+                log.log(Level.WARNING, "[脚本] showTitle 失败: " + t.getMessage(), t);
+            }
+        };
+        if (plugin == null) {
+            work.run();
+        } else {
+            Bukkit.getScheduler().runTask(plugin, work);
+        }
+        return TraceStep.ok(blockId, "action", "title→" + who);
     }
 
     /**

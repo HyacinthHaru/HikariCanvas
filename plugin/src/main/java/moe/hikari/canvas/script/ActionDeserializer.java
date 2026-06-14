@@ -135,6 +135,24 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireLong(ctxt, node, "durationMs", type),
                     readEasing(ctxt, node, "easing", type),
                     readBranch(ctxt, node, "body", type));
+            // 0.7.3：随机分支 / 置顶置底 / 取整 / 标题弹窗
+            case "randomBranch" -> new Action.RandomBranch(
+                    requireInt(ctxt, node, "probability", type),
+                    readBranch(ctxt, node, "then", type),
+                    readBranch(ctxt, node, "else", type));
+            case "setElementLayer" -> new Action.SetElementLayer(
+                    requireText(ctxt, node, "elementId", type),
+                    requireText(ctxt, node, "mode", type));
+            case "roundVariable" -> new Action.RoundVariable(
+                    requireText(ctxt, node, "fullName", type),
+                    requireText(ctxt, node, "mode", type));
+            case "showTitle" -> new Action.ShowTitle(
+                    optionalText(node, "title", ""),
+                    optionalText(node, "subtitle", ""),
+                    requireInt(ctxt, node, "fadeInMs", type),
+                    requireInt(ctxt, node, "stayMs", type),
+                    requireInt(ctxt, node, "fadeOutMs", type),
+                    optionalText(node, "target", "trigger"));
             default -> ctxt.reportInputMismatch(Action.class,
                     "unknown action type: " + type);
         };

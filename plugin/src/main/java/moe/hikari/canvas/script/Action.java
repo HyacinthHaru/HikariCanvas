@@ -25,7 +25,8 @@ public sealed interface Action permits
         Action.Repeat,
         Action.StopScript, Action.PlayParticle, Action.WaitUntil,
         Action.CopyVariable, Action.AppendVariable, Action.CloneElement, Action.DeleteElement,
-        Action.RepeatUntil, Action.TweenBlock {
+        Action.RepeatUntil, Action.TweenBlock,
+        Action.RandomBranch, Action.SetElementLayer, Action.RoundVariable, Action.ShowTitle {
 
     /** wire 判别字段 {@code type} 的取值（camelCase）。 */
     String wireType();
@@ -213,5 +214,48 @@ public sealed interface Action permits
         public TweenBlock {
             body = body == null ? java.util.List.of() : java.util.List.copyOf(body);
         }
+    }
+
+    /**
+     * 0.7.3：随机分支（控制流，照 {@link If} 双臂）。{@code probability} ∈ [0,100]（百分比）；
+     * 运行时 {@code rng.nextInt(100) < probability} → 压 then，否则压 else。
+     * elseActions 避开 java 关键字；wire 字段名是 "else"。blockId 同构 "/then/<j>" / "/else/<j>"。
+     */
+    record RandomBranch(int probability, java.util.List<Action> then,
+                        java.util.List<Action> elseActions) implements Action {
+        @Override public String wireType() { return "randomBranch"; }
+        public RandomBranch {
+            then = then == null ? java.util.List.of() : java.util.List.copyOf(then);
+            elseActions = elseActions == null ? java.util.List.of() : java.util.List.copyOf(elseActions);
+        }
+    }
+
+    /**
+     * 0.7.3：元素置顶/置底（结构性改 state，照 {@link CloneElement}/{@link DeleteElement}
+     * 双路径）。{@code mode} ∈ {front, back}；front = 层内末尾（最上渲染），back = 层内开头（最下）。
+     * 元素不存在 → error step。
+     */
+    record SetElementLayer(String elementId, String mode) implements Action {
+        @Override public String wireType() { return "setElementLayer"; }
+    }
+
+    /**
+     * 0.7.3：变量取整（async，照 {@link ScaleVariable}）。
+     * {@code mode} ∈ {round, floor, ceil}；读变量当前值 → Double.parse → 取整 → 写回。
+     * 非数值 → error step。
+     */
+    record RoundVariable(String fullName, String mode) implements Action {
+        @Override public String wireType() { return "roundVariable"; }
+    }
+
+    /**
+     * 0.7.3：标题弹窗（主线程，照 {@link SendMessage} doSendMessage）。
+     * {@code target} ∈ {trigger, all}；title/subtitle 过 {@code ${var:X}} 插值；
+     * ms → tick = ms/50；title 和 subtitle 至少一个非空；时长 ≥ 0。
+     */
+    record ShowTitle(String title, String subtitle,
+                     int fadeInMs, int stayMs, int fadeOutMs,
+                     String target) implements Action {
+        @Override public String wireType() { return "showTitle"; }
     }
 }

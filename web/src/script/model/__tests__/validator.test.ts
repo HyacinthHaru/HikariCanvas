@@ -44,6 +44,13 @@ import {
     MESSAGE_TARGETS,
     TWEEN_DURATION_MIN,
     TWEEN_DURATION_MAX,
+    PROBABILITY_MIN,
+    PROBABILITY_MAX,
+    ELEMENT_LAYER_MODES,
+    ROUND_MODES,
+    TITLE_MAX,
+    TITLE_FADE_MAX,
+    TITLE_STAY_MAX,
 } from '../validator';
 import type { ScriptRule, ScriptAction, ScriptTrigger, Easing } from '@/types/protocol';
 
@@ -758,6 +765,162 @@ describe('validateRule — tweenBlock 补间包裹（durationMs + easing + body 
             outerActions = [{ type: 'if', condition: 'true', then: outerActions, else: [] }];
         }
         expect(validateRule(rule({ actions: outerActions }))).toEqual([]);
+    });
+});
+
+// ---------- 0.7.3：G1 randomBranch ----------
+
+describe('validateRule — randomBranch 随机分支', () => {
+    function mkRb(probability: number, thenA: ScriptAction[] = [], elseA: ScriptAction[] = []): ScriptAction {
+        return { type: 'randomBranch', probability, then: thenA, else: elseA };
+    }
+
+    it('合法 probability 边界（0 / 50 / 100）', () => {
+        expect(validateRule(rule({ actions: [mkRb(PROBABILITY_MIN)] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [mkRb(50)] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [mkRb(PROBABILITY_MAX)] }))).toEqual([]);
+    });
+
+    it('probability -1 / 101 报错（文案"随机概率需在 0..100 之间"）', () => {
+        const lo = validateRule(rule({ actions: [mkRb(-1)] }));
+        const hi = validateRule(rule({ actions: [mkRb(101)] }));
+        expect(lo.some((e) => e.message === `随机概率需在 ${PROBABILITY_MIN}..${PROBABILITY_MAX} 之间` && e.blockId === 'actions/0')).toBe(true);
+        expect(hi.some((e) => e.message.includes('随机概率'))).toBe(true);
+    });
+
+    it('then/else 内子动作错误带正确 blockId 路径（与后端 ScriptRunner 同构）', () => {
+        const errs = validateRule(rule({ actions: [mkRb(50, [{ type: 'wait', ms: 1 }], [{ type: 'log', message: 'ok' }])] }));
+        const waitErr = errs.find((e) => e.message.includes('等待时长'));
+        expect(waitErr?.blockId).toBe('actions/0/then/0');
+    });
+
+    it('randomBranch 计入 if 深度：MAX_IF_DEPTH 层合法，MAX_IF_DEPTH+1 层报错', () => {
+        // MAX_IF_DEPTH=4 层合法（最深节点 depth=4，不超）。
+        let inner4: ScriptAction[] = [{ type: 'log', message: 'x' }];
+        for (let i = 0; i < MAX_IF_DEPTH; i++) {
+            inner4 = [mkRb(50, inner4, [])];
+        }
+        expect(validateRule(rule({ actions: inner4 }))).toEqual([]);
+        // MAX_IF_DEPTH+1=5 层报错（最深节点 depth=5 > 4）。
+        let inner5: ScriptAction[] = [{ type: 'log', message: 'x' }];
+        for (let i = 0; i < MAX_IF_DEPTH + 1; i++) {
+            inner5 = [mkRb(50, inner5, [])];
+        }
+        expect(validateRule(rule({ actions: inner5 })).some((e) => e.message.includes('分支嵌套超过'))).toBe(true);
+    });
+
+    it('countBlocks 计 randomBranch 自身 + then/else 节点', () => {
+        const then48: ScriptAction[] = Array.from({ length: 48 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
+        // 1 randomBranch + 48 then + 1 else = 50，合法。
+        const ok = mkRb(50, then48, [{ type: 'log', message: 'e' }]);
+        expect(validateRule(rule({ actions: [ok] }))).toEqual([]);
+        // 1 + 49 + 1 = 51，超。
+        const then49: ScriptAction[] = Array.from({ length: 49 }, () => ({ type: 'log', message: 'x' }) as ScriptAction);
+        const over = mkRb(50, then49, [{ type: 'log', message: 'e' }]);
+        expect(validateRule(rule({ actions: [over] })).some((e) => e.message.includes('积木总数'))).toBe(true);
+    });
+});
+
+// ---------- 0.7.3：G2 setElementLayer ----------
+
+describe('validateRule — setElementLayer 元素置层', () => {
+    it('合法（elementId 非空 + mode ∈ {front,back}）', () => {
+        expect(validateRule(rule({ actions: [{ type: 'setElementLayer', elementId: 'el-1', mode: 'front' }] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [{ type: 'setElementLayer', elementId: 'el-2', mode: 'back' }] }))).toEqual([]);
+    });
+
+    it('elementId 空 → 报错', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'setElementLayer', elementId: '', mode: 'front' }] }));
+        expect(errs.some((e) => e.message === '元素置层缺少元素 ID' && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('mode 非法 → 报错', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'setElementLayer', elementId: 'el-1', mode: 'middle' as never }] }));
+        expect(errs.some((e) => e.message.includes('置层方向不在允许范围') && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('ELEMENT_LAYER_MODES 白名单与 def 一致', () => {
+        expect(ELEMENT_LAYER_MODES.has('front')).toBe(true);
+        expect(ELEMENT_LAYER_MODES.has('back')).toBe(true);
+        expect(ELEMENT_LAYER_MODES.size).toBe(2);
+    });
+});
+
+// ---------- 0.7.3：G3 roundVariable ----------
+
+describe('validateRule — roundVariable 变量取整', () => {
+    it('合法（fullName 非空 + mode ∈ {round,floor,ceil}）', () => {
+        expect(validateRule(rule({ actions: [{ type: 'roundVariable', fullName: 'user/score', mode: 'round' }] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [{ type: 'roundVariable', fullName: 'user/x', mode: 'floor' }] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [{ type: 'roundVariable', fullName: 'user/y', mode: 'ceil' }] }))).toEqual([]);
+    });
+
+    it('fullName 空 → 报错', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'roundVariable', fullName: '', mode: 'round' }] }));
+        expect(errs.some((e) => e.message === '取整变量名不能为空' && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('mode 非法 → 报错', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'roundVariable', fullName: 'user/x', mode: 'truncate' as never }] }));
+        expect(errs.some((e) => e.message.includes('取整方式不在允许范围') && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it('ROUND_MODES 白名单覆盖 3 种', () => {
+        expect(ROUND_MODES.has('round')).toBe(true);
+        expect(ROUND_MODES.has('floor')).toBe(true);
+        expect(ROUND_MODES.has('ceil')).toBe(true);
+        expect(ROUND_MODES.size).toBe(3);
+    });
+});
+
+// ---------- 0.7.3：G4 showTitle ----------
+
+describe('validateRule — showTitle 标题弹窗', () => {
+    function mkSt(over: Partial<{ title: string; subtitle: string; fadeInMs: number; stayMs: number; fadeOutMs: number; target: string }>): ScriptAction {
+        return {
+            type: 'showTitle',
+            title: '标题',
+            subtitle: '',
+            fadeInMs: 500,
+            stayMs: 2000,
+            fadeOutMs: 500,
+            target: 'trigger',
+            ...over,
+        } as ScriptAction;
+    }
+
+    it('合法（title 非空 + 时长在范围内 + target=trigger/all）', () => {
+        expect(validateRule(rule({ actions: [mkSt({})] }))).toEqual([]);
+        expect(validateRule(rule({ actions: [mkSt({ target: 'all', subtitle: '副' })] }))).toEqual([]);
+        // subtitle 非空 title 空也合法（至少一个非空）
+        expect(validateRule(rule({ actions: [mkSt({ title: '', subtitle: '副标题' })] }))).toEqual([]);
+    });
+
+    it('title 和 subtitle 同时为空 → 报错', () => {
+        const errs = validateRule(rule({ actions: [mkSt({ title: '', subtitle: '' })] }));
+        expect(errs.some((e) => e.message === '标题和副标题不能同时为空' && e.blockId === 'actions/0')).toBe(true);
+    });
+
+    it(`title 超长（> ${TITLE_MAX}）→ 报错`, () => {
+        const errs = validateRule(rule({ actions: [mkSt({ title: 'a'.repeat(TITLE_MAX + 1) })] }));
+        expect(errs.some((e) => e.message.includes('标题超长'))).toBe(true);
+    });
+
+    it(`fadeInMs / fadeOutMs 超限（> ${TITLE_FADE_MAX}）→ 报错`, () => {
+        const e1 = validateRule(rule({ actions: [mkSt({ fadeInMs: TITLE_FADE_MAX + 1 })] }));
+        expect(e1.some((e) => e.message.includes('淡入时长'))).toBe(true);
+        const e2 = validateRule(rule({ actions: [mkSt({ fadeOutMs: TITLE_FADE_MAX + 1 })] }));
+        expect(e2.some((e) => e.message.includes('淡出时长'))).toBe(true);
+    });
+
+    it(`stayMs 超限（> ${TITLE_STAY_MAX}）→ 报错`, () => {
+        const errs = validateRule(rule({ actions: [mkSt({ stayMs: TITLE_STAY_MAX + 1 })] }));
+        expect(errs.some((e) => e.message.includes('停留时长'))).toBe(true);
+    });
+
+    it('target 非法 → 报错', () => {
+        const errs = validateRule(rule({ actions: [mkSt({ target: 'server' })] }));
+        expect(errs.some((e) => e.message.includes('弹窗发送对象不在允许范围') && e.blockId === 'actions/0')).toBe(true);
     });
 });
 

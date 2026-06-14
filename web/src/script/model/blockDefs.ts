@@ -156,6 +156,23 @@ const PARTICLE_OPTIONS: FieldOption[] = [
 ];
 
 /**
+ * 0.7.3：SetElementLayer.mode 白名单（front = 置顶 / back = 置底）。
+ */
+const ELEMENT_LAYER_MODE_OPTIONS: FieldOption[] = [
+    { value: 'front', labelKey: 'script.fieldOptions.layerFront' },
+    { value: 'back', labelKey: 'script.fieldOptions.layerBack' },
+];
+
+/**
+ * 0.7.3：RoundVariable.mode 白名单（round / floor / ceil）。
+ */
+const ROUND_MODE_OPTIONS: FieldOption[] = [
+    { value: 'round', labelKey: 'script.fieldOptions.roundRound' },
+    { value: 'floor', labelKey: 'script.fieldOptions.roundFloor' },
+    { value: 'ceil', labelKey: 'script.fieldOptions.roundCeil' },
+];
+
+/**
  * tween-P1：补间缓动选项（4 预设，wire 值对应 Easing.type；复用 protocol.ts EasingType）。
  * P1 不含 cubicBezier（贝塞尔编辑器留 P4），拖出默认 easeInOut。
  * i18n key 复用 timeline P3 的 easingXxx 文案（用户已熟悉）。
@@ -567,6 +584,57 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'body', type: 'statements', labelKey: 'script.fields.tweenBody' },
         ],
     },
+    // ---- 0.7.3：G1 随机分支（control 绿，C 形双臂，照 if）----
+    // probability number [0,100]；then/else statements 子序列槽。
+    // blockId 路径与后端 ScriptRunner 逐字符同构：`${path}/then/${i}` / `${path}/else/${i}`。
+    randomBranch: {
+        kind: 'randomBranch',
+        category: 'control',
+        colorVar: CATEGORY_COLOR_VAR.control,
+        labelKey: 'script.blocks.randomBranch',
+        fields: [
+            { name: 'probability', type: 'number', labelKey: 'script.fields.probability', min: 0, max: 100, step: 1 },
+            { name: 'then', type: 'statements', labelKey: 'script.fields.then' },
+            { name: 'else', type: 'statements', labelKey: 'script.fields.else' },
+        ],
+    },
+    // ---- 0.7.3：G2 元素置顶/置底（action 蓝，元素字段 + mode 下拉）----
+    setElementLayer: {
+        kind: 'setElementLayer',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.setElementLayer',
+        fields: [
+            { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
+            { name: 'mode', type: 'select', labelKey: 'script.fields.layerMode', options: ELEMENT_LAYER_MODE_OPTIONS },
+        ],
+    },
+    // ---- 0.7.3：G3 变量取整（action 蓝，变量字段 + mode 下拉，照 scaleVariable）----
+    roundVariable: {
+        kind: 'roundVariable',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.roundVariable',
+        fields: [
+            { name: 'fullName', type: 'variable', labelKey: 'script.fields.fullName' },
+            { name: 'mode', type: 'select', labelKey: 'script.fields.roundMode', options: ROUND_MODE_OPTIONS },
+        ],
+    },
+    // ---- 0.7.3：G4 标题弹窗（action 蓝，照 sendMessage：主标题 + 副标题 + 3 时长 + target）----
+    showTitle: {
+        kind: 'showTitle',
+        category: 'action',
+        colorVar: CATEGORY_COLOR_VAR.action,
+        labelKey: 'script.blocks.showTitle',
+        fields: [
+            { name: 'title', type: 'text', labelKey: 'script.fields.titleText' },
+            { name: 'subtitle', type: 'text', labelKey: 'script.fields.subtitleText' },
+            { name: 'fadeInMs', type: 'number', labelKey: 'script.fields.fadeInMs', min: 0, max: 10000, step: 50 },
+            { name: 'stayMs', type: 'number', labelKey: 'script.fields.stayMs', min: 0, max: 60000, step: 50 },
+            { name: 'fadeOutMs', type: 'number', labelKey: 'script.fields.fadeOutMs', min: 0, max: 10000, step: 50 },
+            { name: 'target', type: 'scope', labelKey: 'script.fields.msgTarget', options: MESSAGE_TARGET_OPTIONS },
+        ],
+    },
 };
 
 // ---------- 0.7.1-P1：友好元素积木皮肤（路线乙——8 个友好积木都序列化成一条 setElementProperties）----------
@@ -824,6 +892,21 @@ export function makeDefaultAction(kind: string): ScriptAction {
                 easing: { type: 'easeInOut' },
                 body: [{ type: 'setElementProperties', elementId: '', patch: { x: '0', y: '0' }, kind: 'moveTo' }],
             };
+        // ---- 0.7.3：4 个新积木默认值 ----
+        case 'randomBranch':
+            // probability 默 50（对半开；合法落 0..100）；then/else 空数组（wire 契约）。
+            // 与 if 同策略：空分支合法，让用户往内拖块填。
+            return { type: 'randomBranch', probability: 50, then: [], else: [] };
+        case 'setElementLayer':
+            // elementId 依赖墙上元素 → 留空让用户选；mode 取 front（置顶，最常见操作）。
+            return { type: 'setElementLayer', elementId: '', mode: 'front' };
+        case 'roundVariable':
+            // fullName 给非空默认（拖出即合法）；mode 取 round（四舍五入，最通用）。
+            return { type: 'roundVariable', fullName: 'user/score', mode: 'round' };
+        case 'showTitle':
+            // title/subtitle 空串后端合法（至少一个非空由后端校验）；
+            // 时长取常用默认（fadeIn 500ms / stay 2000ms / fadeOut 500ms）；target 默 trigger。
+            return { type: 'showTitle', title: '', subtitle: '', fadeInMs: 500, stayMs: 2000, fadeOutMs: 500, target: 'trigger' };
         default:
             // 未知 kind 兜底：给个最简单的 log 动作（保证返回合法 ScriptAction）。
             return { type: 'log', message: '' };

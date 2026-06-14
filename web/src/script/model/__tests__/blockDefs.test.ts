@@ -13,6 +13,7 @@ import {
     CATEGORY_COLOR_VAR,
     FRIENDLY_ELEMENT_DEFS,
     FRIENDLY_PALETTE_KINDS,
+    makeDefaultAction,
     type BlockDef,
 } from '../blockDefs';
 import { ELEMENT_PROPERTIES, MESSAGE_CHANNELS, SCALE_OPS, MESSAGE_TARGETS } from '../validator';
@@ -66,6 +67,11 @@ const EXPECTED_ACTION_FIELDS: Record<string, string[]> = {
     deleteElement: ['elementId'],
     // tween-P1：补间包裹积木（control category，durationMs + easing select + body statements）。
     tweenBlock: ['durationMs', 'easing', 'body'],
+    // 0.7.3：4 个新积木。
+    randomBranch: ['probability', 'then', 'else'],
+    setElementLayer: ['elementId', 'mode'],
+    roundVariable: ['fullName', 'mode'],
+    showTitle: ['title', 'subtitle', 'fadeInMs', 'stayMs', 'fadeOutMs', 'target'],
 };
 
 function fieldNames(def: BlockDef): string[] {
@@ -97,7 +103,7 @@ describe('blockDefs.TRIGGER_DEFS', () => {
 });
 
 describe('blockDefs.ACTION_DEFS', () => {
-    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat + 0.7.1-P5 3 个 + 0.7.2-P2 4 个 + 0.7.2-P3 repeatUntil + tween-P1 tweenBlock = 24）', () => {
+    it('动作集与 EXPECTED_ACTION_FIELDS 一致（0.7.0 9 个 + 0.7.1-P1 5 个 + 0.7.1-P2 repeat + 0.7.1-P5 3 个 + 0.7.2-P2 4 个 + 0.7.2-P3 repeatUntil + tween-P1 tweenBlock + 0.7.3 4 个 = 28）', () => {
         expect(Object.keys(ACTION_DEFS).sort()).toEqual(
             Object.keys(EXPECTED_ACTION_FIELDS).sort(),
         );
@@ -300,5 +306,104 @@ describe('blockDefs.defFor', () => {
     it('未知 kind → null', () => {
         expect(defFor('nope')).toBeNull();
         expect(defFor('')).toBeNull();
+    });
+});
+
+// ---- 0.7.3：4 个新积木 def 形态 ----
+
+describe('blockDefs.ACTION_DEFS — 0.7.3 新积木', () => {
+    it('randomBranch def：category=control / colorVar=green / 字段 probability(number 0..100) + then/else(statements)', () => {
+        const def = ACTION_DEFS.randomBranch;
+        expect(def.kind).toBe('randomBranch');
+        expect(def.category).toBe('control');
+        expect(def.colorVar).toBe('--ctp-green');
+        expect(def.labelKey).toBe('script.blocks.randomBranch');
+        const prob = def.fields.find((f) => f.name === 'probability')!;
+        expect(prob.type).toBe('number');
+        expect([prob.min, prob.max]).toEqual([0, 100]);
+        const then = def.fields.find((f) => f.name === 'then')!;
+        expect(then.type).toBe('statements');
+        const els = def.fields.find((f) => f.name === 'else')!;
+        expect(els.type).toBe('statements');
+    });
+
+    it('setElementLayer def：category=action / colorVar=blue / 字段 elementId(element) + mode(select front/back)', () => {
+        const def = ACTION_DEFS.setElementLayer;
+        expect(def.kind).toBe('setElementLayer');
+        expect(def.category).toBe('action');
+        expect(def.colorVar).toBe('--ctp-blue');
+        const mode = def.fields.find((f) => f.name === 'mode')!;
+        expect(mode.type).toBe('select');
+        expect(mode.options?.map((o) => o.value)).toEqual(['front', 'back']);
+    });
+
+    it('roundVariable def：category=action / colorVar=blue / 字段 fullName(variable) + mode(select round/floor/ceil)', () => {
+        const def = ACTION_DEFS.roundVariable;
+        expect(def.kind).toBe('roundVariable');
+        expect(def.category).toBe('action');
+        expect(def.colorVar).toBe('--ctp-blue');
+        const mode = def.fields.find((f) => f.name === 'mode')!;
+        expect(mode.type).toBe('select');
+        expect(mode.options?.map((o) => o.value)).toEqual(['round', 'floor', 'ceil']);
+    });
+
+    it('showTitle def：category=action / colorVar=blue / 字段 title+subtitle+3时长(number)+target(scope,复用MESSAGE_TARGET_OPTIONS)', () => {
+        const def = ACTION_DEFS.showTitle;
+        expect(def.kind).toBe('showTitle');
+        expect(def.category).toBe('action');
+        expect(def.colorVar).toBe('--ctp-blue');
+        const target = def.fields.find((f) => f.name === 'target')!;
+        expect(target.type).toBe('scope');
+        expect(target.options?.map((o) => o.value)).toEqual(['trigger', 'all']);
+        const fadeIn = def.fields.find((f) => f.name === 'fadeInMs')!;
+        expect(fadeIn.type).toBe('number');
+        expect([fadeIn.min, fadeIn.max]).toEqual([0, 10000]);
+        const stay = def.fields.find((f) => f.name === 'stayMs')!;
+        expect([stay.min, stay.max]).toEqual([0, 60000]);
+    });
+});
+
+// ---- 0.7.3：makeDefaultAction 默认值 ----
+
+describe('blockDefs.makeDefaultAction — 0.7.3 新积木默认值', () => {
+    it('randomBranch 默认 probability=50 + then/else 空数组', () => {
+        const a = makeDefaultAction('randomBranch');
+        expect(a.type).toBe('randomBranch');
+        if (a.type === 'randomBranch') {
+            expect(a.probability).toBe(50);
+            expect(a.then).toEqual([]);
+            expect(a.else).toEqual([]);
+        }
+    });
+
+    it('setElementLayer 默认 elementId 空 + mode=front', () => {
+        const a = makeDefaultAction('setElementLayer');
+        expect(a.type).toBe('setElementLayer');
+        if (a.type === 'setElementLayer') {
+            expect(a.elementId).toBe('');
+            expect(a.mode).toBe('front');
+        }
+    });
+
+    it('roundVariable 默认 fullName=user/score + mode=round', () => {
+        const a = makeDefaultAction('roundVariable');
+        expect(a.type).toBe('roundVariable');
+        if (a.type === 'roundVariable') {
+            expect(a.fullName).toBe('user/score');
+            expect(a.mode).toBe('round');
+        }
+    });
+
+    it('showTitle 默认 title/subtitle 空串 + 标准时长 + target=trigger', () => {
+        const a = makeDefaultAction('showTitle');
+        expect(a.type).toBe('showTitle');
+        if (a.type === 'showTitle') {
+            expect(a.title).toBe('');
+            expect(a.subtitle).toBe('');
+            expect(a.fadeInMs).toBe(500);
+            expect(a.stayMs).toBe(2000);
+            expect(a.fadeOutMs).toBe(500);
+            expect(a.target).toBe('trigger');
+        }
     });
 });

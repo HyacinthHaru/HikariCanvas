@@ -1,4 +1,4 @@
 allprojects {
     group = "moe.hikari"
-    version = "0.6.0-SNAPSHOT"
+    version = "0.7.3-SNAPSHOT"
 }

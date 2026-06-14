@@ -118,6 +118,14 @@ public final class ScriptRunner {
     /** 0.7.1-P5：WaitUntil 轮询间隔（ms）。 */
     private static final long WAIT_UNTIL_TICK_MS = 100L;
 
+    /**
+     * 0.7.3：RandomBranch 随机源（runner 单线程直调，无并发竞争）。
+     * 生产默认 {@code ThreadLocalRandom.current()}；测试经 {@link #setRngForTest} 注入确定性源。
+     * IntSupplier 语义：返回 [0,100) 内随机整数（nextInt(100) 等价）。
+     */
+    private java.util.function.IntSupplier rng =
+            () -> java.util.concurrent.ThreadLocalRandom.current().nextInt(100);
+
     /** 生产装配：自建单线程 daemon SES（线程名 {@code hikari-script-runner}）。 */
     public ScriptRunner(ConditionEvaluator conditions, ActionSink sink, ScriptBudget budget,
                         @Nullable AuditLog audit, Logger log) {
@@ -149,6 +157,14 @@ public final class ScriptRunner {
      */
     public void setTweenScheduler(TweenScheduler ts) {
         this.tweenScheduler = ts;
+    }
+
+    /**
+     * 0.7.3 测试 seam：注入确定性随机源（生产不调用）。
+     * {@code rng} 返回 [0,100) 范围的整数值——调用侧 {@code rng.getAsInt() < probability}。
+     */
+    void setRngForTest(java.util.function.IntSupplier rng) {
+        this.rng = rng;
     }
 
     /**
@@ -287,6 +303,18 @@ public final class ScriptRunner {
                         List<Action> branch = cond ? iff.then() : iff.elseActions();
                         stack.push(new Frame(branch, 0,
                                 blockId + (cond ? "/then/" : "/else/")));
+                        continue outer;
+                    }
+                    if (a instanceof Action.RandomBranch rb) {
+                        // 0.7.3：随机分支（控制流，照 if；rng 由 ActionExecutor.rng 注入 seam 持有，
+                        // 但 ScriptRunner 不依赖 ActionExecutor——改由 runner 自持 rng seam）。
+                        boolean pick = rng.getAsInt() < rb.probability();
+                        st.trace.add(TraceStep.ok(blockId, "condition",
+                                "random=" + rb.probability() + "% → " + (pick ? "then" : "else")));
+                        stack.push(new Frame(acts, i + 1, f.prefix()));
+                        List<Action> branch = pick ? rb.then() : rb.elseActions();
+                        stack.push(new Frame(branch, 0,
+                                blockId + (pick ? "/then/" : "/else/")));
                         continue outer;
                     }
                     if (a instanceof Action.Repeat rep) {
