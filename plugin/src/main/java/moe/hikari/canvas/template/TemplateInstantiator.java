@@ -2,14 +2,17 @@ package moe.hikari.canvas.template;
 
 import moe.hikari.canvas.state.Effects;
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.ElementValidator;
 import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.Glow;
 import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.RectElement;
 import moe.hikari.canvas.state.Shadow;
 import moe.hikari.canvas.state.SolidFill;
+import moe.hikari.canvas.state.StrictNumber;
 import moe.hikari.canvas.state.Stroke;
 import moe.hikari.canvas.state.TextElement;
+import moe.hikari.canvas.state.ValidationException;
 import moe.hikari.canvas.template.expr.Expr;
 import moe.hikari.canvas.template.expr.ExpressionEvaluator;
 import moe.hikari.canvas.template.expr.ExpressionParser;
@@ -686,7 +689,20 @@ public final class TemplateInstantiator {
         return n;
     }
 
-    /** 解析 x/y 这种没有"auto"语义的维度。返回 int。null/无法解析 → fallback。 */
+    /**
+     * 解析 x/y 这种没有"auto"语义的维度。返回 int。null/无法解析 → fallback。
+     *
+     * <p>C2-P2-12 修：</p>
+     * <ul>
+     *   <li>INT_NUMERIC 匹配超 int 范围的字符串（如 {@code "99999999999"}）时，
+     *       旧路径直接 {@code Integer.parseInt} 抛 {@link NumberFormatException}，
+     *       被外层 {@link IllegalArgumentException} catch 接住并把 JDK 原始报文
+     *       透传给客户端（含 "For input string: …" 格式）。现用
+     *       {@link StrictNumber#clampInt} 统一钳位到 int 范围，不外泄 JDK 文案。</li>
+     *   <li>百分比分支 {@code Math.round(contentBasis*pct)} 返回 {@code long}，
+     *       旧的 {@code (int)} 收窄对超大 pct 静默回绕；现改用 {@code clampInt}。</li>
+     * </ul>
+     */
     private int resolveDimension(Object raw, int contentBasis,
                                  Map<String, Object> params, int fallback) {
         if (raw == null) return fallback;
@@ -700,14 +716,27 @@ public final class TemplateInstantiator {
             var m = PERCENT.matcher(s);
             if (m.matches()) {
                 double pct = Double.parseDouble(m.group(1)) / 100.0;
-                return (int) Math.round(contentBasis * pct);
+                // C2: clampInt 防超大百分比静默回绕
+                return StrictNumber.clampInt(Math.round(contentBasis * pct));
             }
-            if (INT_NUMERIC.matcher(s).matches()) return Integer.parseInt(s);
+            if (INT_NUMERIC.matcher(s).matches()) {
+                // C2: 超 int 范围字符串走 clampInt，不外泄 NFE JDK 报文
+                try {
+                    return Integer.parseInt(s);
+                } catch (NumberFormatException nfe) {
+                    // 字符串合法数字但超 int 范围（如 "99999999999"）
+                    return StrictNumber.clampInt(Long.parseLong(s));
+                }
+            }
         }
         return fallback;
     }
 
-    /** 解析 w/h 维度：支持 "auto" 走 supplier，"N%" 按 basis，数字按数字。 */
+    /**
+     * 解析 w/h 维度：支持 "auto" 走 supplier，"N%" 按 basis，数字按数字。
+     *
+     * <p>C2-P2-12：同 {@link #resolveDimension} 修复超 int 回绕与 JDK 报文泄漏。</p>
+     */
     private int resolveDimensionWithAuto(Object raw, int basis,
                                          Map<String, Object> params,
                                          java.util.function.IntSupplier autoFallback) {
@@ -723,36 +752,75 @@ public final class TemplateInstantiator {
             var m = PERCENT.matcher(s);
             if (m.matches()) {
                 double pct = Double.parseDouble(m.group(1)) / 100.0;
-                return (int) Math.round(basis * pct);
+                // C2: clampInt 防超大百分比静默回绕
+                return StrictNumber.clampInt(Math.round(basis * pct));
             }
-            if (INT_NUMERIC.matcher(s).matches()) return Integer.parseInt(s);
+            if (INT_NUMERIC.matcher(s).matches()) {
+                // C2: 超 int 范围字符串走 clampInt，不外泄 NFE JDK 报文
+                try {
+                    return Integer.parseInt(s);
+                } catch (NumberFormatException nfe) {
+                    return StrictNumber.clampInt(Long.parseLong(s));
+                }
+            }
         }
         return autoFallback.getAsInt();
     }
 
-    /** TemplateElement → state.Element 物化。line 在 v1 跳过返回 null。 */
+    /**
+     * TemplateElement → state.Element 物化。line 在 v1 跳过返回 null。
+     *
+     * <p><b>C1-P2-11 修：</b> 常规布局路径（stack/free/grid）的物化结果现在与 raw_state
+     * 路径对称，通过两层校验：</p>
+     * <ol>
+     *   <li>{@link ElementValidator#validateElementForTemplateApply}：坐标/尺寸/旋转/fill
+     *       安全校验（与 raw_state 路径完全相同）。</li>
+     *   <li>TextElement 专属字段钳位：fontSize / lineHeight / letterSpacing 超范围时
+     *       <b>clamp</b>（非拒）——模板作者通常给静态字面值，钳位比报错更宽容；
+     *       text content 超 {@link ElementValidator#MAX_TEXT_LEN} 时截断并抛
+     *       {@link InstantiationException}，因为内容来自用户参数插值，过长通常是意外。</li>
+     * </ol>
+     * <p>校验失败时抛 {@link InstantiationException}（携带 {@code INVALID_TEMPLATE} 错误码），
+     * 由 {@link #layoutAndMaterialize} 上层统一捕获并转为 {@code Result.Failed}。</p>
+     */
     private Element materialize(TemplateElement el, int x, int y, int w, int h,
                                 Map<String, Object> params) {
         String id = "e-" + UUID.randomUUID();
+        Element result;
         if (el instanceof TemplateElement.Text t) {
             String content = interp(t.content() == null ? "" : t.content(), params);
+            // C1: 超长 content 给友好错误（内容来自用户参数，过长是意外）
+            if (content.length() > ElementValidator.MAX_TEXT_LEN) {
+                throw new InstantiationException("INVALID_TEMPLATE",
+                        "text content length " + content.length()
+                                + " exceeds " + ElementValidator.MAX_TEXT_LEN);
+            }
             String color = interp(t.color() == null ? "#000000" : t.color(), params);
             String fontId = interp(t.font() == null ? "ark_pixel" : t.font(), params);
-            int size = t.size() == null ? 24 : t.size();
+            // C1: fontSize clamp [1, MAX_FONT_SIZE]
+            int size = t.size() == null ? 24 : Math.max(1,
+                    Math.min(ElementValidator.MAX_FONT_SIZE, t.size()));
             String align = t.align() == null ? "left" : t.align();
-            float lineHeight = t.lineHeight() == null ? 1.2f : t.lineHeight().floatValue();
-            float letterSpacing = t.letterSpacing() == null ? 0f : t.letterSpacing().floatValue();
+            // C1: lineHeight clamp [MIN_LINE_HEIGHT, MAX_LINE_HEIGHT]
+            float lineHeight = t.lineHeight() == null ? 1.2f
+                    : Math.max(ElementValidator.MIN_LINE_HEIGHT,
+                            Math.min(ElementValidator.MAX_LINE_HEIGHT,
+                                    t.lineHeight().floatValue()));
+            // C1: letterSpacing clamp [MIN_LETTER_SPACING, MAX_LETTER_SPACING]
+            float letterSpacing = t.letterSpacing() == null ? 0f
+                    : Math.max(ElementValidator.MIN_LETTER_SPACING,
+                            Math.min(ElementValidator.MAX_LETTER_SPACING,
+                                    t.letterSpacing().floatValue()));
             boolean vertical = t.vertical() != null && t.vertical();
             Effects effects = materializeEffects(t.effects(), params);
-            return new TextElement(
+            result = new TextElement(
                     id, x, y, w, h,
                     t.rotation(), false, true,
                     content, fontId, size, color, align,
                     letterSpacing, lineHeight, vertical, effects,
                     null, null, null,
                     null, null);
-        }
-        if (el instanceof TemplateElement.Rect r) {
+        } else if (el instanceof TemplateElement.Rect r) {
             Fill fill = r.fill() == null ? null : new SolidFill(interp(r.fill(), params));
             Stroke stroke;
             if (r.stroke() == null) {
@@ -762,25 +830,35 @@ public final class TemplateInstantiator {
                 Integer sw = asIntInterp(r.stroke().width(), params);
                 stroke = new Stroke(sw == null ? 1 : sw, interp(r.stroke().color(), params));
             }
-            return new RectElement(
+            result = new RectElement(
                     id, x, y, w, h,
                     r.rotation(), false, true,
                     fill, stroke,
                     null, null, null);
-        }
-        if (el instanceof TemplateElement.Icon ic) {
+        } else if (el instanceof TemplateElement.Icon ic) {
             String source = interp(ic.source(), params);
             String tint = ic.tint() == null ? null : interp(ic.tint(), params);
             // M26：模板 tint 字段语义升级——若指定 tint 则同步为 SolidFill；否则 fill=null（用 pack 默认色）
             Fill fill = (tint == null || tint.isBlank()) ? null : new SolidFill(tint);
-            return new IconElement(
+            result = new IconElement(
                     id, x, y, w, h,
                     ic.rotation(), false, true,
                     source, tint,
                     null, null, null, fill);
+        } else {
+            // line: v1 不渲染，但保留 instantiate 链路以待 v2+
+            return null;
         }
-        // line: v1 不渲染，但保留 instantiate 链路以待 v2+
-        return null;
+
+        // C1-P2-11: 与 raw_state 路径对称——跑 validateElementForTemplateApply 校验
+        // 坐标/尺寸/旋转/fill 等字段（x/y 超范围时给友好 INVALID_TEMPLATE 错误）。
+        try {
+            ElementValidator.validateElementForTemplateApply(result);
+        } catch (ValidationException ve) {
+            throw new InstantiationException("INVALID_TEMPLATE",
+                    "materialized element invalid: " + ve.getMessage());
+        }
+        return result;
     }
 
     private Effects materializeEffects(TemplateEffects te, Map<String, Object> params) {

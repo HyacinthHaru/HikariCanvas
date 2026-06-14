@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-06-14 · 0.7.3 ultrareview 第三批（收官）：协议 close 一组 + P2 散点 11 条
+
+承接第一批 `ffd7a5c` / 第二批 `7bd403a`。5 子代理并行（**先确认属实——11 条全属实无误报**）+ 2 处
+systematic-debugging。**ultrareview 三批正式收官**。实施计划 `docs/superpowers/plans/2026-06-14-ultrareview-batch3.md`。
+
+**11 条修复：**
+- **A 协议 close(4)**：`wsClient` onClose terminal 集合加 `4002`(版本不符)/`4429`(限流，删后端从未发出的
+  死码 `4008`)→ 不再用同版本无限重连；抽 `isTerminalCloseCode` 纯函数；`VERSION_MISMATCH` 文案从
+  「画板被他人改动正在同步」改「客户端版本与服务器不兼容，请升级」；`4002` 分支 `if(!lastError)` 保护
+  handleReady 设的精确提示不被通用「连接断开」覆写（P2-17 / P2-18 / P3-12 / P3-13）。
+- **B 渲染一致(2)**：`GlowRenderer` 非旋转 glyph 的 glow bbox 从 AWT `FontMetrics` 改用
+  `round(fontSize*0.8)`+`canonicalCharWidth`(前端同款度量)→ 发光双端一致；`PreviewRenderer.drawDitheredElement`
+  opacity 加 `isFinite+clamp(0,1)`(负 opacity 双端分叉)（P2-7 / P2-19）。
+- **C 模板路径(2)**：常规布局(stack/free/grid)`materialize` 补 `validateElementForTemplateApply` +
+  fontSize/lineHeight/letterSpacing clamp + content 超长拒(与 raw_state 路径对称)；`resolveDimension` 用
+  `StrictNumber.clampInt` 防 long→int 静默回绕 + 超 int 数字串不外泄 JDK NFE 文案（P2-11 / P2-12）。
+- **D 前端交互(2)**：`BlockParamInput` 命令模板孤儿 templateId 显示红字警告(以前静默吞致参数消失)；
+  `CanvasView.boundBoxFunc` 重写 + `useSnapManager.snapEdge` 单边吸附(resize 拖手柄只吸正在动的那条边，
+  不再被静止锚点的 delta 拉跳)（P2-15 / P2-20）。
+- **E MapPool(1)**：`offerFreeByName` 加 `allowBukkitFallback` 参数，`detectLeaks` 异步路径传 `false`
+  (缓存 miss 时不调 `Bukkit.getWorld`，落 unknown-world 桶等主线程 reclaim 回迁)，守住「detectLeaks 不碰
+  Bukkit API」+ idcounts.dat 防膨胀线程纪律（P2-10）。
+
+**systematic-debugging(2)**：① C 自己的 `textFieldsClampedNotRejected` 测试输入太极端(size 9999 让
+auto 布局算出 h≈99 万超 MAX_DIM 被 validateElementForTemplateApply 拒)→ 改用温和超限值，隔离「字段 clamp」
+语义(极端尺寸拒由 `freeLayoutOversizedDimRejected` 覆盖)；② glow baseline 漂移(P2-7 预期，读 diff 图确认
+仅 "GLOW" 末字符位置微偏、是对齐前端度量而非渲染坏)→ 重建 `05-effects-glow.png`。
+
+**测试**：后端 **~1989** 全绿(含 glow baseline 重建)/ 前端 **1303**(+60)全绿。用户实测通过。
+
+**🏁 ultrareview 总收官**：三批累计 **27 条真问题**(8 + 8 + 11)+ 剔除 1 误报(P2-8 BlendModes float32/64)。
+覆盖崩溃 / 数据丢失 / 静默失败 / 双端不一致 / 无限重连。剩 P3 约 15 条(文案/局部边界) + D 25 条(设计待定，
+多被上游守卫兜住) → 低 ROI 遇到再修；P2-9(migration WAL 备份) → 1.0 发版开 auto-backup 时修。
+
+关联：前端 `wsClient` / `messages` / `PreviewRenderer` / `BlockParamInput` / `CanvasView` / `useSnapManager`
++ 4 测试(closeCode / glowAndDitherOpacity / useSnapManager / BlockParamInput.smoke)；后端 `GlowRenderer` /
+`TemplateInstantiator` / `MapPool` + 2 测试(TemplateInstantiator / MapPoolDetectLeaksThreadSafety) +
+glow baseline；plan。
+
+---
+
 ## 2026-06-14 · 0.7.3 ultrareview 第二批：真崩溃 / 数据错乱 / 防御 6 条 + rail 拆分 + 保存提醒
 
 承接第一批（`ffd7a5c`）。5 子代理并行（子系统无冲突）+ 1 处 systematic-debugging。实施计划

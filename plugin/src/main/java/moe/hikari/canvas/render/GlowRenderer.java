@@ -4,7 +4,6 @@ import moe.hikari.canvas.state.Glow;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -51,14 +50,15 @@ public final class GlowRenderer {
         if (glow == null || glow.radius() <= 0 || glyphs.isEmpty()) return;
 
         int radius = glow.radius();
-        FontMetrics fm = mainG.getFontMetrics(font);
-        int ascent = fm.getAscent();
-        int descent = fm.getDescent();
-        // P2-62：竖排可旋转标点 glow mask 需镜像 TextRenderer.drawGlyph 的 rotated 分支
-        // （之前 GlowRenderer 完全不处理 rotation，与前端旋转后的 glow 形状不一致）。
-        // 旋转 glyph 占 fontSize×fontSize 方格（与前端 PreviewRenderer.renderGlow bbox 对齐）。
+        // B1-P2-7：非旋转 glyph bbox 改用与前端 PreviewRenderer.renderGlow 一致的固定规则：
+        //   ascent = round(fontSize * 0.8)，descent = fontSize - ascent，
+        //   宽度 = TextLayout.canonicalCharWidth(ch, fontSize)（与主字形 fill layout 对齐方式相同）。
+        // 消除原 fm.getAscent/getDescent/charWidth（AWT FontMetrics）与前端 measureText 的双端分叉。
+        // 旋转 glyph 路径（fontSize×fontSize 方格）本已与前端一致，不改。
         int fontSize = font.getSize();
-        int rotatedAscent = (int) Math.round(fontSize * 0.8);
+        int ascent = (int) Math.round(fontSize * TextLayout.ASCENT_RATIO);
+        int descent = fontSize - ascent;
+        int rotatedAscent = ascent; // rotated 分支复用同一比例（与原 round(fontSize*0.8) 等价）
 
         // 1) 外接矩形 + padding。用 double 累计 + 末尾 floor/ceil 与前端一致；非旋转 glyph 的
         //    minX/maxX 仍是整数，floor/ceil 为 no-op，snapshot baseline 不漂移。
@@ -72,7 +72,8 @@ public final class GlowRenderer {
                 minY = Math.min(minY, pg.baselineY() - fontSize / 2.0);
                 maxY = Math.max(maxY, pg.baselineY() + fontSize / 2.0);
             } else {
-                int chW = fm.charWidth(pg.ch().charAt(0));
+                // B1-P2-7：canonicalCharWidth 与 TextLayout.layout 的宽度度量一致，消除 AWT 分叉
+                int chW = TextLayout.canonicalCharWidth(pg.ch().charAt(0), fontSize);
                 minX = Math.min(minX, pg.x());
                 maxX = Math.max(maxX, pg.x() + chW);
                 minY = Math.min(minY, pg.baselineY() - ascent);

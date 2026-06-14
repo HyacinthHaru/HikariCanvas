@@ -305,6 +305,48 @@ describe('BlockParamInput — command（复合字段）', () => {
         expect(w.find('select').exists()).toBe(false);
         expect(w.text()).toContain('服主还没配命令模板');
     });
+
+    // 0.7.3-D1：孤儿模板检测
+    it('templateId 非空但不在列表 → 显示孤儿警告', async () => {
+        // 服主已删除 "old-cmd"，当前只剩 "announce"
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            json: async () => ({
+                templates: [
+                    { id: 'announce', params: [{ name: 'msg', type: 'text', maxLength: 64 }] },
+                ],
+            }),
+        } as unknown as Response)));
+        useNetworkStore().sessionId = 'sid-1';
+        const f = field({ type: 'command', name: 'templateId', labelKey: 'script.fields.templateId' });
+        // 积木保存的 templateId 指向已删除的 "old-cmd"
+        const w = mountInput(f, { templateId: 'old-cmd', params: {} }, 'runCommand');
+        await flushPromises();
+        // 孤儿警告出现，且包含失效 id
+        expect(w.find('.hc-pf-cmd-orphan').exists()).toBe(true);
+        expect(w.find('.hc-pf-cmd-orphan').text()).toContain('old-cmd');
+        // params 子输入不渲染（selectedTemplate 为 null）
+        expect(w.find('.hc-pf-cmd-params').exists()).toBe(false);
+    });
+
+    it('templateId 为空 → 不显示孤儿警告', async () => {
+        stubTemplatesFetch();
+        useNetworkStore().sessionId = 'sid-1';
+        const f = field({ type: 'command', name: 'templateId', labelKey: 'script.fields.templateId' });
+        const w = mountInput(f, { templateId: '', params: {} }, 'runCommand');
+        await flushPromises();
+        expect(w.find('.hc-pf-cmd-orphan').exists()).toBe(false);
+    });
+
+    it('templateId 在列表中存在 → 不显示孤儿警告，params 正常渲染', async () => {
+        stubTemplatesFetch();
+        useNetworkStore().sessionId = 'sid-1';
+        const f = field({ type: 'command', name: 'templateId', labelKey: 'script.fields.templateId' });
+        const w = mountInput(f, { templateId: 'announce', params: { msg: 'hello' } }, 'runCommand');
+        await flushPromises();
+        expect(w.find('.hc-pf-cmd-orphan').exists()).toBe(false);
+        expect(w.find('.hc-pf-cmd-params').exists()).toBe(true);
+    });
 });
 
 describe('BlockParamInput — disabled', () => {

@@ -124,28 +124,26 @@ interface BoundBox { x: number; y: number; width: number; height: number; rotati
 /**
  * M17.4 F3：resize snap。Konva Transformer 每帧拖锚点 call boundBoxFunc(oldBox, newBox)。
  *
- * 简化版（v2）：跑 snapManager 拿 hints（含 candidate 轴 + delta），然后按"哪条边在动"
- * 应用 delta：
- *   - left 边在动 → 应用 X delta 到 x（width 反向调整以保 right 不动）
- *   - right 边在动 → 应用 X delta 到 width（不动 x）
- *   - 没动 → 不 snap
- * 纵向同理。能正确处理任何锚点（top-left / top-right / bottom-left / bottom-right /
- * middle-* / *-center）；shift 临时禁用走 snapManager.bypass。
+ * v3（0.7.3-D2 修）：先判断哪条边在动，再仅对正在移动的那条边做 snapEdge 单边吸附。
  *
- * 排除：当前所有选中（含正在 resize 的）；resize 多选时整组排除避免 snap 到自己。
- * 旋转：rotation != 0 时跳过（旋转后 bbox 不再对齐画布轴；snapManager 几何不支持）。
+ * v2 问题：调 snapManager.snap(bbox…) 时内部 snapAxis 扫 left/center/right 三锚点找全局
+ * bestDelta；若静止的 left 边恰好距某 candidate 更近，拖右手柄时 dx 来自 left 锚点，导致
+ * width 突然跳变到错误值。center 锚点同理。
+ *
+ * v3 策略：
+ *   - left  在动 → 仅对 newBox.x                     snapEdge('x')
+ *   - right 在动 → 仅对 newBox.x + newBox.width       snapEdge('x')
+ *   - top   在动 → 仅对 newBox.y                     snapEdge('y')
+ *   - bottom在动 → 仅对 newBox.y + newBox.height      snapEdge('y')
+ * 每条边独立吸附，不互相影响。drag（整体平移，三锚点 delta 一致）不受影响，仍走 snap()。
+ *
+ * shift 临时禁用走 snapManager.bypass。旋转非零时跳过（bbox 不对齐画布轴）。
  */
 function boundBoxFunc(oldBox: BoundBox, newBox: BoundBox): BoundBox {
     if (Math.abs(newBox.rotation) > 0.01) return newBox;
     if (newBox.width < 1 || newBox.height < 1) return newBox;
     const excludeIds = new Set<string>(ui.selectedIds);
-    const hints = snapManager.snap(newBox.x, newBox.y, newBox.width, newBox.height, excludeIds);
-    const hasHits = hints.activeXAxes.length > 0 || hints.activeYAxes.length > 0
-        || !!hints.equalGapX || !!hints.equalGapY;
-    activeSnapHints.value = hasHits ? hints : null;
 
-    const dx = hints.snappedX - newBox.x;
-    const dy = hints.snappedY - newBox.y;
     const EPS = 0.01;
     // 判断哪条边在动（与 oldBox 对比）
     const leftMoved = Math.abs(newBox.x - oldBox.x) > EPS;
@@ -158,25 +156,47 @@ function boundBoxFunc(oldBox: BoundBox, newBox: BoundBox): BoundBox {
     let width = newBox.width;
     let height = newBox.height;
 
-    if (dx !== 0) {
-        if (leftMoved && !rightMoved) {
-            // left 在动：移动 x，反向减 width 保 right 不动
+    // X 方向：只对正在动的那条边做单边吸附
+    if (leftMoved && !rightMoved) {
+        // left 在动：snapEdge 对 left 坐标，width 反向补偿保 right 不动
+        const dx = snapManager.snapEdge(newBox.x, 'x', excludeIds);
+        if (dx !== 0) {
             x = newBox.x + dx;
             width = Math.max(1, newBox.width - dx);
-        } else if (rightMoved && !leftMoved) {
-            // right 在动：只加 width，不动 x
+        }
+    } else if (rightMoved && !leftMoved) {
+        // right 在动：snapEdge 对 right 坐标，只加 width，不动 x
+        const rightEdge = newBox.x + newBox.width;
+        const dx = snapManager.snapEdge(rightEdge, 'x', excludeIds);
+        if (dx !== 0) {
             width = Math.max(1, newBox.width + dx);
         }
-        // 两边都没动（仅旋转 / 等比缩放？）或都动了（中心缩放）→ 不应用 X
     }
-    if (dy !== 0) {
-        if (topMoved && !bottomMoved) {
+    // 两边都动（中心缩放 / 等比缩放）→ 不 snap（视觉复杂，v1.x 再处理）
+
+    // Y 方向：只对正在动的那条边做单边吸附
+    if (topMoved && !bottomMoved) {
+        const dy = snapManager.snapEdge(newBox.y, 'y', excludeIds);
+        if (dy !== 0) {
             y = newBox.y + dy;
             height = Math.max(1, newBox.height - dy);
-        } else if (bottomMoved && !topMoved) {
+        }
+    } else if (bottomMoved && !topMoved) {
+        const bottomEdge = newBox.y + newBox.height;
+        const dy = snapManager.snapEdge(bottomEdge, 'y', excludeIds);
+        if (dy !== 0) {
             height = Math.max(1, newBox.height + dy);
         }
     }
+
+    // snap hints visualizer：resize 不走 snapManager.snap()，无 SnapHints 对象；
+    // 有实际吸附时点亮轻量提示（activeSnapHints 置非 null 供 SnapGuideOverlay 感知）；
+    // 否则清除，避免 drag 结束后遗留。
+    const snapped = (x !== newBox.x || y !== newBox.y || width !== newBox.width || height !== newBox.height);
+    activeSnapHints.value = snapped
+        ? { snappedX: x, snappedY: y, activeXAxes: [], activeYAxes: [] }
+        : null;
+
     return { x, y, width, height, rotation: newBox.rotation };
 }
 

@@ -237,6 +237,19 @@ const selectedTemplate = computed<CommandTemplate | null>(() => {
     return cmd.templates.value.find((tpl) => tpl.id === id) ?? null;
 });
 
+/**
+ * 孤儿模板检测：templateId 非空 + 模板列表已加载 + 找不到匹配项时为 true。
+ *
+ * <p>服主删除 / 改名模板后，已保存的积木仍持有旧 templateId。原生 select 显示空白但
+ * 底层值未清除，前端 validator 只判 templateId 非空就放行，导致积木悄悄引用无效模板。
+ * 检测到孤儿时在 UI 显示红色警告，让用户能发现并修正。</p>
+ */
+const isOrphanTemplate = computed<boolean>(() => {
+    const id = commandValue.value.templateId;
+    // 只在 id 非空 + 列表已加载 + 列表中找不到时报孤儿（避免列表尚未 fetch 时误报）
+    return !!id && cmd.templates.value.length > 0 && selectedTemplate.value === null;
+});
+
 /** 切模板：保留与新模板 param 名交集的旧值，丢弃其余（避免残留无关参数）。 */
 function onCommandTemplateChange(e: Event): void {
     const newId = (e.target as HTMLSelectElement).value;
@@ -434,6 +447,12 @@ onMounted(() => {
       <span v-else class="hc-pf-empty">{{ t.script.param.noCommandTemplates }}</span>
     </label>
 
+    <!-- 0.7.3-D1：孤儿模板警告——templateId 有值但在当前列表中找不到（服主删除 / 改名模板后出现）。
+         显示失效 ID 并提示用户重新选择，保留原 id 可见让用户知道原来绑定的是哪个。 -->
+    <div v-if="isOrphanTemplate" class="hc-pf-cmd-orphan">
+      ⚠ {{ t.script.param.orphanTemplate(commandValue.templateId) }}
+    </div>
+
     <!-- 选中模板后按其 params 动态渲染子输入 -->
     <div v-if="selectedTemplate && selectedTemplate.params.length > 0" class="hc-pf-cmd-params">
       <label
@@ -607,6 +626,18 @@ onMounted(() => {
 .hc-pf-picker-host {
     /* fixed 定位由内联 pickerStyle 给；这里只需建立相对定位上下文供 picker 的 absolute 贴合 */
     position: fixed;
+}
+
+/* 0.7.3-D1：孤儿模板警告行（templateId 不在当前列表中） */
+.hc-pf-cmd-orphan {
+    font-size: 10px;
+    color: var(--destructive, #ef4444);
+    background: color-mix(in srgb, var(--destructive, #ef4444) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--destructive, #ef4444) 35%, transparent);
+    border-radius: var(--radius-sm, 4px);
+    padding: 2px 7px;
+    line-height: 1.4;
+    word-break: break-all;
 }
 
 /* command 复合 */

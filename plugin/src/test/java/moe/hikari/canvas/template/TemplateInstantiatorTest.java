@@ -28,6 +28,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  *   <li>visible_when 不可见元素 skip</li>
  *   <li>${param} 在 content/color/background 中插值</li>
  *   <li>spec §10 subway_station 完整 fixture 走通</li>
+ *   <li>C1-P2-11: 常规布局 materialize 后跑元素级校验（超长文本/越界坐标/越界尺寸）</li>
+ *   <li>C2-P2-12: resolveDimension 超 int 数字串不回绕、不外泄 JDK 报文；超大百分比不回绕</li>
  * </ul>
  */
 class TemplateInstantiatorTest {
@@ -571,5 +573,201 @@ class TemplateInstantiatorTest {
         // line v1 跳过 → 只剩 text
         assertEquals(1, r.elements().size());
         assertEquals("keep", ((TextElement) r.elements().get(0)).text());
+    }
+
+    // ==================== C1-P2-11: 常规布局元素级校验 ====================
+
+    /**
+     * C1-P2-11: 插值后 text content 超 MAX_TEXT_LEN(256) 时返回 INVALID_TEMPLATE，
+     * 不进入渲染层。
+     */
+    @Test
+    void tooLongTextContentInStackRejected() {
+        String longValue = "A".repeat(300);
+        TemplateSpec spec = parse("""
+                spec: 1
+                id: long_text
+                name: long text
+                canvas: { size: auto }
+                params:
+                  msg:
+                    type: string
+                    label: msg
+                    default: "x"
+                layout:
+                  type: stack
+                  elements:
+                    - type: text
+                      content: "${msg}"
+                      size: 12
+                      color: "#000000"
+                """);
+        var f = failed(instantiator.instantiate(spec, params("msg", longValue), 2, 1));
+        assertEquals("INVALID_TEMPLATE", f.code());
+        assertTrue(f.errors().toString().contains("256"),
+                "error should mention MAX_TEXT_LEN: " + f.errors());
+    }
+
+    /**
+     * C1-P2-11: free 布局中传入超 int 的 x 坐标字符串，被 clampInt 到 Integer.MAX_VALUE，
+     * 再被 validateElementForTemplateApply 拒，返回 INVALID_TEMPLATE（不含 JDK 报文）。
+     */
+    @Test
+    void freeLayoutOversizedCoordRejected() {
+        TemplateSpec spec = parse("""
+                spec: 1
+                id: coord_overflow
+                name: coord overflow
+                canvas: { size: auto }
+                params:
+                  xpos:
+                    type: string
+                    label: xpos
+                    default: "0"
+                layout:
+                  type: free
+                  elements:
+                    - type: rect
+                      x: "${xpos}"
+                      y: 0
+                      w: 10
+                      h: 10
+                      fill: "#FF0000"
+                """);
+        var f = failed(instantiator.instantiate(spec, params("xpos", "99999999999"), 2, 1));
+        assertEquals("INVALID_TEMPLATE", f.code());
+        assertFalse(f.errors().toString().contains("For input string"),
+                "should not expose JDK NFE message: " + f.errors());
+    }
+
+    /**
+     * C1-P2-11: free 布局中 w 超 MAX_DIM(10000) 被 validateElementForTemplateApply 拒。
+     */
+    @Test
+    void freeLayoutOversizedDimRejected() {
+        TemplateSpec spec = parse("""
+                spec: 1
+                id: dim_overflow
+                name: dim overflow
+                canvas: { size: auto }
+                layout:
+                  type: free
+                  elements:
+                    - type: rect
+                      x: 0
+                      y: 0
+                      w: 20000
+                      h: 10
+                      fill: "#FF0000"
+                """);
+        var f = failed(instantiator.instantiate(spec, params(), 2, 1));
+        assertEquals("INVALID_TEMPLATE", f.code());
+    }
+
+    /**
+     * C1-P2-11: fontSize / lineHeight / letterSpacing 超范围时 clamp 到合法区间，
+     * 不报错——模板静态字面值的宽容策略。
+     */
+    @Test
+    void textFieldsClampedNotRejected() {
+        // 验证「字段 clamp」：size/lineHeight/letterSpacing 超边界被 clamp 而非拒。
+        // 用温和超限值——auto 布局算出的 h(≈ size×lineHeight 单行) 不爆 MAX_DIM(10000)。
+        // 极端尺寸(如 size 9999×lineHeight 99 → h 近百万)会让 layout 算出的 h 超 MAX_DIM
+        // 被 validateElementForTemplateApply 拒，那是「尺寸超限拒」语义，由
+        // freeLayoutOversizedDimRejected 覆盖，与此处「字段 clamp」分开测。
+        TemplateSpec spec = parse("""
+                spec: 1
+                id: clamp_text
+                name: clamp text
+                canvas: { size: auto }
+                layout:
+                  type: stack
+                  elements:
+                    - type: text
+                      content: hi
+                      size: 600
+                      line_height: 5.0
+                      letter_spacing: 200.0
+                      color: "#000000"
+                """);
+        var r = ok(instantiator.instantiate(spec, params(), 2, 1));
+        assertEquals(1, r.elements().size());
+        TextElement t = (TextElement) r.elements().get(0);
+        assertEquals(512, t.fontSize());
+        assertEquals(4.0f, t.lineHeight(), 0.001f);
+        assertEquals(128.0f, t.letterSpacing(), 0.001f);
+    }
+
+    // ==================== C2-P2-12: resolveDimension 溢出防护 ====================
+
+    /**
+     * C2-P2-12: 超 int 数字串（"99999999999"）在 resolveDimension/resolveDimensionWithAuto
+     * 不抛 NFE、不外泄 JDK 报文，走 clampInt → Integer.MAX_VALUE，
+     * 再被 validateElementForTemplateApply 拒为 INVALID_TEMPLATE。
+     */
+    @Test
+    void oversizedIntStringInFreeDimNoJdkMessage() {
+        TemplateSpec spec = parse("""
+                spec: 1
+                id: overflow_w
+                name: overflow w
+                canvas: { size: auto }
+                params:
+                  sz:
+                    type: string
+                    label: sz
+                    default: "10"
+                layout:
+                  type: free
+                  elements:
+                    - type: rect
+                      x: 0
+                      y: 0
+                      w: "${sz}"
+                      h: 10
+                      fill: "#FF0000"
+                """);
+        var f = failed(instantiator.instantiate(spec, params("sz", "99999999999"), 2, 1));
+        assertEquals("INVALID_TEMPLATE", f.code());
+        assertFalse(f.errors().toString().contains("For input string"),
+                "JDK NFE message must not leak: " + f.errors());
+        // 正常尺寸仍然通过
+        ok(instantiator.instantiate(spec, params("sz", "100"), 2, 1));
+    }
+
+    /**
+     * C2-P2-12: 超大百分比（"9999999999%"）百分比分支不回绕——
+     * Math.round 返 long，StrictNumber.clampInt 钳位到 Integer.MAX_VALUE（正数），
+     * 不会出现负数的回绕结果。
+     */
+    @Test
+    void hugePercentageInFreeDimNoWrap() {
+        TemplateSpec spec = parse("""
+                spec: 1
+                id: huge_pct
+                name: huge pct
+                canvas:
+                  size: auto
+                  padding: 0
+                params:
+                  sz:
+                    type: string
+                    label: sz
+                    default: "10"
+                layout:
+                  type: free
+                  elements:
+                    - type: rect
+                      x: 0
+                      y: 0
+                      w: "${sz}"
+                      h: 10
+                      fill: "#FF0000"
+                """);
+        var f = failed(instantiator.instantiate(spec, params("sz", "9999999999%"), 2, 1));
+        assertEquals("INVALID_TEMPLATE", f.code());
+        // clampInt 结果为正数（Integer.MAX_VALUE），错误消息不含负号（回绕征兆）
+        assertFalse(f.errors().toString().contains("-"),
+                "result should not be negative (wrap-around): " + f.errors());
     }
 }

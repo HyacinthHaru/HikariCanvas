@@ -41,7 +41,8 @@ import java.util.logging.Logger;
  *   <li>{@link #reserveForWall(String, int, World)}（扩容时会 createMap）</li>
  * </ul>
  * {@link #detectLeaks} 可异步调用：它会 mutate 池状态并写 DB（{@code persist}），但归还
- * 路径走 {@link #worldNameToUid} 内存缓存而<b>不</b>调 Bukkit API（P2-17 / P3-18 修复后），
+ * 路径以 {@code allowBukkitFallback=false} 调用 {@link #worldNameToUid} 缓存，缓存 miss 时
+ * 落 unknown-world 桶而<b>绝不</b>调 Bukkit API（P2-17 / P3-18 + E1·P2-10 修复），
  * 且整段 {@code synchronized(this)} 与主线程 reserve/bind 互斥，DB 写在 HikariCP 连接上线程安全。
  */
 public final class MapPool {
@@ -322,7 +323,7 @@ public final class MapPool {
             if (m.state() == PoolState.RESERVED && owner.equals(m.reservedBy())) {
                 PooledMap freed = m.withFree(now);
                 byId.put(m.mapId(), freed);
-                offerFreeByName(m.mapId(), m.world());
+                offerFreeByName(m.mapId(), m.world(), true);
                 persist(freed);
                 released.add(m.mapId());
             }
@@ -352,7 +353,7 @@ public final class MapPool {
         long now = System.currentTimeMillis();
         PooledMap freed = m.withFree(now);
         byId.put(mapId, freed);
-        offerFreeByName(mapId, m.world());
+        offerFreeByName(mapId, m.world(), true);
         persist(freed);
         auditLog.record("POOL_RELEASE_TO_FREE", null, null, null, null,
                 Map.of("map_id", mapId, "prev_owner", String.valueOf(m.reservedBy())));
@@ -364,9 +365,14 @@ public final class MapPool {
      * 当前简化策略：扫所有 RESERVED；非 "wall:" 前缀直接归还（视为旧 session: / draft: 残留）。
      * 后续可加"wall_id 不在 walls 表"的二次校验；调用方负责传 liveWallIds 集合。
      *
-     * <p><b>P2-17 / P3-18：</b> 本方法可异步调用——内部 {@link #offerFreeByName} 走 name→UUID
-     * 内存缓存归还（{@link #worldNameToUid}），不触 Bukkit API。{@code persist} 的 DB 写在
-     * HikariCP 连接上线程安全。整段 {@code synchronized(this)} 与主线程 reserve/bind 互斥。</p>
+     * <p><b>P2-17 / P3-18 / E1·P2-10：</b> 本方法可异步调用——内部 {@link #offerFreeByName}
+     * 以 {@code allowBukkitFallback=false} 调用，保证缓存 miss 时直接落 unknown-world 桶，
+     * <b>绝不调用</b> {@link Bukkit#getWorld(String)}（Bukkit API 主线程专用）。
+     * 缓存命中（{@link #worldNameToUid} 有该 world）时走 UUID 桶直接归还，零 Bukkit 调用。
+     * unknown-world 桶里的 map 在下次主线程 {@link #reserveForWall} →
+     * {@link #reclaimUnknownBucketForWorld} 时自动回迁正确桶。
+     * {@code persist} 的 DB 写在 HikariCP 连接上线程安全。
+     * 整段 {@code synchronized(this)} 与主线程 reserve/bind 互斥。</p>
      *
      * <p><b>P2-18：</b> 跳过 {@link #PENDING_WALL_PREFIX pending-} owner —— confirm() 在
      * reserve（owner=wall:pending-&lt;uuid&gt;）与最终 bind 到真 wallId 之间有一个短暂窗口，
@@ -402,7 +408,10 @@ public final class MapPool {
             PooledMap m = byId.get(id);
             PooledMap freed = m.withFree(now);
             byId.put(id, freed);
-            offerFreeByName(id, m.world());
+            // E1·P2-10：detectLeaks 在异步线程；缓存 miss 时禁止 Bukkit fallback——
+            // Bukkit.getWorld 是主线程专用 API。map 暂存 unknown-world 桶，
+            // 下次主线程 reserveForWall → reclaimUnknownBucketForWorld 可回收。
+            offerFreeByName(id, m.world(), false);
             persist(freed);
         }
         if (!leaked.isEmpty()) {
@@ -491,10 +500,18 @@ public final class MapPool {
      *
      * <p>P2-17 / P3-18：先查 {@link #worldNameToUid} 内存缓存（已 offerFree 过的 world 都有），
      * 命中即直接入对应 UUID 桶，<b>零 Bukkit 调用</b>——这是让 {@link #detectLeaks} 能在异步
-     * 线程安全归还的关键。缓存 miss 才退化到 {@link Bukkit#getWorld}（仅 {@link #releaseWall} /
-     * {@link #releaseToFree} 等主线程路径会走到，主线程下 Bukkit 调用合法）。</p>
+     * 线程安全归还的关键。</p>
+     *
+     * <p>E1·P2-10：{@code allowBukkitFallback} 控制缓存 miss 时的行为：</p>
+     * <ul>
+     *   <li>{@code true}（主线程路径：{@link #releaseWall} / {@link #releaseToFree}）：
+     *       缓存 miss 退化到 {@link Bukkit#getWorld}，合法（主线程调用）；并顺便填充缓存。</li>
+     *   <li>{@code false}（异步路径：{@link #detectLeaks}）：缓存 miss 时<b>禁止</b>调用
+     *       {@link Bukkit#getWorld}（Bukkit API 主线程专用）——直接暂存 unknown-world 桶，
+     *       等下次主线程 {@link #reserveForWall} → {@link #reclaimUnknownBucketForWorld} 回收。</li>
+     * </ul>
      */
-    private void offerFreeByName(int mapId, String worldName) {
+    private void offerFreeByName(int mapId, String worldName, boolean allowBukkitFallback) {
         if (worldName != null) {
             UUID cached = worldNameToUid.get(worldName);
             if (cached != null) {
@@ -502,10 +519,18 @@ public final class MapPool {
                 return;
             }
         }
+        // 缓存 miss：异步路径（detectLeaks）禁止 Bukkit 调用，直接落 unknown-world 桶。
+        if (!allowBukkitFallback) {
+            freeByWorld.computeIfAbsent(new UUID(0L, 0L), k -> new ArrayDeque<>()).offer(mapId);
+            log.warning("MapPool.offerFreeByName: world '" + worldName
+                    + "' not in cache (async path, Bukkit.getWorld skipped); map_id=" + mapId
+                    + " parked in unknown-world bucket");
+            return;
+        }
         World w = worldName == null ? null : Bukkit.getWorld(worldName);
         if (w == null) {
             // World 已卸载（玩家删 multiverse world？）。fallback：放在一个"未知"桶里，
-            // 用 zero UUID 作 key；下次 initialize 会被规整。
+            // 用 zero UUID 作 key；下次 initialize / reserveForWall 会被规整。
             freeByWorld.computeIfAbsent(new UUID(0L, 0L), k -> new ArrayDeque<>()).offer(mapId);
             log.warning("MapPool.offerFreeByName: world '" + worldName
                     + "' not loaded; map_id=" + mapId + " parked in unknown-world bucket");

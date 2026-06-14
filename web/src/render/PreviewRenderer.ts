@@ -243,9 +243,12 @@ function drawDitheredElement(
             ctx.rotate((e.rotation * Math.PI) / 180);
             ctx.translate(-cx, -cy);
         }
+        // B2-P2-19：对齐 drawElement 的 NaN/非有限 兜底 + clamp(0,1)，消除负 opacity（可经模板
+        // raw_state 绕过协议入口注入）在前端负 globalAlpha vs 后端 clamp 0 的双端分叉。
         const op = e.opacity;
-        if (op !== undefined && op !== null && op < 1) {
-            ctx.globalAlpha = ctx.globalAlpha * op;
+        if (op !== undefined && op !== null && (!Number.isFinite(op) || op < 1)) {
+            const safe = !Number.isFinite(op) ? 1 : Math.max(0, Math.min(1, op));
+            ctx.globalAlpha = ctx.globalAlpha * safe;
         }
         drawElementBody(ctx, e);
         ctx.restore();

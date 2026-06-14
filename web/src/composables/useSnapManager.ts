@@ -65,6 +65,16 @@ export interface UseSnapManagerOpts {
 
 export interface SnapManager {
     snap(rawX: number, rawY: number, w: number, h: number, excludeIds: Set<string>): SnapHints;
+    /**
+     * 0.7.3-D2：单边吸附——resize 时只对正在移动的那条边做 snap，避免静止锚点的 bestDelta
+     * 被误用到动的边上（例如拖右手柄时 left 近候选轴的 delta 意外加到 width）。
+     *
+     * @param rawEdge   正在移动的边的当前绝对坐标（X 方向传 left 或 right；Y 方向传 top 或 bottom）
+     * @param axis      'x' 或 'y'（决定用哪组候选轴）
+     * @param excludeIds 排除自身（同 snap）
+     * @returns delta（snap 后坐标 - rawEdge）；bypass / 无命中返 0
+     */
+    snapEdge(rawEdge: number, axis: 'x' | 'y', excludeIds: Set<string>): number;
 }
 
 interface CollectedElement {
@@ -360,5 +370,48 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
         };
     }
 
-    return { snap };
+    /**
+     * 0.7.3-D2：单边吸附实现。
+     *
+     * 只对 rawEdge 一个锚点（而非 left/center/right 三锚点）扫描 candidate，拿最近 delta。
+     * 候选轴来源与 snap() 相同（canvas / element / grid），但 distribute 不适用于单边 resize 故跳过。
+     */
+    function snapEdge(rawEdge: number, axis: 'x' | 'y', excludeIds: Set<string>): number {
+        if (!ui.snapEnabled) return 0;
+        if (opts.bypass && opts.bypass()) return 0;
+
+        const threshold = ui.snapThreshold;
+        const coords: number[] = [];
+
+        if (ui.snapToCanvas) {
+            const c = collectCanvasAxes();
+            coords.push(...(axis === 'x' ? c.xs : c.ys));
+        }
+        if (ui.snapToElement) {
+            const otherElements = collectElements(excludeIds);
+            const e = collectElementAxes(otherElements);
+            coords.push(...(axis === 'x' ? e.xs : e.ys));
+        }
+        if (ui.snapToGrid) {
+            const gridSize = project.state?.canvas.gridSize ?? 0;
+            coords.push(...pickGridCandidates(rawEdge, gridSize));
+        }
+
+        if (coords.length === 0) return 0;
+
+        // 单锚点扫描：找最近 candidate
+        let bestDist = threshold + 1;
+        let bestDelta = 0;
+        for (const cand of coords) {
+            const d = cand - rawEdge;
+            const abs = Math.abs(d);
+            if (abs < bestDist) {
+                bestDist = abs;
+                bestDelta = d;
+            }
+        }
+        return bestDist <= threshold ? bestDelta : 0;
+    }
+
+    return { snap, snapEdge };
 }

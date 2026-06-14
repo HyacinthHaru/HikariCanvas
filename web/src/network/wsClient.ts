@@ -897,19 +897,32 @@ export class WsClient {
             this.pendingAcks.clear();
         }
 
-        // M5-D7：按 close code 判断是否重连
-        // - 1000 (normal) / 4001 (auth failed) / 4008 (rate limit) → 不重连
-        // - 1006 (server down) / 1011 (server error) / 1001 (going away) → 退避重连
-        const terminal = ev.code === 1000 || ev.code === 4001 || ev.code === 4008;
+        // M5-D7 + A1/A2（ultrareview 0.7.3 批 A）：按 close code 判断是否重连。
+        // terminal = 重连无意义的终止态，停止退避；否则 scheduleReconnect。
+        // 集合定义见导出函数 isTerminalCloseCode（可独测）。
+        const terminal = isTerminalCloseCode(ev.code);
         if (this.stopped || terminal) {
             if (ev.code === 4001) {
                 // M25 任务 2A：友好提示走 i18n（AUTH_FAILED 中英文都覆盖到 token 提示）
                 net.lastError = localizeErrorCode('AUTH_FAILED');
                 this.clearStoredToken();
+            } else if (ev.code === 4002) {
+                // A4：handleReady 已设精确 lastError（「协议版本不兼容 server=X client=Y」）；
+                // 若 stopped 为 true 且 lastError 已有精确内容，不覆写（防止通用提示冲掉精确提示）。
+                // 若 stopped 为 false（理论上 handleReady 分支不会走这里，防御性保留兜底）。
+                if (!net.lastError) {
+                    net.lastError = localizeErrorCode('PROTOCOL_VERSION_UNSUPPORTED');
+                }
+            } else if (ev.code === 4429) {
+                net.lastError = localizeErrorCode('RATE_LIMITED');
             } else if (ev.code === 1000) {
                 // 主动关闭，不刷红
             } else {
-                net.lastError = `${localizeErrorCode('CONNECTION_CLOSED')}（code ${ev.code}）`;
+                // stopped=true 但 code 不在以上特殊 code 中（如 close() 默认 1000 以外的情形）；
+                // 若 handleReady 等已设精确 lastError，不覆写。
+                if (!net.lastError) {
+                    net.lastError = `${localizeErrorCode('CONNECTION_CLOSED')}（code ${ev.code}）`;
+                }
             }
             return;
         }
@@ -1147,4 +1160,21 @@ export function applyScriptTrace(payload: ScriptTracePayload | null | undefined)
     }
     useScriptStore().setLastTrace(payload);
     net.pushLog('meta', `script.trace: rule=${payload.ruleId} steps=${payload.steps.length}`);
+}
+
+// ---------- close code 终止态判定（A1/A2 ultrareview 0.7.3 批 A）----------
+//
+// terminal close code = 重连无意义的终止态；非 terminal 走 scheduleReconnect 退避重连。
+// 导出为纯函数，可独立单测（不依赖 Pinia / WebSocket，node 环境即可跑）。
+//
+// ■ 1000  正常关闭（client.close() 主动）
+// ■ 4001  auth 失败（token 无效 / 超时）→ 换 token 才有用，重连必再失败
+// ■ 4002  协议版本不兼容（Protocol.CLOSE_PROTOCOL_VERSION_UNSUPPORTED）→ 升级客户端才有用
+// ■ 4429  token 暴力枚举限流（Protocol.CLOSE_TOKEN_RATE_LIMITED）→ 等待窗口复位
+//         原 4008 是后端从未发出的死码，已替换为 4429（见 Protocol.java）
+export function isTerminalCloseCode(code: number): boolean {
+    return code === 1000
+        || code === 4001
+        || code === 4002
+        || code === 4429;
 }

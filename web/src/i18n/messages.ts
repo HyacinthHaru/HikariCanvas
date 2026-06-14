@@ -1007,6 +1007,9 @@ export const messages = {
                 needSelect: '还需填写：{field}',
                 // 0.7.1-P3：元素字段旁的「从预览点选」靶心按钮提示。点它后去右侧预览框点元素即可填入。
                 pickFromPreview: '从预览点选元素',
+                // 0.7.3-D1：command 复合字段——已保存的模板 ID 在服主删除 / 改名后找不到时的孤儿警告。
+                // {id} = 失效的模板 ID。
+                orphanTemplate: (id: string) => `命令模板已失效：${id}（请重新选择或联系服主配置）`,
             },
             // 0.7.0-P5-G：if 条件可视构建器文案（操作数类型 / joiner / 高级文本框切换）。
             condition: {
@@ -1171,7 +1174,7 @@ export const messages = {
             INVALID_PAYLOAD: '操作格式不对，请刷新页面重试',
             INVALID_OP: '这个操作格式不对，请刷新页面重试',
             CONFLICT: '画板被其他人改动过，请刷新一下',
-            VERSION_MISMATCH: '画板被其他人改动过，正在自动同步…',
+            VERSION_MISMATCH: '客户端版本与服务器不兼容，请刷新页面升级',
             RATE_LIMITED: '操作太频繁，请稍等一下',
             INTERNAL_ERROR: '服务器内部错误，请稍后再试',
             UNEXPECTED: '出了点意外，请稍后再试',
@@ -2242,6 +2245,10 @@ export const messages = {
                 // field on the block is still empty. {field} = friendly field name
                 // (element / timeline / command / variable / condition / sound).
                 needSelect: 'Still need to fill in: {field}',
+                // 0.7.3-D1: orphan warning when the saved templateId is not in the
+                // current template list (server admin deleted / renamed the template).
+                // {id} = the stale template ID.
+                orphanTemplate: (id: string) => `Command template not found: ${id} (re-select or ask an admin to reconfigure)`,
                 // 0.7.1-P3: crosshair button next to the element field. Click it, then
                 // click an element in the right-side preview to fill it in.
                 pickFromPreview: 'Pick from preview',
@@ -2408,7 +2415,7 @@ export const messages = {
             INVALID_PAYLOAD: 'Something\'s off with the request — please refresh and try again',
             INVALID_OP: 'This operation isn\'t recognized — please refresh and try again',
             CONFLICT: 'Someone else changed this wall — please refresh',
-            VERSION_MISMATCH: 'Wall was changed elsewhere — syncing…',
+            VERSION_MISMATCH: 'Client version is incompatible with the server — please refresh to upgrade',
             RATE_LIMITED: 'Slow down a bit, you\'re doing that too fast',
             INTERNAL_ERROR: 'Server hit an error — please try again shortly',
             UNEXPECTED: 'Something unexpected happened — please try again',
