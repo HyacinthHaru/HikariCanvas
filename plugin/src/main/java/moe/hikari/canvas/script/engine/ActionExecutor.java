@@ -262,10 +262,11 @@ public final class ActionExecutor implements ActionSink {
         return TraceStep.ok(blockId, "action", dst + " += ...");
     }
 
-    /** 整数值输出无小数点（"42" 而非 "42.0"）；否则 {@code String.valueOf}。 */
+    /** 整数值输出无小数点（"42" 而非 "42.0"）；否则 {@code String.valueOf}。
+     * 非有限数值（NaN / Infinity / -Infinity）一律返 "0"，避免污染变量库和墙上渲染。 */
     static String formatNumber(double v) {
-        if (Double.isFinite(v) && v == Math.rint(v)
-                && Math.abs(v) <= 9.007199254740992E15) { // 2^53：double 整数精确域
+        if (!Double.isFinite(v)) return "0";
+        if (v == Math.rint(v) && Math.abs(v) <= 9.007199254740992E15) { // 2^53：double 整数精确域
             return String.valueOf((long) v);
         }
         return String.valueOf(v);
@@ -685,8 +686,11 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /**
-     * 变量取整（照 {@link #doScale}：async，读当前值 → Double.parse → 取整 → setValue）。
-     * 非数值 → error step（解析失败不是程序错误，让链继续）。
+     * 变量取整（async，读当前值 → 严格文法校验 → 取整 → setValue）。
+     * 非严格数值（null / "abc" / "NaN" / "Infinity" / "0x1p4" / "5d" 等）→ error step：
+     * 取整一个非数值变量无合理意义，应让用户在 trace 看到（区别于 doIncrement / doScale
+     * 的「空变量从 0 起算」语义）。用 {@link StrictNumber#PATTERN} 严格判定（禁
+     * Double.parseDouble，后者接受 NaN / Infinity / 0x1p4 / 5d 等非法形式）。
      */
     private TraceStep doRoundVariable(String wallId, String blockId, Action.RoundVariable a) {
         if (store == null || storeLookup == null) {
@@ -694,15 +698,12 @@ public final class ActionExecutor implements ActionSink {
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
         String raw = storeLookup.apply(fullName);
-        double parsed;
-        try {
-            if (raw == null || raw.isBlank()) {
-                return TraceStep.error(blockId, "变量 " + fullName + " 无值，无法取整");
-            }
-            parsed = Double.parseDouble(raw.trim());
-        } catch (NumberFormatException e) {
-            return TraceStep.error(blockId, "变量 " + fullName + " 非数值: " + raw);
+        // 非严格数值（abc / 0x1p4 / 5d / Infinity / NaN）→ error step（区别于 doIncrement/doScale
+        // 的「按 0」：取整非数值无意义，让用户在 trace 看到）。StrictNumber.PATTERN 严格判定。
+        if (raw == null || !StrictNumber.PATTERN.matcher(raw.trim()).matches()) {
+            return TraceStep.error(blockId, "roundVariable " + fullName + "：非数值，无法取整");
         }
+        double parsed = StrictNumber.parse(raw);
         double result = switch (a.mode()) {
             case "floor" -> Math.floor(parsed);
             case "ceil" -> Math.ceil(parsed);

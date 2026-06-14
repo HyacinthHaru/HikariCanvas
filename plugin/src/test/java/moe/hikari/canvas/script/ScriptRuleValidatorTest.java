@@ -721,6 +721,65 @@ class ScriptRuleValidatorTest {
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
     }
 
+    // ---------- 0.7.3-ultrareview：RandomBranch ifDepth 双端对齐 ----------
+
+    @Test
+    void randomBranch_ok_valid_probability() {
+        // RandomBranch 合法：概率 50%，then/else 有简单动作
+        Action a = new Action.RandomBranch(50,
+                List.of(new Action.Log("yes")), List.of(new Action.Log("no")));
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))));
+    }
+
+    @Test
+    void randomBranch_depth_3_ok() {
+        // RandomBranch 3 层嵌套（含最外层 If 4 层总计 = 4，恰在上限内）
+        // 外层 If(depth=1) → RandomBranch(depth=2) → If(depth=3) → RandomBranch(depth=4) ← 上限
+        Action inner = new Action.Log("deep");
+        inner = new Action.RandomBranch(50, List.of(inner), List.of());  // depth=4
+        inner = new Action.If("1 > 0", List.of(inner), List.of());       // depth=3
+        inner = new Action.RandomBranch(50, List.of(inner), List.of());  // depth=2
+        inner = new Action.If("1 > 0", List.of(inner), List.of());       // depth=1
+        assertEquals(Optional.empty(),
+                ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner))),
+                "RandomBranch 与 If 混合 4 层应放行");
+    }
+
+    @Test
+    void randomBranch_depth_5_rejected() {
+        // RandomBranch 当 if 计深度：5 层应被拒（与前端 validator.ts randomBranch case 对齐）
+        Action inner = new Action.Log("deep");
+        for (int i = 0; i < 5; i++) {
+            inner = new Action.RandomBranch(50, List.of(inner), List.of());
+        }
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
+        assertTrue(err.isPresent(), "RandomBranch 5 层嵌套应被拒（超 MAX_IF_DEPTH=4）");
+        assertTrue(err.get().contains("depth") || err.get().contains("嵌套"), err.get());
+    }
+
+    @Test
+    void randomBranch_mixed_with_if_depth_5_rejected() {
+        // 4 层 If 外再套 RandomBranch → depth=5 被拒
+        Action inner = new Action.Log("deep");
+        for (int i = 0; i < 4; i++) {
+            inner = new Action.If("1 > 0", List.of(inner), List.of());
+        }
+        inner = new Action.RandomBranch(50, List.of(inner), List.of());
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
+        assertTrue(err.isPresent(), "RandomBranch 外包 4 层 If 应被拒（depth=5）");
+    }
+
+    @Test
+    void randomBranch_else_branch_also_depth_checked() {
+        // 超深嵌套在 else 分支里也应被检测
+        Action inner = new Action.Log("deep");
+        for (int i = 0; i < 5; i++) {
+            inner = new Action.RandomBranch(50, List.of(), List.of(inner));  // 在 else 分支嵌套
+        }
+        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
+        assertTrue(err.isPresent(), "else 分支超深嵌套也应被拒");
+    }
+
     @Test
     void tween_cubicBezier_missing_bezier_rejected() {
         // cubicBezier 类型但 bezier=null → 拒
@@ -737,5 +796,28 @@ class ScriptRuleValidatorTest {
         Action a = new Action.TweenBlock(500L, bad,
                 List.of(new Action.SetElementProperties("e-1", Map.of("x", "0"), "moveTo")));
         assertTrue(ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))).isPresent());
+    }
+
+    // ---------- 0.7.3 D3：setColor 友好积木 patch 键修复（color 不是 fill）----------
+
+    /** 0.7.3 D3：SetElementProperties patch 含 "color" 键合法（setColor 友好积木目标格式）。 */
+    @Test
+    void set_element_properties_color_key_is_whitelisted() {
+        // 回归：旧版 ELEMENT_PROPERTIES 不含 "color"，setColor 友好积木 defaultPatch={color:'#FFF'}
+        // 在 tweenBlock body 里走 validateAction→ELEMENT_PROPERTIES check → "元素属性不在允许范围：color"
+        // 修复：ELEMENT_PROPERTIES 加入 "color"，校验放行，TweenScheduler color 分支端到端可达。
+        assertEquals(Optional.empty(), ScriptRuleValidator.validate(rule(okTrigger(),
+                List.of(new Action.SetElementProperties("e-1",
+                        Map.of("color", "#FF0000"), "setColor")))));
+    }
+
+    /** 0.7.3 D3：setColor 在 tweenBlock body 里合法（kind=setColor ∈ TWEENABLE_KINDS + color 已白名单）。 */
+    @Test
+    void tween_body_setColor_with_color_key_ok() {
+        Action a = new Action.TweenBlock(500L, Easing.LINEAR,
+                List.of(new Action.SetElementProperties("e-1",
+                        Map.of("color", "#000000"), "setColor")));
+        assertEquals(Optional.empty(),
+                ScriptRuleValidator.validate(rule(okTrigger(), List.of(a))));
     }
 }

@@ -185,6 +185,29 @@ public final class AnimationTicker implements AnimationTickerGate {
         if (e != null) tick(e);
     }
 
+    /**
+     * 测试 seam（P2-6）：在 Ticker 线程排一道屏障任务并阻塞等其完成。
+     * 单线程 scheduler 的 FIFO 保证：本方法返回时，此前 {@code scheduler.execute} 投递的
+     * 所有任务（renderStatic / clearStaticDiff 的 trampoline）均已执行完毕。
+     */
+    void flushSchedulerForTest() {
+        try {
+            scheduler.submit(() -> { }).get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new RuntimeException("flushSchedulerForTest failed", e);
+        }
+    }
+
+    /** 测试 seam（P2-6）：当前 staticDiffs 是否残留指定 wall 条目。 */
+    boolean hasStaticDiffForTest(String wallId) {
+        return staticDiffs.containsKey(wallId);
+    }
+
+    /** 测试 seam（P2-6）：当前 staticDiffs 条目数。 */
+    int staticDiffCountForTest() {
+        return staticDiffs.size();
+    }
+
     void setNanoClock(LongSupplier clock) {
         this.nanoClock = clock;
     }
@@ -431,9 +454,22 @@ public final class AnimationTicker implements AnimationTickerGate {
 
     /**
      * 补间引擎用：补间结束（或中途取消）后清理 per-wall 静态 diff，防内存泄漏。任意线程可调。
+     *
+     * <p><b>P2-6 线程契约修复</b>：{@link #staticDiffs} 声明「仅 Ticker 线程（scheduler）读写」。
+     * 原实现直接在调用线程 {@code staticDiffs.remove}，破坏该契约且与异步 {@link #renderStatic}
+     * 形成竞态——补间末帧序列「先 clearStaticDiff(remove) 再 renderStatic(异步投 Ticker 线程
+     * computeIfAbsent 新建空 FrameDiff)」会让该条目永不被清，每个静态墙补间完泄漏一条
+     * {@code byte[mapCount][16384]}。改为同样 {@code scheduler.execute} 投递到 Ticker 线程：
+     * 单线程 executor 的 FIFO 保证此 remove 排在同一序列里 {@link #renderStatic} 投递的
+     * computeIfAbsent 任务<b>之后</b>执行，孤儿条目被关死。</p>
      */
     public void clearStaticDiff(String wallId) {
-        if (wallId != null) staticDiffs.remove(wallId);
+        if (shutdown || wallId == null) return;
+        try {
+            scheduler.execute(() -> staticDiffs.remove(wallId));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // 关停竞态（scheduler 已 shutdown）——staticDiffs 会随进程退出整体回收，无需补救
+        }
     }
 
     /** 幂等关停（onDisable，DB close 之前）。 */

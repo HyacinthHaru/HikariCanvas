@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-06-14 · 0.7.3 ultrareview 第一批：8 条「静默失败」+ 崩溃修复（全直接修）
+
+独立第三方全栈 ultrareview（`docs/ultrareview-2026-06-14.md`，159 代理 / 54 真问题 + 25 设计待定）→ 4 个
+子代理读真实代码逐条核验（抓出 1 纯误报 P2-8 BlendModes + 数条「设计折衷被当 bug」）→ 第一批挑 8 条
+**0.7.3/补间「功能坏了但不报错」**直接修。4 批并行实施（文件无冲突）+ 对抗审查硬条目，实施计划见
+`docs/superpowers/plans/2026-06-14-ultrareview-batch1.md`。
+
+**8 条修复**（ID 对报告）：
+- **P1-1** 置顶置底双路径未接线：`SessionManager.applyScriptElementReorder`（照 clone/delete + 共用
+  `finishScriptElementStructuralOp`）+ `HikariCanvas` 匿名 `SessionPatchApplier` override `reorderToEdge`——
+  编辑器开着时脚本置顶/置底走活跃 session（前端实时 patch），不再绕 headless 被 persist 覆盖丢失。
+- **P1-2** 文字变色补间静默失效：setColor 友好积木 `fill` 键 → `color` 键 + 前后端 `ELEMENT_PROPERTIES`
+  白名单加 `color`（`applyTextPatch` 本就接受 color）——ColorTarget 端到端打通（渐变 + 落盘）。
+- **P1-5** `canvas.tweenFps` 漏接 WebServer 分发：`handleMessage` switch 补 case + `EditOpDispatcher`
+  提 `handleCanvasTweenFps` seam——per-wall 帧率真生效（不再卡 30）。
+- **P2-1** RandomBranch 深度校验前后端不一致（6 审查单元命中，置信度最高）：后端 `ScriptRuleValidator`
+  `ifDepth+1` + MAX_IF_DEPTH 查，对齐前端/If——编辑器不再拒服务端会接受的合法规则。
+- **P2-2** K16 保存期条件预检漏 RandomBranch：`ScriptOpDispatcher.checkConditionSyntax` 递归补 then/else。
+- **P2-3 / P2-4 / P3-17** 非有限污染变量库 + roundVariable 绕 StrictNumber：`formatNumber` `!isFinite→"0"`
+  兜底 + `doRoundVariable` 用 `StrictNumber.PATTERN` 判定，非数值（abc / 0x1p4 / 5d / Infinity / NaN）→
+  **error step**（恢复原语义，非批次 B 误改的「静默按 0」——现有测试 `roundVariable_nonNumeric_error`
+  即原语义证据）。
+- **P2-6** `clearStaticDiff` 破「仅 Ticker 线程」契约 → 孤儿 FrameDiff 泄漏：改 `scheduler.execute` 投
+  Ticker 线程（单线程 FIFO 保证排在 renderStatic 之后）。
+- **P3-16** `buildInterpolatedFrame` 原地 mutate 共享 baseState → 跨线程撕裂读：`deepCopyState` 每帧拍
+  独立副本（照 `ProjectState.restore`，layers + elements 列表独立）。
+
+**过程 3 插曲**：① 2 共享文件并行改（ScriptRuleValidator / TweenScheduler）验证改动共存无覆盖 ②
+批次 D 正确越界补后端 `ELEMENT_PROPERTIES` 白名单（P1-2 端到端必要）③ 抓 1 回归（B 误改 roundVariable
+非数值语义撞翻现有测试）→ systematic-debugging 修复（恢复 error + 用 PATTERN 统一覆盖 0x1p4/5d/Inf/NaN）。
+
+**测试**：后端 **1946**（+~40）/ 前端 **1233**（+2）全绿 / **0 baseline 漂移**。用户游戏内实测 P1-1/P1-2/P1-5
+通过。25 设计待定 + 其余 P2（9~15/19/20）+ P3 未纳入（留第二/三批）。
+
+关联：`HikariCanvas` / `SessionManager` / `AnimationTicker` / `TweenScheduler` / `ScriptRuleValidator` /
+`ActionExecutor` / `ScriptOpDispatcher` / `WebServer` / `EditOpDispatcher` + 7 测试类（含新
+`CanvasTweenFpsDispatchTest`）；前端 `blockDefs` / `validator` / `i18n` + 2 测试；
+`docs/ultrareview-2026-06-14.md` + plan。
+
+---
+
 ## 2026-06-14 · 0.7.3 备选积木批完工：4 个新积木 + 版本号 bump 0.7.3-SNAPSHOT
 
 补间动画完工后补一批轻量备选积木（brainstorming 用户选 4 个全做）。后端 + 前端子代理并行。

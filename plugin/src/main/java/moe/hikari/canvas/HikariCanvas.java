@@ -772,6 +772,14 @@ public final class HikariCanvas extends JavaPlugin {
                                 return smForScript.applyScriptElementDelete(
                                         wid, eid, varPushCallback, throttlerForScript);
                             }
+
+                            @Override
+                            public moe.hikari.canvas.script.engine
+                                    .ElementPropertyApplier.SessionOutcome reorderToEdge(
+                                    String wid, String eid, String mode) {
+                                return smForScript.applyScriptElementReorder(
+                                        wid, eid, mode, varPushCallback, throttlerForScript);
+                            }
                         },
                         wallRepo, tickerControl, getLogger());
         // 0.7.2-P2（F10）：headless 克隆路径的元素配额（路径 A 配额由 SessionManager 注入到

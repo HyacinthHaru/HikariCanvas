@@ -472,6 +472,13 @@ final class ScriptOpDispatcher {
                 }
                 Optional<String> sub = checkConditionSyntax(ru.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
+            } else if (a instanceof moe.hikari.canvas.script.Action.RandomBranch rb) {
+                // 0.7.3：RandomBranch 自身无 condition，但 then/else 分支可嵌 If/WaitUntil/RepeatUntil
+                // 等含 condition 的积木——必须递归，否则坏条件绕过保存期预检（K16 漏洞）。
+                Optional<String> sub = checkConditionSyntax(rb.then(), blockId + "/then/");
+                if (sub.isPresent()) return sub;
+                sub = checkConditionSyntax(rb.elseActions(), blockId + "/else/");
+                if (sub.isPresent()) return sub;
             }
         }
         return Optional.empty();

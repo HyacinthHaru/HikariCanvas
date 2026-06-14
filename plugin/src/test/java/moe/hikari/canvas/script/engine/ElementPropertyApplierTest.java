@@ -587,6 +587,185 @@ class ElementPropertyApplierTest {
         assertTrue(step.detail().contains("boom"));
     }
 
+    // ---------- 0.7.3：applySetElementLayer（置顶/置底 headless 双路径 + session seam） ----------
+
+    /** 双 text 元素工程（l-1 内 [a, b]，b 在上）；locked 可配（D-24 LAYER_LOCKED 覆盖）。 */
+    private static ProjectState stateWithTwoElements(boolean locked) {
+        TextElement a = new TextElement("e-a", 10, 20, 100, 50, 0, false, true,
+                "A", "inter", 24, "#000000", "left", 0f, 1.2f, false, null,
+                1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null, null);
+        TextElement b = new TextElement("e-b", 30, 40, 100, 50, 0, false, true,
+                "B", "inter", 24, "#000000", "left", 0f, 1.2f, false, null,
+                1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null, null);
+        Layer layer = new Layer("l-1", "L", true, locked, 1.0f, BlendMode.NORMAL, null,
+                new ArrayList<>(List.of(a, b)));
+        return new ProjectState(1L,
+                new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
+                null, new ArrayList<>(List.of(layer)), "l-1",
+                new ProjectState.History(0, 0), null, null, null);
+    }
+
+    /** 返回 l-1 内元素 id 的顺序（z-order，index 0 = 最底）。 */
+    private static List<String> elementOrder(ProjectState st) {
+        List<String> ids = new ArrayList<>();
+        for (Element e : st.layers().get(0).elements()) ids.add(e.id());
+        return ids;
+    }
+
+    @Test
+    void setElementLayer_headless_front_movesToEnd() {
+        // [a, b] → front(a) → [b, a]（a 移到末尾 = 显示最上）
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep step = headlessApplier().applySetElementLayer(wallId, "b", "e-a", "front");
+        assertEquals("ok", step.result(), () -> "应成功: " + step.detail());
+        assertEquals(List.of("e-b", "e-a"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
+                "front → 移到所在层末尾");
+    }
+
+    @Test
+    void setElementLayer_headless_back_movesToStart() {
+        // [a, b] → back(b) → [b, a]（b 移到开头 = 显示最下）
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep step = headlessApplier().applySetElementLayer(wallId, "b", "e-b", "back");
+        assertEquals("ok", step.result(), () -> "应成功: " + step.detail());
+        assertEquals(List.of("e-b", "e-a"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
+                "back → 移到所在层开头");
+    }
+
+    @Test
+    void setElementLayer_headless_layerLocked_errorStep() {
+        // D-24：所在层锁住 → moveElementToFront 返 LAYER_LOCKED → error step（不落库）
+        String wallId = createWall(stateWithTwoElements(true));
+        TraceStep step = headlessApplier().applySetElementLayer(wallId, "b", "e-a", "front");
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("LAYER_LOCKED"), step.detail());
+        assertEquals(List.of("e-a", "e-b"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
+                "锁层拒绝后顺序不变");
+    }
+
+    @Test
+    void setElementLayer_headless_missingElement_errorStep() {
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep step = headlessApplier().applySetElementLayer(wallId, "b", "e-MISSING", "front");
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("INVALID_ELEMENT"), step.detail());
+        assertEquals(List.of("e-a", "e-b"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
+                "拒绝后顺序不变");
+    }
+
+    @Test
+    void setElementLayer_emptyElementId_errorStep() {
+        TraceStep step = headlessApplier().applySetElementLayer("w-any", "b", "", "front");
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void setElementLayer_headless_wallNotFound_errorStep() {
+        TraceStep step = headlessApplier().applySetElementLayer("w-nope", "b", "e-a", "front");
+        assertEquals("error", step.result());
+    }
+
+    @Test
+    void setElementLayer_headless_animatingWall_invalidates() {
+        String wallId = createWall(stateWithTwoElements(false));
+        ticker.animating = true;
+        headlessApplier().applySetElementLayer(wallId, "b", "e-a", "front");
+        assertEquals(List.of(wallId), ticker.invalidates, "在播 → invalidate（persistWall 链）");
+    }
+
+    @Test
+    void setElementLayer_sessionPath_usesReorderSeam() {
+        // 活跃 session（reorderToEdge 返 APPLIED）→ 不落 headless（DB 顺序不变）
+        List<String> seen = new ArrayList<>();
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        throw new AssertionError("setElementLayer 不应走 apply()");
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome reorderToEdge(
+                            String w, String e, String mode) {
+                        seen.add(e + ":" + mode);
+                        return ElementPropertyApplier.SessionOutcome.applied();
+                    }
+                }, wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep step = a.applySetElementLayer(wallId, "b", "e-a", "front");
+        assertEquals("ok", step.result());
+        assertEquals(List.of("e-a:front"), seen, "走 reorderToEdge seam 且带 mode");
+        assertEquals(List.of("e-a", "e-b"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
+                "session APPLIED → 不再走 headless reorder");
+    }
+
+    @Test
+    void setElementLayer_sessionFailed_errorStep_noHeadlessFallback() {
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        return ElementPropertyApplier.SessionOutcome.noSession();
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome reorderToEdge(
+                            String w, String e, String mode) {
+                        return ElementPropertyApplier.SessionOutcome.failed("LAYER_LOCKED: x");
+                    }
+                }, wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep step = a.applySetElementLayer(wallId, "b", "e-a", "front");
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("LAYER_LOCKED"));
+        assertEquals(List.of("e-a", "e-b"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
+                "session 拒绝不回退 headless");
+    }
+
+    @Test
+    void setElementLayer_sessionNoSession_fallsThroughHeadless() {
+        // 默认 reorderToEdge 返 noSession（旧 fake 兼容）→ headless 落库 [a,b] → front(a) → [b,a]
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                (w, e, p) -> ElementPropertyApplier.SessionOutcome.noSession(),
+                wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep step = a.applySetElementLayer(wallId, "b", "e-a", "front");
+        assertEquals("ok", step.result());
+        assertEquals(List.of("e-b", "e-a"),
+                elementOrder(wallRepo.loadById(wallId).orElseThrow().state()),
+                "noSession → headless reorder 落库");
+    }
+
+    @Test
+    void setElementLayer_sessionApplierThrows_errorStep_chainSafe() {
+        ElementPropertyApplier a = new ElementPropertyApplier(
+                new ElementPropertyApplier.SessionPatchApplier() {
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome apply(
+                            String w, String e, Map<String, Object> p) {
+                        return ElementPropertyApplier.SessionOutcome.noSession();
+                    }
+
+                    @Override
+                    public ElementPropertyApplier.SessionOutcome reorderToEdge(
+                            String w, String e, String mode) {
+                        throw new IllegalStateException("boom");
+                    }
+                }, wallRepo, ticker, LOG);
+        String wallId = createWall(stateWithTwoElements(false));
+        TraceStep step = a.applySetElementLayer(wallId, "b", "e-a", "front");
+        assertEquals("error", step.result());
+        assertTrue(step.detail().contains("boom"));
+    }
+
     // ---------- 路径 A：session seam ----------
 
     @Test

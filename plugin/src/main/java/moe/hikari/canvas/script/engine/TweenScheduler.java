@@ -11,6 +11,7 @@ import moe.hikari.canvas.state.Element;
 import moe.hikari.canvas.state.ElementValidator;
 import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.IconElement;
+import moe.hikari.canvas.state.Layer;
 import moe.hikari.canvas.state.PathElement;
 import moe.hikari.canvas.state.ProjectState;
 import moe.hikari.canvas.state.RectElement;
@@ -45,8 +46,11 @@ import java.util.logging.Logger;
  * </ul>
  *
  * <p>{@code active} ConcurrentHashMap 保证跨线程可见；{@link TweenTask} 字段全为 final
- * immutable（List.copyOf），构造后不修改，跨线程传递安全；frame（ProjectState）为 Java record
- * immutable，跨线程安全。</p>
+ * immutable（List.copyOf），构造后不修改，跨线程传递安全。<b>注意（P3-16）</b>：
+ * {@code ProjectState} record 的<b>外壳</b>不可变，但内层 {@code layers} / 每层 {@code elements}
+ * 是可变 {@code ArrayList}——故 {@code baseState} 绝不直接产帧传给异步读的
+ * {@link TickerControl#renderStatic}；{@link #buildInterpolatedFrame} 每帧 {@link #deepCopyState}
+ * 拍独立副本（layers + elements 列表全新），返回的 frame 才真正跨线程不可变安全。</p>
  *
  * <p><b>P3 属性支持</b>：数值（x/y/w/h/rotation/opacity）/ 颜色（TextElement.color,
  * {@link ColorLerp#lerpHex}）/ fill（几何元素 {@link ColorLerp#lerpFill}）；含 {@code ${var:}}
@@ -122,7 +126,10 @@ public final class TweenScheduler {
                              boolean snap) implements PropTarget {}
 
     /**
-     * 活跃补间任务。所有字段 final；frame baseState 是 immutable record；targets 是 List.copyOf。
+     * 活跃补间任务。所有字段 final；targets 是 List.copyOf。{@code baseState} 仅作为「补间起点
+     * 快照」<b>只读</b>持有——其 record 外壳不可变，但内层 layers/elements 是可变 ArrayList，
+     * 故 tick 路径产帧时 {@link #buildInterpolatedFrame} 必先 {@link #deepCopyState} 拍副本再
+     * mutate，绝不原地改 baseState（P3-16）。
      * tick 线程读取；enqueue 线程构造后 put 到 ConcurrentHashMap → tick 线程可见。
      *
      * <p>{@code fps} 是 enqueue 时从 wall 的 {@link ProjectState#effectiveTweenFps()} 读取的
@@ -431,7 +438,7 @@ public final class TweenScheduler {
             return new NumericTarget(elementId, property, from, to);
         }
         if ("color".equals(property)) {
-            // toStr 是 hex 字符串（setColor 积木 → fill 键，但颜色用 color 键）
+            // toStr 是 hex 字符串（setColor 友好积木产出 color 键，TextElement.color）
             boolean snapTo = containsVar(toStr);
             String from = readColorValue(baseState, elementId);
             boolean snapFrom = from != null && containsVar(from);
@@ -440,7 +447,7 @@ public final class TweenScheduler {
             return new ColorTarget(elementId, property, from, toStr, snap);
         }
         if ("fill".equals(property)) {
-            // toStr 是 #RRGGBB 字符串（setColor 积木 defaultPatch = fill: #FFFFFF）
+            // toStr 是 #RRGGBB 字符串（几何元素如 Rect/Circle/Shape/Path/Brush/Icon 的 fill 属性）
             boolean snap = containsVar(toStr);
             Fill fromFill = readFillValue(baseState, elementId);
             if (fromFill == null) fromFill = new SolidFill(toStr); // 元素不存在 fallback
@@ -551,9 +558,19 @@ public final class TweenScheduler {
     }
 
     /**
-     * 构造插值帧（纯内存，immutable ProjectState；不落 DB）。P3 三态分流。
+     * 构造插值帧（纯内存，<b>每帧独立深拷贝副本</b>；不落 DB）。P3 三态分流。
      *
-     * <p>使用临时 {@link EditSession} + {@code updateElement}——EditSession 纯 record 重建，
+     * <p><b>P3-16 跨线程撕裂读修复</b>：{@link EditSession} 构造器按<b>引用</b>持有 state，
+     * {@code updateElement} 通过 {@code elements().set(idx, ...)} <b>原地 mutate</b> 这个
+     * （非线程安全的）{@code ArrayList}，且 {@code es.state()} 返回的就是传入的同一对象。
+     * 若直接 {@code new EditSession(task.baseState())}，本方法产出的 frame 与 baseState 共享
+     * 内层 Layer 的 element 列表；该 frame 经 {@code renderStatic} <b>异步在 Ticker 线程</b>读，
+     * 而 tween 线程下一 tick 又在同一列表上 set/iterate → 对非线程安全 ArrayList 的并发改读 =
+     * 撕裂读。故构造 EditSession 前先 {@link #deepCopyState} 拍出独立副本：layers + 每个
+     * Layer 的 elements 列表都是新对象（Element / Timeline / Canvas record 不可变可按引用共享），
+     * 让返回的 frame 真正 immutable（不被后续 tick 的 mutate 污染），跨线程安全。</p>
+     *
+     * <p>临时 {@link EditSession} + {@code updateElement}——EditSession 纯 record 重建，
      * <b>不</b>发包、<b>不</b>落 DB、<b>不</b>碰 Ticker；产物即弃，仅取 {@code es.state()}。</p>
      *
      * @param eased 已经过缓动函数映射的插值进度 [0,1]
@@ -567,17 +584,52 @@ public final class TweenScheduler {
             patches.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
                    .put(pt.property(), v);
         }
-        if (patches.isEmpty()) return task.baseState();
+        // patches 为空（全 snap 目标）也返回独立副本——保持「frame 是 baseState 的隔离拷贝」
+        // 这一不变式（绝不把共享 baseState 直接漏给异步读的 renderStatic）
+        ProjectState frame = deepCopyState(task.baseState());
+        if (patches.isEmpty()) return frame;
 
-        EditSession es = new EditSession(task.baseState());
+        EditSession es = new EditSession(frame);
         for (Map.Entry<String, Map<String, Object>> entry : patches.entrySet()) {
             EditSession.OpResult r = es.updateElement(entry.getKey(), entry.getValue());
             if (r instanceof EditSession.OpResult.Error) {
-                // 校验拒绝（如 color 给非 text 元素）：退回 baseState，不崩 tick
-                return task.baseState();
+                // 校验拒绝（如 color 给非 text 元素）：退回独立副本（已对其它 entry 部分 mutate，
+                // 但仍是与 baseState 隔离的拷贝，不污染共享 baseState），不崩 tick
+                return frame;
             }
         }
         return es.state();
+    }
+
+    /**
+     * 深拷贝 {@link ProjectState}（P3-16）：照 {@code ProjectState.restore} 的成熟范式重建 ——
+     * 每个 {@link Layer} 用 {@code new ArrayList<>(l.elements())} 重建 element 列表，保证
+     * 返回 state 的 layers 列表 <b>与</b> 每个 Layer 的 elements 列表都是独立可变副本（后续
+     * {@code EditSession.updateElement} 的原地 set 只动副本，不触碰 baseState）。
+     *
+     * <p>{@link Element} / {@link ProjectState.Canvas} / {@link moe.hikari.canvas.state.Timeline}
+     * 均为不可变 record，按引用共享即线程安全（与 {@code ProjectState.restore} 对 timelines 的处理一致）。</p>
+     */
+    private static ProjectState deepCopyState(ProjectState src) {
+        List<Layer> copiedLayers = new ArrayList<>(src.layers().size());
+        for (Layer l : src.layers()) {
+            copiedLayers.add(new Layer(
+                    l.id(), l.name(), l.visible(), l.locked(),
+                    l.opacity(), l.blendMode(), l.colorTag(),
+                    new ArrayList<>(l.elements())));
+        }
+        // Jackson 反序列化构造器（v1Elements=null，走 v2Layers 分支）。timelines 按引用共享
+        // （Timeline record 不可变，深冻结 tracks）；canvas / history / activeIds 同样不可变或值语义。
+        return new ProjectState(
+                src.version(),
+                src.canvas(),
+                null,
+                copiedLayers,
+                src.activeLayerId(),
+                src.history(),
+                new ArrayList<>(src.timelines()),
+                src.activeTimelineId(),
+                src.tweenFps());
     }
 
     /**

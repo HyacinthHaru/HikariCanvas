@@ -91,8 +91,11 @@ describe('validator 常量与后端 ScriptRuleValidator.java 一致', () => {
         expect(PITCH_MAX).toBe(2.0);
     });
     it('白名单集合', () => {
+        // 0.7.3 D3：ELEMENT_PROPERTIES 加入 'color'（TextElement.color，setColor 友好积木用）。
+        // fill 保留（rect/circle/path/shape/brush/icon 仍用 fill；setElementProperty 通用动作
+        // 用 fill；仅 setColor 友好积木对 TextElement 用 color）。
         expect([...ELEMENT_PROPERTIES].sort()).toEqual(
-            ['fill', 'h', 'opacity', 'rotation', 'text', 'w', 'x', 'y'],
+            ['color', 'fill', 'h', 'opacity', 'rotation', 'text', 'w', 'x', 'y'],
         );
         expect([...TIMELINE_OPS].sort()).toEqual(['pause', 'play', 'seek']);
         expect([...SOUND_SCOPES].sort()).toEqual(['all', 'near']);

@@ -223,15 +223,7 @@ final class EditOpDispatcher {
                 }
                 yield es.setBackground(stringOrNull(payload.get("color")));
             }
-            case "canvas.tweenFps" -> {
-                // 0.7.1：per-wall 补间帧率。fps=[1,60]；0/null → 清回默认（effectiveTweenFps=30）。
-                Object fpsRaw = payload.get("fps");
-                if (fpsRaw != null && !(fpsRaw instanceof Number)) {
-                    yield new EditSession.OpResult.Error("INVALID_PAYLOAD",
-                            "fps must be number or null");
-                }
-                yield es.setTweenFps(fpsRaw == null ? null : ((Number) fpsRaw).intValue());
-            }
+            case "canvas.tweenFps" -> handleCanvasTweenFps(payload, es);
             case "canvas.grid" -> {
                 Object sz = payload.get("size");
                 if (sz != null && !(sz instanceof Number)) {
@@ -360,6 +352,28 @@ final class EditOpDispatcher {
             case EditSession.OpResult.Error er ->
                     ctx.send(Envelope.error(in.id(), er.code(), er.message()));
         }
+    }
+
+    /**
+     * 0.7.1 {@code canvas.tweenFps} op 核心处理（protocol.md §5.x）。
+     *
+     * <p>package-private（非 private）以便 dispatcher 单测直接驱动 payload 解析 →
+     * {@link EditSession#setTweenFps} 映射，绕开 {@code WsMessageContext}
+     * （Javalin final 类，不可 mock）。WebServer switch 必须路由此 op 到
+     * {@link #dispatch}，否则前端改帧率后端永远写不进去。</p>
+     *
+     * @param payload 已解析的 JSON payload（键 "fps"：Number 或 null）
+     * @param es      当前 EditSession（从 session 取出）
+     * @return 供 dispatch 流使用的 {@link EditSession.OpResult}
+     */
+    EditSession.OpResult handleCanvasTweenFps(Map<String, Object> payload, EditSession es) {
+        // 0.7.1：per-wall 补间帧率。fps=[1,60]；0/null → 清回默认（effectiveTweenFps=30）。
+        Object fpsRaw = payload.get("fps");
+        if (fpsRaw != null && !(fpsRaw instanceof Number)) {
+            return new EditSession.OpResult.Error("INVALID_PAYLOAD",
+                    "fps must be number or null");
+        }
+        return es.setTweenFps(fpsRaw == null ? null : ((Number) fpsRaw).intValue());
     }
 
     /**

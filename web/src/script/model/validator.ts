@@ -58,9 +58,9 @@ export const VOLUME_MAX = 2.0;
 export const PITCH_MIN = 0.5;
 export const PITCH_MAX = 2.0;
 
-/** SetElementProperty.property 白名单（后端 {@code ELEMENT_PROPERTIES}，8 项）。 */
+/** SetElementProperty.property 白名单（后端 {@code ELEMENT_PROPERTIES}，9 项）。 */
 export const ELEMENT_PROPERTIES: ReadonlySet<string> = new Set([
-    'x', 'y', 'w', 'h', 'rotation', 'opacity', 'text', 'fill',
+    'x', 'y', 'w', 'h', 'rotation', 'opacity', 'text', 'fill', 'color',
 ]);
 /** PlayTimeline.op 白名单（后端 {@code TIMELINE_OPS}）。 */
 export const TIMELINE_OPS: ReadonlySet<string> = new Set(['play', 'pause', 'seek']);

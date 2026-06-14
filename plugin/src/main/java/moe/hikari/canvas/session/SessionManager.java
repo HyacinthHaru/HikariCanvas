@@ -923,6 +923,37 @@ public final class SessionManager {
     }
 
     /**
+     * 0.7.3：脚本 {@code setElementLayer}（置顶/置底）路径 A——墙开着编辑器时走
+     * {@link moe.hikari.canvas.state.EditSession#moveElementToFront}（{@code mode="front"}）/
+     * {@link moe.hikari.canvas.state.EditSession#moveElementToBack}（其余视作 back）标准链 +
+     * 收尾链（推 reorder 的 state.patch〔remove + add 一对〕+ 投影脏区 + persistWall），与 clone /
+     * delete 路径 A 同档（前端实时可见 reorder，不再被 headless 临时 session 之后的 persist
+     * 静默覆盖）。无活跃 session → {@code NO_SESSION}（调用方走 headless）；元素不存在 / 所在层
+     * 锁住 → {@code FAILED}（不回退 headless，避免双路径语义分叉——同 clone / delete 路径）。
+     */
+    public moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome
+    applyScriptElementReorder(String wallId, String elementId, String mode,
+                              moe.hikari.canvas.web.OpPushCallback push,
+                              moe.hikari.canvas.render.ProjectionThrottler throttler) {
+        if (wallId == null || elementId == null) {
+            return moe.hikari.canvas.script.engine.ElementPropertyApplier
+                    .SessionOutcome.failed("invalid script element reorder args");
+        }
+        boolean front = "front".equals(mode);
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (!wallId.equals(s.wallId())) continue;
+            moe.hikari.canvas.state.EditSession es = s.editSession();
+            if (es == null) continue;
+            moe.hikari.canvas.state.EditSession.OpResult r =
+                    front ? es.moveElementToFront(elementId) : es.moveElementToBack(elementId);
+            return finishScriptElementStructuralOp(s, wallId, r, push, throttler,
+                    "applyScriptElementReorder");
+        }
+        return moe.hikari.canvas.script.engine.ElementPropertyApplier.SessionOutcome.noSession();
+    }
+
+    /**
      * clone / delete 路径 A 的共用收尾（照 {@link #applyScriptElementPatch} 的 Ok 分支）：
      * Ok → 推 patch（非空）+ 投影脏区 + persistWall → APPLIED；Error → FAILED（含错误码）。
      */

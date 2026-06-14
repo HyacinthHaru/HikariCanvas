@@ -254,4 +254,42 @@ class ScriptOpDispatcherLogicTest {
         assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
                 "repeatUntil body 内坏条件也应被预检拒");
     }
+
+    // ---------- 0.7.3-ultrareview：RandomBranch 分支 checkConditionSyntax 递归（K16 漏洞修复）----------
+
+    @Test
+    void checkConditionSyntax_randomBranch_thenBranchBadIf_rejected() {
+        // RandomBranch then 分支里嵌 If/坏条件 → 保存期预检应拒（K16 漏洞修复）
+        var badIf = new Action.If("(((", List.of(), List.of());
+        var actions = List.<Action>of(new Action.RandomBranch(50, List.of(badIf), List.of()));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
+                "RandomBranch then 分支内坏 If 条件应被保存期预检拒（K16）");
+    }
+
+    @Test
+    void checkConditionSyntax_randomBranch_elseBranchBadWaitUntil_rejected() {
+        // RandomBranch else 分支里嵌 WaitUntil/坏条件 → 同样被拒
+        var badWait = new Action.WaitUntil("(((", 5000);
+        var actions = List.<Action>of(new Action.RandomBranch(50, List.of(), List.of(badWait)));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
+                "RandomBranch else 分支内坏 WaitUntil 条件应被保存期预检拒（K16）");
+    }
+
+    @Test
+    void checkConditionSyntax_randomBranch_elseBranchBadRepeatUntil_rejected() {
+        // RandomBranch else 分支里嵌 RepeatUntil/坏条件 → 同样被拒
+        var badRU = new Action.RepeatUntil("(((", 5, List.of(new Action.Log("x")));
+        var actions = List.<Action>of(new Action.RandomBranch(50, List.of(), List.of(badRU)));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isPresent(),
+                "RandomBranch else 分支内坏 RepeatUntil 条件应被保存期预检拒（K16）");
+    }
+
+    @Test
+    void checkConditionSyntax_randomBranch_goodConditionsInBranches_passes() {
+        // RandomBranch 两个分支均含合法 If → 通过
+        var goodIf = new Action.If("var(\"user/x\") > 0", List.of(), List.of());
+        var actions = List.<Action>of(new Action.RandomBranch(50, List.of(goodIf), List.of(goodIf)));
+        assertTrue(ScriptOpDispatcher.checkConditionSyntax(actions).isEmpty(),
+                "RandomBranch 分支内合法条件应通过预检");
+    }
 }

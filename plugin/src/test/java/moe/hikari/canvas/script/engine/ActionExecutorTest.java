@@ -168,6 +168,18 @@ class ActionExecutorTest {
                 "超 2^53 整数精确域不收整");
     }
 
+    // ---------- 0.7.3-ultrareview：formatNumber 非有限 → "0"（变量库污染修复）----------
+
+    @Test
+    void formatNumber_nonFinite_returnsZero() {
+        assertEquals("0", ActionExecutor.formatNumber(Double.POSITIVE_INFINITY),
+                "Infinity → \"0\"，避免污染变量库");
+        assertEquals("0", ActionExecutor.formatNumber(Double.NEGATIVE_INFINITY),
+                "-Infinity → \"0\"");
+        assertEquals("0", ActionExecutor.formatNumber(Double.NaN),
+                "NaN → \"0\"");
+    }
+
     // ---------- setElementProperty（委托；双路径细节见 ElementPropertyApplierTest） ----------
 
     @Test
@@ -771,6 +783,103 @@ class ActionExecutorTest {
         TraceStep step = ex.execute(WALL, "actions/0", new Action.DeleteElement("e-9"));
         assertEquals("ok", step.result(), () -> String.valueOf(step.detail()));
         assertEquals(List.of("e-9"), deleteCalls, "applyDelete 经 seam 落到 delete()");
+    }
+
+    // ---------- 0.7.3-ultrareview：roundVariable StrictNumber 对齐 ----------
+
+    @Test
+    void roundVariable_floor_ok() {
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "3.7", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "floor"));
+        assertEquals("ok", step.result(), () -> String.valueOf(step.detail()));
+        assertEquals("3", valueOf("user:w-1/v"), "floor(3.7) = 3");
+    }
+
+    @Test
+    void roundVariable_ceil_ok() {
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "3.2", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "ceil"));
+        assertEquals("ok", step.result());
+        assertEquals("4", valueOf("user:w-1/v"), "ceil(3.2) = 4");
+    }
+
+    @Test
+    void roundVariable_round_half_up() {
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "2.5", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "round"));
+        assertEquals("ok", step.result());
+        // Java Math.round(2.5) = 3（half-up，非 half-even）
+        assertEquals("3", valueOf("user:w-1/v"), "round(2.5) = 3（half-up）");
+    }
+
+    @Test
+    void roundVariable_round_negative_half_asymmetric() {
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "-2.5", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "round"));
+        assertEquals("ok", step.result());
+        // Java Math.round(-2.5) = -2（向正无穷的 half-up 非对称）
+        assertEquals("-2", valueOf("user:w-1/v"), "round(-2.5) = -2（Java Math.round 语义）");
+    }
+
+    @Test
+    void roundVariable_nanString_error() {
+        // "NaN" 不符合 StrictNumber 文法 → error step（不写回，变量值不变）。
+        // 旧 Double.parseDouble("NaN") 会写脏 "NaN"；静默按 0 又吞错——取整非数值一律 error。
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "NaN", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "round"));
+        assertEquals("error", step.result(), () -> String.valueOf(step.detail()));
+        assertTrue(step.detail().contains("非数值"), step.detail());
+        assertEquals("NaN", valueOf("user:w-1/v"), "error 不写回，变量值保持原样");
+    }
+
+    @Test
+    void roundVariable_infinityString_error() {
+        // "Infinity" 不符合 StrictNumber 文法 → error step（不写回）
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "Infinity", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "floor"));
+        assertEquals("error", step.result());
+        assertEquals("Infinity", valueOf("user:w-1/v"), "error 不写回");
+    }
+
+    @Test
+    void roundVariable_hexString_error() {
+        // "0x1p4"（Double.parseDouble 接受但 StrictNumber 拒）→ error step
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "0x1p4", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "round"));
+        assertEquals("error", step.result());
+        assertEquals("0x1p4", valueOf("user:w-1/v"), "error 不写回");
+    }
+
+    @Test
+    void roundVariable_trailingSuffix_error() {
+        // "5d"（Double.parseDouble 旧版接受但 StrictNumber 拒）→ error step
+        store.create("user:w-1", "v", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-1/v", "5d", null);
+        TraceStep step = executor().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "ceil"));
+        assertEquals("error", step.result());
+        assertEquals("5d", valueOf("user:w-1/v"), "error 不写回");
+    }
+
+    @Test
+    void roundVariable_storeMissing_errorStep() {
+        TraceStep step = bare().execute(WALL, "b",
+                new Action.RoundVariable("user/v", "round"));
+        assertEquals("error", step.result());
     }
 
     @Test

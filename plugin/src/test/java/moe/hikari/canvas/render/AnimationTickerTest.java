@@ -607,4 +607,60 @@ class AnimationTickerTest {
         // 重载后帧里是新 state 的元素（e-2 轨道）——旧 e-1 不在
         assertEquals(Integer.MIN_VALUE, r.lastX(), "重载后渲染新 state（e-1 已不存在）");
     }
+
+    // ---------- P2-6：clearStaticDiff 线程契约（孤儿 FrameDiff 泄漏） ----------
+
+    /**
+     * P2-6 回归：补间末帧序列「先 renderStatic（异步投 Ticker 线程 computeIfAbsent 建 diff）
+     * 再 clearStaticDiff」后，staticDiffs <b>不</b>得残留该 wall 条目。
+     *
+     * <p>旧实现 clearStaticDiff 在调用线程同步 remove → 排在异步 renderStatic 的 computeIfAbsent
+     * <b>之前</b>执行 → 该条目永不被清（每个静态墙补间完泄漏一条 byte[mapCount][16384]）。
+     * 修复后 clearStaticDiff 同走 scheduler.execute，单线程 FIFO 保证 remove 排在 computeIfAbsent
+     * 之后，孤儿条目被关死。</p>
+     */
+    @Test
+    void clearStaticDiffAfterRenderStatic_leavesNoOrphan() {
+        FakeWallSource src = new FakeWallSource();
+        FakeRenderer r = new FakeRenderer();   // viewers=true → renderStatic 会 computeIfAbsent 建 diff
+        // 静态墙：源里有 wall，但不 play（renderStatic 内 entries.containsKey 为 false 才会建 diff）
+        src.walls.put("w-static", wall("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        AnimationTicker t = newTicker(src, r);
+
+        ProjectState frame = stateWith("e-1", LoopMode.LOOP, "tl-1", 1);
+
+        // 补间末帧顺序：renderStatic 投递在前，clearStaticDiff 投递在后
+        t.renderStatic("w-static", frame);
+        t.clearStaticDiff("w-static");
+
+        // 等 Ticker 线程把两道 trampoline 任务排空
+        t.flushSchedulerForTest();
+
+        assertFalse(t.hasStaticDiffForTest("w-static"),
+                "clearStaticDiff 应排在 renderStatic 的 computeIfAbsent 之后 → 无孤儿条目");
+        assertEquals(0, t.staticDiffCountForTest(), "staticDiffs 应彻底清空");
+    }
+
+    /**
+     * P2-6 子项：renderStatic 单独投递（无后续 clear）确实会建一条 diff——
+     * 反向锚定「上面那条测试的 0 残留是 clear 真生效，而非 renderStatic 根本没建 diff」。
+     */
+    @Test
+    void renderStaticAlone_createsStaticDiff() {
+        FakeWallSource src = new FakeWallSource();
+        FakeRenderer r = new FakeRenderer();   // viewers=true
+        src.walls.put("w-static", wall("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        AnimationTicker t = newTicker(src, r);
+
+        t.renderStatic("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        t.flushSchedulerForTest();
+
+        assertTrue(t.hasStaticDiffForTest("w-static"),
+                "renderStatic（有观察者）应 computeIfAbsent 建一条 staticDiff");
+
+        // 再 clearStaticDiff → 清掉
+        t.clearStaticDiff("w-static");
+        t.flushSchedulerForTest();
+        assertFalse(t.hasStaticDiffForTest("w-static"), "clearStaticDiff 后该条目被移除");
+    }
 }

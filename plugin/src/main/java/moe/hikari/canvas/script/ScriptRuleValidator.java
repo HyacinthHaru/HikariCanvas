@@ -37,9 +37,13 @@ public final class ScriptRuleValidator {
     public static final int NEAR_MAX = 32;
     /** blockLayout JSON 最大长度（null 当 "{}" 合法）。 */
     public static final int BLOCK_LAYOUT_MAX = 65536;
-    /** SetElementProperty.property 白名单。 */
+    /** SetElementProperty.property 白名单。
+     * 0.7.3 D3：加入 "color"（TextElement.color，setColor 友好积木 + 补间 color 分支用）。
+     * fill 保留：rect/circle/path/shape/brush/icon 仍用 fill；setElementProperty 通用动作
+     * 继续用 fill；仅 setColor 友好积木对 TextElement 用 color（TweenScheduler L434 color 分支）。
+     */
     public static final Set<String> ELEMENT_PROPERTIES =
-            Set.of("x", "y", "w", "h", "rotation", "opacity", "text", "fill");
+            Set.of("x", "y", "w", "h", "rotation", "opacity", "text", "fill", "color");
     /** PlayTimeline.op 白名单。 */
     public static final Set<String> TIMELINE_OPS = Set.of("play", "pause", "seek");
     /** PlaySound.scope 白名单。 */
@@ -341,6 +345,7 @@ public final class ScriptRuleValidator {
                         yield Optional.of("元素属性不在允许范围：" + e.getKey());
                     }
                     // text 空串是合法内容（ElementPropertyApplier.buildPatch 接受空文字）；
+                    // color 空串同理（hex 空串会失败，仍检查空）；
                     // 其余键（x/y/w/h/rotation/opacity/fill）空串会静默变 0 或 hex 失败，仍查空
                     if (!"text".equals(e.getKey()) && blank(e.getValue())) {
                         yield Optional.of("属性 " + e.getKey() + " 的值不能为空");
@@ -487,10 +492,15 @@ public final class ScriptRuleValidator {
                     yield Optional.of("随机概率需在 " + RANDOM_BRANCH_PROB_MIN + ".."
                             + RANDOM_BRANCH_PROB_MAX + " 之间（百分比）");
                 }
+                // RandomBranch 与 If 同语义——递增 ifDepth 并查 MAX_IF_DEPTH（双端对齐）
+                int depth = ifDepth + 1;
+                if (depth > MAX_IF_DEPTH) {
+                    yield Optional.of("if/randomBranch 嵌套超过 " + MAX_IF_DEPTH + " 层（depth=" + depth + "）");
+                }
                 // then / else 都可为空（与 If 同语义）；递归校验
-                Optional<String> thenErr = validateActions(a.then(), ifDepth);
+                Optional<String> thenErr = validateActions(a.then(), depth);
                 if (thenErr.isPresent()) yield thenErr;
-                yield validateActions(a.elseActions(), ifDepth);
+                yield validateActions(a.elseActions(), depth);
             }
             case Action.SetElementLayer a -> {
                 if (blank(a.elementId())) {

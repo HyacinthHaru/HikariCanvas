@@ -977,6 +977,7 @@ export const messages = {
                 propOpacity: '不透明度',
                 propText: '文字',
                 propFill: '填充',
+                propColor: '文字颜色',
                 // 0.7.1：发消息渠道 + 乘除运算。
                 channelChat: '聊天框',
                 channelActionbar: '动作栏',
@@ -2210,6 +2211,7 @@ export const messages = {
                 propOpacity: 'Opacity',
                 propText: 'Text',
                 propFill: 'Fill',
+                propColor: 'Text color',
                 // 0.7.1: message channel + scale op.
                 channelChat: 'Chat',
                 channelActionbar: 'Action bar',

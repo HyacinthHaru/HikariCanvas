@@ -664,9 +664,10 @@ export interface FriendlyElementDef {
  * show / hide / setText / setColor。字段标签复用现有 {@code script.fieldOptions.prop*} key
  * （横坐标 X / 纵坐标 Y / 宽度 / 高度 / 旋转 / 不透明度 / 文字 / 填充）。
  *
- * <p>{@code setColor} 用 {@code text} 字段输 hex（P1 从简，颜色选择器留后续）；{@code setText}
- * 用 {@code text} 字段（支持手打 {@code ${var:X}}）。每个 patch 键都在后端 {@code ELEMENT_PROPERTIES}
- * 白名单内（x/y/w/h/rotation/opacity/text/fill），保证「拖出即合法」。</p>
+ * <p>{@code setColor} 用 {@code color} 字段输 hex（0.7.3 D3 修复：原为 fill，但 TextElement
+ * 只有 color 属性，fill 键会被 applyTextPatch 拒绝）；{@code setText} 用 {@code text} 字段
+ * （支持手打 {@code ${var:X}}）。每个 patch 键都在后端 {@code ELEMENT_PROPERTIES}
+ * 白名单内（x/y/w/h/rotation/opacity/text/fill/color），保证「拖出即合法」。</p>
  */
 export const FRIENDLY_ELEMENT_DEFS: Record<string, FriendlyElementDef> = {
     moveTo: {
@@ -727,9 +728,9 @@ export const FRIENDLY_ELEMENT_DEFS: Record<string, FriendlyElementDef> = {
         kind: 'setColor',
         labelKey: 'script.friendly.setColor',
         fields: [
-            { name: 'fill', type: 'text', labelKey: 'script.fieldOptions.propFill' },
+            { name: 'color', type: 'text', labelKey: 'script.fieldOptions.propColor' },
         ],
-        defaultPatch: { fill: '#FFFFFF' },
+        defaultPatch: { color: '#FFFFFF' },
     },
 };
 

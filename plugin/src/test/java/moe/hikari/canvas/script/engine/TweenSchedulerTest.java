@@ -623,6 +623,58 @@ class TweenSchedulerTest {
                 "含变量颜色末帧应落变量字符串: " + entry);
     }
 
+    // ---------- P3-16：buildInterpolatedFrame 不得原地 mutate 共享 baseState ----------
+
+    /**
+     * P3-16 回归：补间中间帧产帧（{@code buildInterpolatedFrame}）<b>不得</b>原地 mutate
+     * {@code task.baseState()}——否则该 baseState 的 element ArrayList 会被 tick 线程并发 set，
+     * 而它同时被 renderStatic 异步在 Ticker 线程读 → 撕裂读。
+     *
+     * <p>旧实现 {@code new EditSession(task.baseState())} 按引用共享 layers/elements，
+     * {@code updateElement} 的 {@code elements().set(idx, ...)} 直接改 baseState；连续两次 tick 后
+     * baseState 里 rect 的 x 会被污染成插值值（50 / …）。修复后每帧 {@code deepCopyState} 拍独立
+     * 副本，baseState 的 from 值（x=0）始终不变。</p>
+     */
+    @Test
+    void p3_16_buildInterpolatedFrame_doesNotMutateSharedBaseState() {
+        // from x=0, to x=100；静态墙（animating=false 默认）走 buildInterpolatedFrame
+        fakeState = stateWithRect(0, 0);
+        Action.SetElementProperties move = new Action.SetElementProperties(
+                ELEMENT, Map.of("x", "100"), "moveTo");
+        Action.TweenBlock tb = new Action.TweenBlock(1000L, Easing.LINEAR, List.of(move));
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tb);
+
+        assertEquals(0, rectXIn(fakeState), "enqueue 后 baseState 的 from 值应为 0");
+
+        // 第一次中间帧 tick（local=0.25 → eased x≈25）
+        clock.set(250L);
+        scheduler.tickForTest();
+        assertEquals(0, rectXIn(fakeState),
+                "第一次中间帧产帧后 baseState 的 x 仍应为原始 0（产帧用的是深拷贝副本）");
+
+        // 第二次中间帧 tick（local=0.5 → eased x≈50）
+        clock.set(500L);
+        scheduler.tickForTest();
+        assertEquals(0, rectXIn(fakeState),
+                "第二次中间帧产帧后 baseState 的 x 仍应为原始 0（无跨帧污染）");
+
+        // renderStatic 确实被调（证明走的是静态墙产帧路径，而非空操作）
+        assertFalse(ticker.renderCalls.isEmpty(), "静态墙中间帧应 renderStatic");
+        assertTrue(scheduler.hasActive(WALL), "未到末帧 active 仍在");
+    }
+
+    /** 读取 ProjectState 中 ELEMENT 这个 rect 的 x（找不到返 Integer.MIN_VALUE）。 */
+    private static int rectXIn(ProjectState state) {
+        for (var layer : state.layers()) {
+            for (var el : layer.elements()) {
+                if (el.id().equals(ELEMENT)) return el.x();
+            }
+        }
+        return Integer.MIN_VALUE;
+    }
+
     // ---------- 辅助 helper ----------
 
     /** 构建包含一个 TextElement（指定 color）的 ProjectState。 */

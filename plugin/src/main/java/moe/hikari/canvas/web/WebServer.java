@@ -771,6 +771,7 @@ public final class WebServer {
                  "layer.set-active",
                  "canvas.resize",
                  "canvas.background",
+                 "canvas.tweenFps",
                  "canvas.grid",
                  "canvas.guides.set",
                  "timeline.create",

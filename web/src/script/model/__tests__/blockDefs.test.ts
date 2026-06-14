@@ -275,6 +275,24 @@ describe('blockDefs.FRIENDLY_ELEMENT_DEFS', () => {
         expect(FRIENDLY_ELEMENT_DEFS.moveTo.fields.map((f) => f.name)).toEqual(['x', 'y']);
         expect(FRIENDLY_ELEMENT_DEFS.moveTo.defaultPatch).toEqual({ x: '0', y: '0' });
     });
+
+    // ---- 0.7.3 D3：setColor 产出 color 键（不是 fill）修复 ----
+    it('setColor 字段 = color（不是 fill），defaultPatch.color = #FFFFFF', () => {
+        // 回归：旧版 setColor 的 fields[0].name='fill' + defaultPatch={fill:'#FFFFFF'}，
+        // 导致补间引擎把 fill 键发给 TextElement → applyTextPatch 抛"unknown text field: fill"
+        // + from==to（fill 兜底成目标色）→ 文字变色补间既不动画也不落盘。
+        // 修复后 patch 键为 color，后端 color 分支（TweenScheduler L434）端到端可达。
+        const def = FRIENDLY_ELEMENT_DEFS.setColor;
+        expect(def.fields.map((f) => f.name)).toEqual(['color']);
+        expect(def.defaultPatch).toEqual({ color: '#FFFFFF' });
+    });
+
+    it('setColor defaultPatch 键在 ELEMENT_PROPERTIES 白名单内（color 已加入）', () => {
+        // 双重确认：setColor 产出 color → ELEMENT_PROPERTIES 需含 color → validator 放行
+        expect(ELEMENT_PROPERTIES.has('color')).toBe(true);
+        const k = Object.keys(FRIENDLY_ELEMENT_DEFS.setColor.defaultPatch)[0];
+        expect(ELEMENT_PROPERTIES.has(k)).toBe(true);
+    });
 });
 
 describe('blockDefs.FRIENDLY_PALETTE_KINDS', () => {
