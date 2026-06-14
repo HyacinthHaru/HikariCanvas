@@ -88,7 +88,7 @@ ${var:user/红队比分}                            完整命名
 ${var:红队比分}                                 简写（自动加 user/ 前缀）
 ${var:bedwars/score}                            插件变量
 ${var:server.time}                              系统变量（点分号 alias 兼容）
-${var:papi:%player_name%}                       PAPI
+${var:papi/%player_name%}                        PAPI（斜杠形态；亦接受 ${var:papi.player_name} 点号形态）
 
 # fallback 语法
 ${var:bedwars/score|fallback=0}                 变量不存在 / 过期时显示 0
@@ -111,6 +111,11 @@ ${var:eta_minutes|format=int|suffix=min}
   侧约定一致）
 - `${var:server.time}` 等系统点分号 alias **暂未实现完整映射**（P3-J 仅 wall.* / scoreboard.\*）；
   系统变量当前以 slash 形式访问：`${var:system/server.time}`。完整 dot-alias 留 0.4.1+
+- **PAPI 形态（实测）**：`resolveFullName`（双端）**不解析 `papi:` 冒号语法**——`${var:papi:%xxx%}` 会按
+  字面 `papi:%xxx%` 查 store（必然 miss → fallback）。实际可用形态是 `${var:papi/%player_name%}`（斜杠）
+  或 `${var:papi.player_name}`（点号）：interpolator resolve miss → `notifyDynamicLookup` →
+  {{PapiVariableBridge}} 把 `%xxx%` 编码成内部 store key `papi/pct_xxx_pct` 注册 + 5s 刷新。冒号语法是
+  早期纸面设计残留，**代码从未支持**。
 
 ---
 
@@ -220,7 +225,7 @@ VariableStore 变更通过 state.patch 推到客户端：
 
 - `namespace`：用于在 placeholder 文本里引用的 namespace（如 `${var:system/server.time}`）。
 - `displayName`：UI 显示分组名（picker 标题等）。
-- `dynamic`：是否为动态 namespace（{@link VariableProvider#isDynamic()}）；动态 namespace `keys` 始终为空，编辑器应给出模板字符串说明（如 `scoreboard.<obj>.<player>` / `papi:%placeholder%`）。
+- `dynamic`：是否为动态 namespace（{@link VariableProvider#isDynamic()}）；动态 namespace `keys` 始终为空，编辑器应给出模板字符串说明（如 `scoreboard.<obj>.<player>` / `papi/%placeholder%`）。
 - `keys[i].key`：完整 key（不含 namespace 前缀）。
 - `keys[i].type`：`STRING` / `NUMBER` / `BOOLEAN` / `COLOR`。
 - `keys[i].description`：人类可读说明（可选）。
@@ -458,8 +463,8 @@ public class BedWarsPlugin extends JavaPlugin {
 │   bedwars/match_a.blue_score    │
 │   bedwars/match_a.mvp           │
 │ ▼ 🔌 PAPI                        │
-│   papi:%player_name%             │
-│   papi:%server_uptime%           │
+│   papi/%player_name%             │
+│   papi/%server_uptime%           │
 │ ▼ 👤 我的变量                    │
 │   user/红队比分                  │
 │   user/下一班车                  │
@@ -526,9 +531,9 @@ public final class PapiVariableBridge implements VariableProvider {
 
 | 玩家语法 | store fullName | tracker 内 |
 |---|---|---|
-| `${var:papi:%player_name%}` | `papi/pct_player_name_pct` | 原文 `%player_name%` |
+| `${var:papi/%player_name%}`（斜杠）/ `${var:papi.player_name}`（点号） | `papi/pct_player_name_pct` | 原文 `%player_name%` |
 
-`handleDynamic` 接受两种形态（编码 / 原文 dot+slash），统一编码为 `pct_<inner>_pct`；refresh 时按 tracker 内原文调 PAPI、按 encoded key 写 store。**P3-K 实装时 interpolator 侧未做编码层**——`${var:papi:%xxx%}` 语法的 interpolator 编码留 P3-M 一同接入。
+`handleDynamic` 接受两种形态（编码 `pct_xxx_pct` / 原文 `%xxx%`，前缀走 `papi/` 斜杠或 `papi.` 点号），统一编码为 `pct_<inner>_pct`；refresh 时按 tracker 内原文调 PAPI、按 encoded key 写 store。**实测纠正**：interpolator（`resolveFullName`，双端）对 papi namespace **不做任何特殊语法转换**——既不解析 `papi:` 冒号，也不主动编码 `%`。可用路径是玩家直接写 `${var:papi/%xxx%}` 或 `${var:papi.xxx}`，interpolator 按字面 resolve miss → `notifyDynamicLookup("papi/...")` → 本桥接 hook 接管编码 + 注册。`papi:` 冒号语法（早期 §3.1 纸面设计）**代码从未实现**。
 
 **ACL**：HikariCanvas 不做额外 ACL，完全信任 PAPI（详见 §9.3）。
 
@@ -541,7 +546,8 @@ PAPI placeholder 自动 wrap 为 `papi/<encoded>` 变量；TTL 默认 5s（PAPI 
 零外部依赖的"时刻表" provider，让玩家不依赖第三方铁路插件也能做基础站牌。**0.4.0 bugfix 后**支持每 wall 独立的分钟 / 秒精度，并把 `is_arriving` 阈值改为可配（默认 60s）。
 
 - 玩家在 wall 的 "Schedule Manager" panel 配时刻表 + 选精度（minute / second）
-- 内置 provider 暴露 7 个变量（namespace = `schedule:<wallId>`）：
+- 内置 provider 暴露 **15 个变量**（namespace = `schedule:<wallId>`；8 个基础 + 第二班次 `next2_*` 7 个，
+  M28-enhance 扩展。实测见 {{ManualScheduleProvider}}.ALL_KEYS）：
 
 | 变量 | 类型 | 示例 | 说明 |
 |---|---|---|---|
@@ -549,9 +555,19 @@ PAPI placeholder 自动 wrap 为 `papi/<encoded>` 变量；TTL 默认 5s（PAPI 
 | `next_destination` | STRING | `"郑州东站"` | 下一班车终点 |
 | `eta_minutes` | NUMBER | `"12"` | 距下一班车几分钟（向下兼容，整除丢秒） |
 | `eta_seconds` | NUMBER | `"742"` | **0.4.0 bugfix**：距下一班车几秒（秒精度主用） |
+| `eta_mmss` | STRING | `"12:22"` | **M28-enhance**：距下一班车 MM:SS 格式（超 99min 仍累加，如 `"150:30"`） |
 | `is_arriving` | BOOLEAN | `"true"` | eta ≤ `arriving-threshold-seconds` 时为 true |
 | `arrival_status` | STRING | `"进站中"` / `""` | **0.4.0 bugfix**：进站中文案 / 空闲文案（config 可改） |
 | `precision` | STRING | `"minute"` / `"second"` | **0.4.0 bugfix**：当前 wall 精度 |
+| `next2_departure` | STRING | `"08:45"` | **M28-enhance**：第二班车出发时间 |
+| `next2_destination` | STRING | `"郑州东站"` | 第二班车终点 |
+| `next2_eta_minutes` | NUMBER | `"27"` | 距第二班车几分钟 |
+| `next2_eta_seconds` | NUMBER | `"1620"` | 距第二班车几秒 |
+| `next2_eta_mmss` | STRING | `"27:00"` | 第二班车 MM:SS 格式 |
+| `next2_is_arriving` | BOOLEAN | `"false"` | 第二班车 ETA ≤ 阈值 |
+| `next2_arrival_status` | STRING | `"进站中"` / `""` | 第二班车进站文案 / 空闲文案 |
+
+> 单 entry 时 `next2_*` = 该 entry 明天循环（ETA +24h）；0 entry 时 `next2_*` 全空。
 
 **config.yml**（默认值）：
 
@@ -1164,6 +1180,11 @@ CREATE TABLE wall_rail_bindings (
 4. JOIN `rail_stations` 拿 terminus name
 5. 暴露到 `schedule:<wallId>/*` 变量（兼容 0.4.0 schedule namespace）
 
+实测（{{RailScheduleProvider}}.ALL_RAIL_KEYS）：rail-bound wall 共 push **29 个 key** =
+**15 个与 ManualSchedule 共享的基础 key**（`SHARED_BASE_KEYS`，让旧 wall 文本无感升级）+
+**14 个 0.4.4 车次专属 key**（`RAIL_ONLY_KEYS`，next 7 + next2 7）。`unbind` 时只删 14 个 rail-only key，
+共享 15 个保留交回 ManualScheduleProvider。
+
 **关键**：每站时刻**精确从 rail_timetable 读**，不再走"travel_seconds 均匀推算"。
 这样支持站间不均匀（如长区间 vs 短区间）+ 大站快车跳站 + 区间车不到全线。
 
@@ -1250,16 +1271,27 @@ ${var:schedule.next_notes}
 
 ### 18.6 ACL / 权限节点
 
-- `canvas.rail.line.create` (default: true) — 任何玩家可建线路
-- `canvas.rail.line.edit.own` (default: true) — owner 可改
-- `canvas.rail.line.edit.any` (default: op) — admin
-- `canvas.rail.line.delete.own / .any` (default: true / op)
-- `canvas.rail.run.edit.own / .any`  — 车次同款 ACL（继承线路 owner）
-- `canvas.rail.wall.bind` (default: true) — wall 绑定（wall 自身鉴权同 schedule）
+实测（{{RailOpDispatcher}}.checkPermission + paper-plugin.yml）— **5 个 rail 节点 + 复用 schedule.any**，
+**没有** `canvas.rail.run.edit.*` / `canvas.rail.station.*` 独立节点：
 
-### 18.7 WS 协议（新 11 个 op）
+- `canvas.rail.line.create` (default: true) — 任何玩家可建线路
+- `canvas.rail.line.edit.own` (default: true) — line owner 可改
+- `canvas.rail.line.edit.any` (default: op) — admin
+- `canvas.rail.line.delete.own` (default: true) / `canvas.rail.line.delete.any` (default: op)
+- `canvas.rail.wall.bind` (default: true) — wall 绑定（wall owner）；**非 owner** 走 `canvas.schedule.any`（op）
+- **station.* / run.* / run.timetable.set 全部复用 `canvas.rail.line.edit.own/.any`**（按所属线路 owner 判定，
+  非每张子表配独立 owner 字段）；`rail.line.delete` 走 `delete.own/.any`；`rail.line.list / rail.line.detail`
+  完全开放（只读）。
+
+### 18.7 WS 协议（新 13 个 op）
+
+> **实测**（{{RailOpDispatcher}} switch）共 **13 op**：除下列 11 个写/查 op 外，另有 2 个只读 op
+> `rail.line.list`（列全部线路）+ `rail.line.detail { lineId }`（聚合返该线 stations + runs +
+> timetableByRun，单接口避 N+1，0.4.5 P1 补）；二者权限完全开放（只读）。
 
 ```
+rail.line.list                              ← 0.4.4 / 只读
+rail.line.detail        { lineId }          ← 0.4.5 P1 / 只读聚合
 rail.line.create        { name, code?, color? }
 rail.line.update        { lineId, name?, code?, color? }
 rail.line.delete        { lineId }
@@ -1287,7 +1319,7 @@ rail.wall.bind          { wallId, lineId?, stationId?, direction }
 |---|---|---:|
 | **P1** | V016 5 表 migration + 5 DAO（LineDao / StationDao / RunDao / TimetableDao / BindingDao）+ record + Auto-generator helper（首站时间 + 站间秒 + 跳站集合 → timetable rows） | 12h |
 | **P2** | RailScheduleProvider 计算（按 timetable 精确查 + 兼容旧 ManualSchedule fallback） | 10h |
-| **P3** | 11 个 WS op + 6 个 `canvas.rail.*` 权限节点 + RailOpDispatcher + AuditLog | 8h |
+| **P3** | 13 个 WS op（含 2 只读 list/detail）+ 5 个 `canvas.rail.*` 权限节点（run/station 复用 line.edit）+ RailOpDispatcher + AuditLog | 8h |
 | **P4** | 前端铁路网络管理 modal（线路 + 站点 + 车次 + 时刻表 + 自动生成对话框 + 拖动排序） | 16h |
 | **P5** | Schedule Manager modal 加铁路绑定段 + 车次语义变量预览 + i18n + 单测 + docs | 8h |
 | **P6** | 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push | 6h |

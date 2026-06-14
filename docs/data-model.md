@@ -1,9 +1,11 @@
 # 数据模型
 
-**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14
-**适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式、迁移策略
+**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14；**代码对齐回填 · 2026-06-14（迁移至 V017）**
+**适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式（规划中，未实装）、迁移策略
 
 本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。
+
+> **代码对齐说明（2026-06-14）**：本文档与当前代码（`plugin/src/main/resources/db-migrations/` 最高 V017、`plugin/src/main/java/moe/hikari/canvas/storage/`、`deploy/FrameDeployer.java`）逐条核对回填。当前 DB schema 已演进到 **V017**（V009 跳号未落地脚本）。`.canvas` 工程文件格式（§4）为**规划设计，当前版本完全未实装**（后端无 Zip 流、前端无 JSZip、无导入导出 UI）。
 
 > **M5.5 重构（2026-04-27）**：合并 `drafts` + `sign_records` → 单一 `walls` 表；`pool_maps.state` 由三态收为两态（FREE/RESERVED）；废止 commit 流程，新增 `published_at` 标签。
 
@@ -15,12 +17,12 @@
 
 | 存储位置 | 内容 | 生命周期 |
 | --- | --- | --- |
-| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计、**image_uploads 配额表（M13）** | 跨服务器重启；随世界快照备份 |
+| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计、image_uploads 配额表（M13）、用户变量 / 别名 / 全局变量、列车时刻表、铁路网络、墙脚本 | 跨服务器重启；随世界快照备份 |
 | `ItemFrame` PDC | `wall_id` / `slot` 标签（`published_at` 不再写入，2026-05-14 砍） | 随世界文件 |
 | 文件：`templates/*.yml` | 模板定义 | 人工管理 |
 | 文件：`user-templates/<uuid>/` | 玩家上传模板（v1.x） | 按玩家 uuid 组织 |
 | 文件：`fonts/*.ttf` / `*.woff2` | 字体 | 人工管理 |
-| 文件：`.canvas` 工程导出 | 玩家导出的工程 | 外部管理 |
+| 文件：`.canvas` 工程导出 | 玩家导出的工程（**规划中，当前未实装**） | 外部管理 |
 | **文件：`uploads/<sha256[:16]>.png`（M13）** | 玩家上传的图片（hash 内容寻址，跨 wall 引用同一文件不重复存） | 按 last_used_at LRU 清理；删 wall 不立即清 |
 
 ---
@@ -99,6 +101,7 @@ CREATE TABLE walls (
   published_at  INTEGER,                   -- nullable timestamp；NULL=可编辑，非 NULL=已锁定（lock 时间戳，2026-05-14 起语义化）
   template_id   TEXT,                      -- M6 模板系统填，源模板 ID
   template_version INTEGER,                -- M6 当时模板版本
+  protocol_version INTEGER NOT NULL DEFAULT 1, -- V006（M8-B）加：标记 project_json 形态（1=v1 / 2=v2 layered）
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -108,6 +111,7 @@ CREATE UNIQUE INDEX idx_walls_alias    ON walls(alias) WHERE alias IS NOT NULL;
 CREATE INDEX idx_walls_owner       ON walls(owner_uuid);
 CREATE INDEX idx_walls_published   ON walls(published_at) WHERE published_at IS NOT NULL;
 CREATE INDEX idx_walls_updated     ON walls(updated_at DESC);
+CREATE INDEX idx_walls_protocol_version ON walls(protocol_version);  -- V006
 ```
 
 **唯一性：**
@@ -209,7 +213,7 @@ v2 形态:
 CREATE TABLE audit_log (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   ts           INTEGER NOT NULL,
-  event        TEXT NOT NULL,              -- 'AUTH_OK' | 'AUTH_FAILED' | 'SESSION_BEGIN/CONFIRM/CANCEL' | 'WALL_PUBLISH/UNPUBLISH/DELETE' | 'POOL_RESERVE/RETURN/EXPAND/LEAK/ATTACH' | 'CLEANUP' | ...
+  event        TEXT NOT NULL,              -- 见下方「实际记录的事件清单」
   player_uuid  TEXT,                       -- 可空（如未认证阶段）
   player_name  TEXT,
   session_id   TEXT,
@@ -221,6 +225,25 @@ CREATE INDEX idx_audit_ts ON audit_log(ts);
 CREATE INDEX idx_audit_player ON audit_log(player_uuid);
 CREATE INDEX idx_audit_event ON audit_log(event);
 ```
+
+**实际记录的事件清单（2026-06-14 按代码 `auditLog.record(...)` 调用点核对，约 30+ 个）：**
+
+| 分组 | 事件字面量 | 出处 |
+| --- | --- | --- |
+| 认证 | `AUTH_OK` | `SessionManager`（认证成功；`AUTH_FAILED` 是 WS/HTTP 错误响应码，不入 audit 表） |
+| 会话 | `SESSION_OPEN` `SESSION_BEGIN` `SESSION_CONFIRM` `SESSION_CANCEL` | `SessionManager` |
+| 墙 | `WALL_ALIAS` `WALL_LOCK` `WALL_UNLOCK` `WALL_DELETE` | 命令族 / lock dispatcher |
+| 地图池 | `POOL_INITIALIZED` `POOL_RESERVE` `POOL_BIND_WALL` `POOL_RELEASE_WALL` `POOL_RELEASE_TO_FREE` `POOL_EXPAND` `POOL_LEAK` `POOL_ORPHAN_ROW` | `MapPool` / 启动扫描 |
+| 图片上传 | `IMAGE_UPLOAD_OK` `IMAGE_UPLOAD_REJECTED` | `UploadHandler` |
+| 安全 | `PERMISSION_DENIED` `PLUGIN_NAMESPACE_DENIED` `TOKEN_RATE_LIMIT_EXCEEDED` | 鉴权 / Plugin API / token rate limit |
+| 变量（命令） | `VARIABLE_COMMAND_SET` `VARIABLE_COMMAND_DELETE` | `/canvas var` 命令 |
+| 变量（WS op） | `VARIABLE_CREATE` `VARIABLE_UPDATE` `VARIABLE_SET` `VARIABLE_DELETE` `VARIABLE_BIND`（global 走 `VARIABLE_GLOBAL_*` 前缀） | `VariableOpDispatcher`（按 op 拼前缀 + 动作名） |
+| 变量别名 | `VARIABLE_ALIAS_SET` `VARIABLE_ALIAS_CLEAR` | `VariableAliasDispatcher`（0.4.2） |
+| 时刻表 | `SCHEDULE_UPSERT` `SCHEDULE_ENTRY_ADD` `SCHEDULE_ENTRY_UPDATE` `SCHEDULE_ENTRY_DELETE` | `ScheduleOpDispatcher`（0.4.0） |
+| 铁路网络 | `RAIL_LINE_CREATE/UPDATE/DELETE` `RAIL_STATION_ADD/UPDATE/DELETE` `RAIL_RUN_CREATE/UPDATE/DELETE` `RAIL_TIMETABLE_SET` `RAIL_WALL_BIND` | `RailOpDispatcher`（0.4.4） |
+| 脚本 | `SCRIPT_CREATE/UPDATE/DELETE/ENABLE/TEST` `SCRIPT_COMMAND_EXECUTED` `SCRIPT_RUN_BLOCKED` | `ScriptOpDispatcher` / 脚本执行引擎（0.7.0） |
+
+> 注：`SESSION_CLOSED` / `WALL_NOT_FOUND` / `SCRIPT_INVALID` / `SCRIPT_NOT_FOUND` / `SCRIPT_QUOTA_EXCEEDED` / `SCRIPT_ENGINE_UNAVAILABLE` 等是 WS `Envelope.error(...)` 的**错误码**（返回给前端），并非全部都写入 audit 表——以代码 `auditLog.record(...)` 实际调用为准。
 
 **保留策略：** 默认保留 90 天，后台任务定期 `DELETE WHERE ts < now - 90d`。可配置。
 
@@ -338,6 +361,119 @@ ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute';
 - **migration V013**：现有 wall 行 ALTER ADD COLUMN DEFAULT 'minute'，无数据丢失，向下兼容
 - **级联删除**：wall 删除时 cascade（FK CASCADE 已声明；ScheduleDao.deleteByWall 显式调用兜底）
 
+### 2.9.1 表：`variable_aliases`（0.4.2 引入，V014）
+
+per-wall 变量别名。别名仅 UI 展示用（picker / panel / chip），**不参与 `${var:...}` 解析**。所有 namespace 通用（user / system / papi / scoreboard / schedule / plugin 等）。
+
+```sql
+CREATE TABLE variable_aliases (
+    wall_id     TEXT    NOT NULL,
+    full_name   TEXT    NOT NULL,             -- 完整变量名（含 namespace）
+    alias       TEXT    NOT NULL,             -- 玩家起的短别名
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (wall_id, full_name),         -- 同 wall 内一个 fullName 只一个别名
+    FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_variable_aliases_wall ON variable_aliases(wall_id);
+```
+
+### 2.9.2 表：`user_global_variables`（0.4.3 引入，V015）
+
+全服共享的用户变量（`userglobal/<name>` namespace；`name` 单字段全服唯一，**不带 wallId**）。补 0.4.0 user 变量 per-wall 不能跨画布的遗留。
+
+```sql
+CREATE TABLE user_global_variables (
+    name           TEXT    PRIMARY KEY,        -- 不含 userglobal/ 前缀；全服唯一
+    owner_uuid     TEXT    NOT NULL,           -- 创建者
+    owner_name     TEXT    NOT NULL,           -- 创建时玩家名
+    type           TEXT    NOT NULL,           -- 'STRING' / 'NUMBER' / 'BOOLEAN' / 'COLOR'
+    default_value  TEXT,                       -- fallback 链中段
+    current_value  TEXT,                       -- 当前值
+    bound_to       TEXT,                       -- 绑定的插件 namespace（可空）
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+
+CREATE INDEX idx_ugvar_owner ON user_global_variables(owner_uuid);
+CREATE INDEX idx_ugvar_bound ON user_global_variables(bound_to) WHERE bound_to IS NOT NULL;
+```
+
+- **无 wall 外键**：全服级状态，不随某个 wall cascade 删除；`.canvas` 工程文件不含 userglobal（跨服务器无意义）
+- **配额**：per-owner 500 + 全服 10000（config 可调）
+
+### 2.9.3 表：铁路网络 5 表（0.4.4 引入，V016）
+
+完整铁路网络抽象：线路 + 站点 + 车次（含服务类型 / 编组 / 区间 / 备注）+ 每站精确时刻表 + wall 绑定。`RailScheduleProvider` 接管 rail-bound wall，从 `rail_timetable` 精确查站时刻（非估算）。
+
+```sql
+CREATE TABLE rail_lines (
+    id           TEXT    PRIMARY KEY,    -- "line-<8hex>" 或玩家命名
+    name         TEXT    NOT NULL,
+    code         TEXT,                   -- 短代号（"L1" / "M2"）；可空
+    color        TEXT,                   -- "#RRGGBB"；可空
+    owner_uuid   TEXT    NOT NULL,
+    owner_name   TEXT    NOT NULL,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE rail_stations (
+    id           TEXT    PRIMARY KEY,
+    line_id      TEXT    NOT NULL,
+    name         TEXT    NOT NULL,
+    code         TEXT,
+    sort_order   INTEGER NOT NULL,
+    is_terminus  INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL,
+    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE CASCADE
+);
+
+CREATE TABLE rail_runs (
+    id                TEXT    PRIMARY KEY,
+    line_id           TEXT    NOT NULL,
+    run_number        TEXT    NOT NULL,
+    direction         TEXT    NOT NULL,                  -- "up" / "down"
+    service_type      TEXT    NOT NULL DEFAULT 'local',  -- 4 内置（local/express/section/limited）+ 自定义字符串
+    cars              INTEGER,                           -- 编组节数；可空
+    start_station_id  TEXT,                              -- null = 线路首站
+    end_station_id    TEXT,                              -- null = 线路末站
+    notes             TEXT,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    UNIQUE (line_id, run_number),
+    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE CASCADE,
+    FOREIGN KEY (start_station_id) REFERENCES rail_stations(id) ON DELETE SET NULL,
+    FOREIGN KEY (end_station_id) REFERENCES rail_stations(id) ON DELETE SET NULL
+);
+
+CREATE TABLE rail_timetable (
+    run_id          TEXT    NOT NULL,
+    station_id      TEXT    NOT NULL,
+    arrival_time    TEXT,                  -- HH:mm:ss；首站可空
+    departure_time  TEXT,                  -- HH:mm:ss；末站可空
+    stops_here      INTEGER NOT NULL DEFAULT 1,  -- 0 = 跳站（大站快车）
+    PRIMARY KEY (run_id, station_id),
+    FOREIGN KEY (run_id) REFERENCES rail_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY (station_id) REFERENCES rail_stations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE wall_rail_bindings (
+    wall_id      TEXT    PRIMARY KEY,
+    line_id      TEXT,                     -- NULL = 未绑定（fallback ManualScheduleProvider 旧路径）
+    station_id   TEXT,
+    direction    TEXT,                     -- "up" / "down" / "both"
+    updated_at   INTEGER NOT NULL,
+    FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE,
+    FOREIGN KEY (line_id) REFERENCES rail_lines(id) ON DELETE SET NULL,
+    FOREIGN KEY (station_id) REFERENCES rail_stations(id) ON DELETE SET NULL
+);
+```
+
+- **rail + manual 共享 `schedule:*` namespace**：RailScheduleProvider 接管的 wall 让 ManualScheduleProvider 跳过 push，避免双写同 key
+- **`wall_rail_bindings.line_id IS NULL` 走 fallback**：兼容只用 ManualSchedule 的旧 server
+
 ### 2.10 表：`wall_scripts`（0.7.0 引入，V017）
 
 墙脚本规则（视觉运行时；契约 `docs/scripting.md §2`）。脚本不进 ProjectState（D7），
@@ -401,11 +537,19 @@ CREATE INDEX IF NOT EXISTS idx_wall_scripts_wall ON wall_scripts(wall_id);
 
 ---
 
-## 4. `.canvas` 工程文件格式
+## 4. `.canvas` 工程文件格式（规划中 · 当前版本未实装）
 
-玩家在编辑器中可「导出工程」供离线保存 / 分享。
+> **⚠️ 实装状态（2026-06-14 核对）：本节描述的 `.canvas` zip 导出 / 导入功能当前完全未实装。**
+> 代码核对结论：
+> - 后端无任何 `java.util.zip`（ZipOutputStream / ZipInputStream）使用；
+> - 前端 `web/` 无 `JSZip` / `file-saver` 依赖（`package.json` / `package-lock.json` 均无）；
+> - 前端无「导出工程」/「导入 `.canvas`」UI 入口或下载逻辑。
+>
+> 工程文件扩展名 `.canvas` 仍是项目标识（见 CLAUDE.md），下文 §4.1–§4.5 为**规划设计**，作为未来实装的契约保留，**不代表现状**。当前玩家作品仅以 `walls.project_json` blob 形式存于服务端 DB，跨服务器分享需走 DB 级备份/迁移，无单文件导出。
 
-### 4.1 文件结构
+玩家在编辑器中（规划功能）可「导出工程」供离线保存 / 分享。
+
+### 4.1 文件结构（规划）
 
 `.canvas` 是 **zip 压缩包**，扩展名 `.canvas`。内部：
 
@@ -465,7 +609,7 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 3. manifest 填充
 4. 打 zip → 浏览器下载
 
-导出**不**经过服务器存储，完全在浏览器端用 JSZip 打包。
+导出**不**经过服务器存储，完全在浏览器端用 JSZip 打包。（**注：JSZip 依赖与该导出链路当前均未引入 / 未实装；本小节为规划设计。**）
 
 ---
 
@@ -505,18 +649,44 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 ### 6.2 DB 迁移流程
 
 ```
-src/main/resources/db-migrations/
+plugin/src/main/resources/db-migrations/
 ├── V001__initial.sql
-├── V002__add_template_usage.sql
-├── V003__add_soft_delete.sql
-└── ...
+├── V002__drafts.sql
+├── ...
+└── V017__wall_scripts.sql
 ```
+
+**迁移清单不靠目录扫描** —— `MigrationRunner.MIGRATIONS` 静态 `List` 显式声明每个 `(version, 资源路径)`（shadow jar 下 classpath 目录扫描不稳定）。新增迁移必须同时落 SQL 文件 + 往该列表末尾追加条目。
+
+**当前迁移清单（核对 `MigrationRunner.java`，最高 V017；V009 跳号未落地脚本）：**
+
+| 版本 | 文件 | 引入版本 | 主要内容 |
+| --- | --- | --- | --- |
+| V001 | `V001__initial.sql` | M2 | 初始 4 表：`pool_maps` / `sign_records` / `audit_log` / `template_usage` |
+| V002 | `V002__drafts.sql` | M2-M5 | 加 `drafts` 表（二段式编辑模型） |
+| V003 | `V003__drafts_add_maps.sql` | M3 | `drafts` 加 maps 字段 |
+| V004 | `V004__drafts_wall_id_alias.sql` | M4 | `drafts` 加 wall_id / alias |
+| V005 | `V005__walls_unified.sql` | M5.5 | **重构**：DROP `sign_records` + `drafts`，drop+recreate `pool_maps`（去 `sign_id`），新建 `walls` 表 |
+| V006 | `V006__walls_protocol_version.sql` | M8-B | `walls` 加 `protocol_version` 列（标记 project_json 形态 v1/v2） |
+| V007 | `V007__image_uploads.sql` | M13 | 新建 `image_uploads` 表（含 `refcount` 列） |
+| V008 | `V008__templates.sql` | M14 | 新建 `templates` 表（玩家模板） |
+| V009 | （跳号） | — | 迭代中预留，**未落地脚本**，`MIGRATIONS` 列表无此项 |
+| V010 | `V010__remove_refcount.sql` | M16-P6 | `ALTER TABLE image_uploads DROP COLUMN refcount` |
+| V011 | `V011__user_variables.sql` | 0.4.0 | 新建 `user_variables` 表 |
+| V012 | `V012__wall_schedules.sql` | 0.4.0 | 新建 `wall_schedules` + `schedule_entries` 表 |
+| V013 | `V013__schedule_precision.sql` | 0.4.0 bugfix | `wall_schedules` 加 `precision` 列 |
+| V014 | `V014__variable_aliases.sql` | 0.4.2 | 新建 `variable_aliases` 表（per-wall 别名） |
+| V015 | `V015__user_global_variables.sql` | 0.4.3 | 新建 `user_global_variables` 表（全服唯一） |
+| V016 | `V016__rail_network.sql` | 0.4.4 | 铁路网络 5 表：`rail_lines` / `rail_stations` / `rail_runs` / `rail_timetable` / `wall_rail_bindings` |
+| V017 | `V017__wall_scripts.sql` | 0.7.0 | 新建 `wall_scripts` 表（视觉运行时脚本） |
+
+> 时间轴（0.6）**不建表**——序列化进 `walls.project_json` blob（见 §2.4.2），故 schema 版本无对应条目。
 
 启动时：
 1. 读 `schema_version` 表最大 version `N`
-2. 查找文件系统中 `V(N+1)__*.sql` ... 按序应用
+2. 遍历 `MigrationRunner.MIGRATIONS`，对 `version > N` 的条目按序应用
 3. 每应用一个脚本 → 在 `schema_version` 表插入新 row
-4. 全流程在一个事务里；失败则回滚并拒绝启动
+4. **每个 migration 各自包一个事务**（M15.4 P0-28），失败回滚不留半态；可选 `auto-backup`（pre-release 默认关）
 
 **0.6 例外（无 schema 变更）：** 0.6 时间轴把协议版本由 2 升至 3（详见 `protocol.md`），但**不引入新的 DB schema 版本**——无新表、无 `ALTER`，`timelines` / 关键帧轨全在 `walls.project_json` blob 层加（§2.4.2）。与历来"每次 DB 变更 +1"（§6.1）的惯例对照：本次变更不触碰任何表结构，故 `schema_version` 不动；版本演进体现在 `project_json` 内部的 `protocolVersion` 字段（lazy on-write 写成 3），而非 schema 整数。
 
@@ -531,12 +701,16 @@ src/main/resources/db-migrations/
 M5.5 重构涉及 schema 大改：合并 `drafts` + `sign_records` → `walls`、`pool_maps` 删 `sign_id` 列。决策按 V005 一次性 drop + recreate 而不是 alter：
 
 ```sql
--- V005__walls_unified.sql （示意，非最终）
+-- V005__walls_unified.sql （实际脚本要点，已核对）
 DROP TABLE IF EXISTS sign_records;
 DROP TABLE IF EXISTS drafts;
 DROP INDEX IF EXISTS idx_pool_sign;
-ALTER TABLE pool_maps DROP COLUMN sign_id;
-DROP TABLE IF EXISTS pool_maps;  -- M15.1 实装：整表 drop+recreate（替代 ALTER DROP COLUMN）
+DROP INDEX IF EXISTS idx_pool_session;
+-- SQLite 不支持 DROP COLUMN（V005 当时），pool_maps 走「建新表 → drop 旧表」recreate
+-- 去掉 sign_id 列（不是 ALTER DROP COLUMN）：
+CREATE TABLE pool_maps_new (...);   -- 新 schema，无 sign_id
+DROP TABLE pool_maps;
+-- （注：脚本以 pool_maps_new 承接；列对齐细节见 db-migrations/V005__walls_unified.sql）
 
 CREATE TABLE walls (...);  -- 完整 §2.4 schema
 CREATE INDEX/UNIQUE INDEX ...;
@@ -618,7 +792,7 @@ FROM walls
 WHERE owner_uuid = ?
 ORDER BY updated_at DESC;
 
--- 全局已发布画（首页"最近发布"）
+-- 全局已锁定画（published_at 非 NULL = 已锁定/只读，时间戳 = 锁定时刻；非"已发布"语义，见 §2.4）
 SELECT wall_id, alias, owner_name, published_at
 FROM walls
 WHERE published_at IS NOT NULL

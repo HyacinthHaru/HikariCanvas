@@ -1,10 +1,25 @@
 # WebSocket 通信协议
 
-**状态：** v2 规划稿 · 2026-05-13
+**状态：** 已实装（随代码更新）· 2026-06-14
 **适用范围：** 浏览器编辑器 ↔ 插件
-**协议版本：** `2.0`（M8 起；v1 不再兼容）
 
-本协议定义浏览器与插件之间的消息格式、生命周期、错误处理。**前后端必须严格按此实现**；任何变更必须升级协议版本并在此文档记录。
+本协议有**三个相互独立的版本号**，务必分清（详见下方「三层版本号」一节）：
+
+| 版本号 | 当前值 | 代码出处 | 何时升 |
+|---|---|---|---|
+| **业务协议版本**（business protocol） | **7** | `Protocol.SUPPORTED_MIN = SUPPORTED_MAX = 7`；前端 `wsClient.ts CLIENT_V = 7` | 新增 op / 改 payload 语义 |
+| **信封壳版本**（envelope schema） | **恒为 2** | `Envelope.of` 固定写 `2`；前端 `wsClient.ts ENVELOPE_V = 2` | 只有改信封字段（`v / op / id / ts / payload`）才动 |
+| **ProjectState schema** | **3** | `ProjectState.PROTOCOL_VERSION = 3` | 只有 project_json schema 变化才同步 bump |
+
+本协议定义浏览器与插件之间的消息格式、生命周期、错误处理。**前后端必须严格按此实现**；任何变更必须升级相应版本号并在此文档记录。
+
+## 三层版本号
+
+代码里存在三个版本号，含义不同、各自独立递增（见 `web/Protocol.java` javadoc 与 `web/src/network/wsClient.ts` 常量注释）：
+
+1. **业务协议版本**（business protocol）= 业务 op / payload schema 的版本。client 在 auth 帧携 `client_v`，server 在 ready 帧回 `accepted_v`；不匹配 close `4002`。常量在 `Protocol.SUPPORTED_MIN / SUPPORTED_MAX`（当前都 = `7`），前端 `CLIENT_V = 7`。历史：v2（M8 图层）→ v3（0.6 时间轴）→ v4（0.7.0 脚本）→ v5（0.7.1 新触发器 + 有界循环）→ v6（0.7.3 补间 tweenBlock）→ v7（0.7.3 备选积木批 + 协议 v7）。每次都取"干净切换"（`MIN = MAX` 同步提升，不维持双轨）。
+2. **信封壳版本**（envelope schema）= 消息容器格式版本，`Envelope.v` 恒为 `2`（`Envelope.of` 固定写 2，前端 `ENVELOPE_V = 2`）。改 envelope 字段才会动这个号，业务升级时**不动**。所有出帧（含 auth / ping）用它做 `v`。
+3. **ProjectState schema** = `ProjectState.PROTOCOL_VERSION`，当前 `3`，序列化进 `project_json`。0.6 的 timeline 字段进了 ProjectState 故 bump 到 3；0.7 脚本**不进 ProjectState**（有意为之，见 scripting.md D7），故 v4-v7 升业务版本时此号留 3 不动。
 
 ## v1 → v2 变更总览（M8）
 
@@ -62,6 +77,20 @@
 
 ---
 
+## v4 → v5 / v6 / v7 变更总览（0.7.1 / 0.7.3）
+
+0.7.1 起脚本系统连续扩充，每次都干净切换业务协议版本（`Protocol.SUPPORTED_MIN = MAX` 同步提升）。**这些变更只动 Trigger / Action 的 wire 多态联合形态，不新增 op 族、不改信封壳、不改 ProjectState schema。**
+
+| 版本 | 范围 | wire union 变化 |
+|---|---|---|
+| **v5**（0.7.1） | 3 个新触发器（`rightClickWall` / `playerLeaveRange` / `playerQuit`）+ 有界循环「重复 N 次」动作 | Trigger union 新增 3 种；Action union 新增 `repeat`（带 count + body） |
+| **v6**（tween，0.7.3） | 补间动画包裹积木 | Action union 新增 `tweenBlock`（`durationMs` + `easing` + `body`）；契约见 `docs/scripting-tween.md` |
+| **v7**（0.7.3） | 备选积木批（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗等） | Action union 扩充若干内置积木 |
+
+> Trigger / Action 的完整 wire 多态形态（type 判别 + 扁平字段）以 `docs/scripting.md §2.2/§2.3` 及各分版设计稿（`scripting-0.7.1.md` / `scripting-0.7.2.md` / `scripting-0.7.3.md` / `scripting-tween.md`）为权威；本协议文档只记录版本号边界。
+
+---
+
 ## 1. 传输层
 
 | 项 | 约定 |
@@ -70,8 +99,8 @@
 | 默认路径 | `ws://127.0.0.1:8877/ws` |
 | 编码 | UTF-8 JSON 文本帧 |
 | 压缩 | `permessage-deflate`（必开启） |
-| 心跳 | WS ping/pong，30s 间隔 |
-| 最大消息尺寸 | 1 MiB（snapshot 时可能接近上限） |
+| 心跳 | 前端每 **20s** 发应用层 `ping`（`wsClient.ts HEARTBEAT_INTERVAL_MS = 20_000`）；Jetty WS idleTimeout 设 **60s**（`WebServer.start` modifyWebSocketServletFactory），两层兜底。真正的 session 超时由 SessionReaper 负责（wsGrace 5min / idle 30min） |
+| 最大消息尺寸 | **入站 WS 文本帧硬上限 64 KiB**（`factory.setMaxTextMessageSize(65536)`，M15.1 防 flood）。snapshot 由服务端出站，不受此限 |
 
 二进制帧保留不使用。调色板像素数据走 MC 原生 map packet，不经 WS。
 
@@ -83,7 +112,7 @@
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "op": "element.update",
   "id": "c-17",
   "ts": 1713528000000,
@@ -93,7 +122,7 @@
 
 | 字段 | 类型 | 方向 | 说明 |
 | --- | --- | --- | --- |
-| `v` | int | 双向 | 协议版本，当前 `2`（M8 起；v1 不再支持） |
+| `v` | int | 双向 | **信封壳版本**，恒为 `2`（与业务协议版本 `client_v`/`accepted_v` 解耦，见「三层版本号」）。`Envelope.of` 固定写 2 |
 | `op` | string | 双向 | 消息类型，见 §5 |
 | `id` | string | 双向（可选） | 请求 ID，用于对应响应；客户端发起用 `"c-<序号>"`，服务器发起用 `"s-<序号>"` |
 | `ts` | int | 双向（可选） | 毫秒时间戳，用于日志与延迟测量 |
@@ -132,14 +161,22 @@ GET /api/session/:token HTTP/1.1
 
 ```json
 { "v": 2, "op": "auth", "id": "c-0",
-  "payload": { "token": "...", "client_v": 2 } }
+  "payload": { "token": "...", "client_v": 7, "clientProtocolVersion": 7 } }
 ```
 
-> 服务端收到 `client_v < SUPPORTED_MIN_PROTOCOL_VERSION (=2)` 或 `client_v > SUPPORTED_MAX_PROTOCOL_VERSION (=2)` 或缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `moe.hikari.canvas.web.Protocol`（M16-P6.2 引入；前后端双向校验）。
+> 前端实际同时发 `client_v`（M16-P6.2 起的主字段名）和旧别名 `clientProtocolVersion`（兼容回滚到旧 jar 的情形，见 `wsClient.ts sendAuth`）。服务端优先读 `client_v`，缺则回退读 `clientProtocolVersion`（`WebServer.handleAuth`）。
 >
-> **未认证 5s 超时**（M16-P1.2）：WS 升级后未在 `network.ws-auth-timeout-seconds`（默认 5s）内收到合法 `auth` 帧 → close `4001` (`auth_timeout`)。防止恶意客户端占 WS 槽。
+> 服务端收到 `client_v` 不在 `[Protocol.SUPPORTED_MIN, SUPPORTED_MAX]`（当前都 = `7`）或非数字 / 缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `moe.hikari.canvas.web.Protocol`（M16-P6.2 引入；前后端双向校验）。**版本检查在 token consume 之前**（避免为不兼容客户端浪费一次性 token），但在 per-IP 限流之后（防绕过）。
 >
-> **Origin 白名单**（M16-P1.3）：WS upgrade 时校验 `Origin` 头是否在 `network.allowed-origins` 配置；不在白名单 reject upgrade。默认空 = 不校验（兼容原生 WS 客户端）。
+> **未认证 5s 超时**（M16-P1.2）：WS 升级后未在 `network.ws-auth-timeout-seconds`（默认 5s，代码钳到 `1..60`）内收到合法 `auth` 帧 → close `4001` (`auth_timeout`)。防止恶意客户端占 WS 槽。
+>
+> **Origin 白名单**（M16-P1.3）：WS upgrade 时校验 `Origin` 头（`checkWsOrigin` / `isOriginAllowed`）。**放行**：① 无 Origin / `null`（同源 fetch / 非浏览器）；② `127.0.0.1:*` 与 `localhost:*`（任何端口）；③ 与服务端 `host:port` 完全相同的同源；④ `network.allowed-origins` 精确匹配（大小写敏感）。其余 → 403 + 不 upgrade。注意：与表格描述不同，回环始终放行，并非"默认空 = 不校验"。
+>
+> **per-IP token 限流**（2026-05-25）：auth 进校验前先做 per-IP 速率限制（`TokenRateLimiter`，默配见 config）；超限 → `error: RATE_LIMITED` + close `4429` (`CLOSE_TOKEN_RATE_LIMITED`)。client 看到 4429 应显示"请稍后再试"而非自动重连。
+>
+> **auth 时复查权限**（2026-05-25 #3）：token 签发后玩家可能被撤权（lp/pex/reload），故 auth 路径经主线程 hop 复查 `canvas.edit`；被撤权 → `error: PERMISSION_DENIED` + close `4003`（同 takeover 码，client 不重连）。同一 hop 顺带解析 `canvas.template.use-others` 供 ready 帧模板可见性过滤。
+>
+> **会话级 IP 绑定**（M16-P6.6）：首次 auth 时 `bindOrCheckIp` 把 client socket peer IP（**不解析 XFF**，避免伪造头攻击）CAS 绑定到 `Session.boundIp`；后续重连 IP 不一致 → `error: AUTH_FAILED` + close `4001`（文本 `ip_mismatch`）。
 
 3. 服务器校验通过 → `ready`：
 
@@ -148,10 +185,10 @@ GET /api/session/:token HTTP/1.1
   "payload": {
     "sessionId": "e1b2...",
     "serverVersion": "1.0.0",
-    "protocolVersion": 2,
-    "accepted_v": 2,
+    "protocolVersion": 3,
+    "accepted_v": 7,
     "reconnectToken": "...",
-    "projectState": { /* v2 形态，见 §7 */ },
+    "projectState": { /* 见 §7；含 timelines（v3 起） */ },
     "wallId": "w-1a2b3c4d",
     "alias": "subway-test",
     "lockedAt": 1714200000000,
@@ -169,16 +206,40 @@ GET /api/session/:token HTTP/1.1
         "ttl": 0,
         "source": "manual"
       }
-    ]
+    ],
+    "aliases": { "user:w-1a2b3c4d/red_score": "红队分" },
+    "scripts": [ /* ScriptRule[]，本墙全部规则；见 §5.14 */ ],
+    "railBinding": null
   }
 }
+```
 
-> **M16-P6.2 协议字段**：ready 携带 `accepted_v: number`（服务端实际接受的协议版本，与 client_v 等值或为 server fallback 值）。前端在收到 ready 后做一次「accepted_v == client_v」断言，不一致则 console.warn 但不断连（防御服务端 forward-compat bug）。
+**ready payload 字段总表**（来源 `WebServer.handleAuth` payload 构造）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `sessionId` | string | 登录态 session id |
+| `serverVersion` | string | 插件版本字符串 |
+| `protocolVersion` | int | = `ProjectState.PROTOCOL_VERSION`（当前 **3**）；描述 project_json schema，**不是**业务协议版本 |
+| `accepted_v` | int | server 实际接受的业务协议版本（= 协商的 `client_v`，当前 **7**）。前端收到后断言 `accepted_v === CLIENT_V`，不一致则主动 close `4002`（`wsClient.handleReady`） |
+| `reconnectToken` | string | auth 成功后 rotate 出的新 token，供断线重连 |
+| `projectState` | object | 权威工程状态，见 §7 |
+| `wallId` | string? | 仅 session 绑了 wall 时存在 |
+| `alias` | string? | wall 别名，缺省略 |
+| `lockedAt` | number? | = `walls.published_at`（DB 列名保留，**语义为 lock 时间戳**）；非 null = 已锁定，前端 readonly。缺省（null）略 |
+| `ownerUuid` | string? | wall 作者 UUID；与 `selfUuid` 比对得 `isOwner` |
+| `selfUuid` | string | 当前 session 玩家 UUID（始终下发） |
+| `templates` | TemplateSpec[] | 按 caller owner + `canvas.template.use-others` 过滤后的可见模板 |
+| `variables` | VariableDto[] | 当前 wall 可见的变量快照（`listVisibleToWall`，含 user/system/schedule/scoreboard/papi）；剔除 `referencedByWalls` 防泄露。wall=null 或 store 未配 → `[]` |
+| `aliases` | Map<fullName, string> | 当前 wall 的变量别名（0.4.2）；wall=null 或 dao 未配 → `{}` |
+| `scripts` | ScriptRule[] | 当前 wall 全部脚本规则快照（0.7.0）；wall=null 或 store 未配 → `[]` |
+| `railBinding` | object? | 当前 wall 的铁路绑定 `{ wallId, lineId, stationId?, direction? }`（0.4.5）；未绑定 → `null` |
+
+> **M16-P6.2 协议字段**：ready 携带 `accepted_v: number`（服务端实际接受的业务协议版本，= 协商的 `client_v`）。前端收到 ready 后做「accepted_v == CLIENT_V」断言，不一致则**主动 close 4002 并停止重连**（`wsClient.handleReady`，比原 console.warn 更严格）。
 
 > **2026-05-14**：ready payload 字段 `publishedAt` 改名 `lockedAt`；新增 `ownerUuid`（wall.owner_uuid） + `selfUuid`（当前 session 玩家）让前端判 `isOwner = selfUuid === ownerUuid`。详见 CLAUDE.md `§lock-state`。
 
-> **0.4.0-P2-F（2026-05-19）**：ready payload 新增 `variables: VariableDto[]` 字段，携带当前 wall 引用的变量快照，前端无需额外 HTTP round-trip 初始化 VariableStore mirror。`VariableDto` 字段对应 `Variable` record 投影 = `{namespace, key, type, defaultValue?, currentValue?, updatedAt, ttl, source?}`；**主动剔除**内部倒排索引字段 `referencedByWalls`（防泄露 peer wallId 元数据）。`type` 走 Jackson 默认枚举 name 序列化：`"STRING" | "NUMBER" | "BOOLEAN" | "COLOR"`。`null` 字段被 `NON_NULL` inclusion 略去。`variables` 字段在 wall 未引用任何变量或首次连接尚未触发 Compositor `markWallReferences` 时为空数组 `[]`（前端按需通过 `state.patch /variables/*` 接增量更新）。
-```
+> **0.4.0-P2-F（2026-05-19）**：ready payload 新增 `variables: VariableDto[]` 字段，携带当前 wall **可见**的变量快照（0.4.0 bugfix Bug 1 起改用 `listVisibleToWall`，按 namespace 形态判定可见性，含 system/schedule/scoreboard/papi，不再依赖 byWall 倒排索引），前端无需额外 HTTP round-trip 初始化 VariableStore mirror。`VariableDto` 字段对应 `Variable` record 投影 = `{namespace, key, type, defaultValue?, currentValue?, updatedAt, ttl, source?}`（0.4.3 起 userglobal 变量另注入 `ownerUuid` / `ownerName`）；**主动剔除**内部倒排索引字段 `referencedByWalls`（防泄露 peer wallId 元数据）。`type` 走 Jackson 默认枚举 name 序列化：`"STRING" | "NUMBER" | "BOOLEAN" | "COLOR"`。`null` 字段被 `NON_NULL` inclusion 略去。
 
 > **M6 决策（2026-05-11）**：`templates` 字段一次性全量下发，不走单独 `template.list` op。理由：5 个内置模板每个 ~1-2KB，合计 5-10KB；服主自定义模板少（v1 阶段 < 50KB），WS 单帧足够。未来若模板数量爆炸（v2 模板包生态）再切 index + on-demand `template.fetch`。
 
@@ -190,7 +251,7 @@ GET /api/session/:token HTTP/1.1
 
 ### 3.4 断开与重连
 
-- **客户端主动关闭**：先发 `cancel`（释放 session；wall 数据保留）再关闭。不发直接关也等同 `disconnect`。M5.5 起 `commit` op 废止——保存通过每次 `element.*` op 的隐式 auto-save（walls 表 UPDATE）实现，不需要客户端显式发包。
+- **客户端主动关闭**：直接关 WS（`cancel` op 当前未实装，见 §5.7）；服务端 onClose → `markDisconnected`，wall 数据保留，session 由 SessionReaper 回收（wsGrace 5min）。M5.5 起 `commit` op 废止——保存通过每次 `element.*` op 的隐式 auto-save（walls 表 UPDATE）实现，不需要客户端显式发包。
 - **网络断连**：前端自动重连，5 秒、10 秒、30 秒阶梯；重新握手时复用同一 token（仍在 TTL 内）
 - **服务端超时断开**：5 分钟无消息 → 踢连 + 会话进入 CLOSING
 - **协议版本不匹配**：close 码 `4002`
@@ -275,6 +336,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `canvas.background` | C→S | `{ fill: Fill }` 推荐 / `{ color: "#RRGGBB[AA]" }` 兼容 — 见下方 schema |
 | `canvas.grid` | C→S | `{ size: int }`（0 = 关闭网格） |
 | `canvas.guides.set` | C→S | `{ guides: [{ axis, position }, ...] }`（整组替换；前端拖动期不发，松手 batch 发） |
+| `canvas.tweenFps` | C→S | 0.7.3：设置本 wall 补间动画帧率（per-wall）；走 editOpDispatcher 路径 |
 | `template.apply` | C→S | `{ templateId, params }` （会清空所有层 + 用 Default Layer 包结果） |
 
 **`canvas.background` payload schema（M17 升级）：**
@@ -305,7 +367,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 | op | 方向 | payload |
 | --- | --- | --- |
-| `cancel` | C→S | `{}` - 服务器回 `ack` 后关闭 session（wall 数据保留） |
+| `cancel` | C→S | **⚠️ 未实装**：`WebServer.handleMessage` switch 无 `cancel` 分支（发了会回 `INVALID_OP`），前端也不发。实际"关闭浏览器"路径靠直接断开 WS（onClose → `markDisconnected`）+ SessionReaper 回收。规划语义为：`{}` - 服务器回 `ack` 后关闭 session（wall 数据保留） |
 | `wall.lock` | C→S | `{}` - **owner-only**：caller UUID == wall.owner_uuid 才接受；UPDATE walls.published_at=now（DB 列名保留，语义为 lock 时间戳）；返回 `ack { lockedAt }`；非 owner 返 `FORBIDDEN`；session 不关闭。**2026-05-14 引入** |
 | `wall.unlock` | C→S | `{}` - **owner-only**：UPDATE walls.published_at=NULL；返回 `ack { lockedAt: null }`；非 owner 返 `FORBIDDEN`；session 不关闭 |
 | `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；不符合 `[A-Za-z0-9_-]{2,32}` 返 `INVALID_ALIAS_FORMAT`；冲突返 `ALIAS_TAKEN`；session 不关闭 |
@@ -347,13 +409,61 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 | op | 方向 | payload | 行为 |
 | --- | --- | --- | --- |
-| `variable.create` | C→S | `{ name, type, defaultValue? }` | 玩家创建用户变量（自动加 `user/` 前缀）；`ack { fullName }` / `error VARIABLE_EXISTS / INVALID_PAYLOAD` |
+| `variable.create` | C→S | `{ name, type, defaultValue?, scope? }` | 玩家创建用户变量。`scope='wall'`（默认）→ 加 `user/` 前缀（per-wall）；`scope='global'`（0.4.3）→ `userglobal/<name>`（全服共享）。`ack { fullName }` / `error VARIABLE_EXISTS / INVALID_PAYLOAD` |
 | `variable.update` | C→S | `{ fullName, patch: { type?, defaultValue? } }` | 改类型 / default；`ack` / `error VARIABLE_NOT_FOUND` |
-| `variable.set` | C→S | `{ fullName, value }` | 手动设当前值（仅 user/*）；`ack` / `error VARIABLE_TYPE_MISMATCH` |
+| `variable.set` | C→S | `{ fullName, value }` | 手动设当前值（仅 user/* 与 userglobal/*）；`ack` / `error VARIABLE_TYPE_MISMATCH` |
 | `variable.bind` | C→S | `{ fullName, boundTo: pluginName \| null }` | 让 user/* 变量被插件 push 接管 |
 | `variable.delete` | C→S | `{ fullName }` | 删除 user/* 变量；引用该变量的 element 显示 fallback |
 
-state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形如 `/variables/<encoded-fullName>/currentValue`。
+state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形如 `/variables/<encoded-fullName>/currentValue`（整节点 add/replace/remove 也支持；前端 `applyVariablePatches` 路由）。`userglobal/*` 的变更经 `SessionManager.broadcastVariableChangeToAll` 广播到所有 session。
+
+> **0.4.3 全局用户变量**：`variable.create scope='global'` 与对 `userglobal/*` 的 update/set/delete/bind 走同一组 op，但 dispatcher 按 `fullName.startsWith("userglobal/")` 分流到 owner-only + admin override 权限节点（`canvas.var.global.*`）。`userglobal` 在 `PluginNamespaceRegistry.RESERVED_NAMESPACES` 中，外部插件禁推。
+
+### 5.11.1 变量别名（0.4.2）
+
+全 namespace 通用、per-wall 隔离。走 `VariableAliasDispatcher`，复用 `canvas.var.write.own/any` 权限（list 只读放行）。
+
+| op | 方向 | payload | 行为 |
+| --- | --- | --- | --- |
+| `variable.alias.set` | C→S | `{ fullName, alias }` | 给 fullName 起别名（覆盖已有），alias 1..64 字符；推 `state.patch` 的 `/aliases/<encoded fullName>` |
+| `variable.alias.clear` | C→S | `{ fullName }` | 清掉别名（不存在也幂等）；推 `remove /aliases/<encoded>` |
+| `variable.alias.list` | C→S | `{}` | 只读返当前 wall 全部别名 |
+
+> 别名仅在 UI 层展示（picker / panel / chip），**不参与 `${var:...}` 解析**。ready payload 的 `aliases` 字段一次性初始化前端 `VariableAliasStore` mirror。
+
+### 5.11.2 时刻表（0.4.0-P3-L，ManualScheduleProvider）
+
+走 `ScheduleOpDispatcher`；per-wall。
+
+| op | 方向 | payload | 行为 |
+| --- | --- | --- | --- |
+| `schedule.list` | C→S | `{}` | 返当前 wall 完整时刻表 `{ schedule }`（含 0.4.5 railBinding） |
+| `schedule.upsert` | C→S | `{ stationName, precision? }` | 创建/更新元数据（站名 + 时间精度 minute/second，0.4.0 bugfix Bug 4）；precision 不传时保留现值 |
+| `schedule.entry.add` | C→S | `{ departureTime, destination, sortOrder }` | 添加条目，返回生成的 id |
+| `schedule.entry.update` | C→S | `{ id, departureTime, destination, sortOrder }` | 按 id 改条目 |
+| `schedule.entry.delete` | C→S | `{ id }` | 按 id 删条目 |
+
+### 5.11.3 铁路网络（0.4.4 + 0.4.5）
+
+走 `RailOpDispatcher`；线路级 owner ACL（`canvas.rail.*` 6 权限节点）。共 13 op（0.4.4 的 12 + 0.4.5 新增 `rail.line.detail`）。
+
+| op | 方向 | payload | 行为 |
+| --- | --- | --- | --- |
+| `rail.line.list` | C→S | `{}` | 列所有线路（含 owner / color 元数据） |
+| `rail.line.detail` | C→S | `{ lineId }` | 0.4.5：聚合查 stations + runs + `timetableByRun`（避免 N+1） |
+| `rail.line.create` | C→S | `{ name, code?, color? }` | 返 `{ lineId, line }` |
+| `rail.line.update` | C→S | `{ lineId, name?/code?/color? }` | |
+| `rail.line.delete` | C→S | `{ lineId }` | |
+| `rail.station.add` | C→S | `{ lineId, name, code?, sortOrder?, isTerminus }` | 返 `{ stationId, station }` |
+| `rail.station.update` | C→S | `{ stationId, ...patch }` | |
+| `rail.station.delete` | C→S | `{ stationId }` | |
+| `rail.run.create` | C→S | `{ lineId, runNumber, direction, serviceType, cars?, startStationId?, endStationId?, notes?, generateOptions? }` | 返 `{ runId, run }`；`generateOptions` 触发自动时刻表生成 |
+| `rail.run.update` | C→S | `{ runId, ...patch }` | |
+| `rail.run.delete` | C→S | `{ runId }` | |
+| `rail.run.timetable.set` | C→S | `{ runId, entries: [{ stationId, arrival?, departure?, stopsHere }] }` | 整表替换，返 `{ rows }` |
+| `rail.wall.bind` | C→S | `{ wallId?, lineId?, stationId?, direction? }` | 绑定当前 wall 到线路+站+方向（wallId 缺省由后端注入） |
+
+> 铁路网络的协议细节以 `docs/dynamic-data.md §18.7` 为权威。
 
 ### 5.12 时间轴（v3 新增）
 
@@ -364,9 +474,9 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 | `timeline.create` | C→S | `{ name, durationMs, fps, loopMode, trigger }` | 新建时间轴；`ack { version }`，新 timeline（含 id）经 `state.patch` 的 `add /timelines/<i>` 下发（同 `element.add` 范式）。`fps` 受 config `timeline.max-fps` 钳（默 60），超出按上限截断 |
 | `timeline.update` | C→S | `{ timelineId, patch: { name?, durationMs?, fps?, loopMode?, trigger? } }` | 部分更新；`fps` 同样受 max-fps 钳；任何字段显式传 `null` 拒 `INVALID_PAYLOAD`（不支持「null = 清字段」语义，含 `trigger`）；`durationMs` 缩短到低于现有关键帧时刻拒 `INVALID_KEYFRAME_TIME`；`error TIMELINE_NOT_FOUND` |
 | `timeline.delete` | C→S | `{ timelineId }` | 删除时间轴及其 tracks；`error TIMELINE_NOT_FOUND` |
-| `timeline.play` | C→S | `{ timelineId }` | 在部署 wall 上启动后端 Ticker；**不落 DB、不进 history**；`ack` |
-| `timeline.pause` | C→S | `{ timelineId }` | 停止后端 Ticker；**不落 DB、不进 history**；`ack` |
-| `timeline.seek` | C→S | `{ timelineId, atMs? }` | 定位后端 Ticker 到 `atMs`（缺省 = 0）；**不落 DB、不进 history**；`ack` |
+| `timeline.play` | C→S | `{ timelineId? }` | 在部署 wall 上启动后端 Ticker；`timelineId` 缺省时后端用 `activeTimelineId`（前端不带该键）；**不落 DB、不进 history**；`ack` |
+| `timeline.pause` | C→S | `{}` | 停止后端 Ticker；payload 无参；**不落 DB、不进 history**；`ack` |
+| `timeline.seek` | C→S | `{ atMs, timelineId? }` | 定位后端 Ticker 到 `atMs`（前端始终携带；`timelineId` 缺省用 `activeTimelineId`）；**不落 DB、不进 history**；`ack` |
 
 > 编辑器内 scrubber 拖动的本地预览是**纯前端、不发 WS**（60fps 跟手，见 `docs/timeline.md §6.3`）。`timeline.play/pause/seek` 仅用于操控真实部署 wall 上的后端 Ticker；游戏内最终输出永远以后端为权威（`docs/timeline.md` D9）。
 
@@ -415,9 +525,11 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 
 | op | 方向 | 说明 |
 | --- | --- | --- |
-| `session.warning` | S→C | 非致命警告（如池即将耗尽、限流） |
-| `session.terminated` | S→C | 服务端强制结束（管理员操作或超时） |
-| `variable.changed` | S→C | 变量值变化通知（替代或补充 state.patch；可选实施） |
+| `state.snapshot` / `state.patch` | S→C | 状态推送（见 §5.2，实装的主力 S→C 通道） |
+| `script.trace` | S→C | 0.7.0-P3：`script.test` 的异步执行轨迹（**已实装**；详见 §5.14） |
+| `session.warning` | S→C | **未实装**（规划：非致命警告，如池即将耗尽、限流） |
+| `session.terminated` | S→C | **未实装**（规划：服务端强制结束）。实际强制断开走 close code（4001/4003）而非此 op |
+| `variable.changed` | S→C | **未实装**（规划：变量值变化通知）。实际变量变化走 `state.patch /variables/*` 通道 |
 
 ---
 
@@ -427,7 +539,7 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 
 ```json
 {
-  "v": 1, "op": "error", "id": "c-17",
+  "v": 2, "op": "error", "id": "c-17",
   "payload": {
     "code": "INVALID_ELEMENT",
     "message": "text box width must be > 0",
@@ -472,8 +584,8 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `INVALID_KEYFRAME_TIME` | 0.6：keyframe timeMs 为负值或超出所属 timeline 的 durationMs | ❌ |
 | `SCRIPT_INVALID` | 0.7：ScriptRuleValidator 结构校验拒（message 为人读原因首行；细节进 server 日志） | ❌ |
 | `SCRIPT_NOT_FOUND` | 0.7：script.update / delete / enable / test 指向不存在或非本墙的 ruleId | ❌ |
-| `SCRIPT_QUOTA_EXCEEDED` | 0.7：单墙规则数超 `scripts.max-rules-per-wall`（默 16） | ❌ |
-| `SCRIPT_ENGINE_UNAVAILABLE` | 0.7-P1：script.test 在执行引擎落地（P2）前恒回此码 | ❌ |
+| `SCRIPT_QUOTA_EXCEEDED` | 0.7：单墙规则数超 `scripts.max-rules-per-wall`（默 16）。另 0.7.2 起单墙脚本可操作元素数受 `scripts.max-elements-per-wall`（默 200）约束 | ❌ |
+| `SCRIPT_ENGINE_UNAVAILABLE` | 0.7：script.test 时执行引擎（ScriptTestLauncher）未装配——启动早期窗口 / 测试装配缺时回此码（P2-P5 已落地，正常运行不再触发） | ❌ |
 | `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
 | `QUOTA_PER_WALL` | M13/M14：当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
 | `QUOTA_PER_DAY` | M13/M14：玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
@@ -487,30 +599,35 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 
 ### 6.2 WS Close 码
 
-| code | 说明 |
-| --- | --- |
-| 1000 | 正常关闭（cancel 后或客户端主动断） |
-| 1008 | 策略违反（限流反复触发） |
-| 1011 | 服务端错误 |
-| 4001 | 认证失败 / `auth_timeout`（M16-P1.2：未认证 5s 超时；M16-P6.6：会话级 IP 绑定不一致也走此码 + 文本 `ip_mismatch`） |
-| 4002 | 协议版本不匹配（`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`，M16-P6.2 常量化） |
-| 4003 | 会话被其他连接接管 |
-| 4004 | 空闲超时 |
+实际由服务端发出的 close code（`WebServer` 各 `closeXxx` 助手；前端 `wsClient.isTerminalCloseCode` 决定是否重连）：
+
+| code | 说明 | 前端重连 |
+| --- | --- | --- |
+| 1000 | 正常关闭（客户端主动 `close()`） | 否（terminal） |
+| 4001 | 认证失败 / `auth_timeout`（M16-P1.2：未认证 5s 超时）/ 会话级 IP 绑定不一致（M16-P6.6，文本 `ip_mismatch`）/ `session_forgotten`（服务端 forget 陈旧连接） | 否（terminal）— 清掉本地 token |
+| 4002 | 业务协议版本不匹配（`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`，M16-P6.2 常量化）。前端 `handleReady` 检出 `accepted_v !== CLIENT_V` 时也主动发此码 | 否（terminal）— 需升级客户端 |
+| 4003 | 会话被其他连接接管（`session-takeover`）**或**认证后权限被撤销（`PERMISSION_REVOKED`，2026-05-25 #3 复用同码） | **是**（非 terminal，会退避重连）— 接管/撤权场景下重连会再走 auth 自然失败 |
+| 4429 | token 暴力枚举超限（`CLOSE_TOKEN_RATE_LIMITED`，2026-05-25）。沿用 HTTP 429 语义，client 应显示"请稍后再试" | 否（terminal） |
+
+> **未实装**：原表中的 `1008`（策略违反 / 限流反复触发）、`1011`（服务端错误）、`4004`（空闲超时）当前代码均**未作为 WS close code 发出**——`SessionRateLimiter` 注释明确"close 1008 留 M7 polish"，idle/空闲回收走 SessionReaper 的 `markDisconnected` 而非显式 4004 close。保留记录以备规划。
+>
+> 前端另有一个内部用的 `4000`（`ready_timeout` / `malformed_ready`）——`wsClient` 在 open→ready 看门狗超时或 ready payload 畸形时**客户端自己**发的 close 码（非服务端发出），落非 terminal 分支触发重连。
 
 ---
 
-## 7. 工程状态模型（v2）
+## 7. 工程状态模型
 
-客户端与服务器共享同一份数据结构。v2 起 elements 数组被层包裹：
+客户端与服务器共享同一份数据结构。v2 起 elements 数组被层包裹；`protocolVersion` = `ProjectState.PROTOCOL_VERSION`，当前 **3**（v3 timeline 进 ProjectState 时 bump；脚本不进 ProjectState 故 v4-v7 不动）：
 
 ```typescript
 type ProjectState = {
   version: number;            // 递增版本号，每次变更 +1
-  protocolVersion: 2;
+  protocolVersion: 3;         // = ProjectState.PROTOCOL_VERSION
   canvas: {
     widthMaps: number;
     heightMaps: number;
-    background: string;
+    background: Fill;         // M17 起 string→Fill 联合类型（solid/linear/radial）；
+                             // FillDeserializer 自动把旧 "#xxx" 字符串 wrap 成 SolidFill
     gridSize?: number;        // 0/缺省 = 不显示网格；常用值 8/16/32（仅前端预览，不入 MC）
     guides?: Guide[];         // 用户参考线，仅前端预览
   };
@@ -658,10 +775,10 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 ```
 前端 ─── HTTP GET /api/session/abc123 ───▶ 插件
-                                           ← 200 { sessionId, wall, mapIds, ... }
+                                           ← 200 { ok: true, playerName, wsUrl }   (M15.4 精简，敏感元数据走 ready)
 前端 ─── WS open /ws ─────────────────────▶
-前端 ─── { op: "auth", id: "c-0", payload: { token } }
-                                           ← { op: "ready", id: "s-0", payload: { projectState } }
+前端 ─── { op: "auth", id: "c-0", payload: { token, client_v: 7 } }
+                                           ← { op: "ready", id: "s-0", payload: { projectState, ... } }
 
 （画布空白，玩家看到白色预览墙面，无任何文字）
 
@@ -760,7 +877,9 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 | --- | --- | --- |
 | 单会话 op 速率 | 20 msg/s | 返回 `RATE_LIMITED` 并丢弃本次 op |
 | 单会话 op 突发 | 40 msg / 2s | 同上 |
-| 重复触发 | 5 次 / 1min | close 1008 |
+| 重复触发 | 5 次 / 1min | **未实装**：`SessionRateLimiter` 注释明确 "close 1008 留 M7 polish"；当前只有上面两档软限流 |
+
+另有 per-IP 的 **token 暴力枚举限流**（`TokenRateLimiter`，2026-05-25），在 auth 阶段触发 → close `4429`（见 §3.2 / §6.2），与上面的 op 速率限流是两套机制。
 
 对 `ping` / `ack` 不计速率。
 
@@ -816,8 +935,8 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 - **不兼容变更**：改字段类型、改必填字段、改语义 — `v` +1
 - 插件拒绝 `v < minSupported` 的客户端：`error: VERSION_MISMATCH` + close 4002
 - 协议版本协商在 `auth` 帧进行；客户端用多大的 `v` 作为上限由握手时 `serverVersion` 决定
-- **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「v2 → v3 变更总览（0.6）」）。`auth` 帧 `clientProtocolVersion: 3`；服务端遇 `client_v < 3` reject `VERSION_MISMATCH` + close 4002，沿用 M16.6 既有版本协商路径
-- **0.7 起协议升至 v4**（墙脚本 `script.*`；同样干净切换，见「v3 → v4 变更总览（0.7）」）。`auth` 帧 `clientProtocolVersion: 4`；`ProjectState.PROTOCOL_VERSION` 留 3 是有意（脚本不进 ProjectState，project_json schema 未变）
+- **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「v2 → v3 变更总览（0.6）」）。`ProjectState.PROTOCOL_VERSION` 同步 bump 到 3
+- **0.7.0 起 v4**（墙脚本 `script.*`），**0.7.1 起 v5**（新触发器 + 有界循环），**0.7.3 起 v6**（补间 tweenBlock）→ **v7**（备选积木批）。均干净切换；`Protocol.SUPPORTED_MIN = MAX` 当前都 = **7**，前端 `CLIENT_V = 7`。v4 起脚本不进 ProjectState，故 `ProjectState.PROTOCOL_VERSION` 留 **3** 不动（有意为之）。auth 帧 `client_v` 不在范围 → reject `VERSION_MISMATCH` + close 4002，沿用 M16.6 既有版本协商路径
 
 ---
 

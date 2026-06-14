@@ -42,63 +42,68 @@ List<MapBitmap>   输出
 
 ### 2.1 字体文件
 
-- 后端：`src/main/resources/fonts/*.ttf`（或 `.otf`），经 `processResources` 进入 shadow jar
-- 前端：`web/public/fonts/*.woff2`，由 TTF 通过 `woff2_compress` 生成（M5 前端渲染器接入时一起做）
-- **必须从同一源 TTF 产出**，构建脚本中校验 hash
+- 后端：jar 内 `/fonts/*.ttf`（或 `.otf`），由 Gradle `downloadFonts` 构建期抓取后经 `processResources` 进入 shadow jar（不入 git，`.gitignore` 排除）
+- 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（M23 起单轨，见 §2.3），**不再走 `.woff2` + CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`，由 Gradle `syncFontsToWeb` 构建期同步进 `web/public/fonts/`；该目录被 `.gitignore` 排除，同时也落了字体二进制副本但渲染不读它，仅 metrics JSON 被消费）
+- 后端 + 前端**使用同一源字体文件**，构建脚本中以 SHA-256 pin 校验
 
-### 2.1.1 分发策略（M4 定稿 · 方案 A）
+### 2.1.1 分发策略（M4 定稿 · 方案 A；M21/M22/M25 扩充至 22 枚）
 
-**两类字体，两种分发路径：**
+**全部内置字体走 Gradle `downloadFonts` 任务**（构建期从官方 Release / google/fonts 抓到 `build/downloaded-fonts/`，SHA-256 pin 校验 → `processResources` 合并进 shadow jar）；仓库**不入任何字体文件**，`.gitignore` 排除。
 
-| 字体 | 协议 | 文件 | 大小 | 分发 |
-|---|---|---|---|---|
-| **Ark Pixel 12px Monospaced zh_cn** | SIL OFL | `ark-pixel-12px-monospaced-zh_cn.ttf` | ~200 KB | 直接入 git `plugin/src/main/resources/fonts/` |
-| **Source Han Sans SC Regular**（思源黑体） | SIL OFL | `SourceHanSansSC-Regular.otf` | ~15 MB | **Gradle `downloadFonts` 任务** 从官方 Release 抓到 `build/downloaded-fonts/`；`processResources` 合并到 jar；SHA-256 校验；`.gitignore` 排除 |
+**内置字体矩阵（实清点 = 22 枚，全 SIL OFL 1.1）：** 清单硬编码在 `FontRegistry.BUILT_IN`（`LinkedHashMap`），与 `plugin/build.gradle.kts` 的 `bundledFonts` 列表逐项对应（两边均为 **22 项**，逐 `fontId` 一致）：
+
+| 类别 | fontId |
+|---|---|
+| 中文正文 | `ark_pixel`（12px 像素，pixelated=true）/ `source_han_sans`（黑体）/ `source_han_serif`（宋体） |
+| 中文艺术 | `smiley_sans` / `ma_shan_zheng` / `zcool_xiaowei` / `zcool_kuaile` / `zcool_qingkehuangyou` / `lxgw_wenkai` |
+| 西文正文 | `inter` / `noto_serif` / `jetbrains_mono` / `fira_code` |
+| 西文装饰 | `comic_neue` / `pacifico` / `lobster` / `bangers` / `shadows_into_light` / `caveat` / `dancing_script` / `overpass`（FHWA-like）/ `bebas_neue`（DIN-like） |
+
+> **历史注：** 本表早期版本仅列 2 枚（`ark_pixel` + `source_han_sans`）；M21 加 6（中文宋 + 西文 4）、M22 加 13（中文艺术 6 + 西文装饰 7）、M25 加 2（`overpass` + `bebas_neue`），现为 22 枚。
 
 **理由：**
-- 仓库保持纤瘦（<500 KB），`git clone` 快
-- shadow jar 对终端用户仍然一步到位（`./gradlew shadowJar` 后 jar 里字体齐全）
+- 仓库保持纤瘦（无字体二进制），`git clone` 快
+- shadow jar 对终端用户仍然一步到位（`./gradlew :plugin:shadowJar` 后 jar 里字体齐全）
 - SHA-256 固定值内嵌 build script，任何篡改都会让 build 失败
-- 两字体**均为 SIL OFL 1.1**，可合法 redistribute
+- 全部内置字体**均为 SIL OFL 1.1**，可合法 redistribute
 
-**Gradle 任务轮廓**（M4-T3 实现）：
+**Gradle 任务轮廓**（`bundledFonts` 列表 + `downloadFonts` 任务）：
 ```kotlin
-val fontsDir = layout.buildDirectory.dir("downloaded-fonts")
-val downloadFonts by tasks.registering {
-    outputs.dir(fontsDir)
-    doLast {
-        download(
-            url = "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf",
-            dest = fontsDir.get().file("SourceHanSansSC-Regular.otf").asFile,
-            sha256 = "..."
-        )
-    }
+data class FontSpec(val displayId: String, val url: String, val destFileName: String,
+                    val expectedSha256: String, val inZipEntryPattern: String? = null)
+val bundledFonts = listOf(/* 22 枚 FontSpec：source_han_sans / ark_pixel / ... / bebas_neue */)
+val downloadFonts = tasks.register("downloadFonts") {
+    doLast { for (spec in bundledFonts) { /* download + sha256 校验（zip 按 inZipEntryPattern 提取） */ } }
 }
-tasks.processResources { dependsOn(downloadFonts); from(fontsDir) { into("fonts") } }
+tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { into("fonts") } }
 ```
 
-**其他字体：** 服主可放到 `plugins/HikariCanvas/fonts/` 并在 `config.yml` 里注册 `fontId`（见 §2.2）；运行时 `FontRegistry` 会优先找外部目录、fallback 到 jar 内置。
+**用户字体：** 服主可放到 `plugins/HikariCanvas/fonts/*.ttf`（`.otf`）；运行时 `FontRegistry.loadExternal` 启动期扫描该目录，**文件名去扩展名即 `fontId`**（约定优于配置；同名覆盖内置）。用户字体无构建期 metrics，启动期由 `FontMetricsTable.registerRuntime` 后台 worker 现场计算（见 §2.4 / CLAUDE.md M20）。
 
 ### 2.2 字体 ID 与声明
 
-```yaml
-# config.yml
-fonts:
-  sourcehan:
-    file: "fonts/SourceHanSansSC-Regular.otf"
-    display-name: "思源黑体"
-    pixelated: false    # 标记此字体适合的渲染模式
-  ark-pixel-12:
-    file: "fonts/ark-pixel-12px-monospaced-zh_cn.ttf"
-    display-name: "方舟像素 12px"
-    pixelated: true
-    native-size: 12     # 该像素字体的设计尺寸
-```
+**当前实现：内置字体元数据硬编码在 `FontRegistry.BUILT_IN`，无 config.yml 声明机制。** 每枚内置字体的 `(fontId, classpath 路径, Metadata{displayName, pixelated, nativeSize})` 直接写死在 `FontRegistry` 静态初始化块里；用户字体走 §2.1.1 的文件名约定（`pixelated` 一律 false、`nativeSize` 0）。
+
+> **未实装（保留作早期设计意图记录）：** 下方 `config.yml fonts:` 段声明 `fontId / file / display-name / pixelated / native-size` 的机制**从未落地**——`config.yml` 没有 `fonts:` 段，`HikariCanvasConfig` 也无对应字段。像素字体的 `native-size` 现仅 `ark_pixel`（=12）一枚，写死在 `FontRegistry`。若未来要让服主给用户字体标 `pixelated` / `native-size`，可复活此机制。
+>
+> ```yaml
+> # config.yml —— 未实装
+> fonts:
+>   sourcehan:
+>     file: "fonts/SourceHanSansSC-Regular.otf"
+>     display-name: "思源黑体"
+>     pixelated: false
+>   ark-pixel-12:
+>     file: "fonts/ark-pixel-12px-monospaced-zh_cn.ttf"
+>     display-name: "方舟像素 12px"
+>     pixelated: true
+>     native-size: 12
+> ```
 
 ### 2.3 加载规则
 
-- **后端**：启动时 `Font.createFont(TRUETYPE_FONT, stream)`，缓存 `Map<String, Font>`
-- **前端**：通过 CSS `@font-face` + `document.fonts.load()` 预加载，页面就绪前不渲染
+- **后端**：启动时 `Font.createFont(TRUETYPE_FONT, stream)`（AWT 对 TTF/OTF 统一用 `TRUETYPE_FONT` 常量），缓存 `Map<String, Registered>`
+- **前端（M23 起单轨）**：`FontLoader.ensureLoaded(fontId)` 用 `new FontFace(id, "url(/api/font/file?id=X)")` → `await face.load()` → `document.fonts.add(face)` 动态注册；加载完触发 `onFontLoaded(fontId)` 回调 → `requestDraw` 重画。**删除了 `style.css` 静态 `@font-face` + `PreviewRenderer.fontFamily()` 的 KNOWN 白名单**（M21/M22 加字体漏修的 bug 根因）。失败静默，浏览器走 system fallback
 
 ### 2.4 字号语义
 
@@ -118,7 +123,7 @@ fonts:
 
 算法：
 1. 按 `\n` 切为硬换行段
-2. 每段按字符逐个累加宽度（`Font.getStringBounds().getWidth()`）
+2. 每段按字符逐个累加宽度。**宽度不读 Java/浏览器 font metrics**（两端即便加载同一 TTF 也返不同值，会让换行点双端不一致）；统一走 `TextLayout.charAdvance(fontId, ch, fontSize)`：优先查 `FontMetricsTable`（构建期 / 运行时算的双端共享 advance 表，M20），缺字 / 表未到位时 fallback `canonicalCharWidth`（码点 `< U+2E80` → `round(fontSize × 0.5)`，CJK / 全角 → `fontSize`）
 3. 超出 `w` 时回溯到最近的**软换行点**插入换行
 4. 软换行点定义：
    - 空白字符前（含全角空格 U+3000）
@@ -134,19 +139,21 @@ fonts:
 
 ### 3.3 竖排
 
-**状态：M4-T5 未实装，推迟到 M4.5 / M7**
-（理由：旋转标点规则 + 换列方向 + 与横排 layout 复用的成本在 M4 本身就偏重；单独做更稳。M3 / M4 期间 `vertical: true` 在 EditSession 字段保留但渲染按 `false` 处理并 log WARN 一次。）
+**状态：已实装（M5-C6）。** 双端 `TextLayout.layoutVertical`（Java）/ `web/src/render/TextLayout.ts layoutVertical`（前端镜像）。
 
-`vertical: true` 时（实装后）：
-1. 字符从上到下排列
-2. 全角标点（`。` `，` `！` `？` `：` `；` `“` `”` `（` `）` 等）**旋转 90°** 或替换为竖排对应字符
-3. 半角字符不旋转，保持横向
-4. 换列方向：右 → 左（CJK 传统）或 左 → 右（现代）可配置，默认右 → 左
+`vertical: true` 时：
+1. 字符**从上到下**排列，**列从右到左**（CJK 传统）；每字符占 `fontSize × fontSize` 方格，列宽 = `fontSize × lineHeight`
+2. 全角标点 / 符号（`U+3000–U+303F` 与半宽全宽形式 `U+FF00–U+FFEF`，含全角括号等）**旋转 90°**（`PositionedGlyph.rotated = true`，绘制时绕方格中心 `rotate(π/2)`）；全角汉字本身方形不旋转
+3. 半角字符不旋转，保持直立
+4. 软换行按 box `h`；硬换行 `\n` 起新列
+5. `align` 在竖排下语义 = 列内**顶 / 中 / 底**对齐（`left`→顶、`center`→中、`right`→底）
+
+**当前未覆盖：** 竖排下的**行首禁则**（§3.1 第 4 条）未实装（横排已实装），相对少见，留 M7 polish。换列方向固定右→左，暂不暴露"左→右"配置。
 
 ### 3.4 对齐
 
 `align: "left" | "center" | "right"`：文本框内水平对齐（对每一行分别应用）。
-竖排下 `align` 语义变为顶部/中部/底部对齐（随 §3.3 一并推迟到 M4.5 / M7）。
+竖排下 `align` 语义变为列内顶部 / 中部 / 底部对齐（已随 §3.3 实装）。
 
 ### 3.5 letterSpacing
 
@@ -159,8 +166,8 @@ fonts:
 ### 4.1 RGBA 临时画布
 
 - 整个工程渲染到单张大画布：`widthMaps × 128 × heightMaps × 128` 像素的 `BufferedImage TYPE_INT_ARGB`（Java）/ `ImageData`（JS）
-- 背景先填充 `canvas.background`
-- **v2 起：分层渲染。** 对每个 visible+unlocked 的 layer：
+- 背景先填充 `canvas.background`（Fill 联合类型，§6.4 透明背景说明）
+- **v2 起：分层渲染。** 渲染只看 `layer.visible()` + `layer.opacity > 0` 两个条件（lock 是**纯前端 readonly**，后端 rasterize 透明不读 lock —— 见 CLAUDE.md §lock-state 第 2 条 / `architecture.md §13`）。对每个 `visible` 且 `opacity > 0` 的 layer：
   1. 分配同尺寸 ARGB layer-buffer
   2. 在 layer-buffer 上按层内 z-order 绘制每个 visible element（element 自己的 opacity + blendMode 在此层 buffer 内生效）
   3. 用 `layer.opacity` + `layer.blendMode` 把 layer-buffer 合成到主 buffer
@@ -293,8 +300,17 @@ g.setClip(originalClip);
 每个字形的渲染顺序（从后到前）：
 1. 发光
 2. 阴影
-3. 描边
-4. 字形填充
+3. 描边（`effects.stroke`）
+4. **加粗描边**（`bold`，见 §5.5；与 `effects.stroke` 独立可叠加）
+5. 字形填充
+
+### 5.5 加粗 / 斜体（0.4.6 P3）
+
+`TextElement` 的 `bold` / `italic`（均为 nullable `Boolean`）。双端走**数学等价的线性变换 + stroke 描边**，避免 synthetic bold 在 AWT vs Canvas 像素不一致：
+
+- **bold = 额外一遍 stroke pass**：用**字形填充色**对字形 outline 描边，`width = max(1.5, fontSize × 0.08)`，`CAP_ROUND / JOIN_ROUND`；描边 + 正常 fill 叠加产生加粗视觉。
+  - **像素字体（最近邻路径）跳过 bold 描边**：NN 路径走 `BufferedImage` mask 而非 outline，像素字体本身已够清晰（后端 `!useNearest` / 前端 `!useNN` 守卫）。
+- **italic = shear 变换**：后端 AWT `g.shear(-0.2, 0)`（锚点平移到 `(t.x, t.y)` 后剪切再平移回）/ 前端 `ctx.transform(1, 0, -0.2, 1, 0, 0)`，两式数学等价。包裹整个 drawText 内部所有 pass（glow / shadow / stroke / fill）。dither buffer 对 italic 文本左右各扩 `ceil(0.2 × h)` 的 shear padding，防倾斜后探出的字形被裁切。
 
 ---
 
@@ -338,10 +354,12 @@ for r in 0..31: for g in 0..31: for b in 0..31:
 
 ### 6.4 透明处理
 
-- `alpha < 128` 的像素 → 调色板索引 `0`（完全透明，MC 地图 transparent）
+- `alpha < 128`（`PaletteLut.ALPHA_THRESHOLD`）的像素 → 调色板索引 `0`（`PaletteLut.TRANSPARENT_INDEX`，完全透明，MC 地图 transparent，透出 ItemFrame 后方方块）
 - `alpha ≥ 128` 的像素 → 按 RGB 查 LUT；忽略半透明
 
-不支持半透明像素（MC 地图原生不支持 alpha）。文字的半透明抗锯齿边缘也会被硬截断——这是必须关抗锯齿的另一原因。
+不支持**半透明**像素（MC 地图原生不支持中间 alpha）。文字的半透明抗锯齿边缘也会被硬截断——这是必须关抗锯齿的另一原因。
+
+**透明背景（0.4.6 P2 起支持）：** 主 rasterize buffer 升为 `TYPE_INT_ARGB`（之前 `TYPE_INT_RGB` 会强制合成不透明，把 `SolidFill("#00000000")` 吃成黑底）。背景 alpha 通道现可贯穿到量化层：`toPaletteSlice` 逐像素调 **4 参 `matchColor(r, g, b, a)`** 重载，`a < 128` 时直接返 `TRANSPARENT_INDEX(0)`，整块画布无元素覆盖的区域在 MC 地图里透明。内存成本 +33%（不透明像素 `a >= 128` 时 4 参与 3 参 `matchColor` 等价，snapshot baseline 0 漂移）。编辑器 `CanvasSettingsSection` 提供「设为透明背景」快捷按钮。
 
 ### 6.5 元素级 opacity（M8 协议 v2 引入）
 
@@ -425,34 +443,31 @@ for row in 0..heightMaps:
 
 ### 8.1 Snapshot 测试台
 
-`rendering-test/` 目录：
+**当前实现：后端 JUnit `RendererSnapshotTest`（+ `RendererSnapshotTimelineTest` 多帧）。** fixture / 基线放在 `plugin/src/test/resources/`（**不是** `rendering-test/`）：
 
 ```
-rendering-test/
+plugin/src/test/resources/
 ├── fixtures/                      # 测试工程 JSON
-│   ├── 001-hello-world.json
-│   ├── 002-chinese-signs.json
-│   ├── 003-effects.json
-│   └── ...
-├── expected/                      # 参考位图（人工审核确认过的）
-│   ├── 001-hello-world.png
-│   └── ...
-├── java-runner/                   # 后端渲染测试入口
-└── web-runner/                    # 前端渲染测试入口（Playwright）
+│   ├── 01-hello-world.json
+│   ├── 02-chinese-text.json
+│   ├── 03-effects-stroke.json ... 13-image-*.json
+│   └── 14-timeline-easing.json    # 多帧（§9.6）
+└── expected/                      # 参考位图（人工审核确认过的）
+    ├── 01-hello-world.png ...
+    └── 14-timeline-easing-t{0,250,500,750}.png
 ```
 
-CI 流程：
-1. Java runner 渲染所有 fixture → `actual-java/*.png`
-2. Web runner（Headless Chrome）渲染 → `actual-web/*.png`
-3. 对比 `actual-java` vs `expected` 与 `actual-web` vs `expected`
-4. 像素差异 > 0.5% → fail
-5. 差异图输出到 CI artifact 方便人工审查
+测试流程：`RendererSnapshotTest` 读 `fixtures/*.json` → `rasterize` → 与 `expected/*.png` 逐像素比对，差异 > 0.5%（`TOLERANCE`）→ fail，差异图写 diff 目录。
+
+**前端无独立 snapshot 渲染台：** §8.1 早期设想的 `java-runner` / `web-runner`（Playwright Headless Chrome）**未实装**。前端只有 vitest 单元测试（`web/src/**/__tests__/*.test.ts`，覆盖 livepaint / interpolator / glow+dither 等算法），**不跑像素级双端对比**。双端一致靠"同算法 + 同常量 + 同 metrics JSON"的代码镜像纪律保证（§8.4 / §9.6 缓动测试向量是少数有显式双端数值比对的路径）。
+
+**CI 跳过文本 fixture（0.4.7 起）：** `02-chinese-text` / `03-effects-stroke` / `04-effects-shadow` / `05-effects-glow` 在 Linux + macOS AWT 度量 / effects 内部实现差异 > 0.5%，CI Linux 跑会 fail。这 4 个拆到 `snapshotPlatformSensitive` 方法 + `@DisabledIfEnvironmentVariable(GITHUB_ACTIONS=true)`，**CI 只跑跨平台稳定的几何 / 路径 / 渐变 / dither / 笔刷 / 图片 fixture**；4 个文本 fixture 仅本地 macOS 跑。
 
 ### 8.2 容忍度
 
-- 像素字体（`pixelated=true`）：**0% 差异**
-- 非像素字体在低字号（≤16px）：< 0.5%
-- 非像素字体大字号：< 2%（仅限 hinting 差异）
+- 像素字体（`pixelated=true`）：理想 **0% 差异**
+- 非像素文本 fixture：因 AWT 跨平台度量差，CI 跳过（见 §8.1），本地 macOS 比对沿用 0.5% 容差
+- 几何 / 路径 / 渐变 / dither：< 0.5%（`RendererSnapshotTest.TOLERANCE`）
 
 ### 8.3 修复流程
 
@@ -641,7 +656,7 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
    Java 端与 TS 端各跑同一向量并比对 expected。纯算术、跨平台稳定，进 CI gate。
 2. **多帧 snapshot**：新增 `rasterize(state, timeMs)` 路径 + 带 `timeline` 的 fixture；同一 timeline 在
    `t = 0 / 250 / 500 / 750ms` 各出一张 PNG 比基线。缓动 fixture **只用纯几何元素**（文本 fixture 因 AWT
-   度量差已在 CI 跳过，§8.4 同因）。
+   度量差已在 CI 跳过，§8.1 同因）。
 
 像素容差沿用 §8.2。
 

@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-06-14 · 契约文档批量回填：9 份 docs 原地校准到与代码一致（写用户手册前的地基）
+
+为后续写「整个项目的玩家+服主大文档」做准备,**先把整个项目代码读完**（12 子系统,多子代理并行,
+全程以代码为唯一事实来源,不凭记忆、不信滞后的设计文档），再把既有契约文档**原地**更新到与当前
+代码一致。**不新建、不删除任何文档**;每份由一个子代理先回代码逐条确认、再编辑,保留原结构,未实装
+功能标注「未实装/规划中」而非删除。无任何代码改动。
+
+**9 份文档更新（+1013 / −383 行）:**
+- **protocol.md** 协议 v2→v7;厘清三层版本号（业务 v7 / 信封壳恒 2 / ProjectState schema 3）;
+  close codes 4001/4002/4003/4429 据实;ready payload 补全;补 timeline/script/rail/schedule/tweenFps op;
+  `cancel`、`session.warning` 等未实装标注。
+- **data-model.md** 迁移补到 V017（V009 跳号）+ 别名/全局变量/铁路 5 表 schema;**`.canvas` zip 格式标
+  「规划中·未实装」**;PDC 仅 wall_id+slot;审计事件据实（AUTH_OK 非 AUTH_ISSUED）。
+- **template-spec.md** rotation 0/90/180/270→连续 0..359;元素 4→8 种（line「v1 不渲染」）;icon FA 矢量;
+  fill 三态渐变;补 raw_state「存当前招牌」主路径 + 属性范围常量。
+- **rendering.md** 字体加载改 FontFace API 单轨;**字体数实清点=22 枚**（FontRegistry.BUILT_IN 与
+  bundledFonts 两处一致;旧表只列 2 枚）;竖排「未实装」→已实装;补透明背景（ARGB）+ 加粗/斜体;
+  config `fonts:` 声明段标未实装。
+- **timeline.md** 删不存在的 `PLAYER_NEAR` 枚举;MVP 描述标历史,当前=5 缓动+9 属性+多 timeline;
+  wire camelCase≠Java 名;cubicBezier 已实装。
+- **variables.md** 标题 0.4.0→0.7.3;系统变量列正确;**PAPI 冒号语法不支持**（改 `papi/` 或 `papi.`）;
+  `${var:system/server.time}` 而非裸点号;schedule 7→15 key;chip 紫色。
+- **dynamic-data.md** 同上 PAPI/系统/schedule 修正;铁路 11→13 op;**删除不存在的 `rail.run.edit.*` 权限**
+  （实际复用 line.edit）。
+- **security.md** ⚠️ **SSRF 防御已移除如实写明**（URL 上传不再过滤私网/回环,公网服主醒目提示）;审计事件
+  表据实重写;限流/IP 绑定/token 机制校正;权限节点表对齐 paper-plugin.yml;CI 扫描标「规划未接入」。
+- **architecture.md** `/canvas cleanup` 标 stub 未实装;publish/unpublish 命令砍→ wall.lock op（DAO 保留,
+  语义=lock）;墙面仅垂直限制据实;HTTP 端点鉴权差异表;config 键名校正（map-pool.*）。
+
+**核心发现**:既有 `docs/*.md` 普遍是「规划态/历史态」,与代码出入大,**写文档必须从代码核对、不能照抄
+旧契约**。深度审查清单见 `docs/ultrareview-2026-06-14.md`。下一步:在此地基上写新的玩家+服主用户手册。
+
+关联:`docs/{protocol,data-model,template-spec,rendering,timeline,variables,dynamic-data,security,architecture}.md`
+（均原地更新,无新增/删除）。
+
+---
+
 ## 2026-06-14 · 0.7.x 整体收尾：用户文档 + 契约回填 + 压测简化 + 路线对齐（0.7.0 P6 收口）
 
 0.7.x 主线功能（0.7.0–0.7.3 + 补间）全完工后,**先读代码读文档评估收尾范围**（纠正了凭记忆误判

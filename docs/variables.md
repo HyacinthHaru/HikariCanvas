@@ -1,6 +1,6 @@
 # HikariCanvas 变量系统使用指南
 
-> HikariCanvas 0.4.0 "动态信息屏" 完整指南。覆盖玩家入门、运维管理、端到端测试。
+> HikariCanvas "动态信息屏" 完整指南（覆盖到 0.7.3-SNAPSHOT 行为）。变量系统自 0.4.0 引入，后续 0.4.2 加别名、0.4.3 加全局用户变量、0.4.4 加铁路网络。覆盖玩家入门、运维管理、端到端测试。
 >
 > 配套文档：
 > - `docs/dynamic-data.md`（设计 / 协议 / 数据模型契约）
@@ -20,6 +20,9 @@
   - [1.9 列车时刻表（Manual Schedule）](#19-列车时刻表manual-schedule)
   - [1.10 fallback 语法](#110-fallback-语法)
   - [1.11 变量被删除后？](#111-变量被删除后)
+  - [1.12 变量别名（0.4.2）](#112-变量别名042)
+  - [1.13 铁路网络（0.4.4）](#113-铁路网络044)
+  - [1.14 全局用户变量（0.4.3）](#114-全局用户变量043)
 - [第二部分：运维管理](#第二部分运维管理)
   - [2.1 /canvas var 命令族](#21-canvas-var-命令族)
   - [2.2 config.yml 限流配置](#22-configyml-限流配置)
@@ -50,9 +53,9 @@ HikariCanvas 0.4.0 之前的招牌是 **静态** 的：保存后内容不会变�
 |---|---|---|---|
 | 玩家变量 | `user:<wallId>` | `user/red_score` | 玩家手动 / 插件 push |
 | 插件变量 | 插件自定义（如 `bedwars`） | `bedwars/red_score` | 第三方插件 push |
-| 系统变量 | `system` / `wall` | `system.server.time` / `wall.alias` | HikariCanvas 自维护 |
-| PAPI 桥接 | `papi` | `papi/pct_player_name_pct` | PlaceholderAPI 实时算 |
-| Scoreboard | `scoreboard` | `scoreboard.points.Steve` | Bukkit Scoreboard API |
+| 系统变量 | `system` / `wall` | `${var:system/server.time}` / `${var:wall.alias}` | HikariCanvas 自维护 |
+| PAPI 桥接 | `papi` | `${var:papi/%player_name%}` | PlaceholderAPI 实时算 |
+| Scoreboard | `scoreboard` | `${var:scoreboard.points.Steve}` | Bukkit Scoreboard API |
 | Schedule | `schedule:<wallId>` | `schedule.next_departure` | HikariCanvas 自维护（用户配的时刻表） |
 
 > 详细架构 / 协议见 `docs/dynamic-data.md`。
@@ -135,20 +138,20 @@ chip 视觉：
 
 ### 1.6 系统自动变量
 
-无需创建，HikariCanvas 启动就有 13 个 system / wall 变量可用：
+无需创建，HikariCanvas 启动就有 12 个 system / wall 变量可用（全局 8 + per-wall 4）：
 
 **全局（namespace = `system`）：**
 
 | 引用 | 类型 | 描述 | 刷新间隔 |
 |---|---|---|---|
-| `${var:server.time}` | STRING | 当前服务器本地时间 `HH:mm` | 60s |
-| `${var:server.real_time}` | STRING | 完整 ISO 时间戳 | 60s |
-| `${var:server.tick}` | NUMBER | Bukkit tick 计数 | 1s |
-| `${var:server.online}` | NUMBER | 当前在线人数 | 30s |
-| `${var:server.online_list}` | STRING | 在线玩家名（逗号分隔） | 30s |
-| `${var:server.motd}` | STRING | 服务器 MOTD | 1h |
-| `${var:server.tps}` | NUMBER | Paper TPS 1min 平均 | 30s |
-| `${var:server.name}` | STRING | 服务器名 | 1h |
+| `${var:system/server.time}` | STRING | 当前服务器本地时间 `HH:mm` | 60s |
+| `${var:system/server.real_time}` | STRING | 完整 ISO 时间戳 | 60s |
+| `${var:system/server.tick}` | NUMBER | Bukkit tick 计数 | 1s |
+| `${var:system/server.online}` | NUMBER | 当前在线人数 | 30s |
+| `${var:system/server.online_list}` | STRING | 在线玩家名（逗号分隔） | 30s |
+| `${var:system/server.motd}` | STRING | 服务器 MOTD | 1h |
+| `${var:system/server.tps}` | NUMBER | Paper TPS 1min 平均 | 30s |
+| `${var:system/server.name}` | STRING | 服务器名 | 1h |
 
 **per-wall（namespace = `wall`）：**
 
@@ -159,25 +162,28 @@ chip 视觉：
 | `${var:wall.owner}` | wall 创建者玩家名 |
 | `${var:wall.owner_uuid}` | wall 创建者 UUID |
 
-引用 system / wall 变量时 **可省 namespace 前缀**——`${var:server.time}` 等同于 `${var:system/server.time}`。HikariCanvas 内部按 `.` 分隔自动识别。
+> **引用语法注意**：
+> - **全局 `server.*` 变量必须写完整 `${var:system/server.time}`**——裸点号 alias `${var:server.time}` **不被注入**（interpolator 只对 `user/` `wall.` `schedule.` `scoreboard.` 做 namespace 注入），裸写会 miss 走 fallback `???`。
+> - **per-wall `wall.*` 变量可裸写**——`${var:wall.alias}` 被 interpolator 自动注入成内部 `system:<wallId>/wall.alias`；写 `${var:wall/alias}` 斜杠形式也等价。
 
 ### 1.7 PlaceholderAPI 集成
 
 装上 [PlaceholderAPI](https://wiki.placeholderapi.com/) 后自动启用——HikariCanvas 启动时反射检测 PAPI 类，存在则注册 `papi` namespace 的动态 Provider。
 
-引用语法：
+引用语法（推荐直接写原生 `%xxx%`）：
 
 ```
-${var:papi/pct_player_name_pct}
-${var:papi/pct_server_online_pct}
-${var:papi/pct_<expansion>_<key>_pct}
+${var:papi/%player_name%}
+${var:papi.%player_name%}
+${var:papi/%server_online%}
+${var:papi/%<expansion>_<key>%}
 ```
 
-> **为什么写 `pct_xxx_pct` 而不是 `%xxx%`？**
+> **注意：冒号形态 `${var:papi:%player_name%}` 不被接受**——桥接只识别 `papi/...` 或 `papi....`（斜杠 / 点号分隔），冒号会被当成 key 的一部分 → miss 走 fallback。
 >
-> PAPI 原生占位符语法 `%player_name%` 里的 `%` 会被 HikariCanvas 占位符解析器误判为变量边界。所以 PAPI 桥接做了 **编码层**：将 PAPI 占位符的 `%` 换为 `pct_` / `_pct`，引用时写编码形式，HikariCanvas 内部 resolve 时 decode 回 `%xxx%` 再喂给 PAPI。
+> **编码形式也接受**：`${var:papi/pct_player_name_pct}` / `${var:papi.pct_player_name_pct}`。桥接内部把 PAPI 占位符的 `%` 编码为 `pct_` / `_pct`（store key 校验正则不允许 `%`），resolve 时 decode 回 `%xxx%` 再喂给 PAPI。写原生 `%xxx%` 时由桥接自动编码，玩家无需关心。
 
-不装 PAPI 的服务器：`${var:papi/xxx}` 走 fallback 链（`???` 或自定义 `|fallback=...`）。
+不装 PAPI 的服务器：`${var:papi/%xxx%}` 走 fallback 链（`???` 或自定义 `|fallback=...`）。
 
 ### 1.8 Scoreboard 动态变量
 
@@ -202,7 +208,7 @@ ${var:papi/pct_<expansion>_<key>_pct}
 
 ### 1.9 列车时刻表（Manual Schedule）
 
-HikariCanvas 内置 **手动时刻表** 工具，给 server 没装专门列车 / 公交插件做兜底。**0.4.0 bugfix** 后支持每 wall 独立的 **分钟 / 秒精度** + 4 个新变量（`eta_seconds` / `arrival_status` / `precision` 等）。
+HikariCanvas 内置 **手动时刻表** 工具，给 server 没装专门列车 / 公交插件做兜底。支持每 wall 独立的 **分钟 / 秒精度**，共暴露 15 个变量（含 `eta_seconds` / `eta_mmss` / `arrival_status` / `precision` + 第二班 `next2_*` 系列）。需要完整线路 / 站点 / 车次抽象的服主见 §1.13 铁路网络。
 
 操作：
 
@@ -212,19 +218,34 @@ HikariCanvas 内置 **手动时刻表** 工具，给 server 没装专门列车 /
    - 分钟（默认）：entry 用 `HH:mm`，刷新 30s 一次
    - 秒：entry 用 `HH:mm:ss`（或 `HH:mm` 自动补 `:00`），刷新 1s 一次
 4. 配若干 entry
-5. 关闭 modal → 自动注册 7 个 `schedule:<wallId>` 变量
+5. 关闭 modal → 自动注册 15 个 `schedule:<wallId>` 变量（8 个下一班 + 7 个第二班 `next2_*`）
 
-引用：
+引用（`schedule.X` 裸点号会被 interpolator 自动注入 wallId，无需写完整 namespace）：
+
+**下一班：**
 
 | 变量 | 类型 | 描述 |
 |---|---|---|
-| `${var:schedule.next_departure}` | STRING | 下一班发车时间 `HH:mm` 或 `HH:mm:ss`（按 wall 精度） |
+| `${var:schedule.next_departure}` | STRING | 下一班发车时刻 `HH:mm` 或 `HH:mm:ss`（按 wall 精度） |
 | `${var:schedule.next_destination}` | STRING | 下一班终点 |
 | `${var:schedule.eta_minutes}` | NUMBER | 距下一班还有多少分钟（向下兼容） |
-| `${var:schedule.eta_seconds}` | NUMBER | **0.4.0 bugfix**：距下一班还有多少秒（秒精度主用） |
+| `${var:schedule.eta_seconds}` | NUMBER | 距下一班还有多少秒（秒精度主用） |
+| `${var:schedule.eta_mmss}` | STRING | 距下一班 `MM:SS` 格式（超 99min 仍按 MM 累加） |
 | `${var:schedule.is_arriving}` | BOOLEAN | eta ≤ 阈值（默认 60s）→ `true` / `false` |
-| `${var:schedule.arrival_status}` | STRING | **0.4.0 bugfix**：进站中文案 / 空闲文案（config 可改） |
-| `${var:schedule.precision}` | STRING | **0.4.0 bugfix**：wall 当前精度 `minute` / `second` |
+| `${var:schedule.arrival_status}` | STRING | 进站中文案 / 空闲文案（config 可改） |
+| `${var:schedule.precision}` | STRING | wall 当前精度 `minute` / `second` |
+
+**第二班（`next2_*`，地铁屏标配）：**
+
+| 变量 | 类型 | 描述 |
+|---|---|---|
+| `${var:schedule.next2_departure}` | STRING | 第二班发车时刻 |
+| `${var:schedule.next2_destination}` | STRING | 第二班终点 |
+| `${var:schedule.next2_eta_minutes}` | NUMBER | 距第二班多少分钟 |
+| `${var:schedule.next2_eta_seconds}` | NUMBER | 距第二班多少秒 |
+| `${var:schedule.next2_eta_mmss}` | STRING | 第二班 `MM:SS` 格式 |
+| `${var:schedule.next2_is_arriving}` | BOOLEAN | 第二班 ETA ≤ 阈值 |
+| `${var:schedule.next2_arrival_status}` | STRING | 第二班进站 / 空闲文案 |
 
 **配置**（`config.yml`）：
 
@@ -252,16 +273,18 @@ ${var:NAME|fallback=N/A}        显式 fallback → 当 currentValue / defaultVa
 
 | 档 | 条件 | 输出 |
 |---|---|---|
-| 1 | `Variable.currentValue` 非 null | `currentValue` |
-| 2 | `currentValue` 为 null 但 `defaultValue` 非 null | `defaultValue` |
-| 3 | 上面两个都空，但占位符里写了 `\|fallback=X` | `X` |
+| 1 | `Variable.currentValue` 非空 **且未过 TTL（非 stale）** | `currentValue` |
+| 2 | cached 缺失 / 为空 / 已过期，但占位符里写了 `\|fallback=X` | `X` |
+| 3 | 无 `\|fallback=`，但 `Variable.defaultValue` 非 null | `defaultValue` |
 | 4 | 全空 / 变量不存在 | `???`（系统兜底） |
+
+> 注意优先级：**占位符内的 `\|fallback=X` 比变量自身的 `defaultValue` 优先**（cached 缺失时先用 inline fallback，没写才退到 default）。TTL 过期（stale）的 cached 值不再被采用，等同"缺失"走后续档。
 
 例子：
 
 ```
 分数: ${var:bedwars/red_score|fallback=未开始}
-人数: ${var:server.online}（无 fallback；缺失走 ???）
+人数: ${var:system/server.online}（无 fallback；缺失走 ???）
 ```
 
 ### 1.11 变量被删除后？
@@ -390,8 +413,8 @@ TopBar 火车轨道图标 → **「铁路网络」** modal。
 
 #### wall 绑定铁路
 
-`rail.wall.bind` WS op（前端 UI 在 Schedule Manager modal 后续版本添加；
-v0.4.4 通过 `/canvas var inspect` 命令查看 wall 当前绑定）。
+在 Schedule Manager modal 里有可折叠「铁路绑定」section（线路 / 本站 / 方向 3 列下拉，0.4.5 起），
+选定后走 `rail.wall.bind` WS op；也可用 `/canvas var inspect <wallId>` 命令查看 wall 当前绑定。
 
 绑定后 wall 的 `${var:schedule.next_*}` 自动来自 RailScheduleProvider，
 取代 0.4.0 ManualScheduleProvider 的 per-wall 配置。
@@ -417,7 +440,7 @@ arrival_status / precision` 等保留（rail provider 也写这些 key 让旧 wa
 ```
 下一班 ${var:schedule.next_run_number} 次 → ${var:schedule.next_terminus}
 ${var:schedule.next_cars} 节 · ${var:schedule.next_service_type_text}
-ETA ${var:schedule.next_eta_mmss}
+ETA ${var:schedule.eta_mmss}
 ${var:schedule.next_notes}
 ```
 
@@ -534,10 +557,10 @@ dynamic:
 
 ```
 $ /canvas var list
-Variable namespaces (4 ns / 17 total):
+Variable namespaces:
   system · 8 var(s)
-  wall · 4 var(s)
-  schedule:w-1a2b3c4d · 4 var(s)
+  system:w-1a2b3c4d · 4 var(s)        # per-wall wall.* 变量
+  schedule:w-1a2b3c4d · 15 var(s)
   user:w-1a2b3c4d · 1 var(s)
 ```
 
@@ -600,10 +623,11 @@ audit 日志事件：`VARIABLE_COMMAND_DELETE`。
 ```
 $ /canvas var providers
 Registered providers (6):
-  system 'システム変数' [static] keys=12 interval=1s
-  scoreboard 'Scoreboard' [dynamic] keys=0 interval=10s
+  system '系统变量' [static] keys=12 interval=1s
+  scoreboard 'Bukkit Scoreboard' [dynamic] keys=0 interval=10s
   papi 'PlaceholderAPI' [dynamic] keys=0 interval=30s
-  schedule:w-1a2b3c4d '列车时刻表' [static] keys=4 interval=60s
+  schedule 'Manual Schedule' [static] keys=15 interval=1s
+  rail 'Rail Schedule' [static] keys=... interval=...
   bedwars 'BedWars' [static] keys=0 interval=ZERO
   ...
 ```
@@ -677,9 +701,12 @@ dynamic:
 
 涉及的表：
 
-- `user_variables` — `wall_id / name / type / default_value / current_value / bound_to / created_at / updated_at`
-- `wall_schedules` — 时刻表 per-wall 配置（站名等）
+- `user_variables` — per-wall user 变量（`wall_id / name / type / default_value / current_value / bound_to / created_at / updated_at`）
+- `user_global_variables` — 全局 user 变量（0.4.3，namespace = `userglobal`，PK = name 全服唯一）
+- `variable_aliases` — 变量别名（0.4.2，per-wall）
+- `wall_schedules` — 时刻表 per-wall 配置（站名 / precision 等）
 - `schedule_entries` — 时刻表 entry（HH:mm / 终点）
+- `rail_lines` / `rail_stations` / `rail_runs` / `rail_timetable` / `wall_rail_bindings` — 铁路网络（0.4.4）
 
 备份（停服或在 server 内 `save-all + save-off`）：
 
@@ -693,7 +720,7 @@ sqlite3 plugins/HikariCanvas/data.db ".backup '/path/to/backup-$(date +%Y%m%d).d
 cp plugins/HikariCanvas/data.db /path/to/backup-$(date +%Y%m%d).db
 ```
 
-恢复：停服 → 把备份文件覆盖回去 → 启动。schema 迁移（V010 / V011 / V012）会自动跑。
+恢复：停服 → 把备份文件覆盖回去 → 启动。schema 迁移（当前到 V017）会自动跑。
 
 > **0.x 阶段** schema 可能向前不兼容；启动期日志会提示。生产环境推荐每周一备。
 
@@ -717,11 +744,11 @@ cp plugins/HikariCanvas/data.db /path/to/backup-$(date +%Y%m%d).db
 ```bash
 # 后端
 ./gradlew :plugin:test
-# 当前总数：~700+ test
+# 当前总数：~1989 test（覆盖全部版本）
 
 # 前端
 cd web && npm run test
-# 当前总数：93+ test
+# 当前总数：~1303 test
 ```
 
 ### 3.2 本地 dev server 端到端
@@ -748,11 +775,11 @@ cd web && npm run test
 | 8 | TextElement 写 `${var:user/red}` | P1+P2 interpolator | live preview 显数字 |
 | 9 | textarea 输入 `${` | P2-H 双触发 | Picker 自动弹 |
 | 10 | Picker 看到 system / wall / scoreboard / papi / schedule | P3-M list-all-namespaces | 全显示 |
-| 11 | 用 `${var:server.time}` | P3-J SystemProvider | wall 显 `HH:mm` |
+| 11 | 用 `${var:system/server.time}`（注意必须带 `system/` 前缀） | P3-J SystemProvider | wall 显 `HH:mm` |
 | 12 | 用 `${var:wall.alias}` | P3-J per-wall | wall 显 alias |
 | 13 | `/scoreboard objectives add points dummy` + `${var:scoreboard.points.<你>}` | P3-J scoreboard 混合注册 | 10s 后出现 |
 | 14 | `/scoreboard players set <你> points 42` | Bukkit | wall 10s 内更新 42 |
-| 15 | 装 PAPI + `${var:papi/pct_player_name_pct}` | P3-K reflection | 显玩家名 |
+| 15 | 装 PAPI + `${var:papi/%player_name%}` | P3-K reflection | 显玩家名 |
 | 16 | TopBar Train → 配 2 条时刻表 + 站名 | P3-L | modal 关闭后 schedule.* 变量自动出现 |
 | 17 | `${var:schedule.next_departure}` / `eta_minutes` | P3-L | 实时倒数 |
 | 18 | `./gradlew :examples:demo-train-plugin:jar` + 复制到 plugins/ + `/reload confirm` | P4 + R | console 看 "registered namespace 'demo_train'" |
@@ -802,7 +829,7 @@ sqlite3 plugins/HikariCanvas/data.db "SELECT * FROM schedule_entries;"
 - [`docs/dynamic-data.md`](dynamic-data.md) — 变量系统设计 / 协议契约
 - [`docs/api.md`](api.md) — 第三方插件接入 SDK
 - [`docs/architecture.md`](architecture.md) — 系统架构
-- [`docs/protocol.md`](protocol.md) — WS 协议 v2
+- [`docs/protocol.md`](protocol.md) — WS 协议（当前 v7）
 - [`docs/data-model.md`](data-model.md) — SQLite / PDC 格式
 
 变更日志 / 实施细节倒序见 [`docs/journal.md`](journal.md)。

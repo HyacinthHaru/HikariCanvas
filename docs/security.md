@@ -1,7 +1,7 @@
 # 安全规范
 
-**状态：** 立项稿 v0.1 · 2026-04-19
-**适用范围：** 插件 Web 服务、认证、限流、输入校验、权限节点、审计、部署建议
+**状态：** 随代码同步更新（最近一次对照代码核对：2026-06-14，覆盖至 0.7.3）
+**适用范围：** 插件 Web 服务、认证、限流、输入校验、权限节点、审计、脚本运行时、部署建议
 
 本文档定义 HikariCanvas 的安全模型与实现要求。所有面向网络的代码必须满足本文要求，否则 PR 不合并。
 
@@ -39,6 +39,7 @@
 | T12 | 审计日志被清除 | 事后无法溯源 |
 | T13 | 管理员误操作 | 数据丢失 |
 | T14 | 图片上传滥用：超大文件 / 压缩炸弹 / 伪造 MIME / 路径穿越 / 磁盘填满 / 恶意 EXIF | 资源耗尽、RCE 风险（M13 引入；详细缓解见 §4.5） |
+| T15 | URL 图片上传 SSRF（服务端代 fetch 任意 URL，可探内网 / 回环 / 云元数据） | 内网探测 / 凭证窃取。**0.4.9 起 SSRF 过滤已按用户要求移除，仅校验 scheme + 不跟重定向 + 10MB/30s 上限；公网部署服主自担风险，详见 §4.6** |
 
 ### 1.3 非目标
 
@@ -62,8 +63,8 @@
 生成 token = 随机 32 字节 URL-safe base64 (43 字符)
     │
     │  存储：
-    │    memory: TokenService.tokenMap[token] = {playerUuid, sessionId, issuedAt, ttl}
-    │    SQLite: audit_log 记录 AUTH_ISSUED，存 token 的 SHA-256
+    │    memory: TokenService.tokens[token] = {playerUuid, sessionId, issuedAt, ttlMillis, used}
+    │    SQLite: audit_log 记录 AUTH_ISSUED（首发）/ AUTH_ROTATED（重连 rotate），存 token 的 SHA-256（字段 token_sha256）
     │
     ▼
 拼接 URL = ${publicUrl}/?token=${token}
@@ -72,10 +73,10 @@
 以可点击 TextComponent 发给玩家
     │
     ▼
-玩家 15 分钟内点击 → 浏览器 GET /api/session/:token 验证 → WS auth 消耗
+玩家 15 分钟内点击 → 浏览器 GET /api/session/:token peek 验证（不消耗）→ WS auth 帧 consume 消耗
     │
     ▼
-消耗后立即失效（不可复用）；rotate 出新 token 给 WS 重连用
+消耗后立即失效（不可复用，CAS mark used）；rotate 出新 token 给 WS 重连用（rotate token 同样单次使用）
 ```
 
 ### 2.2 强制要求
@@ -107,9 +108,11 @@ validateToken(t):
 
 ### 2.4 防暴力
 
-- 按源 IP 统计失败次数：**10 次失败 / 5 分钟 → 封禁该 IP 30 分钟**
-- 全局失败率：**100 次 / 分钟 → 切换入「保守模式」**，所有新 token 签发延迟 1s
-- IP 的存储：SHA-256 哈希存 `audit_log.ip_hash`，配置允许加 salt
+**原设计目标（部分未实装，见下方状态说明）：**
+
+- 按源 IP 统计失败次数 + 阈值封禁（IP 级失败计数 → 临时封禁）
+- 全局失败率「保守模式」（延迟签发）
+- IP 的存储：SHA-256 哈希存 `audit_log.ip_hash`（IP 原文绝不入库）
 
 > **当前实装状态（2026-05-25 起）**：`TokenRateLimiter` **已实装**——按源 IP 固定窗口限流（默认 **10 次 / 分钟**，`security.token-rate-limit.per-minute` 可配），在 **WS `auth` 帧 token 校验之前**拦截；超限 **close 4429** + `TOKEN_RATE_LIMIT_EXCEEDED` audit 事件。实现见 `web/TokenRateLimiter.java`（per-IP `ConcurrentHashMap` + 桶内 `synchronized`；P3-31 被动 sweep 每窗口清一次过期桶，内存 O(activeIp) 不无限增长），由 `WebServer.handleAuth` 调用 `tryConsume(authIp)`。
 >
@@ -117,7 +120,7 @@ validateToken(t):
 > - **仅覆盖 WS `auth` 帧**这一路径；**不**含 HTTP `GET /api/session/:token` peek（该端点不读 token 计数）。
 > - 反代部署下因 IP 绑定路径**不读 X-Forwarded-For**（见 §2.5 已知限制），`authIp` 退化为反代本机 IP，per-IP 桶变成「同一反代来源共享一个桶」——真实 IP 级限流仍需反代层 `limit_req_zone $binary_remote_addr` 弥补（与 §2.5 / §7.4 反代限制联动）。
 >
-> token 本体熵（256 bit · 单次使用 · 15min TTL）仍是第一道防线。**全局保守模式（100 次/分钟 → 延迟签发）+ `SessionRateLimiter` IP 级失败计数**这两项进阶防御仍 **未实装**，留 v1.x。
+> token 本体熵（256 bit · 单次使用 · 15min TTL）仍是第一道防线。**全局保守模式（延迟签发）+ IP 级失败计数 / 临时封禁**这两项进阶防御仍 **未实装**，留 v1.x。（`SessionRateLimiter` 是另一回事——它做的是**每会话编辑 op 限流 40/2s**，不是 token / IP 失败计数，见 §3.3。）
 
 ### 2.5 会话级 IP 绑定（M16-P6.6，2026-05-16）
 
@@ -141,9 +144,9 @@ validateToken(t):
 
 ### 3.1 连接层
 
-- 只接受本机或反代的 `Origin` 头（可配置白名单；默认 `null` 关闭 Origin 校验以兼容原生 WS 客户端）
-- 连接前必须完成 HTTP 预握手 `GET /api/session/:token`
-- 每连接在 5 秒内必须发送 `auth` 帧，否则强制关闭
+- **WS upgrade Origin 白名单（M16-P1.3 实装，`WebServer.checkWsOrigin` / `isOriginAllowed`）**：放行三类 ——（1）无 / 空 / 字面 `"null"` 的 Origin（同源 fetch / 非浏览器客户端）；（2）`127.0.0.1:*` / `localhost:*`（开发环境）；（3）与服务端 `host:port` 完全同源，或显式命中 `network.allowed-origins` 配置白名单（严格大小写敏感匹配 scheme+host+port）。其余一律拒绝 upgrade（防 CSWSH 跨站 WS 劫持）。**注意：携带任意非白名单 Origin 的浏览器请求会被拒；缺失 Origin 的非浏览器客户端放行**
+- 连接前需完成 HTTP 预握手 `GET /api/session/:token`（peek 校验，不消耗 token）
+- 每连接在 5 秒内必须发送 `auth` 帧，否则强制 close 4001（`auth_timeout`）
 
 ### 3.2 消息层
 
@@ -155,15 +158,14 @@ validateToken(t):
 
 ### 3.3 限流
 
-实现三层漏桶：
+**当前实装（`SessionRateLimiter`）**：单会话固定窗口计数器 —— 默认 **40 msg / 2s**（≈ 20 msg/s 平均）。窗内超限本次 op 直接返回 `RATE_LIMITED` 并丢弃，**不关闭连接**。
 
-| 层级 | 规则 | 超过动作 |
-| --- | --- | --- |
-| 即时速率 | 20 msg/s | 返回 `RATE_LIMITED`，丢弃本次 |
-| 突发 | 40 msg / 2s | 同上 |
-| 反复超限 | 5 次 RATE_LIMITED / 1 min | WS close 1008 + 会话终止 |
+| 层级 | 规则 | 超过动作 | 状态 |
+| --- | --- | --- | --- |
+| 突发窗口 | 40 msg / 2s（`DEFAULT_BURST` / `DEFAULT_WINDOW_MS`） | 返回 `RATE_LIMITED`，丢弃本次 | ✅ 实装 |
+| 反复超限 → close | 5 次 RATE_LIMITED / 1 min → close 1008 + 终止会话 | — | **未实装**（代码注释「留 M7 polish」，至今未做） |
 
-数值来自 `limits.ws-messages-per-second` 配置，默认给出推荐值。
+这与 token 暴力枚举限流（§2.4 `TokenRateLimiter`，per-IP 10 次/分钟 → close 4429）是正交的两套限流。
 
 ---
 
@@ -283,35 +285,81 @@ validateToken(t):
 - EXIF 信息读取 / 隐私元数据清除（ImageIO 解码后重写 PNG 时自然丢，不依赖额外 scrub）
 - 杀毒 / 内容审核（超 scope；走 Bukkit 服管手动责任）
 
+### 4.6 URL 图片上传 `POST /api/upload/url`（0.4.7 引入）
+
+编辑器允许玩家粘贴一个图片 URL，由服务端代为 fetch 后走与文件上传相同的解码 / 配额 / 存储栈。
+
+> ⚠️ **SSRF 防御已移除（0.4.9 hotfix-3 起，按用户明确要求）—— 公网部署服主必读**
+>
+> `UrlFetchSafety.check`（代码注释明确「SSRF 风险由用户自担」）**仅校验**：
+> - scheme 必须是 `http` / `https`（仍拒 `file://` / `ftp://` / `data:` / `javascript:` 等）
+> - URI 语法合法且 host 非空
+>
+> **已被删除的过滤（务必知悉）**：DNS 解析、私有地址段（RFC1918）、回环（127.0.0.0/8）、link-local、CGNAT（100.64.0.0/10）、IPv6 unique-local（fc00::/7）、`localhost` 字符串黑名单。`UrlFetchSafety.Reason` 中的 `UNRESOLVABLE_HOST` / `PRIVATE_ADDRESS` 枚举项保留但**新代码不再返回**。
+>
+> **后果**：任意持 `canvas.upload` 权限的玩家可让服务端向**任意内网 / 回环地址**发起 GET 请求（如 `http://169.254.169.254/`（云元数据）/ `http://127.0.0.1:<内部端口>/`），这是典型 **SSRF**。设计取舍是「本地 / 可信玩家场景，风险用户自担」。
+>
+> **公网或开放注册服务器必须额外缓解**：在反代 / 防火墙层禁止插件进程主动访问内网网段，或直接关闭 URL 上传入口（不给 `canvas.upload` 权限）。**不要假设本插件还在防 SSRF。**
+
+**残留缓解（仅这三项，非 SSRF 防护）**：
+
+- **不跟随重定向**：`HttpURLConnection.setInstanceFollowRedirects(false)`（302 等不自动跳，避免重定向绕过 scheme 校验）
+- **字节上限 10 MB**：硬编码 `URL_MAX_BYTES`，超出 abort（注意：此处先按硬上限读，再按可配 `images.max-size-kb` 默认 2 MB 复查）
+- **总超时 30s**：连接 + 读取各 15s（`URL_TIMEOUT_MS / 2`）
+- fetch 回来的字节仍走与文件上传完全相同的 magic 校验 / ImageIO 隔离解码 / 配额 / hash 存储栈
+
 ---
 
 ## 5. 权限节点
 
+> 下表与 `plugin/src/main/resources/paper-plugin.yml` 的 `permissions:` 段为权威，二者必须一致。默认值列直接取 yml 的 `default`（`true` = 所有玩家、`op` = 仅 OP）。
+
 | 节点 | 默认 | 说明 |
 | --- | --- | --- |
-| `canvas.use` | op=true, player=false | 使用任何功能（基础总开关） |
-| `canvas.edit` | 继承 `canvas.use` | 开启编辑会话（`/canvas edit` / 持 Wand 交互） |
-| `canvas.wand` | 继承 `canvas.edit` | 领取 Canvas Wand 物品 |
-| `canvas.template.use.*` | 继承 `canvas.edit` | 使用特定模板，如 `canvas.template.use.subway_station` |
-| `canvas.template.all` | true 等价所有子节点 | |
-| `canvas.import` | false | 导入 `.canvas` 工程 |
-| `canvas.upload` | 继承 `canvas.edit` | 通过 `/api/upload` 上传图片（M13） |
-| `canvas.upload.bypass-limit` | op=true | 跳过每画 / 每日配额检查（M13） |
-| `canvas.template.use-others` | op=true | 使用其他玩家发布的用户模板（**M16-P1.6 引入**；TemplateRegistry `byIdForApply` 跨用户隔离，无此节点只能用自己发布的 + 内置模板） |
-| `canvas.alias.any` | op=true | 修改任意 wall 的 alias（**M16-P1.7 引入**；默认 wall.alias WS op 只允许 owner 改） |
-| `canvas.admin.bypass-lock` | op=true | M15.3 鉴权方案 C：绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open（M15 引入） |
-| `canvas.delete.own` | 继承 `canvas.edit` | 删除自己的画（`/canvas delete <wall_id>`，M5.5 起替代 `canvas.remove.own`） |
-| `canvas.delete.any` | op=true | 删除任何画（M5.5 起替代 `canvas.remove.any`） |
-| `canvas.admin` | op=true | 管理命令（reload / stats / cleanup / fsck） |
-| `canvas.admin.bypass-limit` | op=true | 无视限流与画布上限 |
-| `canvas.admin.force-break` | op=true | 允许破坏插件保护的成品物品框 |
-| `canvas.var.read` | 继承 `canvas.use` | 0.4.0：查看变量列表（编辑器自动补全） |
-| `canvas.var.write.own` | 继承 `canvas.edit` | 0.4.0：在自己 wall 上创建 / 改值 user/* 变量 |
-| `canvas.var.write.any` | op=true | 0.4.0：在任意 wall 上 |
-| `canvas.var.delete.own` | 继承 `canvas.edit` | 0.4.0：删除自己 wall 上的 user/* 变量 |
-| `canvas.var.delete.any` | op=true | 0.4.0 |
-| `canvas.var.bind` | op=true | 0.4.0：让 user/* 变量被插件 push 接管（敏感操作） |
-| `canvas.var.command` | op=true | 0.4.0：用 `/canvas var` 命令族 |
+| `canvas.use` | true | 使用任何功能（基础总开关） |
+| `canvas.edit` | true | 开启编辑会话（`/canvas edit` / 持 Wand 交互） |
+| `canvas.wand` | true | 领取 Canvas Wand 物品 |
+| `canvas.commit` | true | 提交（保存）招牌 |
+| `canvas.bench` | op | 跑服务端渲染 benchmark（`/canvas bench`，0.5.0） |
+| `canvas.upload` | true | 通过 `/api/upload` 上传图片（M13） |
+| `canvas.upload.bypass-limit` | op | 跳过每画 / 每日 / 总磁盘配额检查（M13） |
+| `canvas.delete.own` | true | 删除自己的画（`/canvas delete <wall_id>`） |
+| `canvas.delete.any` | op | 删除任何画 |
+| `canvas.alias.any` | op | 修改任意 wall 的 alias（默认 wall.alias WS op 只允许 owner 改） |
+| `canvas.admin` | op | 管理命令（stats / cleanup / reload） |
+| `canvas.admin.bypass-limit` | op | 无视限流与画布上限 |
+| `canvas.admin.force-break` | op | 允许破坏插件保护的成品物品框 / 支撑方块 |
+| `canvas.admin.bypass-lock` | op | M15.3 鉴权方案 C：绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open |
+| `canvas.template.save` | true | 把当前 wall 发布为创意工坊模板 |
+| `canvas.template.delete.own` | true | 删除自己发布的模板 |
+| `canvas.template.delete.any` | op | 删除任意模板（moderation） |
+| `canvas.template.feature` | op | 标记 / 取消模板为精选 |
+| `canvas.template.bypass-limit` | op | 跳过每玩家模板发布数配额 |
+| `canvas.template.use-others` | op | 使用其他玩家发布的用户模板（M16-P1.6；TemplateRegistry `byIdForApply` 跨用户隔离） |
+| `canvas.var.read` | true | 0.4.0：查看变量列表与值（编辑器自动补全） |
+| `canvas.var.write.own` | true | 0.4.0：在自己 wall 上创建 / 改值 user/* 变量 |
+| `canvas.var.write.any` | op | 0.4.0：在任意 wall 上修改用户变量 |
+| `canvas.var.delete.own` | true | 0.4.0：删除自己 wall 上的 user/* 变量 |
+| `canvas.var.delete.any` | op | 0.4.0：删除任意 wall 上的用户变量 |
+| `canvas.var.bind` | op | 0.4.0：让 user/* 变量被插件 push 接管（敏感操作） |
+| `canvas.var.command` | op | 0.4.0：用 `/canvas var` 命令族 |
+| `canvas.var.global.create` | true | 0.4.3：创建全局用户变量（`userglobal/*`，跨 wall 共享） |
+| `canvas.var.global.write.own` | true | 0.4.3：修改自己创建的全局用户变量 |
+| `canvas.var.global.write.any` | op | 0.4.3：修改任意全局用户变量（管理员 override） |
+| `canvas.var.global.delete.own` | true | 0.4.3：删除自己创建的全局用户变量 |
+| `canvas.var.global.delete.any` | op | 0.4.3：删除任意全局用户变量（管理员 override） |
+| `canvas.schedule.own` | true | 0.4.0-P3-L：管理自己 wall 的列车 / 公交时刻表 |
+| `canvas.schedule.any` | op | 管理任意 wall 的时刻表（管理员） |
+| `canvas.rail.line.create` | true | 0.4.4：创建铁路线路 |
+| `canvas.rail.line.edit.own` | true | 0.4.4：编辑自己创建的线路 / 站点 / 车次 / 时刻表 |
+| `canvas.rail.line.edit.any` | op | 0.4.4：编辑任意铁路线路（管理员） |
+| `canvas.rail.line.delete.own` | true | 0.4.4：删除自己创建的铁路线路 |
+| `canvas.rail.line.delete.any` | op | 0.4.4：删除任意铁路线路（管理员） |
+| `canvas.rail.wall.bind` | true | 0.4.4：把 wall 绑定到铁路网络 |
+| `canvas.script.edit` | true | 0.7.0：给自己能打开的墙编排积木脚本（基础脚本权限） |
+| `canvas.script.trigger.global` | true | 0.7.0：使用全服事件触发器（进服 / 被击杀 / 退服 / 右键墙） |
+| `canvas.script.sound` | true | 0.7.0：在脚本里用"播放声音 / 粒子"积木 |
+| `canvas.script.command` | op | 0.7.0：在脚本里用"执行命令模板"积木（危险面，见 §13.1） |
 
 Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
@@ -329,7 +377,7 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 | `/canvas wand` | `canvas.wand` |
 | `/canvas confirm` | `canvas.edit`（同开启会话的权限） |
 | WS auth 成功 | 再次校验 `canvas.edit`（防权限中途撤销） |
-| `template.apply` | `canvas.template.use.<id>` 或 `canvas.template.all` |
+| `template.apply`（他人发布的用户模板） | `canvas.template.use-others`（内置模板 / 自己发布的模板无需此节点） |
 | `/canvas delete <wall_id>` | wall owner == 自己 且 `canvas.delete.own` / 或 `canvas.delete.any`；二次确认强制 30s |
 | 管理员命令 | `canvas.admin` |
 | 超出画布 `max-maps` | 需 `canvas.admin.bypass-limit` |
@@ -392,26 +440,58 @@ server {
 
 ### 8.1 必须记录
 
+> 下表事件名与代码 `auditLog.record("...")` 调用点的字面量为权威（脚本相关事件另见 §13.7）。
+> **注意**：`AUTH_FAILED` / `RATE_LIMITED` / `INVALID_PAYLOAD` 等是**错误响应码**（走 `Envelope.error` / HTTP status），**不是审计事件**，不会写入 `audit_log` 表。
+
+**认证 / 会话：**
+
+| 事件 | 触发 | 字段 |
+| --- | --- | --- |
+| `AUTH_ISSUED` | `/canvas confirm` 首发 token | player, session, token_sha256, ttl_ms |
+| `AUTH_ROTATED` | WS auth 成功后 rotate 重连 token | player, session, token_sha256, ttl_ms |
+| `AUTH_OK` | WS auth 帧校验通过 | player, session, ip_hash |
+| `SESSION_BEGIN` | `/canvas edit` 开新会话 | player, session, wall, mapIds |
+| `SESSION_OPEN` | `/canvas open` 打开已有 wall | player, session, wall |
+| `SESSION_CONFIRM` | `/canvas confirm` 提交 | player, session |
+| `SESSION_CANCEL` | `/canvas cancel` 取消 | player, session |
+| `TOKEN_RATE_LIMIT_EXCEEDED` | per-IP token 限流超限（close 4429） | ipHash（仅 SHA-256，不存原文 IP） |
+
+**权限 / wall / 上传：**
+
+| 事件 | 触发 | 字段 |
+| --- | --- | --- |
+| `PERMISSION_DENIED` | 任一权限校验失败 | player, node（M16-P6.4：write 失败 SEVERE stack trace 兜底） |
+| `WALL_DELETE` | `/canvas delete` 删除 wall | player, session, wall_id |
+| `WALL_LOCK` | `wall.lock` op | player, session, wall_id, locked_at |
+| `WALL_UNLOCK` | `wall.unlock` op | player, session, wall_id |
+| `WALL_ALIAS` | `wall.alias` op | player, session, wall_id, old_alias, new_alias |
+| `IMAGE_UPLOAD_OK` | 上传成功 | player, session, hash, bytes, width, height |
+| `IMAGE_UPLOAD_REJECTED` | 上传被拒（含 URL fetch 失败 / 解码超时等 reason） | player, session, reason, content_length |
+| `PLUGIN_NAMESPACE_DENIED` | 插件 push 撞别人 namespace（ACL 拒） | plugin, namespace |
+
+**地图池（`MapPool`）：**
+
 | 事件 | 字段 |
 | --- | --- |
-| `AUTH_ISSUED` | player, session, token_hash, ttl |
-| `AUTH_OK` | player, session, ip_hash |
-| `AUTH_FAIL` | ip_hash, reason |
-| `EDIT_START` | player, session, wall, mapIds |
-| `COMMIT` | player, session, sign_id, element_count |
-| `CANCEL` | player, session, reason |
-| `CLEANUP` | admin, target_sign_ids |
+| `POOL_INITIALIZED` | size |
 | `POOL_EXPAND` | old_size, new_size |
-| `POOL_SHRINK` | old_size, new_size |
-| `RATE_LIMITED` | session, op_count |
-| `PERMISSION_DENIED` | player, node（M16-P6.4：write 失败 SEVERE stack trace 兜底） |
-| `INPUT_REJECTED` | session, field, reason |
-| `WALL_LOCK` | player, session, wall_id, locked_at（**M16-P6.4 新增**） |
-| `WALL_UNLOCK` | player, session, wall_id（**M16-P6.4 新增**） |
-| `WALL_ALIAS` | player, session, wall_id, old_alias, new_alias（M16-P1.7） |
-| `IMAGE_UPLOAD_OK` | player, session, hash, bytes, width, height（**M16-P6.4 新增**） |
-| `IMAGE_UPLOAD_REJECTED` | player, session, reason, content_length（**M16-P6.4 新增**） |
+| `POOL_RESERVE` / `POOL_BIND_WALL` / `POOL_RELEASE_WALL` | wall_id, map_ids |
 | `POOL_RELEASE_TO_FREE` | wall_id, map_ids, reason（M16-P2.5；WallRestorer 失败回收路径） |
+| `POOL_LEAK` / `POOL_ORPHAN_ROW` | map_ids（泄漏 / 孤儿行检测） |
+
+**变量 / 时刻表 / 铁路 / 时间轴：**
+
+| 事件 | 触发 |
+| --- | --- |
+| `VARIABLE_CREATE/UPDATE/SET/DELETE/BIND` | `variable.*` WS op（per-wall 用户变量） |
+| `VARIABLE_GLOBAL_CREATE/UPDATE/SET/DELETE/BIND` | 同上但 `userglobal/*` 全局变量（0.4.3） |
+| `VARIABLE_ALIAS_SET` / `VARIABLE_ALIAS_CLEAR` | `variable.alias.*` op（0.4.2） |
+| `VARIABLE_COMMAND_SET` / `VARIABLE_COMMAND_DELETE` | `/canvas var set/delete` 命令 |
+| `SCHEDULE_UPSERT` / `SCHEDULE_ENTRY_ADD/UPDATE/DELETE` | `schedule.*` op（0.4.0-P3-L） |
+| `RAIL_LINE_*` / `RAIL_STATION_*` / `RAIL_RUN_*` / `RAIL_TIMETABLE_SET` / `RAIL_WALL_BIND` | `rail.*` op（0.4.4，共 11 个） |
+| `TIMELINE_PLAY` / `TIMELINE_PAUSE` / `TIMELINE_SEEK` | `timeline.*` 播放控制 op（0.6.0） |
+
+脚本相关审计事件（`SCRIPT_*`）单列于 §13.7。
 
 ### 8.2 访问控制
 
@@ -453,9 +533,11 @@ server {
 
 ### 10.2 CI
 
-- Dependabot（或 Renovate）监控依赖升级
-- 每日扫描 `gradle dependencyCheck`（OWASP 插件）
-- 前端 `npm audit --audit-level=high` 纳入 PR 检查
+> **当前实装状态**：`.github/workflows/ci.yml` 跑前端 vitest + vite build + 后端 `:plugin:test` + `shadowJar`。下列依赖安全扫描项为**规划目标，尚未接入 CI**：
+>
+> - Dependabot（或 Renovate）监控依赖升级 —— **未配置**（无 `.github/dependabot.yml`）
+> - 每日 `gradle dependencyCheck`（OWASP 插件）—— **未接入**
+> - 前端 `npm audit --audit-level=high` 纳入 PR 检查 —— **未接入**（CI 里 npm ci 失败回退时反而带 `--no-audit`）
 
 ### 10.3 发布构件
 

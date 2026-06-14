@@ -1,11 +1,17 @@
 # 模板 YAML 规范
 
-**状态：** 立项稿 v0.1 · 2026-04-19
-**格式版本：** `1`
+**状态：** 实装稿 · 对齐代码 2026-06-14
+**格式版本：** `1`（`TemplateLoader.SUPPORTED_SPEC = 1`）
 **文件扩展名：** `.yml`（或 `.yaml`）
 **适用范围：** 所有内置模板、服务器自定义模板、社区分享模板
 
 本文档定义模板的 YAML 结构。模板是用户面的重要扩展点，**格式一旦在 v1.0 发布就不再做破坏性变更**；新字段只能以向后兼容方式加入。
+
+> **两种模板模式（M14 起）：**
+> 1. **声明式 layout 模式**——本文 §2-§7 描述的手写 YAML（`canvas` + `params` + `layout`），内置模板与服主手写模板走这条。
+> 2. **raw_state 模式**——玩家在编辑器里点「存当前招牌为模板」，系统把当前 `ProjectState` 整体内嵌进模板的 `raw_state` 字段（见 §2.1）。这是玩家创意工坊的主路径。
+>
+> 两种模式由 `raw_state` 字段是否存在区分（`TemplateSpec.isRawStateMode()`）：`raw_state` 非空时 `canvas` / `layout` 可省略，实例化绕开声明式路径。
 
 ---
 
@@ -15,11 +21,13 @@
 | --- | --- |
 | 内置模板 | jar 内 `resources/templates/*.yml`（只读） |
 | 服务器模板 | `plugins/HikariCanvas/templates/*.yml` |
-| 玩家模板（v1.x 后） | `plugins/HikariCanvas/user-templates/<uuid>/*.yml` |
+| 玩家模板（M14 起，创意工坊） | `plugins/HikariCanvas/user-templates/<uuid>/*.yml` |
 
-加载顺序：**内置 → 服务器 → 玩家**。同 `id` 后加载覆盖前者，允许服主覆盖内置模板。
+加载顺序：**内置 → 服务器 → 玩家**（代码出处 `TemplateRegistry.reload`）。覆盖规则**不对称**：
+- **服务器模板同 `id` 覆盖内置**（允许服主替换内置模板）
+- **玩家模板同 `id` 跳过**（不覆盖 builtin / server，避免玩家抢占已有 id）
 
-启动时全部扫描解析，失败的单个模板记 warn log，不影响其他模板加载。`/canvas reload templates` 热重载（管理员权限 `canvas.admin`，原子 swap 一次性替换 registry 指针避免半态）。
+启动时全部扫描解析，失败的单个模板记 warn log，不影响其他模板加载。`/canvas reload templates` 热重载（管理员权限 `canvas.admin`，原子 swap 一次性替换 `volatile` registry 引用避免半态）。
 
 **解析库（M6 决策 2026-05-11）：** `jackson-dataformat-yaml` 2.18.2，与项目 Jackson 主线一致。YAML 直接 `readValue` 到 record（详见 `docs/security.md §4.3`）。不开 polymorphic typing、不允许 `@class` 之类字段。
 
@@ -35,31 +43,66 @@ description: 标准地铁站风格   # 简介
 version: 1                   # 模板内容版本，便于追踪改动
 author: "hikari-canvas-official"
 tags: [sign, transit, cjk]   # 搜索分类
-preview: "previews/subway_station.png"   # 编辑器缩略图（可空）
 
-canvas:                     # 画布定义
+canvas:                     # 画布定义（raw_state 模式可省略）
   ...
 
 params:                     # 参数声明
   ...
 
-layout:                     # 布局与元素
+layout:                     # 布局与元素（raw_state 模式可省略）
   ...
+
+# raw_state:                # 创意工坊模式：内嵌完整 ProjectState（与 layout 互斥，见 §2.1）
+#   ...
 ```
 
 | 字段 | 必填 | 类型 | 说明 |
 | --- | --- | --- | --- |
 | `spec` | ✅ | int | 格式版本，当前 `1`。插件拒绝更高 spec |
-| `id` | ✅ | string | 小写 + 下划线 + 数字，长度 3~64 |
-| `name` | ✅ | string | UI 显示名，支持 Unicode |
+| `id` | ✅ | string | 匹配 `^[a-z][a-z0-9_-]{2,63}$`（小写字母开头，含数字 / `_` / `-`，长度 3~64；M14 起允许 `-` 以容纳 `user-<uuid8>-<slug>` 工坊命名） |
+| `name` | ✅ | string | UI 显示名，支持 Unicode，长度 ≤ 64 |
 | `description` | | string | |
 | `version` | | int | 模板内容版本，服主自管 |
 | `author` | | string | |
 | `tags` | | string[] | 编辑器筛选用 |
-| `preview` | | string | 相对模板文件的路径 |
-| `canvas` | ✅ | object | 见 §3 |
+| `canvas` | △ | object | 见 §3。声明式 layout 模式必填；raw_state 模式可省略 |
 | `params` | | map | 见 §5 |
-| `layout` | ✅ | object | 见 §4 |
+| `layout` | △ | object | 见 §4。声明式 layout 模式必填；raw_state 模式可省略 |
+| `raw_state` | △ | object | 见 §2.1。raw_state 模式专用；与 `layout` 二选一 |
+
+> **`preview` 字段已废弃。** 文档早期版本有 `preview: "previews/xxx.png"` 字段；自 M7 起编辑器缩略图改为服务端动态渲染（`GET /api/template/{id}/preview.png`，见 §7 / §12），模板里写 `preview` 无效（解析时静默忽略，不报错）。
+
+---
+
+## 2.1 raw_state 模式（创意工坊）
+
+玩家在编辑器里点「存当前招牌为模板」时，后端 `TemplateExporter` 把当前 `ProjectState` 反向序列化为模板（代码出处 `template/TemplateExporter.java` / `TemplatePublisher.java`）：
+
+```yaml
+spec: 1
+id: user-1a2b3c4d-my-sign
+name: 我的招牌
+raw_state:                # 内嵌完整 ProjectState 的序列化形式（Map 结构）
+  widthMaps: 4
+  heightMaps: 1
+  canvas: { ... }
+  layers:
+    - elements:
+        - type: text
+          text: "${text_1}"   # 自动参数化的文本
+          ...
+params:
+  text_1:
+    type: text
+    default: "原始文字"
+```
+
+**v1 参数化范围 = 仅文本。** 导出时 `TemplateExporter` 按 z-order 扫所有 `TextElement`，给每个分配默认 paramId `text_1 / text_2 / ...`；用户对每个文本可选「保留为参数」（keep）或写死。keep 时把 element 的 `text` 字段替换为 `"${paramId}"`，并在 `params` 段生成一个 `type: text` 的参数。**非文本字段（颜色 / 字号 / 坐标 / fill 等）参数化留 v1.x**（代码注释明确标注 future）。
+
+**实例化（`TemplateInstantiator`）：** 检测到 `raw_state` 非空时，深拷贝 raw_state → 遍历 Map 把**所有 String 字段**中的 `${param}` 占位符替换为参数值 → 反序列化回 `ProjectState` → 走 EditSession replace。raw_state 内的 element 同样跑 `validateElementForTemplateApply` 二次安全校验（坐标 / 尺寸 / 旋转 / fill / mask / image source 等），防止玩家通过模板注入畸形 element。
+
+**安全阈值（M16）：** raw_state 嵌套深度上限 32（`MAX_DEEP_COPY_DEPTH`）；单文档 YAML 码点上限 5 MiB；anchor/alias 展开上限 50。
 
 ---
 
@@ -81,8 +124,10 @@ canvas:
 | `maps` | `[int, int]` | — | `[width, height]`，`size: fixed` 必填 |
 | `min_maps` | `[int, int]` | `[1, 1]` | `size: auto` 时下限 |
 | `max_maps` | `[int, int]` | `[8, 4]` | `size: auto` 时上限 |
-| `background` | color | `"#FFFFFF"` | |
-| `padding` | int / `[int,int,int,int]` | `0` | 单值等同四值相同 |
+| `background` | color | `"#FFFFFF"` | hex `#RRGGBB[AA]` 或 `${param}`。**声明式 layout 模式下仅 hex 字符串/占位符**（`TemplateCanvas.background` 为 `String`）；渐变背景请走 raw_state 模式（ProjectState 的 `canvas.background` 是 Fill 联合类型，见 §4.4） |
+| `padding` | int / `[int,int,int,int]` | `0` | 单值等同四值相同；上/右/下/左 |
+
+> **校验：** `maps` / `min_maps` / `max_maps` 各维度范围 `[1, 16]`（`TemplateLoader.validateMapsDim`）。`size: fixed` 时 `maps` 必填。
 
 ---
 
@@ -107,41 +152,51 @@ layout:
 ### 4.2 元素通用字段
 
 ```yaml
-- type: text                # text | rect | line | icon
-  id: title                 # 元素局部 id（可空，系统自动生成）
+- type: text                # text | rect | line | icon（声明式 layout 模式的 4 种元素）
+  id: title                 # 元素局部 id（可空，系统自动生成 e-<uuid>）
   x: 0                      # free 时必填；stack/grid 忽略
   y: 0
   w: auto                   # "auto" 或具体像素，auto 由内容决定
   h: auto
-  rotation: 0               # 0 | 90 | 180 | 270
+  rotation: 0               # 连续整数，范围 [0, 360)；任意角度均可（非仅直角）
   visible: true             # 支持 ${param}
   z_order: 0
 ```
+
+> **声明式 layout 元素 = `text` / `rect` / `line` / `icon` 共 4 种**（代码出处 `template/TemplateElement.java` sealed permits）。这是模板 DSL 的简化元素集，**不是**运行时的完整元素体系。
+>
+> 运行时 `ProjectState` 有 **8 种** element：`text` / `rect` / `circle` / `shape` / `path` / `brush` / `image` / `icon`（代码出处 `state/Element.java`）。raw_state 模式（§2.1）内嵌的是完整 ProjectState，故 8 种全部可用；声明式 layout 模式只暴露上述 4 种。
+>
+> **`rotation` 是连续整数**，范围 `[0, 360)`，任意角度均可（`ElementValidator.validateRotation` 校验 `0 ≤ r < 360`）。文档早期写的「0 | 90 | 180 | 270 四直角」是错误约束，代码从未限制为直角。
 
 ### 4.3 text 元素
 
 ```yaml
 - type: text
-  content: "${name}"         # 支持参数插值
-  font: sourcehan            # 引用 config.yml 中的字体 ID
-  size: 48
-  color: "#000000"
-  align: center              # left | center | right
-  line_height: 1.2
-  letter_spacing: 0
-  vertical: false
+  content: "${name}"         # 支持参数插值（必填）
+  font: source_han_sans      # 内置字体 ID；支持 ${param}（动态字体选择）；缺省 ark_pixel
+  size: 48                   # 字号；缺省 24；钳位 [1, 512]（MAX_FONT_SIZE）
+  color: "#000000"           # 缺省 #000000；支持 ${param}
+  align: center              # left | center | right；缺省 left
+  line_height: 1.2           # 缺省 1.2；钳位 [0.5, 4.0]
+  letter_spacing: 0          # 缺省 0；钳位 [-32, 128]
+  vertical: false            # 竖排
   effects:
     stroke:
-      width: 1
-      color: "#FFFFFF"
+      width: 1               # 描边宽度，范围 [0, 128]
+      color: "#FFFFFF"       # 支持 ${param}
     shadow:
-      dx: 2
+      dx: 2                  # 偏移 ±128
       dy: 2
-      color: "#808080"
+      color: "#808080"       # 支持 ${param}
     glow:
-      radius: 4
-      color: "#FFD700"
+      radius: 4              # 范围 [0, 64]
+      color: "#FFD700"       # 支持 ${param}
 ```
+
+> **字体 ID 示例已更新。** 文档早期用 `sourcehan` / `source han` 等过时名；现实内置字体 ID 形如 `source_han_sans`（黑体）/ `source_han_serif`（宋体）/ `ark_pixel`（像素）/ `smiley_sans` 等（见 CLAUDE.md 字体矩阵）。模板未指定 `font` 时缺省 `ark_pixel`（`TemplateInstantiator` 默认值）。`content` 缺省空串、`color` 缺省 `#000000`、`size` 缺省 24、`align` 缺省 `left`。
+>
+> **数值范围（钳位 / 拒绝，代码出处 `state/ElementValidator.java`）：** `size` 钳位 `[1, 512]`、`line_height` 钳位 `[0.5, 4.0]`、`letter_spacing` 钳位 `[-32, 128]`；`stroke.width ≤ 128`、`shadow` 偏移 `±128`、`glow.radius ≤ 64`。文本内容（插值后）长度 > 256（`MAX_TEXT_LEN`）报 `INVALID_TEMPLATE`。`effects` 块内三处 `color` 均支持 `${param}`。
 
 ### 4.4 rect 元素
 
@@ -149,11 +204,20 @@ layout:
 - type: rect
   w: 100%                   # 百分号表示相对父容器
   h: 16
-  fill: "${line_color}"
+  fill: "${line_color}"     # 声明式 layout 模式：hex 字符串 / ${param}（→ SolidFill）
   stroke:
-    width: 1
+    width: 1                # 支持 ${param}（P2-36）
     color: "#000000"
 ```
+
+> **声明式 layout 模式下 `rect.fill` 仅纯色。** `TemplateElement.Rect.fill` 是 `String`，实例化时包成 `SolidFill`（代码出处 `TemplateInstantiator.materialize`）。
+>
+> **渐变填充（solid / linear / radial 三态联合）走 raw_state 模式。** 运行时 `Fill` 是联合类型：
+> - `solid` — `{type: solid, color: "#RRGGBB[AA]"}`
+> - `linear` — `{type: linear, angle: 0..360, stops: [...]}`（线性渐变）
+> - `radial` — `{type: radial, cx, cy, r, stops: [...]}`（径向渐变，`cx/cy ∈ [0,1]`、`r ∈ (0,2]`）
+>
+> `stops` 为 2~8 个 `{position(0..1, 非递减), color}`（代码出处 `state/FillValidator.java`，`MIN_STOPS=2` / `MAX_STOPS=8`）。raw_state 内嵌的 rect / circle / shape / path / icon 元素都可用渐变 fill。
 
 ### 4.5 line 元素
 
@@ -165,23 +229,33 @@ layout:
   color: "#000000"
 ```
 
+> **⚠️ `line` 元素 v1 不渲染。** 声明式 layout 路径的 `line` 元素在 `TemplateInstantiator.materialize` 中**直接返回 null 被跳过**（代码注释：「v1 不渲染，但保留 instantiate 链路以待 v2+」）。解析阶段仍校验 `from` / `to` 必须为 `[x, y]`，但实例化时不产出任何 element。需要画线请用 raw_state 模式的 `path` 元素（运行时 8 种元素之一）。
+
 ### 4.6 icon 元素
 
 ```yaml
 - type: icon
-  source: warning          # 图标资源名（^[a-z0-9_-]{1,32}$；whitelist 防路径穿越）
+  source: warning          # 声明式 layout 模式：PNG 资源名（^[a-z0-9_-]{1,32}$；whitelist 防路径穿越）
   x: 0
   y: 0
   w: 32
   h: 32
-  tint: "${line_color}"    # 染色（source-in 合成；保留 alpha 形状、替换色）；空 = 原色
+  tint: "${line_color}"    # deprecated：染色（source-in 合成）；空 = 原色。新数据改用 fill
 ```
 
-**M7 起实装。** 解析阶段对 `source` 做严格 whitelist 校验（小写字母数字 `_-`，长度 1-32）。运行期解析顺序：先 classpath `template-assets/icons/<source>.png`（jar 内 builtin）→ 后 `plugins/HikariCanvas/assets/icons/<source>.png`（服主自定义）。找不到 → 占位虚线方框 + `?`，不阻塞渲染。
+**M7 起实装。**
 
-后端用 `AlphaComposite.SrcIn` 染色，前端用 `globalCompositeOperation: 'source-in'`，**两端语义一致**。前端通过 `/api/template-asset/icons/<source>.png` 拿真图，按 `image-rendering: pixelated` 显示。
+**声明式 layout 模式的 icon**（`TemplateElement.Icon`）：解析阶段对 `source` 做严格 whitelist 校验 `^[a-z0-9_-]{1,32}$`（`TemplateAssetService.SAFE_NAME`，仅 PNG）。运行期解析顺序：先 classpath `/template-assets/icons/<source>.png`（jar 内 builtin）→ 后 `plugins/HikariCanvas/assets/icons/<source>.png`（服主自定义）。找不到 → 占位虚线方框 + `?`，不阻塞渲染。前端通过 `/api/template-asset/icons/<source>.png` 拿真图。
 
-内置图标：`info` / `warning` / `star` / `arrow_right`（32×32，纯白 alpha 形状，配合 `tint` 用）。
+**运行时 icon（raw_state 模式 / 编辑器内的 `IconElement`）source 规则已大幅扩展**（M26，代码出处 `state/IconElement.java`，`SOURCE_RE = ^[a-z0-9_-]+(/[a-z0-9_.-]+)?$`，长度 ≤ 64）：
+- `fa-solid/<name>` / `fa-regular/<name>` / `fa-brands/<name>` — Font Awesome Free 矢量图标（如 `fa-solid/heart`）
+- `material/<name>` — Material Symbols（M27 hook）
+- `user/<id>` — 用户自定义 SVG（`plugins/HikariCanvas/icons/<id>.svg`）
+- 不含 `/` 的 legacy 形态（如 `heart`）— 走 PNG 兼容路径
+
+**染色字段：`tint` 已 deprecated，主字段是 `fill`。** M26 起矢量 path 填充走 `Fill` 联合类型（与 rect / circle / shape 共用）。模板若只写了 `tint`，实例化 / 反序列化时升级为 `SolidFill(tint)`；同时存在 `fill` + `tint` 时以 `fill` 为准。`fill == null` 表示用图标包默认色。新数据不应再写 `tint`。
+
+后端 PNG 染色用 `AlphaComposite.SrcIn`，前端用 `globalCompositeOperation: 'source-in'`，**两端语义一致**。builtin PNG 图标示例：`info` / `warning` / `star` / `arrow_right`（32×32，纯白 alpha 形状）。
 
 ---
 
@@ -233,7 +307,9 @@ params:
 | `bool` | boolean | |
 | `color` | `#RRGGBB` | `presets[]` |
 | `enum` | string | `options: [{label, value}]` |
-| `font` | string | 字体 ID，下拉来自 config |
+| `font` | string | 字体 ID（如 `source_han_sans`），下拉来自后端 `/api/font/list` |
+
+> **全 8 种参数类型均已实装**（`TemplateLoader.ALLOWED_PARAM_TYPES`）。`option` / `presets` 的 `value` 可为字符串或数字（`TemplateParam.Option.value` 为 `Object`）。
 
 ### 5.2 通用字段
 
@@ -306,6 +382,8 @@ visible_when: "show_english == true && name != \"\""
 
 **Layout 实装范围：** `stack` + `free` + `grid`（M7 起 grid 实装；按 `columns × rows` 平铺，超容截断）。
 
+**raw_state 模式实例化（§2.1）走另一条路径：** 跳过上述步骤 2-3 的尺寸计算与 layout 排布；尺寸 / canvas / element 全在内嵌 ProjectState 内自带，只做占位符替换 + element 安全二次校验后 replace。
+
 **关联 walls 表：** apply 成功后服务端写入 `walls.template_id` 与 `walls.template_version`，便于「网页首页 / `/canvas list` 显示该 wall 出自哪个模板」。但模板**不是**运行时活对象——实例化后即转为普通工程数据，玩家可任意自由编辑，修改不影响源模板，亦不影响 `template_id` 字段（保留作 audit）。
 
 ---
@@ -340,14 +418,19 @@ visible_when: "show_english == true && name != \"\""
 
 解析模板时的校验（失败则该模板不加载，不影响其他）：
 
-- `spec` 必须为当前支持的版本
-- `id` 匹配 `^[a-z][a-z0-9_]{2,63}$`
+- `spec` 必须为当前支持的版本（≤ `SUPPORTED_SPEC = 1`，且 > 0）
+- `id` 匹配 `^[a-z][a-z0-9_-]{2,63}$`（M14 起含 `-`）
 - `name` 非空，长度 ≤ 64
-- `canvas.maps` / `canvas.min_maps` / `canvas.max_maps` 各维度 1~16
-- 颜色字段匹配 `^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$`
+- `canvas` 在声明式 layout 模式必填，raw_state 模式可省略
+- `canvas.maps` / `canvas.min_maps` / `canvas.max_maps` 各维度 1~16；`size: fixed` 时 `maps` 必填
+- `canvas.padding` 为单 int 或 `[int,int,int,int]`
+- 颜色字段（含 `${param}` 时跳过格式判，留实例化期）匹配 `^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$`
 - 参数 `id` 匹配 `^[a-z][a-z0-9_]{0,31}$`
+- 参数 `type` ∈ `{string, text, int, float, bool, color, enum, font}`
 - 参数 `enum` 的 options 非空
-- 所有 `${param_name}` 引用的参数必须已声明
+- `layout` 在声明式 layout 模式必填且 `elements` 非空；raw_state 模式可省略
+- `layout.type` ∈ `{stack, free, grid}`；`grid` 需 `columns ≥ 1` 且 `rows ≥ 1`
+- 所有 `${param_name}` 引用的参数必须已声明（含 `content` / `font` / `color` / `fill` / `effects.*.color` / icon `source` / stroke `width` 等可插值字段）
 - `visible_when` 表达式可解析
 
 ---
@@ -406,14 +489,14 @@ layout:
 
     - type: text
       content: "${name}"
-      font: sourcehan
+      font: source_han_sans
       size: 48
       color: "#000000"
       align: center
 
     - type: text
       content: "${english_name}"
-      font: sourcehan
+      font: source_han_sans
       size: 16
       color: "#666666"
       align: center

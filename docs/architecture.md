@@ -26,7 +26,7 @@
                                                     │
                               WebServer 校验 caller UUID == owner_uuid
                                                     │
-                              WallRepo.markLocked(wallId, now)  ── UPDATE walls.published_at = now
+                              WallRepo.markPublished(wallId)  ── UPDATE walls.published_at = now（now 由 DAO 内部取）
                                                     │
                               ack 回前端 + 广播状态变更
                                                     │
@@ -48,7 +48,9 @@
 
 **未锁定 wall（lockedAt=null）= 协作中间态**：任何 `canvas.edit` 玩家可 `/canvas open <wall_id>`，进入 ACTIVE 编辑。`byWall` 排他锁保证同一时刻只有一个活跃 session，但接力 / 切换 owner 完全开放——前一玩家 `cancel` 后下一玩家立即 open。这是 v1 的协作模型（接力 ≠ 实时多人，OT/CRDT 永久不做）。
 
-**锁定 wall（lockedAt 非 null）**：M15.3 鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`。
+**锁定 wall（lockedAt 非 null）**：M15.3 鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`（`SessionManager.open` 入口拦截）。
+
+> **`wall.lock` / `wall.unlock` WS op 本身严格 owner-only，无 admin bypass**（`WallOpDispatcher` 直接比 `wall.ownerUuid == caller`，非 owner 一律 `FORBIDDEN`）。`canvas.admin.bypass-lock` 仅作用于"打开已锁定 wall"的 open 路径，不放行"代替 owner 锁/解锁"。
 
 **未来 ACL（owner-only 草稿）**：若服主想要"草稿也仅 owner 可改"的语义，走 v1.x 协作 scope（新增 `walls.acl` 列 + acl-aware open 校验）；详见 §13 动态画板路径的同源扩展思路（acl 字段同样不进编辑 op 路径，仅在 open 鉴权点生效）。
 
@@ -56,23 +58,23 @@
 
 **MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；M16 起 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。
 
-- `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（受 `map-pool.per-world.<worldName>.max-size` 限制）
+- `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（全局受 `map-pool.max` 限制）
 - `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（之前 silent bind 会让 map 显示在错误维度）
 - 跨世界绑定路径被根除：WallRestorer 启动恢复 / `/canvas open` / `confirm` 三处都走 world-aware 路径
 - 失败兜底：WallRestorer 任一 wall 恢复异常 → `MapPool.releaseToFree(mapIds, world)` 回收避免 idcounts.dat 膨胀（**项目核心风险**，详见 PROPOSAL §5.2.6）；同时审计 `POOL_RELEASE_TO_FREE`
 
-**配置（config.yml）**：
+**配置（config.yml，实际键名）**：
 
 ```yaml
 map-pool:
-  initial-size: 64       # 全局默认（无 per-world 配置时用）
-  max-size: 256
-  per-world:             # 可选：按 world name 覆写
-    world:        { initial-size: 64, max-size: 512 }
-    world_nether: { initial-size: 16, max-size: 64 }
+  initial: 64            # 全局默认预热张数
+  max: 256               # 池上限（全局）
+  per-world:             # 可选：按 world name 覆写 initial（值是单个 int，仅预热张数）
+    world: 32            # overworld 预热 32 张
+    world_nether: 8      # nether 预热 8 张
 ```
 
-无 per-world 配置时所有 world 共享同一组默认值（仍是每 world 一个独立 bucket，只是 size 一致）。
+per-world 只覆写每世界的预热张数（`initial`），无独立 max；未列出的 world 走 on-demand 扩容（首次 confirm 时 `createMap`），全局 `max` 是唯一总上限。无 per-world 配置时各 world 仍独立分桶，按需扩容。
 
 ### 1.2 高层拓扑
 
@@ -194,8 +196,8 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
                                   校验：caller.uuid == wall.owner_uuid
                                               │
                                               ▼
-                                  WallRepo.markPublished(wallId, now)
-                                  （DB 列名保留 published_at；语义为 lock 时间戳）
+                                  WallRepo.markPublished(wallId)
+                                  （DB 列名保留 published_at；语义为 lock 时间戳；now 由 DAO 取）
                                               │
                                               ▼
                                   ack { lockedAt: now } 回前端
@@ -408,7 +410,7 @@ PooledMap
 ### 4.3 生命周期
 
 **启动：**
-1. 读取配置 `pool.initial-size`（默认 64）和 `pool.max-size`（默认 256）
+1. 读取配置 `map-pool.initial`（默认 64，钳 [1,1024]）和 `map-pool.max`（默认 256）
 2. 查询 SQLite，恢复既有池地图（插件重启不丢池）
 3. 若不足 `initial-size`，补充新建
 
@@ -444,7 +446,7 @@ bindWall(wallId, mapIds) -> bool:
     return true
 ```
 
-> publish 不动池；`/canvas publish` 只 UPDATE walls.published_at + ItemFrame PDC，map 状态不变。
+> lock 不动池；`wall.lock` WS op（lock-state 重设计后取代旧 `/canvas publish`）只 UPDATE `walls.published_at`（语义=lock 时间戳），map 状态不变，也不写 ItemFrame PDC（FrameDeployer.markPublished 已砍）。
 
 **取消（释放会话占用，wall 数据不动）：**
 ```
@@ -458,7 +460,9 @@ cancel(session):
 ```
 
 **清理（管理员 `/canvas cleanup`，原 PERMANENT 校对路径已废止）：**
-M5.5 起 `/canvas cleanup` 语义改为：扫 walls 表，对每行验证 `(world, origin, facing, map_ids)` 与世界中 ItemFrame 的对应关系，孤立行（ItemFrame 全丢）由管理员决定 delete；ItemFrame 不在 walls 表里的（外来）报告但不动。具体实现待 M7。
+**未实装（stub）。** `CanvasCommand.runCleanup` 当前仅回一句 "cleanup is stubbed" 提示，不做任何实际操作。规划语义为：扫 walls 表，对每行验证 `(world, origin, facing, map_ids)` 与世界中 ItemFrame 的对应关系，孤立行（ItemFrame 全丢）由管理员决定 delete；ItemFrame 不在 walls 表里的（外来）报告但不动。该 fsck 实现尚未落地（原计划 M7，至今未做）。
+
+> **泄漏防护不依赖 cleanup**：idcounts.dat 防膨胀的实际防线是后台 `MapPool.detectLeaks` 周期任务（每 5 分钟，硬编码于 `HikariCanvas` onEnable，见 §4.5 / §10.2）+ confirm/部署失败时的原子 `releaseToFree` 回滚，与未实装的 cleanup 命令无关。
 
 ### 4.4 Placeholder 地图
 
@@ -618,6 +622,8 @@ CI 集成：
 
 ### 7.1 交互与选区（两段式）
 
+> **墙面方向限制（长期现状）**：`WallResolver` 目前**仅支持垂直墙面**（朝向必须是水平的 N/S/E/W）。天花板 / 地板（UP/DOWN）会被拒为 `VERTICAL_ONLY`。这是从早期就存在、至今未放宽的真实限制（代码注释里"M2/M4+ 再放宽"仅为历史标记，并无后续放宽实装）。
+
 **第一段：进入 SELECTING 状态**
 
 两条入口，二择一：
@@ -660,7 +666,7 @@ CI 集成：
 PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取插件名小写）：
 - `hikaricanvas:wall_id = <wall_id>` ← M5.5 起核心 key（替代旧的 `session` / `sign`）
 - `hikaricanvas:slot = <index>` ← 该 frame 在 wall 里的位置序号
-- `hikaricanvas:published_at = <ms>` ← 仅 publish 后写；nullable
+- ~~`hikaricanvas:published_at`~~ ← **2026-05-14 lock-state 重设计砍**：`FrameDeployer.markPublished` 已移除，ItemFrame PDC 不再写此 key（现存旧画框残留的该 key 保留无害，不再读）。lock 状态只存 DB 列 `walls.published_at`，不下放到 PDC
 
 > **路径 B「打开已有 wall」（`/canvas open` 或 wand 二次点击 / 启动恢复）不走 7.2，物品框已存在不重新部署，直接 bind 池 + 写 ProjectState。**
 
@@ -671,8 +677,8 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | `/canvas confirm`（新建路径） | 新增 walls 行 | 新挂 N×M 个 | SELECTING → ISSUED |
 | `/canvas confirm`（现有 wall：bind 路径） | 不变 | 不变 | SELECTING → ISSUED |
 | `/canvas open` | 不变 | 不变 | CLOSED → ACTIVE |
-| `/canvas publish` | UPDATE published_at | 更新 PDC | 不变 |
-| `/canvas unpublish` | UPDATE published_at=NULL | 更新 PDC | 不变 |
+| `wall.lock` WS op（取代旧 `/canvas publish`） | UPDATE published_at（=lock 时间戳） | 不变（PDC 不再写） | 不变 |
+| `wall.unlock` WS op（取代旧 `/canvas unpublish`） | UPDATE published_at=NULL | 不变（PDC 不再写） | 不变 |
 | `/canvas alias` | UPDATE alias | 不变 | 不变 |
 | `/canvas cancel` | 不变 | 不变 | 释放（→ CLOSING → CLOSED） |
 | WS 5min disconnect | 不变 | 不变 | 释放 |
@@ -687,7 +693,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | 存储 | 内容 | 生命周期 |
 | --- | --- | --- |
 | **SQLite** (`plugins/HikariCanvas/data.db`) | 池元信息、walls 表、审计日志、模板使用统计 | 跨重启 |
-| **PDC**（每张 ItemFrame） | `wall_id` / `slot` / `published_at` | 随世界文件 |
+| **PDC**（每张 ItemFrame） | `wall_id` / `slot`（2026-05-14 起不再写 `published_at`，见 §7.2） | 随世界文件 |
 | **文件**（`templates/*.yml`） | 模板定义 | 人工管理 |
 | **文件**（`fonts/*.ttf`） | 字体 | 人工管理 |
 
@@ -704,7 +710,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | `project_json` | 完整工程数据；任何 op 后 UPDATE |
 | `owner_uuid / owner_name` | 创建者；非排他锁，仅做归属展示 |
 | `alias` | 玩家命名，nullable |
-| `published_at` | nullable timestamp；`/canvas publish` 写入，`/canvas unpublish` 清空 |
+| `published_at` | nullable timestamp；**语义=lock 时间戳**（2026-05-14 lock-state 重设计，列名保留）：`wall.lock` WS op 写入（`WallRepo.markPublished`），`wall.unlock` 清空（`WallRepo.markUnpublished`）。非 null = 已锁定（前端 readonly） |
 | `created_at / updated_at` | 时间戳；updated_at 在每次 op save 时刷新 |
 
 ---
@@ -713,13 +719,23 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 
 ### 9.1 路由
 
-| 路径 | 方法 | 说明 |
-| --- | --- | --- |
-| `/` | GET | 静态 `index.html` |
-| `/assets/*` | GET | 静态资源（JS/CSS/字体） |
-| `/api/session/:token` | GET | 会话握手信息（校验 token） |
-| `/ws` | WS | 编辑器主通道 |
-| `/health` | GET | 健康检查（只返回 OK，不泄漏信息） |
+| 路径 | 方法 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| `/` | GET | 127.0.0.1 trust | 静态 `index.html` |
+| `/assets/{file}` | GET | 127.0.0.1 trust | 静态资源（JS/CSS/字体）；含 `..` / `/` 拒绝 |
+| `/api/session/{token}` | GET | token | 会话预握手，校验 token + 返会话元信息 |
+| `/api/walls` | GET | 127.0.0.1 trust | 首页"近期项目"列表（全 walls summary） |
+| `/api/templates` · `/api/template/{id}/preview.png` · `/api/template-asset/icons/{name}` | GET | 127.0.0.1 trust | 模板库 |
+| `/api/palette` · `/api/font/{metrics,file,list}` · `/api/icon/{list,paths}` | GET | 127.0.0.1 trust | 调色板 / 字体 / 图标资源（无玩家鉴权） |
+| `/api/wall/{id}/preview.png` | GET | 127.0.0.1 trust | wall 缩略图 |
+| `/api/upload`（POST）· `/api/upload/url`（POST）· `/api/upload/quota` · `/api/upload/{source}` | POST/GET | **sessionId**（query 或 form 字段）| 图片上传 / 下载 / 配额；缺失或失效返 401 |
+| `/api/variable/list-all-namespaces` | GET | **sessionId**（query，401 拒） | Provider declaredKeys 聚合（仅当变量系统装配时注册） |
+| `/api/script/command-templates` | GET | **sessionId** | 命令模板列表，仅返 id/params，不泄 command 原文（仅当脚本系统装配时注册） |
+| `/ws` | WS | auth 帧 + Origin 白名单 + 5s 超时 + IP 绑定 | 编辑器主通道 |
+
+> **鉴权模型（M16 起）**：默认 `bind: 127.0.0.1`，本机非敏感资源（静态 / 模板 / 调色板 / 字体 / 图标 / wall 列表与缩略图）走 loopback trust 不鉴权；触碰玩家私有数据或可枚举内容的端点（上传文件下载 / 变量命名空间 / 命令模板）要求 `sessionId` 对应一个活 session，校验失败 401。公网部署须反代 + TLS。
+>
+> ~~`/health`~~：**未实装/规划中**（WebServer 当前无此路由）。
 
 ### 9.2 WebSocket 握手
 
@@ -762,9 +778,13 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 ### 10.3 可观测性
 
 - SLF4J + 配置文件控制 log level
-- `/canvas stats` 管理员命令：池状态、活跃会话、近期事件
-- `/canvas debug <sessionId>`：单会话详情
-- 审计日志：`SESSION_BEGIN/CONFIRM/CANCEL` / `WALL_PUBLISH/UNPUBLISH/DELETE` / `AUTH_OK/FAILED` / `POOL_*`，写 SQLite
+- `/canvas stats` 管理员命令：池状态（total/free/reserved）、walls 计数（含 locked）、活跃会话数、活跃 token 数
+- `/canvas cleanup` 管理员命令：**未实装/stub**（见 §4.3）
+- `/canvas reload templates` / `/canvas reload config` 管理员命令：热重载模板 registry / config.yml（host/port 改动需重启生效）
+- ~~`/canvas debug <sessionId>`~~：**未实装/规划中**（CanvasCommand 无此子命令）
+
+> **命令族现状**（`CanvasCommand.build`）：玩家级 `edit / wand / confirm / cancel / open / list / alias / delete`（`publish / unpublish` 已于 2026-05-14 砍，锁定改走前端 `wall.lock/unlock` WS op）；管理员级 `stats / cleanup(stub) / reload {templates,config}`；另有按子系统装配挂载的 `/canvas var`（0.4.0 变量系统）与 `/canvas bench`（0.5.0 Benchmark）子命令族（对应 handler 为 null 时不注册）。
+- 审计日志：`SESSION_BEGIN/CONFIRM/CANCEL` / `WALL_LOCK/UNLOCK/DELETE`（2026-05-14 起，旧 `WALL_PUBLISH/UNPUBLISH` 已随命令砍）/ `WALL_ALIAS` / `AUTH_OK/FAILED` / `POOL_*` / `IMAGE_UPLOAD_OK/REJECTED` / `PERMISSION_DENIED`，写 SQLite
 
 ### 10.4 安全
 
@@ -879,8 +899,10 @@ CanvasCompositor.rasterize 大体流程：
 
 ## 11. 配置文件骨架
 
+> **以打包的 `plugin/src/main/resources/config.yml` 为权威**。本节是早期骨架，部分键名已与实现分叉，仅作结构示意。已知差异：`web.public-url` 实为 `web.editor-url`；`session.token-ttl` 实为 `session.token-ttl-minutes`、`session.idle-disconnect` 实为 `session.idle-minutes`；`render:` 段不存在（字体 / 调色板走构建期资源，非运行配置）；帧率限流在 `throttle.projection-fps`（默 5）而非下方 `render` 段。`map-pool` 段与泄漏扫描周期（硬编码 5 分钟）见 §3.6.2 / §4.5 已校正。
+
 ```yaml
-# plugins/HikariCanvas/config.yml
+# plugins/HikariCanvas/config.yml（示意，非逐字；权威见打包 config.yml）
 
 web:
   bind: 127.0.0.1
@@ -888,10 +910,12 @@ web:
   context-path: ""                  # 反代时可设 "/canvas"
   public-url: "http://127.0.0.1:8877" # 生成给玩家的链接
 
-pool:
-  initial-size: 64
-  max-size: 256
-  leak-scan-interval: 5m
+# 实际 config.yml 用 `map-pool:` 段（旧 `pool.*` 名已废）。泄漏扫描周期不可配——
+# 硬编码 5 分钟（HikariCanvas onEnable 的 mapPoolLeakTask）。
+map-pool:
+  initial: 64                       # 启动预创建张数（HikariCanvasConfig 钳 [1, 1024]）
+  max: 256                          # 池上限；达上限新会话拿 POOL_EXHAUSTED
+  per-world: {}                     # 可选：按 world name 覆写 initial（M16-P2.3，见 §3.6.2）
 
 session:
   token-ttl: 15m
