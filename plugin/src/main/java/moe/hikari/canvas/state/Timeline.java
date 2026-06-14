@@ -44,8 +44,16 @@ public record Timeline(
         } else {
             LinkedHashMap<String, List<Keyframe>> frozen = new LinkedHashMap<>(tracks.size());
             for (Map.Entry<String, List<Keyframe>> e : tracks.entrySet()) {
+                // 宽容路径：持久化 blob 里轨道列表含 null 元素时不抛硬错
+                // （List.copyOf 对 null 元素会 NPE → 整面墙加载失败，违反「坏数据不在反序列化期
+                // 抛硬错」承诺；参照 Easing.java 的 null 过滤范式）。null 关键帧被静默过滤；
+                // WS 路径的输入校验仍在 op 层（TimelineOperations）拒绝非法关键帧。
+                List<Keyframe> raw = e.getValue();
                 frozen.put(e.getKey(),
-                        e.getValue() == null ? List.of() : List.copyOf(e.getValue()));
+                        raw == null ? List.of()
+                                    : raw.stream()
+                                         .filter(java.util.Objects::nonNull)
+                                         .toList());
             }
             tracks = Collections.unmodifiableMap(frozen);
         }

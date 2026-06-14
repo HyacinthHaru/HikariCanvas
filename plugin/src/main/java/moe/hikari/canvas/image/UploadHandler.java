@@ -863,6 +863,14 @@ public final class UploadHandler {
             readerRef.set(reader);
             try {
                 reader.setInput(iis, true, true);
+                // B2：解码前读头部尺寸（getWidth/getHeight 只解析头，不解码全图），
+                // 拦截"小体积但巨尺寸"的分配型炸弹（如 30000×30000 声明 → read(0) 分配 GB raster）
+                int pw = reader.getWidth(0);
+                int ph = reader.getHeight(0);
+                if (pw > BBOX_MAX_EDGE || ph > BBOX_MAX_EDGE) {
+                    throw new IOException("image dimensions too large: " + pw + "x" + ph
+                            + " > " + BBOX_MAX_EDGE);
+                }
                 return reader.read(0);
             } catch (javax.imageio.IIOException abortOrFail) {
                 // abort() 触发的提前结束在多数 reader 下抛 IIOException("aborted") →

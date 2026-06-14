@@ -50,6 +50,8 @@ public final class ImageStorage {
     private static final Pattern HASH_RE = Pattern.compile("^[0-9a-f]{16}$");
     private static final int MEMORY_CACHE_MAX = 16;
     private static final long MEMORY_CACHE_TTL_MS = 60_000L;
+    /** B2：渲染路径解码前尺寸预检上界（与 UploadHandler.BBOX_MAX_EDGE 同值）。 */
+    private static final int BBOX_MAX_EDGE = 8192;
 
     private final Logger log;
     private final Path uploadsDir;
@@ -306,6 +308,14 @@ public final class ImageStorage {
             readerRef.set(reader);
             try {
                 reader.setInput(iis, true, true);
+                // B2：解码前读头部尺寸（getWidth/getHeight 只解析头，不解码全图），
+                // 拦截"小体积但巨尺寸"的分配型炸弹（如 30000×30000 声明 → read(0) 分配 GB raster）
+                int pw = reader.getWidth(0);
+                int ph = reader.getHeight(0);
+                if (pw > BBOX_MAX_EDGE || ph > BBOX_MAX_EDGE) {
+                    throw new IOException("image dimensions too large: " + pw + "x" + ph
+                            + " > " + BBOX_MAX_EDGE);
+                }
                 return reader.read(0);
             } catch (javax.imageio.IIOException abortOrFail) {
                 throw new IOException("render decode aborted or failed", abortOrFail);

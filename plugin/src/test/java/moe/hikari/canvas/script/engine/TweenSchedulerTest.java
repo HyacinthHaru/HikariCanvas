@@ -665,6 +665,146 @@ class TweenSchedulerTest {
         assertTrue(scheduler.hasActive(WALL), "未到末帧 active 仍在");
     }
 
+    // ---------- E1：补间末帧落盘 → 续接回调（顺序承诺 scripting-tween.md §2.2） ----------
+
+    /**
+     * E1 核心顺序承诺：续接回调（{@code onComplete}）<b>必在末帧 applyFn 落盘之后</b>触发。
+     * 用共享 {@code events} 序列记录两件事的发生先后——断言 WRITE 在 CONTINUE 之前。
+     */
+    @Test
+    void e1_onComplete_firesAfterFinalApplyFn() {
+        List<String> events = new ArrayList<>();
+        // applyFn 记 WRITE（在 FakeApplyFn 之外另用一个直接记序的 fake）
+        TweenScheduler sched = new TweenScheduler(
+                (wallId, blockId, elementId, rawPatch) -> {
+                    events.add("WRITE:" + rawPatch);
+                    return TraceStep.ok(blockId, "action", "ok");
+                },
+                ticker, wallId -> fakeState, clock::get, 2, 60, LOG);
+
+        fakeState = stateWithRect(0, 0);
+        Action.TweenBlock tb = tweenMove(500L, 100, 0);
+        clock.set(0L);
+        sched.enqueue(WALL, BLOCK, tb, () -> events.add("CONTINUE"));
+
+        // 中间帧：还没落盘、还没续接
+        clock.set(250L);
+        sched.tickForTest();
+        assertFalse(events.contains("CONTINUE"), "中间帧不应续接");
+
+        // 末帧：先 WRITE 再 CONTINUE
+        clock.set(500L);
+        sched.tickForTest();
+        assertEquals(2, events.size(), "末帧应恰有 WRITE + CONTINUE 两事件: " + events);
+        assertTrue(events.get(0).startsWith("WRITE"), "第一件应是落盘 WRITE: " + events);
+        assertEquals("CONTINUE", events.get(1), "续接必在落盘之后: " + events);
+        assertTrue(events.get(0).contains("100"), "落盘值应为目标 x=100: " + events);
+    }
+
+    /** E1：正常完成只触发 onComplete 一次（即使再多 tick 也不重复）。 */
+    @Test
+    void e1_onComplete_firesExactlyOnce_onNormalCompletion() {
+        java.util.concurrent.atomic.AtomicInteger fires = new java.util.concurrent.atomic.AtomicInteger();
+        fakeState = stateWithRect(0, 0);
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tweenMove(500L, 100, 0), fires::incrementAndGet);
+
+        clock.set(500L);
+        scheduler.tickForTest();   // 末帧 → 触发一次
+        assertEquals(1, fires.get(), "末帧触发恰一次");
+
+        // 再 tick（active 已空，no-op）
+        clock.set(600L);
+        scheduler.tickForTest();
+        assertEquals(1, fires.get(), "末帧后再 tick 不重复触发");
+    }
+
+    /**
+     * E1：被同墙新补间接管时，<b>旧补间</b>的 onComplete 触发一次（旧脚本不永久挂起，T8 接管语义）；
+     * 新补间的 onComplete 不在接管瞬间触发（它还没完成）。
+     */
+    @Test
+    void e1_takeover_firesOldOnComplete_once_notNew() {
+        java.util.concurrent.atomic.AtomicInteger oldFires = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger newFires = new java.util.concurrent.atomic.AtomicInteger();
+        fakeState = stateWithRect(0, 0);
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 100, 0), oldFires::incrementAndGet);
+
+        clock.set(500L);
+        // 同 wall 接管 → 旧补间 onComplete 应触发一次
+        scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 200, 0), newFires::incrementAndGet);
+        assertEquals(1, oldFires.get(), "接管应触发旧补间续接一次");
+        assertEquals(0, newFires.get(), "新补间还没完成，不应触发");
+
+        // 新补间跑完末帧 → 新 onComplete 触发一次，旧的不重复
+        clock.set(1500L);
+        scheduler.tickForTest();
+        assertEquals(1, newFires.get(), "新补间末帧触发一次");
+        assertEquals(1, oldFires.get(), "旧补间续接不被重复触发");
+    }
+
+    /**
+     * E1：补间 tick 异常（{@code renderStatic} 抛）也触发 onComplete 一次——脚本不永久挂起。
+     * 用一个会抛的 ticker 让 tickOne 末帧 renderStatic 抛 → 落到 tick() 的 Throwable 清理路径。
+     */
+    @Test
+    void e1_onComplete_firesOnTickException_noPermanentHang() {
+        java.util.concurrent.atomic.AtomicInteger fires = new java.util.concurrent.atomic.AtomicInteger();
+        // throwingTicker：renderStatic 抛 RuntimeException（静态墙末帧会调 renderStatic）
+        TickerControl throwingTicker = new TickerControl() {
+            @Override public AnimationTicker.Result play(String w, String t) { return AnimationTicker.Result.OK; }
+            @Override public void pause(String w) {}
+            @Override public AnimationTicker.Result seek(String w, String t, long ms) { return AnimationTicker.Result.OK; }
+            @Override public boolean isWallAnimating(String w) { return false; }
+            @Override public void invalidate(String w) {}
+            @Override public void refreshAutoPlay(String w) {}
+            @Override public void renderStatic(String wallId, ProjectState frame) {
+                throw new RuntimeException("boom render");
+            }
+            @Override public void clearStaticDiff(String wallId) {}
+        };
+        TweenScheduler sched = new TweenScheduler(
+                (wallId, blockId, elementId, rawPatch) -> TraceStep.ok(blockId, "action", "ok"),
+                throwingTicker, wallId -> fakeState, clock::get, 2, 60, LOG);
+
+        fakeState = stateWithRect(0, 0);
+        clock.set(0L);
+        sched.enqueue(WALL, BLOCK, tweenMove(500L, 100, 0), fires::incrementAndGet);
+
+        clock.set(500L);
+        sched.tickForTest();   // 末帧 renderStatic 抛 → tick catch → fireComplete
+        assertEquals(1, fires.get(), "tick 异常清理路径应触发续接一次（脚本不挂起）");
+        assertFalse(sched.hasActive(WALL), "异常后 active 应清空");
+    }
+
+    /** E1：shutdown <b>不</b>触发 onComplete（关服路径，与 ScriptRunner 丢弃续接契约一致）。 */
+    @Test
+    void e1_shutdown_doesNotFireOnComplete() {
+        java.util.concurrent.atomic.AtomicInteger fires = new java.util.concurrent.atomic.AtomicInteger();
+        fakeState = stateWithRect(0, 0);
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tweenMove(5000L, 100, 0), fires::incrementAndGet);
+
+        scheduler.shutdown();
+        assertEquals(0, fires.get(), "shutdown 不触发续接回调");
+    }
+
+    /** E1：null onComplete 安全（演示拼接 / 测试无续接需求）——不崩、补间照常完成。 */
+    @Test
+    void e1_nullOnComplete_isSafe() {
+        fakeState = stateWithRect(0, 0);
+        clock.set(0L);
+        // 3 参重载等价 onComplete=null
+        TraceStep step = scheduler.enqueue(WALL, BLOCK, tweenMove(500L, 100, 0));
+        assertEquals("ok", step.result());
+        clock.set(500L);
+        scheduler.tickForTest();   // 末帧；null 回调不应抛
+        assertFalse(applyFn.log.isEmpty(), "null 回调下末帧仍正常落盘");
+        assertFalse(scheduler.hasActive(WALL));
+    }
+
     /** 读取 ProjectState 中 ELEMENT 这个 rect 的 x（找不到返 Integer.MIN_VALUE）。 */
     private static int rectXIn(ProjectState state) {
         for (var layer : state.layers()) {

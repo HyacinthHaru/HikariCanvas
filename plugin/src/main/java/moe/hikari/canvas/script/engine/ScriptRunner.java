@@ -413,29 +413,40 @@ public final class ScriptRunner {
                         continue;
                     }
                     if (a instanceof Action.TweenBlock tb) {
-                        // P2：补间引擎接入（TweenScheduler）
+                        // P2：补间引擎接入（TweenScheduler）。E1（顺序承诺，scripting-tween.md §2.2）：
+                        // 续接<b>不再</b>由本 runner 自按 durationMs 定时——改由 TweenScheduler 在
+                        // 「末帧落盘完成后」回调触发（否则续接早于落盘，后续动作读到补间前旧值）。
                         TweenScheduler ts = tweenScheduler;
                         if (ts == null) {
                             // 未装配（测试 / P1 降级）：记 trace 跳过 body，不崩 runner
                             st.trace.add(TraceStep.ok(blockId, "action", "补间引擎未装配，跳过"));
                             i++; continue;
                         }
-                        TraceStep step = ts.enqueue(st.wallId, blockId, tb);
+                        // 先打包 continuation 快照（含剩余动作 acts[i+1..] + 外层后续）——不污染 live
+                        // stack：push→拷贝→pop，使「不挂起」分支的 stack 保持原样。
+                        stack.push(new Frame(acts, i + 1, f.prefix()));
+                        Deque<Frame> cont = new ArrayDeque<>(stack);
+                        stack.pop();
+                        // 续接回调：被 TweenScheduler 在末帧落盘后 / 异常 / 接管时（tween 或 runner 线程）
+                        // 调用——内部只把 runFrames 续接 schedule(0) 到 <b>runner SES</b>（复用
+                        // playTimelineAwait/wait/pollWaitUntil 的 schedule 续接范式），脚本续接<b>始终</b>
+                        // 在 runner 线程跑，绝不在 tween 线程。TweenScheduler 已对回调做一次性 + 抛吞兜底。
+                        Runnable continuation = () -> {
+                            if (shutdown) return;
+                            try {
+                                scheduler.schedule(() -> runFrames(st, cont), 0L);
+                            } catch (RejectedExecutionException e) {
+                                // shutdown 竞态：续接丢弃（session 已死，不补跑）
+                            }
+                        };
+                        TraceStep step = ts.enqueue(st.wallId, blockId, tb, continuation);
                         st.trace.add(step);
                         if ("ok".equals(step.result()) && tb.durationMs() > 0) {
-                            // 挂起：把剩余动作打包成 continuation，tb.durationMs() 后续接
-                            stack.push(new Frame(acts, i + 1, f.prefix()));
-                            Deque<Frame> cont = new ArrayDeque<>(stack);
-                            if (!shutdown) {
-                                try {
-                                    scheduler.schedule(() -> runFrames(st, cont), tb.durationMs());
-                                } catch (RejectedExecutionException e) {
-                                    // shutdown 竞态：续接丢弃
-                                }
-                            }
+                            // 挂起：等 TweenScheduler 末帧落盘后经 continuation 续接（此处不另行 schedule）。
                             return;
                         }
-                        // enqueue 失败 / duration=0 → 不挂起，链继续
+                        // enqueue 失败 / duration=0 → 不挂起，链继续（continuation 不会被 TweenScheduler
+                        // 触发：失败 / 0 时长不注册会回调的 task）。
                         i++; continue;
                     }
                     if (a instanceof Action.WaitUntil wu) {

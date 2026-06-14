@@ -1,9 +1,9 @@
 package moe.hikari.canvas.state;
 
-import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -11,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -24,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ul>
  *   <li>{@link Timeline} 全量 round-trip（record 语义 equals）</li>
  *   <li>enum wire 形态走 camelCase（{@code pingPong} / {@code easeInOut} / {@code variableChange}）</li>
- *   <li>{@link KfValue} 三态分流（number → Num、string → Str、object → FillV）；数组拒绝</li>
+ *   <li>{@link KfValue} 三态分流（number → Num、string → Str、object → FillV）；boolean/数组等非预期形态宽容退 null</li>
  *   <li>{@link Easing#LINEAR} 省略 {@code bezier} 键；空 tracks 序列化为 {@code {}}</li>
  *   <li>{@link ProjectState} v2 旧 blob 兼容（无 timelines 字段）+ 静态工程序列化省略</li>
  * </ul>
@@ -144,8 +143,18 @@ class TimelineRecordsTest {
     }
 
     @Test
-    void kfValueArrayInputThrows() {
-        assertThrows(JsonMappingException.class, () -> M.readValue("[1,2,3]", KfValue.class));
+    void kfValueArrayInputDegradesLeniently() throws Exception {
+        // 宽容路径（C1 修复）：array 等非预期形态不再抛 JsonMappingException（会冒泡致
+        // 整面墙加载失败），改返回 null 交插值器守卫兜底。
+        KfValue v = M.readValue("[1,2,3]", KfValue.class);
+        assertNull(v, "array 形态 KfValue 应返回 null 而非抛异常");
+    }
+
+    @Test
+    void kfValueBooleanInputDegradesLeniently() throws Exception {
+        // 同上：boolean 也属非预期形态，返回 null 而非抛异常。
+        KfValue v = M.readValue("true", KfValue.class);
+        assertNull(v, "boolean 形态 KfValue 应返回 null 而非抛异常");
     }
 
     // ---------- Easing / Timeline wire 细节 ----------
@@ -270,6 +279,105 @@ class TimelineRecordsTest {
         assertEquals(1, ps.timelines().size(), "restore 应回到快照时刻的单 timeline");
         assertEquals(a, ps.timelines().get(0));
         assertEquals("tl-a", ps.activeTimelineId());
+    }
+
+    // ---------- Timeline tracks null 元素宽容路径（C1 修复）----------
+
+    /**
+     * tracks 轨道列表含 null 元素时构造 Timeline 不应 NPE（旧 List.copyOf 会抛）；
+     * null 元素被静默过滤，合法关键帧保留且顺序不变。
+     */
+    @Test
+    void timelineTrackWithNullKeyframeFiltersNullsNoNpe() {
+        List<Keyframe> withNulls = new ArrayList<>();
+        Keyframe good1 = kf("k-1", "x", 0, KfValue.of(0.0), Easing.LINEAR);
+        Keyframe good2 = kf("k-2", "x", 500, KfValue.of(10.0), Easing.LINEAR);
+        withNulls.add(good1);
+        withNulls.add(null);   // 损坏的 null 元素
+        withNulls.add(good2);
+        withNulls.add(null);
+
+        // 构造不应 NPE
+        Timeline tl = new Timeline("tl-null", "test", 1000, 20,
+                LoopMode.LOOP, TriggerConfig.MANUAL,
+                Map.of("e-1", withNulls));
+
+        List<Keyframe> track = tl.tracks().get("e-1");
+        assertEquals(2, track.size(), "null 关键帧应被过滤，合法元素保留");
+        assertEquals(good1, track.get(0));
+        assertEquals(good2, track.get(1));
+    }
+
+    /**
+     * tracks 轨道列表为 null 本身（整条轨道 null）→ 退空列表，不抛。
+     */
+    @Test
+    void timelineTrackValueNullFallsBackToEmptyList() {
+        Map<String, List<Keyframe>> withNullTrack = new java.util.HashMap<>();
+        withNullTrack.put("e-null", null);
+
+        Timeline tl = new Timeline("tl-nulltrack", "test", 1000, 20,
+                LoopMode.LOOP, TriggerConfig.MANUAL, withNullTrack);
+
+        List<Keyframe> track = tl.tracks().get("e-null");
+        assertTrue(track.isEmpty(), "轨道值为 null 应退空列表");
+    }
+
+    /**
+     * 全轨道都是正常元素时 null 过滤逻辑不影响结果（顺序 / 内容不变）。
+     */
+    @Test
+    void timelineTrackWithNoNullsUnaffected() {
+        Keyframe kf1 = kf("k-1", "opacity", 0, KfValue.of(0.0), Easing.LINEAR);
+        Keyframe kf2 = kf("k-2", "opacity", 1000, KfValue.of(1.0), Easing.LINEAR);
+
+        Timeline tl = new Timeline("tl-clean", "test", 2000, 20,
+                LoopMode.LOOP, TriggerConfig.MANUAL,
+                Map.of("e-1", List.of(kf1, kf2)));
+
+        List<Keyframe> track = tl.tracks().get("e-1");
+        assertEquals(List.of(kf1, kf2), track, "无 null 元素的轨道内容应完整保留");
+    }
+
+    /**
+     * 持久化 blob 里 tracks 某轨含 null 关键帧（Jackson 反序列化结果）时，
+     * Timeline 构造不失败，整个 ProjectState 能正常加载。
+     */
+    @Test
+    void projectStateDeserializationWithNullKeyframeInTrackSucceeds() throws Exception {
+        // 手写一个轨道含 null 元素的 project_json 形态（模拟数据损坏 blob）
+        String json = """
+                {
+                  "version": 1,
+                  "protocolVersion": 3,
+                  "canvas": {"widthMaps": 1, "heightMaps": 1, "background": "#FFFFFF"},
+                  "layers": [
+                    {"id": "l-1", "name": "Default Layer", "visible": true, "locked": false,
+                     "opacity": 1.0, "blendMode": "normal", "elements": []}
+                  ],
+                  "activeLayerId": "l-1",
+                  "timelines": [
+                    {
+                      "id": "tl-1", "name": "anim", "durationMs": 1000, "fps": 20,
+                      "loopMode": "loop",
+                      "tracks": {
+                        "e-1": [
+                          {"id": "k-1", "property": "x", "timeMs": 0, "value": 1.0,
+                           "easing": {"type": "linear"}},
+                          null,
+                          {"id": "k-2", "property": "x", "timeMs": 500, "value": 5.0,
+                           "easing": {"type": "linear"}}
+                        ]
+                      }
+                    }
+                  ]
+                }
+                """;
+        // 不抛异常即通过（整墙加载不失败）
+        ProjectState ps = M.readValue(json, ProjectState.class);
+        assertEquals(1, ps.timelines().size(), "含 null 关键帧的 blob 应能正常加载 timeline");
+        List<Keyframe> track = ps.timelines().get(0).tracks().get("e-1");
+        assertEquals(2, track.size(), "null 关键帧被过滤后剩 2 个合法关键帧");
     }
 
     // ---------- 坏 blob 宽容路径（P1 审查确认项 #5）----------

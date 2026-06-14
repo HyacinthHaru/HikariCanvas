@@ -1179,8 +1179,8 @@ CREATE TABLE wall_rail_bindings (
 | `schedule:<wallId>/next_cars` | "6" / "" | 编组（null → 空字符串） |
 | `schedule:<wallId>/next_terminus` | "郑州东" | 终点站名（区间车显示中间终点） |
 | `schedule:<wallId>/next_notes` | "末班车" / "" | 备注（null → 空字符串） |
-| `schedule:<wallId>/next_arrival` | "06:02:30" | 该站精确到达时刻（从 timetable 读，非估算） |
-| `schedule:<wallId>/next_departure` | "06:03:00" | 该站精确发车时刻（兼容 0.4.0 含义微调）|
+| `schedule:<wallId>/next_arrival` | "06:02:30" | 该站精确**到达**时刻（读 `arrival_time`；始发站无到达 → fallback `departure_time`；两列皆空 → 空串） |
+| `schedule:<wallId>/next_departure` | "06:03:00" | 该站精确**发车**时刻（读 `departure_time`；终到站无发车 → fallback `arrival_time`；两列皆空 → 空串）。**与 `next_arrival` 是两个独立字段**：中间站两列均非空时各取本列、互不相等 |
 | `schedule:<wallId>/next_eta_*` | 同 0.4.0 | 兼容旧 wall 引用 |
 | `next2_*` 同上 | 第二班 |
 | 旧 `is_arriving / arrival_status / precision` | 保留 | 兼容 |

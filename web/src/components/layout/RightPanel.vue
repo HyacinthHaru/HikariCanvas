@@ -52,20 +52,35 @@ const isGeometric = computed(() => isRect.value || isCircle.value || isShape.val
 /** M8-F：是否多选（>= 2）。multi 时隐藏单选 UI，显示批量操作提示。 */
 const isMulti = computed(() => ui.selectedCount >= 2);
 
-/** 立即发送（用于 boolean / color / select 之类"定型"变更）。 */
-function sendUpdate(patch: Record<string, unknown>) {
-    const el = selected.value;
+/**
+ * 立即发送（用于 boolean / color / select 之类"定型"变更）。
+ *
+ * <p>接受显式 elementId 以防止跨元素串写：当子组件 emit 触发时由外层捕获当前 id，
+ * 不在执行时重读 selected.value——避免 80ms 防抖 flush 时用户已切换到另一元素的竞态。</p>
+ */
+function sendUpdate(patch: Record<string, unknown>, elementId: string) {
+    const el = project.elementById(elementId);
     if (!el) return;
     // optimistic
     for (const [k, v] of Object.entries(patch)) {
         (el as unknown as Record<string, unknown>)[k] = v;
     }
-    ws.send('element.update', { elementId: el.id, patch });
+    ws.send('element.update', { elementId, patch });
 }
 
-/** 80ms 防抖（用于文字 / 数值输入）。2026-05-12 实测后从 200ms 降下来，
- *  在 ~12 wpm 输入下不会塞 WS，但视觉滞后感明显改善。color/select 路径不防抖。 */
-const sendUpdateDebounced = useDebounceFn(sendUpdate, 80);
+/**
+ * 防抖包装：调用时捕获当前 selected 的 id，flush 时按该捕获 id 路由，
+ * 即便 80ms 内用户切换了元素，改动也归属于触发时的元素（A 的输入写 A，不写 B）。
+ */
+const _sendUpdateDebouncedInner = useDebounceFn(
+    (patch: Record<string, unknown>, capturedId: string) => sendUpdate(patch, capturedId),
+    80,
+);
+function sendUpdateDebounced(patch: Record<string, unknown>) {
+    const capturedId = selected.value?.id;
+    if (!capturedId) return;
+    _sendUpdateDebouncedInner(patch, capturedId);
+}
 
 function deleteSelected() {
     const el = selected.value;
@@ -152,7 +167,7 @@ function deleteMultiSelected(): void {
         <TransformSection
           :element="selected"
           :locked="project.isLocked"
-          @update="sendUpdate"
+          @update="(patch) => sendUpdate(patch, selected!.id)"
           @update-debounced="sendUpdateDebounced"
         />
 
@@ -161,7 +176,7 @@ function deleteMultiSelected(): void {
           v-if="isGeometric"
           :element="selected as RectElement | CircleElement | ShapeElement | PathElement"
           :locked="project.isLocked"
-          @update="sendUpdate"
+          @update="(patch) => sendUpdate(patch, selected!.id)"
           @update-debounced="sendUpdateDebounced"
         />
 
@@ -170,7 +185,7 @@ function deleteMultiSelected(): void {
           v-if="isText"
           :element="selected as TextElement"
           :locked="project.isLocked"
-          @update="sendUpdate"
+          @update="(patch) => sendUpdate(patch, selected!.id)"
           @update-debounced="sendUpdateDebounced"
         />
 
@@ -179,7 +194,7 @@ function deleteMultiSelected(): void {
           v-if="isImage"
           :element="selected as ImageElement"
           :locked="project.isLocked"
-          @update="sendUpdate"
+          @update="(patch) => sendUpdate(patch, selected!.id)"
         />
       </div>
     </section>

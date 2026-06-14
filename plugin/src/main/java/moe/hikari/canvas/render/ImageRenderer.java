@@ -1,6 +1,7 @@
 package moe.hikari.canvas.render;
 
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.ElementValidator;
 import moe.hikari.canvas.state.ImageElement;
 import moe.hikari.canvas.state.Mask;
 
@@ -75,6 +76,8 @@ public final class ImageRenderer implements ElementRenderer {
     private static void drawWithFeather(Graphics2D g, ImageElement im, BufferedImage src, RenderContext ctx) {
         int w = im.w();
         int h = im.h();
+        // B1：关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）；dither 路径按 clip∩canvas 分配安全，不用改
+        if (w > ElementValidator.MAX_DIM || h > ElementValidator.MAX_DIM) return;
         Mask mask = im.mask();
         int featherPx = mask == null ? 0 : mask.featherPxOrZero();
         try {

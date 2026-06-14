@@ -1,9 +1,16 @@
 package moe.hikari.canvas.script.engine;
 
 import moe.hikari.canvas.HikariCanvasConfig;
+import moe.hikari.canvas.render.AnimationTicker;
 import moe.hikari.canvas.script.Action;
 import moe.hikari.canvas.script.ScriptRule;
 import moe.hikari.canvas.script.Trigger;
+import moe.hikari.canvas.state.BlendMode;
+import moe.hikari.canvas.state.Easing;
+import moe.hikari.canvas.state.Fill;
+import moe.hikari.canvas.state.Layer;
+import moe.hikari.canvas.state.ProjectState;
+import moe.hikari.canvas.state.RectElement;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +18,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
@@ -674,6 +682,150 @@ class ScriptRunnerTest {
         // 替身仍跑——验证关停态下补跑无异常、状态安全
         assertDoesNotThrow(scheduler::runPending);
         assertTrue(sink.blockIds.size() >= 1);
+    }
+
+    // ---------- E1：TweenBlock 续接早于落盘修复（ScriptRunner × TweenScheduler 集成） ----------
+
+    /** 构建含一个 RectElement（x=0, y=0, w=100, h=50）的 ProjectState（补间 base）。 */
+    private static ProjectState tweenBaseState(String elementId) {
+        RectElement rect = new RectElement(elementId, 0, 0, 100, 50, 0,
+                false, true, Fill.solid("#FF0000"), null, null, BlendMode.NORMAL, null);
+        Layer layer = new Layer("l-1", "L", true, false, 1.0f, BlendMode.NORMAL, null,
+                List.of(rect));
+        return new ProjectState(1L,
+                new ProjectState.Canvas(2, 2, Fill.solid("#FFFFFF")),
+                null, List.of(layer), "l-1",
+                new ProjectState.History(0, 0), null, null, null);
+    }
+
+    /** no-op TickerControl（renderStatic / clearStaticDiff 静默；isWallAnimating=false 走静态墙路径）。 */
+    private static TickerControl noopTicker() {
+        return new TickerControl() {
+            @Override public AnimationTicker.Result play(String w, String t) { return AnimationTicker.Result.OK; }
+            @Override public void pause(String w) {}
+            @Override public AnimationTicker.Result seek(String w, String t, long ms) { return AnimationTicker.Result.OK; }
+            @Override public boolean isWallAnimating(String w) { return false; }
+            @Override public void invalidate(String w) {}
+            @Override public void refreshAutoPlay(String w) {}
+            @Override public void renderStatic(String wallId, ProjectState frame) {}
+            @Override public void clearStaticDiff(String wallId) {}
+        };
+    }
+
+    /**
+     * E1 顺序承诺（端到端）：TweenBlock 移动元素 x（0→100），其后一个读 x 的动作（{@code Log}）必须在
+     * 补间<b>末帧落盘之后</b>续接——证明续接不再早于落盘。用共享 {@code events} 记录「落盘 WRITE」与
+     * 「续接动作 AFTER」的先后，断言顺序为 [WRITE, AFTER]，且 AFTER 落盘值是目标 x=100（非起始 0）。
+     */
+    @Test
+    void e1_tweenBlock_continuationRunsAfterFinalApplyMany() {
+        final List<String> events = new ArrayList<>();
+        final AtomicLong tweenClock = new AtomicLong(0L);
+        final ProjectState base = tweenBaseState("e-rect");
+
+        // 真实 TweenScheduler（fake clock/applyFn/ticker/wallLoader）；applyFn 记 WRITE + 目标值
+        TweenScheduler tween = new TweenScheduler(
+                (wallId, blockId, elementId, rawPatch) -> {
+                    events.add("WRITE:" + rawPatch);
+                    return TraceStep.ok(blockId, "action", "ok");
+                },
+                noopTicker(), wallId -> base, tweenClock::get, 4, 60, LOG);
+
+        // sink：续接动作执行时记 AFTER（TweenBlock 由 runner 拦截，不过 sink；唯一 sink execute 是 after）
+        sink.onExecute = () -> events.add("AFTER");
+        ScriptRunner r = runner();
+        r.setTweenScheduler(tween);
+
+        Action.SetElementProperties move = new Action.SetElementProperties(
+                "e-rect", Map.of("x", "100"), "moveTo");
+        Action.TweenBlock tb = new Action.TweenBlock(500L, Easing.LINEAR, List.of(move));
+        r.submit(WALL, rule("r1", List.of(tb, new Action.Log("after"))), ctx(0));
+
+        // 补间已注册 + 脚本挂起：after 还没执行，runner SES 也没排续接（等 TweenScheduler 回调）
+        assertEquals(List.of(), sink.blockIds, "TweenBlock 挂起：after 未执行");
+        assertEquals(0, scheduler.scheduledDelays.size(),
+                "续接不再由 runner 自按 durationMs 定时（无 schedule）");
+        assertTrue(events.isEmpty(), "尚未落盘 / 未续接");
+
+        // 推进补间到末帧 → applyFn 落盘（WRITE）→ TweenScheduler 触发续接回调 → schedule(0) 到 runner SES
+        tweenClock.set(500L);
+        tween.tickForTest();
+        assertEquals(List.of("WRITE:{x=100}"), events, "末帧先落盘（目标 x=100）");
+        assertEquals(1, scheduler.scheduledDelays.size(), "续接回调把 runFrames schedule 到 runner SES");
+        assertEquals(0L, scheduler.scheduledDelays.get(0), "续接以 0 延迟投递（已在末帧之后）");
+
+        // 跑 runner SES 续接 → after 执行
+        scheduler.runPending();
+        assertEquals(List.of("WRITE:{x=100}", "AFTER"), events,
+                "顺序承诺：落盘 WRITE 必先于续接动作 AFTER");
+        assertEquals(List.of("actions/1"), sink.blockIds, "续接执行 after（actions/1）");
+    }
+
+    /**
+     * E1：补间末帧 tick 异常（renderStatic 抛）时脚本<b>不永久挂起</b>——TweenScheduler 异常清理路径
+     * 仍触发续接回调，after 照常执行。
+     */
+    @Test
+    void e1_tweenBlock_tickException_doesNotHangScript() {
+        final AtomicLong tweenClock = new AtomicLong(0L);
+        final ProjectState base = tweenBaseState("e-rect");
+
+        // 静态墙末帧会调 renderStatic → 抛 → 落到 tick() 的 Throwable 清理路径
+        TickerControl throwingTicker = new TickerControl() {
+            @Override public AnimationTicker.Result play(String w, String t) { return AnimationTicker.Result.OK; }
+            @Override public void pause(String w) {}
+            @Override public AnimationTicker.Result seek(String w, String t, long ms) { return AnimationTicker.Result.OK; }
+            @Override public boolean isWallAnimating(String w) { return false; }
+            @Override public void invalidate(String w) {}
+            @Override public void refreshAutoPlay(String w) {}
+            @Override public void renderStatic(String wallId, ProjectState frame) {
+                throw new RuntimeException("boom render");
+            }
+            @Override public void clearStaticDiff(String wallId) {}
+        };
+        TweenScheduler tween = new TweenScheduler(
+                (wallId, blockId, elementId, rawPatch) -> TraceStep.ok(blockId, "action", "ok"),
+                throwingTicker, wallId -> base, tweenClock::get, 4, 60, LOG);
+
+        ScriptRunner r = runner();
+        r.setTweenScheduler(tween);
+        Action.SetElementProperties move = new Action.SetElementProperties(
+                "e-rect", Map.of("x", "100"), "moveTo");
+        Action.TweenBlock tb = new Action.TweenBlock(500L, Easing.LINEAR, List.of(move));
+        r.submit(WALL, rule("r1", List.of(tb, new Action.Log("after"))), ctx(0));
+        assertEquals(List.of(), sink.blockIds, "挂起：after 未执行");
+
+        tweenClock.set(500L);
+        tween.tickForTest();   // renderStatic 抛 → 异常清理 → 触发续接
+        scheduler.runPending();
+        assertEquals(List.of("actions/1"), sink.blockIds, "补间异常也续接（脚本不永久挂起）");
+    }
+
+    /**
+     * E1：续接回调恰一次——TweenBlock 后接续接动作只跑一次（不因末帧 + 潜在重复触发而双发）。
+     */
+    @Test
+    void e1_tweenBlock_continuationFiresExactlyOnce() {
+        final AtomicLong tweenClock = new AtomicLong(0L);
+        final ProjectState base = tweenBaseState("e-rect");
+        TweenScheduler tween = new TweenScheduler(
+                (wallId, blockId, elementId, rawPatch) -> TraceStep.ok(blockId, "action", "ok"),
+                noopTicker(), wallId -> base, tweenClock::get, 4, 60, LOG);
+
+        ScriptRunner r = runner();
+        r.setTweenScheduler(tween);
+        Action.SetElementProperties move = new Action.SetElementProperties(
+                "e-rect", Map.of("x", "100"), "moveTo");
+        Action.TweenBlock tb = new Action.TweenBlock(500L, Easing.LINEAR, List.of(move));
+        r.submit(WALL, rule("r1", List.of(tb, new Action.Log("after"))), ctx(0));
+
+        tweenClock.set(500L);
+        tween.tickForTest();
+        tweenClock.set(600L);
+        tween.tickForTest();   // active 已空，no-op；不应再次触发续接
+        scheduler.runPending();
+        assertEquals(1, sink.blockIds.stream().filter("actions/1"::equals).count(),
+                "续接动作 after 恰执行一次");
     }
 
     // ---------- fakes ----------

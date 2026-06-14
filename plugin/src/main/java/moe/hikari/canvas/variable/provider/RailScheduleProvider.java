@@ -517,9 +517,12 @@ public final class RailScheduleProvider implements VariableProvider {
                                            DataSource ds, Locale locale) {
         RailTimetableEntry e = row.entry();
         RailRun r = row.run();
-        // departure: 首站显示 departure_time；其他显示 arrival_time（兼容旧 next_departure 字段语义）
-        String departure = e.arrivalTime() != null ? e.arrivalTime() : e.departureTime();
-        String arrival = e.arrivalTime();
+        // 0.7.3 P2-13：next_arrival / next_departure 拆成两个独立字段（docs §18.4）。
+        // arrival = 该站到达时刻（arrival_time）；首站/始发通常无 arrival → fallback departure_time。
+        // departure = 该站发车时刻（departure_time）；末站/终到通常无 departure → fallback arrival_time。
+        // 两列都缺则空串（下方 null → "" 兜底）。中间站两列均非空 → 各取本列、互不相等。
+        String arrival = e.arrivalTime() != null ? e.arrivalTime() : e.departureTime();
+        String departure = e.departureTime() != null ? e.departureTime() : e.arrivalTime();
         // terminus = run.end_station_id → station name；无则线路末站；都没则空
         String terminus = resolveTerminus(r, ds);
         return new Snapshot(

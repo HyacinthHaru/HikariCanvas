@@ -20,6 +20,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -90,6 +91,112 @@ class RailScheduleProviderTest {
         assertEquals("大站快车",
                 store.get("schedule:" + WALL + "/next_service_type_text").orElseThrow().currentValue());
         assertEquals("6", store.get("schedule:" + WALL + "/next_cars").orElseThrow().currentValue());
+    }
+
+    /**
+     * 0.7.3 P2-13：next_arrival / next_departure 是两个独立字段。
+     * 中间站 arrival_time ≠ departure_time → 两 key 分别等于两列且不相等。
+     */
+    @Test
+    void middleStation_arrivalAndDepartureAreIndependent() {
+        ds.bindings.add(binding(WALL, "L1", "s2", "up"));
+        ds.stations.addAll(List.of(station("s1", "L1", "郑州", 0),
+                station("s2", "L1", "二七", 1),
+                station("s3", "L1", "紫荆", 2)));
+        ds.runs.add(run("r1", "L1", "A01", "up", "express", 6, null, null, ""));
+        // s2 是中间站：到达 10:02:30，发车 10:03:00（两列不同）
+        ds.timetable.add(new RailDao.TimetableJoinRow(
+                new RailTimetableEntry("r1", "s2", "10:02:30", "10:03:00", true),
+                ds.runs.get(0)));
+        ds.now = LocalTime.of(10, 0, 0);
+        provider.initialize();
+
+        String arrival = store.get("schedule:" + WALL + "/next_arrival").orElseThrow().currentValue();
+        String departure = store.get("schedule:" + WALL + "/next_departure").orElseThrow().currentValue();
+        assertEquals("10:02:30", arrival, "next_arrival 应取 arrival_time");
+        assertEquals("10:03:00", departure, "next_departure 应取 departure_time");
+        assertNotEquals(arrival, departure,
+                "next_arrival 与 next_departure 是独立字段，中间站不应相等");
+    }
+
+    /**
+     * 0.7.3 P2-13：始发站无 arrival → next_arrival fallback departure_time；
+     * next_departure 取 departure_time（两者此时相等是预期的，因始发站只有发车时刻）。
+     */
+    @Test
+    void firstStation_arrivalFallsBackToDeparture() {
+        ds.bindings.add(binding(WALL, "L1", "s1", "up"));
+        ds.stations.addAll(List.of(station("s1", "L1", "郑州", 0),
+                station("s2", "L1", "二七", 1)));
+        ds.runs.add(run("r1", "L1", "A01", "up", "express", 6, null, null, ""));
+        // s1 始发站：无 arrival（null），仅 departure 10:00:00
+        ds.timetable.add(new RailDao.TimetableJoinRow(
+                new RailTimetableEntry("r1", "s1", null, "10:00:00", true),
+                ds.runs.get(0)));
+        ds.now = LocalTime.of(9, 50, 0);
+        provider.initialize();
+
+        assertEquals("10:00:00",
+                store.get("schedule:" + WALL + "/next_arrival").orElseThrow().currentValue(),
+                "始发站无 arrival → next_arrival fallback departure_time");
+        assertEquals("10:00:00",
+                store.get("schedule:" + WALL + "/next_departure").orElseThrow().currentValue(),
+                "始发站 next_departure 取 departure_time");
+    }
+
+    /**
+     * 0.7.3 P2-13：终到站无 departure → next_departure fallback arrival_time；
+     * next_arrival 取 arrival_time。
+     */
+    @Test
+    void terminalStation_departureFallsBackToArrival() {
+        ds.bindings.add(binding(WALL, "L1", "s3", "up"));
+        ds.stations.addAll(List.of(station("s1", "L1", "郑州", 0),
+                station("s2", "L1", "二七", 1),
+                station("s3", "L1", "紫荆", 2)));
+        ds.runs.add(run("r1", "L1", "A01", "up", "express", 6, null, null, ""));
+        // s3 终到站：到达 10:05:00，无 departure（null）
+        ds.timetable.add(new RailDao.TimetableJoinRow(
+                new RailTimetableEntry("r1", "s3", "10:05:00", null, true),
+                ds.runs.get(0)));
+        ds.now = LocalTime.of(10, 0, 0);
+        provider.initialize();
+
+        assertEquals("10:05:00",
+                store.get("schedule:" + WALL + "/next_arrival").orElseThrow().currentValue(),
+                "终到站 next_arrival 取 arrival_time");
+        assertEquals("10:05:00",
+                store.get("schedule:" + WALL + "/next_departure").orElseThrow().currentValue(),
+                "终到站无 departure → next_departure fallback arrival_time");
+    }
+
+    /**
+     * 0.7.3 P2-14（provider 侧契约）：RailOpDispatcher.handleStationDelete 删除被绑定站后
+     * 对每个绑定 wall 调本方法。验证 unregisterWall 把 station-bound wall 的 rail 快照彻底释放——
+     * registeredWalls 不再含该 wall（refresh 不再 push 旧 stationId 空串）+ hasWallBinding 转 false
+     * （ManualSchedule 的 skipPredicate 不再跳过 → 可接管）。
+     */
+    @Test
+    void unregisterWall_releasesStationBoundSnapshot_forStationDelete() {
+        ds.bindings.add(binding(WALL, "L1", "s1", "up"));
+        ds.stations.add(station("s1", "L1", "郑州", 0));
+        ds.runs.add(run("r1", "L1", "A01", "up", "local", 6, null, null, ""));
+        ds.timetable.add(new RailDao.TimetableJoinRow(
+                new RailTimetableEntry("r1", "s1", null, "10:00:00", true),
+                ds.runs.get(0)));
+        provider.initialize();
+        assertTrue(provider.hasWallBinding(WALL));
+        assertTrue(provider.registeredWallsSnapshot().contains(WALL));
+
+        // 模拟 handleStationDelete 在删站后对绑定 wall 的调用
+        provider.unregisterWall(WALL);
+
+        assertFalse(provider.hasWallBinding(WALL),
+                "删被绑定站后 wall 应被释放，skipPredicate 不再跳过");
+        assertFalse(provider.registeredWallsSnapshot().contains(WALL),
+                "registeredWalls 不应再持旧 stationId 快照");
+        assertFalse(store.get("schedule:" + WALL + "/next_run_number").isPresent(),
+                "rail-only key 应被清，不残留旧值");
     }
 
     @Test

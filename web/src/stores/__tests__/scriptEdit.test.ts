@@ -16,6 +16,7 @@ import { nextTick } from 'vue';
 import { useScriptEditStore } from '../scriptEdit';
 import { useScriptStore } from '../scripts';
 import { useProjectStore } from '../project';
+import { useNetworkStore } from '../network';
 import type { ScriptRule, ScriptAction } from '@/types/protocol';
 
 // ---------- mock wsClient ----------
@@ -800,5 +801,103 @@ describe('scriptEditStore — activeElementBinding（0.7.1-P3 波2 T4）', () =>
         expect(edit.activeElementBinding).toBe('actions/0');
         edit.selectRule('sr-2');
         expect(edit.activeElementBinding).toBe(null);
+    });
+});
+
+// ---------- D2：closeEditing / selectRule 校验未通过时给 net.lastError 提示 ----------
+
+describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示', () => {
+    function setup() {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        scripts.upsert(makeRule('sr-2'));
+        const edit = useScriptEditStore();
+        const net = useNetworkStore();
+        return { edit, net, scripts };
+    }
+
+    it('dirty + 校验错误时 closeEditing → net.lastError 被设置（提醒用户）', () => {
+        const { edit, net } = setup();
+        edit.selectRule('sr-1');
+        // 空名称触发校验错误
+        edit.setName('   ');
+        expect(edit.dirty).toBe(true);
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+
+        net.lastError = null; // 清空，确认是 closeEditing 设置的
+        edit.closeEditing();
+
+        expect(net.lastError).not.toBeNull();
+        expect(typeof net.lastError).toBe('string');
+        // 提示应包含"保存"或"校验"相关文字
+        expect(net.lastError).toContain('保存');
+    });
+
+    it('dirty 但校验通过时 closeEditing → 不触发提示（正常保存路径）', () => {
+        const { edit, net } = setup();
+        edit.selectRule('sr-1');
+        edit.setName('好名字');
+        expect(edit.dirty).toBe(true);
+        expect(edit.validationErrors).toEqual([]);
+
+        net.lastError = null;
+        edit.closeEditing();
+
+        // 正常保存，不设置错误提示
+        expect(net.lastError).toBeNull();
+    });
+
+    it('非脏时 closeEditing → 不触发提示（无改动）', () => {
+        const { edit, net } = setup();
+        edit.selectRule('sr-1');
+        expect(edit.dirty).toBe(false);
+
+        net.lastError = null;
+        edit.closeEditing();
+
+        expect(net.lastError).toBeNull();
+    });
+
+    it('dirty + 校验错误时 selectRule 切到另一条规则 → net.lastError 被设置', () => {
+        const { edit, net, scripts } = setup();
+        scripts.upsert(makeRule('sr-extra'));
+        edit.selectRule('sr-1');
+        edit.setName('   '); // 空名称 = 非法
+        expect(edit.dirty).toBe(true);
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+
+        net.lastError = null;
+        edit.selectRule('sr-extra'); // 切规则触发 flushSave（被校验拒）
+
+        expect(net.lastError).not.toBeNull();
+        expect(net.lastError).toContain('保存');
+    });
+
+    it('dirty + 校验通过时 selectRule 切规则 → 不触发提示', () => {
+        const { edit, net, scripts } = setup();
+        scripts.upsert(makeRule('sr-extra'));
+        edit.selectRule('sr-1');
+        edit.setName('好名字');
+        expect(edit.dirty).toBe(true);
+        expect(edit.validationErrors).toEqual([]);
+
+        net.lastError = null;
+        edit.selectRule('sr-extra');
+
+        expect(net.lastError).toBeNull();
+    });
+
+    it('closeEditing 即便有提示也不阻止关闭（workingCopy 被清空）', () => {
+        const { edit } = setup();
+        edit.selectRule('sr-1');
+        edit.setName(''); // 非法
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+
+        edit.closeEditing();
+
+        // 关闭照常发生
+        expect(edit.selectedRuleId).toBeNull();
+        expect(edit.workingCopy).toBeNull();
+        expect(edit.dirty).toBe(false);
     });
 });

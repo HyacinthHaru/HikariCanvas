@@ -331,7 +331,22 @@ final class RailOpDispatcher {
     private void handleStationDelete(WsMessageContext ctx, Envelope in, String sessionId,
                                      Session s, Map<String, Object> payload) {
         String id = stringOrNull(payload.get("stationId"));
+        // 0.7.3 P2-14：删站前先收集"本站"绑定到该 station 的 wall。FK 是
+        // ON DELETE SET NULL —— 删后 wall_rail_bindings.station_id 变 null，无法再反查；
+        // 删后对每个绑定 wall 调 provider.unregisterWall 让 RailScheduleProvider 释放接管，
+        // 否则它持旧 stationId 快照 + refresh() 永查空 → push 空串覆盖 schedule:* +
+        // hasWallBinding 仍 true 让 ManualSchedule 持续跳过 → 该 wall 屏整个运行期空白到重启。
+        // 与 handleLineDelete 同款。
+        List<String> boundWalls = new ArrayList<>();
+        if (id != null) {
+            for (WallRailBinding b : dao.listAllBindings()) {
+                if (id.equals(b.stationId())) boundWalls.add(b.wallId());
+            }
+        }
         int n = dao.deleteStation(id);
+        if (provider != null) {
+            for (String wid : boundWalls) provider.unregisterWall(wid);
+        }
         audit(sessionId, s, "RAIL_STATION_DELETE",
                 Map.of("station_id", id == null ? "" : id, "rows", n));
         Map<String, Object> ack = new LinkedHashMap<>();

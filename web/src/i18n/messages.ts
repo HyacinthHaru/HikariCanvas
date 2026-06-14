@@ -796,6 +796,8 @@ export const messages = {
             // validationHint 是指示本身的小字（{n} = 待完善的问题条数）。
             validationTitle: '这条规则还有问题，修好才会自动保存（点这里跳到第一处）',
             validationHint: '⚠ {n} 处待完善',
+            // 关闭/切换规则时有校验错误导致改动未保存的提示（不阻止关闭，只提醒）。
+            discardedByValidation: '部分改动因校验未通过，未能保存',
             // 试跑高亮图例（每种执行结果对应一种边框色）
             legendOk: '执行了',
             legendSkipped: '跳过了',
@@ -2034,6 +2036,8 @@ export const messages = {
             // validationHint is the small inline text itself ({n} = number of issues to finish).
             validationTitle: 'This rule still has issues; auto-save resumes once fixed (click to jump to the first)',
             validationHint: '⚠ {n} to finish',
+            // Shown when closing / switching rules with unsaved changes that failed validation (non-blocking).
+            discardedByValidation: 'Some changes could not be saved because the rule has validation errors',
             // test-run highlight legend (each result maps to a border color)
             legendOk: 'Ran',
             legendSkipped: 'Skipped',

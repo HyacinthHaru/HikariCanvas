@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-06-14 · 0.7.3 ultrareview 第二批：真崩溃 / 数据错乱 / 防御 6 条 + rail 拆分 + 保存提醒
+
+承接第一批（`ffd7a5c`）。5 子代理并行（子系统无冲突）+ 1 处 systematic-debugging。实施计划
+`docs/superpowers/plans/2026-06-14-ultrareview-batch2.md`。
+
+**8 条修复**（ID 对报告）：
+- **P2-14** 删绑定站点 → 屏整运行期空白：`RailOpDispatcher.handleStationDelete` 照 `handleLineDelete`，
+  删前收集 boundWalls、删后 `provider.unregisterWall`（让 ManualSchedule 接管）。
+- **P2-13** `next_departure` 取的是到达时刻（**用户确认拆分**）：`RailScheduleProvider.snapshotFields`
+  把 `next_arrival`（读 `arrival_time`）/`next_departure`（读 `departure_time`）拆成两个独立字段 + 互为
+  fallback（首站无 arrival / 末站无 departure），`next2_*` 同步；`docs/dynamic-data.md §18.4` 写清。
+- **P1-4** `Timeline.tracks` 的 `List.copyOf` 遇 null 元素 NPE → 整墙加载失败：改 `filter(nonNull).toList()`；
+  连带 `KfValueDeserializer` 对 boolean/array 坏形态 `throw JsonMappingException` → `return null`（下游
+  `instanceof` 守卫兜，同属「坏数据不在反序列化期抛硬错」契约）。
+- **P1-7** 属性面板 80ms 防抖跨元素串写：`RightPanel.sendUpdate(patch, elementId)` 显式传 id，
+  `sendUpdateDebounced` 触发时捕获 `selected.id`，flush 按捕获 id 路由（80ms 内切元素不串写）。
+- **P2-16** 关编辑器校验未过静默丢弃（**用户确认加提醒**）：`closeEditing`/`selectRule` 在
+  `dirty && validationErrors>0` 时设 `net.lastError`（非阻塞中文提示，不阻止关闭）。
+- **P1-3** 动画关键帧 w/h 无 MAX_DIM → 渲染线程 OOM：`IconRenderer` tint + `ImageRenderer.drawWithFeather`
+  分配前加 `ElementValidator.MAX_DIM` 守卫 + `TimelineOperations.parseValue` 对 w/h 加范围校验。
+- **P1-6** ImageIO 无尺寸预检 → 分配型炸弹 OOM：`UploadHandler.decodeCooperative` / `ImageStorage`
+  在 `reader.read(0)` 前用 `getWidth/getHeight` 预检尺寸 > `BBOX_MAX_EDGE`(8192) 即拒（解码前拦分配）。
+- **P2-5** 脚本挂起续接早于补间末帧落盘 → 读到旧值：`TweenScheduler.enqueue` 加 `onComplete` 回调，
+  正常末帧落盘后 / tick 异常清理 / 接管三终结点 `fireComplete`（`oneShot` AtomicBoolean 幂等），
+  `ScriptRunner` 不再自按 durationMs 定时，续接经回调 `schedule(0)` 投 Runner SES（不在 tween 线程跑脚本）；
+  接管路径顺带把 `active.get`+`put` 合一为原子 `active.put` 消除 TOCTOU。满足 `scripting-tween.md §2.2`
+  「补间完 → 落盘 → 续接」顺序。
+
+**systematic-debugging（1 处）**：D2 子代理为 i18n 用 `messages[ui.locale]` 在 `scriptEdit` 里调
+`useUiStore()`，间接触发 `theme` store 实例化 → `theme.ts loadFlavor` 的 `window.matchMedia` 在 node
+测试环境炸 6 个测试。根因是**偏离现有惯例**（其余 5 处 `net.lastError` 都是直接中文）。修复：生产 + 测试
+都改回直接中文字面量、去掉 ui/theme 依赖。
+
+**测试**：后端全绿（新增约 31：OomGuard×2 新 + Timeline / Rail / Tween / ScriptRunner / EditSessionKeyframe）/
+前端 **1243**（+10）全绿 / **0 baseline 漂移**。用户游戏内实测通过。
+
+关联：`RailOpDispatcher` / `RailScheduleProvider` / `Timeline` / `KfValueDeserializer` / `IconRenderer` /
+`ImageRenderer` / `TimelineOperations` / `UploadHandler` / `ImageStorage` / `TweenScheduler` / `ScriptRunner`
++ 7 测试类（OomGuardRenderersTest / OomGuardDecodeTest 新）；前端 `RightPanel` / `scriptEdit` / `messages`
++ 2 测试；`docs/dynamic-data.md §18.4` + plan。
+
+---
+
 ## 2026-06-14 · 0.7.3 ultrareview 第一批：8 条「静默失败」+ 崩溃修复（全直接修）
 
 独立第三方全栈 ultrareview（`docs/ultrareview-2026-06-14.md`，159 代理 / 54 真问题 + 25 设计待定）→ 4 个

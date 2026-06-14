@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -134,10 +135,19 @@ public final class TweenScheduler {
      *
      * <p>{@code fps} 是 enqueue 时从 wall 的 {@link ProjectState#effectiveTweenFps()} 读取的
      * per-wall 帧率——已被 config maxFps clamp，决定 renderStatic 节流间隔（1000/fps ms）。</p>
+     *
+     * <p><b>E1（补间→落盘→续接的时序承诺）</b>：{@code onComplete} 是脚本续接回调——把
+     * 「补间末帧落盘完成后才续接脚本后续动作」（scripting-tween.md §2.2 步骤 6）这一顺序承诺
+     * 落地。构造时已被 {@link #oneShot(Runnable)} <b>一次性包装</b>（内部 AtomicBoolean CAS），
+     * 故 {@link #fireComplete} 在任何终结点（正常末帧落盘后 / tick 异常清理 / 接管）重复调都<b>恰
+     * 一次</b>生效。可为 {@code null}（无续接需求，如纯演示拼接或测试）。<b>注意</b>：record
+     * {@code equals}/{@code hashCode} 因新增 onComplete（Runnable，identity 语义）改变，但
+     * {@code active.remove(wallId, task)} 始终传<b>同一实例</b>（identity 自反相等），CAS 不受影响；
+     * 全代码无两个不同 TweenTask 实例相等比较。</p>
      */
     record TweenTask(String wallId, String blockId, List<PropTarget> targets,
                      long startMs, long durationMs, Easing easing,
-                     ProjectState baseState, int fps) {
+                     ProjectState baseState, int fps, Runnable onComplete) {
         TweenTask {
             targets = List.copyOf(targets);
         }
@@ -215,16 +225,33 @@ public final class TweenScheduler {
     // ---------- enqueue（Runner 线程） ----------
 
     /**
+     * 无续接回调的注册重载（演示拼接 / 测试用——补间照常跑 + 末帧落盘，但不续接任何脚本）。
+     * 等价 {@code enqueue(wallId, blockId, tb, null)}。
+     */
+    public TraceStep enqueue(String wallId, String blockId, Action.TweenBlock tb) {
+        return enqueue(wallId, blockId, tb, null);
+    }
+
+    /**
      * 注册一个补间任务（从 TweenBlock 的 body 解析 targets）。
      *
      * <p>调用方（ScriptRunner）在 Runner 线程调；结果 {@link TraceStep} 决定是否挂起：
-     * {@code "ok"} → 挂起 durationMs；否则不挂起，脚本链继续。</p>
+     * {@code "ok"} → 挂起（等 {@code onComplete} 回调续接，<b>不再</b>由 Runner 自按 durationMs
+     * 定时）；否则不挂起，脚本链继续。</p>
      *
-     * @param wallId  当前墙
-     * @param blockId 补间积木 blockId（用于 trace 定位）
-     * @param tb      TweenBlock action（含 durationMs / easing / body）
+     * <p><b>E1 时序承诺</b>：{@code onComplete} 由本引擎在<b>补间末帧落盘完成后</b>（正常完成）/
+     * tick 异常清理后 / 被同墙新补间接管后<b>恰一次</b>触发——把 scripting-tween.md §2.2
+     * 「补间完→落盘→续接」的顺序落地。回调内部应把脚本续接<b>投递到 Runner SES</b>（绝不在
+     * tween 线程跑脚本续接）；本引擎只负责<b>在正确时点</b>调用它一次。{@code onComplete} 仅在
+     * 返回 {@code "ok"} 且 {@code durationMs > 0}（即真正挂起）时才会被触发——失败 / 0 时长场景
+     * 由调用方（ScriptRunner）当场不挂起继续，不依赖本回调。</p>
+     *
+     * @param wallId     当前墙
+     * @param blockId    补间积木 blockId（用于 trace 定位）
+     * @param tb         TweenBlock action（含 durationMs / easing / body）
+     * @param onComplete 末帧落盘后的脚本续接回调（可 {@code null}）；本引擎一次性包装后在终结点触发
      */
-    public TraceStep enqueue(String wallId, String blockId, Action.TweenBlock tb) {
+    public TraceStep enqueue(String wallId, String blockId, Action.TweenBlock tb, Runnable onComplete) {
         if (shutdown) return TraceStep.error(blockId, "补间引擎已关停");
         if (wallId == null) return TraceStep.error(blockId, "wallId 缺失");
         if (tb.body().isEmpty()) return TraceStep.error(blockId, "补间 body 为空");
@@ -273,22 +300,25 @@ public final class TweenScheduler {
             return TraceStep.error(blockId, "补间未解析到有效 targets");
         }
 
-        // 同 wall 已有旧补间 → 末尾清 diff（接管，旧补间不再 tick）
-        TweenTask old = active.get(wallId);
-        if (old != null) {
-            ticker.clearStaticDiff(wallId);
-            // 接管时清旧 lastRenderAt，让新任务首帧立即渲染
-            lastRenderAt.remove(wallId);
-        }
-
         // per-wall 帧率：从 baseState.effectiveTweenFps() 读取，并受 maxFps 硬上限 clamp
         int wallFps = Math.min(maxFps, baseState.effectiveTweenFps());
 
+        // E1：一次性包装续接回调，挂到 task 上——在终结点（末帧落盘后 / 异常 / 接管）恰一次触发。
         TweenTask task = new TweenTask(wallId, blockId, targets,
                 clock.getAsLong(), tb.durationMs(),
                 tb.easing() != null ? tb.easing() : Easing.LINEAR,
-                baseState, wallFps);
-        active.put(wallId, task);
+                baseState, wallFps, oneShot(onComplete));
+
+        // 同 wall 已有旧补间 → 接管：清 diff + 清旧 lastRenderAt（新任务首帧立即渲），
+        // 且替换为新 task 后<b>触发旧补间的续接回调</b>（旧脚本不永久挂起，T8 接管语义）。
+        TweenTask old = active.put(wallId, task);
+        if (old != null) {
+            ticker.clearStaticDiff(wallId);
+            lastRenderAt.remove(wallId);
+            // 接管发生在 Runner 线程；fireComplete 内只 schedule 投递到 Runner SES（见调用方），
+            // 不在此跑脚本续接。一次性保证由 old 自身的 oneShot 包装兜底。
+            fireComplete(old);
+        }
         return TraceStep.ok(blockId, "action", "补间注册成功，targets=" + targets.size()
                 + " duration=" + tb.durationMs() + "ms");
     }
@@ -310,6 +340,9 @@ public final class TweenScheduler {
                 // 出错也清理，防无限重试
                 active.remove(wallId, task);
                 ticker.clearStaticDiff(wallId);
+                // E1：异常也要触发续接回调，让脚本以「补间失败」状态续接 —— 否则脚本永久挂起。
+                // 触发在 tween 线程；回调内只把续接 schedule 到 Runner SES（不在 tween 线程跑脚本）。
+                fireComplete(task);
             }
         }
     }
@@ -348,6 +381,10 @@ public final class TweenScheduler {
             active.remove(wallId, task);
             lastRenderAt.remove(wallId);
             if (!animating) ticker.clearStaticDiff(wallId);
+            // E1（顺序承诺）：续接<b>必在末帧落盘（上面 applyFn.apply）之后</b>触发——这样脚本
+            // 后续动作（读元素 x/y、waitUntil/if 读几何）读到的是补间<b>目标值</b>而非起始值。
+            // 触发在 tween 线程；回调内只把续接 schedule 到 Runner SES，不在 tween 线程跑脚本。
+            fireComplete(task);
             return;
         }
 
@@ -384,7 +421,13 @@ public final class TweenScheduler {
 
     // ---------- 关停 ----------
 
-    /** 幂等关停（cleanupResources：scriptRunner.shutdown 之后、animationTicker.shutdown 之前）。 */
+    /**
+     * 幂等关停（cleanupResources：scriptRunner.shutdown 之后、animationTicker.shutdown 之前）。
+     *
+     * <p><b>E1</b>：关停<b>不触发</b>活跃补间的续接回调——关服路径下 ScriptRunner 已先 shutdown，
+     * 其 SES 拒新任务、session 已死，续接无意义（与 ScriptRunner wait/playTimelineAwait 的
+     * 「shutdown 竞态丢弃不回调」契约一致）。仅清 staticDiff + 清表 + 关 SES。</p>
+     */
     public void shutdown() {
         if (shutdown) return;
         shutdown = true;
@@ -410,6 +453,42 @@ public final class TweenScheduler {
     }
 
     // ---------- 内部 helper ----------
+
+    /**
+     * E1：把脚本续接回调包装成<b>一次性</b> Runnable（AtomicBoolean CAS 守护）。{@code null} 入参
+     * 返回 {@code null}（无续接需求）。包装后即便 {@link #fireComplete} 在多个终结点（末帧 / 异常 /
+     * 接管）被重复调，真正 body 也只跑一次——满足「续接恰一次」契约。
+     */
+    private static Runnable oneShot(Runnable body) {
+        if (body == null) return null;
+        AtomicBoolean fired = new AtomicBoolean(false);
+        return () -> {
+            if (fired.compareAndSet(false, true)) {
+                body.run();
+            }
+        };
+    }
+
+    /**
+     * E1：在补间终结点触发 task 的续接回调（一次性，由 {@link #oneShot} 包装兜底幂等）。
+     *
+     * <p><b>线程语义</b>：本方法可能在 <i>tween 线程</i>（tickOne 正常末帧 / tick 异常清理）或
+     * <i>Runner 线程</i>（enqueue 接管）被调；它<b>不</b>跑脚本逻辑，只调用回调 body——而 body
+     * （来自 ScriptRunner）内部只把脚本续接 {@code schedule} 投递到 Runner SES（见 ScriptRunner
+     * 的 TweenBlock 分支），故脚本续接<b>始终</b>在 Runner 线程跑，绝不在 tween 线程。回调 body
+     * 自身抛异常被吞 + WARNING，不杀 tween 线程的 tick 循环。</p>
+     */
+    private void fireComplete(TweenTask task) {
+        if (task == null) return;
+        Runnable cb = task.onComplete();
+        if (cb == null) return;
+        try {
+            cb.run();
+        } catch (Throwable t) {
+            log.log(Level.WARNING, "[补间] 续接回调抛异常（已吞）wallId=" + task.wallId()
+                    + " block=" + task.blockId() + ": " + t.getMessage(), t);
+        }
+    }
 
     /** P3：是否可补间属性（数值 + color + fill）。 */
     private static boolean isTweenableProperty(String property) {

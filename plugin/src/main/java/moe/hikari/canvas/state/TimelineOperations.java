@@ -282,6 +282,13 @@ final class TimelineOperations {
                     throw new ValidationException("INVALID_PAYLOAD",
                             "numeric keyframe value must be finite: " + property);
                 }
+                // B1：w/h 关键帧不得超 MAX_DIM，否则渲染线程按 element w×h 分配巨 buffer → OOM
+                if (("w".equals(property) || "h".equals(property))
+                        && d > ElementValidator.MAX_DIM) {
+                    throw new ValidationException("INVALID_PAYLOAD",
+                            property + " keyframe value exceeds MAX_DIM ("
+                                    + ElementValidator.MAX_DIM + "): " + d);
+                }
                 return new KfValue.Num(d);
             }
             if (valueRaw instanceof String s) {

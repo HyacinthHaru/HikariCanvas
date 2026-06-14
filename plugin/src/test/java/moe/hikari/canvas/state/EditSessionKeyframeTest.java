@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+// B1：w/h keyframe MAX_DIM 上限校验
 
 /**
  * 0.6 P1：通过 EditSession 的 keyframe.* op（add / update / delete / move）行为校验。
@@ -420,5 +421,65 @@ class EditSessionKeyframeTest {
         // 一次 undo → 两帧一起回到 1000
         assertInstanceOf(EditSession.OpResult.OkSnapshot.class, es.undo());
         for (Keyframe k : track(es, eid)) assertEquals(1000, k.timeMs(), "整体块拖动应一步撤销回原时刻");
+    }
+
+    // ---------- B1：w/h 关键帧 MAX_DIM 上限校验（防渲染线程 OOM）----------
+
+    @Test
+    void addKeyframeW_overMaxDim_rejected() {
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+        // w = MAX_DIM + 1 → INVALID_PAYLOAD（超出 element.add 同闸，应拒）
+        int overMax = ElementValidator.MAX_DIM + 1;
+        EditSession.OpResult r = es.addKeyframe(tid, eid, "w", 100, overMax, null);
+        assertEquals("INVALID_PAYLOAD",
+                ((EditSession.OpResult.Error) r).code(),
+                "w keyframe > MAX_DIM 应被拒（防 BufferedImage OOM）");
+    }
+
+    @Test
+    void addKeyframeH_overMaxDim_rejected() {
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+        int overMax = ElementValidator.MAX_DIM + 1;
+        EditSession.OpResult r = es.addKeyframe(tid, eid, "h", 100, overMax, null);
+        assertEquals("INVALID_PAYLOAD",
+                ((EditSession.OpResult.Error) r).code(),
+                "h keyframe > MAX_DIM 应被拒（防 BufferedImage OOM）");
+    }
+
+    @Test
+    void addKeyframeW_exactlyMaxDim_accepted() {
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+        // w = MAX_DIM 刚好在上限 → 允许
+        EditSession.OpResult r = es.addKeyframe(tid, eid, "w", 100, ElementValidator.MAX_DIM, null);
+        assertInstanceOf(EditSession.OpResult.Ok.class, r,
+                "w keyframe = MAX_DIM 应允许");
+    }
+
+    @Test
+    void addKeyframeH_exactlyMaxDim_accepted() {
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+        EditSession.OpResult r = es.addKeyframe(tid, eid, "h", 100, ElementValidator.MAX_DIM, null);
+        assertInstanceOf(EditSession.OpResult.Ok.class, r,
+                "h keyframe = MAX_DIM 应允许");
+    }
+
+    @Test
+    void addKeyframeX_overMaxCoord_notBlockedByMaxDim() {
+        // x/y 不受 MAX_DIM 约束，仅受 finite 校验（MAX_DIM 守卫只对 w/h 生效）
+        EditSession es = newSession();
+        String tid = newTimeline(es, 5000);
+        String eid = addText(es, "hi");
+        int overMax = ElementValidator.MAX_DIM + 1;  // 10001，x/y 不限
+        EditSession.OpResult r = es.addKeyframe(tid, eid, "x", 100, overMax, null);
+        assertInstanceOf(EditSession.OpResult.Ok.class, r,
+                "x keyframe > MAX_DIM 不应受 MAX_DIM 守卫影响（x/y 不是尺寸属性）");
     }
 }

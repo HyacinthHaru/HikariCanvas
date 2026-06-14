@@ -128,6 +128,11 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         if (!rule) return;
         // 切到另一条规则前，先把上一条手上的脏改动落盘。
         if (selectedRuleId.value !== null && selectedRuleId.value !== ruleId) {
+            // 有脏改动但校验不过：flushSave 会被 doSave 内的校验门拒绝，改动将被丢弃，
+            // 给用户非阻塞提示（不影响切规则本身）。
+            if (dirty.value && validationErrors.value.length > 0) {
+                net.lastError = '部分改动因校验未通过，未能保存';
+            }
             flushSave();
         }
         selectedRuleId.value = ruleId;
@@ -142,8 +147,15 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     /**
      * 退出编辑：先 flush 待保存改动 → 清空 workingCopy / selectedRuleId / undo 栈。
      * 切 wall（scripts.reset）/ 关闭 overlay / 删除当前规则时调。
+     *
+     * <p>若 dirty + validationErrors 非空，flushSave 会因校验拒绝不发送——此时静默
+     * 丢弃不理想，改为用 net.lastError 提示用户（非阻塞，不阻止关闭）。</p>
      */
     function closeEditing(): void {
+        // 关闭前先检测"有脏改动但校验不过"的情形，提前警告（不阻止关闭）。
+        if (dirty.value && validationErrors.value.length > 0) {
+            net.lastError = '部分改动因校验未通过，未能保存';
+        }
         flushSave();
         selectedRuleId.value = null;
         workingCopy.value = null;

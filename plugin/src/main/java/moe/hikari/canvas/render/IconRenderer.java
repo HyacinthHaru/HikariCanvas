@@ -1,6 +1,7 @@
 package moe.hikari.canvas.render;
 
 import moe.hikari.canvas.state.Element;
+import moe.hikari.canvas.state.ElementValidator;
 import moe.hikari.canvas.state.Fill;
 import moe.hikari.canvas.state.IconElement;
 import moe.hikari.canvas.state.SolidFill;
@@ -48,6 +49,8 @@ public final class IconRenderer implements ElementRenderer {
         // P3-49：渲染层兜底（对齐 renderSvgPath:92 与 M16.3 兄弟 renderer 模式）；
         // w/h ≤ 0 时 drawImage / BufferedImage 行为退化 → 直接 return
         if (ic.w() <= 0 || ic.h() <= 0) return;
+        // B1：关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）
+        if (ic.w() > ElementValidator.MAX_DIM || ic.h() > ElementValidator.MAX_DIM) return;
         if (ctx.assetService() == null) {
             ctx.log().warning("[compositor] IconElement '" + ic.id() + "' but no assetService bound");
             return;
