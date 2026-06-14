@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-06-14 · 用户文档 Wiki 脚手架：VitePress 站点（`docs` 分支）
+
+决定用 **VitePress** 做面向玩家+服主的在线 Wiki 用户手册,部署到网页。为不污染 main,**新开 `docs`
+分支**承载这块 in-progress 工作（以后可 PR 合并或当长期文档分支 / GitHub Pages 源）。
+
+**本次只搭脚手架,不写正文**（正文下一步从代码事实逐页填）:
+- 新建 `user-docs/`（VitePress 1.6.4,Node 25 下 `npm install` + `docs:build` 均一次过,无死链）。
+- `.vitepress/config.mts`:中文 + 暗色 + 本地全文搜索 + GitHub 链接 + 上/下页 + 页内目录;
+  顶部导航三卷 + 每卷独立侧边栏。
+- 三卷骨架（每页先放占位 + 内容大纲）:
+  - 卷一 玩家手册 `guide/`（认识 / 做第一面招牌 / 元素与工具 / 变量 / 时间轴 / 脚本）
+  - 卷二 服主手册 `admin/`（安装部署 / 命令 / 权限 / 配置 / 安全与配额——已埋 SSRF 风险提示）
+  - 卷三 开发者手册 `api/`（Plugin Push API）
+- `npm run docs:dev/build/preview` 三脚本;`user-docs/.gitignore` 忽略 node_modules/dist/cache。
+
+关联:`user-docs/`（新目录,VitePress 项目,在 `docs` 分支）。
+
+---
+
 ## 2026-06-14 · 契约文档批量回填：9 份 docs 原地校准到与代码一致（写用户手册前的地基）
 
 为后续写「整个项目的玩家+服主大文档」做准备,**先把整个项目代码读完**（12 子系统,多子代理并行,
