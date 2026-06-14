@@ -231,7 +231,7 @@ if t >= 1:
 | **P2 ✅** | 补间引擎 MVP：`TweenScheduler`（单线程 SES + TweenTask + EasingSolver 算值）+ **路径 Z `renderStatic` 渲临时态省 DB** + 挂起 + 最简前端可拼 + **per-wall 帧率**（tweenFps + 节流）+ 缓动两层 bug 修 | ✅ 实测过：招牌滑入 + 缓动 + 挂起 + 帧率可调 |
 | **P3 ✅** | 全属性 + 缓动 + 共存：多属性并行 + **color/fill 轨**（ColorLerp.lerpHex/lerpFill）+ 全 EasingType + **与时间轴共存**（`isWallAnimating` 分流：有 timeline 墙每帧 applyMany / 静态墙 renderStatic）+ 冲突接管（T8）+ `${var}` 颜色末帧瞬切 | ✅ 实测过：颜色补间 + 多属性并行 + 补间和时间轴叠加 |
 | **P4 ✅** | 前端 C 形包裹积木 + 缓动选择器（下拉预设 + 自定义曲线复用 0.6 `EasingCurveEditor`）+ body 拖入限制（`isTweenBodySlotAllowed`）+ i18n + 曲线拖动 bug 修 | ✅ 实测过：视觉完美 + body 限制 + 自定义曲线 |
-| **P5**（进行中） | config（`max-fps`/`max-concurrent` 已 P2 加）+ 性能透明 + 收尾（docs / journal / 版本号 / 用户用法） | 收口 |
+| **P5 ✅** | config（`max-fps`/`max-concurrent` 已 P2 加）+ 性能透明 + 收尾（docs / journal / 版本号 / 用户用法） | 收口 |
 
 ---
 
@@ -268,3 +268,5 @@ if t >= 1:
 
 **注意**：「在 X 秒内」里面**只能放属性动作**（移动/缩放/转动/透明度/变色）；放别的（发消息等）会拖不进去——
 那些放在补间**外面**。
+
+完整脚本教程见 docs/scripting-guide.md

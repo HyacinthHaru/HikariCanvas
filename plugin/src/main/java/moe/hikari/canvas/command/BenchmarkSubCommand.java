@@ -22,6 +22,8 @@ import moe.hikari.canvas.benchmark.PerElementCost;
 import moe.hikari.canvas.benchmark.Percentiles;
 import moe.hikari.canvas.benchmark.SceneLibrary;
 import moe.hikari.canvas.benchmark.SceneResult;
+import moe.hikari.canvas.benchmark.ScriptBenchmarkDriver;
+import moe.hikari.canvas.benchmark.TweenBenchmarkDriver;
 import moe.hikari.canvas.render.CanvasCompositor;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -186,6 +188,44 @@ public final class BenchmarkSubCommand {
                             doClear(ctx.getSource().getSender());
                             return Command.SINGLE_SUCCESS;
                         }))
+                // run-tween [iterations] [warmup] — 补间帧率压测（0.7.x）
+                .then(Commands.literal("run-tween")
+                        .executes(ctx -> {
+                            doRunTween(ctx.getSource().getSender(), -1, -1);
+                            return Command.SINGLE_SUCCESS;
+                        })
+                        .then(Commands.argument("iterations", IntegerArgumentType.integer(1))
+                                .executes(ctx -> {
+                                    doRunTween(ctx.getSource().getSender(),
+                                            IntegerArgumentType.getInteger(ctx, "iterations"), -1);
+                                    return Command.SINGLE_SUCCESS;
+                                })
+                                .then(Commands.argument("warmup", IntegerArgumentType.integer(0))
+                                        .executes(ctx -> {
+                                            doRunTween(ctx.getSource().getSender(),
+                                                    IntegerArgumentType.getInteger(ctx, "iterations"),
+                                                    IntegerArgumentType.getInteger(ctx, "warmup"));
+                                            return Command.SINGLE_SUCCESS;
+                                        }))))
+                // run-script [iterations] [warmup] — 脚本动作链压测（0.7.x）
+                .then(Commands.literal("run-script")
+                        .executes(ctx -> {
+                            doRunScript(ctx.getSource().getSender(), -1, -1);
+                            return Command.SINGLE_SUCCESS;
+                        })
+                        .then(Commands.argument("iterations", IntegerArgumentType.integer(1))
+                                .executes(ctx -> {
+                                    doRunScript(ctx.getSource().getSender(),
+                                            IntegerArgumentType.getInteger(ctx, "iterations"), -1);
+                                    return Command.SINGLE_SUCCESS;
+                                })
+                                .then(Commands.argument("warmup", IntegerArgumentType.integer(0))
+                                        .executes(ctx -> {
+                                            doRunScript(ctx.getSource().getSender(),
+                                                    IntegerArgumentType.getInteger(ctx, "iterations"),
+                                                    IntegerArgumentType.getInteger(ctx, "warmup"));
+                                            return Command.SINGLE_SUCCESS;
+                                        }))))
                 // /canvas bench (no subcommand) → usage
                 .executes(ctx -> {
                     sendUsage(ctx.getSource().getSender());
@@ -551,13 +591,99 @@ public final class BenchmarkSubCommand {
     //  usage
     // ──────────────────────────────────────────────────────────────────
 
+    // ──────────────────────────────────────────────────────────────────
+    //  run-tween（0.7.x 补间帧率压测）
+    // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * 补间帧率压测：测 N 面活跃墙的 tick 开销（{@link TweenBenchmarkDriver}）。
+     * 异步跑，结束回主线程发文字摘要。
+     */
+    private void doRunTween(CommandSender sender, int iterations, int warmup) {
+        if (running) {
+            sender.sendMessage(Component.text("已有测试在跑，请等它跑完。", NamedTextColor.RED));
+            return;
+        }
+        int measured = iterations < 0 ? 100 : iterations;
+        int warm = warmup < 0 ? 10 : warmup;
+        running = true;
+        sender.sendMessage(Component.text(
+                "已开始补间帧率压测（正式 " + measured + " 轮 + 预热 " + warm + " 轮）…",
+                NamedTextColor.GRAY));
+        benchExecutor.submit(() -> {
+            try {
+                String summary = TweenBenchmarkDriver.run(
+                        List.of(1, 4, 16, 64), warm, measured);
+                runOnMain(() -> {
+                    sender.sendMessage(Component.text("补间帧率压测完成：", NamedTextColor.GOLD));
+                    for (String line : summary.split("\n")) {
+                        sender.sendMessage(Component.text(line, NamedTextColor.GRAY));
+                    }
+                });
+            } catch (Throwable t) {
+                plugin.getLogger().log(Level.SEVERE, "run-tween failed", t);
+                String msg = t.getClass().getSimpleName()
+                        + (t.getMessage() == null ? "" : ": " + t.getMessage());
+                runOnMain(() -> sender.sendMessage(Component.text("压测失败：" + msg, NamedTextColor.RED)));
+            } finally {
+                running = false;
+            }
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  run-script（0.7.x 脚本动作链压测）
+    // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * 脚本动作链压测：测不同动作数的链路开销（{@link ScriptBenchmarkDriver}）。
+     * 异步跑，结束回主线程发文字摘要。
+     */
+    private void doRunScript(CommandSender sender, int iterations, int warmup) {
+        if (running) {
+            sender.sendMessage(Component.text("已有测试在跑，请等它跑完。", NamedTextColor.RED));
+            return;
+        }
+        int measured = iterations < 0 ? 100 : iterations;
+        int warm = warmup < 0 ? 10 : warmup;
+        running = true;
+        sender.sendMessage(Component.text(
+                "已开始脚本动作链压测（正式 " + measured + " 轮 + 预热 " + warm + " 轮）…",
+                NamedTextColor.GRAY));
+        benchExecutor.submit(() -> {
+            try {
+                String summary = ScriptBenchmarkDriver.run(
+                        List.of(1, 10, 25, 50), warm, measured);
+                runOnMain(() -> {
+                    sender.sendMessage(Component.text("脚本动作链压测完成：", NamedTextColor.GOLD));
+                    for (String line : summary.split("\n")) {
+                        sender.sendMessage(Component.text(line, NamedTextColor.GRAY));
+                    }
+                });
+            } catch (Throwable t) {
+                plugin.getLogger().log(Level.SEVERE, "run-script failed", t);
+                String msg = t.getClass().getSimpleName()
+                        + (t.getMessage() == null ? "" : ": " + t.getMessage());
+                runOnMain(() -> sender.sendMessage(Component.text("压测失败：" + msg, NamedTextColor.RED)));
+            } finally {
+                running = false;
+            }
+        });
+    }
+
     private static void sendUsage(CommandSender sender) {
         sender.sendMessage(Component.text("/canvas bench 子命令：", NamedTextColor.GOLD));
         sender.sendMessage(Component.text(
                 "  /canvas bench list                          — 列出测试场景",
                 NamedTextColor.GRAY));
         sender.sendMessage(Component.text(
-                "  /canvas bench run [场景] [轮次] [预热]  — 运行性能测试",
+                "  /canvas bench run [场景] [轮次] [预热]  — 运行渲染性能测试",
+                NamedTextColor.GRAY));
+        sender.sendMessage(Component.text(
+                "  /canvas bench run-tween [轮次] [预热]       — 补间动画帧率压测（0.7.x）",
+                NamedTextColor.GRAY));
+        sender.sendMessage(Component.text(
+                "  /canvas bench run-script [轮次] [预热]      — 脚本动作链开销压测（0.7.x）",
                 NamedTextColor.GRAY));
         sender.sendMessage(Component.text(
                 "  /canvas bench report [id]                   — 打印最近的或指定的报告",

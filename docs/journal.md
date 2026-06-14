@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-06-14 · 0.7.x 整体收尾：用户文档 + 契约回填 + 压测简化 + 路线对齐（0.7.0 P6 收口）
+
+0.7.x 主线功能（0.7.0–0.7.3 + 补间）全完工后,**先读代码读文档评估收尾范围**（纠正了凭记忆误判
+「0.7.1 P4-P5 待做」——实际早完工）。3 子代理并行评估 → 用户拍板「**压测简化 + 版本号保持 SNAPSHOT**」
+→ 4 子代理并行实施。这是 0.7.0 P6 的收口产出。
+
+**4 项产出：**
+- **A 用户文档** 新建 `docs/scripting-guide.md`（399 行,5 部分大白话:做第一条规则 / 9 触发器 / 29 动作 /
+  进阶〔幽灵拖动 + 试跑轨迹高亮 + 熔断说明〕/ 服主运维〔权限 + 命令模板白名单 + 调参 + 排障〕）。照
+  `timeline-guide.md` + `variables.md` 形态,整合 `scripting-tween.md §12` 补间用法。
+- **B 契约回填** `security.md §13` 脚本运行时威胁模型（命令白名单 K13 净化 / 熔断 Budget 三闸 / 触发器权限面 /
+  编辑鉴权 / 审计 7 事件）+ `architecture.md §17` 脚本架构（执行引擎三组件数据流 / 三线程模型 / 触发器接入 /
+  setElementProperty 双路径 / 反模式守则）。
+- **C 压测简化**（用户定「只测核心」）:`TweenBenchmarkDriver`（N 墙 [1/4/16/64] 并发补间 tick 成本,测
+  `buildInterpolatedFrame` deepCopy）+ `ScriptBenchmarkDriver`（脚本动作链 [1/10/25/50] 开销,真实 ScriptRunner
+  SES）+ `/canvas bench run-tween`/`run-script` + `benchmark.md §7`（含已知局限:playerNear 依赖 Bukkit 主线程,
+  纯 headless 测不了）。复用 0.5.0 benchmark 框架,文字摘要（不出 html,简化）。
+- **E 文档对齐** `CLAUDE.md` 补 0.7.2/0.7.3 整行 + 改 0.7.1「P4-P5 待做」为完工;`scripting-0.7.1`(P1-P5) /
+  `scripting-0.7.2`(P1-P4) / `scripting-tween`(P5 误写「进行中」) 分期表回填 ✅;2 个 demo 插件
+  `paper-plugin.yml` 版本号裂口修（0.5.0 → 0.7.3-SNAPSHOT）。
+
+**收尾中 systematic-debugging 修 2 处：**
+- **guide 4 处事实不准**（读代码核出来的）:玩家击杀实际是 **PvP「被另一玩家击杀」**（`getKiller()!=null`;
+  环境死亡 / 杀生物都不算,A 误写「击杀别人/生物」）;右键墙 + 退服**也需 `trigger.global`**（`ScriptPermissions`
+  管 PlayerJoin/Kill/Quit/RightClickWall 4 个,A 漏标）;权限表补全。
+- **benchmark 编译错**:`TweenScheduler` 的 test seam 构造（ApplyManyFn 版）+ `tickForTest()` 都是
+  package-private,benchmark 包访问不了 → 两处 public 化（与 `AnimationTicker.tickOnceForTest` 一致,低风险）。
+
+**测试**:后端全绿（含 benchmark +9 测试）/ 前端 **1303**（无代码改,有效）。0.7.0 P6 三件（压测 / scripting-guide /
+契约回填）收口。
+
+**评估纠错（关键）**:0.7.x 功能全齐——9 触发器 + 29 动作全实现,无「剩余触发器」;OnCommand/OnLockChange
+是设计时就推后/不做的,不属 0.7.x 收尾。版本号保持 `0.7.3-SNAPSHOT`（用户定,不定正式版）。
+
+关联:`docs/scripting-guide.md`(新) / `security.md` / `architecture.md` / `benchmark.md` / `CLAUDE.md` /
+`scripting-0.7.1/0.7.2/tween`;plugin `benchmark/{Tween,Script}BenchmarkDriver`(+2 测试) / `BenchmarkSubCommand` /
+`TweenScheduler`(seam public 化);2 个 demo `paper-plugin.yml`。
+
+---
+
 ## 2026-06-14 · 0.7.3 ultrareview 第三批（收官）：协议 close 一组 + P2 散点 11 条
 
 承接第一批 `ffd7a5c` / 第二批 `7bd403a`。5 子代理并行（**先确认属实——11 条全属实无误报**）+ 2 处

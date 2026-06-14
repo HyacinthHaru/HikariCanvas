@@ -201,9 +201,9 @@ public final class TweenScheduler {
     }
 
     /**
-     * 测试装配 / seam 入口（全 fake 注入）。
+     * 测试 / benchmark 装配 seam 入口（全 fake 注入）。
      */
-    TweenScheduler(ApplyManyFn applyFn, TickerControl ticker,
+    public TweenScheduler(ApplyManyFn applyFn, TickerControl ticker,
                    WallLoader wallLoader, LongSupplier clock,
                    int maxConcurrent, int maxFps, Logger log) {
         this.applyFn = applyFn;
@@ -842,8 +842,8 @@ public final class TweenScheduler {
         return active.containsKey(wallId);
     }
 
-    /** 强制触发一次 tick（测试用，绕开 scheduleAtFixedRate）。 */
-    void tickForTest() {
+    /** 强制触发一次 tick（测试 / benchmark 用，绕开 scheduleAtFixedRate）。 */
+    public void tickForTest() {
         tick();
     }
 }

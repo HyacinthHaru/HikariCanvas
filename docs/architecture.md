@@ -1132,9 +1132,92 @@ element.add type=path  落库 + 后端 PathRenderer 渲染
 
 ### 16.6 性能与边界
 
+
 - RDP 顶点上限 240（PathDValidator 实际阈值），tolerance 阶梯 0.5→1→2→4→8→16 直到达标
 - 极小 gap 过滤 `MIN_GAP_AREA = 4 px²`（防点击噪声）
 - DEV-only `console.debug` perf log（tree-shake prod 构建期由 `__DEV__` 常量剥掉）
 - 100 elements 实测 build < 50ms（worker 内）；UI debounce 100ms 后调度
 - 自交 path → ElementToPolygon 改用 bbox fallback（不把无效 ring 喂给 polygon-clipping）
 - vitest 28 单测覆盖 ElementToPolygon / LivePaintCore / PolygonToPath / RdpSimplifier 四模块全部分支
+
+---
+
+## 17. 脚本运行时架构（0.7.0 引入）
+
+> **契约总纲**：`docs/scripting.md`（D1-D8 决策 / 执行管线 §3 / Budget §2.4 / 命令白名单 §5 / 权限 §6）。本节仅固化脚本系统在整体架构中的定位与线程契约，不重复设计细节。
+
+### 17.1 执行引擎三组件
+
+```
+游戏事件（GameEventListenerHub，主线程 MONITOR）
+变量变化（VariableStore.ChangeListener，写方线程同步）
+定时器（TriggerRouter 自持单线程 daemon，hikari-script-trigger）
+playerNear 采样器（Bukkit 主线程 task，每 10 tick 扫距离）
+        ↓
+TriggerRouter — 路由层：按 (triggerType → wallId → ruleId) 双层索引 O(1) 查找，
+               只存引用 (RuleRef = wallId:ruleId)，触发时刻 store.find 拿最新规则
+               （防 stale rule 执行；rebuild 竞态窗口内残留索引无害）
+        ↓
+ScriptRunner — 单线程 SES（hikari-script-runner）：帧栈 + wait 续接（不睡线程）
+              Budget 三闸（ABA 链深 / runs/s / actions/run）全部在 submit 入口处检查
+              ThreadLocal CHAIN_DEPTH / RULE_KEY / TRIGGER_PLAYER 贯穿整个执行段
+        ↓
+ActionExecutor — 按动作类型分发：
+  ├ setVariable / incrementVariable / log → VariableStore（async 安全，ChangeListener 同步回调）
+  ├ setElementProperty → ElementPropertyApplier 双路径（§17.4）
+  ├ playTimeline → AnimationTicker.play/pause/seek（现成线程安全入口）
+  ├ playTimeline(await) → TweenScheduler（补间；§17.2）
+  ├ playSound / runCommand → 主线程 hop（Bukkit.getScheduler().runTask）
+  └ 三层异常隔离：单动作 throw → error step + WARNING log，链不断
+```
+
+### 17.2 三线程模型（脚本 + 时间轴 + 补间）
+
+| 线程 | 名称 | 职责 | 跨线程契约 |
+|---|---|---|---|
+| ScriptRunner SES | `hikari-script-runner` | 脚本帧栈逐动作执行；wait 续接重入队列不睡线程 | 单线程串行化同墙副作用；写 VariableStore 触发 ChangeListener 在本线程同步回调（ABA 链深由此计量） |
+| TweenScheduler SES | `hikari-canvas-tween` | 补间动画按帧推进；末帧落盘（`ApplyManyFn`） | 不访问非线程安全 API；与 Ticker 共享 `TickerControl` 线程安全入口；末帧落盘走 `ElementPropertyApplier` 主线程 hop |
+| AnimationTicker SES | `hikari-canvas-ticker` | 时间轴关键帧插值产帧；viewer-gated 不 rasterize 空墙 | 见 §5.5；与脚本的关系：脚本 playTimeline 动作经 `TickerControl` 接口投递，不直接碰 Ticker 内部 |
+
+**主线程 hop 要求**：playSound（`Bukkit.getScheduler().runTask` + `player.playSound`）和 runCommand（`Bukkit.dispatchCommand` console sender）必须在主线程执行，统一走 `Bukkit.getScheduler().runTask(plugin, runnable)`（plugin 为 null 时测试路径直接执行）。
+
+### 17.3 触发器种类与游戏事件接入
+
+| 触发器 | 路由来源 | 线程 | 倒排索引 |
+|---|---|---|---|
+| `variableChange` | `VariableStore.ChangeListener`（写方线程同步） | 任意（写变量的线程） | fullName → Set\<RuleRef\>（ConcurrentHashMap） |
+| `timer` | TriggerRouter 自持单线程 daemon SES | `hikari-script-trigger` | — （每 timer 规则一个 ScheduledFuture） |
+| `wallReady` | `TriggerRouter.fireWallReady`（启动恢复 + `SessionManager.confirm`） | 主线程 | 不进倒排——直查 store.listByWall |
+| `playerJoin` | `GameEventListenerHub.onPlayerJoin`（MONITOR） | 主线程 | 全局 joinRules Set\<RuleRef\> |
+| `playerKill` | `GameEventListenerHub.onPlayerDeath`（MONITOR，killer ≠ null） | 主线程 | 全局 killRules Set\<RuleRef\> |
+| `playerQuit` | `GameEventListenerHub.onPlayerQuit`（MONITOR） | 主线程 | 全局 quitRules Set\<RuleRef\> |
+| `playerNear` / `playerLeaveRange` | `PlayerNearSampler.tick`（Bukkit 主线程 task，每 2 tick 扫，按 sampleTicks 跳帧） | 主线程 | nearByWall → 扁平 nearSnapshot（volatile 整体替换） |
+| `rightClickWall` | `GameEventListenerHub.onPlayerInteractEntity`（`ignoreCancelled=false`；PDC 反查 wallId） | 主线程 | rightClickByWall Map\<wallId, Set\<RuleRef\>\> |
+
+`GameEventListenerHub` 是全部游戏事件的唯一入口类（MONITOR 优先级），本身无分支逻辑，只做一行转发给 TriggerRouter。右键墙触发器设 `ignoreCancelled=false` 是有意设计——`FrameProtectionListener` 会 cancel 所有 wall frame 交互，遵守 `ignoreCancelled=true` 则永远收不到右键墙事件。
+
+### 17.4 setElementProperty 双路径
+
+脚本改元素属性时走两条路径（照 0.4 动态变量 headless 路径先例）：
+
+| 场景 | 路径 | 行为 |
+|---|---|---|
+| wall 当前有活跃编辑器 session | `EditSession` 标准 op | 副作用进编辑器 history 栈；UI 实时可见 |
+| 无活跃 session（headless） | 直改持久化 `ProjectState` + `persistWall` | 不进 history；下次 open 可见 |
+
+headless 路径的已知竞态（可接受）：若 session open/close 与 headless 写入并发，脚本改动可能被 session 旧 state 覆盖（单属性丢一次更新，低频低危，scripting.md §10 已记账）。
+
+### 17.5 与时间轴和变量系统的关系
+
+**脚本是上层，时间轴是被编排的素材（D2）**——对应 §13 动态画板路径中的反模式约定：
+
+- 脚本 `playTimeline` 动作调 `AnimationTicker` 的公开线程安全入口；时间轴关键帧插值不感知脚本存在。
+- 脚本 `setVariable` / `incrementVariable` 写 `VariableStore`；`VariableStore.ChangeListener` 回调 `TriggerRouter.onVariableChange`（ABA 链深在此计量）；渲染期 `Compositor` 读 VariableStore cached 值替换占位符（P-1 路径，同 §13.1）。
+- **补间（TweenScheduler）**改 base ProjectState 字段；时间轴 KeyframeInterpolator 在 base 上叠加关键帧偏移。两层叠加不冲突——补间是"改终态"，时间轴是"在终态基础上周期插值"。
+- **脚本不 mutate 时间轴的 `timeMs`（播放进度），只能通过 `playTimeline(play/pause/seek)` 命令式控制**。时间轴的进度只在 AnimationTicker 线程内推进，不允许脚本直接写。
+
+### 17.6 反模式守则（对照 §13.3）
+
+§13.3 已禁止"P-2 定时 patch ProjectState"（后台 task 定时 `EditSession.updateElement`）。脚本系统 `setElementProperty` 走 `ElementPropertyApplier` 双路径（§17.4），**不经 `EditSession.updateElement`**（不进 history 栈 / 不触发 WS 编辑流量）——属于 P-1 渲染期内嵌路径的合规延伸，**不是 P-2 反模式**。
+
+脚本的正确定位：**条件分支 + 副作用**的上层调度器，使用时间轴（作为可播放素材）和变量（作为状态载体），不绕过这两个子系统直接写渲染状态。

@@ -21,6 +21,7 @@
 - [4 性能预算公式与交互计算器](#4-性能预算公式与交互计算器)
 - [5 用实测容量设 config 软上限](#5-用实测容量设-config-软上限)
 - [6 已知局限](#6-已知局限)
+- [7 0.7.x 脚本 / 补间压测](#7-07x-脚本--补间压测run-tween--run-script)
 
 ---
 
@@ -221,3 +222,81 @@ Benchmark 的实战用途：把**你自己机器的实测数据**变成 config �
 - **整体成本偏保守**：公式把整个渲染都算进服务器的处理成本，实际有一部分在后台跑，所以算出来偏保守。
 
 设计与实现细节见 `docs/dynamic-data.md §13.3`。
+
+---
+
+## 7 0.7.x 脚本 / 补间压测（run-tween / run-script）
+
+0.7.x 引入脚本引擎（0.7.0）和补间动画（scripting-tween.md），这两条路径有独立的 CPU 开销，
+无法用原有 21 个渲染场景衡量。新增两条**最小可用**测量：
+
+### 7.1 补间帧率压测（`/canvas bench run-tween`）
+
+**测什么**：N 面墙同时有活跃补间任务时，`TweenScheduler.tick` 每轮的总耗时——
+主要成本来自 `buildInterpolatedFrame`（每面墙一次 `deepCopyState` + 插值 + `EditSession`
+属性写回）。
+
+**N 的梯度**：1 / 4 / 16 / 64（硬编码在驱动里；可改代码扩展）。
+
+**怎么跑**：
+
+```
+/canvas bench run-tween              # 默认 10 预热 + 100 测量
+/canvas bench run-tween 200 20       # 200 测量 + 20 预热
+```
+
+**输出格式**：
+
+```
+补间帧率 benchmark（deepCopy + 插值，100 轮，10 轮预热）
+活跃墙    p50(ms)   p95(ms)   p99(ms)   均值(ms)  最大(ms)
+--------------------------------------------------------------
+1        0.0023    0.0051    0.0089    0.0025    0.0091
+4        0.0071    0.0102    0.0140    0.0073    0.0145
+16       0.0268    0.0312    0.0400    0.0273    0.0411
+64       0.1040    0.1290    0.1510    0.1073    0.1540
+```
+
+**装配方式**：headless 全 fake——fake TickerControl（渲染调用丢弃）/ fake WallLoader（返回
+内存 ProjectState）/ fake ApplyManyFn（末帧落盘丢弃）/ 静止 fake clock（恒中间帧，
+不触发末帧路径）。每面 wall 持 20 个 RectElement、4 个补间 target。
+
+### 7.2 脚本动作链压测（`/canvas bench run-script`）
+
+**测什么**：一条规则含 N 个 `setVariable` 动作时，ScriptRunner 执行一轮的耗时——
+包含帧栈建立、N 次 ActionSink.execute 调用、trace 收集、finish 回调。
+
+**N 的梯度**：1 / 10 / 25 / 50（硬编码在驱动里；50 ≈ 默认 `max-actions-per-run`）。
+
+**怎么跑**：
+
+```
+/canvas bench run-script             # 默认 10 预热 + 100 测量
+/canvas bench run-script 200 20      # 200 测量 + 20 预热
+```
+
+**输出格式**：
+
+```
+脚本动作链 benchmark（fake sink，含帧栈/trace，100 轮，10 轮预热）
+动作数      p50(ms)   p95(ms)   p99(ms)   均值(ms)  最大(ms)
+----------------------------------------------------------------
+1          0.0009    0.0019    0.0037    0.0010    0.0038
+10         0.0031    0.0048    0.0070    0.0033    0.0071
+25         0.0065    0.0089    0.0120    0.0067    0.0123
+50         0.0112    0.0145    0.0190    0.0115    0.0193
+```
+
+**装配方式**：headless 全 fake——fake ActionSink（O(1) 无副作用）/ AlwaysTrueConditionEvaluator
+（不碰 VariableStore）/ TrampolineScheduler（同步直跑，无 SES 线程开销）。
+budget 动态设为 actionCount+1 保证不被熔断。
+
+### 7.3 已知局限
+
+| 局限 | 说明 |
+|---|---|
+| fake sink 无副作用 | `run-script` 不测实际 DB 写、变量插值、Bukkit 主线程 hop |
+| 不测 PlayerNear 采样 | `PlayerNearSampler` 依赖 Bukkit 主线程 + 在线玩家，headless 测不了；只能在真实服务器观察 |
+| 补间 clock 静止 | `run-tween` 中 clock 固定 0ms，tick 恒走中间帧路径（不触发末帧落盘 + applyFn）；末帧开销需在真实服务器观察 |
+| 不测网络 | 补间产生的帧不经 rasterize / PacketEvents；实际成本另加 0.5.0 `run` 得出的渲染成本 |
+| 无 HTML 报告 | 这两条压测的输出是聊天栏文字摘要，不写磁盘 / 不生成 HTML（简化设计） |

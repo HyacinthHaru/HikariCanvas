@@ -480,7 +480,97 @@ server {
 
 ---
 
-## 13. 未决问题
+## 13. 脚本运行时威胁模型（0.7.0 引入）
+
+0.7.0 引入了可视化积木脚本系统，让墙可以响应游戏事件并执行副作用（改变量、播动画、执行命令）。这一层新增了独立的攻击面，以下按威胁→缓解格式记录。
+
+### 13.1 命令执行面
+
+**威胁**：脚本的"执行命令"积木允许在服务器以 console sender 身份执行 Bukkit 命令（`dispatchCommand`），若允许自由拼接命令字符串，攻击者可执行任意命令（如 `/op @s`）。
+
+**实际缓解（代码：`CommandTemplateEngine.java`）**：
+
+- **服主白名单模板（K13）**：`runCommand` 积木只能引用 `config.yml` 中 `scripts.command-templates` 段预先声明的模板，**不接受任意字符串**。模板表为空时，该积木在编辑器内灰显且不可执行。
+- **参数净化**：替换值执行前强制剥去换行符（`\n`/`\r`）与 `§` 颜色码；text 类型参数若净化后仍含 `@` 字符（`@a`/`@e` 选择器），整条命令拒绝执行并记 error step。
+- **online-player 参数类型**：声明 `type: online-player` 的参数值必须精确命中当前在线玩家名（大小写敏感），不允许任何选择器语法。
+- **单参数长度上限**：默认 64 字符（`max-length` 可调）。
+- **执行权限面**：使用该积木的规则在保存（`script.create`/`script.update`）时检查 caller 持有 `canvas.script.command`（默认 op），缺权限拒 `PERMISSION_DENIED`；**执行期不再二次检查**（规则是 owner 权限快照，与 wall 所有权语义一致）。
+- **audit**：每次命令执行记 `SCRIPT_COMMAND_EXECUTED`（templateId + 替换后全文 + 来源 ruleId），从不静默。
+
+### 13.2 熔断 Budget（资源耗尽防御）
+
+**威胁**：恶意或低质量脚本可能以极高频率触发，或通过 ABA 链（A 写变量 → 变量触发 B → B 写变量 → 再触发 A）形成无限环，耗尽服务器 CPU / 线程资源。
+
+**实际缓解（代码：`ScriptBudget.java`，config `scripts.budget` 段）**：
+
+Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` 时钟注入保证单测确定性。
+
+| 闸 | 机制 | 默认值 | 超限行为 |
+|---|---|---|---|
+| **runs/s** | per-rule 1s 固定窗计数（`tryAcquireRun`）；窗内超限立即 false | 10 次/s | 本次 run 丢弃；记 `SCRIPT_RUN_BLOCKED`（K5 per-rule 10s 限频，防 audit 表被刷爆） |
+| **actions/run** | 单次触发展开动作总数累计（含嵌套 if / wait 续接跨段）；`actionsExceeded` | 50 | 掐断剩余动作；blocked step + audit（K5 限频） |
+| **chain depth（ABA 熔断，D8）** | `ScriptRunner.CHAIN_DEPTH` ThreadLocal：runner 线程持有当前链深；`VariableStore.fireChange` 同步回调 `TriggerRouter.onVariableChange` 直读 ThreadLocal，非脚本来源（null）depth=0，脚本写变量触发则 depth+1；`chainDepthExceeded` 检查 ≥ max | 8 | 整个 run 掐断 + WARNING 日志（含链路径）；**不自动禁用规则**（D8 工具不是保姆原则） |
+
+`ScriptRunner` 单线程队列天然背压：同一时刻最多一个 action 在跑，极端高频触发会在队列侧堆积，不会无限并发扩张。
+
+### 13.3 触发器权限面
+
+**威胁**：全局事件触发器（玩家进服、被击杀、退服）监听全服行为，任意玩家都能触发；若无权限控制，低权限玩家可借此实现全服级副作用。
+
+**实际缓解（代码：`ScriptPermissions.java`；`paper-plugin.yml` §133-144）**：
+
+`ScriptPermissions.requiredFacets` 在规则保存时（create/update）递归扫描触发器与动作：
+
+| 触发器/动作类型 | 所需附加权限面 | 默认 |
+|---|---|---|
+| playerJoin / playerKill / playerQuit / rightClickWall（全局语义） | `canvas.script.trigger.global` | **true** |
+| playSound / playParticle | `canvas.script.sound` | **true** |
+| runCommand | `canvas.script.command` | **op** |
+| 其余（setVariable / setElementProperty / playTimeline / wait / if 等） | 无（仅基础 `canvas.script.edit`） | **true** |
+
+权限面在**保存时检查**，不在执行时二次查。Owner 失权后已保存的规则照跑（语义与 wall 锁定一致），服主可手动 disable 规则。
+
+`playerNear` / `playerLeaveRange` 是墙周范围触发，不属于全局面，仅需基础 `canvas.script.edit`。
+
+### 13.4 脚本编辑鉴权
+
+**威胁**：恶意玩家尝试向不属于自己的 wall 写入脚本规则。
+
+**实际缓解（代码：`ScriptOpDispatcher.java`）**：
+
+- `script.create` / `script.update` / `script.delete` / `script.enable` / `script.test` 全部先过 `canvas.script.edit` 基础权限，再按规则内容逐积木检查附加面（§13.3）。
+- 鉴权基准：caller 必须能打开该 wall（open 路径鉴权，M15.3 方案 C）——非 owner 且 wall 已锁定 → open 时已拒 FORBIDDEN；后端编辑 op 路径不读 lock（lock-state §3.6 架构纪律）。
+- 条件语法保存期预检（K16）：`if.condition` 字段在 create/update 时过 `ConditionEvaluator.checkSyntax` parse-only 检查，语法错误立即拒 `SCRIPT_INVALID`（返回 parse 错误首行 + blockId 定位），不等运行期静默 false。
+
+### 13.5 `.canvas` 工程文件导入中的脚本
+
+**威胁**：导入含脚本规则的 `.canvas` 文件时，其中可能含引用本服不存在的命令模板的 `runCommand` 积木。
+
+**实际缓解**：`runCommand.templateId` 按名引用，本服 `config.yml` 不存在该 templateId → `CommandTemplateEngine` 返回 `Result.Blocked`，该积木在编辑器内标记缺失（红 badge）并灰显，**不可执行**。规则其余部分照常可用，不需要整条规则删除或拒绝导入。
+
+### 13.6 试跑副作用
+
+**威胁**：`script.test` op 若不受约束，可被用于无限次刷副作用（播声音/执行命令/改变量）。
+
+**实际缓解**：`script.test` 走与生产触发完全相同的执行路径（D5 决策），**不豁免 Budget 三闸**（K12），同样过权限面检查，记 `SCRIPT_TEST` audit 事件（标注为 TEST run）。ack 立即返受理回执（`{accepted:true, ruleId}`），执行轨迹通过独立 `script.trace` S→C op 异步推回（避免 Jetty worker 被 wait 续接阻塞 5s 超时，K11）。
+
+### 13.7 脚本相关 audit 事件
+
+| 事件 | 触发时机 | 字段 |
+|---|---|---|
+| `SCRIPT_CREATE` | script.create op 成功 | sessionId, wallId, ruleId, name, facets |
+| `SCRIPT_UPDATE` | script.update op 成功 | sessionId, wallId, ruleId, facets |
+| `SCRIPT_DELETE` | script.delete op 成功 | sessionId, wallId, ruleId |
+| `SCRIPT_ENABLE` | script.enable op 成功 | sessionId, wallId, ruleId, enabled |
+| `SCRIPT_TEST` | script.test op 受理 | sessionId, wallId, ruleId, facets |
+| `SCRIPT_RUN_BLOCKED` | Budget 闸拒（K5 per-rule 10s 去重） | ruleId, reason(chain\|runs\|actions), chainDepth |
+| `SCRIPT_COMMAND_EXECUTED` | runCommand 积木执行命令（不限频，每次记） | templateId, rendered 全文, ruleKey |
+
+`log` 动作（`Action.Log`）**不进 audit**（玩家级高频动作进 audit 会刷库）；仅进 plugin logger INFO 级别。
+
+---
+
+## 14. 未决问题
 
 - [ ] 是否支持 OAuth 登录（如 Microsoft Account / Minecraft）以替代一次性 token——复杂度高，v1.0 不做
 - [ ] 多服务器场景下的共享 session / token 传递
