@@ -195,7 +195,11 @@ public final class VariableMetadataHandler {
 
         for (VariableProvider p : daemon.registeredProviders()) {
             Map<String, Object> ns = new LinkedHashMap<>();
-            ns.put("namespace", safe(p.namespace()));
+            // 0.7.4：下发 store namespace 前缀（前端展示 + interpolator 解析用），而非 daemon
+            // 唯一性 key。绝大多数 provider 两者相同；RailScheduleProvider 例外（daemon key
+            // = "schedule_rail" 但 store 前缀 = "schedule"），避免 picker 出现 schedule_rail/*
+            // 幽灵变量 + 选中后 resolve miss。详见 VariableProvider.storeNamespacePrefix()。
+            ns.put("namespace", safe(p.storeNamespacePrefix()));
             ns.put("displayName", safe(p.displayName()));
             ns.put("dynamic", p.isDynamic());
             List<Map<String, Object>> keys = new ArrayList<>();

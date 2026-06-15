@@ -133,6 +133,16 @@ public final class RailScheduleProvider implements VariableProvider {
     }
 
     @Override public String namespace() { return DAEMON_KEY; }
+
+    /**
+     * 0.7.4：前端 picker / interpolator 用的真实 store namespace 前缀 = {@code "schedule"}
+     * （= {@link #NAMESPACE_PREFIX}），而非 daemon 唯一性 key {@link #DAEMON_KEY}。让 rail 的
+     * 14 个车次语义 key 与 manual 的基础 key 同归前端 {@code schedule} 组，选中插入
+     * {@code ${var:schedule/next_cars}} 经 interpolator 注入 wallId → {@code schedule:<wallId>/next_cars}
+     * 命中真实变量。详见 {@link VariableProvider#storeNamespacePrefix()}。
+     */
+    @Override public String storeNamespacePrefix() { return NAMESPACE_PREFIX; }
+
     @Override public String displayName() { return "Rail Schedule"; }
     @Override public Duration refreshInterval() { return Duration.ofMillis(REFRESH_INTERVAL_MS); }
 
@@ -142,36 +152,39 @@ public final class RailScheduleProvider implements VariableProvider {
         List<DeclaredKey> out = new ArrayList<>(ManualScheduleProvider.ALL_KEYS.length + 14);
         // 复用 ManualSchedule 的 15 个 key（同名同类）；不要重复声明，让 ManualSchedule 的 declaredKeys 处理
         // 0.4.4 新车次语义：next + next2 配对，共 14
+        // 0.7.4：rail 专属 key 描述加 [铁路网络] 前缀，让用户在 picker 里区分「铁路网络」
+        // 定义的车次语义 vs ManualSchedule 的「手填时刻表」基础 key（next_departure / eta_* 等
+        // 由 ManualScheduleProvider.declaredKeys() 提供，描述不带前缀，保持原样）。
         out.add(new DeclaredKey("next_run_number", VarType.STRING,
-                "下一班车次号（如 A01）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班车次号（如 A01）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_service_type", VarType.STRING,
-                "下一班服务类型 enum 值（local / express / section / limited / 自定义）",
+                "[铁路网络] 下一班服务类型 enum 值（local / express / section / limited / 自定义）",
                 REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_service_type_text", VarType.STRING,
-                "下一班服务类型 i18n 友好文本（按 owner locale）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班服务类型 i18n 友好文本（按 owner locale）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_cars", VarType.STRING,
-                "下一班编组节数（null → 空字符串）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班编组节数（null → 空字符串）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_terminus", VarType.STRING,
-                "下一班终点站（区间车显示区间终点）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班终点站（区间车显示区间终点）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_notes", VarType.STRING,
-                "下一班备注（如末班车 / 加开）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下一班备注（如末班车 / 加开）", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next_arrival", VarType.STRING,
-                "该站精确到达时刻（HH:mm:ss，从 timetable 读，非估算）", REFRESH_INTERVAL_MS));
+                "[铁路网络] 该站精确到达时刻（HH:mm:ss，从 timetable 读，非估算）", REFRESH_INTERVAL_MS));
         // next2_*
         out.add(new DeclaredKey("next2_run_number", VarType.STRING,
-                "下下班车次号", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班车次号", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_service_type", VarType.STRING,
-                "下下班服务类型 enum", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班服务类型 enum", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_service_type_text", VarType.STRING,
-                "下下班服务类型 i18n 文本", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班服务类型 i18n 文本", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_cars", VarType.STRING,
-                "下下班编组节数", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班编组节数", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_terminus", VarType.STRING,
-                "下下班终点站", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班终点站", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_notes", VarType.STRING,
-                "下下班备注", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班备注", REFRESH_INTERVAL_MS));
         out.add(new DeclaredKey("next2_arrival", VarType.STRING,
-                "下下班该站精确到达时刻", REFRESH_INTERVAL_MS));
+                "[铁路网络] 下下班该站精确到达时刻", REFRESH_INTERVAL_MS));
         return out;
     }
 

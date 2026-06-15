@@ -29,6 +29,15 @@ export const messages = {
             railNetwork: '铁路网络（线路 / 站点 / 车次 / 时刻表）',
             timelineManager: '时间轴（关键帧动画）',
             scriptEditor: '积木脚本（按条件做事）',
+            // 0.7.4：溢出菜单（…）
+            more: '更多',
+            moreRailNetwork: '铁路网络',
+            moreTemplate: '存为模板',
+            moreSnap: '智能对齐',
+            moreLog: '连接日志',
+            moreHelp: '帮助 / 快捷键',
+            moreSwitchLocale: 'Switch to English',
+            moreTheme: '主题',
         },
         wall: {
             copyId: (id: string) => `点击复制画板 ID：${id}`,
@@ -142,6 +151,8 @@ export const messages = {
             // 0.4.6 P2：一键透明背景
             setTransparentBackground: '设为透明背景',
             transparentBgTooltip: '把背景设为完全透明，可让 wall 后面的方块 / 风景透出来',
+            // 0.7.4：画布导航快捷键提示（ZoomBar 角落显示）
+            navHint: 'Shift+滚轮 横向 · 中键 / Space / H 拖拽画布',
         },
         properties: {
             header: '元素属性',
@@ -1279,6 +1290,15 @@ export const messages = {
             railNetwork: 'Rail network (lines / stations / runs / timetable)',
             timelineManager: 'Timeline (keyframe animation)',
             scriptEditor: 'Block scripts',
+            // 0.7.4: overflow menu (…)
+            more: 'More',
+            moreRailNetwork: 'Rail Network',
+            moreTemplate: 'Save as Template',
+            moreSnap: 'Snap Settings',
+            moreLog: 'Connection Log',
+            moreHelp: 'Help / Shortcuts',
+            moreSwitchLocale: '切换到中文',
+            moreTheme: 'Theme',
         },
         wall: {
             copyId: (id: string) => `Click to copy wall id: ${id}`,
@@ -1392,6 +1412,8 @@ export const messages = {
             // 0.4.6 P2: one-click transparent background
             setTransparentBackground: 'Make background transparent',
             transparentBgTooltip: 'Show blocks / scenery behind the wall through transparent pixels',
+            // 0.7.4: canvas navigation shortcut hint shown in the ZoomBar
+            navHint: 'Shift+Scroll horizontal · Middle-click / Space / H to pan',
         },
         properties: {
             header: 'Element properties',

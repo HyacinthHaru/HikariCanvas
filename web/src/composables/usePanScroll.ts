@@ -17,7 +17,17 @@ export function usePanScroll(opts: {
     const isPanning = ref(false);
 
     function onWheel(e: WheelEvent) {
-        if (!(e.ctrlKey || e.metaKey)) return;
+        if (!(e.ctrlKey || e.metaKey)) {
+            // Shift+wheel → 水平滚动（PS / Figma 标准）。
+            // 鼠标 wheel 只有 deltaY；Shift 在此把 Y 轴增量重定向到水平方向。
+            // 触控板原生 deltaX 横滚不经此分支（未按 Shift），浏览器默认处理。
+            if (e.shiftKey) {
+                e.preventDefault();
+                const outer = outerRef.value;
+                if (outer) outer.scrollLeft += e.deltaY;
+            }
+            return;
+        }
         e.preventDefault();
         const outer = outerRef.value;
         if (!outer) return;

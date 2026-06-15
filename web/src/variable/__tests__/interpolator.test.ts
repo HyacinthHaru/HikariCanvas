@@ -312,6 +312,28 @@ describe('interpolator.interpolate', () => {
         expect(r.text.substring(r.segments[0].start, r.segments[0].end)).toBe('5');
     });
 
+    // 0.7.4：rail 车次语义变量端到端 resolve。RailScheduleProvider 写
+    // schedule:<wallId>/next_cars，metadata 现以 namespace="schedule" 下发（不再是 daemon key
+    // schedule_rail）→ picker 选中插入 ${var:schedule/next_cars} → interpolator 注入 wallId →
+    // schedule:w-1/next_cars 命中。修复前 picker 会插入 ${var:schedule_rail/next_cars}，
+    // interpolator 不识别 schedule_rail 前缀 → 字面查询 miss → 误报"已删除"。
+    it('26b. rail 变量 ${var:schedule/next_cars} 注入 wallId 命中真实值（幽灵变量根因回归）', () => {
+        store.set('schedule:w-1/next_cars', mkVar('schedule:w-1', 'next_cars', '6'));
+        const r = interpolate('编组 ${var:schedule/next_cars} 节', 'w-1', store);
+        expect(r.text).toBe('编组 6 节');
+        expect(r.referencedFullNames.has('schedule:w-1/next_cars')).toBe(true);
+        expect(r.missingFullNames.size).toBe(0);
+    });
+
+    it('26c. 旧 daemon key 形态 ${var:schedule_rail/next_cars} 不被注入 → miss（证明必须改 namespace）', () => {
+        // 即使 store 有 schedule:w-1/next_cars，旧 schedule_rail 前缀也 resolve 不到——
+        // 这正是修复前的 bug 形态，固化为回归保护：metadata 绝不能再下发 schedule_rail。
+        store.set('schedule:w-1/next_cars', mkVar('schedule:w-1', 'next_cars', '6'));
+        const r = interpolate('${var:schedule_rail/next_cars}', 'w-1', store);
+        expect(r.text).toBe(UNRESOLVED);
+        expect(r.missingFullNames.has('schedule_rail/next_cars')).toBe(true);
+    });
+
     // ──────────────────────────────────────────────────────────
     //  0.4.2 bugfix（Bug 1）：二次扫描兜底
     // ──────────────────────────────────────────────────────────

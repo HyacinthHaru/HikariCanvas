@@ -358,6 +358,60 @@ describe('buildGroups + merged metadata (P3-M)', () => {
     });
 });
 
+// ---------- 0.7.4：rail + manual 共享 schedule namespace（幽灵变量根因修复） ----------
+
+describe('schedule namespace merge (rail + manual, 0.7.4)', () => {
+    // 后端 VariableMetadataHandler 现以 storeNamespacePrefix 下发：manual + rail 都报 namespace="schedule"
+    // （rail daemon key 是 schedule_rail，但前端只看 namespace 字段）。两块 key 不相交。
+    const metadata: NamespaceMetadata[] = [
+        {
+            namespace: 'schedule',            // ManualScheduleProvider
+            displayName: 'Manual Schedule',
+            dynamic: false,
+            keys: [
+                { key: 'next_departure', type: 'STRING', ttlMs: 1000 },
+                { key: 'eta_minutes', type: 'NUMBER', ttlMs: 1000 },
+            ],
+        },
+        {
+            namespace: 'schedule',            // RailScheduleProvider（store 前缀同样是 schedule）
+            displayName: 'Rail Schedule',
+            dynamic: false,
+            keys: [
+                { key: 'next_cars', type: 'STRING', description: '[铁路网络] 下一班编组节数', ttlMs: 1000 },
+                { key: 'next_run_number', type: 'STRING', description: '[铁路网络] 下一班车次号', ttlMs: 1000 },
+            ],
+        },
+    ];
+
+    it('manual + rail key 合并后 namespace 全 = "schedule"，无 schedule_rail 幽灵 namespace', () => {
+        const merged = mergeMetadata([], metadata);
+        // 4 key（manual 2 + rail 2），全部 namespace = schedule
+        expect(merged.length).toBe(4);
+        for (const v of merged) expect(v.namespace).toBe('schedule');
+        const keys = merged.map((v) => v.key).sort();
+        expect(keys).toEqual(['eta_minutes', 'next_cars', 'next_departure', 'next_run_number']);
+        // 没有任何变量带 schedule_rail（修复前的幽灵 namespace）
+        expect(merged.some((v) => v.namespace === 'schedule_rail')).toBe(false);
+    });
+
+    it('rail 变量 displayName = "schedule/next_cars"（可被 interpolator 注入 wallId 的插入形态）', () => {
+        const merged = mergeMetadata([], metadata);
+        const railVar = merged.find((v) => v.key === 'next_cars');
+        expect(railVar).toBeTruthy();
+        // 选中后插入 ${var:schedule/next_cars}，interpolator 注入 wallId → schedule:<wallId>/next_cars
+        expect(displayName(railVar!)).toBe('schedule/next_cars');
+    });
+
+    it('manual + rail 都归 plugin 组（schedule 非 user/system/papi/userglobal）', () => {
+        const merged = mergeMetadata([], metadata);
+        const groups = buildGroups(merged, 'w-1', '');
+        const plugin = groups.find((g) => g.id === 'plugin')?.items ?? [];
+        expect(plugin.map((v) => v.key).sort())
+            .toEqual(['eta_minutes', 'next_cars', 'next_departure', 'next_run_number']);
+    });
+});
+
 describe('nextActiveIndex', () => {
     it('total = 0 → -1', () => {
         expect(nextActiveIndex(0, 1, 0)).toBe(-1);

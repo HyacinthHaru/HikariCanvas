@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { Sparkles, Undo2, Redo2, Type, Square, MousePointer2, Move, Hand, Minus, MoveRight, Circle, Star, Brush, PaintBucket, Shapes } from 'lucide-vue-next';
+import { ref, computed } from 'vue';
+import { useResizeObserver } from '@vueuse/core';
 import { getWsClient } from '@/network/wsClient';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -78,10 +80,29 @@ function addRect() {
 function openTemplates() {
     templates.openGallery();
 }
+
+// 0.7.4：自动两栏——当 aside 可用高度 < 阈值时切 grid-cols-2。
+// 阈值计算：15 按钮 × 36px + 4px gap × 14 + 3 分隔线 × 16px + py-2×2 ≈ 658px → 取 660px。
+const SINGLE_COL_HEIGHT_THRESHOLD = 660;
+const asideRef = ref<HTMLElement | null>(null);
+const availableHeight = ref(window.innerHeight);
+
+useResizeObserver(asideRef, ([entry]) => {
+    availableHeight.value = entry.contentRect.height;
+});
+
+/** true = 空间够，单列；false = 空间紧，两栏 */
+const isSingleCol = computed(() => availableHeight.value >= SINGLE_COL_HEIGHT_THRESHOLD);
 </script>
 
 <template>
-  <aside class="w-12 bg-[color:var(--card)] border-r border-[color:var(--border)] flex flex-col items-center py-2 gap-1">
+  <aside
+    ref="asideRef"
+    class="bg-[color:var(--card)] border-r border-[color:var(--border)] py-2 gap-1 overflow-y-auto"
+    :class="isSingleCol
+      ? 'w-12 flex flex-col items-center'
+      : 'w-24 grid grid-cols-2 items-center justify-items-center'"
+  >
     <!-- 工具模式：Select（带 transformer 锚点）vs Move（PS 风格纯拖拽） -->
     <Tooltip :text="t.tools.selectTool" shortcut="V">
       <button
@@ -118,7 +139,7 @@ function openTemplates() {
       </button>
     </Tooltip>
 
-    <div class="my-1 w-8 h-px bg-[color:var(--border)]"></div>
+    <div class="my-1 h-px bg-[color:var(--border)]" :class="isSingleCol ? 'w-8' : 'col-span-2 w-20'"></div>
 
     <!-- M9-D：绘制工具激活态切换（drag-to-create 在 M9-E 接入） -->
     <Tooltip :text="t.tools.lineTool" shortcut="L">
@@ -189,7 +210,7 @@ function openTemplates() {
       </button>
     </Tooltip>
 
-    <div class="my-1 w-8 h-px bg-[color:var(--border)]"></div>
+    <div class="my-1 h-px bg-[color:var(--border)]" :class="isSingleCol ? 'w-8' : 'col-span-2 w-20'"></div>
 
     <!-- M26.3：图标库 panel toggle（不参与 activeTool）。快捷键 I。 -->
     <Tooltip :text="t.tools.iconLibraryTool" shortcut="I">
@@ -236,7 +257,7 @@ function openTemplates() {
       </button>
     </Tooltip>
 
-    <div class="my-1 w-8 h-px bg-[color:var(--border)]"></div>
+    <div class="my-1 h-px bg-[color:var(--border)]" :class="isSingleCol ? 'w-8' : 'col-span-2 w-20'"></div>
 
     <Tooltip :text="t.tools.undo" shortcut="Ctrl+Z">
       <button

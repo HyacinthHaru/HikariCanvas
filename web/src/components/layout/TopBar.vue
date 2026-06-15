@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film, Puzzle } from 'lucide-vue-next';
+import { useResizeObserver } from '@vueuse/core';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film, Puzzle, Magnet } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
+import OverflowMenu from '@/components/layout/OverflowMenu.vue';
 import { useUiStore } from '@/stores/ui';
 import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
@@ -183,20 +185,82 @@ function showRefreshFlash(msg: string) {
         refreshFlashTimer = null;
     }, 3000);
 }
+
+// ---------------------------------------------------------------------------
+// 0.7.4 响应式溢出菜单
+// ---------------------------------------------------------------------------
+
+/**
+ * 右侧按钮区容器的 ref。useResizeObserver 监测其宽度，动态决定折叠几个低频按钮。
+ *
+ * 分级（按使用频率从高到低）：
+ *   高频（永远常显）：PanelLeft / PanelRight / Film / Puzzle / Variable / Train
+ *   低频（空间不足时依次折叠）：
+ *     TrainTrack → Bookmark → SnapSettingsPopover → Terminal → HelpCircle → Languages → Sun/Moon + ThemeSwitcher
+ *
+ * 宽度断点（每个按钮约 32px，含 gap 1 = 4px，实测每按钮约 36px）：
+ *   ≥ 420px：全部展开（14 项，含 ThemeSwitcher 宽约 36px，Languages 36px，Sun/Moon 36px，Help 36px，Terminal 36px，Snap 36px，Bookmark 36px，TrainTrack 36px，Train 36px，Variable 36px，Puzzle 36px，Film 36px，PanelRight 36px，PanelLeft 36px）
+ *   < 420px：TrainTrack 折叠（13 项）
+ *   < 384px：+ Bookmark 折叠（12 项）
+ *   < 348px：+ SnapSettings 折叠（11 项）
+ *   < 312px：+ Terminal 折叠（10 项）
+ *   < 276px：+ Help 折叠（9 项）
+ *   < 240px：+ Languages 折叠（8 项）
+ *   < 204px：+ Sun/Moon + ThemeSwitcher 折叠（6 项，只剩高频 6 个）
+ *
+ * 每个低频项在 breakpoint 以下被折叠进 … 菜单；如有任何折叠则显示 … 按钮（约 36px）。
+ */
+
+const rightBarRef = ref<HTMLElement | null>(null);
+const rightBarWidth = ref(9999); // 初始值大，保证首屏不提前折叠
+
+// 阈值（px）：每条以下时对应低频项折叠
+const BREAKPOINTS = {
+    trainTrack: 420,
+    bookmark:   380,
+    snap:       340,
+    terminal:   300,
+    help:       260,
+    languages:  220,
+    theme:      180,  // Sun/Moon + ThemeSwitcher 同时折叠
+} as const;
+
+useResizeObserver(rightBarRef, (entries) => {
+    const entry = entries[0];
+    if (entry) rightBarWidth.value = entry.contentRect.width;
+});
+
+const showTrainTrack  = computed(() => rightBarWidth.value >= BREAKPOINTS.trainTrack);
+const showBookmark    = computed(() => rightBarWidth.value >= BREAKPOINTS.bookmark);
+const showSnap        = computed(() => rightBarWidth.value >= BREAKPOINTS.snap);
+const showTerminal    = computed(() => rightBarWidth.value >= BREAKPOINTS.terminal);
+const showHelp        = computed(() => rightBarWidth.value >= BREAKPOINTS.help);
+const showLanguages   = computed(() => rightBarWidth.value >= BREAKPOINTS.languages);
+const showTheme       = computed(() => rightBarWidth.value >= BREAKPOINTS.theme);
+// … 按钮只在至少有一项被折叠时才显示
+const showMoreButton  = computed(() =>
+    !showTrainTrack.value ||
+    !showBookmark.value ||
+    !showSnap.value ||
+    !showTerminal.value ||
+    !showHelp.value ||
+    !showLanguages.value ||
+    !showTheme.value,
+);
 </script>
 
 <template>
   <header class="flex items-center justify-between h-11 px-3 border-b border-[color:var(--border)] bg-[color:var(--card)] text-[color:var(--card-foreground)] select-none">
-    <div class="flex items-center gap-3">
-      <span class="text-sm font-semibold tracking-tight">{{ t.brand }}</span>
-      <span class="text-xs text-[color:var(--muted-foreground)]">
+    <div class="flex items-center gap-3 min-w-0 flex-1 overflow-hidden">
+      <span class="text-sm font-semibold tracking-tight shrink-0">{{ t.brand }}</span>
+      <span class="text-xs text-[color:var(--muted-foreground)] shrink-0">
         {{ net.serverVersion ? `server ${net.serverVersion}` : '' }}
       </span>
       <!-- M5.5: wall 元数据 -->
-      <div v-if="project.wallId" class="flex items-center gap-2 ml-2 text-xs">
+      <div v-if="project.wallId" class="flex items-center gap-2 ml-2 text-xs min-w-0 overflow-hidden">
         <Tooltip :text="t.wall.copyId(project.wallId)">
           <button
-            class="hc-btn px-2 py-1 rounded-[var(--radius-sm)] font-mono bg-[color:var(--secondary)] hover:bg-[color:var(--accent)] transition-colors relative"
+            class="hc-btn px-2 py-1 rounded-[var(--radius-sm)] font-mono bg-[color:var(--secondary)] hover:bg-[color:var(--accent)] transition-colors relative shrink-0"
             @click="copyWallId"
           >
             <span v-if="copiedFlash === 'wallid'" class="text-[color:var(--ctp-green)]">{{ t.wall.copied }}</span>
@@ -206,7 +270,7 @@ function showRefreshFlash(msg: string) {
         <!-- alias：默认显示按钮；点击进入内联编辑 -->
         <Tooltip v-if="!editingAlias" :text="project.alias ? t.wall.aliasSetTip(project.alias) : t.wall.aliasSetTipEmpty">
           <button
-            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors text-[color:var(--muted-foreground)]"
+            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors text-[color:var(--muted-foreground)] shrink-0"
             @click="startAliasEdit"
           >
             <Tag class="size-3" />
@@ -215,7 +279,7 @@ function showRefreshFlash(msg: string) {
             <Pencil class="size-3 opacity-50" />
           </button>
         </Tooltip>
-        <div v-else class="flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] bg-[color:var(--secondary)]">
+        <div v-else class="flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] bg-[color:var(--secondary)] shrink-0">
           <Tag class="size-3 text-[color:var(--muted-foreground)]" />
           <input
             ref="aliasInput"
@@ -241,7 +305,7 @@ function showRefreshFlash(msg: string) {
           ? (isOwner ? t.wall.lockToggleOff : t.wall.lockOwnerOnly)
           : (isOwner ? t.wall.lockToggleOn : t.wall.lockOwnerOnly)">
           <button
-            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60 shrink-0"
             :class="locked
               ? 'bg-[color:var(--ctp-peach)]/20 text-[color:var(--ctp-peach)] hover:bg-[color:var(--ctp-peach)]/30'
               : 'bg-[color:var(--secondary)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
@@ -255,7 +319,7 @@ function showRefreshFlash(msg: string) {
         </Tooltip>
         <Tooltip :text="t.wall.refreshTip">
           <button
-            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-50"
+            class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-50 shrink-0"
             :disabled="refreshing"
             @click="refreshWall"
           >
@@ -265,12 +329,14 @@ function showRefreshFlash(msg: string) {
         </Tooltip>
         <span
           v-if="refreshFlash"
-          class="text-xs text-[color:var(--muted-foreground)] tabular-nums"
+          class="text-xs text-[color:var(--muted-foreground)] tabular-nums shrink-0"
         >· {{ refreshFlash }}</span>
       </div>
     </div>
 
-    <div class="flex items-center gap-1">
+    <!-- 右侧按钮区：高频按钮常显，低频按钮在空间不足时折入 … 菜单 -->
+    <div ref="rightBarRef" class="flex items-center gap-1 shrink-0 ml-2">
+      <!-- ── 高频（永远显示）── -->
       <Tooltip :text="t.topbar.toggleLeft">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
@@ -285,55 +351,6 @@ function showRefreshFlash(msg: string) {
           @click="ui.toggleRight()"
         >
           <PanelRight class="size-4" />
-        </button>
-      </Tooltip>
-      <Tooltip :text="t.topbar.toggleLog">
-        <button
-          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
-          @click="ui.toggleLogDrawer()"
-        >
-          <Terminal class="size-4" />
-        </button>
-      </Tooltip>
-      <Tooltip :text="project.isLocked ? t.tooltips.disabledWhenLocked : t.tooltips.saveTemplate">
-        <button
-          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-40"
-          :disabled="!project.wallId || project.isLocked"
-          @click="saveModalOpen = true"
-        >
-          <Bookmark class="size-4" />
-        </button>
-      </Tooltip>
-      <!-- M17.4 F3：Snap 设置 -->
-      <SnapSettingsPopover />
-      <!-- 0.4.0-P2-G：变量管理面板触发 -->
-      <Tooltip :text="t.topbar.variableManager">
-        <button
-          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
-          :class="ui.variablePanelOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
-          @click="ui.toggleVariablePanel()"
-        >
-          <Variable class="size-4" />
-        </button>
-      </Tooltip>
-      <!-- 0.4.0-P3-L：列车时刻表管理 -->
-      <Tooltip :text="t.topbar.scheduleManager">
-        <button
-          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
-          :class="ui.scheduleManagerOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
-          @click="ui.toggleScheduleManager()"
-        >
-          <Train class="size-4" />
-        </button>
-      </Tooltip>
-      <!-- 0.4.4：铁路网络管理 -->
-      <Tooltip :text="t.topbar.railNetwork">
-        <button
-          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
-          :class="ui.railNetworkOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
-          @click="ui.toggleRailNetwork()"
-        >
-          <TrainTrack class="size-4" />
         </button>
       </Tooltip>
       <!-- 0.6 P4：时间轴（关键帧动画）AE 风底部 dock -->
@@ -356,7 +373,62 @@ function showRefreshFlash(msg: string) {
           <Puzzle class="size-4" />
         </button>
       </Tooltip>
-      <Tooltip :text="t.topbar.help" shortcut="?">
+      <!-- 0.4.0-P2-G：变量管理面板触发 -->
+      <Tooltip :text="t.topbar.variableManager">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
+          :class="ui.variablePanelOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="ui.toggleVariablePanel()"
+        >
+          <Variable class="size-4" />
+        </button>
+      </Tooltip>
+      <!-- 0.4.0-P3-L：列车时刻表管理 -->
+      <Tooltip :text="t.topbar.scheduleManager">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
+          :class="ui.scheduleManagerOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="ui.toggleScheduleManager()"
+        >
+          <Train class="size-4" />
+        </button>
+      </Tooltip>
+
+      <!-- ── 低频（空间不足时折叠进 … 菜单）── -->
+
+      <!-- 0.4.4：铁路网络管理（低频：建好线路后很少再打开） -->
+      <Tooltip v-if="showTrainTrack" :text="t.topbar.railNetwork">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
+          :class="ui.railNetworkOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          @click="ui.toggleRailNetwork()"
+        >
+          <TrainTrack class="size-4" />
+        </button>
+      </Tooltip>
+      <!-- 存为模板（低频：完成设计后偶尔用） -->
+      <Tooltip v-if="showBookmark" :text="project.isLocked ? t.tooltips.disabledWhenLocked : t.tooltips.saveTemplate">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors disabled:opacity-40"
+          :disabled="!project.wallId || project.isLocked"
+          @click="saveModalOpen = true"
+        >
+          <Bookmark class="size-4" />
+        </button>
+      </Tooltip>
+      <!-- M17.4 F3：Snap 设置（低频：配一次就不常动） -->
+      <SnapSettingsPopover v-if="showSnap" />
+      <!-- Terminal 日志（低频：调试用） -->
+      <Tooltip v-if="showTerminal" :text="t.topbar.toggleLog">
+        <button
+          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
+          @click="ui.toggleLogDrawer()"
+        >
+          <Terminal class="size-4" />
+        </button>
+      </Tooltip>
+      <!-- 帮助（低频：看完快捷键就关） -->
+      <Tooltip v-if="showHelp" :text="t.topbar.help" shortcut="?">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.helpOpen = true"
@@ -364,7 +436,8 @@ function showRefreshFlash(msg: string) {
           <HelpCircle class="size-4" />
         </button>
       </Tooltip>
-      <Tooltip :text="t.topbar.switchLocale">
+      <!-- 语言切换（低频：偶尔切一次） -->
+      <Tooltip v-if="showLanguages" :text="t.topbar.switchLocale">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
           @click="ui.toggleLocale()"
@@ -372,17 +445,92 @@ function showRefreshFlash(msg: string) {
           <Languages class="size-4" />
         </button>
       </Tooltip>
-      <Tooltip :text="t.topbar.toggleTheme">
+      <!-- 主题（低频：配好后很少改） -->
+      <template v-if="showTheme">
+        <Tooltip :text="t.topbar.toggleTheme">
+          <button
+            class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
+            @click="ui.toggleTheme()"
+          >
+            <Sun v-if="ui.theme === 'dark'" class="size-4" />
+            <Moon v-else class="size-4" />
+          </button>
+        </Tooltip>
+        <!-- M24-B：主题切换器（preset / accent / radius） -->
+        <ThemeSwitcher />
+      </template>
+
+      <!-- ── 溢出菜单 … ── -->
+      <OverflowMenu v-if="showMoreButton">
+        <!-- 铁路网络 -->
         <button
-          class="hc-btn p-1.5 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] transition-colors"
+          v-if="!showTrainTrack"
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left"
+          :class="ui.railNetworkOpen ? 'text-[color:var(--foreground)]' : 'text-[color:var(--card-foreground)]'"
+          @click="ui.toggleRailNetwork()"
+        >
+          <TrainTrack class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreRailNetwork }}</span>
+        </button>
+        <!-- 存为模板 -->
+        <button
+          v-if="!showBookmark"
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left disabled:opacity-40"
+          :disabled="!project.wallId || project.isLocked"
+          @click="saveModalOpen = true"
+        >
+          <Bookmark class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreTemplate }}</span>
+        </button>
+        <!-- 智能对齐设置（折叠时只提供开/关快捷切换；完整设置仍需空间充足时通过常显按钮打开） -->
+        <button
+          v-if="!showSnap"
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left"
+          :class="ui.snapEnabled ? 'text-[color:var(--foreground)]' : ''"
+          @click="ui.snapEnabled = !ui.snapEnabled"
+        >
+          <Magnet class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreSnap }}</span>
+          <span class="ml-auto text-[color:var(--muted-foreground)]">{{ ui.snapEnabled ? t.templates.on : t.templates.off }}</span>
+        </button>
+        <!-- 日志 -->
+        <button
+          v-if="!showTerminal"
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left"
+          @click="ui.toggleLogDrawer()"
+        >
+          <Terminal class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreLog }}</span>
+        </button>
+        <!-- 帮助 -->
+        <button
+          v-if="!showHelp"
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left"
+          @click="ui.helpOpen = true"
+        >
+          <HelpCircle class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreHelp }}</span>
+        </button>
+        <!-- 语言 -->
+        <button
+          v-if="!showLanguages"
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left"
+          @click="ui.toggleLocale()"
+        >
+          <Languages class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreSwitchLocale }}</span>
+        </button>
+        <!-- 主题（Sun/Moon + 调色盘 → 合并为一行切换深浅色；主题 picker 太复杂不内嵌，只放快捷切换） -->
+        <button
+          v-if="!showTheme"
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left"
           @click="ui.toggleTheme()"
         >
-          <Sun v-if="ui.theme === 'dark'" class="size-4" />
-          <Moon v-else class="size-4" />
+          <Sun v-if="ui.theme === 'dark'" class="size-4 shrink-0" />
+          <Moon v-else class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreTheme }}</span>
         </button>
-      </Tooltip>
-      <!-- M24-B：主题切换器（preset / accent / radius） -->
-      <ThemeSwitcher />
+      </OverflowMenu>
     </div>
   </header>
 

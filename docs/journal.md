@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-15 · 0.7.4 前端体验优化批：6 个体验 bug（小窗口响应 + 画布平移 + 变量 picker 根因）
+
+3 子代理读真实代码定根因 + 用户拍板方案（问题一两栏 / 问题二更多菜单）→ 4 子代理并行实施。
+
+**6 个问题：**
+- **一 左工具栏自动两栏**：`LeftTools.vue` 15 工具纵向单列 `w-12`，窗口**矮**时底部按钮被截出视口、无折叠无滚动。`useResizeObserver` 监高度，< 阈值(~660px)切 `grid-cols-2`+`w-24`(纵向需求减半) + `overflow-y` 兜底。
+- **二 右上角更多菜单**：`TopBar.vue` 14 按钮无响应式，窗口窄时右侧按钮静默消失。`useResizeObserver` 测宽，7 个低频按钮按断点收进 `…` `OverflowMenu`(新组件)，高频 6 个(面板/时间轴/脚本/变量/时刻表)常显。
+- **三 鼠标左右拖画布**：非 `Ctrl+滚轮`交还浏览器默认只纵滚(鼠标无 `deltaX`)。`usePanScroll.onWheel` 加 `Shift+滚轮→水平`(PS/Figma 标准)+ `CanvasZoomBar` 加快捷键提示(中键/`Space`/`H` 拖拽本已实现、用户不知)。
+- **四+五 `schedule_rail` 幽灵变量(同根因)**：`RailScheduleProvider` 的 daemon 内部 key `"schedule_rail"`(为避 daemon map 撞 manual 的 `"schedule"`)被 `VariableMetadataHandler` 当变量 namespace 暴露,但真实变量是 `schedule:<wallId>/*`。→ picker 一堆幽灵变量(无值,问题四)、选了插入报「已删除」(问题五)。修:`VariableProvider` 加 `storeNamespacePrefix()`(rail 返 `"schedule"`)，`buildJson` 用它替 daemon key;rail 14 专属 key 描述加 `[铁路网络]` 区分。rail 变量改归 `schedule` 组,经 interpolator 注入 wallId 端到端 resolve;manual 不受影响。
+- **六 picker 列错乱**：`VariablePicker` `table-layout:auto` + name-cell `display:flex`(脱离表格布局)+ 无 `overflow-x` → 列乱大片空白。改 `table-layout:fixed` + `overflow-x:auto` + name-cell 去 flex;配合四五消幽灵变量、空白大减。
+
+**根治(systematic-debugging,本会话第三次踩)**：store setup 用 DOM API 在 node 测试炸——`theme.ts`(`window.matchMedia` + `document.documentElement` ×3)+ `ui.ts`(`document.documentElement.lang` ×2)全加 `typeof window/document !== 'undefined'` 守卫。之前 scriptEdit(D2)一次、本批 C(usePanScroll 测试)一次,根治后不再每次改测试迁就。
+
+**环境插曲**：实施期发现 **env cwd 被切到 `docs` 分支**(用户在另一终端整理 docs)，main 真实代码在 worktree `HikariCanvas-main`;**4 子代理自动检测到 cwd 不对、去 main 改对了地方**。main worktree 无依赖,`npm install` 同步 lock(+23 行 optional native deps,`package.json` 零改);代码均在 main 编译测试 + 提交。
+
+**版本号** `0.7.3 → 0.7.4-SNAPSHOT`(7 处)。**测试** 后端全绿 / 前端 **1334**(原 1303 + 0.7.4 各批测试 + theme/ui 守卫修复)。
+
+关联：前端 `LeftTools`/`TopBar`/`OverflowMenu`(新)/`usePanScroll`/`CanvasZoomBar`/`VariablePicker`/`interpolator`/`pickerLogic`/`theme`/`ui`/`messages` + 4 测试;后端 `VariableProvider`/`RailScheduleProvider`/`VariableMetadataHandler` + 2 测试;版本号 7 处 + `package-lock`。plan `docs/superpowers/plans/2026-06-15-0.7.4-frontend-ux.md`。
+
+---
+
 ## 2026-06-14 · 契约文档批量回填：9 份 docs 原地校准到与代码一致（写用户手册前的地基）
 
 为后续写「整个项目的玩家+服主大文档」做准备,**先把整个项目代码读完**（12 子系统,多子代理并行,

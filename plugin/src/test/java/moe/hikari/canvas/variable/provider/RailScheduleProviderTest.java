@@ -247,6 +247,24 @@ class RailScheduleProviderTest {
     }
 
     @Test
+    void declaredKeys_descriptionsHaveRailNetworkPrefix() {
+        // 0.7.4：rail 专属 key 描述带 [铁路网络] 前缀，让 picker 区分「铁路网络」vs「手填时刻表」。
+        for (var k : provider.declaredKeys()) {
+            assertTrue(k.description() != null && k.description().startsWith("[铁路网络]"),
+                    "rail key 描述应带 [铁路网络] 前缀: " + k.key() + " → " + k.description());
+        }
+    }
+
+    @Test
+    void storeNamespacePrefix_isSchedule_notDaemonKey() {
+        // 0.7.4 根因修复：daemon key 唯一性用 "schedule_rail"，但 store 写入 / 前端展示 / interpolator
+        // 解析用真实前缀 "schedule"（与 ManualSchedule 共享）。picker 选 ${var:schedule/next_cars}
+        // 经 interpolator 注入 wallId → schedule:<wallId>/next_cars 命中真实变量。
+        assertEquals("schedule_rail", provider.namespace());
+        assertEquals("schedule", provider.storeNamespacePrefix());
+    }
+
+    @Test
     void emptyTimetable_pushesEmptyValues() {
         // wall 绑定但 timetable 空（车次 / 站点未配齐）—— 应 push 空字符串，不抛
         ds.bindings.add(binding(WALL, "L1", "s1", "up"));

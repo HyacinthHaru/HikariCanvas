@@ -290,6 +290,47 @@ class VariableMetadataHandlerTest {
         });
     }
 
+    // ---------- 0.7.4：storeNamespacePrefix 下发（rail 幽灵变量根因修复） ----------
+
+    @Test
+    void usesStoreNamespacePrefix_notDaemonKey() {
+        // 模拟 RailScheduleProvider：daemon key = "schedule_rail"（唯一性），但 store 写入前缀
+        // = "schedule"（与 ManualSchedule 共享）。picker 应看到 "schedule"，否则前端选中插入
+        // ${var:schedule_rail/X} 会因 interpolator 不识别 schedule_rail 前缀而 resolve miss。
+        daemon.register(new PrefixOverrideProvider("schedule_rail", "schedule", "Rail Schedule",
+                List.of(new DeclaredKey("next_cars", VarType.STRING,
+                        "[铁路网络] 下一班编组节数", 1000L))));
+
+        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid));
+        JavalinTest.test(buildApp(handler), (server, client) -> {
+            Response resp = client.get("/api/variable/list-all-namespaces?sessionId=v");
+            assertEquals(200, resp.code());
+            JsonNode root = mapper.readTree(resp.body().string());
+            JsonNode ns0 = root.get("namespaces").get(0);
+            assertEquals("schedule", ns0.get("namespace").asText(),
+                    "下发 store 前缀 schedule，而非 daemon key schedule_rail");
+            assertEquals("Rail Schedule", ns0.get("displayName").asText());
+            JsonNode keys = ns0.get("keys");
+            assertEquals(1, keys.size());
+            assertEquals("next_cars", keys.get(0).get("key").asText());
+            assertEquals("[铁路网络] 下一班编组节数", keys.get(0).get("description").asText(),
+                    "rail 专属 key 描述带 [铁路网络] 前缀");
+        });
+    }
+
+    @Test
+    void defaultProvider_storeNamespacePrefix_equalsNamespace() {
+        // 普通 provider（未覆写 storeNamespacePrefix）下发的 namespace 仍 = namespace()。
+        daemon.register(new FakeStaticProvider("system", "系统变量",
+                List.of(new DeclaredKey("server.time", VarType.STRING, null, 60_000L))));
+        VariableMetadataHandler handler = newHandler(sid -> "v".equals(sid));
+        JavalinTest.test(buildApp(handler), (server, client) -> {
+            Response resp = client.get("/api/variable/list-all-namespaces?sessionId=v");
+            JsonNode ns0 = mapper.readTree(resp.body().string()).get("namespaces").get(0);
+            assertEquals("system", ns0.get("namespace").asText());
+        });
+    }
+
     // ---------- 辅助 ----------
 
     private VariableMetadataHandler newHandler(java.util.function.Predicate<String> auth) {
@@ -315,6 +356,31 @@ class VariableMetadataHandlerTest {
         }
 
         @Override public String namespace() { return ns; }
+        @Override public String displayName() { return display; }
+        @Override public void initialize() {}
+        @Override public boolean refresh() { return false; }
+        @Override public Duration refreshInterval() { return Duration.ZERO; }
+        @Override public void shutdown() {}
+        @Override public List<DeclaredKey> declaredKeys() { return keys; }
+    }
+
+    /** 0.7.4：storeNamespacePrefix ≠ namespace 的 provider（模拟 RailScheduleProvider）。 */
+    private static final class PrefixOverrideProvider implements VariableProvider {
+        private final String daemonKey;
+        private final String storePrefix;
+        private final String display;
+        private final List<DeclaredKey> keys;
+
+        PrefixOverrideProvider(String daemonKey, String storePrefix, String display,
+                               List<DeclaredKey> keys) {
+            this.daemonKey = daemonKey;
+            this.storePrefix = storePrefix;
+            this.display = display;
+            this.keys = keys;
+        }
+
+        @Override public String namespace() { return daemonKey; }
+        @Override public String storeNamespacePrefix() { return storePrefix; }
         @Override public String displayName() { return display; }
         @Override public void initialize() {}
         @Override public boolean refresh() { return false; }

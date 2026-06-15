@@ -26,6 +26,27 @@ public interface VariableProvider {
     /** 返回 namespace（如 "system" / "papi" / "scoreboard"）。daemon 用此做唯一性 key。 */
     String namespace();
 
+    /**
+     * 0.7.4：返回该 provider 写入 {@link moe.hikari.canvas.variable.VariableStore} 时实际使用的
+     * namespace 前缀——即编辑器 VariablePicker 应展示、且占位符 {@code ${var:<prefix>/key}} 能被
+     * {@code VariableInterpolator} 注入 wallId 解析到的形态。
+     *
+     * <p>绝大多数 provider 的 {@link #namespace()}（daemon 唯一性 key）与 store 写入前缀一致，
+     * 默认实现直接返 {@link #namespace()}。例外是 {@link RailScheduleProvider}：它与
+     * {@link ManualScheduleProvider} 共享 {@code schedule:<wallId>/*} store namespace（让旧
+     * wall 文本无感升级），但在 daemon 内部必须用不同的唯一 key（{@code "schedule_rail"}）避免
+     * {@code VariableProviderDaemon.register} 因 namespace 撞名抛异常。该 provider 覆写本方法返
+     * {@code "schedule"}，让 {@code VariableMetadataHandler} 下发给前端 picker 的 namespace 是
+     * 真实 store 前缀，而非 daemon 内部 key——否则 picker 会显示一堆 {@code schedule_rail/*} 幽灵
+     * 变量（store 无对应、值恒空），且选中插入的 {@code ${var:schedule_rail/X}} 因 interpolator
+     * 不识别 {@code schedule_rail} 前缀而 resolve miss（误报"已删除"）。</p>
+     *
+     * @return store 写入 / 前端展示用的 namespace 前缀；默认 = {@link #namespace()}
+     */
+    default String storeNamespacePrefix() {
+        return namespace();
+    }
+
     /** 返回 display name（编辑器 UI 显示）。 */
     String displayName();
 

@@ -151,9 +151,9 @@ export const useUiStore = defineStore('ui', () => {
 
     watch(locale, (v) => {
         try { localStorage.setItem(LOCALE_KEY, v); } catch { /* ignore */ }
-        document.documentElement.lang = v === 'zh' ? 'zh-CN' : 'en';
+        if (typeof document !== 'undefined') document.documentElement.lang = v === 'zh' ? 'zh-CN' : 'en';
     });
-    document.documentElement.lang = locale.value === 'zh' ? 'zh-CN' : 'en';
+    if (typeof document !== 'undefined') document.documentElement.lang = locale.value === 'zh' ? 'zh-CN' : 'en';
 
     function toggleTheme() {
         // M24-B：委托给 themeStore。Latte ↔ Frappé 二态切；其他 flavor（macchiato）

@@ -128,6 +128,10 @@ function cancelZoomEdit() {
         >
       </label>
     </Tooltip>
+    <!-- 0.7.4：画布导航快捷键提示（低调小字，半透明） -->
+    <span class="hc-nav-hint pl-2 border-l border-[color:var(--border)] ml-1">
+      {{ t.canvas.navHint }}
+    </span>
   </div>
 </template>
 
@@ -161,5 +165,14 @@ function cancelZoomEdit() {
 .hc-grid-input:focus {
     border-color: var(--ring);
     box-shadow: 0 0 0 1px var(--ring);
+}
+/* 0.7.4：导航快捷键提示——小字、半透明，不挡操作区 */
+.hc-nav-hint {
+    font-size: 0.65rem;
+    white-space: nowrap;
+    opacity: 0.5;
+    color: var(--muted-foreground);
+    letter-spacing: 0.01em;
+    user-select: none;
 }
 </style>

@@ -307,15 +307,17 @@ async function clearAlias(ev?: Event) {
                   <span class="hc-vp-value">{{ v.currentValue ?? v.defaultValue ?? '—' }}</span>
                 </td>
                 <td class="hc-vp-cell hc-vp-name-cell">
-                  <span class="hc-vp-name" :title="`${v.namespace}/${v.key}`">{{ displayName(v) }}</span>
-                  <span class="hc-vp-meta">
-                    <span
-                      v-if="isDynamic(v.namespace)"
-                      class="hc-vp-chip hc-vp-chip-dynamic"
-                      :title="t.variables.picker.dynamicHint"
-                    >dyn</span>
-                    <span class="hc-vp-chip hc-vp-chip-type">{{ v.type }}</span>
-                  </span>
+                  <div class="hc-vp-name-inner">
+                    <span class="hc-vp-name" :title="`${v.namespace}/${v.key}`">{{ displayName(v) }}</span>
+                    <span class="hc-vp-meta">
+                      <span
+                        v-if="isDynamic(v.namespace)"
+                        class="hc-vp-chip hc-vp-chip-dynamic"
+                        :title="t.variables.picker.dynamicHint"
+                      >dyn</span>
+                      <span class="hc-vp-chip hc-vp-chip-type">{{ v.type }}</span>
+                    </span>
+                  </div>
                 </td>
                 <td class="hc-vp-cell hc-vp-action-cell">
                   <button
@@ -432,12 +434,17 @@ async function clearAlias(ev?: Event) {
 .hc-vp-table-wrap {
     flex: 1;
     overflow-y: auto;
+    /* 0.7.4：长变量名（如 schedule:w-abc/next_service_type_text）超列宽时横向滚动，
+       不撑破固定列布局。外层 .hc-variable-picker 的 overflow:hidden 仅用于圆角裁剪，
+       横向滚动条渲染在本 wrap 内部，不被裁掉。 */
+    overflow-x: auto;
 }
 
 .hc-vp-table {
     width: 100%;
     border-collapse: collapse;
-    table-layout: auto;
+    /* 0.7.4：fixed 让列宽严格按 th 百分比（28/22/44/6），不再被超长变量名内容撑乱。 */
+    table-layout: fixed;
     font-size: 11px;
 }
 .hc-vp-table thead th {
@@ -505,9 +512,17 @@ async function clearAlias(ev?: Event) {
     color: var(--foreground);
 }
 .hc-vp-name-cell {
+    /* 0.7.4：td 保持自然块级（table-cell，继承自 .hc-vp-cell），不再用 display:flex——
+       flex 会让 td 脱离表格列布局致 table-layout:fixed 列宽失效。flex 行内化到内层
+       .hc-vp-name-inner，td 仅负责 overflow 裁剪。 */
+    overflow: hidden;
+}
+/* 0.7.4：名字 + meta chip 的 flex 行（在 td 内部，不影响表格列宽）。 */
+.hc-vp-name-inner {
     display: flex;
     align-items: center;
     gap: 4px;
+    min-width: 0;
     overflow: hidden;
 }
 .hc-vp-name {

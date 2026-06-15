@@ -84,7 +84,7 @@ function loadFlavor(): Flavor {
         if (legacy === 'light') return 'latte';
     } catch { /* ignore */ }
     // 跟随系统：暗色 → frappe，浅色 → latte
-    if (window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'latte';
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'latte';
     return 'frappe';
 }
 
@@ -105,6 +105,7 @@ function loadRadius(): RadiusScale {
 }
 
 function applyFlavor(flavor: Flavor): void {
+    if (typeof document === 'undefined') return; // node/SSR（测试）无 DOM，跳过应用
     const html = document.documentElement;
     // 清旧 theme-* class
     html.classList.remove('theme-latte', 'theme-frappe', 'theme-macchiato');
@@ -117,10 +118,12 @@ function applyFlavor(flavor: Flavor): void {
 }
 
 function applyAccent(accent: Accent): void {
+    if (typeof document === 'undefined') return;
     document.documentElement.dataset.accent = accent;
 }
 
 function applyRadius(radius: RadiusScale): void {
+    if (typeof document === 'undefined') return;
     document.documentElement.dataset.radius = radius;
 }
 
