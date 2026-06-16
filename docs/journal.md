@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-06-16 · 0.8 立项：工程导入导出 + SVG 导入 设计总纲（docs/import-export.md）
+
+长期评估收敛后定 0.8 = 两个新功能：`.canvas` 工程导入导出 + SVG 矢量导入。多子代理读**真实代码**评估（非凭记忆）+ 用户 AskUserQuestion 拍板 → 照 `scripting.md` 范式写设计总纲。**本条无代码改动，纯契约定稿。**
+
+**子代理评估的三个反直觉发现（均读代码得出）：**
+- **`.canvas` 地基 ~60-70% 现成**：ProjectState 已完整 Jackson 序列化 + 向后兼容、TemplateExporter 已跑通「序列化+自校验 roundtrip」范式、图片 hash 收集 / 上传校验栈 / 变量 fallback 全现成，连导入安全限额（`security.md §4.4`）+ 脚本导入威胁模型（§13.5）都已写。**最大缺口：脚本独立存 `wall_scripts`、不在 ProjectState，旧 spec §4.3 只导 ProjectState → 会丢脚本** → 用户拍板纳入，新增 `scripts.json`。
+- **SVG 矢量管线早已存在**：M9 起有 PathElement/Circle/Shape、M26 起 IconElement 即 SVG 矢量、后端 `PathParser.java` 已支持完整 SVG path 文法（含椭圆弧→cubic）、`IconRegistry.loadExternal` 已有单 path 用户 SVG 导入通道。故 SVG 导入 = 复用矢量地基 + 补前端多 path 解析器。硬约束：SVG 因 magic-bytes 进不了图片上传管线 → 栅格化反而不省事 → 用户拍板「只做矢量完整版」。
+- **动画 SVG 撞时间轴墙**：实抓用户海报（hcs.wiki：CSS `@keyframes` + SMIL 渐变 + `stroke-dashoffset` 画线 + 多周期并发）。我们无 CSS 解析器 / 无渐变 stop 动画 / 无 stroke 动画 / 一墙一时刻只播一条时间轴 → 仅 A 档（平移/旋转/透明度/keySplines）能近无损映射 → 定：动画 SVG 取首帧静态化，「SVG 动画→时间轴」留 0.9+。
+
+**10 条固化决策 D1-D10**（见文档 §0）。**工时** Part A ~53h + Part B ~64h + 文档回填 ~6h ≈ **120h / 3-4 周**。§9 列 6 处下游契约回填清单（实装时同步）。
+
+关联：新增 `docs/import-export.md`（0.8 契约总纲：升级 `data-model.md §4`「规划」→「实装定稿」、扩展 `security.md §4.4/§13.5`、复用 `scripting.md §2.1` + `protocol.md §7`）。下一步 writing-plans 拆 Part A 实施计划。
+
+---
+
 ## 2026-06-15 · 0.7.4 前端体验优化批：6 个体验 bug（小窗口响应 + 画布平移 + 变量 picker 根因）
 
 3 子代理读真实代码定根因 + 用户拍板方案（问题一两栏 / 问题二更多菜单）→ 4 子代理并行实施。
