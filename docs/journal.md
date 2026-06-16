@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-06-16 · 0.8 Part A 实施计划写就（.canvas 导入导出，19 任务 TDD）
+
+writing-plans + 2 子代理精确侦察（后端导入栈 / 前端导出栈，给到 `文件:行号` + 签名 + 测试范式）→ 写出 `docs/superpowers/plans/2026-06-16-0.8-partA-canvas-io.md`。19 个 bite-sized TDD 任务：A1 前端导出(5) / A2 后端导入+安全(8) / A3 导入UI(3) / A4 脚本纳入(3)。
+
+**侦察确认的关键事实（影响实现）**：后端**零 zip 代码**（安全解包从零写）+ **无 audit 枚举**（`PROJECT_IMPORT` 传字符串）；ProjectState 物化复用 `TemplateInstantiator.instantiateRawState` 范式；**`EditSession.replaceContent` 只单层拍平 → 新增 `replaceProject` 保多层**；脚本 `ScriptStore.create` 天然重绑 wallId；前端 **fflate 仅 dev-transitive**（首步转正式依赖）；**导入刷新零前端代码**（后端推 `state.snapshot` → 既有 `handleSnapshot`→`setSnapshot`）。
+
+待执行（subagent-driven）。本条仅计划，无实现代码。关联：新增 plan 文件 + 末尾「任务↔契约覆盖」自查表。
+
+---
+
 ## 2026-06-16 · 0.8 立项：工程导入导出 + SVG 导入 设计总纲（docs/import-export.md）
 
 长期评估收敛后定 0.8 = 两个新功能：`.canvas` 工程导入导出 + SVG 矢量导入。多子代理读**真实代码**评估（非凭记忆）+ 用户 AskUserQuestion 拍板 → 照 `scripting.md` 范式写设计总纲。**本条无代码改动，纯契约定稿。**
