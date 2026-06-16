@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
 import { useResizeObserver } from '@vueuse/core';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film, Puzzle, Magnet } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film, Puzzle, Magnet, Download } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
@@ -12,6 +12,7 @@ import { useProjectStore } from '@/stores/project';
 import { useTimelineStore } from '@/stores/timeline';
 import { useI18n } from '@/i18n';
 import { getWsClient } from '@/network/wsClient';
+import { useProjectExport } from '@/composables/useProjectExport';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
 const ui = useUiStore();
@@ -20,6 +21,7 @@ const project = useProjectStore();
 const timeline = useTimelineStore();
 const { t } = useI18n();
 const ws = getWsClient();
+const { exportProject } = useProjectExport();
 
 // 2026-05-14 lock-state：published 概念砍 → lock 概念。仅 wall owner 可锁/解锁。
 const locked = computed(() => project.isLocked);
@@ -237,16 +239,9 @@ const showTerminal    = computed(() => rightBarWidth.value >= BREAKPOINTS.termin
 const showHelp        = computed(() => rightBarWidth.value >= BREAKPOINTS.help);
 const showLanguages   = computed(() => rightBarWidth.value >= BREAKPOINTS.languages);
 const showTheme       = computed(() => rightBarWidth.value >= BREAKPOINTS.theme);
-// … 按钮只在至少有一项被折叠时才显示
-const showMoreButton  = computed(() =>
-    !showTrainTrack.value ||
-    !showBookmark.value ||
-    !showSnap.value ||
-    !showTerminal.value ||
-    !showHelp.value ||
-    !showLanguages.value ||
-    !showTheme.value,
-);
+// … 按钮恒显示：导出工程是只放在溢出菜单里的常驻项（主栏无导出按钮），故无论宽窄
+// 都要能打开 … 菜单拿到它；其余低频项仍按各自断点决定是否在菜单里出现。
+const showMoreButton = computed(() => true);
 </script>
 
 <template>
@@ -462,6 +457,14 @@ const showMoreButton  = computed(() =>
 
       <!-- ── 溢出菜单 … ── -->
       <OverflowMenu v-if="showMoreButton">
+        <!-- 导出工程（.canvas）：仅溢出菜单内，常驻不折叠 -->
+        <button
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left disabled:opacity-40"
+          @click="exportProject()"
+        >
+          <Download class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreExport }}</span>
+        </button>
         <!-- 铁路网络 -->
         <button
           v-if="!showTrainTrack"
