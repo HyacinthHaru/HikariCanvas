@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-06-16 · 0.8-A1 前端导出落地（.canvas 导出闭环，subagent-driven 首批）
+
+按 Part A 计划 subagent-driven 执行 A1（5 task）：implementer 实现+测试、controller（我）独立 review + 签名提交。**11 测试全绿**，vue-tsc 无新增错误（66 个 pre-existing 无关错误不动）。
+
+**A1 成果**：编辑器「更多菜单 → 导出工程」把当前工程打成 `.canvas`（zip：`manifest.json` + `project.json` + 256×128 缩略图 + `assets/` 引用图片）下载，纯浏览器、不经服务器。新增 `lib/downloadBlob`、`lib/canvasFile`（收集图片hash / manifest / 组装zip 纯函数）、`render/exportThumbnail`（复用 `renderProjectState` 渲全工程）、`composables/useProjectExport`（编排）+ TopBar 入口 + i18n；fflate 转正式 dependency。
+
+**implementer 按真实代码的关键修正**：① 图片下载端点要 `?sessionId=`（M16 P1.1 IDOR 修复），否则导出丢图 → `fetchImageBytes` 拼上 sessionId + 失败优雅跳过；② 无 `__APP_VERSION__` 注入 → `manifest.plugin_version` 用后端 ready 上报的 `serverVersion`；③ `showMoreButton` 改恒 `true`（导出是只在溢出菜单的常驻项，宽屏也要能打开 … 菜单拿到它，0.7.4 折叠逻辑仍保留）；④ 测试适配 happy-dom 无 canvas 2D context / `vi.mock` hoisting TDZ → `vi.hoisted` / `Uint8Array`→`BlobPart` cast。
+
+A2（后端导入+安全，8 task）待用户验证 A1 后续做。关联：新增 5 源文件 + 5 测试，改 `TopBar.vue` / `messages.ts` / `package.json`。plan `2026-06-16-0.8-partA-canvas-io.md`。
+
+---
+
 ## 2026-06-16 · 0.8 Part A 实施计划写就（.canvas 导入导出，19 任务 TDD）
 
 writing-plans + 2 子代理精确侦察（后端导入栈 / 前端导出栈，给到 `文件:行号` + 签名 + 测试范式）→ 写出 `docs/superpowers/plans/2026-06-16-0.8-partA-canvas-io.md`。19 个 bite-sized TDD 任务：A1 前端导出(5) / A2 后端导入+安全(8) / A3 导入UI(3) / A4 脚本纳入(3)。
