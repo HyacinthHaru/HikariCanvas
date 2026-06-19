@@ -5,6 +5,8 @@ import moe.hikari.canvas.image.ImageQuotaService;
 import moe.hikari.canvas.image.ImageStorage;
 import moe.hikari.canvas.render.DirtyRegion;
 import moe.hikari.canvas.render.ProjectionThrottler;
+import moe.hikari.canvas.script.ScriptRule;
+import moe.hikari.canvas.script.ScriptStore;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionTestFactory;
 import moe.hikari.canvas.state.ProjectState;
@@ -91,8 +93,10 @@ class ProjectImporterTest {
 
     private ProjectImporter newImporter() {
         // throttler 传 null：投影是 best-effort 副作用，不影响 replaceProject / snapshot / 持久化主链。
+        // scriptImporter 传 null：本组用例不带 scripts.json；脚本导入单测见 ScriptImporterTest，
+        // 含 scripts.json 的编排用例见 importInto_withScripts_persistsToScriptStore。
         return new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
-                assetIngest, push, wallRepo, auditLog, null);
+                assetIngest, push, wallRepo, null, auditLog, null);
     }
 
     /** 造一个绑定 {@code w}×{@code h} 墙的 session（初始单层空工程）。 */
@@ -148,7 +152,7 @@ class ProjectImporterTest {
         Session session = freshSession(2, 1);
         RecordingThrottler throttler = new RecordingThrottler();
         ProjectImporter importer = new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
-                assetIngest, push, wallRepo, auditLog, throttler);
+                assetIngest, push, wallRepo, null, auditLog, throttler);
         byte[] canvas = buildCanvas(
                 "{\"spec\":1,\"kind\":\"project\",\"created_at\":1,\"wall\":{\"width\":2,\"height\":1}}",
                 "{\"version\":3,\"canvas\":{\"widthMaps\":2,\"heightMaps\":1,\"background\":\"#FFFFFF\"},"
@@ -249,6 +253,36 @@ class ProjectImporterTest {
         assertEquals(2, reloaded.state().layers().size(), "导入工程必须落库（project_json 更新）");
     }
 
+    // ---------- scripts.json 编排（0.8-A4 Task 18） ----------
+
+    @Test
+    void importInto_withScripts_persistsToScriptStoreWithReboundWallId() throws Exception {
+        Session session = freshSession(2, 1);   // wallId = "wall-1"
+        ScriptStore scriptStore = new ScriptStore(LOG, null, 16);
+        ScriptImporter scriptImporter = new ScriptImporter(scriptStore, java.util.Map::of);
+        ProjectImporter importer = new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
+                assetIngest, push, wallRepo, scriptImporter, auditLog, null);
+
+        // 规则 wallId="w-old" 应被重绑到目标墙 "wall-1"；空动作会被 validate 拒，故带一个 log。
+        String scriptsJson = "[{\"id\":\"sr-old\",\"wallId\":\"w-old\",\"enabled\":true,\"name\":\"r\","
+                + "\"trigger\":{\"type\":\"wallReady\"},"
+                + "\"actions\":[{\"type\":\"log\",\"message\":\"hi\"}],\"blockLayout\":\"{}\"}]";
+        byte[] canvas = buildCanvasWithScripts(
+                "{\"spec\":1,\"kind\":\"project\",\"created_at\":1,\"wall\":{\"width\":2,\"height\":1}}",
+                "{\"version\":3,\"canvas\":{\"widthMaps\":2,\"heightMaps\":1,\"background\":\"#FFFFFF\"},"
+                        + "\"layers\":[{\"id\":\"l1\",\"name\":\"L\",\"visible\":true,\"locked\":false,\"opacity\":1.0,"
+                        + "\"blendMode\":\"normal\",\"elements\":[]}],\"activeLayerId\":\"l1\"}",
+                scriptsJson);
+
+        ImportResult r = importer.importInto(session, canvas, UUID.randomUUID());
+
+        assertTrue(r.warnings().isEmpty(), "干净脚本不应产生 warning");
+        List<ScriptRule> stored = scriptStore.listByWall("wall-1");
+        assertEquals(1, stored.size(), "脚本必须落到目标墙的 ScriptStore");
+        assertEquals("wall-1", stored.get(0).wallId(), "wallId 已重绑到目标墙");
+        assertTrue(push.snapshotPushed, "工程本体照常广播 snapshot");
+    }
+
     // ---------- helpers ----------
 
     private void seedWall(String wallId, int w, int h) {
@@ -284,6 +318,23 @@ class ProjectImporterTest {
             z.closeEntry();
             z.putNextEntry(new ZipEntry("project.json"));
             z.write(project.getBytes());
+            z.closeEntry();
+        }
+        return bos.toByteArray();
+    }
+
+    private static byte[] buildCanvasWithScripts(String manifest, String project, String scripts)
+            throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream z = new ZipOutputStream(bos)) {
+            z.putNextEntry(new ZipEntry("manifest.json"));
+            z.write(manifest.getBytes());
+            z.closeEntry();
+            z.putNextEntry(new ZipEntry("project.json"));
+            z.write(project.getBytes());
+            z.closeEntry();
+            z.putNextEntry(new ZipEntry("scripts.json"));
+            z.write(scripts.getBytes());
             z.closeEntry();
         }
         return bos.toByteArray();

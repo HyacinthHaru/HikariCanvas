@@ -286,9 +286,19 @@ public final class WebServer {
         if (assetIngest == null || importConfig == null) {
             this.projectImportHandler = null;
         } else {
+            // 0.8-A4：scripts.json 导入器。scriptStore 缺（旧装配）→ null，工程导入仍可用、
+            //         仅静默忽略包内脚本。命令模板供给复用 commandTemplatesSupplier（缺则空表 →
+            //         所有 runCommand 判为 blocked，但规则照常落库）。
+            moe.hikari.canvas.canvasfile.ScriptImporter scriptImporter = scriptStore == null
+                    ? null
+                    : new moe.hikari.canvas.canvasfile.ScriptImporter(
+                            scriptStore,
+                            commandTemplatesSupplier == null
+                                    ? java.util.Map::of : commandTemplatesSupplier);
             moe.hikari.canvas.canvasfile.ProjectImporter projectImporter =
                     new moe.hikari.canvas.canvasfile.ProjectImporter(
-                            importConfig, assetIngest, push, wallRepo, auditLog, throttler);
+                            importConfig, assetIngest, push, wallRepo,
+                            scriptImporter, auditLog, throttler);
             this.projectImportHandler = new ProjectImportHandler(sessionManager, projectImporter);
         }
     }

@@ -70,6 +70,12 @@ public final class ProjectImporter {
     private final AssetIngest assetIngest;
     private final OpPushCallback push;
     private final WallRepo wallRepo;
+    /**
+     * 0.8-A4：scripts.json 导入器（wallId 重绑 + 重校验 + 落库）。可空 —— ScriptStore 未配置
+     * 的装配（旧测试 / 无脚本子系统）传 null，此时工程包里的 scripts.json 被静默忽略
+     * （工程本体照常导入）。
+     */
+    private final ScriptImporter scriptImporter;
     /** 可空：留痕 best-effort（与 dispatcher 的 auditLog 可空范式一致）。 */
     private final AuditLog auditLog;
     /**
@@ -83,12 +89,14 @@ public final class ProjectImporter {
                            AssetIngest assetIngest,
                            OpPushCallback push,
                            WallRepo wallRepo,
+                           ScriptImporter scriptImporter,
                            AuditLog auditLog,
                            ProjectionThrottler throttler) {
         this.importConfig = importConfig;
         this.assetIngest = assetIngest;
         this.push = push;
         this.wallRepo = wallRepo;
+        this.scriptImporter = scriptImporter;
         this.auditLog = auditLog;
         this.throttler = throttler;
     }
@@ -136,6 +144,15 @@ public final class ProjectImporter {
 
         // 6) 整体替换会话工程（保留多层 / 时间轴；OkSnapshot）
         EditSession.OpResult result = session.editSession().replaceProject(imported);
+
+        // 6.5) scripts.json 导入（wallId 重绑到目标墙 + 重校验 + 落 wall_scripts）。
+        //      scriptImporter 可空（ScriptStore 未配的装配）→ 跳过脚本，工程本体照常导入。
+        //      脚本是 wall-scoped 状态、与 ProjectState 解耦，不进 snapshot；这里只落库。
+        if (scriptImporter != null && session.wallId() != null
+                && entries.containsKey("scripts.json")) {
+            warnings.addAll(scriptImporter.importScripts(
+                    entries.get("scripts.json"), session.wallId()));
+        }
 
         // 7) 全量快照广播（照 EditOpDispatcher 的 OkSnapshot 分支：从 session.projectState() 读）
         push.pushSnapshot(session.id(), session.projectState());
