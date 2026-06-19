@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-06-17 · 0.8-A3 导入 UI 落地（.canvas 导入端到端可点，subagent-driven）
+
+A3 共 3 task：implementer 实现+测试、controller review+签名提交。**5 测试全绿**，vue-tsc 零 TS 错误。
+
+**成果**：编辑器「更多菜单 → 导入工程」打开导入对话框 → 选 `.canvas` → 破坏性替换二次确认 → 导入 → 展示后端 warnings 清单 / 错误。配合 A1 导出 + A2 后端导入，**导出 → 导入完整 roundtrip 现可在编辑器端到端点击验证**。新增 `composables/useProjectImport`（FormData POST `/api/project/import`，刷新靠后端 WS `state.snapshot` 零前端代码）、`components/layout/ImportProjectModal`（阶段机 idle→confirm→importing→done/error，importing 防关闭）+ TopBar 入口 + i18n `project` 分组。
+
+warning 大白话 kind→文案映射留 A4 Task 19（本批先显示原始 `detail`）。关联：新增 2 源 + 3 测试，改 `TopBar.vue` / `messages.ts`。
+
+---
+
 ## 2026-06-17 · 0.8-A2 后端导入+安全落地（.canvas 导入闭环，3 批 subagent-driven）
 
 A2 共 8 task，分 3 批 implementer 串行 + controller review/签名提交。后端**零 zip 代码从零写**，端到端 e2e 通：multipart 收 `.canvas` → 流式安全解包 → 校验 → 灌入会话 → 广播 snapshot + **游戏内投影** → 持久化 → audit。
