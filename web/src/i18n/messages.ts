@@ -51,6 +51,18 @@ export const messages = {
             importDone: '导入完成',
             importFailed: (code: string) => `导入失败（${code}）`,
             warnTitle: '导入提示',
+            // 0.8-A4：后端 warning kind → 服主/玩家看得懂的大白话（禁开发黑话）。
+            warn: {
+                'missing-font': (d: string) => `字体「${d}」这台服务器没有，已用默认字体代替`,
+                'missing-variable': (d: string) => `变量「${d}」在这台服务器上不存在，显示为占位符`,
+                'missing-icon': (d: string) => `图标「${d}」缺失，已留空`,
+                'script-command-blocked': (d: string) => `脚本里的指令模板「${d}」本服没有，该积木已停用`,
+                'script-invalid': (d: string) => `有一条脚本规则不合法，已跳过（${d}）`,
+                'script-quota': () => '脚本数量超过上限，部分规则未导入',
+                'animation-flattened': () => '这张图自带动画，已按初始样子导入',
+                'orphan-track-dropped': () => '有动画轨指向已删除的元素，已自动清理',
+                'asset-quota': () => '图片配额已满，部分图片未导入',
+            } as Record<string, (d: string) => string>,
         },
         wall: {
             copyId: (id: string) => `点击复制画板 ID：${id}`,
@@ -1325,6 +1337,18 @@ export const messages = {
             importDone: 'Imported',
             importFailed: (code: string) => `Import failed (${code})`,
             warnTitle: 'Import notes',
+            // 0.8-A4: backend warning kind → plain language for server owners / players.
+            warn: {
+                'missing-font': (d: string) => `Font "${d}" isn't on this server, so the default font was used instead`,
+                'missing-variable': (d: string) => `Variable "${d}" doesn't exist on this server and shows as a placeholder`,
+                'missing-icon': (d: string) => `Icon "${d}" is missing and was left blank`,
+                'script-command-blocked': (d: string) => `The command template "${d}" isn't set up on this server, so that block was disabled`,
+                'script-invalid': (d: string) => `A script rule was invalid and was skipped (${d})`,
+                'script-quota': () => 'Too many scripts; some rules were not imported',
+                'animation-flattened': () => 'This image is animated and was imported in its starting state',
+                'orphan-track-dropped': () => 'An animation track pointed at a deleted element and was cleaned up',
+                'asset-quota': () => 'The image quota is full; some images were not imported',
+            } as Record<string, (d: string) => string>,
         },
         wall: {
             copyId: (id: string) => `Click to copy wall id: ${id}`,

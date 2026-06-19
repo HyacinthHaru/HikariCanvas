@@ -12,7 +12,8 @@
  * accept=".canvas" 会把它灰掉、逼用户切「所有文件」；故放行任意文件，合法性由后端导入
  * 校验兜底（坏文件 → IMPORT_MALFORMED）。入口区同时支持<b>拖拽</b>。</p>
  *
- * <p>warning 渲染本期直接显示原始 detail；大白话 kind→文案映射在 0.8 A4 补 warningText。</p>
+ * <p>warning 渲染经 {@link warningText} 把后端 {@code kind} 翻成服主/玩家看得懂的大白话
+ * （文案在 i18n {@code project.warn}，zh/en 镜像）；未知 kind 兜底回原始 detail。</p>
  */
 import { ref } from 'vue';
 import { X, Upload, FileUp, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-vue-next';
@@ -91,6 +92,15 @@ async function doImport(file: File) {
     }
 }
 
+/**
+ * 把一条后端 warning 翻成大白话：按 kind 查 i18n project.warn 文案函数，未命中回原始 detail。
+ * 文案函数签名统一 (d:string)=>string；无参文案忽略 detail（JS 多传参无害）。
+ */
+function warningText(w: ImportWarningDto): string {
+    const fn = t.value.project.warn[w.kind];
+    return fn ? fn(w.detail) : w.detail;
+}
+
 function onClose() {
     if (phase.value === 'importing') return;   // 导入进行中不可关
     // 重置态，下次打开干净
@@ -103,7 +113,7 @@ function onClose() {
     emit('close');
 }
 
-defineExpose({ doImport, acceptFile });
+defineExpose({ doImport, acceptFile, warningText });
 </script>
 
 <template>
@@ -184,7 +194,7 @@ defineExpose({ doImport, acceptFile });
                 class="flex items-start gap-1.5 text-[color:var(--foreground)]"
               >
                 <AlertTriangle class="size-3.5 shrink-0 mt-0.5 text-[color:var(--ctp-peach)]" />
-                <span>{{ w.detail }}</span>
+                <span>{{ warningText(w) }}</span>
               </li>
             </ul>
           </section>
