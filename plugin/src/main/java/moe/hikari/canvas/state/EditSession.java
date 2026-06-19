@@ -920,6 +920,36 @@ public final class EditSession {
         return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
     }
 
+    /**
+     * 0.8-A2：整体替换当前工程为导入的 {@link ProjectState}，<b>保留其多层结构 + 时间轴</b>。
+     *
+     * <p>用于 {@code .canvas} 工程导入——区别于 {@link #replaceContent(Fill, List)} 把内容拍平成
+     * 单层。采用 imported 的 canvas + layers(+activeLayerId) + timelines(+activeTimelineId) +
+     * tweenFps，bump version 并把替换前状态压入 undo 栈，返回结构跳变 {@link OpResult.OkSnapshot}。</p>
+     *
+     * <p>实现走 {@link ProjectState#restore(ProjectSnapshot)}：它对 imported 的 layers 深拷贝
+     * （新 Layer + 新 element ArrayList），timelines 浅拷外层（Timeline record 不可变），保证
+     * 替换后会话 state 与传入的 imported 对象不再共享任何可变集合。</p>
+     *
+     * @param imported 已物化 / 校验过的导入工程（由 ProjectMaterializer 产出）
+     */
+    public synchronized OpResult replaceProject(ProjectState imported) {
+        ProjectSnapshot pre = snapshotNow();
+        // 采用 imported 的 canvas + 整棵 layers 树 + timelines。restore 内部深拷贝 layers、
+        // 还原 activeLayerId / activeTimelineId，等价于一次全量替换。
+        state.restore(new ProjectSnapshot(
+                imported.canvas(),
+                imported.layers(),
+                imported.activeLayerId(),
+                imported.timelines(),
+                imported.activeTimelineId(),
+                null));
+        state.tweenFps(imported.tweenFps());
+        commitHistory(pre);
+        long v = state.bumpVersion();
+        return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
+    }
+
     // ---------- undo / redo / history.mark ----------
 
     /** 见 {@link HistoryStack#undo()}。 */
