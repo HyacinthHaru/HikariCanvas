@@ -32,7 +32,9 @@ import java.util.concurrent.ConcurrentMap;
  * <p><b>线程：</b> async scheduler + `ConcurrentMap` + per-session `synchronized(bucket)`。
  * 和 T7 CanvasProjector 一致，整条链都不需要主线程。</p>
  */
-public final class ProjectionThrottler {
+// 非 final：测试需可子类化覆盖 submit 做记录型 fake（0.8-A2 Task 12 投影接入；
+// 生产无子类，行为不变）。
+public class ProjectionThrottler {
 
     /** 5 fps = 200ms；runTaskLaterAsynchronously 以 tick 为单位（50ms/tick）。 */
     public static final long DEFAULT_MIN_INTERVAL_MS = 200L;
