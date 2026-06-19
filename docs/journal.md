@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-06-17 · 0.8-A3 修复：导入对话框拖拽 + .canvas 可选（用户实测 bug）
+
+用户实测 A3 导入对话框两个 UI bug，systematic-debugging 定根因后修：
+- **macOS Finder 选不中 `.canvas`**：`<input accept=".canvas">` —— `.canvas` 是自定义扩展名、macOS 基于 UTI 无注册 → 被灰掉，逼用户切「所有文件」。修：**去掉 accept**（放行任意文件，合法性由后端导入校验兜底 `IMPORT_MALFORMED`）。
+- **不支持拖入**：对话框只有点击选文件。修：idle 入口区加拖拽（`dragover` 高亮 + `drop` 取文件），抽 `acceptFile` 统一「选/拖」入口。
+
++ i18n 拖拽提示（zh/en `importDropHint`）+ 2 个回归测试（`acceptFile`→confirm、input 无 accept）。关联：改 `ImportProjectModal.vue` / `messages.ts` + 测试。
+
+---
+
 ## 2026-06-17 · 0.8-A3 导入 UI 落地（.canvas 导入端到端可点，subagent-driven）
 
 A3 共 3 task：implementer 实现+测试、controller review+签名提交。**5 测试全绿**，vue-tsc 零 TS 错误。

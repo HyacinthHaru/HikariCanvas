@@ -2,12 +2,15 @@
 /**
  * 0.8 A3：.canvas 工程导入对话框。
  *
- * 流程：选文件 → 破坏性替换二次确认 → 调 useProjectImport().importProject(file)
+ * 流程：选文件 / 拖入 → 破坏性替换二次确认 → 调 useProjectImport().importProject(file)
  *   → loading → 展示后端 warnings 清单 / 错误。
  *
  * <p>导入成功后由后端经 WS state.snapshot 推全量工程（wsClient handleSnapshot →
- * setSnapshot），本组件不手动刷新工程。文件选择照 useCanvasUpload 隐藏 input 范式，
- * accept=".canvas"。</p>
+ * setSnapshot），本组件不手动刷新工程。</p>
+ *
+ * <p><b>文件选择不设 accept 扩展名过滤</b>：自定义 .canvas 在 macOS Finder 无 UTI 注册，
+ * accept=".canvas" 会把它灰掉、逼用户切「所有文件」；故放行任意文件，合法性由后端导入
+ * 校验兜底（坏文件 → IMPORT_MALFORMED）。入口区同时支持<b>拖拽</b>。</p>
  *
  * <p>warning 渲染本期直接显示原始 detail；大白话 kind→文案映射在 0.8 A4 补 warningText。</p>
  */
@@ -32,18 +35,30 @@ const errorMessage = ref<string | null>(null);
 const fileRef = ref<HTMLInputElement | null>(null);
 /** 待确认的文件（选好但还没过二次确认）。 */
 const pendingFile = ref<File | null>(null);
+/** 拖拽悬停高亮态。 */
+const isDragging = ref(false);
 
 function pickFile() {
     fileRef.value?.click();
+}
+
+/** 选到 / 拖到的文件统一入口：进入破坏性替换二次确认（不按扩展名预筛，见组件注释）。 */
+function acceptFile(file: File | null) {
+    if (!file) return;
+    pendingFile.value = file;
+    phase.value = 'confirm';
 }
 
 function onPick(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0] ?? null;
     input.value = '';   // 清空，便于再次选同名文件触发 change
-    if (!file) return;
-    pendingFile.value = file;
-    phase.value = 'confirm';   // 进入破坏性替换二次确认
+    acceptFile(file);
+}
+
+function onDrop(e: DragEvent) {
+    isDragging.value = false;
+    acceptFile(e.dataTransfer?.files?.[0] ?? null);
 }
 
 /** 用户确认替换后才真正导入。 */
@@ -81,13 +96,14 @@ function onClose() {
     // 重置态，下次打开干净
     phase.value = 'idle';
     pendingFile.value = null;
+    isDragging.value = false;
     warnings.value = [];
     errorCode.value = null;
     errorMessage.value = null;
     emit('close');
 }
 
-defineExpose({ doImport });
+defineExpose({ doImport, acceptFile });
 </script>
 
 <template>
@@ -110,23 +126,30 @@ defineExpose({ doImport });
       </header>
 
       <div class="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
-        <!-- 隐藏的真实文件选择 input；accept=".canvas" -->
+        <!-- 隐藏的真实文件选择 input；不设 accept（.canvas 在 macOS Finder 无 UTI 会被灰掉） -->
         <input
           ref="fileRef"
           type="file"
-          accept=".canvas"
           class="hidden"
           @change="onPick"
         />
 
-        <!-- idle：选文件入口 -->
+        <!-- idle：选文件 / 拖拽入口 -->
         <template v-if="phase === 'idle'">
           <button
-            class="hc-btn w-full flex items-center justify-center gap-2 px-3 py-3 rounded-[var(--radius-sm)] border border-dashed border-[color:var(--border)] hover:bg-[color:var(--accent)] transition-colors"
+            class="hc-btn w-full flex flex-col items-center justify-center gap-2 px-3 py-6 rounded-[var(--radius-sm)] border border-dashed transition-colors"
+            :class="isDragging
+              ? 'border-[color:var(--ctp-blue)] bg-[color:var(--ctp-blue)]/10'
+              : 'border-[color:var(--border)] hover:bg-[color:var(--accent)]'"
             @click="pickFile"
+            @dragenter.prevent="isDragging = true"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            @drop.prevent="onDrop"
           >
-            <FileUp class="size-4 shrink-0" />
+            <FileUp class="size-5 shrink-0" />
             <span>{{ t.project.importPick }}</span>
+            <span class="text-[color:var(--muted-foreground)]">{{ t.project.importDropHint }}</span>
           </button>
         </template>
 

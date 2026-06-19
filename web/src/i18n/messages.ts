@@ -45,6 +45,7 @@ export const messages = {
         project: {
             importTitle: '导入工程',
             importPick: '选择 .canvas 文件',
+            importDropHint: '或把文件拖到这里',
             importConfirmReplace: '导入会替换当前画布的全部内容，确定继续吗？',
             importing: '正在导入…',
             importDone: '导入完成',
@@ -1318,6 +1319,7 @@ export const messages = {
         project: {
             importTitle: 'Import Project',
             importPick: 'Choose a .canvas file',
+            importDropHint: 'or drop a file here',
             importConfirmReplace: 'Importing replaces everything on the current canvas. Continue?',
             importing: 'Importing…',
             importDone: 'Imported',
