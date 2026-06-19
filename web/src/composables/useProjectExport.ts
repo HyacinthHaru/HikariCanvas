@@ -1,5 +1,6 @@
 import { useProjectStore } from '@/stores/project';
 import { useNetworkStore } from '@/stores/network';
+import { useScriptStore } from '@/stores/scripts';
 import { collectImageHashes, buildManifest, assembleCanvasZip } from '@/lib/canvasFile';
 import { renderExportThumbnail } from '@/render/exportThumbnail';
 import { downloadBlob } from '@/lib/downloadBlob';
@@ -46,9 +47,13 @@ export function useProjectExport() {
             createdAt: Date.now(),
             pluginVersion: net.serverVersion ?? undefined,
         });
+        // 0.8-A4：带上当前墙的脚本（listSorted 是服务端顺序的只读快照）。无脚本则省略
+        // scripts.json（assembleCanvasZip 的 scriptsJson 可选，undefined 时不打进 zip）。
+        const scripts = useScriptStore().listSorted;
         const zip = assembleCanvasZip({
             manifest,
             projectJson: JSON.stringify(state),
+            scriptsJson: scripts.length ? JSON.stringify(scripts) : undefined,
             thumbnailPng,
             assets,
         });
