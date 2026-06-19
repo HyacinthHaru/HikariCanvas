@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-06-17 · 0.8-A2 后端导入+安全落地（.canvas 导入闭环，3 批 subagent-driven）
+
+A2 共 8 task，分 3 批 implementer 串行 + controller review/签名提交。后端**零 zip 代码从零写**，端到端 e2e 通：multipart 收 `.canvas` → 流式安全解包 → 校验 → 灌入会话 → 广播 snapshot + **游戏内投影** → 持久化 → audit。
+
+- **批1 零件（Task 6/7/8/10，16 测试）**：`ImportConfig` 限额（Builder 5 处接线）；`CanvasArchive` zip 流式三闸 + 路径白名单（从零写）；`CanvasManifest` 解析 + spec 兼容；`ProjectMaterializer` 物化（复用 `TemplateInstantiator` 范式 + 元素校验 + 尺寸匹配）。
+- **批2 集成件（Task 9/11，8 测试）**：`EditSession.replaceProject` 保留多层（照 `replaceContent` 范式 `restore`）；`AssetIngest` 图片摄入（magic + 200ms 隔离解码 + 头部预检 + SERIALIZABLE 配额事务 + `writeFileAtomic` 失败补偿回滚；跨包私有件不可复用故内写等价实现）。
+- **批3 编排+端点（Task 12/13，13 测试）**：`ProjectImporter` 串全链；`ProjectImportHandler` `/api/project/import`（鉴权 + `canvas.edit` + 错误码→HTTP status 映射，e2e 真链非 mock）。`WebServer` 装配 + `HikariCanvas` bootstrap `AssetIngest`。
+
+**review 抓到 1 个真缺口并修**：`ProjectImporter` 初版漏 `throttler.submit`（对照 `EditOpDispatcher` OkSnapshot 分支 :344）→ 导致导入后**游戏内地图不刷新**、只有编辑器更新。修：注入 `ProjectionThrottler`，用 `replaceProject` 返回的 `OkSnapshot.dirty()` 提交全画布重绘（为可测去掉 `ProjectionThrottler` 的 `final`，项目无 mockito）。**已知限制**：`persistWall` 全链的 Ticker 自动播 / 触发器 rebuild 不在导入路径——导入的时间轴动画需手动播 / 墙重载起播。
+
+**push 分叉**：远程多了用户的 `Update README.md`，`rebase`（`-c rebase.gpgSign=true` 强制重签）干净叠加。全量 `:plugin:test`（2039）零回归。scripts.json 导入留 A4。关联：`canvasfile/` 包 8 类 + 改 `WebServer`/`HikariCanvas` + `ProjectionThrottler` 去 final。
+
+---
+
 ## 2026-06-16 · 0.8-A1 前端导出落地（.canvas 导出闭环，subagent-driven 首批）
 
 按 Part A 计划 subagent-driven 执行 A1（5 task）：implementer 实现+测试、controller（我）独立 review + 签名提交。**11 测试全绿**，vue-tsc 无新增错误（66 个 pre-existing 无关错误不动）。
