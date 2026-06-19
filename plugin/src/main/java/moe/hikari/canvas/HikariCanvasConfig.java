@@ -82,6 +82,9 @@ public final class HikariCanvasConfig {
     // ---- images (M13) ----
     public final ImageConfig images;
 
+    /** 0.8 .canvas 工程导入限额。 */
+    public final ImportConfig importConfig;
+
     // ---- database (M15.4) ----
     /** 跑 schema migration 前是否先备份 data.db。pre-release 默认 false。 */
     public final boolean databaseAutoBackup;
@@ -294,6 +297,16 @@ public final class HikariCanvasConfig {
         }
     }
 
+    /**
+     * 0.8 .canvas 工程导入限额（防恶意大文件 / zip 炸弹）。
+     * 单位 MB；解包闸把 MB × 1024×1024 换算为字节上限。defaults 全正，保证三闸有效。
+     */
+    public record ImportConfig(int canvasMaxMb, int canvasMaxEntryMb, int canvasMaxTotalMb) {
+        public static ImportConfig defaults() {
+            return new ImportConfig(10, 10, 50);
+        }
+    }
+
     private HikariCanvasConfig(Builder b) {
         this.host = b.host;
         this.port = b.port;
@@ -316,6 +329,7 @@ public final class HikariCanvasConfig {
         this.previewCacheSeconds = b.previewCacheSeconds;
         this.templatesMaxPerPlayer = b.templatesMaxPerPlayer;
         this.images = b.images;
+        this.importConfig = b.importConfig;
         this.databaseAutoBackup = b.databaseAutoBackup;
         this.pushRateLimitConfig = b.pushRateLimitConfig;
         this.scheduleConfig = b.scheduleConfig;
@@ -419,6 +433,13 @@ public final class HikariCanvasConfig {
                 Math.max(0, f.getInt("images.max-per-wall", defaults.maxPerWall())),
                 Math.max(0, f.getInt("images.max-uploads-per-day", defaults.maxUploadsPerDay())),
                 Math.max(0, f.getInt("images.max-total-storage-mb", defaults.maxTotalStorageMb())));
+
+        // 0.8 import 段（.canvas 工程导入限额）
+        ImportConfig importDefaults = ImportConfig.defaults();
+        b.importConfig = new ImportConfig(
+                Math.max(1, f.getInt("import.canvas-max-mb", importDefaults.canvasMaxMb())),
+                Math.max(1, f.getInt("import.canvas-max-entry-mb", importDefaults.canvasMaxEntryMb())),
+                Math.max(1, f.getInt("import.canvas-max-total-mb", importDefaults.canvasMaxTotalMb())));
 
         // M15.4 P0-29 database 段
         b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", false);
@@ -673,6 +694,7 @@ public final class HikariCanvasConfig {
         int previewCacheSeconds = 300;
         int templatesMaxPerPlayer = 20;
         ImageConfig images = ImageConfig.defaults();
+        ImportConfig importConfig = ImportConfig.defaults();
         boolean databaseAutoBackup = false;
         moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
                 moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();

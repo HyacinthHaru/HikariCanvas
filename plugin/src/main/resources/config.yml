@@ -122,6 +122,15 @@ images:
   # 全服磁盘总配额（MiB）。超出 → 触发 LRU 清理直到腾出空间。0 = 不限。
   max-total-storage-mb: 1024
 
+# .canvas 工程导入限额（0.8）。防恶意大文件 / zip 炸弹。下界均为 1MB。
+import:
+  # 整个 .canvas 包上限（MB）。超出 → 413 IMPORT_ZIP_TOO_LARGE。
+  canvas-max-mb: 10
+  # 单个内部文件解压上限（MB）。边读边计数，不信任声明的大小。
+  canvas-max-entry-mb: 10
+  # 所有内部文件解压总和上限（MB）。防多文件累加的 zip 炸弹。
+  canvas-max-total-mb: 50
+
 # 安全（2026-05-25 token 暴力枚举防御）
 security:
   # WS auth 帧 token 校验前的每 IP 尝试限流，防御 token 暴破 / 撞库。
