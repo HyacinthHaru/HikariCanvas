@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-06-17 · 0.8-A4 脚本纳入落地（Part A 19 task 全部完成）
+
+A4 共 3 task：implementer 实现+测试、controller review+签名提交。前端 10 测试 + 后端 `ScriptImporterTest` 8 + `ProjectImporterTest`/`HandlerTest` 全绿，vue-tsc 无新错误。
+
+**成果**：导出的 `.canvas` 现带 `scripts.json`（墙脚本随工程走）；导入时脚本**重绑到目标墙 + 全量重校验**（不信任文件内 rule_json）+ 落 `wall_scripts`；warning 清单变大白话。
+- **Task 17**：`useProjectExport` 取 `useScriptStore().listSorted` → `scripts.json`。
+- **Task 18**：新建 `ScriptImporter`——逐条多态反序列化 → `ScriptRuleValidator.validate` → 递归 `ConditionEvaluator.checkSyntax` → 命令模板缺失 `script-command-blocked`（不跳过、照常落库，`security.md §13.5`）→ `ScriptStore.create`（wallId 重绑 + 新 ruleId；配额超 `script-quota` 停）。`ProjectImporter` 编排注入 ScriptImporter（构造 7 参），`WebServer` 装配。
+- **Task 19**：`ImportProjectModal.warningText` 把 9 个 kind→大白话（i18n `project.warn` zh/en 镜像），如「字体『X』这台服务器没有，已用默认字体代替」。
+
+**implementer 关键偏离**：`ScriptOpDispatcher.parseIncomingRule/checkConditionSyntax` 是 web 包 package-private、跨包不可复用 → ScriptImporter 内用公开 API 复刻同语义（wallId 重绑由 `store.create` 承担、条件语法递归自实现）。
+
+**Part A（`.canvas` 导入导出）19 task 全部完成**：A1 导出 + A2 后端导入/安全 + A3 导入 UI（+拖拽/accept 修复）+ A4 脚本纳入。剩**文档回填**（data-model/security/protocol/rendering §9）+ 版本号 bump。关联：新增 `ScriptImporter` + 3 测试，改 `ProjectImporter`/`WebServer`/`useProjectExport`/`ImportProjectModal`/`messages`。
+
+---
+
 ## 2026-06-17 · 0.8-A3 修复：导入对话框拖拽 + .canvas 可选（用户实测 bug）
 
 用户实测 A3 导入对话框两个 UI bug，systematic-debugging 定根因后修：
