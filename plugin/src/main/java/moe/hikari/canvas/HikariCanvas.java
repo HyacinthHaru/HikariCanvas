@@ -561,6 +561,13 @@ public final class HikariCanvas extends JavaPlugin {
                 imageDao, database.jdbi(),
                 config.images, tokenService, sessionManager, wallRepo, auditLog);
 
+        // 0.8-A2：.canvas 工程导入的 assets 图片摄入栈（与上传同款 magic+隔离解码+配额+落 hash）。
+        // 复用上面已装配的 imageStorage / imageQuota / imageDao / wallRepo / jdbi，注入 WebServer
+        // 由其内部 new ProjectImporter（复用 dispatcher 同款 push 广播）。
+        moe.hikari.canvas.canvasfile.AssetIngest assetIngest =
+                new moe.hikari.canvas.canvasfile.AssetIngest(getLogger(), imageStorage, imageQuota,
+                        imageDao, wallRepo, database.jdbi());
+
         // 0.4.0-P3-L：取出 ManualScheduleProvider 引用让 WebServer 在 entry 增删时通知 refreshWall
         ManualScheduleProvider manualScheduleProviderRef = (ManualScheduleProvider)
                 variableProviderDaemon.registeredProviders().stream()
@@ -591,7 +598,9 @@ public final class HikariCanvas extends JavaPlugin {
                 tokenRateLimiter, scriptStore,
                 // 0.7.0-P5-E：命令模板表惰性读 volatile config → /canvas reload 即生效，
                 // 与 ActionExecutor 读模板范式一致（绝不泄 command 原文由 handler 保证）。
-                () -> config().scriptsConfig.commandTemplates());
+                () -> config().scriptsConfig.commandTemplates(),
+                // 0.8-A2：.canvas 工程导入——AssetIngest + 导入限额；WebServer 内 new ProjectImporter。
+                assetIngest, config.importConfig);
         webServer.start();
 
         // 0.6 P2：时间轴动画产帧引擎装配（docs/architecture.md §5.5 / docs/timeline.md §3）。

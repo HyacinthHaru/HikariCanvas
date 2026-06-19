@@ -131,6 +131,12 @@ public final class WebServer {
     private final CommandTemplateHandler commandTemplateHandler;
 
     /**
+     * 0.8-A2：{@code POST /api/project/import} 端点 handler（.canvas 工程导入）。
+     * 可为 null（测试装配 / AssetIngest 未传时禁用端点）。
+     */
+    private final ProjectImportHandler projectImportHandler;
+
+    /**
      * M7 wall 缩略图缓存：key = "wallId@updatedAt"，value = PNG bytes。
      * M15.1 P0-16：Caffeine 替代 ConcurrentHashMap（ConcurrentHashMap 不收缩）；
      * 5 分钟 access TTL + 上限 100 项。
@@ -192,7 +198,9 @@ public final class WebServer {
                      moe.hikari.canvas.script.ScriptStore scriptStore,
                      java.util.function.Supplier<Map<String,
                              moe.hikari.canvas.HikariCanvasConfig.CommandTemplate>>
-                             commandTemplatesSupplier) {
+                             commandTemplatesSupplier,
+                     moe.hikari.canvas.canvasfile.AssetIngest assetIngest,
+                     moe.hikari.canvas.HikariCanvasConfig.ImportConfig importConfig) {
         this.log = log;
         this.host = host;
         this.port = port;
@@ -272,6 +280,17 @@ public final class WebServer {
                 : new CommandTemplateHandler(
                         sessionManager, commandTemplatesSupplier,
                         new com.fasterxml.jackson.databind.ObjectMapper());
+        // 0.8-A2：.canvas 工程导入端点 handler。AssetIngest 由 bootstrap 注入（图片摄入栈所在处）；
+        // ProjectImporter 在此 new——复用 dispatcher 同款内部 push（snapshot 广播）+ wallRepo 持久化
+        // （照 EditOpDispatcher 的 OkSnapshot 收尾范式）。AssetIngest / importConfig 任一缺则禁用端点。
+        if (assetIngest == null || importConfig == null) {
+            this.projectImportHandler = null;
+        } else {
+            moe.hikari.canvas.canvasfile.ProjectImporter projectImporter =
+                    new moe.hikari.canvas.canvasfile.ProjectImporter(
+                            importConfig, assetIngest, push, wallRepo, auditLog, throttler);
+            this.projectImportHandler = new ProjectImportHandler(sessionManager, projectImporter);
+        }
     }
 
     public void start() {
@@ -381,6 +400,12 @@ public final class WebServer {
                         HandlerType.GET, "/api/upload/quota", uploadHandler::handleQuota));
                 cfg.routes.addEndpoint(new Endpoint(
                         HandlerType.GET, "/api/upload/{source}", uploadHandler::handleDownload));
+            }
+
+            // 0.8-A2：.canvas 工程导入（multipart 收 zip → 安全解包 → 校验 → 灌会话 → snapshot）
+            if (projectImportHandler != null) {
+                cfg.routes.addEndpoint(new Endpoint(
+                        HandlerType.POST, "/api/project/import", projectImportHandler::handleImport));
             }
 
             // M20-P4：字体 advance 表查询端点（用户字体走这条路；内置字体仍由
