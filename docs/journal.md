@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part A review 补缺：导入时扫缺字体/图标/变量（missing-* warning）
+
+补 plan §3.2 step 8 要求、A2 批3 漏实装的 3 种 warning。新建 `canvasfile/MissingResourceScanner.java`（`scan(ProjectState): List<ImportWarning>`），在 `ProjectImporter.importInto` 的 materialize 之后、replaceProject 之前调用、`warnings.addAll`：
+- **missing-font**：遍历 `TextElement.fontId`（非 null），查 `FontRegistry.get` 判存在性 → 缺则 warn（去重）。
+- **missing-icon**：遍历 `IconElement.source`，**仅 `user/<id>` 形态**查 `IconRegistry.isRegistered`（内置 `fa-*` 恒在、legacy PNG 不在范围）→ 缺则 warn（去重）。
+- **missing-variable**：提取 `${var:...}`（复用 `VariableInterpolator` 同款占位符文法），**仅判定 `userglobal/<key>`** 查 `VariableStore.get`；`user/*`（wall-scoped 导入需重设）、`schedule`/`scoreboard`/`wall`/`rail`/`system`（本服 provider 运行期 resolve）一律不扫，避免误报 → 缺则 warn（去重）。
+
+**装配**：`MissingResourceScanner` 注入 `ProjectImporter`（构造加第 8 参，可空 best-effort）；`WebServer` 用已有 `fontRegistry`/`iconRegistry`/`variableStore` 三字段 new scanner（各自可空降级）。3 处旧测试装配同步加 `null`。
+
+**测试**：`MissingResourceScannerTest`（18 用例：各 warning 产出 + 去重 + 不误报 + 可空降级 + 多层）；`ProjectImporterTest` 加 1 端到端用例（引用缺字体 → warnings 含 missing-font）。全绿。
+
+**文档**：`protocol.md` warning kind 表 3 行「预留/当前未产出」→「已实装」（变量行如实写"仅扫 userglobal"、图标行"仅 user/*"）；汇总句 5 种→8 种（仅 `animation-flattened` 仍预留）。`security.md`/`data-model.md` 经核查**不含** `missing-*` warning 措辞，无需改。
+
+关联：`MissingResourceScanner`（新）/ `ProjectImporter` / `WebServer` / `MissingResourceScannerTest`（新）/ `ProjectImporterTest` / `ProjectImportHandlerTest` / `protocol.md`。
+
+---
+
 ## 2026-06-20 · 0.8 Part A 文档回填：4 份契约同步到实装（4 子代理并行）
 
 Part A 代码完成后，把契约文档回填到与代码一致（文档先行纪律，避免滞后）。4 子代理并行回填，各先读真实代码核实、据实纠正清单错误：

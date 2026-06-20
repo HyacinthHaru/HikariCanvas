@@ -30,6 +30,8 @@ import java.util.UUID;
  *   <li>{@link CanvasManifest#parse} 解析 manifest 并校验 spec ≤ {@link #CANVAS_SPEC_MAX}；</li>
  *   <li>{@link ProjectMaterializer#materialize} 把 untrusted {@code project.json} 物化为校验过的
  *       {@link ProjectState}，并与会话墙尺寸做匹配；</li>
+ *   <li>{@link MissingResourceScanner#scan} 扫缺字体 / 缺 user 图标 / 缺 userglobal 变量
+ *       （{@code missing-font} / {@code missing-icon} / {@code missing-variable} warn）；可空跳过；</li>
  *   <li>{@link AssetIngest#ingestAll} 摄入 {@code assets/*.png}（magic + 隔离解码 + 配额 + 落 hash）；</li>
  *   <li>孤儿关键帧轨丢弃：引用不存在 elementId 的 track 剔除 + {@code orphan-track-dropped} warn；</li>
  *   <li>{@code session.editSession().replaceProject} 整体替换（保留多层 / 时间轴，返回 OkSnapshot）；</li>
@@ -84,6 +86,13 @@ public final class ProjectImporter {
      * {@code null} 时跳过投影（前端编辑器仍经 pushSnapshot 更新，但游戏里要等墙重载才见新内容）。
      */
     private final ProjectionThrottler throttler;
+    /**
+     * 0.8 Part A review 补缺：导入时扫缺字体 / 图标 / 全局变量并产出 {@code missing-*} warning
+     * （{@code docs/import-export.md §3.2 step 8}）。可空（best-effort，与 {@code auditLog} 同范式）：
+     * 装配时由 {@code WebServer} 注入（内部各 registry 也各自可空降级）；{@code null} 时跳过缺资源扫描
+     * （工程照常导入，仅不提示哪些资源缺）。
+     */
+    private final MissingResourceScanner missingResourceScanner;
 
     public ProjectImporter(HikariCanvasConfig.ImportConfig importConfig,
                            AssetIngest assetIngest,
@@ -91,7 +100,8 @@ public final class ProjectImporter {
                            WallRepo wallRepo,
                            ScriptImporter scriptImporter,
                            AuditLog auditLog,
-                           ProjectionThrottler throttler) {
+                           ProjectionThrottler throttler,
+                           MissingResourceScanner missingResourceScanner) {
         this.importConfig = importConfig;
         this.assetIngest = assetIngest;
         this.push = push;
@@ -99,6 +109,7 @@ public final class ProjectImporter {
         this.scriptImporter = scriptImporter;
         this.auditLog = auditLog;
         this.throttler = throttler;
+        this.missingResourceScanner = missingResourceScanner;
     }
 
     /**
@@ -129,6 +140,13 @@ public final class ProjectImporter {
                 sessionCanvas.widthMaps(), sessionCanvas.heightMaps());
 
         List<ImportWarning> warnings = new ArrayList<>();
+
+        // 3.5) 缺资源扫描（0.8 Part A review：docs/import-export.md §3.2 step 8）——materialize 之后、
+        //      replaceProject 之前。引用本服缺字体 / 缺 user 图标 / 缺 userglobal 变量 → missing-* 提示。
+        //      scanner 可空（best-effort）→ 跳过；内部各 registry 亦各自可空降级。导入照常完成。
+        if (missingResourceScanner != null) {
+            warnings.addAll(missingResourceScanner.scan(imported));
+        }
 
         // 4) assets/*.png 摄入（落盘；缺/拒静默跳过，差额生成 asset-quota warning）
         int requestedAssets = countRequestedAssetPngs(entries);

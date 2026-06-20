@@ -295,10 +295,16 @@ public final class WebServer {
                             scriptStore,
                             commandTemplatesSupplier == null
                                     ? java.util.Map::of : commandTemplatesSupplier);
+            // 0.8 Part A review：导入时扫缺字体 / 缺 user 图标 / 缺 userglobal 变量并提示
+            // （docs/import-export.md §3.2 step 8）。三件 registry 已是 WebServer 字段；各自可空降级
+            // （variableStore 可能为 null）。scanner 整体注入 ProjectImporter（best-effort 可空范式）。
+            moe.hikari.canvas.canvasfile.MissingResourceScanner missingResourceScanner =
+                    new moe.hikari.canvas.canvasfile.MissingResourceScanner(
+                            fontRegistry, iconRegistry, variableStore);
             moe.hikari.canvas.canvasfile.ProjectImporter projectImporter =
                     new moe.hikari.canvas.canvasfile.ProjectImporter(
                             importConfig, assetIngest, push, wallRepo,
-                            scriptImporter, auditLog, throttler);
+                            scriptImporter, auditLog, throttler, missingResourceScanner);
             this.projectImportHandler = new ProjectImportHandler(sessionManager, projectImporter);
         }
     }

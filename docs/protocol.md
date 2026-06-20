@@ -946,9 +946,9 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 | kind | 含义 |
 | --- | --- |
-| `missing-font` | 引用的字体在本服未注册（保留位，当前实现未产出） |
-| `missing-variable` | 引用的变量在本服不存在（保留位，当前实现未产出） |
-| `missing-icon` | 引用的图标不在白名单 / 缺失（保留位，当前实现未产出） |
+| `missing-font` | 引用的字体在本服未注册（detail = fontId；运行期降级为默认字体）。**已实装** |
+| `missing-variable` | 引用了本服没有的**全局用户变量** `userglobal/<key>`（detail = `userglobal/<key>`；运行期显示为 `???` 占位）。**已实装**（仅扫 `userglobal`：`user/*` 为 wall-scoped、导入新墙本就需重设；`schedule`/`scoreboard`/`wall`/`rail`/`system` 等由本服 provider 运行期 resolve；皆不扫，避免误报） |
+| `missing-icon` | 引用的**用户自定义图标** `user/<id>` 在本服未注册（detail = `user/<id>`；运行期留空）。**已实装**（仅扫 `user/*`；内置 `fa-*` 恒在、legacy PNG 形态不在范围） |
 | `script-command-blocked` | 脚本规则的 `runCommand` 命中未注册命令模板（detail = templateId）；**规则照常落库**，仅该命令运行期被拦 |
 | `script-invalid` | 脚本规则结构 / 条件语法校验失败，跳过该规则（整份 `scripts.json` 无法解析时返单条此 kind） |
 | `script-quota` | 导入脚本规则数超单墙上限（`scripts.max-rules-per-wall`），停止处理后续规则 |
@@ -956,7 +956,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 | `orphan-track-dropped` | 关键帧轨引用了不存在的 elementId，该轨被丢弃（detail = elementId） |
 | `asset-quota` | 部分 `assets/*.png` 因配额满 / 不可解码被跳过（detail = 跳过张数） |
 
-> 上表为文档约定的完整集合（与 `ImportWarning` 类注释一致）。**当前实装实际产出 5 种**：`asset-quota` / `orphan-track-dropped` / `script-invalid` / `script-command-blocked` / `script-quota`；`missing-font` / `missing-variable` / `missing-icon` / `animation-flattened` 为预留 kind，代码暂未触发。前端按全集翻译即可。
+> 上表为文档约定的完整集合（与 `ImportWarning` 类注释一致）。**当前实装实际产出 8 种**：`missing-font` / `missing-variable`（仅 `userglobal`）/ `missing-icon`（仅 `user/*`）/ `asset-quota` / `orphan-track-dropped` / `script-invalid` / `script-command-blocked` / `script-quota`；仅 `animation-flattened` 仍为预留 kind，代码暂未触发。前端按全集翻译即可。
 
 **错误**——失败响应统一为 `{ "error": <code>, "message": <人读原因> }` + 对应 HTTP status：
 

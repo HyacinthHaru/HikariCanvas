@@ -96,7 +96,8 @@ class ProjectImportHandlerTest {
     private ProjectImporter importer(HikariCanvasConfig.ImportConfig cfg) {
         // throttler 传 null：端点 e2e 只验状态码 / 错误码映射，投影副作用不在覆盖面内。
         // scriptImporter 传 null：本组不带 scripts.json，脚本导入覆盖见 ScriptImporterTest。
-        return new ProjectImporter(cfg, assetIngest, push, wallRepo, null, auditLog, null);
+        // scanner 传 null：缺资源扫描覆盖见 MissingResourceScannerTest / ProjectImporterTest。
+        return new ProjectImporter(cfg, assetIngest, push, wallRepo, null, auditLog, null, null);
     }
 
     private Session sessionWithProject(int w, int h) {

@@ -4,6 +4,7 @@ import moe.hikari.canvas.HikariCanvasConfig;
 import moe.hikari.canvas.image.ImageQuotaService;
 import moe.hikari.canvas.image.ImageStorage;
 import moe.hikari.canvas.render.DirtyRegion;
+import moe.hikari.canvas.render.FontRegistry;
 import moe.hikari.canvas.render.ProjectionThrottler;
 import moe.hikari.canvas.script.ScriptRule;
 import moe.hikari.canvas.script.ScriptStore;
@@ -96,7 +97,7 @@ class ProjectImporterTest {
         // scriptImporter 传 null：本组用例不带 scripts.json；脚本导入单测见 ScriptImporterTest，
         // 含 scripts.json 的编排用例见 importInto_withScripts_persistsToScriptStore。
         return new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
-                assetIngest, push, wallRepo, null, auditLog, null);
+                assetIngest, push, wallRepo, null, auditLog, null, null);
     }
 
     /** 造一个绑定 {@code w}×{@code h} 墙的 session（初始单层空工程）。 */
@@ -152,7 +153,7 @@ class ProjectImporterTest {
         Session session = freshSession(2, 1);
         RecordingThrottler throttler = new RecordingThrottler();
         ProjectImporter importer = new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
-                assetIngest, push, wallRepo, null, auditLog, throttler);
+                assetIngest, push, wallRepo, null, auditLog, throttler, null);
         byte[] canvas = buildCanvas(
                 "{\"spec\":1,\"kind\":\"project\",\"created_at\":1,\"wall\":{\"width\":2,\"height\":1}}",
                 "{\"version\":3,\"canvas\":{\"widthMaps\":2,\"heightMaps\":1,\"background\":\"#FFFFFF\"},"
@@ -232,6 +233,39 @@ class ProjectImporterTest {
         assertFalse(tracks.containsKey("ghost"), "孤儿轨必须从导入工程中清掉");
     }
 
+    // ---------- 缺资源扫描（0.8 Part A review：missing-font / missing-icon / missing-variable） ----------
+
+    @Test
+    void importInto_referencesMissingFont_warnsMissingFont() throws Exception {
+        // 装真 FontRegistry（loadBuiltIn 拿到内置 id 全集），导入引用一个本服没有的字体 →
+        // warnings 含 missing-font（端到端验 scanner 已接入 importInto 编排）。
+        Session session = freshSession(2, 1);
+        FontRegistry fonts = new FontRegistry(LOG);
+        fonts.loadBuiltIn();
+        MissingResourceScanner scanner = new MissingResourceScanner(fonts, null, null);
+        ProjectImporter importer = new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
+                assetIngest, push, wallRepo, null, auditLog, null, scanner);
+
+        // 一个引用 fontId="totally_missing_font" 的 text 元素。
+        String project = "{\"version\":3,\"canvas\":{\"widthMaps\":2,\"heightMaps\":1,\"background\":\"#FFFFFF\"},"
+                + "\"layers\":[{\"id\":\"l1\",\"name\":\"L\",\"visible\":true,\"locked\":false,\"opacity\":1.0,"
+                + "\"blendMode\":\"normal\",\"elements\":[{\"id\":\"e1\",\"type\":\"text\",\"x\":0,\"y\":0,\"w\":80,\"h\":40,"
+                + "\"rotation\":0,\"text\":\"hi\",\"fontId\":\"totally_missing_font\",\"fontSize\":24,"
+                + "\"color\":\"#000000\",\"align\":\"left\",\"letterSpacing\":0.0,\"lineHeight\":1.2,\"vertical\":false}]}],"
+                + "\"activeLayerId\":\"l1\"}";
+        byte[] canvas = buildCanvas(
+                "{\"spec\":1,\"kind\":\"project\",\"created_at\":1,\"wall\":{\"width\":2,\"height\":1}}",
+                project);
+
+        ImportResult r = importer.importInto(session, canvas, UUID.randomUUID());
+
+        assertTrue(push.snapshotPushed, "工程本体照常导入");
+        List<ImportWarning> missing = r.warnings().stream()
+                .filter(w -> "missing-font".equals(w.kind())).toList();
+        assertEquals(1, missing.size(), "应正好一条 missing-font warning");
+        assertEquals("totally_missing_font", missing.get(0).detail());
+    }
+
     // ---------- 持久化 ----------
 
     @Test
@@ -261,7 +295,7 @@ class ProjectImporterTest {
         ScriptStore scriptStore = new ScriptStore(LOG, null, 16);
         ScriptImporter scriptImporter = new ScriptImporter(scriptStore, java.util.Map::of);
         ProjectImporter importer = new ProjectImporter(HikariCanvasConfig.ImportConfig.defaults(),
-                assetIngest, push, wallRepo, scriptImporter, auditLog, null);
+                assetIngest, push, wallRepo, scriptImporter, auditLog, null, null);
 
         // 规则 wallId="w-old" 应被重绑到目标墙 "wall-1"；空动作会被 validate 拒，故带一个 log。
         String scriptsJson = "[{\"id\":\"sr-old\",\"wallId\":\"w-old\",\"enabled\":true,\"name\":\"r\","
