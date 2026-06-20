@@ -32,8 +32,12 @@ public final class PathRenderer implements ElementRenderer {
 
         // 填充
         if (p.fill() != null) {
+            java.awt.geom.Path2D path = parsed.path();
+            path.setWindingRule("evenodd".equals(p.fillRule())
+                    ? java.awt.geom.Path2D.WIND_EVEN_ODD
+                    : java.awt.geom.Path2D.WIND_NON_ZERO);
             g.setPaint(FillPaintBuilder.fillToPaint(p.fill(), 0, 0, p.w(), p.h()));
-            g.fill(parsed.path());
+            g.fill(path);
         }
 
         // 描边
