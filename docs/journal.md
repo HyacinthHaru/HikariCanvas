@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-06-20 · Part B 开工前对齐核查 + plan 计数修正
+
+开工 Part B 前按纪律实地核查（读 journal/代码不凭记忆），坐实 plan 三根支柱 + 修一处计数笔误：
+- **fillRule 两端确无**（grep `plugin/src/main/java` + `web/src/types/protocol.ts` 零命中）→ PB-1 新增 `PathElement.fillRule` 字段的必要性坐实。
+- **`PathParser` 全文法（M/L/H/V/Q/T/C/S/A/Z + 弧分解）vs `PathDValidator` 只认 M/L/Q/C/Z** → 前端归一化（H/V→L、S→C、T→Q、A→cubic）是 `element.add` 过 `PathDValidator` 校验的**硬要求**，PB-2/B2 坐实。
+- **无批量 op** → 一组 SVG = N 条 `element.add`、N 次撤销（PB-3，与 clipboard 一致）。
+- **修正**：plan 正文「7 处 `new PathElement` 构造点」实为 **8 处**——`TemplateInstantiator.java:293` 用全限定名 `new moe.hikari.canvas.state.PathElement(`，裸 grep `new PathElement(` 漏命中（plan 行号清单本就列全 8 个，仅计数文字写 7/6，已改 8/7 并注明全限定名坑，避免 implementer 漏改导致编译失败）。
+
+无代码改动。关联：plan 文件 4 处计数修正。
+
+---
+
 ## 2026-06-20 · 0.8 Part B 实施计划写就（SVG 矢量导入，20 task TDD）
 
 writing-plans + 2 子代理精确侦察（前端 SVG 栈 / 后端 path 栈）→ `docs/superpowers/plans/2026-06-20-0.8-partB-svg-import.md`。20 个 bite-sized TDD 任务：B0 fillRule 纵切(3) / B1 解析基础(4) / B2 归一化+编排(6，**MVP 闸 Task 13**) / B3 gradient+viewBox+位图(3) / B4 安全硬化(1) / B5 UI+双端一致+文档(3)。
