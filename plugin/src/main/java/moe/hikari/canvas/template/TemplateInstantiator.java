@@ -293,7 +293,7 @@ public final class TemplateInstantiator {
             case moe.hikari.canvas.state.PathElement p -> new moe.hikari.canvas.state.PathElement(newId,
                     p.x(), p.y(), p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
                     p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
-                    p.opacity(), p.blendMode(), p.renderMode());
+                    p.opacity(), p.blendMode(), p.renderMode(), p.fillRule());
             case moe.hikari.canvas.state.CircleElement c -> new moe.hikari.canvas.state.CircleElement(newId,
                     c.x(), c.y(), c.w(), c.h(), c.rotation(), c.locked(), c.visible(),
                     c.fill(), c.stroke(), c.opacity(), c.blendMode(), c.renderMode());

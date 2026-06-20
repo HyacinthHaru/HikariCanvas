@@ -294,7 +294,7 @@ public final class SceneLibrary {
                     d, null,
                     new Stroke(2 + c.rng.nextInt(3), nextColor(c)),
                     null, (i % 4 == 0) ? "arrow" : null,
-                    null, BlendMode.NORMAL, RenderMode.CLEAN));
+                    null, BlendMode.NORMAL, RenderMode.CLEAN, null));
         }
         return new BenchmarkScene("path-saturated-2x2", "Path saturated 2x2",
                 BenchmarkScene.CATEGORY_ELEMENT_ISOLATION, "path", 2, 2, st);
@@ -627,7 +627,7 @@ public final class SceneLibrary {
                         c.id(), ex, ey, sz, sz, 0, false, true,
                         "M0 0 L" + sz + " " + sz, null,
                         new Stroke(2, nextColor(c)), null, null,
-                        null, BlendMode.NORMAL, RenderMode.CLEAN));
+                        null, BlendMode.NORMAL, RenderMode.CLEAN, null));
             }
         }
     }

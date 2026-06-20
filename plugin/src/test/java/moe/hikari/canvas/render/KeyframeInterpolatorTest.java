@@ -388,7 +388,7 @@ class KeyframeInterpolatorTest {
     void withAnimated_pathPreservesDAndMarkers() {
         PathElement src = new PathElement("e", 1, 2, 3, 4, 5, false, true,
                 "M0 0 L10 10 Z", Fill.solid("#000000"), null, "arrow", "dot",
-                1.0f, BlendMode.NORMAL, RenderMode.CLEAN);
+                1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null);
         PathElement out = (PathElement) KeyframeInterpolator.withAnimated(src, allProps());
         assertNumericApplied(out);
         assertEquals("M0 0 L10 10 Z", out.d(), "d 保留");

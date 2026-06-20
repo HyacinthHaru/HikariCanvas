@@ -25,6 +25,7 @@ import static moe.hikari.canvas.state.ElementValidator.intValue;
 import static moe.hikari.canvas.state.ElementValidator.isValidColor;
 import static moe.hikari.canvas.state.ElementValidator.parseBlendModeNullable;
 import static moe.hikari.canvas.state.ElementValidator.parseFillNullable;
+import static moe.hikari.canvas.state.ElementValidator.parseFillRuleNullable;
 import static moe.hikari.canvas.state.ElementValidator.parseMarkerNullable;
 import static moe.hikari.canvas.state.ElementValidator.parseMaskNullable;
 import static moe.hikari.canvas.state.ElementValidator.parseOpacityNullable;
@@ -491,7 +492,7 @@ public final class EditSession {
             case PathElement p -> new PathElement(p.id(),
                     nx, ny, p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
                     p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
-                    p.opacity(), p.blendMode(), p.renderMode());
+                    p.opacity(), p.blendMode(), p.renderMode(), p.fillRule());
             case CircleElement c -> new CircleElement(c.id(),
                     nx, ny, c.w(), c.h(), c.rotation(), c.locked(), c.visible(),
                     c.fill(), c.stroke(),
@@ -1058,9 +1059,10 @@ public final class EditSession {
         Float opacity = parseOpacityNullable(p.get("opacity"));
         BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
         RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
+        String fillRule = parseFillRuleNullable(p.get("fillRule"));
         return new PathElement(id, x, y, w, h, rotation, locked, visible,
                 d, fill, stroke, markerStart, markerEnd,
-                opacity, blendMode, renderMode);
+                opacity, blendMode, renderMode, fillRule);
     }
 
     private PathElement applyPathPatch(PathElement orig, Map<String, Object> patch) {
@@ -1075,6 +1077,7 @@ public final class EditSession {
         Float opacity = orig.opacity();
         BlendMode blendMode = orig.blendMode();
         RenderMode renderMode = orig.renderMode();
+        String fillRule = orig.fillRule();
 
         for (var e : patch.entrySet()) {
             String k = e.getKey(); Object v = e.getValue();
@@ -1094,6 +1097,7 @@ public final class EditSession {
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
                 case "renderMode" -> renderMode = parseRenderModeNullable(v);
+                case "fillRule" -> fillRule = parseFillRuleNullable(v);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
                         "unknown path field: " + k);
             }
@@ -1103,7 +1107,7 @@ public final class EditSession {
         }
         return new PathElement(orig.id(), x, y, w, h, rotation, locked, visible,
                 d, fill, stroke, markerStart, markerEnd,
-                opacity, blendMode, renderMode);
+                opacity, blendMode, renderMode, fillRule);
     }
 
     // ---------- M9 CircleElement ----------
@@ -1603,7 +1607,7 @@ public final class EditSession {
             case PathElement p -> new PathElement(newId,
                     p.x(), p.y(), p.w(), p.h(), p.rotation(), p.locked(), p.visible(),
                     p.d(), p.fill(), p.stroke(), p.markerStart(), p.markerEnd(),
-                    p.opacity(), p.blendMode(), p.renderMode());
+                    p.opacity(), p.blendMode(), p.renderMode(), p.fillRule());
             case CircleElement c -> new CircleElement(newId,
                     c.x(), c.y(), c.w(), c.h(), c.rotation(), c.locked(), c.visible(),
                     c.fill(), c.stroke(),

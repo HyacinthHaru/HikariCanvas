@@ -274,6 +274,17 @@ public final class ElementValidator {
         };
     }
 
+    /** SVG fill-rule: 仅 nonzero / evenodd / null（默认 nonzero）。 */
+    public static String parseFillRuleNullable(Object raw) {
+        if (raw == null) return null;
+        String s = raw.toString();
+        if (!"nonzero".equals(s) && !"evenodd".equals(s)) {
+            throw new ValidationException("INVALID_ELEMENT",
+                    "fillRule must be nonzero or evenodd: " + s);
+        }
+        return s;
+    }
+
     public static Float parseOpacityNullable(Object v) {
         if (v == null) return null;
         float f = floatValue(v, "opacity");

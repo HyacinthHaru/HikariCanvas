@@ -31,6 +31,7 @@ public record PathElement(
         String markerEnd,
         Float opacity,
         BlendMode blendMode,
-        RenderMode renderMode
+        RenderMode renderMode,
+        String fillRule          // SVG fill-rule: null / "nonzero" / "evenodd"（null = 默认 nonzero）
 ) implements Element {
 }

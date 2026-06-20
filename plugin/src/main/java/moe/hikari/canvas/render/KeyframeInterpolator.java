@@ -369,7 +369,7 @@ public final class KeyframeInterpolator {
                     pa.locked(), pa.visible(), pa.d(),
                     v.hasFill ? v.fill : pa.fill(),
                     pa.stroke(), pa.markerStart(), pa.markerEnd(),
-                    opacity, pa.blendMode(), pa.renderMode());
+                    opacity, pa.blendMode(), pa.renderMode(), pa.fillRule());
             case CircleElement c -> new CircleElement(c.id(), x, y, w, h, rotation,
                     c.locked(), c.visible(),
                     v.hasFill ? v.fill : c.fill(),
