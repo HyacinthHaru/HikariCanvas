@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part B — B0：fillRule 纵切前后端（Task 1-3 完成）
+
+SVG 导入承载带洞图形填充规则的前置纵切，subagent-driven（3 子代理实现+测试，controller 独立 review + 签名提交）。无 db-migration（可空字段默认 nonzero = 旧行为）。
+- **Task 1（后端字段）**：`PathElement` record 加第 17 字段 `String fillRule`；`ElementValidator.parseFillRuleNullable`（仅 nonzero/evenodd/null，非法抛 `ValidationException`）；`EditSession.buildPath` 读、`applyPathPatch` 加 `case "fillRule"`；**9 处构造点**（plan 数 8，实测含测试文件 `KeyframeInterpolatorTest` 共 9）末位补值——move/duplicate/template/interpolate 保留原值 `p.fillRule()`、benchmark/测试补 `null`。`PathFillRuleTest` 3 用例。
+- **Task 2（后端渲染）**：`PathRenderer` fill 前 `parsed.path().setWindingRule(evenodd ? WIND_EVEN_ODD : WIND_NON_ZERO)`；`PathParser.Result.path()` 真实即 `Path2D.Double`（无需 cast）。`PathRendererFillRuleTest` 带洞图形（外方+内方同向）中心像素 alpha：evenodd 透空=0、nonzero 填实>0。
+- **Task 3（前端）**：`protocol.ts` PathElement 加 `fillRule?: 'nonzero' | 'evenodd'`；`PreviewRenderer.drawPath` 改 `export` + `ctx.fill(parsed.path, p.fillRule === 'evenodd' ? 'evenodd' : 'nonzero')`——**与后端逐函数镜像**。`previewPathFillRule.test.ts`（happy-dom + Path2D stub + 动态 import）2 用例。
+
+回归：`:plugin:test --tests state.* / render.* / EditOp*` 全绿；前端单文件 vitest 绿。3 commit 各自签名验签 true。
+
+---
+
 ## 2026-06-20 · Part B 开工前对齐核查 + plan 计数修正
 
 开工 Part B 前按纪律实地核查（读 journal/代码不凭记忆），坐实 plan 三根支柱 + 修一处计数笔误：

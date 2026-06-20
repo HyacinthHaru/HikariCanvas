@@ -217,6 +217,7 @@ export interface PathElement extends BaseElement {
     stroke?: Stroke;
     markerStart?: 'arrow' | 'dot';
     markerEnd?: 'arrow' | 'dot';
+    fillRule?: 'nonzero' | 'evenodd';
 }
 
 /** M9 CircleElement：圆 / 椭圆，由 bbox 推 cx/cy/rx/ry。 */

@@ -322,7 +322,7 @@ function drawDitheredElement(
 // ---------- M9-C：PathElement / CircleElement / ShapeElement 真实绘制 ----------
 
 /** 与后端 CanvasCompositor.drawPath 镜像。d 内坐标相对 element.(x, y)。 */
-function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
+export function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
     if (!p.d) return;
     const parsed = parsePathD(p.d);
 
@@ -333,7 +333,7 @@ function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
     const pFill = fillToCanvasStyle(ctx, p.fill, 0, 0, p.w, p.h);
     if (pFill) {
         ctx.fillStyle = pFill;
-        ctx.fill(parsed.path);
+        ctx.fill(parsed.path, p.fillRule === 'evenodd' ? 'evenodd' : 'nonzero');
     }
 
     let strokeColor: string | null = null;
