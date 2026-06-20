@@ -1,6 +1,6 @@
 # 安全规范
 
-**状态：** 随代码同步更新（最近一次对照代码核对：2026-06-14，覆盖至 0.7.3）
+**状态：** 随代码同步更新（最近一次对照代码核对：2026-06-20，覆盖至 0.8 Part A `.canvas` 工程导入）
 **适用范围：** 插件 Web 服务、认证、限流、输入校验、权限节点、审计、脚本运行时、部署建议
 
 本文档定义 HikariCanvas 的安全模型与实现要求。所有面向网络的代码必须满足本文要求，否则 PR 不合并。
@@ -34,7 +34,7 @@
 | T7 | 预览地图池耗尽 | 其他玩家无法编辑 |
 | T8 | PDC / SQLite 注入（非法字段值） | 数据损坏 |
 | T9 | 恶意模板（YAML 解析 RCE） | 任意代码执行（M6 起 jackson-dataformat-yaml 默认即免疫 SnakeYAML `!!java/*` tag 路径）|
-| T10 | 恶意 `.canvas` 工程文件导入 | 客户端 XSS / 服务器异常 |
+| T10 | 恶意 `.canvas` 工程文件导入（zip bomb / 路径穿越 / 伪造图片 / 越权脚本 / 不存在命令模板） | 资源耗尽 / 服务器异常 / 越权写。**0.8 Part A 起防御已实装**：解包三闸 + 路径校验 + 白名单（§4.4 `CanvasArchive`）、assets PNG magic + 隔离解码 + 配额（§4.4 `AssetIngest`）、脚本全量重校验 + wallId 重绑 + 命令模板白名单（§13.5 `ScriptImporter`）|
 | T11 | 端口扫描识别本插件 | 辅助上述攻击 |
 | T12 | 审计日志被清除 | 事后无法溯源 |
 | T13 | 管理员误操作 | 数据丢失 |
@@ -204,12 +204,36 @@ validateToken(t):
 
 ### 4.4 `.canvas` 文件导入
 
-- 最大 zip 大小 10 MiB
-- 单个文件解压后最大 10 MiB
-- zip 条目总解压大小 50 MiB（防 zip bomb）
-- 条目名必须通过安全路径校验：无 `..`、无绝对路径、无符号链接
-- 只接受 `manifest.json`、`project.json`、`thumbnail.png`、`assets/` 前缀下的文件
-- assets 文件仅允许 PNG，magic number 校验
+`.canvas` 是一个 zip：`manifest.json` + `project.json` + `scripts.json`（可选）+ `thumbnail.png`（可选）+ `assets/<hash>.png`。导入入口 `POST /api/project/import`（multipart，字段 `sessionId` + `file`），权限 `canvas.edit`（fail-closed：玩家离线拿不到 live `Player` 即视为无权限拒）。导入是「整体替换工程」的破坏性写。
+
+**解包三闸 + 路径 + 白名单（`CanvasArchive.unpack` / `isSafeEntryName`）：**
+
+- 包大小上限：默认 10 MiB（config `import.canvas-max-mb`）
+- 单条目解压后上限：默认 10 MiB（config `import.canvas-max-entry-mb`）
+- zip 条目总解压上限：默认 50 MiB，防 zip bomb（config `import.canvas-max-total-mb`）
+- 流式边读边计数，**不信任 `ZipEntry.getSize()`**（声明大小可造假）
+- 条目名安全路径校验：拒 `..`、拒绝对路径（`/` 开头）、拒反斜杠 `\`、拒 NUL 字节
+- 白名单条目：`manifest.json`、`project.json`、`scripts.json`、`thumbnail.png`，外加 `assets/` 前缀下的文件；其余一律 `IMPORT_BAD_ENTRY` 拒整包
+- 缺 `manifest.json` 或 `project.json` → `IMPORT_MALFORMED`
+
+**`project.json` 物化（`ProjectMaterializer`）**：untrusted JSON → 经 `ElementValidator.validateElementForTemplateApply` 逐元素重校验（不信任任何元素数值）；画布尺寸超当前墙 → `IMPORT_SIZE_MISMATCH`；`manifest.spec` 高于插件支持上限 → `IMPORT_SPEC_UNSUPPORTED`。
+
+**assets 摄入（`AssetIngest`，每张走与 `/api/upload` 同等的不可信防御链）：**
+
+每个 `assets/` 下、以 `.png` 结尾的真实文件条目逐张：
+
+1. **magic 校验**：读首字节判 PNG（`89 50 4E 47`）；**非 PNG 直接跳过**（不信文件扩展名）
+2. **隔离解码**：独立 daemon 线程 `hc-asset-decoder` + **200ms 硬超时**（`ImageReader.abort()` 协作式中断）；**解码前先读头部尺寸预检**（只解析头不解码全图），> 8192×8192 直接拒，拦"小体积巨尺寸"分配型炸弹；解码失败 / 超时 / 超尺寸 → 跳过
+3. **解码后 bbox sanity**：拒 0×0、拒超 8192×8192
+4. **规范化 + 按内容重算 hash**：`encodePng` 重编码 + `sha256Hex16` **按内容算 hash**（不信文件名，hash 内容寻址、跨画去重）
+5. **SERIALIZABLE 配额事务**：per-hash 锁 + 串行化隔离事务里查配额（`tryReserveQuotaOn`）；**配额拒（每日上传数 / 总磁盘 LRU 后仍超）→ 跳过该张**
+6. **原子落盘 + 失败补偿**：事务 commit 后 `writeFileAtomic` 写盘；写盘失败则回滚 DB 行避免孤儿 row，并清 LRU 已 evict 的孤儿文件
+
+**任何单张失败只跳过该张、不抛异常、不中止整次导入**；跳过张数汇总成一条 `asset-quota` warning 回前端。
+
+- **assets 配额计入图片配额**：摄入走的就是 `/api/upload` 同一套 `ImageQuotaService`（每玩家每日上传数 / 服务端总磁盘 LRU），落 `image_uploads` 表，owner = 导入者。导入侧不开 bypass（`canvas.upload.bypass-limit`）。
+- **`assets/icons/<id>.svg` 不被摄入**：SVG 条目虽因 `assets/` 前缀被解包白名单接纳，但 `AssetIngest` 只摄入 `.png`（`isAssetPng`），SVG 既不被解码也不计入配额、也不被导出收集——当前无 SVG 处理路径。
+- **`thumbnail.png` 导入侧无专门校验**：核对全代码（`ProjectImporter` / `AssetIngest` / `image` 包）确认，`thumbnail.png` 仅被 `CanvasArchive` 解包白名单接纳进条目 map，此后**不被任何下游阶段读取 / magic 校验 / ImageIO 解码 / 计入配额**——`ProjectImporter` 只消费 `manifest.json` / `project.json` / `assets/*.png` / `scripts.json`，从不取 `thumbnail.png`。它受三闸大小约束（占总解压量），但无独立内容校验。（与 §4.5 `/api/upload` 那条严格解码栈不同，勿混淆。）
 
 ### 4.5 图片导入 `/api/upload`（M13）
 
@@ -626,9 +650,18 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 
 ### 13.5 `.canvas` 工程文件导入中的脚本
 
-**威胁**：导入含脚本规则的 `.canvas` 文件时，其中可能含引用本服不存在的命令模板的 `runCommand` 积木。
+**威胁**：导入含脚本规则的 `.canvas` 文件（zip 内 `scripts.json`）时，文件内的 `rule_json` 完全不可信——可能含越权 / 畸形 / 语法错误的规则，也可能引用本服不存在的命令模板。
 
-**实际缓解**：`runCommand.templateId` 按名引用，本服 `config.yml` 不存在该 templateId → `CommandTemplateEngine` 返回 `Result.Blocked`，该积木在编辑器内标记缺失（红 badge）并灰显，**不可执行**。规则其余部分照常可用，不需要整条规则删除或拒绝导入。
+**实际缓解（代码：`ScriptImporter.importScripts`，编排自 `ProjectImporter` 第 6.5 步调用）**：整个 `scripts.json` 必须是 `ScriptRule[]` JSON 数组；解析不出数组 → 单条 `script-invalid` warning 返回（**不抛**，脚本导入失败不中断整次工程导入）。逐条规则**全量重校验、不信任文件内 `rule_json`**：
+
+- **多态反序列化**：`ScriptRule`（trigger / actions 注解自带判别）反序列化；单条失败 → 跳过 + `script-invalid`
+- **wallId 重绑**：由 `ScriptStore.create` 承担——它忽略 incoming 的 `id` / `wallId`，生成全新 `sr-<8hex>` 并强制绑定到**目标墙**（等价 `ScriptOpDispatcher` 的服务端权威覆写，杜绝跨墙注入）
+- **结构校验**：`ScriptRuleValidator.validate` 非空 → 跳过 + `script-invalid`
+- **条件语法预检**：递归对所有 `if` / `waitUntil` / `repeatUntil` 条件调 `ConditionEvaluator.checkSyntax`（parse-only）→ 非空跳过 + `script-invalid`（不等运行期静默 false，同 §13.4 K16）
+- **命令模板检查**：扫所有 `runCommand.templateId`，本服 `config.yml` 模板表缺 → `script-command-blocked`（detail = templateId）；**不跳过、规则照常落库**，运行期 `CommandTemplateEngine` 会把该积木判为 `Blocked`（编辑器内红 badge 灰显不可执行）。规则其余部分照常可用
+- **配额闸**：落库 `ScriptStore.create` 抛 `QuotaExceededException`（每墙脚本数超限）→ `script-quota` warning + **停止处理后续规则**
+
+> **注意**：导入侧不做执行期权限面（§13.3 的 `canvas.script.command` 等）二次检查——脚本权限面是**保存期**校验的（owner 权限快照，与 wall 所有权语义一致）。导入是「把规则落到目标墙」，鉴权由 §13.4 的 wall open 路径承担（caller 必须能打开该墙）。命令积木的真正执行闸是上面的模板白名单 + 运行期 `Blocked` 判定。
 
 ### 13.6 试跑副作用
 

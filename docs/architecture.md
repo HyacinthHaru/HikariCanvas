@@ -240,6 +240,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 | 地图池 | `pool/` | **核心**：预览地图借还 |
 | 部署 | `deploy/` | 墙面识别、物品框、包发送 |
 | **图片**（M13） | `image/`（`ImageStorage` / `UploadHandler` / `ImageQuotaService`） | sha256 内容寻址 + LRU + 配额 + ImageIO 解码隔离 |
+| **工程档**（0.8-A） | `canvasfile/`（`CanvasArchive` / `CanvasManifest` / `ProjectMaterializer` / `AssetIngest` / `ScriptImporter` / `ProjectImporter`） | `.canvas` 工程档**导入**信任边界：zip 安全解包 + manifest 校验 + project.json 物化 + 图片摄入 + 脚本重绑（导出在前端，见 §18） |
 | 存储 | `storage/` | SQLite、PDC 工具；M13 起新增 `image_uploads` 表 DAO |
 | 配置 | `config/` | YAML 配置读取 |
 
@@ -729,6 +730,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | `/api/palette` · `/api/font/{metrics,file,list}` · `/api/icon/{list,paths}` | GET | 127.0.0.1 trust | 调色板 / 字体 / 图标资源（无玩家鉴权） |
 | `/api/wall/{id}/preview.png` | GET | 127.0.0.1 trust | wall 缩略图 |
 | `/api/upload`（POST）· `/api/upload/url`（POST）· `/api/upload/quota` · `/api/upload/{source}` | POST/GET | **sessionId**（query 或 form 字段）| 图片上传 / 下载 / 配额；缺失或失效返 401 |
+| `/api/project/import` | POST | **sessionId** + `canvas.edit` | `.canvas` 工程档导入（multipart `file`）；整体替换会话工程，破坏性写故要编辑权限（fail-closed，玩家离线即拒）。仅当 `AssetIngest` + 导入限额装配时注册。详见 §18 |
 | `/api/variable/list-all-namespaces` | GET | **sessionId**（query，401 拒） | Provider declaredKeys 聚合（仅当变量系统装配时注册） |
 | `/api/script/command-templates` | GET | **sessionId** | 命令模板列表，仅返 id/params，不泄 command 原文（仅当脚本系统装配时注册） |
 | `/ws` | WS | auth 帧 + Origin 白名单 + 5s 超时 + IP 绑定 | 编辑器主通道 |
@@ -1245,3 +1247,98 @@ headless 路径的已知竞态（可接受）：若 session open/close 与 headl
 §13.3 已禁止"P-2 定时 patch ProjectState"（后台 task 定时 `EditSession.updateElement`）。脚本系统 `setElementProperty` 走 `ElementPropertyApplier` 双路径（§17.4），**不经 `EditSession.updateElement`**（不进 history 栈 / 不触发 WS 编辑流量）——属于 P-1 渲染期内嵌路径的合规延伸，**不是 P-2 反模式**。
 
 脚本的正确定位：**条件分支 + 副作用**的上层调度器，使用时间轴（作为可播放素材）和变量（作为状态载体），不绕过这两个子系统直接写渲染状态。
+
+---
+
+## 18. `.canvas` 工程导入 / 导出（0.8 Part A 引入）
+
+`.canvas` 是 HikariCanvas 的工程档格式——一个普通 zip，内含 `manifest.json`（spec/kind/wall 尺寸等元信息）+ `project.json`（整棵 `ProjectState`，多层 + 时间轴）+ 可选 `scripts.json`（墙脚本规则数组）+ 可选 `thumbnail.png`（256×128 缩略图）+ `assets/<hash>.png`（工程引用到的图片字节）。完整档案布局与 manifest 字段见 `docs/import-export.md`；本节只讲两条数据流与信任边界。
+
+> **信任边界（核心纪律）**：**导出在前端、导入在后端**。导出只是把已在内存的可信状态打成 zip 让浏览器下载，不经服务器；导入收的是用户上传的不可信 zip，所有防御（zip 炸弹 / 路径穿越 / magic 校验 / 元素与脚本重校验 / 配额）一律在 Java 侧做，前端不参与任何安全判定。
+
+### 18.1 导出数据流（前端 fflate，不经服务器）
+
+导出是纯前端动作（`web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`），用 **fflate** 在浏览器里 `zipSync` 客户端打包，再触发下载。服务器不参与打包，唯一的网络往返是逐张拉图片字节（复用已有的图片下载端点）。
+
+```
+useProjectExport.exportProject()
+        │
+        ├─ collectImageHashes(state)：扫所有 image 元素的 source hash（去重）
+        │       │
+        │       └─ 逐 hash fetch GET /api/upload/{hash}?sessionId=...  ← 唯一服务器往返
+        │              （401/404/网络错误 → 静默跳过该图，导出不中断）
+        │
+        ├─ renderExportThumbnail(state) → 256×128 thumbnail.png（缩略图，best-effort）
+        │
+        ├─ buildManifest(state, …)：spec=CANVAS_SPEC(=1)、kind=project、wall 尺寸、
+        │                            plugin_version 用 ready 时后端上报的 serverVersion（缺则省略）
+        │
+        ├─ scripts.json：useScriptStore().listSorted（服务端顺序的只读快照）；无脚本则省略
+        │
+        └─ assembleCanvasZip(...)：fflate zipSync({ manifest.json, project.json,
+                                    [scripts.json], [thumbnail.png], assets/<hash>.png }, level 6)
+                │
+                └─ downloadBlob(zip, "<name>.canvas")  ← 浏览器直接下载，不上传
+```
+
+**关键不变量：**
+- 前端 `CANVAS_SPEC = 1` 与后端 `ProjectImporter.CANVAS_SPEC_MAX = 1` 对齐；后端只接受 `spec ≤ MAX`，更高版本回 `IMPORT_SPEC_UNSUPPORTED`（提示升级插件）。
+- 导出**不打安全闸**——它信任本端内存里的 `ProjectState`；所有炸弹 / 穿越 / 解码防御都留给导入侧。
+- 缺图不致命：任一图片拉取失败优雅跳过，导出照常出一个不含该图字节的 `.canvas`。
+
+### 18.2 导入数据流（后端 `canvasfile` 包，信任边界所在）
+
+导入端点 `POST /api/project/import`（`web/ProjectImportHandler`）收 multipart `file` → 鉴权（sessionId 对应活 session + 该会话已绑 wall）→ 权限（live `Player.hasPermission("canvas.edit")`，玩家离线即 fail-closed 拒）→ 调 `ProjectImporter.importInto`。`canvasfile` 包按职责拆成单一职责的零件，`ProjectImporter` 把它们串成一条编排链：
+
+| 零件 | 职责 |
+| --- | --- |
+| `CanvasArchive` | zip 流式安全解包：三闸（包 / 单条目 / 解压总量上限，单位由 `ImportConfig` 的 MB 换算）+ 边读边计数（不信 `entry.getSize()`）+ 路径校验（拒 `..` / 绝对路径 / 反斜杠 / NUL）+ 顶层白名单（`manifest.json` / `project.json` / `scripts.json` / `thumbnail.png` / `assets/`） |
+| `CanvasManifest` | 解析 `manifest.json`，校验 `spec`（>0 且 ≤ `CANVAS_SPEC_MAX`，否则 `IMPORT_SPEC_UNSUPPORTED`）、`kind == project`、`wall` 尺寸合法；宽松忽略未知字段 |
+| `ProjectMaterializer` | 把不可信 `project.json` 反序列化成 `ProjectState`（`@JsonCreator` 处理 v1/v2/v3 迁移），与会话当前墙尺寸做**匹配**（工程不得大于墙，否则 `IMPORT_SIZE_MISMATCH`），并对每个元素跑 `ElementValidator`（不信任任何元素数值，校验失败归 `IMPORT_MALFORMED`） |
+| `AssetIngest` | `assets/*.png` 逐张安全摄入，走与图片上传**同等**的防御链：magic bytes 校验 → ImageIO 隔离解码（独立 daemon 线程 + 200ms 超时 + 解码前 8192 头部尺寸预检拦分配型炸弹）→ 规范化 PNG 后**按内容重算 hash**（不信文件名）→ per-hash 锁 + SERIALIZABLE 配额事务落库落盘。任一张失败**只跳过该张、不中止导入** |
+| `ScriptImporter` | 导入 `scripts.json`：每条规则**重绑到目标墙**（经 `ScriptStore.create` 生成新 `sr-<id>` + 强制 wallId）+ **全量重校验**（结构 `ScriptRuleValidator` + 条件语法 `ConditionEvaluator.checkSyntax`）+ 命令模板缺失检查（缺则 `script-command-blocked` 但不跳过，运行期判 Blocked）+ 落 `wall_scripts`；配额超限 `script-quota` 即停 |
+| `ProjectImporter` | **编排**：把上述零件串成完整导入链 + 孤儿轨丢弃 + 灌入会话 + 广播 / 投影 / 持久化 / 留痕（见下） |
+
+`ImportWarning`（非致命提示）/ `ImportResult`（含 warnings 列表）/ `CanvasImportException`（致命失败，带稳定 `IMPORT_*` 码供端点映射 HTTP status）是这条链的公共数据载体。
+
+```
+POST /api/project/import (multipart file, sessionId)
+        │
+ProjectImportHandler：sessionId → 活 session（带 wall）+ canvas.edit（live Player，离线 fail-closed）
+        │
+        ▼
+ProjectImporter.importInto(session, canvasBytes, uploader)
+        │
+   1) CanvasArchive.unpack ── 流式安全解包（三闸 + 路径校验 + 白名单）
+   2) CanvasManifest.parse ── 校验 spec ≤ MAX、kind、wall 尺寸
+   3) ProjectMaterializer.materialize ── project.json → 校验过的 ProjectState
+            └─ 尺寸匹配当前墙（超墙 → IMPORT_SIZE_MISMATCH）+ 逐元素 ElementValidator
+   4) AssetIngest.ingestAll ── assets/*.png 逐张摄入（magic + 200ms 隔离解码 + 8192 预检 + 配额 + 落 hash）
+            └─ 摄入张数 < 请求张数 → asset-quota warning（差额跳过，不中止）
+   5) 孤儿关键帧轨丢弃 ── timeline 里引用不存在 elementId 的 track 剔除 + orphan-track-dropped warning
+   6) EditSession.replaceProject(imported) ── 整体替换会话工程，【保留多层 + 时间轴】
+   6.5) ScriptImporter.importScripts ── scripts.json 重绑目标墙 + 重校验 + 落 wall_scripts（脚本 wall-scoped，不进 snapshot）
+   7) push.pushSnapshot ── 全量快照广播下行（照 EditOpDispatcher OkSnapshot 分支，前端编辑器刷新）
+   7b) ProjectionThrottler.submit(sessionId, dirty) ── 游戏内地图全画布重绘（否则玩家要等墙重载才见新内容）
+   8) wallRepo.updateState ── 持久化（照 SessionManager#persistWall 的 DB 写）
+   9) auditLog.record("PROJECT_IMPORT", …) ── 留痕（wall_id / spec / elements / assets）
+        │
+        ▼
+   ImportResult{ warnings: [...] } → ctx 200 { ok:true, warnings }
+   （CanvasImportException → IMPORT_* 码映射 HTTP：ZIP_TOO_LARGE→413、
+     SPEC_UNSUPPORTED/SIZE_MISMATCH→409、BAD_ENTRY/MALFORMED→400）
+```
+
+`EditSession.replaceProject` 是导入专用的**保留多层**整体替换——区别于模板套用走的 `replaceContent`（把内容拍平成单层）；它采用 imported 的 canvas + 整棵 layers 树 + timelines + tweenFps，深拷贝 layers（替换后会话 state 与传入对象不再共享可变集合），bump version 并把替换前状态压 undo 栈，返回结构跳变 `OkSnapshot`。
+
+### 18.3 装配（依赖注入）
+
+- `HikariCanvas` bootstrap 处 `new AssetIngest(...)`，**复用已装配的图片栈**（`imageStorage` / `imageQuota` / `imageDao` / `wallRepo` / `jdbi`——与 `UploadHandler` 同一套），把它作为构造参数传给 `WebServer`。
+- `WebServer` 构造内部 `new ProjectImporter` / `new ScriptImporter` / `new ProjectImportHandler`：`ProjectImporter` **复用 dispatcher 同款 push / throttler seam**——`OpPushCallback push`（与 `EditOpDispatcher` 共享的服务端主动推送）做 snapshot 广播、与 `EditOpDispatcher` **同一实例**的 `ProjectionThrottler` 做游戏内重绘、`wallRepo` 做持久化，收尾范式照搬 `EditOpDispatcher` 的 OkSnapshot 分支。
+- 可空降级：`AssetIngest` 或导入限额任一缺失 → 不注册 `/api/project/import` 端点；`ScriptStore` 未配 → `scriptImporter` 为 null，工程档里的 `scripts.json` 被静默忽略（工程本体照常导入）；`auditLog` / `throttler` 为 null 时对应副作用 best-effort 跳过（不影响 replaceProject / pushSnapshot / 持久化主链，便于裸装配测试）。
+
+### 18.4 已知限制
+
+- **导入未走 `SessionManager.persistWall` 全链**：导入路径只投静态像素帧（`ProjectionThrottler.submit`），`persistWall` 里的 `AnimationTicker` 自动播刷新与触发器 rebuild **不**在导入时触发。故导入工程里的时间轴动画不会自动起播——需手动播一次，或随墙下次加载 / 会话回收时自然起播。
+- **`thumbnail.png` 仅导出生成、导入侧不读取**（缩略图是给文件管理 / 未来工程库用的，导入不依赖它）。
+- **`assets/icons/*.svg` 仅白名单接纳、不摄入**——`AssetIngest` 只摄 `assets/<file>.png`，SVG 条目虽过解包白名单但被忽略。SVG 导入是 **Part B**（尚未实装），本节只覆盖 `.canvas` 工程档的 Part A 实装。

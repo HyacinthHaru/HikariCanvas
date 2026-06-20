@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part A 文档回填：4 份契约同步到实装（4 子代理并行）
+
+Part A 代码完成后，把契约文档回填到与代码一致（文档先行纪律，避免滞后）。4 子代理并行回填，各先读真实代码核实、据实纠正清单错误：
+- **data-model.md §4**：去「未实装」→ 已实装；§4.1 结构加 `scripts.json` + `assets/icons`；§4.4 孤儿轨定稿「丢弃+warn」；§4.5 JSZip→**fflate**；新增 §4.6 `scripts.json` 形态；§5.1 config 加 `import.canvas-max-*` 三行。
+- **security.md §4.4/§13.5/T10**：补 `AssetIngest` 六步防御链 + `ScriptImporter` 重校验链；据实写明 thumbnail 导入侧不读、配额计入。
+- **protocol.md §9.5/§6.1**：新增 `POST /api/project/import` 端点契约 + 10 个错误码→HTTP status 表 + 导入后 `state.snapshot`/投影下行。
+- **architecture.md §18 新增**：导入/导出数据流 + `canvasfile` 包职责 + `ProjectImporter` 编排链 + 装配 + 信任边界。
+
+**子代理据实纠正的实况（重要）**：
+- **warning kind 实装只 5 个产出**（`asset-quota`/`orphan-track-dropped`/`script-invalid`/`script-command-blocked`/`script-quota`）；`missing-font`/`missing-variable`/`missing-icon`/`animation-flattened` 仅 Javadoc 预留、代码未触发（plan §3.2「扫缺字体/变量/图标」**未实装**——待决定补否）。
+- `thumbnail.png` 仅导出生成、导入侧不读取/不校验。
+- 路径校验实为拒 `..`/绝对/反斜杠/NUL（**无 symlink 检查**，原文措辞失实已修）。
+- `assets/icons/*.svg` 仅白名单接纳、不摄入（SVG 是 Part B 未实装）。
+
+无代码改动。关联：`data-model`/`security`/`protocol`/`architecture` 4 文档 +300/−39。
+
+---
+
 ## 2026-06-17 · 0.8-A4 脚本纳入落地（Part A 19 task 全部完成）
 
 A4 共 3 task：implementer 实现+测试、controller review+签名提交。前端 10 测试 + 后端 `ScriptImporterTest` 8 + `ProjectImporterTest`/`HandlerTest` 全绿，vue-tsc 无新错误。

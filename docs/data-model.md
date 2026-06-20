@@ -1,11 +1,13 @@
 # 数据模型
 
-**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14；**代码对齐回填 · 2026-06-14（迁移至 V017）**
-**适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式（规划中，未实装）、迁移策略
+**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14；代码对齐回填 · 2026-06-14（迁移至 V017）；**`.canvas` 导入导出回填 · 2026-06-19（0.8 Part A 实装）**
+**适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式（0.8 实装）、迁移策略
 
 本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。
 
-> **代码对齐说明（2026-06-14）**：本文档与当前代码（`plugin/src/main/resources/db-migrations/` 最高 V017、`plugin/src/main/java/moe/hikari/canvas/storage/`、`deploy/FrameDeployer.java`）逐条核对回填。当前 DB schema 已演进到 **V017**（V009 跳号未落地脚本）。`.canvas` 工程文件格式（§4）为**规划设计，当前版本完全未实装**（后端无 Zip 流、前端无 JSZip、无导入导出 UI）。
+> **代码对齐说明（2026-06-14）**：本文档与当前代码（`plugin/src/main/resources/db-migrations/` 最高 V017、`plugin/src/main/java/moe/hikari/canvas/storage/`、`deploy/FrameDeployer.java`）逐条核对回填。当前 DB schema 已演进到 **V017**（V009 跳号未落地脚本）。
+
+> **`.canvas` 导入导出回填（2026-06-19）**：`.canvas` 工程文件格式（§4）已在 **0.8 Part A 落地**（契约总纲见 `docs/import-export.md`）。导出为纯前端（`web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 打 zip）；导入为后端 `POST /api/project/import`（包 `moe.hikari.canvas.canvasfile` + `web/ProjectImportHandler`）。`.canvas spec = 1`。本节据已实装代码逐条核对回填。**仍未实装的是 Part B（SVG → 原生元素导入）**——`assets/icons/*.svg` 的写入 / 摄入属 Part B，详见 §4.1 注。
 
 > **M5.5 重构（2026-04-27）**：合并 `drafts` + `sign_records` → 单一 `walls` 表；`pool_maps.state` 由三态收为两态（FREE/RESERVED）；废止 commit 流程，新增 `published_at` 标签。
 
@@ -22,7 +24,7 @@
 | 文件：`templates/*.yml` | 模板定义 | 人工管理 |
 | 文件：`user-templates/<uuid>/` | 玩家上传模板（v1.x） | 按玩家 uuid 组织 |
 | 文件：`fonts/*.ttf` / `*.woff2` | 字体 | 人工管理 |
-| 文件：`.canvas` 工程导出 | 玩家导出的工程（**规划中，当前未实装**） | 外部管理 |
+| 文件：`.canvas` 工程导出 | 玩家导出的工程（0.8 实装；纯前端 fflate 打包下载，不经服务端存储） | 外部管理 |
 | **文件：`uploads/<sha256[:16]>.png`（M13）** | 玩家上传的图片（hash 内容寻址，跨 wall 引用同一文件不重复存） | 按 last_used_at LRU 清理；删 wall 不立即清 |
 
 ---
@@ -537,30 +539,39 @@ CREATE INDEX IF NOT EXISTS idx_wall_scripts_wall ON wall_scripts(wall_id);
 
 ---
 
-## 4. `.canvas` 工程文件格式（规划中 · 当前版本未实装）
+## 4. `.canvas` 工程文件格式（0.8 Part A 实装）
 
-> **⚠️ 实装状态（2026-06-14 核对）：本节描述的 `.canvas` zip 导出 / 导入功能当前完全未实装。**
+> **实装状态（2026-06-19 核对）：本节描述的 `.canvas` zip 导出 / 导入功能已在 0.8 Part A 落地。**
 > 代码核对结论：
-> - 后端无任何 `java.util.zip`（ZipOutputStream / ZipInputStream）使用；
-> - 前端 `web/` 无 `JSZip` / `file-saver` 依赖（`package.json` / `package-lock.json` 均无）；
-> - 前端无「导出工程」/「导入 `.canvas`」UI 入口或下载逻辑。
+> - 导出：纯前端 `web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 的 `zipSync` 打 zip（无服务端往返、无 JSZip）；
+> - 导入：后端 `POST /api/project/import`（`web/ProjectImportHandler` → `canvasfile/ProjectImporter` 编排，`canvasfile/CanvasArchive` 流式安全解包用 `java.util.zip.ZipInputStream`）；
+> - 前端有「导出工程」（TopBar 更多菜单）/「导入 `.canvas`」（`ImportProjectModal`）UI 入口。
 >
-> 工程文件扩展名 `.canvas` 仍是项目标识（见 CLAUDE.md），下文 §4.1–§4.5 为**规划设计**，作为未来实装的契约保留，**不代表现状**。当前玩家作品仅以 `walls.project_json` blob 形式存于服务端 DB，跨服务器分享需走 DB 级备份/迁移，无单文件导出。
+> 契约总纲见 `docs/import-export.md`。下文 §4.1–§4.6 据已实装代码回填。
+>
+> **仍属 Part B（未实装）**：SVG → 原生元素导入（D5/D6，前端 `useSvgImport` + 后端 SVG 清洗落 `assets/icons/`）。故 `assets/icons/*.svg` 当前**只被解包白名单接纳、不被任何代码写入或摄入**（见 §4.1 注）。
 
-玩家在编辑器中（规划功能）可「导出工程」供离线保存 / 分享。
+玩家在编辑器中可「导出工程」供离线保存 / 分享，也可「导入 `.canvas`」整体替换当前会话工程。
 
-### 4.1 文件结构（规划）
+### 4.1 文件结构
 
-`.canvas` 是 **zip 压缩包**，扩展名 `.canvas`。内部：
+`.canvas` 是 **zip 压缩包**，扩展名 `.canvas`。内部（解包白名单见 `CanvasArchive.ALLOWED_TOP` + `ASSETS_PREFIX`）：
 
 ```
 mysign.canvas
 ├── manifest.json            # 必选
 ├── project.json             # 必选：完整 ProjectState
+├── scripts.json             # 可选：ScriptRule[]（0.8-A4 新增；无脚本则省略）
 ├── thumbnail.png            # 可选：预览缩略图 256×128
 └── assets/
-    └── (玩家自定义图片资源，若使用 icon 元素)
+    ├── <sha256[:16]>.png    # 工程引用的上传图片（内容寻址，与服务端命名一致）
+    └── icons/<id>.svg       # 工程引用的用户自定义图标（见下注，Part B 才写/读）
 ```
+
+- **必选项缺失 → `IMPORT_MALFORMED`**：解包后若缺 `manifest.json` 或 `project.json`，`CanvasArchive.unpack` 直接拒（`CanvasArchive.java`）。
+- **`assets/<hash>.png`**：导出时 `collectImageHashes` 扫所有图层的 image 元素 `source` 去重，逐张拉字节塞进包；导入时逐张走与上传同等的不可信防御链落 hash（`AssetIngest`，见 §4.4）。
+- **`assets/icons/<id>.svg`（Part B）**：解包白名单**接纳** `assets/icons/<file>` 条目（`CanvasArchive.isSafeEntryName`），但当前导出**不写**（`useProjectExport` 只收 image hash、不收 `user/<id>` 图标）、导入摄入器**显式跳过**（`AssetIngest.isAssetPng` 只认 `assets/<file>.png`，注释明确「排除 `assets/icons/*.svg`」）。SVG 图标的写入 / 清洗 / 落盘是 **Part B**（`import-export.md §2.4/§3.3/§5.3`），结构图保留该路径作前向占位。
+- **前向兼容**：老导入器遇到未知顶层条目应忽略而非报错（当前白名单外条目由 `isSafeEntryName` 拒为 `IMPORT_BAD_ENTRY`，白名单内的可选条目缺失则正常跳过）。
 
 ### 4.2 `manifest.json`
 
@@ -592,24 +603,64 @@ mysign.canvas
 
 v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引入，见 §2.4.2）。导入老的 v1/v2 `project.json`（无这两个字段）时按静态处理（`timelines` 读为 `null`），无须迁移。时间轴是工程状态的一部分（序列化进 `ProjectState`），故 `.canvas` 导出天然带上它，无需 `assets/` 之类外置资源承载。
 
+> **脚本不进 `project.json`**：墙脚本独立存 `wall_scripts` 表（不在 ProjectState，见 §2.10 / 脚本总纲 D7），故 `.canvas` 用独立的 `scripts.json` 条目承载（0.8-A4 新增）。形态见 **§4.6**。
+
 ### 4.4 导入语义
 
-玩家在编辑器选「导入 `.canvas`」：
-1. 解析 manifest，校验 `spec` 与当前插件兼容
-2. 加载 `project.json` 替换当前工程状态
-3. 若 `project.canvas` 超出当前会话墙面尺寸 → 提示并中止，让玩家开新会话
-4. 若包含 `assets/`（v1.x 图标功能），文件由插件临时保存，会话结束清理
-5. （0.6 引入）若 `project.json` 含 `timelines[]`，其 `tracks` 的 key 是 elementId。导入到当前工程时若某条 track 引用了**不存在的 elementId**（孤儿关键帧轨，常见于只导入了部分元素或元素被删过的工程），处理方式**留实现期回填**（见 §10）。**建议默认**：丢弃孤儿轨 + `log warn`，不让坏引用进运行期（Ticker 按 elementId 查不到元素会空插值）；但此为待定项，最终丢弃 vs 保留以 §10 回填为准。
+导入是后端 `POST /api/project/import`（multipart 收 `.canvas` 字节），鉴权 `canvas.edit`（fail-closed）。编排见 `ProjectImporter.importInto`（流程契约 `import-export.md §3.2`）：
+
+1. **流式安全解包**（`CanvasArchive.unpack`）：三闸边解边计数（包 / 单条目 / 总解压，闸值来自 config `import.*`，见 §5.1）+ 条目名安全校验（无 `..` / 绝对路径 / 反斜杠 / NUL）+ 白名单条目（§4.1）；缺 `manifest.json` / `project.json` → `IMPORT_MALFORMED`。
+2. **解析 manifest**（`CanvasManifest.parse`）：校验 `spec`（缺失/≤0 → `IMPORT_MALFORMED`；> `CANVAS_SPEC_MAX`(=1) → `IMPORT_SPEC_UNSUPPORTED` 提示升级插件）、`kind=="project"`、`wall.width/height>0`。
+3. **物化 `project.json` → `ProjectState`**（`ProjectMaterializer.materialize`）：复用既有 `@JsonCreator` + 元素/数值校验栈，不信任文件内任何数值；并与**当前会话墙尺寸**匹配，超出 → `IMPORT_SIZE_MISMATCH` 中止，提示开匹配尺寸新会话。
+4. **`assets/*.png` 摄入**（`AssetIngest.ingestAll`）：逐张走 magic + ImageIO 隔离解码（200ms 超时 + 头部尺寸预检）+ 按内容重算 hash + 配额事务落盘；单张缺/拒**静默跳过**（计入图片配额，防绕过上传限频），差额产出 `asset-quota` warning。
+5. **孤儿关键帧轨丢弃 + warn**（`ProjectImporter.stripOrphanTracksAndCollect`）：若 `project.json` 含 `timelines[]`，其 `tracks` 的 key 是 elementId；对照所有图层的 elementId 集合，引用**不存在 elementId** 的 track（孤儿轨，常见于只导入了部分元素或元素被删过的工程）**剔除**，每条加一条 `orphan-track-dropped` warning。**此前 §10 留待定的「丢弃 vs 保留」现定稿为：丢弃 + warn**（不让坏引用进运行期，否则 Ticker 按 elementId 查不到元素会空插值）。
+6. **整体替换会话工程**（`EditSession.replaceProject`）：保留多层 / 时间轴。
+7. **`scripts.json` 导入**（若包内含且会话已绑墙，见 §4.6）。
+8. 全量快照广播（`pushSnapshot`）+ 游戏内地图全画布重绘（`throttler.submit`）+ 持久化（`wallRepo.updateState`）+ `audit PROJECT_IMPORT`。
+
+> **已知限制（导入路径不起播动画）**：throttler 只投静态像素帧；`persistWall` 全链的 Ticker 自动播 / 触发器 rebuild **不**在导入路径触发，故导入工程里的时间轴动画不会自动起播——需手动播一次，或随墙下次加载 / 会话回收时自然起播。
+>
+> **导入成功响应** `{ ok:true, warnings:[{kind, detail}…] }`；warning 不阻断，`kind` ∈ `asset-quota` / `orphan-track-dropped` / `script-invalid` / `script-command-blocked` / `script-quota`（错误码 → HTTP status 见 `import-export.md §4`：`IMPORT_ZIP_TOO_LARGE`→413、`IMPORT_SPEC_UNSUPPORTED`/`IMPORT_SIZE_MISMATCH`→409、`IMPORT_BAD_ENTRY`/`IMPORT_MALFORMED`→400）。
 
 ### 4.5 导出语义
 
-编辑器「导出」动作：
-1. 序列化当前 `ProjectState` → `project.json`
-2. 渲染当前 RGBA 画布缩略图到 `thumbnail.png`（可空）
-3. manifest 填充
-4. 打 zip → 浏览器下载
+编辑器「导出」动作（纯前端 `useProjectExport.exportProject` + `canvasFile.ts`，无服务器往返）：
+1. 取当前 `ProjectState`；`collectImageHashes` 扫图层 image 元素 → 逐张走现有图片下载端点 `GET /api/upload/{hash}?sessionId=…` 拉字节塞 `assets/<hash>.png`（任何失败优雅跳过，不中断导出）
+2. 渲染缩略图 256×128（`renderExportThumbnail`）→ `thumbnail.png`（可空）
+3. `buildManifest` 填充（`spec=CANVAS_SPEC=1`、`kind="project"`、`wall{width,height}` 等；`plugin_version` 取 ready 时后端上报的 `serverVersion`，缺省省略）
+4. 取当前墙脚本 `useScriptStore().listSorted` → `scripts.json`（非空才写，见 §4.6）
+5. `assembleCanvasZip` 用 **fflate** 的 `zipSync`（`level: 6`）打 zip → `downloadBlob` 触发 `<name>.canvas` 下载
 
-导出**不**经过服务器存储，完全在浏览器端用 JSZip 打包。（**注：JSZip 依赖与该导出链路当前均未引入 / 未实装；本小节为规划设计。**）
+> **打包库 = fflate**（`web/package.json` 依赖 `fflate@0.8.3`，非 JSZip；项目从未引入 JSZip / file-saver）。导出**不**经过服务器存储，完全在浏览器端完成。
+
+### 4.6 `scripts.json` 形态（0.8-A4 新增）
+
+`scripts.json` = 一个 JSON 数组，每项是一条 `ScriptRule`（record 形态以 `scripting.md §2.1` 为权威：`id` / `wallId` / `enabled` / `name` / `trigger` / `actions`（Action 树，含 If 嵌套）/ `blockLayout`）。墙脚本独立存 `wall_scripts`（不在 ProjectState，§2.10 / D7），故用独立条目承载。无脚本时**省略**该条目（`assembleCanvasZip` 的 `scriptsJson` 可选）。
+
+```jsonc
+// scripts.json = ScriptRule[]（见 scripting.md §2.1）
+[
+  {
+    "id": "sr-1a2b3c4d",
+    "wallId": "<导出时的 wallId>",   // 导入时由后端重绑到当前会话墙
+    "enabled": true,
+    "name": "比分牌",
+    "trigger": { "type": "playerKill" },
+    "actions": [ /* … Action 树 … */ ],
+    "blockLayout": "<前端积木摆放坐标 JSON，后端原样存取>"
+  }
+]
+```
+
+**导入语义**（`ScriptImporter.importScripts`，§4.4 步骤 7；契约 `import-export.md §2.3` / `security.md §13.5`）：
+
+- **`wallId` 重绑**：文件内的 `id` / `wallId` 在目标服无意义；逐条经 `ScriptStore.create` 落库时**忽略 incoming id/wallId**、生成全新 `sr-<8hex>` 并强制绑定到**当前会话墙**。
+- **全量重校验**（不信任文件内 `rule_json`）：结构校验 `ScriptRuleValidator.validate`（不过 → 跳过 + `script-invalid`）+ 递归 `ConditionEvaluator.checkSyntax` 预检所有 `if/waitUntil/repeatUntil` 条件语法（不过 → 跳过 + `script-invalid`）。
+- **命令模板缺失**：`runCommand.templateId` 在目标服 config 不存在 → `script-command-blocked`（detail=templateId），**不跳过**、规则照常落库（运行期 `CommandTemplateEngine` 判为 Blocked、编辑器灰显）。
+- **落 `wall_scripts`**：`ScriptStore.create`；单墙配额超 `scripts.max-rules-per-wall`（默 16）→ `script-quota` warning + **停止**处理后续规则。
+- 整个 `scripts.json` 无法解析（非数组等）→ 单条 `script-invalid` warning，**不抛**（脚本导入失败不中断整次工程导入）。
+
+> **装配可空**：`ProjectImporter` 的 `ScriptImporter` 可为 null（`ScriptStore` 未配的旧装配 / 无脚本子系统）；此时包内 `scripts.json` 被静默忽略，工程本体照常导入。
 
 ---
 
@@ -631,8 +682,13 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 | `limits.ws-messages-per-second` | int | 1~1000 | `20` |
 | `limits.text-max-length` | int | 1~4096 | `256` |
 | `limits.canvas-max-maps` | int | 1~64 | `16` |
+| `import.canvas-max-mb` | int | ≥ 1 | `10` |
+| `import.canvas-max-entry-mb` | int | ≥ 1 | `10` |
+| `import.canvas-max-total-mb` | int | ≥ 1 | `50` |
 
 所有 duration 支持 `s` / `m` / `h` 后缀。
+
+> **`import.*`（0.8）**：`.canvas` 导入 zip 三闸，单位 **MB**，防恶意大文件 / zip 炸弹（`HikariCanvasConfig.ImportConfig` + `config.yml` `import:` 段）。下界均为 `1`（`Math.max(1, …)` 兜底）。`canvas-max-mb` = 整个包上限（超 → 413 `IMPORT_ZIP_TOO_LARGE`）；`canvas-max-entry-mb` = 单个内部文件解压上限（边读边计数，不信声明大小）；`canvas-max-total-mb` = 所有内部文件解压总和上限（防多文件累加炸弹）。`CanvasArchive` 把 MB × 1024×1024 换算成 byte 后施闸。
 
 ---
 
@@ -644,7 +700,7 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 - **DB schema 版本**：单调整数，每次变更 +1
 - **模板 spec 版本**：独立整数，见 `template-spec.md`
 - **协议版本**：独立整数，见 `protocol.md`
-- **.canvas spec 版本**：独立整数
+- **.canvas spec 版本**：独立整数。**0.8 首发 = `1`**（前端 `CANVAS_SPEC` / 后端 `ProjectImporter.CANVAS_SPEC_MAX` 均 = 1，§4.4–§4.5）；导入 `spec > 当前支持` → `IMPORT_SPEC_UNSUPPORTED`
 
 ### 6.2 DB 迁移流程
 
@@ -841,5 +897,5 @@ LIMIT 10;
 - [ ] **M5.5 引入**：wall delete 时是否需要保留 audit log 一份 project_json 备份（防误删）
 - [ ] `audit_log` 是否分库以免主 DB 膨胀
 - [ ] 多服务器共享 DB 的场景（暂不支持，但考虑未来是否兼容）
-- [ ] **0.6 引入**：孤儿关键帧轨（导入的 `timelines[].tracks` 引用当前工程不存在的 elementId）丢弃 vs 保留（§4.4；建议默认丢弃 + log warn，待回填裁决）
+- [x] **0.6 引入 / 0.8 定稿**：孤儿关键帧轨（导入的 `timelines[].tracks` 引用当前工程不存在的 elementId）丢弃 vs 保留——**已定稿为「丢弃 + `orphan-track-dropped` warn」**（0.8 Part A 实装，`ProjectImporter.stripOrphanTracksAndCollect`，见 §4.4 步骤 5）
 - [ ] **0.6 引入**：`timelines` 含大量关键帧时 `project_json` blob 体积是否需要上限约束（单 wall 一个 blob，关键帧数无天然边界；与 `limits.*` config 段的关系待定）

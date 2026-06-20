@@ -564,7 +564,7 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `INVALID_ELEMENT` | 元素 id 不存在或属性非法 | ❌ |
 | `INVALID_ALIAS_FORMAT` | wall.alias 不满足 `[A-Za-z0-9_-]{2,32}`（M11） | ❌ |
 | `PERMISSION_DENIED` | 权限不足 | ❌ |
-| `FORBIDDEN` | M15.3 鉴权方案 C：lock-aware open / template.* / wall.lock/unlock 非 owner（或缺管理员 bypass）；与 PERMISSION_DENIED 区别是基于运行期身份（owner_uuid / lock 状态）而非静态权限节点 | ❌ |
+| `FORBIDDEN` | M15.3 鉴权方案 C：lock-aware open / template.* / wall.lock/unlock 非 owner（或缺管理员 bypass）；与 PERMISSION_DENIED 区别是基于运行期身份（owner_uuid / lock 状态）而非静态权限节点。0.8-A 起 `POST /api/project/import` 缺 `canvas.edit`（含玩家离线 fail-closed）也用此码（HTTP 403） | ❌ |
 | `SESSION_CLOSED` | 会话已关闭 | ❌ |
 | `ALIAS_TAKEN` | wall.alias 已被其他 wall 占用 | ❌ |
 | `WALL_NOT_FOUND` | wall.* op 但当前 session 没绑定 wall（不应发生） | ❌ |
@@ -594,6 +594,15 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `NOT_FOUND` | M14：template.delete / template.feature / template.unfeature 指向不存在 templateId | ❌ |
 | `DB_FAILED` | M14：TemplatePublisher 写 SQLite 失败（templates upsert / featured update） | ✅ |
 | `WRITE_FAILED` | M14：TemplatePublisher 写 YAML 文件失败（user-templates/<uuid>/*.yml） | ✅ |
+| `NO_SESSION` | 0.8-A：`POST /api/project/import` 缺 sessionId 或会话未知（HTTP 401） | ❌ |
+| `SESSION_NOT_READY` | 0.8-A：`POST /api/project/import` 会话无可写活动墙（HTTP 409） | ❌ |
+| `NO_FILE` | 0.8-A：`POST /api/project/import` 缺 `file` multipart 字段（HTTP 400） | ❌ |
+| `IMPORT_ZIP_TOO_LARGE` | 0.8-A：`.canvas` 包体积 / 单条或总解压量超限，防 zip 炸弹（HTTP 413） | ❌ |
+| `IMPORT_SPEC_UNSUPPORTED` | 0.8-A：`manifest.spec` 高于本插件支持的最高版本，需升级插件（HTTP 409） | ❌ |
+| `IMPORT_SIZE_MISMATCH` | 0.8-A：工程画布尺寸与目标墙尺寸不一致（HTTP 409） | ❌ |
+| `IMPORT_BAD_ENTRY` | 0.8-A：`.canvas` zip 含非法条目名（路径穿越等，HTTP 400） | ❌ |
+| `IMPORT_MALFORMED` | 0.8-A：`.canvas` zip 无法解析 / 缺 manifest.json 或 project.json / 结构非法（HTTP 400） | ❌ |
+| `INTERNAL` | 0.8-A：`POST /api/project/import` 编排期意外运行期异常兜底（HTTP 500；不静默 500-without-body） | ❌ |
 | `UNEXPECTED` | 服务端断言失败（如 brush op 返了 OkSnapshot），通常是 bug，含上下文 | ❌ |
 | `INTERNAL_ERROR` | 服务器内部错误 | 视情况 |
 
@@ -908,6 +917,72 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 ```
 
 **错误**：`401` 未认证 / `403` 无权限 / `413` 太大 / `400` `UPLOAD_REJECTED`（含 reason）/ `429` 配额耗尽
+
+### `POST /api/project/import`（0.8-A）
+
+导入一个 `.canvas` 工程包（zip），**整体替换**当前会话绑定墙的工程内容（保留多层 / 时间轴语义）。后端 `ProjectImportHandler.handleImport` 处理；`WebServer` 注册此端点时要求 `AssetIngest` 与 `images` 导入配置（`ImportConfig`）均装配，**任一缺则该端点不注册**（请求 404）。
+
+请求体 `multipart/form-data`，字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `sessionId` | 是 | 当前活跃编辑会话 id（form param）；定位要导入的目标墙 |
+| `file` | 是 | `.canvas` 工程包（zip）。安全解包：条目名白名单 + 单条/总解压量上限（防 zip 炸弹），必须含 `manifest.json` + `project.json` |
+
+**鉴权 / 权限**：
+
+1. `sessionId` 必须对应一个活跃会话，且该会话已绑定可写墙（`wallId` / `editSession` / `projectState` 均就绪），否则分别 `401` / `409`。
+2. 权限节点 `canvas.edit`（导入是「整体替换工程」的破坏性写，与上传绑 `canvas.upload` 同理）。**fail-closed**：经 live `Player.hasPermission` 判定，玩家离线（拿不到在线 `Player`）一律视为无权限 → `403`。
+
+**响应**（`200 OK`）——导入成功（含「带降级」成功）：
+
+```json
+{ "ok": true, "warnings": [ { "kind": "asset-quota", "detail": "2 image(s) skipped (quota full or undecodable)" } ] }
+```
+
+`warnings` 为非致命提示列表（导入照常完成，仅告知某些内容被降级处理）；完全无损导入时为空数组 `[]`。每项 `{ kind, detail }`：`kind` 是稳定类别码（前端据此选大白话文案），`detail` 是该类别的具体对象（缺失字体名 / 被丢弃的 elementId 等），无对象时为空串。
+
+**warning `kind` 全集**：
+
+| kind | 含义 |
+| --- | --- |
+| `missing-font` | 引用的字体在本服未注册（保留位，当前实现未产出） |
+| `missing-variable` | 引用的变量在本服不存在（保留位，当前实现未产出） |
+| `missing-icon` | 引用的图标不在白名单 / 缺失（保留位，当前实现未产出） |
+| `script-command-blocked` | 脚本规则的 `runCommand` 命中未注册命令模板（detail = templateId）；**规则照常落库**，仅该命令运行期被拦 |
+| `script-invalid` | 脚本规则结构 / 条件语法校验失败，跳过该规则（整份 `scripts.json` 无法解析时返单条此 kind） |
+| `script-quota` | 导入脚本规则数超单墙上限（`scripts.max-rules-per-wall`），停止处理后续规则 |
+| `animation-flattened` | 动画被压平为静态（保留位，当前实现未产出） |
+| `orphan-track-dropped` | 关键帧轨引用了不存在的 elementId，该轨被丢弃（detail = elementId） |
+| `asset-quota` | 部分 `assets/*.png` 因配额满 / 不可解码被跳过（detail = 跳过张数） |
+
+> 上表为文档约定的完整集合（与 `ImportWarning` 类注释一致）。**当前实装实际产出 5 种**：`asset-quota` / `orphan-track-dropped` / `script-invalid` / `script-command-blocked` / `script-quota`；`missing-font` / `missing-variable` / `missing-icon` / `animation-flattened` 为预留 kind，代码暂未触发。前端按全集翻译即可。
+
+**错误**——失败响应统一为 `{ "error": <code>, "message": <人读原因> }` + 对应 HTTP status：
+
+| code | HTTP | 触发 |
+| --- | --- | --- |
+| `NO_SESSION` | 401 | 缺 `sessionId` 或会话未知 |
+| `SESSION_NOT_READY` | 409 | 会话没有可写的活动墙（未绑 wall / editSession / projectState） |
+| `FORBIDDEN` | 403 | 缺 `canvas.edit`（含玩家离线 fail-closed） |
+| `NO_FILE` | 400 | 缺 `file` multipart 字段 |
+| `IMPORT_ZIP_TOO_LARGE` | 413 | zip 体积 / 单条或总解压量超限（防 zip 炸弹） |
+| `IMPORT_SPEC_UNSUPPORTED` | 409 | `manifest.spec` 高于本插件支持的最高版本（提示升级插件） |
+| `IMPORT_SIZE_MISMATCH` | 409 | 工程画布尺寸与目标墙尺寸不一致 |
+| `IMPORT_BAD_ENTRY` | 400 | zip 内含非法条目名（路径穿越等） |
+| `IMPORT_MALFORMED` | 400 | zip 无法解析 / 缺 `manifest.json` 或 `project.json` / manifest / `project.json` 结构非法 / 读取上传文件失败 |
+| `INTERNAL` | 500 | 编排期意外运行期异常（兜底，不静默 500-without-body） |
+
+> 映射实现：`NO_SESSION` / `SESSION_NOT_READY` / `FORBIDDEN` / `NO_FILE` 由 handler 前置校验直接定 status；`IMPORT_*` 经 `ProjectImportHandler.statusFor` 映射（`IMPORT_ZIP_TOO_LARGE`→413、`IMPORT_SPEC_UNSUPPORTED`/`IMPORT_SIZE_MISMATCH`→409、其余 `IMPORT_*` 默认 400）；`INTERNAL` 为 catch-all 500。
+
+**导入成功后的下行语义**（两条独立通道，前端编辑器 + 游戏内地图都会刷新）：
+
+1. **WS 推 `state.snapshot`**：经 `push.pushSnapshot(session, projectState)` 向该会话推一帧完整工程快照（§5.2）；前端 `wsClient.handleSnapshot` 整体刷新编辑器状态。
+2. **游戏内全画布重绘**：经 `ProjectionThrottler.submit` 提交脏区投影，把新工程重绘到游戏内地图（否则玩家在游戏里要等墙重载才能看到新内容）。
+
+> 脚本是 wall-scoped 状态、与 `ProjectState` 解耦，不进 `state.snapshot`——`scripts.json` 仅落 `wall_scripts` 库。
+>
+> **SVG 导入（Part B）尚未实装**，本端点只收 `.canvas` 工程包。
 
 ### `GET /api/upload/{source}?session=<sessionId>`（M13；M16-P1.1 起强制鉴权）
 
