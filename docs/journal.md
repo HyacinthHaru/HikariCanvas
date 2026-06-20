@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part B 实施计划写就（SVG 矢量导入，20 task TDD）
+
+writing-plans + 2 子代理精确侦察（前端 SVG 栈 / 后端 path 栈）→ `docs/superpowers/plans/2026-06-20-0.8-partB-svg-import.md`。20 个 bite-sized TDD 任务：B0 fillRule 纵切(3) / B1 解析基础(4) / B2 归一化+编排(6，**MVP 闸 Task 13**) / B3 gradient+viewBox+位图(3) / B4 安全硬化(1) / B5 UI+双端一致+文档(3)。
+
+**侦察确认的关键事实**：后端 `PathParser` 已支持全 SVG path 文法（M/L/H/V/Q/T/C/S/A/Z + 弧分解 cubic），但 `PathDValidator` + 前端 `PathParser.ts` 只认 M/L/Q/C/Z → **d 归一化（A/S/T/H/V 展开）是前端必做纯函数**；**`fillRule` 前后端都没有**（D9 要新增 `PathElement.fillRule` 纵切 5 层，**无 db-migration**，可空默认 nonzero）；**无批量 op**（一组 SVG = N 条 `element.add`，N 次撤销）；**server-authoritative**（前端走 `ws.send('element.add')` 不 mutate store）。
+
+6 条固化决策 PB-1~PB-6（见文档 §决策摘要）。工时 ~70h（含 fillRule）。待执行（subagent-driven）。本条仅计划，无实现代码。
+
+---
+
 ## 2026-06-20 · 0.8 Part A review 补缺：导入时扫缺字体/图标/变量（missing-* warning）
 
 补 plan §3.2 step 8 要求、A2 批3 漏实装的 3 种 warning。新建 `canvasfile/MissingResourceScanner.java`（`scan(ProjectState): List<ImportWarning>`），在 `ProjectImporter.importInto` 的 materialize 之后、replaceProject 之前调用、`warnings.addAll`：
