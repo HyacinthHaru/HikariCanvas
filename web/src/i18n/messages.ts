@@ -35,11 +35,32 @@ export const messages = {
             moreTemplate: '存为模板',
             moreExport: '导出工程',
             moreImport: '导入工程',
+            moreSvgImport: '导入 SVG',
             moreSnap: '智能对齐',
             moreLog: '连接日志',
             moreHelp: '帮助 / 快捷键',
             moreSwitchLocale: 'Switch to English',
             moreTheme: '主题',
+        },
+        // 0.8 B5：SVG 矢量导入对话框
+        svgImport: {
+            svgImportTitle: '导入 SVG',
+            svgImportPick: '选择 SVG 文件',
+            svgImportDropHint: '或拖拽 .svg 到这里',
+            importing: '正在导入…',
+            done: (n: number) => n === 0
+                ? '没有找到可导入的矢量内容（可能所有图层都被锁定了）'
+                : `导入了 ${n} 个图形`,
+            failed: (code: string) => {
+                if (code === 'SVG_TOO_LARGE') return 'SVG 文件太大，超过了大小限制';
+                if (code === 'SVG_HAS_ENTITY') return 'SVG 文件含有不安全内容，已拒绝导入';
+                if (code === 'SVG_MALFORMED') return 'SVG 文件格式有问题，读不进来';
+                if (code === 'SVG_TOO_COMPLEX') return 'SVG 太复杂（形状太多或节点太密），超过了处理上限';
+                return `导入失败（${code}）`;
+            },
+            skippedExternalImages: '外链图片已跳过（只支持内嵌图片）',
+            animationFlattened: '动画 SVG 已按初始样子导入',
+            tooComplex: 'SVG 太复杂，部分内容可能没导进来',
         },
         // 0.8 A3：.canvas 工程导入对话框
         project: {
@@ -1321,11 +1342,32 @@ export const messages = {
             moreTemplate: 'Save as Template',
             moreExport: 'Export Project',
             moreImport: 'Import Project',
+            moreSvgImport: 'Import SVG',
             moreSnap: 'Snap Settings',
             moreLog: 'Connection Log',
             moreHelp: 'Help / Shortcuts',
             moreSwitchLocale: '切换到中文',
             moreTheme: 'Theme',
+        },
+        // 0.8 B5: SVG vector import dialog
+        svgImport: {
+            svgImportTitle: 'Import SVG',
+            svgImportPick: 'Choose an SVG file',
+            svgImportDropHint: 'or drag a .svg here',
+            importing: 'Importing…',
+            done: (n: number) => n === 0
+                ? 'No importable vector content found (all layers may be locked)'
+                : `Imported ${n} shape${n === 1 ? '' : 's'}`,
+            failed: (code: string) => {
+                if (code === 'SVG_TOO_LARGE') return 'SVG file is too large';
+                if (code === 'SVG_HAS_ENTITY') return 'SVG file contains unsafe content and was rejected';
+                if (code === 'SVG_MALFORMED') return 'SVG file is malformed and could not be read';
+                if (code === 'SVG_TOO_COMPLEX') return 'SVG is too complex (too many shapes or vertices)';
+                return `Import failed (${code})`;
+            },
+            skippedExternalImages: 'External images were skipped (only embedded images are supported)',
+            animationFlattened: 'Animated SVG was imported in its starting state',
+            tooComplex: 'SVG is very complex; some content may not have been imported',
         },
         // 0.8 A3: .canvas project import dialog
         project: {

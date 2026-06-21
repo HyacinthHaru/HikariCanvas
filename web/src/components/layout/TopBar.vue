@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
 import { useResizeObserver } from '@vueuse/core';
-import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film, Puzzle, Magnet, Download, Upload } from 'lucide-vue-next';
+import { Sun, Moon, PanelLeft, PanelRight, Terminal, Languages, Tag, Lock, Unlock, Pencil, Check, X, RefreshCw, HelpCircle, Bookmark, Variable, Train, TrainTrack, Film, Puzzle, Magnet, Download, Upload, FileImage } from 'lucide-vue-next';
 import SaveAsTemplateModal from '@/components/template/SaveAsTemplateModal.vue';
 import ImportProjectModal from '@/components/layout/ImportProjectModal.vue';
+import SvgImportModal from '@/components/layout/SvgImportModal.vue';
 import SnapSettingsPopover from '@/components/layout/SnapSettingsPopover.vue';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher.vue';
 import OverflowMenu from '@/components/layout/OverflowMenu.vue';
@@ -41,6 +42,8 @@ let copiedFlashTimer: number | null = null;
 const saveModalOpen = ref(false);
 // 0.8 A3：.canvas 工程导入对话框开关
 const importOpen = ref(false);
+// 0.8 B5：SVG 矢量导入对话框开关
+const svgImportOpen = ref(false);
 
 /**
  * M16 P6.8：lock / unlock 进行中的 promise。pending 时按钮 disabled；防止用户连点
@@ -476,6 +479,14 @@ const showMoreButton = computed(() => true);
           <Upload class="size-4 shrink-0" />
           <span>{{ t.topbar.moreImport }}</span>
         </button>
+        <!-- 导入 SVG：追加矢量元素到当前工程，仅溢出菜单内，常驻不折叠 -->
+        <button
+          class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left disabled:opacity-40"
+          @click="svgImportOpen = true"
+        >
+          <FileImage class="size-4 shrink-0" />
+          <span>{{ t.topbar.moreSvgImport }}</span>
+        </button>
         <!-- 铁路网络 -->
         <button
           v-if="!showTrainTrack"
@@ -550,6 +561,7 @@ const showMoreButton = computed(() => true);
 
   <SaveAsTemplateModal v-if="saveModalOpen" @close="saveModalOpen = false" />
   <ImportProjectModal :open="importOpen" @close="importOpen = false" />
+  <SvgImportModal :open="svgImportOpen" @close="svgImportOpen = false" />
 </template>
 
 <style scoped>
