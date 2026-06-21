@@ -685,7 +685,62 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
 
 ---
 
-## 11. 边界条件
+## 11. SVG 导入渲染（0.8 Part B 实装）
+
+本节描述 SVG 矢量导入管线与渲染层的对接约定。SVG 导入是**纯前端**操作（`web/src/lib/svg/`），后端零新解析器；产物是一组原生 `PathElement`（+ 内嵌位图 `ImageElement`），经现有 `element.add` op 写入，走 §4.4 的 `PathElement` 常规渲染路径。
+
+### 11.1 fill-rule 双端一致（D9）
+
+`PathElement` 新增可空字段 `fillRule`（`"nonzero"` / `"evenodd"` / `null`），`null` 等价于 `"nonzero"`。
+
+**双端实现（须逐函数一致）：**
+
+| 端 | 代码位置 | 实现 |
+|---|---|---|
+| 后端 Java | `PathRenderer.java` | `path.setWindingRule("evenodd".equals(p.fillRule()) ? Path2D.WIND_EVEN_ODD : Path2D.WIND_NON_ZERO)` |
+| 前端 Canvas | `PreviewRenderer.ts drawPath` | `ctx.fill(parsed.path, p.fillRule === 'evenodd' ? 'evenodd' : 'nonzero')` |
+
+两端均以"默认 nonzero"为兜底（`null` 或缺字段时走 `WIND_NON_ZERO`/`'nonzero'`）。`ElementValidator.parseFillRuleNullable` 在服务端校验；协议层 `protocol.ts` 的 `PathElement` 定义加 `fillRule?: 'nonzero' | 'evenodd'`。
+
+> **为何要显式承载（D9）**：SVG 默认 nonzero，但带洞图形（如字母 O 的内圆）依赖 evenodd；不显式设置会让后端与前端渲染结果不一致。
+
+**无 DB migration**：`fillRule` 序列化在 `project_json` blob 内，是 nullable 加法（旧 blob 无此字段 → Jackson 读为 `null` → 沿用默认 nonzero，零漂移）。
+
+### 11.2 SVG viewBox → 画布坐标映射
+
+`svgToElements.ts` 在解析时把 SVG 逻辑坐标系映射到目标画布像素坐标（由导入对话框的目标宽高决定）：
+
+```
+sx = targetWidth  / viewBox.width
+sy = targetHeight / viewBox.height
+viewBoxMat = translate(-minX*sx, -minY*sy) ∘ scale(sx, sy)
+```
+
+每个形状的祖先链 transform 矩阵与 `viewBoxMat` 累乘后，由 `bakePath.bakeMatrix` 烘焙进路径坐标；再经 `rebaseToOrigin` 把 bbox 左上角平移到 `(0, 0)`，对齐 `PathElement.d` 「坐标相对 element (x,y)」的约定。
+
+若 SVG 无 `viewBox`（或导入对话框不指定目标尺寸），则以 SVG 声明的 `width/height` 属性作像素尺寸，不做缩放。
+
+### 11.3 path d 归一化到 M/L/Q/C/Z 子集
+
+前端导入时，所有 SVG path 命令**归一化**到 `M/L/Q/C/Z` 绝对命令子集：
+
+| 原始命令 | 展开方式 |
+|---|---|
+| `H`/`V` | → `L`（水平/垂直线段展开为普通线） |
+| `S`（smooth cubic） | → `C`（对称控制点展开为完整三次贝塞尔） |
+| `T`（smooth quadratic） | → `Q` |
+| `A`（椭圆弧） | → 一段或多段 `C`（按 W3C SVG F.6 椭圆弧分解，移植自后端 `PathParser.arcToBezier`） |
+| 相对命令（小写） | → 绝对坐标 |
+
+归一化保证：
+1. `PathElement.d` 字段只含 `PathDValidator` 支持的命令子集，后端 `PathParser.java` 与前端 `PathParser.ts` 双端一致
+2. 双端渲染等价（不依赖各端对 `S`/`T`/`A` 的差异解释）
+
+基本形状（`<rect>`/`<circle>`/`<ellipse>`/`<line>`/`<polyline>`/`<polygon>`）先由 `shapesToPath.ts` 转为 path d，再走同一归一化管线。圆/椭圆用 4 段三次贝塞尔近似，控制点系数 kappa = 0.5522847498（`4*(√2−1)/3`）。
+
+---
+
+## 12. 边界条件
 
 | 情形 | 行为 |
 | --- | --- |
@@ -698,7 +753,7 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
 
 ---
 
-## 12. 未决问题
+## 13. 未决问题
 
 - [ ] 非像素字体是否需要提供「强制像素化」选项（字号任意 → 量化到 1px 网格）
 - [ ] Dithering 是否值得做（v1.0 不做，但预留配置）

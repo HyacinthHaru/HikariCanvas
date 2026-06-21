@@ -40,6 +40,7 @@
 | T13 | 管理员误操作 | 数据丢失 |
 | T14 | 图片上传滥用：超大文件 / 压缩炸弹 / 伪造 MIME / 路径穿越 / 磁盘填满 / 恶意 EXIF | 资源耗尽、RCE 风险（M13 引入；详细缓解见 §4.5） |
 | T15 | URL 图片上传 SSRF（服务端代 fetch 任意 URL，可探内网 / 回环 / 云元数据） | 内网探测 / 凭证窃取。**0.4.9 起 SSRF 过滤已按用户要求移除，仅校验 scheme + 不跟重定向 + 10MB/30s 上限；公网部署服主自担风险，详见 §4.6** |
+| T16 | 恶意 SVG 导入（XXE / 实体爆炸 / 嵌入脚本 / 超大 path → CPU/内存耗尽 / XSS） | 资源耗尽 / 脚本执行。**0.8 Part B 起防御已实装**：`preParseGuard`（体积上限 + 拒 DOCTYPE/ENTITY）+ `DOMParser` 天然挡 XXE/脚本执行 + `stripDangerous` 剥离危险节点 + `complexityGuard` 复杂度上限（§4.7） |
 
 ### 1.3 非目标
 
@@ -331,6 +332,50 @@ validateToken(t):
 - **字节上限 10 MB**：硬编码 `URL_MAX_BYTES`，超出 abort（注意：此处先按硬上限读，再按可配 `images.max-size-kb` 默认 2 MB 复查）
 - **总超时 30s**：连接 + 读取各 15s（`URL_TIMEOUT_MS / 2`）
 - fetch 回来的字节仍走与文件上传完全相同的 magic 校验 / ImageIO 隔离解码 / 配额 / hash 存储栈
+
+### 4.7 SVG 矢量导入（0.8 Part B 实装）
+
+**状态：已实装（0.8 Part B）**。SVG 导入是纯前端操作（`web/src/lib/svg/`），后端无新 SVG 解析器；导入产物（`PathElement`）走与手绘路径完全相同的 `element.add` 校验栈，后端只看路径 d 的 `PathDValidator` 校验，不接触原始 SVG 文档。
+
+**防御层次（前端三闸 + DOMParser 天然隔离）：**
+
+**1. `preParseGuard`（解析前体积 + 实体拦截）**
+
+- 体积上限默认 **512 KB**（字符串字节数，可配 `limits.svg-import-max-kb`）；超限抛 `SVG_TOO_LARGE`
+- 拒含 `<!DOCTYPE` 或 `<!ENTITY` 的源串（防十亿笑 / XXE 表面）；抛 `SVG_HAS_ENTITY`
+
+**2. `DOMParser('image/svg+xml')` 天然隔离**
+
+- 浏览器 DOMParser 不取外部实体、不执行 `<script>`、不发起网络请求；SVG 文档只被解析成内存 DOM，**不注入当前页面 DOM**（天然挡 XSS + XXE）
+- 解析出来的 DOM 树不含 SVG 内联样式的 `@import` / 外链字体等副作用
+
+**3. `stripDangerous`（危险节点 / 属性剥离）**
+
+深度优先遍历 DOM，执行以下剥离：
+
+| 剥离目标 | 处理方式 |
+|---|---|
+| `<script>` / `<foreignObject>` / `<use>` / `<symbol>` | 删整个节点（含子节点） |
+| `<animate>` / `<animateTransform>` / `<animateMotion>` / `<set>` | 删整个节点（取首帧静态值） |
+| `<style>` | 删整个节点 |
+| `on*` 事件属性 | 删属性（任意元素） |
+| `href` / `xlink:href` 含 `javascript:` | 删属性（任意元素） |
+| `<image>` 的 `href` / `xlink:href` 为外链（非 `data:` 前缀） | 删整个 `<image>` 元素（不允许外链位图） |
+
+**4. `complexityGuard`（复杂度上限）**
+
+统计解析后的形状数与估算顶点数；超限抛 `SVG_TOO_COMPLEX`，前端熔断并展示大白话提示：
+
+| 闸 | 默认上限 |
+|---|---|
+| `maxShapes` | 500（单 SVG 最大形状数） |
+| `maxTotalVertices` | 50000（估算总顶点数） |
+
+**5. 后端兜底**
+
+SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验（M/L/Q/C/Z 命令子集 + 数值范围），非法路径以 `INVALID_PAYLOAD` 拒。内嵌位图（`<image data:…>`）走与 `/api/upload` 完全相同的 magic + ImageIO 隔离解码 + 配额栈，不绕过任何上传限制。
+
+**不做（D10 明确不支持的攻击面）**：`<text>`、`<clipPath>`/`<mask>`、CSS/SMIL 动画（取首帧静态化，剩余节点被 `stripDangerous` 删除）、`<foreignObject>`、外部 `href` 引用、`<use>`/`<symbol>`。这些功能连带其攻击面均不在实装范围内。
 
 ---
 

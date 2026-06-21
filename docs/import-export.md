@@ -2,8 +2,14 @@
 
 > **定稿 2026-06-16（brainstorming D1-D10 用户拍板）。** 本文件是 0.8 的契约总纲。
 > 它把 `data-model.md §4`（`.canvas` 工程文件格式，此前标「规划中·未实装」）**升级为实装定稿**，
-> 并新增 SVG 导入契约。配套下游契约（实装时按本文回填）：
-> `data-model.md §4`、`security.md §4.4 / §4.7（新增）/ §13.5`、`protocol.md`（新端点）、`rendering.md`（SVG 坐标映射）。
+> 并新增 SVG 导入契约。
+>
+> **实装状态（2026-06-21 核对）：**
+> - **Part A（`.canvas` 导入导出）：已实装（A1-A4）。** 导出 = 前端 `fflate` 打包 + TopBar 更多菜单入口；导入 = 后端 `POST /api/project/import` + `ImportProjectModal` UI；含脚本（`scripts.json`）+ 图片（`assets/*.png`）。
+> - **Part B（SVG 矢量导入）：已实装（B0-B5）。** 纯前端（`web/src/lib/svg/`），后端零新解析器；`PathElement.fillRule` 字段实装（D9）；UI 入口 = TopBar 溢出菜单「导入 SVG」（`SvgImportModal.vue`）。`assets/icons/*.svg`（IconElement 用户自定义图标导出/导入）仍未实装，与 SVG→PathElement 矢量导入是不同路径。
+>
+> **配套下游契约（已据实回填 2026-06-21）：**
+> `data-model.md §4`、`security.md §4.7（新增）`、`protocol.md §7（PathElement fillRule）`、`rendering.md §11（新增）`。
 >
 > **写代码前必读本文。要改契约 → 先改本文，再改代码。**
 
@@ -106,21 +112,23 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 
 ### 2.4 SVG 导入产物（D5：映射到 `PathElement`）
 
+**实装状态：已实装（0.8 Part B）**
+
 前端把一份 SVG 文档解析成一组**原生元素**插入当前工程：
 
 | SVG 输入 | 映射到 | 说明 |
 |---|---|---|
 | `<path d>` | `PathElement` | `d` **归一化到可渲染子集** M/L/Q/C/Z（H/V→L，S/T→C/Q，A 椭圆弧→cubic 近似），见 D6 + §3.3 |
-| `<rect> <circle> <ellipse> <line> <polyline> <polygon>` | `PathElement`（转 `d`）或现成 `RectElement`/`CircleElement` | 基本形状先统一转 path，简单矩形/正圆可直映现成元素 |
-| `fill`（纯色 / `linearGradient` / `radialGradient`） | `PathElement.fill`（`Fill` 联合，渐变现成） | 渐变 stop / gradientUnits 映射到项目 `LinearGradient`/`RadialGradient` |
+| `<rect> <circle> <ellipse> <line> <polyline> <polygon>` | `PathElement`（转 `d`） | 基本形状统一转 path d（`shapesToPath.ts`）；**不直映** `RectElement`/`CircleElement`（统一 path 管线更简单） |
+| `fill`（纯色 / `linearGradient` / `radialGradient`） | `PathElement.fill`（`Fill` 联合，渐变现成） | 渐变 stop / gradientUnits 映射到项目 `LinearGradient`/`RadialGradient`（**降维近似**：linear angle=atan2(dy,dx)，radial cx/cy/r 归一化，stops 排序钳[2,8]；忽略 gradientTransform/userSpaceOnUse/spreadMethod/双焦点） |
 | `stroke`（color + width） | `PathElement.stroke`（`Stroke`） | 项目 `Stroke` 仅 width+color；dasharray/cap/join/渐变描边丢失 |
-| `transform`（translate/scale/rotate/matrix） | **烘焙进 `d` 坐标** | 不引入元素级 transform 字段；解析时算成画布绝对坐标 |
+| `transform`（translate/scale/rotate/matrix/skewX/skewY） | **烘焙进 `d` 坐标** | `transform.ts` 解析 2×3 矩阵 + 链式累乘；`bakePath.ts` 烘焙进坐标 |
 | `opacity` | `PathElement.opacity` | 元素级现成字段 |
-| `<image href=data:…>` 内嵌位图 | `ImageElement` | 抽出 base64 → 走现有 `/api/upload` 校验/存储栈（§3.3） |
-| `fill-rule` | 随 `PathElement` 承载（D9） | SVG 默认 nonzero；不显式设带洞图形会错 |
+| `<image href=data:…>` 内嵌位图 | `ImageElement` | 抽出 base64 → `fetch(dataUrl)→blob→File` → `POST /api/upload`（带 sessionId）→ 拿 sha256 source → `element.add type=image` |
+| `fill-rule` | `PathElement.fillRule`（`"nonzero"` / `"evenodd"` / `null`，D9） | **已实装**：`fillMap.mapFillRule` 映射；后端 `PathRenderer` + 前端 `PreviewRenderer.drawPath` 双端一致（见 `rendering.md §11.1`） |
 
 - **不新增元素类型**：零新数据模型、`.canvas` / `project_json` 序列化形态不变、双端一致天然成立。
-- 一份 SVG 导入 = 多个元素**成组**插入（落在新建图层或当前图层），共享一次撤销栈条目。
+- 一份 SVG 导入 = N 条 `element.add` op（N 个元素独立写入，各自可撤销）。SVG 元素成组落在当前活动图层。
 
 ---
 
@@ -156,18 +164,42 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 
 ### 3.3 SVG 解析流程（前端，D6）
 
+**实装状态：已实装（0.8 Part B，`web/src/lib/svg/`）**
+
 ```
-1. 文件大小预闸（≤ svg-import-max-kb，默 512）+ 拒含 <!DOCTYPE/<!ENTITY 的源串（§5.3）
+1. 文件大小预闸（≤ svg-import-max-kb，默 512KB）+ 拒含 <!DOCTYPE/<!ENTITY 的源串（§5.3）
+   ← 实装：svgSecurity.preParseGuard（体积 + 实体拦截）
+
 2. new DOMParser().parseFromString(svg, 'image/svg+xml')  ← 不取外部实体、不执行脚本
-3. 剥离危险节点：<script> / <foreignObject> / on* 属性 / href^=javascript: / 外部 <image href=http…> / <use>外链
-4. 遍历 DOM：basic shapes → path d；逐节点累乘 transform 矩阵 + viewBox→目标尺寸 scale，烘焙进 d 坐标
-5. d 归一化到 M/L/Q/C/Z 子集（A/S/T/H/V 展开；A→cubic 复用后端 PathParser F.6 算法移植）
-   ← 为何归一化：PathElement 前端预览走 render/PathParser.ts（M/L/Q/C/Z 子集），后端 PathParser.java 虽支持全文法，
-      但统一归一化才能双端一致 + 复用现有 PathElement 渲染
-6. fill/stroke/opacity/fill-rule 映射（§2.4）；动画节点（<animate>/CSS）→ 取 t=0 静态值后丢弃
-7. <image> base64 → 经 /api/upload 落 hash → ImageElement
-8. 成组插入 element（走现有 element 创建 op，后端再校验一遍）
-9. 节点数 / 顶点数超闸 → 前端熔断提示（§5.3）
+   ← 实装：svgToElements.ts 内直接调用 DOMParser；天然挡 XXE/脚本注入 DOM
+
+3. 剥离危险节点：<script>/<foreignObject>/<use>/<symbol>/<animate*>/<set>/<style> + on* 属性
+   + href^=javascript: + 外部 <image href> （非 data: 前缀）
+   ← 实装：svgSecurity.stripDangerous（深度优先遍历，按 DANGEROUS_TAGS 集合删节点）
+
+4. 遍历 DOM：basic shapes → path d；逐节点累乘祖先 transform 矩阵 + viewBox→目标尺寸 scale，烘焙进 d 坐标
+   ← 实装：svgParse.ts（形状收集 + viewBox/width/height 解析）；shapesToPath.ts（rect/circle/ellipse/
+      line/polyline/polygon → path d，圆/椭圆用 kappa=0.5522847498 的 4 段三次贝塞尔）；
+      transform.ts（translate/scale/rotate/matrix/skewX/skewY → 2×3 矩阵，支持链式累乘）；
+      bakePath.ts（矩阵烘焙进坐标 + bbox + rebase 到 bbox 左上）
+
+5. d 归一化到 M/L/Q/C/Z 绝对命令子集（H/V→L；S→C；T→Q；A→cubic 逐公式移植后端 PathParser.arcToBezier）
+   ← 实装：normalizeD.ts（A 弧按 W3C SVG F.6 椭圆弧分解，完整移植后端算法）
+
+6. fill/stroke/opacity/fill-rule 映射（§2.4）；gradient url(#id) → Linear/RadialGradient 降维近似；
+   动画节点（<animate>/CSS @keyframes）→ stripDangerous 已删除，无需另取 t=0
+   ← 实装：fillMap.ts（fill/stroke/opacity/fillRule 映射；渐变降维：linear angle=atan2(dy,dx)，
+      radial cx/cy/r 归一化，stops 排序钳[2,8]；忽略 gradientTransform/userSpaceOnUse/spreadMethod/双焦点）
+
+7. <image href=data:…> → 抽出 base64 → fetch(dataUrl)→blob→File → POST /api/upload（带 sessionId）
+   → 拿 sha256 source → element.add type=image
+   ← 实装：useSvgImport.ts（Task 16 image 支持）
+
+8. PathElement draft 直接发 element.add；image draft 走 /api/upload 再 element.add
+   ← 实装：useSvgImport.importSvg（循环发 element.add，server-authoritative；每条独立可撤销）
+
+9. 节点数 / 顶点数超闸 → 前端熔断提示
+   ← 实装：svgSecurity.complexityGuard（maxShapes=500 / maxTotalVertices=50000，超限 throw SVG_TOO_COMPLEX）
 ```
 
 ---
@@ -211,18 +243,20 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 - 导入积木**全量重校验**（类型/参数/condition 语法），不信任文件内 rule_json（§2.3）。
 - 导入的命令字符串走与生产同样的 Budget 三闸 + 权限面检查。
 
-### 5.3 SVG 导入闸（`security.md §4.7` 新增，T11 新增威胁项）
+### 5.3 SVG 导入闸（`security.md §4.7`，**0.8 Part B 已实装**）
 
-| 闸 | 值 / 做法 |
-|---|---|
-| 源串体积 | ≤ `limits.svg-import-max-kb`（默 512） |
-| XML 实体 | **拒含 `<!DOCTYPE` / `<!ENTITY`**（防十亿笑）；`DOMParser('image/svg+xml')` 本身不取外部实体（天然挡 XXE） |
-| 危险节点 | 剥离 `<script>` / `<foreignObject>` / `on*` 事件属性 / `href^=javascript:` / 外部 `<image href=http…>` / `<use>` 外链（§3.3 步骤 3） |
-| path 复杂度 | 单 `d` ≤ `svg-import-max-path-bytes`（默 64KB，比 `PathDValidator` 的 4096 放宽，但有界）；总元素数 / 总顶点数有界，前端解析期熔断 |
-| 后端兜底 | 插入的每个 `PathElement.d` 仍过 `PathDValidator`（放宽上限版）；ImageElement 走 §4.5 全栈 |
-| SSRF | MVP **一律拒外部引用**（不 fetch SVG 内任何外链）；与 `security.md §4.6` 已移除 URL-SSRF 防御保持「不新增 fetch 面」 |
+**实装状态：已实装（0.8 Part B，见 `security.md §4.7` 详细说明）**
 
-> `security.md` 威胁表新增 **T11 恶意 SVG 导入**（XXE / 实体爆炸 / 嵌入脚本 / 超大 path → DoS）。
+| 闸 | 值 / 做法 | 实装位置 |
+|---|---|---|
+| 源串体积 | ≤ 512 KB（`svg.length` 字节数） | `svgSecurity.preParseGuard` |
+| XML 实体 | **拒含 `<!DOCTYPE` / `<!ENTITY`**（防十亿笑）；`DOMParser` 天然挡 XXE | `svgSecurity.preParseGuard` + DOMParser |
+| 危险节点 | 剥离 `<script>`/`<foreignObject>`/`<use>`/`<symbol>`/`<animate*>`/`<set>`/`<style>` + `on*` 事件属性 + `href^=javascript:` + 外部 `<image href>`（非 data:） | `svgSecurity.stripDangerous` |
+| path 复杂度 | maxShapes=500 / maxTotalVertices=50000，超限 throw `SVG_TOO_COMPLEX`，前端展示大白话提示 | `svgSecurity.complexityGuard` |
+| 后端兜底 | 每个 `PathElement.d` 仍过后端 `PathDValidator`（M/L/Q/C/Z 命令子集 + 数值范围）；ImageElement 走 `POST /api/upload` 全栈 | `ElementValidator`（server-side） |
+| SSRF | 一律拒 SVG 内外链；内嵌位图仅允许 `data:` 协议，外链 `<image>` 被 `stripDangerous` 删除 | `svgSecurity.stripDangerous` |
+
+> `security.md` 威胁表 **T16 恶意 SVG 导入**（XXE / 实体爆炸 / 嵌入脚本 / 超大 path → DoS）已新增，详见 `security.md §4.7`。
 
 ---
 
@@ -235,10 +269,14 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 - 「导入 `.canvas`」文件选择 → POST → 进度 → 成功后展示 **warning 清单**（缺字体/变量/图标/被 block 脚本/动画已静态化/孤儿轨）。
 - 锁定 / 未保存工程的导入是**破坏性替换** → 必须二次确认（防覆盖丢数据）。
 
-### 6.3 SVG 解析器
-- 前端 `composables/useSvgImport`：`DOMParser` + 危险节点剥离 + transform 烘焙 + d 归一化 + 内嵌位图抽取。
-- 导入对话框：目标尺寸 / 位置（viewBox→画布映射，§见 rendering 回填）。
-- 解析失败 / 超闸 / 含动画的友好提示（大白话，例：「这张图自带动画，已按初始样子导入」）。
+### 6.3 SVG 解析器（**0.8 Part B 已实装**）
+
+- **`web/src/composables/useSvgImport.ts`**（已实装）：协调 `svgToElements`（解析+烘焙+归一化）→ 循环发 `element.add` + 内嵌位图走 `POST /api/upload` → `element.add type=image`。
+- **`web/src/lib/svg/`**（已实装，7 个文件）：`svgSecurity`（安全三闸）/ `svgParse`（DOM 收集）/ `shapesToPath`（基本形状→path）/ `transform`（2×3 矩阵链式累乘）/ `normalizeD`（命令归一化）/ `bakePath`（矩阵烘焙+rebase）/ `fillMap`（fill/stroke/fillRule/opacity 映射+渐变降维）/ `svgToElements`（编排入口）。
+- **`SvgImportModal.vue`**（已实装）：`accept=".svg,image/svg+xml"`；SVG 是「追加」操作，不替换工程，无破坏性二次确认。
+- **TopBar 溢出菜单入口**（已实装）：「导入 SVG」项常驻溢出菜单内。
+- viewBox→画布坐标映射规范见 `rendering.md §11.2`。
+- 解析失败 / 超闸时展示大白话错误提示（`i18n svgImport.failed(code)`）；前端已按 `SVG_TOO_LARGE` / `SVG_HAS_ENTITY` / `SVG_TOO_COMPLEX` 等错误码映射文案。
 
 ---
 
@@ -259,46 +297,46 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 
 ---
 
-## 8. 分期与工时（理想工时，不含 review/commit）
+## 8. 分期与工时（历史记录）
 
 > SVG 跳过「阶段 0 单 path 图标上传甜点」（用户选「只做矢量完整版」），直接 B1 起。
 
-**Part A — `.canvas` 导入导出（~53h）**
+**Part A — `.canvas` 导入导出（✅ 已实装 A1-A4）**
 
-| 批 | 内容 | 工时 |
+| 批 | 内容 | 状态 |
 |---|---|---|
-| A1 | 导出（前端）：fflate 打包 + manifest + project.json + 缩略图 + 收集图片塞 assets + 菜单入口/下载 | ~14h |
-| A2 | 导入解析 + 安全（后端）：`/api/project/import` + zip 安全解包三闸 + manifest/spec + ProjectState 校验 + 尺寸匹配 + assets magic 解码 + 孤儿轨/缺资源扫描 + 灌会话/广播/audit | ~20h |
-| A3 | 导入前端 UI：文件选择/进度/错误 + warning 清单 + 破坏性导入二次确认 + i18n | ~9h |
-| A4 | 脚本纳入（D3）：导出 `scripts.json` + 导入 wallId 重绑/重校验/写 wall_scripts + user 变量定义（D8） | ~10h |
+| A1 | 导出（前端）：fflate 打包 + manifest + project.json + 缩略图 + 收集图片塞 assets + 菜单入口/下载 | ✅ 已实装 |
+| A2 | 导入解析 + 安全（后端）：`/api/project/import` + zip 安全解包三闸 + manifest/spec + ProjectState 校验 + 尺寸匹配 + assets magic 解码 + 孤儿轨/缺资源扫描 + 灌会话/广播/audit | ✅ 已实装 |
+| A3 | 导入前端 UI：文件选择/进度/错误 + warning 清单 + 破坏性导入二次确认 + i18n | ✅ 已实装 |
+| A4 | 脚本纳入（D3）：导出 `scripts.json` + 导入 wallId 重绑/重校验/写 wall_scripts + user 变量定义（D8） | ✅ 已实装 |
 
-**Part B — SVG 导入（~52-76h，取中 ~64h）**
+**Part B — SVG 矢量导入（✅ 已实装 B0-B5）**
 
-| 批 | 内容 | 工时 |
+| 批 | 内容 | 状态 |
 |---|---|---|
-| B1 | 前端 SVG 文档解析器：DOMParser 遍历 + basic shapes→path + transform 烘焙 + fill/stroke 映射 | 16-24h |
-| B2 | → 多 `PathElement` 成组插入：d 归一化（A/S/T/H/V 展开）+ 分组/落点/撤销栈 | 10-14h |
-| B3 | gradient + viewBox/尺寸映射对话框 + 内嵌位图抽取 | 10-14h |
-| B4 | 安全硬化：体积/实体/节点上限 + 危险节点剥离 + PathDValidator 兜底 + 单测 | 8-12h |
-| B5 | 双端一致（snapshot CI）+ 文档回填 + i18n + 大白话提示 | 8-12h |
+| B0 | SVG 安全三闸（preParseGuard / stripDangerous / complexityGuard）| ✅ 已实装 |
+| B1 | 前端 SVG 文档解析器：DOMParser 遍历 + basic shapes→path + transform 烘焙 + fill/stroke 映射 | ✅ 已实装 |
+| B2 | 多 `PathElement` 成组插入：d 归一化（A/S/T/H/V 展开）+ element.add 循环写入 | ✅ 已实装 |
+| B3 | gradient 降维近似 + viewBox/尺寸映射 + 内嵌位图抽取（/api/upload → ImageElement） | ✅ 已实装 |
+| B4 | fillRule 双端实现（D9）：PathElement.fillRule + PathRenderer + PreviewRenderer.drawPath | ✅ 已实装 |
+| B5 | UI 入口（SvgImportModal / TopBar 溢出菜单）+ i18n + 大白话提示 + 文档回填 | ✅ 已实装（含本次文档回填） |
 
-**合计 ~117h + 文档回填 ~6h ≈ ~120h（3-4 周单人）。**
-
-**排期建议**：Part A 先行（1.0 硬前置，且导出/导入是后续 SVG 测试的载体）；Part B 跟进。每批走 TDD（先写失败测试）+ 子代理实现 + 双段审查（subagent-driven-development）。
+**仍未实装**：`assets/icons/*.svg`（IconElement 用户自定义 SVG 图标的导出/导入路径），留后续版本。
 
 ---
 
-## 9. 文档回填清单（实装时同步）
+## 9. 文档回填清单（2026-06-21 完成状态）
 
-| 文档 | 动作 |
-|---|---|
-| `data-model.md §4` | 去掉「未实装」警示；§4.1 加 `scripts.json` + `assets/icons/`；§4.4 定稿孤儿轨=丢弃（D7）；§4.5 把 JSZip 改 fflate；新增 §4.6 `scripts.json` 形态 |
-| `security.md` | §4.4 补 thumbnail 校验 + scripts.json 白名单 + 配额计入；**新增 §4.7 SVG 导入**；威胁表加 **T11** |
-| `protocol.md` | 新增 `POST /api/project/import` 契约 + 5 个 `IMPORT_*` 错误码 + 导入后 `state.snapshot` 语义；SVG 走现有 element 创建 op 说明 |
-| `rendering.md` | 新增 SVG `viewBox`→画布坐标映射公式（复用 IconRenderer contain 范式）+ `fill-rule` 约定 + 双端一致要求 |
-| `data-model.md §5.1` / `architecture.md §11` | config 新增 `limits.canvas-import-max-mb` / `limits.svg-import-max-kb` / `limits.svg-import-max-path-bytes` 等字段 |
-| `architecture.md` | 补「导入/导出数据流」节（导出前端 / 导入后端信任边界） |
-| 用户文档（操作类） | 大白话讲「导出分享 / 导入工程 / 导入 SVG 是像素化、不支持动画」——可等实现稳定后写 |
+| 文档 | 动作 | 状态 |
+|---|---|---|
+| `data-model.md §4` | 去掉「未实装」警示；§4.1 更新 `assets/icons/` 说明；§4.3 补 `fillRule` 加法说明；Part B 状态注释更新 | ✅ 已完成（2026-06-21） |
+| `security.md` | **新增 §4.7 SVG 导入安全**；威胁表加 **T16** | ✅ 已完成（2026-06-21） |
+| `protocol.md` | §7 工程状态模型补 `PathElement` 完整 type 定义（含 `fillRule`）；§5.3 补 SVG 导入走 element.add 说明；删除「Part B 未实装」失实注释 | ✅ 已完成（2026-06-21） |
+| `rendering.md` | 新增 §11（SVG 导入渲染）：fillRule 双端实现 + viewBox→画布坐标映射公式 + d 归一化到 M/L/Q/C/Z 子集 | ✅ 已完成（2026-06-21） |
+| `import-export.md` | 本文：Part B 状态标为已实装（B0-B5）；§2.4/§3.3/§5.3/§6.3/§8 据实更新 | ✅ 已完成（2026-06-21） |
+| `data-model.md §5.1` / `architecture.md §11` | config 新增 `limits.svg-import-max-kb` 等字段 | 部分（`security.md §4.7` 已提及默认值 512KB；config 字段声明留后续） |
+| `architecture.md` | 补「导入/导出数据流」节 | 留后续（非 0.8 Part B 文档回填范围） |
+| 用户文档（操作类） | 大白话讲「导出分享 / 导入工程 / 导入 SVG 是像素化、不支持动画」 | 留后续（操作类文档可等实现稳定后写，见「文档先行工作方式」纪律） |
 
 ---
 

@@ -1,13 +1,15 @@
 # 数据模型
 
-**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14；代码对齐回填 · 2026-06-14（迁移至 V017）；**`.canvas` 导入导出回填 · 2026-06-19（0.8 Part A 实装）**
+**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14；代码对齐回填 · 2026-06-14（迁移至 V017）；**`.canvas` 导入导出回填 · 2026-06-19（0.8 Part A 实装）**；**SVG 矢量导入 + fillRule 回填 · 2026-06-21（0.8 Part B 实装）**
 **适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式（0.8 实装）、迁移策略
 
 本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。
 
 > **代码对齐说明（2026-06-14）**：本文档与当前代码（`plugin/src/main/resources/db-migrations/` 最高 V017、`plugin/src/main/java/moe/hikari/canvas/storage/`、`deploy/FrameDeployer.java`）逐条核对回填。当前 DB schema 已演进到 **V017**（V009 跳号未落地脚本）。
 
-> **`.canvas` 导入导出回填（2026-06-19）**：`.canvas` 工程文件格式（§4）已在 **0.8 Part A 落地**（契约总纲见 `docs/import-export.md`）。导出为纯前端（`web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 打 zip）；导入为后端 `POST /api/project/import`（包 `moe.hikari.canvas.canvasfile` + `web/ProjectImportHandler`）。`.canvas spec = 1`。本节据已实装代码逐条核对回填。**仍未实装的是 Part B（SVG → 原生元素导入）**——`assets/icons/*.svg` 的写入 / 摄入属 Part B，详见 §4.1 注。
+> **`.canvas` 导入导出回填（2026-06-19）**：`.canvas` 工程文件格式（§4）已在 **0.8 Part A 落地**（契约总纲见 `docs/import-export.md`）。导出为纯前端（`web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 打 zip）；导入为后端 `POST /api/project/import`（包 `moe.hikari.canvas.canvasfile` + `web/ProjectImportHandler`）。`.canvas spec = 1`。本节据已实装代码逐条核对回填。
+
+> **SVG 矢量导入 + fillRule 回填（2026-06-21）**：0.8 Part B（SVG → 原生元素导入）**已实装**（B0-B5）。`PathElement` 新增 `fillRule` 可空字段（`"nonzero"`/`"evenodd"`/`null`，无 DB migration，见下）；SVG 导入为纯前端（`web/src/lib/svg/`），后端零新解析器，产物经现有 `element.add` op 写入。`assets/icons/*.svg`（用于 IconElement 的用户自定义 SVG 图标导出/导入路径）仍**未实装**——解包白名单接纳该路径但摄入器（`AssetIngest`）只处理 `.png`，SVG 图标的写入/摄入属后续版本。
 
 > **M5.5 重构（2026-04-27）**：合并 `drafts` + `sign_records` → 单一 `walls` 表；`pool_maps.state` 由三态收为两态（FREE/RESERVED）；废止 commit 流程，新增 `published_at` 标签。
 
@@ -539,17 +541,18 @@ CREATE INDEX IF NOT EXISTS idx_wall_scripts_wall ON wall_scripts(wall_id);
 
 ---
 
-## 4. `.canvas` 工程文件格式（0.8 Part A 实装）
+## 4. `.canvas` 工程文件格式（0.8 Part A + Part B 实装）
 
-> **实装状态（2026-06-19 核对）：本节描述的 `.canvas` zip 导出 / 导入功能已在 0.8 Part A 落地。**
+> **实装状态（2026-06-21 核对）：本节描述的 `.canvas` zip 导出/导入已在 0.8 Part A 落地；SVG 矢量导入已在 0.8 Part B 落地。**
 > 代码核对结论：
 > - 导出：纯前端 `web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 的 `zipSync` 打 zip（无服务端往返、无 JSZip）；
 > - 导入：后端 `POST /api/project/import`（`web/ProjectImportHandler` → `canvasfile/ProjectImporter` 编排，`canvasfile/CanvasArchive` 流式安全解包用 `java.util.zip.ZipInputStream`）；
-> - 前端有「导出工程」（TopBar 更多菜单）/「导入 `.canvas`」（`ImportProjectModal`）UI 入口。
+> - 前端有「导出工程」（TopBar 更多菜单）/「导入 `.canvas`」（`ImportProjectModal`）UI 入口；
+> - SVG 矢量导入：纯前端 `web/src/lib/svg/`（`useSvgImport.ts` 编排）→ element.add 写入，`PathElement.fillRule` 字段（0.8 Part B D9）实装；UI 入口 = TopBar 溢出菜单「导入 SVG」（`SvgImportModal.vue`）。
 >
 > 契约总纲见 `docs/import-export.md`。下文 §4.1–§4.6 据已实装代码回填。
 >
-> **仍属 Part B（未实装）**：SVG → 原生元素导入（D5/D6，前端 `useSvgImport` + 后端 SVG 清洗落 `assets/icons/`）。故 `assets/icons/*.svg` 当前**只被解包白名单接纳、不被任何代码写入或摄入**（见 §4.1 注）。
+> **仍未实装**：`assets/icons/*.svg`（IconElement 用户自定义 SVG 图标的导出/导入路径，与 SVG→PathElement 矢量导入是不同路径），留后续版本（见 §4.1 注）。
 
 玩家在编辑器中可「导出工程」供离线保存 / 分享，也可「导入 `.canvas`」整体替换当前会话工程。
 
@@ -570,7 +573,7 @@ mysign.canvas
 
 - **必选项缺失 → `IMPORT_MALFORMED`**：解包后若缺 `manifest.json` 或 `project.json`，`CanvasArchive.unpack` 直接拒（`CanvasArchive.java`）。
 - **`assets/<hash>.png`**：导出时 `collectImageHashes` 扫所有图层的 image 元素 `source` 去重，逐张拉字节塞进包；导入时逐张走与上传同等的不可信防御链落 hash（`AssetIngest`，见 §4.4）。
-- **`assets/icons/<id>.svg`（Part B）**：解包白名单**接纳** `assets/icons/<file>` 条目（`CanvasArchive.isSafeEntryName`），但当前导出**不写**（`useProjectExport` 只收 image hash、不收 `user/<id>` 图标）、导入摄入器**显式跳过**（`AssetIngest.isAssetPng` 只认 `assets/<file>.png`，注释明确「排除 `assets/icons/*.svg`」）。SVG 图标的写入 / 清洗 / 落盘是 **Part B**（`import-export.md §2.4/§3.3/§5.3`），结构图保留该路径作前向占位。
+- **`assets/icons/<id>.svg`（仍未实装）**：解包白名单**接纳** `assets/icons/<file>` 条目（`CanvasArchive.isSafeEntryName`），但当前导出**不写**（`useProjectExport` 只收 image hash、不收 `user/<id>` 图标）、导入摄入器**显式跳过**（`AssetIngest.isAssetPng` 只认 `assets/<file>.png`，注释明确「排除 `assets/icons/*.svg`」）。注意：这条路径是给「IconElement 用户自定义 SVG 图标」的导出/导入用的，与「SVG→PathElement 矢量导入」（0.8 Part B 已实装，走 `useSvgImport` + `element.add`）是不同路径。SVG 图标的写入 / 清洗 / 落盘留后续版本，结构图保留该路径作前向占位。
 - **前向兼容**：老导入器遇到未知顶层条目应忽略而非报错（当前白名单外条目由 `isSafeEntryName` 拒为 `IMPORT_BAD_ENTRY`，白名单内的可选条目缺失则正常跳过）。
 
 ### 4.2 `manifest.json`
@@ -602,6 +605,8 @@ mysign.canvas
 直接包含 `protocol.md §7` 定义的 `ProjectState` 对象。v2 起为 layered 形态（含 `layers[]` / `activeLayerId` / `canvas.gridSize` / `canvas.guides` / 元素级 `opacity` / `blendMode` / `renderMode`）。导入老的 v1 `project.json`（含 `elements[]`）时自动 migrate（见 §2.4.1）。
 
 v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引入，见 §2.4.2）。导入老的 v1/v2 `project.json`（无这两个字段）时按静态处理（`timelines` 读为 `null`），无须迁移。时间轴是工程状态的一部分（序列化进 `ProjectState`），故 `.canvas` 导出天然带上它，无需 `assets/` 之类外置资源承载。
+
+**0.8 Part B 新增字段（`PathElement.fillRule`）**：`PathElement` 在 `project.json` 内新增可空字段 `fillRule`（`"nonzero"` / `"evenodd"` / `null`，`null` 等价 `nonzero`）。**无 DB migration**：`fillRule` 在 `project_json` blob 内是 nullable 加法，旧 blob 无此字段 → Jackson `@JsonProperty` 反序列化读为 `null` → 渲染时走默认 `nonzero`，基线零漂移。SVG 矢量导入生成的 `PathElement` 按 SVG 源文件的 `fill-rule` 属性写入此字段（`fillMap.mapFillRule` 映射）。
 
 > **脚本不进 `project.json`**：墙脚本独立存 `wall_scripts` 表（不在 ProjectState，见 §2.10 / 脚本总纲 D7），故 `.canvas` 用独立的 `scripts.json` 条目承载（0.8-A4 新增）。形态见 **§4.6**。
 

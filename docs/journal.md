@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part B — B5：UI 入口 + 双端一致 + 文档（Task 18-20，**Part B 完成**）
+
+- **Task 18 UI**：`SvgImportModal.vue`（accept=".svg,image/svg+xml"，**追加语义无破坏性二次确认**，阶段机 idle→importing→done/error；done 显示「导入了 N 个图形」，count=0 提示图层可能锁定；error 把 SVG_TOO_LARGE/HAS_ENTITY/MALFORMED/TOO_COMPLEX 翻大白话）+ TopBar 溢出菜单「导入 SVG」入口（FileImage 图标）+ i18n `svgImport` 分组（zh/en 镜像，全大白话）。
+- **Task 19 双端一致回归**：`svgRoundtripParity.test.ts`（5 用例）——逻辑级 parity（happy-dom canvas 无真实像素，绕开像素快照）：归一化 d 只含 M/L/Q/C/Z（无 H/V/S/T/A 残留）+ 带洞 fillRule evenodd + mock ctx 验 `drawPath → ctx.fill(path,'evenodd')` 镜像后端 WIND_EVEN_ODD + 端到端 svgToElements→drawPath。
+- **Task 20 文档回填**：rendering.md（§11 fillRule 双端表 + viewBox 映射 + 归一化子集）/ security.md（§4.7 SVG 导入五层防御 + 威胁 T16）/ protocol.md（PathElement fillRule + element.add 批量）/ data-model.md（fillRule nullable）/ import-export.md（Part B 标实装）。子代理据实纠正 5 处失实（protocol §9.5「SVG 未实装」、import-export「简单矩形直映现成元素」实为全转 PathElement 等）。
+
+**Part B（SVG 矢量导入）全部完成**：B0 fillRule 纵切 / B1 解析基础 / B2 归一化+编排（MVP 闸）/ B3 gradient+viewBox+位图 / B4 复杂度硬化 / B5 UI+一致+文档。全程 subagent-driven，controller 独立 review + 签名提交，前端全量 **1421 测试绿、零回归**。**0.8 = Part A（.canvas 导入导出）+ Part B（SVG 导入）双双完成。**
+
+---
+
 ## 2026-06-20 · 0.8 Part B — B4：复杂度硬化（Task 17）
 
 `svgSecurity.complexityGuard(shapes, {maxShapes=500, maxTotalVertices=50000})`：形状数 + 估算顶点（path 命令字母数 / poly 点数 / 其它常数 4）双上限，超限 throw `SvgImportError('SVG_TOO_COMPLEX')`；`svgToElements` 在 parseSvg 后、遍历前调用，挡超大/恶意 SVG。测试 4 + svgToElements 回归 3 绿。

@@ -317,6 +317,8 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 **M18 Live Paint 注**：油漆桶工具不引入新 op。点击空白 gap 走 `element.add type=path`（payload `props.d` = gap polygon 转的 SVG path 字符串 + `props.fill` = 当前 fill）；点击元素内部走 `element.update {patch:{fill}}`（vector-fill 决策 A）。拓扑计算完全在前端 Web Worker 跑，详见 `docs/architecture.md §16` 与 `docs/rendering.md §8.4`。
 
+**0.8 Part B SVG 矢量导入注**：SVG 导入不引入新 op，走现有 `element.add`（server-authoritative）。前端解析一份 SVG → N 个 PathElement draft + 可选 ImageElement draft，循环发 N 条 `element.add { type, props, layerId }`；服务端逐条校验（`PathDValidator` + `parseFillRuleNullable` 等）后写入 state，各条独立可撤销。`props` 含 `fillRule`（`"nonzero"`/`"evenodd"`/缺省）字段（`ElementValidator` 0.8 Part B 起支持）。内嵌位图（`<image data:…>`）先 `POST /api/upload` 拿 `source` hash，再发 `element.add type=image`。
+
 ### 5.4 图层（v2 新增）
 
 | op | 方向 | payload | 说明 |
@@ -711,6 +713,23 @@ type RectElement = BaseElement & {
   stroke?: { width: number; color: string };
 };
 
+// M9 PathElement：通用 SVG-like 路径（M/L/Q/C/Z 子集）。
+// d 坐标相对 element (x,y)（即 element bbox 左上角）。
+// fillRule 字段 0.8 Part B 新增：SVG fill-rule，null 等价 nonzero（默认）。
+// 无 DB migration：fillRule 在 project_json blob 内，旧记录缺字段 = 视为 null。
+type PathElement = BaseElement & {
+  type: "path";
+  d: string;                              // SVG path d（M/L/Q/C/Z 绝对命令子集）
+  fill?: Fill;                            // 填充（solid/linear/radial）
+  stroke?: { width: number; color: string };
+  marker?: string;                        // 箭头等标记（可空）
+  fillRule?: "nonzero" | "evenodd";       // 0.8 Part B 新增；null/缺省 = nonzero
+};
+// element.add（type="path"）和 element.update（patch 含 fillRule）均支持 fillRule 字段；
+// 服务端 ElementValidator.parseFillRuleNullable 校验：仅接受 "nonzero"/"evenodd"/null。
+// 双端渲染：后端 PathRenderer 走 Path2D.WIND_EVEN_ODD/WIND_NON_ZERO；
+// 前端 PreviewRenderer.drawPath 走 ctx.fill(path, fillRule ?? 'nonzero')。
+
 // M13：图片元素。source 是上传时返回的 sha256[:16] hash（内容寻址）；
 // 客户端用 GET /api/upload/{source} 拉取原图。mask 是可选 SVG path
 // 蒙版（M9 PathDValidator 子集 M/L/Q/C/Z），坐标相对 element bbox 0..w/0..h；
@@ -982,7 +1001,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 > 脚本是 wall-scoped 状态、与 `ProjectState` 解耦，不进 `state.snapshot`——`scripts.json` 仅落 `wall_scripts` 库。
 >
-> **SVG 导入（Part B）尚未实装**，本端点只收 `.canvas` 工程包。
+> **SVG 矢量导入（0.8 Part B 实装）**走纯前端路径：前端解析 SVG → 一组 `PathElement`（+内嵌位图 `ImageElement`）→ 经现有 `element.add` op 循环写入（每个元素独立一条 op，N 条 element.add = N 次可撤销）；内嵌位图走 `POST /api/upload` 先上传拿 hash 再 element.add。SVG 导入**不走本端点**，无需新 HTTP 端点。
 
 ### `GET /api/upload/{source}?session=<sessionId>`（M13；M16-P1.1 起强制鉴权）
 
