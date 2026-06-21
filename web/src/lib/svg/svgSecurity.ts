@@ -46,10 +46,11 @@ export function stripDangerous(root: Element): void {
             if (v && /^javascript:/i.test(v)) el.removeAttribute(name);
         }
 
-        // image 外链 href / xlink:href
+        // image 外链 href / xlink:href（Task 16: 只允许 data: 前缀，外链静默丢弃并 warn）
         if (tag === 'image') {
             const href = el.getAttribute('href') ?? el.getAttribute('xlink:href') ?? '';
-            if (/^(https?:|javascript:)/i.test(href)) {
+            if (href && !/^data:/i.test(href)) {
+                console.warn('[svgToElements] <image> external URL rejected:', href.slice(0, 64));
                 toRemove.push(el);
                 return;
             }

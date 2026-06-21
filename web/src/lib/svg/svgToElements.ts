@@ -13,12 +13,14 @@ import { shapeToPathD } from './shapesToPath';
 import { parsePathCommands, commandsToD } from './normalizeD';
 import { bakeMatrix, commandsBBox, rebaseToOrigin } from './bakePath';
 import { mapFill, mapStroke, mapFillRule, mapOpacity } from './fillMap';
-import { parseTransform, mul, IDENTITY } from './transform';
+import { parseTransform, mul, IDENTITY, applyPoint } from './transform';
 import type { Mat } from './transform';
 
 export interface ElementDraft {
     type: 'path' | 'image';
     props: Record<string, unknown>;
+    /** Task 16: 嵌入位图的 data URL，仅 type='image' 时存在 */
+    dataUrl?: string;
 }
 
 /**
@@ -61,20 +63,69 @@ function ancestorMatrix(shape: Element, root: Element): Mat {
  *
  * 纯函数；DOMParser 只在 happy-dom / 浏览器环境下可用（测试加 @vitest-environment happy-dom）。
  */
-export function svgToElements(svg: string, opts?: { maxBytes?: number }): ElementDraft[] {
+export function svgToElements(
+    svg: string,
+    opts?: { maxBytes?: number; targetWidth?: number; targetHeight?: number },
+): ElementDraft[] {
     const doc = parseSvg(svg, opts?.maxBytes);
     const drafts: ElementDraft[] = [];
 
+    // Task 15: 构建 viewBox 缩放矩阵（仅当 viewBox + targetWidth/targetHeight 均存在时）
+    let viewBoxMat: Mat = [...IDENTITY] as Mat;
+    if (doc.viewBox && opts?.targetWidth != null && opts?.targetHeight != null) {
+        const [minX, minY, vbW, vbH] = doc.viewBox;
+        const sx = opts.targetWidth / vbW;
+        const sy = opts.targetHeight / vbH;
+        // viewBoxMat = translate(-minX*sx, -minY*sy) ∘ scale(sx, sy)
+        // 即：先 scale，再 translate（translate 作为外层 m1）
+        const scaleMat: Mat = [sx, 0, 0, sy, 0, 0];
+        const translateMat: Mat = [1, 0, 0, 1, -minX * sx, -minY * sy];
+        viewBoxMat = mul(translateMat, scaleMat);
+    }
+
     for (const shape of doc.shapes) {
-        // Step 1: path d
-        const rawD = shapeToPathD(shape);
-        if (rawD === null) {
-            // image 或不支持形状 → B3 留
+        // Task 16: 处理 <image> 标签（嵌入位图）
+        if (shape.tagName.toLowerCase() === 'image') {
+            const href = shape.getAttribute('href') ?? shape.getAttribute('xlink:href') ?? '';
+            if (!href.startsWith('data:')) {
+                // 拒绝外部 URL（安全考量，仅允许 data: 前缀）
+                console.warn('[svgToElements] <image> external URL rejected:', href.slice(0, 64));
+                continue;
+            }
+            // 获取 x/y/width/height，应用祖先矩阵 + viewBox 矩阵
+            const ix = parseFloat(shape.getAttribute('x') ?? '0') || 0;
+            const iy = parseFloat(shape.getAttribute('y') ?? '0') || 0;
+            const iw = parseFloat(shape.getAttribute('width') ?? '0') || 0;
+            const ih = parseFloat(shape.getAttribute('height') ?? '0') || 0;
+            const ancestorMat = ancestorMatrix(shape, doc.root as unknown as Element);
+            const m = mul(viewBoxMat, ancestorMat);
+            // 对四个角点应用变换，取 bbox
+            const [x0, y0] = applyPoint(m, ix, iy);
+            const [x1, y1] = applyPoint(m, ix + iw, iy);
+            const [x2, y2] = applyPoint(m, ix, iy + ih);
+            const [x3, y3] = applyPoint(m, ix + iw, iy + ih);
+            const bx = Math.min(x0, x1, x2, x3);
+            const by = Math.min(y0, y1, y2, y3);
+            const bw = Math.max(x0, x1, x2, x3) - bx;
+            const bh = Math.max(y0, y1, y2, y3) - by;
+            drafts.push({
+                type: 'image',
+                props: { x: bx, y: by, w: bw, h: bh },
+                dataUrl: href,
+            });
             continue;
         }
 
-        // Step 2: 祖先链 transform 矩阵
-        const m = ancestorMatrix(shape, doc.root as unknown as Element);
+        // Step 1: path d
+        const rawD = shapeToPathD(shape);
+        if (rawD === null) {
+            // 不支持形状 → 跳过
+            continue;
+        }
+
+        // Step 2: 祖先链 transform 矩阵（viewBoxMat 作为最外层）
+        const ancestorMat = ancestorMatrix(shape, doc.root as unknown as Element);
+        const m = mul(viewBoxMat, ancestorMat);
 
         // Step 3: 归一化 → 烘焙矩阵 → bbox → rebase → commandsToD
         let cmds = parsePathCommands(rawD);
@@ -84,7 +135,7 @@ export function svgToElements(svg: string, opts?: { maxBytes?: number }): Elemen
         const d = commandsToD(cmds);
 
         // Step 4: fill / stroke / fillRule / opacity
-        const fill = mapFill(shape);
+        const fill = mapFill(shape, doc.root as unknown as Element);
         const stroke = mapStroke(shape);
         const fillRule = mapFillRule(shape);
         const opacity = mapOpacity(shape);

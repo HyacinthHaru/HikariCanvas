@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part B — B3：gradient + viewBox + 内嵌位图（Task 14-16）
+
+MVP 后增强，一个 implementer 连做（三 task 交织在 svgToElements.ts）。controller 禁沙箱独立跑全 SVG 测试 **54 绿、零回归**。
+- **Task 14 gradient**：`mapFill(el, root?)` 扩 root 参；`fill="url(#id)"` 查 root 里 `<linearGradient>`（angle=atan2(dy,dx)→[0,360)）/`<radialGradient>`（cx/cy/r%→归一化）→ 降维 Fill；stops 读 offset+stop-color、按 position 排序、钳 [2,8]；PB-4 忽略 gradientTransform/userSpaceOnUse/spreadMethod/fx,fy；无 root/查不到→undefined 降级。
+- **Task 15 viewBox**：`svgToElements(svg, {targetWidth?,targetHeight?})`；viewBox+目标尺寸 → 根矩阵 `translate(-min*s)∘scale(t/vb)` 乘在祖先矩阵最外层；无则 IDENTITY（B2 行为不变）。
+- **Task 16 内嵌位图**：`<image>` 仅 `data:` href（D10 拒外链，svgSecurity 同步加「非 data: 删元素」）→ image draft `{type:'image', props:{x,y,w,h}, dataUrl}`（四角变换取 bbox）；useSvgImport 对 image draft：fetch(dataUrl)→blob→File→FormData(sessionId+file)→POST /api/upload→source→element.add type:image。
+
+测试：fillMap.gradient(4)/svgViewBox(3)/useSvgImport.image(2)。关联：fillMap.ts/svgToElements.ts/useSvgImport.ts/svgSecurity.ts + 3 测试。
+
+---
+
 ## 2026-06-20 · 0.8 Part B — B2：归一化 + 编排（Task 8-13，**MVP 闸达成**）
 
 前端把 SVG 形状归一化成 PathElement 子集并经 server-authoritative 循环插入。subagent-driven（含两个并行 implementer：normalizeD ‖ fillMap）。

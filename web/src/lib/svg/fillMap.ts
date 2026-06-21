@@ -11,7 +11,7 @@
  * 优先级：style="" 内联属性覆盖同名 presentation 属性。
  */
 
-import type { Fill, Stroke } from '../../types/protocol';
+import type { Fill, Stroke, Stop, LinearGradient, RadialGradient } from '../../types/protocol';
 
 // ---------- 命名色查表（小集，至少覆盖测试 + 常见色）----------
 
@@ -109,21 +109,125 @@ function normalizeColor(raw: string): string | undefined | null {
     return null;
 }
 
+// ---------- Gradient 解析工具 ----------
+
+/**
+ * 将百分比字符串或小数字符串转换为 [0, 1] 范围的数字。
+ * "50%" → 0.5, "0.5" → 0.5
+ */
+function parsePercent(v: string | null | undefined, def = 0): number {
+    if (v == null || v === '') return def;
+    const s = v.trim();
+    if (s.endsWith('%')) return parseFloat(s) / 100;
+    const n = parseFloat(s);
+    return isNaN(n) ? def : n;
+}
+
+/**
+ * 解析 <linearGradient> / <radialGradient> 内的 <stop> 子元素，
+ * 返回 Stop[]；少于 2 个或超过 8 个时截断/返回 undefined。
+ */
+function parseStops(gradEl: Element): Stop[] | undefined {
+    const stopEls = Array.from(gradEl.children).filter(
+        (c) => c.tagName.toLowerCase() === 'stop',
+    );
+    if (stopEls.length < 2) return undefined;
+    const truncated = stopEls.slice(0, 8);
+
+    const stops: Stop[] = [];
+    for (const s of truncated) {
+        const offset = parsePercent(s.getAttribute('offset'), 0);
+        const rawColor = s.getAttribute('stop-color') ?? 'black';
+        const color = normalizeColor(rawColor);
+        if (color === undefined || color === null) continue; // none / 无法解析跳过
+        stops.push({ position: offset, color });
+    }
+    if (stops.length < 2) return undefined;
+    // 按 position 升序
+    stops.sort((a, b) => a.position - b.position);
+    return stops;
+}
+
+/**
+ * 将 linearGradient 的 x1/y1/x2/y2 转换为角度（度数，[0, 360)）。
+ * SVG 坐标：y 轴向下。
+ * angle 定义：0° = 沿 +x（左→右），90° = 沿 +y（上→下），顺时针为正。
+ */
+function linearGradientAngle(el: Element): number {
+    const x1 = parsePercent(el.getAttribute('x1'), 0);
+    const y1 = parsePercent(el.getAttribute('y1'), 0);
+    const x2 = parsePercent(el.getAttribute('x2'), 1);
+    const y2 = parsePercent(el.getAttribute('y2'), 0);
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    // atan2(dy, dx)：dy>0 在 SVG 中是向下
+    let deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    if (deg < 0) deg += 360;
+    return deg;
+}
+
+/**
+ * 从 SVG 根元素中按 id 查找并解析渐变定义。
+ * 返回 LinearGradient | RadialGradient | undefined。
+ */
+function resolveGradient(id: string, root: Element): LinearGradient | RadialGradient | undefined {
+    const gradEl = root.querySelector(`#${CSS.escape(id)}`);
+    if (!gradEl) return undefined;
+
+    const tag = gradEl.tagName.toLowerCase();
+
+    if (tag === 'lineargradient') {
+        const angle = linearGradientAngle(gradEl);
+        const stops = parseStops(gradEl);
+        if (!stops) return undefined;
+        return { type: 'linear', angle, stops };
+    }
+
+    if (tag === 'radialgradient') {
+        const cx = parsePercent(gradEl.getAttribute('cx'), 0.5);
+        const cy = parsePercent(gradEl.getAttribute('cy'), 0.5);
+        // r%: 50% → 1.0  (r = r% / 50)
+        const rRaw = gradEl.getAttribute('r');
+        const rPct = rRaw != null ? parseFloat(rRaw) : 50;
+        const r = (rRaw?.endsWith('%') ? rPct : rPct * 100) / 50;
+        const stops = parseStops(gradEl);
+        if (!stops) return undefined;
+        return { type: 'radial', cx, cy, r, stops };
+    }
+
+    return undefined;
+}
+
 // ---------- 公开 API ----------
 
 /**
- * 从 SVG 元素映射 `fill` 属性到 HikariCanvas `Fill`（仅 SolidFill）。
+ * 从 SVG 元素映射 `fill` 属性到 HikariCanvas `Fill`。
  * - `fill="#hex"` 或命名色 → `{ type: 'solid', color: '#rrggbb' }`
  * - `fill="none"` / `fill="transparent"` → `undefined`
- * - `fill="url(#id)"` gradient 引用 → `undefined`（B3 batch 接入）
+ * - `fill="url(#id)"` + root 参数 → LinearGradient / RadialGradient（B3）
+ * - `fill="url(#id)"` 且无 root 或 id 不存在 → `undefined`（优雅降级）
  * - 未设置 fill → `undefined`
+ *
+ * PB-4 降维忽略：gradientTransform / gradientUnits=userSpaceOnUse / spreadMethod / fx,fy
  */
-export function mapFill(el: Element): Fill | undefined {
+export function mapFill(el: Element, root?: Element): Fill | undefined {
     const raw = getAttr(el, 'fill');
     if (raw === undefined) return undefined;
 
+    const v = raw.trim().toLowerCase();
+
+    // url(#id) gradient 引用
+    if (v.startsWith('url(')) {
+        if (!root) return undefined;
+        // 提取 id：url(#foo) → foo
+        const match = /url\(#([^)]+)\)/i.exec(raw.trim());
+        if (!match) return undefined;
+        const id = match[1].trim();
+        return resolveGradient(id, root);
+    }
+
     const color = normalizeColor(raw);
-    if (color === undefined || color === null) return undefined; // none / url(#) / 无法解析
+    if (color === undefined || color === null) return undefined; // none / 无法解析
 
     return { type: 'solid', color };
 }
