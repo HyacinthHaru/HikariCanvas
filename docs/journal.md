@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part B — B1：SVG 解析基础（Task 4-7 完成）
+
+前端纯函数解析栈（无后端依赖），subagent-driven。新建 `web/src/lib/svg/`：
+- **Task 4 svgSecurity**：`preParseGuard`（体积 + 拒 DOCTYPE/ENTITY 防十亿笑/XXE）、`stripDangerous`（walk 遍历删危险标签 script/foreignObject/use/symbol/animate*/set/style + on* 属性 + 外链 image；controller review 补强：任意元素 `javascript:` href 删属性 defense-in-depth）、`SvgImportError`。happy-dom，5 用例。
+- **Task 5 svgParse**：`parseSvg(svg, maxBytes=512KB): SvgDoc{root,shapes,viewBox,width,height}`，DOMParser 解析 + stripDangerous + 扁平化收集 8 类图形节点。2 用例。
+- **Task 6 shapesToPath**：`shapeToPathD(el): string|null`，rect/line/polyline/polygon → M/L(+Z)；circle/ellipse → 4 段三次贝塞尔（kappa=0.5522847498，右极点起顺时针）；path 返自身 d；image/未知 → null。紧凑数字格式。7 用例。
+- **Task 7 transform**：`Mat=[a,b,c,d,e,f]`、`parseTransform`（translate/scale/rotate[含中心]/matrix/skewX/skewY 链，左到右累积 mul）、`mul`（列向量约定）、`applyPoint`、`IDENTITY`。8 用例。
+
+**踩坑**：三测试一条 `vitest run` 多文件并发 → exit 144（worker 崩，非测试失败）；逐文件单独 `npx vitest run <file>` 全绿。Task 4 单独 commit，Task 5-7 并行实现合并一 commit，各验签 true。
+
+---
+
 ## 2026-06-20 · 0.8 Part B — B0：fillRule 纵切前后端（Task 1-3 完成）
 
 SVG 导入承载带洞图形填充规则的前置纵切，subagent-driven（3 子代理实现+测试，controller 独立 review + 签名提交）。无 db-migration（可空字段默认 nonzero = 旧行为）。
