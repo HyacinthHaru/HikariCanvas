@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part B — B2：归一化 + 编排（Task 8-13，**MVP 闸达成**）
+
+前端把 SVG 形状归一化成 PathElement 子集并经 server-authoritative 循环插入。subagent-driven（含两个并行 implementer：normalizeD ‖ fillMap）。
+- **Task 8-10 normalizeD**：`parsePathCommands(d): Cmd[]` 三档——M/L/H/V/Q/C/Z + 相对转绝对 + 隐式 lineto / S→C·T→Q 反射 / A→cubic（逐公式移植后端 `PathParser.arcToBezier` 的 W3C F.6；flag tokenizer 用字符级 `scanFlag` 只取单字符防 "0110" 贪婪）；`commandsToD` 紧凑拼接。10 用例。controller review 清理了未被调用的 tokenize/consumeNum 死代码。
+- **Task 11 bakePath**：`bakeMatrix` / `commandsBBox`（控制点包围盒，近似）/ `rebaseToOrigin`（坐标减 bbox 左上 → PathElement.d 相对约定）。4 用例。
+- **Task 12 fillMap**：`mapFill`（#hex/命名色→SolidFill；none/url(#)→undefined B3 接）/ `mapStroke` / `mapFillRule` / `mapOpacity`；style 内联覆盖 presentation 属性。Fill/Stroke 对齐 protocol.ts。4 用例。
+- **Task 13 svgToElements + useSvgImport（MVP 闸）**：`svgToElements(svg): ElementDraft[]` 纯函数——遍历 shapes，祖先链 transform 从外到内 `mul` 累乘（自身先作用）→ shapeToPathD → 归一化 → bakeMatrix → bbox → rebase → commandsToD → `draft{type:'path', props}`（fill+stroke 皆空跳过；image 留 B3；props 只放有值字段，不含 id/type）；`useSvgImport().importSvg` 仿 useClipboard 选层（pickWritableLayer）+ 循环 `ws.send('element.add', {type, props, layerId})`，刷新靠后端 patch。5 用例（含全锁→count 0）。
+
+**MVP 闸达成**：含 `<path>`+基本形状+纯色 fill 的静态 SVG → 一组可编辑 PathElement；带洞图形 fillRule 前后端一致（B0 已验）。**注意：UI 入口在 B5 Task 18 才接，当前 MVP 仅程序级（测试证明管线），游戏内手动导入要等 B5。**
+
+**重大踩坑（待记 memory）**：vitest 在 controller 主 shell（**sandbox**）下卡死 / exit 144；**禁沙箱（dangerouslyDisableSandbox）后稳定绿且快（~350ms）**。implementer 子代理不在 sandbox 故一路绿。后续 controller 跑前端测试一律禁沙箱。
+
+**已知边界（留后续）**：纯水平/垂直线 bbox 一维为 0，后端 PathElement 校验可能拒该条 → 那条线丢失（不崩，count 不计）；MVP 范围（rect+path）未触及，B3/polish 评估。
+
+---
+
 ## 2026-06-20 · 0.8 Part B — B1：SVG 解析基础（Task 4-7 完成）
 
 前端纯函数解析栈（无后端依赖），subagent-driven。新建 `web/src/lib/svg/`：
