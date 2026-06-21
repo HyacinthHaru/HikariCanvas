@@ -47,8 +47,8 @@ repositories {
 }
 
 dependencies {
-    compileOnly(files("libs/HikariCanvas-0.3.0-SNAPSHOT.jar"))
-    // 或 compileOnly("moe.hikari:hikari-canvas:0.3.0-SNAPSHOT")
+    compileOnly(files("libs/HikariCanvas-0.7.4-SNAPSHOT.jar")) // 替换为 build.gradle.kts 当前版本
+    // 或 compileOnly("moe.hikari:hikari-canvas:0.7.4-SNAPSHOT")
 }
 ```
 
@@ -337,6 +337,7 @@ canvas.unsetVariable(this, "bedwars", "match_a.mvp");
 | Namespace | 用途 |
 |---|---|
 | `user` / `user:<wallId>` | 玩家用户变量（per-wall） |
+| `userglobal` | 全服共享用户变量（0.4.3 起保留；仅玩家通过编辑器创建，插件禁推） |
 | `system` / `system:<wallId>` | 系统变量（`server.time` / `wall.alias` 等） |
 | `papi` | PlaceholderAPI 桥接 |
 | `scoreboard` | Bukkit 记分板 |
@@ -344,7 +345,7 @@ canvas.unsetVariable(this, "bedwars", "match_a.mvp");
 
 注册保留 namespace → 抛 `IllegalArgumentException`。
 
-> **注意**：你也不能注册带 `:` `-` 的 namespace —— 这两个字符保留给 HikariCanvas 内部 `<ns>:<wallId>` 形态。
+> **注意**：namespace 正则为 `^[a-zA-Z_][a-zA-Z0-9_]{0,31}$` —— 只允许字母 / 数字 / 下划线，1-32 字符；`:` `-` 都不允许（HikariCanvas 内部 `<ns>:<wallId>` 形态另行拼接）。
 
 ### 4.2 ACL spoof 防御
 
@@ -359,7 +360,7 @@ canvas.unsetVariable(this, "bedwars", "match_a.mvp");
 - **小写**：`bedwars` ✓，`BedWars` 也合法但不推荐
 - **简洁**：`bedwars` ✓，`my_bedwars_plugin_v2` 嫌长
 - **加前缀防撞**：多插件作者同时建议 `myorg_bedwars`（如 `hyacinth_bedwars`）
-- **保留 namespace**：仅五个（见 §4.1），社区可视情况扩展
+- **保留 namespace**：仅六个（见 §4.1），社区可视情况扩展
 
 ---
 

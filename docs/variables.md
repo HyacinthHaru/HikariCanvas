@@ -1,6 +1,6 @@
 # HikariCanvas 变量系统使用指南
 
-> HikariCanvas "动态信息屏" 完整指南（覆盖到 0.7.3-SNAPSHOT 行为）。变量系统自 0.4.0 引入，后续 0.4.2 加别名、0.4.3 加全局用户变量、0.4.4 加铁路网络。覆盖玩家入门、运维管理、端到端测试。
+> HikariCanvas "动态信息屏" 完整指南（覆盖到 0.7.4-SNAPSHOT 行为）。变量系统自 0.4.0 引入，后续 0.4.2 加别名、0.4.3 加全局用户变量、0.4.4 加铁路网络。覆盖玩家入门、运维管理、端到端测试。
 >
 > 配套文档：
 > - `docs/dynamic-data.md`（设计 / 协议 / 数据模型契约）
@@ -112,7 +112,7 @@ NUMBER 类型变量在 VariablePanel 里有两组按钮：`-1` / `+1`。操作�
 - **Enter** 插入（自动补全 `${var:NAME}` 后并把光标移到 `}` 后）
 - **Esc** 关闭
 - **左侧按钮触发** 也能手动召唤（不用打 `${`）
-- **画布内双击文本** 也进 chip 编辑器（inline 形态）；`${` 触发同样有效（0.4.1-P3.5 起）
+- **画布内双击文本** 也进 chip 编辑器（inline 形态）；`${` 触发同样有效（0.4.1 起）
 
 Picker 拉取的元数据来源：`GET /api/variable/list-all-namespaces`，包含 user / system / wall / scoreboard / papi / schedule / 插件 namespace 全部 declared keys。
 
@@ -293,7 +293,7 @@ VariablePanel 里删变量 → wall 内引用该变量的位置 **不会自动�
 
 编辑器额外提示（三层）：
 
-1. **chip 编辑器** 内：被删变量对应的 chip 转为 **红色 + 删除线 + ⚠ 前缀**，点击红 chip 弹「是否立即创建？」确认对话框 → 一键补创 user 变量（0.4.1-P3.4 起）
+1. **chip 编辑器** 内：被删变量对应的 chip 转为 **红色 + 删除线 + ⚠ 前缀**，点击红 chip 弹「是否立即创建？」确认对话框 → 一键补创 user 变量（0.4.1 起）
 2. **TextElement live preview** 下方标红 **banner**——警告 "Variable X was deleted, references will render as ???"
 3. hover 红 chip 显 tooltip："变量已删除，最终渲染为 '???'"
 
@@ -761,41 +761,41 @@ cd web && npm run test
 
 ### 3.3 测试 checklist 31 步
 
-按以下表逐项验证。`#` 列对应顺序，`步骤` 是操作描述，`验证范围` 是涉及的 milestone phase，`预期` 是观察结果。
+按以下表逐项验证。`#` 列对应顺序，`步骤` 是操作描述，`验证范围` 是涉及的功能点，`预期` 是观察结果。
 
 | # | 步骤 | 验证范围 | 预期 |
 |--:|---|---|---|
-| 1 | wand 创建 wall | M1-M2 | wall 出现 |
-| 2 | `/canvas open <id>` | M3+ | 浏览器编辑器加载 |
-| 3 | TopBar 看到 Variable + Train 按钮 | P2-G + P3-L | 两图标可见 |
-| 4 | 点 Variable → 弹 380px drawer | P2-G | drawer 出现 |
-| 5 | 创建 user 变量 "red"（NUMBER, 默认 0） | P1+P2 | VariablePanel 出现 |
-| 6 | 单击 `[+1]` 5 次 | P2-G | 值 5 |
-| 7 | 长按 `[+1]` 1 秒 | useLongPressIncrement | 跳 ~19 |
-| 8 | TextElement 写 `${var:user/red}` | P1+P2 interpolator | live preview 显数字 |
-| 9 | textarea 输入 `${` | P2-H 双触发 | Picker 自动弹 |
-| 10 | Picker 看到 system / wall / scoreboard / papi / schedule | P3-M list-all-namespaces | 全显示 |
-| 11 | 用 `${var:system/server.time}`（注意必须带 `system/` 前缀） | P3-J SystemProvider | wall 显 `HH:mm` |
-| 12 | 用 `${var:wall.alias}` | P3-J per-wall | wall 显 alias |
-| 13 | `/scoreboard objectives add points dummy` + `${var:scoreboard.points.<你>}` | P3-J scoreboard 混合注册 | 10s 后出现 |
-| 14 | `/scoreboard players set <你> points 42` | Bukkit | wall 10s 内更新 42 |
-| 15 | 装 PAPI + `${var:papi/%player_name%}` | P3-K reflection | 显玩家名 |
-| 16 | TopBar Train → 配 2 条时刻表 + 站名 | P3-L | modal 关闭后 schedule.* 变量自动出现 |
-| 17 | `${var:schedule.next_departure}` / `eta_minutes` | P3-L | 实时倒数 |
-| 18 | `./gradlew :examples:demo-train-plugin:jar` + 复制到 plugins/ + `/reload confirm` | P4 + R | console 看 "registered namespace 'demo_train'" |
-| 19 | `${var:demo_train/line1.eta_minutes}` | P4 ServicesManager | 5s 更新一次 |
-| 20 | `/demoscore add red 3` | P4 命令 | demo_score/red 显 3 |
-| 21 | `/demoscore reset` | P4 | 归零 |
-| 22 | 玩家 join → demo_score/mvp 自动设 | P4 事件 | wall mvp 更新 |
-| 23 | `/canvas var list` | P5 命令 | 输出全部 namespace |
-| 24 | `/canvas var get user:<wallId>/red` | P5 | 完整元信息 |
-| 25 | `/canvas var set demo_score/red 999` | P5 + AUDIT | wall 显 999 + 日志 |
-| 26 | `/canvas var providers` | P5 | 列 6+ provider |
-| 27 | `/canvas var inspect <wallId>` | P5 倒排 | 列引用变量 |
-| 28 | `/canvas var reload` | P5 | 限流配置重读 |
-| 29 | 删除 user/red → wall 显 ??? | P2-G + P3 fallback | banner 红警告 + ??? |
-| 30 | 切到另一 wall | P2-I ready hookup | variables store reset |
-| 31 | reload DemoTrain plugin | P4 PluginCleanupListener | "30s grace + purge" 日志 |
+| 1 | wand 创建 wall | wall 创建 | wall 出现 |
+| 2 | `/canvas open <id>` | 编辑器打开 | 浏览器编辑器加载 |
+| 3 | TopBar 看到 Variable + Train 按钮 | 变量面板 + 时刻表入口 | 两图标可见 |
+| 4 | 点 Variable → 弹 380px drawer | 变量面板 | drawer 出现 |
+| 5 | 创建 user 变量 "red"（NUMBER, 默认 0） | 用户变量创建 | VariablePanel 出现 |
+| 6 | 单击 `[+1]` 5 次 | 变量改值 | 值 5 |
+| 7 | 长按 `[+1]` 1 秒 | 长按累加 | 跳 ~19 |
+| 8 | TextElement 写 `${var:user/red}` | 变量占位符解析 | live preview 显数字 |
+| 9 | textarea 输入 `${` | 变量选择器自动弹出 | Picker 自动弹 |
+| 10 | Picker 看到 system / wall / scoreboard / papi / schedule | 全命名空间列举 | 全显示 |
+| 11 | 用 `${var:system/server.time}`（注意必须带 `system/` 前缀） | 系统变量 | wall 显 `HH:mm` |
+| 12 | 用 `${var:wall.alias}` | 单 wall 系统变量 | wall 显 alias |
+| 13 | `/scoreboard objectives add points dummy` + `${var:scoreboard.points.<你>}` | 计分板变量（动态注册） | 10s 后出现 |
+| 14 | `/scoreboard players set <你> points 42` | 计分板变量刷新 | wall 10s 内更新 42 |
+| 15 | 装 PAPI + `${var:papi/%player_name%}` | PlaceholderAPI 桥接 | 显玩家名 |
+| 16 | TopBar Train → 配 2 条时刻表 + 站名 | 时刻表变量 | modal 关闭后 schedule.* 变量自动出现 |
+| 17 | `${var:schedule.next_departure}` / `eta_minutes` | 时刻表变量刷新 | 实时倒数 |
+| 18 | `./gradlew :examples:demo-train-plugin:jar` + 复制到 plugins/ + `/reload confirm` | 第三方插件变量推送 | console 看 "registered namespace 'demo_train'" |
+| 19 | `${var:demo_train/line1.eta_minutes}` | 第三方插件变量推送 | 5s 更新一次 |
+| 20 | `/demoscore add red 3` | 第三方插件命令推送 | demo_score/red 显 3 |
+| 21 | `/demoscore reset` | 第三方插件命令推送 | 归零 |
+| 22 | 玩家 join → demo_score/mvp 自动设 | 第三方插件事件推送 | wall mvp 更新 |
+| 23 | `/canvas var list` | 变量命令族 | 输出全部 namespace |
+| 24 | `/canvas var get user:<wallId>/red` | 变量命令族 | 完整元信息 |
+| 25 | `/canvas var set demo_score/red 999` | 变量命令族 + 审计日志 | wall 显 999 + 日志 |
+| 26 | `/canvas var providers` | 变量命令族 | 列 6+ provider |
+| 27 | `/canvas var inspect <wallId>` | wall 变量引用追踪 | 列引用变量 |
+| 28 | `/canvas var reload` | 变量命令族 | 限流配置重读 |
+| 29 | 删除 user/red → wall 显 ??? | 变量删除 fallback | banner 红警告 + ??? |
+| 30 | 切到另一 wall | wall 切换状态重置 | variables store reset |
+| 31 | reload DemoTrain plugin | 第三方插件卸载清理 | "30s grace + purge" 日志 |
 
 ### 3.4 压力 / 异常测试
 

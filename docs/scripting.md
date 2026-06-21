@@ -6,6 +6,12 @@
 >
 > **写代码前必读本文。要改契约 → 先改本文,再改代码。**
 
+> **版本框定（截至 0.7.4-SNAPSHOT）：** 本文是 **0.7.0 基础设计总纲**,叙事保留为档案。
+> 0.7.1+ 的触发器 / 动作扩展见 `scripting-0.7.1.md` / `scripting-0.7.2.md` /
+> `scripting-0.7.3.md` / `scripting-tween.md`(补间 TweenBlock)。**当前实装全集**(9 触发器 +
+> 28 动作 + If)见本文末「附录：当前实装全集」;玩家用法见 `scripting-guide.md`。
+> 本文正文里的「6 触发器 / 8 动作」等数字是 **0.7.0 原始集**,不再回改,以附录为现状权威。
+
 一句话:让墙从「被动展示数据」升级到「主动响应事件并执行副作用」。玩家用 Scratch 风格的
 可视化积木编排逻辑:「有人被击杀 → 比分 +1 → 如果比分 ≥ 10 → 播 MVP 时间轴 + 播声音 + 执行命令模板」。
 
@@ -19,8 +25,8 @@
 |---|---|---|---|
 | **D1** | 产品形态 | **自写积木画布**(真 Scratch 风;不用 Blockly、不用规则卡片) | Blockly 双向 schema 同步是全期最大维护负担 + UI 与 Catppuccin 不合 + bundle +300KB;自写引擎 ~80-100h 但完全可控 |
 | **D2** | 与时间轴关系 | **脚本是上层,时间轴是被编排的素材**;同画布共存,「一画布二选一」作废 | 0.6 触发器已是微型规则引擎;脚本 playTimeline 把时间轴当资源;0.6 三种触发器原样保留给简单场景 |
-| **D3** | v1 触发器 | **6 个**:变量变化 / 定时器 / 玩家进服 / 玩家被击杀 / 玩家靠近(周期采样) / 墙就绪 | 覆盖地铁屏/PvP/欢迎墙全部已知场景;OnCommand/OnLockChange 低频且安全面大,推后续 |
-| **D4** | v1 动作 | **8 个**:设变量 / 变量增减 / 改元素属性 / 播时间轴(play·pause·seek) / 播声音 / 等待 / 执行命令 / 日志。**执行命令 = 服主 config 白名单模板 + 填参,禁自由拼接** | RCE 面收敛到「服主自己写的模板」内;白名单空 = 积木灰显;挂命令积木需独立权限默 op |
+| **D3** | v1 触发器 | **6 个**(0.7.0 原始集;现状 9 个见附录):变量变化 / 定时器 / 玩家进服 / 玩家被击杀 / 玩家靠近(周期采样) / 墙就绪 | 覆盖地铁屏/PvP/欢迎墙全部已知场景;OnCommand/OnLockChange 低频且安全面大,推后续 |
+| **D4** | v1 动作 | **8 个**(0.7.0 原始集;现状 28 + If 见附录):设变量 / 变量增减 / 改元素属性 / 播时间轴(play·pause·seek) / 播声音 / 等待 / 执行命令 / 日志。**执行命令 = 服主 config 白名单模板 + 填参,禁自由拼接** | RCE 面收敛到「服主自己写的模板」内;白名单空 = 积木灰显;挂命令积木需独立权限默 op |
 | **D5** | 执行权威 | **后端唯一执行器,前端积木纯 UI**;编辑器「试跑」= WS op 让后端真执行一次,轨迹回推逐积木高亮 | 零双端逻辑分叉(双端一致哲学);试跑即生产行为;副作用真实发生(文档明示) |
 | **D6** | 权限 | **分级放权**:`script.edit` 默 true(无害触发器+无害动作)/ `script.trigger.global` 默 true(击杀/进服帽子)/ `script.sound` 默 true / `script.command` 默 op | 沿用项目一贯「默认玩家可用 + 敏感面独立节点」;服主可按面收紧 |
 | **D7** | 数据归属 | **独立 ScriptStore + V017 `wall_scripts` 表,不进 ProjectState**;积木摆放坐标(blockLayout)随 ScriptRule 存但执行器不读 | 脚本与渲染/编辑解耦,state.patch 不膨胀;`.canvas` 工程文件**包含脚本**(随墙走),命令模板按名引用、导入端缺失则积木灰显 |
@@ -85,6 +91,9 @@ record ScriptRule(
 | `playerNear` | `rangeBlocks`(1-32) | **周期采样器**:每 10 tick 主线程扫在线玩家 × 挂此帽子的墙;按世界分桶 + 距离平方预筛;进入范围沿(edge-trigger)才触发,持续在内不重复触发,离开后重置 |
 | `wallReady` | — | 墙部署完成 / 服务器启动恢复完成(AnimationTicker autoRegisterAll 同时机) |
 
+> 上表为 0.7.0 原始 6 触发器。0.7.1 新增 `rightClickWall` / `playerLeaveRange` / `playerQuit`
+> (见 `scripting-0.7.1.md`);全 9 个触发器现状见本文末「附录」。
+
 ### 2.3 `sealed Action`(8 + If;同多态范式)
 
 | type | 字段 | 线程 | 权限面 |
@@ -108,6 +117,12 @@ record ScriptRule(
   故 `"abc" == 0` / `"" == 0` 恒 false(P2-2b 契约修订,规格审查者建议采纳)。
 - 条件里的数字字面量不支持科学计数法(`1e3` 是 parse error);变量值字符串按 `StrictNumber`
   文法(含指数形态)可被数值比较。
+
+> 上表为 0.7.0 原始 8 动作 + `if`。0.7.1+ 大幅扩充(批量改属性 / 相对移动 / 发消息 / 随机数 /
+> 变量乘除 / 等播完 / 重复 N 次 / 停止脚本 / 播粒子 / 等待直到 / 变量复制·拼接 / 克隆·删除元素 /
+> 重复直到 / 补间 / 随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗),见 `scripting-0.7.1.md` /
+> `scripting-0.7.2.md` / `scripting-0.7.3.md` / `scripting-tween.md`(补间 `tweenBlock`);全 28 动作
+> + `if` 现状见本文末「附录」。
 
 ### 2.4 `Budget`(config `scripts.budget` 段,全部可调)
 
@@ -293,6 +308,10 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 > ConditionBuilder / useCommandTemplates)。编辑会话状态在 `stores/scriptEdit.ts`(working copy + 本地
 > undo + debounce 自动保存,**非纸面"保存按钮"**——K-UI-11)。blockId = 动作树路径(`actions/2/then/1`,
 > 后端执行期生成,前端不在 rule_json 存 id),非纸面"创建积木时分配"。独立 chunk `script-engine`。
+>
+> **积木内容现状**:本节按 0.7.0 的 6 帽子 + 8 动作描述;0.7.1+ 积木 def 已扩到 9 触发器 +
+> 28 动作(友好皮肤分组 / C 形包裹积木 / Scratch 实色风),见 `scripting-0.7.1.md` ~
+> `scripting-0.7.3.md` / `scripting-tween.md`,全集见本文末「附录」。
 
 ### 6.1 分层(引擎与内容解耦)
 
@@ -345,10 +364,14 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 | **P2** ✅ 2026-06-10 | 执行引擎:TriggerRouter(变量/定时/墙就绪 3 触发器,无 debounce——Budget 即节流)+ ScriptRunner(单线程帧栈 + wait 续接 + K1 ThreadLocal 链深)+ ActionExecutor(8 动作,setElementProperty 双路径)+ Budget 三闸/ABA 熔断 + ConditionEvaluator(expr 扩比较/算术/var() + == 数值等值修订)。3 批次 + MVP 集成测试 7 case;后端 1515 / 前端 529 全绿 | **MVP 闸:JSON 建规则游戏内生效(待用户实测)** | ~70h |
 | **P3** ✅ 2026-06-10 | 游戏事件层:GameEventListenerHub(进服/击杀 MONITOR + 世界 UUID 快照表)+ playerNear 采样器(K14 进入沿状态机/跳帧热更)+ 命令模板系统(K13 转义/online-player 校验 + SCRIPT_COMMAND_EXECUTED audit)+ script.test 异步轨迹(K11 ack 受理 + script.trace 推送)+ 条件保存期预 parse(K16)。后端 1575 / 前端 536 全绿 | 6 触发 8 动作全通(单测)✅ | ~50h |
 | **P4** ✅ 2026-06-11 | 积木引擎层:无限画布 pan/zoom(viewport+world transform)+ Scratch 式拖拽吸附(SlotRect 几何 + findDropTarget)+ if C 形嵌套 + blockTree 树操作/blockLayout 序列化 + 编辑会话(working copy + 本地 undo + debounce 自动保存)。波次 A/B/C/D1/D2 | 引擎可拖可嵌可存(待用户实测) | ~70h |
-| **P5** ✅ 2026-06-11 | 积木内容层:6 触发器(帽子可编辑)+ 9 动作积木真表单 + 条件可视构建器(↔ 字符串双向 + 高级文本框)+ 下拉(变量/时间轴/元素/声音/命令模板端点)+ 试跑高亮(trace blockId 树路径定位 + 120ms 步进)+ validator 镜像 + i18n。波次 E/F/G/H + 集成审查修 2 阻断(新建带默认动作 / 帽子触发器可编辑)。前端 877 / 后端 1585 | **完整用户实测闸(待测)** | ~70h |
+| **P5** ✅ 2026-06-11 | 积木内容层:6 触发器(帽子可编辑)+ 9 动作积木真表单(均 0.7.0 当时数;0.7.1+ 已扩至 9 触发/28 动作,见附录) + 条件可视构建器(↔ 字符串双向 + 高级文本框)+ 下拉(变量/时间轴/元素/声音/命令模板端点)+ 试跑高亮(trace blockId 树路径定位 + 120ms 步进)+ validator 镜像 + i18n。波次 E/F/G/H + 集成审查修 2 阻断(新建带默认动作 / 帽子触发器可编辑)。前端 877 / 后端 1585 | **完整用户实测闸(待测)** | ~70h |
 | **P6** | 对抗审查(恶意脚本/熔断/采样器压测)+ 大白话教程 `docs/scripting-guide.md` + security.md/architecture.md 回填 + 版本号 + 收尾 | 全绿收口 | ~30h |
 
 节奏照 0.6:每段一闸可演示;P2 / P4 / P5 三道用户实测闸。
+
+> 上表是 0.7.0 的 6 段分期(P1-P6)。0.7.0 完工后的后续小版本(0.7.1 / 0.7.2 / 0.7.3 / 补间)
+> 各有独立分期表,见 `scripting-0.7.1.md` / `scripting-0.7.2.md` / `scripting-0.7.3.md` /
+> `scripting-tween.md`。
 
 ## 9. 工时
 
@@ -363,7 +386,10 @@ StrictNumber / coalesce / 协议切换机制——抵掉 ~20h)。wall-clock 按�
   (ElementPropertyApplier javadoc 记账)。**已知竞态(可接受)**:headless 写入与编辑器
   open/close 瞬间并发时,脚本改动可能被 session 的旧 state persist 覆盖——单属性丢一次
   更新,低频低危,下游 ultrareview 勿当新缺陷重报
-- [ ] `timer` 触发器在墙未部署时是否照跑(脚本副作用与渲染无关,倾向照跑;P2 定)
+- [x] ~~`timer` 触发器在墙未部署时是否照跑~~ → **已决:照跑,与部署状态无关**。
+  `TriggerRouter.onTimerFire` 只查规则存在 / enabled / 触发器仍是 `Timer`,无任何部署检查;
+  脚本副作用(改变量 / 发消息 / 改元素属性等)与墙是否有投影 / 有观察者解耦(§3 执行管线
+  「墙没部署 / 无观察者按需照常触发」)。
 - [x] ~~playerNear 采样间隔 config 默认值(10 tick 起步,P6 压测回填)~~ → **P3-B2 落地:
   config `scripts.player-near-sample-ticks` 默认 10(load 期 clamp 1..200)。机制:底层
   Bukkit 主线程 task 固定 2 tick 周期跑 `PlayerNearSampler.tick()`,内部按 volatile
@@ -398,3 +424,59 @@ P1 全程对抗终审排出的设计债,按归属 phase 记账:
 - `ProjectState.PROTOCOL_VERSION` 留 3 是**有意**(D7 脚本不进 ProjectState,project_json schema
   未变;该常量仅序列化输出无导入校验)
 - patch 只推 caller session ≠ 漏广播:byWall 排他锁一墙一活跃 session,等价全墙广播(alias 同例)
+
+---
+
+## 附录：当前实装全集（截至 0.7.4-SNAPSHOT）
+
+> 名称与源码 `Trigger.java` / `Action.java` 的 `permits` 子类逐字对齐;wire 判别 `type` 为 camelCase
+> (子类名首字母小写)。「哪版」= 子类 javadoc 注明的引入版本。0.7.0+ 各版扩展的详细设计见
+> `scripting-0.7.1.md` / `scripting-0.7.2.md` / `scripting-0.7.3.md` / `scripting-tween.md`。
+
+### A.1 触发器（9 个，`sealed Trigger`）
+
+| 子类 | 哪版 | 作用 |
+|---|---|---|
+| `VariableChange` | 0.7.0 | 指定 `fullName` 变量值变化时触发 |
+| `Timer` | 0.7.0 | 固定 `intervalSeconds` 秒定时触发(与墙是否部署无关) |
+| `PlayerJoin` | 0.7.0 | 玩家加入服务器时触发(全局面) |
+| `PlayerKill` | 0.7.0 | 玩家击杀(killer 非 null)时触发(全局面) |
+| `PlayerNear` | 0.7.0 | 玩家进入墙 `rangeBlocks` 方块半径内(进入沿)触发 |
+| `WallReady` | 0.7.0 | 墙投影就绪 / 启动恢复完成时触发 |
+| `RightClickWall` | 0.7.1 | 玩家右键墙的 ItemFrame 时触发(全局面) |
+| `PlayerLeaveRange` | 0.7.1 | 玩家离开墙 `rangeBlocks` 方块半径(离开沿)触发 |
+| `PlayerQuit` | 0.7.1 | 玩家退出服务器时触发(全局面) |
+
+### A.2 动作（28 个 + `If` 条件分支，`sealed Action`）
+
+| 子类 | 哪版 | 作用 |
+|---|---|---|
+| `SetVariable` | 0.7.0 | 设变量值(支持 `${var:...}` 插值) |
+| `IncrementVariable` | 0.7.0 | 变量数值累加 `delta`(按 double) |
+| `SetElementProperty` | 0.7.0 | 设单个元素属性(白名单 property) |
+| `PlayTimeline` | 0.7.0 | 时间轴 play/pause/seek |
+| `PlaySound` | 0.7.0 | 播声音(scope=near/all) |
+| `Wait` | 0.7.0 | 等待毫秒数(调度续接,不睡线程) |
+| `RunCommand` | 0.7.0 | 执行 config 白名单命令模板 + 填参 |
+| `Log` | 0.7.0 | 写 plugin logger(调试用) |
+| `If` | 0.7.0 | 条件分支(condition + then / else 可递归嵌套) |
+| `SetElementProperties` | 0.7.1 | 批量设元素属性(友好积木序列化目标,带 kind 皮肤标记) |
+| `NudgeElement` | 0.7.1 | 相对移动元素(读当前 x/y + dx/dy) |
+| `SendMessage` | 0.7.1 | 发消息(channel=chat/actionbar/title;target=trigger/all,target 自 0.7.2-P3) |
+| `SetRandomVariable` | 0.7.1 | 设随机数变量(min..max 闭区间均匀采样) |
+| `ScaleVariable` | 0.7.1 | 变量乘 / 除 factor(op=multiply/divide) |
+| `PlayTimelineAwait` | 0.7.1 | 播时间轴并等播完一轮(挂起续接) |
+| `Repeat` | 0.7.1 | 有界循环「重复 N 次」(count∈[1,100],预展开 body) |
+| `StopScript` | 0.7.1-P5 | 中止当前脚本运行(清帧栈) |
+| `PlayParticle` | 0.7.1-P5 | 在墙世界坐标播放粒子(白名单 particle) |
+| `WaitUntil` | 0.7.1-P5 | 轮询条件,满足或 timeoutMs 超时才继续 |
+| `CopyVariable` | 0.7.2-P2 | 把 source 变量当前值复制到 target |
+| `AppendVariable` | 0.7.2-P2 | 把 text(可含 `${var:X}`)追加到变量末尾 |
+| `CloneElement` | 0.7.2-P2 | 克隆元素(新 id + 偏移)到同 layer |
+| `DeleteElement` | 0.7.2-P2 | 删除元素 |
+| `RepeatUntil` | 0.7.2-P3 | 重复 body 直到条件满足(while 语义,动态调度 + maxIterations 闸) |
+| `TweenBlock` | 补间(见 `scripting-tween.md`) | 在 durationMs 内将 body 属性动作从当前值缓动插值到目标值(C 形包裹,挂起式) |
+| `RandomBranch` | 0.7.3 | 随机分支(probability∈[0,100] 决定走 then / else) |
+| `SetElementLayer` | 0.7.3 | 元素置顶 / 置底(mode=front/back) |
+| `RoundVariable` | 0.7.3 | 变量取整(mode=round/floor/ceil) |
+| `ShowTitle` | 0.7.3 | 标题弹窗(title/subtitle + 淡入·停留·淡出 + target=trigger/all) |

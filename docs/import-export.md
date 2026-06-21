@@ -46,7 +46,7 @@
 - `.canvas` **导出**：前端把当前工程（含时间轴 + 脚本 + 引用图片）打成 zip 下载
 - `.canvas` **导入**：后端安全解包 + 校验 + 灌入当前会话墙 + 广播 `state.snapshot`
 - **SVG 导入**：前端解析静态 SVG → 一组 `PathElement`（+ 内嵌位图 → `ImageElement`）插入当前工程
-- 导入冲突 / 降级的用户提示（缺字体 / 缺变量 / 缺图标 / 被 block 脚本 / 动画已静态化）
+- 导入冲突 / 降级的用户提示（缺字体 / 缺变量 / 缺图标 / 图片配额满 / 孤儿轨已丢弃 / 脚本不合法 / 脚本指令被 block / 脚本超额）
 
 **不做（明确砍掉，防 scope 膨胀）：**
 - `.canvas` **跨墙合并 / 增量导入**——导入语义是「整体替换当前会话工程」，非 merge
@@ -222,7 +222,18 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 | `IMPORT_SIZE_MISMATCH` | 工程尺寸超当前会话墙 |
 | `IMPORT_MALFORMED` | manifest/project.json 解析失败 / 校验不过 |
 
-导入成功响应：`{ ok:true, warnings:[ {kind, detail} … ] }`（warning 不阻断，kind ∈ 缺字体/缺变量/缺图标/脚本命令被block/动画已静态化/孤儿轨已丢弃）。
+导入成功响应：`{ ok:true, warnings:[ {kind, detail} … ] }`（warning 不阻断）。代码实装产出的 8 种 `kind`：
+
+| kind | 含义（用户语） |
+|---|---|
+| `missing-font` | 工程用到的字体本服没有，已用默认字体代替（`detail` = fontId）。 |
+| `missing-icon` | 工程引用的用户自定义图标（`user/<id>`）本服缺失，已留空（`detail` = source）。 |
+| `missing-variable` | 工程引用的全局用户变量（`userglobal/*`）本服不存在，显示为占位符（`detail` = 变量全名）。 |
+| `asset-quota` | 图片配额已满，部分引用图片未落地。 |
+| `orphan-track-dropped` | 有关键帧轨指向已不存在的元素，已自动丢弃（`detail` = elementId）。 |
+| `script-invalid` | 有一条脚本规则解析 / 校验不过，已跳过，其余规则照常导入（`detail` = 原因）。 |
+| `script-command-blocked` | 脚本里的命令模板本服未配置，该积木停用、规则其余照常（`detail` = templateId）。 |
+| `script-quota` | 脚本数量超本服上限，超额规则未导入、后续停止处理。 |
 
 ---
 
@@ -266,13 +277,13 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 - TopBar「更多菜单」（0.7.4 OverflowMenu）新增「导出工程」→ fflate 打包 → 下载 + 错误提示。
 
 ### 6.2 导入 UI
-- 「导入 `.canvas`」文件选择 → POST → 进度 → 成功后展示 **warning 清单**（缺字体/变量/图标/被 block 脚本/动画已静态化/孤儿轨）。
+- 「导入 `.canvas`」文件选择 → POST → 进度 → 成功后展示 **warning 清单**（缺字体/缺变量/缺图标/图片配额满/孤儿轨已丢弃/脚本不合法/脚本指令被 block/脚本超额，8 种见 §4）。
 - 锁定 / 未保存工程的导入是**破坏性替换** → 必须二次确认（防覆盖丢数据）。
 
 ### 6.3 SVG 解析器（**0.8 Part B 已实装**）
 
 - **`web/src/composables/useSvgImport.ts`**（已实装）：协调 `svgToElements`（解析+烘焙+归一化）→ 循环发 `element.add` + 内嵌位图走 `POST /api/upload` → `element.add type=image`。
-- **`web/src/lib/svg/`**（已实装，7 个文件）：`svgSecurity`（安全三闸）/ `svgParse`（DOM 收集）/ `shapesToPath`（基本形状→path）/ `transform`（2×3 矩阵链式累乘）/ `normalizeD`（命令归一化）/ `bakePath`（矩阵烘焙+rebase）/ `fillMap`（fill/stroke/fillRule/opacity 映射+渐变降维）/ `svgToElements`（编排入口）。
+- **`web/src/lib/svg/`**（已实装，8 个 `.ts`）：`svgSecurity`（安全三闸）/ `svgParse`（DOM 收集）/ `shapesToPath`（基本形状→path）/ `transform`（2×3 矩阵链式累乘）/ `normalizeD`（命令归一化）/ `bakePath`（矩阵烘焙+rebase）/ `fillMap`（fill/stroke/fillRule/opacity 映射+渐变降维）/ `svgToElements`（编排入口）。
 - **`SvgImportModal.vue`**（已实装）：`accept=".svg,image/svg+xml"`；SVG 是「追加」操作，不替换工程，无破坏性二次确认。
 - **TopBar 溢出菜单入口**（已实装）：「导入 SVG」项常驻溢出菜单内。
 - viewBox→画布坐标映射规范见 `rendering.md §11.2`。

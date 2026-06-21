@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-21 · docs 全文档对齐到代码现状 + 新建 development/troubleshooting
+
+把 `docs/` 全部「描述当前行为」的活文档对齐到代码真实状态（**以代码为事实源**，多子代理逐条 grep/read 核实，不靠记忆/路线表）。流程：16 份审计找漂移 → 分级过滤（剔除「无需改」「仅代码注释」项）→ 13 份 fix→verify 流水线 → verify 抓出 5 处 fix 小尾巴 controller 补丁 → 2 份新文档对抗验证（125+ 项事实零矛盾）。
+
+- **architecture.md**：状态机删掉代码里不存在的 `CLOSED`/`EXPIRED` 态（`SessionState` 仅 SELECTING/ISSUED/ACTIVE/CLOSING；EXPIRED 是 `TokenService` 拒绝码非会话态）。
+- **scripting.md**：自称「6 触发器/8 动作」实际 9/29——加版本框定（0.7.0 基础总纲）+ 新增「当前实装全集」附录（对 `Trigger.java`/`Action.java` 逐字）。
+- **import-export.md**：删虚报的 `animation-flattened` warning（代码从不产出）+ 补全实装 8 种 warning + SVG 模块 7→8 文件。
+- **deployment.md**：删已砍的 `/canvas unpublish` + config 速查 4 段补到全 13 段 + hot-apply 据实 + 状态行更新。
+- **template-spec.md**：纠正「icon v1 不实装」（实为完整支持）+ 补 ownerUuid/权限/配额节 + 修条件文法（含比较/算术）。
+- **variables.md**：清除用户文档泄漏的内部阶段号（P2-G/P3-J 等 16 处）→ 大白话。
+- **api.md**：保留 namespace 补 `userglobal`（5→6）+ 依赖示例版本。**dynamic-data.md**：权限节点纠正（per-wall 删除复用 write 节点）。
+- **data-model.md / timeline.md / timeline-guide.md / scripting-guide.md / security.md**：补 `tweenFps`、删 `fontId`、补 color/fill 关键帧、补 log 动作、补 auth 超时机制。
+- **CLAUDE.md / PROPOSAL.md**：0.6/0.7 状态「进行中→完工」+ 补 0.7.4/0.8 路线 + 版本现实注（0.8 在 `0.7.4-SNAPSHOT` 串下完成、未 bump）。
+- **新建 `docs/development.md`**（开发指南 10 节）+ **`docs/troubleshooting.md`**（故障排查 9 类，三段式）。
+
+`rendering.md`/`protocol.md`/`benchmark.md` 复核本就准确未动；`journal.md`/`ultrareview-*`/`scripting-0.7.x`/`tween` 按约定保留；**零代码文件改动**（git 核验）。未改版本号（发版决策留给后续）。
+
+关联文件：15 改（CLAUDE.md / PROPOSAL.md + docs/{api,architecture,data-model,deployment,dynamic-data,import-export,scripting-guide,scripting,security,template-spec,timeline-guide,timeline,variables}）+ 2 新（docs/{development,troubleshooting}）。
+
+---
+
 ## 2026-06-20 · 0.8 Part B — B5：UI 入口 + 双端一致 + 文档（Task 18-20，**Part B 完成**）
 
 - **Task 18 UI**：`SvgImportModal.vue`（accept=".svg,image/svg+xml"，**追加语义无破坏性二次确认**，阶段机 idle→importing→done/error；done 显示「导入了 N 个图形」，count=0 提示图层可能锁定；error 把 SVG_TOO_LARGE/HAS_ENTITY/MALFORMED/TOO_COMPLEX 翻大白话）+ TopBar 溢出菜单「导入 SVG」入口（FileImage 图标）+ i18n `svgImport` 分组（zh/en 镜像，全大白话）。

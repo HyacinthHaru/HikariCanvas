@@ -262,13 +262,17 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 
 ## 3. 编辑会话生命周期
 
-> **M5.5 重要变化**：状态机本身保持 SELECTING → ISSUED → ACTIVE → CLOSING → CLOSED；删除 `commit` 转移分支。`ACTIVE → CLOSING` 仅由 cancel / disconnect 触发；新增 `/canvas open` 直接从 CLOSED 跳到 ACTIVE（绕开 SELECTING / ISSUED 选区流程）。
+> **M5.5 重要变化**：状态机本身保持 SELECTING → ISSUED → ACTIVE → CLOSING；删除 `commit` 转移分支。`ACTIVE → CLOSING` 仅由 cancel / disconnect 触发；新增 `/canvas open` 直接进 ACTIVE（绕开 SELECTING / ISSUED 选区流程）。
+>
+> **状态枚举校正**：`SessionState` 实际只有 `SELECTING / ISSUED / ACTIVE / CLOSING` 四态，无独立 `CLOSED` 终态。会话取消 / 超时后进入 `CLOSING`（不可逆清理路径），SessionManager 将其从索引（byId / byPlayer / byWall）摘除、逻辑隐退；新会话由 `/canvas edit` / `/canvas open` 全新创建，而非从某个 `CLOSED` 态恢复。下文状态机图与转移表沿用历史叙述方便理解，凡标 `CLOSED` 处即指"无活跃会话"这一隐含起点 / 终点，非枚举中的真实状态。
 
 ### 3.1 状态机
 
+> 注：图中 `(无会话)` 是"该玩家无活跃会话"这一隐含起点 / 终点，**非** `SessionState` 枚举里的真实状态（枚举只有 SELECTING / ISSUED / ACTIVE / CLOSING）。`CLOSING` 即终态：会话清理完成后被 SessionManager 从索引摘除、逻辑隐退，不再转入任何后续状态。（`EXPIRED` 是 `TokenService` 的 token 拒绝码，**非**会话状态；token 过期等同会话作废 → `CLOSING`。）
+
 ```
                        ┌─────────────┐
-                       │   CLOSED    │
+                       │  (无会话)   │
                        └──┬──────┬───┘
        /canvas edit       │      │ /canvas open <wall_id|alias>
        或  Wand 首次点击 │      │ 或  Wand 瞄已有 ItemFrame → 二次确认
@@ -278,27 +282,22 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
                   └──┬──────┬───┘ │
    /canvas cancel    │      │ /canvas confirm
                      ▼      ▼     │
-                ┌──────┐  ┌────────┴────┐
-                │CLOSED│  │   ISSUED    │ ← 物品框已挂 + placeholder
-                └──────┘  │             │   + Token 已签发
-                          └─┬──────┬────┘
-     Token 15min 过期       │      │ 浏览器握手
-                            ▼      ▼
-                       ┌───────┐  ┌──────────┐
-                       │EXPIRED│  │  ACTIVE  │
-                       └───────┘  └────┬─────┘
-                                       │  cancel / WS 断连 5min
-                                       ▼
-                              ┌───────────┐
-                              │  CLOSING  │
-                              └─────┬─────┘
-                                    │ 资源回收完成（注：
-                                    │ wall 数据本体仍在 walls 表，
-                                    │ 仅释放 session/锁/wand）
-                                    ▼
-                              ┌───────────┐
-                              │   CLOSED  │
-                              └───────────┘
+              ┌──────────┐ ┌────────┴────┐
+              │  CLOSING  │ │   ISSUED    │ ← 物品框已挂 + placeholder
+              └──────────┘ │             │   + Token 已签发
+                           └─┬──────┬────┘
+     Token 15min 过期        │      │ 浏览器握手
+                             ▼      ▼
+                        ┌───────┐  ┌──────────┐
+                        │CLOSING│  │  ACTIVE  │
+                        └───────┘  └────┬─────┘
+                                        │  cancel / WS 断连 5min
+                                        ▼
+                               ┌───────────┐
+                               │  CLOSING  │ ← 终态：清理完成后
+                               └───────────┘   从索引摘除、逻辑隐退
+                                                （wall 数据本体仍在 walls
+                                                 表，仅释放 session/锁/wand）
 ```
 
 > 「ACTIVE → CLOSING(commit)」分支已彻底废止。`wall.lock` / `wall.unlock` WS op 不改变 session 状态（它是 wall 元数据的一次 UPDATE，玩家继续在 ACTIVE 中编辑；前端 readonly UI 是 lock 唯一执行者）。
@@ -307,18 +306,18 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 
 | 转移 | 动作 |
 | --- | --- |
-| `CLOSED → SELECTING` | `/canvas edit`：记 SessionId + playerUuid；**不触碰池、不挂物品框**；发 wand；等待两角点击 |
+| `(无会话) → SELECTING` | `/canvas edit`：记 SessionId + playerUuid；**不触碰池、不挂物品框**；发 wand；等待两角点击 |
 | `SELECTING → SELECTING` | 记录 pos1 / pos2；WallResolver 预览；玩家覆盖重选 |
 | `SELECTING → SELECTING (reselect)` | 已 SELECTING 时再次 `/canvas edit` 隐式清 pos1/pos2 重新开始 |
-| `SELECTING → CLOSED` | `/canvas cancel`：丢弃 selection、收回 wand |
+| `SELECTING → CLOSING` | `/canvas cancel`：丢弃 selection、收回 wand（清理完成后逻辑隐退，无后续 CLOSED 态） |
 | `SELECTING → ISSUED` | `/canvas confirm`：解析墙面 →（路径 A 新建：池借 N×M、挂物品框、写 walls 新行；路径 B 现有 wall：bind owner、不挂物品框）→ Token 签发 |
-| `CLOSED → ACTIVE` | `/canvas open <id>` 或 wand 二次点击已有 ItemFrame：直接 bind 已有 wall + 签发 Token + 跳过物品框部署 |
+| `(无会话) → ACTIVE` | `/canvas open <id>` 或 wand 二次点击已有 ItemFrame：直接 bind 已有 wall + 签发 Token + 跳过物品框部署 |
 | `ISSUED → ACTIVE` | WS 握手成功，Token 标记为已使用 |
-| `ISSUED → EXPIRED` | Token 过期，**仅释放 session/wand**，walls 数据 + ItemFrames 保留（路径 A 新建场景留下"未连入的 wall"，玩家可后续 `/canvas open` 接管） |
+| `ISSUED → CLOSING` | Token 过期（`EXPIRED` 是 `TokenService` 拒绝码，**非** `SessionState` 枚举）：**仅释放 session/wand**，walls 数据 + ItemFrames 保留（路径 A 新建场景留下"未连入的 wall"，玩家可后续 `/canvas open` 接管） |
 | `ACTIVE → ACTIVE (lock)` | `wall.lock` WS op（owner-only）：UPDATE walls.published_at = now（语义为 lock 时间戳）；session 状态不变；前端 readonly UI 生效 |
 | `ACTIVE → CLOSING(cancel)` | `/canvas cancel`：仅释放 session/wand；wall 数据 + ItemFrames 保留 |
 | `ACTIVE → CLOSING(disconnect)` | WS 断开 5min 触发，等同 cancel |
-| `CLOSING → CLOSED` | session 清理完成（wall 表数据**不动**）|
+| `CLOSING（终态）` | session 清理完成后从索引（byId / byPlayer / byWall）摘除、逻辑隐退（wall 表数据**不动**）；无独立 CLOSED 终态 |
 
 > **关键不变量**：会话生命周期（SELECTING/ISSUED/ACTIVE）只管"谁在编辑"；wall 数据生命周期（walls 表行 + map RESERVED + ItemFrames）只在 `/canvas delete` 显式清理。两者解耦。
 
@@ -652,7 +651,7 @@ CI 集成：
 
 **SELECTING 期间的其他行为：**
 - 玩家重复点击 = 覆盖更新最近的同键位点
-- `/canvas cancel` = 丢弃 selection，回到 CLOSED
+- `/canvas cancel` = 丢弃 selection，进 CLOSING 后逻辑隐退（无活跃会话）
 - 玩家断线 / 离线 = SELECTING 立即释放（无资源占用）
 
 ### 7.2 物品框部署（仅"新建 wall"路径走，`/canvas confirm` 后立即执行）
@@ -677,11 +676,11 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | --- | --- | --- | --- |
 | `/canvas confirm`（新建路径） | 新增 walls 行 | 新挂 N×M 个 | SELECTING → ISSUED |
 | `/canvas confirm`（现有 wall：bind 路径） | 不变 | 不变 | SELECTING → ISSUED |
-| `/canvas open` | 不变 | 不变 | CLOSED → ACTIVE |
+| `/canvas open` | 不变 | 不变 | (无会话) → ACTIVE |
 | `wall.lock` WS op（取代旧 `/canvas publish`） | UPDATE published_at（=lock 时间戳） | 不变（PDC 不再写） | 不变 |
 | `wall.unlock` WS op（取代旧 `/canvas unpublish`） | UPDATE published_at=NULL | 不变（PDC 不再写） | 不变 |
 | `/canvas alias` | UPDATE alias | 不变 | 不变 |
-| `/canvas cancel` | 不变 | 不变 | 释放（→ CLOSING → CLOSED） |
+| `/canvas cancel` | 不变 | 不变 | 释放（→ CLOSING 终态，逻辑隐退） |
 | WS 5min disconnect | 不变 | 不变 | 释放 |
 | `/canvas delete <id>` | 第一次提示等 confirm；30s 内 confirm → DELETE walls 行 | 拆除 | 释放 |
 

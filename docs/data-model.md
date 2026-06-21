@@ -188,16 +188,17 @@ v2 形态:
 
 ### 2.4.2 `project_json` v2 → v3 加法（0.6）
 
-0.6 时间轴在 `ProjectState` 顶层加两个 **nullable** 字段（依据 `timeline.md §2.6/§2.7`）：
+0.6 时间轴在 `ProjectState` 顶层加两个 **nullable** 字段（依据 `timeline.md §2.6/§2.7`）；0.7.1 沿同一加法范式再补一个 `tweenFps`（per-wall 补间帧率，见下表）：
 
 | 字段 | 类型 | 缺省 | 语义 |
 | --- | --- | --- | --- |
 | `timelines` | `List<Timeline>` | `null` | 工程下所有时间轴；每条含 `tracks: Map<elementId, List<Keyframe>>`（方案 B：关键帧轨压平进 timeline，不进 Element） |
 | `activeTimelineId` | `String` | `null` | 当前激活时间轴 id；`null` = 静态画板（本节加法不生效） |
+| `tweenFps` | `Integer` | `null` | **0.7.1 引入**：per-wall 补间帧率；nullable blob 加法，旧工程无此字段 → `null` → `effectiveTweenFps()` 取引擎默认 30；序列化省略 `null`（`NON_NULL`）；同样无新 DB schema 版本 |
 
 `Timeline` / `Keyframe` / `Easing` / `TriggerConfig` record 形态以 `timeline.md §2.1–§2.5` 为权威。
 
-**与 v1→v2（§2.4.1）的关键区别：v2→v3 是纯加法，不重构结构、不需主动 rewrite 迁移。** v1→v2 把 `elements[]` 包进 `layers[]`、改了树形结构，故走启动期全库扫描回写（方案 A）；v2→v3 只是顶层多两个字段，沿用 **M8 v2 nullable 加法范式**：旧 v2 blob 无这两字段 → Jackson 反序列化填 `null` → `timelines == null` 走完全静态行为、baseline 零漂移（`ProjectState` 的 `@JsonCreator` 入口加两个 `@JsonProperty` 参数，缺失退 `null`）。
+**与 v1→v2（§2.4.1）的关键区别：v2→v3 是纯加法，不重构结构、不需主动 rewrite 迁移。** v1→v2 把 `elements[]` 包进 `layers[]`、改了树形结构，故走启动期全库扫描回写（方案 A）；v2→v3 只是顶层多两个字段，沿用 **M8 v2 nullable 加法范式**：旧 v2 blob 无这两字段 → Jackson 反序列化填 `null` → `timelines == null` 走完全静态行为、baseline 零漂移（`ProjectState` 的 `@JsonCreator` 入口为此加 `timelines` / `activeTimelineId` 两个 `@JsonProperty` 参数；0.7.1 又以同一 nullable 加法范式补了 `tweenFps`，故现共三个新参数，缺失均退 `null`）。
 
 **`Element` 8 个 record 零改动**——这是方案 B 的核心好处：关键帧不进 Element，故 sealed permits 与全部元素字段不动，`.canvas` / `project_json` 里既有 element 的序列化形态完全不变。
 
@@ -604,7 +605,7 @@ mysign.canvas
 
 直接包含 `protocol.md §7` 定义的 `ProjectState` 对象。v2 起为 layered 形态（含 `layers[]` / `activeLayerId` / `canvas.gridSize` / `canvas.guides` / 元素级 `opacity` / `blendMode` / `renderMode`）。导入老的 v1 `project.json`（含 `elements[]`）时自动 migrate（见 §2.4.1）。
 
-v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引入，见 §2.4.2）。导入老的 v1/v2 `project.json`（无这两个字段）时按静态处理（`timelines` 读为 `null`），无须迁移。时间轴是工程状态的一部分（序列化进 `ProjectState`），故 `.canvas` 导出天然带上它，无需 `assets/` 之类外置资源承载。
+v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引入）/ `tweenFps`（0.7.1 引入），见 §2.4.2。导入老的 v1/v2 `project.json`（无这两个字段）时按静态处理（`timelines` 读为 `null`），无须迁移。时间轴是工程状态的一部分（序列化进 `ProjectState`），故 `.canvas` 导出天然带上它，无需 `assets/` 之类外置资源承载。
 
 **0.8 Part B 新增字段（`PathElement.fillRule`）**：`PathElement` 在 `project.json` 内新增可空字段 `fillRule`（`"nonzero"` / `"evenodd"` / `null`，`null` 等价 `nonzero`）。**无 DB migration**：`fillRule` 在 `project_json` blob 内是 nullable 加法，旧 blob 无此字段 → Jackson `@JsonProperty` 反序列化读为 `null` → 渲染时走默认 `nonzero`，基线零漂移。SVG 矢量导入生成的 `PathElement` 按 SVG 源文件的 `fill-rule` 属性写入此字段（`fillMap.mapFillRule` 映射）。
 

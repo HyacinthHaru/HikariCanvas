@@ -98,11 +98,34 @@ params:
     default: "原始文字"
 ```
 
-**v1 参数化范围 = 仅文本。** 导出时 `TemplateExporter` 按 z-order 扫所有 `TextElement`，给每个分配默认 paramId `text_1 / text_2 / ...`；用户对每个文本可选「保留为参数」（keep）或写死。keep 时把 element 的 `text` 字段替换为 `"${paramId}"`，并在 `params` 段生成一个 `type: text` 的参数。**非文本字段（颜色 / 字号 / 坐标 / fill 等）参数化留 v1.x**（代码注释明确标注 future）。
+**raw_state 模式自动参数化范围 = 仅文本。** 导出时 `TemplateExporter` 按 z-order 扫所有 `TextElement`，给每个分配默认 paramId `text_1 / text_2 / ...`；用户对每个文本可选「保留为参数」（keep）或写死。keep 时把 element 的 `text` 字段替换为 `"${paramId}"`，并在 `params` 段生成一个 `type: text` 的参数。**raw_state 自动导出对非文本字段（颜色 / 字号 / 坐标 / fill 等）的参数化留 v1.x**（代码注释明确标注 future）。
+
+> **声明式 layout 模式（§4）参数化范围更广。** 手写 YAML 时不止文本内容可参数化——关键属性如 `text.color` / `text.font` / `text.size`、`rect.fill` / `rect.stroke.width`、`effects.*.color`、`icon.source` / `icon.tint` 等都可写 `${param}`（实例化期 `interp` 插值，代码出处 `TemplateLoader.collectParamRefs` 校验声明 + `TemplateInstantiator.materialize` 插值）。复杂多参数化（含 raw_state 自动导出未覆盖的字段）建议直接走 raw_state 模式。
 
 **实例化（`TemplateInstantiator`）：** 检测到 `raw_state` 非空时，深拷贝 raw_state → 遍历 Map 把**所有 String 字段**中的 `${param}` 占位符替换为参数值 → 反序列化回 `ProjectState` → 走 EditSession replace。raw_state 内的 element 同样跑 `validateElementForTemplateApply` 二次安全校验（坐标 / 尺寸 / 旋转 / fill / mask / image source 等），防止玩家通过模板注入畸形 element。
 
 **安全阈值（M16）：** raw_state 嵌套深度上限 32（`MAX_DEEP_COPY_DEPTH`）；单文档 YAML 码点上限 5 MiB；anchor/alias 展开上限 50。
+
+---
+
+## 2.2 用户模板所有权与权限
+
+玩家发布的工坊模板带**所有权标记**：`TemplateEntry.ownerUuid` 非空表示该条目来自 `user-templates/<uuid>/` 目录（DB `templates` 行同样持 owner UUID + name，代码出处 `TemplatePublisher`）。builtin / server 模板 `ownerUuid` 为空，所有玩家可见可用。
+
+**权限节点**（代码出处 `web/TemplateOpDispatcher.java` + `paper-plugin.yml`）：
+
+| 节点 | 默认 | 作用 |
+| --- | --- | --- |
+| `canvas.template.save` | `true` | 把当前 wall 发布为工坊模板 |
+| `canvas.template.delete.own` | `true` | 删除自己创作的模板 |
+| `canvas.template.delete.any` | `op` | 删除任意工坊模板（管理 / moderation） |
+| `canvas.template.feature` | `op` | 在模板库标记 / 取消「精选」 |
+| `canvas.template.bypass-limit` | `op` | 跳过每玩家发布数量配额 |
+| `canvas.template.use-others` | `op` | apply 其他玩家拥有的工坊模板（跨用户隔离 bypass） |
+
+**跨用户隔离（M16 P1.6）：** 非 owner 且无 `canvas.template.use-others` 的玩家，ready 帧模板列表里看不到他人的工坊模板，apply 时也被 `ForbiddenTemplateException` 拦截。builtin / server 模板不受此限。
+
+**发布配额：** `config.yml → templates.max-per-player`（默 20；`0` = 不限）。持 `canvas.template.bypass-limit` 的玩家跳过配额；超额发布返 `QUOTA_EXCEEDED`（更新同 slug 的现有模板不计配额，给宽限）。
 
 ---
 
@@ -339,15 +362,21 @@ fill: "${line_color}"
 
 ### 6.2 条件表达式（visible_when / visible）
 
-支持极简表达式子集：
+文法（0.7.0-P2 K2 扩充版；模板 `visible_when` 与脚本条件共用 `ExpressionParser`，拿到无破坏超集，代码出处 `template/expr/ExpressionParser.java`）：
 
 ```
-<expr> := <term> (( "==" | "!=" | "&&" | "||" ) <term>)*
-<term> := <ident> | <literal> | "(" <expr> ")" | "!" <term>
-<literal> := <string> | <number> | "true" | "false"
+or      := and ( "||" and )*
+and     := equ ( "&&" equ )*
+equ     := cmp ( ("==" | "!=") cmp )*
+cmp     := add ( ("<" | "<=" | ">" | ">=") add )?     # 禁止连串
+add     := mul ( ("+" | "-") mul )*
+mul     := unary ( ("*" | "/") unary )*
+unary   := "!" unary | "-" unary | primary
+primary := "var" "(" string ")" | ident | number | string
+         | "true" | "false" | "(" or ")"
 ```
 
-不支持函数调用、算术、字段访问。
+优先级（高 → 低）：`! -`（一元）→ `* /` → `+ -` → 比较（`< <= > >=`）→ `== !=` → `&&` → `||`，与 C 系语言一致。**比较禁止连串**：`1 < 2 < 3` 直接 parse error（用 `&&` 拼接）。`var("user/score")` 解析为变量引用（脚本条件用；裸 `var` 是保留字，不允许当标识符）。除 `var` 外不支持函数调用、字段访问。
 
 `==` / `!=` 语义（0.7.0-P2-2b 契约修订，实现与脚本条件共用 `ExpressionEvaluator`）：
 **双侧均为数值形态**（数字字面量或整串匹配 StrictNumber 文法的字符串）时走数值等值

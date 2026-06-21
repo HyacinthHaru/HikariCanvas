@@ -147,7 +147,7 @@ validateToken(t):
 
 - **WS upgrade Origin 白名单（M16-P1.3 实装，`WebServer.checkWsOrigin` / `isOriginAllowed`）**：放行三类 ——（1）无 / 空 / 字面 `"null"` 的 Origin（同源 fetch / 非浏览器客户端）；（2）`127.0.0.1:*` / `localhost:*`（开发环境）；（3）与服务端 `host:port` 完全同源，或显式命中 `network.allowed-origins` 配置白名单（严格大小写敏感匹配 scheme+host+port）。其余一律拒绝 upgrade（防 CSWSH 跨站 WS 劫持）。**注意：携带任意非白名单 Origin 的浏览器请求会被拒；缺失 Origin 的非浏览器客户端放行**
 - 连接前需完成 HTTP 预握手 `GET /api/session/:token`（peek 校验，不消耗 token）
-- 每连接在 5 秒内必须发送 `auth` 帧，否则强制 close 4001（`auth_timeout`）
+- 每连接在 5 秒内必须发送 `auth` 帧，否则强制 close 4001（`auth_timeout`）。该超时由**服务器被动驱动**——`onConnect` 时 `WebServer.scheduleAuthTimeout` 在内部专用 daemon `ScheduledExecutorService`（`hikari-ws-auth-timeout`）上注册一个 N 秒后触发的任务（非网络层自然超时）；到时若该连接仍未通过 auth（未设置 session attr）即主动 `ctx.closeSession(4001, "auth_timeout")`，auth 成功则 `cancelAuthTimeout` 撤销该任务
 
 ### 3.2 消息层
 

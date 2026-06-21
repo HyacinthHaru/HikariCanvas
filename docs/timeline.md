@@ -13,8 +13,9 @@
 > 本文取代 `dynamic-data.md §13.4` 的纸面设想（§13.4 已瘦为指向本文的摘要）。可行性评估（5 维度
 > 深读真实代码 + 0.5.0 Benchmark 实测）的结论已并入本文，关键 file:line 证据随文给出。
 
-**状态**：**0.6.0 已完工（2026-06-09）**。本文已按当前代码原地校准（2026-06-14）。`§0` 决策由 owner
-拍板（2026-06-03）；`§10` 分期表保留为历史记录，当前实际能力以正文「当前能力」标注为准。
+**状态**：**0.6.0 已完工（2026-06-09）**。本文为 0.6.0 设计总纲，已按 **0.7.4-SNAPSHOT** 代码原地校准
+（最近一次 2026-06-14）。`§0` 决策由 owner 拍板（2026-06-03）；`§10` 分期表保留为历史记录，当前实际
+能力以正文「当前能力」标注为准。
 
 > **本文的"留 phase / 留 0.7 / MVP 只做 X"等表述多为规划期措辞。0.6.0 已全部完工，实际能力已远超
 > MVP**：5 种缓动 + 自定义贝塞尔曲线编辑器 + 9 个可关键帧属性 + 多 timeline（上限 16）+ AE 风底部
@@ -134,19 +135,22 @@ record Keyframe(
 按 `property` 的可插值性分三类：
 - **数值类**（x/y/w/h/rotation/opacity）：线性 + easing 插值。
 - **Fill / color 类**：渐变插值（在 sRGB 线性空间，§4.4）。
-- **离散类**（text / fontId 等）：不插值，取 `timeMs <= 当前` 的最近关键帧（step）。
+- **离散类**（仅 `text`）：不插值，取 `timeMs <= 当前` 的最近关键帧（step）。可加关键帧的属性白名单共
+  **9 个**（`Keyframe.PROPERTIES`：x/y/w/h/rotation/opacity/color/fill/text），**无 `fontId`**。
 
 ### 2.4 `Easing`
 
 ```
 record Easing(EasingType type, List<Double> bezier)  // bezier 仅 CUBIC_BEZIER 用：[x1,y1,x2,y2]
 enum EasingType { LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT, CUBIC_BEZIER }
-// wire: linear / easeIn / easeOut / easeInOut / cubicBezier（camelCase，≠ Java 名）
+// wire: linear / easeIn / easeOut / easeInOut / cubicBezier
+// （wire 用 camelCase 字符串，与 Java enum name 仅大小写不同，由 @JsonProperty 映射）
 ```
 
 > **代码核对**：`bezier` 在 Java 端是 `List<Double>`（非 `double[]`），缺省 `Easing.LINEAR`
-> （`Easing.java`）。**wire ≠ Java 名**：`EasingType` wire 是 `linear`/`easeIn`/`easeOut`/`easeInOut`/
-> `cubicBezier`（camelCase）。
+> （`Easing.java`）。**wire 用 camelCase 字符串，与 Java enum name 仅大小写不同**（同物两种写法，由
+> `EasingType.java` 的 `@JsonProperty` 显式映射：`LINEAR`→`linear` / `EASE_IN`→`easeIn` /
+> `EASE_OUT`→`easeOut` / `EASE_IN_OUT`→`easeInOut` / `CUBIC_BEZIER`→`cubicBezier`）。
 
 > **当前能力（D4 已超出）**：**5 种缓动全部已实装**——`LINEAR` + `EASE_IN/OUT/IN_OUT` 三预设 + 完整
 > `CUBIC_BEZIER`。求值器 `EasingSolver`（Java）/ `web/src/timeline/easing.ts`（TS）双端逐位等价；前端
@@ -285,7 +289,7 @@ config max-fps 默 60 → 16.7ms 为上界）tick。每 tick：对每个活跃�
 |---|---|
 | 数值（x/y/w/h/rotation/opacity） | 线性 + easing：`v = a + (b-a) × ease(t)` |
 | Fill / color | 按 stop 对齐做分量插值，**sRGB 线性空间**（§4.4） |
-| 离散（text/fontId） | step：取 `timeMs <= 当前` 的最近关键帧，不插值 |
+| 离散（仅 text） | step：取 `timeMs <= 当前` 的最近关键帧，不插值（白名单仅 9 属性，**无** `fontId`） |
 
 **字形动画不做**：逐字 advance 量化是双端已知痛点（CLAUDE.md M20），文本只整体属性动画 + 内容 step
 切换，不做字形级 morph。

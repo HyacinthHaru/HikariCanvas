@@ -633,12 +633,14 @@ CREATE TABLE IF NOT EXISTS user_variables (
 | 权限 | default | 用途 |
 |---|---|---|
 | `canvas.var.read` | true | 查看变量列表 |
-| `canvas.var.write.own` | true | 在自己 wall 上创建 / 改值 user/* 变量 |
-| `canvas.var.write.any` | op | 在任意 wall 上 |
-| `canvas.var.delete.own` | true | 删除自己 wall 上的 user/* |
-| `canvas.var.delete.any` | op | |
+| `canvas.var.write.own` | true | 在自己 wall 上创建 / 改值 / **删除** user/* 变量 |
+| `canvas.var.write.any` | op | 在任意 wall 上同上 |
+| `canvas.var.delete.own` | true | （已声明但当前未被代码引用——per-wall user/* 删除复用 `write.own`，见下方说明） |
+| `canvas.var.delete.any` | op | （同上，未被引用） |
 | `canvas.var.bind` | op | 让 user/* 变量被插件接管（敏感操作） |
 | `canvas.var.command` | op | 用 `/canvas var` 命令 |
+
+> **per-wall user 变量的权限实装说明**：`VariableOpDispatcher.checkPermission` 对所有 non-bind 的 per-wall user/* 操作（`variable.create / update / set / delete`）统一按 owner 与否选 `canvas.var.write.own` / `canvas.var.write.any`；`variable.bind` 走 `canvas.var.bind`。`canvas.var.delete.own/.any` 两个节点仍在 `paper-plugin.yml` 声明，但**当前代码无任何引用**（删除走 write 节点）。全局用户变量（`userglobal/*`）的删除走另一套节点族 `canvas.var.global.delete.own/.any`（见 §17.3）。
 
 ### 9.2 插件 namespace ACL
 
