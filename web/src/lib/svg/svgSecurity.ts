@@ -12,6 +12,41 @@ export function preParseGuard(svg: string, maxBytes: number): void {
     }
 }
 
+/**
+ * SVG 复杂度上限：形状数 + 估算总顶点数。超限 throw SvgImportError('SVG_TOO_COMPLEX')。
+ * 顶点为粗估——path 用 d 里的命令字母数累加、基本形状用常数，不必精确，只为挡住超大输入。
+ */
+export function complexityGuard(
+    shapes: Element[],
+    limits?: { maxShapes?: number; maxTotalVertices?: number },
+): void {
+    const maxShapes = limits?.maxShapes ?? 500;
+    const maxTotalVertices = limits?.maxTotalVertices ?? 50000;
+
+    if (shapes.length > maxShapes) {
+        throw new SvgImportError('SVG_TOO_COMPLEX', `形状数 ${shapes.length} 超过上限 ${maxShapes}`);
+    }
+
+    let total = 0;
+    for (const el of shapes) {
+        const tag = el.tagName.toLowerCase();
+        if (tag === 'path') {
+            const d = el.getAttribute('d') ?? '';
+            // 命令字母数粗估顶点（M/L/Q/C/H/V/A/S/T/Z 及小写）
+            const cmds = d.match(/[MmLlHhVvQqCcSsTtAaZz]/g);
+            total += cmds ? cmds.length : 0;
+        } else if (tag === 'polyline' || tag === 'polygon') {
+            const pts = (el.getAttribute('points') ?? '').trim().split(/[\s,]+/).filter(Boolean);
+            total += Math.ceil(pts.length / 2);
+        } else {
+            total += 4;   // rect/circle/ellipse/line/image 常数
+        }
+        if (total > maxTotalVertices) {
+            throw new SvgImportError('SVG_TOO_COMPLEX', `估算顶点数超过上限 ${maxTotalVertices}`);
+        }
+    }
+}
+
 /** 危险标签列表(小写)——用 tagName.toLowerCase() 匹配,绕过 happy-dom querySelectorAll 大小写敏感问题。 */
 const DANGEROUS_TAGS = new Set([
     'script', 'foreignobject', 'use', 'symbol',

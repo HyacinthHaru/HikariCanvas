@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-06-20 · 0.8 Part B — B4：复杂度硬化（Task 17）
+
+`svgSecurity.complexityGuard(shapes, {maxShapes=500, maxTotalVertices=50000})`：形状数 + 估算顶点（path 命令字母数 / poly 点数 / 其它常数 4）双上限，超限 throw `SvgImportError('SVG_TOO_COMPLEX')`；`svgToElements` 在 parseSvg 后、遍历前调用，挡超大/恶意 SVG。测试 4 + svgToElements 回归 3 绿。
+
+---
+
 ## 2026-06-20 · 0.8 Part B — B3：gradient + viewBox + 内嵌位图（Task 14-16）
 
 MVP 后增强，一个 implementer 连做（三 task 交织在 svgToElements.ts）。controller 禁沙箱独立跑全 SVG 测试 **54 绿、零回归**。

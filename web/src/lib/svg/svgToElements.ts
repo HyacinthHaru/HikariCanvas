@@ -9,6 +9,7 @@
  */
 
 import { parseSvg } from './svgParse';
+import { complexityGuard } from './svgSecurity';
 import { shapeToPathD } from './shapesToPath';
 import { parsePathCommands, commandsToD } from './normalizeD';
 import { bakeMatrix, commandsBBox, rebaseToOrigin } from './bakePath';
@@ -68,6 +69,7 @@ export function svgToElements(
     opts?: { maxBytes?: number; targetWidth?: number; targetHeight?: number },
 ): ElementDraft[] {
     const doc = parseSvg(svg, opts?.maxBytes);
+    complexityGuard(doc.shapes);
     const drafts: ElementDraft[] = [];
 
     // Task 15: 构建 viewBox 缩放矩阵（仅当 viewBox + targetWidth/targetHeight 均存在时）
