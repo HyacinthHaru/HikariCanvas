@@ -730,7 +730,7 @@ export class WsClient {
         // authenticated=true / 未启心跳的半态卡死）。缺失视为协议错误：记日志 + 主动 close
         // （非 1000 码）让 onClose→scheduleReconnect 接管，而非半态继续。
         if (!payload || !payload.projectState || !payload.projectState.canvas) {
-            net.lastError = 'ready payload 缺失 projectState/canvas（协议错误）';
+            net.lastError = localizeErrorCode('MALFORMED_READY');
             net.pushLog('err', 'ready payload missing projectState/canvas; closing connection');
             try { this.ws?.close(4000, 'malformed_ready'); } catch { /* ignore */ }
             return;
@@ -932,7 +932,7 @@ export class WsClient {
     private scheduleReconnect(): void {
         const net = useNetworkStore();
         if (this.reconnectAttempt >= RECONNECT_BACKOFF_S.length) {
-            net.lastError = '服务器长时间不可达，请刷新页面或在游戏里重新 /canvas edit';
+            net.lastError = localizeErrorCode('RECONNECT_EXHAUSTED');
             return;
         }
         const delay = RECONNECT_BACKOFF_S[this.reconnectAttempt] * 1000;
@@ -944,7 +944,7 @@ export class WsClient {
             if (this.stopped) return;
             const token = this.pickTokenForReconnect();
             if (!token) {
-                net.lastError = 'token 丢失，请刷新页面或重新 /canvas edit';
+                net.lastError = localizeErrorCode('TOKEN_MISSING');
                 return;
             }
             this.connect(token);
