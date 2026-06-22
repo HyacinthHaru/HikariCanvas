@@ -568,7 +568,7 @@ public final class HikariCanvas extends JavaPlugin {
                         new CanvasCommand(this, sessionManager, frameDeployer,
                                 tokenService, mapPool, database, wallRepo,
                                 templateRegistry, templatePreviewService, editorUrlTemplate,
-                                variableSubCommand, benchmarkSubCommand).build()));
+                                variableSubCommand, benchmarkSubCommand, messages).build()));
 
         // M13：UploadHandler 需要 sessionManager / wallRepo，所以晚于它们装配
         // M16 P2.1/P2.2：还需要 imageDao + jdbi 做事务化 quota+insert+evict

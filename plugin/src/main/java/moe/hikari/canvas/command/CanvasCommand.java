@@ -9,6 +9,7 @@ import io.papermc.paper.command.brigadier.Commands;
 import moe.hikari.canvas.deploy.CanvasWand;
 import moe.hikari.canvas.deploy.FrameDeployer;
 import moe.hikari.canvas.deploy.WallResolver;
+import moe.hikari.canvas.i18n.Messages;
 import moe.hikari.canvas.pool.MapPool;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionManager;
@@ -21,8 +22,7 @@ import moe.hikari.canvas.template.preview.TemplatePreviewService;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -31,9 +31,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -77,6 +75,8 @@ public final class CanvasCommand {
     private final VariableSubCommand variableSubCommand;
     /** 0.5.0-P1：{@code /canvas bench} 命令族（list/run/report/clear）。null = 主插件未传，跳过注册。 */
     private final BenchmarkSubCommand benchmarkSubCommand;
+    /** 0.8.2 i18n：多语言消息注册表。 */
+    private final Messages messages;
 
     /**
      * M16-P2.6：玩家最近的 /canvas delete <wallId> 待确认条目。
@@ -106,7 +106,8 @@ public final class CanvasCommand {
                          TemplatePreviewService templatePreviewService,
                          String editorUrlTemplate,
                          VariableSubCommand variableSubCommand,
-                         BenchmarkSubCommand benchmarkSubCommand) {
+                         BenchmarkSubCommand benchmarkSubCommand,
+                         Messages messages) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
         this.frameDeployer = frameDeployer;
@@ -119,6 +120,7 @@ public final class CanvasCommand {
         this.editorUrlTemplate = editorUrlTemplate;
         this.variableSubCommand = variableSubCommand;
         this.benchmarkSubCommand = benchmarkSubCommand;
+        this.messages = messages;
         // M16-P2.6：注册 PlayerQuit 监听清 pendingDeletes，避免玩家退出后 bucket 长期挂着
         plugin.getServer().getPluginManager().registerEvents(
                 new QuitListener(), plugin);
@@ -162,8 +164,8 @@ public final class CanvasCommand {
                 .then(Commands.literal("list")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runList))
-                // 2026-05-14 lock-state 重设计：/canvas publish 与 /canvas unpublish 砍。
-                // 锁定 / 解锁由前端浏览器 TopBar 的 Lock 按钮触发 WS op wall.lock/wall.unlock。
+                // 2026-05-14 砍：runPublish / runUnpublish 命令处理器移除。
+                // lock 状态由前端 TopBar Lock 按钮 → ws.send('wall.lock' | 'wall.unlock') → WebServer.handleWallOp 处理。
                 .then(Commands.literal("alias")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .then(Commands.argument("name", StringArgumentType.word())
@@ -205,7 +207,7 @@ public final class CanvasCommand {
                 player.getUniqueId(), player.getName());
         if (r instanceof SessionManager.BeginResult.Ok) {
             ensureWand(player);
-            sendEditGuide(player, "Selection mode on. Pick the wall corners:");
+            sendEditGuide(player, "command.edit.guide-headline-new");
         } else if (r instanceof SessionManager.BeginResult.AlreadyHasSession ex) {
             Session existing = ex.existing();
             switch (existing.state()) {
@@ -213,15 +215,10 @@ public final class CanvasCommand {
                     // M5-D8：隐式 reselect，避免玩家被卡在"已选一半"
                     sessionManager.resetSelection(existing.id());
                     ensureWand(player);
-                    sendEditGuide(player, "Selection reset. Pick the wall corners again:");
+                    sendEditGuide(player, "command.edit.guide-headline-reset");
                 }
-                case ISSUED, ACTIVE -> player.sendMessage(Component.text(
-                        "Editor is already open. Use /canvas cancel to close it, "
-                                + "or open the URL from the previous /canvas confirm.",
-                        NamedTextColor.YELLOW));
-                case CLOSING -> player.sendMessage(Component.text(
-                        "Session is closing; try again in a moment.",
-                        NamedTextColor.GRAY));
+                case ISSUED, ACTIVE -> messages.send(player, "command.edit.already-open");
+                case CLOSING -> messages.send(player, "command.edit.session-closing");
             }
         }
         return Command.SINGLE_SUCCESS;
@@ -233,22 +230,17 @@ public final class CanvasCommand {
         }
     }
 
-    private void sendEditGuide(Player player, String headline) {
-        player.sendMessage(Component.text(headline, NamedTextColor.GOLD));
-        player.sendMessage(Component.text("  ① Left-click the first wall block (or item frame on it)",
-                NamedTextColor.GRAY));
-        player.sendMessage(Component.text("  ② Right-click the opposite corner block",
-                NamedTextColor.GRAY));
-        player.sendMessage(Component.text("  ③ Run /canvas confirm to open the editor",
-                NamedTextColor.GRAY));
+    private void sendEditGuide(Player player, String headlineKey) {
+        messages.send(player, headlineKey);
+        messages.send(player, "command.edit.guide-step1");
+        messages.send(player, "command.edit.guide-step2");
+        messages.send(player, "command.edit.guide-step3");
     }
 
     private int runWand(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
         player.getInventory().addItem(CanvasWand.forPlayer(plugin, player));
-        player.sendMessage(Component.text(
-                "Received Canvas Wand. Left-click / right-click blocks to select corners.",
-                NamedTextColor.GOLD));
+        messages.send(player, "command.wand.received");
         return Command.SINGLE_SUCCESS;
     }
 
@@ -256,7 +248,7 @@ public final class CanvasCommand {
         Player player = (Player) ctx.getSource().getSender();
         Session s = sessionManager.byPlayer(player.getUniqueId());
         if (s == null) {
-            player.sendMessage(Component.text("No active session.", NamedTextColor.GRAY));
+            messages.send(player, "command.no-session");
             return 0;
         }
         // M5.5：cancel 仅释放 session/wand；wall 数据 + ItemFrames 保留
@@ -265,10 +257,14 @@ public final class CanvasCommand {
         sessionManager.cancel(sid, "player-cancel");
         int wands = CanvasWand.removeAllFrom(player, plugin);
 
-        StringBuilder msg = new StringBuilder("Session cancelled (was " + prev + ").");
-        if (wands > 0) msg.append(" Wand returned.");
-        msg.append(" Wall data preserved—use /canvas open or right-click ItemFrame to resume.");
-        player.sendMessage(Component.text(msg.toString(), NamedTextColor.YELLOW));
+        // wand_note 为魔棒回收提示（有棒时）或空串（无棒时）
+        String wandNoteKey = wands > 0 ? "command.cancel.cancelled-wand-returned"
+                : "command.cancel.cancelled-no-wand";
+        String wandNote = messages.rawOrNull(messages.localeId(player), wandNoteKey);
+        if (wandNote == null) wandNote = "";
+        messages.send(player, "command.cancel.cancelled",
+                Placeholder.unparsed("prev_state", prev.toString()),
+                Placeholder.unparsed("wand_note", wandNote));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -280,28 +276,29 @@ public final class CanvasCommand {
         SessionManager.OpenResult r = sessionManager.open(
                 player.getUniqueId(), player.getName(), idOrAlias);
         if (r instanceof SessionManager.OpenResult.NotFound) {
-            player.sendMessage(Component.text("No such wall: " + idOrAlias, NamedTextColor.RED));
+            messages.send(player, "command.open.not-found",
+                    Placeholder.unparsed("id_or_alias", idOrAlias));
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.AlreadyHasSession a) {
-            player.sendMessage(Component.text(
-                    "You already have an active session (state=" + a.current() + "). Use /canvas cancel first.",
-                    NamedTextColor.RED));
+            messages.send(player, "command.open.already-has-session",
+                    Placeholder.unparsed("state", a.current().toString()));
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.WallOccupied wo) {
-            player.sendMessage(Component.text(
-                    "Wall is being edited by " + (wo.otherPlayer() == null ? "?" : wo.otherPlayer()) + ".",
-                    NamedTextColor.RED));
+            messages.send(player, "command.open.wall-occupied",
+                    Placeholder.unparsed("other_player",
+                            wo.otherPlayer() == null ? "?" : wo.otherPlayer().toString()));
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.BindFailed bf) {
-            player.sendMessage(Component.text("Cannot bind wall: " + bf.detail(), NamedTextColor.RED));
+            messages.send(player, "command.open.bind-failed",
+                    Placeholder.unparsed("detail", bf.detail()));
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.Forbidden f) {
-            player.sendMessage(Component.text(
-                    "Wall is locked: " + f.message(), NamedTextColor.RED));
+            messages.send(player, "command.open.forbidden",
+                    Placeholder.unparsed("message", f.message()));
             return Command.SINGLE_SUCCESS;
         }
         SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;
@@ -309,15 +306,20 @@ public final class CanvasCommand {
         String token = tokenService.issue(player.getUniqueId(), player.getName(), ok.session().id());
         String url = editorUrlTemplate.replace("{token}", token);
         WallRepo.Wall w = ok.wall();
-        String summary = "Opened wall " + w.wallId()
-                + (w.alias() != null ? " (alias: " + w.alias() + ")" : "")
-                + " · " + w.widthMaps() + "×" + w.heightMaps();
-        player.sendMessage(Component.text(summary, NamedTextColor.GREEN));
-        player.sendMessage(Component.text("Open editor: ", NamedTextColor.GRAY)
-                .append(Component.text(url, NamedTextColor.AQUA)
-                        .decorate(TextDecoration.UNDERLINED)
-                        .clickEvent(ClickEvent.openUrl(url))
-                        .hoverEvent(HoverEvent.showText(Component.text("Click to open in browser")))));
+
+        // summary line with optional alias
+        String aliasPart = "";
+        if (w.alias() != null) {
+            String aliasPartRaw = messages.rawOrNull(messages.localeId(player), "command.open.alias-part");
+            if (aliasPartRaw == null) aliasPartRaw = " (alias: <alias>)";
+            aliasPart = aliasPartRaw.replace("<alias>", w.alias());
+        }
+        messages.send(player, "command.open.summary",
+                Placeholder.unparsed("wall_id", w.wallId()),
+                Placeholder.unparsed("alias_part", aliasPart),
+                Placeholder.unparsed("width", String.valueOf(w.widthMaps())),
+                Placeholder.unparsed("height", String.valueOf(w.heightMaps())));
+        sendEditorUrlComponent(player, url, "command.open.editor-url", "command.open.editor-url-hover");
         return Command.SINGLE_SUCCESS;
     }
 
@@ -325,36 +327,49 @@ public final class CanvasCommand {
         Player player = (Player) ctx.getSource().getSender();
         List<WallRepo.Summary> walls = wallRepo.listForOwner(player.getUniqueId());
         if (walls.isEmpty()) {
-            player.sendMessage(Component.text(
-                    "You have no canvas walls yet. Use /canvas edit to create one.",
-                    NamedTextColor.GRAY));
+            messages.send(player, "command.list.empty");
             return Command.SINGLE_SUCCESS;
         }
         // P3-99: 术语对齐 lock-state 重设计——publishedAt 非 null = 已锁定（locked）。
         // 数据语义不变，仅玩家可见文案从过时的 "published" 改为 "locked"。
         List<WallRepo.Summary> locked = walls.stream().filter(w -> w.publishedAt() != null).toList();
         List<WallRepo.Summary> drafts = walls.stream().filter(w -> w.publishedAt() == null).toList();
-        player.sendMessage(Component.text(
-                "Your canvas walls: " + walls.size() + " total ("
-                        + locked.size() + " locked, " + drafts.size() + " editing)",
-                NamedTextColor.GOLD));
+        messages.send(player, "command.list.header",
+                Placeholder.unparsed("total", String.valueOf(walls.size())),
+                Placeholder.unparsed("locked", String.valueOf(locked.size())),
+                Placeholder.unparsed("drafts", String.valueOf(drafts.size())));
         for (WallRepo.Summary w : locked) sendWallLine(player, w, true);
         for (WallRepo.Summary w : drafts) sendWallLine(player, w, false);
         return Command.SINGLE_SUCCESS;
     }
 
     private void sendWallLine(Player p, WallRepo.Summary w, boolean locked) {
-        String tag = locked ? "[L]" : "[D]";
         String aliasPart = w.alias() != null ? " '" + w.alias() + "'" : "";
-        String label = String.format("  %s %s%s · %dx%d · %s (%d,%d,%d) %s",
-                tag, w.wallId(), aliasPart, w.widthMaps(), w.heightMaps(),
-                w.world(), w.originX(), w.originY(), w.originZ(), w.facing());
-        Component line = Component.text(label,
-                locked ? NamedTextColor.AQUA : NamedTextColor.GRAY)
+        String lineKey = locked ? "command.list.line-locked" : "command.list.line-draft";
+        String lineRaw = messages.rawOrNull(messages.localeId(p), lineKey);
+        if (lineRaw == null) {
+            lineRaw = locked
+                    ? "<aqua>  [L] <wall_id><alias_part> · <width>x<height> · <world> (<x>,<y>,<z>) <facing></aqua>"
+                    : "<gray>  [D] <wall_id><alias_part> · <width>x<height> · <world> (<x>,<y>,<z>) <facing></gray>";
+        }
+        Component label = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+                .deserialize(lineRaw,
+                        Placeholder.unparsed("wall_id", w.wallId()),
+                        Placeholder.unparsed("alias_part", aliasPart),
+                        Placeholder.unparsed("width", String.valueOf(w.widthMaps())),
+                        Placeholder.unparsed("height", String.valueOf(w.heightMaps())),
+                        Placeholder.unparsed("world", w.world()),
+                        Placeholder.unparsed("x", String.valueOf(w.originX())),
+                        Placeholder.unparsed("y", String.valueOf(w.originY())),
+                        Placeholder.unparsed("z", String.valueOf(w.originZ())),
+                        Placeholder.unparsed("facing", w.facing()));
+        // hover text from lang
+        String hoverRaw = messages.rawOrNull(messages.localeId(p), "command.list.line-hover");
+        if (hoverRaw == null) hoverRaw = "Click to suggest /canvas open <wall_id>";
+        String hoverText = hoverRaw.replace("<wall_id>", w.wallId());
+        p.sendMessage(label
                 .clickEvent(ClickEvent.suggestCommand("/canvas open " + w.wallId()))
-                .hoverEvent(HoverEvent.showText(Component.text(
-                        "Click to suggest /canvas open " + w.wallId())));
-        p.sendMessage(line);
+                .hoverEvent(HoverEvent.showText(Component.text(hoverText))));
     }
 
     // 2026-05-14 砍：runPublish / runUnpublish 命令处理器移除。
@@ -364,38 +379,36 @@ public final class CanvasCommand {
         Player player = (Player) ctx.getSource().getSender();
         Session s = sessionManager.byPlayer(player.getUniqueId());
         if (s == null || s.wallId() == null) {
-            player.sendMessage(Component.text("No active wall session.", NamedTextColor.RED));
+            messages.send(player, "command.no-wall-session");
             return Command.SINGLE_SUCCESS;
         }
         String alias = StringArgumentType.getString(ctx, "name");
         if (!ALIAS_PATTERN.matcher(alias).matches()) {
-            player.sendMessage(Component.text(
-                    "Alias must match [A-Za-z0-9_-]{2,32}.", NamedTextColor.RED));
+            messages.send(player, "command.alias.invalid-format");
             return Command.SINGLE_SUCCESS;
         }
         // M15.3 P0-19：alias 操作必须是 wall owner（或带 canvas.alias.any 权限）
         var wallOpt = wallRepo.loadById(s.wallId());
         if (wallOpt.isEmpty()) {
-            player.sendMessage(Component.text("Wall not found.", NamedTextColor.RED));
+            messages.send(player, "command.alias.wall-not-found");
             return Command.SINGLE_SUCCESS;
         }
         var wall = wallOpt.get();
         boolean isOwner = wall.ownerUuid().equals(player.getUniqueId());
         boolean canAny = player.hasPermission("canvas.alias.any");
         if (!isOwner && !canAny) {
-            player.sendMessage(Component.text(
-                    "Only the wall owner can change alias.",
-                    NamedTextColor.RED));
+            messages.send(player, "command.alias.not-owner");
             return Command.SINGLE_SUCCESS;
         }
         boolean ok = wallRepo.setAlias(s.wallId(), alias);
         if (!ok) {
-            player.sendMessage(Component.text(
-                    "Alias '" + alias + "' is already in use.", NamedTextColor.RED));
+            messages.send(player, "command.alias.in-use",
+                    Placeholder.unparsed("alias", alias));
             return Command.SINGLE_SUCCESS;
         }
-        player.sendMessage(Component.text(
-                "Wall " + s.wallId() + " alias = " + alias, NamedTextColor.GREEN));
+        messages.send(player, "command.alias.set-ok",
+                Placeholder.unparsed("wall_id", s.wallId()),
+                Placeholder.unparsed("alias", alias));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -404,14 +417,13 @@ public final class CanvasCommand {
         String wallId = StringArgumentType.getString(ctx, "wall_id");
         var w = wallRepo.loadById(wallId).orElse(null);
         if (w == null) {
-            player.sendMessage(Component.text("No such wall: " + wallId, NamedTextColor.RED));
+            messages.send(player, "command.delete.not-found",
+                    Placeholder.unparsed("wall_id", wallId));
             return Command.SINGLE_SUCCESS;
         }
         if (!w.ownerUuid().equals(player.getUniqueId())
                 && !player.hasPermission("canvas.delete.any")) {
-            player.sendMessage(Component.text(
-                    "You can only delete your own walls (need canvas.delete.any otherwise).",
-                    NamedTextColor.RED));
+            messages.send(player, "command.delete.not-owner");
             return Command.SINGLE_SUCCESS;
         }
         long now = System.currentTimeMillis();
@@ -421,18 +433,22 @@ public final class CanvasCommand {
         reapExpired(bucket, now);
         PendingDelete existing = bucket.get(wallId);
         if (existing != null && now - existing.ts() <= DELETE_CONFIRM_WINDOW_MS) {
-            player.sendMessage(Component.text(
-                    "Already pending for wall " + wallId
-                            + ". Type /canvas delete " + wallId + " confirm to proceed.",
-                    NamedTextColor.YELLOW));
+            messages.send(player, "command.delete.already-pending",
+                    Placeholder.unparsed("wall_id", wallId));
             return Command.SINGLE_SUCCESS;
         }
         bucket.put(wallId, new PendingDelete(wallId, now));
-        player.sendMessage(Component.text(
-                "About to delete wall " + wallId
-                        + (w.alias() != null ? " '" + w.alias() + "'" : "")
-                        + ". Run /canvas delete " + wallId + " confirm within 30s.",
-                NamedTextColor.YELLOW));
+
+        // alias part for pending message
+        String aliasPart = "";
+        if (w.alias() != null) {
+            String aliasPartRaw = messages.rawOrNull(messages.localeId(player), "command.delete.pending-alias-part");
+            if (aliasPartRaw == null) aliasPartRaw = " '<alias>'";
+            aliasPart = aliasPartRaw.replace("<alias>", w.alias());
+        }
+        messages.send(player, "command.delete.pending",
+                Placeholder.unparsed("wall_id", wallId),
+                Placeholder.unparsed("alias_part", aliasPart));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -456,20 +472,19 @@ public final class CanvasCommand {
         }
         if (pd == null || !pd.wallId().equals(wallId)
                 || now - pd.ts() > DELETE_CONFIRM_WINDOW_MS) {
-            player.sendMessage(Component.text(
-                    "Confirm window expired or mismatched. Re-run /canvas delete " + wallId,
-                    NamedTextColor.RED));
+            messages.send(player, "command.delete.expired",
+                    Placeholder.unparsed("wall_id", wallId));
             return Command.SINGLE_SUCCESS;
         }
         var w = wallRepo.loadById(wallId).orElse(null);
         if (w == null) {
-            player.sendMessage(Component.text("Wall already gone: " + wallId, NamedTextColor.GRAY));
+            messages.send(player, "command.delete.already-gone",
+                    Placeholder.unparsed("wall_id", wallId));
             return Command.SINGLE_SUCCESS;
         }
         if (!w.ownerUuid().equals(player.getUniqueId())
                 && !player.hasPermission("canvas.delete.any")) {
-            player.sendMessage(Component.text(
-                    "You can only delete your own walls.", NamedTextColor.RED));
+            messages.send(player, "command.delete.not-owner-confirm");
             return Command.SINGLE_SUCCESS;
         }
         // 拆 ItemFrame
@@ -477,9 +492,9 @@ public final class CanvasCommand {
         int frames = world == null ? 0 : frameDeployer.removeForWall(wallId, world);
         // SessionManager.deleteWall 释放池 + 删 walls 行（含 cancel 任何活跃 session）
         sessionManager.deleteWall(wallId);
-        player.sendMessage(Component.text(
-                "Wall " + wallId + " deleted. " + frames + " frames removed.",
-                NamedTextColor.GREEN));
+        messages.send(player, "command.delete.deleted",
+                Placeholder.unparsed("wall_id", wallId),
+                Placeholder.unparsed("frames", String.valueOf(frames)));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -489,8 +504,7 @@ public final class CanvasCommand {
         Player player = (Player) ctx.getSource().getSender();
         Session s = sessionManager.byPlayer(player.getUniqueId());
         if (s == null) {
-            player.sendMessage(Component.text("No active session. Run /canvas edit first.",
-                    NamedTextColor.RED));
+            messages.send(player, "command.no-session-edit-first");
             return 0;
         }
 
@@ -500,36 +514,35 @@ public final class CanvasCommand {
         } catch (SessionManager.SessionConfirmFailedException e) {
             // M16-P2.7-A：confirm 中跨子系统步骤已 rollback。给玩家提示，细节看服务端日志。
             plugin.getLogger().log(Level.SEVERE, "SessionManager.confirm rolled back", e);
-            player.sendMessage(Component.text(
-                    "Failed to confirm session, server log for details.",
-                    NamedTextColor.RED));
+            messages.send(player, "command.confirm-failed");
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.NotReady nr) {
-            player.sendMessage(Component.text("Not ready: " + nr.detail(), NamedTextColor.RED));
+            messages.send(player, "command.confirm.not-ready",
+                    Placeholder.unparsed("detail", nr.detail()));
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.WallFailed wf) {
-            player.sendMessage(Component.text(
-                    "Wall invalid: " + wf.reason().reason() + " — " + wf.reason().detail(),
-                    NamedTextColor.RED));
+            messages.send(player, "command.confirm.wall-invalid",
+                    Placeholder.unparsed("reason", String.valueOf(wf.reason().reason())),
+                    Placeholder.unparsed("detail", wf.reason().detail()));
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.WallOccupied wo) {
-            player.sendMessage(Component.text(
-                    "This wall is already being edited (session " + wo.otherSessionId() + ").",
-                    NamedTextColor.RED));
+            messages.send(player, "command.confirm.wall-occupied",
+                    Placeholder.unparsed("session_id", wo.otherSessionId()));
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.PoolExhausted pe) {
-            player.sendMessage(Component.text(
-                    "Pool exhausted: " + pe.message() + ". Try smaller wall or wait.",
-                    NamedTextColor.RED));
+            messages.send(player, "command.confirm.pool-exhausted",
+                    Placeholder.unparsed("message", pe.message()));
             return Command.SINGLE_SUCCESS;
         }
         // Ultrareview 2026-05-25 #2：confirm 撞 locked + 非 owner + 无 bypass → Forbidden
         if (result instanceof SessionManager.ConfirmResult.Forbidden fb) {
-            player.sendMessage(Component.text(fb.message(), NamedTextColor.RED));
+            // fb.message() 是动态服务器错误信息，直接用 Component.text 转发
+            player.sendMessage(Component.text(fb.message(),
+                    net.kyori.adventure.text.format.NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
 
@@ -567,8 +580,8 @@ public final class CanvasCommand {
                             "deploy-failure rollback also failed for wall " + wallId, rollbackEx);
                     sessionManager.cancel(sessionAfter.id(), "deploy-failed");  // 兜底至少结束 session
                 }
-                player.sendMessage(Component.text("Frame deployment failed: " + e.getMessage(),
-                        NamedTextColor.RED));
+                messages.send(player, "command.confirm.deploy-failed",
+                        Placeholder.unparsed("message", e.getMessage() != null ? e.getMessage() : "unknown"));
                 return Command.SINGLE_SUCCESS;
             }
         }
@@ -578,23 +591,40 @@ public final class CanvasCommand {
                 player.getUniqueId(), player.getName(), sessionAfter.id());
         String url = editorUrlTemplate.replace("{token}", token);
 
-        String summary = newWall
-                ? "Wall created: " + wallId + " · " + wall.width() + "×" + wall.height()
-                        + " (" + mounted + " frames)."
-                : "Wall opened: " + wallId + " · " + wall.width() + "×" + wall.height()
-                        + " (existing).";
-        player.sendMessage(Component.text(summary + " Editor token valid 15 min.",
-                NamedTextColor.GREEN));
-        player.sendMessage(Component.text("Open editor: ", NamedTextColor.GRAY)
-                .append(Component.text(url, NamedTextColor.AQUA)
-                        .decorate(TextDecoration.UNDERLINED)
-                        .clickEvent(ClickEvent.openUrl(url))
-                        .hoverEvent(HoverEvent.showText(Component.text(
-                                "Click to open in browser")))));
+        String confirmKey = newWall ? "command.confirm.created" : "command.confirm.opened";
+        messages.send(player, confirmKey,
+                Placeholder.unparsed("wall_id", wallId),
+                Placeholder.unparsed("width", String.valueOf(wall.width())),
+                Placeholder.unparsed("height", String.valueOf(wall.height())),
+                Placeholder.unparsed("frames", String.valueOf(mounted)));
+        sendEditorUrlComponent(player, url, "command.confirm.editor-url", "command.confirm.editor-url-hover");
 
         // 收回 wand（契约：confirm 后 wand 消失）
         CanvasWand.removeAllFrom(player, plugin);
         return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * 发送带 ClickEvent（open_url）和 HoverEvent 的编辑器链接。
+     * lang 文件只提供 hover 文字，链接本体由 Java 构建（MiniMessage 不支持动态 url click tag）。
+     */
+    private void sendEditorUrlComponent(Player player, String url, String prefixKey, String hoverKey) {
+        // hover 文字来自 lang
+        String hoverRaw = messages.rawOrNull(messages.localeId(player), hoverKey);
+        if (hoverRaw == null) hoverRaw = "Click to open in browser";
+        // 前缀文字：lang 中 urlKey 的非 url 部分，直接用 MiniMessage 渲染 prefix key
+        // 约定 lang 格式："<gray>Open editor: </gray><aqua><underlined><url></underlined></aqua>"
+        // 这里把 <url> 替换为真实 url 并用 Placeholder 注入，Adventure 会渲染文字但无法附 ClickEvent。
+        // 因此：用 Component 拼装，lang 仅贡献文字颜色语义。
+        String prefixRaw = messages.rawOrNull(messages.localeId(player), prefixKey);
+        Component prefix = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+                .deserialize(prefixRaw != null ? prefixRaw.replace("<url>", "") : "Open editor: ");
+        Component link = Component.text(url,
+                net.kyori.adventure.text.format.NamedTextColor.AQUA)
+                .decorate(net.kyori.adventure.text.format.TextDecoration.UNDERLINED)
+                .clickEvent(ClickEvent.openUrl(url))
+                .hoverEvent(HoverEvent.showText(Component.text(hoverRaw)));
+        player.sendMessage(prefix.append(link));
     }
 
     // ---------- admin ----------
@@ -608,41 +638,36 @@ public final class CanvasCommand {
         int locked = database.jdbi().withHandle(h -> h.createQuery(
                 "SELECT COUNT(*) FROM walls WHERE published_at IS NOT NULL")
                 .mapTo(Integer.class).one());
-        sender.sendMessage(Component.text(String.format(
-                        "MapPool: total=%d  free=%d  reserved=%d   "
-                                + "|   Walls: %d (locked=%d)   "
-                                + "|   Sessions: %d   |   Tokens: %d",
-                        ps.total(), ps.free(), ps.reserved(),
-                        wallsCount, locked,
-                        sessionManager.size(), tokenService.activeCount()),
-                NamedTextColor.GOLD));
+        messages.send(sender, "command.stats.output",
+                Placeholder.unparsed("pool_total", String.valueOf(ps.total())),
+                Placeholder.unparsed("pool_free", String.valueOf(ps.free())),
+                Placeholder.unparsed("pool_reserved", String.valueOf(ps.reserved())),
+                Placeholder.unparsed("walls", String.valueOf(wallsCount)),
+                Placeholder.unparsed("walls_locked", String.valueOf(locked)),
+                Placeholder.unparsed("sessions", String.valueOf(sessionManager.size())),
+                Placeholder.unparsed("tokens", String.valueOf(tokenService.activeCount())));
         return Command.SINGLE_SUCCESS;
     }
 
     private int runCleanup(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
         // M5.5：stub —— 真正的孤立 ItemFrame / 错位 walls 行检测留 M7 fsck
-        sender.sendMessage(Component.text(
-                "cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.",
-                NamedTextColor.YELLOW));
+        messages.send(sender, "command.cleanup.stubbed");
         return Command.SINGLE_SUCCESS;
     }
 
     private int runReloadConfig(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
         if (!(plugin instanceof moe.hikari.canvas.HikariCanvas hc)) {
-            sender.sendMessage(Component.text(
-                    "reload config: plugin type mismatch (internal bug)", NamedTextColor.RED));
+            messages.send(sender, "command.reload.config-type-mismatch");
             return Command.SINGLE_SUCCESS;
         }
         plugin.reloadConfig();
         moe.hikari.canvas.HikariCanvasConfig fresh = moe.hikari.canvas.HikariCanvasConfig.load(plugin);
         hc.applyConfig(fresh);
-        sender.sendMessage(Component.text("Config reloaded: " + fresh.summary(),
-                NamedTextColor.GOLD));
-        sender.sendMessage(Component.text(
-                "Note: host/port changes require server restart to take effect.",
-                NamedTextColor.GRAY));
+        messages.send(sender, "command.reload.config-ok",
+                Placeholder.unparsed("summary", fresh.summary()));
+        messages.send(sender, "command.reload.config-restart-note");
         return Command.SINGLE_SUCCESS;
     }
 
@@ -650,14 +675,16 @@ public final class CanvasCommand {
         CommandSender sender = ctx.getSource().getSender();
         var stats = templateRegistry.reload();
         templatePreviewService.invalidate();  // 缩略图缓存随之失效
-        sender.sendMessage(Component.text(String.format(
-                        "Templates reloaded: %d builtin + %d server (overrides=%d, failed=%d) — total=%d",
-                        stats.builtinLoaded(), stats.serverLoaded(),
-                        stats.overrides(), stats.failed(), templateRegistry.size()),
-                NamedTextColor.GOLD));
+        messages.send(sender, "command.reload.templates-ok",
+                Placeholder.unparsed("builtin", String.valueOf(stats.builtinLoaded())),
+                Placeholder.unparsed("server", String.valueOf(stats.serverLoaded())),
+                Placeholder.unparsed("overrides", String.valueOf(stats.overrides())),
+                Placeholder.unparsed("failed", String.valueOf(stats.failed())),
+                Placeholder.unparsed("total", String.valueOf(templateRegistry.size())));
         if (stats.failed() > 0) {
             for (String f : stats.failures()) {
-                sender.sendMessage(Component.text("  ✗ " + f, NamedTextColor.RED));
+                messages.send(sender, "command.reload.template-failure",
+                        Placeholder.unparsed("file", f));
             }
         }
         return Command.SINGLE_SUCCESS;
