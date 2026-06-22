@@ -73,6 +73,20 @@ public final class HikariCanvasConfig {
         }
     }
 
+    /**
+     * 0.8.2：国际化配置（{@code i18n} 段）。
+     */
+    public final I18nConfig i18nConfig;
+
+    /**
+     * 0.8.2：国际化配置。
+     *
+     * @param defaultLocale 兜底语言（玩家语言无对应文件时使用）；小写下划线形式，如 {@code en_us}
+     */
+    public record I18nConfig(String defaultLocale) {
+        public static I18nConfig defaults() { return new I18nConfig("en_us"); }
+    }
+
     // ---- templates ----
     public final boolean autoReloadTemplatesOnStartup;
     public final int previewCacheSeconds;
@@ -325,6 +339,7 @@ public final class HikariCanvasConfig {
         this.inputRatePerSecond = b.inputRatePerSecond;
         this.inputBurst = b.inputBurst;
         this.adaptiveFps = b.adaptiveFps;
+        this.i18nConfig = b.i18nConfig;
         this.autoReloadTemplatesOnStartup = b.autoReloadTemplatesOnStartup;
         this.previewCacheSeconds = b.previewCacheSeconds;
         this.templatesMaxPerPlayer = b.templatesMaxPerPlayer;
@@ -415,6 +430,16 @@ public final class HikariCanvasConfig {
             boolean pushOn = adaptSec.getBoolean("push-packets-enabled",
                     adaptDefaults.pushPacketsEnabled());
             b.adaptiveFps = new AdaptiveFpsConfig(defMs, highMs, pushOn);
+        }
+
+        // 0.8.2：i18n 段 —— 国际化兜底语言
+        org.bukkit.configuration.ConfigurationSection i18nSec = f.getConfigurationSection("i18n");
+        if (i18nSec == null) {
+            b.i18nConfig = I18nConfig.defaults();
+        } else {
+            String def = i18nSec.getString("default-locale", "en_us")
+                    .toLowerCase(java.util.Locale.ROOT).replace('-', '_');
+            b.i18nConfig = new I18nConfig(def);
         }
 
         b.autoReloadTemplatesOnStartup = f.getBoolean("templates.auto-reload-on-startup", true);
@@ -700,6 +725,7 @@ public final class HikariCanvasConfig {
                 moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
         ScheduleConfig scheduleConfig = ScheduleConfig.defaults();
         AdaptiveFpsConfig adaptiveFps = AdaptiveFpsConfig.defaults();
+        I18nConfig i18nConfig = I18nConfig.defaults();
         int userGlobalMaxPerOwner =
                 moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_PER_OWNER;
         int userGlobalMaxTotal =

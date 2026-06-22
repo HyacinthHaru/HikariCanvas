@@ -244,3 +244,9 @@ scripts:
   #     command: "give {player} diamond 1"
   #     params:
   #       player: { type: online-player }
+
+# 国际化（i18n）：玩家在游戏内看到的文字
+i18n:
+  # 玩家客户端语言无对应 lang 文件、或某条文案缺译时的兜底语言。
+  # 内置 en_us / zh_cn；可在 plugins/HikariCanvas/lang/ 自加语言文件后用其文件名（去 .yml）。
+  default-locale: en_us
