@@ -4,11 +4,18 @@ import type { ScriptRule, ScriptTrigger, ScriptAction } from '@/types/protocol';
 import { useScriptStore } from './scripts';
 import { useProjectStore } from './project';
 import { useNetworkStore } from './network';
+import { useUiStore } from './ui';
 import { getWsClient } from '@/network/wsClient';
 import { getAt, parsePath, removeAt, replaceAt } from '@/script/model/blockTree';
 import { parseBlockLayout, stringifyBlockLayout } from '@/script/model/serialize';
 import { validateRule, type ValidationError } from '@/script/model/validator';
 import { makeDefaultAction } from '@/script/model/blockDefs';
+import { messages } from '@/i18n/messages';
+
+function scriptMsg(key: keyof typeof messages['zh']['script']): string {
+    const v = messages[useUiStore().locale].script[key];
+    return typeof v === 'string' ? v : String(key);
+}
 
 /**
  * 0.7.0-P4-D1：积木编辑会话 store（决策 K-UI-11 / K-UI-12）。
@@ -36,8 +43,8 @@ const UNDO_CAP = 50;
 const SAVE_DEBOUNCE_MS = 800;
 /** newRule 等待 server 回 patch（新规则落 store）的超时——超时仍拿不到 id 则放弃选中。 */
 const NEW_RULE_PATCH_TIMEOUT_MS = 5000;
-/** 默认新规则名（后端 NAME_MAX=64，留空也合法但给个有意义的名）。 */
-const DEFAULT_RULE_NAME = '新规则';
+/** 默认新规则名（后端 NAME_MAX=64，留空也合法但给个有意义的名）。延迟取值以支持 i18n。 */
+const defaultRuleName = () => scriptMsg('defaultRuleName');
 
 /** 把带 id/wallId 的 ScriptRule 剥成 create/update payload 形态（server 权威这两字段）。 */
 function stripIdWall(rule: ScriptRule): Omit<ScriptRule, 'id' | 'wallId'> {
@@ -131,7 +138,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             // 有脏改动但校验不过：flushSave 会被 doSave 内的校验门拒绝，直接切走会
             // 丢弃这条规则未保存的改动（数据丢失）。挡住切换并提示用户修正 / 撤销。
             if (dirty.value && validationErrors.value.length > 0) {
-                net.lastError = '当前规则有校验错误，请修正或撤销改动后再切换。';
+                net.lastError = scriptMsg('validationErrorsOnSwitch');
                 return;
             }
             flushSave();
@@ -159,7 +166,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     function closeEditing(): void {
         // 有脏改动但校验不过：清空会丢数据，挡住关闭并提示用户修正 / 撤销。
         if (dirty.value && validationErrors.value.length > 0) {
-            net.lastError = '部分改动因校验未通过，未能保存。请修正错误或撤销改动。';
+            net.lastError = scriptMsg('discardedByValidation');
             return;
         }
         flushSave();
@@ -198,7 +205,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
      * </ol>
      * <p>拿到新 id → selectRule 进入编辑并返回该 id；失败（send reject / 超时）→ toast + 返 null。</p>
      */
-    async function newRule(name: string = DEFAULT_RULE_NAME): Promise<string | null> {
+    async function newRule(name: string = defaultRuleName()): Promise<string | null> {
         if (project.isLocked) return null;
         const draft: Omit<ScriptRule, 'id' | 'wallId'> = {
             enabled: true,
@@ -215,7 +222,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         try {
             const newId = await createAndAwaitId(draft, known);
             if (newId === null) {
-                net.lastError = '新建规则失败：没收到服务器回执';
+                net.lastError = scriptMsg('createRuleFailed');
                 return null;
             }
             selectRule(newId);
