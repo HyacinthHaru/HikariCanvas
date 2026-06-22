@@ -167,6 +167,8 @@ public final class HikariCanvas extends JavaPlugin {
     /** 0.5.0-P1：/canvas bench 命令族；持守护线程 executor，onDisable 须 shutdown。 */
     private BenchmarkSubCommand benchmarkSubCommand;
     private volatile HikariCanvasConfig config;
+    // 0.8.2 i18n：多语言消息注册表（jar 内置 lang/ + dataFolder/lang/ 外部覆盖）。
+    private moe.hikari.canvas.i18n.Messages messages;
     // 0.4.10 P2-82：onEnable 从 JVM 全局 IIORegistry 注销的 ImageReaderSpi 实例列表。
     // onDisable 逐个 registerServiceProvider 恢复——避免本插件（热）卸载后别的插件
     // ImageIO.read GIF/BMP/TIFF 永久失败（IIORegistry 是进程级共享单例）。
@@ -290,6 +292,16 @@ public final class HikariCanvas extends JavaPlugin {
         fontRegistry.loadBuiltIn();
         fontRegistry.loadExternal(getDataFolder().toPath().resolve("fonts"));
         getLogger().info("FontRegistry: " + fontRegistry.size() + " font(s) ready");
+
+        // 0.8.2 i18n：多语言消息注册表。jar 内置 lang/ → saveResource 拷到 dataFolder/lang/ 供服主覆盖；
+        // 再 loadExternal 扫 dataFolder/lang/ 让外部覆盖生效。
+        messages = new moe.hikari.canvas.i18n.Messages(getLogger());
+        saveResource("lang/en_us.yml", false);
+        saveResource("lang/zh_cn.yml", false);
+        messages.loadBuiltIn();
+        messages.loadExternal(getDataFolder().toPath().resolve("lang"));
+        messages.setDefaultLocale(config.i18nConfig.defaultLocale());
+        getLogger().info("Messages: " + messages.size() + " language(s) ready");
 
         // M26：矢量图标注册表。jar 内置 Font Awesome Free + 用户 plugins/HikariCanvas/icons/*.svg
         iconRegistry = new moe.hikari.canvas.render.IconRegistry(getLogger());
@@ -1000,11 +1012,19 @@ public final class HikariCanvas extends JavaPlugin {
         if (scriptPropertyApplier != null) {
             scriptPropertyApplier.setMaxElementsPerWall(fresh.scriptsConfig.maxElementsPerWall());
         }
+        // 0.8.2 i18n：热重载时重扫外部 lang/ 并更新默认语言。
+        if (messages != null) {
+            messages.reload(getDataFolder().toPath().resolve("lang"));
+            messages.setDefaultLocale(fresh.i18nConfig.defaultLocale());
+        }
         getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
     }
 
     /** 供命令侧用；返回 null 表示插件还没 onEnable。 */
     public HikariCanvasConfig config() { return config; }
+
+    /** 0.8.2 i18n：多语言消息注册表；onEnable 完成前可能返 null。 */
+    public moe.hikari.canvas.i18n.Messages messages() { return messages; }
 
     /** 0.4.0-P1-A：供 B / C / D / E 任务取 VariableStore 单例。 */
     public VariableStore getVariableStore() { return variableStore; }
