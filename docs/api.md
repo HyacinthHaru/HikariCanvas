@@ -47,8 +47,8 @@ repositories {
 }
 
 dependencies {
-    compileOnly(files("libs/HikariCanvas-0.7.4-SNAPSHOT.jar")) // 替换为 build.gradle.kts 当前版本
-    // 或 compileOnly("moe.hikari:hikari-canvas:0.7.4-SNAPSHOT")
+    compileOnly(files("libs/HikariCanvas-0.8.1-SNAPSHOT.jar")) // 替换为 build.gradle.kts 当前版本
+    // 或 compileOnly("moe.hikari:hikari-canvas:0.8.1-SNAPSHOT")
 }
 ```
 
