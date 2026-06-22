@@ -3,6 +3,7 @@ package moe.hikari.canvas.i18n;
 import static org.junit.jupiter.api.Assertions.*;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
 import java.util.logging.Logger;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
@@ -10,6 +11,7 @@ import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class MessagesTest {
     private Messages messages;
@@ -85,5 +87,22 @@ class MessagesTest {
     void resolveLocaleId_unsupported_fallsBackToDefault() {
         assertEquals("en_us", messages.resolveLocaleId("fr_fr")); // default en_us
         assertEquals("en_us", messages.resolveLocaleId(null));
+    }
+
+    @Test
+    void loadBuiltIn_loadsBundledLocales() {
+        Messages m = new Messages(Logger.getLogger("t"));
+        m.loadBuiltIn();
+        assertEquals(2, m.size());
+        assertEquals("English (US)", m.rawOrNull("en_us", "_meta.name"));
+    }
+
+    @Test
+    void loadExternal_overridesBuiltIn(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("en_us.yml"), "command:\n  no-session: \"OVERRIDDEN\"\n");
+        Messages m = new Messages(Logger.getLogger("t"));
+        m.loadBuiltIn();
+        m.loadExternal(dir);
+        assertEquals("OVERRIDDEN", m.rawOrNull("en_us", "command.no-session"));
     }
 }

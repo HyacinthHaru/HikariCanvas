@@ -1,10 +1,17 @@
 package moe.hikari.canvas.i18n;
 
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
@@ -71,4 +78,45 @@ public final class Messages {
     }
 
     public int size() { return byLocale.size(); }
+
+    private static final List<String> BUNDLED = List.of("en_us", "zh_cn");
+
+    public void loadBuiltIn() {
+        for (String id : BUNDLED) {
+            String res = "/lang/" + id + ".yml";
+            try (InputStream in = Messages.class.getResourceAsStream(res)) {
+                if (in == null) { log.warning("[i18n] bundled lang missing: " + res); continue; }
+                try (InputStreamReader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
+                    byLocale.put(id, YamlConfiguration.loadConfiguration(reader));
+                }
+            } catch (Exception e) {
+                log.warning("[i18n] failed to load " + res + ": " + e.getMessage());
+            }
+        }
+    }
+
+    public void loadExternal(Path langDir) {
+        if (langDir == null || !Files.isDirectory(langDir)) return;
+        try (Stream<Path> s = Files.list(langDir)) {
+            s.filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".yml"))
+             .forEach(p -> {
+                 String fn = p.getFileName().toString();
+                 String id = norm(fn.substring(0, fn.length() - 4));
+                 try {
+                     byLocale.put(id, YamlConfiguration.loadConfiguration(p.toFile()));
+                 } catch (Exception e) {
+                     log.warning("[i18n] failed to load " + fn + ": " + e.getMessage());
+                 }
+             });
+        } catch (Exception e) {
+            log.warning("[i18n] failed to scan lang dir: " + e.getMessage());
+        }
+    }
+
+    public void reload(Path langDir) {
+        byLocale.clear();
+        warnedMissing.clear();
+        loadBuiltIn();
+        loadExternal(langDir);
+    }
 }
