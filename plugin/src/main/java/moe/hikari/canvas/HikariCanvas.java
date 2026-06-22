@@ -560,7 +560,8 @@ public final class HikariCanvas extends JavaPlugin {
                     PushRateLimiter newLimiter = new PushRateLimiter(fresh.pushRateLimitConfig);
                     apiImplRef.setRateLimiter(newLimiter);
                     return fresh.pushRateLimitConfig;
-                });
+                },
+                messages);
         // 0.5.0-P1：/canvas bench 命令族。持守护线程 executor，存字段供 onDisable shutdown。
         benchmarkSubCommand = new BenchmarkSubCommand(this);
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->

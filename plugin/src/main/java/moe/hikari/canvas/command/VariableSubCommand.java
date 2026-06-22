@@ -9,6 +9,7 @@ import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
+import moe.hikari.canvas.i18n.Messages;
 import moe.hikari.canvas.storage.AuditLog;
 import moe.hikari.canvas.storage.WallRepo;
 import moe.hikari.canvas.variable.Variable;
@@ -18,6 +19,7 @@ import moe.hikari.canvas.variable.plugin.HikariCanvasAPIImpl;
 import moe.hikari.canvas.variable.plugin.PushRateLimiter;
 import moe.hikari.canvas.variable.provider.VariableProvider;
 import moe.hikari.canvas.variable.provider.VariableProviderDaemon;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -116,6 +118,7 @@ public final class VariableSubCommand {
     private final WallSource walls;
     private final AuditLog auditLog;
     private final ReloadHook reloadHook;
+    private final Messages messages;
 
     /**
      * 注入用 hook：reload 子命令调它把新的限流参数应用到 {@link HikariCanvasAPIImpl}。
@@ -140,9 +143,10 @@ public final class VariableSubCommand {
                               VariableProviderDaemon daemon,
                               WallRepo wallRepo,
                               AuditLog auditLog,
-                              ReloadHook reloadHook) {
+                              ReloadHook reloadHook,
+                              Messages messages) {
         this(store, daemon, WallSource.fromWallRepo(Objects.requireNonNull(wallRepo, "wallRepo")),
-                auditLog, reloadHook);
+                auditLog, reloadHook, messages);
     }
 
     /** 测试 / 注入构造器：直接传 {@link WallSource}。 */
@@ -150,12 +154,14 @@ public final class VariableSubCommand {
                               VariableProviderDaemon daemon,
                               WallSource walls,
                               AuditLog auditLog,
-                              ReloadHook reloadHook) {
+                              ReloadHook reloadHook,
+                              Messages messages) {
         this.store = Objects.requireNonNull(store, "store");
         this.daemon = Objects.requireNonNull(daemon, "daemon");
         this.walls = Objects.requireNonNull(walls, "walls");
         this.auditLog = auditLog; // 测试可为 null
         this.reloadHook = Objects.requireNonNull(reloadHook, "reloadHook");
+        this.messages = Objects.requireNonNull(messages, "messages");
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -250,7 +256,8 @@ public final class VariableSubCommand {
      */
     public void execute(CommandSender sender, String[] args) {
         if (!sender.hasPermission(PERMISSION)) {
-            sender.sendMessage("§cPermission denied: " + PERMISSION);
+            messages.send(sender, "command.var.permission-denied",
+                    Placeholder.unparsed("node", PERMISSION));
             return;
         }
         if (args == null || args.length == 0 || args[0] == null) {
@@ -270,14 +277,18 @@ public final class VariableSubCommand {
                 case "reload" -> doReload(sender);
                 case "inspect" -> doInspect(sender, args);
                 default -> {
-                    sender.sendMessage("§cUnknown subcommand: " + args[0]);
+                    messages.send(sender, "command.var.unknown-subcommand",
+                            Placeholder.unparsed("sub", args[0]));
                     sendUsage(sender);
                 }
             }
         } catch (VariableException e) {
-            sender.sendMessage("§cFailed: " + e.code() + " — " + e.getMessage());
+            messages.send(sender, "command.var.failed",
+                    Placeholder.unparsed("code", e.code().name()),
+                    Placeholder.unparsed("message", String.valueOf(e.getMessage())));
         } catch (Exception e) {
-            sender.sendMessage("§cUnexpected error: " + e.getMessage());
+            messages.send(sender, "command.var.unexpected-error",
+                    Placeholder.unparsed("message", String.valueOf(e.getMessage())));
         }
     }
 
@@ -350,13 +361,16 @@ public final class VariableSubCommand {
                 counts.merge(v.namespace(), 1, Integer::sum);
             }
             if (counts.isEmpty()) {
-                sender.sendMessage("§7No variables in store.");
+                messages.send(sender, "command.var.list.empty");
                 return;
             }
-            sender.sendMessage("§6Variable namespaces (" + counts.size() + " ns / "
-                    + store.size() + " total):");
+            messages.send(sender, "command.var.list.header",
+                    Placeholder.unparsed("ns_count", String.valueOf(counts.size())),
+                    Placeholder.unparsed("total", String.valueOf(store.size())));
             for (var e : counts.entrySet()) {
-                sender.sendMessage("  §7" + e.getKey() + " §8· §a" + e.getValue() + " var(s)");
+                messages.send(sender, "command.var.list.ns-line",
+                        Placeholder.unparsed("namespace", e.getKey()),
+                        Placeholder.unparsed("count", String.valueOf(e.getValue())));
             }
             return;
         }
@@ -364,46 +378,66 @@ public final class VariableSubCommand {
         String ns = args[1];
         List<Variable> vars = store.listByNamespace(ns);
         if (vars.isEmpty()) {
-            sender.sendMessage("§7No variables in namespace: " + ns);
+            messages.send(sender, "command.var.list.ns-empty",
+                    Placeholder.unparsed("namespace", ns));
             return;
         }
-        sender.sendMessage("§6Namespace '" + ns + "' (" + vars.size() + " variable(s)):");
+        messages.send(sender, "command.var.list.ns-header",
+                Placeholder.unparsed("namespace", ns),
+                Placeholder.unparsed("count", String.valueOf(vars.size())));
         for (Variable v : vars) {
-            String value = v.currentValue() == null ? "§8(null)" : "§f" + truncate(v.currentValue(), 64);
+            String value = v.currentValue() == null ? "(null)" : truncate(v.currentValue(), 64);
             String ttl = formatTtl(v.ttl());
-            sender.sendMessage("  §7" + v.fullName() + " §8[§e" + v.type() + "§8] §8= "
-                    + value + " §8ttl=§7" + ttl);
+            messages.send(sender, "command.var.list.var-line",
+                    Placeholder.unparsed("full_name", v.fullName()),
+                    Placeholder.unparsed("type", v.type().toString()),
+                    Placeholder.unparsed("value", value),
+                    Placeholder.unparsed("ttl", ttl));
         }
     }
 
     private void doGet(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§7Usage: /canvas var get <fullName>");
+            messages.send(sender, "command.var.get.usage");
             return;
         }
         String fullName = args[1].trim();
         Optional<Variable> opt = store.get(fullName);
         if (opt.isEmpty()) {
-            sender.sendMessage("§cVariable not found: " + fullName);
+            messages.send(sender, "command.var.not-found",
+                    Placeholder.unparsed("full_name", fullName));
             return;
         }
         Variable v = opt.get();
-        sender.sendMessage("§6Variable §e" + v.fullName());
-        sender.sendMessage("  §7namespace: §f" + v.namespace());
-        sender.sendMessage("  §7key:       §f" + v.key());
-        sender.sendMessage("  §7type:      §f" + v.type());
-        sender.sendMessage("  §7default:   §f" + (v.defaultValue() == null ? "§8(null)" : v.defaultValue()));
-        sender.sendMessage("  §7current:   §f" + (v.currentValue() == null ? "§8(null)" : v.currentValue()));
-        sender.sendMessage("  §7updated:   §f"
-                + (v.updatedAt() == 0L ? "§8(never)" : TS_FMT.format(Instant.ofEpochMilli(v.updatedAt()))));
-        sender.sendMessage("  §7ttl:       §f" + formatTtl(v.ttl()));
-        sender.sendMessage("  §7source:    §f" + (v.source() == null ? "§8(none)" : v.source()));
-        sender.sendMessage("  §7refByWalls:§f" + v.referencedByWalls().size());
+        String defaultVal = v.defaultValue() == null ? "(null)" : v.defaultValue();
+        String currentVal = v.currentValue() == null ? "(null)" : v.currentValue();
+        String updatedAt = v.updatedAt() == 0L ? "(never)" : TS_FMT.format(Instant.ofEpochMilli(v.updatedAt()));
+        String source = v.source() == null ? "(none)" : v.source();
+        messages.send(sender, "command.var.get.header",
+                Placeholder.unparsed("full_name", v.fullName()));
+        messages.send(sender, "command.var.get.namespace",
+                Placeholder.unparsed("value", v.namespace()));
+        messages.send(sender, "command.var.get.key",
+                Placeholder.unparsed("value", v.key()));
+        messages.send(sender, "command.var.get.type",
+                Placeholder.unparsed("value", v.type().toString()));
+        messages.send(sender, "command.var.get.default",
+                Placeholder.unparsed("value", defaultVal));
+        messages.send(sender, "command.var.get.current",
+                Placeholder.unparsed("value", currentVal));
+        messages.send(sender, "command.var.get.updated",
+                Placeholder.unparsed("value", updatedAt));
+        messages.send(sender, "command.var.get.ttl",
+                Placeholder.unparsed("value", formatTtl(v.ttl())));
+        messages.send(sender, "command.var.get.source",
+                Placeholder.unparsed("value", source));
+        messages.send(sender, "command.var.get.ref-by-walls",
+                Placeholder.unparsed("count", String.valueOf(v.referencedByWalls().size())));
     }
 
     private void doSet(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            sender.sendMessage("§7Usage: /canvas var set <fullName> <value...>");
+            messages.send(sender, "command.var.set.usage");
             return;
         }
         String fullName = args[1].trim();
@@ -416,11 +450,14 @@ public final class VariableSubCommand {
         String value = sb.toString();
         Optional<Variable> existing = store.get(fullName);
         if (existing.isEmpty()) {
-            sender.sendMessage("§cVariable not found: " + fullName);
+            messages.send(sender, "command.var.not-found",
+                    Placeholder.unparsed("full_name", fullName));
             return;
         }
         store.setValue(fullName, value, null); // null = 沿用原 TTL
-        sender.sendMessage("§a✓ Set " + fullName + " = " + truncate(value, 64));
+        messages.send(sender, "command.var.set.ok",
+                Placeholder.unparsed("full_name", fullName),
+                Placeholder.unparsed("value", truncate(value, 64)));
         // AuditLog 仅在装配齐全时写
         if (auditLog != null) {
             Map<String, Object> details = new LinkedHashMap<>();
@@ -433,16 +470,18 @@ public final class VariableSubCommand {
 
     private void doDelete(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§7Usage: /canvas var delete <fullName>");
+            messages.send(sender, "command.var.delete.usage");
             return;
         }
         String fullName = args[1].trim();
         if (store.get(fullName).isEmpty()) {
-            sender.sendMessage("§cVariable not found: " + fullName);
+            messages.send(sender, "command.var.not-found",
+                    Placeholder.unparsed("full_name", fullName));
             return;
         }
         store.delete(fullName);
-        sender.sendMessage("§a✓ Deleted " + fullName);
+        messages.send(sender, "command.var.delete.ok",
+                Placeholder.unparsed("full_name", fullName));
         if (auditLog != null) {
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("fullName", fullName);
@@ -454,18 +493,22 @@ public final class VariableSubCommand {
     private void doProviders(CommandSender sender) {
         List<VariableProvider> providers = daemon.registeredProviders();
         if (providers.isEmpty()) {
-            sender.sendMessage("§7No providers registered.");
+            messages.send(sender, "command.var.providers.empty");
             return;
         }
-        sender.sendMessage("§6Registered providers (" + providers.size() + "):");
+        messages.send(sender, "command.var.providers.header",
+                Placeholder.unparsed("count", String.valueOf(providers.size())));
         for (VariableProvider p : providers) {
             String interval = formatInterval(p.refreshInterval());
             int keys = p.declaredKeys() == null ? 0 : p.declaredKeys().size();
-            sender.sendMessage("  §7" + p.namespace()
-                    + " §8'§f" + p.displayName() + "§8' "
-                    + (p.isDynamic() ? "§b[dynamic]" : "§a[static]")
-                    + " §8keys=§7" + keys
-                    + " §8interval=§7" + interval);
+            String lineKey = p.isDynamic()
+                    ? "command.var.providers.line-dynamic"
+                    : "command.var.providers.line-static";
+            messages.send(sender, lineKey,
+                    Placeholder.unparsed("namespace", p.namespace()),
+                    Placeholder.unparsed("display_name", p.displayName()),
+                    Placeholder.unparsed("keys", String.valueOf(keys)),
+                    Placeholder.unparsed("interval", interval));
         }
     }
 
@@ -474,37 +517,51 @@ public final class VariableSubCommand {
         try {
             cfg = reloadHook.reload();
         } catch (Exception e) {
-            sender.sendMessage("§cReload failed: " + e.getMessage());
+            messages.send(sender, "command.var.reload.failed",
+                    Placeholder.unparsed("message", String.valueOf(e.getMessage())));
             return;
         }
-        sender.sendMessage("§a✓ Config reloaded. PushRateLimiter:");
-        sender.sendMessage("  §7per-plugin:           §f" + cfg.perPluginPerSecond() + "/s");
-        sender.sendMessage("  §7global:               §f" + cfg.globalPerSecond() + "/s");
-        sender.sendMessage("  §7circuit-break:        §f" + cfg.globalCircuitBreakMs() + "ms");
+        messages.send(sender, "command.var.reload.ok");
+        messages.send(sender, "command.var.reload.per-plugin",
+                Placeholder.unparsed("value", String.valueOf(cfg.perPluginPerSecond())));
+        messages.send(sender, "command.var.reload.global",
+                Placeholder.unparsed("value", String.valueOf(cfg.globalPerSecond())));
+        messages.send(sender, "command.var.reload.circuit-break",
+                Placeholder.unparsed("value", String.valueOf(cfg.globalCircuitBreakMs())));
     }
 
     private void doInspect(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§7Usage: /canvas var inspect <wallId>");
+            messages.send(sender, "command.var.inspect.usage");
             return;
         }
         String wallId = args[1].trim();
         if (!walls.exists(wallId)) {
-            sender.sendMessage("§eWall not found: " + wallId + " §7(inspecting referenced vars anyway)");
+            messages.send(sender, "command.var.inspect.wall-not-found",
+                    Placeholder.unparsed("wall_id", wallId));
         }
         Set<String> refs = store.referencedFullNamesByWall(wallId);
         if (refs.isEmpty()) {
-            sender.sendMessage("§7No variables referenced by wall " + wallId
-                    + " §8(may need a render pass to populate)");
+            messages.send(sender, "command.var.inspect.no-refs",
+                    Placeholder.unparsed("wall_id", wallId));
             return;
         }
-        sender.sendMessage("§6Wall " + wallId + " references " + refs.size() + " variable(s):");
+        messages.send(sender, "command.var.inspect.header",
+                Placeholder.unparsed("wall_id", wallId),
+                Placeholder.unparsed("count", String.valueOf(refs.size())));
         for (String fn : refs) {
             Optional<Variable> v = store.get(fn);
             String cur = v.map(x -> x.currentValue() == null
-                    ? "§8(null)" : "§f" + truncate(x.currentValue(), 48))
-                    .orElse("§c(missing from store!)");
-            sender.sendMessage("  §7" + fn + " §8= " + cur);
+                    ? "(null)" : truncate(x.currentValue(), 48))
+                    .orElse(null);
+            if (cur == null) {
+                messages.send(sender, "command.var.inspect.var-missing",
+                        Placeholder.unparsed("full_name", fn));
+            } else {
+                messages.send(sender, "command.var.inspect.var-line",
+                        Placeholder.unparsed("full_name", fn),
+                        Placeholder.unparsed("value", cur));
+            }
         }
     }
 
@@ -546,19 +603,19 @@ public final class VariableSubCommand {
     //  Helpers
     // ──────────────────────────────────────────────────────────────────
 
-    private static void sendUsage(CommandSender sender) {
-        sender.sendMessage("§6/canvas var §7subcommands:");
-        sender.sendMessage("  §7/canvas var list [namespace]      §8— list namespaces / vars");
-        sender.sendMessage("  §7/canvas var get <fullName>        §8— variable metadata");
-        sender.sendMessage("  §7/canvas var set <fullName> <val>  §8— set current value");
-        sender.sendMessage("  §7/canvas var delete <fullName>     §8— delete variable");
-        sender.sendMessage("  §7/canvas var providers             §8— list registered providers");
-        sender.sendMessage("  §7/canvas var reload                §8— reload config.yml rate limits");
-        sender.sendMessage("  §7/canvas var inspect <wallId>      §8— wall reverse index");
+    private void sendUsage(CommandSender sender) {
+        messages.send(sender, "command.var.usage.header");
+        messages.send(sender, "command.var.usage.list");
+        messages.send(sender, "command.var.usage.get");
+        messages.send(sender, "command.var.usage.set");
+        messages.send(sender, "command.var.usage.delete");
+        messages.send(sender, "command.var.usage.providers");
+        messages.send(sender, "command.var.usage.reload");
+        messages.send(sender, "command.var.usage.inspect");
     }
 
     private static String formatTtl(long ttlMs) {
-        if (ttlMs == 0L) return "永久";
+        if (ttlMs == 0L) return "permanent";
         if (ttlMs < 1000) return ttlMs + "ms";
         long s = ttlMs / 1000;
         if (s < 60) return s + "s";

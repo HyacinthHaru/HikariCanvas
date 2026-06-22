@@ -1,5 +1,6 @@
 package moe.hikari.canvas.command;
 
+import moe.hikari.canvas.i18n.Messages;
 import moe.hikari.canvas.storage.UserVariableDao;
 import moe.hikari.canvas.variable.VarType;
 import moe.hikari.canvas.variable.VariableStore;
@@ -52,6 +53,7 @@ class VariableSubCommandTest {
     private CommandSender sender;
     private AtomicBoolean reloadCalled;
     private PushRateLimiter.Config reloadedConfig;
+    private Messages messages;
 
     @BeforeEach
     void setUp() {
@@ -60,12 +62,15 @@ class VariableSubCommandTest {
         wallSource = new FakeWallSource();
         reloadCalled = new AtomicBoolean(false);
         reloadedConfig = new PushRateLimiter.Config(200, 2000, 5000L);
+        messages = new Messages(Logger.getLogger("test"));
+        messages.loadBuiltIn();
         cmd = new VariableSubCommand(store, daemon, (VariableSubCommand.WallSource) wallSource,
                 /*auditLog*/ null,
                 () -> {
                     reloadCalled.set(true);
                     return reloadedConfig;
-                });
+                },
+                messages);
         capturedMessages = new ArrayList<>();
         sender = makeSender(true, capturedMessages);  // hasPermission = true by default
     }
@@ -259,7 +264,8 @@ class VariableSubCommandTest {
     void reload_hookThrows_reportsFailure() {
         VariableSubCommand failCmd = new VariableSubCommand(store, daemon,
                 (VariableSubCommand.WallSource) wallSource, null,
-                () -> { throw new RuntimeException("boom"); });
+                () -> { throw new RuntimeException("boom"); },
+                messages);
         failCmd.execute(sender, new String[]{"reload"});
         assertTrue(allMessages().contains("Reload failed"));
     }
