@@ -131,6 +131,51 @@ command:
       header: "<gold>Wall <wall_id> references <count> variable(s):</gold>"
       var-line: "  <gray><full_name></gray> <dark_gray>=</dark_gray> <white><value></white>"
       var-missing: "  <gray><full_name></gray> <dark_gray>=</dark_gray> <red>(missing from store!)</red>"
+  bench:
+    already-running: "<red>A benchmark is already running. Please wait.</red>"
+    running: "<yellow>Benchmarking…</yellow>"
+    list:
+      no-scenes: "<gray>No benchmark scenes defined yet.</gray>"
+      header: "<gold>Benchmark scenes (<count> total):</gold>"
+      scene-line: "<gray>  <scene_id>  [<category>]  <tiles_wide>x<tiles_high> tiles  <element_type></gray>"
+    run:
+      started: "<gray>Benchmark started (scene='<selector>', <measured> measured + <warmup> warmup). Running in background…</gray>"
+      failed: "<red>Benchmark failed: <message></red>"
+      no-match: "<red>No scenes match '<selector>'. Use /canvas bench list to see available scenes.</red>"
+      saved: "<gray>Saved to: <path></gray>"
+    report:
+      not-found: "<red>Report not found: <id></red>"
+      empty: "<gray>No reports yet. Run /canvas bench run first.</gray>"
+      missing-file: "<red>Report is missing <report_file>: <dir></red>"
+      read-failed: "<red>Failed to read report: <message></red>"
+      header: "<gold>Report <id>:</gold>"
+    clear:
+      nothing: "<gray>Nothing to clear (benchmarks directory does not exist).</gray>"
+      failed: "<red>Clear failed: <message></red>"
+      done: "<green>Cleared benchmarks directory (<count> items removed).</green>"
+    summary:
+      header: "<gold>Done — <scene_count> scene(s)  ·  blank baseline <blank_baseline_ms> ms</gold>"
+      env: "<gray>Env: Java <java_version> · <processors> core(s) · max heap <max_heap_mb> · GC <gc_names></gray>"
+      scene-line: "<gray>  <scene_id>  rasterize <p50>/<p95>/<p99> ms (p50/p95/p99)  palette <palette_p50> ms  alloc <alloc></gray>"
+      per-element-header: "<gold>Marginal cost per element (ms/elem):</gold>"
+      per-element-line: "<gray>  <element_type> <marginal_ms> ms/elem  (<element_count> total)</gray>"
+      gc: "<gray>GC during test: <gc_count> collection(s), <gc_time_ms> ms total (incl. warmup)</gray>"
+    run-tween:
+      started: "<gray>Tween benchmark started (<measured> measured + <warmup> warmup)…</gray>"
+      done: "<gold>Tween benchmark complete:</gold>"
+      failed: "<red>Benchmark failed: <message></red>"
+    run-script:
+      started: "<gray>Script benchmark started (<measured> measured + <warmup> warmup)…</gray>"
+      done: "<gold>Script benchmark complete:</gold>"
+      failed: "<red>Benchmark failed: <message></red>"
+    usage:
+      header: "<gold>/canvas bench subcommands:</gold>"
+      list: "<gray>  /canvas bench list                          — list benchmark scenes</gray>"
+      run: "<gray>  /canvas bench run [scene] [iter] [warmup]   — run render benchmark</gray>"
+      run-tween: "<gray>  /canvas bench run-tween [iter] [warmup]     — tween fps benchmark (0.7.x)</gray>"
+      run-script: "<gray>  /canvas bench run-script [iter] [warmup]    — script action benchmark (0.7.x)</gray>"
+      report: "<gray>  /canvas bench report [id]                   — show latest or given report</gray>"
+      clear: "<gray>  /canvas bench clear                         — delete saved reports</gray>"
 wand:
   restore-failed: "<red>Wall '<wall_id>' failed to restore on startup — see server log.</red>"
   locked-by: "<red>Wall '<wall_id>' is locked by <owner_name>.</red>"

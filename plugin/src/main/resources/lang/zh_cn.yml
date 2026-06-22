@@ -131,6 +131,51 @@ command:
       header: "<gold>画布 <wall_id> 引用了 <count> 个变量：</gold>"
       var-line: "  <gray><full_name></gray> <dark_gray>=</dark_gray> <white><value></white>"
       var-missing: "  <gray><full_name></gray> <dark_gray>=</dark_gray> <red>（变量库中不存在！）</red>"
+  bench:
+    already-running: "<red>已有测试在跑，请等它跑完。</red>"
+    running: "<yellow>正在测试…</yellow>"
+    list:
+      no-scenes: "<gray>还没有定义任何测试场景。</gray>"
+      header: "<gold>测试场景（共 <count> 个）：</gold>"
+      scene-line: "<gray>  <scene_id>  [<category>]  <tiles_wide>x<tiles_high> 格  <element_type></gray>"
+    run:
+      started: "<gray>已开始测试（场景='<selector>', 正式 <measured> 轮 + 预热 <warmup> 轮）。后台运行中，跑完会出结果…</gray>"
+      failed: "<red>测试失败：<message></red>"
+      no-match: "<red>没有匹配 '<selector>' 的场景，用 /canvas bench list 看有哪些。</red>"
+      saved: "<gray>已保存到：<path></gray>"
+    report:
+      not-found: "<red>找不到这份测试报告：<id></red>"
+      empty: "<gray>还没有任何测试报告，先用 /canvas bench run 跑一次。</gray>"
+      missing-file: "<red>报告缺少 <report_file>：<dir></red>"
+      read-failed: "<red>读取报告失败：<message></red>"
+      header: "<gold>报告 <id>：</gold>"
+    clear:
+      nothing: "<gray>没有可清除的内容（benchmarks 目录不存在）。</gray>"
+      failed: "<red>清除失败：<message></red>"
+      done: "<green>已清空 benchmarks 目录（删除了 <count> 项）。</green>"
+    summary:
+      header: "<gold>测试完成 — <scene_count> 个场景  ·  空白画面耗时 <blank_baseline_ms> ms</gold>"
+      env: "<gray>环境: Java <java_version> · <processors> 核 · 最大内存 <max_heap_mb> · 内存回收 <gc_names></gray>"
+      scene-line: "<gray>  <scene_id>  渲染 <p50>/<p95>/<p99> ms (一般/偏慢/最慢)  调色板 <palette_p50> ms  内存 <alloc></gray>"
+      per-element-header: "<gold>每个元素的额外耗时 (ms/个):</gold>"
+      per-element-line: "<gray>  <element_type> <marginal_ms> ms/个  (共 <element_count> 个)</gray>"
+      gc: "<gray>测试期间内存回收: <gc_count> 次, 共 <gc_time_ms> ms (含预热)</gray>"
+    run-tween:
+      started: "<gray>已开始补间帧率压测（正式 <measured> 轮 + 预热 <warmup> 轮）…</gray>"
+      done: "<gold>补间帧率压测完成：</gold>"
+      failed: "<red>压测失败：<message></red>"
+    run-script:
+      started: "<gray>已开始脚本动作链压测（正式 <measured> 轮 + 预热 <warmup> 轮）…</gray>"
+      done: "<gold>脚本动作链压测完成：</gold>"
+      failed: "<red>压测失败：<message></red>"
+    usage:
+      header: "<gold>/canvas bench 子命令：</gold>"
+      list: "<gray>  /canvas bench list                          — 列出测试场景</gray>"
+      run: "<gray>  /canvas bench run [场景] [轮次] [预热]  — 运行渲染性能测试</gray>"
+      run-tween: "<gray>  /canvas bench run-tween [轮次] [预热]       — 补间动画帧率压测（0.7.x）</gray>"
+      run-script: "<gray>  /canvas bench run-script [轮次] [预热]      — 脚本动作链开销压测（0.7.x）</gray>"
+      report: "<gray>  /canvas bench report [id]                   — 打印最近的或指定的报告</gray>"
+      clear: "<gray>  /canvas bench clear                         — 清空已保存的报告</gray>"
 wand:
   restore-failed: "<red>画布 '<wall_id>' 启动时恢复失败，请查看服务端日志。</red>"
   locked-by: "<red>画布 '<wall_id>' 已被 <owner_name> 锁定。</red>"

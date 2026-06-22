@@ -24,9 +24,9 @@ import moe.hikari.canvas.benchmark.SceneLibrary;
 import moe.hikari.canvas.benchmark.SceneResult;
 import moe.hikari.canvas.benchmark.ScriptBenchmarkDriver;
 import moe.hikari.canvas.benchmark.TweenBenchmarkDriver;
+import moe.hikari.canvas.i18n.Messages;
 import moe.hikari.canvas.render.CanvasCompositor;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.IllegalPluginAccessException;
@@ -98,6 +98,7 @@ public final class BenchmarkSubCommand {
     private static final String HTML_FILE = "report.html";
 
     private final JavaPlugin plugin;
+    private final Messages messages;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /**
@@ -113,8 +114,9 @@ public final class BenchmarkSubCommand {
     /** 是否有 benchmark 正在跑。worker 线程读 / 写，主线程读，故 volatile。 */
     private volatile boolean running = false;
 
-    public BenchmarkSubCommand(JavaPlugin plugin) {
+    public BenchmarkSubCommand(JavaPlugin plugin, Messages messages) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
+        this.messages = Objects.requireNonNull(messages, "messages");
     }
 
     /** HikariCanvas.onDisable 调：关停 bench 线程。 */
@@ -241,16 +243,18 @@ public final class BenchmarkSubCommand {
     private void doList(CommandSender sender) {
         List<BenchmarkScene> scenes = new SceneLibrary().generate();
         if (scenes.isEmpty()) {
-            sender.sendMessage(Component.text("还没有定义任何测试场景。", NamedTextColor.GRAY));
+            messages.send(sender, "command.bench.list.no-scenes");
             return;
         }
-        sender.sendMessage(Component.text(
-                "测试场景（共 " + scenes.size() + " 个）：", NamedTextColor.GOLD));
+        messages.send(sender, "command.bench.list.header",
+                Placeholder.unparsed("count", String.valueOf(scenes.size())));
         for (BenchmarkScene s : scenes) {
-            sender.sendMessage(Component.text(String.format(
-                    "  %s  [%s]  %dx%d 格  %s",
-                    s.id(), s.category(), s.tilesWide(), s.tilesHigh(), s.dominantElementType()),
-                    NamedTextColor.GRAY));
+            messages.send(sender, "command.bench.list.scene-line",
+                    Placeholder.unparsed("scene_id", s.id()),
+                    Placeholder.unparsed("category", s.category()),
+                    Placeholder.unparsed("tiles_wide", String.valueOf(s.tilesWide())),
+                    Placeholder.unparsed("tiles_high", String.valueOf(s.tilesHigh())),
+                    Placeholder.unparsed("element_type", s.dominantElementType()));
         }
     }
 
@@ -265,9 +269,7 @@ public final class BenchmarkSubCommand {
      */
     private void doRun(CommandSender sender, String selector, int iterations, int warmup) {
         if (running) {
-            sender.sendMessage(Component.text(
-                    "已有测试在跑，请等它跑完。",
-                    NamedTextColor.RED));
+            messages.send(sender, "command.bench.already-running");
             return;
         }
         BenchmarkConfig quick = BenchmarkConfig.quick();
@@ -278,12 +280,11 @@ public final class BenchmarkSubCommand {
 
         running = true;
         // sendActionBar：CommandSender 实现 Audience；非玩家 sender（console）会无视 ActionBar
-        sender.sendActionBar(Component.text("正在测试…", NamedTextColor.YELLOW));
-        sender.sendMessage(Component.text(
-                "已开始测试（场景='" + selector + "', "
-                        + "正式 " + measured + " 轮 + 预热 " + warm + " 轮）。"
-                        + "后台运行中，跑完会出结果…",
-                NamedTextColor.GRAY));
+        sender.sendActionBar(messages.get(messages.localeId(sender), "command.bench.running"));
+        messages.send(sender, "command.bench.run.started",
+                Placeholder.unparsed("selector", selector),
+                Placeholder.unparsed("measured", String.valueOf(measured)),
+                Placeholder.unparsed("warmup", String.valueOf(warm)));
 
         benchExecutor.submit(() -> {
             try {
@@ -292,8 +293,8 @@ public final class BenchmarkSubCommand {
                 plugin.getLogger().log(Level.SEVERE, "Benchmark run failed", t);
                 String msg = t.getClass().getSimpleName()
                         + (t.getMessage() == null ? "" : ": " + t.getMessage());
-                runOnMain(() -> sender.sendMessage(Component.text(
-                        "测试失败：" + msg, NamedTextColor.RED)));
+                runOnMain(() -> messages.send(sender, "command.bench.run.failed",
+                        Placeholder.unparsed("message", msg)));
             } finally {
                 running = false;
             }
@@ -305,9 +306,8 @@ public final class BenchmarkSubCommand {
         CanvasCompositor compositor = BenchCompositor.create(plugin.getLogger());
         // 预检：selector 无匹配场景时早退，避免空跑空白基线。
         if (new SceneLibrary().select(selector).isEmpty()) {
-            runOnMain(() -> sender.sendMessage(Component.text(
-                    "没有匹配 '" + selector
-                            + "' 的场景，用 /canvas bench list 看有哪些。", NamedTextColor.RED)));
+            runOnMain(() -> messages.send(sender, "command.bench.run.no-match",
+                    Placeholder.unparsed("selector", selector)));
             return;
         }
 
@@ -328,7 +328,8 @@ public final class BenchmarkSubCommand {
         // 回主线程：发彩色摘要 + 保存路径
         runOnMain(() -> {
             sendReportToSender(sender, report);
-            sender.sendMessage(Component.text("已保存到：" + outDir, NamedTextColor.GRAY));
+            messages.send(sender, "command.bench.run.saved",
+                    Placeholder.unparsed("path", outDir.toString()));
         });
     }
 
@@ -341,36 +342,35 @@ public final class BenchmarkSubCommand {
         if (id != null && !id.isBlank()) {
             dir = benchRoot().resolve(id);
             if (!Files.isDirectory(dir)) {
-                sender.sendMessage(Component.text(
-                        "找不到这份测试报告：" + id, NamedTextColor.RED));
+                messages.send(sender, "command.bench.report.not-found",
+                        Placeholder.unparsed("id", id));
                 return;
             }
         } else {
             Optional<Path> latest = latestReportDir();
             if (latest.isEmpty()) {
-                sender.sendMessage(Component.text(
-                        "还没有任何测试报告，先用 /canvas bench run 跑一次。",
-                        NamedTextColor.GRAY));
+                messages.send(sender, "command.bench.report.empty");
                 return;
             }
             dir = latest.get();
         }
         Path file = dir.resolve(REPORT_FILE);
         if (!Files.isRegularFile(file)) {
-            sender.sendMessage(Component.text(
-                    "报告缺少 " + REPORT_FILE + "：" + dir.getFileName(), NamedTextColor.RED));
+            messages.send(sender, "command.bench.report.missing-file",
+                    Placeholder.unparsed("report_file", REPORT_FILE),
+                    Placeholder.unparsed("dir", dir.getFileName().toString()));
             return;
         }
         BenchmarkReport report;
         try {
             report = mapper.readValue(file.toFile(), BenchmarkReport.class);
         } catch (IOException e) {
-            sender.sendMessage(Component.text(
-                    "读取报告失败：" + e.getMessage(), NamedTextColor.RED));
+            messages.send(sender, "command.bench.report.read-failed",
+                    Placeholder.unparsed("message", String.valueOf(e.getMessage())));
             return;
         }
-        sender.sendMessage(Component.text(
-                "报告 " + dir.getFileName() + "：", NamedTextColor.GOLD));
+        messages.send(sender, "command.bench.report.header",
+                Placeholder.unparsed("id", dir.getFileName().toString()));
         sendReportToSender(sender, report);
     }
 
@@ -381,8 +381,7 @@ public final class BenchmarkSubCommand {
     private void doClear(CommandSender sender) {
         Path root = benchRoot();
         if (!Files.isDirectory(root)) {
-            sender.sendMessage(Component.text(
-                    "没有可清除的内容（benchmarks 目录不存在）。", NamedTextColor.GRAY));
+            messages.send(sender, "command.bench.clear.nothing");
             return;
         }
         int[] removed = {0};
@@ -402,13 +401,12 @@ public final class BenchmarkSubCommand {
                         });
             }
         } catch (IOException e) {
-            sender.sendMessage(Component.text(
-                    "清除失败：" + e.getMessage(), NamedTextColor.RED));
+            messages.send(sender, "command.bench.clear.failed",
+                    Placeholder.unparsed("message", String.valueOf(e.getMessage())));
             return;
         }
-        sender.sendMessage(Component.text(
-                "已清空 benchmarks 目录（删除了 " + removed[0] + " 项）。",
-                NamedTextColor.GREEN));
+        messages.send(sender, "command.bench.clear.done",
+                Placeholder.unparsed("count", String.valueOf(removed[0])));
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -418,32 +416,30 @@ public final class BenchmarkSubCommand {
     /** 给 sender 发彩色聚合摘要：环境 + 逐场景 percentile + per-element + GC。run / report 共享。 */
     private void sendReportToSender(CommandSender sender, BenchmarkReport report) {
         EnvInfo env = report.env();
-        sender.sendMessage(Component.text(String.format(
-                "测试完成 — %d 个场景  ·  空白画面耗时 %.3f ms",
-                report.scenes().size(), report.blankBaselineMs()), NamedTextColor.GOLD));
-        sender.sendMessage(Component.text(String.format(
-                "环境: Java %s · %d 核 · 最大内存 %s · 内存回收 %s",
-                env.javaVersion(), env.availableProcessors(),
-                env.maxHeapMb() < 0 ? "?" : env.maxHeapMb() + "MB", env.gcNames()),
-                NamedTextColor.GRAY));
+        messages.send(sender, "command.bench.summary.header",
+                Placeholder.unparsed("scene_count", String.valueOf(report.scenes().size())),
+                Placeholder.unparsed("blank_baseline_ms", String.format("%.3f", report.blankBaselineMs())));
+        messages.send(sender, "command.bench.summary.env",
+                Placeholder.unparsed("java_version", env.javaVersion()),
+                Placeholder.unparsed("processors", String.valueOf(env.availableProcessors())),
+                Placeholder.unparsed("max_heap_mb", env.maxHeapMb() < 0 ? "?" : env.maxHeapMb() + "MB"),
+                Placeholder.unparsed("gc_names", String.join(", ", env.gcNames())));
         for (SceneResult r : report.scenes()) {
             sendSceneLine(sender, r);
         }
         if (!report.perElement().isEmpty()) {
-            sender.sendMessage(Component.text(
-                    "每个元素的额外耗时 (ms/个):",
-                    NamedTextColor.GOLD));
+            messages.send(sender, "command.bench.summary.per-element-header");
             for (PerElementCost p : report.perElement()) {
-                sender.sendMessage(Component.text(String.format(
-                        "  %-10s %.5f ms/个  (共 %d 个)",
-                        p.elementType(), p.marginalMsPerElement(), p.elementCount()),
-                        NamedTextColor.GRAY));
+                messages.send(sender, "command.bench.summary.per-element-line",
+                        Placeholder.unparsed("element_type", String.format("%-10s", p.elementType())),
+                        Placeholder.unparsed("marginal_ms", String.format("%.5f", p.marginalMsPerElement())),
+                        Placeholder.unparsed("element_count", String.valueOf(p.elementCount())));
             }
         }
         GcSummary gc = report.gc();
-        sender.sendMessage(Component.text(String.format(
-                "测试期间内存回收: %d 次, 共 %d ms (含预热)",
-                gc.collectionCount(), gc.collectionTimeMs()), NamedTextColor.GRAY));
+        messages.send(sender, "command.bench.summary.gc",
+                Placeholder.unparsed("gc_count", String.valueOf(gc.collectionCount())),
+                Placeholder.unparsed("gc_time_ms", String.valueOf(gc.collectionTimeMs())));
     }
 
     /** 单场景一行：rasterize p50/p95/p99 + palette p50 + alloc MB/it。 */
@@ -452,10 +448,13 @@ public final class BenchmarkSubCommand {
         String alloc = r.allocSupported()
                 ? String.format("%.2f MB/it", r.meanAllocMbPerIter())
                 : "n/a";
-        sender.sendMessage(Component.text(String.format(
-                "  %s  渲染 %.3f/%.3f/%.3f ms (一般/偏慢/最慢)  调色板 %.3f ms  内存 %s",
-                r.sceneId(), ras.p50(), ras.p95(), ras.p99(), r.paletteMs().p50(), alloc),
-                NamedTextColor.GRAY));
+        messages.send(sender, "command.bench.summary.scene-line",
+                Placeholder.unparsed("scene_id", r.sceneId()),
+                Placeholder.unparsed("p50", String.format("%.3f", ras.p50())),
+                Placeholder.unparsed("p95", String.format("%.3f", ras.p95())),
+                Placeholder.unparsed("p99", String.format("%.3f", ras.p99())),
+                Placeholder.unparsed("palette_p50", String.format("%.3f", r.paletteMs().p50())),
+                Placeholder.unparsed("alloc", alloc));
     }
 
     /** summary.txt 全文：环境 + config + 逐场景 percentile 表 + per-element 表 + GC + 基线。 */
@@ -601,30 +600,32 @@ public final class BenchmarkSubCommand {
      */
     private void doRunTween(CommandSender sender, int iterations, int warmup) {
         if (running) {
-            sender.sendMessage(Component.text("已有测试在跑，请等它跑完。", NamedTextColor.RED));
+            messages.send(sender, "command.bench.already-running");
             return;
         }
         int measured = iterations < 0 ? 100 : iterations;
         int warm = warmup < 0 ? 10 : warmup;
         running = true;
-        sender.sendMessage(Component.text(
-                "已开始补间帧率压测（正式 " + measured + " 轮 + 预热 " + warm + " 轮）…",
-                NamedTextColor.GRAY));
+        messages.send(sender, "command.bench.run-tween.started",
+                Placeholder.unparsed("measured", String.valueOf(measured)),
+                Placeholder.unparsed("warmup", String.valueOf(warm)));
         benchExecutor.submit(() -> {
             try {
                 String summary = TweenBenchmarkDriver.run(
                         List.of(1, 4, 16, 64), warm, measured);
                 runOnMain(() -> {
-                    sender.sendMessage(Component.text("补间帧率压测完成：", NamedTextColor.GOLD));
+                    messages.send(sender, "command.bench.run-tween.done");
                     for (String line : summary.split("\n")) {
-                        sender.sendMessage(Component.text(line, NamedTextColor.GRAY));
+                        sender.sendMessage(net.kyori.adventure.text.Component.text(line,
+                                net.kyori.adventure.text.format.NamedTextColor.GRAY));
                     }
                 });
             } catch (Throwable t) {
                 plugin.getLogger().log(Level.SEVERE, "run-tween failed", t);
                 String msg = t.getClass().getSimpleName()
                         + (t.getMessage() == null ? "" : ": " + t.getMessage());
-                runOnMain(() -> sender.sendMessage(Component.text("压测失败：" + msg, NamedTextColor.RED)));
+                runOnMain(() -> messages.send(sender, "command.bench.run-tween.failed",
+                        Placeholder.unparsed("message", msg)));
             } finally {
                 running = false;
             }
@@ -641,55 +642,45 @@ public final class BenchmarkSubCommand {
      */
     private void doRunScript(CommandSender sender, int iterations, int warmup) {
         if (running) {
-            sender.sendMessage(Component.text("已有测试在跑，请等它跑完。", NamedTextColor.RED));
+            messages.send(sender, "command.bench.already-running");
             return;
         }
         int measured = iterations < 0 ? 100 : iterations;
         int warm = warmup < 0 ? 10 : warmup;
         running = true;
-        sender.sendMessage(Component.text(
-                "已开始脚本动作链压测（正式 " + measured + " 轮 + 预热 " + warm + " 轮）…",
-                NamedTextColor.GRAY));
+        messages.send(sender, "command.bench.run-script.started",
+                Placeholder.unparsed("measured", String.valueOf(measured)),
+                Placeholder.unparsed("warmup", String.valueOf(warm)));
         benchExecutor.submit(() -> {
             try {
                 String summary = ScriptBenchmarkDriver.run(
                         List.of(1, 10, 25, 50), warm, measured);
                 runOnMain(() -> {
-                    sender.sendMessage(Component.text("脚本动作链压测完成：", NamedTextColor.GOLD));
+                    messages.send(sender, "command.bench.run-script.done");
                     for (String line : summary.split("\n")) {
-                        sender.sendMessage(Component.text(line, NamedTextColor.GRAY));
+                        sender.sendMessage(net.kyori.adventure.text.Component.text(line,
+                                net.kyori.adventure.text.format.NamedTextColor.GRAY));
                     }
                 });
             } catch (Throwable t) {
                 plugin.getLogger().log(Level.SEVERE, "run-script failed", t);
                 String msg = t.getClass().getSimpleName()
                         + (t.getMessage() == null ? "" : ": " + t.getMessage());
-                runOnMain(() -> sender.sendMessage(Component.text("压测失败：" + msg, NamedTextColor.RED)));
+                runOnMain(() -> messages.send(sender, "command.bench.run-script.failed",
+                        Placeholder.unparsed("message", msg)));
             } finally {
                 running = false;
             }
         });
     }
 
-    private static void sendUsage(CommandSender sender) {
-        sender.sendMessage(Component.text("/canvas bench 子命令：", NamedTextColor.GOLD));
-        sender.sendMessage(Component.text(
-                "  /canvas bench list                          — 列出测试场景",
-                NamedTextColor.GRAY));
-        sender.sendMessage(Component.text(
-                "  /canvas bench run [场景] [轮次] [预热]  — 运行渲染性能测试",
-                NamedTextColor.GRAY));
-        sender.sendMessage(Component.text(
-                "  /canvas bench run-tween [轮次] [预热]       — 补间动画帧率压测（0.7.x）",
-                NamedTextColor.GRAY));
-        sender.sendMessage(Component.text(
-                "  /canvas bench run-script [轮次] [预热]      — 脚本动作链开销压测（0.7.x）",
-                NamedTextColor.GRAY));
-        sender.sendMessage(Component.text(
-                "  /canvas bench report [id]                   — 打印最近的或指定的报告",
-                NamedTextColor.GRAY));
-        sender.sendMessage(Component.text(
-                "  /canvas bench clear                         — 清空已保存的报告",
-                NamedTextColor.GRAY));
+    private void sendUsage(CommandSender sender) {
+        messages.send(sender, "command.bench.usage.header");
+        messages.send(sender, "command.bench.usage.list");
+        messages.send(sender, "command.bench.usage.run");
+        messages.send(sender, "command.bench.usage.run-tween");
+        messages.send(sender, "command.bench.usage.run-script");
+        messages.send(sender, "command.bench.usage.report");
+        messages.send(sender, "command.bench.usage.clear");
     }
 }
