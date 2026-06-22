@@ -1,2 +1,4 @@
 _meta:
   name: "简体中文"
+common:
+  prefix: "<gold>[HikariCanvas]</gold> "
