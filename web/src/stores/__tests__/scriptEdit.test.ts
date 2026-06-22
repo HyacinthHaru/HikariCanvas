@@ -551,6 +551,40 @@ describe('scriptEditStore — server-as-truth dirty 协调', () => {
         expect(edit.workingCopy).toBe(null);
     });
 
+    it('规则被 server 删除时即便 dirty+校验错误也强制清空（规则已没，无处保存）', async () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('   '); // 脏 + 校验错误（空名称）
+        expect(edit.dirty).toBe(true);
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        // server 删掉该规则：必须强制清空，不能被 closeEditing 校验门卡住残留
+        scripts.removeRule('sr-1');
+        await nextTick();
+        expect(edit.selectedRuleId).toBe(null);
+        expect(edit.workingCopy).toBe(null);
+        expect(edit.dirty).toBe(false);
+    });
+
+    it('wall 切换时即便 dirty+校验错误也强制清空（不残留上一面墙的 workingCopy）', async () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        const project = useProjectStore();
+        project.setWallMeta('w-aaa', null, null, null, null);
+        edit.selectRule('sr-1');
+        edit.setName('   '); // 脏 + 校验错误
+        expect(edit.dirty).toBe(true);
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        // 切到另一面墙：必须强制清空
+        project.setWallMeta('w-bbb', null, null, null, null);
+        await nextTick();
+        expect(edit.selectedRuleId).toBe(null);
+        expect(edit.workingCopy).toBe(null);
+        expect(edit.dirty).toBe(false);
+    });
+
     // ---- P5 实测修复（根因 3）：拖拽中冻结整树替换 ----
 
     it('dragging=true 时 server 回声不替换 workingCopy（防 v-for 重建打断 capture）', async () => {
@@ -858,7 +892,7 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
         expect(net.lastError).toBeNull();
     });
 
-    it('dirty + 校验错误时 selectRule 切到另一条规则 → net.lastError 被设置', () => {
+    it('dirty + 校验错误时 selectRule 被挡住（不切走）+ net.lastError 提示（R16）', () => {
         const { edit, net, scripts } = setup();
         scripts.upsert(makeRule('sr-extra'));
         edit.selectRule('sr-1');
@@ -867,10 +901,11 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
         expect(edit.validationErrors.length).toBeGreaterThan(0);
 
         net.lastError = null;
-        edit.selectRule('sr-extra'); // 切规则触发 flushSave（被校验拒）
+        edit.selectRule('sr-extra'); // R16：校验未过 → 被挡，不切走、改动保留
 
         expect(net.lastError).not.toBeNull();
-        expect(net.lastError).toContain('保存');
+        expect(net.lastError).toContain('校验错误');
+        expect(edit.selectedRuleId).toBe('sr-1'); // 仍停在原规则
     });
 
     it('dirty + 校验通过时 selectRule 切规则 → 不触发提示', () => {
@@ -887,17 +922,69 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
         expect(net.lastError).toBeNull();
     });
 
-    it('closeEditing 即便有提示也不阻止关闭（workingCopy 被清空）', () => {
+    it('校验错误时 closeEditing 保留 workingCopy（不静默丢弃未保存改动）', () => {
         const { edit } = setup();
         edit.selectRule('sr-1');
         edit.setName(''); // 非法
         expect(edit.validationErrors.length).toBeGreaterThan(0);
+        expect(edit.dirty).toBe(true);
 
         edit.closeEditing();
 
-        // 关闭照常发生
+        // 关闭被挡住：workingCopy / dirty / selectedRuleId 全保留，改动不丢
+        expect(edit.selectedRuleId).toBe('sr-1');
+        expect(edit.workingCopy).not.toBeNull();
+        expect(edit.dirty).toBe(true);
+        // 也不发 update（doSave 校验门拦下）
+        expect(sendScriptUpdate).not.toHaveBeenCalled();
+    });
+
+    it('校验通过时 closeEditing 正常 flush + 清空', () => {
+        const { edit } = setup();
+        edit.selectRule('sr-1');
+        edit.setName('好名字');
+        expect(edit.dirty).toBe(true);
+        expect(edit.validationErrors).toEqual([]);
+
+        edit.closeEditing();
+
+        // 正常关闭：flush 发出去 + 清空
+        expect(sendScriptUpdate).toHaveBeenCalledTimes(1);
         expect(edit.selectedRuleId).toBeNull();
         expect(edit.workingCopy).toBeNull();
+        expect(edit.dirty).toBe(false);
+    });
+
+    it('校验错误时 selectRule 切规则被挡住（保留当前 workingCopy + 不切走）', () => {
+        const { edit, scripts } = setup();
+        scripts.upsert(makeRule('sr-extra', { name: '别的规则' }));
+        edit.selectRule('sr-1');
+        edit.setName('   '); // 空名称 = 非法
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        expect(edit.dirty).toBe(true);
+
+        edit.selectRule('sr-extra');
+
+        // 切换被挡住：仍停在 sr-1，未保存改动保留
+        expect(edit.selectedRuleId).toBe('sr-1');
+        expect(edit.workingCopy?.name).toBe('   ');
+        expect(edit.dirty).toBe(true);
+        expect(sendScriptUpdate).not.toHaveBeenCalled();
+    });
+
+    it('校验通过时 selectRule 正常切到目标规则', () => {
+        const { edit, scripts } = setup();
+        scripts.upsert(makeRule('sr-extra', { name: '别的规则' }));
+        edit.selectRule('sr-1');
+        edit.setName('好名字'); // 合法
+        expect(edit.validationErrors).toEqual([]);
+
+        edit.selectRule('sr-extra');
+
+        // 正常切换：flush 上一条 + 切到目标
+        expect(sendScriptUpdate).toHaveBeenCalledTimes(1);
+        expect(edit.selectedRuleId).toBe('sr-extra');
+        expect(edit.workingCopy?.name).toBe('别的规则');
         expect(edit.dirty).toBe(false);
     });
 });

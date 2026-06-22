@@ -222,4 +222,40 @@ describe('EasingCurveEditor 渲染 smoke', () => {
         expect(wrapper.findAll('button').length).toBeGreaterThanOrEqual(4);
         expect(wrapper.text()).toContain('匀速');   // easingLinear
     });
+
+    // R19-easingeditor-drag 回归：拖拽中收到 server patch（props.modelValue 变）不得漂移未拖的
+    // 那个控制点。SIZE=160；toSvgX(x)=x*160，toSvgY(y)=160-y*160。
+    it('拖拽中 props 变化不漂移基线：松手发的 bezier 用拖拽起始快照（非 patch 后值）', async () => {
+        const wrapper = mount(EasingCurveEditor, {
+            props: { modelValue: { type: 'cubicBezier', bezier: [0.2, 0.3, 0.8, 0.7] } },
+        });
+        // SVG getBoundingClientRect 在 happy-dom 下返 0；stub 成 160×160 @ 原点，让指针坐标可映射。
+        const svg = wrapper.find('svg').element as SVGSVGElement;
+        vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({
+            left: 0, top: 0, right: 160, bottom: 160, width: 160, height: 160, x: 0, y: 0, toJSON() {},
+        } as DOMRect);
+
+        // 圆顺序：endpoint0 / endpoint1 / p1-handle / p2-handle。按下 p1-handle 开始拖（快照基线）。
+        const handles = wrapper.findAll('circle');
+        expect(handles.length).toBe(4);
+        await handles[2].trigger('pointerdown', { pointerId: 1 });
+
+        // 拖拽中：server patch 回流改 props.modelValue（p2 控制点被改到 0.1,0.1）。
+        await wrapper.setProps({ modelValue: { type: 'cubicBezier', bezier: [0.5, 0.5, 0.1, 0.1] } });
+
+        // 拖 p1-handle 到 (0.4, 0.6)：clientX=0.4*160=64，clientY=(1-0.6)*160=64。
+        await wrapper.find('svg').trigger('pointermove', { clientX: 64, clientY: 64 });
+        // 松手 emit 一条。
+        await wrapper.find('svg').trigger('pointerup', { pointerId: 1 });
+
+        const events = wrapper.emitted('update:modelValue');
+        expect(events).toBeTruthy();
+        const last = events![events!.length - 1][0] as { type: string; bezier: number[] };
+        expect(last.type).toBe('cubicBezier');
+        // p1 取拖到的 (0.4, 0.6)；p2 取拖拽起始快照 (0.8, 0.7)——而非 patch 后的 (0.1, 0.1)。
+        expect(last.bezier[0]).toBeCloseTo(0.4, 5);
+        expect(last.bezier[1]).toBeCloseTo(0.6, 5);
+        expect(last.bezier[2]).toBeCloseTo(0.8, 5);
+        expect(last.bezier[3]).toBeCloseTo(0.7, 5);
+    });
 });

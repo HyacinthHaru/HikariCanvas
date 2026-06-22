@@ -111,6 +111,9 @@ public final class HikariCanvas extends JavaPlugin {
     private WallPreviewService wallPreviewService;
     private ImageStorage imageStorage;
     private UploadHandler uploadHandler;
+    // 0.8-A2：.canvas 工程导入 assets 摄入栈；持 daemon 单线程 decoderPool，onDisable 须 shutdown
+    // （否则热重载累积线程池泄漏）。
+    private moe.hikari.canvas.canvasfile.AssetIngest assetIngest;
     private TemplateRepo templateRepo;
     private TemplatePublisher templatePublisher;
     // 0.4.0-P1-A：变量系统底座（VariableStore + user_variables 持久化）。
@@ -564,7 +567,7 @@ public final class HikariCanvas extends JavaPlugin {
         // 0.8-A2：.canvas 工程导入的 assets 图片摄入栈（与上传同款 magic+隔离解码+配额+落 hash）。
         // 复用上面已装配的 imageStorage / imageQuota / imageDao / wallRepo / jdbi，注入 WebServer
         // 由其内部 new ProjectImporter（复用 dispatcher 同款 push 广播）。
-        moe.hikari.canvas.canvasfile.AssetIngest assetIngest =
+        this.assetIngest =
                 new moe.hikari.canvas.canvasfile.AssetIngest(getLogger(), imageStorage, imageQuota,
                         imageDao, wallRepo, database.jdbi());
 
@@ -1094,6 +1097,11 @@ public final class HikariCanvas extends JavaPlugin {
         if (uploadHandler != null) {
             closeQuietly("uploadHandler.shutdown", uploadHandler::shutdown);
             uploadHandler = null;
+        }
+        // 0.8-A2：停 .canvas 导入 assets 摄入栈的 daemon 解码线程池（shutdownNow 幂等）。
+        if (assetIngest != null) {
+            closeQuietly("assetIngest.shutdown", assetIngest::shutdown);
+            assetIngest = null;
         }
         if (imageStorage != null) {
             closeQuietly("imageStorage.shutdown", imageStorage::shutdown);

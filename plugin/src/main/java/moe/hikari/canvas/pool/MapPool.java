@@ -297,12 +297,17 @@ public final class MapPool {
             }
         }
         long now = System.currentTimeMillis();
+        // R5：两阶段，杜绝内存/DB 分叉。① 先在单事务里把全部 map upsert 落盘（all-or-nothing，
+        // 失败抛异常 → byId 完全未动，调用方回滚链处理）；② DB 成功后才改内存（纯内存操作不会失败）。
+        List<PooledMap> upds = new ArrayList<>(mapIds.size());
         for (int id : mapIds) {
-            PooledMap m = byId.get(id);
-            if (m.state() == PoolState.FREE) removeFromFree(id, expectedWorld);
-            PooledMap upd = m.withReserved(owner, now);
+            upds.add(byId.get(id).withReserved(owner, now));
+        }
+        persistAllStrict(upds);
+        for (PooledMap upd : upds) {
+            int id = upd.mapId();
+            if (byId.get(id).state() == PoolState.FREE) removeFromFree(id, expectedWorld);
             byId.put(id, upd);
-            persist(upd);
         }
         auditLog.record("POOL_BIND_WALL", null, null, null, null,
                 Map.of("wall_id", wallId, "world", expectedWorld.getName(), "map_ids", mapIds));
@@ -678,5 +683,19 @@ public final class MapPool {
         jdbi.useHandle(h -> h.execute(PERSIST_SQL,
                 m.mapId(), m.state().name(), m.reservedBy(), m.world(),
                 m.createdAt(), m.lastUsedAt()));
+    }
+
+    /**
+     * R5：{@link #bindToWall} 专用——把多张 map 的 upsert 收进<b>单个事务</b>，失败<b>抛出</b>（不吞）。
+     * 保证 all-or-nothing：要么全部落盘、要么全不落盘并抛异常让调用方回滚，杜绝 {@link #persist}
+     * 那种"中段失败、内存全改而 DB 部分改"的分叉。
+     */
+    private void persistAllStrict(List<PooledMap> maps) {
+        jdbi.useTransaction(h -> {
+            for (PooledMap m : maps) {
+                h.execute(PERSIST_SQL, m.mapId(), m.state().name(), m.reservedBy(),
+                        m.world(), m.createdAt(), m.lastUsedAt());
+            }
+        });
     }
 }

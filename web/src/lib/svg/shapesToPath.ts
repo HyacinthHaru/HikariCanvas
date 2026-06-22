@@ -79,6 +79,7 @@ export function shapeToPathD(el: Element): string | null {
             const y = attr(el, 'y');
             const w = attr(el, 'width');
             const h = attr(el, 'height');
+            if (w <= 0 || h <= 0) return null;
             return `M${num(x)} ${num(y)} L${num(x + w)} ${num(y)} L${num(x + w)} ${num(y + h)} L${num(x)} ${num(y + h)} Z`;
         }
 
@@ -113,6 +114,7 @@ export function shapeToPathD(el: Element): string | null {
             const cx = attr(el, 'cx');
             const cy = attr(el, 'cy');
             const r = attr(el, 'r');
+            if (r <= 0) return null;
             return ellipseToPath(cx, cy, r, r);
         }
 
@@ -121,6 +123,7 @@ export function shapeToPathD(el: Element): string | null {
             const cy = attr(el, 'cy');
             const rx = attr(el, 'rx');
             const ry = attr(el, 'ry');
+            if (rx <= 0 || ry <= 0) return null;
             return ellipseToPath(cx, cy, rx, ry);
         }
 

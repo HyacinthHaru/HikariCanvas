@@ -6,6 +6,9 @@ import java.awt.Color;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * MC 地图调色板查找表，契约见 {@code docs/rendering.md §6}。
@@ -32,6 +35,11 @@ import java.util.List;
  * 构建完后 {@link #lut} 只读；所有 {@code matchColor} 都是纯函数，任意线程并发安全。
  */
 public final class PaletteLut {
+
+    private static final Logger LOG = Logger.getLogger(PaletteLut.class.getName());
+
+    /** 越界 rgb 分量只告警一次，避免 248 项坏 palette 刷 248 条 SEVERE。 */
+    private static final AtomicBoolean RGB_RANGE_WARNED = new AtomicBoolean(false);
 
     /** MC 地图调色板中 alpha=0 的透明索引（M4-T1 实测 index 0-3 均透明，约定用 0）。 */
     public static final byte TRANSPARENT_INDEX = 0;
@@ -81,6 +89,7 @@ public final class PaletteLut {
         this.entries = paletteEntries.toArray(new PaletteEntry[0]);
         // P3-48：fail-fast 校验每项 rgb 合法（null / 长度 < 3 即 palette.json 损坏），
         // 不再静默用单色 fallback 掩盖坏数据
+        boolean rangeViolated = false;
         for (int i = 0; i < entries.length; i++) {
             PaletteEntry e = entries[i];
             if (e == null || e.rgb == null || e.rgb.length < 3) {
@@ -88,6 +97,20 @@ public final class PaletteLut {
                         "palette entry " + i + " has malformed rgb (null or length < 3); "
                                 + "palette.json corrupt? run ./gradlew generatePalette");
             }
+            // R10：损坏/篡改的 palette.json 可能含负 / >255 分量，直接进 rgbToLab 会算出
+            // 越界 Lab。就地 clamp 到 [0,255]，单条坏色不拖垮启动（不抛异常）。
+            for (int c = 0; c < 3; c++) {
+                int v = e.rgb[c];
+                int clamped = clamp8(v);
+                if (clamped != v) {
+                    e.rgb[c] = clamped;
+                    rangeViolated = true;
+                }
+            }
+        }
+        if (rangeViolated && RGB_RANGE_WARNED.compareAndSet(false, true)) {
+            LOG.log(Level.SEVERE, "palette.json 含越界 rgb 分量（<0 或 >255），已 clamp 到 [0,255]；"
+                    + "palette.json 可能损坏，建议重跑 ./gradlew generatePalette");
         }
         // 预筛非透明 palette 项；只有它们参与 RGB → index 匹配
         int opaqueCount = 0;

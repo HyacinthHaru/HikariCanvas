@@ -150,17 +150,23 @@ public final class FillPaintBuilder {
 
     /**
      * AWT {@code GradientPaint} 要求 fractions 严格递增。FillValidator 允许相等（硬切色），
-     * 这里 epsilon-bump 处理：连续相等 fraction 改为 {@code prev + 1e-5f}，最高 clamp 到 1。
+     * 这里做鲁棒单调化：前向把每项推到 {@code prev + EPS}，若末项越界（> 1）再后向回退，
+     * 使全相等 / 部分相等 / 混合输入都严格递增且 ≤ 1（对常见 n=2..10，{@code (n-1)*EPS} 远小于 1）。
      */
     public static float[] monotonicFractions(List<Stop> stops) {
+        final float EPS = 1e-5f;
         int n = stops.size();
         float[] out = new float[n];
-        float prev = -1f;
-        for (int i = 0; i < n; i++) {
-            float f = (float) stops.get(i).position();
-            if (f <= prev) f = Math.min(1f, prev + 1e-5f);
-            out[i] = f;
-            prev = f;
+        out[0] = Math.max(0f, Math.min(1f, (float) stops.get(0).position()));
+        for (int i = 1; i < n; i++) {
+            float f = Math.max(0f, Math.min(1f, (float) stops.get(i).position()));
+            out[i] = Math.max(f, out[i - 1] + EPS);
+        }
+        if (out[n - 1] > 1f) {
+            out[n - 1] = 1f;
+            for (int i = n - 2; i >= 0; i--) {
+                out[i] = Math.min(out[i], out[i + 1] - EPS);
+            }
         }
         return out;
     }

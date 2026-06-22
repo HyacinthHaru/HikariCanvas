@@ -114,11 +114,15 @@ function parseSingle(name: string, rawArgs: string): Mat {
         }
         case 'skewX': {
             const rad = ((args[0] ?? 0) * Math.PI) / 180;
-            return [1, 0, Math.tan(rad), 1, 0, 0];
+            const tanVal = Math.tan(rad);
+            const safeTan = Number.isFinite(tanVal) && Math.abs(tanVal) < 1e6 ? tanVal : 0;
+            return [1, 0, safeTan, 1, 0, 0];
         }
         case 'skewY': {
             const rad = ((args[0] ?? 0) * Math.PI) / 180;
-            return [1, Math.tan(rad), 0, 1, 0, 0];
+            const tanVal = Math.tan(rad);
+            const safeTan = Number.isFinite(tanVal) && Math.abs(tanVal) < 1e6 ? tanVal : 0;
+            return [1, safeTan, 0, 1, 0, 0];
         }
         default:
             return [...IDENTITY] as Mat;

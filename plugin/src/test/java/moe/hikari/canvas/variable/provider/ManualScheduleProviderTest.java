@@ -544,6 +544,31 @@ class ManualScheduleProviderTest {
     }
 
     @Test
+    void computeNext_crossMidnight_etaNotClampedTo86400() {
+        // R13-schedule-eta：now=00:00:00、单 entry 23:59:59。
+        // 该班次今天仍未发车（23:59:59 > 00:00:00）→ next 当日，eta = 86399s（不被钳到 86400）。
+        // next2 = 同班次明天 = eta + 86400 = 172799s，跨午夜累加值保留，不被旧 86_400L 上界裁掉。
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "23:59:59", "Midnight", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(0, 0, 0), 60L);
+        assertEquals("23:59:59", c.nextDeparture());
+        assertEquals(86399, (int) c.etaSeconds());
+        assertEquals(172799, (int) c.next2EtaSeconds(),
+                "跨午夜第二班次 eta 约 172799，保留近 2 天而非被钳到 86400");
+        assertFalse(c.isArriving());
+        assertFalse(c.next2IsArriving());
+    }
+
+    @Test
+    void computeNext_sameDayFuture_under86400_unchanged() {
+        // 对照组：同日未来班次（eta < 86400）行为不变，不受钳位上界改动影响。
+        List<ScheduleEntry> entries = List.of(
+                new ScheduleEntry(1, "w", "08:30", "Soon", 0));
+        var c = ManualScheduleProvider.computeNext(entries, LocalTime.of(8, 0), 60L);
+        assertEquals(1800, (int) c.etaSeconds()); // 30min
+    }
+
+    @Test
     void computeNext_emptyEntries_next2AllNull() {
         var c = ManualScheduleProvider.computeNext(List.of(), LocalTime.of(8, 0), 60L);
         assertNull(c.nextDeparture());

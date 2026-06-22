@@ -22,4 +22,24 @@ describe('transform', () => {
         expect(parseTransform('')).toEqual(IDENTITY);
         expect(parseTransform(null)).toEqual(IDENTITY);
     });
+    it('skewX(45) → tan45=1', () => {
+        const [a, b, c, d, e, f] = parseTransform('skewX(45)');
+        expect([a, b, d, e, f]).toEqual([1, 0, 1, 0, 0]);
+        expect(c).toBeCloseTo(1);
+    });
+    it('skewY(45) → tan45=1', () => {
+        const [a, b, c, d, e, f] = parseTransform('skewY(45)');
+        expect([a, c, d, e, f]).toEqual([1, 0, 1, 0, 0]);
+        expect(b).toBeCloseTo(1);
+    });
+    it('skewX(90) degenerates to identity (no NaN/Infinity)', () => {
+        const m = parseTransform('skewX(90)');
+        expect(m).toEqual(IDENTITY);
+        expect(applyPoint(m, 3, 4)).toEqual([3, 4]);
+    });
+    it('skewY(90) degenerates to identity (no NaN/Infinity)', () => {
+        const m = parseTransform('skewY(90)');
+        expect(m).toEqual(IDENTITY);
+        expect(applyPoint(m, 3, 4)).toEqual([3, 4]);
+    });
 });

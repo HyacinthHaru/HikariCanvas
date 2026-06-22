@@ -424,9 +424,8 @@ export class WsClient {
                 .then((p) => p as { rows: number });
     }
 
-    /** wallId 默认当前 session 绑定的 wall（后端自动注入）。 */
+    /** 绑定当前 session 的 wall 到铁路网络（R7：后端只认 session wall，不接受 wallId）。 */
     sendRailWallBind(payload: {
-        wallId?: string;
         lineId?: string | null;
         stationId?: string | null;
         direction?: 'up' | 'down' | 'both';

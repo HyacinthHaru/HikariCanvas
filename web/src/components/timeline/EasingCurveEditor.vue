@@ -30,7 +30,13 @@ const PRESET_POINTS: Record<string, [number, number, number, number]> = {
 
 // 本地 draft（拖动跟手；props 变化时同步）。
 const localEasing = ref<Easing>({ ...props.modelValue });
-watch(() => props.modelValue, (v) => { localEasing.value = { ...v }; });
+// 拖拽期基线快照：onHandleDown 冻结当前 localEasing，onHandleMove 基于它算控制点，避免
+// 拖动中收到 server patch（watch 改 localEasing）导致未拖的那个控制点跳变。
+const dragStartEasing = ref<Easing | null>(null);
+watch(() => props.modelValue, (v) => {
+    if (dragging) return;   // 拖拽期跳过 props 同步，松手后下一条 patch 再回流
+    localEasing.value = { ...v };
+});
 
 const points = computed<[number, number, number, number]>(() => {
     const e = localEasing.value;
@@ -68,6 +74,7 @@ function clamp01(v: number): number { return Math.max(0, Math.min(1, v)); }
 
 function onHandleDown(e: PointerEvent, which: 1 | 2): void {
     dragging = which;
+    dragStartEasing.value = { ...localEasing.value, bezier: points.value };
     dragPointerId = e.pointerId;
     try { (e.target as Element).setPointerCapture(e.pointerId); } catch { /* ignore */ }
     e.preventDefault();
@@ -78,7 +85,8 @@ function onHandleMove(e: PointerEvent): void {
     const rect = svgRef.value.getBoundingClientRect();
     const x = clamp01((e.clientX - rect.left) / rect.width);
     const y = 1 - (e.clientY - rect.top) / rect.height;
-    const c = points.value;
+    // 未拖的那个控制点取拖拽起始快照（非可能被 patch 改过的 localEasing），避免曲线跳变。
+    const c = dragStartEasing.value?.bezier ?? points.value;
     const bezier: [number, number, number, number] = dragging === 1
         ? [x, y, c[2], c[3]]
         : [c[0], c[1], x, y];
@@ -88,6 +96,7 @@ function onHandleUp(e: PointerEvent): void {
     if (!dragging) return;
     try { (e.target as Element).releasePointerCapture(dragPointerId); } catch { /* ignore */ }
     dragging = null;
+    dragStartEasing.value = null;
     dragPointerId = -1;
     emit('update:modelValue', localEasing.value);   // 松手发一条
 }

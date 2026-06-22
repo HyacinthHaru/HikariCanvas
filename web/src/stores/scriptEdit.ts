@@ -128,10 +128,11 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         if (!rule) return;
         // 切到另一条规则前，先把上一条手上的脏改动落盘。
         if (selectedRuleId.value !== null && selectedRuleId.value !== ruleId) {
-            // 有脏改动但校验不过：flushSave 会被 doSave 内的校验门拒绝，改动将被丢弃，
-            // 给用户非阻塞提示（不影响切规则本身）。
+            // 有脏改动但校验不过：flushSave 会被 doSave 内的校验门拒绝，直接切走会
+            // 丢弃这条规则未保存的改动（数据丢失）。挡住切换并提示用户修正 / 撤销。
             if (dirty.value && validationErrors.value.length > 0) {
-                net.lastError = '部分改动因校验未通过，未能保存';
+                net.lastError = '当前规则有校验错误，请修正或撤销改动后再切换。';
+                return;
             }
             flushSave();
         }
@@ -146,17 +147,32 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
 
     /**
      * 退出编辑：先 flush 待保存改动 → 清空 workingCopy / selectedRuleId / undo 栈。
-     * 切 wall（scripts.reset）/ 关闭 overlay / 删除当前规则时调。
+     * 关闭 overlay 时调（用户主动退出当前规则）。
      *
-     * <p>若 dirty + validationErrors 非空，flushSave 会因校验拒绝不发送——此时静默
-     * 丢弃不理想，改为用 net.lastError 提示用户（非阻塞，不阻止关闭）。</p>
+     * <p>若 dirty + validationErrors 非空，flushSave 会因校验拒绝不发送——此时清空
+     * workingCopy 会<b>静默丢弃</b>用户未保存的改动（数据丢失）。改为设 net.lastError 提示
+     * 并 return，不清空：用户要么修好错误（届时自动保存），要么自己撤销改动。</p>
+     *
+     * <p>注意：规则<b>已经从 server 消失</b>（被删 / 切 wall scripts.reset）的内部清理走
+     * {@link forceClose}——那种场景无处可保存，必须无条件清，不能被校验门卡住。</p>
      */
     function closeEditing(): void {
-        // 关闭前先检测"有脏改动但校验不过"的情形，提前警告（不阻止关闭）。
+        // 有脏改动但校验不过：清空会丢数据，挡住关闭并提示用户修正 / 撤销。
         if (dirty.value && validationErrors.value.length > 0) {
-            net.lastError = '部分改动因校验未通过，未能保存';
+            net.lastError = '部分改动因校验未通过，未能保存。请修正错误或撤销改动。';
+            return;
         }
         flushSave();
+        forceClose();
+    }
+
+    /**
+     * 无条件清空编辑会话（不 flush、不校验、不挡）。用于"规则已没了"的内部路径
+     * （server 删除回声 / wall 切换）——此时既无处保存也不该把残留 workingCopy 挂在已
+     * 失效的 selectedRuleId 上。先取消 pending save timer 避免删后还把缓存写回。
+     */
+    function forceClose(): void {
+        cancelPendingSave();
         selectedRuleId.value = null;
         workingCopy.value = null;
         undoStack.value = [];
@@ -544,9 +560,10 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
      * - 拖拽中 → 跳过整树替换（根因 3：v-for 重建会打断 pointer capture）；
      * - 非脏 → 用 server 版刷新 workingCopy（回显他人改动 / 自己 save 成功后的权威态）；
      * - 脏   → 保留本地不覆盖（用户正在编辑，server 回声不能踩掉手上的活）。
-     * 当前编辑规则被 server 删掉（get 返 null）→ closeEditing（无可编辑对象）。
+     * 当前编辑规则被 server 删掉（get 返 null）→ forceClose（规则没了，无处可保存，
+     * 必须无条件清——不能被 closeEditing 的校验门卡住、残留指向已删规则的 workingCopy）。
      *
-     * <p>注意 closeEditing（规则被删）<b>不受 dragging 守卫</b>：规则真没了就该退出编辑，
+     * <p>注意 forceClose（规则被删）<b>不受 dragging 守卫</b>：规则真没了就该退出编辑，
      * 拖一个不存在的规则没有意义；松手时 useBlockDrag 取 workingCopy 为 null 会安全早退。</p>
      */
     watch(
@@ -555,7 +572,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             if (selectedRuleId.value === null) return;
             if (serverRule === null) {
                 // 规则在 server 侧没了（别人删了 / 自己 deleteRule 已先清这里就不会再进）。
-                closeEditing();
+                forceClose();
                 return;
             }
             if (dragging.value) return; // 拖拽中：保留本地（防整树替换打断 capture）
@@ -567,12 +584,13 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
 
     /**
      * wall 切换：project.wallId 变 → scripts 已 reset（project.reset 调），编辑会话必须清空，
-     * 否则残留上一面墙的 workingCopy。直接 closeEditing。
+     * 否则残留上一面墙的 workingCopy。走 forceClose（上一面墙的规则已不在 store，无处保存，
+     * 不能被校验门挡住——否则切墙后残留旧 workingCopy）。
      */
     watch(
         () => project.wallId,
         () => {
-            closeEditing();
+            forceClose();
         },
     );
 

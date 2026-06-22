@@ -396,6 +396,10 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
                         updated++;
                     }
                     if (changed || forceFullPush) {
+                        // forceFullPush 且本帧未变（changed=false）时 diff.lastFrames[i] 可能尚无
+                        // 基准 → 用本帧 pixels 兜底，杜绝 pushToViewers(...,null) 让新观察者缺帧
+                        // （docs/architecture.md §5.5）。
+                        if (!changed && diff.lastFrames[i] == null) diff.lastFrames[i] = pixels;
                         pushToViewers(viewers, mapId, diff.lastFrames[i]);
                     }
                 } catch (Exception e) {

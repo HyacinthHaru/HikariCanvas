@@ -550,6 +550,10 @@ function validateAction(
             if (isBlank(action.fullName)) {
                 errors.push({ blockId: path, message: '文本拼接的目标变量不能为空' });
             }
+            // 后端：text != null && text.length > SET_VALUE_MAX → 拒（null 合法，拼接 null 视为空）。
+            if (action.text != null && action.text.length > SET_VALUE_MAX) {
+                errors.push({ blockId: path, message: `拼接文本超长（最多 ${SET_VALUE_MAX} 字符）` });
+            }
             break;
         }
         case 'cloneElement': {
@@ -642,6 +646,9 @@ function validateAction(
                 if (!b || b.length !== 4 || !(b[0] >= 0 && b[0] <= 1) || !(b[2] >= 0 && b[2] <= 1)) {
                     errors.push({ blockId: path, message: '自定义缓动的控制点不合法（x1,x2 需在 0..1 之间）' });
                 }
+            } else if (easing.bezier != null) {
+                // 后端：type 合法但非 cubicBezier 却带 bezier → 拒（ScriptRuleValidator §580）。
+                errors.push({ blockId: path, message: 'bezier 参数仅允许 cubicBezier 缓动' });
             }
             // body 非空。
             if (!action.body || action.body.length === 0) {

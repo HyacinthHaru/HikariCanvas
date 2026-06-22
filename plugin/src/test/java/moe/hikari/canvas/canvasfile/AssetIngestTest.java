@@ -122,4 +122,13 @@ class AssetIngestTest {
         Set<String> stored = ingest.ingestAll(assets, uploader);
         assertEquals(1, stored.size(), "只处理 assets/*.png，其余忽略");
     }
+
+    @Test
+    void shutdown_repeatedCalls_idempotentNoThrow() {
+        // R3-assetingest-leak：onDisable 关停 decoderPool；cleanupResources 与 onEnable-fail
+        // catch 共用，须可多次安全调用（shutdownNow 幂等）。
+        ingest.shutdown();
+        ingest.shutdown();
+        ingest.shutdown();
+    }
 }

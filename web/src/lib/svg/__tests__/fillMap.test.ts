@@ -25,4 +25,13 @@ describe('fillMap', () => {
     it('style inline overrides presentation attr', () => {
         expect(mapFill(makeEl('path', { fill: '#000000', style: 'fill:#ff0000' }))).toEqual({ type: 'solid', color: '#ff0000' });
     });
+    it('invalid hex → undefined; valid hex (incl shorthand / alpha) still maps', () => {
+        for (const bad of ['#12345g', '#gggggg', '#12345zaa', '#12', '#1234567']) {
+            expect(mapFill(makeEl('path', { fill: bad }))).toBeUndefined();
+            expect(mapStroke(makeEl('path', { stroke: bad }))).toBeUndefined();
+        }
+        expect(mapFill(makeEl('path', { fill: '#ff0000' }))).toEqual({ type: 'solid', color: '#ff0000' });
+        expect(mapFill(makeEl('path', { fill: '#f00' }))).toEqual({ type: 'solid', color: '#ff0000' });
+        expect(mapFill(makeEl('path', { fill: '#ff0000aa' }))).toEqual({ type: 'solid', color: '#ff0000aa' });
+    });
 });

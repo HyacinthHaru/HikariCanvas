@@ -568,7 +568,7 @@ public final class ManualScheduleProvider implements VariableProvider {
 
         // 防误差：负数兜底 0；最大 2 day（next2 跨日累加可能超 86400）
         if (etaSeconds < 0) etaSeconds = 0;
-        if (etaSeconds > 86_400L) etaSeconds = 86_400L;
+        if (etaSeconds > 172_800L) etaSeconds = 172_800L;
         if (eta2Seconds < 0) eta2Seconds = 0;
         if (eta2Seconds > 172_800L) eta2Seconds = 172_800L;
 

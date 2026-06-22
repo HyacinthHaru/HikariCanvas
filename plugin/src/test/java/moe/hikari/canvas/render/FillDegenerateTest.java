@@ -5,6 +5,8 @@ import moe.hikari.canvas.state.ProjectState;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import moe.hikari.canvas.state.Stop;
+
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.util.List;
@@ -13,6 +15,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * M11-E review 回归：用户可在 FillInput 把所有 stops 拉到 position=1.0（FillValidator 允许相等位置）。
@@ -89,6 +92,47 @@ class FillDegenerateTest {
         ), null, null);
         BufferedImage img = assertDoesNotThrow(() -> compositor.rasterize(es.state()));
         assertNotNull(img);
+    }
+
+    @Test
+    void monotonicFractionsAllEqualOneStrictlyIncreasingAndCapped() {
+        float[] out = FillPaintBuilder.monotonicFractions(List.of(
+                new Stop(1.0, "#FF0000"),
+                new Stop(1.0, "#00FF00"),
+                new Stop(1.0, "#0000FF")));
+        assertStrictlyIncreasingAndInRange(out);
+    }
+
+    @Test
+    void monotonicFractionsPartialEqualStrictlyIncreasingAndCapped() {
+        float[] out = FillPaintBuilder.monotonicFractions(List.of(
+                new Stop(0.0, "#000000"),
+                new Stop(0.5, "#777777"),
+                new Stop(0.5, "#888888"),
+                new Stop(1.0, "#FFFFFF")));
+        assertStrictlyIncreasingAndInRange(out);
+    }
+
+    @Test
+    void monotonicFractionsMixedNonMonotoneStrictlyIncreasingAndCapped() {
+        // 含倒序 + 越界 + 全 1.0 末段
+        float[] out = FillPaintBuilder.monotonicFractions(List.of(
+                new Stop(0.8, "#111111"),
+                new Stop(0.3, "#222222"),
+                new Stop(1.0, "#333333"),
+                new Stop(1.0, "#444444")));
+        assertStrictlyIncreasingAndInRange(out);
+    }
+
+    private static void assertStrictlyIncreasingAndInRange(float[] out) {
+        for (int i = 0; i < out.length; i++) {
+            assertTrue(out[i] >= 0f && out[i] <= 1f,
+                    "fraction out of [0,1] at " + i + ": " + out[i]);
+            if (i > 0) {
+                assertTrue(out[i] > out[i - 1],
+                        "not strictly increasing at " + i + ": " + out[i - 1] + " -> " + out[i]);
+            }
+        }
     }
 
     @Test

@@ -113,7 +113,7 @@ final class HistoryStack {
     void commitHistoryCoalesced(ProjectSnapshot preSnapshot, String coalesceKey) {
         long now = clock.getAsLong();
         if (coalesceKey != null && coalesceKey.equals(lastCoalesceKey)
-                && now - lastCommitAt <= COALESCE_WINDOW_MS && !past.isEmpty()) {
+                && now >= lastCommitAt && now - lastCommitAt <= COALESCE_WINDOW_MS && !past.isEmpty()) {
             future.clear();
             lastCommitAt = now;
             return;

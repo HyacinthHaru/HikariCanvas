@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -153,6 +154,44 @@ class BayerDitherTest {
         img.setRGB(0, 0, 0xFFAABBCC);
         BayerDither.apply(img, null);
         assertEquals(0xFFAABBCC, img.getRGB(0, 0));
+    }
+
+    @Test
+    void nullPaletteColorFallsBackToTransparentNotSkip() {
+        // R9：getColor(matched) 返 null 时旧代码 `continue` 静默保留原色（画面 glitch）。
+        // 现要求 fallback 到 TRANSPARENT_INDEX 取色。构造一个 palette：entries[0] = 透明色
+        // (TRANSPARENT_INDEX，rgb 全 0)，entries[1] = 不透明项但其 `index` 字段=200 > 数组长度，
+        // 于是 matchColor 返 byte 200，getColor(200) 越界返 null → 触发 fallback 路径。
+        PaletteLut.PaletteEntry transparent =
+                new PaletteLut.PaletteEntry(PaletteLut.TRANSPARENT_INDEX, new int[]{0, 0, 0}, 0);
+        PaletteLut.PaletteEntry opaqueOutOfRange =
+                new PaletteLut.PaletteEntry(200, new int[]{255, 0, 0}, 255);
+        PaletteLut broken = new PaletteLut(List.of(transparent, opaqueOutOfRange));
+
+        // 自检：匹配命中越界 index，getColor 确实返 null（保证测试覆盖 null 分支）
+        byte matched = broken.matchColor(120, 120, 120);
+        assertEquals(200, Byte.toUnsignedInt(matched), "matched index should be the out-of-range one");
+        assertEquals(null, broken.getColor(matched), "out-of-range index must return null");
+
+        int original = 0xFF707070;
+        BufferedImage img = new BufferedImage(4, 4, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                img.setRGB(x, y, original);
+            }
+        }
+        BayerDither.apply(img, broken);
+
+        // 不再静默跳过保留原色：每个像素被改写为 fallback（透明 entry 的 RGB，input alpha 保留）。
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                int rgb = img.getRGB(x, y);
+                assertNotEquals(original, rgb,
+                        "pixel at " + x + "," + y + " should not be silently preserved");
+                assertEquals(0xFF000000, rgb,
+                        "pixel should fall back to TRANSPARENT_INDEX color (input alpha kept)");
+            }
+        }
     }
 
     @Test

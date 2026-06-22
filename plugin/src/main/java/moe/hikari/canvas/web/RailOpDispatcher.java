@@ -575,8 +575,9 @@ final class RailOpDispatcher {
 
     private void handleWallBind(WsMessageContext ctx, Envelope in, String sessionId,
                                 Session s, Map<String, Object> payload) {
-        String wallId = stringOrNull(payload.get("wallId"));
-        if (wallId == null) wallId = s.wallId();  // 默认绑定当前 wall
+        // R7：只绑当前 session 的 wall（与 ScheduleOpDispatcher / VariableOpDispatcher 一致），
+        // 不接受客户端传入 wallId，杜绝跨 wall 越权绑定（前端从不传 wallId，无破坏）。
+        String wallId = s.wallId();
         if (wallId == null) {
             ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wallId required"));
             return;
@@ -616,8 +617,8 @@ final class RailOpDispatcher {
         }
         // 3. rail.wall.bind → 复用 schedule.own/any（wall owner 判定）
         if ("rail.wall.bind".equals(op)) {
-            String wallId = stringOrNull(payload.get("wallId"));
-            if (wallId == null) wallId = s.wallId();
+            // R7：owner 判定基于当前 session 的 wall（不接受客户端 wallId），与 handleWallBind 一致。
+            String wallId = s.wallId();
             moe.hikari.canvas.storage.WallRepo.Wall wall = wallId == null
                     ? null : wallRepo.loadById(wallId).orElse(null);
             boolean isOwner = wall != null && wall.ownerUuid().equals(callerUuid);
@@ -654,6 +655,8 @@ final class RailOpDispatcher {
             details.put("operation", in.op());
             details.put("required", node);
             details.put("scope", "rail");
+            // R7-b：补 wall_id，与 Schedule/Variable dispatcher 的权限拒绝审计对齐。
+            details.put("wall_id", s.wallId() == null ? "" : s.wallId());
             auditLog.record("PERMISSION_DENIED",
                     s.playerUuid() == null ? null : s.playerUuid().toString(),
                     s.playerName(), sessionId, null, details);

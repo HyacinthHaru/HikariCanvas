@@ -529,6 +529,13 @@ public final class ScriptRunner {
                     + " block=" + blockId + " err=" + t.getMessage(), t);
             st.trace.add(TraceStep.error(blockId, "waitUntil 轮询失败: " + t.getMessage()));
             fireTraceOnce(st);
+        } finally {
+            // R2：pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这三个 ThreadLocal，
+            // 防异常/inline 首调路径把 CHAIN_DEPTH/RULE_KEY/TRIGGER_DETAIL 泄漏到 runner 线程后续任务。
+            // 续接 runFrames（上方 schedule）会在自身入口重设这三个值，故此处清理不影响续接。
+            CHAIN_DEPTH.remove();
+            RULE_KEY.remove();
+            TRIGGER_DETAIL.remove();
         }
     }
 

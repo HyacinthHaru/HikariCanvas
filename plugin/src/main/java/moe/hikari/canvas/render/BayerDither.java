@@ -2,6 +2,8 @@ package moe.hikari.canvas.render;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Logger;
 
 /**
  * Bayer 4×4 有序抖动（M11-B 引入）。契约见 {@code docs/rendering.md §6.6}。
@@ -25,6 +27,11 @@ import java.awt.image.BufferedImage;
  * 但不同图片并发安全。
  */
 public final class BayerDither {
+
+    private static final Logger LOGGER = Logger.getLogger(BayerDither.class.getName());
+
+    /** {@link #getColor} 返 null 时只 log 一次，防渲染热路径刷屏。 */
+    private static final AtomicBoolean WARNED = new AtomicBoolean(false);
 
     /** 4×4 Bayer 矩阵，索引 {@code [y%4][x%4]}，值域 {@code 0..15}。 */
     public static final int[][] MATRIX = {
@@ -99,7 +106,15 @@ public final class BayerDither {
                 int db = clamp(b + offset);
                 byte idx = palette.matchColor(dr, dg, db);
                 Color qc = palette.getColor(idx);
-                if (qc == null) continue;
+                if (qc == null) {
+                    if (WARNED.compareAndSet(false, true)) {
+                        LOGGER.severe("BayerDither: palette.getColor returned null for index "
+                                + Byte.toUnsignedInt(idx) + " (palette size=" + palette.size()
+                                + "); palette.json corrupt? falling back to TRANSPARENT_INDEX");
+                    }
+                    qc = palette.getColor(PaletteLut.TRANSPARENT_INDEX);
+                    if (qc == null) continue;
+                }
                 row[x] = (alpha << 24)
                         | (qc.getRed() << 16)
                         | (qc.getGreen() << 8)

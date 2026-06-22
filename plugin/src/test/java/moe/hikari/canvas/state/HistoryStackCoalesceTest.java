@@ -88,6 +88,20 @@ class HistoryStackCoalesceTest {
     }
 
     @Test
+    void clockRegressionPushesNewEntry() {
+        ProjectState state = newState();
+        HistoryStack history = new HistoryStack(state);
+        long[] clock = {1000L};
+        history.setClock(() -> clock[0]);
+
+        history.commitHistoryCoalesced(history.snapshotNow(), KEY_A);
+        clock[0] = 800L; // 时钟回拨：now < lastCommitAt，差值为负
+        history.commitHistoryCoalesced(history.snapshotNow(), KEY_A);
+        assertEquals(2, history.pastDepth(),
+                "时钟回退（now<lastCommitAt）应 push 新条目，不得因负差值误合并");
+    }
+
+    @Test
     void nullKeyAlwaysPushes() {
         ProjectState state = newState();
         HistoryStack history = new HistoryStack(state);

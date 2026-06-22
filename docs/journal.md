@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-06-22 · 0.8.1 独立 ultrareview P0-P2 修复批（版本号 → 0.8.1-SNAPSHOT）
+
+独立深度审查（68 子代理：40 审查 + 28 对抗验证；confirmed 30 / refuted 58 / doc-sanctioned 12 / uncertain 10）后修 P0-P2 全部 26 条。流程：21 子代理再确认 + 出修法规格（定夺双端对齐方向）→ 14 子代理并行修隔离项 + controller 亲修 7 个并发/跨文件硬骨头 → 全量测试 → 2 处中途修正 → 复测全绿。
+
+**真修复（21）**：
+- WS auth 超时与成功竞态：cancel-gate（取消成功才注册 ctx，关 put↔attr 窗口，防孤儿连接致 push 静默失败、客户端假死）`WebServer`
+- ScriptRunner.pollWaitUntil 异常路径泄漏 ThreadLocal → finally 自清 CHAIN_DEPTH/RULE_KEY/TRIGGER_DETAIL `ScriptRunner`
+- AssetIngest.decoderPool 热重载线程泄漏 → HikariCanvas 持字段 + cleanupResources shutdown `HikariCanvas`
+- MapPool.bindToWall 中段 persist 失败致内存/DB 分叉 → 两阶段（单事务 upsert 全部 → 成功才改内存）`MapPool`
+- mask 坐标越界检查被科学计数法绕过（`1e4` 被拆 `1`/`4`）→ MASK_NUMBER_RE 支持科学计数 + 用 MAX_COORD 常量 `ElementValidator`
+- rail.wall.bind 接受客户端 wallId 致跨墙绑定窗口 → 锁定 session wall（前端从不传，无破坏）+ 审计补 wall_id `RailOpDispatcher`/`wsClient`
+- SVG skewX/skewY(90°) tan 有限大数破坏矩阵致元素不可渲染 → 幅度守卫退化恒等 `transform.ts`
+- 脚本编辑器 closeEditing/selectRule 校验未过时静默丢未保存改动 → 挡住 + 提示 + 保留 workingCopy `scriptEdit.ts`
+- 渐变全 stop=1.0 时 epsilon-bump 失效抛 IAE 降级纯色 → 鲁棒单调化（前向严格递增 + 后向钳 ≤1）`FillPaintBuilder`
+- BayerDither getColor 返 null 静默跳过无 log → 一次性 SEVERE + TRANSPARENT 兜底 `BayerDither`
+- PaletteLut 未校验 RGB 分量范围 → 越界 clamp + 一次性 warn `PaletteLut`
+- FrameDeployer reattach 失败 slot 仍进 skipSlots 致永久空框 → 返回成功集合、失败 slot 交 deployFor 重生 `FrameDeployer`
+- 协议 fill 嵌套未知字段绕过 FAIL_ON_UNKNOWN → 协议层专用严格 mapper（mixin 放行多态 type、拒其余；不碰存储态/模板兼容）`ElementValidator`
+- mask 坐标上界三处不一致 → 统一 MAX_COORD `ElementValidator`
+- HistoryStack 时钟回退致误合并丢撤销粒度 → `now>=lastCommitAt` 守卫 `HistoryStack`
+- SVG rect/circle/ellipse 负宽高/半径未校验 → 返 null（SVG spec）`shapesToPath.ts`
+- SVG hex 颜色不校验字符合法性 → 正则校验 `fillMap.ts`
+- 缓动曲线拖拽中收 server patch 致曲线跳变 → 拖拽快照基线 `EasingCurveEditor.vue`
+- appendVariable text 长度 / tweenBlock bezier 前端校验缺失 → 补齐对齐后端 `validator.ts`
+
+**防御性硬化（4，深入分析为当前不可达 / 已被兜住，修复留作未来保护，已如实标注）**：CanvasProjector forceFullPush（`changed` 定义已含 null 判断 → 不可达）/ ManualScheduleProvider ETA 钳位（`etaMinutes` 另有独立钳位 → 基本不可观测，仅对齐常量）/ useTimelinePlayback.play() 双 rAF（第 46 行已守 → 加前置幂等）/ WaitUntil 轮询预算（validated 超时上限 + 顺序轮询单任务 + per-run 限流三重兜住 → 无需加码）。
+
+**误报（1，核实后不改）**：RandomBranch 嵌套深度——`ScriptRuleValidator.java:496` 与 `validator.ts:577` 两端都递增 ifDepth，本就一致（原审查误读后端"不递增"）。
+
+**2 处中途修正**：① R12 严格 mapper 首跑误拒多态 `type` 字段（8 测试挂）→ mixin 改 `@JsonIgnoreProperties(value={"type"}, ignoreUnknown=false)` 显式放行；② R4/R11 子代理写的 ServerMock 测试本仓库跑不起（MockBukkit-v1.21:3.123.0 与 Paper API 版本错配，全仓零 ServerMock 实跑先例，见 `GameEventListenerHubTest:177-181`）→ 删 2 测试文件，生产修复保留。
+
+**测试**：后端 BUILD SUCCESSFUL（含新增 PaletteLutTest / ElementValidatorMaskBoundsTest + 各 fix 回归用例）/ 前端 **1443 全绿**。关联：16 生产 Java + 8 后端测试 + 8 前端 + 5 前端测试 + 版本号 6 文件（→ `0.8.1-SNAPSHOT`）。
+
+---
+
 ## 2026-06-21 · docs 全文档对齐到代码现状 + 新建 development/troubleshooting
 
 把 `docs/` 全部「描述当前行为」的活文档对齐到代码真实状态（**以代码为事实源**，多子代理逐条 grep/read 核实，不靠记忆/路线表）。流程：16 份审计找漂移 → 分级过滤（剔除「无需改」「仅代码注释」项）→ 13 份 fix→verify 流水线 → verify 抓出 5 处 fix 小尾巴 controller 补丁 → 2 份新文档对抗验证（125+ 项事实零矛盾）。

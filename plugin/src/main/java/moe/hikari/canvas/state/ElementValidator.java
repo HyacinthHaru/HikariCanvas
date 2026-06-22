@@ -1,6 +1,8 @@
 package moe.hikari.canvas.state;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.Map;
@@ -38,13 +40,40 @@ public final class ElementValidator {
     public static final Pattern IMAGE_SOURCE_RE =
             Pattern.compile("^[0-9a-f]{16}$");
 
-    /** mask path d 字符串内数字 token 抽取（v1 仅约束坐标 ≤ 10000）。 */
+    /**
+     * mask path d 字符串内数字 token 抽取（约束坐标 ≤ {@link #MAX_COORD}）。
+     * 含科学计数法 + leading-dot 小数，避免 "1e4" 被拆成 "1"/"4" 绕过越界检查；
+     * 数字文法与 {@link PathDValidator} 的 scanNumber 一致。
+     */
     public static final Pattern MASK_NUMBER_RE =
-            Pattern.compile("-?\\d+(?:\\.\\d+)?");
+            Pattern.compile("-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?");
 
     /** M11：fill object（含 type 字段）→ {@link Fill} 子类映射的共享 ObjectMapper。 */
     public static final ObjectMapper FILL_MAPPER = new ObjectMapper()
             .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+
+    /**
+     * 协议入口专用严格 mapper：拒绝渐变对象里的未知字段（与顶层信封的 {@code FAIL_ON_UNKNOWN_PROPERTIES}
+     * 一致）。mixin 覆盖 {@link LinearGradient}/{@link RadialGradient}/{@link Stop} 上为兼容老工程而设的
+     * {@code @JsonIgnoreProperties(ignoreUnknown=true)}——仅作用于 client→server 协议解析
+     * （{@link #parseFillNullable}），不影响 WallRepo / ProjectMaterializer 的存储态宽松反序列化。
+     * solid 形态走 {@link FillDeserializer} 手动只取 color（兼容字符串形态），不在此约束内。
+     */
+    public static final ObjectMapper FILL_MAPPER_STRICT = new ObjectMapper()
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL)
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true)
+            .addMixIn(LinearGradient.class, StrictUnknownMixin.class)
+            .addMixIn(RadialGradient.class, StrictUnknownMixin.class)
+            .addMixIn(Stop.class, StrictUnknownMixin.class);
+
+    /**
+     * 让严格 mapper 对渐变 record 不再忽略未知字段（覆盖类级 {@code @JsonIgnoreProperties(true)}）。
+     * 显式放行多态判别字段 {@code type}（它只有 getter、无 record 组件，否则会被当未知字段误拒），
+     * 其余未知字段仍触发 {@code FAIL_ON_UNKNOWN_PROPERTIES}。
+     */
+    @JsonIgnoreProperties(value = {"type"}, ignoreUnknown = false)
+    private abstract static class StrictUnknownMixin {
+    }
 
     public static final int MAX_TEXT_LEN = 256;
     public static final int MAX_COORD = 10_000;
@@ -226,12 +255,12 @@ public final class ElementValidator {
         while (m.find()) {
             try {
                 double v = Double.parseDouble(m.group());
-                if (Math.abs(v) > 10_000) {
+                if (!Double.isFinite(v) || Math.abs(v) > MAX_COORD) {
                     throw new ValidationException("INVALID_PAYLOAD",
-                            "mask.d coordinate " + v + " > 10000");
+                            "mask.d coordinate " + v + " > " + MAX_COORD);
                 }
             } catch (NumberFormatException ignored) {
-                // 正则已限定为合法数字格式
+                // MASK_NUMBER_RE 已限定为合法数字 token（整数 / 小数 / 科学计数）；防御性兜底。
             }
         }
     }
@@ -249,7 +278,7 @@ public final class ElementValidator {
             fill = new SolidFill(s);
         } else if (raw instanceof Map<?, ?> m) {
             try {
-                fill = FILL_MAPPER.convertValue(m, Fill.class);
+                fill = FILL_MAPPER_STRICT.convertValue(m, Fill.class);
             } catch (IllegalArgumentException e) {
                 throw new ValidationException("INVALID_PAYLOAD",
                         "invalid fill: " + e.getMessage());

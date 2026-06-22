@@ -612,9 +612,15 @@ public final class WebServer {
         pendingAuthTimers.put(key, fut);
     }
 
-    private void cancelAuthTimeout(WsContext ctx) {
+    /**
+     * 取消未认证超时任务。返回 {@code true}=成功阻止其运行（auth 可安全注册 ctx）；
+     * {@code false}=该任务已运行 / 正在运行（连接将 / 已被 close 4001——auth 应放弃注册，
+     * 避免把已 close 的 ctx 写进 {@link #wsBySession} 导致后续 push 静默失败）。onClose 调用忽略返回值。
+     */
+    private boolean cancelAuthTimeout(WsContext ctx) {
         ScheduledFuture<?> fut = pendingAuthTimers.remove(ctx.sessionId());
-        if (fut != null) fut.cancel(false);
+        if (fut == null) return false;   // 已被超时任务在 finally 自移除（即它已运行）→ 不安全
+        return fut.cancel(false);        // true=未启动、已阻止；false=已 / 正在运行
     }
 
     // ---------- M16 P1.3：WS upgrade Origin 白名单 ----------
@@ -1054,14 +1060,20 @@ public final class WebServer {
             closeAuthFailed(ctx, "session reaped during auth");
             return;
         }
+        // R1：先取消未认证超时任务并 gate——只有成功阻止其运行才注册 ctx。若超时已触发 / 正在
+        // close 此连接，放弃注册，避免把已被 close 4001 的 ctx 写进 wsBySession 致后续 push 静默失败、
+        // 客户端假死。竞态窗口（put↔attr 之间超时触发）由此关闭。
+        if (!cancelAuthTimeout(ctx)) {
+            log.info("WS auth raced auth-timeout close (sid=" + session.id() + "), abort registration");
+            return;  // 连接将被超时任务 close 4001；客户端按 close 重新发起 auth
+        }
+        // 先设 attr 再 put：超时任务此刻已被取消，onClose 总能据 attr 找到 sid 做 CAS 清理。
+        ctx.attribute(ATTR_SESSION_ID, session.id());
         // 旧的 WS ctx（同 sessionId）若还在，关掉再覆盖，避免双连
         WsContext oldCtx = wsBySession.put(session.id(), ctx);
         if (oldCtx != null && oldCtx != ctx) {
             try { oldCtx.closeSession(4003, "session-takeover"); } catch (Exception ignored) {}
         }
-        ctx.attribute(ATTR_SESSION_ID, session.id());
-        // M16 P1.2：auth 成功 → 取消未认证超时 close 任务
-        cancelAuthTimeout(ctx);
 
         // T3 token rotate：auth 成功后立即 rotate 新 token 交回前端，供 WS 断线重连重新 auth。
         // 契约见 docs/security.md §2.2 / docs/protocol.md §11。

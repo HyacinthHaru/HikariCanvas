@@ -36,6 +36,7 @@ export function useTimelinePlayback() {
 
     /** 从当前播放头续播（停在末帧时从 0 重起）。 */
     function play(): void {
+        if (store.playing && rafId !== null) return;
         const tl = store.activeTimeline;
         if (!tl || tl.durationMs <= 0) return;
         // pingPong 续播相位按正程近似（同一 playhead 在回程相位会跳到正程同位置——可接受小瑕疵）

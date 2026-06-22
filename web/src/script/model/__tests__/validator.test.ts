@@ -221,6 +221,21 @@ describe('validateRule — 动作字段（blockId=actions/i）', () => {
         const bad: ScriptAction = { type: 'setVariable', fullName: 'user/x', value: 'a'.repeat(SET_VALUE_MAX + 1) };
         expect(validateRule(rule({ actions: [bad] })).some((e) => e.message.includes('值超长'))).toBe(true);
     });
+    it('appendVariable text 超长校验（R21-b：前端补齐后端 SET_VALUE_MAX）', () => {
+        const bad = { type: 'appendVariable', fullName: 'user/x', text: 'a'.repeat(SET_VALUE_MAX + 1) } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [bad] })).some((e) => e.message.includes('拼接文本超长'))).toBe(true);
+        const ok = { type: 'appendVariable', fullName: 'user/x', text: 'a'.repeat(SET_VALUE_MAX) } as ScriptAction;
+        expect(validateRule(rule({ actions: [ok] })).some((e) => e.message.includes('拼接文本超长'))).toBe(false);
+        const okNull = { type: 'appendVariable', fullName: 'user/x', text: null } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [okNull] })).some((e) => e.message.includes('拼接文本超长'))).toBe(false);
+    });
+    it('tweenBlock 非 cubicBezier 却带 bezier → 拒（R21-c：前端补齐后端 else-if）', () => {
+        const body = [{ type: 'setElementProperties', elementId: 'el', kind: 'moveTo', x: 0, y: 0 }] as unknown as ScriptAction[];
+        const bad = { type: 'tweenBlock', durationMs: 1000, easing: { type: 'linear', bezier: [0, 0, 1, 1] }, body } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [bad] })).some((e) => e.message.includes('bezier 参数仅允许 cubicBezier'))).toBe(true);
+        const ok = { type: 'tweenBlock', durationMs: 1000, easing: { type: 'linear' }, body } as unknown as ScriptAction;
+        expect(validateRule(rule({ actions: [ok] })).some((e) => e.message.includes('bezier 参数仅允许 cubicBezier'))).toBe(false);
+    });
     it('incrementVariable delta 非有限 → 报错', () => {
         const a = { type: 'incrementVariable', fullName: 'user/n', delta: Infinity } as unknown as ScriptAction;
         expect(validateRule(rule({ actions: [a] })).some((e) => e.message.includes('有限数值'))).toBe(true);

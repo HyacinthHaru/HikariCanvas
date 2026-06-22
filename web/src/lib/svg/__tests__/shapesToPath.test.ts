@@ -35,4 +35,22 @@ describe('shapeToPathD', () => {
     it('image → null (not a path)', () => {
         expect(shapeToPathD(el('image', { href: 'data:...' }))).toBeNull();
     });
+    it('rect with negative width → null', () => {
+        expect(shapeToPathD(el('rect', { x: '0', y: '0', width: '-5', height: '5' }))).toBeNull();
+    });
+    it('rect with zero height → null', () => {
+        expect(shapeToPathD(el('rect', { x: '0', y: '0', width: '10', height: '0' }))).toBeNull();
+    });
+    it('circle with negative radius → null', () => {
+        expect(shapeToPathD(el('circle', { cx: '10', cy: '10', r: '-5' }))).toBeNull();
+    });
+    it('circle with zero radius → null', () => {
+        expect(shapeToPathD(el('circle', { cx: '10', cy: '10', r: '0' }))).toBeNull();
+    });
+    it('ellipse with negative rx → null', () => {
+        expect(shapeToPathD(el('ellipse', { cx: '10', cy: '10', rx: '-5', ry: '8' }))).toBeNull();
+    });
+    it('ellipse with zero ry → null', () => {
+        expect(shapeToPathD(el('ellipse', { cx: '10', cy: '10', rx: '5', ry: '0' }))).toBeNull();
+    });
 });

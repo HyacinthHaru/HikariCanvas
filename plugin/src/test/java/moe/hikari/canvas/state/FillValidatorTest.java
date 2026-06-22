@@ -3,6 +3,7 @@ package moe.hikari.canvas.state;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -193,5 +194,38 @@ class FillValidatorTest {
         LinearGradient g = new LinearGradient(0.0,
                 List.of(stop(0.0, "red"), stop(1.0, "#0000FF")));
         assertThrows(RuntimeException.class, () -> FillValidator.validate(g));
+    }
+
+    // ---------- parseFillNullable 协议严格性（R12：未知字段拒绝）----------
+
+    @Test
+    void parseFillAcceptsValidLinearObject() {
+        // 含合法 type/angle/stops 的渐变对象应正常解析（type 字段不应被严格 mapper 误判为未知）。
+        Map<String, Object> linear = Map.of(
+                "type", "linear",
+                "angle", 45.0,
+                "stops", List.of(
+                        Map.of("position", 0.0, "color", "#FF0000"),
+                        Map.of("position", 1.0, "color", "#0000FF")));
+        assertDoesNotThrow(() -> ElementValidator.parseFillNullable(linear));
+    }
+
+    @Test
+    void parseFillRejectsUnknownKeyInLinear() {
+        // R12：协议入口渐变对象的未知字段应被拒（FILL_MAPPER_STRICT，不再静默忽略）。
+        Map<String, Object> linear = Map.of(
+                "type", "linear",
+                "angle", 45.0,
+                "stops", List.of(
+                        Map.of("position", 0.0, "color", "#FF0000"),
+                        Map.of("position", 1.0, "color", "#0000FF")),
+                "bogusField", 123);
+        assertThrows(RuntimeException.class, () -> ElementValidator.parseFillNullable(linear));
+    }
+
+    @Test
+    void parseFillStillAcceptsStringSolid() {
+        // 字符串形态（M0–M10 兼容）不受协议严格化影响。
+        assertDoesNotThrow(() -> ElementValidator.parseFillNullable("#FF0000"));
     }
 }

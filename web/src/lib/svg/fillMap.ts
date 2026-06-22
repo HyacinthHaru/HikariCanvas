@@ -96,9 +96,11 @@ function normalizeColor(raw: string): string | undefined | null {
         const hex = v.slice(1);
         if (hex.length === 3) {
             // #rgb → #rrggbb
+            if (!/^[0-9a-f]{3}$/.test(hex)) return null;
             return '#' + hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
         }
         if (hex.length === 6 || hex.length === 8) {
+            if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/.test(hex)) return null;
             return '#' + hex;
         }
     }

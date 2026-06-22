@@ -123,22 +123,30 @@ public final class FrameDeployer {
                 emptyFrames.keySet(), expected, wallBlocksReplaced));
 
         // 3) 给"画框还在但内容被撸掉"的 slot 直接 setItem，不需要 spawn 新 entity
-        int framesReAttached = reAttachMapsToEmptyFrames(wallId, wall, mapIds, emptyFrames);
+        java.util.Set<Integer> reAttachedSlots = reAttachMapsToEmptyFrames(wallId, wall, mapIds, emptyFrames);
+        int framesReAttached = reAttachedSlots.size();
 
-        // 4) 完全缺失的 slot 走原 spawn 路径
+        // 4) 完全缺失的 slot 走原 spawn 路径。
+        //    只跳过"完整 present"和"成功 reattach"的 slot；reattach 失败的空框（坏 mapId /
+        //    MapView 缺失）不进 skipSlots，交给 deployFor 重新 spawn，避免永久空框。
         java.util.Set<Integer> skipSlots = new java.util.HashSet<>(present);
-        skipSlots.addAll(emptyFrames.keySet());  // 空框已经在 step 3 处理完了，不要再 spawn
+        skipSlots.addAll(reAttachedSlots);
         int framesRespawned = deployFor(wallId, wall, mapIds, skipSlots);
         plugin.getLogger().info("[wall.refresh " + wallId + "] framesRespawned=" + framesRespawned
                 + " framesReAttached=" + framesReAttached);
         return new RepairResult(framesRespawned, framesReAttached, wallBlocksReplaced);
     }
 
-    /** 给已存在但 item 被撸掉的画框重新塞回对应 mapId 的 FILLED_MAP。 */
-    private int reAttachMapsToEmptyFrames(String wallId, WallResolver.Result.Ok wall,
+    /**
+     * 给已存在但 item 被撸掉的画框重新塞回对应 mapId 的 FILLED_MAP。
+     *
+     * @return 成功 reattach 的 slot 集合。失败的 slot（mapId 越界 / MapView 缺失）<b>不</b>纳入返回，
+     *         由 {@link #repairFor} 交给 {@link #deployFor} 重新 spawn，避免永久空框。
+     */
+    private java.util.Set<Integer> reAttachMapsToEmptyFrames(String wallId, WallResolver.Result.Ok wall,
                                            List<Integer> mapIds,
                                            java.util.Map<Integer, ItemFrame> emptyFrames) {
-        int fixed = 0;
+        java.util.Set<Integer> reAttached = new java.util.HashSet<>();
         int total = wall.mapCount();
         for (var entry : emptyFrames.entrySet()) {
             int slot = entry.getKey();
@@ -164,9 +172,9 @@ public final class FrameDeployer {
             canvasRenderer.update(mapId, pixels);
             plugin.getLogger().info("[reAttach] OK slot=" + slot + " mapId=" + mapId
                     + " frameUuid=" + f.getUniqueId());
-            fixed++;
+            reAttached.add(slot);
         }
-        return fixed;
+        return reAttached;
     }
 
     /**
