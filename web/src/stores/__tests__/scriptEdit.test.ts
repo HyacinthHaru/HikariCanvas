@@ -863,8 +863,8 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
 
         expect(net.lastError).not.toBeNull();
         expect(typeof net.lastError).toBe('string');
-        // 提示应包含"保存"或"校验"相关文字
-        expect(net.lastError).toContain('保存');
+        // 提示应包含"保存"或"校验"相关文字（i18n 查表，测试环境默认 en）
+        expect(net.lastError).toContain('save');
     });
 
     it('dirty 但校验通过时 closeEditing → 不触发提示（正常保存路径）', () => {
@@ -904,7 +904,7 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
         edit.selectRule('sr-extra'); // R16：校验未过 → 被挡，不切走、改动保留
 
         expect(net.lastError).not.toBeNull();
-        expect(net.lastError).toContain('校验错误');
+        expect(net.lastError).toContain('validation'); // i18n 查表，测试环境默认 en
         expect(edit.selectedRuleId).toBe('sr-1'); // 仍停在原规则
     });
 
