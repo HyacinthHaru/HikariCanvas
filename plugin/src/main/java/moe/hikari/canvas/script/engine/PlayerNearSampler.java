@@ -106,7 +106,7 @@ public final class PlayerNearSampler {
         try {
             sample();
         } catch (Throwable t) {
-            log.log(Level.WARNING, "PlayerNearSampler: 采样轮异常 err=" + t.getMessage(), t);
+            log.log(Level.WARNING, "PlayerNearSampler: sample tick error err=" + t.getMessage(), t);
         }
     }
 
@@ -145,7 +145,7 @@ public final class PlayerNearSampler {
                     try {
                         sink.fire(rule.wallId(), rule.ruleId(), p.name());
                     } catch (RuntimeException e) {
-                        log.log(Level.WARNING, "PlayerNearSampler: 触发投递异常 wall="
+                        log.log(Level.WARNING, "PlayerNearSampler: trigger dispatch error wall="
                                 + rule.wallId() + " rule=" + rule.ruleId()
                                 + " err=" + e.getMessage(), e);
                     }

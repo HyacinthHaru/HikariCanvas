@@ -226,7 +226,7 @@ public final class TriggerRouter {
             }
         }
         refreshNearSnapshotLocked();
-        if (n > 0) log.info("TriggerRouter: " + n + " 条 enabled 脚本规则已登记");
+        if (n > 0) log.info("TriggerRouter: " + n + " enabled script rule(s) registered");
     }
 
     /** 注销某墙的全部触发登记（wall delete hook）。 */
@@ -408,7 +408,7 @@ public final class TriggerRouter {
             try {
                 resolved = resolver.resolve(vc.fullName(), wallId);
             } catch (RuntimeException e) {
-                log.warning("TriggerRouter: fullName 解析失败 wall=" + wallId
+                log.warning("TriggerRouter: fullName resolve failed wall=" + wallId
                         + " rule=" + rule.id() + " raw=" + vc.fullName()
                         + " err=" + e.getMessage());
                 return;
@@ -498,7 +498,7 @@ public final class TriggerRouter {
             runner.submit(wallId, latest,
                     new TriggerContext(TriggerContext.Source.TIMER, 0, "timer"));
         } catch (Throwable t) {
-            log.log(Level.WARNING, "TriggerRouter: timer 触发失败 rule=" + key
+            log.log(Level.WARNING, "TriggerRouter: timer trigger failed rule=" + key
                     + " err=" + t.getMessage(), t);
         }
     }

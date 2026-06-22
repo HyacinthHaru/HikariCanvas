@@ -390,7 +390,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         if (activeId == null) return;
         Timeline tl = resolveTimeline(w.state(), activeId);
         if (autoLoopEligible(tl)) {
-            log.info("[时间轴] 墙 " + wallId + " 自动播放循环动画 " + activeId + "（编辑器关闭 / 刷新触发）");
+            log.info("[timeline] wall " + wallId + " auto-playing loop animation " + activeId + " (triggered by editor close / refresh)");
             play(wallId, activeId);
         }
     }

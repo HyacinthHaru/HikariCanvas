@@ -191,7 +191,7 @@ public final class ScriptRunner {
 
         // 闸 1：ABA 链深（K1/D8）——整个 run 掐断，不自动禁用规则
         if (budget.chainDepthExceeded(ctx.chainDepth())) {
-            log.warning("[脚本] ABA 链深熔断: rule=" + ruleKey
+            log.warning("[script] ABA chain depth circuit-breaker: rule=" + ruleKey
                     + " depth=" + ctx.chainDepth() + "/" + budget.maxChainDepth()
                     + " source=" + ctx.source()
                     + (ctx.detail() == null ? "" : " detail=" + ctx.detail()));
@@ -204,7 +204,7 @@ public final class ScriptRunner {
         // 闸 2：per-rule runs/s（超 → 丢弃 + blocked trace 进 FINE + audit 限频）
         if (!budget.tryAcquireRun(ruleKey)) {
             if (log.isLoggable(Level.FINE)) {
-                log.fine("[脚本 trace] rule=" + ruleKey + " source=" + ctx.source()
+                log.fine("[script trace] rule=" + ruleKey + " source=" + ctx.source()
                         + " outcome=blocked steps=[trigger=blocked(rate)]");
             }
             auditBlocked(ruleKey, wallId, rule, "rate", ctx);
@@ -388,7 +388,7 @@ public final class ScriptRunner {
                         try {
                             step = sink.execute(st.wallId, blockId, pta);
                         } catch (RuntimeException e) {
-                            log.log(Level.WARNING, "[脚本] playTimelineAwait 执行异常（链继续）: rule="
+                            log.log(Level.WARNING, "[script] playTimelineAwait execution error (chain continues): rule="
                                     + ruleKey(st.wallId, st.rule) + " block=" + blockId
                                     + " err=" + e.getMessage(), e);
                             step = TraceStep.error(blockId, String.valueOf(e.getMessage()));
@@ -465,7 +465,7 @@ public final class ScriptRunner {
                     try {
                         step = sink.execute(st.wallId, blockId, a);
                     } catch (RuntimeException e) {
-                        log.log(Level.WARNING, "[脚本] 动作执行异常（链继续）: rule="
+                        log.log(Level.WARNING, "[script] action execution error (chain continues): rule="
                                 + ruleKey(st.wallId, st.rule) + " block=" + blockId
                                 + " err=" + e.getMessage(), e);
                         step = TraceStep.error(blockId, String.valueOf(e.getMessage()));
@@ -478,7 +478,7 @@ public final class ScriptRunner {
             finish(st, "ok");
         } catch (Throwable t) {
             // 任务级异常隔离：单 run 失败不杀 runner 线程（照 AnimationTicker.tick 范式）
-            log.log(Level.WARNING, "[脚本] run 失败: rule=" + ruleKey(st.wallId, st.rule)
+            log.log(Level.WARNING, "[script] run failed: rule=" + ruleKey(st.wallId, st.rule)
                     + " err=" + t.getMessage(), t);
             // K11：异常掐断也要恰一次回调（finish 未到达——callbackFired 防 finish 后
             // 续接段异常的双发竞态）
@@ -525,7 +525,7 @@ public final class ScriptRunner {
         } catch (Throwable t) {
             // poll 走独立调度（不在 runFrames 的 try 内）——兜底防 Throwable 孤儿化 run：记 error +
             // callback 恰一次（照 runFrames catch 范式），与 WaitUntil 的"恰一次"契约对齐。
-            log.log(Level.WARNING, "[脚本] waitUntil 轮询失败: rule=" + ruleKey(st.wallId, st.rule)
+            log.log(Level.WARNING, "[script] waitUntil poll failed: rule=" + ruleKey(st.wallId, st.rule)
                     + " block=" + blockId + " err=" + t.getMessage(), t);
             st.trace.add(TraceStep.error(blockId, "waitUntil 轮询失败: " + t.getMessage()));
             fireTraceOnce(st);
@@ -544,7 +544,7 @@ public final class ScriptRunner {
         fireTraceOnce(st);
         if (!log.isLoggable(Level.FINE)) return;
         StringBuilder sb = new StringBuilder(128);
-        sb.append("[脚本 trace] rule=").append(ruleKey(st.wallId, st.rule))
+        sb.append("[script trace] rule=").append(ruleKey(st.wallId, st.rule))
                 .append(" source=").append(st.ctx.source())
                 .append(" depth=").append(st.ctx.chainDepth())
                 .append(" outcome=").append(outcome)
@@ -576,7 +576,7 @@ public final class ScriptRunner {
         try {
             cb.accept(steps);
         } catch (RuntimeException e) {
-            log.log(Level.WARNING, "[脚本] trace callback 抛异常（已吞）: " + e.getMessage(), e);
+            log.log(Level.WARNING, "[script] trace callback threw exception (swallowed): " + e.getMessage(), e);
         }
     }
 
@@ -593,7 +593,7 @@ public final class ScriptRunner {
                     "source", ctx.source().name(),
                     "chainDepth", ctx.chainDepth()));
         } catch (RuntimeException e) {
-            log.log(Level.WARNING, "[脚本] SCRIPT_RUN_BLOCKED audit 失败: " + e.getMessage(), e);
+            log.log(Level.WARNING, "[script] SCRIPT_RUN_BLOCKED audit failed: " + e.getMessage(), e);
         }
     }
 

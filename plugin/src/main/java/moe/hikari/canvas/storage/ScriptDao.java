@@ -168,7 +168,7 @@ public class ScriptDao {
         try {
             parsed = MAPPER.readValue(row.ruleJson, ScriptRule.class);
         } catch (Exception e) {
-            log.log(Level.SEVERE, "wall_scripts 坏 blob，跳过该规则: id=" + row.id
+            log.log(Level.SEVERE, "wall_scripts corrupt blob, skipping rule: id=" + row.id
                     + " wall=" + row.wallId, e);
             return null;
         }

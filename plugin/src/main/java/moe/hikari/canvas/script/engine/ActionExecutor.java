@@ -172,7 +172,7 @@ public final class ActionExecutor implements ActionSink {
             };
         } catch (RuntimeException e) {
             // 三层隔离兜底：单动作失败不断链
-            log.log(Level.WARNING, "[脚本] 动作执行失败（链继续）: wall=" + wallId
+            log.log(Level.WARNING, "[script] action execution failed (chain continues): wall=" + wallId
                     + " block=" + blockId + " type=" + action.wireType()
                     + " err=" + e.getMessage(), e);
             return TraceStep.error(blockId, action.wireType() + ": " + e.getMessage());
@@ -356,7 +356,7 @@ public final class ActionExecutor implements ActionSink {
                 if (near) {
                     World world = Bukkit.getWorld(w.key().world());
                     if (world == null) {
-                        log.warning("[脚本] playSound 跳过：世界未加载 " + w.key().world());
+                        log.warning("[script] playSound skipped: world not loaded " + w.key().world());
                         return;
                     }
                     Location origin = new Location(world,
@@ -373,7 +373,7 @@ public final class ActionExecutor implements ActionSink {
                 }
             } catch (Throwable t) {
                 // 主线程任务内异常只 log（trace step 已发出，无法回填）
-                log.log(Level.WARNING, "[脚本] playSound 执行失败: " + t.getMessage(), t);
+                log.log(Level.WARNING, "[script] playSound failed: " + t.getMessage(), t);
             }
         };
         if (plugin == null) {
@@ -415,7 +415,7 @@ public final class ActionExecutor implements ActionSink {
             try {
                 World world = Bukkit.getWorld(w.key().world());
                 if (world == null) {
-                    log.warning("[脚本] playParticle 跳过：世界未加载 " + w.key().world());
+                    log.warning("[script] playParticle skipped: world not loaded " + w.key().world());
                     return;
                 }
                 Location origin = new Location(world,
@@ -425,7 +425,7 @@ public final class ActionExecutor implements ActionSink {
                 world.spawnParticle(p, origin, a.count());
             } catch (Throwable t) {
                 // 主线程任务内异常只 log（trace step 已发出，无法回填——同 playSound）
-                log.log(Level.WARNING, "[脚本] playParticle 执行失败: " + t.getMessage(), t);
+                log.log(Level.WARNING, "[script] playParticle failed: " + t.getMessage(), t);
             }
         };
         if (plugin == null) {
@@ -447,7 +447,7 @@ public final class ActionExecutor implements ActionSink {
         switch (r) {
             case CommandTemplateEngine.Result.Blocked b -> {
                 if (log.isLoggable(Level.FINE)) {
-                    log.fine("[脚本] runCommand blocked: wall=" + wallId
+                    log.fine("[script] runCommand blocked: wall=" + wallId
                             + " template=" + a.templateId() + " — " + b.reason());
                 }
                 return TraceStep.blocked(blockId, b.reason());
@@ -465,7 +465,7 @@ public final class ActionExecutor implements ActionSink {
                         Bukkit.dispatchCommand(Bukkit.getConsoleSender(), ok.command());
                     } catch (Throwable t) {
                         // 主线程任务内异常只 log（trace step 已发出，无法回填——同 playSound）
-                        log.log(Level.WARNING, "[脚本] runCommand 执行失败: template="
+                        log.log(Level.WARNING, "[script] runCommand failed: template="
                                 + a.templateId() + " err=" + t.getMessage(), t);
                     }
                 };
@@ -493,7 +493,7 @@ public final class ActionExecutor implements ActionSink {
             details.put("block_id", blockId);
             audit.record("SCRIPT_COMMAND_EXECUTED", null, null, null, null, details);
         } catch (RuntimeException e) {
-            log.log(Level.WARNING, "[脚本] SCRIPT_COMMAND_EXECUTED audit 失败: "
+            log.log(Level.WARNING, "[script] SCRIPT_COMMAND_EXECUTED audit failed: "
                     + e.getMessage(), e);
         }
     }
@@ -505,7 +505,7 @@ public final class ActionExecutor implements ActionSink {
                 : interpolator.interpolate(a.message(), wallId).text();
         // 不进 audit：log 是玩家级高频动作，进 audit 会刷库（与 scripting.md §2.3 偏差，
         // 收口改契约该行——计划已记账）
-        log.info("[脚本 " + wallId + "] " + msg);
+        log.info("[script " + wallId + "] " + msg);
         return TraceStep.ok(blockId, "action", "log");
     }
 
@@ -566,7 +566,7 @@ public final class ActionExecutor implements ActionSink {
                         sendTo(p, channel, msg);
                     }
                 } catch (Throwable t) {
-                    log.log(Level.WARNING, "[脚本] sendMessage 广播失败: " + t.getMessage(), t);
+                    log.log(Level.WARNING, "[script] sendMessage broadcast failed: " + t.getMessage(), t);
                 }
             };
             if (plugin == null) {
@@ -587,7 +587,7 @@ public final class ActionExecutor implements ActionSink {
                 if (p == null) return; // 离线
                 sendTo(p, channel, msg);
             } catch (Throwable t) {
-                log.log(Level.WARNING, "[脚本] sendMessage 失败: " + t.getMessage(), t);
+                log.log(Level.WARNING, "[script] sendMessage failed: " + t.getMessage(), t);
             }
         };
         if (plugin == null) {
@@ -740,7 +740,7 @@ public final class ActionExecutor implements ActionSink {
                         p.sendTitle(titleText, subtitleText, fadeInTicks, stayTicks, fadeOutTicks);
                     }
                 } catch (Throwable t) {
-                    log.log(Level.WARNING, "[脚本] showTitle 广播失败: " + t.getMessage(), t);
+                    log.log(Level.WARNING, "[script] showTitle broadcast failed: " + t.getMessage(), t);
                 }
             };
             if (plugin == null) {
@@ -761,7 +761,7 @@ public final class ActionExecutor implements ActionSink {
                 if (p == null) return; // 离线
                 p.sendTitle(titleText, subtitleText, fadeInTicks, stayTicks, fadeOutTicks);
             } catch (Throwable t) {
-                log.log(Level.WARNING, "[脚本] showTitle 失败: " + t.getMessage(), t);
+                log.log(Level.WARNING, "[script] showTitle failed: " + t.getMessage(), t);
             }
         };
         if (plugin == null) {

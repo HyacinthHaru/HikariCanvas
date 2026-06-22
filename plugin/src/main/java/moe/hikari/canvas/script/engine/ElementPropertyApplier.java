@@ -178,7 +178,7 @@ public final class ElementPropertyApplier {
             try {
                 outcome = sessionApplier.apply(wallId, elementId, patch);
             } catch (RuntimeException e) {
-                log.log(Level.WARNING, "[脚本] session 路径 element.update 异常: wall="
+                log.log(Level.WARNING, "[script] session path element.update error: wall="
                         + wallId + " element=" + elementId + " err=" + e.getMessage(), e);
                 outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
             }
@@ -218,7 +218,7 @@ public final class ElementPropertyApplier {
             try {
                 outcome = sessionApplier.nudge(wallId, elementId, idx, idy);
             } catch (RuntimeException e) {
-                log.log(Level.WARNING, "[脚本] session nudge 异常: wall=" + wallId
+                log.log(Level.WARNING, "[script] session nudge error: wall=" + wallId
                         + " element=" + elementId + " err=" + e.getMessage(), e);
                 outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
             }
@@ -277,7 +277,7 @@ public final class ElementPropertyApplier {
             try {
                 outcome = sessionApplier.clone(wallId, elementId, offsetX, offsetY);
             } catch (RuntimeException e) {
-                log.log(Level.WARNING, "[脚本] session clone 异常: wall=" + wallId
+                log.log(Level.WARNING, "[script] session clone error: wall=" + wallId
                         + " element=" + elementId + " err=" + e.getMessage(), e);
                 outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
             }
@@ -310,7 +310,7 @@ public final class ElementPropertyApplier {
             try {
                 outcome = sessionApplier.delete(wallId, elementId);
             } catch (RuntimeException e) {
-                log.log(Level.WARNING, "[脚本] session delete 异常: wall=" + wallId
+                log.log(Level.WARNING, "[script] session delete error: wall=" + wallId
                         + " element=" + elementId + " err=" + e.getMessage(), e);
                 outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
             }

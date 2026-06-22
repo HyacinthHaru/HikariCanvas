@@ -152,7 +152,7 @@ public final class ConditionEvaluator {
             warned.clear();
         }
         if (warned.add(condition)) {
-            log.log(Level.WARNING, "脚本条件" + stage + "（该条件后续恒为 false,只警告一次）: "
+            log.log(Level.WARNING, "script condition " + stage + " (condition will always be false, warn once): "
                     + condition + " — " + e.getMessage());
         }
     }

@@ -127,12 +127,12 @@ public final class TimelineTriggerRegistry {
             String dk = b.wallId() + ":" + b.timelineId();
             Long last = lastFire.get(dk);
             if (last != null && now - last < DEBOUNCE_MS) {                // 去抖：窗口内重复触发吞掉
-                log.fine("[时间轴触发] 变量 " + fullName + " 变化在去抖窗内，跳过 " + dk);
+                log.fine("[timeline-trigger] variable " + fullName + " change within debounce window, skipping " + dk);
                 continue;
             }
             lastFire.put(dk, now);
-            log.info("[时间轴触发] 变量 " + fullName + " 变化 → 播放墙 " + b.wallId()
-                    + " 的时间轴 " + b.timelineId());
+            log.info("[timeline-trigger] variable " + fullName + " changed → playing timeline " + b.timelineId()
+                    + " on wall " + b.wallId());
             try {
                 player.play(b.wallId(), b.timelineId());
             } catch (Exception e) {
@@ -159,8 +159,8 @@ public final class TimelineTriggerRegistry {
         byFullName.computeIfAbsent(resolved, k -> ConcurrentHashMap.newKeySet())
                 .add(new Binding(wallId, tl.id()));
         wallKeys.computeIfAbsent(wallId, k -> ConcurrentHashMap.newKeySet()).add(resolved);
-        log.info("[时间轴触发] 已绑定：墙 " + wallId + " 时间轴 " + tl.id()
-                + " ← 监听变量 " + resolved + "（触发方式 " + type + "，配置名 " + raw + "）");
+        log.info("[timeline-trigger] bound: wall " + wallId + " timeline " + tl.id()
+                + " ← watching variable " + resolved + " (trigger=" + type + ", param=" + raw + ")");
         return true;
     }
 

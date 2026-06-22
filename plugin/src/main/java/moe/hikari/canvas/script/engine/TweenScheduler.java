@@ -275,7 +275,7 @@ public final class TweenScheduler {
         for (Action a : tb.body()) {
             if (!(a instanceof Action.SetElementProperties sep)) {
                 // 非属性动作（校验层应已拦截，运行层防御性跳过）
-                log.warning("[补间] body 含非属性动作: " + a.wireType() + " wall=" + wallId + " block=" + blockId);
+                log.warning("[tween] body contains non-property action: " + a.wireType() + " wall=" + wallId + " block=" + blockId);
                 continue;
             }
             String elementId = sep.elementId();
@@ -336,7 +336,7 @@ public final class TweenScheduler {
                 tickOne(wallId, task, now);
             } catch (Throwable t) {
                 // 任务级异常隔离：单 wall 补间失败不杀整个 tick 循环
-                log.log(Level.WARNING, "[补间] tick 失败 wallId=" + wallId + ": " + t.getMessage(), t);
+                log.log(Level.WARNING, "[tween] tick failed wallId=" + wallId + ": " + t.getMessage(), t);
                 // 出错也清理，防无限重试
                 active.remove(wallId, task);
                 ticker.clearStaticDiff(wallId);
@@ -374,7 +374,7 @@ public final class TweenScheduler {
                 try {
                     applyFn.apply(wallId, task.blockId(), el.getKey(), el.getValue());
                 } catch (Exception e) {
-                    log.log(Level.WARNING, "[补间] 末帧 applyMany 失败 wallId=" + wallId
+                    log.log(Level.WARNING, "[tween] final frame applyMany failed wallId=" + wallId
                             + " elementId=" + el.getKey() + ": " + e.getMessage(), e);
                 }
             }
@@ -403,7 +403,7 @@ public final class TweenScheduler {
                     try {
                         applyFn.apply(wallId, task.blockId(), el.getKey(), el.getValue());
                     } catch (Exception e) {
-                        log.log(Level.WARNING, "[补间] 中间帧 applyMany 失败 wallId=" + wallId
+                        log.log(Level.WARNING, "[tween] mid-frame applyMany failed wallId=" + wallId
                                 + " elementId=" + el.getKey() + ": " + e.getMessage(), e);
                     }
                 }
@@ -485,7 +485,7 @@ public final class TweenScheduler {
         try {
             cb.run();
         } catch (Throwable t) {
-            log.log(Level.WARNING, "[补间] 续接回调抛异常（已吞）wallId=" + task.wallId()
+            log.log(Level.WARNING, "[tween] continuation callback threw exception (swallowed) wallId=" + task.wallId()
                     + " block=" + task.blockId() + ": " + t.getMessage(), t);
         }
     }
