@@ -8,7 +8,9 @@ import java.util.logging.Logger;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
 
 /** i18n 文案中枢：YamlConfiguration 持各 locale 文案，MiniMessage 渲染。无 Bukkit 主线程依赖，可单测。 */
 public final class Messages {
@@ -48,6 +50,24 @@ public final class Messages {
             return Component.text(key);
         }
         return MiniMessage.miniMessage().deserialize(raw, resolvers);
+    }
+
+    public String resolveLocaleId(String rawClientLocale) {
+        String n = norm(rawClientLocale);
+        return byLocale.containsKey(n) ? n : defaultLocale;
+    }
+
+    public String localeId(CommandSender sender) {
+        if (sender instanceof Player p) return resolveLocaleId(p.getLocale());
+        return defaultLocale;
+    }
+
+    public void send(CommandSender to, String key, TagResolver... resolvers) {
+        to.sendMessage(get(localeId(to), key, resolvers));
+    }
+
+    public void sendActionBar(Player to, String key, TagResolver... resolvers) {
+        to.sendActionBar(get(localeId(to), key, resolvers));
     }
 
     public int size() { return byLocale.size(); }

@@ -74,4 +74,16 @@ class MessagesTest {
     void get_returnsKeyLiteral_whenMissingEverywhere() {
         assertEquals("command.nope", plain(messages.get("en_us", "command.nope")));
     }
+
+    @Test
+    void resolveLocaleId_exactMatch() {
+        assertEquals("zh_cn", messages.resolveLocaleId("zh_CN"));
+        assertEquals("en_us", messages.resolveLocaleId("en_us"));
+    }
+
+    @Test
+    void resolveLocaleId_unsupported_fallsBackToDefault() {
+        assertEquals("en_us", messages.resolveLocaleId("fr_fr")); // default en_us
+        assertEquals("en_us", messages.resolveLocaleId(null));
+    }
 }
