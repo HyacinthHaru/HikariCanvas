@@ -1,0 +1,3 @@
+command:
+  no-session: "<gray>No active session.</gray>"
+  open-editor: "<gray>Open editor: <url></gray>"
