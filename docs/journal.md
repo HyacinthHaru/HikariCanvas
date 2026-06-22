@@ -9,17 +9,17 @@
 
 **i18n 双端国际化**：后端从零搭 i18n + 前端收尾，玩家游戏内文字按 MC 客户端语言显示，统一现有英/中混用。
 - 后端基础设施：新 `i18n/Messages` 类（Bukkit YamlConfiguration 持 `lang/<locale>.yml`，jar 默认 + `plugins/HikariCanvas/lang/` 服主可覆盖/加语言，`Player.getLocale()` 选语言、config `i18n.default-locale` 兜底 en_us，MiniMessage 渲染 + 命名占位符 + 缺 key 回退链）；HikariCanvas 装配 + `/canvas reload config` 热重载。
-- 后端迁移：CanvasCommand / WandListener+CanvasWand+FrameProtectionListener / VariableSubCommand（§ 码转 MiniMessage）/ BenchmarkSubCommand（中文→双语）共约 160 处玩家可见文字 → `lang/{en_us,zh_cn}.yml`（同 key，LangFileParityTest 防漏译）；控制台日志统一英文（10 文件 44 处，消除中英混杂）。
+- 后端迁移：CanvasCommand / WandListener+CanvasWand+FrameProtectionListener / VariableSubCommand（§ 码转 MiniMessage）/ BenchmarkSubCommand（中文→双语）共约 160 处玩家可见文字 → `lang/{en_us,zh_cn}.yml`（同 key，LangFileParityTest 防漏译）；控制台日志统一英文（10 文件 44 处，消除中英混杂；benchmark 驱动类 1 处 logger 漏，见已知缺口）。
 - 前端收尾：messages.ts 加 errors/script 5 key + 修 2 个 en switchLocale 误填中文 bug；wsClient 3 处 + scriptEdit 4 处硬编码改查表；新增 zh/en key 对齐 + en 无中文 vitest 守卫。
 - 内置 zh_cn + en_us；服主可在 lang/ 加语言。
-- **已知缺口（留后续）**：script.trace 试跑诊断文本（后端生成、经 WS 发编辑器面板显示）仍中文，本版未覆盖（spec 范围为游戏内玩家文字 + 前端漏网）。
+- **已知缺口（留后续，建议 0.8.3 一并处理）**：① `script.trace` 试跑诊断文本（TraceStep.* in ScriptRunner/ActionExecutor/ElementPropertyApplier，后端生成、经 WS 发编辑器面板）仍中文；② `/canvas bench run-tween`/`run-script` 的驱动摘要表格正文（`ScriptBenchmarkDriver`/`TweenBenchmarkDriver`，含一处中文 logger）经 sendMessage 发玩家、仍中文。两者均属诊断/压测工具输出（非核心玩家流程），spec 范围（命令回复 + wand + 前端漏网）未覆盖。整支终审（opus）确认除此二者外无其它玩家/编辑器可见中文漏网。
 - 版本号 0.8.1 → 0.8.2-SNAPSHOT。
 
 **0.8.1 文档版本引用同步**（随本次一并）：上一轮把 9 份文档的「当前版本」引用从 0.7.4 同步到 0.8.1（commit 374dc00），随 i18n 一起提交。
 
 测试：后端 :plugin:test 全绿 + LangFileParityTest/MessagesTest；前端 vitest 全绿；shadow jar HikariCanvas-0.8.2-SNAPSHOT.jar。
 
-关联文件：`plugin/src/main/java/moe/hikari/canvas/i18n/Messages.java`、`plugin/src/main/resources/lang/en_us.yml`、`plugin/src/main/resources/lang/zh_cn.yml`、`plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`、`plugin/src/main/java/moe/hikari/canvas/command/VariableSubCommand.java`、`plugin/src/main/java/moe/hikari/canvas/command/BenchmarkSubCommand.java`、`web/src/i18n/messages.ts`、`web/src/network/wsClient.ts`、`web/src/composables/scriptEdit.ts`、`build.gradle.kts`、`plugin/src/main/resources/paper-plugin.yml`、`web/package.json`。
+关联文件：`plugin/src/main/java/moe/hikari/canvas/i18n/Messages.java`、`plugin/src/main/resources/lang/en_us.yml`、`plugin/src/main/resources/lang/zh_cn.yml`、`plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`、`plugin/src/main/java/moe/hikari/canvas/command/VariableSubCommand.java`、`plugin/src/main/java/moe/hikari/canvas/command/BenchmarkSubCommand.java`、`web/src/i18n/messages.ts`、`web/src/network/wsClient.ts`、`web/src/stores/scriptEdit.ts`、`build.gradle.kts`、`plugin/src/main/resources/paper-plugin.yml`、`web/package.json`。
 
 ---
 
