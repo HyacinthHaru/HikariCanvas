@@ -542,10 +542,10 @@ public final class HikariCanvas extends JavaPlugin {
         // "瞄已有 ItemFrame 二次确认 → open" 路径
         getServer().getPluginManager().registerEvents(
                 new WandListener(this, sessionManager, frameDeployer, tokenService, wallRepo,
-                        editorUrlTemplate, wallRestorer),
+                        editorUrlTemplate, wallRestorer, messages),
                 this);
         getServer().getPluginManager().registerEvents(
-                new FrameProtectionListener(frameDeployer), this);
+                new FrameProtectionListener(frameDeployer, messages), this);
 
         // 0.4.0-P5：/canvas var 子命令族。reload hook 重读 config.yml + 重建 PushRateLimiter
         // + 通过 setRateLimiter 热替换，无需重启服务器。

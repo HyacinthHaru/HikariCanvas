@@ -73,3 +73,21 @@ command:
     config-restart-note: "<gray>注意：host/port 的更改需要重启服务器才能生效。</gray>"
     templates-ok: "<gold>模板已重载：<builtin> 个内置 + <server> 个服务器自定义（覆盖=<overrides>，失败=<failed>）— 共 <total> 个</gold>"
     template-failure: "<red>  ✗ <file></red>"
+wand:
+  restore-failed: "<red>画布 '<wall_id>' 启动时恢复失败，请查看服务端日志。</red>"
+  locked-by: "<red>画布 '<wall_id>' 已被 <owner_name> 锁定。</red>"
+  click-again: "<aqua>画布 <wall_id> — 30 秒内再点一次打开编辑器</aqua>"
+  selection-started: "<gold>Canvas 魔棒：已进入选区模式。</gold>"
+  busy-session: "<red>你已有一个活跃的画布会话，请先完成或使用 /canvas cancel 取消。</red>"
+  preview-ok: "<aqua>画布：<width>×<height>（共 <maps> 张地图），朝向 <facing>。从 (<min_x>,<min_y>,<min_z>) 到 (<max_x>,<max_y>,<max_z>)。执行 /canvas confirm 确认。</aqua>"
+  preview-invalid: "<red>选区无效：<reason> — <detail></red>"
+  corner: "<gray><label>（<x>, <y>, <z>）</gray><dark_gray> 朝向 <face></dark_gray>"
+  label-first: "第一个角"
+  label-second: "第二个角"
+  item:
+    name: "<gold>Canvas 魔棒</gold>"
+    lore-1: "<gray>左键：第一个角</gray>"
+    lore-2: "<gray>右键：第二个角</gray>"
+    lore-3: "<gray>然后执行 /canvas confirm</gray>"
+frame-protect:
+  blocked: "<red>该方块支撑着 HikariCanvas 招牌，需要 canvas.admin.force-break 权限才能破坏。</red>"

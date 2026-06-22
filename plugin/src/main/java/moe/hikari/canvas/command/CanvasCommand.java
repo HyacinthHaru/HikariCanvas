@@ -226,7 +226,7 @@ public final class CanvasCommand {
 
     private void ensureWand(Player player) {
         if (!CanvasWand.hasWand(player, plugin)) {
-            player.getInventory().addItem(CanvasWand.forPlayer(plugin, player));
+            player.getInventory().addItem(CanvasWand.forPlayer(plugin, player, messages));
         }
     }
 
@@ -239,7 +239,7 @@ public final class CanvasCommand {
 
     private int runWand(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
-        player.getInventory().addItem(CanvasWand.forPlayer(plugin, player));
+        player.getInventory().addItem(CanvasWand.forPlayer(plugin, player, messages));
         messages.send(player, "command.wand.received");
         return Command.SINGLE_SUCCESS;
     }

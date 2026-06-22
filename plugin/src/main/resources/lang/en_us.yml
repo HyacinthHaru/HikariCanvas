@@ -73,3 +73,21 @@ command:
     config-restart-note: "<gray>Note: host/port changes require server restart to take effect.</gray>"
     templates-ok: "<gold>Templates reloaded: <builtin> builtin + <server> server (overrides=<overrides>, failed=<failed>) — total=<total></gold>"
     template-failure: "<red>  ✗ <file></red>"
+wand:
+  restore-failed: "<red>Wall '<wall_id>' failed to restore on startup — see server log.</red>"
+  locked-by: "<red>Wall '<wall_id>' is locked by <owner_name>.</red>"
+  click-again: "<aqua>Wall <wall_id> — click again within 30s to open editor</aqua>"
+  selection-started: "<gold>Canvas Wand: selection mode started.</gold>"
+  busy-session: "<red>You have an active canvas session; finish it or /canvas cancel first.</red>"
+  preview-ok: "<aqua>Wall: <width>×<height> (<maps> maps), facing <facing>. From (<min_x>,<min_y>,<min_z>) to (<max_x>,<max_y>,<max_z>). Run /canvas confirm.</aqua>"
+  preview-invalid: "<red>Selection invalid: <reason> — <detail></red>"
+  corner: "<gray><label> (<x>, <y>, <z>)</gray><dark_gray> facing <face></dark_gray>"
+  label-first: "First corner"
+  label-second: "Second corner"
+  item:
+    name: "<gold>Canvas Wand</gold>"
+    lore-1: "<gray>Left-click: first corner</gray>"
+    lore-2: "<gray>Right-click: second corner</gray>"
+    lore-3: "<gray>Then /canvas confirm</gray>"
+frame-protect:
+  blocked: "<red>This block supports a HikariCanvas sign. Op-grant canvas.admin.force-break to bypass.</red>"

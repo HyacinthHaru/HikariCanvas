@@ -1,7 +1,6 @@
 package moe.hikari.canvas.deploy;
 
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
+import moe.hikari.canvas.i18n.Messages;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -29,19 +28,16 @@ public final class CanvasWand {
 
     private CanvasWand() {}
 
-    public static ItemStack forPlayer(JavaPlugin plugin, Player player) {
+    public static ItemStack forPlayer(JavaPlugin plugin, Player player, Messages messages) {
+        String locale = messages.resolveLocaleId(player.getLocale());
         ItemStack item = new ItemStack(Material.GOLDEN_SHOVEL);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(Component.text("Canvas Wand")
-                .color(NamedTextColor.GOLD)
+        meta.displayName(messages.get(locale, "wand.item.name")
                 .decoration(TextDecoration.ITALIC, false));
         meta.lore(List.of(
-                Component.text("Left-click: first corner",
-                        NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
-                Component.text("Right-click: second corner",
-                        NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
-                Component.text("Then /canvas confirm",
-                        NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)));
+                messages.get(locale, "wand.item.lore-1").decoration(TextDecoration.ITALIC, false),
+                messages.get(locale, "wand.item.lore-2").decoration(TextDecoration.ITALIC, false),
+                messages.get(locale, "wand.item.lore-3").decoration(TextDecoration.ITALIC, false)));
         meta.getPersistentDataContainer().set(
                 new NamespacedKey(plugin, PDC_KEY),
                 PersistentDataType.STRING,

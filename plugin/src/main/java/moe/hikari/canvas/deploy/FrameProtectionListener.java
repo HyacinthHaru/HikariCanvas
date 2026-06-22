@@ -1,7 +1,6 @@
 package moe.hikari.canvas.deploy;
 
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
+import moe.hikari.canvas.i18n.Messages;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.entity.ItemFrame;
@@ -34,9 +33,11 @@ public final class FrameProtectionListener implements Listener {
     };
 
     private final FrameDeployer frameDeployer;
+    private final Messages messages;
 
-    public FrameProtectionListener(FrameDeployer frameDeployer) {
+    public FrameProtectionListener(FrameDeployer frameDeployer, Messages messages) {
         this.frameDeployer = frameDeployer;
+        this.messages = messages;
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -85,10 +86,7 @@ public final class FrameProtectionListener implements Listener {
                 // 仅 force-break 权限可绕过。
                 if (canForce) return;
                 event.setCancelled(true);
-                player.sendActionBar(Component.text(
-                        "This block supports a HikariCanvas sign. "
-                                + "Op-grant canvas.admin.force-break to bypass.",
-                        NamedTextColor.RED));
+                messages.sendActionBar(player, "frame-protect.blocked");
                 return;
             }
         }

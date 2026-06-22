@@ -3,11 +3,13 @@ package moe.hikari.canvas.session;
 import moe.hikari.canvas.deploy.CanvasWand;
 import moe.hikari.canvas.deploy.FrameDeployer;
 import moe.hikari.canvas.deploy.WallResolver;
+import moe.hikari.canvas.i18n.Messages;
 import moe.hikari.canvas.render.WallRestorer;
 import moe.hikari.canvas.storage.WallRepo;
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.block.Block;
@@ -59,26 +61,20 @@ public final class WandListener implements Listener {
     private final String editorUrlTemplate;
     /** M16 P2.5：启动期 restore 失败的 wall 白名单查询；玩家与失败 wall 交互时给提示。可空（test 路径）。 */
     private final WallRestorer wallRestorer;
+    private final Messages messages;
 
     /** 第一次点 HikariCanvas ItemFrame 后记录待确认。playerUuid → (wallId, ts)。 */
     private final ConcurrentMap<UUID, PendingOpen> pendingOpens = new ConcurrentHashMap<>();
 
     private record PendingOpen(String wallId, long ts) {}
 
-    public WandListener(JavaPlugin plugin, SessionManager sessionManager,
-                        FrameDeployer frameDeployer, TokenService tokenService,
-                        WallRepo wallRepo, String editorUrlTemplate) {
-        this(plugin, sessionManager, frameDeployer, tokenService, wallRepo, editorUrlTemplate, null);
-    }
-
     /**
-     * M16 P2.5 完整构造：注入 {@link WallRestorer} 让 wand 路径能查"启动期 restore 失败"白名单。
-     * 旧 6-arg 构造保留兼容 test。
+     * 完整构造：注入 {@link WallRestorer}（启动期 restore 失败白名单）与 {@link Messages}（i18n）。
      */
     public WandListener(JavaPlugin plugin, SessionManager sessionManager,
                         FrameDeployer frameDeployer, TokenService tokenService,
                         WallRepo wallRepo, String editorUrlTemplate,
-                        WallRestorer wallRestorer) {
+                        WallRestorer wallRestorer, Messages messages) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
         this.frameDeployer = frameDeployer;
@@ -86,6 +82,7 @@ public final class WandListener implements Listener {
         this.wallRepo = wallRepo;
         this.editorUrlTemplate = editorUrlTemplate;
         this.wallRestorer = wallRestorer;
+        this.messages = messages;
     }
 
     // ---------- 方块层 ----------
@@ -149,9 +146,8 @@ public final class WandListener implements Listener {
         // M16 P2.5：启动期 restore 失败的 wall → ActionBar 提示，不进入 open 路径。
         // 让玩家立刻明白不必再点（避免一直点不开还以为是 lock 问题）。
         if (wallRestorer != null && wallRestorer.isRestorationFailed(wallId)) {
-            player.sendActionBar(Component.text(
-                    "Wall '" + wallId + "' failed to restore on startup — see server log",
-                    NamedTextColor.RED));
+            sendActionBar(player, "wand.restore-failed",
+                    Placeholder.unparsed("wall_id", wallId));
             return;
         }
         // M15.3 Phase 2 方案 C：wand 路径同步 lock check。SessionManager.open 已硬拦截,
@@ -160,9 +156,9 @@ public final class WandListener implements Listener {
         if (w != null && w.publishedAt() != null
                 && !player.getUniqueId().equals(w.ownerUuid())
                 && !player.hasPermission("canvas.admin.bypass-lock")) {
-            player.sendActionBar(Component.text(
-                    "Wall '" + wallId + "' is locked by " + w.ownerName(),
-                    NamedTextColor.RED));
+            sendActionBar(player, "wand.locked-by",
+                    Placeholder.unparsed("wall_id", wallId),
+                    Placeholder.unparsed("owner_name", w.ownerName()));
             return;
         }
         long now = System.currentTimeMillis();
@@ -175,37 +171,37 @@ public final class WandListener implements Listener {
             return;
         }
         pendingOpens.put(player.getUniqueId(), new PendingOpen(wallId, now));
-        player.sendActionBar(Component.text(
-                "Wall " + wallId + " — click again within 30s to open editor",
-                NamedTextColor.AQUA));
+        sendActionBar(player, "wand.click-again",
+                Placeholder.unparsed("wall_id", wallId));
     }
 
     private void doOpen(Player player, String wallId) {
         SessionManager.OpenResult r = sessionManager.open(
                 player.getUniqueId(), player.getName(), wallId);
         if (r instanceof SessionManager.OpenResult.NotFound) {
-            player.sendMessage(Component.text("Wall no longer exists: " + wallId, NamedTextColor.RED));
+            sendMsg(player, "command.open.not-found",
+                    Placeholder.unparsed("id_or_alias", wallId));
             return;
         }
         if (r instanceof SessionManager.OpenResult.AlreadyHasSession a) {
-            player.sendMessage(Component.text(
-                    "You already have an active session (state=" + a.current() + "). /canvas cancel first.",
-                    NamedTextColor.RED));
+            sendMsg(player, "command.open.already-has-session",
+                    Placeholder.unparsed("state", a.current().toString()));
             return;
         }
         if (r instanceof SessionManager.OpenResult.WallOccupied wo) {
-            player.sendMessage(Component.text(
-                    "Wall is being edited by " + (wo.otherPlayer() == null ? "?" : wo.otherPlayer()) + ".",
-                    NamedTextColor.RED));
+            sendMsg(player, "command.open.wall-occupied",
+                    Placeholder.unparsed("other_player",
+                            wo.otherPlayer() == null ? "?" : wo.otherPlayer().toString()));
             return;
         }
         if (r instanceof SessionManager.OpenResult.BindFailed bf) {
-            player.sendMessage(Component.text("Cannot open: " + bf.detail(), NamedTextColor.RED));
+            sendMsg(player, "command.open.bind-failed",
+                    Placeholder.unparsed("detail", bf.detail()));
             return;
         }
         if (r instanceof SessionManager.OpenResult.Forbidden f) {
-            player.sendMessage(Component.text(
-                    "Wall is locked: " + f.message(), NamedTextColor.RED));
+            sendMsg(player, "command.open.forbidden",
+                    Placeholder.unparsed("message", f.message()));
             return;
         }
         SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;
@@ -213,16 +209,23 @@ public final class WandListener implements Listener {
         String url = editorUrlTemplate.replace("{token}", token);
         // 收回 wand（与 confirm 行为一致）
         CanvasWand.removeAllFrom(player, plugin);
-        player.sendMessage(Component.text(
-                "Opened wall " + wallId
-                        + (ok.wall().alias() != null ? " '" + ok.wall().alias() + "'" : "")
-                        + " · " + ok.wall().widthMaps() + "×" + ok.wall().heightMaps(),
-                NamedTextColor.GREEN));
-        player.sendMessage(Component.text("Open editor: ", NamedTextColor.GRAY)
-                .append(Component.text(url, NamedTextColor.AQUA)
-                        .decorate(TextDecoration.UNDERLINED)
-                        .clickEvent(ClickEvent.openUrl(url))
-                        .hoverEvent(HoverEvent.showText(Component.text("Click to open in browser")))));
+
+        // summary line with optional alias
+        WallRepo.Wall wall = ok.wall();
+        String aliasPart = "";
+        if (wall.alias() != null && messages != null) {
+            String aliasPartRaw = messages.rawOrNull(messages.localeId(player), "command.open.alias-part");
+            if (aliasPartRaw == null) aliasPartRaw = " (alias: <alias>)";
+            aliasPart = aliasPartRaw.replace("<alias>", wall.alias());
+        } else if (wall.alias() != null) {
+            aliasPart = " '" + wall.alias() + "'";
+        }
+        sendMsg(player, "command.open.summary",
+                Placeholder.unparsed("wall_id", wall.wallId()),
+                Placeholder.unparsed("alias_part", aliasPart),
+                Placeholder.unparsed("width", String.valueOf(wall.widthMaps())),
+                Placeholder.unparsed("height", String.valueOf(wall.heightMaps())));
+        sendEditorUrl(player, url);
     }
 
     // ---------- 选区共享逻辑 ----------
@@ -246,15 +249,12 @@ public final class WandListener implements Listener {
                     player.getUniqueId(), player.getName());
             if (br instanceof SessionManager.BeginResult.Ok ok) {
                 session = ok.session();
-                player.sendMessage(Component.text("Canvas Wand: selection mode started.",
-                        NamedTextColor.GOLD));
+                sendMsg(player, "wand.selection-started");
             } else {
                 return;
             }
         } else if (session.state() != SessionState.SELECTING) {
-            player.sendMessage(Component.text(
-                    "You have an active canvas session; finish it or /canvas cancel first.",
-                    NamedTextColor.RED));
+            sendMsg(player, "wand.busy-session");
             return;
         }
 
@@ -263,16 +263,21 @@ public final class WandListener implements Listener {
 
         WallResolver.Result preview = sessionManager.preview(session.id());
         if (preview instanceof WallResolver.Result.Ok ok) {
-            player.sendMessage(Component.text(String.format(
-                            "Wall: %d×%d (%d maps), facing %s. From (%d,%d,%d) to (%d,%d,%d). Run /canvas confirm.",
-                            ok.width(), ok.height(), ok.mapCount(), ok.facing().name(),
-                            ok.minX(), ok.minY(), ok.minZ(),
-                            computeMaxX(ok), computeMaxY(ok), computeMaxZ(ok)),
-                    NamedTextColor.AQUA));
+            sendMsg(player, "wand.preview-ok",
+                    Placeholder.unparsed("width", String.valueOf(ok.width())),
+                    Placeholder.unparsed("height", String.valueOf(ok.height())),
+                    Placeholder.unparsed("maps", String.valueOf(ok.mapCount())),
+                    Placeholder.unparsed("facing", ok.facing().name()),
+                    Placeholder.unparsed("min_x", String.valueOf(ok.minX())),
+                    Placeholder.unparsed("min_y", String.valueOf(ok.minY())),
+                    Placeholder.unparsed("min_z", String.valueOf(ok.minZ())),
+                    Placeholder.unparsed("max_x", String.valueOf(computeMaxX(ok))),
+                    Placeholder.unparsed("max_y", String.valueOf(computeMaxY(ok))),
+                    Placeholder.unparsed("max_z", String.valueOf(computeMaxZ(ok))));
         } else if (preview instanceof WallResolver.Result.Failed f) {
-            player.sendMessage(Component.text(
-                    "Selection invalid: " + f.reason() + " — " + f.detail(),
-                    NamedTextColor.RED));
+            sendMsg(player, "wand.preview-invalid",
+                    Placeholder.unparsed("reason", f.reason().name()),
+                    Placeholder.unparsed("detail", f.detail()));
         }
     }
 
@@ -295,11 +300,55 @@ public final class WandListener implements Listener {
     }
 
     private void echoCorner(Player player, boolean first, Block block, BlockFace face) {
-        Component label = Component.text(first ? "First corner " : "Second corner ", NamedTextColor.GRAY);
-        Component coord = Component.text(String.format("(%d, %d, %d)",
-                block.getX(), block.getY(), block.getZ()), NamedTextColor.WHITE);
-        Component facing = Component.text(" facing " + face.name(), NamedTextColor.DARK_GRAY);
-        player.sendMessage(label.append(coord).append(facing));
+        String labelKey = first ? "wand.label-first" : "wand.label-second";
+        String labelText = (messages != null)
+                ? messages.rawOrNull(messages.localeId(player), labelKey)
+                : null;
+        if (labelText == null) labelText = first ? "First corner" : "Second corner";
+        sendMsg(player, "wand.corner",
+                Placeholder.unparsed("label", labelText),
+                Placeholder.unparsed("x", String.valueOf(block.getX())),
+                Placeholder.unparsed("y", String.valueOf(block.getY())),
+                Placeholder.unparsed("z", String.valueOf(block.getZ())),
+                Placeholder.unparsed("face", face.name()));
+    }
+
+    // ---------- i18n helpers (null-safe: fall back to legacy Component when messages == null) ----------
+
+    private void sendMsg(Player player, String key, net.kyori.adventure.text.minimessage.tag.resolver.TagResolver... resolvers) {
+        if (messages != null) {
+            messages.send(player, key, resolvers);
+        }
+        // If messages is null (test paths without i18n), silently skip — test assertions
+        // target SessionManager / WallRepo behaviour, not player-visible text.
+    }
+
+    private void sendActionBar(Player player, String key, net.kyori.adventure.text.minimessage.tag.resolver.TagResolver... resolvers) {
+        if (messages != null) {
+            messages.sendActionBar(player, key, resolvers);
+        }
+    }
+
+    private void sendEditorUrl(Player player, String url) {
+        if (messages != null) {
+            String hoverRaw = messages.rawOrNull(messages.localeId(player), "command.open.editor-url-hover");
+            if (hoverRaw == null) hoverRaw = "Click to open in browser";
+            String prefixRaw = messages.rawOrNull(messages.localeId(player), "command.open.editor-url");
+            Component prefix = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+                    .deserialize(prefixRaw != null ? prefixRaw.replace("<url>", "") : "Open editor: ");
+            Component link = Component.text(url, NamedTextColor.AQUA)
+                    .decorate(TextDecoration.UNDERLINED)
+                    .clickEvent(ClickEvent.openUrl(url))
+                    .hoverEvent(HoverEvent.showText(Component.text(hoverRaw)));
+            player.sendMessage(prefix.append(link));
+        } else {
+            // fallback for test paths
+            player.sendMessage(Component.text("Open editor: ", NamedTextColor.GRAY)
+                    .append(Component.text(url, NamedTextColor.AQUA)
+                            .decorate(TextDecoration.UNDERLINED)
+                            .clickEvent(ClickEvent.openUrl(url))
+                            .hoverEvent(HoverEvent.showText(Component.text("Click to open in browser")))));
+        }
     }
 
     private int computeMaxX(WallResolver.Result.Ok ok) {
