@@ -321,7 +321,7 @@ class ActionExecutorTest {
         assertTrue(step.detail().contains("announce"), step.detail());
         boolean warned = logRecords.stream().anyMatch(r ->
                 r.getLevel() == Level.WARNING
-                        && r.getMessage().contains("runCommand 执行失败"));
+                        && r.getMessage().contains("runCommand failed"));
         assertTrue(warned, "无 Bukkit server 环境 dispatch 失败应留 WARNING 不上抛");
     }
 
@@ -335,7 +335,7 @@ class ActionExecutorTest {
                 new Action.Log("count=${var:user/n}"));
         assertEquals("ok", step.result());
         boolean found = logRecords.stream().anyMatch(r ->
-                r.getLevel() == Level.INFO && r.getMessage().equals("[脚本 w-1] count=7"));
+                r.getLevel() == Level.INFO && r.getMessage().equals("[script w-1] count=7"));
         assertTrue(found, "log.info 含 wallId 前缀 + 插值后消息");
     }
 
@@ -344,7 +344,7 @@ class ActionExecutorTest {
         TraceStep step = bare().execute(WALL, "b", new Action.Log("raw ${var:user/n}"));
         assertEquals("ok", step.result());
         assertTrue(logRecords.stream().anyMatch(r ->
-                r.getMessage().equals("[脚本 w-1] raw ${var:user/n}")));
+                r.getMessage().equals("[script w-1] raw ${var:user/n}")));
     }
 
     // ---------- 0.7.1：setElementProperties / nudge（委托 applier） ----------

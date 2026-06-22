@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-06-23 · 0.8.2 i18n（插件本体国际化）+ 0.8.1 文档版本引用同步
+
+**i18n 双端国际化**：后端从零搭 i18n + 前端收尾，玩家游戏内文字按 MC 客户端语言显示，统一现有英/中混用。
+- 后端基础设施：新 `i18n/Messages` 类（Bukkit YamlConfiguration 持 `lang/<locale>.yml`，jar 默认 + `plugins/HikariCanvas/lang/` 服主可覆盖/加语言，`Player.getLocale()` 选语言、config `i18n.default-locale` 兜底 en_us，MiniMessage 渲染 + 命名占位符 + 缺 key 回退链）；HikariCanvas 装配 + `/canvas reload config` 热重载。
+- 后端迁移：CanvasCommand / WandListener+CanvasWand+FrameProtectionListener / VariableSubCommand（§ 码转 MiniMessage）/ BenchmarkSubCommand（中文→双语）共约 160 处玩家可见文字 → `lang/{en_us,zh_cn}.yml`（同 key，LangFileParityTest 防漏译）；控制台日志统一英文（10 文件 44 处，消除中英混杂）。
+- 前端收尾：messages.ts 加 errors/script 5 key + 修 2 个 en switchLocale 误填中文 bug；wsClient 3 处 + scriptEdit 4 处硬编码改查表；新增 zh/en key 对齐 + en 无中文 vitest 守卫。
+- 内置 zh_cn + en_us；服主可在 lang/ 加语言。
+- **已知缺口（留后续）**：script.trace 试跑诊断文本（后端生成、经 WS 发编辑器面板显示）仍中文，本版未覆盖（spec 范围为游戏内玩家文字 + 前端漏网）。
+- 版本号 0.8.1 → 0.8.2-SNAPSHOT。
+
+**0.8.1 文档版本引用同步**（随本次一并）：上一轮把 9 份文档的「当前版本」引用从 0.7.4 同步到 0.8.1（commit 374dc00），随 i18n 一起提交。
+
+测试：后端 :plugin:test 全绿 + LangFileParityTest/MessagesTest；前端 vitest 全绿；shadow jar HikariCanvas-0.8.2-SNAPSHOT.jar。
+
+关联文件：`plugin/src/main/java/moe/hikari/canvas/i18n/Messages.java`、`plugin/src/main/resources/lang/en_us.yml`、`plugin/src/main/resources/lang/zh_cn.yml`、`plugin/src/main/java/moe/hikari/canvas/command/CanvasCommand.java`、`plugin/src/main/java/moe/hikari/canvas/command/VariableSubCommand.java`、`plugin/src/main/java/moe/hikari/canvas/command/BenchmarkSubCommand.java`、`web/src/i18n/messages.ts`、`web/src/network/wsClient.ts`、`web/src/composables/scriptEdit.ts`、`build.gradle.kts`、`plugin/src/main/resources/paper-plugin.yml`、`web/package.json`。
+
+---
+
 ## 2026-06-22 · 0.8.1 独立 ultrareview P0-P2 修复批（版本号 → 0.8.1-SNAPSHOT）
 
 独立深度审查（68 子代理：40 审查 + 28 对抗验证；confirmed 30 / refuted 58 / doc-sanctioned 12 / uncertain 10）后修 P0-P2 全部 26 条。流程：21 子代理再确认 + 出修法规格（定夺双端对齐方向）→ 14 子代理并行修隔离项 + controller 亲修 7 个并发/跨文件硬骨头 → 全量测试 → 2 处中途修正 → 复测全绿。
