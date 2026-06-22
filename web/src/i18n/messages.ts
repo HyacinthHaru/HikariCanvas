@@ -855,6 +855,8 @@ export const messages = {
             validationHint: '⚠ {n} 处待完善',
             // 关闭/切换规则时有校验错误导致改动未保存的提示（不阻止关闭，只提醒）。
             discardedByValidation: '部分改动因校验未通过，未能保存',
+            validationErrorsOnSwitch: '当前规则有校验错误，请修正或撤销改动后再切换。',
+            createRuleFailed: '新建规则失败：没收到服务器回执',
             // 试跑高亮图例（每种执行结果对应一种边框色）
             legendOk: '执行了',
             legendSkipped: '跳过了',
@@ -1269,6 +1271,10 @@ export const messages = {
             SCRIPT_NOT_FOUND: '找不到这条脚本规则，可能已经被删除了',
             SCRIPT_QUOTA_EXCEEDED: '这块画板的脚本数量已达上限，先删几条再加',
             SCRIPT_ENGINE_UNAVAILABLE: '脚本功能暂时不可用，请联系服主或稍后再试',
+            // 重连 / 初始化（0.8.2）
+            RECONNECT_EXHAUSTED: '服务器长时间不可达，请刷新页面或在游戏里重新 /canvas edit',
+            TOKEN_MISSING: 'token 丢失，请刷新页面或重新 /canvas edit',
+            MALFORMED_READY: '初始化数据异常（协议错误），请刷新页面',
             // 兜底
             UNKNOWN: '出了点小问题，请稍后再试',
         },
@@ -1329,7 +1335,7 @@ export const messages = {
             toggleRight: 'Collapse / expand right panel',
             toggleLog: 'Open / close log drawer',
             toggleTheme: 'Switch between dark / light theme',
-            switchLocale: '切换到中文',
+            switchLocale: 'Switch to Chinese',
             help: 'Shortcuts & help',
             variableManager: 'Variable manager (dynamic data)',
             scheduleManager: 'Train schedule (dynamic departure board)',
@@ -1346,7 +1352,7 @@ export const messages = {
             moreSnap: 'Snap Settings',
             moreLog: 'Connection Log',
             moreHelp: 'Help / Shortcuts',
-            moreSwitchLocale: '切换到中文',
+            moreSwitchLocale: 'Switch to Chinese',
             moreTheme: 'Theme',
         },
         // 0.8 B5: SVG vector import dialog
@@ -2155,6 +2161,8 @@ export const messages = {
             validationHint: '⚠ {n} to finish',
             // Shown when closing / switching rules with unsaved changes that failed validation (non-blocking).
             discardedByValidation: 'Some changes could not be saved because the rule has validation errors',
+            validationErrorsOnSwitch: 'This rule has validation errors — fix or discard your changes before switching.',
+            createRuleFailed: 'Failed to create rule: no server acknowledgement',
             // test-run highlight legend (each result maps to a border color)
             legendOk: 'Ran',
             legendSkipped: 'Skipped',
@@ -2567,6 +2575,10 @@ export const messages = {
             SCRIPT_NOT_FOUND: 'This script rule can\'t be found — it may have been deleted',
             SCRIPT_QUOTA_EXCEEDED: 'This wall has hit its script limit — delete a few before adding more',
             SCRIPT_ENGINE_UNAVAILABLE: 'Scripting is temporarily unavailable — contact the admin or try later',
+            // Reconnect / init (0.8.2)
+            RECONNECT_EXHAUSTED: "Server unreachable for a while — refresh the page or run /canvas edit again in-game",
+            TOKEN_MISSING: 'Token missing — refresh the page or run /canvas edit again',
+            MALFORMED_READY: 'Malformed init data (protocol error) — please refresh',
             // Fallback
             UNKNOWN: 'Something went wrong — please try again in a moment',
         },
