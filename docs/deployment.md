@@ -191,7 +191,47 @@ network:
 
 ---
 
-## 5. 多玩家场景注意事项
+## 5. 语言 / 文案
+
+### 5.1 玩家看到的语言
+
+游戏内命令回复、wand 提示、压测反馈等文字**按每位玩家自己的 MC 客户端语言**显示——中文客户端看中文，英文客户端看英文，不需要服主做任何设置。
+
+插件内置两种语言：
+
+| 语言 ID | 对应语言 |
+|---|---|
+| `en_us` | 英文 |
+| `zh_cn` | 简体中文 |
+
+**当玩家的客户端语言没有对应文件时**（比如玩家用法语），会自动回落到 `config.yml` 里 `i18n.default-locale`（默认 `en_us`）。
+
+### 5.2 修改或添加语言文件
+
+语言文件在 **`plugins/HikariCanvas/lang/`** 目录，首次启动时内置的两个文件（`en_us.yml` / `zh_cn.yml`）会自动复制到这个目录里。你可以：
+
+- **改现有文案**：直接编辑对应 `.yml` 文件，跑 `/canvas reload config` 立即生效，无需重启。
+- **添加新语言**：在同目录放 `<语言 ID>.yml`（如 `fr_fr.yml`），同样 `/canvas reload config` 热重载即可。
+
+> 文案支持 MiniMessage 格式，可以加颜色标签（如 `<red>...</red>` / `<gradient:...>`）。
+
+### 5.3 统一所有玩家的语言
+
+如果想让所有玩家不管客户端语言是什么都看同一种语言，把 `i18n.default-locale` 改为目标语言 ID，**并且删掉其他语言的 lang 文件**（或者把其他 `.yml` 内容改成你想要的文字）。
+
+最常见的场景是纯中文服务器希望所有玩家看中文：
+
+```yaml
+# config.yml
+i18n:
+  default-locale: zh_cn
+```
+
+改完 `/canvas reload config` 热重载，不用重启服务器。
+
+---
+
+## 6. 多玩家场景注意事项
 
 当前版本的 wall 排他锁是**全局**的（详见 `docs/architecture.md §3`）：
 
@@ -204,7 +244,7 @@ network:
 
 ---
 
-## 6. 常见问题排查
+## 7. 常见问题排查
 
 | 现象 | 可能原因 |
 |---|---|
@@ -218,7 +258,7 @@ network:
 
 ---
 
-## 7. config.yml 速查
+## 8. config.yml 速查
 
 完整字段说明见 jar 内嵌的 `resources/config.yml`（首次启动自动拷到 `plugins/HikariCanvas/`，每行都带中文注释），共 13 个顶级段。下表按段列关键字段：
 
@@ -241,6 +281,7 @@ network:
 | `images.max-size-kb` / `.allowed-mime` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / png·jpeg·webp / `1024` / `16` / `50` / `1024` | M13 图片上传：单文件 / MIME / 降采样 / 单墙 / 每日 / 全服磁盘配额 | ✅ |
 | `import.canvas-max-mb` / `.canvas-max-entry-mb` / `.canvas-max-total-mb` | `10` / `10` / `50` | 0.8 `.canvas` 工程导入限额（防 zip 炸弹） | ✅ |
 | `security.token-rate-limit.per-minute` | `10` | 每 IP 每分钟 WS auth token 尝试次数（防暴破） | ✅ |
+| `i18n.default-locale` | `en_us` | 玩家客户端语言无对应 lang 文件时的兜底语言（内置 `en_us` / `zh_cn`；可加自定义文件） | ❌（`/canvas reload config` 即时生效） |
 | `database.auto-backup-before-migration` | `false` | migration 前自动备份 `data.db`（stable 发版后建议开） | ✅ |
 | `dynamic.push-rate-limit.*` | `100` / `1000` / `10000` | 插件 Push API 单插件 / 全局每秒上限 + 熔断保护期 ms | `/canvas var reload` 热替换 |
 | `dynamic.schedule.*` | `60` / "进站中" / "" | 兜底列车 ETA 进站阈值秒 + 进站 / 空闲文案 | ✅ |
@@ -252,7 +293,7 @@ network:
 
 ---
 
-## 8. 版本升级 SOP（stable 1.0.0+）
+## 9. 版本升级 SOP（stable 1.0.0+）
 
 > **配套契约：** `docs/data-model.md §6.6` 定义 stable 发版（≥1.0.0）后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。当前 `0.8.1-SNAPSHOT` 仍处 pre-release。
 

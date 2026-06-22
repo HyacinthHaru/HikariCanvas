@@ -350,6 +350,46 @@ network:
 
 ---
 
+## 10. 语言 / 文案问题
+
+### 10.1 玩家看到的语言不是预期的
+
+**症状：** 玩家收到的命令回复 / wand 提示是英文，但他希望看中文（或反过来）。
+
+**原因：** 插件按**各玩家自己的 Minecraft 客户端语言**自动选文案（内置 `en_us` / `zh_cn`）。客户端语言设成什么，插件就用什么；没有对应语言文件时，回落到 `config.yml` 里 `i18n.default-locale`（默认 `en_us`）。
+
+**解决：**
+
+- **让玩家改自己的客户端语言**：玩家进游戏设置 → 语言 → 改成对应语言，下次命令就切过去了。
+- **想让所有玩家统一看某种语言**：在 `config.yml` 里把 `i18n.default-locale` 改成目标语言 ID（如 `zh_cn`），然后 `/canvas reload config` 热重载，不需要重启服务器。注意：这只影响客户端语言没有对应文件的玩家；已有对应文件的玩家还是看自己语言。如果要彻底统一，把其他语言的 lang 文件改成同样内容，或直接删掉。
+
+```yaml
+# config.yml（改完 /canvas reload config 即可）
+i18n:
+  default-locale: zh_cn
+```
+
+### 10.2 改了 lang 文件（或 default-locale），但没生效
+
+**症状：** 编辑了 `plugins/HikariCanvas/lang/zh_cn.yml`（或改了 `config.yml` 里的 `i18n.default-locale`），玩家还是看到旧文案。
+
+**原因：** 语言文件在内存里有缓存，文件改了之后要主动触发重载。
+
+**解决：** 跑 `/canvas reload config`（需 `canvas.admin`），lang 目录下所有文件会被立即重新读入，`default-locale` 也跟着生效。不需要重启服务器。
+
+### 10.3 加了新语言文件但插件没认出来
+
+**症状：** 在 `plugins/HikariCanvas/lang/` 放了一个新 `fr_fr.yml`，法语客户端玩家还是看到 `en_us` 的文案。
+
+**原因 / 解决：**
+
+- 确认文件名和 Minecraft 的语言 ID **完全一致**（如 `fr_fr.yml`，不能用大写或连字符 `fr-FR.yml`）。
+- 文件放好后跑 `/canvas reload config` 重载，不用重启。
+- reload 后如果日志里出现 `[i18n] failed to load fr_fr.yml: ...`，说明文件有 YAML 语法错误，按日志信息修。
+- 某条 key 翻译缺失时，插件会自动回落到 `default-locale` 对应语言（不会崩），同时在日志里打一条 `[i18n] missing key: ...` 方便你补全。
+
+---
+
 ## 附：WebSocket 关闭码速查
 
 玩家网页断开时，浏览器控制台 / 服务器日志可能出现这些关闭码：
