@@ -68,6 +68,21 @@ command:
     by-world: "<gray>  Free by world: <world_breakdown></gray>"
     variables: "<gray>  Variables: <var_total> (<var_breakdown>)</gray>"
     animation: "<gray>  Animation: timeline walls <timeline_walls> · active tweens <tween_active></gray>"
+  diagnose:
+    header: "<gold>Diagnose <wall_id>:</gold>"
+    not-found: "<red>  ✗ Wall not found: <wall_id> (no such wall in database).</red>"
+    maps-ok: "<green>  ✓ Maps assigned: <map_count>/<expected> (<width>×<height>).</green>"
+    maps-missing: "<yellow>  ⚠ Maps mismatch: <map_count> assigned, expected <expected> (<width>×<height>). Pool: total=<pool_total> free=<pool_free> reserved=<pool_reserved>.</yellow>"
+    world-loaded: "<green>  ✓ World loaded: <world>.</green>"
+    world-unloaded: "<red>  ✗ World not loaded: <world> (the wall can't render until it loads).</red>"
+    session-active: "<gray>  ℹ Editor session: active (someone is editing now).</gray>"
+    session-none: "<gray>  ℹ Editor session: none (server is ready to render; nothing is driving updates).</gray>"
+    state-ok: "<green>  ✓ Project data: parsed OK (<layers> layers).</green>"
+    state-corrupt: "<red>  ✗ Project data: corrupt (project_json failed to parse).</red>"
+    anim-playing: "<gray>  ℹ Animation: playing a timeline.</gray>"
+    anim-static: "<gray>  ℹ Animation: static (no timeline playing).</gray>"
+    summary-ok: "<green>  → All checks passed. If it still won't show, open the editor once to drive a render.</green>"
+    summary-issues: "<yellow>  → First issue: <issue></yellow>"
   cleanup:
     stubbed: "<yellow>cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.</yellow>"
   reload:

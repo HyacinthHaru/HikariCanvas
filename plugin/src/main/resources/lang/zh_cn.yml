@@ -68,6 +68,21 @@ command:
     by-world: "<gray>  分世界空闲：<world_breakdown></gray>"
     variables: "<gray>  变量：<var_total>（<var_breakdown>）</gray>"
     animation: "<gray>  动画：时间轴墙 <timeline_walls> · 活跃补间 <tween_active></gray>"
+  diagnose:
+    header: "<gold>诊断 <wall_id>：</gold>"
+    not-found: "<red>  ✗ 找不到这块墙：<wall_id>（数据库里没有这块墙）。</red>"
+    maps-ok: "<green>  ✓ 地图已分配：<map_count>/<expected> 张（<width>×<height>）。</green>"
+    maps-missing: "<yellow>  ⚠ 地图数量对不上：已分配 <map_count> 张，应为 <expected> 张（<width>×<height>）。地图池：总数=<pool_total> 空闲=<pool_free> 已占用=<pool_reserved>。</yellow>"
+    world-loaded: "<green>  ✓ 世界已加载：<world>。</green>"
+    world-unloaded: "<red>  ✗ 世界未加载：<world>（世界没加载前这块墙没法渲染）。</red>"
+    session-active: "<gray>  ℹ 编辑会话：有人正在编辑。</gray>"
+    session-none: "<gray>  ℹ 编辑会话：无人编辑（后端已就绪待渲染，但没有前端在驱动更新）。</gray>"
+    state-ok: "<green>  ✓ 工程数据：解析正常（<layers> 个图层）。</green>"
+    state-corrupt: "<red>  ✗ 工程数据：已损坏（project_json 解析失败）。</red>"
+    anim-playing: "<gray>  ℹ 动画：正在播放时间轴。</gray>"
+    anim-static: "<gray>  ℹ 动画：静态（没有时间轴在播）。</gray>"
+    summary-ok: "<green>  → 所有检查通过。若仍不显示，打开一次编辑器驱动一帧渲染即可。</green>"
+    summary-issues: "<yellow>  → 首个问题：<issue></yellow>"
   cleanup:
     stubbed: "<yellow>cleanup 命令尚未实现，完整孤儿检测（孤儿展示框 / 地图池偏差）将在 M7 中完成。</yellow>"
   reload:

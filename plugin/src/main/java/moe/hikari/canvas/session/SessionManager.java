@@ -1147,6 +1147,28 @@ public final class SessionManager {
     }
 
     /**
+     * 0.9.2 可观测性（Task 2）：给定 {@code wallId} 判断是否有玩家正开着活跃编辑 session。
+     *
+     * <p>{@code byWall} 的 key 是 {@link WallKey}（位置标识）而非 wallId 字符串，无法按 wallId 直接
+     * 查；照 {@link #submitFullCanvasDirtyByWallAndReport} / {@code applyScript*} 的既定范式遍历
+     * {@code byId.values()} 按 {@link Session#wallId()} 匹配。</p>
+     *
+     * <p><b>线程</b>：纯无锁 {@link ConcurrentHashMap} 读 + per-session volatile getter（不取
+     * {@link #writeLock}，也不碰任何 Bukkit / MapPool API）——可从任意线程调用，不存在
+     * "持 writeLock 碰 Bukkit" 的死锁面。{@link SessionState#CLOSING} 的回收中 session 视作不活跃。</p>
+     *
+     * @return true = 至少一个非 CLOSING session 绑定到该 wall；false = 无人在编辑
+     */
+    public boolean isWallActive(String wallId) {
+        if (wallId == null) return false;
+        for (Session s : byId.values()) {
+            if (s.state() == SessionState.CLOSING) continue;
+            if (wallId.equals(s.wallId())) return true;
+        }
+        return false;
+    }
+
+    /**
      * 2026-05-14：对所有活跃 session 的 {@link moe.hikari.canvas.state.EditSession#purgeStaleStrokes}
      * 一并调用。由 {@link SessionReaper} 周期触发——确保用户永久离开后服务端
      * 不会积压 stroke buffer 内存（M12 brush 引入的潜在泄漏）。
