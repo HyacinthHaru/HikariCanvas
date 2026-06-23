@@ -44,6 +44,9 @@ public final class Messages {
         this.defaultLocale = byLocale.containsKey(n) ? n : "en_us";
     }
 
+    /** 当前默认 locale id（小写规范化）。用于"不分玩家"的输出（如磁盘报告文件）。 */
+    public String defaultLocale() { return defaultLocale; }
+
     public String rawOrNull(String localeId, String key) {
         YamlConfiguration cfg = byLocale.get(norm(localeId));
         return cfg == null ? null : cfg.getString(key);

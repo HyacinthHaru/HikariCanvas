@@ -459,27 +459,39 @@ public final class BenchmarkSubCommand {
 
     /** summary.txt 全文：环境 + config + 逐场景 percentile 表 + per-element 表 + GC + 基线。 */
     private String renderReportText(String selector, BenchmarkReport report) {
+        String loc = messages.defaultLocale();
+        java.util.function.Function<String, String> t =
+                k -> { String s = messages.rawOrNull(loc, k); return s == null ? k : s; };
         EnvInfo env = report.env();
         BenchmarkConfig cfg = report.config();
         StringBuilder sb = new StringBuilder();
-        sb.append("HikariCanvas 性能测试报告\n");
-        sb.append("测试场景: ").append(selector).append('\n');
-        sb.append("环境:     Java ").append(env.javaVersion())
+        sb.append(t.apply("command.bench.report-file.title")).append('\n');
+        sb.append(t.apply("command.bench.report-file.scene-prefix")).append(selector).append('\n');
+        sb.append(t.apply("command.bench.report-file.env-prefix")).append(env.javaVersion())
                 .append(" / ").append(env.osName()).append(' ').append(env.osArch()).append('\n');
-        sb.append("CPU:      ").append(env.availableProcessors()).append(" 核   最大内存 ")
+        sb.append(t.apply("command.bench.report-file.cpu-prefix")).append(env.availableProcessors())
+                .append(t.apply("command.bench.report-file.cpu-cores-mem"))
                 .append(env.maxHeapMb() < 0 ? "?" : env.maxHeapMb() + "MB").append('\n');
-        sb.append("内存回收方式: ").append(env.gcNames()).append('\n');
-        sb.append("测试设置: 正式 ").append(cfg.measuredIterations()).append(" 轮 + 预热 ")
-                .append(cfg.warmupIterations()).append(" 轮   (帧率=").append(cfg.fpsValues())
-                .append(", 观看人数=").append(cfg.viewerCounts())
-                .append(")\n");
-        sb.append("空白画面耗时: 空场景渲染 ")
-                .append(String.format("%.4f", report.blankBaselineMs())).append(" ms\n");
-        sb.append("内存回收:  ").append(report.gc().collectionCount()).append(" 次, 共 ")
-                .append(report.gc().collectionTimeMs()).append(" ms (含预热)\n");
+        sb.append(t.apply("command.bench.report-file.gc-method-prefix")).append(env.gcNames()).append('\n');
+        sb.append(t.apply("command.bench.report-file.settings-prefix")).append(cfg.measuredIterations())
+                .append(t.apply("command.bench.report-file.settings-warmup"))
+                .append(cfg.warmupIterations())
+                .append(t.apply("command.bench.report-file.settings-fps")).append(cfg.fpsValues())
+                .append(t.apply("command.bench.report-file.settings-viewers")).append(cfg.viewerCounts())
+                .append(t.apply("command.bench.report-file.settings-suffix")).append('\n');
+        sb.append(t.apply("command.bench.report-file.blank-prefix"))
+                .append(String.format("%.4f", report.blankBaselineMs()))
+                .append(t.apply("command.bench.report-file.blank-suffix")).append('\n');
+        sb.append(t.apply("command.bench.report-file.gc-prefix")).append(report.gc().collectionCount())
+                .append(t.apply("command.bench.report-file.gc-mid"))
+                .append(report.gc().collectionTimeMs())
+                .append(t.apply("command.bench.report-file.gc-suffix")).append('\n');
         sb.append("=================================================================\n");
         sb.append(String.format("%-28s  %-21s  %-21s  %10s%n",
-                "场景", "渲染 一般/偏慢/最慢", "调色板 一般/偏慢/最慢", "每轮内存"));
+                t.apply("command.bench.report-file.col-scene"),
+                t.apply("command.bench.report-file.col-rasterize"),
+                t.apply("command.bench.report-file.col-palette"),
+                t.apply("command.bench.report-file.col-alloc")));
         for (SceneResult r : report.scenes()) {
             Percentiles ra = r.rasterizeMs();
             Percentiles pa = r.paletteMs();
@@ -490,11 +502,13 @@ public final class BenchmarkSubCommand {
                     pa.p50(), pa.p95(), pa.p99(), alloc));
         }
         sb.append("-----------------------------------------------------------------\n");
-        sb.append("每个元素的额外耗时 (ms/个):\n");
+        sb.append(t.apply("command.bench.report-file.per-element-header")).append('\n');
         for (PerElementCost p : report.perElement()) {
-            sb.append(String.format("  %-10s x%-4d  %.5f ms/个   (单独测 %.4f ms, 场景 %s)%n",
-                    p.elementType(), p.elementCount(), p.marginalMsPerElement(),
-                    p.isolationSceneMeanMs(), p.sceneId()));
+            sb.append(String.format("  %-10s x%-4d  %.5f", p.elementType(), p.elementCount(), p.marginalMsPerElement()))
+                    .append(t.apply("command.bench.report-file.per-element-unit"))
+                    .append(String.format("%.4f", p.isolationSceneMeanMs()))
+                    .append(t.apply("command.bench.report-file.per-element-scene"))
+                    .append(p.sceneId()).append(")\n");
         }
         return sb.toString();
     }
