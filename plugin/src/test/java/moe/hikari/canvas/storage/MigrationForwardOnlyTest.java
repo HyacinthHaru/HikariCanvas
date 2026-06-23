@@ -36,7 +36,9 @@ class MigrationForwardOnlyTest {
             if (s.isEmpty()) continue;
             if (s.startsWith("DROP TABLE")) {
                 out.add("DROP TABLE 禁用: " + stmt.trim());
-            } else if (s.startsWith("ALTER TABLE") && s.contains(" DROP COLUMN ")) {
+            } else if (s.matches("ALTER TABLE \\S+ DROP\\b.*")) {
+                // SQLite 的 COLUMN 关键字可省略：DROP COLUMN c 与 DROP c 都算删列。
+                // 限定"表名后紧跟 DROP"避免 ADD COLUMN ... DEFAULT 'DROP x' 字符串误判。
                 out.add("DROP COLUMN 禁用: " + stmt.trim());
             } else if (s.startsWith("ALTER TABLE") && s.contains(" ALTER COLUMN ")) {
                 out.add("ALTER COLUMN 禁用: " + stmt.trim());
@@ -54,6 +56,8 @@ class MigrationForwardOnlyTest {
     @Test
     void forbidsDropAndAlterColumnFromFreeze() {
         assertFalse(violations(18, "ALTER TABLE x DROP COLUMN y;", FREEZE_FROM).isEmpty());
+        // SQLite 允许省略 COLUMN 关键字，也须拦截。
+        assertFalse(violations(18, "ALTER TABLE x DROP y;", FREEZE_FROM).isEmpty());
         assertFalse(violations(18, "ALTER TABLE x ALTER COLUMN y TYPE TEXT;", FREEZE_FROM).isEmpty());
     }
 
@@ -63,6 +67,9 @@ class MigrationForwardOnlyTest {
         assertTrue(violations(18, "CREATE TABLE z (id INTEGER PRIMARY KEY);", FREEZE_FROM).isEmpty());
         assertTrue(violations(18, "CREATE INDEX ix ON z(id);", FREEZE_FROM).isEmpty());
         assertTrue(violations(18, "ALTER TABLE x RENAME TO x_v018_archive;", FREEZE_FROM).isEmpty());
+        // ADD COLUMN 的字符串默认值含 'DROP' 不应被误判为删列。
+        assertTrue(violations(18,
+                "ALTER TABLE x ADD COLUMN note TEXT DEFAULT 'DROP it';", FREEZE_FROM).isEmpty());
     }
 
     @Test
