@@ -819,7 +819,7 @@ V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount �
 - `database.auto-backup-before-migration: true`（0.9.1 起 config 默认开）
 - 每个待执行 migration 前：先 `PRAGMA wal_checkpoint(TRUNCATE)` 把 WAL 已提交事务刷进主库，再 copy `data.db` + `-wal`/`-shm` → `data.db.pre-V<NNN>.bak`（+ `.bak-wal`/`.bak-shm`）。迁移在 onEnable 单线程跑、无并发写，故备份是一致快照。
 - **恢复**：停服 → 用 `.bak` 覆盖 `data.db`（连同 `.bak-wal`/`.bak-shm` 覆盖，或删除现有 `data.db-wal`/`-shm`）→ 启动。
-- 备份保留策略（30 天 + BackupReaper 自动清）留后续版本。
+- **备份保留策略**（0.9.1 已实装）：`BackupReaper` 在 migration 后启动期清理超过 `database.backup-retention-days`（默 30）天的 `data.db.pre-V<NNN>.bak`（含 `-wal`/`-shm`）。`0` = 永久保留，禁用清理。
 
 #### 6.6.3 Migration 测试要求（V018 起）
 

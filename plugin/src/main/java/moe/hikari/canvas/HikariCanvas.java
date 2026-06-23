@@ -32,6 +32,7 @@ import moe.hikari.canvas.storage.Database;
 import moe.hikari.canvas.storage.ImageUploadDao;
 import moe.hikari.canvas.storage.TemplateRepo;
 import moe.hikari.canvas.storage.WallRepo;
+import moe.hikari.canvas.storage.BackupReaper;
 import moe.hikari.canvas.storage.MigrationRunner;
 import moe.hikari.canvas.image.ImageQuotaService;
 import moe.hikari.canvas.image.ImageStorage;
@@ -242,6 +243,10 @@ public final class HikariCanvas extends JavaPlugin {
         new MigrationRunner(database.jdbi(), getLogger(),
                 config.databaseAutoBackup,
                 getDataFolder().toPath().resolve("data.db")).run();
+        // 备份保留策略：启动期清理超过保留天数的 migration 备份（0.9.1 BackupReaper）。
+        new BackupReaper(getLogger()).reap(
+                getDataFolder().toPath(), "data.db", config.backupRetentionDays,
+                System.currentTimeMillis());
         // M15.4 P0-33：AuditLog 接 logger，让 DB 失败时能 fallback 到 server log。
         auditLog = new AuditLog(database.jdbi(), getLogger());
 

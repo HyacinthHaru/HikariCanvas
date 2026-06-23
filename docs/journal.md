@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-06-23 · 0.9.1 备份保留（BackupReaper）
+
+补 0.9.1 数据契约闸留的尾——备份保留策略。仍 0.9.1-SNAPSHOT，不 bump 版本号。
+
+**做了什么**：启动期 migration 后跑 `BackupReaper.reap()`，清理超过 `database.backup-retention-days`（默 30）天的 `data.db.pre-V<NNN>.bak`（含 `-wal`/`-shm`）。`0` = 永久保留禁用清理。只动本插件产的备份文件，不碰 `data.db` 及其他文件。
+
+**关联文件**：
+- `storage/BackupReaper.java`（新建，纯逻辑、注入 nowMillis 便于单测）
+- `HikariCanvasConfig.java`（字段 `backupRetentionDays`，4 处：声明 / 构造赋值 / parse / builder 默认）
+- `HikariCanvas.java`（import + migration 后接线 `new BackupReaper(getLogger()).reap(...)`）
+- `resources/config.yml`（`database.backup-retention-days: 30`）
+- `docs/data-model.md §6.6.2`（"留后续版本"改为"已实装"）
+
+**测试**：`BackupReaperTest` 5 case（旧备份删 + 新备份留 + 无关文件不动 + retentionDays=0 禁用 + retentionDays<0 禁用 + 恰在截止点保留 + `.bak-shm` 覆盖）；全量 `:plugin:test` 2115+ 全绿。
+
+---
+
 ## 2026-06-23 · 0.9.1 数据契约闸（1.0 硬闸第一块）
 
 把"首次 stable 后必须 forward-only + 强制 auto-backup"从文档约定变成代码/测试落地，并把 **schema 冻结点提前到 V018**（V001-V017 grandfathered），抢在 1.0 之前一版进入冻结。subagent-driven（per-task implementer→review→fix + opus 整支终审）。版本号 0.8.3 → 0.9.1-SNAPSHOT。

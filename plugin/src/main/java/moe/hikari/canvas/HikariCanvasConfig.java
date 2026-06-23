@@ -102,6 +102,8 @@ public final class HikariCanvasConfig {
     // ---- database (M15.4) ----
     /** 跑 schema migration 前是否先备份 data.db。pre-release 默认 false。 */
     public final boolean databaseAutoBackup;
+    /** 备份保留天数：启动期自动清理超过此天数的 data.db.pre-V&lt;NNN&gt;.bak。≤0 = 永久保留。 */
+    public final int backupRetentionDays;
 
     // ---- dynamic (0.4.0-P4-P) ----
     /**
@@ -346,6 +348,7 @@ public final class HikariCanvasConfig {
         this.images = b.images;
         this.importConfig = b.importConfig;
         this.databaseAutoBackup = b.databaseAutoBackup;
+        this.backupRetentionDays = b.backupRetentionDays;
         this.pushRateLimitConfig = b.pushRateLimitConfig;
         this.scheduleConfig = b.scheduleConfig;
         this.userGlobalMaxPerOwner = b.userGlobalMaxPerOwner;
@@ -468,6 +471,7 @@ public final class HikariCanvasConfig {
 
         // database 段：0.9.1 起备份 WAL 安全，默认打开。
         b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", true);
+        b.backupRetentionDays = f.getInt("database.backup-retention-days", 30);
 
         // 0.4.0-P4-P：dynamic.push-rate-limit 段
         org.bukkit.configuration.ConfigurationSection rate =
@@ -721,6 +725,7 @@ public final class HikariCanvasConfig {
         ImageConfig images = ImageConfig.defaults();
         ImportConfig importConfig = ImportConfig.defaults();
         boolean databaseAutoBackup = true;
+        int backupRetentionDays = 30;
         moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
                 moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
         ScheduleConfig scheduleConfig = ScheduleConfig.defaults();
