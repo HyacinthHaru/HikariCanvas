@@ -221,7 +221,7 @@ class TweenSchedulerTest {
         TraceStep step = scheduler.enqueue("w-3", BLOCK, tb);
 
         assertEquals("error", step.result(), "超过 maxConcurrent 应返回 error");
-        assertTrue(step.detail() != null && step.detail().contains("上限"),
+        assertTrue(step.detail() != null && step.detail().contains("max concurrency"),
                 "error detail 应说明上限: " + step.detail());
     }
 

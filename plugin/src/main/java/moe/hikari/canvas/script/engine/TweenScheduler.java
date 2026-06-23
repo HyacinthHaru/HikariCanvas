@@ -252,20 +252,20 @@ public final class TweenScheduler {
      * @param onComplete 末帧落盘后的脚本续接回调（可 {@code null}）；本引擎一次性包装后在终结点触发
      */
     public TraceStep enqueue(String wallId, String blockId, Action.TweenBlock tb, Runnable onComplete) {
-        if (shutdown) return TraceStep.error(blockId, "补间引擎已关停");
-        if (wallId == null) return TraceStep.error(blockId, "wallId 缺失");
-        if (tb.body().isEmpty()) return TraceStep.error(blockId, "补间 body 为空");
+        if (shutdown) return TraceStep.error(blockId, "tween engine shut down");
+        if (wallId == null) return TraceStep.error(blockId, "wallId missing");
+        if (tb.body().isEmpty()) return TraceStep.error(blockId, "tween body is empty");
 
         // 并发数限制（已有同 wall 任务时接管，不计入 size 比较；先查 active.containsKey）
         boolean sameWallExists = active.containsKey(wallId);
         if (!sameWallExists && active.size() >= maxConcurrent) {
-            return TraceStep.error(blockId, "补间已达上限（" + maxConcurrent + "）");
+            return TraceStep.error(blockId, "tween at max concurrency (" + maxConcurrent + ")");
         }
 
         // 读 base state（从 DB，enqueue 时一次性拍快照）
         ProjectState baseState = wallLoader.load(wallId);
         if (baseState == null) {
-            return TraceStep.error(blockId, "wall 不存在或无 state: " + wallId);
+            return TraceStep.error(blockId, "wall not found or has no state: " + wallId);
         }
 
         // 收集 PropTarget（从 body 的 SetElementProperties 解析 to + 读当前值 from）
@@ -284,20 +284,20 @@ public final class TweenScheduler {
                 String toStr = entry.getValue();
                 // P3：支持数值 + color + fill 属性
                 if (!isTweenableProperty(property)) {
-                    return TraceStep.error(blockId, "补间不支持属性: " + property
-                            + "（支持: x/y/w/h/rotation/opacity/color/fill）");
+                    return TraceStep.error(blockId, "tween unsupported property: " + property
+                            + " (supported: x/y/w/h/rotation/opacity/color/fill)");
                 }
                 PropTarget target = buildTarget(baseState, existingForTakeover, nowForTakeover,
                         elementId, property, toStr, blockId);
                 if (target == null) {
-                    return TraceStep.error(blockId, "补间 target 构建失败: property=" + property
+                    return TraceStep.error(blockId, "tween target build failed: property=" + property
                             + " elementId=" + elementId);
                 }
                 targets.add(target);
             }
         }
         if (targets.isEmpty()) {
-            return TraceStep.error(blockId, "补间未解析到有效 targets");
+            return TraceStep.error(blockId, "tween resolved no valid targets");
         }
 
         // per-wall 帧率：从 baseState.effectiveTweenFps() 读取，并受 maxFps 硬上限 clamp
@@ -319,7 +319,7 @@ public final class TweenScheduler {
             // 不在此跑脚本续接。一次性保证由 old 自身的 oneShot 包装兜底。
             fireComplete(old);
         }
-        return TraceStep.ok(blockId, "action", "补间注册成功，targets=" + targets.size()
+        return TraceStep.ok(blockId, "action", "tween registered, targets=" + targets.size()
                 + " duration=" + tb.durationMs() + "ms");
     }
 
