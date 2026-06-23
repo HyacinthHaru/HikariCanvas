@@ -275,7 +275,7 @@ class Action073BehaviorTest {
         TraceStep step = ex.execute(WALL, "a/0",
                 new Action.RoundVariable("user/text", "round"));
         assertEquals("error", step.result());
-        assertTrue(step.detail().contains("非数值"), step.detail());
+        assertTrue(step.detail().contains("not numeric"), step.detail());
     }
 
     @Test
@@ -298,7 +298,7 @@ class Action073BehaviorTest {
         TraceStep step = ex.execute(WALL, "a/0",
                 new Action.ShowTitle("Big News", "Sub", 500, 2000, 500, "all"));
         assertEquals("ok", step.result(), step::detail);
-        assertTrue(step.detail().contains("全服"), step.detail());
+        assertTrue(step.detail().contains("broadcast"), step.detail());
     }
 
     /**
@@ -310,7 +310,7 @@ class Action073BehaviorTest {
         TraceStep step = ex.execute(WALL, "a/0",
                 new Action.ShowTitle("Hi", "there", 200, 3000, 200, "trigger"));
         assertEquals("ok", step.result(), step::detail);
-        assertTrue(step.detail().contains("跳过"), step.detail());
+        assertTrue(step.detail().contains("skipped"), step.detail());
     }
 
     // ────────── helpers ──────────
