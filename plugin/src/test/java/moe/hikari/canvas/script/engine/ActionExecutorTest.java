@@ -414,7 +414,7 @@ class ActionExecutorTest {
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("hi", "chat", "trigger"));
         assertEquals("ok", step.result());
-        assertTrue(step.detail().contains("无触发玩家"), step.detail());
+        assertTrue(step.detail().contains("no trigger player"), step.detail());
     }
 
     @Test
@@ -453,7 +453,7 @@ class ActionExecutorTest {
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("大家好", "chat", "all"));
         assertEquals("ok", step.result());
-        assertFalse(step.detail().contains("无触发玩家"),
+        assertFalse(step.detail().contains("no trigger player"),
                 "target=all 应走广播分支，不应因无触发玩家而跳过: " + step.detail());
     }
 
@@ -480,7 +480,7 @@ class ActionExecutorTest {
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("hi", "chat", "trigger"));
         assertEquals("ok", step.result());
-        assertTrue(step.detail().contains("无触发玩家"), step.detail());
+        assertTrue(step.detail().contains("no trigger player"), step.detail());
     }
 
     // ---------- 0.7.1：setRandomVariable ----------
@@ -838,7 +838,7 @@ class ActionExecutorTest {
         TraceStep step = executor().execute(WALL, "b",
                 new Action.RoundVariable("user/v", "round"));
         assertEquals("error", step.result(), () -> String.valueOf(step.detail()));
-        assertTrue(step.detail().contains("非数值"), step.detail());
+        assertTrue(step.detail().contains("not numeric"), step.detail());
         assertEquals("NaN", valueOf("user:w-1/v"), "error 不写回，变量值保持原样");
     }
 

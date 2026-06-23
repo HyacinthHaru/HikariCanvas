@@ -156,19 +156,19 @@ public final class ActionExecutor implements ActionSink {
                 case Action.ShowTitle a -> doShowTitle(wallId, blockId, a);
                 // wait / if / repeat / stopScript / waitUntil 由 Runner 处理；进到这里是 Runner
                 // 实现 bug → 防御 error（stopScript/waitUntil 真实现在 Runner，本批次外）
-                case Action.Wait a -> TraceStep.error(blockId, "wait 应由 ScriptRunner 处理");
-                case Action.If a -> TraceStep.error(blockId, "if 应由 ScriptRunner 处理");
-                case Action.Repeat a -> TraceStep.error(blockId, "repeat 应由 ScriptRunner 处理");
-                case Action.StopScript a -> TraceStep.error(blockId, "stopScript 应由 ScriptRunner 处理");
-                case Action.WaitUntil a -> TraceStep.error(blockId, "waitUntil 应由 ScriptRunner 处理");
+                case Action.Wait a -> TraceStep.error(blockId, "wait must be handled by ScriptRunner");
+                case Action.If a -> TraceStep.error(blockId, "if must be handled by ScriptRunner");
+                case Action.Repeat a -> TraceStep.error(blockId, "repeat must be handled by ScriptRunner");
+                case Action.StopScript a -> TraceStep.error(blockId, "stopScript must be handled by ScriptRunner");
+                case Action.WaitUntil a -> TraceStep.error(blockId, "waitUntil must be handled by ScriptRunner");
                 // 0.7.2-P3：repeatUntil 真实现在 ScriptRunner（动态循环 + RunState 轮数）；
                 // 进到这里是 Runner 实现 bug → 防御 error。
-                case Action.RepeatUntil a -> TraceStep.error(blockId, "repeatUntil 由 ScriptRunner 处理（占位）");
+                case Action.RepeatUntil a -> TraceStep.error(blockId, "repeatUntil is handled by ScriptRunner (placeholder)");
                 // tween P1 占位：TweenBlock 由 ScriptRunner（P1）/ TweenScheduler（P2）处理；
                 // 进到这里是 Runner 实现 bug → 防御 error。
-                case Action.TweenBlock a -> TraceStep.error(blockId, "tweenBlock 由 ScriptRunner 处理（P2 替换为 TweenScheduler）");
+                case Action.TweenBlock a -> TraceStep.error(blockId, "tweenBlock is handled by ScriptRunner (replaced by TweenScheduler in P2)");
                 // 0.7.3：RandomBranch 由 ScriptRunner 处理（控制流）；进到这里是 Runner 实现 bug。
-                case Action.RandomBranch a -> TraceStep.error(blockId, "randomBranch 应由 ScriptRunner 处理");
+                case Action.RandomBranch a -> TraceStep.error(blockId, "randomBranch must be handled by ScriptRunner");
             };
         } catch (RuntimeException e) {
             // 三层隔离兜底：单动作失败不断链
@@ -183,7 +183,7 @@ public final class ActionExecutor implements ActionSink {
 
     private TraceStep doSetVariable(String wallId, String blockId, Action.SetVariable a) {
         if (store == null || interpolator == null) {
-            return TraceStep.error(blockId, "VariableStore 未装配");
+            return TraceStep.error(blockId, "VariableStore not wired");
         }
         // value 过 ${var:X} 插值（与 Compositor 渲染期同一 VariableInterpolator 实现）
         String resolved = interpolator.interpolate(a.value(), wallId).text();
@@ -200,7 +200,7 @@ public final class ActionExecutor implements ActionSink {
 
     private TraceStep doIncrement(String wallId, String blockId, Action.IncrementVariable a) {
         if (store == null || storeLookup == null) {
-            return TraceStep.error(blockId, "VariableStore 未装配");
+            return TraceStep.error(blockId, "VariableStore not wired");
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
         // 读 cached 当前值（与 ConditionEvaluator.storeLookup 同链：fresh → default → null）；
@@ -223,13 +223,13 @@ public final class ActionExecutor implements ActionSink {
      */
     private TraceStep doCopyVariable(String wallId, String blockId, Action.CopyVariable a) {
         if (store == null) {
-            return TraceStep.error(blockId, "VariableStore 未装配");
+            return TraceStep.error(blockId, "VariableStore not wired");
         }
         String src = VariableInterpolator.resolveFullName(a.source(), wallId);
         String dst = VariableInterpolator.resolveFullName(a.target(), wallId);
         var srcVar = store.get(src).orElse(null);
         if (srcVar == null) {
-            return TraceStep.error(blockId, "源变量不存在: " + src);
+            return TraceStep.error(blockId, "source variable not found: " + src);
         }
         String value = srcVar.currentValue() != null ? srcVar.currentValue()
                 : (srcVar.defaultValue() != null ? srcVar.defaultValue() : "");
@@ -247,7 +247,7 @@ public final class ActionExecutor implements ActionSink {
      */
     private TraceStep doAppendVariable(String wallId, String blockId, Action.AppendVariable a) {
         if (store == null || interpolator == null) {
-            return TraceStep.error(blockId, "VariableStore 未装配");
+            return TraceStep.error(blockId, "VariableStore not wired");
         }
         String dst = VariableInterpolator.resolveFullName(a.fullName(), wallId);
         String add = interpolator.interpolate(a.text(), wallId).text();
@@ -277,7 +277,7 @@ public final class ActionExecutor implements ActionSink {
     private TraceStep doSetElementProperty(String wallId, String blockId,
                                            Action.SetElementProperty a) {
         if (applier == null) {
-            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+            return TraceStep.error(blockId, "ElementPropertyApplier not wired");
         }
         return applier.apply(wallId, blockId, a.elementId(), a.property(), a.value());
     }
@@ -286,13 +286,13 @@ public final class ActionExecutor implements ActionSink {
 
     private TraceStep doPlayTimeline(String wallId, String blockId, Action.PlayTimeline a) {
         if (ticker == null) {
-            return TraceStep.error(blockId, "AnimationTicker 未装配");
+            return TraceStep.error(blockId, "AnimationTicker not wired");
         }
         switch (String.valueOf(a.op())) {
             case "play" -> {
                 AnimationTicker.Result r = ticker.play(wallId, a.timelineId());
                 if (r != AnimationTicker.Result.OK) {
-                    return TraceStep.error(blockId, "play 失败: " + r);
+                    return TraceStep.error(blockId, "play failed: " + r);
                 }
                 return TraceStep.ok(blockId, "action", "play " + a.timelineId());
             }
@@ -302,16 +302,16 @@ public final class ActionExecutor implements ActionSink {
             }
             case "seek" -> {
                 if (a.seekMs() == null) {
-                    return TraceStep.error(blockId, "seek 缺 seekMs");
+                    return TraceStep.error(blockId, "seek missing seekMs");
                 }
                 AnimationTicker.Result r = ticker.seek(wallId, a.timelineId(), a.seekMs());
                 if (r != AnimationTicker.Result.OK) {
-                    return TraceStep.error(blockId, "seek 失败: " + r);
+                    return TraceStep.error(blockId, "seek failed: " + r);
                 }
                 return TraceStep.ok(blockId, "action", "seek " + a.seekMs() + "ms");
             }
             default -> {
-                return TraceStep.error(blockId, "未知 timeline op: " + a.op());
+                return TraceStep.error(blockId, "unknown timeline op: " + a.op());
             }
         }
     }
@@ -321,18 +321,18 @@ public final class ActionExecutor implements ActionSink {
     private TraceStep doPlaySound(String wallId, String blockId, Action.PlaySound a) {
         boolean near = "near".equals(a.scope());
         if (!near && !"all".equals(a.scope())) {
-            return TraceStep.error(blockId, "未知 scope: " + a.scope());
+            return TraceStep.error(blockId, "unknown scope: " + a.scope());
         }
         if (wallRepo == null) {
-            return TraceStep.error(blockId, "playSound 不可用（WallRepo 未装配）");
+            return TraceStep.error(blockId, "playSound unavailable (WallRepo not wired)");
         }
         WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
         if (wall == null) {
-            return TraceStep.error(blockId, "wall 不存在: " + wallId);
+            return TraceStep.error(blockId, "wall not found: " + wallId);
         }
         if (near && wall.key() == null) {
             // near 需要墙坐标（WallKey：world + origin）；DB 行恒有 key，这里是防御
-            return TraceStep.error(blockId, "wall 无坐标（key 缺失），near 不可用");
+            return TraceStep.error(blockId, "wall has no coordinates (key missing); near unavailable");
         }
         // soundId 同步解析（Registry 是只读表，任意线程读安全）：查无 → error step 不抛
         Sound sound;
@@ -342,11 +342,11 @@ public final class ActionExecutor implements ActionSink {
             sound = key == null ? null : org.bukkit.Registry.SOUNDS.get(key);
         } catch (RuntimeException | NoClassDefFoundError | ExceptionInInitializerError e) {
             // 无 Bukkit server 环境（纯单测路径）Registry 静态初始化会失败——归为解析失败
-            return TraceStep.error(blockId, "声音解析失败: " + a.soundId()
+            return TraceStep.error(blockId, "sound parse failed: " + a.soundId()
                     + " (" + e.getClass().getSimpleName() + ")");
         }
         if (sound == null) {
-            return TraceStep.error(blockId, "声音不存在: " + a.soundId());
+            return TraceStep.error(blockId, "sound not found: " + a.soundId());
         }
         float volume = (float) a.volume();
         float pitch = (float) a.pitch();
@@ -389,11 +389,11 @@ public final class ActionExecutor implements ActionSink {
 
     private TraceStep doPlayParticle(String wallId, String blockId, Action.PlayParticle a) {
         if (wallRepo == null) {
-            return TraceStep.error(blockId, "playParticle 不可用（WallRepo 未装配）");
+            return TraceStep.error(blockId, "playParticle unavailable (WallRepo not wired)");
         }
         WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
         if (wall == null || wall.key() == null) {
-            return TraceStep.error(blockId, "wall 不存在: " + wallId);
+            return TraceStep.error(blockId, "wall not found: " + wallId);
         }
         // 解析 particle → Particle（Registry 只读表，任意线程读安全；同 playSound 的 Registry.SOUNDS 范式）
         org.bukkit.Particle particle;
@@ -403,11 +403,11 @@ public final class ActionExecutor implements ActionSink {
             particle = key == null ? null : org.bukkit.Registry.PARTICLE_TYPE.get(key);
         } catch (RuntimeException | NoClassDefFoundError | ExceptionInInitializerError e) {
             // 无 Bukkit server 环境（纯单测路径）Registry 静态初始化会失败——归为解析失败
-            return TraceStep.error(blockId, "粒子解析失败: " + a.particle()
+            return TraceStep.error(blockId, "particle parse failed: " + a.particle()
                     + " (" + e.getClass().getSimpleName() + ")");
         }
         if (particle == null) {
-            return TraceStep.error(blockId, "粒子不存在: " + a.particle());
+            return TraceStep.error(blockId, "particle not found: " + a.particle());
         }
         WallRepo.Wall w = wall;
         org.bukkit.Particle p = particle;
@@ -515,7 +515,7 @@ public final class ActionExecutor implements ActionSink {
     private TraceStep doSetElementProperties(String wallId, String blockId,
                                              Action.SetElementProperties a) {
         if (applier == null) {
-            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+            return TraceStep.error(blockId, "ElementPropertyApplier not wired");
         }
         return applier.applyMany(wallId, blockId, a.elementId(), a.patch());
     }
@@ -523,7 +523,7 @@ public final class ActionExecutor implements ActionSink {
     /** 相对移动 → {@link ElementPropertyApplier#applyNudge}（运行时读当前 x/y + delta）。 */
     private TraceStep doNudge(String wallId, String blockId, Action.NudgeElement a) {
         if (applier == null) {
-            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+            return TraceStep.error(blockId, "ElementPropertyApplier not wired");
         }
         return applier.applyNudge(wallId, blockId, a.elementId(), a.dx(), a.dy());
     }
@@ -531,7 +531,7 @@ public final class ActionExecutor implements ActionSink {
     /** 0.7.2-P2：克隆元素 → {@link ElementPropertyApplier#applyClone}（双路径 + F10 配额）。 */
     private TraceStep doCloneElement(String wallId, String blockId, Action.CloneElement a) {
         if (applier == null) {
-            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+            return TraceStep.error(blockId, "ElementPropertyApplier not wired");
         }
         return applier.applyClone(wallId, blockId, a.elementId(), a.offsetX(), a.offsetY());
     }
@@ -539,7 +539,7 @@ public final class ActionExecutor implements ActionSink {
     /** 0.7.2-P2：删除元素 → {@link ElementPropertyApplier#applyDelete}（双路径）。 */
     private TraceStep doDeleteElement(String wallId, String blockId, Action.DeleteElement a) {
         if (applier == null) {
-            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+            return TraceStep.error(blockId, "ElementPropertyApplier not wired");
         }
         return applier.applyDelete(wallId, blockId, a.elementId());
     }
@@ -554,7 +554,7 @@ public final class ActionExecutor implements ActionSink {
     private TraceStep doSendMessage(String wallId, String blockId, Action.SendMessage a) {
         String channel = a.channel();
         if (!"chat".equals(channel) && !"actionbar".equals(channel) && !"title".equals(channel)) {
-            return TraceStep.error(blockId, "未知 channel: " + channel);
+            return TraceStep.error(blockId, "unknown channel: " + channel);
         }
         String msg = interpolator == null ? a.text()
                 : interpolator.interpolate(a.text(), wallId).text();
@@ -574,12 +574,12 @@ public final class ActionExecutor implements ActionSink {
             } else {
                 Bukkit.getScheduler().runTask(plugin, work);
             }
-            return TraceStep.ok(blockId, "action", "msg→全服 (" + channel + ")");
+            return TraceStep.ok(blockId, "action", "msg -> broadcast (" + channel + ")");
         }
         // target=trigger（默认）：发给触发该脚本的玩家
         String who = ScriptRunner.currentTriggerDetail();
         if (who == null || who.isBlank()) {
-            return TraceStep.ok(blockId, "action", "无触发玩家，跳过");
+            return TraceStep.ok(blockId, "action", "no trigger player; skipped");
         }
         Runnable work = () -> {
             try {
@@ -595,7 +595,7 @@ public final class ActionExecutor implements ActionSink {
         } else {
             Bukkit.getScheduler().runTask(plugin, work);
         }
-        return TraceStep.ok(blockId, "action", "msg→" + who + " (" + channel + ")");
+        return TraceStep.ok(blockId, "action", "msg -> " + who + " (" + channel + ")");
     }
 
     /** 按 channel 把已插值的 msg 发给单个玩家（chat/actionbar/title）。须在主线程调用。 */
@@ -612,10 +612,10 @@ public final class ActionExecutor implements ActionSink {
     /** 随机数 [min,max] 闭区间。min&gt;max → error。两端皆整 → 整数随机（含 max，roll dice 体验）。 */
     private TraceStep doSetRandom(String wallId, String blockId, Action.SetRandomVariable a) {
         if (store == null) {
-            return TraceStep.error(blockId, "VariableStore 未装配");
+            return TraceStep.error(blockId, "VariableStore not wired");
         }
         if (!Double.isFinite(a.min()) || !Double.isFinite(a.max()) || a.min() > a.max()) {
-            return TraceStep.error(blockId, "随机区间非法: " + a.min() + ".." + a.max());
+            return TraceStep.error(blockId, "invalid random range: " + a.min() + ".." + a.max());
         }
         double v = a.min() + rng.nextDouble() * (a.max() - a.min());
         // 两端皆整 + 跨度可装进 int → 取整数随机（含 max）；否则保留上面的连续采样（防 int 溢出）
@@ -636,17 +636,17 @@ public final class ActionExecutor implements ActionSink {
     /** 变量乘 / 除。读当前值（StrictNumber，非数值作 0）→ × / ÷ → 写回。divide by 0 → error。 */
     private TraceStep doScale(String wallId, String blockId, Action.ScaleVariable a) {
         if (store == null || storeLookup == null) {
-            return TraceStep.error(blockId, "VariableStore 未装配");
+            return TraceStep.error(blockId, "VariableStore not wired");
         }
         boolean mul = "multiply".equals(a.op());
         if (!mul && !"divide".equals(a.op())) {
-            return TraceStep.error(blockId, "未知 op: " + a.op());
+            return TraceStep.error(blockId, "unknown op: " + a.op());
         }
         if (!Double.isFinite(a.factor())) {
-            return TraceStep.error(blockId, "factor 必须有限");
+            return TraceStep.error(blockId, "factor must be finite");
         }
         if (!mul && a.factor() == 0.0) {
-            return TraceStep.error(blockId, "除数不能为 0");
+            return TraceStep.error(blockId, "divisor must not be 0");
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
         double base = StrictNumber.parse(storeLookup.apply(fullName));
@@ -663,14 +663,14 @@ public final class ActionExecutor implements ActionSink {
     /** 播时间轴：触发 play（挂起 durationMs 由 Runner 经 {@link #timelineDurationMs} 处理）。 */
     private TraceStep doPlayTimelineAwait(String wallId, String blockId, Action.PlayTimelineAwait a) {
         if (ticker == null) {
-            return TraceStep.error(blockId, "AnimationTicker 未装配");
+            return TraceStep.error(blockId, "AnimationTicker not wired");
         }
         if (a.timelineId() == null || a.timelineId().isBlank()) {
-            return TraceStep.error(blockId, "缺 timelineId");
+            return TraceStep.error(blockId, "missing timelineId");
         }
         AnimationTicker.Result r = ticker.play(wallId, a.timelineId());
         if (r != AnimationTicker.Result.OK) {
-            return TraceStep.error(blockId, "play 失败: " + r);
+            return TraceStep.error(blockId, "play failed: " + r);
         }
         return TraceStep.ok(blockId, "action", "playAwait " + a.timelineId());
     }
@@ -680,7 +680,7 @@ public final class ActionExecutor implements ActionSink {
     /** 元素置顶/置底 → {@link ElementPropertyApplier#applySetElementLayer}（双路径）。 */
     private TraceStep doSetElementLayer(String wallId, String blockId, Action.SetElementLayer a) {
         if (applier == null) {
-            return TraceStep.error(blockId, "ElementPropertyApplier 未装配");
+            return TraceStep.error(blockId, "ElementPropertyApplier not wired");
         }
         return applier.applySetElementLayer(wallId, blockId, a.elementId(), a.mode());
     }
@@ -694,14 +694,14 @@ public final class ActionExecutor implements ActionSink {
      */
     private TraceStep doRoundVariable(String wallId, String blockId, Action.RoundVariable a) {
         if (store == null || storeLookup == null) {
-            return TraceStep.error(blockId, "VariableStore 未装配");
+            return TraceStep.error(blockId, "VariableStore not wired");
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
         String raw = storeLookup.apply(fullName);
         // 非严格数值（abc / 0x1p4 / 5d / Infinity / NaN）→ error step（区别于 doIncrement/doScale
         // 的「按 0」：取整非数值无意义，让用户在 trace 看到）。StrictNumber.PATTERN 严格判定。
         if (raw == null || !StrictNumber.PATTERN.matcher(raw.trim()).matches()) {
-            return TraceStep.error(blockId, "roundVariable " + fullName + "：非数值，无法取整");
+            return TraceStep.error(blockId, "roundVariable " + fullName + ": not numeric, cannot round");
         }
         double parsed = StrictNumber.parse(raw);
         double result = switch (a.mode()) {
@@ -748,12 +748,12 @@ public final class ActionExecutor implements ActionSink {
             } else {
                 Bukkit.getScheduler().runTask(plugin, work);
             }
-            return TraceStep.ok(blockId, "action", "title→全服");
+            return TraceStep.ok(blockId, "action", "title -> broadcast");
         }
         // target=trigger：发给触发玩家
         String who = ScriptRunner.currentTriggerDetail();
         if (who == null || who.isBlank()) {
-            return TraceStep.ok(blockId, "action", "无触发玩家，showTitle 跳过");
+            return TraceStep.ok(blockId, "action", "no trigger player; showTitle skipped");
         }
         Runnable work = () -> {
             try {
@@ -769,7 +769,7 @@ public final class ActionExecutor implements ActionSink {
         } else {
             Bukkit.getScheduler().runTask(plugin, work);
         }
-        return TraceStep.ok(blockId, "action", "title→" + who);
+        return TraceStep.ok(blockId, "action", "title -> " + who);
     }
 
     /**
