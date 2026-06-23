@@ -748,7 +748,7 @@ plugin/src/main/resources/db-migrations/
 1. 读 `schema_version` 表最大 version `N`
 2. 遍历 `MigrationRunner.MIGRATIONS`，对 `version > N` 的条目按序应用
 3. 每应用一个脚本 → 在 `schema_version` 表插入新 row
-4. **每个 migration 各自包一个事务**（M15.4 P0-28），失败回滚不留半态；可选 `auto-backup`（pre-release 默认关）
+4. **每个 migration 各自包一个事务**（M15.4 P0-28），失败回滚不留半态；事务前 WAL 安全 `auto-backup`（0.9.1 起默认开，见 §6.6.2）
 
 **0.6 例外（无 schema 变更）：** 0.6 时间轴把协议版本由 2 升至 3（详见 `protocol.md`），但**不引入新的 DB schema 版本**——无新表、无 `ALTER`，`timelines` / 关键帧轨全在 `walls.project_json` blob 层加（§2.4.2）。与历来"每次 DB 变更 +1"（§6.1）的惯例对照：本次变更不触碰任何表结构，故 `schema_version` 不动；版本演进体现在 `project_json` 内部的 `protocolVersion` 字段（lazy on-write 写成 3），而非 schema 整数。
 
@@ -786,41 +786,46 @@ CREATE INDEX/UNIQUE INDEX ...;
 
 ### 6.4 备份与恢复
 
-插件不主动备份 DB。但文档提示：
-- `data.db` 应随世界文件一并快照
+**0.9.1 起**：每次 schema migration 前自动 WAL 安全备份（见 §6.6.2；`database.auto-backup-before-migration` 默认开）。这是"迁移前兜底"，不是周期性快照。
+
+日常运维仍建议：
+- `data.db` 应随世界文件一并快照（迁移前备份只覆盖 migration 时点）
 - 恢复时确保 DB 与世界文件的时间一致，否则 map 与 PDC 可能不匹配
 
 ### 6.6 Migration 兼容性规则（pre-release vs stable 发版）
 
-> **M15.4 P0-28/29 落地**（2026-05-16）：M15 之前 migration 走的是"激进 drop+recreate"（如 V005 整体重置），适合 pre-release 阶段；首次 stable（≥1.0.0）之后必须切到 forward-only + 强制 auto-backup。
+> **数据契约闸 0.9.1 落地**（2026-06-23）：M15 之前 migration 走"激进 drop+recreate"（如 V005 整体重置），适合 pre-release。0.9.1 把"首次 stable 后必须 forward-only + 强制 auto-backup"从文档约定变成**代码/测试落地**——并把 **schema 冻结点提前到 V018**（V001-V017 grandfathered，自 V018 起强制 forward-only），抢在 1.0 之前一个版本进入冻结。
 >
-> **版本语义**（M18 后调整）：`0.x.y-SNAPSHOT` 全部视为 pre-release 阶段，允许激进改 schema；`1.0.0` 起视为 stable 发版。当前 `0.2.0-SNAPSHOT` 仍处 pre-release。
+> **版本语义**：`0.x.y-SNAPSHOT` 历来视为 pre-release（允许激进改 schema）；但 **schema 实际已自 V018 冻结**（forward-only 守卫强制起始版本），不再等到 1.0.0。当前最高迁移 V017。
 
-#### 6.6.1 Pre-release（0.x SNAPSHOT）
+#### 6.6.1 Pre-release schema（V001-V017，grandfathered）
 
-允许激进改 schema：V<N+1> 可 `DROP` 旧表 / 重命名列 / 删字段。
-`database.auto-backup-before-migration` config 默认 `false`。
+V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount 等），forward-only 守卫不追溯，原样保留。
 
-#### 6.6.2 Stable（≥1.0.0）发版后
+#### 6.6.2 Forward-only（V018 起强制）
 
-强制 forward-only：
+**强制 forward-only**（由 `MigrationForwardOnlyTest` 编译期守卫——扫 `db-migrations/*.sql`，V018+ 命中即 fail）：
 
-- 不允许 `DROP TABLE` / `DROP COLUMN`（用户数据可能丢失）
-- 不允许 `ALTER COLUMN` type 改变（兼容性破坏）
+- 禁 `DROP TABLE` / `DROP COLUMN`（含 SQLite 省略 `COLUMN` 关键字的 `ALTER TABLE t DROP c`）
+- 禁 `ALTER COLUMN` type 改变
 - 新加列 `ADD COLUMN` 必须有 default 值或 nullable
 - 列删除走"逻辑删除"（保留物理列 + 应用层不用）
-- 表删除走"重命名为 `_v<NNN>_archive`"（保留 30 天后清）
+- 表删除走"重命名为 `_v<NNN>_archive`"
+- **确需破坏性变更**：在该 `.sql` 顶部加 `-- @forward-only-exempt: <理由>` 显式豁免（需 code review）
 
-强制 auto-backup：
+**强制 auto-backup**（`MigrationRunner.tryBackup`，**WAL 安全**）：
 
-- `database.auto-backup-before-migration: true`（config 默认值改）
-- 每个 migration 前自动 `cp data.db data.db.pre-V<NNN>.bak`
-- 备份保留 30 天，超出由 BackupReaper（v2 加）清
+- `database.auto-backup-before-migration: true`（0.9.1 起 config 默认开）
+- 每个待执行 migration 前：先 `PRAGMA wal_checkpoint(TRUNCATE)` 把 WAL 已提交事务刷进主库，再 copy `data.db` + `-wal`/`-shm` → `data.db.pre-V<NNN>.bak`（+ `.bak-wal`/`.bak-shm`）。迁移在 onEnable 单线程跑、无并发写，故备份是一致快照。
+- **恢复**：停服 → 用 `.bak` 覆盖 `data.db`（连同 `.bak-wal`/`.bak-shm` 覆盖，或删除现有 `data.db-wal`/`-shm`）→ 启动。
+- 备份保留策略（30 天 + BackupReaper 自动清）留后续版本。
 
-#### 6.6.3 Migration 测试要求（stable 发版后）
+#### 6.6.3 Migration 测试要求（V018 起）
 
-每个新 migration 必须有 fixture 测试：跑 V<N-1> baseline DB → V<N> →
-验证关键查询仍返同等价数据。测试 fixture 在 `plugin/src/test/resources/migration-fixtures/V<NNN>__before.sql`。
+每个新 migration 必须有 fixture 测试（基建 `MigrationFixtureTestBase` 0.9.1 已就位）：
+`runUpTo(V<N-1>)` 建 baseline → 灌 `migration-fixtures/V<NNN>__<name>/before.sql` 种子数据 →
+`runUpTo(V<N>)` 应用目标迁移 → 子类断言关键查询数据无损 / 新结构正确。
+示范见 `V017WallScriptsFixtureTest`；加新 fixture 的步骤见 `migration-fixtures/README.md`。
 
 详见 `docs/journal.md` 2026-05-16 M15.4 条目（P0-28/29 落地）。
 

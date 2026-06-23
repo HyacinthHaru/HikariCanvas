@@ -140,12 +140,12 @@ security:
     # 每 IP 每分钟可尝试的 token 次数。下界 1（即每分钟只准 1 次，过严）。
     per-minute: 10
 
-# 数据库 / 迁移（M15.4）
+# 数据库 / 迁移
 database:
-  # 跑 schema migration 前自动备份 data.db 到 data.db.pre-V<NNN>.bak。
-  # 多个 migration 各备份一份，文件名带版本号方便回滚。
-  # pre-release（0.1.x SNAPSHOT）默认关；0.1.0 发版后建议改 true。
-  auto-backup-before-migration: false
+  # 跑 schema migration 前自动备份 data.db 到 data.db.pre-V<NNN>.bak（含 -wal/-shm）。
+  # 0.9.1 起备份做了 WAL 安全（先 wal_checkpoint(TRUNCATE) 再拷），默认打开。
+  # 恢复：停服 → 用 .bak 覆盖 data.db（连同 .bak-wal/.bak-shm 覆盖 data.db-wal/-shm，或删除现有 -wal/-shm）→ 启动。
+  auto-backup-before-migration: true
 
 # 动态数据（0.4.0）
 # 详见 docs/dynamic-data.md

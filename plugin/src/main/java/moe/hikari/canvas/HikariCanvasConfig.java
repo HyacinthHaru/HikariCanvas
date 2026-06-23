@@ -466,8 +466,8 @@ public final class HikariCanvasConfig {
                 Math.max(1, f.getInt("import.canvas-max-entry-mb", importDefaults.canvasMaxEntryMb())),
                 Math.max(1, f.getInt("import.canvas-max-total-mb", importDefaults.canvasMaxTotalMb())));
 
-        // M15.4 P0-29 database 段
-        b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", false);
+        // database 段：0.9.1 起备份 WAL 安全，默认打开。
+        b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", true);
 
         // 0.4.0-P4-P：dynamic.push-rate-limit 段
         org.bukkit.configuration.ConfigurationSection rate =
@@ -720,7 +720,7 @@ public final class HikariCanvasConfig {
         int templatesMaxPerPlayer = 20;
         ImageConfig images = ImageConfig.defaults();
         ImportConfig importConfig = ImportConfig.defaults();
-        boolean databaseAutoBackup = false;
+        boolean databaseAutoBackup = true;
         moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
                 moe.hikari.canvas.variable.plugin.PushRateLimiter.Config.defaults();
         ScheduleConfig scheduleConfig = ScheduleConfig.defaults();
