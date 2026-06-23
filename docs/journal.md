@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-06-23 · 0.8.3 i18n 收尾（benchmark per-player i18n + summary.txt + script.trace 英文化）
+
+收掉 0.8.2 留的两处 i18n 缺口。subagent-driven（per-task implementer→review→fix + opus 整支终审）。版本号 0.8.2 → 0.8.3-SNAPSHOT。
+
+**缺口一 · benchmark 压测摘要**：
+- `run-tween`/`run-script` 玩家可见摘要做**真 per-player i18n**：两个 driver（`TweenBenchmarkDriver`/`ScriptBenchmarkDriver`）从"返回中文成品字符串"改为返回结构化行 `List<BenchRow>`，由 `BenchmarkSubCommand.sendBenchRows` 按玩家 locale 用 `Messages` 组装 done/subtitle/表头/数据行/脚注（新 `command.bench.run-tween.*`/`run-script.*` 各 4 key，zh+en）。数字仍 `String.format` 宽度对齐填 `Placeholder.unparsed`。
+- `summary.txt` 磁盘报告（`renderReportText`）改为按 config **default-locale** 渲染（文件不分玩家、跟随服主默认语言）：新 `Messages.defaultLocale()` getter + 中文片段抽 `command.bench.report-file.*`（纯文本无 MiniMessage 标签），`String.format` 宽度结构保留、数字/sceneId 不翻译。
+- driver 那处中文超时 logger 英文化。
+
+**缺口二 · script.trace 试跑诊断英文化**（统一英文化，不进 lang、不改 `TraceStep` 结构、不碰前端——真 per-player i18n 留待将来前端做 detail 展示 UI 时连结构重构一起做）：
+- `ActionExecutor`(52) / `ScriptRunner`(14) / `ElementPropertyApplier`(22) trace detail + 诊断中文就地英文化（中文箭头 `→`→`->`）。
+- **范围补登**：0.8.2 那条已知缺口 note 只列了 3 文件，**低估了范围**——全量回归（`Action073BehaviorTest` 失败）暴露 `script/engine/` 包还有 `TweenScheduler`(10)、`CommandTemplateEngine`(7)、`TriggerRouter`(1)、`ConditionEvaluator`(1) 同样产出中文 trace detail。用户拍板"折进 0.8.3 一起收"→ 补做 Task 6/7。
+- **opus 整支终审完整性普查**又抓出一处文件清单 scope 漏网：`HikariCanvas:931` 试跑入口 lambda 的 `TraceStep.error("规则不存在")`（藏在装配代码、不在 engine 包，但正是 script.trace channel）→ 英文化为 `"rule not found"`。
+- 至此 engine 包逐文件 + 装配代码 + benchmark 的玩家/编辑器可见中文运行时串清零（终审实证）。
+
+**过程教训（已固化到本次 plan）**：① per-task 测试**必须跑全量** `:plugin:test`——Task 3 只跑 `*ActionExecutorTest`，漏了跨套件断言它 detail 的 `Action073BehaviorTest`，被全量回归抓出补修（commit 2e03cadb）。② Gap 范围别只信旧 note 的文件清单，要按 channel（"凡产 script.trace detail 的代码"）全包扫——TweenScheduler / HikariCanvas 两次漏网都源于此。
+
+**明确留后续（非 0.8.3 范围，据实记录）**：
+- **脚本编辑器「保存校验报错」中文** = `ScriptOpDispatcher`(6) + `ScriptRuleValidator`(**97**) ≈ 103 串。这是 SCRIPT_INVALID 保存 reject 文案（**非** script.trace channel），是一整片独立的"编辑器校验报错 i18n"课题；只修 dispatcher 而留 validator 会造成同类中英混杂，故不在 0.8.3 半做，留独立批次。
+- 预存量（口径透明）：`report.html`（`HtmlReportRenderer`）/ `BudgetFormula.DISCLAIMER` / `BenchCompositor` 启动异常仍中文——服主可见磁盘产物/日志，不在 0.8.2/0.8.3 任何缺口清单内。
+
+**测试**：全量 `:plugin:test` **2101** 全绿（含 driver 结构化测试重写 + 各文件断言英文同步 + `LangFileParityTest`）；shadowJar `HikariCanvas-0.8.3-SNAPSHOT.jar`。0 baseline 漂移。
+
+**0.8.2 两处已知缺口至此关闭**（script.trace 试跑诊断 ✅ 全包英文化；benchmark 驱动摘要 ✅ 真 i18n）。
+
+关联文件（生产）：`benchmark/{BenchRow(新),ScriptBenchmarkDriver,TweenBenchmarkDriver}`、`command/BenchmarkSubCommand`、`i18n/Messages`、`script/engine/{ActionExecutor,ScriptRunner,ElementPropertyApplier,TweenScheduler,CommandTemplateEngine,TriggerRouter,ConditionEvaluator}`、`HikariCanvas`、`resources/lang/{en_us,zh_cn}.yml`；测试 5 文件断言同步；版本号 6 文件 → 0.8.3-SNAPSHOT。
+
+---
+
 ## 2026-06-23 · 0.8.2 i18n（插件本体国际化）+ 0.8.1 文档版本引用同步
 
 **i18n 双端国际化**：后端从零搭 i18n + 前端收尾，玩家游戏内文字按 MC 客户端语言显示，统一现有英/中混用。
