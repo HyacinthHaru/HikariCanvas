@@ -230,11 +230,11 @@ public final class DiagnosticsSubCommand {
             if (in.rawRowExists()) {
                 // 行物理存在但 loadById 为空 = project_json 解析失败 → state-corrupt，停。
                 messages.send(sender, "command.diagnose.state-corrupt");
-                summaryIssues(sender, "command.diagnose.state-corrupt");
+                messages.send(sender, "command.diagnose.summary-issues");
             } else {
                 messages.send(sender, "command.diagnose.not-found",
                         Placeholder.unparsed("wall_id", wallId));
-                summaryIssues(sender, "command.diagnose.not-found");
+                messages.send(sender, "command.diagnose.summary-issues");
             }
             return Command.SINGLE_SUCCESS;
         }
@@ -298,27 +298,10 @@ public final class DiagnosticsSubCommand {
         if (firstIssueKey == null) {
             messages.send(sender, "command.diagnose.summary-ok");
         } else {
-            summaryIssues(sender, firstIssueKey);
+            // 通用总结行（指向上方第一处问题环节）；不再嵌带占位符的 issue 文本，避免值被剥空。
+            messages.send(sender, "command.diagnose.summary-issues");
         }
         return Command.SINGLE_SUCCESS;
-    }
-
-    /**
-     * 发 summary-issues 行：把首个问题环节的 lang 文本（去掉 MiniMessage 标签 / 占位符 / 缩进）作为
-     * {@code <issue>} 注入，避免再嵌一层颜色标签。文本取自调用者 locale 的同一 lang 行。
-     */
-    private void summaryIssues(CommandSender sender, String issueKey) {
-        String localeId = messages.localeId(sender);
-        String raw = messages.rawOrNull(localeId, issueKey);
-        String issueText = raw == null ? issueKey : stripTags(raw);
-        messages.send(sender, "command.diagnose.summary-issues",
-                Placeholder.unparsed("issue", issueText));
-    }
-
-    /** 去掉 MiniMessage {@code <...>} 标签 + 首尾空白 / 前缀符号，让 summary 行不再嵌标签。 */
-    private static String stripTags(String s) {
-        // 去掉 <tag> / </tag>；保留占位符如 <wall_id> 也一并去掉（summary 仅作摘要，不再填值）。
-        return s.replaceAll("<[^>]*>", "").trim();
     }
 
     /**

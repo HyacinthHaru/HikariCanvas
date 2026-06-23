@@ -82,7 +82,7 @@ command:
     anim-playing: "<gray>  ℹ Animation: playing a timeline.</gray>"
     anim-static: "<gray>  ℹ Animation: static (no timeline playing).</gray>"
     summary-ok: "<green>  → All checks passed. If it still won't show, open the editor once to drive a render.</green>"
-    summary-issues: "<yellow>  → First issue: <issue></yellow>"
+    summary-issues: "<yellow>  → Issues found: the first ✗ / ⚠ line above is the cause.</yellow>"
   cleanup:
     stubbed: "<yellow>cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.</yellow>"
   reload:

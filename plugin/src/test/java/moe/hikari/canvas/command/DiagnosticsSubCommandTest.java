@@ -116,7 +116,7 @@ class DiagnosticsSubCommandTest {
         assertTrue(o.contains("test_world"), "world name injected: " + o);
         // 世界未加载是首个问题 → summary-issues 指向它，不是 summary-ok
         assertFalse(o.contains("All checks passed"), "must not summarise OK: " + o);
-        assertTrue(o.contains("First issue"), "summary-issues: " + o);
+        assertTrue(o.contains("Issues found"), "summary-issues: " + o);
     }
 
     // ── 4. 工程数据损坏：loadById 空但裸行存在 ──
@@ -153,7 +153,7 @@ class DiagnosticsSubCommandTest {
         // 后续环节仍跑（world / session / state / anim），只是总结指向首个问题
         assertTrue(o.contains("World loaded"), "should continue after WARN: " + o);
         assertFalse(o.contains("All checks passed"), "summary must flag the WARN: " + o);
-        assertTrue(o.contains("First issue"), "summary-issues: " + o);
+        assertTrue(o.contains("Issues found"), "summary-issues: " + o);
     }
 
     // ── 6. 活跃 session + 在播动画的 INFO 文案 ──

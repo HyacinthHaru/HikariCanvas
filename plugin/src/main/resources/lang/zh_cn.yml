@@ -82,7 +82,7 @@ command:
     anim-playing: "<gray>  ℹ 动画：正在播放时间轴。</gray>"
     anim-static: "<gray>  ℹ 动画：静态（没有时间轴在播）。</gray>"
     summary-ok: "<green>  → 所有检查通过。若仍不显示，打开一次编辑器驱动一帧渲染即可。</green>"
-    summary-issues: "<yellow>  → 首个问题：<issue></yellow>"
+    summary-issues: "<yellow>  → 发现问题：上方第一处标 ✗ / ⚠ 的环节即原因。</yellow>"
   cleanup:
     stubbed: "<yellow>cleanup 命令尚未实现，完整孤儿检测（孤儿展示框 / 地图池偏差）将在 M7 中完成。</yellow>"
   reload:
