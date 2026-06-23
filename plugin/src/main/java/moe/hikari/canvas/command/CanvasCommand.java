@@ -75,6 +75,8 @@ public final class CanvasCommand {
     private final VariableSubCommand variableSubCommand;
     /** 0.5.0-P1：{@code /canvas bench} 命令族（list/run/report/clear）。null = 主插件未传，跳过注册。 */
     private final BenchmarkSubCommand benchmarkSubCommand;
+    /** 0.9.2 可观测性：{@code /canvas stats} 实现（runStats 迁出至此）+ 后续 diagnose 族（Task 2）。 */
+    private final DiagnosticsSubCommand diagnosticsSubCommand;
     /** 0.8.2 i18n：多语言消息注册表。 */
     private final Messages messages;
 
@@ -107,6 +109,7 @@ public final class CanvasCommand {
                          String editorUrlTemplate,
                          VariableSubCommand variableSubCommand,
                          BenchmarkSubCommand benchmarkSubCommand,
+                         DiagnosticsSubCommand diagnosticsSubCommand,
                          Messages messages) {
         this.plugin = plugin;
         this.sessionManager = sessionManager;
@@ -120,6 +123,7 @@ public final class CanvasCommand {
         this.editorUrlTemplate = editorUrlTemplate;
         this.variableSubCommand = variableSubCommand;
         this.benchmarkSubCommand = benchmarkSubCommand;
+        this.diagnosticsSubCommand = diagnosticsSubCommand;
         this.messages = messages;
         // M16-P2.6：注册 PlayerQuit 监听清 pendingDeletes，避免玩家退出后 bucket 长期挂着
         plugin.getServer().getPluginManager().registerEvents(
@@ -182,7 +186,7 @@ public final class CanvasCommand {
                                         .executes(this::runDeleteConfirm))))
                 .then(Commands.literal("stats")
                         .requires(src -> src.getSender().hasPermission("canvas.admin"))
-                        .executes(this::runStats))
+                        .executes(diagnosticsSubCommand::runStats))
                 .then(Commands.literal("cleanup")
                         .requires(src -> src.getSender().hasPermission("canvas.admin"))
                         .executes(this::runCleanup))
@@ -629,25 +633,7 @@ public final class CanvasCommand {
 
     // ---------- admin ----------
 
-    private int runStats(CommandContext<CommandSourceStack> ctx) {
-        CommandSender sender = ctx.getSource().getSender();
-        MapPool.Stats ps = mapPool.stats();
-        int wallsCount = database.jdbi().withHandle(h -> h.createQuery(
-                "SELECT COUNT(*) FROM walls").mapTo(Integer.class).one());
-        // P3-99: published_at 非 null = 已锁定；统计标签术语对齐为 locked（DB 列名不变）。
-        int locked = database.jdbi().withHandle(h -> h.createQuery(
-                "SELECT COUNT(*) FROM walls WHERE published_at IS NOT NULL")
-                .mapTo(Integer.class).one());
-        messages.send(sender, "command.stats.output",
-                Placeholder.unparsed("pool_total", String.valueOf(ps.total())),
-                Placeholder.unparsed("pool_free", String.valueOf(ps.free())),
-                Placeholder.unparsed("pool_reserved", String.valueOf(ps.reserved())),
-                Placeholder.unparsed("walls", String.valueOf(wallsCount)),
-                Placeholder.unparsed("walls_locked", String.valueOf(locked)),
-                Placeholder.unparsed("sessions", String.valueOf(sessionManager.size())),
-                Placeholder.unparsed("tokens", String.valueOf(tokenService.activeCount())));
-        return Command.SINGLE_SUCCESS;
-    }
+    // 0.9.2：runStats 已迁出至 DiagnosticsSubCommand（多行增强 + 后续 diagnose 族）。
 
     private int runCleanup(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();

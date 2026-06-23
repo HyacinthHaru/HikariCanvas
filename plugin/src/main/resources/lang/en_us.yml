@@ -64,7 +64,10 @@ command:
     editor-url: "<gray>Open editor: </gray><aqua><underlined><url></underlined></aqua>"
     editor-url-hover: "Click to open in browser"
   stats:
-    output: "<gold>MapPool: total=<pool_total>  free=<pool_free>  reserved=<pool_reserved>   |   Walls: <walls> (locked=<walls_locked>)   |   Sessions: <sessions>   |   Tokens: <tokens></gold>"
+    output: "<gold>MapPool: total=<pool_total>  free=<pool_free>  reserved=<pool_reserved>  max=<pool_max>   |   Walls: <walls> (locked=<walls_locked>)   |   Sessions: <sessions>   |   Tokens: <tokens></gold>"
+    by-world: "<gray>  Free by world: <world_breakdown></gray>"
+    variables: "<gray>  Variables: <var_total> (<var_breakdown>)</gray>"
+    animation: "<gray>  Animation: timeline walls <timeline_walls> · active tweens <tween_active></gray>"
   cleanup:
     stubbed: "<yellow>cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.</yellow>"
   reload:

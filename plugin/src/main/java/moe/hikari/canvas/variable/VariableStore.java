@@ -1001,6 +1001,40 @@ public final class VariableStore {
     }
 
     /**
+     * 0.9.2 可观测性（{@code /canvas stats} / {@code diagnose}）：按 namespace 前缀统计变量数。
+     *
+     * <p>遍历 {@code store}（CHM）快照，按 {@link Variable#namespace()} 的前缀段归类计数：
+     * per-wall namespace（形如 {@code user:<wallId>} / {@code system:<wallId>} /
+     * {@code schedule:<wallId>}）取冒号前的前缀（{@code user} / {@code system} /
+     * {@code schedule}）；全局 namespace（{@code userglobal} / {@code papi} /
+     * {@code scoreboard} / 插件 namespace）原样作 key。</p>
+     *
+     * <p>无锁读：CHM 的 {@code values()} 迭代器弱一致，统计期并发写最多影响 ±1，对观测无害。
+     * 返回 {@link java.util.LinkedHashMap}（key 按计数降序，便于 stats 行展示主要来源在前）。</p>
+     *
+     * @return namespace 前缀 → 变量数（按计数降序）。
+     */
+    public java.util.Map<String, Integer> statsByNamespace() {
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        for (Variable v : store.values()) {
+            String ns = v.namespace();
+            int colon = ns.indexOf(':');
+            String prefix = colon < 0 ? ns : ns.substring(0, colon);
+            counts.merge(prefix, 1, Integer::sum);
+        }
+        // 按计数降序，计数相同按 key 字典序，稳定可读
+        java.util.List<java.util.Map.Entry<String, Integer>> sorted =
+                new java.util.ArrayList<>(counts.entrySet());
+        sorted.sort((a, b) -> {
+            int c = Integer.compare(b.getValue(), a.getValue());
+            return c != 0 ? c : a.getKey().compareTo(b.getKey());
+        });
+        java.util.Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        for (java.util.Map.Entry<String, Integer> e : sorted) out.put(e.getKey(), e.getValue());
+        return out;
+    }
+
+    /**
      * 测试用：清空所有内存状态（不动 DB）。生产代码不要调。
      */
     void clearForTest() {

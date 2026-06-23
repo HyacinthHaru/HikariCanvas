@@ -64,7 +64,10 @@ command:
     editor-url: "<gray>编辑器链接：</gray><aqua><underlined><url></underlined></aqua>"
     editor-url-hover: "点击在浏览器中打开"
   stats:
-    output: "<gold>地图池：总数=<pool_total>  空闲=<pool_free>  已占用=<pool_reserved>   |   画布：<walls>（已锁定=<walls_locked>）   |   会话：<sessions>   |   令牌：<tokens></gold>"
+    output: "<gold>地图池：总数=<pool_total>  空闲=<pool_free>  已占用=<pool_reserved>  上限=<pool_max>   |   画布：<walls>（已锁定=<walls_locked>）   |   会话：<sessions>   |   令牌：<tokens></gold>"
+    by-world: "<gray>  分世界空闲：<world_breakdown></gray>"
+    variables: "<gray>  变量：<var_total>（<var_breakdown>）</gray>"
+    animation: "<gray>  动画：时间轴墙 <timeline_walls> · 活跃补间 <tween_active></gray>"
   cleanup:
     stubbed: "<yellow>cleanup 命令尚未实现，完整孤儿检测（孤儿展示框 / 地图池偏差）将在 M7 中完成。</yellow>"
   reload:

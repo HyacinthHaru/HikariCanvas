@@ -437,6 +437,49 @@ public final class MapPool {
 
     public record Stats(int total, int free, int reserved) {}
 
+    /**
+     * 0.9.2 可观测性（{@code /canvas stats} / {@code diagnose}）：池容量上限。
+     * 直接返构造期注入的 {@code maxSize} final 字段（{@code map-pool.max-size} config）。
+     */
+    public synchronized int maxSize() {
+        return maxSize;
+    }
+
+    /**
+     * 0.9.2 可观测性：按 world 统计当前 FREE map 数。
+     *
+     * <p>遍历 {@link #freeByWorld}（按 world UUID 分桶的 FREE 队列）→ 用桶内任一 mapId 的
+     * {@link PooledMap#world()} 名字作 key（同一 world 桶内 PooledMap.world() 一致）。
+     * unknown-world 桶（zero UUID，world 卸载窗口期暂存）固定标 {@code "<unknown>"}。
+     * 空桶（曾有 map 后全被借出）跳过不计。</p>
+     *
+     * @return world 名 → 该 world FREE map 数（{@link java.util.LinkedHashMap}，无序枚举）。
+     */
+    public synchronized Map<String, Integer> byWorldStats() {
+        Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        UUID unknownKey = new UUID(0L, 0L);
+        for (Map.Entry<UUID, Deque<Integer>> e : freeByWorld.entrySet()) {
+            Deque<Integer> q = e.getValue();
+            if (q == null || q.isEmpty()) continue;
+            String name;
+            if (unknownKey.equals(e.getKey())) {
+                name = "<unknown>";
+            } else {
+                // 桶内任一 mapId 的 PooledMap.world() 名字即该 world 名；同桶名字一致。
+                name = "<unknown>";
+                for (Integer id : q) {
+                    PooledMap m = byId.get(id);
+                    if (m != null && m.world() != null) {
+                        name = m.world();
+                        break;
+                    }
+                }
+            }
+            out.merge(name, q.size(), Integer::sum);
+        }
+        return out;
+    }
+
     // ----- 内部实现 -----
 
     /**

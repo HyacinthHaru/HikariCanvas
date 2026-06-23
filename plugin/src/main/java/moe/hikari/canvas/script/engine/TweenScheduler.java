@@ -832,8 +832,11 @@ public final class TweenScheduler {
 
     // ---------- 测试辅助（包级可见） ----------
 
-    /** 活跃任务数（测试断言用）。 */
-    int activeCount() {
+    /**
+     * 活跃补间任务数。0.9.2 起公开供 {@code /canvas stats} / {@code diagnose} 观测
+     * （{@code active} 是 {@link java.util.concurrent.ConcurrentHashMap}，{@code size()} 无锁线程安全）。
+     */
+    public int activeCount() {
         return active.size();
     }
 

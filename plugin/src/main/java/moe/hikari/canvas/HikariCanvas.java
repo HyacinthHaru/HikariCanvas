@@ -5,6 +5,7 @@ import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import moe.hikari.canvas.command.BenchmarkSubCommand;
 import moe.hikari.canvas.command.CanvasCommand;
+import moe.hikari.canvas.command.DiagnosticsSubCommand;
 import moe.hikari.canvas.command.VariableSubCommand;
 import moe.hikari.canvas.deploy.FrameDeployer;
 import moe.hikari.canvas.deploy.FrameProtectionListener;
@@ -569,12 +570,10 @@ public final class HikariCanvas extends JavaPlugin {
                 messages);
         // 0.5.0-P1：/canvas bench 命令族。持守护线程 executor，存字段供 onDisable shutdown。
         benchmarkSubCommand = new BenchmarkSubCommand(this, messages);
-        getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
-                event.registrar().register(
-                        new CanvasCommand(this, sessionManager, frameDeployer,
-                                tokenService, mapPool, database, wallRepo,
-                                templateRegistry, templatePreviewService, editorUrlTemplate,
-                                variableSubCommand, benchmarkSubCommand, messages).build()));
+        // 0.9.2：CanvasCommand 注册（含 DiagnosticsSubCommand 注入）下移到 animationTicker /
+        // tweenScheduler 装配之后——DiagnosticsSubCommand.runStats 读这两者的活跃数，须非 null。
+        final VariableSubCommand variableSubCommandRef = variableSubCommand;
+        final String editorUrlTemplateRef = editorUrlTemplate;
 
         // M13：UploadHandler 需要 sessionManager / wallRepo，所以晚于它们装配
         // M16 P2.1/P2.2：还需要 imageDao + jdbi 做事务化 quota+insert+evict
@@ -841,6 +840,23 @@ public final class HikariCanvas extends JavaPlugin {
                         tweenMaxConcurrent, tweenMaxFps, getLogger());
         this.tweenScheduler = ts;
         this.scriptRunner.setTweenScheduler(ts);
+
+        // 0.9.2 可观测性：DiagnosticsSubCommand（迁出 runStats + 增强）+ CanvasCommand 注册。
+        // 此处装配——animationTicker（上方 ~setAnimationTicker 段）/ tweenScheduler（刚装配）
+        // 均已非 null，DiagnosticsSubCommand.runStats 读两者活跃数安全。COMMANDS lifecycle
+        // 在 onEnable 内注册，位置无关；仅依赖被注入对象就位，故下移到此。
+        DiagnosticsSubCommand diagnosticsSubCommand = new DiagnosticsSubCommand(
+                mapPool, sessionManager, wallRepo, variableStore,
+                this.animationTicker, this.tweenScheduler, frameDeployer,
+                tokenService, database, this, messages);
+        getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
+                event.registrar().register(
+                        new CanvasCommand(this, sessionManager, frameDeployer,
+                                tokenService, mapPool, database, wallRepo,
+                                templateRegistry, templatePreviewService, editorUrlTemplateRef,
+                                variableSubCommandRef, benchmarkSubCommand,
+                                diagnosticsSubCommand, messages).build()));
+
         // 0.7.0-P3 B2（K14）+ P3-5 修正：墙原点源——WallRepo.loadById 拿 Wall.key
         // （world 是名字字符串）→ 查 scriptWorldUuidByName 快照表换世界 UUID。
         // rebuild 触发点并不全在主线程：onEnable 启动 / wall delete hook 是主线程，
