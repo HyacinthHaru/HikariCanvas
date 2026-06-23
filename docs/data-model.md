@@ -808,6 +808,7 @@ V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount �
 
 - 禁 `DROP TABLE` / `DROP COLUMN`（含 SQLite 省略 `COLUMN` 关键字的 `ALTER TABLE t DROP c`）
 - 禁 `ALTER COLUMN` type 改变
+- 禁 `RENAME COLUMN`（列改名破坏前向兼容；表改名 `RENAME TO _v<NNN>_archive` 仍允许）
 - 新加列 `ADD COLUMN` 必须有 default 值或 nullable
 - 列删除走"逻辑删除"（保留物理列 + 应用层不用）
 - 表删除走"重命名为 `_v<NNN>_archive`"

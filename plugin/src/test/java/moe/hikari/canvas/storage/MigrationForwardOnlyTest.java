@@ -42,6 +42,9 @@ class MigrationForwardOnlyTest {
                 out.add("DROP COLUMN 禁用: " + stmt.trim());
             } else if (s.startsWith("ALTER TABLE") && s.contains(" ALTER COLUMN ")) {
                 out.add("ALTER COLUMN 禁用: " + stmt.trim());
+            } else if (s.startsWith("ALTER TABLE") && s.contains(" RENAME COLUMN ")) {
+                // 列改名破坏前向兼容（旧代码读旧列名失败）；表改名 RENAME TO（_archive）不受此限。
+                out.add("RENAME COLUMN 禁用: " + stmt.trim());
             }
         }
         return out;
@@ -59,6 +62,8 @@ class MigrationForwardOnlyTest {
         // SQLite 允许省略 COLUMN 关键字，也须拦截。
         assertFalse(violations(18, "ALTER TABLE x DROP y;", FREEZE_FROM).isEmpty());
         assertFalse(violations(18, "ALTER TABLE x ALTER COLUMN y TYPE TEXT;", FREEZE_FROM).isEmpty());
+        // 列改名破坏前向兼容，须拦截（但表改名 RENAME TO 见 allowsAdditiveDdlFromFreeze 放行）。
+        assertFalse(violations(18, "ALTER TABLE x RENAME COLUMN a TO b;", FREEZE_FROM).isEmpty());
     }
 
     @Test

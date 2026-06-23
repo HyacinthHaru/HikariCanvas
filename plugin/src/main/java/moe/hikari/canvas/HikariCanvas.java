@@ -238,7 +238,7 @@ public final class HikariCanvas extends JavaPlugin {
 
         // 持久化：按 docs/data-model.md §2.1 在 plugins/HikariCanvas/data.db
         database = new Database(getLogger(), getDataFolder().toPath().resolve("data.db"));
-        // M15.4 P0-29：可选 migration 前自动备份；pre-release 默认关。
+        // migration 前 WAL 安全自动备份（0.9.1 起默认开，见 data-model.md §6.6.2）。
         new MigrationRunner(database.jdbi(), getLogger(),
                 config.databaseAutoBackup,
                 getDataFolder().toPath().resolve("data.db")).run();
