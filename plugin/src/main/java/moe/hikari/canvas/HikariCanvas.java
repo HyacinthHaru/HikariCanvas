@@ -928,7 +928,7 @@ public final class HikariCanvas extends JavaPlugin {
             if (r.isEmpty()) {
                 traceCallback.accept(java.util.List.of(
                         moe.hikari.canvas.script.engine.TraceStep.error(
-                                "trigger", "规则不存在: " + ruleId)));
+                                "trigger", "rule not found: " + ruleId)));
                 return;
             }
             runnerForTest.submit(wallId, r.get(),
