@@ -61,13 +61,13 @@ public final class CommandTemplateEngine {
                                 Collection<String> onlinePlayerNames) {
         if (templateId == null || templateId.isBlank()
                 || templates == null || !templates.containsKey(templateId)) {
-            return new Result.Blocked("命令模板未配置: "
-                    + (templateId == null || templateId.isBlank() ? "(空)" : templateId));
+            return new Result.Blocked("command template not configured: "
+                    + (templateId == null || templateId.isBlank() ? "(empty)" : templateId));
         }
         CommandTemplate tpl = templates.get(templateId);
         if (tpl.command() == null || tpl.command().isBlank()) {
             // config 解析期已拦空 command；这里是防御（手工构造的模板表）
-            return new Result.Error("模板 " + templateId + " 的 command 为空");
+            return new Result.Error("template " + templateId + " has empty command");
         }
         Map<String, String> given = params == null ? Map.of() : params;
 
@@ -77,22 +77,22 @@ public final class CommandTemplateEngine {
             ParamSpec spec = e.getValue() == null ? ParamSpec.defaults() : e.getValue();
             String raw = given.get(name);
             if (raw == null) {
-                return new Result.Error("缺少参数: " + name);
+                return new Result.Error("missing parameter: " + name);
             }
             // K13 转义：剥换行 + § 颜色码
             String value = sanitize(raw);
             if (ParamSpec.TYPE_ONLINE_PLAYER.equals(spec.type())) {
                 if (value.isEmpty()
                         || onlinePlayerNames == null || !onlinePlayerNames.contains(value)) {
-                    return new Result.Error("参数 " + name + " 必须是在线玩家名");
+                    return new Result.Error("parameter " + name + " must be an online player name");
                 }
             } else if (value.indexOf('@') >= 0) {
                 // 含 @ 整体拒（选择器注入面），除非显式 online-player
-                return new Result.Error("参数 " + name + " 含 @，已拒绝（选择器不允许）");
+                return new Result.Error("parameter " + name + " contains @, rejected (selectors not allowed)");
             }
             int maxLen = spec.maxLength() <= 0 ? ParamSpec.DEFAULT_MAX_LENGTH : spec.maxLength();
             if (value.length() > maxLen) {
-                return new Result.Error("参数 " + name + " 超长（上限 " + maxLen + " 字符）");
+                return new Result.Error("parameter " + name + " too long (max " + maxLen + " chars)");
             }
             rendered = rendered.replace("{" + name + "}", value);
         }
@@ -102,7 +102,7 @@ public final class CommandTemplateEngine {
             out = out.substring(1).trim();
         }
         if (out.isEmpty()) {
-            return new Result.Error("模板 " + templateId + " 渲染结果为空");
+            return new Result.Error("template " + templateId + " rendered to empty");
         }
         return new Result.Ok(out);
     }

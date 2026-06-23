@@ -138,7 +138,7 @@ public final class ConditionEvaluator {
             new ExpressionParser().parse(condition);
             return Optional.empty();
         } catch (RuntimeException e) {
-            String msg = e.getMessage() == null ? "语法错误" : e.getMessage();
+            String msg = e.getMessage() == null ? "syntax error" : e.getMessage();
             int nl = msg.indexOf('\n');
             if (nl >= 0) msg = msg.substring(0, nl);
             return Optional.of(msg.length() > 300 ? msg.substring(0, 300) : msg);

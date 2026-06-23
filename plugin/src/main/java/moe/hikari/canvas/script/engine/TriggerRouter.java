@@ -450,7 +450,7 @@ public final class TriggerRouter {
         WallOrigin origin = originSource == null ? null : originSource.load(wallId);
         if (origin == null) {
             log.warning("TriggerRouter: " + (leaveEdge ? "playerLeaveRange" : "playerNear")
-                    + " 原点解析失败（墙不存在或世界未加载），规则跳过登记 wall="
+                    + " origin resolve failed (wall missing or world not loaded); rule skipped registration wall="
                     + wallId + " rule=" + rule.id());
             return;
         }
