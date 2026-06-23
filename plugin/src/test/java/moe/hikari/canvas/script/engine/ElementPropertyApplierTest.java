@@ -316,7 +316,7 @@ class ElementPropertyApplierTest {
     void applyNudge_nonFiniteDelta_errorStep() {
         TraceStep step = headlessApplier().applyNudge("w-any", "b", "e-1", Double.NaN, 1.0);
         assertEquals("error", step.result());
-        assertTrue(step.detail().contains("有限"), step.detail());
+        assertTrue(step.detail().contains("finite"), step.detail());
     }
 
     @Test
@@ -324,7 +324,7 @@ class ElementPropertyApplierTest {
         String wallId = createWall(stateWithText("e-1", false));
         TraceStep step = headlessApplier().applyNudge(wallId, "b", "e-MISSING", 1.0, 1.0);
         assertEquals("error", step.result());
-        assertTrue(step.detail().contains("元素不存在"), step.detail());
+        assertTrue(step.detail().contains("element not found"), step.detail());
     }
 
     @Test

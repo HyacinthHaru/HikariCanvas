@@ -131,7 +131,7 @@ public final class ElementPropertyApplier {
     public TraceStep apply(String wallId, String blockId,
                            String elementId, String property, String value) {
         if (elementId == null || elementId.isEmpty()) {
-            return TraceStep.error(blockId, "elementId 缺失");
+            return TraceStep.error(blockId, "elementId missing");
         }
         Map<String, Object> patch;
         try {
@@ -150,10 +150,10 @@ public final class ElementPropertyApplier {
     public TraceStep applyMany(String wallId, String blockId, String elementId,
                                Map<String, String> rawPatch) {
         if (elementId == null || elementId.isEmpty()) {
-            return TraceStep.error(blockId, "elementId 缺失");
+            return TraceStep.error(blockId, "elementId missing");
         }
         if (rawPatch == null || rawPatch.isEmpty()) {
-            return TraceStep.error(blockId, "patch 为空");
+            return TraceStep.error(blockId, "patch is empty");
         }
         Map<String, Object> merged = new java.util.LinkedHashMap<>();
         try {
@@ -186,7 +186,7 @@ public final class ElementPropertyApplier {
                 switch (outcome.status()) {
                     case APPLIED -> {
                         return TraceStep.ok(blockId, "action",
-                                desc + " → session(element.update)");
+                                desc + " -> session(element.update)");
                     }
                     case FAILED -> {
                         return TraceStep.error(blockId, String.valueOf(outcome.detail()));
@@ -205,10 +205,10 @@ public final class ElementPropertyApplier {
     public TraceStep applyNudge(String wallId, String blockId, String elementId,
                                 double dx, double dy) {
         if (elementId == null || elementId.isEmpty()) {
-            return TraceStep.error(blockId, "elementId 缺失");
+            return TraceStep.error(blockId, "elementId missing");
         }
         if (!Double.isFinite(dx) || !Double.isFinite(dy)) {
-            return TraceStep.error(blockId, "dx/dy 必须有限");
+            return TraceStep.error(blockId, "dx/dy must be finite");
         }
         int idx = (int) Math.round(dx);
         int idy = (int) Math.round(dy);
@@ -226,7 +226,7 @@ public final class ElementPropertyApplier {
                 switch (outcome.status()) {
                     case APPLIED -> {
                         return TraceStep.ok(blockId, "action",
-                                "nudge → session(+" + idx + "," + idy + ")");
+                                "nudge -> session(+" + idx + "," + idy + ")");
                     }
                     case FAILED -> {
                         return TraceStep.error(blockId, String.valueOf(outcome.detail()));
@@ -237,11 +237,11 @@ public final class ElementPropertyApplier {
         }
         // 路径 B：headless 读 state 当前 x/y + 增量
         if (wallRepo == null) {
-            return TraceStep.error(blockId, "headless 路径不可用（WallRepo 未装配）");
+            return TraceStep.error(blockId, "headless path unavailable (WallRepo not wired)");
         }
         WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
         if (wall == null || wall.state() == null) {
-            return TraceStep.error(blockId, "wall 不存在或无 state: " + wallId);
+            return TraceStep.error(blockId, "wall not found or has no state: " + wallId);
         }
         Integer curX = null;
         Integer curY = null;
@@ -254,7 +254,7 @@ public final class ElementPropertyApplier {
             }
         }
         if (curX == null) {
-            return TraceStep.error(blockId, "元素不存在: " + elementId);
+            return TraceStep.error(blockId, "element not found: " + elementId);
         }
         // 升 long 相加防 int 回绕（idx 可接近 Integer.MAX_VALUE），与 session 路径
         // SessionManager.applyScriptElementNudge 的 (long) 升级对齐；下游 clampInt 收窄
@@ -270,7 +270,7 @@ public final class ElementPropertyApplier {
     public TraceStep applyClone(String wallId, String blockId, String elementId,
                                 int offsetX, int offsetY) {
         if (elementId == null || elementId.isEmpty()) {
-            return TraceStep.error(blockId, "elementId 缺失");
+            return TraceStep.error(blockId, "elementId missing");
         }
         if (sessionApplier != null) {
             SessionOutcome outcome;
@@ -285,7 +285,7 @@ public final class ElementPropertyApplier {
                 switch (outcome.status()) {
                     case APPLIED -> {
                         return TraceStep.ok(blockId, "action", "clone " + elementId
-                                + " (+" + offsetX + "," + offsetY + ") → session");
+                                + " (+" + offsetX + "," + offsetY + ") -> session");
                     }
                     case FAILED -> {
                         return TraceStep.error(blockId, String.valueOf(outcome.detail()));
@@ -303,7 +303,7 @@ public final class ElementPropertyApplier {
      */
     public TraceStep applyDelete(String wallId, String blockId, String elementId) {
         if (elementId == null || elementId.isEmpty()) {
-            return TraceStep.error(blockId, "elementId 缺失");
+            return TraceStep.error(blockId, "elementId missing");
         }
         if (sessionApplier != null) {
             SessionOutcome outcome;
@@ -317,7 +317,7 @@ public final class ElementPropertyApplier {
             if (outcome != null) {
                 switch (outcome.status()) {
                     case APPLIED -> {
-                        return TraceStep.ok(blockId, "action", "delete " + elementId + " → session");
+                        return TraceStep.ok(blockId, "action", "delete " + elementId + " -> session");
                     }
                     case FAILED -> {
                         return TraceStep.error(blockId, String.valueOf(outcome.detail()));
@@ -336,7 +336,7 @@ public final class ElementPropertyApplier {
     public TraceStep applySetElementLayer(String wallId, String blockId,
                                           String elementId, String mode) {
         if (elementId == null || elementId.isEmpty()) {
-            return TraceStep.error(blockId, "elementId 缺失");
+            return TraceStep.error(blockId, "elementId missing");
         }
         if (sessionApplier != null) {
             SessionOutcome outcome;
@@ -344,7 +344,7 @@ public final class ElementPropertyApplier {
                 outcome = sessionApplier.reorderToEdge(wallId, elementId, mode);
             } catch (RuntimeException e) {
                 log.log(java.util.logging.Level.WARNING,
-                        "[脚本] session reorderToEdge 异常: wall=" + wallId
+                        "[script] session reorderToEdge error: wall=" + wallId
                                 + " element=" + elementId + " err=" + e.getMessage(), e);
                 outcome = SessionOutcome.failed(String.valueOf(e.getMessage()));
             }
@@ -352,7 +352,7 @@ public final class ElementPropertyApplier {
                 switch (outcome.status()) {
                     case APPLIED -> {
                         return TraceStep.ok(blockId, "action",
-                                "setElementLayer " + mode + " → session");
+                                "setElementLayer " + mode + " -> session");
                     }
                     case FAILED -> {
                         return TraceStep.error(blockId, String.valueOf(outcome.detail()));
@@ -396,11 +396,11 @@ public final class ElementPropertyApplier {
                                   java.util.function.Function<EditSession,
                                           EditSession.OpResult> op) {
         if (wallRepo == null) {
-            return TraceStep.error(blockId, "headless 路径不可用（WallRepo 未装配）");
+            return TraceStep.error(blockId, "headless path unavailable (WallRepo not wired)");
         }
         WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
         if (wall == null || wall.state() == null) {
-            return TraceStep.error(blockId, "wall 不存在或无 state: " + wallId);
+            return TraceStep.error(blockId, "wall not found or has no state: " + wallId);
         }
         EditSession es = new EditSession(wall.state());
         EditSession.OpResult r = op.apply(es);
@@ -408,7 +408,7 @@ public final class ElementPropertyApplier {
             return TraceStep.error(blockId, er.code() + ": " + er.message());
         }
         if (!(r instanceof EditSession.OpResult.Ok)) {
-            return TraceStep.error(blockId, "意外的 op 结果: " + r.getClass().getSimpleName());
+            return TraceStep.error(blockId, "unexpected op result: " + r.getClass().getSimpleName());
         }
         wallRepo.updateState(wallId, es.state());
         if (ticker != null) {
@@ -418,7 +418,7 @@ public final class ElementPropertyApplier {
                 ticker.refreshAutoPlay(wallId);
             }
         }
-        return TraceStep.ok(blockId, "action", desc + " → headless(updateState)");
+        return TraceStep.ok(blockId, "action", desc + " -> headless(updateState)");
     }
 
     /**
@@ -437,11 +437,11 @@ public final class ElementPropertyApplier {
     private TraceStep applyHeadless(String wallId, String blockId, String elementId,
                                     String property, Map<String, Object> patch) {
         if (wallRepo == null) {
-            return TraceStep.error(blockId, "headless 路径不可用（WallRepo 未装配）");
+            return TraceStep.error(blockId, "headless path unavailable (WallRepo not wired)");
         }
         WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
         if (wall == null || wall.state() == null) {
-            return TraceStep.error(blockId, "wall 不存在或无 state: " + wallId);
+            return TraceStep.error(blockId, "wall not found or has no state: " + wallId);
         }
         EditSession es = new EditSession(wall.state());
         EditSession.OpResult r = es.updateElement(elementId, patch);
@@ -449,7 +449,7 @@ public final class ElementPropertyApplier {
             return TraceStep.error(blockId, er.code() + ": " + er.message());
         }
         if (!(r instanceof EditSession.OpResult.Ok)) {
-            return TraceStep.error(blockId, "意外的 op 结果: " + r.getClass().getSimpleName());
+            return TraceStep.error(blockId, "unexpected op result: " + r.getClass().getSimpleName());
         }
         wallRepo.updateState(wallId, es.state());
         // 照 SessionManager.persistWall 的 Ticker 链：在播 → invalidate（下一帧用新 state）；
@@ -461,7 +461,7 @@ public final class ElementPropertyApplier {
                 ticker.refreshAutoPlay(wallId);
             }
         }
-        return TraceStep.ok(blockId, "action", property + " → headless(updateState)");
+        return TraceStep.ok(blockId, "action", property + " -> headless(updateState)");
     }
 
     /**
@@ -471,7 +471,7 @@ public final class ElementPropertyApplier {
      * @throws IllegalArgumentException 属性不在白名单 / fill 格式非法
      */
     static Map<String, Object> buildPatch(String property, String value) {
-        if (property == null) throw new IllegalArgumentException("property 缺失");
+        if (property == null) throw new IllegalArgumentException("property missing");
         return switch (property) {
             // 数值属性：StrictNumber 严格文法（非数值 → 0.0，与 0.6 变量数值链同语义）
             case "x", "y", "w", "h", "rotation" -> Map.of(property,
@@ -482,13 +482,13 @@ public final class ElementPropertyApplier {
             case "fill" -> {
                 if (value == null || !HEX_FILL.matcher(value).matches()) {
                     throw new IllegalArgumentException(
-                            "fill 仅支持 #RRGGBB / #RRGGBBAA，收到: " + value);
+                            "fill only supports #RRGGBB / #RRGGBBAA, got: " + value);
                 }
                 // 字符串形态交给 EditSession（ElementValidator.parseFillNullable
                 // string → SolidFill 的 M11 既有兼容路径）
                 yield Map.of(property, value);
             }
-            default -> throw new IllegalArgumentException("不支持的属性: " + property);
+            default -> throw new IllegalArgumentException("unsupported property: " + property);
         };
     }
 }

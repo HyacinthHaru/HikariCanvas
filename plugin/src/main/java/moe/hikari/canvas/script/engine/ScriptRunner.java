@@ -197,7 +197,7 @@ public final class ScriptRunner {
                     + (ctx.detail() == null ? "" : " detail=" + ctx.detail()));
             auditBlocked(ruleKey, wallId, rule, "chain", ctx);
             fireTrace(traceCallback, List.of(TraceStep.blocked("trigger",
-                    "链深熔断（depth=" + ctx.chainDepth() + "/" + budget.maxChainDepth() + "）")));
+                    "chain-depth tripped (depth=" + ctx.chainDepth() + "/" + budget.maxChainDepth() + ")")));
             return;
         }
 
@@ -209,7 +209,7 @@ public final class ScriptRunner {
             }
             auditBlocked(ruleKey, wallId, rule, "rate", ctx);
             fireTrace(traceCallback, List.of(TraceStep.blocked("trigger",
-                    "触发频率超限（" + budget.maxRunsPerSecond() + "/s）")));
+                    "trigger rate exceeded (" + budget.maxRunsPerSecond() + "/s)")));
             return;
         }
 
@@ -288,7 +288,7 @@ public final class ScriptRunner {
                     st.actionCount++;
                     if (budget.actionsExceeded(st.actionCount)) {
                         st.trace.add(TraceStep.blocked(blockId,
-                                "动作总数超上限 " + budget.maxActionsPerRun() + "，剩余动作已掐断"));
+                                "action count over limit " + budget.maxActionsPerRun() + "; remaining actions cut"));
                         auditBlocked(ruleKey(st.wallId, st.rule), st.wallId, st.rule,
                                 "actions", st.ctx);
                         finish(st, "blocked");
@@ -349,13 +349,13 @@ public final class ScriptRunner {
                         if (cond || rounds >= ru.maxIterations()) {
                             st.repeatUntilRounds.remove(blockId);
                             st.trace.add(TraceStep.ok(blockId, "action",
-                                    cond ? "repeatUntil 条件满足" : "repeatUntil 达上限"));
+                                    cond ? "repeatUntil condition met" : "repeatUntil max iterations reached"));
                             i++; // 跳出循环，内层 while 继续后续 acts[i+1]
                             continue;
                         }
                         st.repeatUntilRounds.put(blockId, rounds + 1);
                         st.trace.add(TraceStep.ok(blockId, "action",
-                                "repeatUntil 第 " + (rounds + 1) + " 轮"));
+                                "repeatUntil round " + (rounds + 1)));
                         stack.push(new Frame(acts, i, f.prefix())); // 压回自身（i 不变，含后续）
                         stack.push(new Frame(ru.body(), 0, blockId + "/body/")); // body 先执行
                         continue outer;
@@ -393,7 +393,7 @@ public final class ScriptRunner {
                                     + " err=" + e.getMessage(), e);
                             step = TraceStep.error(blockId, String.valueOf(e.getMessage()));
                         }
-                        if (step == null) step = TraceStep.error(blockId, "ActionSink 返回 null step");
+                        if (step == null) step = TraceStep.error(blockId, "ActionSink returned null step");
                         st.trace.add(step);
                         long dur = "ok".equals(step.result())
                                 ? sink.timelineDurationMs(st.wallId, pta.timelineId()) : 0L;
@@ -419,7 +419,7 @@ public final class ScriptRunner {
                         TweenScheduler ts = tweenScheduler;
                         if (ts == null) {
                             // 未装配（测试 / P1 降级）：记 trace 跳过 body，不崩 runner
-                            st.trace.add(TraceStep.ok(blockId, "action", "补间引擎未装配，跳过"));
+                            st.trace.add(TraceStep.ok(blockId, "action", "tween engine not wired, skipping"));
                             i++; continue;
                         }
                         // 先打包 continuation 快照（含剩余动作 acts[i+1..] + 外层后续）——不污染 live
@@ -453,7 +453,7 @@ public final class ScriptRunner {
                         // 0.7.1-P5：轮询条件，满足/超时才续接。不阻塞 runner 线程——首次计 1 个 action
                         // （上方 actionCount++ 已计）+ 压栈后续（i+1）+ 启动独立 pollWaitUntil 递归。
                         // 轮询走独立调度、不重入 action 循环 → 不重复计 actionCount、不被 Budget 误拦。
-                        st.trace.add(TraceStep.ok(blockId, "action", "waitUntil 开始"));
+                        st.trace.add(TraceStep.ok(blockId, "action", "waitUntil start"));
                         long deadline = clock.getAsLong() + wu.timeoutMs();
                         stack.push(new Frame(acts, i + 1, f.prefix()));
                         Deque<Frame> cont = new ArrayDeque<>(stack);
@@ -471,7 +471,7 @@ public final class ScriptRunner {
                         step = TraceStep.error(blockId, String.valueOf(e.getMessage()));
                     }
                     st.trace.add(step == null
-                            ? TraceStep.error(blockId, "ActionSink 返回 null step") : step);
+                            ? TraceStep.error(blockId, "ActionSink returned null step") : step);
                     i++;
                 }
             }
@@ -482,7 +482,7 @@ public final class ScriptRunner {
                     + " err=" + t.getMessage(), t);
             // K11：异常掐断也要恰一次回调（finish 未到达——callbackFired 防 finish 后
             // 续接段异常的双发竞态）
-            st.trace.add(TraceStep.error("run", "run 失败: " + t.getMessage()));
+            st.trace.add(TraceStep.error("run", "run failed: " + t.getMessage()));
             fireTraceOnce(st);
         } finally {
             CHAIN_DEPTH.remove();
@@ -509,7 +509,7 @@ public final class ScriptRunner {
             boolean timedOut = clock.getAsLong() >= deadline;
             if (satisfied || timedOut) {
                 st.trace.add(TraceStep.ok(blockId, "action",
-                        satisfied ? "waitUntil 满足" : "waitUntil 超时"));
+                        satisfied ? "waitUntil satisfied" : "waitUntil timed out"));
                 try {
                     scheduler.schedule(() -> runFrames(st, cont), 0L); // 续接后续动作
                 } catch (RejectedExecutionException ignored) {
@@ -527,7 +527,7 @@ public final class ScriptRunner {
             // callback 恰一次（照 runFrames catch 范式），与 WaitUntil 的"恰一次"契约对齐。
             log.log(Level.WARNING, "[script] waitUntil poll failed: rule=" + ruleKey(st.wallId, st.rule)
                     + " block=" + blockId + " err=" + t.getMessage(), t);
-            st.trace.add(TraceStep.error(blockId, "waitUntil 轮询失败: " + t.getMessage()));
+            st.trace.add(TraceStep.error(blockId, "waitUntil poll failed: " + t.getMessage()));
             fireTraceOnce(st);
         } finally {
             // R2：pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这三个 ThreadLocal，

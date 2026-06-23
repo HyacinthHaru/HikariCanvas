@@ -621,7 +621,7 @@ class ScriptRunnerTest {
         TraceStep step = received.get(0).get(0);
         assertEquals("trigger", step.blockId());
         assertEquals("blocked", step.result());
-        assertTrue(step.detail().contains("频率"), step.detail());
+        assertTrue(step.detail().contains("rate"), step.detail());
     }
 
     @Test
@@ -631,7 +631,7 @@ class ScriptRunnerTest {
         r.submit(WALL, rule("r1", List.of(new Action.Log("x"))), ctx(8), received::add);
         assertEquals(1, received.size());
         assertEquals("blocked", received.get(0).get(0).result());
-        assertTrue(received.get(0).get(0).detail().contains("链深"),
+        assertTrue(received.get(0).get(0).detail().contains("chain-depth"),
                 received.get(0).get(0).detail());
     }
 
