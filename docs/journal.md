@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-06-23 · 0.9.1 数据契约闸（1.0 硬闸第一块）
+
+把"首次 stable 后必须 forward-only + 强制 auto-backup"从文档约定变成代码/测试落地，并把 **schema 冻结点提前到 V018**（V001-V017 grandfathered），抢在 1.0 之前一版进入冻结。subagent-driven（per-task implementer→review→fix + opus 整支终审）。版本号 0.8.3 → 0.9.1-SNAPSHOT。
+
+**四件套**：
+- **WAL 安全 auto-backup**（`MigrationRunner.tryBackup`）：备份前用迁移连接 `PRAGMA wal_checkpoint(TRUNCATE)` 把 WAL 已提交事务刷进主库，再 copy 主库 + `-wal/-shm` → `data.db.pre-V<NNN>.bak`。修掉原"只 copy 主库不 checkpoint"在 WAL 模式下丢最近提交数据的缺陷。利用迁移在 onEnable 单线程跑、无并发写（终审实证 run() 先于 SessionManager/WebServer 启动）→ 备份是一致快照。加 `runUpTo(int)` 测试 seam。
+- **forward-only 守卫**（`MigrationForwardOnlyTest`，编译期）：扫 `db-migrations/*.sql`，**V018+** 禁 `DROP TABLE` / `DROP COLUMN`（含 SQLite 省略 COLUMN 的 `ALTER TABLE t DROP c`）/ `ALTER COLUMN` / `RENAME COLUMN`；V001-V017 grandfathered；`-- @forward-only-exempt` 显式豁免；`scanned>=16` sanity 防 vacuous。前缀/正则判定避字符串字面量误判。
+- **迁移 fixture 测试基建**（`MigrationFixtureTestBase` + `migration-fixtures/` + V017 示范）：`runUpTo(baseline)` 建 schema → 灌 `before.sql` 种子 → `runUpTo(target)` 应用 → 断言数据无损。1.0 起每个新 migration 须配。
+- **config 默认翻 true**（备份已 WAL 安全）+ data-model.md §6.4/§6.6 据实标实装（forward-only V018、WAL 安全备份、fixture 基建、恢复步骤、豁免机制）。
+
+**过程**：5 commit（T1 WAL 备份 + runUpTo `5b84deab` / T2 forward-only 守卫 `4d62f92e` + 检测器堵省略 COLUMN `3cacd5c3` / T3 fixture 基建 `30318ad4` / config+doc `4be7909e`）+ 终审硬化 `70c80d3a`（补 RENAME COLUMN 拦截 + 修陈旧注释）+ 本收尾。**T2 实现者子代理连接中途断开→controller 亲读全文件+跑全量绿+提交**。
+
+**终审（opus）**：对抗探针确认守卫对 DROP TABLE（含 schema 限定/引号/多空格/单行多语句）、省略 COLUMN 删列、ALTER/RENAME COLUMN 全拦；WAL 单线程前提实证成立；config 翻转三处（getBoolean 默认参数 + builder 字段 + config.yml）齐全；文档零矛盾。Minor（checkpoint busy 返回值未检查）裁定可接受——备份测试已端到端实证刷盘成功。
+
+**测试**：全量 `:plugin:test` **2110+** 全绿（含 `MigrationRunnerBackupTest`〔WAL 刷盘回归，非 vacuous〕/ `MigrationForwardOnlyTest`〔检测逻辑 + 扫 17 真实迁移〕/ `V017WallScriptsFixtureTest`〔示范〕）；shadowJar `HikariCanvas-0.9.1-SNAPSHOT.jar`。
+
+**遗留后续**：备份保留策略（30 天 + BackupReaper 自动清）；`/canvas` 可观测性（0.9.2）。关联文件（生产）：`storage/{MigrationRunner,Database}`、`HikariCanvasConfig`、`HikariCanvas`、`resources/config.yml`、`docs/data-model.md`；测试 4 新（MigrationRunnerBackupTest / MigrationForwardOnlyTest / MigrationFixtureTestBase / V017WallScriptsFixtureTest）+ fixtures；版本号 6 文件 → 0.9.1-SNAPSHOT。
+
+---
+
 ## 2026-06-23 · 0.8.3 i18n 收尾（benchmark per-player i18n + summary.txt + script.trace 英文化）
 
 收掉 0.8.2 留的两处 i18n 缺口。subagent-driven（per-task implementer→review→fix + opus 整支终审）。版本号 0.8.2 → 0.8.3-SNAPSHOT。
