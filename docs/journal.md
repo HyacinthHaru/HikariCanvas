@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-06-23 · 0.9.2 可观测性（增强 /canvas stats + 新增 diagnose）
+
+给服主自助诊断能力（1.0 发布前打磨第 2 块）。subagent-driven（per-task implementer + reviewer 全用 opus；opus 整支终审 Ready-to-merge）。版本号 0.9.1 → 0.9.2-SNAPSHOT。**只读观测，不做任何修复**（cleanup stub 不碰；符合"工具不是保姆——数据透明不替服主决策"）。
+
+**新建 `DiagnosticsSubCommand`**（照 VariableSubCommand/BenchmarkSubCommand 范式：构造注入子系统 + 纯逻辑 + CanvasCommand.build() 接线）。CanvasCommand 缺 VariableStore/AnimationTicker/TweenScheduler 依赖，故新类自注入。两命令都用现有 `canvas.admin`，不新增权限节点。
+
+- **增强 `/canvas stats`**：原池/墙/会话/令牌基础上多发——池行加上限 max；分世界空闲（多 world 时）；变量总数 + 按 namespace（找膨胀源）；动画占用（时间轴墙数 + 活跃补间数）。补只读 accessor `MapPool.byWorldStats()`+`maxSize()` / `VariableStore.statsByNamespace()` / `TweenScheduler.activeCount()` widen public。
+- **新增 `/canvas diagnose <wallId>`**：7 环节只读诊断链——墙存在 → 地图分配(数=width×height) → 世界加载(Bukkit.getWorld) → 活跃 session → ProjectState 解析 → 动画态 → 总结。每环节 OK/WARN/ERROR/INFO 配色。补 `SessionManager.isWallActive()`（byWall key 是 WallKey 故走 byId 迭代 wallId 匹配，无锁 CHM 读）+ wallId tab 补全。**not-found vs state-corrupt 区分**：loadById 把坏 json 吞成 empty → 用 Database 裸 `SELECT 1` 探物理行（同 runStats 范式）。诊断链只报不修：world-unloaded/maps-missing 不硬停，跑完看全整墙，总结指首个问题（比硬停更优诊断 UX）。
+
+**整支终审（opus）**：grep 所有写动词 → 只命中 javadoc/import/占位符名，**零写路径**（全链路纯读）；线程安全（MapPool 读 synchronized 不碰 Bukkit / 其余 CHM 无锁 / isWallActive 不取 writeLock）；数据口径正确；可观测性覆盖 4 类常见问题（池满/某墙渲不出/变量膨胀/动画占用）无漏报。2 cosmetic Minor：① CanvasCommand 迁走 runStats 后 mapPool/database 成死字段（两次评审判保留可接受，记录不改）② diagnose 总结行 stripTags 把占位符删成空值（**已修 commit 66b1e7a5**：改通用文案"上方第一处标 ✗/⚠ 即原因"，不再嵌带占位符的 issue 文本）。
+
+**过程**：3 commit（T1 增强 stats `1ebe7ffa` / T2 diagnose `ca289b61` / 终审 summary 修复 `66b1e7a5`）+ 本收尾。**子代理全程用 opus**（用户偏好：能力优先于成本）。
+
+**测试**：全量 `:plugin:test` **2130** 全绿（含 MapPoolStatsTest 反射注入绕 Bukkit / VariableStoreStatsTest 归类自洽 / DiagnosticsSubCommandTest 6 路 Proxy sender 捕获文案）；shadowJar `HikariCanvas-0.9.2-SNAPSHOT.jar`。
+
+**1.0 进度**：6 块里数据闸(0.9.1) + 可观测性(0.9.2) 已完成。剩 4 块：安全收尾（SECURITY.md + 0.0.0.0 警告）/ 发布验证（跑 release.yml）/ MapPool 测试守卫 / 脚本校验 i18n。关联文件（生产）：`command/{DiagnosticsSubCommand(新),CanvasCommand}`、`HikariCanvas`、`pool/MapPool`、`variable/VariableStore`、`session/SessionManager`、`script/engine/TweenScheduler`、`resources/lang/{zh_cn,en_us}.yml`；测试 3（MapPoolStats/VariableStoreStats/DiagnosticsSubCommand）；docs troubleshooting §2.5 + deployment §7；版本号 6 文件 → 0.9.2-SNAPSHOT。
+
+---
+
 ## 2026-06-23 · 0.9.1 备份保留（BackupReaper）
 
 补 0.9.1 数据契约闸留的尾——备份保留策略。仍 0.9.1-SNAPSHOT，不 bump 版本号。

@@ -246,6 +246,8 @@ i18n:
 
 ## 7. 常见问题排查
 
+> **排查前先自查**（需 `canvas.admin`，两条都是只读）：`/canvas stats` 看全局健康（地图池是否接近上限 / 会话 / 变量 / 动画占用）；`/canvas diagnose <wallId>` 给单面墙逐环节体检（墙存在 → 地图 → 世界加载 → 会话 → 工程数据 → 动画），直接定位"某块墙为什么渲不出"。详见 `troubleshooting.md §2.5`。
+
 | 现象 | 可能原因 |
 |---|---|
 | 浏览器打开 `http://127.0.0.1:8877` 卡白屏 | shadow jar 没打 web/ 资源；跑 `./gradlew :plugin:shadowJar` 重打 |
