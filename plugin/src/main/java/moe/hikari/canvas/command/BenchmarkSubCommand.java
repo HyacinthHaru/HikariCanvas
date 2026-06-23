@@ -611,15 +611,9 @@ public final class BenchmarkSubCommand {
                 Placeholder.unparsed("warmup", String.valueOf(warm)));
         benchExecutor.submit(() -> {
             try {
-                String summary = TweenBenchmarkDriver.run(
+                List<moe.hikari.canvas.benchmark.BenchRow> rows = TweenBenchmarkDriver.measure(
                         List.of(1, 4, 16, 64), warm, measured);
-                runOnMain(() -> {
-                    messages.send(sender, "command.bench.run-tween.done");
-                    for (String line : summary.split("\n")) {
-                        sender.sendMessage(net.kyori.adventure.text.Component.text(line,
-                                net.kyori.adventure.text.format.NamedTextColor.GRAY));
-                    }
-                });
+                runOnMain(() -> sendBenchRows(sender, "run-tween", measured, warm, rows));
             } catch (Throwable t) {
                 plugin.getLogger().log(Level.SEVERE, "run-tween failed", t);
                 String msg = t.getClass().getSimpleName()
@@ -653,15 +647,9 @@ public final class BenchmarkSubCommand {
                 Placeholder.unparsed("warmup", String.valueOf(warm)));
         benchExecutor.submit(() -> {
             try {
-                String summary = ScriptBenchmarkDriver.run(
+                List<moe.hikari.canvas.benchmark.BenchRow> rows = ScriptBenchmarkDriver.measure(
                         List.of(1, 10, 25, 50), warm, measured);
-                runOnMain(() -> {
-                    messages.send(sender, "command.bench.run-script.done");
-                    for (String line : summary.split("\n")) {
-                        sender.sendMessage(net.kyori.adventure.text.Component.text(line,
-                                net.kyori.adventure.text.format.NamedTextColor.GRAY));
-                    }
-                });
+                runOnMain(() -> sendBenchRows(sender, "run-script", measured, warm, rows));
             } catch (Throwable t) {
                 plugin.getLogger().log(Level.SEVERE, "run-script failed", t);
                 String msg = t.getClass().getSimpleName()
@@ -672,6 +660,28 @@ public final class BenchmarkSubCommand {
                 running = false;
             }
         });
+    }
+
+    /** 把 driver 返回的结构化行按玩家 locale 组装成 done/subtitle/表头/数据行/脚注发出。 */
+    private void sendBenchRows(CommandSender sender, String which, int measured, int warm,
+                               List<moe.hikari.canvas.benchmark.BenchRow> rows) {
+        String base = "command.bench." + which;
+        messages.send(sender, base + ".done");
+        messages.send(sender, base + ".subtitle",
+                Placeholder.unparsed("measured", String.valueOf(measured)),
+                Placeholder.unparsed("warmup", String.valueOf(warm)));
+        messages.send(sender, base + ".table-header");
+        for (moe.hikari.canvas.benchmark.BenchRow r : rows) {
+            var p = r.p();
+            messages.send(sender, base + ".row",
+                    Placeholder.unparsed("n", String.format("%-8d", r.n())),
+                    Placeholder.unparsed("p50", String.format("%8.4f", p.p50())),
+                    Placeholder.unparsed("p95", String.format("%8.4f", p.p95())),
+                    Placeholder.unparsed("p99", String.format("%8.4f", p.p99())),
+                    Placeholder.unparsed("mean", String.format("%8.4f", p.mean())),
+                    Placeholder.unparsed("max", String.format("%8.4f", p.max())));
+        }
+        messages.send(sender, base + ".note");
     }
 
     private void sendUsage(CommandSender sender) {

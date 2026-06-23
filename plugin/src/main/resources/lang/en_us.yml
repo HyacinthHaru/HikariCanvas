@@ -164,10 +164,18 @@ command:
       started: "<gray>Tween benchmark started (<measured> measured + <warmup> warmup)…</gray>"
       done: "<gold>Tween benchmark complete:</gold>"
       failed: "<red>Benchmark failed: <message></red>"
+      subtitle: "<gray>Tween frame-rate benchmark (deepCopy + interpolation, <measured> measured, <warmup> warmup)</gray>"
+      table-header: "<gray>walls     p50(ms)   p95(ms)   p99(ms)   mean(ms)  max(ms)</gray>"
+      row: "<gray><n>  <p50>  <p95>  <p99>  <mean>  <max></gray>"
+      note: "<gray>Known limits: measures total tick cost of buildInterpolatedFrame across N walls; excludes rasterize / PacketEvents / network; clock frozen (always mid-frame, no final-frame persist).</gray>"
     run-script:
       started: "<gray>Script benchmark started (<measured> measured + <warmup> warmup)…</gray>"
       done: "<gold>Script benchmark complete:</gold>"
       failed: "<red>Benchmark failed: <message></red>"
+      subtitle: "<gray>Script action-chain benchmark (fake sink, incl. frame stack/trace, <measured> measured, <warmup> warmup)</gray>"
+      table-header: "<gray>actions   p50(ms)   p95(ms)   p99(ms)   mean(ms)  max(ms)</gray>"
+      row: "<gray><n>  <p50>  <p95>  <p99>  <mean>  <max></gray>"
+      note: "<gray>Known limits: uses a fake ActionSink (O(1), no side effects); results reflect frame stack + SES dispatch + trace overhead, excluding real variable DB writes / element persistence / Bukkit main-thread hops.</gray>"
     usage:
       header: "<gold>/canvas bench subcommands:</gold>"
       list: "<gray>  /canvas bench list                          — list benchmark scenes</gray>"

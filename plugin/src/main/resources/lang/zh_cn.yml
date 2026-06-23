@@ -164,10 +164,18 @@ command:
       started: "<gray>已开始补间帧率压测（正式 <measured> 轮 + 预热 <warmup> 轮）…</gray>"
       done: "<gold>补间帧率压测完成：</gold>"
       failed: "<red>压测失败：<message></red>"
+      subtitle: "<gray>补间帧率 benchmark（deepCopy + 插值，正式 <measured> 轮，预热 <warmup> 轮）</gray>"
+      table-header: "<gray>活跃墙    p50(ms)   p95(ms)   p99(ms)   均值(ms)  最大(ms)</gray>"
+      row: "<gray><n>  <p50>  <p95>  <p99>  <mean>  <max></gray>"
+      note: "<gray>已知局限：测量「tick 对 N 面墙 buildInterpolatedFrame 的总耗时」，不含 rasterize / PacketEvents / 网络；clock 静止（恒中间帧，无末帧落盘）。</gray>"
     run-script:
       started: "<gray>已开始脚本动作链压测（正式 <measured> 轮 + 预热 <warmup> 轮）…</gray>"
       done: "<gold>脚本动作链压测完成：</gold>"
       failed: "<red>压测失败：<message></red>"
+      subtitle: "<gray>脚本动作链 benchmark（fake sink，含帧栈/trace，正式 <measured> 轮，预热 <warmup> 轮）</gray>"
+      table-header: "<gray>动作数    p50(ms)   p95(ms)   p99(ms)   均值(ms)  最大(ms)</gray>"
+      row: "<gray><n>  <p50>  <p95>  <p99>  <mean>  <max></gray>"
+      note: "<gray>已知局限：使用 fake ActionSink（O(1) 无副作用），测量结果反映帧栈 + SES 投递 + trace 开销，不含实际变量 DB 写 / Element 落盘 / Bukkit 主线程 hop。</gray>"
     usage:
       header: "<gold>/canvas bench 子命令：</gold>"
       list: "<gray>  /canvas bench list                          — 列出测试场景</gray>"

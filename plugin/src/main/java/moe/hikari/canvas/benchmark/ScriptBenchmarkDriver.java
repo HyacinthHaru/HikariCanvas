@@ -44,30 +44,20 @@ public final class ScriptBenchmarkDriver {
     private static final Logger LOG = Logger.getLogger("hikari-bench-script");
 
     /**
-     * 运行脚本链 benchmark，返回文字摘要。
+     * 运行脚本链 benchmark，返回结构化结果行列表。
      *
      * @param actionCounts  待测的动作数列表（如 {@code [1, 10, 25, 50]}，含 max-actions-per-run 边界）
      * @param warmupIters   预热轮数（触发 JIT 编译）
      * @param measuredIters 测量轮数
-     * @return 文字摘要，可直接发给 CommandSender
+     * @return 每个动作数对应一行 {@link BenchRow}，文案由调用端按 locale 组装
      */
-    public static String run(List<Integer> actionCounts, int warmupIters, int measuredIters) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("脚本动作链 benchmark（fake sink，含帧栈/trace，")
-                .append(measuredIters).append(" 轮，").append(warmupIters).append(" 轮预热）\n");
-        sb.append(String.format("%-10s  %8s  %8s  %8s  %8s  %8s%n",
-                "动作数", "p50(ms)", "p95(ms)", "p99(ms)", "均值(ms)", "最大(ms)"));
-        sb.append("----------------------------------------------------------------\n");
-
+    public static List<BenchRow> measure(List<Integer> actionCounts, int warmupIters, int measuredIters) {
+        List<BenchRow> rows = new ArrayList<>(actionCounts.size());
         for (int n : actionCounts) {
             Percentiles p = measureActionCount(n, warmupIters, measuredIters);
-            sb.append(String.format("%-10d  %8.4f  %8.4f  %8.4f  %8.4f  %8.4f%n",
-                    n, p.p50(), p.p95(), p.p99(), p.mean(), p.max()));
+            rows.add(new BenchRow(n, p));
         }
-
-        sb.append("\n已知局限：使用 fake ActionSink（O(1) 无副作用），测量结果反映帧栈 + SES 投递 + trace 开销，");
-        sb.append("不含实际变量 DB 写 / Element 落盘 / Bukkit 主线程 hop。");
-        return sb.toString();
+        return rows;
     }
 
     // ---------- 内部逻辑 ----------
@@ -128,7 +118,7 @@ public final class ScriptBenchmarkDriver {
     private static void awaitLatch(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {
-                LOG.warning("[bench-script] run 超时 10s（runner SES 未触发 trace callback，结果可能不准）");
+                LOG.warning("[bench-script] run timed out after 10s (runner SES never fired trace callback; result may be inaccurate)");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

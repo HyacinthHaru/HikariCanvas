@@ -48,30 +48,20 @@ public final class TweenBenchmarkDriver {
     private static final Logger LOG = Logger.getLogger("hikari-bench-tween");
 
     /**
-     * 运行补间 benchmark，返回文字摘要。
+     * 运行补间 benchmark，返回结构化结果行列表。
      *
      * @param wallCounts    待测的 N 值列表（如 {@code [1, 4, 16, 64]}）；每个 N 独立建 TweenScheduler
      * @param warmupIters   预热 tick 轮数（触发 JIT 编译，结果丢弃）
      * @param measuredIters 测量 tick 轮数
-     * @return 文字摘要，可直接发给 CommandSender
+     * @return 每个墙数对应一行 {@link BenchRow}，文案由调用端按 locale 组装
      */
-    public static String run(List<Integer> wallCounts, int warmupIters, int measuredIters) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("补间帧率 benchmark（deepCopy + 插值，").append(measuredIters)
-                .append(" 轮，").append(warmupIters).append(" 轮预热）\n");
-        sb.append(String.format("%-8s  %8s  %8s  %8s  %8s  %8s%n",
-                "活跃墙", "p50(ms)", "p95(ms)", "p99(ms)", "均值(ms)", "最大(ms)"));
-        sb.append("--------------------------------------------------------------\n");
-
+    public static List<BenchRow> measure(List<Integer> wallCounts, int warmupIters, int measuredIters) {
+        List<BenchRow> rows = new ArrayList<>(wallCounts.size());
         for (int n : wallCounts) {
             Percentiles p = measureN(n, warmupIters, measuredIters);
-            sb.append(String.format("%-8d  %8.4f  %8.4f  %8.4f  %8.4f  %8.4f%n",
-                    n, p.p50(), p.p95(), p.p99(), p.mean(), p.max()));
+            rows.add(new BenchRow(n, p));
         }
-
-        sb.append("\n已知局限：测量「tick 对 N 面墙 buildInterpolatedFrame 的总耗时」，");
-        sb.append("不含 rasterize / PacketEvents / 网络；clock 静止（恒中间帧，无末帧落盘）。");
-        return sb.toString();
+        return rows;
     }
 
     // ---------- 内部逻辑 ----------
