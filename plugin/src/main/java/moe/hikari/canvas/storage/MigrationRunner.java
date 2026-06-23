@@ -84,6 +84,11 @@ public final class MigrationRunner {
     }
 
     public void run() {
+        runUpTo(Integer.MAX_VALUE);
+    }
+
+    /** 应用 version ≤ maxVersion 的待执行迁移（测试 seam：fixture / 备份测试按版本分段跑）。 */
+    public void runUpTo(int maxVersion) {
         jdbi.useHandle(h -> {
             ensureSchemaVersionTable(h);
             int currentVersion = h.createQuery(
@@ -94,10 +99,11 @@ public final class MigrationRunner {
 
             for (Migration m : MIGRATIONS) {
                 if (m.version <= currentVersion) continue;
+                if (m.version > maxVersion) break; // MIGRATIONS 按版本升序，可提前 break
                 log.info("Applying migration V" + String.format("%03d", m.version) + " ...");
-                // M15.4 P0-29：可选自动备份。pre-release 默认关，0.1.0 发版后建议开。
+                // 可选自动备份（WAL 安全）：在 per-migration 事务之前、用同一连接 checkpoint。
                 if (autoBackup && dbFilePath != null) {
-                    tryBackup(m.version);
+                    tryBackup(h, m.version);
                 }
                 // M15.4 P0-28：每个 migration 包事务；DDL 失败时回滚不留半态。
                 // 注：SQLite 大多数 DDL 也是事务安全的；JDBI 的 useTransaction 在已有
@@ -123,16 +129,31 @@ public final class MigrationRunner {
     }
 
     /**
-     * 复制 data.db 到 {@code data.db.pre-V<NNN>.bak}。失败不抛——备份只是兜底，
-     * 主链路还是要让 migration 跑（manual rollback 走 SQL 写脚本仍可行）。
+     * 备份 data.db 到 {@code data.db.pre-V<NNN>.bak}。WAL 安全：
+     * 先在迁移连接上 {@code PRAGMA wal_checkpoint(TRUNCATE)} 把已提交事务从 -wal 刷进主库
+     * 并截断 -wal，再 copy 主库 + 仍存在的 -wal/-shm（备份成完整文件集）。
+     *
+     * <p>迁移在 onEnable 单线程跑、此时无其它连接写入，故 checkpoint 后主库即一致快照。
+     * 失败不抛——备份只是兜底，主链路仍让 migration 跑。</p>
      */
-    private void tryBackup(int version) {
+    private void tryBackup(Handle h, int version) {
         try {
-            Path backup = dbFilePath.resolveSibling(
-                    dbFilePath.getFileName() + ".pre-V"
-                            + String.format("%03d", version) + ".bak");
-            Files.copy(dbFilePath, backup, StandardCopyOption.REPLACE_EXISTING);
-            log.info("DB backed up to " + backup);
+            // WAL → 主库：TRUNCATE 把所有已提交帧落主库并清空 -wal。
+            h.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+            String base = dbFilePath.getFileName().toString();
+            Path dir = dbFilePath.getParent();
+            String suffix = ".pre-V" + String.format("%03d", version) + ".bak";
+            Path mainBak = dir.resolve(base + suffix);
+            Files.copy(dbFilePath, mainBak, StandardCopyOption.REPLACE_EXISTING);
+            // 连同 -wal/-shm 一起备份（checkpoint TRUNCATE 后通常已空，但完整文件集让恢复更稳妥）。
+            for (String sidecar : new String[]{"-wal", "-shm"}) {
+                Path src = dir.resolve(base + sidecar);
+                if (Files.exists(src)) {
+                    Files.copy(src, dir.resolve(base + suffix + sidecar),
+                            StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            log.info("DB backed up (WAL-checkpointed) to " + mainBak);
         } catch (Exception e) {
             log.log(Level.WARNING, "DB backup failed (continuing anyway)", e);
         }
