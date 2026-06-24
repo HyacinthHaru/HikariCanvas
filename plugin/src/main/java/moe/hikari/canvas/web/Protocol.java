@@ -48,6 +48,13 @@ public final class Protocol {
      */
     public static final int CLOSE_TOKEN_RATE_LIMITED = 4429;
 
+    /**
+     * 单会话在 1 分钟内反复触发输入限流（≥5 次 RATE_LIMITED）→ 主动断连的 close code
+     * （0.9.3 引入）。用 WebSocket 标准的 1008（policy violation）。client 看到 1008 应
+     * 显示"操作过于频繁，已断开"并停止自动重连（与 §3.3 契约一致）。
+     */
+    public static final int CLOSE_RATE_LIMIT_VIOLATION = 1008;
+
     /** 版本是否在可接受范围内（含边界）。 */
     public static boolean isSupported(int clientVersion) {
         return clientVersion >= SUPPORTED_MIN && clientVersion <= SUPPORTED_MAX;

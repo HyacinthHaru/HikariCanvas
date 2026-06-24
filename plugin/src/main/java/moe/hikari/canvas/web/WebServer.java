@@ -150,6 +150,8 @@ public final class WebServer {
 
     /** 活跃 session → 绑定的 WS 连接；用于服务端主动推送（state.snapshot / state.patch）。 */
     private final ConcurrentMap<String, WsContext> wsBySession = new ConcurrentHashMap<>();
+    /** 0.9.3：会话输入限流器；持引用供"反复超限 → 单点断连"回调（见 {@link #closeForRepeatedViolation}）。 */
+    private final SessionRateLimiter rateLimiter;
     /** 服务端主动推送 {@code s-<N>} 的自增计数。 */
     private final AtomicLong serverIdSeq = new AtomicLong(0);
 
@@ -222,6 +224,9 @@ public final class WebServer {
         this.iconRegistry = iconRegistry;
         this.plugin = plugin;
         this.serverVersion = serverVersion;
+        this.rateLimiter = rateLimiter;
+        // 0.9.3：会话反复超限 → 单点断连回调（6 个 dispatcher 的 allow() 调用不变）
+        rateLimiter.setOnRepeatedViolation(this::closeForRepeatedViolation);
 
         // M15.x god-class 拆分：dispatcher 通过 OpPushCallback 触发服务端主动推送，
         // 避免直接耦合 wsBySession 映射。
@@ -1312,6 +1317,34 @@ public final class WebServer {
         } catch (Exception ignored) {}
         log.info("WS closed " + Protocol.CLOSE_TOKEN_RATE_LIMITED
                 + " token_rate_limited: " + reason);
+    }
+
+    /**
+     * 0.9.3：某会话在 1 分钟内反复触发输入限流（≥ {@code violationThreshold} 次 RATE_LIMITED）
+     * → 主动断连 + 审计。由 {@link SessionRateLimiter#setOnRepeatedViolation} 回调，运行在
+     * WS onMessage 线程。close 1008（policy violation）= 终止态，前端不重连。
+     *
+     * <p>关连接逻辑收口于此单点；6 个 dispatcher 的 {@code rateLimiter.allow()} 调用一律不变。</p>
+     */
+    private void closeForRepeatedViolation(String sessionId) {
+        WsContext ctx = wsBySession.remove(sessionId);
+        if (auditLog != null) {
+            java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+            details.put("reason", "repeated input rate-limit violations");
+            Session s = sessionManager.byId(sessionId);
+            String playerUuid = (s == null || s.playerUuid() == null) ? null : s.playerUuid().toString();
+            String playerName = (s == null) ? null : s.playerName();
+            auditLog.record("SESSION_RATE_LIMIT_DISCONNECT",
+                    playerUuid, playerName, sessionId, null, details);
+        }
+        if (ctx != null) {
+            try {
+                ctx.closeSession(Protocol.CLOSE_RATE_LIMIT_VIOLATION, "rate_limit_violation");
+            } catch (Exception ignored) {}
+            log.info("WS closed " + Protocol.CLOSE_RATE_LIMIT_VIOLATION
+                    + " rate_limit_violation: sessionId=" + sessionId);
+        }
+        rateLimiter.discardSession(sessionId);
     }
 
     /**

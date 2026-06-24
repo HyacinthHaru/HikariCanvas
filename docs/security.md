@@ -159,12 +159,12 @@ validateToken(t):
 
 ### 3.3 限流
 
-**当前实装（`SessionRateLimiter`）**：单会话固定窗口计数器 —— 默认 **40 msg / 2s**（≈ 20 msg/s 平均）。窗内超限本次 op 直接返回 `RATE_LIMITED` 并丢弃，**不关闭连接**。
+**当前实装（`SessionRateLimiter`）**：单会话固定窗口计数器 —— 默认 **40 msg / 2s**（≈ 20 msg/s 平均）。窗内超限本次 op 直接返回 `RATE_LIMITED` 并丢弃；**单次超限不关闭连接**，但 1 分钟内反复超限达 5 次会主动断连（close 1008，见下表）。
 
 | 层级 | 规则 | 超过动作 | 状态 |
 | --- | --- | --- | --- |
 | 突发窗口 | 40 msg / 2s（`DEFAULT_BURST` / `DEFAULT_WINDOW_MS`） | 返回 `RATE_LIMITED`，丢弃本次 | ✅ 实装 |
-| 反复超限 → close | 5 次 RATE_LIMITED / 1 min → close 1008 + 终止会话 | — | **未实装**（代码注释「留 M7 polish」，至今未做） |
+| 反复超限 → close | 5 次 RATE_LIMITED / 1 min → close 1008 + 终止会话 | close 1008 + 断连 + `SESSION_RATE_LIMIT_DISCONNECT` 审计 | ✅ 实装（0.9.3，`SessionRateLimiter` 回调 → `WebServer.closeForRepeatedViolation`） |
 
 这与 token 暴力枚举限流（§2.4 `TokenRateLimiter`，per-IP 10 次/分钟 → close 4429）是正交的两套限流。
 
