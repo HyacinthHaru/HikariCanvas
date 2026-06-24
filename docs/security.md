@@ -626,7 +626,7 @@ server {
 ## 12. 响应渠道
 
 - GitHub Security Advisory 接收私密上报
-- `SECURITY.md` 在仓库根目录说明上报流程与响应 SLA（v1.0 发布前创建）
+- `SECURITY.md` 在仓库根目录说明上报流程与响应 SLA（0.9.3 已创建）
 - 披露政策：漏洞修复发布后 7 日解密细节
 
 ---
