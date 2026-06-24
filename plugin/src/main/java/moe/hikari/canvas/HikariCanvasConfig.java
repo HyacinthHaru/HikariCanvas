@@ -367,6 +367,7 @@ public final class HikariCanvasConfig {
         FileConfiguration f = plugin.getConfig();
         Builder b = new Builder();
         b.host = f.getString("network.host", b.host);
+        warnIfPublicBind(b.host, plugin.getLogger());
         b.port = f.getInt("network.port", b.port);
         String urlTemplate = f.getString("network.editor-url",
                 "http://{host}:{port}/?token={token}");
@@ -688,6 +689,28 @@ public final class HikariCanvasConfig {
             return fallback;
         }
         return resolved;
+    }
+
+    /**
+     * 0.9.3：服主把 {@code network.host} 显式绑成公网通配地址（{@code 0.0.0.0} / {@code ::}）时，
+     * 启动期打 3 行警告。web 编辑器默认无 TLS，公网裸绑会让 auth token 明文暴露在网络上。
+     *
+     * <p>只警告、不阻拦——服主有正当理由（如反代在另一台机器）时仍可绑公网。
+     * 控制台日志走英文（与 {@link #sanitizeEditorUrl} 一致）。</p>
+     */
+    static void warnIfPublicBind(String host, Logger logger) {
+        if (host == null) return;
+        String h = host.trim();
+        boolean publicBind = h.equals("0.0.0.0")
+                || h.equals("::") || h.equals("[::]")
+                || h.equals("*") || h.isEmpty();
+        if (!publicBind) return;
+        logger.warning("============================================================");
+        logger.warning("[HikariCanvas] network.host is bound to '" + host
+                + "' (a public interface). The web editor ships NO TLS, so the auth "
+                + "token is exposed in plaintext on the network.");
+        logger.warning("[HikariCanvas] For any public deployment, bind 127.0.0.1 and put "
+                + "a TLS reverse proxy (nginx / Caddy) in front. See SECURITY.md.");
     }
 
     /** 摘要字符串，启动 / reload 时 log 一下，方便排错。 */
