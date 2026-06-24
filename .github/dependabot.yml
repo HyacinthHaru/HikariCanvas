@@ -1,0 +1,28 @@
+# Dependabot：每周扫依赖更新并开 PR。0.9.3 引入（1.0 发布前安全收尾）。
+# 三个生态：根 Gradle / web 前端 npm / GitHub Actions workflow。
+# 与 CI 正交——dependabot 只开 PR，合并与否由人判断；不做 npm audit gate。
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
