@@ -168,6 +168,8 @@ validateToken(t):
 
 这与 token 暴力枚举限流（§2.4 `TokenRateLimiter`，per-IP 10 次/分钟 → close 4429）是正交的两套限流。
 
+**覆盖面（重要）**：`SessionRateLimiter.allow()` 只在 6 个编辑类 dispatcher 内调用 —— `element.* / layer.* / canvas.* / timeline.* / keyframe.*`（EditOpDispatcher）、`variable.*`、`variable.alias.*`、`schedule.*`、`rail.*`、`script.*`。**不计入**限流窗口的消息：`ping`（无副作用 echo）、`brush.*`（笔触流畅性考量，靠 `MAX_BRUSH_POINTS_PER_STROKE` / `MAX_ACTIVE_STROKES` 内存上限兜底）、`wall.*` / `template.*`（各有 ACL + DB 写锁兜底）。即「反复超限 → close 1008」只对编辑类 op 生效。把全部消息面纳入统一限流是一个会影响笔触体验的独立决策，留待后续按需评估（见 PROPOSAL「工具不是保姆」性能哲学，不预先过度防御）。
+
 ---
 
 ## 4. 输入校验

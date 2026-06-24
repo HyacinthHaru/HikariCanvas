@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-06-24 · 0.9.3 安全收尾（SECURITY.md + 公网绑定警告 + 反复超限断连 + dependabot）
+
+1.0 发布前打磨第 3 块（安全收尾）。subagent-driven（per-task implementer + reviewer 全用 opus；opus 整支终审 Ready-to-merge）。版本号 0.9.2 → 0.9.3-SNAPSHOT。
+
+**四件套**：
+- **`SECURITY.md`（仓库根，英文，GitHub Security 标签页识别）**：GitHub Security Advisory 私密上报 + 5 日 ack / 10 日 triage SLA + 漏洞修复后 7 日披露 + `[SECURITY]` 发布标记 + 边界声明（默认绑 127.0.0.1 / 公网必须 TLS+反代 / URL 上传 SSRF 已移除服主自担 / MC 协议·OS·账号盗用 out of scope）。`docs/security.md §12` 标已创建。
+- **公网绑定启动警告**（`HikariCanvasConfig.warnIfPublicBind`）：host = `0.0.0.0` / `::` / `[::]` / `*` / 空 → 打 3 行英文 warning（无 TLS 裸绑会明文暴露 token + 建议反代）；**只警告不阻拦**。`load()` 读 host 后接线（照 `sanitizeEditorUrl` 范式）。
+- **会话反复超限主动断连**：`Protocol.CLOSE_RATE_LIMIT_VIOLATION = 1008` + `SessionRateLimiter` 内部 violation 计数（独立 60s 窗口，5 次拒绝 → 触发注入回调；**锁内决策 / 锁外触发回调 / single-fire / 窗口复位 / volatile null-safe hook**）+ `WebServer` 新 `rateLimiter` 字段 + 构造期 `setOnRepeatedViolation(this::closeForRepeatedViolation)` 接线 + `closeForRepeatedViolation` **单点收口**（`wsBySession.remove` → close 1008 → `discardSession`）+ `SESSION_RATE_LIMIT_DISCONNECT` 审计。**6 个编辑类 dispatcher 的 `allow()` 调用一行未改**（关连接逻辑只在 WebServer 单点）。前端 `wsClient.isTerminalCloseCode` 加 1008 终止态（不自动重连）+ onClose 复用 `RATE_LIMITED` 文案（不新增 i18n key）。`security.md §3.3` 标实装 + 补**覆盖面限定**（`ping` / `brush` / `wall` / `template` 不计入——整支终审 I-1 文档精确化；把全 op 纳入统一限流是会动笔触体验的独立 scope，不在本批）。
+- **`.github/dependabot.yml`**：gradle（根）+ npm（`web/`）+ github-actions 三生态周更；不做 npm audit gate（与 CI 正交）。
+
+**过程**：6 commit（T1 SECURITY.md `39d9b1ac` / T2 公网警告 `756d27c5` / T3 反复超限断连 `c24cfea2` / T4 前端 1008 `a962138b` / T5 dependabot `e0833167` / T6 收尾本 commit）。**子代理全程 opus**。**整支终审（opus）Ready to merge 无 Critical**：前后端 1008 闭环成立、关连接收口纪律遵守、并发正确、文档与代码一致；I-1（限流覆盖面）文档精确化已采纳，M-1（测试占位断言）/ M-2（1008 复用 RATE_LIMITED 文案）系 plan 自承取舍可接受。
+
+**测试**：后端全量 `:plugin:test` BUILD SUCCESSFUL（含新 `HikariCanvasConfigTest` 3 + `SessionRateLimiterTest` 4）；前端 vitest **93 files / 1446** 全绿（含 closeCode 1008 新 case）；shadowJar `HikariCanvas-0.9.3-SNAPSHOT.jar` 152 MB。
+
+**1.0 进度**：6 块里数据闸(0.9.1) + 可观测性(0.9.2) + 安全收尾(0.9.3) 已完成。剩 3 块：**发布验证**（跑 release.yml 出真 release，0.9.4）/ MapPool+WallRestorer 测试守卫 / 脚本校验 i18n（`ScriptRuleValidator` ~103 串）。关联文件（生产）：`SECURITY.md`(新)、`HikariCanvasConfig`、`web/Protocol`、`session/SessionRateLimiter`、`web/WebServer`、`web/src/network/wsClient.ts`、`.github/dependabot.yml`(新)、`docs/security.md`；测试 2 新（HikariCanvasConfigTest / SessionRateLimiterTest）+ closeCode.test；版本号 6 文件 → 0.9.3-SNAPSHOT。
+
+---
+
 ## 2026-06-23 · 0.9.2 可观测性（增强 /canvas stats + 新增 diagnose）
 
 给服主自助诊断能力（1.0 发布前打磨第 2 块）。subagent-driven（per-task implementer + reviewer 全用 opus；opus 整支终审 Ready-to-merge）。版本号 0.9.1 → 0.9.2-SNAPSHOT。**只读观测，不做任何修复**（cleanup stub 不碰；符合"工具不是保姆——数据透明不替服主决策"）。
