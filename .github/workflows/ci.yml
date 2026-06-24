@@ -28,7 +28,7 @@ jobs:
           java-version: 21
 
       - name: Setup Node 22 LTS
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           # CLAUDE.md：Node 25 偶卡 vue-tsc，CI 锁 22 LTS 稳定。
