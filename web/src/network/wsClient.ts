@@ -914,6 +914,8 @@ export class WsClient {
                 }
             } else if (ev.code === 4429) {
                 net.lastError = localizeErrorCode('RATE_LIMITED');
+            } else if (ev.code === 1008) {
+                net.lastError = localizeErrorCode('RATE_LIMITED');
             } else if (ev.code === 1000) {
                 // 主动关闭，不刷红
             } else {
@@ -1167,12 +1169,14 @@ export function applyScriptTrace(payload: ScriptTracePayload | null | undefined)
 // 导出为纯函数，可独立单测（不依赖 Pinia / WebSocket，node 环境即可跑）。
 //
 // ■ 1000  正常关闭（client.close() 主动）
+// ■ 1008  反复超限断连（Protocol.CLOSE_RATE_LIMIT_VIOLATION）→ 等待后手动刷新，不自动重连
 // ■ 4001  auth 失败（token 无效 / 超时）→ 换 token 才有用，重连必再失败
 // ■ 4002  协议版本不兼容（Protocol.CLOSE_PROTOCOL_VERSION_UNSUPPORTED）→ 升级客户端才有用
 // ■ 4429  token 暴力枚举限流（Protocol.CLOSE_TOKEN_RATE_LIMITED）→ 等待窗口复位
 //         原 4008 是后端从未发出的死码，已替换为 4429（见 Protocol.java）
 export function isTerminalCloseCode(code: number): boolean {
     return code === 1000
+        || code === 1008
         || code === 4001
         || code === 4002
         || code === 4429;

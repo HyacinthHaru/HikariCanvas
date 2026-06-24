@@ -38,6 +38,12 @@ describe('isTerminalCloseCode', () => {
         expect(isTerminalCloseCode(4429)).toBe(true);
     });
 
+    it('1008 (repeated rate-limit violations) → terminal', () => {
+        // Protocol.CLOSE_RATE_LIMIT_VIOLATION = 1008（SessionRateLimiter 反复超限触发）；
+        // 重连只会继续触发限流，应停止退避重连，提示用户放慢操作。
+        expect(isTerminalCloseCode(1008)).toBe(true);
+    });
+
     // 非终止态：应走 scheduleReconnect 退避
     it('1001 (going away / server reboot) → non-terminal', () => {
         expect(isTerminalCloseCode(1001)).toBe(false);
