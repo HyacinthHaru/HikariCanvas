@@ -25,7 +25,7 @@
 
 **测试**：默认路径全量 `:plugin:test` BUILD SUCCESSFUL（PacketEvents 2.12.2 无回归）；26.1.2 守卫编译 BUILD SUCCESSFUL（仅 getName deprecation note）；shadowJar `HikariCanvas-0.9.5-SNAPSHOT.jar`。
 
-**1.0 进度**：6 块完成 5 块（数据闸 / 可观测性 / 安全收尾 / 发布验证 / 多版本支持）。剩 1 块：MapPool+WallRestorer 测试守卫（脚本校验 i18n 另算）。**未发布待办**：可选 cut `v0.9.5-rc.1` 真 release（让 26.x 服务器有可下载的多版本 jar——当前 release rc.1 不支持 26.x）。关联文件：`plugin/build.gradle.kts`（PacketEvents 2.12.2 + paperApi/mcVersion/javaVer/release 参数化）、`.github/workflows/ci.yml`（compat-26 守卫 job）、`README.md`、`docs/deployment.md`、`CLAUDE.md`、版本号 6 文件 → 0.9.5-SNAPSHOT。
+**1.0 进度**：6 块完成 5 块（数据闸 / 可观测性 / 安全收尾 / 发布验证 / 多版本支持）。剩 1 块：MapPool+WallRestorer 测试守卫（脚本校验 i18n 另算）。**已 cut `v0.9.5-rc.1`**（2026-06-27，tag 指 `1d3cca2c`；release run `28256911964` 全绿 → prerelease `HikariCanvas-0.9.5-rc.1.jar` 89MB，含 PacketEvents 2.12.2 多版本；现在 26.x 服务器有可下载多版本包，README 版本指向更新到 rc.1）。关联文件：`plugin/build.gradle.kts`（PacketEvents 2.12.2 + paperApi/mcVersion/javaVer/release 参数化）、`.github/workflows/ci.yml`（compat-26 守卫 job）、`README.md`、`docs/deployment.md`、`CLAUDE.md`、版本号 6 文件 → 0.9.5-SNAPSHOT。
 
 ---
 
