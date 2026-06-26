@@ -40,8 +40,11 @@ jobs:
 
       - name: Frontend - install deps + test + build
         working-directory: web
+        # npm ci fallback 与 ci.yml 对齐：macOS dev 生成的 platform-specific transitive
+        # deps（@rolldown/binding-* / @emnapi 等）不写入 package-lock.json，CI Linux 上
+        # 严格 npm ci 会失败 → fallback 到 npm install 保证 release 跑通。
         run: |
-          npm ci
+          npm ci || (echo "::warning::npm ci failed (likely platform-specific dep mismatch); falling back to npm install" && npm install --no-audit --no-fund)
           npm run test
           npm run build
 
