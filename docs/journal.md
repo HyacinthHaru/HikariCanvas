@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-06-26 · 0.9.4 发布验证（release.yml 首跑出真 Release + README 发布化 + 体积真相）
+
+1.0 发布前打磨第 4 块（发布验证）。让从未跑过的 `release.yml` 真正产出一个可下载的 GitHub Release，端到端验证发布管线。版本号 0.9.3 → 0.9.4-SNAPSHOT。
+
+**做了什么**：
+- **release.yml 预检硬化**：前端步骤 `npm ci` → `npm ci || npm install --no-audit --no-fund`（对齐 ci.yml）。release.yml 从未跑过，首跑必撞 ci.yml 当初的跨平台 lock 坑（macOS dev 生成的 platform-specific transitive deps 不进 package-lock，CI Linux 严格 npm ci 失败）。**实跑验证：CI 确实命中 fallback**（run annotation `npm ci failed … falling back to npm install`）——预检硬化是必需的，否则首个公开 release 直接栽在前端步骤。
+- **打 tag `v0.9.4-rc.1`（SSH 签名 annotated）→ 触发 release.yml → run `28212224911` 全绿（2m38s）**：frontend(test+build) + backend(test+shadowJar) + rename + Create GitHub Release 全过。产出 **prerelease** `HikariCanvas-0.9.4-rc.1.jar`（由 gradle `0.9.4-SNAPSHOT` 经 rename 步骤改名，验证了 tag≠gradle 版本的 rename 兜底逻辑）。`prerelease=true`（`contains(VERSION,'-')`）/ `draft=false`。URL：https://github.com/HyacinthHaru/HikariCanvas/releases/tag/v0.9.4-rc.1 。**这是项目首个 GitHub Release**。（一条 benign annotation：Node 20 deprecation，`@v4` actions 被迫跑 Node 24，非失败——0.9.3 刚加的 dependabot github-actions 生态会管它。）
+- **README 从愿景体重写为发布体**：环境要求（Paper 1.21.11 / Java 21）+ 下载 + 60 秒上手 + 功能一览（编辑器/动态数据/动画脚本/工程管理 4 组，大白话无内部编号）+ 公网部署指 deployment §3 + SECURITY.md + 文档导航 + 体积说明 + 保留 AI 诚实声明 + 两张 banner 图。
+- **体积真相（发布验证的意外收获）**：下载 release jar 实测 **94 MB**，本地 `:plugin:shadowJar` 出 **152 MB**——差 ~62MB。查清根因：本地 dev 跑过 `syncFontsToWeb` 把 27 套字体塞进 `web/public/fonts/`，vite build 又烤进 jar 的 `web/fonts/`（与后端 `fonts/` 重复一份）；**CI release 路径不跑 syncFontsToWeb，`web/public/fonts/` 空，故 release jar 只含 `fonts/` 一份**。核实前端字体加载：二进制走 `/api/font/file?id=X`（后端从 `fonts/` 供给，`FontLoader.ts:66` / `TextGlyphExtractor.ts:149`），metrics 先试静态 `/fonts/X.metrics.json` 失败再 fallback `/api/font/metrics`（`GlyphMetricsLut.ts:60-64`）——**前端从不静态取 `web/fonts/*.ttf` 大二进制，那份纯冗余**。结论：**release jar（90 MB，字体一份）是正确且功能完整的精简产物**，本地 152MB 是 dev-only 膨胀。原计划要记为"~88MB 字体去重候选"的事，在 release 路径上已天然完成。据此把 README + deployment 体积标注从 ~150MB 改正为 ~90MB（按真实 release 产物）。
+- 版本 bump 0.9.3 → 0.9.4-SNAPSHOT（6 文件）。
+
+**实机安装（交用户）**：在真 Paper 1.21.11 服务器装**从 Releases 下载的** `HikariCanvas-0.9.4-rc.1.jar`（90 MB，**不是本地 build 的 152MB jar**），确认插件正常起 + 编辑器字体渲染正常（验证 90MB 精简产物的字体路径在真服无碍）。CI 不能替代真服启动。
+
+**留后续（dev-build 体感，非 release 问题）**：本地 build 仍出 152MB 冗余 jar（`web/fonts/` 那份）；可在 shadowJar 排除 `web/fonts/` 或不为 build 跑 syncFontsToWeb 让本地 build 与 release 一致，留 1.0+ 评估（不影响 release，YAGNI）。
+
+**1.0 进度**：6 块完成 4 块（数据闸 0.9.1 / 可观测性 0.9.2 / 安全收尾 0.9.3 / 发布验证 0.9.4）。剩 2 块：MapPool+WallRestorer 测试守卫 / 脚本校验 i18n（`ScriptRuleValidator` ~103 串）。关联文件：`.github/workflows/release.yml`（npm ci fallback）、`README.md`（重写）、`docs/deployment.md §1`（体积）、版本号 6 文件 → 0.9.4-SNAPSHOT；tag `v0.9.4-rc.1` / Release run `28212224911`。
+
+---
+
 ## 2026-06-24 · 0.9.3 安全收尾（SECURITY.md + 公网绑定警告 + 反复超限断连 + dependabot）
 
 1.0 发布前打磨第 3 块（安全收尾）。subagent-driven（per-task implementer + reviewer 全用 opus；opus 整支终审 Ready-to-merge）。版本号 0.9.2 → 0.9.3-SNAPSHOT。

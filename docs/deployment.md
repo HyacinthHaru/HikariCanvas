@@ -13,7 +13,7 @@
 
 ## 1. 单机 / 内网最小可用
 
-把 jar 扔进 `plugins/`、重启服务器，第一次启动会自动生成 `plugins/HikariCanvas/config.yml`。jar 约 150 MB（体积偏大是因为内置了 20+ 套字体，属正常；首次启动稍慢也正常）。
+把 jar 扔进 `plugins/`、重启服务器，第一次启动会自动生成 `plugins/HikariCanvas/config.yml`。GitHub Releases 上的发布 jar 约 90 MB（体积偏大是因为内置了 20+ 套字体，由后端统一供给给编辑器，无需服主另配字体；属正常，首次启动稍慢也正常）。
 
 ```yaml
 network:
