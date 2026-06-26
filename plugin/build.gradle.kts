@@ -12,9 +12,18 @@ plugins {
     id("com.gradleup.shadow") version "9.4.1"
 }
 
+// 0.9.5 多版本支持：编译目标可参数化，默认 1.21.11 / Java 21（生产 jar）。
+// CI 双版本编译守卫用 `-PpaperApi=26.1.2-R0.1-SNAPSHOT -PjavaVer=25` 对 26.x API 编译同一份源码，
+// 提前抓「用了 26.x 已移除 API」的回归；本地也可 `./gradlew runServer -PpaperApi=... -PjavaVer=25` 起 26.x dev server。
+// paperApi = paperweight dev bundle 坐标（1.21.11 用 `1.21.11-R0.1-SNAPSHOT`；26.x 新版本号用
+// `26.1.2.build.+` 追最新 stable build）。mcVersion 单列（runServer 用，两种格式无法统一推导）。
+val paperApi: String = providers.gradleProperty("paperApi").getOrElse("1.21.11-R0.1-SNAPSHOT")
+val mcVersion: String = providers.gradleProperty("mcVersion").getOrElse("1.21.11")
+val javaVer: Int = providers.gradleProperty("javaVer").map(String::toInt).getOrElse(21)
+
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(javaVer)
     }
 }
 
@@ -24,12 +33,12 @@ repositories {
 }
 
 dependencies {
-    paperweight.paperDevBundle("1.21.11-R0.1-SNAPSHOT")
+    paperweight.paperDevBundle(paperApi)
 
     implementation("io.javalin:javalin:7.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.2")
-    implementation("com.github.retrooper:packetevents-spigot:2.11.2")
+    implementation("com.github.retrooper:packetevents-spigot:2.12.2")
 
     // 持久化（M2-T2）
     implementation("org.xerial:sqlite-jdbc:3.53.0.0")
@@ -574,7 +583,9 @@ tasks.processResources {
 tasks {
     compileJava {
         options.encoding = "UTF-8"
-        options.release = 21
+        // 生产 jar 锁 Java 21 字节码（跑 1.21.11 的 Java 21 服 + 向上兼容 26.x 的 Java 25 服）。
+        // CI 双版本守卫用 -PjavaVer=25 对 26.x API 编译（26.x paper-api 是 Java 25，无法 --release 21）。
+        options.release = javaVer
     }
 
     jar {
@@ -613,7 +624,7 @@ tasks {
     }
 
     runServer {
-        minecraftVersion("1.21.11")
+        minecraftVersion(mcVersion)
         pluginJars.from(shadowJar.flatMap { it.archiveFile })
         doFirst {
             val eula = project.file("run/eula.txt")

@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-06-26 · 0.9.5 多版本支持（一份 jar 通吃 Paper 1.21.11 + 26.x）
+
+1.0 发布前打磨第 5 块（多版本支持）。生态在往 Minecraft 26 迁（新版本号体系 + Java 25），停 1.21.11 会被甩下。本版让**同一份 jar 同时跑 Paper 1.21.11 和 26.1/26.2**。版本号 0.9.4 → 0.9.5-SNAPSHOT。
+
+**背景**：rc1（0.9.4）在用户 26.1.2 服上崩在 `PacketEvents 2.11.2` 内部 NMS 反射（`NMS_ITEM_STACK_CLASS` null）——Paper 26.1 移除了插件 Spigot 重映射。但崩的是**依赖**不是我们的代码：grep 实证 `plugin/src/main` 零 `net.minecraft`/`craftbukkit`，零 NMS。这正是 PROPOSAL §5.2.6「26.x 升级保障」纪律埋了半年的回报——迁移只是 bump 依赖，不动代码。
+
+**de-risk spike（controller 亲验 3 个未知）**：
+- PacketEvents 2.11.2 → **2.12.2**（多版本库，同时支持 1.21.x + 26.1.x）：Java 21 编译通过（**不需 Java 25**）、全量测试不回归、`MapPacketSender` 的 `WrapperPlayServerMapData` 签名未变（零代码改动）。
+- 用户实测：候选 jar（1.21.11 编译 + PacketEvents 2.12.2）在原生 **Paper 26.1 上正常 enable + 渲染文字 + 创建画布**。同一 jar 已验证跑 1.21.11（rc1）+ 26.1 两个大版本。`api-version: '1.21'` 在 26.1 被正常接受。
+
+**实装（路线 A「通吃 jar」）**：
+- **build 参数化**：`paperApi`/`mcVersion`/`javaVer` 三个 gradle property（默认 `1.21.11-R0.1-SNAPSHOT` / `1.21.11` / `21`，生产路径不变）；`options.release` 也参数化（默认 21）。生产 jar 仍 Java 21 字节码（跑 1.21 的 Java21 服 + 向上兼容 26.x 的 Java25 服）。
+- **CI 双版本编译守卫**（新 `compat-26` job）：Java 25 对 `26.1.2.build.+` dev bundle 编译同一份 main（`-PpaperApi=26.1.2.build.+ -PjavaVer=25`），提前抓「用了 26.x 已移除 API」的回归。**本地实测守卫编译通过**——API 审计结论：我们用的 Bukkit API（47 个 import，全核心 map/entity/world/player）在 26.1.2 无一被移除，唯一 deprecation note 是 `World#getName`（只警告不 fail）。dev-bundle 新版本号格式 `26.1.2.build.NN-stable`（26.x 起 `年.drop.hotfix`，老 `-R0.1-SNAPSHOT` 不存在）。
+- **World#getName 决定保留**（不迁 getKey）：审计发现它是整个数据模型的持久化世界标识（`pool_maps`/`walls` 等表 `world` 列 + `worldNameToUid`/`scriptWorldUuidByName` 缓存 + 脚本按名引用），迁移=深数据模型改造 + DB migration，与多版本目标无关；且 getName 只 obsolete 没移除、守卫无 `-Werror` 不被卡。记一条：若 Paper 哪天真硬删 getName，再做独立的「换持久化世界标识」项目。
+- **docs**：README 环境要求改多版本 + deployment §1 多版本说明 + CLAUDE.md 锁定版本表同步（PacketEvents 2.12.2、Java/Paper 改注「编译目标」+ compat-26 守卫）。
+
+**dev-build 体感（顺带修的坑）**：清掉一个从周二卡死的 0.9.1 shadowJar 僵尸 gradle 进程（占 `expanded.lock` 让新构建 hang，是「构建这么慢」的真因）。
+
+**测试**：默认路径全量 `:plugin:test` BUILD SUCCESSFUL（PacketEvents 2.12.2 无回归）；26.1.2 守卫编译 BUILD SUCCESSFUL（仅 getName deprecation note）；shadowJar `HikariCanvas-0.9.5-SNAPSHOT.jar`。
+
+**1.0 进度**：6 块完成 5 块（数据闸 / 可观测性 / 安全收尾 / 发布验证 / 多版本支持）。剩 1 块：MapPool+WallRestorer 测试守卫（脚本校验 i18n 另算）。**未发布待办**：可选 cut `v0.9.5-rc.1` 真 release（让 26.x 服务器有可下载的多版本 jar——当前 release rc.1 不支持 26.x）。关联文件：`plugin/build.gradle.kts`（PacketEvents 2.12.2 + paperApi/mcVersion/javaVer/release 参数化）、`.github/workflows/ci.yml`（compat-26 守卫 job）、`README.md`、`docs/deployment.md`、`CLAUDE.md`、版本号 6 文件 → 0.9.5-SNAPSHOT。
+
+---
+
 ## 2026-06-26 · 0.9.4 发布验证（release.yml 首跑出真 Release + README 发布化 + 体积真相）
 
 1.0 发布前打磨第 4 块（发布验证）。让从未跑过的 `release.yml` 真正产出一个可下载的 GitHub Release，端到端验证发布管线。版本号 0.9.3 → 0.9.4-SNAPSHOT。
