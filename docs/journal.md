@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-07-02 · 0.9.6 MapPool + WallRestorer 测试守卫（1.0 硬闸最后一块）
+
+给项目技术核心（"预览地图池编辑期只刷像素、不新建 MapView，避免 idcounts.dat 膨胀——这项做不好整个项目报废"）补上此前**零覆盖**的自动化测试守卫。1.0 前 6 块硬闸最后一块。subagent-driven（per-task implementer→review 全 opus + opus 整支终审 Ready-to-merge）。版本号 0.9.5 → 0.9.6-SNAPSHOT。
+
+**关键约束**：**MockBukkit 在本仓不可用**（`ServerMock.<init>` 因 MockBukkit-v1.21:3.123.0 与 Paper API 版本错配抛 `Invalid namespace key minecraft:chain`，全仓零 ServerMock 实跑先例）。故照既定 seam 范式（`MainThreadPerms.testResolver` + 真 SQLite + 直驱逻辑）——给 MapPool 抽一层 behavior-preserving 的 map 操作 seam，才能测核心不变式。
+
+**三件套**：
+- **T1 `MapBackend` seam**（behavior-preserving 重构，`66ed6ccc`）：抽 `Bukkit.createMap/getMap/getWorld` 成 `MapBackend`（createMap/installRenderer/mapWorld/worldByName 4 方法）+ `BukkitMapBackend` 逐字委托 + MapPool 双构造（6-arg 委托默认 `new BukkitMapBackend()`，生产 `HikariCanvas` 接线零改）+ 6 触点改走 backend。**不加新测试**，靠现有 MapPoolStatsTest/DetectLeaksTest + 全量当回归网；评审逐触点核行为等价。
+- **T2 MapPool 核心不变式测试**（真 SQLite + `FakeMapBackend` + Proxy fakeWorld，`cbdffb0c`，**10 case**）：核心指标 `createMapCalls`（全池唯一铸造点 = idcounts 膨胀次数）——reserve 复用零铸 / 按需精确扩容 / releaseWall→复用 / releaseToFree→复用 / 跨世界拒绝 / per-world 分桶 / initialize 铸满 initialSize / **重启恢复不重铸（命根子另一半，终审补 case 10 `e73a6cc0`）**。评审做**变异测试**（把 reserveForWall 改成每次铸→5 case 红→revert）实证非 vacuous。
+- **T3 WallRestorer 失败守卫**（`1b1a5b3d`）：`worldResolver` seam（默认 `Bukkit::getWorld`，6-arg 旧构造保留生产不受影响）+ `HikariCanvasRenderer` 去 `final`（让测试 `ThrowingRenderer` 子类注入渲染失败，运行期零影响）+ 3 case：restore 成功 / **bind 成功后渲染抛异常→releaseToFree 全回滚不泄漏（M16 P2.5 命根子）** / 世界未加载跳过。实现者 + 评审**双重变异测试**（废 releaseToFree→case 红 expected3 was0→revert）。
+
+**过程**：4 commit（T1 `66ed6ccc` / T2 `cbdffb0c` / T3 `1b1a5b3d` / 终审补 case10 `e73a6cc0`）+ 本收尾。子代理全程 opus。整支终审（opus）Ready to merge，无 Critical/Important；Minor#1（重启恢复不重铸未覆盖）controller 已补 case 10；Minor#2（`FakeMapBackend` 两份，render 包访问不到 pool 包级类所致）可接受。
+
+**测试**：全量 `:plugin:test` BUILD SUCCESSFUL（**2150** = 原 2137 + MapPoolInvariantTest 10 + WallRestorerTest 3）；shadowJar `HikariCanvas-0.9.6-SNAPSHOT.jar` 152MB。
+
+**1.0 进度**：**6 块硬闸全部完成**（数据契约闸 0.9.1 / 可观测性 0.9.2 / 安全收尾 0.9.3 / 发布验证 0.9.4 / 多版本支持 0.9.5 / MapPool·WallRestorer 测试守卫 0.9.6）。**1.0 正式版前置打磨到齐**。剩独立项：脚本编辑器保存校验 i18n（`ScriptRuleValidator` ~103 串）。下一步可 cut `v0.9.6-rc` 或朝 1.0 收束。关联文件（生产）：`pool/{MapBackend(新),BukkitMapBackend(新),MapPool}`、`render/{HikariCanvasRenderer,WallRestorer}`；测试 3 新（FakeMapBackend / MapPoolInvariantTest 10 / WallRestorerTest 3）；版本号 6 文件 → 0.9.6-SNAPSHOT。
+
+---
+
 ## 2026-06-26 · 0.9.5 多版本支持（一份 jar 通吃 Paper 1.21.11 + 26.x）
 
 1.0 发布前打磨第 5 块（多版本支持）。生态在往 Minecraft 26 迁（新版本号体系 + Java 25），停 1.21.11 会被甩下。本版让**同一份 jar 同时跑 Paper 1.21.11 和 26.1/26.2**。版本号 0.9.4 → 0.9.5-SNAPSHOT。
