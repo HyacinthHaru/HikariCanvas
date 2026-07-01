@@ -63,6 +63,7 @@ public final class MapPool {
     private final HikariCanvasRenderer sharedRenderer;
     private final int initialSize;
     private final int maxSize;
+    private final MapBackend backend;
 
     private final Map<Integer, PooledMap> byId = new HashMap<>();
     /** FREE 队列按 world UUID 分桶。同一 world 的 FREE map 集中在一条 deque 里。 */
@@ -78,6 +79,12 @@ public final class MapPool {
     public MapPool(Logger log, Jdbi jdbi, AuditLog auditLog,
                    HikariCanvasRenderer sharedRenderer,
                    int initialSize, int maxSize) {
+        this(log, jdbi, auditLog, sharedRenderer, initialSize, maxSize, new BukkitMapBackend());
+    }
+
+    public MapPool(Logger log, Jdbi jdbi, AuditLog auditLog,
+                   HikariCanvasRenderer sharedRenderer,
+                   int initialSize, int maxSize, MapBackend backend) {
         if (initialSize <= 0 || maxSize < initialSize) {
             throw new IllegalArgumentException(
                     "invalid pool sizing: initial=" + initialSize + " max=" + maxSize);
@@ -88,6 +95,7 @@ public final class MapPool {
         this.sharedRenderer = sharedRenderer;
         this.initialSize = initialSize;
         this.maxSize = maxSize;
+        this.backend = backend;
     }
 
     /**
@@ -127,28 +135,22 @@ public final class MapPool {
         List<PooledMap> normalizedPersists = new ArrayList<>();
 
         for (PooledMap rec : persisted) {
-            MapView view = Bukkit.getMap(rec.mapId());
-            if (view == null) {
+            World mapWorld = backend.installRenderer(rec.mapId(), sharedRenderer);
+            if (mapWorld == null) {
                 missingMapView++;
                 orphanDeletes.add(rec.mapId());
                 auditLog.record("POOL_ORPHAN_ROW", null, null, null, null,
                         Map.of("map_id", rec.mapId(), "state", rec.state().name()));
                 continue;
             }
-            // 重启后 Paper 把默认 renderer 加回 MapView，会每 tick 写空白 canvas 覆盖
-            // 我们直接 push 的 MapData packet。解法：清默认 + 装我们自己的 renderer。
-            new java.util.ArrayList<>(view.getRenderers()).forEach(view::removeRenderer);
-            view.addRenderer(sharedRenderer);
-
             PooledMap normalizedRec = enforceInvariant(rec, now);
             if (!normalizedRec.equals(rec)) {
                 normalized++;
                 normalizedPersists.add(normalizedRec);
             }
-
             byId.put(normalizedRec.mapId(), normalizedRec);
             if (normalizedRec.state() == PoolState.FREE) {
-                offerFree(normalizedRec.mapId(), view.getWorld());
+                offerFree(normalizedRec.mapId(), mapWorld);
             }
             recovered++;
         }
@@ -173,7 +175,7 @@ public final class MapPool {
         // 阶段 1：per-world 显式补齐
         int totalNewlyCreated = 0;
         for (Map.Entry<String, Integer> e : perWorldInitial.entrySet()) {
-            World w = Bukkit.getWorld(e.getKey());
+            World w = backend.worldByName(e.getKey());
             if (w == null) {
                 log.warning("map-pool.per-world: world '" + e.getKey()
                         + "' is not loaded; skipping initial allocation");
@@ -282,16 +284,15 @@ public final class MapPool {
             PooledMap m = byId.get(id);
             if (m == null) return false;
             if (m.state() == PoolState.RESERVED && !owner.equals(m.reservedBy())) return false;
-            MapView view = Bukkit.getMap(id);
-            if (view == null) {
+            World actual = backend.mapWorld(id);
+            if (actual == null) {
                 throw new IllegalStateException(
                         "bindToWall: MapView missing for map_id=" + id + " (wall=" + wallId + ")");
             }
-            World actual = view.getWorld();
-            if (actual == null || !actual.getUID().equals(expectedWorld.getUID())) {
+            if (!actual.getUID().equals(expectedWorld.getUID())) {
                 throw new IllegalStateException(
                         "bindToWall: world mismatch — map_id=" + id
-                                + " in world='" + (actual == null ? "null" : actual.getName())
+                                + " in world='" + actual.getName()
                                 + "' but wall='" + wallId
                                 + "' expects world='" + expectedWorld.getName() + "'");
             }
@@ -517,10 +518,7 @@ public final class MapPool {
         }
         int created = 0;
         for (int i = 0; i < count; i++) {
-            MapView view = Bukkit.createMap(world);
-            new java.util.ArrayList<>(view.getRenderers()).forEach(view::removeRenderer);
-            view.addRenderer(sharedRenderer);
-            int id = view.getId();
+            int id = backend.createMap(world, sharedRenderer);
             PooledMap rec = new PooledMap(id, PoolState.FREE, null, world.getName(), now, now);
             // P2-49：先持久化再注册到 in-memory 结构。persist 失败时不 byId.put/offerFree——
             // 让该 map 成为一个"DB 不知道、内存也不知道"的真孤儿（下次 initialize/detectLeaks
@@ -575,7 +573,7 @@ public final class MapPool {
                     + " parked in unknown-world bucket");
             return;
         }
-        World w = worldName == null ? null : Bukkit.getWorld(worldName);
+        World w = worldName == null ? null : backend.worldByName(worldName);
         if (w == null) {
             // World 已卸载（玩家删 multiverse world？）。fallback：放在一个"未知"桶里，
             // 用 zero UUID 作 key；下次 initialize / reserveForWall 会被规整。
