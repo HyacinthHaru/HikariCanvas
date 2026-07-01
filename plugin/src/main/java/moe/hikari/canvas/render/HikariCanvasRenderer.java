@@ -23,7 +23,9 @@ import java.util.concurrent.ConcurrentMap;
  * M2 阶段 Placeholder / paint 所有玩家看到同一张，这样省 CPU。M3 编辑实时投影
  * 时再评估是否需要 per-player。</p>
  */
-public final class HikariCanvasRenderer extends MapRenderer {
+// 0.9.6：去 final 让 WallRestorerTest 的 ThrowingRenderer 子类 override update 注入失败，
+// 测「restore 失败 → releaseToFree 回滚」不泄漏（M16 P2.5 守卫）。运行期行为不变。
+public class HikariCanvasRenderer extends MapRenderer {
 
     private final ConcurrentMap<Integer, byte[]> pixelsByMapId = new ConcurrentHashMap<>();
 

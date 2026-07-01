@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -40,6 +41,12 @@ public final class WallRestorer {
     private final HikariCanvasRenderer renderer;
     private final CanvasCompositor compositor;
     private final PlaceholderRenderer placeholder;
+    /**
+     * 0.9.6：world 名 → {@link World} 解析 seam（生产默认 {@link Bukkit#getWorld}）。
+     * WallRestorerTest 注入 fake（返回 JDK Proxy World / 返 null 模拟世界未加载），
+     * 让「restore 失败 → releaseToFree 回滚」守卫无需 Bukkit server 即可跑。
+     */
+    private final Function<String, World> worldResolver;
 
     /** restore 失败的 wall_id（不可变 publish 后由 isRestorationFailed 读）。CopyOnWrite 语义足够：写一次读多次。 */
     private volatile Set<String> failedRestoreWallIds = Collections.emptySet();
@@ -47,12 +54,20 @@ public final class WallRestorer {
     public WallRestorer(Logger log, WallRepo wallRepo, MapPool mapPool,
                         HikariCanvasRenderer renderer, CanvasCompositor compositor,
                         PlaceholderRenderer placeholder) {
+        this(log, wallRepo, mapPool, renderer, compositor, placeholder, Bukkit::getWorld);
+    }
+
+    public WallRestorer(Logger log, WallRepo wallRepo, MapPool mapPool,
+                        HikariCanvasRenderer renderer, CanvasCompositor compositor,
+                        PlaceholderRenderer placeholder,
+                        Function<String, World> worldResolver) {
         this.log = log;
         this.wallRepo = wallRepo;
         this.mapPool = mapPool;
         this.renderer = renderer;
         this.compositor = compositor;
         this.placeholder = placeholder;
+        this.worldResolver = worldResolver;
     }
 
     /** 启动期一次性执行。返回恢复的 wall 数。 */
@@ -113,7 +128,7 @@ public final class WallRestorer {
         List<Integer> bound = new ArrayList<>();
         try {
             // P2.4 要求 bindToWall 校验 world；先解析 wall 所在 world
-            World world = Bukkit.getWorld(w.key().world());
+            World world = worldResolver.apply(w.key().world());
             if (world == null) {
                 log.warning("WallRestorer: world '" + w.key().world()
                         + "' not loaded for wall " + w.wallId() + " — skipping restore");
