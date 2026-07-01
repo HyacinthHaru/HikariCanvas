@@ -187,4 +187,26 @@ class MapPoolInvariantTest {
         assertEquals(3, pool.byWorldStats().getOrDefault("world_a", 0),
                 "worldA 的 3 张 FREE 未被 worldB 消耗");
     }
+
+    // ── 10. 重启恢复不重铸（命根子另一半）：DB 已有 FREE 行 + Bukkit 已有对应 MapView →
+    //        initialize 应把它们恢复进 byId，绝不再 createMap。若恢复路径断了（installRenderer
+    //        返 null → 当孤儿删 → 补铸到 initialSize），本 case 会红。──
+    @Test
+    void initialize_recoversPersisted_withoutReminting() {
+        long now = System.currentTimeMillis();
+        int[] ids = {7001, 7002, 7003};
+        for (int id : ids) {
+            backend.preexisting(id, worldA);   // 模拟重启后 Bukkit 已有该 MapView
+            database.jdbi().useHandle(h -> h.execute(
+                    "INSERT INTO pool_maps (map_id, state, reserved_by, world, created_at, last_used_at) "
+                            + "VALUES (?, 'FREE', NULL, ?, ?, ?)",
+                    id, "world_a", now, now));
+        }
+        pool = newPool(3, 20);                  // initialSize == 已持久化数 → 无需补铸
+        pool.initialize(worldA, Map.of());
+        assertEquals(0, backend.createMapCalls,
+                "已恢复 3 张 FREE，重启不应重铸任何 map（命根子另一半）");
+        assertEquals(3, pool.stats().free(), "3 张持久化 FREE 全部恢复");
+        assertEquals(0, pool.stats().reserved());
+    }
 }
