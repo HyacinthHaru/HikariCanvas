@@ -4,7 +4,11 @@
 
 [![CI](https://github.com/HyacinthHaru/HikariCanvas/actions/workflows/ci.yml/badge.svg)](https://github.com/HyacinthHaru/HikariCanvas/actions/workflows/ci.yml)
 
-**Minecraft 里的「所见即所得」招牌 / 信息屏编辑器** —— 在浏览器里画，实时渲染到游戏内的地图墙上展示。
+**Minecraft 里的「所见即所得」招牌 / 信息屏编辑器** —— 在浏览器里画，实时渲染到游戏内的地图墙上展示。还有 Scratch-like 的类通用脚本编辑器、非线性动画编辑与展示。说好听点？你的服务器以后能有动态展示框了。你自己做的那种。
+
+### 下面的这一堆内容是 AI 自己帮我生成的 Readme
+> 我相信你可能早就看腻了这一大堆 AI 生成的文本的口癖。我最近有一些忙。等我放 1.0 之前肯定会把这些 Readme 和文档用我自己的人话再写一遍。
+> **这个仓库的部分或全部代码使用了 AI 生成**。我用的是 Claude Opus，不是豆包。所以我对这里的代码质量还是有那么一点点信心的。我烧了差不多大几千刀等额的 API 费用，为了这个项目。因此我认为它足够能给你使用。
 
 把 Canva / Figma 的编辑体验，和 Scratch 的可视化脚本，搬进 Minecraft。你在网页里画一张图、排个版、做个动画，游戏内的地图展示框立刻同步显示同样的画面。可以拿来做店铺招牌、服务器公告屏、地铁 / 车站 PIDS（到站信息屏），甚至右键地图就触发一连串动作的可编程画布。
 
