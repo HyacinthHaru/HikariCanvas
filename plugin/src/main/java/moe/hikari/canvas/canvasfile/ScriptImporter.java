@@ -79,11 +79,11 @@ public final class ScriptImporter {
         try {
             root = MAPPER.readTree(scriptsJson);
         } catch (Exception e) {
-            warnings.add(new ImportWarning("script-invalid", "脚本数据无法解析: " + rootMessage(e)));
+            warnings.add(new ImportWarning("script-invalid", "script data could not be parsed: " + rootMessage(e)));
             return warnings;
         }
         if (root == null || !root.isArray()) {
-            warnings.add(new ImportWarning("script-invalid", "脚本数据不是规则数组"));
+            warnings.add(new ImportWarning("script-invalid", "script data is not a rule array"));
             return warnings;
         }
 
@@ -98,11 +98,11 @@ public final class ScriptImporter {
             try {
                 rule = MAPPER.convertValue(ruleNode, ScriptRule.class);
             } catch (RuntimeException ex) {
-                warnings.add(new ImportWarning("script-invalid", "规则解析失败: " + rootMessage(ex)));
+                warnings.add(new ImportWarning("script-invalid", "rule parse failed: " + rootMessage(ex)));
                 continue;
             }
             if (rule == null) {
-                warnings.add(new ImportWarning("script-invalid", "规则为空"));
+                warnings.add(new ImportWarning("script-invalid", "rule is empty"));
                 continue;
             }
 
@@ -153,7 +153,7 @@ public final class ScriptImporter {
             switch (a) {
                 case Action.If iff -> {
                     Optional<String> err = ConditionEvaluator.checkSyntax(iff.condition());
-                    if (err.isPresent()) return Optional.of("if 条件语法错误: " + err.get());
+                    if (err.isPresent()) return Optional.of("invalid if condition: " + err.get());
                     Optional<String> sub = checkConditionSyntax(iff.then());
                     if (sub.isPresent()) return sub;
                     sub = checkConditionSyntax(iff.elseActions());
@@ -161,11 +161,11 @@ public final class ScriptImporter {
                 }
                 case Action.WaitUntil wu -> {
                     Optional<String> err = ConditionEvaluator.checkSyntax(wu.condition());
-                    if (err.isPresent()) return Optional.of("等待条件语法错误: " + err.get());
+                    if (err.isPresent()) return Optional.of("invalid wait condition: " + err.get());
                 }
                 case Action.RepeatUntil ru -> {
                     Optional<String> err = ConditionEvaluator.checkSyntax(ru.condition());
-                    if (err.isPresent()) return Optional.of("重复条件语法错误: " + err.get());
+                    if (err.isPresent()) return Optional.of("invalid repeat condition: " + err.get());
                     Optional<String> sub = checkConditionSyntax(ru.body());
                     if (sub.isPresent()) return sub;
                 }
