@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-07-16 · 0.9.7 脚本校验报错 i18n（1.0 前最后一处 i18n 缺口）
+
+把编辑器保存脚本时的 ~100 条校验报错（此前硬编码中文）国际化，按**编辑器 UI 语言**显示。subagent-driven（per-task implementer→review 全 opus + opus 整支终审 Ready-to-merge）。版本号 0.9.6 → 0.9.7-SNAPSHOT。
+
+**架构**：校验报错经 WS `Envelope.error(id,"SCRIPT_INVALID",<message>)` 发编辑器，前端显示在"新建规则失败：…"横幅。故后端按编辑器 locale 渲染好这句：`ScriptRuleValidator` / `checkConditionSyntax` 从"返回中文字符串"改为返回 `ValidationError`(key+参数)，`ScriptOpDispatcher` 用既有 `Messages`（0.8.2）按 `session.editorLocale` 渲染；前端只需 auth 帧带 `ui.locale`。
+
+**四段**：
+- **T1 基建**（`d9180340`）：`ValidationError` record + `Messages.plain`（SPI-free 纯文本渲染，避 PlainTextComponentSerializer 在测试 classpath 上 SPI 崩）+ `Session.editorLocale` + 前端 auth 带 `ui.locale`（经 `uiLocaleToGameId` 桥接 zh→zh_cn/en→en_us，否则 resolveLocaleId 失配→整批静默回退默认）+ WebServer auth 读存 + ScriptOpDispatcher 注入 Messages。validate 仍返 String 行为不变。
+- **T2 大头**（`a8763ce8`）：`ScriptRuleValidator` 94 站点 → `ValidationError`（91 key）+ 91×2 双语 lang（zh 原文 + en 地道译文，参数名两端精确对齐）+ `renderValidation` 渲染。`.canvas` 导入路径也调 validate（ScriptImporter，无 locale）→ key 塞 `ImportWarning.detail`，前端 wrapper 句本地化（反修原中英混串漏洞）。
+- **T3**（`8f25cc7a`）：`checkConditionSyntax` 3 wrapper → ValidationError + 3×2 lang；detail 透传 ConditionParser 英文技术串。
+- **T3.5**（controller `d33a9532`）：`ScriptImporter` 导入路径 7 条报错（3 condition wrapper + 4 parse 错误）英文化——该路径无 per-player locale，语言中性英文，收干净导入路径 i18n 遗留。
+
+**过程**：5 commit（T1-T3.5 + 本收尾）+ 版本 bump。子代理全程 opus。整支终审 Ready to merge：端到端 i18n 链逐环核实无断点、脚本校验用户可见中文清零、94 key 精确对齐（en=zh、0 死键）、auth 加 locale 向后兼容（旧 client→默认 locale 不崩）。**实现者两处真坑修**（locale 形态失配 zh vs zh_cn / PlainTextComponentSerializer SPI 冲突）。
+
+**测试**：后端全量 `:plugin:test` BUILD SUCCESSFUL（含 LangFileParityTest / MessagesTest）+ 前端 vitest 1446 双绿；shadowJar `HikariCanvas-0.9.7-SNAPSHOT.jar` 152MB。
+
+**1.0 进度**：6 块硬闸全完成 + rc 稳定；脚本校验 i18n（本批）收口——**i18n 完整性到位**。1.0 前剩：① 去 AI 味专项（用户已定：全扫文案+文档+代码注释 + 总纲文档结构手术）② 发布收尾（LICENSE 文件缺 + README/版本 de-rc → 1.0.0 + 发布说明 + cut v1.0.0 stable）。关联文件（生产）：`script/{ValidationError(新),ScriptRuleValidator}`、`web/ScriptOpDispatcher`、`canvasfile/ScriptImporter`、`i18n/Messages`、`session/Session`、`web/WebServer`、`HikariCanvas`、`web/src/network/wsClient.ts`、`lang/{en_us,zh_cn}.yml`（+94 key）；版本号 6 文件 → 0.9.7-SNAPSHOT。
+
+---
+
 ## 2026-07-02 · 0.9.6 MapPool + WallRestorer 测试守卫（1.0 硬闸最后一块）
 
 给项目技术核心（"预览地图池编辑期只刷像素、不新建 MapView，避免 idcounts.dat 膨胀——这项做不好整个项目报废"）补上此前**零覆盖**的自动化测试守卫。1.0 前 6 块硬闸最后一块。subagent-driven（per-task implementer→review 全 opus + opus 整支终审 Ready-to-merge）。版本号 0.9.5 → 0.9.6-SNAPSHOT。
