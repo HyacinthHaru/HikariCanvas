@@ -545,8 +545,8 @@ export const messages = {
             groupPapi: 'PAPI',
             emptyMine: '点击 "+ 新建变量" 添加你的第一个变量',
             emptyGlobal: '尚无全局变量，点击 "+ 新建变量" 选 "全局" 创建',
-            emptyPlugin: 'P3 启用 Plugin Provider 后此处自动出现',
-            emptySystem: 'P3 启用 System Provider 后此处自动出现',
+            emptyPlugin: '等有插件提供变量时，会自动显示在这里',
+            emptySystem: '系统变量会自动显示在这里',
             emptyPapi: '安装 PlaceholderAPI 后此处自动出现',
             // 0.4.3：全局变量 owner badge
             ownerBadgePrefix: '所属：',
@@ -608,7 +608,7 @@ export const messages = {
             // 绑定对话框
             dialogBindTitle: (fullName: string) => `让插件接管 ${fullName}`,
             bindEmpty: '暂无可用插件',
-            bindHint: 'P4 阶段启用 Plugin Push API 后，此处显示已注册插件列表',
+            bindHint: '已接入的插件会显示在这里',
             bindCurrent: (plugin: string) => `当前已绑定: ${plugin}`,
             bindUnbindButton: '取消绑定',
             bindCloseButton: '关闭',
@@ -808,7 +808,7 @@ export const messages = {
             resetView: '回到原始视图',
             zoom: '缩放',
             paletteTitle: '积木库',
-            palettePlaceholder: '积木列表即将上线',
+            palettePlaceholder: '积木库',
             // 0.7.0-P4-D2：palette 分组标题 + 无选中规则提示
             paletteNeedRule: '先在上面选一条规则，再把积木拖到画布上',
             paletteGroup: {
@@ -844,7 +844,7 @@ export const messages = {
             deleteConfirmYes: '删除',
             deleteConfirmNo: '取消',
             test: '试跑',
-            testPlaceholder: '试跑功能即将上线',
+            testPlaceholder: '点这里试跑这条规则',
             // ---- 0.7.0-P5-H：试跑高亮 + 校验 ----
             testing: '试跑中…',
             testBlockedByErrors: '规则有问题，先修好下面的错误再试跑',
@@ -1858,8 +1858,8 @@ export const messages = {
             groupPapi: 'PAPI',
             emptyMine: 'Click "+ New variable" to add your first variable',
             emptyGlobal: 'No global variables yet — click "+ New variable" and pick "Global"',
-            emptyPlugin: 'Will appear here once Plugin Provider is enabled (P3)',
-            emptySystem: 'Will appear here once System Provider is enabled (P3)',
+            emptyPlugin: 'Variables provided by plugins will appear here automatically',
+            emptySystem: 'System variables will appear here automatically',
             emptyPapi: 'Install PlaceholderAPI for these to appear',
             // 0.4.3: global variable owner badge
             ownerBadgePrefix: 'Owner:',
@@ -1921,7 +1921,7 @@ export const messages = {
             // bind dialog
             dialogBindTitle: (fullName: string) => `Let a plugin manage ${fullName}`,
             bindEmpty: 'No plugins available yet',
-            bindHint: 'Once Plugin Push API (P4) is enabled, registered plugins will appear here',
+            bindHint: 'Connected plugins will appear here',
             bindCurrent: (plugin: string) => `Currently bound to: ${plugin}`,
             bindUnbindButton: 'Unbind',
             bindCloseButton: 'Close',
@@ -2118,7 +2118,7 @@ export const messages = {
             resetView: 'Reset view',
             zoom: 'Zoom',
             paletteTitle: 'Blocks',
-            palettePlaceholder: 'Block list coming soon',
+            palettePlaceholder: 'Blocks',
             // 0.7.0-P4-D2: palette group titles + no-rule-selected hint
             paletteNeedRule: 'Pick a rule above first, then drag blocks onto the canvas',
             paletteGroup: {
@@ -2150,7 +2150,7 @@ export const messages = {
             deleteConfirmYes: 'Delete',
             deleteConfirmNo: 'Cancel',
             test: 'Test run',
-            testPlaceholder: 'Test run coming soon',
+            testPlaceholder: 'Run this rule as a test',
             // ---- 0.7.0-P5-H: test-run highlight + validation ----
             testing: 'Testing…',
             testBlockedByErrors: 'Fix the errors below before running a test',

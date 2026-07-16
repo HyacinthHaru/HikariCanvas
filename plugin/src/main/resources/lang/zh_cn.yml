@@ -78,13 +78,13 @@ command:
     session-active: "<gray>  ℹ 编辑会话：有人正在编辑。</gray>"
     session-none: "<gray>  ℹ 编辑会话：无人编辑（后端已就绪待渲染，但没有前端在驱动更新）。</gray>"
     state-ok: "<green>  ✓ 工程数据：解析正常（<layers> 个图层）。</green>"
-    state-corrupt: "<red>  ✗ 工程数据：已损坏（project_json 解析失败）。</red>"
+    state-corrupt: "<red>  ✗ 工程数据：已损坏（无法解析）。</red>"
     anim-playing: "<gray>  ℹ 动画：正在播放时间轴。</gray>"
     anim-static: "<gray>  ℹ 动画：静态（没有时间轴在播）。</gray>"
     summary-ok: "<green>  → 所有检查通过。若仍不显示，打开一次编辑器驱动一帧渲染即可。</green>"
     summary-issues: "<yellow>  → 发现问题：上方第一处标 ✗ / ⚠ 的环节即原因。</yellow>"
   cleanup:
-    stubbed: "<yellow>cleanup 命令尚未实现，完整孤儿检测（孤儿展示框 / 地图池偏差）将在 M7 中完成。</yellow>"
+    stubbed: "<yellow>该命令暂未开放。清理孤立展示框 / 修复数据将在后续版本提供。</yellow>"
   reload:
     config-type-mismatch: "<red>重载配置失败：插件类型不匹配（内部错误）</red>"
     config-ok: "<gold>配置已重载：<summary></gold>"
@@ -138,7 +138,7 @@ command:
       line-static: "  <gray><namespace></gray> <dark_gray>'</dark_gray><white><display_name></white><dark_gray>'</dark_gray> <green>[静态]</green> <dark_gray>keys=</dark_gray><gray><keys></gray> <dark_gray>interval=</dark_gray><gray><interval></gray>"
     reload:
       failed: "<red>重载失败：<message></red>"
-      ok: "<green>✓ 配置已重载，PushRateLimiter 参数：</green>"
+      ok: "<green>✓ 配置已重载，推送限速参数：</green>"
       per-plugin: "  <gray>单插件限速：          </gray><white><value>/s</white>"
       global: "  <gray>全局限速：            </gray><white><value>/s</white>"
       circuit-break: "  <gray>熔断时长：            </gray><white><value>ms</white>"

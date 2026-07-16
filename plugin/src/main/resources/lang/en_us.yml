@@ -78,13 +78,13 @@ command:
     session-active: "<gray>  ℹ Editor session: active (someone is editing now).</gray>"
     session-none: "<gray>  ℹ Editor session: none (server is ready to render; nothing is driving updates).</gray>"
     state-ok: "<green>  ✓ Project data: parsed OK (<layers> layers).</green>"
-    state-corrupt: "<red>  ✗ Project data: corrupt (project_json failed to parse).</red>"
+    state-corrupt: "<red>  ✗ Project data: corrupt (could not be parsed).</red>"
     anim-playing: "<gray>  ℹ Animation: playing a timeline.</gray>"
     anim-static: "<gray>  ℹ Animation: static (no timeline playing).</gray>"
     summary-ok: "<green>  → All checks passed. If it still won't show, open the editor once to drive a render.</green>"
     summary-issues: "<yellow>  → Issues found: the first ✗ / ⚠ line above is the cause.</yellow>"
   cleanup:
-    stubbed: "<yellow>cleanup is stubbed. Full fsck (orphan ItemFrame / pool-walls drift) implemented in M7.</yellow>"
+    stubbed: "<yellow>This command isn't available yet. Cleanup of orphaned frames / data repair is planned for a later release.</yellow>"
   reload:
     config-type-mismatch: "<red>reload config: plugin type mismatch (internal bug)</red>"
     config-ok: "<gold>Config reloaded: <summary></gold>"
@@ -138,7 +138,7 @@ command:
       line-static: "  <gray><namespace></gray> <dark_gray>'</dark_gray><white><display_name></white><dark_gray>'</dark_gray> <green>[static]</green> <dark_gray>keys=</dark_gray><gray><keys></gray> <dark_gray>interval=</dark_gray><gray><interval></gray>"
     reload:
       failed: "<red>Reload failed: <message></red>"
-      ok: "<green>✓ Config reloaded. PushRateLimiter:</green>"
+      ok: "<green>✓ Config reloaded. Push rate limits:</green>"
       per-plugin: "  <gray>per-plugin:           </gray><white><value>/s</white>"
       global: "  <gray>global:               </gray><white><value>/s</white>"
       circuit-break: "  <gray>circuit-break:        </gray><white><value>ms</white>"
