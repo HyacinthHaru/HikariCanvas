@@ -135,9 +135,9 @@ class ScriptRuleValidatorTest {
         for (int i = 0; i < 5; i++) {
             inner = new Action.If("1 > 0", List.of(inner), List.of());
         }
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
         assertTrue(err.isPresent());
-        assertTrue(err.get().contains("depth") || err.get().contains("嵌套"));
+        assertEquals("ifDepthExceeded", err.get().key());
     }
 
     @Test
@@ -155,9 +155,10 @@ class ScriptRuleValidatorTest {
         List<Action> logs = java.util.stream.IntStream.range(0, 50)
                 .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
         Action iff = new Action.If("1 > 0", logs, List.of());
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(iff)));
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(iff)));
         assertTrue(err.isPresent());
-        assertTrue(err.get().contains("50"));
+        assertEquals("blocksTotalExceeded", err.get().key());
+        assertEquals("50", err.get().params().get("max"));
     }
 
     @Test
@@ -441,18 +442,22 @@ class ScriptRuleValidatorTest {
 
     @Test
     void repeat_count_low_rejected() {
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(),
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.Repeat(0, List.of(new Action.Log("x"))))));
         assertTrue(err.isPresent());
-        assertTrue(err.get().contains("1..100"), err.get());
+        assertEquals("repeatCountRange", err.get().key(), err.get().toString());
+        assertEquals("1", err.get().params().get("min"));
+        assertEquals("100", err.get().params().get("max"));
     }
 
     @Test
     void repeat_count_high_rejected() {
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(),
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.Repeat(101, List.of(new Action.Log("x"))))));
         assertTrue(err.isPresent());
-        assertTrue(err.get().contains("1..100"), err.get());
+        assertEquals("repeatCountRange", err.get().key(), err.get().toString());
+        assertEquals("1", err.get().params().get("min"));
+        assertEquals("100", err.get().params().get("max"));
     }
 
     @Test
@@ -479,10 +484,11 @@ class ScriptRuleValidatorTest {
         // body 50 节点 → repeat(1) + 50 = 51 > 50 拒
         List<Action> body51 = java.util.stream.IntStream.range(0, 50)
                 .mapToObj(i -> (Action) new Action.Log("l" + i)).toList();
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(),
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(),
                 List.of(new Action.Repeat(2, body51))));
         assertTrue(err.isPresent());
-        assertTrue(err.get().contains("50"), err.get());
+        assertEquals("blocksTotalExceeded", err.get().key(), err.get().toString());
+        assertEquals("50", err.get().params().get("max"));
     }
 
     // ---------- 0.7.1-P5：停止 / 粒子 / 等待直到 ----------
@@ -699,9 +705,9 @@ class ScriptRuleValidatorTest {
         // body 里放 sendMessage（非属性动作）→ 拒
         Action a = new Action.TweenBlock(500L, Easing.LINEAR,
                 List.of(new Action.SendMessage("hi", "chat", "trigger")));
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(a)));
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(a)));
         assertTrue(err.isPresent());
-        assertTrue(err.get().contains("补间") || err.get().contains("移动"));
+        assertEquals("tweenBodyNotPropertyAction", err.get().key());
     }
 
     @Test
@@ -709,7 +715,7 @@ class ScriptRuleValidatorTest {
         // kind = show（不在 TWEENABLE_KINDS）→ 拒
         Action a = new Action.TweenBlock(500L, Easing.LINEAR,
                 List.of(new Action.SetElementProperties("e-1", Map.of("opacity", "1"), "show")));
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(a)));
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(a)));
         assertTrue(err.isPresent());
     }
 
@@ -752,9 +758,9 @@ class ScriptRuleValidatorTest {
         for (int i = 0; i < 5; i++) {
             inner = new Action.RandomBranch(50, List.of(inner), List.of());
         }
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
         assertTrue(err.isPresent(), "RandomBranch 5 层嵌套应被拒（超 MAX_IF_DEPTH=4）");
-        assertTrue(err.get().contains("depth") || err.get().contains("嵌套"), err.get());
+        assertEquals("ifRandomBranchDepthExceeded", err.get().key(), err.get().toString());
     }
 
     @Test
@@ -765,7 +771,7 @@ class ScriptRuleValidatorTest {
             inner = new Action.If("1 > 0", List.of(inner), List.of());
         }
         inner = new Action.RandomBranch(50, List.of(inner), List.of());
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
         assertTrue(err.isPresent(), "RandomBranch 外包 4 层 If 应被拒（depth=5）");
     }
 
@@ -776,7 +782,7 @@ class ScriptRuleValidatorTest {
         for (int i = 0; i < 5; i++) {
             inner = new Action.RandomBranch(50, List.of(), List.of(inner));  // 在 else 分支嵌套
         }
-        Optional<String> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
+        Optional<ValidationError> err = ScriptRuleValidator.validate(rule(okTrigger(), List.of(inner)));
         assertTrue(err.isPresent(), "else 分支超深嵌套也应被拒");
     }
 

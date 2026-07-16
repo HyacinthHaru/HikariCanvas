@@ -106,10 +106,16 @@ public final class ScriptImporter {
                 continue;
             }
 
-            // b) 结构校验（不信任文件内容）。
-            Optional<String> structErr = ScriptRuleValidator.validate(rule);
+            // b) 结构校验（不信任文件内容）。0.9.7：validate 现返 ValidationError（key + 参数）。
+            //    本导入路径无编辑器 session / locale（是文件导入，非 per-player WS 请求），
+            //    ImportWarning.detail 语义即"稳定的具体对象码，前端据此选大白话文案"——故 detail
+            //    存 ValidationError 的稳定 key（+ 参数附注）而非渲染后语句；前端 script-invalid
+            //    文案已本地化外层句子（见 web/src/i18n/messages.ts）。
+            Optional<moe.hikari.canvas.script.ValidationError> structErr =
+                    ScriptRuleValidator.validate(rule);
             if (structErr.isPresent()) {
-                warnings.add(new ImportWarning("script-invalid", structErr.get()));
+                warnings.add(new ImportWarning("script-invalid",
+                        describeValidationError(structErr.get())));
                 continue;
             }
 
@@ -232,5 +238,22 @@ public final class ScriptImporter {
         if (msg == null) return cur.getClass().getSimpleName();
         int nl = msg.indexOf('\n');
         return nl >= 0 ? msg.substring(0, nl) : msg;
+    }
+
+    /**
+     * 0.9.7：把 {@link moe.hikari.canvas.script.ValidationError} 压成稳定的 detail 字符串
+     * （{@code key} 或 {@code key [k=v, ...]}），供 {@code script-invalid} 提示携带。
+     * 无 locale 渲染（导入路径无 session）——前端外层句子已本地化，detail 是稳定具体对象码。
+     */
+    private static String describeValidationError(moe.hikari.canvas.script.ValidationError ve) {
+        if (ve.params().isEmpty()) return ve.key();
+        StringBuilder sb = new StringBuilder(ve.key()).append(" [");
+        boolean first = true;
+        for (Map.Entry<String, String> e : ve.params().entrySet()) {
+            if (!first) sb.append(", ");
+            sb.append(e.getKey()).append('=').append(e.getValue());
+            first = false;
+        }
+        return sb.append(']').toString();
     }
 }

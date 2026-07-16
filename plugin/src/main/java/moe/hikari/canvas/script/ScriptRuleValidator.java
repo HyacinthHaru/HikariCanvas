@@ -123,49 +123,51 @@ public final class ScriptRuleValidator {
     }
 
     /**
-     * 校验整条规则。empty = 合法；present = 人读错误信息。
+     * 校验整条规则。empty = 合法；present = 结构化 {@link ValidationError}
+     * （key + 命名参数，由 dispatcher 按编辑器 locale 渲染）。
      */
-    public static Optional<String> validate(ScriptRule rule) {
+    public static Optional<ValidationError> validate(ScriptRule rule) {
         if (rule == null) {
-            return Optional.of("规则不能为空");
+            return Optional.of(ValidationError.of("ruleNull"));
         }
         if (rule.name() == null || rule.name().isBlank()) {
-            return Optional.of("规则名称不能为空");
+            return Optional.of(ValidationError.of("nameBlank"));
         }
         if (rule.name().length() > NAME_MAX) {
-            return Optional.of("规则名称超长（最多 " + NAME_MAX + " 字符）");
+            return Optional.of(ValidationError.of("nameTooLong", "max", NAME_MAX));
         }
         if (rule.trigger() == null) {
-            return Optional.of("缺少触发器");
+            return Optional.of(ValidationError.of("triggerMissing"));
         }
         if (rule.actions().isEmpty()) {
-            return Optional.of("动作列表不能为空");
+            return Optional.of(ValidationError.of("actionsEmpty"));
         }
         if (rule.blockLayout() != null && rule.blockLayout().length() > BLOCK_LAYOUT_MAX) {
-            return Optional.of("积木布局数据超长（最多 " + BLOCK_LAYOUT_MAX + " 字符）");
+            return Optional.of(ValidationError.of("blockLayoutTooLong", "max", BLOCK_LAYOUT_MAX));
         }
-        Optional<String> triggerError = validateTrigger(rule.trigger());
+        Optional<ValidationError> triggerError = validateTrigger(rule.trigger());
         if (triggerError.isPresent()) {
             return triggerError;
         }
         int total = countBlocks(rule.actions());
         if (total > MAX_TOTAL_BLOCKS) {
-            return Optional.of("积木总数 " + total + " 超过上限 " + MAX_TOTAL_BLOCKS);
+            return Optional.of(ValidationError.of("blocksTotalExceeded",
+                    "total", total, "max", MAX_TOTAL_BLOCKS));
         }
         return validateActions(rule.actions(), 0);
     }
 
     /** 触发器各子类的字段范围校验。 */
-    private static Optional<String> validateTrigger(Trigger trigger) {
+    private static Optional<ValidationError> validateTrigger(Trigger trigger) {
         return switch (trigger) {
             case Trigger.VariableChange t -> blank(t.fullName())
-                    ? Optional.of("变量变化触发器的变量名不能为空")
+                    ? Optional.of(ValidationError.of("triggerVarChangeNameBlank"))
                     : Optional.empty();
             case Trigger.Timer t -> (t.intervalSeconds() < TIMER_MIN || t.intervalSeconds() > TIMER_MAX)
-                    ? Optional.of("定时器间隔需在 " + TIMER_MIN + ".." + TIMER_MAX + " 秒之间")
+                    ? Optional.of(ValidationError.of("timerRange", "min", TIMER_MIN, "max", TIMER_MAX))
                     : Optional.empty();
             case Trigger.PlayerNear t -> (t.rangeBlocks() < NEAR_MIN || t.rangeBlocks() > NEAR_MAX)
-                    ? Optional.of("玩家靠近半径需在 " + NEAR_MIN + ".." + NEAR_MAX + " 方块之间")
+                    ? Optional.of(ValidationError.of("playerNearRange", "min", NEAR_MIN, "max", NEAR_MAX))
                     : Optional.empty();
             case Trigger.PlayerJoin ignored -> Optional.empty();
             case Trigger.PlayerKill ignored -> Optional.empty();
@@ -173,7 +175,7 @@ public final class ScriptRuleValidator {
             // 0.7.1：3 个新触发器。playerLeaveRange 复用 NEAR_MIN..NEAR_MAX（与 playerNear
             // 同半径语义）；rightClickWall / playerQuit 无字段。
             case Trigger.PlayerLeaveRange t -> (t.rangeBlocks() < NEAR_MIN || t.rangeBlocks() > NEAR_MAX)
-                    ? Optional.of("玩家离开半径需在 " + NEAR_MIN + ".." + NEAR_MAX + " 方块之间")
+                    ? Optional.of(ValidationError.of("playerLeaveRange", "min", NEAR_MIN, "max", NEAR_MAX))
                     : Optional.empty();
             case Trigger.RightClickWall ignored -> Optional.empty();
             case Trigger.PlayerQuit ignored -> Optional.empty();
@@ -208,9 +210,9 @@ public final class ScriptRuleValidator {
     }
 
     /** 逐个动作校验；ifDepth = 进入本层前已有的 if 嵌套层数。 */
-    private static Optional<String> validateActions(List<Action> actions, int ifDepth) {
+    private static Optional<ValidationError> validateActions(List<Action> actions, int ifDepth) {
         for (Action action : actions) {
-            Optional<String> error = validateAction(action, ifDepth);
+            Optional<ValidationError> error = validateAction(action, ifDepth);
             if (error.isPresent()) {
                 return error;
             }
@@ -218,109 +220,109 @@ public final class ScriptRuleValidator {
         return Optional.empty();
     }
 
-    private static Optional<String> validateAction(Action action, int ifDepth) {
+    private static Optional<ValidationError> validateAction(Action action, int ifDepth) {
         return switch (action) {
             case Action.SetVariable a -> {
                 if (blank(a.fullName())) {
-                    yield Optional.of("设置变量的变量名不能为空");
+                    yield Optional.of(ValidationError.of("setVarNameBlank"));
                 }
                 if (a.value() == null) {
-                    yield Optional.of("设置变量的值不能为 null（空串合法）");
+                    yield Optional.of(ValidationError.of("setVarValueNull"));
                 }
                 if (a.value().length() > SET_VALUE_MAX) {
-                    yield Optional.of("设置变量的值超长（最多 " + SET_VALUE_MAX + " 字符）");
+                    yield Optional.of(ValidationError.of("setVarValueTooLong", "max", SET_VALUE_MAX));
                 }
                 yield Optional.empty();
             }
             case Action.IncrementVariable a -> {
                 if (blank(a.fullName())) {
-                    yield Optional.of("累加变量的变量名不能为空");
+                    yield Optional.of(ValidationError.of("incrementVarNameBlank"));
                 }
                 if (!Double.isFinite(a.delta())) {
-                    yield Optional.of("累加步长必须是有限数值");
+                    yield Optional.of(ValidationError.of("incrementDeltaNotFinite"));
                 }
                 yield Optional.empty();
             }
             case Action.SetElementProperty a -> {
                 if (blank(a.elementId())) {
-                    yield Optional.of("设置元素属性缺少元素 ID");
+                    yield Optional.of(ValidationError.of("setElementPropMissingId"));
                 }
                 if (a.property() == null || !ELEMENT_PROPERTIES.contains(a.property())) {
-                    yield Optional.of("元素属性不在允许范围：" + a.property());
+                    yield Optional.of(ValidationError.of("elementPropNotAllowed", "property", a.property()));
                 }
                 if (blank(a.value())) {
-                    yield Optional.of("设置元素属性的值不能为空");
+                    yield Optional.of(ValidationError.of("setElementPropValueBlank"));
                 }
                 yield Optional.empty();
             }
             case Action.PlayTimeline a -> {
                 if (blank(a.timelineId())) {
-                    yield Optional.of("时间轴控制缺少时间轴 ID");
+                    yield Optional.of(ValidationError.of("timelineMissingId"));
                 }
                 if (a.op() == null || !TIMELINE_OPS.contains(a.op())) {
-                    yield Optional.of("时间轴操作不在允许范围：" + a.op());
+                    yield Optional.of(ValidationError.of("timelineOpNotAllowed", "op", a.op()));
                 }
                 if ("seek".equals(a.op()) && a.seekMs() == null) {
-                    yield Optional.of("seek 操作必须提供 seekMs");
+                    yield Optional.of(ValidationError.of("timelineSeekMissingMs"));
                 }
                 if (a.seekMs() != null && a.seekMs() < 0) {
-                    yield Optional.of("seekMs 不能为负数");
+                    yield Optional.of(ValidationError.of("timelineSeekNegative"));
                 }
                 yield Optional.empty();
             }
             case Action.PlaySound a -> {
                 if (blank(a.soundId()) || a.soundId().length() > SOUND_ID_MAX) {
-                    yield Optional.of("声音 ID 不能为空且最多 " + SOUND_ID_MAX + " 字符");
+                    yield Optional.of(ValidationError.of("soundIdInvalid", "max", SOUND_ID_MAX));
                 }
                 // 取反区间写法：NaN 任何比较都为 false，连带被拒（finite 纪律）
                 if (!(a.volume() >= VOLUME_MIN && a.volume() <= VOLUME_MAX)) {
-                    yield Optional.of("音量需在 " + VOLUME_MIN + ".." + VOLUME_MAX + " 之间");
+                    yield Optional.of(ValidationError.of("soundVolumeRange", "min", VOLUME_MIN, "max", VOLUME_MAX));
                 }
                 if (!(a.pitch() >= PITCH_MIN && a.pitch() <= PITCH_MAX)) {
-                    yield Optional.of("音调需在 " + PITCH_MIN + ".." + PITCH_MAX + " 之间");
+                    yield Optional.of(ValidationError.of("soundPitchRange", "min", PITCH_MIN, "max", PITCH_MAX));
                 }
                 if (a.scope() == null || !SOUND_SCOPES.contains(a.scope())) {
-                    yield Optional.of("声音范围不在允许范围：" + a.scope());
+                    yield Optional.of(ValidationError.of("soundScopeNotAllowed", "scope", a.scope()));
                 }
                 yield Optional.empty();
             }
             case Action.Wait a -> (a.ms() < WAIT_MIN || a.ms() > WAIT_MAX)
-                    ? Optional.of("等待时长需在 " + WAIT_MIN + ".." + WAIT_MAX + " 毫秒之间")
+                    ? Optional.of(ValidationError.of("waitRange", "min", WAIT_MIN, "max", WAIT_MAX))
                     : Optional.empty();
             case Action.RunCommand a -> {
                 if (blank(a.templateId())) {
-                    yield Optional.of("执行命令缺少模板 ID");
+                    yield Optional.of(ValidationError.of("commandMissingTemplateId"));
                 }
                 for (Map.Entry<String, String> e : a.params().entrySet()) {
                     // Map.copyOf 已保证 value 非 null，这里只查长度
                     if (e.getValue().length() > COMMAND_PARAM_MAX) {
-                        yield Optional.of("命令参数 '" + e.getKey() + "' 超长（最多 "
-                                + COMMAND_PARAM_MAX + " 字符）");
+                        yield Optional.of(ValidationError.of("commandParamTooLong",
+                                "name", e.getKey(), "max", COMMAND_PARAM_MAX));
                     }
                 }
                 yield Optional.empty();
             }
             case Action.Log a -> {
                 if (a.message() == null) {
-                    yield Optional.of("日志内容不能为 null");
+                    yield Optional.of(ValidationError.of("logMessageNull"));
                 }
                 if (a.message().length() > LOG_MESSAGE_MAX) {
-                    yield Optional.of("日志内容超长（最多 " + LOG_MESSAGE_MAX + " 字符）");
+                    yield Optional.of(ValidationError.of("logMessageTooLong", "max", LOG_MESSAGE_MAX));
                 }
                 yield Optional.empty();
             }
             case Action.If a -> {
                 int depth = ifDepth + 1;
                 if (depth > MAX_IF_DEPTH) {
-                    yield Optional.of("if 嵌套超过 " + MAX_IF_DEPTH + " 层（depth=" + depth + "）");
+                    yield Optional.of(ValidationError.of("ifDepthExceeded", "max", MAX_IF_DEPTH, "depth", depth));
                 }
                 if (blank(a.condition())) {
-                    yield Optional.of("if 条件不能为空");
+                    yield Optional.of(ValidationError.of("ifConditionBlank"));
                 }
                 if (a.condition().length() > CONDITION_MAX) {
-                    yield Optional.of("if 条件超长（最多 " + CONDITION_MAX + " 字符）");
+                    yield Optional.of(ValidationError.of("ifConditionTooLong", "max", CONDITION_MAX));
                 }
-                Optional<String> thenError = validateActions(a.then(), depth);
+                Optional<ValidationError> thenError = validateActions(a.then(), depth);
                 if (thenError.isPresent()) {
                     yield thenError;
                 }
@@ -329,91 +331,91 @@ public final class ScriptRuleValidator {
             // 0.7.1：6 个新 Action 子类
             case Action.SetElementProperties a -> {
                 if (blank(a.elementId())) {
-                    yield Optional.of("设置元素属性缺少元素 ID");
+                    yield Optional.of(ValidationError.of("setElementPropMissingId"));
                 }
                 if (a.patch().isEmpty()) {
-                    yield Optional.of("批量设属性的 patch 不能为空");
+                    yield Optional.of(ValidationError.of("patchEmpty"));
                 }
                 if (a.patch().size() > PATCH_MAX_KEYS) {
-                    yield Optional.of("patch 属性数超过 " + PATCH_MAX_KEYS);
+                    yield Optional.of(ValidationError.of("patchTooManyKeys", "max", PATCH_MAX_KEYS));
                 }
                 if (a.kind() != null && a.kind().length() > KIND_MAX) {
-                    yield Optional.of("kind 超长");
+                    yield Optional.of(ValidationError.of("kindTooLong", "max", KIND_MAX));
                 }
                 for (Map.Entry<String, String> e : a.patch().entrySet()) {
                     if (!ELEMENT_PROPERTIES.contains(e.getKey())) {
-                        yield Optional.of("元素属性不在允许范围：" + e.getKey());
+                        yield Optional.of(ValidationError.of("elementPropNotAllowed", "property", e.getKey()));
                     }
                     // text 空串是合法内容（ElementPropertyApplier.buildPatch 接受空文字）；
                     // color 空串同理（hex 空串会失败，仍检查空）；
                     // 其余键（x/y/w/h/rotation/opacity/fill）空串会静默变 0 或 hex 失败，仍查空
                     if (!"text".equals(e.getKey()) && blank(e.getValue())) {
-                        yield Optional.of("属性 " + e.getKey() + " 的值不能为空");
+                        yield Optional.of(ValidationError.of("patchPropValueBlank", "property", e.getKey()));
                     }
                 }
                 yield Optional.empty();
             }
             case Action.NudgeElement a -> {
                 if (blank(a.elementId())) {
-                    yield Optional.of("相对移动缺少元素 ID");
+                    yield Optional.of(ValidationError.of("nudgeMissingId"));
                 }
                 if (!Double.isFinite(a.dx()) || !Double.isFinite(a.dy())) {
-                    yield Optional.of("相对移动的 dx/dy 必须是有限数值");
+                    yield Optional.of(ValidationError.of("nudgeDeltaNotFinite"));
                 }
                 yield Optional.empty();
             }
             case Action.SendMessage a -> {
                 if (a.text() == null) {
-                    yield Optional.of("发消息内容不能为 null");
+                    yield Optional.of(ValidationError.of("messageTextNull"));
                 }
                 if (a.text().length() > MESSAGE_MAX) {
-                    yield Optional.of("发消息内容超长（最多 " + MESSAGE_MAX + "）");
+                    yield Optional.of(ValidationError.of("messageTextTooLong", "max", MESSAGE_MAX));
                 }
                 if (a.channel() == null || !MESSAGE_CHANNELS.contains(a.channel())) {
-                    yield Optional.of("消息渠道不在允许范围：" + a.channel());
+                    yield Optional.of(ValidationError.of("messageChannelNotAllowed", "channel", a.channel()));
                 }
                 // 0.7.2-P3：target 白名单（trigger / all）
                 if (a.target() == null || !MESSAGE_TARGETS.contains(a.target())) {
-                    yield Optional.of("发送对象不在允许范围：" + a.target());
+                    yield Optional.of(ValidationError.of("messageTargetNotAllowed", "target", a.target()));
                 }
                 yield Optional.empty();
             }
             case Action.SetRandomVariable a -> {
                 if (blank(a.fullName())) {
-                    yield Optional.of("随机数变量名不能为空");
+                    yield Optional.of(ValidationError.of("randomVarNameBlank"));
                 }
                 if (!Double.isFinite(a.min()) || !Double.isFinite(a.max())) {
-                    yield Optional.of("随机区间必须是有限数值");
+                    yield Optional.of(ValidationError.of("randomRangeNotFinite"));
                 }
                 if (a.min() > a.max()) {
-                    yield Optional.of("随机区间 min 不能大于 max");
+                    yield Optional.of(ValidationError.of("randomRangeMinGtMax"));
                 }
                 yield Optional.empty();
             }
             case Action.ScaleVariable a -> {
                 if (blank(a.fullName())) {
-                    yield Optional.of("乘除变量名不能为空");
+                    yield Optional.of(ValidationError.of("scaleVarNameBlank"));
                 }
                 if (a.op() == null || !SCALE_OPS.contains(a.op())) {
-                    yield Optional.of("运算不在允许范围：" + a.op());
+                    yield Optional.of(ValidationError.of("scaleOpNotAllowed", "op", a.op()));
                 }
                 if (!Double.isFinite(a.factor())) {
-                    yield Optional.of("乘除系数必须是有限数值");
+                    yield Optional.of(ValidationError.of("scaleFactorNotFinite"));
                 }
                 if ("divide".equals(a.op()) && a.factor() == 0.0) {
-                    yield Optional.of("除数不能为 0");
+                    yield Optional.of(ValidationError.of("scaleDivideByZero"));
                 }
                 yield Optional.empty();
             }
             case Action.PlayTimelineAwait a -> blank(a.timelineId())
-                    ? Optional.of("播时间轴缺少时间轴 ID")
+                    ? Optional.of(ValidationError.of("timelineAwaitMissingId"))
                     : Optional.empty();
             case Action.Repeat a -> {
                 if (a.count() < REPEAT_MIN || a.count() > REPEAT_MAX) {
-                    yield Optional.of("重复次数需在 " + REPEAT_MIN + ".." + REPEAT_MAX + " 之间");
+                    yield Optional.of(ValidationError.of("repeatCountRange", "min", REPEAT_MIN, "max", REPEAT_MAX));
                 }
                 if (a.body().isEmpty()) {
-                    yield Optional.of("重复循环体不能为空");
+                    yield Optional.of(ValidationError.of("repeatBodyEmpty"));
                 }
                 // body 递归（ifDepth 不变——repeat 不增 if 嵌套深度）
                 yield validateActions(a.body(), ifDepth);
@@ -422,65 +424,66 @@ public final class ScriptRuleValidator {
             case Action.StopScript ignored -> Optional.empty();
             case Action.PlayParticle a -> {
                 if (a.particle() == null || !PARTICLE_WHITELIST.contains(a.particle())) {
-                    yield Optional.of("粒子种类不在允许范围：" + a.particle());
+                    yield Optional.of(ValidationError.of("particleNotAllowed", "particle", a.particle()));
                 }
                 if (!(a.count() >= PARTICLE_COUNT_MIN && a.count() <= PARTICLE_COUNT_MAX)) {
-                    yield Optional.of("粒子数量需在 " + PARTICLE_COUNT_MIN + ".." + PARTICLE_COUNT_MAX + " 之间");
+                    yield Optional.of(ValidationError.of("particleCountRange",
+                            "min", PARTICLE_COUNT_MIN, "max", PARTICLE_COUNT_MAX));
                 }
                 if (!(Double.isFinite(a.offsetX()) && Double.isFinite(a.offsetY())
                         && Double.isFinite(a.offsetZ()))) {
-                    yield Optional.of("粒子偏移必须是有限数值");
+                    yield Optional.of(ValidationError.of("particleOffsetNotFinite"));
                 }
                 yield Optional.empty();
             }
             case Action.WaitUntil a -> {
                 if (blank(a.condition()) || a.condition().length() > CONDITION_MAX) {
-                    yield Optional.of("等待条件不能为空且最多 " + CONDITION_MAX + " 字符");
+                    yield Optional.of(ValidationError.of("waitUntilConditionInvalid", "max", CONDITION_MAX));
                 }
                 if (!(a.timeoutMs() >= WAIT_UNTIL_TIMEOUT_MIN
                         && a.timeoutMs() <= WAIT_UNTIL_TIMEOUT_MAX)) {
-                    yield Optional.of("超时时长需在 " + WAIT_UNTIL_TIMEOUT_MIN + ".."
-                            + WAIT_UNTIL_TIMEOUT_MAX + " 毫秒之间");
+                    yield Optional.of(ValidationError.of("waitUntilTimeoutRange",
+                            "min", WAIT_UNTIL_TIMEOUT_MIN, "max", WAIT_UNTIL_TIMEOUT_MAX));
                 }
                 yield Optional.empty();
             }
             // 0.7.2-P2：copy / append / clone / delete
             case Action.CopyVariable a -> (blank(a.target()) || blank(a.source()))
-                    ? Optional.of("变量复制的目标 / 来源不能为空")
+                    ? Optional.of(ValidationError.of("copyVarTargetOrSourceBlank"))
                     : Optional.empty();
             case Action.AppendVariable a -> {
                 if (blank(a.fullName())) {
-                    yield Optional.of("文本拼接的目标变量不能为空");
+                    yield Optional.of(ValidationError.of("appendVarNameBlank"));
                 }
                 // text 复用 SetVariable 值长度上限（= VariableStore.MAX_VALUE_LENGTH，4096）
                 if (a.text() != null && a.text().length() > SET_VALUE_MAX) {
-                    yield Optional.of("拼接文本超长（最多 " + SET_VALUE_MAX + " 字符）");
+                    yield Optional.of(ValidationError.of("appendTextTooLong", "max", SET_VALUE_MAX));
                 }
                 yield Optional.empty();
             }
             case Action.CloneElement a -> {
                 if (blank(a.elementId())) {
-                    yield Optional.of("克隆元素的目标不能为空");
+                    yield Optional.of(ValidationError.of("cloneElementIdBlank"));
                 }
                 if (!(Math.abs(a.offsetX()) <= ELEMENT_OFFSET_MAX
                         && Math.abs(a.offsetY()) <= ELEMENT_OFFSET_MAX)) {
-                    yield Optional.of("克隆偏移超范围（绝对值最多 " + ELEMENT_OFFSET_MAX + "）");
+                    yield Optional.of(ValidationError.of("cloneOffsetOutOfRange", "max", ELEMENT_OFFSET_MAX));
                 }
                 yield Optional.empty();
             }
             case Action.DeleteElement a -> blank(a.elementId())
-                    ? Optional.of("删除元素的目标不能为空")
+                    ? Optional.of(ValidationError.of("deleteElementIdBlank"))
                     : Optional.empty();
             // 0.7.2-P3：重复直到条件（condition 非空 + maxIterations∈[1,100] + body 非空递归）
             case Action.RepeatUntil a -> {
                 if (blank(a.condition()) || a.condition().length() > CONDITION_MAX) {
-                    yield Optional.of("重复条件不能为空且最多 " + CONDITION_MAX + " 字符");
+                    yield Optional.of(ValidationError.of("repeatUntilConditionInvalid", "max", CONDITION_MAX));
                 }
                 if (a.maxIterations() < REPEAT_MIN || a.maxIterations() > REPEAT_MAX) {
-                    yield Optional.of("重复次数上限需在 " + REPEAT_MIN + ".." + REPEAT_MAX + " 之间");
+                    yield Optional.of(ValidationError.of("repeatUntilMaxRange", "min", REPEAT_MIN, "max", REPEAT_MAX));
                 }
                 if (a.body().isEmpty()) {
-                    yield Optional.of("重复循环体不能为空");
+                    yield Optional.of(ValidationError.of("repeatBodyEmpty"));
                 }
                 // body 递归（ifDepth 不变——repeatUntil 不增 if 嵌套深度，同 Repeat）
                 yield validateActions(a.body(), ifDepth);
@@ -489,34 +492,34 @@ public final class ScriptRuleValidator {
             case Action.RandomBranch a -> {
                 if (a.probability() < RANDOM_BRANCH_PROB_MIN
                         || a.probability() > RANDOM_BRANCH_PROB_MAX) {
-                    yield Optional.of("随机概率需在 " + RANDOM_BRANCH_PROB_MIN + ".."
-                            + RANDOM_BRANCH_PROB_MAX + " 之间（百分比）");
+                    yield Optional.of(ValidationError.of("randomBranchProbRange",
+                            "min", RANDOM_BRANCH_PROB_MIN, "max", RANDOM_BRANCH_PROB_MAX));
                 }
                 // RandomBranch 与 If 同语义——递增 ifDepth 并查 MAX_IF_DEPTH（双端对齐）
                 int depth = ifDepth + 1;
                 if (depth > MAX_IF_DEPTH) {
-                    yield Optional.of("if/randomBranch 嵌套超过 " + MAX_IF_DEPTH + " 层（depth=" + depth + "）");
+                    yield Optional.of(ValidationError.of("ifRandomBranchDepthExceeded", "max", MAX_IF_DEPTH, "depth", depth));
                 }
                 // then / else 都可为空（与 If 同语义）；递归校验
-                Optional<String> thenErr = validateActions(a.then(), depth);
+                Optional<ValidationError> thenErr = validateActions(a.then(), depth);
                 if (thenErr.isPresent()) yield thenErr;
                 yield validateActions(a.elseActions(), depth);
             }
             case Action.SetElementLayer a -> {
                 if (blank(a.elementId())) {
-                    yield Optional.of("元素置顶/置底缺少元素 ID");
+                    yield Optional.of(ValidationError.of("elementLayerMissingId"));
                 }
                 if (a.mode() == null || !ELEMENT_LAYER_MODES.contains(a.mode())) {
-                    yield Optional.of("置顶/置底模式不在允许范围：" + a.mode());
+                    yield Optional.of(ValidationError.of("elementLayerModeNotAllowed", "mode", a.mode()));
                 }
                 yield Optional.empty();
             }
             case Action.RoundVariable a -> {
                 if (blank(a.fullName())) {
-                    yield Optional.of("变量取整的变量名不能为空");
+                    yield Optional.of(ValidationError.of("roundVarNameBlank"));
                 }
                 if (a.mode() == null || !ROUND_MODES.contains(a.mode())) {
-                    yield Optional.of("取整模式不在允许范围：" + a.mode());
+                    yield Optional.of(ValidationError.of("roundModeNotAllowed", "mode", a.mode()));
                 }
                 yield Optional.empty();
             }
@@ -525,26 +528,26 @@ public final class ScriptRuleValidator {
                 boolean titleEmpty = a.title() == null || a.title().isBlank();
                 boolean subtitleEmpty = a.subtitle() == null || a.subtitle().isBlank();
                 if (titleEmpty && subtitleEmpty) {
-                    yield Optional.of("标题弹窗的主标题和副标题不能同时为空");
+                    yield Optional.of(ValidationError.of("titleBothEmpty"));
                 }
                 if (a.title() != null && a.title().length() > TITLE_TEXT_MAX) {
-                    yield Optional.of("标题超长（最多 " + TITLE_TEXT_MAX + " 字符）");
+                    yield Optional.of(ValidationError.of("titleTooLong", "max", TITLE_TEXT_MAX));
                 }
                 if (a.subtitle() != null && a.subtitle().length() > TITLE_TEXT_MAX) {
-                    yield Optional.of("副标题超长（最多 " + TITLE_TEXT_MAX + " 字符）");
+                    yield Optional.of(ValidationError.of("subtitleTooLong", "max", TITLE_TEXT_MAX));
                 }
                 // 时长 ≥ 0 + 上限
                 if (a.fadeInMs() < 0 || a.fadeInMs() > SHOW_TITLE_FADE_MAX_MS) {
-                    yield Optional.of("淡入时长需在 0.." + SHOW_TITLE_FADE_MAX_MS + " 毫秒之间");
+                    yield Optional.of(ValidationError.of("titleFadeInRange", "max", SHOW_TITLE_FADE_MAX_MS));
                 }
                 if (a.stayMs() < 0 || a.stayMs() > SHOW_TITLE_STAY_MAX_MS) {
-                    yield Optional.of("停留时长需在 0.." + SHOW_TITLE_STAY_MAX_MS + " 毫秒之间");
+                    yield Optional.of(ValidationError.of("titleStayRange", "max", SHOW_TITLE_STAY_MAX_MS));
                 }
                 if (a.fadeOutMs() < 0 || a.fadeOutMs() > SHOW_TITLE_FADE_MAX_MS) {
-                    yield Optional.of("淡出时长需在 0.." + SHOW_TITLE_FADE_MAX_MS + " 毫秒之间");
+                    yield Optional.of(ValidationError.of("titleFadeOutRange", "max", SHOW_TITLE_FADE_MAX_MS));
                 }
                 if (a.target() == null || !TITLE_TARGETS.contains(a.target())) {
-                    yield Optional.of("发送对象不在允许范围：" + a.target());
+                    yield Optional.of(ValidationError.of("titleTargetNotAllowed", "target", a.target()));
                 }
                 yield Optional.empty();
             }
@@ -552,49 +555,49 @@ public final class ScriptRuleValidator {
             case Action.TweenBlock a -> {
                 // durationMs 范围 [1, TWEEN_DURATION_MAX]
                 if (a.durationMs() < 1 || a.durationMs() > TWEEN_DURATION_MAX) {
-                    yield Optional.of("补间时长需在 1.." + TWEEN_DURATION_MAX + " 毫秒之间");
+                    yield Optional.of(ValidationError.of("tweenDurationRange", "max", TWEEN_DURATION_MAX));
                 }
                 // easing 非 null（wire 层缺失已 fallback LINEAR；但 record 构造后 null 是坏状态）
                 if (a.easing() == null) {
-                    yield Optional.of("补间缓动不能为空");
+                    yield Optional.of(ValidationError.of("tweenEasingNull"));
                 }
                 // easing.type 合法
                 if (a.easing().type() == null) {
-                    yield Optional.of("补间缓动类型未知");
+                    yield Optional.of(ValidationError.of("tweenEasingTypeUnknown"));
                 }
                 // CUBIC_BEZIER 时 bezier 必须是 4 个有限参数，且 x1/x2 ∈ [0,1]
                 if (a.easing().type() == EasingType.CUBIC_BEZIER) {
                     List<Double> bz = a.easing().bezier();
                     if (bz == null || bz.size() != 4) {
-                        yield Optional.of("cubicBezier 缓动需要 4 个控制点参数");
+                        yield Optional.of(ValidationError.of("cubicBezierNeeds4"));
                     }
                     for (double v : bz) {
                         if (!Double.isFinite(v)) {
-                            yield Optional.of("cubicBezier 控制点必须是有限数值");
+                            yield Optional.of(ValidationError.of("cubicBezierControlNotFinite"));
                         }
                     }
                     double x1 = bz.get(0), x2 = bz.get(2);
                     if (x1 < 0.0 || x1 > 1.0 || x2 < 0.0 || x2 > 1.0) {
-                        yield Optional.of("cubicBezier x1/x2 需在 [0,1] 范围内");
+                        yield Optional.of(ValidationError.of("cubicBezierXOutOfRange"));
                     }
                 } else if (a.easing().bezier() != null) {
-                    yield Optional.of("bezier 参数仅允许 cubicBezier 缓动");
+                    yield Optional.of(ValidationError.of("bezierOnlyForCubicBezier"));
                 }
                 // body 不能为空
                 if (a.body().isEmpty()) {
-                    yield Optional.of("补间里至少要有一个属性动作");
+                    yield Optional.of(ValidationError.of("tweenBodyEmpty"));
                 }
                 // body 每条必须是属性动作白名单（SetElementProperties + kind ∈ TWEENABLE_KINDS）
                 for (Action bodyAction : a.body()) {
                     if (!(bodyAction instanceof Action.SetElementProperties sep)) {
-                        yield Optional.of("补间里只能放移动/缩放/转动/透明度/变色动作");
+                        yield Optional.of(ValidationError.of("tweenBodyNotPropertyAction"));
                     }
                     String kind = sep.kind();
                     if (kind == null || kind.isBlank() || !TWEENABLE_KINDS.contains(kind)) {
-                        yield Optional.of("补间里只能放移动/缩放/转动/透明度/变色动作（kind=" + kind + " 不支持）");
+                        yield Optional.of(ValidationError.of("tweenBodyKindNotAllowed", "kind", kind));
                     }
                     // body 里的属性动作自身递归校验
-                    Optional<String> bodyErr = validateAction(bodyAction, ifDepth);
+                    Optional<ValidationError> bodyErr = validateAction(bodyAction, ifDepth);
                     if (bodyErr.isPresent()) yield bodyErr;
                 }
                 // TODO P3: 同属性在 body 里重复警告（v1 先放行，P3 补）

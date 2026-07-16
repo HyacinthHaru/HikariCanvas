@@ -58,9 +58,10 @@ class ScriptOpDispatcherLogicTest {
 
         assertNull(parsed.error());
         assertNull(parsed.rule().trigger());
-        Optional<String> err = ScriptRuleValidator.validate(parsed.rule());
+        Optional<moe.hikari.canvas.script.ValidationError> err =
+                ScriptRuleValidator.validate(parsed.rule());
         assertTrue(err.isPresent());
-        assertTrue(err.get().contains("触发器"), "validator 应报缺触发器: " + err.get());
+        assertEquals("triggerMissing", err.get().key(), "validator 应报缺触发器: " + err.get());
     }
 
     /** trigger 非法 type → 解析期报错（INVALID_PAYLOAD 路径）。 */

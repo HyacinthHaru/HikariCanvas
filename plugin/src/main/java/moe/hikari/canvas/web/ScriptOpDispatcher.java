@@ -3,7 +3,10 @@ package moe.hikari.canvas.web;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.websocket.WsMessageContext;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import moe.hikari.canvas.script.ScriptPermissions;
+import moe.hikari.canvas.script.ValidationError;
 import moe.hikari.canvas.script.ScriptRule;
 import moe.hikari.canvas.script.ScriptRuleValidator;
 import moe.hikari.canvas.script.ScriptStore;
@@ -197,9 +200,10 @@ final class ScriptOpDispatcher {
             logParseFailure("script.create", parsed);
             return Envelope.error(in.id(), "INVALID_PAYLOAD", parsed.error());
         }
-        Optional<String> invalid = ScriptRuleValidator.validate(parsed.rule());
+        Optional<ValidationError> invalid = ScriptRuleValidator.validate(parsed.rule());
         if (invalid.isPresent()) {
-            return Envelope.error(in.id(), "SCRIPT_INVALID", invalid.get());
+            return Envelope.error(in.id(), "SCRIPT_INVALID",
+                    renderValidation(sessionId, invalid.get()));
         }
         // K16：所有 if.condition 保存期预 parse——坏条件保存时就拒，不等运行期静默 false
         Optional<String> badCondition = checkConditionSyntax(parsed.rule().actions());
@@ -242,9 +246,10 @@ final class ScriptOpDispatcher {
             logParseFailure("script.update", parsed);
             return Envelope.error(in.id(), "INVALID_PAYLOAD", parsed.error());
         }
-        Optional<String> invalid = ScriptRuleValidator.validate(parsed.rule());
+        Optional<ValidationError> invalid = ScriptRuleValidator.validate(parsed.rule());
         if (invalid.isPresent()) {
-            return Envelope.error(in.id(), "SCRIPT_INVALID", invalid.get());
+            return Envelope.error(in.id(), "SCRIPT_INVALID",
+                    renderValidation(sessionId, invalid.get()));
         }
         // K16：同 create——update 全量替换也逐 if.condition 预 parse
         Optional<String> badCondition = checkConditionSyntax(parsed.rule().actions());
@@ -614,6 +619,23 @@ final class ScriptOpDispatcher {
         auditLog.record(event,
                 s.playerUuid() == null ? null : s.playerUuid().toString(),
                 s.playerName(), sessionId, null, d);
+    }
+
+    /**
+     * 0.9.7：把结构化 {@link ValidationError} 按发起 session 的编辑器 locale 渲染成人读
+     * 文案（{@code script.validate.<key>}）。缺 {@code messages}（旧测试装配容忍 null）时
+     * 回退 key 名，保证不 NPE。参数转 {@link Placeholder#unparsed}（validation 文案纯文本，
+     * 参数是数字 / 白名单值，无需 MiniMessage 解析）。T2 供 validate 两处调用；T3 的
+     * condition 语法错误亦复用。
+     */
+    private String renderValidation(String sessionId, ValidationError ve) {
+        if (messages == null) return ve.key();
+        Session s = sessionManager.byId(sessionId);
+        String locale = (s == null) ? null : s.editorLocale();
+        TagResolver[] resolvers = ve.params().entrySet().stream()
+                .map(e -> Placeholder.unparsed(e.getKey(), e.getValue()))
+                .toArray(TagResolver[]::new);
+        return messages.plain(locale, "script.validate." + ve.key(), resolvers);
     }
 
     /** 批次3 #5：解析失败时完整异常进 server 日志（外发 message 已脱敏为首行）。 */
