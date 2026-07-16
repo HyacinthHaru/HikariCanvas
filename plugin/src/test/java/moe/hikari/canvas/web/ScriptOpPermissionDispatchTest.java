@@ -91,7 +91,7 @@ class ScriptOpPermissionDispatchTest {
             }
         };
         dispatcher = new ScriptOpDispatcher(/*sessionManager=*/null, /*rateLimiter=*/null,
-                store, wallRepo, push, auditLog, /*plugin=*/null, LOG);
+                store, wallRepo, push, auditLog, /*plugin=*/null, LOG, /*messages=*/null);
         session = SessionTestFactory.withWall(SESSION_ID, CALLER, "tester", wallId);
     }
 

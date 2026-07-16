@@ -89,6 +89,13 @@ public final class WebServer {
     private final FontRegistry fontRegistry;
     /** M26：HTTP 矢量图标端点 {@code /api/icon/list} 与 {@code /api/icon/paths} 用。 */
     private final IconRegistry iconRegistry;
+    /**
+     * 0.9.7：i18n 文案中枢。WS auth 读前端携带的 locale → {@code resolveLocaleId} 规范化后
+     * 存入 {@link Session#setEditorLocale}，供脚本校验报错按编辑器语言渲染；同时转交
+     * {@link ScriptOpDispatcher}（T2/T3 渲染 {@link moe.hikari.canvas.script.ValidationError}）。
+     * 可为 null（旧测试装配容忍——auth 缺 messages 时跳过 setEditorLocale）。
+     */
+    private final moe.hikari.canvas.i18n.Messages messages;
 
     // ---------- 拆分后的 dispatcher（M15.x god-class 拆分）----------
     private final EditOpDispatcher editOpDispatcher;
@@ -202,10 +209,12 @@ public final class WebServer {
                              moe.hikari.canvas.HikariCanvasConfig.CommandTemplate>>
                              commandTemplatesSupplier,
                      moe.hikari.canvas.canvasfile.AssetIngest assetIngest,
-                     moe.hikari.canvas.HikariCanvasConfig.ImportConfig importConfig) {
+                     moe.hikari.canvas.HikariCanvasConfig.ImportConfig importConfig,
+                     moe.hikari.canvas.i18n.Messages messages) {
         this.log = log;
         this.host = host;
         this.port = port;
+        this.messages = messages;
         this.tokenService = tokenService;
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
@@ -269,7 +278,7 @@ public final class WebServer {
         this.scriptStore = scriptStore;
         this.scriptOpDispatcher = scriptStore == null ? null
                 : new ScriptOpDispatcher(sessionManager, rateLimiter, scriptStore,
-                        wallRepo, push, auditLog, plugin, log);
+                        wallRepo, push, auditLog, plugin, log, messages);
         // 0.4.0-P2-F：保留引用供 ready payload 注入 variables 快照
         this.variableStore = variableStore;
         // 0.4.0-P3-M：variable metadata 端点 handler；store/daemon/sessionManager 任一缺则禁用
@@ -1043,6 +1052,17 @@ public final class WebServer {
             ctx.send(Envelope.error(in.id(), "AUTH_FAILED", null));
             closeAuthFailed(ctx, "ip_mismatch");
             return;
+        }
+
+        // 0.9.7：读前端携带的编辑器 UI 语言（game locale id 形态，如 zh_cn / en_us）→
+        // Messages.resolveLocaleId 规范化 + 兜底后存入 session，供脚本校验报错按编辑器语言渲染。
+        // 缺失 / 非字符串时不设（editorLocale 保持 null，渲染回退默认 locale）；messages 为 null
+        // （旧测试装配）也跳过。放在 IP 绑定通过后、markActive 前：session 已确认可用。
+        if (messages != null) {
+            Object rawLocale = pl.get("locale");
+            if (rawLocale instanceof String localeStr && !localeStr.isBlank()) {
+                session.setEditorLocale(messages.resolveLocaleId(localeStr));
+            }
         }
 
         // M5.5：/canvas open 同 wall 路径下 session 已是 ACTIVE；只刷活跃时间，不再走 markActive 转移。

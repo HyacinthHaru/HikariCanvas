@@ -84,6 +84,13 @@ final class ScriptOpDispatcher {
     /** server 日志（批次3 #2：catch-all 不再静默吞异常）；可为 null（兜底跳过记录）。 */
     private final java.util.logging.Logger log;
     /**
+     * 0.9.7：i18n 文案中枢，按编辑器 locale 渲染脚本校验报错（{@link ValidationError} →
+     * {@code Messages.plain(session.editorLocale(), "script.validate.<key>", …)}）。
+     * 本任务（T1）只注入不使用——T2/T3 把 validate/checkConditionSyntax 的返回改为
+     * {@link ValidationError} 后在此渲染。可为 null（旧测试装配容忍）。
+     */
+    private final moe.hikari.canvas.i18n.Messages messages;
+    /**
      * 0.7.0-P3 A2（K11）：异步试跑入口（取代 P1 同步 ScriptTestSeam——同步等待阻塞
      * Jetty worker，合法规则可串 wait 至分钟级，5s ack 超时必爆）。null = 引擎未装配，
      * {@code script.test} 回 {@code SCRIPT_ENGINE_UNAVAILABLE}。
@@ -101,7 +108,8 @@ final class ScriptOpDispatcher {
                        OpPushCallback push,
                        moe.hikari.canvas.storage.AuditLog auditLog,
                        org.bukkit.plugin.Plugin plugin,
-                       java.util.logging.Logger log) {
+                       java.util.logging.Logger log,
+                       moe.hikari.canvas.i18n.Messages messages) {
         this.sessionManager = sessionManager;
         this.rateLimiter = rateLimiter;
         this.store = store;
@@ -110,6 +118,7 @@ final class ScriptOpDispatcher {
         this.auditLog = auditLog;
         this.plugin = plugin;
         this.log = log;
+        this.messages = messages;
     }
 
     /** A2：试跑入口注入（HikariCanvas onEnable 引擎装配后经 WebServer 转交）；volatile 可见。 */

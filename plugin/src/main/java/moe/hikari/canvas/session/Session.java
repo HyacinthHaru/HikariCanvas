@@ -48,6 +48,12 @@ public final class Session {
      * 见 CLAUDE.md §lock-state 后的 IP 绑定决策。
      */
     private volatile String boundIp;
+    /**
+     * 0.9.7：编辑器 UI 语言（前端 auth 帧携带 ui.locale，映射成 game locale id 形态如
+     * {@code zh_cn} / {@code en_us}）。用于按编辑器语言渲染脚本校验报错。
+     * null = 未知，渲染时回退 Messages 默认 locale。
+     */
+    private volatile String editorLocale;
 
     Session(String id, UUID playerUuid, String playerName, long now) {
         this.id = id;
@@ -77,6 +83,14 @@ public final class Session {
     public long wsDisconnectedAt() { return wsDisconnectedAt; }
     /** M16 P6.6：当前绑定的 client IP；null 表示尚未首次 auth。 */
     public String boundIp() { return boundIp; }
+    /** 0.9.7：编辑器 UI 语言（game locale id 形态，如 {@code zh_cn}）；null = 未知。 */
+    public String editorLocale() { return editorLocale; }
+    /**
+     * 0.9.7：WS auth 时由 {@code WebServer} 依前端携带的 locale 设置（已经
+     * {@code Messages.resolveLocaleId} 规范化 + 兜底）。public：跨 package 由 WebServer 直设，
+     * 非编辑不变量的一部分（仅影响外发文案渲染），无需走 SessionManager 锁。
+     */
+    public void setEditorLocale(String localeId) { this.editorLocale = localeId; }
 
     // package-private mutators——只允许 SessionManager 在持锁下修改
     void state(SessionState s) { this.state = s; }

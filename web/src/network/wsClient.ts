@@ -12,6 +12,7 @@ import { useNetworkStore } from '@/stores/network';
 import { useProjectStore } from '@/stores/project';
 import { useTemplatesStore } from '@/stores/templates';
 import { useUiStore } from '@/stores/ui';
+import type { Locale } from '@/stores/ui';
 import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
 import { useRailStore } from '@/stores/rail';
@@ -35,6 +36,15 @@ function localizeErrorCode(code: string, fallbackMessage?: string): string {
             : `${errs.UNKNOWN}（${code}）`;
     }
     return fallbackMessage ?? code;
+}
+
+/**
+ * 0.9.7：编辑器 UI 语言（2 字母 {@link Locale}）→ game locale id（如 {@code zh_cn} / {@code en_us}）。
+ * 后端 auth 读取后走 {@code Messages.resolveLocaleId} 规范化 + 兜底；与命令路径
+ * （{@code player.getLocale()} 返回 game locale id）统一，让脚本校验报错按编辑器语言渲染。
+ */
+function uiLocaleToGameId(locale: Locale): string {
+    return locale === 'zh' ? 'zh_cn' : 'en_us';
 }
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
@@ -618,7 +628,17 @@ export class WsClient {
         // M16 P6.2：发新字段 client_v；旧字段 clientProtocolVersion 同步发以兼容回滚
         // 到旧服务端 jar 的情形（旧后端不识别 client_v，识别 clientProtocolVersion）。
         // 新后端（M16+）优先读 client_v；范围检查通过 → ready 回 accepted_v。
-        this.send('auth', { token, client_v: CLIENT_V, clientProtocolVersion: CLIENT_V });
+        //
+        // 0.9.7：携带编辑器 UI 语言（用于后端按编辑器语言渲染脚本校验报错等外发文案）。
+        // ui.locale 是 2 字母（'zh' / 'en'），这里映射成 game locale id 形态（'zh_cn' / 'en_us'），
+        // 与命令路径（player.getLocale() 返回 'zh_cn'）对齐 → 后端 Messages.resolveLocaleId 统一处理。
+        // auth payload 后端按 Object → Map 松散解析（非严格 record 字段），旧后端多这个键也静默忽略。
+        this.send('auth', {
+            token,
+            client_v: CLIENT_V,
+            clientProtocolVersion: CLIENT_V,
+            locale: uiLocaleToGameId(useUiStore().locale),
+        });
     }
 
     private startHeartbeat(): void {

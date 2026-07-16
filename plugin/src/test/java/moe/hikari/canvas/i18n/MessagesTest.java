@@ -98,6 +98,20 @@ class MessagesTest {
     }
 
     @Test
+    void plain_rendersNamedParam_asPlainText() {
+        // 0.9.7：plain() 把 Component 出成纯文本 String（WS error message 字段用）。
+        // 用现成带 <url> 占位符的 key（command.open-editor = "<gray>Open editor: <url></gray>"）
+        // 验证：① 占位符被填充；② 无 MiniMessage 标签残留（不含 '<'）。
+        // 注意 plain() 不走 PlainTextComponentSerializer（测试 classpath 上其 static init 抛
+        // ExceptionInInitializerError——Paper devbundle + MockBukkit 双份 Provider），
+        // 改用与本类 plain(Component) 同款递归 flatten，输出等价。
+        String s = messages.plain("en_us", "command.open-editor",
+                Placeholder.unparsed("url", "http://x/42"));
+        assertEquals("Open editor: http://x/42", s);
+        assertFalse(s.contains("<"), "不应残留 MiniMessage 标签: " + s);
+    }
+
+    @Test
     void loadExternal_overridesBuiltIn(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("en_us.yml"), "command:\n  no-session: \"OVERRIDDEN\"\n");
         Messages m = new Messages(Logger.getLogger("t"));

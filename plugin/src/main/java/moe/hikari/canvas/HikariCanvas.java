@@ -620,7 +620,9 @@ public final class HikariCanvas extends JavaPlugin {
                 // 与 ActionExecutor 读模板范式一致（绝不泄 command 原文由 handler 保证）。
                 () -> config().scriptsConfig.commandTemplates(),
                 // 0.8-A2：.canvas 工程导入——AssetIngest + 导入限额；WebServer 内 new ProjectImporter。
-                assetIngest, config.importConfig);
+                assetIngest, config.importConfig,
+                // 0.9.7：i18n 文案中枢（WS auth 读编辑器 locale + 转交 ScriptOpDispatcher 渲染校验报错）
+                messages);
         webServer.start();
 
         // 0.6 P2：时间轴动画产帧引擎装配（docs/architecture.md §5.5 / docs/timeline.md §3）。

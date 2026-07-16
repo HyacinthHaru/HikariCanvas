@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.command.CommandSender;
@@ -60,6 +61,39 @@ public final class Messages {
             return Component.text(key);
         }
         return MiniMessage.miniMessage().deserialize(raw, resolvers);
+    }
+
+    /**
+     * 0.9.7：渲染成纯文本 String（WS error message 字段用；WS 的 message 字段是 String，
+     * validation 文案无格式，纯文本即可）。{@link #get} 出 Component 后递归抽取
+     * TextComponent 的 content 拼接；找不到 key 时 get() 已回退 defaultLocale / key 名。
+     *
+     * <p><b>不用 PlainTextComponentSerializer</b>：其 static init 在测试 classpath 上
+     * （Paper devbundle + MockBukkit 双份 {@code PlainTextComponentSerializer$Provider}）
+     * 抛 {@code ExceptionInInitializerError}（"found multiple"）——{@code MessagesTest}
+     * 已为此手写同款递归 flatten。本项目所有 YML 文案经 MiniMessage 反序列化后均为纯
+     * {@link TextComponent} 树（无 {@code <lang:…>} / {@code <keybind:…>} 等非文本节点），
+     * 故递归拼接 content 与 PlainTextComponentSerializer 对这些字符串输出等价，且零 SPI 依赖。</p>
+     */
+    public String plain(String localeId, String key, TagResolver... resolvers) {
+        StringBuilder sb = new StringBuilder();
+        flattenPlain(get(localeId, key, resolvers), sb);
+        return sb.toString();
+    }
+
+    /**
+     * 递归把 {@link Component} 树的文本内容拼进 {@code sb}。仅支持纯
+     * {@link TextComponent}（本项目 MiniMessage 对 YML 字符串的产物形态）；遇到非
+     * TextComponent 节点（如 TranslatableComponent）保守跳过其自身内容但仍递归子节点，
+     * 避免抛异常打断 WS 错误帧渲染。
+     */
+    private static void flattenPlain(Component c, StringBuilder sb) {
+        if (c instanceof TextComponent tc) {
+            sb.append(tc.content());
+        }
+        for (Component child : c.children()) {
+            flattenPlain(child, sb);
+        }
     }
 
     public String resolveLocaleId(String rawClientLocale) {

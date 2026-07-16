@@ -82,7 +82,7 @@ class ScriptOpDispatchBehaviorTest {
         // sessionManager / rateLimiter / wallRepo / auditLog 在 handler 路径不被触碰，传 null；
         // plugin=null → MainThreadPerms 直接调用路径（本测试规则 facets 为空，不会走到）。
         dispatcher = new ScriptOpDispatcher(/*sessionManager=*/null, /*rateLimiter=*/null,
-                store, /*wallRepo=*/null, push, /*auditLog=*/null, /*plugin=*/null, LOG);
+                store, /*wallRepo=*/null, push, /*auditLog=*/null, /*plugin=*/null, LOG, /*messages=*/null);
         session = SessionTestFactory.withWall(SESSION_ID, CALLER, "tester", WALL);
     }
 
