@@ -66,7 +66,6 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 writeActions(gen, provider, "then", a.then());
                 writeActions(gen, provider, "else", a.elseActions());
             }
-            // 0.7.1：6 个新 Action 子类
             case Action.SetElementProperties a -> {
                 gen.writeStringField("elementId", a.elementId());
                 gen.writeObjectFieldStart("patch");
@@ -85,7 +84,7 @@ public final class ActionSerializer extends JsonSerializer<Action> {
             case Action.SendMessage a -> {
                 gen.writeStringField("text", a.text());
                 gen.writeStringField("channel", a.channel());
-                gen.writeStringField("target", a.target());   // 0.7.2-P3
+                gen.writeStringField("target", a.target());
             }
             case Action.SetRandomVariable a -> {
                 gen.writeStringField("fullName", a.fullName());
@@ -102,7 +101,7 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeNumberField("count", a.count());
                 writeActions(gen, provider, "body", a.body());  // 复用 if 分支递归写出
             }
-            // 0.7.1-P5：停止 / 粒子 / 等待直到
+            // 停止 / 粒子 / 等待直到
             case Action.StopScript a -> { /* 仅 type 字段，已写 */ }
             case Action.PlayParticle a -> {
                 gen.writeStringField("particle", a.particle());
@@ -115,7 +114,7 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeStringField("condition", a.condition());
                 gen.writeNumberField("timeoutMs", a.timeoutMs());
             }
-            // 0.7.2-P2：copy / append / clone / delete
+            // copy / append / clone / delete
             case Action.CopyVariable a -> {
                 gen.writeStringField("target", a.target());
                 gen.writeStringField("source", a.source());
@@ -130,19 +129,19 @@ public final class ActionSerializer extends JsonSerializer<Action> {
                 gen.writeNumberField("offsetY", a.offsetY());
             }
             case Action.DeleteElement a -> gen.writeStringField("elementId", a.elementId());
-            // 0.7.2-P3：重复直到条件
+            // 重复直到条件
             case Action.RepeatUntil a -> {
                 gen.writeStringField("condition", a.condition());
                 gen.writeNumberField("maxIterations", a.maxIterations());
                 writeActions(gen, provider, "body", a.body());  // 复用 if/repeat 分支递归写出
             }
-            // tween：补间动画包裹（docs/scripting-tween.md T1-T6）
+            // tween：补间动画包裹（docs/scripting-tween.md）
             case Action.TweenBlock a -> {
                 gen.writeNumberField("durationMs", a.durationMs());
                 writeEasing(gen, a.easing());                    // 与 0.6 timeline Easing 同 serde
                 writeActions(gen, provider, "body", a.body());
             }
-            // 0.7.3：随机分支 / 置顶置底 / 取整 / 标题弹窗
+            // 随机分支 / 置顶置底 / 取整 / 标题弹窗
             case Action.RandomBranch a -> {
                 gen.writeNumberField("probability", a.probability());
                 writeActions(gen, provider, "then", a.then());

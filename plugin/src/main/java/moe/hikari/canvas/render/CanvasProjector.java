@@ -19,14 +19,14 @@ import java.util.logging.Logger;
  * {@link CanvasCompositor#toPaletteSlice} 量化切片 → 写入 {@link HikariCanvasRenderer}。
  * 下一 tick Paper 自动 sync 给 viewer。
  *
- * <p><b>M4-T4 变化（相对 M3）：</b> rasterize 和 quantize 分两阶段——一次 rasterize
+ * <p><b>rasterize 和 quantize 分两阶段：</b>一次 rasterize
  * 复用给多个 mapIndex；只有被 region 覆盖的 map 才做量化，节省 mapping 成本。</p>
  *
  * <p><b>线程：</b> {@link HikariCanvasRenderer#update} 线程安全（ConcurrentMap）；
  * {@link CanvasCompositor} 每次分配独立 BufferedImage。可在 Jetty WS 线程或 BukkitScheduler
  * async task 里调用，不必切主线程。</p>
  *
- * <p><b>0.6 P2：</b>实现 {@link AnimationTicker.FrameRenderer}——AnimationTicker 的逐帧出口
+ * <p>实现 {@link AnimationTicker.FrameRenderer}——AnimationTicker 的逐帧出口
  * （{@link #hasViewers} / {@link #renderFrame}，含 per-map 帧间 diff + 新观察者全量补发），
  * 见 docs/architecture.md §5.5。</p>
  */
@@ -37,22 +37,22 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
     private final PlaceholderRenderer placeholderRenderer;
     private final Logger log;
     /**
-     * 0.4.0 方案 B 自适应渲染：主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket。
+     * 自适应渲染：主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket。
      * Paper 默认 MapView sync 间隔 250ms-5s 不可控，秒精度倒计时场景不够稳；本路径补齐"渲染完
      * 立刻推帧"语义。可空（测试 / 旧构造器路径）—— null 时跳过主动推送，回落 Paper 默认 sync。
      */
     private final MapPacketSender mapPacketSender;
     /**
-     * 0.4.0 方案 B：拿 wall 元数据（world / origin）算 viewer 候选。可空——同上。
+     * 拿 wall 元数据（world / origin）算 viewer 候选。可空——同上。
      */
     private final WallRepo wallRepo;
     /**
-     * 0.4.0 方案 B：viewer 检测的 chunk 曼哈顿距离阈值。8 chunks ≈ 默认 view distance 内。
+     * viewer 检测的 chunk 曼哈顿距离阈值。8 chunks ≈ 默认 view distance 内。
      * 超出阈值的玩家由 Paper 默认 sync 兜底。
      */
     private static final int VIEWER_CHUNK_DISTANCE = 8;
 
-    /** M1-M28 兼容构造器：不带主动推帧能力，回落 Paper 默认 sync。 */
+    /** 兼容构造器：不带主动推帧能力，回落 Paper 默认 sync。 */
     public CanvasProjector(HikariCanvasRenderer canvasRenderer,
                            CanvasCompositor compositor,
                            PlaceholderRenderer placeholderRenderer,
@@ -61,7 +61,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
     }
 
     /**
-     * 0.4.0 方案 B：完整构造器；mapPacketSender / wallRepo 任一为 null 即关闭主动推帧（fallback）。
+     * 完整构造器；mapPacketSender / wallRepo 任一为 null 即关闭主动推帧（fallback）。
      */
     public CanvasProjector(HikariCanvasRenderer canvasRenderer,
                            CanvasCompositor compositor,
@@ -93,10 +93,10 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         List<Integer> indices = region.coveredMapIndices(widthMaps, heightMaps);
         if (indices.isEmpty()) return 0;
 
-        // M4 小修：{@code ProjectState} 回到"pristine 初始态"时，不走 compositor
+        // {@code ProjectState} 回到"pristine 初始态"时，不走 compositor
         // 渲空白，而是重绘 placeholder（灰底 + HIKARICANVAS 水印 + slot 标签），
         // 保留 confirm 阶段的视觉提示。触发条件：elements 空 && background=#FFFFFF（session 刚 confirm 时就是这个状态，undo 到底也会回到这）。
-        // 0.4.0 方案 B：viewer 列表只算一次给本次 project 用（pristine / 正常分支共享）。
+        // viewer 列表只算一次给本次 project 用（pristine / 正常分支共享）。
         // 计算稍贵（遍历 world.getPlayers()）；只在 mapPacketSender + wallRepo 齐全时算。
         List<Player> viewers = findViewersForWall(session.wallId());
 
@@ -121,7 +121,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
 
         BufferedImage img;
         try {
-            // 0.4.0-P1-C：传 session.wallId() 让 compositor 把 ${var:user/X} 注入当前 wallId，
+            // 传 session.wallId() 让 compositor 把 ${var:user/X} 注入当前 wallId，
             // 渲染末尾 VariableStore.markWallReferences 倒排索引联动。session.wallId() 在 SELECTING
             // 阶段为 null —— compositor 内部对 null wallId 走"无 user 变量解析 + 不写倒排索引"分支。
             img = compositor.rasterize(state, session.wallId());
@@ -137,7 +137,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
             try {
                 byte[] pixels = compositor.toPaletteSlice(img, idx, widthMaps);
                 canvasRenderer.update(mapId, pixels);
-                // 0.4.0 方案 B：渲染完立刻给 chunk-loaded viewer 推帧（Paper 默认 sync
+                // 渲染完立刻给 chunk-loaded viewer 推帧（Paper 默认 sync
                 // 250ms-5s 不稳，秒精度倒计时场景必须主动）。
                 pushToViewers(viewers, mapId, pixels);
                 updated++;
@@ -150,7 +150,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
     }
 
     /**
-     * 0.4.0 方案 B：主动给 viewer 推 ClientboundMapItemDataPacket。
+     * 主动给 viewer 推 ClientboundMapItemDataPacket。
      * 单 viewer 推送失败不影响其他 viewer / 其他 map。
      */
     private void pushToViewers(List<Player> viewers, int mapId, byte[] pixels) {
@@ -166,7 +166,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
     }
 
     /**
-     * 0.4.0 方案 B：找 chunk-loaded 范围内的 viewer 候选。
+     * 找 chunk-loaded 范围内的 viewer 候选。
      *
      * <p>策略：从 {@link WallRepo} 拿 wall 元数据 → 取 world + origin chunk → 取 world 当前在线
      * 玩家 → 按曼哈顿 chunk 距离阈值 {@link #VIEWER_CHUNK_DISTANCE} 过滤。Paper 的 world.getPlayers
@@ -192,7 +192,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
     }
 
     /**
-     * 0.6 P2：已持有 Wall 元数据时的 viewer 查询重载——AnimationTicker 缓存 Wall 后逐帧调，
+     * 已持有 Wall 元数据时的 viewer 查询重载——AnimationTicker 缓存 Wall 后逐帧调，
      * 免去 {@link #findViewersForWall} 内的 loadById（20fps 下每 tick 一次 DB 读不可接受，
      * docs/architecture.md §5.5 状态缓存）。线程安全性与原方法一致（只读 Bukkit API）。
      */
@@ -203,7 +203,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         int wallChunkX = w.key().originX() >> 4;
         int wallChunkZ = w.key().originZ() >> 4;
         List<Player> out = new ArrayList<>();
-        // P2-11：world.getPlayers() 取列表 + for-each 迭代本身也包 try-catch，收窄非主线程
+        // world.getPlayers() 取列表 + for-each 迭代本身也包 try-catch，收窄非主线程
         // 读 Bukkit 玩家列表时瞬态 CME/RuntimeException 的逃逸面（避免异常冒泡到
         // ProjectionThrottler.flushLocked 把整帧投影判为失败）。返回已收集到的部分候选。
         try {
@@ -229,14 +229,14 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
 
     /**
      * pristine = 与 {@code SessionManager.confirm} 时构造的初始 state 等价。
-     * Ultrareview 2026-05-25 #6：用 isPristineAcrossLayers 跨所有 visible+opacity>0 layer 判 elements
+     * 用 isPristineAcrossLayers 跨所有 visible+opacity>0 layer 判 elements
      * 是否全空，避免 active layer 空 + 其他 layer 有内容时被误判为 pristine。
      */
     private static boolean isPristine(ProjectState state) {
         return state.isPristineAcrossLayers() && isWhiteSolid(state.canvas().background());
     }
 
-    /** M17 F5：判 background 是否纯白 SolidFill（渐变 / 非白 / 半透明都不算 pristine）。 */
+    /** 判 background 是否纯白 SolidFill（渐变 / 非白 / 半透明都不算 pristine）。 */
     private static boolean isWhiteSolid(moe.hikari.canvas.state.Fill bg) {
         if (!(bg instanceof moe.hikari.canvas.state.SolidFill s)) return false;
         String c = s.color();
@@ -251,7 +251,7 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
     }
 
     /**
-     * Ultrareview 2026-05-25 #1：无活跃 editor session 时按 wallId + ProjectState 直接渲染
+     * 无活跃 editor session 时按 wallId + ProjectState 直接渲染
      * 全 canvas。用于 VariableStore 变化时，被引用的 wall 当前没人在编辑也要刷新像素到
      * deployed maps。
      *
@@ -334,11 +334,11 @@ public final class CanvasProjector implements AnimationTicker.FrameRenderer {
         return isWhiteSolid(state.canvas().background());
     }
 
-    // ---------- 0.6 P2：AnimationTicker.FrameRenderer 实现（仅 Ticker 线程调） ----------
+    // ---------- AnimationTicker.FrameRenderer 实现（仅 Ticker 线程调） ----------
 
     /**
      * 动画逐帧出口（docs/architecture.md §5.5）：viewer 查询（空且非 force → 跳过，
-     * <b>不 rasterize</b>——viewer-gated 真正省 CPU 的点；单次扫描，审查确认项 #9）→
+     * <b>不 rasterize</b>——viewer-gated 真正省 CPU 的点；单次扫描）→
      * rasterize 插值帧 → per-map 量化 → <b>帧间 diff</b>（只 update / 只发像素变了的 map，
      * §3.4「基本的不浪费」）→ 新观察者出现时全量补发（diff 跳过的 map 对新 viewer 是缺帧）。
      *

@@ -9,7 +9,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * playerNear 触发器周期采样器（0.7.0-P3 B2 / K14；{@code docs/scripting.md §2 / §3}）。
+ * playerNear 触发器周期采样器（{@code docs/scripting.md §2 / §3}）。
  *
  * <p><b>本体零 Bukkit</b>：在线玩家位置 / near 规则条目 / 触发投递全部走注入 seam——
  * 装配层（HikariCanvas onEnable）用 lambda 包 {@code Bukkit.getOnlinePlayers()} +
@@ -25,7 +25,7 @@ import java.util.logging.Logger;
  *
  * <p><b>边沿状态机（edge-trigger）</b>：状态 key = {@code playerName + "|" + wallId + ":"
  * + ruleId}。同世界且距离平方 ≤ range² 视为"在内"。每个 {@link TriggerRouter.NearEntry}
- * 按 {@code leaveEdge} 分沿（0.7.1）：</p>
+ * 按 {@code leaveEdge} 分沿：</p>
  * <ul>
  *   <li><b>{@code leaveEdge=false}（playerNear）</b>：<b>从不在内变为在内的那一轮</b>触发
  *       （进入范围一次），持续在内不重复，离开后重置（再进再触发）。</li>
@@ -41,7 +41,7 @@ import java.util.logging.Logger;
  * <p><b>主线程成本</b>：每轮 O(规则数 × 在线玩家数) 次距离平方比较（零开方 / 零查库——
  * 墙原点已在 {@code TriggerRouter} rebuild 期解析进 {@link TriggerRouter.NearEntry}）；
  * 规则量受 per-wall 配额约束。无 near 规则或无玩家时一轮就是两次 supplier 调用。
- * 压测预算进 P6（{@code docs/scripting.md §7}）。</p>
+ * 压测预算见 {@code docs/scripting.md §7}。</p>
  */
 public final class PlayerNearSampler {
 

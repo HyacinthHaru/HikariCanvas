@@ -11,8 +11,8 @@ import java.util.List;
  * 单场景测量原语：对一个 {@link BenchmarkScene} 反复跑 rasterize + 全 tile palette 量化、
  * 分别计时、采分配字节，产出一串 {@link RasterizeSample}。
  *
- * <p>这是 benchmark 的最小测量单元。P2 的矩阵 runner（fps × viewer 轴）会对每个矩阵 cell
- * 调用一次本方法；P1 只在 {@code SceneLibrary.select()} 出来的场景上逐个跑（见
+ * <p>这是 benchmark 的最小测量单元。矩阵 runner（fps × viewer 轴）会对每个矩阵 cell
+ * 调用一次本方法；基础路径只在 {@code SceneLibrary.select()} 出来的场景上逐个跑（见
  * {@code docs/dynamic-data.md §13.3} 与 {@code PROPOSAL.md §5.2.7}）。</p>
  *
  * <h2>纯函数压测</h2>

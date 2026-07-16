@@ -30,13 +30,13 @@ import java.util.Optional;
 import java.util.Random;
 
 /**
- * Benchmark 场景工厂（0.5.0 P1）。用<b>单一固定 seed</b> 确定性程序生成一组
+ * Benchmark 场景工厂。用<b>单一固定 seed</b> 确定性程序生成一组
  * {@link BenchmarkScene}，覆盖全部元素类型 + 全部特效路径 + 真实混合场景 + 尺寸缩放梯度，
  * 供纯服务端 rasterize / palette 量化压测（headless，零 Bukkit / 地图池 / 网络依赖）。
  *
  * <p>设计见 {@code docs/dynamic-data.md §13.3} 与 {@code PROPOSAL.md §5.2.7}。</p>
  *
- * <h2>确定性契约（不可破坏）</h2>
+ * <h2>确定性契约</h2>
  * <ul>
  *   <li>所有随机性源自 {@link #SEED} 这一个常量；每个场景构造前 {@code rng} 用
  *       {@code SEED + 场景固定偏移} 重新播种，使<b>同一场景的内容与构造顺序无关</b>

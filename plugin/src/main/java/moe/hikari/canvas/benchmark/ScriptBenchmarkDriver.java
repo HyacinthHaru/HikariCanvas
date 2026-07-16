@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
- * 0.7.x 脚本动作链开销 benchmark 驱动（headless 纯内存，无 Bukkit / DB / PacketEvents）。
+ * 脚本动作链开销 benchmark 驱动（headless 纯内存，无 Bukkit / DB / PacketEvents）。
  *
  * <p><b>测量对象</b>：{@link ScriptRunner} 执行一条含 actionCount 个动作的规则一轮的耗时——
  * 包含帧栈遍历、{@link ActionSink#execute} 调用（fake sink，每次 O(1) 返回 ok step）、
@@ -36,8 +36,6 @@ import java.util.logging.Logger;
  *
  * <p><b>测量点</b>：从 {@code runner.submit()} 到 trace callback 回调（run 结束信号）的 wall-clock
  * 时间，覆盖 SES 投递 + 帧栈建立 + 所有 actionCount 次 sink 调用 + trace 聚合 + callback 回调。</p>
- *
- * <p>符合 0.5.0「工具不是保姆」哲学：只给数字，不替服主决策。</p>
  */
 public final class ScriptBenchmarkDriver {
 

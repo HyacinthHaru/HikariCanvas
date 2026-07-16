@@ -8,8 +8,8 @@ package moe.hikari.canvas.benchmark;
  * 字节增量（{@code com.sun.management.ThreadMXBean.getThreadAllocatedBytes}），衡量 GC
  * 压力——{@code BufferedImage} 分配是大头。</p>
  *
- * <p>P1 只产出原始样本 + 基础 min/mean/max 摘要；P2 的 {@code ResultAggregator} 做
- * p50/p95/p99 percentile + per-element 归因。</p>
+ * <p>这里只承载原始样本；p50/p95/p99 percentile + per-element 归因由
+ * {@code ResultAggregator} 计算。</p>
  *
  * @param sceneId        场景标识
  * @param iteration      测量迭代序号（0-based，不含 warmup）

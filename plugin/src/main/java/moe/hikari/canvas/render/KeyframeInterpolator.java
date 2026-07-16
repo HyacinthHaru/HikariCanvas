@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 关键帧插值器（0.6 P2 引入，P3 补全缓动 + 颜色/Fill/离散轨 + 变量 resolve）。
+ * 关键帧插值器（缓动 + 颜色/Fill/离散轨 + 变量 resolve）。
  * 数学权威定义见 {@code docs/rendering.md §9}；管线定位见 {@code docs/architecture.md §5.5}
  * （输出帧 = Rasterize(Interpolate(state, timeMs))）。
  *
@@ -34,13 +34,13 @@ import java.util.Map;
  * seam 注入（生产 = {@code VariableInterpolator::resolveAsNumber} 经 AnimationTicker 按 wall
  * 绑定；测试 / snapshot 路径不注 = 无变量支持）。</p>
  *
- * <p><b>P3 范围</b>（rendering.md §9.2–§9.5）：</p>
+ * <p><b>支持范围</b>（rendering.md §9.2–§9.5）：</p>
  * <ul>
  *   <li>缓动：{@link EasingSolver}（LINEAR / EASE_* 预设 / CUBIC_BEZIER，双端逐位等价）</li>
  *   <li>数值轨（x/y/w/h/rotation/opacity）：{@code v = a + (b−a)×eased}；{@code ${var:X}} /
  *       数字字符串值经 resolver 求值（无 resolver 时纯数字仍可用、变量引用退 0——§9.5 链终点）</li>
  *   <li>颜色轨（{@code color}，仅 TextElement）：sRGB 线性空间插值（{@link ColorLerp}）；
- *       含 {@code ${var:}} 的颜色值 P3 不支持，整轨跳过</li>
+ *       含 {@code ${var:}} 的颜色值不支持，整轨跳过</li>
  *   <li>Fill 轨（6 类几何/图标/笔刷元素）：同类型同 stop 数逐 stop 插值，否则 step</li>
  *   <li>离散轨（{@code text}，仅 TextElement）：step 取 {@code timeMs ≤ t} 最近帧（首帧前取
  *       首帧）；内容里的 {@code ${var:X}} 由 rasterize 的 {@code maybeInterpolateText} 统一 resolve</li>
@@ -91,7 +91,7 @@ public final class KeyframeInterpolator {
     /**
      * 区间定位结果：{@code b == null} 表示边界命中（直接取 {@code a} 的值，不插值）；
      * 否则 {@code eased} 为经 {@code a.easing()} 映射后的进度。{@code ai} 是 {@code a}
-     * 在轨内的真实索引（镜像 TS 端 Span.ai——P3 审查确认项 #0/#4：用 equals 反查
+     * 在轨内的真实索引（镜像 TS 端 Span.ai——用 equals 反查
      * indexOf 在全等重合帧下会错位，双端取值分叉）。
      */
     private record Span(Keyframe a, int ai, Keyframe b, double eased) {}
@@ -151,7 +151,7 @@ public final class KeyframeInterpolator {
 
     /**
      * 颜色轨采样（仅 TextElement.color 用）。全轨必须是 hex 字符串（{@link KfValue.Str}）；
-     * 含 {@code ${var:}} 或错型 → 整轨跳过（P3 不支持变量颜色）。区间内
+     * 含 {@code ${var:}} 或错型 → 整轨跳过（不支持变量颜色）。区间内
      * {@link ColorLerp#lerpHex}（内部解析失败自然 step）。
      */
     static String sampleColor(List<Keyframe> kfs, int t) {
@@ -169,7 +169,7 @@ public final class KeyframeInterpolator {
 
     /**
      * Fill 轨采样。值为 {@link KfValue.FillV}，或 {@link KfValue.Str} hex（归一化为 SolidFill，
-     * P1 op 层允许的形态）；含 {@code ${var:}} 或错型 → 整轨跳过。区间内
+     * op 层允许的形态）；含 {@code ${var:}} 或错型 → 整轨跳过。区间内
      * {@link ColorLerp#lerpFill}（类型 / stop 数不一致内部自然 step）。
      */
     static Fill sampleFill(List<Keyframe> kfs, int t) {
@@ -226,7 +226,7 @@ public final class KeyframeInterpolator {
         }
     }
 
-    /** P2 兼容入口：无变量支持（snapshot / 测试路径）。 */
+    /** 兼容入口：无变量支持（snapshot / 测试路径）。 */
     public static ProjectState interpolate(ProjectState base, Timeline timeline, int timeMs) {
         return interpolate(base, timeline, timeMs, null);
     }
@@ -247,7 +247,7 @@ public final class KeyframeInterpolator {
                                            NumberResolver resolver) {
         if (base == null || timeline == null || timeline.tracks().isEmpty()) return base;
 
-        // P3 审查确认项 #5：帧内同一 raw 只 resolve 一次（memo）——变量 push 落在两次读
+        // 帧内同一 raw 只 resolve 一次（memo）——变量 push 落在两次读
         // 之间会让同帧的 va/vb 取自不同快照（单帧撕裂）；memo 保证整帧读同一变量快照
         if (resolver != null) {
             NumberResolver delegate = resolver;
@@ -257,7 +257,7 @@ public final class KeyframeInterpolator {
 
         Map<String, AnimatedValues> animated = new HashMap<>();
         for (Map.Entry<String, List<Keyframe>> track : timeline.tracks().entrySet()) {
-            // 同元素轨内多属性混排（方案 B）：按 property 分组后逐属性求值
+            // 同元素轨内多属性混排：按 property 分组后逐属性求值
             Map<String, List<Keyframe>> byProp = new LinkedHashMap<>();
             for (Keyframe k : track.getValue()) {
                 if (!Keyframe.PROPERTIES.contains(k.property())) continue;
@@ -339,7 +339,7 @@ public final class KeyframeInterpolator {
      * TextElement；{@code fill} 仅 Rect/Icon/Path/Circle/Shape/Brush（按 record 字段
      * 适用性，错配的轨静默忽略——op 层不做属性×类型校验，渲染侧兜底）。
      * x/y/w/h/rotation 四舍五入回 int；opacity 钳 [0,1]。w/h 插出非正值不钳——渲染器
-     * 入口已有 {@code w<=0} 守卫（M16.3），语义为「元素暂不可见」。
+     * 入口已有 {@code w<=0} 守卫，语义为「元素暂不可见」。
      */
     static Element withAnimated(Element e, AnimatedValues v) {
         Map<String, Double> p = v.numbers;

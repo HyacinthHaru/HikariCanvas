@@ -10,7 +10,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * M20-P2：per-font 字符 advance 查找表。
+ * per-font 字符 advance 查找表。
  *
  * <p>取代 {@link TextLayout#canonicalCharWidth} 简化模型，提供基于字体真实 metrics 的
  * 双端一致 advance。表由构建期 {@code generateGlyphMetrics} 生成，jar 路径
@@ -39,7 +39,7 @@ public final class FontMetricsTable {
 
     private FontMetricsTable() {}
 
-    /** 显式预加载（M20-P3 启动期由 HikariCanvas 调；test 可用 main classloader 直接读）。 */
+    /** 显式预加载（启动期由 HikariCanvas 调；test 可用 main classloader 直接读）。 */
     public static void preload(String fontId) {
         load(fontId);
     }
@@ -92,7 +92,7 @@ public final class FontMetricsTable {
     }
 
     /**
-     * M20-P4：运行时注册字体 advance 表（用户字体走这条路）。
+     * 运行时注册字体 advance 表（用户字体走这条路）。
      *
      * <p>用 AWT BufferedImage + Graphics2D + Font.deriveFont(12f) + FontMetrics.charWidth
      * 扫 BMP 0x20..0xFFFF（与构建期 GlyphMetricsGenerator 算法完全一致），结果直接
@@ -130,7 +130,7 @@ public final class FontMetricsTable {
     }
 
     /**
-     * M20-P4：把指定字体的 advance 表序列化为 JSON 字符串，供 WebServer
+     * 把指定字体的 advance 表序列化为 JSON 字符串，供 WebServer
      * {@code GET /api/font/metrics} 端点输出。表未加载 / 为 MISSING sentinel 返 null。
      */
     public static String serializeToJson(String fontId) {
@@ -160,7 +160,7 @@ public final class FontMetricsTable {
     }
 
     /**
-     * P3-29：清空内存 advance 表。由 {@code HikariCanvas#onDisable} 在插件停用时调用，
+     * 清空内存 advance 表。由 {@code HikariCanvas#onDisable} 在插件停用时调用，
      * 让 reload（PlugMan / {@code /reload}）不在复用同 classloader 时残留被删 / 改的用户字体旧表，
      * 也减小旧 classloader 被静态字段 pin 住延迟 GC 的负担。线程安全（ConcurrentHashMap.clear）。
      */

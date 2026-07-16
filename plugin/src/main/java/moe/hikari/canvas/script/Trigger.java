@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 /**
- * 墙脚本触发器的多态联合（0.7 引入）：六种触发时机。
+ * 墙脚本触发器的多态联合：六种触发时机。
  * 契约见 {@code docs/scripting.md §2.2}。
  *
  * <p>wire 形态为扁平字段 + {@code type} 判别（camelCase），与 {@link moe.hikari.canvas.state.KfValue}
@@ -60,20 +60,20 @@ public sealed interface Trigger permits
         @Override public String wireType() { return "wallReady"; }
     }
 
-    /** 0.7.1：玩家右键墙的 ItemFrame 时触发（全局面，见 {@link ScriptPermissions}）。 */
+    /** 玩家右键墙的 ItemFrame 时触发（全局面，见 {@link ScriptPermissions}）。 */
     record RightClickWall() implements Trigger {
         @Override public String wireType() { return "rightClickWall"; }
     }
 
     /**
-     * 0.7.1：玩家离开 wall 指定方块半径时触发（墙级，复用 {@code PlayerNearSampler}
+     * 玩家离开 wall 指定方块半径时触发（墙级，复用 {@code PlayerNearSampler}
      * 的离开沿；同 {@link PlayerNear} 仅需基础 {@link ScriptPermissions#NODE_EDIT}）。
      */
     record PlayerLeaveRange(int rangeBlocks) implements Trigger {
         @Override public String wireType() { return "playerLeaveRange"; }
     }
 
-    /** 0.7.1：玩家退出服务器时触发（全局面，见 {@link ScriptPermissions}）。 */
+    /** 玩家退出服务器时触发（全局面，见 {@link ScriptPermissions}）。 */
     record PlayerQuit() implements Trigger {
         @Override public String wireType() { return "playerQuit"; }
     }

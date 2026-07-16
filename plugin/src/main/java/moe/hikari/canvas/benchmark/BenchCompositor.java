@@ -9,19 +9,15 @@ import java.io.IOException;
 import java.util.logging.Logger;
 
 /**
- * 0.5.0 Benchmark P1：构建一个 <b>纯无头</b>（headless）{@link CanvasCompositor} 的工厂，
+ * 构建一个 <b>纯无头</b>（headless）{@link CanvasCompositor} 的工厂，
  * 让 {@code SceneTimer} / {@code /canvas bench} / CI harness 在不依赖 Bukkit / 世界 / 玩家 /
  * 网络的前提下，光栅化 + 量化 benchmark 场景，测纯 CPU / 内存渲染成本。
  *
- * <h2>为什么单独一个工厂</h2>
- * 生产路径（{@code HikariCanvas.onEnable}）走 5 参完整构造（含 TemplateAssetService /
- * IconRegistry / VariableSupport）；那条路径需要插件运行期的一堆服务实例，benchmark 无法也不该
- * 拉起。本工厂复刻 {@code RendererSnapshotTest} 的「已验证无头装配」：仅 {@link PaletteLut} +
- * {@link FontRegistry} + {@link Logger} 三件套，调最小 3 参构造。这正是 snapshot 测试每天在 CI 上
- * 跑的同一条路径——稳定可信、零外部依赖、线程安全（{@link CanvasCompositor} 无可变状态、每次
- * {@code rasterize} 分配新 buffer）。
+ * <h2>装配方式</h2>
+ * headless 装配：仅 3 参构造，复刻 {@code RendererSnapshotTest}（{@link PaletteLut} +
+ * {@link FontRegistry} + {@link Logger}），零外部依赖、线程安全。
  *
- * <h2>合成图片加载器（P1 增强）</h2>
+ * <h2>合成图片加载器</h2>
  * {@link CanvasCompositor#setImageLoader} 是一个干净的 SAM 注入口（{@code BufferedImage load(String)}，
  * 零 Bukkit）。生产环境注入 {@code ImageStorage::load} 从磁盘读真实上传文件；benchmark 场景里没有
  * 磁盘文件，若不注入则所有 ImageElement / 蒙版场景会走「文件缺失占位」分支，渲染成本失真（占位是
@@ -30,13 +26,13 @@ import java.util.logging.Logger;
  * image + mask 场景能渲染出真实像素、量化真实成本。该生成器纯 AWT、无 IO、无 Bukkit，是个安全的
  * 一行注入。
  *
- * <h3>已知局限（留 P2 精化）</h3>
+ * <h3>已知局限</h3>
  * <ul>
  *   <li>合成图固定 256×256 RGB 渐变，无 alpha；真实上传图尺寸 / 通道 / 解码路径不同，
- *       image 场景成本是「代表性近似」而非「逐文件精确」。P2 可按场景声明的尺寸生成。</li>
+ *       image 场景成本是「代表性近似」而非「逐文件精确」。</li>
  *   <li>IconElement（矢量 SVG）仍走占位——本工厂用 3 参构造，未注入 {@code IconRegistry}，
- *       SVG icon 渲染退占位。icon 真实成本同样留 P2（需在不拉起插件运行期的前提下，离线构造
- *       一个无头 IconRegistry）。</li>
+ *       SVG icon 渲染退占位。icon 真实成本需在不拉起插件运行期的前提下，离线构造
+ *       一个无头 IconRegistry。</li>
  * </ul>
  */
 public final class BenchCompositor {
@@ -87,7 +83,7 @@ public final class BenchCompositor {
         }
 
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry, log);
-        // P1 增强：合成渐变图片加载器。纯 AWT、确定性、无 IO / 无 Bukkit。
+        // 合成渐变图片加载器。纯 AWT、确定性、无 IO / 无 Bukkit。
         // 对任意 source（含未知 hash）都返回同一张渐变图，让 ImageElement / mask 场景渲染真实
         // 像素而非占位；从而量化真实的图片解码替身 + 蒙版 clip + dither 成本。
         compositor.setImageLoader(BenchCompositor::syntheticGradient);

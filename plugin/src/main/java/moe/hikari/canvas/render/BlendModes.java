@@ -5,7 +5,7 @@ import moe.hikari.canvas.state.BlendMode;
 import java.awt.image.BufferedImage;
 
 /**
- * M8-E v1 混合模式实现。契约见 {@code docs/rendering.md §6.6}。
+ * 混合模式实现。契约见 {@code docs/rendering.md §6.6}。
  *
  * <h2>公式（per-channel，输入输出均 [0, 1] float）</h2>
  * <pre>
@@ -28,9 +28,9 @@ import java.awt.image.BufferedImage;
  *     # out_a == 0 → 输出全透明 #00000000
  * </pre>
  *
- * <p><b>Ultrareview 2026-05-25 #7（0.4.6 P2 修正）：</b>主 buffer 已升 TYPE_INT_ARGB 支持
- * 透明背景；slow path 必须按真 source-over 合成 alpha 通道，不能再强写 0xFF 不透明
- * （之前 layer.opacity ≠ 1 / blendMode ≠ NORMAL 路径会把背景透明像素变成不透明黑）。</p>
+ * <p><b>主 buffer 是 TYPE_INT_ARGB 支持透明背景：</b>slow path 必须按真 source-over 合成
+ * alpha 通道，不能强写 0xFF 不透明（否则 layer.opacity ≠ 1 / blendMode ≠ NORMAL 路径会把
+ * 背景透明像素变成不透明黑）。</p>
  *
  * <h2>双端一致性</h2>
  * 前端 {@code web/src/render/BlendModes.ts} 必须与本类逐行公式一致；任何一边修改要
@@ -46,8 +46,7 @@ public final class BlendModes {
      * <p>per-pixel 循环；对 8×4 wall（1024×512 = 524k 像素）约 ~3M 浮点 op，本机约 30ms。
      * 仅在 layer.opacity ≠ 1 / blendMode ≠ NORMAL 时调用（fast path 走 Graphics2D 原生合成）。</p>
      *
-     * <p>P3-92：dst 是 TYPE_INT_ARGB 主 buffer（0.4.6 P2 起），da 真实参与 source-over 合成，
-     * 不强写 0xFF——措辞与实现一致。</p>
+     * <p>dst 是 TYPE_INT_ARGB 主 buffer，da 真实参与 source-over 合成，不强写 0xFF。</p>
      *
      * @param dst          主 ARGB BufferedImage（被 mutate）
      * @param src          层 ARGB BufferedImage
@@ -84,7 +83,7 @@ public final class BlendModes {
                 int bg = blendChannel(sg, dg, mode);
                 int bb = blendChannel(sb, db, mode);
 
-                // Ultrareview 2026-05-25 #7：W3C source-over 完整公式（含 alpha）。
+                // W3C source-over 完整公式（含 alpha）。
                 // outA = srcA + dstA * (1 - srcA)
                 // outRGB = (blend * srcA + dst * dstA * (1 - srcA)) / outA
                 // 主 buffer 升 ARGB 后 alpha 必须真传递，不能强写 0xFF。

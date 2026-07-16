@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 0.9.7：脚本校验错误的结构化载体，取代原先"返回中文字符串"。{@code key} 是 lang yml 里
+ * 脚本校验错误的结构化载体，取代原先"返回中文字符串"。{@code key} 是 lang yml 里
  * {@code script.validate.<key>} 的后缀；{@code params} 是命名占位符（如 {@code max=64}）。
  * 由 {@code ScriptOpDispatcher} 用 {@code Messages} 按编辑器 locale 渲染成最终文案。
  */

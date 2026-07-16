@@ -18,8 +18,8 @@ import java.util.List;
  * </ol>
  *
  * <h2>不处理</h2>
- * 竖排（{@code vertical=true}）：M4-T5 不实装，由 {@link CanvasCompositor} 在调用前检测并 WARN；
- * 真竖排排版推迟到 M4.5 / M7，见 {@code docs/rendering.md §3.3}。
+ * 竖排（{@code vertical=true}）：早期不实装，由 {@link CanvasCompositor} 在调用前检测并 WARN；
+ * 真竖排排版见 {@code docs/rendering.md §3.3}。
  *
  * <h2>纯函数</h2>
  * 静态方法，无状态，线程安全。
@@ -31,14 +31,13 @@ public final class TextLayout {
 
     /**
      * 行首禁则：出现在行首的标点会被回溯到上一行末尾。半全角都收录。
-     * P3-96：去重——原字面量把 11 个全角标点重复写了两遍（indexOf 成员判定对重复不敏感，
-     * 行为本就正确，仅冗余）。保留一组全角 + 一组半角。顺序：） 】 」 』 。 ， 、 ？ ！ ： ；。
+     * 顺序：） 】 」 』 。 ， 、 ？ ！ ： ；。
      * 与前端 TextLayout.ts 的 LINE_START_FORBIDDEN 逐字节一致（双端镜像硬约束）。
      */
     private static final String LINE_START_FORBIDDEN = "）】」』。，、？！：；)].,!?:;";
 
     /**
-     * M5-D2 P2：前后端一致的"标准"字符宽度。
+     * 前后端一致的"标准"字符宽度。
      *
      * <p>浏览器 {@code ctx.measureText} 和 Java {@code FontMetrics.charWidth} 即使加载
      * 同一 TTF/OTF 也会返回不同值，导致 softWrap 换行点前后端不同。规避方案：两端不读
@@ -54,7 +53,7 @@ public final class TextLayout {
     }
 
     /**
-     * M20-P2\uFF1A\u57FA\u4E8E {@link FontMetricsTable} \u7684\u771F\u5B9E\u5B57\u7B26 advance\uFF1B\u7F3A\u5B57 / \u8868\u672A\u52A0\u8F7D\u65F6 fallback
+     * \u57FA\u4E8E {@link FontMetricsTable} \u7684\u771F\u5B9E\u5B57\u7B26 advance\uFF1B\u7F3A\u5B57 / \u8868\u672A\u52A0\u8F7D\u65F6 fallback
      * \u5230 {@link #canonicalCharWidth}\u3002\u6240\u6709 layout \u5B50\u65B9\u6CD5\u7684\u7EDF\u4E00\u5165\u53E3\u3002
      *
      * <p>fontId \u6765\u81EA {@link TextElement#fontId()}\uFF1B\u4E3A null \u76F4\u63A5\u8D70 canonical\u3002</p>
@@ -74,7 +73,7 @@ public final class TextLayout {
      * <ul>
      *   <li>{@code rotated == false}：{@code (x, baselineY)} 是 Graphics2D.drawString 的标准
      *       锚点——字符 baseline 起点；调用方直接 {@code g.drawString(ch, x, baselineY)}</li>
-     *   <li>{@code rotated == true}（M5-C3 竖排全角标点）：{@code (x, baselineY)} 是字符
+     *   <li>{@code rotated == true}（竖排全角标点）：{@code (x, baselineY)} 是字符
      *       <b>方格中心</b>；调用方应 translate 到该点 → rotate(π/2) → drawString 在字符
      *       自身坐标系中心偏移处（参见 CanvasCompositor.drawRotatedGlyph）</li>
      * </ul>
@@ -88,8 +87,7 @@ public final class TextLayout {
     /**
      * 给定 TextElement，返回每个字符的绘制位置列表。{@code letterSpacing} 已累计进 x。
      *
-     * <p>M5-D2 起改用 {@link #canonicalCharWidth}，不再需要 FontMetrics。之前的签名
-     * {@code layout(t, fm)} 留在别处（CanvasCompositor），此处新重载忽略 fm。</p>
+     * <p>用 {@link #canonicalCharWidth}，不需要 FontMetrics。</p>
      *
      * <p>调用方用 {@code Graphics2D.drawString(glyph.ch(), glyph.x(), glyph.baselineY())}
      * 逐字符绘制。之所以不直接返回整行 + 一次 drawString，是为了支持 letterSpacing
@@ -256,7 +254,7 @@ public final class TextLayout {
                 || (c >= '\u3000' && c <= '\u303F'); // CJK Symbols & Punctuation
     }
 
-    // ---------- M5-C6 竖排（rendering.md §3.3） ----------
+    // ---------- 竖排（rendering.md §3.3） ----------
 
     /**
      * 竖排布局。与横排不同：
@@ -269,7 +267,7 @@ public final class TextLayout {
      *   <li>软换行：按 box {@code h}；硬换行 {@code \n} 起新列</li>
      * </ul>
      *
-     * <p>行首禁则在竖排下未实装（M7 polish）——相对少见。</p>
+     * <p>行首禁则在竖排下未实装——相对少见。</p>
      */
     private static List<PositionedGlyph> layoutVertical(TextElement t) {
         String fontId = t.fontId();

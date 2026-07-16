@@ -18,8 +18,6 @@ import java.util.List;
 
 /**
  * 文本绘制（含 effects: glow / shadow / stroke）+ 像素字体最近邻路径。
- *
- * <p>拆分自 god class {@code CanvasCompositor}（2026-05-14）。</p>
  */
 public final class TextRenderer implements ElementRenderer {
 
@@ -28,7 +26,7 @@ public final class TextRenderer implements ElementRenderer {
         TextElement t = (TextElement) e;
         if (t.text() == null || t.text().isEmpty()) return;
 
-        // 0.4.6 P3：italic = AWT shear transform。在所有绘制 pass（glow / shadow / stroke / fill）
+        // italic = AWT shear transform。在所有绘制 pass（glow / shadow / stroke / fill）
         // 外面包 shear；shear sx=-0.2 让字形上半部分向右倾斜（标准 italic 视觉）。
         // 与前端 Canvas 2D ctx.transform(1, 0, -0.2, 1, 0, 0) 数学等价 — 双端像素一致。
         boolean italic = Boolean.TRUE.equals(t.italic());
@@ -55,7 +53,7 @@ public final class TextRenderer implements ElementRenderer {
                     + " default=" + FontRegistry.DEFAULT_FONT_ID + "); skipping text " + t.id());
             return;
         }
-        // M5-C5：像素字体启用最近邻缩放路径。TextLayout 的字符定位仍用 target-size
+        // 像素字体启用最近邻缩放路径。TextLayout 的字符定位仍用 target-size
         // metrics（保证排字与非像素场景一致）；drawPixelatedGlyph 内部用 nativeSize
         // 字体画 mask，再 NEAREST_NEIGHBOR drawImage 缩放到 target。
         boolean useNearest = shouldUseNearestNeighbor(reg, t.fontSize());
@@ -63,19 +61,19 @@ public final class TextRenderer implements ElementRenderer {
         g.setFont(font);
         FontMetrics fm = g.getFontMetrics(font);
 
-        // M4-T5 + M5-C6 + M5-D2：多行 + wrap + letterSpacing + 基线 + align + 竖排
-        // 全由 TextLayout；自 M5-D2 起用 canonicalCharWidth，不再依赖 Java FontMetrics
+        // 多行 + wrap + letterSpacing + 基线 + align + 竖排
+        // 全由 TextLayout；用 canonicalCharWidth，不再依赖 Java FontMetrics
         List<TextLayout.PositionedGlyph> glyphs = TextLayout.layout(t);
         if (glyphs.isEmpty()) return;
 
         Effects effects = t.effects();
 
-        // M4-T10 发光：最底层。字形 mask → 盒模糊 alpha → 着色 → 合成到主画布
+        // 发光：最底层。字形 mask → 盒模糊 alpha → 着色 → 合成到主画布
         if (effects != null && effects.glow() != null) {
             GlowRenderer.render(g, glyphs, font, effects.glow());
         }
 
-        // M4-T9 阴影：drawString 到 (dx, dy) 偏移处
+        // 阴影：drawString 到 (dx, dy) 偏移处
         if (effects != null && effects.shadow() != null) {
             Shadow sh = effects.shadow();
             g.setColor(FillPaintBuilder.parseColor(sh.color()));
@@ -85,7 +83,7 @@ public final class TextRenderer implements ElementRenderer {
             }
         }
 
-        // M4-T8 描边：GlyphVector.getOutline + BasicStroke.draw
+        // 描边：GlyphVector.getOutline + BasicStroke.draw
         if (effects != null && effects.stroke() != null && effects.stroke().width() > 0) {
             Stroke strokeCfg = effects.stroke();
             FontRenderContext frc = g.getFontRenderContext();
@@ -99,7 +97,7 @@ public final class TextRenderer implements ElementRenderer {
             g.setStroke(prev);
         }
 
-        // 0.4.6 P3：bold = 额外 stroke pass（color = text color，width = max(1.5, fontSize * 0.08)）。
+        // bold = 额外 stroke pass（color = text color，width = max(1.5, fontSize * 0.08)）。
         // 字形 outline 描边 + fill 叠加产生"加粗"视觉效果；与 effects.stroke 独立可叠加。
         // 像素字体（NN 路径）目前不支持 bold 描边（NN mask 路径走 BufferedImage 而非 outline）—
         // 简单跳过，让像素字体 bold 走原样 fill（已经够清晰）。
@@ -127,8 +125,8 @@ public final class TextRenderer implements ElementRenderer {
     /**
      * 判断是否启用像素字体最近邻缩放路径（rendering.md §2.4）。
      *
-     * <p>M5-D4 修 Bug 3/4：只要 {@link FontRegistry.Metadata#pixelated()} 就走 NN，
-     * 取消原"{@code targetSize} 必须是 {@code nativeSize} 的整数倍"限制。原因：像素字体
+     * <p>只要 {@link FontRegistry.Metadata#pixelated()} 就走 NN，
+     * 不要求 {@code targetSize} 是 {@code nativeSize} 的整数倍。原因：像素字体
      * 本就设计为 {@code nativeSize}（12）点阵，任何 target size 都是放大——非整数倍时
      * 走 {@code drawString} 会让 Java2D 按字号插值出灰阶像素，与前端 NN 不一致。现在
      * 双端都从 {@code nativeSize} mask 用 NEAREST 拉伸到 {@code targetSize}，保证像素锐利 + 双端像素对齐。</p>
@@ -139,7 +137,7 @@ public final class TextRenderer implements ElementRenderer {
     }
 
     /**
-     * 像素字体 fill/shadow 路径。M5-D6 Bug 7 终版：扫 mask 实际字形边界 + 手工 per-pixel NN。
+     * 像素字体 fill/shadow 路径：扫 mask 实际字形边界 + 手工 per-pixel NN。
      *
      * <p>与前端 {@code PreviewRenderer.drawPixelatedGlyph} 同策略 —— 各端按自己字体引擎
      * 实际画出的字形宽度 scale，字形永远完整；layout cursor 仍按 canonical 推。</p>
@@ -199,7 +197,7 @@ public final class TextRenderer implements ElementRenderer {
     }
 
     /**
-     * 绘制单个 glyph。M5-C6：{@code pg.rotated == true} 时绕 {@code (pg.x, pg.baselineY)}
+     * 绘制单个 glyph。{@code pg.rotated == true} 时绕 {@code (pg.x, pg.baselineY)}
      * 顺时针旋转 90°（CJK 竖排全角标点）。非旋转字符走标准 {@code drawString}。
      */
     private static void drawGlyph(Graphics2D g, TextLayout.PositionedGlyph pg, int offsetDx, int offsetDy) {

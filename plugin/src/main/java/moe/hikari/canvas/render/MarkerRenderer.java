@@ -6,7 +6,7 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 
 /**
- * M9-B marker（path 端点装饰）渲染。支持 {@code arrow} 三角形与 {@code dot} 圆点。
+ * marker（path 端点装饰）渲染。支持 {@code arrow} 三角形与 {@code dot} 圆点。
  *
  * <p><b>几何约定：</b></p>
  * <ul>
@@ -34,17 +34,11 @@ public final class MarkerRenderer {
     public static final int MIN_DOT_RADIUS = 3;
 
     /**
-     * arrow size 公式（0.4.6 hotfix #6 — 平缓化）。
+     * arrow size 公式 = {@code max(MIN_ARROW_SIZE, strokeWidth × 2 + 4)}。
      *
-     * <p><b>从 {@code stroke × 3} 改成 {@code stroke × 2 + 4}</b>：</p>
-     * <ul>
-     *   <li>细 stroke (1-3) 几乎不变（保持原低端体验）</li>
-     *   <li>粗 stroke 增长显著平缓——stroke=10 → arrow=24 (旧:30)，stroke=20 → arrow=44 (旧:60)</li>
-     * </ul>
-     *
-     * <p><b>动机</b>：arrow 是三角形 (面积 ∝ size²)，stroke 是矩形带 (面积 ∝ stroke)；
-     * 旧公式让 stroke 调粗时 arrow 视觉面积按平方增长，stroke 5→10 = 直线面积 ×2，但
-     * arrow 面积 ×4 — 用户报"稍微一调宽就特别大"。新公式让 arrow 增速线性平缓。</p>
+     * <p>arrow 是三角形（面积 ∝ size²），若让 size 随 stroke 线性放大过快，粗 stroke 时
+     * arrow 视觉面积会按平方膨胀；{@code × 2 + 4} 让细 stroke (1-3) 几乎不变、粗 stroke 增速
+     * 线性平缓。</p>
      *
      * <p>不带硬上限——element-aware cap 由调用方传 element 对角线限制 marker 不溢出。</p>
      */
@@ -53,7 +47,7 @@ public final class MarkerRenderer {
     }
 
     /**
-     * 0.4.7：element-aware cap 重载。
+     * element-aware cap 重载。
      *
      * <p>caller 传 element 对角线，marker 自动 cap 到 {@code diag × MARKER_MAX_RATIO_OF_LENGTH}。
      * 但**仍保证 base ≥ stroke × 2**（视觉清晰度底线，比 element 比例优先级高）——若元素
@@ -69,22 +63,16 @@ public final class MarkerRenderer {
     }
 
     /**
-     * dot radius 公式（0.4.6 hotfix #6 — 平缓化）。
+     * dot radius 公式 = {@code max(MIN_DOT_RADIUS, strokeWidth / 2 + 3)}（Java 整数除法 = floor）。
      *
-     * <p><b>从 {@code stroke + 1} 改成 {@code stroke / 2 + 3}</b>（Java 整数除法 = floor）：</p>
-     * <ul>
-     *   <li>stroke=1 → r=3，stroke=2 → r=4 (旧:3)，stroke=5 → r=5 (旧:6)</li>
-     *   <li>stroke=10 → r=8 (旧:11)，stroke=20 → r=13 (旧:21)</li>
-     * </ul>
-     *
-     * <p><b>动机</b>：dot 是圆 (面积 ∝ r²)，旧公式让粗 stroke 时 dot 面积按平方膨胀 —
-     * 同 arrowSize 修复一致；粗 stroke 时圆形 marker 不抢直线视觉。</p>
+     * <p>dot 是圆（面积 ∝ r²）；{@code / 2 + 3} 让粗 stroke 时圆形 marker 面积不按平方膨胀、
+     * 不抢直线视觉。</p>
      */
     public static int dotRadius(int strokeWidth) {
         return Math.max(MIN_DOT_RADIUS, strokeWidth / 2 + 3);
     }
 
-    /** 0.4.7：element-aware cap，同 arrowSize。 */
+    /** element-aware cap，同 arrowSize。 */
     public static int dotRadius(int strokeWidth, double elementDiagonal) {
         int base = dotRadius(strokeWidth);
         if (elementDiagonal <= 0) return base;
@@ -97,19 +85,16 @@ public final class MarkerRenderer {
     /**
      * 构造 arrow 三角形几何（不绘制）。
      *
-     * <p><b>0.4.7 几何修正</b>：原实现把 path end 当 apex，base 朝 path 内部退 size 距离。
-     * 这导致 path stroke 矩形带（粗 strokeWidth、沿 path 方向）在 arrow 三角形内部画，
-     * 而等腰三角形从 apex 朝外 d 距离处宽度仅 d（两腰斜率 0.5），所以 d < strokeWidth 时
-     * stroke 矩形带必然超出三角形边缘 → 视觉上"V 形箭头被直线横穿"。</p>
-     *
-     * <p><b>新几何（SVG marker-end 标准做法）</b>：path end 当 <b>base center</b>，apex
+     * <p><b>几何（SVG marker-end 标准做法）</b>：path end 当 <b>base center</b>，apex
      * 在 path end <b>朝 dir 方向延伸 size</b>。这样 stroke 干净截止于 base center
-     * （配合 BUTT lineCap），arrow 三角形完全在 path end 之外，V 头清晰突出。</p>
+     * （配合 BUTT lineCap），arrow 三角形完全在 path end 之外，V 头清晰突出。若把 path end
+     * 当 apex、base 朝 path 内部退 size，则粗 strokeWidth 的 stroke 矩形带会超出三角形边缘
+     * （等腰三角形从 apex 朝外 d 距离处宽度仅 d），视觉上直线横穿 V 头。</p>
      *
      * <p><b>参数 {@code apexX, apexY} 仍命名为 apex</b>（向下兼容 caller）—— 实际传入的
      * 是 path end，函数内部把它当 base center 用，并算出真 apex = path end + dir × size。</p>
      *
-     * <p><b>side effect</b>：arrow 现在画在 element bbox 之外（编辑器视觉上略溢出 bbox
+     * <p><b>side effect</b>：arrow 画在 element bbox 之外（编辑器视觉上略溢出 bbox
      * border，但 marker 本就是 path end 之外的装饰，是 SVG 标准行为）。</p>
      */
     public static Path2D.Double arrowShape(double apexX, double apexY,

@@ -10,14 +10,13 @@ import java.awt.geom.Ellipse2D;
 
 /**
  * 绘制 circle / 椭圆。bbox 推 cx/cy/rx/ry：cx = x + w/2, cy = y + h/2, rx = w/2, ry = h/2。
- * 拆分自 god class {@code CanvasCompositor}（2026-05-14）。
  */
 public final class CircleRenderer implements ElementRenderer {
 
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         CircleElement c = (CircleElement) e;
-        // M16 P3.1：渲染层兜底；w/h ≤ 0 时半径 ≤ 0，Ellipse2D 行为退化 → 直接 return
+        // 渲染层兜底；w/h ≤ 0 时半径 ≤ 0，Ellipse2D 行为退化 → 直接 return
         if (c.w() <= 0 || c.h() <= 0) return;
         Ellipse2D.Double el = new Ellipse2D.Double(c.x(), c.y(), c.w(), c.h());
         if (c.fill() != null) {

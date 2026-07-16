@@ -18,7 +18,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 脚本单线程执行管线（0.7.0-P2 T3；{@code docs/scripting.md §3}）。
+ * 脚本单线程执行管线（{@code docs/scripting.md §3}）。
  *
  * <p><b>线程模型</b>：单线程 {@link ScheduledExecutorService}（daemon，线程名
  * {@code hikari-script-runner}；照 {@code AnimationTicker} 范式）。同一时刻最多一个
@@ -26,9 +26,9 @@ import java.util.logging.Logger;
  *
  * <p><b>执行语义</b>：</p>
  * <ul>
- *   <li>{@link #submit}：①链深闸（ABA / K1，≥ max 整个 run 掐断 + WARNING）
+ *   <li>{@link #submit}：①链深闸（ABA，≥ max 整个 run 掐断 + WARNING）
  *       ②runs/s 闸（{@link ScriptBudget#tryAcquireRun}；拒 → 丢弃）→ 队列执行。
- *       两闸掐断都记 audit {@code SCRIPT_RUN_BLOCKED}（K5 per-rule 10s 限频）。</li>
+ *       两闸掐断都记 audit {@code SCRIPT_RUN_BLOCKED}（per-rule 10s 限频）。</li>
  *   <li>{@code if} → {@link ConditionEvaluator#eval}（坏条件恒 false 不炸链）+
  *       递归对应分支；condition 步进 trace。</li>
  *   <li>{@code wait} → 把剩余动作（含外层 if 之后的后续）包成 continuation
@@ -38,20 +38,20 @@ import java.util.logging.Logger;
  *       blocked step + audit（限频）。</li>
  * </ul>
  *
- * <p><b>ABA 链深（K1）</b>：执行段全程 {@link #CHAIN_DEPTH} ThreadLocal 置
+ * <p><b>ABA 链深</b>：执行段全程 {@link #CHAIN_DEPTH} ThreadLocal 置
  * {@code ctx.chainDepth()}（finally 必清）。脚本动作 setVariable →
- * {@code VariableStore.fireChange} 同步发生在 runner 线程 → TriggerRouter（批次 3）
+ * {@code VariableStore.fireChange} 同步发生在 runner 线程 → TriggerRouter
  * 的 listener <b>直读 {@code CHAIN_DEPTH.get()}</b>：null（非脚本来源）→ depth 0；
  * 非 null（runner 线程脚本写变量）→ +1。不能用 currentChainDepth()+1——它把无上下文
  * 折叠成 0 会让非脚本来源被错算成 depth 1。零 VariableStore API 改动。</p>
  *
- * <p><b>trace（K10）</b>：每 run 收集 {@code List<TraceStep>}，结束后 FINE log 一行
- * summary；P3 接 {@code script.test} ack。</p>
+ * <p><b>trace</b>：每 run 收集 {@code List<TraceStep>}，结束后 FINE log 一行
+ * summary + {@code script.test} ack。</p>
  */
 public final class ScriptRunner {
 
     /**
-     * K1：ABA 链深 ThreadLocal。<b>包级可见</b>——TriggerRouter（批次 3，同包）在
+     * ABA 链深 ThreadLocal。<b>包级可见</b>——TriggerRouter（同包）在
      * VariableStore 同步 fireChange 回调里读。null = 当前线程无脚本 run 上下文。
      */
     static final ThreadLocal<Integer> CHAIN_DEPTH = new ThreadLocal<>();
@@ -63,7 +63,7 @@ public final class ScriptRunner {
     }
 
     /**
-     * 0.7.0-P3 A1：当前 run 的 ruleKey（{@code wallId:ruleId}）ThreadLocal。
+     * 当前 run 的 ruleKey（{@code wallId:ruleId}）ThreadLocal。
      * 与 {@link #CHAIN_DEPTH} 同生命周期（runFrames 置位 / finally 清）；
      * {@code ActionExecutor.runCommand} 的 SCRIPT_COMMAND_EXECUTED audit 读它记
      * "来源规则"（scripting.md §5.2）——ActionSink 接口不为此扩参。
@@ -76,7 +76,7 @@ public final class ScriptRunner {
     }
 
     /**
-     * 0.7.1：当前 run 的触发玩家名（{@link TriggerContext#detail()}，仅 player* 触发器有值）。
+     * 当前 run 的触发玩家名（{@link TriggerContext#detail()}，仅 player* 触发器有值）。
      * 与 {@link #RULE_KEY} 同生命周期（runFrames 置位 / finally 清）。
      * {@code ActionExecutor.doSendMessage} 读它拿触发玩家——ActionSink 接口不为此扩参。
      */
@@ -106,20 +106,20 @@ public final class ScriptRunner {
     private final Logger log;
     private final TaskScheduler scheduler;
     private volatile boolean shutdown;
-    /** 0.7.1-P5：时间源（WaitUntil 超时判定）。生产 {@code System::currentTimeMillis}；测试注入可控时钟。 */
+    /** 时间源（WaitUntil 超时判定）。生产 {@code System::currentTimeMillis}；测试注入可控时钟。 */
     private final java.util.function.LongSupplier clock;
     /**
-     * 补间引擎（TweenScheduler）注入 seam。{@code null} = 未装配（P1 占位行为：记 trace 跳过）。
+     * 补间引擎（TweenScheduler）注入 seam。{@code null} = 未装配（降级行为：记 trace 跳过）。
      * 生产由 {@link moe.hikari.canvas.HikariCanvas} onEnable 经 {@link #setTweenScheduler} 注入；
      * 测试可注 fake。
      */
     private volatile @Nullable TweenScheduler tweenScheduler;
 
-    /** 0.7.1-P5：WaitUntil 轮询间隔（ms）。 */
+    /** WaitUntil 轮询间隔（ms）。 */
     private static final long WAIT_UNTIL_TICK_MS = 100L;
 
     /**
-     * 0.7.3：RandomBranch 随机源（runner 单线程直调，无并发竞争）。
+     * RandomBranch 随机源（runner 单线程直调，无并发竞争）。
      * 生产默认 {@code ThreadLocalRandom.current()}；测试经 {@link #setRngForTest} 注入确定性源。
      * IntSupplier 语义：返回 [0,100) 内随机整数（nextInt(100) 等价）。
      */
@@ -138,7 +138,7 @@ public final class ScriptRunner {
         this(conditions, sink, budget, audit, log, scheduler, System::currentTimeMillis);
     }
 
-    /** 测试装配：注入调度替身 + 时钟（0.7.1-P5 WaitUntil 超时测试）。 */
+    /** 测试装配：注入调度替身 + 时钟（WaitUntil 超时测试）。 */
     ScriptRunner(ConditionEvaluator conditions, ActionSink sink, ScriptBudget budget,
                  @Nullable AuditLog audit, Logger log, TaskScheduler scheduler,
                  java.util.function.LongSupplier clock) {
@@ -160,7 +160,7 @@ public final class ScriptRunner {
     }
 
     /**
-     * 0.7.3 测试 seam：注入确定性随机源（生产不调用）。
+     * 测试 seam：注入确定性随机源（生产不调用）。
      * {@code rng} 返回 [0,100) 范围的整数值——调用侧 {@code rng.getAsInt() < probability}。
      */
     void setRngForTest(java.util.function.IntSupplier rng) {
@@ -176,7 +176,7 @@ public final class ScriptRunner {
     }
 
     /**
-     * 0.7.0-P3 A2（K11）：带 trace callback 的投递（{@code script.test} 路径）。
+     * 带 trace callback 的投递（{@code script.test} 路径）。
      *
      * <p><b>callback 契约——恰一次</b>：run 最终段结束（含 wait 续接跨段后的真正末尾）/
      * Budget 掐断（actions 超限）/ 投递侧两闸拒（chain / rate，回 blocked trigger step）/
@@ -189,7 +189,7 @@ public final class ScriptRunner {
         if (shutdown || wallId == null || rule == null || ctx == null) return;
         String ruleKey = ruleKey(wallId, rule);
 
-        // 闸 1：ABA 链深（K1/D8）——整个 run 掐断，不自动禁用规则
+        // 闸 1：ABA 链深——整个 run 掐断，不自动禁用规则
         if (budget.chainDepthExceeded(ctx.chainDepth())) {
             log.warning("[script] ABA chain depth circuit-breaker: rule=" + ruleKey
                     + " depth=" + ctx.chainDepth() + "/" + budget.maxChainDepth()
@@ -234,14 +234,14 @@ public final class ScriptRunner {
         final String wallId;
         final ScriptRule rule;
         final TriggerContext ctx;
-        /** K11：trace callback（wait 续接经本对象延续传递）；可 null。 */
+        /** trace callback（wait 续接经本对象延续传递）；可 null。 */
         final @Nullable java.util.function.Consumer<List<TraceStep>> traceCallback;
         final List<TraceStep> trace = new ArrayList<>();
         int actionCount;
         /** callback 恰一次保险（finish 与 run 级异常路径互斥触发）。 */
         boolean callbackFired;
         /**
-         * 0.7.2-P3：RepeatUntil 每个 blockId 的已执行轮数（while 语义动态循环计数）。嵌套
+         * RepeatUntil 每个 blockId 的已执行轮数（while 语义动态循环计数）。嵌套
          * RepeatUntil 各 blockId 独立；跳出（满足 / 达上限）时 remove 该 blockId；run 结束随 RunState 弃。
          */
         final java.util.Map<String, Integer> repeatUntilRounds = new java.util.HashMap<>();
@@ -270,12 +270,12 @@ public final class ScriptRunner {
 
     /**
      * 执行帧栈直到耗尽 / wait 续接 / 掐断。整段在 runner 线程上跑；
-     * {@link #CHAIN_DEPTH} 全程置位，finally 必清（K1）。
+     * {@link #CHAIN_DEPTH} 全程置位，finally 必清。
      */
     private void runFrames(RunState st, Deque<Frame> stack) {
         CHAIN_DEPTH.set(st.ctx.chainDepth());
         RULE_KEY.set(ruleKey(st.wallId, st.rule));
-        TRIGGER_DETAIL.set(st.ctx.detail());   // 0.7.1：触发玩家名（player* 触发器有值）→ sendMessage
+        TRIGGER_DETAIL.set(st.ctx.detail());   // 触发玩家名（player* 触发器有值）→ sendMessage
         try {
             outer:
             while (!stack.isEmpty()) {
@@ -306,7 +306,7 @@ public final class ScriptRunner {
                         continue outer;
                     }
                     if (a instanceof Action.RandomBranch rb) {
-                        // 0.7.3：随机分支（控制流，照 if；rng 由 ActionExecutor.rng 注入 seam 持有，
+                        // 随机分支（控制流，照 if；rng 由 ActionExecutor.rng 注入 seam 持有，
                         // 但 ScriptRunner 不依赖 ActionExecutor——改由 runner 自持 rng seam）。
                         boolean pick = rng.getAsInt() < rb.probability();
                         st.trace.add(TraceStep.ok(blockId, "condition",
@@ -318,12 +318,12 @@ public final class ScriptRunner {
                         continue outer;
                     }
                     if (a instanceof Action.Repeat rep) {
-                        // 0.7.1：有界循环展开。repeat 自身计 1 个动作（上方 actionCount++ 已计）；
+                        // 有界循环展开。repeat 自身计 1 个动作（上方 actionCount++ 已计）；
                         // 展开后的 body 动作各自再计入 —— 超 max-actions-per-run 自然熔断。
                         st.trace.add(TraceStep.ok(blockId, "action", "repeat " + rep.count() + "x"));
                         // 先押回当前帧剩余（含外层后续），再押 count 轮 body 帧。
                         stack.push(new Frame(acts, i + 1, f.prefix()));
-                        // 关键（守 0.7.0 同构）：bodyPrefix 不含 round —— count 轮的 body[j] 的
+                        // 关键（守前后端同构）：bodyPrefix 不含 round —— count 轮的 body[j] 的
                         // blockId 都是 <blockId>/body/<j>，与前端 body 子块 path 一致。各轮 body
                         // 帧完全相同（同 body / 同 prefix / index 0），LIFO 弹出顺序对可观察行为
                         // 无影响（相同副作用、相同 trace blockId 序列，仅重复 count 次）。
@@ -334,7 +334,7 @@ public final class ScriptRunner {
                         continue outer;
                     }
                     if (a instanceof Action.RepeatUntil ru) {
-                        // 0.7.2-P3：动态 while 循环——先查 condition（满足 / 达 maxIterations → 跳出），
+                        // 动态 while 循环——先查 condition（满足 / 达 maxIterations → 跳出），
                         // 否则轮数+1 + 压回自身（Frame(acts,i) 含其后续）+ 压一轮 body（LIFO body 先执行）。
                         // body 执行完弹回 Frame(acts,i) → 重新进入 RepeatUntil 再查 condition。轮数 Map 记、
                         // 跳出清。RepeatUntil 自身每轮进入计 1 actionCount（循环顶 ++）+ body 计入 → Budget 50
@@ -361,7 +361,7 @@ public final class ScriptRunner {
                         continue outer;
                     }
                     if (a instanceof Action.StopScript) {
-                        // 0.7.1-P5：中止当前 run——清空帧栈，外层 while 见栈空退出 → finish(st,"ok")。
+                        // 中止当前 run——清空帧栈，外层 while 见栈空退出 → finish(st,"ok")。
                         st.trace.add(TraceStep.ok(blockId, "action", "stopScript"));
                         stack.clear();
                         continue outer;
@@ -413,12 +413,12 @@ public final class ScriptRunner {
                         continue;
                     }
                     if (a instanceof Action.TweenBlock tb) {
-                        // P2：补间引擎接入（TweenScheduler）。E1（顺序承诺，scripting-tween.md §2.2）：
+                        // 补间引擎接入（TweenScheduler）。顺序承诺（scripting-tween.md §2.2）：
                         // 续接<b>不再</b>由本 runner 自按 durationMs 定时——改由 TweenScheduler 在
                         // 「末帧落盘完成后」回调触发（否则续接早于落盘，后续动作读到补间前旧值）。
                         TweenScheduler ts = tweenScheduler;
                         if (ts == null) {
-                            // 未装配（测试 / P1 降级）：记 trace 跳过 body，不崩 runner
+                            // 未装配（测试 / 降级）：记 trace 跳过 body，不崩 runner
                             st.trace.add(TraceStep.ok(blockId, "action", "tween engine not wired, skipping"));
                             i++; continue;
                         }
@@ -450,7 +450,7 @@ public final class ScriptRunner {
                         i++; continue;
                     }
                     if (a instanceof Action.WaitUntil wu) {
-                        // 0.7.1-P5：轮询条件，满足/超时才续接。不阻塞 runner 线程——首次计 1 个 action
+                        // 轮询条件，满足/超时才续接。不阻塞 runner 线程——首次计 1 个 action
                         // （上方 actionCount++ 已计）+ 压栈后续（i+1）+ 启动独立 pollWaitUntil 递归。
                         // 轮询走独立调度、不重入 action 循环 → 不重复计 actionCount、不被 Budget 误拦。
                         st.trace.add(TraceStep.ok(blockId, "action", "waitUntil start"));
@@ -480,7 +480,7 @@ public final class ScriptRunner {
             // 任务级异常隔离：单 run 失败不杀 runner 线程（照 AnimationTicker.tick 范式）
             log.log(Level.WARNING, "[script] run failed: rule=" + ruleKey(st.wallId, st.rule)
                     + " err=" + t.getMessage(), t);
-            // K11：异常掐断也要恰一次回调（finish 未到达——callbackFired 防 finish 后
+            // 异常掐断也要恰一次回调（finish 未到达——callbackFired 防 finish 后
             // 续接段异常的双发竞态）
             st.trace.add(TraceStep.error("run", "run failed: " + t.getMessage()));
             fireTraceOnce(st);
@@ -492,7 +492,7 @@ public final class ScriptRunner {
     }
 
     /**
-     * 0.7.1-P5：WaitUntil 轮询——每 tick 评估 condition，满足 / 超时 → 续接后续动作（cont），否则
+     * WaitUntil 轮询——每 tick 评估 condition，满足 / 超时 → 续接后续动作（cont），否则
      * tick 后再评估。走<b>独立调度</b>，不重入 runFrames 的 action 循环，故轮询不重复计 actionCount、
      * 不被 Budget 误拦。shutdown / 调度拒绝 → 安静放弃（同 wait 续接容错）。
      */
@@ -530,7 +530,7 @@ public final class ScriptRunner {
             st.trace.add(TraceStep.error(blockId, "waitUntil poll failed: " + t.getMessage()));
             fireTraceOnce(st);
         } finally {
-            // R2：pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这三个 ThreadLocal，
+            // pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这三个 ThreadLocal，
             // 防异常/inline 首调路径把 CHAIN_DEPTH/RULE_KEY/TRIGGER_DETAIL 泄漏到 runner 线程后续任务。
             // 续接 runFrames（上方 schedule）会在自身入口重设这三个值，故此处清理不影响续接。
             CHAIN_DEPTH.remove();
@@ -539,7 +539,7 @@ public final class ScriptRunner {
         }
     }
 
-    /** run 结束（正常 / blocked）：trace callback 恰一次（K11）+ FINE log 一行 summary（K10）。 */
+    /** run 结束（正常 / blocked）：trace callback 恰一次 + FINE log 一行 summary。 */
     private void finish(RunState st, String outcome) {
         fireTraceOnce(st);
         if (!log.isLoggable(Level.FINE)) return;
@@ -569,7 +569,7 @@ public final class ScriptRunner {
         fireTrace(st.traceCallback, List.copyOf(st.trace));
     }
 
-    /** callback 调用统一兜底（K11：callback 抛异常不杀 runner / 不影响投递方）。 */
+    /** callback 调用统一兜底（callback 抛异常不杀 runner / 不影响投递方）。 */
     private void fireTrace(@Nullable java.util.function.Consumer<List<TraceStep>> cb,
                            List<TraceStep> steps) {
         if (cb == null) return;
@@ -580,7 +580,7 @@ public final class ScriptRunner {
         }
     }
 
-    /** audit {@code SCRIPT_RUN_BLOCKED}（K5 per-rule 10s 限频；DB 失败由 AuditLog 自吞）。 */
+    /** audit {@code SCRIPT_RUN_BLOCKED}（per-rule 10s 限频；DB 失败由 AuditLog 自吞）。 */
     private void auditBlocked(String ruleKey, String wallId, ScriptRule rule,
                               String reason, TriggerContext ctx) {
         if (audit == null || !budget.shouldAuditBlock(ruleKey)) return;

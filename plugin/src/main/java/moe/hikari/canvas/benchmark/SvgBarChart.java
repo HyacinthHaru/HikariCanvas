@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 纯字符串 SVG 横向条形图生成器（{@code 0.5.0 Benchmark P3} 自包含 HTML 报告专用）。
+ * 纯字符串 SVG 横向条形图生成器（自包含 HTML 报告专用）。
  *
  * <p>无任何外部依赖、无 Bukkit / NMS、headless——只把 {@link Bar} 列表拼成一段
  * {@code <svg>…</svg>} 片段（<b>不是</b>整页 HTML 文档），由 {@link HtmlReportRenderer}

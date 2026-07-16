@@ -18,8 +18,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.7.0-P2(T2)：脚本条件求值入口——包装 {@link ExpressionParser} +
- * {@link ExpressionEvaluator}（K2 扩展文法）+ 变量 resolver 注入（K3）。
+ * 脚本条件求值入口——包装 {@link ExpressionParser} +
+ * {@link ExpressionEvaluator}（扩展文法）+ 变量 resolver 注入。
  * 契约 {@code docs/scripting.md}。
  *
  * <h2>语义</h2>
@@ -59,7 +59,7 @@ public final class ConditionEvaluator {
 
     /** condition 串 → {@link Expr} 或 {@link #PARSE_FAILED}。 */
     private final ConcurrentHashMap<String, Object> parseCache = new ConcurrentHashMap<>();
-    /** 已 WARN 过的条件串（每串只刷一次日志；I-1：同受 {@link #CACHE_MAX} 上界约束）。 */
+    /** 已 WARN 过的条件串（每串只刷一次日志；同受 {@link #CACHE_MAX} 上界约束）。 */
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
     /** 实际 parse 次数（缓存生效的单测侧证;非公开契约）。 */
     private final AtomicInteger parseCount = new AtomicInteger();
@@ -85,7 +85,7 @@ public final class ConditionEvaluator {
         if (cached == null) {
             if (parseCache.size() >= CACHE_MAX) {
                 // 极端防御：缓存撑爆整体重建（正常规则量级远到不了这里）。
-                // I-1：warned 与 parseCache 同按条件串记账，同步清防两者漂移
+                // warned 与 parseCache 同按条件串记账，同步清防两者漂移
                 parseCache.clear();
                 warned.clear();
             }
@@ -123,7 +123,7 @@ public final class ConditionEvaluator {
     }
 
     /**
-     * 0.7.0-P3 A2（K16）：保存期条件语法预检（parse-only，不求值不查变量）。
+     * 保存期条件语法预检（parse-only，不求值不查变量）。
      * {@code ScriptOpDispatcher} 在 create / update 校验链（Validator 后）对所有
      * {@code if.condition} 逐条调——坏条件在保存时就拒（SCRIPT_INVALID），
      * 不等运行期静默 false。
@@ -146,7 +146,7 @@ public final class ConditionEvaluator {
     }
 
     private void warnOnce(String condition, String stage, RuntimeException e) {
-        // I-1：warned 自身设独立上界——eval 失败的条件串不进 parseCache 负缓存，
+        // warned 自身设独立上界——eval 失败的条件串不进 parseCache 负缓存，
         // 单靠 parseCache 超限同步清不足以约束 warned 的增长
         if (warned.size() >= CACHE_MAX) {
             warned.clear();
@@ -162,7 +162,7 @@ public final class ConditionEvaluator {
      * （cached fresh → default → null）,去掉 inline fallback 档。
      *
      * <p>包级共享：{@code ActionExecutor.incrementVariable} 读当前值用同款链
-     * （T4——保证条件判定与累加起算值取自同一语义）。</p>
+     * （保证条件判定与累加起算值取自同一语义）。</p>
      */
     static Function<String, String> storeLookup(VariableStore store) {
         return fullName -> {

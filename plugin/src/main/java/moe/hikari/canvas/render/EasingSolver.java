@@ -6,7 +6,7 @@ import moe.hikari.canvas.state.EasingType;
 import java.util.List;
 
 /**
- * 缓动求解器（0.6 P3）。数学权威定义见 {@code docs/rendering.md §9.3}——本类与前端
+ * 缓动求解器。数学权威定义见 {@code docs/rendering.md §9.3}——本类与前端
  * {@code web/src/timeline/easing.ts} 是同一份定义的双端实现，<b>逐位等价是硬纪律</b>：
  * 算法（WebKit UnitBezier 系数形式 + 固定步数牛顿迭代 + 二分兜底）、常量
  * （{@link #NEWTON_ITER} / {@link #BISECT_MAX} / {@link #EPS}）、边界捷径与预设控制点

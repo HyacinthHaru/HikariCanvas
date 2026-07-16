@@ -13,7 +13,7 @@ import java.awt.geom.Path2D;
 import java.util.List;
 
 /**
- * M12-B 笔触绘制：Catmull-Rom 拟合相邻点 → 每段画一段 cubic Bezier；
+ * 笔触绘制：Catmull-Rom 拟合相邻点 → 每段画一段 cubic Bezier；
  * 段宽度 / 段 alpha 按 {@code pressureSize / pressureOpacity} 取值。
  *
  * <p><b>Catmull-Rom → Bezier 公式：</b></p>
@@ -30,8 +30,6 @@ import java.util.List;
  * 段宽度 = {@code size × avgPressure}；段 alpha = {@code outerAlpha × pressureAlpha}（与外层
  * element-level opacity 复合，避免覆盖）。视觉上段间会有微小阶梯，但相邻段平均压感相近，
  * 实际不可见。</p>
- *
- * <p>拆分自 god class {@code CanvasCompositor}（2026-05-14）。</p>
  */
 public final class BrushRenderer implements ElementRenderer {
 

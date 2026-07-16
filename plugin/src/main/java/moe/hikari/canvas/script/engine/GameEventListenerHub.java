@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 脚本游戏事件入口（0.7.0-P3 B1 / K15；{@code docs/scripting.md §3}）：把 Bukkit
+ * 脚本游戏事件入口（{@code docs/scripting.md §3}）：把 Bukkit
  * 事件转发给 {@link TriggerRouter} 的全局触发索引，全服脚本的进服 / 击杀事件
  * listener 集中在这一个类。
  *
@@ -42,7 +42,7 @@ import java.util.UUID;
  * 不触发。两个 fire 都在主线程同步调，Router 内只做索引遍历 + submit（重活
  * 全在 runner 线程），主线程成本可忽略。</p>
  *
- * <p><b>0.7.1 新增两个 handler</b>：</p>
+ * <p><b>右键墙 / 退服 handler</b>：</p>
  * <ul>
  *   <li><b>onPlayerQuit</b>（PlayerQuitEvent，不可取消）→ {@link #handlePlayerQuit}
  *       转发到 {@code router.firePlayerQuit}（全局 quit 索引）。</li>
@@ -55,7 +55,7 @@ import java.util.UUID;
  *       与 worldLoad/worldUnload 转发体同纪律。</li>
  * </ul>
  *
- * <p><b>世界名 → UUID 快照表维护（0.7.0-P3-5）</b>：playerNear 的墙原点解析
+ * <p><b>世界名 → UUID 快照表维护</b>：playerNear 的墙原点解析
  * （originSource）可能在任意线程跑（WS 脚本 op 经 ScriptStore listener →
  * rebuildWall 在 Jetty 线程），不能调 {@code Bukkit.getWorld}（异步读
  * CraftServer.worlds 普通 LinkedHashMap，官方不保证线程安全）。改读装配层注入的
@@ -68,7 +68,7 @@ import java.util.UUID;
 public final class GameEventListenerHub implements Listener {
 
     /**
-     * 0.7.1：ItemFrame → wallId 反查 seam（生产 = {@code FrameDeployer::wallIdOf}，PDC 读）。
+     * ItemFrame → wallId 反查 seam（生产 = {@code FrameDeployer::wallIdOf}，PDC 读）。
      * 非 HikariCanvas 画框返 null。注入式 seam 让 {@code script.engine} 不依赖 {@code deploy}
      * 包，且右键转发体可纯 JVM 单测（不构造 ItemFrame）。
      */
@@ -82,7 +82,7 @@ public final class GameEventListenerHub implements Listener {
     private final Map<String, UUID> worldUuidByName;
     /** 世界加载后的补登记回调（生产 = {@code TriggerRouter::rebuildAll}；可 null）。 */
     private final Runnable onWorldChange;
-    /** 0.7.1：右键墙 ItemFrame 反查 wallId（生产 = {@code FrameDeployer::wallIdOf}；可 null）。 */
+    /** 右键墙 ItemFrame 反查 wallId（生产 = {@code FrameDeployer::wallIdOf}；可 null）。 */
     private final @Nullable WallIdLookup wallIdLookup;
 
     public GameEventListenerHub(TriggerRouter router,
@@ -107,7 +107,7 @@ public final class GameEventListenerHub implements Listener {
         router.firePlayerKill(event.getEntity().getName(), killer.getName());
     }
 
-    /** 0.7.1：玩家退服（PlayerQuitEvent 不可取消，ignoreCancelled 对它 no-op）。 */
+    /** 玩家退服（PlayerQuitEvent 不可取消，ignoreCancelled 对它 no-op）。 */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
         handlePlayerQuit(event.getPlayer().getName());
@@ -119,14 +119,14 @@ public final class GameEventListenerHub implements Listener {
     }
 
     /**
-     * 0.7.1：玩家右键实体——只关心右键 {@link ItemFrame}（HikariCanvas 画框）。
+     * 玩家右键实体——只关心右键 {@link ItemFrame}（HikariCanvas 画框）。
      *
      * <p><b>MONITOR 但 {@code ignoreCancelled = false}（必须观察已取消事件）</b>：
      * HikariCanvas 自己的 {@code FrameProtectionListener.onPlayerInteractEntity}
      * （priority=HIGH）会对每一个 wall frame 右键 {@code setCancelled(true)}——这是
      * 防玩家旋转 / 改画框内容的保护逻辑，wall frame 在游戏内是惰性（inert）的。若本
      * handler 用 {@code ignoreCancelled=true}，右键墙事件永远被那个保护 cancel 挡掉，
-     * {@code rightClickWall} 触发器永不触发（0.7.1 实测 bug 根因）。MONITOR 是"观察不
+     * {@code rightClickWall} 触发器永不触发（实测 bug 根因）。MONITOR 是"观察不
      * 修改"优先级，读取已被取消的事件正是其用途——脚本只 fire 不改事件结果，wall frame
      * 旋转早已被锁，观察这次右键无副作用。<br>
      * （边缘：玩家持 wand 时 {@code WandListener} 也会 cancel wall frame 右键——改成

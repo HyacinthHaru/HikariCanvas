@@ -10,14 +10,11 @@ import java.util.List;
  *
  * <p>纯 headless 工具类——只读 {@code java.lang.management} / {@code com.sun.management} 计数器，
  * 零 Bukkit / PacketEvents 依赖。{@code SceneTimer} 用 {@link #threadAllocatedBytes()} 算每轮
- * rasterize+palette 的分配增量；{@code GcStat} 给 P2 报告做 GC 压力归因。</p>
+ * rasterize+palette 的分配增量；{@code GcStat} 给报告做 GC 压力归因。</p>
  *
- * <h2>为什么测分配 / GC</h2>
- * benchmark 的核心成本不只是 CPU 时间，还有 <b>分配率</b>：{@code CanvasCompositor.rasterize}
- * 每次 new 一个 {@code widthMaps*128 × heightMaps*128} 的 ARGB {@code BufferedImage}（一面 2×2
- * 墙 = 256×256×4 = 256 KB/帧），高 fps 下持续分配会触发频繁 minor GC。光看 wall-clock 时间
- * 看不出这层成本（GC 暂停可能落在别的迭代里），所以单独采分配字节 + GC 计数，让报告能区分
- * 「算得慢」与「GC 压力大」（见 {@code docs/dynamic-data.md §13.3} 决策 ③：数据透明，不替服主决策）。
+ * <h2>分配 / GC 采样</h2>
+ * 单独采分配字节 + GC 计数，让报告能区分「算得慢」与「GC 压力大」（见
+ * {@code docs/dynamic-data.md §13.3} 决策 ③：数据透明，不替服主决策）。
  *
  * <h2>平台兼容</h2>
  * {@code getCurrentThreadAllocatedBytes()} 是 HotSpot/OpenJ9 私有 API（{@code com.sun.management}），

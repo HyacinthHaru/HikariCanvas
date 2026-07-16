@@ -15,7 +15,7 @@ import java.util.logging.Logger;
  *
  * <h2>算法</h2>
  * <ul>
- *   <li><b>输入</b>：classpath 下的 {@code palette.json}（由 M4-T1 构建期生成）</li>
+ *   <li><b>输入</b>：classpath 下的 {@code palette.json}（构建期生成）</li>
  *   <li><b>距离度量</b>：CIE76 Lab 欧氏距离（sRGB D65 → XYZ → Lab）</li>
  *   <li><b>数据结构</b>：{@code byte[32*32*32]} 扁平数组，索引 = {@code (r>>3)<<10 | (g>>3)<<5 | (b>>3)}
  *       （RGB 各取高 5 位）</li>
@@ -25,7 +25,7 @@ import java.util.logging.Logger;
  *
  * <h2>构建成本</h2>
  * 启动期一次性构建，32³ × (palette 大小) ≈ 8 M 距离比较；单线程耗时 ~1-3 秒（24 核并行更快，
- * 但 M4 阶段不优化）。构建后 LUT 大小 32 KB，整个 JVM 生命周期常驻。
+ * 暂不优化）。构建后 LUT 大小 32 KB，整个 JVM 生命周期常驻。
  *
  * <h2>替代 {@link org.bukkit.map.MapPalette#matchColor} 的动机</h2>
  * Paper 1.21 把 {@code matchColor(int,int,int)} 标 {@code @Deprecated(forRemoval=true)} 但没给替代；
@@ -41,7 +41,7 @@ public final class PaletteLut {
     /** 越界 rgb 分量只告警一次，避免 248 项坏 palette 刷 248 条 SEVERE。 */
     private static final AtomicBoolean RGB_RANGE_WARNED = new AtomicBoolean(false);
 
-    /** MC 地图调色板中 alpha=0 的透明索引（M4-T1 实测 index 0-3 均透明，约定用 0）。 */
+    /** MC 地图调色板中 alpha=0 的透明索引（实测 index 0-3 均透明，约定用 0）。 */
     public static final byte TRANSPARENT_INDEX = 0;
 
     /** alpha &lt; 该阈值视为透明，直接返回 {@link #TRANSPARENT_INDEX}。 */
@@ -87,8 +87,8 @@ public final class PaletteLut {
 
     public PaletteLut(List<PaletteEntry> paletteEntries) {
         this.entries = paletteEntries.toArray(new PaletteEntry[0]);
-        // P3-48：fail-fast 校验每项 rgb 合法（null / 长度 < 3 即 palette.json 损坏），
-        // 不再静默用单色 fallback 掩盖坏数据
+        // fail-fast 校验每项 rgb 合法（null / 长度 < 3 即 palette.json 损坏），
+        // 不静默用单色 fallback 掩盖坏数据
         boolean rangeViolated = false;
         for (int i = 0; i < entries.length; i++) {
             PaletteEntry e = entries[i];
@@ -97,7 +97,7 @@ public final class PaletteLut {
                         "palette entry " + i + " has malformed rgb (null or length < 3); "
                                 + "palette.json corrupt? run ./gradlew generatePalette");
             }
-            // R10：损坏/篡改的 palette.json 可能含负 / >255 分量，直接进 rgbToLab 会算出
+            // 损坏/篡改的 palette.json 可能含负 / >255 分量，直接进 rgbToLab 会算出
             // 越界 Lab。就地 clamp 到 [0,255]，单条坏色不拖垮启动（不抛异常）。
             for (int c = 0; c < 3; c++) {
                 int v = e.rgb[c];
@@ -115,8 +115,8 @@ public final class PaletteLut {
         // 预筛非透明 palette 项；只有它们参与 RGB → index 匹配
         int opaqueCount = 0;
         for (PaletteEntry e : entries) if (e.alpha >= ALPHA_THRESHOLD) opaqueCount++;
-        // P3-48/P3-79：调色板无任何不透明项 → buildLut 全返 index 0，整张地图渲染成单一透明/黑
-        // 像素却无任何报错。改为启动期 fail-fast，把无声失败变成可见错误（由 onEnable try/catch 升级为启动失败）。
+        // 调色板无任何不透明项 → buildLut 全返 index 0，整张地图渲染成单一透明/黑
+        // 像素却无任何报错。启动期 fail-fast，把无声失败变成可见错误（由 onEnable try/catch 升级为启动失败）。
         if (opaqueCount == 0) {
             throw new IllegalStateException(
                     "palette has no opaque entries; palette.json corrupt? run ./gradlew generatePalette");
@@ -165,7 +165,7 @@ public final class PaletteLut {
         int idx = Byte.toUnsignedInt(index);
         if (idx >= entries.length) return null;
         PaletteEntry e = entries[idx];
-        // P3-48：构造期已保证 rgb 合法，此处仍做防御性检查
+        // 构造期已保证 rgb 合法，此处仍做防御性检查
         if (e == null || e.rgb == null || e.rgb.length < 3) return null;
         return new Color(e.rgb[0], e.rgb[1], e.rgb[2], e.alpha);
     }

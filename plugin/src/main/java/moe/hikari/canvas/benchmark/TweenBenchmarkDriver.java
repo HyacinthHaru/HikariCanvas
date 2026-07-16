@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 /**
- * 0.7.x 补间成本 benchmark 驱动（headless 纯内存，无 Bukkit / DB / PacketEvents）。
+ * 补间成本 benchmark 驱动（headless 纯内存，无 Bukkit / DB / PacketEvents）。
  *
  * <p><b>测量对象</b>：{@link TweenScheduler#buildInterpolatedFrame}（{@code deepCopyState}
  * + 插值 + EditSession 属性写回）—— N 面活跃墙各持一个补间任务时，tick 的累计 CPU 成本。</p>
@@ -34,8 +34,6 @@ import java.util.logging.Logger;
  *   <li>{@code tickForTest}（测量阶段）：反复调用 tick，每次 tick 对所有 N 面活跃墙执行
  *       {@code buildInterpolatedFrame}。计时覆盖"N 面墙的完整 tick"，得出分布统计。</li>
  * </ol>
- *
- * <p>符合 0.5.0「工具不是保姆」哲学：只给数字，不做成本估算 / 不替服主决策。</p>
  */
 public final class TweenBenchmarkDriver {
 

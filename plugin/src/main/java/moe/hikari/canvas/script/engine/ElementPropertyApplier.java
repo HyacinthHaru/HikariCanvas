@@ -11,14 +11,14 @@ import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
 /**
- * {@code setElementProperty} 动作的双路径落地（T4；{@code docs/scripting.md §2.3 / §3}）：
+ * {@code setElementProperty} 动作的双路径落地（{@code docs/scripting.md §2.3 / §3}）：
  *
  * <ul>
  *   <li><b>路径 A（墙开着编辑器）</b>：经 {@link SessionPatchApplier} seam 反查活跃
  *       session → {@code EditSession.updateElement} 标准链（进 history + 前端 patch +
  *       投影 + persistWall）——与 {@code EditOpDispatcher} case {@code "element.update"}
- *       的收尾链一致。生产实现 = {@code SessionManager.applyScriptElementPatch}（批次 3
- *       装配时绑 OpPushCallback + ProjectionThrottler）。</li>
+ *       的收尾链一致。生产实现 = {@code SessionManager.applyScriptElementPatch}
+ *       （装配时绑 OpPushCallback + ProjectionThrottler）。</li>
  *   <li><b>路径 B（headless）</b>：WallRepo 读 state → 临时 {@link EditSession} 套同一个
  *       {@code updateElement}（校验 / immutable 重建与编辑器路径单一权威，零语义分叉）→
  *       {@code wallRepo.updateState} → Ticker 处理照 {@code SessionManager.persistWall}
@@ -66,7 +66,7 @@ public final class ElementPropertyApplier {
         SessionOutcome apply(String wallId, String elementId, Map<String, Object> patch);
 
         /**
-         * 0.7.1 nudge 原子：session 锁内读当前 x/y + delta 写回。无 session 返 noSession。
+         * nudge 原子：session 锁内读当前 x/y + delta 写回。无 session 返 noSession。
          * default = noSession（旧 fake / 调用方自动走 headless 读改写）。
          */
         default SessionOutcome nudge(String wallId, String elementId, int dx, int dy) {
@@ -74,7 +74,7 @@ public final class ElementPropertyApplier {
         }
 
         /**
-         * 0.7.2-P2：活跃 session 克隆元素（新 id + 偏移）→ 标准 element.add 链 + 前端 patch。
+         * 活跃 session 克隆元素（新 id + 偏移）→ 标准 element.add 链 + 前端 patch。
          * 无 session 返 noSession（调用方走 headless）。default = noSession（旧 fake 兼容）。
          */
         default SessionOutcome clone(String wallId, String elementId, int offsetX, int offsetY) {
@@ -82,7 +82,7 @@ public final class ElementPropertyApplier {
         }
 
         /**
-         * 0.7.2-P2：活跃 session 删除元素 → 标准 element.delete 链 + 前端 patch。
+         * 活跃 session 删除元素 → 标准 element.delete 链 + 前端 patch。
          * 无 session 返 noSession。default = noSession（旧 fake 兼容）。
          */
         default SessionOutcome delete(String wallId, String elementId) {
@@ -90,7 +90,7 @@ public final class ElementPropertyApplier {
         }
 
         /**
-         * 0.7.3：活跃 session 置顶/置底元素 → reorderElement 标准链 + 前端 patch。
+         * 活跃 session 置顶/置底元素 → reorderElement 标准链 + 前端 patch。
          * mode = "front"（末尾）/ "back"（开头）。无 session 返 noSession。
          * default = noSession（旧 fake 兼容）。
          */
@@ -105,7 +105,7 @@ public final class ElementPropertyApplier {
     private final Logger log;
 
     /**
-     * 0.7.2-P2（F10）：headless 克隆路径的单 wall 元素数上限。由 HikariCanvas 装配后注入
+     * headless 克隆路径的单 wall 元素数上限。由 HikariCanvas 装配后注入
      * （{@code ScriptsConfig.maxElementsPerWall()}）；{@code <= 0} = 不限。路径 A（活跃 session）
      * 的配额由 session 自己的 EditSession 在 open/confirm 时注入，不读此字段。默认 0（未注入）
      * → headless 不限，测试零侵入。{@code /canvas reload} 经 {@link #setMaxElementsPerWall} 热更。
@@ -122,7 +122,7 @@ public final class ElementPropertyApplier {
         this.log = log;
     }
 
-    /** 0.7.2-P2（F10）：注入 headless 克隆路径的元素数上限（{@code <= 0} = 不限）。 */
+    /** 注入 headless 克隆路径的元素数上限（{@code <= 0} = 不限）。 */
     public void setMaxElementsPerWall(int max) {
         this.maxElementsPerWall = max;
     }
@@ -143,7 +143,7 @@ public final class ElementPropertyApplier {
     }
 
     /**
-     * 0.7.1：批量设属性（friendly 积木）。{@code rawPatch} 每个 (key,val) 过
+     * 批量设属性（friendly 积木）。{@code rawPatch} 每个 (key,val) 过
      * {@link #buildPatch} 合并成一个 element.update patch，一次落地（同 session/headless
      * 双路径，同 {@link #apply}）。任一键非法 → error step（链不断）。
      */
@@ -199,7 +199,7 @@ public final class ElementPropertyApplier {
     }
 
     /**
-     * 0.7.1：相对移动。dx/dy round 成 int 增量。session 路径锁内原子读改写；
+     * 相对移动。dx/dy round 成 int 增量。session 路径锁内原子读改写；
      * headless 路径读 DB state 当前 x/y + 增量（已知低危竞态同 {@link #applyHeadless} 注释）。
      */
     public TraceStep applyNudge(String wallId, String blockId, String elementId,
@@ -264,7 +264,7 @@ public final class ElementPropertyApplier {
     }
 
     /**
-     * 0.7.2-P2（F5/F10）：克隆元素（新 id + 偏移）。双路径同 {@link #apply}：路径 A 活跃 session
+     * 克隆元素（新 id + 偏移）。双路径同 {@link #apply}：路径 A 活跃 session
      * 走 {@code EditSession.cloneElement} 标准链（前端 add patch 实时可见）；NO_SESSION → headless。
      */
     public TraceStep applyClone(String wallId, String blockId, String elementId,
@@ -298,7 +298,7 @@ public final class ElementPropertyApplier {
     }
 
     /**
-     * 0.7.2-P2（F5）：删除元素。双路径同 {@link #apply}：路径 A 活跃 session 走
+     * 删除元素。双路径同 {@link #apply}：路径 A 活跃 session 走
      * {@code EditSession.deleteElement} 标准链（前端 remove patch）；NO_SESSION → headless。
      */
     public TraceStep applyDelete(String wallId, String blockId, String elementId) {
@@ -330,7 +330,7 @@ public final class ElementPropertyApplier {
     }
 
     /**
-     * 0.7.3：元素置顶/置底（双路径，照 {@link #applyClone}/{@link #applyDelete}）。
+     * 元素置顶/置底（双路径，照 {@link #applyClone}/{@link #applyDelete}）。
      * 路径 A：session 内 reorderElement 标准链；NO_SESSION → headless。
      */
     public TraceStep applySetElementLayer(String wallId, String blockId,
@@ -372,7 +372,7 @@ public final class ElementPropertyApplier {
                 es -> front ? es.moveElementToFront(elementId) : es.moveElementToBack(elementId));
     }
 
-    /** 路径 B：headless 克隆（临时 EditSession 注入 F10 配额 → cloneElement → updateState + Ticker）。 */
+    /** 路径 B：headless 克隆（临时 EditSession 注入元素数配额 → cloneElement → updateState + Ticker）。 */
     private TraceStep cloneHeadless(String wallId, String blockId, String elementId,
                                     int offsetX, int offsetY) {
         return runHeadless(wallId, blockId, "clone " + elementId, es -> {
@@ -425,7 +425,7 @@ public final class ElementPropertyApplier {
      * 路径 B：headless 直改。临时 EditSession 复用 {@code updateElement} 的校验 +
      * immutable 重建（其 history / patch 产物即弃），落库后照 persistWall 链处理 Ticker。
      *
-     * <p><b>成本记账（scripting.md §10 P2 拍板：每 action 直落，不节流）</b>：每次 apply =
+     * <p><b>成本记账（scripting.md §10：每 action 直落，不节流）</b>：每次 apply =
      * 一次 loadById（全量 JSON 反序列化）+ 一次 updateState（全量序列化落库）；同 run 内
      * 连续 N 个 setElementProperty 即 N 次往返。上限受 Budget 三闸封顶（10 runs/s ×
      * 50 actions），与编辑器 persistWall 频率同级，可接受。</p>
@@ -466,7 +466,7 @@ public final class ElementPropertyApplier {
 
     /**
      * 值串 → element.update patch（单属性）。白名单 8 属性
-     * （{@code ScriptRuleValidator.ELEMENT_PROPERTIES}）由 P1 校验兜底，此处防御重申。
+     * （{@code ScriptRuleValidator.ELEMENT_PROPERTIES}）由校验层兜底，此处防御重申。
      *
      * @throws IllegalArgumentException 属性不在白名单 / fill 格式非法
      */

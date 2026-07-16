@@ -12,7 +12,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 文本发光效果渲染（M4-T10），契约对应 {@code docs/rendering.md §5.3}。
+ * 文本发光效果渲染，契约对应 {@code docs/rendering.md §5.3}。
  *
  * <h2>算法（自实现盒模糊，不用系统高斯模糊以保双端一致）</h2>
  * <ol>
@@ -50,7 +50,7 @@ public final class GlowRenderer {
         if (glow == null || glow.radius() <= 0 || glyphs.isEmpty()) return;
 
         int radius = glow.radius();
-        // B1-P2-7：非旋转 glyph bbox 改用与前端 PreviewRenderer.renderGlow 一致的固定规则：
+        // 非旋转 glyph bbox 用与前端 PreviewRenderer.renderGlow 一致的固定规则：
         //   ascent = round(fontSize * 0.8)，descent = fontSize - ascent，
         //   宽度 = TextLayout.canonicalCharWidth(ch, fontSize)（与主字形 fill layout 对齐方式相同）。
         // 消除原 fm.getAscent/getDescent/charWidth（AWT FontMetrics）与前端 measureText 的双端分叉。
@@ -72,7 +72,7 @@ public final class GlowRenderer {
                 minY = Math.min(minY, pg.baselineY() - fontSize / 2.0);
                 maxY = Math.max(maxY, pg.baselineY() + fontSize / 2.0);
             } else {
-                // B1-P2-7：canonicalCharWidth 与 TextLayout.layout 的宽度度量一致，消除 AWT 分叉
+                // canonicalCharWidth 与 TextLayout.layout 的宽度度量一致，消除 AWT 分叉
                 int chW = TextLayout.canonicalCharWidth(pg.ch().charAt(0), fontSize);
                 minX = Math.min(minX, pg.x());
                 maxX = Math.max(maxX, pg.x() + chW);
@@ -99,7 +99,7 @@ public final class GlowRenderer {
             lg.setColor(Color.WHITE);  // 任意不透明色；只关心 alpha 通道的形状
             for (TextLayout.PositionedGlyph pg : glyphs) {
                 if (pg.rotated()) {
-                    // P2-62：镜像 TextRenderer.drawGlyph rotated 分支 + 前端 renderGlow
+                    // 镜像 TextRenderer.drawGlyph rotated 分支 + 前端 renderGlow
                     // translate 到方格中心 → rotate 90° → drawString 在 (-chW/2, ascent - fontSize/2)
                     java.awt.geom.AffineTransform saved = lg.getTransform();
                     lg.translate(pg.x() - bboxX, pg.baselineY() - bboxY);

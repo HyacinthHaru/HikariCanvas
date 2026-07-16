@@ -23,7 +23,7 @@ import java.util.logging.Logger;
  * <h2>加载顺序（后者覆盖前者）</h2>
  * <ol>
  *   <li><b>内置字体</b>：jar 内 {@code /fonts/SourceHanSansSC-Regular.otf} 与
- *       {@code /fonts/ark-pixel-12px-monospaced-zh_cn.ttf}（由 M4-T3 Gradle
+ *       {@code /fonts/ark-pixel-12px-monospaced-zh_cn.ttf}（由 Gradle
  *       {@code downloadFonts} 任务构建期拉取入 jar）</li>
  *   <li><b>外部字体</b>：{@code plugins/HikariCanvas/fonts/*.ttf}（{@code .otf}），
  *       扫描时 fileName 去扩展名作为 {@code fontId}；同名覆盖内置</li>
@@ -32,7 +32,7 @@ import java.util.logging.Logger;
  * <h2>字号语义（rendering.md §2.4）</h2>
  * 字号单位 = 像素；{@link Font#deriveFont(float)} 的参数即字号。
  * 像素字体（{@link Metadata#pixelated()}）若用户字号非 {@code nativeSize} 的整数倍，
- * 由 CanvasCompositor 在 M4-T4 阶段选最近邻缩放模式（M4-T3 这里只管加载）。
+ * 由 CanvasCompositor 选最近邻缩放模式（本类只管加载）。
  *
  * <h2>线程</h2>
  * 加载期有写入，稳态后全局只读；{@link #get} / {@link #getOrDefault} 纯读线程安全。
@@ -52,7 +52,7 @@ public final class FontRegistry {
         BUILT_IN.put("source_han_sans", new BuiltIn(
                 "/fonts/SourceHanSansSC-Regular.otf",
                 new Metadata("思源黑体 SC Regular", false, 0)));
-        // M21：6 个新内置字体（全 SIL OFL 1.1）
+        // 6 个正文字体（全 SIL OFL 1.1）
         BUILT_IN.put("source_han_serif", new BuiltIn(
                 "/fonts/SourceHanSerifSC-Regular.otf",
                 new Metadata("思源宋体 SC Regular", false, 0)));
@@ -68,7 +68,7 @@ public final class FontRegistry {
         BUILT_IN.put("noto_serif", new BuiltIn(
                 "/fonts/NotoSerif-Regular.ttf",
                 new Metadata("Noto Serif Regular", false, 0)));
-        // M22：13 个艺术 / 装饰字体（全 SIL OFL 1.1）
+        // 13 个艺术 / 装饰字体（全 SIL OFL 1.1）
         // 中文艺术 6
         BUILT_IN.put("smiley_sans", new BuiltIn(
                 "/fonts/SmileySans-Oblique.otf",
@@ -112,7 +112,6 @@ public final class FontRegistry {
         BUILT_IN.put("dancing_script", new BuiltIn(
                 "/fonts/DancingScript-Variable.ttf",
                 new Metadata("Dancing Script Regular", false, 0)));
-        // M25：用户请求 FHWA Series + Bahnschrift 的 OFL 替代品。
         // overpass：Red Hat 的 FHWA Series 风格 sans（variable wght）；default 400 取静态等价。
         // bebas_neue：经典 DIN / Bahnschrift Condensed 替代（condensed sans，仅英文）。
         BUILT_IN.put("overpass", new BuiltIn(
@@ -127,7 +126,7 @@ public final class FontRegistry {
     private final Map<String, Registered> fonts = new HashMap<>();
 
     /**
-     * P3-29：后台 metrics worker 线程引用（{@link #spawnMetricsWorker}）。持有它让
+     * 后台 metrics worker 线程引用（{@link #spawnMetricsWorker}）。持有它让
      * {@code HikariCanvas#onDisable} 能 {@link #shutdownMetricsWorker()} interrupt + join，
      * 避免热重载时旧 worker 仍跑（每用户字体 ~1-2s × N）+ pin 住旧 classloader 延迟 GC。
      * volatile：spawn / shutdown 可能跨线程读写。
@@ -165,7 +164,7 @@ public final class FontRegistry {
      * 扫描给定目录加载外部字体；fileName 去扩展名作为 fontId。
      * 目录不存在或扫描失败不抛异常，仅 log。
      *
-     * <p><b>M26-B 异步化（2026-05-17）：</b> {@link Font#createFont} + {@code fonts.put} 仍同步
+     * <p><b>metrics 异步化：</b> {@link Font#createFont} + {@code fonts.put} 仍同步
      * 完成（其他模块 onEnable 后立即假定字体注册表 ready）；但 {@link FontMetricsTable#registerRuntime}
      * 扫 65k codepoints 每字体 ~1-2s 阻塞，N 个用户字体启动期累计 20s+。改为 daemon worker thread
      * 后台跑：</p>
@@ -190,7 +189,7 @@ public final class FontRegistry {
                 String lower = fileName.toLowerCase();
                 if (!lower.endsWith(".ttf") && !lower.endsWith(".otf")) return;
                 String id = fileName.substring(0, fileName.lastIndexOf('.'));
-                // P3-23/P3-51：派生的 fontId 必须与 /api/font/file、/api/font/metrics 端点的
+                // 派生的 fontId 必须与 /api/font/file、/api/font/metrics 端点的
                 // 正则 [a-zA-Z0-9_-]+ 同集。文件名含点（如 "My.Font.ttf" → id="My.Font"）/ 空格 /
                 // 非 ASCII / 隐藏文件（".DS_Store" 已被扩展名过滤，但 ".x.ttf" → id="" 空串）会
                 // 让 id 与端点正则不一致——listAll 暴露的 id 前端拉不到字体。拒载 + WARNING，不污染下游。
@@ -202,15 +201,15 @@ public final class FontRegistry {
                 }
                 try (InputStream in = Files.newInputStream(path)) {
                     Font font = Font.createFont(Font.TRUETYPE_FONT, in);
-                    // 外部字体默认 pixelated=false；M7 接入 config.yml 后可按文件名前缀或配置项区分
+                    // 外部字体默认 pixelated=false；接入 config.yml 后可按文件名前缀或配置项区分
                     fonts.put(id, new Registered(id, font,
                             new Metadata(id, false, 0),
                             path.toAbsolutePath().toString()));
                     log.info("FontRegistry: loaded external '" + id + "' (" + path + ")");
-                    // M20-P4：用户字体没有构建期生成的 .metrics.json，运行时扫一次 advance 表
+                    // 用户字体没有构建期生成的 .metrics.json，运行时扫一次 advance 表
                     // 覆盖 MISSING sentinel；否则 charAdvance 返 -1 fallback canonicalCharWidth 与
                     // GlyphMetricsLut HTTP 端点的查询也会 404。
-                    // M26-B：异步化（见 javadoc）；这里只收集，后面统一 spawn worker
+                    // 异步化（见 javadoc）；这里只收集，后面统一 spawn worker
                     pendingMetrics.add(Map.entry(id, font));
                 } catch (IOException | FontFormatException ex) {
                     log.log(Level.WARNING, "FontRegistry: failed to load external " + path, ex);
@@ -228,7 +227,7 @@ public final class FontRegistry {
      * 启动单个 daemon 线程后台逐字体跑 {@link FontMetricsTable#registerRuntime}。
      * daemon 防 plugin disable 后 JVM 仍挂住；逐字体而非并行—避免同时算 65k×N 把 GC 打爆。
      *
-     * <p>P3-29：worker 引用存入 {@link #metricsWorker} 字段，供 {@link #shutdownMetricsWorker()}
+     * <p>worker 引用存入 {@link #metricsWorker} 字段，供 {@link #shutdownMetricsWorker()}
      * interrupt + join；循环内每字体前查 {@link Thread#isInterrupted()} 提前退出。</p>
      */
     private void spawnMetricsWorker(List<Map.Entry<String, Font>> pending) {
@@ -236,7 +235,7 @@ public final class FontRegistry {
             long t0 = System.nanoTime();
             int done = 0;
             for (Map.Entry<String, Font> e : pending) {
-                // P3-29：disable 期 interrupt 后尽快收手，不再扫剩余字体的 65k codepoints
+                // disable 期 interrupt 后尽快收手，不再扫剩余字体的 65k codepoints
                 if (Thread.currentThread().isInterrupted()) {
                     log.info("FontRegistry: metrics worker interrupted, stopping early ("
                             + done + "/" + pending.size() + " fonts done)");
@@ -265,7 +264,7 @@ public final class FontRegistry {
     }
 
     /**
-     * P3-29：停止后台 metrics worker（{@code HikariCanvas#onDisable} 调用）。
+     * 停止后台 metrics worker（{@code HikariCanvas#onDisable} 调用）。
      * interrupt 让 worker 在下一字体前退出，再 join 短超时回收，最后清字段断引用让旧
      * classloader 可被 GC。worker 已结束 / 从未 spawn 时为 no-op。
      */
@@ -304,7 +303,7 @@ public final class FontRegistry {
         return Collections.unmodifiableMap(new LinkedHashMap<>(fonts));
     }
 
-    // ---------- M23-P1 HTTP 端点支持 ----------
+    // ---------- HTTP 端点支持 ----------
 
     /**
      * 读取字体文件二进制。内置字体从 jar classpath，用户字体从绝对路径。
@@ -383,7 +382,7 @@ public final class FontRegistry {
 
         /**
          * 按像素字号派生一个具体字号 Font 实例。像素字体用户字号非 native 整数倍时，
-         * 在 M4-T4 CanvasCompositor 里走最近邻缩放；这里只负责 {@link Font#deriveFont(float)}。
+         * 在 CanvasCompositor 里走最近邻缩放；这里只负责 {@link Font#deriveFont(float)}。
          */
         public Font derive(float pixelSize) {
             return font.deriveFont(pixelSize);

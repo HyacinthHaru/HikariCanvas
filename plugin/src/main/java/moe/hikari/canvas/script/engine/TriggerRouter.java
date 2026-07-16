@@ -20,7 +20,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 脚本触发器路由（0.7.0-P2 T5；{@code docs/scripting.md §3}）。3 触发器落地：
+ * 脚本触发器路由（{@code docs/scripting.md §3}）。3 触发器落地：
  *
  * <ul>
  *   <li><b>variableChange</b>：倒排索引 {@code 解析后 fullName → Set<RuleRef>}
@@ -33,8 +33,8 @@ import java.util.logging.Logger;
  *       投递后执行在 runner 线程。调度本身轻（仅 submit），不复用 runner 的 SES——
  *       runner 单线程串行执行重活，timer 到期不该排在 wait 续接后面才投递。</li>
  *   <li><b>wallReady</b>：不进索引——{@link #fireWallReady} 时直查 {@code store.listByWall}
- *       （K9 两触发点：启动恢复成功墙 + {@code SessionManager.confirm} 部署完成）。</li>
- *   <li><b>playerJoin / playerKill</b>（0.7.0-P3 B1 / K15）：全局触发索引
+ *       （两触发点：启动恢复成功墙 + {@code SessionManager.confirm} 部署完成）。</li>
+ *   <li><b>playerJoin / playerKill</b>：全局触发索引
  *       {@code Set<RuleRef>} 两枚——事件不带墙语义，到达时遍历全服该型规则
  *       （规则量受 per-wall 配额约束，O(全服规则) 可接受）。事件入口集中在
  *       {@link GameEventListenerHub}（主线程 MONITOR），本类 fire 方法只做
@@ -45,7 +45,7 @@ import java.util.logging.Logger;
  * 始终 {@code store.find} 拿最新规则——规则被更新 / 禁用 / 删除后旧索引条目即便残留
  * （rebuild 竞态窗口）也不会执行过期动作。</p>
  *
- * <p><b>ABA 链深（K1）</b>：脚本动作 setVariable 的 fireChange 同步发生在 runner 线程
+ * <p><b>ABA 链深</b>：脚本动作 setVariable 的 fireChange 同步发生在 runner 线程
  * （{@link ScriptRunner#CHAIN_DEPTH} 已置位）→ 本类读 ThreadLocal：非 null → depth+1
  * （脚本引发的下游链）；null → depth 0（玩家 / Provider / 命令等非脚本来源）。
  * 注意不能用 {@code currentChainDepth()+1}——它把"无上下文"折叠成 0，非脚本来源会被
@@ -69,7 +69,7 @@ public final class TriggerRouter {
     }
 
     /**
-     * 投递 seam（0.7.0-P3 B1）：生产 = {@code ScriptRunner::submit}；测试注记录替身
+     * 投递 seam：生产 = {@code ScriptRunner::submit}；测试注记录替身
      * 可直接断言 TriggerContext 形态（source / chainDepth / detail）。
      */
     @FunctionalInterface
@@ -77,13 +77,13 @@ public final class TriggerRouter {
         void submit(String wallId, ScriptRule rule, TriggerContext ctx);
     }
 
-    /** 墙原点（世界 UUID + 坐标；B2 playerNear 距离判定基准点）。 */
+    /** 墙原点（世界 UUID + 坐标；playerNear 距离判定基准点）。 */
     public record WallOrigin(java.util.UUID worldId, double x, double y, double z) {}
 
     /**
-     * 墙原点数据源 seam（0.7.0-P3 B2；照 {@code AnimationTicker.WallSource} 范式）：
+     * 墙原点数据源 seam（照 {@code AnimationTicker.WallSource} 范式）：
      * 生产 = {@code WallRepo.loadById} 拿 {@code Wall.key} + 查装配层的
-     * 世界名 → UUID 快照表（P3-5：rebuild 可能跑在 WS / Jetty 线程，异步调
+     * 世界名 → UUID 快照表（rebuild 可能跑在 WS / Jetty 线程，异步调
      * {@code Bukkit.getWorld} 不安全；快照表零 Bukkit 调用，任意线程安全）；
      * 墙不存在 / 世界未加载返 null（该规则跳过登记 + warning——世界随后加载时
      * 生产装配的 {@code GameEventListenerHub} WorldLoadEvent → {@link #rebuildAll}
@@ -95,7 +95,7 @@ public final class TriggerRouter {
     }
 
     /**
-     * playerNear / playerLeaveRange 规则条目（B2/K14；0.7.1 加 {@code leaveEdge}）：墙原点
+     * playerNear / playerLeaveRange 规则条目（{@code leaveEdge} 分沿）：墙原点
      * 已在 rebuild 期解析好，{@link PlayerNearSampler} 每轮采样只做距离平方比较，零查库零
      * Bukkit。{@code leaveEdge=false}（playerNear）只在进入沿触发；{@code leaveEdge=true}
      * （playerLeaveRange）只在离开沿触发——两者共享同一采样器与状态表，按本字段分沿。
@@ -121,7 +121,7 @@ public final class TriggerRouter {
     private final ScriptStore store;
     private final RunSubmitter runner;
     private final FullNameResolver resolver;
-    /** 墙原点源（B2；可 null = 不支持 playerNear，near 规则登记时 warning 跳过）。 */
+    /** 墙原点源（可 null = 不支持 playerNear，near 规则登记时 warning 跳过）。 */
     private final WallOriginSource originSource;
     private final Logger log;
     private final TimerScheduler timers;
@@ -134,21 +134,21 @@ public final class TriggerRouter {
     /** {@code wallId:ruleId} → 该 timer 规则的周期任务。 */
     private final Map<String, ScheduledFuture<?>> timerTasks = new ConcurrentHashMap<>();
     /**
-     * 0.7.0-P3 B1（K15）：playerJoin 全局触发索引。规则量受 per-wall 配额约束，
+     * playerJoin 全局触发索引。规则量受 per-wall 配额约束，
      * 事件到达时 O(全服 join 规则) 遍历可接受；与 byFullName 同纪律——只存引用，
      * fire 时刻 {@code store.find} 拿最新规则。
      */
     private final Set<RuleRef> joinRules = ConcurrentHashMap.newKeySet();
-    /** 0.7.0-P3 B1（K15）：playerKill 全局触发索引（同 {@link #joinRules} 纪律）。 */
+    /** playerKill 全局触发索引（同 {@link #joinRules} 纪律）。 */
     private final Set<RuleRef> killRules = ConcurrentHashMap.newKeySet();
-    /** 0.7.1：playerQuit 全局触发索引（同 {@link #joinRules} 纪律）。 */
+    /** playerQuit 全局触发索引（同 {@link #joinRules} 纪律）。 */
     private final Set<RuleRef> quitRules = ConcurrentHashMap.newKeySet();
     /**
-     * 0.7.1：wallId → rightClickWall 规则集合（右键墙触发携带墙语义，按墙索引——
+     * wallId → rightClickWall 规则集合（右键墙触发携带墙语义，按墙索引——
      * 与 nearByWall 同纪律，事件到达时只看该墙的规则）。
      */
     private final Map<String, Set<RuleRef>> rightClickByWall = new ConcurrentHashMap<>();
-    /** 0.7.0-P3 B2（K14）：wallId → 该墙的 playerNear 条目（rebuild 期解析好原点）。 */
+    /** wallId → 该墙的 playerNear 条目（rebuild 期解析好原点）。 */
     private final Map<String, java.util.List<NearEntry>> nearByWall = new ConcurrentHashMap<>();
     /**
      * near 条目扁平快照（volatile 整体替换，照 byFullName 的快照替换纪律）：
@@ -169,7 +169,7 @@ public final class TriggerRouter {
         this(store, (RunSubmitter) runner::submit, resolver, originSource, log, timers);
     }
 
-    /** 测试装配：注入投递替身（B1，ctx 形态可断言）+ timer 调度替身。 */
+    /** 测试装配：注入投递替身（ctx 形态可断言）+ timer 调度替身。 */
     TriggerRouter(ScriptStore store, RunSubmitter runner, FullNameResolver resolver,
                   WallOriginSource originSource, Logger log, TimerScheduler timers) {
         this.store = store;
@@ -181,7 +181,7 @@ public final class TriggerRouter {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  索引重建（K7：ScriptStore.Listener 接入，墙级粒度）
+    //  索引重建（ScriptStore.Listener 接入，墙级粒度）
     // ──────────────────────────────────────────────────────────
 
     /**
@@ -259,7 +259,7 @@ public final class TriggerRouter {
     /**
      * 变量变化 → 投递匹配规则（{@code VariableStore.registerChangeListener} 接入）。
      * 只认 VALUE_SET / UPDATED / CREATED（值真的变了）；BOUND / DELETED /
-     * WALL_REFS_UPDATED 不触发。链深读 {@link ScriptRunner#CHAIN_DEPTH}（K1，见类注释）。
+     * WALL_REFS_UPDATED 不触发。链深读 {@link ScriptRunner#CHAIN_DEPTH}（见类注释）。
      */
     public void onVariableChange(VariableStore.VariableChangeEvent event) {
         if (shutdown || event == null) return;
@@ -271,7 +271,7 @@ public final class TriggerRouter {
         }
         Set<RuleRef> refs = byFullName.get(event.fullName());
         if (refs == null || refs.isEmpty()) return;
-        // K1：runner 线程脚本写变量 → 同步 fireChange 走到这里，链深延续 +1；
+        // runner 线程脚本写变量 → 同步 fireChange 走到这里，链深延续 +1；
         // 非脚本来源（ThreadLocal null）→ depth 0。
         Integer running = ScriptRunner.CHAIN_DEPTH.get();
         int depth = running == null ? 0 : running + 1;
@@ -284,7 +284,7 @@ public final class TriggerRouter {
     }
 
     /**
-     * 墙就绪（K9：启动恢复成功 / 部署完成）→ 投递该墙 enabled 的 wallReady 规则。
+     * 墙就绪（启动恢复成功 / 部署完成）→ 投递该墙 enabled 的 wallReady 规则。
      * 不走索引，直查 store 快照（触发频率极低）。
      */
     public void fireWallReady(String wallId) {
@@ -296,7 +296,7 @@ public final class TriggerRouter {
         }
     }
 
-    /** K9①：启动期对全部恢复成功的墙各发一次 wallReady。 */
+    /** 启动期对全部恢复成功的墙各发一次 wallReady。 */
     public void fireWallReadyAll(Collection<String> wallIds) {
         if (wallIds == null) return;
         for (String wallId : wallIds) {
@@ -305,9 +305,9 @@ public final class TriggerRouter {
     }
 
     /**
-     * 玩家进服（B1/K15；{@code GameEventListenerHub.onPlayerJoin} 接入，主线程调）→
-     * 遍历全局 join 索引投递。事件来源非脚本，链深恒 0；detail = 玩家名（K17：
-     * 只进 trace / audit，不注入动作参数）。
+     * 玩家进服（{@code GameEventListenerHub.onPlayerJoin} 接入，主线程调）→
+     * 遍历全局 join 索引投递。事件来源非脚本，链深恒 0；detail = 玩家名
+     * （只进 trace / audit，不注入动作参数）。
      */
     public void firePlayerJoin(String playerName) {
         fireGlobal(joinRules, Trigger.PlayerJoin.class,
@@ -315,7 +315,7 @@ public final class TriggerRouter {
     }
 
     /**
-     * 玩家被击杀（B1/K15；{@code GameEventListenerHub.onPlayerDeath}，killer 非 null
+     * 玩家被击杀（{@code GameEventListenerHub.onPlayerDeath}，killer 非 null
      * 才到这里）→ 遍历全局 kill 索引投递。detail = {@code victim→killer}。
      */
     public void firePlayerKill(String victimName, String killerName) {
@@ -324,8 +324,8 @@ public final class TriggerRouter {
     }
 
     /**
-     * 0.7.1：玩家退服（{@code GameEventListenerHub.onPlayerQuit} 接入，主线程调）→
-     * 遍历全局 quit 索引投递。detail = 玩家名（K17：只进 trace / audit）。
+     * 玩家退服（{@code GameEventListenerHub.onPlayerQuit} 接入，主线程调）→
+     * 遍历全局 quit 索引投递。detail = 玩家名（只进 trace / audit）。
      */
     public void firePlayerQuit(String playerName) {
         fireGlobal(quitRules, Trigger.PlayerQuit.class,
@@ -333,7 +333,7 @@ public final class TriggerRouter {
     }
 
     /**
-     * 0.7.1：玩家右键墙的 ItemFrame（{@code GameEventListenerHub.onPlayerInteractEntity}
+     * 玩家右键墙的 ItemFrame（{@code GameEventListenerHub.onPlayerInteractEntity}
      * 经 FrameDeployer 反查 wallId 后调，主线程）→ 该墙的 rightClickWall 规则投递。与其他
      * fire 入口同纪律：{@code store.find} 拿<b>最新</b>规则——索引残留 / 已禁用 / 已换型一律跳过。
      */
@@ -351,9 +351,9 @@ public final class TriggerRouter {
     }
 
     /**
-     * 玩家进入 / 离开墙范围（B2/K14；{@link PlayerNearSampler} 进入沿 / 离开沿回调，主线程调）。
+     * 玩家进入 / 离开墙范围（{@link PlayerNearSampler} 进入沿 / 离开沿回调，主线程调）。
      * 与其他 fire 入口同纪律：{@code store.find} 拿<b>最新</b>规则——索引残留 / 已禁用 /
-     * 已换型（NearEntry 在 rebuild 竞态窗口里可能 stale）一律跳过。0.7.1：按规则触发器类型
+     * 已换型（NearEntry 在 rebuild 竞态窗口里可能 stale）一律跳过。按规则触发器类型
      * 定 source——{@link Trigger.PlayerNear} → PLAYER_NEAR；{@link Trigger.PlayerLeaveRange}
      * → PLAYER_LEAVE_RANGE；其余（已换型）跳过。事件来源非脚本，链深恒 0；detail = 玩家名。
      */
@@ -373,7 +373,7 @@ public final class TriggerRouter {
     }
 
     /**
-     * near 条目扁平快照（B2；{@link PlayerNearSampler} 每轮采样无锁读）。
+     * near 条目扁平快照（{@link PlayerNearSampler} 每轮采样无锁读）。
      * volatile 整体替换 + 不可变 List——采样线程读到的永远是某次 rebuild 的完整一致视图。
      */
     public java.util.List<NearEntry> nearRules() {
@@ -424,26 +424,26 @@ public final class TriggerRouter {
         } else if (t instanceof Trigger.PlayerKill) {
             killRules.add(new RuleRef(wallId, rule.id()));
         } else if (t instanceof Trigger.PlayerQuit) {
-            // 0.7.1：playerQuit 全局索引（同 join/kill）。
+            // playerQuit 全局索引（同 join/kill）。
             quitRules.add(new RuleRef(wallId, rule.id()));
         } else if (t instanceof Trigger.RightClickWall) {
-            // 0.7.1：rightClickWall 按墙索引（事件携带墙语义）。
+            // rightClickWall 按墙索引（事件携带墙语义）。
             rightClickByWall.computeIfAbsent(wallId, k -> ConcurrentHashMap.newKeySet())
                     .add(new RuleRef(wallId, rule.id()));
         } else if (t instanceof Trigger.PlayerNear pn) {
             registerNearLocked(wallId, rule, pn.rangeBlocks(), false);
         } else if (t instanceof Trigger.PlayerLeaveRange pl) {
-            // 0.7.1：playerLeaveRange 复用 near 采样器（leaveEdge=true 离开沿触发）。
+            // playerLeaveRange 复用 near 采样器（leaveEdge=true 离开沿触发）。
             registerNearLocked(wallId, rule, pl.rangeBlocks(), true);
         }
         // wallReady 不进索引（fireWallReady 直查 store）。
     }
 
     /**
-     * 0.7.1：playerNear / playerLeaveRange 共用的 near 条目登记（B2/K14）。原点在 rebuild
+     * playerNear / playerLeaveRange 共用的 near 条目登记。原点在 rebuild
      * 期解析一次（Sampler 每轮只比距离平方）。解析失败（墙不存在 / 世界未加载 / originSource
      * 未注入）→ 跳过 + warning：世界随后加载时生产装配的 WorldLoadEvent → rebuildAll 会自动
-     * 补登记（P3-5）。{@code leaveEdge} 决定沿（false 进入沿 / true 离开沿）。
+     * 补登记。{@code leaveEdge} 决定沿（false 进入沿 / true 离开沿）。
      */
     private void registerNearLocked(String wallId, ScriptRule rule, int rangeBlocks,
                                     boolean leaveEdge) {
@@ -529,7 +529,7 @@ public final class TriggerRouter {
         }
     }
 
-    /** 重建 near 扁平快照（B2；任何 nearByWall 结构变更后调，仅 synchronized 内）。 */
+    /** 重建 near 扁平快照（任何 nearByWall 结构变更后调，仅 synchronized 内）。 */
     private void refreshNearSnapshotLocked() {
         if (nearByWall.isEmpty()) {
             nearSnapshot = java.util.List.of();
@@ -566,22 +566,22 @@ public final class TriggerRouter {
         return timerTasks.containsKey(timerKey(wallId, ruleId));
     }
 
-    /** 全局 join 索引当前条目数（B1）。 */
+    /** 全局 join 索引当前条目数。 */
     int joinRuleCount() {
         return joinRules.size();
     }
 
-    /** 全局 kill 索引当前条目数（B1）。 */
+    /** 全局 kill 索引当前条目数。 */
     int killRuleCount() {
         return killRules.size();
     }
 
-    /** 0.7.1：全局 quit 索引当前条目数。 */
+    /** 全局 quit 索引当前条目数。 */
     int quitRuleCount() {
         return quitRules.size();
     }
 
-    /** 0.7.1：某墙 rightClickWall 索引当前条目数。 */
+    /** 某墙 rightClickWall 索引当前条目数。 */
     int rightClickRuleCount(String wallId) {
         Set<RuleRef> set = rightClickByWall.get(wallId);
         return set == null ? 0 : set.size();

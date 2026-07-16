@@ -15,8 +15,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Fill / Paint 构造工具集。拆分自 god class {@code CanvasCompositor}（2026-05-14）。
- * 所有方法 static + pure，无副作用，可被任意 Renderer 共用。
+ * Fill / Paint 构造工具集。所有方法 static + pure，无副作用，可被任意 Renderer 共用。
  *
  * <p>同时承担 {@link #parseColor} 颜色解析职责（HEX → AWT Color），供 Renderer 直接调。</p>
  */
@@ -29,7 +28,7 @@ public final class FillPaintBuilder {
     /**
      * 解析 {@code #RRGGBB} 或 {@code #RRGGBBAA} 为 AWT Color。
      *
-     * <p>M10：alpha 通道支持。alpha 字段缺省时 = 255（不透明）；非空时 0-255 控制半透明。
+     * <p>alpha 通道支持：alpha 字段缺省时 = 255（不透明）；非空时 0-255 控制半透明。
      * 在 {@code TYPE_INT_RGB} 主 buffer 上 fill 时 Graphics2D 走 Porter-Duff SrcOver，
      * alpha < 255 的色与底层像素叠加（"颜色变浅"语义，同 docs/rendering.md §6.5 element opacity）。</p>
      */
@@ -43,7 +42,7 @@ public final class FillPaintBuilder {
     }
 
     /**
-     * M11-B：把 {@link Fill} 转成 AWT {@link Paint}，喂给 {@code g.setPaint}。
+     * 把 {@link Fill} 转成 AWT {@link Paint}，喂给 {@code g.setPaint}。
      *
      * <ul>
      *   <li>{@link SolidFill} → {@link Color}（{@code Color extends Paint}，等价 setColor）</li>
@@ -68,7 +67,7 @@ public final class FillPaintBuilder {
 
     public static Paint buildLinearPaint(LinearGradient g,
                                           double bx, double by, double bw, double bh) {
-        // M16 P3.2：剔除 NaN offset 的 stops；FillValidator 协议入口已挡，
+        // 剔除 NaN offset 的 stops；FillValidator 协议入口已挡，
         // 这里兜底覆盖模板 raw_state 等绕过路径
         List<Stop> stops = filterFiniteStops(g.stops());
         if (stops == null || stops.isEmpty()) return Color.WHITE;
@@ -108,11 +107,11 @@ public final class FillPaintBuilder {
 
     public static Paint buildRadialPaint(RadialGradient g,
                                           double bx, double by, double bw, double bh) {
-        // M16 P3.2：剔除 NaN offset 的 stops
+        // 剔除 NaN offset 的 stops
         List<Stop> stops = filterFiniteStops(g.stops());
         if (stops == null || stops.isEmpty()) return Color.WHITE;
         if (stops.size() < 2) return parseColor(stops.get(0).color());
-        // M16 P3.2：cx / cy / r 非 finite → fallback；保留协议入口 FillValidator 已挡
+        // cx / cy / r 非 finite → fallback；保留协议入口 FillValidator 已挡
         double gcx = Double.isFinite(g.cx()) ? g.cx() : 0.5;
         double gcy = Double.isFinite(g.cy()) ? g.cy() : 0.5;
         double gr = Double.isFinite(g.r()) ? g.r() : 1.0;
@@ -133,7 +132,7 @@ public final class FillPaintBuilder {
     }
 
     /**
-     * M16 P3.2：剔除 {@code position} 非 finite 的 stops；颜色非法不在此过滤
+     * 剔除 {@code position} 非 finite 的 stops；颜色非法不在此过滤
      * （parseColor 已 fallback 到白）。{@code null} → 返回 {@code null} 上调用方走纯白
      * fallback；返回 size &lt; 2 由调用方降级首 stop 纯色。
      */

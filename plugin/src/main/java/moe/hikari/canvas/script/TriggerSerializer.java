@@ -24,7 +24,6 @@ public final class TriggerSerializer extends JsonSerializer<Trigger> {
             case Trigger.PlayerJoin ignored -> { }
             case Trigger.PlayerKill ignored -> { }
             case Trigger.WallReady ignored -> { }
-            // 0.7.1：3 个新触发器
             case Trigger.RightClickWall ignored -> { }
             case Trigger.PlayerLeaveRange n -> gen.writeNumberField("rangeBlocks", n.rangeBlocks());
             case Trigger.PlayerQuit ignored -> { }

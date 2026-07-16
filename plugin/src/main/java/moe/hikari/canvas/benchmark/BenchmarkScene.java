@@ -14,7 +14,7 @@ import moe.hikari.canvas.state.ProjectState;
  * @param id                  稳定标识，如 {@code "text-saturated-2x2"}
  * @param name                人类可读名
  * @param category            分组：见 {@link #CATEGORY_ELEMENT_ISOLATION} 等常量
- * @param dominantElementType 主元素类型（{@code "text"/"rect"/.../"mixed"}），供 P2 per-element 归因
+ * @param dominantElementType 主元素类型（{@code "text"/"rect"/.../"mixed"}），供 per-element 归因
  * @param tilesWide           canvas 宽（128px map tile 数）
  * @param tilesHigh           canvas 高（128px map tile 数）
  * @param state               待 rasterize 的 ProjectState

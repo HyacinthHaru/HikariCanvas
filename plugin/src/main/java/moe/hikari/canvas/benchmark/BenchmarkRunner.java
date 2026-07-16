@@ -7,17 +7,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Benchmark 编排器（0.5.0 P2）：把场景选取 → 计时 → 聚合 → per-element 归因 → GC/环境
+ * Benchmark 编排器：把场景选取 → 计时 → 聚合 → per-element 归因 → GC/环境
  * 快照串成一次完整 run，产出 {@link BenchmarkReport}。
  *
  * <p>纯 headless：只依赖 {@link CanvasCompositor} + {@link ProjectState} + {@code java.*} +
  * {@link Instrumentation}，零 Bukkit / Player / PacketEvents（{@code PROPOSAL.md §5.2.7} /
  * {@code docs/dynamic-data.md §13.3}）。「只测 CPU / 内存，绝不测网络」。</p>
  *
- * <h2>「测一次」纪律（核心设计点，不可越界）</h2>
+ * <h2>「测一次」纪律</h2>
  * rasterize / palette 成本<b>只取决于场景本身</b>（canvas 尺寸已烘进每个场景），<b>不</b>取决于
  * fps / viewer 数。故每个场景只测<b>一次</b>——绝不为每个 fps/viewer 组合重复 rasterize（那是
- * 在重复测同一个东西）。fps / viewer 仅作为 P3 公式的输入参数随 {@link BenchmarkConfig} 记录在
+ * 在重复测同一个东西）。fps / viewer 仅作为公式的输入参数随 {@link BenchmarkConfig} 记录在
  * 报告里，不参与本类的任何测量循环。
  *
  * <h2>per-element 边际成本的空白基线</h2>
@@ -48,7 +48,7 @@ public final class BenchmarkRunner {
      *
      * @param compositor        headless {@link CanvasCompositor}（{@code BenchCompositor.create} 产出）
      * @param lib               场景工厂
-     * @param config            压测配置（轮数 + selector；fps/viewer 仅作 P3 公式参数随报告记录）
+     * @param config            压测配置（轮数 + selector；fps/viewer 仅作公式参数随报告记录）
      * @param generatedAtMillis 报告生成时刻（epoch ms，由调用方注入——核心不读时钟保持可测）
      * @return 完整 {@link BenchmarkReport}
      */

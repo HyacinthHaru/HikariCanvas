@@ -26,7 +26,7 @@ public final class RenderContext {
     }
 
     /**
-     * M26.2：新增 {@link IconRegistry} 注入，供 {@link IconRenderer} 矢量 path 渲染查 path d / viewBox。
+     * 新增 {@link IconRegistry} 注入，供 {@link IconRenderer} 矢量 path 渲染查 path d / viewBox。
      * null = 测试 / 老路径，IconRenderer 自动降级（matrix 元素走 legacy PNG，新 SVG 元素走占位）。
      */
     public RenderContext(PaletteLut paletteLut, FontRegistry fontRegistry,

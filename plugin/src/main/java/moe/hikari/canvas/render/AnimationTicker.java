@@ -21,7 +21,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 时间轴动画产帧引擎（0.6 P2，docs/architecture.md §5.5 / docs/timeline.md §3.1）。
+ * 时间轴动画产帧引擎（docs/architecture.md §5.5 / docs/timeline.md §3.1）。
  *
  * <p><b>线程模型：</b>单线程 {@link ScheduledExecutorService}（照 {@code VariableProviderDaemon}
  * 范式：daemon 线程 + 任务级异常隔离 + 幂等关停）。<b>不用 Bukkit 定时器</b>——Bukkit scheduler
@@ -33,12 +33,12 @@ import java.util.logging.Logger;
  * <b>不</b>每 tick 走 {@code loadById}（20fps = 20 DB 读/秒/墙，不可接受）。编辑持久化后由
  * 装配层调 {@link #invalidate}，下一 tick 重载——编辑可见延迟 ≤ 1 帧。</p>
  *
- * <p><b>播放语义（P2 / MANUAL）：</b></p>
+ * <p><b>播放语义（MANUAL）：</b></p>
  * <ul>
  *   <li>{@code play}：暂停态恢复（保位置）；未注册则从 0 开始。timelineId 缺省取
  *       {@code activeTimelineId}。一墙一时刻只播一条 timeline。</li>
  *   <li>{@code pause}：停 cadence、记住位置；{@link #isWallAnimating} 转 false（分流 gate 放行
- *       reactive 路径）。不持久化——重启后 LOOP 墙总是自动播（D-P2-2）。</li>
+ *       reactive 路径）。不持久化——重启后 LOOP 墙总是自动播。</li>
  *   <li>{@code seek}：定位（播放/暂停态均可；未注册时建暂停态条目，等 play 从该处续）。</li>
  *   <li>{@code ONCE} 播到尾：渲染末帧一次后自动注销（不烧空 tick）。</li>
  *   <li>viewer-gated：无观察者跳帧不渲染；位置按墙钟推进，观察者回来时动画在正确时刻。</li>
@@ -47,7 +47,7 @@ import java.util.logging.Logger;
 public final class AnimationTicker implements AnimationTickerGate {
 
     /**
-     * wall 数据源 seam（照 0.4.0-P5 {@code VariableSubCommand.WallSource} 范式）：
+     * wall 数据源 seam（照 {@code VariableSubCommand.WallSource} 范式）：
      * 生产走 {@link #fromRepo(WallRepo)}；测试注内存 fake，不碰 SQLite。
      */
     public interface WallSource {
@@ -92,7 +92,7 @@ public final class AnimationTicker implements AnimationTickerGate {
          * 渲染插值帧并发包。实现侧负责：① 观察者查询（无观察者且 {@code force == false}
          * 时返回 {@code -1}，<b>不 rasterize</b>——viewer-gated 的真正省 CPU 点在此）；
          * ② per-map 帧间 diff（只发像素变了的 map）与新观察者全量补发，工作区在
-         * {@code diff}（<b>仅 Ticker 线程访问</b>，控制线程不得触碰——P2 审查确认项 #1）。
+         * {@code diff}（<b>仅 Ticker 线程访问</b>，控制线程不得触碰）。
          *
          * @param force {@code true} = 无观察者也渲染并更新像素缓存（ONCE 末帧终态）
          * @return {@code -1} = 因无观察者跳过（未 rasterize）；{@code >= 0} = 实际 update 的 map 数
@@ -113,7 +113,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         }
     }
 
-    /** play/seek 的结果（B2 dispatcher 映射到协议错误码）。 */
+    /** play/seek 的结果（dispatcher 映射到协议错误码）。 */
     public enum Result { OK, WALL_NOT_FOUND, TIMELINE_NOT_FOUND }
 
     private static final class PlaybackEntry {
@@ -126,7 +126,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         boolean paused;
         boolean invalidated;
         /**
-         * P2 审查确认项 #1：diff 只许 Ticker 线程触碰。控制线程（play 非 resume /
+         * diff 只许 Ticker 线程触碰。控制线程（play 非 resume /
          * invalidate）想清 diff 时置此标志，由下一 tick 在 Ticker 线程上执行 reset。
          */
         boolean diffResetPending;
@@ -158,7 +158,7 @@ public final class AnimationTicker implements AnimationTickerGate {
     private volatile LongSupplier nanoClock = System::nanoTime;
 
     /**
-     * 0.6 P3（rendering.md §9.5）：数值轨 {@code ${var:X}} 求值 seam（raw + wallId → 数值）。
+     * 数值轨 {@code ${var:X}} 求值 seam（raw + wallId → 数值；rendering.md §9.5）。
      * 装配层注 {@code VariableInterpolator::resolveAsNumber}；null = 无变量支持
      * （Str 关键帧里的纯数字仍可用、变量引用退 0）。
      */
@@ -168,7 +168,7 @@ public final class AnimationTicker implements AnimationTickerGate {
 
     private volatile WallNumberResolver numberResolver;
 
-    /** 0.6 P3 装配 seam（见 {@link WallNumberResolver}）。 */
+    /** 装配 seam（见 {@link WallNumberResolver}）。 */
     public void setNumberResolver(WallNumberResolver resolver) {
         this.numberResolver = resolver;
     }
@@ -186,7 +186,7 @@ public final class AnimationTicker implements AnimationTickerGate {
     }
 
     /**
-     * 测试 seam（P2-6）：在 Ticker 线程排一道屏障任务并阻塞等其完成。
+     * 测试 seam：在 Ticker 线程排一道屏障任务并阻塞等其完成。
      * 单线程 scheduler 的 FIFO 保证：本方法返回时，此前 {@code scheduler.execute} 投递的
      * 所有任务（renderStatic / clearStaticDiff 的 trampoline）均已执行完毕。
      */
@@ -198,12 +198,12 @@ public final class AnimationTicker implements AnimationTickerGate {
         }
     }
 
-    /** 测试 seam（P2-6）：当前 staticDiffs 是否残留指定 wall 条目。 */
+    /** 测试 seam：当前 staticDiffs 是否残留指定 wall 条目。 */
     boolean hasStaticDiffForTest(String wallId) {
         return staticDiffs.containsKey(wallId);
     }
 
-    /** 测试 seam（P2-6）：当前 staticDiffs 条目数。 */
+    /** 测试 seam：当前 staticDiffs 条目数。 */
     int staticDiffCountForTest() {
         return staticDiffs.size();
     }
@@ -243,7 +243,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         Timeline tl = resolveTimeline(w.state(), timelineId);
         if (tl == null) return Result.TIMELINE_NOT_FOUND;
 
-        // P2 审查确认项 #0（TOCTOU）：computeIfAbsent 与进入 entry 锁之间，并发 stopWall
+        // TOCTOU：computeIfAbsent 与进入 entry 锁之间，并发 stopWall
         // 可能已把该 entry 摘出 map——若仍在其上 schedule 会产生「永不可达的孤儿 cadence 任务」。
         // 锁内复核 map 成员资格，被摘除则重试拿新 entry；stopWall 的 remove 也在 entry 锁内，
         // 两者互斥后该窗口被关死。
@@ -259,7 +259,7 @@ public final class AnimationTicker implements AnimationTickerGate {
                 e.basisNanos = nanoClock.getAsLong();
                 if (!resume) {
                     e.basisPosMs = 0L;
-                    // #1：不直接动 e.diff（在飞 tick 可能正用它）；置标志由 Ticker 线程消化
+                    // 不直接动 e.diff（在飞 tick 可能正用它）；置标志由 Ticker 线程消化
                     e.diffResetPending = true;
                 }
                 e.paused = false;
@@ -298,7 +298,7 @@ public final class AnimationTicker implements AnimationTickerGate {
                 if (tl == null) return Result.TIMELINE_NOT_FOUND;
                 e = entries.computeIfAbsent(wallId, PlaybackEntry::new);
                 synchronized (e) {
-                    if (entries.get(wallId) != e) continue;   // 并发摘除 → 重试（#0 同款复核）
+                    if (entries.get(wallId) != e) continue;   // 并发摘除 → 重试（同款复核）
                     if (e.timeline == null) {
                         // 我们刚创建的空 entry → 填充为暂停态；并发 play 已填则不覆盖播放态
                         e.wall = w;
@@ -328,7 +328,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         PlaybackEntry e = entries.get(wallId);
         if (e == null) return;
         synchronized (e) {
-            // remove 在 entry 锁内执行（与 play/seek 的锁内成员资格复核互斥，关死 #0 窗口）；
+            // remove 在 entry 锁内执行（与 play/seek 的锁内成员资格复核互斥，关死 TOCTOU 窗口）；
             // remove(key, value) 双参形态防误删并发 play 重试后塞入的新 entry
             if (entries.remove(wallId, e)) {
                 cancelTask(e);
@@ -344,7 +344,7 @@ public final class AnimationTicker implements AnimationTickerGate {
      * <ul>
      *   <li>播放中：置标志，下一 tick 重载 wall + 重解析 timeline + 全量补发；
      *       timeline 已不存在 → 自动注销。</li>
-     *   <li>暂停态（#13）：没有 tick 来消化标志 → 当场在调用线程重载（持久化路径线程，
+     *   <li>暂停态：没有 tick 来消化标志 → 当场在调用线程重载（持久化路径线程，
      *       一次有界 DB 读）；wall / timeline 消失 → 当场注销，杜绝 stale 条目滞留。</li>
      * </ul>
      */
@@ -353,7 +353,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         if (e == null) return;
         synchronized (e) {
             if (entries.get(wallId) != e) return;
-            // #8：被吸收的 reactive 意图（编辑 flush / wall.refresh）转为下一帧全量补发，
+            // 被吸收的 reactive 意图（编辑 flush / wall.refresh）转为下一帧全量补发，
             // 避免 per-map diff 跳过「像素没变但 ItemFrame 重挂」的 map
             e.diffResetPending = true;
             if (e.paused) {
@@ -364,7 +364,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         }
     }
 
-    /** gate 回调（P2 审查确认项 #3/#6/#8）：reactive 产帧意图被丢弃 → 转为 invalidate。 */
+    /** gate 回调：reactive 产帧意图被丢弃 → 转为 invalidate。 */
     @Override
     public void onReactiveYield(String wallId) {
         invalidate(wallId);
@@ -396,7 +396,7 @@ public final class AnimationTicker implements AnimationTickerGate {
     }
 
     /**
-     * 0.6 P5：wall-ready 自动 LOOP 播仅对 {@code MANUAL} 触发生效。{@code VARIABLE_CHANGE} /
+     * wall-ready 自动 LOOP 播仅对 {@code MANUAL} 触发生效。{@code VARIABLE_CHANGE} /
      * {@code SCHEDULE} 触发的时间轴不在此自动播——改由 {@link TimelineTriggerRegistry} 在绑定变量
      * 变化时驱动 {@link #play}（timeline.md §5.2）。
      */
@@ -409,7 +409,7 @@ public final class AnimationTicker implements AnimationTickerGate {
     /**
      * 启动期全库扫描自动播（WallRestorer.restore 之后调）。返回注册数。
      *
-     * @param excludeWallIds 排除集（P2 审查确认项 #7：restore 失败的 wall 其 mapIds 已
+     * @param excludeWallIds 排除集（restore 失败的 wall 其 mapIds 已
      *                       releaseToFree，注册播放会向已归还 / 可能被复用的 mapId 写像素——
      *                       传 {@code WallRestorer.failedRestoreWallIds()}）；null = 不排除
      */
@@ -432,7 +432,7 @@ public final class AnimationTicker implements AnimationTickerGate {
      * 补间引擎用：渲染某 wall 的一帧补间中间态（不落 DB；Ticker 线程执行保 BufferPool/diff 契约）。
      *
      * <p>该 wall 已有 timeline 播放 entry 时本方法静默 no-op（timeline tick 优先，
-     * 补间和时间轴共存策略在 P3 完善；P2 仅静态墙生效）。wall 不存在 / shutdown 也 no-op。</p>
+     * 仅对无 timeline 播放的静态墙生效）。wall 不存在 / shutdown 也 no-op。</p>
      *
      * <p>任意线程可调（投递 scheduler.execute 到 Ticker 线程）；frame 必须 immutable 不可变。</p>
      */
@@ -455,11 +455,11 @@ public final class AnimationTicker implements AnimationTickerGate {
     /**
      * 补间引擎用：补间结束（或中途取消）后清理 per-wall 静态 diff，防内存泄漏。任意线程可调。
      *
-     * <p><b>P2-6 线程契约修复</b>：{@link #staticDiffs} 声明「仅 Ticker 线程（scheduler）读写」。
-     * 原实现直接在调用线程 {@code staticDiffs.remove}，破坏该契约且与异步 {@link #renderStatic}
-     * 形成竞态——补间末帧序列「先 clearStaticDiff(remove) 再 renderStatic(异步投 Ticker 线程
-     * computeIfAbsent 新建空 FrameDiff)」会让该条目永不被清，每个静态墙补间完泄漏一条
-     * {@code byte[mapCount][16384]}。改为同样 {@code scheduler.execute} 投递到 Ticker 线程：
+     * <p>{@link #staticDiffs} 契约是「仅 Ticker 线程（scheduler）读写」，故本方法的 remove
+     * <b>必须经 {@code scheduler.execute} 投递到 Ticker 线程</b>，不能在调用线程直接
+     * {@code staticDiffs.remove}——否则与异步 {@link #renderStatic} 形成竞态：补间末帧序列
+     * 「先 clearStaticDiff(remove) 再 renderStatic(异步投 Ticker 线程 computeIfAbsent 新建空
+     * FrameDiff)」会让该条目永不被清，每个静态墙补间完泄漏一条 {@code byte[mapCount][16384]}。
      * 单线程 executor 的 FIFO 保证此 remove 排在同一序列里 {@link #renderStatic} 投递的
      * computeIfAbsent 任务<b>之后</b>执行，孤儿条目被关死。</p>
      */
@@ -518,7 +518,7 @@ public final class AnimationTicker implements AnimationTickerGate {
             boolean resetDiff;
             synchronized (e) {
                 if (e.paused) return;
-                // #0 残余：stopWall 后 cancel(false) 不中断在飞 run——成员资格复核弃帧，
+                // stopWall 后 cancel(false) 不中断在飞 run——成员资格复核弃帧，
                 // 防对已注销（可能已删除、mapIds 已归还）的 wall 再渲染
                 if (entries.get(e.wallId) != e) return;
                 if (e.invalidated && !reloadLocked(e)) return;   // 重载失败已注销
@@ -529,7 +529,7 @@ public final class AnimationTicker implements AnimationTickerGate {
                 resetDiff = e.diffResetPending;
                 e.diffResetPending = false;
             }
-            // #1：diff 只在 Ticker 线程触碰；单线程 scheduler 串行保证与 renderFrame 不交错
+            // diff 只在 Ticker 线程触碰；单线程 scheduler 串行保证与 renderFrame 不交错
             if (resetDiff) e.diff.reset();
 
             KeyframeInterpolator.NumberResolver resolver = resolverFor(e.wallId);
@@ -543,7 +543,7 @@ public final class AnimationTicker implements AnimationTickerGate {
                 return;
             }
 
-            // viewer-gated 在 renderFrame 实现侧（无观察者返 -1 不 rasterize，#9 免双扫描）；
+            // viewer-gated 在 renderFrame 实现侧（无观察者返 -1 不 rasterize，免双扫描）；
             // 位置按墙钟推进，观察者回来时动画在正确时刻
             int t = KeyframeInterpolator.mapTime(posMs, tl.durationMs(), tl.loopMode());
             ProjectState frame = KeyframeInterpolator.interpolate(w.state(), tl, t, resolver);
@@ -569,7 +569,7 @@ public final class AnimationTicker implements AnimationTickerGate {
         }
         e.wall = w;
         long newCadence = cadenceOf(tl);
-        // #13：暂停态不 schedule（invalidate 当场重载路径会走到这——暂停态没有 cadence，
+        // 暂停态不 schedule（invalidate 当场重载路径会走到这——暂停态没有 cadence，
         // 只更新 cadenceMs 字段；play 恢复时总是按最新 timeline 重新 schedule）
         if (!e.paused && (e.timeline == null || newCadence != e.cadenceMs)) {
             schedule(e, newCadence);    // fps 改了 → 换 cadence

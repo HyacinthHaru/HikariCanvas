@@ -27,7 +27,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 脚本动作执行器（T4；{@code docs/scripting.md §2.3 / §3}）。8 动作落地：
+ * 脚本动作执行器（{@code docs/scripting.md §2.3 / §3}）。8 动作落地：
  *
  * <ul>
  *   <li>{@code setVariable / incrementVariable / log} → VariableStore / logger（async 安全；
@@ -37,12 +37,11 @@ import java.util.logging.Logger;
  *   <li>{@code playTimeline} → {@link TickerControl}（AnimationTicker 线程安全入口直调）</li>
  *   <li>{@code playSound} → 同步解析（wall 坐标 / scope / soundId）后主线程 hop
  *       {@code Bukkit.getScheduler().runTask}；plugin == null（测试路径）直跑</li>
- *   <li>{@code runCommand} → 0.7.0-P3 A1：{@link CommandTemplateEngine} 渲染（K13 转义 /
+ *   <li>{@code runCommand} → {@link CommandTemplateEngine} 渲染（转义 /
  *       校验全在纯函数侧）→ 主线程 hop {@code Bukkit.dispatchCommand(console, cmd)} +
  *       audit {@code SCRIPT_COMMAND_EXECUTED}；模板未配置 → blocked step，参数校验失败
  *       → error step</li>
- *   <li>{@code log} → {@code logger.info}；<b>不进 audit</b>（玩家级高频会刷库——与
- *       scripting.md §2.3 的偏差已在计划记账，P2 收口改契约）</li>
+ *   <li>{@code log} → {@code logger.info}；<b>不进 audit</b>（玩家级高频会刷库）</li>
  *   <li>{@code wait / if} 由 {@link ScriptRunner} 处理；进到这里是防御 → error step</li>
  * </ul>
  *
@@ -65,7 +64,7 @@ public final class ActionExecutor implements ActionSink {
     private final @Nullable WallRepo wallRepo;
     private final @Nullable Plugin plugin;
     /**
-     * 0.7.0-P3 A1：命令模板表 supplier（惰性读 volatile config 引用 → reload 热更免接线）。
+     * 命令模板表 supplier（惰性读 volatile config 引用 → reload 热更免接线）。
      * null / 返回空表 → runCommand 恒 blocked（模板未配置）。
      */
     private final @Nullable Supplier<Map<String, HikariCanvasConfig.CommandTemplate>> templates;
@@ -80,7 +79,7 @@ public final class ActionExecutor implements ActionSink {
     private final @Nullable AuditLog audit;
     private final Logger log;
     /**
-     * 0.7.1：setRandomVariable 的随机源。生产默认 {@code ThreadLocalRandom.current()}
+     * setRandomVariable 的随机源。生产默认 {@code ThreadLocalRandom.current()}
      * （runner 单线程，无竞争）；单测经 {@link #setRngForTest} 注 seeded {@code Random} 确定性。
      */
     private volatile java.util.random.RandomGenerator rng =
@@ -118,7 +117,7 @@ public final class ActionExecutor implements ActionSink {
         this.log = log;
     }
 
-    /** 0.7.1 测试 seam：注入确定性随机源（生产不调用）。 */
+    /** 测试 seam：注入确定性随机源（生产不调用）。 */
     void setRngForTest(java.util.random.RandomGenerator r) {
         this.rng = r;
     }
@@ -134,7 +133,6 @@ public final class ActionExecutor implements ActionSink {
                 case Action.PlaySound a -> doPlaySound(wallId, blockId, a);
                 case Action.RunCommand a -> doRunCommand(wallId, blockId, a);
                 case Action.Log a -> doLog(wallId, blockId, a);
-                // 0.7.1：6 个新 Action 子类
                 case Action.SetElementProperties a -> doSetElementProperties(wallId, blockId, a);
                 case Action.NudgeElement a -> doNudge(wallId, blockId, a);
                 case Action.SendMessage a -> doSendMessage(wallId, blockId, a);
@@ -143,31 +141,31 @@ public final class ActionExecutor implements ActionSink {
                 // playTimelineAwait：Runner 调本 sink 执行 play（副作用），再据 durationMs 决定挂起。
                 // 即本方法做 play、Runner 做"等播完"——故这里真正执行（非防御 error）。
                 case Action.PlayTimelineAwait a -> doPlayTimelineAwait(wallId, blockId, a);
-                // 0.7.1-P5：粒子真正执行（主线程 hop + 墙坐标，同 playSound 范式）
+                // 粒子真正执行（主线程 hop + 墙坐标，同 playSound 范式）
                 case Action.PlayParticle a -> doPlayParticle(wallId, blockId, a);
-                // 0.7.2-P2：变量积木 + 元素积木（克隆/删除）真实现
+                // 变量积木 + 元素积木（克隆/删除）真实现
                 case Action.CopyVariable a -> doCopyVariable(wallId, blockId, a);
                 case Action.AppendVariable a -> doAppendVariable(wallId, blockId, a);
                 case Action.CloneElement a -> doCloneElement(wallId, blockId, a);
                 case Action.DeleteElement a -> doDeleteElement(wallId, blockId, a);
-                // 0.7.3：置顶置底 / 取整 / 标题弹窗（真实现）
+                // 置顶置底 / 取整 / 标题弹窗（真实现）
                 case Action.SetElementLayer a -> doSetElementLayer(wallId, blockId, a);
                 case Action.RoundVariable a -> doRoundVariable(wallId, blockId, a);
                 case Action.ShowTitle a -> doShowTitle(wallId, blockId, a);
                 // wait / if / repeat / stopScript / waitUntil 由 Runner 处理；进到这里是 Runner
-                // 实现 bug → 防御 error（stopScript/waitUntil 真实现在 Runner，本批次外）
+                // 实现 bug → 防御 error（stopScript/waitUntil 真实现在 Runner）
                 case Action.Wait a -> TraceStep.error(blockId, "wait must be handled by ScriptRunner");
                 case Action.If a -> TraceStep.error(blockId, "if must be handled by ScriptRunner");
                 case Action.Repeat a -> TraceStep.error(blockId, "repeat must be handled by ScriptRunner");
                 case Action.StopScript a -> TraceStep.error(blockId, "stopScript must be handled by ScriptRunner");
                 case Action.WaitUntil a -> TraceStep.error(blockId, "waitUntil must be handled by ScriptRunner");
-                // 0.7.2-P3：repeatUntil 真实现在 ScriptRunner（动态循环 + RunState 轮数）；
+                // repeatUntil 真实现在 ScriptRunner（动态循环 + RunState 轮数）；
                 // 进到这里是 Runner 实现 bug → 防御 error。
                 case Action.RepeatUntil a -> TraceStep.error(blockId, "repeatUntil is handled by ScriptRunner (placeholder)");
-                // tween P1 占位：TweenBlock 由 ScriptRunner（P1）/ TweenScheduler（P2）处理；
+                // TweenBlock 由 ScriptRunner / TweenScheduler 处理；
                 // 进到这里是 Runner 实现 bug → 防御 error。
                 case Action.TweenBlock a -> TraceStep.error(blockId, "tweenBlock is handled by ScriptRunner (replaced by TweenScheduler in P2)");
-                // 0.7.3：RandomBranch 由 ScriptRunner 处理（控制流）；进到这里是 Runner 实现 bug。
+                // RandomBranch 由 ScriptRunner 处理（控制流）；进到这里是 Runner 实现 bug。
                 case Action.RandomBranch a -> TraceStep.error(blockId, "randomBranch must be handled by ScriptRunner");
             };
         } catch (RuntimeException e) {
@@ -189,8 +187,8 @@ public final class ActionExecutor implements ActionSink {
         String resolved = interpolator.interpolate(a.value(), wallId).text();
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
         try {
-            // K1：CHAIN_DEPTH 已由 Runner 置位——fireChange 同步发生在本线程，
-            // Router（批次 3）listener 读 ThreadLocal 得链深
+            // CHAIN_DEPTH 已由 Runner 置位——fireChange 同步发生在本线程，
+            // Router listener 读 ThreadLocal 得链深
             store.setValue(fullName, resolved, null);
         } catch (VariableException e) {
             return TraceStep.error(blockId, "setVariable " + fullName + ": " + e.getMessage());
@@ -217,7 +215,7 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /**
-     * 0.7.2-P2：把 source 变量的当前值复制到 target 变量（照 {@link #doSetVariable} 范式：
+     * 把 source 变量的当前值复制到 target 变量（照 {@link #doSetVariable} 范式：
      * store.get 取值 + store.setValue 写入；async 安全无主线程 hop）。源变量缺失 → error；
      * source.currentValue 为 null 时退 defaultValue，再退空串。
      */
@@ -242,7 +240,7 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /**
-     * 0.7.2-P2：把 text（过 {@code ${var:X}} 插值）追加到 fullName 变量末尾（读当前值 +
+     * 把 text（过 {@code ${var:X}} 插值）追加到 fullName 变量末尾（读当前值 +
      * 拼接 + 写回；currentValue 缺失从空串起拼）。async 安全。
      */
     private TraceStep doAppendVariable(String wallId, String blockId, Action.AppendVariable a) {
@@ -385,7 +383,7 @@ public final class ActionExecutor implements ActionSink {
                 "sound " + a.soundId() + " scope=" + a.scope());
     }
 
-    // ---------- 0.7.1-P5：粒子（主线程 hop + 墙坐标，照 doPlaySound 范式） ----------
+    // ---------- 粒子（主线程 hop + 墙坐标，照 doPlaySound 范式） ----------
 
     private TraceStep doPlayParticle(String wallId, String blockId, Action.PlayParticle a) {
         if (wallRepo == null) {
@@ -436,7 +434,7 @@ public final class ActionExecutor implements ActionSink {
         return TraceStep.ok(blockId, "action", "particle " + a.particle() + " x" + a.count());
     }
 
-    // ---------- 命令（0.7.0-P3 A1：命令模板系统真实化；docs/scripting.md §5.2） ----------
+    // ---------- 命令（命令模板系统；docs/scripting.md §5.2） ----------
 
     private TraceStep doRunCommand(String wallId, String blockId, Action.RunCommand a) {
         Map<String, HikariCanvasConfig.CommandTemplate> tpls =
@@ -457,7 +455,7 @@ public final class ActionExecutor implements ActionSink {
             }
             case CommandTemplateEngine.Result.Ok ok -> {
                 // audit 记"提交执行"（templateId + 替换后全文 + 来源规则；scripting.md §5.2）。
-                // ruleKey 从 ScriptRunner ThreadLocal 读（runner 线程恒有；直调路径 null 省略）
+                // ruleKey 从 ScriptRunner ThreadLocal 读（runner 线程恒有；直调路径 null 省略）。
                 recordCommandAudit(wallId, blockId, a.templateId(), ok.command());
                 Runnable work = () -> {
                     try {
@@ -503,13 +501,12 @@ public final class ActionExecutor implements ActionSink {
     private TraceStep doLog(String wallId, String blockId, Action.Log a) {
         String msg = interpolator == null ? a.message()
                 : interpolator.interpolate(a.message(), wallId).text();
-        // 不进 audit：log 是玩家级高频动作，进 audit 会刷库（与 scripting.md §2.3 偏差，
-        // 收口改契约该行——计划已记账）
+        // 不进 audit：log 是玩家级高频动作，进 audit 会刷库
         log.info("[script " + wallId + "] " + msg);
         return TraceStep.ok(blockId, "action", "log");
     }
 
-    // ---------- 0.7.1：6 个新动作 ----------
+    // ---------- 友好积木动作 ----------
 
     /** 批量设元素属性（友好积木）→ {@link ElementPropertyApplier#applyMany}（kind 仅前端皮肤，忽略）。 */
     private TraceStep doSetElementProperties(String wallId, String blockId,
@@ -528,7 +525,7 @@ public final class ActionExecutor implements ActionSink {
         return applier.applyNudge(wallId, blockId, a.elementId(), a.dx(), a.dy());
     }
 
-    /** 0.7.2-P2：克隆元素 → {@link ElementPropertyApplier#applyClone}（双路径 + F10 配额）。 */
+    /** 克隆元素 → {@link ElementPropertyApplier#applyClone}（双路径 + 元素数配额）。 */
     private TraceStep doCloneElement(String wallId, String blockId, Action.CloneElement a) {
         if (applier == null) {
             return TraceStep.error(blockId, "ElementPropertyApplier not wired");
@@ -536,7 +533,7 @@ public final class ActionExecutor implements ActionSink {
         return applier.applyClone(wallId, blockId, a.elementId(), a.offsetX(), a.offsetY());
     }
 
-    /** 0.7.2-P2：删除元素 → {@link ElementPropertyApplier#applyDelete}（双路径）。 */
+    /** 删除元素 → {@link ElementPropertyApplier#applyDelete}（双路径）。 */
     private TraceStep doDeleteElement(String wallId, String blockId, Action.DeleteElement a) {
         if (applier == null) {
             return TraceStep.error(blockId, "ElementPropertyApplier not wired");
@@ -545,7 +542,7 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /**
-     * 发消息。0.7.2-P3：按 {@link Action.SendMessage#target()} 分流——
+     * 发消息。按 {@link Action.SendMessage#target()} 分流——
      * {@code "all"} → 全服广播（{@code Bukkit.getOnlinePlayers()} 逐个发，不依赖触发玩家）；
      * 否则（{@code "trigger"}）→ 触发玩家名 = {@link ScriptRunner#currentTriggerDetail}（仅
      * player* 触发器有值），无触发玩家 / 离线 → ok step skip（非错误）。text 过
@@ -675,7 +672,7 @@ public final class ActionExecutor implements ActionSink {
         return TraceStep.ok(blockId, "action", "playAwait " + a.timelineId());
     }
 
-    // ---------- 0.7.3：置顶置底 / 取整 / 标题弹窗 ----------
+    // ---------- 置顶置底 / 取整 / 标题弹窗 ----------
 
     /** 元素置顶/置底 → {@link ElementPropertyApplier#applySetElementLayer}（双路径）。 */
     private TraceStep doSetElementLayer(String wallId, String blockId, Action.SetElementLayer a) {
@@ -773,7 +770,7 @@ public final class ActionExecutor implements ActionSink {
     }
 
     /**
-     * 0.7.1 {@link ActionSink#timelineDurationMs}：从 wallRepo 读 timeline 一轮时长（ms）。
+     * {@link ActionSink#timelineDurationMs}：从 wallRepo 读 timeline 一轮时长（ms）。
      * 查无 / wallRepo 缺 → 0（Runner 据此不挂起）。封顶 10 分钟防异常 duration 卡死续接。
      */
     @Override

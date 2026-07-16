@@ -38,9 +38,9 @@ public final class ScriptRuleValidator {
     /** blockLayout JSON 最大长度（null 当 "{}" 合法）。 */
     public static final int BLOCK_LAYOUT_MAX = 65536;
     /** SetElementProperty.property 白名单。
-     * 0.7.3 D3：加入 "color"（TextElement.color，setColor 友好积木 + 补间 color 分支用）。
+     * "color"（TextElement.color，setColor 友好积木 + 补间 color 分支用）。
      * fill 保留：rect/circle/path/shape/brush/icon 仍用 fill；setElementProperty 通用动作
-     * 继续用 fill；仅 setColor 友好积木对 TextElement 用 color（TweenScheduler L434 color 分支）。
+     * 继续用 fill；仅 setColor 友好积木对 TextElement 用 color（TweenScheduler color 分支）。
      */
     public static final Set<String> ELEMENT_PROPERTIES =
             Set.of("x", "y", "w", "h", "rotation", "opacity", "text", "fill", "color");
@@ -64,28 +64,28 @@ public final class ScriptRuleValidator {
     /** PlaySound.pitch 范围。 */
     public static final double PITCH_MIN = 0.5;
     public static final double PITCH_MAX = 2.0;
-    /** 0.7.1 SendMessage.text 最大长度。 */
+    /** SendMessage.text 最大长度。 */
     public static final int MESSAGE_MAX = 256;
-    /** 0.7.1 SetElementProperties.patch 最大键数。 */
+    /** SetElementProperties.patch 最大键数。 */
     public static final int PATCH_MAX_KEYS = 8;
-    /** 0.7.1 SetElementProperties.kind 最大长度。 */
+    /** SetElementProperties.kind 最大长度。 */
     public static final int KIND_MAX = 32;
-    /** 0.7.1 SendMessage.channel 白名单。 */
+    /** SendMessage.channel 白名单。 */
     public static final Set<String> MESSAGE_CHANNELS = Set.of("chat", "actionbar", "title");
-    /** 0.7.2-P3 SendMessage.target 白名单（trigger=触发玩家 / all=全服广播）。 */
+    /** SendMessage.target 白名单（trigger=触发玩家 / all=全服广播）。 */
     public static final Set<String> MESSAGE_TARGETS = Set.of("trigger", "all");
-    /** 0.7.1 ScaleVariable.op 白名单。 */
+    /** ScaleVariable.op 白名单。 */
     public static final Set<String> SCALE_OPS = Set.of("multiply", "divide");
-    /** 0.7.1 Repeat.count 范围（次）。 */
+    /** Repeat.count 范围（次）。 */
     public static final int REPEAT_MIN = 1;
     public static final int REPEAT_MAX = 100;
-    /** 0.7.1-P5 PlayParticle.count 范围（个）。 */
+    /** PlayParticle.count 范围（个）。 */
     public static final int PARTICLE_COUNT_MIN = 1;
     public static final int PARTICLE_COUNT_MAX = 1000;
-    /** 0.7.1-P5 WaitUntil.timeoutMs 范围（毫秒）。 */
+    /** WaitUntil.timeoutMs 范围（毫秒）。 */
     public static final long WAIT_UNTIL_TIMEOUT_MIN = 50L;
     public static final long WAIT_UNTIL_TIMEOUT_MAX = 60_000L;
-    /** 0.7.2-P2 CloneElement.offsetX/Y 绝对值上限（合理偏移，方块/像素同量级）。 */
+    /** CloneElement.offsetX/Y 绝对值上限（合理偏移，方块/像素同量级）。 */
     public static final int ELEMENT_OFFSET_MAX = 4096;
     /** TweenBlock.durationMs 上限（毫秒；1 ms 下限直接比较）。 */
     public static final long TWEEN_DURATION_MAX = 60_000L;
@@ -97,22 +97,22 @@ public final class ScriptRuleValidator {
      */
     public static final Set<String> TWEENABLE_KINDS =
             Set.of("moveTo", "resize", "rotateTo", "setOpacity", "setColor");
-    /** 0.7.3 RandomBranch.probability 范围（百分比，含边界）。 */
+    /** RandomBranch.probability 范围（百分比，含边界）。 */
     public static final int RANDOM_BRANCH_PROB_MIN = 0;
     public static final int RANDOM_BRANCH_PROB_MAX = 100;
-    /** 0.7.3 SetElementLayer.mode 白名单。 */
+    /** SetElementLayer.mode 白名单。 */
     public static final Set<String> ELEMENT_LAYER_MODES = Set.of("front", "back");
-    /** 0.7.3 RoundVariable.mode 白名单。 */
+    /** RoundVariable.mode 白名单。 */
     public static final Set<String> ROUND_MODES = Set.of("round", "floor", "ceil");
-    /** 0.7.3 ShowTitle 时长上限（毫秒）。 */
+    /** ShowTitle 时长上限（毫秒）。 */
     public static final int SHOW_TITLE_FADE_MAX_MS = 10_000;   // fadeIn / fadeOut ≤ 10s
     public static final int SHOW_TITLE_STAY_MAX_MS = 60_000;   // stay ≤ 60s
-    /** 0.7.3 ShowTitle.target 白名单（复用 SendMessage 的 target 集合）。 */
+    /** ShowTitle.target 白名单（复用 SendMessage 的 target 集合）。 */
     public static final Set<String> TITLE_TARGETS = Set.of("trigger", "all");
-    /** 0.7.3 ShowTitle title / subtitle 最大长度（单个字段）。 */
+    /** ShowTitle title / subtitle 最大长度（单个字段）。 */
     public static final int TITLE_TEXT_MAX = 256;
 
-    /** 0.7.1-P5 PlayParticle.particle 白名单（14 个，双端对齐）。 */
+    /** PlayParticle.particle 白名单（14 个，双端对齐）。 */
     public static final Set<String> PARTICLE_WHITELIST = Set.of(
             "minecraft:flame", "minecraft:smoke", "minecraft:heart", "minecraft:happy_villager",
             "minecraft:crit", "minecraft:enchant", "minecraft:portal", "minecraft:firework",
@@ -172,7 +172,7 @@ public final class ScriptRuleValidator {
             case Trigger.PlayerJoin ignored -> Optional.empty();
             case Trigger.PlayerKill ignored -> Optional.empty();
             case Trigger.WallReady ignored -> Optional.empty();
-            // 0.7.1：3 个新触发器。playerLeaveRange 复用 NEAR_MIN..NEAR_MAX（与 playerNear
+            // playerLeaveRange 复用 NEAR_MIN..NEAR_MAX（与 playerNear
             // 同半径语义）；rightClickWall / playerQuit 无字段。
             case Trigger.PlayerLeaveRange t -> (t.rangeBlocks() < NEAR_MIN || t.rangeBlocks() > NEAR_MAX)
                     ? Optional.of(ValidationError.of("playerLeaveRange", "min", NEAR_MIN, "max", NEAR_MAX))
@@ -184,8 +184,8 @@ public final class ScriptRuleValidator {
 
     /**
      * 递归积木计数：每个 Action 计 1，If 自身计 1 再加两分支，Repeat 自身计 1 再加 body
-     * （0.7.1：<b>不乘 count</b>——这是积木<i>树节点数</i>硬限 {@value #MAX_TOTAL_BLOCKS}，
-     * 非展开后的动作数；展开数由运行时 Budget 熔断，见 scripting-0.7.1.md §9）。
+     * （<b>不乘 count</b>——这是积木<i>树节点数</i>硬限 {@value #MAX_TOTAL_BLOCKS}，
+     * 非展开后的动作数；展开数由运行时 Budget 熔断）。
      */
     private static int countBlocks(List<Action> actions) {
         int count = 0;
@@ -196,13 +196,13 @@ public final class ScriptRuleValidator {
             } else if (action instanceof Action.Repeat rep) {
                 count += countBlocks(rep.body());
             } else if (action instanceof Action.RepeatUntil ru) {
-                // 0.7.2-P3：repeatUntil body 计入节点数（同 Repeat，不乘轮数——动态轮数由 Budget 兜底）
+                // repeatUntil body 计入节点数（同 Repeat，不乘轮数——动态轮数由 Budget 兜底）
                 count += countBlocks(ru.body());
             } else if (action instanceof Action.TweenBlock tb) {
                 // tween body 计入节点数（body 里的属性动作都是树节点）
                 count += countBlocks(tb.body());
             } else if (action instanceof Action.RandomBranch rb) {
-                // 0.7.3：随机分支 then/else 计入节点数（同 If）
+                // 随机分支 then/else 计入节点数（同 If）
                 count += countBlocks(rb.then()) + countBlocks(rb.elseActions());
             }
         }
@@ -328,7 +328,6 @@ public final class ScriptRuleValidator {
                 }
                 yield validateActions(a.elseActions(), depth);
             }
-            // 0.7.1：6 个新 Action 子类
             case Action.SetElementProperties a -> {
                 if (blank(a.elementId())) {
                     yield Optional.of(ValidationError.of("setElementPropMissingId"));
@@ -374,7 +373,7 @@ public final class ScriptRuleValidator {
                 if (a.channel() == null || !MESSAGE_CHANNELS.contains(a.channel())) {
                     yield Optional.of(ValidationError.of("messageChannelNotAllowed", "channel", a.channel()));
                 }
-                // 0.7.2-P3：target 白名单（trigger / all）
+                // target 白名单（trigger / all）
                 if (a.target() == null || !MESSAGE_TARGETS.contains(a.target())) {
                     yield Optional.of(ValidationError.of("messageTargetNotAllowed", "target", a.target()));
                 }
@@ -420,7 +419,7 @@ public final class ScriptRuleValidator {
                 // body 递归（ifDepth 不变——repeat 不增 if 嵌套深度）
                 yield validateActions(a.body(), ifDepth);
             }
-            // 0.7.1-P5：停止 / 粒子 / 等待直到
+            // 停止 / 粒子 / 等待直到
             case Action.StopScript ignored -> Optional.empty();
             case Action.PlayParticle a -> {
                 if (a.particle() == null || !PARTICLE_WHITELIST.contains(a.particle())) {
@@ -447,7 +446,7 @@ public final class ScriptRuleValidator {
                 }
                 yield Optional.empty();
             }
-            // 0.7.2-P2：copy / append / clone / delete
+            // copy / append / clone / delete
             case Action.CopyVariable a -> (blank(a.target()) || blank(a.source()))
                     ? Optional.of(ValidationError.of("copyVarTargetOrSourceBlank"))
                     : Optional.empty();
@@ -474,7 +473,7 @@ public final class ScriptRuleValidator {
             case Action.DeleteElement a -> blank(a.elementId())
                     ? Optional.of(ValidationError.of("deleteElementIdBlank"))
                     : Optional.empty();
-            // 0.7.2-P3：重复直到条件（condition 非空 + maxIterations∈[1,100] + body 非空递归）
+            // 重复直到条件（condition 非空 + maxIterations∈[1,100] + body 非空递归）
             case Action.RepeatUntil a -> {
                 if (blank(a.condition()) || a.condition().length() > CONDITION_MAX) {
                     yield Optional.of(ValidationError.of("repeatUntilConditionInvalid", "max", CONDITION_MAX));
@@ -488,7 +487,7 @@ public final class ScriptRuleValidator {
                 // body 递归（ifDepth 不变——repeatUntil 不增 if 嵌套深度，同 Repeat）
                 yield validateActions(a.body(), ifDepth);
             }
-            // 0.7.3：随机分支 / 置顶置底 / 取整 / 标题弹窗
+            // 随机分支 / 置顶置底 / 取整 / 标题弹窗
             case Action.RandomBranch a -> {
                 if (a.probability() < RANDOM_BRANCH_PROB_MIN
                         || a.probability() > RANDOM_BRANCH_PROB_MAX) {
@@ -551,7 +550,7 @@ public final class ScriptRuleValidator {
                 }
                 yield Optional.empty();
             }
-            // tween：补间动画包裹（docs/scripting-tween.md T1-T6）
+            // tween：补间动画包裹（docs/scripting-tween.md）
             case Action.TweenBlock a -> {
                 // durationMs 范围 [1, TWEEN_DURATION_MAX]
                 if (a.durationMs() < 1 || a.durationMs() > TWEEN_DURATION_MAX) {

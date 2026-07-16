@@ -3,8 +3,8 @@ package moe.hikari.canvas.script.engine;
 import moe.hikari.canvas.script.Action;
 
 /**
- * {@link ScriptRunner} → 动作执行端的 seam（T3 先定义接口面，T4 的
- * {@code ActionExecutor} 实现之；单测注 fake 记录调用）。
+ * {@link ScriptRunner} → 动作执行端的 seam（{@code ActionExecutor} 实现之；
+ * 单测注 fake 记录调用）。
  *
  * <p>契约：实现<b>必须</b>三层异常隔离——任何动作失败返回 error {@link TraceStep}，
  * 不抛（Runner 侧仍有兜底 catch，但那是防御不是契约）。{@code wait} / {@code if}
@@ -23,7 +23,7 @@ public interface ActionSink {
     TraceStep execute(String wallId, String blockId, Action action);
 
     /**
-     * 0.7.1 playTimelineAwait：返回时间轴一轮时长（ms），&gt;0 时 Runner 挂起续接。
+     * playTimelineAwait：返回时间轴一轮时长（ms），&gt;0 时 Runner 挂起续接。
      * 查无 / 不支持 → 0（不挂起）。default 0 让既有 fake 不破。
      */
     default long timelineDurationMs(String wallId, String timelineId) {

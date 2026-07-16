@@ -4,7 +4,7 @@ import moe.hikari.canvas.render.AnimationTicker;
 import moe.hikari.canvas.state.ProjectState;
 
 /**
- * {@link AnimationTicker} 的脚本侧门面 seam（T4）。
+ * {@link AnimationTicker} 的脚本侧门面 seam。
  *
  * <p>{@code AnimationTicker} 是 final 具象类，引擎侧只用到 8 个入口——抽接口让
  * {@code ActionExecutor}（play/pause/seek）与 {@code ElementPropertyApplier}

@@ -40,7 +40,7 @@ import java.util.logging.Logger;
  *      → {@link #toPaletteSlice} 按 mapIndex 切 128×128、逐像素 {@link PaletteLut#matchColor} 量化
  * </pre>
  *
- * <h2>架构（2026-05-14 god class 拆分后）</h2>
+ * <h2>架构</h2>
  * 本类负责：rasterize / toPaletteSlice 公共 API；按 layer/element 分发；fast vs slow path
  * 选择；element rotation / opacity / dither 装饰；layer 合成。各 element 几何由
  * {@link ElementRenderer} 子类（{@link TextRenderer} / {@link RectRenderer} / {@link IconRenderer} /
@@ -51,7 +51,7 @@ import java.util.logging.Logger;
  * 无可变状态（除 {@link #imageLoader} volatile 引用）；{@link #rasterize} 每次分配新 BufferedImage，
  * 多线程并发调用安全。{@link PaletteLut} / {@link FontRegistry} 都在构造时传入、稳态只读。
  *
- * <p><b>0.6 P2 池化注：</b>装配 {@link BufferPool} 后，<b>仅池 owner 线程（AnimationTicker
+ * <p><b>池化注：</b>装配 {@link BufferPool} 后，<b>仅池 owner 线程（AnimationTicker
  * 单线程）</b>的 rasterize 借用复用 buffer（主 + slow-path layer），其余线程
  * {@code acquire} 退化为 new —— 上述「每次 new 保证并发安全」契约对反应式路径不变。
  * 主 buffer 逃逸出本方法，Ticker 路径由调用方（{@code CanvasProjector.renderFrame}）
@@ -62,7 +62,7 @@ public final class CanvasCompositor {
     public static final int MAP_SIZE = 128;
 
     /**
-     * M13 ImageElement 文件加载 SAM。生产环境注入 {@code ImageStorage::load}；测试可注入
+     * ImageElement 文件加载 SAM。生产环境注入 {@code ImageStorage::load}；测试可注入
      * 从 test resources 加载的 lambda。返回 {@code null} → drawImage 走占位路径。
      */
     @FunctionalInterface
@@ -70,27 +70,27 @@ public final class CanvasCompositor {
         BufferedImage load(String source);
     }
 
-    /** 0.4.2 bugfix（Bug 1 兜底）：静态 logger 用于 {@code maybeInterpolateText} 静态路径。 */
+    /** 静态 logger 用于 {@code maybeInterpolateText} 静态路径。 */
     private static final Logger LOG = Logger.getLogger(CanvasCompositor.class.getName());
 
     private final PaletteLut paletteLut;
     private final RenderContext ctx;
-    /** M13：图片加载器；null = 所有 ImageElement 走占位。 */
+    /** 图片加载器；null = 所有 ImageElement 走占位。 */
     private volatile ImageLoader imageLoader;
     /**
-     * 0.4.0-P1-C：变量占位符替换器。null = 不做替换（snapshot 测试 / 老路径完全无侵入）。
+     * 变量占位符替换器。null = 不做替换（snapshot 测试 / 老路径完全无侵入）。
      * 由 {@code HikariCanvas.onEnable} 在 {@link VariableStore} 构造后注入。
      * volatile 保证多线程可见。
      */
     private volatile VariableInterpolator interpolator;
     /**
-     * 0.4.0-P1-C：变量存储（用于渲染结束时 {@code markWallReferences}）。
+     * 变量存储（用于渲染结束时 {@code markWallReferences}）。
      * 与 {@link #interpolator} 同时被 {@link #setVariableSupport} 注入；为 null 表示不联动倒排索引。
      */
     private volatile VariableStore variableStore;
 
     /**
-     * 0.6 P2：BufferedImage 复用池（线程限定，见类注释「池化注」）。null = 不池化，
+     * BufferedImage 复用池（线程限定，见类注释「池化注」）。null = 不池化，
      * 所有路径每次 new —— snapshot 测试 / 旧装配零侵入。
      */
     private volatile BufferPool bufferPool;
@@ -115,7 +115,7 @@ public final class CanvasCompositor {
     }
 
     /**
-     * M26.2：完整构造，含 {@link IconRegistry} 注入（矢量 icon 渲染需要）。生产路径
+     * 完整构造，含 {@link IconRegistry} 注入（矢量 icon 渲染需要）。生产路径
      * （{@code HikariCanvas.onEnable}）走这条；测试 / 老 fixture 仍可走前两个无 iconRegistry
      * 构造（IconRenderer 对 SVG 元素退占位）。
      */
@@ -127,17 +127,17 @@ public final class CanvasCompositor {
                 log, () -> this.imageLoader);
     }
 
-    /** M13：启动期由 {@code HikariCanvas.onEnable} 注入；测试可传 lambda。 */
+    /** 启动期由 {@code HikariCanvas.onEnable} 注入；测试可传 lambda。 */
     public void setImageLoader(ImageLoader loader) {
         this.imageLoader = loader;
     }
 
     /**
-     * 0.4.0-P1-C：启动期由 {@code HikariCanvas.onEnable} 在变量系统构造后注入。
+     * 启动期由 {@code HikariCanvas.onEnable} 在变量系统构造后注入。
      *
      * <p>注入后 {@link #rasterize(ProjectState, String)} 与
      * {@link #rasterize(ProjectState)} 都会在 TextElement 路径上做 {@code ${var:X}} 替换；
-     * 未注入则保持 M0~M27 旧行为（snapshot baseline 不漂移）。</p>
+     * 未注入则保持旧行为（snapshot baseline 不漂移）。</p>
      *
      * @param interpolator   占位符替换器；null 即关闭替换
      * @param variableStore  与 interpolator 共用的 store（用于 {@code markWallReferences}）；null 即关闭倒排索引联动
@@ -148,14 +148,14 @@ public final class CanvasCompositor {
     }
 
     /**
-     * 0.6 P2：装配 {@link BufferPool}（由 {@code HikariCanvas.onEnable} 注入；测试可不注）。
+     * 装配 {@link BufferPool}（由 {@code HikariCanvas.onEnable} 注入；测试可不注）。
      * 池是线程限定的——仅 owner 线程（AnimationTicker）真正复用，其余线程行为不变。
      */
     public void setBufferPool(BufferPool pool) {
         this.bufferPool = pool;
     }
 
-    /** 0.6 P2：借 buffer（无池 / 非 owner 线程 → new，行为与池化前一致）。 */
+    /** 借 buffer（无池 / 非 owner 线程 → new，行为与池化前一致）。 */
     private BufferedImage acquireBuffer(int w, int h) {
         BufferPool pool = this.bufferPool;
         return pool != null ? pool.acquire(w, h)
@@ -163,7 +163,7 @@ public final class CanvasCompositor {
     }
 
     /**
-     * 0.6 P2：归还 rasterize 借出的 buffer（主 buffer 由调用方在切片完成后调；
+     * 归还 rasterize 借出的 buffer（主 buffer 由调用方在切片完成后调；
      * layer buffer 在 rasterize 内部合成后调）。无池 / 非 owner 线程 / null → no-op。
      */
     public void releaseToPool(BufferedImage img) {
@@ -172,15 +172,15 @@ public final class CanvasCompositor {
     }
 
     /**
-     * 把 {@link ProjectState} 渲染到整张大画布。返回 {@code TYPE_INT_ARGB}（含 alpha；
-     * P3-93/0.4.6 P2 起，让透明背景的 alpha 通道贯穿到 {@link #toPaletteSlice}）。
+     * 把 {@link ProjectState} 渲染到整张大画布。返回 {@code TYPE_INT_ARGB}（含 alpha，
+     * 让透明背景的 alpha 通道贯穿到 {@link #toPaletteSlice}）。
      *
      * <p>大小 = {@code (widthMaps*128) × (heightMaps*128)}；2×2 = 85 KiB、8×4 = 2 MiB、10×10 = 8.5 MiB。</p>
      *
-     * <h3>M8-E 分层渲染</h3>
+     * <h3>分层渲染</h3>
      * <ul>
      *   <li><b>fast path</b>：层 opacity = 1 + blendMode = NORMAL + 层内无 element opacity/blendMode
-     *       → 直接 draw 到主 buffer，与 M7 之前行为完全等价（snapshot baseline 不漂移）</li>
+     *       → 直接 draw 到主 buffer，与早期无分层行为完全等价（snapshot baseline 不漂移）</li>
      *   <li><b>slow path</b>：分配 ARGB 中间 buffer 画层内 element + element.opacity 用
      *       {@link AlphaComposite#SrcOver}.derive；最后用
      *       {@link BlendModes#applyBlendModeOver} 把层 buffer 按 layer.opacity / blendMode
@@ -194,7 +194,7 @@ public final class CanvasCompositor {
     }
 
     /**
-     * 0.4.0-P1-C：带 wallId 的渲染入口。{@code wallId} 仅用于 {@code ${var:user/X}} 占位符
+     * 带 wallId 的渲染入口。{@code wallId} 仅用于 {@code ${var:user/X}} 占位符
      * 注入 + 渲染结束 {@link VariableStore#markWallReferences} 倒排索引维护。
      *
      * <p>预览 / 模板 publish / 测试路径传 null wallId（{@code ${var:user/X}} 走 fallback 链
@@ -208,12 +208,12 @@ public final class CanvasCompositor {
         ProjectState.Canvas canvas = state.canvas();
         int widthPx = canvas.widthMaps() * MAP_SIZE;
         int heightPx = canvas.heightMaps() * MAP_SIZE;
-        // 0.4.6 P2：主 buffer 升 TYPE_INT_ARGB 让背景 alpha 通道在 toPaletteSlice 时
-        // 能被读到（之前 TYPE_INT_RGB 强行合成不透明，导致 SolidFill("#00000000") 透明背景
+        // 主 buffer 用 TYPE_INT_ARGB 让背景 alpha 通道在 toPaletteSlice 时
+        // 能被读到（TYPE_INT_RGB 会强行合成不透明，导致 SolidFill("#00000000") 透明背景
         // 被吃掉）。toPaletteSlice 内的 matchColor 4 参重载在 alpha < 128 时返 palette index 0
         // （TRANSPARENT_INDEX），MC 地图渲染时该像素透出后方方块。内存 +33%（64→85 KiB 每 2×2 maps）
-        // 0.6 P2：经池借用（仅 Ticker 线程命中池；其余线程等价 new，见类注释「池化注」）。
-        // 渲染中途抛异常时归还借出的 buffer（审查确认项 #2/#4——否则池利用率随异常缓降）再重抛。
+        // 经池借用（仅 Ticker 线程命中池；其余线程等价 new，见类注释「池化注」）。
+        // 渲染中途抛异常时归还借出的 buffer（否则池利用率随异常缓降）再重抛。
         BufferedImage img = acquireBuffer(widthPx, heightPx);
         try {
             return rasterizeInto(img, state, wallId, widthPx, heightPx);
@@ -228,7 +228,7 @@ public final class CanvasCompositor {
                                         int widthPx, int heightPx) {
         ProjectState.Canvas canvas = state.canvas();
         Graphics2D g = img.createGraphics();
-        // 0.4.0-P1-C：snapshot 取 volatile，整段 rasterize 内不变
+        // snapshot 取 volatile，整段 rasterize 内不变
         VariableInterpolator interp = this.interpolator;
         VariableStore store = this.variableStore;
         // 倒排索引累积容器；null = 本次 rasterize 不联动 store
@@ -236,12 +236,12 @@ public final class CanvasCompositor {
                 ? new HashSet<>() : null;
         try {
             applyHints(g);
-            // 背景：M17 F5 起 background 是 Fill 联合类型（solid / linear / radial），
+            // 背景：background 是 Fill 联合类型（solid / linear / radial），
             // 由 FillPaintBuilder.fillToPaint 渲染——bbox 取全画布以便渐变铺满。
             g.setPaint(FillPaintBuilder.fillToPaint(canvas.background(), 0, 0, widthPx, heightPx));
             g.fillRect(0, 0, widthPx, heightPx);
 
-            // P1-8：不可变快照遍历，免疫 WS 编辑线程与变量驱动重画线程对 live ArrayList 的
+            // 不可变快照遍历，免疫 WS 编辑线程与变量驱动重画线程对 live ArrayList 的
             // 并发结构修改（ConcurrentModificationException / 撕裂读）。state.layers() 已是
             // unmodifiableList live 视图；这里 List.copyOf 锁住层引用，每层 elements 也各取
             // 一次浅拷贝（Element 是 record 不可变，只需复制容器）。调用方
@@ -249,10 +249,10 @@ public final class CanvasCompositor {
             // 自身不与结构修改并发——拷贝完成后即便锁释放，迭代也只看快照。
             List<Layer> layerSnapshot = List.copyOf(state.layers());
 
-            // M8-E：分层渲染
+            // 分层渲染
             for (Layer layer : layerSnapshot) {
                 if (!layer.visible()) continue;
-                // M16 P3.2：NaN-aware opacity 兜底；layer.opacity 非 finite → fallback 1.0
+                // NaN-aware opacity 兜底；layer.opacity 非 finite → fallback 1.0
                 float layerOpacity = ElementValidator.finiteOr(layer.opacity(), 1.0f);
                 if (layerOpacity <= 0f) continue;
                 List<Element> elementSnapshot = List.copyOf(layer.elements());
@@ -267,7 +267,7 @@ public final class CanvasCompositor {
                     try {
                         BlendModes.applyBlendModeOver(img, layerBuf, layerOpacity, layer.blendMode());
                     } finally {
-                        // 0.6 P2：layer buffer 不逃逸 rasterize，合成完即归还（非池路径 no-op）
+                        // layer buffer 不逃逸 rasterize，合成完即归还（非池路径 no-op）
                         releaseToPool(layerBuf);
                     }
                 }
@@ -275,7 +275,7 @@ public final class CanvasCompositor {
         } finally {
             g.dispose();
         }
-        // 0.4.0-P1-C：把本次实际引用的 fullName 写回倒排索引（同时清掉上次记录但本次不在的）。
+        // 把本次实际引用的 fullName 写回倒排索引（同时清掉上次记录但本次不在的）。
         // markWallReferences 是 ConcurrentHashMap 操作，幂等且线程安全 —— 多 session 同 wall
         // 同时 rasterize 重复调不会错乱。
         if (referencedFullNames != null) {
@@ -292,20 +292,19 @@ public final class CanvasCompositor {
      * fast path 判定：层与层内所有 element 都为默认混合参数时直接画主 buffer，避免分配中间 ARGB
      * 缓冲与 per-pixel 合成。这是保证已有 fixture snapshot baseline 不漂移的关键。
      *
-     * <p>M8-E 阶段 element 级 blendMode / renderMode 字段路径已打通但合成未实装（推到 M11
-     * 与 dither 一起做）。fast path 检查这两个字段是<b>防御性</b>的 —— 一旦 M11 真接 dither，
-     * renderMode=DITHER 的 element 必须走 slow path（per-pixel 抖动）；这里提前堵口避免
-     * 集成时漏判。当前 element.blendMode 即使非 NORMAL 也走 fast path 等价处理（无合成）。</p>
+     * <p>fast path 检查 element 级 opacity / renderMode 是<b>硬约束</b>：
+     * renderMode=DITHER 的 element 必须走 slow path（per-pixel 抖动），否则 dither 不生效。
+     * 当前 element.blendMode 即使非 NORMAL 也走 fast path 等价处理（无合成）。</p>
      */
     private static boolean canFastPath(Layer layer, float sanitizedLayerOpacity,
                                        List<Element> elements) {
         if (sanitizedLayerOpacity < 1.0f) return false;
         if (layer.blendMode() != BlendMode.NORMAL) return false;
-        // P1-8：遍历调用方已抓好的不可变快照（与本帧实际绘制的元素集合一致），
+        // 遍历调用方已抓好的不可变快照（与本帧实际绘制的元素集合一致），
         // 不再二次读 live layer.elements()。
         for (Element e : elements) {
             Float op = e.opacity();
-            // M16 P3.2：NaN opacity 视为非默认（避开 fast path），让 slow path 兜底 clamp
+            // NaN opacity 视为非默认（避开 fast path），让 slow path 兜底 clamp
             if (op != null && (!Float.isFinite(op) || op < 1.0f)) return false;
             RenderMode rm = e.renderMode();
             if (rm != null && rm != RenderMode.CLEAN) return false;
@@ -316,7 +315,7 @@ public final class CanvasCompositor {
     /**
      * 在指定 Graphics2D 上按 z-order 画一组 element，含 element.opacity 与 renderMode=DITHER 处理。
      *
-     * <p><b>dither element 路径（M11-B）</b>：分配一张 canvas 尺寸的 ARGB 中间 buffer，
+     * <p><b>dither element 路径</b>：分配一张 canvas 尺寸的 ARGB 中间 buffer，
      * 在其上画 element body（仍走 drawRect/Path/etc）+ rotation；然后跑
      * {@link BayerDither#apply} 量化抖动；最后用 element.opacity 透明地 drawImage 到 {@code g}。
      * 这种做法保证 dither 仅作用于该 element 自身的像素，不污染相邻 element 或层背景。</p>
@@ -328,10 +327,10 @@ public final class CanvasCompositor {
         Composite baseComposite = g.getComposite();
         for (Element e : elements) {
             if (!e.visible()) continue;
-            // 0.4.0-P1-C：TextElement 替换 ${var:X} 占位符 → 用替换后的副本走后续 dispatch。
+            // TextElement 替换 ${var:X} 占位符 → 用替换后的副本走后续 dispatch。
             // 替换是位置不变的 record copy，rotation / opacity / dither 装饰路径完全不变。
             Element rendered = maybeInterpolateText(e, interp, wallId, referencedAccumulator);
-            // M16 P3.2：opacity 经 ElementValidator.parseOpacityNullable 入口已挡 NaN，
+            // opacity 经 ElementValidator.parseOpacityNullable 入口已挡 NaN，
             // 但模板 raw_state 反序列化绕过路径可能漏；finiteOr 兜底到 1.0
             float opacity = ElementValidator.finiteOr(rendered.effectiveOpacity(), 1.0f);
             // clamp 入 [0, 1]：协议入口允许 [0,1]，这里防御性 clamp 保证 AlphaComposite 不抛
@@ -361,7 +360,7 @@ public final class CanvasCompositor {
     }
 
     /**
-     * 0.4.0-P1-C：TextElement 内含 {@code ${var:X}} 时返回替换后的 record 副本；其他元素 / 纯文本
+     * TextElement 内含 {@code ${var:X}} 时返回替换后的 record 副本；其他元素 / 纯文本
      * 直接返原 {@code e}。{@code interp == null} 或 {@code text} 空也走 passthrough。
      *
      * <p>{@code referencedAccumulator} 不为 null 时会把本次引用的 fullName 累计进去
@@ -378,10 +377,10 @@ public final class CanvasCompositor {
             referencedAccumulator.addAll(r.referencedFullNames());
         }
         String rendered = r.text();
-        // 0.4.2 bugfix（Bug 1 兜底）：interpolator 已做 MAX_INTERPOLATE_DEPTH 二次扫描；若仍含
+        // interpolator 已做 MAX_INTERPOLATE_DEPTH 二次扫描；若仍含
         // ${var:} 字面 = 数据损坏或无法收敛，强制全替换为 "???" 防 wall 显字面 placeholder。
         if (rendered != null && rendered.indexOf("${var:") >= 0) {
-            // P3-74：闭合大括号设为可选 `}?`，让未闭合的 `${var:foo`（行尾缺 `}`）也被兜底替换，
+            // 闭合大括号设为可选 `}?`，让未闭合的 `${var:foo`（行尾缺 `}`）也被兜底替换，
             // 否则残缺占位符会原样漏到 wall 显字面字符串。[^}]* 贪心吃到下一个 } 或行尾。
             rendered = rendered.replaceAll("\\$\\{var:[^}]*\\}?", VariableInterpolator.UNRESOLVED);
             LOG.warning("[CanvasCompositor] residual ${var:} after interpolate; replaced with "
@@ -422,9 +421,9 @@ public final class CanvasCompositor {
     /**
      * dither element：在独立 ARGB buffer 上画 + 跑 Bayer 抖动 → blend 回主 graphics。
      *
-     * <p><b>M15.4 P0-Render-2</b>：buffer 按 element bbox（含 rotation 包围盒）而非整 canvas
-     * 分配。配合 P0-Render-1 的 32 maps 上限，原来 4096×4096×ARGB = 64 MiB transient × N dither
-     * element 的 OOM 风险消除；常规小元素只占 几 KiB ~ 几百 KiB。</p>
+     * <p><b>buffer 按 element bbox 分配</b>（含 rotation 包围盒）而非整 canvas。
+     * 配合 32 maps 上限，避免 4096×4096×ARGB = 64 MiB transient × N dither
+     * element 的 OOM 风险；常规小元素只占 几 KiB ~ 几百 KiB。</p>
      *
      * <p><b>dither 相位保持</b>：buffer 局部坐标 (0,0) 对应原画 (clipX, clipY)，调用
      * {@link BayerDither#apply(BufferedImage, PaletteLut, int, int)} 传 phase=(clipX, clipY)
@@ -447,7 +446,7 @@ public final class CanvasCompositor {
             bbY = e.y();
             bbW = e.w();
             bbH = e.h();
-            // P3-20：italic TextElement 走 shear(-0.2, 0) 变换，字形会在左右缘各溢出最多
+            // italic TextElement 走 shear(-0.2, 0) 变换，字形会在左右缘各溢出最多
             // ceil(0.2 * h)（行高 20% 即最大水平偏移）。dither buffer 若只裁到元素 bbox 会切掉
             // 倾斜后探出的字形像素。给非旋转分支的 italic 文本左右各扩 shear padding；
             // translate(-clipX,-clipY) 与 BayerDither phase 仍按扩后坐标传入，dither 相位不变。
@@ -490,7 +489,7 @@ public final class CanvasCompositor {
     /**
      * slow path：把 layer 内 element 画到独立 ARGB buffer（透明背景）。
      *
-     * <p>P1-8：{@code elements} 是调用方已抓的不可变快照（{@link #rasterize} 内
+     * <p>{@code elements} 是调用方已抓的不可变快照（{@link #rasterize} 内
      * {@code List.copyOf(layer.elements())}），不再二次读 live {@code layer.elements()}，
      * 保证 fast/slow path 渲染同一份元素集合且免疫并发结构修改。layer 级标量
      * （blendMode / opacity）已在调用方 {@link #canFastPath} 处判过，这里不再需要。</p>
@@ -499,8 +498,8 @@ public final class CanvasCompositor {
                                               int widthPx, int heightPx,
                                               VariableInterpolator interp, String wallId,
                                               Set<String> referencedAccumulator) {
-        // 0.6 P2：经池借用（调用方 rasterize 在合成后 releaseToPool；非池路径等价 new）。
-        // 绘制中途抛异常 → 归还后重抛（审查确认项 #2/#4）。
+        // 经池借用（调用方 rasterize 在合成后 releaseToPool；非池路径等价 new）。
+        // 绘制中途抛异常 → 归还后重抛。
         BufferedImage buf = acquireBuffer(widthPx, heightPx);
         Graphics2D lg = buf.createGraphics();
         try {
@@ -540,9 +539,9 @@ public final class CanvasCompositor {
                 int r = (rgb >> 16) & 0xff;
                 int gg = (rgb >> 8) & 0xff;
                 int b = rgb & 0xff;
-                // 0.4.6 P2：4 参 matchColor — alpha < ALPHA_THRESHOLD(128) 时返
+                // 4 参 matchColor — alpha < ALPHA_THRESHOLD(128) 时返
                 // TRANSPARENT_INDEX(0)，MC 地图渲染时该像素透出 ItemFrame 后方方块。
-                // 不透明像素（alpha >= 128）走原 3 参 LUT 匹配路径，零差异。
+                // 不透明像素（alpha >= 128）走 3 参 LUT 匹配路径，零差异。
                 out[base + x] = paletteLut.matchColor(r, gg, b, a);
             }
         }

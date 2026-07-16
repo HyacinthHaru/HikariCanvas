@@ -13,8 +13,8 @@ import java.util.List;
  * {@link #coveredMapIndices} 把它切成 slotIndex 列表交给
  * {@link CanvasProjector} 做逐图重绘。
  *
- * <p>契约见 {@code docs/architecture.md §5.2}。M3-T7 粒度 = map 级：
- * region 与任一 map 相交就整张重绘；T8+ 才考虑格内 partial。</p>
+ * <p>契约见 {@code docs/architecture.md §5.2}。粒度 = map 级：
+ * region 与任一 map 相交就整张重绘；格内 partial 未实装。</p>
  */
 public record DirtyRegion(int x, int y, int w, int h) {
 
@@ -31,10 +31,10 @@ public record DirtyRegion(int x, int y, int w, int h) {
      *
      * <p>扩张顺序：</p>
      * <ol>
-     *   <li>M4-T8/T9/T10：{@link TextElement#effects()} 让字形像素溢出 bbox——
+     *   <li>{@link TextElement#effects()} 让字形像素溢出 bbox——
      *       {@code shadow} 按 {@code (dx, dy)} 单向外扩、{@code stroke} 按 width/2 四向外扩、
      *       {@code glow} 按 radius 四向外扩</li>
-     *   <li>M4-T6：{@code rotation ∈ {90, 270}} → 外接 = 边长 {@code max(w, h)} 方形中心对齐</li>
+     *   <li>{@code rotation ∈ {90, 270}} → 外接 = 边长 {@code max(w, h)} 方形中心对齐</li>
      * </ol>
      *
      * <p>其他 rotation（0 / 180）bbox 不变。stroke 为 TextElement.effects.stroke；
@@ -52,7 +52,7 @@ public record DirtyRegion(int x, int y, int w, int h) {
             h += pad[1] + pad[3];
         }
 
-        // Step 2：rotation 外接。M5-D6 放开任意角度，按旋转后四角外接矩形算。
+        // Step 2：rotation 外接。任意角度按旋转后四角外接矩形算。
         int rot = ((e.rotation() % 360) + 360) % 360;
         if (rot != 0 && rot != 180) {
             double rad = Math.toRadians(rot);

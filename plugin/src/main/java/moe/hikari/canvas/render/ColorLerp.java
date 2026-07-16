@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * sRGB 线性空间色彩 / Fill 插值（0.6 P3）。数学权威定义见 {@code docs/rendering.md §9.4}——
+ * sRGB 线性空间色彩 / Fill 插值。数学权威定义见 {@code docs/rendering.md §9.4}——
  * 本类与前端 {@code web/src/timeline/colorLerp.ts} 是同一份定义的双端实现，逐位等价细则
  * （lerp 形式 {@code a + (b−a)×t}、{@code round(x×255)} 半数进位、输出含 alpha 当且仅当任一
  * 输入含 alpha、解析失败 step）两端写死相同，由共享向量

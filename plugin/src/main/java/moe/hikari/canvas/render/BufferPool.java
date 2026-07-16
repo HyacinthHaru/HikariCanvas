@@ -8,7 +8,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * {@link BufferedImage} 复用池（0.6 P2 引入）。动机与约束见 {@code docs/timeline.md §3.3}
+ * {@link BufferedImage} 复用池。动机与约束见 {@code docs/timeline.md §3.3}
  * 与 {@code docs/architecture.md §5.5}：动画逐帧 rasterize 的 ARGB 分配
  * （主 buffer + slow-path layer buffer）在 8×8 多墙 / 高 fps 下成 GC 压力源。
  *

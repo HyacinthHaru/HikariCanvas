@@ -75,7 +75,6 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireText(ctxt, node, "condition", type),
                     readBranch(ctxt, node, "then", type),
                     readBranch(ctxt, node, "else", type));
-            // 0.7.1：6 个新 Action 子类
             case "setElementProperties" -> new Action.SetElementProperties(
                     requireText(ctxt, node, "elementId", type),
                     readStringMap(ctxt, node, "patch", type),
@@ -87,7 +86,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
             case "sendMessage" -> new Action.SendMessage(
                     requireText(ctxt, node, "text", type),
                     requireText(ctxt, node, "channel", type),
-                    optionalText(node, "target", "trigger"));  // 0.7.2-P3：缺省 trigger（向后兼容旧 payload）
+                    optionalText(node, "target", "trigger"));  // 缺省 trigger（向后兼容旧 payload）
             case "setRandomVariable" -> new Action.SetRandomVariable(
                     requireText(ctxt, node, "fullName", type),
                     requireDouble(ctxt, node, "min", type),
@@ -101,7 +100,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
             case "repeat" -> new Action.Repeat(
                     requireInt(ctxt, node, "count", type),
                     readBranch(ctxt, node, "body", type));   // 复用 if 分支递归读取
-            // 0.7.1-P5：停止 / 粒子 / 等待直到
+            // 停止 / 粒子 / 等待直到
             case "stopScript" -> new Action.StopScript();
             case "playParticle" -> new Action.PlayParticle(
                     requireText(ctxt, node, "particle", type),
@@ -112,7 +111,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
             case "waitUntil" -> new Action.WaitUntil(
                     requireText(ctxt, node, "condition", type),
                     requireLong(ctxt, node, "timeoutMs", type));
-            // 0.7.2-P2：copy / append / clone / delete
+            // copy / append / clone / delete
             case "copyVariable" -> new Action.CopyVariable(
                     requireText(ctxt, node, "target", type),
                     requireText(ctxt, node, "source", type));
@@ -125,17 +124,17 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
                     requireInt(ctxt, node, "offsetY", type));
             case "deleteElement" -> new Action.DeleteElement(
                     requireText(ctxt, node, "elementId", type));
-            // 0.7.2-P3：重复直到条件（动态循环，Runner 调度）
+            // 重复直到条件（动态循环，Runner 调度）
             case "repeatUntil" -> new Action.RepeatUntil(
                     requireText(ctxt, node, "condition", type),
                     requireInt(ctxt, node, "maxIterations", type),
                     readBranch(ctxt, node, "body", type));   // 复用 if/repeat 分支递归读取
-            // tween：补间动画包裹（docs/scripting-tween.md T1-T6）
+            // tween：补间动画包裹（docs/scripting-tween.md）
             case "tweenBlock" -> new Action.TweenBlock(
                     requireLong(ctxt, node, "durationMs", type),
                     readEasing(ctxt, node, "easing", type),
                     readBranch(ctxt, node, "body", type));
-            // 0.7.3：随机分支 / 置顶置底 / 取整 / 标题弹窗
+            // 随机分支 / 置顶置底 / 取整 / 标题弹窗
             case "randomBranch" -> new Action.RandomBranch(
                     requireInt(ctxt, node, "probability", type),
                     readBranch(ctxt, node, "then", type),
@@ -181,8 +180,8 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
     }
 
     /**
-     * 必填整数字段（int）；缺失 / 非整数 → reportInputMismatch。0.7.1 repeat.count 用，
-     * 同 {@link #requireLong} 的 K8 纪律（{@code canConvertToInt} 查范围 + {@code
+     * 必填整数字段（int）；缺失 / 非整数 → reportInputMismatch。repeat.count 用，
+     * 同 {@link #requireLong} 的纪律（{@code canConvertToInt} 查范围 + {@code
      * isIntegralNumber} 拒整值浮点 {@code 3.0}）。
      */
     private static int requireInt(DeserializationContext ctxt, JsonNode node,
@@ -198,7 +197,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
     /**
      * 必填长整数字段；缺失 / 非整数 → reportInputMismatch。
      *
-     * <p>0.7.0-P2(K8)：{@code canConvertToLong} 只查范围，会把 {@code 100.5} 静默截断——
+     * <p>{@code canConvertToLong} 只查范围，会把 {@code 100.5} 静默截断——
      * 再查 {@code isIntegralNumber()}，wire 给非整数值（含 {@code 100.0} 整值浮点）一律拒。
      * {@code delta} 不走本方法（本就是 double）。</p>
      */
@@ -212,7 +211,7 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         return v.asLong();
     }
 
-    /** 可选长整数字段；缺失 = null，存在但非整数（K8 含整值浮点）→ reportInputMismatch。 */
+    /** 可选长整数字段；缺失 = null，存在但非整数（含整值浮点）→ reportInputMismatch。 */
     private static Long optionalLong(DeserializationContext ctxt, JsonNode node,
                                      String field, String type) throws IOException {
         JsonNode v = node.get(field);
@@ -226,20 +225,20 @@ public final class ActionDeserializer extends JsonDeserializer<Action> {
         return v.asLong();
     }
 
-    /** 可选文本字段；缺失 / null / 非文本 → null（0.7.1 setElementProperties.kind 用）。 */
+    /** 可选文本字段；缺失 / null / 非文本 → null（setElementProperties.kind 用）。 */
     private static String optionalText(JsonNode node, String field) {
         JsonNode v = node.get(field);
         return (v == null || !v.isTextual()) ? null : v.asText();
     }
 
-    /** 可选文本字段带默认；缺失 / null / 非文本 → {@code def}（0.7.2-P3 sendMessage.target 向后兼容用）。 */
+    /** 可选文本字段带默认；缺失 / null / 非文本 → {@code def}（sendMessage.target 向后兼容用）。 */
     private static String optionalText(JsonNode node, String field, String def) {
         JsonNode v = node.get(field);
         return (v == null || !v.isTextual()) ? def : v.asText();
     }
 
     /**
-     * 0.7.1：通用 string map object → {@code Map<String,String>}（缺失当空 map；
+     * 通用 string map object → {@code Map<String,String>}（缺失当空 map；
      * 值必须全是 string）。范式同 {@link #readParams}，参数化字段名供 setElementProperties.patch 用。
      */
     private static Map<String, String> readStringMap(DeserializationContext ctxt, JsonNode node,

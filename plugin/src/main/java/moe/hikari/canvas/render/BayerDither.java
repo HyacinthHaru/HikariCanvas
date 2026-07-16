@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 /**
- * Bayer 4×4 有序抖动（M11-B 引入）。契约见 {@code docs/rendering.md §6.6}。
+ * Bayer 4×4 有序抖动。契约见 {@code docs/rendering.md §6.6}。
  *
  * <h2>算法</h2>
  * <p>对每个像素 {@code (x, y)} 用 Bayer 矩阵 {@code MATRIX[y%4][x%4]} 取阈值
@@ -82,7 +82,7 @@ public final class BayerDither {
      * 原画坐标 ({@code phaseX}, {@code phaseY})，dither 图案相位与"全画布 buffer 时"
      * 一致，跨 element 边界的 dither 图案不会错位。
      *
-     * <p>M15.4 P0-Render-2 引入：dither buffer 缩到 element bbox 后必传
+     * <p>dither buffer 缩到 element bbox 后必传
      * {@code (clipX, clipY)} 维持视觉相位一致。</p>
      */
     public static void apply(BufferedImage img, PaletteLut palette, int phaseX, int phaseY) {

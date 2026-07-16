@@ -22,7 +22,7 @@ import java.util.Arrays;
  */
 public final class PlaceholderRenderer {
 
-    /** 浅色背景 palette 索引（M2 经验值，M4 调色板 LUT 后修正）。 */
+    /** 浅色背景 palette 索引（经验值）。 */
     public static final byte BG_PALETTE = 33;
     /** 深色前景 palette 索引。 */
     public static final byte FG_PALETTE = 44;

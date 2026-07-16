@@ -21,7 +21,7 @@ public final class ScriptPermissions {
     /**
      * 全局触发面：playerJoin / playerKill / playerQuit / rightClickWall（影响全服而非
      * wall 附近——进服 / 击杀 / 退服是全服事件，右键墙虽带墙语义但属"任意玩家可触"，
-     * 同列全局面）。0.7.1 加 playerQuit / rightClickWall。
+     * 同列全局面）。
      */
     public static final String NODE_TRIGGER_GLOBAL = "canvas.script.trigger.global";
     /** 播放声音面。 */
@@ -58,9 +58,9 @@ public final class ScriptPermissions {
                     scanActions(iff.then(), facets);
                     scanActions(iff.elseActions(), facets);
                 }
-                // 0.7.1：Repeat 递归扫 body（循环体内动作的权限面照常生效）
+                // Repeat 递归扫 body（循环体内动作的权限面照常生效）
                 case Action.Repeat rep -> scanActions(rep.body(), facets);
-                // 0.7.2-P3：RepeatUntil 递归扫 body（同 Repeat）
+                // RepeatUntil 递归扫 body（同 Repeat）
                 case Action.RepeatUntil ru -> scanActions(ru.body(), facets);
                 // 以下子类无附加权限面（显式列出而非 default，保证穷尽性）
                 case Action.SetVariable ignored -> { }
@@ -69,25 +69,25 @@ public final class ScriptPermissions {
                 case Action.PlayTimeline ignored -> { }
                 case Action.Wait ignored -> { }
                 case Action.Log ignored -> { }
-                // 0.7.1：6 个新 Action 子类，均无附加权限面（仍走基础 canvas.script.edit）
+                // 均无附加权限面（仍走基础 canvas.script.edit）
                 case Action.SetElementProperties ignored -> { }
                 case Action.NudgeElement ignored -> { }
                 case Action.SendMessage ignored -> { }
                 case Action.SetRandomVariable ignored -> { }
                 case Action.ScaleVariable ignored -> { }
                 case Action.PlayTimelineAwait ignored -> { }
-                // 0.7.1-P5：粒子复用声音面（喷粒子是音视效果同档）；停止 / 等待直到仅基础 edit
+                // 粒子复用声音面（喷粒子是音视效果同档）；停止 / 等待直到仅基础 edit
                 case Action.PlayParticle ignored -> facets.add(NODE_SOUND);
                 case Action.StopScript ignored -> { }
                 case Action.WaitUntil ignored -> { }
-                // 0.7.2-P2：copy / append / clone / delete 均无附加权限面（仅基础 canvas.script.edit）
+                // copy / append / clone / delete 均无附加权限面（仅基础 canvas.script.edit）
                 case Action.CopyVariable ignored -> { }
                 case Action.AppendVariable ignored -> { }
                 case Action.CloneElement ignored -> { }
                 case Action.DeleteElement ignored -> { }
                 // tween：递归扫 body（body 里的属性动作权限面照常生效；包裹本身无附加权限面）
                 case Action.TweenBlock tb -> scanActions(tb.body(), facets);
-                // 0.7.3：随机分支递归扫 then/else；其余 3 个无附加权限面
+                // 随机分支递归扫 then/else；其余 3 个无附加权限面
                 case Action.RandomBranch rb -> {
                     scanActions(rb.then(), facets);
                     scanActions(rb.elseActions(), facets);

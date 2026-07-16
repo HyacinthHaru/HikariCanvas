@@ -34,7 +34,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 补间动画引擎（scripting-tween.md P2；docs/scripting-tween.md T1-T10）。
+ * 补间动画引擎（docs/scripting-tween.md）。
  *
  * <p><b>架构路径 Z</b>：补间引擎维护内存中的临时插值帧，经 {@link TickerControl#renderStatic}
  * 渲到地图（不落 DB）；末帧经 {@link #ApplyManyFn} 落 DB（永久目标值）。</p>
@@ -47,17 +47,17 @@ import java.util.logging.Logger;
  * </ul>
  *
  * <p>{@code active} ConcurrentHashMap 保证跨线程可见；{@link TweenTask} 字段全为 final
- * immutable（List.copyOf），构造后不修改，跨线程传递安全。<b>注意（P3-16）</b>：
+ * immutable（List.copyOf），构造后不修改，跨线程传递安全。<b>注意</b>：
  * {@code ProjectState} record 的<b>外壳</b>不可变，但内层 {@code layers} / 每层 {@code elements}
  * 是可变 {@code ArrayList}——故 {@code baseState} 绝不直接产帧传给异步读的
  * {@link TickerControl#renderStatic}；{@link #buildInterpolatedFrame} 每帧 {@link #deepCopyState}
  * 拍独立副本（layers + elements 列表全新），返回的 frame 才真正跨线程不可变安全。</p>
  *
- * <p><b>P3 属性支持</b>：数值（x/y/w/h/rotation/opacity）/ 颜色（TextElement.color,
+ * <p><b>属性支持</b>：数值（x/y/w/h/rotation/opacity）/ 颜色（TextElement.color,
  * {@link ColorLerp#lerpHex}）/ fill（几何元素 {@link ColorLerp#lerpFill}）；含 {@code ${var:}}
- * 的颜色/fill 退化末帧瞬切（不每帧 resolve）。一墙一补间（同 wallId 后来者接管，T8 简化版）。</p>
+ * 的颜色/fill 退化末帧瞬切（不每帧 resolve）。一墙一补间（同 wallId 后来者接管）。</p>
  *
- * <p><b>P3 共存分流</b>（§5）：每 tick 现查 {@link TickerControl#isWallAnimating(String)}；
+ * <p><b>共存分流</b>（§5）：每 tick 现查 {@link TickerControl#isWallAnimating(String)}；
  * 有时间轴 → 每渲帧 {@link ApplyManyFn} 落 DB（让 Ticker reload 叠加关键帧）；
  * 静态墙 → renderStatic 渲临时态 + 末帧落 DB。</p>
  */
@@ -88,7 +88,7 @@ public final class TweenScheduler {
     // ---------- 数据模型 ----------
 
     /**
-     * 单属性补间目标（P3 三态 sealed interface）。所有实现均 immutable record。
+     * 单属性补间目标（三态 sealed interface）。所有实现均 immutable record。
      *
      * <ul>
      *   <li>{@link NumericTarget} — 数值属性（x/y/w/h/rotation/opacity），double 插值</li>
@@ -130,20 +130,19 @@ public final class TweenScheduler {
      * 活跃补间任务。所有字段 final；targets 是 List.copyOf。{@code baseState} 仅作为「补间起点
      * 快照」<b>只读</b>持有——其 record 外壳不可变，但内层 layers/elements 是可变 ArrayList，
      * 故 tick 路径产帧时 {@link #buildInterpolatedFrame} 必先 {@link #deepCopyState} 拍副本再
-     * mutate，绝不原地改 baseState（P3-16）。
+     * mutate，绝不原地改 baseState。
      * tick 线程读取；enqueue 线程构造后 put 到 ConcurrentHashMap → tick 线程可见。
      *
      * <p>{@code fps} 是 enqueue 时从 wall 的 {@link ProjectState#effectiveTweenFps()} 读取的
      * per-wall 帧率——已被 config maxFps clamp，决定 renderStatic 节流间隔（1000/fps ms）。</p>
      *
-     * <p><b>E1（补间→落盘→续接的时序承诺）</b>：{@code onComplete} 是脚本续接回调——把
+     * <p><b>补间→落盘→续接的时序承诺</b>：{@code onComplete} 是脚本续接回调——把
      * 「补间末帧落盘完成后才续接脚本后续动作」（scripting-tween.md §2.2 步骤 6）这一顺序承诺
      * 落地。构造时已被 {@link #oneShot(Runnable)} <b>一次性包装</b>（内部 AtomicBoolean CAS），
      * 故 {@link #fireComplete} 在任何终结点（正常末帧落盘后 / tick 异常清理 / 接管）重复调都<b>恰
-     * 一次</b>生效。可为 {@code null}（无续接需求，如纯演示拼接或测试）。<b>注意</b>：record
-     * {@code equals}/{@code hashCode} 因新增 onComplete（Runnable，identity 语义）改变，但
-     * {@code active.remove(wallId, task)} 始终传<b>同一实例</b>（identity 自反相等），CAS 不受影响；
-     * 全代码无两个不同 TweenTask 实例相等比较。</p>
+     * 一次</b>生效。可为 {@code null}（无续接需求，如纯演示拼接或测试）。record equals/hashCode
+     * 含 onComplete（Runnable，identity 语义），但 {@code active.remove(wallId, task)} 只按同一实例的
+     * identity 相等比较，CAS 不受影响。</p>
      */
     record TweenTask(String wallId, String blockId, List<PropTarget> targets,
                      long startMs, long durationMs, Easing easing,
@@ -239,7 +238,7 @@ public final class TweenScheduler {
      * {@code "ok"} → 挂起（等 {@code onComplete} 回调续接，<b>不再</b>由 Runner 自按 durationMs
      * 定时）；否则不挂起，脚本链继续。</p>
      *
-     * <p><b>E1 时序承诺</b>：{@code onComplete} 由本引擎在<b>补间末帧落盘完成后</b>（正常完成）/
+     * <p><b>时序承诺</b>：{@code onComplete} 由本引擎在<b>补间末帧落盘完成后</b>（正常完成）/
      * tick 异常清理后 / 被同墙新补间接管后<b>恰一次</b>触发——把 scripting-tween.md §2.2
      * 「补间完→落盘→续接」的顺序落地。回调内部应把脚本续接<b>投递到 Runner SES</b>（绝不在
      * tween 线程跑脚本续接）；本引擎只负责<b>在正确时点</b>调用它一次。{@code onComplete} 仅在
@@ -270,7 +269,7 @@ public final class TweenScheduler {
 
         // 收集 PropTarget（从 body 的 SetElementProperties 解析 to + 读当前值 from）
         List<PropTarget> targets = new ArrayList<>();
-        TweenTask existingForTakeover = active.get(wallId); // 接管快照（接管时从当前插值位作新 from，T8）
+        TweenTask existingForTakeover = active.get(wallId); // 接管快照（接管时从当前插值位作新 from）
         long nowForTakeover = clock.getAsLong();
         for (Action a : tb.body()) {
             if (!(a instanceof Action.SetElementProperties sep)) {
@@ -282,7 +281,7 @@ public final class TweenScheduler {
             for (Map.Entry<String, String> entry : sep.patch().entrySet()) {
                 String property = entry.getKey();
                 String toStr = entry.getValue();
-                // P3：支持数值 + color + fill 属性
+                // 支持数值 + color + fill 属性
                 if (!isTweenableProperty(property)) {
                     return TraceStep.error(blockId, "tween unsupported property: " + property
                             + " (supported: x/y/w/h/rotation/opacity/color/fill)");
@@ -303,14 +302,14 @@ public final class TweenScheduler {
         // per-wall 帧率：从 baseState.effectiveTweenFps() 读取，并受 maxFps 硬上限 clamp
         int wallFps = Math.min(maxFps, baseState.effectiveTweenFps());
 
-        // E1：一次性包装续接回调，挂到 task 上——在终结点（末帧落盘后 / 异常 / 接管）恰一次触发。
+        // 一次性包装续接回调，挂到 task 上——在终结点（末帧落盘后 / 异常 / 接管）恰一次触发。
         TweenTask task = new TweenTask(wallId, blockId, targets,
                 clock.getAsLong(), tb.durationMs(),
                 tb.easing() != null ? tb.easing() : Easing.LINEAR,
                 baseState, wallFps, oneShot(onComplete));
 
         // 同 wall 已有旧补间 → 接管：清 diff + 清旧 lastRenderAt（新任务首帧立即渲），
-        // 且替换为新 task 后<b>触发旧补间的续接回调</b>（旧脚本不永久挂起，T8 接管语义）。
+        // 且替换为新 task 后<b>触发旧补间的续接回调</b>（旧脚本不永久挂起，接管语义）。
         TweenTask old = active.put(wallId, task);
         if (old != null) {
             ticker.clearStaticDiff(wallId);
@@ -340,7 +339,7 @@ public final class TweenScheduler {
                 // 出错也清理，防无限重试
                 active.remove(wallId, task);
                 ticker.clearStaticDiff(wallId);
-                // E1：异常也要触发续接回调，让脚本以「补间失败」状态续接 —— 否则脚本永久挂起。
+                // 异常也要触发续接回调，让脚本以「补间失败」状态续接 —— 否则脚本永久挂起。
                 // 触发在 tween 线程；回调内只把续接 schedule 到 Runner SES（不在 tween 线程跑脚本）。
                 fireComplete(task);
             }
@@ -353,7 +352,7 @@ public final class TweenScheduler {
                 : Math.min(1.0, Math.max(0.0, (double) elapsed / task.durationMs()));
         double eased = EasingSolver.ease(task.easing(), local);
 
-        // P3 共存分流：每 tick 现查（不缓存——补间期间用户可能开/关时间轴）
+        // 共存分流：每 tick 现查（不缓存——补间期间用户可能开/关时间轴）
         boolean animating = ticker.isWallAnimating(wallId);
 
         if (local >= 1.0) {
@@ -381,7 +380,7 @@ public final class TweenScheduler {
             active.remove(wallId, task);
             lastRenderAt.remove(wallId);
             if (!animating) ticker.clearStaticDiff(wallId);
-            // E1（顺序承诺）：续接<b>必在末帧落盘（上面 applyFn.apply）之后</b>触发——这样脚本
+            // 顺序承诺：续接<b>必在末帧落盘（上面 applyFn.apply）之后</b>触发——这样脚本
             // 后续动作（读元素 x/y、waitUntil/if 读几何）读到的是补间<b>目标值</b>而非起始值。
             // 触发在 tween 线程；回调内只把续接 schedule 到 Runner SES，不在 tween 线程跑脚本。
             fireComplete(task);
@@ -424,7 +423,7 @@ public final class TweenScheduler {
     /**
      * 幂等关停（cleanupResources：scriptRunner.shutdown 之后、animationTicker.shutdown 之前）。
      *
-     * <p><b>E1</b>：关停<b>不触发</b>活跃补间的续接回调——关服路径下 ScriptRunner 已先 shutdown，
+     * <p>关停<b>不触发</b>活跃补间的续接回调——关服路径下 ScriptRunner 已先 shutdown，
      * 其 SES 拒新任务、session 已死，续接无意义（与 ScriptRunner wait/playTimelineAwait 的
      * 「shutdown 竞态丢弃不回调」契约一致）。仅清 staticDiff + 清表 + 关 SES。</p>
      */
@@ -455,7 +454,7 @@ public final class TweenScheduler {
     // ---------- 内部 helper ----------
 
     /**
-     * E1：把脚本续接回调包装成<b>一次性</b> Runnable（AtomicBoolean CAS 守护）。{@code null} 入参
+     * 把脚本续接回调包装成<b>一次性</b> Runnable（AtomicBoolean CAS 守护）。{@code null} 入参
      * 返回 {@code null}（无续接需求）。包装后即便 {@link #fireComplete} 在多个终结点（末帧 / 异常 /
      * 接管）被重复调，真正 body 也只跑一次——满足「续接恰一次」契约。
      */
@@ -470,7 +469,7 @@ public final class TweenScheduler {
     }
 
     /**
-     * E1：在补间终结点触发 task 的续接回调（一次性，由 {@link #oneShot} 包装兜底幂等）。
+     * 在补间终结点触发 task 的续接回调（一次性，由 {@link #oneShot} 包装兜底幂等）。
      *
      * <p><b>线程语义</b>：本方法可能在 <i>tween 线程</i>（tickOne 正常末帧 / tick 异常清理）或
      * <i>Runner 线程</i>（enqueue 接管）被调；它<b>不</b>跑脚本逻辑，只调用回调 body——而 body
@@ -490,7 +489,7 @@ public final class TweenScheduler {
         }
     }
 
-    /** P3：是否可补间属性（数值 + color + fill）。 */
+    /** 是否可补间属性（数值 + color + fill）。 */
     private static boolean isTweenableProperty(String property) {
         return switch (property) {
             case "x", "y", "w", "h", "rotation", "opacity", "color", "fill" -> true;
@@ -509,7 +508,7 @@ public final class TweenScheduler {
             double from = readNumericValue(baseState, elementId, property);
             double to = StrictNumber.parse(toStr);
             if (!Double.isFinite(to)) return null;
-            // 接管：从旧补间当前插值位置作新 from（T8 平滑接管）
+            // 接管：从旧补间当前插值位置作新 from（平滑接管）
             if (existing != null) {
                 double takeover = interpolatedNumeric(existing, elementId, property, nowForTakeover);
                 if (Double.isFinite(takeover)) from = takeover;
@@ -618,7 +617,7 @@ public final class TweenScheduler {
     }
 
     /**
-     * 同 wall 接管时：从旧 TweenTask 中插值当前数值，作新 from（T8 平滑接管）。
+     * 同 wall 接管时：从旧 TweenTask 中插值当前数值，作新 from（平滑接管）。
      * 找不到 NumericTarget 时返 NaN（调用方 fallback 读 base state）。
      */
     private static double interpolatedNumeric(TweenTask task, String elementId,
@@ -637,9 +636,9 @@ public final class TweenScheduler {
     }
 
     /**
-     * 构造插值帧（纯内存，<b>每帧独立深拷贝副本</b>；不落 DB）。P3 三态分流。
+     * 构造插值帧（纯内存，<b>每帧独立深拷贝副本</b>；不落 DB）。三态分流。
      *
-     * <p><b>P3-16 跨线程撕裂读修复</b>：{@link EditSession} 构造器按<b>引用</b>持有 state，
+     * <p><b>跨线程撕裂读修复</b>：{@link EditSession} 构造器按<b>引用</b>持有 state，
      * {@code updateElement} 通过 {@code elements().set(idx, ...)} <b>原地 mutate</b> 这个
      * （非线程安全的）{@code ArrayList}，且 {@code es.state()} 返回的就是传入的同一对象。
      * 若直接 {@code new EditSession(task.baseState())}，本方法产出的 frame 与 baseState 共享
@@ -681,7 +680,7 @@ public final class TweenScheduler {
     }
 
     /**
-     * 深拷贝 {@link ProjectState}（P3-16）：照 {@code ProjectState.restore} 的成熟范式重建 ——
+     * 深拷贝 {@link ProjectState}：照 {@code ProjectState.restore} 的成熟范式重建 ——
      * 每个 {@link Layer} 用 {@code new ArrayList<>(l.elements())} 重建 element 列表，保证
      * 返回 state 的 layers 列表 <b>与</b> 每个 Layer 的 elements 列表都是独立可变副本（后续
      * {@code EditSession.updateElement} 的原地 set 只动副本，不触碰 baseState）。
@@ -833,7 +832,7 @@ public final class TweenScheduler {
     // ---------- 测试辅助（包级可见） ----------
 
     /**
-     * 活跃补间任务数。0.9.2 起公开供 {@code /canvas stats} / {@code diagnose} 观测
+     * 活跃补间任务数。公开供 {@code /canvas stats} / {@code diagnose} 观测
      * （{@code active} 是 {@link java.util.concurrent.ConcurrentHashMap}，{@code size()} 无锁线程安全）。
      */
     public int activeCount() {

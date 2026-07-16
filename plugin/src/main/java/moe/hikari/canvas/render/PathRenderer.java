@@ -15,8 +15,6 @@ import java.awt.geom.Rectangle2D;
 /**
  * 绘制 path 元素。d 内坐标相对 element.(x, y)，所以临时 translate 后绘制；marker 在
  * path 端点上，方向由 {@link PathParser} 提取的切线决定。
- *
- * <p>拆分自 god class {@code CanvasCompositor}（2026-05-14）。</p>
  */
 public final class PathRenderer implements ElementRenderer {
 
@@ -49,11 +47,10 @@ public final class PathRenderer implements ElementRenderer {
             strokeColor = FillPaintBuilder.parseColor(s.color());
             g.setColor(strokeColor);
             java.awt.Stroke prevStroke = g.getStroke();
-            // 0.4.7 第二次修：path 有 arrow marker 时直线末端用 CAP_BUTT（平切端）
-            // 原 CAP_ROUND 在 path end (arrow apex) 处画一个 r=strokeWidth/2 的半圆，
+            // path 有 arrow marker 时直线末端用 CAP_BUTT（平切端）：
+            // CAP_ROUND 会在 path end (arrow apex) 处画一个 r=strokeWidth/2 的半圆，
             // 半圆中心 = arrow apex 位置但伸出 apex 朝外，跟 arrow V 形顶尖**视觉重叠**，
-            // 粗 stroke 时整个箭头看起来"糊在一起"——这是用户报告"宽度调宽后箭头本体和
-            // 直线糊在一起"的真正根因。BUTT cap 让直线末端是平切矩形，跟 arrow base 对接
+            // 粗 stroke 时整个箭头看起来"糊在一起"。BUTT cap 让直线末端是平切矩形，跟 arrow base 对接
             // 干净，无半圆突出；arrow 三角形 fill 完整覆盖直线末段，V 头清晰。
             // 对无 arrow marker 的 path，ROUND cap 保留（避免改变其他 path 视觉）。
             boolean hasArrowMarker = "arrow".equals(p.markerEnd())
@@ -61,7 +58,7 @@ public final class PathRenderer implements ElementRenderer {
             int capStyle = hasArrowMarker ? BasicStroke.CAP_BUTT : BasicStroke.CAP_ROUND;
             g.setStroke(new BasicStroke(strokeWidth, capStyle, BasicStroke.JOIN_ROUND));
 
-            // 2026-05-15 修箭头 Bug：arrow marker 在 apex 处宽度 = 0（三角形收尖），
+            // arrow marker 在 apex 处宽度 = 0（三角形收尖），
             // stroke 直线宽 strokeWidth。Visual：arrow tip 附近 distance < strokeWidth/3 范围内
             // arrow 比 stroke 窄 → stroke 矩形从 arrow 锥尖处突出。修法：把 arrow 内部从
             // 描边 clip 中扣掉，让 stroke 不画进 arrow 三角形，arrow 自己 fill 覆盖。
@@ -78,7 +75,7 @@ public final class PathRenderer implements ElementRenderer {
         }
 
         // marker（需要 stroke 才有意义；color 沿用 stroke.color）
-        // 0.4.7：element-aware cap — 用 element bbox 对角线限制 marker 大小，
+        // element-aware cap — 用 element bbox 对角线限制 marker 大小，
         // 避免 stroke 极粗时 marker 吞没短箭头（详见 MarkerRenderer.arrowSize 双参重载）
         if (parsed.hasSegments() && strokeColor != null) {
             double diag = Math.hypot(p.w(), p.h());
@@ -112,7 +109,7 @@ public final class PathRenderer implements ElementRenderer {
         if (!hasEndArrow && !hasStartArrow) return null;
         if (!parsed.hasSegments()) return null;
 
-        // 0.4.7：clip 减除用的 arrow size 也要走 element-aware cap，否则减除区与
+        // clip 减除用的 arrow size 也要走 element-aware cap，否则减除区与
         // 实际绘制不一致，stroke 极粗时 arrow 边缘会"漏出" stroke 线条
         double diag = Math.hypot(p.w(), p.h());
         int arrowSize = MarkerRenderer.arrowSize(strokeWidth, diag);
@@ -132,7 +129,7 @@ public final class PathRenderer implements ElementRenderer {
         return subtractClip;
     }
 
-    /** 0.4.7：drawMarker 加 elementDiagonal 参数透传给 arrowSize / dotRadius 的 cap 路径。 */
+    /** drawMarker 加 elementDiagonal 参数透传给 arrowSize / dotRadius 的 cap 路径。 */
     private static void drawMarker(Graphics2D g, String type, double x, double y,
                                    double dirX, double dirY, int strokeWidth,
                                    double elementDiagonal, Color color) {

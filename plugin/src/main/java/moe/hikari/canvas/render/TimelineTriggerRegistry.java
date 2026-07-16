@@ -13,16 +13,15 @@ import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 
 /**
- * 0.6 P5：时间轴触发器路由（docs/timeline.md §5.2 / §5.3）。
+ * 时间轴触发器路由（docs/timeline.md §5.2 / §5.3）。
  *
  * <p>把"变量变化 → 播放绑定该变量的 wall 时间轴"这件事做成一个**薄索引 + 监听**：维护
  * {@code 解析后fullName → Set<(wallId, timelineId)>} 倒排表，变量变化事件到达时 O(1) 查表 →
  * 调 {@link TimelinePlayer#play} 重播。{@code MANUAL} 触发不进本表（由 AnimationTicker 的
  * "wall ready 自动播 LOOP"管）；{@code VARIABLE_CHANGE} / {@code SCHEDULE} 才登记。</p>
  *
- * <p><b>0.7 收敛（§5.3）：</b>构造参数全是 seam（player / resolver / wallSource / clock），
- * 不直接依赖 AnimationTicker / VariableStore 具体类型 —— 0.7 的统一 {@code TriggerListenerRegistry}
- * 可换实现吸收，不重写。</p>
+ * <p>构造参数全是 seam（player / resolver / wallSource / clock），不直接依赖 AnimationTicker /
+ * VariableStore 具体类型，可换实现。</p>
  *
  * <p><b>线程安全：</b>索引用 {@link ConcurrentHashMap} + {@link ConcurrentHashMap#newKeySet}。
  * {@link #onVariableChange} 在 VariableStore 后台线程触发；{@code rebuild*} 在编辑持久化 / 启动

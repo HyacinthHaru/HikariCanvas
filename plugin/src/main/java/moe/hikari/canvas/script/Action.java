@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 /**
- * 墙脚本动作的多态联合（0.7 引入）：8 种动作 + {@link If} 条件分支（可递归嵌套）。
+ * 墙脚本动作的多态联合：8 种动作 + {@link If} 条件分支（可递归嵌套）。
  * 契约见 {@code docs/scripting.md §2.2}。
  *
  * <p>wire 形态为扁平字段 + {@code type} 判别（camelCase），与 {@link Trigger} /
@@ -61,7 +61,7 @@ public sealed interface Action permits
         @Override public String wireType() { return "wait"; }
     }
 
-    /** 执行命令模板（白名单模板 + 参数替换，模板侧在后续批次落地）。 */
+    /** 执行命令模板（白名单模板 + 参数替换）。 */
     record RunCommand(String templateId, java.util.Map<String, String> params) implements Action {
         @Override public String wireType() { return "runCommand"; }
         public RunCommand { params = params == null ? java.util.Map.of() : java.util.Map.copyOf(params); }
@@ -82,7 +82,7 @@ public sealed interface Action permits
         }
     }
 
-    /** 0.7.1：批量设元素属性（友好积木的序列化目标）。patch 键 = 属性名（白名单），
+    /** 批量设元素属性（友好积木的序列化目标）。patch 键 = 属性名（白名单），
      * 值 = 字符串值；kind = 前端皮肤标记（moveTo/resize/...），后端执行忽略，仅透传存储。 */
     record SetElementProperties(String elementId, java.util.Map<String, String> patch,
                                 String kind) implements Action {
@@ -92,40 +92,40 @@ public sealed interface Action permits
         }
     }
 
-    /** 0.7.1：相对移动元素（运行时读当前 x/y + 增量）。 */
+    /** 相对移动元素（运行时读当前 x/y + 增量）。 */
     record NudgeElement(String elementId, double dx, double dy) implements Action {
         @Override public String wireType() { return "nudgeElement"; }
     }
 
     /**
-     * 0.7.1：发消息。channel = chat|actionbar|title。0.7.2-P3 加 target：
-     * {@code "trigger"}（默认，发给触发该脚本的玩家）/ {@code "all"}（全服广播，见 F7）。
+     * 发消息。channel = chat|actionbar|title。target：
+     * {@code "trigger"}（默认，发给触发该脚本的玩家）/ {@code "all"}（全服广播）。
      * 旧 payload 无 target → Deserializer 默 {@code "trigger"}（向后兼容）。
      */
     record SendMessage(String text, String channel, String target) implements Action {
         @Override public String wireType() { return "sendMessage"; }
     }
 
-    /** 0.7.1：设随机数变量（min..max 闭区间均匀采样，输出整数若两端皆整）。 */
+    /** 设随机数变量（min..max 闭区间均匀采样，输出整数若两端皆整）。 */
     record SetRandomVariable(String fullName, double min, double max) implements Action {
         @Override public String wireType() { return "setRandomVariable"; }
     }
 
-    /** 0.7.1：变量乘 / 除（读当前值 × / ÷ factor）。op = multiply|divide。 */
+    /** 变量乘 / 除（读当前值 × / ÷ factor）。op = multiply|divide。 */
     record ScaleVariable(String fullName, String op, double factor) implements Action {
         @Override public String wireType() { return "scaleVariable"; }
     }
 
-    /** 0.7.1：播放时间轴并等播完（等一轮 durationMs，由 Runner 挂起续接）。 */
+    /** 播放时间轴并等播完（等一轮 durationMs，由 Runner 挂起续接）。 */
     record PlayTimelineAwait(String timelineId) implements Action {
         @Override public String wireType() { return "playTimelineAwait"; }
     }
 
     /**
-     * 0.7.1：有界循环「重复 N 次」。count ∈ [1,100]（范围校验在 {@link ScriptRuleValidator}）；
+     * 有界循环「重复 N 次」。count ∈ [1,100]（范围校验在 {@link ScriptRuleValidator}）；
      * body 为每轮执行的动作，由 {@code ScriptRunner} 展开 count 轮。展开时每轮 body[i] 的
      * blockId 用<b>同一 prefix</b> {@code <blockId>/body/<i>}（不带 round）——前端 body 只一份，
-     * 守 0.7.0 前后端同构；trace 同 blockId 重复 = 执行多次高亮多次（正确语义）。
+     * 守前后端同构；trace 同 blockId 重复 = 执行多次高亮多次（正确语义）。
      */
     record Repeat(int count, java.util.List<Action> body) implements Action {
         @Override public String wireType() { return "repeat"; }
@@ -134,13 +134,13 @@ public sealed interface Action permits
         }
     }
 
-    /** 0.7.1-P5：中止当前脚本运行（{@code ScriptRunner} 清帧栈，后续动作不执行）。无字段。 */
+    /** 中止当前脚本运行（{@code ScriptRunner} 清帧栈，后续动作不执行）。无字段。 */
     record StopScript() implements Action {
         @Override public String wireType() { return "stopScript"; }
     }
 
     /**
-     * 0.7.1-P5：在墙世界坐标播放粒子。{@code particle = minecraft:xxx}（白名单见
+     * 在墙世界坐标播放粒子。{@code particle = minecraft:xxx}（白名单见
      * {@link ScriptRuleValidator}）；{@code count} 个；{@code offset*} 为墙原点的偏移格。
      * wire 字段名 {@code particle}（双端同名）。
      */
@@ -149,38 +149,38 @@ public sealed interface Action permits
         @Override public String wireType() { return "playParticle"; }
     }
 
-    /** 0.7.1-P5：轮询条件，满足或 {@code timeoutMs} 超时才继续。condition 复用 {@link If} 的条件文法。 */
+    /** 轮询条件，满足或 {@code timeoutMs} 超时才继续。condition 复用 {@link If} 的条件文法。 */
     record WaitUntil(String condition, long timeoutMs) implements Action {
         @Override public String wireType() { return "waitUntil"; }
     }
 
-    /** 0.7.2-P2：把 source 变量的当前值复制到 target 变量。 */
+    /** 把 source 变量的当前值复制到 target 变量。 */
     record CopyVariable(String target, String source) implements Action {
         @Override public String wireType() { return "copyVariable"; }
     }
 
-    /** 0.7.2-P2：把 text（可含 ${var:X}）追加到 fullName 变量末尾。 */
+    /** 把 text（可含 ${var:X}）追加到 fullName 变量末尾。 */
     record AppendVariable(String fullName, String text) implements Action {
         @Override public String wireType() { return "appendVariable"; }
     }
 
-    /** 0.7.2-P2：克隆元素（新 id + 位置偏移 offsetX/Y）到同 layer。 */
+    /** 克隆元素（新 id + 位置偏移 offsetX/Y）到同 layer。 */
     record CloneElement(String elementId, int offsetX, int offsetY) implements Action {
         @Override public String wireType() { return "cloneElement"; }
     }
 
-    /** 0.7.2-P2：删除元素。 */
+    /** 删除元素。 */
     record DeleteElement(String elementId) implements Action {
         @Override public String wireType() { return "deleteElement"; }
     }
 
     /**
-     * 0.7.2-P3：重复执行 body 直到 condition 满足（while 语义：先查后做）或达 maxIterations
+     * 重复执行 body 直到 condition 满足（while 语义：先查后做）或达 maxIterations
      * 上限。与 {@link Repeat}（固定 count 预展开）不同——本动作<b>不预展开</b>，由
      * {@code ScriptRunner} 动态调度（每轮查 condition 决定是否再来一轮，轮数记在 RunState）。
      * maxIterations ∈ [1,100]（范围校验在 {@link ScriptRuleValidator}，复用 repeat 上限）；
      * 与 Budget 双闸防失控。body[j] 的 blockId 用同一 prefix {@code <blockId>/body/<j>}
-     * （不带轮数，守 0.7.0 前后端同构，照 Repeat 范式）。
+     * （不带轮数，守前后端同构，照 Repeat 范式）。
      */
     record RepeatUntil(String condition, int maxIterations,
                        java.util.List<Action> body) implements Action {
@@ -191,12 +191,12 @@ public sealed interface Action permits
     }
 
     /**
-     * 补间动画包裹（T1-T6；设计总纲 {@code docs/scripting-tween.md}）：在 {@code durationMs}
+     * 补间动画包裹（设计总纲 {@code docs/scripting-tween.md}）：在 {@code durationMs}
      * 毫秒内，将 {@code body} 里的属性动作从当前值插值到目标值，以 {@code easing} 函数缓动。
      *
      * <p><b>语义</b>：挂起式执行——脚本走到本动作后挂起 durationMs，补间完成才继续后续动作
-     * （照 {@link PlayTimelineAwait} 范式）。{@link moe.hikari.canvas.script.engine.TweenScheduler}
-     * 在 P2 实现执行侧；P1 仅数模 + 校验 + 协议。</p>
+     * （照 {@link PlayTimelineAwait} 范式）。执行侧见
+     * {@link moe.hikari.canvas.script.engine.TweenScheduler}。</p>
      *
      * <p><b>body 约束</b>：只放「属性动作」白名单——{@link SetElementProperties}，且
      * {@code kind} ∈ {@link ScriptRuleValidator#TWEENABLE_KINDS}（moveTo / resize /
@@ -217,7 +217,7 @@ public sealed interface Action permits
     }
 
     /**
-     * 0.7.3：随机分支（控制流，照 {@link If} 双臂）。{@code probability} ∈ [0,100]（百分比）；
+     * 随机分支（控制流，照 {@link If} 双臂）。{@code probability} ∈ [0,100]（百分比）；
      * 运行时 {@code rng.nextInt(100) < probability} → 压 then，否则压 else。
      * elseActions 避开 java 关键字；wire 字段名是 "else"。blockId 同构 "/then/<j>" / "/else/<j>"。
      */
@@ -231,7 +231,7 @@ public sealed interface Action permits
     }
 
     /**
-     * 0.7.3：元素置顶/置底（结构性改 state，照 {@link CloneElement}/{@link DeleteElement}
+     * 元素置顶/置底（结构性改 state，照 {@link CloneElement}/{@link DeleteElement}
      * 双路径）。{@code mode} ∈ {front, back}；front = 层内末尾（最上渲染），back = 层内开头（最下）。
      * 元素不存在 → error step。
      */
@@ -240,7 +240,7 @@ public sealed interface Action permits
     }
 
     /**
-     * 0.7.3：变量取整（async，照 {@link ScaleVariable}）。
+     * 变量取整（async，照 {@link ScaleVariable}）。
      * {@code mode} ∈ {round, floor, ceil}；读变量当前值 → Double.parse → 取整 → 写回。
      * 非数值 → error step。
      */
@@ -249,7 +249,7 @@ public sealed interface Action permits
     }
 
     /**
-     * 0.7.3：标题弹窗（主线程，照 {@link SendMessage} doSendMessage）。
+     * 标题弹窗（主线程，照 {@link SendMessage} doSendMessage）。
      * {@code target} ∈ {trigger, all}；title/subtitle 过 {@code ${var:X}} 插值；
      * ms → tick = ms/50；title 和 subtitle 至少一个非空；时长 ≥ 0。
      */

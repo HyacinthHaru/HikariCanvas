@@ -19,18 +19,16 @@ import java.awt.image.ConvolveOp;
 import java.awt.image.Kernel;
 
 /**
- * M13 ImageElement 绘制：按 hash 加载文件 + 可选 mask 裁切 + bbox 拉伸。dither 由
+ * ImageElement 绘制：按 hash 加载文件 + 可选 mask 裁切 + bbox 拉伸。dither 由
  * {@code CanvasCompositor#drawDitheredElement} 的 per-element off-buffer 路径自然达成"先 dither 再 mask"，
  * 见 {@code docs/rendering.md §4.4}。
- *
- * <p>拆分自 god class {@code CanvasCompositor}（2026-05-14）。</p>
  */
 public final class ImageRenderer implements ElementRenderer {
 
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         ImageElement im = (ImageElement) e;
-        // M16 P3.1：渲染层兜底；w/h ≤ 0 时 drawImage 行为不定，直接 return
+        // 渲染层兜底；w/h ≤ 0 时 drawImage 行为不定，直接 return
         if (im.w() <= 0 || im.h() <= 0) return;
         CanvasCompositor.ImageLoader loader = ctx.imageLoader();
         BufferedImage img = loader == null ? null : loader.load(im.source());
@@ -44,12 +42,12 @@ public final class ImageRenderer implements ElementRenderer {
         try {
             g.translate(im.x(), im.y());
             Mask mask = im.mask();
-            // 2026-05-25 项 2：羽化路径走 alpha mask off-buffer；硬边路径仍走原 clip。
+            // 羽化路径走 alpha mask off-buffer；硬边路径仍走原 clip。
             if (mask != null && mask.hasFeather()) {
                 drawWithFeather(g, im, img, ctx);
             } else {
                 if (mask != null) {
-                    // M16 P3.3：mask Area boolean op 在极端凹 / 自交 path 下可能抛 InternalError
+                    // mask Area boolean op 在极端凹 / 自交 path 下可能抛 InternalError
                     // ("Odd number of new curves!") 或 O(n²) 卡死；失败时静默降级为不应用 mask
                     applyImageMaskClipSafely(g, im, ctx);
                 }
@@ -62,7 +60,7 @@ public final class ImageRenderer implements ElementRenderer {
     }
 
     /**
-     * 2026-05-25 项 2：feather 路径。流程：
+     * feather 路径。流程：
      * <ol>
      *   <li>off-buffer1：把 image 缩放绘到 (w, h) ARGB</li>
      *   <li>off-buffer2：把 mask path 填白色到 (w, h)；inverted 时填外部</li>
@@ -76,7 +74,7 @@ public final class ImageRenderer implements ElementRenderer {
     private static void drawWithFeather(Graphics2D g, ImageElement im, BufferedImage src, RenderContext ctx) {
         int w = im.w();
         int h = im.h();
-        // B1：关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）；dither 路径按 clip∩canvas 分配安全，不用改
+        // 关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）；dither 路径按 clip∩canvas 分配安全，不用改
         if (w > ElementValidator.MAX_DIM || h > ElementValidator.MAX_DIM) return;
         Mask mask = im.mask();
         int featherPx = mask == null ? 0 : mask.featherPxOrZero();
@@ -163,7 +161,7 @@ public final class ImageRenderer implements ElementRenderer {
     }
 
     /**
-     * M16 P3.3：把 mask Area 构造 + setClip 包 try-catch；同时做 bbox sanity（mask path
+     * 把 mask Area 构造 + setClip 包 try-catch；同时做 bbox sanity（mask path
      * 包围盒不应远超 element bbox），都 fail 时降级为无 mask 直接画原图，并 warn。
      */
     private static void applyImageMaskClipSafely(Graphics2D g, ImageElement im, RenderContext ctx) {

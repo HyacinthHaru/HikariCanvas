@@ -12,13 +12,13 @@ import java.awt.geom.Path2D;
  * <ul>
  *   <li>{@code M / m}：moveto（多组隐式 lineto）</li>
  *   <li>{@code L / l}：lineto</li>
- *   <li>{@code H / h}：水平 lineto（M26-C 引入）</li>
- *   <li>{@code V / v}：垂直 lineto（M26-C 引入）</li>
+ *   <li>{@code H / h}：水平 lineto</li>
+ *   <li>{@code V / v}：垂直 lineto</li>
  *   <li>{@code Q / q}：quadratic bezier</li>
- *   <li>{@code T / t}：smooth quadratic shortcut（M26-C 引入）</li>
+ *   <li>{@code T / t}：smooth quadratic shortcut</li>
  *   <li>{@code C / c}：cubic bezier</li>
- *   <li>{@code S / s}：smooth cubic shortcut（M26-C 引入）</li>
- *   <li>{@code A / a}：椭圆弧，用 ≤π/2 段 cubic bezier 近似（M26-C 引入）</li>
+ *   <li>{@code S / s}：smooth cubic shortcut</li>
+ *   <li>{@code A / a}：椭圆弧，用 ≤π/2 段 cubic bezier 近似</li>
  *   <li>{@code Z / z}：闭合 subpath</li>
  * </ul>
  *
@@ -30,12 +30,12 @@ import java.awt.geom.Path2D;
  *   <li>{@code Z} / {@code z} 闭合当前 subpath 并把"当前点"重置为 subpath 起点</li>
  * </ul>
  *
- * <p>双端一致性约定：前端 {@code web/src/render/PathParser.ts}（M9-C）必须用同一文法 +
- * 同样的隐式 lineto / 大小写规则。M26-C 后前端用浏览器原生 {@code new Path2D(d)} 渲染
+ * <p>双端一致性约定：前端 {@code web/src/render/PathParser.ts} 必须用同一文法 +
+ * 同样的隐式 lineto / 大小写规则。前端用浏览器原生 {@code new Path2D(d)} 渲染
  * IconLibrary path（含 A/S/T/H/V），后端这里手实装与之对齐。</p>
  *
  * <p><b>输入校验：</b> PathElement 输入应先通过 {@link PathDValidator#validate} 词法校验
- * （M9 子集）；IconLibrary path 直接从可信 IconRegistry 加载，不走 validator。本类对
+ * IconLibrary path 直接从可信 IconRegistry 加载，不走 validator。本类对
  * 非法输入<b>尽力而为</b> —— 遇不识别字符就停止解析返回当前累积结果，不抛异常。</p>
  */
 public final class PathParser {
@@ -667,7 +667,7 @@ public final class PathParser {
         char c = s.charAt(i);
         if (c == '0') { outEndIdx[0] = i + 1; return 0; }
         if (c == '1') { outEndIdx[0] = i + 1; return 1; }
-        // P3-21: 非 '0'/'1' 字符不是合法 flag——不再 fall-through 到 scanNumber
+        // 非 '0'/'1' 字符不是合法 flag——不 fall-through 到 scanNumber
         // （否则会把后续坐标数字误吞为 flag、错位整段弧参数）。返回 outEndIdx 不前进
         // （== i），让调用方 line 144 的 `endIdx[0] == i` 守卫停止解析，与 scanNumber
         // 遇非数字时的行为一致。

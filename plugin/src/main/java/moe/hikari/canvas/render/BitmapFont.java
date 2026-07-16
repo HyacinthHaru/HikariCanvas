@@ -7,7 +7,7 @@ import java.util.Map;
  * 5×7 像素位图字表。M2 阶段起用，为 Placeholder / M3 TextElement 提供渲染底。
  * M4 渲染引擎接入真 TTF 字体后此类会被替换/废弃。
  *
- * <p>字符集（M3-T7 扩展后）：</p>
+ * <p>字符集：</p>
  * <ul>
  *   <li>全 26 个大写字母 {@code A-Z}</li>
  *   <li>全部数字 {@code 0-9}</li>

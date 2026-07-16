@@ -11,15 +11,13 @@ import java.awt.geom.Path2D;
 /**
  * 绘制正多边形 / 星。外接圆中心在 bbox 中心；半径 = min(w, h) / 2。
  * 第一个顶点朝上（角度 -π/2）；后续顶点等角度分布。star 时外内交替（外用 outerR，内用 outerR × innerRatio）。
- *
- * <p>拆分自 god class {@code CanvasCompositor}（2026-05-14）。</p>
  */
 public final class ShapeRenderer implements ElementRenderer {
 
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         ShapeElement s = (ShapeElement) e;
-        // M16 P3.1：渲染层兜底；w/h ≤ 0 时外接圆半径退化为非正数 → 不画
+        // 渲染层兜底；w/h ≤ 0 时外接圆半径退化为非正数 → 不画
         if (s.w() <= 0 || s.h() <= 0) return;
         Path2D.Double path = buildShapePath(s);
         if (s.fill() != null) {

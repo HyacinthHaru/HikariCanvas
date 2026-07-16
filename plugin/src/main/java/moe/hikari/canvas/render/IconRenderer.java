@@ -19,17 +19,15 @@ import java.awt.image.BufferedImage;
 /**
  * 绘制图标元素。
  *
- * <p><b>M26.2 双路径分流</b>：</p>
+ * <p><b>双路径分流</b>：</p>
  * <ul>
  *   <li><b>SVG 矢量路径</b>（{@code source} 含 {@code /}）：从 {@link IconRegistry} 取 path d
  *       + viewBox，{@link PathParser} 解析为 {@link java.awt.geom.Path2D}；viewBox → bbox
  *       等比缩放居中变换；用 {@link IconElement#fill()}（{@link FillPaintBuilder#fillToPaint}）
  *       填充。fill 为 null 时退黑色。</li>
- *   <li><b>PNG legacy 路径</b>（{@code source} 不含 {@code /}）：保留 M7 行为不变；
+ *   <li><b>PNG legacy 路径</b>（{@code source} 不含 {@code /}）：行为不变；
  *       {@code tint} 非空时对 alpha 做 source-in 染色（保留 alpha 形状、整体替换 tint 色）。</li>
  * </ul>
- *
- * <p>拆分自 god class {@code CanvasCompositor}（2026-05-14）；M26.2 加 SVG 矢量分支。</p>
  */
 public final class IconRenderer implements ElementRenderer {
 
@@ -43,13 +41,12 @@ public final class IconRenderer implements ElementRenderer {
         }
     }
 
-    // ---------- M7 legacy PNG 路径（行为完全不变） ----------
+    // ---------- legacy PNG 路径（行为完全不变） ----------
 
     private void renderLegacyPng(Graphics2D g, IconElement ic, RenderContext ctx) {
-        // P3-49：渲染层兜底（对齐 renderSvgPath:92 与 M16.3 兄弟 renderer 模式）；
-        // w/h ≤ 0 时 drawImage / BufferedImage 行为退化 → 直接 return
+        // 渲染层兜底；w/h ≤ 0 时 drawImage / BufferedImage 行为退化 → 直接 return
         if (ic.w() <= 0 || ic.h() <= 0) return;
-        // B1：关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）
+        // 关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）
         if (ic.w() > ElementValidator.MAX_DIM || ic.h() > ElementValidator.MAX_DIM) return;
         if (ctx.assetService() == null) {
             ctx.log().warning("[compositor] IconElement '" + ic.id() + "' but no assetService bound");
@@ -80,7 +77,7 @@ public final class IconRenderer implements ElementRenderer {
         g.drawImage(tinted, ic.x(), ic.y(), null);
     }
 
-    // ---------- M26.2 SVG 矢量路径 ----------
+    // ---------- SVG 矢量路径 ----------
 
     private void renderSvgPath(Graphics2D g, IconElement ic, RenderContext ctx) {
         IconRegistry registry = ctx.iconRegistry();
@@ -97,7 +94,7 @@ public final class IconRenderer implements ElementRenderer {
         }
         if (ic.w() <= 0 || ic.h() <= 0) return;
 
-        // 1. parse path d → Path2D（PathParser 支持完整 SVG 命令集 M/L/H/V/Q/T/C/S/A，M26-C 起引入；
+        // 1. parse path d → Path2D（PathParser 支持完整 SVG 命令集 M/L/H/V/Q/T/C/S/A；
         //    A 弧用 ≤π/2 段 cubic bezier 近似——见 PathParser 类 doc）
         PathParser.Result parsed = PathParser.parse(pathD);
         Shape shape = parsed.path();
@@ -123,7 +120,7 @@ public final class IconRenderer implements ElementRenderer {
         xf.scale(scale, scale);
         Shape transformed = xf.createTransformedShape(shape);
 
-        // 3. fill paint：null → 黑色 fallback（M26 决策：pack 默认色 = 黑）
+        // 3. fill paint：null → 黑色 fallback（pack 默认色 = 黑）
         //    渐变 bbox 取 element bbox（与 Rect/Circle/Path 一致）
         Fill fill = ic.fill();
         if (fill == null) {
@@ -159,7 +156,7 @@ public final class IconRenderer implements ElementRenderer {
         }
     }
 
-    /** 占位：虚线方框 + ?。同 M7 风格。 */
+    /** 占位：虚线方框 + ?。 */
     private static void drawPlaceholder(Graphics2D g, IconElement ic) {
         Paint prev = g.getPaint();
         g.setColor(new Color(0xAAAAAA));

@@ -3,8 +3,8 @@ package moe.hikari.canvas.benchmark;
 /**
  * 50mspt 主线程预算公式（{@code docs/dynamic-data.md §13.3} / {@code PROPOSAL.md §5.2.7}）。
  *
- * <p>「给原料 + 公式，<b>不</b>给『你能开 N 个 wall』结论」——服主用<b>自己</b>的 mspt 预算 / 主线程
- * 份额 / 目标帧率代入算。HTML 报告里的内联 JS 计算器镜像本类的算法，让服主在浏览器里实时试算。</p>
+ * <p>服主用<b>自己</b>的 mspt 预算 / 主线程份额 / 目标帧率代入算。HTML 报告里的内联 JS 计算器
+ * 镜像本类的算法，让服主在浏览器里实时试算。</p>
  *
  * <h2>公式</h2>
  * <pre>
@@ -16,7 +16,7 @@ package moe.hikari.canvas.benchmark;
  * <h2>这是保守下界，不是上限</h2>
  * 公式把<b>整个</b> rasterize 成本当作主线程成本。实际 rasterize 走 async 线程，主线程只做 schedule +
  * packet handoff，真实主线程成本<b>更低</b>——故算出的「可载 wall 数」偏保守（实际能开更多）。真正的
- * 主线程成本需后续 Benchmark 在主线程侧实测标定（留 P4+）。这条 disclaimer 必须随计算器一起展示，
+ * 主线程成本需后续 Benchmark 在主线程侧实测标定。这条 disclaimer 必须随计算器一起展示，
  * 避免被当成硬上限。
  */
 public final class BudgetFormula {

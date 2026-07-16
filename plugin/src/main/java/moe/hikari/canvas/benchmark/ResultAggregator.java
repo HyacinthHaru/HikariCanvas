@@ -6,13 +6,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * P2 聚合器：把 P1 产出的逐次原始样本（{@link RasterizeSample}）收敛成
+ * 聚合器：把逐次产出的原始样本（{@link RasterizeSample}）收敛成
  * {@link SceneResult} percentile 统计 + {@link PerElementCost} 边际成本。
  *
  * <p><b>纯函数 / headless</b>：不碰 Bukkit / Player / PacketEvents / 时钟，
  * 只读样本与场景元数据，无任何副作用——同一组入参多次调用结果完全相同。</p>
  *
- * <p>核心设计（已固化）：rasterize 成本<b>只</b>取决于场景本身（canvas 尺寸已烘进
+ * <p>核心设计：rasterize 成本<b>只</b>取决于场景本身（canvas 尺寸已烘进
  * 每个场景），与 fps / 观看人数无关，故每个场景只测一次。per-element 成本 = 该元素
  * 隔离场景的 rasterize 均值，减去<b>同尺寸空白画布</b>基线后再除以元素数——把 buffer
  * 分配 / clear / palette 等固定开销扣掉，得到「多画一个该元素」的净边际成本

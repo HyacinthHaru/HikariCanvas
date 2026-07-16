@@ -17,13 +17,11 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * M5.5：服务器启动末尾跑一次，把 walls 表里每行的 ProjectState compose 成像素写回 mapIds 对应的
+ * 服务器启动末尾跑一次，把 walls 表里每行的 ProjectState compose 成像素写回 mapIds 对应的
  * MapView 缓存（{@link HikariCanvasRenderer}），同时把 mapIds 在 {@link MapPool} 里 bind 到
  * {@code wall:<wall_id>} 防 leak 扫描归还。
  *
- * <p>替代 M5-D7 引入的 {@code DraftRestorer}（M5.5 wall 模型不再区分草稿与已发布）。</p>
- *
- * <p><b>M16 P2.5 池泄漏修复：</b> 启动期 restore 某 wall 的 bind / compose / IO 任一步抛异常时，
+ * <p><b>池泄漏修复：</b> 启动期 restore 某 wall 的 bind / compose / IO 任一步抛异常时，
  * 必须把这一轮已经在 {@link MapPool} 里 bind 过的 mapId 全部 {@link MapPool#releaseToFree}
  * 回 FREE。否则它们留在 RESERVED 状态（owner = wall:&lt;id&gt;）但 wall 也没真正恢复 →
  * 必须等周期 detectLeaks 扫到才能回收，中间窗口期视为软泄漏；同时极端情况下"半态" wall
@@ -42,7 +40,7 @@ public final class WallRestorer {
     private final CanvasCompositor compositor;
     private final PlaceholderRenderer placeholder;
     /**
-     * 0.9.6：world 名 → {@link World} 解析 seam（生产默认 {@link Bukkit#getWorld}）。
+     * world 名 → {@link World} 解析 seam（生产默认 {@link Bukkit#getWorld}）。
      * WallRestorerTest 注入 fake（返回 JDK Proxy World / 返 null 模拟世界未加载），
      * 让「restore 失败 → releaseToFree 回滚」守卫无需 Bukkit server 即可跑。
      */
@@ -127,7 +125,7 @@ public final class WallRestorer {
         // 任一步抛异常 → 全部 release 回 FREE。
         List<Integer> bound = new ArrayList<>();
         try {
-            // P2.4 要求 bindToWall 校验 world；先解析 wall 所在 world
+            // bindToWall 需校验 world；先解析 wall 所在 world
             World world = worldResolver.apply(w.key().world());
             if (world == null) {
                 log.warning("WallRestorer: world '" + w.key().world()
@@ -139,7 +137,7 @@ public final class WallRestorer {
             if (!bindOk) {
                 // bindToWall 返回 false 表示 mapIds 已被别 wall 占（应该不可能——启动期没人借）
                 // 或者 mapId 不在池里（孤儿）。不能确定哪些已经 bind 成功，保守起见也释放整批：
-                // bindToWall 是原子的（M16 前 / 后版本都是先全扫描再全更新），失败时 0 个 bind，
+                // bindToWall 是原子的（先全扫描再全更新），失败时 0 个 bind，
                 // 所以 bound 列表保持空，下面 release 不会跑——安全。
                 log.warning("WallRestorer: pool bind refused for " + w.wallId() + " mapIds=" + mapIds);
                 return false;
@@ -155,7 +153,7 @@ public final class WallRestorer {
                 }
                 return true;
             }
-            // 0.4.0-P1-C：传 wallId 让 ${var:user/X} 注入；启动期 variable store 加载在 compositor
+            // 传 wallId 让 ${var:user/X} 注入；启动期 variable store 加载在 compositor
             // setVariableSupport 之前，restorer 仍可能在 setVariableSupport 前调用 —— 此时 interpolator
             // 为 null，rasterize 走原行为；setVariableSupport 注入后再次 restore（极少见）也安全。
             BufferedImage img = compositor.rasterize(state, w.wallId());
@@ -189,12 +187,12 @@ public final class WallRestorer {
     }
 
     private static boolean isPristine(ProjectState state) {
-        // Ultrareview 2026-05-25 #6：见 CanvasProjector.isPristine 同款修复
+        // 见 CanvasProjector.isPristine 同款判定
         return state.isPristineAcrossLayers() && isWhiteSolid(state.canvas().background());
     }
 
     /**
-     * M17 F5：background 升级为 {@link moe.hikari.canvas.state.Fill} 联合类型后的判等。
+     * background 是 {@link moe.hikari.canvas.state.Fill} 联合类型后的判等。
      * 只把 {@code SolidFill #FFFFFF[FF]} 视为"白色背景"；渐变 / 半透明都不算 pristine。
      */
     private static boolean isWhiteSolid(moe.hikari.canvas.state.Fill bg) {

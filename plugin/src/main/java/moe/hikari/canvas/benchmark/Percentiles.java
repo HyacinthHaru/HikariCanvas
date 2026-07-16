@@ -7,7 +7,7 @@ import java.util.Arrays;
  *
  * <p>p50/p95/p99 用<b>线性插值法</b>（R-7 / Excel {@code PERCENTILE.INC} 同款）——对
  * benchmark 这种小样本（measuredIterations 数十~数百）比「最近秩」更平滑、更标准。所有字段
- * 都是描述性统计，不含任何「推荐/结论」语义（「工具不是保姆」哲学：给原料不给结论）。</p>
+ * 都是描述性统计，不含任何「推荐/结论」语义。</p>
  *
  * @param p50    中位数（ms）
  * @param p95    95 分位（ms）

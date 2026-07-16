@@ -23,7 +23,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 矢量图标注册表（M26 引入）。统一管理 jar 内置矢量图标包（Font Awesome Free 6.x）
+ * 矢量图标注册表。统一管理 jar 内置矢量图标包（Font Awesome Free 6.x）
  * + 用户自定义 SVG（{@code plugins/HikariCanvas/icons/*.svg}）。
  *
  * <p><b>启动期：</b></p>
@@ -35,8 +35,7 @@ import java.util.regex.Pattern;
  * </ol>
  *
  * <p><b>线程模型：</b> 启动期单线程装载 → 之后只读（{@code ConcurrentHashMap}）。reload 流程
- * 走 {@link #invalidate()} 后重新 {@link #loadBuiltIn()}/{@link #loadExternal(Path)}（M14
- * 模板 reload 风格）。</p>
+ * 走 {@link #invalidate()} 后重新 {@link #loadBuiltIn()}/{@link #loadExternal(Path)}。</p>
  *
  * <p><b>边界：</b></p>
  * <ul>
@@ -64,7 +63,7 @@ public final class IconRegistry {
     /** classpath 资源根；jar 内 /icons/<pack>.icons.json。 */
     private static final String[] BUILTIN_PACKS = {
             "fa-solid", "fa-regular", "fa-brands"
-            // M27：material 待 IconLibraryGenerator 增 material pipeline 后追加
+            // material 待 IconLibraryGenerator 增 material pipeline 后追加
     };
 
     private final Logger log;

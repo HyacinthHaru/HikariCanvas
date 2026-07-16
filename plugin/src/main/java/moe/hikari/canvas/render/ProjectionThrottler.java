@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentMap;
 
 /**
  * 投影端节流：把编辑 op 产生的 {@link DirtyRegion} 做 per-session 合并，
- * 按 {@code minIntervalMs} 上限（M3 默认 200ms = 5 fps）下发到 {@link CanvasProjector}。
+ * 按 {@code minIntervalMs} 上限（默认 200ms = 5 fps）下发到 {@link CanvasProjector}。
  *
  * <p>契约见 {@code docs/architecture.md §5.1}：
  * <ul>
@@ -30,10 +30,9 @@ import java.util.concurrent.ConcurrentMap;
  * </ul>
  *
  * <p><b>线程：</b> async scheduler + `ConcurrentMap` + per-session `synchronized(bucket)`。
- * 和 T7 CanvasProjector 一致，整条链都不需要主线程。</p>
+ * 和 CanvasProjector 一致，整条链都不需要主线程。</p>
  */
-// 非 final：测试需可子类化覆盖 submit 做记录型 fake（0.8-A2 Task 12 投影接入；
-// 生产无子类，行为不变）。
+// 非 final：测试需可子类化覆盖 submit 做记录型 fake；生产无子类，行为不变。
 public class ProjectionThrottler {
 
     /** 5 fps = 200ms；runTaskLaterAsynchronously 以 tick 为单位（50ms/tick）。 */
@@ -47,7 +46,7 @@ public class ProjectionThrottler {
     private final ConcurrentMap<String, Bucket> bySession = new ConcurrentHashMap<>();
 
     /**
-     * 0.4.0 方案 B 自适应渲染：per-session 间隔覆盖。
+     * 自适应渲染：per-session 间隔覆盖。
      *
      * <p>HikariCanvas 注入的自适应 listener 在 {@link moe.hikari.canvas.variable.VariableStore.ChangeType#WALL_REFS_UPDATED}
      * 时调 {@link #setIntervalForSession} 把绑定到含高频变量 wall 的 session 切到 50ms（20 fps）；
@@ -56,7 +55,7 @@ public class ProjectionThrottler {
     private final ConcurrentMap<String, Long> sessionIntervalOverride = new ConcurrentHashMap<>();
 
     /**
-     * 0.6 P2 分流 gate（docs/architecture.md §5.1「两条产帧路径」）：动画接管期间，
+     * 分流 gate（docs/architecture.md §5.1「两条产帧路径」）：动画接管期间，
      * 编辑 op 产生的 reactive flush 退让给 AnimationTicker（编辑可见性由
      * 「持久化完成 → ticker.invalidate → 下一 tick 重载」保证，延迟 ≤ 1 帧）。
      * null = 无 gate（旧装配 / 测试零侵入）。
@@ -66,7 +65,7 @@ public class ProjectionThrottler {
     private static final class Bucket {
         DirtyRegion pending;
         /**
-         * P3-54：上次 flush 的时间戳，单位 <b>纳秒</b>（{@link System#nanoTime()} 单调钟读数），
+         * 上次 flush 的时间戳，单位 <b>纳秒</b>（{@link System#nanoTime()} 单调钟读数），
          * 免疫 NTP 回拨 / VM 时间同步导致的 {@code since} 为负、帧被推迟问题。
          *
          * <p>注意：{@code nanoTime()} 原点任意（可负），仅差值有意义，故不能像旧
@@ -74,7 +73,7 @@ public class ProjectionThrottler {
          * {@link #projectedOnce} 标志判定。</p>
          */
         long lastProjectAtNanos;
-        /** P3-54：是否已 flush 过一次。false 时下一次 submit 强制立即 flush（保「首帧立即」契约）。 */
+        /** 是否已 flush 过一次。false 时下一次 submit 强制立即 flush（保「首帧立即」契约）。 */
         boolean projectedOnce;
         BukkitTask flushTask;
     }
@@ -98,7 +97,7 @@ public class ProjectionThrottler {
         this.minIntervalMs = minIntervalMs;
     }
 
-    /** 0.6 P2：装配层注入分流 gate（HikariCanvas.onEnable；测试 / 旧路径不注 = 无 gate）。 */
+    /** 装配层注入分流 gate（HikariCanvas.onEnable；测试 / 旧路径不注 = 无 gate）。 */
     public void setAnimationGate(AnimationTickerGate gate) {
         this.animationGate = gate;
     }
@@ -107,7 +106,7 @@ public class ProjectionThrottler {
      * 提交一次脏矩形。立刻 flush 或与已有 pending 合并并调度尾帧。
      * {@code region == null} 时 no-op。
      *
-     * <p>0.6 P2：wall 被 AnimationTicker 接管（播放中）时整次 submit 退让——不入 pending、
+     * <p>wall 被 AnimationTicker 接管（播放中）时整次 submit 退让——不入 pending、
      * 不调度（避免两条产帧路径对同一 mapId 交错写）。暂停 / 注销后 reactive 路径自然恢复。</p>
      */
     public void submit(String sessionId, DirtyRegion region) {
@@ -128,7 +127,7 @@ public class ProjectionThrottler {
         synchronized (b) {
             b.pending = b.pending == null ? region : b.pending.union(region);
             long now = System.nanoTime();
-            // P3-54：nanoTime 单调，正常情况下 since >= 0；用 Math.max(0, ..) 兜底极端
+            // nanoTime 单调，正常情况下 since >= 0；用 Math.max(0, ..) 兜底极端
             // nanoTime 实现回绕（理论上 ~292 年才回绕，仍防御一手）。
             long sinceNanos = Math.max(0L, now - b.lastProjectAtNanos);
             // 首帧立即下发（nanoTime 原点任意，不能靠 lastProjectAtNanos==0 推断）。
@@ -145,7 +144,7 @@ public class ProjectionThrottler {
     }
 
     /**
-     * 0.4.0 方案 B 自适应渲染：取该 session 的有效节流间隔。
+     * 自适应渲染：取该 session 的有效节流间隔。
      * 优先 {@link #sessionIntervalOverride}；未设置时回落到构造期 {@link #minIntervalMs}。
      */
     private long effectiveInterval(String sessionId) {
@@ -154,7 +153,7 @@ public class ProjectionThrottler {
     }
 
     /**
-     * 0.4.0 方案 B 自适应渲染：覆盖某 session 的节流间隔（ms）。
+     * 自适应渲染：覆盖某 session 的节流间隔（ms）。
      *
      * <p>典型用法：含 {@code schedule:<wallId>/eta_seconds} / {@code system/server.tick} 引用的 wall
      * 切到 50ms（20 fps）；wall 不再含高频引用时调 {@link #clearSessionInterval} 回落。
@@ -171,7 +170,7 @@ public class ProjectionThrottler {
         }
     }
 
-    /** 0.4.0 方案 B：清除 session 间隔覆盖，回落到默认 {@link #minIntervalMs}。 */
+    /** 清除 session 间隔覆盖，回落到默认 {@link #minIntervalMs}。 */
     public void clearSessionInterval(String sessionId) {
         if (sessionId == null) return;
         sessionIntervalOverride.remove(sessionId);
@@ -194,12 +193,12 @@ public class ProjectionThrottler {
     /**
      * 必须在持有 {@code b} 锁下调用。
      *
-     * <p>P2-11：{@code project()} 抛异常时不丢脏区域——只有成功返回后才清 {@code pending}
+     * <p>{@code project()} 抛异常时不丢脏区域——只有成功返回后才清 {@code pending}
      * 并推进 {@code lastProjectAt}；失败时把 {@code toProject} 通过 {@link DirtyRegion#union}
      * 并回 {@code pending} 并保持 {@code lastProjectAt} 不变（不推进时间基），让下一次 submit
      * 自动重投递该区域，兑现 architecture.md §5.1.5「session 关闭前最后一帧 100% 正确」承诺。</p>
      *
-     * <p><b>P1-8（数据竞争修复）：</b>{@code project()} 内 {@code CanvasCompositor.rasterize}
+     * <p><b>数据竞争修复：</b>{@code project()} 内 {@code CanvasCompositor.rasterize}
      * 会遍历 {@code ProjectState} 的 layers / 各 layer 的 elements live ArrayList。这些列表的
      * 结构修改全部发生在 {@link EditSession} 的 {@code synchronized(this)} mutator 里，而
      * rasterize 此前不持该监视器——两侧无共享锁，并发 WS 编辑 op 与变量驱动重画会对同一
@@ -225,7 +224,7 @@ public class ProjectionThrottler {
             b.projectedOnce = true;
             return;
         }
-        // 0.6 P2 审查确认项 #6：尾帧延迟 flush 也要查 gate——submit 时未播放、flush 执行前
+        // 尾帧延迟 flush 也要查 gate——submit 时未播放、flush 执行前
         // play 落在延迟窗口内的情形，否则这次 reactive 直写会与 Ticker 抢同一 mapId。
         AnimationTickerGate gate = this.animationGate;
         if (gate != null && s.wallId() != null && gate.isWallAnimating(s.wallId())) {
@@ -252,7 +251,7 @@ public class ProjectionThrottler {
     }
 
     /**
-     * P1-8：在 session 的 {@link EditSession} 监视器内执行投影，让 {@code rasterize} 入口对
+     * 在 session 的 {@link EditSession} 监视器内执行投影，让 {@code rasterize} 入口对
      * layers / elements live 列表的浅拷贝与 EditSession mutator 互斥（消除 fail-fast 迭代撕裂）。
      * editSession 为 null（SELECTING 阶段尚未 confirm）时无 live 列表可竞争，直接 project。
      */
@@ -269,7 +268,7 @@ public class ProjectionThrottler {
 
     /** session 结束时清理，避免 BukkitTask 泄漏到下个 session。 */
     public void discardSession(String sessionId) {
-        // 0.4.0 方案 B：自适应间隔覆盖也要清，避免泄漏到下个 session（虽然 sessionId 是 UUID 不会重）。
+        // 自适应间隔覆盖也要清，避免泄漏到下个 session（虽然 sessionId 是 UUID 不会重）。
         sessionIntervalOverride.remove(sessionId);
         Bucket b = bySession.remove(sessionId);
         if (b == null) return;
@@ -283,7 +282,7 @@ public class ProjectionThrottler {
     }
 
     /**
-     * Ultrareview 2026-05-25 #5：session cancel / 关闭前同步 flush pending region，
+     * session cancel / 关闭前同步 flush pending region，
      * 确保最后一帧编辑落到地图上。如果调用方紧接着会 {@link #discardSession}，
      * 调用顺序应该是先 flushNow 后 discardSession——flushNow 持锁短暂跑 projector.project，
      * 不影响 discardSession 的 Bukkit task cancel。

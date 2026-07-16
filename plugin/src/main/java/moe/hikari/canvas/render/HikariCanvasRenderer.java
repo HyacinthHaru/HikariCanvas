@@ -20,11 +20,10 @@ import java.util.concurrent.ConcurrentMap;
  * （WS 线程 / scheduler）不打架。</p>
  *
  * <p>{@code super(false)} = non-contextual，同一 view 所有 viewer 共享 canvas。
- * M2 阶段 Placeholder / paint 所有玩家看到同一张，这样省 CPU。M3 编辑实时投影
- * 时再评估是否需要 per-player。</p>
+ * Placeholder / paint 所有玩家看到同一张，这样省 CPU。是否需要 per-player 待后续评估。</p>
  */
-// 0.9.6：去 final 让 WallRestorerTest 的 ThrowingRenderer 子类 override update 注入失败，
-// 测「restore 失败 → releaseToFree 回滚」不泄漏（M16 P2.5 守卫）。运行期行为不变。
+// 非 final：让 WallRestorerTest 的 ThrowingRenderer 子类 override update 注入失败，
+// 测「restore 失败 → releaseToFree 回滚」不泄漏。运行期行为不变。
 public class HikariCanvasRenderer extends MapRenderer {
 
     private final ConcurrentMap<Integer, byte[]> pixelsByMapId = new ConcurrentHashMap<>();
@@ -47,7 +46,7 @@ public class HikariCanvasRenderer extends MapRenderer {
     }
 
     /**
-     * M15.3 P0-25：批量清除像素缓存（wall delete / mapPool.releaseWall 路径调用）。
+     * 批量清除像素缓存（wall delete / mapPool.releaseWall 路径调用）。
      * 防止 mapId 复用时旧 wall 的像素显示在新 wall（跨 wall 像素泄漏）。
      */
     public void invalidate(java.util.Collection<Integer> mapIds) {

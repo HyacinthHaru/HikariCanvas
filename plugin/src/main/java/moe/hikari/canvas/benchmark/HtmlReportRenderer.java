@@ -11,10 +11,9 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * 把聚合好的 {@link BenchmarkReport} 渲染成<b>完全自包含</b>的 HTML5 报告（P3 产物）。
+ * 把聚合好的 {@link BenchmarkReport} 渲染成<b>完全自包含</b>的 HTML5 报告。
  *
- * <p>「给原料 + 公式，不给『你能开 N 个 wall』结论」（{@code PROPOSAL.md §5.2.7} /
- * {@code docs/dynamic-data.md §13.3}）：报告只摊开描述性测量（环境 / per-scene 分位 /
+ * <p>报告只摊开描述性测量（环境 / per-scene 分位 /
  * per-element 边际 / GC），结论部分交给服主用<b>自己</b>的 mspt 预算在内联 JS 计算器里实时试算。
  * 计算器的算法精确镜像 {@link BudgetFormula#availableMsPerSecond} /
  * {@link BudgetFormula#projectedMaxWalls}，并随身展示 {@link BudgetFormula#DISCLAIMER}（保守下界
@@ -36,7 +35,7 @@ public final class HtmlReportRenderer {
     /**
      * 渲染完整自包含 HTML 报告文档（以 {@code <!DOCTYPE html>} 开头）。
      *
-     * @param report P2 聚合产出的报告（数据源）
+     * @param report 聚合产出的报告（数据源）
      * @return 完整 HTML 文档字符串，可直接落盘成 {@code report.html}
      */
     public static String render(BenchmarkReport report) {

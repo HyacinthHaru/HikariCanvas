@@ -9,15 +9,15 @@ import java.util.function.LongSupplier;
  * 脚本执行预算三闸（{@code docs/scripting.md §2.4}；config {@code scripts.budget} 段）：
  * <ol>
  *   <li><b>runs/s</b>：per-rule 1s 固定窗触发频率（{@link #tryAcquireRun}）；超 → 丢弃本次 run</li>
- *   <li><b>chain depth</b>：ABA 熔断（D8；{@link #chainDepthExceeded}）；不自动禁用脚本</li>
+ *   <li><b>chain depth</b>：ABA 熔断（{@link #chainDepthExceeded}）；不自动禁用脚本</li>
  *   <li><b>actions/run</b>：单次触发展开执行的动作总数（{@link #actionsExceeded}）</li>
  * </ol>
  *
- * <p><b>audit 限频（K5）</b>：{@code SCRIPT_RUN_BLOCKED} per-rule 10s 窗只记 1 条
+ * <p><b>audit 限频</b>：{@code SCRIPT_RUN_BLOCKED} per-rule 10s 窗只记 1 条
  * （{@link #shouldAuditBlock}）——10 runs/s 限流被持续触发时不能把 audit DB 打爆；
  * 掐断照常发生，只是不刷 audit 表。</p>
  *
- * <p>热更：字段 volatile，{@code /canvas reload} 时（批次 3 在
+ * <p>热更：字段 volatile，{@code /canvas reload} 时（在
  * {@code HikariCanvas.applyConfig} 接线，照 {@code ScriptStore.setMaxRulesPerWall} 先例）
  * 调 {@link #applyConfig}。clock 经 {@link LongSupplier} 注入（照 {@code HistoryStack} 范式），
  * 单测确定性。</p>
@@ -33,7 +33,7 @@ public class ScriptBudget {
 
     /** runs/s 固定窗宽。 */
     static final long RUN_WINDOW_MS = 1000L;
-    /** audit 限频窗宽（K5）。 */
+    /** audit 限频窗宽。 */
     static final long AUDIT_WINDOW_MS = 10_000L;
     /** 记账表容量上限，超限整体 clear（防异常输入面撑爆）。 */
     static final int MAP_MAX = 4096;
@@ -46,7 +46,7 @@ public class ScriptBudget {
 
     /** ruleKey → 当前 1s 窗（windowStart + count）。 */
     private final ConcurrentHashMap<String, RunWindow> runWindows = new ConcurrentHashMap<>();
-    /** ruleKey → 上次 RUN_BLOCKED audit 时间戳（K5 限频）。 */
+    /** ruleKey → 上次 RUN_BLOCKED audit 时间戳（限频）。 */
     private final ConcurrentHashMap<String, Long> auditStamps = new ConcurrentHashMap<>();
 
     public ScriptBudget(HikariCanvasConfig.ScriptsConfig config) {
@@ -59,7 +59,7 @@ public class ScriptBudget {
         applyConfig(config);
     }
 
-    /** 热更（/canvas reload；批次 3 接线）。已开的 1s 窗不重置，下个窗起生效。 */
+    /** 热更（/canvas reload）。已开的 1s 窗不重置，下个窗起生效。 */
     public final void applyConfig(HikariCanvasConfig.ScriptsConfig config) {
         this.maxActionsPerRun = Math.max(1, config.maxActionsPerRun());
         this.maxRunsPerSecond = Math.max(1, config.maxRunsPerSecond());
@@ -87,7 +87,7 @@ public class ScriptBudget {
         }
     }
 
-    /** ABA 链深判定（K1/D8）：depth ≥ max → 掐断整个 run。 */
+    /** ABA 链深判定：depth ≥ max → 掐断整个 run。 */
     public boolean chainDepthExceeded(int chainDepth) {
         return chainDepth >= maxChainDepth;
     }
@@ -110,7 +110,7 @@ public class ScriptBudget {
     }
 
     /**
-     * K5 audit 限频：per-rule 10s 窗内只放行 1 条 {@code SCRIPT_RUN_BLOCKED}。
+     * audit 限频：per-rule 10s 窗内只放行 1 条 {@code SCRIPT_RUN_BLOCKED}。
      * compute 原子换 stamp，无 race 双记。
      */
     public boolean shouldAuditBlock(String ruleKey) {

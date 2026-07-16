@@ -40,7 +40,6 @@ public final class TriggerDeserializer extends JsonDeserializer<Trigger> {
             case "playerNear" -> new Trigger.PlayerNear(
                     requireInt(ctxt, node, "rangeBlocks", type));
             case "wallReady" -> new Trigger.WallReady();
-            // 0.7.1：3 个新触发器
             case "rightClickWall" -> new Trigger.RightClickWall();
             case "playerLeaveRange" -> new Trigger.PlayerLeaveRange(
                     requireInt(ctxt, node, "rangeBlocks", type));
@@ -64,7 +63,7 @@ public final class TriggerDeserializer extends JsonDeserializer<Trigger> {
     /**
      * 必填整数字段；缺失 / 非整数 → reportInputMismatch（不给默认值）。
      *
-     * <p>0.7.0-P2(K8)：{@code canConvertToInt} 只查范围，会把 {@code 1.9} 静默截断成
+     * <p>{@code canConvertToInt} 只查范围，会把 {@code 1.9} 静默截断成
      * {@code 1}——再查 {@code isIntegralNumber()}，wire 给非整数值（含 {@code 1.0}
      * 这种整值浮点）一律拒，双端语义零漂移。</p>
      */

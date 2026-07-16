@@ -14,7 +14,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.7.0 脚本内存镜像。线程安全:per-wall compute() 串行化写路径;list 存不可变快照。
+ * 脚本内存镜像。线程安全:per-wall compute() 串行化写路径;list 存不可变快照。
  * Dao 抛异常时内存不动(先落库再换内存)。契约 docs/scripting.md §2。
  *
  * <p><b>结构</b>:{@code byWall} 存每墙规则的不可变快照({@code List.copyOf});
@@ -39,7 +39,7 @@ public final class ScriptStore {
     }
 
     /**
-     * 0.7.0-P2(K7):墙级 mutation 监听。任何 create / update / delete / setEnabled /
+     * 墙级 mutation 监听。任何 create / update / delete / setEnabled /
      * clearWall 成功后(compute 外、状态已落定)+ loadFromDb 加载到的每面墙各通知一次。
      * TriggerRouter 收到即整墙 rebuild(≤16 规则,O(墙)便宜),不做 per-rule 增量。
      */
@@ -59,7 +59,7 @@ public final class ScriptStore {
     /** ruleId → wallId 反查索引。 */
     private final ConcurrentHashMap<String, String> wallByRule = new ConcurrentHashMap<>();
 
-    /** 0.7.0-P2(K7):墙级 mutation 监听者(照 SessionManager wallDeleteHooks 风格)。 */
+    /** 墙级 mutation 监听者(照 SessionManager wallDeleteHooks 风格)。 */
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
 
     /** @param dao 可 null(纯内存测试装配) */
@@ -165,14 +165,14 @@ public final class ScriptStore {
     }
 
     /**
-     * 0.7.0-P2:全墙不可变快照(TriggerRouter rebuildAll / wallReady 直查用)。
+     * 全墙不可变快照(TriggerRouter rebuildAll / wallReady 直查用)。
      * {@code Map.copyOf} 浅拷贝即不可变——值本就是 {@code List.copyOf} 快照。
      */
     public Map<String, List<ScriptRule>> snapshotAll() {
         return Map.copyOf(byWall);
     }
 
-    /** 0.7.0-P2(K7):注册墙级 mutation 监听(装配期调用;CopyOnWriteArrayList 线程安全)。 */
+    /** 注册墙级 mutation 监听(装配期调用;CopyOnWriteArrayList 线程安全)。 */
     public void addListener(Listener l) {
         listeners.add(l);
     }
@@ -212,7 +212,7 @@ public final class ScriptStore {
         }
         log.info("ScriptStore loaded " + wallByRule.size() + " rule(s) across "
                 + byWall.size() + " wall(s)");
-        // 0.7.0-P2(K7):对加载到的每面墙各通知一次(启动恢复让 Router 建索引)
+        // 对加载到的每面墙各通知一次(启动恢复让 Router 建索引)
         for (String wallId : byWall.keySet()) {
             notifyWall(wallId);
         }
@@ -228,7 +228,7 @@ public final class ScriptStore {
     // ──────────────────────────────────────────────────────────
 
     /**
-     * 0.7.0-P2(K7):mutation 落定后(compute 外)逐 listener 通知;
+     * mutation 落定后(compute 外)逐 listener 通知;
      * 异常 try-catch 隔离 + WARNING(照 SessionManager wallDeleteHooks 风格),
      * 单个 listener 抛不影响 store 操作结果与其余 listener。
      */

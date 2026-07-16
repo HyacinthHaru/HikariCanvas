@@ -7,15 +7,15 @@ import java.util.Collection;
 import java.util.Map;
 
 /**
- * 0.7.0-P3 A1：runCommand 命令模板渲染器（docs/scripting.md §5.2；计划 K13）。
+ * runCommand 命令模板渲染器（docs/scripting.md §5.2）。
  *
  * <p><b>纯函数，零 Bukkit</b>——模板表 / 在线玩家名列表全部由调用方传入；
  * 任意线程可调，全场景可单测。{@link ActionExecutor#execute} 是唯一生产消费点。</p>
  *
- * <h2>K13 规则（逐条）</h2>
+ * <h2>转义 / 注入防御规则（逐条）</h2>
  * <ul>
  *   <li>模板查无（含 templateId 空 / 模板表空）→ {@link Result.Blocked}
- *       （同 P2 runCommand 占位的 blocked step 形态——"功能没配"而非"参数错"）</li>
+ *       （blocked step 形态——"功能没配"而非"参数错"）</li>
  *   <li>模板声明的参数缺失 → {@link Result.Error}</li>
  *   <li>替换值先<b>剥换行（\n / \r）与 {@code §}</b>（颜色码 / 多行注入面）</li>
  *   <li>text 参数（默认）：剥后仍含 {@code @} → 整体拒（error；杜绝 {@code @a/@e}
@@ -79,7 +79,7 @@ public final class CommandTemplateEngine {
             if (raw == null) {
                 return new Result.Error("missing parameter: " + name);
             }
-            // K13 转义：剥换行 + § 颜色码
+            // 转义：剥换行 + § 颜色码
             String value = sanitize(raw);
             if (ParamSpec.TYPE_ONLINE_PLAYER.equals(spec.type())) {
                 if (value.isEmpty()
@@ -107,7 +107,7 @@ public final class CommandTemplateEngine {
         return new Result.Ok(out);
     }
 
-    /** K13 转义：删去 \n / \r / §（不替换为空格——招牌命令场景值都是单行短串）。 */
+    /** 转义：删去 \n / \r / §（不替换为空格——招牌命令场景值都是单行短串）。 */
     static String sanitize(String raw) {
         StringBuilder sb = new StringBuilder(raw.length());
         for (int i = 0; i < raw.length(); i++) {
