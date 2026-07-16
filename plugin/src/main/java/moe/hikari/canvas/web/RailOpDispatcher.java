@@ -31,7 +31,7 @@ import static moe.hikari.canvas.web.WebHelpers.mapOrEmpty;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * 0.4.4 P3：{@code rail.*} WS op 分发器（11 个 op）。详见 {@code docs/dynamic-data.md §18.7}。
+ * {@code rail.*} WS op 分发器（11 个 op）。详见 {@code docs/dynamic-data.md §18.7}。
  *
  * <h2>11 op</h2>
  * <ul>
@@ -71,7 +71,7 @@ final class RailOpDispatcher {
     private final @Nullable RailScheduleProvider provider;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
-    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
 
     RailOpDispatcher(SessionManager sessionManager,
@@ -148,7 +148,7 @@ final class RailOpDispatcher {
     }
 
     /**
-     * 0.4.5 P1：聚合视图 — 一次返该线路的 stations + runs + 各 run 的 timetable。
+     * 聚合视图 — 一次返该线路的 stations + runs + 各 run 的 timetable。
      * 前端 RailNetworkModal.selectLine 调用避免 N+1 请求。
      */
     private void handleLineDetail(WsMessageContext ctx, Envelope in,
@@ -198,7 +198,7 @@ final class RailOpDispatcher {
         String code = trimOrNull(stringOrNull(payload.get("code")));
         String color = trimOrNull(stringOrNull(payload.get("color")));
         long now = System.currentTimeMillis();
-        // P3-6：do-while 唯一 id（冲突时追加 random 后缀并再次校验，根除同毫秒碰撞）
+        // do-while 唯一 id（冲突时追加 random 后缀并再次校验，根除同毫秒碰撞）
         String id = generateUniqueId("line-", cand -> dao.findLine(cand).isPresent());
         UUID owner = s.playerUuid();
         if (owner == null) {
@@ -244,7 +244,7 @@ final class RailOpDispatcher {
     private void handleLineDelete(WsMessageContext ctx, Envelope in, String sessionId,
                                   Session s, Map<String, Object> payload) {
         String id = stringOrNull(payload.get("lineId"));
-        // 0.4.10 P2-5：删线路前先收集绑定到该线路的 wall（FK CASCADE 会把 line_id SET NULL，
+        // 删线路前先收集绑定到该线路的 wall（FK CASCADE 会把 line_id SET NULL，
         // 删后无法再反查），删后立即 unregister 让 RailScheduleProvider 释放接管、ManualSchedule
         // 接手——否则 provider.refresh() 永不重读 binding，wall 永久卡在 rail 接管态显示旧值。
         List<String> boundWalls = new ArrayList<>();
@@ -290,7 +290,7 @@ final class RailOpDispatcher {
         }
         boolean terminus = Boolean.TRUE.equals(payload.get("isTerminus"));
         long now = System.currentTimeMillis();
-        // P3-6：do-while 唯一 id（冲突时追加 random 后缀并再次校验）
+        // do-while 唯一 id（冲突时追加 random 后缀并再次校验）
         String id = generateUniqueId("stn-", cand -> dao.findStation(cand).isPresent());
         RailStation st = new RailStation(id, lineId, name, code, sortOrder, terminus, now);
         dao.upsertStation(st);
@@ -331,7 +331,7 @@ final class RailOpDispatcher {
     private void handleStationDelete(WsMessageContext ctx, Envelope in, String sessionId,
                                      Session s, Map<String, Object> payload) {
         String id = stringOrNull(payload.get("stationId"));
-        // 0.7.3 P2-14：删站前先收集"本站"绑定到该 station 的 wall。FK 是
+        // 删站前先收集"本站"绑定到该 station 的 wall。FK 是
         // ON DELETE SET NULL —— 删后 wall_rail_bindings.station_id 变 null，无法再反查；
         // 删后对每个绑定 wall 调 provider.unregisterWall 让 RailScheduleProvider 释放接管，
         // 否则它持旧 stationId 快照 + refresh() 永查空 → push 空串覆盖 schedule:* +
@@ -388,16 +388,16 @@ final class RailOpDispatcher {
                     "notes too long (≤256)"));
             return;
         }
-        // 0.4.10 P3-47：编组数范围校验（可选字段；提供时须 1..32，防退化/超长编组）
+        // 编组数范围校验（可选字段；提供时须 1..32，防退化/超长编组）
         if (cars != null && (cars < 1 || cars > 32)) {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "cars must be 1..32"));
             return;
         }
         long now = System.currentTimeMillis();
-        // P3-6：do-while 唯一 id（冲突时追加 random 后缀并再次校验）
+        // do-while 唯一 id（冲突时追加 random 后缀并再次校验）
         String id = generateUniqueId("run-", cand -> dao.findRun(cand).isPresent());
 
-        // 0.4.10 P2-7/P2-64：先生成+校验 timetable（generateAutoTimetable 可能抛
+        // 先生成+校验 timetable（generateAutoTimetable 可能抛
         // IllegalArgumentException），再写库——避免校验失败时 run 行已 upsert 留下孤儿。
         List<RailTimetableEntry> autoEntries = null;
         Object genOpts = payload.get("generateOptions");
@@ -486,7 +486,7 @@ final class RailOpDispatcher {
                     "notes too long (≤256)"));
             return;
         }
-        // 0.4.10 P3-47：编组数范围校验（提供时须 1..32）
+        // 编组数范围校验（提供时须 1..32）
         if (cars != null && (cars < 1 || cars > 32)) {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "cars must be 1..32"));
             return;
@@ -642,7 +642,7 @@ final class RailOpDispatcher {
     private boolean ensurePerm(WsMessageContext ctx, Envelope in, String sessionId,
                                Session s, UUID callerUuid, String node,
                                boolean defaultTrue) {
-        // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+        // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
         boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, node);
         if (!granted && defaultTrue) {
             // own / create 节点 default=true：offline 玩家也通行
@@ -711,7 +711,7 @@ final class RailOpDispatcher {
     }
 
     /**
-     * P3-6：生成唯一 id（line/station/run 共用）。基础形态 = {@code prefix + 时间戳低 8 位 hex}；
+     * 生成唯一 id（line/station/run 共用）。基础形态 = {@code prefix + 时间戳低 8 位 hex}；
      * 若 {@code exists} 命中冲突则追加 random 后缀并 <b>再次校验</b>，循环到无冲突。
      *
      * <p>修复点：原代码冲突时只做单次 random 后缀且不二次 findX 校验——同毫秒并发 create 或
@@ -779,7 +779,7 @@ final class RailOpDispatcher {
     }
 
     /**
-     * 0.4.5 P3：包外（WebServer）查 wall 当前 binding。dispatcher 内部持有 dao，
+     * 包外（WebServer）查 wall 当前 binding。dispatcher 内部持有 dao，
      * 包外不直接拿；走静态 helper 转发 dao.findBinding。
      */
     static @Nullable WallRailBinding lookupBinding(RailOpDispatcher self, String wallId) {

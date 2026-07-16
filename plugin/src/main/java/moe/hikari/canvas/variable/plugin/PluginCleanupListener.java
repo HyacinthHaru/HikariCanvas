@@ -13,7 +13,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P4-Q：监听 {@link PluginDisableEvent}，外部插件 disable 时清理它在 HikariCanvas
+ * 监听 {@link PluginDisableEvent}，外部插件 disable 时清理它在 HikariCanvas
  * 注册的 namespace。
  *
  * <h2>三阶段清理</h2>
@@ -28,7 +28,7 @@ import java.util.logging.Logger;
  *   <li><b>30s 延迟后</b>（async via Bukkit scheduler）：调用
  *       {@link HikariCanvasAPIImpl#purgeNamespaceData} 把该 namespace 的所有变量值从
  *       {@link moe.hikari.canvas.variable.VariableStore} 删掉。保留 30s 让引用方走 cached
- *       value 平滑过渡（用户决策：避免"插件重启 → wall 立刻闪烁占位符"的体验问题）。</li>
+ *       value 平滑过渡（避免"插件重启 → wall 立刻闪烁占位符"的体验问题）。</li>
  * </ol>
  *
  * <h2>自我跳过</h2>
@@ -130,7 +130,7 @@ public final class PluginCleanupListener implements Listener {
     }
 
     /**
-     * 核心清理逻辑。原 package-private；0.4.0-P5 改 public 让端到端 smoke test 同样跨 package 直接调
+     * 核心清理逻辑。public 让端到端 smoke test 跨 package 直接调
      * （Bukkit 的 ServerEvent 构造需 Bukkit.server 单例，单测环境没装 → 跳过 onPluginDisable 是必须的）。
      *
      * @param disabled 被 disable 的插件实例
@@ -164,7 +164,7 @@ public final class PluginCleanupListener implements Listener {
     /**
      * 30s 延迟任务体。单 namespace 抛异常隔离 —— 其他 namespace 仍要清理。
      *
-     * <p>0.4.10 P1-7：grace 期内若同名 namespace 被新插件重新注册（disable → 立即
+     * <p>grace 期内若同名 namespace 被新插件重新注册（disable → 立即
      * unregister registry → 另一插件 register 抢走 → 30s 后本任务跑），则
      * {@code registry.get(ns)} 已非空（指向新 owner 的 {@code Registration}）。此时
      * 必须跳过 purge，否则会误删新插件刚推入的数据。{@code unregisterAllByPlugin} 已把

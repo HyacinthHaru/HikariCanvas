@@ -3,7 +3,7 @@ package moe.hikari.canvas.variable;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 给前端 wire 用的变量视图（0.4.0-P2-F：ready payload + 后续 /api/variable/list 端点）。
+ * 给前端 wire 用的变量视图（ready payload + /api/variable/list 端点）。
  *
  * <p>核心目的是把 {@link Variable#referencedByWalls} 字段挡在外面——那是 VariableStore
  * 内部倒排索引，跨 wall 信息泄露给浏览器既无用又是元数据嗅探面。其他字段透传。</p>
@@ -11,7 +11,7 @@ import org.jetbrains.annotations.Nullable;
  * <p>序列化形态见 {@code docs/protocol.md §3.2}（ready payload 的 {@code variables} 数组）
  * 与 {@code docs/dynamic-data.md §3.3}（HTTP 端点 P3 共用）。</p>
  *
- * <p>0.4.3：{@code userglobal/*} namespace 额外携带 {@link #ownerUuid} / {@link #ownerName}
+ * <p>{@code userglobal/*} namespace 额外携带 {@link #ownerUuid} / {@link #ownerName}
  * 字段（其他 namespace 为 null），让前端 Picker / Panel 区分"我的全局 / 其他全局"。
  * 工厂方法 {@link #from(Variable, VariableStore)} 自动按 namespace 形态注入。</p>
  */
@@ -47,7 +47,7 @@ public record VariableDto(
     }
 
     /**
-     * 0.4.3：从 {@link Variable} 投影并自动为 {@code userglobal/*} 注入 owner 信息。
+     * 从 {@link Variable} 投影并自动为 {@code userglobal/*} 注入 owner 信息。
      * 调用方需传入 {@link VariableStore} 让本方法查 {@code getGlobalOwner}；其他 namespace
      * 的变量 owner 字段固定 null。
      */

@@ -27,7 +27,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P3-L：内置 Manual Schedule Provider（兜底列车 / 公交时刻表）。
+ * 内置 Manual Schedule Provider（兜底列车 / 公交时刻表）。
  *
  * <p>零外部依赖。玩家通过编辑器 "Schedule Manager" modal 配 schedule 元数据 + entries，
  * 本 Provider 在主线程线程外定期算 next_* / eta_* / arrival_status / is_arriving 并 push 进
@@ -36,7 +36,7 @@ import java.util.logging.Logger;
  * <h2>per-wall namespace</h2>
  *
  * <p>namespace = {@code "schedule:<wallId>"}（与 {@link SystemVariableProvider} per-wall
- * 同款）。15 key（M28-enhance 扩展：第二班次 next2_* + MM:SS 格式 eta_mmss）：</p>
+ * 同款）。15 key（含第二班次 next2_* + MM:SS 格式 eta_mmss）：</p>
  * <ul>
  *   <li>{@code next_departure} (STRING) — 下一班车出发时间 {@code HH:mm} 或 {@code HH:mm:ss}
  *       （按 wall.precision；无 entry 时空字符串）</li>
@@ -67,11 +67,11 @@ import java.util.logging.Logger;
  *
  * <h2>线程模型 / 节流</h2>
  *
- * <p>0.4.0 bugfix（Bug 4）：{@link #refresh()} 在 daemon 线程跑（1s 周期，最小粒度），内部按
+ * <p>{@link #refresh()} 在 daemon 线程跑（1s 周期，最小粒度），内部按
  * 每个 wall 的 precision 节流：</p>
  * <ul>
  *   <li>{@code precision="second"} → 每 1s push 一次</li>
- *   <li>{@code precision="minute"} → 每 30s push 一次（默认；与 0.4.0 原行为一致）</li>
+ *   <li>{@code precision="minute"} → 每 30s push 一次（默认）</li>
  * </ul>
  *
  * <p>{@link #refresh()} 自身轻量（O(W) 内存表 + LocalTime 计算），不切主线程。store.setValue
@@ -109,25 +109,25 @@ public final class ManualScheduleProvider implements VariableProvider {
 
     private final VariableStore store;
     private final DataSource dataSource;
-    /** 0.4.0 bugfix（Bug 3）：阈值 / 文案配置（不可变快照；reload config 后整体替换）。 */
+    /** 阈值 / 文案配置（不可变快照；reload config 后整体替换）。 */
     private volatile HikariCanvasConfig.ScheduleConfig config;
     /**
-     * 0.4.4：让铁路路径接管的 wall 跳过本 provider 的 push。
+     * 让铁路路径接管的 wall 跳过本 provider 的 push。
      *
      * <p>RailScheduleProvider 与本 provider 共享 {@code schedule:<wallId>/*} namespace，
      * 同时写会双 push 同 key。HikariCanvas 装配时注入此 predicate（{@code wallId ->
      * railDao.findBinding(...).map(b -> b.lineId() != null).orElse(false)}）让 rail-bound
-     * wall 在 refresh 时跳过本 provider。未注入或返 false 时按 0.4.0 原行为不变。</p>
+     * wall 在 refresh 时跳过本 provider。未注入或返 false 时按原行为不变。</p>
      */
     private volatile java.util.function.Predicate<String> skipWallPredicate;
 
     /** 已注册的 wall 集合（值 = 该 wall 当前 entries 快照）。 */
     private final ConcurrentHashMap<String, List<ScheduleEntry>> registeredWalls =
             new ConcurrentHashMap<>();
-    /** 0.4.0 bugfix（Bug 4）：每 wall 上次 push 时间戳（用于按 precision 节流）。 */
+    /** 每 wall 上次 push 时间戳（用于按 precision 节流）。 */
     private final ConcurrentHashMap<String, Long> lastPushAt = new ConcurrentHashMap<>();
     /**
-     * 0.4.10 P2-84：每 wall 的 precision 内存缓存（register / refreshWall / ensureWallRegistered
+     * 每 wall 的 precision 内存缓存（register / refreshWall / ensureWallRegistered
      * 写路径主动刷新）。原 refresh() 每 tick 对每个 wall 查一次 DB（{@code loadByWallPrecision}）
      * 来算节流间隔，而 DB 查询本身就发生在节流 continue 之前——minute 精度 wall 每 1s 白查一次。
      * 缓存后 refresh() 零 DB 查询，DB 仅在 schedule 写操作时刷新。
@@ -158,18 +158,18 @@ public final class ManualScheduleProvider implements VariableProvider {
         this.config = config == null ? HikariCanvasConfig.ScheduleConfig.defaults() : config;
     }
 
-    /** 0.4.0 bugfix（Bug 3）：reload config 后热替换。 */
+    /** reload config 后热替换。 */
     public void setConfig(HikariCanvasConfig.ScheduleConfig newConfig) {
         if (newConfig == null) return;
         this.config = newConfig;
     }
 
-    /** 0.4.4：注入 rail-bound wall 跳过 predicate；null 关闭跳过逻辑。 */
+    /** 注入 rail-bound wall 跳过 predicate；null 关闭跳过逻辑。 */
     public void setSkipWallPredicate(@Nullable java.util.function.Predicate<String> p) {
         this.skipWallPredicate = p;
     }
 
-    /** 0.4.4：predicate 安全调用，未注入时返 false（不跳过）。 */
+    /** predicate 安全调用，未注入时返 false（不跳过）。 */
     private boolean shouldSkipWall(String wallId) {
         java.util.function.Predicate<String> p = skipWallPredicate;
         if (p == null) return false;
@@ -204,7 +204,7 @@ public final class ManualScheduleProvider implements VariableProvider {
                         "进站文案（eta ≤ 阈值时）/ 空闲文案，config 可改", REFRESH_INTERVAL_MS),
                 new DeclaredKey("precision", VarType.STRING,
                         "wall 当前精度（minute / second）", REFRESH_INTERVAL_MS),
-                // M28-enhance：第二班次
+                // 第二班次
                 new DeclaredKey("next2_departure", VarType.STRING,
                         "第二班车出发时间（地铁屏标配）", REFRESH_INTERVAL_MS),
                 new DeclaredKey("next2_destination", VarType.STRING,
@@ -240,10 +240,10 @@ public final class ManualScheduleProvider implements VariableProvider {
         for (java.util.Map.Entry<String, List<ScheduleEntry>> entry : registeredWalls.entrySet()) {
             String wallId = entry.getKey();
             try {
-                // 0.4.4：rail-bound wall 跳过（RailScheduleProvider 接管该 wall 的 push）
+                // rail-bound wall 跳过（RailScheduleProvider 接管该 wall 的 push）
                 if (shouldSkipWall(wallId)) continue;
-                // 0.4.0 bugfix（Bug 4）：按 wall.precision 节流
-                // 0.4.10 P2-84：从内存缓存读 precision（写路径已主动刷新），refresh() 零 DB 查询
+                // 按 wall.precision 节流
+                // 从内存缓存读 precision（写路径已主动刷新），refresh() 零 DB 查询
                 String precision = cachedPrecision(wallId);
                 long interval = WallSchedule.PRECISION_SECOND.equals(precision)
                         ? SECOND_INTERVAL_MS : MINUTE_INTERVAL_MS;
@@ -333,7 +333,7 @@ public final class ManualScheduleProvider implements VariableProvider {
             "eta_minutes", "eta_seconds", "eta_mmss",
             "is_arriving", "arrival_status",
             "precision",
-            // M28-enhance：第二班次
+            // 第二班次
             "next2_departure", "next2_destination",
             "next2_eta_minutes", "next2_eta_seconds", "next2_eta_mmss",
             "next2_is_arriving", "next2_arrival_status"};
@@ -373,7 +373,7 @@ public final class ManualScheduleProvider implements VariableProvider {
                 ? List.of() : List.copyOf(entries);
         registeredWalls.put(wallId, snapshot);
         String ns = NAMESPACE_PREFIX + ":" + wallId;
-        // M28-enhance：15 变量（7 原 + eta_mmss + 7 next2_*）。旧 7 保留向下兼容
+        // 15 变量（7 原 + eta_mmss + 7 next2_*）。旧 7 保留向下兼容
         tryCreate(ns, "next_departure", VarType.STRING);
         tryCreate(ns, "next_destination", VarType.STRING);
         tryCreate(ns, "eta_minutes", VarType.NUMBER);
@@ -408,7 +408,7 @@ public final class ManualScheduleProvider implements VariableProvider {
      */
     private void pushValues(String wallId, List<ScheduleEntry> entries, LocalTime now,
                             String precision) {
-        // 0.4.10 P2-6：单点拦截 rail-bound wall。refresh() tick 已在循环里 skip，但
+        // 单点拦截 rail-bound wall。refresh() tick 已在循环里 skip，但
         // forceRefreshAll / ensureWallRegistered / refreshWall 三条立即推送路径之前未检查，
         // 会与 RailScheduleProvider 双写同一 schedule:<wallId>/* key。在 pushValues 入口
         // 统一拦截，覆盖全部调用方。
@@ -433,7 +433,7 @@ public final class ManualScheduleProvider implements VariableProvider {
                 c.isArriving ? cfg.arrivingText() : cfg.idleText(), ttl);
         tryWrite(ns + "/precision",
                 precision == null ? WallSchedule.PRECISION_MINUTE : precision, ttl);
-        // M28-enhance：next2_*
+        // next2_*
         tryWrite(ns + "/next2_departure",
                 c.next2Departure == null ? "" : c.next2Departure, ttl);
         tryWrite(ns + "/next2_destination",
@@ -475,7 +475,7 @@ public final class ManualScheduleProvider implements VariableProvider {
     }
 
     /**
-     * 0.4.10 P2-84：refresh() 节流判定专用——优先读内存缓存（写路径已填充），
+     * refresh() 节流判定专用——优先读内存缓存（写路径已填充），
      * 未命中（如启动后 refresh 先于任何写路径跑）才回退查 DB 并填缓存。避免每 tick 查 DB。
      */
     private String cachedPrecision(String wallId) {
@@ -603,7 +603,7 @@ public final class ManualScheduleProvider implements VariableProvider {
 
     /**
      * 容错时间解析；非法格式返 {@link LocalTime#MIDNIGHT}（让该 entry 排前 + 不爆栈）。
-     * 支持 HH:mm 和 HH:mm:ss 两种格式（0.4.0 bugfix Bug 4）。
+     * 支持 HH:mm 和 HH:mm:ss 两种格式。
      */
     private static LocalTime safeParseTime(String hhmm) {
         if (hhmm == null) return LocalTime.MIDNIGHT;
@@ -614,7 +614,7 @@ public final class ManualScheduleProvider implements VariableProvider {
         }
     }
 
-    /** 计算结果（M28-enhance：加 eta_mmss + 第二班次 next2_*）。 */
+    /** 计算结果（含 eta_mmss + 第二班次 next2_*）。 */
     public record Computed(
             @Nullable String nextDeparture,
             @Nullable String nextDestination,
@@ -638,7 +638,7 @@ public final class ManualScheduleProvider implements VariableProvider {
         List<WallSchedule> loadAllSchedules();
         List<ScheduleEntry> loadEntries(String wallId);
         LocalTime currentLocalTime();
-        /** 0.4.0 bugfix（Bug 4）：拿该 wall 当前 precision。空 / 失败默认 "minute"。 */
+        /** 拿该 wall 当前 precision。空 / 失败默认 "minute"。 */
         default String loadByWallPrecision(String wallId) {
             return WallSchedule.PRECISION_MINUTE;
         }
@@ -686,7 +686,7 @@ public final class ManualScheduleProvider implements VariableProvider {
                         .map(WallSchedule::precision)
                         .orElse(WallSchedule.PRECISION_MINUTE);
             } catch (Exception e) {
-                // 0.4.10 P3-82：与 loadAllSchedules / loadEntries 对齐，DB 故障不再静默降级
+                // 与 loadAllSchedules / loadEntries 对齐，DB 故障不静默降级
                 log.log(Level.WARNING, "loadByWallPrecision failed: " + wallId, e);
                 return WallSchedule.PRECISION_MINUTE;
             }

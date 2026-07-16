@@ -37,7 +37,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * 0.4.0-P5-A：{@code /canvas var} 命令族（7 子命令）。
+ * {@code /canvas var} 命令族（7 子命令）。
  *
  * <p>所有子命令统一 {@code canvas.var.command} 权限（默认 op）。命令族范围与
  * {@code docs/dynamic-data.md} 一致：</p>
@@ -87,7 +87,7 @@ public final class VariableSubCommand {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
 
     /**
-     * 0.4.0-P5：抽出 wall 列表 / 查询接口，让单测无 SQLite + 无 mock 框架也能造数据。
+     * 抽出 wall 列表 / 查询接口，让单测无 SQLite + 无 mock 框架也能造数据。
      *
      * <p>生产实现 = {@link #fromWallRepo}，包装真 {@link WallRepo}。</p>
      */
@@ -180,7 +180,7 @@ public final class VariableSubCommand {
         return Commands.literal("var")
                 .requires(src -> src.getSender().hasPermission(PERMISSION))
                 // list / list <namespace>
-                // 0.7.0-P2 修：string() 不带引号时只认 [0-9A-Za-z_.+-]，真实 namespace
+                // string() 不带引号时只认 [0-9A-Za-z_.+-]，真实 namespace
                 // 含冒号/斜杠（user:w-xxxx）会报"参数后应有空格分隔"——尾参改 greedyString
                 .then(Commands.literal("list")
                         .executes(ctx -> runExec(ctx, new String[]{"list"}))
@@ -195,7 +195,7 @@ public final class VariableSubCommand {
                                 .executes(ctx -> runExec(ctx, new String[]{"get",
                                         StringArgumentType.getString(ctx, "fullName")}))))
                 // set <fullName> <value...>
-                // 0.7.0-P2 修：fullName 原用 string()——不带引号时冒号/斜杠直接 parse error
+                // fullName 原用 string()——不带引号时冒号/斜杠直接 parse error
                 // （游戏内 /canvas var set user:w-xxxx/score 5 报"参数后应有空格分隔"）。
                 // Brigadier 中段参数无法既不带引号又收任意字符，改成整尾 greedyString +
                 // 手工按第一个空格切 fullName / value（value 仍可含空格）。
@@ -261,7 +261,7 @@ public final class VariableSubCommand {
             return;
         }
         if (args == null || args.length == 0 || args[0] == null) {
-            // P3-76: null 首 token（理论上 Brigadier 不产生，但单测 / 外部调用可能传）
+            // null 首 token（理论上 Brigadier 不产生，但单测 / 外部调用可能传）
             // 走 usage 脱敏分支，避免 args[0].toLowerCase() 裸 NPE。
             sendUsage(sender);
             return;
@@ -632,7 +632,7 @@ public final class VariableSubCommand {
     private static String truncate(String s, int max) {
         if (s == null) return "";
         if (s.length() <= max) return s;
-        // P3-53: max < 3 时 max-3 为负，substring 抛 StringIndexOutOfBoundsException；
+        // max < 3 时 max-3 为负，substring 抛 StringIndexOutOfBoundsException；
         // 钳位：max < 3 直接硬截到 max 长度，不附省略号。
         if (max < 3) return s.substring(0, Math.max(0, max));
         return s.substring(0, max - 3) + "...";

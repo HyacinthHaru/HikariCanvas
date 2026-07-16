@@ -5,7 +5,7 @@ import java.net.URISyntaxException;
 import java.util.Locale;
 
 /**
- * URL 上传的最小化校验（0.4.9 hotfix-3 起：用户选择"所有域名均可粘贴"）。
+ * URL 上传的最小化校验（用户选择"所有域名均可粘贴"）。
  *
  * <p>合法 URL 必须：</p>
  * <ul>
@@ -67,7 +67,7 @@ public final class UrlFetchSafety {
         if (host == null || host.isBlank()) {
             return new CheckResult(Reason.INVALID_URL, "no host");
         }
-        // 0.4.9 hotfix-3：删除 DNS 解析 + 私有地址 / 回环 / link-local 黑名单。
+        // 无 DNS 解析 + 无私有地址 / 回环 / link-local 黑名单。
         // 用户选择"所有域名均可粘贴"——SSRF 由用户自担。
         return CheckResult.success();
     }

@@ -1,7 +1,7 @@
 package moe.hikari.canvas.canvasfile;
 
 /**
- * 0.8-A2：导入过程中产生的<b>非致命提示</b>（导入照常完成，仅告知用户某些内容被降级处理）。
+ * 导入过程中产生的<b>非致命提示</b>（导入照常完成，仅告知用户某些内容被降级处理）。
  *
  * <p>{@code kind} 取值（前端 {@code ImportProjectModal} 翻成大白话，见 {@code docs/import-export.md §4}）：
  * {@code missing-font} / {@code missing-variable} / {@code missing-icon} /

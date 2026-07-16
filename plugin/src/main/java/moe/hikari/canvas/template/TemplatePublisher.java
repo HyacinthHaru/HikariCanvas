@@ -16,7 +16,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * M14 创意工坊协调器：把 {@link TemplateExporter} 产物 + 缩略图渲染 + DB 元数据 + Registry
+ * 创意工坊协调器：把 {@link TemplateExporter} 产物 + 缩略图渲染 + DB 元数据 + Registry
  * 热重载组合成一次完整的"发布 / 删除 / 精选"操作。
  *
  * <p><b>线程模型：</b> publish / delete 调用方应在 WS 主循环或命令处理线程上调用（不在 Bukkit

@@ -25,8 +25,7 @@ import java.util.List;
  * 提供按 wall 移除、publish 标签写 PDC，以及保护 listener 用的"是否属于 HikariCanvas"接口。
  *
  * <p>契约见 {@code docs/architecture.md §7.2}、PDC key 规范见 {@code docs/data-model.md §3.2}。
- * <b>M5.5：</b> PDC key 简化为 {@code wall_id / slot}（原 {@code published_at} 在 2026-05-14
- * lock-state 重设计后砍除，不再写入；现有 PDC 数据保留无害）。</p>
+ * PDC key = {@code wall_id / slot}（{@code published_at} 不再写入；现有 PDC 数据保留无害）。</p>
  *
  * <p><b>主线程约束：</b> {@link #deploy}、{@link #removeForWall} 都使用 Bukkit
  * 实体/世界 API，必须在主线程调用。</p>
@@ -77,9 +76,9 @@ public final class FrameDeployer {
     }
 
     /**
-     * M5-D9 wall.refresh：补 spawn 用户在创造模式撸掉的画框。
+     * wall.refresh：补 spawn 用户在创造模式撸掉的画框。
      *
-     * <p><b>关键修复（2026-05-12 实测后）：</b> 玩家通常撸掉的是<b>支撑方块</b>，不是画框本身；
+     * <p><b>关键修复：</b> 玩家通常撸掉的是<b>支撑方块</b>，不是画框本身；
      * 画框因失去支撑掉到地上变成物品。仅 spawn 新画框时它会立即又掉下来 —— 这就是"按刷新按钮
      * 看似没反应"的真实原因。本方法现在先扫一遍墙面 bbox，把缺失的支撑方块用 {@link Material#STONE}
      * 自动补回（玩家可以事后手动换皮），再走原 spawn 流程。</p>
@@ -245,7 +244,7 @@ public final class FrameDeployer {
         int blockY = wall.minY() + (height - 1 - row);
         int blockX;
         int blockZ;
-        // M5.5：按 facing 映射 (row,col) → 世界坐标，使 col=0 对应玩家视角最左。
+        // 按 facing 映射 (row,col) → 世界坐标，使 col=0 对应玩家视角最左。
         switch (facing) {
             case NORTH -> {
                 blockX = wall.minX() + (width - 1 - col);
@@ -307,11 +306,11 @@ public final class FrameDeployer {
         // 防御 3：清掉 frameLoc 1 格内残留的 Item 掉落物（撸破的画框 / 地图 item 可能掉在这）
         //         + 清掉"自己 wall + 同 slot 上次失败 spawn 留下的"幽灵 ItemFrame。
         //
-        // 关键约束 A（2026-05-14 修 Bug：邻接 wall confirm 误删）：
+        // 关键约束 A（邻接 wall confirm 误删）：
         //   不动 PDC wall_id != current 的 ItemFrame —— ItemFrame bbox 半径 ~0.25 + query box
         //   半径 0.8 = 1.05 格 > 标准 1 格间距，相邻 wall 的 frame bbox 会被 getNearbyEntities
         //   抓到。
-        // 关键约束 B（2026-05-15 修 Bug：同 wall 邻接 slot 互删导致只剩 1 frame）：
+        // 关键约束 B（同 wall 邻接 slot 互删导致只剩 1 frame）：
         //   同 wall_id 但邻接 slot 也会被 query box 抓到（slot 间距 1 + bbox 0.5 + box 0.8 相交）。
         //   光看 wall_id 会把刚 spawn 的兄弟 slot 当残骸删。必须额外要求 PDC slot == current slot
         //   才算"真正同位置的失败 spawn 残留"。
@@ -381,12 +380,7 @@ public final class FrameDeployer {
         return removed;
     }
 
-    // 2026-05-14 lock-state 重设计砍：
-    //   - markPublished(...) 整体砍除（ItemFrame PDC 不再写 published_at；旧 PDC 保留无害）
-    //   - isFramePublished(...) 砍（FrameProtectionListener 不再读 published 状态）
-    //   - publishedAtKey 字段砍
-
-    /** 反查：{@link ItemFrame} 上的 wall_id PDC（wand 瞄已有画框 P3 用）。 */
+    /** 反查：{@link ItemFrame} 上的 wall_id PDC（wand 瞄已有画框用）。 */
     public String wallIdOf(ItemFrame frame) {
         return frame.getPersistentDataContainer().get(wallIdKey, PersistentDataType.STRING);
     }

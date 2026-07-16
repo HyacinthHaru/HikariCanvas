@@ -17,7 +17,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P3-K：PlaceholderAPI 桥接（Tier 4）。
+ * PlaceholderAPI 桥接（Tier 4）。
  *
  * <p>软依赖：PAPI 未装时 {@link #initialize()} 自动 noop，整个 {@code papi/*} namespace
  * 不出现；{@link #refreshInterval()} 返 {@link Duration#ZERO}，daemon 不调度——零开销。</p>
@@ -34,52 +34,14 @@ import java.util.logging.Logger;
  * VariableStore#notifyDynamicLookup(String)} → 本桥接 hook 触发：自动 register key +
  * 启动定时 refresh（5s TTL）。首次渲染走 fallback "???"，约 5s 内补齐。</p>
  *
- * <h2>fullName 形态</h2>
+ * <h2>fullName 形态 / 编码层</h2>
  *
- * <p>store 内 fullName = {@code papi/%player_name%}（namespace="papi", key="%player_name%"）。
- * 注意 key 含 {@code %} 字符——{@link VariableStore} key 校验正则 {@code [a-zA-Z0-9_.-]+}
- * <b>不</b>允许 {@code %}，所以本桥接<b>不调</b> {@link VariableStore#create}；而是直接走 store
- * package-private hook 写值的路径？——不行，store 没暴露 bypass。实际策略：interpolator
- * 调用方仍走 {@code ${var:papi:...}} 这种语法形态由 interpolator 自己拼装；我们在 hook 里把
- * key 中的 {@code %} 转义成 {@code _pct_}，对外 fullName 形态保持 store 内合法，向 PAPI
- * 调用时再还原 {@code %placeholder%}。</p>
- *
- * <p>但这会引入"双形态映射"复杂度。简化方案（本类采用）：<b>不调 store.create</b>，本桥接
- * 自己维护一份 placeholder → cachedValue 的 map，并通过覆盖 hook 的 fullName 直接调
- * {@code store.setValue} 失败时静默——同时 docs §7.2 已声明 PAPI 桥接只是 forwarder，不
- * 持久化、不进 store 也合理。但 Compositor / Interpolator resolve 直接查 store，本桥接
- * 不进 store 则 resolve 拿不到值——这矛盾。</p>
- *
- * <p><b>最终方案</b>：把 key 中的 {@code %} 字符做安全编码（{@code _pct_}）后再 create /
- * setValue。interpolator 一侧（已上游就把 {@code papi:%xxx%} 转成 {@code papi/_pct_xxx_pct_}
- * 形态查 store）也走同样编码。本桥接独立维护"trackedPlaceholders"原文 → encoded key 的映射，
- * refresh 时按原文调 PAPI，按 encoded key 写 store。<b>但这种方案要改 interpolator</b>——
- * 超出 P3-K 范围。</p>
- *
- * <p><b>P3-K 实施方案（务实）</b>：约定语法 <code>${var:papi.&lt;placeholder_without_pct&gt;}</code>，
- * 即玩家写 {@code ${var:papi.player_name}}，本桥接收到 hook 时把 key 还原成 {@code %player_name%}
- * 调 PAPI。这样 key 形态合法（无 {@code %}），interpolator 不需要改动——它走 dynamic
- * namespace dot alias 形态（与 scoreboard.&lt;obj&gt;.&lt;player&gt; 同套路）。docs §7.2 后续 P3-M
- * 收尾时一同补 alias 语法。</p>
- *
- * <p>但 docs §3.1 显式写了 <code>${var:papi:%player_name%}</code>。为兼顾 docs / 实施可行性，
- * 本桥接<b>两种形态都接</b>：</p>
- * <ul>
- *   <li>handleDynamic 收到 {@code papi/%xxx%} 或 {@code papi.%xxx%} 形态：解析出真实
- *       placeholder {@code %xxx%}，将 store key 编码为 {@code pct_xxx_pct}（不带 {@code %}）；
- *       内部 placeholderByKey map 记录 {@code pct_xxx_pct → %xxx%}。</li>
- *   <li>refresh 按 placeholderByKey 调 PAPI，按 encoded key 写 store。</li>
- *   <li>interpolator 端：dynamic miss 时拼出的 fullName 应该已经是 encoded（{@code papi/pct_xxx_pct}）
- *       才能命中——这要求 interpolator 在 papi namespace 上做编码。<b>P3-K 留这步给 interpolator
- *       后续改</b>；眼下 hook 只支持 {@code papi/pct_xxx_pct} encoded 形态从外部触发；
- *       原文形态 {@code papi/%xxx%} 因 store key 非法所以 store.create 会抛 INVALID，
- *       本桥接 catch + 自记。</li>
- * </ul>
- *
- * <p><b>实际范围限制</b>：P3-K 暂不接入 interpolator 编码改造（避免与 J Wave 1 已 merged
- * 代码冲突），handleDynamic 仅接受已 encoded 形态（{@code papi/pct_xxx_pct}）；测试覆盖
- * 编码/解码 + reflection 路径 + PAPI 未装 noop；docs 在 §7.2 补一条 "P3-K 实装注释：
- * 当前 encoded 形态，原文 syntax 由 P3-M 加 interpolator 编码层启用"。</p>
+ * <p>PAPI placeholder 含 {@code %} 字符，而 {@link VariableStore} key 校验正则
+ * {@code [a-zA-Z0-9_.-]+} <b>不</b>允许 {@code %}。因此本桥接对 key 做编码：原文
+ * {@code %xxx%} ↔ store 内 key {@code pct_xxx_pct}（绕开正则限制）。handleDynamic 收到
+ * {@code papi/%xxx%} 或 {@code papi.%xxx%} 形态时解析出真实 placeholder，store key 编码为
+ * {@code pct_xxx_pct}，内部 {@code placeholderByKey} map 记录 {@code pct_xxx_pct → %xxx%}；
+ * refresh 按原文调 PAPI，按 encoded key 写 store。docs §7.2 记录该语法约定。</p>
  *
  * @see moe.hikari.canvas.variable.VariableInterpolator
  */
@@ -335,7 +297,7 @@ public final class PapiVariableBridge implements VariableProvider {
 
         private final JavaPlugin plugin;
         /**
-         * 0.4.10 P3-19：把原 {@code available}（boolean）+ {@code setPlaceholdersMethod}
+         * 把原 {@code available}（boolean）+ {@code setPlaceholdersMethod}
          * （Method）两个独立 volatile 合成<b>单一</b> volatile 引用：{@code Method} 引用本身
          * 不可变，{@code null} 即表示禁用（未装 PAPI / 反射失败 / shutdown 后）。{@link #resolve}
          * 一次读到局部变量再判空 + invoke，消除"先读 available=true，再读 method 已被 shutdown
@@ -382,7 +344,7 @@ public final class PapiVariableBridge implements VariableProvider {
 
         @Override
         public @Nullable String resolve(String placeholder) {
-            // 0.4.10 P3-19：单次读到局部变量，避免两次独立 volatile 读之间被 shutdown 置 null。
+            // 单次读到局部变量，避免两次独立 volatile 读之间被 shutdown 置 null。
             Method m = setPlaceholdersMethod;
             if (m == null) return null;
             try {

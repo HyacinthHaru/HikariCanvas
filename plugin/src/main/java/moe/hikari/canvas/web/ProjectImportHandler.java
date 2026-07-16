@@ -21,7 +21,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.8-A2 Task 13：{@code POST /api/project/import} 端点——multipart 收 {@code .canvas} →
+ * {@code POST /api/project/import} 端点——multipart 收 {@code .canvas} →
  * 鉴权 → {@link ProjectImporter#importInto} → 成功 {@code {ok:true,warnings:[...]}} /
  * 失败 {@code {error,message}} + 状态码。
  *

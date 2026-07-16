@@ -3,7 +3,7 @@ package moe.hikari.canvas.schedule;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 0.4.0-P3-L：列车 / 公交时刻表一条记录。schema 见
+ * 列车 / 公交时刻表一条记录。schema 见
  * {@code db-migrations/V012__wall_schedules.sql}。
  *
  * @param id             自增主键；新建 entry 时调用方传 0，{@link moe.hikari.canvas.storage.ScheduleDao#insertEntry}

@@ -3,7 +3,7 @@ package moe.hikari.canvas.state;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * 正多边形 / 星（M9 引入）。
+ * 正多边形 / 星。
  *
  * <ul>
  *   <li>{@code kind = "polygon"}：正 {@code sides} 边形（{@code sides ∈ [3, 32]}）；
@@ -26,7 +26,7 @@ public record ShapeElement(
         String kind,            // "polygon" | "star"
         int sides,              // 3..32
         Float innerRatio,       // 仅 star 用；null = 默认 0.5
-        Fill fill,              // 可空（M11：纯色或渐变）
+        Fill fill,              // 可空（纯色或渐变）
         Stroke stroke,          // 可空
         Float opacity,
         BlendMode blendMode,

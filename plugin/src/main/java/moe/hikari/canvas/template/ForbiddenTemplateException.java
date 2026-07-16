@@ -1,7 +1,7 @@
 package moe.hikari.canvas.template;
 
 /**
- * M16 P1.6：调用方尝试 apply 一个不属于自己的 user-template，且无
+ * 调用方尝试 apply 一个不属于自己的 user-template，且无
  * {@code canvas.template.use-others} bypass 权限时由
  * {@link TemplateRegistry#byIdForApply(String, java.util.UUID, boolean)} 抛出。
  *

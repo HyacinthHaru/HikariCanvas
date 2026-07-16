@@ -12,7 +12,7 @@ import java.util.logging.Logger;
  * 主线程定时扫描，按 {@link SessionManager#collectExpired} 的规则把超时会话 cancel 掉。
  * 契约见 {@code docs/architecture.md §3.1}。
  *
- * <p><b>M5.5 起：</b> cancel 不再拆 ItemFrames、不归还池——wall 数据生命周期与 session 解耦。
+ * <p>cancel 不拆 ItemFrames、不归还池——wall 数据生命周期与 session 解耦。
  * 玩家断线 / 超时仅释放编辑锁，墙上画照常显示，玩家可后续 `/canvas open` 接管。</p>
  */
 public final class SessionReaper {
@@ -56,8 +56,8 @@ public final class SessionReaper {
     }
 
     private void sweep() {
-        // 2026-05-14：每次 sweep 顺手清各 session 的 stale brush stroke buffer
-        // （M12 brush 引入；用户永久离开后 EditSession 内 strokes Map 不会自动清）
+        // 每次 sweep 顺手清各 session 的 stale brush stroke buffer
+        // （用户永久离开后 EditSession 内 strokes Map 不会自动清）
         sessions.purgeAllStaleStrokes();
 
         long now = System.currentTimeMillis();

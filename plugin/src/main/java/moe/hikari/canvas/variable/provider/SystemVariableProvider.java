@@ -23,7 +23,7 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
- * 0.4.0-P3-J：系统变量 Provider（Tier 3）。
+ * 系统变量 Provider（Tier 3）。
  *
  * <p>注册两轨：</p>
  * <ul>
@@ -67,7 +67,7 @@ public final class SystemVariableProvider implements VariableProvider {
     public static final String NAMESPACE = "system";
     /** Daemon refresh interval（最小公约：server.tick = 1s）。 */
     public static final long BASE_REFRESH_INTERVAL_MS = 1000L;
-    /** per-wall alias 刷新节流间隔（与 wall.alias TTL=5s 一致；P2-83）。 */
+    /** per-wall alias 刷新节流间隔（与 wall.alias TTL=5s 一致）。 */
     public static final long PER_WALL_ALIAS_INTERVAL_MS = 5_000L;
 
     /** server.time 格式化器（24h HH:mm）。 */
@@ -103,7 +103,7 @@ public final class SystemVariableProvider implements VariableProvider {
     private final java.util.Set<String> registeredWalls =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
     /**
-     * P2-83：per-wall alias 上次 push 时刻（ms epoch）。refresh() 每 1s 跑一次（与 server.tick 同
+     * per-wall alias 上次 push 时刻（ms epoch）。refresh() 每 1s 跑一次（与 server.tick 同
      * 公约），但 wall.alias TTL=5s + 极少变 —— 用此表把每 wall 的 DB 查询/刷新收到 5s 一次，
      * 避免 N 个 wall × 1 SELECT/s 永续浪费 HikariCP 连接池。
      */
@@ -159,7 +159,7 @@ public final class SystemVariableProvider implements VariableProvider {
     @Override
     public void initialize() {
         long now = System.currentTimeMillis();
-        // P2-32：运行期新建 wall 走 dynamic-lookup 兜底。interpolator 遇 system:<wid>/wall.* miss
+        // 运行期新建 wall 走 dynamic-lookup 兜底。interpolator 遇 system:<wid>/wall.* miss
         // → notifyDynamicLookup("system:<wid>/wall.X")（namespace 提取为 "system:<wid>"）→ 本 hook
         // 解析 wallId lazy registerWall。与 ScoreboardVariableProvider.handleDynamic 同款模式。
         store.registerDynamicLookupHook((fullName, namespace) -> {
@@ -208,7 +208,7 @@ public final class SystemVariableProvider implements VariableProvider {
             }
         }
         // per-wall keys：所有已注册 wall 的 wall.alias 每 5s 刷新即可（其他 3 个永久变量没必要）。
-        // P2-83：用 lastAliasPushAt 节流——refresh() 本身 1s 一跑，但 alias TTL=5s + 极少变，
+        // 用 lastAliasPushAt 节流——refresh() 本身 1s 一跑，但 alias TTL=5s + 极少变，
         // 不该每 tick 对每个 wall 发一条 SELECT * FROM walls；按 PER_WALL_ALIAS_INTERVAL_MS（5s）收敛。
         for (String wallId : registeredWalls) {
             Long last = lastAliasPushAt.get(wallId);
@@ -234,7 +234,7 @@ public final class SystemVariableProvider implements VariableProvider {
     }
 
     /**
-     * P2-32：dynamic-lookup hook 上来的 per-wall 懒注册。namespace 形如 {@code system:<wallId>}，
+     * dynamic-lookup hook 上来的 per-wall 懒注册。namespace 形如 {@code system:<wallId>}，
      * 此处 wallId 已是去掉 {@code "system:"} 前缀后的部分。registerWall 自带 add 幂等 + 永久值填充。
      */
     void handleDynamicWall(String wallId) {
@@ -311,12 +311,12 @@ public final class SystemVariableProvider implements VariableProvider {
             } catch (Exception e) {
                 log.log(Level.WARNING,
                         "system var compute failed: " + k.key, e);
-                // 0.4.10 P3-45：compute 异常也回退 nextRefreshAt 让下个 tick 重试，而非等满 TTL
+                // compute 异常也回退 nextRefreshAt 让下个 tick 重试，而非等满 TTL
                 nextRefreshAt.put(k.key, System.currentTimeMillis());
                 return;
             }
             if (value == null) {
-                // 0.4.10 P3-45：value 暂不可用（如 tick / tps 尚未就绪）。refresh() 已把
+                // value 暂不可用（如 tick / tps 尚未就绪）。refresh() 已把
                 // nextRefreshAt 推进到 now+ttl —— 若不回退，这个 key 要等满一个 TTL（最长 1h）
                 // 才重试。回退到当前时刻 → 下个 1s tick 即重试。ConcurrentHashMap 幂等写。
                 nextRefreshAt.put(k.key, System.currentTimeMillis());

@@ -3,7 +3,7 @@ package moe.hikari.canvas.rail;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 0.4.4：铁路站点。属于一条 {@link RailLine}，按 {@link #sortOrder} 排序展示。
+ * 铁路站点。属于一条 {@link RailLine}，按 {@link #sortOrder} 排序展示。
  *
  * @param id          站点 id（形如 {@code "stn-<8hex>"}）
  * @param lineId      所属线路

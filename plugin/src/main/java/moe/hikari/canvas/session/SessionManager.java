@@ -32,7 +32,7 @@ import java.util.logging.Logger;
 /**
  * 会话生命周期核心。契约见 {@code docs/architecture.md §3}。
  *
- * <p><b>并发模型（M16-P6.7 重构）：</b></p>
+ * <p><b>并发模型：</b></p>
  * <ul>
  *   <li>三索引 {@code byId} / {@code byPlayer} / {@code byWall} 全部 {@link ConcurrentHashMap}：
  *       单 key 读写 lock-free；任意线程可并发查询无阻塞。</li>
@@ -66,22 +66,22 @@ public final class SessionManager {
     private final AuditLog auditLog;
     private final WallRepo wallRepo;
     /**
-     * 0.4.3：可选 VariableStore 引用 — 仅用于 broadcast 路径在 userglobal namespace 时
+     * 可选 VariableStore 引用 — 仅用于 broadcast 路径在 userglobal namespace 时
      * 注入 ownerUuid / ownerName 字段到 patch value。setter 注入，未配置时 patch 不含 owner
      * 字段（前端有兜底）。
      */
     @org.jetbrains.annotations.Nullable
     private volatile moe.hikari.canvas.variable.VariableStore variableStoreRef;
-    /** M15.3 P0-25：deleteWall 释放 map 后清除像素缓存，防 mapId 复用导致跨 wall 像素泄漏。可空（不强制依赖）。 */
+    /** deleteWall 释放 map 后清除像素缓存，防 mapId 复用导致跨 wall 像素泄漏。可空（不强制依赖）。 */
     private final HikariCanvasRenderer canvasRenderer;
 
-    /** M16-P6.7：lock-free 单 key read/write，跨 map 复合写通过 {@link #writeLock} 串行化。 */
+    /** lock-free 单 key read/write，跨 map 复合写通过 {@link #writeLock} 串行化。 */
     private final Map<String, Session> byId = new ConcurrentHashMap<>();
     private final Map<UUID, String> byPlayer = new ConcurrentHashMap<>();
     private final Map<WallKey, String> byWall = new ConcurrentHashMap<>();
 
     /**
-     * M16-P6.7：守护多 map 的复合 mutate（confirm / cancel / open / deleteWall / forget）。
+     * 守护多 map 的复合 mutate（confirm / cancel / open / deleteWall / forget）。
      * 不守护 Bukkit / MapPool 调用——那些必须在锁外执行（详见 class javadoc）。
      */
     private final ReentrantLock writeLock = new ReentrantLock();
@@ -90,21 +90,21 @@ public final class SessionManager {
     private final List<Consumer<String>> forgetHooks = new CopyOnWriteArrayList<>();
 
     /**
-     * Ultrareview 2026-05-25 #5：session forget <b>之前</b> 调用——session 仍在 byId 内，
+     * session forget <b>之前</b> 调用——session 仍在 byId 内，
      * 让 throttler 等可以走"flush pending 尾帧"路径（discardSession 只 cancel + 清 pending，
      * 会丢最后一次编辑落入节流窗口的尾帧）。
      */
     private final List<Consumer<String>> preForgetHooks = new CopyOnWriteArrayList<>();
 
     /**
-     * 0.4.0-P1-C：wall 删除时调用，让 VariableStore 清掉 wall 的倒排索引（避免被删 wall 仍
+     * wall 删除时调用，让 VariableStore 清掉 wall 的倒排索引（避免被删 wall 仍
      * 出现在 referencedByWalls 列表里、变量值变更触发已不存在 wall 的 dirty）。
      * callback 接收被删的 wallId；线程安全（CopyOnWriteArrayList）。
      */
     private final List<Consumer<String>> wallDeleteHooks = new CopyOnWriteArrayList<>();
 
     /**
-     * 0.7.0-P2（K9）：wall 部署完成（{@link #confirm} 成功）监听。callback 接收就绪的
+     * wall 部署完成（{@link #confirm} 成功）监听。callback 接收就绪的
      * wallId；TriggerRouter 据此投递 wallReady 脚本规则。线程安全（CopyOnWriteArrayList），
      * 异常隔离逐个调用——照 {@link #wallDeleteHooks} 一模一样的风格。
      */
@@ -116,7 +116,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.4.10 P2-8：per-wall 图片配额上限。由 HikariCanvas 在装配后注入（config.images.maxPerWall）；
+     * per-wall 图片配额上限。由 HikariCanvas 在装配后注入（config.images.maxPerWall）；
      * 默认 {@link Integer#MAX_VALUE}（不限）保证未注入时无回归。confirm / open 新建 EditSession
      * 时透传，让 EditSession.addElement 在加 image 元素时强制拒绝超额（上传期 quota 之外的第二道防线）。
      */
@@ -127,7 +127,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.7.2-P2（F10）：per-wall 元素总数上限（脚本克隆元素时强制）。由 HikariCanvas 装配后注入
+     * per-wall 元素总数上限（脚本克隆元素时强制）。由 HikariCanvas 装配后注入
      * （{@code config.scriptsConfig.maxElementsPerWall}）；默认 {@link Integer#MAX_VALUE}（不限）
      * 保证未注入时无回归。confirm / open 新建 EditSession 时透传，让路径 A（活跃 session）的
      * {@code EditSession.cloneElement} 强制配额。
@@ -139,7 +139,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.6 P2：时间轴动画产帧引擎引用（HikariCanvas 装配后注入）。两处用途：
+     * 时间轴动画产帧引擎引用（HikariCanvas 装配后注入）。两处用途：
      * <ul>
      *   <li>{@link #persistWall} 内编辑持久化（{@code wallRepo.updateState}）完成后调
      *       {@code invalidate(wallId)}——Ticker 缓存的 state 下一 tick 重载，编辑可见延迟 ≤ 1 帧。
@@ -150,7 +150,7 @@ public final class SessionManager {
      * 默认 null（未注入）时两处均跳过——测试零侵入。
      */
     private volatile moe.hikari.canvas.render.AnimationTicker animationTicker;
-    /** 0.6 P5：时间轴触发器索引。编辑持久化 / session 关闭后重建该 wall 的触发绑定。可空（测试零侵入）。 */
+    /** 时间轴触发器索引。编辑持久化 / session 关闭后重建该 wall 的触发绑定。可空（测试零侵入）。 */
     private volatile moe.hikari.canvas.render.TimelineTriggerRegistry timelineTriggerRegistry;
 
     public void setAnimationTicker(moe.hikari.canvas.render.AnimationTicker ticker) {
@@ -162,7 +162,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.6 P1：时间轴帧率配置（config 段 {@code timeline}）。由 HikariCanvas 在装配后注入
+     * 时间轴帧率配置（config 段 {@code timeline}）。由 HikariCanvas 在装配后注入
      * （{@code HikariCanvasConfig.TimelineConfig.{defaultFps(), maxFps()}}）；默认 null（未注入）
      * 时 EditSession / TimelineOperations 退回常量缺省 20 / 60，保证无回归。confirm / open 新建
      * EditSession 时透传，让 timeline.create / update 的 fps 钳到 {@code [1, maxFps]}。
@@ -176,7 +176,7 @@ public final class SessionManager {
     }
 
     /**
-     * Ultrareview 2026-05-25 #5：注册"forget 前"监听。在 session 离开 byId 之前调，让
+     * 注册"forget 前"监听。在 session 离开 byId 之前调，让
      * ProjectionThrottler 等组件能 flush pending 尾帧（discardSession 只 cancel 不 flush）。
      */
     public void addPreForgetHook(Consumer<String> hook) {
@@ -184,7 +184,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.4.0-P1-C：注册 wall 删除监听。callback 在 {@link #deleteWall} 完成 map 释放 + DB 删行后
+     * 注册 wall 删除监听。callback 在 {@link #deleteWall} 完成 map 释放 + DB 删行后
      * 触发，按 hook 注册顺序异常隔离逐个调用。
      */
     public void addWallDeleteHook(Consumer<String> hook) {
@@ -192,7 +192,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.7.0-P2（K9）：注册"wall 部署完成"监听。callback 在 {@link #confirm} 成功
+     * 注册"wall 部署完成"监听。callback 在 {@link #confirm} 成功
      * （新建 / 二次编辑两路径）后触发；编辑器 persistWall <b>不算</b>就绪（那是改稿）。
      */
     public void addWallReadyHook(Consumer<String> hook) {
@@ -205,7 +205,7 @@ public final class SessionManager {
     }
 
     /**
-     * M15.3 P0-25：带 renderer 引用的构造器。生产路径走此构造，测试可走 5-arg 版本传 null。
+     * 带 renderer 引用的构造器。生产路径走此构造，测试可走 5-arg 版本传 null。
      */
     public SessionManager(Logger log, MapPool mapPool, WallResolver wallResolver,
                           AuditLog auditLog, WallRepo wallRepo,
@@ -231,7 +231,7 @@ public final class SessionManager {
         long now = System.currentTimeMillis();
         String sessionId = UUID.randomUUID().toString();
         Session s = new Session(sessionId, playerUuid, playerName, now);
-        // M16-P6.7：跨 byPlayer + byId 双 put，用 writeLock 串行化（race：两玩家同时 edit）
+        // 跨 byPlayer + byId 双 put，用 writeLock 串行化（race：两玩家同时 edit）
         writeLock.lock();
         try {
             String existingId = byPlayer.get(playerUuid);
@@ -256,7 +256,7 @@ public final class SessionManager {
     }
 
     /**
-     * M5-D8：清空已选 pos1/pos2，玩家在 SELECTING 状态下隐式 reselect。
+     * 清空已选 pos1/pos2，玩家在 SELECTING 状态下隐式 reselect。
      * {@code /canvas edit} 在已 SELECTING 时调用此方法替代抛 AlreadyHasSession。
      */
     public boolean resetSelection(String sessionId) {
@@ -293,14 +293,14 @@ public final class SessionManager {
         record WallOccupied(String otherSessionId, UUID otherPlayer) implements ConfirmResult {}
         record PoolExhausted(String message) implements ConfirmResult {}
         /**
-         * Ultrareview 2026-05-25 #2：locked wall 二次编辑 + 非 owner + 无 bypass 权限 → 拒绝。
+         * locked wall 二次编辑 + 非 owner + 无 bypass 权限 → 拒绝。
          * 与 {@link OpenResult.Forbidden} 同款；调用方应给玩家显示 "wall is locked by owner"。
          */
         record Forbidden(String message) implements ConfirmResult {}
     }
 
     /**
-     * M16-P2.7-A：confirm 失败时统一异常，含已执行的 rollback 链摘要。
+     * confirm 失败时统一异常，含已执行的 rollback 链摘要。
      * 调用方据此向玩家显示"failed to confirm session, server log for details"。
      */
     public static final class SessionConfirmFailedException extends RuntimeException {
@@ -317,11 +317,11 @@ public final class SessionManager {
      * </ul>
      * <b>必须主线程</b>（MapPool.reserveForWall 可能 createMap）。
      *
-     * <p>M16-P2.7-A：multi-step 链路用 rollback stack 包裹——任一中间步抛异常时
+     * <p>multi-step 链路用 rollback stack 包裹——任一中间步抛异常时
      * 倒序执行已 push 的 rollback action，避免留下 mapPool reserved 但 walls 无对应行
      * （maps 永久泄漏）或反过来的状态。</p>
      *
-     * <p>M16-P6.7：不再 {@code synchronized(this)}。confirm 已 {@link #assertMainThread}
+     * <p>不用 {@code synchronized(this)}。confirm 已 {@link #assertMainThread}
      * 保证主线程串行；跨 map 的最终 commit（{@code byWall.putIfAbsent}）由 {@link #writeLock}
      * 短临界区守护，确保异步线程的 read 观察到完整状态。Bukkit / MapPool 调用全部在
      * writeLock 之外。</p>
@@ -338,7 +338,7 @@ public final class SessionManager {
             return new ConfirmResult.NotReady("please click both corners first");
         }
 
-        // 走 WallResolver；M5.5 阶段 OCCUPIED 由 WallResolver 兼容处理（P3 完善）
+        // 走 WallResolver；OCCUPIED 由 WallResolver 兼容处理
         WallResolver.Result r = wallResolver.resolve(s.pos1(), s.face(), s.pos2(), s.face());
         if (r instanceof WallResolver.Result.Failed f) {
             return new ConfirmResult.WallFailed(f);
@@ -347,7 +347,7 @@ public final class SessionManager {
 
         WallKey key = new WallKey(
                 wall.world().getName(), wall.minX(), wall.minY(), wall.minZ(), wall.facing());
-        // M16-P6.7：early probe；最终 commit 用 putIfAbsent 在临界区里 race-free
+        // early probe；最终 commit 用 putIfAbsent 在临界区里 race-free
         String holderId = byWall.get(key);
         if (holderId != null) {
             Session holder = byId.get(holderId);
@@ -362,13 +362,13 @@ public final class SessionManager {
         String wallId;
         boolean newWall;
 
-        // M16-P2.7-A：rollback stack。每步成功后 push 一个 undo action；任何后续步骤
+        // rollback stack。每步成功后 push 一个 undo action；任何后续步骤
         // 抛异常时倒序运行（LIFO）。所有 Runnable 都用 try/catch 包裹，单条 rollback
         // 失败仅 log.warning，不影响其它 rollback 和原始异常传递。
         final java.util.Deque<Runnable> rollbacks = new java.util.ArrayDeque<>();
 
         try {
-            // Ultrareview 2026-05-25 #2：locked existing wall 二次编辑路径的 owner 校验
+            // locked existing wall 二次编辑路径的 owner 校验
             // —— 与 OpenResult 路径一致。/canvas edit + confirm 撞上别人的 locked wall：
             // 非 owner + 无 canvas.admin.bypass-lock → Forbidden（防止绕过 /canvas open
             // 已有的 lock 校验拿到编辑 token）。Bukkit.getPlayer 调用在 confirm assertMainThread
@@ -406,7 +406,7 @@ public final class SessionManager {
             } else {
                 // 全空 → 新建。链路：reserve → INSERT walls → release(pending) + bind(wallId)
                 ps = new ProjectState(wall.width(), wall.height());
-                // P2-18：用 MapPool.PENDING_WALL_PREFIX，确保 detectLeaks 能识别并豁免这段
+                // 用 MapPool.PENDING_WALL_PREFIX，确保 detectLeaks 能识别并豁免这段
                 // reserve→bind 窗口期的临时预留（否则异步泄漏检测会误删正在创建的 wall maps）。
                 final String reserveOwnerWallId = MapPool.PENDING_WALL_PREFIX + UUID.randomUUID();
                 try {
@@ -446,7 +446,7 @@ public final class SessionManager {
             }
 
             // ---- 从此处起进入 in-memory 状态变更 ----
-            // P2-21：Session 的这些字段均为 volatile（见 Session.java），每次写都带发布屏障，
+            // Session 的这些字段均为 volatile（见 Session.java），每次写都带发布屏障，
             // 异步线程（daemon 节流 / broadcast / CanvasProjector）无锁读也观察到最新值，不会
             // 看到半构造状态。confirm 已 assertMainThread 保证主线程串行写；后续 byWall.putIfAbsent
             // 在 writeLock 临界区内，与这些 volatile 写形成 happens-before（主线程程序序），
@@ -457,13 +457,13 @@ public final class SessionManager {
             s.wallId(wallId);
             s.projectState(ps);
             EditSession es = new EditSession(ps);
-            es.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
-            es.setMaxElementsPerWall(maxElementsPerWall);  // 0.7.2-P2 F10：注入 per-wall 元素配额
-            es.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 0.6 P1：注入时间轴 fps 配置
+            es.setMaxImagesPerWall(maxImagesPerWall);  // 注入 per-wall 图片配额
+            es.setMaxElementsPerWall(maxElementsPerWall);  // 注入 per-wall 元素配额
+            es.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 注入时间轴 fps 配置
             s.editSession(es);
             s.state(SessionState.ISSUED);
 
-            // M16-P6.7：byWall race-free put。失败说明 confirm-vs-confirm race（实际不会
+            // byWall race-free put。失败说明 confirm-vs-confirm race（实际不会
             // 发生，因 confirm 主线程串行），但作为防御保留 + WallOccupied 路径。
             writeLock.lock();
             try {
@@ -481,7 +481,7 @@ public final class SessionManager {
                     Map.of("wall_id", wallId, "new_wall", newWall, "map_count", mapIds.size(),
                             "world", wall.world().getName()));
 
-            // 0.7.0-P2（K9②）：部署完成 → wallReady 脚本触发点（异常隔离，hook 抛不影响 confirm）
+            // 部署完成 → wallReady 脚本触发点（异常隔离，hook 抛不影响 confirm）
             fireWallReadyHooks(wallId);
 
             return newWall
@@ -514,7 +514,7 @@ public final class SessionManager {
         }
     }
 
-    /** 0.7.0-P2（K9）：逐 hook 通知 wall 就绪；异常隔离（照 wallDeleteHooks 纪律）。 */
+    /** 逐 hook 通知 wall 就绪；异常隔离（照 wallDeleteHooks 纪律）。 */
     private void fireWallReadyHooks(String wallId) {
         for (Consumer<String> hook : wallReadyHooks) {
             try {
@@ -526,7 +526,7 @@ public final class SessionManager {
         }
     }
 
-    /** M16-P2.7-A：倒序执行 rollback stack，单条失败仅 log.warning，不抛。 */
+    /** 倒序执行 rollback stack，单条失败仅 log.warning，不抛。 */
     private void runRollbacks(java.util.Deque<Runnable> rollbacks) {
         while (!rollbacks.isEmpty()) {
             Runnable r = rollbacks.pop();
@@ -551,7 +551,7 @@ public final class SessionManager {
         record AlreadyHasSession(SessionState current) implements OpenResult {}
         record WallOccupied(String otherSessionId, UUID otherPlayer) implements OpenResult {}
         record BindFailed(String detail) implements OpenResult {}
-        /** M15.3 Phase 2 方案 C：wall 已锁定 + caller 非 owner + 无 bypass 权限 → 拒绝 open。 */
+        /** wall 已锁定 + caller 非 owner + 无 bypass 权限 → 拒绝 open。 */
         record Forbidden(String message) implements OpenResult {}
     }
 
@@ -561,14 +561,14 @@ public final class SessionManager {
                 wallRepo.loadByAlias(wallIdOrAlias).orElse(null));
         if (w == null) return new OpenResult.NotFound();
 
-        // M15.3 Phase 2 方案 C：lock-aware open。后端编辑 op 仍透明放行（CLAUDE.md §lock-state 第 2 条），
+        // lock-aware open。后端编辑 op 仍透明放行（CLAUDE.md §lock-state 第 2 条），
         // 仅在 open 入口拦截：locked wall + 非 owner + 无 canvas.admin.bypass-lock 权限 → Forbidden。
         // 注意：Bukkit.getPlayer 调用在锁外（持锁中调 Bukkit API 易死锁）。
         if (w.publishedAt() != null && !playerUuid.equals(w.ownerUuid())) {
             org.bukkit.entity.Player live = Bukkit.getPlayer(playerUuid);
             boolean bypass = live != null && live.hasPermission("canvas.admin.bypass-lock");
             if (!bypass) {
-                // M16 P6.4：lock-aware open 拒绝留痕——监控异常尝试访问他人 locked wall
+                // lock-aware open 拒绝留痕——监控异常尝试访问他人 locked wall
                 LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                 details.put("operation", "open");
                 details.put("wall_id", w.wallId());
@@ -581,7 +581,7 @@ public final class SessionManager {
             }
         }
 
-        // M5.5 修：玩家若已绑同一 wall（浏览器关了但 session 还 ACTIVE）→ 幂等重用 + 重发 URL；
+        // 玩家若已绑同一 wall（浏览器关了但 session 还 ACTIVE）→ 幂等重用 + 重发 URL；
         // 绑别的 wall 才报 AlreadyHasSession，避免"5min idle 等不及"的卡死。
         String existingId = byPlayer.get(playerUuid);
         if (existingId != null) {
@@ -621,15 +621,15 @@ public final class SessionManager {
         s.mapIds(w.mapIds());
         s.projectState(w.state());
         EditSession openEs = new EditSession(w.state());
-        openEs.setMaxImagesPerWall(maxImagesPerWall);  // P2-8：注入 per-wall 图片配额
-        openEs.setMaxElementsPerWall(maxElementsPerWall);  // 0.7.2-P2 F10：注入 per-wall 元素配额
-        openEs.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 0.6 P1：注入时间轴 fps 配置
+        openEs.setMaxImagesPerWall(maxImagesPerWall);  // 注入 per-wall 图片配额
+        openEs.setMaxElementsPerWall(maxElementsPerWall);  // 注入 per-wall 元素配额
+        openEs.setTimelineFpsLimits(timelineDefaultFps, timelineMaxFps);  // 注入时间轴 fps 配置
         s.editSession(openEs);
-        // 2026-05-12 修：补回 wall geometry，否则 wall.refresh / frame ops 在 /canvas open 后空跑
+        // 补回 wall geometry，否则 wall.refresh / frame ops 在 /canvas open 后空跑
         s.wall(rebuildWallGeometry(w));
         s.state(SessionState.ISSUED);
 
-        // M16-P6.7：跨 byId / byPlayer / byWall 三 map commit 在 writeLock 临界区内串行化，
+        // 跨 byId / byPlayer / byWall 三 map commit 在 writeLock 临界区内串行化，
         // 确保异步 read 看到完整状态；race-check 防主线程窗口（不应该发生但防御）。
         writeLock.lock();
         try {
@@ -703,17 +703,17 @@ public final class SessionManager {
     }
 
     /**
-     * M5.5：WS op 成功后由 WebServer 调用，把当前 {@link ProjectState} 存 walls 表
+     * WS op 成功后由 WebServer 调用，把当前 {@link ProjectState} 存 walls 表
      * （仅 UPDATE project_json，不动 mapIds / wall_id）。非主线程调用即可。
      */
     public void persistWall(String sessionId) {
-        // M16-P6.7：CHM read 无锁
+        // CHM read 无锁
         Session s = byId.get(sessionId);
         if (s == null || s.wallId() == null || s.projectState() == null) return;
         wallRepo.updateState(s.wallId(), s.projectState());
-        // 0.6 P2/P6：updateState 同步落库后处理 Ticker。
+        // updateState 同步落库后处理 Ticker。
         //  - 已在播 → invalidate（廉价刷缓存，下一帧即用新 state，编辑可见延迟 ≤1 帧）。
-        //  - 没在播但有 activeTimeline → refreshAutoPlay：**编辑期就让游戏里的墙自动播**（P6 改进），
+        //  - 没在播但有 activeTimeline → refreshAutoPlay：编辑期就让游戏里的墙自动播，
         //    不必等编辑器关闭 / 会话回收 / 重启全量扫描——这也是"新建动画要重启才动"那个毛刺的根因
         //    （浏览器关闭不一定立刻 cancel→refreshAutoPlay，旧逻辑只在关闭/启动才起播）。
         //  - 静态墙（无 activeTimeline）→ 不碰 Ticker（避免每次编辑多一次 loadWall 的 DB 读）。
@@ -725,7 +725,7 @@ public final class SessionManager {
                 ticker.refreshAutoPlay(s.wallId());
             }
         }
-        // 0.6 P5：编辑落库后重建该 wall 的触发绑定（timeline.trigger / activeTimelineId 可能刚改）。
+        // 编辑落库后重建该 wall 的触发绑定（timeline.trigger / activeTimelineId 可能刚改）。
         moe.hikari.canvas.render.TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
         if (trig != null) {
             trig.rebuildForWall(s.wallId());
@@ -733,13 +733,13 @@ public final class SessionManager {
     }
 
     /**
-     * 0.7.0-P2（T4）：脚本 {@code setElementProperty} 路径 A——墙开着编辑器时走
+     * 脚本 {@code setElementProperty} 路径 A——墙开着编辑器时走
      * {@link moe.hikari.canvas.state.EditSession#updateElement} 标准链，并照
      * {@code EditOpDispatcher} case {@code "element.update"} 的收尾链：推 state.patch
      * （前端实时可见）+ ProjectionThrottler 脏区投影 + {@link #persistWall}（其内含
      * Ticker invalidate/refreshAutoPlay + TimelineTriggerRegistry rebuild）。
      *
-     * <p>与 dispatcher 的差异：无 ack（脚本无 WS 请求方）；push / throttler 由批次 3
+     * <p>与 dispatcher 的差异：无 ack（脚本无 WS 请求方）；push / throttler 由
      * 装配层闭包绑入（本类不长期持有两引用，照 {@code broadcastVariableChangeToWall}
      * 传参先例）。</p>
      *
@@ -794,7 +794,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.7.1：脚本 {@code nudgeElement} 路径 A——墙开着编辑器时，在<b>同一次 session 迭代</b>内
+     * 脚本 {@code nudgeElement} 路径 A——墙开着编辑器时，在<b>同一次 session 迭代</b>内
      * 读元素当前 x/y + delta 写回，走与 {@link #applyScriptElementPatch} 相同的标准
      * element.update 链（state.patch 推送 + 投影节流 + persistWall）。读 + 写在同一 EditSession
      * 引用上顺序进行，避免脚本 nudge 与编辑器互相覆盖。
@@ -866,7 +866,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.7.2-P2（F5/F10）：脚本 {@code cloneElement} 路径 A——墙开着编辑器时走
+     * 脚本 {@code cloneElement} 路径 A——墙开着编辑器时走
      * {@link moe.hikari.canvas.state.EditSession#cloneElement} 标准链，并照
      * {@link #applyScriptElementPatch} 的收尾链：推 state.patch（前端实时多出副本）+
      * ProjectionThrottler 脏区投影 + {@link #persistWall}。F10 配额由 session 自己的
@@ -897,7 +897,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.7.2-P2（F5）：脚本 {@code deleteElement} 路径 A——墙开着编辑器时走
+     * 脚本 {@code deleteElement} 路径 A——墙开着编辑器时走
      * {@link moe.hikari.canvas.state.EditSession#deleteElement} 标准链 + 收尾链（推
      * state.patch 移除元素 + 投影 + persistWall）。无活跃 session → {@code NO_SESSION}；
      * 元素不存在 → {@code FAILED}（不回退 headless，同 patch 路径）。
@@ -923,7 +923,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.7.3：脚本 {@code setElementLayer}（置顶/置底）路径 A——墙开着编辑器时走
+     * 脚本 {@code setElementLayer}（置顶/置底）路径 A——墙开着编辑器时走
      * {@link moe.hikari.canvas.state.EditSession#moveElementToFront}（{@code mode="front"}）/
      * {@link moe.hikari.canvas.state.EditSession#moveElementToBack}（其余视作 back）标准链 +
      * 收尾链（推 reorder 的 state.patch〔remove + add 一对〕+ 投影脏区 + persistWall），与 clone /
@@ -988,7 +988,7 @@ public final class SessionManager {
     }
 
     /**
-     * M16 P6.6：会话级 IP 绑定判定。
+     * 会话级 IP 绑定判定。
      * <ul>
      *   <li>session 不存在 → {@link IpBindResult#NO_SESSION}（调用方应已 closeAuthFailed，
      *       此返回仅为安全网）。</li>
@@ -1026,9 +1026,9 @@ public final class SessionManager {
 
     /**
      * 释放 session（不删 wall）。任何非 CLOSING 状态都可 cancel；不归还池（wall 一直占）；
-     * 仅清 byPlayer / byWall / forgetHooks。M5.5 起 wall 数据生命周期与 session 解耦。
+     * 仅清 byPlayer / byWall / forgetHooks。wall 数据生命周期与 session 解耦。
      *
-     * <p>M16-P6.7：跨 map mutate 在 {@link #writeLock} 内；{@link #forgetHooks} 在锁外触发，
+     * <p>跨 map mutate 在 {@link #writeLock} 内；{@link #forgetHooks} 在锁外触发，
      * 防止 hook 回调持外部锁造成 lock-order 死锁。</p>
      */
     public void cancel(String sessionId, String reason) {
@@ -1036,12 +1036,12 @@ public final class SessionManager {
         Session s = byId.get(sessionId);
         if (s == null) return;
         if (s.state() == SessionState.CLOSING) return;
-        // 0.6 P2：在 forget 把 wallId 从 session 摘掉之前捕获——cancel 完成后据此让 LOOP 墙自动续播。
+        // 在 forget 把 wallId 从 session 摘掉之前捕获——cancel 完成后据此让 LOOP 墙自动续播。
         // cancel 是所有 session 关闭路径的唯一汇聚点（/canvas cancel、WS grace 超时、idle 超时
         // 的 SessionReaper 都走此处），故一处挂钩覆盖全部"编辑器关闭"场景。
         final String closingWallId = s.wallId();
 
-        // Ultrareview 2026-05-25 #5：先 flush pending 尾帧（session 还在 byId 才能 flush 成功），
+        // 先 flush pending 尾帧（session 还在 byId 才能 flush 成功），
         // 再走 cancel 主流程。preForgetHooks 异常隔离避免单个 hook 拖垮 cancel。
         runPreForgetHooks(sessionId);
 
@@ -1061,13 +1061,13 @@ public final class SessionManager {
         auditLog.record("SESSION_CANCEL", s.playerUuid().toString(), s.playerName(),
                 sessionId, null, Map.of("reason", reason == null ? "" : reason));
         runForgetHooks(sessionId);
-        // 0.6 P2：锁外触发——编辑器关闭后让该 wall 的 LOOP 动画自动续播（refreshAutoPlay 内部
+        // 锁外触发——编辑器关闭后让该 wall 的 LOOP 动画自动续播（refreshAutoPlay 内部
         // 若 wall 不存在 / 非 LOOP / 已注册则 no-op；与上方 runForgetHooks 同样在 writeLock 外执行）。
         moe.hikari.canvas.render.AnimationTicker ticker = this.animationTicker;
         if (ticker != null && closingWallId != null) {
             ticker.refreshAutoPlay(closingWallId);
         }
-        // 0.6 P5：编辑器关闭后重建触发绑定（最终态落库；与 refreshAutoPlay 同源 hook）。
+        // 编辑器关闭后重建触发绑定（最终态落库；与 refreshAutoPlay 同源 hook）。
         moe.hikari.canvas.render.TimelineTriggerRegistry trig = this.timelineTriggerRegistry;
         if (trig != null && closingWallId != null) {
             trig.rebuildForWall(closingWallId);
@@ -1078,7 +1078,7 @@ public final class SessionManager {
      * `/canvas delete <wall_id> confirm`：彻底删除 wall（释放 map → FREE，删 walls 行）。
      * 调用方负责拆 ItemFrames 和 cancel 任何活跃 session。
      *
-     * <p>M16-P6.7：map mutate 在 writeLock 内；MapPool / WallRepo / renderer / forgetHooks
+     * <p>map mutate 在 writeLock 内；MapPool / WallRepo / renderer / forgetHooks
      * 全部在锁外执行。</p>
      */
     public boolean deleteWall(String wallId) {
@@ -1101,7 +1101,7 @@ public final class SessionManager {
         }
         // Bukkit / MapPool / WallRepo / renderer 全部在锁外
         List<Integer> released = mapPool.releaseWall(wallId);
-        // M15.3 P0-25：清像素缓存，防 mapId 复用导致旧像素显示在新 wall。
+        // 清像素缓存，防 mapId 复用导致旧像素显示在新 wall。
         if (canvasRenderer != null && !released.isEmpty()) {
             canvasRenderer.invalidate(released);
         }
@@ -1109,7 +1109,7 @@ public final class SessionManager {
         auditLog.record("WALL_DELETE", null, null, null, null,
                 Map.of("wall_id", wallId, "released_maps", released.size()));
         for (String id : forgottenIds) runForgetHooks(id);
-        // 0.4.0-P1-C：wall 删除完成 → 触发监听（VariableStore.clearWallReferences 等）。
+        // wall 删除完成 → 触发监听（VariableStore.clearWallReferences 等）。
         // 异常隔离避免单个 hook 抛拖垮主路径。
         for (Consumer<String> hook : wallDeleteHooks) {
             try {
@@ -1147,7 +1147,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.9.2 可观测性（Task 2）：给定 {@code wallId} 判断是否有玩家正开着活跃编辑 session。
+     * 给定 {@code wallId} 判断是否有玩家正开着活跃编辑 session。
      *
      * <p>{@code byWall} 的 key 是 {@link WallKey}（位置标识）而非 wallId 字符串，无法按 wallId 直接
      * 查；照 {@link #submitFullCanvasDirtyByWallAndReport} / {@code applyScript*} 的既定范式遍历
@@ -1169,9 +1169,9 @@ public final class SessionManager {
     }
 
     /**
-     * 2026-05-14：对所有活跃 session 的 {@link moe.hikari.canvas.state.EditSession#purgeStaleStrokes}
+     * 对所有活跃 session 的 {@link moe.hikari.canvas.state.EditSession#purgeStaleStrokes}
      * 一并调用。由 {@link SessionReaper} 周期触发——确保用户永久离开后服务端
-     * 不会积压 stroke buffer 内存（M12 brush 引入的潜在泄漏）。
+     * 不会积压 stroke buffer 内存（brush 引入的潜在泄漏）。
      */
     public void purgeAllStaleStrokes() {
         for (Session s : byId.values()) {
@@ -1181,7 +1181,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.4.0-P1-B：找到所有绑定到 {@code wallId} 的活跃 session，对每个 submit 全画布 dirty
+     * 找到所有绑定到 {@code wallId} 的活跃 session，对每个 submit 全画布 dirty
      * 到 {@link moe.hikari.canvas.render.ProjectionThrottler}。
      *
      * <p>用例：变量值变化（{@link moe.hikari.canvas.variable.VariableStore} wallDirtyCallback）
@@ -1196,7 +1196,7 @@ public final class SessionManager {
     }
 
     /**
-     * Ultrareview 2026-05-25 #1：同 {@link #submitFullCanvasDirtyByWall} 但返回是否找到任何
+     * 同 {@link #submitFullCanvasDirtyByWall} 但返回是否找到任何
      * 活跃 session 提交。{@code false} 表示该 wall 部署在游戏内但没人开编辑器，调用方应
      * 走 deploy-only refresh 路径（{@link moe.hikari.canvas.render.CanvasProjector#projectByWall}）
      * 让外部变量驱动的渲染不丢更新。
@@ -1220,7 +1220,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.4.0 bugfix3（Bug B）：把 {@link moe.hikari.canvas.variable.VariableStore.VariableChangeEvent}
+     * 把 {@link moe.hikari.canvas.variable.VariableStore.VariableChangeEvent}
      * 翻译成 {@code state.patch} 推给绑定到 {@code event.referencingWalls()} 的所有活跃 session。
      *
      * <p>用例：Provider（ManualScheduleProvider / SystemVariableProvider / PapiVariableBridge 等）
@@ -1250,7 +1250,7 @@ public final class SessionManager {
      * @param push  OpPushCallback（由 WebServer 实现）
      */
     /**
-     * 0.4.3：广播全局用户变量变更给<b>所有</b>活跃 session，不限 wall。
+     * 广播全局用户变量变更给<b>所有</b>活跃 session，不限 wall。
      *
      * <p>{@code userglobal/*} namespace 是全服共享的，任何画布都可能引用——必须给所有
      * session 推 patch；与按 {@link #broadcastVariableChangeToWall} 的 per-wall 倒排索引
@@ -1298,7 +1298,7 @@ public final class SessionManager {
             moe.hikari.canvas.variable.VariableStore.VariableChangeEvent event,
             moe.hikari.canvas.web.OpPushCallback push) {
         if (event == null || push == null) return;
-        // 0.4.0 方案 B 自适应渲染：WALL_REFS_UPDATED 事件由 markWallReferences 引发，
+        // 自适应渲染：WALL_REFS_UPDATED 事件由 markWallReferences 引发，
         // variable 字段为 null + fullName 是占位符；该事件用于让自适应 listener 重新评估
         // ProjectionThrottler 间隔，不需要推 state.patch。这里早返避免 buildVariablePatchOp
         // 走 switch 时缺 case + NPE。
@@ -1363,7 +1363,7 @@ public final class SessionManager {
     }
 
     /**
-     * 0.4.3：注入 VariableStore 引用让 broadcast 路径能查 userglobal owner 信息。
+     * 注入 VariableStore 引用让 broadcast 路径能查 userglobal owner 信息。
      * HikariCanvas onEnable 装配后调用一次。
      */
     public void setVariableStoreRef(
@@ -1391,7 +1391,7 @@ public final class SessionManager {
                         path + "/source", src);
             }
             case DELETED -> moe.hikari.canvas.state.PatchOp.remove(path);
-            // 0.4.0 方案 B：WALL_REFS_UPDATED 不构造 patch（broadcastVariableChangeToWall
+            // WALL_REFS_UPDATED 不构造 patch（broadcastVariableChangeToWall
             // 已早返）。switch exhaustive 时此分支永不命中；返 null 上游也已处理。
             case WALL_REFS_UPDATED -> null;
         };
@@ -1406,7 +1406,7 @@ public final class SessionManager {
      * 把 Variable 序列化为 patch value Map。与 {@link moe.hikari.canvas.state.EditSession#variableToMap}
      * 形态完全一致 — 前端 wsClient.applyVariablePatches 路径已就位。
      *
-     * <p>0.4.3：{@code userglobal/*} namespace 时，从 {@link #variableStoreRef}
+     * <p>{@code userglobal/*} namespace 时，从 {@link #variableStoreRef}
      * 查 owner 信息并注入 {@code ownerUuid} / {@code ownerName} 字段，让前端 Picker / Panel
      * 区分"我的全局 / 其他全局"。store 未注入或 owner 不存在时跳过 owner 字段。</p>
      */
@@ -1424,7 +1424,7 @@ public final class SessionManager {
         if (v.source() != null) m.put("source", v.source());
         // referencedByWalls 是服务端倒排索引细节，不下发（与 EditSession.variableToMap 一致）
 
-        // 0.4.3：userglobal 注入 owner 信息
+        // userglobal 注入 owner 信息
         if (moe.hikari.canvas.variable.VariableStore.USER_GLOBAL_NAMESPACE.equals(v.namespace())) {
             moe.hikari.canvas.variable.VariableStore store = variableStoreRef;
             if (store != null) {
@@ -1437,7 +1437,7 @@ public final class SessionManager {
         return m;
     }
 
-    // ---------- 超时扫描（M3-T2 Reaper 用） ----------
+    // ---------- 超时扫描（Reaper 用） ----------
 
     /**
      * 由 {@link SessionReaper} 批量查询要 cancel 的会话。仅做决策，不做副作用；
@@ -1461,7 +1461,7 @@ public final class SessionManager {
     public List<ExpiredSession> collectExpired(
             long now, long issuedTimeoutMs, long wsGraceMs, long activeIdleMs) {
         List<ExpiredSession> out = new ArrayList<>();
-        // P2-20：在 writeLock 临界区内做超时判定，与 confirm/cancel/forget 等生命周期 mutate
+        // 在 writeLock 临界区内做超时判定，与 confirm/cancel/forget 等生命周期 mutate
         // 串行化——避免观察到正在被 forget（CLOSING 中途）的 session，或与 markActive 的
         // 活跃刷新撕裂读。判定只读不副作用，持锁极短（无 Bukkit/IO）。
         writeLock.lock();
@@ -1474,7 +1474,7 @@ public final class SessionManager {
                     }
                 }
                 case ACTIVE -> {
-                    // P3-13：wsDisconnectedAt 是 volatile（见 Session.java），单次读快照避免
+                    // wsDisconnectedAt 是 volatile（见 Session.java），单次读快照避免
                     // 第一次判定后并发 reconnect（markActive→touchActivity 置 -1）导致两次读不一致，
                     // 走进既非 ws-reconnect 也非 idle 的"幽灵"分支或反之误杀。
                     long disconnectedAt = s.wsDisconnectedAt();
@@ -1498,7 +1498,7 @@ public final class SessionManager {
     // ---------- 内部 ----------
 
     /**
-     * M16-P2.7-B：主线程断言。{@link #confirm} / {@link #cancel} / {@link #deleteWall}
+     * 主线程断言。{@link #confirm} / {@link #cancel} / {@link #deleteWall}
      * 直接或间接调用 {@link MapPool} 的 Bukkit API 路径（{@code createMap} / MapView 操作），必须主线程。
      *
      * <p>纯单测环境（Bukkit server 未注入）下 {@link Bukkit#getServer()} 抛 NPE 或返回 null，
@@ -1558,7 +1558,7 @@ public final class SessionManager {
     }
 
     /**
-     * Ultrareview 2026-05-25 #5：在 session forget <b>之前</b>跑（session 还在 byId 内）。
+     * 在 session forget <b>之前</b>跑（session 还在 byId 内）。
      * 给 throttler 一个机会 flush pending 尾帧。锁外执行避免持锁回调反向 lock-order。
      */
     private void runPreForgetHooks(String sessionId) {

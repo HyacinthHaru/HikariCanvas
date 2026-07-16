@@ -27,7 +27,7 @@ import static moe.hikari.canvas.web.WebHelpers.asPayloadMap;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * 0.7.0 P1：{@code script.*} WS op 分发器（5 op）。契约 {@code docs/scripting.md §2}。
+ * {@code script.*} WS op 分发器（5 op）。契约 {@code docs/scripting.md §2}。
  *
  * <h2>5 个 op</h2>
  *
@@ -36,7 +36,7 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
  *   <li>{@code script.update {ruleId, rule}} — 全量替换（先 find 确认属本 wall，防跨墙改）</li>
  *   <li>{@code script.delete {ruleId}} — 删除；不存在也推 remove patch（幂等，照 alias clear 先例）</li>
  *   <li>{@code script.enable {ruleId, enabled}} — 翻转开关</li>
- *   <li>{@code script.test {ruleId}} — 0.7.0-P3 A2（K11）异步试跑：ack 立即返
+ *   <li>{@code script.test {ruleId}} — 异步试跑：ack 立即返
  *       {@code {accepted:true, ruleId}}；轨迹完成后 S→C 推 {@code script.trace}
  *       （经 {@link moe.hikari.canvas.script.engine.ScriptTestLauncher} seam）</li>
  * </ul>
@@ -44,7 +44,7 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
  * <h2>权限</h2>
  *
  * <p>全部 op 先查基础节点 {@link ScriptPermissions#NODE_EDIT}（default=true；仅 offline
- * 玩家兜底放行，在线被显式收回必须真拒——批次3 #1，与 alias 模板的 own 兜底等价语义）。
+ * 玩家兜底放行，在线被显式收回必须真拒，与 alias 模板的 own 兜底等价语义）。
  * create / update 解析出
  * rule 后再对 {@link ScriptPermissions#requiredFacets} 逐面查——<b>面节点无兜底</b>：
  * 服主收回 {@code canvas.script.sound} / {@code canvas.script.command} /
@@ -57,7 +57,7 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
  * <p>{@code /scripts/<encoded ruleId>}（RFC 6901 段编码）。create / update / enable 推 add
  * （前端 mirror set 幂等，replace 语义统一用 add，照 alias 注释先例）；delete 推 remove。
  * 同 {@link VariableAliasDispatcher}：不走 EditSession（脚本不影响 ProjectState 像素 /
- * version / undo），patch 携 {@code currentVersion(s)}——Ultrareview 2026-05-25 #17：
+ * version / undo），patch 携 {@code currentVersion(s)}——
  * 不要写 0，前端 applyPatch 会把空 projectOps 的 patch.version 当 state.version 覆盖，
  * 写 0 会把 ProjectState.version 倒退影响后续 op 冲突判定。</p>
  */
@@ -72,7 +72,7 @@ final class ScriptOpDispatcher {
     /**
      * 解析结果：error 非 null 即 INVALID_PAYLOAD message（此时 rule 为 null）；
      * cause 是解析期原始异常（仅 error 路径非 null，供 server 日志记完整堆栈——
-     * 批次3 #5：外发 message 只留首行，细节进日志）。
+     * 外发 message 只留首行，细节进日志）。
      */
     record ParsedRule(ScriptRule rule, String error, Throwable cause) {}
 
@@ -84,23 +84,23 @@ final class ScriptOpDispatcher {
     private final moe.hikari.canvas.storage.AuditLog auditLog;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
-    /** server 日志（批次3 #2：catch-all 不再静默吞异常）；可为 null（兜底跳过记录）。 */
+    /** server 日志（catch-all 不再静默吞异常）；可为 null（兜底跳过记录）。 */
     private final java.util.logging.Logger log;
     /**
-     * 0.9.7：i18n 文案中枢，按编辑器 locale 渲染脚本校验报错（{@link ValidationError} →
+     * i18n 文案中枢，按编辑器 locale 渲染脚本校验报错（{@link ValidationError} →
      * {@code Messages.plain(session.editorLocale(), "script.validate.<key>", …)}）。
      * 本任务（T1）只注入不使用——T2/T3 把 validate/checkConditionSyntax 的返回改为
      * {@link ValidationError} 后在此渲染。可为 null（旧测试装配容忍）。
      */
     private final moe.hikari.canvas.i18n.Messages messages;
     /**
-     * 0.7.0-P3 A2（K11）：异步试跑入口（取代 P1 同步 ScriptTestSeam——同步等待阻塞
+     * 异步试跑入口（不走同步等待——同步等待阻塞
      * Jetty worker，合法规则可串 wait 至分钟级，5s ack 超时必爆）。null = 引擎未装配，
      * {@code script.test} 回 {@code SCRIPT_ENGINE_UNAVAILABLE}。
      *
-     * <p><b>facet 语义（契约 scripting.md §4.1）</b>：试跑即真实执行（D5），
+     * <p><b>facet 语义（契约 scripting.md §4.1）</b>：试跑即真实执行，
      * {@code launch} 前同样过 {@link #checkFacets}（sound / command 面缺失真拒）+
-     * {@code SCRIPT_TEST} audit；K12：TEST run 不豁免 Budget（runner 投递侧统一过闸）。</p>
+     * {@code SCRIPT_TEST} audit；TEST run 不豁免 Budget（runner 投递侧统一过闸）。</p>
      */
     private volatile moe.hikari.canvas.script.engine.ScriptTestLauncher testLauncher;
 
@@ -180,7 +180,7 @@ final class ScriptOpDispatcher {
                         "unknown script op: " + op);
             };
         } catch (Exception e) {
-            // M16 P6.1 错误消息脱敏：client 只收固定文案；批次3 #2：完整异常进 server 日志
+            // 错误消息脱敏：client 只收固定文案；完整异常进 server 日志
             if (log != null) {
                 log.log(java.util.logging.Level.WARNING, "script op failed: " + op, e);
             }
@@ -205,7 +205,7 @@ final class ScriptOpDispatcher {
             return Envelope.error(in.id(), "SCRIPT_INVALID",
                     renderValidation(sessionId, invalid.get()));
         }
-        // K16：所有 if.condition 保存期预 parse——坏条件保存时就拒，不等运行期静默 false
+        // 所有 if.condition 保存期预 parse——坏条件保存时就拒，不等运行期静默 false
         Optional<ValidationError> badCondition = checkConditionSyntax(parsed.rule().actions());
         if (badCondition.isPresent()) {
             return Envelope.error(in.id(), "SCRIPT_INVALID",
@@ -241,7 +241,7 @@ final class ScriptOpDispatcher {
             return Envelope.error(in.id(), "SCRIPT_NOT_FOUND",
                     "script rule not found: " + ruleId);
         }
-        // P2-1：update 缺 enabled 时继承现值（不再缺省 true）
+        // update 缺 enabled 时继承现值（不再缺省 true）
         ParsedRule parsed = parseIncomingRule(payload, wallId, existing.enabled());
         if (parsed.error() != null) {
             logParseFailure("script.update", parsed);
@@ -252,7 +252,7 @@ final class ScriptOpDispatcher {
             return Envelope.error(in.id(), "SCRIPT_INVALID",
                     renderValidation(sessionId, invalid.get()));
         }
-        // K16：同 create——update 全量替换也逐 if.condition 预 parse
+        // 同 create——update 全量替换也逐 if.condition 预 parse
         Optional<ValidationError> badCondition = checkConditionSyntax(parsed.rule().actions());
         if (badCondition.isPresent()) {
             return Envelope.error(in.id(), "SCRIPT_INVALID",
@@ -329,7 +329,7 @@ final class ScriptOpDispatcher {
     }
 
     /**
-     * K11：异步试跑——ack 立即返 {@code {accepted:true, ruleId}}（不等执行；合法规则
+     * 异步试跑——ack 立即返 {@code {accepted:true, ruleId}}（不等执行；合法规则
      * 可串 wait 至分钟级）；轨迹完成后由 runner 线程经 {@link OpPushCallback#pushOp}
      * 推 S→C op {@code script.trace {ruleId, steps}} 给发起 session（session 没了静默丢）。
      */
@@ -345,7 +345,7 @@ final class ScriptOpDispatcher {
             return Envelope.error(in.id(), "SCRIPT_ENGINE_UNAVAILABLE",
                     "script engine not wired");
         }
-        // 批次3 #6：launch 前守卫 ruleId 存在性（含跨墙——find 按本 wall 查），
+        // launch 前守卫 ruleId 存在性（含跨墙——find 按本 wall 查），
         // 不把"不存在的 ruleId"透传给引擎
         Optional<ScriptRule> rule = store.find(wallId, ruleId);
         if (rule.isEmpty()) {
@@ -390,7 +390,7 @@ final class ScriptOpDispatcher {
 
     /**
      * 兼容入口：{@code enabledFallback = TRUE}（create 语义；既有单测沿用）。
-     * update 路径必须走三参版传现有 rule 的 enabled——见 P1 终审记账 §11。
+     * update 路径必须走三参版传现有 rule 的 enabled。
      */
     static ParsedRule parseIncomingRule(Map<String, Object> payload, String wallId) {
         return parseIncomingRule(payload, wallId, Boolean.TRUE);
@@ -402,9 +402,9 @@ final class ScriptOpDispatcher {
      *   <li>id / wallId 服务端权威——客户端给了也覆写（id 占位，store.create 再生成；
      *       wallId = session 的 wall）</li>
      *   <li>enabled 缺省取 {@code enabledFallback}（create 路径 = TRUE；update 路径 =
-     *       现有 rule 的 enabled——P2-1：缺字段时<b>继承现值</b>，防第三方 WS 客户端
+     *       现有 rule 的 enabled——缺字段时<b>继承现值</b>，防第三方 WS 客户端
      *       update 不带 enabled 悄悄重启已禁用规则）；存在但非 Boolean（如字符串
-     *       {@code "false"}）→ 拒（批次3 #7：不静默改写，防类型混淆）；
+     *       {@code "false"}）→ 拒（不静默改写，防类型混淆）；
      *       blockLayout 缺省 {@code "{}"}</li>
      *   <li>trigger / actions 经各自多态 deserializer；非法 type / 非数组等 →
      *       {@code ParsedRule.error}（INVALID_PAYLOAD message）</li>
@@ -429,7 +429,7 @@ final class ScriptOpDispatcher {
         if (enabledRaw == null) {
             m.put("enabled", enabledFallback);
         } else if (!(enabledRaw instanceof Boolean)) {
-            // 批次3 #7：enabled 存在但类型错（"false" / 0 / ...）→ 真拒，不默认成 true
+            // enabled 存在但类型错（"false" / 0 / ...）→ 真拒，不默认成 true
             return new ParsedRule(null, "enabled must be a boolean", null);
         }
         if (m.get("blockLayout") == null) {
@@ -443,12 +443,12 @@ final class ScriptOpDispatcher {
     }
 
     /**
-     * K16：递归走动作树，对每个 {@code if.condition} 调
+     * 递归走动作树，对每个 {@code if.condition} 调
      * {@link moe.hikari.canvas.script.engine.ConditionEvaluator#checkSyntax}（parse-only）。
      * 返回首个失败的结构化 {@link ValidationError}（含 {@code blockId} 定位 + {@code detail}
      * 底层文法错误）；全通过返 empty。
      *
-     * <p>0.9.7：{@code detail} = {@link moe.hikari.canvas.script.engine.ConditionEvaluator#checkSyntax}
+     * <p>{@code detail} = {@link moe.hikari.canvas.script.engine.ConditionEvaluator#checkSyntax}
      * 的返回串——由 {@link moe.hikari.canvas.template.expr.ExpressionParser.ParseException} 产出，
      * 本身已是英文 + 符号 + 位置信息（如 {@code unexpected token '(' (at position 0)}），
      * 故原样透传作 {@code detail} 参，不再另立 i18n key。dispatcher 侧
@@ -476,8 +476,8 @@ final class ScriptOpDispatcher {
                 sub = checkConditionSyntax(iff.elseActions(), blockId + "/else/");
                 if (sub.isPresent()) return sub;
             } else if (a instanceof moe.hikari.canvas.script.Action.WaitUntil wu) {
-                // 0.7.1-P5：WaitUntil 的 condition 同样走保存期 parse-only 预检（与 if 一致）；
-                // 否则坏条件运行期静默恒 false 等满超时、无任何报错，破坏 K16 契约。
+                // WaitUntil 的 condition 同样走保存期 parse-only 预检（与 if 一致）；
+                // 否则坏条件运行期静默恒 false 等满超时、无任何报错，破坏保存期预检契约。
                 Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
                         .checkSyntax(wu.condition());
                 if (err.isPresent()) {
@@ -485,11 +485,11 @@ final class ScriptOpDispatcher {
                             "blockId", blockId, "detail", err.get()));
                 }
             } else if (a instanceof moe.hikari.canvas.script.Action.Repeat rep) {
-                // 0.7.1-P5：递归进 repeat body（补 0.7.0-P2 既存遗漏——body 里的 if/waitUntil 条件也预检）。
+                // 递归进 repeat body（body 里的 if/waitUntil 条件也预检）。
                 Optional<ValidationError> sub = checkConditionSyntax(rep.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
             } else if (a instanceof moe.hikari.canvas.script.Action.RepeatUntil ru) {
-                // 0.7.2-P3：repeatUntil 自身 condition 预检（照 WaitUntil）+ 递归 body。
+                // repeatUntil 自身 condition 预检（照 WaitUntil）+ 递归 body。
                 Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
                         .checkSyntax(ru.condition());
                 if (err.isPresent()) {
@@ -499,8 +499,8 @@ final class ScriptOpDispatcher {
                 Optional<ValidationError> sub = checkConditionSyntax(ru.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
             } else if (a instanceof moe.hikari.canvas.script.Action.RandomBranch rb) {
-                // 0.7.3：RandomBranch 自身无 condition，但 then/else 分支可嵌 If/WaitUntil/RepeatUntil
-                // 等含 condition 的积木——必须递归，否则坏条件绕过保存期预检（K16 漏洞）。
+                // RandomBranch 自身无 condition，但 then/else 分支可嵌 If/WaitUntil/RepeatUntil
+                // 等含 condition 的积木——必须递归，否则坏条件绕过保存期预检。
                 Optional<ValidationError> sub = checkConditionSyntax(rb.then(), blockId + "/then/");
                 if (sub.isPresent()) return sub;
                 sub = checkConditionSyntax(rb.elseActions(), blockId + "/else/");
@@ -523,13 +523,13 @@ final class ScriptOpDispatcher {
      * 基础节点 {@code canvas.script.edit}（default=true）+ wall 存在性。
      * 返回 null = 放行；非 null = 直接回给 client 的错误帧。
      *
-     * <p>批次3 #1：与 alias / 模板的 own 兜底<b>等价语义</b>——default-true 节点只对
+     * <p>与 alias / 模板的 own 兜底<b>等价语义</b>——default-true 节点只对
      * 无法解析的离线玩家（{@code online=false}，含主线程超时 / 解析异常）放行；
      * <b>在线但被服主显式收回节点的必须真拒</b>（PERMISSION_DENIED + audit，照
      * {@link #checkFacets} 的 audit 形态）。旧实现无条件 {@code granted=true}
      * 是 fail-open，服主收回 {@code canvas.script.edit} 形同虚设。</p>
      *
-     * <p>package-private：P2-1 权限拒绝路径 dispatch 级测试直接驱动（照 handleCreate
+     * <p>package-private：权限拒绝路径 dispatch 级测试直接驱动（照 handleCreate
      * 等 handler 的既有范式，绕开 final 的 SessionManager 全装配）。</p>
      */
     Envelope checkBasePermission(Envelope in, String sessionId, Session s) {
@@ -601,7 +601,7 @@ final class ScriptOpDispatcher {
     }
 
     /**
-     * Ultrareview 2026-05-25 #17：从 session 拿当前 ProjectState.version。
+     * 从 session 拿当前 ProjectState.version。
      * 脚本通道不改像素 → 不 bump，但要保持前端 mirror 看到的版本号一致；写 0 会把
      * ProjectState.version 倒退。session 无 ProjectState（极早期）回 0。
      */
@@ -634,7 +634,7 @@ final class ScriptOpDispatcher {
     }
 
     /**
-     * 0.9.7：把结构化 {@link ValidationError} 按发起 session 的编辑器 locale 渲染成人读
+     * 把结构化 {@link ValidationError} 按发起 session 的编辑器 locale 渲染成人读
      * 文案（{@code script.validate.<key>}）。缺 {@code messages}（旧测试装配容忍 null）时
      * 回退 key 名，保证不 NPE。参数转 {@link Placeholder#unparsed}（validation 文案纯文本，
      * 参数是数字 / 白名单值，无需 MiniMessage 解析）。T2 供 validate 两处调用；T3 的
@@ -650,7 +650,7 @@ final class ScriptOpDispatcher {
         return messages.plain(locale, "script.validate." + ve.key(), resolvers);
     }
 
-    /** 批次3 #5：解析失败时完整异常进 server 日志（外发 message 已脱敏为首行）。 */
+    /** 解析失败时完整异常进 server 日志（外发 message 已脱敏为首行）。 */
     private void logParseFailure(String op, ParsedRule parsed) {
         if (log != null && parsed.cause() != null) {
             log.log(java.util.logging.Level.FINE,
@@ -660,7 +660,7 @@ final class ScriptOpDispatcher {
 
     /**
      * 取异常链最深 message（Jackson convertValue 包两层 IllegalArgumentException）。
-     * 批次3 #5 脱敏：只留首行（自定义 deserializer 的可读文案在首行，后续行是
+     * 脱敏：只留首行（自定义 deserializer 的可读文案在首行，后续行是
      * Jackson 引用链 / 内部路径，不外发）；完整异常由 {@link #logParseFailure} 进日志。
      */
     private static String rootMessage(Throwable t) {

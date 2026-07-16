@@ -22,7 +22,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * 0.8-A2 Task 12：{@code .canvas} 工程导入编排——把前两批的零件串成完整导入链。
+ * {@code .canvas} 工程导入编排——把各零件串成完整导入链。
  *
  * <p>流程（contract {@code docs/import-export.md §3.2}）：</p>
  * <ol>
@@ -42,8 +42,6 @@ import java.util.UUID;
  *   <li>{@code wallRepo.updateState} 持久化（照 {@code SessionManager#persistWall} 的 DB 写）；</li>
  *   <li>{@code auditLog.record("PROJECT_IMPORT", ...)} 留痕。</li>
  * </ol>
- *
- * <p><b>scripts.json 处理不在本批</b>（留 A4 Task 18），编排里先不接脚本。</p>
  *
  * <p>装配（{@code WebServer} 构造时 new，依赖均已就位）：{@link OpPushCallback} 用 WebServer 内部
  * 的 push（同 dispatcher 共享）；{@link WallRepo} 持久化；{@link AssetIngest} 由 bootstrap 注入。
@@ -73,7 +71,7 @@ public final class ProjectImporter {
     private final OpPushCallback push;
     private final WallRepo wallRepo;
     /**
-     * 0.8-A4：scripts.json 导入器（wallId 重绑 + 重校验 + 落库）。可空 —— ScriptStore 未配置
+     * scripts.json 导入器（wallId 重绑 + 重校验 + 落库）。可空 —— ScriptStore 未配置
      * 的装配（旧测试 / 无脚本子系统）传 null，此时工程包里的 scripts.json 被静默忽略
      * （工程本体照常导入）。
      */
@@ -87,7 +85,7 @@ public final class ProjectImporter {
      */
     private final ProjectionThrottler throttler;
     /**
-     * 0.8 Part A review 补缺：导入时扫缺字体 / 图标 / 全局变量并产出 {@code missing-*} warning
+     * 导入时扫缺字体 / 图标 / 全局变量并产出 {@code missing-*} warning
      * （{@code docs/import-export.md §3.2 step 8}）。可空（best-effort，与 {@code auditLog} 同范式）：
      * 装配时由 {@code WebServer} 注入（内部各 registry 也各自可空降级）；{@code null} 时跳过缺资源扫描
      * （工程照常导入，仅不提示哪些资源缺）。
@@ -141,7 +139,7 @@ public final class ProjectImporter {
 
         List<ImportWarning> warnings = new ArrayList<>();
 
-        // 3.5) 缺资源扫描（0.8 Part A review：docs/import-export.md §3.2 step 8）——materialize 之后、
+        // 3.5) 缺资源扫描（docs/import-export.md §3.2 step 8）——materialize 之后、
         //      replaceProject 之前。引用本服缺字体 / 缺 user 图标 / 缺 userglobal 变量 → missing-* 提示。
         //      scanner 可空（best-effort）→ 跳过；内部各 registry 亦各自可空降级。导入照常完成。
         if (missingResourceScanner != null) {

@@ -3,10 +3,10 @@ package moe.hikari.canvas.state;
 import java.util.Locale;
 
 /**
- * SVG path {@code d} 字符串词法校验（M9 引入）。
+ * SVG path {@code d} 字符串词法校验。
  *
  * <p><b>仅校验</b>命令字母合法 + 数字-命令配对正确 + 数值有限 + 总长上限；
- * <b>不</b>构造 {@code Path2D}。真正绘制时由 {@code render/PathParser}（M9-B）执行。</p>
+ * <b>不</b>构造 {@code Path2D}。真正绘制时由 {@code render/PathParser} 执行。</p>
  *
  * <p>支持命令：{@code M / L / Q / C / Z}（大写绝对、小写相对）。每命令参数数：</p>
  * <ul>

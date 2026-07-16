@@ -10,7 +10,7 @@ import java.util.Map;
  * Web 包内共享的小工具：payload 类型解构 + brush point 解析 + JSON Pointer 段编解码。
  * <p>从 {@link WebServer} 抽出，供 {@link EditOpDispatcher} / {@link BrushOpDispatcher}
  * / {@link WallOpDispatcher} / {@link TemplateOpDispatcher} 复用。</p>
- * <p>0.4.10 P3-114：类与 JSON Pointer 编解码方法 public 化，让 state/session 包的
+ * <p>类与 JSON Pointer 编解码方法 public 化，让 state/session 包的
  * {@code EditSession} / {@code SessionManager} 复用同一来源（消除 4 份重复实现）。</p>
  */
 public final class WebHelpers {
@@ -21,7 +21,7 @@ public final class WebHelpers {
     private WebHelpers() {}
 
     /**
-     * 0.4.10 P3-114：RFC 6902 JSON Pointer 段编码（{@code ~ → ~0}，{@code / → ~1}）。
+     * RFC 6902 JSON Pointer 段编码（{@code ~ → ~0}，{@code / → ~1}）。
      * 单一来源——state.patch 路径里凡需把 fullName 当 path 段都走这里。
      */
     public static String encodeJsonPointerSegment(String s) {
@@ -43,7 +43,7 @@ public final class WebHelpers {
     static Map<?, ?> mapOrEmpty(Object v) {
         if (v == null) return Map.of();
         if (v instanceof Map<?, ?> m) return m;
-        // M16 P6.1：不暴露内部类名（Java SimpleName），固定消息。
+        // 不暴露内部类名（Java SimpleName），固定消息。
         throw new IllegalArgumentException("expected object");
     }
 
@@ -53,7 +53,7 @@ public final class WebHelpers {
 
     static Integer intOrNull(Object v) {
         if (!(v instanceof Number n)) return null;
-        // 0.6 P1：越界 / 非有限值返 null（调用方按字段缺失走 INVALID_PAYLOAD），
+        // 越界 / 非有限值返 null（调用方按字段缺失走 INVALID_PAYLOAD），
         // 防 Long/Double 超出 int 范围时 intValue() 静默回绕绕过语义范围检查
         long l = n.longValue();
         double d = n.doubleValue();
@@ -85,7 +85,7 @@ public final class WebHelpers {
             if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(p)) {
                 throw new IllegalArgumentException("non-finite point value");
             }
-            // 0.4.10 P2-12：拒绝巨大 finite 坐标（绕过 MAX_COORD 会致整数溢出 / 超宽 stroke），
+            // 拒绝巨大 finite 坐标（绕过 MAX_COORD 会致整数溢出 / 超宽 stroke），
             // 压感钳到 [0,1]（越界压感会被 BrushRenderer 放大成异常线宽）。
             if (Math.abs(x) > BRUSH_MAX_COORD || Math.abs(y) > BRUSH_MAX_COORD) {
                 throw new IllegalArgumentException("point coordinate out of range");

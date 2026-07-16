@@ -14,7 +14,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 渲染期文本占位符替换。0.4.0-P1-C 核心类。
+ * 渲染期文本占位符替换。
  *
  * <p>把 {@code ${var:<name>}} 或 {@code ${var:<name>|fallback=<default>}} 形式的占位符
  * 替换成 {@link VariableStore} 当前缓存值；不在 MC 主线程跑 resolve（Provider 任务 E 才提供
@@ -59,7 +59,7 @@ public final class VariableInterpolator {
     /** 系统兜底文案（fallback 链最后一档）。 */
     public static final String UNRESOLVED = "???";
 
-    /** 0.4.2 bugfix（Bug 1）：二次扫描最大深度，防止数据 / 算法异常下死循环。 */
+    /** 二次扫描最大深度，防止数据 / 算法异常下死循环。 */
     private static final int MAX_INTERPOLATE_DEPTH = 2;
 
     private static final Logger LOG = Logger.getLogger(VariableInterpolator.class.getName());
@@ -76,7 +76,7 @@ public final class VariableInterpolator {
      * <p>对纯文本（不含 {@code ${var:}} 子串）走 O(1) 短路返原 text 与空 referenced 集合；
      * 否则 O(n) regex 单趟扫描。</p>
      *
-     * <p>0.4.2 bugfix（Bug 1：服务器重启后字面 {@code ${var:} 残留）：把 {@link #doInterpolate}
+     * <p>二次扫描兜底（服务器重启后字面 {@code ${var:} 残留场景）：把 {@link #doInterpolate}
      * 拆成内部实现 + 外层 wrapper 做二次扫描。当首次替换后输出仍含 {@code ${var:} 字面（典型场景：
      * chip editor roundtrip 漏 escape / 数据写入了双重嵌套 {@code ${${var:X}}}），最多再 interpolate
      * {@value #MAX_INTERPOLATE_DEPTH} 次兜底；若 depth>0 则 {@link Logger#warning} 提示用户数据可能
@@ -109,13 +109,13 @@ public final class VariableInterpolator {
     }
 
     /**
-     * 0.6 P3（rendering.md §9.5）：数值关键帧轨的 {@code ${var:X}} 求值。
+     * 数值关键帧轨的 {@code ${var:X}} 求值（rendering.md §9.5）。
      * 把 {@code raw}（单个模板 / 含模板的字符串 / 纯数字字符串）经标准 fallback 链
      * （cached → inline fallback → default → "???"）resolve 后解析为 double；
      * 非数值（含 "???"）/ 非有限值 / 解析失败一律落到链终点 {@code 0.0}。
      *
      * <p>由 {@code AnimationTicker} 在<b>插值前</b>调用（Ticker 线程；store cached 值
-     * 异步读安全，0.4.10 已证），插值器拿到的是纯数值——变量变化经 per-map diff 自然
+     * 异步读安全），插值器拿到的是纯数值——变量变化经 per-map diff 自然
      * 反映到下一帧。</p>
      */
     public double resolveAsNumber(@Nullable String raw, @Nullable String wallId) {
@@ -166,17 +166,17 @@ public final class VariableInterpolator {
      * 把对外 placeholder 内的 rawName 转成 {@link VariableStore} 的 fullName 编码：
      * <ul>
      *   <li>{@code user/X} → {@code user:<wallId>/X}（wallId 非空时；为空走字面）</li>
-     *   <li>{@code wall.X} → {@code system:<wallId>/wall.X}（0.4.0-P3-J；
+     *   <li>{@code wall.X} → {@code system:<wallId>/wall.X}（
      *       {@link moe.hikari.canvas.variable.provider.SystemVariableProvider} 按 per-wall
      *       namespace 注册 wall.id / wall.alias / wall.owner / wall.owner_uuid，wallId 为空跳过）</li>
-     *   <li>{@code scoreboard.<obj>.<player>} → {@code scoreboard/<obj>.<player>}（0.4.0-P3-J；
+     *   <li>{@code scoreboard.<obj>.<player>} → {@code scoreboard/<obj>.<player>}（
      *       动态 namespace 别名：把第一个 {@code .} 当 namespace/key 分隔——让
      *       {@link moe.hikari.canvas.variable.provider.ScoreboardVariableProvider}
      *       存的 {@code scoreboard/<obj>.<player>} 被字面查询命中）</li>
      *   <li>{@code bedwars/score} → 字面 {@code bedwars/score}</li>
      *   <li>{@code server.time} → 字面 {@code server.time}（system namespace 点分号 alias
-     *       在 P3-J 仍按字面；SystemVariableProvider 内部 fullName 是 {@code system/server.time}，
-     *       编辑器 Picker 使用 slash 形式；点分号 alias 完整支持留 0.4.1+）</li>
+     *       仍按字面；SystemVariableProvider 内部 fullName 是 {@code system/server.time}，
+     *       编辑器 Picker 使用 slash 形式；点分号 alias 完整支持尚未实现）</li>
      * </ul>
      */
     public static String resolveFullName(String rawName, @Nullable String wallId) {
@@ -186,13 +186,13 @@ public final class VariableInterpolator {
             String key = rawName.substring(VariableStore.USER_NAMESPACE_PREFIX.length() + 1);
             return VariableStore.USER_NAMESPACE_PREFIX + ":" + wallId + "/" + key;
         }
-        // 0.4.0-P3-J：wall.* 系统变量按 per-wall namespace 注入
+        // wall.* 系统变量按 per-wall namespace 注入
         // e.g. ${var:wall.id} + wallId="w-abc" → "system:w-abc/wall.id"
         // wallId == null（模板 publish / 预览路径）跳过注入，让 wall.* 字面查询（多半 fallback）
         if (wallId != null && !wallId.isEmpty() && rawName.startsWith("wall.")) {
             return "system:" + wallId + "/" + rawName;
         }
-        // 0.4.0-P3-L：schedule.* per-wall namespace 注入（与 wall.* 同款）
+        // schedule.* per-wall namespace 注入（与 wall.* 同款）
         // e.g. ${var:schedule.next_departure} + wallId="w-abc" → "schedule:w-abc/next_departure"
         // ManualScheduleProvider 按 namespace=schedule:<wallId> 注册 4 个 key（next_departure /
         // next_destination / eta_minutes / is_arriving）。wallId == null 跳过注入，字面查询走 fallback。
@@ -200,7 +200,7 @@ public final class VariableInterpolator {
             String tail = rawName.substring("schedule.".length());
             return "schedule:" + wallId + "/" + tail;
         }
-        // 0.4.0 bugfix3（Bug A）：用户直觉的 namespace/key 斜杠语法 — 与 ${var:user/X} 同款风格。
+        // 用户直觉的 namespace/key 斜杠语法 — 与 ${var:user/X} 同款风格。
         // 不破坏 schedule.X / wall.X 点号语法，仅作为 fallback；wallId 为空时跳过，字面查询走 fallback。
         // e.g. ${var:schedule/eta_seconds} + wallId="w-abc" → "schedule:w-abc/eta_seconds"
         // e.g. ${var:wall/id} + wallId="w-abc" → "system:w-abc/wall.id"（注入到 SystemVariableProvider
@@ -213,7 +213,7 @@ public final class VariableInterpolator {
             String tail = rawName.substring("schedule/".length());
             return "schedule:" + wallId + "/" + tail;
         }
-        // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
+        // scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
         // 与 ScoreboardVariableProvider.handleDynamic 存储侧约定一致。
         if (rawName.startsWith("scoreboard.")) {
             String tail = rawName.substring("scoreboard.".length());
@@ -230,7 +230,7 @@ public final class VariableInterpolator {
         if (opt.isPresent()) {
             Variable v = opt.get();
             String cur = v.currentValue();
-            // Ultrareview 2026-05-25 #18：TTL 过期后不再返回 cached value，走 fallback 链。
+            // TTL 过期后不再返回 cached value，走 fallback 链。
             // ttl=0 表示永久；isStale 内已处理。stale 时与"变量不存在"语义一致：触发
             // dynamic lookup hook 让 Provider 有机会刷新，再走 fallback / default / UNRESOLVED。
             if (cur != null && !cur.isEmpty() && !v.isStale(System.currentTimeMillis())) {
@@ -242,7 +242,7 @@ public final class VariableInterpolator {
             return UNRESOLVED;
         }
         // 变量不存在（被删 / 未声明 / 命名不匹配）。
-        // 0.4.0-P3-J：触发动态 namespace 注册 hook——首次渲染走 fallback，后续 tick 起有数据。
+        // 触发动态 namespace 注册 hook——首次渲染走 fallback，后续 tick 起有数据。
         // 本方法仍 O(1) 短路：hook 实现应快速返回；阻塞处理走自己的 daemon。
         store.notifyDynamicLookup(fullName);
         if (inlineFallback != null) return inlineFallback;
@@ -256,7 +256,7 @@ public final class VariableInterpolator {
      * @param referencedFullNames 本次解析引用到的内部 fullName 集合；
      *                            供 {@link VariableStore#markWallReferences} 使用
      * @param segments            每个 placeholder 在<b>替换后</b> {@link #text} 中的 char range +
-     *                            原始 fullName + 原 placeholder 字符串。M28-enhance 加入：游戏内
+     *                            原始 fullName + 原 placeholder 字符串。游戏内
      *                            Compositor 渲染时<b>忽略 segments</b>（保持双端像素一致），仅前端
      *                            PreviewRenderer 用 segments 画 placeholder hint chip 风格背景。
      *                            纯文本路径或无 placeholder 时为空列表
@@ -266,7 +266,7 @@ public final class VariableInterpolator {
     }
 
     /**
-     * 单个 placeholder 在替换后文本中的位置标记（M28-enhance 引入）。
+     * 单个 placeholder 在替换后文本中的位置标记。
      *
      * @param start    替换后文本中起始 char index（inclusive）
      * @param end      替换后文本中结束 char index（exclusive）

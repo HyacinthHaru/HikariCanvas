@@ -15,7 +15,7 @@ public interface OpPushCallback {
     boolean pushPatch(String sessionId, StatePatch patch);
 
     /**
-     * 0.7.0-P3 A2（K11）：推任意服务端主动 op（首个消费者 {@code script.trace}）。
+     * 推任意服务端主动 op（首个消费者 {@code script.trace}）。
      * Envelope id 由 WebServer 侧统一发号（{@code s-N}，与 snapshot / patch 同纪律）；
      * dispatcher 只给 op 名 + payload。
      *

@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 模板/脚本表达式解析器。文法（0.7.0-P2 扩充版，K2；模板 {@code visible_when}
+ * 模板/脚本表达式解析器。文法（模板 {@code visible_when}
  * 拿到无破坏超集）：
  *
  * <pre>
@@ -36,7 +36,7 @@ import java.util.List;
  * {@code Literal(-n)}，保持既有 AST 形态（{@code parse("-1.5")} 仍是 Literal）。</p>
  *
  * <p><b>失败行为：</b> 任何 lex/parse 错误抛 {@link ParseException}，
- * 调用方（{@link moe.hikari.canvas.template.TemplateLoader} / 0.7.0
+ * 调用方（{@link moe.hikari.canvas.template.TemplateLoader} /
  * {@code script.engine.ConditionEvaluator}）应把它当校验失败处理。</p>
  *
  * <p>实例无状态，可安全复用。</p>
@@ -91,7 +91,7 @@ public final class ExpressionParser {
                 if (Character.isWhitespace(c)) { i++; continue; }
                 int start = i;
                 if (c == '"' || c == '\'') { out.add(readString(c, start)); continue; }
-                // 0.7.0-P2：负号不再并入数字（见类注释），数字仅从 digit / '.' 开始
+                // 负号不再并入数字（见类注释），数字仅从 digit / '.' 开始
                 if (Character.isDigit(c)
                         || (c == '.' && i + 1 < src.length() && Character.isDigit(src.charAt(i + 1)))) {
                     out.add(readNumber(start));
@@ -189,7 +189,7 @@ public final class ExpressionParser {
     // ============================ Parser ============================
 
     /**
-     * P3-52：递归下降嵌套深度上限。每层 {@code (} 进入 {@code parseOr}、每个 {@code !}/{@code -}
+     * 递归下降嵌套深度上限。每层 {@code (} 进入 {@code parseOr}、每个 {@code !}/{@code -}
      * 进入 {@code parseUnary} 都自增 depth，超限抛 {@link ParseException}（被
      * {@code TemplateLoader.checkExpression} 正常 catch），把原本未设防的无界递归
      * （海量 {@code (} / {@code !} → StackOverflowError 逃出 loader.reload）降级为
@@ -206,7 +206,7 @@ public final class ExpressionParser {
 
         Token peek() { return tokens.get(p); }
 
-        /** P3-52：进入一个会加深递归的层级，超 {@link #MAX_DEPTH} 抛 ParseException。 */
+        /** 进入一个会加深递归的层级，超 {@link #MAX_DEPTH} 抛 ParseException。 */
         private void enterDepth() {
             if (++depth > MAX_DEPTH) {
                 throw new ParseException("expression nesting too deep (> " + MAX_DEPTH + ")",
@@ -259,7 +259,7 @@ public final class ExpressionParser {
             return left;
         }
 
-        /** 0.7.0-P2(K2)：比较层。禁止连串——第二个比较符直接 parse error（见类注释）。 */
+        /** 比较层。禁止连串——第二个比较符直接 parse error（见类注释）。 */
         Expr parseComparison() {
             Expr left = parseAdditive();
             Expr.Op op = cmpOp(peek().kind());
@@ -349,7 +349,7 @@ public final class ExpressionParser {
                 }
                 case STRING -> { p++; return new Expr.Literal(t.text()); }
                 case IDENT -> {
-                    // 0.7.0-P2(K2)：var 是保留字函数——var("fullName") → VarRef；
+                    // var 是保留字函数——var("fullName") → VarRef；
                     // 裸 var（不跟 LPAREN）直接拒，不退化成 Identifier
                     if ("var".equals(t.text())) {
                         p++;

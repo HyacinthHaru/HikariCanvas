@@ -5,7 +5,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.regex.Pattern;
 
 /**
- * 数值字符串严格文法 + int 钳位的双端唯一权威（0.6 P3，rendering.md §9.5）。
+ * 数值字符串严格文法 + int 钳位的双端唯一权威（rendering.md §9.5）。
  * 前端镜像见 {@code web/src/timeline/interpolation.ts}（{@code STRICT_NUMBER} 正则 +
  * {@code parsePlainNumber} + {@code clampInt}）。
  *

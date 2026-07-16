@@ -13,8 +13,8 @@ import java.util.logging.Logger;
  * <p>插入是 fire-and-forget（失败时仅 log warn，不影响业务链路）；
  * 安全要求的 token / IP 原文绝不入 detail，只存 SHA-256。</p>
  *
- * <p>M15.4 P0-33：DB 插入失败时 fallback 到 server log，至少给运维留痕；
- * 不再让异常向上冒泡静默丢失。</p>
+ * <p>DB 插入失败时 fallback 到 server log，至少给运维留痕；
+ * 不让异常向上冒泡静默丢失。</p>
  */
 public final class AuditLog {
 
@@ -47,7 +47,7 @@ public final class AuditLog {
                     ? null
                     : JSON.writeValueAsString(details);
         } catch (Exception e) {
-            // P3-83：details 序列化失败不能静默——补 WARNING 日志（对齐本方法 DB-insert catch
+            // details 序列化失败不能静默——补 WARNING 日志（对齐本方法 DB-insert catch
             // 与 insertSignRecord 既有 fallback 约定）；写可追溯 marker 而非纯 null，保留审计上下文。
             log.log(Level.WARNING, "AuditLog details serialization failed for event=" + event, e);
             detailsJson = "{\"_serialization_failed\":true}";
@@ -65,7 +65,7 @@ public final class AuditLog {
                     ipHash,
                     finalDetails));
         } catch (Exception e) {
-            // M15.4 P0-33 / M16 P6.4：DB 失败 fallback 到 server log，至少留痕；
+            // DB 失败 fallback 到 server log，至少留痕；
             // 安全事件不能因 DB 异常静默丢失。severe + 带异常对象（log.log）让 ops
             // 工具链能拿到 stack trace。
             log.log(Level.SEVERE, String.format(

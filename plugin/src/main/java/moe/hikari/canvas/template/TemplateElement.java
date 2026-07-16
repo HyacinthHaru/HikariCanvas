@@ -15,7 +15,7 @@ import java.util.List;
  *
  * <p><b>字段类型偏宽松：</b> {@code w / h / visible / x / y} 既能是常量（int/bool）
  * 也能是 {@code "${param}"} / {@code "auto"} / {@code "100%"} 等字符串，统一用
- * {@link Object} 持有；M6-C 实例化阶段按字段语义解析。</p>
+ * {@link Object} 持有；实例化阶段按字段语义解析。</p>
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type", visible = true)
 @JsonSubTypes({

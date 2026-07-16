@@ -11,13 +11,13 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Locale;
 
 /**
- * 0.4.0-P1-E：VariableProviderDaemon 装配入口。
+ * VariableProviderDaemon 装配入口。
  *
- * <p>0.4.0-P3-J 起注册 {@link SystemVariableProvider} + {@link ScoreboardVariableProvider}；
- * 0.4.0-P3-K 起加 {@link PapiVariableBridge}（PAPI 未装时自动 noop）；
- * 0.4.0-P3-L 起加 {@link ManualScheduleProvider}（兜底列车时刻表）。</p>
+ * <p>注册 {@link SystemVariableProvider} + {@link ScoreboardVariableProvider}；
+ * {@link PapiVariableBridge}（PAPI 未装时自动 noop）；
+ * {@link ManualScheduleProvider}（兜底列车时刻表）。</p>
  *
- * <p>0.4.0 bugfix（Bug 3）：{@link ManualScheduleProvider} 可注入 {@link HikariCanvasConfig.ScheduleConfig}
+ * <p>{@link ManualScheduleProvider} 可注入 {@link HikariCanvasConfig.ScheduleConfig}
  * 配阈值 / 文案。</p>
  *
  * <p>详见 {@code docs/dynamic-data.md §7 内置 Provider}。</p>
@@ -32,7 +32,7 @@ public final class ProviderBootstrap {
      * <p>调用方负责把返回的 daemon 实例保留到 plugin 字段，并在 {@code onDisable} 调
      * {@link VariableProviderDaemon#shutdown()}。</p>
      *
-     * @param store          P1-A 交付的 VariableStore；provider 通过 store push 值
+     * @param store          VariableStore；provider 通过 store push 值
      * @param plugin         插件实例（Bukkit scheduler 切主线程 / reflection load 等）
      * @param wallRepo       wall 元数据 DAO（{@link SystemVariableProvider} 注册 per-wall {@code wall.*}）
      * @param scheduleDao    时刻表 DAO（{@link ManualScheduleProvider} 启动期 loadAll + per-wall 注册）；
@@ -49,11 +49,11 @@ public final class ProviderBootstrap {
     }
 
     /**
-     * 0.4.4：6 参数 overload，加 RailDao（铁路网络 Provider）。
+     * 6 参数 overload，加 RailDao（铁路网络 Provider）。
      *
      * <p>装配顺序：</p>
      * <ol>
-     *   <li>注册 system / scoreboard / papi / ManualScheduleProvider（同 0.4.0）</li>
+     *   <li>注册 system / scoreboard / papi / ManualScheduleProvider</li>
      *   <li>注册 RailScheduleProvider（共享 schedule namespace）</li>
      *   <li>给 ManualScheduleProvider 注入 skipWallPredicate = railProvider.hasWallBinding
      *       让 rail-bound wall 跳过 manual push</li>
@@ -69,20 +69,20 @@ public final class ProviderBootstrap {
                                                     @Nullable HikariCanvasConfig.ScheduleConfig scheduleConfig,
                                                     @Nullable RailDao railDao) {
         VariableProviderDaemon daemon = new VariableProviderDaemon();
-        // P3-J：system + scoreboard
+        // system + scoreboard
         daemon.register(new SystemVariableProvider(store, plugin, wallRepo));
         daemon.register(new ScoreboardVariableProvider(store, plugin));
-        // P3-K：PAPI 桥接（软依赖；未装时 refreshInterval=ZERO，daemon 不调度）
+        // PAPI 桥接（软依赖；未装时 refreshInterval=ZERO，daemon 不调度）
         daemon.register(new PapiVariableBridge(store, plugin));
         HikariCanvasConfig.ScheduleConfig cfg = scheduleConfig == null
                 ? HikariCanvasConfig.ScheduleConfig.defaults() : scheduleConfig;
-        // P3-L：兜底列车时刻表（per-wall manual）
+        // 兜底列车时刻表（per-wall manual）
         ManualScheduleProvider manualProvider = null;
         if (scheduleDao != null) {
             manualProvider = new ManualScheduleProvider(store, plugin, scheduleDao, cfg);
             daemon.register(manualProvider);
         }
-        // 0.4.4 P2：铁路网络（线路 + 站点 + 车次 + timetable）
+        // 铁路网络（线路 + 站点 + 车次 + timetable）
         if (railDao != null) {
             RailScheduleProvider railProvider = new RailScheduleProvider(
                     store, railDao, cfg, Locale.SIMPLIFIED_CHINESE);
@@ -96,7 +96,7 @@ public final class ProviderBootstrap {
     }
 
     /**
-     * 兼容旧调用方（K 阶段及之前）的 3 参数 overload。新代码请传 scheduleDao + config。
+     * 兼容旧调用方的 3 参数 overload。新代码请传 scheduleDao + config。
      */
     public static VariableProviderDaemon initialize(VariableStore store,
                                                     JavaPlugin plugin,

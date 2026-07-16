@@ -22,7 +22,7 @@ import org.bukkit.event.player.PlayerInteractEntityEvent;
  *   <li>{@link HangingBreakEvent} — 所有破坏原因（含爆炸、物理失联）</li>
  *   <li>{@link HangingBreakByEntityEvent} — 实体攻击；玩家持 {@code canvas.admin.force-break} 权限时允许</li>
  *   <li>{@link PlayerInteractEntityEvent} — 玩家右键改内容</li>
- *   <li>{@link BlockBreakEvent} — 支撑方块被破坏；扫 4 个水平相邻格（M2 只支持垂直墙面）</li>
+ *   <li>{@link BlockBreakEvent} — 支撑方块被破坏；扫 4 个水平相邻格（只支持垂直墙面）</li>
  * </ul>
  */
 public final class FrameProtectionListener implements Listener {
@@ -53,7 +53,7 @@ public final class FrameProtectionListener implements Listener {
     public void onHangingBreakByEntity(HangingBreakByEntityEvent event) {
         if (!(event.getEntity() instanceof ItemFrame frame)) return;
         if (!frameDeployer.isProtectedFrame(frame)) return;
-        // 2026-05-14 lock-state 重设计：published 概念砍，所有 wall ItemFrame 同等保护。
+        // 所有 wall ItemFrame 同等保护（不区分 lock 状态）。
         // canvas.admin.force-break 权限是唯一例外（管理员强行破坏）。
         Player p = event.getRemover() instanceof Player pp ? pp : null;
         if (p != null && p.hasPermission(FORCE_BREAK_PERMISSION)) {
@@ -82,8 +82,7 @@ public final class FrameProtectionListener implements Listener {
                     ItemFrame.class, adjacent.getLocation().toCenterLocation(), 0.5)) {
                 if (!frameDeployer.isProtectedFrame(f)) continue;
                 if (f.getAttachedFace() != face.getOppositeFace()) continue;
-                // 2026-05-14 lock-state 重设计：published 概念砍，所有 wall 同等保护；
-                // 仅 force-break 权限可绕过。
+                // 所有 wall 同等保护（不区分 lock 状态）；仅 force-break 权限可绕过。
                 if (canForce) return;
                 event.setCancelled(true);
                 messages.sendActionBar(player, "frame-protect.blocked");

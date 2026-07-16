@@ -28,7 +28,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 
 /**
- * 0.9.2 可观测性：{@code /canvas stats} 的实现 + 后续 {@code diagnose} 子命令族（Task 2 接入）。
+ * {@code /canvas stats} 的实现 + {@code diagnose} 子命令族。
  *
  * <p>从 {@link CanvasCommand} 迁出原 {@code runStats}（信息太少：仅地图池 total/free/reserved
  * + 墙 + 会话 + token）并增强为多行输出：</p>
@@ -44,7 +44,7 @@ import java.util.function.Predicate;
  * <p>构造注入各子系统的只读 accessor，纯逻辑 {@link #runStats}；Brigadier 注册由
  * {@link CanvasCommand}.build 直接 {@code .executes(diagnostics::runStats)}（{@code stats}
  * 节点 requires {@code canvas.admin} 不变）。多注几个依赖（{@link FrameDeployer} /
- * {@link JavaPlugin} / {@link WallRepo}）供 0.9.2 Task 2 的 {@code diagnose} 子命令族复用。</p>
+ * {@link JavaPlugin} / {@link WallRepo}）供 {@code diagnose} 子命令族复用。</p>
  *
  * <h2>线程</h2>
  *
@@ -65,7 +65,7 @@ public final class DiagnosticsSubCommand {
     private final FrameDeployer frameDeployer;
     private final TokenService tokenService;
     private final Database database;
-    @SuppressWarnings("unused") // 留作 0.9.2 后续 diagnose 扩展用
+    @SuppressWarnings("unused") // 留作后续 diagnose 扩展用
     private final JavaPlugin plugin;
     private final Messages messages;
 
@@ -94,7 +94,7 @@ public final class DiagnosticsSubCommand {
     }
 
     /**
-     * 0.9.2 Task 2：仅供单测的窄构造器——{@link #diagnose} 纯逻辑只依赖 {@link Messages}，其余 10
+     * 仅供单测的窄构造器——{@link #diagnose} 纯逻辑只依赖 {@link Messages}，其余 10
      * 个子系统在 diagnose 链中由调用方预先快照进 {@link DiagnoseInputs}，故测试无需装配它们（也就
      * 不必引 Bukkit / SQLite）。<b>勿用于生产</b>：用此构造器的实例调 {@link #runStats} /
      * {@link #runDiagnose} / {@link #suggestWallIds} 会 NPE。包级可见，仅测试同包可用。
@@ -124,7 +124,7 @@ public final class DiagnosticsSubCommand {
         int poolMax = mapPool.maxSize();
         int wallsCount = database.jdbi().withHandle(h -> h.createQuery(
                 "SELECT COUNT(*) FROM walls").mapTo(Integer.class).one());
-        // P3-99: published_at 非 null = 已锁定；统计标签术语对齐为 locked（DB 列名不变）。
+        // published_at 非 null = 已锁定；统计标签术语对齐为 locked（DB 列名不变）。
         int locked = database.jdbi().withHandle(h -> h.createQuery(
                 "SELECT COUNT(*) FROM walls WHERE published_at IS NOT NULL")
                 .mapTo(Integer.class).one());
@@ -163,7 +163,7 @@ public final class DiagnosticsSubCommand {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  /canvas diagnose <wallId>（0.9.2 Task 2）
+    //  /canvas diagnose <wallId>
     // ──────────────────────────────────────────────────────────────────
 
     /**

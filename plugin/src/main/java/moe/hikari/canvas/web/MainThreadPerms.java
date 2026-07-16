@@ -10,7 +10,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /**
- * P2-26：WS op dispatcher 的主线程权限解析助手。
+ * WS op dispatcher 的主线程权限解析助手。
  *
  * <p><b>背景</b>：{@code Bukkit.getPlayer(UUID)}（读 join/quit 时 mutate 的在线表）与
  * {@code Player.hasPermission}（读 attachment / LuckPerms reload 时主线程重算的
@@ -45,14 +45,11 @@ final class MainThreadPerms {
     private static final long TIMEOUT_SECONDS = 2L;
 
     /**
-     * 0.7.0-P2-1：包级静态测试 seam。非 null 时 {@link #resolve} 直接走它（绕开
-     * Bukkit / 主线程 hop），让权限拒绝路径可在无 MockBukkit server 的纯 JVM 单测里
+     * 包级静态测试 seam。非 null 时 {@link #resolve} 直接走它（绕开
+     * Bukkit / 主线程 hop），让权限拒绝路径可在纯 JVM 单测里
      * dispatch 级驱动（在线被收回节点 → PERMISSION_DENIED + audit 全链）。
      *
-     * <p><b>为何不走 MockBukkit</b>：依赖虽在（M15 引入），但全仓零 ServerMock 实跑先例
-     * （既有测试均注明"不引 MockBukkit"），且 ServerMock 与 Paper 1.21.11 API 的
-     * 兼容性未验证——按任务"二选一"取 seam 路线。生产路径 seam 恒 null，
-     * 仅一次 volatile 读零开销；测试 @AfterEach 必须复位 null。</p>
+     * <p>生产路径 seam 恒 null，仅一次 volatile 读零开销；测试 @AfterEach 必须复位 null。</p>
      */
     static volatile java.util.function.BiFunction<java.util.UUID, String[], Resolved>
             testResolver;
@@ -89,7 +86,7 @@ final class MainThreadPerms {
     }
 
     /**
-     * P2-26：一次主线程 hop 解析在线玩家 + 多个节点的授权结果。
+     * 一次主线程 hop 解析在线玩家 + 多个节点的授权结果。
      *
      * <p>用于一个 op 需要查多个权限节点（如 {@code template.save} 同时查
      * {@code canvas.template.save} + {@code canvas.template.bypass-limit}）的场景，
@@ -100,7 +97,7 @@ final class MainThreadPerms {
      * @return {@link Resolved}：{@code online} = 玩家是否在线；{@code granted[i]} = 是否持 {@code nodes[i]}
      */
     static Resolved resolve(Plugin plugin, java.util.UUID callerUuid, String... nodes) {
-        // 0.7.0-P2-1：测试 seam 优先（生产恒 null，单次 volatile 读）
+        // 测试 seam 优先（生产恒 null，单次 volatile 读）
         var seam = testResolver;
         if (seam != null) return seam.apply(callerUuid, nodes);
         boolean[] denied = new boolean[nodes.length];  // 全 false（fail-closed 默认值）

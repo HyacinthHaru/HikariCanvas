@@ -64,7 +64,7 @@ public final class Messages {
     }
 
     /**
-     * 0.9.7：渲染成纯文本 String（WS error message 字段用；WS 的 message 字段是 String，
+     * 渲染成纯文本 String（WS error message 字段用；WS 的 message 字段是 String，
      * validation 文案无格式，纯文本即可）。{@link #get} 出 Component 后递归抽取
      * TextComponent 的 content 拼接；找不到 key 时 get() 已回退 defaultLocale / key 名。
      *

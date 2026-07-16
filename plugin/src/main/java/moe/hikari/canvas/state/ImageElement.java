@@ -3,12 +3,12 @@ package moe.hikari.canvas.state;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * M13 位图图片元素。{@code source} 是上传时返回的 {@code sha256[:16]} 内容寻址 hash；
+ * 位图图片元素。{@code source} 是上传时返回的 {@code sha256[:16]} 内容寻址 hash；
  * 服务端从 {@code plugins/HikariCanvas/uploads/<source>.png} 加载真实文件，跨 wall
  * 引用同 hash 文件零重复存储（详见 {@code docs/architecture.md §3.7}）。
  *
  * <p>{@code mask} 可选：非空时按 SVG path 几何蒙版裁切，详见 {@link Mask}。Dither 与
- * mask 的叠加顺序「先 dither 再 mask」由 M11-B 的 per-element off-buffer 路径自然
+ * mask 的叠加顺序「先 dither 再 mask」由 per-element off-buffer 路径自然
  * 达成（见 {@code docs/rendering.md §4.4}）。</p>
  *
  * <p><b>v1 安全约束：</b> {@code source} 必须匹配 {@code ^[0-9a-f]{16}$}（16 字符小写

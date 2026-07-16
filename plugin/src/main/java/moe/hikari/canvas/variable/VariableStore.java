@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
- * 全局变量内存存储。0.4.0-P1 核心类。
+ * 全局变量内存存储。
  *
  * <p>详见 {@code docs/dynamic-data.md §2.2}。本类承担：
  * <ul>
@@ -57,12 +57,12 @@ public final class VariableStore {
     public static final String USER_NAMESPACE_PREFIX = "user";
 
     /**
-     * 0.4.3：全局用户变量 namespace。不带冒号 + wallId 后缀（与 {@link #USER_NAMESPACE_PREFIX}
+     * 全局用户变量 namespace。不带冒号 + wallId 后缀（与 {@link #USER_NAMESPACE_PREFIX}
      * 的 per-wall 区别）；fullName 形如 {@code userglobal/<key>}，全服共享。
      */
     public static final String USER_GLOBAL_NAMESPACE = "userglobal";
 
-    /** 0.4.3 默认配额（{@code docs/dynamic-data.md §17.4}）。config.yml 可覆盖。 */
+    /** 默认配额（{@code docs/dynamic-data.md §17.4}）。config.yml 可覆盖。 */
     public static final int DEFAULT_USERGLOBAL_PER_OWNER = 500;
     public static final int DEFAULT_USERGLOBAL_TOTAL = 10_000;
 
@@ -73,7 +73,7 @@ public final class VariableStore {
     /** wallId → fullName set（倒排索引；Compositor render 前 markWallReferences 维护）。 */
     private final ConcurrentHashMap<String, Set<String>> byWall = new ConcurrentHashMap<>();
     /**
-     * 0.4.10 P2-23：markWallReferences 的 per-wallId 条带锁。
+     * markWallReferences 的 per-wallId 条带锁。
      *
      * <p>原 markWallReferences 的「快照 previous → 算 diff → 逐项写 bucket + referencedByWalls」
      * 三步非原子：同一 wall 的两个并发 markWallReferences（如 Compositor render 线程 + ready
@@ -84,13 +84,13 @@ public final class VariableStore {
     private final ConcurrentHashMap<String, Object> wallRefMonitors = new ConcurrentHashMap<>();
 
     private final UserVariableDao dao;
-    /** 任意 wall dirty 通知（B 任务接到 ProjectionThrottler#dirty）；P1 阶段可为 noop。 */
+    /** 任意 wall dirty 通知（接到 ProjectionThrottler#dirty）；可为 noop。 */
     private final java.util.function.Consumer<String> wallDirtyCallback;
 
-    // ── 0.4.3：全局用户变量持久化 + owner 信息（namespace = userglobal） ──
+    // ── 全局用户变量持久化 + owner 信息（namespace = userglobal） ──
 
     /**
-     * 0.4.3：{@code userglobal/*} 持久化 DAO。装配期由 {@link #configureUserGlobal} 注入；
+     * {@code userglobal/*} 持久化 DAO。装配期由 {@link #configureUserGlobal} 注入；
      * 未注入时 {@link #createGlobal} 抛 INTERNAL；现有 user / 插件 / system / papi / schedule
      * 路径完全不受影响。
      */
@@ -101,7 +101,7 @@ public final class VariableStore {
     private volatile int maxUserGlobalTotal = DEFAULT_USERGLOBAL_TOTAL;
 
     /**
-     * 0.4.10 P2-22 / P3-14：createGlobal 配额检查（per-owner + total）与后续 create→persist
+     * createGlobal 配额检查（per-owner + total）与后续 create→persist
      * 之间存在 TOCTOU 窗口——两个会话同一 owner 并发可双双过 count 检查越过上限。
      * createGlobal 频率极低（玩家手动建全局变量），用一把锁串行化整个 count→create→persist
      * 流程，强制 happens-before，开销可忽略。
@@ -110,7 +110,7 @@ public final class VariableStore {
             new java.util.concurrent.locks.ReentrantLock();
 
     /**
-     * 0.4.3：全局变量 key → owner 信息（在内存）。
+     * 全局变量 key → owner 信息（在内存）。
      *
      * <p>{@link Variable} record 的 {@code source} 字段已被 bind 语义占用（写 plugin namespace），
      * 不能复用承载 owner。owner 仅 {@code userglobal} namespace 需要——独立内存表代价更小，
@@ -124,7 +124,7 @@ public final class VariableStore {
     private final ConcurrentHashMap<String, GlobalOwnerInfo> globalOwners = new ConcurrentHashMap<>();
 
     /**
-     * 0.4.0-P3-J：动态 namespace 注册 hook。
+     * 动态 namespace 注册 hook。
      *
      * <p>{@link VariableInterpolator} 在 {@code resolve} 时若 store 内查不到 fullName，会逐个
      * 调用已注册的 hook（BiConsumer 参数为 fullName + namespace）。动态 Provider（如
@@ -138,7 +138,7 @@ public final class VariableStore {
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /**
-     * 0.4.0 bugfix3（Bug B）：变量变更广播 listener。
+     * 变量变更广播 listener。
      *
      * <p>EditSession 走 OpResult.dirty 触发 pushPatch 给前端 mirror，但 Provider 直接调
      * {@link #create} / {@link #setValue} / {@link #bind} / {@link #delete} 不走该路径——
@@ -160,7 +160,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.4.0-P3-J：注册动态 namespace 查找 hook。
+     * 注册动态 namespace 查找 hook。
      *
      * <p>由 Provider 在 {@link moe.hikari.canvas.variable.provider.VariableProvider#initialize()}
      * 内调用一次；hook 在 {@link VariableInterpolator} 遇 missing 变量时同步被回调。</p>
@@ -174,7 +174,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.4.0-P3-J：由 {@link VariableInterpolator} 在 resolve miss 时调用，通知所有注册过的
+     * 由 {@link VariableInterpolator} 在 resolve miss 时调用，通知所有注册过的
      * 动态 namespace hook。本方法不阻塞调用线程语义之外：hook 抛异常被吞掉 + log warning。
      *
      * @param fullName missing 的 fullName（已注入 wallId 形态，如 {@code user:w-1/X}）
@@ -204,13 +204,13 @@ public final class VariableStore {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  0.4.0 bugfix3（Bug B）：ChangeListener API
+    //  ChangeListener API
     // ──────────────────────────────────────────────────────────────────
 
     /**
      * 变更类型。Listener 据此决定如何构造 state.patch op。
      *
-     * <p>{@link #WALL_REFS_UPDATED}（0.4.0 方案 B 自适应渲染）—— 一次 {@link #markWallReferences}
+     * <p>{@link #WALL_REFS_UPDATED}（自适应渲染）—— 一次 {@link #markWallReferences}
      * 调用后 wall 的引用集合发生过实际变化（增加 / 移除任意 fullName）。listener 收到时不该推
      * state.patch（fullName 字段语义占位为 {@code "<bulk_wall_refs>"}，variable 为 null），
      * 只用于触发"该 wall 高频状态可能改变了，重新评估 ProjectionThrottler 间隔"。</p>
@@ -267,11 +267,11 @@ public final class VariableStore {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  0.4.3：全局用户变量装配 + API
+    //  全局用户变量装配 + API
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * 0.4.3：注入 {@link UserGlobalVariableDao} + 配额参数。装配期 HikariCanvas onEnable 调用
+     * 注入 {@link UserGlobalVariableDao} + 配额参数。装配期 HikariCanvas onEnable 调用
      * 一次；如果不调 {@link #createGlobal} 直接抛 {@code QUOTA_EXCEEDED}，已有 user / 插件
      * / system / papi 路径完全不受影响。
      *
@@ -283,14 +283,13 @@ public final class VariableStore {
                                     int maxPerOwner, int maxTotal) {
         this.globalDao = Objects.requireNonNull(dao, "globalDao");
         this.maxUserGlobalPerOwner = Math.max(1, maxPerOwner);
-        // 注意：不强制 maxTotal ≥ maxPerOwner —— 让 admin 直接信任输入。
-        // 若 admin 写反（total < per_owner），create 时 total 配额先触顶，per_owner 实际无效，
-        // 这是合理的"管理员意图优先"语义。
+        // 不强制 maxTotal ≥ maxPerOwner（管理员意图优先）：若写反（total < per_owner），
+        // create 时 total 配额先触顶，per_owner 实际无效。
         this.maxUserGlobalTotal = Math.max(1, maxTotal);
     }
 
     /**
-     * 0.4.3：创建全局用户变量 {@code userglobal/<key>}。owner 信息（UUID + 名）记录到内存
+     * 创建全局用户变量 {@code userglobal/<key>}。owner 信息（UUID + 名）记录到内存
      * {@link #globalOwners} 表 + 写 {@code user_global_variables} 表（持久化）。
      *
      * <p>配额检查（{@code docs/dynamic-data.md §17.4}）：</p>
@@ -316,7 +315,7 @@ public final class VariableStore {
             throw new VariableException(VariableException.Code.VARIABLE_TYPE_MISMATCH,
                     "type must not be null");
         }
-        // 0.4.10 P2-22 / P3-14：整段 count→create→persist 在锁内串行，消除跨会话 TOCTOU。
+        // 整段 count→create→persist 在锁内串行，消除跨会话 TOCTOU。
         globalCreateLock.lock();
         try {
             // 配额：DB 查 count + compute 内还有全局 MAX_GLOBAL 兜底
@@ -340,7 +339,7 @@ public final class VariableStore {
             boolean ownerPlacedHere = (prev == null);
             try {
                 // source = "manual" 同 user 变量；bind 后会改写
-                // 0.4.10 P2-31：userglobal 跳过 per-namespace 配额（MAX_PER_NAMESPACE=1000），
+                // userglobal 跳过 per-namespace 配额（MAX_PER_NAMESPACE=1000），
                 // 改由 maxUserGlobalTotal（默 10000，已在上方校验）封顶，让 config 的 total 真正可达。
                 return create(USER_GLOBAL_NAMESPACE, key, type, defaultValue, "manual", true);
             } catch (RuntimeException e) {
@@ -353,13 +352,13 @@ public final class VariableStore {
         }
     }
 
-    /** 0.4.3：列所有 {@code userglobal/*} 变量（无序）。 */
+    /** 列所有 {@code userglobal/*} 变量（无序）。 */
     public List<Variable> listGlobals() {
         return listByNamespace(USER_GLOBAL_NAMESPACE);
     }
 
     /**
-     * 0.4.3：查 userglobal 变量的 owner 信息。
+     * 查 userglobal 变量的 owner 信息。
      *
      * <p>序列化路径（{@code VariableDto.from} / patchOp builder）调用注入 ownerUuid /
      * ownerName 给前端。非 userglobal 变量 key 命中也可能返非空——调用方应先确认
@@ -373,7 +372,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.4.3：启动期一次性把 {@code user_global_variables} 加载到内存（同
+     * 启动期一次性把 {@code user_global_variables} 加载到内存（同
      * {@link #loadFromDb} 风格，绕过 create 配额校验，把 DB 视为合法基线）。
      */
     public void loadGlobalsFromDb() {
@@ -414,7 +413,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.4.10 P2-31：内部 create，{@code skipNsQuota=true} 时跳过 per-namespace 配额
+     * 内部 create，{@code skipNsQuota=true} 时跳过 per-namespace 配额
      * （{@link #MAX_PER_NAMESPACE}）。仅 {@link #createGlobal}（userglobal namespace）用——
      * 它自己用 {@link #maxUserGlobalTotal} 封顶，否则 MAX_PER_NAMESPACE=1000 会硬封 config
      * 的 total（默 10000）使其不可达。全局 {@link #MAX_GLOBAL} 兜底始终生效。
@@ -456,7 +455,7 @@ public final class VariableStore {
                                 + ": " + MAX_PER_NAMESPACE);
             }
             nsBucket.add(k);
-            // 0.4.0 bugfix（Bug 2）：反查 byWall 倒排索引。Compositor 渲染早于 store.create
+            // 反查 byWall 倒排索引。Compositor 渲染早于 store.create
             // 时（典型场景：用户先在 wall 文本里写 ${var:schedule.X} 触发 markWallReferences，
             // 后 ManualScheduleProvider.ensureWallRegistered 才 create），addWallToReferencedSet
             // 之前因 store 不含变量被 noop 跳过。这里反查 byWall 把"已经引用我"的 wall 注入
@@ -477,7 +476,7 @@ public final class VariableStore {
 
         persistIfUser(created, now, now);
         persistIfUserGlobal(created, now, now);
-        // 0.4.0 bugfix3（Bug B）：广播 CREATED 给 listener（HikariCanvas 注入的 listener 推
+        // 广播 CREATED 给 listener（HikariCanvas 注入的 listener 推
         // state.patch 给前端 mirror）。fireChange 在 compute 之外调，避免持锁回调。
         fireChange(fullName, created, ChangeType.CREATED);
         return created;
@@ -517,7 +516,6 @@ public final class VariableStore {
         persistIfUser(updated, createdAtHolder[0], now);
         persistIfUserGlobal(updated, createdAtHolder[0], now);
         notifyReferencingWalls(updated);
-        // 0.4.0 bugfix3（Bug B）
         fireChange(fullName, updated, ChangeType.UPDATED);
         return updated;
     }
@@ -552,7 +550,7 @@ public final class VariableStore {
         persistIfUser(updated, now, now);
         persistIfUserGlobal(updated, now, now);
         notifyReferencingWalls(updated);
-        // 0.4.0 bugfix3（Bug B）：Provider 写值的核心路径——ManualScheduleProvider /
+        // Provider 写值的核心路径——ManualScheduleProvider /
         // SystemVariableProvider / PapiVariableBridge / ScoreboardVariableProvider 都靠
         // 此 listener 才能让前端 mirror 同步显示 currentValue。
         fireChange(fullName, updated, ChangeType.VALUE_SET);
@@ -567,7 +565,7 @@ public final class VariableStore {
         Set<String> nsBucket = byNamespace.get(removed.namespace());
         if (nsBucket != null) {
             nsBucket.remove(fullName);
-            // 0.4.10 P3-91(a)：桶空则原子移除空桶——否则 per-wall namespace（user:<wallId> /
+            // 桶空则原子移除空桶——否则 per-wall namespace（user:<wallId> /
             // schedule:<wallId> 等）的桶在 wall 删除后永久驻留（内存泄漏，long-running server
             // 上 byNamespace 单调增长）。用 2 参 remove(key, value) 防 race：仅当当前映射仍是
             // 这个空桶才移除——若有并发 create 已重新填入，2 参 remove 会因值不等而跳过。
@@ -575,7 +573,7 @@ public final class VariableStore {
                 byNamespace.remove(removed.namespace(), nsBucket);
             }
         }
-        // 0.4.0 bugfix3（Bug B）：删除前先抓住 referencedByWalls 快照——用于 fireChange 路由。
+        // 删除前先抓住 referencedByWalls 快照——用于 fireChange 路由。
         // 接下来 byWall 清掉之后 removed.referencedByWalls() 仍是 mutation 前的 Set（record immutable），
         // 而 fireChange(... DELETED, removed) 用 removed.referencedByWalls() 作为 walls 列表，正确。
         // 清掉所有 wall 倒排索引里的引用
@@ -589,7 +587,7 @@ public final class VariableStore {
                 dao.delete(wallId, removed.key());
             }
         }
-        // 0.4.3：全局用户变量同样清持久化 + 内存 owner 表
+        // 全局用户变量同样清持久化 + 内存 owner 表
         if (USER_GLOBAL_NAMESPACE.equals(removed.namespace())) {
             globalOwners.remove(removed.key());
             if (globalDao != null) {
@@ -597,7 +595,7 @@ public final class VariableStore {
             }
         }
         notifyReferencingWalls(removed);
-        // 0.4.0 bugfix3（Bug B）：DELETED 事件的 variable=null，referencingWalls 取删除前的快照
+        // DELETED 事件的 variable=null，referencingWalls 取删除前的快照
         // 一并打到 event.referencingWalls 字段（listener 拿来路由）。
         Set<String> walls = Set.copyOf(removed.referencedByWalls());
         VariableChangeEvent event = new VariableChangeEvent(
@@ -640,7 +638,6 @@ public final class VariableStore {
         persistIfUser(updated, now, now);
         persistIfUserGlobal(updated, now, now);
         notifyReferencingWalls(updated);
-        // 0.4.0 bugfix3（Bug B）
         fireChange(fullName, updated, ChangeType.BOUND);
     }
 
@@ -679,7 +676,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.4.0 bugfix（Bug 1）：列出该 wall <b>可能引用</b>的全部变量（不依赖 byWall 倒排索引，
+     * 列出该 wall <b>可能引用</b>的全部变量（不依赖 byWall 倒排索引，
      * 解决 ready payload "鸡生蛋"问题）。
      *
      * <p>ready payload 在 wall 刚 open 时构造，此时 Compositor 尚未对该 wall 执行渲染 →
@@ -735,7 +732,7 @@ public final class VariableStore {
                 ? Set.of() : Set.copyOf(referencedFullNames);
 
         boolean changed;
-        // 0.4.10 P2-23：per-wallId 条带锁，把「快照→diff→双结构写」整段串行化。
+        // per-wallId 条带锁，把「快照→diff→双结构写」整段串行化。
         Object monitor = wallRefMonitors.computeIfAbsent(wallId, w -> new Object());
         synchronized (monitor) {
             Set<String> bucket = byWall.computeIfAbsent(wallId,
@@ -759,7 +756,7 @@ public final class VariableStore {
             changed = !removed.isEmpty() || !added.isEmpty();
         }
 
-        // 0.4.0 方案 B 自适应渲染：引用集合有变化时通知 listener 重新评估高频状态。
+        // 自适应渲染：引用集合有变化时通知 listener 重新评估高频状态。
         // 用 WALL_REFS_UPDATED 类型 + variable=null + fullName=占位符 让广播 listener 跳过 patch 推送
         // （SessionManager.broadcastVariableChangeToWall 拿到 null variable 时不构造 patch）；
         // HikariCanvas 注入的自适应 listener 据此调 ProjectionThrottler.setIntervalForSession。
@@ -770,7 +767,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.4.0 方案 B 自适应渲染：发布 WALL_REFS_UPDATED 事件。
+     * 自适应渲染：发布 WALL_REFS_UPDATED 事件。
      *
      * <p>事件 fullName 字段使用占位符 {@code "<bulk_wall_refs>"}；variable 为 null；
      * referencingWalls 仅含触发 wallId。listener 必须自行识别此类型，跳过 state.patch 路径，
@@ -793,12 +790,12 @@ public final class VariableStore {
     }
 
     /**
-     * Wall 删除时调用（B 任务在 walls 表 DELETE 后联动）：从所有变量的倒排索引清掉 wallId，
+     * Wall 删除时调用（walls 表 DELETE 后联动）：从所有变量的倒排索引清掉 wallId，
      * 并删除该 wall 的 {@code user:<wallId>/*} 变量（内存 + 持久化）。
      *
-     * <p>0.4.10 P3-91(b)：原实现只清倒排索引，不删 {@code user:<wallId>/*} 内存变量——
+     * <p>除了清倒排索引，还删 {@code user:<wallId>/*} 内存变量——
      * wall 删除后这些变量在 store / byNamespace 永久驻留（DB FK CASCADE 清了行但内存不清，
-     * long-running server 内存泄漏）。改为对每个 user 变量调 {@link #delete}（内含 per-key
+     * long-running server 内存泄漏）。对每个 user 变量调 {@link #delete}（内含 per-key
      * {@code dao.delete}，与 FK CASCADE 幂等——walls 行已删时删 0 行无害），与
      * ManualScheduleProvider / RailScheduleProvider 的 unregisterWall 删 per-wall 变量路径对齐。
      * {@code schedule:/system:/rail} per-wall 变量由各自 provider 的 unregisterWall hook 清，
@@ -806,7 +803,7 @@ public final class VariableStore {
      */
     public void clearWallReferences(String wallId) {
         Objects.requireNonNull(wallId, "wallId");
-        // 0.4.10 P2-23：与 markWallReferences 共用 per-wall 锁，避免删除与 mark 交错。
+        // 与 markWallReferences 共用 per-wall 锁，避免删除与 mark 交错。
         Object monitor = wallRefMonitors.computeIfAbsent(wallId, w -> new Object());
         synchronized (monitor) {
             Set<String> bucket = byWall.remove(wallId);
@@ -818,7 +815,7 @@ public final class VariableStore {
         }
         wallRefMonitors.remove(wallId);
 
-        // 0.4.10 P3-91(b)：删本 wall 的 user:<wallId>/* 内存变量（先快照 fullName 避免迭代时改集合）。
+        // 删本 wall 的 user:<wallId>/* 内存变量（先快照 fullName 避免迭代时改集合）。
         String userNs = USER_NAMESPACE_PREFIX + ":" + wallId;
         Set<String> userBucket = byNamespace.get(userNs);
         if (userBucket != null) {
@@ -899,7 +896,7 @@ public final class VariableStore {
 
     /**
      * 触发 wall dirty。<b>仅</b>对当前 referencedByWalls 集合内的 wall 触发；create 时
-     * 集合为空（变量刚建无 referencer），不触发——这是按任务要求设计的。
+     * 集合为空（变量刚建无 referencer），不触发。
      */
     private void notifyReferencingWalls(Variable v) {
         for (String wallId : v.referencedByWalls()) {
@@ -922,7 +919,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.4.3：仅当 namespace = {@code userglobal} 时落库到 {@code user_global_variables} 表。
+     * 仅当 namespace = {@code userglobal} 时落库到 {@code user_global_variables} 表。
      * owner 信息从 {@link #globalOwners} 内存表查；create 主路径在 {@link #createGlobal}
      * 内先 put owner 再调 store.create，保证此时 globalOwners 一定含 key。
      *
@@ -1001,7 +998,7 @@ public final class VariableStore {
     }
 
     /**
-     * 0.9.2 可观测性（{@code /canvas stats} / {@code diagnose}）：按 namespace 前缀统计变量数。
+     * 按 namespace 前缀统计变量数（{@code /canvas stats} / {@code diagnose}）。
      *
      * <p>遍历 {@code store}（CHM）快照，按 {@link Variable#namespace()} 的前缀段归类计数：
      * per-wall namespace（形如 {@code user:<wallId>} / {@code system:<wallId>} /
@@ -1052,7 +1049,7 @@ public final class VariableStore {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  0.4.0 方案 B 自适应渲染：高频 wall 判断
+    //  自适应渲染：高频 wall 判断
     // ──────────────────────────────────────────────────────────────────
 
     /**
@@ -1074,7 +1071,7 @@ public final class VariableStore {
     );
 
     /**
-     * 0.4.0 方案 B 自适应渲染：检查 wall 引用的变量是否含秒级变化的高频 key。
+     * 自适应渲染：检查 wall 引用的变量是否含秒级变化的高频 key。
      *
      * <p>调用方（{@link moe.hikari.canvas.HikariCanvas} 注入的 ChangeListener）据此把
      * {@link moe.hikari.canvas.render.ProjectionThrottler} 该 session 的间隔从默认 200ms

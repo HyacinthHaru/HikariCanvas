@@ -21,7 +21,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P3-M：{@code GET /api/variable/list-all-namespaces} 端点 handler。
+ * {@code GET /api/variable/list-all-namespaces} 端点 handler。
  *
  * <p>聚合所有已注册 {@link VariableProvider} 的 {@link VariableProvider#declaredKeys() declared keys}
  * + 调用 wall 的 user 变量（仅当 query string 带 {@code wallId} 时），下发给编辑器 VariablePicker
@@ -48,8 +48,7 @@ import java.util.logging.Logger;
  * <h2>注册</h2>
  *
  * <p>本类不主动注册路由：由 {@link WebServer} 装配时调
- * {@code app.get("/api/variable/list-all-namespaces", handler::handle)} 一行接入。
- * 保持 WebServer god-class 拆分（M15.x）的纪律——handler 自治，WebServer 仅路由。</p>
+ * {@code app.get("/api/variable/list-all-namespaces", handler::handle)} 一行接入。</p>
  *
  * @see docs/dynamic-data.md §3.3 / §6.3
  */
@@ -65,7 +64,7 @@ public final class VariableMetadataHandler {
     /** 鉴权检查：sessionId 是否对应活 session。生产传 {@code sessionManager::byId 非空判定}；测试注入 fake。 */
     private final Predicate<String> sessionAuthCheck;
     /**
-     * P2-3：sessionId → 该 session 服务端绑定的 wallId（未绑定/无 session 返 null）。
+     * sessionId → 该 session 服务端绑定的 wallId（未绑定/无 session 返 null）。
      * 生产由 {@code sessionManager.byId(sid).wallId()} 解析；测试注入 fake。
      * <p>per-wall 隔离的唯一权威来源——客户端传的 {@code wallId} query param 一律忽略，
      * 防 IDOR 跨 wall 枚举他人 user 变量元数据（与 WebServer ready payload 用 session 绑定 wallId 一致）。</p>
@@ -154,7 +153,7 @@ public final class VariableMetadataHandler {
                     .result("{\"error\":\"UNAUTHORIZED\"}");
             return;
         }
-        // P2-3（IDOR 修复）：忽略客户端传的 wallId query param，改用 session 服务端绑定的 wallId。
+        // IDOR 修复：忽略客户端传的 wallId query param，改用 session 服务端绑定的 wallId。
         // 这样任意已认证玩家无法把 wallId 改为他人 wall 枚举其 user 变量元数据，
         // 与 WebServer ready payload 路径（用 session.wallId()）的 per-wall 隔离一致。
         String wallId = sessionWallResolver.apply(sessionId);
@@ -195,7 +194,7 @@ public final class VariableMetadataHandler {
 
         for (VariableProvider p : daemon.registeredProviders()) {
             Map<String, Object> ns = new LinkedHashMap<>();
-            // 0.7.4：下发 store namespace 前缀（前端展示 + interpolator 解析用），而非 daemon
+            // 下发 store namespace 前缀（前端展示 + interpolator 解析用），而非 daemon
             // 唯一性 key。绝大多数 provider 两者相同；RailScheduleProvider 例外（daemon key
             // = "schedule_rail" 但 store 前缀 = "schedule"），避免 picker 出现 schedule_rail/*
             // 幽灵变量 + 选中后 resolve miss。详见 VariableProvider.storeNamespacePrefix()。

@@ -28,9 +28,9 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.4 P2：铁路网络时刻表 Provider。与 {@link ManualScheduleProvider} 共享
+ * 铁路网络时刻表 Provider。与 {@link ManualScheduleProvider} 共享
  * {@code schedule:<wallId>/*} namespace；仅对**已绑定铁路网络**（{@code wall_rail_bindings.line_id
- * IS NOT NULL}）的 wall 接管 push，未绑定的 wall 由 ManualScheduleProvider 继续走 0.4.0
+ * IS NOT NULL}）的 wall 接管 push，未绑定的 wall 由 ManualScheduleProvider 继续走
  * 旧路径（fallback）。
  *
  * <p>{@link #refresh()} 对每个已注册 wall：</p>
@@ -51,7 +51,7 @@ import java.util.logging.Logger;
  * <ul>
  *   <li>兼容旧：{@code next_departure / next_destination / eta_minutes / eta_seconds /
  *       eta_mmss / is_arriving / arrival_status / precision}</li>
- *   <li>0.4.4 新车次语义：{@code next_run_number / next_service_type /
+ *   <li>新车次语义：{@code next_run_number / next_service_type /
  *       next_service_type_text / next_cars / next_terminus / next_notes / next_arrival}</li>
  *   <li>next2 同上（next_* / next2_* 配对，第二班车）</li>
  * </ul>
@@ -68,7 +68,7 @@ public final class RailScheduleProvider implements VariableProvider {
     public static final String NAMESPACE_PREFIX = "schedule";
 
     /**
-     * 0.4.6 hotfix：{@link VariableProvider#namespace()} 是 {@link VariableProviderDaemon}
+     * {@link VariableProvider#namespace()} 是 {@link VariableProviderDaemon}
      * 内部用作 provider 实例 map 的 key（必须全局唯一）；这与"对外暴露的 store namespace
      * 前缀"是两个独立概念。Rail 和 Manual 都暴露 {@code schedule:<wallId>/*} 给 wall（
      * NAMESPACE_PREFIX），但在 daemon 内部必须用不同 key 区分实例——否则
@@ -102,7 +102,7 @@ public final class RailScheduleProvider implements VariableProvider {
 
     /** 已注册铁路 wall（值 = 该 wall 当前 binding 快照）。 */
     private final ConcurrentHashMap<String, WallRailBinding> registeredWalls = new ConcurrentHashMap<>();
-    /** 节流（同 ManualSchedule，secondary 精度走 1s / 默认 30s）。0.4.4 默认 second（地铁屏标配）。 */
+    /** 节流（同 ManualSchedule，secondary 精度走 1s / 默认 30s）。默认 second（地铁屏标配）。 */
     private final ConcurrentHashMap<String, Long> lastPushAt = new ConcurrentHashMap<>();
 
     /** 生产构造：注入 RailDao + config + locale。 */
@@ -135,7 +135,7 @@ public final class RailScheduleProvider implements VariableProvider {
     @Override public String namespace() { return DAEMON_KEY; }
 
     /**
-     * 0.7.4：前端 picker / interpolator 用的真实 store namespace 前缀 = {@code "schedule"}
+     * 前端 picker / interpolator 用的真实 store namespace 前缀 = {@code "schedule"}
      * （= {@link #NAMESPACE_PREFIX}），而非 daemon 唯一性 key {@link #DAEMON_KEY}。让 rail 的
      * 14 个车次语义 key 与 manual 的基础 key 同归前端 {@code schedule} 组，选中插入
      * {@code ${var:schedule/next_cars}} 经 interpolator 注入 wallId → {@code schedule:<wallId>/next_cars}
@@ -151,8 +151,8 @@ public final class RailScheduleProvider implements VariableProvider {
     public List<DeclaredKey> declaredKeys() {
         List<DeclaredKey> out = new ArrayList<>(ManualScheduleProvider.ALL_KEYS.length + 14);
         // 复用 ManualSchedule 的 15 个 key（同名同类）；不要重复声明，让 ManualSchedule 的 declaredKeys 处理
-        // 0.4.4 新车次语义：next + next2 配对，共 14
-        // 0.7.4：rail 专属 key 描述加 [铁路网络] 前缀，让用户在 picker 里区分「铁路网络」
+        // 新车次语义：next + next2 配对，共 14
+        // rail 专属 key 描述加 [铁路网络] 前缀，让用户在 picker 里区分「铁路网络」
         // 定义的车次语义 vs ManualSchedule 的「手填时刻表」基础 key（next_departure / eta_* 等
         // 由 ManualScheduleProvider.declaredKeys() 提供，描述不带前缀，保持原样）。
         out.add(new DeclaredKey("next_run_number", VarType.STRING,
@@ -266,7 +266,7 @@ public final class RailScheduleProvider implements VariableProvider {
     /**
      * 取消铁路接管（业务侧 unbind / DELETE 后调）。
      *
-     * <p>0.4.10 U-2：仅删 {@link #RAIL_ONLY_KEYS}（14 个 0.4.4 专属 key）。
+     * <p>仅删 {@link #RAIL_ONLY_KEYS}（14 个 rail 专属 key）。
      * {@link #SHARED_BASE_KEYS}（15 个与 ManualSchedule 共享的 key）<b>保留</b>——unbind
      * 后该 wall 若仍有 manual schedule，ManualScheduleProvider 会继续写这些 key；删掉只会
      * 触发多余的 re-create + 在重建窗口闪占位符。manual 不再接管时这些 key 会随其
@@ -296,7 +296,7 @@ public final class RailScheduleProvider implements VariableProvider {
     }
 
     /**
-     * 0.4.4 P2 关键：判断 wall 是否被铁路路径接管（HikariCanvas 装配时把它作为
+     * 判断 wall 是否被铁路路径接管（HikariCanvas 装配时把它作为
      * {@code ManualScheduleProvider.skipWallPredicate} 传入，让 manual 跳过这些 wall）。
      */
     public boolean hasWallBinding(String wallId) {
@@ -311,7 +311,7 @@ public final class RailScheduleProvider implements VariableProvider {
     /**
      * 与 {@link ManualScheduleProvider} 共享的 15 个基础 key（8 base + 7 next2 base）。
      *
-     * <p>0.4.10 U-2：这些 key 由 rail 和 manual 两个 provider 共同写。{@link #unregisterWall}
+     * <p>这些 key 由 rail 和 manual 两个 provider 共同写。{@link #unregisterWall}
      * <b>不能</b>删它们——unbind 后该 wall 可能退回 ManualSchedule 路径，删掉会让 manual
      * 重新 create（多余）+ 在重建窗口内占位符闪 "???"。仅 register 时 create（幂等，
      * manual 已 create 则跳过），unregister 时保留交给 manual。</p>
@@ -327,16 +327,16 @@ public final class RailScheduleProvider implements VariableProvider {
     };
 
     /**
-     * 0.4.4 引入的 14 个 rail 专属 key（7 next + 7 next2）。
+     * 14 个 rail 专属 key（7 next + 7 next2）。
      *
      * <p>这些 key 只有 rail provider 写。{@link #unregisterWall} 只删这 14 个——manual
      * 不认识它们，删掉是干净的。</p>
      */
     static final String[] RAIL_ONLY_KEYS = new String[] {
-            // 0.4.4 新 next 7
+            // 新 next 7
             "next_run_number", "next_service_type", "next_service_type_text",
             "next_cars", "next_terminus", "next_notes", "next_arrival",
-            // 0.4.4 新 next2 7
+            // 新 next2 7
             "next2_run_number", "next2_service_type", "next2_service_type_text",
             "next2_cars", "next2_terminus", "next2_notes", "next2_arrival"
     };
@@ -530,7 +530,7 @@ public final class RailScheduleProvider implements VariableProvider {
                                            DataSource ds, Locale locale) {
         RailTimetableEntry e = row.entry();
         RailRun r = row.run();
-        // 0.7.3 P2-13：next_arrival / next_departure 拆成两个独立字段（docs §18.4）。
+        // next_arrival / next_departure 拆成两个独立字段（docs §18.4）。
         // arrival = 该站到达时刻（arrival_time）；首站/始发通常无 arrival → fallback departure_time。
         // departure = 该站发车时刻（departure_time）；末站/终到通常无 departure → fallback arrival_time。
         // 两列都缺则空串（下方 null → "" 兜底）。中间站两列均非空 → 各取本列、互不相等。

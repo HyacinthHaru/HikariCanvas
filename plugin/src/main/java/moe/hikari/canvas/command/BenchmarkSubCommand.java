@@ -46,7 +46,7 @@ import java.util.concurrent.Executors;
 import java.util.logging.Level;
 
 /**
- * 0.5.0-P1：{@code /canvas bench} 命令族——纯服务端渲染成本 benchmark 的运行 / 报告入口。
+ * {@code /canvas bench} 命令族——纯服务端渲染成本 benchmark 的运行 / 报告入口。
  *
  * <p>本类是<b>命令适配层</b>，可以引用 Bukkit；真正的压测核心（{@link SceneLibrary} /
  * {@link SceneTimer} / {@link BenchCompositor} / {@code Instrumentation}）全部 headless，
@@ -63,12 +63,11 @@ import java.util.logging.Level;
  *   <li>{@code clear} — 清空 {@code benchmarks/} 目录内容</li>
  * </ul>
  *
- * <h2>哲学纪律（不可越界）</h2>
+ * <h2>测量边界</h2>
  *
- * <p>「工具不是保姆」——只测 CPU / 内存（rasterize + palette quantize），<b>绝不碰网络</b>，
- * 不模拟 viewer 带宽 / 压缩比；不写世界 / 地图池 / ItemFrame。rasterize 是 stateless +
- * 线程安全的，故 {@code run} 整段在守护线程跑，仅最后回主线程发消息（Bukkit Scheduler
- * 契约要求消息 / 调度类 API 在主线程调）。</p>
+ * <p>只测 CPU / 内存（rasterize + palette quantize），不碰网络（不模拟 viewer 带宽 / 压缩比），
+ * 不写世界 / 地图池 / ItemFrame。rasterize 是 stateless + 线程安全的，故 {@code run} 整段在
+ * 守护线程跑，仅最后回主线程发消息（Bukkit Scheduler 契约要求消息 / 调度类 API 在主线程调）。</p>
  *
  * <h2>消息颜色约定</h2>
  *
@@ -190,7 +189,7 @@ public final class BenchmarkSubCommand {
                             doClear(ctx.getSource().getSender());
                             return Command.SINGLE_SUCCESS;
                         }))
-                // run-tween [iterations] [warmup] — 补间帧率压测（0.7.x）
+                // run-tween [iterations] [warmup] — 补间帧率压测
                 .then(Commands.literal("run-tween")
                         .executes(ctx -> {
                             doRunTween(ctx.getSource().getSender(), -1, -1);
@@ -209,7 +208,7 @@ public final class BenchmarkSubCommand {
                                                     IntegerArgumentType.getInteger(ctx, "warmup"));
                                             return Command.SINGLE_SUCCESS;
                                         }))))
-                // run-script [iterations] [warmup] — 脚本动作链压测（0.7.x）
+                // run-script [iterations] [warmup] — 脚本动作链压测
                 .then(Commands.literal("run-script")
                         .executes(ctx -> {
                             doRunScript(ctx.getSource().getSender(), -1, -1);
@@ -311,7 +310,7 @@ public final class BenchmarkSubCommand {
             return;
         }
 
-        // P2：BenchmarkRunner 内部 选场景 → 测同尺寸空白基线 → 逐场景计时 → 聚合 percentile +
+        // BenchmarkRunner 内部 选场景 → 测同尺寸空白基线 → 逐场景计时 → 聚合 percentile +
         // per-element + GC/env。generatedAtMillis 由命令层注入（runner 不读时钟保持可测）。
         BenchmarkReport report = new BenchmarkRunner()
                 .run(compositor, new SceneLibrary(), cfg, System.currentTimeMillis());
@@ -322,7 +321,7 @@ public final class BenchmarkSubCommand {
         mapper.writerWithDefaultPrettyPrinter()
                 .writeValue(outDir.resolve(REPORT_FILE).toFile(), report);
         Files.writeString(outDir.resolve(SUMMARY_FILE), renderReportText(selector, report));
-        // P3：自包含 HTML 报告（内联 SVG 图 + 50mspt 公式交互计算器），服主浏览器打开即看。
+        // 自包含 HTML 报告（内联 SVG 图 + 50mspt 公式交互计算器），服主浏览器打开即看。
         Files.writeString(outDir.resolve(HTML_FILE), HtmlReportRenderer.render(report));
 
         // 回主线程：发彩色摘要 + 保存路径
@@ -605,7 +604,7 @@ public final class BenchmarkSubCommand {
     // ──────────────────────────────────────────────────────────────────
 
     // ──────────────────────────────────────────────────────────────────
-    //  run-tween（0.7.x 补间帧率压测）
+    //  run-tween（补间帧率压测）
     // ──────────────────────────────────────────────────────────────────
 
     /**
@@ -641,7 +640,7 @@ public final class BenchmarkSubCommand {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  run-script（0.7.x 脚本动作链压测）
+    //  run-script（脚本动作链压测）
     // ──────────────────────────────────────────────────────────────────
 
     /**

@@ -18,7 +18,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 0.8 Part A review 补缺：导入 {@code .canvas} 工程时扫缺资源（字体 / 图标 / 变量）并提示。
+ * 导入 {@code .canvas} 工程时扫缺资源（字体 / 图标 / 变量）并提示。
  *
  * <p>contract {@code docs/import-export.md §3.2 step 8}。{@link ProjectImporter#importInto} 在
  * {@link ProjectMaterializer#materialize} 之后、{@code replaceProject} 之前调用，把产出的

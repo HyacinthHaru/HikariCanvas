@@ -18,7 +18,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.7.0-P5-E（K-UI-10）：{@code GET /api/script/command-templates} 端点 handler。
+ * {@code GET /api/script/command-templates} 端点 handler。
  *
  * <p>给积木编辑器的 {@code runCommand} 积木列出服主在 {@code config.yml} 配的命令模板，
  * 让玩家从下拉里选一个模板 + 填参数，而不是手打命令全文。</p>
@@ -39,7 +39,7 @@ import java.util.logging.Logger;
  *       校验失败 401。鉴权方式同
  *       {@link moe.hikari.canvas.image.UploadHandler#handleDownload(Context)} 与
  *       {@link VariableMetadataHandler#handle(Context)}（{@code sessionManager.byId} 非空判定）。
- *       为兼容 K-UI-10 规格里写的 {@code ?session=<sid>}，也接受 {@code session} 作为别名
+ *       为兼容写作 {@code ?session=<sid>} 的调用方，也接受 {@code session} 作为别名
  *       （先读 {@code sessionId}，缺则读 {@code session}）。</li>
  * </ul>
  *
@@ -70,7 +70,7 @@ import java.util.logging.Logger;
  *
  * <h2>注册</h2>
  *
- * <p>本类不主动注册路由：由 {@link WebServer} 装配时一行接入，保持 god-class 拆分（M15.x）纪律。</p>
+ * <p>本类不主动注册路由：由 {@link WebServer} 装配时一行接入，保持 god-class 拆分纪律。</p>
  */
 public final class CommandTemplateHandler {
 
@@ -119,7 +119,7 @@ public final class CommandTemplateHandler {
      * </ul>
      */
     public void handle(Context ctx) {
-        // 先读 sessionId（codebase 约定名）；缺则读 session（K-UI-10 规格里写的别名）
+        // 先读 sessionId（codebase 约定名）；缺则读 session（别名）
         String sessionId = ctx.queryParam("sessionId");
         if (sessionId == null || sessionId.isBlank()) {
             sessionId = ctx.queryParam("session");

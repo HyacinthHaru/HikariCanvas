@@ -4,8 +4,7 @@ package moe.hikari.canvas.pool;
  * 池中一张地图的内存视图（{@code pool_maps} 表一行的值对象）。
  * 不可变——状态迁移通过 {@link MapPool} 重建新实例并更新索引。
  *
- * <p>M5.5：删除 {@code signId} 字段（PERMANENT 状态废止）。{@code reservedBy} 在 RESERVED 时
- * 格式为 {@code wall:<wall_id>}。</p>
+ * <p>{@code reservedBy} 在 RESERVED 时格式为 {@code wall:<wall_id>}。</p>
  */
 public record PooledMap(
         int mapId,

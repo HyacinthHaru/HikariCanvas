@@ -32,11 +32,11 @@ import java.util.regex.Pattern;
  * <p><b>纯函数语义：</b> 不碰 Bukkit / DB / Session；输入 {@link TemplateSpec} +
  * 用户参数 + 目标 wall 尺寸（已由 {@link moe.hikari.canvas.session.Session} 确定），
  * 输出 {@code Result.Ok}（背景色 + element list）或 {@code Result.Failed}（错误码 + 详情）。
- * WS 层（M6-D）在主线程拿到结果后走 EditSession {@code replace}。</p>
+ * WS 层在主线程拿到结果后走 EditSession {@code replace}。</p>
  *
- * <p><b>M6 v1 实施范围：</b></p>
+ * <p><b>实施范围：</b></p>
  * <ul>
- *   <li>layout: {@code stack} + {@code free}（{@code grid} 推迟 M7）</li>
+ *   <li>layout: {@code stack} + {@code free} + {@code grid}</li>
  *   <li>element: {@code text} + {@code rect}（{@code line} 占位允许，但 v1 不渲染→
  *       materialize 时返回 null 跳过；{@code icon} 已在 loader 拒绝）</li>
  *   <li>{@code w}/{@code h} 支持 int / "auto" / "N%" / "${param}"</li>
@@ -60,10 +60,10 @@ public final class TemplateInstantiator {
     /**
      * 实例化结果。失败时 {@code errors} 给出全部累计校验问题。
      *
-     * <p>M17 F5：{@code backgroundColor} 字段语义未变（仍是 hex 字符串），非 raw_state
-     * 模板的 {@code resolveBackground} 仍输出 hex；raw_state 模式下从 {@link Fill}
+     * <p>{@code backgroundColor} 字段语义是 hex 字符串，非 raw_state
+     * 模板的 {@code resolveBackground} 输出 hex；raw_state 模式下从 {@link Fill}
      * 抽 {@link moe.hikari.canvas.state.SolidFill#color()}，非 solid 形态退默认 {@code "#FFFFFF"}。
-     * v1 模板谱系不支持渐变背景；要做需扩展 template-spec 接口。</p>
+     * 模板谱系不支持渐变背景；要做需扩展 template-spec 接口。</p>
      */
     public sealed interface Result {
         record Ok(int widthMaps, int heightMaps, String backgroundColor,
@@ -119,7 +119,7 @@ public final class TemplateInstantiator {
             errors.add(ie.getMessage());
             return new Result.Failed(ie.code, errors);
         } catch (IllegalArgumentException iae) {
-            // M16 P1.5：Interpolator 长度上限触发——IAE 透过 interp() helper 上抛
+            // Interpolator 长度上限触发——IAE 透过 interp() helper 上抛
             errors.add(iae.getMessage());
             return new Result.Failed("INVALID_TEMPLATE", errors);
         }
@@ -127,10 +127,10 @@ public final class TemplateInstantiator {
         return new Result.Ok(wallWidthMaps, wallHeightMaps, bg, elements, params);
     }
 
-    // ==================== M14 raw state 模式 ====================
+    // ==================== raw state 模式 ====================
 
     /**
-     * 创意工坊模板（{@link TemplateSpec#rawState} 非空）的实例化路径。
+     * rawState 模板（{@link TemplateSpec#rawState} 非空）的实例化路径。
      *
      * <p>流程：参数校验 → 深拷贝 rawState → 遍历 Map 把所有 String 字段中的
      * {@code "${paramId}"} 替换为 params 实际值（text 类型直接 toString）→
@@ -163,13 +163,13 @@ public final class TemplateInstantiator {
         try {
             replaced = replacePlaceholders(raw, params);
         } catch (Interpolator.MissingParamException mpe) {
-            // P2-65：raw_state 内引用了未声明 / 未填值的 param。与非 raw 路径
+            // raw_state 内引用了未声明 / 未填值的 param。与非 raw 路径
             // resolveBackground 对齐，回 INVALID_PARAM（含缺失 param 名）而非让
             // RuntimeException 逃逸到 WS dispatcher 变成 ack_timeout。
             errors.add("rawState references missing param '" + mpe.paramName() + "'");
             return new Result.Failed("INVALID_PARAM", errors);
         } catch (IllegalArgumentException iae) {
-            // M16 P1.5：Interpolator 长度上限被触发（单参数 / 累计输出）
+            // Interpolator 长度上限被触发（单参数 / 累计输出）
             errors.add(iae.getMessage());
             return new Result.Failed("INVALID_TEMPLATE", errors);
         }
@@ -189,14 +189,14 @@ public final class TemplateInstantiator {
             return new Result.Failed("INVALID_TEMPLATE", errors);
         }
 
-        // M17 F5：state.canvas().background() 现在是 Fill；raw_state 模板若是渐变背景，
-        // v1 不支持向 template.apply.Result.Ok 透传——抽 SolidFill.color 或退默认。
+        // state.canvas().background() 是 Fill；raw_state 模板若是渐变背景，
+        // 不支持向 template.apply.Result.Ok 透传——抽 SolidFill.color 或退默认。
         moe.hikari.canvas.state.Fill bgFill = state.canvas().background();
         String bg = bgFill instanceof moe.hikari.canvas.state.SolidFill sf ? sf.color() : "#FFFFFF";
         List<Element> flat = new ArrayList<>();
         for (var layer : state.layers()) {
             for (Element el : layer.elements()) {
-                // M15.4 P0-23：raw_state 反序列化得到的 element 跑安全校验，
+                // raw_state 反序列化得到的 element 跑安全校验，
                 // 避免 canvas.template.save 玩家通过模板注入畸形 element（path / image source / mask 等）。
                 try {
                     moe.hikari.canvas.state.EditSession.validateElementForTemplateApply(el);
@@ -235,7 +235,7 @@ public final class TemplateInstantiator {
     }
 
     /**
-     * M16 P1.5：raw_state 嵌套深度上限。Map / List 任一层嵌套累计超过此值抛
+     * raw_state 嵌套深度上限。Map / List 任一层嵌套累计超过此值抛
      * {@link IllegalArgumentException}。32 足以覆盖现实模板（典型 ProjectState
      * 深度 ≤ 6：layers[].elements[].effects.stroke），同时挡住恶意指数嵌套触发
      * 解析期 StackOverflow / 内存爆炸。
@@ -692,7 +692,6 @@ public final class TemplateInstantiator {
     /**
      * 解析 x/y 这种没有"auto"语义的维度。返回 int。null/无法解析 → fallback。
      *
-     * <p>C2-P2-12 修：</p>
      * <ul>
      *   <li>INT_NUMERIC 匹配超 int 范围的字符串（如 {@code "99999999999"}）时，
      *       旧路径直接 {@code Integer.parseInt} 抛 {@link NumberFormatException}，
@@ -716,11 +715,11 @@ public final class TemplateInstantiator {
             var m = PERCENT.matcher(s);
             if (m.matches()) {
                 double pct = Double.parseDouble(m.group(1)) / 100.0;
-                // C2: clampInt 防超大百分比静默回绕
+                // clampInt 防超大百分比静默回绕
                 return StrictNumber.clampInt(Math.round(contentBasis * pct));
             }
             if (INT_NUMERIC.matcher(s).matches()) {
-                // C2: 超 int 范围字符串走 clampInt，不外泄 NFE JDK 报文
+                // 超 int 范围字符串走 clampInt，不外泄 NFE JDK 报文
                 try {
                     return Integer.parseInt(s);
                 } catch (NumberFormatException nfe) {
@@ -734,8 +733,7 @@ public final class TemplateInstantiator {
 
     /**
      * 解析 w/h 维度：支持 "auto" 走 supplier，"N%" 按 basis，数字按数字。
-     *
-     * <p>C2-P2-12：同 {@link #resolveDimension} 修复超 int 回绕与 JDK 报文泄漏。</p>
+     * 同 {@link #resolveDimension} 处理超 int 回绕与 JDK 报文泄漏。
      */
     private int resolveDimensionWithAuto(Object raw, int basis,
                                          Map<String, Object> params,
@@ -752,11 +750,11 @@ public final class TemplateInstantiator {
             var m = PERCENT.matcher(s);
             if (m.matches()) {
                 double pct = Double.parseDouble(m.group(1)) / 100.0;
-                // C2: clampInt 防超大百分比静默回绕
+                // clampInt 防超大百分比静默回绕
                 return StrictNumber.clampInt(Math.round(basis * pct));
             }
             if (INT_NUMERIC.matcher(s).matches()) {
-                // C2: 超 int 范围字符串走 clampInt，不外泄 NFE JDK 报文
+                // 超 int 范围字符串走 clampInt，不外泄 NFE JDK 报文
                 try {
                     return Integer.parseInt(s);
                 } catch (NumberFormatException nfe) {
@@ -770,7 +768,7 @@ public final class TemplateInstantiator {
     /**
      * TemplateElement → state.Element 物化。line 在 v1 跳过返回 null。
      *
-     * <p><b>C1-P2-11 修：</b> 常规布局路径（stack/free/grid）的物化结果现在与 raw_state
+     * <p>常规布局路径（stack/free/grid）的物化结果与 raw_state
      * 路径对称，通过两层校验：</p>
      * <ol>
      *   <li>{@link ElementValidator#validateElementForTemplateApply}：坐标/尺寸/旋转/fill
@@ -789,7 +787,7 @@ public final class TemplateInstantiator {
         Element result;
         if (el instanceof TemplateElement.Text t) {
             String content = interp(t.content() == null ? "" : t.content(), params);
-            // C1: 超长 content 给友好错误（内容来自用户参数，过长是意外）
+            // 超长 content 给友好错误（内容来自用户参数，过长是意外）
             if (content.length() > ElementValidator.MAX_TEXT_LEN) {
                 throw new InstantiationException("INVALID_TEMPLATE",
                         "text content length " + content.length()
@@ -797,16 +795,16 @@ public final class TemplateInstantiator {
             }
             String color = interp(t.color() == null ? "#000000" : t.color(), params);
             String fontId = interp(t.font() == null ? "ark_pixel" : t.font(), params);
-            // C1: fontSize clamp [1, MAX_FONT_SIZE]
+            // fontSize clamp [1, MAX_FONT_SIZE]
             int size = t.size() == null ? 24 : Math.max(1,
                     Math.min(ElementValidator.MAX_FONT_SIZE, t.size()));
             String align = t.align() == null ? "left" : t.align();
-            // C1: lineHeight clamp [MIN_LINE_HEIGHT, MAX_LINE_HEIGHT]
+            // lineHeight clamp [MIN_LINE_HEIGHT, MAX_LINE_HEIGHT]
             float lineHeight = t.lineHeight() == null ? 1.2f
                     : Math.max(ElementValidator.MIN_LINE_HEIGHT,
                             Math.min(ElementValidator.MAX_LINE_HEIGHT,
                                     t.lineHeight().floatValue()));
-            // C1: letterSpacing clamp [MIN_LETTER_SPACING, MAX_LETTER_SPACING]
+            // letterSpacing clamp [MIN_LETTER_SPACING, MAX_LETTER_SPACING]
             float letterSpacing = t.letterSpacing() == null ? 0f
                     : Math.max(ElementValidator.MIN_LETTER_SPACING,
                             Math.min(ElementValidator.MAX_LETTER_SPACING,
@@ -826,7 +824,7 @@ public final class TemplateInstantiator {
             if (r.stroke() == null) {
                 stroke = null;
             } else {
-                // P2-36：stroke.width 支持 ${param}，先插值再解析。
+                // stroke.width 支持 ${param}，先插值再解析。
                 Integer sw = asIntInterp(r.stroke().width(), params);
                 stroke = new Stroke(sw == null ? 1 : sw, interp(r.stroke().color(), params));
             }
@@ -838,7 +836,7 @@ public final class TemplateInstantiator {
         } else if (el instanceof TemplateElement.Icon ic) {
             String source = interp(ic.source(), params);
             String tint = ic.tint() == null ? null : interp(ic.tint(), params);
-            // M26：模板 tint 字段语义升级——若指定 tint 则同步为 SolidFill；否则 fill=null（用 pack 默认色）
+            // 模板 tint 字段：若指定 tint 则同步为 SolidFill；否则 fill=null（用 pack 默认色）
             Fill fill = (tint == null || tint.isBlank()) ? null : new SolidFill(tint);
             result = new IconElement(
                     id, x, y, w, h,
@@ -850,7 +848,7 @@ public final class TemplateInstantiator {
             return null;
         }
 
-        // C1-P2-11: 与 raw_state 路径对称——跑 validateElementForTemplateApply 校验
+        // 与 raw_state 路径对称——跑 validateElementForTemplateApply 校验
         // 坐标/尺寸/旋转/fill 等字段（x/y 超范围时给友好 INVALID_TEMPLATE 错误）。
         try {
             ElementValidator.validateElementForTemplateApply(result);
@@ -909,7 +907,7 @@ public final class TemplateInstantiator {
     }
 
     /**
-     * P2-36：先插值再 asInt 的整数解析（复用 {@link #resolveDimension} 的
+     * 先插值再 asInt 的整数解析（复用 {@link #resolveDimension} 的
      * 『String→interp→INT_NUMERIC 解析』+ MissingParam 回退模式）。TemplateEffects
      * width/dx/dy/radius 与 Rect stroke.width 声明支持 {@code ${param}}，但 {@link #asInt}
      * 直接对 {@code "${n}"} 返 null 会被静默当 0/默认；本 helper 先把 String 中的占位符

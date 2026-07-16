@@ -7,7 +7,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
- * 关键帧缓动（0.6 引入）。数学权威定义见 {@code docs/rendering.md §9.3}；
+ * 关键帧缓动。数学权威定义见 {@code docs/rendering.md §9.3}；
  * 协议契约见 {@code docs/protocol.md §7}。
  *
  * <p>{@code bezier} 仅 {@link EasingType#CUBIC_BEZIER} 使用：{@code [x1, y1, x2, y2]} 四元，
@@ -32,7 +32,7 @@ public record Easing(
         if (type == null) type = EasingType.LINEAR;
         if (bezier != null) {
             // 宽容路径：持久化 blob 里 bezier 含 null 元素时不抛硬错（List.copyOf 会 NPE
-            // 致整面墙加载失败，违反本类「坏数据不在反序列化期抛硬错」的承诺；审查确认项 #5）。
+            // 致整面墙加载失败，违反本类「坏数据不在反序列化期抛硬错」的承诺）。
             // 退 null —— 渲染期按无控制点处理；WS 路径的语义校验仍在 op 层拒 INVALID_EASING。
             boolean hasNull = false;
             for (Double d : bezier) {

@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  *
  * <p>不支持嵌套（{@code ${a${b}}}）与默认值语法（{@code ${a:-x}}）—— v2+ 议题。</p>
  *
- * <p><b>M16 P1.5 DoS 防御：</b></p>
+ * <p><b>DoS 防御：</b></p>
  * <ul>
  *   <li>单参数 {@code toString()} 长度 &gt; {@link #MAX_VALUE_LEN}（16 KiB）→
  *       抛 {@link IllegalArgumentException}。防恶意 user-template 把超大值塞进
@@ -70,13 +70,13 @@ public final class Interpolator {
             }
             Object val = values.get(name);
             String s = val == null ? "" : val.toString();
-            // M16 P1.5：单参数值长度上限——防超大 string 注入
+            // 单参数值长度上限——防超大 string 注入
             if (s.length() > MAX_VALUE_LEN) {
                 throw new IllegalArgumentException(
                         "interpolated value for '" + name + "' too large: "
                                 + s.length() + " > " + MAX_VALUE_LEN);
             }
-            // M16 P1.5：累计输出上限——防 ${a}${a}${a}... 倍增展开
+            // 累计输出上限——防 ${a}${a}${a}... 倍增展开
             if ((long) out.length() + s.length() > MAX_OUTPUT_LEN) {
                 throw new IllegalArgumentException(
                         "interpolated output exceeds limit " + MAX_OUTPUT_LEN);

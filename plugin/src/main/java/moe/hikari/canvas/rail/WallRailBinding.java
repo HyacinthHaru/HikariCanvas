@@ -3,10 +3,10 @@ package moe.hikari.canvas.rail;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 0.4.4：wall → 铁路网络的绑定（线路 + 本站 + 方向）。
+ * wall → 铁路网络的绑定（线路 + 本站 + 方向）。
  *
  * <p>{@link #lineId} 非空时 {@code RailScheduleProvider} 走铁路路径（按 timetable 精确查）；
- * 为空时 fallback 到 0.4.0 {@code ManualScheduleProvider}（per-wall 时刻表）。</p>
+ * 为空时 fallback 到 {@code ManualScheduleProvider}（per-wall 时刻表）。</p>
  *
  * <p>direction 取值：{@code "up"} / {@code "down"} / {@code "both"}（双向都列出）。</p>
  *

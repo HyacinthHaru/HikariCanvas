@@ -19,15 +19,14 @@ import java.util.logging.Logger;
 /**
  * 按 {@code docs/data-model.md §6.2} 的约定维护 schema 版本。
  *
- * <p>M2 阶段只有 V001 一个迁移脚本。未来新增迁移时：
+ * <p>新增迁移时：
  * <ol>
  *   <li>在 {@code src/main/resources/db-migrations/} 新增 {@code V<NNN>__<name>.sql}</li>
  *   <li>在本类的 {@link #MIGRATIONS} 列表末尾追加条目</li>
  * </ol>
  * 不做 classpath 目录扫描——jar 内 resource 扫描在 shadow jar 下不稳定，显式声明更安全。
  *
- * <p>M15.4 P0-27 / P0-28 / P0-29：SQL 拆分识别字符串字面量 + 每个 migration 包事务
- * + 可选自动备份 data.db。</p>
+ * <p>SQL 拆分识别字符串字面量 + 每个 migration 包事务 + 可选自动备份 data.db。</p>
  */
 public final class MigrationRunner {
 
@@ -45,20 +44,19 @@ public final class MigrationRunner {
             new Migration(10, "db-migrations/V010__remove_refcount.sql"),
             new Migration(11, "db-migrations/V011__user_variables.sql"),
             new Migration(12, "db-migrations/V012__wall_schedules.sql"),
-            // 0.4.0 bugfix（Bug 4）：per-wall schedule 精度（minute / second）
+            // per-wall schedule 精度（minute / second）
             new Migration(13, "db-migrations/V013__schedule_precision.sql"),
-            // 0.4.2：变量别名（per-wall，全 namespace 通用）
+            // 变量别名（per-wall，全 namespace 通用）
             new Migration(14, "db-migrations/V014__variable_aliases.sql"),
-            // 0.4.3：全局用户变量（userglobal/* namespace；name 全服唯一）
+            // 全局用户变量（userglobal/* namespace；name 全服唯一）
             //
-            // 0.4.6 bugfix：原 0.4.3 实施时漏在此列表注册，导致 V015 / V016 SQL 文件存在但
-            // 永远不会被运行；服务器启动时 DB schema 停在 V14，代码 INSERT 这两表立即抛
-            // SQLITE_ERROR "no such table"。注释顶部"未来新增迁移时在 MIGRATIONS 列表末尾
-            // 追加条目"是必须的——这是显式声明而非目录扫描的代价。
+            // V015 / V016 必须显式登记在此列表——否则 SQL 文件存在但永远不会被运行，
+            // 服务器启动后代码 INSERT 这两表会抛 SQLITE_ERROR "no such table"。
+            // 这是显式声明而非目录扫描的代价。
             new Migration(15, "db-migrations/V015__user_global_variables.sql"),
-            // 0.4.4：铁路网络（线路 / 站点 / 车次 / 时刻表 / wall 绑定）
+            // 铁路网络（线路 / 站点 / 车次 / 时刻表 / wall 绑定）
             new Migration(16, "db-migrations/V016__rail_network.sql"),
-            // 0.7.0 P1：墙脚本（视觉运行时；rule_json 整体存 ScriptRule）
+            // 墙脚本（视觉运行时；rule_json 整体存 ScriptRule）
             new Migration(17, "db-migrations/V017__wall_scripts.sql")
     );
 
@@ -105,7 +103,7 @@ public final class MigrationRunner {
                 if (autoBackup && dbFilePath != null) {
                     tryBackup(h, m.version);
                 }
-                // M15.4 P0-28：每个 migration 包事务；DDL 失败时回滚不留半态。
+                // 每个 migration 包事务；DDL 失败时回滚不留半态。
                 // 注：SQLite 大多数 DDL 也是事务安全的；JDBI 的 useTransaction 在已有
                 // handle 上开 savepoint 即可，无需独立 handle。
                 h.useTransaction(txHandle -> {
@@ -170,7 +168,7 @@ public final class MigrationRunner {
     }
 
     /**
-     * M15.4 P0-27：SQL 拆分识别单引号字符串字面量 + 行内 {@code --} 注释。
+     * SQL 拆分识别单引号字符串字面量 + 行内 {@code --} 注释。
      *
      * <p>朴素 {@code sql.split(";")} 会把 {@code INSERT VALUES ('a;b')} 这种含分号的
      * 字符串字面量截断；同理 {@code 'It''s'} 这种 SQL escape 也得保住。SQLite 标准其实

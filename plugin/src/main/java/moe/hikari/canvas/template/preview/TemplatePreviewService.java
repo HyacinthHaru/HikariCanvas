@@ -22,7 +22,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 模板缩略图服务（M7 polish）。给每个模板渲染一张缩略图供前端 Gallery 卡片显示。
+ * 模板缩略图服务。给每个模板渲染一张缩略图供前端 Gallery 卡片显示。
  *
  * <p>策略：</p>
  * <ul>
@@ -44,7 +44,7 @@ public final class TemplatePreviewService {
     /**
      * key = templateId；value = PNG bytes。
      *
-     * <p>P3-38：渲染失败时 {@link #renderPreview} 返 {@code null}，而
+     * <p>渲染失败时 {@link #renderPreview} 返 {@code null}，而
      * {@link ConcurrentHashMap#computeIfAbsent} 对 null 返回值不写表——即失败结果
      * <b>不被缓存，下次请求会重新实例化重试</b>（与类 javadoc 策略一致）。
      * 故此处不存在"失败负缓存、本轮不重试"语义。</p>

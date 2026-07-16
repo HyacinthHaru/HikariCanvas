@@ -18,7 +18,7 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 /**
- * 0.8-A4 Task 18：导入 {@code scripts.json} —— 把工程包里的脚本规则<b>重绑到目标墙</b>、
+ * 导入 {@code scripts.json} —— 把工程包里的脚本规则<b>重绑到目标墙</b>、
  * <b>全量重校验</b>（不信任文件内 {@code rule_json}）、最后<b>落 {@code wall_scripts}</b>。
  *
  * <p>每条规则的处理（契约 {@code docs/import-export.md §2.3} / {@code security.md §13.5}）：</p>
@@ -37,11 +37,10 @@ import java.util.function.Supplier;
  *       → {@code script-quota} + <b>停止</b>处理后续规则。</li>
  * </ol>
  *
- * <p><b>偏离记账</b>：计划写「复用 {@code ScriptOpDispatcher.parseIncomingRule} +
- * {@code checkConditionSyntax}」，但二者是 {@code web} 包 package-private 静态方法，{@code canvasfile}
- * 包无法访问；故本类用公开 API（{@code new ObjectMapper()} 多态反序列化 +
- * {@code ScriptRuleValidator.validate} + {@code ConditionEvaluator.checkSyntax} + {@code store.create}）
- * 复刻同一套语义。wallId 重绑由 store.create 承担（与 dispatcher 同效）。</p>
+ * <p>{@code ScriptOpDispatcher} 的校验是 {@code web} 包 package-private，{@code canvasfile} 包
+ * 无法复用；故本类用公开 API（多态反序列化 + {@code ScriptRuleValidator.validate} +
+ * {@code ConditionEvaluator.checkSyntax} + {@code store.create}）复刻同一套语义。
+ * wallId 重绑由 store.create 承担（与 dispatcher 同效）。</p>
  */
 public final class ScriptImporter {
 
@@ -106,7 +105,7 @@ public final class ScriptImporter {
                 continue;
             }
 
-            // b) 结构校验（不信任文件内容）。0.9.7：validate 现返 ValidationError（key + 参数）。
+            // b) 结构校验（不信任文件内容）。validate 返 ValidationError（key + 参数）。
             //    本导入路径无编辑器 session / locale（是文件导入，非 per-player WS 请求），
             //    ImportWarning.detail 语义即"稳定的具体对象码，前端据此选大白话文案"——故 detail
             //    存 ValidationError 的稳定 key（+ 参数附注）而非渲染后语句；前端 script-invalid
@@ -241,7 +240,7 @@ public final class ScriptImporter {
     }
 
     /**
-     * 0.9.7：把 {@link moe.hikari.canvas.script.ValidationError} 压成稳定的 detail 字符串
+     * 把 {@link moe.hikari.canvas.script.ValidationError} 压成稳定的 detail 字符串
      * （{@code key} 或 {@code key [k=v, ...]}），供 {@code script-invalid} 提示携带。
      * 无 locale 渲染（导入路径无 session）——前端外层句子已本地化，detail 是稳定具体对象码。
      */

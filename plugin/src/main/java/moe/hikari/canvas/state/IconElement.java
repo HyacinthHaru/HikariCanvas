@@ -5,24 +5,23 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.regex.Pattern;
 
 /**
- * 矢量图标元素。M7 polish 引入（PNG raster 模型），<b>M26 升级为 SVG 矢量 + Fill 联合类型</b>
- * （{@code docs/template-spec.md §4.6}）。
+ * 矢量图标元素（SVG 矢量 + Fill 联合类型）。契约见 {@code docs/template-spec.md §4.6}。
  *
- * <p><b>新 source 命名 schema</b>（M26）：</p>
+ * <p><b>source 命名 schema：</b></p>
  * <ul>
  *   <li>{@code fa-solid/<name>} — Font Awesome Free Solid（如 {@code fa-solid/heart}）</li>
  *   <li>{@code fa-regular/<name>} — Font Awesome Free Regular</li>
  *   <li>{@code fa-brands/<name>} — Font Awesome Free Brands</li>
- *   <li>{@code material/<name>} — Material Symbols Outlined（M27 实装；本期 IconRegistry 留 hook）</li>
+ *   <li>{@code material/<name>} — Material Symbols Outlined（IconRegistry 留 hook）</li>
  *   <li>{@code user/<id>} — 用户自定义 SVG（{@code plugins/HikariCanvas/icons/<id>.svg}）</li>
  *   <li><b>不含 {@code /} 的 legacy 形态</b>（如 {@code "heart"}）— 走 PNG 兼容路径
- *       （{@link moe.hikari.canvas.template.asset.TemplateAssetService}），加载 M7 旧模板用</li>
+ *       （{@link moe.hikari.canvas.template.asset.TemplateAssetService}），加载旧模板用</li>
  * </ul>
  *
  * <p><b>校验：</b> source 必须匹配 {@link #SOURCE_RE}，长度 ≤ 64。path 部分支持 {@code .}
  * （形如 {@code material/star.fill}）。pack 部分 {@code ^[a-z0-9_-]+$}。</p>
  *
- * <p><b>fill（M26）替代 tint：</b> 矢量 path 的填充走 {@link Fill} 联合类型，与 Rect/Circle/Shape
+ * <p><b>fill 替代 tint：</b> 矢量 path 的填充走 {@link Fill} 联合类型，与 Rect/Circle/Shape
  * 共用 {@link moe.hikari.canvas.render.FillPaintBuilder}。{@code fill == null} 表示用 pack 默认
  * 色（IconRenderer 退回原 PNG 路径或 black）。</p>
  *
@@ -31,10 +30,6 @@ import java.util.regex.Pattern;
  * 同时存在 {@code fill} + {@code tint} 时以 {@code fill} 为准。
  * Java record 不能在 component 上挂 {@code @Deprecated}，故只在文档中标注，行为靠
  * deserializer + 显式 fill-优先 策略控制。</p>
- *
- * <p><b>字段顺序</b>（M26）：在 M7 record 13 字段尾部追加 {@code fill}。所有现有调用方
- * （EditSession / TemplateInstantiator 等）必须把构造尾从 {@code (..., renderMode)} 改为
- * {@code (..., renderMode, fill)}。</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = IconElementDeserializer.class)
@@ -45,18 +40,18 @@ public record IconElement(
         boolean locked,
         boolean visible,
         String source,    // 图标资源名（whitelist 校验；fa-solid/heart / user/foo / 或 legacy "heart"）
-        String tint,      // M26 deprecated：仅供旧模板向后兼容；新协议改用 fill
+        String tint,      // deprecated：仅供旧模板向后兼容；新协议改用 fill
         Float opacity,
         BlendMode blendMode,
         RenderMode renderMode,
-        Fill fill         // M26：替代 tint；矢量 path 填充。null = pack 默认色
+        Fill fill         // 替代 tint；矢量 path 填充。null = pack 默认色
 ) implements Element {
 
     /**
-     * M26 新 source 校验。
+     * source 校验。
      *
      * <ul>
-     *   <li>{@code <id>} — legacy PNG 形态（M7-M25 旧数据）；不含 {@code /}</li>
+     *   <li>{@code <id>} — legacy PNG 形态（旧数据）；不含 {@code /}</li>
      *   <li>{@code <pack>/<name>} — 矢量形态；pack 与 name 各自字符集</li>
      * </ul>
      *

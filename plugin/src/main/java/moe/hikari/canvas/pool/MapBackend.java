@@ -4,7 +4,7 @@ import org.bukkit.World;
 import org.bukkit.map.MapRenderer;
 
 /**
- * 0.9.6：MapPool 与 Bukkit 地图 API 之间的 seam。抽出全部 {@code Bukkit.createMap / getMap /
+ * MapPool 与 Bukkit 地图 API 之间的 seam。抽出全部 {@code Bukkit.createMap / getMap /
  * getWorld} 调用，让 MapPool 的池簿记（借出优先复用 FREE、绝不多 {@code createMap} 等核心
  * 不变式）可在无 Bukkit server 的单测里用 fake backend 驱动 + 断言。
  *

@@ -11,14 +11,14 @@ import java.util.Map;
 
 /**
  * 累积 {@link PatchOp} 并最终 {@link #build(long)} 成 {@link StatePatch}。
- * 用于 M3-T6 element op handler 在一次调用里批量产出多个 JSON Patch 子句。
+ * 用于 element op handler 在一次调用里批量产出多个 JSON Patch 子句。
  *
  * <p>非线程安全——只在 {@code SessionManager.synchronized} 段内使用即可。</p>
  */
 public final class StatePatchBuilder {
 
     /**
-     * M5-D4 修 Bug 1：{@link PatchOp#value()} 声明为 {@code Object}，Javalin/Jackson 在
+     * {@link PatchOp#value()} 声明为 {@code Object}，Javalin/Jackson 在
      * Object 字段路径下 <b>不会</b> 触发 {@link com.fasterxml.jackson.annotation.JsonTypeInfo}
      * 的多态写入，导致 {@code element.add} 发出的 patch 丢 {@code "type"} 字段；而
      * {@code template.apply} 走 {@code OkSnapshot} 时 {@code ProjectState.elements} 静态类型
@@ -69,11 +69,11 @@ public final class StatePatchBuilder {
      * 把"运行时是 record / 多态子类，但需要以 JSON 对象语义出现在 patch.value"的对象
      * 提前序列化成 {@code Map}。包括：
      * <ul>
-     *   <li>{@link Element}（声明类型 Object 时丢失 {@code @JsonTypeInfo} 多态写入；
-     *       M5-D4 修过 element.add bug 的根因即此）</li>
-     *   <li>{@link Layer}（M8-C 引入；layer.create / duplicate 时 patch.value 是整个 Layer
+     *   <li>{@link Element}（声明类型 Object 时丢失 {@code @JsonTypeInfo} 多态写入，
+     *       是 element.add 丢 type 字段 bug 的根因）</li>
+     *   <li>{@link Layer}（layer.create / duplicate 时 patch.value 是整个 Layer
      *       record。前端 applyPatch 当 Map 处理，所以这里也提前转，保持测试与运行时一致）</li>
-     *   <li>{@link Timeline} / {@link Keyframe} / {@code List<Keyframe>}（0.6 v3 引入；
+     *   <li>{@link Timeline} / {@link Keyframe} / {@code List<Keyframe>}（
      *       timeline.create 的 patch.value 是整个 Timeline、keyframe.add 是单个 Keyframe、
      *       轨道重排（timeMs 变更后整轨 replace）是 List&lt;Keyframe&gt;。{@code KfValue}
      *       的自定义序列化靠类注解、任何 mapper 都生效，但统一提前转 Map，与

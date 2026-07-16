@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 /**
  * 单个模板文件的解析 + §9 校验。{@link TemplateRegistry} 调它处理每个 yml。
  *
- * <p><b>解析库：</b> {@code jackson-dataformat-yaml} 2.18.2（M6 决策 2026-05-11，见
+ * <p><b>解析库：</b> {@code jackson-dataformat-yaml} 2.18.2（见
  * {@code CLAUDE.md} 与 {@code docs/security.md §4.3}）。已显式 disable polymorphic
  * typing，YAML 中的 {@code !!java/*} tag 会直接抛错而非反射构造任意类。</p>
  *
@@ -35,7 +35,7 @@ public final class TemplateLoader {
     /** 当前插件支持的最高 spec 版本。 */
     public static final int SUPPORTED_SPEC = 1;
 
-    /** M14 起允许 {@code -} 以容纳 {@code user-<uuid8>-<slug>} 工坊命名约定。 */
+    /** 允许 {@code -} 以容纳 {@code user-<uuid8>-<slug>} 工坊命名约定。 */
     private static final Pattern ID_PATTERN = Pattern.compile("^[a-z][a-z0-9_-]{2,63}$");
     private static final Pattern PARAM_ID_PATTERN = Pattern.compile("^[a-z][a-z0-9_]{0,31}$");
     private static final Pattern COLOR_PATTERN = Pattern.compile("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$");
@@ -45,11 +45,11 @@ public final class TemplateLoader {
     private static final Set<String> ALLOWED_PARAM_TYPES = Set.of(
             "string", "text", "int", "float", "bool", "color", "enum", "font");
 
-    /** 实装的 layout type。M7 起 grid 也支持。 */
+    /** 实装的 layout type。 */
     private static final Set<String> ALLOWED_LAYOUT_TYPES = Set.of("stack", "free", "grid");
 
     /**
-     * M16 P1.4 SnakeYAML DoS 防御阈值。
+     * SnakeYAML DoS 防御阈值。
      *
      * <p>{@code MAX_ALIASES_FOR_COLLECTIONS}：单 YAML 内 anchor/alias 展开总次数上限。
      * 防 Billion-Laughs 风格的 alias 嵌套指数膨胀。50 远大于任何合理模板的复用次数。</p>
@@ -63,7 +63,7 @@ public final class TemplateLoader {
     private final ObjectMapper yamlMapper;
 
     public TemplateLoader() {
-        // M16 P1.4：通过 YAMLFactoryBuilder 注入受限 SnakeYAML LoaderOptions。
+        // 通过 YAMLFactoryBuilder 注入受限 SnakeYAML LoaderOptions。
         // jackson-dataformat-yaml 2.18.2 的 LoaderOptions 字段名是 codePointLimit
         // （非 maxCodepointLimit），见 org.yaml.snakeyaml.LoaderOptions。
         LoaderOptions loaderOptions = new LoaderOptions();
@@ -82,7 +82,7 @@ public final class TemplateLoader {
     }
 
     /**
-     * M14 创意工坊：把 {@link TemplateSpec} 序列化为 YAML 字符串，用于写入
+     * 把 {@link TemplateSpec} 序列化为 YAML 字符串，用于写入
      * {@code user-templates/<uuid>/<slug>.yml}。共享同一 YAMLMapper 配置（NON_NULL 省略，
      * 无 doc-start {@code ---} 头）。
      *
@@ -270,10 +270,10 @@ public final class TemplateLoader {
             if (t.content() == null) errors.add(tag + " missing 'content'");
             if (t.size() != null && t.size() <= 0) errors.add(tag + " size must be > 0");
             collectParamRefs(t.content(), paramIds, errors, tag + ".content");
-            // P2-35：font 字段支持 ${param}（动态字体选择），声明必须存在。
+            // font 字段支持 ${param}（动态字体选择），声明必须存在。
             collectParamRefs(t.font(), paramIds, errors, tag + ".font");
             checkColor(t.color(), paramIds, errors, tag + ".color");
-            // P2-35：effects 块内 stroke/shadow/glow.color 同样可插值，补声明校验。
+            // effects 块内 stroke/shadow/glow.color 同样可插值，补声明校验。
             checkEffectsColors(t.effects(), paramIds, errors, tag + ".effects");
         } else if (el instanceof TemplateElement.Rect r) {
             checkColor(r.fill(), paramIds, errors, tag + ".fill");
@@ -300,7 +300,7 @@ public final class TemplateLoader {
         checkExpression(el.visibleWhen(), errors, tag + ".visible_when");
     }
 
-    /** P2-35：扫 effects 块内三处 color 的 ${param} 声明 + 静态 hex 校验。 */
+    /** 扫 effects 块内三处 color 的 ${param} 声明 + 静态 hex 校验。 */
     private static void checkEffectsColors(TemplateEffects eff, Set<String> paramIds,
                                            List<String> errors, String where) {
         if (eff == null) return;
@@ -322,7 +322,7 @@ public final class TemplateLoader {
     }
 
     /**
-     * P2-35：解耦『参数声明校验』与『颜色格式校验』。
+     * 解耦『参数声明校验』与『颜色格式校验』。
      * <p>即便含 {@code ${param}} 也先调 {@link #collectParamRefs} 拒未声明引用（§9 契约），
      * 再对静态值跳过 hex 格式判定（留实例化期校验插值结果）。</p>
      */

@@ -19,7 +19,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P3-J：Bukkit scoreboard 桥接 Provider（Tier 3）。
+ * Bukkit scoreboard 桥接 Provider（Tier 3）。
  *
  * <p>动态 namespace = {@code scoreboard}。引用模式：
  * <code>${var:scoreboard.&lt;objective&gt;.&lt;player&gt;}</code>。第一次被 interpolator
@@ -201,8 +201,8 @@ public final class ScoreboardVariableProvider implements VariableProvider {
                 Scoreboard sb = Bukkit.getScoreboardManager().getMainScoreboard();
                 Objective obj = sb.getObjective(objectiveName);
                 if (obj == null) return null;
-                // 0.4.10 P1-4/P2-28：scoreboard 以 entry 字符串为键，直接用 getScore(String)
-                // 重载读分数，零网络 I/O。原 Bukkit.getOfflinePlayer(String) 在主线程会触发
+                // scoreboard 以 entry 字符串为键，直接用 getScore(String)
+                // 重载读分数，零网络 I/O。不要用 Bukkit.getOfflinePlayer(String)——它在主线程会触发
                 // 阻塞式 Mojang usercache/网络查询，卡服。
                 Score sc = obj.getScore(playerName);
                 if (sc == null) return null;

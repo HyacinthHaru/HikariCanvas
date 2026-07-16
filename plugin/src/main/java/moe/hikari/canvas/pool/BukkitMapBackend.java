@@ -7,7 +7,7 @@ import org.bukkit.map.MapView;
 
 import java.util.ArrayList;
 
-/** 0.9.6：{@link MapBackend} 生产实现，逐字委托 Bukkit（与 0.9.6 前 MapPool 内联调用等价）。 */
+/** {@link MapBackend} 生产实现，逐字委托 Bukkit（与内联调用等价）。 */
 public final class BukkitMapBackend implements MapBackend {
 
     @Override

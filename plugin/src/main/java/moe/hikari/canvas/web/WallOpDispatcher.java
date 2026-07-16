@@ -11,8 +11,8 @@ import static moe.hikari.canvas.web.WebHelpers.asPayloadMap;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * M5.5 wall 元数据 op 分发：{@code wall.lock / unlock / alias / refresh}。
- * <p>从 {@link WebServer} 抽出。lock/unlock 为 owner-only；refresh 切回主线程做
+ * wall 元数据 op 分发：{@code wall.lock / unlock / alias / refresh}。
+ * <p>lock/unlock 为 owner-only；refresh 切回主线程做
  * 方块 + entity 修复。</p>
  */
 final class WallOpDispatcher {
@@ -62,7 +62,7 @@ final class WallOpDispatcher {
         handleWallOp(ctx, sessionId, in, payload);
     }
 
-    /** M5.5：wall.alias / wall.refresh；M11+ lock-state 重设计：wall.lock / wall.unlock（owner-only）。
+    /** wall.alias / wall.refresh / wall.lock / wall.unlock（owner-only）。
      *  不影响 ProjectState，绕开 EditSession。 */
     private void handleWallOp(WsMessageContext ctx, String sessionId,
                               Envelope in, Map<String, Object> payload) {
@@ -89,8 +89,7 @@ final class WallOpDispatcher {
                     ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "lock failed"));
                     return;
                 }
-                // 2026-05-14 lock-state 重设计：ItemFrame PDC 不再写 published_at（FrameDeployer.markPublished 砍）
-                // M16 P6.4：owner 锁定画板留痕（防误锁纠纷 / 后续 audit 查谁锁的）
+                // owner 锁定画板留痕（防误锁纠纷 / 后续 audit 查谁锁的）
                 if (auditLog != null) {
                     java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
                     details.put("wall_id", wallId);
@@ -112,14 +111,14 @@ final class WallOpDispatcher {
                     return;
                 }
                 wallRepo.markUnpublished(wallId);
-                // M16 P6.4：owner 解锁画板留痕（对应 WALL_LOCK 的对偶事件）
+                // owner 解锁画板留痕（对应 WALL_LOCK 的对偶事件）
                 if (auditLog != null) {
                     java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
                     details.put("wall_id", wallId);
                     auditLog.record("WALL_UNLOCK", s.playerUuid().toString(), s.playerName(),
                             sessionId, null, details);
                 }
-                // M15.1 P0-2：全局 JsonInclude.NON_NULL 会把 lockedAt: null 字段吞掉，前端收空对象；
+                // 全局 JsonInclude.NON_NULL 会把 lockedAt: null 字段吞掉，前端收空对象；
                 // 改用显式布尔 locked: false（协议变更，前端 wsClient.ts 同步调整）
                 ctx.send(Envelope.of("ack", in.id(), Map.of("locked", false)));
             }
@@ -130,7 +129,7 @@ final class WallOpDispatcher {
                             "alias must match [A-Za-z0-9_-]{2,32}"));
                     return;
                 }
-                // P1.7：owner-only（或带 canvas.alias.any 权限）。与命令侧 CanvasCommand.runAlias 同款检查。
+                // owner-only（或带 canvas.alias.any 权限）。与命令侧 CanvasCommand.runAlias 同款检查。
                 // 离线玩家无法走 hasPermission，bypass 视为 false（与 SessionManager.open 处理一致）。
                 var wallOpt = wallRepo.loadById(wallId);
                 if (wallOpt.isEmpty()) {
@@ -140,10 +139,10 @@ final class WallOpDispatcher {
                 var wall = wallOpt.get();
                 boolean isOwner = wall.ownerUuid().equals(s.playerUuid());
                 if (!isOwner) {
-                    // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+                    // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
                     boolean canAny = MainThreadPerms.hasPermission(plugin, s.playerUuid(), "canvas.alias.any");
                     if (!canAny) {
-                        // M16 P6.4：非 owner 尝试改 alias 留痕——可观测异常尝试
+                        // 非 owner 尝试改 alias 留痕——可观测异常尝试
                         if (auditLog != null) {
                             java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
                             details.put("operation", "alias");
@@ -187,7 +186,7 @@ final class WallOpDispatcher {
                 final String ackId = in.id();
                 // 主线程跑（动方块 + spawn entity），完成后回 ack 到当前 WS ctx（Jetty 线程安全）
                 org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    // P2-67：整个 task 体包 try/catch。repairFor 动方块/spawn entity 任一步抛
+                    // 整个 task 体包 try/catch。repairFor 动方块/spawn entity 任一步抛
                     // RuntimeException 时，原代码异常逃出 task 体 → 仅 Bukkit 默认日志，前端永不收 ack
                     // → 8s ack_timeout 误报"无响应"。改为捕获后记 SEVERE + 回 INTERNAL_ERROR 让前端拿真错码。
                     try {

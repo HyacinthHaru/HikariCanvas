@@ -17,7 +17,7 @@ import static moe.hikari.canvas.web.WebHelpers.asPayloadMap;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * 0.4.2：{@code variable.alias.*} WS op 分发器。详见 {@code docs/variables.md §1.12} +
+ * {@code variable.alias.*} WS op 分发器。详见 {@code docs/variables.md §1.12} +
  * {@code docs/protocol.md §5.13}。
  *
  * <h2>3 个 op</h2>
@@ -31,8 +31,7 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
  * <h2>权限</h2>
  *
  * <p>沿用 variable write 节点：owner 走 {@code canvas.var.write.own}（default=true）；
- * 非 owner 需 {@code canvas.var.write.any}。理由：别名是 wall-scoped 元数据，作者负责
- * 命名清晰度即可，没必要单独再起一组节点。</p>
+ * 非 owner 需 {@code canvas.var.write.any}。</p>
  *
  * <h2>state.patch 路径</h2>
  *
@@ -57,7 +56,7 @@ final class VariableAliasDispatcher {
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final OpPushCallback push;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
-    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
 
     VariableAliasDispatcher(SessionManager sessionManager,
@@ -165,7 +164,7 @@ final class VariableAliasDispatcher {
         // 推 state.patch：path=/aliases/<encoded>，value=alias 字符串
         // 已存在的别名 → replace 语义；前端 mirror set(key, value) 幂等，统一用 add 即可。
         // 与 /variables/ 通道同款 RFC 6901 JSON Pointer 编码。
-        // Ultrareview 2026-05-25 #17：用当前 session ProjectState.version 不要写 0
+        // 用当前 session ProjectState.version 不要写 0
         // —— 前端 applyPatch 会把空 projectOps 的 patch.version 当作 state.version 覆盖，
         // 写 0 会把 ProjectState.version 倒退到 0 影响后续 op 冲突判定。
         String path = "/aliases/" + encodeJsonPointer(fullName);
@@ -197,7 +196,7 @@ final class VariableAliasDispatcher {
         int rows = dao.delete(wallId, fullName);
 
         // 即使 rows=0（别名不存在）也推 remove 让前端 mirror 保持一致——idempotent
-        // Ultrareview 2026-05-25 #17：用当前 session ProjectState.version 不要写 0
+        // 用当前 session ProjectState.version 不要写 0
         String path = "/aliases/" + encodeJsonPointer(fullName);
         StatePatch patch = new StatePatch(currentVersion(s), List.of(PatchOp.remove(path)));
         push.pushPatch(sessionId, patch);
@@ -237,7 +236,7 @@ final class VariableAliasDispatcher {
         }
         boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
         String requiredNode = isOwnerOnly ? "canvas.var.write.own" : "canvas.var.write.any";
-        // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+        // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
         boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
         // own 节点 default=true（与 var write 一致）；offline 玩家 own 路径放行
         if (!granted && "canvas.var.write.own".equals(requiredNode)) {
@@ -263,13 +262,13 @@ final class VariableAliasDispatcher {
     //  helpers
     // ──────────────────────────────────────────────────────────
 
-    /** 0.4.10 P3-114：JSON Pointer 段编码统一走 {@link WebHelpers#encodeJsonPointerSegment}。 */
+    /** JSON Pointer 段编码统一走 {@link WebHelpers#encodeJsonPointerSegment}。 */
     private static String encodeJsonPointer(String s) {
         return WebHelpers.encodeJsonPointerSegment(s);
     }
 
     /**
-     * Ultrareview 2026-05-25 #17：从 session 拿当前 ProjectState.version。
+     * 从 session 拿当前 ProjectState.version。
      * 别名通道不改 ProjectState 像素 → 不 bump，但要保持前端 mirror 看到的版本号一致。
      * session 无 ProjectState（极早期）回 0。
      */

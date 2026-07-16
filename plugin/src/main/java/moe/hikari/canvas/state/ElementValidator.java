@@ -11,11 +11,10 @@ import java.util.regex.Pattern;
 /**
  * 元素字段级 sanity 校验与 Map → typed-value 提取的纯静态 helper 集中处。
  *
- * <p>从原 {@code EditSession} god class 抽出（2026-05-14 重构）。所有方法均 {@code static}、
- * 无实例状态；外部调用方包括：</p>
+ * <p>所有方法均 {@code static}、无实例状态。调用方：</p>
  * <ul>
  *   <li>{@link EditSession} 自己的 buildXxx / applyXxxPatch / brush op</li>
- *   <li>{@link BrushSession}（M12 brush op 状态机）</li>
+ *   <li>{@link BrushSession}（brush op 状态机）</li>
  *   <li>{@link LayerOperations}（layer.* op，guide / blendMode 校验）</li>
  *   <li>{@code moe.hikari.canvas.template.TemplateInstantiator}（raw_state 二次校验）</li>
  * </ul>
@@ -48,7 +47,7 @@ public final class ElementValidator {
     public static final Pattern MASK_NUMBER_RE =
             Pattern.compile("-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?");
 
-    /** M11：fill object（含 type 字段）→ {@link Fill} 子类映射的共享 ObjectMapper。 */
+    /** fill object（含 type 字段）→ {@link Fill} 子类映射的共享 ObjectMapper。 */
     public static final ObjectMapper FILL_MAPPER = new ObjectMapper()
             .setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
@@ -80,7 +79,7 @@ public final class ElementValidator {
     public static final int MAX_DIM = 10_000;
     public static final int MAX_FONT_SIZE = 512;
     public static final int MAX_STROKE_WIDTH = 128;
-    /** M15.3 P0-10：mask path 最大 vertex 数。 */
+    /** mask path 最大 vertex 数。 */
     public static final int MAX_MASK_VERTICES = 64;
     public static final float MIN_LETTER_SPACING = -32f;
     public static final float MAX_LETTER_SPACING = 128f;
@@ -89,20 +88,20 @@ public final class ElementValidator {
     public static final int MAX_SHADOW_OFFSET = 128;
     public static final int MAX_GLOW_RADIUS = 64;
 
-    /** ShapeElement（M9）多边形/星形参数范围。 */
+    /** ShapeElement 多边形/星形参数范围。 */
     public static final int MIN_SIDES = 3;
     public static final int MAX_SIDES = 32;
     public static final float MIN_INNER_RATIO = 0.1f;
     public static final float MAX_INNER_RATIO = 0.95f;
 
-    /** BrushStrokeElement（M12）笔刷大小范围。 */
+    /** BrushStrokeElement 笔刷大小范围。 */
     public static final int MIN_BRUSH_SIZE = 1;
     public static final int MAX_BRUSH_SIZE = 64;
 
-    // ---------- M16 P3.2：non-finite 兜底 ----------
+    // ---------- non-finite 兜底 ----------
 
     /**
-     * M16 P3.2：非 finite（NaN / ±Inf）→ {@code fallback}；否则返回原值。
+     * 非 finite（NaN / ±Inf）→ {@code fallback}；否则返回原值。
      * 用于渲染层兜底所有浮点字段（rotation / opacity / stop.offset / dx / dy / blur 等）；
      * 对已存在的残破数据（极端模板 / 旧 .canvas 文件）容忍替换、不抛，避免单元素污染整 wall。
      *
@@ -185,7 +184,7 @@ public final class ElementValidator {
         }
     }
 
-    // ---------- M9 shape / path ----------
+    // ---------- shape / path ----------
 
     public static void validateShapeKind(String k) {
         if (!"polygon".equals(k) && !"star".equals(k)) {
@@ -216,7 +215,7 @@ public final class ElementValidator {
         }
     }
 
-    // ---------- M12 brush ----------
+    // ---------- brush ----------
 
     public static void validateBrushSize(int v) {
         if (v < MIN_BRUSH_SIZE || v > MAX_BRUSH_SIZE) {
@@ -226,7 +225,7 @@ public final class ElementValidator {
         }
     }
 
-    // ---------- M13 image / mask ----------
+    // ---------- image / mask ----------
 
     public static void validateImageSource(String s) {
         if (s == null || !IMAGE_SOURCE_RE.matcher(s).matches()) {
@@ -236,7 +235,7 @@ public final class ElementValidator {
     }
 
     /**
-     * M15.3 P0-10：在 {@link #validatePathD} 之上对 mask path 加二次约束。
+     * 在 {@link #validatePathD} 之上对 mask path 加二次约束。
      */
     public static void validateMaskPathBounds(String d) {
         int vertexCount = 0;
@@ -268,7 +267,7 @@ public final class ElementValidator {
     // ---------- 解析 helpers（raw Object → typed Fill / enum / Mask）----------
 
     /**
-     * M11：把 fill 字段 raw value（{@code Map} / {@code String} / {@code null}）解析为
+     * 把 fill 字段 raw value（{@code Map} / {@code String} / {@code null}）解析为
      * {@link Fill}，并跑 {@link FillValidator} 校验。
      */
     public static Fill parseFillNullable(Object raw) {
@@ -381,7 +380,7 @@ public final class ElementValidator {
         } else {
             throw new ValidationException("INVALID_PAYLOAD", "mask.inverted must be boolean");
         }
-        // 2026-05-25 项 2：featherPx 可选字段。null / 缺省 / 0 = 无羽化；范围 [1, 32]
+        // featherPx 可选字段。null / 缺省 / 0 = 无羽化；范围 [1, 32]
         Object fRaw = m.get("featherPx");
         Integer feather = null;
         if (fRaw != null) {
@@ -526,7 +525,7 @@ public final class ElementValidator {
     }
 
     /**
-     * 0.4.6：可空 bool 字段（用于 TextElement.bold / italic 等向下兼容 null 字段）。
+     * 可空 bool 字段（用于 TextElement.bold / italic 等向下兼容 null 字段）。
      * 缺省返 null 让 record 走默认值（NON_NULL 序列化时跳过）。
      */
     public static Boolean boolFieldOrNull(Map<String, Object> m, String k) {
@@ -574,12 +573,10 @@ public final class ElementValidator {
         return b;
     }
 
-    // ---------- M15.4 P0-23：模板 raw_state 反序列化得到的 element 二次校验 ----------
+    // ---------- 模板 raw_state 反序列化得到的 element 二次校验 ----------
 
     /**
      * 模板 raw_state 反序列化得到的 element 通过本方法二次校验。
-     * 之前位于 {@code EditSession.validateElementForTemplateApply}（M15.4 引入），
-     * 2026-05-14 重构搬至 {@link ElementValidator}；
      * {@code EditSession.validateElementForTemplateApply} 保留 wrapper 维持外部 API。
      *
      * @throws ValidationException 任一字段不合法
@@ -603,13 +600,13 @@ public final class ElementValidator {
             }
             if (b.fill() != null) FillValidator.validate(b.fill());
         } else if (el instanceof ShapeElement sh) {
-            // P2-53：模板 raw_state 的 ShapeElement 走与 WS buildShape/applyShapePatch 同款校验。
+            // 模板 raw_state 的 ShapeElement 走与 WS buildShape/applyShapePatch 同款校验。
             validateShapeKind(sh.kind());
             validateSides(sh.sides());
             if (sh.innerRatio() != null) validateInnerRatio(sh.innerRatio());
             if (sh.fill() != null) FillValidator.validate(sh.fill());
         } else if (el instanceof RectElement r) {
-            // P3-56：raw_state Rect fill 含 NaN 渐变在反序列化期 fail-fast，而非渲染期。
+            // raw_state Rect fill 含 NaN 渐变在反序列化期 fail-fast，而非渲染期。
             if (r.fill() != null) FillValidator.validate(r.fill());
         } else if (el instanceof CircleElement c) {
             if (c.fill() != null) FillValidator.validate(c.fill());
@@ -626,7 +623,7 @@ public final class ElementValidator {
                 validateMaskPathBounds(im.mask().d());
             }
         } else if (el instanceof IconElement ic) {
-            // M26：扩展 source schema 接受 fa-solid/heart / user/foo / material/star.fill / legacy "heart"
+            // 扩展 source schema 接受 fa-solid/heart / user/foo / material/star.fill / legacy "heart"
             if (!IconElement.isValidSource(ic.source())) {
                 throw new ValidationException("INVALID_PAYLOAD",
                         "icon source must match " + IconElement.SOURCE_RE.pattern()

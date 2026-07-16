@@ -3,7 +3,7 @@ package moe.hikari.canvas.canvasfile;
 import java.util.List;
 
 /**
- * 0.8-A2：一次成功导入的结果。
+ * 一次成功导入的结果。
  *
  * <p>导入成功（未抛 {@link CanvasImportException}）即返回本结果；{@code warnings} 罗列所有被降级
  * 处理的内容（缺字体 / 孤儿动画轨 / 图片配额满等），由端点序列化为

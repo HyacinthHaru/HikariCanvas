@@ -30,7 +30,7 @@ import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
 /**
- * M13 图片存储层：sha256[:16] 内容寻址 + 磁盘 LRU + 60s 内存缓存。
+ * 图片存储层：sha256[:16] 内容寻址 + 磁盘 LRU + 60s 内存缓存。
  *
  * <ul>
  *   <li><b>磁盘布局</b>：{@code plugins/HikariCanvas/uploads/<hash>.png}（统一存 PNG，
@@ -50,14 +50,14 @@ public final class ImageStorage {
     private static final Pattern HASH_RE = Pattern.compile("^[0-9a-f]{16}$");
     private static final int MEMORY_CACHE_MAX = 16;
     private static final long MEMORY_CACHE_TTL_MS = 60_000L;
-    /** B2：渲染路径解码前尺寸预检上界（与 UploadHandler.BBOX_MAX_EDGE 同值）。 */
+    /** 渲染路径解码前尺寸预检上界（与 UploadHandler.BBOX_MAX_EDGE 同值）。 */
     private static final int BBOX_MAX_EDGE = 8192;
 
     private final Logger log;
     private final Path uploadsDir;
     private final ImageUploadDao dao;
 
-    // M15.4 P0-17：渲染解码也要 timeout 隔离，否则损坏 PNG 让 rasterize 主线程死锁。
+    // 渲染解码也要 timeout 隔离，否则损坏 PNG 让 rasterize 主线程死锁。
     // 同 UploadHandler 的有界 ThreadPoolExecutor pattern，但 TTL 短（render 上下文）。
     private final ExecutorService renderDecoderPool = new java.util.concurrent.ThreadPoolExecutor(
             1, 1,
@@ -72,12 +72,12 @@ public final class ImageStorage {
 
     private static final long RENDER_DECODE_TIMEOUT_MS = 500L;
 
-    // M16 P2.2：同 hash 并发 putIfAbsent 串行（保证 Files.write 不重入），
+    // 同 hash 并发 putIfAbsent 串行（保证 Files.write 不重入），
     // 不同 hash 不互相阻塞。LRU 自动清理：lock 在 finally 释放后由 GC 回收的可能性
     // 极低（map 永远引用），但锁数与历史出现的 hash 数同阶；每个 ReentrantLock ~48B，
     // 1k hash 占 ~48KB，可接受。
     //
-    // P3-36（保持现状，bounded，安全）：刻意不做 unlock-后 evict。naive 修法
+    // 刻意不做 unlock-后 evict（bounded，安全）。naive 修法
     //（unlock 后用 compute 原子移除条目）有 acquire-after-remove 竞态——线程 T1 拿到
     // 旧 lock 实例后、尚未 lock() 之前，T2 把该条目移除并放入新 lock 实例，T1/T2 各持不同
     // 锁导致同 hash 的写互斥彻底失效。增长有界（条目数 = 历史不同图片内容数，sha256 去重，
@@ -111,7 +111,7 @@ public final class ImageStorage {
      * 把 {@link BufferedImage} 编码为 PNG 后按 hash 内容寻址持久化。
      * 若同 hash 已存在 → 不写磁盘 + 仅刷 last_used_at，返回 {@code isNew=false}。
      *
-     * <p><b>注意</b>：M16 P2.2 之后此方法保留作 legacy 简化路径（仅用于测试 / 老代码）。
+     * <p><b>注意</b>：此方法是 legacy 简化路径（仅用于测试 / 老代码）。
      * 生产路径 {@link moe.hikari.canvas.image.UploadHandler} 走"事务内 quota+insert →
      * 事务外写磁盘"的拆分流程，不再调本方法。</p>
      *
@@ -134,7 +134,7 @@ public final class ImageStorage {
                 return new StoreResult(hash, r.width(), r.height(), r.bytes(), false);
             }
 
-            // 先 DB insert，后写文件（与 P2.2 主路径方向一致）
+            // 先 DB insert，后写文件（与主路径方向一致）
             boolean inserted = dao.insert(new ImageUploadDao.Row(
                     hash, pngBytes.length,
                     img.getWidth(), img.getHeight(),
@@ -161,7 +161,7 @@ public final class ImageStorage {
     }
 
     /**
-     * M16 P2.2：将 BufferedImage 编码为 PNG 字节。无副作用，可在任何线程调用。
+     * 将 BufferedImage 编码为 PNG 字节。无副作用，可在任何线程调用。
      */
     public static byte[] encodePng(BufferedImage img) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -172,7 +172,7 @@ public final class ImageStorage {
     }
 
     /**
-     * M16 P2.2：原子地把 PNG 字节落到 {@code uploads/<hash>.png}。
+     * 原子地把 PNG 字节落到 {@code uploads/<hash>.png}。
      * 流程：写到 {@code <hash>.png.tmp} → {@code Files.move(tmp → final, ATOMIC_MOVE, REPLACE_EXISTING)}。
      * 失败 finally 清理 tmp，避免孤儿。
      *
@@ -209,7 +209,7 @@ public final class ImageStorage {
     }
 
     /**
-     * M16 P2.2：删除磁盘 PNG 文件（**不**碰 DB / 内存缓存）。
+     * 删除磁盘 PNG 文件（**不**碰 DB / 内存缓存）。
      * 用于事务 commit 之后 LRU evict 已 DELETE 的行的磁盘 cleanup；DB 行已不在，
      * 这里失败仅 warn，孤儿文件由下次启动 sweep / 手工清理 / 永远占空间（最坏情况）。
      */
@@ -227,7 +227,7 @@ public final class ImageStorage {
     }
 
     /**
-     * M16 P2.2：取（创建）某 hash 专属串行锁。同 hash 写流程必须 lock/unlock 包裹。
+     * 取（创建）某 hash 专属串行锁。同 hash 写流程必须 lock/unlock 包裹。
      * 不同 hash 不互锁。
      */
     public ReentrantLock writeLockFor(String hash) {
@@ -251,7 +251,7 @@ public final class ImageStorage {
         Path file = uploadsDir.resolve(hash + ".png");
         if (!Files.isRegularFile(file)) return null;
         BufferedImage img;
-        // P2-46：协作式 abort（同 UploadHandler.decodeWithTimeout）。Future.cancel(true) 的
+        // 协作式 abort（同 UploadHandler.decodeWithTimeout）。Future.cancel(true) 的
         // interrupt 对 ImageIO 解码循环大多无效，超时只 interrupt 会让卡死线程永久占满 1/1
         // 的 renderDecoderPool，使后续所有 load 返 null（引用图全渲染为占位符）。改为超时跨线程
         // 调 ImageReader.abort()，让卡死线程尽快退出归还。
@@ -291,7 +291,7 @@ public final class ImageStorage {
     }
 
     /**
-     * P2-46：用 {@link javax.imageio.ImageReader} 从文件解码并把 reader 发布到 {@code readerRef}，
+     * 用 {@link javax.imageio.ImageReader} 从文件解码并把 reader 发布到 {@code readerRef}，
      * 使超时线程能跨线程调 {@link javax.imageio.ImageReader#abort()} 协作式中止。
      * 无 reader（不支持的格式）返 null（同 {@code ImageIO.read} 语义）。
      */
@@ -308,7 +308,7 @@ public final class ImageStorage {
             readerRef.set(reader);
             try {
                 reader.setInput(iis, true, true);
-                // B2：解码前读头部尺寸（getWidth/getHeight 只解析头，不解码全图），
+                // 解码前读头部尺寸（getWidth/getHeight 只解析头，不解码全图），
                 // 拦截"小体积但巨尺寸"的分配型炸弹（如 30000×30000 声明 → read(0) 分配 GB raster）
                 int pw = reader.getWidth(0);
                 int ph = reader.getHeight(0);
@@ -326,7 +326,7 @@ public final class ImageStorage {
         }
     }
 
-    /** M15.4 P0-17：关闭渲染解码池，由 HikariCanvas.onDisable 调。 */
+    /** 关闭渲染解码池，由 HikariCanvas.onDisable 调。 */
     public void shutdown() {
         renderDecoderPool.shutdownNow();
     }
@@ -403,7 +403,7 @@ public final class ImageStorage {
      * 的 hash 集合。**v1 实时计算**，~50 walls 量级 SQLite 查询 + Jackson 反序列化 < 50ms 可接受；
      * 未来 wall 数量上千再考虑增量 refcount 维护。
      *
-     * <p>P1-2 / P2-10：此集合是 LRU evict 的 fail-closed 闸门（excludeHashes），任何漏算都会让
+     * <p>此集合是 LRU evict 的 fail-closed 闸门（excludeHashes），任何漏算都会让
      * 在用图被误删。因此：① {@code im.source()} 判空（旧图 / 损坏元素可能为 null，直接
      * {@code HASH_RE.matcher(null)} 抛 NPE）；② 单个坏 wall 用 per-wall try/catch 跳过而非
      * 旧版的 catch-all 降级为『零引用』——后者会让整张引用表清空 → LRU 把全服在用图删光。坏 wall
@@ -415,7 +415,7 @@ public final class ImageStorage {
     }
 
     /**
-     * P2-24：事务感知 {@link #collectReferencedHashes(WallRepo)}。在调用方已持有的
+     * 事务感知 {@link #collectReferencedHashes(WallRepo)}。在调用方已持有的
      * {@link Handle} 上扫 walls，让"读引用 → 删 LRU 孤儿"在单一 IMMEDIATE 写事务的一致视图
      * 内原子完成——消除"事务外快照引用、事务内 evict"的跨 hash 误删竞态（另一线程在快照后、
      * evict 前把某 hash 写进某 wall 的 project_json，该 hash 若是较老 LRU victim 又不在快照里，

@@ -3,7 +3,7 @@ package moe.hikari.canvas.rail;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 0.4.4：铁路车次（一趟具体的车）。含车次号 / 服务类型 / 编组 / 区间 / 备注。
+ * 铁路车次（一趟具体的车）。含车次号 / 服务类型 / 编组 / 区间 / 备注。
  *
  * <p>车次时刻表（每站精确时刻）放在 {@link RailTimetableEntry} 表，按 {@link #id}
  * 关联。{@link RailScheduleProvider} 按 wall 绑定的 line + station + direction 查出

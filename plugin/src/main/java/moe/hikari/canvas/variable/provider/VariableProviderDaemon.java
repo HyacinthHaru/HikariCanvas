@@ -13,14 +13,11 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P1-E：异步 Provider 调度框架。
+ * 异步 Provider 调度框架。
  *
  * <p>跑在守护线程池（2 thread, daemon=true），<b>不在主线程 resolve</b>——满足
- * {@code docs/dynamic-data.md §10 性能纪律：resolve 不在主线程} 要求。</p>
- *
- * <p>P1 阶段 framework only：{@link ProviderBootstrap#initialize} 不注册任何 provider；
- * P3 阶段在那里加 SystemVariableProvider / PapiVariableBridge / ScoreboardProvider /
- * ManualScheduleProvider 注册。</p>
+ * {@code docs/dynamic-data.md §10 性能纪律：resolve 不在主线程} 要求。
+ * 具体 provider 由 {@link ProviderBootstrap#initialize} 注册。</p>
  *
  * <p><b>线程安全</b>：{@link #register} / {@link #unregister} / {@link #shutdown} 都用
  * {@link ConcurrentHashMap#putIfAbsent} / {@link ConcurrentHashMap#remove} 保证不重复

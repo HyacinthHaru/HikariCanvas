@@ -22,7 +22,7 @@ import static moe.hikari.canvas.web.WebHelpers.intOrNull;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * 0.4.0-P3-L：{@code schedule.*} WS op 分发器。详见 {@code docs/protocol.md §5.12}
+ * {@code schedule.*} WS op 分发器。详见 {@code docs/protocol.md §5.12}
  * + {@code docs/dynamic-data.md §7.3}。
  *
  * <h2>5 个 op</h2>
@@ -49,8 +49,7 @@ final class ScheduleOpDispatcher {
 
     /**
      * "HH:mm" 或 "HH:mm:ss" 24h 格式校验。00:00 .. 23:59[:59]；不接受单位数 hour 如 "8:00"。
-     * 0.4.0 bugfix（Bug 4）：扩展为可选秒精度。Server 端不强制 wall.precision——前端 UI 控制
-     * 展示，server 两种格式都接受。
+     * 可选秒精度。Server 端不强制 wall.precision——前端 UI 控制展示，server 两种格式都接受。
      */
     private static final Pattern HHMM_PATTERN =
             Pattern.compile("^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$");
@@ -64,7 +63,7 @@ final class ScheduleOpDispatcher {
     private final @Nullable ManualScheduleProvider provider;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
-    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
 
     ScheduleOpDispatcher(SessionManager sessionManager,
@@ -165,7 +164,7 @@ final class ScheduleOpDispatcher {
                     "stationName must be string or null"));
             return;
         }
-        // 0.4.0 bugfix（Bug 4）：可选 precision 字段（"minute" / "second"，默认 minute）
+        // 可选 precision 字段（"minute" / "second"，默认 minute）
         Object rawPrecision = payload.get("precision");
         String precision = moe.hikari.canvas.schedule.WallSchedule.PRECISION_MINUTE;
         if (rawPrecision instanceof String pstr) {
@@ -208,7 +207,7 @@ final class ScheduleOpDispatcher {
             // sanitize 已发 error
             return;
         }
-        // P3-72：Empty → 合法 null（纯空白也正常插入 destination=null + 回 ack，不再静默丢弃）
+        // Empty → 合法 null（纯空白也正常插入 destination=null + 回 ack，不再静默丢弃）
         String destination = destResult instanceof DestResult.Ok ok ? ok.value() : null;
         int sortOrder = intOrNullDefault(payload.get("sortOrder"), 0);
 
@@ -260,7 +259,7 @@ final class ScheduleOpDispatcher {
         if (destResult instanceof DestResult.Error) {
             return;
         }
-        // P3-72：Empty → 合法 null（纯空白也正常更新 destination=null + 回 ack）
+        // Empty → 合法 null（纯空白也正常更新 destination=null + 回 ack）
         String destination = destResult instanceof DestResult.Ok ok ? ok.value() : null;
         int sortOrder = intOrNullDefault(payload.get("sortOrder"), 0);
 
@@ -329,7 +328,7 @@ final class ScheduleOpDispatcher {
         }
         boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
         String requiredNode = isOwnerOnly ? "canvas.schedule.own" : "canvas.schedule.any";
-        // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+        // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
         boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
         // own 节点 default=true（与 var write own 同款）；offline 玩家 own 路径放行
         if (!granted && "canvas.schedule.own".equals(requiredNode)) {
@@ -361,7 +360,7 @@ final class ScheduleOpDispatcher {
         m.put("wallId", ws.wallId());
         if (ws.stationName() != null) m.put("stationName", ws.stationName());
         m.put("updatedAt", ws.updatedAt());
-        // 0.4.0 bugfix（Bug 4）：携带 precision 字段（旧客户端忽略未知字段；新客户端用此切 UI）
+        // 携带 precision 字段（旧客户端忽略未知字段；新客户端用此切 UI）
         m.put("precision", WallSchedule.normalizePrecision(ws.precision()));
         List<Map<String, Object>> entries = new ArrayList<>(ws.entries().size());
         for (ScheduleEntry e : ws.entries()) {
@@ -384,7 +383,7 @@ final class ScheduleOpDispatcher {
     }
 
     /**
-     * P3-72：destination 校验三态结果。原先返单一 {@code null} 让调用方无法区分
+     * destination 校验三态结果。原先返单一 {@code null} 让调用方无法区分
      * 「合法空 destination（应正常插入 null）」与「类型/长度非法（已发 error 应 return）」，
      * 导致纯空白 destination 被守卫误判为已发 error → 既不写库也不回 ack/error 静默丢弃。
      */

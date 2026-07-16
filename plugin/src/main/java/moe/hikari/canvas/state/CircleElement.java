@@ -3,7 +3,7 @@ package moe.hikari.canvas.state;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * 圆 / 椭圆（M9 引入）。完全由 bbox 决定：
+ * 圆 / 椭圆。完全由 bbox 决定：
  * <pre>
  *   cx = x + w / 2
  *   cy = y + h / 2
@@ -22,7 +22,7 @@ public record CircleElement(
         int rotation,
         boolean locked,
         boolean visible,
-        Fill fill,            // 可空（M11：纯色或渐变）
+        Fill fill,            // 可空（纯色或渐变）
         Stroke stroke,        // 可空（与 fill 至少一个非空）
         Float opacity,
         BlendMode blendMode,

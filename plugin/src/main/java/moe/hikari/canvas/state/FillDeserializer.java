@@ -13,9 +13,9 @@ import java.io.IOException;
  * {@link Fill} 的 Jackson 反序列化：支持 {@code string ↔ object} 联合形态。
  *
  * <ul>
- *   <li>{@code "#FF0000"} → {@link SolidFill}（M0–M10 工程文件兼容）</li>
+ *   <li>{@code "#FF0000"} → {@link SolidFill}（旧工程文件兼容）</li>
  *   <li>{@code {"type":"solid", ...}} / {@code {"type":"linear", ...}} / {@code {"type":"radial", ...}}
- *       → 对应 record（M11 起新工程文件写出形态）</li>
+ *       → 对应 record（新工程文件写出形态）</li>
  *   <li>缺 {@code type} 字段的 object 当 {@code solid} 处理（防御已知 buggy 写出方）</li>
  * </ul>
  *

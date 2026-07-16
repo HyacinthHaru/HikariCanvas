@@ -11,7 +11,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * M13 配额三层校验：单 wall 引用数 / 玩家 24h 上传次数 / 全服磁盘总字节。任一超限拒。
+ * 配额三层校验：单 wall 引用数 / 玩家 24h 上传次数 / 全服磁盘总字节。任一超限拒。
  *
  * <p>磁盘超限不直接拒：返 {@link CheckResult.NeedsEviction}，调用方触发
  * {@link ImageStorage#evictLruUntilUnder} 后再校验。</p>
@@ -91,10 +91,10 @@ public final class ImageQuotaService {
         return cfg;
     }
 
-    // ---------- M16 P2.1：事务内原子化 check+evict+insert ----------
+    // ---------- 事务内原子化 check+evict+insert ----------
 
     /**
-     * M16 P2.1 单事务里跑：per-day 配额 → 磁盘配额（含 LRU evict）→ INSERT 新行。
+     * 单事务里跑：per-day 配额 → 磁盘配额（含 LRU evict）→ INSERT 新行。
      * 调用方必须在 {@code jdbi.inTransaction(IMMEDIATE, ...)} 里调本方法，保证 SQLite
      * 写锁全程持有，杜绝并发 49+1+1=51 的 TOCTOU。
      *

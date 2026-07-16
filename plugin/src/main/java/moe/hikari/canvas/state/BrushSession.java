@@ -17,10 +17,9 @@ import static moe.hikari.canvas.state.ElementValidator.parseRenderModeNullable;
 import static moe.hikari.canvas.state.ElementValidator.validateBrushSize;
 
 /**
- * M12 笔刷 op 状态机：{@code brush.start / brush.point / brush.end / brush.cancel}。
+ * 笔刷 op 状态机：{@code brush.start / brush.point / brush.end / brush.cancel}。
  *
- * <p>从原 {@code EditSession} god class 抽出（2026-05-14 重构）。EditSession 通过
- * 字段委托所有 brush.* op 与 {@code purgeStaleStrokes}；公共 API 保持不变。</p>
+ * <p>brush.* op 由 EditSession 字段委托（含 {@code purgeStaleStrokes}）。</p>
  *
  * <p><b>状态机：</b>每个活跃笔触持 {@link StrokeBuffer}（strokeId → buffer），
  * {@code brush.start} 分配；{@code brush.point} 累积 raw points；{@code brush.end}
@@ -209,7 +208,7 @@ final class BrushSession {
             return new EditSession.OpResult.Ok(new StatePatch(state.version(), List.of()), null);
         }
 
-        // M12-B：RDP 简化。epsilon = smoothing × 4 px。
+        // RDP 简化。epsilon = smoothing × 4 px。
         double epsilon = buf.smoothing * 4.0;
         List<BrushPoint> simplified = RdpSimplifier.simplify(buf.rawPoints, epsilon);
         if (simplified.size() < 2) {

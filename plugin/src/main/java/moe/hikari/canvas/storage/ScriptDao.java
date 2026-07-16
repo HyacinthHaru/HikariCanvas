@@ -13,7 +13,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * {@code wall_scripts} 表 DAO（0.7.0 P1）。schema 见
+ * {@code wall_scripts} 表 DAO。schema 见
  * {@code db-migrations/V017__wall_scripts.sql} + 契约 {@code docs/scripting.md §2}。
  *
  * <p><b>rule_json 整体存</b>：{@link ScriptRule} 经 Jackson 序列化整体落

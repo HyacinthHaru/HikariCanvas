@@ -14,9 +14,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * <p>{@code fill} 为 {@code null} 时 Jackson 序列化因 {@code NON_NULL} 策略会省略该字段，
  * 与 {@code protocol.md §7 RectElement.fill: string} 的「可选」语义吻合。</p>
  *
- * <p><b>M8 v2 新增：</b> {@code opacity / blendMode / renderMode}（追加到末尾；nullable）。</p>
+ * <p><b>{@code opacity / blendMode / renderMode}：</b>追加到末尾；nullable。</p>
  *
- * <p><b>M11 升级：</b> {@code fill} 由 {@code String} 升级为 {@link Fill}，支持纯色与渐变；
+ * <p>{@code fill} 由 {@code String} 升级为 {@link Fill}，支持纯色与渐变；
  * 老形态 {@code "#RRGGBB"} 字符串由 {@link FillDeserializer} 兼容读入。</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)

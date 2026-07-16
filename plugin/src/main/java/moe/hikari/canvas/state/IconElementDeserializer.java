@@ -9,14 +9,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 
 /**
- * {@link IconElement} 的 Jackson 反序列化（M26 引入）。
+ * {@link IconElement} 的 Jackson 反序列化。
  *
- * <p><b>核心兼容职责：</b> 老数据（M7-M25）只有 {@code tint: "#RRGGBB"} 字段；新数据
- * （M26+）写 {@code fill: {type, color}}。本 deserializer 负责"老→新"自动升级：</p>
+ * <p><b>核心兼容职责：</b> 老数据只有 {@code tint: "#RRGGBB"} 字段；新数据
+ * 写 {@code fill: {type, color}}。本 deserializer 负责"老→新"自动升级：</p>
  *
  * <ul>
- *   <li>读 {@code fill}（M26+）—— 走 {@link FillDeserializer}；如非空则忽略 {@code tint}</li>
- *   <li>否则读 {@code tint}（M7-M25）—— 转 {@link SolidFill}；保留 {@code tint} 字段值在
+ *   <li>读 {@code fill} —— 走 {@link FillDeserializer}；如非空则忽略 {@code tint}</li>
+ *   <li>否则读 {@code tint} —— 转 {@link SolidFill}；保留 {@code tint} 字段值在
  *       record 里（不抹掉，前端 / 模板 raw_state 可能读它）</li>
  *   <li>两者都没 —— {@code fill = null}（即 pack 默认色）</li>
  * </ul>
@@ -83,7 +83,7 @@ public final class IconElementDeserializer extends JsonDeserializer<IconElement>
             }
         }
 
-        // M26 关键兼容路径：fill 优先；fill 缺则把 tint 升级成 SolidFill
+        // 关键兼容路径：fill 优先；fill 缺则把 tint 升级成 SolidFill
         Fill fill = null;
         if (node.has("fill") && !node.get("fill").isNull()) {
             fill = codec.treeToValue(node.get("fill"), Fill.class);

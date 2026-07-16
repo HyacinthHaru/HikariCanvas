@@ -15,7 +15,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
- * M14 创意工坊：把 {@link ProjectState} 反向序列化为 {@link TemplateSpec}（rawState 模式）
+ * 把 {@link ProjectState} 反向序列化为 {@link TemplateSpec}（rawState 模式）
  * + YAML 字符串。纯函数；不碰文件 IO / DB / Registry（由 {@link TemplatePublisher} 协调）。
  *
  * <h2>参数化策略（v1）</h2>
@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
  *       params 段加入 {@code TemplateParam(type=text, default=原 text 值)}</li>
  * </ol>
  *
- * <p>v1 非 text 字段（color / fontSize / x/y/w/h 等）手工标注为参数 → <b>v1.x 留 future</b>，
+ * <p>TODO：非 text 字段（color / fontSize / x/y/w/h 等）手工标注为参数，
  * 需要 RawState JsonNode 通用 interpolator（按字段类型转 number/string）。</p>
  */
 public final class TemplateExporter {
@@ -201,7 +201,7 @@ public final class TemplateExporter {
         if (!(layersObj instanceof List<?> layers)) return;
         int flat = 0;
         for (Object layerObj : layers) {
-            // P3-24：layer 本身不计入 flat（与 collectTextElements 仅在 element 处 flat++
+            // layer 本身不计入 flat（与 collectTextElements 仅在 element 处 flat++
             // 的口径一致）。非 Map layer 直接 continue 不递增 flat，否则会与
             // collectTextElements 的索引错位，把 ${paramId} 写到错误的 text element。
             if (!(layerObj instanceof Map<?, ?> layerMap)) continue;

@@ -15,7 +15,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * {@code wall_schedules} + {@code schedule_entries} 表 DAO（0.4.0 P3-L）。
+ * {@code wall_schedules} + {@code schedule_entries} 表 DAO。
  *
  * <p>schema 见 {@code db-migrations/V012__wall_schedules.sql} + V013 增加 precision 列
  * + {@code docs/data-model.md §2.9}。
@@ -89,7 +89,7 @@ public class ScheduleDao {
     }
 
     /**
-     * 0.4.0 bugfix（Bug 4）：4 参数 overload，可指定 precision。
+     * 4 参数 overload，可指定 precision。
      *
      * <p>首次 upsert 时插入 (wall_id, station_name, updated_at, precision)；后续 upsert 同时
      * 更新 station_name + precision + updated_at（让玩家在 modal 切精度时 UI 即可触发持久化）。</p>

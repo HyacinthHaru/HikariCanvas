@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Ramer-Douglas-Peucker 折线简化（M12-B 引入）。
+ * Ramer-Douglas-Peucker 折线简化。
  *
  * <p>经典算法：找出"端点连线"的最远点，若距离 > epsilon 则保留并继续处理两侧；
  * 否则该段整体压缩为 (start, end) 两点。{@code O(n log n)} 平均、{@code O(n²)} 最坏。</p>
@@ -13,7 +13,7 @@ import java.util.List;
  * <p><b>笔触特化：</b> {@link BrushPoint} 含 {@code pressure} 字段；RDP 仅按 (x, y) 计算距离，
  * 保留点的原始 pressure（不平均、不插值），这样 brush.end 后简化产物仍带原始压感数据。</p>
  *
- * <p><b>M15.3 P0-11：迭代化。</b> 原递归实现最坏栈深 ≈ n；MAX_BRUSH_POINTS_PER_STROKE=5000
+ * <p><b>用显式栈防 SOF。</b> 原递归实现最坏栈深 ≈ n；MAX_BRUSH_POINTS_PER_STROKE=5000
  * 时配合 JVM 512KB 栈约 ~2500 帧后 StackOverflowError。改用 {@link ArrayDeque} 显式栈
  * 模拟递归，算法等价（同输入同输出），栈在堆上不受 JVM 线程栈大小限制。</p>
  */

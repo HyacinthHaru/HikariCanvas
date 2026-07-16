@@ -2,7 +2,7 @@ package moe.hikari.canvas.variable;
 
 /**
  * VariableStore 抛的业务异常。错误码与 WS 协议错误码对齐——
- * 详见 {@code docs/dynamic-data.md §3.1} 与 {@code docs/protocol.md §error codes}（B 任务接入）。
+ * 详见 {@code docs/dynamic-data.md §3.1} 与 {@code docs/protocol.md §error codes}。
  *
  * <p>RuntimeException 而非 checked：与项目其他业务异常风格一致
  * （{@code TemplateException} / {@code UploadException}）。调用方在 WS op handler

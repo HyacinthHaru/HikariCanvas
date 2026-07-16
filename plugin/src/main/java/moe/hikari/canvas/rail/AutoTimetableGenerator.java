@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 0.4.4 P1：车次时刻表自动生成 helper（{@code docs/dynamic-data.md §18.5}）。
+ * 车次时刻表自动生成 helper（{@code docs/dynamic-data.md §18.5}）。
  *
  * <p>输入"首站发车时间 + 站间均匀秒数 + 停靠时长 + 跳过站集合 + 区间起止"，
  * 输出该车次每站的 arrival/departure/stops_here 列表。用户在前端"创建车次"弹

@@ -10,7 +10,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * {@code user_variables} 表 DAO（0.4.0 P1）。schema 见
+ * {@code user_variables} 表 DAO。schema 见
  * {@code db-migrations/V011__user_variables.sql} + {@code docs/data-model.md §2.8}。
  *
  * <p><b>持久化范围</b>：仅 {@code user/*} namespace 的玩家手动变量；插件 / 系统 / PAPI

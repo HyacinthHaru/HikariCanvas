@@ -55,8 +55,8 @@ import static moe.hikari.canvas.state.ElementValidator.validateText;
  *
  * <p>1 个 EditSession ↔ 1 个 {@code moe.hikari.canvas.session.Session}；随 session 生灭。</p>
  *
- * <p><b>M8-C 升级：</b> 所有 element / layer / canvas op 切换到 v2 path
- * （{@code /layers/{i}/elements/{j}/...}）。新增 layer.* op 族 + element.move-to-layer
+ * <p><b>v2 path：</b> 所有 element / layer / canvas op 使用 v2 path
+ * （{@code /layers/{i}/elements/{j}/...}）。含 layer.* op 族 + element.move-to-layer
  * + canvas.grid + canvas.guides.set。{@code locked} 层内 element op 全部拒
  * {@code LAYER_LOCKED}。</p>
  *
@@ -69,10 +69,7 @@ import static moe.hikari.canvas.state.ElementValidator.validateText;
 public final class EditSession {
 
     // ---------- 校验常量 ----------
-    // 元素级校验常量（COLOR_RE / MAX_TEXT_LEN / MAX_COORD / MAX_DIM / MIN_/MAX_LETTER_SPACING /
-    // MIN_/MAX_LINE_HEIGHT / MAX_SHADOW_OFFSET / MAX_GLOW_RADIUS / MASK_NUMBER_RE / MAX_MASK_VERTICES /
-    // IMAGE_SOURCE_RE / MIN_/MAX_SIDES / MIN_/MAX_INNER_RATIO / MIN_/MAX_BRUSH_SIZE / FILL_MAPPER）
-    // 2026-05-14 重构后集中于 {@link ElementValidator}。
+    // 元素级校验常量集中于 {@link ElementValidator}。
 
     // layer 容量常量集中于 {@link LayerOperations}；保留单工程参考线上限本地化（仅 canvas op 用）。
     /** 单工程参考线数上限（防意外刷爆）。 */
@@ -81,7 +78,7 @@ public final class EditSession {
     private final ProjectState state;
 
     /**
-     * P2-8：单 wall image 元素数上限（按 {@code source} 去重，data-model.md §2.6）。
+     * 单 wall image 元素数上限（按 {@code source} 去重，data-model.md §2.6）。
      * {@code null} 或 {@code <= 0} = 不强制（缺省放行）—— 兼容未注入配置的测试 / SELECTING
      * 阶段。生产路径由 {@code SessionManager} 经 {@link #setMaxImagesPerWall(int)} 注入
      * {@code HikariCanvasConfig.ImageConfig.maxPerWall()}。强制点必须在此（element.add type=image
@@ -90,7 +87,7 @@ public final class EditSession {
     private volatile Integer maxImagesPerWall;
 
     /**
-     * 0.7.2-P2（F10）：单 wall 元素总数上限（克隆元素时强制）。{@code null} 或 {@code <= 0} =
+     * 单 wall 元素总数上限（克隆元素时强制）。{@code null} 或 {@code <= 0} =
      * 不强制（缺省放行）—— 兼容未注入配置的测试 / SELECTING 阶段。生产路径由
      * {@code SessionManager} 经 {@link #setMaxElementsPerWall(int)} 注入
      * {@code HikariCanvasConfig.ScriptsConfig.maxElementsPerWall()}。强制点在 {@link #cloneElement}
@@ -99,16 +96,16 @@ public final class EditSession {
      */
     private volatile Integer maxElementsPerWall;
 
-    /** T11 历史栈（past + future + commit/undo/redo/mark）。2026-05-14 抽出。 */
+    /** 历史栈（past + future + commit/undo/redo/mark）。 */
     private final HistoryStack history;
 
-    /** layer.* op 模块（create / delete / update / reorder / duplicate / set-active）。2026-05-14 抽出。 */
+    /** layer.* op 模块（create / delete / update / reorder / duplicate / set-active）。 */
     private final LayerOperations layerOps;
 
-    /** M12 brush.* op 状态机模块。2026-05-14 抽出。 */
+    /** brush.* op 状态机模块。 */
     private final BrushSession brushOps;
 
-    /** 0.6 P1：timeline.* / keyframe.* op 模块。 */
+    /** timeline.* / keyframe.* op 模块。 */
     private final TimelineOperations timelineOps;
 
     public EditSession(ProjectState state) {
@@ -124,7 +121,7 @@ public final class EditSession {
     }
 
     /**
-     * P2-8：注入单 wall image 元素数上限（按 {@code source} 去重）。{@code <= 0} = 不限。
+     * 注入单 wall image 元素数上限（按 {@code source} 去重）。{@code <= 0} = 不限。
      * 由 {@code SessionManager} 在 confirm / open 构造 EditSession 后调用，传入
      * {@code HikariCanvasConfig.ImageConfig.maxPerWall()}。未调用时字段为 null → 放行
      * （测试 / 老路径行为不变）。
@@ -134,7 +131,7 @@ public final class EditSession {
     }
 
     /**
-     * 0.7.2-P2（F10）：注入单 wall 元素总数上限。{@code <= 0} = 不限。由 {@code SessionManager}
+     * 注入单 wall 元素总数上限。{@code <= 0} = 不限。由 {@code SessionManager}
      * 在 confirm / open 构造 EditSession 后调用（路径 A 活跃 session），以及 headless 路径
      * （{@code ElementPropertyApplier} 临时 EditSession）注入，传入
      * {@code HikariCanvasConfig.ScriptsConfig.maxElementsPerWall()}。未调用时字段为 null → 放行。
@@ -144,7 +141,7 @@ public final class EditSession {
     }
 
     /**
-     * 0.6 P1：注入时间轴 fps 配置（config 段 {@code timeline}）。由 {@code SessionManager}
+     * 注入时间轴 fps 配置（config 段 {@code timeline}）。由 {@code SessionManager}
      * 在 confirm / open 构造 EditSession 后调用，传入
      * {@code HikariCanvasConfig.TimelineConfig.{defaultFps(), maxFps()}}。任一参数为 null
      * 时该项退回 {@link TimelineOperations} 的常量缺省（20 / 60），与未注入行为一致
@@ -166,7 +163,7 @@ public final class EditSession {
         record Ok(StatePatch patch, DirtyRegion dirty) implements OpResult {}
 
         /**
-         * M12 brush.start 专用结果：ack 中需要带 {@code strokeId} 回前端，且无 patch / dirty。
+         * brush.start 专用结果：ack 中需要带 {@code strokeId} 回前端，且无 patch / dirty。
          * 其他 brush.* op（point / end / cancel）走 {@link Ok} 路径。
          */
         record OkBrushStart(String strokeId) implements OpResult {}
@@ -276,7 +273,7 @@ public final class EditSession {
             return err(ve.code, ve.getMessage());
         }
 
-        // P2-8：服务端强制 images.max-per-wall（前端建议值之外的硬约束，防脚本客户端用
+        // 服务端强制 images.max-per-wall（前端建议值之外的硬约束，防脚本客户端用
         // element.add type=image 在单 wall 堆叠任意多 image 元素拖慢 rasterize）。统计目标 wall
         // 跨所有 layer 的 image 元素，按 source 去重（data-model.md §2.6 v1 简化口径）；新增的
         // source 若是全新文件且现有去重数已达上限则拒。强制点在此而非上传路径——上传仅入磁盘 / DB，
@@ -307,7 +304,7 @@ public final class EditSession {
     }
 
     /**
-     * P2-8：单 wall image 元素配额校验（按 {@code source} 去重）。
+     * 单 wall image 元素配额校验（按 {@code source} 去重）。
      *
      * <p>返回非 null 即拒绝（{@code QUOTA_PER_WALL}）；返回 null 表示放行。{@code maxImagesPerWall}
      * 为 null 或 {@code <= 0} 时不限。统计当前工程跨所有 layer 的 ImageElement 去重 source 集合：
@@ -345,7 +342,7 @@ public final class EditSession {
      * <p>支持的字段：</p>
      * <ul>
      *   <li>共通：{@code x / y / w / h / rotation / locked / visible /
-     *       opacity / blendMode / renderMode}（v2 新字段 M8-C 起接 patch）</li>
+     *       opacity / blendMode / renderMode}（v2 字段）</li>
      *   <li>Text：{@code text / fontId / fontSize / color / align /
      *       letterSpacing / lineHeight / vertical / effects}</li>
      *   <li>Rect：{@code fill / stroke}</li>
@@ -413,17 +410,17 @@ public final class EditSession {
                 DirtyRegion.of(loc.element));
     }
 
-    // ---------- element.clone（0.7.2-P2 脚本克隆元素） ----------
+    // ---------- element.clone（脚本克隆元素） ----------
 
     /**
-     * 0.7.2-P2（F10）：克隆元素（新 id + 位置偏移 {@code offsetX/offsetY}），副本追加到
+     * 克隆元素（新 id + 位置偏移 {@code offsetX/offsetY}），副本追加到
      * <b>源元素所在 layer 末尾</b>（非 activeLayer——脚本无"当前层"概念，跟随源元素最直观）。
      *
      * <p>复用 {@link #cloneElementWithNewId}（深拷贝 + 重生成 id）→ {@link #withOffset} 把
      * 副本 x/y 平移；x/y 超 {@code [-MAX_COORD, MAX_COORD]} 钳回边界（不拒绝——脚本批量克隆
      * 偏移累加易越界，钳位比报错友好且不破坏数据）。</p>
      *
-     * <p>F10 配额：每墙元素总数达 {@code maxElementsPerWall} 时拒 {@code QUOTA_EXCEEDED}
+     * <p>配额：每墙元素总数达 {@code maxElementsPerWall} 时拒 {@code QUOTA_EXCEEDED}
      * （脚本反复克隆是唯一能无界堆元素的入口）。layer.locked 拒 {@code LAYER_LOCKED}。</p>
      *
      * @return {@code INVALID_ELEMENT} 元素不存在；{@code LAYER_LOCKED} 源层锁定；
@@ -454,7 +451,7 @@ public final class EditSession {
         return new OpResult.Ok(patch, DirtyRegion.of(cloned));
     }
 
-    /** 单 wall 跨所有 layer 的元素总数（F10 配额判定）。 */
+    /** 单 wall 跨所有 layer 的元素总数（配额判定）。 */
     private int totalElements() {
         int n = 0;
         for (Layer l : state.layers()) {
@@ -548,7 +545,7 @@ public final class EditSession {
     }
 
     /**
-     * 0.7.3：把元素移到所在层末尾（front = 最后渲染 = 显示最上）。
+     * 把元素移到所在层末尾（front = 最后渲染 = 显示最上）。
      * 已在末尾则仍 bump version 返 Ok（幂等）。layer.locked → LAYER_LOCKED。
      * 元素不存在 → INVALID_ELEMENT。
      */
@@ -561,7 +558,7 @@ public final class EditSession {
     }
 
     /**
-     * 0.7.3：把元素移到所在层开头（back = 最先渲染 = 显示最下）。
+     * 把元素移到所在层开头（back = 最先渲染 = 显示最下）。
      * 已在开头则仍 bump version 返 Ok（幂等）。layer.locked → LAYER_LOCKED。
      * 元素不存在 → INVALID_ELEMENT。
      */
@@ -691,7 +688,7 @@ public final class EditSession {
         return layerOps.setActiveLayer(layerId);
     }
 
-    // ---------- 0.6 P1：timeline.* / keyframe.* op（实现见 {@link TimelineOperations}） ----------
+    // ---------- timeline.* / keyframe.* op（实现见 {@link TimelineOperations}） ----------
     //
     // timeline.play / pause / seek 留 P2（AnimationTicker 未建）：dispatcher 不加这些 case，
     // 落到现有 INVALID_OP 路径即可。
@@ -756,8 +753,8 @@ public final class EditSession {
     // ---------- canvas.resize ----------
 
     /**
-     * M3 只接受尺寸等于当前值的 no-op resize（保持 op channel 通畅 + 前端试探能通过）。
-     * 真正的动态扩缩容涉及 MapPool 借还和物品框增删，留给后续 milestone。
+     * 只接受尺寸等于当前值的 no-op resize（保持 op channel 通畅 + 前端试探能通过）。
+     * 真正的动态扩缩容涉及 MapPool 借还和物品框增删，尚未实装。
      */
     public synchronized OpResult resizeCanvas(int widthMaps, int heightMaps) {
         ProjectState.Canvas c = state.canvas();
@@ -773,7 +770,7 @@ public final class EditSession {
     // ---------- canvas.background ----------
 
     /**
-     * 旧入口：{@code "#RRGGBB"} hex 字符串。M17 F5 起内部 wrap 成 {@link SolidFill} 后调
+     * 旧入口：{@code "#RRGGBB"} hex 字符串。内部 wrap 成 {@link SolidFill} 后调
      * {@link #setBackground(Fill)}。WS op {@code canvas.background} 的 {@code color} 字段
      * 仍走这条；新协议字段 {@code fill} 走 Fill 直传。
      */
@@ -783,7 +780,7 @@ public final class EditSession {
     }
 
     /**
-     * M17 F5：Fill 联合类型入口（solid / linear / radial）。{@link FillValidator} 校验后
+     * Fill 联合类型入口（solid / linear / radial）。{@link FillValidator} 校验后
      * 整体替换 canvas.background；dirty = 全画布、history mark。
      */
     public synchronized OpResult setBackground(Fill fill) {
@@ -807,7 +804,7 @@ public final class EditSession {
     // ---------- canvas.tweenFps ----------
 
     /**
-     * 0.7.1：per-wall 补间帧率。payload {@code fps} [1,60]，超范围 clamp + INVALID_PAYLOAD；
+     * per-wall 补间帧率。payload {@code fps} [1,60]，超范围 clamp + INVALID_PAYLOAD；
      * null / 0 → 清回默认（projectState.tweenFps = null → effectiveTweenFps() = 30）。
      * 不进 undo 历史（同 activeTimelineId 语义；属运行时配置非内容编辑）。
      * 广播 state.patch {@code /tweenFps}。
@@ -890,10 +887,10 @@ public final class EditSession {
     /**
      * 替换 ProjectState 内容（背景 + 整 layers 树）。{@code template.apply} 的"replace 语义"。
      *
-     * <p>M8-C 升级：清空所有层 → 生成一个 Default Layer 包住 {@code elements} → activeLayerId
+     * <p>清空所有层 → 生成一个 Default Layer 包住 {@code elements} → activeLayerId
      * 指向它。符合 {@code docs/architecture.md §10.5}。</p>
      *
-     * <p>M17 F5：{@code backgroundColor} String 入口保留兼容（自动 wrap 为 SolidFill）；
+     * <p>{@code backgroundColor} String 入口保留兼容（自动 wrap 为 SolidFill）；
      * 推荐新调用方走 {@link #replaceContent(Fill, List)} 直传 Fill。</p>
      *
      * @param backgroundColor 新背景色 hex（null = 保留当前）
@@ -903,7 +900,7 @@ public final class EditSession {
         return replaceContent(backgroundColor == null ? null : new SolidFill(backgroundColor), elements);
     }
 
-    /** M17 F5：Fill 入口的 replaceContent。{@code null} 保留当前 background。 */
+    /** Fill 入口的 replaceContent。{@code null} 保留当前 background。 */
     public synchronized OpResult replaceContent(Fill background, List<Element> elements) {
         ProjectSnapshot pre = snapshotNow();
         ProjectState.Canvas c = state.canvas();
@@ -922,7 +919,7 @@ public final class EditSession {
     }
 
     /**
-     * 0.8-A2：整体替换当前工程为导入的 {@link ProjectState}，<b>保留其多层结构 + 时间轴</b>。
+     * 整体替换当前工程为导入的 {@link ProjectState}，<b>保留其多层结构 + 时间轴</b>。
      *
      * <p>用于 {@code .canvas} 工程导入——区别于 {@link #replaceContent(Fill, List)} 把内容拍平成
      * 单层。采用 imported 的 canvas + layers(+activeLayerId) + timelines(+activeTimelineId) +
@@ -1000,11 +997,10 @@ public final class EditSession {
         validateLineHeight(lineHeight);
         boolean vertical = boolFieldOrDefault(p, "vertical", false);
         Effects effects = buildEffects(p.get("effects"));
-        // 0.4.6 P3：bold / italic 字段（向下兼容 null）
+        // bold / italic 字段（向下兼容 null）
         Boolean bold = boolFieldOrNull(p, "bold");
         Boolean italic = boolFieldOrNull(p, "italic");
-        // Ultrareview 2026-05-25 #12：build 路径需保留 v2 BaseElement 通用字段
-        // （opacity / blendMode / renderMode），否则 element.add 携带的视觉字段被服务端丢弃。
+        // build 路径需保留 opacity / blendMode / renderMode，否则 element.add 携带的视觉字段被服务端丢弃。
         Float opacity = parseOpacityNullable(p.get("opacity"));
         BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
         RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
@@ -1028,7 +1024,6 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "rect needs fill or non-zero stroke");
         }
-        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
         Float opacity = parseOpacityNullable(p.get("opacity"));
         BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
         RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
@@ -1036,7 +1031,7 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
-    // ---------- M9 PathElement ----------
+    // ---------- PathElement ----------
 
     private Element buildPath(String id, Map<String, Object> p) {
         int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
@@ -1055,7 +1050,6 @@ public final class EditSession {
         }
         String markerStart = parseMarkerNullable(p.get("markerStart"));
         String markerEnd = parseMarkerNullable(p.get("markerEnd"));
-        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
         Float opacity = parseOpacityNullable(p.get("opacity"));
         BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
         RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
@@ -1110,7 +1104,7 @@ public final class EditSession {
                 opacity, blendMode, renderMode, fillRule);
     }
 
-    // ---------- M9 CircleElement ----------
+    // ---------- CircleElement ----------
 
     private Element buildCircle(String id, Map<String, Object> p) {
         int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
@@ -1125,7 +1119,6 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "circle needs fill or non-zero stroke");
         }
-        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
         Float opacity = parseOpacityNullable(p.get("opacity"));
         BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
         RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
@@ -1171,7 +1164,7 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
-    // ---------- M9 ShapeElement ----------
+    // ---------- ShapeElement ----------
 
     private Element buildShape(String id, Map<String, Object> p) {
         int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
@@ -1196,7 +1189,6 @@ public final class EditSession {
         if (fill == null && (stroke == null || stroke.width() == 0)) {
             throw new ValidationException("INVALID_ELEMENT", "shape needs fill or non-zero stroke");
         }
-        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
         Float opacity = parseOpacityNullable(p.get("opacity"));
         BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
         RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
@@ -1253,7 +1245,7 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
-    // ---------- M12 BrushStrokeElement op handlers（实现见 {@link BrushSession}） ----------
+    // ---------- BrushStrokeElement op handlers（实现见 {@link BrushSession}） ----------
 
     /** 见 {@link BrushSession#startBrush(Map, String)}。 */
     public synchronized OpResult startBrush(Map<String, Object> props, String layerId) {
@@ -1381,7 +1373,7 @@ public final class EditSession {
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
                 case "renderMode" -> renderMode = parseRenderModeNullable(v);
-                // 0.4.6 P3：bold / italic patch 字段（null 视同 false / 关闭）
+                // bold / italic patch 字段（null 视同 false / 关闭）
                 case "bold" -> bold = (v == null) ? null : boolValue(v, k);
                 case "italic" -> italic = (v == null) ? null : boolValue(v, k);
                 default -> throw new ValidationException("INVALID_PAYLOAD",
@@ -1430,10 +1422,10 @@ public final class EditSession {
                 opacity, blendMode, renderMode);
     }
 
-    // ---------- M7 IconElement（M26 升级矢量 + Fill 联合类型） ----------
+    // ---------- IconElement（矢量 + Fill 联合类型） ----------
 
     /**
-     * 构造 IconElement。M26 升级后 source 走 {@link IconElement#isValidSource}（pack/name 形态
+     * 构造 IconElement。source 走 {@link IconElement#isValidSource}（pack/name 形态
      * 或 legacy 单段），fill 优先于 tint：
      * <ul>
      *   <li>同次 add 给了 {@code fill} → 走 {@link FillValidator}；{@code tint} 仅作为冗余字段
@@ -1441,9 +1433,6 @@ public final class EditSession {
      *   <li>没 fill 但有 {@code tint}（旧客户端 / 旧模板） → 自动 wrap {@link SolidFill}</li>
      *   <li>两者都没 → fill = null（IconRenderer 退回 pack 默认色 / 黑）</li>
      * </ul>
-     *
-     * <p>M26-B（2026-05-17）补丁：M26.1 加 IconElement record 时漏改 addElement switch，所有
-     * {@code element.add type=icon} fall through default 返 {@code INVALID_ELEMENT}。本方法补上。</p>
      */
     private Element buildIcon(String id, Map<String, Object> p) {
         int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
@@ -1506,7 +1495,7 @@ public final class EditSession {
                                         + " (≤" + IconElement.SOURCE_MAX_LEN + "): " + source);
                     }
                 }
-                // M26 deprecated：仍接受 tint 入参（兼容旧客户端 patch），并同步升级到 fill
+                // deprecated：仍接受 tint 入参（兼容旧客户端 patch），并同步升级到 fill
                 case "tint" -> {
                     if (v == null) { tint = null; }
                     else {
@@ -1515,7 +1504,7 @@ public final class EditSession {
                         fill = new SolidFill(tint);
                     }
                 }
-                // M26：新协议入口
+                // 新协议入口
                 case "fill" -> fill = parseFillNullable(v);
                 case "opacity" -> opacity = parseOpacityNullable(v);
                 case "blendMode" -> blendMode = parseBlendModeNullable(v);
@@ -1528,7 +1517,7 @@ public final class EditSession {
                 opacity, blendMode, renderMode, fill);
     }
 
-    // ---------- M13 ImageElement ----------
+    // ---------- ImageElement ----------
 
     private Element buildImage(String id, Map<String, Object> p) {
         int x = intFieldOrDefault(p, "x", 0); validateCoord(x, "x");
@@ -1541,7 +1530,6 @@ public final class EditSession {
         String source = requireString(p, "source", true);
         validateImageSource(source);
         Mask mask = parseMaskNullable(p.get("mask"));
-        // Ultrareview 2026-05-25 #12：保留 v2 BaseElement 通用字段
         Float opacity = parseOpacityNullable(p.get("opacity"));
         BlendMode blendMode = parseBlendModeNullable(p.get("blendMode"));
         RenderMode renderMode = parseRenderModeNullable(p.get("renderMode"));
@@ -1586,7 +1574,7 @@ public final class EditSession {
                 source, mask, opacity, blendMode, renderMode);
     }
 
-    // 2026-05-14 重构：package-private 以便 {@link LayerOperations#duplicateLayer} 跨类调用。
+    // package-private 以便 {@link LayerOperations#duplicateLayer} 跨类调用。
     static Element cloneElementWithNewId(Element src) {
         String newId = "e-" + UUID.randomUUID();
         return switch (src) {
@@ -1630,12 +1618,12 @@ public final class EditSession {
     }
 
     // 校验 helpers（validateColor / parseFill / validateRotation / validate* /
-    // requireString / intFieldOrDefault / intValue / boolValue 等）已整体迁出至
-    // {@link ElementValidator}（2026-05-14 god class 拆分）。
+    // requireString / intFieldOrDefault / intValue / boolValue 等）位于
+    // {@link ElementValidator}。
     //
-    // ValidationException：M11 提取为 top-level 同包类（让 FillValidator 共用），见 ValidationException.java。
+    // ValidationException 是 top-level 同包类（让 FillValidator 共用），见 ValidationException.java。
 
-    // ---------- 0.4.0-P1 variable.* op handlers ----------
+    // ---------- variable.* op handlers ----------
     //
     // user 变量按 per-wall 隔离：所有方法签名要 wallId（dispatcher 从 Session.wallId 传入）。
     // 内部 namespace = "user:<wallId>"；对外协议 fullName = "user:<wallId>/<name>"。
@@ -1659,7 +1647,7 @@ public final class EditSession {
      * 把 Variable record 序列化为 JSON Patch value 用的 Map（Jackson 自动处理 record →
      * object）。把 referencedByWalls 视为 Set<String>，无需特殊处理。
      *
-     * <p>0.4.3：方法签名加 store 参数（仅 createGlobal / updateGlobal 等路径传入）让
+     * <p>方法签名加 store 参数（仅 createGlobal / updateGlobal 等路径传入）让
      * {@code userglobal/*} 携带 owner 信息；其他路径透传 null store 即可，行为不变。</p>
      */
     private static Map<String, Object> variableToMap(Variable v) {
@@ -1678,7 +1666,7 @@ public final class EditSession {
         m.put("ttl", v.ttl());
         if (v.source() != null) m.put("source", v.source());
         // referencedByWalls 是服务端倒排索引细节，前端不需要（前端是单 wall 视角）；不下发。
-        // 0.4.3：userglobal 注入 owner 信息（store 可空 → 不查 / 也不注入）
+        // userglobal 注入 owner 信息（store 可空 → 不查 / 也不注入）
         if (store != null
                 && VariableStore.USER_GLOBAL_NAMESPACE.equals(v.namespace())) {
             store.getGlobalOwner(v.key()).ifPresent(info -> {
@@ -1781,7 +1769,7 @@ public final class EditSession {
         }
         long v = state.bumpVersion();
         // 只发 currentValue 增量；前端 mirror 用 JSON Patch 局部 replace。
-        // P3-9：value==null 也用 replace(path, null)（与 SessionManager VALUE_SET 同形），
+        // value==null 也用 replace(path, null)（与 SessionManager VALUE_SET 同形），
         // 前端 applyVariablePatches 的 replace&&sub==='currentValue' 分支可处理；
         // 旧的 remove .../currentValue 形态前端无对应分支会被丢弃，故消除该分叉。
         StatePatchBuilder b = new StatePatchBuilder();
@@ -1845,13 +1833,13 @@ public final class EditSession {
         return new OpResult.Ok(b.build(v), null);
     }
 
-    // ---------- 0.4.3 全局用户变量 op handlers (userglobal/*) ----------
+    // ---------- 全局用户变量 op handlers (userglobal/*) ----------
     //
     // 与 user 变量（per-wall）的关键区别：
     //   - namespace = "userglobal"（不含冒号 + wallId 后缀）
     //   - 持久化主键 = name 单字段（全服唯一）；wall 删除不动它
     //   - ACL 走 canvas.var.global.{create, write.own/any, delete.own/any}（PluginYml 已加）
-    //   - state.patch 广播 → 所有 session（不止本 wall），SessionManager P3 路由层完成
+    //   - state.patch 广播 → 所有 session（不止本 wall），SessionManager 路由层完成
     //
     // 路径区分：
     //   - createGlobalVariable：协议侧 payload scope='global' → dispatcher 调本方法
@@ -1869,7 +1857,7 @@ public final class EditSession {
     }
 
     /**
-     * 0.4.3：创建全局用户变量 {@code userglobal/<key>}。owner = 调用者（UUID + 名）。
+     * 创建全局用户变量 {@code userglobal/<key>}。owner = 调用者（UUID + 名）。
      * dispatcher 在调用前应做 {@code canvas.var.global.create} 权限检查。
      */
     public synchronized OpResult createGlobalVariable(VariableStore store,
@@ -1896,7 +1884,7 @@ public final class EditSession {
         return new OpResult.Ok(patch, null);
     }
 
-    /** 0.4.3：更新 {@code userglobal/*} 的 type / defaultValue。 */
+    /** 更新 {@code userglobal/*} 的 type / defaultValue。 */
     public synchronized OpResult updateGlobalVariable(VariableStore store,
                                                       String fullName, VariablePatch patch) {
         if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
@@ -1919,7 +1907,7 @@ public final class EditSession {
         return new OpResult.Ok(sp, null);
     }
 
-    /** 0.4.3：设当前值（{@code userglobal/*}）。 */
+    /** 设当前值（{@code userglobal/*}）。 */
     public synchronized OpResult setGlobalVariableValue(VariableStore store,
                                                         String fullName, String value) {
         if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
@@ -1934,7 +1922,7 @@ public final class EditSession {
             return err(mapVariableErrorCode(ve.code()), ve.getMessage());
         }
         long v = state.bumpVersion();
-        // P3-9：与 setUserVariableValue 同步——value==null 也用 replace(path, null)，
+        // 与 setUserVariableValue 同步——value==null 也用 replace(path, null)，
         // 对齐 SessionManager VALUE_SET wire 形态，前端可处理。
         StatePatchBuilder b = new StatePatchBuilder();
         String path = variablePath(fullName) + "/currentValue";
@@ -1942,7 +1930,7 @@ public final class EditSession {
         return new OpResult.Ok(b.build(v), null);
     }
 
-    /** 0.4.3：删除 {@code userglobal/*}。 */
+    /** 删除 {@code userglobal/*}。 */
     public synchronized OpResult deleteGlobalVariable(VariableStore store, String fullName) {
         if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
         try {
@@ -1962,7 +1950,7 @@ public final class EditSession {
         return new OpResult.Ok(sp, null);
     }
 
-    /** 0.4.3：把 {@code userglobal/*} 绑定到插件 namespace 或解绑。 */
+    /** 把 {@code userglobal/*} 绑定到插件 namespace 或解绑。 */
     public synchronized OpResult bindGlobalVariable(VariableStore store,
                                                     String fullName, String boundTo) {
         if (store == null) return err("INTERNAL_ERROR", "variable store unavailable");
@@ -2012,8 +2000,8 @@ public final class EditSession {
     }
 
     /**
-     * M15.4 P0-23：模板 raw_state 反序列化得到的 element 通过本方法二次校验。
-     * 2026-05-14 god class 重构后实现位于 {@link ElementValidator#validateElementForTemplateApply}；
+     * 模板 raw_state 反序列化得到的 element 通过本方法二次校验。
+     * 实现位于 {@link ElementValidator#validateElementForTemplateApply}；
      * 保留本 wrapper 以维持 {@code moe.hikari.canvas.template.TemplateInstantiator} 等外部调用方
      * 的 API 不变。
      *

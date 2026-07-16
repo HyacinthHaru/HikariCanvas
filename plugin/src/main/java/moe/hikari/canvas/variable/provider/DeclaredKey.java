@@ -4,13 +4,13 @@ import moe.hikari.canvas.variable.VarType;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Provider 声明可用 key 的元数据（编辑器自动补全用）。0.4.0-P3-J 引入。
+ * Provider 声明可用 key 的元数据（编辑器自动补全用）。
  *
  * <p>静态 namespace（如 {@code system}）通过 {@link VariableProvider#declaredKeys()} 返完整 key
  * 列表；动态 namespace（如 {@code scoreboard}）走 {@link VariableProvider#isDynamic()} = true，
  * 不返 declared keys，编辑器 UI 应给出模板字符串说明（如 {@code scoreboard.<obj>.<player>}）。</p>
  *
- * <p>由 P3-M {@code GET /api/variable/list-all-namespaces} 端点序列化下发。</p>
+ * <p>由 {@code GET /api/variable/list-all-namespaces} 端点序列化下发。</p>
  *
  * @param key         完整 key（如 {@code "server.time"} / {@code "wall.id"}），不含 namespace 前缀
  * @param type        值类型 hint，给编辑器选输入控件

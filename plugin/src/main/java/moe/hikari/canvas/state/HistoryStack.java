@@ -10,33 +10,30 @@ import java.util.function.LongSupplier;
 /**
  * 每会话历史栈：past / future + commit / undo / redo / mark。
  *
- * <p>从原 {@code EditSession} god class 抽出（2026-05-14 重构）。原本是
- * EditSession 自己持 {@code past / future} 两个 {@link Deque} + 私有 helper；
- * 现在把状态 + 行为打包成 {@link HistoryStack}，EditSession 通过
- * 字段委托调用。</p>
+ * <p>由 EditSession 字段委托调用。</p>
  *
  * <p><b>线程安全：</b>不自带锁。调用方（{@code EditSession.synchronized(this)}）
  * 已经保证单线程访问，此处不再加锁。</p>
  *
  * <p><b>容量：</b>{@link #MAX_HISTORY} 控制 past 栈深度；超过踢掉最老
- * （对应 docs/protocol.md §5.5）。0.6 D7：工程有激活时间轴时提升到
+ * （对应 docs/protocol.md §5.5）。工程有激活时间轴时提升到
  * {@link #MAX_HISTORY_TIMELINE}（keyframe 编辑高频，16 步会被一次拖动序列吞光）。
  * future 不设上限——每次 commit 都会清空 future。</p>
  *
- * <p><b>coalescing（0.6 D7 路线 A，docs/timeline.md §7.2）：</b>同
+ * <p><b>coalescing（docs/timeline.md §7.2）：</b>同
  * {@code coalesceKey} 的连续提交在 {@link #COALESCE_WINDOW_MS} 窗口内合并为一步 ——
  * 不再 push 新快照（栈顶已是这段连续编辑起点的 pre-state），undo 一次回到拖动前。
  * 任何非可合并 op / undo / redo 都会打断合并链。</p>
  */
 final class HistoryStack {
 
-    /** T11 历史栈上限（每会话）；超过后踢掉最老的。 */
+    /** 历史栈上限（每会话）；超过后踢掉最老的。 */
     static final int MAX_HISTORY = 16;
 
-    /** 0.6 D7：有激活时间轴的工程的提升上限。 */
+    /** 有激活时间轴的工程的提升上限。 */
     static final int MAX_HISTORY_TIMELINE = 64;
 
-    /** 0.6 D7：同 coalesce key 连续提交的合并窗口。 */
+    /** 同 coalesce key 连续提交的合并窗口。 */
     static final long COALESCE_WINDOW_MS = 500L;
 
     private final ProjectState state;
@@ -69,7 +66,7 @@ final class HistoryStack {
         this.clock = clock;
     }
 
-    /** 当前 past 栈容量上限：有过激活时间轴的会话 → 64（粘性），否则 16（D7）。 */
+    /** 当前 past 栈容量上限：有过激活时间轴的会话 → 64（粘性），否则 16。 */
     private int capacity() {
         if (state.activeTimelineId() != null) timelineCapacityUnlocked = true;
         return timelineCapacityUnlocked ? MAX_HISTORY_TIMELINE : MAX_HISTORY;
@@ -103,7 +100,7 @@ final class HistoryStack {
     }
 
     /**
-     * 可合并提交（0.6 D7 路线 A）：与上次提交同 {@code coalesceKey} 且在
+     * 可合并提交：与上次提交同 {@code coalesceKey} 且在
      * {@link #COALESCE_WINDOW_MS} 窗口内 → 不 push（栈顶保持这段连续编辑起点的
      * pre-state），仅失效 redo 分支；否则按 {@link #commitHistory} 常规推进并记录 key。
      *

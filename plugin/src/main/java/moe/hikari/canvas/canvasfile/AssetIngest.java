@@ -33,10 +33,10 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.8-A2 Task 11：把导入的 {@code assets/<hash>.png} 逐张安全摄入到图片存储。
+ * 把导入的 {@code assets/<hash>.png} 逐张安全摄入到图片存储。
  *
  * <p>每张图走与上传<b>同等</b>的不可信防御链（对照 {@code UploadHandler.processDownloadedBytes}
- * 与配额事务块 {@code UploadHandler.java:572-657}）：
+ * 与 UploadHandler 的配额事务块）：
  * <ol>
  *   <li>magic bytes 校验（非 PNG → 跳过）；</li>
  *   <li>ImageIO 隔离解码（独立线程 + {@value #DECODE_TIMEOUT_MS}ms 超时 + 解码前头部尺寸预检

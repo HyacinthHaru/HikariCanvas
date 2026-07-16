@@ -11,7 +11,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * {@code user_global_variables} 表 DAO（0.4.3 P1）。schema 见
+ * {@code user_global_variables} 表 DAO。schema 见
  * {@code db-migrations/V015__user_global_variables.sql} + {@code docs/dynamic-data.md §17}。
  *
  * <p><b>与 {@link UserVariableDao} 关键区别</b>：</p>

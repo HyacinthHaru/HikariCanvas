@@ -9,7 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 时间轴触发配置（0.6 引入）。契约见 {@code docs/timeline.md §2.5 / §5} 与
+ * 时间轴触发配置。契约见 {@code docs/timeline.md §2.5 / §5} 与
  * {@code docs/protocol.md §7}。
  *
  * <p>{@code params} 按触发类型携带参数（如 {@code VARIABLE_CHANGE} 的 {@code fullName}）。
@@ -35,7 +35,7 @@ public record TriggerConfig(
             params = Map.of();
         } else {
             // 宽容路径：持久化 blob 里 params 含 null 键/值时不抛硬错（Map.copyOf 会 NPE
-            // 致整面墙加载失败；审查确认项 #5）。静默滤掉 null 项；WS 路径的校验在 op 层。
+            // 致整面墙加载失败）。静默滤掉 null 项；WS 路径的校验在 op 层。
             LinkedHashMap<String, String> clean = new LinkedHashMap<>(params.size());
             for (Map.Entry<String, String> e : params.entrySet()) {
                 if (e.getKey() != null && e.getValue() != null) {

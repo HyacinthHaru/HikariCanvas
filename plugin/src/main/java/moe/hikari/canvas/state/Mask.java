@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * M13 {@link ImageElement} 的可选蒙版。{@code d} 为 SVG path 字符串（M/L/Q/C/Z 子集，
+ * {@link ImageElement} 的可选蒙版。{@code d} 为 SVG path 字符串（M/L/Q/C/Z 子集，
  * 相对 element bbox {@code (0, 0)..(w, h)}），复用 {@link PathDValidator} 校验
  * （含 4096 字符长度上限）；{@code inverted=false} 时显示 mask 内部像素（默认），
  * {@code true} 时显示 mask 外部（用 element bbox 减去 mask 形状）。
@@ -14,10 +14,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * {@code docs/rendering.md §4.4}。</p>
  *
  * <p>v1 RightPanel dropdown 暴露 {@code none / circle / roundedRect / ellipse} 4 预设；
- * 2026-05-25 起新增 lasso 自由路径（Alt + 拖动 image element 在画布上直接画）；
+ * 另有 lasso 自由路径（Alt + 拖动 image element 在画布上直接画）；
  * 数据模型仍是 SVG path d 字符串，向下兼容。</p>
  *
- * <p>2026-05-25 引入 {@link #featherPx}：蒙版边缘羽化（高斯模糊蒙版 alpha 通道，让裁切
+ * <p>{@link #featherPx}：蒙版边缘羽化（高斯模糊蒙版 alpha 通道，让裁切
  * 边变成平滑过渡而不是硬边）。{@code null / 0} = 无羽化（向下兼容）；{@code 1..32} =
  * 边缘渐变像素数。详见 {@code docs/rendering.md §4.4}。</p>
  *

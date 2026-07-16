@@ -15,7 +15,7 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 /**
- * 2026-05-25 项 4：JPEG EXIF Orientation 解析 + 自动旋转。
+ * JPEG EXIF Orientation 解析 + 自动旋转。
  *
  * <p>手机拍照 JPEG 含 EXIF Orientation tag（值 1-8），上传时若不读会导致图像方向错误
  * （横屏照片 90° / 倒置等）。本类用 ImageIO 内置 jpeg-metadata 路径解析 EXIF，
@@ -188,7 +188,7 @@ public final class ExifOrientation {
         try {
             // 用 AffineTransform 一次性表达任意 orientation。
             // 推导：先平移到目标中心，转，flip，再平移回左上。
-            // 这里用简化的 case 分发 — 8 种值都是离散整数变换，AWT 调度足够清晰。
+            // 用 case 分发 — 8 种值都是离散整数变换。
             java.awt.geom.AffineTransform tx = new java.awt.geom.AffineTransform();
             switch (orientation) {
                 case 2 -> {  // 水平翻转

@@ -3,7 +3,7 @@ package moe.hikari.canvas.rail;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 0.4.4：铁路线路。一条线路含多个站点（{@link RailStation}）+ 多个车次（{@link RailRun}）。
+ * 铁路线路。一条线路含多个站点（{@link RailStation}）+ 多个车次（{@link RailRun}）。
  *
  * <p>schema 见 {@code db-migrations/V016__rail_network.sql}；ACL 走
  * {@code canvas.rail.line.edit.{own,any}}（owner = {@link #ownerUuid}）。</p>

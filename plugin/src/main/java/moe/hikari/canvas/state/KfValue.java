@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 /**
- * 关键帧值的多态联合（0.6 引入）：数值 / 字符串 / {@link Fill}。
+ * 关键帧值的多态联合：数值 / 字符串 / {@link Fill}。
  * 契约见 {@code docs/timeline.md §2.3} 与 {@code docs/protocol.md §7}
  * （{@code KfValue = number | string | Fill}）。
  *
@@ -29,7 +29,7 @@ public sealed interface KfValue permits KfValue.Num, KfValue.Str, KfValue.FillV 
     /** 字符串（文本内容 / 颜色 hex / {@code ${var:X}} 模板）。 */
     record Str(String value) implements KfValue {}
 
-    /** Fill 联合（solid / linear / radial，复用 M11 类型）。 */
+    /** Fill 联合（solid / linear / radial）。 */
     record FillV(Fill fill) implements KfValue {}
 
     static KfValue of(double v) {

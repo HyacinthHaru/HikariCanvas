@@ -13,12 +13,12 @@ import java.util.logging.Logger;
  * {@code boolean}（条件分支）。
  *
  * <p>语义与 {@code docs/template-spec.md §6.2} 一致（{@code && || !} 与 truthy 链
- * <b>0.7.0-P2 后保持不动</b>，回归红线；{@code ==} / {@code !=} 于 P2-2b 契约修订）：</p>
+ * 是回归红线，保持不动）：</p>
  * <ul>
  *   <li><b>truthy</b>（用于 {@code &&} / {@code ||} / {@code !} / {@code visible_when} 顶层）：
  *       {@code null = false}；{@code Boolean} 取自身；{@code Number != 0 → true}；
  *       {@code String 非空 → true}；其他类型 → true</li>
- *   <li><b>{@code ==} / {@code !=} 相等</b>（0.7.0-P2-2b 契约修订）：<b>双侧均为数值形态</b>
+ *   <li><b>{@code ==} / {@code !=} 相等</b>：<b>双侧均为数值形态</b>
  *       （{@code Number} 或整串匹配 {@link StrictNumber#PATTERN} 的字符串）时走数值等值
  *       （{@code var("score") == 42} 直接可用）；其余链不动——一边 Boolean 时按 truthy
  *       比较，否则 {@code Objects.toString} 后 string 比较</li>
@@ -26,7 +26,7 @@ import java.util.logging.Logger;
  *       {@link UndeclaredParamException}（loader 阶段应已拦截，这里是兜底）</li>
  * </ul>
  *
- * <p><b>0.7.0-P2 扩展语义（K2/K3，契约 docs/scripting.md）</b>：</p>
+ * <p><b>扩展语义（契约 docs/scripting.md）</b>：</p>
  * <ul>
  *   <li><b>比较 {@code < <= > >=}</b>：两侧任一可按 {@link StrictNumber#PATTERN}
  *       完整匹配（或本身是 {@code Number}）→ 双侧 {@code StrictNumber.parse} 数值比较；
@@ -47,7 +47,7 @@ public final class ExpressionEvaluator {
         }
     }
 
-    /** 0.7.0-P2：在无 resolver 的路径（模板 visible_when）里用了 {@code var(...)}。 */
+    /** 在无 resolver 的路径（模板 visible_when）里用了 {@code var(...)}。 */
     public static final class VarUnsupportedException extends RuntimeException {
         public VarUnsupportedException() {
             super("var(...) is not available in this context (no variable resolver)");
@@ -64,7 +64,7 @@ public final class ExpressionEvaluator {
         this(null, null);
     }
 
-    /** 0.7.0-P2(K3)：脚本路径构造——注入变量 resolver（fullName → 当前值 / null）。 */
+    /** 脚本路径构造——注入变量 resolver（fullName → 当前值 / null）。 */
     public ExpressionEvaluator(@Nullable Function<String, String> varResolver,
                                @Nullable Logger log) {
         this.varResolver = varResolver;
@@ -128,8 +128,8 @@ public final class ExpressionEvaluator {
 
     static boolean equals(Object a, Object b) {
         if (a == null || b == null) return a == b;
-        // 0.7.0-P2-2b 契约修订：双侧均为数值形态 → 数值等值（含 Number-Number 老分支，
-        // 被此分支语义覆盖收编）。注意必须"双侧"——若任一侧即走数值，"abc" == 0 会因
+        // 双侧均为数值形态 → 数值等值（含 Number-Number 老分支，被此分支语义覆盖收编）。
+        // 注意必须"双侧"——若任一侧即走数值，"abc" == 0 会因
         // StrictNumber parse 失败强转 0.0 而误判 true
         if (isNumeric(a) && isNumeric(b)) {
             return Double.compare(toNumber(a), toNumber(b)) == 0;
@@ -141,7 +141,7 @@ public final class ExpressionEvaluator {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.7.0-P2(K2)：比较 / 算术语义
+    //  比较 / 算术语义
     // ──────────────────────────────────────────────────────────
 
     /**
@@ -164,7 +164,7 @@ public final class ExpressionEvaluator {
         return false;
     }
 
-    /** 数值强转（K2：算术恒数值；与渲染/op 层共用 StrictNumber 单一文法权威）。 */
+    /** 数值强转（算术恒数值；与渲染/op 层共用 StrictNumber 单一文法权威）。 */
     private static double toNumber(Object v) {
         double d = (v instanceof Number n) ? n.doubleValue()
                 : StrictNumber.parse(v == null ? null : v.toString());
@@ -172,7 +172,7 @@ public final class ExpressionEvaluator {
     }
 
     /**
-     * 数值归一单点（0.7.0-P2-2b，M-1/M-2 收口）：
+     * 数值归一单点：
      * <ul>
      *   <li>{@code -0.0 → 0.0}（"-0" 字符串 / {@code -1 * 0} 等路径），防
      *       {@code Double.compare} 把 ±0 分出大小让 {@code "-var(x) < 0"} 假阳</li>
@@ -190,7 +190,7 @@ public final class ExpressionEvaluator {
         return v == null ? "" : v.toString();
     }
 
-    /** K2：除零 → 0.0 + FINE log，不抛（条件求值不允许炸链）。 */
+    /** 除零 → 0.0 + FINE log，不抛（条件求值不允许炸链）。 */
     private double divide(double a, double b) {
         if (b == 0d) {
             if (log != null) {

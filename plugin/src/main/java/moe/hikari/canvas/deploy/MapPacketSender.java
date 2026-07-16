@@ -27,7 +27,7 @@ public final class MapPacketSender {
      * @param pixels128x128 128×128 = 16384 字节，每字节是 MC map palette 索引
      */
     public void sendFullMap(Player player, int mapId, byte[] pixels128x128) {
-        // P3-77：唯一发包入口的入参校验。null pixels 之前会在 .length 抛不可读的 NPE，
+        // 唯一发包入口的入参校验。null pixels 之前会在 .length 抛不可读的 NPE，
         // 被上游 CanvasProjector.pushToViewers 的 catch(Exception) 吞成泛化日志；这里转为
         // 明确的 IllegalArgumentException + 对 player 做 null 防御，保护新接入点。
         Objects.requireNonNull(player, "player must not be null");

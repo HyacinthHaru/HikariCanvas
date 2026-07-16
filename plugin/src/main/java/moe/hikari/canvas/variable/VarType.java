@@ -8,7 +8,7 @@ package moe.hikari.canvas.variable;
  * 渲染合适的输入控件（number → numeric input、color → color picker、boolean → toggle）。
  * 业务语义（是不是合法的数 / 合法的颜色）由插件侧负责。</p>
  *
- * <p>0.4.0 范围：STRING / NUMBER / BOOLEAN / COLOR。list / map / object 留 1.x。</p>
+ * <p>STRING / NUMBER / BOOLEAN / COLOR；list / map / object 尚未支持。</p>
  */
 public enum VarType {
     STRING,

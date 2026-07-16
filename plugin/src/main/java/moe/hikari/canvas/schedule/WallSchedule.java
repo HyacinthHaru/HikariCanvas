@@ -5,14 +5,14 @@ import org.jetbrains.annotations.Nullable;
 import java.util.List;
 
 /**
- * 0.4.0-P3-L：一面 wall 的时刻表完整视图——元数据 + entries 列表。
+ * 一面 wall 的时刻表完整视图——元数据 + entries 列表。
  *
  * <p>{@link moe.hikari.canvas.storage.ScheduleDao#loadByWall} 一次 join 拿到。Provider /
  * 编辑器 modal 都用此结构。entries 已按 {@code sort_order ASC, departure_time ASC} 预排好。</p>
  *
- * <p>0.4.0 bugfix（Bug 4）：新增 {@code precision} 字段（{@code "minute"} / {@code "second"}）
- * 控制 ManualScheduleProvider 刷新频率 + departure_time 接受的格式。schema V013 引入，
- * 现有 wall 默认 {@code "minute"}（无 migration data loss）。</p>
+ * <p>{@code precision} 字段（{@code "minute"} / {@code "second"}）控制 ManualScheduleProvider
+ * 刷新频率 + departure_time 接受的格式。schema V013 引入，现有 wall 默认 {@code "minute"}
+ * （无 migration data loss）。</p>
  *
  * @param wallId       所属 wall
  * @param stationName  站名（可空，玩家命名）

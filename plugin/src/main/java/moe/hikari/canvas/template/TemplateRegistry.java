@@ -48,7 +48,7 @@ public final class TemplateRegistry {
     /** 用于定位 jar 的"锚点类"——通常传 {@code HikariCanvas.class}。 */
     private final Class<?> anchorClass;
     private final Path serverTemplatesDir;
-    /** M14 创意工坊：玩家发布的模板根目录 {@code dataFolder/user-templates/<uuid>/*.yml}。 */
+    /** 玩家发布的模板根目录 {@code dataFolder/user-templates/<uuid>/*.yml}。 */
     private final Path userTemplatesDir;
 
     /** {@code id → entry}。每次 reload 整体替换。读时取一次引用，避免拷贝。 */
@@ -82,7 +82,7 @@ public final class TemplateRegistry {
     }
 
     /**
-     * M16 P1.6：apply 用查询，强制跨用户隔离。
+     * apply 用查询，强制跨用户隔离。
      *
      * <ul>
      *   <li>id 不存在 → 返回 {@code null}（保持与 {@link #byId(String)} 一致的"未找到"语义）</li>
@@ -105,11 +105,11 @@ public final class TemplateRegistry {
     }
 
     /**
-     * P2-1：ready / list 端点用的可见性过滤，与 {@link #byIdForApply} 共用同一隔离判定。
+     * ready / list 端点用的可见性过滤，与 {@link #byIdForApply} 共用同一隔离判定。
      *
-     * <p>背景：之前 ready 帧把全量 {@link TemplateSpec}（含 user-template 的完整
-     * {@code raw_state} 画布内容）下发给每个已认证 session，玩家 B 即可读取玩家 A 私有
-     * 模板的全部设计，使 {@code byIdForApply} 的 apply 端隔离形同虚设。</p>
+     * <p>ready 帧只下发调用方可见的 {@link TemplateSpec}——user-template 的完整
+     * {@code raw_state} 画布内容不能泄漏给非 owner，否则 {@code byIdForApply} 的 apply
+     * 端隔离形同虚设。</p>
      *
      * <p>规则（与 {@link #byIdForApply} 对齐）：</p>
      * <ul>
@@ -157,7 +157,7 @@ public final class TemplateRegistry {
         // 2) 服务器：dataFolder/templates/*.yml（同 id 覆盖 builtin）
         loadServer(next, serverLoaded, overrides, failures);
 
-        // 3) M14 玩家发布：dataFolder/user-templates/<uuid>/*.yml（同 id 跳过；不覆盖 builtin/server）
+        // 3) 玩家发布：dataFolder/user-templates/<uuid>/*.yml（同 id 跳过；不覆盖 builtin/server）
         loadUser(next, userLoaded, failures);
 
         // 4) atomic swap
@@ -340,7 +340,7 @@ public final class TemplateRegistry {
     // ---------------- user (plugins/HikariCanvas/user-templates/<uuid>/) ----------------
 
     /**
-     * M14 创意工坊：递归扫 {@code user-templates/<uuid>/*.yml}。同 id 已存在 → 跳过（不覆盖
+     * 递归扫 {@code user-templates/<uuid>/*.yml}。同 id 已存在 → 跳过（不覆盖
      * builtin / server）。容错：单 uuid 子目录失败不影响其他。
      */
     private void loadUser(Map<String, TemplateEntry> out, int[] counter,
@@ -355,7 +355,7 @@ public final class TemplateRegistry {
         try (Stream<Path> uuidDirs = Files.list(userTemplatesDir)) {
             List<Path> dirs = uuidDirs.filter(Files::isDirectory).sorted().toList();
             for (Path uuidDir : dirs) {
-                // M16 P1.6：校验目录名为合法 UUID；非法目录跳过 + warn（防伪造目录名注入
+                // 校验目录名为合法 UUID；非法目录跳过 + warn（防伪造目录名注入
                 // 全局可见模板，或绕过 owner 隔离）。
                 String dirName = uuidDir.getFileName().toString();
                 UUID ownerUuid;

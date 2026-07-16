@@ -7,19 +7,14 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Token 暴力枚举防御限流器（M16 留下的待办，2026-05-25 实施）。
+ * Token 暴力枚举防御限流器。
  *
  * <p><b>定位</b>：和 {@link moe.hikari.canvas.session.SessionRateLimiter}（每会话编辑 op
  * 限流，40/2s）正交。本类针对 <b>WS auth 帧 token 校验前</b> 按 IP 做尝试次数限流，
  * 防御场景：攻击者拿到 sessionId 后循环试随机 token 暴破，或对 reconnect token 撞库。</p>
  *
- * <p><b>算法</b>：固定窗口计数器 per-IP（不是 token bucket）。理由：</p>
- * <ul>
- *   <li>固定窗口实现简单 + 内存 O(activeIp)，并发只持桶内 lock</li>
- *   <li>"10 次/分钟"语义清晰，对合法用户友好（断线 retry 5 次 + 重连 1-2 次远低于阈值）</li>
- *   <li>窗口结尾流量翻倍不是问题：超限即 close，攻击者每分钟只能试 ~20 次（vs 不限流可
- *       每秒上千次）</li>
- * </ul>
+ * <p><b>算法</b>：固定窗口计数器 per-IP（不是 token bucket）；内存 O(activeIp)，
+ * 并发只持桶内 lock。默认 10 次/分钟（合法用户断线 retry 5 次 + 重连 1-2 次远低于阈值）。</p>
  *
  * <p><b>线程模型</b>：{@link ConcurrentHashMap} + 桶内 {@code synchronized}；
  * Jetty WS worker 线程从 {@link WebServer#handleAuth} 主路径调用 {@link #tryConsume}。</p>
@@ -40,7 +35,7 @@ public final class TokenRateLimiter {
     private final long windowMs;
     private final Clock clock;
     private final ConcurrentMap<String, Bucket> buckets = new ConcurrentHashMap<>();
-    /** P3-31：上次被动清理时刻；限制 sweep 频率为最多每窗口一次，避免每帧扫全表。 */
+    /** 上次被动清理时刻；限制 sweep 频率为最多每窗口一次，避免每帧扫全表。 */
     private final AtomicLong lastSweepAt = new AtomicLong(0L);
 
     private static final class Bucket {
@@ -74,7 +69,7 @@ public final class TokenRateLimiter {
      */
     public boolean tryConsume(String ip) {
         long now = clock.millis();
-        // P3-31：被动清理过期桶（最多每窗口一次），防 per-IP 桶在 direct-bind 部署下永久累积。
+        // 被动清理过期桶（最多每窗口一次），防 per-IP 桶在 direct-bind 部署下永久累积。
         maybeSweep(now);
         String key = (ip == null || ip.isEmpty()) ? "unknown" : ip;
         Bucket b = buckets.computeIfAbsent(key, k -> new Bucket());
@@ -90,7 +85,7 @@ public final class TokenRateLimiter {
     }
 
     /**
-     * P3-31：被动清理——若距上次 sweep 已过一个完整窗口，则移除所有窗口已彻底过期的桶。
+     * 被动清理——若距上次 sweep 已过一个完整窗口，则移除所有窗口已彻底过期的桶。
      * 用 CAS 确保同一时刻只有一个线程执行扫描（其余线程直接跳过，零阻塞）。
      * 移除时在桶 monitor 内复检 windowStart，避免误删刚被并发刷新的活跃桶。
      */

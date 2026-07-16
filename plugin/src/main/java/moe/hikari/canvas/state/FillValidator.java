@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * {@link Fill} 字段范围与一致性校验（M11 引入）。
+ * {@link Fill} 字段范围与一致性校验。
  *
  * <p><b>范围约束（v1）：</b></p>
  * <ul>
@@ -14,9 +14,6 @@ import java.util.regex.Pattern;
  *   <li>{@link RadialGradient#cx()} / {@link RadialGradient#cy()}：{@code [0, 1]}</li>
  *   <li>{@link RadialGradient#r()}：{@code (0, 2]}</li>
  * </ul>
- *
- * <p>把校验从 {@code EditSession.validateColor} 抽出来，是为了让 M11-A
- * 升级后所有 fill 入口（buildRect / applyRectPatch / 同 Path / Circle / Shape）共用一个 helper。</p>
  */
 public final class FillValidator {
 

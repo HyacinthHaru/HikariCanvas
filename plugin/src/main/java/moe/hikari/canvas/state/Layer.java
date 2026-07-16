@@ -8,20 +8,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 图层（M8 v2 引入）。契约见 {@code docs/architecture.md §10.5}。
+ * 图层。契约见 {@code docs/architecture.md §10.5}。
  *
  * <p>每个 Layer 持有一组共享 visible / locked / opacity / blendMode 的元素；
  * 层间 z-order = {@code ProjectState.layers} 的索引（越大越上层），
  * 层内 z-order = {@link #elements} 的索引。</p>
  *
  * <p><b>可变性：</b> {@link #elements} 是 {@link ArrayList}，供 {@link ProjectState} mutator
- * 直接增删（M8-A 阶段 EditSession 继续按"扁平 elements"操作 activeLayer 的列表）。
+ * 直接增删（EditSession 继续按"扁平 elements"操作 activeLayer 的列表）。
  * 紧凑构造器会把 null / 其他子类的列表归一化为 {@code ArrayList}，避免反序列化拿到不可变视图。</p>
  *
  * @param id        {@code "l-<8hex>"}，由服务端生成
  * @param name      用户可见名（默认 {@code "Layer N"} / {@code "Default Layer"}）
  * @param visible   层可见性；false 时整层跳过渲染
- * @param locked    锁层；M8-C 起 element.* op 命中 locked 层时拒 {@code LAYER_LOCKED}
+ * @param locked    锁层；element.* op 命中 locked 层时拒 {@code LAYER_LOCKED}
  * @param opacity   层级不透明度 0.0–1.0
  * @param blendMode 层级混合模式
  * @param colorTag  PS 风格颜色标签（仅 UI 显示用，不影响渲染）。

@@ -39,14 +39,14 @@ public final class Database implements AutoCloseable {
         cfg.setJdbcUrl("jdbc:sqlite:" + dbFile.toAbsolutePath());
         cfg.setMaximumPoolSize(4);
         cfg.setPoolName("HikariCanvas-SQLite");
-        // M16 P5.2：连接租借超 30s 未还视为泄漏，HikariCP log WARN + 栈跟踪。
+        // 连接租借超 30s 未还视为泄漏，HikariCP log WARN + 栈跟踪。
         // dev/prod 均启用——SQLite 单写场景下任何超 30s 的连接都几乎必是 bug
         // （editor op / migration / wall query 均亚秒级），早暴露胜过线上锁死。
         cfg.setLeakDetectionThreshold(30_000);
         // SQLite 特定：WAL 模式（读写并发友好）+ 外键约束
         cfg.addDataSourceProperty("journal_mode", "WAL");
         cfg.addDataSourceProperty("foreign_keys", "true");
-        // M15.1 P0-31：WAL 下并发写撞 BUSY 会立即抛 SQLITE_BUSY；5s busy_timeout
+        // WAL 下并发写撞 BUSY 会立即抛 SQLITE_BUSY；5s busy_timeout
         // 让 SQLite 内部自旋重试，配合 HikariCP 4 连接消除竞争异常。
         cfg.addDataSourceProperty("busy_timeout", "5000");
 

@@ -16,7 +16,7 @@ import static moe.hikari.canvas.web.WebHelpers.parseBrushPoints;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * M12 brush op 入口。{@code brush.start / point / end / cancel} 走独立路径，**不走** edit
+ * brush op 入口。{@code brush.start / point / end / cancel} 走独立路径，**不走** edit
  * 路径的 rateLimiter（brush.point 高频低消息，限流会卡笔触流畅性）；内存安全靠
  * EditSession 的 {@code MAX_BRUSH_POINTS_PER_STROKE} + {@code MAX_ACTIVE_STROKES} 保护。
  */

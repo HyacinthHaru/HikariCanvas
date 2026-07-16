@@ -10,12 +10,12 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * M13 {@code image_uploads} 表 DAO。按 sha256[:16] 内容寻址，跨 wall 引用同一 hash
+ * {@code image_uploads} 表 DAO。按 sha256[:16] 内容寻址，跨 wall 引用同一 hash
  * 文件零重复存储。schema 见 {@code db-migrations/V007__image_uploads.sql}、
  * {@code docs/data-model.md §2.6.5}。
  *
- * <p>M16 P6.3：移除 {@code refcount} 列（V010 migration drop）。代码自承「不做实时增减」
- * 是 dead 列。LRU 候选实时由 {@link moe.hikari.canvas.image.ImageStorage#collectReferencedHashes}
+ * <p>没有 {@code refcount} 列——LRU 候选实时由
+ * {@link moe.hikari.canvas.image.ImageStorage#collectReferencedHashes}
  * sweep {@code walls.project_json} 计算。</p>
  */
 public final class ImageUploadDao {
@@ -57,7 +57,7 @@ public final class ImageUploadDao {
     }
 
     /**
-     * M16 P2.1：事务内执行 INSERT，不吞异常。调用方在 {@code jdbi.inTransaction} lambda
+     * 事务内执行 INSERT，不吞异常。调用方在 {@code jdbi.inTransaction} lambda
      * 内传入活动 {@link Handle}；冲突或异常上抛使外层事务能感知并回滚。
      *
      * @return 1 = 插入成功；0 = INSERT OR IGNORE 命中冲突（同 hash 已存在）
@@ -193,7 +193,7 @@ public final class ImageUploadDao {
                     .map((rs, ctx) -> mapRow(rs))
                     .list();
         }
-        // M15.4 P0-15：用 SQL NOT IN 替代内存 filter。否则攻击者上传 16 张图全引用 →
+        // 用 SQL NOT IN 替代内存 filter。否则攻击者上传 16 张图全引用 →
         // SQL 返 16 行、filter 全空 → break → 所有玩家永久 fail。
         return h.createQuery(
                 "SELECT * FROM image_uploads "
@@ -217,14 +217,14 @@ public final class ImageUploadDao {
         }
     }
 
-    // P3-75：非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
+    // 非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
     private Row mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
         String uploaderRaw = rs.getString("uploader_uuid");
         UUID uploader;
         try {
             uploader = UUID.fromString(uploaderRaw);
         } catch (IllegalArgumentException ex) {
-            // P3-75：外部 DB 数据损坏的防御性降级（与 RailDao/UserGlobalVariableDao 看齐）——
+            // 外部 DB 数据损坏的防御性降级（与 RailDao/UserGlobalVariableDao 看齐）——
             // nil UUID 匹配 uploader 失败更受限（安全），且单行坏数据不阻断整查询。
             log.log(Level.WARNING, "ImageUploadDao.mapRow uploader_uuid parse failed, hash="
                     + rs.getString("hash") + ", uploader=" + uploaderRaw, ex);

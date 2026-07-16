@@ -9,7 +9,7 @@ import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P4-P：Plugin Push API 限流器（{@code docs/dynamic-data.md §10.2}）。
+ * Plugin Push API 限流器（{@code docs/dynamic-data.md §10.2}）。
  *
  * <h2>双层限流</h2>
  * <ul>
@@ -29,8 +29,7 @@ import java.util.logging.Logger;
  *
  * <h2>线程安全</h2>
  * <p>全 {@link ConcurrentHashMap} + {@link AtomicLong}，无锁、无 synchronized 块。
- * 与 {@link moe.hikari.canvas.session.SessionRateLimiter} 风格一致但用 atomic 版本——
- * Push API 调用方多为后台线程，竞争率高于 session input。</p>
+ * Push API 调用方多为后台线程，竞争率高，用 atomic 版本。</p>
  *
  * @see HikariCanvasAPIImpl
  */
@@ -86,7 +85,7 @@ public final class PushRateLimiter {
     }
 
     /**
-     * 测试用构造器——注入自定义时钟（0.4.8 hotfix 起 public 化，让跨包单测可用）。
+     * 测试用构造器——注入自定义时钟（public，让跨包单测可用）。
      * 生产代码请用 {@link #PushRateLimiter(Config)} 单参版本。
      */
     public PushRateLimiter(Config config, LongSupplier clock) {
@@ -115,7 +114,7 @@ public final class PushRateLimiter {
      * 加 per-plugin。任一阶段超限即 reject。已加进 window 的 count 不 rollback——
      * fixed-window 在下个秒自动归零，最坏 1s 内 reject 后续。</p>
      *
-     * <p>0.4.10 P2-25：新增"超大单批预拦截"——当单次 batch 的 {@code count} 本身就超过
+     * <p>"超大单批预拦截"——当单次 batch 的 {@code count} 本身就超过
      * per-plugin 限额（默 100）时，直接按 per-plugin drop tail 拒绝，<b>不</b>计入全局窗口、
      * <b>不</b>触发全服 10s 熔断。原实现先加全局：一个插件推一个超 global（默 1000）的大批
      * 会无辜熔断全服所有插件的 push。本拦截仍把 count 记进 per-plugin 窗口（保持"同窗口后续
@@ -143,7 +142,7 @@ public final class PushRateLimiter {
         long windowSec = now / 1000L;
         Window w = perPlugin.computeIfAbsent(plugin.getName(), k -> new Window());
 
-        // 2. 0.4.10 P2-25：超大单批预拦截——count 本身超 per-plugin 限额 → 局部 drop，
+        // 2. 超大单批预拦截——count 本身超 per-plugin 限额 → 局部 drop，
         //    不污染全局窗口、不触发全服熔断。仍把 count 记进 per-plugin 窗口（保持后续 drop）。
         if (count > config.perPluginPerSecond) {
             int pluginCount = w.addAndGet(windowSec, count);

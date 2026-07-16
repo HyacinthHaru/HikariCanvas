@@ -12,10 +12,9 @@ import java.util.concurrent.ConcurrentMap;
  *   <tr><td>折合平均速率</td><td>≈ 20 msg/s</td></tr>
  * </table>
  *
- * <p>M3-T10 实装基本 40/2s 滑窗（固定窗口计数器，简单可靠）。
- * 0.9.3 起补"反复超限 → 断连"：窗内连续被拒达 {@code violationThreshold} 次 /
- * {@code violationWindowMs} 即触发注入的 {@code onRepeatedViolation} 回调（由 WebServer
- * 关连接 close 1008）。协议 §9 契约。</p>
+ * <p>基本 40/2s 滑窗（固定窗口计数器）。"反复超限 → 断连"：窗内连续被拒达
+ * {@code violationThreshold} 次 / {@code violationWindowMs} 即触发注入的
+ * {@code onRepeatedViolation} 回调（由 WebServer 关连接 close 1008）。协议 §9 契约。</p>
  *
  * <p>{@code ping} / {@code ack} 不计入限流（调用方自行控制传什么）。</p>
  */
@@ -36,7 +35,7 @@ public final class SessionRateLimiter {
     private static final class Bucket {
         long windowStart;
         int count;
-        // 0.9.3：反复超限计数（独立 60s 窗口，与突发窗口分离）
+        // 反复超限计数（独立 60s 窗口，与突发窗口分离）
         long violationWindowStart;
         int violationCount;
         boolean violationReported;
@@ -64,7 +63,7 @@ public final class SessionRateLimiter {
     }
 
     /**
-     * 0.9.3：注册"会话反复超限"回调。某会话在 {@code violationWindowMs} 内累计
+     * 注册"会话反复超限"回调。某会话在 {@code violationWindowMs} 内累计
      * {@code violationThreshold} 次 {@code allow()} 拒绝时触发一次（同窗口内不重复），
      * 入参是 sessionId；回调应主动关该 WS 连接（close 1008）。
      * 默认 no-op，旧测试 / 未接线路径不受影响。{@code null} 视作 no-op。
@@ -88,7 +87,7 @@ public final class SessionRateLimiter {
             }
             if (b.count >= burst) {
                 allowed = false;
-                // 0.9.3：本次拒绝计入反复超限窗口（独立 violationWindowMs）
+                // 本次拒绝计入反复超限窗口（独立 violationWindowMs）
                 if (now - b.violationWindowStart >= violationWindowMs) {
                     b.violationWindowStart = now;
                     b.violationCount = 0;

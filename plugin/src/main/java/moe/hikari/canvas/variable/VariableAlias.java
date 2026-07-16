@@ -1,7 +1,7 @@
 package moe.hikari.canvas.variable;
 
 /**
- * 变量别名记录（0.4.2）。详见 {@code docs/variables.md §1.12}。
+ * 变量别名记录。详见 {@code docs/variables.md §1.12}。
  *
  * <p>每个 wall 给某个 fullName 可起一个别名，UI 层展示时优先用别名代替原始 fullName。
  * 主键 {@code (wallId, fullName)}：同一 wall 内一个变量只能有一个别名。</p>

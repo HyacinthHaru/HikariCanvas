@@ -10,11 +10,11 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 0.4.0-P4-O：每个外部插件注册的 namespace 对应一个 {@link VariableProvider} 实例。
+ * 每个外部插件注册的 namespace 对应一个 {@link VariableProvider} 实例。
  *
  * <h2>用途</h2>
  *
- * <p>让 {@link moe.hikari.canvas.api.HikariCanvasAPI#declareKey} 加入的 keys 通过 P3-M
+ * <p>让 {@link moe.hikari.canvas.api.HikariCanvasAPI#declareKey} 加入的 keys 通过
  * {@code /api/variable/list-all-namespaces} 端点暴露给前端 Picker。本 Provider 不调度
  * （{@link #refreshInterval()} = {@link Duration#ZERO}），写值走
  * {@link moe.hikari.canvas.api.HikariCanvasAPI#setVariable} 直接调

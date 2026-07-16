@@ -17,8 +17,8 @@ import java.util.Set;
  * 契约见 {@code docs/architecture.md §7.1}。纯算法类：输入 Bukkit 对象，
  * 输出不可变 Result。无副作用、无状态。
  *
- * <p><b>M2 仅支持垂直墙面</b>（normal 必须是水平方向 N/S/E/W）。天花板/地板
- * （UP/DOWN）保留到 M4+ 再放宽，避免现在处理跨轴像素方向的复杂度。</p>
+ * <p><b>仅支持垂直墙面</b>（normal 必须是水平方向 N/S/E/W）。天花板/地板
+ * （UP/DOWN）暂不放宽，避免处理跨轴像素方向的复杂度。</p>
  */
 public final class WallResolver {
 
@@ -41,7 +41,7 @@ public final class WallResolver {
                 int minX, int minY, int minZ,
                 int width, int height,     // 水平方向地图数 × 垂直方向地图数
                 BlockFace facing,          // 墙面朝向（= 点击时的 normal）
-                boolean hasExistingFrames  // M5.5：bbox 内全是 HikariCanvas 自家画框 → 走"打开现有"路径
+                boolean hasExistingFrames  // bbox 内全是 HikariCanvas 自家画框 → 走"打开现有"路径
         ) implements Result {
             public int mapCount() {
                 return width * height;
@@ -56,7 +56,7 @@ public final class WallResolver {
     public enum FailReason {
         NORMAL_MISMATCH,   // 两次点击的朝向不同
         DIFFERENT_WORLDS,  // 两个 block 在不同世界
-        VERTICAL_ONLY,     // normal 是 UP/DOWN（M2 不支持）
+        VERTICAL_ONLY,     // normal 是 UP/DOWN（不支持）
         NOT_COPLANAR,      // 两点不在同一垂直平面
         TOO_LARGE,         // 超过 maxMaps
         BLOCK_NOT_SOLID,     // bbox 内某方块非实心 full cube

@@ -14,9 +14,9 @@ import java.util.UUID;
 /**
  * 服务端权威的编辑工程状态。契约见 {@code docs/protocol.md §7} 与 {@code docs/architecture.md §10.5}。
  *
- * <p><b>M8 v2 形态：</b> 顶层是 {@code layers: Layer[]} + {@code activeLayerId}；
+ * <p><b>v2 形态：</b> 顶层是 {@code layers: Layer[]} + {@code activeLayerId}；
  * 老的扁平 {@code elements: Element[]} 不再是字段，但仍保留同名访问器/mutator 转发到
- * {@code activeLayer().elements}，让 M8-A 阶段未升级到 v2 path 的调用方（如 EditSession）
+ * {@code activeLayer().elements}，让未升级到 v2 path 的调用方（如 EditSession）
  * 零修改即可继续按"活动层"语义工作。</p>
  *
  * <p>生命周期：在 {@code SessionManager.confirm} 里构造，随 {@code Session} 一起 forget。</p>
@@ -39,7 +39,7 @@ import java.util.UUID;
 )
 public final class ProjectState {
 
-    /** 协议版本字段，序列化输出固定 3（0.6 起切断 v2，同 M8 切 v1 的干净切换；见 docs/protocol.md「v2 → v3 变更总览」）。 */
+    /** 协议版本字段，序列化输出固定 3（干净切断 v2；见 docs/protocol.md「v2 → v3 变更总览」）。 */
     public static final int PROTOCOL_VERSION = 3;
 
     /** 默认层名（创建 wall / v1 migrate / template.apply 都用同一文案）。 */
@@ -54,7 +54,7 @@ public final class ProjectState {
             List<Guide> guides      // null/empty = 无参考线
     ) {
         public Canvas {
-            // M15.1 P0-Render-1：widthMaps/heightMaps 上限校验，防远程 OOM（48GB heap）。
+            // widthMaps/heightMaps 上限校验，防远程 OOM（48GB heap）。
             // 32×32 = 1024 maps 上限符合 PROPOSAL.md §3.1 设计上限。
             if (widthMaps < 1 || widthMaps > 32) {
                 throw new IllegalArgumentException("widthMaps out of range [1, 32]: " + widthMaps);
@@ -67,9 +67,9 @@ public final class ProjectState {
         }
 
         /**
-         * M17 F5：Jackson 反序列化入口。{@code background} 字段类型从 {@code String}
+         * Jackson 反序列化入口。{@code background} 字段类型从 {@code String}
          * 升级为 {@link Fill}（solid / linear / radial）。{@link FillDeserializer} 同时
-         * 接受 string（M0-M16 旧形态自动 wrap 为 {@link SolidFill}）与 object（v2 新形态），
+         * 接受 string（旧形态自动 wrap 为 {@link SolidFill}）与 object（新形态），
          * 保留旧 .canvas 工程文件向后兼容。
          */
         @JsonCreator
@@ -91,7 +91,7 @@ public final class ProjectState {
         }
 
         /**
-         * M17 F5 兼容构造：旧 String 入口仍可用，内部 wrap 为 {@link SolidFill}。
+         * 兼容构造：旧 String 入口仍可用，内部 wrap 为 {@link SolidFill}。
          * 调用方应在新代码里直接传 {@link Fill}；保留此构造避开测试 / 全栈大规模重写。
          */
         public Canvas(int widthMaps, int heightMaps, String backgroundColor) {
@@ -109,17 +109,17 @@ public final class ProjectState {
     private String activeLayerId;
     private History history;
     /**
-     * 0.6 v3：时间轴列表（docs/data-model.md §2.4.2）。空 = 静态画板；序列化省略
-     * （{@code NON_EMPTY}），旧 v2 blob 无此字段 → 读为空 → 完全静态行为、零迁移。
+     * 时间轴列表（docs/data-model.md §2.4.2）。空 = 静态画板；序列化省略
+     * （{@code NON_EMPTY}），旧 blob 无此字段 → 读为空 → 完全静态行为、零迁移。
      * 列表本体可变（同 layers 范式），元素 {@link Timeline} record 不可变。
      */
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private final List<Timeline> timelines = new ArrayList<>();
-    /** 0.6 v3：当前激活时间轴 id；null = 无（序列化省略）。 */
+    /** 当前激活时间轴 id；null = 无（序列化省略）。 */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String activeTimelineId;
     /**
-     * 0.7.1：per-wall 补间帧率（scripts.tween.max-fps 硬上限；null = 未设置 → 引擎默认 30）。
+     * per-wall 补间帧率（scripts.tween.max-fps 硬上限；null = 未设置 → 引擎默认 30）。
      * Jackson 加法兼容：旧工程无此字段 → 反序列化为 null → effectiveTweenFps() 返默认值 30。
      * 序列化省略 null（{@code NON_NULL}），减小 blob 体积。
      */
@@ -182,14 +182,14 @@ public final class ProjectState {
             this.activeLayerId = def.id();
         }
 
-        // 0.6 v3 加法：旧 v2 blob 两字段缺失 → 走默认（空列表 / null）= 静态画板
+        // 加法：旧 blob 两字段缺失 → 走默认（空列表 / null）= 静态画板
         if (timelines != null) {
             this.timelines.addAll(timelines);
         }
         this.activeTimelineId =
                 (activeTimelineId != null && containsTimeline(activeTimelineId))
                         ? activeTimelineId : null;
-        // 0.7.1 加法：per-wall 补间帧率；旧工程缺字段 → null → effectiveTweenFps() 取默认
+        // 加法：per-wall 补间帧率；旧工程缺字段 → null → effectiveTweenFps() 取默认
         this.tweenFps = tweenFps;
     }
 
@@ -218,17 +218,17 @@ public final class ProjectState {
     public List<Layer> layers() { return Collections.unmodifiableList(layers); }
     public String activeLayerId() { return activeLayerId; }
 
-    /** 0.6 v3：时间轴只读视图；空列表 = 静态画板。 */
+    /** 时间轴只读视图；空列表 = 静态画板。 */
     public List<Timeline> timelines() { return Collections.unmodifiableList(timelines); }
 
-    /** 0.6 v3：当前激活时间轴 id；null = 无。 */
+    /** 当前激活时间轴 id；null = 无。 */
     public String activeTimelineId() { return activeTimelineId; }
 
-    /** 0.7.1：per-wall 补间帧率原始值；null = 未设置（调用方通过 {@link #effectiveTweenFps} 取有效值）。 */
+    /** per-wall 补间帧率原始值；null = 未设置（调用方通过 {@link #effectiveTweenFps} 取有效值）。 */
     public Integer tweenFps() { return tweenFps; }
 
     /**
-     * 0.7.1：有效补间帧率——null → 默认 30fps；否则 clamp [1, 60]。
+     * 有效补间帧率——null → 默认 30fps；否则 clamp [1, 60]。
      * 上限 60 是协议约定，与 scripts.tween.max-fps config 做第二次 clamp（引擎侧）相互独立保证安全。
      */
     public int effectiveTweenFps() {
@@ -253,8 +253,8 @@ public final class ProjectState {
     }
 
     /**
-     * <b>兼容视图：</b> 等价于 {@code activeLayer().elements()} 的只读副本。M8-A 阶段
-     * EditSession 与渲染器都继续通过此 API 访问"当前活动层的元素"；M8-C 起新协议路径会
+     * <b>兼容视图：</b> 等价于 {@code activeLayer().elements()} 的只读副本。
+     * EditSession 与渲染器都继续通过此 API 访问"当前活动层的元素"；新协议路径会
      * 直接走 {@link #layers()}。
      */
     public List<Element> elements() {
@@ -262,15 +262,14 @@ public final class ProjectState {
     }
 
     /**
-     * Ultrareview 2026-05-25 #6：多图层 pristine 判定。等价于"工程是否完全空"——
-     * 所有 layer 都 empty 或 hidden。
+     * 多图层 pristine 判定。等价于"工程是否完全空"——所有 layer 都 empty 或 hidden。
      *
-     * <p>背景：旧 {@link #elements()} 只返回 active layer，多图层工程若 active layer 空但其他
+     * <p>旧 {@link #elements()} 只返回 active layer，多图层工程若 active layer 空但其他
      * visible layer 有内容会被误判为 pristine，启动 restore / projector 走 placeholder 抹掉真实内容。</p>
      *
-     * <p><b>0.4.9 hotfix #2</b>：删除 {@code opacity==0} 判定——用户 layer.opacity=0 是
-     * 有意为之（透明该 layer 让背景方块透出），不是空工程。pristine 是数据视角不是视觉视角；
-     * 不该把"有元素但视觉透明"的工程误判为 placeholder 应该显示。</p>
+     * <p>不判 {@code opacity==0}——用户 layer.opacity=0 是有意为之（透明该 layer 让背景方块
+     * 透出），不是空工程。pristine 是数据视角不是视觉视角；不该把"有元素但视觉透明"的工程
+     * 误判为 placeholder 应该显示。</p>
      */
     public boolean isPristineAcrossLayers() {
         for (Layer l : layers) {
@@ -307,7 +306,7 @@ public final class ProjectState {
         if (containsLayer(layerId)) this.activeLayerId = layerId;
     }
 
-    // ---------- M8-C：layer 级 mutator（EditSession 使用）----------
+    // ---------- layer 级 mutator（EditSession 使用）----------
 
     /** 插入新层到 {@code index} 位置；不修改 activeLayerId。 */
     public void insertLayer(int index, Layer layer) {
@@ -364,7 +363,7 @@ public final class ProjectState {
                 (timelineId != null && containsTimeline(timelineId)) ? timelineId : null;
     }
 
-    /** 0.7.1：设置 per-wall 补间帧率（null = 清回默认 30）。 */
+    /** 设置 per-wall 补间帧率（null = 清回默认 30）。 */
     public void tweenFps(Integer fps) {
         this.tweenFps = fps;
     }
@@ -400,7 +399,7 @@ public final class ProjectState {
     /**
      * 从 {@link ProjectSnapshot} 整体恢复 state（undo/redo 用）。
      *
-     * <p><b>M8-C 升级：</b> snapshot 现存完整 {@code layers + activeLayerId} 树。restore
+     * <p>snapshot 现存完整 {@code layers + activeLayerId} 树。restore
      * 整体替换 canvas / layers / activeLayerId 三件套，保证跨层 op（layer.create / delete /
      * reorder / element.move-to-layer 等）都能正确撤销。</p>
      *

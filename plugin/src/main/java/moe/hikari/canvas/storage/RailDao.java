@@ -17,7 +17,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.4 P1：铁路网络 5 表统一 DAO（与 {@link ScheduleDao} 单类风格一致）。
+ * 铁路网络 5 表统一 DAO（与 {@link ScheduleDao} 单类风格一致）。
  *
  * <p>承担：{@code rail_lines} / {@code rail_stations} / {@code rail_runs} /
  * {@code rail_timetable} / {@code wall_rail_bindings} 五表的 CRUD。FK 级联由 schema 自带
@@ -279,7 +279,7 @@ public class RailDao {
     }
 
     /**
-     * 0.4.5 P1：按线路一次性聚合 stations + runs + 各 run 的 timetable，给前端
+     * 按线路一次性聚合 stations + runs + 各 run 的 timetable，给前端
      * RailNetworkModal `selectLine` 调用避免 N+1 个独立请求。
      *
      * @return 聚合视图；线路不存在时返 empty
@@ -495,13 +495,13 @@ public class RailDao {
     //  helpers
     // ────────────────────────────────────────────────────────────
 
-    // P3-84：非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
+    // 非 static（用实例 log 记录损坏数据告警）。仅在实例方法的 RowMapper lambda 内调用。
     private RailLine mapLine(java.sql.ResultSet rs) throws java.sql.SQLException {
         UUID owner;
         try {
             owner = UUID.fromString(rs.getString("owner_uuid"));
         } catch (IllegalArgumentException ex) {
-            // P3-84：外部 DB 数据损坏的防御性降级——nil UUID 匹配 owner 失败更受限（安全）。
+            // 外部 DB 数据损坏的防御性降级——nil UUID 匹配 owner 失败更受限（安全）。
             // 补 WARNING 日志便于运维排查 owner_uuid 被损坏的根因。
             log.log(Level.WARNING, "RailDao.mapLine owner_uuid parse failed, id="
                     + rs.getString("id") + ", owner=" + rs.getString("owner_uuid"), ex);

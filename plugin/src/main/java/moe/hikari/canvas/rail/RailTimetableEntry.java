@@ -3,10 +3,10 @@ package moe.hikari.canvas.rail;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 0.4.4：车次时刻表的一行——某车次到达某站的精确到达 / 发车时刻。
+ * 车次时刻表的一行——某车次到达某站的精确到达 / 发车时刻。
  *
  * <p>schema：{@code rail_timetable}，主键 ({@link #runId}, {@link #stationId})。
- * 这是 0.4.4 的关键设计：每站时刻**精确从此表读**，不再走"travel_seconds 均匀推算"，
+ * 关键设计：每站时刻**精确从此表读**，不再走"travel_seconds 均匀推算"，
  * 因此支持站间不均、大站快车跳站（{@link #stopsHere} = false）、区间车不到全线。</p>
  *
  * @param runId          所属车次（FK CASCADE）

@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * 系统 / PAPI 等异步 provider 接口。0.4.0-P1-E 框架骨架——具体实现 P3 落地。
+ * 系统 / PAPI 等异步 provider 接口。
  *
  * <p>Provider 由 {@link VariableProviderDaemon} 调度，<b>不允许在主线程调 store</b>。
  * 每个 Provider 自己负责定时刷新（通过 daemon scheduleRefresh）+ push 当前值进 store。</p>
@@ -27,7 +27,7 @@ public interface VariableProvider {
     String namespace();
 
     /**
-     * 0.7.4：返回该 provider 写入 {@link moe.hikari.canvas.variable.VariableStore} 时实际使用的
+     * 返回该 provider 写入 {@link moe.hikari.canvas.variable.VariableStore} 时实际使用的
      * namespace 前缀——即编辑器 VariablePicker 应展示、且占位符 {@code ${var:<prefix>/key}} 能被
      * {@code VariableInterpolator} 注入 wallId 解析到的形态。
      *
@@ -77,13 +77,13 @@ public interface VariableProvider {
     void shutdown();
 
     /**
-     * 0.4.0-P3-J：Provider 声明可用 key（编辑器自动补全用）。
+     * Provider 声明可用 key（编辑器自动补全用）。
      *
      * <p>静态 namespace（{@link #isDynamic()} = false）返完整 key 列表；动态 namespace
      * （{@link #isDynamic()} = true）返空列表，由 namespace 自身说明 + 模板字符串向用户提示
      * 引用方式（如 {@code scoreboard.<obj>.<player>}）。</p>
      *
-     * <p>默认实现返空列表——兼容 P1-E 已有 Provider 不强制改造。P3-M {@code GET
+     * <p>默认实现返空列表——不强制已有 Provider 改造。{@code GET
      * /api/variable/list-all-namespaces} 端点会调本方法做序列化。</p>
      */
     default List<DeclaredKey> declaredKeys() {
@@ -91,7 +91,7 @@ public interface VariableProvider {
     }
 
     /**
-     * 0.4.0-P3-J：此 namespace 是否动态注册（玩家引用任意 key 都自动创建）。
+     * 此 namespace 是否动态注册（玩家引用任意 key 都自动创建）。
      *
      * <p>动态 namespace 示例：{@code scoreboard} —— 任何 {@code scoreboard.<obj>.<player>}
      * 第一次被引用时自动 register 进 store + 加入 refresh 列表。{@link VariableStore} 暴露的

@@ -1,7 +1,7 @@
 package moe.hikari.canvas.pool;
 
 /**
- * 池中一张地图的状态。M5.5 起两态（原 PERMANENT 已废止）。契约见 {@code docs/data-model.md §2.3}。
+ * 池中一张地图的状态（两态）。契约见 {@code docs/data-model.md §2.3}。
  *
  * <p>不变式：</p>
  * <ul>

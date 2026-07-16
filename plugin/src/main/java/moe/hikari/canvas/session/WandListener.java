@@ -34,7 +34,7 @@ import java.util.concurrent.ConcurrentMap;
 
 /**
  * 把玩家左/右键点击翻译为 {@link SessionManager#recordPos}（选区流程），或者
- * 当点中 HikariCanvas 自家 ItemFrame 时进入"二次确认 → /canvas open"路径（M5.5）。
+ * 当点中 HikariCanvas 自家 ItemFrame 时进入"二次确认 → /canvas open"路径。
  *
  * <p>触发条件（任一即可）：</p>
  * <ul>
@@ -59,7 +59,7 @@ public final class WandListener implements Listener {
     private final TokenService tokenService;
     private final WallRepo wallRepo;
     private final String editorUrlTemplate;
-    /** M16 P2.5：启动期 restore 失败的 wall 白名单查询；玩家与失败 wall 交互时给提示。可空（test 路径）。 */
+    /** 启动期 restore 失败的 wall 白名单查询；玩家与失败 wall 交互时给提示。可空（test 路径）。 */
     private final WallRestorer wallRestorer;
     private final Messages messages;
 
@@ -143,14 +143,14 @@ public final class WandListener implements Listener {
     // ---------- "瞄已有 wall → 二次确认 → open" ----------
 
     private void handleOpenExistingWall(Player player, String wallId) {
-        // M16 P2.5：启动期 restore 失败的 wall → ActionBar 提示，不进入 open 路径。
+        // 启动期 restore 失败的 wall → ActionBar 提示，不进入 open 路径。
         // 让玩家立刻明白不必再点（避免一直点不开还以为是 lock 问题）。
         if (wallRestorer != null && wallRestorer.isRestorationFailed(wallId)) {
             sendActionBar(player, "wand.restore-failed",
                     Placeholder.unparsed("wall_id", wallId));
             return;
         }
-        // M15.3 Phase 2 方案 C：wand 路径同步 lock check。SessionManager.open 已硬拦截,
+        // wand 路径同步 lock check。SessionManager.open 已硬拦截,
         // 这里多一道 ActionBar 提示让玩家立刻明白不必再点。
         WallRepo.Wall w = wallRepo.loadById(wallId).orElse(null);
         if (w != null && w.publishedAt() != null
@@ -231,7 +231,7 @@ public final class WandListener implements Listener {
     // ---------- 选区共享逻辑 ----------
 
     private boolean shouldHandle(Player player, ItemStack hand) {
-        // Ultrareview 2026-05-25 #4：交互时重新校验 canvas.edit。曾经合法持有 wand 的玩家
+        // 交互时重新校验 canvas.edit。曾经合法持有 wand 的玩家
         // 被撤权（lp user xx permission unset canvas.edit）后仍可触发选区 / open 流程。
         // 静默忽略 —— UX 上 wand 不响应。
         if (!player.hasPermission("canvas.edit")) return false;

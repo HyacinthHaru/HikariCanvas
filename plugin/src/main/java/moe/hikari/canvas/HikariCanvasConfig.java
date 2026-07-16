@@ -23,9 +23,9 @@ public final class HikariCanvasConfig {
     public final String host;
     public final int port;
     public final String editorUrlTemplate;  // 解析后的最终模板（{host}/{port} 已替换；{token} 留给运行期）
-    /** M16 P1.2：WS 连上后多少秒内未通过 auth 就主动 close 4001（防 idle DoS）。 */
+    /** WS 连上后多少秒内未通过 auth 就主动 close 4001（防 idle DoS）。 */
     public final int wsAuthTimeoutSeconds;
-    /** M16 P1.3：WS upgrade 允许的 Origin 白名单（除同源 / 127.0.0.1 / localhost 外的反代域名）。 */
+    /** WS upgrade 允许的 Origin 白名单（除同源 / 127.0.0.1 / localhost 外的反代域名）。 */
     public final java.util.List<String> allowedOrigins;
 
     // ---- session ----
@@ -39,7 +39,7 @@ public final class HikariCanvasConfig {
     public final int mapPoolInitial;
     public final int mapPoolMax;
     /**
-     * M16 P2.3：per-world initial 配置（world name → 该 world 至少 FREE 数）。
+     * per-world initial 配置（world name → 该 world 至少 FREE 数）。
      * 未配置的 world 走 on-demand 扩容。配置 key = world name（与 server.properties 一致）。
      * 不可变 Map，可能为 empty。
      */
@@ -51,12 +51,12 @@ public final class HikariCanvasConfig {
     public final int inputBurst;
 
     /**
-     * 0.4.0 方案 B 自适应渲染配置（{@code rendering.adaptive-fps} 段）。
+     * 自适应渲染配置（{@code rendering.adaptive-fps} 段）。
      */
     public final AdaptiveFpsConfig adaptiveFps;
 
     /**
-     * 0.4.0 方案 B：自适应 fps + 主动推帧配置。
+     * 自适应 fps + 主动推帧配置。
      *
      * @param defaultMinIntervalMs  普通 wall 节流间隔（ms）；默认 200ms = 5fps
      * @param highFreqMinIntervalMs 高频 wall 节流间隔（ms）；默认 50ms = 20fps
@@ -74,12 +74,12 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.8.2：国际化配置（{@code i18n} 段）。
+     * 国际化配置（{@code i18n} 段）。
      */
     public final I18nConfig i18nConfig;
 
     /**
-     * 0.8.2：国际化配置。
+     * 国际化配置。
      *
      * @param defaultLocale 兜底语言（玩家语言无对应文件时使用）；小写下划线形式，如 {@code en_us}
      */
@@ -90,71 +90,71 @@ public final class HikariCanvasConfig {
     // ---- templates ----
     public final boolean autoReloadTemplatesOnStartup;
     public final int previewCacheSeconds;
-    /** M14 创意工坊：每玩家可发布模板数；0 = 不限。 */
+    /** 每玩家可发布模板数；0 = 不限。 */
     public final int templatesMaxPerPlayer;
 
-    // ---- images (M13) ----
+    // ---- images ----
     public final ImageConfig images;
 
     /** 0.8 .canvas 工程导入限额。 */
     public final ImportConfig importConfig;
 
-    // ---- database (M15.4) ----
+    // ---- database ----
     /** 跑 schema migration 前是否先备份 data.db。pre-release 默认 false。 */
     public final boolean databaseAutoBackup;
     /** 备份保留天数：启动期自动清理超过此天数的 data.db.pre-V&lt;NNN&gt;.bak。≤0 = 永久保留。 */
     public final int backupRetentionDays;
 
-    // ---- dynamic (0.4.0-P4-P) ----
+    // ---- dynamic ----
     /**
-     * 0.4.0-P4-P：Plugin Push API 限流参数（{@code docs/dynamic-data.md §10.2}）。
+     * Plugin Push API 限流参数（{@code docs/dynamic-data.md §10.2}）。
      * 配置段 {@code dynamic.push-rate-limit}。
      */
     public final moe.hikari.canvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig;
 
     /**
-     * 0.4.0 bugfix（Bug 3）：兜底列车 ManualScheduleProvider 配置。
+     * 兜底列车 ManualScheduleProvider 配置。
      * 配置段 {@code dynamic.schedule}。
      */
     public final ScheduleConfig scheduleConfig;
 
     /**
-     * 0.4.3：全局用户变量配额 per-owner（默 500）。配置段 {@code dynamic.variables.userglobal-max-per-owner}。
+     * 全局用户变量配额 per-owner（默 500）。配置段 {@code dynamic.variables.userglobal-max-per-owner}。
      */
     public final int userGlobalMaxPerOwner;
     /**
-     * 0.4.3：全局用户变量配额全服总（默 10000）。配置段 {@code dynamic.variables.userglobal-max-total}。
+     * 全局用户变量配额全服总（默 10000）。配置段 {@code dynamic.variables.userglobal-max-total}。
      */
     public final int userGlobalMaxTotal;
 
     /**
-     * 2026-05-25 token 暴力枚举防御：每 IP 每分钟可尝试 WS auth 的 token 次数。
+     * token 暴力枚举防御：每 IP 每分钟可尝试 WS auth 的 token 次数。
      * 配置段 {@code security.token-rate-limit.per-minute}（默 10）。详见
      * {@link moe.hikari.canvas.web.TokenRateLimiter}。
      */
     public final int tokenRateLimitPerMinute;
 
     /**
-     * 0.6：时间轴帧率参数。配置段 {@code timeline}（docs/architecture.md §5.5 / §11）。
+     * 时间轴帧率参数。配置段 {@code timeline}（docs/architecture.md §5.5 / §11）。
      */
     public final TimelineConfig timelineConfig;
 
     /**
-     * 0.7：墙脚本参数。配置段 {@code scripts}（docs/scripting.md §2）。
+     * 墙脚本参数。配置段 {@code scripts}（docs/scripting.md §2）。
      */
     public final ScriptsConfig scriptsConfig;
 
     /**
-     * 0.7.1：补间动画引擎参数。配置段 {@code scripts.tween}。
+     * 补间动画引擎参数。配置段 {@code scripts.tween}。
      */
     public final TweenConfig tweenConfig;
 
     /**
-     * 0.4.0 bugfix（Bug 3）：兜底列车时刻表配置。
+     * 兜底列车时刻表配置。
      *
      * @param arrivingThresholdSeconds 进站阈值（秒）。eta ≤ 阈值时 {@code is_arriving=true} +
-     *                                 {@code arrival_status=arrivingText}；默认 60 秒（dynamic-data.md
-     *                                 §7.3 原写 5min 已废，秒粒度更符合实际列车业务）
+     *                                 {@code arrival_status=arrivingText}；默认 60 秒
+     *                                 （dynamic-data.md §7.3）
      * @param arrivingText             arrival_status 进站文案，默认 "进站中"
      * @param idleText                 arrival_status 空闲文案，默认空字符串
      */
@@ -169,7 +169,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.6：时间轴帧率参数（docs/architecture.md §5.5；config 段 {@code timeline}）。
+     * 时间轴帧率参数（docs/architecture.md §5.5；config 段 {@code timeline}）。
      *
      * @param defaultFps 新建 timeline 的默认帧率（默 20 = 一个 Bukkit tick 50ms）
      * @param maxFps     服务器级安全阀：单墙 fps 硬上限，op 层 clamp 每条 timeline 的 fps
@@ -182,7 +182,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.7.1：per-wall 补间动画引擎参数（config 段 {@code scripts.tween}）。
+     * per-wall 补间动画引擎参数（config 段 {@code scripts.tween}）。
      *
      * @param maxFps        SES cadence 上限兼 enqueue 时 fps clamp 上界（默 60；admin 保护阀门，不自动降级）
      * @param maxConcurrent 同时活跃补间上限（默 16；超限新补间返 error）
@@ -194,7 +194,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.7：墙脚本参数（docs/scripting.md §2 / §2.4；config 段 {@code scripts} +
+     * 墙脚本参数（docs/scripting.md §2 / §2.4；config 段 {@code scripts} +
      * 嵌套 {@code scripts.budget} + {@code scripts.command-templates}）。
      *
      * <p>budget 三闸的另两项（{@code max-delay-depth} / {@code max-delay-ms}）是
@@ -203,18 +203,18 @@ public final class HikariCanvasConfig {
      * @param maxRulesPerWall  单墙脚本规则数上限（默 16；{@code /canvas reload} 热更走
      *                         {@link moe.hikari.canvas.script.ScriptStore#setMaxRulesPerWall}）
      * @param maxActionsPerRun 单次触发展开执行的动作总数（含嵌套；默 50；热更走
-     *                         {@code ScriptBudget.applyConfig}，批次 3 接线）
+     *                         {@code ScriptBudget.applyConfig} 接线）
      * @param maxRunsPerSecond 单规则触发频率上限（超出丢弃 + audit RUN_BLOCKED；默 10）
      * @param maxChainDepth    ABA 熔断链深（脚本写变量→触发别的脚本；默 8）
-     * @param commandTemplates 0.7.0-P3 A1：runCommand 命令模板白名单（templateId → 模板；
+     * @param commandTemplates runCommand 命令模板白名单（templateId → 模板；
      *                         服主手写进 config，插件不内置任何模板——docs/scripting.md §5.2）。
      *                         热更：执行侧经 supplier 惰性读 volatile config 引用，
      *                         {@code /canvas reload} 后下一次执行即生效
-     * @param playerNearSampleTicks 0.7.0-P3 B2（K14）：playerNear 触发器的采样间隔
+     * @param playerNearSampleTicks playerNear 触发器的采样间隔
      *                         （游戏 tick；默 10 = 0.5s；load 期 clamp 1..200）。热更走
      *                         {@code PlayerNearSampler.setSampleTicks}（volatile 跳帧计数，
      *                         无需重 schedule）；实际分辨率受底层 task 周期 2 tick 限制
-     * @param maxElementsPerWall 0.7.2-P2（F10）：单墙元素总数上限（脚本"克隆元素"积木反复
+     * @param maxElementsPerWall 单墙元素总数上限（脚本"克隆元素"积木反复
      *                         克隆是唯一能无界堆元素的入口；默 200）。热更：confirm/open 新建
      *                         EditSession 时透传 + headless 经
      *                         {@code ElementPropertyApplier.setMaxElementsPerWall}，
@@ -225,10 +225,10 @@ public final class HikariCanvasConfig {
                                 java.util.Map<String, CommandTemplate> commandTemplates,
                                 int playerNearSampleTicks,
                                 int maxElementsPerWall) {
-        /** playerNear 采样间隔默认值（tick）；P6 压测后可能回调（docs/scripting.md §10）。 */
+        /** playerNear 采样间隔默认值（tick）；压测后可能回调（docs/scripting.md §10）。 */
         public static final int DEFAULT_PLAYER_NEAR_SAMPLE_TICKS = 10;
 
-        /** 0.7.2-P2（F10）：单墙元素总数上限默认值。 */
+        /** 单墙元素总数上限默认值。 */
         public static final int DEFAULT_MAX_ELEMENTS_PER_WALL = 200;
 
         public ScriptsConfig {
@@ -244,7 +244,7 @@ public final class HikariCanvasConfig {
                     DEFAULT_MAX_ELEMENTS_PER_WALL);
         }
 
-        /** 兼容 0.7.0-P3 A1 的 5 参形态（采样间隔走默认）。 */
+        /** 兼容 5 参形态（采样间隔走默认）。 */
         public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                              int maxRunsPerSecond, int maxChainDepth,
                              java.util.Map<String, CommandTemplate> commandTemplates) {
@@ -253,7 +253,7 @@ public final class HikariCanvasConfig {
                     DEFAULT_MAX_ELEMENTS_PER_WALL);
         }
 
-        /** 兼容 0.7.0-P3 B2 的 6 参形态（元素配额走默认）。 */
+        /** 兼容 6 参形态（元素配额走默认）。 */
         public ScriptsConfig(int maxRulesPerWall, int maxActionsPerRun,
                              int maxRunsPerSecond, int maxChainDepth,
                              java.util.Map<String, CommandTemplate> commandTemplates,
@@ -268,7 +268,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.7.0-P3 A1：runCommand 命令模板（docs/scripting.md §5.2；K13）。
+     * runCommand 命令模板（docs/scripting.md §5.2）。
      *
      * @param command 命令全文，可含 {@code {param}} 占位符（不带前导 {@code /}，
      *                执行侧会防御性剥掉一个）
@@ -281,7 +281,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 命令模板单参数规格（K13）。
+     * 命令模板单参数规格。
      *
      * @param maxLength 替换值长度上限（默 64；config 解析期 clamp ≥1）
      * @param type      {@code "text"}（默；值含 {@code @} 整体拒）或
@@ -314,7 +314,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.8 .canvas 工程导入限额（防恶意大文件 / zip 炸弹）。
+     * .canvas 工程导入限额（防恶意大文件 / zip 炸弹）。
      * 单位 MB；解包闸把 MB × 1024×1024 换算为字节上限。defaults 全正，保证三闸有效。
      */
     public record ImportConfig(int canvasMaxMb, int canvasMaxEntryMb, int canvasMaxTotalMb) {
@@ -371,12 +371,12 @@ public final class HikariCanvasConfig {
         b.port = f.getInt("network.port", b.port);
         String urlTemplate = f.getString("network.editor-url",
                 "http://{host}:{port}/?token={token}");
-        // M16 P6.5：editor-url 协议白名单。admin 把 url 写成 javascript:/data:/file:/vbscript:
+        // editor-url 协议白名单。admin 把 url 写成 javascript:/data:/file:/vbscript:
         // 等 → 玩家点 ActionBar / chat 链接执行 JS，等价于配置侧 XSS。仅允许 http(s)；
         // 不合法回退到默认 http://{host}:{port}/?token={token}，并 severe log 让 ops 知道。
         b.editorUrlTemplate = sanitizeEditorUrl(urlTemplate, b.host, b.port, plugin.getLogger());
 
-        // M16 P1.2 / P1.3：网络层安全收口
+        // 网络层安全收口
         b.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, f.getInt("network.ws-auth-timeout-seconds", 5)));
         @SuppressWarnings("unchecked")
         java.util.List<String> origins = (java.util.List<String>) f.getList(
@@ -392,12 +392,12 @@ public final class HikariCanvasConfig {
         b.reaperScanTicks = 20L * Math.max(5, f.getLong("session.reaper-scan-seconds", 30));
         b.tokenPurgeTicks = 20L * 60 * Math.max(1, f.getLong("session.token-purge-minutes", 5));
 
-        // P3-44：map-pool.initial 下限钳到 1（不是 0）。MapPool 构造前置条件要求
+        // map-pool.initial 下限钳到 1（不是 0）。MapPool 构造前置条件要求
         // initialSize > 0，配 0 会在 onEnable 抛 IllegalArgumentException 崩插件。
         // 上限 1024 与 docs/data-model.md §11 声明的 range 1-1024 对齐。
         b.mapPoolInitial = Math.max(1, Math.min(1024, f.getInt("map-pool.initial", 64)));
         b.mapPoolMax = Math.max(b.mapPoolInitial, f.getInt("map-pool.max", 256));
-        // M16 P2.3：可选 per-world 初始分配。yml 形如：
+        // 可选 per-world 初始分配。yml 形如：
         //   map-pool:
         //     per-world:
         //       world: 32
@@ -418,7 +418,7 @@ public final class HikariCanvasConfig {
         b.inputRatePerSecond = Math.max(1, f.getInt("throttle.input-rate-per-second", 20));
         b.inputBurst = Math.max(b.inputRatePerSecond, f.getInt("throttle.input-burst", 40));
 
-        // 0.4.0 方案 B 自适应渲染段
+        // 自适应渲染段
         org.bukkit.configuration.ConfigurationSection adaptSec =
                 f.getConfigurationSection("rendering.adaptive-fps");
         AdaptiveFpsConfig adaptDefaults = AdaptiveFpsConfig.defaults();
@@ -436,7 +436,7 @@ public final class HikariCanvasConfig {
             b.adaptiveFps = new AdaptiveFpsConfig(defMs, highMs, pushOn);
         }
 
-        // 0.8.2：i18n 段 —— 国际化兜底语言
+        // i18n 段 —— 国际化兜底语言
         org.bukkit.configuration.ConfigurationSection i18nSec = f.getConfigurationSection("i18n");
         if (i18nSec == null) {
             b.i18nConfig = I18nConfig.defaults();
@@ -450,7 +450,7 @@ public final class HikariCanvasConfig {
         b.previewCacheSeconds = Math.max(0, f.getInt("templates.preview-cache-seconds", 300));
         b.templatesMaxPerPlayer = Math.max(0, f.getInt("templates.max-per-player", 20));
 
-        // M13 images 段
+        // images 段
         ImageConfig defaults = ImageConfig.defaults();
         @SuppressWarnings("unchecked")
         java.util.List<String> mimes = (java.util.List<String>) f.getList(
@@ -463,18 +463,18 @@ public final class HikariCanvasConfig {
                 Math.max(0, f.getInt("images.max-uploads-per-day", defaults.maxUploadsPerDay())),
                 Math.max(0, f.getInt("images.max-total-storage-mb", defaults.maxTotalStorageMb())));
 
-        // 0.8 import 段（.canvas 工程导入限额）
+        // import 段（.canvas 工程导入限额）
         ImportConfig importDefaults = ImportConfig.defaults();
         b.importConfig = new ImportConfig(
                 Math.max(1, f.getInt("import.canvas-max-mb", importDefaults.canvasMaxMb())),
                 Math.max(1, f.getInt("import.canvas-max-entry-mb", importDefaults.canvasMaxEntryMb())),
                 Math.max(1, f.getInt("import.canvas-max-total-mb", importDefaults.canvasMaxTotalMb())));
 
-        // database 段：0.9.1 起备份 WAL 安全，默认打开。
+        // database 段：备份 WAL 安全，默认打开。
         b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", true);
         b.backupRetentionDays = f.getInt("database.backup-retention-days", 30);
 
-        // 0.4.0-P4-P：dynamic.push-rate-limit 段
+        // dynamic.push-rate-limit 段
         org.bukkit.configuration.ConfigurationSection rate =
                 f.getConfigurationSection("dynamic.push-rate-limit");
         moe.hikari.canvas.variable.plugin.PushRateLimiter.Config rateDefaults =
@@ -492,7 +492,7 @@ public final class HikariCanvasConfig {
                     perPlugin, global, breakMs);
         }
 
-        // 0.4.0 bugfix（Bug 3）：dynamic.schedule 段
+        // dynamic.schedule 段
         org.bukkit.configuration.ConfigurationSection schedSec =
                 f.getConfigurationSection("dynamic.schedule");
         ScheduleConfig schedDefaults = ScheduleConfig.defaults();
@@ -511,7 +511,7 @@ public final class HikariCanvasConfig {
                     idleText == null ? schedDefaults.idleText() : idleText);
         }
 
-        // 0.4.3：dynamic.variables 段 — 全局用户变量配额（缺则用 VariableStore 默认值）
+        // dynamic.variables 段 — 全局用户变量配额（缺则用 VariableStore 默认值）
         org.bukkit.configuration.ConfigurationSection varSec =
                 f.getConfigurationSection("dynamic.variables");
         if (varSec != null) {
@@ -523,7 +523,7 @@ public final class HikariCanvasConfig {
                     moe.hikari.canvas.variable.VariableStore.DEFAULT_USERGLOBAL_TOTAL));
         }
 
-        // 2026-05-25：security.token-rate-limit 段 —— token 暴力枚举防御
+        // security.token-rate-limit 段 —— token 暴力枚举防御
         org.bukkit.configuration.ConfigurationSection rlSec =
                 f.getConfigurationSection("security.token-rate-limit");
         if (rlSec != null) {
@@ -532,7 +532,7 @@ public final class HikariCanvasConfig {
                     moe.hikari.canvas.web.TokenRateLimiter.DEFAULT_PER_MINUTE));
         }
 
-        // 0.6：timeline 段 —— 时间轴帧率参数（default-fps 钳到 max-fps 之内）
+        // timeline 段 —— 时间轴帧率参数（default-fps 钳到 max-fps 之内）
         org.bukkit.configuration.ConfigurationSection tlSec =
                 f.getConfigurationSection("timeline");
         TimelineConfig tlDefaults = TimelineConfig.defaults();
@@ -545,7 +545,7 @@ public final class HikariCanvasConfig {
             b.timelineConfig = new TimelineConfig(defFps, maxFps);
         }
 
-        // 0.7：scripts 段 —— 墙脚本参数
+        // scripts 段 —— 墙脚本参数
         org.bukkit.configuration.ConfigurationSection scSec =
                 f.getConfigurationSection("scripts");
         ScriptsConfig scDefaults = ScriptsConfig.defaults();
@@ -554,7 +554,7 @@ public final class HikariCanvasConfig {
         } else {
             int maxRules = Math.max(1, scSec.getInt(
                     "max-rules-per-wall", scDefaults.maxRulesPerWall()));
-            // 0.7.0-P2：scripts.budget 嵌套段（照 dynamic.schedule 范式；缺段全 default）
+            // scripts.budget 嵌套段（照 dynamic.schedule 范式；缺段全 default）
             org.bukkit.configuration.ConfigurationSection budSec =
                     scSec.getConfigurationSection("budget");
             int maxActions = scDefaults.maxActionsPerRun();
@@ -565,7 +565,7 @@ public final class HikariCanvasConfig {
                 maxRuns = Math.max(1, budSec.getInt("max-runs-per-second", maxRuns));
                 maxChain = Math.max(1, budSec.getInt("max-chain-depth", maxChain));
             }
-            // 0.7.0-P3 A1：scripts.command-templates 段（docs/scripting.md §5.2）。
+            // scripts.command-templates 段（docs/scripting.md §5.2）。
             // 形如：
             //   command-templates:
             //     announce:
@@ -617,17 +617,17 @@ public final class HikariCanvasConfig {
                     templates.put(tplId, new CommandTemplate(command.trim(), params));
                 }
             }
-            // 0.7.0-P3 B2（K14）：playerNear 采样间隔（tick；clamp 1..200——下限防主线程
+            // playerNear 采样间隔（tick；clamp 1..200——下限防主线程
             // 每 tick 全量扫，上限 10s 再迟钝就失去"靠近"语义）。
             int nearTicks = Math.min(200, Math.max(1, scSec.getInt(
                     "player-near-sample-ticks",
                     ScriptsConfig.DEFAULT_PLAYER_NEAR_SAMPLE_TICKS)));
-            // 0.7.2-P2（F10）：单墙元素总数上限（脚本克隆元素强制）。clamp ≥1。
+            // 单墙元素总数上限（脚本克隆元素强制）。clamp ≥1。
             int maxElements = Math.max(1, scSec.getInt("max-elements-per-wall",
                     ScriptsConfig.DEFAULT_MAX_ELEMENTS_PER_WALL));
             b.scriptsConfig = new ScriptsConfig(maxRules, maxActions, maxRuns, maxChain,
                     templates, nearTicks, maxElements);
-            // 0.7.1：scripts.tween 嵌套段——补间引擎 maxFps / maxConcurrent
+            // scripts.tween 嵌套段——补间引擎 maxFps / maxConcurrent
             org.bukkit.configuration.ConfigurationSection tweenSec =
                     scSec.getConfigurationSection("tween");
             if (tweenSec != null) {
@@ -642,7 +642,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * M16 P6.5：editor-url 协议白名单。
+     * editor-url 协议白名单。
      *
      * <p>解析步骤：</p>
      * <ol>
@@ -692,7 +692,7 @@ public final class HikariCanvasConfig {
     }
 
     /**
-     * 0.9.3：服主把 {@code network.host} 显式绑成公网通配地址（{@code 0.0.0.0} / {@code ::}）时，
+     * 服主把 {@code network.host} 显式绑成公网通配地址（{@code 0.0.0.0} / {@code ::}）时，
      * 启动期打 3 行警告。web 编辑器默认无 TLS，公网裸绑会让 auth token 明文暴露在网络上。
      *
      * <p>只警告、不阻拦——服主有正当理由（如反代在另一台机器）时仍可绑公网。

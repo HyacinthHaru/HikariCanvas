@@ -13,7 +13,7 @@ import java.util.List;
  * <ul>
  *   <li>{@code size} = {@code "auto"} | {@code "fixed"}（默认 {@code "auto"}）</li>
  *   <li>{@code maps / minMaps / maxMaps} = {@code [width, height]}</li>
- *   <li>{@code background} 支持 {@code ${param}}（M6-B 插值），M6-A 仅原样持有</li>
+ *   <li>{@code background} 支持 {@code ${param}}（实例化时插值）</li>
  *   <li>{@code padding} 可为单一 int 或 [上, 右, 下, 左]；本 record 持有原始
  *       {@link Object}，由 {@link TemplateLoader} 归一化到 {@code int[4]} 后用</li>
  * </ul>

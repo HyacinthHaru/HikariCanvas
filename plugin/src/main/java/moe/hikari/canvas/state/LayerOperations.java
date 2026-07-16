@@ -15,8 +15,7 @@ import static moe.hikari.canvas.state.ElementValidator.requireStringValue;
 /**
  * layer.* op 集中实现：create / delete / update / reorder / duplicate / set-active。
  *
- * <p>从原 {@code EditSession} god class 抽出（2026-05-14 重构）。EditSession 通过
- * 字段委托调用每个 op，对外公共 API 签名保持完全不变。</p>
+ * <p>EditSession 通过字段委托调用每个 op，对外公共 API 签名保持完全不变。</p>
  *
  * <p><b>线程安全：</b>不自带锁，依靠 EditSession {@code synchronized(this)} 兜底。</p>
  *

@@ -18,7 +18,7 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
- * walls 表 DAO（M5.5 起替代 DraftRepo + sign_records）。契约见 {@code docs/data-model.md §2.4}。
+ * walls 表 DAO。契约见 {@code docs/data-model.md §2.4}。
  *
  * <p>每行 = 一面墙上的一幅画，主键 {@code wall_id}（玩家可见短 ID `w-<8hex>`），
  * `(world, origin, facing)` 唯一。{@code published_at} 是 UI 标签层 nullable timestamp，
@@ -82,12 +82,9 @@ public final class WallRepo {
     }
 
     /**
-     * M15.3 P0-32 v1：原子地写一行 walls（含 mapIds）。confirm 路径先 reserve 拿 mapIds，
+     * 原子地写一行 walls（含 mapIds）。confirm 路径先 reserve 拿 mapIds，
      * 再一次性 INSERT，避免旧的「先 create 后 updateMapIds」两步无事务半态（旧路径若第二步
      * 失败，walls 行 mapIds 字段为空字符串，但 mapPool 已 reserve）。
-     *
-     * <p>P3-97：旧的两步 {@code create + updateMapIds} 方法为死代码，已删除——所有 wall
-     * 创建走本方法的单条原子 INSERT。</p>
      *
      * @return 生成的 wall_id；冲突 5 次则抛
      */
@@ -139,9 +136,6 @@ public final class WallRepo {
         }
         throw new IllegalStateException("wall_id collision 5x; SecureRandom broken?");
     }
-
-    // P3-97：删除死代码 create(WallKey,...) 与 updateMapIds(...)——
-    // 旧的两步「create 后增量 updateMapIds」组合无调用方，已被 createWithMapIds 原子 INSERT 取代。
 
     /** 仅更新 ProjectState（每次 op 后由 SessionManager 调）。 */
     public void updateState(String wallId, ProjectState state) {
@@ -237,7 +231,7 @@ public final class WallRepo {
     }
 
     /**
-     * P2-24：事务感知 {@link #loadAll()}。在调用方已持有的 {@link org.jdbi.v3.core.Handle} 上跑同一查询，
+     * 事务感知 {@link #loadAll()}。在调用方已持有的 {@link org.jdbi.v3.core.Handle} 上跑同一查询，
      * 让"读 walls 引用 → 删孤儿图"在单一 IMMEDIATE 写事务的一致视图内原子完成（图片上传 LRU
      * evict 路径用）。与 {@link #loadAll()} 不同：本方法**不吞异常**——它跑在外层事务内，
      * 异常应让外层事务回滚（宁可拒上传也不在不可信引用集下误删在用图）。
@@ -356,7 +350,7 @@ public final class WallRepo {
     }
 
     /**
-     * M6-D：写回模板来源。{@code template.apply} 成功后调用，supports {@code /canvas list} 显示
+     * 写回模板来源。{@code template.apply} 成功后调用，supports {@code /canvas list} 显示
      * "出自哪个模板" + 后续审计。templateId 可为 {@code null}（手动清除）。
      */
     public void setTemplate(String wallId, String templateId, Integer templateVersion) {
@@ -375,7 +369,7 @@ public final class WallRepo {
         }
     }
 
-    // ---------- M8-B：project_json v1 → v2 lazy migration ----------
+    // ---------- project_json v1 → v2 lazy migration ----------
 
     /** {@link #migrateAllToV2} 返回的统计。 */
     public record MigrationStats(int scanned, int migrated, int failed) {
@@ -484,7 +478,7 @@ public final class WallRepo {
             try {
                 owner = UUID.fromString(ownerRaw);
             } catch (IllegalArgumentException ex) {
-                // P3-75：外部 DB 数据损坏的防御性降级（与 RailDao/UserGlobalVariableDao 看齐）——
+                // 外部 DB 数据损坏的防御性降级（与 RailDao/UserGlobalVariableDao 看齐）——
                 // nil UUID 匹配 owner 失败更受限（安全），且单行坏数据不阻断整查询。
                 log.log(Level.WARNING, "WallRepo.mapRow owner_uuid parse failed, wallId="
                         + rs.getString("wall_id") + ", owner=" + ownerRaw, ex);
@@ -509,7 +503,7 @@ public final class WallRepo {
     }
 
     /**
-     * P2-56：robust nullable-long 读取。SQLite JDBC 对 {@code INTEGER} 列的
+     * robust nullable-long 读取。SQLite JDBC 对 {@code INTEGER} 列的
      * {@code getObject} 不保证返回 {@link Long}（可能是 {@link Integer} / {@link java.math.BigDecimal}
      * 等），直接 {@code (Long)} 强转会 ClassCastException。统一走 {@link Number#longValue()}。
      */

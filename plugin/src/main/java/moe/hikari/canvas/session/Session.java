@@ -12,7 +12,7 @@ import java.util.UUID;
 /**
  * 单个编辑会话。可变 POJO；写入路径由 {@link SessionManager} 在 writeLock 临界区内执行，
  * 但读取可能发生在其他线程（Jetty WS 线程 / daemon 节流线程）。为保证跨线程发布可见性，
- * 所有可变字段标记 {@code volatile}（P2-19 / P3-13）：volatile 不影响 lock-free 读性能，
+ * 所有可变字段标记 {@code volatile}：volatile 不影响 lock-free 读性能，
  * 仅补上写后发布屏障，消除撕裂读 / 陈旧读。复合不变量仍依赖 SessionManager 的锁来维护。
  *
  * <p>字段分阶段生效：</p>
@@ -37,19 +37,19 @@ public final class Session {
     private volatile WallResolver.Result.Ok wall;
     private volatile List<Integer> mapIds;
     private volatile WallKey wallKey;
-    private volatile String wallId;             // M5.5：当前 session 编辑的 wall（confirm 后赋值）
+    private volatile String wallId;             // 当前 session 编辑的 wall（confirm 后赋值）
     private volatile ProjectState projectState;
     private volatile EditSession editSession;
     private volatile long lastActivityAt;
     private volatile long wsDisconnectedAt = -1;
     /**
-     * M16 P6.6：会话级 IP 绑定。首次 WS auth 成功时设值；后续 reconnect 必须 IP 同源。
+     * 会话级 IP 绑定。首次 WS auth 成功时设值；后续 reconnect 必须 IP 同源。
      * null = 尚未首次 auth；非 null = 已绑定，认 IP 字符串严格相等。
      * 见 CLAUDE.md §lock-state 后的 IP 绑定决策。
      */
     private volatile String boundIp;
     /**
-     * 0.9.7：编辑器 UI 语言（前端 auth 帧携带 ui.locale，映射成 game locale id 形态如
+     * 编辑器 UI 语言（前端 auth 帧携带 ui.locale，映射成 game locale id 形态如
      * {@code zh_cn} / {@code en_us}）。用于按编辑器语言渲染脚本校验报错。
      * null = 未知，渲染时回退 Messages 默认 locale。
      */
@@ -81,12 +81,12 @@ public final class Session {
     public EditSession editSession() { return editSession; }
     public long lastActivityAt() { return lastActivityAt; }
     public long wsDisconnectedAt() { return wsDisconnectedAt; }
-    /** M16 P6.6：当前绑定的 client IP；null 表示尚未首次 auth。 */
+    /** 当前绑定的 client IP；null 表示尚未首次 auth。 */
     public String boundIp() { return boundIp; }
-    /** 0.9.7：编辑器 UI 语言（game locale id 形态，如 {@code zh_cn}）；null = 未知。 */
+    /** 编辑器 UI 语言（game locale id 形态，如 {@code zh_cn}）；null = 未知。 */
     public String editorLocale() { return editorLocale; }
     /**
-     * 0.9.7：WS auth 时由 {@code WebServer} 依前端携带的 locale 设置（已经
+     * WS auth 时由 {@code WebServer} 依前端携带的 locale 设置（已经
      * {@code Messages.resolveLocaleId} 规范化 + 兜底）。public：跨 package 由 WebServer 直设，
      * 非编辑不变量的一部分（仅影响外发文案渲染），无需走 SessionManager 锁。
      */
@@ -96,7 +96,7 @@ public final class Session {
     void state(SessionState s) { this.state = s; }
     void pos1(Block b, BlockFace f) { this.pos1 = b; this.face = f; }
     void pos2(Block b, BlockFace f) { this.pos2 = b; this.face = f; }
-    /** M5-D8：清空已选角，让玩家在 SELECTING 状态下重新开始（隐式 reselect 用）。 */
+    /** 清空已选角，让玩家在 SELECTING 状态下重新开始（隐式 reselect 用）。 */
     void clearPos() { this.pos1 = null; this.pos2 = null; this.face = null; }
     void wall(WallResolver.Result.Ok w) { this.wall = w; }
     void mapIds(List<Integer> ids) { this.mapIds = ids; }
@@ -106,6 +106,6 @@ public final class Session {
     void editSession(EditSession es) { this.editSession = es; }
     void touchActivity(long now) { this.lastActivityAt = now; this.wsDisconnectedAt = -1; }
     void markWsDisconnected(long now) { this.wsDisconnectedAt = now; }
-    /** M16 P6.6：首次 WS auth 成功时调；后续 reconnect 必须 IP 同源。 */
+    /** 首次 WS auth 成功时调；后续 reconnect 必须 IP 同源。 */
     void boundIp(String ip) { this.boundIp = ip; }
 }

@@ -20,11 +20,11 @@ import static moe.hikari.canvas.web.WebHelpers.mapOrEmpty;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * M3-T6 编辑 op 分发：{@code element.* / layer.* / canvas.* / undo / redo / history.mark /
- * template.apply}，0.6 P1 起加 {@code timeline.* / keyframe.*}（共 7 op，§5.12 / §5.13）。
+ * 编辑 op 分发：{@code element.* / layer.* / canvas.* / undo / redo / history.mark /
+ * template.apply / timeline.* / keyframe.*}（共 7 op，§5.12 / §5.13）。
  * <p>从 {@link WebServer} 抽出。每个成功 op 走 ack + pushPatch/pushSnapshot + throttler 投影 + 持久化的标准路径。</p>
  *
- * <p><b>0.6 P2 起：</b> {@code timeline.play / pause / seek} 三个播放控制 op 在此特判（{@link
+ * <p><b>播放控制：</b> {@code timeline.play / pause / seek} 三个 op 在此特判（{@link
  * #handleTimelinePlayback}）。它们<b>不走 OpResult 流</b>——不 mutate {@link ProjectState}、不进
  * history、无 patch、无 throttler 投影，只在 {@link moe.hikari.canvas.render.AnimationTicker} 上启停
  * / 定位后端产帧（protocol.md §5.12）。权限与编辑 op 同权（session 活跃即可，不查 owner，docs/timeline.md §5.2）。</p>
@@ -38,24 +38,24 @@ final class EditOpDispatcher {
     private final TemplateInstantiator templateInstantiator = new TemplateInstantiator();
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
     private final OpPushCallback push;
-    /** M16 P6.4：可空——给 template.apply 跨用户拒绝路径写 audit。 */
+    /** 可空——给 template.apply 跨用户拒绝路径写 audit。 */
     private final moe.hikari.canvas.storage.AuditLog auditLog;
-    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
 
     /**
-     * 0.6 P2：时间轴播放控制引擎（timeline.play/pause/seek 三 op 的目标）。由装配层经
+     * 时间轴播放控制引擎（timeline.play/pause/seek 三 op 的目标）。由装配层经
      * {@code WebServer.setAnimationTicker} 注入；null = 三 op 返 {@code INTERNAL_ERROR}
      * （引擎未装配）。volatile：注入在 WebServer 构造之后。
      */
     private volatile moe.hikari.canvas.render.AnimationTicker animationTicker;
 
-    /** 0.6 P2：装配 seam（见 {@link #animationTicker}）。 */
+    /** 装配 seam（见 {@link #animationTicker}）。 */
     void setAnimationTicker(moe.hikari.canvas.render.AnimationTicker ticker) {
         this.animationTicker = ticker;
     }
 
-    /** 0.6 P2：timeline.play/pause/seek case 用（B2 实施）。 */
+    /** timeline.play/pause/seek case 用。 */
     moe.hikari.canvas.render.AnimationTicker animationTicker() {
         return animationTicker;
     }
@@ -98,7 +98,7 @@ final class EditOpDispatcher {
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
-        // T10 输入限流：超 40 msg/2s（≈ 20 msg/s）返 RATE_LIMITED，不进 EditSession
+        // 输入限流：超 40 msg/2s（≈ 20 msg/s）返 RATE_LIMITED，不进 EditSession
         if (!rateLimiter.allow(sessionId)) {
             ctx.send(Envelope.error(in.id(), "RATE_LIMITED",
                     "input rate exceeded; slow down"));
@@ -119,7 +119,7 @@ final class EditOpDispatcher {
             return;
         }
 
-        // 0.6 P2：timeline.play/pause/seek 三个播放控制 op 在此特判（限流 + session 校验之后）。
+        // timeline.play/pause/seek 三个播放控制 op 在此特判（限流 + session 校验之后）。
         // 它们不走下方 OpResult switch——不 mutate ProjectState、不进 history、无 patch、无投影，
         // 只在 AnimationTicker 上启停 / 定位后端产帧（protocol.md §5.12）。直接发响应后 return。
         switch (in.op()) {
@@ -131,7 +131,7 @@ final class EditOpDispatcher {
             default -> { /* 落入下方编辑 op 流 */ }
         }
 
-        // P2-66：整个 op 解析 switch 包 try/catch，与 BrushOpDispatcher.dispatch 形态对齐。
+        // 整个 op 解析 switch 包 try/catch，与 BrushOpDispatcher.dispatch 形态对齐。
         // mapOrEmpty（props/patch/params 类型错）等会抛 IllegalArgumentException，
         // 不包则异常逃逸 → Javalin onError 只 log，前端拿不到 INVALID_PAYLOAD 而是 5s ack_timeout。
         EditSession.OpResult result;
@@ -175,7 +175,7 @@ final class EditOpDispatcher {
                 Integer idx = intOrNull(payload.get("index"));
                 yield es.moveElementToLayer(eid, target, idx);
             }
-            // ---- layer.* op 族（M8-C 新增）----
+            // ---- layer.* op 族 ----
             case "layer.create" -> {
                 String name = stringOrNull(payload.get("name"));
                 String afterId = stringOrNull(payload.get("afterLayerId"));
@@ -209,7 +209,7 @@ final class EditOpDispatcher {
                 yield es.resizeCanvas(wn.intValue(), hn.intValue());
             }
             case "canvas.background" -> {
-                // M17 F5：协议 v2 升级——优先看 fill（Fill 对象，solid/linear/radial），
+                // 优先看 fill（Fill 对象，solid/linear/radial），
                 // 兼容老 color（hex 字符串）。两者皆缺 → INVALID_PAYLOAD。
                 Object fillRaw = payload.get("fill");
                 if (fillRaw != null) {
@@ -240,7 +240,7 @@ final class EditOpDispatcher {
                 }
                 yield es.setGuides((List<?>) gs);
             }
-            // ---- timeline.* op 族（0.6 P1，protocol.md §5.12）----
+            // ---- timeline.* op 族（protocol.md §5.12）----
             case "timeline.create" -> {
                 String name = stringOrNull(payload.get("name"));
                 Integer durationMs = intOrNull(payload.get("durationMs"));
@@ -259,7 +259,7 @@ final class EditOpDispatcher {
                 yield es.updateTimeline(tid, tp);
             }
             case "timeline.delete" -> es.deleteTimeline(stringOrNull(payload.get("timelineId")));
-            // ---- keyframe.* op 族（0.6 P1，protocol.md §5.13）----
+            // ---- keyframe.* op 族（protocol.md §5.13）----
             case "keyframe.add" -> {
                 String tid = stringOrNull(payload.get("timelineId"));
                 String eid = stringOrNull(payload.get("elementId"));
@@ -268,7 +268,7 @@ final class EditOpDispatcher {
                 // value / easing 形态因 property 而异（number / string / object），原样透传
                 Object value = payload.get("value");
                 Object easing = payload.get("easing");
-                // 0.6 P4.5b：可选 coalesceKey——整体帧批量加帧（拉就设 / + 按钮）共享一步撤销
+                // 可选 coalesceKey——整体帧批量加帧（拉就设 / + 按钮）共享一步撤销
                 String ck = stringOrNull(payload.get("coalesceKey"));
                 yield es.addKeyframe(tid, eid, property, timeMs, value, easing, ck);
             }
@@ -300,8 +300,8 @@ final class EditOpDispatcher {
                 String tpl = stringOrNull(payload.get("templateId"));
                 @SuppressWarnings("unchecked")
                 Map<String, Object> tp = (Map<String, Object>) mapOrEmpty(payload.get("params"));
-                // M16 P1.6：跨用户隔离——查 caller 的 use-others bypass 权限
-                // P2-26：主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
+                // 跨用户隔离——查 caller 的 use-others bypass 权限
+                // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
                 java.util.UUID callerUuid = s.playerUuid();
                 boolean hasBypass = MainThreadPerms.hasPermission(plugin, callerUuid, "canvas.template.use-others");
                 yield applyTemplate(es, sessionId, tpl, tp, callerUuid, s.playerName(), hasBypass);
@@ -325,11 +325,11 @@ final class EditOpDispatcher {
                 if (!ok.patch().ops().isEmpty()) {
                     push.pushPatch(sessionId, ok.patch());
                 }
-                // 3) 脏矩形投影经 T10 节流器（Bukkit async task 里调 projector.project）
+                // 3) 脏矩形投影经节流器（Bukkit async task 里调 projector.project）
                 if (ok.dirty() != null) {
                     throttler.submit(sessionId, ok.dirty());
                 }
-                // 4) 草稿持久化（M5-D6）
+                // 4) 草稿持久化
                 sessionManager.persistWall(sessionId);
             }
             case EditSession.OpResult.OkSnapshot oks -> {
@@ -355,7 +355,7 @@ final class EditOpDispatcher {
     }
 
     /**
-     * 0.7.1 {@code canvas.tweenFps} op 核心处理（protocol.md §5.x）。
+     * {@code canvas.tweenFps} op 核心处理（protocol.md §5.x）。
      *
      * <p>package-private（非 private）以便 dispatcher 单测直接驱动 payload 解析 →
      * {@link EditSession#setTweenFps} 映射，绕开 {@code WsMessageContext}
@@ -367,7 +367,7 @@ final class EditOpDispatcher {
      * @return 供 dispatch 流使用的 {@link EditSession.OpResult}
      */
     EditSession.OpResult handleCanvasTweenFps(Map<String, Object> payload, EditSession es) {
-        // 0.7.1：per-wall 补间帧率。fps=[1,60]；0/null → 清回默认（effectiveTweenFps=30）。
+        // per-wall 补间帧率。fps=[1,60]；0/null → 清回默认（effectiveTweenFps=30）。
         Object fpsRaw = payload.get("fps");
         if (fpsRaw != null && !(fpsRaw instanceof Number)) {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD",
@@ -377,7 +377,7 @@ final class EditOpDispatcher {
     }
 
     /**
-     * 0.6 P2：{@code timeline.play / pause / seek} 三个播放控制 op 的核心处理（protocol.md §5.12）。
+     * {@code timeline.play / pause / seek} 三个播放控制 op 的核心处理（protocol.md §5.12）。
      *
      * <p>独立于 OpResult 流：不 mutate {@link ProjectState}、不进 history、不发 patch、不投影。
      * 返回待发送的响应信封（{@code ack} 空 map / {@code error}）——抽成纯函数（不直接碰
@@ -418,7 +418,7 @@ final class EditOpDispatcher {
                 yield Envelope.of("ack", inId, Map.of());
             }
             case "timeline.seek" -> {
-                // P2 审查确认项 #11：区分「字段缺省」与「字段存在但非法」——intOrNull 对
+                // 区分「字段缺省」与「字段存在但非法」——intOrNull 对
                 // 越界 long / NaN 返 null，若直接当缺省会把非法输入静默折叠成 seek 到 0
                 Object atMsRaw = payload.get("atMs");
                 Integer atMs = intOrNull(atMsRaw);
@@ -466,7 +466,7 @@ final class EditOpDispatcher {
     }
 
     /**
-     * M6-D template.apply 中枢：resolve registry → instantiate → replaceContent → walls write-back。
+     * template.apply 中枢：resolve registry → instantiate → replaceContent → walls write-back。
      * 不在主线程跑（持有当前 WS thread），但只做内存/DB I/O，不碰 Bukkit world API。
      */
     private EditSession.OpResult applyTemplate(EditSession es, String sessionId,
@@ -480,8 +480,8 @@ final class EditOpDispatcher {
         try {
             entry = templateRegistry.byIdForApply(templateId, callerUuid, hasBypass);
         } catch (moe.hikari.canvas.template.ForbiddenTemplateException fte) {
-            // M16 P1.6：包装为 FORBIDDEN，不 echo 内部异常细节
-            // M16 P6.4：跨用户 template.apply 拒绝留痕（监控异常尝试用他人 template）
+            // 包装为 FORBIDDEN，不 echo 内部异常细节
+            // 跨用户 template.apply 拒绝留痕（监控异常尝试用他人 template）
             if (auditLog != null) {
                 java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
                 details.put("operation", "template.apply");

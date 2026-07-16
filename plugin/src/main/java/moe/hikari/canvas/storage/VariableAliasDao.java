@@ -11,7 +11,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * {@code variable_aliases} 表 DAO（0.4.2）。schema 见
+ * {@code variable_aliases} 表 DAO。schema 见
  * {@code db-migrations/V014__variable_aliases.sql} + {@code docs/variables.md §1.12}。
  *
  * <p><b>per-wall</b>：alias 是 wall 局部状态——同一 fullName 在不同 wall 可起不同别名；

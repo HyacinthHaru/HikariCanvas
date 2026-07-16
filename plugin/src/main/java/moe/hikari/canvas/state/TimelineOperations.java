@@ -230,7 +230,7 @@ final class TimelineOperations {
             }
             params = out;
         }
-        // 0.6 P5：VARIABLE_CHANGE / SCHEDULE 必须带 params.fullName（绑定的变量），否则触发器无从匹配。
+        // VARIABLE_CHANGE / SCHEDULE 必须带 params.fullName（绑定的变量），否则触发器无从匹配。
         if (type == TriggerType.VARIABLE_CHANGE || type == TriggerType.SCHEDULE) {
             String fn = params.get("fullName");
             if (fn == null || fn.isBlank()) {
@@ -292,7 +292,7 @@ final class TimelineOperations {
                 return new KfValue.Num(d);
             }
             if (valueRaw instanceof String s) {
-                // P3 审查 #3：非变量模板的字符串必须是严格数值文法——否则双端渲染期
+                // 非变量模板的字符串必须是严格数值文法——否则双端渲染期
                 // 静默退 0 且 Java/TS 解析语义分叉；堵在 op 入口
                 if (!isVarTemplate(s) && !StrictNumber.PATTERN.matcher(s.trim()).matches()) {
                     throw new ValidationException("INVALID_PAYLOAD",
@@ -305,7 +305,7 @@ final class TimelineOperations {
         }
         if ("color".equals(property)) {
             if (valueRaw instanceof String s) {
-                // P3 审查 #2/#6：非法 hex 会在渲染期静默退化（step / 白色），堵在 op 入口
+                // 非法 hex 会在渲染期静默退化（step / 白色），堵在 op 入口
                 if (!isVarTemplate(s) && !isValidHexColor(s)) {
                     throw new ValidationException("INVALID_PAYLOAD",
                             "color keyframe value must be #RRGGBB / #RRGGBBAA or ${var:...}");
@@ -482,7 +482,7 @@ final class TimelineOperations {
                     case "loopMode" -> loopMode = validateLoopMode(stringOrThrow(vv, "loopMode"));
                     case "trigger" -> {
                         // 显式 null 拒收：与 name/durationMs 等同级字段一致，防「想清字段 vs
-                        // 误传 null」歧义把已有 trigger 静默重置成 manual（审查确认项 #2）
+                        // 误传 null」歧义把已有 trigger 静默重置成 manual
                         if (vv == null) {
                             throw new ValidationException("INVALID_PAYLOAD",
                                     "trigger must be object (explicit null not allowed)");
@@ -797,7 +797,7 @@ final class TimelineOperations {
     private static int intOrThrow(Object v, String field) {
         if (v instanceof Number n) {
             // 越界 / 非有限值守卫：Long/Double 超出 int 范围时 intValue() 静默回绕，
-            // 会绕过 timeMs/durationMs/fps 的语义范围检查（审查确认项 #4）
+            // 会绕过 timeMs/durationMs/fps 的语义范围检查
             long l = n.longValue();
             double d = n.doubleValue();
             if (l > Integer.MAX_VALUE || l < Integer.MIN_VALUE

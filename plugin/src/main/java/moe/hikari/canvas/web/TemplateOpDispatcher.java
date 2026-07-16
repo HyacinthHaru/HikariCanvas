@@ -10,15 +10,15 @@ import static moe.hikari.canvas.web.WebHelpers.asPayloadMap;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * M14 创意工坊：{@code template.save / delete / feature / unfeature} 入口。
+ * {@code template.save / delete / feature / unfeature} 入口。
  * <p>鉴权用当前 session 的 player UUID 查 Bukkit live Player 拿 hasPermission。</p>
- * <p>P2-26：{@code Bukkit.getPlayer} + {@code hasPermission} 主线程专用——经
+ * <p>{@code Bukkit.getPlayer} + {@code hasPermission} 主线程专用——经
  * {@link MainThreadPerms#resolve} 一次主线程 hop 解析在线态 + 全部所需节点（复用 auth
  * 路径同款 {@code callSyncMethod}），不再在 Jetty 线程裸调。</p>
  */
 final class TemplateOpDispatcher {
 
-    // P2-26：dispatch 一次性解析的节点顺序（与 Resolved.granted 下标对应）。
+    // dispatch 一次性解析的节点顺序（与 Resolved.granted 下标对应）。
     private static final int NODE_SAVE = 0;
     private static final int NODE_BYPASS_LIMIT = 1;
     private static final int NODE_DELETE_ANY = 2;
@@ -34,7 +34,7 @@ final class TemplateOpDispatcher {
 
     private final SessionManager sessionManager;
     private final moe.hikari.canvas.template.TemplatePublisher templatePublisher;
-    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
 
     TemplateOpDispatcher(SessionManager sessionManager,
@@ -63,7 +63,7 @@ final class TemplateOpDispatcher {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
             return;
         }
-        // P2-26：一次主线程 hop 解析在线态 + 全部节点；离线 / 超时 → online=false + 全节点 false。
+        // 一次主线程 hop 解析在线态 + 全部节点；离线 / 超时 → online=false + 全节点 false。
         MainThreadPerms.Resolved perms = MainThreadPerms.resolve(plugin, s.playerUuid(), PERM_NODES);
         if (!perms.online()) {
             ctx.send(Envelope.error(in.id(), "FORBIDDEN", "player offline"));

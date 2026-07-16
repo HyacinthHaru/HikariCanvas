@@ -3,9 +3,6 @@ package moe.hikari.canvas.api;
 /**
  * {@link HikariCanvasAPI#setVariable} / {@link HikariCanvasAPI#declareKey} /
  * {@link HikariCanvasAPI#unsetVariable} 抛：namespace 不存在或 ACL 拒绝。
- *
- * <p>RuntimeException 而非 checked——调用方在事件处理器内一般不可恢复，让插件作者自决
- * fail-fast / 静默 fallback。</p>
  */
 public final class PluginNamespaceException extends RuntimeException {
 

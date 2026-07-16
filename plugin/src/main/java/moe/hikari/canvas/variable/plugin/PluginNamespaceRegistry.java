@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
- * 0.4.0-P4-O：plugin namespace 注册表。
+ * plugin namespace 注册表。
  *
  * <p>承担：</p>
  * <ul>
@@ -33,10 +33,8 @@ public final class PluginNamespaceRegistry {
     /**
      * 保留 namespace：HikariCanvas 内部使用，外部插件禁止注册。
      *
-     * <p>0.4.3：{@code userglobal} 加入保留。理由：全局用户变量只能由玩家通过编辑器创建
-     * （走 EditSession.createGlobalVariable），插件想全服共享数据应用自己 namespace
-     * （如 {@code bedwars/score}），抢用 userglobal 等于绕开 ACL + 配额。详见
-     * {@code docs/dynamic-data.md §17.3}。</p>
+     * <p>{@code userglobal} 保留：防插件抢用绕 ACL / 配额（插件想全服共享应用自己 namespace，
+     * 如 {@code bedwars/score}）。详见 {@code docs/dynamic-data.md §17.3}。</p>
      */
     public static final Set<String> RESERVED_NAMESPACES =
             Set.of("user", "userglobal", "system", "papi", "scoreboard", "schedule");
@@ -118,10 +116,10 @@ public final class PluginNamespaceRegistry {
     /**
      * plugin disable 时调用：移除该 plugin 所有 namespace。
      *
-     * <p>注意此方法仅清 registry；变量本身的延迟清理（30s 后 store.delete）由 Q 任务的
+     * <p>注意此方法仅清 registry；变量本身的延迟清理（30s 后 store.delete）由
      * {@code HikariCanvasAPIImpl.purgeNamespaceData} 配合 scheduler 执行。</p>
      *
-     * @return 实际移除的 namespace 列表（顺序无保证，仅用于 Q 任务后续调用 purge）
+     * @return 实际移除的 namespace 列表（顺序无保证，仅用于后续调用 purge）
      */
     public List<String> unregisterAllByPlugin(Plugin plugin) {
         Objects.requireNonNull(plugin, "plugin");

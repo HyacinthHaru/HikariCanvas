@@ -38,19 +38,19 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
 
 /**
- * {@code /canvas} 根命令。M5.5 wall 模型起命令族（详见 docs/architecture.md §3、PROPOSAL.md §5.2.x）：
+ * {@code /canvas} 根命令。wall 模型命令族（详见 docs/architecture.md §3、PROPOSAL.md §5.2.x）：
  * <ul>
  *   <li>{@code edit / wand / cancel} — 选区入口</li>
  *   <li>{@code confirm} — 锁定墙面，新建 wall（部署 ItemFrame + 借池）或 bind 现有 wall（不部署）+ 签发 token URL</li>
  *   <li>{@code open <wall_id\|alias>} — 直接打开已有 wall（绕过 SELECTING）</li>
  *   <li>{@code list} — 玩家自己的画清单</li>
  *   <li>{@code alias} — wall 元数据修改（标签层）</li>
- *   <li>~~{@code publish / unpublish}~~ 2026-05-14 砍：lock 状态由前端 TopBar 按钮触发 ws 的 wall.lock/unlock</li>
+ *   <li>lock 状态由前端 TopBar 按钮触发 ws 的 wall.lock/unlock（不走命令）</li>
  *   <li>{@code delete <wall_id> [confirm]} — 删除 wall（30s 二次确认）</li>
  *   <li>{@code stats / cleanup} — 管理员</li>
  * </ul>
  *
- * <p>M5.5 起 {@code commit} 子命令彻底废止——保存通过 op auto-save 实现。</p>
+ * <p>{@code commit} 子命令彻底废止——保存通过 op auto-save 实现。</p>
  */
 public final class CanvasCommand {
 
@@ -71,17 +71,17 @@ public final class CanvasCommand {
     private final TemplatePreviewService templatePreviewService;
     /** 形如 {@code http://host:port/?token={token}}；{token} 占位符会被替换。 */
     private final String editorUrlTemplate;
-    /** 0.4.0-P5：{@code /canvas var} 子命令族（7 子命令）。null = 主插件未传，跳过注册。 */
+    /** {@code /canvas var} 子命令族（7 子命令）。null = 主插件未传，跳过注册。 */
     private final VariableSubCommand variableSubCommand;
-    /** 0.5.0-P1：{@code /canvas bench} 命令族（list/run/report/clear）。null = 主插件未传，跳过注册。 */
+    /** {@code /canvas bench} 命令族（list/run/report/clear）。null = 主插件未传，跳过注册。 */
     private final BenchmarkSubCommand benchmarkSubCommand;
-    /** 0.9.2 可观测性：{@code /canvas stats} 实现（runStats 迁出至此）+ 后续 diagnose 族（Task 2）。 */
+    /** {@code /canvas stats} 实现（runStats 迁出至此）+ diagnose 族。 */
     private final DiagnosticsSubCommand diagnosticsSubCommand;
-    /** 0.8.2 i18n：多语言消息注册表。 */
+    /** 多语言消息注册表。 */
     private final Messages messages;
 
     /**
-     * M16-P2.6：玩家最近的 /canvas delete <wallId> 待确认条目。
+     * 玩家最近的 /canvas delete <wallId> 待确认条目。
      * 外层 key = playerUuid；内层 key = wallId，value = pending 元数据。
      *
      * <p>多 wall 并存：玩家可同时对多个不同 wall 各起一个 pending（30s 窗口内），
@@ -125,7 +125,7 @@ public final class CanvasCommand {
         this.benchmarkSubCommand = benchmarkSubCommand;
         this.diagnosticsSubCommand = diagnosticsSubCommand;
         this.messages = messages;
-        // M16-P2.6：注册 PlayerQuit 监听清 pendingDeletes，避免玩家退出后 bucket 长期挂着
+        // 注册 PlayerQuit 监听清 pendingDeletes，避免玩家退出后 bucket 长期挂着
         plugin.getServer().getPluginManager().registerEvents(
                 new QuitListener(), plugin);
     }
@@ -141,11 +141,11 @@ public final class CanvasCommand {
     public LiteralCommandNode<CommandSourceStack> build() {
         var root = Commands.literal("canvas");
         if (variableSubCommand != null) {
-            // 0.4.0-P5：/canvas var <sub> 命令族
+            // /canvas var <sub> 命令族
             root = root.then(variableSubCommand.build());
         }
         if (benchmarkSubCommand != null) {
-            // 0.5.0-P1：/canvas bench <sub> 命令族
+            // /canvas bench <sub> 命令族
             root = root.then(benchmarkSubCommand.build());
         }
         return root
@@ -168,14 +168,12 @@ public final class CanvasCommand {
                 .then(Commands.literal("list")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runList))
-                // 2026-05-14 砍：runPublish / runUnpublish 命令处理器移除。
-                // lock 状态由前端 TopBar Lock 按钮 → ws.send('wall.lock' | 'wall.unlock') → WebServer.handleWallOp 处理。
                 .then(Commands.literal("alias")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(this::runAlias)))
                 .then(Commands.literal("delete")
-                        // P3-3: 门禁与业务权限并集对齐——业务逻辑（runDeleteConfirm 等）允许
+                        // 门禁与业务权限并集对齐——业务逻辑（runDeleteConfirm 等）允许
                         // canvas.delete.any 删他人 wall，故门禁不能只认 .own，否则纯 .any
                         // 管理员被挡在 Brigadier 节点外。
                         .requires(src -> isPlayerWith(src, "canvas.delete.own")
@@ -221,7 +219,7 @@ public final class CanvasCommand {
             Session existing = ex.existing();
             switch (existing.state()) {
                 case SELECTING -> {
-                    // M5-D8：隐式 reselect，避免玩家被卡在"已选一半"
+                    // 隐式 reselect，避免玩家被卡在"已选一半"
                     sessionManager.resetSelection(existing.id());
                     ensureWand(player);
                     sendEditGuide(player, "command.edit.guide-headline-reset");
@@ -260,7 +258,7 @@ public final class CanvasCommand {
             messages.send(player, "command.no-session");
             return 0;
         }
-        // M5.5：cancel 仅释放 session/wand；wall 数据 + ItemFrames 保留
+        // cancel 仅释放 session/wand；wall 数据 + ItemFrames 保留
         String sid = s.id();
         SessionState prev = s.state();
         sessionManager.cancel(sid, "player-cancel");
@@ -339,8 +337,7 @@ public final class CanvasCommand {
             messages.send(player, "command.list.empty");
             return Command.SINGLE_SUCCESS;
         }
-        // P3-99: 术语对齐 lock-state 重设计——publishedAt 非 null = 已锁定（locked）。
-        // 数据语义不变，仅玩家可见文案从过时的 "published" 改为 "locked"。
+        // publishedAt 非 null = 已锁定（locked）；数据语义不变，玩家可见文案用 "locked"。
         List<WallRepo.Summary> locked = walls.stream().filter(w -> w.publishedAt() != null).toList();
         List<WallRepo.Summary> drafts = walls.stream().filter(w -> w.publishedAt() == null).toList();
         messages.send(player, "command.list.header",
@@ -381,9 +378,6 @@ public final class CanvasCommand {
                 .hoverEvent(HoverEvent.showText(Component.text(hoverText))));
     }
 
-    // 2026-05-14 砍：runPublish / runUnpublish 命令处理器移除。
-    // lock 状态由前端 TopBar Lock 按钮 → ws.send('wall.lock' | 'wall.unlock') → WebServer.handleWallOp 处理。
-
     private int runAlias(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
         Session s = sessionManager.byPlayer(player.getUniqueId());
@@ -396,7 +390,7 @@ public final class CanvasCommand {
             messages.send(player, "command.alias.invalid-format");
             return Command.SINGLE_SUCCESS;
         }
-        // M15.3 P0-19：alias 操作必须是 wall owner（或带 canvas.alias.any 权限）
+        // alias 操作必须是 wall owner（或带 canvas.alias.any 权限）
         var wallOpt = wallRepo.loadById(s.wallId());
         if (wallOpt.isEmpty()) {
             messages.send(player, "command.alias.wall-not-found");
@@ -438,7 +432,7 @@ public final class CanvasCommand {
         long now = System.currentTimeMillis();
         ConcurrentMap<String, PendingDelete> bucket = pendingDeletes.computeIfAbsent(
                 player.getUniqueId(), k -> new ConcurrentHashMap<>());
-        // M16-P2.6：先清这玩家自己已过期的条目（顺手 reap），再判同一 wallId 是否已 pending
+        // 先清这玩家自己已过期的条目（顺手 reap），再判同一 wallId 是否已 pending
         reapExpired(bucket, now);
         PendingDelete existing = bucket.get(wallId);
         if (existing != null && now - existing.ts() <= DELETE_CONFIRM_WINDOW_MS) {
@@ -521,7 +515,7 @@ public final class CanvasCommand {
         try {
             result = sessionManager.confirm(s.id());
         } catch (SessionManager.SessionConfirmFailedException e) {
-            // M16-P2.7-A：confirm 中跨子系统步骤已 rollback。给玩家提示，细节看服务端日志。
+            // confirm 中跨子系统步骤已 rollback。给玩家提示，细节看服务端日志。
             plugin.getLogger().log(Level.SEVERE, "SessionManager.confirm rolled back", e);
             messages.send(player, "command.confirm-failed");
             return Command.SINGLE_SUCCESS;
@@ -547,7 +541,7 @@ public final class CanvasCommand {
                     Placeholder.unparsed("message", pe.message()));
             return Command.SINGLE_SUCCESS;
         }
-        // Ultrareview 2026-05-25 #2：confirm 撞 locked + 非 owner + 无 bypass → Forbidden
+        // confirm 撞 locked + 非 owner + 无 bypass → Forbidden
         if (result instanceof SessionManager.ConfirmResult.Forbidden fb) {
             // fb.message() 是动态服务器错误信息，直接用 Component.text 转发
             player.sendMessage(Component.text(fb.message(),
@@ -577,7 +571,7 @@ public final class CanvasCommand {
                 mounted = frameDeployer.deploy(sessionAfter, wall, mapIds);
             } catch (Exception e) {
                 plugin.getLogger().log(Level.SEVERE, "FrameDeployer.deploy failed", e);
-                // 0.4.10 P2-47：部署失败必须原子回滚整个新建 wall，否则只 cancel 会留下
+                // 部署失败必须原子回滚整个新建 wall，否则只 cancel 会留下
                 // walls 行 + 预留的 RESERVED map 不归还（cancel 故意不释放池）→ 孤儿 wall +
                 // idcounts.dat 漂移。removeForWall 清理可能已部署的部分 ItemFrame；deleteWall
                 // 释放池→FREE + 删 walls 行 + cancel 活跃 session（与正常 /canvas delete 同款逆操作）。
@@ -638,11 +632,11 @@ public final class CanvasCommand {
 
     // ---------- admin ----------
 
-    // 0.9.2：runStats 已迁出至 DiagnosticsSubCommand（多行增强 + 后续 diagnose 族）。
+    // runStats 已迁出至 DiagnosticsSubCommand（多行增强 + diagnose 族）。
 
     private int runCleanup(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
-        // M5.5：stub —— 真正的孤立 ItemFrame / 错位 walls 行检测留 M7 fsck
+        // stub —— 真正的孤立 ItemFrame / 错位 walls 行检测尚未实装（fsck 待补）
         messages.send(sender, "command.cleanup.stubbed");
         return Command.SINGLE_SUCCESS;
     }

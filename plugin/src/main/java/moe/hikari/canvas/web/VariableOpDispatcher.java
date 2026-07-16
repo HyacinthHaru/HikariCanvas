@@ -19,7 +19,7 @@ import static moe.hikari.canvas.web.WebHelpers.mapOrEmpty;
 import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
 
 /**
- * 0.4.0-P1-B：{@code variable.*} 五个 WS op 的分发器。详见 {@code docs/protocol.md §5.11}
+ * {@code variable.*} 五个 WS op 的分发器。详见 {@code docs/protocol.md §5.11}
  * + {@code docs/dynamic-data.md §3.1 / §9}。
  *
  * <p>权限层（contract: {@code docs/dynamic-data.md §9.1}）：
@@ -33,7 +33,7 @@ import static moe.hikari.canvas.web.WebHelpers.stringOrNull;
  * 非 owner 拒 {@code FORBIDDEN}。</p>
  *
  * <p>所有变量变更通过 {@link EditSession} 走完整 ack + state.patch 路径；变量值变更不影响
- * 画布像素（dirty=null），渲染期改 ${var:X} → currentValue 的工作由 C agent 在
+ * 画布像素（dirty=null），渲染期改 ${var:X} → currentValue 的工作在
  * CanvasCompositor 完成 + 经 VariableStore.wallDirtyCallback 触发投影重画。</p>
  */
 final class VariableOpDispatcher {
@@ -44,7 +44,7 @@ final class VariableOpDispatcher {
     private final OpPushCallback push;
     private final moe.hikari.canvas.storage.AuditLog auditLog;
     private final moe.hikari.canvas.storage.WallRepo wallRepo;
-    /** P2-26：主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
+    /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
 
     VariableOpDispatcher(SessionManager sessionManager,
@@ -94,7 +94,7 @@ final class VariableOpDispatcher {
             return;
         }
 
-        // 权限检查：write 类 op vs bind op；0.4.3 全局变量走独立权限节点。
+        // 权限检查：write 类 op vs bind op；全局变量走独立权限节点。
         String op = in.op();
         Map<String, Object> payloadForPerm = payload;
         if (!checkPermission(ctx, in, sessionId, s, op, payloadForPerm)) return;
@@ -102,7 +102,7 @@ final class VariableOpDispatcher {
         EditSession es = s.editSession();
         String wallId = s.wallId();
 
-        // 0.4.3：scope='global' 走 createGlobalVariable；update/set/delete/bind 按 fullName
+        // scope='global' 走 createGlobalVariable；update/set/delete/bind 按 fullName
         // 前缀（userglobal/）自动路由——dispatcher 不要求用户额外传 scope 字段，复用 fullName 形态
         boolean isGlobalCreate = "global".equalsIgnoreCase(
                 String.valueOf(payload.getOrDefault("scope", "wall")));
@@ -231,7 +231,7 @@ final class VariableOpDispatcher {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.3 全局用户变量 handlers
+    //  全局用户变量 handlers
     // ──────────────────────────────────────────────────────────
 
     private EditSession.OpResult handleCreateGlobal(EditSession es, Session s,
@@ -303,7 +303,7 @@ final class VariableOpDispatcher {
     }
 
     /**
-     * 0.4.3：op + payload 形态判断当前操作是否针对 userglobal 变量。
+     * op + payload 形态判断当前操作是否针对 userglobal 变量。
      * update/set/delete/bind 走 fullName 前缀；create 由 caller 处理（scope 字段）。
      */
     private static boolean isGlobalOpByFullName(String op, Map<String, Object> payload) {
@@ -358,7 +358,7 @@ final class VariableOpDispatcher {
             }
         }
 
-        // P2-26：主线程解析在线玩家权限（Bukkit.getPlayer + hasPermission 主线程专用），
+        // 主线程解析在线玩家权限（Bukkit.getPlayer + hasPermission 主线程专用），
         // 复用 auth 路径同款 callSyncMethod；离线 / 超时 / 异常返 false（own 节点下方兜底放行）。
         boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
         // own / create 节点 default=true（paper-plugin.yml）；offline 玩家 / 测试期 mock
@@ -385,7 +385,7 @@ final class VariableOpDispatcher {
     }
 
     /**
-     * 0.4.3：选 global 路径需要的权限节点。
+     * 选 global 路径需要的权限节点。
      *
      * <ul>
      *   <li>{@code variable.create} (scope=global) → {@code canvas.var.global.create}</li>
@@ -408,7 +408,7 @@ final class VariableOpDispatcher {
     }
 
     /**
-     * 0.4.3：caller 是否本全局变量的 owner？变量不存在时返 false（让 .any 路径处理，
+     * caller 是否本全局变量的 owner？变量不存在时返 false（让 .any 路径处理，
      * 走 store 时再抛 VARIABLE_NOT_FOUND）。
      */
     private boolean isCallerGlobalOwner(UUID callerUuid, String fullName) {
@@ -464,7 +464,7 @@ final class VariableOpDispatcher {
                                     Map<String, Object> payload,
                                     EditSession.OpResult.Ok ok) {
         if (auditLog == null) return;
-        // 0.4.3：global 事件单独命名前缀 VARIABLE_GLOBAL_*，让运维过滤 + 审计搜索更精准
+        // global 事件单独命名前缀 VARIABLE_GLOBAL_*，让运维过滤 + 审计搜索更精准
         boolean isGlobalCreate = "variable.create".equals(op)
                 && "global".equalsIgnoreCase(String.valueOf(
                         payload.getOrDefault("scope", "wall")));

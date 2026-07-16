@@ -3,7 +3,7 @@ package moe.hikari.canvas.rail;
 import java.util.Locale;
 
 /**
- * 0.4.4：车次服务类型。4 个内置 enum 值 + 自定义字符串兜底。
+ * 车次服务类型。4 个内置 enum 值 + 自定义字符串兜底。
  *
  * <p>{@link #LOCAL}（站站停）/ {@link #EXPRESS}（大站快车）/ {@link #SECTION}（区间车）/
  * {@link #LIMITED}（特快）。</p>

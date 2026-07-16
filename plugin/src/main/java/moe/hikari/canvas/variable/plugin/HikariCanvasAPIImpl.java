@@ -23,19 +23,19 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 0.4.0-P4-O：{@link HikariCanvasAPI} 默认实现。
+ * {@link HikariCanvasAPI} 默认实现。
  *
  * <h2>装配</h2>
  *
- * <p>由 P4-Q 任务在 {@code HikariCanvas.onEnable} 中实例化 + 暴露：</p>
+ * <p>在 {@code HikariCanvas.onEnable} 中实例化 + 暴露：</p>
  * <pre>
  * this.apiImpl = new HikariCanvasAPIImpl(registry, store, daemon, limiter, auditLog);
  * Bukkit.getServicesManager().register(HikariCanvasAPI.class, apiImpl, this, ServicePriority.Normal);
  * </pre>
  *
- * <p>P4-Q 同时挂 {@code PluginDisableEvent} listener：disable 触发
+ * <p>{@code PluginDisableEvent} listener：disable 触发
  * {@code registry.unregisterAllByPlugin(plugin)} → {@link #unregisterPluginProviders(List)}
- * → 30s 后调 {@link #purgeNamespaceData(String)} 清 store 变量（决策 3：保留 30s 让引用方
+ * → 30s 后调 {@link #purgeNamespaceData(String)} 清 store 变量（保留 30s 让引用方
  * 走 cached 平滑过渡）。</p>
  *
  * <h2>错误隔离</h2>
@@ -58,7 +58,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     /** dynamic-data.md §16-9：Tier 2 默认 TTL 30s，防卡僵尸数据。 */
     private static final long DEFAULT_TTL_MS = 30_000L;
 
-    /** 0.4.10 P3-55：declared key 校验正则，镜像 {@code VariableStore.KEY_RE}。 */
+    /** declared key 校验正则，镜像 {@code VariableStore.KEY_RE}。 */
     private static final java.util.regex.Pattern KEY_RE =
             java.util.regex.Pattern.compile("[a-zA-Z0-9_.\\-]+");
 
@@ -66,16 +66,16 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     private final VariableStore store;
     private final VariableProviderDaemon daemon;
     /**
-     * 0.4.10 P3-4：审计日志。{@link #checkAcl} 拒绝 namespace spoof / 未注册推送时记
+     * 审计日志。{@link #checkAcl} 拒绝 namespace spoof / 未注册推送时记
      * {@code PLUGIN_NAMESPACE_DENIED}，对齐 {@code security.md §8.1} 对 PERMISSION_DENIED
      * 的强制审计要求。{@link AuditLog#record} 线程安全（内部 jdbi.useHandle + fallback log），
      * 可在调用插件的任意线程直接调，无需切主线程。
      */
     private final AuditLog auditLog;
     /**
-     * P 任务：双层 push 限流（per-plugin 100/s + 全局 1000/s + 保护期 10s）。
+     * 双层 push 限流（per-plugin 100/s + 全局 1000/s + 保护期 10s）。
      *
-     * <p>0.4.0-P5：改 volatile 让 {@code /canvas var reload} 触发的
+     * <p>volatile 让 {@code /canvas var reload} 触发的
      * {@link #setRateLimiter} 能热替换。读路径（{@link #setVariable} 等）每次 push 都
      * 重新拿引用——少量内存屏障开销换 reload 后立刻生效，无需重启。</p>
      */
@@ -99,7 +99,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     }
 
     /**
-     * 0.4.0-P5：热替换 {@link PushRateLimiter}（{@code /canvas var reload} 调）。
+     * 热替换 {@link PushRateLimiter}（{@code /canvas var reload} 调）。
      *
      * <p>仅替换引用——窗口数据不迁移（旧 limiter 内的 fixed-window counter 直接 GC）。
      * 替换瞬间到下个 1s 边界之间最坏出现一次窗口"重置"，但 1s 窗口本就是 lossy 抽样，
@@ -119,7 +119,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     @Override
     public void registerNamespace(Plugin plugin, String namespace, NamespaceInfo info) {
         Objects.requireNonNull(plugin, "plugin");
-        Objects.requireNonNull(namespace, "namespace");  // 0.4.10 P3-78：对齐 api.md §8.1 契约
+        Objects.requireNonNull(namespace, "namespace");  // 对齐 api.md §8.1 契约
         // PluginNamespaceRegistry.register 内部校验 namespace 格式 + 保留前缀 + ACL；
         // 抛 NamespaceConflictException / IllegalArgumentException → 直接传给调用方。
         registry.register(plugin, namespace, info);
@@ -142,10 +142,10 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     public void declareKey(Plugin plugin, String namespace, String key,
                            VarType apiType, @Nullable String hint) {
         Objects.requireNonNull(plugin, "plugin");
-        Objects.requireNonNull(namespace, "namespace");  // 0.4.10 P3-78
+        Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(apiType, "type");
         checkAcl(plugin, namespace);
-        // 0.4.10 P3-55：key 格式校验（对齐 VariableStore.validateKey）。上游报错优于让坏 key
+        // key 格式校验（对齐 VariableStore.validateKey）。上游报错优于让坏 key
         // 进 declaredKeys → 污染前端 Picker。非法 key 抛 IllegalArgumentException，不静默吞。
         validateKeyFormat(key);
 
@@ -164,10 +164,10 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     public void setVariable(Plugin plugin, String namespace, String key, String value,
                             @Nullable Duration ttl) {
         Objects.requireNonNull(plugin, "plugin");
-        Objects.requireNonNull(namespace, "namespace");  // 0.4.10 P3-78
+        Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(value, "value");
         checkAcl(plugin, namespace);
-        // P 任务：限流检查（dynamic-data.md §10.2）。limiter 内部已 log；这里 drop。
+        // 限流检查（dynamic-data.md §10.2）。limiter 内部已 log；这里 drop。
         if (!limiter.tryAcquire(plugin)) {
             return;
         }
@@ -189,11 +189,11 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     @Override
     public void setVariables(Plugin plugin, String namespace, Map<String, VariableUpdate> updates) {
         Objects.requireNonNull(plugin, "plugin");
-        Objects.requireNonNull(namespace, "namespace");  // 0.4.10 P3-78
+        Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(updates, "updates");
         checkAcl(plugin, namespace);
         if (updates.isEmpty()) return;
-        // P 任务：批量计费 — 一次性占 updates.size() token，要么全成要么全 reject。
+        // 批量计费 — 一次性占 updates.size() token，要么全成要么全 reject。
         // 实际写入循环不再走 tryAcquire（已批量占用）。
         if (!limiter.tryAcquireBatch(plugin, updates.size())) {
             return;
@@ -219,7 +219,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     @Override
     public void unsetVariable(Plugin plugin, String namespace, String key) {
         Objects.requireNonNull(plugin, "plugin");
-        Objects.requireNonNull(namespace, "namespace");  // 0.4.10 P3-78
+        Objects.requireNonNull(namespace, "namespace");
         checkAcl(plugin, namespace);
         try {
             String fullName = namespace + "/" + key;
@@ -236,11 +236,11 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  Q 任务回调钩子（plugin disable 时调用）
+    //  回调钩子（plugin disable 时调用）
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * Q 任务用：plugin disable 触发的 provider + daemon 即时清理。
+     * plugin disable 触发的 provider + daemon 即时清理。
      *
      * <p>对每个 namespace：从 providers 摘除 + 调 {@link VariableProviderDaemon#unregister}
      * （内部 cancel scheduled task + 调 provider.shutdown）。变量值不在此处删——
@@ -259,12 +259,12 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     }
 
     /**
-     * Q 任务用：30s 延迟后调用，清除该 namespace 下所有变量。
+     * 30s 延迟后调用，清除该 namespace 下所有变量。
      *
      * <p>触发链：plugin disable → unregisterAllByPlugin（registry 立即摘除）→ scheduler 30s
      * 后 purgeNamespaceData → store.delete 该 namespace 所有 fullName。</p>
      *
-     * @param namespace 已 unregister 的 namespace（不再做 ACL 检查 —— Q 是受信调用方）
+     * @param namespace 已 unregister 的 namespace（不再做 ACL 检查 —— 受信内部调用方）
      */
     public void purgeNamespaceData(String namespace) {
         Objects.requireNonNull(namespace, "namespace");
@@ -286,7 +286,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * 0.4.10 P3-55：declared key 格式校验，与 {@code VariableStore.validateKey} 一致
+     * declared key 格式校验，与 {@code VariableStore.validateKey} 一致
      * （{@code [a-zA-Z0-9_.-]+}，长度 ≤ {@link VariableStore#MAX_KEY_LENGTH}）。非法即抛
      * {@link IllegalArgumentException} —— 让插件 dev 立即发现，而非让坏 key 进 Picker。
      */
@@ -304,7 +304,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         if (!registry.owns(plugin, namespace)) {
             Optional<PluginNamespaceRegistry.Registration> existing = registry.get(namespace);
             if (existing.isEmpty()) {
-                // 0.4.10 P3-4：未注册 namespace 推送也是 spoof 面（插件漏 registerNamespace 或
+                // 未注册 namespace 推送也是 spoof 面（插件漏 registerNamespace 或
                 // 抢 reserved namespace），留审计痕。
                 recordNamespaceDenied(plugin, namespace,
                         PluginNamespaceException.Code.NAMESPACE_NOT_REGISTERED, null);
@@ -313,7 +313,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
                         namespace,
                         "namespace '" + namespace + "' not registered; call registerNamespace first");
             }
-            // 0.4.10 P3-4：namespace spoof（推他人 namespace）记审计——security.md §9.2 威胁模型。
+            // namespace spoof（推他人 namespace）记审计——security.md §9.2 威胁模型。
             recordNamespaceDenied(plugin, namespace,
                     PluginNamespaceException.Code.NAMESPACE_ACL_DENIED, existing.get().pluginName());
             throw new PluginNamespaceException(
@@ -325,7 +325,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     }
 
     /**
-     * 0.4.10 P3-4：把 namespace spoof / 未注册推送拒绝写进 audit_log（事件
+     * 把 namespace spoof / 未注册推送拒绝写进 audit_log（事件
      * {@code PLUGIN_NAMESPACE_DENIED}）。actor 是<b>插件</b>非玩家，故 player/session/ip 字段留
      * null，spoof 上下文（来源插件 / 目标 namespace / 实际 owner / 拒绝码）全放 details。
      *
@@ -366,8 +366,8 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         try {
             store.create(namespace, key, type, null, sourcePluginName);
         } catch (VariableException e) {
-            // 0.4.10 P3-16：两个线程并发首次 push 同 key → 都 setValue miss → 都 create，
-            // 一个赢另一个拿 VARIABLE_EXISTS。原实现把败者的值丢弃。这里 create-or-retry-setValue
+            // 两个线程并发首次 push 同 key → 都 setValue miss → 都 create，
+            // 一个赢另一个拿 VARIABLE_EXISTS。create-or-retry-setValue
             // 闭环：捕获 VARIABLE_EXISTS → 对赢家刚建好的变量再 setValue 一次，败者的值不丢。
             // 其他 code（QUOTA / NAME_INVALID）仍原样抛给上层 catch。
             if (e.code() != VariableException.Code.VARIABLE_EXISTS) {
