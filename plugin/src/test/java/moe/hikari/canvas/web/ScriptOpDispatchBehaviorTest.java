@@ -1,7 +1,9 @@
 package moe.hikari.canvas.web;
 
+import moe.hikari.canvas.script.Action;
 import moe.hikari.canvas.script.ScriptRule;
 import moe.hikari.canvas.script.ScriptStore;
+import moe.hikari.canvas.script.ValidationError;
 import moe.hikari.canvas.session.Session;
 import moe.hikari.canvas.session.SessionTestFactory;
 import moe.hikari.canvas.state.PatchOp;
@@ -14,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Logger;
 
@@ -352,7 +355,18 @@ class ScriptOpDispatchBehaviorTest {
                 SESSION_ID, session, WALL, nested);
         assertEquals("error", bad.op());
         assertEquals("SCRIPT_INVALID", codeOf(bad));
-        assertTrue(String.valueOf(((Map<?, ?>) bad.payload()).get("message"))
-                .contains("actions/0/then/0"), "错误信息带 blockId 定位");
+
+        // 0.9.7：错误的 blockId 定位不再拼进消息串（已结构化进 ValidationError.params），
+        // 直接对同构动作树验 key + blockId 参（本 dispatcher 装配 messages=null，
+        // renderValidation 只回退 key 名，无法从消息串取 blockId）。
+        Action badIf = new Action.If("&&&&",
+                List.of(new Action.Log("x")), List.of());
+        Action outerIf = new Action.If("1 == 1", List.of(badIf), List.of());
+        Optional<ValidationError> ve =
+                ScriptOpDispatcher.checkConditionSyntax(List.of(outerIf));
+        assertTrue(ve.isPresent(), "嵌套 then 里的坏条件应被预检拒");
+        assertEquals("conditionSyntaxIf", ve.get().key());
+        assertEquals("actions/0/then/0", ve.get().params().get("blockId"),
+                "ValidationError 带 blockId 定位");
     }
 }

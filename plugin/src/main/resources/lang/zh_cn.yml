@@ -329,6 +329,10 @@ script:
     ifConditionTooLong: "if 条件超长（最多 <max> 字符）"
     ifDepthExceeded: "if 嵌套超过 <max> 层（当前 <depth> 层）"
     ifRandomBranchDepthExceeded: "if / 随机分支嵌套超过 <max> 层（当前 <depth> 层）"
+    # —— 条件语法（保存期预检；<detail> 为底层解析器原文，位置/符号信息）——
+    conditionSyntaxIf: "if 条件语法错误（<blockId>）: <detail>"
+    conditionSyntaxWaitUntil: "等待条件语法错误（<blockId>）: <detail>"
+    conditionSyntaxRepeatUntil: "重复条件语法错误（<blockId>）: <detail>"
     repeatCountRange: "重复次数需在 <min>..<max> 之间"
     repeatBodyEmpty: "重复循环体不能为空"
     repeatUntilConditionInvalid: "重复条件不能为空且最多 <max> 字符"

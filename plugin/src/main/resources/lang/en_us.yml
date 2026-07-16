@@ -329,6 +329,10 @@ script:
     ifConditionTooLong: "If condition too long (max <max> characters)"
     ifDepthExceeded: "If nesting exceeds <max> levels (currently <depth>)"
     ifRandomBranchDepthExceeded: "If / random-branch nesting exceeds <max> levels (currently <depth>)"
+    # —— condition syntax (checked on save; <detail> is the raw parser message with position/token info) ——
+    conditionSyntaxIf: "Invalid If condition (<blockId>): <detail>"
+    conditionSyntaxWaitUntil: "Invalid wait condition (<blockId>): <detail>"
+    conditionSyntaxRepeatUntil: "Invalid repeat condition (<blockId>): <detail>"
     repeatCountRange: "Repeat count must be between <min> and <max>"
     repeatBodyEmpty: "Loop body cannot be empty"
     repeatUntilConditionInvalid: "Repeat condition cannot be empty and must be at most <max> characters"

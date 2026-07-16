@@ -206,9 +206,10 @@ final class ScriptOpDispatcher {
                     renderValidation(sessionId, invalid.get()));
         }
         // K16：所有 if.condition 保存期预 parse——坏条件保存时就拒，不等运行期静默 false
-        Optional<String> badCondition = checkConditionSyntax(parsed.rule().actions());
+        Optional<ValidationError> badCondition = checkConditionSyntax(parsed.rule().actions());
         if (badCondition.isPresent()) {
-            return Envelope.error(in.id(), "SCRIPT_INVALID", badCondition.get());
+            return Envelope.error(in.id(), "SCRIPT_INVALID",
+                    renderValidation(sessionId, badCondition.get()));
         }
         Set<String> facets = ScriptPermissions.requiredFacets(parsed.rule());
         Envelope facetDenied = checkFacets(in, sessionId, s, "script.create", facets);
@@ -252,9 +253,10 @@ final class ScriptOpDispatcher {
                     renderValidation(sessionId, invalid.get()));
         }
         // K16：同 create——update 全量替换也逐 if.condition 预 parse
-        Optional<String> badCondition = checkConditionSyntax(parsed.rule().actions());
+        Optional<ValidationError> badCondition = checkConditionSyntax(parsed.rule().actions());
         if (badCondition.isPresent()) {
-            return Envelope.error(in.id(), "SCRIPT_INVALID", badCondition.get());
+            return Envelope.error(in.id(), "SCRIPT_INVALID",
+                    renderValidation(sessionId, badCondition.get()));
         }
         Set<String> facets = ScriptPermissions.requiredFacets(parsed.rule());
         Envelope facetDenied = checkFacets(in, sessionId, s, "script.update", facets);
@@ -443,13 +445,20 @@ final class ScriptOpDispatcher {
     /**
      * K16：递归走动作树，对每个 {@code if.condition} 调
      * {@link moe.hikari.canvas.script.engine.ConditionEvaluator#checkSyntax}（parse-only）。
-     * 返回首个失败的错误信息（含 blockId 定位）；全通过返 empty。
+     * 返回首个失败的结构化 {@link ValidationError}（含 {@code blockId} 定位 + {@code detail}
+     * 底层文法错误）；全通过返 empty。
+     *
+     * <p>0.9.7：{@code detail} = {@link moe.hikari.canvas.script.engine.ConditionEvaluator#checkSyntax}
+     * 的返回串——由 {@link moe.hikari.canvas.template.expr.ExpressionParser.ParseException} 产出，
+     * 本身已是英文 + 符号 + 位置信息（如 {@code unexpected token '(' (at position 0)}），
+     * 故原样透传作 {@code detail} 参，不再另立 i18n key。dispatcher 侧
+     * {@link #renderValidation} 按 locale 渲染 {@code script.validate.conditionSyntax*} 外层文案。</p>
      */
-    static Optional<String> checkConditionSyntax(List<moe.hikari.canvas.script.Action> actions) {
+    static Optional<ValidationError> checkConditionSyntax(List<moe.hikari.canvas.script.Action> actions) {
         return checkConditionSyntax(actions, "actions/");
     }
 
-    private static Optional<String> checkConditionSyntax(
+    private static Optional<ValidationError> checkConditionSyntax(
             List<moe.hikari.canvas.script.Action> actions, String prefix) {
         if (actions == null) return Optional.empty();
         for (int i = 0; i < actions.size(); i++) {
@@ -459,9 +468,10 @@ final class ScriptOpDispatcher {
                 Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
                         .checkSyntax(iff.condition());
                 if (err.isPresent()) {
-                    return Optional.of("if 条件语法错误（" + blockId + "）: " + err.get());
+                    return Optional.of(ValidationError.of("conditionSyntaxIf",
+                            "blockId", blockId, "detail", err.get()));
                 }
-                Optional<String> sub = checkConditionSyntax(iff.then(), blockId + "/then/");
+                Optional<ValidationError> sub = checkConditionSyntax(iff.then(), blockId + "/then/");
                 if (sub.isPresent()) return sub;
                 sub = checkConditionSyntax(iff.elseActions(), blockId + "/else/");
                 if (sub.isPresent()) return sub;
@@ -471,25 +481,27 @@ final class ScriptOpDispatcher {
                 Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
                         .checkSyntax(wu.condition());
                 if (err.isPresent()) {
-                    return Optional.of("等待条件语法错误（" + blockId + "）: " + err.get());
+                    return Optional.of(ValidationError.of("conditionSyntaxWaitUntil",
+                            "blockId", blockId, "detail", err.get()));
                 }
             } else if (a instanceof moe.hikari.canvas.script.Action.Repeat rep) {
                 // 0.7.1-P5：递归进 repeat body（补 0.7.0-P2 既存遗漏——body 里的 if/waitUntil 条件也预检）。
-                Optional<String> sub = checkConditionSyntax(rep.body(), blockId + "/body/");
+                Optional<ValidationError> sub = checkConditionSyntax(rep.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
             } else if (a instanceof moe.hikari.canvas.script.Action.RepeatUntil ru) {
                 // 0.7.2-P3：repeatUntil 自身 condition 预检（照 WaitUntil）+ 递归 body。
                 Optional<String> err = moe.hikari.canvas.script.engine.ConditionEvaluator
                         .checkSyntax(ru.condition());
                 if (err.isPresent()) {
-                    return Optional.of("重复条件语法错误（" + blockId + "）: " + err.get());
+                    return Optional.of(ValidationError.of("conditionSyntaxRepeatUntil",
+                            "blockId", blockId, "detail", err.get()));
                 }
-                Optional<String> sub = checkConditionSyntax(ru.body(), blockId + "/body/");
+                Optional<ValidationError> sub = checkConditionSyntax(ru.body(), blockId + "/body/");
                 if (sub.isPresent()) return sub;
             } else if (a instanceof moe.hikari.canvas.script.Action.RandomBranch rb) {
                 // 0.7.3：RandomBranch 自身无 condition，但 then/else 分支可嵌 If/WaitUntil/RepeatUntil
                 // 等含 condition 的积木——必须递归，否则坏条件绕过保存期预检（K16 漏洞）。
-                Optional<String> sub = checkConditionSyntax(rb.then(), blockId + "/then/");
+                Optional<ValidationError> sub = checkConditionSyntax(rb.then(), blockId + "/then/");
                 if (sub.isPresent()) return sub;
                 sub = checkConditionSyntax(rb.elseActions(), blockId + "/else/");
                 if (sub.isPresent()) return sub;
