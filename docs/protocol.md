@@ -975,7 +975,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 - **不兼容变更**：改字段类型、改必填字段、改语义 — `v` +1
 - 插件拒绝 `v < minSupported` 的客户端：`error: VERSION_MISMATCH` + close 4002
 - 协议版本协商在 `auth` 帧进行；客户端用多大的 `v` 作为上限由握手时 `serverVersion` 决定
-- **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「v2 → v3 变更总览（0.6）」）。`ProjectState.PROTOCOL_VERSION` 同步 bump 到 3
+- **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「版本演进」注）。`ProjectState.PROTOCOL_VERSION` 同步 bump 到 3
 - **0.7.0 起 v4**（墙脚本 `script.*`），**0.7.1 起 v5**（新触发器 + 有界循环），**0.7.3 起 v6**（补间 tweenBlock）→ **v7**（备选积木批）。均干净切换；`Protocol.SUPPORTED_MIN = MAX` 当前都 = **7**，前端 `CLIENT_V = 7`。v4 起脚本不进 ProjectState，故 `ProjectState.PROTOCOL_VERSION` 留 **3** 不动（有意为之）。auth 帧 `client_v` 不在范围 → reject `VERSION_MISMATCH` + close 4002，沿用 M16.6 既有版本协商路径
 
 ---
