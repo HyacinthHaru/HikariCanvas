@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-07-17 · 0.9.10 PacketEvents 2.12.2 → 2.13.0（修 Paper 26.2 无法加载）
+
+用户 26.2 服（Leaves 26.2）onEnable 崩：`SpigotReflectionUtil.NMS_ITEM_STACK_CLASS is null`——与 0.9.5 在 26.1.2 上的崩**同一类**：PacketEvents 内部 NMS 反射在新 MC 版本上找不到类。2.12.2 只到 26.1，不认识 26.2 的布局。版本号 0.9.9 → 0.9.10-SNAPSHOT。
+
+**根因**：崩在**依赖**不在我们代码（grep 零 NMS，PROPOSAL §5.2.6 纪律）。PacketEvents **2.13.0**（2026-06-22 发布）加入 26.2 支持，且多版本累积——同时支持 1.21.11 + 26.1 + 26.2，不回退老版本。
+
+**修法**：`plugin/build.gradle.kts` PacketEvents 2.12.2 → 2.13.0。API 用面极小（`PacketEvents.getAPI().init()` + `WrapperPlayServerMapData` + `sendPacket()`），签名未变 → **零代码改动**，靠编译验证。
+
+**顺带**：
+- 修正 build.gradle.kts 一条**错误注释**——原写「PacketEvents 是 plugin-loader 模式（compileOnly），不进 shadow jar」，实际是 `implementation` 打进 jar（stack trace 里 PE 类就在 `HikariCanvas.jar//` 内）。改为正确理由（bundled 但不 relocate：靠 NMS 反射 + 全局单例 `PacketEvents.getAPI()`，改包名会破坏内部）。
+- CI `compat-26` 守卫从 `26.1.2.build.+` 升到 `26.2.build.+`（26.2 目前仍在 beta，最新 `26.2.build.60-beta`，`.+` 通配 beta）。守卫只 compileJava、不 gating 本修复（本修复零代码改，26.1.2 守卫本也过）。
+- docs：CLAUDE 锁定版本表 PacketEvents 2.13.0 + deployment「26.2 自 0.9.10」。
+
+**验证**：`clean` 全量 compileJava（PE 2.13.0 API 兼容确认，零编译错）+ `:plugin:test` **2151 全绿** + shadowJar `HikariCanvas-0.9.10-SNAPSHOT.jar` 打进 PE 2.13.0 的 1881 类（含崩溃点 `io/github/retrooper/packetevents/util/SpigotReflectionUtil.class`）。**「能否在 26.2 enable」需用户用新 jar 在真服验证**（本地无 26.2 server）。
+
+---
+
 ## 2026-07-17 · 0.9.9 包名重命名 `moe.hikari.canvas` → `ac.haru.hikaricanvas`
 
 把根包名从当初没考虑好的 `moe.hikari.canvas` 改成 `ac.haru.hikaricanvas`。**独立一次机械大改**，版本号 0.9.8 → 0.9.9-SNAPSHOT。

@@ -87,7 +87,7 @@ jobs:
           if-no-files-found: ignore
 
   # 0.9.5 多版本支持：双版本编译守卫。
-  # 用 Java 25 对 Paper 26.1.2 API 编译同一份 main 源码，提前抓「用了 26.x 已移除 API」的回归。
+  # 用 Java 25 对 Paper 26.2 API 编译同一份 main 源码，提前抓「用了 26.x 已移除 API」的回归。
   # 只 compileJava（不跑 :plugin:test —— MockBukkit 锁 1.21；26.x 功能验证靠真服手动测）。
   # 生产 jar 仍由上面的 build job 以 1.21.11 / Java 21 / release 21 产出，一份 jar 通吃两版。
   compat-26:
@@ -108,8 +108,8 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Compile main against Paper 26.1.2 API
-        # paperApi=26.1.2.build.+ 追最新 26.1.2 stable dev bundle；javaVer=25 让 toolchain +
-        # options.release 都切 25（26.x paper-api 是 Java 25 字节码，无法 --release 21 编译）。
+      - name: Compile main against Paper 26.2 API
+        # paperApi=26.2.build.+ 追最新 26.2 dev bundle（26.2 目前仍在 beta，无 -stable；.+ 通配 beta）；
+        # javaVer=25 让 toolchain + options.release 都切 25（26.x paper-api 是 Java 25 字节码，无法 --release 21 编译）。
         # deprecation note（如 World#getName）只 warning 不 fail；真用了已移除 API 才会红。
-        run: ./gradlew :plugin:compileJava -PpaperApi=26.1.2.build.+ -PjavaVer=25 --no-daemon --stacktrace
+        run: ./gradlew :plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25 --no-daemon --stacktrace

@@ -20,10 +20,10 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 | 项 | 版本 |
 |---|---|
 | Java | **21** 编译目标（跑 1.21.x 用 Java 21、跑 26.x 用 Java 25；0.9.5 起一份 jar 通吃，见「0.9.5 多版本支持」） |
-| Paper API | **1.21.11** 编译目标（`1.21.11-R0.1-SNAPSHOT`；可 `-PpaperApi=`/`-PjavaVer=` 切换，CI `compat-26` job 对 26.1.2 编译守卫） |
+| Paper API | **1.21.11** 编译目标（`1.21.11-R0.1-SNAPSHOT`；可 `-PpaperApi=`/`-PjavaVer=` 切换，CI `compat-26` job 对 26.2 编译守卫） |
 | Gradle | **9.4.1** |
 | `paperweight-userdev` | **2.0.0-beta.21**（同一版本即支持 1.21.x 与 26.x dev bundle） |
-| PacketEvents | **2.12.2**（多版本：同时支持 1.21.x + 26.1.x；0.9.5 从 2.11.2 升以支持 Paper 26.x） |
+| PacketEvents | **2.13.0**（多版本：同时支持 1.21.x + 26.1 + 26.2；0.9.5 从 2.11.2→2.12.2 支持 26.1，0.9.10 升 2.13.0 支持 26.2） |
 | Javalin | **7.1.0**（6 已过时，不用） |
 | 插件描述文件 | **`paper-plugin.yml`**（不用 `plugin.yml` 旧格式） |
 | 本地测试服 | `./gradlew runServer`（paperweight-userdev 提供） |
