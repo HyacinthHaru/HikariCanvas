@@ -65,7 +65,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 6. 签名失败**不要用 `--no-gpg-sign` 绕过**，先查原因
 7. 签名验证：`gh api /repos/HyacinthHaru/HikariCanvas/commits/<sha> --jq '.commit.verification.verified'` 应返回 `true`
 
-## 架构纪律（26.x 升级保障，不可越界）
+## 架构纪律（26.x 升级保障）
 
 Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x 必崩。为让未来升级只改版本号、不动代码：
 
@@ -75,9 +75,9 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 
 见 PROPOSAL.md §5.2.6 完整说明。
 
-## 其他不可越界的技术决策
+## 其他技术决策
 
-- **预览地图池**是技术核心：编辑期间**只刷像素、不新建 MapView**，避免 `idcounts.dat` 膨胀——这一项做不好整个项目报废
+- **预览地图池**是技术核心：编辑期间**只刷像素、不新建 MapView**，避免 `idcounts.dat` 膨胀
 - **双端渲染一致性**：浏览器 Canvas 与 Java Graphics2D 用同一 TTF 文件、禁抗锯齿；TextLayout 两端走 **`charAdvance(fontId, ch, fontSize)`**（M20 起）—— 构建期 `generateGlyphMetrics` 用 AWT 算每个内置字体 BMP 范围 advance → 紧凑 JSON 双端共享（jar `/fonts/{id}.metrics.json` + `web/public/fonts/{id}.metrics.json`）；运行时 `advance = round(baseAdv × fontSize / baseSize)`。用户字体（`plugins/HikariCanvas/fonts/*`）启动期 `FontMetricsTable.registerRuntime` 现场用同款 AWT 算法计算 + 内存表 + `GET /api/font/metrics?id=...` 给前端。缺字 / 表未到位 fallback 旧 `canonicalCharWidth`（ASCII=0.5×fontSize, CJK=fontSize）。M5-D2 canonical 已被替换为 fallback，仅在首次渲染窗口或缺字时生效
 - **帧率策略**：静止 0fps · 输入防抖 100ms + 5fps 上限 · 提交全量。**这是 v1 静态招牌默认值，不是硬上限**；0.6.0 时间轴会参数化到 30fps，但遵守"不自动降级"哲学（服主主动配，系统不偷偷压）
 - **性能哲学（"工具不是保姆"，2026-05-25 固化）**：默认服主有充足性能 + 知道自己在做什么。① 数据透明不替服主决策 ② 不自动降级（config 上限仅作安全上限，非自动调优）③ 不擦屁股（网络 / 带宽 / 压缩比 / 服主没开的配置一律不测不估）。详见 `PROPOSAL.md §2.1`（产品哲学）+ `§5.2.7`（Benchmark 4 原则）+ `docs/dynamic-data.md §13`
@@ -142,7 +142,7 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 
 **0.4.0 总 ~150h ≈ 6-7 周 wall-clock**。
 
-**6 个固化决策**（不可越界，避技术债）：
+**6 个固化决策**（避技术债）：
 1. Push > Pull（性能 / 解耦 / 扩展性）
 2. 变量是 string（业务在插件侧）
 3. 用户变量持久化（DB）；插件 / 系统 / PAPI 变量内存态
@@ -179,7 +179,7 @@ M0 立项 ✅ → M1 端到端验证 ✅（2026-04-20） → M2 会话与地图�
 
 **目标**：让玩家给所有变量起短易记别名（per-wall），并把 VariablePicker 从单列改为 3 列表格化展示。
 
-**4 个固化决策**（不可越界）：
+**4 个固化决策**：
 1. **所有 namespace 都可加别名**（含 user / schedule / system / papi / scoreboard / plugin）——别名仅在 UI 层（picker / panel / chip）展示用，**不参与 `${var:...}` 解析**
 2. **alias per-wall**：同一变量在不同 wall 可起不同别名（个性化）；同一 wall 内一个 fullName 只一个别名（主键 `(wall_id, full_name)`）
 3. **Picker 表格列顺序**：`别名 | 数值 | 变量名`，行末 ✏ 按钮 inline 编辑
