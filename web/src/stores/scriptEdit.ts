@@ -18,7 +18,7 @@ function scriptMsg(key: keyof typeof messages['zh']['script']): string {
 }
 
 /**
- * 0.7.0-P4-D1：积木编辑会话 store（决策 K-UI-11 / K-UI-12）。
+ * 积木编辑会话 store。
  *
  * <p><b>心智 = 「本地改 working copy + 自动保存」</b>，没有"保存按钮"。打开一条规则 →
  * 从 {@link useScriptStore} 深拷一份 {@code workingCopy}（与 server 镜像隔离），之后拖拽 /
@@ -30,16 +30,13 @@ function scriptMsg(key: keyof typeof messages['zh']['script']): string {
  * 刷新 workingCopy（回显别人的改动 / 自己 save 成功后的权威态）；若<b>脏</b>则保留本地不覆盖
  * （用户正在编辑，server 回声不能踩掉手上的活）。wall 切换（scripts.reset）→ {@link closeEditing}。</p>
  *
- * <p><b>lock 守卫（K-UI-12）</b>：{@link useProjectStore} 的 {@code isLocked} 为真时，
+ * <p><b>lock 守卫</b>：{@link useProjectStore} 的 {@code isLocked} 为真时，
  * 所有变更入口 + newRule / deleteRule 直接 no-op——锁定的墙只读，不发任何写 op。</p>
- *
- * <p>D1 只建编辑模型 + 接 overlay 的新建 / 删除 / 选规则；拖拽（算出新 actions 树后调
- * {@link setActions}）留 D2。</p>
  */
 
-/** undo / redo 栈容量（K-UI-11：cap 50）。 */
+/** undo / redo 栈容量（cap 50）。 */
 const UNDO_CAP = 50;
-/** 自动保存防抖窗口（K-UI-11：800ms）。 */
+/** 自动保存防抖窗口（800ms）。 */
 const SAVE_DEBOUNCE_MS = 800;
 /** newRule 等待 server 回 patch（新规则落 store）的超时——超时仍拿不到 id 则放弃选中。 */
 const NEW_RULE_PATCH_TIMEOUT_MS = 5000;
@@ -76,7 +73,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     /**
      * 正在拖拽（拖块 / palette 拖出 / 移堆）；为真时 server 回声<b>不替换整树</b> workingCopy。
      *
-     * <p>P5 实测修复（根因 3）：拖拽进行中若 server.patch 回来（如刚 selectRule 触发的回声 / 别处
+     * <p>拖拽进行中若 server.patch 回来（如刚 selectRule 触发的回声 / 别处
      * 改动），server-as-truth 的 deep watch 会 deepClone 整棵 server 树替换 workingCopy → v-for
      * key 重建被拖块的 DOM → pointer capture 丢失（拖不动 / 偶尔变"复制"）。像 dirty 保护那样，
      * 拖拽期跳过整树替换；松手（setDragging(false)）后恢复 server-as-truth。</p>
@@ -88,7 +85,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     const redoStack = ref<ScriptRule[]>([]);
 
     /**
-     * 0.7.1-P3 波2：当前聚焦的「元素」字段所属积木的 path（如 {@code 'actions/0'} /
+     * 当前聚焦的「元素」字段所属积木的 path（如 {@code 'actions/0'} /
      * {@code 'actions/2/then/1'}）；null = 当前没有任何元素字段在聚焦。
      *
      * <p>用途：让预览框（PreviewPane）的"点选元素 = 绑定"知道把命中的 {@code elementId}（及当前
@@ -109,7 +106,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     }
 
     /**
-     * H（K-UI-9）：对当前 workingCopy 跑前端 validator 镜像得所有错误（空数组 = 合法）。
+     * 对当前 workingCopy 跑前端 validator 镜像得所有错误（空数组 = 合法）。
      * 无 workingCopy → 空数组。UI（ScriptEditorOverlay）读它显红字 banner；{@link doSave}
      * 在 send 前也读它——有错则<b>不 send 且保留 dirty</b>（防"拖完保存才被后端打回"）。
      */
@@ -148,7 +145,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         undoStack.value = [];
         redoStack.value = [];
         dirty.value = false;
-        // 0.7.1-P3 波2：切规则 → 清元素字段绑定（上一规则的积木 path 在新规则里无意义）。
+        // 切规则 → 清元素字段绑定（上一规则的积木 path 在新规则里无意义）。
         activeElementBinding.value = null;
     }
 
@@ -185,7 +182,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         undoStack.value = [];
         redoStack.value = [];
         dirty.value = false;
-        // 0.7.1-P3 波2：退出编辑也清元素字段绑定。
+        // 退出编辑也清元素字段绑定。
         activeElementBinding.value = null;
     }
 
@@ -215,7 +212,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             // 「动作列表不能为空」），空数组会让 create 直接报错、走不通编辑器入口。默认给
             // 一个空 message 的 log 动作——合法过校验、对游戏无害，用户进编辑器后再改 / 拖别的。
             actions: [makeDefaultAction('log')],
-            // 坐标先空——BlockCanvas 的 autoLayout 会给缺坐标规则纵向排布兜底（D2 拖帽子再写实坐标）。
+            // 坐标先空——BlockCanvas 的 autoLayout 会给缺坐标规则纵向排布兜底（拖帽子再写实坐标）。
             blockLayout: stringifyBlockLayout({ stacks: {} }),
         };
         const known = new Set(scripts.order);
@@ -346,7 +343,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         scheduleSave();
     }
 
-    /** D2 拖拽结果写这里：整棵 actions 树替换。 */
+    /** 拖拽结果写这里：整棵 actions 树替换。 */
     function setActions(newActions: ScriptAction[]): void {
         mutate((rule) => ({ ...rule, actions: newActions }));
     }
@@ -383,7 +380,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     }
 
     /**
-     * 改某条规则的积木堆坐标（blockLayout.stacks[ruleId]）。D2 拖帽子调；低频但走 debounce
+     * 改某条规则的积木堆坐标（blockLayout.stacks[ruleId]）。拖帽子调；低频但走 debounce
      * save（与其它结构改动一致，不另发协议）。注意 blockLayout 是<b>整条规则的字段</b>，
      * 这里只改 stacks 里该 ruleId 的项（保留其它 ruleId 坐标——虽然实践中一条规则的
      * blockLayout 通常只存自己）。
@@ -397,11 +394,11 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     }
 
     /**
-     * 改某个 action 的字段值（F 阶段参数表单调）。{@code path} 是 blockTree path 字符串
+     * 改某个 action 的字段值（参数表单调）。{@code path} 是 blockTree path 字符串
      * （如 {@code 'actions/2'} / {@code 'actions/2/then/1'} / {@code 'actions/0/body/0'}）；
      * 复用 {@link replaceAt} 定位 + immutable 重建整棵树（沿途容器节点克隆，未改子树结构
      * 共享）。replaceAt 走 blockTree 已泛化的 transformSequence，<b>统一支持</b> if 的 then/else
-     * 与 repeat 的 body——避免 scriptEdit 维护平行实现漏掉新容器键（0.7.1 body 编辑被丢弃的根因）。
+     * 与 repeat 的 body——避免 scriptEdit 维护平行实现漏掉新容器键（body 编辑被丢弃的根因）。
      *
      * <p>定位失败（path 非法 / 越界）→ 整体 no-op（不标脏、不 push undo），避免脏写。</p>
      */
@@ -415,7 +412,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         // 先算出新 actions（无变化则返回原引用 → 跳过，避免无意义快照 / 保存）。
         const nextActions = replaceAt(cur.actions, segs, patch);
         if (nextActions === cur.actions) return;
-        // 0.7.1-P4：coalesce=true（幽灵拖动逐帧写回）跳过入栈——起拖已 snapshotForUndo 存了一份拖动前
+        // coalesce=true（幽灵拖动逐帧写回）跳过入栈——起拖已 snapshotForUndo 存了一份拖动前
         // 快照，60fps 连续帧若每帧 pushUndo 会瞬间塞满 cap 50、毁掉之前全部历史（Ctrl+Z 失效）。
         if (!coalesce) pushUndo(cur);
         workingCopy.value = { ...deepCloneRule(cur), actions: nextActions };
@@ -424,7 +421,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     }
 
     /**
-     * 0.7.1-P4：拖动起手存一份 undo 快照。之后拖动中的逐帧写回走 {@code updateActionField(.., true)}
+     * 拖动起手存一份 undo 快照。之后拖动中的逐帧写回走 {@code updateActionField(.., true)}
      * （coalesce）不再入栈——一次拖动 = 一个可撤销步。lock / 无 workingCopy → no-op。
      */
     function snapshotForUndo(): void {
@@ -435,7 +432,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     }
 
     /**
-     * 0.7.1：删除 {@code path}（如 {@code 'actions/2'} / {@code 'actions/2/then/1'} /
+     * 删除 {@code path}（如 {@code 'actions/2'} / {@code 'actions/2/then/1'} /
      * {@code 'actions/0/body/0'}）指向的<b>单个动作积木</b>（含其整棵子树）。用于「拖到删除区删积木」
      * —— 搭错一步不必删整堆重搭。复用 {@link removeAt} immutable 重建（统一支持 if then/else +
      * repeat body 容器）。lock no-op。
@@ -458,7 +455,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         scheduleSave();
     }
 
-    // ---------- 拖拽期冻结（根因 3）----------
+    // ---------- 拖拽期冻结 ----------
 
     /**
      * 标记拖拽进行中 / 结束。useBlockDrag 的 start*（拖块 / palette / 移堆）调
@@ -548,7 +545,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         const cur = workingCopy.value;
         if (ruleId === null || cur === null) return;
         if (project.isLocked) return;
-        // H（K-UI-9）：有校验错误 → 不 send，保留 dirty（让 UI 红字提示用户修；改完再次
+        // 有校验错误 → 不 send，保留 dirty（让 UI 红字提示用户修；改完再次
         // scheduleSave / flush 时 validationErrors 变空即可发出）。防"拖完保存才被后端打回"。
         if (validationErrors.value.length > 0) return;
         // 乐观清脏：发出去就当本地无未保存改动；失败回调里再标回脏。
@@ -564,7 +561,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
 
     /**
      * watch server 镜像里当前编辑规则的变化：
-     * - 拖拽中 → 跳过整树替换（根因 3：v-for 重建会打断 pointer capture）；
+     * - 拖拽中 → 跳过整树替换（v-for 重建会打断 pointer capture）；
      * - 非脏 → 用 server 版刷新 workingCopy（回显他人改动 / 自己 save 成功后的权威态）；
      * - 脏   → 保留本地不覆盖（用户正在编辑，server 回声不能踩掉手上的活）。
      * 当前编辑规则被 server 删掉（get 返 null）→ forceClose（规则没了，无处可保存，

@@ -1,11 +1,11 @@
 /**
- * 0.7.1-P3：积木编辑器预览框坐标系（纯函数，可单测）。
+ * 积木编辑器预览框坐标系（纯函数，可单测）。
  *
  * <p>预览框把整面墙（墙像素 = widthMaps*128 × heightMaps*128）等比缩放（fit）并居中显示进
  * 一块可变尺寸的预览区。本模块提供 fit-scale + 居中偏移的变换，及墙坐标 ↔ 预览像素坐标的
  * 双向映射。</p>
  *
- * <p><b>互逆约束</b>：{@link wallToPreview} 与 {@link previewToWall} 必须严格互逆——P4「幽灵
+ * <p><b>互逆约束</b>：{@link wallToPreview} 与 {@link previewToWall} 必须严格互逆——「幽灵
  * 拖动设目标坐标」用 previewToWall 把指针在预览里的位置反算成墙坐标填进积木，差一点目标就偏。
  * 单测做 round-trip 断言守这个约束。</p>
  */
@@ -50,9 +50,9 @@ export function previewToWall(t: PreviewTransform, px: number, py: number): { x:
 }
 
 /**
- * 0.7.1-P4：指针 client 坐标 → 墙坐标，<b>以 canvas 真实 rect 为原点比例映射</b>。
+ * 指针 client 坐标 → 墙坐标，<b>以 canvas 真实 rect 为原点比例映射</b>。
  *
- * <p>消除 P3 审查 M1：{@link computePreviewTransform} 的 offset/scale 用<b>未 round</b> 的尺寸算，
+ * <p>{@link computePreviewTransform} 的 offset/scale 用<b>未 round</b> 的尺寸算，
  * 但 canvas CSS 宽是 {@code round(wallW*scale)}，flex 居中下 canvas 真实左上角与 transform 原点
  * 差 ~0.5px。本函数不经 transform——直接用 {@code crect.width/height}（= round 后真实 CSS 尺寸）
  * 把 client 像素线性映回墙像素（canvas 内部分辨率 = 墙像素，1:1）。crect 任一维 ≤ 0 或墙未就绪

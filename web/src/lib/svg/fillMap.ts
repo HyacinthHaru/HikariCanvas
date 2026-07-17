@@ -1,9 +1,9 @@
 /**
  * fillMap.ts — SVG presentation attribute → HikariCanvas Fill / Stroke / fillRule / opacity
  *
- * 范围（B2 批次，纯色 MVP）：
+ * 范围：
  *   - mapFill:     fill="#hex" → SolidFill；fill="none" → undefined；命名色 → hex
- *                  fill="url(#id)" gradient 引用 → undefined（B3 接）
+ *                  fill="url(#id)" gradient 引用 → 解析或 undefined
  *   - mapStroke:   stroke + stroke-width → Stroke
  *   - mapFillRule: fill-rule 属性 → 'nonzero' | 'evenodd' | undefined
  *   - mapOpacity:  opacity / fill-opacity 属性 → number | undefined
@@ -105,7 +105,7 @@ function normalizeColor(raw: string): string | undefined | null {
         }
     }
 
-    // url(#id) gradient 引用 → B3 接，此处返回 null 表示「有值但不支持」
+    // url(#id) gradient 引用 → 此处返回 null 表示「有值但不支持」（gradient 解析在 mapFill）
     if (v.startsWith('url(')) return null;
 
     return null;
@@ -206,7 +206,7 @@ function resolveGradient(id: string, root: Element): LinearGradient | RadialGrad
  * 从 SVG 元素映射 `fill` 属性到 HikariCanvas `Fill`。
  * - `fill="#hex"` 或命名色 → `{ type: 'solid', color: '#rrggbb' }`
  * - `fill="none"` / `fill="transparent"` → `undefined`
- * - `fill="url(#id)"` + root 参数 → LinearGradient / RadialGradient（B3）
+ * - `fill="url(#id)"` + root 参数 → LinearGradient / RadialGradient
  * - `fill="url(#id)"` 且无 root 或 id 不存在 → `undefined`（优雅降级）
  * - 未设置 fill → `undefined`
  *

@@ -1,5 +1,5 @@
 /**
- * 0.4.4：铁路网络前端类型镜像（与后端 {@code moe.hikari.canvas.rail.*} record 对齐）。
+ * 铁路网络前端类型镜像（与后端 {@code moe.hikari.canvas.rail.*} record 对齐）。
  *
  * <p>schema 见 {@code db-migrations/V016__rail_network.sql}；协议见
  * {@code docs/dynamic-data.md §18.7}。</p>

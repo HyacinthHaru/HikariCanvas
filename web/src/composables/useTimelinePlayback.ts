@@ -3,7 +3,7 @@ import { useTimelineStore } from '@/stores/timeline';
 import { mapTime } from '@/timeline/interpolation';
 
 /**
- * 0.6 P4：时间轴本地预览的自动播放循环（rAF）。
+ * 时间轴本地预览的自动播放循环（rAF）。
  *
  * <p>scrubber 手动拖播放头在 dock 组件内直接处理（setPointerCapture + pxToMs）；本 composable
  * 只管"播放按钮 → rAF 按真实墙钟推进 playheadMs（经 loopMode 映射）→ 喂本地预览"。纯前端、

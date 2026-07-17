@@ -1,7 +1,7 @@
 import type { BlendMode } from '@/types/protocol';
 
 /**
- * M8-E v1 混合模式实现（镜像后端 {@code BlendModes.java}）。
+ * 混合模式实现（镜像后端 {@code BlendModes.java}）。
  * 契约见 {@code docs/rendering.md §6.6}。
  *
  * 公式 per-channel 0-1：
@@ -17,7 +17,7 @@ import type { BlendMode } from '@/types/protocol';
  *   outA = srcA + dstA * (1 - srcA)
  *   outRGB = (blend * srcA + dst * dstA * (1 - srcA)) / outA
  *
- * Ultrareview 2026-05-25 #7：主 buffer 已支持透明（0.4.6 P2 ARGB），
+ * 主 buffer 已支持透明（ARGB），
  * 必须按真 source-over 合成 alpha，不能再强写 255。
  *
  * 任何修改要与后端 BlendModes.java 同步，否则双端预览像素漂移。
@@ -46,7 +46,7 @@ export function blendChannel(srcByte: number, dstByte: number, mode: BlendMode):
 
 /**
  * 把 src（ARGB layer buffer ImageData）按 layerOpacity + blendMode 合到 dst（ARGB 主 buffer ImageData）。
- * P3-92：dst 是真 ARGB 主 buffer（0.4.6 P2 起支持透明背景），dst alpha（da = dd[i+3]）
+ * dst 是真 ARGB 主 buffer（支持透明背景），dst alpha（da = dd[i+3]）
  * 真实参与 W3C source-over 合成——不再假设 255。与模块级 JSDoc 及实现一致。
  */
 export function applyBlendModeOver(
@@ -77,7 +77,7 @@ export function applyBlendModeOver(
         const bg = blendChannel(sg, dg, mode);
         const bb = blendChannel(sb, db, mode);
 
-        // Ultrareview 2026-05-25 #7：W3C source-over with alpha pass-through。
+        // W3C source-over with alpha pass-through。
         const dstAf = da / 255;
         const invA = 1 - srcA;
         const outAf = srcA + dstAf * invA;

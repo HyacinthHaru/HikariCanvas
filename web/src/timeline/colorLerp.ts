@@ -1,5 +1,5 @@
 /**
- * sRGB 线性空间色彩 / Fill 插值（0.6 P3）——后端 `render/ColorLerp.java` 的前端镜像。
+ * sRGB 线性空间色彩 / Fill 插值——后端 `render/ColorLerp.java` 的前端镜像。
  *
  * 数学权威定义见 `docs/rendering.md §9.4`：lerp 形式 `a + (b−a)×t`、`round(x×255)` 半数进位、
  * 输出含 alpha 当且仅当任一输入含 alpha、解析失败 step——**两端写死相同**，由共享向量

@@ -1,4 +1,4 @@
-// M12-D：笔刷参数 Pinia store。localStorage 持久（跨 session 保留用户设置）。
+// 笔刷参数 Pinia store。localStorage 持久（跨 session 保留用户设置）。
 //
 // 字段对应 BrushController.BrushProps；BrushPanel 组件读写此 store。
 

@@ -1,6 +1,6 @@
 /**
- * 关键帧插值器（0.6 P3）——后端 `render/KeyframeInterpolator.java` 的前端镜像，
- * 编辑器本地预览（P4 scrubber）用。数学权威定义见 `docs/rendering.md §9`；游戏内
+ * 关键帧插值器——后端 `render/KeyframeInterpolator.java` 的前端镜像，
+ * 编辑器本地预览（scrubber）用。数学权威定义见 `docs/rendering.md §9`；游戏内
  * 最终输出永远以后端为权威（timeline.md D9）。
  *
  * 取值规则（§9.1：首帧前/末帧后不外插、重合帧取后）、缓动（`easing.ts`）、色彩
@@ -214,7 +214,7 @@ export function interpolate(
     if (trackEntries.length === 0) return base;
 
     // 帧内同一 raw 只 resolve 一次（memo）——与 Java 端一致，防变量 push 落在两次读
-    // 之间造成单帧撕裂（P3 审查确认项 #5）
+    // 之间造成单帧撕裂
     if (resolver) {
         const delegate = resolver;
         const memo = new Map<string, number>();

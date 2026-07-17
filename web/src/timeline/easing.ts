@@ -1,5 +1,5 @@
 /**
- * 缓动求解器（0.6 P3）——后端 `render/EasingSolver.java` 的前端镜像。
+ * 缓动求解器——后端 `render/EasingSolver.java` 的前端镜像。
  *
  * 数学权威定义见 `docs/rendering.md §9.3`：算法（WebKit UnitBezier 系数形式 + 固定步数
  * 牛顿迭代 + 二分兜底）、常量（NEWTON_ITER / BISECT_MAX / EPS）、边界捷径与 EASE 预设

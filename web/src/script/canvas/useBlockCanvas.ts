@@ -1,9 +1,9 @@
 import { computed, onScopeDispose, ref } from 'vue';
 
 /**
- * 0.7.0-P4-B：积木画布的无限平移 / 缩放 composable。
+ * 积木画布的无限平移 / 缩放 composable。
  *
- * <p><b>坐标模型（K-UI-1）</b>：viewport（overflow hidden）内一个 world div，
+ * <p><b>坐标模型</b>：viewport（overflow hidden）内一个 world div，
  * `transform: translate(panX,panY) scale(zoom)`、`transform-origin: 0 0`。积木堆
  * `position:absolute` 定位在 world 坐标系。屏幕坐标 {@code s} 与 world 坐标 {@code w}
  * 关系为 {@code s = pan + w * zoom}，逆变换 {@code w = (s - pan) / zoom}。</p>

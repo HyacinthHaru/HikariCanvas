@@ -8,7 +8,7 @@ const RECENT_KEY = 'hikari-canvas:recent-colors';
 const MAX_RECENT = 20;
 
 /**
- * M10 调色板状态：
+ * 调色板状态：
  * - {@code recent}：最近使用色（localStorage 持久化，跨 session）
  * - {@code projectColors}：从 ProjectState 派生（扫所有 layer.elements + canvas.background）
  *
@@ -38,7 +38,7 @@ export const usePaletteStore = defineStore('palette', () => {
                 collectElementColors(el, set);
             }
         }
-        // M17 F5：canvas.background 升级为 Fill 联合类型；fillColors 抽出全部 stop / solid 颜色。
+        // canvas.background 升级为 Fill 联合类型；fillColors 抽出全部 stop / solid 颜色。
         for (const c of fillColors(project.state.canvas.background)) {
             set.add(c.toUpperCase());
         }
@@ -66,10 +66,10 @@ function collectElementColors(el: Element, set: Set<string>): void {
     const add = (c: string | undefined | null) => {
         if (c) set.add(c.toUpperCase());
     };
-    // 共通字段（M8/M9/M12 各 element 类型）
+    // 共通字段（各 element 类型）
     if ('color' in el) add((el as { color?: string }).color);
     if ('fill' in el) {
-        // M12 BrushStrokeElement.fill 也走这条
+        // BrushStrokeElement.fill 也走这条
         for (const c of fillColors((el as { fill?: FillCompat }).fill)) add(c);
     }
     if ('tint' in el) add((el as { tint?: string }).tint);

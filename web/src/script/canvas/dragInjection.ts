@@ -1,7 +1,7 @@
 import type { InjectionKey } from 'vue';
 
 /**
- * 0.7.0-P4-D2：积木拖拽 start 句柄的 provide/inject 契约。
+ * 积木拖拽 start 句柄的 provide/inject 契约。
  *
  * <p>{@code BlockCanvas} 持有唯一的 {@code useBlockDrag} 实例（它握 canvasRef + screenToWorld），
  * 把"启动块拖动 / 启动移堆"两个句柄 provide 下去；递归的 {@code BlockNode}（拖块）与

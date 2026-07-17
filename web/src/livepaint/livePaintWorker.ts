@@ -1,5 +1,5 @@
 /**
- * M18-P2 Live Paint Worker — buildGraph 移出主线程。
+ * Live Paint Worker — buildGraph 移出主线程。
  *
  * 协议：主线程 postMessage({ type: 'build', requestId, elements, canvasWidth, canvasHeight })，
  *       Worker 回 { type: 'ok', requestId, graph } 或 { type: 'err', requestId, message }。
@@ -42,7 +42,7 @@ self.onmessage = async (e: MessageEvent<LivePaintWorkerRequest>) => {
     const req = e.data;
     if (req.type !== 'build') return;
     try {
-        // 0.4.9 Sub B：buildGraph 升级为 async（text 元素走 fontkit dynamic import + fetch
+        // buildGraph 是 async（text 元素走 fontkit dynamic import + fetch
         // 字体二进制）。Worker 内 async 不阻塞主线程；race 保护由主线程 requestId 校对。
         const graph = await buildGraph(req.elements, req.canvasWidth, req.canvasHeight);
         const resp: LivePaintWorkerResponseOk = { type: 'ok', requestId: req.requestId, graph };

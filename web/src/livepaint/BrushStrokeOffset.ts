@@ -1,5 +1,5 @@
 /**
- * M18-P5+ Live Paint — Brush stroke offset polygon。
+ * Live Paint — Brush stroke offset polygon。
  *
  * 输入 brush 元素的采样点数组 + 笔触宽度，输出真实笔画形状的单 ring polygon。
  * 升级前：ElementToPolygon 对 brush 走 bbox 兜底，导致 Live Paint 把整个 bbox 当占用区域，

@@ -2,8 +2,8 @@ import { nextTick, ref, type Ref } from 'vue';
 import { useUiStore } from '@/stores/ui';
 
 /**
- * M5-B8：Ctrl+wheel zoom（以鼠标为中心）+ 中键 / Alt+左键拖拽 pan。
- * M17 F4：新增 hand 工具（左键直接 pan）+ 暴露 isPanning 供 cursor 状态切换。
+ * Ctrl+wheel zoom（以鼠标为中心）+ 中键 / Alt+左键拖拽 pan。
+ * hand 工具（左键直接 pan）+ 暴露 isPanning 供 cursor 状态切换。
  * outerRef 是带 overflow:auto 的滚动容器；widthPx/heightPx 用于 fitToViewport 计算。
  */
 export function usePanScroll(opts: {
@@ -13,7 +13,7 @@ export function usePanScroll(opts: {
 }) {
     const { outerRef } = opts;
     const ui = useUiStore();
-    /** M17 F4：暴露给 CanvasView 用于 grabbing cursor。 */
+    /** 暴露给 CanvasView 用于 grabbing cursor。 */
     const isPanning = ref(false);
 
     function onWheel(e: WheelEvent) {
@@ -67,7 +67,7 @@ export function usePanScroll(opts: {
     function onMouseDown(e: MouseEvent) {
         const middleBtn = e.button === 1;
         const altLeft = e.button === 0 && e.altKey;
-        // M17 F4：hand 工具下左键直接 pan（含点击元素 / 空白处任意位置）。
+        // hand 工具下左键直接 pan（含点击元素 / 空白处任意位置）。
         const handLeft = e.button === 0 && ui.activeTool === 'hand';
         if (!middleBtn && !altLeft && !handLeft) return;
         if (!outerRef.value) return;

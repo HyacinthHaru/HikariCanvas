@@ -1,14 +1,14 @@
-// SVG path d 字符串缩放工具（M9 PathDValidator 子集：M/L/Q/C/Z 大小写）。
+// SVG path d 字符串缩放工具（PathDValidator 子集：M/L/Q/C/Z 大小写）。
 //
 // 用途：CanvasView 的 onTransformEnd 在 PathElement 缩放时，把 d 内坐标按
 // (sx, sy) 缩放后一并 patch 回后端，否则 d 不变 = 几何形状不变，
-// resize handle 拖动失效（2026-05-14 Bug 修复）。
+// resize handle 拖动失效。
 //
 // 算法：tokenize d → 按命令字母分组 → 把后续连续数字按 (x, y) 配对乘缩放系数。
 // Z/z 无坐标，原样保留。
 
 const CMD_RE = /[MLmlQqCcZz]/;
-// P3-26：数字部分扩展为可选整数位 + 可选小数 + 可选科学计数，与后端 PathDValidator.scanNumber
+// 数字部分扩展为可选整数位 + 可选小数 + 可选科学计数，与后端 PathDValidator.scanNumber
 // 及前端 PathParser.ts 的词法一致。裸 `-?\d+(?:\.\d+)?` 无法匹配 .5 / -.5 / 1e2 等合法 SVG
 // 数字（导入工程 / 模板 raw_state / 外部工具写入的 d 串会出现），导致缩放时坐标量级跳变 / 配对错位。
 const TOKEN_RE = /[MLmlQqCcZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g;
@@ -16,7 +16,7 @@ const TOKEN_RE = /[MLmlQqCcZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g;
 /**
  * 缩放 d 字符串内所有坐标。
  *
- * @param d  原始 d 字符串（M9 子集：M/L/Q/C/Z 大小写均接受）
+ * @param d  原始 d 字符串（子集：M/L/Q/C/Z 大小写均接受）
  * @param sx X 方向缩放系数
  * @param sy Y 方向缩放系数
  * @returns  缩放后的 d；输入空或 sx==sy==1 时返回原样
@@ -53,7 +53,7 @@ export function scalePathD(d: string, sx: number, sy: number): string {
 }
 
 /**
- * 4 位小数 + 整数不加 .0；保证 PathDValidator 正则接受（M9 PathDValidator 允许浮点）。
+ * 4 位小数 + 整数不加 .0；保证 PathDValidator 正则接受（PathDValidator 允许浮点）。
  */
 function formatNum(v: number): string {
     const rounded = Math.round(v * 10000) / 10000;

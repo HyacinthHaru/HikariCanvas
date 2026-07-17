@@ -1,4 +1,4 @@
-// M11-C：Bayer 4×4 有序抖动（前端镜像）。
+// Bayer 4×4 有序抖动（前端镜像）。
 //
 // 与 Java moe.hikari.canvas.render.BayerDither 逐行镜像：同矩阵、同 AMPLITUDE、同公式。
 // 算法详见后端实现与 docs/rendering.md §6.6。
@@ -33,7 +33,7 @@ export function bayerThreshold(x: number, y: number): number {
  * 对 ImageData 原地 dither。{@code alpha < 128} 像素跳过；其余像素加 Bayer offset、
  * 走 {@link PaletteLut.matchColor} 量化、反查 palette RGB 写回。
  *
- * <p>P3-34：{@code phaseX/phaseY} 是该 ImageData 局部 (0,0) 对应的原画坐标偏移。
+ * <p>{@code phaseX/phaseY} 是该 ImageData 局部 (0,0) 对应的原画坐标偏移。
  * 当 offscreen buffer 只裁了 element bbox 子区域时，Bayer 矩阵必须以原画坐标取阈值
  * （{@code bayerThreshold(phaseX + x, phaseY + y)}），与后端 {@code BayerDither.apply(buf, lut, clipX, clipY)}
  * 相位对齐——否则 4×4 图案错位、双端像素漂移。默认 (0,0) 兼容全画布旧调用。</p>

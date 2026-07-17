@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P5-H（K-UI-8）：试跑高亮的纯逻辑层。
+ * 试跑高亮的纯逻辑层。
  *
  * <p>后端 {@code script.test} 异步跑完后推 {@code script.trace}（{@code {ruleId, steps}}，
  * steps 每项 {@code {blockId, kind, result, detail?}}）。编辑器拿到后<b>按 steps 顺序逐个点亮</b>
@@ -15,7 +15,7 @@
 
 import type { ScriptTraceStep } from '@/types/protocol';
 
-/** 单步点亮间隔（ms）。K-UI-8：120ms 步进动画。 */
+/** 单步点亮间隔（ms）。120ms 步进动画。 */
 export const STEP_INTERVAL_MS = 120;
 /** 全部点完后保留高亮的时长（ms），随后自动清（除非期间又触发新试跑 / 编辑）。 */
 export const HOLD_AFTER_MS = 2000;
@@ -27,7 +27,7 @@ export type StepResult = ScriptTraceStep['result'];
 export type HighlightMap = Map<string, StepResult>;
 
 /**
- * 结果态 → Catppuccin CSS 变量名（含 {@code --} 前缀）。K-UI-8 配色：
+ * 结果态 → Catppuccin CSS 变量名（含 {@code --} 前缀）。配色：
  * ok=green / skipped=overlay0 / blocked=yellow / error=red。未知态退边框灰（防御）。
  */
 export function resultColorVar(result: StepResult): string {
@@ -60,8 +60,7 @@ export function buildHighlightFrames(steps: ScriptTraceStep[]): HighlightMap[] {
     for (const step of steps) {
         // 防御：blockId 缺失 / 空 → 跳过（不产生可点亮帧，但不影响后续 step 的帧序）。
         if (!step.blockId) {
-            // 仍推一帧（保持帧数 = 有效 step 数的语义稳定？）——不：跳过空 blockId，
-            // 帧数 = 有效 step 数。这样 UI 停在最后一个有效高亮上。
+            // 跳过空 blockId：帧数 = 有效 step 数，UI 停在最后一个有效高亮上。
             continue;
         }
         acc.set(step.blockId, step.result);

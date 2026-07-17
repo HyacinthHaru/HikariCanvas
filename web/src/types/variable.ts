@@ -1,11 +1,11 @@
 /**
- * 变量系统前端类型（0.4.0-P1-D，对齐 {@code docs/dynamic-data.md §2 / §3} +
- * 后端 P1-A `moe.hikari.canvas.variable.Variable` record）。
+ * 变量系统前端类型（对齐 {@code docs/dynamic-data.md §2 / §3} +
+ * 后端 `moe.hikari.canvas.variable.Variable` record）。
  *
  * <p>核心 fullName 命名约定：</p>
  * <ul>
  *   <li>用户变量内部 namespace = {@code user:<wallId>}（冒号分隔 wallId），fullName 形如
- *     {@code user:w-3a17b2c1/红队比分}。这是后端 P1-A 固化的隔离方案，避免不同 wall 的
+ *     {@code user:w-3a17b2c1/红队比分}。这是后端固化的隔离方案，避免不同 wall 的
  *     user 变量名相撞。前端常用 {@link makeUserFullName} 拼。</li>
  *   <li>插件 / 系统 / PAPI 变量 namespace = {@code <pluginName>} / {@code system} /
  *     {@code papi}，fullName 用 {@link makeFullName} 直拼。</li>
@@ -25,13 +25,13 @@ export type VarType = 'STRING' | 'NUMBER' | 'BOOLEAN' | 'COLOR';
 /**
  * Variable 完整记录（state.patch add value / list 端点返回的形态）。
  *
- * - {@link namespace}：{@code user:<wallId>} / {@code userglobal}（0.4.3） / {@code system} /
+ * - {@link namespace}：{@code user:<wallId>} / {@code userglobal} / {@code system} /
  *   插件名 / {@code papi}
  * - {@link ttl}：毫秒；0 = 永久；>0 = TTL（最小 100ms 由后端校验）
  * - {@link source}：human-readable 来源；用户手动改 = {@code "manual"}；插件 push = 插件名；
  *   系统 provider = {@code "system"}；PAPI 桥接 = {@code "papi"}
  * - {@link updatedAt}：epoch ms
- * - {@link ownerUuid} / {@link ownerName}（0.4.3）：仅 {@code userglobal} namespace 有；其他 null
+ * - {@link ownerUuid} / {@link ownerName}：仅 {@code userglobal} namespace 有；其他 null
  */
 export interface Variable {
     namespace: string;
@@ -52,7 +52,7 @@ export interface VariablePatch {
     defaultValue?: string | null;
 }
 
-/** Plugin Push API 批量 update 形态（P4 用，仅 ts 镜像供后续 typing 一致）。 */
+/** Plugin Push API 批量 update 形态（仅 ts 镜像供 typing 一致）。 */
 export interface VariableUpdate {
     value: string;
     ttl?: number;
@@ -89,13 +89,13 @@ export function isUserNamespace(namespace: string): boolean {
     return namespace.startsWith('user:');
 }
 
-/** 0.4.3：判 namespace 是否为全局用户变量（{@code userglobal}）。 */
+/** 判 namespace 是否为全局用户变量（{@code userglobal}）。 */
 export const USERGLOBAL_NAMESPACE = 'userglobal';
 export function isUserGlobalNamespace(namespace: string): boolean {
     return namespace === USERGLOBAL_NAMESPACE;
 }
 
-/** 0.4.3：拼全局用户变量 fullName，例如 {@code 'userglobal/red_score'}。 */
+/** 拼全局用户变量 fullName，例如 {@code 'userglobal/red_score'}。 */
 export function makeUserGlobalFullName(key: string): string {
     return `${USERGLOBAL_NAMESPACE}/${key}`;
 }

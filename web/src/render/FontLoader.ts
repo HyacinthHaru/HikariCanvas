@@ -1,5 +1,5 @@
 /**
- * M23：统一字体加载层。
+ * 统一字体加载层。
  *
  * <p>浏览器 FontFace API 让任意字体运行时动态注册到 document.fonts。
  * 内置字体 + 用户字体走同一条加载路径（{@code GET /api/font/file?id=X}），删除
@@ -29,7 +29,7 @@ const readyHandlers: ((fontId: string) => void)[] = [];
 
 /**
  * 注册回调，加载完任意字体后触发（CanvasView 接到后 requestDraw）。
- * P3-40：返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用以注销，避免
+ * 返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用以注销，避免
  * 组件多次挂载/卸载时 readyHandlers 数组只增不减（旧闭包持组件引用泄漏 + 重复 requestDraw）。
  */
 export function onFontLoaded(fn: (fontId: string) => void): () => void {
@@ -37,7 +37,7 @@ export function onFontLoaded(fn: (fontId: string) => void): () => void {
     return () => offFontLoaded(fn);
 }
 
-/** P3-40：注销 onFontLoaded 注册的回调。 */
+/** 注销 onFontLoaded 注册的回调。 */
 export function offFontLoaded(fn: (fontId: string) => void): void {
     const i = readyHandlers.indexOf(fn);
     if (i >= 0) readyHandlers.splice(i, 1);

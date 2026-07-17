@@ -1,11 +1,10 @@
 <script setup lang="ts">
 /**
- * 0.7.0-P5-F（K-UI-5/7）：积木参数通用表单控件。
+ * 积木参数通用表单控件。
  *
  * <p>按 {@link FieldDef.type} 渲染对应控件，改值经 {@code update} 事件回写（由 BlockNode 接到
- * {@code edit.updateActionField}）。C 阶段参数槽只渲染占位（字段名 + 原始值文本），F 把它换成真
- * 控件。<b>condition / statements 两类字段不走本组件</b>——condition 由任务 G 的 ConditionBuilder
- * 接，statements 是 BlockNode 递归子槽（任务 C）。</p>
+ * {@code edit.updateActionField}）。<b>condition / statements 两类字段不走本组件</b>——condition
+ * 由 ConditionBuilder 接，statements 是 BlockNode 递归子槽。</p>
  *
  * <h2>各类型 → 控件 + emit 值形态（务必与 wire 类型一致）</h2>
  *
@@ -137,7 +136,7 @@ const pickerStyle = ref<Record<string, string>>({});
  * 的 onClickOutside 会被同一次点击立即触发关闭）；② picker 向下展开 + 在 overlay 里要确保
  * 浮层不被裁切——这里 Teleport 到 body + 用按钮屏幕坐标 fixed 定位 picker 容器。
  *
- * <p>0.7.0-P5 实测修复（次要根因 2）：{@code stopPropagation} 阻止这次"打开"click 继续冒泡到
+ * <p>{@code stopPropagation} 阻止这次"打开"click 继续冒泡到
  * 祖先（BlockStack.onStackClick / 画布 pan / 其它 picker 的 onClickOutside 窗口监听），杜绝同一次
  * 点击里"开了又被外层处理掉"。规则选中已提前在 BlockNode/BlockStack 的 pointerdown 完成，故这里
  * 截断 click 冒泡不影响进入编辑态。</p>
@@ -447,7 +446,7 @@ onMounted(() => {
       <span v-else class="hc-pf-empty">{{ t.script.param.noCommandTemplates }}</span>
     </label>
 
-    <!-- 0.7.3-D1：孤儿模板警告——templateId 有值但在当前列表中找不到（服主删除 / 改名模板后出现）。
+    <!-- 孤儿模板警告——templateId 有值但在当前列表中找不到（服主删除 / 改名模板后出现）。
          显示失效 ID 并提示用户重新选择，保留原 id 可见让用户知道原来绑定的是哪个。 -->
     <div v-if="isOrphanTemplate" class="hc-pf-cmd-orphan">
       ⚠ {{ t.script.param.orphanTemplate(commandValue.templateId) }}
@@ -476,7 +475,7 @@ onMounted(() => {
 
 <style scoped>
 /*
- * 0.7.0-P5（视觉）：积木参数控件统一"胶囊"风。
+ * 积木参数控件统一"胶囊"风。
  *
  * 控件嵌在饱和实色积木块里，必须明显可点 / 可填：白底（深主题随 card）+ 大圆角胶囊 +
  * 清晰边框 + 内阴影，与彩色块面对比强烈。变量"选变量"按钮做成显眼胶囊（显当前变量名或
@@ -628,7 +627,7 @@ onMounted(() => {
     position: fixed;
 }
 
-/* 0.7.3-D1：孤儿模板警告行（templateId 不在当前列表中） */
+/* 孤儿模板警告行（templateId 不在当前列表中） */
 .hc-pf-cmd-orphan {
     font-size: 10px;
     color: var(--destructive, #ef4444);

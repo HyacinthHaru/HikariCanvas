@@ -1,5 +1,5 @@
 /**
- * 0.7.1：从一条积木脚本规则里收集它"涉及的变量"（fullName 引用集合）。
+ * 从一条积木脚本规则里收集它"涉及的变量"（fullName 引用集合）。
  *
  * <p>用途：积木画布右下角的「本脚本变量实时预览」面板（{@link ScriptVariableWatch.vue}）—— 不用切到
  * 右侧变量面板，就能看当前选中规则用到了哪些变量 + 实时值。这里只负责<b>提取引用</b>（纯逻辑、无 DOM /
@@ -48,7 +48,7 @@ function collectFromText(text: unknown, out: Set<string>): void {
 }
 
 /**
- * 0.7.2-F3：从条件文本（ConditionEvaluator 文法）抓出所有 {@code var("rawName")} 引用的 rawName。
+ * 从条件文本（ConditionEvaluator 文法）抓出所有 {@code var("rawName")} 引用的 rawName。
  * 条件里的变量是函数调用形态（{@code var("user/x") > 0}），不是 {@code ${var:X}} 占位符，故单独一条正则。
  */
 function collectFromCondition(condition: unknown, out: Set<string>): void {
@@ -90,7 +90,7 @@ function collectFromAction(action: ScriptAction, out: Set<string>): void {
             break;
         case 'if':
         case 'waitUntil':
-            // 0.7.2-F3：条件文本（var("X") 文法）里的变量引用也进预览。if 的 then/else 子序列由
+            // 条件文本（var("X") 文法）里的变量引用也进预览。if 的 then/else 子序列由
             // walk 下钻；这里只扫 condition 字段本身。
             collectFromCondition((action as { condition?: string }).condition, out);
             break;

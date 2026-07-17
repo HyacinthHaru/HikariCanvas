@@ -1,5 +1,5 @@
 /**
- * M18 Live Paint — GapPolygon → SVG d 字符串 + PathElement payload。
+ * Live Paint — GapPolygon → SVG d 字符串 + PathElement payload。
  *
  * 输出约定：
  * - 一个 GapPolygon 转成多 subpath 的 d：外环一个 M..L..Z，每个 hole 一个 M..L..Z
@@ -7,10 +7,9 @@
  * - 坐标保留 2 位小数（toFixed(2)）
  * - {@link gapToPathElement} 输出相对 bbox (0,0)..(w,h) 的 d，与 PathElement.d 约定一致
  *
- * 顶点限制（M18-P1 仅警告，不简化）：
+ * 顶点限制：
  * - PathDValidator.MAX_LEN = 4096 char；每顶点约 17 char → 约 240 顶点上限
- * - 安全阈值 180（留 holes / 模板字段余量）；超限 console.warn
- * - M18-P4 将做 Douglas-Peucker / RDP 简化
+ * - 安全阈值 180（留 holes / 模板字段余量）；超限触发 RDP 简化
  */
 
 import type { GapPolygon, Polygon } from './types';
@@ -30,11 +29,11 @@ export const VERTEX_HARD_LIMIT = 240;
 export const DEFAULT_BASE_TOLERANCE = 0.5;
 
 /**
- * M18-P4：阶梯式 RDP 简化。顶点 > VERTEX_WARN_THRESHOLD 时触发，初始 tolerance = baseTolerance，
+ * 阶梯式 RDP 简化。顶点 > VERTEX_WARN_THRESHOLD 时触发，初始 tolerance = baseTolerance，
  * 每轮翻倍直到 ≤ VERTEX_HARD_LIMIT 或 tolerance ≥ 16（再大就视觉退化太厉害，放弃）。
  * 每轮都用原 polygon 重算（而非上轮结果），避免误差累计偏移过大。
  *
- * v1.x 引入 baseTolerance 参数：用户可在 PaintBucketPanel 调（0.25..5 px）。
+ * baseTolerance 参数：用户可在 PaintBucketPanel 调（0.25..5 px）。
  * 低 → 更精细多顶点；高 → 平滑少顶点。fallback 阶梯（顶点仍超 LIMIT 时翻倍）逻辑保留。
  */
 function maybeSimplify(poly: Polygon, baseTolerance: number): Polygon {
@@ -111,7 +110,7 @@ export function gapToPathElement(gap: GapPolygon, baseTolerance: number = DEFAUL
     }
 
     const shift = ([x, y]: [number, number]): [number, number] => [x - minX, y - minY];
-    // M18-P4：先对外环 / 每个 hole 做 RDP 简化（基于本地坐标，shift 后再算更稳定，
+    // 先对外环 / 每个 hole 做 RDP 简化（基于本地坐标，shift 后再算更稳定，
     // 因为 tolerance 是绝对像素阈值）。简化策略见 maybeSimplify。
     const shiftedOuter: Polygon = gap.outer.map(shift);
     const shiftedHoles: Polygon[] = gap.holes.map(h => h.map(shift));

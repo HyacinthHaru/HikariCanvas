@@ -1,5 +1,5 @@
 /**
- * VariablePicker 纯逻辑层（0.4.0-P2-H + P3-M 扩展）。
+ * VariablePicker 纯逻辑层。
  *
  * <p>把 picker 的 group 划分 / 搜索过滤 / activeIndex 平铺 / Enter onSelect 行为从
  * Vue 组件抽出，便于 vitest node 环境直接测（不需 jsdom + @vue/test-utils）。</p>
@@ -7,7 +7,7 @@
  * <p>组件 {@code VariablePicker.vue} 是 thin wrapper：拿 store + wallId + keyword
  * → 调本模块 {@link buildGroups} / {@link mergeMetadata} 得分组 + flat index 模型 → 渲染 + 键盘 / 鼠标交互。</p>
  *
- * <p><b>P3-M 扩展</b>：Picker 不再只显示已 cached 的变量；通过
+ * <p>Picker 不再只显示已 cached 的变量；通过
  * {@code GET /api/variable/list-all-namespaces} 拉到所有 Provider declared keys + 当前 wall 的
  * user 变量 metadata 后，合并 store cached value 得完整可用列表（即便 cached value 未来即时也显示
  * "—" 占位）。{@link mergeMetadata} 完成这一合并。</p>
@@ -21,15 +21,15 @@ import type { Variable } from '@/types/variable';
  * - {@link items}：组内变量列表（已 filter 过 keyword）
  */
 export interface PickerGroup {
-    /** 0.4.3：新增 {@code myGlobal} / {@code othersGlobal} 区分 userglobal 我的 / 其他玩家创建的。 */
+    /** 新增 {@code myGlobal} / {@code othersGlobal} 区分 userglobal 我的 / 其他玩家创建的。 */
     id: 'mine' | 'myGlobal' | 'othersGlobal' | 'plugin' | 'system' | 'papi';
     items: Variable[];
 }
 
-// ---------- P3-M：metadata 接入 ----------
+// ---------- metadata 接入 ----------
 
 /**
- * 一个 namespace 在 metadata response 中的描述（对应后端 P3-M
+ * 一个 namespace 在 metadata response 中的描述（对应后端
  * {@code GET /api/variable/list-all-namespaces} JSON）。
  */
 export interface NamespaceMetadata {
@@ -137,7 +137,7 @@ export function isDynamicNamespace(
  *
  * <ul>
  *   <li>user 变量：{@code user/<key>}（隐藏 wallId 部分，与文本中 {@code ${var:user/<key>}} 一致）</li>
- *   <li>0.4.3 userglobal：{@code userglobal/<key>}（保留前缀，文本写法一致）</li>
+ *   <li>userglobal：{@code userglobal/<key>}（保留前缀，文本写法一致）</li>
  *   <li>其他：{@code <namespace>/<key>}</li>
  * </ul>
  */
@@ -149,7 +149,7 @@ export function displayName(v: Variable): string {
 }
 
 /**
- * 把 namespace 归类到 6 个组之一（0.4.3 加 myGlobal / othersGlobal）。
+ * 把 namespace 归类到 6 个组之一（加 myGlobal / othersGlobal）。
  *
  * @param v       变量
  * @param selfUuid 当前玩家 UUID（用于判 userglobal 是不是自己创建的）；可空时默认走 othersGlobal
@@ -197,7 +197,7 @@ export function buildGroups(
     const system: Variable[] = [];
     const papi: Variable[] = [];
 
-    // 0.4.2：把 aliases（Map 或 plain Record）规范成 readonly fn，避免每行 lookup 重复 instanceof
+    // 把 aliases（Map 或 plain Record）规范成 readonly fn，避免每行 lookup 重复 instanceof
     const aliasLookup: (fullName: string) => string | null =
         aliases == null
             ? () => null
@@ -213,7 +213,7 @@ export function buildGroups(
         if (kw.length > 0) {
             const fullName = `${v.namespace}/${v.key}`;
             const hay = fullName.toLowerCase();
-            // 0.4.2：alias 也参与 keyword 命中——让"红队"也能搜到 user:w-abc/red_score
+            // alias 也参与 keyword 命中——让"红队"也能搜到 user:w-abc/red_score
             const alias = aliasLookup(fullName);
             const aliasHay = alias ? alias.toLowerCase() : '';
             if (!hay.includes(kw) && !aliasHay.includes(kw)) continue;

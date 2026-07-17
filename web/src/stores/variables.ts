@@ -4,7 +4,7 @@ import type { Variable } from '@/types/variable';
 import { makeFullName } from '@/types/variable';
 
 /**
- * VariableStore 前端镜像（0.4.0-P1-D）。
+ * VariableStore 前端镜像。
  *
  * <p>来源：state.patch 中 path 前缀为 {@code /variables/} 的 op；由 {@code wsClient}
  * 的 {@code applyVariablePatches} 写入。前端不主动 fetch——server-as-truth，UI 只读
@@ -65,7 +65,7 @@ export const useVariableStore = defineStore('variables', () => {
     });
 
     /**
-     * 0.4.0-P2-G 扩展：批量初始化（用于 wsClient.handleReady 钩 ready payload.variables 列表）。
+     * 批量初始化（用于 wsClient.handleReady 钩 ready payload.variables 列表）。
      * 一次性赋新 Map，避免循环触发 N 次响应。
      */
     function initVariables(list: Variable[]): void {
@@ -78,7 +78,7 @@ export const useVariableStore = defineStore('variables', () => {
     }
 
     /**
-     * 0.4.0-P2-G 扩展：当前 wall 可用的 user 变量 key 集合（给 VariablePicker / TextElementVariableHints 用）。
+     * 当前 wall 可用的 user 变量 key 集合（给 VariablePicker / TextElementVariableHints 用）。
      * 返 fullName 列表（含 {@code user:<wallId>/} 前缀）。供 H 任务的 picker 引用，免再扫一遍 store。
      */
     const availableUserKeys = computed<string[]>(() => {

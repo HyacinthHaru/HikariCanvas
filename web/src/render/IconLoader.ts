@@ -1,5 +1,5 @@
 /**
- * M26.2：矢量图标加载器（前端镜像后端 IconRegistry 查询路径）。
+ * 矢量图标加载器（前端镜像后端 IconRegistry 查询路径）。
  *
  * <p>FA / Material / user SVG 矢量图标的 path d + viewBox 走
  * {@code GET /api/icon/paths?id=<pack>/<name>} 拉取。同 FontLoader / 图片上传 cache 模式：
@@ -16,7 +16,7 @@
 
 export interface IconPathData {
     viewBox: string;        // "minX minY w h"
-    paths: { d: string }[]; // M26 v1 单元素；v2 多 path / per-path fill 颜色预留
+    paths: { d: string }[]; // v1 单元素；v2 多 path / per-path fill 颜色预留
 }
 
 const cache = new Map<string, IconPathData | null>();
@@ -25,7 +25,7 @@ const readyHandlers: ((id: string) => void)[] = [];
 
 /**
  * 注册回调，加载完任意图标后触发（CanvasView 接到后 requestDraw）。
- * P3-40：返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用注销，避免 readyHandlers
+ * 返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用注销，避免 readyHandlers
  * 数组只增不减（旧闭包泄漏 + 重复 requestDraw）。
  */
 export function onIconLoaded(fn: (id: string) => void): () => void {
@@ -33,7 +33,7 @@ export function onIconLoaded(fn: (id: string) => void): () => void {
     return () => offIconLoaded(fn);
 }
 
-/** P3-40：注销 onIconLoaded 注册的回调。 */
+/** 注销 onIconLoaded 注册的回调。 */
 export function offIconLoaded(fn: (id: string) => void): void {
     const i = readyHandlers.indexOf(fn);
     if (i >= 0) readyHandlers.splice(i, 1);
@@ -45,7 +45,7 @@ export function getCached(id: string): IconPathData | null | undefined {
 }
 
 /**
- * P2-70：丢弃失败（cache 值为 null）条目，让 wall 切换 / 重连后能对瞬时 404 / 网络抖动
+ * 丢弃失败（cache 值为 null）条目，让 wall 切换 / 重连后能对瞬时 404 / 网络抖动
  * 失败的图标重新发起加载。成功加载的图标（内容寻址，跨 wall 可共享）保留不动，避免无谓重拉。
  */
 export function clearFailedIconCache(): void {

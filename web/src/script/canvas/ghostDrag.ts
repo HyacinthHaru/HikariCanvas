@@ -1,13 +1,12 @@
 /**
- * 0.7.1-P4：幽灵拖动纯逻辑（虚影元素构造 / 控制点几何 / hit-test / 拖动写回）。
+ * 幽灵拖动纯逻辑（虚影元素构造 / 控制点几何 / hit-test / 拖动写回）。
  *
  * <p>无 Vue / DOM 依赖，纯函数，可单测。PreviewPane 用它把"绑定元素 + 积木 patch"转成虚影几何，
- * 把指针墙坐标转成新 patch（写回走 scriptEdit.updateActionField）。契约 docs/scripting-0.7.1.md
- * §2.3（E10/E11）。</p>
+ * 把指针墙坐标转成新 patch（写回走 scriptEdit.updateActionField）。</p>
  */
 import type { Element } from '@/types/protocol';
 
-/** P4 支持幽灵拖动的坐标积木 kind（friendly setElementProperties 的 kind 子集）。 */
+/** 支持幽灵拖动的坐标积木 kind（friendly setElementProperties 的 kind 子集）。 */
 export type CoordKind = 'moveTo' | 'resize' | 'rotateTo';
 
 /** 幽灵控制点种类：move=拖整块改 x/y；resizeSE=拖右下角改 w/h；rotate=转手柄改 rotation。 */
@@ -18,7 +17,7 @@ export const ROTATE_HANDLE_OFFSET = 24;
 
 const RAD_PER_DEG = Math.PI / 180;
 
-/** 是否 P4 支持拖动的坐标 kind。 */
+/** 是否支持拖动的坐标 kind。 */
 export function isCoordKind(kind: string): kind is CoordKind {
     return kind === 'moveTo' || kind === 'resize' || kind === 'rotateTo';
 }

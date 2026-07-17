@@ -1,11 +1,11 @@
 /**
- * svgToElements.ts — Task 13 MVP 闸
+ * svgToElements.ts
  *
  * SVG 文本 → ElementDraft[]。
  * 纯函数：无副作用，无 WS 调用，无 store 依赖。
  *
- * 本期只处理 path / rect / circle / ellipse / line / polyline / polygon（返回 type='path'）；
- * image 形状跳过（留 B3）。
+ * 处理 path / rect / circle / ellipse / line / polyline / polygon（返回 type='path'）
+ * 与内嵌 <image>（data: URL）。
  */
 
 import { parseSvg } from './svgParse';
@@ -20,7 +20,7 @@ import type { Mat } from './transform';
 export interface ElementDraft {
     type: 'path' | 'image';
     props: Record<string, unknown>;
-    /** Task 16: 嵌入位图的 data URL，仅 type='image' 时存在 */
+    /** 嵌入位图的 data URL，仅 type='image' 时存在 */
     dataUrl?: string;
 }
 
@@ -72,7 +72,7 @@ export function svgToElements(
     complexityGuard(doc.shapes);
     const drafts: ElementDraft[] = [];
 
-    // Task 15: 构建 viewBox 缩放矩阵（仅当 viewBox + targetWidth/targetHeight 均存在时）
+    // 构建 viewBox 缩放矩阵（仅当 viewBox + targetWidth/targetHeight 均存在时）
     let viewBoxMat: Mat = [...IDENTITY] as Mat;
     if (doc.viewBox && opts?.targetWidth != null && opts?.targetHeight != null) {
         const [minX, minY, vbW, vbH] = doc.viewBox;
@@ -86,7 +86,7 @@ export function svgToElements(
     }
 
     for (const shape of doc.shapes) {
-        // Task 16: 处理 <image> 标签（嵌入位图）
+        // 处理 <image> 标签（嵌入位图）
         if (shape.tagName.toLowerCase() === 'image') {
             const href = shape.getAttribute('href') ?? shape.getAttribute('xlink:href') ?? '';
             if (!href.startsWith('data:')) {

@@ -1,5 +1,5 @@
 /**
- * 0.4.1 Chip 编辑器：Lexical DecoratorNode + 序列化 helper（前端 only，不影响协议）。
+ * Chip 编辑器：Lexical DecoratorNode + 序列化 helper（前端 only，不影响协议）。
  *
  * <p>用 lexical core 直接接入（不依赖 lexical-vue / vue-vine）。`VariablePlaceholderNode`
  * 继承 {@code DecoratorNode}，{@link createDOM} 渲染一个 contenteditable=false 的 chip
@@ -159,7 +159,7 @@ export class VariablePlaceholderNode extends DecoratorNode<null> {
         span.textContent = this.__rawName;
         // 阻止 chip 内的点击冒泡为 Lexical 的 selection 改变；编辑期间 chip 不应"吃掉"
         // caret 落位，让用户能在 chip 周围正常移动光标 + 输入文字。
-        // 0.4.2 bugfix（Bug 2 终极版）：彻底关闭 chip click / dblclick 触发 picker
+        // 彻底关闭 chip click / dblclick 触发 picker
         // 的全部路径。用户原话："点击文本框，正常编辑内容；点击文本框右上角的「插入变量」，
         // 才弹出变量选择功能"——picker 触发唯一路径 = "插入变量"按钮。
         // chip click / dblclick / 错误态 click 全部移除；改绑定 / create confirm 由后续
@@ -355,7 +355,7 @@ export function $insertVariableChipAtSelection(
 }
 
 // ===========================================================================
-// P3.6 paste transform：plain text `${var:X}` → chip
+// paste transform：plain text `${var:X}` → chip
 // ===========================================================================
 
 /**

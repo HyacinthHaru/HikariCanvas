@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * 0.7.0-P4-C/D2：积木画布（无限画布 viewport + world）。
+ * 积木画布（无限画布 viewport + world）。
  *
  * <p>viewport（overflow hidden）内一个 world div，用 {@link useBlockCanvas} 的 worldStyle
  * 做 translate+scale。积木堆 `position:absolute` 定位在 world 坐标系。每条 ScriptRule →
  * 一个 {@link BlockStack}，坐标来自各规则 {@code blockLayout}（{@link parseBlockLayout}），
  * 缺坐标走 {@link autoLayout} 纵向排布兜底。</p>
  *
- * <p><b>D2 拖拽接入</b>：本组件持唯一的 {@link useBlockDrag} 实例（它握 canvasRef +
+ * <p><b>拖拽接入</b>：本组件持唯一的 {@link useBlockDrag} 实例（它握 canvasRef +
  * screenToWorld），把"拖块 / 移堆"两句柄 {@code provide} 给递归子组件（BlockNode / BlockStack
  * 注入后在 pointerdown 调）；palette 源经父级 overlay 转发到本组件 {@code defineExpose} 的
  * {@code startPaletteDrag}。移堆拖动中用 {@code drag.stackDragPos} 覆盖该堆坐标即时跟随；
@@ -53,7 +53,7 @@ const canvas = useBlockCanvas({
     isSpaceDown: () => spaceDown.value,
 });
 
-// D2：唯一拖拽实例（canvasRef = viewport 测量根；screenToWorld 给移堆换算 world 位移）。
+// 唯一拖拽实例（canvasRef = viewport 测量根；screenToWorld 给移堆换算 world 位移）。
 const drag = useBlockDrag({
     canvasRef: viewportRef,
     screenToWorld: canvas.screenToWorld,
@@ -81,7 +81,7 @@ defineExpose({
  * 渲染用的规则列表：<b>当前正在编辑的那条规则用 {@code editStore.workingCopy}（本地副本），
  * 其余规则用 {@code scripts.listSorted}（server 镜像）。</b>
  *
- * <p>0.7.0-P5 实测修复（渲染数据源主根因）：所有编辑（拖积木 setActions / 改字段 updateActionField /
+ * <p>渲染数据源主根因：所有编辑（拖积木 setActions / 改字段 updateActionField /
  * 改触发器 setTrigger）都改 workingCopy，但要 800ms debounce 后才 save 回 server；空字段积木还会被
  * validator 拦着不 save → server 永不更新。若画布只读 server 镜像，新拖的积木 / 刚改的字段就要等
  * save 成功才显示，空字段积木则<b>永远不显示</b>（出现"拖了没反应 / 永远停在待完善"）。让被编辑的
@@ -91,7 +91,7 @@ defineExpose({
  * → setActions 等 immutable 替换 workingCopy 时本 computed 重算 → 对应 BlockStack 收到新 rule → 新积木 /
  * 改动立即渲染。</p>
  *
- * <p><b>不破坏拖堆跟手（根因 4 仍成立）</b>：本 computed 仍<b>不依赖 {@code drag.stackDragPos}</b>——移堆
+ * <p><b>不破坏拖堆跟手</b>：本 computed 仍<b>不依赖 {@code drag.stackDragPos}</b>——移堆
  * 拖动<b>过程中</b>只改 stackDragPos（由 {@link liveStackPos} 在绑定级覆盖被拖堆 :x/:y），不改 workingCopy
  * → 本 computed 不重算 → 其余堆静止；松手才 setStackPos（改 workingCopy.blockLayout）触发一次重算。</p>
  */
@@ -128,7 +128,7 @@ const basePositionedStacks = computed(() => {
  * （让它即时跟随指针，松手才提交 setStackPos）；否则用静态基坐标。
  *
  * <p>在模板 :x/:y 绑定里调用——它只读 {@code drag.stackDragPos.value}（reactive），故拖动中仅
- * "被拖堆的绑定结果"会变化，其余堆返回与上帧相同的基坐标对象值 → Vue 不 patch（根因 4 核心）。</p>
+ * "被拖堆的绑定结果"会变化，其余堆返回与上帧相同的基坐标对象值 → Vue 不 patch。</p>
  */
 function liveStackPos(entry: { rule: { id: string }; x: number; y: number }): { x: number; y: number } {
     const live = drag.stackDragPos.value;
@@ -203,11 +203,11 @@ function onPointerDown(e: PointerEvent): void {
       />
     </div>
 
-    <!-- 0.7.1：拖动作积木时的「删除区」垃圾桶（viewport 内 absolute，不随缩放/平移）。
+    <!-- 拖动作积木时的「删除区」垃圾桶（viewport 内 absolute，不随缩放/平移）。
          几何与 useBlockDrag.computeDeleteZoneRect 同源对齐。 -->
     <DeleteDropZone :active="drag.deleteZoneActive.value" :hot="drag.deleteZoneHot.value" />
 
-    <!-- 0.7.1：右下角「本脚本变量实时预览」常驻面板（读当前编辑规则涉及的变量 + 实时值）。 -->
+    <!-- 右下角「本脚本变量实时预览」常驻面板（读当前编辑规则涉及的变量 + 实时值）。 -->
     <ScriptVariableWatch />
   </div>
 

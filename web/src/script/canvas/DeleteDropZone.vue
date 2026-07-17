@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.7.1「拖到删除区删积木」垃圾桶浮层。
+ * 「拖到删除区删积木」垃圾桶浮层。
  *
  * <p>仅在拖<b>动作积木</b>时显示（{@code active}）；悬停其上时高亮红（{@code hot}）；松手在区内 →
  * {@link useBlockDrag} 的 pointerup 短路调 {@code edit.removeAction} 删该积木。帽子（触发器）/ palette

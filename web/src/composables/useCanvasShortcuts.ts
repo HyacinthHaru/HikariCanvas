@@ -8,12 +8,12 @@ import { useClipboard } from '@/composables/useClipboard';
  * 全部 V/M/H/L/A/C/S/B 工具快捷键 + Esc + Ctrl+0/+/- zoom 快捷键 + Space-hold 临时手型。
  * input/textarea 内输入时跳过单字符工具快捷键。
  *
- * M17 F4：
+ * Hand 工具：
  *   - H 键激活 hand 工具
  *   - 按住 Space 临时切到 hand（Figma 标准）；松开恢复原工具。重复 keydown
  *     （OS 按住自动重复）只在首次触发时切换，避免覆盖用户中途的工具切换。
  *
- * 2026-05-25 paste 统一化：旧实现在 keydown 阶段 preventDefault Ctrl+V 截杀了
+ * paste 统一化：旧实现在 keydown 阶段 preventDefault Ctrl+V 截杀了
  * 浏览器的 native `paste` event，导致 useCanvasUpload.onPasteImage 永远收不到事件
  * （URL 粘贴 / image File 截图粘贴双失效）。修法：删 Ctrl+V keydown handler，
  * 让 paste 路径统一走 native `paste` event，由 useCanvasUpload 内的 dispatcher
@@ -36,7 +36,7 @@ export function useCanvasShortcuts() {
     onKeyStroke('0', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomReset(); } });
 
     onKeyStroke('Escape', () => {
-        // M9-E：绘制工具激活时按 Esc 切回 select；select / move 工具下按 Esc 等同清空选中
+        // 绘制工具激活时按 Esc 切回 select；select / move 工具下按 Esc 等同清空选中
         if (isDrawTool(ui.activeTool)) {
             ui.setTool('select');
             return;
@@ -60,7 +60,7 @@ export function useCanvasShortcuts() {
     });
     onKeyStroke(['c', 'C'], (e) => {
         if (e.ctrlKey || e.metaKey) {
-            // F1 Ctrl/Cmd+C：复制选中元素到 system clipboard
+            // Ctrl/Cmd+C：复制选中元素到 system clipboard
             if (inEditable()) return;
             e.preventDefault();
             void clipboard.copy();
@@ -77,18 +77,18 @@ export function useCanvasShortcuts() {
         if (e.ctrlKey || e.metaKey) return;
         if (!inEditable()) ui.setTool('brush');
     });
-    // M18 Live Paint：G 油漆桶（Photoshop / Figma 行业标准 fill bucket 键位）
+    // G 油漆桶（Photoshop / Figma 行业标准 fill bucket 键位）
     onKeyStroke(['g', 'G'], (e) => {
         if (e.ctrlKey || e.metaKey) return;
         if (!inEditable()) ui.setTool('paint-bucket');
     });
-    // M26.3：I 图标库 panel toggle（非工具，独立 UI 状态）
+    // I 图标库 panel toggle（非工具，独立 UI 状态）
     onKeyStroke(['i', 'I'], (e) => {
         if (e.ctrlKey || e.metaKey) return;
         if (!inEditable()) iconLibrary.toggleOpen();
     });
 
-    // M17 F4：Space-hold 临时手型工具。保存原工具到 spaceSavedTool，松开 Space 恢复。
+    // Space-hold 临时手型工具。保存原工具到 spaceSavedTool，松开 Space 恢复。
     // 用 useEventListener 而非 onKeyStroke：keydown 的 repeat 标志 + keyup 配对要原始事件。
     let spaceSavedTool: ActiveTool | null = null;
     useEventListener(window, 'keydown', (e: KeyboardEvent) => {

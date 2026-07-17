@@ -9,7 +9,7 @@ import { preloadImage } from '@/render/PreviewRenderer';
 import { useClipboard, CLIPBOARD_MAGIC } from '@/composables/useClipboard';
 
 /**
- * 2026-05-25 项 3：粘贴板纯文本是否为可下载的 URL。
+ * 粘贴板纯文本是否为可下载的 URL。
  *
  * <p>历史：v1 强制要求 URL 以 .png/.jpg/.gif/.webp 扩展名结尾，结果绝大多数现代图片
  * URL（CDN / 签名 URL / 带 token query / 形如 `https://cdn.x/abc123?sig=...&exp=...`）
@@ -44,7 +44,7 @@ export function looksLikeHttpUrl(text: string): boolean {
 }
 
 /**
- * M13-D：图片上传三入口（drop / paste / file input）。
+ * 图片上传三入口（drop / paste / file input）。
  * - 调用方需提供 brushHostRef（用于 dropToCanvas 坐标换算）+ fileInputRef（隐藏 file input 元素的模板 ref）。
  * - useEventListener(window, 'paste', ...) 由本 composable 自动挂载。
  */
@@ -62,7 +62,7 @@ export function useCanvasUpload(opts: {
     const uploadError = ref<string | null>(null);
     const uploading = ref(false);
 
-    // P3-43/P3-42 同款约定：保存 timer 句柄，下一次 flashError 先清旧的，
+    // 保存 timer 句柄，下一次 flashError 先清旧的，
     // 并在 scope dispose 时兜底清除——避免卸载后挂起的 setTimeout 触碰 stale reactive ref。
     let errorTimer: number | null = null;
     function flashError(msg: string) {
@@ -161,17 +161,17 @@ export function useCanvasUpload(opts: {
     }
 
     /**
-     * 2026-05-25 paste 统一 dispatcher：native `paste` event 唯一入口，三路互斥分发。
+     * paste 统一 dispatcher：native `paste` event 唯一入口，三路互斥分发。
      *
      * <ol>
-     *   <li><b>HikariCanvas magic text</b> → clipboard.paste(e) 处理元素粘贴（M17 F1）。
+     *   <li><b>HikariCanvas magic text</b> → clipboard.paste(e) 处理元素粘贴。
      *       同步读 e.clipboardData，不走 async navigator.clipboard.readText（避开
      *       Safari / FF 的 read permission 提示 + user gesture 要求）。</li>
-     *   <li><b>image File</b>（截图粘贴 / 复制图片粘贴）→ uploadAndPlace（M13-D）。</li>
-     *   <li><b>plain text URL</b>（http/https）→ uploadFromUrl（2026-05-25 项 3）。</li>
+     *   <li><b>image File</b>（截图粘贴 / 复制图片粘贴）→ uploadAndPlace。</li>
+     *   <li><b>plain text URL</b>（http/https）→ uploadFromUrl。</li>
      * </ol>
      *
-     * <p>历史 bug（2026-05-25 修）：useCanvasShortcuts 在 keydown 阶段 preventDefault
+     * <p>历史 bug：useCanvasShortcuts 在 keydown 阶段 preventDefault
      * Ctrl+V，导致浏览器不再 fire `paste` event，本 handler 永远收不到事件——
      * URL 粘贴 + image File 截图粘贴双失效。修法见 useCanvasShortcuts 注释。</p>
      *
@@ -213,7 +213,7 @@ export function useCanvasUpload(opts: {
         }
 
         // 路径 c：plain text URL → 自动下载并上传
-        // 2026-05-25 bugfix（0.4.9）：放宽匹配条件——任何 http(s):// URL 都尝试下载，
+        // 放宽匹配条件——任何 http(s):// URL 都尝试下载，
         // 不再要求必须以 .png/.jpg 扩展名结尾（CDN / 签名 URL 几乎从不带扩展）。
         // 后端 Content-Type + magic-bytes + ImageIO 校验已足够 reject 非图片资源。
         const trimmed = text.trim();
@@ -234,7 +234,7 @@ export function useCanvasUpload(opts: {
         return false;
     }
 
-    /** 2026-05-25 项 3：从 URL 上传。后端 SSRF 校验 + 6 层校验栈复用。 */
+    /** 从 URL 上传。后端 SSRF 校验 + 6 层校验栈复用。 */
     async function uploadFromUrl(url: string, dropClientX?: number, dropClientY?: number) {
         if (project.isLocked) { flashError(t.value.image.lockedDenied); return; }
         if (!net.sessionId) { flashError(t.value.image.noSession); return; }

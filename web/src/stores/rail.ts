@@ -5,7 +5,7 @@ import type {
 } from '@/types/rail';
 
 /**
- * 0.4.4：铁路网络前端镜像。
+ * 铁路网络前端镜像。
  *
  * <p>不通过 state.patch 走（rail 不影响 ProjectState），全部 ack-driven —— 由
  * RailNetworkModal 自己调 wsClient send* 后把 ack payload 写入 store。store 维护跨

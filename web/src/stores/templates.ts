@@ -4,7 +4,7 @@ import type { TemplateParam, TemplateSpec } from '@/types/template';
 
 /**
  * 模板注册表客户端缓存。来源 = ready payload 的 {@code templates} 数组
- * （协议 §3.2 / M6-D）。
+ * （协议 §3.2）。
  *
  * <p>除全量列表外，还维护 UI 侧暂存：当前选中 templateId、当前 params 草稿（按 id
  * 分桶）、TemplateGallery 打开状态。前后端通讯仍由 {@code wsClient.send('template.apply', ...)}

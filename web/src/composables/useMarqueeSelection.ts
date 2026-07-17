@@ -4,7 +4,7 @@ import { useUiStore } from '@/stores/ui';
 import type { Element } from '@/types/protocol';
 
 /**
- * M8-F：marquee 拖框多选状态机 + bbox 相交计算。
+ * marquee 拖框多选状态机 + bbox 相交计算。
  *
  * - start(pos, additive)：在空白处 mousedown 启动 marquee（shift=additive）
  * - move(pos)：mousemove 更新当前 marquee 矩形
@@ -57,7 +57,7 @@ export function useMarqueeSelection() {
 
         const layer = project.activeLayer;
         const hits: string[] = [];
-        // P3-27：活动层被隐藏时其元素在画布上不渲染（PreviewRenderer `if(!layer.visible) continue`），
+        // 活动层被隐藏时其元素在画布上不渲染（PreviewRenderer `if(!layer.visible) continue`），
         // 应同样不可框选——与 useSnapManager 的 `layer.visible && el.visible` 语义对齐，
         // 避免"隐藏却可交互"的错乱。layer.visible 为真时再按 el.visible 逐元素过滤。
         if (layer.visible !== false) {
@@ -82,7 +82,7 @@ export function useMarqueeSelection() {
     function isActive(): boolean { return marquee.value !== null; }
 
     function bboxIntersects(el: Element, x1: number, y1: number, x2: number, y2: number): boolean {
-        // axis-aligned；rotation 用外接 axis-aligned bbox 近似（M8-F MVP）
+        // axis-aligned；rotation 用外接 axis-aligned bbox 近似
         return !(el.x + el.w < x1 || el.x > x2 || el.y + el.h < y1 || el.y > y2);
     }
 

@@ -1,12 +1,12 @@
 /**
- * 前端 SVG path 解析器（M9-C，镜像后端 {@code render/PathParser.java}）。
+ * 前端 SVG path 解析器（镜像后端 {@code render/PathParser.java}）。
  *
  * 解析 SVG path {@code d} 字符串子集（M / L / Q / C / Z，大小写绝对/相对）→
  * 浏览器原生 {@link Path2D} + 起/终点 + 切线元数据（marker 用）。
  *
  * <p>双端一致性约定：本文件必须与 PathParser.java 逐行同公式。任何修改需同步两端。</p>
  *
- * <p>调用方应先用与后端等效的词法校验过 d（M9-A {@code PathDValidator}），但本 parser
+ * <p>调用方应先用与后端等效的词法校验过 d（{@code PathDValidator}），但本 parser
  * 对非法输入<b>尽力而为</b>：遇不识别字符即停止解析，返回当前累积结果，不抛异常。</p>
  */
 

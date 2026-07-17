@@ -1,17 +1,17 @@
 /**
- * 前端 marker 渲染（M9-C，镜像后端 {@code render/MarkerRenderer.java}）。
+ * 前端 marker 渲染（镜像后端 {@code render/MarkerRenderer.java}）。
  *
  * 几何与后端逐行一致：arrow apex 在 path 端点上、base 朝外退 size；
  * dot 圆心在端点。任何修改需同步两端。
  */
 
-/** 0.4.7：marker 大小约束。与后端 MarkerRenderer.java 一致。 */
+/** marker 大小约束。与后端 MarkerRenderer.java 一致。 */
 export const MARKER_MAX_RATIO_OF_LENGTH = 0.5;
 export const MIN_ARROW_SIZE = 8;
 export const MIN_DOT_RADIUS = 3;
 
 /**
- * arrow size 公式（0.4.6 hotfix #6 — 平缓化）。
+ * arrow size 公式（平缓化）。
  *
  * 从 stroke × 3 改成 stroke × 2 + 4：细 stroke 几乎不变，粗 stroke 增速线性平缓。
  * 动机：arrow 是三角形（面积 ∝ size²），旧公式让 stroke 调粗时 arrow 面积平方膨胀。
@@ -28,7 +28,7 @@ export function arrowSize(strokeWidth: number, elementDiagonal?: number): number
 }
 
 /**
- * dot radius 公式（0.4.6 hotfix #6 — 平缓化）。
+ * dot radius 公式（平缓化）。
  *
  * 从 stroke + 1 改成 floor(stroke / 2) + 3（与后端 Java 整数除法一致）。
  * stroke=10 → r=8 (旧 11)，stroke=20 → r=13 (旧 21)；
@@ -45,7 +45,7 @@ export function dotRadius(strokeWidth: number, elementDiagonal?: number): number
 /**
  * 构造 arrow 三角形几何（不绘制）。
  *
- * 0.4.7 几何修正（与后端 MarkerRenderer.java arrowShape 同款）：
+ * 几何修正（与后端 MarkerRenderer.java arrowShape 同款）：
  * - 原实现 path end 当 apex，base 朝 path 内部退 size → stroke 矩形带在三角形 apex
  *   附近超出边缘（V 头被直线横穿）
  * - 新实现 path end 当 **base center**，apex 朝 dir 方向延伸 size → stroke 干净截止

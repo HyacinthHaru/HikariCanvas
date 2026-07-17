@@ -1,5 +1,5 @@
 // TextLayout TS 版，镜像 plugin/src/main/java/moe/hikari/canvas/render/TextLayout.java
-// 契约 docs/rendering.md §3。M5-C3 第一批：横排；竖排分支留下一个 commit 前后端一起做。
+// 契约 docs/rendering.md §3。横排与竖排前后端一起做。
 
 import type { TextElement } from '@/types/protocol';
 import { advance } from './GlyphMetricsLut';
@@ -9,10 +9,10 @@ export interface PositionedGlyph {
     ch: string;
     x: number;
     baselineY: number;
-    /** M5-C3 Part 2 竖排用：true 表示该字符应绕自己的绘制点旋转 90°（CJK 全角标点）。 */
+    /** 竖排用：true 表示该字符应绕自己的绘制点旋转 90°（CJK 全角标点）。 */
     rotated?: boolean;
     /**
-     * M28-enhance：该 glyph 在 {@link TextElement#text} 中的原 char index（输入字符串）。
+     * 该 glyph 在 {@link TextElement#text} 中的原 char index（输入字符串）。
      * <p>仅前端字段——双端一致性不受影响（后端 Java {@code TextLayout.PositionedGlyph} 不带；
      * 仅 PreviewRenderer placeholder hint 用 srcIndex 与 interpolator segments 做 char range
      * 映射）。emoji surrogate pair / combining mark 暂按单 char index 处理。</p>
@@ -24,7 +24,7 @@ export interface PositionedGlyph {
 export const ASCENT_RATIO = 0.8;
 
 /**
- * M5-D2 P2：前后端一致的"标准"字符宽度函数。
+ * 前后端一致的"标准"字符宽度函数。
  *
  * <p>问题背景：浏览器 {@code ctx.measureText} 和 Java {@code FontMetrics.charWidth}
  * 即使加载同一 TTF/OTF 也会返回不同值（hinting / subpixel 策略不同）。layout
@@ -46,7 +46,7 @@ export function canonicalCharWidth(ch: string, fontSize: number): number {
 }
 
 /**
- * M20-P3 dispatch：优先查 per-font GlyphMetricsLut（与后端 FontMetricsTable mirror），
+ * 优先查 per-font GlyphMetricsLut（与后端 FontMetricsTable mirror），
  * 表缺 / 字符缺则 fallback 到 {@link canonicalCharWidth}。fontId 沿调用链从 TextElement 透传。
  */
 export function charAdvance(fontId: string, ch: string, fontSize: number): number {
@@ -57,7 +57,7 @@ export function charAdvance(fontId: string, ch: string, fontSize: number): numbe
 
 /**
  * 行首禁则：半全角标点不许出现在行首，回溯到上一行末。
- * P3-96：去重（原把 11 个全角标点重复写两遍，indexOf 判定对重复不敏感，仅冗余）。
+ * 去重（原把 11 个全角标点重复写两遍，indexOf 判定对重复不敏感，仅冗余）。
  * 保留一组全角 + 一组半角。顺序：） 】 」 』 。 ， 、 ？ ！ ： ；。
  * 与后端 TextLayout.java 的 LINE_START_FORBIDDEN 逐字节一致（双端镜像硬约束）。
  */
@@ -113,7 +113,7 @@ function layoutHorizontal(t: TextElement): PositionedGlyph[] {
         const baselineY = lineTopY + ascentPx;
         const lineWidthPx = measureLineWidth(line.text, fontId, fontSize, letterSpacing);
         let startX = t.x;
-        // P2-33/P2-61: 用 Math.trunc（向零截断）匹配后端 Java 整数除法 `/2` 语义，
+        // 用 Math.trunc（向零截断）匹配后端 Java 整数除法 `/2` 语义，
         // 避免行宽溢出文本框（负奇数分子）时双端 startX 差 1px。
         if (t.align === 'center') startX = t.x + Math.trunc((boxW - lineWidthPx) / 2);
         else if (t.align === 'right') startX = t.x + boxW - lineWidthPx;
@@ -238,7 +238,7 @@ function layoutVertical(t: TextElement): PositionedGlyph[] {
         const cellsH = col.chars.length;
         const totalH = cellsH * fontSize + Math.max(0, cellsH - 1) * letterSpacing;
         let startTopY: number;
-        // P2-33/P2-61: 同横排——竖排 center 起点用 Math.trunc 匹配后端 `/2` 截断语义。
+        // 同横排——竖排 center 起点用 Math.trunc 匹配后端 `/2` 截断语义。
         if (t.align === 'center') startTopY = t.y + Math.trunc((boxH - totalH) / 2);
         else if (t.align === 'right') startTopY = t.y + boxH - totalH;
         else startTopY = t.y;
@@ -296,5 +296,5 @@ function isCjk(c: string): boolean {
         || (cp >= 0x3000 && cp <= 0x303F); // CJK Punct
 }
 
-// ---------- CanvasMeasurer 已废弃（M5-D2 P2 切到 canonicalCharWidth） ----------
+// ---------- CanvasMeasurer 已废弃（切到 canonicalCharWidth） ----------
 // 原文件导出的 CanvasMeasurer 类与 CharMeasurer 接口此轮移除，调用方已不再传 measurer。

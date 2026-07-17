@@ -1,5 +1,5 @@
 /**
- * M20-P3：前端 per-font 字符 advance 查找表（Java FontMetricsTable mirror）。
+ * 前端 per-font 字符 advance 查找表（Java FontMetricsTable mirror）。
  *
  * fetch /fonts/{fontId}.metrics.json + cache + advance(fontId, codePoint, fontSize) →
  * round(baseAdv × fontSize / baseSize)。缺字 / 未加载字体返 -1，调用方 fallback
@@ -31,7 +31,7 @@ const readyHandlers: (() => void)[] = [];
 
 /**
  * 注册回调，metrics 表加载完成后触发（CanvasView 接到后 requestDraw）。
- * P3-40：返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用注销，避免 readyHandlers
+ * 返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用注销，避免 readyHandlers
  * 数组只增不减（旧闭包泄漏 + 重复 requestDraw）。
  */
 export function onMetricsReady(fn: () => void): () => void {
@@ -39,7 +39,7 @@ export function onMetricsReady(fn: () => void): () => void {
     return () => offMetricsReady(fn);
 }
 
-/** P3-40：注销 onMetricsReady 注册的回调。 */
+/** 注销 onMetricsReady 注册的回调。 */
 export function offMetricsReady(fn: () => void): void {
     const i = readyHandlers.indexOf(fn);
     if (i >= 0) readyHandlers.splice(i, 1);
@@ -60,7 +60,7 @@ export function preloadMetrics(fontId: string): Promise<void> {
             // 先试 vite public dir（内置字体走构建期产物 web/public/fonts/{id}.metrics.json）
             let resp = await fetch(`/fonts/${encodeURIComponent(fontId)}.metrics.json`);
             if (!resp.ok) {
-                // M20-P4：fallback 后端 API（用户字体由 FontRegistry.registerRuntime 注册到内存）
+                // fallback 后端 API（用户字体由 FontRegistry.registerRuntime 注册到内存）
                 resp = await fetch(`/api/font/metrics?id=${encodeURIComponent(fontId)}`);
                 if (!resp.ok) {
                     tables.set(fontId, null);
@@ -111,7 +111,7 @@ export function advance(fontId: string, ch: string, fontSize: number): number {
     return Math.round(base * fontSize / t.baseSize);
 }
 
-// P3-95：删除 getAscent/getDescent 两个导出——它们零调用方（死代码导出且误导）。
+// 删除 getAscent/getDescent 两个导出——它们零调用方（死代码导出且误导）。
 // 当前双端基线固定 0.8 倍 fontSize（见 rendering.md §3.2），不按逐字体 ascent/descent 计算。
 // RawTable / Table 仍保留 ascent/descent 字段以记录 .metrics.json 的实际形态（后端
 // serializeToJson 仍输出），但前端不提供读法，避免被误用于基线计算。

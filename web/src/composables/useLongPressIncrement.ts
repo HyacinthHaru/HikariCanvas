@@ -1,5 +1,5 @@
 /**
- * 0.4.0-P2-G：长按累加 composable。
+ * 长按累加 composable。
  *
  * <p>用例：变量管理面板的 [-1] [+1] 按钮——单击 +1，长按 300ms 起以 50ms / tick 持续 +N。
  * 通用足以接其它"递增 / 递减"按钮（例如 SizeInput 微调）。</p>
@@ -19,7 +19,7 @@
  *   <li>启动 {@code initialDelay}（默认 300ms）定时器；</li>
  *   <li>超时后切换到 {@code interval}（默认 50ms）的 setInterval 持续 {@code onTick}；</li>
  *   <li>任意 up / leave / cancel → 清两层 timer；</li>
- *   <li>window blur / document visibilitychange → 终止（P3-43：按钮未 setPointerCapture，
+ *   <li>window blur / document visibilitychange → 终止（按钮未 setPointerCapture，
  *       长按中切窗口浏览器不保证补发 pointerup/cancel，否则 repeatTimer 后台空转使值暴涨；
  *       参照 {@code useBrushHost} 同款防护）；</li>
  *   <li>{@link onBeforeUnmount} 兜底清理（防组件销毁时残留 timer 泄漏）。</li>
@@ -97,7 +97,7 @@ export function useLongPressIncrement(opts: UseLongPressIncrementOptions): UseLo
         stop();
     }
 
-    // P3-43：长按期间切走窗口 / 标签页隐藏时，浏览器可能不补发 pointerup/leave/cancel，
+    // 长按期间切走窗口 / 标签页隐藏时，浏览器可能不补发 pointerup/leave/cancel，
     // 导致 repeatTimer 持续后台 onTick 使变量值无人值守暴涨。监听 window blur +
     // document visibilitychange 强制 stop()（idempotent，未按下时 no-op）。
     function onWindowBlur(): void {

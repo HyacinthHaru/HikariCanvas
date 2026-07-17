@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P4-A：把 {@link ScriptAction}[] 当成可寻址树的纯逻辑层。
+ * 把 {@link ScriptAction}[] 当成可寻址树的纯逻辑层。
  *
  * <p><b>path 形态与后端 trace blockId 同构</b>（权威：{@code ScriptRunner.java}）：</p>
  * <ul>
@@ -15,7 +15,7 @@
  * 以 {@code seqKey} 结尾（如顶层 {@code ['actions']}，或 if 槽 {@code ['actions','2','then']}）。</p>
  *
  * <p>所有变换函数 <b>immutable</b>：返回新树，不修改入参（结构共享未改动子树）。
- * 这是后端 trace 高亮（H 阶段）定位积木的前端契约——path 必须与后端逐字符同构。</p>
+ * 这是后端 trace 高亮定位积木的前端契约——path 必须与后端逐字符同构。</p>
  */
 
 import type { ScriptAction } from '@/types/protocol';
@@ -25,7 +25,7 @@ export const IF_BRANCH_KEYS = ['then', 'else'] as const;
 export type IfBranchKey = (typeof IF_BRANCH_KEYS)[number];
 
 /**
- * 0.7.1-P2：所有「带嵌套子序列」的容器块的序列键全集（if 的 then/else + repeat 的 body）。
+ * 所有「带嵌套子序列」的容器块的序列键全集（if 的 then/else + repeat 的 body）。
  * path 段在 (idx, seqKey) 二元组里出现的 seqKey 必属此集；与后端 ScriptRunner 展开 blockId
  * 前缀逐字符同构（repeat body 不带 round）。新增带子序列的块（如未来 forEach）在此扩集 +
  * {@link getChildSeq} / {@link withChildSeq} 加分支即可，导航 / 变换 / 遍历自动覆盖。
@@ -51,8 +51,8 @@ export function pathToString(path: string[]): string {
 }
 
 /**
- * 「带 {@code then/else} 子序列」容器块类型守卫——窄化到 if（条件分支）与 randomBranch（随机分支，
- * 0.7.3）。两者的 then/else 序列键完全同名，路径 blockId 形态也完全一致（`/then/i` / `/else/i`）。
+ * 「带 {@code then/else} 子序列」容器块类型守卫——窄化到 if（条件分支）与 randomBranch（随机分支）。
+ * 两者的 then/else 序列键完全同名，路径 blockId 形态也完全一致（`/then/i` / `/else/i`）。
  * getChildSeq / withChildSeq / BlockNode C 形渲染共用此一条分支，不为 randomBranch 单独再写分支。
  */
 function isIf(
@@ -62,8 +62,8 @@ function isIf(
 }
 
 /**
- * 「带 {@code body} 子序列」容器块类型守卫——窄化到 repeat（有界循环，0.7.1-P2）、
- * repeatUntil（动态循环，0.7.2-P3）与 tweenBlock（补间包裹，tween-P1）。
+ * 「带 {@code body} 子序列」容器块类型守卫——窄化到 repeat（有界循环）、
+ * repeatUntil（动态循环）与 tweenBlock（补间包裹）。
  * 三者的 body 序列键同名（{@code body}），故下钻 / 回写共用一条分支（getChildSeq /
  * withChildSeq）。新增带 {@code body} 的块在此并入判别即可，导航 / 变换 / 遍历自动覆盖。
  */
@@ -74,7 +74,7 @@ function isBodyContainer(
 }
 
 /**
- * 0.7.1-P2：取容器块 {@code node} 在序列键 {@code key} 下的子序列引用（只读，不复制）。
+ * 取容器块 {@code node} 在序列键 {@code key} 下的子序列引用（只读，不复制）。
  * if → then/else；repeat / repeatUntil → body。非容器块 / 键不属该块 → {@code null}。这是 blockTree
  * 所有"下钻嵌套序列"路径的<b>唯一</b>分支点（resolveSequence / transformSequence 共用）。
  */
@@ -92,7 +92,7 @@ function getChildSeq(node: ScriptAction, key: string): ScriptAction[] | null {
 }
 
 /**
- * 0.7.1-P2：immutable 重写容器块 {@code node} 在序列键 {@code key} 下的子序列为
+ * immutable 重写容器块 {@code node} 在序列键 {@code key} 下的子序列为
  * {@code newSeq}，返回克隆后的新节点。键不属该块 → 原样返回 node（防御）。
  * 与 {@link getChildSeq} 对偶，是 transformSequence 唯一回写点。
  */
@@ -170,7 +170,7 @@ export function removeAt(actions: ScriptAction[], path: string[]): ScriptAction[
  * 改判别符，防破坏多态联合）。</p>
  *
  * <p>path 非法 / 越界 / 中途遇非容器块下钻 → 原样返回 actions（无变化也返回原引用，调用方
- * 可用 {@code === } 判跳过）。这是参数表单（F 阶段）改字段的<b>唯一</b>树写入点，取代
+ * 可用 {@code === } 判跳过）。这是参数表单改字段的<b>唯一</b>树写入点，取代
  * scriptEdit 旧有的平行手写递归。</p>
  *
  * @param actions  顶层动作树。
@@ -302,7 +302,7 @@ function walkSeq(
 
 /**
  * 镜像后端 {@code ScriptRuleValidator.countBlocks}：每个动作计 1；容器块自身计 1
- * （含在通用 +1）再加所有子序列递归（if then/else + 0.7.1-P2 repeat body）。
+ * （含在通用 +1）再加所有子序列递归（if then/else + repeat body）。
  * <b>repeat 不乘 count</b>——硬限 50 是积木树节点数，不是展开后执行动作数。
  * 用于前端 MAX_TOTAL_BLOCKS 预校验。
  */
@@ -322,7 +322,7 @@ export function countBlocks(actions: ScriptAction[]): number {
  * 最深 {@code if} 嵌套层数（镜像后端 ifDepth 语义：顶层 if = 1，if-in-if = 2 ...）。
  * 无 if → 0。用于前端 MAX_IF_DEPTH 预校验。
  *
- * <p>0.7.1-P2：{@code repeat} 自身<b>不增</b> if 深度（与后端 validateActions 一致——repeat
+ * <p>{@code repeat} 自身<b>不增</b> if 深度（与后端 validateActions 一致——repeat
  * 递归 body 时 ifDepth 不变），但仍下钻 body 找其中的 if。故对每个容器块的所有子序列取
  * 子深度，只在节点是 if 时 +1。</p>
  */
@@ -389,7 +389,7 @@ function resolveSequenceForLeaf(
  * 解析 parentPath（以序列键结尾）指向的序列引用（只读，不复制）。
  *
  * <p>形态校验：第 0 段必须是 {@code 'actions'}；之后每个 {@code (idx, seqKey)} 二元组
- * 表示"进入 actions[idx] 这个容器块的 seqKey 子序列"（if → then/else；0.7.1-P2
+ * 表示"进入 actions[idx] 这个容器块的 seqKey 子序列"（if → then/else；
  * repeat → body）。任一步该块没有此子序列（非容器 / 键不匹配）/ 越界 → null。</p>
  */
 function resolveSequence(actions: ScriptAction[], parentPath: string[]): ScriptAction[] | null {
@@ -414,7 +414,7 @@ function resolveSequence(actions: ScriptAction[], parentPath: string[]): ScriptA
 /**
  * immutable 地用 {@code fn} 重写 parentPath 指向的序列，回写整棵树。
  * parentPath 非法 → 原样返回 actions。沿途路径结构共享 + 仅克隆改动链上的容器块
- * （if / 0.7.1-P2 repeat）。
+ * （if / repeat）。
  */
 function transformSequence(
     actions: ScriptAction[],

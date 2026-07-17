@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.7.2-F4：变量预览面板的单行。数值 + 可写（user / userglobal）变量带 `−1 / +1` 快捷调
+ * 变量预览面板的单行。数值 + 可写（user / userglobal）变量带 `−1 / +1` 快捷调
  * （复用 {@link useLongPressIncrement}：单击 ±1 / 长按连加），点击发 `variable.set`，不用跳画布。
  *
  * <p><b>乐观本地值</b>：按压期间本地累加（{@code local}），不等 server 往返；松手后由 watch 同步

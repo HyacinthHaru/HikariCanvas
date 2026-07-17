@@ -25,8 +25,8 @@ const EMPTY_LAYER: Layer = {
  * ProjectState 本地镜像，随 state.snapshot / state.patch 更新。
  * 服务端仍是权威；本地只做 UI 响应式快速更新。
  *
- * M8-A：内部按 v2 layers 形态存储；通过把 activeLayer.elements 同步赋值给
- * state.elements 同一引用，组件可以继续通过 state.elements 读写。M8-C 起新协议路径
+ * 内部按 v2 layers 形态存储；通过把 activeLayer.elements 同步赋值给
+ * state.elements 同一引用，组件可以继续通过 state.elements 读写。新协议路径
  * 会改成直接走 layers。
  */
 export const useProjectStore = defineStore('project', () => {
@@ -38,8 +38,8 @@ export const useProjectStore = defineStore('project', () => {
      */
     const lastAddedElementId = ref<string | null>(null);
 
-    // M5.5：wall 元数据（来自 ready payload + wall.* op 的 ack）
-    // 2026-05-14 lock-state 重设计：publishedAt → lockedAt；新增 ownerUuid + selfUuid
+    // wall 元数据（来自 ready payload + wall.* op 的 ack）
+    // lockedAt: null = 可编辑，非 null = 锁定；ownerUuid + selfUuid
     // 供前端 computed isOwner = (selfUuid === ownerUuid)，仅 owner 能 lock/unlock。
     const wallId = ref<string | null>(null);
     const alias = ref<string | null>(null);
@@ -64,11 +64,11 @@ export const useProjectStore = defineStore('project', () => {
         return s.layers.find((l) => l.id === s.activeLayerId) ?? s.layers[0];
     });
 
-    /** 是否活动层被锁；M8-D：UI 用它禁用 element 列表的 element op 按钮 + element 在 canvas 上的拖拽。 */
+    /** 是否活动层被锁；UI 用它禁用 element 列表的 element op 按钮 + element 在 canvas 上的拖拽。 */
     const activeLayerLocked = computed(() => activeLayer.value.locked);
 
     /**
-     * 0.7.0-P5-F：把所有图层的元素展平成 {@code {id, type, label}} 列表，供积木编辑器
+     * 把所有图层的元素展平成 {@code {id, type, label}} 列表，供积木编辑器
      * （setElementProperty 的 elementId 下拉）选元素用。label 是人类可读名——文本元素截
      * 前 16 字正文，其余用 {@code 类型 · id 短码}（id 取 {@code e-} 后的短 hash 显示）。
      *
@@ -105,8 +105,8 @@ export const useProjectStore = defineStore('project', () => {
     /**
      * 应用 RFC 6902 子集 patch（add / replace / remove）。
      *
-     * <p>M8-A 阶段后端 EditSession 仍发 v1 path（{@code /elements/N/...} / {@code /canvas/...}）；
-     * M8-C 起将切换到 v2 path（{@code /layers/{i}/elements/{j}/...}）。两种 path 都处理：
+     * <p>后端 EditSession 仍发 v1 path（{@code /elements/N/...} / {@code /canvas/...}）；
+     * 也可切换到 v2 path（{@code /layers/{i}/elements/{j}/...}）。两种 path 都处理：
      * v1 path 落到 activeLayer 上，v2 path 按显式层索引落位。</p>
      */
     function applyPatch(version: number, ops: PatchOp[]) {
@@ -137,7 +137,7 @@ export const useProjectStore = defineStore('project', () => {
     }
 
     /**
-     * M16 P4.2：setup store 没有自动 $reset，手动把所有 wall-scoped ref 重置到初始值。
+     * setup store 没有自动 $reset，手动把所有 wall-scoped ref 重置到初始值。
      * 调用点：wall 切换 / disconnect 后；palette / brush store 等跨 wall 用户偏好不在此处理。
      */
     function reset(): void {
@@ -148,22 +148,22 @@ export const useProjectStore = defineStore('project', () => {
         lockedAt.value = null;
         ownerUuid.value = null;
         selfUuid.value = null;
-        // 0.4.0-P1-D：variables 是 cross-wall 全局 store，切 wall 时一起清；
+        // variables 是 cross-wall 全局 store，切 wall 时一起清；
         // 重连同 wall 不会进 reset 分支（见 wsClient.handleReady 的 wallId diff 判断）
         useVariableStore().reset();
-        // P3-103：wall-scoped store 的 reset 统一收进 project.reset()，单一调用点，
+        // wall-scoped store 的 reset 统一收进 project.reset()，单一调用点，
         // 避免散在 wsClient.handleReady 里靠手动并列调用维护（漏一个就泄漏旧 wall 状态）。
-        // 0.4.0-P3-L：schedule 是 wall-scoped 元数据。
+        // schedule 是 wall-scoped 元数据。
         useScheduleStore().reset();
-        // 0.4.2：alias 也是 wall-scoped。
+        // alias 也是 wall-scoped。
         useVariableAliasStore().reset();
-        // 0.4.5 P3：rail store 含 lines / stations / runs / timetables 内存缓存。
+        // rail store 含 lines / stations / runs / timetables 内存缓存。
         useRailStore().reset();
-        // 0.7.0 P1：脚本规则是 wall-scoped 镜像。
+        // 脚本规则是 wall-scoped 镜像。
         useScriptStore().reset();
         // 图层缩略图缓存（按 layerId 索引）跨 wall 不可复用，切 wall 时清。
         clearLayerThumbnailCache();
-        // P2-70：丢弃 PreviewRenderer 的图片 / 图标失败缓存条目，让切 wall / 重连后
+        // 丢弃 PreviewRenderer 的图片 / 图标失败缓存条目，让切 wall / 重连后
         // 瞬时失败（404 / session 过期）的资源重新加载，不再永久占位 ?。
         resetImageCaches();
     }
@@ -184,7 +184,7 @@ export const useProjectStore = defineStore('project', () => {
 // ---------- 内部辅助 ----------
 
 /**
- * 0.7.0-P5-F：单个元素的人类可读名（积木 elementId 下拉显示用）。
+ * 单个元素的人类可读名（积木 elementId 下拉显示用）。
  *
  * <ul>
  *   <li>文本元素：有正文 → 取前 16 字（超出加省略号）；空正文 → 退 {@code 文本 · 短码}；</li>
@@ -238,7 +238,7 @@ function applyOne(state: ProjectState, op: PatchOp): void {
     if (tokens[0] === 'canvas' && tokens.length === 2) {
         const field = tokens[1] as keyof ProjectState['canvas'];
         if (op.op === 'replace' && op.value !== undefined) {
-            // M17 F5：canvas.background 升级 FillCompat 后 Canvas 字段类型异构，
+            // canvas.background 升级 FillCompat 后 Canvas 字段类型异构，
             // 显式 unknown 中转避免 TS 严格 cast 报错。
             (state.canvas as unknown as Record<string, unknown>)[field] = op.value;
         }
@@ -269,7 +269,7 @@ function applyOne(state: ProjectState, op: PatchOp): void {
     // ---------- /layers/<i> 层级操作（layer.create/delete/reorder/duplicate）----------
     if (tokens[0] === 'layers' && tokens.length === 2) {
         const idx = parseInt(tokens[1], 10);
-        // P3-57：完整边界校验。负索引让 splice 反向定位（静默错位），越界插稀疏空洞。
+        // 完整边界校验。负索引让 splice 反向定位（静默错位），越界插稀疏空洞。
         if (!Number.isInteger(idx) || idx < 0) return;
         if (op.op === 'add' && op.value) {
             if (idx > state.layers.length) return;  // add 允许追加到 length
@@ -451,7 +451,7 @@ function applyElementMutation(
     fieldPath: string[],
     op: PatchOp,
 ): void {
-    // P3-57：完整边界校验，不只防 NaN。负索引会让 splice 从尾部反向定位（静默错位插入/删除），
+    // 完整边界校验，不只防 NaN。负索引会让 splice 从尾部反向定位（静默错位插入/删除），
     // 越界会插到稀疏空洞。add 允许 idx == length（追加）；remove/replace 须 idx < length。
     if (!Number.isInteger(idx) || idx < 0) return;
     if (op.op === 'add' && fieldPath.length === 0) {

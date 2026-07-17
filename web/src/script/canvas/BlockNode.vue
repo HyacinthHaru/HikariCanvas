@@ -1,23 +1,21 @@
 <script setup lang="ts">
 /**
- * 0.7.0-P4-C：递归积木块（一个动作 / if 条件分支）。
+ * 递归积木块（一个动作 / if 条件分支）。
  *
  * <p>渲染单个 {@link ScriptAction}：左侧色条（按 def.category 着色）+ 头部 label + 参数槽。
- * <b>本阶段参数槽渲染占位</b>——每个非 {@code statements}/{@code condition} 字段显
- * “字段label: 原始值文本”；真表单控件（number/select/variable/...）留任务 F。</p>
+ * 每个非 {@code statements}/{@code condition} 字段由真表单控件（number/select/variable/...）渲染。</p>
  *
  * <p><b>if 块 = C 形</b>：condition 字段单独占位显示条件串；{@code then} / {@code else} 两个
  * 子序列槽用本组件递归渲染 —— 子积木 path 拼 {@code `${path}/then/${i}`} /
  * {@code `${path}/else/${i}`}，<b>与后端 trace blockId 逐字符同构</b>（权威
  * blockTree.ts 头注 / ScriptRunner.java）。空槽显占位提示。</p>
  *
- * <p><b>repeat 块 = C 形（单臂，0.7.1-P2）</b>：count 标量在头部由 BlockParamInput 渲染（number），
+ * <p><b>repeat 块 = C 形（单臂）</b>：count 标量在头部由 BlockParamInput 渲染（number），
  * {@code body} 子序列槽递归渲染 —— 子积木 path 拼 {@code `${path}/body/${i}`}，<b>与后端
  * ScriptRunner 展开 blockId 同构</b>（展开 count 轮但 blockId 不带 round，前端只一份 body）。</p>
  *
- * <p>块根挂 {@code data-block-path}（= props.path）——供任务 D 测量插槽矩形、任务 H 按
- * trace blockId 高亮定位。lock 态（project.isLocked）下本阶段仍静态渲染（拖拽 / 交互在
- * 任务 D 接，按 K-UI-12 守卫）。</p>
+ * <p>块根挂 {@code data-block-path}（= props.path）——供测量插槽矩形、按
+ * trace blockId 高亮定位。lock 态（project.isLocked）下拖拽 / 交互按 lock 守卫禁用。</p>
  */
 import { computed, inject } from 'vue';
 import { Crosshair } from 'lucide-vue-next';
@@ -46,7 +44,7 @@ const props = defineProps<{
 const { t } = useI18n();
 const project = useProjectStore();
 const edit = useScriptEditStore();
-/** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
+/** 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
 /**
  * H 阶段试跑高亮（overlay provide；单独 mount 时走空 map 兜底——查不到高亮，静态渲染）。
@@ -63,10 +61,10 @@ const highlight = inject(BLOCK_HIGHLIGHT_KEY, EMPTY_HIGHLIGHT);
  * （BlockNode 递归不显式持 ruleId，避免一路透传 prop）。{@code startBlockDrag} 内部会
  * stopPropagation——嵌套块时只有<b>指针正下方最深的那块</b>启动拖动，外层不抢。
  *
- * <p>C/F 阶段块内会有参数输入框：表单元素聚焦不应触发拖块（避免点输入框就拖走）。这里
+ * <p>块内会有参数输入框：表单元素聚焦不应触发拖块（避免点输入框就拖走）。这里
  * 跳过 input/textarea/select/contentEditable 目标（pointerdown 落在它们上时不拖）。</p>
  *
- * <p>0.7.0-P5 实测修复（变量选择器打开可靠性，次要根因 2）：pointerdown 落在表单控件上时虽不拖块，
+ * <p>变量选择器打开可靠性：pointerdown 落在表单控件上时虽不拖块，
  * 但要<b>在此处先选中本规则</b>。理由：变量「选变量」按钮的 click 会冒泡到 BlockStack 的
  * {@code onStackClick} 触发 {@code selectRule}；若规则原本未选中，这次 selectRule 会在<b>同一次点击</b>
  * 里替换 workingCopy 触发画布重渲，与刚弹出的 picker 抢时序 → 用户感觉"多点几次才开"。提前在
@@ -94,7 +92,7 @@ function selectOwningRule(e: PointerEvent): void {
 /**
  * pointerdown 目标是否落在交互控件（命中则不启动拖块，留给控件自身的 click / focus）。
  *
- * <p>0.7.1 触控板敏感度修复（修复 A）：用 {@code closest} 而非 {@code matches}。变量「选变量」按钮
+ * <p>触控板敏感度修复：用 {@code closest} 而非 {@code matches}。变量「选变量」按钮
  * 内有子元素（{@code <button><span>选变量…</span></button>}），点击实际落在子 {@code span} 上——
  * {@code span.matches('button')} 为 false 会漏判成"可拖" → 点不到字段就被拖走。{@code closest} 会
  * 沿祖先链找到那个 {@code button}/{@code input}，凡落在交互元素内（含其子节点）一律视为表单目标。
@@ -104,7 +102,7 @@ function isFormTarget(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
     if (!el) return false;
     if (el.isContentEditable) return true;
-    // tween-P4 实测修复：自定义缓动曲线编辑器（.hc-tween-curve-editor 内的 SVG 拖控制点）也算交互区——
+    // 自定义缓动曲线编辑器（.hc-tween-curve-editor 内的 SVG 拖控制点）也算交互区——
     // pointerdown 落它上时不启动拖块，否则拖曲线会被块根 onBlockPointerDown 当成拖积木、把整块拖走。
     return !!el.closest?.('input, textarea, select, button, [role="button"], [contenteditable], label, .hc-tween-curve-editor');
 }
@@ -112,7 +110,7 @@ function isFormTarget(target: EventTarget | null): boolean {
 /** 本块的声明定义；未知 kind → null（兜底显示 unknownBlock）。 */
 const def = computed(() => defFor(props.action.type));
 
-// ---------- 0.7.1：友好元素积木皮肤（setElementProperties 路线乙）----------
+// ---------- 友好元素积木皮肤（setElementProperties）----------
 
 /**
  * 是否友好元素积木（{@code setElementProperties}）。这类块在 ACTION_DEFS 里没有 def
@@ -171,27 +169,27 @@ const colorVar = computed(() => {
 });
 
 /**
- * 是否「带 then/else 双臂」块（C 形布局：if 条件分支 + 0.7.3 randomBranch 随机分支）。
+ * 是否「带 then/else 双臂」块（C 形布局：if 条件分支 + randomBranch 随机分支）。
  * 两者渲染路径完全相同（条件/概率行 + then/else 子槽 + C 形底托），共用模板。
  * if 的条件行走 ConditionBuilder（conditionField 存在）；randomBranch 的 probability 走 scalarFields。
  */
 const isIf = computed(() => props.action.type === 'if' || props.action.type === 'randomBranch');
 
 /**
- * 是否 repeat 块（0.7.1-P2，C 形单臂布局：count 标量 + body 子序列槽）。count 字段走
+ * 是否 repeat 块（C 形单臂布局：count 标量 + body 子序列槽）。count 字段走
  * scalarFields 在头部由 BlockParamInput 渲染（number），body 是 statements 子槽（C 臂）。
  */
 const isRepeat = computed(() => props.action.type === 'repeat');
 
 /**
- * 是否 repeatUntil 块（0.7.2-P3，C 形单臂布局：condition + maxIterations 标量 + body 子序列槽）。
+ * 是否 repeatUntil 块（C 形单臂布局：condition + maxIterations 标量 + body 子序列槽）。
  * condition 走下方 {@code conditionField && !isIf} 行的 ConditionBuilder（同 waitUntil）；
  * maxIterations 走 scalarFields 在头部由 BlockParamInput 渲染（number）；body 是 statements 子槽（C 臂）。
  */
 const isRepeatUntil = computed(() => props.action.type === 'repeatUntil');
 
 /**
- * 是否 tweenBlock（tween-P1，C 形单臂布局：durationMs + easing 标量 + body 子序列槽）。
+ * 是否 tweenBlock（C 形单臂布局：durationMs + easing 标量 + body 子序列槽）。
  * durationMs / easing 字段走 scalarFields 由 BlockParamInput 渲染（number / select），
  * body 是 statements 子槽（C 臂），与 repeat / repeatUntil 共用 {@link hasBodySlot} 分支。
  */
@@ -233,8 +231,8 @@ const highlightStyle = computed(() => {
 });
 
 /**
- * 头部要渲染的“标量参数槽”字段（F：换成 {@link BlockParamInput} 真控件）：排除 statements
- * （then/else 由 C 形子槽渲染）与 condition（if 的条件单独行，留任务 G 的 ConditionBuilder）。
+ * 头部要渲染的“标量参数槽”字段（由 {@link BlockParamInput} 真控件渲染）：排除 statements
+ * （then/else 由 C 形子槽渲染）与 condition（if 的条件单独行，走 ConditionBuilder）。
  *
  * <p><b>runCommand 特殊</b>：它有 templateId + params 两个 {@code command} 字段，但二者由<b>同一
  * 个</b> command 控件整体处理（见模板 {@code commandField} 分支）。故这里把 runCommand 的所有
@@ -254,7 +252,7 @@ const commandField = computed<FieldDef | null>(() =>
     isRunCommand.value ? (def.value?.fields.find((f) => f.type === 'command') ?? null) : null,
 );
 
-/** if 块的 condition 字段（单独占位行；真构建器留任务 G）。 */
+/** if 块的 condition 字段（单独占位行）。 */
 const conditionField = computed<FieldDef | null>(
     () => def.value?.fields.find((f) => f.type === 'condition') ?? null,
 );
@@ -270,7 +268,7 @@ function fieldLabel(field: FieldDef): string {
  */
 function fieldValue(field: FieldDef): unknown {
     // tweenBlock 的 easing 字段：数据是 Easing 对象 {type, bezier?}，用 select 渲染 type 部分。
-    // tween-P4：select 受控值仍是 type 字符串（含 'cubicBezier'）；bezier 由 tweenEasingBezier 单独暴露。
+    // select 受控值仍是 type 字符串（含 'cubicBezier'）；bezier 由 tweenEasingBezier 单独暴露。
     if (field.name === 'easing') {
         const e = (props.action as unknown as { easing?: { type?: string } }).easing;
         return e?.type ?? 'linear';
@@ -279,7 +277,7 @@ function fieldValue(field: FieldDef): unknown {
 }
 
 /**
- * tween-P4：当前 tweenBlock easing 对象（完整，含 bezier；非 tweenBlock 时为 linear）。
+ * 当前 tweenBlock easing 对象（完整，含 bezier；非 tweenBlock 时为 linear）。
  * 供 EasingCurveEditor v-model 读取完整 Easing，不只是 type 字符串。
  */
 const tweenEasing = computed<Easing>(() => {
@@ -288,7 +286,7 @@ const tweenEasing = computed<Easing>(() => {
     return e ?? { type: 'easeInOut' };
 });
 
-/** tween-P4：当前 easing 是否为 cubicBezier（控制曲线编辑器显隐）。 */
+/** 当前 easing 是否为 cubicBezier（控制曲线编辑器显隐）。 */
 const isTweenEasingCustom = computed(() => tweenEasing.value.type === 'cubicBezier');
 
 /**
@@ -298,7 +296,7 @@ const isTweenEasingCustom = computed(() => tweenEasing.value.type === 'cubicBezi
  */
 function onFieldUpdate(field: FieldDef, value: unknown): void {
     // easing：select emit 字符串 type，包回 Easing 对象。
-    // tween-P4：切到 cubicBezier 时保留/初始化 bezier（默 ease [0.25,0.1,0.25,1]）；
+    // 切到 cubicBezier 时保留/初始化 bezier（默 ease [0.25,0.1,0.25,1]）；
     // 切到其他预设时丢掉 bezier（非 cubicBezier 类型无 bezier 字段）。
     if (field.name === 'easing') {
         const newType = value as string;
@@ -314,14 +312,14 @@ function onFieldUpdate(field: FieldDef, value: unknown): void {
 }
 
 /**
- * tween-P4：EasingCurveEditor emit update:modelValue 时回写完整 Easing 对象。
+ * EasingCurveEditor emit update:modelValue 时回写完整 Easing 对象。
  * 仅 tweenBlock 的 easing 字段用到。
  */
 function onTweenEasingCurveUpdate(newEasing: Easing): void {
     edit.updateActionField(props.path, { easing: newEasing } as unknown as Partial<ScriptAction>);
 }
 
-// ---------- 0.7.1：friendly 块字段读写（值落 action.patch，elementId 落顶层）----------
+// ---------- friendly 块字段读写（值落 action.patch，elementId 落顶层）----------
 
 /**
  * friendly 块某 patch 字段的当前值（喂 BlockParamInput）。patch 存的是 string
@@ -360,7 +358,7 @@ function onFriendlyElementUpdate(value: unknown): void {
 }
 
 /**
- * 0.7.1-P3 波2：本块的「元素」字段获得焦点 → 记下本积木 path 到 {@code activeElementBinding}，
+ * 本块的「元素」字段获得焦点 → 记下本积木 path 到 {@code activeElementBinding}，
  * 让预览框（PreviewPane）点选元素时知道把命中的 elementId（及当前坐标值）填到哪条积木。
  *
  * <p>挂在元素字段控件外层 {@code @focusin}（focus 会冒泡，故 focusin 而非 focus）：用户点元素
@@ -372,7 +370,7 @@ function onElementFieldFocus(): void {
 }
 
 /**
- * 0.7.1-P3 实测 Bug 1 修复：「从预览点选」按钮的点击处理。
+ * 「从预览点选」按钮的点击处理。
  *
  * <p>根因：element 字段是原生 {@code <select>}，展开浏览器原生下拉时去点预览元素，浏览器会
  * <b>先关下拉、吃掉这次点击</b>，PreviewPane 的 {@code onPointerDown} 收不到 → 没填。修复是在
@@ -431,7 +429,7 @@ const elseActions = computed<ScriptAction[]>(() =>
     (props.action.type === 'if' || props.action.type === 'randomBranch') ? props.action.else : [],
 );
 /**
- * repeat / repeatUntil 的 body 子序列（0.7.1-P2 / 0.7.2-P3；无 body 块为空）。子块 path 拼
+ * repeat / repeatUntil 的 body 子序列（无 body 块为空）。子块 path 拼
  * {@code `${path}/body/${i}`}——<b>与后端 ScriptRunner 展开 / 动态压栈 blockId 逐字符同构</b>
  * （blockId 不带轮数，前端只一份 body）。
  */
@@ -442,7 +440,7 @@ const bodyActions = computed<ScriptAction[]>(() =>
 );
 
 /**
- * condition 字段的原始串（喂给 ConditionBuilder）。0.7.1-P5：从 if-only 泛化为「任何带
+ * condition 字段的原始串（喂给 ConditionBuilder）。从 if-only 泛化为「任何带
  * condition 字段的动作」——if 与 waitUntil 都有 type:'condition' 字段（{@link conditionField}
  * 已按 type 自动识别）；读值时按 action 上的 {@code condition} 属性取，二者同名故统一读。
  * 写回走 {@link onConditionUpdate} 的 {@code updateActionField}（本就泛化，不限 if）。
@@ -452,7 +450,7 @@ const conditionText = computed(() => {
     return typeof a.condition === 'string' ? a.condition : '';
 });
 
-/** if 的 condition 改值回写（G：ConditionBuilder emit 出 build 后的 / 高级模式原串）。 */
+/** if 的 condition 改值回写（ConditionBuilder emit 出 build 后的 / 高级模式原串）。 */
 function onConditionUpdate(value: string): void {
     edit.updateActionField(props.path, { condition: value } as Partial<ScriptAction>);
 }
@@ -460,7 +458,7 @@ function onConditionUpdate(value: string): void {
 // ---------- 视觉：必填引用字段未填的"待选择"角标（不改逻辑，只读判定）----------
 
 /**
- * 本块里"必填但还没填"的字段（一眼提示用户哪个积木哪个字段要填）。0.7.0-P5 实测修复（次要问题 1）：
+ * 本块里"必填但还没填"的字段（一眼提示用户哪个积木哪个字段要填）。
  * 从原来仅 element / timeline / command 三类，扩展到也覆盖 <b>variable（变量名）/ condition（if 条件）/
  * sound（声音）</b>——这些字段虽有合理默认（拖出即合法），但用户可清空 / 删空，空了就该提示。
  *
@@ -532,10 +530,10 @@ const needSelectTitle = computed(() =>
     <div class="hc-block-head">
       <span class="hc-block-title">{{ title }}</span>
 
-      <!-- 0.7.1 友好元素积木：先元素下拉，再皮肤字段（值落 action.patch）。
+      <!-- 友好元素积木：先元素下拉，再皮肤字段（值落 action.patch）。
            show/hide 的 friendlyFields 为空 → 只渲染元素下拉。 -->
       <template v-if="isFriendly">
-        <!-- 0.7.1-P3 波2：元素字段外层 @focusin → 记 activeElementBinding（预览点选填到本积木） -->
+        <!-- 元素字段外层 @focusin → 记 activeElementBinding（预览点选填到本积木） -->
         <span class="hc-block-param-input" @focusin="onElementFieldFocus">
           <BlockParamInput
             :field="FRIENDLY_ELEMENT_FIELD"
@@ -544,7 +542,7 @@ const needSelectTitle = computed(() =>
             :disabled="locked"
             @update="onFriendlyElementUpdate"
           />
-          <!-- Bug 1：独立「从预览点选」按钮——点它进入预览点选态（不展开原生下拉，绕开"点预览被
+          <!-- 独立「从预览点选」按钮——点它进入预览点选态（不展开原生下拉，绕开"点预览被
                下拉吃掉"）。 -->
           <button
             type="button"
@@ -558,7 +556,7 @@ const needSelectTitle = computed(() =>
             <Crosshair class="size-3" />
           </button>
         </span>
-        <!-- 0.7.1-P4(E12)：皮肤字段(moveTo/resize/rotateTo 的 x/y/w/h/rotation) focusin →
+        <!-- 皮肤字段(moveTo/resize/rotateTo 的 x/y/w/h/rotation) focusin →
              setActiveElementBinding(本积木)，让预览自动显该坐标积木虚影可拖（复用元素字段同 setter）。 -->
         <span
           v-for="f in friendlyFields"
@@ -587,7 +585,7 @@ const needSelectTitle = computed(() =>
             :disabled="locked"
             @update="(v: unknown) => onFieldUpdate(f, v)"
           />
-          <!-- Bug 1：独立「从预览点选」按钮（同友好块路径，绕开原生下拉吃点击）。 -->
+          <!-- 独立「从预览点选」按钮（同友好块路径，绕开原生下拉吃点击）。 -->
           <button
             type="button"
             class="hc-pick-from-preview"
@@ -609,7 +607,7 @@ const needSelectTitle = computed(() =>
           :disabled="locked"
           @update="(v: unknown) => onFieldUpdate(f, v)"
         />
-        <!-- tween-P4：缓动字段选到「自定义曲线」时额外渲染 EasingCurveEditor（复用 0.6 SVG 编辑器）。
+        <!-- 缓动字段选到「自定义曲线」时额外渲染 EasingCurveEditor（复用 SVG 编辑器）。
              data 是完整 Easing 对象（含 bezier），emit 也写完整 Easing 对象。 -->
         <div
           v-if="f.name === 'easing' && isTweenBlock && isTweenEasingCustom"
@@ -634,7 +632,7 @@ const needSelectTitle = computed(() =>
       />
     </div>
 
-    <!-- 0.7.1-P5：非 C 形动作（waitUntil）的条件行——复用 ConditionBuilder（同 if 的条件控件）。
+    <!-- 非 C 形动作（waitUntil）的条件行——复用 ConditionBuilder（同 if 的条件控件）。
          if 的条件行在下方 C 形块里渲染，故这里仅当有 conditionField 且非 if 时渲染，避免重复。 -->
     <div v-if="conditionField && !isIf" class="hc-block-condition">
       <span class="hc-param-label">{{ fieldLabel(conditionField) }}</span>
@@ -702,7 +700,7 @@ const needSelectTitle = computed(() =>
       <div class="hc-block-if-foot" aria-hidden="true" />
     </template>
 
-    <!-- 0.7.1-P2 repeat / 0.7.2-P3 repeatUntil 块 C 形（单臂）：标量（count / maxIterations）+
+    <!-- repeat / repeatUntil 块 C 形（单臂）：标量（count / maxIterations）+
          repeatUntil 的 condition 行均在上方已渲染，这里只画 body 子序列槽。
          子块 path = `${path}/body/${i}`，与后端 ScriptRunner 展开 / 动态压栈 blockId 同构（不带轮数）。 -->
     <template v-if="hasBodySlot">
@@ -734,7 +732,7 @@ const needSelectTitle = computed(() =>
 
 <style scoped>
 /*
- * 0.7.0-P5（视觉）→ 0.7.2-P4（精修）：Scratch 风积木块。
+ * Scratch 风积木块。
  *
  * 设计要点：
  *   - 实色块：背景直填分类色 --hc-block-color（由模板内联给，= trace 高亮色或分类色），
@@ -746,7 +744,7 @@ const needSelectTitle = computed(() =>
  *   - hover 上浮：translateY(-1px) + 阴影加深，「积木被拿起」手感；transition 含 transform。
  */
 
-/* ===== 0.7.2-P4 节奏变量（块级本地；BlockStack 各自定义一套同名变量保持一致）===== */
+/* ===== 节奏变量（块级本地；BlockStack 各自定义一套同名变量保持一致）===== */
 .hc-block-node {
     /* 圆角节奏 */
     --bn-radius: 8px;
@@ -835,7 +833,7 @@ const needSelectTitle = computed(() =>
     max-width: 100%;
 }
 
-/* Bug 1：「从预览点选」靶心小按钮（紧贴元素下拉右侧）。圆形胶囊，与参数控件同视觉语言。
+/* 「从预览点选」靶心小按钮（紧贴元素下拉右侧）。圆形胶囊，与参数控件同视觉语言。
  * 点它进入"预览点选态"（不展开原生下拉），高亮态（hc-pick-active）= 当前积木正等着去预览点元素。 */
 .hc-pick-from-preview {
     display: inline-flex;
@@ -873,7 +871,7 @@ const needSelectTitle = computed(() =>
     margin-top: 6px;
     width: 100%;
 }
-/* tween-P4：自定义缓动曲线编辑器容器（tweenBlock 选 cubicBezier 时展开）。
+/* 自定义缓动曲线编辑器容器（tweenBlock 选 cubicBezier 时展开）。
  * 占块整宽，与积木头部 flex-wrap 同行后换行展开。背景用半透明深底适配积木实色面。 */
 .hc-tween-curve-editor {
     width: 100%;

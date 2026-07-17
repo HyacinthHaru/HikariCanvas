@@ -1,13 +1,13 @@
 /**
- * 0.7.0-P4-C：积木声明式定义（K-UI 配色 + 字段 schema）。
+ * 积木声明式定义（配色 + 字段 schema）。
  *
  * <p>每种触发器 / 动作对应一个 {@link BlockDef}：kind 判别 + category（决定配色）+
  * label i18n key + {@link FieldDef}[] 字段表。<b>字段顺序 = 积木内表单顺序</b>；字段逐一
  * 对应 wire 数据字段（权威：{@code web/src/types/protocol.ts} 的 ScriptTrigger / ScriptAction）。</p>
  *
- * <p><b>本阶段（C）参数槽渲染占位</b>——只显字段名 + 原始值文本；真表单控件（按 type 渲染
- * number/select/variable/...）留任务 F。故这里只声明 {@code type} + 取值范围 / select options
- * 等元数据，{@link BlockNode.vue} 暂只用 {@code name}/{@code labelKey} 读原始值。</p>
+ * <p>字段声明 {@code type} + 取值范围 / select options 等元数据；参数槽由 {@link BlockNode.vue}
+ * 按 {@code type} 渲染真表单控件（number/select/variable/...），{@code name}/{@code labelKey}
+ * 读原始值。</p>
  *
  * <p><b>category → 配色（colorVar，Catppuccin token 名）</b>：</p>
  * <ul>
@@ -23,8 +23,7 @@ import type { ScriptAction, ScriptTrigger } from '@/types/protocol';
 
 /**
  * 参数字段类型。{@code statements} 是 if 的 then/else 子序列槽（不是表单控件，由
- * BlockNode 递归渲染子积木）；{@code condition} 是条件构建器（任务 G）。其余为
- * 任务 F 的真表单控件类型。
+ * BlockNode 递归渲染子积木）；{@code condition} 是条件构建器。其余为真表单控件类型。
  */
 export type FieldType =
     | 'number'
@@ -112,7 +111,7 @@ const ELEMENT_PROPERTY_OPTIONS: FieldOption[] = [
     { value: 'fill', labelKey: 'script.fieldOptions.propFill' },
 ];
 
-/** 0.7.1：SendMessage.channel 白名单（镜像后端 MESSAGE_CHANNELS）。 */
+/** SendMessage.channel 白名单（镜像后端 MESSAGE_CHANNELS）。 */
 const MESSAGE_CHANNEL_OPTIONS: FieldOption[] = [
     { value: 'chat', labelKey: 'script.fieldOptions.channelChat' },
     { value: 'actionbar', labelKey: 'script.fieldOptions.channelActionbar' },
@@ -120,7 +119,7 @@ const MESSAGE_CHANNEL_OPTIONS: FieldOption[] = [
 ];
 
 /**
- * 0.7.2-P3：SendMessage.target 白名单（镜像后端 MESSAGE_TARGETS）。{@code trigger} 给触发玩家
+ * SendMessage.target 白名单（镜像后端 MESSAGE_TARGETS）。{@code trigger} 给触发玩家
  * （默认）/ {@code all} 全服广播。下拉走 scope-like 控件（同 PlaySound.scope）。
  */
 const MESSAGE_TARGET_OPTIONS: FieldOption[] = [
@@ -128,14 +127,14 @@ const MESSAGE_TARGET_OPTIONS: FieldOption[] = [
     { value: 'all', labelKey: 'script.fieldOptions.targetAll' },
 ];
 
-/** 0.7.1：ScaleVariable.op 白名单（镜像后端 SCALE_OPS）。 */
+/** ScaleVariable.op 白名单（镜像后端 SCALE_OPS）。 */
 const SCALE_OP_OPTIONS: FieldOption[] = [
     { value: 'multiply', labelKey: 'script.fieldOptions.opMultiply' },
     { value: 'divide', labelKey: 'script.fieldOptions.opDivide' },
 ];
 
 /**
- * 0.7.1-P5：PlayParticle.particle 白名单（14 个，逐字镜像后端 ScriptRuleValidator 的
+ * PlayParticle.particle 白名单（14 个，逐字镜像后端 ScriptRuleValidator 的
  * {@code PARTICLE_WHITELIST}）。value 上 wire（{@code minecraft:xxx}），与后端集合<b>逐字符一致</b>。
  */
 const PARTICLE_OPTIONS: FieldOption[] = [
@@ -156,7 +155,7 @@ const PARTICLE_OPTIONS: FieldOption[] = [
 ];
 
 /**
- * 0.7.3：SetElementLayer.mode 白名单（front = 置顶 / back = 置底）。
+ * SetElementLayer.mode 白名单（front = 置顶 / back = 置底）。
  */
 const ELEMENT_LAYER_MODE_OPTIONS: FieldOption[] = [
     { value: 'front', labelKey: 'script.fieldOptions.layerFront' },
@@ -164,7 +163,7 @@ const ELEMENT_LAYER_MODE_OPTIONS: FieldOption[] = [
 ];
 
 /**
- * 0.7.3：RoundVariable.mode 白名单（round / floor / ceil）。
+ * RoundVariable.mode 白名单（round / floor / ceil）。
  */
 const ROUND_MODE_OPTIONS: FieldOption[] = [
     { value: 'round', labelKey: 'script.fieldOptions.roundRound' },
@@ -173,22 +172,21 @@ const ROUND_MODE_OPTIONS: FieldOption[] = [
 ];
 
 /**
- * tween-P1：补间缓动选项（4 预设，wire 值对应 Easing.type；复用 protocol.ts EasingType）。
- * P1 不含 cubicBezier（贝塞尔编辑器留 P4），拖出默认 easeInOut。
- * i18n key 复用 timeline P3 的 easingXxx 文案（用户已熟悉）。
+ * 补间缓动选项（4 预设，wire 值对应 Easing.type；复用 protocol.ts EasingType）。拖出默认 easeInOut。
+ * i18n key 复用 timeline 的 easingXxx 文案（用户已熟悉）。
  */
 const TWEEN_EASING_OPTIONS: FieldOption[] = [
-    // i18n key 在 timeline 块（0.6 P3 缓动文案），不在 script.fieldOptions——故路径用 timeline.*。
+    // i18n key 在 timeline 块（缓动文案），不在 script.fieldOptions——故路径用 timeline.*。
     { value: 'linear', labelKey: 'timeline.easingLinear' },
     { value: 'easeIn', labelKey: 'timeline.easingEaseIn' },
     { value: 'easeOut', labelKey: 'timeline.easingEaseOut' },
     { value: 'easeInOut', labelKey: 'timeline.easingEaseInOut' },
-    // tween-P4：自定义贝塞尔曲线（复用 EasingCurveEditor；i18n key 复用 timeline.easingCustom）。
+    // 自定义贝塞尔曲线（复用 EasingCurveEditor；i18n key 复用 timeline.easingCustom）。
     { value: 'cubicBezier', labelKey: 'timeline.easingCustom' },
 ];
 
 /**
- * tween-P1：补间 body 中允许的 setElementProperties.kind 集合。
+ * 补间 body 中允许的 setElementProperties.kind 集合。
  * 对应「可平滑插值的属性」：位置 / 尺寸 / 旋转 / 不透明度 / 颜色——与后端
  * {@code ScriptRuleValidator.TWEENABLE_KINDS} 逐字一致（两端必须同步）。
  * setText 不可补间（文字离散跳变）；show/hide 是 opacity 快捷，合并为 setOpacity；
@@ -199,7 +197,7 @@ export const TWEENABLE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 九种触发器定义（kind ∈ ScriptTrigger.type，0.7.0 六种 + 0.7.1-P2 三种）。
+ * 九种触发器定义（kind ∈ ScriptTrigger.type）。
  * 字段覆盖各 wire 数据字段：variableChange→fullName / timer→intervalSeconds /
  * playerNear→rangeBlocks / playerLeaveRange→rangeBlocks；playerJoin / playerKill /
  * wallReady / rightClickWall / playerQuit 无数据字段。
@@ -267,7 +265,7 @@ export const TRIGGER_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.wallReady',
         fields: [],
     },
-    // ---- 0.7.1-P2：3 个新触发器（右键墙 / 玩家离开靠近区域 / 玩家退服）----
+    // ---- 3 个新触发器（右键墙 / 玩家离开靠近区域 / 玩家退服）----
     rightClickWall: {
         kind: 'rightClickWall',
         category: 'trigger',
@@ -301,10 +299,10 @@ export const TRIGGER_DEFS: Record<string, BlockDef> = {
 };
 
 /**
- * 动作定义（kind ∈ ScriptAction.type）：0.7.0 8 动作 + if，0.7.1-P1 5 新动作，0.7.1-P2 repeat。
+ * 动作定义（kind ∈ ScriptAction.type）。
  * 字段逐一对应 wire 数据字段；if 用 condition + then/else、repeat 用 count + body（statements 子序列槽）。
  * playTimeline.seekMs 标 optional（仅 op=seek 携带）；runCommand.params 是动态键值
- * （type=command，由所选模板的 params 驱动子输入，任务 F）。
+ * （type=command，由所选模板的 params 驱动子输入）。
  */
 export const ACTION_DEFS: Record<string, BlockDef> = {
     setVariable: {
@@ -401,7 +399,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'message', type: 'text', labelKey: 'script.fields.message' },
         ],
     },
-    // ---- 0.7.1-P1：4 个低风险新动作 + 相对移动（友好元素积木走 FRIENDLY_ELEMENT_DEFS，不在此）----
+    // ---- 4 个低风险新动作 + 相对移动（友好元素积木走 FRIENDLY_ELEMENT_DEFS，不在此）----
     nudgeElement: {
         kind: 'nudgeElement',
         category: 'action',
@@ -421,7 +419,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         fields: [
             { name: 'text', type: 'text', labelKey: 'script.fields.messageText' },
             { name: 'channel', type: 'select', labelKey: 'script.fields.channel', options: MESSAGE_CHANNEL_OPTIONS },
-            // 0.7.2-P3：发给（触发玩家 / 全服）。scope-like 下拉，与 PlaySound.scope 同控件。
+            // 发给（触发玩家 / 全服）。scope-like 下拉，与 PlaySound.scope 同控件。
             { name: 'target', type: 'scope', labelKey: 'script.fields.msgTarget', options: MESSAGE_TARGET_OPTIONS },
         ],
     },
@@ -467,7 +465,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'else', type: 'statements', labelKey: 'script.fields.else' },
         ],
     },
-    // ---- 0.7.1-P2：有界循环「重复 N 次」（control category，count + body 子序列槽）----
+    // ---- 有界循环「重复 N 次」（control category，count + body 子序列槽）----
     repeat: {
         kind: 'repeat',
         category: 'control',
@@ -478,7 +476,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
-    // ---- 0.7.2-P3：动态循环「重复直到条件」（C 形 control 绿，照 repeat：condition + maxIterations
+    // ---- 动态循环「重复直到条件」（C 形 control 绿，照 repeat：condition + maxIterations
     // + body statements 子序列槽）。condition 走 ConditionBuilder（type:'condition'，同 if/waitUntil）；
     // maxIterations 是安全阀（1..100），body 是每轮执行的子序列槽（C 臂）。----
     repeatUntil: {
@@ -492,8 +490,8 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
-    // ---- 0.7.1-P5：3 个剩余动作（停止脚本 / 播放粒子 / 等待直到）----
-    // palette 由 ACTION_DEFS 按 category 自动分组。0.7.2-F2：停止脚本 / 等待直到是控制流 → category
+    // ---- 3 个剩余动作（停止脚本 / 播放粒子 / 等待直到）----
+    // palette 由 ACTION_DEFS 按 category 自动分组。停止脚本 / 等待直到是控制流 → category
     // 'control'（绿，与 if/repeat/wait 同组）；播放粒子是副作用 → 留 'action'（蓝）。
     // waitUntil 的条件字段用 type:'condition' 复用 ConditionBuilder。
     stopScript: {
@@ -526,7 +524,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'timeoutMs', type: 'number', labelKey: 'script.fields.timeoutMs', min: 50, max: 60000, step: 50 },
         ],
     },
-    // ---- 0.7.2-P2：4 个新动作（变量复制 / 文本拼接 / 克隆元素 / 删除元素，都是副作用 → 'action' 蓝）----
+    // ---- 4 个新动作（变量复制 / 文本拼接 / 克隆元素 / 删除元素，都是副作用 → 'action' 蓝）----
     // 变量字段走 type:'variable'（现有 VariablePicker）；元素字段走 type:'element'（现有元素下拉）；
     // offsetX/Y 走 type:'number'。palette 由 ACTION_DEFS 按 category 自动分组（蓝组），无需另登记。
     copyVariable: {
@@ -569,10 +567,10 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
         ],
     },
-    // ---- tween-P1：补间包裹积木「在 X 秒内」（control 绿，带 body 子序列槽）----
+    // ---- 补间包裹积木「在 X 秒内」（control 绿，带 body 子序列槽）----
     // body 只放属性动作（setElementProperties，kind ∈ TWEENABLE_KINDS）。
-    // P1 UI 占位：durationMs = number，easing = select（4 预设），body = statements。
-    // C 形积木皮肤留 P4 细化；校验镜像 ScriptRuleValidator.TweenBlock case。
+    // durationMs = number，easing = select（4 预设），body = statements。
+    // 校验镜像 ScriptRuleValidator.TweenBlock case。
     tweenBlock: {
         kind: 'tweenBlock',
         category: 'control',
@@ -584,7 +582,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'body', type: 'statements', labelKey: 'script.fields.tweenBody' },
         ],
     },
-    // ---- 0.7.3：G1 随机分支（control 绿，C 形双臂，照 if）----
+    // ---- 随机分支（control 绿，C 形双臂，照 if）----
     // probability number [0,100]；then/else statements 子序列槽。
     // blockId 路径与后端 ScriptRunner 逐字符同构：`${path}/then/${i}` / `${path}/else/${i}`。
     randomBranch: {
@@ -598,7 +596,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'else', type: 'statements', labelKey: 'script.fields.else' },
         ],
     },
-    // ---- 0.7.3：G2 元素置顶/置底（action 蓝，元素字段 + mode 下拉）----
+    // ---- 元素置顶/置底（action 蓝，元素字段 + mode 下拉）----
     setElementLayer: {
         kind: 'setElementLayer',
         category: 'action',
@@ -609,7 +607,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'mode', type: 'select', labelKey: 'script.fields.layerMode', options: ELEMENT_LAYER_MODE_OPTIONS },
         ],
     },
-    // ---- 0.7.3：G3 变量取整（action 蓝，变量字段 + mode 下拉，照 scaleVariable）----
+    // ---- 变量取整（action 蓝，变量字段 + mode 下拉，照 scaleVariable）----
     roundVariable: {
         kind: 'roundVariable',
         category: 'action',
@@ -620,7 +618,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
             { name: 'mode', type: 'select', labelKey: 'script.fields.roundMode', options: ROUND_MODE_OPTIONS },
         ],
     },
-    // ---- 0.7.3：G4 标题弹窗（action 蓝，照 sendMessage：主标题 + 副标题 + 3 时长 + target）----
+    // ---- 标题弹窗（action 蓝，照 sendMessage：主标题 + 副标题 + 3 时长 + target）----
     showTitle: {
         kind: 'showTitle',
         category: 'action',
@@ -637,7 +635,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
     },
 };
 
-// ---------- 0.7.1-P1：友好元素积木皮肤（路线乙——8 个友好积木都序列化成一条 setElementProperties）----------
+// ---------- 友好元素积木皮肤（8 个友好积木都序列化成一条 setElementProperties）----------
 
 /**
  * 友好元素积木皮肤声明。{@code kind} → 标题（{@code labelKey}）+ 该 kind 对应的可编辑字段
@@ -647,7 +645,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
  * 字段值读写 {@code action.patch[field.name]}。{@code fields} 为空数组（如 show / hide）= 无可编辑
  * 字段，拖出即定值（show = opacity 1 / hide = opacity 0）。</p>
  *
- * <p>这是 0.7.0「1 积木 = 1 条 action」blockId 同构纪律的延续——一个友好积木只产一条 action，
+ * <p>这是「1 积木 = 1 条 action」blockId 同构纪律的延续——一个友好积木只产一条 action，
  * 试跑高亮 / undo / 幽灵拖动天然正确。{@code kind} 仅前端皮肤标记，后端执行忽略。</p>
  */
 export interface FriendlyElementDef {
@@ -664,7 +662,7 @@ export interface FriendlyElementDef {
  * show / hide / setText / setColor。字段标签复用现有 {@code script.fieldOptions.prop*} key
  * （横坐标 X / 纵坐标 Y / 宽度 / 高度 / 旋转 / 不透明度 / 文字 / 填充）。
  *
- * <p>{@code setColor} 用 {@code color} 字段输 hex（0.7.3 D3 修复：原为 fill，但 TextElement
+ * <p>{@code setColor} 用 {@code color} 字段输 hex（原为 fill，但 TextElement
  * 只有 color 属性，fill 键会被 applyTextPatch 拒绝）；{@code setText} 用 {@code text} 字段
  * （支持手打 {@code ${var:X}}）。每个 patch 键都在后端 {@code ELEMENT_PROPERTIES}
  * 白名单内（x/y/w/h/rotation/opacity/text/fill/color），保证「拖出即合法」。</p>
@@ -735,7 +733,7 @@ export const FRIENDLY_ELEMENT_DEFS: Record<string, FriendlyElementDef> = {
 };
 
 /**
- * 0.7.1-P3 波2：友好元素积木 {@code kind} → 「点选元素时该从元素当前态取哪些值填进 patch」。
+ * 友好元素积木 {@code kind} → 「点选元素时该从元素当前态取哪些值填进 patch」。
  *
  * <p>预览框点选命中元素后（深度2），除回填 {@code elementId}，对<b>坐标/尺寸/旋转/透明度</b>类
  * 友好积木顺带把元素的当前几何填进 {@code patch}——免去用户手抄坐标。映射的字段名（{@code x/y/
@@ -771,7 +769,7 @@ export function defFor(kind: string): BlockDef | null {
     return ACTION_DEFS[kind] ?? TRIGGER_DEFS[kind] ?? null;
 }
 
-// ---------- 新积木默认值（D2：palette 拖出 / 新建规则用）----------
+// ---------- 新积木默认值（palette 拖出 / 新建规则用）----------
 
 /**
  * 造一个指定 kind 的合法默认动作（palette 拖出新块时用）。
@@ -780,7 +778,7 @@ export function defFor(kind: string): BlockDef | null {
  * <ul>
  *   <li><b>不依赖墙状态</b>的引用（变量名 {@code fullName} / 声音 {@code soundId} / if 条件
  *       {@code condition}）：给一个<b>非空合理默认</b>（{@code user/score} / {@code entity.player.levelup}
- *       / {@code var("user/score") > 0}）。理由：拖出新块的瞬间属于"中间态"，若引用字段给空串则
+ *       / {@code var("user/score") > 0}）。拖出新块的瞬间属于"中间态"，若引用字段给空串则
  *       前端 validator + 后端 ScriptRuleValidator 都立刻判非法 → 红字轰炸 + 自动保存被卡。给一个
  *       合法占位让积木"拖出即合法"，用户再按需改成自己的变量 / 声音；</li>
  *   <li><b>依赖墙上有什么</b>的引用（元素 {@code elementId} / 时间轴 {@code timelineId} / 命令模板
@@ -829,14 +827,14 @@ export function makeDefaultAction(kind: string): ScriptAction {
             const def = FRIENDLY_ELEMENT_DEFS[kind];
             return { type: 'setElementProperties', elementId: '', patch: { ...def.defaultPatch }, kind };
         }
-        // 0.7.1 4 个低风险新动作 + nudge。引用字段给非空合理默认（拖出即合法）：
+        // 4 个低风险新动作 + nudge。引用字段给非空合理默认（拖出即合法）：
         // nudge / 随机 / 乘除给变量名或 dx/dy；sendMessage text 空串后端合法（非引用字段）。
         case 'nudgeElement':
             // elementId 依赖墙上元素 → 留空让用户选；dx/dy 默认 0（合法，验证只查有限）。
             return { type: 'nudgeElement', elementId: '', dx: 0, dy: 0 };
         case 'sendMessage':
             // text 空串后端合法（非引用字段，不触发"待完善"角标）；channel 取首项 chat；
-            // 0.7.2-P3：target 默认 trigger（发给触发玩家，向后兼容旧语义）。
+            // target 默认 trigger（发给触发玩家，向后兼容旧语义）。
             return { type: 'sendMessage', text: '', channel: 'chat', target: 'trigger' };
         case 'setRandomVariable':
             // fullName 给非空默认（user/roll），区间 1..6（骰子体验）。
@@ -851,15 +849,15 @@ export function makeDefaultAction(kind: string): ScriptAction {
             // condition 给一个能被 tryParseCondition 解析回可视模式的合法默认（var 比较），拖出即合法。
             return { type: 'if', condition: 'var("user/score") > 0', then: [], else: [] };
         case 'repeat':
-            // 0.7.1-P2：count 默认 3（落 1..100）；body 空数组——由用户往循环体拖块填，
+            // count 默认 3（落 1..100）；body 空数组——由用户往循环体拖块填，
             // 拖出态会提示"循环体不能为空"（与 if 的空分支不同：repeat 要求 body 非空）。
             return { type: 'repeat', count: 3, body: [] };
         case 'repeatUntil':
-            // 0.7.2-P3：condition 给能被 tryParseCondition 解析回可视模式的合法默认（同 if/waitUntil，
+            // condition 给能被 tryParseCondition 解析回可视模式的合法默认（同 if/waitUntil，
             // 拖出即合法）；maxIterations 默 10（安全阀，落 1..100）；body 空数组——由用户往循环体拖块填，
             // 拖出态提示"重复体不能为空"（与 if 空分支不同：repeatUntil 要求 body 非空）。
             return { type: 'repeatUntil', condition: 'var("user/x") > 0', maxIterations: 10, body: [] };
-        // ---- 0.7.1-P5：3 个剩余动作 ----
+        // ---- 3 个剩余动作 ----
         case 'stopScript':
             // 无字段——拖出即合法（清栈中止本次 run）。
             return { type: 'stopScript' };
@@ -869,19 +867,19 @@ export function makeDefaultAction(kind: string): ScriptAction {
         case 'waitUntil':
             // condition 给能被 tryParseCondition 解析回可视模式的合法默认（同 if）；timeoutMs 5000（落 50..60000）。
             return { type: 'waitUntil', condition: 'var("user/score") > 0', timeoutMs: 5000 };
-        // ---- 0.7.2-P2：变量积木默认（source/target 留空——拖出态提示"目标 / 来源不能为空"，用户从 picker 选）。
+        // ---- 变量积木默认（source/target 留空——拖出态提示"目标 / 来源不能为空"，用户从 picker 选）。
         // 与 setVariable 不同：copy/append 两端都是用户要点选的具体变量，没有通用合理默认，故空串。
         case 'copyVariable':
             return { type: 'copyVariable', source: '', target: '' };
         case 'appendVariable':
             // fullName 留空（用户选追加目标）；text 空串后端合法（拼接内容由用户填）。
             return { type: 'appendVariable', fullName: '', text: '' };
-        // ---- 0.7.2-P2：元素积木默认（elementId 依赖墙上元素 → 留空让用户选；偏移默认 10,10 错开可见）。
+        // ---- 元素积木默认（elementId 依赖墙上元素 → 留空让用户选；偏移默认 10,10 错开可见）。
         case 'cloneElement':
             return { type: 'cloneElement', elementId: '', offsetX: 10, offsetY: 10 };
         case 'deleteElement':
             return { type: 'deleteElement', elementId: '' };
-        // ---- tween-P1：补间包裹积木默认（1000ms / easeInOut / body 含一条 moveTo 默认）。
+        // ---- 补间包裹积木默认（1000ms / easeInOut / body 含一条 moveTo 默认）。
         case 'tweenBlock':
             // durationMs 1000ms（落 1..60000 合法）；easing 默 easeInOut（最常见）；
             // body 给一条 setElementProperties(moveTo) 占位——validator 要求 body 非空 + 每条必须是
@@ -893,7 +891,7 @@ export function makeDefaultAction(kind: string): ScriptAction {
                 easing: { type: 'easeInOut' },
                 body: [{ type: 'setElementProperties', elementId: '', patch: { x: '0', y: '0' }, kind: 'moveTo' }],
             };
-        // ---- 0.7.3：4 个新积木默认值 ----
+        // ---- 4 个新积木默认值 ----
         case 'randomBranch':
             // probability 默 50（对半开；合法落 0..100）；then/else 空数组（wire 契约）。
             // 与 if 同策略：空分支合法，让用户往内拖块填。
@@ -937,7 +935,7 @@ export function makeDefaultTrigger(kind: string): ScriptTrigger {
             return { type: 'playerNear', rangeBlocks: 8 };
         case 'wallReady':
             return { type: 'wallReady' };
-        // ---- 0.7.1-P2：3 个新触发器 ----
+        // ---- 3 个新触发器 ----
         case 'rightClickWall':
             return { type: 'rightClickWall' };
         case 'playerLeaveRange':

@@ -1,5 +1,5 @@
 /**
- * 0.6 P4.5b：整体关键帧"打 / 更新"的统一执行器。
+ * 整体关键帧"打 / 更新"的统一执行器。
  *
  * <p>dock 元素行的 + 按钮（{@code addTransformKeyframe}）和画布拖动自动加帧（CanvasView
  * onDragEnd / onElementTransformEnd）共用此 composable，消除两处 upsert 逻辑分叉。纯计划由
@@ -28,7 +28,7 @@ export function useTimelineAuthoring() {
         const plan = planTransformUpsert(timeline, el, timeMs);
         const track = timeline.tracks?.[elementId];
         // 整体帧 = 一个用户动作。6 个属性 op 共享同一 coalesceKey → 后端合并成一步撤销
-        // （修"撤回只回收 1/6 属性、整体帧块不消失"，实测反馈 Bug 2）。
+        // （修"撤回只回收 1/6 属性、整体帧块不消失"）。
         const coalesceKey = `integ:${elementId}:${timeMs}`;
         for (const u of plan.updates) {
             // 乐观：直接改 mirror 里该 kf 的 value（reactive → 触发画布重绘）；patch 回来值一致无害

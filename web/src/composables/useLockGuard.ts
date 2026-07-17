@@ -4,7 +4,7 @@ import { useProjectStore } from '@/stores/project';
 import { useI18n } from '@/i18n';
 
 /**
- * 2026-05-25 ultrareview #8 — wall lock readonly 多入口 guard。
+ * wall lock readonly 多入口 guard。
  *
  * <p>CLAUDE.md §lock-state 第 4 条规定"前端是 lock 的唯一执行者"，后端编辑 op 透明放行。
  * 但是 wall locked 时，前端如果漏了某个 mutation 入口（按钮 / 快捷键 / 拖入），

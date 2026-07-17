@@ -1,19 +1,19 @@
 <script setup lang="ts">
 /**
- * 0.7.0-P4-D2：积木库侧栏（决策 K-UI 配色 + palette 拖出新块）。
+ * 积木库侧栏（配色 + palette 拖出新块）。
  *
- * <p>按 category 分组列出可拖出的动作积木（含 if）+ 0.7.1 新增「友好元素」分组（移到 / 改大小 /
+ * <p>按 category 分组列出可拖出的动作积木（含 if）+ 「友好元素」分组（移到 / 改大小 /
  * 显示 / 隐藏 等）；每项 = 色点 + label，pointerdown 触发 {@code emit('paletteDown', kind, event)}
  * → 上层（ScriptEditorOverlay / BlockCanvas 持有的单一 useBlockDrag）调 {@code startPaletteDrag}。
  * 落画布时按 kind 调 {@code makeDefaultAction(kind)} 生成对应 action（friendly kind →
  * setElementProperties；nudgeElement → 独立 action）。</p>
  *
- * <p><b>触发器不在 palette</b>（决策：每条规则一个帽子，帽子从「新建规则」来，不从 palette 拖）。
+ * <p><b>触发器不在 palette</b>：每条规则一个帽子，帽子从「新建规则」来，不从 palette 拖。
  * lock 态（{@code project.isLocked}）→ 全部项禁拖（{@code pointer-events:none} + 视觉灰显），
- * 与 RightPanel lock 守卫同款（K-UI-12）。</p>
+ * 与 RightPanel lock 守卫同款。</p>
  *
  * <p>分组顺序：动作（blue）→ 时间轴（mauve playTimeline）→ 控制（green if）→ 危险（red
- * runCommand）→ 友好元素（blue，0.7.1）。配色读 BlockDef.colorVar（Catppuccin token），与画布上
+ * runCommand）→ 友好元素（blue）。配色读 BlockDef.colorVar（Catppuccin token），与画布上
  * 块同色，拖出去"颜色不变"心智一致。</p>
  *
  * <p><b>nudgeElement 去重</b>：它在 ACTION_DEFS 里 category=action，但<b>只在「友好元素」分组</b>
@@ -39,7 +39,7 @@ const emit = defineEmits<{
 const project = useProjectStore();
 const { t } = useI18n();
 
-/** lock 态：palette 禁拖（K-UI-12）。 */
+/** lock 态：palette 禁拖。 */
 const locked = computed(() => project.isLocked);
 
 /**
@@ -97,7 +97,7 @@ const groups = computed<PaletteGroup[]>(() => {
         if (items.length === 0) continue;
         result.push({ key: cat, titleKey: GROUP_LABEL_KEY[cat], items });
     }
-    // 友好元素分组（0.7.1）：按 FRIENDLY_PALETTE_KINDS 顺序，统一动作蓝。
+    // 友好元素分组：按 FRIENDLY_PALETTE_KINDS 顺序，统一动作蓝。
     const friendlyItems: PaletteItem[] = FRIENDLY_PALETTE_KINDS.map((kind) => ({
         kind,
         labelKey: friendlyLabelKey(kind),
@@ -155,7 +155,7 @@ function onItemPointerDown(kind: string, e: PointerEvent): void {
 
 <style scoped>
 /*
- * 0.7.2-P4 第 3 轮：palette 条目与画布积木视觉语言统一。
+ * palette 条目与画布积木视觉语言统一。
  *
  * 设计：
  *   - 实色饱和底（~65% 分类色 mix card），与画布块同色语言；不再是 12% 淡灰底的 IDE 卡片。

@@ -1,5 +1,5 @@
 /**
- * M18 Live Paint — union / difference / find gap 主流程。
+ * Live Paint — union / difference / find gap 主流程。
  *
  * 流程：
  *   1. 收集 element polygon（ElementToPolygon）
@@ -22,7 +22,7 @@ import { elementToPolygon, elementToMultiPolygonAsync } from './ElementToPolygon
 /**
  * 构建当前画布的 gap graph（async）。
  *
- * 0.4.9 Sub B 起改为 async：text 元素走 fontkit 真实 glyph 提取（dynamic import +
+ * async 原因：text 元素走 fontkit 真实 glyph 提取（dynamic import +
  * fetch 字体文件）。其他元素类型仍同步。在 Worker 内调用——主线程通过 onmessage
  * 接 graph 结果，不感知 async 切换。
  *
@@ -34,7 +34,7 @@ export async function buildGraph(
     canvasHeight: number,
 ): Promise<LivePaintGraph> {
     if (!isFinite(canvasWidth) || !isFinite(canvasHeight) || canvasWidth <= 0 || canvasHeight <= 0) {
-        // P3-85：尺寸非法是"空且不可信"状态——必须置 degraded（与 catch 分支对齐），
+        // 尺寸非法是"空且不可信"状态——必须置 degraded（与 catch 分支对齐），
         // 让 UI 走"不可用"文案而非误导性的 noGapFound（"没找到可填充区域"）。
         // 保持"空 gap 必带 degraded"的不变量。
         return { gaps: [], canvasWidth: 0, canvasHeight: 0, degraded: true };
@@ -45,7 +45,7 @@ export async function buildGraph(
      *  低于这个面积的 gap 实际不可达。 */
     const MIN_GAP_AREA = 4;
 
-    // 0.4.10 bugfix：收集 element MultiPolygon（text 元素保留 holes + 多 glyph polygon；
+    // 收集 element MultiPolygon（text 元素保留 holes + 多 glyph polygon；
     // 非 text 元素是单 polygon 包成 MultiPolygon）。union 时直接 spread 即可——
     // polygon-clipping 支持 GeoJSON-style MultiPolygon 输入，holes 自然被减去。
     //
@@ -84,10 +84,10 @@ export async function buildGraph(
         // canvas - occupied → 所有空隙
         gapsRaw = polygonClipping.difference(canvasRect, occupied);
     } catch (e) {
-        // M18-P4：polygon-clipping 在退化输入（自交 / 重合边 / 共线）下偶尔抛
-        // "Unable to complete output ring" 等。M18-P1 旧策略是降级为"整画布单 gap"，
-        // 但这会让用户误以为油漆桶能用——实际点哪里都填充整画布，行为完全不符。
-        // P4 改为 degraded=true + 空 gap 列表，让 UI 显式提示"不可用"。
+        // polygon-clipping 在退化输入（自交 / 重合边 / 共线）下偶尔抛
+        // "Unable to complete output ring" 等。降级为"整画布单 gap"会让用户误以为
+        // 油漆桶能用——实际点哪里都填充整画布，行为完全不符。
+        // 改为 degraded=true + 空 gap 列表，让 UI 显式提示"不可用"。
         console.warn('[LivePaint] buildGraph union/difference failed:', e);
         return {
             gaps: [],
@@ -98,7 +98,7 @@ export async function buildGraph(
     }
 
     // MultiPolygon → GapPolygon[]
-    // M18-P4：极小 gap（面积 < MIN_GAP_AREA px²）整体丢弃；这些来自 polygon-clipping
+    // 极小 gap（面积 < MIN_GAP_AREA px²）整体丢弃；这些来自 polygon-clipping
     // 数值精度噪声，用户点不中也增加 findGapAt 扫描成本。
     const gaps: GapPolygon[] = [];
     for (const poly of gapsRaw) {
@@ -121,7 +121,7 @@ export async function buildGraph(
 
 /**
  * Shoelace formula 算 polygon 面积。约定首点不重复末点。
- * 输出绝对值（不区分 CW/CCW）。M18-P4 用于过滤数值精度噪声生成的极小 gap。
+ * 输出绝对值（不区分 CW/CCW）。用于过滤数值精度噪声生成的极小 gap。
  */
 function polygonArea(poly: Polygon): number {
     const n = poly.length;
@@ -154,7 +154,7 @@ export function findGapAt(graph: LivePaintGraph, px: number, py: number): GapPol
 /**
  * 标准 ray casting point-in-polygon。O(n)。
  *
- * M18-P4：从 file-private 升级为 export，供 CanvasView 在"点击 element 内部 vector-fill"
+ * export 供 CanvasView 在"点击 element 内部 vector-fill"
  * 路径上做精确命中（仅 bbox hit 会让 circle / star 在角落区域误中）。
  *
  * 输入约定：poly 首点不重复末点（本模块 Polygon 约定）。

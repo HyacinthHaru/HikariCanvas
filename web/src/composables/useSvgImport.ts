@@ -1,10 +1,10 @@
 /**
- * useSvgImport.ts — Task 13 MVP 闸 / Task 16 image 支持
+ * useSvgImport.ts — SVG 导入 + 内嵌 image 支持
  *
  * SVG 文本 → 一组 element.add WS 指令，插入当前工程的可写图层。
  * 刷新靠后端 state.patch 推回，不手动改 store。
  *
- * Task 16：嵌入 <image> 的 data URL 先 fetch→blob→File，POST /api/upload，
+ * 嵌入 <image> 的 data URL 先 fetch→blob→File，POST /api/upload，
  * 取 source hash，再发 element.add { type:'image', props:{ x,y,w,h,source } }。
  */
 
@@ -52,7 +52,7 @@ export function useSvgImport(): {
         let count = 0;
         for (const draft of drafts) {
             if (draft.type === 'image' && draft.dataUrl) {
-                // Task 16: data URL → blob → FormData → POST /api/upload → source → element.add
+                // data URL → blob → FormData → POST /api/upload → source → element.add
                 const sent = await uploadImageDraft(draft.dataUrl, draft.props, targetLayer.id);
                 if (sent) count++;
             } else {
@@ -69,7 +69,7 @@ export function useSvgImport(): {
     }
 
     /**
-     * Task 16: 将嵌入 <image> 的 data URL 上传至 /api/upload，
+     * 将嵌入 <image> 的 data URL 上传至 /api/upload，
      * 取 source hash 后发送 element.add { type:'image', props:{ x,y,w,h,source } }。
      */
     async function uploadImageDraft(

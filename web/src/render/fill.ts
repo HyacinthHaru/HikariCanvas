@@ -1,20 +1,13 @@
-// M11-A：Fill 工具函数（前端镜像）。
+// Fill 工具函数（前端镜像）。
 //
 // 后端 moe.hikari.canvas.state.{Fill, SolidFill, LinearGradient, RadialGradient, Stop}
 // 的 TS 侧消费者助手。
-//
-// 当前阶段（M11-A）只承担三件事：
-//   1. 把后端 / 老工程文件吐回的 string 形态 fill 归一化为 SolidFill object
-//   2. 给 ctx.fillStyle 提供一个纯色 fallback（渐变取第一 stop 颜色；M11-B 替换为 CanvasGradient）
-//   3. 给 palette projectColors 扫描提供一次性"提取所有颜色"接口
-//
-// M11-B 实施时本文件加 fillToCanvasStyle(ctx, fill, bbox) → string | CanvasGradient。
 
 import type { Fill, FillCompat, LinearGradient, RadialGradient, SolidFill } from '../types/protocol';
 
 /**
  * 把 string 形态 fill 归一化为 object 形态。其余按原样返回。
- * M0-M10 工程文件 / 后端 v1 patch 兼容入口。
+ * 工程文件 / 后端 v1 patch 兼容入口。
  */
 export function normalizeFill(fill: FillCompat | null | undefined): Fill | undefined {
     if (fill === null || fill === undefined) return undefined;
@@ -23,8 +16,8 @@ export function normalizeFill(fill: FillCompat | null | undefined): Fill | undef
 }
 
 /**
- * M11-A 临时桥接：把 Fill 拍平成一个 hex 颜色串供 ctx.fillStyle 用。
- * 渐变此阶段取 stops[0].color 显示，M11-B 替换为 createLinearGradient / createRadialGradient。
+ * 临时桥接：把 Fill 拍平成一个 hex 颜色串供 ctx.fillStyle 用。
+ * 渐变此路径取 stops[0].color 兜底显示（完整 CanvasGradient 走 fillToCanvasStyle）。
  */
 export function fillToCss(fill: FillCompat | null | undefined): string | undefined {
     const f = normalizeFill(fill);
@@ -54,7 +47,7 @@ export function isSolidFill(fill: FillCompat | null | undefined): fill is SolidF
 }
 
 /**
- * M11-C：把 {@link FillCompat} 转成 Canvas 2D `fillStyle` 接受的类型。
+ * 把 {@link FillCompat} 转成 Canvas 2D `fillStyle` 接受的类型。
  *
  * <ul>
  *   <li>solid → hex string</li>
@@ -85,7 +78,7 @@ export function fillToCanvasStyle(
 const FILL_FALLBACK_WHITE = '#FFFFFF';
 
 /**
- * P3-66/P3-68：剔除 position 非有限的 stops（镜像后端 FillPaintBuilder.filterFiniteStops）；
+ * 剔除 position 非有限的 stops（镜像后端 FillPaintBuilder.filterFiniteStops）；
  * 协议入口 FillValidator 已挡，这里兜底覆盖模板 raw_state 等绕过路径。
  */
 function filterFiniteStops(
@@ -104,12 +97,12 @@ function buildLinearGradient(
     g: LinearGradient,
     bx: number, by: number, bw: number, bh: number,
 ): string | CanvasGradient {
-    // P3-66/P3-68：三档退化兜底，逐档对齐后端 buildLinearPaint。
+    // 三档退化兜底，逐档对齐后端 buildLinearPaint。
     const stops = filterFiniteStops(g.stops);
     if (stops.length === 0) return FILL_FALLBACK_WHITE;          // 0 stops → 纯白
     if (stops.length < 2) return stops[0].color;                 // < 2 stops → 首 stop 色
     // 与 Java buildLinearPaint 同：方向向量 (cos θ, sin θ)；θ=0° 沿 +x，90° 沿 +y（画布坐标系 Y 朝下）
-    // P3-68：NaN 角度兜底为 0（对齐后端 Double.isFinite(g.angle())? : 0.0）
+    // NaN 角度兜底为 0（对齐后端 Double.isFinite(g.angle())? : 0.0）
     const angle = Number.isFinite(g.angle) ? g.angle : 0;
     const rad = (angle * Math.PI) / 180;
     const dx = Math.cos(rad);
@@ -132,7 +125,7 @@ function buildLinearGradient(
     const y1 = cy + dy * minP;
     const x2 = cx + dx * maxP;
     const y2 = cy + dy * maxP;
-    // P3-66：端点重合（0 尺寸 bbox）→ 首 stop 纯色，对齐后端 `x1==x2 && y1==y2` 分支
+    // 端点重合（0 尺寸 bbox）→ 首 stop 纯色，对齐后端 `x1==x2 && y1==y2` 分支
     if (x1 === x2 && y1 === y2) return stops[0].color;
     const grad = ctx.createLinearGradient(x1, y1, x2, y2);
     addStops(grad, stops);
@@ -144,18 +137,18 @@ function buildRadialGradient(
     g: RadialGradient,
     bx: number, by: number, bw: number, bh: number,
 ): string | CanvasGradient {
-    // P3-66/P3-67/P3-68：退化兜底对齐后端 buildRadialPaint。
+    // 退化兜底对齐后端 buildRadialPaint。
     const stops = filterFiniteStops(g.stops);
     if (stops.length === 0) return FILL_FALLBACK_WHITE;
     if (stops.length < 2) return stops[0].color;
-    // P3-68：cx/cy/r 非有限兜底（对齐后端 Double.isFinite? : 0.5/0.5/1.0）
+    // cx/cy/r 非有限兜底（对齐后端 Double.isFinite? : 0.5/0.5/1.0）
     const gcx = Number.isFinite(g.cx) ? g.cx : 0.5;
     const gcy = Number.isFinite(g.cy) ? g.cy : 0.5;
     const gr = Number.isFinite(g.r) ? g.r : 1;
     const cx = bx + gcx * bw;
     const cy = by + gcy * bh;
     const radius = gr * Math.min(bw, bh) / 2;
-    // P3-67：r<=0 / 非有限 → 首 stop 纯色（对齐后端 `radius <= 0 || !finite` 分支）。
+    // r<=0 / 非有限 → 首 stop 纯色（对齐后端 `radius <= 0 || !finite` 分支）。
     // 不再强制 Math.max(0.0001, ...)——那会让退化半径显示末 stop 色，与后端纯色行为分叉。
     if (radius <= 0 || !Number.isFinite(radius)) return stops[0].color;
     // Canvas createRadialGradient(x0,y0,r0,x1,y1,r1)：内圆退化为中心点（r0=0）映射 Java RadialGradientPaint

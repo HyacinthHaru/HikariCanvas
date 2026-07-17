@@ -4,7 +4,7 @@ import { rdpSimplify } from '@/livepaint/RdpSimplifier';
 import type { ImageElement, Mask } from '@/types/protocol';
 
 /**
- * 2026-05-25 项 1：lasso 自由绘制 mask（替代 M13 v1 的 4 预设方案）。
+ * lasso 自由绘制 mask。
  *
  * <h3>触发条件</h3>
  * 当满足以下条件时进入 lasso 模式：

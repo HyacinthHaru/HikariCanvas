@@ -35,15 +35,15 @@ export function useTransformerManager(opts: {
     const project = useProjectStore();
     const ui = useUiStore();
     const ws = getWsClient();
-    // 2026-05-25 ultrareview #8：transform 完成时再 guard 一次（mid-transform 远端 lock 兜底）
+    // transform 完成时再 guard 一次（mid-transform 远端 lock 兜底）
     const lockGuard = useLockGuard();
 
     function attachTransformer(): void {
         const t = opts.transformerRef.value?.getNode() as undefined | { nodes(ns: unknown[]): void };
         const l = opts.layerRef.value?.getNode() as undefined | { findOne(sel: string): unknown };
         if (!t || !l) return;
-        // M17 F4：hand 工具下同样隐藏 transformer（pan 模式不显示锚点遮挡）
-        // M18 Live Paint：paint-bucket 工具下隐藏 transformer（click-only 工具，不需要 resize/rotate 锚点）
+        // hand 工具下同样隐藏 transformer（pan 模式不显示锚点遮挡）
+        // paint-bucket 工具下隐藏 transformer（click-only 工具，不需要 resize/rotate 锚点）
         if (ui.activeTool === 'move' || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket' || ui.selectedCount === 0) { t.nodes([]); return; }
         const nodes: unknown[] = [];
         for (const id of ui.selectedIds) {
@@ -54,7 +54,7 @@ export function useTransformerManager(opts: {
     }
 
     // Transformer attach：selection 变化 / elements 变化 / 工具切换都 reattach
-    // M8-F：watch selectedIds 用 Array.from(...).join(',')，Set 引用每次 selectMany 都换新
+    // watch selectedIds 用 Array.from(...).join(',')，Set 引用每次 selectMany 都换新
     watch(() => Array.from(ui.selectedIds).join(','), () => nextTick(attachTransformer));
     watch(opts.elementsWatchSource, () => nextTick(attachTransformer), { deep: true });
     watch(() => ui.activeTool, () => nextTick(attachTransformer));
@@ -74,10 +74,10 @@ export function useTransformerManager(opts: {
         node.rotation(newRot);
         const el = project.elementById(id);
         if (!el) return;
-        // 2026-05-25 ultrareview #8 内层防线：node 状态已视觉重置；wall 远端被 lock 时不发 op
+        // 内层防线：node 状态已视觉重置；wall 远端被 lock 时不发 op
         if (!lockGuard.guardMutation('transform')) return;
 
-        // 2026-05-14 Bug 修：PathElement 的几何完全由 d 字符串 + stroke.width 决定。
+        // PathElement 的几何完全由 d 字符串 + stroke.width 决定。
         if (el.type === 'path') {
             const path = el as PathElement;
             const oldW = Math.max(1, path.w);

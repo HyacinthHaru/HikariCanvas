@@ -1,20 +1,20 @@
 <script setup lang="ts">
 /**
- * 0.7.1-P3/P4：积木编辑器右侧「墙面预览框」。
+ * 积木编辑器右侧「墙面预览框」。
  *
- * <p>P3：只读复用现有墙渲染（{@link renderProjectState}）显示当前墙现状 + 元素点选取当前值。
- * P4：给"移到 / 改大小 / 旋转"坐标积木叠半透明元素虚影 + 控制点，拖虚影设目标 x/y/w/h/rotation。</p>
+ * <p>只读复用现有墙渲染（{@link renderProjectState}）显示当前墙现状 + 元素点选取当前值。
+ * 给"移到 / 改大小 / 旋转"坐标积木叠半透明元素虚影 + 控制点，拖虚影设目标 x/y/w/h/rotation。</p>
  *
  * <p>坐标系（{@link previewCoords}）= fit-scale + 居中。<b>反算指针 → 墙坐标走 {@link clientToWall}</b>
- *（以 canvas 真实 getBoundingClientRect 为原点，消 P3 审查 M1 的 ~0.5px round 偏差）。</p>
+ *（以 canvas 真实 getBoundingClientRect 为原点，消 ~0.5px round 偏差）。</p>
  *
  * <p><b>渲染</b>：canvas 内部分辨率 = 墙像素，CSS 缩放（pixelated 最近邻），ctx 即墙坐标空间（1:1），
  * 虚影 / handle / 高亮都直接用墙坐标绘制。<b>重绘</b>：watch project.state（deep）+ ghostEl + 绑定 →
  * RAF 合并全量重绘。</p>
  *
- * <p><b>幽灵拖动（E10/E11/E12）</b>：聚焦坐标积木任意字段 → `activeElementBinding`=path →
+ * <p><b>幽灵拖动</b>：聚焦坐标积木任意字段 → `activeElementBinding`=path →
  * `activeCoordBlock` 命中 → 叠该积木虚影（元素半透明真样子 + 按 kind 的 handle）。onPointerDown
- * 先判虚影 handle（命中起拖，window 监听照 splitter 范式防 capture 丢失），否则落回 P3 元素点选。</p>
+ * 先判虚影 handle（命中起拖，window 监听照 splitter 范式防 capture 丢失），否则落回元素点选。</p>
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useProjectStore } from '@/stores/project';
@@ -45,10 +45,10 @@ const paneH = ref(0);
 /** 当前 fit 变换（显示 + handle 半径按 scale 反补偿用）。canvas CSS 尺寸 / 占位文字定位都读它。 */
 const transform = ref<PreviewTransform>({ scale: 1, offsetX: 0, offsetY: 0 });
 
-/** P4：虚影 handle 显示半径（CSS px）；墙像素半径 = 此值 / scale（显示恒定）。 */
+/** 虚影 handle 显示半径（CSS px）；墙像素半径 = 此值 / scale（显示恒定）。 */
 const GHOST_HANDLE_RADIUS_CSS = 7;
 
-/** P4：当前虚影拖动会话；null = 未拖动。startG = 拖起时虚影元素快照（写回基准，逐帧不漂移）。 */
+/** 当前虚影拖动会话；null = 未拖动。startG = 拖起时虚影元素快照（写回基准，逐帧不漂移）。 */
 interface GhostDragSession {
     handle: GhostHandle;
     path: string;
@@ -96,13 +96,13 @@ function paint(): void {
     if (!ctx) return;
     renderProjectState(ctx, state);
 
-    // 当前积木绑定的元素描边高亮（P3）。
+    // 当前积木绑定的元素描边高亮。
     drawBindingHighlight(ctx, transform.value.scale);
-    // 当前坐标积木的半透明虚影 + 控制点（P4）。
+    // 当前坐标积木的半透明虚影 + 控制点。
     drawGhost(ctx, transform.value.scale);
 }
 
-// ---------- P3：点选 hit-test + 取当前值 + 高亮 ----------
+// ---------- 点选 hit-test + 取当前值 + 高亮 ----------
 
 /** 当前墙上所有可见元素（跨层展平，保持 z-order：图层序 + 层内序）。state 未就绪 → 空。 */
 function visibleElements(): Element[] {
@@ -167,12 +167,12 @@ function drawBindingHighlight(ctx: CanvasRenderingContext2D, scale: number): voi
     ctx.restore();
 }
 
-// ---------- P4：虚影派生 + 渲染 ----------
+// ---------- 虚影派生 + 渲染 ----------
 
 /**
  * 当前"坐标积木"（activeElementBinding 指向的 action 若是 setElementProperties + kind∈
  * {moveTo,resize,rotateTo} + 已绑可见元素）。null = 不显虚影。聚焦坐标积木任意字段
- *（BlockNode focusin）→ activeElementBinding=path → 此 computed 命中 → 叠虚影（E12）。
+ *（BlockNode focusin）→ activeElementBinding=path → 此 computed 命中 → 叠虚影。
  */
 const activeCoordBlock = computed<
     { path: string; kind: CoordKind; baseEl: Element; patch: Record<string, string> } | null
@@ -202,7 +202,7 @@ const ghostEl = computed<Element | null>(() => {
 });
 
 /**
- * 画当前坐标积木的虚影（元素半透明真样子，E10）+ 控制点 handle。ctx 处于墙像素空间（1:1）。
+ * 画当前坐标积木的虚影（元素半透明真样子）+ 控制点 handle。ctx 处于墙像素空间（1:1）。
  * 半透明 = save + globalAlpha=0.5 + drawElement + restore。handle 半径按 scale 反补偿（显示恒定）。
  */
 function drawGhost(ctx: CanvasRenderingContext2D, scale: number): void {
@@ -266,9 +266,9 @@ function drawGhostOutline(ctx: CanvasRenderingContext2D, g: Element): void {
     ctx.stroke();
 }
 
-// ---------- 坐标反算（M1 正解）+ 交互 ----------
+// ---------- 坐标反算 + 交互 ----------
 
-/** client → 墙坐标，以 canvas 真实 rect 为原点（M1 正解，绕开 transform.offset）。 */
+/** client → 墙坐标，以 canvas 真实 rect 为原点（绕开 transform.offset）。 */
 function clientToWallCoord(clientX: number, clientY: number): { x: number; y: number } | null {
     const canvas = canvasRef.value;
     if (!canvas || typeof canvas.getBoundingClientRect !== 'function') return null;
@@ -277,8 +277,8 @@ function clientToWallCoord(clientX: number, clientY: number): { x: number; y: nu
 }
 
 /**
- * canvas pointerdown：P4 先判虚影控制点（命中 → 起拖，window 监听）；否则落回 P3 元素点选
- *（findElementAt → 改绑 elementId）。坐标反算走 {@link clientToWallCoord}（M1 正解）。
+ * canvas pointerdown：先判虚影控制点（命中 → 起拖，window 监听）；否则落回元素点选
+ *（findElementAt → 改绑 elementId）。坐标反算走 {@link clientToWallCoord}。
  */
 function onPointerDown(e: PointerEvent): void {
     if (e.button !== undefined && e.button !== 0) return;
@@ -286,7 +286,7 @@ function onPointerDown(e: PointerEvent): void {
     const wallH = project.canvasPixelHeight;
     if (!project.state || wallW <= 0 || wallH <= 0) return;
 
-    // P4：先判虚影控制点（hit-test 优先于 P3 点选）。
+    // 先判虚影控制点（hit-test 优先于元素点选）。
     const cb = activeCoordBlock.value;
     const g = ghostEl.value;
     if (cb && g) {
@@ -308,7 +308,7 @@ function onPointerDown(e: PointerEvent): void {
         }
     }
 
-    // P3：落回元素点选（改绑 elementId）。
+    // 落回元素点选（改绑 elementId）。
     const w = clientToWallCoord(e.clientX, e.clientY);
     if (!w) return;
     const el = findElementAt(w.x, w.y);
@@ -316,7 +316,7 @@ function onPointerDown(e: PointerEvent): void {
     applyPickedElement(el);
 }
 
-/** P4：虚影拖动中。算新 patch（走唯一写回入口 updateActionField，本地 mutate 让虚影跟手）。 */
+/** 虚影拖动中。算新 patch（走唯一写回入口 updateActionField，本地 mutate 让虚影跟手）。 */
 function onGhostPointerMove(e: PointerEvent): void {
     if (!ghostDrag) return;
     // 绑定已不指向本积木（切积木 / server 替换树）→ 本次拖动作废写回，防把坐标写到别的积木。
@@ -335,7 +335,7 @@ function onGhostPointerMove(e: PointerEvent): void {
     } as Partial<ScriptAction>, true);
 }
 
-/** P4：松手 / 取消——解绑 window 监听 + 解冻 server 同步，结束拖动会话（写回已逐帧落，debounce save 收口）。 */
+/** 松手 / 取消——解绑 window 监听 + 解冻 server 同步，结束拖动会话（写回已逐帧落，debounce save 收口）。 */
 function onGhostPointerUp(): void {
     ghostDrag = null;
     edit.setDragging(false);
@@ -436,13 +436,13 @@ watch([() => project.canvasPixelWidth, () => project.canvasPixelHeight], () => r
 // 当前积木绑定的元素 / 绑定本身变化 → 重绘高亮。
 watch(() => edit.activeElementBinding, () => requestPaint());
 watch(() => boundElementId(), () => requestPaint());
-// P4：坐标积木 patch / 虚影几何变化 → 重绘虚影。
+// 坐标积木 patch / 虚影几何变化 → 重绘虚影。
 watch(() => ghostEl.value, () => requestPaint(), { deep: true });
 
 onBeforeUnmount(() => {
     if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
     if (rafId !== 0) { cancelAnimationFrame(rafId); rafId = 0; }
-    // P4：拖动中卸载 → 解绑 window 监听防泄漏。
+    // 拖动中卸载 → 解绑 window 监听防泄漏。
     if (ghostDrag) onGhostPointerUp();
 });
 </script>
@@ -451,7 +451,7 @@ onBeforeUnmount(() => {
   <div class="hc-preview-pane">
     <div class="hc-preview-title">{{ t.script.preview.title }}</div>
     <div ref="hostRef" class="hc-preview-canvas-host">
-      <!-- canvas pointerdown = 虚影拖动(P4) 或 元素点选(P3) -->
+      <!-- canvas pointerdown = 虚影拖动 或 元素点选 -->
       <canvas
         ref="canvasRef"
         class="hc-preview-canvas"
@@ -462,7 +462,7 @@ onBeforeUnmount(() => {
         :style="canvasStyle()"
         @pointerdown="onPointerDown"
       />
-      <!-- P4：当前坐标积木 → 底部幽灵拖动提示 -->
+      <!-- 当前坐标积木 → 底部幽灵拖动提示 -->
       <div v-if="activeCoordBlock" class="hc-preview-ghost-hint">{{ t.script.preview.ghostHint }}</div>
       <!-- 空态：未选择墙 / 墙未就绪 -->
       <div v-if="!project.state" class="hc-preview-empty">{{ t.script.preview.noWall }}</div>
@@ -514,7 +514,7 @@ onBeforeUnmount(() => {
 .hc-preview-canvas-pickable {
     cursor: crosshair;
 }
-/* P4：当前坐标积木 → 可拖虚影 */
+/* 当前坐标积木 → 可拖虚影 */
 .hc-preview-canvas-ghost {
     cursor: move;
 }

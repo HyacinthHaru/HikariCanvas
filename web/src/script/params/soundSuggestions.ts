@@ -1,8 +1,8 @@
 /**
- * 0.7.0-P5-F（K-UI-7）：playSound 积木的常用声音建议列表（datalist 候选）。
+ * playSound 积木的常用声音建议列表（datalist 候选）。
  *
- * <p>K-UI-7 决策：声音 id = {@code <input list>} 文本输入 + 常用建议 ~24 个（前端硬编码常量）；
- * 完整 Registry 列表端点留 P6。用户可从下拉里挑常用声音，也可手填任意合法
+ * <p>声音 id = {@code <input list>} 文本输入 + 常用建议 ~24 个（前端硬编码常量）；
+ * 用户可从下拉里挑常用声音，也可手填任意合法
  * Minecraft sound id（如 {@code minecraft:entity.cat.purr}）——本列表只是"快捷建议"，
  * <b>不是白名单</b>（后端按 Registry 校验）。</p>
  *

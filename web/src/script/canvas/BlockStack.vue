@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.7.0-P4-C：单条 {@link ScriptRule} 的积木堆 = 触发器帽子 + 动作序列。
+ * 单条 {@link ScriptRule} 的积木堆 = 触发器帽子 + 动作序列。
  *
  * <p><b>帽子</b>读 {@link TRIGGER_DEFS}（按 rule.trigger.type）渲染：梯形 / 帽子视觉（peach 底），
  * 显规则名 + 触发器 label + 触发器标量参数占位。<b>动作序列</b>用 {@link BlockNode} 递归渲染，
@@ -35,9 +35,9 @@ const props = defineProps<{
 const { t } = useI18n();
 const project = useProjectStore();
 const edit = useScriptEditStore();
-/** 锁定态：true 时帽子的触发类型 select + 参数控件全禁用（K-UI-12，锁定的墙只读）。 */
+/** 锁定态：true 时帽子的触发类型 select + 参数控件全禁用（锁定的墙只读）。 */
 const locked = computed(() => project.isLocked);
-/** D2 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
+/** 拖拽句柄（BlockCanvas provide；单独 mount 时走 no-op 兜底）。 */
 const dragHandles = inject(BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES);
 /** H 试跑高亮（帽子 blockId = 'trigger'）；单独 mount 走空 map 兜底。 */
 const EMPTY_HIGHLIGHT: HighlightInject = {
@@ -61,7 +61,7 @@ const hatDetail = computed(() => highlight.details.value.get('trigger'));
 function onHatPointerDown(e: PointerEvent): void {
     if (e.button !== 0) return; // 仅左键：移堆 + 选中
     if (isFormTarget(e.target)) {
-        // 0.7.0-P5 实测修复（次要根因 2）：pointerdown 落在帽子里的控件（触发类型 select /
+        // pointerdown 落在帽子里的控件（触发类型 select /
         // variableChange 的变量按钮）上时不移堆，但要先选中本规则——早于变量按钮的 click，
         // 避免 onStackClick 在同一次点击里 selectRule 重渲与 picker 抢时序。
         if (edit.selectedRuleId !== props.rule.id) edit.selectRule(props.rule.id);
@@ -73,7 +73,7 @@ function onHatPointerDown(e: PointerEvent): void {
 /**
  * pointerdown 目标是否落在交互控件（命中则不启动移堆，留给控件自身交互）。
  *
- * <p>0.7.1 触控板敏感度修复（修复 A）：用 {@code closest} 而非 {@code matches}——帽子里的变量按钮
+ * <p>触控板敏感度修复：用 {@code closest} 而非 {@code matches}——帽子里的变量按钮
  * 等控件有子元素，点击落在子节点时 {@code matches} 会漏判。改 closest 沿祖先链命中交互元素，
  * 凡落在其内（含子节点）一律视为表单目标（与 BlockNode.isFormTarget 同口径）。</p>
  */
@@ -233,14 +233,14 @@ const hatStyle = computed(() => {
 
 <style scoped>
 /*
- * 0.7.0-P5（视觉）→ 0.7.2-P4（精修）：Scratch 风积木堆 = 事件帽 + 焊接动作序列。
+ * Scratch 风积木堆 = 事件帽 + 焊接动作序列。
  *   - 帽子（hat）：顶部大圆顶 + 实色饱和触发色，明显区别于方角动作块。
  *   - 动作序列：与帽子无缝相接（负 margin 让首块咬住帽子底）+ 块间 gap≈3px 焊接堆叠。
  *   - hover 上浮：translateY(-1px) + 阴影加深，「积木堆被拿起」手感。
  * 块上文字走 --hc-block-fg（浅主题白 / 深主题深 crust），饱和块面上对比清晰。
  */
 
-/* ===== 0.7.2-P4 节奏变量（与 BlockNode 保持一致命名）===== */
+/* ===== 节奏变量（与 BlockNode 保持一致命名）===== */
 .hc-stack-hat {
     /* 帽子圆角：顶大圆 14px / 底小角 6px（衔接动作块） */
     --bn-hat-radius-top: 14px;

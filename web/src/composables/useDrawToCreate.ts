@@ -4,7 +4,7 @@ import { getWsClient } from '@/network/wsClient';
 import { useLockGuard } from './useLockGuard';
 
 /**
- * M9-E：drag-to-create（line / arrow / circle / star）+ drawDrag 状态 + commitDraw。
+ * drag-to-create（line / arrow / circle / star）+ drawDrag 状态 + commitDraw。
  *
  * - start(pos)：drawTool 激活时在空白处 mousedown 启动
  * - move(pos, shiftLocked?)：实时更新对角点，驱动预览；shiftLocked 时锁等比
@@ -12,14 +12,14 @@ import { useLockGuard } from './useLockGuard';
  * - cancel()：手动取消（拖出窗口 / 工具切换）
  * - drawPreview：暴露给 Konva 的预览 config
  *
- * M27（2026-05-19）：按住 Shift 锁等比 —— circle 画正圆 / rect&star 画正方形 /
+ * 按住 Shift 锁等比 —— circle 画正圆 / rect&star 画正方形 /
  * line&arrow 锁 0/45/90/135 度。锚点固定 (x1,y1)，终点按 |dx|/|dy| 较大值
  * 取正方形边长，sign 保留方向。
  */
 export function useDrawToCreate() {
     const ui = useUiStore();
     const ws = getWsClient();
-    // 2026-05-25 ultrareview #8：lock 多入口 guard 内层防线（stage overlay 已挡 mousedown，
+    // lock 多入口 guard 内层防线（stage overlay 已挡 mousedown，
     // 但用户先 mousedown 起拖再被远端 lock 时本地 mouseup 仍会走 commitDraw —— 此处兜底）
     const lockGuard = useLockGuard();
 
@@ -82,7 +82,7 @@ export function useDrawToCreate() {
         const d = drawDrag.value;
         if (!d) return null;
         const tool = ui.activeTool;
-        // M27：Shift 锁等比 — 应用到预览以实时反馈
+        // Shift 锁等比 — 应用到预览以实时反馈
         const effEnd = d.shiftLocked ? applyShiftLock(d.x1, d.y1, d.x2, d.y2, tool) : { x2: d.x2, y2: d.y2 };
         const minX = Math.min(d.x1, effEnd.x2);
         const minY = Math.min(d.y1, effEnd.y2);

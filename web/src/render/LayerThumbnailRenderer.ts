@@ -20,7 +20,7 @@ import { renderProjectState } from './PreviewRenderer';
 /**
  * 缩略图长边像素数（dataURL 按画布 aspect ratio 输出，长边 = 此值，短边按比例）。
  *
- * <p><b>0.4.9 hotfix #4</b>：原 64×64 letterbox 输出导致 LayerPanel `<img object-contain>`
+ * <p>原 64×64 letterbox 输出导致 LayerPanel `<img object-contain>`
  * 时 double scale（dataURL 自身含巨大透明边 + CSS 再 fit），用户看到的内容只占容器一小部分。
  * 改为按 aspect ratio 输出真实尺寸，让 CSS 的 object-contain 做单次 fit，棋盘格 background
  * 透过透明边自然显示。</p>
@@ -36,9 +36,8 @@ const cache = new Map<string, CacheEntry>();
 
 /**
  * Renderer 版本号 — 任何渲染逻辑改动（letterbox / aspect ratio / 输出尺寸等）都 bump 此值
- * 强制清空 stale cache。0.4.9 hotfix-2 #3 引入：用户实测仍看到旧 letterbox 缩略图，根因是
- * `computeLayerHash` 只签 layer 内容不签 renderer 版本，hotfix #4 改了输出尺寸算法但 cache
- * 仍返旧 dataURL。
+ * 强制清空 stale cache。根因是 `computeLayerHash` 只签 layer 内容不签 renderer 版本，
+ * 改了输出尺寸算法但 cache 仍返旧 dataURL。
  */
 const RENDERER_VERSION = 'v2-aspect-ratio';
 
@@ -119,7 +118,7 @@ export function renderLayerThumbnail(
     renderProjectState(fg, synthetic);
 
     // 2) 缩放到 aspect ratio 的 thumb canvas（长边 = THUMBNAIL_MAX_SIDE）
-    //    0.4.9 hotfix #4：去 letterbox，让 CSS object-contain 做单次 fit，避免 double scale
+    //    去 letterbox，让 CSS object-contain 做单次 fit，避免 double scale
     const ratio = Math.min(THUMBNAIL_MAX_SIDE / widthPx, THUMBNAIL_MAX_SIDE / heightPx);
     const thumbW = Math.max(1, Math.round(widthPx * ratio));
     const thumbH = Math.max(1, Math.round(heightPx * ratio));

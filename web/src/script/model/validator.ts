@@ -1,10 +1,10 @@
 /**
- * 0.7.0-P5-H（K-UI-9）：前端 validator 镜像 —— 后端 {@code ScriptRuleValidator} 的逐字段复刻。
+ * 前端 validator 镜像 —— 后端 {@code ScriptRuleValidator} 的逐字段复刻。
  *
  * <p><b>权威 = {@code plugin/src/main/java/moe/hikari/canvas/script/ScriptRuleValidator.java}</b>。
  * 本文件的常量（数值上下界 / 长度上限 / 白名单集合）必须与后端<b>逐一一致</b>——任一处漂移都会
- * 让"前端放行、后端打回"（或反之）。后端是唯一执行权威（决策 D5），前端这层只为<b>保存前预校验</b>
- * （K-UI-9）：拖完一拍就在编辑器里给红字提示 + 阻止 send，而不是等 server 回 {@code SCRIPT_INVALID}。</p>
+ * 让"前端放行、后端打回"（或反之）。后端是唯一执行权威，前端这层只为<b>保存前预校验</b>：
+ * 拖完一拍就在编辑器里给红字提示 + 阻止 send，而不是等 server 回 {@code SCRIPT_INVALID}。</p>
  *
  * <p><b>与后端的两点形态差异（有意为之，语义不变）</b>：</p>
  * <ol>
@@ -67,7 +67,7 @@ export const TIMELINE_OPS: ReadonlySet<string> = new Set(['play', 'pause', 'seek
 /** PlaySound.scope 白名单（后端 {@code SOUND_SCOPES}）。 */
 export const SOUND_SCOPES: ReadonlySet<string> = new Set(['near', 'all']);
 
-// ---------- 0.7.1-P1 新动作常量（逐一对照 ScriptRuleValidator.java）----------
+// ---------- 新动作常量（逐一对照 ScriptRuleValidator.java）----------
 
 /** SendMessage.text 最大长度。后端 {@code MESSAGE_MAX}。 */
 export const MESSAGE_MAX = 256;
@@ -80,13 +80,13 @@ export const MESSAGE_CHANNELS: ReadonlySet<string> = new Set(['chat', 'actionbar
 /** ScaleVariable.op 白名单。后端 {@code SCALE_OPS}。 */
 export const SCALE_OPS: ReadonlySet<string> = new Set(['multiply', 'divide']);
 
-// ---------- 0.7.1-P2 repeat 常量（逐一对照 ScriptRuleValidator.java）----------
+// ---------- repeat 常量（逐一对照 ScriptRuleValidator.java）----------
 
 /** Repeat.count 范围（重复次数）。后端 {@code REPEAT_MIN} / {@code REPEAT_MAX}。 */
 export const REPEAT_MIN = 1;
 export const REPEAT_MAX = 100;
 
-// ---------- 0.7.2-P3 常量（sendMessage target / repeatUntil，逐一对照 ScriptRuleValidator.java）----------
+// ---------- sendMessage target / repeatUntil 常量（逐一对照 ScriptRuleValidator.java）----------
 
 /**
  * SendMessage.target 白名单。后端 {@code MESSAGE_TARGETS}。{@code trigger} 给触发玩家（默认）/
@@ -95,7 +95,7 @@ export const REPEAT_MAX = 100;
  */
 export const MESSAGE_TARGETS: ReadonlySet<string> = new Set(['trigger', 'all']);
 
-// ---------- 0.7.3 常量（4 个新积木，逐一对照 ScriptRuleValidator.java）----------
+// ---------- 4 个新积木常量（逐一对照 ScriptRuleValidator.java）----------
 
 /** RandomBranch.probability 范围（百分比整数）。后端 {@code PROBABILITY_MIN} / {@code PROBABILITY_MAX}。 */
 export const PROBABILITY_MIN = 0;
@@ -111,7 +111,7 @@ export const TITLE_FADE_MAX = 10000;
 /** ShowTitle.stayMs 上限（毫秒）。后端 {@code TITLE_STAY_MAX}。 */
 export const TITLE_STAY_MAX = 60000;
 
-// ---------- tween-P1 常量（补间包裹，逐一对照 ScriptRuleValidator.java）----------
+// ---------- 补间包裹常量（逐一对照 ScriptRuleValidator.java）----------
 
 /** TweenBlock.durationMs 最小值（毫秒）。后端 {@code TWEEN_DURATION_MIN}。 */
 export const TWEEN_DURATION_MIN = 1;
@@ -122,7 +122,7 @@ export const VALID_EASING_TYPES: ReadonlySet<EasingType> = new Set<EasingType>([
     'linear', 'easeIn', 'easeOut', 'easeInOut', 'cubicBezier',
 ]);
 
-// ---------- 0.7.1-P5 常量（停止 / 粒子 / 等待直到，逐一对照 ScriptRuleValidator.java）----------
+// ---------- 停止 / 粒子 / 等待直到常量（逐一对照 ScriptRuleValidator.java）----------
 
 /** PlayParticle.count 范围。后端 {@code PARTICLE_COUNT_MIN} / {@code PARTICLE_COUNT_MAX}。 */
 export const PARTICLE_COUNT_MIN = 1;
@@ -236,7 +236,7 @@ function validateTrigger(trigger: ScriptTrigger, errors: ValidationError[]): voi
                 });
             }
             break;
-        // 0.7.1-P2：playerLeaveRange 范围校验同 playerNear（复用 NEAR_MIN/MAX），文案"玩家离开半径"。
+        // playerLeaveRange 范围校验同 playerNear（复用 NEAR_MIN/MAX），文案"玩家离开半径"。
         case 'playerLeaveRange':
             if (trigger.rangeBlocks < NEAR_MIN || trigger.rangeBlocks > NEAR_MAX) {
                 errors.push({
@@ -245,7 +245,7 @@ function validateTrigger(trigger: ScriptTrigger, errors: ValidationError[]): voi
                 });
             }
             break;
-        // 无字段触发器（后端 Optional.empty）。0.7.1-P2 加 rightClickWall / playerQuit。
+        // 无字段触发器（后端 Optional.empty）：含 rightClickWall / playerQuit。
         case 'playerJoin':
         case 'playerKill':
         case 'wallReady':
@@ -397,7 +397,7 @@ function validateAction(
             validateActions(action.else ?? [], depth, `${path}/else`, errors);
             break;
         }
-        // ---- 0.7.1-P1：6 个新 action（文案与后端 ScriptRuleValidator 逐字一致）----
+        // ---- 6 个新 action（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'setElementProperties': {
             if (isBlank(action.elementId)) {
                 errors.push({ blockId: path, message: '设置元素属性缺少元素 ID' });
@@ -442,7 +442,7 @@ function validateAction(
             if (action.channel == null || !MESSAGE_CHANNELS.has(action.channel)) {
                 errors.push({ blockId: path, message: `消息渠道不在允许范围：${action.channel}` });
             }
-            // 0.7.2-P3：target 白名单（trigger / all）。后端 Deserializer 缺省默 'trigger'，故
+            // target 白名单（trigger / all）。后端 Deserializer 缺省默 'trigger'，故
             // <b>缺失（旧 payload）当 trigger 放行</b>（向后兼容）；非空但不在白名单才拒。
             // 文案与后端 ScriptRuleValidator 逐字一致（"发送对象不在允许范围："）。
             if (action.target != null && !MESSAGE_TARGETS.has(action.target)) {
@@ -481,7 +481,7 @@ function validateAction(
             }
             break;
         }
-        // ---- 0.7.1-P2：repeat 有界循环（文案与后端 ScriptRuleValidator 逐字一致）----
+        // ---- repeat 有界循环（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'repeat': {
             if (typeof action.count !== 'number' || action.count < REPEAT_MIN || action.count > REPEAT_MAX) {
                 errors.push({ blockId: path, message: `重复次数需在 ${REPEAT_MIN}..${REPEAT_MAX} 之间` });
@@ -494,7 +494,7 @@ function validateAction(
             validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
             break;
         }
-        // ---- 0.7.2-P3：repeatUntil 动态循环（while 语义；文案与后端 ScriptRuleValidator 逐字一致）----
+        // ---- repeatUntil 动态循环（while 语义；文案与后端 ScriptRuleValidator 逐字一致）----
         // 与 repeat 部分措辞有别：condition 报"重复条件…"、maxIterations 报"重复次数上限…"；
         // body 空与 repeat 同文案"重复循环体不能为空"。
         case 'repeatUntil': {
@@ -512,7 +512,7 @@ function validateAction(
             validateActions(action.body ?? [], ifDepth, `${path}/body`, errors);
             break;
         }
-        // ---- 0.7.1-P5：停止 / 粒子 / 等待直到（文案与后端 ScriptRuleValidator 逐字一致）----
+        // ---- 停止 / 粒子 / 等待直到（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'stopScript':
             // 无字段——永远合法（后端 Optional.empty）。
             break;
@@ -537,7 +537,7 @@ function validateAction(
             }
             break;
         }
-        // ---- 0.7.2-P2：变量积木 + 元素积木（文案与后端 ScriptRuleValidator 逐字一致）----
+        // ---- 变量积木 + 元素积木（文案与后端 ScriptRuleValidator 逐字一致）----
         // 注：克隆偏移这层只查"有限数值"；上界（ELEMENT_OFFSET_MAX）由后端 validator 兜底
         // （前端从简——offset 在表单里就是普通数字输入，越界由 server 打回）。
         case 'copyVariable': {
@@ -571,7 +571,7 @@ function validateAction(
             }
             break;
         }
-        // ---- 0.7.3：4 个新积木（文案与后端 ScriptRuleValidator 逐字一致）----
+        // ---- 4 个新积木（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'randomBranch': {
             // probability 必须在 [0,100] 之间（整数，后端 int 存储）。
             if (typeof action.probability !== 'number' || action.probability < PROBABILITY_MIN || action.probability > PROBABILITY_MAX) {
@@ -631,7 +631,7 @@ function validateAction(
             }
             break;
         }
-        // ---- tween-P1：补间包裹积木（文案与后端 ScriptRuleValidator 逐字一致）----
+        // ---- 补间包裹积木（文案与后端 ScriptRuleValidator 逐字一致）----
         case 'tweenBlock': {
             // durationMs 范围。
             if (typeof action.durationMs !== 'number' || action.durationMs < TWEEN_DURATION_MIN || action.durationMs > TWEEN_DURATION_MAX) {
@@ -675,7 +675,7 @@ function validateAction(
 
 /**
  * 镜像后端 {@code countBlocks}：每个动作计 1；if 自身计 1 再加 then + else 递归；
- * 0.7.1-P2 repeat 自身计 1 再加 body 递归——<b>不乘 count</b>（硬限 50 是积木树节点数，
+ * repeat 自身计 1 再加 body 递归——<b>不乘 count</b>（硬限 50 是积木树节点数，
  * 不是展开后的执行动作数；展开数超 50 靠运行时 Budget 熔断，§9 决策）。
  */
 function countBlocks(actions: ScriptAction[]): number {
@@ -683,11 +683,11 @@ function countBlocks(actions: ScriptAction[]): number {
     for (const action of actions) {
         count++;
         if (action.type === 'if' || action.type === 'randomBranch') {
-            // 0.7.3：randomBranch 与 if 同——自身计 1 + then/else 节点递归。
+            // randomBranch 与 if 同——自身计 1 + then/else 节点递归。
             count += countBlocks(action.then ?? []) + countBlocks(action.else ?? []);
         } else if (action.type === 'repeat' || action.type === 'repeatUntil' || action.type === 'tweenBlock') {
-            // 0.7.2-P3：repeatUntil 与 repeat 同——自身计 1 + body 节点递归（不乘轮数；
-            // 展开数超 50 靠运行时 Budget 熔断，§9 决策）。tween-P1：tweenBlock 同。
+            // repeatUntil 与 repeat 同——自身计 1 + body 节点递归（不乘轮数；
+            // 展开数超 50 靠运行时 Budget 熔断，§9 决策）。tweenBlock 同。
             count += countBlocks(action.body ?? []);
         }
     }

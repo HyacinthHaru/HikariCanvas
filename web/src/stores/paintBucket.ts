@@ -1,7 +1,7 @@
 /**
- * M18 Live Paint — 油漆桶工具配置 store。
+ * 油漆桶工具配置 store。
  *
- * 范围：用户偏好（当前 fill / tolerance）跨 wall 持久化，不在 M16 P4.2 reset() 范围内
+ * 范围：用户偏好（当前 fill / tolerance）跨 wall 持久化，不在 reset() 范围内
  *  ——剪贴板 / 笔刷 fill 选择同款语义。
  *
  * 字段：
@@ -23,7 +23,7 @@ import type { FillCompat } from '@/types/protocol';
 const KEY = 'hikari-canvas:paint-bucket';
 
 const DEFAULT_FILL: FillCompat = { type: 'solid', color: '#000000' };
-/** RDP 基础 tolerance 默认值；保持与 PolygonToPath M18-P4 历史 baseline 一致。 */
+/** RDP 基础 tolerance 默认值；保持与 PolygonToPath 历史 baseline 一致。 */
 export const DEFAULT_TOLERANCE = 0.5;
 /** Slider 范围：低端精细 / 高端平滑。 */
 export const TOLERANCE_MIN = 0.25;

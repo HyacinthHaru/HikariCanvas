@@ -5,12 +5,12 @@ import { useBrushStore } from '@/stores/brush';
 import { BrushController, extractPressure } from '@/brush/BrushController';
 
 /**
- * M12-C 笔刷接入：pointerdown/move/up/cancel + BrushController 实例化。
+ * 笔刷接入：pointerdown/move/up/cancel + BrushController 实例化。
  *
  * 调用方提供 brushHostRef（容器 DOM）+ widthPx/heightPx getter（动态 canvas 尺寸）。
  * 返回 4 个事件 handler 直接绑到 brushHost 元素。
  *
- * <p>M16 P4.1：setPointerCapture / releasePointerCapture 包 try-catch；监听
+ * <p>setPointerCapture / releasePointerCapture 包 try-catch；监听
  * pointercancel / window blur / document visibilitychange，触发即终止 stroke，
  * 防止"用户切走 → pointerup 永不到达 → BrushController 卡在 isDrawing"。</p>
  */

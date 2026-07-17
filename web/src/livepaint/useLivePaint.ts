@@ -1,5 +1,5 @@
 /**
- * M18-P2 Live Paint 主线程封装 composable。
+ * Live Paint 主线程封装 composable。
  *
  * 职责：
  *   - 持有一个 LivePaintWorker 实例
@@ -9,11 +9,7 @@
  *   - onScopeDispose: terminate worker + clear debounce timer
  *
  * 关键决策：
- *   1. debounce 100ms ── 与 M5 编辑器 5fps 输入防抖一致；用户拖动 element 高频时避免 worker 风暴
- *   2. requestId race ── nextRequestId 单调递增；onmessage 比对 pendingRequestId 只接最新
- *   3. JSON 深 clone ── Vue reactive Proxy 不能 structuredClone；JSON.parse(JSON.stringify) 简单可靠
- *   4. enabled gate ── Live Paint 工具未激活时短路 send()，节省 worker CPU
- *   5. immediate=true ── 组件挂载即一次性触发首次构建（若 enabled）
+ *   - JSON 深 clone ── Vue reactive Proxy 不能 structuredClone；JSON.parse(JSON.stringify) 简单可靠
  */
 
 import { onScopeDispose, ref, watch, type Ref } from 'vue';
@@ -59,7 +55,7 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
     /** debounce timer handle。 */
     let debounceTimer: number | null = null;
     /**
-     * M18-P4：性能跟踪——pendingRequestId → { startedAt, elementCount } 映射。
+     * 性能跟踪——pendingRequestId → { startedAt, elementCount } 映射。
      * onmessage 内换算 elapsed 后立刻 delete。仅 DEV 启用，prod build 走 import.meta.env.DEV
      * 静态分支被 Vite tree-shake 完整消除（含 Map 实例分配也不发生）。
      */
@@ -103,7 +99,7 @@ export function useLivePaint(opts: UseLivePaintOpts): UseLivePaintReturn {
         if (!opts.enabled.value) {
             graph.value = null;
             isBuilding.value = false;
-            // P2-30：让任何在途请求失效——递增 pendingRequestId 使其响应在 onmessage(73)
+            // 让任何在途请求失效——递增 pendingRequestId 使其响应在 onmessage(73)
             // 的 ID 比对被丢弃，永不把已清空的 graph 回填成陈旧拓扑（worker 升 async 后
             // text+fontkit 路径慢请求可在禁用后才返回）。
             pendingRequestId = ++nextRequestId;

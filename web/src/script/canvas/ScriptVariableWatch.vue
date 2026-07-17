@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.7.1：积木画布右下角「本脚本变量实时预览」常驻面板。
+ * 积木画布右下角「本脚本变量实时预览」常驻面板。
  *
  * <p>不用切到右侧变量面板，就能在积木画布里看<b>当前选中规则</b>涉及哪些变量 + 它们的实时值。
  * 数据来源：{@code scriptEdit.workingCopy}（当前编辑规则的本地副本）经
@@ -72,7 +72,7 @@ interface WatchRow {
     display: string;
     value: string;
     missing: boolean;
-    /** 0.7.2-F4：可写（user/userglobal）+ 当前值是有限数 → 行内 ±1 快捷调。 */
+    /** 可写（user/userglobal）+ 当前值是有限数 → 行内 ±1 快捷调。 */
     editable: boolean;
     /** 当前数值（editable 时有效，传给 VarWatchRow 做乐观累加基准）。 */
     numValue: number;
@@ -102,7 +102,7 @@ const rows = computed<WatchRow[]>(() => {
             value = UNRESOLVED;
             missing = true;
         }
-        // 0.7.2-F4：可写(user:/userglobal/) + 当前值是有限数 → 行内 ±1。其余（system/papi/schedule
+        // 可写(user:/userglobal/) + 当前值是有限数 → 行内 ±1。其余（system/papi/schedule
         // 只读、文本变量）不显 stepper。
         const writable = fullName.startsWith('user:') || fullName.startsWith('userglobal/');
         const numParsed = Number(value);
@@ -115,7 +115,7 @@ const rows = computed<WatchRow[]>(() => {
 /** 是否有变量行（控制空状态 vs 列表）。 */
 const hasVars = computed(() => rows.value.length > 0);
 
-/** 0.7.2-F4：行内 ±1 写回变量（发 variable.set）。失败设 lastError；乐观本地值由行组件松手后同步纠正。 */
+/** 行内 ±1 写回变量（发 variable.set）。失败设 lastError；乐观本地值由行组件松手后同步纠正。 */
 function onSet(fullName: string, value: string): void {
     getWsClient().sendVariableSet(fullName, value).catch((e) => {
         net.lastError = `改变量失败：${e instanceof Error ? e.message : String(e)}`;

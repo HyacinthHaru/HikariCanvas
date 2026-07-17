@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P5-F（K-UI-5/10）：命令模板列表 fetch + 进程内缓存 composable。
+ * 命令模板列表 fetch + 进程内缓存 composable。
  *
  * <p>{@code runCommand} 积木的「命令模板」下拉需要服主在 {@code config.yml} 配的模板列表
  * （每个模板有哪些参数 + 各参数 maxLength）。后端端点

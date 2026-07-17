@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
 /**
- * P3-111：模块级单调自增日志序号。同毫秒多条日志的 ts 会碰撞，用作 v-for key 时
+ * 模块级单调自增日志序号。同毫秒多条日志的 ts 会碰撞，用作 v-for key 时
  * 内容相同的两条会撞 key（Vue 复用错 DOM）。每条日志带唯一 id 作稳定 key。
  */
 let logSeq = 0;
@@ -36,7 +36,7 @@ export const useNetworkStore = defineStore('network', () => {
     });
 
     function pushLog(level: LogLine['level'], text: string) {
-        // P3-111：每条带唯一 id（模块级单调自增）作为 LogDrawer v-for 的稳定 key，
+        // 每条带唯一 id（模块级单调自增）作为 LogDrawer v-for 的稳定 key，
         // 避免同毫秒同内容日志 ts+text 派生 key 碰撞。
         logs.value.push({ id: logSeq++, ts: Date.now(), level, text });
         if (logs.value.length > MAX_LOG) logs.value.splice(0, logs.value.length - MAX_LOG);

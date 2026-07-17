@@ -6,7 +6,7 @@ import { useI18n } from '@/i18n';
 import type { Element, Layer } from '@/types/protocol';
 
 /**
- * M17 F1：复制 / 粘贴。Figma 风格：选中元素 → Ctrl+C 写 system clipboard；
+ * 复制 / 粘贴。Figma 风格：选中元素 → Ctrl+C 写 system clipboard；
  * Ctrl+V 解析 clipboard → 偏移 +10,+10 → 逐个发 element.add 让 server 生成新 id。
  *
  * 剪贴板格式：
@@ -73,7 +73,7 @@ export function useClipboard(): {
     }
 
     /**
-     * 2026-05-25 paste 统一化：接收可选 ClipboardEvent。
+     * paste 统一化：接收可选 ClipboardEvent。
      *
      * <ul>
      *   <li>带 e 参数：同步从 e.clipboardData.getData('text/plain') 读，

@@ -1,15 +1,14 @@
 <script setup lang="ts">
 /**
- * 0.7.0-P4-B / D1：积木脚本编辑器全屏 overlay 容器。
+ * 积木脚本编辑器全屏 overlay 容器。
  *
  * <p>fixed 全屏（z-index 60，高于时间轴 dock）。头部工具条 = 标题 + "新建规则" + 当前规则
  * 编辑控件（名称 / 启停 / 撤销重做 / 删除 / 试跑占位）+ zoom 显示 % + reset + 关闭。主体 =
- * 左侧侧栏（<b>D1 规则列表</b> + palette 占位空壳，真 palette 任务 D2）+ 右侧 {@link BlockCanvas}。</p>
+ * 左侧侧栏（<b>规则列表</b> + palette）+ 右侧 {@link BlockCanvas}。</p>
  *
- * <p><b>D1 接通编辑模型（{@link useScriptEditStore}）</b>：点列表项 → selectRule；新建 →
+ * <p><b>接通编辑模型（{@link useScriptEditStore}）</b>：点列表项 → selectRule；新建 →
  * newRule（拿 server 发的 id 再进编辑）；删除走 inline confirm；名称 input / 启停 toggle 改
- * working copy（debounce 自动保存）；Ctrl+Z/Y 撤销重做。拖拽 / palette 留 D2，故 BlockCanvas
- * 的堆点击选中也留 D2。lock（project.isLocked）→ 编辑控件全禁用（K-UI-12）。</p>
+ * working copy（debounce 自动保存）；Ctrl+Z/Y 撤销重做。lock（project.isLocked）→ 编辑控件全禁用。</p>
  *
  * <p>挂 {@code ui.scriptEditorOpen}（App.vue 末尾 v-if 懒加载挂载）。Esc 关闭（先 flush 保存）。
  * 配色走 Catppuccin token。i18n 在 script setup 里用 {@code t.value.xxx}。</p>
@@ -44,13 +43,13 @@ const { t } = useI18n();
 
 const canvasRef = ref<InstanceType<typeof BlockCanvas> | null>(null);
 
-/** 删除 inline confirm 目标 ruleId（null = 未在确认）。照 0.4.5 VariablePanel 范式。 */
+/** 删除 inline confirm 目标 ruleId（null = 未在确认）。照 VariablePanel 范式。 */
 const confirmingDelete = ref<string | null>(null);
 
-/** 锁定态：编辑控件全禁用（K-UI-12）。 */
+/** 锁定态：编辑控件全禁用。 */
 const locked = computed(() => project.isLocked);
 
-// ---------- H：保存前校验（K-UI-9）----------
+// ---------- 保存前校验 ----------
 
 /**
  * 当前 workingCopy 的校验错误列表（空 = 合法）。直接读 scriptEdit store 的 {@code validationErrors}
@@ -62,7 +61,7 @@ const hasErrors = computed(() => validationErrors.value.length > 0);
 /** 头部温和指示文案：「⚠ N 处待完善」（N = 错误条数）。 */
 const validationHintText = computed(() => t.value.script.validationHint.replace('{n}', String(validationErrors.value.length)));
 
-// ---------- H：试跑高亮（K-UI-8）----------
+// ---------- 试跑高亮 ----------
 
 /** 高亮 result map（blockId → result）；overlay 局部态，provide 给画布递归子组件。 */
 const highlightResults = ref<HighlightMap>(new Map());
@@ -123,7 +122,7 @@ watch(
 
 onScopeDispose(() => {
     stepper.clear();
-    // Bug 2 兜底：拖动中卸载组件（如关编辑器）→ 摘掉 window 分隔条监听，杜绝卸载后 window
+    // 兜底：拖动中卸载组件（如关编辑器）→ 摘掉 window 分隔条监听，杜绝卸载后 window
     // pointermove 仍驱动改宽（onSplitterUp 已 idempotent，这里直接 detach + 复位 dragging）。
     splitterDragging.value = false;
     detachSplitterListeners();
@@ -154,7 +153,7 @@ function onTest(): void {
 }
 
 /**
- * P5 实测修复（根因 1）：点头部「待完善」温和指示 → 定位到<b>第一个带 blockId 的错误积木</b>
+ * 点头部「待完善」温和指示 → 定位到<b>第一个带 blockId 的错误积木</b>
  * （best-effort——滚动到 data-block-path 元素居中）。循环找首个有 blockId 的错误（规则级错误如
  * 名称空 / 动作列表空无 blockId，跳过它们找到第一个能定位的积木）。无任何可定位错误 → 静默。
  */
@@ -204,11 +203,11 @@ function onPaletteDown(kind: string, e: PointerEvent): void {
     canvasRef.value?.startPaletteDrag(kind, e);
 }
 
-// ---------- 0.7.1-P3：右侧预览框拖宽分隔条（拖动期间挂 window 监听，照 useBlockDrag 范式）----------
+// ---------- 右侧预览框拖宽分隔条（拖动期间挂 window 监听，照 useBlockDrag 范式）----------
 // hostRef = 横向 flex 容器（左 BlockCanvas + 分隔条 + 右 PreviewPane）。拖动时按指针在容器内
 // 的位置反算右框占宽 %：widthPct = (hostRight - clientX) / hostWidth * 100，交给 ui store clamp。
 //
-// 实测 Bug 2 修复：原实现把 pointermove/up 绑在分隔条元素上、靠 setPointerCapture retarget。
+// 原实现把 pointermove/up 绑在分隔条元素上、靠 setPointerCapture retarget。
 // 触控板上 capture 不可靠——鼠标拖出分隔条再松手时 pointerup 不在分隔条触发 → onSplitterUp 不调 →
 // splitterDragging 卡 true → 之后 hover 分隔条触发 pointermove 继续改宽（越拖越大）。改成拖动期间
 // 在 window 挂 pointermove/up/cancel：pointerup 在 window 一定收到 → dragging 一定清 + 监听一定摘。
@@ -359,7 +358,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
       <Puzzle class="size-4 text-[color:var(--ctp-mauve)]" />
       <h2 class="text-sm font-semibold">{{ t.script.editorTitle }}</h2>
 
-      <!-- 新建规则（D1 接通；lock 时禁用） -->
+      <!-- 新建规则（lock 时禁用） -->
       <button
         class="hc-script-btn ml-3"
         :class="locked ? 'opacity-50 cursor-not-allowed' : ''"
@@ -407,7 +406,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         >
           <Redo2 class="size-4" />
         </button>
-        <!-- 试跑：H 阶段接真逻辑。有校验错误 / 锁定 / 试跑中 → 禁用。 -->
+        <!-- 试跑：有校验错误 / 锁定 / 试跑中 → 禁用。 -->
         <button
           class="hc-script-icon-btn hc-rule-test"
           :class="testing ? 'hc-rule-test-busy' : ''"
@@ -436,7 +435,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
           </span>
         </template>
 
-        <!-- P5 实测修复（根因 1）：校验问题的温和 inline 指示（橙色小字，不占新行 / 不挤画布）。
+        <!-- 校验问题的温和 inline 指示（橙色小字，不占新行 / 不挤画布）。
              点它滚动定位到第一个可定位的错误积木。validationErrors 为空时不显示。 -->
         <button
           v-if="hasErrors"
@@ -492,7 +491,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 
     <div class="hc-script-body">
       <aside class="hc-script-palette">
-        <!-- D1：规则列表（点选进入编辑） -->
+        <!-- 规则列表（点选进入编辑） -->
         <div class="hc-side-section-title">{{ t.script.rulesTitle }}</div>
         <div v-if="scripts.size === 0" class="hc-side-empty">{{ t.script.rulesEmpty }}</div>
         <ul v-else class="hc-rule-list">
@@ -508,7 +507,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
           </li>
         </ul>
 
-        <!-- 积木库（D2：拖出新块）。无选中规则时提示先选/建一条。 -->
+        <!-- 积木库（拖出新块）。无选中规则时提示先选/建一条。 -->
         <div class="hc-side-section-title mt-2">{{ t.script.paletteTitle }}</div>
         <div v-if="!edit.workingCopy" class="px-3 py-1 text-xs text-[color:var(--muted-foreground)]">
           {{ t.script.paletteNeedRule }}
@@ -518,7 +517,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         </div>
       </aside>
 
-      <!-- 主体：左积木画布 + 分隔条 + 右墙面预览框（0.7.1-P3） -->
+      <!-- 主体：左积木画布 + 分隔条 + 右墙面预览框 -->
       <main ref="hostRef" class="hc-script-canvas-host">
         <!-- 左：积木画布（含空态提示 / 试跑图例 / 折叠时的展开按钮） -->
         <div class="hc-script-canvas-main">
@@ -532,7 +531,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
             {{ t.script.selectRuleHint }}
           </div>
 
-          <!-- H：试跑高亮图例（试跑中 / 有高亮时显示，底部居中） -->
+          <!-- 试跑高亮图例（试跑中 / 有高亮时显示，底部居中） -->
           <div v-if="showLegend" class="hc-script-legend">
             <span v-if="testing" class="hc-legend-testing">{{ t.script.testing }}</span>
             <span v-for="item in legendItems" :key="item.result" class="hc-legend-item">
@@ -673,7 +672,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
 .hc-del-yes:hover {
     opacity: 0.9;
 }
-/* P5 实测修复（根因 1）：头部 inline 温和指示（橙色小字，不占新行 / 不挤画布）。
+/* 头部 inline 温和指示（橙色小字，不占新行 / 不挤画布）。
    点它定位到第一个可定位的错误积木。替代原来的整行红 banner（布局位移元凶）。 */
 .hc-validation-hint {
     display: inline-flex;
@@ -703,7 +702,7 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
 }
-/* H：试跑高亮图例（底部居中 pill） */
+/* 试跑高亮图例（底部居中 pill） */
 .hc-script-legend {
     position: absolute;
     bottom: 0.75rem;

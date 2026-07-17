@@ -6,13 +6,13 @@ import { findDropTarget, type SlotRect } from '@/script/model/dropTarget';
 import { makeDefaultAction, TWEENABLE_KINDS } from '@/script/model/blockDefs';
 
 /**
- * 0.7.0-P4-D2：积木拖拽吸附核心（决策 K-UI-3）。
+ * 积木拖拽吸附核心。
  *
  * <p>两种拖拽源：① 从 palette 拖出<b>新块</b>（{@link startPaletteDrag}）；② 在画布上拖
  * <b>已有块</b>（{@link startBlockDrag}）。拖动中实时测量所有可插入位置（SlotRect），用
  * {@link findDropTarget} 找命中插槽并高亮；松手对 working copy 做树操作（palette 源
  * {@code insertAt} 新建 / 画布源 {@code moveNode} 重排）后经 {@code edit.setActions} 提交
- * （进 D1 的 undo + debounce save）。另有<b>移堆</b>（{@link startStackDrag}）改 blockLayout 坐标。</p>
+ * （进 undo + debounce save）。另有<b>移堆</b>（{@link startStackDrag}）改 blockLayout 坐标。</p>
  *
  * <p><b>测量纯逻辑可测</b>：DOM 测量（{@code getBoundingClientRect}）与 SlotRect 推导分离——
  * {@link buildSlots} 是纯函数（喂"已测块矩形数组"返 SlotRect[]，无 DOM），{@link collectSlots}
@@ -24,15 +24,15 @@ import { makeDefaultAction, TWEENABLE_KINDS } from '@/script/model/blockDefs';
  * 触发即 abort（还原拖拽态 + releaseCapture），杜绝"用户切走 → pointerup 永不到达 →
  * 卡在拖拽态"。</p>
  *
- * <p><b>lock 守卫（K-UI-12）</b>：{@code project.isLocked} 时所有 {@code start*} 直接 return
- * 不启动拖拽；D1 的 setActions / setStackPos 本身也带 lock no-op（双保险）。</p>
+ * <p><b>lock 守卫</b>：{@code project.isLocked} 时所有 {@code start*} 直接 return
+ * 不启动拖拽；setActions / setStackPos 本身也带 lock no-op（双保险）。</p>
  */
 
 /** 吸附命中阈值（加权像素距离，传给 findDropTarget）。 */
 export const DROP_THRESHOLD = 40;
 
 /**
- * 0.7.1 触控板敏感度修复：<b>拖动启动阈值</b>（像素）。pointerdown 后指针位移超过此距离才算
+ * 触控板敏感度修复：<b>拖动启动阈值</b>（像素）。pointerdown 后指针位移超过此距离才算
  * "拖动意图"，真正启动拖块 / 移堆；阈值内松手视为"点击"（让积木里的字段 / 变量按钮正常聚焦）。
  *
  * <p>Mac 触控板 pointerdown 必带几像素微移，没有阈值时旧实现 pointerdown 当帧即进拖动态 →
@@ -48,7 +48,7 @@ export const DRAG_THRESHOLD = 5;
 const SLOT_BAND_H = 14;
 
 /**
- * 0.7.1「拖到删除区删积木」删除区几何（屏幕坐标，相对 viewport）。
+ * 「拖到删除区删积木」删除区几何（屏幕坐标，相对 viewport）。
  *
  * <p>删除区固定贴在 viewport <b>底部居中</b>（Scratch 垃圾桶范式），尺寸固定。仅在拖<b>动作积木</b>
  * （非 palette 源 / 非移堆）时显示。命中判定与渲染同源——{@link computeDeleteZoneRect} 由 composable
@@ -314,7 +314,7 @@ type DragState =
     | { mode: 'stack'; ruleId: string; startX: number; startY: number; x0: number; y0: number };
 
 /**
- * tween-P4：判断「被拖积木是否允许落入目标插槽」。
+ * 判断「被拖积木是否允许落入目标插槽」。
  *
  * tweenBlock body 只允许 setElementProperties（kind ∈ TWEENABLE_KINDS），其他积木一律不可落。
  * 顶层序列 / if / repeat / repeatUntil 无此限制，直接返 true。
@@ -360,11 +360,11 @@ export function useBlockDrag(opts: {
     /** 移堆拖动中的实时坐标（让被拖堆即时跟随；松手提交 setStackPos）。 */
     const stackDragPos = ref<{ ruleId: string; x: number; y: number } | null>(null);
     /**
-     * 0.7.1：删除区是否激活（仅拖<b>动作积木</b>时为真；palette 源 / 移堆不显示删除区）。
+     * 删除区是否激活（仅拖<b>动作积木</b>时为真；palette 源 / 移堆不显示删除区）。
      * 浮层 {@link DeleteDropZone} 据此显隐。
      */
     const deleteZoneActive = ref(false);
-    /** 0.7.1：指针当前是否悬停在删除区上（浮层据此高亮红；pointerup 时据此短路成删除）。 */
+    /** 指针当前是否悬停在删除区上（浮层据此高亮红；pointerup 时据此短路成删除）。 */
     const deleteZoneHot = ref(false);
 
     /** 拖动中缓存的候选插槽（pointerdown 时测一次，move 时复用——避免每帧 reflow）。 */
@@ -374,13 +374,13 @@ export function useBlockDrag(opts: {
     let capturedTarget: HTMLElement | null = null;
     let capturedPointerId: number | null = null;
 
-    // ----- 0.7.1：拖动启动阈值（pending arm）-----
+    // ----- 拖动启动阈值（pending arm）-----
     //
     // block / stack 两源 pointerdown 时<b>不</b>立即启动拖动，而是记一个 pending + 挂临时 window
     // pointermove/up/cancel 监听。指针位移超 DRAG_THRESHOLD → 真正启动（onCross）；阈值内松手 =
     // 点击（清 pending，全程没 preventDefault / 没 capture / 没 selectRule，字段 click/focus 正常）。
     //
-    // 不变性（P5）：pending 期间<b>不</b> selectRule（不重渲、不重建 DOM），故 pending.target 始终是
+    // 不变性：pending 期间<b>不</b> selectRule（不重渲、不重建 DOM），故 pending.target 始终是
     // pointerdown 时刻的原始 DOM；onCross 里先 tryCapture(pending.target) 再让上层 selectRule，
     // 保证 "capture 先于 selectRule"。
     interface PendingArm {
@@ -466,7 +466,7 @@ export function useBlockDrag(opts: {
      * idempotent 终止拖拽（不提交任何改动 = 还原）。pointercancel / blur / visibility / dispose 调；
      * onPointerUp 各分支提交前也先调它清拖拽态。
      *
-     * <p>P5 实测修复（根因 3）：统一在这里 {@code setDragging(false)}——它是所有拖拽结束 / abort 路径
+     * <p>统一在这里 {@code setDragging(false)}——它是所有拖拽结束 / abort 路径
      * 的唯一汇合点（pointerup 各分支 / pointercancel / blur / visibility / dispose 都经此），保证拖完
      * 一定恢复 server-as-truth（server 回声可再替换整树）。idempotent，重复调安全。</p>
      */
@@ -478,7 +478,7 @@ export function useBlockDrag(opts: {
         deleteZoneActive.value = false;
         deleteZoneHot.value = false;
         cachedSlots = [];
-        // 0.7.1：若 pending（pointerdown 后未跨阈值就被 cancel/blur/dispose 中断）也一并清掉。
+        // 若 pending（pointerdown 后未跨阈值就被 cancel/blur/dispose 中断）也一并清掉。
         clearPending();
         detachMoveListeners();
         tryRelease();
@@ -520,7 +520,7 @@ export function useBlockDrag(opts: {
     /** 拖动中更新跟手浮层 + 吸附命中（palette / block 源共用）。 */
     function updateDrag(clientX: number, clientY: number, grabDx: number, grabDy: number, kind: string): void {
         ghost.value = { kind, x: clientX - grabDx, y: clientY - grabDy };
-        // tween-P4：过滤不允许落入 tweenBlock body 的插槽（isTweenBodySlotAllowed 语义校验）。
+        // 过滤不允许落入 tweenBlock body 的插槽（isTweenBodySlotAllowed 语义校验）。
         const allowedSlots = cachedSlots.filter((s) => isTweenBodySlotAllowed(kind, s));
         activeSlot.value = findDropTarget(allowedSlots, clientX, clientY, DROP_THRESHOLD);
     }
@@ -538,7 +538,7 @@ export function useBlockDrag(opts: {
         if (!target) return;
         if (!tryCapture(target, e.pointerId)) return;
         e.preventDefault();
-        // 标记拖拽中（根因 3）：拖出期间 server 回声不替换整树，capture（在 palette 项上）不被打断。
+        // 标记拖拽中：拖出期间 server 回声不替换整树，capture（在 palette 项上）不被打断。
         edit.setDragging(true);
         // 抓取点：浮层左上角对齐指针（palette 块无固定尺寸，简单取 0 偏移让块跟在指针右下）。
         const grabDx = 8;
@@ -563,7 +563,7 @@ export function useBlockDrag(opts: {
         if (path.length < 2) return;
         const target = (e.currentTarget as HTMLElement) ?? (e.target as HTMLElement);
         if (!target) return;
-        // 0.7.1 触控板敏感度修复：pointerdown <b>不</b>立即启动拖动——先 arm pending（记起点 + 几何 +
+        // 触控板敏感度修复：pointerdown <b>不</b>立即启动拖动——先 arm pending（记起点 + 几何 +
         // 启动回调），指针位移超 DRAG_THRESHOLD 才真正拖（onCross）。pending 期间不 capture / 不
         // preventDefault / 不 selectRule / 不 setDragging → 阈值内松手时字段 click/focus 正常发生。
         //
@@ -581,7 +581,7 @@ export function useBlockDrag(opts: {
 
         armDrag(e.clientX, e.clientY, (crossX, crossY) => {
             // ===== 超阈值：真正启动拖块 =====
-            // P5 不变性（根因 3）：<b>先 tryCapture 再 selectRule</b>。pending 期没 selectRule，故
+            // 不变性：<b>先 tryCapture 再 selectRule</b>。pending 期没 selectRule，故
             // target 仍是 pointerdown 时刻的原始 DOM——先在它上面抓住 pointer，再 selectRule（其重渲
             // 会 v-for 重建被拖块 DOM，但 capture 已落在旧 DOM 上不被顶替）。
             if (!tryCapture(target, pointerId)) return;
@@ -592,7 +592,7 @@ export function useBlockDrag(opts: {
             const kind = blockKindAt(stackRuleId, path);
             state = { mode: 'block', ruleId: stackRuleId, path, kind, grabDx, grabDy };
             measure(path);
-            // 0.7.1：拖动作积木时亮出删除区（仅 block 源；松手在区内 = 删该积木）。
+            // 拖动作积木时亮出删除区（仅 block 源；松手在区内 = 删该积木）。
             deleteZoneActive.value = true;
             // 用阈值跨越点坐标初始化浮层（首个正式 onPointerMove 会立刻校正到指针处）。
             updateDrag(crossX, crossY, grabDx, grabDy, kind);
@@ -600,7 +600,7 @@ export function useBlockDrag(opts: {
         });
     }
 
-    /** 0.7.1：取删除区当前 client 矩形（无 viewport → null）。move/up 命中判定共用。 */
+    /** 取删除区当前 client 矩形（无 viewport → null）。move/up 命中判定共用。 */
     function deleteZoneRect(): { left: number; top: number; width: number; height: number } | null {
         const el = opts.canvasRef.value;
         if (!el) return null;
@@ -608,7 +608,7 @@ export function useBlockDrag(opts: {
     }
 
     /**
-     * 0.7.1：更新删除区悬停态（仅 block 拖动时有意义）。返回是否命中删除区。
+     * 更新删除区悬停态（仅 block 拖动时有意义）。返回是否命中删除区。
      * 命中时 composable 让吸附指示线让位（在 onPointerMove 里清 activeSlot）—— 用户意图明确是"删"。
      */
     function updateDeleteHot(clientX: number, clientY: number): boolean {
@@ -635,7 +635,7 @@ export function useBlockDrag(opts: {
             const node = seq[idx] as { type?: string; then?: unknown; else?: unknown; body?: unknown };
             if (i + 2 >= path.length) return node?.type ?? 'log';
             const branch = path[i + 2];
-            // if → then/else；0.7.1-P2 repeat → body（浮层 kind 标签深入循环体也正确）。
+            // if → then/else；repeat → body（浮层 kind 标签深入循环体也正确）。
             seq = branch === 'then' ? node?.then
                 : branch === 'else' ? node?.else
                 : branch === 'body' ? node?.body
@@ -655,7 +655,7 @@ export function useBlockDrag(opts: {
         if (project.isLocked) return;
         const target = (e.currentTarget as HTMLElement) ?? (e.target as HTMLElement);
         if (!target) return;
-        // 0.7.1 触控板敏感度修复：与 startBlockDrag 同——pointerdown 只 arm pending，超阈值才真启动。
+        // 触控板敏感度修复：与 startBlockDrag 同——pointerdown 只 arm pending，超阈值才真启动。
         // 堆现坐标（x0/y0）在 pointerdown 当下从旧 DOM 的 style.left/top 读好闭包进 onCross：pending
         // 期不 selectRule 不重渲，旧 DOM 一直在；该坐标不因 selectRule 变化，pointerdown 时读即准。
         const downX = e.clientX;
@@ -679,7 +679,7 @@ export function useBlockDrag(opts: {
 
         armDrag(downX, downY, () => {
             // ===== 超阈值：真正启动移堆 =====
-            // P5 不变性（根因 3）：先 tryCapture（旧 DOM 帽子上）再 selectRule。pending 期未 select，
+            // 不变性：先 tryCapture（旧 DOM 帽子上）再 selectRule。pending 期未 select，
             // target 仍是原始帽子 DOM，capture 落在它上不被重渲顶替。
             if (!tryCapture(target, pointerId)) return;
             edit.setDragging(true);
@@ -729,7 +729,7 @@ export function useBlockDrag(opts: {
             return;
         }
 
-        // 0.7.1：block 源松手在删除区内 → 删除该积木（短路掉吸附落树）。palette 源不走删除
+        // block 源松手在删除区内 → 删除该积木（短路掉吸附落树）。palette 源不走删除
         //（拖出新块没必要拖回去删，松手在区内只是丢弃 = abort）。
         if (s.mode === 'block' && updateDeleteHot(e.clientX, e.clientY)) {
             const fromPath = s.path;
@@ -740,7 +740,7 @@ export function useBlockDrag(opts: {
             return;
         }
 
-        // palette / block：按命中插槽落树。tween-P4：同 updateDrag，过滤 tweenBlock body 约束。
+        // palette / block：按命中插槽落树。同 updateDrag，过滤 tweenBlock body 约束。
         const dragKind = s.mode === 'palette' ? s.kind : s.kind;
         const allowedSlotsUp = cachedSlots.filter((slot) => isTweenBodySlotAllowed(dragKind, slot));
         const hit = findDropTarget(allowedSlotsUp, e.clientX, e.clientY, DROP_THRESHOLD);

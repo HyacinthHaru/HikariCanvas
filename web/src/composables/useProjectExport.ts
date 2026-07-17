@@ -11,7 +11,7 @@ export interface ExportOutcome { ok: boolean; reason?: string; }
  * 拉单张图片字节（复用现有图片下载端点 GET /api/upload/{source}）。
  *
  * <p>该端点要求 {@code ?sessionId=<id>} 鉴权（见后端 UploadHandler.handleDownload，
- * M16 P1.1 IDOR 修复）；缺 sessionId 会 401。这里把当前会话的 sessionId 拼进 URL。
+ * IDOR 防御）；缺 sessionId 会 401。这里把当前会话的 sessionId 拼进 URL。
  * 任何失败（无会话 / 401 / 404 / 网络错误）都优雅返回 null —— 导出不因缺图中断。</p>
  */
 async function fetchImageBytes(hash: string, sessionId: string | null): Promise<Uint8Array | null> {
@@ -47,7 +47,7 @@ export function useProjectExport() {
             createdAt: Date.now(),
             pluginVersion: net.serverVersion ?? undefined,
         });
-        // 0.8-A4：带上当前墙的脚本（listSorted 是服务端顺序的只读快照）。无脚本则省略
+        // 带上当前墙的脚本（listSorted 是服务端顺序的只读快照）。无脚本则省略
         // scripts.json（assembleCanvasZip 的 scriptsJson 可选，undefined 时不打进 zip）。
         const scripts = useScriptStore().listSorted;
         const zip = assembleCanvasZip({

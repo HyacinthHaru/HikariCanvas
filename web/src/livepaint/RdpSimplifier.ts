@@ -1,5 +1,5 @@
 /**
- * M18-P4 Live Paint — Ramer–Douglas–Peucker 多边形顶点简化。
+ * Live Paint — Ramer–Douglas–Peucker 多边形顶点简化。
  *
  * 用途：buildGraph 输出的 gap polygon 顶点数可能因 polygon-clipping union 后膨胀
  * （多 element 边相交产生交点）。PathDValidator MAX_LEN=4096 char、每顶点 ~17 char →

@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P4-C：把 {@link BlockDef} / {@link FieldDef} 里的点分 i18n key
+ * 把 {@link BlockDef} / {@link FieldDef} 里的点分 i18n key
  * （如 {@code 'script.blocks.variableChange'}）解析为当前 locale 文案。
  *
  * <p>blockDefs 是声明式静态表，labelKey 存的是完整点分路径；组件渲染时用本 helper 在

@@ -53,7 +53,7 @@ const DANGEROUS_TAGS = new Set([
     'animate', 'animatetransform', 'animatemotion', 'set', 'style',
 ]);
 
-/** 解析后闸:原地剥离危险节点 + on* 事件属性 + 外链 image。D10 不支持项一并剔除。 */
+/** 解析后闸:原地剥离危险节点 + on* 事件属性 + 外链 image。不支持项一并剔除。 */
 export function stripDangerous(root: Element): void {
     // 深度优先遍历,收集要删除的节点,避免边走边删破坏迭代
     const toRemove: Element[] = [];
@@ -75,13 +75,13 @@ export function stripDangerous(root: Element): void {
         }
 
         // defense-in-depth：任意元素的 javascript: href 删属性（覆盖非 image 元素，
-        // 如 <a xlink:href="javascript:...">）。image 的外链单独按 D10 删整个元素。
+        // 如 <a xlink:href="javascript:...">）。image 的外链单独删整个元素。
         for (const name of ['href', 'xlink:href']) {
             const v = el.getAttribute(name);
             if (v && /^javascript:/i.test(v)) el.removeAttribute(name);
         }
 
-        // image 外链 href / xlink:href（Task 16: 只允许 data: 前缀，外链静默丢弃并 warn）
+        // image 外链 href / xlink:href（只允许 data: 前缀，外链静默丢弃并 warn）
         if (tag === 'image') {
             const href = el.getAttribute('href') ?? el.getAttribute('xlink:href') ?? '';
             if (href && !/^data:/i.test(href)) {

@@ -2,13 +2,13 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
 /**
- * VariableAliasStore 前端镜像（0.4.2）。
+ * VariableAliasStore 前端镜像。
  *
  * <p>来源：ready payload 的 {@code aliases} 字段（{@code Record<fullName, alias>}）+ state.patch
  * 中 path 前缀为 {@code /aliases/} 的 op。前端不主动 fetch——server-as-truth，UI 只读本 store。</p>
  *
  * <p>别名是 wall-scoped 状态；wall 切换时 {@link reset} 统一由 {@code project.reset()} 调用
- * （P3-103：不再在 wsClient.handleReady 单独并列调）。单层 {@code Map<fullName, alias>}，
+ * （不再在 wsClient.handleReady 单独并列调）。单层 {@code Map<fullName, alias>}，
  * 简单 in-place 替换避免循环引用：</p>
  *
  * <pre>

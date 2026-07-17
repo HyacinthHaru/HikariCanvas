@@ -16,7 +16,7 @@ import type { useVariableStore } from '@/stores/variables';
  * 前端 Canvas 2D 预览渲染器。镜像 Java {@code CanvasCompositor}。
  * 契约 docs/rendering.md §4 / §5（效果渲染顺序：glow → shadow → stroke → fill）。
  *
- * M8-E 升级：分层渲染。同后端 fast/slow path 双轨；fast path 直接画主 ctx，
+ * 分层渲染。同后端 fast/slow path 双轨；fast path 直接画主 ctx，
  * slow path 走 offscreen canvas + ImageData {@code applyBlendModeOver} 合成。
  */
 export function renderProjectState(
@@ -27,11 +27,11 @@ export function renderProjectState(
     const widthPx = (state?.canvas.widthMaps ?? 1) * 128;
     const heightPx = (state?.canvas.heightMaps ?? 1) * 128;
 
-    // P1-10：先 clearRect 把画布清成全透明，再画背景。否则当 background 是半透明 Fill
+    // 先 clearRect 把画布清成全透明，再画背景。否则当 background 是半透明 Fill
     // （alpha < 1）时，fillRect 走 source-over 不会覆盖上一帧像素 → 鬼影逐帧积累。
     // 与后端每次 new BufferedImage 从空画布起绘的行为对齐。
     ctx.clearRect(0, 0, widthPx, heightPx);
-    // M17 F5：canvas.background 升级为 Fill 联合类型。镜像后端 FillPaintBuilder.fillToPaint：
+    // canvas.background 升级为 Fill 联合类型。镜像后端 FillPaintBuilder.fillToPaint：
     // solid → hex string；linear/radial → CanvasGradient（端点 / 中心由 bbox=整画布推）。
     const bgStyle = fillToCanvasStyle(ctx, state?.canvas.background, 0, 0, widthPx, heightPx);
     ctx.fillStyle = bgStyle ?? '#FFFFFF';
@@ -60,17 +60,17 @@ export function renderProjectState(
     }
 }
 
-/** 同后端 canFastPath 判定（含 element.renderMode 防御 check，与 M11 dither 集成对齐）。 */
+/** 同后端 canFastPath 判定（含 element.renderMode 防御 check，与 dither 集成对齐）。 */
 function canFastPath(layer: Layer): boolean {
     if (layer.opacity < 1) return false;
     if (layer.blendMode !== 'normal') return false;
     for (const e of layer.elements) {
         const op = e.opacity;
-        // P3-63/P3-105：NaN/非有限 opacity 也视为非默认（避开 fast path），让 slow path 兜底 clamp，
+        // NaN/非有限 opacity 也视为非默认（避开 fast path），让 slow path 兜底 clamp，
         // 对齐后端 CanvasCompositor.canFastPath 的 `op != null && (!Float.isFinite(op) || op < 1)`。
         if (op !== undefined && op !== null && (!Number.isFinite(op) || op < 1)) return false;
         if (e.renderMode && e.renderMode !== 'clean') return false;
-        // element-level blendMode 字段保留但 M8-E 不实装合成（M11 dither 一起）
+        // element-level blendMode 字段保留但不实装合成（与 dither 一起留待后续）
     }
     return true;
 }
@@ -101,7 +101,7 @@ function renderLayerSlowPath(
 }
 
 /**
- * 渲染单个元素到 ctx（已含 rotation 绕中心 + opacity globalAlpha 复合）。0.7.1-P4 导出供
+ * 渲染单个元素到 ctx（已含 rotation 绕中心 + opacity globalAlpha 复合）。导出供
  * PreviewPane 画半透明虚影复用（调用方包 save + globalAlpha=0.5 + drawElement + restore）。
  */
 export function drawElement(ctx: CanvasRenderingContext2D, e: Element, widthPx: number, heightPx: number): void {
@@ -117,8 +117,8 @@ export function drawElement(ctx: CanvasRenderingContext2D, e: Element, widthPx: 
         ctx.rotate((e.rotation * Math.PI) / 180);
         ctx.translate(-cx, -cy);
     }
-    // M8-E：element-level opacity 通过 globalAlpha 实装（同后端 SrcOver.derive）
-    // P3-105：NaN/非有限 opacity 兜底为 1（finiteOr），并 clamp 入 [0,1]，对齐后端 drawElementsTo
+    // element-level opacity 通过 globalAlpha 实装（同后端 SrcOver.derive）
+    // NaN/非有限 opacity 兜底为 1（finiteOr），并 clamp 入 [0,1]，对齐后端 drawElementsTo
     const op = e.opacity;
     if (op !== undefined && op !== null && (!Number.isFinite(op) || op < 1)) {
         const safe = !Number.isFinite(op) ? 1 : Math.max(0, Math.min(1, op));
@@ -140,7 +140,7 @@ function drawElementBody(ctx: CanvasRenderingContext2D, e: Element): void {
 }
 
 /**
- * M12-C 笔触绘制：与 Java {@code CanvasCompositor.drawBrush} 公式逐行镜像。
+ * 笔触绘制：与 Java {@code CanvasCompositor.drawBrush} 公式逐行镜像。
  * Catmull-Rom → cubic Bezier：B1 = P1 + (P2 - P0) / 6, B2 = P2 - (P3 - P1) / 6；
  * 首尾 phantom：P[-1] = P[0], P[n] = P[n-1]。段宽度 = size × avgPressure（pressureSize）；
  * 段 alpha 与外层 globalAlpha 复合。
@@ -190,11 +190,11 @@ function drawBrush(ctx: CanvasRenderingContext2D, b: BrushStrokeElement): void {
     ctx.globalAlpha = outerAlpha;
 }
 
-// ---------- M11-C：dither pass（per-element off-canvas → BayerDither → drawImage） ----------
+// ---------- dither pass（per-element off-canvas → BayerDither → drawImage） ----------
 
 let cachedPalette: PaletteLut | null = null;
 let paletteReadyHook: (() => void) | null = null;
-// P3-106：in-flight 守卫。未就绪时 getCachedPalette 每帧都会被调；若不挡，每帧都注册一个
+// in-flight 守卫。未就绪时 getCachedPalette 每帧都会被调；若不挡，每帧都注册一个
 // 新的 getPaletteLut().then 回调，导致 palette resolve 时一次性触发 N 次 requestDraw。
 let paletteLoading = false;
 
@@ -203,7 +203,7 @@ export function onPaletteReady(hook: () => void) { paletteReadyHook = hook; }
 
 function getCachedPalette(): PaletteLut | null {
     if (cachedPalette) return cachedPalette;
-    // P3-106：已有在途加载则直接返回 null，不再重复注册 .then
+    // 已有在途加载则直接返回 null，不再重复注册 .then
     if (paletteLoading) return null;
     paletteLoading = true;
     // 首次：发起 lazy load，本帧返回 null，加载完后 hook 触发重绘
@@ -243,7 +243,7 @@ function drawDitheredElement(
             ctx.rotate((e.rotation * Math.PI) / 180);
             ctx.translate(-cx, -cy);
         }
-        // B2-P2-19：对齐 drawElement 的 NaN/非有限 兜底 + clamp(0,1)，消除负 opacity（可经模板
+        // 对齐 drawElement 的 NaN/非有限 兜底 + clamp(0,1)，消除负 opacity（可经模板
         // raw_state 绕过协议入口注入）在前端负 globalAlpha vs 后端 clamp 0 的双端分叉。
         const op = e.opacity;
         if (op !== undefined && op !== null && (!Number.isFinite(op) || op < 1)) {
@@ -254,8 +254,8 @@ function drawDitheredElement(
         ctx.restore();
         return;
     }
-    // P3-34：按 element bbox（含 rotation 外接圆 / italic shear padding）∩ canvas 分配 offscreen，
-    // 而非整张 canvas。镜像后端 CanvasCompositor.drawDitheredElement（M15.4 P0-Render-2）——
+    // 按 element bbox（含 rotation 外接圆 / italic shear padding）∩ canvas 分配 offscreen，
+    // 而非整张 canvas。镜像后端 CanvasCompositor.drawDitheredElement——
     // 避免大画布上每个 dither element 都分配 W×H×ARGB transient buffer。
     // 整数算术逐步骤镜像后端（Java int 除法向零截断，TS 用 Math.trunc）以保 clipX/Y 一致、
     // dither 相位双端对齐。
@@ -273,7 +273,7 @@ function drawDitheredElement(
         bbY = e.y;
         bbW = e.w;
         bbH = e.h;
-        // P3-20：italic text 走 shear，左右各溢出 ceil(0.2*h)；扩 padding 与后端一致。
+        // italic text 走 shear，左右各溢出 ceil(0.2*h)；扩 padding 与后端一致。
         if (e.type === 'text' && e.italic === true) {
             const shearPad = Math.ceil(0.2 * Math.abs(e.h));
             bbX -= shearPad;
@@ -319,7 +319,7 @@ function drawDitheredElement(
     ctx.globalAlpha = prevAlpha;
 }
 
-// ---------- M9-C：PathElement / CircleElement / ShapeElement 真实绘制 ----------
+// ---------- PathElement / CircleElement / ShapeElement 真实绘制 ----------
 
 /** 与后端 CanvasCompositor.drawPath 镜像。d 内坐标相对 element.(x, y)。 */
 export function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
@@ -343,14 +343,14 @@ export function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
         strokeColor = p.stroke.color;
         ctx.strokeStyle = strokeColor;
         ctx.lineWidth = strokeWidth;
-        // 0.4.7 第二次修：path 有 arrow marker 时直线末端用 'butt'（平切端）
+        // path 有 arrow marker 时直线末端用 'butt'（平切端）
         // 原 'round' 在 path end (arrow apex) 处画 r=strokeWidth/2 半圆，跟 arrow V 头
         // 视觉重叠"糊一起"——粗 stroke 时尤其明显（详见后端 PathRenderer 同款修复注释）
         const hasArrowMarker = p.markerEnd === 'arrow' || p.markerStart === 'arrow';
         ctx.lineCap = hasArrowMarker ? 'butt' : 'round';
         ctx.lineJoin = 'round';
 
-        // 2026-05-15 修箭头 Bug：arrow apex 处宽 0，粗 stroke 会从 arrow 锥尖戳出。
+        // arrow apex 处宽 0，粗 stroke 会从 arrow 锥尖戳出。
         // 在描边前 clip 一个反相形状（大矩形外圈 + arrow 三角形作"洞"，evenodd 填充规则），
         // 让 stroke 不画进 arrow 内部，arrow 自己 fill 覆盖。
         const subtractClip = buildArrowSubtractClip(parsed, p, strokeWidth);
@@ -365,7 +365,7 @@ export function drawPath(ctx: CanvasRenderingContext2D, p: PathElement): void {
     }
 
     if (parsed.hasSegments && strokeColor) {
-        // 0.4.7：element-aware cap — 让 marker 大小不超过 element 对角线某比例，
+        // element-aware cap — 让 marker 大小不超过 element 对角线某比例，
         // 避免 stroke 极粗时 marker 吞没短箭头（详见 MarkerRenderer.arrowSize 注释）
         const diag = Math.hypot(p.w, p.h);
         if (p.markerEnd) {
@@ -416,7 +416,7 @@ function buildArrowSubtractClip(
     if (!hasEndArrow && !hasStartArrow) return null;
     if (!parsed.hasSegments) return null;
 
-    // 0.4.7：clip 减除 size 必须与实际绘制 size 一致，否则 stroke 末端从扣减区"漏出"
+    // clip 减除 size 必须与实际绘制 size 一致，否则 stroke 末端从扣减区"漏出"
     const diag = Math.hypot(p.w, p.h);
     const size = arrowSize(strokeWidth, diag);
     const clip = new Path2D();
@@ -440,7 +440,7 @@ function buildArrowSubtractClip(
 
 /** 与后端 CanvasCompositor.drawCircle 镜像：bbox 推 cx/cy/rx/ry → ctx.ellipse。 */
 function drawCircle(ctx: CanvasRenderingContext2D, c: CircleElement): void {
-    // P2-57/P3-58/P3-62：渲染层兜底，对齐后端 CircleRenderer.java:21。w/h ≤ 0 时半径 ≤ 0，
+    // 渲染层兜底，对齐后端 CircleRenderer.java:21。w/h ≤ 0 时半径 ≤ 0，
     // ctx.ellipse 负半径抛 IndexSizeError（整帧崩）→ 直接 return。
     if (c.w <= 0 || c.h <= 0) return;
     const cx = c.x + c.w / 2;
@@ -468,7 +468,7 @@ function drawCircle(ctx: CanvasRenderingContext2D, c: CircleElement): void {
 
 /** 与后端 CanvasCompositor.drawShape / buildShapePath 镜像。 */
 function drawShape(ctx: CanvasRenderingContext2D, s: ShapeElement): void {
-    // P2-57/P3-62：渲染层兜底，对齐后端 ShapeRenderer.java:23。w/h ≤ 0 时外接圆半径退化 → 不画。
+    // 渲染层兜底，对齐后端 ShapeRenderer.java:23。w/h ≤ 0 时外接圆半径退化 → 不画。
     if (s.w <= 0 || s.h <= 0) return;
     const cx = s.x + s.w / 2;
     const cy = s.y + s.h / 2;
@@ -509,7 +509,7 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ShapeElement): void {
 // 是同步函数 —— 因此首次绘制时图未就绪，画占位 ?；图加载完毕调用 onIconReady() 回调，外层
 // CanvasView 的 requestDraw 会再触发一次完整重绘。
 
-// P2-70：失败条目记 failedAt 时间戳；重绘命中超过 TTL 的 failed 条目时重新发起加载，
+// 失败条目记 failedAt 时间戳；重绘命中超过 TTL 的 failed 条目时重新发起加载，
 // 避免瞬时 404 / 401 / 网络抖动把资源永久钉死在占位 ?（原先 failed=true 一旦写入再不重试）。
 const FAILED_RETRY_TTL_MS = 10_000;
 
@@ -532,7 +532,7 @@ function startIconLoad(source: string, entry: IconCacheEntry): void {
 function getIconImage(source: string): IconCacheEntry {
     let entry = iconCache.get(source);
     if (entry) {
-        // P2-70：失败条目超过 TTL → 重新加载（瞬时失败自愈，无需整页刷新）。
+        // 失败条目超过 TTL → 重新加载（瞬时失败自愈，无需整页刷新）。
         if (entry.failed && Date.now() - entry.failedAt > FAILED_RETRY_TTL_MS) {
             startIconLoad(source, entry);
         }
@@ -552,7 +552,7 @@ function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
     drawIconSvgPath(ctx, ic);
 }
 
-/** M7 legacy PNG 路径（行为完全不变）：source 不含 `/` 时走 /api/template-asset/icons/<source>.png。 */
+/** legacy PNG 路径（行为完全不变）：source 不含 `/` 时走 /api/template-asset/icons/<source>.png。 */
 function drawIconLegacyPng(ctx: CanvasRenderingContext2D, ic: IconElement): void {
     const entry = getIconImage(ic.source);
     if (entry.failed || !entry.ready) {
@@ -578,7 +578,7 @@ function drawIconLegacyPng(ctx: CanvasRenderingContext2D, ic: IconElement): void
 }
 
 /**
- * M26.2 SVG 矢量路径：source 含 `/`（如 `fa-solid/heart`）→ 从 IconLoader 拉 path d + viewBox，
+ * SVG 矢量路径：source 含 `/`（如 `fa-solid/heart`）→ 从 IconLoader 拉 path d + viewBox，
  * 用 Path2D + 变换 + Fill 绘制。镜像后端 {@code IconRenderer.renderSvgPath}：
  *
  * <ol>
@@ -655,7 +655,7 @@ function drawIconPlaceholder(ctx: CanvasRenderingContext2D, ic: IconElement): vo
     ctx.restore();
 }
 
-// ---------- M13 ImageElement ----------
+// ---------- ImageElement ----------
 //
 // 加载策略：源走 /api/upload/<hash>。同 IconElement 异步模型：首次绘制时图未就绪→占位 ?，
 // 加载完毕调用同一 iconReadyHook → CanvasView.requestDraw 再触一次重绘。
@@ -664,7 +664,7 @@ function drawIconPlaceholder(ctx: CanvasRenderingContext2D, ic: IconElement): vo
 interface ImageCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; failedAt: number; }
 const imageCache = new Map<string, ImageCacheEntry>();
 
-// M16 P1.1：/api/upload/{hash} 后端鉴权要 sessionId query param；上层注入访问器避免
+// /api/upload/{hash} 后端鉴权要 sessionId query param；上层注入访问器避免
 // PreviewRenderer 直接耦合 Pinia store。
 let uploadAuthProvider: (() => string | null) | null = null;
 export function setUploadAuthProvider(fn: () => string | null) { uploadAuthProvider = fn; }
@@ -687,7 +687,7 @@ function startUploadLoad(source: string, entry: ImageCacheEntry): void {
 function getUploadImage(source: string): ImageCacheEntry {
     let entry = imageCache.get(source);
     if (entry) {
-        // P2-70：失败条目超过 TTL → 重新加载（瞬时 404 / session 过期重连场景自愈）。
+        // 失败条目超过 TTL → 重新加载（瞬时 404 / session 过期重连场景自愈）。
         if (entry.failed && Date.now() - entry.failedAt > FAILED_RETRY_TTL_MS) {
             startUploadLoad(source, entry);
         }
@@ -711,7 +711,7 @@ export function preloadImage(source: string, dataUrl: string): void {
 }
 
 /**
- * P2-70：丢弃图片 / 图标缓存中的失败（占位 ?）条目，并联动清 IconLoader 的失败 SVG 条目。
+ * 丢弃图片 / 图标缓存中的失败（占位 ?）条目，并联动清 IconLoader 的失败 SVG 条目。
  *
  * <p>由 {@code project.reset()}（切 wall / 断线重连触发）调用，与 {@code clearLayerThumbnailCache}
  * 并列。原先这两个模块级 Map 永不重置——瞬时网络错误把资源永久钉死占位 ?，只能整页刷新；
@@ -746,7 +746,7 @@ function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
         return;
     }
 
-    // 2026-05-25 项 2：feather 路径走 off-screen canvas + filter='blur()' + DST_IN。
+    // feather 路径走 off-screen canvas + filter='blur()' + DST_IN。
     // 硬边路径（无 mask 或 featherPx=0）仍走原 clip 实现，保持向下兼容 / 性能 OK。
     const feather = im.mask?.featherPx;
     if (im.mask && typeof feather === 'number' && feather > 0) {
@@ -776,7 +776,7 @@ function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
 }
 
 /**
- * 2026-05-25 项 2：feather mask 路径。流程与后端 ImageRenderer.drawWithFeather 镜像：
+ * feather mask 路径。流程与后端 ImageRenderer.drawWithFeather 镜像：
  * 1) image off-canvas 绘到 (w, h)
  * 2) mask off-canvas 填白
  * 3) mask 用 ctx.filter='blur(Npx)' 模糊
@@ -871,13 +871,13 @@ export interface FontMeta { displayName: string; pixelated: boolean; nativeSize:
 export const FONT_META: Record<string, FontMeta> = {
     ark_pixel: { displayName: 'Ark Pixel 12px（像素）', pixelated: true, nativeSize: 12 },
     source_han_sans: { displayName: '思源黑体 SC Regular', pixelated: false, nativeSize: 0 },
-    // M21：6 个新内置字体（全 SIL OFL 1.1）
+    // 6 个新内置字体（全 SIL OFL 1.1）
     source_han_serif: { displayName: '思源宋体 SC Regular', pixelated: false, nativeSize: 0 },
     jetbrains_mono: { displayName: 'JetBrains Mono Regular', pixelated: false, nativeSize: 0 },
     fira_code: { displayName: 'Fira Code Regular', pixelated: false, nativeSize: 0 },
     inter: { displayName: 'Inter Regular', pixelated: false, nativeSize: 0 },
     noto_serif: { displayName: 'Noto Serif Regular', pixelated: false, nativeSize: 0 },
-    // M22：13 个艺术 / 装饰字体（全 SIL OFL 1.1）
+    // 13 个艺术 / 装饰字体（全 SIL OFL 1.1）
     // 中文艺术 6
     smiley_sans: { displayName: '得意黑 Smiley Sans Oblique', pixelated: false, nativeSize: 0 },
     ma_shan_zheng: { displayName: '马善政毛笔楷书 Ma Shan Zheng Regular', pixelated: false, nativeSize: 0 },
@@ -893,13 +893,13 @@ export const FONT_META: Record<string, FontMeta> = {
     shadows_into_light: { displayName: 'Shadows Into Light Regular', pixelated: false, nativeSize: 0 },
     caveat: { displayName: 'Caveat Regular', pixelated: false, nativeSize: 0 },
     dancing_script: { displayName: 'Dancing Script Regular', pixelated: false, nativeSize: 0 },
-    // M25：FHWA / Bahnschrift OFL 替代品
+    // FHWA / Bahnschrift OFL 替代品
     overpass: { displayName: 'Overpass Regular (FHWA-like)', pixelated: false, nativeSize: 0 },
     bebas_neue: { displayName: 'Bebas Neue Regular (DIN-like)', pixelated: false, nativeSize: 0 },
 };
 
 /**
- * M5-D4 修 Bug 3/4：放宽为 <b>只要是像素字体就走 NN 路径</b>。
+ * 放宽为 <b>只要是像素字体就走 NN 路径</b>。
  *
  * <p>原实现要求 {@code targetSize} 是 {@code nativeSize}(12) 的 ≥2 整数倍，否则 fallback
  * 到 {@code ctx.fillText} —— 浏览器在非整数倍下会对 TTF 嵌入位图插值放大得到灰阶像素，
@@ -912,7 +912,7 @@ function shouldUseNearestNeighbor(family: string): boolean {
     return !!(meta?.pixelated && meta.nativeSize > 0);
 }
 
-// ---------- Variable interpolation context（M28-enhance） ----------
+// ---------- Variable interpolation context ----------
 //
 // PreviewRenderer 是同步纯函数；运行时需要拿当前 wallId + Pinia variable store 解析 ${var:X}。
 // 上层 CanvasView mount 时调 setVariableContext 注入访问器，避免 PreviewRenderer 直接 import
@@ -941,7 +941,7 @@ function resolveTextForRender(t: TextElement): { rendered: string; segments: Pla
     if (!ctx) return { rendered: text, segments: [] };
     const r = interpolate(text, ctx.wallId, ctx.store);
     let rendered = r.text;
-    // 0.4.2 bugfix（Bug 1 兜底）：interpolator 已做二次扫描；若仍含 ${var:} 字面 = 数据损坏
+    // interpolator 已做二次扫描；若仍含 ${var:} 字面 = 数据损坏
     // （嵌套 / 错乱字符 / depth limit 内无法收敛），强制全替换为 "???" 防 wall 显字面 placeholder。
     if (rendered.indexOf('${var:') >= 0) {
         rendered = rendered.replace(/\$\{var:[^}]*\}/g, '???');
@@ -957,7 +957,7 @@ function resolveTextForRender(t: TextElement): { rendered: string; segments: Pla
 
 function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
     if (!t.text) return;
-    // 0.4.6 P3：italic = shear transform。包裹整个 drawText 内部绘制。
+    // italic = shear transform。包裹整个 drawText 内部绘制。
     // ctx.transform(1, 0, -0.2, 1, ...) 与 AWT AffineTransform.shear(-0.2, 0) 数学等价
     // → 双端像素一致。在 ctx.save / restore 内安全嵌套不影响外层 transform。
     const italic = t.italic === true;
@@ -975,7 +975,7 @@ function drawText(ctx: CanvasRenderingContext2D, t: TextElement): void {
 }
 
 function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
-    // M23：fontId 直接当 family（删除 KNOWN 白名单 fallback）。未加载的 fontId 触发
+    // fontId 直接当 family（删除 KNOWN 白名单 fallback）。未加载的 fontId 触发
     //     ensureLoaded 异步加载；首帧 ctx.font 走系统 fallback，加载完 onFontLoaded
     //     回调通知 CanvasView.requestDraw 重画一次切到真字形。
     const family = t.fontId;
@@ -987,7 +987,7 @@ function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
 
-    // M28-enhance：渲染前先用 interpolator 解析 ${var:X}。layout 走替换后字符串，
+    // 渲染前先用 interpolator 解析 ${var:X}。layout 走替换后字符串，
     // 避免编辑器画布上长占位符（如 "${var:schedule/eta_minutes}"）撑爆 layout
     // 致使文字叠在一起。游戏内同源走后端 Compositor 已 interpolate；前端 hint 仅编辑期视觉提示。
     const { rendered, segments } = resolveTextForRender(t);
@@ -1032,7 +1032,7 @@ function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
         ctx.lineCap = 'round';
         for (const g of glyphs) drawGlyphStroke(ctx, g, t.fontSize);
     }
-    // 0.4.6 P3：bold = 额外 stroke pass（color = text color，width = max(1.5, fontSize * 0.08)）。
+    // bold = 额外 stroke pass（color = text color，width = max(1.5, fontSize * 0.08)）。
     // 与 effects.stroke 独立可叠加；像素字体（NN 路径）跳过保持锐利。
     if (t.bold === true && !useNN) {
         const boldWidth = Math.max(1.5, t.fontSize * 0.08);
@@ -1053,7 +1053,7 @@ function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
 }
 
 /**
- * M28-enhance：placeholder hint chip 风格背景。每个 segment 对应原 text 中的 ${var:X}
+ * placeholder hint chip 风格背景。每个 segment 对应原 text 中的 ${var:X}
  * 替换后的字符 range；通过 glyphs[].srcIndex 反查命中字符 → 按行分组 → 画半透明矩形。
  *
  * <p>视觉决策：Catppuccin Mauve 0.20 alpha 填充 + 0.50 alpha 边框（极薄），让用户能在编辑器
@@ -1114,7 +1114,7 @@ function drawPlaceholderHints(
 }
 
 /**
- * M5-D6 Bug 7 终版：扫 mask 实际字形边界 + 手工 per-pixel NN。
+ * 扫 mask 实际字形边界 + 手工 per-pixel NN。
  *
  * <p>根因：ark_pixel TTF 的 {@code advance('W')=6} 但 Chromium 画 W 字形时会把可见像素
  * 画到 0..11（超出 advance 的 side-bearing）。前几版用 {@code nativeChW=6} 作为采样宽

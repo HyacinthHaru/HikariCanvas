@@ -1,11 +1,11 @@
 /**
- * 0.7.0-P4-A：积木堆坐标（blockLayout）的编解码 + 自动布局 fallback（决策 K-UI-2）。
+ * 积木堆坐标（blockLayout）的编解码 + 自动布局 fallback。
  *
  * <p>每条 {@code ScriptRule} 在画布上是一个"积木堆"，堆的左上角坐标存在 wire 字段
  * {@code ScriptRule.blockLayout}（JSON 字符串）。形态：</p>
  * <pre>{ "stacks": { "&lt;ruleId&gt;": { "x": N, "y": N } } }</pre>
  *
- * <p><b>后端不解析 blockLayout</b>（决策 D7）——纯前端 UI 坐标。坏 / 缺坐标时由
+ * <p><b>后端不解析 blockLayout</b>——纯前端 UI 坐标。坏 / 缺坐标时由
  * {@link autoLayout} 纵向排布兜底。本文件只管坐标编解码，不碰 actions 树（树操作见
  * blockTree.ts）；"编辑模型"即 ScriptRule 本身 + 此处解析出的坐标。</p>
  */

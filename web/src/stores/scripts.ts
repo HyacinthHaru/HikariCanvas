@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import type { ScriptRule, ScriptTracePayload } from '@/types/protocol';
 
 /**
- * ScriptStore 前端镜像（0.7.0 P1，契约 docs/scripting.md §2）。
+ * ScriptStore 前端镜像（契约 docs/scripting.md §2）。
  *
  * <p>来源：ready payload 的 {@code scripts} 字段（{@code ScriptRule[]}，服务端顺序）+
  * state.patch 中 path 前缀为 {@code /scripts/} 的 op（add = 完整 rule 对象，replace 语义
@@ -11,10 +11,9 @@ import type { ScriptRule, ScriptTracePayload } from '@/types/protocol';
  * 网络写走 wsClient.sendScript*。</p>
  *
  * <p>脚本是 wall-scoped 状态；wall 切换时 {@link reset} 统一由 {@code project.reset()}
- * 调用（P3-103 单一调用点纪律）。主表 {@code Map<ruleId, ScriptRule>} + {@code order}
+ * 调用（单一调用点纪律）。主表 {@code Map<ruleId, ScriptRule>} + {@code order}
  * 数组保持服务端顺序；Map 实例每次 mutation 重建（照 variableAliases 的
- * {@code new Map(...)} 范式）以触发 Vue 响应。{@code blockLayout} 仅透传不解析
- * （积木 UI 是 P4/P5）。</p>
+ * {@code new Map(...)} 范式）以触发 Vue 响应。{@code blockLayout} 仅透传不解析。</p>
  */
 export const useScriptStore = defineStore('scripts', () => {
     /** 主表：ruleId → ScriptRule。Map 实例每次 mutation 重建以触发 Vue 响应。 */
@@ -22,8 +21,8 @@ export const useScriptStore = defineStore('scripts', () => {
     /** ruleId 顺序表（保持服务端下发顺序；upsert 新增追加，已存在原位不动）。 */
     const order = ref<string[]>([]);
     /**
-     * 0.7.0-P3 A2（K11）：最近一次 {@code script.trace} 推送（试跑轨迹）。
-     * wsClient 收到 S→C op 时写入；P5 积木高亮消费。wall 切换 reset 清。
+     * 最近一次 {@code script.trace} 推送（试跑轨迹）。
+     * wsClient 收到 S→C op 时写入；积木高亮消费。wall 切换 reset 清。
      */
     const lastTrace = ref<ScriptTracePayload | null>(null);
 

@@ -1,4 +1,4 @@
-// M17 P3 / F3 智能对齐 v1（smart guides）+ M17.4 distribute & resize 扩展。
+// 智能对齐（smart guides）+ distribute & resize 扩展。
 //
 // 输入：拖动中元素的 bbox（左上 + 宽高）+ raw 位置 + 需排除 ID 集合。
 // 输出：snap 后的 (x, y) + 命中的对齐轴 X / Y 数组（供 visualizer 画红线）+
@@ -8,7 +8,7 @@
 //   1. canvas：left=0 / centerX=widthPx/2 / right=widthPx；top / centerY / bottom 同理；四角隐含在边的交集中
 //   2. element：其他可见元素的 left / centerX / right + top / centerY / bottom
 //   3. grid：rawX / rawY 附近的 floor / ceil 倍数（仅当 gridSize > 0）
-//   4. distribute（M17.4）：两侧最近邻 A、C 决定"AB == BC"的理想中点；横纵向各算一次
+//   4. distribute：两侧最近邻 A、C 决定"AB == BC"的理想中点；横纵向各算一次
 //
 // dragged 锚点：left = rawX，centerX = rawX + w/2，right = rawX + w（Y 同理）。
 // 匹配距离阈值 ui.snapThreshold（默认 8px）。每个轴方向取最近 candidate 应用。
@@ -66,7 +66,7 @@ export interface UseSnapManagerOpts {
 export interface SnapManager {
     snap(rawX: number, rawY: number, w: number, h: number, excludeIds: Set<string>): SnapHints;
     /**
-     * 0.7.3-D2：单边吸附——resize 时只对正在移动的那条边做 snap，避免静止锚点的 bestDelta
+     * 单边吸附——resize 时只对正在移动的那条边做 snap，避免静止锚点的 bestDelta
      * 被误用到动的边上（例如拖右手柄时 left 近候选轴的 delta 意外加到 width）。
      *
      * @param rawEdge   正在移动的边的当前绝对坐标（X 方向传 left 或 right；Y 方向传 top 或 bottom）
@@ -186,7 +186,7 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
     }
 
     /**
-     * M17.4 distribute 横向：找 dragged 左右两侧最近邻 A / C；
+     * distribute 横向：找 dragged 左右两侧最近邻 A / C；
      * 若理想中点（B.left = A.right + ((C.left - A.right) - w) / 2）距 rawX 落在阈值内 → snap。
      *
      * 返回 delta（== idealLeft - rawX）+ 间距段标注（用 snap 后位置标注，让 visualizer 画线对齐）。
@@ -333,7 +333,7 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
             ? snapAxis(rawY, h, ys, threshold)
             : { delta: 0, axes: [] as number[] };
 
-        // M17.4 distribute：与 axis snap 同方向竞争——若 axis 已命中（delta != 0 或 axes 非空），
+        // distribute：与 axis snap 同方向竞争——若 axis 已命中（delta != 0 或 axes 非空），
         // distribute 不再覆盖（避免两种 snap 互相抢夺导致跳变）。
         let equalGapX: EqualGapX | undefined;
         let equalGapY: EqualGapY | undefined;
@@ -371,7 +371,7 @@ export function useSnapManager(opts: UseSnapManagerOpts): SnapManager {
     }
 
     /**
-     * 0.7.3-D2：单边吸附实现。
+     * 单边吸附实现。
      *
      * 只对 rawEdge 一个锚点（而非 left/center/right 三锚点）扫描 candidate，拿最近 delta。
      * 候选轴来源与 snap() 相同（canvas / element / grid），但 distribute 不适用于单边 resize 故跳过。

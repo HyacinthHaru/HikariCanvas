@@ -2,7 +2,7 @@ import type { InjectionKey, Ref } from 'vue';
 import type { HighlightMap } from './traceHighlight';
 
 /**
- * 0.7.0-P5-H（K-UI-8）：试跑高亮的 provide/inject 契约。
+ * 试跑高亮的 provide/inject 契约。
  *
  * <p>{@code ScriptEditorOverlay} 持有唯一的高亮局部 ref（{@code Ref<HighlightMap>} =
  * {@code Map<blockId, result>}，由 {@link createHighlightStepper} 步进更新）+ 一份

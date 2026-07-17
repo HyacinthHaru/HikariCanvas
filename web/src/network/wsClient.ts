@@ -20,7 +20,7 @@ import { useScriptStore } from '@/stores/scripts';
 import { messages } from '@/i18n/messages';
 
 /**
- * M25 任务 2A：把 server 端 error code 翻译成对用户友好的 i18n 文案。
+ * 把 server 端 error code 翻译成对用户友好的 i18n 文案。
  * 找不到对应 key 时回退 UNKNOWN，最后回退原 code。直接读 messages 表（非 useI18n composable），
  * 因为 wsClient 是单例 ts class 不是 Vue setup。locale 从 useUiStore() 拿。
  */
@@ -29,7 +29,7 @@ function localizeErrorCode(code: string, fallbackMessage?: string): string {
     const errs = messages[ui.locale]?.errors as Record<string, string> | undefined;
     if (errs && typeof errs[code] === 'string') return errs[code];
     if (errs && typeof errs.UNKNOWN === 'string') {
-        // 兜底文案 + 附原 code，便于排查 / 反馈。P3-86：未映射 code 时优先展示
+        // 兜底文案 + 附原 code，便于排查 / 反馈。未映射 code 时优先展示
         // 服务端人类可读说明（fallbackMessage），而非把它丢弃。
         return fallbackMessage
             ? `${fallbackMessage}（${code}）`
@@ -39,7 +39,7 @@ function localizeErrorCode(code: string, fallbackMessage?: string): string {
 }
 
 /**
- * 0.9.7：编辑器 UI 语言（2 字母 {@link Locale}）→ game locale id（如 {@code zh_cn} / {@code en_us}）。
+ * 编辑器 UI 语言（2 字母 {@link Locale}）→ game locale id（如 {@code zh_cn} / {@code en_us}）。
  * 后端 auth 读取后走 {@code Messages.resolveLocaleId} 规范化 + 兜底；与命令路径
  * （{@code player.getLocale()} 返回 game locale id）统一，让脚本校验报错按编辑器语言渲染。
  */
@@ -49,12 +49,12 @@ function uiLocaleToGameId(locale: Locale): string {
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
-/** P2-69：open → ready 看门狗超时。超过仍未 authenticated 则强制断开走重连。 */
+/** open → ready 看门狗超时。超过仍未 authenticated 则强制断开走重连。 */
 const READY_TIMEOUT_MS = 10_000;
 /** 重连退避阶梯（秒）。超过最后一档就停。 */
 const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
 /**
- * 双层版本说明（M16 P6.2 引入双层；0.6 升 3、0.7 升 4）：
+ * 双层版本说明：
  *
  * <ul>
  *   <li><b>信封壳 {@code Envelope.v}</b>：消息容器格式版本，恒为 {@link ENVELOPE_V}（=2，
@@ -62,15 +62,13 @@ const RECONNECT_BACKOFF_S = [1, 2, 5, 10, 30];
  *       {@code plugin/.../web/Protocol.java} javadoc）。auth / ping 等所有出帧用它做 {@code v}。</li>
  *   <li><b>业务协议版本 {@code CLIENT_V}</b>：ProjectState schema / op 族契约版本。auth 帧 payload
  *       携 {@code client_v} 发给 server，server 在 [SUPPORTED_MIN, SUPPORTED_MAX] 范围内则 ready
- *       回 {@code accepted_v}；client 收到后校验 {@code accepted_v === CLIENT_V}，不匹配则断开。
- *       0.7.1 起 = 5（v5 新触发器 rightClickWall/playerLeaveRange/playerQuit + 有界循环 repeat；
- *       v4 墙脚本 script.* / v3 时间轴均为干净切换，见 docs/scripting-0.7.1.md §7）。</li>
+ *       回 {@code accepted_v}；client 收到后校验 {@code accepted_v === CLIENT_V}，不匹配则断开。</li>
  * </ul>
  *
  * 两者解耦：升业务版本只动 {@link CLIENT_V}，不动 {@link ENVELOPE_V}。
  * {@link CLIENT_V} 升级时与 {@code plugin/.../Protocol.java SUPPORTED_MIN/MAX} 同步改。
  */
-const CLIENT_V = 7; // 0.7.3：协议 v7（后端 Protocol.java SUPPORTED_MIN/MAX 同步改）
+const CLIENT_V = 7; // 协议 v7（后端 Protocol.java SUPPORTED_MIN/MAX 同步改）
 
 /**
  * 信封壳版本（消息容器格式）。所有出帧的 {@code Envelope.v} 用它；与业务协议版本
@@ -79,13 +77,13 @@ const CLIENT_V = 7; // 0.7.3：协议 v7（后端 Protocol.java SUPPORTED_MIN/MA
 const ENVELOPE_V = 2;
 
 /**
- * WS 协议客户端单例封装（M5-A3）。
+ * WS 协议客户端单例封装。
  * 直接操作 {@link useNetworkStore} / {@link useProjectStore} 的响应式状态，
  * UI 组件只需订阅 store 即可。
  *
  * <p>设计：一个 Pinia app 内只会创建一个 WsClient 实例（见 {@link createWsClient}），
- * main.ts 启动时调 {@link connect}；重连 / 自动重试逻辑 M5-A 阶段先保留手动 reconnect，
- * 完整的 5s/10s/30s 阶梯重连留 M5-B 或 M7 polish。</p>
+ * main.ts 启动时调 {@link connect}；断线由 onClose→scheduleReconnect 走
+ * {@link RECONNECT_BACKOFF_S} 的 5s/10s/30s 阶梯退避重连。</p>
  */
 type PendingAck = {
     resolve: (payload: unknown) => void;
@@ -99,7 +97,7 @@ export class WsClient {
     private heartbeatTimer: number | null = null;
     private reconnectTimer: number | null = null;
     /**
-     * P2-69：open 后等待 ready 的一次性看门狗。服务端 accept + auth 成功但 ready 构建/发送
+     * open 后等待 ready 的一次性看门狗。服务端 accept + auth 成功但 ready 构建/发送
      * 挂起（DAO / 序列化故障 / 半开 TCP）时，客户端会永久卡在 'authenticating' 且无重连
      * （重连只从 onClose 触发）。到时仍 !authenticated 则主动 close（非 1000 码）让
      * onClose→scheduleReconnect 接管。handleReady 成功与任何失败 close 路径都清除它。
@@ -142,7 +140,7 @@ export class WsClient {
             net.connecting = false;
             net.pushLog('meta', 'ws open');
             this.sendAuth(token);
-            // P2-69：启动 ready 看门狗。注意 reconnectAttempt 不在 open 清零——若 ready 永不
+            // 启动 ready 看门狗。注意 reconnectAttempt 不在 open 清零——若 ready 永不
             // 到达而靠看门狗断开重连，过早清零会丢失退避进度；改在 handleReady 成功后清零。
             this.startReadyWatchdog();
         });
@@ -170,7 +168,7 @@ export class WsClient {
         }
         const id = `c-${this.seq++}`;
         // 信封壳 v 恒为 ENVELOPE_V（=2，与业务协议版本 CLIENT_V 解耦，见常量 javadoc）；
-        // 业务版本（client_v / accepted_v）走 auth payload，0.7.1 起 = 5。
+        // 业务版本（client_v / accepted_v）走 auth payload。
         const env: Envelope = { v: ENVELOPE_V, op, id, ts: Date.now(), payload };
         const text = JSON.stringify(env);
         this.ws.send(text);
@@ -204,7 +202,7 @@ export class WsClient {
         });
     }
 
-    // ---------- 变量系统（0.4.0-P1-D，协议契约见 docs/protocol.md §5.11）----------
+    // ---------- 变量系统（协议契约见 docs/protocol.md §5.11）----------
     //
     // 5 个 op 都走 ack 通道，副作用（VariableStore mirror）由后端发 state.patch 推回；
     // send 方法本身仅负责发送，不预测性 mutate 本地 store——保持 server-as-truth。
@@ -213,7 +211,7 @@ export class WsClient {
      * `variable.create`：在当前 wall 上创建用户变量。
      * 后端自动加 {@code user:<wallId>/} 前缀。
      *
-     * <p>0.4.3：可选 {@code scope} 参数 — {@code 'wall'}（默认，per-wall user 变量）/
+     * <p>可选 {@code scope} 参数 — {@code 'wall'}（默认，per-wall user 变量）/
      * {@code 'global'}（{@code userglobal/*}，跨 wall 全服共享）。后者由调用方走
      * NewVariableDialog 的 scope toggle 决定。返 promise resolve 后可读 ack 拿
      * {@code fullName}（前端 NewVariableDialog 已沿用名字字段拼 alias，需要 fullName
@@ -226,7 +224,7 @@ export class WsClient {
     }
 
     /**
-     * 0.4.3：创建全局用户变量（{@code userglobal/<name>}）并返 ack payload 含
+     * 创建全局用户变量（{@code userglobal/<name>}）并返 ack payload 含
      * {@code fullName}（{@code 'userglobal/<name>'}）。调用方需要立即给变量起别名时用。
      */
     sendVariableCreateGlobalWithAck(
@@ -256,7 +254,7 @@ export class WsClient {
         return this.sendWithAck('variable.bind', { fullName, boundTo }).then(() => undefined);
     }
 
-    // ---------- 变量别名（0.4.2，全 namespace 通用，per-wall 隔离）----------
+    // ---------- 变量别名（全 namespace 通用，per-wall 隔离）----------
     //
     // 2 个写 op；ack 通道 + 服务端推 /aliases/<encoded> state.patch 更新 VariableAliasStore mirror。
 
@@ -272,7 +270,7 @@ export class WsClient {
             .then(() => undefined);
     }
 
-    // ---------- 列车时刻表（0.4.0-P3-L，协议契约见 docs/protocol.md §5.12）----------
+    // ---------- 列车时刻表（协议契约见 docs/protocol.md §5.12）----------
     //
     // 5 个 op 都走 ack 通道；ScheduleStore mirror 由各方法返回的 payload 自己更新。
 
@@ -283,7 +281,7 @@ export class WsClient {
     }
 
     /**
-     * {@code schedule.upsert}：创建 / 更新 schedule 元数据（站名 + 0.4.0 bugfix Bug 4 precision）。
+     * {@code schedule.upsert}：创建 / 更新 schedule 元数据（站名 + precision）。
      * precision 可选；不传时 server 保留现有值（首次 upsert 默认 minute）。
      */
     sendScheduleUpsert(
@@ -322,7 +320,7 @@ export class WsClient {
                 .then((p) => p as { id: number });
     }
 
-    // ---------- 铁路网络（0.4.4，协议见 docs/dynamic-data.md §18.7）----------
+    // ---------- 铁路网络（协议见 docs/dynamic-data.md §18.7）----------
 
     /** 列所有线路（含 owner / color 等元数据）。 */
     sendRailLineList(): Promise<{ lines: import('@/types/rail').RailLine[] }> {
@@ -331,7 +329,7 @@ export class WsClient {
     }
 
     /**
-     * 0.4.5 P1：聚合查询某线路的 stations + runs + 各 run 的 timetable。
+     * 聚合查询某线路的 stations + runs + 各 run 的 timetable。
      * 前端 RailNetworkModal.selectLine 用此避免 N+1 请求。
      */
     sendRailLineDetail(lineId: string): Promise<{
@@ -434,7 +432,7 @@ export class WsClient {
                 .then((p) => p as { rows: number });
     }
 
-    /** 绑定当前 session 的 wall 到铁路网络（R7：后端只认 session wall，不接受 wallId）。 */
+    /** 绑定当前 session 的 wall 到铁路网络（后端只认 session wall，不接受 wallId）。 */
     sendRailWallBind(payload: {
         lineId?: string | null;
         stationId?: string | null;
@@ -444,13 +442,13 @@ export class WsClient {
                 .then((p) => p as { binding: import('@/types/rail').WallRailBinding });
     }
 
-    // ---------- 时间轴 / 关键帧（0.6，协议契约见 docs/protocol.md §5.12 / §5.13）----------
+    // ---------- 时间轴 / 关键帧（协议契约见 docs/protocol.md §5.12 / §5.13）----------
     //
     // 两族 op 都走 ack 通道。timeline.create / keyframe.add 的 ack 只含 {version}——新生成的
     // id（tl-* / kf-*）由后端经 state.patch 的 add /timelines/<i>（整 Timeline）/
     // add /timelines/<i>/tracks/<eid>/<k>（整 Keyframe）回下发（同 element.add 范式，
     // protocol.md §5.12 "新 timeline（含 id）经 state.patch 下发"）。本地 mirror 由
-    // project.applyPatch 的 applyTimelineMutation 落地（P1 已实装），故这些 send 方法不预测性
+    // project.applyPatch 的 applyTimelineMutation 落地，故这些 send 方法不预测性
     // mutate store，保持 server-as-truth。
     //
     // play / pause / seek 不落 DB / 不进 history（protocol.md §5.12）；ack 形态为空 {}，
@@ -459,7 +457,7 @@ export class WsClient {
     /**
      * {@code timeline.create}：新建时间轴。{@code name} 留空时后端补默认名；
      * {@code fps} 受 config {@code timeline.max-fps} 钳。{@code trigger} MVP 固定
-     * {@code { type: 'manual', params: {} }}（触发器 UI 留 P5）。ack 只含 {@code version}，
+     * {@code { type: 'manual', params: {} }}。ack 只含 {@code version}，
      * 新 timeline（含 id）经 state.patch 回下发。
      */
     sendTimelineCreate(
@@ -541,7 +539,7 @@ export class WsClient {
 
     /**
      * {@code keyframe.update}：部分更新关键帧（timeMs / value / easing，§5.13）。
-     * {@code coalesceKey} 可选——整体帧批量改值（拉就设 update 分支）共享一步撤销（P4.5b）。
+     * {@code coalesceKey} 可选——整体帧批量改值（拉就设 update 分支）共享一步撤销。
      */
     sendKeyframeUpdate(
         timelineId: string,
@@ -566,7 +564,7 @@ export class WsClient {
 
     /**
      * {@code keyframe.move}：仅挪时刻的高频快捷（§5.13）；拖动期前端本地 mutate，dragend 发一条。
-     * {@code coalesceKey} 可选——整体块拖动的 N 帧共享一步撤销（P4.5b）。
+     * {@code coalesceKey} 可选——整体块拖动的 N 帧共享一步撤销。
      */
     sendKeyframeMove(timelineId: string, keyframeId: string, timeMs: number,
                      coalesceKey?: string): Promise<void> {
@@ -575,7 +573,7 @@ export class WsClient {
         return this.sendWithAck('keyframe.move', payload).then(() => undefined);
     }
 
-    // ---------- 墙脚本（0.7.0 P1，协议契约见 docs/scripting.md §2）----------
+    // ---------- 墙脚本（协议契约见 docs/scripting.md §2）----------
     //
     // 5 op 都走 ack 通道。create / update / enable 的新 / 改后 rule（含服务端权威的 id /
     // wallId）经 state.patch 的 add /scripts/<encoded ruleId> 回下发（replace 语义统一发
@@ -613,10 +611,10 @@ export class WsClient {
     }
 
     /**
-     * {@code script.test}：试运行规则（0.7.0-P3 A2 起异步——K11）。ack 立即 resolve
+     * {@code script.test}：试运行规则（异步）。ack 立即 resolve
      * {@code {accepted: true, ruleId}}（受理回执，不等执行：合法规则可串 wait 至分钟级）；
      * 执行轨迹在 run 结束后由服务端主动推 S→C op {@code script.trace}，本类路由进
-     * scripts store 的 {@code lastTrace}（P5 积木高亮消费）。
+     * scripts store 的 {@code lastTrace}（积木高亮消费）。
      */
     sendScriptTest(ruleId: string): Promise<unknown> {
         return this.sendWithAck('script.test', { ruleId });
@@ -625,11 +623,11 @@ export class WsClient {
     // ---------- 内部 ----------
 
     private sendAuth(token: string): void {
-        // M16 P6.2：发新字段 client_v；旧字段 clientProtocolVersion 同步发以兼容回滚
+        // 发新字段 client_v；旧字段 clientProtocolVersion 同步发以兼容回滚
         // 到旧服务端 jar 的情形（旧后端不识别 client_v，识别 clientProtocolVersion）。
-        // 新后端（M16+）优先读 client_v；范围检查通过 → ready 回 accepted_v。
+        // 新后端优先读 client_v；范围检查通过 → ready 回 accepted_v。
         //
-        // 0.9.7：携带编辑器 UI 语言（用于后端按编辑器语言渲染脚本校验报错等外发文案）。
+        // 携带编辑器 UI 语言（用于后端按编辑器语言渲染脚本校验报错等外发文案）。
         // ui.locale 是 2 字母（'zh' / 'en'），这里映射成 game locale id 形态（'zh_cn' / 'en_us'），
         // 与命令路径（player.getLocale() 返回 'zh_cn'）对齐 → 后端 Messages.resolveLocaleId 统一处理。
         // auth payload 后端按 Object → Map 松散解析（非严格 record 字段），旧后端多这个键也静默忽略。
@@ -659,7 +657,7 @@ export class WsClient {
     }
 
     /**
-     * P2-69：启动一次性 ready 看门狗。到时仍未 authenticated（ready 未到达）则强制断开，
+     * 启动一次性 ready 看门狗。到时仍未 authenticated（ready 未到达）则强制断开，
      * 让 onClose→scheduleReconnect 接管退避重连，避免永久卡在 'authenticating'。
      */
     private startReadyWatchdog(): void {
@@ -693,7 +691,7 @@ export class WsClient {
             return;
         }
 
-        // P2-68：handler dispatch 外层包 try/catch，隔离单帧异常。TS 类型断言运行时擦除，
+        // handler dispatch 外层包 try/catch，隔离单帧异常。TS 类型断言运行时擦除，
         // 服务端结构漂移帧（forward-compat / 后端 bug）可让 handler 中途抛 TypeError，
         // 不捕获会逃逸出浏览器 'message' 回调（无 window.onerror 降级），污染后续帧。
         // 捕获后记录并安全 return——后续帧与 pending ack 不受影响。
@@ -732,11 +730,11 @@ export class WsClient {
         const project = useProjectStore();
         const templates = useTemplatesStore();
         const ui = useUiStore();
-        // P2-69：ready 到达（无论成功或下方的协议错误 close 路径）都清掉看门狗。
+        // ready 到达（无论成功或下方的协议错误 close 路径）都清掉看门狗。
         this.clearReadyWatchdog();
-        // M16 P6.2：双向校验业务协议版本——server 同意了 accepted_v 但若与 CLIENT_V
+        // 双向校验业务协议版本——server 同意了 accepted_v 但若与 CLIENT_V
         // 不一致（如运维误装错版本），客户端主动断开避免后续 op 行为漂移。
-        // 旧后端不发 accepted_v → undefined → 沿用 M8-C 的 v2 默认（信任 server）。
+        // 旧后端不发 accepted_v → undefined → 沿用 v2 默认（信任 server）。
         const acceptedV = payload.accepted_v;
         if (typeof acceptedV === 'number' && acceptedV !== CLIENT_V) {
             net.lastError = `协议版本不兼容 (server accepted_v=${acceptedV}, client=${CLIENT_V})；请升级`;
@@ -745,7 +743,7 @@ export class WsClient {
             try { this.ws?.close(4002, 'protocol_version_unsupported'); } catch { /* ignore */ }
             return;
         }
-        // P2-68：ready payload 运行时空值守卫。TS 类型断言不防 server 结构漂移，
+        // ready payload 运行时空值守卫。TS 类型断言不防 server 结构漂移，
         // payload.projectState.canvas 缺失会让下方 widthMaps 读取抛 TypeError（且已设
         // authenticated=true / 未启心跳的半态卡死）。缺失视为协议错误：记日志 + 主动 close
         // （非 1000 码）让 onClose→scheduleReconnect 接管，而非半态继续。
@@ -755,16 +753,16 @@ export class WsClient {
             try { this.ws?.close(4000, 'malformed_ready'); } catch { /* ignore */ }
             return;
         }
-        // M16 P4.2：切到新 wall 时清掉旧 wall 残留状态（selectedIds / lockedAt / state...）。
+        // 切到新 wall 时清掉旧 wall 残留状态（selectedIds / lockedAt / state...）。
         // 同 wall 重连（wallId 不变）保留 UI 上下文，避免重连闪烁。
         const incomingWallId = payload.wallId ?? null;
         if (project.wallId !== null && project.wallId !== incomingWallId) {
-            // P3-103：schedule / alias / rail 等 wall-scoped store 的 reset 已收进
+            // schedule / alias / rail 等 wall-scoped store 的 reset 已收进
             // project.reset() 单一调用点（见 stores/project.ts），此处不再并列手动调用。
             project.reset();
             ui.reset();
         }
-        // P2-69：握手真正完成才清零退避计数（open 不再清零，见 connect open 回调注释）。
+        // 握手真正完成才清零退避计数（open 不再清零，见 connect open 回调注释）。
         this.reconnectAttempt = 0;
         net.authenticated = true;
         net.sessionId = payload.sessionId;
@@ -781,16 +779,16 @@ export class WsClient {
             payload.ownerUuid ?? null,
             payload.selfUuid ?? null,
         );
-        // M6-D：缓存全量 TemplateSpec 列表，供 TemplateGallery 使用
+        // 缓存全量 TemplateSpec 列表，供 TemplateGallery 使用
         templates.setTemplates(payload.templates ?? []);
-        // 0.4.0-P2-I：用 ready payload 携带的 variables 快照一次性初始化 VariableStore mirror；
+        // 用 ready payload 携带的 variables 快照一次性初始化 VariableStore mirror；
         // 后续变更走 state.patch /variables/<encoded> 路径（见 applyVariablePatches）。
         useVariableStore().initVariables(payload.variables ?? []);
-        // 0.4.2：变量别名快照（per-wall）；后续变更走 state.patch /aliases/<encoded>。
+        // 变量别名快照（per-wall）；后续变更走 state.patch /aliases/<encoded>。
         useVariableAliasStore().initAliases(payload.aliases ?? {});
-        // 0.7.0 P1：脚本规则快照（per-wall，服务端顺序）；后续变更走 state.patch /scripts/<encoded>。
+        // 脚本规则快照（per-wall，服务端顺序）；后续变更走 state.patch /scripts/<encoded>。
         useScriptStore().initScripts(payload.scripts ?? []);
-        // 0.4.5 P3：铁路绑定快照（当前 wall 是否绑了线路）；用于 ScheduleManagerModal /
+        // 铁路绑定快照（当前 wall 是否绑了线路）；用于 ScheduleManagerModal /
         // RailNetworkModal 一打开就显示绑定状态。null = 未绑定。
         const railBinding = (payload as { railBinding?: import('@/types/rail').WallRailBinding | null })
             .railBinding;
@@ -812,7 +810,7 @@ export class WsClient {
     }
 
     /** ack payload 可能含 wall.* op 的副作用（lockedAt / alias）；同步进 store。
-     *  2026-05-14：publishedAt → lockedAt 重命名。 */
+     *  publishedAt → lockedAt 重命名。 */
     private handleAck(ackId: string | undefined, payload: unknown): void {
         // 1) sendWithAck 的 Promise resolve（与 store 副作用解耦）
         if (ackId && this.pendingAcks.has(ackId)) {
@@ -828,7 +826,7 @@ export class WsClient {
         if (typeof p.lockedAt === 'number') {
             project.lockedAt = p.lockedAt;  // wall.lock ack
         } else if (p.locked === false) {
-            project.lockedAt = null;          // wall.unlock ack（M15.1 改协议）
+            project.lockedAt = null;          // wall.unlock ack
         }
         if (typeof p.alias === 'string') {
             project.alias = p.alias;
@@ -836,10 +834,10 @@ export class WsClient {
     }
 
     private handlePatch(payload: StatePatchPayload): void {
-        // 0.4.0-P1-D：variables 走 global VariableStore 而非 ProjectState；按 patch.path
+        // variables 走 global VariableStore 而非 ProjectState；按 patch.path
         // 前缀分拣后再分别落 store。剩余 patch 仍走 project.applyPatch（既有路径不变）。
-        // 0.4.2：aliases 同款分拣到 VariableAliasStore。
-        // 0.7.0 P1：scripts 同款分拣到 ScriptStore。
+        // aliases 同款分拣到 VariableAliasStore。
+        // scripts 同款分拣到 ScriptStore。
         const variableOps: PatchOp[] = [];
         const aliasOps: PatchOp[] = [];
         const scriptOps: PatchOp[] = [];
@@ -864,7 +862,7 @@ export class WsClient {
     }
 
     /**
-     * 0.7.0-P3 A2（K11）：S→C op {@code script.trace}——{@code script.test} 的异步轨迹
+     * S→C op {@code script.trace}——{@code script.test} 的异步轨迹
      * （ack 只回受理；run 真正结束后才推这条）。逻辑在独立导出 {@link applyScriptTrace}
      * （照 applyScriptPatches 可独测范式）。
      */
@@ -874,7 +872,7 @@ export class WsClient {
 
     private handleError(errId: string | undefined, payload: ErrorPayload): void {
         const net = useNetworkStore();
-        // M25 任务 2A：把后端 code 翻译成 i18n friendly message；保留 raw code 进 lastOpError + log
+        // 把后端 code 翻译成 i18n friendly message；保留 raw code 进 lastOpError + log
         // （方便 LogDrawer 排查、客户端 i18n key 缺失时回退）。
         const friendly = localizeErrorCode(payload.code, payload.message);
         if (payload.code === 'AUTH_FAILED') {
@@ -905,7 +903,7 @@ export class WsClient {
         net.reset();
         net.pushLog('meta', `ws closed code=${ev.code}${ev.reason ? ` reason="${ev.reason}"` : ''}`);
 
-        // M16 P4.3：清空所有未完成 ack，让 await sendWithAck 的消费者收到 rejection
+        // 清空所有未完成 ack，让 await sendWithAck 的消费者收到 rejection
         // 而非永远 pending。重连后是干净的 Map，不混前后两次连接的 ack 序号。
         // 注意 seq 计数器不重置——保留现有行为（id 全局递增）。
         if (this.pendingAcks.size > 0) {
@@ -916,17 +914,17 @@ export class WsClient {
             this.pendingAcks.clear();
         }
 
-        // M5-D7 + A1/A2（ultrareview 0.7.3 批 A）：按 close code 判断是否重连。
+        // 按 close code 判断是否重连。
         // terminal = 重连无意义的终止态，停止退避；否则 scheduleReconnect。
         // 集合定义见导出函数 isTerminalCloseCode（可独测）。
         const terminal = isTerminalCloseCode(ev.code);
         if (this.stopped || terminal) {
             if (ev.code === 4001) {
-                // M25 任务 2A：友好提示走 i18n（AUTH_FAILED 中英文都覆盖到 token 提示）
+                // 友好提示走 i18n（AUTH_FAILED 中英文都覆盖到 token 提示）
                 net.lastError = localizeErrorCode('AUTH_FAILED');
                 this.clearStoredToken();
             } else if (ev.code === 4002) {
-                // A4：handleReady 已设精确 lastError（「协议版本不兼容 server=X client=Y」）；
+                // handleReady 已设精确 lastError（「协议版本不兼容 server=X client=Y」）；
                 // 若 stopped 为 true 且 lastError 已有精确内容，不覆写（防止通用提示冲掉精确提示）。
                 // 若 stopped 为 false（理论上 handleReady 分支不会走这里，防御性保留兜底）。
                 if (!net.lastError) {
@@ -1028,7 +1026,7 @@ function resolveWsUrl(): string {
     return 'ws://127.0.0.1:8877/ws';
 }
 
-// ---------- 变量 state.patch 路由（0.4.0-P1-D）----------
+// ---------- 变量 state.patch 路由 ----------
 //
 // 后端发 path 形如 {@code /variables/<encoded>/currentValue}；encoded 是 fullName 用
 // RFC 6901 {@code ~1} 转义 {@code /} 后的字符串。本路由解码后落到 VariableStore。
@@ -1066,7 +1064,7 @@ function applyVariablePatches(ops: PatchOp[]): void {
         } else if (op.op === 'remove' && sub === '') {
             store.remove(fullName);
         } else if (op.op === 'replace' && sub === '') {
-            // P1-3：整 Variable JSON 节点 replace（UPDATED 事件，type / defaultValue 改动）。
+            // 整 Variable JSON 节点 replace（UPDATED 事件，type / defaultValue 改动）。
             // 与 add 分支同款落表逻辑——后端 SessionManager / EditSession 对 variable.update
             // 发的是 replace 整节点（而非逐字段 patch），漏接会让 type/defaultValue 不同步。
             if (op.value && typeof op.value === 'object') {
@@ -1107,7 +1105,7 @@ function decodeJsonPointerToken(token: string): string {
     return token.replace(/~1/g, '/').replace(/~0/g, '~');
 }
 
-// ---------- 别名 state.patch 路由（0.4.2）----------
+// ---------- 别名 state.patch 路由 ----------
 //
 // 后端 dispatcher 发 path 形如 {@code /aliases/<encoded fullName>}（同变量通道 RFC 6901
 // 编码 ~ → ~0, / → ~1）。支持：add / replace 携 alias 字符串；remove 不携 value。
@@ -1134,7 +1132,7 @@ function applyAliasPatches(ops: PatchOp[]): void {
     }
 }
 
-// ---------- 脚本 state.patch 路由（0.7.0 P1）----------
+// ---------- 脚本 state.patch 路由 ----------
 //
 // 后端 ScriptOpDispatcher 发 path 形如 {@code /scripts/<encoded ruleId>}（RFC 6901 段编码，
 // 同变量 / 别名通道）。支持：add / replace 携完整 ScriptRule 对象（后端 create / update /
@@ -1167,7 +1165,7 @@ export function applyScriptPatches(ops: PatchOp[]): void {
     }
 }
 
-// ---------- script.trace 路由（0.7.0-P3 A2，K11）----------
+// ---------- script.trace 路由 ----------
 //
 // S→C op {@code script.trace {ruleId, steps}}：script.test 的异步轨迹（ack 只回受理）。
 // 落 scripts store 的 lastTrace（覆盖式）+ meta log 一条；畸形 payload（后端结构漂移 /
@@ -1183,7 +1181,7 @@ export function applyScriptTrace(payload: ScriptTracePayload | null | undefined)
     net.pushLog('meta', `script.trace: rule=${payload.ruleId} steps=${payload.steps.length}`);
 }
 
-// ---------- close code 终止态判定（A1/A2 ultrareview 0.7.3 批 A）----------
+// ---------- close code 终止态判定 ----------
 //
 // terminal close code = 重连无意义的终止态；非 terminal 走 scheduleReconnect 退避重连。
 // 导出为纯函数，可独立单测（不依赖 Pinia / WebSocket，node 环境即可跑）。

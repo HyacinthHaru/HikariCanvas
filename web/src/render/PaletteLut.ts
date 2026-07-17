@@ -78,7 +78,7 @@ export class PaletteLut {
 
     /**
      * 把 ImageData 逐像素量化到 palette 颜色（RGB 覆盖回 imageData，alpha 保留）。
-     * M5-D snapshot 测试 + "Simulate MC palette" 预览切换 用。
+     * snapshot 测试 + "Simulate MC palette" 预览切换 用。
      */
     quantizeImageData(imgData: ImageData): void {
         const d = imgData.data;
@@ -158,7 +158,7 @@ let lutPromise: Promise<PaletteLut> | null = null;
 /**
  * 首次调 fetch + 构建；之后返回缓存 promise。
  * 构建耗时 ~1-3s（单线程遍历 8M 格 × 248 palette）；由于只跑一次，放 main thread 可接受。
- * M7 polish 可迁到 Web Worker 避免首帧阻塞。
+ * 可迁到 Web Worker 避免首帧阻塞。
  */
 export function getPaletteLut(): Promise<PaletteLut> {
     if (!lutPromise) lutPromise = PaletteLut.loadFromEndpoint();

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 
 /**
- * M26.3 IconLibrary store：图标库 panel 的 open 状态 + 收藏夹 + 最近使用列表。
+ * IconLibrary store：图标库 panel 的 open 状态 + 收藏夹 + 最近使用列表。
  *
  * <p>三段 localStorage 持久化（与 ui store 的 theme / locale / snap 同级）：
  * <ul>

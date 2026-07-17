@@ -1,5 +1,5 @@
 /**
- * 0.7.0-P5-G（K-UI-6）：if 积木 condition 的「简化条件模型 ↔ 字符串」双向转换。
+ * if 积木 condition 的「简化条件模型 ↔ 字符串」双向转换。
  *
  * <p>普通用户用「操作数 比较符 操作数」逐行拼条件（同一 {@code joiner} 连所有行），本模块负责
  * 把这个 {@link SimpleCondition} <b>序列化</b>成后端 {@code ExpressionParser} 能解析的表达式串

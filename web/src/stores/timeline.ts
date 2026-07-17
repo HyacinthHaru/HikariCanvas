@@ -4,7 +4,7 @@ import { useProjectStore } from './project';
 import type { Timeline } from '@/types/protocol';
 
 /**
- * 0.6 P4：AE 风时间轴 dock 的编辑态（dock 开关 / playhead / 缩放 / 展开 / 选中）。
+ * AE 风时间轴 dock 的编辑态（dock 开关 / playhead / 缩放 / 展开 / 选中）。
  *
  * <p>数据本身（timelines / activeTimelineId）仍是 {@code project.state} 的 mirror（patch 自动
  * 落地，见 stores/project.ts applyTimelineMutation）；本 store 只持"编辑器视图态"——不发 WS、
@@ -26,17 +26,17 @@ export const useTimelineStore = defineStore('timeline', () => {
     const playing = ref(false);
     /** 缩放：每 ms 多少像素。0 = 待 dock 按可见宽度 fit 计算。 */
     const pxPerMs = ref(0);
-    /** 横滚：标尺左缘对应时刻（ms）。P4a 恒 0（fit 铺满），缩放/横滚留后续。 */
+    /** 横滚：标尺左缘对应时刻（ms）。恒 0（fit 铺满），缩放/横滚留后续。 */
     const scrollMs = ref(0);
     /** 展开了属性子轨的元素 id 集合。 */
     const expandedElements = ref<Set<string>>(new Set());
-    /** 当前选中的关键帧 id（单选；P4.5b 展开子轨微调单帧用）。 */
+    /** 当前选中的关键帧 id（单选；展开子轨微调单帧用）。 */
     const selectedKeyframeId = ref<string | null>(null);
-    /** P4.5：选中的整体关键帧 key（elementId:timeMs）集合，多选。缓动 / 删除 / 拖动主操作单位。 */
+    /** 选中的整体关键帧 key（elementId:timeMs）集合，多选。缓动 / 删除 / 拖动主操作单位。 */
     const selectedGroups = ref<Set<string>>(new Set());
-    /** P4.5b：自动加帧开关（PR 风"自动关键帧"）。ON + dock 开 + 有 timeline 时，画布拖元素在 playhead 自动打整体帧。 */
+    /** 自动加帧开关（PR 风"自动关键帧"）。ON + dock 开 + 有 timeline 时，画布拖元素在 playhead 自动打整体帧。 */
     const autoKeyframe = ref(true);
-    /** P4.5b：正在拖动且会自动加帧的元素 id 集（渲染期跟手覆盖 + dragend upsert 用；非自动加帧拖动时恒空）。 */
+    /** 正在拖动且会自动加帧的元素 id 集（渲染期跟手覆盖 + dragend upsert 用；非自动加帧拖动时恒空）。 */
     const draggingElementIds = ref<Set<string>>(new Set());
 
     /** 所有时间轴（project.state mirror）。 */
@@ -81,7 +81,7 @@ export const useTimelineStore = defineStore('timeline', () => {
         if (id) selectedGroups.value = new Set();   // 单属性帧与整体帧选中互斥
     }
 
-    /** P4.5 整体关键帧选中。additive（Shift）= 切换；否则单选替换。同时清单帧选中。 */
+    /** 整体关键帧选中。additive（Shift）= 切换；否则单选替换。同时清单帧选中。 */
     function selectGroup(key: string, additive = false) {
         if (additive) {
             const next = new Set(selectedGroups.value);

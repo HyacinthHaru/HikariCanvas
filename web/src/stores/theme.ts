@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 
 /**
- * M24-B 主题 store：preset flavor + accent + radius scale。
+ * 主题 store：preset flavor + accent + radius scale。
  *
  * 拆分自 {@link useUiStore}，因为：
  *   - theme 偏好独立于 wall / element 状态，跨 wall 持久；

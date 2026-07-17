@@ -1,5 +1,5 @@
 /**
- * M18 Live Paint — Element → 单 ring Polygon 转换。
+ * Live Paint — Element → 单 ring Polygon 转换。
  *
  * 各元素类型采样策略：
  * - rect / icon / text / image / brush：bbox 4 顶点（text 字形 / image alpha / brush 像素级 v2）
@@ -15,7 +15,7 @@
  * - 不强制方向（CCW/CW 都行，polygon-clipping 自处理）
  *
  * 关于自交：用户的 path 可能自交；本模块尽力而为，不主动检测——polygon-clipping
- * 容忍但行为可能略偏。M18-P4 hover preview 期间会观察 corner case。
+ * 容忍但行为可能略偏。
  */
 
 import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon } from 'polygon-clipping';
@@ -45,7 +45,7 @@ export function elementToPolygon(el: Element): Polygon | null {
             local = bboxPolygon(el.x, el.y, el.w, el.h);
             break;
         case 'brush': {
-            // M18-P5+：brush 升级到真实 stroke offset polygon（替代 bbox 兜底）。
+            // brush 走真实 stroke offset polygon（替代 bbox 兜底）。
             // points 是 element-local；这里加上 (el.x, el.y) 转全局。
             const brush = el as BrushStrokeElement;
             const globalPts = (brush.points ?? []).map(p => ({
@@ -93,10 +93,10 @@ export function elementToPolygon(el: Element): Polygon | null {
 }
 
 /**
- * 0.4.9 Sub B：异步版本——text 元素走 fontkit 真实 glyph polygon；其他类型同步返回。
+ * 异步版本——text 元素走 fontkit 真实 glyph polygon；其他类型同步返回。
  *
  * 调用方（如 LivePaintCore.buildGraph）需 await；旧 sync `elementToPolygon` 保留以便
- * 不需要 glyph 精度的场景沿用（向下兼容）。Worker 内 buildGraph 升级为 async 后调用本版本。
+ * 不需要 glyph 精度的场景沿用（向下兼容）。Worker 内 buildGraph 为 async，调用本版本。
  *
  * 失败 / null fallback 与同步版本一致：调用方决定是 fallback bbox 还是丢弃。
  */
@@ -134,7 +134,7 @@ export async function elementToPolygonAsync(el: Element): Promise<Polygon | null
 }
 
 /**
- * 0.4.10 bugfix：Element → polygon-clipping MultiPolygon（保留 holes + 多 polygon）。
+ * Element → polygon-clipping MultiPolygon（保留 holes + 多 polygon）。
  *
  * 对比 {@link elementToPolygonAsync}：
  * - 旧函数为 text 走 fontkit 但**只返单 ring polygon**——丢失 "O" 的内孔、丢失 "Hello"

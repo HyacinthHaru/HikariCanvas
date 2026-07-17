@@ -1,5 +1,5 @@
 /**
- * 渲染期文本占位符替换（前端镜像）。0.4.0-P2-H 核心模块。
+ * 渲染期文本占位符替换（前端镜像）。核心模块。
  *
  * <p>与后端 {@code moe.hikari.canvas.variable.VariableInterpolator} 一致的算法：
  * <ul>
@@ -26,7 +26,7 @@ export const UNRESOLVED = '???';
 const USER_NAMESPACE_PREFIX = 'user';
 
 /**
- * P3-10：TTL 过期判定，镜像后端 {@code Variable.isStale}：{@code ttl > 0 && (now - updatedAt) > ttl}。
+ * TTL 过期判定，镜像后端 {@code Variable.isStale}：{@code ttl > 0 && (now - updatedAt) > ttl}。
  *
  * <p>之前前端只判 {@code currentValue != null && length > 0} 就用 cached，从不判过期；
  * 后端 {@code VariableInterpolator.resolveValue} 则 stale 时跳过 cached 走 fallback 链。
@@ -34,7 +34,7 @@ const USER_NAMESPACE_PREFIX = 'user';
  *
  * <p>注：staleness 时钟基准依赖 {@code updatedAt}（由 wsClient 接 state.patch 写入）。</p>
  *
- * <p>P3-10：导出供 VariableChipEditor 的 chip 显示 / tooltip 复用同一判定，保证三处
+ * <p>导出供 VariableChipEditor 的 chip 显示 / tooltip 复用同一判定，保证三处
  * （interpolate / chip 文本 / tooltip）的 stale 语义不分叉。</p>
  */
 export function isStale(ttl: number | undefined, updatedAt: number | undefined, now: number): boolean {
@@ -44,7 +44,7 @@ export function isStale(ttl: number | undefined, updatedAt: number | undefined, 
 }
 
 /**
- * 单个 placeholder 在<b>替换后</b>文本中的位置标记（M28-enhance 引入）。
+ * 单个 placeholder 在<b>替换后</b>文本中的位置标记。
  *
  * <p>由 {@link interpolate} 输出；用于编辑器 PreviewRenderer 在 Canvas 上画 "chip 风格"背景 hint
  * 把替换后的字符按段着色，让用户区分"哪几个字是变量值"。游戏内 Compositor 不画 hint，所以这只是
@@ -81,7 +81,7 @@ export interface InterpolateResult {
  * <ul>
  *   <li>{@code user/X} + wallId 非空 → {@code user:<wallId>/X}</li>
  *   <li>{@code user/X} + wallId 为空 → 字面 {@code user/X}（必然 miss，便于无 wall 上下文预览）</li>
- *   <li>{@code wall.X} + wallId 非空 → {@code system:<wallId>/wall.X}（0.4.0-P3-J；
+ *   <li>{@code wall.X} + wallId 非空 → {@code system:<wallId>/wall.X}（
  *       后端 SystemVariableProvider 按 per-wall namespace 注册 wall.id / wall.alias 等）</li>
  *   <li>{@code wall.X} + wallId 为空 → 字面 {@code wall.X}（必然 miss，便于模板 publish / 预览）</li>
  *   <li>{@code bedwars/score} / {@code server.time} 等 → 字面不变</li>
@@ -94,17 +94,17 @@ export function resolveFullName(rawName: string, wallId: string | null): string 
         const key = trimmed.substring(USER_NAMESPACE_PREFIX.length + 1);
         return `${USER_NAMESPACE_PREFIX}:${wallId}/${key}`;
     }
-    // 0.4.0-P3-J：wall.* 系统变量按 per-wall namespace 注入
+    // wall.* 系统变量按 per-wall namespace 注入
     if (wallId && wallId.length > 0 && trimmed.startsWith('wall.')) {
         return `system:${wallId}/${trimmed}`;
     }
-    // 0.4.0-P3-L：schedule.* per-wall namespace 注入（与 wall.* 同款）
+    // schedule.* per-wall namespace 注入（与 wall.* 同款）
     // ${var:schedule.next_departure} + wallId → schedule:<wallId>/next_departure
     if (wallId && wallId.length > 0 && trimmed.startsWith('schedule.')) {
         const tail = trimmed.substring('schedule.'.length);
         return `schedule:${wallId}/${tail}`;
     }
-    // 0.4.0 bugfix3（Bug A）：用户直觉的 namespace/key 斜杠语法 — 与 ${var:user/X} 同款风格。
+    // 用户直觉的 namespace/key 斜杠语法 — 与 ${var:user/X} 同款风格。
     // 不破坏 schedule.X / wall.X 点号语法，仅作为 fallback；wallId 为空时跳过。
     // ${var:schedule/eta_seconds} + wallId → schedule:<wallId>/eta_seconds
     // ${var:wall/id} + wallId → system:<wallId>/wall.id（注入到 SystemVariableProvider 同款 fullName）
@@ -116,7 +116,7 @@ export function resolveFullName(rawName: string, wallId: string | null): string 
         const tail = trimmed.substring('schedule/'.length);
         return `schedule:${wallId}/${tail}`;
     }
-    // 0.4.0-P3-J：scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
+    // scoreboard.<obj>.<player> 点分号 alias → scoreboard/<obj>.<player>
     if (trimmed.startsWith('scoreboard.')) {
         const tail = trimmed.substring('scoreboard.'.length);
         if (tail.length > 0 && tail.indexOf('/') < 0) {
@@ -131,7 +131,7 @@ export function resolveFullName(rawName: string, wallId: string | null): string 
  *
  * <p>性能：text 不含 {@code ${var:} 子串时 O(1) 短路返原引用；否则 O(n) regex 单趟扫描。</p>
  *
- * <p>0.4.2 bugfix（Bug 1：服务器重启后字面 {@code ${var:} 残留）：把 {@link #doInterpolate}
+ * <p>服务器重启后字面 {@code ${var:} 残留场景：把 {@link #doInterpolate}
  * 拆成内部实现 + 外层 {@link interpolate} 做二次扫描 wrapper。当首次替换后输出仍含 {@code ${var:}
  * 字面（典型场景：chip editor roundtrip 漏 escape / 数据写入了双重嵌套 {@code ${${var:X}}}），最多
  * 再 interpolate 2 次兜底。DEV 模式下若触发二次解析 console.warn 帮排查根因。</p>
@@ -186,7 +186,7 @@ function doInterpolate(
     const referenced = new Set<string>();
     const missing = new Set<string>();
     const segments: PlaceholderSegment[] = [];
-    // P3-10：单次扫描内用同一 now，避免一段文本内多个占位符 staleness 判定时钟漂移。
+    // 单次扫描内用同一 now，避免一段文本内多个占位符 staleness 判定时钟漂移。
     const now = Date.now();
     // 单趟扫描；手工累积输出 + 同步记录每个 placeholder 在替换后 text 中的 char range。
     // 不用 String.replace 因为它不易暴露每段 placeholder 替换后的 char index（只有原字符串 offset）。
@@ -207,7 +207,7 @@ function doInterpolate(
         let resolved: string;
         if (v) {
             const cur = v.currentValue;
-            // P3-10：cached 非空且未过期才用；stale（ttl 过期）则跳过 cached 走 fallback 链，与后端一致。
+            // cached 非空且未过期才用；stale（ttl 过期）则跳过 cached 走 fallback 链，与后端一致。
             if (cur != null && cur.length > 0 && !isStale(v.ttl, v.updatedAt, now)) resolved = cur;
             else if (fallback !== undefined) resolved = fallback;
             else if (v.defaultValue != null) resolved = v.defaultValue;
