@@ -33,14 +33,14 @@
 | T6 | 大 payload 攻击（超大文本、超大画布） | 渲染 OOM、CPU 占满 |
 | T7 | 预览地图池耗尽 | 其他玩家无法编辑 |
 | T8 | PDC / SQLite 注入（非法字段值） | 数据损坏 |
-| T9 | 恶意模板（YAML 解析 RCE） | 任意代码执行（M6 起 jackson-dataformat-yaml 默认即免疫 SnakeYAML `!!java/*` tag 路径）|
-| T10 | 恶意 `.canvas` 工程文件导入（zip bomb / 路径穿越 / 伪造图片 / 越权脚本 / 不存在命令模板） | 资源耗尽 / 服务器异常 / 越权写。**0.8 Part A 起防御已实装**：解包三闸 + 路径校验 + 白名单（§4.4 `CanvasArchive`）、assets PNG magic + 隔离解码 + 配额（§4.4 `AssetIngest`）、脚本全量重校验 + wallId 重绑 + 命令模板白名单（§13.5 `ScriptImporter`）|
+| T9 | 恶意模板（YAML 解析 RCE） | 任意代码执行（jackson-dataformat-yaml 默认即免疫 SnakeYAML `!!java/*` tag 路径）|
+| T10 | 恶意 `.canvas` 工程文件导入（zip bomb / 路径穿越 / 伪造图片 / 越权脚本 / 不存在命令模板） | 资源耗尽 / 服务器异常 / 越权写。防御：解包三闸 + 路径校验 + 白名单（§4.4 `CanvasArchive`）、assets PNG magic + 隔离解码 + 配额（§4.4 `AssetIngest`）、脚本全量重校验 + wallId 重绑 + 命令模板白名单（§13.5 `ScriptImporter`）|
 | T11 | 端口扫描识别本插件 | 辅助上述攻击 |
 | T12 | 审计日志被清除 | 事后无法溯源 |
 | T13 | 管理员误操作 | 数据丢失 |
-| T14 | 图片上传滥用：超大文件 / 压缩炸弹 / 伪造 MIME / 路径穿越 / 磁盘填满 / 恶意 EXIF | 资源耗尽、RCE 风险（M13 引入；详细缓解见 §4.5） |
-| T15 | URL 图片上传 SSRF（服务端代 fetch 任意 URL，可探内网 / 回环 / 云元数据） | 内网探测 / 凭证窃取。**0.4.9 起 SSRF 过滤已按用户要求移除，仅校验 scheme + 不跟重定向 + 10MB/30s 上限；公网部署服主自担风险，详见 §4.6** |
-| T16 | 恶意 SVG 导入（XXE / 实体爆炸 / 嵌入脚本 / 超大 path → CPU/内存耗尽 / XSS） | 资源耗尽 / 脚本执行。**0.8 Part B 起防御已实装**：`preParseGuard`（体积上限 + 拒 DOCTYPE/ENTITY）+ `DOMParser` 天然挡 XXE/脚本执行 + `stripDangerous` 剥离危险节点 + `complexityGuard` 复杂度上限（§4.7） |
+| T14 | 图片上传滥用：超大文件 / 压缩炸弹 / 伪造 MIME / 路径穿越 / 磁盘填满 / 恶意 EXIF | 资源耗尽、RCE 风险（详细缓解见 §4.5） |
+| T15 | URL 图片上传 SSRF（服务端代 fetch 任意 URL，可探内网 / 回环 / 云元数据） | 内网探测 / 凭证窃取。**不做 SSRF 过滤，仅校验 scheme + 不跟重定向 + 10MB/30s 上限；公网部署服主自担风险，详见 §4.6** |
+| T16 | 恶意 SVG 导入（XXE / 实体爆炸 / 嵌入脚本 / 超大 path → CPU/内存耗尽 / XSS） | 资源耗尽 / 脚本执行。防御：`preParseGuard`（体积上限 + 拒 DOCTYPE/ENTITY）+ `DOMParser` 天然挡 XXE/脚本执行 + `stripDangerous` 剥离危险节点 + `complexityGuard` 复杂度上限（§4.7） |
 
 ### 1.3 非目标
 
@@ -109,29 +109,19 @@ validateToken(t):
 
 ### 2.4 防暴力
 
-**原设计目标（部分未实装，见下方状态说明）：**
+`TokenRateLimiter` 按源 IP 固定窗口限流（默认 **10 次 / 分钟**，`security.token-rate-limit.per-minute` 可配），在 **WS `auth` 帧 token 校验之前**拦截；超限 **close 4429** + `TOKEN_RATE_LIMIT_EXCEEDED` audit 事件。实现见 `web/TokenRateLimiter.java`（per-IP `ConcurrentHashMap` + 桶内 `synchronized`；被动 sweep 每窗口清一次过期桶，内存 O(activeIp) 不无限增长），由 `WebServer.handleAuth` 调用 `tryConsume(authIp)`。
 
-- 按源 IP 统计失败次数 + 阈值封禁（IP 级失败计数 → 临时封禁）
-- 全局失败率「保守模式」（延迟签发）
-- IP 的存储：SHA-256 哈希存 `audit_log.ip_hash`（IP 原文绝不入库）
+**防御边界（明确）**：
+- **仅覆盖 WS `auth` 帧**这一路径；**不**含 HTTP `GET /api/session/:token` peek（该端点不读 token 计数）。
+- 反代部署下因 IP 绑定路径**不读 X-Forwarded-For**（见 §2.5 已知限制），`authIp` 退化为反代本机 IP，per-IP 桶变成「同一反代来源共享一个桶」——真实 IP 级限流仍需反代层 `limit_req_zone $binary_remote_addr` 弥补（与 §2.5 / §7.4 反代限制联动）。
 
-> **当前实装状态（2026-05-25 起）**：`TokenRateLimiter` **已实装**——按源 IP 固定窗口限流（默认 **10 次 / 分钟**，`security.token-rate-limit.per-minute` 可配），在 **WS `auth` 帧 token 校验之前**拦截；超限 **close 4429** + `TOKEN_RATE_LIMIT_EXCEEDED` audit 事件。实现见 `web/TokenRateLimiter.java`（per-IP `ConcurrentHashMap` + 桶内 `synchronized`；P3-31 被动 sweep 每窗口清一次过期桶，内存 O(activeIp) 不无限增长），由 `WebServer.handleAuth` 调用 `tryConsume(authIp)`。
->
-> **防御边界（明确）**：
-> - **仅覆盖 WS `auth` 帧**这一路径；**不**含 HTTP `GET /api/session/:token` peek（该端点不读 token 计数）。
-> - 反代部署下因 IP 绑定路径**不读 X-Forwarded-For**（见 §2.5 已知限制），`authIp` 退化为反代本机 IP，per-IP 桶变成「同一反代来源共享一个桶」——真实 IP 级限流仍需反代层 `limit_req_zone $binary_remote_addr` 弥补（与 §2.5 / §7.4 反代限制联动）。
->
-> token 本体熵（256 bit · 单次使用 · 15min TTL）仍是第一道防线。**全局保守模式（延迟签发）+ IP 级失败计数 / 临时封禁**这两项进阶防御仍 **未实装**，留 v1.x。（`SessionRateLimiter` 是另一回事——它做的是**每会话编辑 op 限流 40/2s**，不是 token / IP 失败计数，见 §3.3。）
+token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**全局保守模式（延迟签发）+ IP 级失败计数 / 临时封禁**这两项进阶防御未实装，留 v1.x。（`SessionRateLimiter` 是另一回事——它做的是**每会话编辑 op 限流 40/2s**，不是 token / IP 失败计数，见 §3.3。）
 
-### 2.5 会话级 IP 绑定（M16-P6.6，2026-05-16）
+### 2.5 会话级 IP 绑定
 
 为防御 token 在传输 / 浏览器历史 / 日志泄漏后被异地重放，Session 首次 `auth` 成功时绑定 caller IP（`Session.boundIp`，CAS 写入），后续所有帧到达必须从同 IP 来源；不一致 → `error: AUTH_FAILED` + close 4001。
 
-**方案 B：绑 session 不绑 token**
-
-- Token 已是单次使用 + 15min TTL，再绑 token IP 等于双重防御一个已被消耗的凭证，无收益
-- Session 跨多次 WS 重连复用（5s~30s 阶梯重连），首次 auth 后任何重连都会触发 bindOrCheckIp
-- 实现位置：`SessionManager.bindOrCheckIp(sessionId, callerIp)`，单方法 CAS + check 两态
+**绑 session 不绑 token**：Session 跨多次 WS 重连复用（5s~30s 阶梯重连），首次 auth 后任何重连都会触发 bindOrCheckIp。实现位置：`SessionManager.bindOrCheckIp(sessionId, callerIp)`，单方法 CAS + check 两态。
 
 **已知限制：**
 
@@ -145,7 +135,7 @@ validateToken(t):
 
 ### 3.1 连接层
 
-- **WS upgrade Origin 白名单（M16-P1.3 实装，`WebServer.checkWsOrigin` / `isOriginAllowed`）**：放行三类 ——（1）无 / 空 / 字面 `"null"` 的 Origin（同源 fetch / 非浏览器客户端）；（2）`127.0.0.1:*` / `localhost:*`（开发环境）；（3）与服务端 `host:port` 完全同源，或显式命中 `network.allowed-origins` 配置白名单（严格大小写敏感匹配 scheme+host+port）。其余一律拒绝 upgrade（防 CSWSH 跨站 WS 劫持）。**注意：携带任意非白名单 Origin 的浏览器请求会被拒；缺失 Origin 的非浏览器客户端放行**
+- **WS upgrade Origin 白名单（`WebServer.checkWsOrigin` / `isOriginAllowed`）**：放行三类 ——（1）无 / 空 / 字面 `"null"` 的 Origin（同源 fetch / 非浏览器客户端）；（2）`127.0.0.1:*` / `localhost:*`（开发环境）；（3）与服务端 `host:port` 完全同源，或显式命中 `network.allowed-origins` 配置白名单（严格大小写敏感匹配 scheme+host+port）。其余一律拒绝 upgrade（防 CSWSH 跨站 WS 劫持）。**注意：携带任意非白名单 Origin 的浏览器请求会被拒；缺失 Origin 的非浏览器客户端放行**
 - 连接前需完成 HTTP 预握手 `GET /api/session/:token`（peek 校验，不消耗 token）
 - 每连接在 5 秒内必须发送 `auth` 帧，否则强制 close 4001（`auth_timeout`）。该超时由**服务器被动驱动**——`onConnect` 时 `WebServer.scheduleAuthTimeout` 在内部专用 daemon `ScheduledExecutorService`（`hikari-ws-auth-timeout`）上注册一个 N 秒后触发的任务（非网络层自然超时）；到时若该连接仍未通过 auth（未设置 session attr）即主动 `ctx.closeSession(4001, "auth_timeout")`，auth 成功则 `cancelAuthTimeout` 撤销该任务
 
@@ -164,7 +154,7 @@ validateToken(t):
 | 层级 | 规则 | 超过动作 | 状态 |
 | --- | --- | --- | --- |
 | 突发窗口 | 40 msg / 2s（`DEFAULT_BURST` / `DEFAULT_WINDOW_MS`） | 返回 `RATE_LIMITED`，丢弃本次 | ✅ 实装 |
-| 反复超限 → close | 5 次 RATE_LIMITED / 1 min → close 1008 + 终止会话 | close 1008 + 断连 + `SESSION_RATE_LIMIT_DISCONNECT` 审计 | ✅ 实装（0.9.3，`SessionRateLimiter` 回调 → `WebServer.closeForRepeatedViolation`） |
+| 反复超限 → close | 5 次 RATE_LIMITED / 1 min → close 1008 + 终止会话 | close 1008 + 断连 + `SESSION_RATE_LIMIT_DISCONNECT` 审计 | ✅ 实装（`SessionRateLimiter` 回调 → `WebServer.closeForRepeatedViolation`） |
 
 这与 token 暴力枚举限流（§2.4 `TokenRateLimiter`，per-IP 10 次/分钟 → close 4429）是正交的两套限流。
 
@@ -199,8 +189,8 @@ validateToken(t):
 
 ### 4.3 YAML 解析（模板）
 
-- M6 起使用 **jackson-dataformat-yaml**（2.18.2）替代原计划的 SnakeYAML
-- jackson-dataformat-yaml 底层基于 SnakeYAML 但不暴露 `!!java/*` tag 接口，默认不允许任意类实例化，无 SnakeYAML SafeConstructor 那种"忘记切换 → RCE"的失误面
+- 使用 **jackson-dataformat-yaml**（2.18.2）解析
+- jackson-dataformat-yaml 底层基于 SnakeYAML 但不暴露 `!!java/*` tag 接口，默认不允许任意类实例化
 - 不开 Jackson 的 `enableDefaultTyping` / `@class` 多态机制
 - 最大文件大小 256 KiB（启动加载时按 byte 长度预筛）
 - 解析失败的模板不加载，打 warn log；YAMLMapper 的 `MISSING_PROPERTY` / `UNKNOWN_PROPERTY` 视情设 strict 或忽略未来兼容
@@ -238,7 +228,7 @@ validateToken(t):
 - **`assets/icons/<id>.svg` 不被摄入**：SVG 条目虽因 `assets/` 前缀被解包白名单接纳，但 `AssetIngest` 只摄入 `.png`（`isAssetPng`），SVG 既不被解码也不计入配额、也不被导出收集——当前无 SVG 处理路径。
 - **`thumbnail.png` 导入侧无专门校验**：核对全代码（`ProjectImporter` / `AssetIngest` / `image` 包）确认，`thumbnail.png` 仅被 `CanvasArchive` 解包白名单接纳进条目 map，此后**不被任何下游阶段读取 / magic 校验 / ImageIO 解码 / 计入配额**——`ProjectImporter` 只消费 `manifest.json` / `project.json` / `assets/*.png` / `scripts.json`，从不取 `thumbnail.png`。它受三闸大小约束（占总解压量），但无独立内容校验。（与 §4.5 `/api/upload` 那条严格解码栈不同，勿混淆。）
 
-### 4.5 图片导入 `/api/upload`（M13）
+### 4.5 图片导入 `/api/upload`
 
 `canvas.upload` 权限（默认绑 `canvas.edit`）的玩家可通过编辑器上传图片。后端走严格校验栈：
 
@@ -292,7 +282,7 @@ validateToken(t):
 
 `GET /api/upload/quota` 返回当前玩家剩余配额（次数 / 字节），前端在 UI 提示。
 
-**i) ImageElement.mask 校验（M13 决策 2026-05-14）**
+**i) ImageElement.mask 校验**
 
 `ImageElement.mask.d` 是客户端控制的 SVG path 字符串，与 `PathElement.d` 共享攻击面：
 - **复用 M9 `PathDValidator`**：M/L/Q/C/Z 子集（大小写绝对/相对）、数值范围、命令-参数对应
@@ -312,32 +302,32 @@ validateToken(t):
 - EXIF 信息读取 / 隐私元数据清除（ImageIO 解码后重写 PNG 时自然丢，不依赖额外 scrub）
 - 杀毒 / 内容审核（超 scope；走 Bukkit 服管手动责任）
 
-### 4.6 URL 图片上传 `POST /api/upload/url`（0.4.7 引入）
+### 4.6 URL 图片上传 `POST /api/upload/url`
 
 编辑器允许玩家粘贴一个图片 URL，由服务端代为 fetch 后走与文件上传相同的解码 / 配额 / 存储栈。
 
-> ⚠️ **SSRF 防御已移除（0.4.9 hotfix-3 起，按用户明确要求）—— 公网部署服主必读**
+> ⚠️ **不做 SSRF 过滤，SSRF 风险由服主自担 —— 公网部署服主必读**
 >
-> `UrlFetchSafety.check`（代码注释明确「SSRF 风险由用户自担」）**仅校验**：
-> - scheme 必须是 `http` / `https`（仍拒 `file://` / `ftp://` / `data:` / `javascript:` 等）
+> `UrlFetchSafety.check` **仅校验**：
+> - scheme 必须是 `http` / `https`（拒 `file://` / `ftp://` / `data:` / `javascript:` 等）
 > - URI 语法合法且 host 非空
 >
-> **已被删除的过滤（务必知悉）**：DNS 解析、私有地址段（RFC1918）、回环（127.0.0.0/8）、link-local、CGNAT（100.64.0.0/10）、IPv6 unique-local（fc00::/7）、`localhost` 字符串黑名单。`UrlFetchSafety.Reason` 中的 `UNRESOLVABLE_HOST` / `PRIVATE_ADDRESS` 枚举项保留但**新代码不再返回**。
+> 不做 DNS 解析、私有地址段（RFC1918）、回环、link-local、CGNAT、IPv6 unique-local、`localhost` 黑名单等 SSRF 过滤。
 >
-> **后果**：任意持 `canvas.upload` 权限的玩家可让服务端向**任意内网 / 回环地址**发起 GET 请求（如 `http://169.254.169.254/`（云元数据）/ `http://127.0.0.1:<内部端口>/`），这是典型 **SSRF**。设计取舍是「本地 / 可信玩家场景，风险用户自担」。
+> **后果**：任意持 `canvas.upload` 权限的玩家可让服务端向**任意内网 / 回环地址**发起 GET 请求（如 `http://169.254.169.254/`（云元数据）/ `http://127.0.0.1:<内部端口>/`），这是典型 **SSRF**。设计取舍是「本地 / 可信玩家场景，风险由服主自担」。
 >
-> **公网或开放注册服务器必须额外缓解**：在反代 / 防火墙层禁止插件进程主动访问内网网段，或直接关闭 URL 上传入口（不给 `canvas.upload` 权限）。**不要假设本插件还在防 SSRF。**
+> **公网或开放注册服务器必须额外缓解**：在反代 / 防火墙层禁止插件进程主动访问内网网段，或直接关闭 URL 上传入口（不给 `canvas.upload` 权限）。
 
-**残留缓解（仅这三项，非 SSRF 防护）**：
+**其余约束（非 SSRF 防护）**：
 
 - **不跟随重定向**：`HttpURLConnection.setInstanceFollowRedirects(false)`（302 等不自动跳，避免重定向绕过 scheme 校验）
 - **字节上限 10 MB**：硬编码 `URL_MAX_BYTES`，超出 abort（注意：此处先按硬上限读，再按可配 `images.max-size-kb` 默认 2 MB 复查）
 - **总超时 30s**：连接 + 读取各 15s（`URL_TIMEOUT_MS / 2`）
 - fetch 回来的字节仍走与文件上传完全相同的 magic 校验 / ImageIO 隔离解码 / 配额 / hash 存储栈
 
-### 4.7 SVG 矢量导入（0.8 Part B 实装）
+### 4.7 SVG 矢量导入
 
-**状态：已实装（0.8 Part B）**。SVG 导入是纯前端操作（`web/src/lib/svg/`），后端无新 SVG 解析器；导入产物（`PathElement`）走与手绘路径完全相同的 `element.add` 校验栈，后端只看路径 d 的 `PathDValidator` 校验，不接触原始 SVG 文档。
+SVG 导入是纯前端操作（`web/src/lib/svg/`），后端无新 SVG 解析器；导入产物（`PathElement`）走与手绘路径完全相同的 `element.add` 校验栈，后端只看路径 d 的 `PathDValidator` 校验，不接触原始 SVG 文档。
 
 **防御层次（前端三闸 + DOMParser 天然隔离）：**
 
@@ -377,7 +367,7 @@ validateToken(t):
 
 SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验（M/L/Q/C/Z 命令子集 + 数值范围），非法路径以 `INVALID_PAYLOAD` 拒。内嵌位图（`<image data:…>`）走与 `/api/upload` 完全相同的 magic + ImageIO 隔离解码 + 配额栈，不绕过任何上传限制。
 
-**不做（D10 明确不支持的攻击面）**：`<text>`、`<clipPath>`/`<mask>`、CSS/SMIL 动画（取首帧静态化，剩余节点被 `stripDangerous` 删除）、`<foreignObject>`、外部 `href` 引用、`<use>`/`<symbol>`。这些功能连带其攻击面均不在实装范围内。
+**不做（明确不支持的攻击面）**：`<text>`、`<clipPath>`/`<mask>`、CSS/SMIL 动画（取首帧静态化，剩余节点被 `stripDangerous` 删除）、`<foreignObject>`、外部 `href` 引用、`<use>`/`<symbol>`。这些功能连带其攻击面均不在实装范围内。
 
 ---
 
@@ -391,52 +381,52 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 | `canvas.edit` | true | 开启编辑会话（`/canvas edit` / 持 Wand 交互） |
 | `canvas.wand` | true | 领取 Canvas Wand 物品 |
 | `canvas.commit` | true | 提交（保存）招牌 |
-| `canvas.bench` | op | 跑服务端渲染 benchmark（`/canvas bench`，0.5.0） |
-| `canvas.upload` | true | 通过 `/api/upload` 上传图片（M13） |
-| `canvas.upload.bypass-limit` | op | 跳过每画 / 每日 / 总磁盘配额检查（M13） |
+| `canvas.bench` | op | 跑服务端渲染 benchmark（`/canvas bench`） |
+| `canvas.upload` | true | 通过 `/api/upload` 上传图片 |
+| `canvas.upload.bypass-limit` | op | 跳过每画 / 每日 / 总磁盘配额检查 |
 | `canvas.delete.own` | true | 删除自己的画（`/canvas delete <wall_id>`） |
 | `canvas.delete.any` | op | 删除任何画 |
 | `canvas.alias.any` | op | 修改任意 wall 的 alias（默认 wall.alias WS op 只允许 owner 改） |
 | `canvas.admin` | op | 管理命令（stats / cleanup / reload） |
 | `canvas.admin.bypass-limit` | op | 无视限流与画布上限 |
 | `canvas.admin.force-break` | op | 允许破坏插件保护的成品物品框 / 支撑方块 |
-| `canvas.admin.bypass-lock` | op | M15.3 鉴权方案 C：绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open |
+| `canvas.admin.bypass-lock` | op | 绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open |
 | `canvas.template.save` | true | 把当前 wall 发布为创意工坊模板 |
 | `canvas.template.delete.own` | true | 删除自己发布的模板 |
 | `canvas.template.delete.any` | op | 删除任意模板（moderation） |
 | `canvas.template.feature` | op | 标记 / 取消模板为精选 |
 | `canvas.template.bypass-limit` | op | 跳过每玩家模板发布数配额 |
-| `canvas.template.use-others` | op | 使用其他玩家发布的用户模板（M16-P1.6；TemplateRegistry `byIdForApply` 跨用户隔离） |
-| `canvas.var.read` | true | 0.4.0：查看变量列表与值（编辑器自动补全） |
-| `canvas.var.write.own` | true | 0.4.0：在自己 wall 上创建 / 改值 user/* 变量 |
-| `canvas.var.write.any` | op | 0.4.0：在任意 wall 上修改用户变量 |
-| `canvas.var.delete.own` | true | 0.4.0：删除自己 wall 上的 user/* 变量 |
-| `canvas.var.delete.any` | op | 0.4.0：删除任意 wall 上的用户变量 |
-| `canvas.var.bind` | op | 0.4.0：让 user/* 变量被插件 push 接管（敏感操作） |
-| `canvas.var.command` | op | 0.4.0：用 `/canvas var` 命令族 |
-| `canvas.var.global.create` | true | 0.4.3：创建全局用户变量（`userglobal/*`，跨 wall 共享） |
-| `canvas.var.global.write.own` | true | 0.4.3：修改自己创建的全局用户变量 |
-| `canvas.var.global.write.any` | op | 0.4.3：修改任意全局用户变量（管理员 override） |
-| `canvas.var.global.delete.own` | true | 0.4.3：删除自己创建的全局用户变量 |
-| `canvas.var.global.delete.any` | op | 0.4.3：删除任意全局用户变量（管理员 override） |
-| `canvas.schedule.own` | true | 0.4.0-P3-L：管理自己 wall 的列车 / 公交时刻表 |
+| `canvas.template.use-others` | op | 使用其他玩家发布的用户模板（TemplateRegistry `byIdForApply` 跨用户隔离） |
+| `canvas.var.read` | true | 查看变量列表与值（编辑器自动补全） |
+| `canvas.var.write.own` | true | 在自己 wall 上创建 / 改值 user/* 变量 |
+| `canvas.var.write.any` | op | 在任意 wall 上修改用户变量 |
+| `canvas.var.delete.own` | true | 删除自己 wall 上的 user/* 变量 |
+| `canvas.var.delete.any` | op | 删除任意 wall 上的用户变量 |
+| `canvas.var.bind` | op | 让 user/* 变量被插件 push 接管（敏感操作） |
+| `canvas.var.command` | op | 用 `/canvas var` 命令族 |
+| `canvas.var.global.create` | true | 创建全局用户变量（`userglobal/*`，跨 wall 共享） |
+| `canvas.var.global.write.own` | true | 修改自己创建的全局用户变量 |
+| `canvas.var.global.write.any` | op | 修改任意全局用户变量（管理员 override） |
+| `canvas.var.global.delete.own` | true | 删除自己创建的全局用户变量 |
+| `canvas.var.global.delete.any` | op | 删除任意全局用户变量（管理员 override） |
+| `canvas.schedule.own` | true | 管理自己 wall 的列车 / 公交时刻表 |
 | `canvas.schedule.any` | op | 管理任意 wall 的时刻表（管理员） |
-| `canvas.rail.line.create` | true | 0.4.4：创建铁路线路 |
-| `canvas.rail.line.edit.own` | true | 0.4.4：编辑自己创建的线路 / 站点 / 车次 / 时刻表 |
-| `canvas.rail.line.edit.any` | op | 0.4.4：编辑任意铁路线路（管理员） |
-| `canvas.rail.line.delete.own` | true | 0.4.4：删除自己创建的铁路线路 |
-| `canvas.rail.line.delete.any` | op | 0.4.4：删除任意铁路线路（管理员） |
-| `canvas.rail.wall.bind` | true | 0.4.4：把 wall 绑定到铁路网络 |
-| `canvas.script.edit` | true | 0.7.0：给自己能打开的墙编排积木脚本（基础脚本权限） |
-| `canvas.script.trigger.global` | true | 0.7.0：使用全服事件触发器（进服 / 被击杀 / 退服 / 右键墙） |
-| `canvas.script.sound` | true | 0.7.0：在脚本里用"播放声音 / 粒子"积木 |
-| `canvas.script.command` | op | 0.7.0：在脚本里用"执行命令模板"积木（危险面，见 §13.1） |
+| `canvas.rail.line.create` | true | 创建铁路线路 |
+| `canvas.rail.line.edit.own` | true | 编辑自己创建的线路 / 站点 / 车次 / 时刻表 |
+| `canvas.rail.line.edit.any` | op | 编辑任意铁路线路（管理员） |
+| `canvas.rail.line.delete.own` | true | 删除自己创建的铁路线路 |
+| `canvas.rail.line.delete.any` | op | 删除任意铁路线路（管理员） |
+| `canvas.rail.wall.bind` | true | 把 wall 绑定到铁路网络 |
+| `canvas.script.edit` | true | 给自己能打开的墙编排积木脚本（基础脚本权限） |
+| `canvas.script.trigger.global` | true | 使用全服事件触发器（进服 / 被击杀 / 退服 / 右键墙） |
+| `canvas.script.sound` | true | 在脚本里用"播放声音 / 粒子"积木 |
+| `canvas.script.command` | op | 在脚本里用"执行命令模板"积木（危险面，见 §13.1） |
 
 Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
-> **lock/unlock op 权限（2026-05-14）**：`wall.lock` / `wall.unlock` 不走权限节点，由 owner-only 校验代替——后端直接对比 caller.uuid == wall.owner_uuid，非 owner 拒 FORBIDDEN。无权限节点。
+> **lock/unlock op 权限**：`wall.lock` / `wall.unlock` 不走权限节点，由 owner-only 校验代替——后端直接对比 caller.uuid == wall.owner_uuid，非 owner 拒 FORBIDDEN。无权限节点。
 
-> **插件 namespace ACL（0.4.0）**：`HikariCanvasAPI.setVariable` 走 namespace 注册中心校验——插件 A 不能 push 插件 B 的 namespace（防 spoof）。无玩家权限节点，由 plugin 自声明 namespace 后强制绑定。详见 `docs/dynamic-data.md §9.2`。
+> **插件 namespace ACL**：`HikariCanvasAPI.setVariable` 走 namespace 注册中心校验——插件 A 不能 push 插件 B 的 namespace（防 spoof）。无玩家权限节点，由 plugin 自声明 namespace 后强制绑定。详见 `docs/dynamic-data.md §9.2`。
 
 ---
 
@@ -531,7 +521,7 @@ server {
 
 | 事件 | 触发 | 字段 |
 | --- | --- | --- |
-| `PERMISSION_DENIED` | 任一权限校验失败 | player, node（M16-P6.4：write 失败 SEVERE stack trace 兜底） |
+| `PERMISSION_DENIED` | 任一权限校验失败 | player, node（write 失败 SEVERE stack trace 兜底） |
 | `WALL_DELETE` | `/canvas delete` 删除 wall | player, session, wall_id |
 | `WALL_LOCK` | `wall.lock` op | player, session, wall_id, locked_at |
 | `WALL_UNLOCK` | `wall.unlock` op | player, session, wall_id |
@@ -547,7 +537,7 @@ server {
 | `POOL_INITIALIZED` | size |
 | `POOL_EXPAND` | old_size, new_size |
 | `POOL_RESERVE` / `POOL_BIND_WALL` / `POOL_RELEASE_WALL` | wall_id, map_ids |
-| `POOL_RELEASE_TO_FREE` | wall_id, map_ids, reason（M16-P2.5；WallRestorer 失败回收路径） |
+| `POOL_RELEASE_TO_FREE` | wall_id, map_ids, reason（WallRestorer 失败回收路径） |
 | `POOL_LEAK` / `POOL_ORPHAN_ROW` | map_ids（泄漏 / 孤儿行检测） |
 
 **变量 / 时刻表 / 铁路 / 时间轴：**
@@ -555,12 +545,12 @@ server {
 | 事件 | 触发 |
 | --- | --- |
 | `VARIABLE_CREATE/UPDATE/SET/DELETE/BIND` | `variable.*` WS op（per-wall 用户变量） |
-| `VARIABLE_GLOBAL_CREATE/UPDATE/SET/DELETE/BIND` | 同上但 `userglobal/*` 全局变量（0.4.3） |
-| `VARIABLE_ALIAS_SET` / `VARIABLE_ALIAS_CLEAR` | `variable.alias.*` op（0.4.2） |
+| `VARIABLE_GLOBAL_CREATE/UPDATE/SET/DELETE/BIND` | 同上但 `userglobal/*` 全局变量 |
+| `VARIABLE_ALIAS_SET` / `VARIABLE_ALIAS_CLEAR` | `variable.alias.*` op |
 | `VARIABLE_COMMAND_SET` / `VARIABLE_COMMAND_DELETE` | `/canvas var set/delete` 命令 |
-| `SCHEDULE_UPSERT` / `SCHEDULE_ENTRY_ADD/UPDATE/DELETE` | `schedule.*` op（0.4.0-P3-L） |
-| `RAIL_LINE_*` / `RAIL_STATION_*` / `RAIL_RUN_*` / `RAIL_TIMETABLE_SET` / `RAIL_WALL_BIND` | `rail.*` op（0.4.4，共 11 个） |
-| `TIMELINE_PLAY` / `TIMELINE_PAUSE` / `TIMELINE_SEEK` | `timeline.*` 播放控制 op（0.6.0） |
+| `SCHEDULE_UPSERT` / `SCHEDULE_ENTRY_ADD/UPDATE/DELETE` | `schedule.*` op |
+| `RAIL_LINE_*` / `RAIL_STATION_*` / `RAIL_RUN_*` / `RAIL_TIMETABLE_SET` / `RAIL_WALL_BIND` | `rail.*` op（共 11 个） |
+| `TIMELINE_PLAY` / `TIMELINE_PAUSE` / `TIMELINE_SEEK` | `timeline.*` 播放控制 op |
 
 脚本相关审计事件（`SCRIPT_*`）单列于 §13.7。
 
@@ -628,14 +618,14 @@ server {
 ## 12. 响应渠道
 
 - GitHub Security Advisory 接收私密上报
-- `SECURITY.md` 在仓库根目录说明上报流程与响应 SLA（0.9.3 已创建）
+- `SECURITY.md` 在仓库根目录说明上报流程与响应 SLA
 - 披露政策：漏洞修复发布后 7 日解密细节
 
 ---
 
-## 13. 脚本运行时威胁模型（0.7.0 引入）
+## 13. 脚本运行时威胁模型
 
-0.7.0 引入了可视化积木脚本系统，让墙可以响应游戏事件并执行副作用（改变量、播动画、执行命令）。这一层新增了独立的攻击面，以下按威胁→缓解格式记录。
+可视化积木脚本系统让墙可以响应游戏事件并执行副作用（改变量、播动画、执行命令）。这一层有独立的攻击面，以下按威胁→缓解格式记录。
 
 ### 13.1 命令执行面
 
@@ -643,7 +633,7 @@ server {
 
 **实际缓解（代码：`CommandTemplateEngine.java`）**：
 
-- **服主白名单模板（K13）**：`runCommand` 积木只能引用 `config.yml` 中 `scripts.command-templates` 段预先声明的模板，**不接受任意字符串**。模板表为空时，该积木在编辑器内灰显且不可执行。
+- **服主白名单模板**：`runCommand` 积木只能引用 `config.yml` 中 `scripts.command-templates` 段预先声明的模板，**不接受任意字符串**。模板表为空时，该积木在编辑器内灰显且不可执行。
 - **参数净化**：替换值执行前强制剥去换行符（`\n`/`\r`）与 `§` 颜色码；text 类型参数若净化后仍含 `@` 字符（`@a`/`@e` 选择器），整条命令拒绝执行并记 error step。
 - **online-player 参数类型**：声明 `type: online-player` 的参数值必须精确命中当前在线玩家名（大小写敏感），不允许任何选择器语法。
 - **单参数长度上限**：默认 64 字符（`max-length` 可调）。
@@ -660,9 +650,9 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 
 | 闸 | 机制 | 默认值 | 超限行为 |
 |---|---|---|---|
-| **runs/s** | per-rule 1s 固定窗计数（`tryAcquireRun`）；窗内超限立即 false | 10 次/s | 本次 run 丢弃；记 `SCRIPT_RUN_BLOCKED`（K5 per-rule 10s 限频，防 audit 表被刷爆） |
-| **actions/run** | 单次触发展开动作总数累计（含嵌套 if / wait 续接跨段）；`actionsExceeded` | 50 | 掐断剩余动作；blocked step + audit（K5 限频） |
-| **chain depth（ABA 熔断，D8）** | `ScriptRunner.CHAIN_DEPTH` ThreadLocal：runner 线程持有当前链深；`VariableStore.fireChange` 同步回调 `TriggerRouter.onVariableChange` 直读 ThreadLocal，非脚本来源（null）depth=0，脚本写变量触发则 depth+1；`chainDepthExceeded` 检查 ≥ max | 8 | 整个 run 掐断 + WARNING 日志（含链路径）；**不自动禁用规则**（D8 工具不是保姆原则） |
+| **runs/s** | per-rule 1s 固定窗计数（`tryAcquireRun`）；窗内超限立即 false | 10 次/s | 本次 run 丢弃；记 `SCRIPT_RUN_BLOCKED`（per-rule 10s 限频，防 audit 表被刷爆） |
+| **actions/run** | 单次触发展开动作总数累计（含嵌套 if / wait 续接跨段）；`actionsExceeded` | 50 | 掐断剩余动作；blocked step + audit（限频） |
+| **chain depth（ABA 熔断）** | `ScriptRunner.CHAIN_DEPTH` ThreadLocal：runner 线程持有当前链深；`VariableStore.fireChange` 同步回调 `TriggerRouter.onVariableChange` 直读 ThreadLocal，非脚本来源（null）depth=0，脚本写变量触发则 depth+1；`chainDepthExceeded` 检查 ≥ max | 8 | 整个 run 掐断 + WARNING 日志（含链路径）；**不自动禁用规则**（工具不是保姆原则） |
 
 `ScriptRunner` 单线程队列天然背压：同一时刻最多一个 action 在跑，极端高频触发会在队列侧堆积，不会无限并发扩张。
 
@@ -670,7 +660,7 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 
 **威胁**：全局事件触发器（玩家进服、被击杀、退服）监听全服行为，任意玩家都能触发；若无权限控制，低权限玩家可借此实现全服级副作用。
 
-**实际缓解（代码：`ScriptPermissions.java`；`paper-plugin.yml` §133-144）**：
+**实际缓解（代码：`ScriptPermissions.java`；`paper-plugin.yml` `permissions:` 段）**：
 
 `ScriptPermissions.requiredFacets` 在规则保存时（create/update）递归扫描触发器与动作：
 
@@ -692,8 +682,8 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 **实际缓解（代码：`ScriptOpDispatcher.java`）**：
 
 - `script.create` / `script.update` / `script.delete` / `script.enable` / `script.test` 全部先过 `canvas.script.edit` 基础权限，再按规则内容逐积木检查附加面（§13.3）。
-- 鉴权基准：caller 必须能打开该 wall（open 路径鉴权，M15.3 方案 C）——非 owner 且 wall 已锁定 → open 时已拒 FORBIDDEN；后端编辑 op 路径不读 lock（lock-state §3.6 架构纪律）。
-- 条件语法保存期预检（K16）：`if.condition` 字段在 create/update 时过 `ConditionEvaluator.checkSyntax` parse-only 检查，语法错误立即拒 `SCRIPT_INVALID`（返回 parse 错误首行 + blockId 定位），不等运行期静默 false。
+- 鉴权基准：caller 必须能打开该 wall（open 路径鉴权）——非 owner 且 wall 已锁定 → open 时已拒 FORBIDDEN；后端编辑 op 路径不读 lock（lock-state §3.6 架构纪律）。
+- 条件语法保存期预检：`if.condition` 字段在 create/update 时过 `ConditionEvaluator.checkSyntax` parse-only 检查，语法错误立即拒 `SCRIPT_INVALID`（返回 parse 错误首行 + blockId 定位），不等运行期静默 false。
 
 ### 13.5 `.canvas` 工程文件导入中的脚本
 
@@ -704,7 +694,7 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 - **多态反序列化**：`ScriptRule`（trigger / actions 注解自带判别）反序列化；单条失败 → 跳过 + `script-invalid`
 - **wallId 重绑**：由 `ScriptStore.create` 承担——它忽略 incoming 的 `id` / `wallId`，生成全新 `sr-<8hex>` 并强制绑定到**目标墙**（等价 `ScriptOpDispatcher` 的服务端权威覆写，杜绝跨墙注入）
 - **结构校验**：`ScriptRuleValidator.validate` 非空 → 跳过 + `script-invalid`
-- **条件语法预检**：递归对所有 `if` / `waitUntil` / `repeatUntil` 条件调 `ConditionEvaluator.checkSyntax`（parse-only）→ 非空跳过 + `script-invalid`（不等运行期静默 false，同 §13.4 K16）
+- **条件语法预检**：递归对所有 `if` / `waitUntil` / `repeatUntil` 条件调 `ConditionEvaluator.checkSyntax`（parse-only）→ 非空跳过 + `script-invalid`（不等运行期静默 false，同 §13.4）
 - **命令模板检查**：扫所有 `runCommand.templateId`，本服 `config.yml` 模板表缺 → `script-command-blocked`（detail = templateId）；**不跳过、规则照常落库**，运行期 `CommandTemplateEngine` 会把该积木判为 `Blocked`（编辑器内红 badge 灰显不可执行）。规则其余部分照常可用
 - **配额闸**：落库 `ScriptStore.create` 抛 `QuotaExceededException`（每墙脚本数超限）→ `script-quota` warning + **停止处理后续规则**
 
@@ -714,7 +704,7 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 
 **威胁**：`script.test` op 若不受约束，可被用于无限次刷副作用（播声音/执行命令/改变量）。
 
-**实际缓解**：`script.test` 走与生产触发完全相同的执行路径（D5 决策），**不豁免 Budget 三闸**（K12），同样过权限面检查，记 `SCRIPT_TEST` audit 事件（标注为 TEST run）。ack 立即返受理回执（`{accepted:true, ruleId}`），执行轨迹通过独立 `script.trace` S→C op 异步推回（避免 Jetty worker 被 wait 续接阻塞 5s 超时，K11）。
+**实际缓解**：`script.test` 走与生产触发完全相同的执行路径，**不豁免 Budget 三闸**，同样过权限面检查，记 `SCRIPT_TEST` audit 事件（标注为 TEST run）。ack 立即返受理回执（`{accepted:true, ruleId}`），执行轨迹通过独立 `script.trace` S→C op 异步推回（避免 Jetty worker 被 wait 续接阻塞 5s 超时）。
 
 ### 13.7 脚本相关 audit 事件
 
@@ -725,7 +715,7 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 | `SCRIPT_DELETE` | script.delete op 成功 | sessionId, wallId, ruleId |
 | `SCRIPT_ENABLE` | script.enable op 成功 | sessionId, wallId, ruleId, enabled |
 | `SCRIPT_TEST` | script.test op 受理 | sessionId, wallId, ruleId, facets |
-| `SCRIPT_RUN_BLOCKED` | Budget 闸拒（K5 per-rule 10s 去重） | ruleId, reason(chain\|runs\|actions), chainDepth |
+| `SCRIPT_RUN_BLOCKED` | Budget 闸拒（per-rule 10s 去重） | ruleId, reason(chain\|runs\|actions), chainDepth |
 | `SCRIPT_COMMAND_EXECUTED` | runCommand 积木执行命令（不限频，每次记） | templateId, rendered 全文, ruleKey |
 
 `log` 动作（`Action.Log`）**不进 audit**（玩家级高频动作进 audit 会刷库）；仅进 plugin logger INFO 级别。

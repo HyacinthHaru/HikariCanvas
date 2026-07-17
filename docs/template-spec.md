@@ -7,7 +7,7 @@
 
 本文档定义模板的 YAML 结构。模板是用户面的重要扩展点，**格式一旦在 v1.0 发布就不再做破坏性变更**；新字段只能以向后兼容方式加入。
 
-> **两种模板模式（M14 起）：**
+> **两种模板模式：**
 > 1. **声明式 layout 模式**——本文 §2-§7 描述的手写 YAML（`canvas` + `params` + `layout`），内置模板与服主手写模板走这条。
 > 2. **raw_state 模式**——玩家在编辑器里点「存当前招牌为模板」，系统把当前 `ProjectState` 整体内嵌进模板的 `raw_state` 字段（见 §2.1）。这是玩家创意工坊的主路径。
 >
@@ -21,7 +21,7 @@
 | --- | --- |
 | 内置模板 | jar 内 `resources/templates/*.yml`（只读） |
 | 服务器模板 | `plugins/HikariCanvas/templates/*.yml` |
-| 玩家模板（M14 起，创意工坊） | `plugins/HikariCanvas/user-templates/<uuid>/*.yml` |
+| 玩家模板（创意工坊） | `plugins/HikariCanvas/user-templates/<uuid>/*.yml` |
 
 加载顺序：**内置 → 服务器 → 玩家**（代码出处 `TemplateRegistry.reload`）。覆盖规则**不对称**：
 - **服务器模板同 `id` 覆盖内置**（允许服主替换内置模板）
@@ -29,7 +29,7 @@
 
 启动时全部扫描解析，失败的单个模板记 warn log，不影响其他模板加载。`/canvas reload templates` 热重载（管理员权限 `canvas.admin`，原子 swap 一次性替换 `volatile` registry 引用避免半态）。
 
-**解析库（M6 决策 2026-05-11）：** `jackson-dataformat-yaml` 2.18.2，与项目 Jackson 主线一致。YAML 直接 `readValue` 到 record（详见 `docs/security.md §4.3`）。不开 polymorphic typing、不允许 `@class` 之类字段。
+**解析库：** `jackson-dataformat-yaml` 2.18.2，与项目 Jackson 主线一致。YAML 直接 `readValue` 到 record（详见 `docs/security.md §4.3`）。不开 polymorphic typing、不允许 `@class` 之类字段。
 
 ---
 
@@ -60,7 +60,7 @@ layout:                     # 布局与元素（raw_state 模式可省略）
 | 字段 | 必填 | 类型 | 说明 |
 | --- | --- | --- | --- |
 | `spec` | ✅ | int | 格式版本，当前 `1`。插件拒绝更高 spec |
-| `id` | ✅ | string | 匹配 `^[a-z][a-z0-9_-]{2,63}$`（小写字母开头，含数字 / `_` / `-`，长度 3~64；M14 起允许 `-` 以容纳 `user-<uuid8>-<slug>` 工坊命名） |
+| `id` | ✅ | string | 匹配 `^[a-z][a-z0-9_-]{2,63}$`（小写字母开头，含数字 / `_` / `-`，长度 3~64；允许 `-` 以容纳 `user-<uuid8>-<slug>` 工坊命名） |
 | `name` | ✅ | string | UI 显示名，支持 Unicode，长度 ≤ 64 |
 | `description` | | string | |
 | `version` | | int | 模板内容版本，服主自管 |
@@ -71,7 +71,7 @@ layout:                     # 布局与元素（raw_state 模式可省略）
 | `layout` | △ | object | 见 §4。声明式 layout 模式必填；raw_state 模式可省略 |
 | `raw_state` | △ | object | 见 §2.1。raw_state 模式专用；与 `layout` 二选一 |
 
-> **`preview` 字段已废弃。** 文档早期版本有 `preview: "previews/xxx.png"` 字段；自 M7 起编辑器缩略图改为服务端动态渲染（`GET /api/template/{id}/preview.png`，见 §7 / §12），模板里写 `preview` 无效（解析时静默忽略，不报错）。
+> **`preview` 字段已废弃。** 编辑器缩略图走服务端动态渲染（`GET /api/template/{id}/preview.png`，见 §7 / §12），模板里写 `preview` 无效（解析时静默忽略，不报错）。
 
 ---
 
@@ -104,7 +104,7 @@ params:
 
 **实例化（`TemplateInstantiator`）：** 检测到 `raw_state` 非空时，深拷贝 raw_state → 遍历 Map 把**所有 String 字段**中的 `${param}` 占位符替换为参数值 → 反序列化回 `ProjectState` → 走 EditSession replace。raw_state 内的 element 同样跑 `validateElementForTemplateApply` 二次安全校验（坐标 / 尺寸 / 旋转 / fill / mask / image source 等），防止玩家通过模板注入畸形 element。
 
-**安全阈值（M16）：** raw_state 嵌套深度上限 32（`MAX_DEEP_COPY_DEPTH`）；单文档 YAML 码点上限 5 MiB；anchor/alias 展开上限 50。
+**安全阈值：** raw_state 嵌套深度上限 32（`MAX_DEEP_COPY_DEPTH`）；单文档 YAML 码点上限 5 MiB；anchor/alias 展开上限 50。
 
 ---
 
@@ -123,7 +123,7 @@ params:
 | `canvas.template.bypass-limit` | `op` | 跳过每玩家发布数量配额 |
 | `canvas.template.use-others` | `op` | apply 其他玩家拥有的工坊模板（跨用户隔离 bypass） |
 
-**跨用户隔离（M16 P1.6）：** 非 owner 且无 `canvas.template.use-others` 的玩家，ready 帧模板列表里看不到他人的工坊模板，apply 时也被 `ForbiddenTemplateException` 拦截。builtin / server 模板不受此限。
+**跨用户隔离：** 非 owner 且无 `canvas.template.use-others` 的玩家，ready 帧模板列表里看不到他人的工坊模板，apply 时也被 `ForbiddenTemplateException` 拦截。builtin / server 模板不受此限。
 
 **发布配额：** `config.yml → templates.max-per-player`（默 20；`0` = 不限）。持 `canvas.template.bypass-limit` 的玩家跳过配额；超额发布返 `QUOTA_EXCEEDED`（更新同 slug 的现有模板不计配额，给宽限）。
 
@@ -190,7 +190,7 @@ layout:
 >
 > 运行时 `ProjectState` 有 **8 种** element：`text` / `rect` / `circle` / `shape` / `path` / `brush` / `image` / `icon`（代码出处 `state/Element.java`）。raw_state 模式（§2.1）内嵌的是完整 ProjectState，故 8 种全部可用；声明式 layout 模式只暴露上述 4 种。
 >
-> **`rotation` 是连续整数**，范围 `[0, 360)`，任意角度均可（`ElementValidator.validateRotation` 校验 `0 ≤ r < 360`）。文档早期写的「0 | 90 | 180 | 270 四直角」是错误约束，代码从未限制为直角。
+> **`rotation` 是连续整数**，范围 `[0, 360)`，任意角度均可（`ElementValidator.validateRotation` 校验 `0 ≤ r < 360`）。
 
 ### 4.3 text 元素
 
@@ -217,7 +217,7 @@ layout:
       color: "#FFD700"       # 支持 ${param}
 ```
 
-> **字体 ID 示例已更新。** 文档早期用 `sourcehan` / `source han` 等过时名；现实内置字体 ID 形如 `source_han_sans`（黑体）/ `source_han_serif`（宋体）/ `ark_pixel`（像素）/ `smiley_sans` 等（见 CLAUDE.md 字体矩阵）。模板未指定 `font` 时缺省 `ark_pixel`（`TemplateInstantiator` 默认值）。`content` 缺省空串、`color` 缺省 `#000000`、`size` 缺省 24、`align` 缺省 `left`。
+> **字体 ID 示例。** 内置字体 ID 形如 `source_han_sans`（黑体）/ `source_han_serif`（宋体）/ `ark_pixel`（像素）/ `smiley_sans` 等（见 CLAUDE.md 字体矩阵）。模板未指定 `font` 时缺省 `ark_pixel`（`TemplateInstantiator` 默认值）。`content` 缺省空串、`color` 缺省 `#000000`、`size` 缺省 24、`align` 缺省 `left`。
 >
 > **数值范围（钳位 / 拒绝，代码出处 `state/ElementValidator.java`）：** `size` 钳位 `[1, 512]`、`line_height` 钳位 `[0.5, 4.0]`、`letter_spacing` 钳位 `[-32, 128]`；`stroke.width ≤ 128`、`shadow` 偏移 `±128`、`glow.radius ≤ 64`。文本内容（插值后）长度 > 256（`MAX_TEXT_LEN`）报 `INVALID_TEMPLATE`。`effects` 块内三处 `color` 均支持 `${param}`。
 
@@ -229,7 +229,7 @@ layout:
   h: 16
   fill: "${line_color}"     # 声明式 layout 模式：hex 字符串 / ${param}（→ SolidFill）
   stroke:
-    width: 1                # 支持 ${param}（P2-36）
+    width: 1                # 支持 ${param}
     color: "#000000"
 ```
 
@@ -266,17 +266,15 @@ layout:
   tint: "${line_color}"    # deprecated：染色（source-in 合成）；空 = 原色。新数据改用 fill
 ```
 
-**M7 起实装。**
-
 **声明式 layout 模式的 icon**（`TemplateElement.Icon`）：解析阶段对 `source` 做严格 whitelist 校验 `^[a-z0-9_-]{1,32}$`（`TemplateAssetService.SAFE_NAME`，仅 PNG）。运行期解析顺序：先 classpath `/template-assets/icons/<source>.png`（jar 内 builtin）→ 后 `plugins/HikariCanvas/assets/icons/<source>.png`（服主自定义）。找不到 → 占位虚线方框 + `?`，不阻塞渲染。前端通过 `/api/template-asset/icons/<source>.png` 拿真图。
 
-**运行时 icon（raw_state 模式 / 编辑器内的 `IconElement`）source 规则已大幅扩展**（M26，代码出处 `state/IconElement.java`，`SOURCE_RE = ^[a-z0-9_-]+(/[a-z0-9_.-]+)?$`，长度 ≤ 64）：
+**运行时 icon（raw_state 模式 / 编辑器内的 `IconElement`）source 规则**（代码出处 `state/IconElement.java`，`SOURCE_RE = ^[a-z0-9_-]+(/[a-z0-9_.-]+)?$`，长度 ≤ 64）：
 - `fa-solid/<name>` / `fa-regular/<name>` / `fa-brands/<name>` — Font Awesome Free 矢量图标（如 `fa-solid/heart`）
-- `material/<name>` — Material Symbols（M27 hook）
+- `material/<name>` — Material Symbols
 - `user/<id>` — 用户自定义 SVG（`plugins/HikariCanvas/icons/<id>.svg`）
 - 不含 `/` 的 legacy 形态（如 `heart`）— 走 PNG 兼容路径
 
-**染色字段：`tint` 已 deprecated，主字段是 `fill`。** M26 起矢量 path 填充走 `Fill` 联合类型（与 rect / circle / shape 共用）。模板若只写了 `tint`，实例化 / 反序列化时升级为 `SolidFill(tint)`；同时存在 `fill` + `tint` 时以 `fill` 为准。`fill == null` 表示用图标包默认色。新数据不应再写 `tint`。
+**染色字段：`tint` 已 deprecated，主字段是 `fill`。** 矢量 path 填充走 `Fill` 联合类型（与 rect / circle / shape 共用）。模板若只写了 `tint`，实例化 / 反序列化时升级为 `SolidFill(tint)`；同时存在 `fill` + `tint` 时以 `fill` 为准。`fill == null` 表示用图标包默认色。新数据不应再写 `tint`。
 
 后端 PNG 染色用 `AlphaComposite.SrcIn`，前端用 `globalCompositeOperation: 'source-in'`，**两端语义一致**。builtin PNG 图标示例：`info` / `warning` / `star` / `arrow_right`（32×32，纯白 alpha 形状）。
 
@@ -343,7 +341,7 @@ params:
 | `required` | 是否必填 |
 | `default` | 默认值 |
 | `visible_when` | 条件显示表达式（见 §6） |
-| `group` | 表单分组名（UI 分节） |
+| `group` | 表单分组名（UI 分节：TemplateGallery 按 `group` 字符串分节、首次出现顺序排序，section header 点击折叠；无 `group` 的 param 进默认组无标题） |
 
 ---
 
@@ -362,7 +360,7 @@ fill: "${line_color}"
 
 ### 6.2 条件表达式（visible_when / visible）
 
-文法（0.7.0-P2 K2 扩充版；模板 `visible_when` 与脚本条件共用 `ExpressionParser`，拿到无破坏超集，代码出处 `template/expr/ExpressionParser.java`）：
+文法（模板 `visible_when` 与脚本条件共用 `ExpressionParser`，代码出处 `template/expr/ExpressionParser.java`）：
 
 ```
 or      := and ( "||" and )*
@@ -378,7 +376,7 @@ primary := "var" "(" string ")" | ident | number | string
 
 优先级（高 → 低）：`! -`（一元）→ `* /` → `+ -` → 比较（`< <= > >=`）→ `== !=` → `&&` → `||`，与 C 系语言一致。**比较禁止连串**：`1 < 2 < 3` 直接 parse error（用 `&&` 拼接）。`var("user/score")` 解析为变量引用（脚本条件用；裸 `var` 是保留字，不允许当标识符）。除 `var` 外不支持函数调用、字段访问。
 
-`==` / `!=` 语义（0.7.0-P2-2b 契约修订，实现与脚本条件共用 `ExpressionEvaluator`）：
+`==` / `!=` 语义（实现与脚本条件共用 `ExpressionEvaluator`）：
 **双侧均为数值形态**（数字字面量或整串匹配 StrictNumber 文法的字符串）时走数值等值
 （`"3.50" == 3.5` 为 true）；任一侧非数值形态走 Boolean truthy / 字符串等值链
 （`"abc" == 0` 为 false）。
@@ -390,7 +388,7 @@ visible_when: "show_english == true && name != \"\""
 
 ### 6.3 尺寸百分比
 
-`w: 100%` / `h: 50%` 表示相对**父容器**内容区的百分比。不支持嵌套父容器链上的复杂计算。
+`w: 100%` / `h: 50%` 表示相对**父容器**内容区的百分比。不支持嵌套父容器链上的复杂计算。父容器 = canvas 内容区（canvas pixel 尺寸减 padding 的 4 元数组），`stack` 与 `free` 一致；`stack` 内 element 的 `w/h` 默认撑满父容器，显式 N% 也按父容器算。
 
 ---
 
@@ -407,9 +405,9 @@ visible_when: "show_english == true && name != \"\""
    - 按 `layout.type` 计算每个元素最终 `x, y, w, h`
 4. **转换为 ProjectState**：输出 `protocol.md §7` 定义的数据结构，推入当前 EditSession
 
-**Apply 语义（M6 决策）：replace**——`template.apply` 清空当前 wall 的 `elements` 列表 + 改 `canvas.background`，写入模板实例化产物。前端 UI 必须在调用前弹"应用会覆盖当前内容"二次确认。merge 语义（保留现有自由元素 + 叠加模板）留 v2+。
+**Apply 语义：replace**——`template.apply` 清空当前 wall 的 `elements` 列表 + 改 `canvas.background`，写入模板实例化产物。前端 UI 必须在调用前弹"应用会覆盖当前内容"二次确认。merge 语义（保留现有自由元素 + 叠加模板）留 v2+。
 
-**Layout 实装范围：** `stack` + `free` + `grid`（M7 起 grid 实装；按 `columns × rows` 平铺，超容截断）。
+**Layout 实装范围：** `stack` + `free` + `grid`（`grid` 按 `columns × rows` 平铺、cell 尺寸 = `(content - (n-1)·gap) / n`，超容截断）。
 
 **raw_state 模式实例化（§2.1）走另一条路径：** 跳过上述步骤 2-3 的尺寸计算与 layout 排布；尺寸 / canvas / element 全在内嵌 ProjectState 内自带，只做占位符替换 + element 安全二次校验后 replace。
 
@@ -448,7 +446,7 @@ visible_when: "show_english == true && name != \"\""
 解析模板时的校验（失败则该模板不加载，不影响其他）：
 
 - `spec` 必须为当前支持的版本（≤ `SUPPORTED_SPEC = 1`，且 > 0）
-- `id` 匹配 `^[a-z][a-z0-9_-]{2,63}$`（M14 起含 `-`）
+- `id` 匹配 `^[a-z][a-z0-9_-]{2,63}$`（含 `-`）
 - `name` 非空，长度 ≤ 64
 - `canvas` 在声明式 layout 模式必填，raw_state 模式可省略
 - `canvas.maps` / `canvas.min_maps` / `canvas.max_maps` 各维度 1~16；`size: fixed` 时 `maps` 必填
@@ -558,7 +556,3 @@ v1.0 不实现，`pack.yml` 字段设计在 v2.0 专项讨论。
 ## 12. 未决问题
 
 - [ ] 是否允许模板间继承（`extends: base_template`）—— v2+
-- [x] `grid` 布局细节 —— **M7 实装**：按 `columns × rows` 平铺、cell 尺寸 = `(content - (n-1)·gap) / n`；超容截断
-- [x] 参数组（`group`）的 UI 表现细节 —— **M7 实装**：TemplateGallery 按 `group` 字符串分节、首次出现顺序排序；section header 点击折叠。无 `group` 字段的 param 进默认组无标题
-- [x] 模板 `preview` 图片尺寸与格式规范 —— **M7 改为服务端动态渲染**：`/api/template/{id}/preview.png` 用 default params 跑 instantiator + compositor 输出 PNG，模板里的 `preview` 字段 v1 不再用
-- [x] 百分比计算在 `stack` 布局下的父容器定义 —— **M6-C 已固化**：父容器 = canvas 内容区（canvas pixel 尺寸减 padding 的 4 元数组），与 `free` 一致。stack 内 element 的 `w/h` 默认撑满父容器；显式 N% 也按父容器算

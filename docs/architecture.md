@@ -17,65 +17,6 @@
 
 玩家在游戏里锁定一面墙 → 打开浏览器编辑器 → 编辑实时投影到那面墙上 → 任何时候都能再次打开继续改；作者可在前端 TopBar 触发 lock 把 wall 冻结为只读（其他玩家拿到 `/canvas open` 也只能查看，无解锁路径）。
 
-### 3.6 lock 状态（2026-05-14 引入）
-
-`walls.published_at` 列保留原名，**语义改为 lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定。owner 由 `walls.owner_uuid` 决定（M5.5 已有字段）。
-
-```
-玩家 A（owner）──── 前端 TopBar Lock 按钮 ──▶ ws.send(wall.lock)
-                                                    │
-                              WebServer 校验 caller UUID == owner_uuid
-                                                    │
-                              WallRepo.markPublished(wallId)  ── UPDATE walls.published_at = now（now 由 DAO 内部取）
-                                                    │
-                              ack 回前端 + 广播状态变更
-                                                    │
-                                          前端 readonly UI 生效
-
-玩家 B（非 owner）/canvas open ──▶ ready payload 含 lockedAt + ownerUuid + selfUuid
-                                       │
-                              前端 computed isOwner = (selfUuid === ownerUuid) = false
-                                       │
-                              UI 显示"已锁定，仅作者可解锁"，Lock 按钮 disabled
-                                       │
-                              用户开发者工具绕过前端 lock → 编辑 op 仍能发送 + 后端接受
-                              （后端编辑 op 不读 lock 状态——这是 lock-state 重设计的核心）
-```
-
-**关键不变量**：lock 是 UX 层概念，不阻挡 op 路径。如果作者发布锁定的 wall，但内部系统（如未来的动态展示）想用 ws.send(element.update) 更新内容，**不会被 lock 拒**。这是 2026-05-14 砍 published 概念的根本动机。
-
-### 3.6.1 草稿 wall 协作语义（M16 确认）
-
-**未锁定 wall（lockedAt=null）= 协作中间态**：任何 `canvas.edit` 玩家可 `/canvas open <wall_id>`，进入 ACTIVE 编辑。`byWall` 排他锁保证同一时刻只有一个活跃 session，但接力 / 切换 owner 完全开放——前一玩家 `cancel` 后下一玩家立即 open。这是 v1 的协作模型（接力 ≠ 实时多人，OT/CRDT 永久不做）。
-
-**锁定 wall（lockedAt 非 null）**：M15.3 鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`（`SessionManager.open` 入口拦截）。
-
-> **`wall.lock` / `wall.unlock` WS op 本身严格 owner-only，无 admin bypass**（`WallOpDispatcher` 直接比 `wall.ownerUuid == caller`，非 owner 一律 `FORBIDDEN`）。`canvas.admin.bypass-lock` 仅作用于"打开已锁定 wall"的 open 路径，不放行"代替 owner 锁/解锁"。
-
-**未来 ACL（owner-only 草稿）**：若服主想要"草稿也仅 owner 可改"的语义，走 v1.x 协作 scope（新增 `walls.acl` 列 + acl-aware open 校验）；详见 §13 动态画板路径的同源扩展思路（acl 字段同样不进编辑 op 路径，仅在 open 鉴权点生效）。
-
-### 3.6.2 多世界假设（M16-P2.3 改）
-
-**MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；M16 起 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。
-
-- `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（全局受 `map-pool.max` 限制）
-- `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（之前 silent bind 会让 map 显示在错误维度）
-- 跨世界绑定路径被根除：WallRestorer 启动恢复 / `/canvas open` / `confirm` 三处都走 world-aware 路径
-- 失败兜底：WallRestorer 任一 wall 恢复异常 → `MapPool.releaseToFree(mapIds, world)` 回收避免 idcounts.dat 膨胀（**项目核心风险**，详见 PROPOSAL §5.2.6）；同时审计 `POOL_RELEASE_TO_FREE`
-
-**配置（config.yml，实际键名）**：
-
-```yaml
-map-pool:
-  initial: 64            # 全局默认预热张数
-  max: 256               # 池上限（全局）
-  per-world:             # 可选：按 world name 覆写 initial（值是单个 int，仅预热张数）
-    world: 32            # overworld 预热 32 张
-    world_nether: 8      # nether 预热 8 张
-```
-
-per-world 只覆写每世界的预热张数（`initial`），无独立 max；未列出的 world 走 on-demand 扩容（首次 confirm 时 `createMap`），全局 `max` 是唯一总上限。无 per-world 配置时各 world 仍独立分桶，按需扩容。
-
 ### 1.2 高层拓扑
 
 ```
@@ -207,7 +148,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
                                   （CanvasView overlay + RightPanel 禁用 + 快捷键守卫）
 ```
 
-2026-05-14 lock-state 重设计：DB 列 walls.published_at 保留原列名（避 SQL 迁移），语义改为 lock 时间戳；non-owner 调用 wall.lock/unlock 返 FORBIDDEN。ItemFrame PDC 不再写 published_at（FrameDeployer.markPublished 已砍）；M7 引入的"已发布拦截"已砍，所有 wall ItemFrame 由 canvas.modify 权限统一保护。
+lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），语义为 lock 时间戳；non-owner 调用 wall.lock/unlock 返 FORBIDDEN。ItemFrame PDC 不写 published_at；所有 wall ItemFrame 由 canvas.modify 权限统一保护。
 
 **删除（仅此操作真正移除 wall）：**
 ```
@@ -262,7 +203,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 
 ## 3. 编辑会话生命周期
 
-> **M5.5 重要变化**：状态机本身保持 SELECTING → ISSUED → ACTIVE → CLOSING；删除 `commit` 转移分支。`ACTIVE → CLOSING` 仅由 cancel / disconnect 触发；新增 `/canvas open` 直接进 ACTIVE（绕开 SELECTING / ISSUED 选区流程）。
+> **状态机概要**：状态机为 SELECTING → ISSUED → ACTIVE → CLOSING，无 `commit` 转移分支。`ACTIVE → CLOSING` 仅由 cancel / disconnect 触发；`/canvas open` 直接进 ACTIVE（绕开 SELECTING / ISSUED 选区流程）。
 >
 > **状态枚举校正**：`SessionState` 实际只有 `SELECTING / ISSUED / ACTIVE / CLOSING` 四态，无独立 `CLOSED` 终态。会话取消 / 超时后进入 `CLOSING`（不可逆清理路径），SessionManager 将其从索引（byId / byPlayer / byWall）摘除、逻辑隐退；新会话由 `/canvas edit` / `/canvas open` 全新创建，而非从某个 `CLOSED` 态恢复。下文状态机图与转移表沿用历史叙述方便理解，凡标 `CLOSED` 处即指"无活跃会话"这一隐含起点 / 终点，非枚举中的真实状态。
 
@@ -327,9 +268,68 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
 - **每面墙最多 1 个活跃会话**（排他锁，wall_id 为 key）。M5.5 不做协作编辑（OT/CRDT 超 scope）
 - 池容量耗尽：拒绝新会话，提示用户稍后；wall 占的 map 一直占着不自动释放，需 `/canvas delete` 显式清
 
+### 3.6 lock 状态
+
+`walls.published_at` 列保留原名，**语义改为 lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定。owner 由 `walls.owner_uuid` 决定。
+
+```
+玩家 A（owner）──── 前端 TopBar Lock 按钮 ──▶ ws.send(wall.lock)
+                                                    │
+                              WebServer 校验 caller UUID == owner_uuid
+                                                    │
+                              WallRepo.markPublished(wallId)  ── UPDATE walls.published_at = now（now 由 DAO 内部取）
+                                                    │
+                              ack 回前端 + 广播状态变更
+                                                    │
+                                          前端 readonly UI 生效
+
+玩家 B（非 owner）/canvas open ──▶ ready payload 含 lockedAt + ownerUuid + selfUuid
+                                       │
+                              前端 computed isOwner = (selfUuid === ownerUuid) = false
+                                       │
+                              UI 显示"已锁定，仅作者可解锁"，Lock 按钮 disabled
+                                       │
+                              用户开发者工具绕过前端 lock → 编辑 op 仍能发送 + 后端接受
+                              （后端编辑 op 不读 lock 状态——这是 lock-state 重设计的核心）
+```
+
+**关键不变量**：lock 是 UX 层概念，不阻挡 op 路径。如果作者发布锁定的 wall，但内部系统（如未来的动态展示）想用 ws.send(element.update) 更新内容，**不会被 lock 拒**。
+
+### 3.6.1 草稿 wall 协作语义
+
+**未锁定 wall（lockedAt=null）= 协作中间态**：任何 `canvas.edit` 玩家可 `/canvas open <wall_id>`，进入 ACTIVE 编辑。`byWall` 排他锁保证同一时刻只有一个活跃 session，但接力 / 切换 owner 完全开放——前一玩家 `cancel` 后下一玩家立即 open。这是 v1 的协作模型（接力 ≠ 实时多人，OT/CRDT 永久不做）。
+
+**锁定 wall（lockedAt 非 null）**：M15.3 鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`（`SessionManager.open` 入口拦截）。
+
+> **`wall.lock` / `wall.unlock` WS op 本身严格 owner-only，无 admin bypass**（`WallOpDispatcher` 直接比 `wall.ownerUuid == caller`，非 owner 一律 `FORBIDDEN`）。`canvas.admin.bypass-lock` 仅作用于"打开已锁定 wall"的 open 路径，不放行"代替 owner 锁/解锁"。
+
+**未来 ACL（owner-only 草稿）**：若服主想要"草稿也仅 owner 可改"的语义，走 v1.x 协作 scope（新增 `walls.acl` 列 + acl-aware open 校验）；详见 §13 动态画板路径的同源扩展思路（acl 字段同样不进编辑 op 路径，仅在 open 鉴权点生效）。
+
+### 3.6.2 多世界假设
+
+**MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；M16 起 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。
+
+- `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（全局受 `map-pool.max` 限制）
+- `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（之前 silent bind 会让 map 显示在错误维度）
+- 跨世界绑定路径被根除：WallRestorer 启动恢复 / `/canvas open` / `confirm` 三处都走 world-aware 路径
+- 失败兜底：WallRestorer 任一 wall 恢复异常 → `MapPool.releaseToFree(mapIds, world)` 回收避免 idcounts.dat 膨胀（**项目核心风险**，详见 PROPOSAL §5.2.6）；同时审计 `POOL_RELEASE_TO_FREE`
+
+**配置（config.yml，实际键名）**：
+
+```yaml
+map-pool:
+  initial: 64            # 全局默认预热张数
+  max: 256               # 池上限（全局）
+  per-world:             # 可选：按 world name 覆写 initial（值是单个 int，仅预热张数）
+    world: 32            # overworld 预热 32 张
+    world_nether: 8      # nether 预热 8 张
+```
+
+per-world 只覆写每世界的预热张数（`initial`），无独立 max；未列出的 world 走 on-demand 扩容（首次 confirm 时 `createMap`），全局 `max` 是唯一总上限。无 per-world 配置时各 world 仍独立分桶，按需扩容。
+
 ---
 
-### 3.7 图片上传数据流（M13 引入）
+### 3.7 图片上传数据流
 
 `/api/upload` 走纯 HTTP（不经 WS），与编辑 op 通道完全解耦。配额跟踪在专表 `image_uploads`；ImageElement.source 持 sha256[:16] hash，跨 wall 引用同 hash 文件零重复存储。
 
@@ -401,7 +401,7 @@ PooledMap
 └── paletteBuffer: byte[128*128]   当前像素（调色板索引）
 ```
 
-> M5.5 重构：`signId` 字段彻底删除；`reservedBy` 在 wall 模型下是 `wall:<wall_id>`（M5-D7 短暂出现的 `draft:<wallTag>` 前缀也合并进去）。`session_id` 概念不再写入 pool_maps —— 会话只是临时持有者，真正持有 map 的是 wall。
+> `reservedBy` 在 wall 模型下是 `wall:<wall_id>`。`session_id` 概念不写入 pool_maps —— 会话只是临时持有者，真正持有 map 的是 wall。
 
 池持有一个 `List<PooledMap>` + 两个索引：
 - `freeQueue: Deque<PooledMap>` — O(1) 借出
@@ -622,7 +622,7 @@ CI 集成：
 
 ### 7.1 交互与选区（两段式）
 
-> **墙面方向限制（长期现状）**：`WallResolver` 目前**仅支持垂直墙面**（朝向必须是水平的 N/S/E/W）。天花板 / 地板（UP/DOWN）会被拒为 `VERTICAL_ONLY`。这是从早期就存在、至今未放宽的真实限制（代码注释里"M2/M4+ 再放宽"仅为历史标记，并无后续放宽实装）。
+> **墙面方向限制**：`WallResolver` **仅支持垂直墙面**（朝向必须是水平的 N/S/E/W）。天花板 / 地板（UP/DOWN）会被拒为 `VERTICAL_ONLY`。
 
 **第一段：进入 SELECTING 状态**
 
@@ -962,7 +962,7 @@ logging:
 
 ---
 
-## 13. 动态画板设计约束（M15.3 拍板，0.4.0 细化）
+## 13. 动态画板设计约束
 
 > **0.4.0 详细设计**：`docs/dynamic-data.md`（变量系统 + Push API + UX + 权限）。本节为顶层架构约束。
 
@@ -976,7 +976,7 @@ logging:
 - ✅ Lock 锁的是「模板编辑」，不是「显示内容更新」
 - ✅ 玩家 lock 后模板冻结，但每帧仍读最新动态值
 
-**关键纪律（不可越界）**：
+**关键约束**：
 
 1. **Push > Pull**：HikariCanvas 不做 active polling 外部数据；插件主动 push
 2. **变量是 string**：HikariCanvas 不解析业务语义，纯字符串 forward
@@ -996,7 +996,7 @@ logging:
 **P-2 定时 patch ProjectState**：后台 task 每 N 秒 `EditSession.updateElement`。
 **不允许** — 会撞 lock-aware open 鉴权 + 撑爆 history 栈 + 产生大量 WS 流量。
 
-变量系统取代这条死路。
+P-2 由变量系统取代。
 
 **AnimationTicker（0.6，§5.5）不属于 P-2 反模式。** 它在 Ticker 线程内算**临时**插值 ProjectState 直接渲染（与 P-1 用 cached 变量值渲染同路），**从不** mutate 持久化 ProjectState、不进 history 栈、不发 WS 编辑流量。与被禁的"后台 task 定时 `EditSession.updateElement`"有本质区别。
 
@@ -1004,17 +1004,17 @@ logging:
 
 ---
 
-## 14. 前端工具栏 & 交互模式（M17 起固化）
+## 14. 前端工具栏 & 交互模式
 
 LeftTools 工具栏分两组：
 
 | 组 | 工具 | 快捷键 | 行为 |
 | --- | --- | --- | --- |
-| 非绘制（M17 引入 hand） | `select` | V | 默认；点击 / 框选 / Transformer 锚点 |
+| 非绘制 | `select` | V | 默认；点击 / 框选 / Transformer 锚点 |
 | | `move` | M | 同 select 的拖动子模式，禁用 marquee |
 | | `hand` | H | pan 模式；左键拖 outer scroll；与 marquee 互斥 |
-| 绘制 | `line` / `arrow` / `circle` / `star` | — | M9 引入 drag-to-create |
-| | `brush` | B | M12 引入 PointerEvent 接管 |
+| 绘制 | `line` / `arrow` / `circle` / `star` | — | drag-to-create |
+| | `brush` | B | PointerEvent 接管 |
 
 **Space 临时切 hand**：keydown Space 闭包 `spaceSavedTool` 保存原工具 → 切 hand；keyup 恢复。`e.repeat` 保护防 OS 长按重复；window blur 兜底防卡死；keydown preventDefault 防 Space 触发页面滚动。
 
@@ -1024,7 +1024,7 @@ LeftTools 工具栏分两组：
 
 ---
 
-## 15. 前端智能对齐 useSnapManager（M17 引入）
+## 15. 前端智能对齐 useSnapManager
 
 `web/src/composables/useSnapManager.ts` 是 drag + resize 共用的对齐能力 composable。**O(n) 线性**，100 elements ≈ 1800 比较 / frame，无 spatial index（留 v1.x）。
 
@@ -1073,7 +1073,7 @@ ui store 字段：`snapEnabled / snapToGrid / snapToCanvas / snapToElement / sna
 
 **fade**：drag / transform end 立刻清 `activeSnapHints = null`，layer `v-if` 自然卸载；CSS fade 留 v1.x。
 
-## 16. Live Paint 子系统（M18 引入，2026-05-17）
+## 16. Live Paint 子系统
 
 油漆桶工具：用户点击画布上某个位置 → 系统识别该点所在的"闭合空白 gap"（被一组元素轮廓包围的连通区域）→ 生成对应 PathElement 并以当前 fill 填充；点击元素内部时直接修改该元素的 fill 字段（vector-fill 决策 A）。
 
@@ -1167,7 +1167,7 @@ element.add type=path  落库 + 后端 PathRenderer 渲染
 
 ---
 
-## 17. 脚本运行时架构（0.7.0 引入）
+## 17. 脚本运行时架构
 
 > **契约总纲**：`docs/scripting.md`（D1-D8 决策 / 执行管线 §3 / Budget §2.4 / 命令白名单 §5 / 权限 §6）。本节仅固化脚本系统在整体架构中的定位与线程契约，不重复设计细节。
 
@@ -1223,7 +1223,7 @@ ActionExecutor — 按动作类型分发：
 
 ### 17.4 setElementProperty 双路径
 
-脚本改元素属性时走两条路径（照 0.4 动态变量 headless 路径先例）：
+脚本改元素属性时走两条路径：
 
 | 场景 | 路径 | 行为 |
 |---|---|---|
@@ -1249,11 +1249,11 @@ headless 路径的已知竞态（可接受）：若 session open/close 与 headl
 
 ---
 
-## 18. `.canvas` 工程导入 / 导出（0.8 Part A 引入）
+## 18. `.canvas` 工程导入 / 导出
 
 `.canvas` 是 HikariCanvas 的工程档格式——一个普通 zip，内含 `manifest.json`（spec/kind/wall 尺寸等元信息）+ `project.json`（整棵 `ProjectState`，多层 + 时间轴）+ 可选 `scripts.json`（墙脚本规则数组）+ 可选 `thumbnail.png`（256×128 缩略图）+ `assets/<hash>.png`（工程引用到的图片字节）。完整档案布局与 manifest 字段见 `docs/import-export.md`；本节只讲两条数据流与信任边界。
 
-> **信任边界（核心纪律）**：**导出在前端、导入在后端**。导出只是把已在内存的可信状态打成 zip 让浏览器下载，不经服务器；导入收的是用户上传的不可信 zip，所有防御（zip 炸弹 / 路径穿越 / magic 校验 / 元素与脚本重校验 / 配额）一律在 Java 侧做，前端不参与任何安全判定。
+> **信任边界**：**导出在前端、导入在后端**。导出只是把已在内存的可信状态打成 zip 让浏览器下载，不经服务器；导入收的是用户上传的不可信 zip，所有防御（zip 炸弹 / 路径穿越 / magic 校验 / 元素与脚本重校验 / 配额）一律在 Java 侧做，前端不参与任何安全判定。
 
 ### 18.1 导出数据流（前端 fflate，不经服务器）
 
