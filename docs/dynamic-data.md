@@ -1,6 +1,6 @@
 # 动态数据接入设计（0.4.0）
 
-> **状态**：规划阶段（2026-05-19 定稿）；实施留待用户通知。所有数据模型 / 协议 / API 决策以本文为准。
+> 本文是变量系统（0.4.0 起）的设计权威：所有数据模型 / 协议 / API 决策以本文为准。
 
 ## 0. 目标 & 设计哲学
 
@@ -14,12 +14,12 @@
 
 **核心定位**：HikariCanvas 是**展示层 + 通用扩展口 + 简单到中等内置编辑**，**不是业务系统**。专业数据（铁路时刻 / PvP 引擎 / 商店逻辑）由专业插件负责，HikariCanvas 提供统一 Push API 让它们推数据进来。
 
-**绝对纪律**（避技术债）：
+**设计约束**（避技术债）：
 - **Push 优于 Pull**：插件主动 push，HikariCanvas 不做 active polling
 - **变量是 string，业务在外**：HikariCanvas 只存字符串值 + 类型 hint；语义解析在插件侧
 - **零外部依赖可用**：内置变量族（time / online / wall.*）够普通用户做基础动态招牌
 - **PAPI 优先桥接**：不重新造已存在的轮子
-- **可视化脚本走 Blockly（1.x）**：避代码沙盒 RCE，玩家友好
+- **可视化脚本走积木化编辑器**：避代码沙盒 RCE，玩家友好（详见 `docs/scripting.md`）
 
 ---
 
@@ -100,7 +100,7 @@ ${var:eta_minutes|format=int|suffix=min}
 
 **正则**：`\$\{var:([^|}]+)(\|fallback=([^}]+))?\}`
 
-**P3-J 引入的 namespace 注入 / 别名规则**（双端 interpolator 一致）：
+**namespace 注入 / 别名规则**（双端 interpolator 一致）：
 
 - `${var:user/X}` + `wallId="w-abc"` → 内部 `user:w-abc/X`（user 变量是 per-wall）
 - `${var:wall.X}` + `wallId="w-abc"` → 内部 `system:w-abc/wall.X`（{{SystemVariableProvider}} 按
@@ -109,13 +109,12 @@ ${var:eta_minutes|format=int|suffix=min}
 - `${var:scoreboard.<obj>.<player>}` → 内部 `scoreboard/<obj>.<player>`（点分号 alias →
   slash；与 {{ScoreboardVariableProvider}} `store.create("scoreboard", "<obj>.<player>", …)` 存储
   侧约定一致）
-- `${var:server.time}` 等系统点分号 alias **暂未实现完整映射**（P3-J 仅 wall.* / scoreboard.\*）；
+- `${var:server.time}` 等系统点分号 alias 暂未实现完整映射（仅 wall.* / scoreboard.\* 注入）；
   系统变量当前以 slash 形式访问：`${var:system/server.time}`。完整 dot-alias 留 0.4.1+
-- **PAPI 形态（实测）**：`resolveFullName`（双端）**不解析 `papi:` 冒号语法**——`${var:papi:%xxx%}` 会按
-  字面 `papi:%xxx%` 查 store（必然 miss → fallback）。实际可用形态是 `${var:papi/%player_name%}`（斜杠）
+- **PAPI 形态**：`resolveFullName`（双端）不解析 `papi:` 冒号语法——`${var:papi:%xxx%}` 会按
+  字面 `papi:%xxx%` 查 store（必然 miss → fallback）。可用形态是 `${var:papi/%player_name%}`（斜杠）
   或 `${var:papi.player_name}`（点号）：interpolator resolve miss → `notifyDynamicLookup` →
-  {{PapiVariableBridge}} 把 `%xxx%` 编码成内部 store key `papi/pct_xxx_pct` 注册 + 5s 刷新。冒号语法是
-  早期纸面设计残留，**代码从未支持**。
+  {{PapiVariableBridge}} 把 `%xxx%` 编码成内部 store key `papi/pct_xxx_pct` 注册 + 5s 刷新。
 
 ---
 
@@ -174,7 +173,7 @@ VariableStore 变更通过 state.patch 推到客户端：
 ### 3.3 HTTP 端点
 
 - `GET /api/variable/list?wall=<wallId>` → 该 wall 引用的变量当前快照（暂未实装；ready payload 已能下发 wall 引用快照，前端不需要主动 fetch）
-- `GET /api/variable/list-all-namespaces?sessionId=<id>&wallId=<wallId>` → **所有可用 namespace + 已声明 keys**（编辑器 VariablePicker 自动补全用，P3-M 实装）
+- `GET /api/variable/list-all-namespaces?sessionId=<id>&wallId=<wallId>` → **所有可用 namespace + 已声明 keys**（编辑器 VariablePicker 自动补全用）
 - 只读端点 + 短 cache（仅 wallId 缺省路径 5s server-side cache；带 wallId 因 user 变量增删频繁直走实时算）
 
 #### `/api/variable/list-all-namespaces` 返样
@@ -259,7 +258,7 @@ public interface HikariCanvasAPI {
      * @throws PluginNamespaceException 如果 namespace 未注册或不属于 plugin
      */
     void setVariable(Plugin plugin, String namespace, String key, String value, @Nullable Duration ttl);
-    //               ^^^^^^^^^^^^ 新增第一参数（M28-P4 实施决策）
+    //               ^^^^^^^^^^^^ 第一参数：调用方 Plugin 实例（ACL spoof 防御）
 
     /**
      * 批量 push（性能：内部 dirty wall merge，比单次循环高效）
@@ -298,7 +297,7 @@ public record VariableUpdate(
 ) {}
 ```
 
-**实施实际接口**（M28-P4 落地）：
+**实际接口实现位置**：
 
 - 接口位置：`plugin/src/main/java/moe/hikari/canvas/api/HikariCanvasAPI.java`
 - 实现位置：`plugin/src/main/java/moe/hikari/canvas/variable/plugin/HikariCanvasAPIImpl.java`
@@ -355,7 +354,7 @@ public class BedWarsPlugin extends JavaPlugin {
 
 ## 5. 渲染期变量解析
 
-### 5.1 线程模型（**核心纪律**）
+### 5.1 线程模型
 
 **变量 resolve 不在 MC 主线程跑**：
 
@@ -402,7 +401,7 @@ public class BedWarsPlugin extends JavaPlugin {
 
 ## 6. 编辑器 UX
 
-### 6.1 变量管理面板（0.4.0-P2）
+### 6.1 变量管理面板
 
 新组件 `VariablePanel.vue`，挂在 RightPanel 底部或 Topbar 按钮触发：
 
@@ -497,7 +496,7 @@ public class BedWarsPlugin extends JavaPlugin {
 
 ### 7.2 Tier 4 PAPI 桥接
 
-**P3-K 实装**：`plugin/.../variable/provider/PapiVariableBridge.java`。软依赖 PAPI（不在 build.gradle 加 dep），通过 reflection 调 `me.clip.placeholderapi.PlaceholderAPI.setPlaceholders(OfflinePlayer, String)`。PAPI 未装时 `refreshInterval=ZERO` → daemon 不调度，整 `papi/*` namespace 不出现，**零开销**。
+实现位置：`plugin/.../variable/provider/PapiVariableBridge.java`。软依赖 PAPI（不在 build.gradle 加 dep），通过 reflection 调 `me.clip.placeholderapi.PlaceholderAPI.setPlaceholders(OfflinePlayer, String)`。PAPI 未装时 `refreshInterval=ZERO` → daemon 不调度，整 `papi/*` namespace 不出现，**零开销**。
 
 ```java
 // 抽象：PapiAccessor（生产用 ReflectionPapiAccessor，测试注入 fake）
@@ -533,7 +532,7 @@ public final class PapiVariableBridge implements VariableProvider {
 |---|---|---|
 | `${var:papi/%player_name%}`（斜杠）/ `${var:papi.player_name}`（点号） | `papi/pct_player_name_pct` | 原文 `%player_name%` |
 
-`handleDynamic` 接受两种形态（编码 `pct_xxx_pct` / 原文 `%xxx%`，前缀走 `papi/` 斜杠或 `papi.` 点号），统一编码为 `pct_<inner>_pct`；refresh 时按 tracker 内原文调 PAPI、按 encoded key 写 store。**实测纠正**：interpolator（`resolveFullName`，双端）对 papi namespace **不做任何特殊语法转换**——既不解析 `papi:` 冒号，也不主动编码 `%`。可用路径是玩家直接写 `${var:papi/%xxx%}` 或 `${var:papi.xxx}`，interpolator 按字面 resolve miss → `notifyDynamicLookup("papi/...")` → 本桥接 hook 接管编码 + 注册。`papi:` 冒号语法（早期 §3.1 纸面设计）**代码从未实现**。
+`handleDynamic` 接受两种形态（编码 `pct_xxx_pct` / 原文 `%xxx%`，前缀走 `papi/` 斜杠或 `papi.` 点号），统一编码为 `pct_<inner>_pct`；refresh 时按 tracker 内原文调 PAPI、按 encoded key 写 store。interpolator（`resolveFullName`，双端）对 papi namespace **不做任何特殊语法转换**——既不解析 `papi:` 冒号，也不主动编码 `%`。可用路径是玩家直接写 `${var:papi/%xxx%}` 或 `${var:papi.xxx}`，interpolator 按字面 resolve miss → `notifyDynamicLookup("papi/...")` → 本桥接 hook 接管编码 + 注册。
 
 **ACL**：HikariCanvas 不做额外 ACL，完全信任 PAPI（详见 §9.3）。
 
@@ -543,23 +542,23 @@ PAPI placeholder 自动 wrap 为 `papi/<encoded>` 变量；TTL 默认 5s（PAPI 
 
 ### 7.3 内置 Manual Schedule Provider（兜底列车功能）
 
-零外部依赖的"时刻表" provider，让玩家不依赖第三方铁路插件也能做基础站牌。**0.4.0 bugfix 后**支持每 wall 独立的分钟 / 秒精度，并把 `is_arriving` 阈值改为可配（默认 60s）。
+零外部依赖的"时刻表" provider，让玩家不依赖第三方铁路插件也能做基础站牌。支持每 wall 独立的分钟 / 秒精度，`is_arriving` 阈值可配（默认 60s）。
 
 - 玩家在 wall 的 "Schedule Manager" panel 配时刻表 + 选精度（minute / second）
-- 内置 provider 暴露 **15 个变量**（namespace = `schedule:<wallId>`；8 个基础 + 第二班次 `next2_*` 7 个，
-  M28-enhance 扩展。实测见 {{ManualScheduleProvider}}.ALL_KEYS）：
+- 内置 provider 暴露 **15 个变量**（namespace = `schedule:<wallId>`；8 个基础 + 第二班次 `next2_*` 7 个；
+  实测见 {{ManualScheduleProvider}}.ALL_KEYS）：
 
 | 变量 | 类型 | 示例 | 说明 |
 |---|---|---|---|
 | `next_departure` | STRING | `"08:30"` / `"08:30:45"` | 下一班车出发时间；HH:mm 或 HH:mm:ss（按 wall 精度） |
 | `next_destination` | STRING | `"郑州东站"` | 下一班车终点 |
 | `eta_minutes` | NUMBER | `"12"` | 距下一班车几分钟（向下兼容，整除丢秒） |
-| `eta_seconds` | NUMBER | `"742"` | **0.4.0 bugfix**：距下一班车几秒（秒精度主用） |
-| `eta_mmss` | STRING | `"12:22"` | **M28-enhance**：距下一班车 MM:SS 格式（超 99min 仍累加，如 `"150:30"`） |
+| `eta_seconds` | NUMBER | `"742"` | 距下一班车几秒（秒精度主用） |
+| `eta_mmss` | STRING | `"12:22"` | 距下一班车 MM:SS 格式（超 99min 仍累加，如 `"150:30"`） |
 | `is_arriving` | BOOLEAN | `"true"` | eta ≤ `arriving-threshold-seconds` 时为 true |
-| `arrival_status` | STRING | `"进站中"` / `""` | **0.4.0 bugfix**：进站中文案 / 空闲文案（config 可改） |
-| `precision` | STRING | `"minute"` / `"second"` | **0.4.0 bugfix**：当前 wall 精度 |
-| `next2_departure` | STRING | `"08:45"` | **M28-enhance**：第二班车出发时间 |
+| `arrival_status` | STRING | `"进站中"` / `""` | 进站中文案 / 空闲文案（config 可改） |
+| `precision` | STRING | `"minute"` / `"second"` | 当前 wall 精度 |
+| `next2_departure` | STRING | `"08:45"` | 第二班车出发时间 |
 | `next2_destination` | STRING | `"郑州东站"` | 第二班车终点 |
 | `next2_eta_minutes` | NUMBER | `"27"` | 距第二班车几分钟 |
 | `next2_eta_seconds` | NUMBER | `"1620"` | 距第二班车几秒 |
@@ -586,8 +585,6 @@ dynamic:
 **schema**：V013 `ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute'`；
 现有 wall 平滑升级到 minute 精度。
 
-**v0.4.0 + bugfix 包含**——价值高 + 工时不重（~25h）。
-
 ---
 
 ## 8. 持久化
@@ -610,7 +607,7 @@ CREATE TABLE IF NOT EXISTS user_variables (
 );
 ```
 
-**Migration**：V011__user_variables.sql（M28 时新加）
+**Migration**：V011__user_variables.sql
 
 ### 8.2 插件 / 系统 / PAPI 变量
 
@@ -705,164 +702,15 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 ---
 
-## 12. 0.4.0 实施 Phase
+## 13. 后续路线指针
 
-| Phase | 内容 | 工时 |
-|---|---|---:|
-| **P1 变量系统底座** | VariableStore + 协议 + 持久化 + Compositor 渲染替换 + threading + 权限 | 62h |
-| **P2 编辑器基础 UX** | 变量管理面板 + 朴素 textarea + Variable Picker | 30h |
-| **P3 内置 Provider** | 系统变量 13 项 + Scoreboard 桥接 + PAPI 桥接 + Manual Schedule | 20h |
-| **P4 Plugin Push API + 示例** | HikariCanvasAPI 接口 + 注册中心 + DemoTrainPlugin + DemoScorePlugin | 28h |
-| **P5 命令族 + 测试 + docs** | `/canvas var` 命令 + 单测 + baseline + 教程 | 10h |
-| **总** | | **150h** |
+动态数据之上的后续路线（性能 Benchmark、时间轴编辑器、视觉运行时）已各有权威设计文档，不在本文展开：
 
-约 **6-7 周 wall-clock**。
+- 性能 Benchmark：`docs/benchmark.md`
+- 时间轴编辑器：`docs/timeline.md`
+- 视觉积木脚本运行时：`docs/scripting.md`
 
-每 phase 结束**可推出演示**：
-- P1 完成 → demo "WS op + 简单 ${var:X} 替换"
-- P2 完成 → demo "玩家创建变量 + 实时改值"
-- P3 完成 → demo "PAPI / Scoreboard / Manual Schedule 列车站牌"
-- P4 完成 → demo "外部插件接入推送（模拟 BedWars 比分）"
-- P5 完成 → demo "命令行运维 + 完整教程"
-
-### 0.4.1（Notion chip 编辑器，~25h，1 周）
-
-`${var:X}` chip 化 + 鼠标悬停显示当前值 + click 弹 picker 改绑定。
-
----
-
-## 13. 0.5.0+ 路线（性能 Benchmark → 时间轴 → 视觉运行时）
-
-> **2026-05-25 重订。** 原 §13 把 0.5.0 定为"动画+时间轴"、0.6.0 定为"Blockly 脚本"。经架构可行性评估（3 子代理深查现状 + 时间轴/Scratch 复杂度）后重排为：**先做性能 Benchmark 摸清硬件成本，再做时间轴（需 30fps 渲染管线），最后做视觉运行时（需时间轴的 action 底座）**。当前进度速览见 `CLAUDE.md` 路线图表；本节是详细设计。
-
-### 13.0 设计哲学（前提）
-
-所有 0.5.0+ 路线遵守"工具不是保姆"哲学（`PROPOSAL.md §2.1`）：**数据透明不替服主决策 / 不自动降级 / 不擦屁股**。性能测评 4 原则见 `PROPOSAL.md §5.2.7`。
-
-**两个编辑器分支（终极愿景；2026-06-10 0.7.0 立项时修订）**：
-- **层 A（After Effects-like 时间轴，0.6.0 已落地）**：keyframe + easing 编排**已有内容**，做循环 / 非线性动画（如服务器入口墙的"欢迎介绍"循环播放）。
-- **层 B（Scratch-like 视觉运行时，0.7.0）**：可视化积木 + 事件驱动条件分支，编排**未知 / 实时更新**的内容（如地铁站牌"车到→图标亮→红色闪"、PvP"有人被击杀→比分++→比赛结束出 MVP→播全屏特效"）。
-
-> **原"一画布二选一"已作废（scripting.md D2）**：脚本是上层，时间轴是被编排的素材（脚本可
-> playTimeline/pause/seek），同画布共存；0.6 的三种触发器原样保留给简单场景。
-
-### 13.1 版本顺序与依赖
-
-| 版本 | 内容 | 为什么是这个顺序 |
-|---|---|---|
-| 0.4.10 | 修补批 + 哲学固化 | 外部 bug 审查后收口；为 0.5.0 留干净基线 |
-| 0.5.0 | 纯服务端性能 Benchmark | **数据先行**：时间轴/动画是高风险投入，立项前必须有真实 rasterize/GC 成本数据 |
-| 0.6.0 | 时间轴编辑器 | action（blink / play）是 0.7.0 Scratch 的依赖；且需把渲染管线推到 30fps |
-| 0.7.0 | Scratch-like 视觉运行时 | 复用 0.6.0 的动画 action + 已有 template.expr / ChangeListener |
-
-跳过 Benchmark 直接做时间轴 = 赌博（不知 30fps 在目标硬件上行不行）；跳过时间轴直接做 Scratch = action 集合缩水（只能改属性不能触发动画）。
-
-### 13.2 — 0.4.10 修补批（~15h）
-
-外部 bug 审查结果出来后的打磨 + 设计哲学固化（PROPOSAL §2.1/§5.2.7 已写）。范围按审查反馈定，不预设。可并入 0.5.0-P0。
-
-### 13.3 — 0.5.0 纯服务端性能 Benchmark（~191h）
-
-**目标**：让服主摸清"我这台服务器能撑多少画布"。production-grade，不做 MVP / 半成品。
-
-**4 原则**（详 `PROPOSAL.md §5.2.7`）：后台模拟不破坏世界 / 数据透明 / 测可控的 / 不测网络。
-
-**测什么（服务端可控成本）**：
-- `rasterize` 耗时 p50/p95/p99（含 element draw / text layout / dither）
-- `toPaletteSlice` 量化耗时
-- GC 分配速率（BufferedImage 是大头）
-- per-element-type 耗时分解（Text/Rect/Path/Image/Brush 各自 ms）
-- 模拟 viewer 数的 packet 序列化成本（每 viewer 一份序列化 = 服务端 CPU 成本，**不是网络成本**）
-
-**不测什么**：带宽 / 压缩比 / RTT / 丢包 / 服主的 zlib 配置——全砍（PROPOSAL §2.1 原则 3）。
-
-**基本单位推敲**：
-- 朴素单位"1 tile / 1 玩家 / 1 次刷新"方向对，但掩盖 2 类成本：rasterize 与 **wall 像素数**线性（5×5 一次 rasterize 比 5 个 1×1 便宜，因为一次性扫整 buffer），序列化与 **tile×fps** 线性；二者不能用同一单位 capture。
-- "4×4@5fps = 3×3@10fps" 作为粗略 rule-of-thumb 可以（80 vs 90 tile-refresh/s，差 ~12%），但精确换算需分开 RENDER（按 wall 像素）与 SERIALIZE（按 tile×fps）。
-- **50 mspt 预算公式**（给服主自算，不给结论）：
-  ```
-  主线程预算 = 50ms × 20tps = 1000 ms/s
-  可用份额 ≈ 30%（其余给 world tick / 其他插件）= 300 ms/s
-  单 wall×fps 主线程成本 = rasterize_p95 × fps（含安全 margin；系数由报告标定）
-  可载 wall 数 ≈ 300 ÷ (单 wall×fps 成本)
-  ```
-- 注：rasterize 走 async 线程，主线程只做 schedule + packet handoff；真正的主线程成本需 Benchmark 实测标定，公式系数由报告给出。
-
-**报告结构**：① 服务端可控部分（mspt / GC / per-element breakdown 三块 percentile）② 服主自算公式区（带宽自己 ping 自己测）。**给原料 + 公式，不给"你能开 N 个 wall"**。
-
-**4 个已锁定决策（2026-05-30 brainstorming，不可越界）**：
-1. **CI 不做性能数值门禁**——本地 commit baseline JSON + CI 只断言「bench 能跑通 + 不崩 + 在 timeout 内」功能性检查；性能 drift 人工复查。理由：0.4.7/0.4.8/0.4.9 三次 CI flaky 全栽在 perf/平台敏感断言，共享 runner ±2-3x 抖动，数值门禁要么松到没用要么紧到 flaky。
-2. **viewer 缩放只测纯渲染管线**——16KB 像素 byte 对同 tile 所有 viewer 是<b>同一份</b>（rasterize 产物共享），per-viewer 只剩「重复 encode 同样 16KB + send」，而 send 是网络边界。故 benchmark 测 `rasterize → toPaletteSlice → byte[16384]`，viewer 数当作「encode 重复次数」的线性<b>外推</b>乘数，**不实跑 PacketEvents**；报告诚实标注「非实测」。
-3. **报告 = JSON + CLI 表 + 独立自包含 HTML**（内联 SVG 图表，无外链依赖）。JSON 是 CI baseline + 服主自有工具的原料，CLI 给控制台人读，HTML 给可视化——图表只可视化原料、不给「推荐配置」结论。
-4. **scene 全元素覆盖**——text/rect/circle/shape/path/image+mask/brush/icon/变量插值 text + 特效 + 真实混合，per-element 分解是核心价值。
-
-**运行模型 = 方案 A：单一 headless 核心 + 两适配器**。核心（`SceneTimer`/`SceneLibrary`/`BenchCompositor`/`Instrumentation`）零 Bukkit/PacketEvents（rasterize 本就是纯函数）；适配器 1 = `/canvas bench` 命令（活服务器 async 线程），适配器 2 = JUnit/gradle harness（CI headless）。两上下文跑同一套数字、不分叉——正是决策②（不碰 PacketEvents）解锁的。
-
-**Phase 分解**（每 phase 自身完整，非"TODO 待补"半成品）：
-- **P1（~50h）✅ 2026-05-30**：Instrumentation（`ThreadMXBean` 分配计数 + GC bean 采样 + warmup）+ 全元素 `SceneLibrary`（21 确定性场景：9 单元素 + 5 特效 + 3 混合 + 4 尺寸梯度，固定 seed）+ `SceneTimer`（warmup→measure，rasterize/palette 分开计时 + blackhole 防 DCE）+ `BenchCompositor`（复刻 `RendererSnapshotTest` 无头装配 + 合成图片 loader 注入让 image+mask 渲真实像素）+ `/canvas bench list/run/report/clear` 命令族（async 守护线程 + JSON/CLI 输出 + 单 bench 守卫）+ 3 共享契约 record。10 单测含端到端 smoke（全 21 场景 headless 跑通，兼 P4 CI gate 种子）。**留 P2 精化**：IconElement 走占位（无 headless IconRegistry）、合成图固定 256² 代表性近似。
-- **P2（~50h）✅ 2026-05-30**：6 聚合 record（`Percentiles` 线性插值 p50/p95/p99 + mean/min/max/stddev / `SceneResult` / `PerElementCost` / `GcSummary` / `EnvInfo` / `BenchmarkReport`）+ `ResultAggregator`（聚合 + alloc 均值 + per-element 边际 = 隔离场景均值 − 同尺寸空白基线 ÷ 元素数）+ `BenchmarkRunner`（选场景 → 测空白基线 → 逐场景计时 → 聚合 → per-element → GC/env 组装报告）+ `/canvas bench` 改产 `report.json`（聚合）+ `summary.txt` + 控制台 percentile 表。**关键澄清（修正 §13.3 原“matrix”措辞）**：rasterize 成本<b>不依赖 fps/viewer</b>（canvas 尺寸已烘进每个场景），故每场景<b>只测一次</b>，fps/viewer 仅作 P3 公式参数随报告记录，<b>不</b>为每个组合重复测量（否则是在重复测同一个东西）。9 P2 单测（percentile 数学 + 聚合 + per-element + Jackson round-trip）。**留 P3+**：真实 icon 成本（需无头 IconRegistry）/ 合成图逐尺寸精化
-- **P3（~55h）✅ 2026-05-30**：`HtmlReportRenderer`（自包含 HTML5，<b>零外链</b>，Catppuccin Latte，仅内联 `<style>`+`<script>`）+ `SvgBarChart`（响应式内联 SVG 横向条形图，Locale.ROOT 防逗号小数 + 退化输入守卫）+ `BudgetFormula`（50mspt 预算公式 + 保守下界 disclaimer）。HTML 报告含：环境卡（机器/JVM/堆/GC 透明）+ config + 逐场景 percentile 表 + rasterize p95 条形图 + per-element 边际条形图 + GC + **50mspt 交互计算器**（服主填 mspt/tps/份额/fps，内联 JS 镜像 `BudgetFormula` 实时算每场景「可载 wall 数」）+ footer「给原料+公式不给结论」。两层转义（`esc` HTML + `jsStr` 防 `</script>` 逃逸）。`/canvas bench run` 现产 `report.json` + `summary.txt` + `report.html` 三件。4 P3 单测（公式数学 + SVG 边界 + HTML 自包含/转义对抗）。
-- **P4（~20h）✅ 2026-05-30**：`BenchmarkPipelineSmokeTest`（CI 功能性 gate——compositor→runner→HTML 全管线 headless 跑通，只断言「能跑通 + 不崩 + 产出非空报告」，<b>0 性能数值断言</b>，随 `:plugin:test` 在 CI 每次 push/PR 跑）+ `docs/benchmark.md`（281 行运维指南：命令族 / 报告怎么读 / 50mspt 公式与交互计算器 / 为什么没有自动门禁 / 用实测容量设 config 软上限 / 4 原则）+ 版本号 0.4.10→0.5.0-SNAPSHOT（7 处）。**无自动 drift 报警 / 不提交 baseline**（数字机器特定、不跨机迁移，由服主在自己机器对比 report.json 人工复查）；**无自动 prune**（`/canvas bench clear` 手动清理，符合「不擦屁股」）。
-
-> **0.5.0 完工（2026-05-30）**：P1 底座 + P2 聚合 + P3 HTML 报告 + P4 CI gate/docs 全部落地。后端 879 test 全绿 / shadow jar 159 MB / 0 baseline 漂移。下一步 0.6.0 时间轴需先做 P0 spike（30fps×4maps 实测 GC/mspt），用本期 Benchmark 工具量化。
-
-### 13.4 — 0.6.0 时间轴编辑器（~360h；After Effects-like）
-
-> **本节原为纸面设想，已被 `docs/timeline.md`（设计总纲）取代。** 数据结构 / 协议 v3 / 渲染管线 /
-> 插值缓动数学 / 触发器 / 分期 / 工时一切以 timeline.md 为权威；配套契约见 `rendering.md §9`（插值+缓动）、
-> `protocol.md`（v2→v3）、`data-model.md §2.4.2`（project_json v3）、`architecture.md §5.5`（AnimationTicker）。
-
-定稿时对本节纸面设想做了几处更正，列此以免后人按旧设想实现：
-
-- **Keyframe 存法取方案 B，不进 Element。** 原写 `Element.keyframes?`（方案 A）已否决；关键帧压平进
-  `Timeline.tracks: Map<elementId, List<Keyframe>>`，`Element` 8 record 零改动（timeline.md D1/§2.2）。
-- **默认帧率 20fps（config `timeline.max-fps` 默 60 安全阀），不是统一 30fps。** 不做成本估算 / 自动校准 /
-  自动降级（timeline.md D3/§3.5）。
-- **`rasterize` 走异步线程，不占主线程 tick budget。** 原"主线程 tick budget"风险不成立；约束是渲染线程
-  算力 + 发包 + GC（timeline.md §3.5）。
-- **HistoryStack 上限是 16，不是 100**（`HistoryStack.MAX_HISTORY=16`）；keyframe 连续拖动靠 coalesce 合并 +
-  有 timeline 时 16→64（timeline.md D7/§7）。
-- **0.6 触发器 = MANUAL + VARIABLE_CHANGE + SCHEDULE；PLAYER_NEAR 推迟 0.7**（需从零建事件层，与 0.7 Scratch
-  触发系统重叠，timeline.md D5/§5）。
-- **分期 6 段**（独立 P0 spike 折进 P2 首任务，一道 MVP 闸）：P1 数据模型+协议 v3+撤销(60) → P2 Ticker+池化
-  +MVP(50) → P3 缓动+双端插值器+一致性 CI(70) → P4 前端 AE panel(100) → P5 触发器(35) → P6 一致性 CI+收尾(15)。
-  详见 timeline.md §10/§11。
-
-### 13.5 — 0.7.0 Scratch-like 视觉运行时（~360h）
-
-> **本节原为纸面预估，已被 `docs/scripting.md`（0.7.0 设计总纲，2026-06-10 定稿）取代。**
-> 数据结构 / 触发器 / 动作 / 安全模型 / 协议 v4 / 分期工时一切以 scripting.md 为权威；本节保留为档案。
-> 定稿时的主要更正：① 事件系统层"几乎为零"已过时——0.6 P5 建成 TimelineTriggerRegistry（变量→播放
-> 路由 + debounce），0.7 TriggerRouter 照其范式扩展；② action blink/playAnimation 依赖已就位
-> （AnimationTicker.play/pause/seek）；③ "一画布二选一"作废，改为分层共存（scripting.md D2）；
-> ④ 积木库选 **自写积木画布**，Blockly 否决（D1）；⑤ ExecuteCommand 走服主白名单模板 + 填参（D4）；
-> ⑥ 工时 360h → ~340h（0.6 资产抵扣）。
-
-**评估结论**：Medium-Low。变量系统层准备好（push + cached + ChangeListener + dynamic lookup），**但事件系统层几乎为零**——现有 4 个 Provider 全 polling，0 个 Bukkit gameplay event listener。Scratch trigger 需从零搭建。原 200h（Blockly）估偏低，含条件 / sandbox / 多 trigger / 前端积木真实落地 ~360h。
-
-**重大利好**：`template/expr/*`（`Expr` AST + `ExpressionParser` + `ExpressionEvaluator`，~447 行）已是 Scratch condition 求值器的半成品，扩比较 / 算术运算仅 ~50 行。
-
-**新数据结构（独立 ScriptStore，不进 ProjectState）**：
-- 新表 `wall_scripts`（与渲染 / 编辑解耦，避免 state.patch 推送范围膨胀到脚本表达式）
-- `ScriptRule { id, wallId, enabled, name, trigger, condition?(复用 Expr), actions[], budget }`
-- `sealed Trigger { OnVariableChange / OnTimer / OnPlayerJoin / OnPlayerKill / OnCommand / OnLockChange / OnWallReady }`
-- `sealed Action { SetVariable / SetElementProperty / ExecuteCommand(白名单) / PlaySound / Blink / Delay(≤5s) / Log }`
-- `Budget { maxSteps:100, maxActions:50, maxInvocationsPerSecond:10, maxNestedDelayDepth:3 }`
-
-**必须新建**：ScriptStore + TriggerListenerRegistry（7-10 个 Bukkit listener + 路由）+ ConditionEvaluator（extend ExpressionEvaluator）+ ActionExecutor（白名单 + 主线程 hop，element.update 类必须走 EditSession 标准 op 路径不绕过 history/lock）+ ScriptRunner（执行管线 + budget + circuit break）+ 前端积木 UI。
-
-**主要风险**：
-1. **Sandbox/RCE**（最高）：`ExecuteCommand` 必须强制白名单 + 模板参数化，禁字符串拼接（防 `/op @s` 夺权）；`Delay` 防 ABA loop（A→setVar→触发 B→setVar→触发 A）。
-2. 主线程 hop（element.update / playSound / executeCommand 必须主线程；`onPlayerMove` 类高频 trigger 必须 sample，不能每 tick 跑）。
-3. 双端 schema 一致性（建议**后端唯一权威 + 前端积木仅 UI**，不做客户端执行预览，避免分叉）。
-4. ChangeListener 滥用（`fireChange` 是同步 for-loop，单 wall 挂 50 listener 会拖慢 → 改异步分发 + namespace/fullName index 路由）。
-5. action `blink / playAnimation` **依赖 0.6.0 时间轴**——这是顺序约束的根因。
-
-**ROI 提醒**：用户列举的场景（地铁站牌 / PvP 比分 / 倒计时）在 0.4.4 + 变量系统下已 **90% 可实现**（schedule + variable + textElement）；Scratch 只在"主动条件 + 副作用"超出展示层时才显著加值。**立项前再评估**。
-
-**积木库选择**：Blockly（Google MIT）vs 自写——待定。Blockly 双向 schema 同步是全期最大维护负担，自写积木可控但工程量大。0.7.0 立项时定。
-
-**Phase**：P0 spike（ChangeListener 挂 1 trigger + 主线程 hop + 1 action 走通端到端，30h）→ 5 trigger + 5 action 无条件分支命令行（80h）→ 条件分支 + sandbox（70h）→ 前端积木 UI（90h，工时大头）→ 剩余 trigger/action（60h）→ 压测+docs（30h）。
+> 脚本是上层（条件分支 + 副作用），时间轴是被编排的素材（脚本可 playTimeline / pause / seek），二者同画布共存。
 
 ---
 
@@ -878,57 +726,23 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 ---
 
-## 15. 参考实施清单
-
-### docs/protocol.md 更新
-- §6 op 列表加 `variable.create / update / set / delete / bind`
-- §error codes 加 `VARIABLE_NOT_FOUND` / `VARIABLE_NAMESPACE_DENIED` / `VARIABLE_TYPE_MISMATCH`
-- §close codes 不动
-
-### docs/data-model.md 更新
-- §1 SQLite schema 加 `user_variables` 表
-- §6.5 V011 migration 备注（pre-release 阶段可加 column）
-
-### docs/security.md 更新
-- §权限节点加 `canvas.var.*` 段
-- §审计事件加 `VARIABLE_BIND / VARIABLE_SET / VARIABLE_DELETE`
-- §限流加 push throttle
-
-### docs/architecture.md 更新
-- §13 动态画板段细化：P-1（渲染期占位符）= 本设计；P-2 反模式不动；P-3 = HikariCanvasAPI Push
-
-### CLAUDE.md 更新
-- 里程碑列表加 0.4.0 路线段
-- 「其他不可越界的技术决策」加：**Push 模式 + 不在主线程 resolve**
-
-### docs/api.md（M28-P4 已落地）
-- `HikariCanvasAPI` 完整接口文档 + 接入教程 + 示例插件 + FAQ
-- 见 `docs/api.md`
-
----
-
-## 16. 设计决策固化（不动）
+## 16. 设计决策汇总
 
 1. **Push 模式** > Pull 模式（性能 / 解耦 / 扩展性）
 2. **变量是 string**（业务语义在插件侧，HikariCanvas 不解析）
 3. **用户变量持久化**（DB + .canvas）
 4. **插件 / 系统 / PAPI 变量不持久化**（重启 push 重建）
-5. **resolve 不在主线程**（PrejectionThrottler 用 cache，async daemon 后台拉）
+5. **resolve 不在主线程**（ProjectionThrottler 用 cache，async daemon 后台拉）
 6. **namespace 严格隔离**（防 plugin spoof）
 7. **PAPI 桥接零 ACL**（信任 PAPI 自己）
 8. **fallback 链**：cached → ${var:X|fallback=...} → default → "???"
 9. **TTL 全局 min 100ms**（防虐用）+ **默认 30s**
-10. **每 phase 可演示**（0.4.0-P1..P5 都是可用 milestone）
 
 ---
 
-## 17. 0.4.3 全局用户变量（规划，2026-05-21 定稿）
+## 17. 0.4.3 全局用户变量（userglobal namespace）
 
-### 17.1 背景
-
-0.4.0 P1 决策 3 把 user 变量按 wall 持久化（namespace = `user:<wallId>/X`），不能跨画布共享。
-用户场景需要"全服可见、跨画布共享"的玩家自定义变量（如全服活动比分、公告状态等），
-独立 namespace `userglobal/<key>` 不带 wallId 后缀。
+user 变量按 wall 持久化（namespace = `user:<wallId>/X`），不能跨画布共享。为支持"全服可见、跨画布共享"的玩家自定义变量（如全服活动比分、公告状态等），引入独立 namespace `userglobal/<key>`（不带 wallId 后缀）。
 
 ### 17.2 数据模型
 
@@ -953,7 +767,7 @@ CREATE INDEX idx_user_global_variables_owner ON user_global_variables(owner_uuid
 
 注：name 是 PRIMARY KEY（全服唯一）— 全局变量名不能与其他玩家创建的重名。
 
-### 17.3 ACL（已锁定决策）
+### 17.3 ACL
 
 - **外部插件禁推 `userglobal/*`**：`userglobal` 加入 `PluginNamespaceRegistry.RESERVED_NAMESPACES`。
   插件 `registerNamespace("userglobal", ...)` 抛 IllegalArgumentException。插件仍可用自己
@@ -967,7 +781,7 @@ CREATE INDEX idx_user_global_variables_owner ON user_global_variables(owner_uuid
 - **类型冲突**：name 已存在（任意 owner 创建过）→ 拒 `VARIABLE_EXISTS`；只能删原 + 重建
 - **owner 离开后**：变量永久保留（同 user_variables 现状）；admin 可手动删
 
-### 17.4 配额（已锁定决策）
+### 17.4 配额
 
 ```yaml
 dynamic:
@@ -1054,40 +868,12 @@ owner / admin 删除 `userglobal/red_score`：
 3. 所有引用该变量的 wall 渲染时走 fallback "???"
 4. **不级联删除** wall 上引用它的 TextElement（与 user 变量同款规则）
 
-### 17.12 实施 Phase（~13h）
-
-| Phase | 范围 | 工时 |
-|---|---|---:|
-| **P1** | V015 migration + UserGlobalVariableDao + VariableStore.createGlobal/listGlobal | 3h |
-| **P2** | EditSession scope='global' 路径 + PluginNamespaceRegistry userglobal 保留 + 5 权限节点 + AuditLog | 3h |
-| **P3** | broadcastVariableChangeToAll + ChangeListener 路由 + interpolator 双端测试（已天然支持，加测）| 2h |
-| **P4** | NewVariableDialog scope toggle + VariablePanel owner 显示 + Picker 分组改造 + i18n | 4h |
-| **P5** | 配额 config + Quota 单测 + docs/variables.md §1.12 新节 + journal + 版本号 0.4.2 → 0.4.3-SNAPSHOT + push | 1h |
-| **总** | 单 commit 合 5 phase | **13h** |
-
-wall-clock 估 **~3 天**（按 0.4.x 节奏 agent 并行 / 串干）。
-
-### 17.13 单测覆盖
-
-- VariableStoreTest 加 createGlobal / listGlobal / userglobal namespace ACL
-- UserGlobalVariableDao 单测（CRUD + per-owner 隔离）
-- EditSessionTest 加 scope='global' 路径 + 配额拒
-- PluginNamespaceRegistryTest 加 reserved namespace 检查（userglobal）
-- broadcastVariableChangeToAll 单测（mock SessionManager）
-- 端到端 EndToEndSmokeTest 加 1 case：玩家 A 创全局变量 + 玩家 B 不同 wall 读
-
-至少 18 个新 case。
-
 ---
 
-## 18. 0.4.4 铁路网络（线路 / 站点 / 车次 / 时刻表）（规划，2026-05-21 定稿）
+## 18. 0.4.4 铁路网络（线路 / 站点 / 车次 / 时刻表）
 
-### 18.1 背景
+ManualScheduleProvider 是**纯 per-wall**：每个 wall 独立配自己的时刻表，100 个地铁屏 = 100 套独立配置，无法共享"1 号线"概念。铁路网络引入完整抽象 + **真实地铁系统语义**：
 
-0.4.0 P3-L 的 ManualScheduleProvider 是**纯 per-wall**：每个 wall 独立配自己的时刻表，
-100 个地铁屏 = 100 套独立配置。无法共享"1 号线"概念。
-
-0.4.4 引入完整铁路网络抽象 + **真实地铁系统语义**：
 - 线路 / 站点 / **车次（含服务类型 / 编组 / 区间 / 备注）** / **每站详细时刻表**
 - wall 编辑器内下拉选**线路 + 本站 + 方向**自动绑定该站时刻，**改一处全服同步**
 - wall 上可展示"A01 次 → 郑州东（6 节 大站快车）"完整运营语义
@@ -1184,7 +970,7 @@ CREATE TABLE wall_rail_bindings (
 
 实测（{{RailScheduleProvider}}.ALL_RAIL_KEYS）：rail-bound wall 共 push **29 个 key** =
 **15 个与 ManualSchedule 共享的基础 key**（`SHARED_BASE_KEYS`，让旧 wall 文本无感升级）+
-**14 个 0.4.4 车次专属 key**（`RAIL_ONLY_KEYS`，next 7 + next2 7）。`unbind` 时只删 14 个 rail-only key，
+**14 个车次专属 key**（`RAIL_ONLY_KEYS`，next 7 + next2 7）。`unbind` 时只删 14 个 rail-only key，
 共享 15 个保留交回 ManualScheduleProvider。
 
 **关键**：每站时刻**精确从 rail_timetable 读**，不再走"travel_seconds 均匀推算"。
@@ -1254,7 +1040,7 @@ ${var:schedule.next_notes}
     郑州东       06:15:00 / ──    (到)    ← 末站（区间终点）
 ```
 
-**创建车次时弹"自动生成对话框"**（用户已决策）：
+**创建车次时弹"自动生成对话框"**：
 - [首站发车时间] 06:00:00
 - [站间均匀时长] 90 秒
 - [停靠时长] 30 秒
@@ -1287,13 +1073,13 @@ ${var:schedule.next_notes}
 
 ### 18.7 WS 协议（新 13 个 op）
 
-> **实测**（{{RailOpDispatcher}} switch）共 **13 op**：除下列 11 个写/查 op 外，另有 2 个只读 op
+> {{RailOpDispatcher}} switch 共 **13 op**：除下列 11 个写/查 op 外，另有 2 个只读 op
 > `rail.line.list`（列全部线路）+ `rail.line.detail { lineId }`（聚合返该线 stations + runs +
-> timetableByRun，单接口避 N+1，0.4.5 P1 补）；二者权限完全开放（只读）。
+> timetableByRun，单接口避 N+1）；二者权限完全开放（只读）。
 
 ```
-rail.line.list                              ← 0.4.4 / 只读
-rail.line.detail        { lineId }          ← 0.4.5 P1 / 只读聚合
+rail.line.list                              ← 只读
+rail.line.detail        { lineId }          ← 只读聚合
 rail.line.create        { name, code?, color? }
 rail.line.update        { lineId, name?, code?, color? }
 rail.line.delete        { lineId }
@@ -1315,20 +1101,6 @@ rail.run.timetable.set  { runId, entries: [{ stationId, arrival?, departure?, st
 rail.wall.bind          { wallId, lineId?, stationId?, direction }
 ```
 
-### 18.8 实施 Phase（~60h）
-
-| Phase | 范围 | 工时 |
-|---|---|---:|
-| **P1** | V016 5 表 migration + 5 DAO（LineDao / StationDao / RunDao / TimetableDao / BindingDao）+ record + Auto-generator helper（首站时间 + 站间秒 + 跳站集合 → timetable rows） | 12h |
-| **P2** | RailScheduleProvider 计算（按 timetable 精确查 + 兼容旧 ManualSchedule fallback） | 10h |
-| **P3** | 13 个 WS op（含 2 只读 list/detail）+ 5 个 `canvas.rail.*` 权限节点（run/station 复用 line.edit）+ RailOpDispatcher + AuditLog | 8h |
-| **P4** | 前端铁路网络管理 modal（线路 + 站点 + 车次 + 时刻表 + 自动生成对话框 + 拖动排序） | 16h |
-| **P5** | Schedule Manager modal 加铁路绑定段 + 车次语义变量预览 + i18n + 单测 + docs | 8h |
-| **P6** | 收尾 + 版本号 0.4.3 → 0.4.4-SNAPSHOT + journal + push | 6h |
-| **总** | 单 milestone 多 commit | **60h** |
-
-wall-clock 估 **~1.5-2.5 周**。
-
 ### 18.9 兼容性
 
 - 0.4.0 ManualScheduleProvider **不删**——`wall_rail_bindings.line_id IS NULL` 的 wall 仍走旧路径
@@ -1348,32 +1120,3 @@ wall-clock 估 **~1.5-2.5 周**。
 | section | 区间车 | Section |
 | limited | 特快 | Limited |
 | `<custom>` | 原样输出 | as-is |
-
-### 18.11 单测覆盖
-
-- 5 DAO 各 5+ case（CRUD + FK CASCADE + 排序）
-- Auto-generator 8+ case（首末站时间 / 跳站 / 区间车起止 / 边界）
-- RailScheduleProvider 计算 10+ case（按时刻 + 方向 + 大站快车跳站 + 区间车 + 过零点）
-- RailOpDispatcher 11 op + 权限拒 + 自动生成路径
-- 前端 RailNetworkManagerModal vitest 关键交互（线路 CRUD / 车次创建 + 时刻表编辑）
-
-至少 50 个新 case。
-
----
-
-## 19. 0.4.x 路线图速览（2026-05-21）
-
-| 版本 | 范围 | 工时 | 状态 |
-|---|---|---:|---|
-| 0.4.0 | 变量系统底座 + Provider + Plugin API + 命令族 | 150h | ✅ |
-| 0.4.1 | chip 编辑器（Lexical / Notion 风格） | 25h | ✅ |
-| 0.4.2 | 变量别名（per-wall） + Picker 表格 | 10h | ✅ |
-| **0.4.3** | **全局用户变量**（userglobal namespace） | **13h** | ✅ |
-| **0.4.4** | **铁路网络**（线路 + 站点 + 车次 + 时刻表 + 服务类型）| **60h** | ✅ |
-| 0.4.5–0.4.9 | 打磨 / 体验 / ultrareview / Live Paint 收尾 | — | ✅ |
-| 0.4.10 | 修补批 + 设计哲学固化 | ~40h | ✅ |
-| 0.5.0 | 纯服务端性能 Benchmark（不测网络，见 §13.3 + PROPOSAL §2.1/§5.2.7 + docs/benchmark.md） | ~150h | ✅ |
-| 0.6.0 | 时间轴编辑器（AE-like，设计总纲 `docs/timeline.md`，摘要见 §13.4） | ~360h | 远期 |
-| 0.7.0 | Scratch-like 视觉运行时（见 §13.5） | ~360h | 远期 |
-
-> 路线图以 `CLAUDE.md` 速览表为准；本表为 dynamic-data 内部参考。原"0.5.0 动画 / 0.6.0 Blockly"已于 2026-05-25 重排（见 §13 重订说明）。
