@@ -92,7 +92,7 @@ public final class WebServer {
     /**
      * i18n 文案中枢。WS auth 读前端携带的 locale → {@code resolveLocaleId} 规范化后
      * 存入 {@link Session#setEditorLocale}，供脚本校验报错按编辑器语言渲染；同时转交
-     * {@link ScriptOpDispatcher}（T2/T3 渲染 {@link moe.hikari.canvas.script.ValidationError}）。
+     * {@link ScriptOpDispatcher}（渲染 {@link moe.hikari.canvas.script.ValidationError}）。
      * 可为 null（旧测试装配容忍——auth 缺 messages 时跳过 setEditorLocale）。
      */
     private final moe.hikari.canvas.i18n.Messages messages;
@@ -872,7 +872,7 @@ public final class WebServer {
                     scheduleOpDispatcher.dispatch(ctx, in, bound);
                 }
             }
-            // 0.4.4 rail.* 12 op + 0.4.5 rail.line.detail（共 13 op）
+            // rail.* 12 op + rail.line.detail（共 13 op）
             case "rail.line.list", "rail.line.detail",
                  "rail.line.create", "rail.line.update", "rail.line.delete",
                  "rail.station.add", "rail.station.update", "rail.station.delete",
@@ -1099,7 +1099,7 @@ public final class WebServer {
             try { oldCtx.closeSession(4003, "session-takeover"); } catch (Exception ignored) {}
         }
 
-        // T3 token rotate：auth 成功后立即 rotate 新 token 交回前端，供 WS 断线重连重新 auth。
+        // token rotate：auth 成功后立即 rotate 新 token 交回前端，供 WS 断线重连重新 auth。
         // 契约见 docs/security.md §2.2 / docs/protocol.md §11。
         String reconnectToken = tokenService.rotate(
                 session.playerUuid(), session.playerName(), session.id());

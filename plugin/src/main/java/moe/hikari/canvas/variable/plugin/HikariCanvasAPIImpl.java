@@ -124,7 +124,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
         // 抛 NamespaceConflictException / IllegalArgumentException → 直接传给调用方。
         registry.register(plugin, namespace, info);
 
-        // 建立 PluginNamespaceProvider + register 到 daemon（让 declaredKeys 接 P3-M）
+        // 建立 PluginNamespaceProvider + register 到 daemon（让 declaredKeys 接变量元数据端点）
         PluginNamespaceProvider provider = providers.computeIfAbsent(namespace,
                 ns -> new PluginNamespaceProvider(ns, info));
         try {

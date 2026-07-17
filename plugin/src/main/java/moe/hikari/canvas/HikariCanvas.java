@@ -1039,7 +1039,7 @@ public final class HikariCanvas extends JavaPlugin {
     /** 供命令侧用；返回 null 表示插件还没 onEnable。 */
     public HikariCanvasConfig config() { return config; }
 
-    /** 0.8.2 i18n：多语言消息注册表；onEnable 完成前可能返 null。 */
+    /** 多语言消息注册表；onEnable 完成前可能返 null。 */
     public moe.hikari.canvas.i18n.Messages messages() { return messages; }
 
     /** 取 VariableStore 单例。 */

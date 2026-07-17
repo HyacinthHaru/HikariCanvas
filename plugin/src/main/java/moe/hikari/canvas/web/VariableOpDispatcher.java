@@ -323,7 +323,7 @@ final class VariableOpDispatcher {
      * <p><b>per-wall user 变量</b>（默认路径）：own / any 判定 = caller 是否 wall owner；
      * bind 单独 {@code canvas.var.bind}（不分 own/any）。</p>
      *
-     * <p><b>0.4.3 全局用户变量</b>（{@code scope='global'} create 或 fullName 以
+     * <p><b>全局用户变量</b>（{@code scope='global'} create 或 fullName 以
      * {@code userglobal/} 开头的 mutation）：own / any 判定 = caller 是否 variable owner
      * （{@code VariableStore.getGlobalOwner}）；create 单独 {@code canvas.var.global.create}；
      * delete 单独 {@code .delete.own/any}；其他改 type/value/bind 走 {@code .write.own/any}。</p>

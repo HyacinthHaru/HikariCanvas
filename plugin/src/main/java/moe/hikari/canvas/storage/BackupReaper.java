@@ -12,7 +12,7 @@ import java.util.stream.Stream;
 
 /**
  * 清理过期的 migration 备份文件（{@code data.db.pre-V<NNN>.bak[-wal|-shm]}）。
- * 启动期 migration 后跑一次（不做周期 scheduler，同 LRU 哲学）。只动本插件产的备份文件。
+ * 启动期 migration 后跑一次（不做周期 scheduler）。只动本插件产的备份文件。
  */
 public final class BackupReaper {
 
