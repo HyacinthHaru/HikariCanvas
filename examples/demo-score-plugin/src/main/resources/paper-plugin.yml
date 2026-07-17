@@ -1,6 +1,6 @@
 name: DemoScorePlugin
-version: '0.9.8-SNAPSHOT'
-main: moe.hikari.canvas.demos.score.DemoScorePlugin
+version: '0.9.9-SNAPSHOT'
+main: ac.haru.hikaricanvas.demos.score.DemoScorePlugin
 api-version: '1.21'
 description: HikariCanvas Push API demo — simulated PvP scoreboard with event + command triggers.
 authors:

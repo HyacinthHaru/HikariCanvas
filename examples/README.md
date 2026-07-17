@@ -1,6 +1,6 @@
 # HikariCanvas Push API 示例插件
 
-两个独立的 Paper 插件 subproject，演示 `moe.hikari.canvas.api.HikariCanvasAPI` 的两种典型触发方式。
+两个独立的 Paper 插件 subproject，演示 `ac.haru.hikaricanvas.api.HikariCanvasAPI` 的两种典型触发方式。
 
 ## DemoTrainPlugin — 定时器 push 范型
 

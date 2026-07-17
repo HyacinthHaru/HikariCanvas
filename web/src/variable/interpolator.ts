@@ -1,7 +1,7 @@
 /**
  * 渲染期文本占位符替换（前端镜像）。核心模块。
  *
- * <p>与后端 {@code moe.hikari.canvas.variable.VariableInterpolator} 一致的算法：
+ * <p>与后端 {@code ac.haru.hikaricanvas.variable.VariableInterpolator} 一致的算法：
  * <ul>
  *   <li>正则 {@code \$\{var:([^|}]+)(?:\|fallback=([^}]*))?\}}</li>
  *   <li>fullName 注入：{@code ${var:user/X}} + wallId → 内部 {@code user:<wallId>/X}</li>

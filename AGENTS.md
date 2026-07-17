@@ -6,7 +6,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 
 | 项 | 值 |
 |---|---|
-| 包名 | `moe.hikari.canvas` |
+| 包名 | `ac.haru.hikaricanvas` |
 | 命令前缀 | `/canvas` |
 | 权限前缀 | `canvas.` |
 | PDC namespace | `hikari_canvas` |

@@ -151,12 +151,12 @@ timeline / script 等）。
 
 ## 4. 后端模块导航
 
-代码在 `plugin/src/main/java/moe/hikari/canvas/`。主类 `HikariCanvas.java`（`extends
+代码在 `plugin/src/main/java/ac/haru/hikaricanvas/`。主类 `HikariCanvas.java`（`extends
 JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanvasConfig.java`（config.yml 映射）。
 
 | 子包 | 一句话职责 |
 |---|---|
-| `api` | 公开 Plugin Push API（`moe.hikari.canvas.api.*`，**shadowJar 不 relocate**）：`HikariCanvasAPI` + `VarType` + `NamespaceInfo` + 2 异常 |
+| `api` | 公开 Plugin Push API（`ac.haru.hikaricanvas.api.*`，**shadowJar 不 relocate**）：`HikariCanvasAPI` + `VarType` + `NamespaceInfo` + 2 异常 |
 | `benchmark` | 0.5.0 纯服务端性能 Benchmark：scene 生成 + rasterize/palette/GC 模拟 + report.json/html + 50mspt 计算器 |
 | `canvasfile` | `.canvas` 工程文件导入导出：archive 打包 / manifest / asset 摄取 / 物化 / 脚本导入 |
 | `command` | `/canvas` 命令树：`CanvasCommand`（根）+ `VariableSubCommand`（`var` 族）+ `BenchmarkSubCommand`（`bench` 族） |
@@ -179,7 +179,7 @@ JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanv
 1. **禁用 NMS**——任何 `net.minecraft.*` / 服务端内部类禁止；只用公开 Bukkit API + PacketEvents。
 2. **PacketEvents 调用集中**——所有发包走 `deploy/MapPacketSender.java` 一个类，别处不直接碰。
 3. **shadowJar relocate**——除 `org.sqlite`（JNI native lib 不能动）外，所有内嵌第三方依赖
-   relocate 到 `moe.hikari.canvas.shaded.*`，防服内插件 classpath 冲突。`moe.hikari.canvas.api`
+   relocate 到 `ac.haru.hikaricanvas.shaded.*`，防服内插件 classpath 冲突。`ac.haru.hikaricanvas.api`
    是公开 API 包**不 relocate**（外部插件 import 路径不可变）。
 
 ---
@@ -232,7 +232,7 @@ JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanv
 
 ## 7. 快照测试怎么跑 / baseline 怎么更新
 
-后端渲染快照测试在 `plugin/src/test/java/moe/hikari/canvas/render/RendererSnapshotTest.java`
+后端渲染快照测试在 `plugin/src/test/java/ac/haru/hikaricanvas/render/RendererSnapshotTest.java`
 （+ 时间轴帧快照 `RendererSnapshotTimelineTest.java`），契约对应 `docs/rendering.md §8`。
 
 ### 7.1 机制
@@ -290,7 +290,7 @@ JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanv
 | **Vite dev / vite build 偶尔卡住** | Node 高版本 + Vite 偶发；重跑一般即过。dev server 端口固定 9173（`strictPort`），被占用会直接报错。 |
 | **改了前端但 `runServer` 没变化** | `runServer` 用 shadow jar 里打包好的旧前端产物。前端热重载要单独起 `npm run dev`（§2.2），或重新 `shadowJar`。 |
 | **改了字体规格但前端 metrics 不对** | 重跑 `./gradlew :plugin:syncFontsToWeb` 把新 metrics 同步到 `web/public/fonts/`。 |
-| **shadowJar 里第三方类与服内其它插件冲突** | 检查是否漏了 relocate。除 `org.sqlite`（JNI）外都要 relocate 到 `moe.hikari.canvas.shaded.*`；**绝不**对 `moe.hikari.canvas` 自身或 `moe.hikari.canvas.api` 加 relocate（会让 `ServicesManager.load(HikariCanvasAPI.class)` 在外部插件侧崩，见 `docs/api.md`）。 |
+| **shadowJar 里第三方类与服内其它插件冲突** | 检查是否漏了 relocate。除 `org.sqlite`（JNI）外都要 relocate 到 `ac.haru.hikaricanvas.shaded.*`；**绝不**对 `ac.haru.hikaricanvas` 自身或 `ac.haru.hikaricanvas.api` 加 relocate（会让 `ServicesManager.load(HikariCanvasAPI.class)` 在外部插件侧崩，见 `docs/api.md`）。 |
 
 ---
 

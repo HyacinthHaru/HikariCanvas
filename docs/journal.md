@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-07-17 · 0.9.9 包名重命名 `moe.hikari.canvas` → `ac.haru.hikaricanvas`
+
+把根包名从当初没考虑好的 `moe.hikari.canvas` 改成 `ac.haru.hikaricanvas`。**独立一次机械大改**，版本号 0.9.8 → 0.9.9-SNAPSHOT。
+
+**为什么现在做**：公开 API 包 `*.api`（6 类，第三方插件接入用）在 1.0 会冻结成永久契约——1.0 后再改就永久破坏接入方。现在还是 pre-1.0（api.md 明示 API 可能破坏），是**最后的干净窗口**。
+
+**数据兼容（关键）：无破坏**。PDC namespace 取插件名不取包名（`new NamespacedKey(plugin,"wall_id")` → 插件名小写 `hikaricanvas`）；**插件名 `HikariCanvas` 保持不动**，故已有展示框 PDC key 照旧、现网画作升级后照常显示。SQLite schema 与 `.canvas` 格式都不含包名。
+
+**范围**：412 文件 rename（`git mv` 5 棵源码树 main/test/generator + 2 example）+ ~2020 处 .java 引用替换；Maven group `moe.hikari`→`ac.haru`；shadowJar 7 条 relocate → `ac.haru.hikaricanvas.shaded.*`；paper-plugin.yml main（主 + 2 demo）；前端 9 文件双端镜像注释引用；活文档（CLAUDE/AGENTS/PROPOSAL/api/development/dynamic-data/protocol/examples README）。**历史 plan 文件、journal、主 README 里的旧包名有意保留**（归档记录 / 作者自管）。
+
+**无编译不可见暗雷**：唯一 `Class.forName` 加载的是外部 PlaceholderAPI（非本包）；无 META-INF/services SPI 文件。故 `compileJava` + 全量测试 + shadowJar 即完整安全网——漏改必编译报错。
+
+**验证**：`clean` 全量 compileJava/compileTestJava/shadowJar 全过（零漏改）+ `:plugin:test` **2151 全绿** + `HikariCanvas-0.9.9-SNAPSHOT.jar` 出。（clean 全量高负载下 `VariableMetadataHandlerTest`〔JavalinTest 内嵌 Jetty HTTP 集成〕偶发 flaky 1 次，单跑 + 重跑全量均绿，非重命名破坏。）
+
+---
+
 ## 2026-07-17 · 0.9.8 去除 AI 味专项（1.0 前收尾）
 
 1.0 正式发布前，把仓库里「AI 味过重」的内容清掉——用户可见文案泄漏的内部阶段编号、代码注释里的开发过程标记 / 自辩护独白、契约文档正文里的过程叙事——**全程零逻辑改动、契约规格 byte-identical**。版本号 0.9.7 → 0.9.8-SNAPSHOT。

@@ -1,5 +1,5 @@
 // MC 地图调色板查找表 —— Java PaletteLut 的 TypeScript 镜像。
-// 契约见 docs/rendering.md §6 + plugin/src/main/java/moe/hikari/canvas/render/PaletteLut.java
+// 契约见 docs/rendering.md §6 + plugin/src/main/java/ac/haru/hikaricanvas/render/PaletteLut.java
 // 算法完全相同：5-bit 量化 → 32³ byte LUT；CIE76 Lab 距离（sRGB D65 → XYZ → Lab）。
 //
 // 用法：const lut = await getPaletteLut(); const idx = lut.matchColor(r, g, b);

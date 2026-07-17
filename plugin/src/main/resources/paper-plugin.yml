@@ -1,6 +1,6 @@
 name: HikariCanvas
-version: '0.9.8-SNAPSHOT'
-main: moe.hikari.canvas.HikariCanvas
+version: '0.9.9-SNAPSHOT'
+main: ac.haru.hikaricanvas.HikariCanvas
 api-version: '1.21'
 authors:
   - HaruHyacinth

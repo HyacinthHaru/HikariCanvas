@@ -115,7 +115,7 @@ GET /api/session/:token HTTP/1.1
 
 > 前端实际同时发 `client_v`（M16-P6.2 起的主字段名）和旧别名 `clientProtocolVersion`（兼容回滚到旧 jar 的情形，见 `wsClient.ts sendAuth`）。服务端优先读 `client_v`，缺则回退读 `clientProtocolVersion`（`WebServer.handleAuth`）。
 >
-> 服务端收到 `client_v` 不在 `[Protocol.SUPPORTED_MIN, SUPPORTED_MAX]`（当前都 = `7`）或非数字 / 缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `moe.hikari.canvas.web.Protocol`（M16-P6.2 引入；前后端双向校验）。**版本检查在 token consume 之前**（避免为不兼容客户端浪费一次性 token），但在 per-IP 限流之后（防绕过）。
+> 服务端收到 `client_v` 不在 `[Protocol.SUPPORTED_MIN, SUPPORTED_MAX]`（当前都 = `7`）或非数字 / 缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `ac.haru.hikaricanvas.web.Protocol`（M16-P6.2 引入；前后端双向校验）。**版本检查在 token consume 之前**（避免为不兼容客户端浪费一次性 token），但在 per-IP 限流之后（防绕过）。
 >
 > **未认证 5s 超时**（M16-P1.2）：WS 升级后未在 `network.ws-auth-timeout-seconds`（默认 5s，代码钳到 `1..60`）内收到合法 `auth` 帧 → close `4001` (`auth_timeout`)。防止恶意客户端占 WS 槽。
 >

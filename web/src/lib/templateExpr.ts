@@ -2,7 +2,7 @@
  * 模板表达式前端镜像。覆盖 {@code docs/template-spec.md §6} 的子集：
  * 运算符 {@code == != && || !}、括号、字面量（string/number/bool）、参数引用。
  *
- * <p>这是 Java {@link moe.hikari.canvas.template.expr.ExpressionEvaluator} 的 TS 等价物，
+ * <p>这是 Java {@link ac.haru.hikaricanvas.template.expr.ExpressionEvaluator} 的 TS 等价物，
  * 用于 TemplateParamForm 的 visible_when 实时求值。</p>
  *
  * <p>解析失败时返回 {@code true}（保守地显示字段，避免参数面板莫名隐藏）。</p>

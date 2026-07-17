@@ -1,7 +1,7 @@
 /**
  * 前端 validator 镜像 —— 后端 {@code ScriptRuleValidator} 的逐字段复刻。
  *
- * <p><b>权威 = {@code plugin/src/main/java/moe/hikari/canvas/script/ScriptRuleValidator.java}</b>。
+ * <p><b>权威 = {@code plugin/src/main/java/ac/haru/hikaricanvas/script/ScriptRuleValidator.java}</b>。
  * 本文件的常量（数值上下界 / 长度上限 / 白名单集合）必须与后端<b>逐一一致</b>——任一处漂移都会
  * 让"前端放行、后端打回"（或反之）。后端是唯一执行权威，前端这层只为<b>保存前预校验</b>：
  * 拖完一拍就在编辑器里给红字提示 + 阻止 send，而不是等 server 回 {@code SCRIPT_INVALID}。</p>

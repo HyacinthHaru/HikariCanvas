@@ -1,6 +1,6 @@
 // Bayer 4×4 有序抖动（前端镜像）。
 //
-// 与 Java moe.hikari.canvas.render.BayerDither 逐行镜像：同矩阵、同 AMPLITUDE、同公式。
+// 与 Java ac.haru.hikaricanvas.render.BayerDither 逐行镜像：同矩阵、同 AMPLITUDE、同公式。
 // 算法详见后端实现与 docs/rendering.md §6.6。
 //
 // 输入：ImageData（ARGB 字节排列 R,G,B,A 每像素 4 byte）

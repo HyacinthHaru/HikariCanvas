@@ -1,6 +1,6 @@
 /**
  * 变量系统前端类型（对齐 {@code docs/dynamic-data.md §2 / §3} +
- * 后端 `moe.hikari.canvas.variable.Variable` record）。
+ * 后端 `ac.haru.hikaricanvas.variable.Variable` record）。
  *
  * <p>核心 fullName 命名约定：</p>
  * <ul>

@@ -1,5 +1,5 @@
 /**
- * Template schema 前端镜像。结构对照 Java {@code moe.hikari.canvas.template.*}
+ * Template schema 前端镜像。结构对照 Java {@code ac.haru.hikaricanvas.template.*}
  * record 树 + {@code docs/template-spec.md §2-§5}。
  *
  * <p>字段宽松：{@code x/y/w/h/visible/padding/size/letterSpacing} 等可能是

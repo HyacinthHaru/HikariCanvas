@@ -1,4 +1,4 @@
-// TextLayout TS 版，镜像 plugin/src/main/java/moe/hikari/canvas/render/TextLayout.java
+// TextLayout TS 版，镜像 plugin/src/main/java/ac/haru/hikaricanvas/render/TextLayout.java
 // 契约 docs/rendering.md §3。横排与竖排前后端一起做。
 
 import type { TextElement } from '@/types/protocol';

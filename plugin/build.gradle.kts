@@ -129,7 +129,7 @@ val generatePalette = tasks.register<JavaExec>("generatePalette") {
     description = "导出 Paper MapPalette 全部调色板到 palette.json（构建期一次性）"
     dependsOn(tasks.named("compileGeneratorJava"))
     classpath = generatorSource.runtimeClasspath
-    mainClass.set("moe.hikari.canvas.build.PaletteGenerator")
+    mainClass.set("ac.haru.hikaricanvas.build.PaletteGenerator")
     // 用 argumentProviders 延迟到执行期 resolve Provider；直接传 Provider 给 args()
     // 会把 Provider.toString() 当字符串传进去，导致文件名里出现 "map(map(...))"
     argumentProviders.add(CommandLineArgumentProvider {
@@ -405,7 +405,7 @@ val generateGlyphMetricsTasks = bundledFonts.map { spec ->
         val outFile = generatedGlyphMetricsDir.map { it.file("${spec.displayId}.metrics.json") }
 
         classpath = generatorSource.runtimeClasspath
-        mainClass.set("moe.hikari.canvas.build.GlyphMetricsGenerator")
+        mainClass.set("ac.haru.hikaricanvas.build.GlyphMetricsGenerator")
         argumentProviders.add(CommandLineArgumentProvider {
             listOf(
                 fontFile.get().asFile.absolutePath,
@@ -537,7 +537,7 @@ val generateIconLibrary = tasks.register<JavaExec>("generateIconLibrary") {
     val outDir = generatedIconResources
 
     classpath = generatorSource.runtimeClasspath
-    mainClass.set("moe.hikari.canvas.build.IconLibraryGenerator")
+    mainClass.set("ac.haru.hikaricanvas.build.IconLibraryGenerator")
     argumentProviders.add(CommandLineArgumentProvider {
         listOf(
             zipFile.get().asFile.absolutePath,
@@ -595,7 +595,7 @@ tasks {
     shadowJar {
         archiveBaseName.set("HikariCanvas")
         archiveClassifier.set("")
-        // M16 P5.1：把所有 runtime 内嵌 lib relocate 到 moe.hikari.canvas.shaded.*，防止
+        // M16 P5.1：把所有 runtime 内嵌 lib relocate 到 ac.haru.hikaricanvas.shaded.*，防止
         // 与生产服其它插件（多半也带 jackson 等）发生类加载冲突。
         //
         // 注意事项：
@@ -603,18 +603,18 @@ tasks {
         // - PacketEvents 是 plugin-loader 模式（compileOnly），不进 shadow jar → 无需 relocate
         // - mergeServiceFiles 必须保留：jackson modules / jdbi plugins / jetty 都靠
         //   META-INF/services 走 ServiceLoader 注册
-        relocate("com.fasterxml.jackson", "moe.hikari.canvas.shaded.jackson")
-        relocate("com.github.benmanes.caffeine", "moe.hikari.canvas.shaded.caffeine")
-        relocate("org.jdbi", "moe.hikari.canvas.shaded.jdbi")
-        relocate("com.zaxxer.hikari", "moe.hikari.canvas.shaded.hikari")
-        relocate("io.javalin", "moe.hikari.canvas.shaded.javalin")
-        relocate("org.eclipse.jetty", "moe.hikari.canvas.shaded.jetty")
+        relocate("com.fasterxml.jackson", "ac.haru.hikaricanvas.shaded.jackson")
+        relocate("com.github.benmanes.caffeine", "ac.haru.hikaricanvas.shaded.caffeine")
+        relocate("org.jdbi", "ac.haru.hikaricanvas.shaded.jdbi")
+        relocate("com.zaxxer.hikari", "ac.haru.hikaricanvas.shaded.hikari")
+        relocate("io.javalin", "ac.haru.hikaricanvas.shaded.javalin")
+        relocate("org.eclipse.jetty", "ac.haru.hikaricanvas.shaded.jetty")
         // jackson-dataformat-yaml 间接依赖 SnakeYAML；同步 relocate 避免半 shade
-        relocate("org.yaml.snakeyaml", "moe.hikari.canvas.shaded.snakeyaml")
-        // M28-P4：moe.hikari.canvas.api.* 是公开 API 包，外部插件 import 路径不可变。
+        relocate("org.yaml.snakeyaml", "ac.haru.hikaricanvas.shaded.snakeyaml")
+        // M28-P4：ac.haru.hikaricanvas.api.* 是公开 API 包，外部插件 import 路径不可变。
         // relocate 仅对显式列出的第三方包 (com.fasterxml.jackson 等) 生效，不会自动 prefix-match
-        // 项目自身的 moe.hikari.canvas.*——所以 api 包天然安全。新增 relocate 时务必只列第三方包，
-        // 不要加 relocate("moe.hikari.canvas", ...)，否则 ServicesManager.load(HikariCanvasAPI.class)
+        // 项目自身的 ac.haru.hikaricanvas.*——所以 api 包天然安全。新增 relocate 时务必只列第三方包，
+        // 不要加 relocate("ac.haru.hikaricanvas", ...)，否则 ServicesManager.load(HikariCanvasAPI.class)
         // 在外部插件侧立即崩。详见 docs/api.md §2。
         mergeServiceFiles()
     }

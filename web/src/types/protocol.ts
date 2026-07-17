@@ -1,5 +1,5 @@
 // WebSocket 协议类型（对齐 docs/protocol.md §2 / §7）。
-// 后端 moe.hikari.canvas.state.* records 的 TypeScript 镜像。
+// 后端 ac.haru.hikaricanvas.state.* records 的 TypeScript 镜像。
 //
 // v2 形态：ProjectState.layers + activeLayerId + canvas.gridSize + canvas.guides；
 // element 加可选 opacity / blendMode / renderMode。

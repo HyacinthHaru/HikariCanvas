@@ -1,6 +1,6 @@
 // Fill 工具函数（前端镜像）。
 //
-// 后端 moe.hikari.canvas.state.{Fill, SolidFill, LinearGradient, RadialGradient, Stop}
+// 后端 ac.haru.hikaricanvas.state.{Fill, SolidFill, LinearGradient, RadialGradient, Stop}
 // 的 TS 侧消费者助手。
 
 import type { Fill, FillCompat, LinearGradient, RadialGradient, SolidFill } from '../types/protocol';

@@ -239,7 +239,7 @@ VariableStore 变更通过 state.patch 推到客户端：
 ### 4.1 接口设计
 
 ```java
-package moe.hikari.canvas.api;
+package ac.haru.hikaricanvas.api;
 
 public interface HikariCanvasAPI {
     /**
@@ -299,12 +299,12 @@ public record VariableUpdate(
 
 **实际接口实现位置**：
 
-- 接口位置：`plugin/src/main/java/moe/hikari/canvas/api/HikariCanvasAPI.java`
-- 实现位置：`plugin/src/main/java/moe/hikari/canvas/variable/plugin/HikariCanvasAPIImpl.java`
+- 接口位置：`plugin/src/main/java/ac/haru/hikaricanvas/api/HikariCanvasAPI.java`
+- 实现位置：`plugin/src/main/java/ac/haru/hikaricanvas/variable/plugin/HikariCanvasAPIImpl.java`
 - 注册中心：`PluginNamespaceRegistry`（防 spoof，原子 `putIfAbsent`）
 - 限流：`PushRateLimiter`（per-plugin 100/s + 全局 1000/s + 10s circuit break）
 - 卸载清理：`PluginCleanupListener`（`PluginDisableEvent` → 立即 unregister + 30s 延迟 purge）
-- API 包独立 enum：`moe.hikari.canvas.api.VarType`（不引用内部 `variable.VarType`，shadowJar relocate exclude 保护外部插件 import 路径稳定）
+- API 包独立 enum：`ac.haru.hikaricanvas.api.VarType`（不引用内部 `variable.VarType`，shadowJar relocate exclude 保护外部插件 import 路径稳定）
 - 异常体系：`NamespaceConflictException`（跨 plugin 冲突）+ `PluginNamespaceException`（Code = `NAMESPACE_NOT_REGISTERED` / `NAMESPACE_ACL_DENIED`），均 RuntimeException
 - 完整接入教程：`docs/api.md`
 

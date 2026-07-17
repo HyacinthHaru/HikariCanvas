@@ -1,6 +1,6 @@
 {
   "name": "hikari-canvas-web",
-  "version": "0.9.8-SNAPSHOT",
+  "version": "0.9.9-SNAPSHOT",
   "private": true,
   "type": "module",
   "scripts": {

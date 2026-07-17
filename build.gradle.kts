@@ -1,4 +1,4 @@
 allprojects {
-    group = "moe.hikari"
-    version = "0.9.8-SNAPSHOT"
+    group = "ac.haru"
+    version = "0.9.9-SNAPSHOT"
 }

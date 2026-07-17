@@ -48,7 +48,7 @@ repositories {
 
 dependencies {
     compileOnly(files("libs/HikariCanvas-0.8.1-SNAPSHOT.jar")) // 替换为 build.gradle.kts 当前版本
-    // 或 compileOnly("moe.hikari:hikari-canvas:0.8.1-SNAPSHOT")
+    // 或 compileOnly("ac.haru:hikari-canvas:0.8.1-SNAPSHOT")
 }
 ```
 
@@ -75,7 +75,7 @@ dependencies:
 **方式 A：Bukkit ServicesManager（推荐，零编译耦合）**
 
 ```java
-import moe.hikari.canvas.api.HikariCanvasAPI;
+import ac.haru.hikaricanvas.api.HikariCanvasAPI;
 import org.bukkit.Bukkit;
 
 HikariCanvasAPI api = Bukkit.getServicesManager().load(HikariCanvasAPI.class);
@@ -89,24 +89,24 @@ if (api == null) {
 **方式 B：getAPI() 方法**
 
 ```java
-import moe.hikari.canvas.HikariCanvas;     // 注意：需 import 主类，编译耦合
-import moe.hikari.canvas.api.HikariCanvasAPI;
+import ac.haru.hikaricanvas.HikariCanvas;     // 注意：需 import 主类，编译耦合
+import ac.haru.hikaricanvas.api.HikariCanvasAPI;
 import org.bukkit.Bukkit;
 
 HikariCanvas plugin = (HikariCanvas) Bukkit.getPluginManager().getPlugin("HikariCanvas");
 HikariCanvasAPI api = plugin.getAPI();
 ```
 
-**优先选方式 A**：方式 B 要求你 `import moe.hikari.canvas.HikariCanvas`，未来 HikariCanvas 主类重构会破坏你的编译；方式 A 只依赖 `moe.hikari.canvas.api.*` 包，该包受 shadowJar relocate exclude 保护，路径稳定。
+**优先选方式 A**：方式 B 要求你 `import ac.haru.hikaricanvas.HikariCanvas`，未来 HikariCanvas 主类重构会破坏你的编译；方式 A 只依赖 `ac.haru.hikaricanvas.api.*` 包，该包受 shadowJar relocate exclude 保护，路径稳定。
 
 ### 2.3 完整接入示例
 
 ```java
 package com.example;
 
-import moe.hikari.canvas.api.HikariCanvasAPI;
-import moe.hikari.canvas.api.NamespaceInfo;
-import moe.hikari.canvas.api.VarType;
+import ac.haru.hikaricanvas.api.HikariCanvasAPI;
+import ac.haru.hikaricanvas.api.NamespaceInfo;
+import ac.haru.hikaricanvas.api.VarType;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -294,7 +294,7 @@ void setVariables(Plugin plugin, String namespace, Map<String, VariableUpdate> u
 **示例**：
 
 ```java
-import moe.hikari.canvas.api.VariableUpdate;
+import ac.haru.hikaricanvas.api.VariableUpdate;
 import java.util.Map;
 
 canvas.setVariables(this, "bedwars", Map.of(
@@ -599,7 +599,7 @@ public void onPluginEnable(PluginEnableEvent ev) {
 
 - **pre-1.0**（`0.x.y` 预发布阶段）：API 可能小破坏，会在 CHANGELOG / journal.md 通告
 - **1.0 起**：API 接口冻结，新方法只追加不修改；现有方法签名 / 行为保持向后兼容
-- **包路径**：`moe.hikari.canvas.api.*` 是公开 SPI 包，受 shadowJar relocate `exclude` 保护，跨 HC 版本路径稳定
+- **包路径**：`ac.haru.hikaricanvas.api.*` 是公开 SPI 包，受 shadowJar relocate `exclude` 保护，跨 HC 版本路径稳定
 - **VarType enum**：新增类型走追加（不重排顺序 / 不删除现有）
 
 如有破坏性变更，**总在 minor 版本号上调**（如 `0.4.x` → `0.5.0`）+ journal.md 突出标注。

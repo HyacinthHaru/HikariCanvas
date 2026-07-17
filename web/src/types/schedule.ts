@@ -1,7 +1,7 @@
 /**
  * 列车 / 公交时刻表前端类型。
  *
- * <p>与后端 {@code moe.hikari.canvas.schedule.WallSchedule / ScheduleEntry} record 对齐，
+ * <p>与后端 {@code ac.haru.hikaricanvas.schedule.WallSchedule / ScheduleEntry} record 对齐，
  * 字段一一映射。仅 modal / ScheduleStore 使用——schedule 不影响 ProjectState，不进 protocol.ts。</p>
  *
  * <p>precision 字段（"minute" / "second"）控制时间精度。</p>

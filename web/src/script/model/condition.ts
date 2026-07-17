@@ -8,7 +8,7 @@
  * 切「高级文本框」模式直接编辑原串。</p>
  *
  * <h2>后端文法权威（务必一致）</h2>
- * 见 {@code plugin/src/main/java/moe/hikari/canvas/template/expr/ExpressionParser.java}：
+ * 见 {@code plugin/src/main/java/ac/haru/hikaricanvas/template/expr/ExpressionParser.java}：
  * <ul>
  *   <li>操作数（这里只支持其中 4 种「叶子」形态）：{@code var("fullName")} / 数字 / 带引号字符串
  *       / {@code true} | {@code false}；</li>
