@@ -15,8 +15,8 @@ import java.util.Set;
  * 人读错误信息（后续 dispatcher 塞进 {@code SCRIPT_INVALID} 错误码）。
  * 一次只报第一个错误（fail-fast），与项目其他 validator 一致。</p>
  *
- * <p>注意：{@link Action.If#condition()} 本期只查非空 + 长度上限，
- * 表达式语法解析在 P2 接（届时复用 template.expr）。</p>
+ * <p>注意：{@link Action.If#condition()} 这里只查非空 + 长度上限；
+ * 表达式语法由 {@code ConditionEvaluator#checkSyntax} 校验（独立条件文法，非模板表达式）。</p>
  */
 public final class ScriptRuleValidator {
 

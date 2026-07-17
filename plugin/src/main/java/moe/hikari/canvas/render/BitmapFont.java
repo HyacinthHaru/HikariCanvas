@@ -4,8 +4,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 5×7 像素位图字表。M2 阶段起用，为 Placeholder / M3 TextElement 提供渲染底。
- * M4 渲染引擎接入真 TTF 字体后此类会被替换/废弃。
+ * 5×7 像素位图字表，为 {@link PlaceholderRenderer} 提供内置点阵字形。
+ * 正式招牌文本走 TTF 渲染管线（{@code CanvasCompositor}）；此类只服务空墙 / pristine 状态的 placeholder。
  *
  * <p>字符集：</p>
  * <ul>

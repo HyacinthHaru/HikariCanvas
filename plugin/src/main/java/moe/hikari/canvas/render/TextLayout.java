@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 横排文本排版算法，契约对应 {@code docs/rendering.md §3}。
+ * 文本排版算法（横排 + 竖排），契约对应 {@code docs/rendering.md §3}。
  *
  * <h2>步骤</h2>
  * <ol>
@@ -17,9 +17,9 @@ import java.util.List;
  *   <li>计算基线：每行高 = {@code fontSize × lineHeight}；基线 = 行顶 + {@code fontSize × ascentRatio}（rendering.md §3.2 固定 0.8）</li>
  * </ol>
  *
- * <h2>不处理</h2>
- * 竖排（{@code vertical=true}）：早期不实装，由 {@link CanvasCompositor} 在调用前检测并 WARN；
- * 真竖排排版见 {@code docs/rendering.md §3.3}。
+ * <h2>竖排</h2>
+ * {@code vertical=true} 走 {@link #layoutVertical}（逐字向下 + 全角标点旋转）；
+ * 排版规则见 {@code docs/rendering.md §3.3}。
  *
  * <h2>纯函数</h2>
  * 静态方法，无状态，线程安全。

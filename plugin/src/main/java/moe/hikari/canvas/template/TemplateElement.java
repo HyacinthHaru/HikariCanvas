@@ -10,8 +10,7 @@ import java.util.List;
 /**
  * 模板布局中的单个元素。契约见 {@code docs/template-spec.md §4}。
  *
- * <p>v1 实装 {@link Text} / {@link Rect} / {@link Line}。{@code icon} 在 §4.6 列出
- * 但 v1 不实装（解析阶段被 {@link TemplateLoader} 拒绝）。</p>
+ * <p>实装四种元素：{@link Text} / {@link Rect} / {@link Line} / {@link Icon}（§4.6）。</p>
  *
  * <p><b>字段类型偏宽松：</b> {@code w / h / visible / x / y} 既能是常量（int/bool）
  * 也能是 {@code "${param}"} / {@code "auto"} / {@code "100%"} 等字符串，统一用

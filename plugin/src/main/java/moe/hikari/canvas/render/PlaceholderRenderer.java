@@ -12,11 +12,9 @@ import java.util.Arrays;
  *   <li>底部居中 "N/M" 位置标签（scale=3）</li>
  * </ul>
  *
- * <p>M2 阶段使用 {@link BitmapFont}；M4 渲染引擎接入真 TTF 字体后替换为真实渲染 +
- * "HikariCanvas" 大小写混排。</p>
+ * <p>用 {@link BitmapFont} 的点阵字形绘制水印 + 位置标签（全大写 "HIKARICANVAS"）。</p>
  *
- * <p>调色板索引的精确值待 M4 调色板 LUT 接入后修正；当前选了经验值：
- * {@link #BG_PALETTE} 偏浅、{@link #FG_PALETTE} 偏深，对比足够 M2 demo。</p>
+ * <p>调色板索引取经验值：{@link #BG_PALETTE} 偏浅、{@link #FG_PALETTE} 偏深，对比足够。</p>
  *
  * <p>线程安全：{@link #render} 不持有状态，可并发调用。</p>
  */
