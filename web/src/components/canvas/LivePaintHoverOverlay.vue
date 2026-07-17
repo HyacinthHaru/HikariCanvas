@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * M18 Live Paint — hover 高亮 overlay。
+ * Live Paint — hover 高亮 overlay。
  *
  * 父组件传入当前 hovered gap polygon，本组件用 Konva v-path 画半透明蓝色填充 +
  * 描边轮廓，listening=false 让点击事件透传到下方 stage（再由 stage onClick 触发填充）。

@@ -27,7 +27,7 @@ const error = ref<string | null>(null);
 const copiedId = ref<string | null>(null);
 let copiedTimer: number | null = null;
 
-// 2026-05-14 lock-state：published 分组改为 locked / unlocked
+// lock-state：published 分组改为 locked / unlocked
 const locked = computed(() => walls.value.filter(w => w.publishedAt != null));
 const unlocked = computed(() => walls.value.filter(w => w.publishedAt == null));
 
@@ -46,7 +46,7 @@ async function loadWalls(isManualRefresh = false) {
     }
 }
 
-// ---------- M14 创意工坊：模板市场 ----------
+// ---------- 创意工坊：模板市场 ----------
 interface TemplateRow {
     templateId: string;
     ownerUuid: string | null;
@@ -89,7 +89,7 @@ onMounted(() => {
 function fmtTime(ts: number): string {
     const d = new Date(ts);
     // 简短：今天 → 14:23；本周 → 周三 14:23 / Wed 14:23；更早 → 5月12日 14:23 / May 12 14:23
-    // P2-85：星期 / 月日走 i18n（home.weekday / home.monthDay），en locale 不再泄漏中文。
+    // 星期 / 月日走 i18n（home.weekday / home.monthDay），en locale 不再泄漏中文。
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
     const hh = d.getHours().toString().padStart(2, '0');
@@ -223,7 +223,7 @@ function previewUrl(w: WallSummary): string {
           </ul>
         </section>
 
-        <!-- M14 创意工坊：模板市场（只读卡片网格；精选优先 + 时间倒序） -->
+        <!-- 创意工坊：模板市场（只读卡片网格；精选优先 + 时间倒序） -->
         <section class="mt-10">
           <header class="flex items-baseline gap-2 mb-3">
             <Sparkles class="size-4 text-[color:var(--ctp-peach)] translate-y-0.5" />

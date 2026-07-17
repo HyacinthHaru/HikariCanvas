@@ -7,7 +7,7 @@ import { normalizeFill } from '@/render/fill';
 import type { Fill, FillCompat, Stop, LinearGradient, RadialGradient } from '@/types/protocol';
 
 /**
- * M11-D：fill 编辑控件。承载 solid / linear / radial 三态联合编辑。
+ * fill 编辑控件。承载 solid / linear / radial 三态联合编辑。
  *
  * <p><b>数据流：</b> {@code modelValue} 接 {@link FillCompat}（兼容 string）；emit 时统一输出
  * {@link Fill} object 形态。父组件不必担心字符串兼容路径。</p>
@@ -168,7 +168,7 @@ function removeStop(i: number): void {
 
 <template>
   <div class="hc-fill-input flex flex-col gap-2">
-    <!-- type tab：M24-B 修撞色 bug——原 active tab 用 bg-primary + text-primary-foreground
+    <!-- type tab：修撞色 bug——原 active tab 用 bg-primary + text-primary-foreground
          在 mauve / blue accent 下文字辨识度低；改用 surface1 底 + foreground 文字 + accent ring。 -->
     <div class="flex items-center rounded-[var(--radius-sm)] border border-[color:var(--border)] overflow-hidden text-xs bg-[color:var(--secondary)]">
       <button
@@ -210,7 +210,7 @@ function removeStop(i: number): void {
             <Plus class="size-3" />
           </button>
         </div>
-        <!-- P3-113：用 position+color 复合 key 替代数组下标——addStop 排序后下标 key
+        <!-- 用 position+color 复合 key 替代数组下标——addStop 排序后下标 key
              会让 ColorInput 内部编辑态（popover open / hexDraft）串到相邻 stop。
              复合 key 按内容身份复用，重排后编辑态跟随正确的 stop。 -->
         <div v-for="(s, i) in stops" :key="`${s.position}:${s.color}`" class="flex items-center gap-1">
@@ -261,7 +261,7 @@ function removeStop(i: number): void {
             <Plus class="size-3" />
           </button>
         </div>
-        <!-- P3-113：用 position+color 复合 key 替代数组下标——addStop 排序后下标 key
+        <!-- 用 position+color 复合 key 替代数组下标——addStop 排序后下标 key
              会让 ColorInput 内部编辑态（popover open / hexDraft）串到相邻 stop。
              复合 key 按内容身份复用，重排后编辑态跟随正确的 stop。 -->
         <div v-for="(s, i) in stops" :key="`${s.position}:${s.color}`" class="flex items-center gap-1">

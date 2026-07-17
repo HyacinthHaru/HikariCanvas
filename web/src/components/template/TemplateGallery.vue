@@ -16,7 +16,7 @@ const project = useProjectStore();
 const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
-// 2026-05-25 ultrareview #8：lock 时 apply 必须拒 — TemplateGallery 可被 LeftTools / TopBar 打开，
+// lock 时 apply 必须拒 — TemplateGallery 可被 LeftTools / TopBar 打开，
 // 但 apply 才是真正的 mutation（replaceContent + state.snapshot）。
 const lockGuard = useLockGuard();
 
@@ -68,7 +68,7 @@ function isCollapsed(groupName: string | null): boolean {
 
 const hasExistingContent = computed(() => (project.state?.elements?.length ?? 0) > 0);
 
-// ---------- 画布尺寸约束（M6-F polish） ----------
+// ---------- 画布尺寸约束 ----------
 
 interface SizeRange { min: [number, number]; max: [number, number]; fixed: boolean; }
 
@@ -104,7 +104,7 @@ function formatRange(r: SizeRange): string {
     return `${r.min[0]}×${r.min[1]} – ${r.max[0]}×${r.max[1]}`;
 }
 
-// ---------- apply 流（M6-F polish：成功/失败/超时三态） ----------
+// ---------- apply 流（成功/失败/超时三态） ----------
 
 /** confirm 阶段：null = 未触发；'pending' = 已点 apply 等二次确认；'applying' = 已发包等 ack。 */
 const confirmStage = ref<null | 'pending' | 'applying'>(null);
@@ -135,7 +135,7 @@ function resetParams() {
 async function applyNow() {
     const tpl = selected.value;
     if (!tpl) return;
-    // 2026-05-25 ultrareview #8：lock 状态下拒绝（同时把 confirmStage 清掉，避免按钮卡在 applying）
+    // lock 状态下拒绝（同时把 confirmStage 清掉，避免按钮卡在 applying）
     if (!lockGuard.guardMutation(t.value.templates.apply)) {
         confirmStage.value = null;
         return;
@@ -481,7 +481,7 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
                 >{{ t.templates.applyConfirm }}</button>
               </template>
               <template v-else>
-                <!-- 2026-05-25 ultrareview #8：lock 状态下禁用 apply 按钮（hover tooltip 通过 :title 提示） -->
+                <!-- lock 状态下禁用 apply 按钮（hover tooltip 通过 :title 提示） -->
                 <button
                   type="button"
                   class="text-xs px-3 py-1.5 rounded bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"

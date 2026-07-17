@@ -21,7 +21,7 @@ import { useProjectStore } from '@/stores/project';
 import { getWsClient } from '@/network/wsClient';
 import type { TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
-// M23：字体下拉动态化 —— fetch /api/font/list 而非读硬编码 FONT_META 白名单。
+// 字体下拉动态化 —— fetch /api/font/list 而非读硬编码 FONT_META 白名单。
 // 内置 + 用户字体都来自后端，displayName / source 分组在 UI 区分。
 interface FontInfo {
     id: string;
@@ -63,8 +63,8 @@ const { t } = useI18n();
 const project = useProjectStore();
 const ws = getWsClient();
 
-// ---------- 0.4.1：chip 编辑器 + 变量 picker 集成 ----------
-// Notion-style chip 编辑器替代了 0.4.0 的 textarea：占位符 ${var:X} 渲染为 pill 而非字面字符串。
+// ---------- chip 编辑器 + 变量 picker 集成 ----------
+// Notion-style chip 编辑器替代了原先的 textarea：占位符 ${var:X} 渲染为 pill 而非字面字符串。
 // chip editor 内部以 lexical core 自包装；本组件作为 caller 只负责 picker 弹出 / chip 改绑定。
 const chipEditorRef = ref<InstanceType<typeof VariableChipEditor> | null>(null);
 const pickerOpen = ref(false);
@@ -90,7 +90,7 @@ function onChipEditorEditRequest(payload: { rawName: string; fallback: string | 
 }
 
 /**
- * P3.4：点击红色 (error) chip → 弹 native confirm "是否立即创建？"。
+ * 点击红色 (error) chip → 弹 native confirm "是否立即创建？"。
  * 仅支持 user 域补创（短名无 / 或 user/X）；其他 namespace（system / scoreboard /
  * papi / plugin / schedule）由对应 Provider 自动注册，不在编辑器手动路径。
  */
@@ -160,7 +160,7 @@ function onSelectChange(field: string, ev: Event) {
     emit('update', { [field]: v });
 }
 
-// M23：切字体时主动 ensureLoaded（FontLoader 内部幂等 + 去重），加载完触发
+// 切字体时主动 ensureLoaded（FontLoader 内部幂等 + 去重），加载完触发
 //     CanvasView 注册的 onFontLoaded 回调 requestDraw；首帧 ctx.font 走 system fallback。
 function onFontIdChange(ev: Event) {
     const v = (ev.target as HTMLSelectElement).value;
@@ -168,7 +168,7 @@ function onFontIdChange(ev: Event) {
     emit('update', { fontId: v });
 }
 
-// ---------- M5-D3 P4：文本 fit-content ----------
+// ---------- 文本 fit-content ----------
 
 function fitTextHeight() {
     const te = props.element;
@@ -268,7 +268,7 @@ function patchGlow(partial: Partial<Glow>) {
               </button>
             </Tooltip>
           </span>
-          <!-- 0.4.1：chip 编辑器替代 textarea；占位符以 pill 显示。 -->
+          <!-- chip 编辑器替代 textarea；占位符以 pill 显示。 -->
           <VariableChipEditor
             ref="chipEditorRef"
             :text="element.text"
@@ -350,7 +350,7 @@ function patchGlow(partial: Partial<Glow>) {
             <option value="right">{{ t.properties.alignRight }}</option>
           </select>
         </label>
-        <!-- 0.4.6 P3：B / I 切换按钮（紧凑工具栏风格） -->
+        <!-- B / I 切换按钮（紧凑工具栏风格） -->
         <div class="flex flex-col gap-0.5">
           <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.styleLabel }}</span>
           <div class="flex gap-1">

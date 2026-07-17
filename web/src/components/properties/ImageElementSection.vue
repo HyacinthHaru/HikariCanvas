@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * M13-D：ImageElement 段（hash 缩略图 + replace + mask preset + inverted + dither）。
+ * ImageElement 段（hash 缩略图 + replace + mask preset + inverted + dither）。
  *
- * mask 数据模型 = SVG path d 字符串（M13 决策 1）。v1 UI 仅暴露 4 个预设 kind：
+ * mask 数据模型 = SVG path d 字符串。v1 UI 仅暴露 4 个预设 kind：
  * none / circle / roundedRect / ellipse；UI 选择 → 生成 d 字符串发到后端。
  *
  * watch image bbox 变化 → 预设 mask 按新 bbox 重生成（用 detectMaskPreset 反推 kind，
@@ -30,7 +30,7 @@ const { t } = useI18n();
 
 type MaskPresetKind = 'none' | 'circle' | 'roundedRect' | 'ellipse' | 'lasso';
 
-// M16 P1.1：缩略图 URL 也需带 sessionId，否则 401
+// 缩略图 URL 也需带 sessionId，否则 401
 const thumbnailSrc = computed(() => {
     const base = `/api/upload/${encodeURIComponent(props.element.source)}`;
     return net.sessionId ? `${base}?sessionId=${encodeURIComponent(net.sessionId)}` : base;
@@ -54,12 +54,12 @@ function detectMaskPreset(im: ImageElement | null): MaskPresetKind {
         return im.w === im.h ? 'circle' : 'ellipse';
     }
     if (qCount === 4 && cCount === 0) return 'roundedRect';
-    // 2026-05-25 项 1：4 预设之外的任意 d 一律视作 lasso（自由 path / 拖动编辑）
+    // 4 预设之外的任意 d 一律视作 lasso（自由 path / 拖动编辑）
     return 'lasso';
 }
 
 /**
- * M16 P3.4：尺寸 sanitize —— NaN / Infinity / 负数 / 0 → 1；上限 16384（同后端 validateDim 范围）。
+ * 尺寸 sanitize —— NaN / Infinity / 负数 / 0 → 1；上限 16384（同后端 validateDim 范围）。
  * 防御性：上游 vue model 若被外部输入污染（如 v-model 输入框 invalid），不让 d 生成 `M NaN NaN`。
  */
 function sanitizeDimension(v: number): number {
@@ -67,7 +67,7 @@ function sanitizeDimension(v: number): number {
 }
 
 /**
- * M16 P3.4：radius sanitize —— 同 sanitizeDimension 但额外 clamp 到 maxR（一般是 min(w, h)/2）。
+ * radius sanitize —— 同 sanitizeDimension 但额外 clamp 到 maxR（一般是 min(w, h)/2）。
  */
 function sanitizeRadius(v: number, maxR: number): number {
     const safe = Number.isFinite(v) && v > 0 ? v : 1;
@@ -183,7 +183,7 @@ function onMaskClear() {
 }
 
 /**
- * 2026-05-25 项 1：触发 lasso 编辑模式。仅是 UI hint —— 实际拖动绘制由 CanvasView /
+ * 触发 lasso 编辑模式。仅是 UI hint —— 实际拖动绘制由 CanvasView /
  * useLassoMask 监听全局 Alt + drag 事件捕获，不需要 RightPanel 改 store state。
  * 这里只做用户教育（toast / hint）；按钮 click 主要为可发现性。
  */
@@ -208,7 +208,7 @@ watch(
         const im = props.element;
         if (!im.mask) return;
         const kind = detectMaskPreset(im);
-        // 2026-05-25 项 1：lasso 是用户自由 path，resize 时不重置（保持原 d）
+        // lasso 是用户自由 path，resize 时不重置（保持原 d）
         if (kind === 'lasso') return;
         let regenerated = '';
         if (kind === 'circle') regenerated = makeCircleD(im.w, im.h);
@@ -341,7 +341,7 @@ async function onReplaceFileChange(e: Event) {
             <input type="checkbox" :checked="imageMaskInverted" @change="onMaskInvertedToggle" />
           </label>
         </Tooltip>
-        <!-- 2026-05-25 项 2：羽化滑块 -->
+        <!-- 羽化滑块 -->
         <Tooltip v-if="imageMaskKind !== 'none'" :text="t.image.maskFeatherTip">
           <label class="flex items-center gap-2 pl-1">
             <span class="hc-field-label flex-shrink-0">{{ t.image.maskFeather }}</span>
@@ -358,7 +358,7 @@ async function onReplaceFileChange(e: Event) {
             <span class="hc-field-label tabular-nums w-10 text-right">{{ imageMaskFeather }} {{ t.image.maskFeatherUnit }}</span>
           </label>
         </Tooltip>
-        <!-- 2026-05-25 项 1：lasso 编辑触发 + 清除蒙版 -->
+        <!-- lasso 编辑触发 + 清除蒙版 -->
         <div class="flex gap-1 pl-1">
           <Tooltip :text="t.image.maskEditLassoTip">
             <button

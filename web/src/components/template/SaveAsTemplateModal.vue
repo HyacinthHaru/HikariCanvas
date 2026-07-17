@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * M14 创意工坊：把当前画布保存为模板的 modal。
+ * 创意工坊：把当前画布保存为模板的 modal。
  *
  * - 自动扫描所有 TextElement，按 z-order 编号 text_1 / text_2 / ...
  * - 用户可对每个 auto param 选 keep（参数化）或 drop（保留静态文本）
@@ -95,7 +95,7 @@ async function onSave() {
             description: description.value || null,
             paramConfig: { textActions },
         }, 8000);
-        // 2026-05-21 bugfix: wsClient.handleAck 直接 resolve `envelope.payload`（不是整个 envelope）。
+        // wsClient.handleAck 直接 resolve `envelope.payload`（不是整个 envelope）。
         // 之前 `(ack as ...).payload?.templateId` 多剥一层永远是 undefined → 走 else 显"发布失败"，
         // 即使 server 实际 publish 完全成功（log 含 "Templates reloaded: user=N"）。
         const ackPayload = ack as { templateId?: string } | undefined;

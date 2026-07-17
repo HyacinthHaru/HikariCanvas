@@ -7,7 +7,7 @@ import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
 /**
- * M17.4 Snap 设置 popover：磁铁 icon 按钮 + 弹出面板。
+ * Snap 设置 popover：磁铁 icon 按钮 + 弹出面板。
  *
  * 内容：
  *   - 总开关 Enable Snap

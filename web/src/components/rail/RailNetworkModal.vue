@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.4.4：铁路网络管理 modal。
+ * 铁路网络管理 modal。
  *
  * 三层：线路 → 站点 + 车次 → 车次详情（独立子 modal）。
  *
@@ -35,10 +35,10 @@ const stationDraftName = ref('');
 const runDialogOpenForRunId = ref<string | null>(null);
 const errorMsg = ref<string | null>(null);
 
-// 0.4.5 P2：inline 删除确认（替换 confirm()）。type + id 共同标识哪一行
+// inline 删除确认（替换 confirm()）。type + id 共同标识哪一行
 const confirmingDelete = ref<{ type: 'line' | 'station' | 'run'; id: string } | null>(null);
 
-// 0.4.5 P2：新建车次对话框（替换 prompt()）
+// 新建车次对话框（替换 prompt()）
 const showNewRunDialog = ref(false);
 const newRunNumber = ref('');
 const newRunDirection = ref<'up' | 'down'>('up');
@@ -74,7 +74,7 @@ async function loadAll() {
 
 async function selectLine(id: string) {
     selectedLineId.value = id;
-    // 0.4.5 P1：调 rail.line.detail 一次性拉 stations + runs + 各 run 的 timetable
+    // 调 rail.line.detail 一次性拉 stations + runs + 各 run 的 timetable
     try {
         const detail = await ws.sendRailLineDetail(id);
         rail.setLine(detail.line);
@@ -173,7 +173,7 @@ async function updateStationSort(s: RailStation, delta: number) {
     }
 }
 
-// 0.4.5 P4：HTML5 native drag-drop 拖动排序
+// HTML5 native drag-drop 拖动排序
 const draggingStationId = ref<string | null>(null);
 const dragOverStationId = ref<string | null>(null);
 
@@ -350,7 +350,7 @@ function closeRunDialog() {
             <div v-if="rail.allLines.length === 0"
                  class="p-3 text-center text-[color:var(--muted-foreground)] space-y-2">
               <div>{{ t.rail.emptyLines }}</div>
-              <!-- 0.4.5 P7：首次打开空状态加示例引导 -->
+              <!-- 首次打开空状态加示例引导 -->
               <div class="text-[10px] bg-[color:var(--ctp-blue)]/10 text-[color:var(--ctp-blue)] p-2 rounded text-left">
                 <div class="font-medium mb-1">💡 {{ t.rail.tipFirstLine }}</div>
                 <div class="opacity-80">{{ t.rail.tipExample }}</div>
@@ -364,7 +364,7 @@ function closeRunDialog() {
           <div v-if="!selectedLine"
                class="p-6 text-center text-[color:var(--muted-foreground)] space-y-3">
             <div>{{ t.rail.pickLine }}</div>
-            <!-- 0.4.5 P7：未选线路时显示典型工作流引导 -->
+            <!-- 未选线路时显示典型工作流引导 -->
             <ol class="text-[11px] text-left max-w-md mx-auto space-y-1 bg-[color:var(--muted)] p-3 rounded">
               <li class="opacity-80">1️⃣ {{ t.rail.tipStep1 }}</li>
               <li class="opacity-80">2️⃣ {{ t.rail.tipStep2 }}</li>
@@ -499,7 +499,7 @@ function closeRunDialog() {
         :stations="selectedStations"
         @close="closeRunDialog" />
 
-      <!-- 0.4.5 P2：新车次创建对话框（替换原生 prompt） -->
+      <!-- 新车次创建对话框（替换原生 prompt） -->
       <div v-if="showNewRunDialog"
            class="absolute inset-0 z-[55] bg-[color:var(--ctp-crust)]/50 flex items-center justify-center p-4"
            @click.self="showNewRunDialog = false"

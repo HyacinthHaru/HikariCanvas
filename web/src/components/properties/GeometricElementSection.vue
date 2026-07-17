@@ -83,7 +83,7 @@ function onNumberChange(field: string, ev: Event) {
           : t.properties.pathHeader }}
     </summary>
     <div class="pt-1.5 space-y-2">
-      <!-- fill：toggle + FillInput（M11-D 支持 solid / linear / radial） -->
+      <!-- fill：toggle + FillInput（支持 solid / linear / radial） -->
       <div class="flex items-start justify-between gap-2">
         <span class="text-[color:var(--muted-foreground)] mt-0.5">{{ t.properties.fill }}</span>
         <div class="flex flex-col gap-1 flex-1 max-w-[180px]">

@@ -39,14 +39,14 @@ function onNumberChange(field: string, ev: Event) {
     let v = parseFloat((ev.target as HTMLInputElement).value);
     if (!Number.isFinite(v)) return;
     if (field === 'rotation') v = ((Math.round(v) % 360) + 360) % 360;
-    // P2-57：w/h JS 层下限钳位。HTML `min="1"` 只约束 spinner/validity，不阻止手动键入负数；
+    // w/h JS 层下限钳位。HTML `min="1"` 只约束 spinner/validity，不阻止手动键入负数；
     // 负 w/h 乐观本地 mutate 后 PreviewRenderer.drawCircle/drawShape 收到负半径会抛
     // IndexSizeError 中断整帧（后端 ElementValidator 也拒 v<=0，落地前先护住本地帧）。
     if (field === 'w' || field === 'h') v = Math.max(1, v);
     emit('updateDebounced', { [field]: v });
 }
 
-// ---------- M8-E：element opacity slider ----------
+// ---------- element opacity slider ----------
 
 const opacityDraftPct = ref<number | null>(null);
 watch(() => props.element.id, () => { opacityDraftPct.value = null; });
@@ -82,7 +82,7 @@ function onOpacityChange(): void {
     <summary class="cursor-pointer select-none text-[color:var(--muted-foreground)] uppercase tracking-wider text-xs py-1 hover:text-[color:var(--foreground)]">
       {{ t.properties.transformHeader }}
     </summary>
-    <!-- M25：把 x/y → position 段，w/h → size 段，每段加 i18n 帮助 tooltip -->
+    <!-- 把 x/y → position 段，w/h → size 段，每段加 i18n 帮助 tooltip -->
     <div class="grid grid-cols-2 gap-2 pt-1.5">
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
@@ -141,7 +141,7 @@ function onOpacityChange(): void {
         <span>{{ t.properties.locked }}</span>
       </label>
     </div>
-    <!-- M8-E：element opacity slider -->
+    <!-- element opacity slider -->
     <label class="flex items-center gap-2 pt-1">
       <span class="hc-field-label">
         {{ t.properties.opacity }}
@@ -161,7 +161,7 @@ function onOpacityChange(): void {
       >
       <span class="w-8 text-xs text-right tabular-nums">{{ opacityPct }}%</span>
     </label>
-    <!-- M8-E：blendMode + renderMode UI 保留但 disabled（M11 dither 一并实装合成） -->
+    <!-- blendMode + renderMode UI 保留但 disabled（dither 一并实装合成） -->
     <div class="grid grid-cols-2 gap-2 pt-1">
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.4.0-P2-G：把 {@link useLongPressIncrement} 包成 props-driven 按钮组件。
+ * 把 {@link useLongPressIncrement} 包成 props-driven 按钮组件。
  *
  * <p>原因：composable 必须在组件 setup 顶层调用——VariablePanel 里 v-for 行
  * 没法对每行单独调 useLongPressIncrement。封一个独立组件让每个按钮拥有自己的 timer

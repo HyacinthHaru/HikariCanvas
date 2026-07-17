@@ -25,7 +25,7 @@ const { t } = useI18n();
 const ws = getWsClient();
 const { exportProject } = useProjectExport();
 
-// 2026-05-14 lock-state：published 概念砍 → lock 概念。仅 wall owner 可锁/解锁。
+// lock-state：published 概念砍 → lock 概念。仅 wall owner 可锁/解锁。
 const locked = computed(() => project.isLocked);
 const isOwner = computed(() => project.isOwner);
 
@@ -40,20 +40,20 @@ const copiedFlash = ref<'wallid' | null>(null);
 let copiedFlashTimer: number | null = null;
 
 const saveModalOpen = ref(false);
-// 0.8 A3：.canvas 工程导入对话框开关
+// .canvas 工程导入对话框开关
 const importOpen = ref(false);
-// 0.8 B5：SVG 矢量导入对话框开关
+// SVG 矢量导入对话框开关
 const svgImportOpen = ref(false);
 
 /**
- * M16 P6.8：lock / unlock 进行中的 promise。pending 时按钮 disabled；防止用户连点
+ * lock / unlock 进行中的 promise。pending 时按钮 disabled；防止用户连点
  * 引起 lockedAt 在多次 ack 之间跳变。alias 同款用 aliasInFlight。
  */
 const lockInFlight = ref(false);
 const aliasInFlight = ref(false);
 
 /**
- * M16 P6.8：optimistic mutation + rollback on server reject。
+ * optimistic mutation + rollback on server reject。
  *
  * 之前实现只 ws.send 不等 ack；server 拒绝（FORBIDDEN / VALIDATION / NOT_OWNER）时
  * 用户看到 UI 已锁但实际未锁，靠 watch(lastError) log 提示但不还原状态。现在 sendWithAck
@@ -112,7 +112,7 @@ async function commitAliasEdit() {
         aliasError.value = t.value.wall.aliasInvalid;
         return;
     }
-    // M16 P6.8：optimistic + ack-driven rollback
+    // optimistic + ack-driven rollback
     const prev = project.alias;
     project.alias = trimmed;
     editingAlias.value = false;
@@ -195,7 +195,7 @@ function showRefreshFlash(msg: string) {
 }
 
 // ---------------------------------------------------------------------------
-// 0.7.4 响应式溢出菜单
+// 响应式溢出菜单
 // ---------------------------------------------------------------------------
 
 /**
@@ -257,7 +257,7 @@ const showMoreButton = computed(() => true);
       <span class="text-xs text-[color:var(--muted-foreground)] shrink-0">
         {{ net.serverVersion ? `server ${net.serverVersion}` : '' }}
       </span>
-      <!-- M5.5: wall 元数据 -->
+      <!-- wall 元数据 -->
       <div v-if="project.wallId" class="flex items-center gap-2 ml-2 text-xs min-w-0 overflow-hidden">
         <Tooltip :text="t.wall.copyId(project.wallId)">
           <button
@@ -301,7 +301,7 @@ const showMoreButton = computed(() => true);
           </button>
           <span v-if="aliasError" class="text-xs text-[color:var(--destructive)] ml-1">{{ aliasError }}</span>
         </div>
-        <!-- 2026-05-14 lock 按钮：替换原 publish 按钮。owner 可点；非 owner disabled。 -->
+        <!-- lock 按钮：替换原 publish 按钮。owner 可点；非 owner disabled。 -->
         <Tooltip :text="locked
           ? (isOwner ? t.wall.lockToggleOff : t.wall.lockOwnerOnly)
           : (isOwner ? t.wall.lockToggleOn : t.wall.lockOwnerOnly)">
@@ -354,7 +354,7 @@ const showMoreButton = computed(() => true);
           <PanelRight class="size-4" />
         </button>
       </Tooltip>
-      <!-- 0.6 P4：时间轴（关键帧动画）AE 风底部 dock -->
+      <!-- 时间轴（关键帧动画）AE 风底部 dock -->
       <Tooltip :text="t.topbar.timelineManager">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
@@ -364,7 +364,7 @@ const showMoreButton = computed(() => true);
           <Film class="size-4" />
         </button>
       </Tooltip>
-      <!-- 0.7.0 P4：积木脚本编辑器（按条件做事）全屏 overlay -->
+      <!-- 积木脚本编辑器（按条件做事）全屏 overlay -->
       <Tooltip :text="t.topbar.scriptEditor">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
@@ -374,7 +374,7 @@ const showMoreButton = computed(() => true);
           <Puzzle class="size-4" />
         </button>
       </Tooltip>
-      <!-- 0.4.0-P2-G：变量管理面板触发 -->
+      <!-- 变量管理面板触发 -->
       <Tooltip :text="t.topbar.variableManager">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
@@ -384,7 +384,7 @@ const showMoreButton = computed(() => true);
           <Variable class="size-4" />
         </button>
       </Tooltip>
-      <!-- 0.4.0-P3-L：列车时刻表管理 -->
+      <!-- 列车时刻表管理 -->
       <Tooltip :text="t.topbar.scheduleManager">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
@@ -397,7 +397,7 @@ const showMoreButton = computed(() => true);
 
       <!-- ── 低频（空间不足时折叠进 … 菜单）── -->
 
-      <!-- 0.4.4：铁路网络管理（低频：建好线路后很少再打开） -->
+      <!-- 铁路网络管理（低频：建好线路后很少再打开） -->
       <Tooltip v-if="showTrainTrack" :text="t.topbar.railNetwork">
         <button
           class="hc-btn p-1.5 rounded-[var(--radius-sm)] transition-colors"
@@ -417,7 +417,7 @@ const showMoreButton = computed(() => true);
           <Bookmark class="size-4" />
         </button>
       </Tooltip>
-      <!-- M17.4 F3：Snap 设置（低频：配一次就不常动） -->
+      <!-- Snap 设置（低频：配一次就不常动） -->
       <SnapSettingsPopover v-if="showSnap" />
       <!-- Terminal 日志（低频：调试用） -->
       <Tooltip v-if="showTerminal" :text="t.topbar.toggleLog">
@@ -457,7 +457,7 @@ const showMoreButton = computed(() => true);
             <Moon v-else class="size-4" />
           </button>
         </Tooltip>
-        <!-- M24-B：主题切换器（preset / accent / radius） -->
+        <!-- 主题切换器（preset / accent / radius） -->
         <ThemeSwitcher />
       </template>
 

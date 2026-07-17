@@ -49,7 +49,7 @@ function show(ev: MouseEvent) {
     const target = ev.currentTarget as HTMLElement;
     showTimer = window.setTimeout(() => {
         if (!target) return;
-        // P3-110：尊重 placement prop（默认 bottom）。视口边界自动翻转留待后续。
+        // 尊重 placement prop（默认 bottom）。视口边界自动翻转留待后续。
         computedPlacement.value = props.placement ?? 'bottom';
         position(target, computedPlacement.value);
         visible.value = true;
@@ -57,7 +57,7 @@ function show(ev: MouseEvent) {
 }
 
 /**
- * P3-110：按 placement 切换 transform 锚点。
+ * 按 placement 切换 transform 锚点。
  * - top/bottom 用 translateX(-50%) 水平居中（left = trigger 中点）
  * - left 用 translate(-100%, -50%) 贴 trigger 左侧（left = trigger 左边 - GAP）
  * - right 用 translateY(-50%) 贴 trigger 右侧（left = trigger 右边 + GAP）

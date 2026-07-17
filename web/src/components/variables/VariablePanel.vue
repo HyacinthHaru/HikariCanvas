@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * 0.4.0-P2-G：变量管理主面板。右侧 fixed drawer，380px 宽。
+ * 变量管理主面板。右侧 fixed drawer，380px 宽。
  *
  * <p>来源契约：{@code docs/dynamic-data.md §6.1}。展示 4 个分组：</p>
  * <ul>
  *   <li>"我的变量"：当前 wall 的 {@code user:<wallId>/*}</li>
- *   <li>"由插件提供"：P3+P4 启用后插件变量；P2 empty state</li>
- *   <li>"系统（自动）"：P3 启用 System Provider 后；P2 empty state</li>
- *   <li>"PAPI"：装 PAPI 后；P2 empty state</li>
+ *   <li>"由插件提供"：有插件推送变量时显示，否则 empty state</li>
+ *   <li>"系统（自动）"：System Provider 提供的变量，否则 empty state</li>
+ *   <li>"PAPI"：装 PAPI 后显示，否则 empty state</li>
  * </ul>
  *
  * <p>关闭路径：</p>
@@ -54,7 +54,7 @@ const rootRef = ref<HTMLElement | null>(null);
 const searchKeyword = ref('');
 
 // 分组折叠态（默认全展开）
-// 0.4.3：新增 global 分组（userglobal/*）
+// 新增 global 分组（userglobal/*）
 const collapsed = ref<Record<'mine' | 'global' | 'plugin' | 'system' | 'papi', boolean>>({
     mine: false,
     global: false,
@@ -115,7 +115,7 @@ function matchesKeyword(fullName: string, v: Variable, kw: string): boolean {
     if (fullName.toLowerCase().includes(kw)) return true;
     if (v.namespace.toLowerCase().includes(kw)) return true;
     if (v.key.toLowerCase().includes(kw)) return true;
-    // 0.4.2：alias 也参与命中
+    // alias 也参与命中
     const alias = aliasStore.get(fullName);
     if (alias && alias.toLowerCase().includes(kw)) return true;
     return false;
@@ -126,7 +126,7 @@ function toggleGroup(g: 'mine' | 'global' | 'plugin' | 'system' | 'papi') {
 }
 
 /**
- * 0.4.3：全局用户变量列表（{@code userglobal/*}），含 owner 区分。
+ * 全局用户变量列表（{@code userglobal/*}），含 owner 区分。
  * 行字段同 myVariables，加 {@code isMine}（owner = self） + {@code ownerName}（展示用）。
  */
 const globalVariables = computed<Array<{
@@ -194,7 +194,7 @@ async function confirmDelete(fullName: string) {
     }
 }
 
-// ---------- 0.4.2：inline alias 编辑 ----------
+// ---------- inline alias 编辑 ----------
 
 function openAliasEdit(fullName: string) {
     editingAliasFor.value = fullName;
@@ -498,7 +498,7 @@ function isHexColor(s: string | null): boolean {
         </div>
       </section>
 
-      <!-- 1.5) 0.4.3 全局变量（userglobal/*）-->
+      <!-- 1.5) 全局变量（userglobal/*）-->
       <section>
         <button
           class="w-full flex items-center gap-1 py-1 px-1 rounded hover:bg-[color:var(--accent)] text-left"

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 /**
- * 0.6 P4 / P4.5：AE 风时间轴底部 dock。
+ * AE 风时间轴底部 dock。
  *
- * <p>P4：dock 布局 + scrubber 60fps 本地预览 + 本地播放 + 缓动曲线编辑器 + timeline 设置。
- * P4.5（AE/PR 风整体关键帧）：元素行直接显示/选/删/缓动一个"整体关键帧"——该时刻所有 transform
+ * <p>dock 布局 + scrubber 60fps 本地预览 + 本地播放 + 缓动曲线编辑器 + timeline 设置。
+ * AE/PR 风整体关键帧：元素行直接显示/选/删/缓动一个"整体关键帧"——该时刻所有 transform
  * 几何属性（x/y/w/h/rotation/opacity）的关键帧聚合成一个块；缓动统一应用到所有 transform → x/y
  * 进度同步 → 运动轨迹保持直线（只速度按缓动变，修"调缓动把轨迹掰弯"）。展开元素看 per-property
- * 子轨（P4.5a 只读灰显，单属性微调留 P4.5b）。</p>
+ * 子轨（只读灰显，单属性微调留后续）。</p>
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useEventListener } from '@vueuse/core';
@@ -59,7 +59,7 @@ const tl = computed(() => store.activeTimeline);
 const durationMs = computed(() => tl.value?.durationMs ?? 0);
 const playing = computed(() => store.playing);
 
-// ---------- 轨道展平：element 主行（整体帧）+ 展开后 per-property 子行（只读，P4.5b 微调） ----------
+// ---------- 轨道展平：element 主行（整体帧）+ 展开后 per-property 子行（只读，后续微调） ----------
 interface FlatRow {
     kind: 'element' | 'property';
     elementId: string;
@@ -171,7 +171,7 @@ function onBlockPointerUp(e: PointerEvent): void {
     blockPointerId = -1;
     if (d.moved && d.curTimeMs !== d.origTimeMs && tl.value) {
         const track = tl.value.tracks?.[d.elementId];
-        // 整组帧共享 coalesceKey → 后端合并成一步撤销（与拉就设同理，Bug 2）
+        // 整组帧共享 coalesceKey → 后端合并成一步撤销（与拉就设同理）
         const coalesceKey = `integ-move:${d.elementId}:${d.origTimeMs}`;
         for (const kfId of d.keyframeIds) {
             const kf = track?.find(k => k.id === kfId);
@@ -390,13 +390,13 @@ function deleteTimeline(): void {
     confirmDeleteTimeline.value = false; settingsOpen.value = false;
 }
 function loopModeLabel(m: string): string {
-    // t 是 ComputedRef，script 内须 .value 解包（hotfix-2）
+    // t 是 ComputedRef，script 内须 .value 解包
     const x = t.value.timeline as unknown as Record<string, string>;
     const map: Record<string, string> = { once: x.loopOnce, loop: x.loopLoop, pingPong: x.loopPingPong };
     return map[m] ?? m;
 }
 
-// ---------- 触发方式（P5）：手动 / 变量变化 / 到点 ----------
+// ---------- 触发方式：手动 / 变量变化 / 到点 ----------
 const triggerFullName = computed(() => tl.value?.trigger?.params?.fullName ?? '');
 const draftTriggerType = ref<TriggerType>('manual');
 watch(() => tl.value?.trigger?.type, (ty) => { draftTriggerType.value = (ty ?? 'manual') as TriggerType; }, { immediate: true });
@@ -589,7 +589,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
                 @dblclick.stop
               />
             </template>
-            <!-- 属性子行：per-property 关键帧块（P4.5b 可点选，选中后 Del 删单帧） -->
+            <!-- 属性子行：per-property 关键帧块（可点选，选中后 Del 删单帧） -->
             <template v-else>
               <div
                 v-for="kf in row.keyframes"
@@ -650,7 +650,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
           <option v-for="m in LOOP_MODES" :key="m" :value="m">{{ loopModeLabel(m) }}</option>
         </select>
       </label>
-      <!-- 触发方式（P5）：手动 / 变量变化 / 到点 -->
+      <!-- 触发方式：手动 / 变量变化 / 到点 -->
       <label class="flex flex-col gap-1">
         <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.triggerLabel }}</span>
         <select v-model="draftTriggerType" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onTriggerTypeChange">
@@ -673,7 +673,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
       </button>
     </div>
 
-    <!-- 触发变量选择器（P5）：VariablePicker 自身向下展开（CSS top:100%），而 dock 在屏幕底部，
+    <!-- 触发变量选择器：VariablePicker 自身向下展开（CSS top:100%），而 dock 在屏幕底部，
          直接放 dock 内会溢出到视口外看不见。用 fixed 居中浮层给它一个有宽度的定位父级，在可见区展开。 -->
     <div v-if="triggerPickerOpen" class="fixed left-1/2 -translate-x-1/2 top-20 w-[min(420px,90vw)] z-[100]">
       <VariablePicker :wall-id="project.wallId" @select="onTriggerVariableSelect" @close="cancelTriggerPicker" />

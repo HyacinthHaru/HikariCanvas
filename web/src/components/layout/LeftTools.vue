@@ -19,7 +19,7 @@ const templates = useTemplatesStore();
 const ui = useUiStore();
 const iconLibrary = useIconLibraryStore();
 const { t } = useI18n();
-// 2026-05-25 ultrareview #8：lock readonly 多入口 guard。
+// lock readonly 多入口 guard。
 // 工具切换（V/M/H/L/A/C/S/B/G/I）不属于 mutation —— 这些只改前端 UI 状态，
 // 不发 ws.send（select 工具下还能选元素看属性）。所以只 guard 真正下发 op 的按钮：
 // addText / addRect / openTemplates / undo / redo + IconLibrary toggle 之外的按钮。
@@ -81,7 +81,7 @@ function openTemplates() {
     templates.openGallery();
 }
 
-// 0.7.4：自动两栏——当 aside 可用高度 < 阈值时切 grid-cols-2。
+// 自动两栏——当 aside 可用高度 < 阈值时切 grid-cols-2。
 // 阈值计算：15 按钮 × 36px + 4px gap × 14 + 3 分隔线 × 16px + py-2×2 ≈ 658px → 取 660px。
 const SINGLE_COL_HEIGHT_THRESHOLD = 660;
 const asideRef = ref<HTMLElement | null>(null);
@@ -126,7 +126,7 @@ const isSingleCol = computed(() => availableHeight.value >= SINGLE_COL_HEIGHT_TH
         <Move class="size-5" />
       </button>
     </Tooltip>
-    <!-- M17 F4：手型工具，按住 Space 也可临时切换 -->
+    <!-- 手型工具，按住 Space 也可临时切换 -->
     <Tooltip :text="t.tools.handTool" shortcut="H">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
@@ -141,7 +141,7 @@ const isSingleCol = computed(() => availableHeight.value >= SINGLE_COL_HEIGHT_TH
 
     <div class="my-1 h-px bg-[color:var(--border)]" :class="isSingleCol ? 'w-8' : 'col-span-2 w-20'"></div>
 
-    <!-- M9-D：绘制工具激活态切换（drag-to-create 在 M9-E 接入） -->
+    <!-- 绘制工具激活态切换（drag-to-create） -->
     <Tooltip :text="t.tools.lineTool" shortcut="L">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
@@ -197,7 +197,7 @@ const isSingleCol = computed(() => availableHeight.value >= SINGLE_COL_HEIGHT_TH
         <Brush class="size-5" />
       </button>
     </Tooltip>
-    <!-- M18 Live Paint：油漆桶工具（click 工具，非 drag-to-create） -->
+    <!-- Live Paint：油漆桶工具（click 工具，非 drag-to-create） -->
     <Tooltip :text="t.tools.paintBucketTool" shortcut="G">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] transition-colors"
@@ -212,7 +212,7 @@ const isSingleCol = computed(() => availableHeight.value >= SINGLE_COL_HEIGHT_TH
 
     <div class="my-1 h-px bg-[color:var(--border)]" :class="isSingleCol ? 'w-8' : 'col-span-2 w-20'"></div>
 
-    <!-- M26.3：图标库 panel toggle（不参与 activeTool）。快捷键 I。 -->
+    <!-- 图标库 panel toggle（不参与 activeTool）。快捷键 I。 -->
     <Tooltip :text="t.tools.iconLibraryTool" shortcut="I">
       <button
         data-icon-library-trigger
@@ -237,7 +237,7 @@ const isSingleCol = computed(() => availableHeight.value >= SINGLE_COL_HEIGHT_TH
         <Sparkles class="size-5" />
       </button>
     </Tooltip>
-    <!-- 2026-05-25 ultrareview #8：lock 时 disabled，避免视觉误以为可点 -->
+    <!-- lock 时 disabled，避免视觉误以为可点 -->
     <Tooltip :text="t.tools.addText">
       <button
         class="hc-btn p-2 rounded-[var(--radius-sm)] hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 /**
- * VariablePicker（0.4.0-P2-H + P3-M + 0.4.2 表格化）：编辑器内 popover 变量选择器。
+ * VariablePicker：编辑器内 popover 变量选择器。
  *
  * <p>从 TextElementSection / Chip editor 的"插入变量"按钮 / 文本中输入 {@code ${} 自动触发；
  * 选中后把短名（{@code user/key} 或 {@code namespace/key}）回传给 caller，由 caller 拼成
  * {@code ${var:...}} 插入 textarea 或 chip。</p>
  *
- * <p><b>0.4.2</b>：</p>
+ * <p><b>3 列表格</b>：</p>
  * <ul>
  *   <li>列表改 3 列表格：<b>别名 | 当前数值 | 变量名</b>；后面追加 ✏ inline 编辑按钮</li>
  *   <li>每行点 ✏ → 替换为 input + 保存/清空/取消 按钮 → wsClient.sendVariableAliasSet/Clear</li>
@@ -62,7 +62,7 @@ const activeIndex = ref(0);
 const metadata = ref<NamespaceMetadata[]>([]);
 
 /**
- * 0.4.2 inline alias 编辑状态：
+ * inline alias 编辑状态：
  * - editingFullName：null = 没在编辑；非 null = 当前正在编辑此 fullName 的别名
  * - editingDraft：编辑框内当前文本
  * - editingError：长度等校验错误
@@ -76,7 +76,7 @@ const editingSubmitting = ref(false);
 const merged = computed(() => mergeMetadata(store.variables.values(), metadata.value));
 
 const groups = computed<PickerGroup[]>(() =>
-    // 0.4.3：第 5 参 selfUuid 传入让 userglobal 分到 myGlobal / othersGlobal
+    // 第 5 参 selfUuid 传入让 userglobal 分到 myGlobal / othersGlobal
     buildGroups(merged.value, props.wallId, keyword.value, aliasStore.aliases,
         project.selfUuid),
 );
@@ -162,7 +162,7 @@ onMounted(async () => {
 onClickOutside(rootRef, () => emit('close'));
 
 // ============================================================================
-// 0.4.2：inline alias 编辑
+// inline alias 编辑
 // ============================================================================
 
 function openAliasEdit(v: Variable, ev: Event) {

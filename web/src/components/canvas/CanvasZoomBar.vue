@@ -115,7 +115,7 @@ function cancelZoomEdit() {
     <Tooltip :text="t.canvas.gridTip">
       <label class="flex items-center gap-1 pl-2 border-l border-[color:var(--border)] ml-1">
         <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.canvas.grid }}</span>
-        <!-- 2026-05-25 ultrareview #8：grid 改值是 canvas mutation，lock 时禁用 -->
+        <!-- grid 改值是 canvas mutation，lock 时禁用 -->
         <input
           type="number"
           min="0"
@@ -128,7 +128,7 @@ function cancelZoomEdit() {
         >
       </label>
     </Tooltip>
-    <!-- 0.7.4：画布导航快捷键提示（低调小字，半透明） -->
+    <!-- 画布导航快捷键提示（低调小字，半透明） -->
     <span class="hc-nav-hint pl-2 border-l border-[color:var(--border)] ml-1">
       {{ t.canvas.navHint }}
     </span>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * M26.3 IconLibrary：图标库侧边 panel。
+ * IconLibrary：图标库侧边 panel。
  *
  * <p>触发：LeftTools 的 Shapes 按钮 toggle store.open；快捷键 I（详见
  * useCanvasShortcuts）。Panel 风格而非 activeTool——不参与 select/move/brush 工具切换，
@@ -21,7 +21,7 @@
  * <p><b>交互</b>：点击 = 在画布中心新建 IconElement（64×64）；拖动 = setData
  * application/x-hikari-icon，CanvasView 接 drop 解 + 创建。</p>
  *
- * <p><b>风格</b>：M24 Catppuccin + M3 扁平。所有颜色 / 圆角走 CSS token；不用
+ * <p><b>风格</b>：Catppuccin + Material 3 扁平。所有颜色 / 圆角走 CSS token；不用
  * backdrop-blur / 阴影堆叠。</p>
  */
 
@@ -227,7 +227,7 @@ function unobserveCell(el: Element | null): void {
 
 // IconLoader 全局回调：任何 id 加载完都 tick 一下让 grid 重渲染
 const onLoaderHook = (_id: string) => { pathCacheTick.value++; };
-// P3-40：onIconLoaded 返回 unsubscribe 闭包；onBeforeUnmount 调用注销，避免 IconLoader
+// onIconLoaded 返回 unsubscribe 闭包；onBeforeUnmount 调用注销，避免 IconLoader
 // 模块级 readyHandlers 数组只增不减（IconLibrary 反复挂载会泄漏旧闭包 + 重复 tick）。
 let unsubscribeIconLoaded: (() => void) | null = null;
 onMounted(() => {

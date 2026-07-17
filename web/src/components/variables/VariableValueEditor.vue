@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.4.0-P2-G：变量当前值编辑器（modal）。
+ * 变量当前值编辑器（modal）。
  *
  * <p>VariablePanel 行点 "改值" 后弹出；按 {@link Variable.type} 切换控件，
  * 保存时走 {@code wsClient.sendVariableSet}。</p>

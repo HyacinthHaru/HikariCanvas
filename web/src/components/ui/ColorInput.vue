@@ -7,7 +7,7 @@ import { DEFAULT_SWATCHES } from '@/config/palettes';
 import { useI18n } from '@/i18n';
 
 /**
- * M10 ColorInput：色块 + hex 文本 + 弹出 popover（HTML5 picker + alpha slider + 三色板 + 复制）。
+ * ColorInput：色块 + hex 文本 + 弹出 popover（HTML5 picker + alpha slider + 三色板 + 复制）。
  *
  * 与原生 {@code <input type="color">} 的差异：
  * - 支持 alpha（{@code allowAlpha} 默认 true，alpha=ff 时存 6 位 hex，否则 8 位）

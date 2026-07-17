@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * 0.4.0-P3-L：时刻表 entry 添加 / 编辑对话框。
+ * 时刻表 entry 添加 / 编辑对话框。
  *
  * <p>双用途：传 entry={null} 时作"添加"；传 entry={existing} 时作"编辑"。submit emit
  * 由父组件 ScheduleManagerModal 接管，调对应的 sendScheduleEntryAdd / Update。</p>
  *
- * <p>0.4.0 bugfix（Bug 4）：增 precision prop。precision="second" 时时间输入接受
+ * <p>增 precision prop。precision="second" 时时间输入接受
  * HH:mm:ss + step="1" 让浏览器显秒；precision="minute" 时仅 HH:mm + step="60"。
  * 编辑现有 HH:mm:ss entry 时显示完整秒；编辑 HH:mm entry 自动补 ":00"。</p>
  */
@@ -16,7 +16,7 @@ import type { ScheduleEntry, SchedulePrecision } from '@/types/schedule';
 
 const props = defineProps<{
     entry: ScheduleEntry | null;        // null = 新增；非空 = 编辑
-    precision: SchedulePrecision;        // 0.4.0 bugfix（Bug 4）
+    precision: SchedulePrecision;
     submitting: boolean;
     errorMessage: string | null;
 }>();

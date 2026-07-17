@@ -9,7 +9,7 @@
  *   做 optimistic mutation + ws.send；保证对外 op 流与拆分前一致
  * - 底部 ElementListSection（不动）
  *
- * 拆分前 1076 行 god component。M13 后续段 + M14 协作各类还会继续往里塞东西，
+ * 拆分前 1076 行 god component。后续段还会继续往里塞东西，
  * 留薄壳让子组件迭代不影响其他段。
  */
 import { computed } from 'vue';
@@ -103,14 +103,14 @@ function deleteMultiSelected(): void {
 <template>
   <aside class="w-72 bg-[color:var(--card)] border-l border-[color:var(--border)] flex flex-col"
          :class="{ 'hc-readonly-panel': project.isLocked }">
-    <!-- 2026-05-14 lock-state：locked 时整个右栏 pointer-events: none + opacity 60%，
+    <!-- lock-state：locked 时整个右栏 pointer-events: none + opacity 60%，
          禁止任何编辑控件交互；解锁路径只能走 TopBar Lock 按钮（owner 才可见）。 -->
-    <!-- M8-D：图层面板（顶端，自身控制 max-h 40%）。 -->
+    <!-- 图层面板（顶端，自身控制 max-h 40%）。 -->
     <LayerPanel />
 
-    <!-- M12-D：笔刷工具激活时，下半 BrushPanel 替代 Properties；其他工具走 Properties 原路径 -->
+    <!-- 笔刷工具激活时，下半 BrushPanel 替代 Properties；其他工具走 Properties 原路径 -->
     <BrushPanel v-if="ui.activeTool === 'brush'" />
-    <!-- M18 Live Paint：油漆桶工具激活时，下半 PaintBucketPanel 替代 Properties -->
+    <!-- Live Paint：油漆桶工具激活时，下半 PaintBucketPanel 替代 Properties -->
     <PaintBucketPanel v-else-if="ui.activeTool === 'paint-bucket'" />
 
     <!-- Properties -->
@@ -143,7 +143,7 @@ function deleteMultiSelected(): void {
       </div>
 
       <div v-else-if="!selected" class="text-xs">
-        <!-- 未选中元素时空 hint + M17 F5 画板设置段 -->
+        <!-- 未选中元素时空 hint + 画板设置段 -->
         <div class="p-3 text-[color:var(--muted-foreground)]">
           {{ t.properties.empty }}
         </div>
@@ -189,7 +189,7 @@ function deleteMultiSelected(): void {
           @update-debounced="sendUpdateDebounced"
         />
 
-        <!-- M13-D：ImageElement 段 -->
+        <!-- ImageElement 段 -->
         <ImageElementSection
           v-if="isImage"
           :element="selected as ImageElement"
@@ -201,7 +201,7 @@ function deleteMultiSelected(): void {
 
     <!-- Elements（当前活动层内的元素列表）-->
     <ElementListSection />
-    </template> <!-- M12-D：v-else 结束（Properties 块只在非 brush 工具显示） -->
+    </template> <!-- v-else 结束（Properties 块只在非 brush 工具显示） -->
   </aside>
 </template>
 

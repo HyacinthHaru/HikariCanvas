@@ -84,7 +84,7 @@ function duplicateLayer(layer: Layer): void {
 function deleteLayer(layer: Layer): void {
     if (layerCount.value <= 1) return; // 最后一层禁删（按钮 disabled）
     ws.send('layer.delete', { layerId: layer.id });
-    // 后端会自动把 activeLayerId 切到剩余的第一层（M8-C 行为）
+    // 后端会自动把 activeLayerId 切到剩余的第一层
     // selection 在 layer.delete patch 应用后由 selectElement 兜底（element 不在新 activeLayer 时清）
     if (layer.id === activeLayerId.value) {
         ui.selectElement(null);
@@ -167,7 +167,7 @@ function onDragEnd(): void {
     dragOverUiIdx.value = -1;
 }
 
-// ---------- M8-E：active layer opacity + blendMode 控件 ----------
+// ---------- active layer opacity + blendMode 控件 ----------
 
 const BLEND_MODES: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay'];
 
@@ -367,7 +367,7 @@ function thumbnailFor(layer: Layer): string | null {
             </button>
           </Tooltip>
         </li>
-        <!-- M8-E：active layer 行紧跟两行 opacity / blendMode 控件 -->
+        <!-- active layer 行紧跟两行 opacity / blendMode 控件 -->
         <li
           v-if="isActive(layer.id)"
           class="px-2 py-1.5 flex items-center gap-2 text-xs bg-[color:var(--accent)] border-l-2 border-l-[color:var(--ring)]"

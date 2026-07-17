@@ -7,7 +7,7 @@
  *
  * 切换：ui store 的 locale toggle；localStorage 持久化。
  *
- * 文案风格（M24-A 用户友好化）：
+ * 文案风格（用户友好化）：
  * - 面向 MC 服主 / 玩家，避免开发术语（fontId / blendMode / canonicalCharWidth 等）
  * - 错误提示要"说人话"：什么出错 + 接下来怎么办
  * - 空状态主动引导（"点击..."、"试试..."），不要冷冰冰只说"无数据"
@@ -29,7 +29,7 @@ export const messages = {
             railNetwork: '铁路网络（线路 / 站点 / 车次 / 时刻表）',
             timelineManager: '时间轴（关键帧动画）',
             scriptEditor: '积木脚本（按条件做事）',
-            // 0.7.4：溢出菜单（…）
+            // 溢出菜单（…）
             more: '更多',
             moreRailNetwork: '铁路网络',
             moreTemplate: '存为模板',
@@ -42,7 +42,7 @@ export const messages = {
             moreSwitchLocale: 'Switch to English',
             moreTheme: '主题',
         },
-        // 0.8 B5：SVG 矢量导入对话框
+        // SVG 矢量导入对话框
         svgImport: {
             svgImportTitle: '导入 SVG',
             svgImportPick: '选择 SVG 文件',
@@ -62,7 +62,7 @@ export const messages = {
             animationFlattened: '动画 SVG 已按初始样子导入',
             tooComplex: 'SVG 太复杂，部分内容可能没导进来',
         },
-        // 0.8 A3：.canvas 工程导入对话框
+        // .canvas 工程导入对话框
         project: {
             importTitle: '导入工程',
             importPick: '选择 .canvas 文件',
@@ -72,7 +72,7 @@ export const messages = {
             importDone: '导入完成',
             importFailed: (code: string) => `导入失败（${code}）`,
             warnTitle: '导入提示',
-            // 0.8-A4：后端 warning kind → 服主/玩家看得懂的大白话（禁开发黑话）。
+            // 后端 warning kind → 服主/玩家看得懂的大白话（禁开发黑话）。
             warn: {
                 'missing-font': (d: string) => `字体「${d}」这台服务器没有，已用默认字体代替`,
                 'missing-variable': (d: string) => `变量「${d}」在这台服务器上不存在，显示为占位符`,
@@ -132,7 +132,7 @@ export const messages = {
             updatedAt: (s: string) => `${s} 更新过`,
             copyHint: '点击复制打开命令',
             refresh: '刷新列表',
-            // P2-85：时间戳本地化（fmtTime 用）。i 为 0(周日)..6(周六)；m 为 1..12。
+            // 时间戳本地化（fmtTime 用）。i 为 0(周日)..6(周六)；m 为 1..12。
             weekday: (i: number) => `周${['日', '一', '二', '三', '四', '五', '六'][i] ?? ''}`,
             monthDay: (m: number, d: number) => `${m}月${d}日`,
         },
@@ -191,13 +191,13 @@ export const messages = {
             empty: '—',
             grid: '网格',
             gridTip: '画布参考网格（仅编辑器预览，不会画进游戏；0 = 关闭，常用 8 / 16 / 32）',
-            // M17 F5：未选中元素时右栏显示的画板设置段
+            // 未选中元素时右栏显示的画板设置段
             settings: '画板设置',
             backgroundLabel: '背景',
-            // 0.4.6 P2：一键透明背景
+            // 一键透明背景
             setTransparentBackground: '设为透明背景',
             transparentBgTooltip: '把背景设为完全透明，可让 wall 后面的方块 / 风景透出来',
-            // 0.7.4：画布导航快捷键提示（ZoomBar 角落显示）
+            // 画布导航快捷键提示（ZoomBar 角落显示）
             navHint: 'Shift+滚轮 横向 · 中键 / Space / H 拖拽画布',
         },
         properties: {
@@ -243,7 +243,7 @@ export const messages = {
             renderModeTip: '颜色如何映射到游戏地图调色板（清晰锐利 vs 柔和过渡）',
             renderModeClean: '清晰',
             renderModeDither: '柔和',
-            // M24-A 新增：字段悬停说明
+            // 字段悬停说明
             fontIdLabel: '字体',
             fontIdTip: '选择渲染文字用的字体；插件自带像素体 / 黑体，也可放到 plugins/HikariCanvas/fonts/ 用自定义字体',
             fontGroupBuiltin: '内置字体',
@@ -260,11 +260,11 @@ export const messages = {
             alignLeft: '左对齐',
             alignCenter: '居中',
             alignRight: '右对齐',
-            // 0.4.6 P3：bold / italic 切换
+            // bold / italic 切换
             styleLabel: '样式',
             boldTip: '加粗（自动叠加字色描边模拟）',
             italicTip: '斜体（字形剪切倾斜变换）',
-            // 0.4.6 P4：形状 (shape) 字段友好化
+            // 形状 (shape) 字段友好化
             shapeKind: '形状',
             shapeKindPolygon: '多边形',
             shapeKindStar: '星形',
@@ -519,17 +519,17 @@ export const messages = {
             unlocked: '可编辑',
             locked: '已锁定',
             wallStateTip: '可编辑 = 任何能进入这块画板的玩家都能改；已锁定 = 只有作者能解锁，其他人只读',
-            // P3-112：状态栏当前工具短标签（区别于 tools.* 的长 tooltip 描述）。
+            // 状态栏当前工具短标签（区别于 tools.* 的长 tooltip 描述）。
             toolSelect: '选择',
             toolMove: '移动',
         },
-        // 2026-05-25 ultrareview #8：lock readonly 多入口 guard 提示。
+        // lock readonly 多入口 guard 提示。
         // 通过 useLockGuard.guardMutation 在 mutation 函数入口拦截时显示。
         lockGuard: {
             blocked: '画板已锁定，无法编辑（请让作者先解锁）',
             blockedWithAction: (action: string) => `画板已锁定 — ${action}不可用（请让作者先解锁）`,
         },
-        // 0.4.0-P2-G 新增：变量管理面板 / 对话框 / 错误文案。
+        // 变量管理面板 / 对话框 / 错误文案。
         // H 任务会另加 picker / livePreview / hints 子段，最终合并为完整 variables section。
         variables: {
             // 面板
@@ -548,7 +548,7 @@ export const messages = {
             emptyPlugin: '等有插件提供变量时，会自动显示在这里',
             emptySystem: '系统变量会自动显示在这里',
             emptyPapi: '安装 PlaceholderAPI 后此处自动出现',
-            // 0.4.3：全局变量 owner badge
+            // 全局变量 owner badge
             ownerBadgePrefix: '所属：',
             ownerMineBadge: '我创建',
             actionReadonly: '只读',
@@ -576,13 +576,13 @@ export const messages = {
             dialogNewNameHint: '将自动加 user:<wallId>/ 前缀',
             dialogNewTypeLabel: '类型',
             dialogNewDefaultLabel: '默认值',
-            // 0.4.3 scope toggle
+            // scope toggle
             dialogNewScopeLabel: '作用域',
             dialogNewScopeWall: '本 wall',
             dialogNewScopeGlobal: '全局',
             dialogNewScopeWallHint: '仅本画布可见；删 wall 则一并删除',
             dialogNewScopeGlobalHint: '全服所有 wall 可读取，但只有你和管理员能修改',
-            // 0.4.2：可选 alias 字段
+            // 可选 alias 字段
             dialogNewAliasLabel: '别名',
             dialogNewAliasPlaceholder: '可选；起一个短名（≤ 64 字符）',
             dialogNewAliasHint: '别名仅本 wall 内生效，不参与 ${var:} 解析',
@@ -593,7 +593,7 @@ export const messages = {
             nameErrorInvalid: '名称只能包含字母数字 _ . -，且 ≤ 64 字符',
             nameErrorTooLong: '名称太长（≤ 64 字符）',
             aliasErrorTooLong: '别名最长 64 字符',
-            // 0.4.2：VariablePanel 行内别名 chip + 编辑入口
+            // VariablePanel 行内别名 chip + 编辑入口
             aliasChipPrefix: '别名:',
             actionEditAlias: '改别名',
             aliasEditTitle: '编辑别名',
@@ -612,7 +612,7 @@ export const messages = {
             bindCurrent: (plugin: string) => `当前已绑定: ${plugin}`,
             bindUnbindButton: '取消绑定',
             bindCloseButton: '关闭',
-            // P2-H：VariablePicker（TextElement 内插入变量）
+            // VariablePicker（TextElement 内插入变量）
             picker: {
                 searchPlaceholder: '搜索变量',
                 emptyResults: '无匹配变量',
@@ -625,9 +625,9 @@ export const messages = {
                 insertButtonLabel: '插入变量',
                 insertButtonTooltip: '插入变量占位符（或在文本中输入 ${ 触发）',
                 keyboardHint: '↑↓ 选择，Enter 确认，Esc 关闭',
-                // P3-M：动态 namespace（如 scoreboard / papi）行内标记 tooltip
+                // 动态 namespace（如 scoreboard / papi）行内标记 tooltip
                 dynamicHint: '动态注册：引用时按 namespace 模板（如 scoreboard.<obj>.<player>）自动创建',
-                // 0.4.2：3 列表格 + 别名编辑
+                // 3 列表格 + 别名编辑
                 columnAlias: '别名',
                 columnValue: '数值',
                 columnName: '变量名',
@@ -639,13 +639,13 @@ export const messages = {
                 aliasCancelButton: '取消',
                 aliasTooLong: '别名最长 64 字符',
             },
-            // P2-H：TextElement 下方 live preview + 删除警告
+            // TextElement 下方 live preview + 删除警告
             hints: {
                 previewLabel: '预览',
                 deletedWarning: '变量 {names} 已被删除，引用此变量的文本将显示 "???"',
                 referencedHint: '此文本引用变量 {names}',
             },
-            // 0.4.1 chip 编辑器：hover tooltip / aria
+            // chip 编辑器：hover tooltip / aria
             chipEditor: {
                 tooltipRaw: '原始',
                 tooltipCurrent: '当前值',
@@ -654,14 +654,14 @@ export const messages = {
                 tooltipHint: '双击改绑定',
                 ariaLabel: '文本编辑器（变量以芯片显示，双击芯片可改绑定）',
             },
-            // 0.4.1-P3 chip 错误态：点击红 chip 触发补创对话框
+            // chip 错误态：点击红 chip 触发补创对话框
             chipError: {
                 notFound: '变量 {name} 不存在。',
                 createConfirm: '是否立即创建？（按确定即新建一个空字符串用户变量）',
                 onlyUserCanCreate: '只能在编辑器中手动创建 user/ 域变量；系统 / 插件 / PAPI 变量由对应 Provider 自动注册。',
             },
         },
-        // 0.4.4：铁路网络（线路 / 站点 / 车次 / 时刻表）
+        // 铁路网络（线路 / 站点 / 车次 / 时刻表）
         rail: {
             modalTitle: '铁路网络',
             linePlaceholder: '线路名（例如 1 号线）',
@@ -678,12 +678,12 @@ export const messages = {
             runs: '车次',
             newRun: '新建车次',
             runNumberPrompt: '车次号（例如 A01）：',
-            // 0.4.5 P2：新车次内嵌对话框（替换原生 prompt）
+            // 新车次内嵌对话框（替换原生 prompt）
             newRunDialogTitle: '新建车次',
             runNumberPlaceholder: '例如 A01 / B02',
             create: '创建',
             deleteConfirmYes: '删除',
-            // 0.4.5 P5：服务类型 i18n 友好文本（与 ServiceType.displayText 中文行对齐）
+            // 服务类型 i18n 友好文本（与 ServiceType.displayText 中文行对齐）
             serviceTypeLocal: '站站停',
             serviceTypeExpress: '大站快车',
             serviceTypeSection: '区间车',
@@ -725,21 +725,21 @@ export const messages = {
             deleteLineConfirm: '确定删除此线路？站点 / 车次 / 时刻表都会被一并删除。',
             deleteStationConfirm: '确定删除此站点？相关时刻表行也会被删除。',
             deleteRunConfirm: '确定删除此车次？其时刻表也会被删除。',
-            // 0.4.5 P6：车次复制
+            // 车次复制
             copyRun: '复制此车次',
             copyDialogTitle: '复制车次',
             copyDialogHint: '基于当前车次创建新车次，含完整字段 + 时刻表。',
-            // 0.4.5 P7：首次打开空状态引导
+            // 首次打开空状态引导
             tipFirstLine: '快速上手',
             tipExample: '例如：填入"1 号线"+ 短代号"L1"+ 颜色 → 创建。然后右边添加站点 → 添加车次 → 自动生成时刻表。',
             tipStep1: '左侧创建一条线路（如「1 号线」）',
             tipStep2: '右侧添加 ≥ 2 个站点（拖动调整顺序）',
             tipStep3: '添加车次 → 点「详情」打开车次编辑',
             tipStep4: '车次详情里点「自动生成时刻表」一键生成',
-            // P2-14：自动生成参数非法（空 / NaN）时的提示
+            // 自动生成参数非法（空 / NaN）时的提示
             autoInvalidInput: '请填写有效的首站发车时间、站间时长和停靠时长（不能留空）',
         },
-        // 0.4.0-P3-L：列车 / 公交时刻表管理（兜底功能，零外部依赖）
+        // 列车 / 公交时刻表管理（兜底功能，零外部依赖）
         schedule: {
             // TopBar / 入口
             topbarButton: '列车时刻表',
@@ -751,7 +751,7 @@ export const messages = {
             entriesHeader: '时刻表条目',
             addEntry: '+ 添加条目',
             entriesDisabledHint: '（铁路网络模式启用 — 时刻表由网络管理）',
-            // 0.4.5 P3：铁路网络绑定段
+            // 铁路网络绑定段
             railBindingTitle: '铁路网络绑定',
             railBindingEnabled: '已启用',
             railBindingDisabled: '未启用',
@@ -767,7 +767,7 @@ export const messages = {
             railBindingClear: '解除绑定',
             railBindingActiveHint: '✓ 当前使用铁路网络模式；下方条目自动忽略',
             emptyEntries: '尚无时刻表条目，点击 + 添加第一条',
-            // 0.4.0 bugfix（Bug 4）：精度切换
+            // 精度切换
             precisionLabel: '时间精度',
             precisionMinute: '分钟（HH:mm）',
             precisionSecond: '秒（HH:mm:ss）',
@@ -798,8 +798,8 @@ export const messages = {
             errorBadTimeFormat: '出发时间格式无效（应为 HH:mm 或 HH:mm:ss 24 小时制）',
             errorEmptyDestination: '终点不能为空',
         },
-        // 0.6 P2（B3）：时间轴最简面板（关键帧动画）。AE 风完整面板留 P4。
-        // 0.7.0 P4：积木脚本编辑器（按条件做事）。B 阶段仅骨架 key，内容层任务 H 补全。
+        // 时间轴最简面板（关键帧动画）。
+        // 积木脚本编辑器（按条件做事）。
         script: {
             editorTitle: '积木脚本',
             newRule: '新建规则',
@@ -809,7 +809,7 @@ export const messages = {
             zoom: '缩放',
             paletteTitle: '积木库',
             palettePlaceholder: '积木库',
-            // 0.7.0-P4-D2：palette 分组标题 + 无选中规则提示
+            // palette 分组标题 + 无选中规则提示
             paletteNeedRule: '先在上面选一条规则，再把积木拖到画布上',
             paletteGroup: {
                 trigger: '触发',
@@ -817,16 +817,16 @@ export const messages = {
                 timeline: '时间轴',
                 control: '控制',
                 danger: '命令',
-                // 0.7.1：友好元素积木分组（移到 / 改大小 / 显示 / 隐藏 等）。
+                // 友好元素积木分组（移到 / 改大小 / 显示 / 隐藏 等）。
                 friendly: '元素动作',
             },
             // 拖块入 if 槽的空槽占位（任务 C）
             emptySlot: '把积木拖到这里',
-            // tween-P4：tweenBlock body 只允许属性动作（拖动时防呆提示，暂未渲染在 UI 上，留作工具提示用）。
+            // tweenBlock body 只允许属性动作（拖动时防呆提示，暂未渲染在 UI 上，留作工具提示用）。
             tweenBodyOnlyHint: '这里只能放移动、缩放、转动、透明度或变色',
             // 未知积木类型兜底（数据里出现没有定义的 kind 时）
             unknownBlock: '未知积木',
-            // ---- 0.7.0-P4-D1 编辑会话 ----
+            // ---- 编辑会话 ----
             // 左侧规则列表
             rulesTitle: '规则列表',
             rulesEmpty: '还没有规则',
@@ -845,7 +845,7 @@ export const messages = {
             deleteConfirmNo: '取消',
             test: '试跑',
             testPlaceholder: '点这里试跑这条规则',
-            // ---- 0.7.0-P5-H：试跑高亮 + 校验 ----
+            // ---- 试跑高亮 + 校验 ----
             testing: '试跑中…',
             testBlockedByErrors: '规则有问题，先修好下面的错误再试跑',
             testFailed: '试跑请求失败',
@@ -868,15 +868,15 @@ export const messages = {
             // 补间动画帧率（per-wall，canvas.tweenFps op）
             tweenFpsLabel: '动画帧率',
             tweenFpsTooltip: '这面招牌里「在 X 秒内」补间动画的流畅度：数字越高越顺滑，但服务器负担也越高（范围 1-60）',
-            // 0.7.0-P5-H2：触发器帽子里"选触发类型"下拉的前缀标签。
+            // 触发器帽子里"选触发类型"下拉的前缀标签。
             triggerKindLabel: '什么时候触发',
-            // 0.7.1：积木画布右下角「本脚本变量实时预览」面板。
+            // 积木画布右下角「本脚本变量实时预览」面板。
             varWatch: {
                 title: '本脚本用到的变量',
                 noRule: '先选一条规则，这里会列出它用到的变量',
                 noVars: '这条规则还没用到变量',
             },
-            // 0.7.1：拖积木到「删除区」删单个积木。
+            // 拖积木到「删除区」删单个积木。
             deleteZone: {
                 hint: '拖到这里删除',
                 release: '松手删除这块',
@@ -889,7 +889,7 @@ export const messages = {
                 playerKill: '当 玩家击杀',
                 playerNear: '当 玩家靠近',
                 wallReady: '当 画板就绪',
-                // 0.7.1-P2：3 个新触发器。
+                // 3 个新触发器。
                 rightClickWall: '当 右键画板',
                 playerLeaveRange: '当 玩家离开范围',
                 playerQuit: '当 玩家退出游戏',
@@ -902,34 +902,34 @@ export const messages = {
                 runCommand: '执行命令',
                 log: '记录日志',
                 if: '如果',
-                // 0.7.1：4 个低风险新动作 + 相对移动。
+                // 4 个低风险新动作 + 相对移动。
                 nudgeElement: '移动一点',
                 sendMessage: '发消息',
                 setRandomVariable: '设随机数',
                 scaleVariable: '变量乘除',
                 playTimelineAwait: '播放并等待',
-                // 0.7.1-P2：有界循环。
+                // 有界循环。
                 repeat: '重复',
-                // 0.7.2-P3：重复直到条件。
+                // 重复直到条件。
                 repeatUntil: '重复直到',
-                // 0.7.1-P5：3 个剩余动作。
+                // 3 个剩余动作。
                 stopScript: '停止脚本',
                 playParticle: '播放粒子',
                 waitUntil: '等待条件',
-                // 0.7.2-P2：元素 / 变量积木。
+                // 元素 / 变量积木。
                 copyVariable: '变量复制',
                 appendVariable: '文本拼接',
                 cloneElement: '克隆元素',
                 deleteElement: '删除元素',
-                // tween-P1：补间包裹积木。
+                // 补间包裹积木。
                 tweenBlock: '在 X 秒内',
-                // 0.7.3：4 个新积木。
+                // 4 个新积木。
                 randomBranch: '随机分支',
                 setElementLayer: '元素置顶/置底',
                 roundVariable: '变量取整',
                 showTitle: '弹出标题',
             },
-            // 0.7.1：友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
+            // 友好元素积木标题（移到 / 改大小 / 旋转 / 透明度 / 显示 / 隐藏 / 改文字 / 改颜色）。
             friendly: {
                 moveTo: '移到',
                 resize: '改大小',
@@ -963,7 +963,7 @@ export const messages = {
                 condition: '条件',
                 then: '那么',
                 else: '否则',
-                // 0.7.1：新动作字段标签。
+                // 新动作字段标签。
                 dx: '横向移动',
                 dy: '纵向移动',
                 messageText: '消息内容',
@@ -972,30 +972,30 @@ export const messages = {
                 max: '最大',
                 scaleOp: '运算',
                 factor: '倍数',
-                // 0.7.1-P2：重复循环字段标签。
+                // 重复循环字段标签。
                 repeatCount: '重复次数',
                 body: '循环体',
                 times: '次',
-                // 0.7.1-P5：粒子 / 等待直到字段。
+                // 粒子 / 等待直到字段。
                 particle: '粒子种类',
                 particleCount: '粒子数量',
                 offsetX: '横向偏移',
                 offsetY: '纵向偏移',
                 offsetZ: '竖向偏移',
                 timeoutMs: '超时（毫秒）',
-                // 0.7.2-P2：变量积木字段。
+                // 变量积木字段。
                 copySource: '从',
                 copyTarget: '到',
                 appendTarget: '追加到',
                 appendText: '内容',
-                // 0.7.2-P3：重复直到 / 发消息字段。
+                // 重复直到 / 发消息字段。
                 maxIterations: '最多次数',
                 msgTarget: '发给',
-                // tween-P1：补间包裹字段。
+                // 补间包裹字段。
                 tweenDurationMs: '时长（毫秒）',
                 tweenEasing: '缓动',
                 tweenBody: '动作列表',
-                // 0.7.3：新积木字段。
+                // 新积木字段。
                 probability: '概率（%）',
                 layerMode: '方向',
                 roundMode: '取整方式',
@@ -1012,10 +1012,10 @@ export const messages = {
                 opSeek: '跳到',
                 scopeNear: '附近玩家',
                 scopeAll: '全服玩家',
-                // 0.7.2-P3：发消息对象。
+                // 发消息对象。
                 targetTrigger: '触发的玩家',
                 targetAll: '全服玩家',
-                // 0.7.1-P5：14 个内置粒子。
+                // 14 个内置粒子。
                 particleFlame: '火焰',
                 particleSmoke: '烟雾',
                 particleHeart: '爱心',
@@ -1039,20 +1039,20 @@ export const messages = {
                 propText: '文字',
                 propFill: '填充',
                 propColor: '文字颜色',
-                // 0.7.1：发消息渠道 + 乘除运算。
+                // 发消息渠道 + 乘除运算。
                 channelChat: '聊天框',
                 channelActionbar: '动作栏',
                 channelTitle: '标题',
                 opMultiply: '乘以',
                 opDivide: '除以',
-                // 0.7.3：元素置层方向 + 变量取整方式。
+                // 元素置层方向 + 变量取整方式。
                 layerFront: '置顶（最上层）',
                 layerBack: '置底（最下层）',
                 roundRound: '四舍五入',
                 roundFloor: '向下取整',
                 roundCeil: '向上取整',
             },
-            // 0.7.0-P5-F：积木参数表单控件文案（下拉占位 / 空列表提示 / 变量按钮）。
+            // 积木参数表单控件文案（下拉占位 / 空列表提示 / 变量按钮）。
             param: {
                 pickVariable: '选变量…',
                 clearVariable: '清空',
@@ -1061,16 +1061,16 @@ export const messages = {
                 noElements: '这个画板还没有元素',
                 noCommandTemplates: '服主还没配命令模板',
                 soundPlaceholder: '输入或选择声音',
-                // 0.7.0-P5（视觉）：积木上必填字段还没填时，角标的 hover 提示。
+                // 积木上必填字段还没填时，角标的 hover 提示。
                 // {field} = 待填字段的友好名（元素 / 时间轴 / 命令 / 变量名 / 条件 / 声音）。
                 needSelect: '还需填写：{field}',
-                // 0.7.1-P3：元素字段旁的「从预览点选」靶心按钮提示。点它后去右侧预览框点元素即可填入。
+                // 元素字段旁的「从预览点选」靶心按钮提示。点它后去右侧预览框点元素即可填入。
                 pickFromPreview: '从预览点选元素',
-                // 0.7.3-D1：command 复合字段——已保存的模板 ID 在服主删除 / 改名后找不到时的孤儿警告。
+                // command 复合字段——已保存的模板 ID 在服主删除 / 改名后找不到时的孤儿警告。
                 // {id} = 失效的模板 ID。
                 orphanTemplate: (id: string) => `命令模板已失效：${id}（请重新选择或联系服主配置）`,
             },
-            // 0.7.0-P5-G：if 条件可视构建器文案（操作数类型 / joiner / 高级文本框切换）。
+            // if 条件可视构建器文案（操作数类型 / joiner / 高级文本框切换）。
             condition: {
                 kindVar: '变量',
                 kindNumber: '数字',
@@ -1089,7 +1089,7 @@ export const messages = {
                 advancedHint: '直接写条件表达式',
                 advancedPlaceholder: '例如：var("user/score") >= 10 && var("user/team") == "red"',
             },
-            // 0.7.0-P5-F（K-UI-7）：常用声音的中文友好名（datalist 候选显示）。
+            // 常用声音的中文友好名（datalist 候选显示）。
             soundNames: {
                 uiButtonClick: '按钮点击',
                 noteHarp: '音符盒·竖琴',
@@ -1116,7 +1116,7 @@ export const messages = {
                 villagerYes: '村民同意',
                 villagerNo: '村民拒绝',
             },
-            // 0.7.1-P3：右侧墙面预览框（显示当前墙现状，可折叠 / 拖宽）。
+            // 右侧墙面预览框（显示当前墙现状，可折叠 / 拖宽）。
             preview: {
                 title: '预览',
                 expand: '展开预览',
@@ -1153,7 +1153,7 @@ export const messages = {
             loopOnce: '播放一次',
             loopLoop: '循环播放',
             loopPingPong: '来回播',
-            // 触发方式（P5）：这段动画什么时候在游戏里播
+            // 触发方式：这段动画什么时候在游戏里播
             triggerLabel: '什么时候播',
             triggerManual: '手动 / 循环（墙加载就播）',
             triggerVariableChange: '变量变了就播',
@@ -1201,7 +1201,7 @@ export const messages = {
             errFpsTooHigh: '每秒帧数太高了（上限 240）',
             errLoopMode: '播放方式无效',
             errKeyframeTime: (max: number) => `时刻要落在 0 到 ${max} 毫秒之间`,
-            // 区块 4：缓动方式（P3；大白话，不暴露贝塞尔术语）
+            // 区块 4：缓动方式（大白话，不暴露贝塞尔术语）
             addEasing: '缓动方式',
             easingLinear: '匀速',
             easingEaseIn: '由慢到快',
@@ -1222,7 +1222,7 @@ export const messages = {
             dockDeleteConfirm: '确认删除？',
             fillHint: '关键帧会记下元素当前的填充；想换填充先在右侧面板改好元素，再加关键帧。',
         },
-        // M24-A 新增：错误码 → 用户友好提示。M24-B 整修时挂到 wsClient / upload error handler
+        // 错误码 → 用户友好提示。
         errors: {
             // WebSocket / 协议级
             UNAUTHORIZED: '身份验证失败，请重新打开编辑器链接',
@@ -1261,25 +1261,24 @@ export const messages = {
             // 校验
             VALIDATION: '内容不符合要求，请检查后重试',
             BAD_REQUEST: '请求格式不正确',
-            // 变量系统（0.4.0-P1）
+            // 变量系统
             VARIABLE_NOT_FOUND: '变量不存在',
             VARIABLE_EXISTS: '变量已存在',
             VARIABLE_TYPE_MISMATCH: '变量类型不匹配',
             VARIABLE_NAMESPACE_DENIED: '无权限操作该命名空间的变量',
-            // 墙脚本（0.7.0）
+            // 墙脚本
             SCRIPT_INVALID: '脚本规则有问题，请按提示检查后再保存',
             SCRIPT_NOT_FOUND: '找不到这条脚本规则，可能已经被删除了',
             SCRIPT_QUOTA_EXCEEDED: '这块画板的脚本数量已达上限，先删几条再加',
             SCRIPT_ENGINE_UNAVAILABLE: '脚本功能暂时不可用，请联系服主或稍后再试',
-            // 重连 / 初始化（0.8.2）
+            // 重连 / 初始化
             RECONNECT_EXHAUSTED: '服务器长时间不可达，请刷新页面或在游戏里重新 /canvas edit',
             TOKEN_MISSING: 'token 丢失，请刷新页面或重新 /canvas edit',
             MALFORMED_READY: '初始化数据异常（协议错误），请刷新页面',
             // 兜底
             UNKNOWN: '出了点小问题，请稍后再试',
         },
-        // M24-A 新增：工具栏 menu / 顶栏按钮的悬停说明（部分已在 topbar / tools 里，这里集中放新增的）
-        // M24-B 整修时挂到具体组件
+        // 工具栏 menu / 顶栏按钮的悬停说明（部分已在 topbar / tools 里，这里集中放新增的）
         tooltips: {
             saveTemplate: '把当前画板发布到模板库，方便复用',
             openLayerPanel: '打开图层面板',
@@ -1342,7 +1341,7 @@ export const messages = {
             railNetwork: 'Rail network (lines / stations / runs / timetable)',
             timelineManager: 'Timeline (keyframe animation)',
             scriptEditor: 'Block scripts',
-            // 0.7.4: overflow menu (…)
+            // overflow menu (…)
             more: 'More',
             moreRailNetwork: 'Rail Network',
             moreTemplate: 'Save as Template',
@@ -1355,7 +1354,7 @@ export const messages = {
             moreSwitchLocale: 'Switch to Chinese',
             moreTheme: 'Theme',
         },
-        // 0.8 B5: SVG vector import dialog
+        // SVG vector import dialog
         svgImport: {
             svgImportTitle: 'Import SVG',
             svgImportPick: 'Choose an SVG file',
@@ -1375,7 +1374,7 @@ export const messages = {
             animationFlattened: 'Animated SVG was imported in its starting state',
             tooComplex: 'SVG is very complex; some content may not have been imported',
         },
-        // 0.8 A3: .canvas project import dialog
+        // .canvas project import dialog
         project: {
             importTitle: 'Import Project',
             importPick: 'Choose a .canvas file',
@@ -1385,7 +1384,7 @@ export const messages = {
             importDone: 'Imported',
             importFailed: (code: string) => `Import failed (${code})`,
             warnTitle: 'Import notes',
-            // 0.8-A4: backend warning kind → plain language for server owners / players.
+            // backend warning kind → plain language for server owners / players.
             warn: {
                 'missing-font': (d: string) => `Font "${d}" isn't on this server, so the default font was used instead`,
                 'missing-variable': (d: string) => `Variable "${d}" doesn't exist on this server and shows as a placeholder`,
@@ -1445,7 +1444,7 @@ export const messages = {
             updatedAt: (s: string) => `updated ${s}`,
             copyHint: 'Click to copy the open command',
             refresh: 'Refresh list',
-            // P2-85: localized timestamp parts (used by fmtTime). i = 0(Sun)..6(Sat); m = 1..12.
+            // localized timestamp parts (used by fmtTime). i = 0(Sun)..6(Sat); m = 1..12.
             weekday: (i: number) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i] ?? '',
             monthDay: (m: number, d: number) => `${['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m] ?? ''} ${d}`,
         },
@@ -1504,13 +1503,13 @@ export const messages = {
             empty: '—',
             grid: 'Grid',
             gridTip: 'Editor reference grid (preview only — not rendered into the game; 0 = off, typical 8 / 16 / 32)',
-            // M17 F5: canvas settings panel shown in RightPanel when nothing is selected
+            // canvas settings panel shown in RightPanel when nothing is selected
             settings: 'Canvas Settings',
             backgroundLabel: 'Background',
-            // 0.4.6 P2: one-click transparent background
+            // one-click transparent background
             setTransparentBackground: 'Make background transparent',
             transparentBgTooltip: 'Show blocks / scenery behind the wall through transparent pixels',
-            // 0.7.4: canvas navigation shortcut hint shown in the ZoomBar
+            // canvas navigation shortcut hint shown in the ZoomBar
             navHint: 'Shift+Scroll horizontal · Middle-click / Space / H to pan',
         },
         properties: {
@@ -1556,7 +1555,7 @@ export const messages = {
             renderModeTip: 'How colors map to the in-game map palette (sharp vs. smooth gradient)',
             renderModeClean: 'Crisp',
             renderModeDither: 'Smooth',
-            // M24-A: extra field tooltips
+            // extra field tooltips
             fontIdLabel: 'Font',
             fontIdTip: 'Choose which font renders the text. The plugin ships with a pixel font and a sans-serif; drop your own .ttf into plugins/HikariCanvas/fonts/',
             fontGroupBuiltin: 'Built-in fonts',
@@ -1573,11 +1572,11 @@ export const messages = {
             alignLeft: 'Left',
             alignCenter: 'Center',
             alignRight: 'Right',
-            // 0.4.6 P3: bold / italic toggles
+            // bold / italic toggles
             styleLabel: 'Style',
             boldTip: 'Bold (overlays a colored stroke to thicken glyphs)',
             italicTip: 'Italic (shear transform tilts glyphs)',
-            // 0.4.6 P4: shape field labels
+            // shape field labels
             shapeKind: 'Shape',
             shapeKindPolygon: 'Polygon',
             shapeKindStar: 'Star',
@@ -1832,17 +1831,17 @@ export const messages = {
             unlocked: 'Editable',
             locked: 'Locked',
             wallStateTip: 'Editable = anyone who can open this wall can edit it; Locked = only the owner can unlock, everyone else is read-only',
-            // P3-112: short current-tool labels for the status bar (vs the long tools.* tooltip text).
+            // short current-tool labels for the status bar (vs the long tools.* tooltip text).
             toolSelect: 'Select',
             toolMove: 'Move',
         },
-        // 2026-05-25 ultrareview #8: lock readonly multi-entry guard messages.
+        // lock readonly multi-entry guard messages.
         // Shown when useLockGuard.guardMutation rejects a mutation while locked.
         lockGuard: {
             blocked: 'Wall is locked — editing blocked (ask the owner to unlock first)',
             blockedWithAction: (action: string) => `Wall is locked — ${action} unavailable (ask the owner to unlock first)`,
         },
-        // 0.4.0-P2-G: variable management panel / dialogs / error strings.
+        // variable management panel / dialogs / error strings.
         // H task will add picker / livePreview / hints subsections; merge into one variables section.
         variables: {
             // panel
@@ -1861,7 +1860,7 @@ export const messages = {
             emptyPlugin: 'Variables provided by plugins will appear here automatically',
             emptySystem: 'System variables will appear here automatically',
             emptyPapi: 'Install PlaceholderAPI for these to appear',
-            // 0.4.3: global variable owner badge
+            // global variable owner badge
             ownerBadgePrefix: 'Owner:',
             ownerMineBadge: 'Mine',
             actionReadonly: 'Read-only',
@@ -1889,13 +1888,13 @@ export const messages = {
             dialogNewNameHint: 'A user:<wallId>/ prefix will be added automatically',
             dialogNewTypeLabel: 'Type',
             dialogNewDefaultLabel: 'Default value',
-            // 0.4.3 scope toggle
+            // scope toggle
             dialogNewScopeLabel: 'Scope',
             dialogNewScopeWall: 'This wall',
             dialogNewScopeGlobal: 'Global',
             dialogNewScopeWallHint: 'Only visible on this canvas; deleted with the wall',
             dialogNewScopeGlobalHint: 'Readable from all walls; only you and admins can modify',
-            // 0.4.2: optional alias field
+            // optional alias field
             dialogNewAliasLabel: 'Alias',
             dialogNewAliasPlaceholder: 'Optional; short nickname (≤ 64 chars)',
             dialogNewAliasHint: 'Alias only applies on this wall; not used in ${var:} resolution',
@@ -1906,7 +1905,7 @@ export const messages = {
             nameErrorInvalid: 'Name may only contain letters, digits, _ . -, and must be ≤ 64 chars',
             nameErrorTooLong: 'Name is too long (≤ 64 chars)',
             aliasErrorTooLong: 'Alias must be ≤ 64 chars',
-            // 0.4.2: VariablePanel inline alias chip + edit entry
+            // VariablePanel inline alias chip + edit entry
             aliasChipPrefix: 'Alias:',
             actionEditAlias: 'Edit alias',
             aliasEditTitle: 'Edit alias',
@@ -1925,7 +1924,7 @@ export const messages = {
             bindCurrent: (plugin: string) => `Currently bound to: ${plugin}`,
             bindUnbindButton: 'Unbind',
             bindCloseButton: 'Close',
-            // P2-H: VariablePicker (insert variable into TextElement)
+            // VariablePicker (insert variable into TextElement)
             picker: {
                 searchPlaceholder: 'Search variables',
                 emptyResults: 'No matching variables',
@@ -1938,9 +1937,9 @@ export const messages = {
                 insertButtonLabel: 'Insert variable',
                 insertButtonTooltip: 'Insert a variable placeholder (or type ${ in the text)',
                 keyboardHint: '↑↓ to choose, Enter to confirm, Esc to close',
-                // P3-M: dynamic namespace (e.g. scoreboard / papi) row marker tooltip
+                // dynamic namespace (e.g. scoreboard / papi) row marker tooltip
                 dynamicHint: 'Dynamic namespace: register on reference (e.g. scoreboard.<obj>.<player>)',
-                // 0.4.2: 3-column table + inline alias editor
+                // 3-column table + inline alias editor
                 columnAlias: 'Alias',
                 columnValue: 'Value',
                 columnName: 'Name',
@@ -1952,13 +1951,13 @@ export const messages = {
                 aliasCancelButton: 'Cancel',
                 aliasTooLong: 'Alias must be ≤ 64 chars',
             },
-            // P2-H: TextElement live preview + deletion warning
+            // TextElement live preview + deletion warning
             hints: {
                 previewLabel: 'Preview',
                 deletedWarning: 'Variable {names} has been deleted. Text referencing it will show "???"',
                 referencedHint: 'This text references variable {names}',
             },
-            // 0.4.1 chip editor: hover tooltip / aria
+            // chip editor: hover tooltip / aria
             chipEditor: {
                 tooltipRaw: 'Raw',
                 tooltipCurrent: 'Current',
@@ -1967,14 +1966,14 @@ export const messages = {
                 tooltipHint: 'Double-click to rebind',
                 ariaLabel: 'Text editor (variables shown as chips; double-click a chip to rebind)',
             },
-            // 0.4.1-P3 chip error state: clicking a red chip triggers create-confirm
+            // chip error state: clicking a red chip triggers create-confirm
             chipError: {
                 notFound: 'Variable {name} does not exist.',
                 createConfirm: 'Create it now? (Confirm to create an empty STRING user variable.)',
                 onlyUserCanCreate: 'Only user/ namespace variables can be created from the editor; system / plugin / PAPI variables are auto-registered by their providers.',
             },
         },
-        // 0.4.4: rail network (lines / stations / runs / timetable)
+        // rail network (lines / stations / runs / timetable)
         rail: {
             modalTitle: 'Rail network',
             linePlaceholder: 'Line name (e.g. Line 1)',
@@ -1991,12 +1990,12 @@ export const messages = {
             runs: 'Runs',
             newRun: 'New run',
             runNumberPrompt: 'Run number (e.g. A01):',
-            // 0.4.5 P2: new run inline dialog (replaces native prompt)
+            // new run inline dialog (replaces native prompt)
             newRunDialogTitle: 'New run',
             runNumberPlaceholder: 'e.g. A01 / B02',
             create: 'Create',
             deleteConfirmYes: 'Delete',
-            // 0.4.5 P5: service type i18n labels
+            // service type i18n labels
             serviceTypeLocal: 'Local',
             serviceTypeExpress: 'Express',
             serviceTypeSection: 'Section',
@@ -2035,21 +2034,21 @@ export const messages = {
             deleteLineConfirm: 'Delete this line? Its stations / runs / timetable will be deleted.',
             deleteStationConfirm: 'Delete this station? Its timetable rows will be deleted.',
             deleteRunConfirm: 'Delete this run? Its timetable will be deleted.',
-            // 0.4.5 P6: run copy
+            // run copy
             copyRun: 'Copy this run',
             copyDialogTitle: 'Copy run',
             copyDialogHint: 'Create a new run based on the current one (all fields + timetable).',
-            // 0.4.5 P7: first-time guidance
+            // first-time guidance
             tipFirstLine: 'Quick start',
             tipExample: 'e.g. fill "Line 1" + short code "L1" + color → Create. Then add stations on the right → add runs → auto-generate timetable.',
             tipStep1: 'Create a line on the left (e.g. "Line 1")',
             tipStep2: 'Add ≥ 2 stations on the right (drag to reorder)',
             tipStep3: 'Add a run → click "Details" to edit',
             tipStep4: 'Inside run details, click "Auto-generate timetable"',
-            // P2-14: prompt when auto-generate inputs are empty / NaN
+            // prompt when auto-generate inputs are empty / NaN
             autoInvalidInput: 'Please enter a valid first departure time, travel seconds and dwell seconds (none may be blank)',
         },
-        // 0.4.0-P3-L: train / bus schedule manager (built-in fallback, zero external dependency)
+        // train / bus schedule manager (built-in fallback, zero external dependency)
         schedule: {
             // TopBar
             topbarButton: 'Train schedule',
@@ -2061,7 +2060,7 @@ export const messages = {
             entriesHeader: 'Schedule entries',
             addEntry: '+ Add entry',
             entriesDisabledHint: '(Rail network mode active — timetable comes from the network)',
-            // 0.4.5 P3: rail network binding
+            // rail network binding
             railBindingTitle: 'Rail network binding',
             railBindingEnabled: 'Active',
             railBindingDisabled: 'Inactive',
@@ -2077,7 +2076,7 @@ export const messages = {
             railBindingClear: 'Remove binding',
             railBindingActiveHint: '✓ Rail network mode active; entries below are ignored',
             emptyEntries: 'No entries yet — click + to add the first one',
-            // 0.4.0 bugfix (Bug 4): precision toggle
+            // precision toggle
             precisionLabel: 'Time precision',
             precisionMinute: 'Minute (HH:mm)',
             precisionSecond: 'Second (HH:mm:ss)',
@@ -2108,8 +2107,8 @@ export const messages = {
             errorBadTimeFormat: 'Invalid time format (use HH:mm or HH:mm:ss 24h)',
             errorEmptyDestination: 'Destination cannot be empty',
         },
-        // 0.6 P2 (B3): minimal timeline panel (keyframe animation). Full AE-style panel lands in P4.
-        // 0.7.0 P4: block script editor. B-stage skeleton keys only; full content in task H.
+        // minimal timeline panel (keyframe animation).
+        // block script editor.
         script: {
             editorTitle: 'Block scripts',
             newRule: 'New rule',
@@ -2119,7 +2118,7 @@ export const messages = {
             zoom: 'Zoom',
             paletteTitle: 'Blocks',
             palettePlaceholder: 'Blocks',
-            // 0.7.0-P4-D2: palette group titles + no-rule-selected hint
+            // palette group titles + no-rule-selected hint
             paletteNeedRule: 'Pick a rule above first, then drag blocks onto the canvas',
             paletteGroup: {
                 trigger: 'Triggers',
@@ -2127,14 +2126,14 @@ export const messages = {
                 timeline: 'Timeline',
                 control: 'Control',
                 danger: 'Commands',
-                // 0.7.1: friendly element block group.
+                // friendly element block group.
                 friendly: 'Element actions',
             },
             emptySlot: 'Drag a block here',
-            // tween-P4: tweenBlock body only allows property actions.
+            // tweenBlock body only allows property actions.
             tweenBodyOnlyHint: 'Only move, resize, rotate, opacity or color blocks allowed here',
             unknownBlock: 'Unknown block',
-            // ---- 0.7.0-P4-D1 edit session ----
+            // ---- edit session ----
             rulesTitle: 'Rules',
             rulesEmpty: 'No rules yet',
             ruleUnnamed: 'Unnamed rule',
@@ -2151,7 +2150,7 @@ export const messages = {
             deleteConfirmNo: 'Cancel',
             test: 'Test run',
             testPlaceholder: 'Run this rule as a test',
-            // ---- 0.7.0-P5-H: test-run highlight + validation ----
+            // ---- test-run highlight + validation ----
             testing: 'Testing…',
             testBlockedByErrors: 'Fix the errors below before running a test',
             testFailed: 'Test request failed',
@@ -2173,15 +2172,15 @@ export const messages = {
             // Tween animation frame rate (per-wall, canvas.tweenFps op)
             tweenFpsLabel: 'Animation frame rate',
             tweenFpsTooltip: 'How smooth the "over X seconds" tween animations look on this sign — higher is smoother but uses more server resources (range 1–60)',
-            // 0.7.0-P5-H2: prefix label for the "trigger type" select in the hat block.
+            // prefix label for the "trigger type" select in the hat block.
             triggerKindLabel: 'When to trigger',
-            // 0.7.1: "variables used by this script" live-preview panel (bottom-right of block canvas).
+            // "variables used by this script" live-preview panel (bottom-right of block canvas).
             varWatch: {
                 title: 'Variables in this script',
                 noRule: 'Pick a rule to see the variables it uses',
                 noVars: 'This rule doesn\'t use any variables yet',
             },
-            // 0.7.1: drag a block onto the "delete zone" to remove a single block.
+            // drag a block onto the "delete zone" to remove a single block.
             deleteZone: {
                 hint: 'Drag here to delete',
                 release: 'Release to delete this block',
@@ -2193,7 +2192,7 @@ export const messages = {
                 playerKill: 'When player kills',
                 playerNear: 'When player is near',
                 wallReady: 'When wall is ready',
-                // 0.7.1-P2: three new triggers.
+                // three new triggers.
                 rightClickWall: 'When wall right-clicked',
                 playerLeaveRange: 'When player leaves range',
                 playerQuit: 'When player quits',
@@ -2206,34 +2205,34 @@ export const messages = {
                 runCommand: 'Run command',
                 log: 'Log',
                 if: 'If',
-                // 0.7.1: four low-risk new actions + relative move.
+                // four low-risk new actions + relative move.
                 nudgeElement: 'Move a bit',
                 sendMessage: 'Send message',
                 setRandomVariable: 'Set random number',
                 scaleVariable: 'Multiply / divide variable',
                 playTimelineAwait: 'Play and wait',
-                // 0.7.1-P2: bounded loop.
+                // bounded loop.
                 repeat: 'Repeat',
-                // 0.7.2-P3: repeat until condition.
+                // repeat until condition.
                 repeatUntil: 'Repeat until',
-                // 0.7.1-P5: three remaining actions.
+                // three remaining actions.
                 stopScript: 'Stop script',
                 playParticle: 'Play particle',
                 waitUntil: 'Wait until',
-                // 0.7.2-P2: element / variable blocks.
+                // element / variable blocks.
                 copyVariable: 'Copy variable',
                 appendVariable: 'Append text',
                 cloneElement: 'Clone element',
                 deleteElement: 'Delete element',
-                // tween-P1: tween wrapper block.
+                // tween wrapper block.
                 tweenBlock: 'Over X seconds',
-                // 0.7.3: four new blocks.
+                // four new blocks.
                 randomBranch: 'Random branch',
                 setElementLayer: 'Move element to front / back',
                 roundVariable: 'Round variable',
                 showTitle: 'Show title',
             },
-            // 0.7.1: friendly element block titles.
+            // friendly element block titles.
             friendly: {
                 moveTo: 'Move to',
                 resize: 'Resize',
@@ -2266,7 +2265,7 @@ export const messages = {
                 condition: 'Condition',
                 then: 'Then',
                 else: 'Else',
-                // 0.7.1: new action field labels.
+                // new action field labels.
                 dx: 'Move X',
                 dy: 'Move Y',
                 messageText: 'Message text',
@@ -2275,30 +2274,30 @@ export const messages = {
                 max: 'Max',
                 scaleOp: 'Operation',
                 factor: 'Factor',
-                // 0.7.1-P2: repeat loop field labels.
+                // repeat loop field labels.
                 repeatCount: 'Repeat count',
                 body: 'Loop body',
                 times: 'times',
-                // 0.7.1-P5: particle / wait-until fields.
+                // particle / wait-until fields.
                 particle: 'Particle',
                 particleCount: 'Count',
                 offsetX: 'Offset X',
                 offsetY: 'Offset Y',
                 offsetZ: 'Offset Z',
                 timeoutMs: 'Timeout (ms)',
-                // 0.7.2-P2: variable block fields.
+                // variable block fields.
                 copySource: 'From',
                 copyTarget: 'To',
                 appendTarget: 'Append to',
                 appendText: 'Text',
-                // 0.7.2-P3: repeat-until / send-message fields.
+                // repeat-until / send-message fields.
                 maxIterations: 'Max times',
                 msgTarget: 'Send to',
-                // tween-P1: tween wrapper fields.
+                // tween wrapper fields.
                 tweenDurationMs: 'Duration (ms)',
                 tweenEasing: 'Easing',
                 tweenBody: 'Actions',
-                // 0.7.3: new block fields.
+                // new block fields.
                 probability: 'Probability (%)',
                 layerMode: 'Direction',
                 roundMode: 'Rounding',
@@ -2314,10 +2313,10 @@ export const messages = {
                 opSeek: 'Seek',
                 scopeNear: 'Nearby players',
                 scopeAll: 'All players',
-                // 0.7.2-P3: send-message target.
+                // send-message target.
                 targetTrigger: 'Triggering player',
                 targetAll: 'Everyone',
-                // 0.7.1-P5: 14 built-in particles.
+                // 14 built-in particles.
                 particleFlame: 'Flame',
                 particleSmoke: 'Smoke',
                 particleHeart: 'Heart',
@@ -2341,20 +2340,20 @@ export const messages = {
                 propText: 'Text',
                 propFill: 'Fill',
                 propColor: 'Text color',
-                // 0.7.1: message channel + scale op.
+                // message channel + scale op.
                 channelChat: 'Chat',
                 channelActionbar: 'Action bar',
                 channelTitle: 'Title',
                 opMultiply: 'Multiply by',
                 opDivide: 'Divide by',
-                // 0.7.3: element layer mode + round mode.
+                // element layer mode + round mode.
                 layerFront: 'Front (top)',
                 layerBack: 'Back (bottom)',
                 roundRound: 'Round',
                 roundFloor: 'Floor',
                 roundCeil: 'Ceil',
             },
-            // 0.7.0-P5-F: block param form control strings.
+            // block param form control strings.
             param: {
                 pickVariable: 'Pick variable…',
                 clearVariable: 'Clear',
@@ -2363,19 +2362,19 @@ export const messages = {
                 noElements: 'This wall has no elements yet',
                 noCommandTemplates: 'No command templates configured',
                 soundPlaceholder: 'Type or pick a sound',
-                // 0.7.0-P5 (visual): hover hint for the corner badge when a required
+                // hover hint for the corner badge when a required
                 // field on the block is still empty. {field} = friendly field name
                 // (element / timeline / command / variable / condition / sound).
                 needSelect: 'Still need to fill in: {field}',
-                // 0.7.3-D1: orphan warning when the saved templateId is not in the
+                // orphan warning when the saved templateId is not in the
                 // current template list (server admin deleted / renamed the template).
                 // {id} = the stale template ID.
                 orphanTemplate: (id: string) => `Command template not found: ${id} (re-select or ask an admin to reconfigure)`,
-                // 0.7.1-P3: crosshair button next to the element field. Click it, then
+                // crosshair button next to the element field. Click it, then
                 // click an element in the right-side preview to fill it in.
                 pickFromPreview: 'Pick from preview',
             },
-            // 0.7.0-P5-G: if-condition visual builder strings.
+            // if-condition visual builder strings.
             condition: {
                 kindVar: 'Variable',
                 kindNumber: 'Number',
@@ -2394,7 +2393,7 @@ export const messages = {
                 advancedHint: 'Write the condition expression directly',
                 advancedPlaceholder: 'e.g. var("user/score") >= 10 && var("user/team") == "red"',
             },
-            // 0.7.0-P5-F (K-UI-7): friendly names for common sounds (datalist hints).
+            // friendly names for common sounds (datalist hints).
             soundNames: {
                 uiButtonClick: 'Button click',
                 noteHarp: 'Note block · harp',
@@ -2421,7 +2420,7 @@ export const messages = {
                 villagerYes: 'Villager yes',
                 villagerNo: 'Villager no',
             },
-            // 0.7.1-P3: right-side wall preview pane (shows current wall, collapsible / resizable).
+            // right-side wall preview pane (shows current wall, collapsible / resizable).
             preview: {
                 title: 'Preview',
                 expand: 'Show preview',
@@ -2505,7 +2504,7 @@ export const messages = {
             errFpsTooHigh: 'Frames per second is too high (max 240)',
             errLoopMode: 'Invalid playback mode',
             errKeyframeTime: (max: number) => `Time must be between 0 and ${max} ms`,
-            // Section 4: easing (P3; plain wording, no bezier jargon)
+            // Section 4: easing (plain wording, no bezier jargon)
             addEasing: 'Easing',
             easingLinear: 'Constant speed',
             easingEaseIn: 'Slow then fast',
@@ -2526,7 +2525,7 @@ export const messages = {
             dockDeleteConfirm: 'Confirm delete?',
             fillHint: 'The keyframe captures the element\'s current fill; to change it, edit the element in the right panel first, then add the keyframe.',
         },
-        // M24-A: error code → user-friendly message. Wire into wsClient / upload error handler in M24-B
+        // error code → user-friendly message.
         errors: {
             // WebSocket / protocol layer
             UNAUTHORIZED: 'Sign-in failed — please reopen the editor link',
@@ -2565,24 +2564,24 @@ export const messages = {
             // Validation
             VALIDATION: 'Some content doesn\'t pass validation — please check and retry',
             BAD_REQUEST: 'Request format isn\'t correct',
-            // Variable system (0.4.0-P1)
+            // Variable system
             VARIABLE_NOT_FOUND: 'Variable not found',
             VARIABLE_EXISTS: 'Variable already exists',
             VARIABLE_TYPE_MISMATCH: 'Variable type mismatch',
             VARIABLE_NAMESPACE_DENIED: 'Permission denied for that variable namespace',
-            // Wall scripts (0.7.0)
+            // Wall scripts
             SCRIPT_INVALID: 'This script rule has a problem — check the hints and save again',
             SCRIPT_NOT_FOUND: 'This script rule can\'t be found — it may have been deleted',
             SCRIPT_QUOTA_EXCEEDED: 'This wall has hit its script limit — delete a few before adding more',
             SCRIPT_ENGINE_UNAVAILABLE: 'Scripting is temporarily unavailable — contact the admin or try later',
-            // Reconnect / init (0.8.2)
+            // Reconnect / init
             RECONNECT_EXHAUSTED: "Server unreachable for a while — refresh the page or run /canvas edit again in-game",
             TOKEN_MISSING: 'Token missing — refresh the page or run /canvas edit again',
             MALFORMED_READY: 'Malformed init data (protocol error) — please refresh',
             // Fallback
             UNKNOWN: 'Something went wrong — please try again in a moment',
         },
-        // M24-A: extra tooltips for top bar / panel buttons (wired into components in M24-B)
+        // extra tooltips for top bar / panel buttons
         tooltips: {
             saveTemplate: 'Publish the current wall to the template library for reuse',
             openLayerPanel: 'Open the layers panel',

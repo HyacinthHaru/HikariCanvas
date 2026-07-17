@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * 0.4.0-P3-L：列车 / 公交时刻表管理 modal。
+ * 列车 / 公交时刻表管理 modal。
  *
  * <p>挂在 App.vue 末尾（同 VariablePanel / TemplateGallery），由 {@code ui.scheduleManagerOpen}
  * 控制显示；TopBar Calendar 按钮触发开启。打开时自动调 {@code wsClient.sendScheduleList}
  * 加载当前 wall 的 schedule（loading state）。后端 op 走 ack payload，本地 mirror 由
  * ScheduleStore 维护。</p>
  *
- * <p>UI：站名输入 + 精度切换（0.4.0 bugfix Bug 4）+ entries 列表（inline 删除）+ 添加按钮
+ * <p>UI：站名输入 + 精度切换 + entries 列表（inline 删除）+ 添加按钮
  * + 当前状态预览（schedule.* 变量）。子 modal {@link ScheduleEntryDialog} 用于添加 / 编辑
  * 单条 entry，按 wall.precision 决定时间输入是 HH:mm 还是 HH:mm:ss。</p>
  */
@@ -33,7 +33,7 @@ const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
-// 0.4.5 P3：铁路绑定段状态
+// 铁路绑定段状态
 const railSectionExpanded = ref(false);
 const railLinesLoaded = ref(false);
 const railEnabled = computed<boolean>(() => !!rail.binding?.lineId);
@@ -65,7 +65,7 @@ watch(open, async (v) => {
         schedule.setError((e as Error).message);
         schedule.setLoading(false);
     }
-    // 0.4.5 P3：同步 rail binding 草稿到 store（ready payload 已带 binding）
+    // 同步 rail binding 草稿到 store（ready payload 已带 binding）
     railLineDraft.value = rail.binding?.lineId ?? '';
     railStationDraft.value = rail.binding?.stationId ?? '';
     railDirectionDraft.value = (rail.binding?.direction as 'up' | 'down' | 'both' | null) ?? 'both';
@@ -241,7 +241,7 @@ function close(): void {
     ui.closeScheduleManager();
 }
 
-// schedule:* 变量 live preview。M28-enhance：next2_* 第二班次 + eta_mmss MM:SS 格式
+// schedule:* 变量 live preview。next2_* 第二班次 + eta_mmss MM:SS 格式
 const previewVars = computed(() => {
     const wid = project.wallId;
     if (!wid) return null;
@@ -255,7 +255,7 @@ const previewVars = computed(() => {
         isArriving: get('is_arriving')?.currentValue ?? 'false',
         arrivalStatus: get('arrival_status')?.currentValue ?? '',
         precision: get('precision')?.currentValue ?? schedule.precision,
-        // M28-enhance：第二班次
+        // 第二班次
         next2Departure: get('next2_departure')?.currentValue ?? '',
         next2Destination: get('next2_destination')?.currentValue ?? '',
         next2EtaMinutes: get('next2_eta_minutes')?.currentValue ?? '',
@@ -297,7 +297,7 @@ const previewVars = computed(() => {
           </div>
         </label>
 
-        <!-- 0.4.5 P3：铁路网络绑定段（可折叠） -->
+        <!-- 铁路网络绑定段（可折叠） -->
         <section class="border border-[color:var(--border)] rounded-[var(--radius-sm)]">
           <button class="w-full flex items-center gap-1.5 px-3 py-2 hover:bg-[color:var(--accent)]/30 rounded-[var(--radius-sm)] text-left"
                   @click="expandRailSection">
@@ -374,7 +374,7 @@ const previewVars = computed(() => {
           </div>
         </section>
 
-        <!-- 0.4.0 bugfix（Bug 4）：精度切换 -->
+        <!-- 精度切换 -->
         <div class="block">
           <div class="flex items-center gap-2 mb-1">
             <Clock class="size-3.5 text-[color:var(--ctp-blue)]" />
@@ -490,7 +490,7 @@ const previewVars = computed(() => {
             <dd>{{ previewVars.precision }}</dd>
           </dl>
 
-          <!-- M28-enhance：第二班次 -->
+          <!-- 第二班次 -->
           <div class="mt-2 pt-2 border-t border-[color:var(--border)]">
             <div class="font-medium mb-1 text-[color:var(--ctp-mauve)]">
               {{ t.schedule.previewNext2Header }}

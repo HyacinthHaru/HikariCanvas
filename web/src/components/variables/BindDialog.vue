@@ -1,15 +1,15 @@
 <script setup lang="ts">
 /**
- * 0.4.0-P2-G：让插件接管 / 取消绑定对话框（**P2 简化版**）。
+ * 让插件接管 / 取消绑定对话框（简化版）。
  *
- * <p>P4（Plugin Push API）落地前，没有可绑定的插件可枚举。P2 阶段：</p>
+ * <p>Plugin Push API 落地前，没有可绑定的插件可枚举。当前简化版：</p>
  * <ul>
- *   <li>未绑：显示 empty state 提示 "P4 阶段启用后此处显示插件列表"；</li>
+ *   <li>未绑：显示 empty state 提示 "插件推送 API 启用后此处显示插件列表"；</li>
  *   <li>已绑（即 {@link Variable.source} 非 manual / null）：显示当前绑定 + "取消绑定" 按钮。</li>
  * </ul>
  * 取消绑定走 {@code wsClient.sendVariableBind(fullName, null)}。
  *
- * <p>P4 时整体替换为插件列表 picker。</p>
+ * <p>后续整体替换为插件列表 picker。</p>
  */
 import { computed, ref } from 'vue';
 import { X, Link2 } from 'lucide-vue-next';
@@ -33,7 +33,7 @@ const submitError = ref<string | null>(null);
 
 /**
  * 是否当前已绑插件。判定：source 既非空 / 也非 "manual" / "system" / "papi" 时认为是插件绑定。
- * P4 落地后改读专用的 boundTo 字段（后端已留接口位）。
+ * 后续改读专用的 boundTo 字段（后端已留接口位）。
  */
 const boundPlugin = computed<string | null>(() => {
     const s = props.variable.source;

@@ -8,7 +8,7 @@ import { useI18n } from '@/i18n';
 import Tooltip from '@/components/ui/Tooltip.vue';
 
 /**
- * M24-B 主题切换器：扁平化 M3 风格 popover。
+ * 主题切换器：扁平化 Material 3 风格 popover。
  *
  * 挂载在 TopBar 右侧，与 SnapSettingsPopover / locale toggle 同级。
  *
@@ -21,7 +21,7 @@ import Tooltip from '@/components/ui/Tooltip.vue';
  *   - 单一 surface tone（var(--card)）做底，不堆 backdrop-blur / shadow-2xl；
  *   - 选中态用 ring + check icon，不用 glow；
  *   - 圆点 swatch + radio 文本，简洁高对比度；
- *   - hover 不上 scale，按 M3 用底色加深表达交互态。
+ *   - hover 不上 scale，按 Material 3 用底色加深表达交互态。
  */
 const theme = useThemeStore();
 const ui = useUiStore();
@@ -29,7 +29,7 @@ const { t } = useI18n();
 
 const rootRef = ref<HTMLElement | null>(null);
 const open = ref(false);
-// M25: 用 ignore selector 排除 Tooltip Teleport 出去的 .hc-tooltip。
+// 用 ignore selector 排除 Tooltip Teleport 出去的 .hc-tooltip。
 // 没 ignore 时，触发 tooltip 显示 → tooltip 渲染在 <body> 下 → 任何点击如果落在 tooltip
 // 上会被视为 outside；正常情况下 tooltip pointer-events:none 已经规避，但保险起见加上。
 onClickOutside(rootRef, () => { open.value = false; }, { ignore: ['.hc-tooltip'] });
@@ -38,7 +38,7 @@ function toggle(): void { open.value = !open.value; }
 function close(): void { open.value = false; }
 
 function flavorLabel(p: typeof PRESETS[number]): string {
-    // M25 修复：useI18n() 只返回 { t }，没 locale；直接读 ui.locale。
+    // useI18n() 只返回 { t }，没 locale；直接读 ui.locale。
     return ui.locale === 'zh' ? p.nameZh : p.nameEn;
 }
 

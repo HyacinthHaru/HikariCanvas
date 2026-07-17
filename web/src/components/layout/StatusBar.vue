@@ -32,7 +32,7 @@ const statusLabel = computed(() => {
     }
 });
 
-// 2026-05-14 lock-state：published 砍 → locked / unlocked
+// lock-state：published 砍 → locked / unlocked
 const wallStateLabel = computed(() => {
     if (project.isLocked) return t.value.status.locked;
     return t.value.status.unlocked;

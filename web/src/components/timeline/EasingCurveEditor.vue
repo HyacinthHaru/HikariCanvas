@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.6 P4c：缓动曲线编辑器（SVG cubic-bezier）。
+ * 缓动曲线编辑器（SVG cubic-bezier）。
  *
  * <p>选中关键帧后编辑其 {@code easing}（到下一帧的缓动）。4 个预设快捷（linear / easeIn / easeOut /
  * easeInOut）+ 拖两个控制点产生自定义 {@code cubicBezier}（写 {@code bezier:[x1,y1,x2,y2]}）。曲线用

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 对齐 / 分布工具栏（0.4.8 实现）。
+ * 对齐 / 分布工具栏。
  *
  * <p>仅在多选（selectedIds.size ≥ 2）+ 非锁定 wall 时挂载；显示在 CanvasView 顶部居中。
  * 按下按钮 → 算出新 (x, y) → 乐观本地 mutate + 批量发 element.update WS op（每个一条）。</p>

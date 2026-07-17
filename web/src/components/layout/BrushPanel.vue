@@ -89,7 +89,7 @@ function onFillChange(v: Fill) {
                :value="Math.round(brush.smoothing * 100)" @input="onSmoothingInput" />
       </label>
 
-      <!-- dither toggle（Q7：复用 M11 renderMode） -->
+      <!-- dither toggle（复用 renderMode） -->
       <Tooltip :text="t.brush.ditherTip">
         <label class="flex items-center justify-between cursor-help">
           <span class="text-[color:var(--muted-foreground)]">{{ t.brush.dither }}</span>

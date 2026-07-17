@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.4.0-P2-G：新建变量对话框。
+ * 新建变量对话框。
  *
  * <p>用户在 VariablePanel 点 "+ 新建变量" 触发；填名称 + 类型 + 默认值后走
  * {@code wsClient.sendVariableCreate(name, type, defaultValue)}。后端自动加
@@ -42,13 +42,13 @@ const NAME_REGEX = /^[a-zA-Z0-9_.-]+$/;
 const MAX_NAME_LEN = 64;
 
 const name = ref('');
-const scope = ref<Scope>('wall');  // 0.4.3：默认 wall（与 0.4.0 行为一致）
+const scope = ref<Scope>('wall');  // 默认 wall
 const type = ref<VarType>('STRING');
 const defaultValueStr = ref('');           // STRING 用
 const defaultValueNum = ref<number>(0);    // NUMBER 用
 const defaultValueBool = ref<boolean>(false); // BOOLEAN 用
 const defaultValueColor = ref('#FFFFFF');  // COLOR 用
-// 0.4.2：可选 alias 字段。创建成功后两步：先 variable.create 拿 fullName，再 variable.alias.set
+// 可选 alias 字段。创建成功后两步：先 variable.create 拿 fullName，再 variable.alias.set
 const aliasDraft = ref('');
 const ALIAS_MAX_LEN = 64;
 
@@ -102,9 +102,9 @@ async function onSubmit() {
     const fullDefault = currentDefaultValueAsString();
     const aliasTrimmed = aliasDraft.value.trim();
     try {
-        // 0.4.3：scope='global' 走 sendVariableCreate 第 4 参，后端 EditSession 路由到 createGlobalVariable
+        // scope='global' 走 sendVariableCreate 第 4 参，后端 EditSession 路由到 createGlobalVariable
         await ws.sendVariableCreate(name.value, type.value, fullDefault, scope.value);
-        // 0.4.2：若 alias 字段非空，create 成功后再发 variable.alias.set。
+        // 若 alias 字段非空，create 成功后再发 variable.alias.set。
         // user 变量 fullName = user:<wallId>/<name>；userglobal 变量 fullName = userglobal/<name>
         if (aliasTrimmed.length > 0) {
             let fullName: string | null = null;
@@ -195,7 +195,7 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
           <span v-else class="text-xs text-[color:var(--muted-foreground)]">{{ t.variables.dialogNewNameHint }}</span>
         </label>
 
-        <!-- 0.4.3：scope toggle（作用域）：本 wall vs 全局 -->
+        <!-- scope toggle（作用域）：本 wall vs 全局 -->
         <div class="block">
           <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.variables.dialogNewScopeLabel }}</span>
           <div class="mt-1 flex gap-1">
@@ -277,7 +277,7 @@ const TYPE_OPTIONS: { value: VarType; labelKey: 'typeString' | 'typeNumber' | 't
           </div>
         </div>
 
-        <!-- 0.4.2：可选 alias 字段 -->
+        <!-- 可选 alias 字段 -->
         <label class="block">
           <span class="text-xs text-[color:var(--muted-foreground)]">
             {{ t.variables.dialogNewAliasLabel }}

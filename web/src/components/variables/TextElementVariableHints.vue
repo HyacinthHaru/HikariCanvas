@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Text 元素变量 hints（0.4.0-P2-H）：textarea 下方 live preview + 删除警告。
+ * Text 元素变量 hints：textarea 下方 live preview + 删除警告。
  *
  * <p>仅当 text 含 {@code ${var:} 子串时挂载（外部 v-if）；内部 200ms debounce
  * 调 {@link interpolate} 算最终文本 + missingFullNames，UI 反馈给用户。</p>

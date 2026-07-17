@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * M18 Live Paint — 油漆桶面板（替代 BrushPanel 在 paint-bucket 工具激活时显示）。
+ * Live Paint — 油漆桶面板（替代 BrushPanel 在 paint-bucket 工具激活时显示）。
  *
  * 结构模仿 BrushPanel：
  *   - 头部 icon + 标题

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * M17 F5：画板设置段。RightPanel 在"未选中任何元素"时显示，提供：
+ * 画板设置段。RightPanel 在"未选中任何元素"时显示，提供：
  * - background：FillInput 联合（solid / linear / radial），含 alpha 通道
  *
  * 数据流：FillInput emit 新 Fill → 本组件 optimistic patch 到 store.canvas.background
- * → 发 WS op {@code canvas.background} 携带 {@code fill}（M17 F5 协议升级，与
+ * → 发 WS op {@code canvas.background} 携带 {@code fill}（协议升级，与
  * legacy {@code color} 字段并存）。
  *
  * 棋盘格 UI 提示：FillInput 渲染色块本身已带 alpha 棋盘格；这里只展示画板缩略图视觉
@@ -33,15 +33,15 @@ function onBgUpdate(next: Fill): void {
     if (!project.state) return;
     // optimistic：先把本地 canvas.background 替换为 object 形态（FillInput 统一 emit object）
     project.state.canvas.background = next;
-    // M17 F5：协议字段 {@code fill}（Fill 对象）。后端 EditOpDispatcher 优先识别 fill，
+    // 协议字段 {@code fill}（Fill 对象）。后端 EditOpDispatcher 优先识别 fill，
     // 兼容旧 {@code color} 字符串字段。
     ws.send('canvas.background', { fill: next });
 }
 
 /**
- * 0.4.6 P2：一键设全透明背景（#00000000）。
+ * 一键设全透明背景（#00000000）。
  *
- * 后端 CanvasCompositor 在 0.4.6 升 TYPE_INT_ARGB buffer + toPaletteSlice 提 alpha 后，
+ * 后端 CanvasCompositor 升 TYPE_INT_ARGB buffer + toPaletteSlice 提 alpha 后，
  * alpha < 128 的像素会被映射到 palette index 0（透明色），MC 地图渲染时该像素透出
  * ItemFrame 后方方块。让玩家把 wall 放在风景或建筑前实现"信息悬浮"效果。
  */
@@ -72,7 +72,7 @@ const hasAlpha = computed(() => {
           <FillInput :model-value="bgFill" @update:model-value="onBgUpdate" />
         </div>
       </label>
-      <!-- 0.4.6 P2：一键设全透明背景 -->
+      <!-- 一键设全透明背景 -->
       <button class="hc-btn flex items-center gap-1 px-2 py-1 text-xs rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] w-full justify-center"
               :title="t.canvas.transparentBgTooltip"
               @click="setTransparentBackground">

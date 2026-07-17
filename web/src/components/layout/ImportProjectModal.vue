@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.8 A3：.canvas 工程导入对话框。
+ * .canvas 工程导入对话框。
  *
  * 流程：选文件 / 拖入 → 破坏性替换二次确认 → 调 useProjectImport().importProject(file)
  *   → loading → 展示后端 warnings 清单 / 错误。

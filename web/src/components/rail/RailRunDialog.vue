@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 0.4.4：车次详情子 modal。
+ * 车次详情子 modal。
  * - 编辑 runNumber / direction / serviceType / cars / startStation / endStation / notes
  * - 时刻表 inline 编辑（每站 arrival / departure / stopsHere）
  * - 「自动生成」按钮 → 弹自动生成对话框（首站时间 + 站间秒 + 跳站集合）
@@ -27,7 +27,7 @@ const run = computed(() => rail.runs.get(props.runId));
 const draftRunNumber = ref('');
 const draftDirection = ref<'up' | 'down'>('up');
 const draftServiceType = ref('local');
-// 0.4.5 P5：当 serviceType 不在 4 内置时，切换为 input 自由编辑
+// 当 serviceType 不在 4 内置时，切换为 input 自由编辑
 const serviceTypeCustomMode = ref(false);
 
 function onServiceTypeSelect(e: Event) {
@@ -58,7 +58,7 @@ const autoTravel = ref(90);
 const autoDwell = ref(30);
 const autoSkips = ref<Set<string>>(new Set());
 
-// 0.4.5 P6：车次复制对话框状态
+// 车次复制对话框状态
 const showCopyDialog = ref(false);
 const copyRunNumber = ref('');
 const copyDirection = ref<'up' | 'down'>('up');
@@ -79,7 +79,7 @@ function syncDraftFromStore() {
     draftRunNumber.value = r.runNumber;
     draftDirection.value = r.direction;
     draftServiceType.value = r.serviceType;
-    // 0.4.5 P5：若 DB 中的 serviceType 不是 4 内置，自动进入 custom input 模式
+    // 若 DB 中的 serviceType 不是 4 内置，自动进入 custom input 模式
     serviceTypeCustomMode.value = !SERVICE_TYPE_ENUMS.includes(r.serviceType as never);
     draftCars.value = r.cars ?? '';
     draftStartId.value = r.startStationId ?? '';
@@ -154,7 +154,7 @@ async function saveTimetable() {
 
 async function runAutoGenerate() {
     if (!run.value) return;
-    // P2-14：v-model.number 在输入框被清空时把 ref 设为 ''（非 NaN），后续 `cursor += ''` 触发
+    // v-model.number 在输入框被清空时把 ref 设为 ''（非 NaN），后续 `cursor += ''` 触发
     // 字符串拼接 → 生成格式合法但语义错乱的时刻（21600 + '' = '21600' → '06:00:00' 等）写入
     // rail_timetable 并经 RailScheduleProvider 推给全线绑定 wall。这里在生成前强转 Number +
     // finite 校验，任一非有限数则拒绝、置 error 提示用户补齐，根除字符串污染。
@@ -189,7 +189,7 @@ async function runAutoGenerate() {
         const segment = stations.slice(startIdx, endIdx + 1);
         const rows: Array<{ stationId: string; arrival: string | null;
                             departure: string | null; stopsHere: boolean }> = [];
-        // P2-14：用上方校验过的 Number 值（travel / dwell / firstSec），避免 += 字符串拼接。
+        // 用上方校验过的 Number 值（travel / dwell / firstSec），避免 += 字符串拼接。
         let cursor = firstSec;
         for (let i = 0; i < segment.length; i++) {
             const s = segment[i];
@@ -262,7 +262,7 @@ function toggleSkip(id: string) {
     autoSkips.value = next;
 }
 
-// 0.4.5 P6：车次复制 — 基于现有车次创建新车次（含所有字段 + timetable）
+// 车次复制 — 基于现有车次创建新车次（含所有字段 + timetable）
 function openCopyDialog() {
     if (!run.value) return;
     copyRunNumber.value = run.value.runNumber + '-copy';
@@ -383,7 +383,7 @@ function isValidTime(v: string): boolean {
           </label>
           <label class="block">
             <span class="text-[color:var(--muted-foreground)]">{{ t.rail.serviceType }}</span>
-            <!-- 0.4.5 P5：4 内置 + "自定义" 切换。custom 模式下显 input，否则 select -->
+            <!-- 4 内置 + "自定义" 切换。custom 模式下显 input，否则 select -->
             <select v-if="!serviceTypeCustomMode"
                     class="hc-input mt-0.5"
                     :value="draftServiceType"
@@ -439,7 +439,7 @@ function isValidTime(v: string): boolean {
             <Wand2 class="size-3" />
             <span>{{ t.rail.autoGenerate }}</span>
           </button>
-          <!-- 0.4.5 P6：车次复制按钮 -->
+          <!-- 车次复制按钮 -->
           <button class="hc-btn flex items-center gap-1 px-3 py-1 text-xs rounded-[var(--radius-sm)] border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
                   @click="openCopyDialog">
             <Copy class="size-3" />
@@ -472,7 +472,7 @@ function isValidTime(v: string): boolean {
                   class="border-t border-[color:var(--border)]">
                 <td class="py-1">{{ s.name }}</td>
                 <td class="py-1">
-                  <!-- 0.4.5 P4：type="time" + step="1" HTML5 原生 picker 含秒；红边校验 -->
+                  <!-- type="time" + step="1" HTML5 原生 picker 含秒；红边校验 -->
                   <input type="time" step="1" class="hc-input font-mono"
                          :class="isValidTime(getRow(s.id).arrival) ? '' : 'hc-input-error'"
                          :value="getRow(s.id).arrival"
@@ -544,7 +544,7 @@ function isValidTime(v: string): boolean {
         </div>
       </div>
 
-      <!-- 0.4.5 P6：车次复制对话框 -->
+      <!-- 车次复制对话框 -->
       <div v-if="showCopyDialog"
            class="absolute inset-0 z-[70] bg-[color:var(--ctp-crust)]/60 flex items-center justify-center p-4"
            @click.self="showCopyDialog = false"

@@ -29,7 +29,7 @@ import { useCanvasUpload } from '@/composables/useCanvasUpload';
 import { useSnapManager, type SnapHints } from '@/composables/useSnapManager';
 import { useLockGuard } from '@/composables/useLockGuard';
 import { useLassoMask } from '@/composables/useLassoMask';
-// M18 Live Paint：油漆桶工具支持
+// Live Paint：油漆桶工具支持
 import { useLivePaint, gapToPathElement, elementToPolygon, pointInPolygon } from '@/livepaint';
 import type { GapPolygon } from '@/livepaint';
 import { usePaintBucketStore } from '@/stores/paintBucket';
@@ -49,11 +49,11 @@ const net = useNetworkStore();
 const variableStore = useVariableStore();
 const timelineStore = useTimelineStore();
 const { upsertTransformKeyframe } = useTimelineAuthoring();
-// 2026-05-25 ultrareview #8：lock 多入口 guard。CanvasView 接入 grid / paint-bucket / icon-drop。
+// lock 多入口 guard。CanvasView 接入 grid / paint-bucket / icon-drop。
 const lockGuard = useLockGuard();
 
 /**
- * 0.6 P4.5b：是否对画布拖动 / resize 自动加帧（"拉就设"）。需 dock 开 + 自动加帧开关 ON +
+ * 是否对画布拖动 / resize 自动加帧（"拉就设"）。需 dock 开 + 自动加帧开关 ON +
  * 有激活时间轴 + wall 未锁。满足时拖元素在 playhead 自动打整体帧。
  */
 function shouldAutoKeyframe(): boolean {
@@ -78,7 +78,7 @@ const inlineEditorRef = ref<{
 } | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
-// ---------- 0.4.1-P3.5：inline editor 的 VariablePicker 接入 ----------
+// ---------- inline editor 的 VariablePicker 接入 ----------
 //
 // CanvasView 自持一个 picker overlay 实例：用户在画布内双击文本进入 chip 编辑器后，
 // 输入 `${` / 点击 chip 都触发 picker，不需要回到 RightPanel。
@@ -99,7 +99,7 @@ const editingElement = computed(() => {
 const widthPx = computed(() => project.canvasPixelWidth || 256);
 const heightPx = computed(() => project.canvasPixelHeight || 256);
 
-// M17 F3：shift 临时禁用 snap；keydown/keyup + window blur 维护
+// shift 临时禁用 snap；keydown/keyup + window blur 维护
 const isShiftDown = ref(false);
 useEventListener(window, 'keydown', (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftDown.value = true; });
 useEventListener(window, 'keyup', (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftDown.value = false; });
@@ -122,9 +122,9 @@ const stageConfig = computed(() => ({
 interface BoundBox { x: number; y: number; width: number; height: number; rotation: number }
 
 /**
- * M17.4 F3：resize snap。Konva Transformer 每帧拖锚点 call boundBoxFunc(oldBox, newBox)。
+ * resize snap。Konva Transformer 每帧拖锚点 call boundBoxFunc(oldBox, newBox)。
  *
- * v3（0.7.3-D2 修）：先判断哪条边在动，再仅对正在移动的那条边做 snapEdge 单边吸附。
+ * 先判断哪条边在动，再仅对正在移动的那条边做 snapEdge 单边吸附。
  *
  * v2 问题：调 snapManager.snap(bbox…) 时内部 snapAxis 扫 left/center/right 三锚点找全局
  * bestDelta；若静止的 left 边恰好距某 candidate 更近，拖右手柄时 dx 来自 left 锚点，导致
@@ -211,7 +211,7 @@ const transformerConfig = {
     borderStrokeWidth: 1.5,
     anchorStroke: '#60a5fa',
     anchorFill: '#0b1120',
-    // 2026-05-12 polish：anchor 由 8 升 12，方便拖拽；rotate 锚点也拉远 8px
+    // anchor 由 8 升 12，方便拖拽；rotate 锚点也拉远 8px
     anchorSize: 12,
     rotateAnchorOffset: 32,
     boundBoxFunc,
@@ -222,11 +222,11 @@ const hoverId = ref<string | null>(null);
 
 const elements = computed(() => project.state?.elements ?? []);
 
-// ---------- M18 Live Paint ----------
+// ---------- Live Paint ----------
 // 只在 paint-bucket 工具激活时跑 worker；切走时 useLivePaint 内部跳过 send + 清空 graph。
 // visibleElements 过滤 visible=false 的 element（隐藏图层 / 隐藏元素不参与 gap 计算）。
 const livePaintEnabled = computed(() => ui.activeTool === 'paint-bucket');
-// P3-27：elements 指向 activeLayer.elements；活动层被隐藏时画布不渲染这些元素，
+// elements 指向 activeLayer.elements；活动层被隐藏时画布不渲染这些元素，
 // 故它们也不应参与 findElementAt / marquee / Live Paint gap 命中——与 useSnapManager
 // 的 `layer.visible && el.visible` 语义对齐（隐藏即不可交互）。
 const visibleElements = computed(() =>
@@ -241,13 +241,13 @@ const livePaint = useLivePaint({
 /** 当前 hover 命中的 gap polygon；非 paint-bucket 工具下永远 null。 */
 const hoveredGap = ref<GapPolygon | null>(null);
 
-// ---------- M8-E：grid overlay ----------
+// ---------- grid overlay ----------
 const gridSize = computed(() => project.state?.canvas.gridSize ?? 0);
 
 function onGridChange(ev: Event): void {
     const v = parseInt((ev.target as HTMLInputElement).value, 10);
     const size = Number.isFinite(v) ? Math.max(0, Math.min(256, v)) : 0;
-    // 2026-05-25 ultrareview #8：lock 状态下 grid 也属于 canvas mutation，必须 guard
+    // lock 状态下 grid 也属于 canvas mutation，必须 guard
     if (!lockGuard.guardMutation(t.value.canvas.grid)) return;
     ws.send('canvas.grid', { size });
 }
@@ -283,8 +283,8 @@ const { onTransformEnd } = useTransformerManager({
 function onElementTransformEnd(ev: Parameters<typeof onTransformEnd>[0], id: string): void {
     onTransformEnd(ev, id);
     activeSnapHints.value = null;
-    // P4.5b：resize / rotate 落定也 upsert 整体帧（值取 onTransformEnd 已 mutate 的 el 最终几何）。
-    //   transform 无拖动期跟手覆盖（沿用 M17 行为，松手生效），故不设 draggingElementIds。
+    // resize / rotate 落定也 upsert 整体帧（值取 onTransformEnd 已 mutate 的 el 最终几何）。
+    //   transform 无拖动期跟手覆盖（沿用既有行为，松手生效），故不设 draggingElementIds。
     if (shouldAutoKeyframe()) {
         const tlNow = timelineStore.activeTimeline;
         if (tlNow) {
@@ -312,7 +312,7 @@ const {
     triggerFileInput,
 } = useCanvasUpload({ brushHostRef, fileInputRef });
 
-// 2026-05-25 项 1：lasso mask 自由绘制。Alt + drag image element 在画布上画 mask。
+// lasso mask 自由绘制。Alt + drag image element 在画布上画 mask。
 //
 // 触发：当前 select 工具 + 选中单 image element + Alt 按住 + pointer down 在 image 内。
 // 输出：M/L/Z subset 的 SVG path d → element.update mask 字段，featherPx 保留。
@@ -369,7 +369,7 @@ const lasso = useLassoMask({
     drawingGuide: lassoGuide,
 });
 
-// ---------- M26.3 IconLibrary drop ----------
+// ---------- IconLibrary drop ----------
 //
 // IconLibrary 的 grid cell 通过 dataTransfer.setData('application/x-hikari-icon', id)
 // 携带 icon source。这里在 outer drop 时先尝试解出 icon → 创建 IconElement；
@@ -451,11 +451,11 @@ function hitConfig(e: Element) {
     const hovered = hoverId.value === e.id;
     const selected = ui.isSelected(e.id);
     const canDrag = !e.locked && e.visible && !project.activeLayerLocked;
-    // M9-E：绘制工具激活时，element-hit 整层 listening=false，让 mousedown 穿透到 stage
+    // 绘制工具激活时，element-hit 整层 listening=false，让 mousedown 穿透到 stage
     // 启动 drag-to-create（PS/Figma 行为：drawTool 下点已有元素也是开始画新元素）
-    // M17 F4：hand 工具同样关闭 element-hit listening，使左键直接被 outer 的 pan 处理。
-    // M18 Live Paint：paint-bucket 也关 element-hit listening，让 mousedown/move 都直达 stage
-    // 由 onPaintBucketClick / hover 逻辑统一接管；P4 实装"点击 element 内部 recolor"时再开
+    // hand 工具同样关闭 element-hit listening，使左键直接被 outer 的 pan 处理。
+    // Live Paint：paint-bucket 也关 element-hit listening，让 mousedown/move 都直达 stage
+    // 由 onPaintBucketClick / hover 逻辑统一接管；实装"点击 element 内部 recolor"时再开
     const drawing = isDrawTool(ui.activeTool) || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket';
     return {
         id: e.id,
@@ -494,7 +494,7 @@ function onHitMouseLeave(ev: { target?: { getStage?: () => { container?: () => H
 function onHitClick(ev: { cancelBubble?: boolean; evt?: MouseEvent | TouchEvent }, id: string): void {
     // 切到别的元素或者在编辑中点同一元素的非 textarea 区域 → 先收编辑态
     if (editingId.value && editingId.value !== id) finishEditing();
-    // M8-F：Shift / Cmd / Ctrl click = 加选 / 切换；普通 click = 单选替换
+    // Shift / Cmd / Ctrl click = 加选 / 切换；普通 click = 单选替换
     const me = ev.evt as MouseEvent | undefined;
     if (me && (me.shiftKey || me.metaKey || me.ctrlKey)) {
         ui.toggleSelection(id);
@@ -516,7 +516,7 @@ function onHitDblClick(ev: { cancelBubble?: boolean }, id: string): void {
 function onEditTextUpdate(v: string) {
     const el = editingElement.value;
     if (!el) return;
-    // 2026-05-25 ultrareview #8 内层防线：理论上 stage 内编辑触发不了（z-20 overlay 接走 dblclick），
+    // 内层防线：理论上 stage 内编辑触发不了（z-20 overlay 接走 dblclick），
     // 但 TextInlineEditor 一旦已 focus 在那里时 wall 被远端 lock，本地仍可继续打字 —— guard 一下
     if (!lockGuard.guardMutation(t.value.tools.addText)) return;
     // optimistic
@@ -530,7 +530,7 @@ function finishEditing() {
     inlinePickerMode.value = { kind: 'insertNew' };
 }
 
-// ---------- 0.4.1-P3.5：inline editor 的 picker hooks ----------
+// ---------- inline editor 的 picker hooks ----------
 
 function onInlineInsertVariableRequest() {
     inlinePickerMode.value = { kind: 'insertNew' };
@@ -543,7 +543,7 @@ function onInlineEditVariableRequest(payload: { rawName: string; fallback: strin
 }
 
 function onInlineCreateVariableRequest(payload: { rawName: string }) {
-    // P3.4：缺失变量补创 — 简化 v1 用 native confirm；外观打磨留 v1.x
+    // 缺失变量补创 — 简化 v1 用 native confirm；外观打磨留 v1.x
     if (typeof window === 'undefined') return;
     const ok = window.confirm(
         `${t.value.variables.chipError.notFound.replace('{name}', payload.rawName)}\n` +
@@ -614,22 +614,22 @@ function onStageMouseDown(ev: StageEvt): void {
     const evt = ev.evt as MouseEvt | undefined;
     if (evt && ((evt as MouseEvent).button === 1 || (evt as MouseEvent).altKey)) return;
 
-    // M17 F4：hand 工具 / 按住 Space 临时切的 hand —— 左键交给 outer pan，不启动 marquee / draw。
+    // hand 工具 / 按住 Space 临时切的 hand —— 左键交给 outer pan，不启动 marquee / draw。
     if (ui.activeTool === 'hand') return;
 
     const stage = node.getStage?.();
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
 
-    // M12-C：brush 工具走 PointerEvent + BrushController（独立路径），stage Konva 事件不动
+    // brush 工具走 PointerEvent + BrushController（独立路径），stage Konva 事件不动
     if (ui.activeTool === 'brush') return;
-    // M18 Live Paint：paint-bucket 单击 = 填充。stage 坐标 = 画布像素坐标（stage 无 scale）。
+    // Live Paint：paint-bucket 单击 = 填充。stage 坐标 = 画布像素坐标（stage 无 scale）。
     if (ui.activeTool === 'paint-bucket') {
         if (editingId.value) finishEditing();
         onPaintBucketClick(pos.x, pos.y);
         return;
     }
-    // M9-E：绘制工具激活时启动 drag-to-create；其他工具启动 marquee
+    // 绘制工具激活时启动 drag-to-create；其他工具启动 marquee
     if (isDrawTool(ui.activeTool)) {
         if (editingId.value) finishEditing();
         drawStart(pos);
@@ -643,30 +643,30 @@ function onStageMouseMove(ev: StageEvt): void {
     const stage = ev.target?.getStage?.();
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
-    // M18 Live Paint：paint-bucket 工具下做 hover preview（point-in-polygon 查 cached graph）
+    // Live Paint：paint-bucket 工具下做 hover preview（point-in-polygon 查 cached graph）
     // 不进 drawMove / marqueeMove；保证不与 marquee 拖框冲突。
     if (ui.activeTool === 'paint-bucket') {
         hoveredGap.value = livePaint.findGapAt(pos.x, pos.y);
         return;
     }
-    if (drawMove(pos, isShiftDown.value)) return;  // M27：Shift 锁等比传给绘制
+    if (drawMove(pos, isShiftDown.value)) return;  // Shift 锁等比传给绘制
     marqueeMove(pos);
 }
 
 /**
- * M18 Live Paint：paint-bucket 单击处理。
+ * Live Paint：paint-bucket 单击处理。
  *
  * 优先级：
  *   1. wall 锁定 → 拒
  *   2. graph 未就绪 / 退化 → 拒（提示 building / degraded）
  *   3. 命中 gap → 新建 PathElement 填充
- *   4. 命中 element 内部（精确 polygon hit-test）→ vector-fill 决策 A：直接改 element.fill
+ *   4. 命中 element 内部（精确 polygon hit-test）→ vector-fill：直接改 element.fill
  *      - rect / circle / shape / path 支持 fill 字段，直接 element.update
- *      - text / image / brush 不支持（text 用 color，image 无填充语义，brush 不在 P4 范围）→ 提示
+ *      - text / image / brush 不支持（text 用 color，image 无填充语义，brush 笔触无填充语义）→ 提示
  *      - 元素锁定 → 拒
  *   5. 都没命中（理论几乎不应该——visibleElements 之外的区域应该都是 gap）→ noGapFound
  *
- * 决策 A 关键：vector-fill 走 element.update（修改既有元素 fill 字段），而非在元素上方
+ * 关键：vector-fill 走 element.update（修改既有元素 fill 字段），而非在元素上方
  * 叠加一个 PathElement。这样 dither / opacity / blendMode 等元素级状态保持完好；
  * 视觉行为最接近 Figma / PS 的"油漆桶点对象重着色"。
  *
@@ -695,19 +695,19 @@ function findElementAt(canvasX: number, canvasY: number): Element | null {
 }
 
 function onPaintBucketClick(canvasX: number, canvasY: number): void {
-    // P0：wall 锁定
+    // wall 锁定
     if (project.isLocked) {
         net.pushLog('meta', t.value.livePaint.wallLocked);
         return;
     }
-    // P0：graph 还没构建（首帧 / 大量 element rebuild 中）—— 提示用户稍等再点。
-    // P2-30：加 isBuilding 门——重新启用工具后、新一轮 rebuild 完成前 graph 可能仍是
+    // graph 还没构建（首帧 / 大量 element rebuild 中）—— 提示用户稍等再点。
+    // 加 isBuilding 门——重新启用工具后、新一轮 rebuild 完成前 graph 可能仍是
     // 上一轮的陈旧拓扑，此时点击应被"请稍候"安全拒绝，而非对过期拓扑执行填充。
     if (!livePaint.graph.value || livePaint.isBuilding.value) {
         net.pushLog('meta', t.value.livePaint.building);
         return;
     }
-    // M18-P4：polygon-clipping 抛错时 graph.degraded=true，gaps 为空——显式不可用
+    // polygon-clipping 抛错时 graph.degraded=true，gaps 为空——显式不可用
     // 而不是给用户"整画布单 gap"的假象
     if (livePaint.graph.value.degraded) {
         net.pushLog('err', t.value.livePaint.degraded);
@@ -749,7 +749,7 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
         return;
     }
 
-    // 2. vector-fill 决策 A：点击 element 内部 → 直接改 element.fill
+    // 2. vector-fill：点击 element 内部 → 直接改 element.fill
     const hitElement = findElementAt(canvasX, canvasY);
     if (hitElement) {
         if (hitElement.locked) {
@@ -772,7 +772,7 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
             net.pushLog('meta', t.value.livePaint.recolorSuccess);
             return;
         }
-        // text（color 字段）/ image（无填充语义）/ brush（笔触不在 P4 范围）→ 提示
+        // text（color 字段）/ image（无填充语义）/ brush（笔触无填充语义）→ 提示
         net.pushLog('meta', t.value.livePaint.elementUnsupported(hitElement.type));
         return;
     }
@@ -782,7 +782,7 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
 }
 
 function onStageMouseUp(): void {
-    // M9-E：绘制工具的 drag-to-create 完成
+    // 绘制工具的 drag-to-create 完成
     if (drawEnd()) return;
 
     const res = marqueeEnd();
@@ -797,7 +797,7 @@ function onStageMouseUp(): void {
     if (!res.additive && editingId.value) finishEditing();
 }
 
-// 2026-05-25 项 1：lasso 全局 pointer 监听。挂在 window 上：
+// lasso 全局 pointer 监听。挂在 window 上：
 //  - Alt 按住 + image 选中 + pointerdown 命中 image 局部坐标 → start 并 stopPropagation
 //    阻止 marquee / drag 启动
 //  - 后续 move/up 都由 lasso 自己处理（不影响其他 stage event）
@@ -828,11 +828,11 @@ useEventListener(window, 'pointercancel', () => {
 useEventListener(window, 'mouseup', () => {
     marqueeCancel();
     drawCancel();  // 拖出窗口 = 取消本次创建
-    // M17.4：也清 snap hints（防止 drag 被中断时残留 visualizer）
+    // 也清 snap hints（防止 drag 被中断时残留 visualizer）
     activeSnapHints.value = null;
 });
 
-// M18 Live Paint：鼠标离开 outer 容器（或 window blur）时清 hover 高亮
+// Live Paint：鼠标离开 outer 容器（或 window blur）时清 hover 高亮
 useEventListener(window, 'blur', () => { hoveredGap.value = null; });
 
 /** 双击 stage 空白处：取消所有选中 + 退出编辑（用户实测后明确要求的 escape 路径）。 */
@@ -847,9 +847,9 @@ function onStageDblClick(ev: { target: { getType?: () => string; hasName?: (n: s
 }
 
 // 切换 Move 工具时也应主动收掉编辑态——避免"Move 模式下拖一个、textarea 仍浮在另一个上"
-// M9-D：切到绘制工具（line/arrow/circle/star）时也清 selection，避免"激活创建工具+持有 selection"
+// 切到绘制工具（line/arrow/circle/star）时也清 selection，避免"激活创建工具+持有 selection"
 // 的矛盾视觉（transformer 还在但用户期望拖出新元素）
-// M9-E：清掉进行中的 marquee / drawDrag 状态，避免边缘 case（拖动中按快捷键切工具）
+// 清掉进行中的 marquee / drawDrag 状态，避免边缘 case（拖动中按快捷键切工具）
 watch(() => ui.activeTool, (next) => {
     if (editingId.value) finishEditing();
     if (isDrawTool(next)) {
@@ -857,25 +857,25 @@ watch(() => ui.activeTool, (next) => {
     }
     marqueeCancel();
     drawCancel();
-    // M18 Live Paint：切走时清 hover 高亮，避免下次切回时短暂残留旧 gap
+    // Live Paint：切走时清 hover 高亮，避免下次切回时短暂残留旧 gap
     if (next !== 'paint-bucket') {
         hoveredGap.value = null;
     }
 });
 
 /**
- * M9-D：cursor 跟随 activeTool。绘制工具显示 crosshair；其他默认 cursor。
- * M17 F4：hand 工具 grab；正在 pan grabbing；Alt 按下且 select/move 也 grab（提示 Alt+左键 pan）。
+ * cursor 跟随 activeTool。绘制工具显示 crosshair；其他默认 cursor。
+ * hand 工具 grab；正在 pan grabbing；Alt 按下且 select/move 也 grab（提示 Alt+左键 pan）。
  */
 const cursorStyle = computed(() => {
     if (isPanning.value) return 'grabbing';
     if (ui.activeTool === 'hand') return 'grab';
-    if (ui.activeTool === 'paint-bucket') return 'crosshair';  // M18 Live Paint
+    if (ui.activeTool === 'paint-bucket') return 'crosshair';  // Live Paint
     if (isDrawTool(ui.activeTool)) return 'crosshair';
     return 'default';
 });
 
-// ---------- M8-F：多选 drag 同步 ----------
+// ---------- 多选 drag 同步 ----------
 //
 // 拖单个 node 时若其在多选集合内，记录所有选中 element 的初始位置；dragmove 时按 leader
 // 的 delta 同步其他 element 位置（视觉跟随）；dragend 时为所有选中 element 各发一条
@@ -888,7 +888,7 @@ function onDragStart(id: string): void {
     // 这里兜底：拖任何元素时只要有 editing 状态就先收掉，避免 textarea 滞留在前一个元素上
     if (editingId.value && editingId.value !== id) finishEditing();
 
-    // M17 F2/F3：单选 / 多选都记录初始位置 —— 单选场景 onDragMove 需要 initLeader 才能算 delta；
+    // 单选 / 多选都记录初始位置 —— 单选场景 onDragMove 需要 initLeader 才能算 delta；
     // 多选场景还要给 follower 同步用。原 size>1 才 set 的逻辑会让单选 onDragMove 早 return。
     const init = new Map<string, { x: number; y: number }>();
     if (ui.selectedCount > 1 && ui.isSelected(id)) {
@@ -902,7 +902,7 @@ function onDragStart(id: string): void {
     }
     dragInitial.value = init;
 
-    // P4.5b：自动加帧模式——记录拖动元素集（渲染期跟手覆盖 + dragend upsert 用），并切预览态让
+    // 自动加帧模式——记录拖动元素集（渲染期跟手覆盖 + dragend upsert 用），并切预览态让
     //   画布显示 playhead 处画面，被拖元素的实时值覆盖在其上跟手（见 :renderProjectState 前的覆盖）。
     if (shouldAutoKeyframe()) {
         timelineStore.setPreviewActive(true);
@@ -929,10 +929,10 @@ function onDragMove(ev: DragEvt, id: string): void {
     let leaderX = Math.round(node.x() - w / 2);
     let leaderY = Math.round(node.y() - h / 2);
 
-    // M17 F3：snap manager 修正 leader 落点。excludeIds 排除整个拖动组（多选）避免 snap 到自己。
+    // snap manager 修正 leader 落点。excludeIds 排除整个拖动组（多选）避免 snap 到自己。
     const excludeIds = new Set<string>(dragInitial.value.keys());
     const hints = snapManager.snap(leaderX, leaderY, w, h, excludeIds);
-    // M17.4：把 hints 推给 visualizer（即使无 snap 也置 null）。activeAxes / equalGap 任一非空都画。
+    // 把 hints 推给 visualizer（即使无 snap 也置 null）。activeAxes / equalGap 任一非空都画。
     const hasHits = hints.activeXAxes.length > 0 || hints.activeYAxes.length > 0
         || !!hints.equalGapX || !!hints.equalGapY;
     activeSnapHints.value = hasHits ? hints : null;
@@ -976,7 +976,7 @@ function onDragMove(ev: DragEvt, id: string): void {
 }
 
 function onDragEnd(ev: DragEvt, id: string): void {
-    // 2026-05-25 ultrareview #8 内层防线：drag mid-flight 远端 lock 兜底（理论 overlay 已挡 mousedown）
+    // 内层防线：drag mid-flight 远端 lock 兜底（理论 overlay 已挡 mousedown）
     if (!lockGuard.guardMutation('drag')) {
         dragInitial.value = new Map();
         timelineStore.setDraggingElementIds(new Set());
@@ -989,10 +989,10 @@ function onDragEnd(ev: DragEvt, id: string): void {
     const newX = Math.round(node.x() - w / 2);
     const newY = Math.round(node.y() - h / 2);
     const el = project.elementById(id);
-    // 0.4.0 bugfix：判等必须用 dragInitial 记录的初始位置而非 mutated 后的 el.x/y——
+    // 判等必须用 dragInitial 记录的初始位置而非 mutated 后的 el.x/y——
     // onDragMove 已经乐观把 el.x/y 同步到拖后位置（line 728-729 F2 视觉跟手），
     // 这里若再判 el.x !== newX 恒为 false → ws.send 永不发 → server 漏更新元素位置。
-    // M15.3 P0-1 已对多选 case 做了同样修复，但单选 path 漏修，导致所有拖动从未真正同步。
+    // 多选 case 已做过同样修复，但单选 path 曾漏修，导致所有拖动从未真正同步。
     const initLeader = dragInitial.value.get(id);
     const moved = initLeader
         ? (initLeader.x !== newX || initLeader.y !== newY)
@@ -1005,7 +1005,7 @@ function onDragEnd(ev: DragEvt, id: string): void {
     }
 
     // 多选：把 leader 的 delta 应用到其他选中 element，逐个发 ws
-    // M15.3 P0-1：判等用 init 记录的初始位置而非已被 dragmove mutate 后的 otherEl.x/y，
+    // 判等用 init 记录的初始位置而非已被 dragmove mutate 后的 otherEl.x/y，
     //   否则 dragmove 同步后 otherEl.x === otherX 恒成立 → ws.send 永不发 → 服务端漏更新
     if (dragInitial.value.size > 1) {
         const initLeader = dragInitial.value.get(id);
@@ -1025,7 +1025,7 @@ function onDragEnd(ev: DragEvt, id: string): void {
             }
         }
     }
-    // P4.5b：拖动落定 → 给所有拖动元素在 playhead upsert 整体帧（"拉就设"），并选中这些整体帧。
+    // 拖动落定 → 给所有拖动元素在 playhead upsert 整体帧（"拉就设"），并选中这些整体帧。
     //   值取 onDragMove 已乐观 mutate 的 el 当前几何；update 路径乐观改本地 value 消 WS 往返闪烁。
     if (timelineStore.draggingElementIds.size > 0) {
         const tlNow = timelineStore.activeTimeline;
@@ -1041,58 +1041,58 @@ function onDragEnd(ev: DragEvt, id: string): void {
         timelineStore.setDraggingElementIds(new Set());
     }
     dragInitial.value = new Map();
-    // M17.4：drag 结束立刻清 hints（无 fade，v1.x 再加）
+    // drag 结束立刻清 hints（无 fade，v1.x 再加）
     activeSnapHints.value = null;
 }
 
 // requestDraw 的 rAF 去抖标志：**必须在下面 immediate watch 之前声明**——否则该 watch 在 setup 期
 // 同步调 requestDraw 时 drawPending 仍在 TDZ → "Cannot access 'drawPending' before initialization"，
-// CanvasView 启动即崩（M5 起潜伏，旧 minifier 恰好提升了声明所以没显形，0.6 P5 重打包后暴露）。
+// CanvasView 启动即崩（长期潜伏——旧 minifier 恰好提升了声明所以没显形，一次重打包后暴露）。
 let drawPending = false;
 let drawRafId: number | null = null;
 
 // 重绘：state 或 editingId 变就重画 canvas
 watch(() => project.state, () => requestDraw(), { deep: true, immediate: true });
 watch(editingId, () => requestDraw());
-// 0.4.0 bugfix：变量值变化（Provider push / 玩家手动改 / state.patch 同步）触发画布重画，
+// 变量值变化（Provider push / 玩家手动改 / state.patch 同步）触发画布重画，
 // 让 PreviewRenderer 内的 interpolator 重新计算占位符替换值。useVariableStore.set/remove/clear
 // 都走 `variables.value = new Map(...)` 替换整个 ref，无需 deep watch。
 watch(() => variableStore.variables, () => requestDraw());
-// P4：播放头 / 预览开关变化 → 重绘（浅 watch 标量，绕开 :979 的 project.state deep watch；
+// 播放头 / 预览开关变化 → 重绘（浅 watch 标量，绕开 :979 的 project.state deep watch；
 // scrubber 60fps 拖动每帧只付 1 rAF + 1 interpolate 浅拷贝 + 1 Canvas2D 全画，无深度 diff）。
 watch(() => timelineStore.playheadMs, () => requestDraw());
 watch(() => timelineStore.previewActive, () => requestDraw());
-// P4.5b：拖动元素集变化（自动加帧开始 set / 结束 clear）→ 重绘，叠加/撤掉拖动期跟手覆盖。
+// 拖动元素集变化（自动加帧开始 set / 结束 clear）→ 重绘，叠加/撤掉拖动期跟手覆盖。
 watch(() => timelineStore.draggingElementIds, () => requestDraw());
 
-// P3-40：FontLoader / IconLoader / GlyphMetricsLut 的 requestDraw 订阅 unsubscribe 闭包，
+// FontLoader / IconLoader / GlyphMetricsLut 的 requestDraw 订阅 unsubscribe 闭包，
 // onBeforeUnmount 逐一调用注销（与 stage.destroy 清理并列）。
 const loaderUnsubscribers: Array<() => void> = [];
 
 onMounted(() => {
     requestDraw();
-    // M23：所有字体走 FontLoader（document.fonts 动态加载）。
+    // 所有字体走 FontLoader（document.fonts 动态加载）。
     //     ensureLoaded 是 PreviewRenderer drawText 调用的，这里只 preload 默认两个
     //     避免首帧空白；onFontLoaded 回调注册后任何 fontId 加载完都触发重画。
-    // P3-40：on*Loaded 返回 unsubscribe 闭包，存入 loaderUnsubscribers，onBeforeUnmount 逐一注销，
+    // on*Loaded 返回 unsubscribe 闭包，存入 loaderUnsubscribers，onBeforeUnmount 逐一注销，
     //        避免 FontLoader/IconLoader/GlyphMetricsLut 模块级 readyHandlers 数组只增不减（旧闭包泄漏）。
     ensureFontLoaded('ark_pixel');
     ensureFontLoaded('source_han_sans');
     loaderUnsubscribers.push(onFontLoaded(() => requestDraw()));
     // 图标异步加载就绪后请求重绘（每个新 source 第一次显示时占位 ?，加载完后真图替换）
     onIconReady(() => requestDraw());
-    // M26.2：SVG 矢量图标 path d / viewBox 异步加载完成后请求重绘（同 onIconReady pattern；
+    // SVG 矢量图标 path d / viewBox 异步加载完成后请求重绘（同 onIconReady pattern；
     // 前者是 PNG 路径走 /api/template-asset，后者是 SVG path 走 /api/icon/paths）
     loaderUnsubscribers.push(onIconLoaded(() => requestDraw()));
-    // M11-C：PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）
+    // PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）
     onPaletteReady(() => requestDraw());
-    // M20-P3：GlyphMetricsLut 异步加载完成后请求重绘（text element 首帧走 canonicalCharWidth fallback,
+    // GlyphMetricsLut 异步加载完成后请求重绘（text element 首帧走 canonicalCharWidth fallback,
     // 加载完切到 per-font advance；与 onIconReady / onPaletteReady 同款 pattern）
     preloadMetrics('ark_pixel');
     preloadMetrics('source_han_sans');
     loaderUnsubscribers.push(onMetricsReady(() => requestDraw()));
 
-    // M17 F4：1024px 虚空白边让 scrollWidth / scrollHeight 比 viewport 大；
+    // 1024px 虚空白边让 scrollWidth / scrollHeight 比 viewport 大；
     // 默认 scrollLeft/Top = 0 会停在 padding 区导致看不到画布。nextTick 后居中。
     nextTick(() => {
         const outer = outerRef.value;
@@ -1104,14 +1104,14 @@ onMounted(() => {
 
 // （drawPending / drawRafId 已上移到 immediate watch 之前声明，见上方注释）
 
-// M16 P4.2 Konva 清理：组件 unmount 时显式 destroy stage（级联清理 Layer / Transformer
+// Konva 清理：组件 unmount 时显式 destroy stage（级联清理 Layer / Transformer
 // 内部的 listeners + 2D context + cached image data）。Vue Konva 不主动 destroy node。
 onBeforeUnmount(() => {
     if (drawRafId !== null) {
         cancelAnimationFrame(drawRafId);
         drawRafId = null;
     }
-    // P3-40：注销 loader requestDraw 订阅，避免模块级 readyHandlers 数组泄漏旧组件 scope。
+    // 注销 loader requestDraw 订阅，避免模块级 readyHandlers 数组泄漏旧组件 scope。
     for (const unsub of loaderUnsubscribers) {
         try { unsub(); } catch (err) { console.warn('[CanvasView] loader unsubscribe failed', err); }
     }
@@ -1139,14 +1139,14 @@ function requestDraw(): void {
         const ctx = el.getContext('2d');
         if (!ctx) return;
         const hide = editingId.value ? new Set([editingId.value]) : undefined;
-        // P4：scrub / 本地播放期喂插值后的临时 state（仅本地预览，不写回 store / 不发 WS；
+        // scrub / 本地播放期喂插值后的临时 state（仅本地预览，不写回 store / 不发 WS；
         // 变量数值轨此处无 resolver → 退 0，§9.5，编辑期可接受）。
         let toRender = project.state;
         if (toRender && timelineStore.previewActive) {
             const tl = timelineStore.activeTimeline;
             if (tl) {
                 toRender = interpolate(toRender, tl, timelineStore.playheadMs);
-                // P4.5b：拖动期被拖元素用实时几何覆盖插值结果，保证有帧元素也跟手（否则被插值钉在帧值、拖不动）。
+                // 拖动期被拖元素用实时几何覆盖插值结果，保证有帧元素也跟手（否则被插值钉在帧值、拖不动）。
                 const dragIds = timelineStore.draggingElementIds;
                 if (dragIds.size > 0) {
                     const ov = new Map<string, TransformSnapshot>();
@@ -1210,9 +1210,9 @@ function requestDraw(): void {
             class="absolute inset-0 hc-canvas-layer"
             :style="{ width: `${widthPx}px`, height: `${heightPx}px` }"
           />
-          <!-- M8-E：grid overlay（仅前端预览，不入 MC）。CSS 双线性渐变实现实线网格。 -->
+          <!-- grid overlay（仅前端预览，不入 MC）。CSS 双线性渐变实现实线网格。 -->
           <CanvasGridOverlay :grid-size="gridSize" />
-          <!-- 2026-05-14 lock-state readonly overlay：locked 时拦截所有 stage 鼠标事件。
+          <!-- lock-state readonly overlay：locked 时拦截所有 stage 鼠标事件。
                中间显示提示；owner 看到解锁按钮，非 owner 看到 "仅作者可解锁"。 -->
           <div
             v-if="project.isLocked"
@@ -1254,7 +1254,7 @@ function requestDraw(): void {
               />
               <v-transformer ref="transformerRef" :config="transformerConfig" />
             </v-layer>
-            <!-- M8-F：marquee 拖框可视层；M9-E：drag-to-create 预览同 layer -->
+            <!-- marquee 拖框可视层；drag-to-create 预览同 layer -->
             <v-layer v-if="marqueeConfig || drawPreview" :listening="false">
               <v-rect v-if="marqueeConfig" :config="marqueeConfig" />
               <v-line v-if="drawPreview?.kind === 'line'" :config="drawPreview.config" />
@@ -1262,17 +1262,17 @@ function requestDraw(): void {
               <v-ellipse v-if="drawPreview?.kind === 'ellipse'" :config="drawPreview.config" />
               <v-star v-if="drawPreview?.kind === 'star'" :config="drawPreview.config" />
             </v-layer>
-            <!-- M17.4 F3：snap visualizer（红色对齐线 + 绿色间距标注）。
+            <!-- snap visualizer（红色对齐线 + 绿色间距标注）。
                  仅当 activeSnapHints 非空时层 mount；drag/transform 结束立刻清。 -->
             <SnapGuideOverlay
               :hints="activeSnapHints"
               :width-px="widthPx"
               :height-px="heightPx"
             />
-            <!-- M18 Live Paint：paint-bucket 工具 hover 高亮。layer listening=false，
+            <!-- Live Paint：paint-bucket 工具 hover 高亮。layer listening=false，
                  让 mousedown/move 直达 stage。 -->
             <LivePaintHoverOverlay :hovered-gap="hoveredGap" />
-            <!-- 2026-05-25 项 1：lasso 绘制中的虚线 path 预览 -->
+            <!-- lasso 绘制中的虚线 path 预览 -->
             <v-layer v-if="lassoGuide && lassoGuide.active" :listening="false">
               <v-line
                 v-if="lassoGuide.points.length >= 2 && lassoImageOffset"
@@ -1302,7 +1302,7 @@ function requestDraw(): void {
             @edit-variable-request="onInlineEditVariableRequest"
             @create-variable-request="onInlineCreateVariableRequest"
           />
-          <!-- 0.4.1-P3.5：inline editor 触发的 VariablePicker（与 RightPanel 的 picker 不冲突，
+          <!-- inline editor 触发的 VariablePicker（与 RightPanel 的 picker 不冲突，
                同一时刻只有一个 editor 在焦点） -->
           <VariablePicker
             v-if="inlinePickerOpen && editingId"
@@ -1315,7 +1315,7 @@ function requestDraw(): void {
       </div>
     </div>
 
-    <!-- M13-D：上传错误 / 进度 banner（顶部居中，自动消失） -->
+    <!-- 上传错误 / 进度 banner（顶部居中，自动消失） -->
     <div
       v-if="uploadError || uploading"
       class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-[var(--radius-sm)] text-xs shadow-lg pointer-events-none"
@@ -1324,7 +1324,7 @@ function requestDraw(): void {
       {{ uploadError ?? t.image.uploading }}
     </div>
 
-    <!-- M18 Live Paint：worker 正在构建 graph 时的浮动 indicator（仅 paint-bucket 工具下显示） -->
+    <!-- Live Paint：worker 正在构建 graph 时的浮动 indicator（仅 paint-bucket 工具下显示） -->
     <div
       v-if="ui.activeTool === 'paint-bucket' && livePaint.isBuilding.value"
       class="absolute bottom-16 right-4 z-40 px-2.5 py-1 rounded-[var(--radius-sm)] text-xs bg-[color:var(--card)] border border-[color:var(--border)] text-[color:var(--muted-foreground)] shadow-md pointer-events-none flex items-center gap-1.5"
@@ -1333,7 +1333,7 @@ function requestDraw(): void {
       {{ t.livePaint.building }}
     </div>
 
-    <!-- M13-D：隐藏 file input（点击工具栏上传按钮触发） -->
+    <!-- 隐藏 file input（点击工具栏上传按钮触发） -->
     <input
       ref="fileInputRef"
       type="file"

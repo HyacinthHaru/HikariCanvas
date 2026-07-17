@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * 0.4.1 chip 编辑器（M28-0.4.1-P1+P2）。
+ * chip 编辑器。
  *
- * <p>替代 0.4.0 的 textarea：把 {@code ${var:X}} 占位符渲染成 Notion-style chip pill。
+ * <p>替代原先的 textarea：把 {@code ${var:X}} 占位符渲染成 Notion-style chip pill。
  * 数据模型不变——v-model:text 仍是 element.text 字符串字面值；chip 仅 UI 层。</p>
  *
  * <h4>Lexical 路线决策</h4>
@@ -21,8 +21,8 @@
  *   <li>store 变化时更新 chip DOM 文本（alias / currentValue / fallback / "???"，stale 走 fallback 链）</li>
  * </ul>
  *
- * <p>P3-108：picker 仅由外层"插入变量"按钮触发（外层调 {@link insertVariableChip} 经
- * defineExpose）；0.4.2 "Bug 2 彻底版" 已移除 chip click 改绑定 / 错误态补创 / {@code ${}
+ * <p>picker 仅由外层"插入变量"按钮触发（外层调 {@link insertVariableChip} 经
+ * defineExpose）；已移除 chip click 改绑定 / 错误态补创 / {@code ${}
  * 自动弹 picker 等内部触发路径。{@code insert/edit/createVariableRequest} 三个 emit 仍保留为
  * 对外契约（外层 TextElementSection / TextInlineEditor 监听），但当前无内部 emit 触发点。</p>
  *
@@ -113,7 +113,7 @@ const tooltipRawName = ref('');
 const tooltipFallback = ref<string | null>(null);
 
 /**
- * P3-10：墙钟节拍。带 TTL 的变量在 stale 窗口内（Provider / 插件停止刷新时）后端走 fallback，
+ * 墙钟节拍。带 TTL 的变量在 stale 窗口内（Provider / 插件停止刷新时）后端走 fallback，
  * 但前端 mirror 的 currentValue 不会被动清掉。staleTick 由 mount 期定时器自增，驱动
  * tooltipDisplayValue computed 与 refreshAllChipDisplays 重算，使过期值随墙钟到期自动切到
  * fallback → default → UNRESOLVED，避免预览停滞在已过期旧值上（与后端展示一致）。
@@ -124,7 +124,7 @@ let staleTimer: ReturnType<typeof setInterval> | null = null;
 const STALE_TICK_MS = 1000;
 
 /**
- * P3.2：chip 缩放因子。根据 props.fontSize 在 [0.6, 1.2] 范围 clamp，让 chip
+ * chip 缩放因子。根据 props.fontSize 在 [0.6, 1.2] 范围 clamp，让 chip
  * pill 在极小（fontSize=6 → 0.6×）/ 极大（fontSize=120 → 1.2×）字号下都保持
  * 视觉协调。CSS 通过 `--chip-scale` 变量消费（padding / border-radius 跟着缩）。
  */
@@ -146,7 +146,7 @@ const tooltipDisplayValue = computed(() => {
     // staleTick 让此 computed 依赖墙钟节拍，TTL 过期后 tooltip 自动从 cached 切到 fallback。
     void staleTick.value;
     const v = tooltipVariable.value;
-    // P3-10：cached 非空且未过期才显示；stale（ttl 过期）跳过走 fallback 链，与后端 / interpolate 一致。
+    // cached 非空且未过期才显示；stale（ttl 过期）跳过走 fallback 链，与后端 / interpolate 一致。
     if (v && v.currentValue != null && v.currentValue.length > 0
             && !isStale(v.ttl, v.updatedAt, Date.now())) return v.currentValue;
     if (tooltipFallback.value != null) return tooltipFallback.value;
@@ -165,7 +165,7 @@ let unregisterAll: (() => void) | null = null;
 /** flag：external watch 在改 editor 内容，避免触发 onUpdate 回写 props.text 引起循环。 */
 let writingExternal = false;
 /**
- * 0.4.2 bugfix（Bug 3）：IME composition flag。中文 / 日文 / 韩文输入法在 compose 期间
+ * IME composition flag。中文 / 日文 / 韩文输入法在 compose 期间
  * 会持续触发 update listener（每按一键 dirtyLeaves > 0），把临时拼音字符 emit('update:text')
  * 后外层 watch 把它写回 lexical，**打断 composition** → 中文输入断流。
  *
@@ -204,7 +204,7 @@ onMounted(() => {
     );
     writingExternal = false;
 
-    // plain-text + history 插件 + P3.6 paste transform（plain text `${var:...}` → chip）
+    // plain-text + history 插件 + paste transform（plain text `${var:...}` → chip）
     unregisterAll = mergeRegister(
         registerPlainText(editor),
         registerHistory(editor, createEmptyHistoryState(), 1000),
@@ -212,7 +212,7 @@ onMounted(() => {
         editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves }) => {
             // 忽略外部 write 触发的更新
             if (writingExternal) return;
-            // 0.4.2 bugfix（Bug 3）：IME composition 期间屏蔽 emit，避免临时拼音字符 commit 后
+            // IME composition 期间屏蔽 emit，避免临时拼音字符 commit 后
             // 被外层 watch 写回 lexical 打断 composition；composition 结束在 onCompositionEnd
             // 里一次性 emit 最终文本。
             if (composing) return;
@@ -223,7 +223,7 @@ onMounted(() => {
                 if (newText !== props.text) {
                     emit('update:text', newText);
                 }
-                // P3-108：${} 自动弹 picker 已废弃（picker 仅由"插入变量"按钮触发，见顶部 JSDoc）。
+                // ${} 自动弹 picker 已废弃（picker 仅由"插入变量"按钮触发，见顶部 JSDoc）。
             });
             // 文本变了 → store 仍然可能没变；刷一遍 chip 显示
             refreshAllChipDisplays();
@@ -231,16 +231,16 @@ onMounted(() => {
     );
 
     // chip 事件代理（mount 时挂在 editable root，捕获冒泡上来的自定义事件）。
-    // P3-108：chip 仅 dispatch hover / leave（tooltip 用），不再有 click 路径。
+    // chip 仅 dispatch hover / leave（tooltip 用），不再有 click 路径。
     editableRef.value.addEventListener(CHIP_EVENT_HOVER, onChipHover as EventListener);
     editableRef.value.addEventListener(CHIP_EVENT_LEAVE, onChipLeave as EventListener);
     editableRef.value.addEventListener('keydown', onEditableKeydown);
     editableRef.value.addEventListener('blur', onEditableBlur);
-    // 0.4.2 bugfix（Bug 3 保留）：composition 守 IME 输入。
+    // composition 守 IME 输入。
     editableRef.value.addEventListener('compositionstart', onCompositionStart);
     editableRef.value.addEventListener('compositionend', onCompositionEnd);
 
-    // 0.4.2 bugfix（Bug A 重启后 chip 显变量名）：Pinia store $subscribe 监听 mutation 立即
+    // Pinia store $subscribe 监听 mutation 立即
     // refresh chip 显示。原 watch(() => [store.variables, aliasStore.aliases]) 不可靠：
     // Pinia setup store 内 ref.value=new Map(...) 替换在 mount 顺序复杂时浅 watch 不触发。
     // $subscribe 是 Pinia 官方推荐的 mutation 订阅 API，100% 触发。
@@ -250,7 +250,7 @@ onMounted(() => {
     // 首次刷 chip 显示
     refreshAllChipDisplays();
 
-    // P3-10：定时重渲 — 让带 TTL 变量过期后 chip / tooltip 自动从 cached 切到 fallback。
+    // 定时重渲 — 让带 TTL 变量过期后 chip / tooltip 自动从 cached 切到 fallback。
     // 仅自增 staleTick + 刷 chip DOM，无网络 / 无重排，开销可忽略。
     staleTimer = setInterval(() => {
         staleTick.value++;
@@ -277,7 +277,7 @@ onBeforeUnmount(() => {
         try { unsub(); } catch { /* ignore */ }
     }
     storeUnsubscribers.length = 0;
-    // P3-10：清 stale 重渲定时器
+    // 清 stale 重渲定时器
     if (staleTimer !== null) {
         clearInterval(staleTimer);
         staleTimer = null;
@@ -342,7 +342,7 @@ watch(
 function refreshAllChipDisplays(): void {
     const root = editableRef.value;
     if (!root) return;
-    // P3-10：单次刷新内用同一 now，避免一段文本内多个 chip 的 staleness 判定时钟漂移。
+    // 单次刷新内用同一 now，避免一段文本内多个 chip 的 staleness 判定时钟漂移。
     const now = Date.now();
     const chips = root.querySelectorAll<HTMLElement>(`.${CHIP_CLASS}`);
     chips.forEach((chip) => {
@@ -351,13 +351,13 @@ function refreshAllChipDisplays(): void {
         const fallback = chip.getAttribute(CHIP_DATA_FALLBACK);
         const fullName = resolveFullName(rawName, props.wallId);
         const v = store.get(fullName);
-        // 0.4.2：chip 显示优先级 alias > currentValue > fallback > defaultValue > UNRESOLVED。
+        // chip 显示优先级 alias > currentValue > fallback > defaultValue > UNRESOLVED。
         // 别名是用户自定义的"短名"，肉眼一致性优先 currentValue（数值可能动态变化，别名稳定）。
         const alias = aliasStore.get(fullName);
         let displayValue: string;
         let deleted = false;
         if (v) {
-            // P3-10：cached 非空且未过期才用；stale（ttl 过期）跳过走 fallback 链，与后端一致。
+            // cached 非空且未过期才用；stale（ttl 过期）跳过走 fallback 链，与后端一致。
             // alias 是用户命名，始终优先（与动态值新鲜度无关）。
             if (alias != null && alias.length > 0) displayValue = alias;
             else if (v.currentValue != null && v.currentValue.length > 0
@@ -425,8 +425,7 @@ function onEditableBlur() {
 // IME composition 守卫（中文 / 日文 / 韩文输入法）
 // ============================================================================
 //
-// P3-108：原 onBeforeInput / detectDollarBraceTrigger（${} 自动弹 picker）已在 0.4.2
-// "Bug 2 彻底版"废弃并删除——picker 改由外层"插入变量"按钮触发（见顶部 JSDoc）。
+// ${} 自动弹 picker 路径已废弃删除——picker 改由外层"插入变量"按钮触发（见顶部 JSDoc）。
 
 /** 0.4.2 bugfix（Bug 3）：IME composition 开始 → 屏蔽 emit 防中断。 */
 function onCompositionStart() {
@@ -434,7 +433,7 @@ function onCompositionStart() {
 }
 
 /**
- * 0.4.2 bugfix（Bug 3）：IME composition 结束 → 一次性 emit 最新文本。
+ * IME composition 结束 → 一次性 emit 最新文本。
  *
  * <p>compositionend 在 lexical update listener 之前 / 之后触发顺序不确定，
  * 为保险这里主动读 lexical 当前文本 emit；update listener 即使紧随其后也由

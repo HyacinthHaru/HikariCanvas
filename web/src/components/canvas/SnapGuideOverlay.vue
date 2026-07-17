@@ -4,7 +4,7 @@ import { useUiStore } from '@/stores/ui';
 import type { SnapHints } from '@/composables/useSnapManager';
 
 /**
- * M17.4 F3 visualizer：在画布坐标系内画 snap 对齐线 + 间距均分标注。
+ * visualizer：在画布坐标系内画 snap 对齐线 + 间距均分标注。
  *
  * 父组件传入 hints / 画布尺寸；本组件渲染：
  *   - 红色虚线（snap axis）：竖向通线 / 横向通线
