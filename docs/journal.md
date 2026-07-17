@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-07-17 · 0.9.8 去除 AI 味专项（1.0 前收尾）
+
+1.0 正式发布前，把仓库里「AI 味过重」的内容清掉——用户可见文案泄漏的内部阶段编号、代码注释里的开发过程标记 / 自辩护独白、契约文档正文里的过程叙事——**全程零逻辑改动、契约规格 byte-identical**。版本号 0.9.7 → 0.9.8-SNAPSHOT。
+
+**方法**：先 4 个 opus 探索代理产出去味清单（`.superpowers/ai-smell/findings-{A,B,C,D}.md`：用户文案 ~19 / 后端注释 ~475 / 前端注释 ~700 / 文档 702 行清单），据此 subagent-driven 分 12 task 清扫。核心洞察：**90%+ 是「剥掉 `M16 P3` 阶段前缀、保留后面真实约束正文」的机械活**，真正整条删的极少。
+
+**用户拍板的 3 个边界**：① 契约文档里的开发过程段（分期表 / 工时账 / ✅完工快照）**从文档删除、不复制回 journal**（journal 已有会话记录）；② `ultrareview-*.md` 4 份审查档案 `git mv` 到 `docs/archive/`；③ CLAUDE.md 只删夸张口癖，历史索引 / 版本表 / 架构纪律全保留；④ `README.md` 作者亲自维护、本批不碰。
+
+**12 task**：
+- **T1** 用户可见文案（messages.ts value + lang yml，14 串）：剥 `P3`/`P4`/`M7`/`fsck`/`PushRateLimiter`/`project_json` 泄漏 + 过时「即将上线」占位。
+- **T2-T5** 代码注释（后端 script/render/benchmark + 其余包 + 前端 messages/components + 其余目录）：~1175 条注释剥前缀，**零代码改动**每 task 决定性证明（两 commit 剥光注释后 byte-identical + 测试数 2151/1446 不变）。双端心脏 PreviewRenderer/protocol.ts 契约逐字保全。
+- **T6-T9** 文档：dynamic-data（1379→1122，删 §12/13/15/19 + §17/18 尾）· protocol/data-model/rendering（删 changelog 章 + dead-YAML，17 CREATE TABLE + 数学公式 byte-identical）· architecture/security/template-spec（§3.6 lock 块归位 + 44 权限节点 + 审计事件保全）· timeline/scripting 系列（删分期/工时段，决策摘要 + Action record + 白名单保全）。
+- **T10** HOW-TO 文档轻扫 + **2 个实质 bug**：api.md 过时版本 `0.3.0-SNAPSHOT` → 版本无关表述；`troubleshooting.md` 与 `deployment.md` 对 Paper 26.x 的**相反指令**对齐（0.9.5 起同 jar 支持 26.x / Java 25，修掉「锁死 Java21 别升 26.x」的过时警告，真会坑服主）+ deployment §9 子标题误编号修正。
+- **T11** CLAUDE.md 去「不可越界」×4 +「整个项目报废」×1 + ultrareview 4 档案归档。
+- **T12** 版本 bump + 本条 journal + 全量验证 + push。
+
+**留作者的过时注释**（与代码矛盾、需内容改写而非剥前缀，本批**未动**，供后续定夺）：BitmapFont/PlaceholderRenderer「M4 会替换此类」（从未替换）· TextLayout「竖排早期不实装」（layoutVertical 已存在）· ScriptRuleValidator javadoc「表达式语法 P2 接」（已由 ConditionEvaluator 实现）· TemplateElement「icon v1 不实装」（icon 已实装）。
+
+**过程记录**：subagent-driven，子代理全程 opus；API 数次掉线（T3 实现者 commit 后掉线 → controller 重建报告 + 独立验证；T3 补丁子代理再掉线 → controller 亲做；2 个 reviewer 返回乱码 → 重派）。T3/T7 各含主 commit + controller fix。
+
+---
+
 ## 2026-07-16 · 0.9.7 脚本校验报错 i18n（1.0 前最后一处 i18n 缺口）
 
 把编辑器保存脚本时的 ~100 条校验报错（此前硬编码中文）国际化，按**编辑器 UI 语言**显示。subagent-driven（per-task implementer→review 全 opus + opus 整支终审 Ready-to-merge）。版本号 0.9.6 → 0.9.7-SNAPSHOT。
