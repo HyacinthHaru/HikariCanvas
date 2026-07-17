@@ -1,11 +1,11 @@
 # 备选积木批（0.7.3）设计总纲
 
-> 补间动画完工后补一批轻量备选积木。契约范式照 `docs/scripting.md`（0.7.0 总纲）/ `scripting-0.7.x.md`。
-> 4 个新积木 + 协议升 v7 + 版本号 bump 0.7.3-SNAPSHOT。
+> 一批轻量备选积木。契约范式照 `docs/scripting.md`（0.7.0 总纲）/ `scripting-0.7.x.md`。
+> 4 个新积木 + 协议升 v7。
 
 ---
 
-## 0. 决策摘要（brainstorming 固化，用户确认 2026-06-14）
+## 0. 决策摘要
 
 | # | 积木 | 决策 | 范式参照 |
 |---|---|---|---|
@@ -14,7 +14,7 @@
 | **G3** | 变量取整 | `RoundVariable(fullName, mode)`；mode = `round`/`floor`/`ceil`；async | `ScaleVariable`（读变量 → 运算 → setValue，async） |
 | **G4** | 标题弹窗 | `ShowTitle(title, subtitle, fadeInMs, stayMs, fadeOutMs, target)`；target = `trigger`/`all`；主线程 | `SendMessage`（主线程 hop + target 分流 + `${var}` 插值） |
 
-**固化默认**：概率百分比（0-100）/ 置顶置底一个积木下拉 / 标题弹窗有 target（复用 sendMessage 范式）/ 取整 3 种。
+**默认取值**：概率百分比（0-100）/ 置顶置底一个积木下拉 / 标题弹窗有 target（复用 sendMessage 范式）/ 取整 3 种。
 
 ---
 
@@ -50,7 +50,6 @@
 ## 2. 范围
 - **做**：4 个新 Action（record + permits + ActionDeserializer/ActionSerializer/ScriptRuleValidator/ScriptPermissions case + ActionExecutor 或 ScriptRunner + 前端 protocol/blockDefs/blockTree（随机分支 body 容器）/validator/i18n）。
 - **协议升 v7**（`Protocol.java` SUPPORTED_MIN/MAX 6→7 + 前端 CLIENT_V 6→7）。
-- **版本号** 0.6.0 → 0.7.3-SNAPSHOT（5 处：build.gradle.kts / paper-plugin.yml / 2 demo example / web/package.json + lock）——收尾。
 
 ## 3. 不做
 - 变量取随机列表（`setRandomVariable` 已有随机数）。

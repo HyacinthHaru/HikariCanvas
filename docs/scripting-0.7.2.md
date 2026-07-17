@@ -1,13 +1,13 @@
 # 视觉运行时打磨 + 积木扩充（0.7.2「稳的」版）设计总纲
 
-> 0.7.1 完工后用户实测提的 2 个小问题 + 一批"稳的"新功能。**补间动画（在 X 秒内 + 缓动）是大功能，
-> 单独 brainstorming + 写设计文档后再排，本版不含**（见 §7）。
+> 2 个小问题 + 一批"稳的"新功能。**补间动画（在 X 秒内 + 缓动）是大功能，独立设计，本版不含**——
+> 见 `docs/scripting-tween.md`。
 >
 > 契约范式照 `docs/scripting.md`（0.7.0 总纲）/ `docs/scripting-0.7.1.md`。实施前对照本文档。
 
 ---
 
-## 0. 决策摘要（固化后不可越界）
+## 0. 决策摘要
 
 | # | 决策 | 结论 | 理由 |
 |---|---|---|---|
@@ -55,7 +55,7 @@
 
 `ScriptVariableWatch.vue`（右下角面板）每行变量：
 - 仅 `type` 为数值型（number/int 之类——按变量 metadata 判定）显示 `−1 / +1` 小按钮
-- 复用 `useLongPressIncrement`（0.4.0-P2 既有：单击 ±1 / 300ms 后连加）
+- 复用 `useLongPressIncrement`（单击 ±1 / 300ms 后连加）
 - 点击 → `wsClient.sendVariableSet(fullName, 新值)`（现有 op）；乐观本地更新 + 失败回滚
 - lock 守卫：墙锁定时按钮 disabled（变量改值本不受 lock 影响，但 UI 一致性——实际变量 set 不读 wall lock，按现有 variable op 行为）
 - 文本型变量：不显 ±1（无意义）
@@ -83,7 +83,7 @@
 - 找不到元素 → error step（链继续，照 P5 风格）。
 
 ### 4.2 重复直到条件（F6）
-- `RepeatUntil(condition, maxIterations≤?, body)`：校验 condition 非空 + 走 K16 保存期预检（接 `checkConditionSyntax`，照 P5 审查修的）；maxIterations ∈ [1, 上限]。
+- `RepeatUntil(condition, maxIterations≤?, body)`：校验 condition 非空 + 走 K16 保存期预检（接 `checkConditionSyntax`）；maxIterations ∈ [1, 上限]。
 - ScriptRunner：每轮——先查 condition，满足 → 跳出（i++ 继续后续）；否则压一轮 body 帧 + 自身续帧（带轮数计数防超 maxIterations）。body 含 wait/waitUntil → 走帧栈续接。**每轮 body 的 action 计入 max-actions-per-run**（Budget 总闸兜底）。blockId 同构：body[j] = `<blockId>/body/<j>`（不带轮数，照 Repeat 范式）。
 - 与 Repeat 区别：Repeat 固定 count 预展开；RepeatUntil 动态（每轮查条件决定是否再来一轮），需要在 Runner 维护"当前轮数 + maxIterations"——用一个轻量循环帧状态（参照 WaitUntil 的 deadline 作参数传递思路，轮数作循环帧字段或 RunState）。
 
@@ -111,34 +111,20 @@
 
 ---
 
-## 6. 分期（~50h）
+## 6. 补间动画（单独设计，本版不含）
 
-| 段 | 内容 | 闸 | 估时 |
-|---|---|---|---:|
-| **P1** ✅ | 2 小修（F2 category + F3 extractVars）+ 变量预览 +1/-1（F4） | 实测 | ~10h |
-| **P2** ✅ | 元素积木（克隆 + 删除，F5/F10）+ 变量积木（复制 + 拼接，F8） | 实测 | ~16h |
-| **P3** ✅ | 流程积木（重复直到，F6）+ 全服广播（F7） | 实测 | ~12h |
-| **P4** ✅ | 积木 UI 打磨（§5）+ i18n + 收尾 | 实测 | ~12h |
-
-节奏照 0.7.x：每段一闸、可演示。P1 先把小修 + 变量±1 推出（用户最快见效）。
+「在 X 秒内把元素移动到/变色到目标 + 非线性缓动」是独立大功能，设计与落地见 `docs/scripting-tween.md`。
 
 ---
 
-## 7. 补间动画（单独设计，本版不含）
+## 7. 未决问题
 
-「在 X 秒内把元素移动到/变色到目标 + 非线性缓动」—— 0.7.2「稳的」版完工 + 实测通过后，**单独走一轮 brainstorming + 写 `docs/scripting-tween.md`（或 0.7.3 设计文档）**，把下列决策定死再动手：
-- **架构**：A 脚本侧自跑补间（解耦，自建帧推进 + 与时间轴冲突协调）vs B 程序生成临时单段时间轴 + 复用 AnimationTicker（复用整条插值/渲染链，但改 Ticker 承载临时 timeline + 防持久化 + 一墙一时刻约束协调）。调研倾向 B。
-- **落 state 语义**：补间完元素停在目标值（永久落盘）——这是补间 vs 时间轴（播完不改 state）的本质差异，两条路都要专门处理"末帧写回"。
-- **可复用**：0.6 `EasingSolver`（cubic-bezier + EASE 预设）+ `ColorLerp`（sRGB）双端镜像、缓动选择器前端现成——数学不用重造。
-- **缓动 UI**：积木里怎么选缓动（下拉预设 + 可选自定义 cubic-bezier 曲线编辑器，复用时间轴的）。
+- 克隆元素的每墙元素总数上限：**`scripts.max-elements-per-wall` 默 200**（config 可调 + `/canvas reload` 热更 headless 路径与后续新开 session）。
+- RepeatUntil：maxIterations ∈ [1, 100]（复用 repeat 的 count 硬上限 100，不另加 config）；**默认 10**；condition 接 K16 保存期预检；**轮数用 RunState 的 `Map<blockId,int>` 记**（嵌套 RepeatUntil 各 blockId 独立，run 结束随 RunState 弃）；RepeatUntil 自身每轮进入计 1 actionCount + body 计入 → Budget 50 兜底先于 maxIterations 到。
+- 全服广播：**sendMessage 加 `target` 字段下拉**（"trigger 给触发玩家" 默认 / "all 全服"），不单独「广播」积木（避免 sendMessage 一型两皮肤的复杂）；executor 按 target 分流（all → `Bukkit.getOnlinePlayers`），向后兼容旧 payload 无 target=trigger。
 
----
+**开放项**：
 
-## 8. 未决问题（实现时回填）
-
-- [x] 克隆元素的每墙元素总数上限默认值：**`scripts.max-elements-per-wall` 默 200**（config 可调 + `/canvas reload` 热更 headless 路径与后续新开 session）(P2 已定 2026-06-13)
-- [ ] P2 克隆/删除在编辑器开着时抢用户选中焦点：`App.vue` watch `lastAddedElementId`，脚本克隆的 add patch 也触发 auto-select → LOOP 克隆 + 编辑器开着时反复夺走用户选中。对抗审查发现（次要，不丢数据 / 不崩 / 不影响 headless 运行时）；留实测确认烦扰度，修则区分"本地 op-ack add（auto-select）"vs"远端推送 add（不抢焦点）"
-- [x] RepeatUntil：maxIterations ∈ [1, 100]（复用 repeat 的 count 硬上限 100，不另加 config）；默认 10；condition 接 K16 保存期预检（照 WaitUntil 审查修）；**轮数用 RunState 的 `Map<blockId,int>` 记**（嵌套 RepeatUntil 各 blockId 独立，run 结束随 RunState 弃）；RepeatUntil 自身每轮进入计 1 actionCount + body 计入 → Budget 50 兜底先于 maxIterations 到(P3 已定 2026-06-13)
-- [x] 全服广播：**sendMessage 加 `target` 字段下拉**（"trigger 给触发玩家" 默认 / "all 全服"），不单独「广播」积木（避免 sendMessage 一型两皮肤的复杂）；executor 按 target 分流（all → `Bukkit.getOnlinePlayers`），向后兼容旧 payload 无 target=trigger(P3 已定 2026-06-13)
-- [ ] 变量预览 +1/-1 的"数值型"判定口径（按变量 VarType metadata？字符串能 parse 成数？）——P1 定
-- [ ] UI 打磨具体改哪些（圆角值/阴影/配色 token）——P4 按现有样式系统细化
+- 克隆/删除在编辑器开着时抢用户选中焦点：`App.vue` watch `lastAddedElementId`，脚本克隆的 add patch 也触发 auto-select → LOOP 克隆 + 编辑器开着时反复夺走用户选中。对抗审查发现（次要，不丢数据 / 不崩 / 不影响 headless 运行时）；留实测确认烦扰度，修则区分"本地 op-ack add（auto-select）"vs"远端推送 add（不抢焦点）"。
+- 变量预览 +1/-1 的"数值型"判定口径（按变量 VarType metadata？字符串能 parse 成数？）。
+- UI 打磨具体改哪些（圆角值/阴影/配色 token）——按现有样式系统细化。

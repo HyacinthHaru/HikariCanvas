@@ -1,16 +1,15 @@
 # 视觉运行时 / 积木脚本（0.7.0）设计总纲
 
-> **定稿 2026-06-10（brainstorming D1-D6 用户拍板）。** 本文件是 0.7.0 的契约总纲,取代
-> `dynamic-data.md §13.5` 的纸面预估(该节保留为档案,以本文为权威)。配套契约:
-> `protocol.md`(v3→v4)、`data-model.md`(V017 wall_scripts)、`architecture.md`(TriggerRouter / ScriptRunner)。
+> 本文件是 0.7.0 的契约总纲,取代 `dynamic-data.md §13.5` 的纸面预估(该节保留为档案,以本文为权威)。
+> 配套契约:`protocol.md`(v3→v4)、`data-model.md`(V017 wall_scripts)、
+> `architecture.md`(TriggerRouter / ScriptRunner)。
 >
 > **写代码前必读本文。要改契约 → 先改本文,再改代码。**
 
-> **版本框定（截至 0.8.1-SNAPSHOT）：** 本文是 **0.7.0 基础设计总纲**,叙事保留为档案。
-> 0.7.1+ 的触发器 / 动作扩展见 `scripting-0.7.1.md` / `scripting-0.7.2.md` /
-> `scripting-0.7.3.md` / `scripting-tween.md`(补间 TweenBlock)。**当前实装全集**(9 触发器 +
-> 28 动作 + If)见本文末「附录：当前实装全集」;玩家用法见 `scripting-guide.md`。
-> 本文正文里的「6 触发器 / 8 动作」等数字是 **0.7.0 原始集**,不再回改,以附录为现状权威。
+> **版本范围：** 本文是 **0.7.0 基础设计总纲**。0.7.1+ 的触发器 / 动作扩展见 `scripting-0.7.1.md` /
+> `scripting-0.7.2.md` / `scripting-0.7.3.md` / `scripting-tween.md`(补间 TweenBlock)。**当前实装全集**
+> (9 触发器 + 28 动作 + If)见本文末「附录：当前实装全集」;玩家用法见 `scripting-guide.md`。
+> 本文正文里的「6 触发器 / 8 动作」数字是 0.7.0 原始集,以附录为现状权威。
 
 一句话:让墙从「被动展示数据」升级到「主动响应事件并执行副作用」。玩家用 Scratch 风格的
 可视化积木编排逻辑:「有人被击杀 → 比分 +1 → 如果比分 ≥ 10 → 播 MVP 时间轴 + 播声音 + 执行命令模板」。
@@ -19,7 +18,7 @@
 
 ---
 
-## 0. 决策摘要(固化后不可越界)
+## 0. 决策摘要
 
 | # | 决策 | 结论 | 理由速记 |
 |---|---|---|---|
@@ -53,7 +52,7 @@
 - OnCommand / OnLockChange 触发器——推后续
 - 脚本市场 / 分享——模板创意工坊范式留 1.x
 
-### 1.2 MVP 定义(P2 末闸)
+### 1.2 MVP 定义
 
 命令行(或测试)以 JSON 建一条规则:「变量 X 变化 → 如果 X ≥ 10 → 设变量 Y + 播时间轴」,
 部署的墙在游戏内生效。无前端 UI。
@@ -105,7 +104,7 @@ record ScriptRule(
 | `playSound` | `soundId, volume(0-2), pitch(0.5-2), scope`(near=墙周 16 格 / all=全服) | 主线程 hop | sound |
 | `wait` | `ms`(50-5000) | 调度续接(不占线程睡眠) | edit |
 | `runCommand` | `templateId, params: Map<String,String>` | 主线程 hop,console sender | **command(默 op)** |
-| `log` | `message`(插值后入 plugin logger;**不进 audit**——玩家级高频动作进 audit 会刷库,P2 实施期修订;SCRIPT_* 管理事件照常入 audit) | async | edit |
+| `log` | `message`(插值后入 plugin logger;**不进 audit**——玩家级高频动作进 audit 会刷库;SCRIPT_* 管理事件照常入 audit) | async | edit |
 | `if` | `condition: Expr 源串, then: List<Action>, else: List<Action>` | — | edit |
 
 - `if` 嵌套深度 ≤ 4(校验期拒绝);`wait` 嵌套深度 ≤ 3(Budget)。
@@ -114,7 +113,7 @@ record ScriptRule(
   数值语义走 0.6 `StrictNumber` 单一权威,杜绝双端/多处解析分叉。
 - `==` / `!=` 对**双侧均为数值形态**的操作数走数值等值(`var("score") == 42` 直接可用,
   `"3.50" == 3.5` 为 true);任一侧非数值形态仍走原链(Boolean truthy / toString 等值),
-  故 `"abc" == 0` / `"" == 0` 恒 false(P2-2b 契约修订,规格审查者建议采纳)。
+  故 `"abc" == 0` / `"" == 0` 恒 false。
 - 条件里的数字字面量不支持科学计数法(`1e3` 是 parse error);变量值字符串按 `StrictNumber`
   文法(含指数形态)可被数值比较。
 
@@ -211,12 +210,12 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
 | `script.update` | `{ruleId, rule}`(全量 rule 替换,积木编辑粒度太碎不做 patch op) | 同上 | 不进画布 undo;保存粒度低频,无需 coalesce |
 | `script.delete` | `{ruleId}` | script.edit | 不进画布 undo;前端走 inline confirm(0.4.5 范式) |
 | `script.enable` | `{ruleId, enabled}` | script.edit | 不进画布 undo |
-| `script.test` | `{ruleId}` | script.edit(**试跑也过 command/sound 面权限**) | 真实执行(D5),audit 标 TEST;**0.7.0-P3 起异步**(K11)——ack 立即 `{accepted:true, ruleId}`,轨迹经 S→C op `script.trace` 推送(见 §4.2) |
+| `script.test` | `{ruleId}` | script.edit(**试跑也过 command/sound 面权限**) | 真实执行(D5),audit 标 TEST;**异步**——ack 立即 `{accepted:true, ruleId}`,轨迹经 S→C op `script.trace` 推送(见 §4.2) |
 
 - 面权限检查在 create/update 时按规则内容逐积木判:含全服帽子 → 需 trigger.global;
   含 playSound → 需 sound;含 runCommand → 需 command。**保存时检查,执行时不再检查**
   (规则是 owner 权限快照;owner 失权后旧规则照跑,服主可 disable——与 wall 所有权语义一致)。
-- create/update 校验链(0.7.0-P3,K16):结构校验(ScriptRuleValidator)后,所有
+- create/update 校验链:结构校验(ScriptRuleValidator)后,所有
   `if.condition` 过 `ConditionEvaluator.checkSyntax`(parse-only)预检——坏条件保存期即拒
   `SCRIPT_INVALID`(parse 错误信息首行 + blockId 定位),不等运行期静默 false。
 - 锁定墙(lockedAt ≠ null):前端积木画布 readonly(同 lock-state 纪律,后端 op 不读 lock)。
@@ -226,11 +225,10 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
 - ready 加 `scripts: ScriptRuleDto[]`(本墙全部规则)。
 - 脚本变更走 state.patch `/scripts/<ruleId>` 路径分拣(照 0.4.2 `/aliases/` 范式),
   广播到本墙全部 session。
-- `script.test` 轨迹**不走 patch、也不走 ack**(0.7.0-P3 实施期修订,K11——P1 原设计
-  "轨迹作 ack result 同步返回"会让 dispatcher 同步等 ScriptRunner 阻塞 Jetty worker,
-  合法规则可串 wait 至分钟级,5s ack 超时必爆):
+- `script.test` 轨迹**不走 patch、也不走 ack**——若轨迹作 ack result 同步返回,dispatcher 会同步等
+  ScriptRunner 阻塞 Jetty worker,合法规则可串 wait 至分钟级,5s ack 超时必爆:
   - ack **立即**返 `{ "accepted": true, "ruleId": "..." }`(受理回执;TEST run 照过
-    Budget 全闸——K12 不豁免);
+    Budget 全闸,不豁免);
   - run 结束后(含 wait 续接跨段的最终段 / Budget 掐断 / 投递闸拒——闸拒回单步
     blocked trigger step)由 runner 线程经推送通道发 **S→C op `script.trace`**
     给发起 session(session 断了静默丢):
@@ -240,11 +238,10 @@ audit `SCRIPT_RUN_BLOCKED(reason=chain)` + plugin logger WARN(含链路径)。**
                 "result":"ok|skipped|blocked|error", "detail":"条件值/错误信息(null 省略)"} ] }
   ```
   blockId = **动作树路径**(如 `trigger` / `actions/0` / `actions/2/then/1`),由后端执行期
-  按树位置生成(P2 实施期修订——P1 数据模型无 per-action id,树路径与前端积木树天然同构,
-  前端无需在 rule_json 里存 id 即可定位高亮)。前端收到后落 scripts store `lastTrace`
-  (P5 积木高亮消费)。
+  按树位置生成——数据模型无 per-action id,树路径与前端积木树天然同构,前端无需在 rule_json 里存 id
+  即可定位高亮。前端收到后落 scripts store `lastTrace`,积木高亮消费。
 
-### 4.3 撤销(2026-06-10 P1 实施期修订)
+### 4.3 撤销
 
 **脚本 op 不进画布 undo/redo。** 原因:D7 决定脚本不在 ProjectState,而 HistoryStack 快照的是
 ProjectSnapshot——「脚本 CRUD 进 HistoryStack」与 D7 矛盾。且项目先例一致:alias / schedule /
@@ -301,13 +298,12 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 
 ## 6. 前端积木引擎(自写,D1)
 
-> **落地形态(2026-06-11 P4+P5 实现后回填)**:实际目录是 `web/src/script/`(非纸面 `web/src/blocks/`)——
-> `model/`(blockTree 树操作 / serialize blockLayout / blockDefs 声明式 / dropTarget 吸附几何 /
-> validator 镜像 / condition 条件↔串)、`canvas/`(useBlockCanvas pan-zoom / useBlockDrag 拖拽 /
-> ScriptEditorOverlay / BlockCanvas / BlockStack / BlockNode / BlockPalette)、`params/`(BlockParamInput /
-> ConditionBuilder / useCommandTemplates)。编辑会话状态在 `stores/scriptEdit.ts`(working copy + 本地
-> undo + debounce 自动保存,**非纸面"保存按钮"**——K-UI-11)。blockId = 动作树路径(`actions/2/then/1`,
-> 后端执行期生成,前端不在 rule_json 存 id),非纸面"创建积木时分配"。独立 chunk `script-engine`。
+> **实现目录**:`web/src/script/`——`model/`(blockTree 树操作 / serialize blockLayout / blockDefs
+> 声明式 / dropTarget 吸附几何 / validator 镜像 / condition 条件↔串)、`canvas/`(useBlockCanvas pan-zoom /
+> useBlockDrag 拖拽 / ScriptEditorOverlay / BlockCanvas / BlockStack / BlockNode / BlockPalette)、
+> `params/`(BlockParamInput / ConditionBuilder / useCommandTemplates)。编辑会话状态在
+> `stores/scriptEdit.ts`(working copy + 本地 undo + debounce 自动保存)。blockId = 动作树路径
+> (`actions/2/then/1`,后端执行期生成,前端不在 rule_json 存 id)。独立 chunk `script-engine`。
 >
 > **积木内容现状**:本节按 0.7.0 的 6 帽子 + 8 动作描述;0.7.1+ 积木 def 已扩到 9 触发器 +
 > 28 动作(友好皮肤分组 / C 形包裹积木 / Scratch 实色风),见 `scripting-0.7.1.md` ~
@@ -356,78 +352,30 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 
 ---
 
-## 8. 分期(6 段,~340h;MVP 闸在 P2 末)
+## 8. 未决问题
 
-| 段 | 内容 | 闸 | 估时 |
-|---|---|---:|---:|
-| **P1** ✅ 2026-06-10 | 数据模型 + V017 + ScriptStore/Dao + sealed Trigger/Action Jackson 多态 + 协议 v4 5 op + 权限节点 + ready/patch + 前端镜像(types/wsClient/store)。4 批次 + 3 轮质量修复 + 全程对抗终审;后端 1378 / 前端 529 全绿 | 后端单测全绿 ✅ | ~50h |
-| **P2** ✅ 2026-06-10 | 执行引擎:TriggerRouter(变量/定时/墙就绪 3 触发器,无 debounce——Budget 即节流)+ ScriptRunner(单线程帧栈 + wait 续接 + K1 ThreadLocal 链深)+ ActionExecutor(8 动作,setElementProperty 双路径)+ Budget 三闸/ABA 熔断 + ConditionEvaluator(expr 扩比较/算术/var() + == 数值等值修订)。3 批次 + MVP 集成测试 7 case;后端 1515 / 前端 529 全绿 | **MVP 闸:JSON 建规则游戏内生效(待用户实测)** | ~70h |
-| **P3** ✅ 2026-06-10 | 游戏事件层:GameEventListenerHub(进服/击杀 MONITOR + 世界 UUID 快照表)+ playerNear 采样器(K14 进入沿状态机/跳帧热更)+ 命令模板系统(K13 转义/online-player 校验 + SCRIPT_COMMAND_EXECUTED audit)+ script.test 异步轨迹(K11 ack 受理 + script.trace 推送)+ 条件保存期预 parse(K16)。后端 1575 / 前端 536 全绿 | 6 触发 8 动作全通(单测)✅ | ~50h |
-| **P4** ✅ 2026-06-11 | 积木引擎层:无限画布 pan/zoom(viewport+world transform)+ Scratch 式拖拽吸附(SlotRect 几何 + findDropTarget)+ if C 形嵌套 + blockTree 树操作/blockLayout 序列化 + 编辑会话(working copy + 本地 undo + debounce 自动保存)。波次 A/B/C/D1/D2 | 引擎可拖可嵌可存(待用户实测) | ~70h |
-| **P5** ✅ 2026-06-11 | 积木内容层:6 触发器(帽子可编辑)+ 9 动作积木真表单(均 0.7.0 当时数;0.7.1+ 已扩至 9 触发/28 动作,见附录) + 条件可视构建器(↔ 字符串双向 + 高级文本框)+ 下拉(变量/时间轴/元素/声音/命令模板端点)+ 试跑高亮(trace blockId 树路径定位 + 120ms 步进)+ validator 镜像 + i18n。波次 E/F/G/H + 集成审查修 2 阻断(新建带默认动作 / 帽子触发器可编辑)。前端 877 / 后端 1585 | **完整用户实测闸(待测)** | ~70h |
-| **P6** | 对抗审查(恶意脚本/熔断/采样器压测)+ 大白话教程 `docs/scripting-guide.md` + security.md/architecture.md 回填 + 版本号 + 收尾 | 全绿收口 | ~30h |
-
-节奏照 0.6:每段一闸可演示;P2 / P4 / P5 三道用户实测闸。
-
-> 上表是 0.7.0 的 6 段分期(P1-P6)。0.7.0 完工后的后续小版本(0.7.1 / 0.7.2 / 0.7.3 / 补间)
-> 各有独立分期表,见 `scripting-0.7.1.md` / `scripting-0.7.2.md` / `scripting-0.7.3.md` /
-> `scripting-tween.md`。
-
-## 9. 工时
-
-~340h(原 §13.5 估 360h;0.6 资产——TimelineTriggerRegistry 模式 / AnimationTicker.play /
-StrictNumber / coalesce / 协议切换机制——抵掉 ~20h)。wall-clock 按既往节奏预计 1-2 周。
-
-## 10. 未决问题(实现时回填)
-
-- [x] ~~`setElementProperty` headless 路径的 persistWall 节流策略~~ → **P2 拍板:每 action 直落,不节流**。
-  理由:Budget 三闸已封顶(10 runs/s × 50 actions/run),且与编辑器 session 路径的 persistWall
-  频率同级;同 run 内连续多个 setElementProperty 是 N 次 load+save,成本上限已知可接受
-  (ElementPropertyApplier javadoc 记账)。**已知竞态(可接受)**:headless 写入与编辑器
-  open/close 瞬间并发时,脚本改动可能被 session 的旧 state persist 覆盖——单属性丢一次
-  更新,低频低危,下游 ultrareview 勿当新缺陷重报
-- [x] ~~`timer` 触发器在墙未部署时是否照跑~~ → **已决:照跑,与部署状态无关**。
-  `TriggerRouter.onTimerFire` 只查规则存在 / enabled / 触发器仍是 `Timer`,无任何部署检查;
-  脚本副作用(改变量 / 发消息 / 改元素属性等)与墙是否有投影 / 有观察者解耦(§3 执行管线
-  「墙没部署 / 无观察者按需照常触发」)。
-- [x] ~~playerNear 采样间隔 config 默认值(10 tick 起步,P6 压测回填)~~ → **P3-B2 落地:
-  config `scripts.player-near-sample-ticks` 默认 10(load 期 clamp 1..200)。机制:底层
-  Bukkit 主线程 task 固定 2 tick 周期跑 `PlayerNearSampler.tick()`,内部按 volatile
-  `sampleTicks` 做跳帧计数——累计游戏 tick 到设定值才真采样,其余调用 O(1) 返回;
-  `/canvas reload` 热更走 `setSampleTicks`(无需重 schedule),实际分辨率受 2 tick 底层
-  周期限制(填 1 与 2 等效)。**默认值是否回调留 P6 压测定**(规则 × 玩家交叉量实测)
-- [ ] 积木画布 pan/zoom 手势与浏览器缩放冲突处理(P4 实测定)
-
-## 11. P1 终审记账(2026-06-10;后续 phase 必读)
-
-P1 全程对抗终审排出的设计债,按归属 phase 记账:
-
-**P2 首任务清单**:
-- [x] **ScriptStore 暴露面**(P2-1 ✅ snapshotAll + Listener):补「枚举全部墙规则」snapshot API + mutation 监听钩子(照 VariableStore
-  ChangeListener 范式)——TriggerRouter 要建 `(triggerType → wallId → ruleId)` 索引并增量维护;
-  byTriggerType 索引放 Router 侧,store 保持哑存储
-- [x] **ScriptTestSeam 必须异步化**(P3-A2 ✅ K11:ScriptTestLauncher + ack `{accepted}` + `script.trace` S→C 推送,旧 seam 已删)
-- [x] **script.update 缺 enabled 默 true**(P2-1 ✅ 继承现值) → 改继承现值(防第三方 WS 客户端悄悄重启已禁用规则)
-- [x] **权限拒绝路径 dispatch 级测试**(P2-1 ✅ MainThreadPerms.testResolver seam + 5 case):checkBasePermission 在线真拒 / checkFacets 拒绝 + audit
-  全链零测试(批次3 #1 修的正是这条路径)——P2 用 MockBukkit 在线玩家 deny case 补
-- [x] 数值字段小数静默截断(P2-1 ✅ K8 收紧:非整数值拒 INVALID_PAYLOAD)(`intervalSeconds=1.9→1`,canConvertToInt 只查范围):P2 决定收紧或接受
-
-**P4/P5 记账**:
-- [x] 4 个错误码 i18n key(P5-H ✅ 中英)(`SCRIPT_INVALID / SCRIPT_NOT_FOUND / SCRIPT_QUOTA_EXCEEDED /
-  SCRIPT_ENGINE_UNAVAILABLE`),目前 ack reject 回退 raw code
-- [x] 前端 validator 镜像(P5-H ✅ validator.ts 复刻全常量 + save 前拦)(本地预校验)+ `setElementProperty.property`
-  TS 窄化到 8 白名单 union
-- [ ] blockLayout 实际预算须低于 WS 入帧 64KB(BLOCK_LAYOUT_MAX 与帧限同值,贴限必 1009 断连;v1 仅存每堆 x/y 坐标,量级远低于上限,实测无虞——留观察);
-  前端发送前长度检查
+- `setElementProperty` headless 路径的 persistWall **每 action 直落,不节流**：Budget 三闸已封顶
+  (10 runs/s × 50 actions/run),与编辑器 session 路径的 persistWall 频率同级。**已知竞态(可接受)**:
+  headless 写入与编辑器 open/close 瞬间并发时,脚本改动可能被 session 的旧 state persist 覆盖——单属性
+  丢一次更新,低频低危。
+- `timer` 触发器在墙未部署时**照跑,与部署状态无关**:`TriggerRouter.onTimerFire` 只查规则存在 /
+  enabled / 触发器仍是 `Timer`,无任何部署检查;脚本副作用与墙是否有投影 / 有观察者解耦。
+- playerNear 采样间隔:config `scripts.player-near-sample-ticks` 默认 **10**(load 期 clamp 1..200)。
+  机制:底层 Bukkit 主线程 task 固定 2 tick 周期跑 `PlayerNearSampler.tick()`,内部按 volatile
+  `sampleTicks` 做跳帧计数——累计游戏 tick 到设定值才真采样,其余调用 O(1) 返回;`/canvas reload` 热更走
+  `setSampleTicks`(无需重 schedule),实际分辨率受 2 tick 底层周期限制(填 1 与 2 等效)。
+- blockLayout 长度须低于 WS 入帧 64KB(`BLOCK_LAYOUT_MAX` 与帧限同值;v1 仅存每堆 x/y 坐标,量级远低于
+  上限)——前端发送前长度检查。
+- 积木画布 pan/zoom 手势与浏览器缩放冲突处理。
 
 **已澄清(防后人误判)**:
 - `ProjectState.PROTOCOL_VERSION` 留 3 是**有意**(D7 脚本不进 ProjectState,project_json schema
-  未变;该常量仅序列化输出无导入校验)
-- patch 只推 caller session ≠ 漏广播:byWall 排他锁一墙一活跃 session,等价全墙广播(alias 同例)
+  未变;该常量仅序列化输出无导入校验)。
+- patch 只推 caller session ≠ 漏广播:byWall 排他锁一墙一活跃 session,等价全墙广播(alias 同例)。
 
 ---
 
-## 附录：当前实装全集（截至 0.8.1-SNAPSHOT）
+## 附录：当前实装全集
 
 > 名称与源码 `Trigger.java` / `Action.java` 的 `permits` 子类逐字对齐;wire 判别 `type` 为 camelCase
 > (子类名首字母小写)。「哪版」= 子类 javadoc 注明的引入版本。0.7.0+ 各版扩展的详细设计见

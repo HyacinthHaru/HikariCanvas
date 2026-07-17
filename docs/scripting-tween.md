@@ -1,14 +1,13 @@
 # 补间动画设计总纲（脚本「在 X 秒内」+ 非线性缓动）
 
-> 0.7.2「稳的」版完工后单独 brainstorming 的大功能（设计于 2026-06-13）。**拟作 0.7.2 之后的独立功能版本**
-> （版本号待定，0.7.x 大版本线一路 `0.6.0-SNAPSHOT` 下迭代）。
+> 脚本「在 X 秒内」+ 非线性缓动的大功能，独立设计。
 >
 > 契约范式照 `docs/scripting.md`（0.7.0 总纲）/ `docs/timeline.md`（0.6 时间轴）/ `docs/scripting-0.7.x.md`。
 > 双端插值/缓动数学权威在 `docs/rendering.md §9`（0.6 已落地）。**实施前对照本文档 + 下方调研依据。**
 
 ---
 
-## 0. 决策摘要（brainstorming 固化，不可越界）
+## 0. 决策摘要
 
 | # | 决策 | 结论 | 理由 |
 |---|---|---|---|
@@ -116,20 +115,19 @@ if t >= 1:
 - 颜色：`ColorLerp.lerpHex(from, to, eased)`（sRGB 线性空间，调研点 4）。
 - fill：复用 `KeyframeInterpolator` 的 fill 插值（同类型同 stop 数逐 stop，否则 step，调研点 3）。
 
-### 3.4 落盘 + 渲染（P2 落地：路径 Z 分情况，比原计划「每帧落 DB」更优）
+### 3.4 落盘 + 渲染（路径 Z：按有无时间轴分两路）
 
-> **实施修正**：调研发现**路径 Z**（给 `AnimationTicker` 加「渲静态墙一帧」轻量入口 `renderStatic`），
-> 补间得以**渲临时态不落 DB**。原 §3.4/§5 写的「每帧落 DB」只在「有时间轴的墙」才必要；静态墙（补间主场景）
-> 省掉了每帧 DB 写。按 wall 有无时间轴分两路：
+**路径 Z** = 给 `AnimationTicker` 加「渲静态墙一帧」轻量入口 `renderStatic`，补间得以**渲临时态不落 DB**。
+「每帧落 DB」只在「有时间轴的墙」才必要；静态墙（补间主场景）省掉每帧 DB 写。按 wall 有无时间轴分两路：
 
-- **静态墙（无 timeline，补间主场景）= P2 已实现**：补间引擎自持插值 frame（内存），每帧
+- **静态墙（无 timeline，补间主场景）**：补间引擎自持插值 frame（内存），每帧
   `ticker.renderStatic(wallId, frame)` 渲临时态（Ticker 线程、复用 renderFrame 的 viewer-gated + diff、
   **不落 DB**）；**末帧** `ElementPropertyApplier.applyMany` 落 DB（目标值永久）。`renderStatic` 内 `entries`
   守卫——有 timeline entry 时 no-op，不抢 Ticker。
-- **有时间轴的墙（共存场景）= P3 实现**：补间改走**每帧 `applyMany` 落 DB**（updateState + invalidate），
+- **有时间轴的墙（共存场景）**：补间改走**每帧 `applyMany` 落 DB**（updateState + invalidate），
   让时间轴下一帧 reload 读到补间基准值 + 叠加关键帧（见 §5）。这条 wall 数通常少，DB 写压力可接受。
 
-§9 的「渲临时覆盖层省 DB」优化在静态墙**已由路径 Z 在 P2 兑现**（原列为 future）。
+§9 的「渲临时覆盖层省 DB」优化在静态墙由路径 Z 兑现。
 
 ### 3.5 挂起 + 续接（复用 `ScriptRunner` 挂起机制）
 - 「在 X 秒内」是**挂起式 Action**（照 `PlayTimelineAwait` 范式，调研点 2）：`ActionExecutor` 触发补间注册后，`ScriptRunner` 据 `durationMs` 挂起（不阻塞线程，帧栈续接）。
@@ -164,10 +162,10 @@ if t >= 1:
 - 补间：改 wall **base state** 本身（落 DB）。
 - 二者正交：时间轴的关键帧是「相对 base 的动画」，补间改的是 base。时间轴下一帧 reload 新 base + 叠加关键帧 → 自然叠加（调研点 6 A 评估「二者不冲突」）。
 
-**落盘策略（P2 落地路径 Z，按有无时间轴分两路）**：
-- **静态墙（无 timeline）= P2 已实现**：补间渲临时态（`renderStatic`）不每帧落 DB，**末帧才落**。省 DB
-  （路径 Z；原计划「每帧落 DB」在静态墙不必要）。
-- **有时间轴的墙 = P3**：要让时间轴叠加补间中间值——时间轴 `reloadLocked` 从 `wallSource.load` 读 DB base
+**落盘策略（路径 Z，按有无时间轴分两路）**：
+- **静态墙（无 timeline）**：补间渲临时态（`renderStatic`）不每帧落 DB，**末帧才落**。省 DB
+  （路径 Z；「每帧落 DB」在静态墙不必要）。
+- **有时间轴的墙**：要让时间轴叠加补间中间值——时间轴 `reloadLocked` 从 `wallSource.load` 读 DB base
   （调研点 7），故这条 wall 的补间**每帧 `applyMany` 落 DB**（updateState + invalidate），时间轴下一帧
   reload 才叠加得到。wall 数少、DB 压力可接受。
 - **分流依据**：`ticker.isWallAnimating(wallId)`——true（有 timeline 在播）走每帧落 DB；false（静态）走
@@ -223,32 +221,24 @@ if t >= 1:
 
 ---
 
-## 10. 分期（拟 5 phase，照 0.7.0 范式）
+## 10. 开放问题
 
-| 段 | 内容 | 闸 |
-|---|---|---|
-| **P1 ✅** | 数据模型 + 协议：`Action.TweenBlock` + 序列化/校验/permissions + 协议升 v6 + 前端类型镜像 | 编译 + 单测 |
-| **P2 ✅** | 补间引擎 MVP：`TweenScheduler`（单线程 SES + TweenTask + EasingSolver 算值）+ **路径 Z `renderStatic` 渲临时态省 DB** + 挂起 + 最简前端可拼 + **per-wall 帧率**（tweenFps + 节流）+ 缓动两层 bug 修 | ✅ 实测过：招牌滑入 + 缓动 + 挂起 + 帧率可调 |
-| **P3 ✅** | 全属性 + 缓动 + 共存：多属性并行 + **color/fill 轨**（ColorLerp.lerpHex/lerpFill）+ 全 EasingType + **与时间轴共存**（`isWallAnimating` 分流：有 timeline 墙每帧 applyMany / 静态墙 renderStatic）+ 冲突接管（T8）+ `${var}` 颜色末帧瞬切 | ✅ 实测过：颜色补间 + 多属性并行 + 补间和时间轴叠加 |
-| **P4 ✅** | 前端 C 形包裹积木 + 缓动选择器（下拉预设 + 自定义曲线复用 0.6 `EasingCurveEditor`）+ body 拖入限制（`isTweenBodySlotAllowed`）+ i18n + 曲线拖动 bug 修 | ✅ 实测过：视觉完美 + body 限制 + 自定义曲线 |
-| **P5 ✅** | config（`max-fps`/`max-concurrent` 已 P2 加）+ 性能透明 + 收尾（docs / journal / 版本号 / 用户用法） | 收口 |
+**已定机制**：
 
----
+- **渲染触发**：`AnimationTicker.renderStatic`（静态墙渲临时态）+ 共存分流（有 timeline 墙每帧 applyMany 让 Ticker reload 叠加）。不需统一入口，按 `isWallAnimating` 在 tick 内分流。
+- **「渲临时覆盖层省 DB」优化**：静态墙由路径 Z 兑现；有 timeline 墙每帧 applyMany（wall 数少可接受）。
+- **DB 写压力**：config 默认 per-wall **fps 30 / max-fps 60 / max-concurrent 16**，静态墙渲临时态不每帧落 DB，写压力可接受。
+- **缓动 category 配色**：`control`（绿）。
+- **同属性 body 内重复**：运行期后者覆盖；保存期警告留 future。
 
-## 11. 开放问题（实施时回填）
+**开放项**：
 
-- [x] **渲染触发统一入口**：P2 路径 Z——`AnimationTicker.renderStatic`（静态墙渲临时态）+ P3 共存分流（有 timeline 墙每帧 applyMany 让 Ticker reload 叠加）。不需统一入口，按 `isWallAnimating` 在 tick 内分流。（P2/P3 定）
-- [x] **「渲临时覆盖层省 DB」优化**：静态墙已由路径 Z 在 P2 兑现（原列 future，提前）；有 timeline 墙每帧 applyMany（wall 数少可接受）。（P2/P3）
-- [x] **DB 写压力实测**：P2/P3 用户实测过（招牌滑入 + 共存），config 默认 per-wall fps 30 / max-fps 60 / max-concurrent 16，静态墙渲临时态不每帧落 DB，写压力可接受。（P2/P3）
-- [ ] **同属性 body 内重复**：P1 放行（运行期后者覆盖），保存期警告留 future。
-- [x] **缓动 category 配色**：P4 定 `control`（绿），用户实测视觉完美。（P4）
-- [ ] **非挂起变体**：future「启动补间后脚本不等」的积木形态（独立动作 vs 包裹加 toggle）。
-- [ ] **渐变 fill 在 animating 墙**：applyFn rawPatch 是 `Map<String,String>`，animating 墙中间帧渐变 fill 退化首 stop 颜色（主场景纯色无此问题）；future 让 applyMany 收 Fill 对象。
-- [ ] **版本号**：补间作为 0.7.x 哪个子版本 / 是否触发 0.7.0 整体 release bump——P5 后 0.7.x 整体盘点定。
+- **非挂起变体**：future「启动补间后脚本不等」的积木形态（独立动作 vs 包裹加 toggle）。
+- **渐变 fill 在 animating 墙**：applyFn rawPatch 是 `Map<String,String>`，animating 墙中间帧渐变 fill 退化首 stop 颜色（主场景纯色无此问题）；future 让 applyMany 收 Fill 对象。
 
 ---
 
-## 12. 给玩家：怎么用补间动画（大白话）
+## 11. 给玩家：怎么用补间动画（大白话）
 
 「**在 X 秒内**」积木让招牌上的元素**平滑动起来**——不再是瞬间跳到新位置/新颜色，而是用一段时间慢慢过渡。
 

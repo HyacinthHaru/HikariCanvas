@@ -13,17 +13,12 @@
 > 本文取代 `dynamic-data.md §13.4` 的纸面设想（§13.4 已瘦为指向本文的摘要）。可行性评估（5 维度
 > 深读真实代码 + 0.5.0 Benchmark 实测）的结论已并入本文，关键 file:line 证据随文给出。
 
-**状态**：**0.6.0 已完工（2026-06-09）**。本文为 0.6.0 设计总纲，已按 **0.8.1-SNAPSHOT** 代码原地校准
-（最近一次 2026-06-14）。`§0` 决策由 owner 拍板（2026-06-03）；`§10` 分期表保留为历史记录，当前实际
-能力以正文「当前能力」标注为准。
-
-> **本文的"留 phase / 留 0.7 / MVP 只做 X"等表述多为规划期措辞。0.6.0 已全部完工，实际能力已远超
-> MVP**：5 种缓动 + 自定义贝塞尔曲线编辑器 + 9 个可关键帧属性 + 多 timeline（上限 16）+ AE 风底部
-> dock。逐条以"当前能力"小注校正。
+**当前能力**：5 种缓动 + 自定义贝塞尔曲线编辑器 + 9 个可关键帧属性 + 多 timeline（上限 16）+ AE 风底部
+dock。各节以"当前能力"小注给出与设计取值的偏差。
 
 ---
 
-## 0. 决策摘要（固化后不可越界）
+## 0. 决策摘要
 
 | # | 决策 | 取值 | 依据 |
 |---|---|---|---|
@@ -33,16 +28,14 @@
 | D4 | **MVP 缓动集** | 先只 `LINEAR`；`CUBIC_BEZIER` / `EASE_IN/OUT` 留缓动 phase | 降低首个里程碑风险，曲线编辑器可独立交付 |
 | D5 | **0.6 触发器范围** | `MANUAL` + `VARIABLE_CHANGE` + `SCHEDULE` | 三者全复用现成设施（§5） |
 
-> **当前能力（D4/D5 已超出/校准）**：D4 五种缓动 `linear/easeIn/easeOut/easeInOut/cubicBezier` 全部已实装
-> （P3 落地 `EasingSolver`/`ColorLerp` 双端逐位等价 + P4 拖控制点的 `EasingCurveEditor.vue`）。D5 的
-> `TriggerType` 枚举**只有 `MANUAL`/`VARIABLE_CHANGE`/`SCHEDULE` 三个常量，从未引入 `PLAYER_NEAR`**——
-> 玩家靠近类触发已在 0.7.0 Scratch 的 `TriggerRouter` 独立实现，时间轴的 `TriggerType` 不含它。
+> **当前能力（D4/D5）**：D4 五种缓动 `linear/easeIn/easeOut/easeInOut/cubicBezier` 全部实装
+> （`EasingSolver`/`ColorLerp` 双端逐位等价 + 拖控制点的 `EasingCurveEditor.vue`）。D5 的
+> `TriggerType` 枚举**只有 `MANUAL`/`VARIABLE_CHANGE`/`SCHEDULE` 三个常量，无 `PLAYER_NEAR`**——
+> 玩家靠近类触发在 0.7.0 Scratch 的 `TriggerRouter` 独立实现，时间轴的 `TriggerType` 不含它。
 | D6 | **keyframe 编辑通道** | 专用 `keyframe.*` op（高频编辑，仿 `element.*` 的 ack 模型）+ `state.patch` 广播 | keyframe 拖动是高频小改，专用 op 比通用 patch 更清晰可控 |
 | D7 | **撤销** | 路线 A：coalesce key 合并同一 keyframe 连续拖动 + `MAX_HISTORY` 条件提升（16→64） | 现状 16 步全快照（非纸面"100 步"），不合并会被一次拖动吞光历史（§7） |
 | D8 | **新依赖** | **零**。插值 / 缓动纯算术自写，cubic-bezier **双端各写一份 + 共享测试向量**，禁引第三方 easing 库 | 双端逐位一致是硬纪律，第三方库的浮点实现对不齐 |
 | D9 | **后端唯一权威** | 游戏内最终输出永远以后端 Ticker 为准；前端本地插值仅供编辑器预览 | 同 M18 Live Paint"前端独占工具、输出走后端"的纪律例外 |
-
-> D1–D9 由 owner 拍板（2026-06-03）：D2 挂 `Timeline.tracks`、D5 三触发器、D3 默认 20fps + max-fps 默 60 宽松阀、**不做成本估算/自动校准**。
 
 ---
 
@@ -57,24 +50,17 @@
 量化是双端痛点，§4.2）。
 
 > **当前能力**：原列入"不做"的两项已落地——**缓动曲线编辑器**（`EasingCurveEditor.vue` 拖控制点的 SVG
-> cubic-bezier 编辑器，非关键帧列表）已在 P4 完成；**AE 风底部 dock**（`TimelineDock.vue` 每元素每属性
-> 子轨 + scrubber）已替代 MVP 的"最简关键帧列表"。"玩家靠近触发"由 0.7.0 Scratch 承担，时间轴侧从未引入
+> cubic-bezier 编辑器，非关键帧列表）；**AE 风底部 dock**（`TimelineDock.vue` 每元素每属性
+> 子轨 + scrubber）替代最简关键帧列表。"玩家靠近触发"由 0.7.0 Scratch 承担，时间轴侧无
 > `PLAYER_NEAR` 枚举。
 
-### 1.2 MVP 定义（首个可演示里程碑——历史，已超出）
+### 1.2 能力全集
 
-> **下述为 P2 末的 MVP 闸定义（历史）。0.6.0 完工后实际能力已远超**，见各「当前能力」小注与 §10 末的
-> 完工汇总。
+多 timeline（**上限 16**）+ **9 个可关键帧属性**（x/y/w/h/rotation/opacity 数值 + color + fill + text）+
+**5 种缓动 + 自定义贝塞尔曲线** + 三种触发器（MANUAL/VARIABLE_CHANGE/SCHEDULE）+ AnimationTicker 逐帧推
++ 后端唯一权威 + AE 风底部 dock。
 
-**单 timeline + 单元素 + 仅 `opacity`/`x`/`y` 三属性 + 仅 `LINEAR` + `LOOP` + `MANUAL` 触发 +
-AnimationTicker 逐帧推 + 后端唯一权威 + 前端最简关键帧列表（非 AE 风 panel）。**
-
-能演示**"一面欢迎墙文字淡入循环"**，验证 Ticker → 池化 → 渲染 → 发包 → 双端基础一致**全链路**。
-不碰缓动曲线、不碰 100h 前端 panel。约 80h。
-
-> **当前能力**：MVP 闸已过（P2，用户实测循环淡入淡出 + 关浏览器/重启自动续播）。完工后实际为：多
-> timeline（**上限 16**）+ **9 个可关键帧属性**（x/y/w/h/rotation/opacity 数值 + color + fill + text）+
-> **5 种缓动 + 自定义贝塞尔曲线** + 三种触发器（MANUAL/VARIABLE_CHANGE/SCHEDULE）+ AE 风底部 dock。
+首个可演示纵切为"一面欢迎墙文字淡入循环"，验证 Ticker → 池化 → 渲染 → 发包 → 双端一致全链路。
 
 ---
 
@@ -259,11 +245,6 @@ config max-fps 默 60 → 16.7ms 为上界）tick。每 tick：对每个活跃�
 3. **不做成本估算、不自动校准、不自动降级**。AE 不会因为你电脑卡就偷偷降你的导出分辨率——工具只管渲染，
    墙卡是服主自己的事。想知道自己机器能扛多少，服主自己跑独立的 `/canvas bench`（0.5.0，与时间轴解耦）。
 
-> **内部参考（非运行时特性 / 与机器相关 / 不进编辑器 / 不做断言——仅供我们判断"为什么 20 是合理默认"）**：
-> `rasterize` 走异步线程（不占 20 TPS 主线程），约束是"渲染线程算力 + 发包 + GC"。某台机 0.5.0 实测 p95
-> 折算单核 ~300ms/s 预算下，纯几何墙 @20fps 可载几十面、文字/仪表盘墙二十面上下、欢迎墙/大屏几面、蒙版图
-> 铺满墙池化前 <1 面。这串数字**只代表那台机**，换机器结论全变。
-
 ---
 
 ## 4. 双端插值 + 缓动（一致性核心）
@@ -280,7 +261,7 @@ config max-fps 默 60 → 16.7ms 为上界）tick。每 tick：对每个活跃�
   对数值做 easing 插值（需给 `VariableInterpolator` 加 `resolveAsNumber`）。
 - **字符串类 keyframe**：整段当文本，插值（step 取最近帧）后由 rasterize 的 `maybeInterpolateText` 统一
   resolve（每帧取最新值，免费）。
-- cached 值在异步线程安全（0.4.10 P1-8 已证）；`VariableInterpolator` 的 `MAX_INTERPOLATE_DEPTH=2`
+- cached 值在异步线程安全；`VariableInterpolator` 的 `MAX_INTERPOLATE_DEPTH=2`
   双扫描兜底防嵌套。
 
 ### 4.2 逐类型插值规则
@@ -294,7 +275,7 @@ config max-fps 默 60 → 16.7ms 为上界）tick。每 tick：对每个活跃�
 **字形动画不做**：逐字 advance 量化是双端已知痛点（CLAUDE.md M20），文本只整体属性动画 + 内容 step
 切换，不做字形级 morph。
 
-**基值覆盖语义（按属性粒度，P2 实测后固化 2026-06-04）**：打了关键帧的属性在播放期间以关键帧求值
+**基值覆盖语义（按属性粒度）**：打了关键帧的属性在播放期间以关键帧求值
 为准——**基值（ProjectState 里的元素字段值）被覆盖**，编辑器里拖动 / 改该属性对游戏内播放无视觉
 反映（动画软件标准语义）。未打关键帧的属性与内容（文本 / 颜色 / 未建轨的几何属性 / 新增元素）来自
 基值 state，编辑落库 → Ticker invalidate → 下一帧（≤1 帧延迟）即反映。
@@ -347,7 +328,7 @@ sRGB 直接线性插值"导致的中间色偏暗。这条写进 `rendering.md`�
 - **SCHEDULE**：复用 `ManualScheduleProvider` / `RailScheduleProvider` 的 schedule 变量 + 挂
   VARIABLE_CHANGE listener，不造新调度器。
 
-> **实装（P5，2026-06-08）**：核心 = `render/TimelineTriggerRegistry`（薄索引 `解析后fullName →
+> **触发实现**：核心 = `render/TimelineTriggerRegistry`（薄索引 `解析后fullName →
 > Set<(wallId,timelineId)>` + 监听）。装配在 `HikariCanvas.onEnable` 加第 3 个 `VariableChangeListener`，
 > 只在 VALUE_SET / UPDATED / CREATED 时调 `onVariableChange`；命中 → `AnimationTicker.play`（任意线程安全，
 > 重播 = ONCE「每次变化重播」语义）。**去抖 200ms**（per-(wall,timeline)，挡 `eta_seconds` 等高频变量 thrash）。
@@ -374,8 +355,8 @@ sRGB 直接线性插值"导致的中间色偏暗。这条写进 `rendering.md`�
 > - **state blob 版本** `ProjectState.PROTOCOL_VERSION` = **3**（0.6 引入 timelines 时升的，之后未动）。
 > - **业务协议版本** `Protocol.SUPPORTED_MIN/MAX` = **7**（每升一版 = 干净切换 MIN=MAX 同步提升）。
 >   时间轴的 `timeline.*` / `keyframe.*` op 自业务协议 v3 起进入协议，0.7.x 多次 bump（v4 script.* /
->   v5 新触发器+Repeat / v6 tween / v7）后**仍在协议内**——业务号上升不影响时间轴 op 可用性。本节下文
->   仍按规划期"v3"措辞，理解为"时间轴 op 自该版起在协议内"即可。
+>   v5 新触发器+Repeat / v6 tween / v7）后**仍在协议内**——业务号上升不影响时间轴 op 可用性。下文
+>   "v3"措辞理解为"时间轴 op 自该版起在协议内"即可。
 
 ### 6.1 新 op（在 `EditOpDispatcher.dispatch` switch 加 case，`EditOpDispatcher.java:104`）
 
@@ -398,9 +379,9 @@ scrubber 拖动 / 本地播放**纯前端**（不发 WS，60fps 跟手）；`tim
 
 ## 7. 撤销 / 历史
 
-### 7.1 现状（纸面错误已纠正）
+### 7.1 现状
 
-`HistoryStack.MAX_HISTORY = 16`（**不是纸面说的 100**，`HistoryStack.java:26`），且**每步全状态深拷贝
+`HistoryStack.MAX_HISTORY = 16`（`HistoryStack.java:26`），且**每步全状态深拷贝
 快照**（`ProjectSnapshot` 克隆整棵 layers 树，`ProjectSnapshot.java:31-44`），调用点遍布每个 mutator。
 keyframe 拖动是高频小改（一秒几十次 op），不处理会**瞬间填满 16 步、把拖动前的真实编辑历史全挤掉**。
 
@@ -409,15 +390,14 @@ keyframe 拖动是高频小改（一秒几十次 op），不处理会**瞬间填
 - **coalesce key**：默认 `{elementId}:{keyframeId}:{property}`（单属性连续拖动 / 滑块合并）。同 key 的连续 op
   在 `commitHistory` 处**合并**（不 push 新快照，只更新栈顶 + `future.clear()`），加一个时间窗（500ms 内算
   同一次拖动）。
-- **整体帧批量 op（P4.5b）**：一个用户动作（拉就设 / 加帧 / 整体块拖动）一次性写元素全部 transform 属性 =
+- **整体帧批量 op**：一个用户动作（拉就设 / 加帧 / 整体块拖动）一次性写元素全部 transform 属性 =
   多条 `keyframe.*` op。前端给这组 op 传**同一个** `coalesceKey`（如 `integ:{elementId}:{timeMs}`），后端优先用
-  它合并 → 一次撤销整组回收。**缺省回退**到上面的单帧默认键，向后兼容（见 `protocol.md §5.13`）。这修了
-  "整体帧 6 个属性各成一步撤销 → ctrl+z 只回收 1/6、整体帧块不消失"的实测 Bug。
+  它合并 → 一次撤销整组回收。**缺省回退**到上面的单帧默认键，向后兼容（见 `protocol.md §5.13`）。这保证
+  整体帧的 6 个属性一次 ctrl+z 整组回收、整体帧块整块消失。
 - `MAX_HISTORY` 条件提升：有 `activeTimelineId` 的工程 16→64。**提升是会话内粘性的**——一旦观察到激活
   时间轴即保持 64，不随时间轴删除回落；否则「删最后一条时间轴」的 commit 自身会按 16 当场 trim，
-  瞬间丢弃最多 48 条真实历史（P1 审查确认项，2026-06-04 实装时固化）。
-- **路线 B（history 改 op 式 / inverse-op）留远期**——纸面"op coalescing"一句话严重低估了改成 op 式的
-  工作量。0.6 只做路线 A。
+  瞬间丢弃最多 48 条真实历史。
+- **路线 B（history 改 op 式 / inverse-op）留远期**——op coalescing 改成 op 式的工作量大。0.6 只做路线 A。
 - 方案 B 的附带好处：keyframe 不在 Element 里 → `ProjectSnapshot` 深拷贝 element 时**不连带拷贝 keyframe
   列表**，撤销性能不随 keyframe 数膨胀。
 
@@ -434,9 +414,9 @@ keyframe 拖动是高频小改（一秒几十次 op），不处理会**瞬间填
 - 顶：播放控制（play/pause/loop/fps + 当前时间）。
 - 缓动曲线编辑器（贝塞尔手柄，纯 SVG）。
 
-> **当前能力**：均已落地于 `web/src/components/timeline/`——`TimelineDock.vue`（AE 风底部 dock，每元素每
-> 属性子轨 + 时间标尺 + scrubber）+ `EasingCurveEditor.vue`（拖控制点的 SVG cubic-bezier 编辑器，已超出
-> 原"留缓动 phase"）+ `timelineLogic.ts`（纯逻辑）。双端插值器在 `web/src/timeline/`
+> **实现位置**：`web/src/components/timeline/`——`TimelineDock.vue`（AE 风底部 dock，每元素每
+> 属性子轨 + 时间标尺 + scrubber）+ `EasingCurveEditor.vue`（拖控制点的 SVG cubic-bezier 编辑器）
+> + `timelineLogic.ts`（纯逻辑）。双端插值器在 `web/src/timeline/`
 > （`interpolation.ts` / `easing.ts` / `colorLerp.ts`）。
 
 **自写时间轴 UI，不引库**（与项目"Konva 画布 + 其余手写 Vue"口味一致；第三方时间轴库多 React/canvas，
@@ -473,57 +453,12 @@ keyframe 拖动是高频小改（一秒几十次 op），不处理会**瞬间填
 
 ---
 
-## 10. 分期（6 段，MVP 在 P2 末，一道 MVP 闸）
+## 10. 未决问题
 
-> **历史记录。0.6.0 已于 2026-06-09 完工**：P1 数模+协议 v3 / P2 Ticker+MVP（MVP 闸已过）/ P3 缓动+双端
-> 一致 CI / P4 AE dock（+ P4.5 整体帧+拉就设）/ P5 触发器 / P6 编辑期自动播+文档+收尾。下表保留为分期
-> 原貌；实际产出已含完整缓动曲线编辑器 + AE 风 dock + 9 属性 + 多 timeline，超出各阶段最初括号内的范围。
-
-独立 P0 spike 不单列——它只为"证明架构正确"（Ticker cadence 稳 + 池化不破坏 `rasterize` 并发契约），而
-这两件事全在 P2，且 P1 不依赖 Ticker 怎么实现（就算 P2 返工，P1 的 records / 迁移 / coalescing 一个不
-浪费）。故把 spike 折进 **P2 的第一个子任务**。
-
-| 阶段 | 工时 | 产出 | 闸 |
-|---|---:|---|---|
-| **P1 数据模型+协议 v3+撤销** | ~60h | Timeline/Keyframe/Easing/Trigger records（nullable 加法，Element 零改）+ v2→v3 迁移 + 协议 v3 + `timeline.*`/`keyframe.*` op + **coalescing（必须同批）** + state.patch 分拣；后端单测绿 | — |
-| **P2 Ticker+池化+MVP**（spike 先行） | ~50h | 先用写死两帧动画跑通 Ticker→池化→`projectByWall`→发包（架构软闸），再铺 LINEAR 插值（x/y/opacity）+ MANUAL 播放 + 最简关键帧列表前端 | **MVP 闸**：演示"欢迎墙文字淡入循环"→ 决定是否上 P4 |
-| **P3 缓动+双端插值器+一致性 CI** | ~70h | cubic-bezier 双端各一份 + EASE 预设 + sRGB 线性色彩插值 + Fill/离散类 + `easing.json` 测试向量（Java+TS 同跑）+ 多帧 snapshot + `rendering.md` 数学权威落地 | — |
-| **P4 前端 AE 风 panel** | ~100h | 底部 dock + 每元素每属性子轨 + 关键帧拖拽 + scrubber 本地预览（60fps，绕 deep watch）+ 缓动曲线编辑器 + 懒加载拆 chunk；可再拆 P4a/P4b | 大头，拿 P2/P3 数据后才全量投 |
-| **P5 触发器扩展** | ~35h | VARIABLE_CHANGE（VariableChangeListener + resolveFullName 注入 + 去抖）+ SCHEDULE（复用 schedule 变量）+ 薄触发接口（0.7 能吸收） | — |
-| **P6 一致性 CI+收尾** | ~15h | 双端一致性 CI gate（确定性、跨机稳定）+ 文档收尾 + 版本号 + journal；**不含成本估算 UI** | — |
-
-**MVP 纵切**（P1→P2 最薄一条）：单 timeline + 单元素 + opacity/x/y + LINEAR + LOOP + MANUAL，到 P2 末演示。
-
-### 砍 / 推迟 0.7
-
-"玩家靠近"触发（从零建事件层，已合 0.7 Scratch 的 `TriggerRouter` 实现，时间轴 `TriggerType` 不含
-`PLAYER_NEAR`）；history 路线 B（op 式，仍留远期）。
-
-> **注**：原列入此处的"完整 AE 曲线编辑器（MVP 用关键帧列表）"**已在 0.6.0 P4 完成**（`EasingCurveEditor.vue`
-> + `TimelineDock.vue`），不再属于推迟项。
-
----
-
-## 11. 工时
-
-约 **360h**。但**别一次吞**：P1+P2（~110h）先把 MVP 全链路验通（含 P2 内的 spike 软闸），拿真机演示后
-再决定要不要上 P4 那 100h AE panel。各块：P1 数据模型+协议+coalescing 60 / P2 Ticker+池化+MVP 50 /
-P3 缓动+插值器（含双端测试基建）70 / P4 前端 panel 100 / P5 trigger 35 / P6 一致性 CI+收尾 15。
-
----
-
-## 12. 未决问题（实现时回填）
-
-- [x] `timeline.play/pause/seek` 持久化"上次播放位置"——**不持久化**：pause 记内存位置，重启后
-  LOOP 墙总是自动播（`AnimationTicker`，play 暂停态恢复保位置 / 否则从 0 起）。
-- [ ] 多 timeline 切换（`activeTimelineId`）的 UX：编辑器同时编辑多条还是一次一条
-- [ ] `.canvas` 导入到无该元素的工程时，孤儿 keyframe track 的处理（丢弃 / 保留）
-- [x] 缓动曲线编辑器的 EASE 预设具体控制点值——**已固化**：`linear=[0,0,1,1]` / `easeIn=[0.42,0,1,1]` /
+- 多 timeline 切换（`activeTimelineId`）的 UX：编辑器同时编辑多条还是一次一条
+- `.canvas` 导入到无该元素的工程时，孤儿 keyframe track 的处理（丢弃 / 保留）
+- EASE 预设控制点值（已固化）：`linear=[0,0,1,1]` / `easeIn=[0.42,0,1,1]` /
   `easeOut=[0,0,0.58,1]` / `easeInOut=[0.42,0,0.58,1]`（取 CSS 同名关键字标准值，`EasingCurveEditor.vue`
   PRESET_POINTS + rendering.md §9.3）。
-
----
-
-> 配套契约文档（本文锁定后按 §「文档计划」依次改）：`rendering.md`（双端插值+缓动，最先）/
-> `data-model.md`（project_json v3）/ `protocol.md`（v3 + op）/ `architecture.md`（帧率+Ticker）/
-> `PROPOSAL.md`（里程碑）。用户向操作指南留实现稳定后写。
+- `timeline.play/pause/seek` 不持久化"上次播放位置"：pause 记内存位置，重启后 LOOP 墙总是自动播
+  （`AnimationTicker`，play 暂停态恢复保位置 / 否则从 0 起）。
