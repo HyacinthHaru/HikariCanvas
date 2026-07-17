@@ -153,7 +153,7 @@ export const messages = {
             undo: '撤销（Ctrl+Z）',
             redo: '重做（Ctrl+Shift+Z）',
             ping: 'Ping 测试',
-            paint: 'M1 演示功能：把所有地图涂红',
+            paint: '演示：把所有地图涂红',
         },
         templates: {
             header: '模板库',
@@ -1465,7 +1465,7 @@ export const messages = {
             undo: 'Undo (Ctrl+Z)',
             redo: 'Redo (Ctrl+Shift+Z)',
             ping: 'Ping the server',
-            paint: 'M1 demo: paint every map red',
+            paint: 'Demo: paint every map red',
         },
         templates: {
             header: 'Templates',
