@@ -46,7 +46,7 @@ List<MapBitmap>   输出
 - 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（M23 起单轨，见 §2.3），**不再走 `.woff2` + CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`，由 Gradle `syncFontsToWeb` 构建期同步进 `web/public/fonts/`；该目录被 `.gitignore` 排除，同时也落了字体二进制副本但渲染不读它，仅 metrics JSON 被消费）
 - 后端 + 前端**使用同一源字体文件**，构建脚本中以 SHA-256 pin 校验
 
-### 2.1.1 分发策略（M4 定稿 · 方案 A；M21/M22/M25 扩充至 22 枚）
+### 2.1.1 分发策略（方案 A）
 
 **全部内置字体走 Gradle `downloadFonts` 任务**（构建期从官方 Release / google/fonts 抓到 `build/downloaded-fonts/`，SHA-256 pin 校验 → `processResources` 合并进 shadow jar）；仓库**不入任何字体文件**，`.gitignore` 排除。
 
@@ -58,8 +58,6 @@ List<MapBitmap>   输出
 | 中文艺术 | `smiley_sans` / `ma_shan_zheng` / `zcool_xiaowei` / `zcool_kuaile` / `zcool_qingkehuangyou` / `lxgw_wenkai` |
 | 西文正文 | `inter` / `noto_serif` / `jetbrains_mono` / `fira_code` |
 | 西文装饰 | `comic_neue` / `pacifico` / `lobster` / `bangers` / `shadows_into_light` / `caveat` / `dancing_script` / `overpass`（FHWA-like）/ `bebas_neue`（DIN-like） |
-
-> **历史注：** 本表早期版本仅列 2 枚（`ark_pixel` + `source_han_sans`）；M21 加 6（中文宋 + 西文 4）、M22 加 13（中文艺术 6 + 西文装饰 7）、M25 加 2（`overpass` + `bebas_neue`），现为 22 枚。
 
 **理由：**
 - 仓库保持纤瘦（无字体二进制），`git clone` 快
@@ -82,23 +80,7 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 
 ### 2.2 字体 ID 与声明
 
-**当前实现：内置字体元数据硬编码在 `FontRegistry.BUILT_IN`，无 config.yml 声明机制。** 每枚内置字体的 `(fontId, classpath 路径, Metadata{displayName, pixelated, nativeSize})` 直接写死在 `FontRegistry` 静态初始化块里；用户字体走 §2.1.1 的文件名约定（`pixelated` 一律 false、`nativeSize` 0）。
-
-> **未实装（保留作早期设计意图记录）：** 下方 `config.yml fonts:` 段声明 `fontId / file / display-name / pixelated / native-size` 的机制**从未落地**——`config.yml` 没有 `fonts:` 段，`HikariCanvasConfig` 也无对应字段。像素字体的 `native-size` 现仅 `ark_pixel`（=12）一枚，写死在 `FontRegistry`。若未来要让服主给用户字体标 `pixelated` / `native-size`，可复活此机制。
->
-> ```yaml
-> # config.yml —— 未实装
-> fonts:
->   sourcehan:
->     file: "fonts/SourceHanSansSC-Regular.otf"
->     display-name: "思源黑体"
->     pixelated: false
->   ark-pixel-12:
->     file: "fonts/ark-pixel-12px-monospaced-zh_cn.ttf"
->     display-name: "方舟像素 12px"
->     pixelated: true
->     native-size: 12
-> ```
+**内置字体元数据硬编码在 `FontRegistry.BUILT_IN`，无 config.yml 声明机制。** 每枚内置字体的 `(fontId, classpath 路径, Metadata{displayName, pixelated, nativeSize})` 直接写死在 `FontRegistry` 静态初始化块里；用户字体走 §2.1.1 的文件名约定（`pixelated` 一律 false、`nativeSize` 0）。像素字体的 `native-size` 现仅 `ark_pixel`（=12）一枚，写死在 `FontRegistry`。
 
 ### 2.3 加载规则
 
@@ -304,7 +286,7 @@ g.setClip(originalClip);
 4. **加粗描边**（`bold`，见 §5.5；与 `effects.stroke` 独立可叠加）
 5. 字形填充
 
-### 5.5 加粗 / 斜体（0.4.6 P3）
+### 5.5 加粗 / 斜体
 
 `TextElement` 的 `bold` / `italic`（均为 nullable `Boolean`）。双端走**数学等价的线性变换 + stroke 描边**，避免 synthetic bold 在 AWT vs Canvas 像素不一致：
 
@@ -361,7 +343,7 @@ for r in 0..31: for g in 0..31: for b in 0..31:
 
 **透明背景（0.4.6 P2 起支持）：** 主 rasterize buffer 升为 `TYPE_INT_ARGB`（之前 `TYPE_INT_RGB` 会强制合成不透明，把 `SolidFill("#00000000")` 吃成黑底）。背景 alpha 通道现可贯穿到量化层：`toPaletteSlice` 逐像素调 **4 参 `matchColor(r, g, b, a)`** 重载，`a < 128` 时直接返 `TRANSPARENT_INDEX(0)`，整块画布无元素覆盖的区域在 MC 地图里透明。内存成本 +33%（不透明像素 `a >= 128` 时 4 参与 3 参 `matchColor` 等价，snapshot baseline 0 漂移）。编辑器 `CanvasSettingsSection` 提供「设为透明背景」快捷按钮。
 
-### 6.5 元素级 opacity（M8 协议 v2 引入）
+### 6.5 元素级 opacity
 
 `element.opacity ∈ [0, 1]`、`layer.opacity ∈ [0, 1]`。MC 调色板**不支持半透明**，所以语义不是"真透明"而是**"颜色变浅"**：
 
@@ -373,7 +355,7 @@ for r in 0..31: for g in 0..31: for b in 0..31:
 
 **用户视角：** opacity 是"褪色"工具，不是"半透明"工具。docs/deployment.md / 编辑器 UI 都要明确告知。
 
-### 6.6 BlendMode（M8 协议 v2 引入）
+### 6.6 BlendMode
 
 v1 选 4 个最常用：`normal / multiply / screen / overlay`。计算（对 normalized [0,1] RGB 各通道独立做）：
 
@@ -388,13 +370,13 @@ v1 选 4 个最常用：`normal / multiply / screen / overlay`。计算（对 no
 
 **双端契约：** Canvas2D `globalCompositeOperation = 'multiply' | 'screen' | 'overlay'` 直接支持；Java Graphics2D 不直接支持，需要在 ARGB 缓冲上**逐像素**做合成（性能 ok，反正画布只有 8 张 map = 1024×512 像素以下）。
 
-### 6.7 Dithering（M8 引入 renderMode 字段，M11 完整实施）
+### 6.7 Dithering
 
 v2 起每个 element 有 `renderMode: 'clean' | 'dither'`，默认 `clean`。
 
 **clean 模式**（现状）：直接走 §6.4 LUT 硬截断。文字 / 矩形 / 图标这类硬边几何，clean 看起来"干净像素艺术"。
 
-**dither 模式**（M11 实施）：用 **Bayer 4×4 ordered dither** 在量化前对每个像素加一个空间相关的小扰动，让渐变 / 软笔锋的色阶过渡看起来连续。
+**dither 模式**：用 **Bayer 4×4 ordered dither** 在量化前对每个像素加一个空间相关的小扰动，让渐变 / 软笔锋的色阶过渡看起来连续。
 
 Bayer 4×4 阈值矩阵：
 
@@ -418,8 +400,6 @@ adjusted = (r + threshold, g + threshold, b + threshold)
 - Bayer 是**纯函数**：每像素独立 + (x,y) → 同一图任意区域多次渲染像素一致。FS 是误差扩散，要从左上角顺序扫，与浏览器/Java 并行优化冲突
 - Bayer 双端 trivially 一致（4×4 矩阵 + 同 LUT 即可）；FS 容易在边界出现微小漂移
 - 取舍：Bayer 有"网纹感"，FS 更"自然"。对像素艺术目标，网纹反而契合 MC 像素美学
-
-**M8 阶段：** 只把 `renderMode` 字段存到协议 + state，渲染时 `clean / dither` 都走 §6.4 硬截断；M11 才真正接入 dither LUT。早做字段是为了避开协议二次升版。
 
 ---
 
@@ -480,7 +460,7 @@ plugin/src/test/resources/
 
 每次修复后**更新 expected** 并提交 PR 审查。
 
-### 8.4 Live Paint 例外（M18，2026-05-17）
+### 8.4 Live Paint 例外
 
 Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**，后端 Java 不做任何镜像。
 这是 §1 / §8 双端镜像纪律的**显式例外**，理由：

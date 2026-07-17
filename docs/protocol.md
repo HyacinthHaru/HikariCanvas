@@ -17,77 +17,26 @@
 
 代码里存在三个版本号，含义不同、各自独立递增（见 `web/Protocol.java` javadoc 与 `web/src/network/wsClient.ts` 常量注释）：
 
-1. **业务协议版本**（business protocol）= 业务 op / payload schema 的版本。client 在 auth 帧携 `client_v`，server 在 ready 帧回 `accepted_v`；不匹配 close `4002`。常量在 `Protocol.SUPPORTED_MIN / SUPPORTED_MAX`（当前都 = `7`），前端 `CLIENT_V = 7`。历史：v2（M8 图层）→ v3（0.6 时间轴）→ v4（0.7.0 脚本）→ v5（0.7.1 新触发器 + 有界循环）→ v6（0.7.3 补间 tweenBlock）→ v7（0.7.3 备选积木批 + 协议 v7）。每次都取"干净切换"（`MIN = MAX` 同步提升，不维持双轨）。
+1. **业务协议版本**（business protocol）= 业务 op / payload schema 的版本。client 在 auth 帧携 `client_v`，server 在 ready 帧回 `accepted_v`；不匹配 close `4002`。常量在 `Protocol.SUPPORTED_MIN / SUPPORTED_MAX`（当前都 = `7`），前端 `CLIENT_V = 7`。每次升版都取"干净切换"（`MIN = MAX` 同步提升，不维持双轨）。**协议版本 v1→v7 沿革见 `docs/journal.md`。**
 2. **信封壳版本**（envelope schema）= 消息容器格式版本，`Envelope.v` 恒为 `2`（`Envelope.of` 固定写 2，前端 `ENVELOPE_V = 2`）。改 envelope 字段才会动这个号，业务升级时**不动**。所有出帧（含 auth / ping）用它做 `v`。
 3. **ProjectState schema** = `ProjectState.PROTOCOL_VERSION`，当前 `3`，序列化进 `project_json`。0.6 的 timeline 字段进了 ProjectState 故 bump 到 3；0.7 脚本**不进 ProjectState**（有意为之，见 scripting.md D7），故 v4-v7 升业务版本时此号留 3 不动。
 
-## v1 → v2 变更总览（M8）
+## 版本演进
 
-| 维度 | v1 | v2 |
+协议业务版本 **v1→v7 的逐版沿革见 `docs/journal.md`**（每次都取"干净切换"：`Protocol.SUPPORTED_MIN = SUPPORTED_MAX` 同步提升，不维持双轨——前端 bundle 由插件自带分发，客户端与服务端版本在实际部署中永远匹配，混版会导致按旧 schema 保存时静默丢数据）。当前边界与各版本引入的能力：
+
+| 版本 | 引入能力 | 对 ProjectState schema 的影响 |
 |---|---|---|
-| ProjectState 顶层 | `elements: Element[]` 扁平列表 | `layers: Layer[]` 树形 + `activeLayerId` |
-| Element 字段 | x/y/w/h/rotation/visible/locked + 类型字段 | **新增** `opacity` / `blendMode` / `renderMode` |
-| Canvas | widthMaps/heightMaps/background | **新增** `gridSize` / `guides[]` |
-| state.patch path | `/elements/{i}/x` | `/layers/{i}/elements/{j}/x` |
-| op 族 | element.* / canvas.* / wall.* / template.* / undo / redo / history.mark | **新增** layer.* + canvas.guides.* / canvas.grid；element.add 加可选 `layerId` |
-| 客户端协商 | auth payload 不带版本 | auth payload **必须**带 `clientProtocolVersion: 2`；服务端遇 `< 2` 直接 reject `VERSION_MISMATCH` + close 4002 |
-| v1 客户端兼容 | — | **不兼容**。v1 没正式发布，不维持双轨
+| v2 | 图层模型（`layers[]` / `activeLayerId`）+ 元素级 `opacity`/`blendMode`/`renderMode` + `canvas.gridSize`/`guides[]`；`layer.*` op 族 | schema bump 到 2（`elements[]` 包进 `layers[]`） |
+| v3 | 时间轴（`timelines?[]` / `activeTimelineId?`）；`timeline.*`（§5.12）+ `keyframe.*`（§5.13）op | schema bump 到 3（timeline 字段进 ProjectState） |
+| v4 | 墙脚本（`script.*` 5 op，§5.14）；ready payload 加 `scripts[]` | **不 bump**（脚本不进 ProjectState，scripting.md D7；schema 留 3） |
+| v5 | 3 新触发器 + 有界循环「重复 N 次」（只扩 Trigger / Action wire union） | 不 bump |
+| v6 | 补间包裹积木 `tweenBlock`（契约 `docs/scripting-tween.md`） | 不 bump |
+| v7 | 备选积木批（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗等，扩 Action union） | 不 bump |
 
----
-
-## v2 → v3 变更总览（0.6）
-
-时间轴编辑器（`docs/timeline.md`）给工程加时间维：`Timeline` + 关键帧（`Keyframe`）+ 缓动（`Easing`），由服务端 `AnimationTicker` 定 cadence 逐帧渲染。协议随之升 v3。
-
-| 维度 | v2 | v3 |
-|---|---|---|
-| ProjectState 顶层 | `layers` / `activeLayerId` | **新增** `timelines?: Timeline[]` / `activeTimelineId?: string` |
-| op 族 | element.* / layer.* / canvas.* / variable.* 等 | **新增** `timeline.*`（§5.12）+ `keyframe.*`（§5.13） |
-| state.patch path | `/layers/<i>/elements/<j>/...` 等 | **新增** `/timelines/<i>/...` 与 `/timelines/<i>/tracks/<elementId>/<k>/...`（§5.2） |
-| 客户端协商 | auth payload `clientProtocolVersion: 2` | auth payload **必须**带 `clientProtocolVersion: 3`；服务端遇 `< 3` 直接 reject `VERSION_MISMATCH` + close 4002 |
-| v2 客户端兼容 | — | **不兼容**，取干净切换（不维持 v2 双轨） |
-
-**为什么取干净切换、不维持 v2 双轨**（与 M8 的 v1→v2 同样处理）：前端 bundle 由插件自带分发，客户端与服务端协议版本在实际部署中永远匹配；版本协商设施（`Protocol.SUPPORTED_MIN/MAX`，M16.6 已建）只作安全校验，非用于支撑混版运行。timeline 字段在形态上虽是 nullable 加法（v2 工程读为 null = 静态画板），但若让 v2 编辑器打开含 timeline 的 v3 工程，保存时会按 v2 schema 丢弃 `timelines`（数据丢失）。故取干净切换：服务端遇 `client_v < 3` 直接 reject，避免混版导致的静默数据丢失。
-
-> **双层版本注**（M16.6 设计，见 `web/Protocol.java`）：本次升的是 **business protocol**
-> （`client_v` / `accepted_v`，校验 `Protocol.SUPPORTED_MIN/MAX = 3`）。消息壳 `Envelope.v`
-> 是独立的 envelope schema version，0.6 未改信封字段（`v / op / id / ts / payload`），故仍为 `2`。
-
----
-
-## v3 → v4 变更总览（0.7）
-
-视觉运行时（`docs/scripting.md`）给墙加脚本规则（ScriptRule = 触发器 + 动作树）。协议随之升 v4。
-
-| 维度 | v3 | v4 |
-|---|---|---|
-| op 族 | timeline.* / keyframe.* 等 | **新增** `script.*` 5 op（§5.14） |
-| ready payload | aliases / variables / railBinding 等 | **新增** `scripts: ScriptRule[]`（本墙全部规则快照；store 未配或无墙回 `[]`） |
-| state.patch path | `/timelines/...` 等 | **新增** `/scripts/<encoded ruleId>`（add=完整 rule 对象，replace 语义统一用 add；remove 幂等） |
-| 客户端协商 | `clientProtocolVersion: 3` | **必须** `4`；服务端遇 `< 4` reject + close 4002 |
-| v3 客户端兼容 | — | **不兼容**，干净切换（同 v2→v3 理由） |
-
-要点：
-- **脚本不进 ProjectState**（scripting.md D7）——`ProjectState.PROTOCOL_VERSION` 仍为 3 是**有意为之**：
-  该常量只描述 project_json schema（v4 未改其形态），且仅作序列化输出、无导入校验。v2/v3 两次升版
-  恰逢 ProjectState schema 变化才同步 bump，本次不变。
-- 脚本 op **不进画布 undo/redo**（scripting.md §4.3；alias/schedule/rail 族同例）。
-- `script.*` patch 推送沿用 alias 通道纪律：`StatePatch.version` 取当前 `ProjectState.version` 不写 0
-  （Ultrareview 2026-05-25 #17）；一墙一活跃 session（byWall 排他锁），单 session push 等价全墙广播。
-
----
-
-## v4 → v5 / v6 / v7 变更总览（0.7.1 / 0.7.3）
-
-0.7.1 起脚本系统连续扩充，每次都干净切换业务协议版本（`Protocol.SUPPORTED_MIN = MAX` 同步提升）。**这些变更只动 Trigger / Action 的 wire 多态联合形态，不新增 op 族、不改信封壳、不改 ProjectState schema。**
-
-| 版本 | 范围 | wire union 变化 |
-|---|---|---|
-| **v5**（0.7.1） | 3 个新触发器（`rightClickWall` / `playerLeaveRange` / `playerQuit`）+ 有界循环「重复 N 次」动作 | Trigger union 新增 3 种；Action union 新增 `repeat`（带 count + body） |
-| **v6**（tween，0.7.3） | 补间动画包裹积木 | Action union 新增 `tweenBlock`（`durationMs` + `easing` + `body`）；契约见 `docs/scripting-tween.md` |
-| **v7**（0.7.3） | 备选积木批（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗等） | Action union 扩充若干内置积木 |
-
-> Trigger / Action 的完整 wire 多态形态（type 判别 + 扁平字段）以 `docs/scripting.md §2.2/§2.3` 及各分版设计稿（`scripting-0.7.1.md` / `scripting-0.7.2.md` / `scripting-0.7.3.md` / `scripting-tween.md`）为权威；本协议文档只记录版本号边界。
+- **信封壳 `Envelope.v` 恒为 2**：以上升版均只动 business protocol（`client_v` / `accepted_v`），不改信封字段（`v / op / id / ts / payload`）。
+- **要点（v3+ 共同纪律）**：脚本 op **不进画布 undo/redo**（scripting.md §4.3；alias/schedule/rail 族同例）；`script.*` patch 推送 `StatePatch.version` 取当前 `ProjectState.version` 不写 0；一墙一活跃 session（byWall 排他锁），单 session push 等价全墙广播。
+- Trigger / Action 的完整 wire 多态形态（type 判别 + 扁平字段）以 `docs/scripting.md §2.2/§2.3` 及各分版设计稿（`scripting-0.7.1.md` / `scripting-0.7.2.md` / `scripting-0.7.3.md` / `scripting-tween.md`）为权威。
 
 ---
 
@@ -140,7 +89,7 @@
 GET /api/session/:token HTTP/1.1
 ```
 
-响应 200（**M15.4 P0-Web-2 起精简**）：
+响应 200——**仅 `{ ok, playerName, wsUrl }` 三字段**：
 
 ```json
 {
@@ -150,7 +99,7 @@ GET /api/session/:token HTTP/1.1
 }
 ```
 
-> **M15.4 协议变更（2026-05-16）**：预握手响应从全量元数据精简到 `{ ok, playerName, wsUrl }` 三字段。理由：HTTP 响应可被同源页面 / 浏览器历史 / 代理缓存嗅探，把 `sessionId / wall / mapIds / templates / palette` 这种敏感元数据放 HTTP 等于扩大攻击面。改为 token consume 后只确认"会话存在 + WS 入口位置"，所有敏感初始化数据通过 WS `ready` 帧下发（见 §3.2）。`templates` / `palette` / `fonts` / `wall` / `mapIds` 等全部移到 `ready` payload。
+> **为什么只回三字段**：HTTP 响应可被同源页面 / 浏览器历史 / 代理缓存嗅探，把 `sessionId / wall / mapIds / templates / palette` 这种敏感元数据放 HTTP 等于扩大攻击面。故 token consume 后只确认"会话存在 + WS 入口位置"，所有敏感初始化数据（`templates` / `palette` / `fonts` / `wall` / `mapIds` 等）通过 WS `ready` 帧下发（见 §3.2）。
 
 响应 401：token 无效/过期（JSON `{ "error": "AUTH_FAILED" }`）。响应 409：会话已占用 / CLOSING（JSON `{ "error": "SESSION_CLOSED" }`）。
 
@@ -235,13 +184,11 @@ GET /api/session/:token HTTP/1.1
 | `scripts` | ScriptRule[] | 当前 wall 全部脚本规则快照（0.7.0）；wall=null 或 store 未配 → `[]` |
 | `railBinding` | object? | 当前 wall 的铁路绑定 `{ wallId, lineId, stationId?, direction? }`（0.4.5）；未绑定 → `null` |
 
-> **M16-P6.2 协议字段**：ready 携带 `accepted_v: number`（服务端实际接受的业务协议版本，= 协商的 `client_v`）。前端收到 ready 后做「accepted_v == CLIENT_V」断言，不一致则**主动 close 4002 并停止重连**（`wsClient.handleReady`，比原 console.warn 更严格）。
+> **`accepted_v` 断言**：ready 携带 `accepted_v: number`（服务端实际接受的业务协议版本，= 协商的 `client_v`）。前端收到 ready 后做「accepted_v == CLIENT_V」断言，不一致则**主动 close 4002 并停止重连**（`wsClient.handleReady`）。
 
-> **2026-05-14**：ready payload 字段 `publishedAt` 改名 `lockedAt`；新增 `ownerUuid`（wall.owner_uuid） + `selfUuid`（当前 session 玩家）让前端判 `isOwner = selfUuid === ownerUuid`。详见 CLAUDE.md `§lock-state`。
+> **`variables` 字段 schema**：`variables: VariableDto[]` 携带当前 wall **可见**的变量快照（`listVisibleToWall`，按 namespace 形态判定可见性，含 system/schedule/scoreboard/papi，不依赖 byWall 倒排索引），前端无需额外 HTTP round-trip 初始化 VariableStore mirror。`VariableDto` 字段对应 `Variable` record 投影 = `{namespace, key, type, defaultValue?, currentValue?, updatedAt, ttl, source?}`（userglobal 变量另注入 `ownerUuid` / `ownerName`）；**主动剔除**内部倒排索引字段 `referencedByWalls`（防泄露 peer wallId 元数据）。`type` 走 Jackson 默认枚举 name 序列化：`"STRING" | "NUMBER" | "BOOLEAN" | "COLOR"`。`null` 字段被 `NON_NULL` inclusion 略去。
 
-> **0.4.0-P2-F（2026-05-19）**：ready payload 新增 `variables: VariableDto[]` 字段，携带当前 wall **可见**的变量快照（0.4.0 bugfix Bug 1 起改用 `listVisibleToWall`，按 namespace 形态判定可见性，含 system/schedule/scoreboard/papi，不再依赖 byWall 倒排索引），前端无需额外 HTTP round-trip 初始化 VariableStore mirror。`VariableDto` 字段对应 `Variable` record 投影 = `{namespace, key, type, defaultValue?, currentValue?, updatedAt, ttl, source?}`（0.4.3 起 userglobal 变量另注入 `ownerUuid` / `ownerName`）；**主动剔除**内部倒排索引字段 `referencedByWalls`（防泄露 peer wallId 元数据）。`type` 走 Jackson 默认枚举 name 序列化：`"STRING" | "NUMBER" | "BOOLEAN" | "COLOR"`。`null` 字段被 `NON_NULL` inclusion 略去。
-
-> **M6 决策（2026-05-11）**：`templates` 字段一次性全量下发，不走单独 `template.list` op。理由：5 个内置模板每个 ~1-2KB，合计 5-10KB；服主自定义模板少（v1 阶段 < 50KB），WS 单帧足够。未来若模板数量爆炸（v2 模板包生态）再切 index + on-demand `template.fetch`。
+> **`templates` 全量下发**：`templates` 字段随 ready 一次性全量下发，不走单独 `template.list` op（内置模板每个 ~1-2KB，服主自定义模板少，WS 单帧足够）。
 
 4. 失败 → `error` + WS close（见 §6 close 码）
 
@@ -885,7 +832,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 前端 ─── { op: "wall.unlock", id: "c-43" }
                                            ← { op: "ack", id: "c-43",
                                                payload: { locked: false } }
-> 注意：M15.1 P0-2 起 `lockedAt: null` 改为显式 `locked: false`（避免 JsonInclude.NON_NULL 全局策略把字段吞掉导致前端收空对象）。
+> 注意：unlock 回 `locked: false`（显式布尔），**不用** `lockedAt: null`——`JsonInclude.NON_NULL` 全局策略会把 null 字段吞掉导致前端收空对象。
 
 # 玩家关闭浏览器
 前端 ─── { op: "cancel", id: "c-99" }
@@ -894,8 +841,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 （服务端释放 session/wand；wall 数据 + ItemFrame 完整保留，下次可 /canvas open <wall_id> 继续）
 ```
 
-> M5.5 前的 `commit` op 流程（转 PERMANENT、写 sign_records、补池、close 1000）已废止。  
-> 2026-05-14 起 `wall.publish` / `wall.unpublish` 也废止，由 `wall.lock` / `wall.unlock` 取代；MC 命令族不再含 publish/unpublish 子命令。
+> `commit` / `wall.publish` / `wall.unpublish` op 均已废止；锁定由 `wall.lock` / `wall.unlock`（§5.7）取代，MC 命令族不再含 publish/unpublish 子命令。
 
 ---
 

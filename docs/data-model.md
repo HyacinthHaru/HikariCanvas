@@ -1,19 +1,10 @@
 # 数据模型
 
-**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14；代码对齐回填 · 2026-06-14（迁移至 V017）；**`.canvas` 导入导出回填 · 2026-06-19（0.8 Part A 实装）**；**SVG 矢量导入 + fillRule 回填 · 2026-06-21（0.8 Part B 实装）**
-**适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式（0.8 实装）、迁移策略
+**适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式、迁移策略
 
-本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。
+本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。当前 DB schema 演进到 **V017**（V009 跳号未落地脚本）；`.canvas` 工程文件格式（§4）+ SVG 矢量导入已在 0.8 实装（契约总纲见 `docs/import-export.md`）。
 
-> **代码对齐说明（2026-06-14）**：本文档与当前代码（`plugin/src/main/resources/db-migrations/` 最高 V017、`plugin/src/main/java/moe/hikari/canvas/storage/`、`deploy/FrameDeployer.java`）逐条核对回填。当前 DB schema 已演进到 **V017**（V009 跳号未落地脚本）。
-
-> **`.canvas` 导入导出回填（2026-06-19）**：`.canvas` 工程文件格式（§4）已在 **0.8 Part A 落地**（契约总纲见 `docs/import-export.md`）。导出为纯前端（`web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 打 zip）；导入为后端 `POST /api/project/import`（包 `moe.hikari.canvas.canvasfile` + `web/ProjectImportHandler`）。`.canvas spec = 1`。本节据已实装代码逐条核对回填。
-
-> **SVG 矢量导入 + fillRule 回填（2026-06-21）**：0.8 Part B（SVG → 原生元素导入）**已实装**（B0-B5）。`PathElement` 新增 `fillRule` 可空字段（`"nonzero"`/`"evenodd"`/`null`，无 DB migration，见下）；SVG 导入为纯前端（`web/src/lib/svg/`），后端零新解析器，产物经现有 `element.add` op 写入。`assets/icons/*.svg`（用于 IconElement 的用户自定义 SVG 图标导出/导入路径）仍**未实装**——解包白名单接纳该路径但摄入器（`AssetIngest`）只处理 `.png`，SVG 图标的写入/摄入属后续版本。
-
-> **M5.5 重构（2026-04-27）**：合并 `drafts` + `sign_records` → 单一 `walls` 表；`pool_maps.state` 由三态收为两态（FREE/RESERVED）；废止 commit 流程，新增 `published_at` 标签。
-
-> **lock-state 重设计（2026-05-14）**：DB 列 `walls.published_at` 名字保留（避免 SQL 迁移风险），但语义改为 **lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定（前端 readonly UI）。`walls.owner_uuid` 为作者权限依据。ItemFrame PDC `published_at` 不再写（FrameDeployer.markPublished 砍）；现有 PDC 数据保留无害。下文 §2.X 涉及 published 语义的描述均按"lock 时间戳"理解。详见 CLAUDE.md `§lock-state` + `docs/architecture.md §3.6`。
+> **lock-state 语义**：DB 列 `walls.published_at` 名字保留（避免 SQL 迁移风险），语义为 **lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定（前端 readonly UI）。`walls.owner_uuid` 为作者权限依据。ItemFrame PDC 不再写 `published_at`。下文 §2.X 涉及 published 语义的描述均按"lock 时间戳"理解。详见 CLAUDE.md `§lock-state` + `docs/architecture.md §3.6`。
 
 ---
 
@@ -172,19 +163,11 @@ v2 形态:
 }
 ```
 
-**执行时机选项：**
+**执行时机：启动期全库扫描**（onEnable 时一次性把所有 `wall.project_json` 升级 + 回写；透明、无 read-time 开销，之后所有运行期代码只需处理 v2 形态）。HikariCanvas 单服 walls 数量上限通常 < 200（典型创意服 ~50），扫描 200 条 JSON 反序列化耗时 < 200ms，可接受。
 
-- **A 启动期全库扫描**：M8 onEnable 时一次性把所有 wall.project_json 升级 + 回写。优：透明、无 read-time 开销；缺：启动慢（按 walls 数量）
-- **B Lazy（每次 load 时升）**：WallRepo.loadById 内置检测 + 即时升 + 写回。优：启动快；缺：分布式写、首次 load 多一次 UPDATE
-- **C 双路径**：服务端代码同时识别 v1/v2 形态（构造 ProjectState 时归一化），不写回 DB。优：零迁移；缺：代码长期维护 v1 兼容
+- **失败容忍**：若某条 `project_json` 解析失败 → log warn 跳过该 wall（不让坏数据卡启动）；启动后该 wall `/canvas open` 时仍会 lazy 再尝试。
 
-**决策（2026-05-13）：** **选 A**。理由：
-- 简单、确定
-- HikariCanvas 单服 walls 数量上限通常 < 200（典型创意服 ~50）；扫描 200 条 JSON 反序列化耗时 < 200ms，可接受
-- A 之后所有运行期代码只需要处理 v2 形态，长期维护成本最低
-- 失败容忍：若某条 project_json 解析失败 → log warn 跳过该 wall（不让坏数据卡启动）；启动后该 wall `/canvas open` 时仍会 lazy 再尝试
-
-**实施位置：** `MigrationRunner` V006 + `WallRepo.migrateProjectJsonV1ToV2` 静态方法。M8-B 子阶段实施。
+**实施位置：** `MigrationRunner` V006 + `WallRepo.migrateProjectJsonV1ToV2` 静态方法。
 
 ### 2.4.2 `project_json` v2 → v3 加法（0.6）
 
@@ -757,32 +740,6 @@ plugin/src/main/resources/db-migrations/
 - **pool_maps schema 变更**：必须保持既有 map 数据可用
 - **walls.project_json 结构变更**：对应 `protocol.md §7` 升版；迁移脚本或启动时懒转换
 - **模板 spec 升版**：旧模板文件保持可加载，读取时 `adapter.transform(oldYaml) → currentSpec`
-
-### 6.5 M5.5 V005 整体重置（2026-04-27）
-
-M5.5 重构涉及 schema 大改：合并 `drafts` + `sign_records` → `walls`、`pool_maps` 删 `sign_id` 列。决策按 V005 一次性 drop + recreate 而不是 alter：
-
-```sql
--- V005__walls_unified.sql （实际脚本要点，已核对）
-DROP TABLE IF EXISTS sign_records;
-DROP TABLE IF EXISTS drafts;
-DROP INDEX IF EXISTS idx_pool_sign;
-DROP INDEX IF EXISTS idx_pool_session;
--- SQLite 不支持 DROP COLUMN（V005 当时），pool_maps 走「建新表 → drop 旧表」recreate
--- 去掉 sign_id 列（不是 ALTER DROP COLUMN）：
-CREATE TABLE pool_maps_new (...);   -- 新 schema，无 sign_id
-DROP TABLE pool_maps;
--- （注：脚本以 pool_maps_new 承接；列对齐细节见 db-migrations/V005__walls_unified.sql）
-
-CREATE TABLE walls (...);  -- 完整 §2.4 schema
-CREATE INDEX/UNIQUE INDEX ...;
-```
-
-理由：M5.5 阶段无生产数据，drafts/sign_records 累计 < 50 行；走 alter + 数据迁移成本远高于 drop + 重建。生产发布前最后一次允许 drop。后续任何破坏性变更必须走严格 alter 迁移。
-
-### 6.5.1 V010 DROP COLUMN refcount（M16-P6.3，2026-05-16）
-
-`image_uploads.refcount` 列在 V010 中 DROP。理由：M15.4 起 refcount 改为运行期从 `project_json` JSON_EACH 算（避免 element.add / element.delete 时多一次 DB UPDATE 引入事务竞争）；refcount 列变成 stale 数据源，留着误导调试。Pre-release（0.x SNAPSHOT）阶段允许激进 DROP COLUMN，符合 §6.6.1 规则。首次 stable（≥1.0.0）发版后类似清理必须走"逻辑删除"路径。
 
 ### 6.4 备份与恢复
 
