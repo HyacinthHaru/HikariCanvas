@@ -1,6 +1,6 @@
 # 部署指南
 
-**状态：** 0.8.1-SNAPSHOT · 2026-06-22（命令族 / 功能已远超 M7：变量系统 / 铁路 / 时间轴 / 墙脚本均已合入）
+**状态：** 0.8.1-SNAPSHOT · 2026-06-22
 **适用范围：** 把 HikariCanvas 部署给真实玩家（单机测试 → 内网 LAN → 公网服务器）
 
 本文档讲三件事：
@@ -240,7 +240,7 @@ i18n:
 - 任意时刻一个 wall 最多一个活跃 session。第二个玩家试图 `/canvas open` 同一 wall 会收 `WALL_OCCUPIED`。
 - alias 是全服唯一（`UNIQUE INDEX idx_walls_alias`）。两个玩家不能用同一别名。
 - 玩家**没有归属概念**：任何有 `canvas.edit` 权限的玩家都能开任何 wall（用 wall_id）。`canvas.delete.own` 限定只能删自己创建的。`canvas.delete.any` 删任意（默认 op 才有）。
-- wall 的 ItemFrame `BlockBreakEvent` / `HangingBreakEvent` 由 `canvas.modify` 权限统一保护——无该权限的玩家拒绝破坏。详见 `docs/security.md §5`。（2026-05-14 lock 状态重设计后，「已发布墙全员拒绝破坏」语义已废止；`/canvas publish` / `/canvas unpublish` 命令一并砍除——锁定/解锁现由网页编辑器 TopBar 的 Lock 按钮触发，走 WS `wall.lock` / `wall.unlock` op，owner-only，且仅作前端只读冻结，不影响游戏内破坏行为。）
+- wall 的 ItemFrame `BlockBreakEvent` / `HangingBreakEvent` 由 `canvas.modify` 权限统一保护——无该权限的玩家拒绝破坏。详见 `docs/security.md §5`。锁定 / 解锁由网页编辑器 TopBar 的 Lock 按钮触发，走 WS `wall.lock` / `wall.unlock` op，owner-only，且仅作前端只读冻结，不影响游戏内破坏行为。
 
 > 玩家身份认证（HomePage 点击直接打开、归属隔离、多人协作）是单独的 milestone，尚未实现。当前公网部署**应该把 HomePage `/api/walls` 视为对内网开放**——所有人都看得到所有人的画清单。
 
@@ -280,9 +280,9 @@ i18n:
 | `map-pool.per-world` | `{}` | 可选 per-world 预热 map 数（多世界服务器） | ✅ |
 | `throttle.projection-fps` | `5` | 服务端推送 MC 地图的 fps | ✅ |
 | `throttle.input-rate-per-second` / `.input-burst` | `20` / `40` | 单玩家 WS op 速率 + 突发上限 | ✅ |
-| `rendering.adaptive-fps.*` | 见 config | 0.4.0 方案 B 自适应渲染（秒级变量墙的高频间隔 + 主动推帧） | ✅ |
+| `rendering.adaptive-fps.*` | 见 config | 自适应渲染（秒级变量墙的高频间隔 + 主动推帧） | ✅ |
 | `templates.auto-reload-on-startup` / `.preview-cache-seconds` / `.max-per-player` | `true` / `300` / `20` | 模板自动 reload + 缩略图缓存 TTL + 每玩家发布上限 | 部分（模板内容可 `/canvas reload templates`） |
-| `images.max-size-kb` / `.allowed-mime` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / png·jpeg·webp / `1024` / `16` / `50` / `1024` | M13 图片上传：单文件 / MIME / 降采样 / 单墙 / 每日 / 全服磁盘配额 | ✅ |
+| `images.max-size-kb` / `.allowed-mime` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / png·jpeg·webp / `1024` / `16` / `50` / `1024` | 图片上传：单文件 / MIME / 降采样 / 单墙 / 每日 / 全服磁盘配额 | ✅ |
 | `import.canvas-max-mb` / `.canvas-max-entry-mb` / `.canvas-max-total-mb` | `10` / `10` / `50` | 0.8 `.canvas` 工程导入限额（防 zip 炸弹） | ✅ |
 | `security.token-rate-limit.per-minute` | `10` | 每 IP 每分钟 WS auth token 尝试次数（防暴破） | ✅ |
 | `i18n.default-locale` | `en_us` | 玩家客户端语言无对应 lang 文件时的兜底语言（内置 `en_us` / `zh_cn`；可加自定义文件） | ❌（`/canvas reload config` 即时生效） |
@@ -301,13 +301,13 @@ i18n:
 
 > **配套契约：** `docs/data-model.md §6.6` 定义 stable 发版（≥1.0.0）后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。当前 `0.8.1-SNAPSHOT` 仍处 pre-release。
 
-### 8.1 升级前
+### 9.1 升级前
 
 1. 停服（保证 `data.db` / world 文件不变）
 2. **手动备份**：`cp -r plugins/HikariCanvas plugins/HikariCanvas.bak.<date>`
 3. 备份 `data.db`（即便 plugin 自动 backup 也建议手工冗余）
 
-### 8.2 升级中
+### 9.2 升级中
 
 4. 替换 jar 文件
 5. 启动服务器
@@ -317,13 +317,13 @@ i18n:
 7. 看 server log 确认 `DB schema current version: <newVersion>` 和
    `✓ V<NNN> applied` 信息
 
-### 8.3 升级后
+### 9.3 升级后
 
 8. 跑 `/canvas list` 验证 walls 数据完整
 9. 至少 1 个玩家打开旧 wall 验证编辑流程正常
 10. 24h 后无问题再删 backup（disk 充裕则保留 30d）
 
-### 8.4 回滚
+### 9.4 回滚
 
 如启动失败 / migration 异常：
 

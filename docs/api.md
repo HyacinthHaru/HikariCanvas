@@ -1,7 +1,7 @@
 # HikariCanvas Plugin Push API
 
 > 让外部插件（铁路 / PvP / 商店 / ...）实时向 HikariCanvas wall 推送动态变量。
-> 引入版本：**0.4.0**（M28-P4）；接口稳定性：**实验性**（pre-1.0，详见 §10）。
+> 引入版本：**0.4.0**；接口稳定性：**实验性**（pre-1.0，详见 §10）。
 
 ---
 
@@ -97,7 +97,7 @@ HikariCanvas plugin = (HikariCanvas) Bukkit.getPluginManager().getPlugin("Hikari
 HikariCanvasAPI api = plugin.getAPI();
 ```
 
-**优先选方式 A**：方式 B 要求你 `import moe.hikari.canvas.HikariCanvas`，未来 HikariCanvas 主类重构会破坏你的编译；方式 A 只依赖 `moe.hikari.canvas.api.*` 包，该包受 shadowJar relocate exclude 保护（M28-P4-T），路径稳定。
+**优先选方式 A**：方式 B 要求你 `import moe.hikari.canvas.HikariCanvas`，未来 HikariCanvas 主类重构会破坏你的编译；方式 A 只依赖 `moe.hikari.canvas.api.*` 包，该包受 shadowJar relocate exclude 保护，路径稳定。
 
 ### 2.3 完整接入示例
 
@@ -597,9 +597,9 @@ public void onPluginEnable(PluginEnableEvent ev) {
 
 ## 11. 升级 / 向后兼容承诺
 
-- **pre-1.0**（`0.x.y`，含当前 `0.3.0-SNAPSHOT`）：API 可能小破坏，会在 CHANGELOG / journal.md 通告
+- **pre-1.0**（`0.x.y` 预发布阶段）：API 可能小破坏，会在 CHANGELOG / journal.md 通告
 - **1.0 起**：API 接口冻结，新方法只追加不修改；现有方法签名 / 行为保持向后兼容
-- **包路径**：`moe.hikari.canvas.api.*` 是公开 SPI 包，受 shadowJar relocate `exclude` 保护（M28-P4-T），跨 HC 版本路径稳定
+- **包路径**：`moe.hikari.canvas.api.*` 是公开 SPI 包，受 shadowJar relocate `exclude` 保护，跨 HC 版本路径稳定
 - **VarType enum**：新增类型走追加（不重排顺序 / 不删除现有）
 
 如有破坏性变更，**总在 minor 版本号上调**（如 `0.4.x` → `0.5.0`）+ journal.md 突出标注。
@@ -610,7 +610,7 @@ public void onPluginEnable(PluginEnableEvent ev) {
 
 - `docs/dynamic-data.md` —— 0.4.0 完整动态数据设计（§4 是本 API 的设计源）
 - `docs/protocol.md` —— WebSocket 协议（编辑器与后端的通讯，与本 API 无直接关系）
-- `docs/architecture.md §13` —— 动态画板架构纪律（P-1 / P-2 / P-3 三种路径）
+- `docs/architecture.md §13` —— 动态画板架构纪律
 - `docs/security.md` —— 权限节点 + 审计日志
 - `examples/demo-train-plugin/` / `examples/demo-score-plugin/` —— 可运行示例插件
 
