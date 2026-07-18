@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Java 21 (Temurin)
         uses: actions/setup-java@v4
@@ -29,14 +29,14 @@ jobs:
           java-version: 21
 
       - name: Setup Node 22 LTS
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Frontend - install deps + test + build
         working-directory: web
@@ -74,7 +74,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: plugin/build/libs/HikariCanvas-${{ env.VERSION }}.jar
           generate_release_notes: true

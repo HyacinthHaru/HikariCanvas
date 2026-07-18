@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Java 21 (Temurin)
         uses: actions/setup-java@v4
@@ -28,7 +28,7 @@ jobs:
           java-version: 21
 
       - name: Setup Node 22 LTS
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           # CLAUDE.md：Node 25 偶卡 vue-tsc，CI 锁 22 LTS 稳定。
@@ -37,7 +37,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         # 自带 Gradle Dependency Cache + Build Cache + Configuration Cache。
         # 不需要显式 actions/cache（用户偏好"原生"）。
 
@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Java 25 (Temurin)
         uses: actions/setup-java@v4
@@ -106,7 +106,7 @@ jobs:
           java-version: 25
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Compile main against Paper 26.2 API
         # paperApi=26.2.build.+ 追最新 26.2 dev bundle（26.2 目前仍在 beta，无 -stable；.+ 通配 beta）；
