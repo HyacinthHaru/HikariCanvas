@@ -36,7 +36,7 @@ dependencies {
     paperweight.paperDevBundle(paperApi)
 
     implementation("io.javalin:javalin:7.1.0")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.1")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.2")
     // PacketEvents 是 GPL-3.0 —— compileOnly 不打包（否则组合 jar 会被 GPL 传染，冲突本项目 MIT）。
     // 服主单独装 PacketEvents 插件（paper-plugin.yml 声明为必装依赖）。
