@@ -42,7 +42,9 @@ class BenchmarkPipelineSmokeTest {
         }
 
         // 渲染自包含 HTML（含每个真实 scene id；scene id 均 word-safe，转义后原样）
-        String html = HtmlReportRenderer.render(report);
+        var msgs = new ac.haru.hikaricanvas.i18n.Messages(Logger.getLogger("test"));
+        msgs.loadBuiltIn();
+        String html = HtmlReportRenderer.render(report, msgs);
         assertTrue(html.contains("<!DOCTYPE html>"));
         assertFalse(html.contains("<script src"), "报告须自包含、零外链");
         for (SceneResult r : report.scenes()) {

@@ -322,7 +322,7 @@ public final class BenchmarkSubCommand {
                 .writeValue(outDir.resolve(REPORT_FILE).toFile(), report);
         Files.writeString(outDir.resolve(SUMMARY_FILE), renderReportText(selector, report));
         // 自包含 HTML 报告（内联 SVG 图 + 50mspt 公式交互计算器），服主浏览器打开即看。
-        Files.writeString(outDir.resolve(HTML_FILE), HtmlReportRenderer.render(report));
+        Files.writeString(outDir.resolve(HTML_FILE), HtmlReportRenderer.render(report, messages));
 
         // 回主线程：发彩色摘要 + 保存路径
         runOnMain(() -> {

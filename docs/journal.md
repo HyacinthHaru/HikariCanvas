@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-07-18 · 0.9.12 benchmark 报告 HTML i18n（1.0 前最后一处 i18n 缺口）
+
+`/canvas bench` 的 `report.html`（`HtmlReportRenderer`）此前硬编码中文——`summary.txt` 在 0.8.3 已 i18n，report.html 遗留。按 `default-locale` 渲染（报告是磁盘文件、无"某玩家"，与 summary.txt 同口径）。版本 0.9.11 → 0.9.12-SNAPSHOT。
+
+**做法（照 summary.txt 范式）**：
+- `HtmlReportRenderer.render(report)` → `render(report, Messages messages)`；内部 `loc = messages.defaultLocale()` + `t = messages.rawOrNull`（**raw 不走 MiniMessage**——故 lang 值可含 `&times;`/`&nbsp;`/`&divide;` HTML 实体不被当标签吃）。`t` 穿进各 append helper。
+- 35 处输出串 → `command.bench.report-html.*`（46 key，中英各 46）；`<html lang>` 按 loc（zh→`zh-CN` / en→`en`）；GC 行 / 公式的 `<b>`/实体结构留 Java、文本留 lang（prefix/mid/suffix 拆键）。
+- `BudgetFormula` 不动；disclaimer 走 lang key。**JS 计算器块无中文**（标签在 HTML `<label>` 里）不用动；`SvgBarChart` 不用动（图表标题从 HtmlReportRenderer 传入）。
+- 调用方 `BenchmarkSubCommand:325` 传 `messages`；2 测试（`BenchmarkP3Test` / `BenchmarkPipelineSmokeTest`）改 `new Messages(log) + loadBuiltIn()`（**关键坑**：`new Messages(log)` 构造器不加载 lang，`byLocale` 空 → key 回退 key 名；须 `loadBuiltIn()`）；P3 的 `保守` 断言→语言无关 `class="disclaimer"`（测试默认 en_us 渲染英文 disclaimer）。
+
+**验证**：clean 全量 `:plugin:test` **2151 全绿**（`LangFileParityTest` 校验 46 key 中英对齐 + 2 benchmark 测试渲染通过）+ shadowJar `HikariCanvas-0.9.12-SNAPSHOT.jar`。**i18n 完整性到此彻底齐**（benchmark 报告是最后一处）。
+
+---
+
 ## 2026-07-18 · 0.9.11 PacketEvents 不打包（GPL-3.0 合规）+ 第三方许可 NOTICE
 
 1.0 前许可审查发现:**PacketEvents 是 GPL-3.0（copyleft），而它是 `implementation` 打进 shadow jar**——分发的组合 jar 被 GPL 传染，和项目 MIT LICENSE 冲突（不能把打包 GPL 的 jar 当 MIT 分发）。用户拍板：不打包，改外置必装插件依赖。版本 0.9.10 → 0.9.11-SNAPSHOT。

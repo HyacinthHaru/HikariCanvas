@@ -100,7 +100,9 @@ class BenchmarkP3Test {
                 BenchmarkConfig.quick(), List.of(sr), List.of(pe),
                 new GcSummary(2, 10), 0.5);
 
-        String html = HtmlReportRenderer.render(report);
+        var msgs = new ac.haru.hikaricanvas.i18n.Messages(java.util.logging.Logger.getLogger("test"));
+        msgs.loadBuiltIn();
+        String html = HtmlReportRenderer.render(report, msgs);
 
         // 自包含 HTML5
         assertTrue(html.contains("<!DOCTYPE html>"));
@@ -117,6 +119,6 @@ class BenchmarkP3Test {
 
         // 关键 section：50mspt 计算器输入 + disclaimer
         assertTrue(html.contains("<input"), "budget 计算器输入");
-        assertTrue(html.contains("保守"), "disclaimer 展示");
+        assertTrue(html.contains("class=\"disclaimer\""), "disclaimer 展示（语言无关：默认 en_us 渲染）");
     }
 }

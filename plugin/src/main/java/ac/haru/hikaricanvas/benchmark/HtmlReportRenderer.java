@@ -1,5 +1,7 @@
 package ac.haru.hikaricanvas.benchmark;
 
+import ac.haru.hikaricanvas.i18n.Messages;
+
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -9,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * 把聚合好的 {@link BenchmarkReport} 渲染成<b>完全自包含</b>的 HTML5 报告。
@@ -16,8 +19,10 @@ import java.util.Map;
  * <p>报告只摊开描述性测量（环境 / per-scene 分位 /
  * per-element 边际 / GC），结论部分交给服主用<b>自己</b>的 mspt 预算在内联 JS 计算器里实时试算。
  * 计算器的算法精确镜像 {@link BudgetFormula#availableMsPerSecond} /
- * {@link BudgetFormula#projectedMaxWalls}，并随身展示 {@link BudgetFormula#DISCLAIMER}（保守下界
- * 口径，避免被当成硬上限）。</p>
+ * {@link BudgetFormula#projectedMaxWalls}，并随身展示 disclaimer（保守下界口径，避免被当成硬上限）。</p>
+ *
+ * <p>文案按 {@code messages.defaultLocale()} 从 {@code command.bench.report-html.*} 取（rawOrNull，
+ * 不走 MiniMessage —— 报告是磁盘文件、无"某玩家"，与 summary.txt 同口径；lang 值可含 HTML 实体）。</p>
  *
  * <p>纯 headless：仅从 report 拼 String，无任何 Bukkit / Player / PacketEvents / NMS，无外部资源
  * （无 CDN script、无远端 link、无 web font）—— 全部内联 {@code <style>} + {@code <script>}。
@@ -35,37 +40,49 @@ public final class HtmlReportRenderer {
     /**
      * 渲染完整自包含 HTML 报告文档（以 {@code <!DOCTYPE html>} 开头）。
      *
-     * @param report 聚合产出的报告（数据源）
+     * @param report   聚合产出的报告（数据源）
+     * @param messages i18n 中枢；文案按 {@code messages.defaultLocale()} 渲染
      * @return 完整 HTML 文档字符串，可直接落盘成 {@code report.html}
      */
-    public static String render(BenchmarkReport report) {
+    public static String render(BenchmarkReport report, Messages messages) {
+        String loc = messages.defaultLocale();
+        Function<String, String> t = k -> {
+            String s = messages.rawOrNull(loc, "command.bench.report-html." + k);
+            return s == null ? k : s;
+        };
+
         StringBuilder sb = new StringBuilder(64 * 1024);
         sb.append("<!DOCTYPE html>\n");
-        sb.append("<html lang=\"zh-CN\">\n");
-        appendHead(sb);
+        sb.append("<html lang=\"").append(htmlLang(loc)).append("\">\n");
+        appendHead(sb, t);
         sb.append("<body>\n<main class=\"wrap\">\n");
 
-        appendHeader(sb, report);
-        appendEnvCard(sb, report);
-        appendConfigCard(sb, report);
-        appendSceneTable(sb, report);
-        appendSceneChart(sb, report);
-        appendPerElementChart(sb, report);
-        appendGcLine(sb, report);
-        appendCalculator(sb, report);
-        appendFooter(sb);
+        appendHeader(sb, report, t);
+        appendEnvCard(sb, report, t);
+        appendConfigCard(sb, report, t);
+        appendSceneTable(sb, report, t);
+        appendSceneChart(sb, report, t);
+        appendPerElementChart(sb, report, t);
+        appendGcLine(sb, report, t);
+        appendCalculator(sb, report, t);
+        appendFooter(sb, t);
 
         sb.append("</main>\n</body>\n</html>\n");
         return sb.toString();
     }
 
+    /** locale id（如 {@code zh_cn} / {@code en_us}）→ HTML {@code lang} 属性。 */
+    private static String htmlLang(String loc) {
+        return (loc != null && loc.toLowerCase(Locale.ROOT).startsWith("zh")) ? "zh-CN" : "en";
+    }
+
     // ---------------------------------------------------------------- head
 
-    private static void appendHead(StringBuilder sb) {
+    private static void appendHead(StringBuilder sb, Function<String, String> t) {
         sb.append("<head>\n");
         sb.append("<meta charset=\"utf-8\">\n");
         sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-        sb.append("<title>HikariCanvas 性能测试报告</title>\n");
+        sb.append("<title>").append(esc(t.apply("title"))).append("</title>\n");
         sb.append("<style>\n").append(css()).append("\n</style>\n");
         sb.append("</head>\n");
     }
@@ -114,26 +131,27 @@ public final class HtmlReportRenderer {
 
     // ---------------------------------------------------------------- header
 
-    private static void appendHeader(StringBuilder sb, BenchmarkReport report) {
+    private static void appendHeader(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         String when = TIME_FMT.format(Instant.ofEpochMilli(report.generatedAtMillis()));
-        sb.append("<h1>HikariCanvas 性能测试报告</h1>\n");
-        sb.append("<p class=\"sub\">生成时间 ").append(esc(when))
-                .append(" &middot; 报告格式 v").append(report.schemaVersion()).append("</p>\n");
+        sb.append("<h1>").append(esc(t.apply("title"))).append("</h1>\n");
+        sb.append("<p class=\"sub\">").append(esc(t.apply("header-generated"))).append(' ').append(esc(when))
+                .append(" &middot; ").append(esc(t.apply("header-format"))).append(report.schemaVersion())
+                .append("</p>\n");
     }
 
     // ---------------------------------------------------------------- env
 
-    private static void appendEnvCard(StringBuilder sb, BenchmarkReport report) {
+    private static void appendEnvCard(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         EnvInfo env = report.env();
         String xmx = env.maxHeapMb() < 0 ? "?" : String.format(Locale.ROOT, "%d MB", env.maxHeapMb());
-        sb.append("<section class=\"card\">\n<h2>运行环境</h2>\n<dl class=\"kv\">\n");
-        kv(sb, "Java 版本", env.javaVersion());
-        kv(sb, "系统 / 架构", env.osName() + " / " + env.osArch());
-        kv(sb, "可用处理器", String.valueOf(env.availableProcessors()));
-        kv(sb, "最大内存", xmx);
-        kv(sb, "内存回收方式", env.gcNames().isEmpty() ? "?" : String.join(", ", env.gcNames()));
+        sb.append("<section class=\"card\">\n<h2>").append(esc(t.apply("env-title"))).append("</h2>\n<dl class=\"kv\">\n");
+        kv(sb, t.apply("env-java"), env.javaVersion());
+        kv(sb, t.apply("env-os"), env.osName() + " / " + env.osArch());
+        kv(sb, t.apply("env-cpu"), String.valueOf(env.availableProcessors()));
+        kv(sb, t.apply("env-mem"), xmx);
+        kv(sb, t.apply("env-gc"), env.gcNames().isEmpty() ? "?" : String.join(", ", env.gcNames()));
         sb.append("</dl>\n");
-        sb.append("<p class=\"note\">这些数字只代表这台机器。换一台服务器、改内存大小后要重新测一遍。</p>\n");
+        sb.append("<p class=\"note\">").append(esc(t.apply("env-note"))).append("</p>\n");
         sb.append("</section>\n");
     }
 
@@ -143,17 +161,17 @@ public final class HtmlReportRenderer {
 
     // ---------------------------------------------------------------- config
 
-    private static void appendConfigCard(StringBuilder sb, BenchmarkReport report) {
+    private static void appendConfigCard(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         BenchmarkConfig cfg = report.config();
-        sb.append("<section class=\"card\">\n<h2>压测配置</h2>\n<dl class=\"kv\">\n");
-        kv(sb, "测量轮数", String.valueOf(cfg.measuredIterations()));
-        kv(sb, "预热轮数", String.valueOf(cfg.warmupIterations()));
-        kv(sb, "帧率", joinInts(cfg.fpsValues()));
-        kv(sb, "观看人数", joinInts(cfg.viewerCounts()));
-        kv(sb, "场景选择", cfg.sceneSelector());
-        kv(sb, "空白画面耗时", String.format(Locale.ROOT, "%.3f ms", report.blankBaselineMs()));
+        sb.append("<section class=\"card\">\n<h2>").append(esc(t.apply("config-title"))).append("</h2>\n<dl class=\"kv\">\n");
+        kv(sb, t.apply("config-measured"), String.valueOf(cfg.measuredIterations()));
+        kv(sb, t.apply("config-warmup"), String.valueOf(cfg.warmupIterations()));
+        kv(sb, t.apply("config-fps"), joinInts(cfg.fpsValues()));
+        kv(sb, t.apply("config-viewers"), joinInts(cfg.viewerCounts()));
+        kv(sb, t.apply("config-selector"), cfg.sceneSelector());
+        kv(sb, t.apply("config-blank"), String.format(Locale.ROOT, "%.3f ms", report.blankBaselineMs()));
         sb.append("</dl>\n");
-        sb.append("<p class=\"note\">帧率和观看人数只用在下方的计算器里，不影响上面测出来的渲染耗时。</p>\n");
+        sb.append("<p class=\"note\">").append(esc(t.apply("config-note"))).append("</p>\n");
         sb.append("</section>\n");
     }
 
@@ -173,13 +191,19 @@ public final class HtmlReportRenderer {
 
     // ---------------------------------------------------------------- scene table
 
-    private static void appendSceneTable(StringBuilder sb, BenchmarkReport report) {
-        sb.append("<section class=\"card\">\n<h2>各场景耗时</h2>\n");
+    private static void appendSceneTable(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
+        sb.append("<section class=\"card\">\n<h2>").append(esc(t.apply("scenes-title"))).append("</h2>\n");
         sb.append("<table>\n<thead>\n<tr>")
-                .append("<th>场景</th>")
-                .append("<th>渲染 一般</th><th>偏慢</th><th>最慢</th>")
-                .append("<th>调色板 一般</th><th>偏慢</th><th>最慢</th>")
-                .append("<th>内存 MB/轮</th><th>元素数</th><th>地图块数</th>")
+                .append("<th>").append(esc(t.apply("th-scene"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-render-typical"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-slower"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-slowest"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-palette-typical"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-slower"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-slowest"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-mem"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-elements"))).append("</th>")
+                .append("<th>").append(esc(t.apply("th-tiles"))).append("</th>")
                 .append("</tr>\n</thead>\n<tbody>\n");
         for (SceneResult s : report.scenes()) {
             Percentiles r = s.rasterizeMs();
@@ -205,7 +229,7 @@ public final class HtmlReportRenderer {
 
     // ---------------------------------------------------------------- scene chart
 
-    private static void appendSceneChart(StringBuilder sb, BenchmarkReport report) {
+    private static void appendSceneChart(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         List<SceneResult> sorted = new ArrayList<>(report.scenes());
         sorted.sort(Comparator.comparingDouble((SceneResult s) -> s.rasterizeMs().p95()).reversed());
         List<SvgBarChart.Bar> bars = new ArrayList<>(sorted.size());
@@ -213,13 +237,13 @@ public final class HtmlReportRenderer {
             bars.add(new SvgBarChart.Bar(s.sceneId(), s.rasterizeMs().p95()));
         }
         sb.append("<section class=\"card\">\n");
-        sb.append(SvgBarChart.horizontal("各场景渲染耗时（偏慢情况，毫秒）", bars, "ms"));
+        sb.append(SvgBarChart.horizontal(t.apply("chart-scene"), bars, "ms"));
         sb.append("\n</section>\n");
     }
 
     // ---------------------------------------------------------------- per-element chart
 
-    private static void appendPerElementChart(StringBuilder sb, BenchmarkReport report) {
+    private static void appendPerElementChart(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         List<PerElementCost> costs = report.perElement();
         if (costs == null || costs.isEmpty()) {
             return;
@@ -237,44 +261,46 @@ public final class HtmlReportRenderer {
             bars.add(new SvgBarChart.Bar(label, c.marginalMsPerElement()));
         }
         sb.append("<section class=\"card\">\n");
-        sb.append(SvgBarChart.horizontal("每个元素的额外耗时（毫秒/个）", bars, "ms"));
+        sb.append(SvgBarChart.horizontal(t.apply("chart-element"), bars, "ms"));
         sb.append("\n</section>\n");
     }
 
     // ---------------------------------------------------------------- gc
 
-    private static void appendGcLine(StringBuilder sb, BenchmarkReport report) {
+    private static void appendGcLine(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         GcSummary gc = report.gc();
-        sb.append("<section class=\"card\">\n<h2>内存回收</h2>\n");
-        sb.append("<p>测试期间共回收内存 <b>").append(gc.collectionCount()).append("</b> 次，累计耗时 <b>")
-                .append(gc.collectionTimeMs()).append("</b> 毫秒。</p>\n");
+        sb.append("<section class=\"card\">\n<h2>").append(esc(t.apply("gc-title"))).append("</h2>\n");
+        sb.append("<p>").append(esc(t.apply("gc-prefix"))).append("<b>").append(gc.collectionCount())
+                .append("</b>").append(esc(t.apply("gc-mid"))).append("<b>").append(gc.collectionTimeMs())
+                .append("</b>").append(esc(t.apply("gc-suffix"))).append("</p>\n");
         sb.append("</section>\n");
     }
 
     // ---------------------------------------------------------------- calculator
 
-    private static void appendCalculator(StringBuilder sb, BenchmarkReport report) {
+    private static void appendCalculator(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         BudgetFormula.Inputs d = BudgetFormula.Inputs.defaults();
-        sb.append("<section class=\"card\">\n<h2>性能预算计算器</h2>\n");
+        sb.append("<section class=\"card\">\n<h2>").append(esc(t.apply("calc-title"))).append("</h2>\n");
         sb.append("<p class=\"sub\" style=\"margin-bottom:14px\">")
-                .append("填入你服务器的参数，估算每个场景大概能放多少面墙。</p>\n");
+                .append(esc(t.apply("calc-intro"))).append("</p>\n");
 
         // 表单
         sb.append("<div class=\"calc-form\">\n");
-        numberInput(sb, "calc-mspt", "每 tick 预算（毫秒）", d.msptBudgetMs(), "1", "0");
-        numberInput(sb, "calc-tps", "目标 tps", d.tps(), "1", "1");
-        numberInput(sb, "calc-share", "分给本插件的性能份额（%）", d.mainThreadSharePct(), "1", "0");
-        numberInput(sb, "calc-fps", "目标帧率", d.fps(), "1", "1");
+        numberInput(sb, "calc-mspt", t.apply("calc-mspt"), d.msptBudgetMs(), "1", "0");
+        numberInput(sb, "calc-tps", t.apply("calc-tps"), d.tps(), "1", "1");
+        numberInput(sb, "calc-share", t.apply("calc-share"), d.mainThreadSharePct(), "1", "0");
+        numberInput(sb, "calc-fps", t.apply("calc-fps"), d.fps(), "1", "1");
         sb.append("</div>\n");
 
-        // 公式 + disclaimer
-        sb.append("<p class=\"formula\">可用预算 = 每 tick 预算 &times; tps &times; 份额% &nbsp;&nbsp;|&nbsp;&nbsp;")
-                .append("能放的墙数 &asymp; 可用预算 &divide; (单墙偏慢耗时 &times; 帧率)</p>\n");
-        sb.append("<p class=\"disclaimer\">").append(esc(BudgetFormula.DISCLAIMER)).append("</p>\n");
+        // 公式 + disclaimer（formula 含 HTML 实体，rawOrNull 原样输出，不 esc）
+        sb.append("<p class=\"formula\">").append(t.apply("calc-formula")).append("</p>\n");
+        sb.append("<p class=\"disclaimer\">").append(esc(t.apply("disclaimer"))).append("</p>\n");
 
         // 结果表
         sb.append("<table style=\"margin-top:16px\">\n<thead>\n<tr>")
-                .append("<th>场景</th><th>单墙偏慢耗时（毫秒）</th><th>能放的墙数</th>")
+                .append("<th>").append(esc(t.apply("th-scene"))).append("</th>")
+                .append("<th>").append(esc(t.apply("calc-th-cost"))).append("</th>")
+                .append("<th>").append(esc(t.apply("calc-th-walls"))).append("</th>")
                 .append("</tr>\n</thead>\n<tbody>\n");
         for (SceneResult s : report.scenes()) {
             sb.append("<tr data-scene=\"").append(esc(s.sceneId())).append("\">")
@@ -342,8 +368,8 @@ public final class HtmlReportRenderer {
 
     // ---------------------------------------------------------------- footer
 
-    private static void appendFooter(StringBuilder sb) {
-        sb.append("<p class=\"foot\">HikariCanvas 性能测试</p>\n");
+    private static void appendFooter(StringBuilder sb, Function<String, String> t) {
+        sb.append("<p class=\"foot\">").append(esc(t.apply("footer"))).append("</p>\n");
     }
 
     // ---------------------------------------------------------------- helpers
