@@ -38,7 +38,9 @@ dependencies {
     implementation("io.javalin:javalin:7.1.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.2")
-    implementation("com.github.retrooper:packetevents-spigot:2.13.0")
+    // PacketEvents 是 GPL-3.0 —— compileOnly 不打包（否则组合 jar 会被 GPL 传染，冲突本项目 MIT）。
+    // 服主单独装 PacketEvents 插件（paper-plugin.yml 声明为必装依赖）。
+    compileOnly("com.github.retrooper:packetevents-spigot:2.13.0")
 
     // 持久化（M2-T2）
     implementation("org.xerial:sqlite-jdbc:3.53.0.0")
@@ -600,8 +602,8 @@ tasks {
         //
         // 注意事项：
         // - org.sqlite 含 JNI native lib（路径硬编码），relocate 会导致 native load 失败 → 不动
-        // - PacketEvents（implementation）打进 shadow jar 但不 relocate：它靠 NMS 反射 + 全局单例
-        //   PacketEvents.getAPI()，改包名会破坏其内部；wrapper 类也按原包路径被引用
+        // - PacketEvents 是 compileOnly + 必装插件依赖（paper-plugin.yml），不进 shadow jar：
+        //   它是 GPL-3.0，打包会污染本项目 MIT 授权；服主单独装 PacketEvents 插件（它自负 init/terminate）
         // - mergeServiceFiles 必须保留：jackson modules / jdbi plugins / jetty 都靠
         //   META-INF/services 走 ServiceLoader 注册
         relocate("com.fasterxml.jackson", "ac.haru.hikaricanvas.shaded.jackson")

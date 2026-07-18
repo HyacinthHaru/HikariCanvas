@@ -13,6 +13,8 @@
 
 ## 1. 单机 / 内网最小可用
 
+> ⚠️ **必装前置依赖：PacketEvents 插件。** HikariCanvas 靠 PacketEvents 把渲染画面以地图数据包推送到游戏内地图（核心投影通道），且**不打包它**——PacketEvents 是 GPL-3.0，打包会污染本插件的 MIT 授权。**先从 <https://modrinth.com/plugin/packetevents> 或 SpigotMC 下载 PacketEvents 插件、丢进 `plugins/`，再装 HikariCanvas。** 没装 PacketEvents 时 HikariCanvas 会拒绝加载（Paper 报缺少必需依赖）。
+
 把 jar 扔进 `plugins/`、重启服务器，第一次启动会自动生成 `plugins/HikariCanvas/config.yml`。GitHub Releases 上的发布 jar 约 90 MB（体积偏大是因为内置了 20+ 套字体，由后端统一供给给编辑器，无需服主另配字体；属正常，首次启动稍慢也正常）。
 
 > **支持的服务端版本**：同一份 jar 同时支持 **Paper 1.21.11 ~ 26.x**（26.1 自 0.9.5、26.2 自 0.9.10——各随 PacketEvents 升级）。Java 要求跟随 MC 版本——跑 1.21.x 用 **Java 21**，跑 26.x 用 **Java 25**（Minecraft 26 自身的要求）。插件不碰 NMS，全靠公开 Bukkit API + PacketEvents，所以一份包就能跨大版本，无需为不同版本下不同包。

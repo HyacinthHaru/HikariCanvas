@@ -1,11 +1,21 @@
 name: HikariCanvas
-version: '0.9.10-SNAPSHOT'
+version: '0.9.11-SNAPSHOT'
 main: ac.haru.hikaricanvas.HikariCanvas
 api-version: '1.21'
 authors:
   - HaruHyacinth
 description: Text signage plugin with TTF font rendering, template system, and a live web editor.
 website: https://github.com/HyacinthHaru/HikariCanvas
+
+# 硬依赖：PacketEvents 是 GPL-3.0，不打包进本 jar（避免污染本项目 MIT 授权）。
+# 服主须单独安装 PacketEvents 插件（https://modrinth.com/plugin/packetevents 或 SpigotMC）。
+# 用途：MapPacketSender 用 WrapperPlayServerMapData 把渲染像素推给玩家——核心投影通道，必装。
+dependencies:
+  server:
+    packetevents:
+      load: BEFORE
+      required: true
+      join-classpath: true
 
 # 权限节点（完整节点表见 docs/security.md §5）
 # M2 demo 阶段：编辑 / 提交类权限给所有玩家，管理类保留 op

@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-07-18 · 0.9.11 PacketEvents 不打包（GPL-3.0 合规）+ 第三方许可 NOTICE
+
+1.0 前许可审查发现:**PacketEvents 是 GPL-3.0（copyleft），而它是 `implementation` 打进 shadow jar**——分发的组合 jar 被 GPL 传染，和项目 MIT LICENSE 冲突（不能把打包 GPL 的 jar 当 MIT 分发）。用户拍板：不打包，改外置必装插件依赖。版本 0.9.10 → 0.9.11-SNAPSHOT。
+
+**修法（改成外置必装插件依赖）**：
+- `build.gradle.kts`：PacketEvents `implementation` → `compileOnly`（编译期用、不进 jar）。
+- `paper-plugin.yml`：加 `dependencies.server.packetevents`（`required: true` + `load: BEFORE` + `join-classpath: true`；PE 独立插件名确认 = `packetevents` 小写，查其 plugin.yml）。
+- `HikariCanvas`：删自建 PE 生命周期——onLoad 的 `SpigotPacketEventsBuilder.build + load()` / onEnable `init()` / onDisable `terminate()` / 2 import。**单独插件模式下 PE 插件自负 init/terminate**，我们只用 `PacketEvents.getAPI()`（`MapPacketSender` 不变）。
+- 唯一用途 = `MapPacketSender` 推地图数据包（`WrapperPlayServerMapData`，核心投影通道），故 `required` 硬依赖。测试/benchmark 零真实 PE 引用（benchmark 只在注释提），改 compileOnly 不破坏测试。
+
+**新建 `THIRD-PARTY-LICENSES.md`**：22 字体（全 SIL OFL 1.1）+ FA Free 6.7.2（CC BY 4.0 / OFL / MIT）+ 后端（Javalin/Jackson/HikariCP/JDBI/Caffeine/SQLite-JDBC 全 Apache 2.0）+ 前端（Vue/Konva/lexical/polygon-clipping/fontkit 全 MIT/ISC）。**唯一 GPL 依赖 PacketEvents 已外置、不在此清单**。留一条 OFL 后续项：把各字体 `OFL.txt` 也拷进 jar 达成 in-artifact 合规。
+
+**验证**：`clean` 全量 compileJava（compileOnly 编译过）+ `:plugin:test` **2151 全绿** + shadowJar `HikariCanvas-0.9.11-SNAPSHOT.jar` **里 0 个 `retrooper/packetevents` 类**（un-bundle 证明，MIT jar 无 GPL 代码）。**⚠️ 部署破坏性变更**：0.9.10-rc.1（打包 PE）升 0.9.11 后，**服主必须先装 PacketEvents 插件**否则 HikariCanvas 拒绝加载。`docs/deployment §1` 加必装前置说明。**「装了 PE 插件后能否正常加载 + 投影」需用户真服验证**（本地无法起真服）。
+
+---
+
 ## 2026-07-18 · 文档版本指针同步（连做 0.9.8-0.9.10 后收尾）
 
 连做去味（0.9.8）/ 包名重命名（0.9.9）/ PacketEvents（0.9.10）三版后，同步活文档里滞后的版本指针 + 补 0.9.9 漏网的一处包名。**纯文档一致性，无代码/契约改动。**

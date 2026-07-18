@@ -1,7 +1,5 @@
 package ac.haru.hikaricanvas;
 
-import com.github.retrooper.packetevents.PacketEvents;
-import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import ac.haru.hikaricanvas.command.BenchmarkSubCommand;
 import ac.haru.hikaricanvas.command.CanvasCommand;
@@ -177,12 +175,6 @@ public final class HikariCanvas extends JavaPlugin {
             new java.util.ArrayList<>();
 
     @Override
-    public void onLoad() {
-        PacketEvents.setAPI(SpigotPacketEventsBuilder.build(this));
-        PacketEvents.getAPI().load();
-    }
-
-    @Override
     public void onEnable() {
         // 整段装配包进 try/catch(Throwable)。任一步失败（缺 palette.json /
         // migration 失败 / schema 损坏 / 磁盘问题）时，catch 逆序清理已就位资源
@@ -193,7 +185,6 @@ public final class HikariCanvas extends JavaPlugin {
         // 重置 shuttingDown——上一次 onEnable 失败走 cleanupResources 会置 true，
         // PlugMan 重新 enable 时若不复位会让 mapPoolLeakTask 入口永久 short-circuit。
         shuttingDown = false;
-        PacketEvents.getAPI().init();
 
         // IIORegistry 防御 — 注销已知有 CVE 历史 / 不需要的 ImageIO reader。
         // 我们 ImageStorage 只用 PNG / JPEG（"webp" 保留在白名单里只是占位——标准 JDK 无
@@ -1067,7 +1058,7 @@ public final class HikariCanvas extends JavaPlugin {
      * 独立兜异常 + 全字段 null-guard，重复调用安全（已 null 的步骤跳过）。
      *
      * <p>顺序固化：先置 shuttingDown + cancel 异步周期任务 → daemon → reaper → webServer →
-     * upload → imageStorage → database.close → 恢复 IIORegistry → PacketEvents.terminate。
+     * upload → imageStorage → database.close → 恢复 IIORegistry。
      * database.close 必须在引用 DB 的任务 / daemon 之后。</p>
      */
     private void cleanupResources() {
@@ -1161,7 +1152,7 @@ public final class HikariCanvas extends JavaPlugin {
         }
         // 恢复 onEnable 从进程级 IIORegistry 注销的 ImageReaderSpi——否则同 JVM
         // 别的插件读 GIF/BMP/TIFF 在本插件（热）卸载后永久失败。registerServiceProvider 即重新
-        // 可用（ordering 不还原无妨）。逐个 try/catch 防一个失败拖垮后续 + PacketEvents.terminate。
+        // 可用（ordering 不还原无妨）。逐个 try/catch 防一个失败拖垮后续。
         if (!deregisteredImageReaders.isEmpty()) {
             try {
                 javax.imageio.spi.IIORegistry registry =
@@ -1182,11 +1173,6 @@ public final class HikariCanvas extends JavaPlugin {
                         "IIORegistry restore failed (non-fatal)", e);
             }
             deregisteredImageReaders.clear();
-        }
-        try {
-            PacketEvents.getAPI().terminate();
-        } catch (Exception ignored) {
-            // terminate 在未 init 时可能抛；忽略
         }
     }
 
