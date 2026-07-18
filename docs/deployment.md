@@ -1,6 +1,6 @@
 # 部署指南
 
-**状态：** 0.8.1-SNAPSHOT · 2026-06-22
+**状态：** 0.9.10-SNAPSHOT · 2026-07-18
 **适用范围：** 把 HikariCanvas 部署给真实玩家（单机测试 → 内网 LAN → 公网服务器）
 
 本文档讲三件事：
@@ -299,7 +299,7 @@ i18n:
 
 ## 9. 版本升级 SOP（stable 1.0.0+）
 
-> **配套契约：** `docs/data-model.md §6.6` 定义 stable 发版（≥1.0.0）后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。当前 `0.8.1-SNAPSHOT` 仍处 pre-release。
+> **配套契约：** `docs/data-model.md §6.6` 定义 stable 发版（≥1.0.0）后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。当前仍处 pre-release。
 
 ### 9.1 升级前
 

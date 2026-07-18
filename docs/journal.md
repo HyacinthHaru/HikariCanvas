@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-07-18 · 文档版本指针同步（连做 0.9.8-0.9.10 后收尾）
+
+连做去味（0.9.8）/ 包名重命名（0.9.9）/ PacketEvents（0.9.10）三版后，同步活文档里滞后的版本指针 + 补 0.9.9 漏网的一处包名。**纯文档一致性，无代码/契约改动。**
+- **CLAUDE.md**：路线表补 0.9.1-0.9.10 行；「当前最新」`0.8.1 已完工`→`已发 v0.9.10-rc.1`（标识表包名早已随 0.9.9 改 `ac.haru.hikaricanvas`）。
+- **deployment / troubleshooting** 状态行 `0.8.1-SNAPSHOT·2026-06-22` → `0.9.10-SNAPSHOT·2026-07-18`；deployment §302 pre-release 句去掉会过时的版本 pin。
+- **development.md**：`group="moe.hikari"`（0.9.9 带引号无冒号、漏网）→ `ac.haru`；jar 产物名 + git tag 示例 → 0.9.10 / rc.1。
+- **api.md** 接入示例版本 + **variables.md**「覆盖到 X 行为」→ 当前 / 版本无关。
+- **有意保留旧名**：`docs/superpowers/plans/*`（归档会话记录）+ `journal.md`（历史）+ `README.md`（作者自管，其版本指针仍 `v0.9.6-rc.1`，待作者重写 README 时一并更新）。
+
+---
+
 ## 2026-07-17 · 0.9.10 PacketEvents 2.12.2 → 2.13.0（修 Paper 26.2 无法加载）
 
 用户 26.2 服（Leaves 26.2）onEnable 崩：`SpigotReflectionUtil.NMS_ITEM_STACK_CLASS is null`——与 0.9.5 在 26.1.2 上的崩**同一类**：PacketEvents 内部 NMS 反射在新 MC 版本上找不到类。2.12.2 只到 26.1，不认识 26.2 的布局。版本号 0.9.9 → 0.9.10-SNAPSHOT。

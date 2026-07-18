@@ -461,10 +461,15 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 | **0.7.4** | **前端体验优化批**（6 个体验 bug：小窗口响应式 + 画布平移 + 变量 Picker 根因等 + 新 OverflowMenu 组件；设计 `docs/superpowers/plans/2026-06-15-0.7.4-frontend-ux.md`） | ~10h | ✅ **完工（2026-06-15）**（前端 LeftTools/TopBar/OverflowMenu/usePanScroll/CanvasZoomBar/VariablePicker/interpolator/pickerLogic + 后端 VariableProvider/RailScheduleProvider/VariableMetadataHandler；版本号 0.7.3→**0.7.4-SNAPSHOT**；后端全绿 / 前端 1334） |
 | **0.8** | **工程导入导出（.canvas）+ SVG 矢量导入**（Part A：`.canvas` 导出/导入 + 6 层安全栈 + 脚本纳入；Part B：SVG→可编辑元素，fillRule 双端 / viewBox 映射 / d 归一化(M/L/Q/C/Z) / gradient 降维 / 内嵌位图 / 复杂度上限；设计总纲 `docs/import-export.md`，D1-D10 已固化 2026-06-16） | ~120h | ✅ **完工（2026-06-20）**（Part A 19 task ✅ 2026-06-17 / Part B 20 task ✅ 2026-06-20，全程 subagent-driven + controller 独立 review 签名；前端 1421 全绿 / 后端全绿。**注：0.8 功能在 `0.7.4-SNAPSHOT` 版本串下完成，2026-06-22 的 0.8.1 修复批时已 bump 到 `0.8.1-SNAPSHOT`（见下方 0.8.1 行）**） |
 | **0.8.1** | **独立 ultrareview P0-P2 修复批**（26 项：21 真修 + 4 防御性硬化 + 1 误报）：WS auth 竞态 / ScriptRunner ThreadLocal 泄漏 / AssetIngest 线程泄漏 / MapPool 绑定原子化 / mask 越界(科学计数法绕过) / 协议 fill 严格校验 / SVG skew·负值·hex 颜色 / 渐变 stop=1.0 / Bayer·Palette 兜底 / FrameDeployer 空框 / rail 跨墙绑定 / HistoryStack 时钟回退 等；**首次把版本串从 `0.7.4-SNAPSHOT` bump 到 `0.8.1-SNAPSHOT`**） | — | ✅ **完工（2026-06-22）**（commit `65a0218`；后端 BUILD SUCCESSFUL + 2 新测试 PaletteLut/ElementValidatorMaskBounds / 前端 1443 全绿） |
+| **0.9.1-0.9.6** | **1.0 前 6 块硬闸**（0.9.1 数据契约闸 WAL 备份+forward-only 守卫 / 0.9.2 可观测性 `/canvas diagnose` / 0.9.3 安全收尾 SECURITY.md+限流断连+dependabot / 0.9.4 发布验证 release.yml 首个 GitHub Release / 0.9.5 多版本 Paper 26.x〔PacketEvents 2.12.2〕 / 0.9.6 MapPool·WallRestorer 测试守卫） | — | ✅ 2026-06-23~07-02 |
+| **0.9.7** | **脚本校验报错 i18n**（~100 条 ScriptRuleValidator→ValidationError，按编辑器 locale 渲染） | — | ✅ 2026-07-16 |
+| **0.9.8** | **去 AI 味专项**（用户可见文案+全部代码注释+全部 docs 的内部阶段编号/自辩护/过程叙事，零逻辑改动；总纲文档结构手术删过程段；ultrareview 4 档案→docs/archive/；12 task subagent-driven） | — | ✅ 2026-07-17 |
+| **0.9.9** | **包名重命名** `moe.hikari.canvas`→`ac.haru.hikaricanvas`（趁 pre-1.0 最后窗口；插件名 HikariCanvas 不变→PDC/数据兼容；412 rename + group ac.haru + relocate） | — | ✅ 2026-07-17 |
+| **0.9.10** | **PacketEvents 2.12.2→2.13.0**（修 Paper 26.2 无法加载；已发 `v0.9.10-rc.1`，用户实测 26.2 起服正常） | — | ✅ 2026-07-18 |
 | M30 | 图层 mask / group / smart object（PS-style）— 独立大版本 | 30h+ | 远期 |
 | 弃 | B-advanced DCEL 覆盖 4% Live Paint 用例 — 38h+ 性价比低 | — | 不做 |
 
-> **当前最新（2026-06-22）**：**0.8.1 已完工**（0.8 = Part A 工程导入导出 + Part B SVG 矢量导入；0.8.1 = 26 项 ultrareview P0-P2 修复批，commit `65a0218`）。`build.gradle.kts` 版本串已 bump 到 `0.8.1-SNAPSHOT`（0.8 当初在 `0.7.4-SNAPSHOT` 串下开发，0.8.1 时首次 bump）。**逐条进度一律以 `docs/journal.md` 为准（倒序，每会话一条），本表 / 里程碑叙事 / 各设计文档分期表可能滞后。**
+> **当前最新（2026-07-18）**：**已发 `v0.9.10-rc.1`**（prerelease；PacketEvents 2.13.0 修 Paper 26.2 加载，用户实测 26.2 起服正常）。版本串 `0.9.10-SNAPSHOT`，包名 `ac.haru.hikaricanvas`（0.9.9 从 `moe.hikari.canvas` 改）。**0.9.x = 1.0 前打磨**：6 块硬闸（0.9.1-0.9.6）+ 脚本校验 i18n（0.9.7）+ 去 AI 味（0.9.8）+ 包名重命名（0.9.9）+ 26.2 支持（0.9.10）。1.0 前剩：README/文档作者亲写 + de-rc → `1.0.0` + 发布说明 + cut `v1.0.0` stable。**逐条进度一律以 `docs/journal.md` 为准（倒序，每会话一条），本表 / 里程碑叙事 / 各设计文档分期表可能滞后。**
 
 > **0.5.0+ 详细设计** 见 `docs/dynamic-data.md §13`（版本顺序依赖、Benchmark 4 原则）+ `docs/scripting.md`（0.7.0 总纲）。**原"一画布二选一"已作废（2026-06-10，scripting.md D2）**：脚本是上层（条件分支 + 副作用），时间轴是被编排的素材（脚本可 playTimeline），同画布共存；0.6 三种触发器原样保留给简单场景。
 
