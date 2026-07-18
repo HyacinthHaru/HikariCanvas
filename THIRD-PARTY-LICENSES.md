@@ -76,7 +76,7 @@ which keeps its original package for JNI native loading).
 | Library | Version | License |
 |---|---|---|
 | Javalin | 7.1.0 | Apache 2.0 |
-| Jackson (databind + dataformat-yaml) | 2.18.2 | Apache 2.0 |
+| Jackson (databind + dataformat-yaml) | 2.22.1 | Apache 2.0 |
 | SnakeYAML (via jackson-dataformat-yaml) | — | Apache 2.0 |
 | Caffeine | 3.1.8 | Apache 2.0 |
 | JDBI (jdbi3-core, jdbi3-sqlite) | 3.52.1 | Apache 2.0 |

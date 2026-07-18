@@ -28,7 +28,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 | 插件描述文件 | **`paper-plugin.yml`**（不用 `plugin.yml` 旧格式） |
 | 本地测试服 | `./gradlew runServer`（paperweight-userdev 提供） |
 
-其余：HikariCP + JDBI + SQLite、**jackson-dataformat-yaml（2.18.2，与 jackson-databind 同版本）**、JUnit 5 + MockBukkit、AWT/Graphics2D。
+其余：HikariCP + JDBI + SQLite、**jackson-dataformat-yaml（2.22.1，与 jackson-databind 同版本；两模块必须对齐——dependabot 曾只升 databind、须手动补 yaml）**、JUnit 5 + MockBukkit、AWT/Graphics2D。
 
 > **M6 决策（2026-05-11）**：YAML 解析改用 jackson-dataformat-yaml，不用 SnakeYAML。理由：项目已全面 Jackson 化（ProjectState / PatchOp / WallRepo 都靠 Jackson），同 ObjectMapper 配置 + record 自动 mapping 可省 ~300 行手工 YAML→Map 转换 + 校验。安全考量上 jackson-dataformat-yaml 默认即关闭 polymorphic typing，不存在 SnakeYAML SafeConstructor 才解决的 `!!java/*` tag RCE 面（见 `docs/security.md §4.3`）。
 

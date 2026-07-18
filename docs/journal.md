@@ -5,6 +5,14 @@
 
 ---
 
+## 2026-07-18 · 合并 dependabot（10 PR）+ Jackson 模块对齐 2.22.1
+
+用户合并 dependabot 10 PR：`jackson-databind` 2.18.2→2.22.1 + 5 个 GitHub Actions 升级（checkout 4→7 / setup-node 4→6 / gradle/actions 4→6 / action-gh-release 2→3）。controller `git merge origin/main`（无冲突——dependabot 碰 `plugin/build.gradle.kts` + workflows，本地 0.9.12 碰 benchmark/lang/root build.gradle.kts，文件不重叠）。
+- **Jackson 模块对齐**：dependabot 只升了 databind，`jackson-dataformat-yaml` 仍 2.18.2 → 版本 skew。CLAUDE.md 要求两模块同版本（2.18 yaml 模块跑在被 databind 传递升级到 2.22 的 jackson-core 上有风险）→ 手动补齐 `jackson-dataformat-yaml` → 2.22.1。`THIRD-PARTY-LICENSES.md` + CLAUDE.md 版本同步。
+- 验证：`clean` 全量 `:plugin:test` **2151 全绿**（Jackson 2.22.1 无回归）+ shadowJar。
+
+---
+
 ## 2026-07-18 · 0.9.12 benchmark 报告 HTML i18n（1.0 前最后一处 i18n 缺口）
 
 `/canvas bench` 的 `report.html`（`HtmlReportRenderer`）此前硬编码中文——`summary.txt` 在 0.8.3 已 i18n，report.html 遗留。按 `default-locale` 渲染（报告是磁盘文件、无"某玩家"，与 summary.txt 同口径）。版本 0.9.11 → 0.9.12-SNAPSHOT。
