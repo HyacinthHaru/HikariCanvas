@@ -94,13 +94,19 @@ public final class MigrationRunner {
                     .mapTo(Integer.class)
                     .one();
             log.info("DB schema current version: " + currentVersion);
+            // 首装（currentVersion==0）要从 V001 一路迁到最新：空库没有既有数据可保护，跳过
+            // per-migration 备份——否则首次加载会在 dataFolder 里堆十几套无意义的
+            // data.db.pre-V*.bak（+ -wal/-shm）。自动备份只为「升级已有数据的库」在某个迁移失败
+            // 时兜底；全新库迁移失败直接删 data.db 重来即可，无数据可丢。
+            boolean freshInstall = currentVersion == 0;
 
             for (Migration m : MIGRATIONS) {
                 if (m.version <= currentVersion) continue;
                 if (m.version > maxVersion) break; // MIGRATIONS 按版本升序，可提前 break
                 log.info("Applying migration V" + String.format("%03d", m.version) + " ...");
                 // 可选自动备份（WAL 安全）：在 per-migration 事务之前、用同一连接 checkpoint。
-                if (autoBackup && dbFilePath != null) {
+                // 首装跳过（freshInstall）——见上方注释。
+                if (autoBackup && dbFilePath != null && !freshInstall) {
                     tryBackup(h, m.version);
                 }
                 // 每个 migration 包事务；DDL 失败时回滚不留半态。

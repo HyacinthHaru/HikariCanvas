@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-07-19 · 0.9.13 首装跳过逐迁移备份 + 清资源文件内部代号
+
+用户 0.9.12 首次加载发现 dataFolder 里堆了十几套 `data.db.pre-V*.bak`（+ `-wal`/`-shm`），另注意到 `config.yml` 仍有 `M16 P1.3` 等内部代号。两件 1.0 前打磨合并为 0.9.13。版本 `0.9.12 → 0.9.13-SNAPSHOT`。
+
+**① 首装跳过逐迁移备份（行为修复）**
+- 根因：`MigrationRunner.runUpTo` 在每个待执行迁移前无条件 `tryBackup`。空库首装（`currentVersion==0`）要从 V001 一路迁到 V017，于是每步都备份一次 → 堆十几套无意义 `.bak`（空库根本没有既有数据可保护）。
+- 修法：`boolean freshInstall = currentVersion == 0`，首装跳过 per-migration 备份（`autoBackup && dbFilePath != null && !freshInstall`）。自动备份只为「升级已有数据的库」在某迁移失败时兜底；全新库迁移失败直接删 `data.db` 重来，无数据可丢。
+- 加测试 `freshInstall_skipsPerMigrationBackups`（空库跑全量 V001-V017 → 0 个 `.bak` + `wall_scripts` 表已建）。**现有 `data.db.pre-V*.bak*` 可直接删**（`data.db` 活库不受影响）。
+
+**② 清资源文件内部开发代号（服主可见文件去黑话）**
+- `config.yml`：8 处注释（`M16 P6.5`/`P1.2`/`P1.3` / `M2` / `P2.3` / `M14` / `Phase 1` + `P1.4-P1.6` / `M13` → 剥前缀留正文）。
+- `paper-plugin.yml`：1 处注释（`M2 demo 阶段` → 「默认权限策略」）+ **17 处权限 `description` 版本尾巴**（`（0.4.0-P3-L）` 内部阶段代号 + `（0.4.3）`/`（0.4.4）`/`（0.5.0）`/`（0.7.0）` 版本溯源 → `description` 统一为纯功能说明，保留「危险面」/「wall owner 走 schedule.own」等实际说明；版本溯源信息 journal 里有）。
+- `db-migrations`：8 个 `.sql` 注释（V002-V008/V010：`M5-D6`/`M5.5`/`M8-B`/`M13`/`M14`/`M16 P6.3`/`M15 §architecture` 等 → 剥净；**保留 `v1`/`v2` 协议版本号 + V016 铁路 code 数据示例 `"M2"`**）。
+- 两个 opus 子代理并行清理（config+paper / db-migrations），controller 统一核对：代号残留清零 + ruby YAML 校验 4 文件有效 + 权限节点数不变（44）。
+
+**验证**：全量 `:plugin:test` **BUILD SUCCESSFUL**（备份修复 + 全量 V001-V017 迁移 SQL 完整性双证）+ shadowJar `HikariCanvas-0.9.13-SNAPSHOT.jar` 152 MB。commit + push + 验签后发 `v0.9.13-rc.1`。
+
+---
+
 ## 2026-07-18 · 合并 dependabot（10 PR）+ Jackson 模块对齐 2.22.1
 
 用户合并 dependabot 10 PR：`jackson-databind` 2.18.2→2.22.1 + 5 个 GitHub Actions 升级（checkout 4→7 / setup-node 4→6 / gradle/actions 4→6 / action-gh-release 2→3）。controller `git merge origin/main`（无冲突——dependabot 碰 `plugin/build.gradle.kts` + workflows，本地 0.9.12 碰 benchmark/lang/root build.gradle.kts，文件不重叠）。

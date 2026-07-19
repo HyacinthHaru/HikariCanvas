@@ -1,5 +1,5 @@
 name: HikariCanvas
-version: '0.9.12-SNAPSHOT'
+version: '0.9.13-SNAPSHOT'
 main: ac.haru.hikaricanvas.HikariCanvas
 api-version: '1.21'
 authors:
@@ -18,7 +18,7 @@ dependencies:
       join-classpath: true
 
 # 权限节点（完整节点表见 docs/security.md §5）
-# M2 demo 阶段：编辑 / 提交类权限给所有玩家，管理类保留 op
+# 默认权限策略：编辑 / 提交类权限给所有玩家，管理类保留 op
 permissions:
   canvas.use:
     description: Use any HikariCanvas functionality
@@ -42,7 +42,7 @@ permissions:
     description: Bypass rate limits and canvas size caps
     default: op
   canvas.bench:
-    description: Run the server-side render benchmark (/canvas bench list/run/report/clear)（0.5.0）
+    description: Run the server-side render benchmark (/canvas bench list/run/report/clear)
     default: op
   canvas.upload:
     description: Upload images for use as ImageElement
@@ -102,53 +102,53 @@ permissions:
     description: 使用 /canvas var 命令族
     default: op
   canvas.var.global.create:
-    description: 创建全局用户变量（userglobal/*，跨 wall 共享，0.4.3）
+    description: 创建全局用户变量（userglobal/*，跨 wall 共享）
     default: true
   canvas.var.global.write.own:
-    description: 修改自己创建的全局用户变量值 / type / defaultValue（0.4.3）
+    description: 修改自己创建的全局用户变量值 / type / defaultValue
     default: true
   canvas.var.global.write.any:
-    description: 修改任意全局用户变量（管理员 override，0.4.3）
+    description: 修改任意全局用户变量（管理员 override）
     default: op
   canvas.var.global.delete.own:
-    description: 删除自己创建的全局用户变量（0.4.3）
+    description: 删除自己创建的全局用户变量
     default: true
   canvas.var.global.delete.any:
-    description: 删除任意全局用户变量（管理员 override，0.4.3）
+    description: 删除任意全局用户变量（管理员 override）
     default: op
   canvas.schedule.own:
-    description: 管理自己 wall 的列车 / 公交时刻表（0.4.0-P3-L）
+    description: 管理自己 wall 的列车 / 公交时刻表
     default: true
   canvas.schedule.any:
     description: 管理任意 wall 的时刻表（管理员）
     default: op
   canvas.rail.line.create:
-    description: 创建铁路线路（0.4.4）
+    description: 创建铁路线路
     default: true
   canvas.rail.line.edit.own:
-    description: 编辑自己创建的铁路线路 / 站点 / 车次 / 时刻表（0.4.4）
+    description: 编辑自己创建的铁路线路 / 站点 / 车次 / 时刻表
     default: true
   canvas.rail.line.edit.any:
-    description: 编辑任意铁路线路（管理员，0.4.4）
+    description: 编辑任意铁路线路（管理员）
     default: op
   canvas.rail.line.delete.own:
-    description: 删除自己创建的铁路线路（0.4.4）
+    description: 删除自己创建的铁路线路
     default: true
   canvas.rail.line.delete.any:
-    description: 删除任意铁路线路（管理员，0.4.4）
+    description: 删除任意铁路线路（管理员）
     default: op
   canvas.rail.wall.bind:
-    description: 把 wall 绑定到铁路网络（0.4.4；wall owner 走 schedule.own）
+    description: 把 wall 绑定到铁路网络（wall owner 走 schedule.own）
     default: true
   canvas.script.edit:
-    description: 给自己能打开的墙编排积木脚本（0.7.0）
+    description: 给自己能打开的墙编排积木脚本
     default: true
   canvas.script.trigger.global:
-    description: 使用全服事件触发器（玩家进服/被击杀）（0.7.0）
+    description: 使用全服事件触发器（玩家进服/被击杀）
     default: true
   canvas.script.sound:
-    description: 在脚本里使用"播放声音"积木（0.7.0）
+    description: 在脚本里使用"播放声音"积木
     default: true
   canvas.script.command:
-    description: 在脚本里使用"执行命令模板"积木（0.7.0，危险面）
+    description: 在脚本里使用"执行命令模板"积木（危险面）
     default: op

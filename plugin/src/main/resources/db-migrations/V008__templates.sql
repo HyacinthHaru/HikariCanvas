@@ -1,4 +1,4 @@
--- M14 创意工坊：模板元数据表。
+-- 创意工坊：模板元数据表。
 -- YAML spec 真相仍在 user-templates/<uuid>/<slug>.yml；本表只存元数据（owner / featured /
 -- 排序用），让 registry 扫起来快 + curation/统计简单。
 --

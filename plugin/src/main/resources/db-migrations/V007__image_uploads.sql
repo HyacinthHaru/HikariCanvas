@@ -1,4 +1,4 @@
--- M13 图片上传配额表。
+-- 图片上传配额表。
 -- 按 sha256[:16] 内容寻址；磁盘上对应 plugins/HikariCanvas/uploads/<hash>.png；
 -- 多个 ImageElement.source 可指同一 hash（跨 wall 引用零重复存储）。
 --

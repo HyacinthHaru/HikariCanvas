@@ -1,7 +1,7 @@
--- M8-B（2026-05-13）：给 walls 行加 protocol_version 列，标记 project_json 的形态。
+-- 给 walls 行加 protocol_version 列，标记 project_json 的形态。
 --
--- 1 = v1 扁平 elements（M5.5~M7 期间写入）
--- 2 = v2 layered（M8 起）
+-- 1 = v1 扁平 elements（早期格式）
+-- 2 = v2 layered（分层格式）
 --
 -- 已有行因 DEFAULT 1 自动落到 v1；启动期 WallRepo.migrateAllToV2 扫表把 v1 行
 -- 反序列化（ProjectState.JsonCreator 自动包成 Default Layer）+ 重新序列化回写，

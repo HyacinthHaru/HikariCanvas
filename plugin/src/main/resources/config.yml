@@ -16,14 +16,14 @@ network:
   # 玩家点 /canvas confirm 后看到的 URL 模板。{token} 会被实际 token 替换。
   # 内网默认就是 http://127.0.0.1:8877/?token={token}。
   # 公网部署改为 https://yourdomain.com/?token={token}。
-  # M16 P6.5 安全收口：仅支持 http:// 和 https:// 协议；javascript: / data: / file: /
+  # 安全收口：仅支持 http:// 和 https:// 协议；javascript: / data: / file: /
   # vbscript: 等一律被拒（防止 admin 误配后玩家点 ActionBar 链接执行任意 JS）。
   # URL 中也不允许含换行（CR/LF）。配置不合法 → 启动期 severe log + 回退到内置默认值。
   editor-url: "http://{host}:{port}/?token={token}"
-  # M16 P1.2：WS 连接建立后多少秒内必须完成 auth；超时 → close 4001 auth_timeout。
+  # WS 连接建立后多少秒内必须完成 auth；超时 → close 4001 auth_timeout。
   # 防御未认证 socket 长挂占连接的 DoS 路径。范围 1-60。
   ws-auth-timeout-seconds: 5
-  # M16 P1.3：WS upgrade Origin 白名单。下列三类一律放行，无需配置：
+  # WS upgrade Origin 白名单。下列三类一律放行，无需配置：
   #   1) Origin 缺失 / null（非浏览器 client，或同源 fetch 不带 Origin）
   #   2) http://127.0.0.1:<port> / http://localhost:<port>
   #   3) 与 network.host:port 完全匹配
@@ -46,7 +46,7 @@ session:
   # 过期 token 异步清理周期。
   token-purge-minutes: 5
 
-# 地图池容量（M2 预览池）
+# 地图池容量（预览池）
 map-pool:
   # 启动时预创建多少张 MapView。每张消耗约 64 KiB 内存 + 一个 mapId。
   # 建议 = 服务器同时编辑会话数 × 平均墙面尺寸（如 4×2=8 张）+ 一些 buffer。
@@ -54,7 +54,7 @@ map-pool:
   # 池上限。达到上限后新会话会拿到 POOL_EXHAUSTED 错误，提示玩家等待。
   # 单服 200 张地图够 25 人同时编辑 4×2 墙面。
   max: 256
-  # M16 P2.3：可选 per-world initial 分配（多世界服务器用）。池内按 world 分桶；
+  # 可选 per-world initial 分配（多世界服务器用）。池内按 world 分桶；
   # 给 wall 借出的 map 必须与 wall 所在 world 一致——否则 wall 在 nether 但 map 在
   # overworld 会导致位置概念错乱。下面 key = world name（与 server.properties 一致）。
   # 列出的 world 在启动时确保 ≥ 该数 FREE map；未列出的 world 走 on-demand 扩容
@@ -96,16 +96,16 @@ templates:
   # 模板缩略图（/api/template/{id}/preview.png）缓存 TTL（秒）。
   # reload templates 时服务端会主动 invalidate；TTL 主要影响浏览器侧。
   preview-cache-seconds: 300
-  # M14 创意工坊：每玩家最多可发布模板数。0 = 不限。
+  # 创意工坊：每玩家最多可发布模板数。0 = 不限。
   # 持 canvas.template.bypass-limit 权限的玩家跳过此限制。
   max-per-player: 20
-  # M16 Phase 1 模板系统 DoS 防御 & 跨用户隔离（当前硬编码，未来可改为本段可配）：
-  #   P1.4 YAML 解析：maxAliasesForCollections=50, codePointLimit=5 MiB
-  #   P1.5 raw_state 嵌套深度：MAX_DEPTH=32
-  #   P1.5 Interpolator：单参数 ≤16 KiB，单次累计输出 ≤1 MiB
-  #   P1.6 user-templates：玩家间默认隔绝；apply 他人模板需 canvas.template.use-others（default: op）
+  # 模板系统 DoS 防御 & 跨用户隔离（当前硬编码，未来可改为本段可配）：
+  #   YAML 解析：maxAliasesForCollections=50, codePointLimit=5 MiB
+  #   raw_state 嵌套深度：MAX_DEPTH=32
+  #   Interpolator：单参数 ≤16 KiB，单次累计输出 ≤1 MiB
+  #   user-templates：玩家间默认隔绝；apply 他人模板需 canvas.template.use-others（default: op）
 
-# 图片上传（M13）
+# 图片上传
 # 文件存在 plugins/HikariCanvas/uploads/<sha256[:16]>.png；hash 内容寻址，跨 wall
 # 引用同 hash 文件零重复存储。详见 docs/security.md §4.5、docs/architecture.md §3.7。
 images:

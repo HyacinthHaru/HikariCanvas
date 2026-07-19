@@ -68,4 +68,26 @@ class MigrationRunnerBackupTest {
                 .mapTo(Integer.class).one());
         assertEquals(1, liveScriptsTbl, "live DB 应已建 wall_scripts 表");
     }
+
+    /** 首装（空库、currentVersion==0）跑全量迁移：应跳过 per-migration 备份，不在 dataFolder 里堆 .bak。 */
+    @Test
+    void freshInstall_skipsPerMigrationBackups() throws Exception {
+        tmpDir = Files.createTempDirectory("hikari-backup-fresh-");
+        Logger log = Logger.getLogger("test");
+        Path dbFile = tmpDir.resolve("data.db");
+        live = new Database(log, dbFile);
+
+        // 全新空库 + 开 auto-backup 跑全量：首装应跳过 per-migration 备份，不产生任何 .bak。
+        new MigrationRunner(live.jdbi(), log, true, dbFile).runUpTo(17);
+
+        try (var s = Files.list(tmpDir)) {
+            long bakCount = s.filter(p -> p.getFileName().toString().contains(".pre-V")).count();
+            assertEquals(0, bakCount, "首装（空库）应跳过 per-migration 备份，不产生 .bak");
+        }
+        // 迁移本身应正常应用到 V017。
+        int scriptsTbl = live.jdbi().withHandle(h -> h.createQuery(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wall_scripts'")
+                .mapTo(Integer.class).one());
+        assertEquals(1, scriptsTbl, "首装迁移应正常应用（wall_scripts 表已建）");
+    }
 }

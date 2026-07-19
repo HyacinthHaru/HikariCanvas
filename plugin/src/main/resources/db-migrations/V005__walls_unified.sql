@@ -1,8 +1,8 @@
--- M5.5 路线修正（2026-04-27）：合并 drafts + sign_records → 单一 walls 表；
+-- 路线修正（2026-04-27）：合并 drafts + sign_records → 单一 walls 表；
 -- pool_maps.state 由三态收为两态（FREE/RESERVED）；废止 PERMANENT + commit。
 --
 -- 详见 docs/architecture.md §3-4、docs/data-model.md §2.3-2.4。
--- 决策：drop + recreate（M5.5 阶段无生产数据，<50 行老数据）。
+-- 决策：drop + recreate（该阶段无生产数据，<50 行老数据）。
 -- SQLite 不支持 DROP COLUMN，pool_maps 走 recreate；新表沿用 map_id 主键。
 
 DROP TABLE IF EXISTS sign_records;
