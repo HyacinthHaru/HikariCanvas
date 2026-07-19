@@ -678,13 +678,16 @@ public final class WebServer {
     // ---------- 静态资源 ----------
 
     private void serveClasspath(Context ctx, String resource) {
+        // 静态资源一律禁 MIME 嗅探：即便 Content-Type 配错也不让浏览器宽容猜测掩盖问题。
+        ctx.header("X-Content-Type-Options", "nosniff");
         java.io.InputStream in = getClass().getClassLoader().getResourceAsStream(resource);
         if (in == null) {
             ctx.status(404);
             return;
         }
+        // guessMime 猜不到时兜底 application/octet-stream（安全下载），别落到 Javalin 默认 text/plain。
         String mime = guessMime(resource);
-        if (mime != null) ctx.contentType(mime);
+        ctx.contentType(mime != null ? mime : "application/octet-stream");
         ctx.result(in);
     }
 
@@ -703,15 +706,30 @@ public final class WebServer {
         ctx.result(in);
     }
 
-    private static String guessMime(String path) {
+    /**
+     * 按扩展名映射 MIME。猜不到返 null —— 调用方（{@link #serveClasspath}）负责兜底到
+     * {@code application/octet-stream}（安全下载语义），别让响应落到 Javalin 默认的
+     * {@code text/plain}。仅供本包 + 单测使用（package-private）。
+     */
+    static String guessMime(String path) {
+        // 文档 / 脚本 / 样式
         if (path.endsWith(".html")) return "text/html; charset=utf-8";
         if (path.endsWith(".js"))   return "application/javascript";
         if (path.endsWith(".mjs"))  return "application/javascript";
         if (path.endsWith(".css"))  return "text/css";
         if (path.endsWith(".json")) return "application/json";
+        if (path.endsWith(".map"))  return "application/json";        // source map 是 JSON
+        if (path.endsWith(".wasm")) return "application/wasm";
+        if (path.endsWith(".txt"))  return "text/plain; charset=utf-8";
+        // 字体
         if (path.endsWith(".woff2"))return "font/woff2";
+        if (path.endsWith(".woff")) return "font/woff";
+        if (path.endsWith(".ttf"))  return "font/ttf";
+        if (path.endsWith(".otf"))  return "font/otf";
+        // 图片
         if (path.endsWith(".svg"))  return "image/svg+xml";
         if (path.endsWith(".png"))  return "image/png";
+        if (path.endsWith(".ico"))  return "image/x-icon";
         return null;
     }
 

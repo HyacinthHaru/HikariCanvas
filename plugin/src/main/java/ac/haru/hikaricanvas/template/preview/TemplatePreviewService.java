@@ -1,6 +1,5 @@
 package ac.haru.hikaricanvas.template.preview;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import ac.haru.hikaricanvas.render.CanvasCompositor;
 import ac.haru.hikaricanvas.state.Element;
 import ac.haru.hikaricanvas.state.ProjectState;
@@ -39,7 +38,6 @@ public final class TemplatePreviewService {
     private final TemplateRegistry registry;
     private final CanvasCompositor compositor;
     private final TemplateInstantiator instantiator = new TemplateInstantiator();
-    private final ObjectMapper mapper = new ObjectMapper();
 
     /**
      * key = templateId；value = PNG bytes。
@@ -145,19 +143,22 @@ public final class TemplatePreviewService {
     }
 
     /**
-     * 直接组装 ProjectState：用我们已有的 Jackson @JsonCreator 入口绕开 mutator
-     * package-private 的限制。
+     * 直接构造 {@link ProjectState}（public 构造器 + {@link ProjectState#addElement}），
+     * 不走 Jackson。
+     *
+     * <p>历史上这里用 {@code mapper.convertValue(Map.of("elements", elements), ...)}
+     * 序列化装配——{@code Map.of} 把 {@code List<Element>} 的值类型擦成 {@code Object}，
+     * 导致 {@link Element} 的 {@code @JsonTypeInfo(property="type")} 不写出 {@code type}
+     * 判别符，反序列化 {@code List<Element>} 多态时抛 {@code InvalidTypeIdException}，
+     * 所有含 ≥1 元素的模板预览必崩（{@code StatePatchBuilder} javadoc 记有同坑）。
+     * 直接构造零序列化、零 type 丢失。</p>
      */
-    private ProjectState stateOf(int widthMaps, int heightMaps, String background,
+    // package-private for test
+    ProjectState stateOf(int widthMaps, int heightMaps, String background,
                                  List<Element> elements) {
-        Map<String, Object> shape = Map.of(
-                "version", 0,
-                "canvas", Map.of(
-                        "widthMaps", widthMaps,
-                        "heightMaps", heightMaps,
-                        "background", background == null ? "#FFFFFF" : background),
-                "elements", elements,
-                "history", Map.of("undoDepth", 0, "redoDepth", 0));
-        return mapper.convertValue(shape, ProjectState.class);
+        ProjectState state = new ProjectState(widthMaps, heightMaps,
+                background == null ? "#FFFFFF" : background);
+        for (Element e : elements) state.addElement(e);
+        return state;
     }
 }

@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-07-19 · 0.9.14 生产 bug 三修（WS 地址 / 模板预览崩溃 / 静态 MIME 加固）
+
+生产服务器（真实域名反代部署，实测跑 0.9.12 jar）报 3 个问题。方法论：先派 3 个 opus 子代理**独立读代码核实根因**（含真实复现），再派 3 个 opus 子代理**并行 TDD 实施**（先红后绿），controller 亲自核对三块 diff 无 scope 蔓延。版本 `0.9.13 → 0.9.14-SNAPSHOT`。
+
+**① 前端连不上画布（WS 地址逻辑写反 · ✅ 属实 · 必修）**
+`web/src/network/wsClient.ts:1019 resolveWsUrl()` 条件写反：只有页面**恰好**在 `127.0.0.1:8877` 才「按来源拼」（那时拼出还是回环），任何真实域名落进死写的 `ws://127.0.0.1:8877/ws` 兜底 → 生产任何场景都只返回回环、连不上，且 `ws://` 撞 HTTPS 页有 mixed-content。修：默认按 `window.location` 同源拼（`https→wss`、host 用 `loc.host` 含反代真实域名），仅 dev（页面 `:9173`）特例跨端口连后端 8877；删硬编码兜底 + `export` + `resolveWsUrl.test.ts` 3 场景（先红后绿：坏代码 3 fail、修后绿）。dev 判定用 `port==='9173'` 而非 `import.meta.env.DEV`（vitest run 下后者为 false 会误判）。
+
+**② 生产疯狂刷 InvalidTypeIdException（模板预览崩溃 · ✅ 属实 · 最高频 · 代码 bug）**
+`TemplatePreviewService.stateOf` 把强类型 `List<Element>` 塞进 `Map.of("elements", elements)`，值类型擦成 `Object` → Jackson `@JsonTypeInfo(type)` 走 Object 路径不写 `type` 判别符 → `convertValue` 反序列化 `List<Element>` 多态找不到 `type` 崩。**所有含 ≥1 元素的模板预览必挂**（子代理用真实 jackson 2.22.1 逐字节复现）。不是近期回归——一直存在，要非空模板 + 前端拉缩略图才暴露；`renderPreview` 的 catch 兜住了不崩服务，但 `computeIfAbsent` 对 null 不缓存 → 每次请求重抛刷屏。本仓 `StatePatchBuilder` javadoc 早记载同坑。修：`stateOf` 改直接构造 `new ProjectState(w,h,bg)` + `addElement`（都是 public），绕开 Jackson、零 type 丢失；删 unused `ObjectMapper`/`mapper` + 订正 javadoc + `TemplatePreviewServiceTest` 4 case。不影响真正应用模板的路径（`TemplateInstantiator` 不走这段）。
+
+**③ 静态资源 MIME（报告不属实 · 顺手加固）**
+「静态资源全发 text/plain」不属实——`WebServer.guessMime` 已按扩展名映射，实际产物 `.js→application/javascript` 等全对（正因如此浏览器才执行了 JS、才报 ws 连接错，**反证 MIME 是对的**；问题 ① ② 与它无关）。但挖到真实隐患：Javalin 7 默认 Content-Type 就是 `text/plain`，`guessMime` 未覆盖扩展名（`.map`/`.wasm`/字体）会 fall-through 落 text/plain，且全站无 `nosniff`。加固：`guessMime` 扩表（`.map`/`.wasm`/`.woff`/`.ttf`/`.otf`/`.ico`/`.txt`）+ `serveClasspath` fall-through `application/octet-stream` + `X-Content-Type-Options: nosniff` + `WebServerMimeTest` 12 case。现有 `.js`/`.css`/`.html` 映射一字未改。
+
+**验证**：后端 `:plugin:test` BUILD SUCCESSFUL（2152 → **2168**，+16：4 preview + 12 mime）+ 前端 vitest **1450**（1446 + 4 resolveWsUrl）+ shadowJar `HikariCanvas-0.9.14-SNAPSHOT.jar` 152 MB。commit + push + 验签后发 `v0.9.14-rc.1`。
+
+---
+
 ## 2026-07-19 · 0.9.13 首装跳过逐迁移备份 + 清资源文件内部代号
 
 用户 0.9.12 首次加载发现 dataFolder 里堆了十几套 `data.db.pre-V*.bak`（+ `-wal`/`-shm`），另注意到 `config.yml` 仍有 `M16 P1.3` 等内部代号。两件 1.0 前打磨合并为 0.9.13。版本 `0.9.12 → 0.9.13-SNAPSHOT`。

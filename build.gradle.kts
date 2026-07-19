@@ -1,4 +1,4 @@
 allprojects {
     group = "ac.haru"
-    version = "0.9.13-SNAPSHOT"
+    version = "0.9.14-SNAPSHOT"
 }

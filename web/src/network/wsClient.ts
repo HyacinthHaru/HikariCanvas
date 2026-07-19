@@ -1016,14 +1016,21 @@ export function pickInitialToken(): { token: string | null; source: 'url' | 'ses
     return { token: null, source: 'none' };
 }
 
-function resolveWsUrl(): string {
-    // 同源（被 WebServer 自己 serve）→ ws://host/ws；否则固定连本机 8877
+export function resolveWsUrl(): string {
+    // WebSocket 在同源路径 /ws 挂着（后端 WebServer serve 前端页面 + 同端口挂 /ws）。
+    // 生产（含 nginx/Caddy 反代）唯一正确做法：按当前页面来源拼——scheme 跟随页面
+    // （https 页 → wss，避免 mixed-content），host 用 loc.host（含反代真实域名 + 端口）。
+    //
+    // 唯一例外是 dev：Vite dev server 跑在 :9173（vite.config.ts strictPort，无 proxy），
+    // 页面在 http://127.0.0.1:9173 但后端在明文本机 8877——两个端口，必须显式跨端口连
+    // 后端 8877，不能按 :9173 来源拼（那儿没挂 /ws）。用 port 9173 判 dev 而非
+    // import.meta.env.DEV：贴合"dev server 在 9173"这个事实，且单测可 mock location.port。
     const loc = window.location;
-    if (loc.hostname === '127.0.0.1' && loc.port === '8877') {
-        const scheme = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${scheme}//${loc.host}/ws`;
+    if (loc.port === '9173') {
+        return `ws://${loc.hostname}:8877/ws`;
     }
-    return 'ws://127.0.0.1:8877/ws';
+    const scheme = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${scheme}//${loc.host}/ws`;
 }
 
 // ---------- 变量 state.patch 路由 ----------
