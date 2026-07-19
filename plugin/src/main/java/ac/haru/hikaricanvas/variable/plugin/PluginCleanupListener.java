@@ -146,7 +146,7 @@ public final class PluginCleanupListener implements Listener {
             // 立即 unregister provider + daemon（释放 namespace 让别人能抢用）
             apiImpl.unregisterPluginProviders(removed);
 
-            log.info("[HikariCanvas] plugin '" + disabled.getName()
+            log.fine("[HikariCanvas] plugin '" + disabled.getName()
                     + "' disabled; unregistered " + removed.size()
                     + " namespace(s): " + removed
                     + " (cached values retained for 30s)");
@@ -177,7 +177,7 @@ public final class PluginCleanupListener implements Listener {
             // 重注册校验：grace 期内被新插件抢走 → 跳过 purge，保留其数据
             if (registry.get(ns).isPresent()) {
                 skipped++;
-                log.info("[HikariCanvas] skip purge of namespace '" + ns
+                log.fine("[HikariCanvas] skip purge of namespace '" + ns
                         + "' (re-registered by another plugin during grace period; "
                         + "original plugin='" + pluginName + "')");
                 continue;

@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-07-19 · 0.9.15 控制台日志清理（开发探针退场）
+
+项目收尾期，把开发期埋的「逐操作」调试探针从控制台清出。先 2 个 opus 子代理盘点后端（服务器控制台）+ 前端（浏览器 console），用户拍板：**降 fine 不删** + **不加 config 开关**。版本 `0.9.14 → 0.9.15-SNAPSHOT`。
+
+**评估结论**：日志纪律本就不错——后端零裸输出（0 个 `System.out`/`println`/`printStackTrace`）、真正热路径（投影循环/每条 WS 消息）零 INFO；前端探针全已 `import.meta.env.DEV` gate。要清的只是后端一批「逐操作」INFO 探针。
+
+**后端（26 条 `.info`→`.fine`，跨 13 类；fine 默认静默、服主调 logger 级别仍可看）**：
+- 热路径 2：`TimelineTriggerRegistry`（变量变化触发时间轴）+ `ActionExecutor`（玩家脚本 log 输出）
+- `FrameDeployer` 逐格诊断簇 6（`[reAttach]`/`[spawnSlot]` 每 slot）+ WS session 开关 3（`WebServer` connected/closed）
+- 逐字体逐图标启动噪音 8（`FontRegistry`/`FontMetricsTable`/`IconRegistry`，22 字体本会打 22 行）
+- 其余中频 7（`AnimationTicker`/`PapiVariableBridge`/`VariableProviderDaemon`/`HikariCanvasAPIImpl`/`PluginCleanupListener`/`TemplateRegistry`）
+- 删 `HikariCanvas:969` 的 `(skeleton)` 遗留措辞（enable banner 保留）；`ActionExecutorTest` 一条断言随之 `INFO→FINE`
+- **保留 INFO**：全部一次性启动摘要（`N font/icon ready`、`WebServer listening on host:port`、迁移事件、wall 恢复数）+ 全部 WARNING/SEVERE + `AuditLog` + 公网绑定警告 + `WallOpDispatcher:199` refresh 结果摘要 + WS 安全 close（auth 失败/协议/限流）
+- 效果：启动 15-20 行干净摘要，运行时基本安静、只在真出错时说话
+
+**前端（回归防护）**：console 已很干净（30 处里 26 `warn` + 1 `error` 该留、2 探针已 DEV-gate）；`vite.config.ts` 加 `esbuild.pure:['console.log/info/debug/trace/dir']`（**非** `drop:['console']`——后者会误删 error/warn）+ `drop:['debugger']`。仅生产 minify 生效、dev 无损。**验证硬证据**：生产产物 `console.log/info/debug 残留=0`、`console.error/warn 保留=21`。防未来漏 gate 的裸 console.log 进 bundle。
+
+**不做**：不加 config `debug-logging` 开关（JUL 级别机制已够，加了冗余）；不引入 log wrapper（各类直接持 `Logger`，降 fine 无需抽象）。
+
+**验证**：后端 `:plugin:test` BUILD SUCCESSFUL（**2168**）+ shadowJar `HikariCanvas-0.9.15-SNAPSHOT.jar` 152 MB；前端 vite build + vitest **1450** + esbuild.pure 产物硬验证。
+
+---
+
 ## 2026-07-19 · 0.9.14 生产 bug 三修（WS 地址 / 模板预览崩溃 / 静态 MIME 加固）
 
 生产服务器（真实域名反代部署，实测跑 0.9.12 jar）报 3 个问题。方法论：先派 3 个 opus 子代理**独立读代码核实根因**（含真实复现），再派 3 个 opus 子代理**并行 TDD 实施**（先红后绿），controller 亲自核对三块 diff 无 scope 蔓延。版本 `0.9.13 → 0.9.14-SNAPSHOT`。

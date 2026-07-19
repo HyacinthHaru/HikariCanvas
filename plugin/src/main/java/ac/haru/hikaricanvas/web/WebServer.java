@@ -569,7 +569,7 @@ public final class WebServer {
                 wsCfg.onConnect(ctx -> {
                     // 起 auth 超时任务，N 秒后未 auth → close 4001
                     scheduleAuthTimeout(ctx);
-                    log.info("WS connected (sid=" + ctx.sessionId() + ", auth-timeout=" + wsAuthTimeoutSeconds + "s)");
+                    log.fine("WS connected (sid=" + ctx.sessionId() + ", auth-timeout=" + wsAuthTimeoutSeconds + "s)");
                 });
                 wsCfg.onClose(ctx -> {
                     cancelAuthTimeout(ctx);
@@ -578,9 +578,9 @@ public final class WebServer {
                         // 原子 CAS：只清空自己绑的那个 ctx，避免 race 把新连接的 mapping 抹掉
                         wsBySession.remove(sid, ctx);
                         sessionManager.markDisconnected(sid);
-                        log.info("WS closed, sessionId=" + sid);
+                        log.fine("WS closed, sessionId=" + sid);
                     } else {
-                        log.info("WS closed (pre-auth)");
+                        log.fine("WS closed (pre-auth)");
                     }
                 });
                 wsCfg.onMessage(this::handleMessage);

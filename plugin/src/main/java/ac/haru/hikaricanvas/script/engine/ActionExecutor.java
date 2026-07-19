@@ -502,7 +502,7 @@ public final class ActionExecutor implements ActionSink {
         String msg = interpolator == null ? a.message()
                 : interpolator.interpolate(a.message(), wallId).text();
         // 不进 audit：log 是玩家级高频动作，进 audit 会刷库
-        log.info("[script " + wallId + "] " + msg);
+        log.fine("[script " + wallId + "] " + msg);
         return TraceStep.ok(blockId, "action", "log");
     }
 

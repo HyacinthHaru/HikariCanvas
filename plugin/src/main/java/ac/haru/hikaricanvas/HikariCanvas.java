@@ -966,7 +966,7 @@ public final class HikariCanvas extends JavaPlugin {
                 20L * 60 * 5,    // 启动后 5 分钟首次跑
                 20L * 60 * 5);   // 每 5 分钟一次
 
-        getLogger().info("HikariCanvas enabled (skeleton)");
+        getLogger().info("HikariCanvas enabled");
         } catch (Throwable t) {
             // 装配中途失败——逆序清理已就位资源后 rethrow。Bukkit 在 onEnable 抛异常
             // 时只 catch+log 并把插件留在 disabled 态（不调 onDisable），故必须在此主动释放

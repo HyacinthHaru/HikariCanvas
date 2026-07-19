@@ -130,7 +130,7 @@ public final class TimelineTriggerRegistry {
                 continue;
             }
             lastFire.put(dk, now);
-            log.info("[timeline-trigger] variable " + fullName + " changed → playing timeline " + b.timelineId()
+            log.fine("[timeline-trigger] variable " + fullName + " changed → playing timeline " + b.timelineId()
                     + " on wall " + b.wallId());
             try {
                 player.play(b.wallId(), b.timelineId());
@@ -158,7 +158,7 @@ public final class TimelineTriggerRegistry {
         byFullName.computeIfAbsent(resolved, k -> ConcurrentHashMap.newKeySet())
                 .add(new Binding(wallId, tl.id()));
         wallKeys.computeIfAbsent(wallId, k -> ConcurrentHashMap.newKeySet()).add(resolved);
-        log.info("[timeline-trigger] bound: wall " + wallId + " timeline " + tl.id()
+        log.fine("[timeline-trigger] bound: wall " + wallId + " timeline " + tl.id()
                 + " ← watching variable " + resolved + " (trigger=" + type + ", param=" + raw + ")");
         return true;
     }

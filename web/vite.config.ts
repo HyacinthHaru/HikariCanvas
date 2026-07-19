@@ -54,6 +54,14 @@ export default defineConfig({
             },
         },
     },
+    // 生产 build 摇掉纯开发探针（console.log/info/debug/trace/dir），保留 error/warn。
+    // 用 pure（只把这几个标记为无副作用、返回值未用时可摇树）而非 drop:['console']——
+    // 后者会连 console.error/warn 一起删掉。仅生产 minify 生效，vite dev 不 minify，
+    // 开发期 console 照常。防未来漏 gate 的裸 console.log 进生产 bundle。
+    esbuild: {
+        pure: ['console.log', 'console.info', 'console.debug', 'console.trace', 'console.dir'],
+        drop: ['debugger'],
+    },
     test: {
         // M18-P5 / M28-P2-G：node 环境跑纯算法 / composable / 校验逻辑测试。
         // 组件渲染测试暂不引入（需 @vue/test-utils + jsdom），改写纯逻辑测试。

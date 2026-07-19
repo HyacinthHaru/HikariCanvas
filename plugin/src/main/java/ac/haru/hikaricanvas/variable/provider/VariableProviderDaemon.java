@@ -82,7 +82,7 @@ public final class VariableProviderDaemon {
                     intervalMs, intervalMs, TimeUnit.MILLISECONDS);
             scheduledTasks.put(ns, task);
         }
-        log.info("Registered VariableProvider: " + ns + " (interval=" + intervalMs + "ms)");
+        log.fine("Registered VariableProvider: " + ns + " (interval=" + intervalMs + "ms)");
     }
 
     /**

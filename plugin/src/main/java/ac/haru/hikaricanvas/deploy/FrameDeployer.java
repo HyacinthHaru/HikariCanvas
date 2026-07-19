@@ -115,7 +115,7 @@ public final class FrameDeployer {
             }
         }
         int expected = wall.width() * wall.height();
-        plugin.getLogger().info(String.format(
+        plugin.getLogger().fine(String.format(
                 "[wall.refresh %s] scanned=%d deadOrInvalid=%d wallMatched=%d present=%s "
                         + "emptyFrames=%s expected=%d replacedBlocks=%d",
                 wallId, scanned, deadOrInvalid, wallMatched, present,
@@ -131,7 +131,7 @@ public final class FrameDeployer {
         java.util.Set<Integer> skipSlots = new java.util.HashSet<>(present);
         skipSlots.addAll(reAttachedSlots);
         int framesRespawned = deployFor(wallId, wall, mapIds, skipSlots);
-        plugin.getLogger().info("[wall.refresh " + wallId + "] framesRespawned=" + framesRespawned
+        plugin.getLogger().fine("[wall.refresh " + wallId + "] framesRespawned=" + framesRespawned
                 + " framesReAttached=" + framesReAttached);
         return new RepairResult(framesRespawned, framesReAttached, wallBlocksReplaced);
     }
@@ -169,7 +169,7 @@ public final class FrameDeployer {
             // 同时把当前 placeholder 重画一遍，throttler 之后会把真实 ProjectState 像素覆盖
             byte[] pixels = placeholderRenderer.render(slot, total);
             canvasRenderer.update(mapId, pixels);
-            plugin.getLogger().info("[reAttach] OK slot=" + slot + " mapId=" + mapId
+            plugin.getLogger().fine("[reAttach] OK slot=" + slot + " mapId=" + mapId
                     + " frameUuid=" + f.getUniqueId());
             reAttached.add(slot);
         }
@@ -318,7 +318,7 @@ public final class FrameDeployer {
         //   位置占用问题由 WallResolver 在 confirm 之前的 OCCUPIED 检查拒绝。
         for (org.bukkit.entity.Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
             if (e instanceof org.bukkit.entity.Item) {
-                plugin.getLogger().info("[spawnSlot] removing stray Item at " + e.getLocation()
+                plugin.getLogger().fine("[spawnSlot] removing stray Item at " + e.getLocation()
                         + " for slot=" + slotIndex);
                 e.remove();
             } else if (e instanceof ItemFrame ifr) {
@@ -326,7 +326,7 @@ public final class FrameDeployer {
                 String w = pdc.get(wallIdKey, PersistentDataType.STRING);
                 Integer s = pdc.get(slotKey, PersistentDataType.INTEGER);
                 if (wallId.equals(w) && s != null && s == slotIndex) {
-                    plugin.getLogger().info("[spawnSlot] removing stale ItemFrame (same wall + slot "
+                    plugin.getLogger().fine("[spawnSlot] removing stale ItemFrame (same wall + slot "
                             + slotIndex + ") at " + e.getLocation());
                     e.remove();
                 }
@@ -358,7 +358,7 @@ public final class FrameDeployer {
                     + " isValid=" + (frame != null && frame.isValid()));
             return false;
         }
-        plugin.getLogger().info("[spawnSlot] OK slot=" + slotIndex + " mapId=" + mapId
+        plugin.getLogger().fine("[spawnSlot] OK slot=" + slotIndex + " mapId=" + mapId
                 + " loc=" + frameLoc + " uuid=" + frame.getUniqueId());
 
         // 首次/补 spawn 都写一遍 placeholder；wall.refresh 之后由 throttler 全画布重画覆盖

@@ -81,7 +81,7 @@ public final class FontMetricsTable {
                         }
                     } catch (NumberFormatException ignored) {}
                 });
-                log.info("loaded metrics for font " + id + " base=" + baseSize + "px asc=" + ascent
+                log.fine("loaded metrics for font " + id + " base=" + baseSize + "px asc=" + ascent
                         + " desc=" + descent);
                 return new Table(baseSize, ascent, descent, advances);
             } catch (IOException e) {

@@ -134,7 +134,7 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
             log.fine("PluginNamespaceProvider register skipped for '" + namespace
                     + "': " + e.getMessage());
         }
-        log.info("[HikariCanvas] plugin '" + plugin.getName()
+        log.fine("[HikariCanvas] plugin '" + plugin.getName()
                 + "' registered namespace '" + namespace + "'");
     }
 

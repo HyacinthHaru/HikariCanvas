@@ -335,8 +335,8 @@ class ActionExecutorTest {
                 new Action.Log("count=${var:user/n}"));
         assertEquals("ok", step.result());
         boolean found = logRecords.stream().anyMatch(r ->
-                r.getLevel() == Level.INFO && r.getMessage().equals("[script w-1] count=7"));
-        assertTrue(found, "log.info 含 wallId 前缀 + 插值后消息");
+                r.getLevel() == Level.FINE && r.getMessage().equals("[script w-1] count=7"));
+        assertTrue(found, "log.fine 含 wallId 前缀 + 插值后消息");
     }
 
     @Test

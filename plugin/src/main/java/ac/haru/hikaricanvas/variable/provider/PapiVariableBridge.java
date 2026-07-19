@@ -146,7 +146,7 @@ public final class PapiVariableBridge implements VariableProvider {
         if (previous != null) return;
         try {
             store.create(NAMESPACE, parsed.encodedKey, VarType.STRING, null, "papi-bridge");
-            log.info("[HikariCanvas] tracking PAPI placeholder: " + parsed.placeholder);
+            log.fine("[HikariCanvas] tracking PAPI placeholder: " + parsed.placeholder);
         } catch (VariableException e) {
             if (e.code() == VariableException.Code.VARIABLE_EXISTS) {
                 // 重启 + DB 持久化路径不会经过 papi（papi 非 user namespace）；保留 tracking。

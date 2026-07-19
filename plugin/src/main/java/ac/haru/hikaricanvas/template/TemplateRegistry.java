@@ -320,7 +320,7 @@ public final class TemplateRegistry {
                         counter[0]++;
                         if (isOverride) {
                             overrides[0]++;
-                            log.info("Template '" + id + "' overridden by " + label);
+                            log.fine("Template '" + id + "' overridden by " + label);
                         }
                     } else if (result instanceof TemplateLoader.Result.Failed f) {
                         failures.add(label + ": " + f.reason() + " — " + f.detail());

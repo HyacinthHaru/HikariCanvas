@@ -110,7 +110,7 @@ public final class IconRegistry {
                     String fullId = pack + "/" + e.getKey();
                     index.put(fullId, new IconInfo(fullId, e.getKey(), pack, viewBox, "builtin"));
                 }
-                log.info("[icons] loaded pack " + pack + " v" + version
+                log.fine("[icons] loaded pack " + pack + " v" + version
                         + " (" + entries.size() + " icons)");
             } catch (IOException e) {
                 log.log(Level.WARNING, "[icons] failed to load builtin pack " + packId, e);

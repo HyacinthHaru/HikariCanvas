@@ -152,7 +152,7 @@ public final class FontRegistry {
                 // AWT 对 TTF/OTF 统一用 TRUETYPE_FONT 常量；OpenType 是 TrueType 的超集
                 Font font = Font.createFont(format, in);
                 fonts.put(id, new Registered(id, font, bi.metadata, "classpath:" + bi.resourcePath));
-                log.info("FontRegistry: loaded built-in '" + id + "' ("
+                log.fine("FontRegistry: loaded built-in '" + id + "' ("
                         + bi.metadata.displayName + ", pixelated=" + bi.metadata.pixelated + ")");
             } catch (IOException | FontFormatException ex) {
                 log.log(Level.WARNING, "FontRegistry: failed to load built-in " + id, ex);
@@ -178,7 +178,7 @@ public final class FontRegistry {
      */
     public void loadExternal(Path fontsDir) {
         if (!Files.isDirectory(fontsDir)) {
-            log.info("FontRegistry: external fonts dir not present: " + fontsDir);
+            log.fine("FontRegistry: external fonts dir not present: " + fontsDir);
             return;
         }
         // 收集需要后台算 metrics 的字体（id, Font 对象），避免在 Files.list 流里逃逸捕获 try-with-resources
@@ -205,7 +205,7 @@ public final class FontRegistry {
                     fonts.put(id, new Registered(id, font,
                             new Metadata(id, false, 0),
                             path.toAbsolutePath().toString()));
-                    log.info("FontRegistry: loaded external '" + id + "' (" + path + ")");
+                    log.fine("FontRegistry: loaded external '" + id + "' (" + path + ")");
                     // 用户字体没有构建期生成的 .metrics.json，运行时扫一次 advance 表
                     // 覆盖 MISSING sentinel；否则 charAdvance 返 -1 fallback canonicalCharWidth 与
                     // GlyphMetricsLut HTTP 端点的查询也会 404。
@@ -237,7 +237,7 @@ public final class FontRegistry {
             for (Map.Entry<String, Font> e : pending) {
                 // disable 期 interrupt 后尽快收手，不再扫剩余字体的 65k codepoints
                 if (Thread.currentThread().isInterrupted()) {
-                    log.info("FontRegistry: metrics worker interrupted, stopping early ("
+                    log.fine("FontRegistry: metrics worker interrupted, stopping early ("
                             + done + "/" + pending.size() + " fonts done)");
                     return;
                 }
@@ -246,7 +246,7 @@ public final class FontRegistry {
                 try {
                     FontMetricsTable.registerRuntime(id, font);
                     done++;
-                    log.info("FontRegistry: registered runtime metrics for external font '" + id + "'");
+                    log.fine("FontRegistry: registered runtime metrics for external font '" + id + "'");
                 } catch (Throwable th) {
                     // 不让一个字体 metrics 失败拖垮 worker
                     log.log(Level.WARNING,
@@ -254,7 +254,7 @@ public final class FontRegistry {
                 }
             }
             long ms = (System.nanoTime() - t0) / 1_000_000L;
-            log.info("FontRegistry: async metrics worker done (" + done + "/"
+            log.fine("FontRegistry: async metrics worker done (" + done + "/"
                     + pending.size() + " fonts, " + ms + " ms)");
         }, "HikariCanvas-FontMetrics-Worker");
         t.setDaemon(true);
