@@ -57,13 +57,12 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 
 ## Git 提交约定
 
-1. 身份固定：`HaruHyacinth <122684177+HyacinthHaru@users.noreply.github.com>`（本地 `.git/config` 已配，**不动全局**）
-2. 所有 commit 必须 SSH 签名：`~/.ssh/id_ed25519.pub`，本地已开 `gpg.format=ssh` + `commit.gpgsign=true` + `tag.gpgsign=true`
-3. **禁止** `Co-Authored-By: Claude`（以及任何形式的 Claude 署名）
-4. **每次 commit 后立刻 `git push origin main`**——不堆积、不集中推
-5. **每次修改必须在 `docs/journal.md` 顶部追加一条**（日期 · 范围 · 改动 · 关联文件）
-6. 签名失败**不要用 `--no-gpg-sign` 绕过**，先查原因
-7. 签名验证：`gh api /repos/HyacinthHaru/HikariCanvas/commits/<sha> --jq '.commit.verification.verified'` 应返回 `true`
+1. 所有 commit 必须 SSH 签名（身份与密钥由本地 `.git/config` 持有，**不动全局**）
+2. **禁止** `Co-Authored-By: Claude`（以及任何形式的 Claude 署名）
+3. **每次 commit 后立刻 `git push origin main`**——不堆积、不集中推
+4. **每次修改必须在 `docs/journal.md` 顶部追加一条**（日期 · 范围 · 改动 · 关联文件）
+5. 签名失败**不要用 `--no-gpg-sign` 绕过**，先查原因
+6. 签名验证：`gh api /repos/HyacinthHaru/HikariCanvas/commits/<sha> --jq '.commit.verification.verified'` 应返回 `true`
 
 ## 架构纪律（26.x 升级保障）
 
