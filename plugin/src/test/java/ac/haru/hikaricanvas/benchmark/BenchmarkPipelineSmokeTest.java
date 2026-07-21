@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.5.0-P4 <b>CI 功能性 gate</b>（决策①）。
+ * <b>CI 功能性 gate</b>。
  *
  * <p>跑完整的 {@code /canvas bench run} 管线——{@link BenchCompositor} → {@link BenchmarkRunner}
  * → {@link HtmlReportRenderer}——在 headless 下端到端走通一遍。<b>只断言「能跑通 + 不崩 + 产出

@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * M6-E：5 个内置模板的回归测试。
+ * 5 个内置模板的回归测试。
  *
  * <p>每个模板用其 {@code min_maps} 作 wall 尺寸 + 全默认 param 走一遍 instantiate，
  * 保证：所有 builtin 都能加载 + 默认值合法 + 至少产生 1 个 element。</p>

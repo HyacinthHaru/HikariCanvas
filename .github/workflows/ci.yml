@@ -38,19 +38,16 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
-        # 自带 Gradle Dependency Cache + Build Cache + Configuration Cache。
-        # 不需要显式 actions/cache（用户偏好"原生"）。
+        # 自带 Gradle Dependency Cache + Build Cache + Configuration Cache，无需另配 actions/cache。
 
       - name: Frontend - install deps
         working-directory: web
-        # 0.4.7 hotfix: macOS dev 用 npm install 时 platform-specific transitive
-        # deps（如 @emnapi/core@1.10.0、@rolldown/binding-* linux 变体）不写入
-        # package-lock.json；CI Linux + npm ci 严格校验失败。fallback 到 npm
-        # install 保证 CI 跑通。M16.5 切 npm ci 时未考虑跨平台 lock 差异；
-        # 等迁到全平台 CI runner matrix 或本地 docker dev 后再切回 npm ci。
+        # npm ci 严格按 package-lock.json 装。若 lock 缺平台相关的传递依赖（如
+        # @emnapi/*、@rolldown/binding-* 的各平台变体），npm ci 会直接失败 —— 此时
+        # 回落到 npm install 保证 CI 可跑，并打 warning 提示 lock 需要重新生成。
         run: npm ci || (echo "::warning::npm ci failed (likely platform-specific dep mismatch); falling back to npm install" && npm install --no-audit --no-fund)
 
-      - name: Frontend - vitest (28 cases)
+      - name: Frontend - vitest
         working-directory: web
         run: npm run test
 
@@ -63,7 +60,7 @@ jobs:
 
       - name: Backend - shadowJar
         # 链路自动跑：compileJava → processResources（含 generatePalette + downloadFonts
-        # + copyWebToResources）→ shadowJar relocate 7 个内嵌依赖（M16-P5.1）
+        # + copyWebToResources）→ shadowJar relocate 7 个内嵌依赖
         # → moe.hikari.canvas.shaded.*；输出 plugin/build/libs/*-all.jar
         run: ./gradlew :plugin:shadowJar --no-daemon --stacktrace
 

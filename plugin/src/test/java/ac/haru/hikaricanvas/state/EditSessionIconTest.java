@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * M26-B：IconElement element.add 路径回归。
+ * IconElement element.add 路径回归。
  *
  * <p><b>背景：</b> M26.1 升级 IconElement 为矢量 + Fill 联合类型时漏改 {@link EditSession#addElement}
  * 的 switch，所有 {@code type:"icon"} fall through default → {@code INVALID_ELEMENT}（前端拖入

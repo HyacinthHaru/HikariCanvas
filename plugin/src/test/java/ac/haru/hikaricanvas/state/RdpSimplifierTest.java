@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M12-B：{@link RdpSimplifier} pure-helper 测试。
+ * {@link RdpSimplifier} pure-helper 测试。
  *
  * <p>覆盖：</p>
  * <ul>

@@ -1,5 +1,5 @@
 /**
- * M18-P5：ElementToPolygon 单元测试。
+ * ElementToPolygon 单元测试。
  *
  * 覆盖：
  * - rect / circle / shape / star / path 各类型采样

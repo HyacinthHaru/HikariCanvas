@@ -235,7 +235,7 @@ describe('interpolator.interpolate', () => {
     });
 
     // ──────────────────────────────────────────────────────────
-    //  M28-enhance：segments 字段（PreviewRenderer hint chip 用）
+    //  segments 字段（PreviewRenderer hint chip 用）
     // ──────────────────────────────────────────────────────────
 
     it('19. 纯文本 → segments 为空数组', () => {

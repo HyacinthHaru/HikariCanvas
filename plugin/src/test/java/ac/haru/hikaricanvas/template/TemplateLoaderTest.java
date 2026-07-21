@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * M6-A 解析 + 校验单元测试。覆盖 {@code docs/template-spec.md §9} 的关键拒绝路径，
+ * 解析 + 校验单元测试。覆盖 {@code docs/template-spec.md §9} 的关键拒绝路径，
  * 防止后续 M6-B/C 改动悄悄破坏 v1 schema 兼容性。
  */
 class TemplateLoaderTest {
@@ -95,7 +95,7 @@ class TemplateLoaderTest {
 
     @Test
     void rejectsGridLayoutInV1() {
-        // M6 决策：grid 推迟到 M7
+        // grid 布局尚未支持
         assertTrue(failureDetail(load("""
                 spec: 1
                 id: grid_demo
@@ -251,7 +251,7 @@ class TemplateLoaderTest {
 
     @Test
     void rejectsBadVisibleWhenSyntax() {
-        // M6-B 把表达式语法校验接进 §9 校验
+        // 把表达式语法校验接进 §9 校验
         String detail = failureDetail(load("""
                 spec: 1
                 id: bad_expr

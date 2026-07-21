@@ -7,7 +7,7 @@
  * 升级后：fontkit 解析字体 → layout glyphs → 每个 glyph SVG path → 采样多边形 →
  * polygon-clipping union → 单外环 polygon。
  *
- * 设计决策：
+ * 实现约束：
  *   1. **dynamic import fontkit**：避免 ~150 kB 进主 bundle；Live Paint + text 触发时才加载。
  *   2. **字体二进制缓存**：fontkit Font 实例按 fontId 内存常驻；同一 fontId 不重复 fetch。
  *   3. **polygon 结果缓存**：按 `fontId|size|text|letterSpacing|lineHeight` 缓存 polygon。
@@ -16,7 +16,7 @@
  *      cache 存"以 (0,0) 为原点的 layout polygon"，调用方加偏移。
  *   4. **v1 限制**：仅单行 / 多行（按 `\n` 拆）水平 layout；不支持 wrap by box-width、
  *      不支持 vertical 模式、不支持 letterSpacing 完整复刻 TextLayout.ts。无法处理时
- *      返回 null 让上层 fallback bbox。这是用户已知的"glyph v1"行为。
+ *      返回 null 让上层 fallback bbox。
  *   5. **退化兜底**：fontkit 加载失败 / 字体 fetch 失败 / glyph path 为空 → 返回 null。
  *
  * 性能：

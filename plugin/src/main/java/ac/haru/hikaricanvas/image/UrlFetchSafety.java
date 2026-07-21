@@ -5,7 +5,7 @@ import java.net.URISyntaxException;
 import java.util.Locale;
 
 /**
- * URL 上传的最小化校验（用户选择"所有域名均可粘贴"）。
+ * URL 上传的最小化校验：任何域名都可粘贴。
  *
  * <p>合法 URL 必须：</p>
  * <ul>
@@ -13,9 +13,9 @@ import java.util.Locale;
  *   <li>URI 语法合法 + host 非空</li>
  * </ul>
  *
- * <p><b>已删除（按用户要求）</b>：DNS 解析 / 私有地址检查 / 回环 / link-local /
- * CGNAT / IPv6 unique-local / localhost 字符串过滤。SSRF 风险由用户自己承担——
- * 本地 HikariCanvas 是单玩家或可信玩家场景，不是公网服务。</p>
+ * <p><b>不做</b>：DNS 解析 / 私有地址检查 / 回环 / link-local / CGNAT /
+ * IPv6 unique-local / localhost 字符串过滤。SSRF 风险由服主承担——HikariCanvas
+ * 面向单玩家或可信玩家场景，不是公网服务。</p>
  *
  * <p><b>线程安全</b>：静态方法，无状态。</p>
  */
@@ -67,8 +67,8 @@ public final class UrlFetchSafety {
         if (host == null || host.isBlank()) {
             return new CheckResult(Reason.INVALID_URL, "no host");
         }
-        // 无 DNS 解析 + 无私有地址 / 回环 / link-local 黑名单。
-        // 用户选择"所有域名均可粘贴"——SSRF 由用户自担。
+        // 无 DNS 解析 + 无私有地址 / 回环 / link-local 黑名单：任何域名都放行，
+        // SSRF 风险由服主承担。
         return CheckResult.success();
     }
 }

@@ -5,7 +5,7 @@
  * <p>替代原先的 textarea：把 {@code ${var:X}} 占位符渲染成 Notion-style chip pill。
  * 数据模型不变——v-model:text 仍是 element.text 字符串字面值；chip 仅 UI 层。</p>
  *
- * <h4>Lexical 路线决策</h4>
+ * <h4>Lexical 接入方式</h4>
  * <p>试验了 {@code lexical-vue}（vue-vine 编译产物，runtime 兼容但 .d.ts 用了
  * {@code vue-vine/internals} 类型，vue-tsc 会报错且无法直接配置 DecoratorNode
  * 渲染管线）→ <b>放弃</b>。最终选 <b>lexical core 直接接 Vue</b>：自己写 reactive bridge

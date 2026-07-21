@@ -42,22 +42,22 @@ dependencies {
     // 服主单独装 PacketEvents 插件（paper-plugin.yml 声明为必装依赖）。
     compileOnly("com.github.retrooper:packetevents-spigot:2.13.0")
 
-    // 持久化（M2-T2）
+    // 持久化
     implementation("org.xerial:sqlite-jdbc:3.53.0.0")
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("org.jdbi:jdbi3-core:3.52.1")
     implementation("org.jdbi:jdbi3-sqlite:3.52.1")
 
-    // M15 内存上限：wallPreviewCache 等需要 LRU + TTL（替代 ConcurrentHashMap 无界）
+    // 内存上限：wallPreviewCache 等需要 LRU + TTL（替代 ConcurrentHashMap 无界）
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
-    // M4-T11 snapshot 测试台
+    // snapshot 测试台
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
-    // M15 测试基建：MockBukkit（FrameDeployer / wall.lock owner-only 等需要 Bukkit world / entity 设施）
+    // 测试基建：MockBukkit（FrameDeployer / wall.lock owner-only 等需要 Bukkit world / entity 设施）
     testImplementation("com.github.seeseemelk:MockBukkit-v1.21:3.123.0")
-    // M15 测试基建：JavalinTest（HTTP / WS 端到端测试 — UploadHandler 全场景 / sessionId 鉴权）
+    // 测试基建：JavalinTest（HTTP / WS 端到端测试 — UploadHandler 全场景 / sessionId 鉴权）
     testImplementation("io.javalin:javalin-testtools:7.1.0")
 }
 
@@ -81,7 +81,7 @@ val installWebDeps = tasks.register<Exec>("installWebDeps") {
     group = "build"
     description = "npm ci in web/ — only runs when node_modules is missing"
     workingDir = webBuildDir.asFile
-    // M16 P5.3：npm ci 严格按 package-lock.json 装，可重现性 > 自动升级；
+    // npm ci 严格按 package-lock.json 装，可重现性 > 自动升级；
     // package.json 与 lock 不一致直接报错，比 npm install 静默升级更安全。
     commandLine(npmCommand, "ci")
     onlyIf { !webBuildDir.dir("node_modules").asFile.exists() }
@@ -109,7 +109,7 @@ val copyWebToResources = tasks.register<Copy>("copyWebToResources") {
     into(generatedWebResources.map { it.dir("web") })
 }
 
-// ---- M4-T1 构建期 palette.json 生成 ----
+// ---- 构建期 palette.json 生成 ----
 // 独立 sourceSet 'generator' 隔离构建期工具类，避免 classes → processResources
 // → generatePalette → classes 的循环依赖。
 //
@@ -145,9 +145,9 @@ val generatePalette = tasks.register<JavaExec>("generatePalette") {
     inputs.files(generatorSource.allSource)
 }
 
-// ---- M4-T3 构建期下载内置字体 ----
+// ---- 构建期下载内置字体 ----
 // 仓库不打包字体文件（>30 MB）。首次 `./gradlew shadowJar` 时从 GitHub Release 抓到
-// build/downloaded-fonts/，SHA-256 校验（M7 polish pin 实际值；M4 留空仅 log）。
+// build/downloaded-fonts/，SHA-256 校验（expectedSha256 留空则只 log 实际值不校验）。
 // processResources 把 *.ttf / *.otf 合并到 jar 的 /fonts/ classpath 子目录，
 // FontRegistry 启动时 getResourceAsStream 读。
 
@@ -173,7 +173,7 @@ val bundledFonts = listOf(
         expectedSha256 = "2fa78b40f74714b0092fa549eb6814b3efec5a729d020254968a270771ba5f75",
         inZipEntryPattern = ".*monospaced-zh_cn\\.ttf"
     ),
-    // M21：6 个新内置字体（全 SIL OFL 1.1）
+    // 6 个新内置字体（全 SIL OFL 1.1）
     FontSpec(
         displayId = "source_han_serif",
         url = "https://github.com/adobe-fonts/source-han-serif/raw/release/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf",
@@ -208,7 +208,7 @@ val bundledFonts = listOf(
     ),
     // 注：source_han_mono SC 单文件不存在（adobe-fonts/source-han-mono release 只发 122MB ttc 多语言合包），
     // 122MB 超过整个 shadow jar 现尺寸 2 倍，本期跳过；未来需中文等宽可走外部字体目录。
-    // M22：13 个艺术 / 装饰字体（全 SIL OFL 1.1）
+    // 13 个艺术 / 装饰字体（全 SIL OFL 1.1）
     // 中文艺术 6
     FontSpec(
         displayId = "smiley_sans",
@@ -292,7 +292,7 @@ val bundledFonts = listOf(
         destFileName = "DancingScript-Variable.ttf",
         expectedSha256 = "21808625578fe8d8cd10cb684be546dca077b27cd03a53a2f1ec11dc743c924c"
     ),
-    // M25：用户请求 FHWA Series（美国路牌字体）+ Bahnschrift（Microsoft 专有）的 OFL 替代。
+    // 用户请求 FHWA Series（美国路牌字体）+ Bahnschrift（Microsoft 专有）的 OFL 替代。
     // Overpass：Red Hat 出品的 FHWA Series B / D 风格替代（variable wght；default 400 双端一致）。
     // Bebas Neue：经典 DIN / Bahnschrift Condensed 风格替代（纯大写英文 condensed sans）。
     // 都来自 google/fonts，全 SIL OFL 1.1。
@@ -497,7 +497,7 @@ val downloadLicenses = tasks.register("downloadLicenses") {
     }
 }
 
-// ---- M20-T1 构建期字体 advance 表生成 ----
+// ---- 构建期字体 advance 表生成 ----
 // 链路：downloadFonts → generateGlyphMetrics（每字体一次 JavaExec）
 //       → build/generated/glyph-metrics/{fontId}.metrics.json
 //       → processResources 合并到 jar `/fonts/{fontId}.metrics.json` 供后端读
@@ -542,9 +542,9 @@ val generateGlyphMetrics = tasks.register("generateGlyphMetrics") {
     dependsOn(generateGlyphMetricsTasks)
 }
 
-// M5-C1：把已下载的字体同步到 web/public/fonts/，Vite 通过 @font-face 加载到浏览器
+// 把已下载的字体同步到 web/public/fonts/，Vite 通过 @font-face 加载到浏览器
 // Canvas 2D / TextLayout 需要与 Java Graphics2D 使用完全相同的 TTF/OTF（rendering.md §2.1）
-// M20-T1：同步追加 *.metrics.json（前端运行期 fetch）
+// 同步追加 *.metrics.json（前端运行期 fetch）
 val webFontsDir = rootProject.layout.projectDirectory.dir("web/public/fonts")
 val syncFontsToWeb = tasks.register<Copy>("syncFontsToWeb") {
     group = "build"
@@ -560,15 +560,14 @@ val syncFontsToWeb = tasks.register<Copy>("syncFontsToWeb") {
     into(webFontsDir)
 }
 
-// ---- M26-T1 构建期 Font Awesome Free 矢量图标库下载 + JSON 生成 ----
+// ---- 构建期 Font Awesome Free 矢量图标库下载 + JSON 生成 ----
 // 链路：downloadIcons（curl FA zip + SHA-256 校验）
 //       → generateIconLibrary JavaExec（IconLibraryGenerator 解 zip 转 JSON）
 //       → build/generated/icon-resources/{fa-solid,fa-regular,fa-brands}.icons.json
 //       → processResources 进 jar /icons/ 供 IconRegistry 启动期读
 //
-// 决策：M26 Phase 1 只内置 Font Awesome Free 6.7.2（CC BY 4.0；~2000 icons / pack 总
-// 计 ~800KB-1.5MB JSON）；Material Symbols 留 M27 单独 pipeline。IconRegistry 已为
-// material/ 命名空间留 hook。
+// 只内置 Font Awesome Free 6.7.2（CC BY 4.0；~2000 icons / pack，总计 ~800KB-1.5MB JSON）。
+// IconRegistry 为 material/ 命名空间留了 hook，接别的图标源时走独立 pipeline。
 
 data class IconSpec(
     val displayId: String,
@@ -678,18 +677,18 @@ tasks.processResources {
     dependsOn(downloadLicenses)
     dependsOn(generateGlyphMetrics)
     dependsOn(syncFontsToWeb)
-    // M26：FA Free 矢量包入 jar /icons/。IconRegistry.loadBuiltIn 读 classpath。
+    // FA Free 矢量包入 jar /icons/。IconRegistry.loadBuiltIn 读 classpath。
     dependsOn(generateIconLibrary)
     from(downloadedFontsDir) {
         include("*.ttf", "*.otf")
         into("fonts")
     }
-    // M20-T1：metrics.json 进 jar /fonts/，后端 FontRegistry 后续 phase 用 getResourceAsStream 读
+    // metrics.json 进 jar /fonts/，后端 FontRegistry 后续 phase 用 getResourceAsStream 读
     from(generatedGlyphMetricsDir) {
         include("*.metrics.json")
         into("fonts")
     }
-    // M26-T1：FA Free 矢量包 JSON 进 jar /icons/，IconRegistry.loadBuiltIn 读 classpath
+    // FA Free 矢量包 JSON 进 jar /icons/，IconRegistry.loadBuiltIn 读 classpath
     from(generatedIconResources) {
         include("*.icons.json")
         into("icons")
@@ -722,7 +721,7 @@ tasks {
     shadowJar {
         archiveBaseName.set("HikariCanvas")
         archiveClassifier.set("")
-        // M16 P5.1：把所有 runtime 内嵌 lib relocate 到 ac.haru.hikaricanvas.shaded.*，防止
+        // 把所有 runtime 内嵌 lib relocate 到 ac.haru.hikaricanvas.shaded.*，防止
         // 与生产服其它插件（多半也带 jackson 等）发生类加载冲突。
         //
         // 注意事项：
@@ -739,7 +738,7 @@ tasks {
         relocate("org.eclipse.jetty", "ac.haru.hikaricanvas.shaded.jetty")
         // jackson-dataformat-yaml 间接依赖 SnakeYAML；同步 relocate 避免半 shade
         relocate("org.yaml.snakeyaml", "ac.haru.hikaricanvas.shaded.snakeyaml")
-        // M28-P4：ac.haru.hikaricanvas.api.* 是公开 API 包，外部插件 import 路径不可变。
+        // ac.haru.hikaricanvas.api.* 是公开 API 包，外部插件 import 路径不可变。
         // relocate 仅对显式列出的第三方包 (com.fasterxml.jackson 等) 生效，不会自动 prefix-match
         // 项目自身的 ac.haru.hikaricanvas.*——所以 api 包天然安全。新增 relocate 时务必只列第三方包，
         // 不要加 relocate("ac.haru.hikaricanvas", ...)，否则 ServicesManager.load(HikariCanvasAPI.class)

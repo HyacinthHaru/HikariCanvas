@@ -1,5 +1,5 @@
 /**
- * M18-P5：RdpSimplifier 单元测试。
+ * RdpSimplifier 单元测试。
  *
  * 覆盖：
  * - 三顶点不变

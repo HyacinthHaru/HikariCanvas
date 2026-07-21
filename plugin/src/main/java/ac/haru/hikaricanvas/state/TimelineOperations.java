@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * timeline.* / keyframe.* op 集中实现（0.6 引入）：
+ * timeline.* / keyframe.* op 集中实现：
  * create / update / delete + keyframe add / update / delete / move。
  *
  * <p>范式与 {@link LayerOperations} 完全对齐 —— 构造器接 {@code (ProjectState, HistoryStack)}，
@@ -26,6 +26,8 @@ import java.util.UUID;
  * <p><b>mutation 范式：</b>{@link Timeline} 不可变，所有改动重建 record 后 {@code replaceTimelineAt}
  * （与 Element / Layer「重建 record 再置换」一致），保证 {@link ProjectSnapshot} 可按引用共享、
  * undo/redo 不互相污染。</p>
+ *
+ * @since 0.6
  */
 final class TimelineOperations {
 

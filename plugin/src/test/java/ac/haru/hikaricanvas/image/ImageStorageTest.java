@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M13-B：{@link ImageStorage} 文件层 + DAO + LRU 行为校验。
+ * {@link ImageStorage} 文件层 + DAO + LRU 行为校验。
  *
  * <p>不 mock：用临时目录 + SQLite 真跑迁移 + 真磁盘 IO。</p>
  */

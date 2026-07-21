@@ -8,8 +8,7 @@
  *   - findGapAt：主线程 sync 查询 cached graph（不走 worker，命中点查 < 1ms）
  *   - onScopeDispose: terminate worker + clear debounce timer
  *
- * 关键决策：
- *   - JSON 深 clone ── Vue reactive Proxy 不能 structuredClone；JSON.parse(JSON.stringify) 简单可靠
+ * 发给 worker 前做 JSON 深 clone —— Vue reactive Proxy 不能 structuredClone。
  */
 
 import { onScopeDispose, ref, watch, type Ref } from 'vue';

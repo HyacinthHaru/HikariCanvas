@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M11-E review 回归：用户可在 FillInput 把所有 stops 拉到 position=1.0（FillValidator 允许相等位置）。
+ * review 回归：用户可在 FillInput 把所有 stops 拉到 position=1.0（FillValidator 允许相等位置）。
  * 此时 {@code monotonicFractions} 仍产出非严格递增的 fractions（{@code [1.0, 1.0]}），
  * 触发 AWT {@code LinearGradientPaint} / {@code RadialGradientPaint} 的 IAE。
  *

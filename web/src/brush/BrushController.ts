@@ -1,4 +1,4 @@
-// M12-C：笔刷控制器。接管 PointerEvent → ws.send brush.start/point/end/cancel
+// 笔刷控制器。接管 PointerEvent → ws.send brush.start/point/end/cancel
 // + floating preview off-canvas 实时反馈（绕开 WS round-trip 延迟）。
 //
 // 工作流：

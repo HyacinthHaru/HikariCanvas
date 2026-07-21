@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M12-A：{@link EditSession} brush.* op 状态机测试。
+ * {@link EditSession} brush.* op 状态机测试。
  *
  * <p>覆盖：</p>
  * <ul>
@@ -90,7 +90,7 @@ class EditSessionBrushTest {
     @Test
     void endBrushCreatesElement() {
         EditSession es = newSession();
-        // M12-B：smoothing=0 关闭 RDP 简化，保证所有 raw 点都进 element.points
+        // smoothing=0 关闭 RDP 简化，保证所有 raw 点都进 element.points
         String sid = ((EditSession.OpResult.OkBrushStart) es.startBrush(
                 Map.of("size", 4, "color", "#FF0000", "smoothing", 0.0), null)).strokeId();
         es.appendBrushPoints(sid, List.of(

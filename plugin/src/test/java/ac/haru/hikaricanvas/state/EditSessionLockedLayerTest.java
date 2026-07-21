@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * M8-C：locked 层校验。{@code element.add / update / delete / reorder / transform /
+ * locked 层校验。{@code element.add / update / delete / reorder / transform /
  * move-to-layer} 命中 locked layer 时必须返 {@code LAYER_LOCKED}；layer.update 本身可以
  * 改 locked 字段（包括 unlock 自己）。
  */

@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * M9-A：通过 EditSession 创建 / 更新 PathElement / CircleElement / ShapeElement 行为校验。
+ * 通过 EditSession 创建 / 更新 PathElement / CircleElement / ShapeElement 行为校验。
  *
  * <p>核心断言：</p>
  * <ul>

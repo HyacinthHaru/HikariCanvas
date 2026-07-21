@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M8-C：layer.* op 族 + element.move-to-layer + canvas.grid / canvas.guides.set 行为验证。
+ * layer.* op 族 + element.move-to-layer + canvas.grid / canvas.guides.set 行为验证。
  *
  * <p>覆盖：</p>
  * <ul>
@@ -171,7 +171,7 @@ class EditSessionLayerOpsTest {
                 ((EditSession.OpResult.Error) r).code());
     }
 
-    // ---------- M8-TODO 项 2：colorTag ----------
+    // ---------- 项 2：colorTag ----------
 
     @Test
     void updateAcceptsValidColorTag() {
@@ -270,7 +270,7 @@ class EditSessionLayerOpsTest {
 
     @Test
     void setActiveDoesNotPushHistory() {
-        // M8-C 决策：set-active 不进 undo 栈
+        // set-active 不进 undo 栈
         EditSession es = newSession();
         String l0 = es.state().activeLayerId();
         EditSession.OpResult.Ok created = (EditSession.OpResult.Ok) es.createLayer("Top", null);

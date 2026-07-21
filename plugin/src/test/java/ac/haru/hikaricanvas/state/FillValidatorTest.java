@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * M11-A：FillValidator pure-helper 单测。
+ * FillValidator pure-helper 单测。
  *
  * <p>覆盖 SolidFill / LinearGradient / RadialGradient 三个子类的字段边界，
  * 以及 stops 列表的数量 / 位置单调 / 颜色合法性校验。</p>

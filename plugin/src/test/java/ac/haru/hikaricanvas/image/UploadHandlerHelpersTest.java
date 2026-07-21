@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M13-B：{@link UploadHandler} 静态辅助方法（magic bytes 探测 + bilinear downscale）。
+ * {@link UploadHandler} 静态辅助方法（magic bytes 探测 + bilinear downscale）。
  *
  * <p>HTTP path 完整 e2e（{@code handleUpload}）需 Javalin {@code JavalinTest} 依赖，未引入；
  * 这里只覆盖纯函数辅助，确保压缩炸弹防御层的核心逻辑可回归。</p>

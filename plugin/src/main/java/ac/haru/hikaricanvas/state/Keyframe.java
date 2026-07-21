@@ -7,14 +7,16 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Set;
 
 /**
- * 关键帧（0.6 引入）。契约见 {@code docs/timeline.md §2.3} 与 {@code docs/protocol.md §7}。
+ * 关键帧。契约见 {@code docs/timeline.md §2.3} 与 {@code docs/protocol.md §7}。
  *
  * <p>同一元素的不同 property 关键帧混在该元素的轨道列表里（按 {@code timeMs} 升序），
- * 前端按 {@code (elementId, property)} 分组渲染成多条属性子轨（方案 B，timeline.md §2.2）。
+ * 前端按 {@code (elementId, property)} 分组渲染成多条属性子轨（timeline.md §2.2）。
  * {@code easing} 是到<b>下一个</b>关键帧的缓动 —— 末帧的 easing 无意义（rendering.md §9.1）。</p>
  *
  * <p>插值类别（rendering.md §9.2）：数值类（x/y/w/h/rotation/opacity）线性 + easing；
  * 颜色 / Fill 类 sRGB 线性空间分量插值；离散类（text）step 取最近帧。</p>
+ *
+ * @since 0.6
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)

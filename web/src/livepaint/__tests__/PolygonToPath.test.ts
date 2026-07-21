@@ -1,5 +1,5 @@
 /**
- * M18-P5：PolygonToPath 单元测试。
+ * PolygonToPath 单元测试。
  *
  * 覆盖：
  * - gapPolygonToPathD：简单矩形外环 / 含 hole 多 subpath

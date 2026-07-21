@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * M6-D：内置 hello_world.yml 端到端走通——loader 接受 + 默认 param 走通 + 自定义 param
+ * 内置 hello_world.yml 端到端走通——loader 接受 + 默认 param 走通 + 自定义 param
  * 透传。模拟 WebServer.template.apply 把 hello_world 当真正的 YAML 模板处理的路径。
  */
 class HelloWorldYamlTest {

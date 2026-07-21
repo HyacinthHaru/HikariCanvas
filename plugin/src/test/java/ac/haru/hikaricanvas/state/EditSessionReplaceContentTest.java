@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M6-D：{@link EditSession#replaceContent(String, java.util.List)} 行为校验。
+ * {@link EditSession#replaceContent(String, java.util.List)} 行为校验。
  * 这是 {@code template.apply} replace 语义的落地点——清空 + 改背景 + 写入新 elements
  * + 推进 version + push 到 history 栈（让 undo 可回）。
  */

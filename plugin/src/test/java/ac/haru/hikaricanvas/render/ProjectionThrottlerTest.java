@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 0.4.0 方案 B 自适应渲染：{@link ProjectionThrottler#setIntervalForSession} +
+ * 自适应渲染：{@link ProjectionThrottler#setIntervalForSession} +
  * {@link ProjectionThrottler#clearSessionInterval} + {@link ProjectionThrottler#discardSession}
  * 覆盖。
  *

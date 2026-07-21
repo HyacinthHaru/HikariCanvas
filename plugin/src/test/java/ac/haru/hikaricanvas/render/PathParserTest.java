@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M9-B：{@link PathParser} 解析与切线方向校验。
+ * {@link PathParser} 解析与切线方向校验。
  *
  * <p>核心断言：</p>
  * <ul>
@@ -220,7 +220,7 @@ class PathParserTest {
         assertEquals(10.0, r.endX(), EPS);
     }
 
-    // ---------- M26-C: H / V / S / T / A 新命令 ----------
+    // ---------- H / V / S / T / A 新命令 ----------
 
     @Test
     void horizontalLineAbsolute() {

@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M13-A：{@link ImageElement} + {@link Mask} 通过 {@link EditSession} 的添加 / 更新行为校验。
+ * {@link ImageElement} + {@link Mask} 通过 {@link EditSession} 的添加 / 更新行为校验。
  *
  * <p>测试覆盖：</p>
  * <ul>

@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M8-E：{@link BlendModes} 公式与合成行为校验。
+ * {@link BlendModes} 公式与合成行为校验。
  *
  * <p>关键不变量：</p>
  * <ul>

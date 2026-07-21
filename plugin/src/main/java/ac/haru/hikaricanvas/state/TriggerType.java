@@ -3,14 +3,15 @@ package ac.haru.hikaricanvas.state;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * 时间轴触发方式（0.6 引入）。契约见 {@code docs/timeline.md §5} 与 {@code docs/protocol.md §7}。
+ * 时间轴触发方式。契约见 {@code docs/timeline.md §5} 与 {@code docs/protocol.md §7}。
  *
- * <p>0.6 范围 = {@code MANUAL / VARIABLE_CHANGE / SCHEDULE} 三种（D5）；{@code PLAYER_NEAR}
- * 推迟 0.7（需从零建事件层，与 0.7 Scratch 触发系统合并实施）—— 届时按 enum 加法扩展，
- * wire 形态向后兼容。</p>
+ * <p>只覆盖时间轴自身的三种触发；玩家靠近这类游戏事件触发走脚本系统的触发器。
+ * 扩展时按 enum 加法追加，wire 形态向后兼容。</p>
  *
- * <p>P1 仅存储触发配置；触发行为（listener 注册 / 去抖）P5 落地。序列化采用 camelCase
- * 字符串 —— 同 {@link BlendMode} 的 {@code @JsonProperty} 显式映射范式。</p>
+ * <p>序列化采用 camelCase 字符串 —— 同 {@link BlendMode} 的 {@code @JsonProperty}
+ * 显式映射范式。</p>
+ *
+ * @since 0.6
  */
 public enum TriggerType {
     @JsonProperty("manual") MANUAL("manual"),

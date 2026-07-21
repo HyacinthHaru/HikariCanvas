@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 双端渲染一致性的 Java 端部分（M4-T11），契约对应 {@code docs/rendering.md §8}。
+ * 双端渲染一致性的 Java 端部分，契约对应 {@code docs/rendering.md §8}。
  *
  * <h2>流程</h2>
  * <ol>

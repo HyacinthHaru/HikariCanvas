@@ -1,5 +1,5 @@
 /**
- * M18-P5：LivePaintCore 单元测试。
+ * LivePaintCore 单元测试。
  *
  * 覆盖：
  * - pointInPolygon：矩形 / U 形凹多边形 / 边界 / 外部

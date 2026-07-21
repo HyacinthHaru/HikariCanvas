@@ -1,7 +1,7 @@
 spec: 1
 id: hello_world
 name: Hello World
-description: 最简模板示例：湖蓝底 + 白色边框 + 居中文字。M3 demo 升级为正式 YAML 模板（M6-D）
+description: 最简模板示例：湖蓝底 + 白色边框 + 居中文字。
 version: 1
 author: hikari-canvas-official
 tags: [demo, basic]

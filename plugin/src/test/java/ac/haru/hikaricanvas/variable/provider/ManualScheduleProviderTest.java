@@ -65,7 +65,7 @@ class ManualScheduleProviderTest {
 
     @Test
     void declaredKeys_returnsFifteen() {
-        // M28-enhance：扩展到 15 个 key（7 原 + eta_mmss + 7 next2_*）
+        // 扩展到 15 个 key（7 原 + eta_mmss + 7 next2_*）
         List<DeclaredKey> keys = provider.declaredKeys();
         assertEquals(15, keys.size());
         assertTrue(keys.stream().anyMatch(k -> k.key().equals("next_departure")));
@@ -198,7 +198,7 @@ class ManualScheduleProviderTest {
         assertEquals("", currentValueOrNull(store, "schedule:w-empty/next_destination"));
         assertEquals("", currentValueOrNull(store, "schedule:w-empty/eta_minutes"));
         assertEquals("false", currentValueOrNull(store, "schedule:w-empty/is_arriving"));
-        // M28-enhance：next2_* 也应为空
+        // next2_* 也应为空
         assertEquals("", currentValueOrNull(store, "schedule:w-empty/next2_departure"));
         assertEquals("", currentValueOrNull(store, "schedule:w-empty/next2_destination"));
         assertEquals("", currentValueOrNull(store, "schedule:w-empty/next2_eta_seconds"));
@@ -255,7 +255,7 @@ class ManualScheduleProviderTest {
 
     @Test
     void unregisterWall_removesAllVariables() {
-        // M28-enhance：扩展到 15 变量，unregister 全部清掉
+        // 扩展到 15 变量，unregister 全部清掉
         dataSource.now = LocalTime.of(8, 0);
         dataSource.entriesByWall.put("w-1", List.of(
                 new ScheduleEntry(1, "w-1", "08:30", "A", 0)));
@@ -272,7 +272,7 @@ class ManualScheduleProviderTest {
         assertFalse(store.get("schedule:w-1/is_arriving").isPresent());
         assertFalse(store.get("schedule:w-1/arrival_status").isPresent());
         assertFalse(store.get("schedule:w-1/precision").isPresent());
-        // M28-enhance：next2_*
+        // next2_*
         assertFalse(store.get("schedule:w-1/next2_departure").isPresent());
         assertFalse(store.get("schedule:w-1/next2_destination").isPresent());
         assertFalse(store.get("schedule:w-1/next2_eta_minutes").isPresent());
@@ -394,7 +394,7 @@ class ManualScheduleProviderTest {
 
         provider.ensureWallRegistered("w-1");
 
-        // M28-enhance：15 个 CREATED + 15 个 VALUE_SET
+        // 15 个 CREATED + 15 个 VALUE_SET
         long createdCount = events.stream()
                 .filter(e -> e.type() == VariableStore.ChangeType.CREATED)
                 .filter(e -> e.fullName().startsWith("schedule:w-1/"))
@@ -456,7 +456,7 @@ class ManualScheduleProviderTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  M28-enhance：next2 第二班次 + eta_mmss
+    //  next2 第二班次 + eta_mmss
     // ──────────────────────────────────────────────────────────
 
     @Test

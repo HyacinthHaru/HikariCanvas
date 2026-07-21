@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M8-C：验证所有 element / canvas / layer op 发出的 StatePatch path 都符合 v2 形态
+ * 验证所有 element / canvas / layer op 发出的 StatePatch path 都符合 v2 形态
  * （元素路径 {@code /layers/{i}/elements/{j}/...}、层路径 {@code /layers/{i}/...}、
  * 活动层 {@code /activeLayerId}、画布字段 {@code /canvas/...}）。
  *

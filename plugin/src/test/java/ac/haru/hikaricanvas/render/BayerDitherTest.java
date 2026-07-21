@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M11-B：{@link BayerDither} pure helper 单测。
+ * {@link BayerDither} pure helper 单测。
  *
  * <p>覆盖：</p>
  * <ul>

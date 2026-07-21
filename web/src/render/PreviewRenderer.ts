@@ -1056,7 +1056,7 @@ function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
  * placeholder hint chip 风格背景。每个 segment 对应原 text 中的 ${var:X}
  * 替换后的字符 range；通过 glyphs[].srcIndex 反查命中字符 → 按行分组 → 画半透明矩形。
  *
- * <p>视觉决策：Catppuccin Mauve 0.20 alpha 填充 + 0.50 alpha 边框（极薄），让用户能在编辑器
+ * <p>Catppuccin Mauve 0.20 alpha 填充 + 0.50 alpha 边框（极薄），让用户能在编辑器
  * 上区分"哪几个字是变量值"；hover tooltip 留 v1.x（Canvas 不易做 hover；需 DOM overlay）。</p>
  */
 function drawPlaceholderHints(

@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * M6-C 实例化引擎测试。覆盖：
+ * 实例化引擎测试。覆盖：
  * <ul>
  *   <li>param 校验 / 必填 / default 填充 / 类型 coerce</li>
  *   <li>canvas size=fixed 必须匹配；size=auto 必须 [min,max] 范围内</li>

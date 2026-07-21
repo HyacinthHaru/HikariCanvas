@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M8-B：{@link WallRepo#migrateProjectJsonV1ToV2} + {@link WallRepo#isV1Form} 的形态校验。
+ * {@link WallRepo#migrateProjectJsonV1ToV2} + {@link WallRepo#isV1Form} 的形态校验。
  *
  * <p>不接数据库，只测两个静态方法的纯函数行为：</p>
  * <ul>

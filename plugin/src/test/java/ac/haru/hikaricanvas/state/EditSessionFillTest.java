@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M11-A：EditSession 端 fill 字段联合形态测试。
+ * EditSession 端 fill 字段联合形态测试。
  *
  * <p>断言：</p>
  * <ul>

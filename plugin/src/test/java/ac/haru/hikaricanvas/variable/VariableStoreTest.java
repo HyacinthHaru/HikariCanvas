@@ -306,7 +306,7 @@ class VariableStoreTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  0.4.0 方案 B：高频 wall 判断
+    //  高频 wall 判断
     // ──────────────────────────────────────────────────────────
 
     @Test
@@ -364,7 +364,7 @@ class VariableStoreTest {
 
     @Test
     void markWallReferences_firesWallRefsUpdatedListener() {
-        // 0.4.0 方案 B：listener 必须能监听到 markWallReferences 后引用集合变化
+        // listener 必须能监听到 markWallReferences 后引用集合变化
         java.util.List<VariableStore.VariableChangeEvent> events = new java.util.ArrayList<>();
         store.registerChangeListener(events::add);
         store.markWallReferences("w-1", Set.of("schedule:w-1/eta_seconds"));

@@ -10,11 +10,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 时间轴（0.6 引入）。契约见 {@code docs/timeline.md §2.1} 与 {@code docs/protocol.md §7}；
+ * 时间轴。契约见 {@code docs/timeline.md §2.1} 与 {@code docs/protocol.md §7}；
  * 持久化形态见 {@code docs/data-model.md §2.4.2}（序列化进 project_json blob，无独立表）。
  *
  * <p>{@code tracks} 的 key 是 elementId，值是该元素<b>所有属性混排</b>、按 {@code timeMs}
- * 升序的关键帧列表（方案 B：关键帧不进 Element record，{@code Element} 8 个子类零改动）。</p>
+ * 升序的关键帧列表 —— 关键帧不进 Element record，{@code Element} 各子类不感知时间轴。</p>
  *
  * <p><b>不可变性：</b> canonical 构造器深冻结 {@code tracks}（LinkedHashMap 保序 +
  * 每轨 {@link List#copyOf}）。mutator 路径（{@code TimelineOperations}）整体重建 record ——
@@ -23,6 +23,8 @@ import java.util.Map;
  *
  * <p>{@code fps} 受 config {@code timeline.max-fps} 钳（op 层 clamp，默 60；默认值 20，
  * 见 architecture.md §5.5）。</p>
+ *
+ * @since 0.6
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)

@@ -75,7 +75,7 @@ export function keyframeablePropertiesFor(element: Element | null | undefined): 
     return props;
 }
 
-/** 新建表单的字段默认值（MVP 决策：durationMs 5000 / fps 20 / loop / 名字空 → 后端补默认）。 */
+/** 新建表单的字段默认值（durationMs 5000 / fps 20 / loop / 名字空 → 后端补默认）。 */
 export const CREATE_FORM_DEFAULTS = {
     name: '',
     durationMs: 5000,
@@ -271,7 +271,7 @@ export interface ElementTrackGroup {
 
 /**
  * 把 {@code timeline.tracks}（每元素所有属性混排）拆成 (elementId, property) 二级结构，供 AE dock
- * 左侧属性树 + 右侧轨道行渲染（docs/timeline.md §2.2 方案 B）。elementId 升序、property 字典序、
+ * 左侧属性树 + 右侧轨道行渲染（docs/timeline.md §2.2）。elementId 升序、property 字典序、
  * 子轨内 timeMs 升序。{@link groupKeyframesByElement} 的二级版（旧 modal 用一级，dock 用二级）。
  */
 export function splitTracksByProperty(

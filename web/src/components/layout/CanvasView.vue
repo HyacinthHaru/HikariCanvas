@@ -835,7 +835,7 @@ useEventListener(window, 'mouseup', () => {
 // Live Paint：鼠标离开 outer 容器（或 window blur）时清 hover 高亮
 useEventListener(window, 'blur', () => { hoveredGap.value = null; });
 
-/** 双击 stage 空白处：取消所有选中 + 退出编辑（用户实测后明确要求的 escape 路径）。 */
+/** 双击 stage 空白处：取消所有选中 + 退出编辑，作为 escape 路径。 */
 function onStageDblClick(ev: { target: { getType?: () => string; hasName?: (n: string) => boolean } }): void {
     const node = ev.target as { getType?: () => string; hasName?: (n: string) => boolean } | null;
     if (!node) return;

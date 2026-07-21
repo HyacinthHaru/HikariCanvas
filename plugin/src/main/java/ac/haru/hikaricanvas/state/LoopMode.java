@@ -3,10 +3,12 @@ package ac.haru.hikaricanvas.state;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * 时间轴播放模式（0.6 引入）。契约见 {@code docs/timeline.md §2.1} 与 {@code docs/protocol.md §7}。
+ * 时间轴播放模式。契约见 {@code docs/timeline.md §2.1} 与 {@code docs/protocol.md §7}。
  *
  * <p>序列化采用 camelCase 字符串（{@code "once"} / {@code "loop"} / {@code "pingPong"}）以贴合
  * 协议契约 —— 同 {@link BlendMode} 的 {@code @JsonProperty} 显式映射范式，非 Java enum name 直出。</p>
+ *
+ * @since 0.6
  */
 public enum LoopMode {
     @JsonProperty("once") ONCE("once"),

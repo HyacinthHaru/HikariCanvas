@@ -150,7 +150,7 @@ class MapPoolInvariantTest {
         assertEquals(before, backend.createMapCalls, "复用刚 releaseToFree 的那张");
     }
 
-    // ── 7. bindToWall 跨世界拒绝（M16 P2.4）──
+    // ── 7. bindToWall 跨世界拒绝──
     @Test
     void bindToWall_crossWorld_throws() {
         pool = newPool(2, 20);

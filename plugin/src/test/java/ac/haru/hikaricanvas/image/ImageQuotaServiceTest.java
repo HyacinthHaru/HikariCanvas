@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M13-B：{@link ImageQuotaService} 三层配额边界 + bypass 路径。
+ * {@link ImageQuotaService} 三层配额边界 + bypass 路径。
  */
 class ImageQuotaServiceTest {
 

@@ -490,7 +490,7 @@ export interface TriggerConfig {
  *
  * <p>{@code tracks} 的 key 是 elementId，值是该元素<b>所有属性混在一起</b>、按 {@code timeMs}
  * 升序的关键帧列表。前端按 {@code (elementId, property)} 二级分组渲染成多条属性子轨
- * （方案 B，见 docs/timeline.md §2.2）。</p>
+ * （见 docs/timeline.md §2.2）。</p>
  */
 export interface Timeline {
     id: string; // "tl-<8hex>"

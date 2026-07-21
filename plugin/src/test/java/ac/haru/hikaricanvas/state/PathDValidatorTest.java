@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * M9-A：{@link PathDValidator} 词法校验边界覆盖。
+ * {@link PathDValidator} 词法校验边界覆盖。
  *
  * <p>不验证 path 绘制语义，只验证：</p>
  * <ul>

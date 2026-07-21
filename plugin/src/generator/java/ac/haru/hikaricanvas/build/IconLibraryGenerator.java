@@ -49,7 +49,7 @@ import java.util.zip.ZipFile;
  * 文件 {@code license} 字段写入 {@code "CC BY 4.0"}；运行期 IconRegistry 加载到 IconPack.license
  * 后由前端 i18n 在 IconPicker 显示 "Font Awesome Free by @fontawesome — CC BY 4.0"。</p>
  *
- * <p><b>M26 Phase 1 决策</b>：仅 FA Free；Material Symbols 留 M27（独立 generator 段）。</p>
+ * <p>仅内置 FA Free；接别的图标源走独立 generator 段。</p>
  */
 public final class IconLibraryGenerator {
 

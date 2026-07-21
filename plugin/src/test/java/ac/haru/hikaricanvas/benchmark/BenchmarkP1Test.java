@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>{@link BenchmarkConfig} 的默认值与归一化；</li>
  *   <li>{@link Instrumentation} 的优雅降级 / 单调分配计数；</li>
  *   <li><b>端到端 smoke</b>：{@link BenchCompositor} + {@link SceneTimer} 在 headless 下把<b>全部</b>
- *       场景跑通一遍——这同时是 0.5.0-P4「CI 功能性 gate」的种子（决策①：CI 只断言 bench 能跑通、
+ *       场景跑通一遍——这同时是 「CI 功能性 gate」的种子（CI 只断言 bench 能跑通、
  *       不崩、产出样本，<b>不</b>做性能数值门禁）。</li>
  * </ul>
  *
