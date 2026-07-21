@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-07-21 · 构建跨平台修复 + package-lock 同步
+
+`./gradlew :plugin:shadowJar` 在 Windows 上挂在 `installWebDeps`（`A problem occurred starting process 'command 'npm''`）——Gradle `Exec` 不经 shell 直接 spawn，而 Windows 上 npm 的可执行文件是 `npm.cmd`。新增 `npmCommand` 按 `os.name` 取值，`installWebDeps` / `buildWeb` 两处调用点共用；Linux / macOS 取值与原先字面相同，行为不变。
+
+`web/package-lock.json` 缺 `@emnapi/runtime@1.11.2`（`@rolldown/binding-wasm32-wasi` 与 `@tailwindcss/oxide-wasm32-wasi` 的依赖，两者都是 wasm32、非 os/cpu 特定），`npm ci` 因此失败。这不止影响 Windows：CI 的 `npm ci` 自 0.4.7 加兜底起每次都失败、每次落到 `npm install` 并打一条 `::warning::`，切 `npm ci` 想要的可复现性一直没真正生效。`npm install` 重新生成 lock 补上该条，差异 +15/-10、无其它版本变动。ci.yml 的 fallback 保留不动。
+
+CLAUDE.md 构建速查同步：原文的 `5 个 fixture` / `28 case` 早已过时，「手动 `cd web` 构建前端」的绕法在跨平台修复后不再需要；补一句 snapshot baseline 与 AWT 栅格化环境绑定、换机器出现文字类 fixture 失败时的判定方法。
+
+**验证**：删掉 `web/node_modules` 后跑不带 `-x` 的 `./gradlew :plugin:shadowJar`，`installWebDeps` 与 `buildWeb` 均实际执行、BUILD SUCCESSFUL；本机 `npm ci` 由失败转通过。CI 侧那条 `::warning::` 是否消失待推送后确认。
+
+关联文件：`plugin/build.gradle.kts`、`web/package-lock.json`、`CLAUDE.md`。
+
+---
+
 ## 2026-07-21 · 内置字体 / 图标许可证正文入包
 
 SIL OFL 1.1 要求再分发字体时随附许可证正文，此前 jar 只有字体本体，`THIRD-PARTY-LICENSES.md` 里记着这条待办。22 枚内置字体的 OFL 正文 + Font Awesome Free 的 LICENSE 改为构建期抓取并打进 jar。版本号不动，仍 0.9.15-SNAPSHOT。

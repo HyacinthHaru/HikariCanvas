@@ -561,13 +561,15 @@ shadow jar `HikariCanvas-0.4.5-SNAPSHOT.jar` 154 MB / 0 baseline 漂移。**0.4.
 ## 构建 / 开发流程速查
 
 ```bash
-./gradlew :plugin:syncFontsToWeb    # 首次或字体规格变更时跑一次（~10min 下载）
-./gradlew :plugin:runServer         # 本地 MC 1.21.11 dev server，挂新 shadow jar
-cd web && npm install               # 首次
-cd web && ./node_modules/.bin/vite build --clearScreen false   # 前端产物（Node 25 下偶卡，重跑即过）
-./gradlew :plugin:test              # snapshot 测试（5 个 fixture）；baseline 变时 rm expected/*.png 重建
-cd web && npm run test              # M18 vitest（28 case，166ms）
+./gradlew :plugin:shadowJar         # 完整产物；前端构建已联动。首次要下 22 个字体，约 10min
+./gradlew :plugin:runServer         # 本地 MC dev server，挂新 shadow jar
+./gradlew :plugin:test              # 后端测试；渲染 snapshot baseline 变时 rm expected/*.png 重建
+cd web && npm run test              # 前端 vitest
 ```
+
+三个平台通用（`npm` 调用按平台取 `npm` / `npm.cmd`）。渲染 snapshot 的 baseline 与生成它的 AWT
+字形栅格化环境绑定，换机器可能出现文字类 fixture 失败；要判断是不是自己引入的回归，把改动
+`git stash` 掉在干净树复跑，对比失败集合是否一致。
 
 ## CI / Release（M19 引入）
 

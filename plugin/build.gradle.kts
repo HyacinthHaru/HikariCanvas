@@ -74,13 +74,16 @@ tasks.test {
 val webBuildDir = rootProject.layout.projectDirectory.dir("web")
 val generatedWebResources = layout.buildDirectory.dir("generated/web-resources")
 
+// Windows 上 npm 的可执行文件是 npm.cmd；Exec 不经 shell 直接 spawn，无扩展名的 npm 找不到。
+val npmCommand = if (System.getProperty("os.name").startsWith("Windows")) "npm.cmd" else "npm"
+
 val installWebDeps = tasks.register<Exec>("installWebDeps") {
     group = "build"
     description = "npm ci in web/ — only runs when node_modules is missing"
     workingDir = webBuildDir.asFile
     // M16 P5.3：npm ci 严格按 package-lock.json 装，可重现性 > 自动升级；
     // package.json 与 lock 不一致直接报错，比 npm install 静默升级更安全。
-    commandLine("npm", "ci")
+    commandLine(npmCommand, "ci")
     onlyIf { !webBuildDir.dir("node_modules").asFile.exists() }
     outputs.dir(webBuildDir.dir("node_modules"))
 }
@@ -90,7 +93,7 @@ val buildWeb = tasks.register<Exec>("buildWeb") {
     group = "build"
     description = "Runs `npm run build` in web/"
     workingDir = webBuildDir.asFile
-    commandLine("npm", "run", "build")
+    commandLine(npmCommand, "run", "build")
     inputs.file(webBuildDir.file("package.json"))
     inputs.file(webBuildDir.file("package-lock.json"))
     inputs.file(webBuildDir.file("vite.config.ts"))
