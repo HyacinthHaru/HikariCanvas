@@ -61,7 +61,7 @@ jobs:
       - name: Backend - shadowJar
         # 链路自动跑：compileJava → processResources（含 generatePalette + downloadFonts
         # + copyWebToResources）→ shadowJar relocate 7 个内嵌依赖
-        # → moe.hikari.canvas.shaded.*；输出 plugin/build/libs/*-all.jar
+        # → ac.haru.hikaricanvas.shaded.*；输出 plugin/build/libs/HikariCanvas-<版本>.jar
         run: ./gradlew :plugin:shadowJar --no-daemon --stacktrace
 
       - name: Upload jar artifact

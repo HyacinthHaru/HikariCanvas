@@ -92,7 +92,7 @@ class RendererSnapshotTest {
      * effects 内部 AWT 实现细节差异），CI Linux 跑会 fail。
      *
      * <p>baseline 用 macOS 生成 + 校对；CI 上跳过避免跨平台 noise。<br>
-     * 升级路径：M19+ 引入 Linux baseline matrix（CI 上生成 + commit Linux baseline，
+     * 升级路径：引入 Linux baseline matrix（CI 上生成 + commit Linux baseline，
      * 测试代码按 platform 选用）后可以打开。或换 macos-latest runner（贵 10×）跑全套。</p>
      */
     @DisabledIfEnvironmentVariable(

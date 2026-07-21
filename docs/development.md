@@ -16,28 +16,45 @@
 
 | 工具 | 版本 | 说明 |
 |---|---|---|
-| **Java** | **21**（Temurin / 任意 21 LTS JDK） | 守住 Minecraft 1.21 LTS，不升 25。Gradle toolchain 在 `plugin/build.gradle.kts` 锁 `JavaLanguageVersion.of(21)` |
+| **Java** | **21**（Temurin / 任意 21 LTS JDK） | 生产 jar 的编译目标，Gradle toolchain 默认 `JavaLanguageVersion.of(21)`。跑 Paper 26.x 的服务器需要 Java 25，但那是**运行**要求；一份 jar 通吃两版，编译目标不变（见 §1.1） |
 | **Node.js** | **22 LTS** | **不要用 Node 25**——已知卡 `vue-tsc`（见 §8）。CI 锁 Node 22 |
 | **Gradle** | **9.4.1** | 走 `./gradlew` wrapper（`gradle/wrapper/gradle-wrapper.properties` 已 pin），不要装全局 Gradle |
 | npm | 随 Node 22 自带 | 前端依赖严格按 `web/package-lock.json` |
+
+### 1.1 多版本编译
+
+`plugin/build.gradle.kts` 把编译目标参数化：`-PpaperApi=` / `-PjavaVer=` / `-PmcVersion=`。默认
+1.21.11 + Java 21 出生产 jar；CI 另有一个 `compat-26` job 用 `-PpaperApi=26.2.build.+ -PjavaVer=25`
+对同一份 main 源码编译，提前抓「用了 26.x 已移除 API」的回归。本地起 26.x dev server 同理传参。
 
 平台依赖：
 
 - **AWT / Graphics2D** 是后端渲染核心，依赖 JDK 自带的 `java.awt`。无头环境（CI Linux）能跑，
   但 AWT 字体度量跨平台有微差——这就是部分快照测试在 CI 上跳过的原因（见 §7）。
 - 本地开发推荐 **macOS**：快照测试的 baseline 是 macOS 生成的，本地 macOS 能跑全套快照保护。
+  CI（Linux）用 `@DisabledIfEnvironmentVariable(GITHUB_ACTIONS=true)` 跳过平台敏感的那批。
+  **在 Windows / Linux 本地跑会看到文字类 fixture 失败**（`02-chinese-text` /
+  `03-effects-stroke` / `04-effects-shadow` / `05-effects-glow`），这是环境差异不是回归——
+  判定方法是把改动 `git stash` 掉在干净树复跑，对比失败集合是否一致。
 
 锁定版本的权威来源（构建脚本真实现状）：
 
-- 根 `build.gradle.kts`：`group = "ac.haru"` / `version = "0.9.10-SNAPSHOT"`
+- 根 `build.gradle.kts`：`group = "ac.haru"` / `version = "0.9.15-SNAPSHOT"`
 - `settings.gradle.kts`：`rootProject.name = "hikari-canvas"`，子项目 `plugin` +
   `examples:demo-train-plugin` + `examples:demo-score-plugin`
 - `plugin/build.gradle.kts` 关键依赖：Paper `1.21.11-R0.1-SNAPSHOT`（`paperweight-userdev`
-  2.0.0-beta.21）、Javalin 7.1.0、Jackson 2.18.2（databind + dataformat-yaml）、
-  PacketEvents 2.11.2、SQLite JDBC 3.53.0.0、HikariCP 7.0.2、JDBI 3.52.1、Caffeine 3.1.8；
-  测试侧 JUnit 5.11.3 + MockBukkit-v1.21 3.123.0 + javalin-testtools
-- `web/package.json` 关键依赖：Vue 3.5、Pinia 2.3、Konva 9.3 + vue-konva 3.4、Lexical 0.44、
-  fontkit 2.0、polygon-clipping 0.15、Tailwind 4 + Vite 8 + Vitest 4 + vue-tsc 3.2
+  2.0.0-beta.21，shadow 9.4.3）、Javalin 7.1.0、Jackson 2.22.1（databind 与 dataformat-yaml
+  **必须同版本**）、SQLite JDBC 3.53.0.0、HikariCP 7.1.0、JDBI 3.54.0（core 与 sqlite
+  **必须同版本**）、Caffeine 3.1.8；测试侧 JUnit 5.11.3 + MockBukkit-v1.21 3.123.0 +
+  javalin-testtools 7.1.0（须与 Javalin 本体同版本）
+- **PacketEvents 2.13.0 是 `compileOnly`，不打进 jar**：它是 GPL-3.0，打包会污染本项目 MIT。
+  服主须单独安装 PacketEvents 插件（`paper-plugin.yml` 声明为必装依赖）
+- `web/package.json` 关键依赖：Vue 3.5、Pinia 2.3、Konva 9.3 + vue-konva 3.4、Lexical 0.44
+  （`lexical` 与 `@lexical/*` **必须同版本**）、fontkit 2.0、polygon-clipping 0.15、
+  Tailwind 4 + Vite 8.1 + Vitest 4 + vue-tsc 3.2
+
+> **模块版本对齐**：上面标了「必须同版本」的几组，dependabot 只会单独升其中一个模块，合并前
+> 要手动补齐另一个。Jackson（2026-07-18）与 JDBI（2026-07-21）都踩过这个坑。
 
 ---
 
@@ -62,7 +79,7 @@ cd web && npm run test && cd ..
 
 # 6. 打包 shadow jar（自动跑 palette / fonts / web 产物链）
 ./gradlew :plugin:shadowJar
-# 产物：plugin/build/libs/HikariCanvas-0.9.10-SNAPSHOT.jar
+# 产物：plugin/build/libs/HikariCanvas-0.9.15-SNAPSHOT.jar
 
 # 7. 起本地 MC 1.21.11 dev server（自动挂上一步的 jar）
 ./gradlew :plugin:runServer
@@ -78,11 +95,16 @@ cd web && npm run test && cd ..
 3. `generatePalette`——从 Paper `MapPalette` 导 248 色到 `palette.json`（独立 `generator`
    sourceSet，避免循环依赖）。
 4. `generateIconLibrary`——下 Font Awesome Free 6.7.2 zip，解出 `fa-{solid,regular,brands}.icons.json`。
-5. `buildWeb` → `copyWebToResources`——`npm run build`（Vite）出 `web/dist/`，拷进 jar 的
+5. `downloadLicenses`——抓每枚字体的 OFL 1.1 正文 + Font Awesome 的 LICENSE（同样 SHA-256 pin），
+   进 jar `/licenses/`。SIL OFL 1.1 要求再分发字体时随附许可证正文。
+6. `buildWeb` → `copyWebToResources`——`npm run build`（Vite）出 `web/dist/`，拷进 jar 的
    `/web` 资源前缀（Javalin 静态托管）。
-6. `processResources` 把字体 / palette / icons / web 产物全合进 shadow jar。
+7. `processResources` 把字体 / palette / icons / licenses / web 产物全合进 shadow jar。
 
 仓库**不入字体 / 图标二进制**（`.gitignore` 排除），它们都靠构建期下载。
+
+> 新增内置字体时必须同时在 `fontLicenses` 里登记它的许可证 URL，否则 Gradle 配置期直接
+> `require` 失败——这是刻意的合规闸。
 
 ### 2.2 本地 dev server 工作流（前端热重载）
 
@@ -124,6 +146,7 @@ token 后，把 token 拼到 Vite 地址用：`http://127.0.0.1:9173/?token=<tok
 | `:plugin:generateIconLibrary` | 仅生成 Font Awesome icons JSON |
 | `:plugin:buildWeb` | 仅跑前端 `npm run build`（含按需 `npm ci`） |
 | `:plugin:copyWebToResources` | 把 `web/dist/` 拷成 jar 资源 |
+| `:plugin:downloadLicenses` | 抓 22 枚内置字体的 OFL 正文 + Font Awesome LICENSE，进 jar `/licenses/` |
 
 > 注意：自定义任务名都不带 `:plugin:` 也能跑（它们定义在 `plugin/build.gradle.kts`），
 > 但加 `:plugin:` 前缀最稳妥。`runServer` / `shadowJar` 等来自 `run-paper` /
@@ -315,7 +338,7 @@ GitHub Actions 两个 workflow（`.github/workflows/`）：
 ### 9.2 `release.yml`——tag `v*` 触发
 
 ```bash
-git tag v0.9.10-rc.1 && git push origin v0.9.10-rc.1
+git tag v0.9.15-rc.1 && git push origin v0.9.15-rc.1
 ```
 
 跑 test + shadowJar → 从 tag 解版本号 → 把产物重命名为 `HikariCanvas-<version>.jar` →
