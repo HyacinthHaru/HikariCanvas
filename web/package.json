@@ -40,7 +40,7 @@
     "lucide-vue-next": "^0.468.0",
     "pinia": "^2.3.1",
     "polygon-clipping": "^0.15.7",
-    "vue": "^3.5.33",
+    "vue": "^3.5.40",
     "vue-konva": "^3.4.0"
   }
 }
