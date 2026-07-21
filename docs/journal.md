@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-07-21 · 合并 dependabot 依赖升级（10 开 7 合 3 留）
+
+**直接合并 6 个**：shadow 9.4.1→9.4.3 · HikariCP 7.0.2→7.1.0 · actions/upload-artifact v4→v7 · vue 3.5.33→3.5.40 · happy-dom 20.10.1→20.11.0 · @tailwindcss/vite 4.2.4→4.3.3。upload-artifact 跨三个大版本，但破坏性变更只有运行时切 Node 24 + 要求 Actions Runner ≥ 2.327.1，本仓用 GitHub 托管 `ubuntu-latest`、用法只有 `name`/`path`/`retention-days`，不受影响。
+
+**手动补齐 2 个**（PR 在前面几个合并后产生冲突，直接在 main 上做）：
+- **jdbi 3.52.1 → 3.54.0**：dependabot 只升 `jdbi3-sqlite`，`jdbi3-core` 留在 3.52.1。这与 2026-07-18 jackson 那次（只升 databind）是同一类，故 core 与 sqlite 一并升到 3.54.0。
+- **vite 8.0.9 → 8.1.0**。
+
+**留下 3 个不合**：
+- **`@lexical/history` 0.44.0→0.47.0**：`lexical` 核心与 `@lexical/plain-text` / `@lexical/utils` 都是 `^0.44.0`，而 caret 对 0.x 只放行 patch，升级后 npm 会给 history 装**嵌套的第二份 `lexical` 核心**（PR diff 里可见 `node_modules/@lexical/history/node_modules/@lexical/extension@0.47.0`）。Lexical 靠类身份识别编辑器实例，两份核心会让 history 插件与画布操作不同的 `LexicalEditor` 类，chip 编辑器撤销/重做会坏；而前端测试是纯算法级、不挂载编辑器，**CI 绿也测不出来**。要升须整个 lexical 家族一起升并人工验证 chip 编辑器。
+- **`javalin-testtools` 7.1.0→7.2.2**：javalin 本体锁在 7.1.0（CLAUDE.md 锁定版本表）。只升 testtools 会让测试 classpath 经传递依赖解析到 javalin 7.2.2，而 shadow jar 里仍是 7.1.0 —— 测试与产物分叉。要动须连 javalin 本体一起升，属破锁定版本的决定。
+- **`jdbi3-sqlite` 单模块 PR**：已由上面的手动双升覆盖。
+
+**验证**：后端 `:plugin:test` 仅 `RendererSnapshotTest` 4 个环境相关既有失败；前端 `npm ci` + vitest + vite build 均通过。
+
+**顺带记录一个既有 flaky 测试**：`test/composables/useCanvasPasteDispatcher.test.ts` 的「粘贴 image File」用例靠固定 `setTimeout(20ms)` 等 `FileReader.onload` 异步回调，全量跑时多 worker 抢 CPU 偶尔不够（隔离跑 15 次挂 1 次）。与本次升级无关（20.10.1 / 20.11.0 两版都复现同等量级），是测试自身的时序竞态。
+
+关联文件：`plugin/build.gradle.kts`、`web/package.json`、`web/package-lock.json`、`.github/workflows/ci.yml`。
+
+---
+
 ## 2026-07-21 · 规范代码注释与文档文案
 
 把散落在代码注释、构建脚本、workflow 与契约文档里的内部开发编号（`M16 P5.1` / `M4-T3` / `P4.5` 这类）剥掉，保留其后的实际约束正文；一并去掉几处自我论证式措辞和把需求来源写进注释的表述。**零逻辑改动。**
