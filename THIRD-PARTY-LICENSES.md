@@ -6,6 +6,15 @@ This document lists the third-party components redistributed inside the released
 plugin jar, and their licenses. All of them are compatible with redistribution
 under a permissive-licensed product.
 
+The released jar carries the full license texts under `/licenses/`:
+
+| Path in jar | Contents |
+|---|---|
+| `/licenses/LICENSE` | HikariCanvas itself (MIT) |
+| `/licenses/THIRD-PARTY-LICENSES.md` | this document |
+| `/licenses/fonts/<font-id>.OFL.txt` | one SIL OFL 1.1 text per bundled font |
+| `/licenses/icons/LICENSE-fontawesome.txt` | Font Awesome Free |
+
 > **PacketEvents is NOT bundled.** PacketEvents is licensed under **GPL-3.0**
 > (copyleft), so it is intentionally *not* shipped inside this jar. It is a
 > required, separately-installed plugin dependency — server owners install the
@@ -19,8 +28,8 @@ under a permissive-licensed product.
 
 Bundled in the jar under `/fonts/`. **All fonts are licensed under the
 SIL Open Font License, Version 1.1** (<https://openfontlicense.org/>). Each
-font's full copyright notice and license text are available at its upstream
-source below.
+font's full copyright notice and license text ship in the jar at
+`/licenses/fonts/<font-id>.OFL.txt`; the upstream source of each is below.
 
 | Font | Author / Foundry | Source |
 |---|---|---|
@@ -48,10 +57,9 @@ source below.
 | Bebas Neue | Ryoichi Tsunekawa (Dharma Type) | github.com/google/fonts (ofl/bebasneue) |
 
 > **OFL note:** the SIL OFL 1.1 requires that its license text accompany the
-> redistributed fonts. The fonts are downloaded at build time (SHA-256 pinned)
-> and merged into the jar; a future build step should also copy each font's
-> `OFL.txt` into the jar alongside the fonts for full in-artifact compliance.
-> Until then this file provides the attribution and license identification.
+> redistributed fonts. Both the fonts and their license texts are downloaded at
+> build time (each SHA-256 pinned) and merged into the jar, so the distributed
+> artifact is self-contained for compliance purposes.
 
 ---
 
@@ -65,6 +73,7 @@ Bundled in the jar under `/icons/` (as vector path JSON).
 - Code: **MIT**
 
 Source: github.com/FortAwesome/Font-Awesome
+License text in jar: `/licenses/icons/LICENSE-fontawesome.txt`
 
 ---
 

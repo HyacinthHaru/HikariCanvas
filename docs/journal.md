@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-07-21 · 内置字体 / 图标许可证正文入包
+
+SIL OFL 1.1 要求再分发字体时随附许可证正文，此前 jar 只有字体本体，`THIRD-PARTY-LICENSES.md` 里记着这条待办。22 枚内置字体的 OFL 正文 + Font Awesome Free 的 LICENSE 改为构建期抓取并打进 jar。版本号不动，仍 0.9.15-SNAPSHOT。
+
+- `plugin/build.gradle.kts`：新增 `LicenseSpec` + `fontLicenses`（22 条，逐条 URL + SHA-256 pin）+ `iconLicense`；新任务 `downloadLicenses` 抓到 `build/downloaded-licenses/`；`processResources` 打进 jar `/licenses/`——`fonts/<id>.OFL.txt` 22 份 + `icons/LICENSE-fontawesome.txt` + 本项目 MIT 正文 + 第三方清单。新增 `fetchWithRetry` 供其使用；`downloadFonts` / `downloadIcons` 两处原有下载块未动。
+- 合规守卫：`bundledFonts` 里有字体没登记许可证时，配置期 `require` 直接失败。
+- 许可证来源：13 枚走 `google/fonts` 的 `ofl/<family>/OFL.txt`，9 枚各自上游（Adobe ×2 / TakWolf / JetBrains / tonsky / rsms / notofonts / atelier-anchor / lxgw）。
+- `THIRD-PARTY-LICENSES.md`：删「a future build step should…」待办段，改为 jar 内路径表。
+
+**验证**：`:plugin:downloadLicenses` 与 `:plugin:shadowJar` 均 BUILD SUCCESSFUL；jar 内 `/licenses/` 25 个文件齐，22 份 OFL 逐份含正文与 Reserved Font Name 声明。`:plugin:test` **2168** 跑完 4 失败（`02-chinese-text` / `03-effects-stroke` / `04-effects-shadow` / `05-effects-glow`）——stash 掉本次改动在干净树复跑得到同样这 4 个，属本机 AWT 字形栅格化与 baseline 生成环境不同，与本次改动无关。
+
+关联文件：`plugin/build.gradle.kts`、`THIRD-PARTY-LICENSES.md`。
+
+---
+
 ## 2026-07-19 · 0.9.15 控制台日志清理（开发探针退场）
 
 项目收尾期，把开发期埋的「逐操作」调试探针从控制台清出。先 2 个 opus 子代理盘点后端（服务器控制台）+ 前端（浏览器 console），用户拍板：**降 fine 不删** + **不加 config 开关**。版本 `0.9.14 → 0.9.15-SNAPSHOT`。

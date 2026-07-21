@@ -307,12 +307,94 @@ val bundledFonts = listOf(
     )
 )
 
+// ---- 内置字体 / 图标的许可证正文入包 ----
+// SIL OFL 1.1 要求再分发字体时随附许可证正文（含版权声明与 Reserved Font Name）。字体本体
+// 构建期下载、不入仓库，故许可证同样构建期抓，processResources 放进 jar 的 /licenses/ 下。
+// ownerId 对应 bundledFonts 的 displayId（fontawesome 为图标包）。
+
+data class LicenseSpec(
+    val ownerId: String,
+    val url: String,
+    val destFileName: String,
+    val expectedSha256: String  // 空串 = 不校验，只 log 实际值
+)
+
+val fontLicenses = listOf(
+    LicenseSpec("source_han_sans", "https://github.com/adobe-fonts/source-han-sans/raw/release/LICENSE.txt", "source_han_sans.OFL.txt", "fcac737e761ec63dbfbdce11030a1780161920d80315edba9c8beff1c2bac5a2"),
+    LicenseSpec("source_han_serif", "https://github.com/adobe-fonts/source-han-serif/raw/release/LICENSE.txt", "source_han_serif.OFL.txt", "9ff5bb567e1b92c801fc1069e5fbf992ff8efccacb9db94e5959a5b3ba9bb903"),
+    LicenseSpec("ark_pixel", "https://github.com/TakWolf/ark-pixel-font/raw/master/LICENSE-OFL", "ark_pixel.OFL.txt", "3ab41567e68e3988ba1ef16dd2644eca95ca5648ea12e7d46e6287fc0bbe5aee"),
+    LicenseSpec("jetbrains_mono", "https://github.com/JetBrains/JetBrainsMono/raw/master/OFL.txt", "jetbrains_mono.OFL.txt", "a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697"),
+    LicenseSpec("fira_code", "https://github.com/tonsky/FiraCode/raw/master/LICENSE", "fira_code.OFL.txt", "1d41e10031ab125302780a05ec4c91d218e47db0c7e37cf315cce5e608cdc25c"),
+    LicenseSpec("inter", "https://github.com/rsms/inter/raw/master/LICENSE.txt", "inter.OFL.txt", "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"),
+    LicenseSpec("noto_serif", "https://github.com/notofonts/latin-greek-cyrillic/raw/main/OFL.txt", "noto_serif.OFL.txt", "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a"),
+    LicenseSpec("smiley_sans", "https://github.com/atelier-anchor/smiley-sans/raw/main/LICENSE", "smiley_sans.OFL.txt", "9401f4050f1b66c26b6ccdc8b0e14a3c1cc37aac122eda84386f25854a9bec72"),
+    LicenseSpec("lxgw_wenkai", "https://github.com/lxgw/LxgwWenKai/raw/main/OFL.txt", "lxgw_wenkai.OFL.txt", "1a25e35da1031c6c3436fde545bb9cb5aca954e9873afe510c834b8b79bd21a0"),
+    LicenseSpec("ma_shan_zheng", "https://github.com/google/fonts/raw/main/ofl/mashanzheng/OFL.txt", "ma_shan_zheng.OFL.txt", "d7bdb1cee215b689e23c2f95672a6084c790542170648267a55114103d756a08"),
+    LicenseSpec("zcool_xiaowei", "https://github.com/google/fonts/raw/main/ofl/zcoolxiaowei/OFL.txt", "zcool_xiaowei.OFL.txt", "a094514ca57cf8f9c5e8d8d1adab5d8cd3a377297ff016f9df2c05b3ecd77f0a"),
+    LicenseSpec("zcool_kuaile", "https://github.com/google/fonts/raw/main/ofl/zcoolkuaile/OFL.txt", "zcool_kuaile.OFL.txt", "538078469839b4a2e7ad22bef4ebe41681a4e53749bb2a072144024f1d6d703d"),
+    LicenseSpec("zcool_qingkehuangyou", "https://github.com/google/fonts/raw/main/ofl/zcoolqingkehuangyou/OFL.txt", "zcool_qingkehuangyou.OFL.txt", "f1bce31b817dee01c1e4ef8bc45d8ecb95f01f4abbf0a985007cb3cd0fd8123d"),
+    LicenseSpec("comic_neue", "https://github.com/google/fonts/raw/main/ofl/comicneue/OFL.txt", "comic_neue.OFL.txt", "7c38a22e5878e60fe423360553e63dd7be23d29f1f60336034935dbfc96e8320"),
+    LicenseSpec("pacifico", "https://github.com/google/fonts/raw/main/ofl/pacifico/OFL.txt", "pacifico.OFL.txt", "a47e5daeda73568969395c656823102678f2eefb0d7d7ecb47aac4cc17e42204"),
+    LicenseSpec("lobster", "https://github.com/google/fonts/raw/main/ofl/lobster/OFL.txt", "lobster.OFL.txt", "88aece7d90f2bb7049719f11619a560af22af3451af141f12aa4f46bb157a99b"),
+    LicenseSpec("bangers", "https://github.com/google/fonts/raw/main/ofl/bangers/OFL.txt", "bangers.OFL.txt", "630dd5a307c0657b094d324e069b390edf90182fe5003639e06c02a0e5769af7"),
+    LicenseSpec("shadows_into_light", "https://github.com/google/fonts/raw/main/ofl/shadowsintolight/OFL.txt", "shadows_into_light.OFL.txt", "0e441ae9f18ad0c294cc5b6ae3974c2db1614cab220598578b1b58c4cc334485"),
+    LicenseSpec("caveat", "https://github.com/google/fonts/raw/main/ofl/caveat/OFL.txt", "caveat.OFL.txt", "1f9d81d094273d82f3898a1ee8b598a717d050ecbf5ff7bede105b704880157b"),
+    LicenseSpec("dancing_script", "https://github.com/google/fonts/raw/main/ofl/dancingscript/OFL.txt", "dancing_script.OFL.txt", "6f090277c00af96651ce6dbcc38ff1591047a3bffef486e80b6a32e8276a8201"),
+    LicenseSpec("overpass", "https://github.com/google/fonts/raw/main/ofl/overpass/OFL.txt", "overpass.OFL.txt", "86e5ff25c701ec446d20b1a85b02ee6d36de8503a7288a4c948f5459809af1f0"),
+    LicenseSpec("bebas_neue", "https://github.com/google/fonts/raw/main/ofl/bebasneue/OFL.txt", "bebas_neue.OFL.txt", "72082f6cb4d04be2ecf7cc7d9e1e7d73787f0af8a5a278a47cade70c16b78341")
+)
+
+// Font Awesome Free 一份 LICENSE.txt 覆盖三种授权（图标 CC BY 4.0 / 字体 OFL / 代码 MIT）
+val iconLicense = LicenseSpec(
+    "fontawesome",
+    "https://github.com/FortAwesome/Font-Awesome/raw/6.x/LICENSE.txt",
+    "LICENSE-fontawesome.txt",
+    "9b914eae88817d63b576eab5aafde7068c7a1abae125d7cdfb034f1da43a9afc"
+)
+
+// 新增内置字体时必须同时登记许可证，漏登记直接构建失败
+val fontsMissingLicense = bundledFonts.map { it.displayId } - fontLicenses.map { it.ownerId }.toSet()
+require(fontsMissingLicense.isEmpty()) { "以下内置字体未登记许可证：$fontsMissingLicense" }
+
 val downloadedFontsDir = layout.buildDirectory.dir("downloaded-fonts")
+val downloadedLicensesDir = layout.buildDirectory.dir("downloaded-licenses")
 
 fun sha256Hex(file: File): String {
     val md = MessageDigest.getInstance("SHA-256")
     file.inputStream().use { it.readAllBytes().let(md::update) }
     return md.digest().joinToString("") { "%02x".format(it) }
+}
+
+// 抓一个小文件到 dest（先写 .tmp 再原子 move）。GitHub 偶发 Premature EOF，重试 3 次。
+fun fetchWithRetry(url: String, dest: File, logger: Logger) {
+    val tempFile = File(dest.parentFile, dest.name + ".tmp")
+    var lastErr: Exception? = null
+    val maxAttempts = 3
+    var attempt = 0
+    while (attempt < maxAttempts) {
+        attempt++
+        try {
+            val conn = URI(url).toURL().openConnection()
+            conn.connectTimeout = 30_000
+            conn.readTimeout = 120_000
+            conn.getInputStream().use { input ->
+                Files.copy(input, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            lastErr = null
+            break
+        } catch (e: Exception) {
+            lastErr = e
+            logger.lifecycle("  [retry $attempt/$maxAttempts] ${dest.name}: ${e.message}")
+        }
+    }
+    if (lastErr != null) {
+        throw GradleException(
+            "下载 ${dest.name} 失败（$maxAttempts 次重试均异常）。" +
+            "可手动下载 $url 放到 ${dest.absolutePath}",
+            lastErr
+        )
+    }
+    Files.move(tempFile.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
 }
 
 val downloadFonts = tasks.register("downloadFonts") {
@@ -374,6 +456,34 @@ val downloadFonts = tasks.register("downloadFonts") {
             } else {
                 tempFile.renameTo(dest)
             }
+            val actual = sha256Hex(dest)
+            if (spec.expectedSha256.isEmpty()) {
+                logger.lifecycle("  [sha256 未 pin] ${spec.destFileName} = $actual （首次构建；建议填入 build.gradle.kts）")
+            } else if (actual != spec.expectedSha256) {
+                error("SHA-256 不符：${spec.destFileName} 期望 ${spec.expectedSha256}，实得 $actual")
+            }
+        }
+    }
+}
+
+val downloadLicenses = tasks.register("downloadLicenses") {
+    group = "build"
+    description = "下载内置字体 / 图标的许可证正文到 build/downloaded-licenses/"
+    outputs.dir(downloadedLicensesDir)
+    doLast {
+        val root = downloadedLicensesDir.get().asFile
+        val fontsDir = File(root, "fonts").apply { mkdirs() }
+        val iconsDir = File(root, "icons").apply { mkdirs() }
+        val all = fontLicenses.map { it to fontsDir } + listOf(iconLicense to iconsDir)
+        for ((spec, dir) in all) {
+            val dest = File(dir, spec.destFileName)
+            if (dest.exists() && dest.length() > 0 &&
+                (spec.expectedSha256.isEmpty() || sha256Hex(dest) == spec.expectedSha256)) {
+                logger.info("  [skip] ${spec.destFileName} already present & verified")
+                continue
+            }
+            logger.lifecycle("  [fetch] ${spec.ownerId} license <- ${spec.url}")
+            fetchWithRetry(spec.url, dest, logger)
             val actual = sha256Hex(dest)
             if (spec.expectedSha256.isEmpty()) {
                 logger.lifecycle("  [sha256 未 pin] ${spec.destFileName} = $actual （首次构建；建议填入 build.gradle.kts）")
@@ -562,6 +672,7 @@ tasks.processResources {
     dependsOn(copyWebToResources)
     dependsOn(generatePalette)
     dependsOn(downloadFonts)
+    dependsOn(downloadLicenses)
     dependsOn(generateGlyphMetrics)
     dependsOn(syncFontsToWeb)
     // M26：FA Free 矢量包入 jar /icons/。IconRegistry.loadBuiltIn 读 classpath。
@@ -579,6 +690,17 @@ tasks.processResources {
     from(generatedIconResources) {
         include("*.icons.json")
         into("icons")
+    }
+    // 许可证正文入包：/licenses/fonts/*.OFL.txt + /licenses/icons/LICENSE-fontawesome.txt
+    // + 本项目 MIT 正文与第三方清单，让分发的 jar 自带完整授权信息
+    from(downloadedLicensesDir) {
+        into("licenses")
+    }
+    from(rootProject.layout.projectDirectory.file("LICENSE")) {
+        into("licenses")
+    }
+    from(rootProject.layout.projectDirectory.file("THIRD-PARTY-LICENSES.md")) {
+        into("licenses")
     }
 }
 
