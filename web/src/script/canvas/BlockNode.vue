@@ -65,7 +65,7 @@ const highlight = inject(BLOCK_HIGHLIGHT_KEY, EMPTY_HIGHLIGHT);
  * 跳过 input/textarea/select/contentEditable 目标（pointerdown 落在它们上时不拖）。</p>
  *
  * <p>变量选择器打开可靠性：pointerdown 落在表单控件上时虽不拖块，
- * 但要<b>在此处先选中本规则</b>。理由：变量「选变量」按钮的 click 会冒泡到 BlockStack 的
+ * 但要<b>在此处先选中本规则</b>：变量「选变量」按钮的 click 会冒泡到 BlockStack 的
  * {@code onStackClick} 触发 {@code selectRule}；若规则原本未选中，这次 selectRule 会在<b>同一次点击</b>
  * 里替换 workingCopy 触发画布重渲，与刚弹出的 picker 抢时序 → 用户感觉"多点几次才开"。提前在
  * pointerdown（早于 click）选好，click 时 onStackClick 命中 guard 不再重选 → 不重渲 → picker 一次到位。</p>

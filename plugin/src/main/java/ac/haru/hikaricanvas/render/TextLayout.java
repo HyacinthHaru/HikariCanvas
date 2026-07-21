@@ -90,8 +90,8 @@ public final class TextLayout {
      * <p>用 {@link #canonicalCharWidth}，不需要 FontMetrics。</p>
      *
      * <p>调用方用 {@code Graphics2D.drawString(glyph.ch(), glyph.x(), glyph.baselineY())}
-     * 逐字符绘制。之所以不直接返回整行 + 一次 drawString，是为了支持 letterSpacing
-     * 对整数像素的独立控制（Graphics2D 本身不支持 per-char letterSpacing）。</p>
+     * 逐字符绘制而非整行一次 drawString —— letterSpacing 需要按整数像素独立控制，
+     * 而 Graphics2D 不支持 per-char letterSpacing。</p>
      */
     public static List<PositionedGlyph> layout(TextElement t) {
         if (t.text() == null || t.text().isEmpty()) {
