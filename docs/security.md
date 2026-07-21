@@ -285,7 +285,7 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 **i) ImageElement.mask 校验**
 
 `ImageElement.mask.d` 是客户端控制的 SVG path 字符串，与 `PathElement.d` 共享攻击面：
-- **复用 M9 `PathDValidator`**：M/L/Q/C/Z 子集（大小写绝对/相对）、数值范围、命令-参数对应
+- **复用 `PathDValidator`**：M/L/Q/C/Z 子集（大小写绝对/相对）、数值范围、命令-参数对应
 - 坐标须在 `(0, 0)..(w, h)` element bbox 内（v1 仅 sanity 警告，不强拒；超出由 `Graphics2D.setClip` 自然裁掉）
 - d 字符串长度上限 4096 字符（同 PathElement.d）
 - `inverted` 字段是 boolean，无注入面
@@ -295,7 +295,7 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 - `canvas.upload`：默认绑 `canvas.edit`
 - `canvas.upload.bypass-limit`：默认 op=true，跳过配额（紧急用）
 
-**M13 不做（v1 范围）：**
+**不做（v1 范围）：**
 
 - mask 不支持其他元素作 alpha mask（PS "图层蒙版用图层" 概念）—— 仅 path 几何 mask
 - 多文件批量上传 / chunked 大文件（v2 视频支持时再加）
@@ -587,7 +587,7 @@ server {
 | Paper API | 宿主 | 跟随 MC 版本 |
 | Javalin | HTTP/WS | 关注 CVE，及时升级 |
 | PacketEvents | 包发送 | 关注 API 破坏 |
-| jackson-dataformat-yaml | YAML 解析 | M6 起用，**不开 `enableDefaultTyping`**；底层 SnakeYAML tag 接口不暴露 |
+| jackson-dataformat-yaml | YAML 解析 | **不开 `enableDefaultTyping`**；底层 SnakeYAML tag 接口不暴露 |
 | HikariCP + JDBI + SQLite JDBC | DB | 稳定 |
 | SLF4J | 日志 | |
 | 前端：Vue / Vite / Konva | 编辑器 | npm audit 纳入 CI |

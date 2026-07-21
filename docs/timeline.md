@@ -35,7 +35,7 @@ dock。各节以"当前能力"小注给出与设计取值的偏差。
 | D6 | **keyframe 编辑通道** | 专用 `keyframe.*` op（高频编辑，仿 `element.*` 的 ack 模型）+ `state.patch` 广播 | keyframe 拖动是高频小改，专用 op 比通用 patch 更清晰可控 |
 | D7 | **撤销** | 路线 A：coalesce key 合并同一 keyframe 连续拖动 + `MAX_HISTORY` 条件提升（16→64） | 现状 16 步全快照（非纸面"100 步"），不合并会被一次拖动吞光历史（§7） |
 | D8 | **新依赖** | **零**。插值 / 缓动纯算术自写，cubic-bezier **双端各写一份 + 共享测试向量**，禁引第三方 easing 库 | 双端逐位一致是硬纪律，第三方库的浮点实现对不齐 |
-| D9 | **后端唯一权威** | 游戏内最终输出永远以后端 Ticker 为准；前端本地插值仅供编辑器预览 | 同 M18 Live Paint"前端独占工具、输出走后端"的纪律例外 |
+| D9 | **后端唯一权威** | 游戏内最终输出永远以后端 Ticker 为准；前端本地插值仅供编辑器预览 | 同 Live Paint"前端独占工具、输出走后端"的纪律例外 |
 
 ---
 
@@ -66,7 +66,7 @@ dock。各节以"当前能力"小注给出与设计取值的偏差。
 
 ## 2. 数据结构
 
-全部走 **M8 v2 nullable 加法范式**（`Element.java:63-73` 三个 nullable 字段 + `effectiveXxx()` 兜底）：
+全部走 **v2 nullable 加法范式**（`Element.java:63-73` 三个 nullable 字段 + `effectiveXxx()` 兜底）：
 旧工程 `project_json` 无新字段 → Jackson 反序列化填 null → 完全静态行为、baseline 零漂移。
 
 ### 2.1 `Timeline`
@@ -272,7 +272,7 @@ config max-fps 默 60 → 16.7ms 为上界）tick。每 tick：对每个活跃�
 | Fill / color | 按 stop 对齐做分量插值，**sRGB 线性空间**（§4.4） |
 | 离散（仅 text） | step：取 `timeMs <= 当前` 的最近关键帧，不插值（白名单仅 9 属性，**无** `fontId`） |
 
-**字形动画不做**：逐字 advance 量化是双端已知痛点（CLAUDE.md M20），文本只整体属性动画 + 内容 step
+**字形动画不做**：逐字 advance 量化是双端已知痛点（CLAUDE.md），文本只整体属性动画 + 内容 step
 切换，不做字形级 morph。
 
 **基值覆盖语义（按属性粒度）**：打了关键帧的属性在播放期间以关键帧求值

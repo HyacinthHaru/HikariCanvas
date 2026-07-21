@@ -12,13 +12,13 @@
 
 | 存储位置 | 内容 | 生命周期 |
 | --- | --- | --- |
-| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计、image_uploads 配额表（M13）、用户变量 / 别名 / 全局变量、列车时刻表、铁路网络、墙脚本 | 跨服务器重启；随世界快照备份 |
+| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计、image_uploads 配额表、用户变量 / 别名 / 全局变量、列车时刻表、铁路网络、墙脚本 | 跨服务器重启；随世界快照备份 |
 | `ItemFrame` PDC | `wall_id` / `slot` 标签（`published_at` 不再写入，2026-05-14 砍） | 随世界文件 |
 | 文件：`templates/*.yml` | 模板定义 | 人工管理 |
 | 文件：`user-templates/<uuid>/` | 玩家上传模板（v1.x） | 按玩家 uuid 组织 |
 | 文件：`fonts/*.ttf` / `*.woff2` | 字体 | 人工管理 |
 | 文件：`.canvas` 工程导出 | 玩家导出的工程（0.8 实装；纯前端 fflate 打包下载，不经服务端存储） | 外部管理 |
-| **文件：`uploads/<sha256[:16]>.png`（M13）** | 玩家上传的图片（hash 内容寻址，跨 wall 引用同一文件不重复存） | 按 last_used_at LRU 清理；删 wall 不立即清 |
+| **文件：`uploads/<sha256[:16]>.png`** | 玩家上传的图片（hash 内容寻址，跨 wall 引用同一文件不重复存） | 按 last_used_at LRU 清理；删 wall 不立即清 |
 
 ---
 
@@ -27,10 +27,10 @@
 ### 2.1 基础
 
 - 文件路径：`plugins/HikariCanvas/data.db`
-- 连接池：HikariCP，**最大 4 连接** + `setLeakDetectionThreshold(30_000)`（M16-P5.2）
+- 连接池：HikariCP，**最大 4 连接** + `setLeakDetectionThreshold(30_000)`
 - 访问层：JDBI 3（轻量、类型安全，比 JOOQ 启动快）
 
-> **maxPoolSize=4 不缩到 1 的理由（M16 确认）**：SQLite 单写但允许并发读（WAL 模式）。4 池让 read-heavy 路径（preview 渲染查询 / quota check / template registry load）不阻塞主线程的 write 路径。写一致性靠 SQLite `busy_timeout=5000ms` + `jdbi.inTransaction(SERIALIZABLE)` + `BEGIN IMMEDIATE` 写锁串行化（M16-P2.1 上传配额路径已切）。缩到 1 会让任何一个长查询（如 `WallRepo.listByOwner` 走全表）阻塞所有后续连接获取，触发 Bukkit 主线程卡顿。`leakDetectionThreshold=30s` 在连接借出 30s 未还时打印 stack trace 兜底排查未关连接的代码路径。
+> **maxPoolSize=4 不缩到 1 的理由**：SQLite 单写但允许并发读（WAL 模式）。4 池让 read-heavy 路径（preview 渲染查询 / quota check / template registry load）不阻塞主线程的 write 路径。写一致性靠 SQLite `busy_timeout=5000ms` + `jdbi.inTransaction(SERIALIZABLE)` + `BEGIN IMMEDIATE` 写锁串行化（上传配额路径已切）。缩到 1 会让任何一个长查询（如 `WallRepo.listByOwner` 走全表）阻塞所有后续连接获取，触发 Bukkit 主线程卡顿。`leakDetectionThreshold=30s` 在连接借出 30s 未还时打印 stack trace 兜底排查未关连接的代码路径。
 - 所有时间戳：`INTEGER NOT NULL`，Unix 毫秒时间戳（UTC）
 - 所有 UUID：`TEXT`，标准 36 字符带连字符格式
 - 所有 JSON blob：`TEXT`
@@ -55,7 +55,7 @@ CREATE TABLE schema_version (
 ```sql
 CREATE TABLE pool_maps (
   map_id        INTEGER PRIMARY KEY,       -- MC map ID
-  state         TEXT NOT NULL,             -- 'FREE' | 'RESERVED'  (M5.5 起两态)
+  state         TEXT NOT NULL,             -- 'FREE' | 'RESERVED'  (两态)
   reserved_by   TEXT,                      -- 'wall:<wall_id>' (state=RESERVED 时)
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER NOT NULL,
@@ -72,9 +72,9 @@ CREATE INDEX idx_pool_owner ON pool_maps(reserved_by);
 
 插件启动时执行一次性扫描验证不变式，异常记录移回 FREE + 告警。
 
-> **M5.5 删字段**：`sign_id` 列删除（合并入 `reserved_by`）。原 `PERMANENT` 状态废止——wall 占的 map 一直 RESERVED 直到 `/canvas delete`。详见 architecture.md §4。
+> **删字段**：`sign_id` 列删除（合并入 `reserved_by`）。原 `PERMANENT` 状态废止——wall 占的 map 一直 RESERVED 直到 `/canvas delete`。详见 architecture.md §4。
 
-### 2.4 表：`walls`（M5.5 替代 `sign_records` + `drafts`）
+### 2.4 表：`walls`（替代 `sign_records` + `drafts`）
 
 每行 = 一面墙上的一幅画。`(world, origin, facing)` 唯一索引保证一墙一画。`published_at` 是纯 UI 标签，不影响底层行为（wall 始终可改）。
 
@@ -94,9 +94,9 @@ CREATE TABLE walls (
   owner_name    TEXT NOT NULL,             -- 冗余，避免玩家改名后查不到
   alias         TEXT,                      -- 玩家命名，nullable，唯一
   published_at  INTEGER,                   -- nullable timestamp；NULL=可编辑，非 NULL=已锁定（lock 时间戳，2026-05-14 起语义化）
-  template_id   TEXT,                      -- M6 模板系统填，源模板 ID
-  template_version INTEGER,                -- M6 当时模板版本
-  protocol_version INTEGER NOT NULL DEFAULT 1, -- V006（M8-B）加：标记 project_json 形态（1=v1 / 2=v2 layered）
+  template_id   TEXT,                      -- 模板系统填，源模板 ID
+  template_version INTEGER,                -- 应用时的模板版本
+  protocol_version INTEGER NOT NULL DEFAULT 1, -- V006 加：标记 project_json 形态（1=v1 / 2=v2 layered）
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -125,7 +125,7 @@ CREATE INDEX idx_walls_protocol_version ON walls(protocol_version);  -- V006
 
 **与 sessions 的关系：** sessions 是临时编辑器持有者；walls 是永久墙上的画。一个 wall 可以有 0 或 1 个活跃 session 编辑它（`byWall` 排他锁）。session cancel/disconnect 不动 walls；wall delete 强制 cancel 关联 session。
 
-### 2.4.1 `project_json` v1 → v2 lazy migration（M8）
+### 2.4.1 `project_json` v1 → v2 lazy migration
 
 **触发：** WallRepo 读 `project_json` 时，Jackson 反序列化前先快速 peek 顶层结构，发现含 `elements:` 但不含 `layers:` → 视为 v1 形态，走 migrate。
 
@@ -181,7 +181,7 @@ v2 形态:
 
 `Timeline` / `Keyframe` / `Easing` / `TriggerConfig` record 形态以 `timeline.md §2.1–§2.5` 为权威。
 
-**与 v1→v2（§2.4.1）的关键区别：v2→v3 是纯加法，不重构结构、不需主动 rewrite 迁移。** v1→v2 把 `elements[]` 包进 `layers[]`、改了树形结构，故走启动期全库扫描回写（方案 A）；v2→v3 只是顶层多两个字段，沿用 **M8 v2 nullable 加法范式**：旧 v2 blob 无这两字段 → Jackson 反序列化填 `null` → `timelines == null` 走完全静态行为、baseline 零漂移（`ProjectState` 的 `@JsonCreator` 入口为此加 `timelines` / `activeTimelineId` 两个 `@JsonProperty` 参数；0.7.1 又以同一 nullable 加法范式补了 `tweenFps`，故现共三个新参数，缺失均退 `null`）。
+**与 v1→v2（§2.4.1）的关键区别：v2→v3 是纯加法，不重构结构、不需主动 rewrite 迁移。** v1→v2 把 `elements[]` 包进 `layers[]`、改了树形结构，故走启动期全库扫描回写（方案 A）；v2→v3 只是顶层多两个字段，沿用 **v2 nullable 加法范式**：旧 v2 blob 无这两字段 → Jackson 反序列化填 `null` → `timelines == null` 走完全静态行为、baseline 零漂移（`ProjectState` 的 `@JsonCreator` 入口为此加 `timelines` / `activeTimelineId` 两个 `@JsonProperty` 参数；0.7.1 又以同一 nullable 加法范式补了 `tweenFps`，故现共三个新参数，缺失均退 `null`）。
 
 **`Element` 8 个 record 零改动**——这是方案 B 的核心好处：关键帧不进 Element，故 sealed permits 与全部元素字段不动，`.canvas` / `project_json` 里既有 element 的序列化形态完全不变。
 
@@ -235,7 +235,7 @@ CREATE INDEX idx_audit_event ON audit_log(event);
 
 **保留策略：** 默认保留 90 天，后台任务定期 `DELETE WHERE ts < now - 90d`。可配置。
 
-### 2.6.5 表：`image_uploads`（M13 引入）
+### 2.6.5 表：`image_uploads`
 
 按 sha256[:16] hash 内容寻址。一个 hash 对应磁盘上一个 PNG 文件 + 一条 image_uploads 行；多个 ImageElement.source 可指同一 hash（跨 wall 引用零重复存储）。
 
@@ -255,14 +255,14 @@ CREATE INDEX idx_uploads_uploader ON image_uploads(uploader_uuid, uploaded_at DE
 CREATE INDEX idx_uploads_lru ON image_uploads(last_used_at);
 ```
 
-> **无 `refcount` 列**：M15.4 起引用计数改为运行期实时 sweep（见下方 LRU 清理）；原 `refcount INTEGER` 列已在 V010 DROP（详见 §6.5.1）。
+> **无 `refcount` 列**：引用计数改为运行期实时 sweep（见下方 LRU 清理）；原 `refcount INTEGER` 列已在 V010 DROP（详见 §6.5.1）。
 
 **关键字段语义：**
 
 - `last_used_at`：每次 wall 重新打开 / element 被引用渲染时刷新
 - LRU 清理：不依赖 refcount 列，而是**实时 sweep** —— 遍历所有 `walls.project_json` 收集被引用的 image hash 集合（`ImageStorage.collectReferencedHashes`），再 `SELECT hash FROM image_uploads WHERE hash NOT IN (<被引用集合>) ORDER BY last_used_at ASC LIMIT N`（`ImageUploadDao.pickLruCandidates`）剔除孤儿 → unlink 磁盘文件 + DELETE 表行
 
-**配额查询（M13）：**
+**配额查询：**
 
 ```sql
 -- 玩家 24h 上传次数
@@ -501,17 +501,17 @@ CREATE INDEX IF NOT EXISTS idx_wall_scripts_wall ON wall_scripts(wall_id);
 所有 PDC key 使用插件命名空间：`NamespacedKey(plugin, "<key>")`。
 命名空间字符串固定：`"hikaricanvas"`（`NamespacedKey(plugin, key)` 取插件名小写，`HikariCanvas` → `hikaricanvas`）。
 
-### 3.2 Key 表（M5.5 简化）
+### 3.2 Key 表
 
 #### 对 MapView 的 PDC
 
-**不写。** M2 立项时设计要把 SQLite 状态镜像到 MapView PDC 作为冗余，但代码从未实装。M5.5 起承认现状：SQLite 是单一来源；MapView PDC 不写业务字段。
+**不写。** 立项时设计要把 SQLite 状态镜像到 MapView PDC 作为冗余，但代码从未实装。现状：SQLite 是单一来源；MapView PDC 不写业务字段。
 
 #### 对 ItemFrame 的 PDC
 
 | Key | 类型 | 说明 |
 | --- | --- | --- |
-| `wall_id` | STRING | 所属 wall（核心 key，M5.5 起替代旧的 `session_id` / `sign_id`） |
+| `wall_id` | STRING | 所属 wall（核心 key，替代旧的 `session_id` / `sign_id`） |
 | `slot` | INT | 在 wall 矩阵内的位置序号（row * width + col） |
 | `published_at` | LONG | **2026-05-14 不再写入**；FrameDeployer.markPublished + FrameProtectionListener "已发布拦截" 都砍；现存 PDC 数据保留无害但不被读 |
 
@@ -707,16 +707,16 @@ plugin/src/main/resources/db-migrations/
 
 | 版本 | 文件 | 引入版本 | 主要内容 |
 | --- | --- | --- | --- |
-| V001 | `V001__initial.sql` | M2 | 初始 4 表：`pool_maps` / `sign_records` / `audit_log` / `template_usage` |
-| V002 | `V002__drafts.sql` | M2-M5 | 加 `drafts` 表（二段式编辑模型） |
-| V003 | `V003__drafts_add_maps.sql` | M3 | `drafts` 加 maps 字段 |
-| V004 | `V004__drafts_wall_id_alias.sql` | M4 | `drafts` 加 wall_id / alias |
-| V005 | `V005__walls_unified.sql` | M5.5 | **重构**：DROP `sign_records` + `drafts`，drop+recreate `pool_maps`（去 `sign_id`），新建 `walls` 表 |
-| V006 | `V006__walls_protocol_version.sql` | M8-B | `walls` 加 `protocol_version` 列（标记 project_json 形态 v1/v2） |
-| V007 | `V007__image_uploads.sql` | M13 | 新建 `image_uploads` 表（含 `refcount` 列） |
-| V008 | `V008__templates.sql` | M14 | 新建 `templates` 表（玩家模板） |
+| V001 | `V001__initial.sql` | 0.1.0 | 初始 4 表：`pool_maps` / `sign_records` / `audit_log` / `template_usage` |
+| V002 | `V002__drafts.sql` | 0.1.0 | 加 `drafts` 表（二段式编辑模型） |
+| V003 | `V003__drafts_add_maps.sql` | 0.1.0 | `drafts` 加 maps 字段 |
+| V004 | `V004__drafts_wall_id_alias.sql` | 0.1.0 | `drafts` 加 wall_id / alias |
+| V005 | `V005__walls_unified.sql` | 0.1.0 | **重构**：DROP `sign_records` + `drafts`，drop+recreate `pool_maps`（去 `sign_id`），新建 `walls` 表 |
+| V006 | `V006__walls_protocol_version.sql` | 0.1.0 | `walls` 加 `protocol_version` 列（标记 project_json 形态 v1/v2） |
+| V007 | `V007__image_uploads.sql` | 0.1.0 | 新建 `image_uploads` 表（含 `refcount` 列） |
+| V008 | `V008__templates.sql` | 0.1.0 | 新建 `templates` 表（玩家模板） |
 | V009 | （跳号） | — | 迭代中预留，**未落地脚本**，`MIGRATIONS` 列表无此项 |
-| V010 | `V010__remove_refcount.sql` | M16-P6 | `ALTER TABLE image_uploads DROP COLUMN refcount` |
+| V010 | `V010__remove_refcount.sql` | 0.1.0 | `ALTER TABLE image_uploads DROP COLUMN refcount` |
 | V011 | `V011__user_variables.sql` | 0.4.0 | 新建 `user_variables` 表 |
 | V012 | `V012__wall_schedules.sql` | 0.4.0 | 新建 `wall_schedules` + `schedule_entries` 表 |
 | V013 | `V013__schedule_precision.sql` | 0.4.0 bugfix | `wall_schedules` 加 `precision` 列 |
@@ -731,7 +731,7 @@ plugin/src/main/resources/db-migrations/
 1. 读 `schema_version` 表最大 version `N`
 2. 遍历 `MigrationRunner.MIGRATIONS`，对 `version > N` 的条目按序应用
 3. 每应用一个脚本 → 在 `schema_version` 表插入新 row
-4. **每个 migration 各自包一个事务**（M15.4 P0-28），失败回滚不留半态；事务前 WAL 安全 `auto-backup`（0.9.1 起默认开，见 §6.6.2）
+4. **每个 migration 各自包一个事务**，失败回滚不留半态；事务前 WAL 安全 `auto-backup`（0.9.1 起默认开，见 §6.6.2）
 
 **0.6 例外（无 schema 变更）：** 0.6 时间轴把协议版本由 2 升至 3（详见 `protocol.md`），但**不引入新的 DB schema 版本**——无新表、无 `ALTER`，`timelines` / 关键帧轨全在 `walls.project_json` blob 层加（§2.4.2）。与历来"每次 DB 变更 +1"（§6.1）的惯例对照：本次变更不触碰任何表结构，故 `schema_version` 不动；版本演进体现在 `project_json` 内部的 `protocolVersion` 字段（lazy on-write 写成 3），而非 schema 整数。
 
@@ -751,7 +751,7 @@ plugin/src/main/resources/db-migrations/
 
 ### 6.6 Migration 兼容性规则（pre-release vs stable 发版）
 
-> **数据契约闸 0.9.1 落地**（2026-06-23）：M15 之前 migration 走"激进 drop+recreate"（如 V005 整体重置），适合 pre-release。0.9.1 把"首次 stable 后必须 forward-only + 强制 auto-backup"从文档约定变成**代码/测试落地**——并把 **schema 冻结点提前到 V018**（V001-V017 grandfathered，自 V018 起强制 forward-only），抢在 1.0 之前一个版本进入冻结。
+> **数据契约闸 0.9.1 落地**（2026-06-23）：早期 migration 走"激进 drop+recreate"（如 V005 整体重置），适合 pre-release。0.9.1 把"首次 stable 后必须 forward-only + 强制 auto-backup"从文档约定变成**代码/测试落地**——并把 **schema 冻结点提前到 V018**（V001-V017 grandfathered，自 V018 起强制 forward-only），抢在 1.0 之前一个版本进入冻结。
 >
 > **版本语义**：`0.x.y-SNAPSHOT` 历来视为 pre-release（允许激进改 schema）；但 **schema 实际已自 V018 冻结**（forward-only 守卫强制起始版本），不再等到 1.0.0。当前最高迁移 V017。
 
@@ -785,7 +785,7 @@ V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount �
 `runUpTo(V<N>)` 应用目标迁移 → 子类断言关键查询数据无损 / 新结构正确。
 示范见 `V017WallScriptsFixtureTest`；加新 fixture 的步骤见 `migration-fixtures/README.md`。
 
-详见 `docs/journal.md` 2026-05-16 M15.4 条目（P0-28/29 落地）。
+详见 `docs/journal.md` 2026-05-16 条目。
 
 ---
 
@@ -801,9 +801,9 @@ V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount �
 | walls 行存在但所有 ItemFrame 消失 | 行保留（玩家可能后续走到原位置 `/canvas open` 恢复）；`/canvas list` 标记 detached |
 | ItemFrame 存在但 walls 表行被删（不应发生，因为 delete 会拆框） | 下次 wand 交互时识别为"陌生 ItemFrame"，提示用户手动拆 |
 
-### 7.2 `/canvas fsck`（M7+）
+### 7.2 `/canvas fsck`
 
-管理员命令，扫描全局一致性并输出报告。M5.5 不做；当前 `/canvas cleanup` 命令保留 stub 占位。
+管理员命令，扫描全局一致性并输出报告。尚未实装；当前 `/canvas cleanup` 命令保留 stub 占位。
 
 ---
 
@@ -826,7 +826,7 @@ LIMIT 50;
 
 -- 反查 mapId → wall_id（wand 瞄 ItemFrame 时用）
 SELECT wall_id FROM walls WHERE map_ids LIKE ? || ',%' OR map_ids LIKE '%,' || ? || ',%' OR map_ids LIKE '%,' || ? OR map_ids = ?;
--- 工程实现建议：单独维护 walls_map_index(map_id PK, wall_id) 反向表（M5.5 P1 加）
+-- 工程实现建议：单独维护 walls_map_index(map_id PK, wall_id) 反向表（后续可加）
 
 -- 某区域的所有 walls
 SELECT * FROM walls
@@ -861,9 +861,9 @@ LIMIT 10;
 
 - [ ] `pool_maps` 删除（池缩容）是否支持在线执行
 - [ ] 世界卸载/加载时 DB 的行为（某世界下线，其中的 walls 行如何处理）
-- [ ] **M5.5 引入**：`walls_map_index(map_id PK, wall_id)` 反向表是 P1 加，还是直接走 LIKE 查询（数据量小可不加）
-- [ ] **M5.5 引入**：alias 大小写敏感性（"Subway" vs "subway" 是否同名冲突）
-- [ ] **M5.5 引入**：wall delete 时是否需要保留 audit log 一份 project_json 备份（防误删）
+- [ ] `walls_map_index(map_id PK, wall_id)` 反向表是 P1 加，还是直接走 LIKE 查询（数据量小可不加）
+- [ ] alias 大小写敏感性（"Subway" vs "subway" 是否同名冲突）
+- [ ] wall delete 时是否需要保留 audit log 一份 project_json 备份（防误删）
 - [ ] `audit_log` 是否分库以免主 DB 膨胀
 - [ ] 多服务器共享 DB 的场景（暂不支持，但考虑未来是否兼容）
 - [x] **0.6 引入 / 0.8 定稿**：孤儿关键帧轨（导入的 `timelines[].tracks` 引用当前工程不存在的 elementId）丢弃 vs 保留——**已定稿为「丢弃 + `orphan-track-dropped` warn」**（0.8 Part A 实装，`ProjectImporter.stripOrphanTracksAndCollect`，见 §4.4 步骤 5）

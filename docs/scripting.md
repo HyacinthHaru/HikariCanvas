@@ -313,7 +313,7 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 
 **引擎层 `web/src/blocks/engine/`**(不知道任何业务积木):
 - DOM + CSS 渲染(积木是文字/下拉/输入框密集体,Konva 不合适;画布 pan/zoom 用 CSS transform)
-- 无限画布 + 拖拽(PointerEvent,复用 M12 接管经验)+ 吸附点(snap slot,垂直序列吸附 +
+- 无限画布 + 拖拽(PointerEvent,复用既有 PointerEvent 接管经验)+ 吸附点(snap slot,垂直序列吸附 +
   C 形嵌套槽)+ 拖出断链 / 拖入接链
 - 积木树 ↔ ScriptRule JSON 双向序列化;blockId 在创建积木时分配
 - 本地 undo 栈(画布草稿态)

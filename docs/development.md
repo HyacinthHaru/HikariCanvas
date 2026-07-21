@@ -197,7 +197,7 @@ JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanv
 | `render/` | 前端渲染镜像（与后端 `render` 包对镜）：`PreviewRenderer` + `PaletteLut` + `PathParser` + `TextLayout` + `FontLoader`（FontFace API）+ `GlyphMetricsLut` + `BayerDither` / `BlendModes` / `fill` + 缩略图 |
 | `components/` | Vue 组件，按区域分子目录：`layout`（CanvasView / TopBar / RightPanel / LayerPanel …）/ `canvas`（overlay / 内联文本编辑）/ `properties`（各元素属性面板）/ `toolbar` / `ui`（ColorInput / FillInput / Tooltip）/ `variables` / `timeline` / `schedule` / `rail` / `template` |
 | `composables/` | 可复用交互逻辑：`useSnapManager` / `useDrawToCreate` / `useClipboard` / `useBrushHost` / `useLassoMask` / `useLockGuard` / `usePanScroll` / `useTimelinePlayback` / `useSvgImport` / `useProjectImport`/`Export` 等 |
-| `livepaint/` | 油漆桶（M18，**前端独占功能**）：`LivePaintCore` + `ElementToPolygon` + `PolygonToPath` + `RdpSimplifier` + Web Worker（`livePaintWorker.ts`） |
+| `livepaint/` | 油漆桶（**前端独占功能**）：`LivePaintCore` + `ElementToPolygon` + `PolygonToPath` + `RdpSimplifier` + Web Worker（`livePaintWorker.ts`） |
 | `timeline/` | 时间轴双端插值镜像：`easing` / `colorLerp` / `interpolation`（与后端 `render` 缓动逻辑对镜，数值需逐位一致） |
 | `script/` | 0.7.0 积木脚本编辑器：`model`（blockDefs / blockTree / dropTarget / validator / serialize）+ `canvas`（无限画布 + 拖拽 + 渲染）+ `params`（参数表单 / 条件构建器） |
 | `variable/` | 变量前端逻辑：`interpolator`（`${var:X}` 镜像）+ `pickerLogic` + `lexicalChip`（Notion 风 chip 编辑器） |

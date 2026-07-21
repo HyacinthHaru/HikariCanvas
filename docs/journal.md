@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-07-21 · 规范代码注释与文档文案
+
+把散落在代码注释、构建脚本、workflow 与契约文档里的内部开发编号（`M16 P5.1` / `M4-T3` / `P4.5` 这类）剥掉，保留其后的实际约束正文；一并去掉几处自我论证式措辞和把需求来源写进注释的表述。**零逻辑改动。**
+
+- **代码与构建（57 文件）**：`plugin/src/{main,test,generator}`、`web/src`、`web/test`、`plugin/build.gradle.kts`、`.github/workflows/ci.yml`。逐行核对 diff 仅注释行变动，唯一的非注释改动是 `hello_world.yml` 的 `description` —— 它是模板库里对玩家可见的文案，此前带着「M3 demo 升级为正式 YAML 模板（M6-D）」。
+- **`@since` 规范化**：时间轴 6 个 `state` 类的「（0.6 引入）」改为标准 `@since 0.6`；顺带清掉其 javadoc 里已过时的阶段叙述（`TriggerType` 写着「PLAYER_NEAR 推迟 0.7」，而该值至今不在此 enum —— 游戏事件触发走的是脚本系统）。
+- **契约文档（9 文件 / 155 行）**：`protocol` / `architecture` / `data-model` / `rendering` / `security` / `timeline` / `scripting` / `development` / `import-export`。`data-model` 迁移表「引入版本」列的 M 代号换成真实版本 `0.1.0`（V001-V010 都落在 0.1.0 期内）。**有意保留**：铁路线路代号示例数据 `"M2"`、`PROPOSAL.md` 的立项期里程碑表（该表自述为规划快照，代号即其内容本身）。
+- **`UrlFetchSafety`** 三处注释改为陈述设计本身（任何域名放行、SSRF 风险由服主承担），不再写成「按要求删掉了这些防护」。
+
+**验证**：后端 `:plugin:test` 与前端 vitest 均无新增失败 —— 后端 4 失败（`RendererSnapshotTest` 文字类 fixture）、前端 2 失败（`scriptEdit` locale 断言），两者都用 stash 掉本次改动在干净树复跑得到同样结果，属本机环境既有。
+
+关联文件：见上述范围；版本号不动。
+
+---
+
 ## 2026-07-21 · 构建跨平台修复 + package-lock 同步
 
 `./gradlew :plugin:shadowJar` 在 Windows 上挂在 `installWebDeps`（`A problem occurred starting process 'command 'npm''`）——Gradle `Exec` 不经 shell 直接 spawn，而 Windows 上 npm 的可执行文件是 `npm.cmd`。新增 `npmCommand` 按 `os.name` 取值，`installWebDeps` / `buildWeb` 两处调用点共用；Linux / macOS 取值与原先字面相同，行为不变。

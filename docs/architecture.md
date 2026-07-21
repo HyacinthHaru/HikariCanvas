@@ -1,11 +1,11 @@
 # HikariCanvas 系统架构
 
-**状态：** 立项稿 v0.1 · 2026-04-19；M5.5 重构 · 2026-04-27；lock-state 重设计 · 2026-05-14
+**状态：** 立项稿 v0.1 · 2026-04-19；wall 模型重构 · 2026-04-27；lock-state 重设计 · 2026-05-14
 **适用范围：** 后端插件 + 前端编辑器
 
 本文档定义系统的组件划分、数据流、生命周期与关键机制。所有代码实现必须遵循此架构；如需调整，先改本文档再改代码。
 
-> **M5.5 路线修正（2026-04-27）**：原"编辑 → commit 永久固化"二段式（drafts + sign_records / RESERVED + PERMANENT）已废止。新模型：单一 `walls` 表 + `published_at` 标签，wall 永远可改，命令族新增 `open / list / publish / delete` 替代 `commit`。
+> **路线修正（2026-04-27）**：原"编辑 → commit 永久固化"二段式（drafts + sign_records / RESERVED + PERMANENT）已废止。新模型：单一 `walls` 表 + `published_at` 标签，wall 永远可改，命令族新增 `open / list / publish / delete` 替代 `commit`。
 
 > **lock-state 重设计（2026-05-14）**：`/canvas publish` / `/canvas unpublish` 命令砍；DB 列 `walls.published_at` 保留但语义改为 lock 时间戳；新 WS op `wall.lock` / `wall.unlock`（owner-only）；前端 TopBar Lock 按钮 + RightPanel readonly UI 是 lock 的唯一执行者；后端编辑 op 路径与 lock 状态完全解耦（未来动态展示用例需要）；ItemFrame PDC 不再写 published_at；FrameProtectionListener "已发布拦截" 砍。下文 §6/§7 旧 publish 流程段落标 `[DEPRECATED 2026-05-14]`，请参考 CLAUDE.md `§lock-state` 与本文档 §3.6 新流程。
 
@@ -101,7 +101,7 @@ Player ─ /canvas confirm ─▶ SessionManager.create
 
 **说明：**
 - `/canvas confirm` **立即**挂物品框并填入 Placeholder 地图（浅灰底 + "HikariCanvas" 水印 + 坐标文字），让玩家在游戏内直接看到所选墙面的物理占位，不必等浏览器才知道选对了位置。
-- Placeholder 像素由 `render.PlaceholderRenderer`（M2 引入）生成：预烘焙位图 ASCII 字表（M4 前无字体系统）+ 静态浅灰底色；同一会话多张地图共享同一张像素缓冲区，减小内存。
+- Placeholder 像素由 `render.PlaceholderRenderer`生成：预烘焙位图 ASCII 字表（当时无字体系统）+ 静态浅灰底色；同一会话多张地图共享同一张像素缓冲区，减小内存。
 
 **编辑过程：**
 ```
@@ -175,14 +175,14 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 | Web | `web/` | Javalin HTTP + WebSocket + 静态资源 |
 | 认证 | `web/auth/` | Token 签发、校验、过期 |
 | 会话 | `session/` | 编辑会话状态、每玩家最多 1 活跃 |
-| 渲染 | `render/` | 字体、排版、调色板、效果、笔触简化（M12 RDP）、Bayer dither（M11） |
-| 笔刷 | （EditSession 内 StrokeBuffer，M12） | brush.* op 缓冲、RDP 简化、 Catmull-Rom 拟合 |
+| 渲染 | `render/` | 字体、排版、调色板、效果、笔触简化、Bayer dither |
+| 笔刷 | （EditSession 内 StrokeBuffer） | brush.* op 缓冲、RDP 简化、 Catmull-Rom 拟合 |
 | 模板 | `template/` | YAML 解析（jackson-dataformat-yaml）、参数绑定、实例化、registry 热重载 |
 | 地图池 | `pool/` | **核心**：预览地图借还 |
 | 部署 | `deploy/` | 墙面识别、物品框、包发送 |
-| **图片**（M13） | `image/`（`ImageStorage` / `UploadHandler` / `ImageQuotaService`） | sha256 内容寻址 + LRU + 配额 + ImageIO 解码隔离 |
+| **图片** | `image/`（`ImageStorage` / `UploadHandler` / `ImageQuotaService`） | sha256 内容寻址 + LRU + 配额 + ImageIO 解码隔离 |
 | **工程档**（0.8-A） | `canvasfile/`（`CanvasArchive` / `CanvasManifest` / `ProjectMaterializer` / `AssetIngest` / `ScriptImporter` / `ProjectImporter`） | `.canvas` 工程档**导入**信任边界：zip 安全解包 + manifest 校验 + project.json 物化 + 图片摄入 + 脚本重绑（导出在前端，见 §18） |
-| 存储 | `storage/` | SQLite、PDC 工具；M13 起新增 `image_uploads` 表 DAO |
+| 存储 | `storage/` | SQLite、PDC 工具；新增 `image_uploads` 表 DAO |
 | 配置 | `config/` | YAML 配置读取 |
 
 ### 2.2 前端（编辑器）
@@ -264,8 +264,8 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 
 ### 3.3 并发约束
 
-- **每玩家最多 1 个活跃会话**（包括 `SELECTING` 态）。M5-D8 起 `/canvas edit` 在已 SELECTING 时**隐式 reselect**而非报错；ISSUED/ACTIVE 仍提示先 cancel
-- **每面墙最多 1 个活跃会话**（排他锁，wall_id 为 key）。M5.5 不做协作编辑（OT/CRDT 超 scope）
+- **每玩家最多 1 个活跃会话**（包括 `SELECTING` 态）。`/canvas edit` 在已 SELECTING 时**隐式 reselect**而非报错；ISSUED/ACTIVE 仍提示先 cancel
+- **每面墙最多 1 个活跃会话**（排他锁，wall_id 为 key）。不做协作编辑（OT/CRDT 超 scope）
 - 池容量耗尽：拒绝新会话，提示用户稍后；wall 占的 map 一直占着不自动释放，需 `/canvas delete` 显式清
 
 ### 3.6 lock 状态
@@ -299,7 +299,7 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 
 **未锁定 wall（lockedAt=null）= 协作中间态**：任何 `canvas.edit` 玩家可 `/canvas open <wall_id>`，进入 ACTIVE 编辑。`byWall` 排他锁保证同一时刻只有一个活跃 session，但接力 / 切换 owner 完全开放——前一玩家 `cancel` 后下一玩家立即 open。这是 v1 的协作模型（接力 ≠ 实时多人，OT/CRDT 永久不做）。
 
-**锁定 wall（lockedAt 非 null）**：M15.3 鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`（`SessionManager.open` 入口拦截）。
+**锁定 wall（lockedAt 非 null）**：鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`（`SessionManager.open` 入口拦截）。
 
 > **`wall.lock` / `wall.unlock` WS op 本身严格 owner-only，无 admin bypass**（`WallOpDispatcher` 直接比 `wall.ownerUuid == caller`，非 owner 一律 `FORBIDDEN`）。`canvas.admin.bypass-lock` 仅作用于"打开已锁定 wall"的 open 路径，不放行"代替 owner 锁/解锁"。
 
@@ -307,7 +307,7 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 
 ### 3.6.2 多世界假设
 
-**MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；M16 起 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。
+**MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；现 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。
 
 - `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（全局受 `map-pool.max` 限制）
 - `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（之前 silent bind 会让 map 显示在错误维度）
@@ -395,7 +395,7 @@ Minecraft 的 map ID 存于世界文件 `data/idcounts.dat`，每次 `Bukkit.cre
 PooledMap
 ├── id: int                        MC map ID
 ├── mapView: MapView               Bukkit 对象
-├── state: FREE | RESERVED         （M5.5 起两态。PERMANENT 已废止）
+├── state: FREE | RESERVED         （两态。PERMANENT 已废止）
 ├── reservedBy: String?            RESERVED 时指向 owner，格式 "wall:<wall_id>"
 ├── lastUsedAt: long               用于 LRU 清理
 └── paletteBuffer: byte[128*128]   当前像素（调色板索引）
@@ -460,7 +460,7 @@ cancel(session):
 ```
 
 **清理（管理员 `/canvas cleanup`，原 PERMANENT 校对路径已废止）：**
-**未实装（stub）。** `CanvasCommand.runCleanup` 当前仅回一句 "cleanup is stubbed" 提示，不做任何实际操作。规划语义为：扫 walls 表，对每行验证 `(world, origin, facing, map_ids)` 与世界中 ItemFrame 的对应关系，孤立行（ItemFrame 全丢）由管理员决定 delete；ItemFrame 不在 walls 表里的（外来）报告但不动。该 fsck 实现尚未落地（原计划 M7，至今未做）。
+**未实装（stub）。** `CanvasCommand.runCleanup` 当前仅回一句 "cleanup is stubbed" 提示，不做任何实际操作。规划语义为：扫 walls 表，对每行验证 `(world, origin, facing, map_ids)` 与世界中 ItemFrame 的对应关系，孤立行（ItemFrame 全丢）由管理员决定 delete；ItemFrame 不在 walls 表里的（外来）报告但不动。该 fsck 实现尚未落地（至今未做）。
 
 > **泄漏防护不依赖 cleanup**：idcounts.dat 防膨胀的实际防线是后台 `MapPool.detectLeaks` 周期任务（每 5 分钟，硬编码于 `HikariCanvas` onEnable，见 §4.5 / §10.2）+ confirm/部署失败时的原子 `releaseToFree` 回滚，与未实装的 cleanup 命令无关。
 
@@ -469,15 +469,15 @@ cancel(session):
 `/canvas confirm` 后物品框**立刻**挂上并填入地图，但浏览器尚未打开——此时显示一张静态 Placeholder：
 
 **视觉：**
-- 浅灰底色（palette 索引待 M4 调色板 LUT 就位后固化；M2 先用 MC map palette 中贴近 `#CCCCCC` 的一个索引）
+- 浅灰底色（palette 索引待调色板 LUT 就位后固化；先用 MC map palette 中贴近 `#CCCCCC` 的一个索引）
 - 顶部："HikariCanvas"（约 12px 高位图字，居中）
 - 底部：坐标文字 `(x, y, z) → (x', y', z')` 与尺寸 `N×M`（告诉玩家「这块墙就是你刚选的」）
 
 **实现：**
-- 位图字表：M2 阶段预烘焙一个 ASCII 字表（只用英文字母+数字+括号+逗号+箭头），因为 M4 之前还没有 TTF 字体系统
+- 位图字表：预烘焙一个 ASCII 字表（只用英文字母+数字+括号+逗号+箭头），因为当时还没有 TTF 字体系统
 - 单张 128×128 图像预生成后**所有会话共享**同一张像素缓冲（只读，内存节省）
 - 每张物品框渲染的 Placeholder 需要叠加自己的"位置标签"（例如 "2/6" 表示这是 6 张地图里的第 2 张）→ 用**字符贴图 + 叠加**，不重渲整张；所有可能的标签预生成有限集
-- 打印代码归属：`render/PlaceholderRenderer.java`（M2 引入）
+- 打印代码归属：`render/PlaceholderRenderer.java`
 
 **协议契约：** Placeholder 的像素布局与字表坐标不算公开契约；`ProjectState` 中不存在 Placeholder 元素，任何编辑动作一旦发出（`element.add` 等），Placeholder 立刻被真实渲染覆盖。
 
@@ -487,7 +487,7 @@ cancel(session):
 
 - `pool.size`：池总量
 - `pool.free`：空闲数
-- `pool.reserved`：被 wall 持有数（M5.5 起合并 RESERVED + 原 PERMANENT，因为已无后者）
+- `pool.reserved`：被 wall 持有数（合并 RESERVED + 原 PERMANENT，因为已无后者）
 - `pool.unowned_reserved`：RESERVED 但 `reservedBy` 不指向任何 walls 行的疑似泄漏数
 
 **泄漏检测：** 每 5 分钟后台扫描，若 RESERVED 的 `reservedBy = "wall:<id>"` 但 walls 表无对应行，强制归还并记日志。`reservedBy` 是临时 `session:<sid>`（不应出现，本来 wall 模型不再这样写）则视为旧版残留，同样回收。
@@ -516,7 +516,7 @@ cancel(session):
 
 - **静止**：无事件 = 无推送。最后一帧的状态已在客户端地图上，自持。
 - **输入中**：100ms 防抖 + 5 fps 节流。
-- **session 关闭前最后一帧**：一次完整（非差分）推送，确保最终帧 100% 正确（M5.5 前称"提交时全量"，新模型下不存在显式 commit，改为 cancel/disconnect 前 ProjectionThrottler flush）。
+- **session 关闭前最后一帧**：一次完整（非差分）推送，确保最终帧 100% 正确（旧模型称"提交时全量"，新模型下不存在显式 commit，改为 cancel/disconnect 前 ProjectionThrottler flush）。
 
 **两条产帧路径（0.6 引入）。** 上面描述的是**反应式路径**；时间轴动画引入第二条**主动 cadence 路径**。两条按 wall 是否有活跃动画分流：
 
@@ -661,10 +661,10 @@ CI 集成：
 - `frame.setItem(mapItem)` ← 从池 reserveForWall 借出的地图；像素填 Placeholder（§4.4）
 - `frame.setRotation(NONE)`
 - `frame.setFixed(true)` ← 防止破坏/旋转
-- `frame.setInvisible(true)` 看场景需求（M2 实测发现 spawn-time 设 invisible 会与客户端 spawn-consumer 时序冲突，目前先 visible，M7 polish）
+- `frame.setInvisible(true)` 看场景需求（实测发现 spawn-time 设 invisible 会与客户端 spawn-consumer 时序冲突，目前先 visible，留后续打磨）
 
 PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取插件名小写）：
-- `hikaricanvas:wall_id = <wall_id>` ← M5.5 起核心 key（替代旧的 `session` / `sign`）
+- `hikaricanvas:wall_id = <wall_id>` ← 核心 key（替代旧的 `session` / `sign`）
 - `hikaricanvas:slot = <index>` ← 该 frame 在 wall 里的位置序号
 - ~~`hikaricanvas:published_at`~~ ← **2026-05-14 lock-state 重设计砍**：`FrameDeployer.markPublished` 已移除，ItemFrame PDC 不再写此 key（现存旧画框残留的该 key 保留无害，不再读）。lock 状态只存 DB 列 `walls.published_at`，不下放到 PDC
 
@@ -697,7 +697,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | **文件**（`templates/*.yml`） | 模板定义 | 人工管理 |
 | **文件**（`fonts/*.ttf`） | 字体 | 人工管理 |
 
-### 8.2 walls 表概览（M5.5 起取代 SignRecord）
+### 8.2 walls 表概览（取代 SignRecord）
 
 （详细 schema 在 `data-model.md`）
 
@@ -734,7 +734,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | `/api/script/command-templates` | GET | **sessionId** | 命令模板列表，仅返 id/params，不泄 command 原文（仅当脚本系统装配时注册） |
 | `/ws` | WS | auth 帧 + Origin 白名单 + 5s 超时 + IP 绑定 | 编辑器主通道 |
 
-> **鉴权模型（M16 起）**：默认 `bind: 127.0.0.1`，本机非敏感资源（静态 / 模板 / 调色板 / 字体 / 图标 / wall 列表与缩略图）走 loopback trust 不鉴权；触碰玩家私有数据或可枚举内容的端点（上传文件下载 / 变量命名空间 / 命令模板）要求 `sessionId` 对应一个活 session，校验失败 401。公网部署须反代 + TLS。
+> **鉴权模型**：默认 `bind: 127.0.0.1`，本机非敏感资源（静态 / 模板 / 调色板 / 字体 / 图标 / wall 列表与缩略图）走 loopback trust 不鉴权；触碰玩家私有数据或可枚举内容的端点（上传文件下载 / 变量命名空间 / 命令模板）要求 `sessionId` 对应一个活 session，校验失败 401。公网部署须反代 + TLS。
 >
 > ~~`/health`~~：**未实装/规划中**（WebServer 当前无此路由）。
 
@@ -792,14 +792,14 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 见 `security.md`，此处只列原则：
 - 默认不暴露公网
 - Token 单次使用 + 过期 + UUID 绑定
-- **会话级 IP 绑定**（M16-P6.6）：Session 首次 auth 时 CAS 绑定 caller IP，后续帧不一致 close 4001。绑 session 不绑 token——token 已单次使用 + TTL，再绑 token IP 是冗余；session 跨重连复用，绑定语义更稳定。已知限制：IPv6 norm + 反代 XFF 见 `security.md §2.5`
-- WS 消息限流 + WS upgrade Origin 白名单（M16-P1.3）+ 未认证 5s 超时 close 4001 auth_timeout（M16-P1.2）
+- **会话级 IP 绑定**：Session 首次 auth 时 CAS 绑定 caller IP，后续帧不一致 close 4001。绑 session 不绑 token——token 已单次使用 + TTL，再绑 token IP 是冗余；session 跨重连复用，绑定语义更稳定。已知限制：IPv6 norm + 反代 XFF 见 `security.md §2.5`
+- WS 消息限流 + WS upgrade Origin 白名单 + 未认证 5s 超时 close 4001 auth_timeout
 - 输入严格校验（字符长度、颜色格式、坐标范围）
 - 权限节点细分
 
 ---
 
-## 10.5 图层模型（M8 引入，协议 v2）
+## 10.5 图层模型（协议 v2）
 
 **心智模型：** ProjectState 不再持有扁平 `elements: Element[]`，而是 `layers: Layer[]`。每个 Layer 是一组共享可见性 / 锁 / 不透明度 / 混合模式的元素集合。Z-order 在两层：层间（`layers[i]` 的 i 越大越上层）+ 层内（layer.elements[j] 的 j 越大越上层）。
 
@@ -844,8 +844,8 @@ Guide {
 
 ### 生命周期
 
-- **创建 wall（M5.5 confirm 路径）**：自动生成 1 个 `Default Layer`，所有 element 落入该层；activeLayerId 指向它
-- **template.apply（M6-D replace 语义）**：清空所有层 → 生成 1 个 `Default Layer` 包住模板物化结果。**不保留**旧的多层结构（与 M6-D replace 语义一致）
+- **创建 wall（confirm 路径）**：自动生成 1 个 `Default Layer`，所有 element 落入该层；activeLayerId 指向它
+- **template.apply（replace 语义）**：清空所有层 → 生成 1 个 `Default Layer` 包住模板物化结果。**不保留**旧的多层结构（与 replace 语义一致）
 - **/canvas open 重新打开**：activeLayerId 沿用 DB 持久化值；若 DB 没有（v1 老画 migrate 后）→ 取第一个 layer
 - **/canvas delete**：所有层一起删（layer 不跨 wall 共享）
 
@@ -916,7 +916,7 @@ web:
 map-pool:
   initial: 64                       # 启动预创建张数（HikariCanvasConfig 钳 [1, 1024]）
   max: 256                          # 池上限；达上限新会话拿 POOL_EXHAUSTED
-  per-world: {}                     # 可选：按 world name 覆写 initial（M16-P2.3，见 §3.6.2）
+  per-world: {}                     # 可选：按 world name 覆写 initial（见 §3.6.2）
 
 session:
   token-ttl: 15m
@@ -951,11 +951,11 @@ logging:
 - [ ] 预览地图池初始化时，若 SQLite 恢复数量 > `initial-size`，超出部分如何处理（保留 vs 缩容）
 - [ ] 反代下的 `public-url` 自动探测是否可行，或仍要求服主手动配置
 - [ ] 会话 disconnect 5 分钟宽限是否太长（公网弱网场景 vs 池占用）
-- [x] 多世界支持：同一池跨世界共享 vs 按世界分池 —— **M16-P2.3 拍板：按 world UUID 分桶**。MapPool 内部 `Map<UUID worldId, PoolBucket>`；`acquireForWall(World, ...)` / `bindToWall` 强校验 mapView.world 一致；跨世界绑定抛 IllegalStateException。config `map-pool.per-world: {}` 按 world name 覆写 size。详见 §3.6.2
-- [ ] **M5.5 引入**：published wall 是否需要"自动归档"（长期无 op 自动 unpublish 释放给 `/canvas list` 滚动列表）—— 倾向不做，walls 数量 < 100 不需要
-- [x] **M5.5 引入**：协作编辑（多 client 同时编辑同一 wall_id）—— **永久不做**。`byWall` 排他锁阻止，玩家接力编辑（前一玩家 cancel 后下一玩家 `/canvas open <wall_id>`）已是现状
-- [ ] **M8 引入**：图层数 / 层内元素数上限（暂无；建议 layers ≤ 32、单层 elements ≤ 200 作为软上限做 warn 不做 hard cap）
-- [ ] **M8 引入**：blendMode v1 选 normal/multiply/screen/overlay 4 个；其他 PS 风格 mode 等用户呼声
+- [x] 多世界支持：同一池跨世界共享 vs 按世界分池 —— **按 world UUID 分桶**。MapPool 内部 `Map<UUID worldId, PoolBucket>`；`acquireForWall(World, ...)` / `bindToWall` 强校验 mapView.world 一致；跨世界绑定抛 IllegalStateException。config `map-pool.per-world: {}` 按 world name 覆写 size。详见 §3.6.2
+- [ ] published wall 是否需要"自动归档"（长期无 op 自动 unpublish 释放给 `/canvas list` 滚动列表）—— 倾向不做，walls 数量 < 100 不需要
+- [x] 协作编辑（多 client 同时编辑同一 wall_id）—— **永久不做**。`byWall` 排他锁阻止，玩家接力编辑（前一玩家 cancel 后下一玩家 `/canvas open <wall_id>`）已是现状
+- [ ] 图层数 / 层内元素数上限（暂无；建议 layers ≤ 32、单层 elements ≤ 200 作为软上限做 warn 不做 hard cap）
+- [ ] blendMode v1 选 normal/multiply/screen/overlay 4 个；其他 PS 风格 mode 等用户呼声
 - [ ] **0.6 引入**：AnimationTicker 与编辑 op 并发改 state 的锁范式落点——倾向进 EditSession monitor、复用 `ProjectionThrottler.projectUnderEditLock`（`ProjectionThrottler.java:221`，`synchronized (es)`）的锁范式；实现时确认是否需要单列。对齐 `timeline.md §9` 风险登记
 
 这些问题实现时根据实际情况回填本文档。
@@ -1000,7 +1000,7 @@ P-2 由变量系统取代。
 
 **AnimationTicker（0.6，§5.5）不属于 P-2 反模式。** 它在 Ticker 线程内算**临时**插值 ProjectState 直接渲染（与 P-1 用 cached 变量值渲染同路），**从不** mutate 持久化 ProjectState、不进 history 栈、不发 WS 编辑流量。与被禁的"后台 task 定时 `EditSession.updateElement`"有本质区别。
 
-详见 `docs/journal.md` 2026-05-16 M15.3 / M15.4 + 2026-05-19 0.4.0 规划条目。
+详见 `docs/journal.md` 2026-05-16 + 2026-05-19 0.4.0 规划条目。
 
 ---
 
@@ -1149,7 +1149,7 @@ element.add type=path  落库 + 后端 PathRenderer 渲染
 3. graph degraded → 拒（`livePaint.graphDegraded`）
 4. 命中 gap → `element.add type=path` + 当前 fill + 乐观本地 mutate
 5. 命中 element：
-   - `rect / circle / shape / path` → `element.update {patch:{fill}}` + 乐观本地 mutate（vector-fill 快捷，沿用 M11 Fill 联合类型）
+   - `rect / circle / shape / path` → `element.update {patch:{fill}}` + 乐观本地 mutate（vector-fill 快捷，沿用 Fill 联合类型）
    - `text / image / brush` → `livePaint.elementUnsupported(type)` 提示（这些元素 fill 不是颜色平铺语义）
 6. 都没命中 → `livePaint.noGap` 提示
 

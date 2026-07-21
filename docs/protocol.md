@@ -49,7 +49,7 @@
 | 编码 | UTF-8 JSON 文本帧 |
 | 压缩 | `permessage-deflate`（必开启） |
 | 心跳 | 前端每 **20s** 发应用层 `ping`（`wsClient.ts HEARTBEAT_INTERVAL_MS = 20_000`）；Jetty WS idleTimeout 设 **60s**（`WebServer.start` modifyWebSocketServletFactory），两层兜底。真正的 session 超时由 SessionReaper 负责（wsGrace 5min / idle 30min） |
-| 最大消息尺寸 | **入站 WS 文本帧硬上限 64 KiB**（`factory.setMaxTextMessageSize(65536)`，M15.1 防 flood）。snapshot 由服务端出站，不受此限 |
+| 最大消息尺寸 | **入站 WS 文本帧硬上限 64 KiB**（`factory.setMaxTextMessageSize(65536)`，防 flood）。snapshot 由服务端出站，不受此限 |
 
 二进制帧保留不使用。调色板像素数据走 MC 原生 map packet，不经 WS。
 
@@ -106,26 +106,26 @@ GET /api/session/:token HTTP/1.1
 ### 3.2 WS 握手
 
 1. 打开 `wss://.../ws`（或 `ws://` 本地）
-2. 客户端首帧必须发送 `auth`，**必须**携带 `client_v`（M16-P6.2 起的字段名；2026-05-16 之前别名 `clientProtocolVersion` 兼容期保留）：
+2. 客户端首帧必须发送 `auth`，**必须**携带 `client_v`（2026-05-16 之前别名 `clientProtocolVersion` 兼容期保留）：
 
 ```json
 { "v": 2, "op": "auth", "id": "c-0",
   "payload": { "token": "...", "client_v": 7, "clientProtocolVersion": 7 } }
 ```
 
-> 前端实际同时发 `client_v`（M16-P6.2 起的主字段名）和旧别名 `clientProtocolVersion`（兼容回滚到旧 jar 的情形，见 `wsClient.ts sendAuth`）。服务端优先读 `client_v`，缺则回退读 `clientProtocolVersion`（`WebServer.handleAuth`）。
+> 前端实际同时发 `client_v`（主字段名）和旧别名 `clientProtocolVersion`（兼容回滚到旧 jar 的情形，见 `wsClient.ts sendAuth`）。服务端优先读 `client_v`，缺则回退读 `clientProtocolVersion`（`WebServer.handleAuth`）。
 >
-> 服务端收到 `client_v` 不在 `[Protocol.SUPPORTED_MIN, SUPPORTED_MAX]`（当前都 = `7`）或非数字 / 缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `ac.haru.hikaricanvas.web.Protocol`（M16-P6.2 引入；前后端双向校验）。**版本检查在 token consume 之前**（避免为不兼容客户端浪费一次性 token），但在 per-IP 限流之后（防绕过）。
+> 服务端收到 `client_v` 不在 `[Protocol.SUPPORTED_MIN, SUPPORTED_MAX]`（当前都 = `7`）或非数字 / 缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `ac.haru.hikaricanvas.web.Protocol`（前后端双向校验）。**版本检查在 token consume 之前**（避免为不兼容客户端浪费一次性 token），但在 per-IP 限流之后（防绕过）。
 >
-> **未认证 5s 超时**（M16-P1.2）：WS 升级后未在 `network.ws-auth-timeout-seconds`（默认 5s，代码钳到 `1..60`）内收到合法 `auth` 帧 → close `4001` (`auth_timeout`)。防止恶意客户端占 WS 槽。
+> **未认证 5s 超时**：WS 升级后未在 `network.ws-auth-timeout-seconds`（默认 5s，代码钳到 `1..60`）内收到合法 `auth` 帧 → close `4001` (`auth_timeout`)。防止恶意客户端占 WS 槽。
 >
-> **Origin 白名单**（M16-P1.3）：WS upgrade 时校验 `Origin` 头（`checkWsOrigin` / `isOriginAllowed`）。**放行**：① 无 Origin / `null`（同源 fetch / 非浏览器）；② `127.0.0.1:*` 与 `localhost:*`（任何端口）；③ 与服务端 `host:port` 完全相同的同源；④ `network.allowed-origins` 精确匹配（大小写敏感）。其余 → 403 + 不 upgrade。注意：与表格描述不同，回环始终放行，并非"默认空 = 不校验"。
+> **Origin 白名单**：WS upgrade 时校验 `Origin` 头（`checkWsOrigin` / `isOriginAllowed`）。**放行**：① 无 Origin / `null`（同源 fetch / 非浏览器）；② `127.0.0.1:*` 与 `localhost:*`（任何端口）；③ 与服务端 `host:port` 完全相同的同源；④ `network.allowed-origins` 精确匹配（大小写敏感）。其余 → 403 + 不 upgrade。注意：与表格描述不同，回环始终放行，并非"默认空 = 不校验"。
 >
 > **per-IP token 限流**（2026-05-25）：auth 进校验前先做 per-IP 速率限制（`TokenRateLimiter`，默配见 config）；超限 → `error: RATE_LIMITED` + close `4429` (`CLOSE_TOKEN_RATE_LIMITED`)。client 看到 4429 应显示"请稍后再试"而非自动重连。
 >
 > **auth 时复查权限**（2026-05-25 #3）：token 签发后玩家可能被撤权（lp/pex/reload），故 auth 路径经主线程 hop 复查 `canvas.edit`；被撤权 → `error: PERMISSION_DENIED` + close `4003`（同 takeover 码，client 不重连）。同一 hop 顺带解析 `canvas.template.use-others` 供 ready 帧模板可见性过滤。
 >
-> **会话级 IP 绑定**（M16-P6.6）：首次 auth 时 `bindOrCheckIp` 把 client socket peer IP（**不解析 XFF**，避免伪造头攻击）CAS 绑定到 `Session.boundIp`；后续重连 IP 不一致 → `error: AUTH_FAILED` + close `4001`（文本 `ip_mismatch`）。
+> **会话级 IP 绑定**：首次 auth 时 `bindOrCheckIp` 把 client socket peer IP（**不解析 XFF**，避免伪造头攻击）CAS 绑定到 `Session.boundIp`；后续重连 IP 不一致 → `error: AUTH_FAILED` + close `4001`（文本 `ip_mismatch`）。
 
 3. 服务器校验通过 → `ready`：
 
@@ -198,7 +198,7 @@ GET /api/session/:token HTTP/1.1
 
 ### 3.4 断开与重连
 
-- **客户端主动关闭**：直接关 WS（`cancel` op 当前未实装，见 §5.7）；服务端 onClose → `markDisconnected`，wall 数据保留，session 由 SessionReaper 回收（wsGrace 5min）。M5.5 起 `commit` op 废止——保存通过每次 `element.*` op 的隐式 auto-save（walls 表 UPDATE）实现，不需要客户端显式发包。
+- **客户端主动关闭**：直接关 WS（`cancel` op 当前未实装，见 §5.7）；服务端 onClose → `markDisconnected`，wall 数据保留，session 由 SessionReaper 回收（wsGrace 5min）。`commit` op 废止——保存通过每次 `element.*` op 的隐式 auto-save（walls 表 UPDATE）实现，不需要客户端显式发包。
 - **网络断连**：前端自动重连，5 秒、10 秒、30 秒阶梯；重新握手时复用同一 token（仍在 TTL 内）
 - **服务端超时断开**：5 分钟无消息 → 踢连 + 会话进入 CLOSING
 - **协议版本不匹配**：close 码 `4002`
@@ -243,7 +243,7 @@ S → C:  { op: "error", id: "c-17",
 | --- | --- | --- |
 | `state.snapshot` | S→C | 完整工程状态（握手后 + undo 后） |
 | `state.patch` | S→C | 增量补丁（JSON Patch RFC 6902 子集） |
-| `project.load` | C→S | 载入既有 wall 进行二次编辑（M5.5 起：`/canvas open` 已经在握手前完成 load，此 op 实际可能不再需要，待 P2 实施时确认） |
+| `project.load` | C→S | 载入既有 wall 进行二次编辑（`/canvas open` 已经在握手前完成 load，此 op 实际可能不再需要，待 P2 实施时确认） |
 
 **state.patch 时间轴路径（v3 新增）**：v3 起 `state.patch` 新增 `/timelines/<i>/...`（时间轴属性，如 `/timelines/0/durationMs`）与 `/timelines/<i>/tracks/<elementId>/<k>/...`（某元素第 `k` 个关键帧的字段，如 `/timelines/0/tracks/e-abc/2/timeMs`）两类路径。沿用现有 JSON Pointer 分拣，与 `/layers/<i>/elements/<j>/...` 同构（前端 `project.ts` applier 多认一段 token）；keyframe 数组的增删 = 列表项 `add` / `remove`（与现有 elements 数组 patch 完全一致）。
 
@@ -262,7 +262,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `element.move-to-layer` | C→S | `{ elementId, targetLayerId, index? }`（跨层移动；index 缺省 = 落底） |
 | `element.transform` | C→S | `{ elementId, x?, y?, w?, h?, rotation? }` |
 
-**M18 Live Paint 注**：油漆桶工具不引入新 op。点击空白 gap 走 `element.add type=path`（payload `props.d` = gap polygon 转的 SVG path 字符串 + `props.fill` = 当前 fill）；点击元素内部走 `element.update {patch:{fill}}`（vector-fill 决策 A）。拓扑计算完全在前端 Web Worker 跑，详见 `docs/architecture.md §16` 与 `docs/rendering.md §8.4`。
+**Live Paint 注**：油漆桶工具不引入新 op。点击空白 gap 走 `element.add type=path`（payload `props.d` = gap polygon 转的 SVG path 字符串 + `props.fill` = 当前 fill）；点击元素内部走 `element.update {patch:{fill}}`（vector-fill 决策 A）。拓扑计算完全在前端 Web Worker 跑，详见 `docs/architecture.md §16` 与 `docs/rendering.md §8.4`。
 
 **0.8 Part B SVG 矢量导入注**：SVG 导入不引入新 op，走现有 `element.add`（server-authoritative）。前端解析一份 SVG → N 个 PathElement draft + 可选 ImageElement draft，循环发 N 条 `element.add { type, props, layerId }`；服务端逐条校验（`PathDValidator` + `parseFillRuleNullable` 等）后写入 state，各条独立可撤销。`props` 含 `fillRule`（`"nonzero"`/`"evenodd"`/缺省）字段（`ElementValidator` 0.8 Part B 起支持）。内嵌位图（`<image data:…>`）先 `POST /api/upload` 拿 `source` hash，再发 `element.add type=image`。
 
@@ -288,7 +288,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `canvas.tweenFps` | C→S | 0.7.3：设置本 wall 补间动画帧率（per-wall）；走 editOpDispatcher 路径 |
 | `template.apply` | C→S | `{ templateId, params }` （会清空所有层 + 用 Default Layer 包结果） |
 
-**`canvas.background` payload schema（M17 升级）：**
+**`canvas.background` payload schema：**
 
 ```jsonc
 // 新格式（推荐，支持渐变）
@@ -300,7 +300,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 - **优先识别 `fill` 字段**，缺则降级读 `color`（包成 SolidFill 内部表示）
 - **两者都缺** → `INVALID_PAYLOAD`
-- `Fill` 联合类型 schema 复用 element fill（M11 引入）：`SolidFill { type: "solid", color }` / `LinearFill { type: "linear", stops, angle }` / `RadialFill { type: "radial", stops, cx, cy, r }`。完整字段见 `state/Fill.java` + `web/src/types/protocol.ts`
+- `Fill` 联合类型 schema 复用 element fill：`SolidFill { type: "solid", color }` / `LinearFill { type: "linear", stops, angle }` / `RadialFill { type: "radial", stops, cx, cy, r }`。完整字段见 `state/Fill.java` + `web/src/types/protocol.ts`
 - 渐变背景的 bbox = 整画布；CanvasCompositor 通过 `FillPaintBuilder.fillToPaint(canvas.background(), 0, 0, w, h)` 渲染
 - 持久化兼容：`ProjectState.Canvas.background` 反序列化时 `FillDeserializer` 自动把字符串 `"#xxx"` wrap 成 SolidFill；旧 .canvas 文件与 fixture 0 漂移
 
@@ -322,11 +322,11 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；不符合 `[A-Za-z0-9_-]{2,32}` 返 `INVALID_ALIAS_FORMAT`；冲突返 `ALIAS_TAKEN`；session 不关闭 |
 | `wall.refresh` | C→S | `{}` - 玩家撸掉支撑方块 / 画框时手动触发；切回主线程跑 `FrameDeployer.repairFor`（补方块 + 补 spawn 缺失画框）后整画布脏矩形 reprojection；`ack { framesRespawned, framesReAttached, wallBlocksReplaced }` |
 
-> M5.5 起 `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
+> `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
 >
 > **2026-05-14**：`wall.publish` / `wall.unpublish` 砍，新 `wall.lock` / `wall.unlock`。lock 是 UX 层概念，**后端编辑 op（element.* / canvas.* / layer.*）路径与 lock 状态完全解耦**——锁定的 wall 仍能接受编辑 op（动态展示场景需要），前端 readonly UI 是 lock 唯一的执行者。`/canvas publish` / `/canvas unpublish` 命令同时砍。
 
-### 5.9 笔刷流（M12 实施）
+### 5.9 笔刷流
 
 笔刷 op 走 `BrushOpDispatcher` 独立路径，**不走** edit 路径的 rateLimiter（brush.point 高频低消息，限流会卡笔触流畅性）；内存安全靠 `MAX_BRUSH_POINTS_PER_STROKE` + `MAX_ACTIVE_STROKES` 双闸门。
 
@@ -339,7 +339,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 > 限制：`MAX_ACTIVE_STROKES` = 8（同 session 同时活跃 stroke 上限）；`MAX_BRUSH_POINTS_PER_STROKE` = 4096（单 stroke 累计点数硬上限）。超出返 `TOO_MANY_STROKES` / `STROKE_TOO_LONG`，前端 UI 应拦截不该发到这一层。
 
-### 5.10 模板创意工坊（M14 引入）
+### 5.10 模板创意工坊
 
 玩家可发布 / 删除 / 推荐自己的模板。走 `TemplateOpDispatcher`。权限节点：
 - `canvas.template.save`（发布）
@@ -442,7 +442,7 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 
 > `property` 取值集合（`x`/`y`/`w`/`h`/`rotation`/`opacity`/`color`/`fill`/`text` 等）与其插值类别（数值 / 颜色 / 离散）见 `docs/rendering.md §9.2`；`easing` 结构（`type` + 可选 `bezier` 控制点）见 `docs/rendering.md §9.3`。
 >
-> **`coalesceKey`（可选，0.6 P4.5b 新增）**：一个用户动作映射到多条 `keyframe.*` op 时（"整体帧"——拉就设 / 加帧 / 整体块拖动一次性写元素全部 transform 属性）让它们共享一个撤销步。同 `coalesceKey` 的连续 op 在历史栈按 `commitHistoryCoalesced` 合并为一步（窗口 500ms，见 `timeline.md §7.2`），一次撤销整组回收。**缺省（不传）= 保持单帧粒度**（`add` 各自一步；`update`/`move` 按默认键 `{elementId}:{keyframeId}:{property}` 合并连续拖动），向后兼容。
+> **`coalesceKey`（可选，0.6 新增）**：一个用户动作映射到多条 `keyframe.*` op 时（"整体帧"——拉就设 / 加帧 / 整体块拖动一次性写元素全部 transform 属性）让它们共享一个撤销步。同 `coalesceKey` 的连续 op 在历史栈按 `commitHistoryCoalesced` 合并为一步（窗口 500ms，见 `timeline.md §7.2`），一次撤销整组回收。**缺省（不传）= 保持单帧粒度**（`add` 各自一步；`update`/`move` 按默认键 `{elementId}:{keyframeId}:{property}` 合并连续拖动），向后兼容。
 >
 > 撤销侧 keyframe 连续拖动会按 coalesce key 合并（`docs/timeline.md §7`），协议层无需感知——前端在 `dragend` 才发终值一条 op，服务端按常规处理。
 
@@ -502,27 +502,27 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 
 | code | 说明 | retryable |
 | --- | --- | --- |
-| `AUTH_FAILED` | token 无效/过期；M16-P6.6 会话 IP 绑定不一致也用此码 | ❌ |
-| `UNAUTHORIZED` | M16-P1.1：`GET /api/upload/{hash}?session=...` 缺 sessionId query 或 sessionId 不匹配活跃 session（HTTP 401） | ❌ |
+| `AUTH_FAILED` | token 无效/过期；会话 IP 绑定不一致也用此码 | ❌ |
+| `UNAUTHORIZED` | `GET /api/upload/{hash}?session=...` 缺 sessionId query 或 sessionId 不匹配活跃 session（HTTP 401） | ❌ |
 | `VERSION_MISMATCH` | 协议版本不兼容（含 `client_v` 缺 / 超出 [SUPPORTED_MIN, SUPPORTED_MAX]） | ❌ |
-| `QUOTA_EXCEEDED_DISK` | M16-P2.1：上传时插件 uploads 总字节超 `images.max-total-storage-mb` 且 LRU 无可回收行（与 `QUOTA_DISK_FULL` 同语义，M16 起统一新码） | ❌ |
+| `QUOTA_EXCEEDED_DISK` | 上传时插件 uploads 总字节超 `images.max-total-storage-mb` 且 LRU 无可回收行（与 `QUOTA_DISK_FULL` 同语义，已统一新码） | ❌ |
 | `RATE_LIMITED` | 超过限流阈值 | ✅ |
 | `POOL_EXHAUSTED` | 预览池耗尽，resize 失败 | ✅ |
 | `INVALID_OP` | 未知 op | ❌ |
 | `INVALID_PAYLOAD` | payload 校验失败 | ❌ |
 | `INVALID_ELEMENT` | 元素 id 不存在或属性非法 | ❌ |
-| `INVALID_ALIAS_FORMAT` | wall.alias 不满足 `[A-Za-z0-9_-]{2,32}`（M11） | ❌ |
+| `INVALID_ALIAS_FORMAT` | wall.alias 不满足 `[A-Za-z0-9_-]{2,32}` | ❌ |
 | `PERMISSION_DENIED` | 权限不足 | ❌ |
-| `FORBIDDEN` | M15.3 鉴权方案 C：lock-aware open / template.* / wall.lock/unlock 非 owner（或缺管理员 bypass）；与 PERMISSION_DENIED 区别是基于运行期身份（owner_uuid / lock 状态）而非静态权限节点。0.8-A 起 `POST /api/project/import` 缺 `canvas.edit`（含玩家离线 fail-closed）也用此码（HTTP 403） | ❌ |
+| `FORBIDDEN` | 鉴权方案 C：lock-aware open / template.* / wall.lock/unlock 非 owner（或缺管理员 bypass）；与 PERMISSION_DENIED 区别是基于运行期身份（owner_uuid / lock 状态）而非静态权限节点。0.8-A 起 `POST /api/project/import` 缺 `canvas.edit`（含玩家离线 fail-closed）也用此码（HTTP 403） | ❌ |
 | `SESSION_CLOSED` | 会话已关闭 | ❌ |
 | `ALIAS_TAKEN` | wall.alias 已被其他 wall 占用 | ❌ |
 | `WALL_NOT_FOUND` | wall.* op 但当前 session 没绑定 wall（不应发生） | ❌ |
-| `LAYER_LOCKED` | element.* op 命中 locked 层（M8 layer.locked=true） | ❌ |
+| `LAYER_LOCKED` | element.* op 命中 locked 层（layer.locked=true） | ❌ |
 | `LAYER_NOT_FOUND` | layer.* op 指向不存在的 layerId | ❌ |
 | `LAST_LAYER` | layer.delete 试图删最后一层 | ❌ |
-| `TOO_MANY_STROKES` | M12 brush：active stroke 数超 `MAX_ACTIVE_STROKES`（默认 8） | ❌ |
-| `INVALID_STROKE` | M12 brush：strokeId 不存在 / 已 end / 已 cancel | ❌ |
-| `STROKE_TOO_LONG` | M12 brush：单 stroke 点数超 `MAX_BRUSH_POINTS_PER_STROKE`（默认 4096） | ❌ |
+| `TOO_MANY_STROKES` | active stroke 数超 `MAX_ACTIVE_STROKES`（默认 8） | ❌ |
+| `INVALID_STROKE` | strokeId 不存在 / 已 end / 已 cancel | ❌ |
+| `STROKE_TOO_LONG` | 单 stroke 点数超 `MAX_BRUSH_POINTS_PER_STROKE`（默认 4096） | ❌ |
 | `VARIABLE_NOT_FOUND` | 0.4.0：variable.* op 指向不存在的 fullName | ❌ |
 | `VARIABLE_EXISTS` | 0.4.0：variable.create 同名已存在 | ❌ |
 | `VARIABLE_TYPE_MISMATCH` | 0.4.0：variable.set 值与声明 type 不符 | ❌ |
@@ -535,14 +535,14 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `SCRIPT_NOT_FOUND` | 0.7：script.update / delete / enable / test 指向不存在或非本墙的 ruleId | ❌ |
 | `SCRIPT_QUOTA_EXCEEDED` | 0.7：单墙规则数超 `scripts.max-rules-per-wall`（默 16）。另 0.7.2 起单墙脚本可操作元素数受 `scripts.max-elements-per-wall`（默 200）约束 | ❌ |
 | `SCRIPT_ENGINE_UNAVAILABLE` | 0.7：script.test 时执行引擎（ScriptTestLauncher）未装配——启动早期窗口 / 测试装配缺时回此码（P2-P5 已落地，正常运行不再触发） | ❌ |
-| `UPLOAD_REJECTED` | 图片上传被拒（M13）；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
-| `QUOTA_PER_WALL` | M13/M14：当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
-| `QUOTA_PER_DAY` | M13/M14：玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
-| `QUOTA_DISK_FULL` | M13/M14：插件 uploads 目录总字节超 `images.max-total-storage-mb`，且 LRU 无可回收行 | ❌ |
-| `QUOTA_EXCEEDED` | M14：模板发布超 `templates.max-per-player`，且无 `canvas.template.bypass-limit` | ❌ |
-| `NOT_FOUND` | M14：template.delete / template.feature / template.unfeature 指向不存在 templateId | ❌ |
-| `DB_FAILED` | M14：TemplatePublisher 写 SQLite 失败（templates upsert / featured update） | ✅ |
-| `WRITE_FAILED` | M14：TemplatePublisher 写 YAML 文件失败（user-templates/<uuid>/*.yml） | ✅ |
+| `UPLOAD_REJECTED` | 图片上传被拒；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
+| `QUOTA_PER_WALL` | 当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
+| `QUOTA_PER_DAY` | 玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
+| `QUOTA_DISK_FULL` | 插件 uploads 目录总字节超 `images.max-total-storage-mb`，且 LRU 无可回收行 | ❌ |
+| `QUOTA_EXCEEDED` | 模板发布超 `templates.max-per-player`，且无 `canvas.template.bypass-limit` | ❌ |
+| `NOT_FOUND` | template.delete / template.feature / template.unfeature 指向不存在 templateId | ❌ |
+| `DB_FAILED` | TemplatePublisher 写 SQLite 失败（templates upsert / featured update） | ✅ |
+| `WRITE_FAILED` | TemplatePublisher 写 YAML 文件失败（user-templates/<uuid>/*.yml） | ✅ |
 | `NO_SESSION` | 0.8-A：`POST /api/project/import` 缺 sessionId 或会话未知（HTTP 401） | ❌ |
 | `SESSION_NOT_READY` | 0.8-A：`POST /api/project/import` 会话无可写活动墙（HTTP 409） | ❌ |
 | `NO_FILE` | 0.8-A：`POST /api/project/import` 缺 `file` multipart 字段（HTTP 400） | ❌ |
@@ -562,12 +562,12 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | code | 说明 | 前端重连 |
 | --- | --- | --- |
 | 1000 | 正常关闭（客户端主动 `close()`） | 否（terminal） |
-| 4001 | 认证失败 / `auth_timeout`（M16-P1.2：未认证 5s 超时）/ 会话级 IP 绑定不一致（M16-P6.6，文本 `ip_mismatch`）/ `session_forgotten`（服务端 forget 陈旧连接） | 否（terminal）— 清掉本地 token |
-| 4002 | 业务协议版本不匹配（`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`，M16-P6.2 常量化）。前端 `handleReady` 检出 `accepted_v !== CLIENT_V` 时也主动发此码 | 否（terminal）— 需升级客户端 |
+| 4001 | 认证失败 / `auth_timeout`（未认证 5s 超时）/ 会话级 IP 绑定不一致（文本 `ip_mismatch`）/ `session_forgotten`（服务端 forget 陈旧连接） | 否（terminal）— 清掉本地 token |
+| 4002 | 业务协议版本不匹配（`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`，已常量化）。前端 `handleReady` 检出 `accepted_v !== CLIENT_V` 时也主动发此码 | 否（terminal）— 需升级客户端 |
 | 4003 | 会话被其他连接接管（`session-takeover`）**或**认证后权限被撤销（`PERMISSION_REVOKED`，2026-05-25 #3 复用同码） | **是**（非 terminal，会退避重连）— 接管/撤权场景下重连会再走 auth 自然失败 |
 | 4429 | token 暴力枚举超限（`CLOSE_TOKEN_RATE_LIMITED`，2026-05-25）。沿用 HTTP 429 语义，client 应显示"请稍后再试" | 否（terminal） |
 
-> **未实装**：原表中的 `1008`（策略违反 / 限流反复触发）、`1011`（服务端错误）、`4004`（空闲超时）当前代码均**未作为 WS close code 发出**——`SessionRateLimiter` 注释明确"close 1008 留 M7 polish"，idle/空闲回收走 SessionReaper 的 `markDisconnected` 而非显式 4004 close。保留记录以备规划。
+> **未实装**：原表中的 `1008`（策略违反 / 限流反复触发）、`1011`（服务端错误）、`4004`（空闲超时）当前代码均**未作为 WS close code 发出**——`SessionRateLimiter` 注释标明 close 1008 尚未实装，idle/空闲回收走 SessionReaper 的 `markDisconnected` 而非显式 4004 close。保留记录以备规划。
 >
 > 前端另有一个内部用的 `4000`（`ready_timeout` / `malformed_ready`）——`wsClient` 在 open→ready 看门狗超时或 ready payload 畸形时**客户端自己**发的 close 码（非服务端发出），落非 terminal 分支触发重连。
 
@@ -584,7 +584,7 @@ type ProjectState = {
   canvas: {
     widthMaps: number;
     heightMaps: number;
-    background: Fill;         // M17 起 string→Fill 联合类型（solid/linear/radial）；
+    background: Fill;         // string→Fill 联合类型（solid/linear/radial）；
                              // FillDeserializer 自动把旧 "#xxx" 字符串 wrap 成 SolidFill
     gridSize?: number;        // 0/缺省 = 不显示网格；常用值 8/16/32（仅前端预览，不入 MC）
     guides?: Guide[];         // 用户参考线，仅前端预览
@@ -617,10 +617,10 @@ type Element =
   | TextElement
   | RectElement
   | IconElement
-  | PathElement       // M9
-  | CircleElement     // M9
-  | ShapeElement      // M9（正多边形 / 星）
-  | ImageElement;     // M13
+  | PathElement
+  | CircleElement
+  | ShapeElement       // 正多边形 / 星
+  | ImageElement;
 
 type BaseElement = {
   id: string;       // "e-<uuid>"
@@ -660,7 +660,7 @@ type RectElement = BaseElement & {
   stroke?: { width: number; color: string };
 };
 
-// M9 PathElement：通用 SVG-like 路径（M/L/Q/C/Z 子集）。
+// PathElement：通用 SVG-like 路径（M/L/Q/C/Z 子集）。
 // d 坐标相对 element (x,y)（即 element bbox 左上角）。
 // fillRule 字段 0.8 Part B 新增：SVG fill-rule，null 等价 nonzero（默认）。
 // 无 DB migration：fillRule 在 project_json blob 内，旧记录缺字段 = 视为 null。
@@ -677,9 +677,9 @@ type PathElement = BaseElement & {
 // 双端渲染：后端 PathRenderer 走 Path2D.WIND_EVEN_ODD/WIND_NON_ZERO；
 // 前端 PreviewRenderer.drawPath 走 ctx.fill(path, fillRule ?? 'nonzero')。
 
-// M13：图片元素。source 是上传时返回的 sha256[:16] hash（内容寻址）；
+// 图片元素。source 是上传时返回的 sha256[:16] hash（内容寻址）；
 // 客户端用 GET /api/upload/{source} 拉取原图。mask 是可选 SVG path
-// 蒙版（M9 PathDValidator 子集 M/L/Q/C/Z），坐标相对 element bbox 0..w/0..h；
+// 蒙版（PathDValidator 子集 M/L/Q/C/Z），坐标相对 element bbox 0..w/0..h；
 // inverted=true 时取 mask 外部像素（图层蒙版反相）。
 type ImageElement = BaseElement & {
   type: "image";
@@ -750,7 +750,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 ```
 前端 ─── HTTP GET /api/session/abc123 ───▶ 插件
-                                           ← 200 { ok: true, playerName, wsUrl }   (M15.4 精简，敏感元数据走 ready)
+                                           ← 200 { ok: true, playerName, wsUrl }   (精简，敏感元数据走 ready)
 前端 ─── WS open /ws ─────────────────────▶
 前端 ─── { op: "auth", id: "c-0", payload: { token, client_v: 7 } }
                                            ← { op: "ready", id: "s-0", payload: { projectState, ... } }
@@ -851,7 +851,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 | --- | --- | --- |
 | 单会话 op 速率 | 20 msg/s | 返回 `RATE_LIMITED` 并丢弃本次 op |
 | 单会话 op 突发 | 40 msg / 2s | 同上 |
-| 重复触发 | 5 次 / 1min | **未实装**：`SessionRateLimiter` 注释明确 "close 1008 留 M7 polish"；当前只有上面两档软限流 |
+| 重复触发 | 5 次 / 1min | **未实装**：`SessionRateLimiter` 注释标明 close 1008 尚未实装；当前只有上面两档软限流 |
 
 另有 per-IP 的 **token 暴力枚举限流**（`TokenRateLimiter`，2026-05-25），在 auth 阶段触发 → close `4429`（见 §3.2 / §6.2），与上面的 op 速率限流是两套机制。
 
@@ -859,11 +859,11 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 ---
 
-## 9.5 HTTP API（M13 引入）
+## 9.5 HTTP API
 
 部分操作不走 WS，而是 HTTP 端点：
 
-### `POST /api/upload`（M13）
+### `POST /api/upload`
 
 玩家上传图片。请求体 `multipart/form-data` + 字段 `file`。
 
@@ -949,13 +949,13 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 >
 > **SVG 矢量导入（0.8 Part B 实装）**走纯前端路径：前端解析 SVG → 一组 `PathElement`（+内嵌位图 `ImageElement`）→ 经现有 `element.add` op 循环写入（每个元素独立一条 op，N 条 element.add = N 次可撤销）；内嵌位图走 `POST /api/upload` 先上传拿 hash 再 element.add。SVG 导入**不走本端点**，无需新 HTTP 端点。
 
-### `GET /api/upload/{source}?session=<sessionId>`（M13；M16-P1.1 起强制鉴权）
+### `GET /api/upload/{source}?session=<sessionId>`（强制鉴权）
 
 按 sha256[:16] hash 拉取原图。返回 `image/png`（统一存储为 PNG，jpeg/webp 上传时已转）。
 
-> **M16-P1.1 鉴权变更（2026-05-16）**：原"无需 token，hash 不可枚举即视为脱敏"的假设被推翻——hash 会出现在 `project_json` / 客户端 DOM / WS 帧日志中，任何能拿到 ws 流量的第三方插件 / 服内调试工具都能枚举出 hash 列表。现强制要求 query `?session=<sessionId>`，服务端校验：(a) sessionId 对应一个活跃 ACTIVE session；(b) 该 session 绑定 wall 的 `project_json` 内任意 ImageElement.source == 请求的 hash。不通过 → HTTP 401 + `UNAUTHORIZED`。这保证图片只对正在编辑该 wall 的玩家可见。
+> **鉴权变更（2026-05-16）**：原"无需 token，hash 不可枚举即视为脱敏"的假设被推翻——hash 会出现在 `project_json` / 客户端 DOM / WS 帧日志中，任何能拿到 ws 流量的第三方插件 / 服内调试工具都能枚举出 hash 列表。现强制要求 query `?session=<sessionId>`，服务端校验：(a) sessionId 对应一个活跃 ACTIVE session；(b) 该 session 绑定 wall 的 `project_json` 内任意 ImageElement.source == 请求的 hash。不通过 → HTTP 401 + `UNAUTHORIZED`。这保证图片只对正在编辑该 wall 的玩家可见。
 
-### `GET /api/upload/quota`（M13）
+### `GET /api/upload/quota`
 
 返当前 player 剩余配额，前端 UI 显示。
 ```json
@@ -976,7 +976,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 - 插件拒绝 `v < minSupported` 的客户端：`error: VERSION_MISMATCH` + close 4002
 - 协议版本协商在 `auth` 帧进行；客户端用多大的 `v` 作为上限由握手时 `serverVersion` 决定
 - **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「版本演进」注）。`ProjectState.PROTOCOL_VERSION` 同步 bump 到 3
-- **0.7.0 起 v4**（墙脚本 `script.*`），**0.7.1 起 v5**（新触发器 + 有界循环），**0.7.3 起 v6**（补间 tweenBlock）→ **v7**（备选积木批）。均干净切换；`Protocol.SUPPORTED_MIN = MAX` 当前都 = **7**，前端 `CLIENT_V = 7`。v4 起脚本不进 ProjectState，故 `ProjectState.PROTOCOL_VERSION` 留 **3** 不动（有意为之）。auth 帧 `client_v` 不在范围 → reject `VERSION_MISMATCH` + close 4002，沿用 M16.6 既有版本协商路径
+- **0.7.0 起 v4**（墙脚本 `script.*`），**0.7.1 起 v5**（新触发器 + 有界循环），**0.7.3 起 v6**（补间 tweenBlock）→ **v7**（备选积木批）。均干净切换；`Protocol.SUPPORTED_MIN = MAX` 当前都 = **7**，前端 `CLIENT_V = 7`。v4 起脚本不进 ProjectState，故 `ProjectState.PROTOCOL_VERSION` 留 **3** 不动（有意为之）。auth 帧 `client_v` 不在范围 → reject `VERSION_MISMATCH` + close 4002，沿用既有版本协商路径
 
 ---
 
@@ -984,25 +984,25 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 - Token 必须通过 HTTPS/WSS（公网部署）
 - Token 单次使用：握手成功后立即 rotate，新 token 供重连用
-- **会话级 IP 绑定**（M16-P6.6）：Session.boundIp 在首次 auth 时 CAS 绑定 caller IP；后续帧 IP 不一致 → close 4001 + `AUTH_FAILED`。绑 session 不绑 token（token 已单次 + TTL）。已知限制（IPv6 norm / 反代 XFF）见 `security.md §2.5`
+- **会话级 IP 绑定**：Session.boundIp 在首次 auth 时 CAS 绑定 caller IP；后续帧 IP 不一致 → close 4001 + `AUTH_FAILED`。绑 session 不绑 token（token 已单次 + TTL）。已知限制（IPv6 norm / 反代 XFF）见 `security.md §2.5`
 - 所有 payload 字段在服务端二次校验（长度、数值范围、颜色格式）
 - 任何字符串字段最大长度 256；富文本字段单独定义最大长度
 - 颜色必须为 `#RRGGBB` 或 `#RRGGBBAA` 格式，拒绝 CSS 关键字
-- Jackson 接收侧严格（M16-P6.1）：`FAIL_ON_UNKNOWN_PROPERTIES=true`，未知字段直接拒 `INVALID_PAYLOAD`；服务端错误消息脱敏（不回传字段实际值 / 内部路径）
+- Jackson 接收侧严格：`FAIL_ON_UNKNOWN_PROPERTIES=true`，未知字段直接拒 `INVALID_PAYLOAD`；服务端错误消息脱敏（不回传字段实际值 / 内部路径）
 
 ---
 
 ## 12. 未决问题
 
 - [ ] 是否支持 batch op（多个操作打包一次发送，减少延迟）
-- [ ] 历史 `history.mark` 的 label 是否持久化到 walls.project_json（M5.5 决策：当前 walls 不存 history，cancel 后 redo/undo 栈丢失；如要保留可 M7 加 `walls.history_json`）
+- [ ] 历史 `history.mark` 的 label 是否持久化到 walls.project_json（当前 walls 不存 history，cancel 后 redo/undo 栈丢失；如要保留可加 `walls.history_json`）
 - [ ] **0.6**：`timeline.play/pause/seek` 是否需在服务端持久化"上次播放位置"，还是每次从 0 起（与 `docs/timeline.md §12` 同一项对齐，不另造结论）
 - [ ] **0.6**：触发器 `variableChange` 绑高频变量（如 `eta_seconds` 每秒变）时的去抖策略是否需要在协议层可见（`trigger.params` 暴露去抖窗口），还是纯服务端状态机内部决策（`docs/timeline.md §5.2`）
 - [ ] 画布 resize 是否允许缩小（需处理越界元素）
-- [x] template.apply 是否支持保留现有自由元素（merge 语义）—— **M6 v1 不做**，沿用 replace（清空 elements + 替换 background）；UI 上加"应用模板会覆盖当前内容"提示。merge 留 v2+
+- [x] template.apply 是否支持保留现有自由元素（merge 语义）—— **v1 不做**，沿用 replace（清空 elements + 替换 background）；UI 上加"应用模板会覆盖当前内容"提示。merge 留 v2+
 - [x] 多人协作（v2）时的协议扩展（是否需要 CRDT）—— **永久不做**。接力编辑（前一玩家 cancel 后下一玩家 /canvas open）已满足需求
-- [x] **M5.5**：ready payload 加 `wallId` / `alias` / `publishedAt` —— **已实装**
-- [x] **M6**：ready payload 加 `templates`（全量 TemplateSpec 列表）—— **已实装**
-- [x] **M8**：图层模型 + 协议 v2 + opacity/blendMode/gridSize/guides 一次性升级 —— **协议固化，待实施**
-- [ ] **M12** 笔刷流 brush.* 通道：能否复用 element.update 还是必须独立通道 → 决策时机：M11 dither 完成后回头评估带宽
-- [x] **M13** 图片上传 `/api/upload` 端点 chunked 大文件 vs 一次性 multipart → **决策（2026-05-14）：一次性 multipart**。默认 max-size-kb=2048（2 MB），单 HTTP body multipart 足够；chunked 上传增加协议复杂度，单文件上限提到 10 MB 内都可承受。chunked 留 v2 加视频文件支持时再上
+- [x] ready payload 加 `wallId` / `alias` / `publishedAt` —— **已实装**
+- [x] ready payload 加 `templates`（全量 TemplateSpec 列表）—— **已实装**
+- [x] 图层模型 + 协议 v2 + opacity/blendMode/gridSize/guides 一次性升级 —— **协议固化，待实施**
+- [ ] 笔刷流 brush.* 通道：能否复用 element.update 还是必须独立通道 → 待 dither 完成后回头评估带宽
+- [x] 图片上传 `/api/upload` 端点 chunked 大文件 vs 一次性 multipart → **决策（2026-05-14）：一次性 multipart**。默认 max-size-kb=2048（2 MB），单 HTTP body multipart 足够；chunked 上传增加协议复杂度，单文件上限提到 10 MB 内都可承受。chunked 留 v2 加视频文件支持时再上

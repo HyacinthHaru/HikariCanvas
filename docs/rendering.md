@@ -43,7 +43,7 @@ List<MapBitmap>   输出
 ### 2.1 字体文件
 
 - 后端：jar 内 `/fonts/*.ttf`（或 `.otf`），由 Gradle `downloadFonts` 构建期抓取后经 `processResources` 进入 shadow jar（不入 git，`.gitignore` 排除）
-- 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（M23 起单轨，见 §2.3），**不再走 `.woff2` + CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`，由 Gradle `syncFontsToWeb` 构建期同步进 `web/public/fonts/`；该目录被 `.gitignore` 排除，同时也落了字体二进制副本但渲染不读它，仅 metrics JSON 被消费）
+- 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（单轨加载，见 §2.3），**不再走 `.woff2` + CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`，由 Gradle `syncFontsToWeb` 构建期同步进 `web/public/fonts/`；该目录被 `.gitignore` 排除，同时也落了字体二进制副本但渲染不读它，仅 metrics JSON 被消费）
 - 后端 + 前端**使用同一源字体文件**，构建脚本中以 SHA-256 pin 校验
 
 ### 2.1.1 分发策略（方案 A）
@@ -76,7 +76,7 @@ val downloadFonts = tasks.register("downloadFonts") {
 tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { into("fonts") } }
 ```
 
-**用户字体：** 服主可放到 `plugins/HikariCanvas/fonts/*.ttf`（`.otf`）；运行时 `FontRegistry.loadExternal` 启动期扫描该目录，**文件名去扩展名即 `fontId`**（约定优于配置；同名覆盖内置）。用户字体无构建期 metrics，启动期由 `FontMetricsTable.registerRuntime` 后台 worker 现场计算（见 §2.4 / CLAUDE.md M20）。
+**用户字体：** 服主可放到 `plugins/HikariCanvas/fonts/*.ttf`（`.otf`）；运行时 `FontRegistry.loadExternal` 启动期扫描该目录，**文件名去扩展名即 `fontId`**（约定优于配置；同名覆盖内置）。用户字体无构建期 metrics，启动期由 `FontMetricsTable.registerRuntime` 后台 worker 现场计算（见 §2.4 / CLAUDE.md）。
 
 ### 2.2 字体 ID 与声明
 
@@ -85,7 +85,7 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 ### 2.3 加载规则
 
 - **后端**：启动时 `Font.createFont(TRUETYPE_FONT, stream)`（AWT 对 TTF/OTF 统一用 `TRUETYPE_FONT` 常量），缓存 `Map<String, Registered>`
-- **前端（M23 起单轨）**：`FontLoader.ensureLoaded(fontId)` 用 `new FontFace(id, "url(/api/font/file?id=X)")` → `await face.load()` → `document.fonts.add(face)` 动态注册；加载完触发 `onFontLoaded(fontId)` 回调 → `requestDraw` 重画。**删除了 `style.css` 静态 `@font-face` + `PreviewRenderer.fontFamily()` 的 KNOWN 白名单**（M21/M22 加字体漏修的 bug 根因）。失败静默，浏览器走 system fallback
+- **前端（单轨加载）**：`FontLoader.ensureLoaded(fontId)` 用 `new FontFace(id, "url(/api/font/file?id=X)")` → `await face.load()` → `document.fonts.add(face)` 动态注册；加载完触发 `onFontLoaded(fontId)` 回调 → `requestDraw` 重画。**删除了 `style.css` 静态 `@font-face` + `PreviewRenderer.fontFamily()` 的 KNOWN 白名单**（加字体时漏修的 bug 根因）。失败静默，浏览器走 system fallback
 
 ### 2.4 字号语义
 
@@ -105,7 +105,7 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 
 算法：
 1. 按 `\n` 切为硬换行段
-2. 每段按字符逐个累加宽度。**宽度不读 Java/浏览器 font metrics**（两端即便加载同一 TTF 也返不同值，会让换行点双端不一致）；统一走 `TextLayout.charAdvance(fontId, ch, fontSize)`：优先查 `FontMetricsTable`（构建期 / 运行时算的双端共享 advance 表，M20），缺字 / 表未到位时 fallback `canonicalCharWidth`（码点 `< U+2E80` → `round(fontSize × 0.5)`，CJK / 全角 → `fontSize`）
+2. 每段按字符逐个累加宽度。**宽度不读 Java/浏览器 font metrics**（两端即便加载同一 TTF 也返不同值，会让换行点双端不一致）；统一走 `TextLayout.charAdvance(fontId, ch, fontSize)`：优先查 `FontMetricsTable`（构建期 / 运行时算的双端共享 advance 表），缺字 / 表未到位时 fallback `canonicalCharWidth`（码点 `< U+2E80` → `round(fontSize × 0.5)`，CJK / 全角 → `fontSize`）
 3. 超出 `w` 时回溯到最近的**软换行点**插入换行
 4. 软换行点定义：
    - 空白字符前（含全角空格 U+3000）
@@ -121,7 +121,7 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 
 ### 3.3 竖排
 
-**状态：已实装（M5-C6）。** 双端 `TextLayout.layoutVertical`（Java）/ `web/src/render/TextLayout.ts layoutVertical`（前端镜像）。
+**状态：已实装。** 双端 `TextLayout.layoutVertical`（Java）/ `web/src/render/TextLayout.ts layoutVertical`（前端镜像）。
 
 `vertical: true` 时：
 1. 字符**从上到下**排列，**列从右到左**（CJK 传统）；每字符占 `fontSize × fontSize` 方格，列宽 = `fontSize × lineHeight`
@@ -130,7 +130,7 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 4. 软换行按 box `h`；硬换行 `\n` 起新列
 5. `align` 在竖排下语义 = 列内**顶 / 中 / 底**对齐（`left`→顶、`center`→中、`right`→底）
 
-**当前未覆盖：** 竖排下的**行首禁则**（§3.1 第 4 条）未实装（横排已实装），相对少见，留 M7 polish。换列方向固定右→左，暂不暴露"左→右"配置。
+**当前未覆盖：** 竖排下的**行首禁则**（§3.1 第 4 条）未实装（横排已实装），相对少见，留后续打磨。换列方向固定右→左，暂不暴露"左→右"配置。
 
 ### 3.4 对齐
 
@@ -209,7 +209,7 @@ if stroke:
     g.drawRect(x, y, w, h)
 ```
 
-**ImageElement（M13）：**
+**ImageElement：**
 ```
 // 1. 加载缓存 BufferedImage（按 hash 从 plugins/HikariCanvas/uploads/<hash>.png）
 BufferedImage img = imageStorage.load(e.source);
@@ -220,10 +220,10 @@ if (img == null) {
 
 // 2. 旋转（同其他元素，已在 drawElementsTo 外层 translate-rotate）
 
-// 3. mask 处理（M13 锁定决策：mask 是 SVG path d，相对 (0, 0)..(w, h)）
+// 3. mask 处理（mask 是 SVG path d，相对 (0, 0)..(w, h)）
 Shape originalClip = g.getClip();
 if (e.mask != null) {
-    Path2D maskPath = PathParser.parse(e.mask.d).path();   // 复用 M9 PathParser
+    Path2D maskPath = PathParser.parse(e.mask.d).path();   // 复用 PathParser
     // mask 坐标相对 element bbox → 绝对坐标变换
     AffineTransform tx = new AffineTransform();
     tx.translate(e.x, e.y);
@@ -244,9 +244,9 @@ g.drawImage(img, e.x, e.y, e.w, e.h, null);
 g.setClip(originalClip);
 ```
 
-**M13 mask × dither 顺序（已锁）：**
+**mask × dither 顺序（已锁）：**
 
-如 element.renderMode === 'dither'：drawElementsTo 走的是 per-element off-buffer 路径（M11-B）→ `drawElementBody` 完整跑（含 mask clip）→ 整个 element buffer 跑 `BayerDither.apply` → blend 回主 graphics。所以 dither 在 mask **内部** 像素，mask 外像素本就透明，dither 不影响（"先 dither 再 mask"语义实际由 per-element buffer 结构自然达成）。
+如 element.renderMode === 'dither'：drawElementsTo 走的是 per-element off-buffer 路径→ `drawElementBody` 完整跑（含 mask clip）→ 整个 element buffer 跑 `BayerDither.apply` → blend 回主 graphics。所以 dither 在 mask **内部** 像素，mask 外像素本就透明，dither 不影响（"先 dither 再 mask"语义实际由 per-element buffer 结构自然达成）。
 
 ---
 
@@ -465,7 +465,7 @@ plugin/src/test/resources/
 Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**，后端 Java 不做任何镜像。
 这是 §1 / §8 双端镜像纪律的**显式例外**，理由：
 
-- 输出是 `PathElement.d`（SVG path），已经在 M9 双端镜像协议内；后端走常规 `PathRenderer` 渲染，与用户手画 / 工具栏画的 path 完全同路径
+- 输出是 `PathElement.d`（SVG path），已经在双端镜像协议内；后端走常规 `PathRenderer` 渲染，与用户手画 / 工具栏画的 path 完全同路径
 - 拓扑算法（element → polygon → polygon-clipping union/difference → gap polygons → SVG path d）**不参与最终像素输出**，仅作"工具输入辅助"——它把用户的鼠标点击位置解释成一条 PathElement.d 字符串，之后的渲染管线与该 element 是工具生成还是手画无区别
 - Java AWT 无 planar subdivision / boolean polygon op 等价物（`Area` API 性能与精度都达不到 `polygon-clipping` 同等级）；强行镜像会引入 ~2000 行 Java 几何代码且仍可能与 TS 实现行为差异，**得不偿失**
 
@@ -514,7 +514,7 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 | 颜色 / Fill | `color`/`fill` | sRGB 线性空间分量插值（§9.4） |
 | 离散 | `text`/`fontId` 等 | **step**：取 `timeMs ≤ t` 的最近关键帧（`t` 在首帧之前取首帧，与 §9.1 边界一致），不插值，`eased` 不参与 |
 
-**字形级动画不做**：逐字 advance 量化是双端已知痛点（§2、CLAUDE.md M20）。文本只做整体属性（位置 /
+**字形级动画不做**：逐字 advance 量化是双端已知痛点（§2、CLAUDE.md）。文本只做整体属性（位置 /
 缩放 / 旋转 / 不透明度）插值 + 内容 step 切换，不做字形级 morph。
 
 ### 9.3 缓动函数（双端逐位等价）
@@ -726,7 +726,7 @@ viewBoxMat = translate(-minX*sx, -minY*sy) ∘ scale(sx, sy)
 | --- | --- |
 | 空文本 | 元素不渲染（但占位包围盒仍用于 layout） |
 | 字号 ≤ 0 | 元素不渲染，校验阶段应已拦截 |
-| 超大画布（> `limits.canvas-max-maps`） | confirm 阶段 WallResolver 拒绝（M5.5 起，校验在新建路径一次性做；现有 wall 即使配置改小也允许打开） |
+| 超大画布（> `limits.canvas-max-maps`） | confirm 阶段 WallResolver 拒绝（校验在新建路径一次性做；现有 wall 即使配置改小也允许打开） |
 | 元素超出画布边界 | 只绘制画布内部分，越界部分裁剪 |
 | 字体不存在 | fallback 到默认字体并产生 `session.warning` |
 | 调色板 LUT 未加载 | 渲染拒绝并 `INTERNAL_ERROR` |
