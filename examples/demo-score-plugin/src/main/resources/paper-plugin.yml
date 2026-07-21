@@ -4,7 +4,7 @@ main: ac.haru.hikaricanvas.demos.score.DemoScorePlugin
 api-version: '1.21'
 description: HikariCanvas Push API demo — simulated PvP scoreboard with event + command triggers.
 authors:
-  - HaruHyacinth
+  - HyacinthHaru
 
 dependencies:
   server:

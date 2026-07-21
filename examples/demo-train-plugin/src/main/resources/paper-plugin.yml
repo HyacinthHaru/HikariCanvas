@@ -4,7 +4,7 @@ main: ac.haru.hikaricanvas.demos.train.DemoTrainPlugin
 api-version: '1.21'
 description: HikariCanvas Push API demo — simulated train schedule with live ETA pushes.
 authors:
-  - HaruHyacinth
+  - HyacinthHaru
 
 dependencies:
   server:

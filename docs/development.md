@@ -328,9 +328,8 @@ git tag v0.9.10-rc.1 && git push origin v0.9.10-rc.1
 
 完整规则见 `CLAUDE.md`「Git 提交约定」。要点：
 
-- 身份固定 `HaruHyacinth <122684177+HyacinthHaru@users.noreply.github.com>`（本地 `.git/config`
-  已配，不动全局）。
-- 所有 commit **SSH 签名**（`gpg.format=ssh` + `commit.gpgsign=true`）；签名失败先查原因，
+- 所有 commit **SSH 签名**（`gpg.format=ssh` + `commit.gpgsign=true`）；身份与密钥由本地
+  `.git/config` 持有，不动全局。签名失败先查原因，
   **不要用 `--no-gpg-sign` 绕过**。
 - **禁止任何形式的 Claude / AI 署名**（含 `Co-Authored-By`）。
 - 每次修改在 `docs/journal.md` 顶部追加一条（日期 · 范围 · 改动 · 关联文件）。
