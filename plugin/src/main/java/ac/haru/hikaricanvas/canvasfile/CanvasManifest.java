@@ -22,8 +22,12 @@ public record CanvasManifest(int spec, String kind, long createdAt, String name,
             throw new CanvasImportException("IMPORT_SPEC_UNSUPPORTED",
                 "工程格式版本 " + spec + " 高于当前插件支持的 " + maxSpec + "，请升级插件");
         }
+        // kind 判别符：project（普通工程）/ pack（模板包，docs/template-pack.md D1）。
+        // 两者同为 .canvas、走同一导入管线，pack 只多一层 params.json + ${param} 前置替换。
         String kind = n.path("kind").asText("");
-        if (!"project".equals(kind)) throw new CanvasImportException("IMPORT_MALFORMED", "kind 非 project: " + kind);
+        if (!"project".equals(kind) && !"pack".equals(kind)) {
+            throw new CanvasImportException("IMPORT_MALFORMED", "kind 非 project/pack: " + kind);
+        }
         JsonNode wall = n.path("wall");
         int w = wall.path("width").asInt(0), h = wall.path("height").asInt(0);
         if (w <= 0 || h <= 0) throw new CanvasImportException("IMPORT_MALFORMED", "manifest.wall 尺寸非法");

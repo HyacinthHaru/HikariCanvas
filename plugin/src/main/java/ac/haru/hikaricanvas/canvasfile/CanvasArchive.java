@@ -7,7 +7,7 @@ import java.util.zip.*;
 /** .canvas（zip）流式安全解包：三闸（包/单条目/总）+ 路径校验 + 白名单条目。 */
 public final class CanvasArchive {
     public static final Set<String> ALLOWED_TOP =
-        Set.of("manifest.json", "project.json", "scripts.json", "thumbnail.png");
+        Set.of("manifest.json", "project.json", "params.json", "scripts.json", "thumbnail.png");
     public static final String ASSETS_PREFIX = "assets/";
 
     /** 字节上限，单位 byte（由 ImportConfig 的 MB × 1024×1024 换算传入）。 */

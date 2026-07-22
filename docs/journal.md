@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-07-22 · 0.9.16 模板系统转 .canvas pack（后端管线打通）
+
+模板套用改接 `.canvas` 工程管线：pack = `manifest.kind="pack"` + `params.json`（参数声明数组）+ `project.json`（字符串位可含 `${param}`）。套用 = 校验参数 → 文本层替换 `${param}` → 复用 `ProjectImporter` 物化管线，模板由此天然带 timeline / script / asset / 安全栈。**additive** —— 旧 YAML 模板路径不动（后续版本退役）。设计见 `docs/template-pack.md`。
+
+- **canvasfile**：新 `PackParamResolver`（解析 `params.json` + 按类型 coerce/校验 + 委托 `Interpolator` 单遍替换，含 16KB/1MB 上限）；`CanvasManifest` 接受 `kind=pack`；`CanvasArchive` 白名单加 `params.json`；`ProjectImporter` 拆 build / propagate 两段 —— 新 `applyPack` 只跑 build 段（不 push/投影/落库，调用方接尾段避免双推），`importInto` 对 pack 用 default 收敛当工程导入（template-pack.md §5 宽容路径）。既有 project 导入路径逐字节等价。
+- **template / web**：`TemplateEntry` 加 `packBytes`（`isPack`）；`TemplateRegistry` 三源（builtin/server/user）同收 `*.canvas` —— 解包出 manifest + params.json 合成 UI 用 spec（id = 文件名去后缀，`kind=project` 跳过），原字节整包存 entry 供 apply 现解；`EditOpDispatcher.template.apply` 命中 pack 条目走 `applyPack`，返回 `OkSnapshot` 交 dispatch 尾段统一 propagate；`WebServer` 经 volatile seam 注入 `ProjectImporter`（缺省装配降级 `INTERNAL_ERROR`）。
+- **D3 数值占位符**：pack 里 `"x":"${off}"` 替换成 `"5"` 后 materialize 的 Jackson coercion 解回 int，纯文本替换不挑字段类型（专测覆盖）。
+- 版本 `0.9.15 → 0.9.16-SNAPSHOT`。
+
+**验证**：`:plugin:test` 2208（+40 新测试：PackParamResolver 20 / ProjectImporterPack 7 / TemplateRegistryPack 3 / 套用集成 1 / dispatcher reroute 3 等），仅既有 4 个 `RendererSnapshotTest` 文字类 fixture 本机 AWT 环境失败（render 代码未动，与本次无关）；9 条既有 `ProjectImporterTest` 全绿证 build/propagate 拆分行为等价。内置 pack 待作者手工制作后预置。
+
+关联文件：`canvasfile/{PackParamResolver(新)/CanvasManifest/CanvasArchive/ProjectImporter}`、`template/{TemplateEntry/TemplateRegistry}`、`web/{EditOpDispatcher/WebServer}` + 5 新测试类；`docs/template-pack.md`。
+
+---
+
 ## 2026-07-21 · 合并 dependabot 依赖升级（10 开 7 合 3 留）
 
 **直接合并 6 个**：shadow 9.4.1→9.4.3 · HikariCP 7.0.2→7.1.0 · actions/upload-artifact v4→v7 · vue 3.5.33→3.5.40 · happy-dom 20.10.1→20.11.0 · @tailwindcss/vite 4.2.4→4.3.3。upload-artifact 跨三个大版本，但破坏性变更只有运行时切 Node 24 + 要求 Actions Runner ≥ 2.327.1，本仓用 GitHub 托管 `ubuntu-latest`、用法只有 `name`/`path`/`retention-days`，不受影响。

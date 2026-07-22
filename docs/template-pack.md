@@ -161,8 +161,10 @@ project = 零参数 pack。二者可互转，故交叉导入**宽容处理、双
 
 ## 7. 分期（草案，实施前细化）
 
-- **P1 后端管线**：`ProjectImporter` 加参数校验 + 替换前置段；`template.apply` 改接此管线；
-  `TemplateRegistry` 读 pack；`params.json` 解析 + 校验。内置模板先放 1-2 个手工 pack 打通端到端。
+- **P1 后端管线** ✅（2026-07-22，0.9.16）：`PackParamResolver`（`params.json` 解析 + 校验 + `${param}`
+  替换）；`ProjectImporter` 拆 build/propagate + 新 `applyPack`；`CanvasManifest` 接受 `kind=pack`；
+  `TemplateRegistry` 三源读 `*.canvas`；`EditOpDispatcher.template.apply` 命中 pack 重路由。additive——YAML
+  路径不动。端到端由测试 fixture 打通（内置 pack 待作者手工制作后于 P4 预置）。
 - **P2 存储 + 存为模板**：`templates` 表 schema 调整；`template.save` 存 pack；`TemplateExporter`
   产 pack + params.json。
 - **P3 预览 + 前端**：`TemplatePreviewService` 渲 pack；`TemplateGallery` / `SaveAsTemplateModal`

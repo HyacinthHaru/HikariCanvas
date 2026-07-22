@@ -319,6 +319,10 @@ public final class WebServer {
                             importConfig, assetIngest, push, wallRepo,
                             scriptImporter, auditLog, throttler, missingResourceScanner);
             this.projectImportHandler = new ProjectImportHandler(sessionManager, projectImporter);
+            // template.apply 命中 .canvas pack 条目时复用同一 ProjectImporter（走 applyPack build 段）。
+            // 装配缺省（无 assetIngest / importConfig，走上方 if 分支）→ importer 保持 null，pack 套用
+            // 降级为 INTERNAL_ERROR（best-effort，同 animationTicker 未装配时的播放控制降级）。
+            editOpDispatcher.setProjectImporter(projectImporter);
         }
     }
 

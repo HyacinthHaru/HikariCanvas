@@ -31,6 +31,9 @@ import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
  */
 final class EditOpDispatcher {
 
+    private static final java.util.logging.Logger LOG =
+            java.util.logging.Logger.getLogger(EditOpDispatcher.class.getName());
+
     private final SessionManager sessionManager;
     private final ProjectionThrottler throttler;
     private final SessionRateLimiter rateLimiter;
@@ -58,6 +61,19 @@ final class EditOpDispatcher {
     /** timeline.play/pause/seek case 用。 */
     ac.haru.hikaricanvas.render.AnimationTicker animationTicker() {
         return animationTicker;
+    }
+
+    /**
+     * {@code .canvas} pack 套用引擎（{@code template.apply} 命中 pack 条目时的目标）。由装配层经
+     * {@code WebServer} 构造尾段注入（{@link #setProjectImporter}）；null = pack 条目返
+     * {@code INTERNAL_ERROR}（导入子系统未装配——无 assetIngest / importConfig 的降级装配，
+     * best-effort，同 {@link #animationTicker} 未装配时的播放控制降级）。volatile：注入在 WebServer 构造之后。
+     */
+    private volatile ac.haru.hikaricanvas.canvasfile.ProjectImporter projectImporter;
+
+    /** 装配 seam（见 {@link #projectImporter}），照 {@link #setAnimationTicker} 范式。 */
+    void setProjectImporter(ac.haru.hikaricanvas.canvasfile.ProjectImporter importer) {
+        this.projectImporter = importer;
     }
 
     EditOpDispatcher(SessionManager sessionManager,
@@ -497,6 +513,12 @@ final class EditOpDispatcher {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD",
                     "unknown template: " + templateId);
         }
+        // pack 条目（.canvas，manifest.kind="pack"）：走 ProjectImporter.applyPack 新管线。
+        // 返回的 OkSnapshot 交由 dispatch 的 OkSnapshot 分支统一收尾（ack + pushSnapshot +
+        // throttler 投影 + persist），故 applyPackEntry 内不自行 push/投影/落库（否则双推）。
+        if (entry.isPack()) {
+            return applyPackEntry(sessionId, templateId, entry, params, callerUuid);
+        }
         ProjectState.Canvas cv = es.state().canvas();
         TemplateInstantiator.Result r = templateInstantiator.instantiate(
                 entry.spec(), params, cv.widthMaps(), cv.heightMaps());
@@ -514,5 +536,46 @@ final class EditOpDispatcher {
             }
         }
         return applied;
+    }
+
+    /**
+     * pack 条目（{@code .canvas}）套用：定位会话 → {@code ProjectImporter.applyPack}（build 段——unpack +
+     * 参数校验 + {@code ${param}} 替换 + materialize + replaceProject，返回 {@code OkSnapshot}）→
+     * {@code walls.template_id} 回写。propagate（push / throttler / persist）由 {@link #dispatch} 的
+     * {@code OkSnapshot} 分支统一收尾，<b>不在此重复</b>（否则双推）。
+     *
+     * <p>{@code projectImporter} 未装配（导入子系统缺）→ {@code INTERNAL_ERROR}；会话已关 →
+     * {@code SESSION_CLOSED}；{@link ac.haru.hikaricanvas.canvasfile.CanvasImportException} 的稳定码
+     * （{@code IMPORT_INVALID_PARAM} / {@code IMPORT_MALFORMED} / ...）原样透传给前端。warnings 为
+     * 非致命，P1 仅记 {@code fine}（下行给前端是后续 wire 变更）。</p>
+     *
+     * <p>package-private（非 private）以便 dispatcher 单测直接驱动 pack 分支（含未装配降级路径），
+     * 绕开 {@code WsMessageContext}（Javalin final 类，不可 mock）——照 {@link #handleCanvasTweenFps} 范式。</p>
+     */
+    EditSession.OpResult applyPackEntry(String sessionId, String templateId, TemplateEntry entry,
+                                        Map<String, Object> params, java.util.UUID callerUuid) {
+        ac.haru.hikaricanvas.canvasfile.ProjectImporter importer = projectImporter;
+        if (importer == null) {
+            return new EditSession.OpResult.Error("INTERNAL_ERROR", "pack apply unavailable");
+        }
+        Session session = sessionManager.byId(sessionId);
+        if (session == null) {
+            return new EditSession.OpResult.Error("SESSION_CLOSED", "no active edit session");
+        }
+        try {
+            ac.haru.hikaricanvas.canvasfile.ProjectImporter.ApplyResult ar =
+                    importer.applyPack(session, entry.packBytes(), params, callerUuid);
+            if (!ar.warnings().isEmpty()) {
+                LOG.fine("template.apply pack '" + templateId + "' produced "
+                        + ar.warnings().size() + " warning(s)");
+            }
+            // walls.template_id / template_version write-back（best-effort，同 YAML 路径）
+            if (ar.result() instanceof EditSession.OpResult.OkSnapshot && session.wallId() != null) {
+                wallRepo.setTemplate(session.wallId(), templateId, entry.spec().version());
+            }
+            return ar.result();
+        } catch (ac.haru.hikaricanvas.canvasfile.CanvasImportException e) {
+            return new EditSession.OpResult.Error(e.code(), e.getMessage());
+        }
     }
 }

@@ -13,6 +13,7 @@ import ac.haru.hikaricanvas.storage.AuditLog;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.web.OpPushCallback;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -27,7 +28,11 @@ import java.util.UUID;
  * <p>流程（contract {@code docs/import-export.md §3.2}）：</p>
  * <ol>
  *   <li>{@link CanvasArchive#unpack} 流式安全解包（三闸 + 路径校验 + 白名单）；</li>
- *   <li>{@link CanvasManifest#parse} 解析 manifest 并校验 spec ≤ {@link #CANVAS_SPEC_MAX}；</li>
+ *   <li>{@link CanvasManifest#parse} 解析 manifest 并校验 spec ≤ {@link #CANVAS_SPEC_MAX}
+ *       （{@code kind} 可为 {@code project} 或 {@code pack}）；</li>
+ *   <li><b>（pack 前置段）</b>{@link #applySubstitution}：条目里有 {@code params.json} 时——解析声明、
+ *       校验用户填值、在 {@code project.json} 文本层单遍替换 {@code ${param}}（{@link PackParamResolver}）；
+ *       无 {@code params.json}（普通 project）时 no-op，字节原样穿透，与旧路径逐字节等价；</li>
  *   <li>{@link ProjectMaterializer#materialize} 把 untrusted {@code project.json} 物化为校验过的
  *       {@link ProjectState}，并与会话墙尺寸做匹配；</li>
  *   <li>{@link MissingResourceScanner#scan} 扫缺字体 / 缺 user 图标 / 缺 userglobal 变量
@@ -42,6 +47,13 @@ import java.util.UUID;
  *   <li>{@code wallRepo.updateState} 持久化（照 {@code SessionManager#persistWall} 的 DB 写）；</li>
  *   <li>{@code auditLog.record("PROJECT_IMPORT", ...)} 留痕。</li>
  * </ol>
+ *
+ * <p><b>build / propagate 拆分：</b>步骤 3~6.5 是「解析 + 物化 + 落会话工程」的 <b>build 段</b>
+ * （{@link #buildFromEntries}）；步骤 7~9 是「广播 + 投影 + 落库 + 留痕」的 <b>propagate 段</b>
+ * （{@link #propagate}）。{@link #importInto} 串完整两段；{@link #applyPack}（模板套用入口）只跑 build 段，
+ * propagate 交给调用它的 WS dispatcher 自己的 push / throttler / persist 尾段——避免双推。两条入口
+ * 在 manifest 解析后都先过 {@link #applySubstitution}：{@code importInto} 传空参数（pack 用 default 收敛、
+ * project 无 params.json 直接 no-op），{@code applyPack} 传用户填值。</p>
  *
  * <p>装配（{@code WebServer} 构造时 new，依赖均已就位）：{@link OpPushCallback} 用 WebServer 内部
  * 的 push（同 dispatcher 共享）；{@link WallRepo} 持久化；{@link AssetIngest} 由 bootstrap 注入。
@@ -128,9 +140,78 @@ public final class ProjectImporter {
                 importConfig.canvasMaxTotalMb() * MB);
         Map<String, byte[]> entries = CanvasArchive.unpack(canvasBytes, limits);
 
-        // 2) manifest 解析 + spec 兼容校验
+        // 2) manifest 解析 + spec 兼容校验（kind = project / pack）
         CanvasManifest manifest = CanvasManifest.parse(entries.get("manifest.json"), CANVAS_SPEC_MAX);
 
+        // 2.5) pack 前置段：空参数——pack 用 default 收敛当工程导入，project 无 params.json
+        //      直接 no-op（entries 字节原样穿透，与重构前逐字节等价）。
+        applySubstitution(entries, Map.of());
+
+        // 3~6.5) build 段（物化 → 缺资源扫描 → assets → 孤儿轨 → replaceProject → scripts）
+        Built built = buildFromEntries(session, entries, manifest, uploader);
+
+        // 7~9) propagate 段（广播 → 投影 → 落库 → 留痕）
+        propagate(session, built, manifest, uploader);
+
+        return new ImportResult(built.warnings());
+    }
+
+    /**
+     * 把一个 {@code kind="pack"} 模板包用给定参数套用到目标会话，整体替换其工程。
+     *
+     * <p>与 {@link #importInto} 同走 unpack → manifest → {@link #applySubstitution} →
+     * {@link #buildFromEntries} 的 build 段，但 <b>不跑 propagate 段</b>：调用方
+     * （{@code template.apply} 的 WS dispatcher）拿到 {@link ApplyResult#result()}（{@code OkSnapshot}）后，
+     * 走自己的 push / {@code throttler.submit} / persist 尾段（与 undo/redo 等 OkSnapshot 类 op 一致）。
+     * 若此处再 propagate 会与之双推。</p>
+     *
+     * @param session    目标会话（必须已绑 wall + 持活 {@code editSession}）
+     * @param packBytes  模板包（{@code .canvas} zip）原始字节
+     * @param userParams 用户填的参数值（id→value）；缺的参数回退声明的 {@code default}，可空当空 map
+     * @param uploader   套用者 uuid（assets 落盘 owner）
+     * @return build 段结果（{@code OkSnapshot} + 非致命 warnings）；propagate 由调用方接
+     * @throws CanvasImportException 致命失败（带稳定 {@code IMPORT_*} 码，参数校验失败为 {@code IMPORT_INVALID_PARAM}）
+     */
+    public ApplyResult applyPack(Session session, byte[] packBytes,
+                                 Map<String, Object> userParams, UUID uploader)
+            throws CanvasImportException {
+        CanvasArchive.Limits limits = new CanvasArchive.Limits(
+                importConfig.canvasMaxMb() * MB,
+                importConfig.canvasMaxEntryMb() * MB,
+                importConfig.canvasMaxTotalMb() * MB);
+        Map<String, byte[]> entries = CanvasArchive.unpack(packBytes, limits);
+        CanvasManifest manifest = CanvasManifest.parse(entries.get("manifest.json"), CANVAS_SPEC_MAX);
+        applySubstitution(entries, userParams);
+        Built built = buildFromEntries(session, entries, manifest, uploader);
+        return new ApplyResult(built.result(), built.warnings());
+    }
+
+    /**
+     * pack 参数前置段：条目里有 {@code params.json} 时，解析声明 + 校验用户填值 + 在 {@code project.json}
+     * 文本层单遍替换 {@code ${param}}，把替换结果写回 {@code entries}。
+     *
+     * <p>无 {@code params.json}（普通 project，或无参数 pack）→ 直接 return，{@code entries} 一字节不动——
+     * 保证既有 project 导入路径与重构前逐字节等价（这是既有 9 条用例不受影响的根据）。</p>
+     */
+    private void applySubstitution(Map<String, byte[]> entries, Map<String, Object> userParams)
+            throws CanvasImportException {
+        byte[] pj = entries.get("params.json");
+        if (pj == null) return;
+        List<PackParamResolver.ParamDef> decls = PackParamResolver.parse(pj);
+        Map<String, Object> values = PackParamResolver.resolve(decls, userParams);
+        String projectJson = new String(entries.get("project.json"), StandardCharsets.UTF_8);
+        String substituted = PackParamResolver.substitute(projectJson, values);
+        entries.put("project.json", substituted.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * build 段（步骤 3~6.5）：materialize → 缺资源扫描 → asset 摄入 → 孤儿轨丢弃 → replaceProject →
+     * scripts 导入。逻辑与重构前 {@link #importInto} 内联段完全一致，仅抽成方法供 {@code importInto} 与
+     * {@link #applyPack} 共用。
+     */
+    private Built buildFromEntries(Session session, Map<String, byte[]> entries,
+                                   CanvasManifest manifest, UUID uploader)
+            throws CanvasImportException {
         // 3) project.json 物化 + 元素校验 + 尺寸匹配（喂会话当前墙尺寸）
         ProjectState.Canvas sessionCanvas = session.projectState().canvas();
         ProjectState imported = ProjectMaterializer.materialize(
@@ -170,13 +251,22 @@ public final class ProjectImporter {
                     entries.get("scripts.json"), session.wallId()));
         }
 
+        return new Built(result, warnings, storedHashes.size());
+    }
+
+    /**
+     * propagate 段（步骤 7~9）：全量快照广播 → 游戏内地图全画布重绘 → 持久化 → audit 留痕。
+     * 逻辑与重构前 {@link #importInto} 内联段完全一致。仅 {@code importInto} 调用；{@link #applyPack}
+     * 不调（其调用方自带 push / throttler / persist 尾段）。
+     */
+    private void propagate(Session session, Built built, CanvasManifest manifest, UUID uploader) {
         // 7) 全量快照广播（照 EditOpDispatcher 的 OkSnapshot 分支：从 session.projectState() 读）
         push.pushSnapshot(session.id(), session.projectState());
 
         // 7b) 游戏内地图全画布重绘（照 EditOpDispatcher OkSnapshot 分支的 throttler.submit；
         //     否则玩家在游戏里看不到新内容，要等墙重载）。throttler 可空 → best-effort。
         if (throttler != null
-                && result instanceof EditSession.OpResult.OkSnapshot oks
+                && built.result() instanceof EditSession.OpResult.OkSnapshot oks
                 && oks.dirty() != null) {
             throttler.submit(session.id(), oks.dirty());
         }
@@ -192,13 +282,25 @@ public final class ProjectImporter {
             details.put("wall_id", session.wallId());
             details.put("spec", manifest.spec());
             details.put("elements", countElements(session.projectState()));
-            details.put("assets", storedHashes.size());
+            details.put("assets", built.assetCount());
             auditLog.record("PROJECT_IMPORT",
                     uploader == null ? null : uploader.toString(),
                     session.playerName(), session.id(), null, details);
         }
+    }
 
-        return new ImportResult(warnings);
+    /**
+     * build 段产物：会话工程替换结果（{@code OkSnapshot}）+ 累计 warnings + 落盘 asset 张数
+     * （audit details 用）。propagate 段与 {@link #applyPack} 调用方据此收尾。
+     */
+    private record Built(EditSession.OpResult result, List<ImportWarning> warnings, int assetCount) {
+    }
+
+    /**
+     * {@link #applyPack} 的返回：build 段结果 + 非致命 warnings。调用方（{@code template.apply} dispatcher）
+     * 拿 {@code result}（{@code OkSnapshot}）走自己的 push / throttler / persist 尾段。
+     */
+    public record ApplyResult(EditSession.OpResult result, List<ImportWarning> warnings) {
     }
 
     /**

@@ -22,8 +22,16 @@ class CanvasManifestTest {
     }
 
     @Test
-    void parse_nonProjectKind_throwsMalformed() {
+    void parse_packManifest_accepted() throws Exception {
+        // template-pack.md D1：kind=pack 是模板包，与 project 同走导入管线。
         byte[] json = "{\"spec\":1,\"kind\":\"pack\",\"wall\":{\"width\":1,\"height\":1}}".getBytes();
+        CanvasManifest m = CanvasManifest.parse(json, 1);
+        assertEquals("pack", m.kind());
+    }
+
+    @Test
+    void parse_unknownKind_throwsMalformed() {
+        byte[] json = "{\"spec\":1,\"kind\":\"widget\",\"wall\":{\"width\":1,\"height\":1}}".getBytes();
         assertEquals("IMPORT_MALFORMED",
             assertThrows(CanvasImportException.class, () -> CanvasManifest.parse(json, 1)).code());
     }

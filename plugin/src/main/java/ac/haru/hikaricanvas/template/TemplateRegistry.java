@@ -1,5 +1,11 @@
 package ac.haru.hikaricanvas.template;
 
+import ac.haru.hikaricanvas.canvasfile.CanvasArchive;
+import ac.haru.hikaricanvas.canvasfile.CanvasImportException;
+import ac.haru.hikaricanvas.canvasfile.CanvasManifest;
+import ac.haru.hikaricanvas.canvasfile.PackParamResolver;
+import ac.haru.hikaricanvas.canvasfile.ProjectImporter;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,6 +32,13 @@ import java.util.stream.Stream;
  * <p><b>加载顺序：</b> jar 内 {@code /templates/*.yml} → {@code dataFolder/templates/*.yml}。
  * 同 {@code id} 后加载覆盖前者，允许服主覆盖内置模板。</p>
  *
+ * <p><b>两种模板载体：</b> 三个来源（builtin / server / user）都同时收 {@code *.yml}（传统模板，走
+ * {@link TemplateLoader} + {@code TemplateInstantiator}）与 {@code *.canvas} pack
+ * （{@code manifest.kind="pack"}，走 {@code ProjectImporter.applyPack}）。pack 的 id = 文件名去
+ * {@code .canvas} 后缀；注册时只解包出 manifest + params.json 合成一份 UI 用 {@link TemplateSpec}，
+ * pack 原始字节整包存进 {@link TemplateEntry#packBytes()} 供 apply 时现解。{@code kind="project"}
+ * 的普通工程 {@code .canvas} 不是模板，扫到即跳过（记 fine，不计失败）。</p>
+ *
  * <p><b>原子热替换：</b> {@link #entries} 为 {@code volatile} 引用，{@link #reload}
  * 把全量加载结果在末尾一次性 swap，期间读到的注册表始终是某次成功加载的完整快照，
  * 无半态可见。</p>
@@ -40,8 +53,14 @@ public final class TemplateRegistry {
 
     private static final String CLASSPATH_TEMPLATES_DIR = "templates";
     /** jar / classpath 内的模板清单文件——dev 模式（classes 与 resources 分离）下用它，
-     *  避免遍历目录失败。文件每行一个 yml 名（不含路径），允许 # 注释。 */
+     *  避免遍历目录失败。文件每行一个 yml / .canvas 名（不含路径），允许 # 注释。 */
     private static final String INDEX_RESOURCE = "templates/_index.txt";
+
+    // 加载可信 .canvas pack 的解包上限（服主 / 玩家已落盘的本地文件，非公网上传，故给宽松上限——
+    // 仅防病态 zip 炸弹在 reload 期 OOM；正常 pack 远小于此）。与端点导入的 ImportConfig 上限相互独立。
+    private static final long PACK_LOAD_MAX_ZIP_BYTES = 64L * 1024 * 1024;    // 64 MB
+    private static final long PACK_LOAD_MAX_ENTRY_BYTES = 64L * 1024 * 1024;  // 64 MB
+    private static final long PACK_LOAD_MAX_TOTAL_BYTES = 256L * 1024 * 1024; // 256 MB
 
     private final Logger log;
     private final TemplateLoader loader;
@@ -193,7 +212,12 @@ public final class TemplateRegistry {
                         log.warning(label + ": missing from classpath");
                         continue;
                     }
-                    if (acceptOne(in, TemplateSource.BUILTIN, label, out, failures)) {
+                    if (isPackFileName(name)) {
+                        if (acceptPackBytes(in.readAllBytes(), TemplateSource.BUILTIN, label,
+                                packIdStem(name), Optional.empty(), out, failures)) {
+                            counter[0]++;
+                        }
+                    } else if (acceptOne(in, TemplateSource.BUILTIN, label, out, failures)) {
                         counter[0]++;
                     }
                 } catch (IOException e) {
@@ -234,7 +258,7 @@ public final class TemplateRegistry {
                 String trimmed = line.trim();
                 if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
                 if (isTemplateFileName(trimmed)) out.add(trimmed);
-                else log.warning("templates/_index.txt: ignoring non-yml entry '" + trimmed + "'");
+                else log.warning("templates/_index.txt: ignoring non-template entry '" + trimmed + "'");
             }
             return out;
         } catch (IOException e) {
@@ -252,8 +276,14 @@ public final class TemplateRegistry {
                 String name = je.getName();
                 if (!isTemplateEntry(name)) continue;
                 String label = "jar:" + name;
+                String simpleName = name.substring(name.lastIndexOf('/') + 1);
                 try (InputStream in = jar.getInputStream(je)) {
-                    if (acceptOne(in, TemplateSource.BUILTIN, label, out, failures)) {
+                    if (isPackFileName(simpleName)) {
+                        if (acceptPackBytes(in.readAllBytes(), TemplateSource.BUILTIN, label,
+                                packIdStem(simpleName), Optional.empty(), out, failures)) {
+                            counter[0]++;
+                        }
+                    } else if (acceptOne(in, TemplateSource.BUILTIN, label, out, failures)) {
                         counter[0]++;
                     }
                 }
@@ -273,7 +303,12 @@ public final class TemplateRegistry {
         for (File f : files) {
             String label = "classes:" + CLASSPATH_TEMPLATES_DIR + "/" + f.getName();
             try (InputStream in = Files.newInputStream(f.toPath())) {
-                if (acceptOne(in, TemplateSource.BUILTIN, label, out, failures)) {
+                if (isPackFileName(f.getName())) {
+                    if (acceptPackBytes(in.readAllBytes(), TemplateSource.BUILTIN, label,
+                            packIdStem(f.getName()), Optional.empty(), out, failures)) {
+                        counter[0]++;
+                    }
+                } else if (acceptOne(in, TemplateSource.BUILTIN, label, out, failures)) {
                     counter[0]++;
                 }
             } catch (IOException e) {
@@ -301,32 +336,33 @@ public final class TemplateRegistry {
                     .sorted()
                     .toList();
             for (Path p : files) {
-                String label = "server:" + p.getFileName();
+                String fileName = p.getFileName().toString();
+                String label = "server:" + fileName;
                 try (InputStream in = Files.newInputStream(p)) {
-                    TemplateLoader.Result result = loader.load(in);
-                    if (result instanceof TemplateLoader.Result.Ok ok) {
-                        String id = ok.spec().id();
-                        TemplateEntry prev = out.get(id);
-                        if (prev != null && prev.source() == TemplateSource.SERVER) {
-                            failures.add(label + ": duplicate server id '" + id
-                                    + "' (already loaded from " + prev.sourceLabel() + ")");
-                            log.warning(label + ": duplicate id '" + id + "', skipped");
+                    // YAML 与 pack 各自解析出（id, entry），再汇合到 registerServerEntry
+                    // 走同一套 override / 重复判定（server 覆盖 builtin）。
+                    String id;
+                    TemplateEntry entry;
+                    if (isPackFileName(fileName)) {
+                        byte[] bytes = in.readAllBytes();
+                        id = packIdStem(fileName);
+                        TemplateSpec spec = tryBuildPackSpec(bytes, id, label, failures);
+                        if (spec == null) continue;   // 非 pack / 解析失败（tryBuildPackSpec 已记 warn）
+                        entry = TemplateEntry.pack(spec, TemplateSource.SERVER, label,
+                                Optional.empty(), bytes);
+                    } else {
+                        TemplateLoader.Result result = loader.load(in);
+                        if (result instanceof TemplateLoader.Result.Failed f) {
+                            failures.add(label + ": " + f.reason() + " — " + f.detail());
+                            log.warning("Template '" + label + "' rejected: "
+                                    + f.reason() + " — " + f.detail());
                             continue;
                         }
-                        boolean isOverride = prev != null
-                                && prev.source() == TemplateSource.BUILTIN;
-                        out.put(id, new TemplateEntry(ok.spec(),
-                                TemplateSource.SERVER, label));
-                        counter[0]++;
-                        if (isOverride) {
-                            overrides[0]++;
-                            log.fine("Template '" + id + "' overridden by " + label);
-                        }
-                    } else if (result instanceof TemplateLoader.Result.Failed f) {
-                        failures.add(label + ": " + f.reason() + " — " + f.detail());
-                        log.warning("Template '" + label + "' rejected: "
-                                + f.reason() + " — " + f.detail());
+                        TemplateLoader.Result.Ok ok = (TemplateLoader.Result.Ok) result;
+                        id = ok.spec().id();
+                        entry = new TemplateEntry(ok.spec(), TemplateSource.SERVER, label);
                     }
+                    registerServerEntry(out, id, label, entry, counter, overrides, failures);
                 } catch (IOException e) {
                     failures.add(label + ": " + e.getMessage());
                     log.log(Level.WARNING, "Templates: read failed " + label, e);
@@ -382,8 +418,17 @@ public final class TemplateRegistry {
                     .sorted()
                     .toList();
             for (Path p : files) {
-                String label = "user:" + uuidDir.getFileName() + "/" + p.getFileName();
+                String fileName = p.getFileName().toString();
+                String label = "user:" + uuidDir.getFileName() + "/" + fileName;
                 try (InputStream in = Files.newInputStream(p)) {
+                    // .canvas pack：走 pack 加载路径（简单去重 + 带 ownerUuid，同 YAML user 规则）。
+                    if (isPackFileName(fileName)) {
+                        if (acceptPackBytes(in.readAllBytes(), TemplateSource.USER, label,
+                                packIdStem(fileName), Optional.of(ownerUuid), out, failures)) {
+                            counter[0]++;
+                        }
+                        continue;
+                    }
                     TemplateLoader.Result result = loader.load(in);
                     if (result instanceof TemplateLoader.Result.Ok ok) {
                         String id = ok.spec().id();
@@ -434,12 +479,134 @@ public final class TemplateRegistry {
         return false;
     }
 
+    // ---------------- .canvas pack ----------------
+
+    /**
+     * pack 加载的简单去重路径（builtin / user 共用，同 {@link #acceptOne} 的 containsKey 规则）：
+     * 把 pack 字节合成 {@link TemplateSpec} 后放入 {@code out}。非 pack（kind=project）/ 解析失败 /
+     * 重复 id → 返 {@code false}（不计数）。
+     *
+     * @param idStem    id = 文件名去 {@code .canvas} 后缀
+     * @param ownerUuid user 源带 owner；builtin 传 {@link Optional#empty()}
+     */
+    private boolean acceptPackBytes(byte[] packBytes, TemplateSource source, String label,
+                                    String idStem, Optional<UUID> ownerUuid,
+                                    Map<String, TemplateEntry> out,
+                                    java.util.List<String> failures) {
+        TemplateSpec spec = tryBuildPackSpec(packBytes, idStem, label, failures);
+        if (spec == null) return false;   // 非 pack / 解析失败（tryBuildPackSpec 已记 warn/fine）
+        if (out.containsKey(idStem)) {
+            failures.add(label + ": duplicate id '" + idStem + "' (already loaded from "
+                    + out.get(idStem).sourceLabel() + ")");
+            log.warning(label + ": duplicate id '" + idStem + "', skipped");
+            return false;
+        }
+        out.put(idStem, TemplateEntry.pack(spec, source, label, ownerUuid, packBytes));
+        return true;
+    }
+
+    /**
+     * server 源统一注册（override / 重复判定）：{@code prev} 为 SERVER → 重复报错跳过；{@code prev}
+     * 为 BUILTIN → 覆盖 + 计 override；否则纯新增。YAML 与 pack 两条路径共用，保证覆盖语义一致。
+     */
+    private void registerServerEntry(Map<String, TemplateEntry> out, String id, String label,
+                                     TemplateEntry entry, int[] counter, int[] overrides,
+                                     java.util.List<String> failures) {
+        TemplateEntry prev = out.get(id);
+        if (prev != null && prev.source() == TemplateSource.SERVER) {
+            failures.add(label + ": duplicate server id '" + id
+                    + "' (already loaded from " + prev.sourceLabel() + ")");
+            log.warning(label + ": duplicate id '" + id + "', skipped");
+            return;
+        }
+        boolean isOverride = prev != null && prev.source() == TemplateSource.BUILTIN;
+        out.put(id, entry);
+        counter[0]++;
+        if (isOverride) {
+            overrides[0]++;
+            log.fine("Template '" + id + "' overridden by " + label);
+        }
+    }
+
+    /**
+     * 解包 pack 字节 + 解析 manifest + 校验 {@code kind="pack"} + 合成 {@link TemplateSpec}。
+     *
+     * <p>返回 {@code null} 表示「跳过」：{@code kind="project"} 的普通工程不是模板（记 fine，不计失败）；
+     * 解包 / manifest / params 解析失败（{@link CanvasImportException}）记 warn + failures。两种情形都
+     * <b>不上抛</b>——照每文件容错纪律，一个坏包不毁整次 {@link #reload()}。</p>
+     */
+    private TemplateSpec tryBuildPackSpec(byte[] packBytes, String idStem, String label,
+                                          java.util.List<String> failures) {
+        try {
+            CanvasArchive.Limits limits = new CanvasArchive.Limits(
+                    PACK_LOAD_MAX_ZIP_BYTES, PACK_LOAD_MAX_ENTRY_BYTES, PACK_LOAD_MAX_TOTAL_BYTES);
+            Map<String, byte[]> zipEntries = CanvasArchive.unpack(packBytes, limits);
+            CanvasManifest manifest = CanvasManifest.parse(
+                    zipEntries.get("manifest.json"), ProjectImporter.CANVAS_SPEC_MAX);
+            if (!"pack".equals(manifest.kind())) {
+                // 普通工程（kind=project）不是模板——跳过（zero-param-project 容忍是后续阶段的事，不在此）。
+                log.fine(label + ": kind=" + manifest.kind() + " (not a pack), skipped");
+                return null;
+            }
+            return buildPackSpec(idStem, manifest, zipEntries.get("params.json"));
+        } catch (CanvasImportException e) {
+            failures.add(label + ": " + e.code() + " — " + e.getMessage());
+            log.warning("Template pack '" + label + "' rejected: " + e.code() + " — " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 用 manifest + {@code params.json} 合成 pack 的 {@link TemplateSpec}——仅供 Gallery / list / preview
+     * 统一按 {@code spec()} 读。只填 {@code spec / id / name / params}；
+     * {@code description / version / author / tags / preview / canvas / layout / rawState} 均为 null
+     * （pack 的画布内容在 {@code project.json}，apply 时由 {@code ProjectImporter.applyPack} 现解，不进 spec）。
+     *
+     * @param idStem     id = 文件名去 {@code .canvas} 后缀
+     * @param paramsJson pack 内 {@code params.json} 字节；可空（无参数 pack）
+     */
+    private static TemplateSpec buildPackSpec(String idStem, CanvasManifest manifest, byte[] paramsJson)
+            throws CanvasImportException {
+        Map<String, TemplateParam> params = new LinkedHashMap<>();
+        if (paramsJson != null) {
+            for (PackParamResolver.ParamDef def : PackParamResolver.parse(paramsJson)) {
+                params.put(def.id(), def.param());
+            }
+        }
+        String name = manifest.name() != null ? manifest.name() : idStem;
+        return new TemplateSpec(manifest.spec(), idStem, name, /*description*/ null,
+                /*version*/ null, /*author*/ null, /*tags*/ null, /*preview*/ null,
+                /*canvas*/ null, params, /*layout*/ null, /*rawState*/ null);
+    }
+
+    /** pack 的 id = 文件名去最后一个扩展名（{@code subway.canvas → subway}）。 */
+    private static String packIdStem(String fileName) {
+        int dot = fileName.lastIndexOf('.');
+        return dot > 0 ? fileName.substring(0, dot) : fileName;
+    }
+
+    // ---------------- 文件名判定 ----------------
+
     private static boolean isTemplateEntry(String name) {
         return name.startsWith(CLASSPATH_TEMPLATES_DIR + "/")
                 && isTemplateFileName(name.substring(name.lastIndexOf('/') + 1));
     }
 
+    /**
+     * 模板文件名——决定各来源 scan 过滤器是否纳入该文件。YAML（{@code .yml/.yaml}）走
+     * {@link TemplateLoader}；{@code .canvas} pack 走 pack 加载路径（{@link #acceptPackBytes} /
+     * {@link #tryBuildPackSpec}），二者在各 loader 里按 {@link #isPackFileName} 分流。
+     */
     private static boolean isTemplateFileName(String name) {
+        return isYamlFileName(name) || isPackFileName(name);
+    }
+
+    private static boolean isYamlFileName(String name) {
         return name.endsWith(".yml") || name.endsWith(".yaml");
+    }
+
+    /** {@code .canvas} pack 文件名——走 pack 加载路径，不喂 {@link TemplateLoader}。 */
+    private static boolean isPackFileName(String name) {
+        return name.endsWith(".canvas");
     }
 }
