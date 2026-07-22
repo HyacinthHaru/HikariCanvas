@@ -31,7 +31,7 @@
   "dependencies": {
     "@lexical/history": "^0.44.0",
     "@lexical/plain-text": "^0.44.0",
-    "@lexical/utils": "^0.44.0",
+    "@lexical/utils": "^0.48.0",
     "@vueuse/core": "^12.8.2",
     "fflate": "0.8.3",
     "fontkit": "^2.0.4",
