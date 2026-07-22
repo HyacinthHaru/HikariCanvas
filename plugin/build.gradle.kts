@@ -35,7 +35,7 @@ repositories {
 dependencies {
     paperweight.paperDevBundle(paperApi)
 
-    implementation("io.javalin:javalin:7.1.0")
+    implementation("io.javalin:javalin:7.2.2")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.22.1")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.1")
     // PacketEvents 是 GPL-3.0 —— compileOnly 不打包（否则组合 jar 会被 GPL 传染，冲突本项目 MIT）。
@@ -58,7 +58,7 @@ dependencies {
     // 测试基建：MockBukkit（FrameDeployer / wall.lock owner-only 等需要 Bukkit world / entity 设施）
     testImplementation("com.github.seeseemelk:MockBukkit-v1.21:3.123.0")
     // 测试基建：JavalinTest（HTTP / WS 端到端测试 — UploadHandler 全场景 / sessionId 鉴权）
-    testImplementation("io.javalin:javalin-testtools:7.1.0")
+    testImplementation("io.javalin:javalin-testtools:7.2.2")
 }
 
 tasks.test {
