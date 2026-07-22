@@ -43,7 +43,7 @@ dependencies {
     compileOnly("com.github.retrooper:packetevents-spigot:2.13.0")
 
     // 持久化
-    implementation("org.xerial:sqlite-jdbc:3.53.0.0")
+    implementation("org.xerial:sqlite-jdbc:3.53.2.1")
     implementation("com.zaxxer:HikariCP:7.1.0")
     implementation("org.jdbi:jdbi3-core:3.54.0")
     implementation("org.jdbi:jdbi3-sqlite:3.54.0")
