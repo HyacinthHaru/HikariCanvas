@@ -38,6 +38,18 @@
 
 ---
 
+## 2026-07-22 · 模板系统统一到 .canvas pack —— 设计文档
+
+评估「用 `.canvas` 工程格式重构模板系统，而非并行造轮子」。结论：`.canvas` 在内容能力上是模板的严格超集（含 timeline/script/asset/安全栈/版本兼容），模板独有的只有参数化；且 `import-export.md` D1 早给模板包预留了 `manifest.kind="pack"` 值位。用户拍板三决策：**全面转 pack 删旧 DSL / 存为模板导出 pack / 全字段参数化**，1.0 前做。
+
+新建 `docs/template-pack.md` 设计总纲（D1-D10 固化 + 数据格式 + apply 管线 + 退役改造清单 + 5 分期 + 4 未决问题）。核心：模板 apply = `ProjectImporter.importInto` 前加「参数校验 + `${param}` 替换」前置段，收敛到与 `.canvas` 导入同一管线；`${param}`（无冒号）与运行时 `${var:X}`（冒号）天然共存。`import-export.md` kind=pack 行加指针。
+
+**未实施**，本条只记设计。实施分 P1（后端管线）→ P5（退役+内置 pack）。
+
+关联文件：`docs/template-pack.md`（新）、`docs/import-export.md`。
+
+---
+
 ## 2026-07-21 · 规范代码注释与文档文案
 
 把散落在代码注释、构建脚本、workflow 与契约文档里的内部开发编号（`M16 P5.1` / `M4-T3` / `P4.5` 这类）剥掉，保留其后的实际约束正文；一并去掉几处自我论证式措辞和把需求来源写进注释的表述。**零逻辑改动。**
