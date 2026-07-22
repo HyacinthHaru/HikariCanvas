@@ -39,7 +39,7 @@
 
 锁定版本的权威来源（构建脚本真实现状）：
 
-- 根 `build.gradle.kts`：`group = "ac.haru"` / `version = "0.9.15-SNAPSHOT"`
+- 根 `build.gradle.kts`：`group = "ac.haru"` / `version = "0.9.16-SNAPSHOT"`
 - `settings.gradle.kts`：`rootProject.name = "hikari-canvas"`，子项目 `plugin` +
   `examples:demo-train-plugin` + `examples:demo-score-plugin`
 - `plugin/build.gradle.kts` 关键依赖：Paper `1.21.11-R0.1-SNAPSHOT`（`paperweight-userdev`
@@ -79,7 +79,7 @@ cd web && npm run test && cd ..
 
 # 6. 打包 shadow jar（自动跑 palette / fonts / web 产物链）
 ./gradlew :plugin:shadowJar
-# 产物：plugin/build/libs/HikariCanvas-0.9.15-SNAPSHOT.jar
+# 产物：plugin/build/libs/HikariCanvas-0.9.16-SNAPSHOT.jar
 
 # 7. 起本地 MC 1.21.11 dev server（自动挂上一步的 jar）
 ./gradlew :plugin:runServer
@@ -338,7 +338,7 @@ GitHub Actions 两个 workflow（`.github/workflows/`）：
 ### 9.2 `release.yml`——tag `v*` 触发
 
 ```bash
-git tag v0.9.15-rc.1 && git push origin v0.9.15-rc.1
+git tag v0.9.16-rc.1 && git push origin v0.9.16-rc.1
 ```
 
 跑 test + shadowJar → 从 tag 解版本号 → 把产物重命名为 `HikariCanvas-<version>.jar` →
