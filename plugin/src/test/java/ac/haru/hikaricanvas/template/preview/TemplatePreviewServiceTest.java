@@ -108,4 +108,41 @@ class TemplatePreviewServiceTest {
         assertInstanceOf(SolidFill.class, r.fill());
         assertEquals(BlendMode.NORMAL, r.effectiveBlendMode());
     }
+
+    // ---- 预览态变量占位符收敛 ----
+
+    @Test
+    void previewResolveUsesFallback() {
+        assertEquals("在线 5 人",
+                TemplatePreviewService.previewResolve("在线 ${var:server.online|fallback=5} 人"));
+    }
+
+    @Test
+    void previewResolveEmptyFallbackYieldsEmpty() {
+        assertEquals("剩余  秒",
+                TemplatePreviewService.previewResolve("剩余 ${var:schedule.eta_seconds|fallback=} 秒"));
+    }
+
+    @Test
+    void previewResolveNoFallbackUsesNameTail() {
+        // 无 fallback → 取变量名末段（server.online → online）
+        assertEquals("online",
+                TemplatePreviewService.previewResolve("${var:server.online}"));
+    }
+
+    @Test
+    void previewResolveMultipleAndPlainUnchanged() {
+        assertEquals("A 0 B --:--",
+                TemplatePreviewService.previewResolve(
+                        "A ${var:server.online|fallback=0} B ${var:server.time|fallback=--:--}"));
+        assertEquals("纯文本无占位符",
+                TemplatePreviewService.previewResolve("纯文本无占位符"));
+    }
+
+    @Test
+    void previewResolveLeavesTemplateParamAlone() {
+        // ${param}（无 var: 前缀）不是运行时变量，预览态不该动它（模板参数已在更早阶段替换）
+        assertEquals("${shop_name}",
+                TemplatePreviewService.previewResolve("${shop_name}"));
+    }
 }

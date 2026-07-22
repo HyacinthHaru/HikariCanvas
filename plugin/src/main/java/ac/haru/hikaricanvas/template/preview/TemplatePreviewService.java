@@ -3,6 +3,7 @@ package ac.haru.hikaricanvas.template.preview;
 import ac.haru.hikaricanvas.render.CanvasCompositor;
 import ac.haru.hikaricanvas.state.Element;
 import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.TextElement;
 import ac.haru.hikaricanvas.template.TemplateEntry;
 import ac.haru.hikaricanvas.template.TemplateInstantiator;
 import ac.haru.hikaricanvas.template.TemplateParam;
@@ -79,7 +80,10 @@ public final class TemplatePreviewService {
                 return null;
             }
             TemplateInstantiator.Result.Ok ok = (TemplateInstantiator.Result.Ok) r;
-            ProjectState state = stateOf(dims[0], dims[1], ok.backgroundColor(), ok.elements());
+            // 缩略图不接变量数据源，把 ${var:X|fallback=Y} 收敛成 Y（= 无数据时的样子），
+            // 否则动态模板预览会渲出一串占位符字面。运行期 wall 渲染仍走真正的变量解析。
+            List<Element> previewElements = resolvePlaceholdersForPreview(ok.elements());
+            ProjectState state = stateOf(dims[0], dims[1], ok.backgroundColor(), previewElements);
             BufferedImage rgba = compositor.rasterize(state);
             ByteArrayOutputStream baos = new ByteArrayOutputStream(4096);
             ImageIO.write(rgba, "PNG", baos);
@@ -93,6 +97,44 @@ public final class TemplatePreviewService {
             log.log(Level.WARNING, "[preview] render failed for " + spec.id(), e);
             return null;
         }
+    }
+
+    /** {@code ${var:NAME|fallback=VALUE}}（含冒号，与模板参数 {@code ${param}} 不同源）。 */
+    private static final java.util.regex.Pattern PREVIEW_VAR =
+            java.util.regex.Pattern.compile("\\$\\{var:([^|}]+)(?:\\|fallback=([^}]*))?\\}");
+
+    /** 预览专用：文本里的运行时变量占位符收敛为 fallback 值（无 fallback 用变量名末段）。 */
+    private static List<Element> resolvePlaceholdersForPreview(List<Element> elements) {
+        List<Element> out = new java.util.ArrayList<>(elements.size());
+        for (Element el : elements) {
+            if (el instanceof TextElement t && t.text() != null && t.text().contains("${var:")) {
+                out.add(withText(t, previewResolve(t.text())));
+            } else {
+                out.add(el);
+            }
+        }
+        return out;
+    }
+
+    /** package-private 供测试直接验证纯替换逻辑。 */
+    static String previewResolve(String text) {
+        java.util.regex.Matcher m = PREVIEW_VAR.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String fallback = m.group(2);
+            String repl = fallback != null ? fallback
+                    : m.group(1).substring(m.group(1).lastIndexOf('.') + 1);
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(repl));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    private static TextElement withText(TextElement t, String text) {
+        return new TextElement(t.id(), t.x(), t.y(), t.w(), t.h(), t.rotation(),
+                t.locked(), t.visible(), text, t.fontId(), t.fontSize(), t.color(),
+                t.align(), t.letterSpacing(), t.lineHeight(), t.vertical(), t.effects(),
+                t.opacity(), t.blendMode(), t.renderMode(), t.bold(), t.italic());
     }
 
     /** 优先 4×1，缺则收敛到 [min, max] 内尽量接近的尺寸。 */

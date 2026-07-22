@@ -26,6 +26,18 @@
 
 ---
 
+## 2026-07-22 · 模板预览收敛变量占位符 + flaky 测试修复
+
+**模板预览变量收敛**：`TemplatePreviewService` 渲缩略图走的是不接变量数据源的 `rasterize`，含 `${var:X}` 的动态模板会渲出一串占位符字面。新增 `previewResolve`：预览态把 `${var:X|fallback=Y}` 收敛成 Y（= 无数据时的样子），无 fallback 取变量名末段。运行期 wall 渲染仍走真正的变量解析，此改动只影响缩略图。`TemplatePreviewServiceTest` +5 case。
+
+**flaky 修复**：`useCanvasPasteDispatcher` 的「粘贴 image File」用例靠固定 `setTimeout(20ms)` 等 `FileReader.onload`，多 worker 抢 CPU 时偶发不够（隔离跑 ~15 次挂 1 次）。改 `vi.waitFor` 轮询，12 次连跑 0 失败。
+
+**背景**：本轮原计划做一批新内置模板，评估后确认模板系统应改用 `.canvas` 工程格式统一（见下）而非继续堆 raw_state YAML，故新模板回滚，只留这两项独立改进。
+
+关联文件：`template/preview/TemplatePreviewService.java`、`web/test/composables/useCanvasPasteDispatcher.test.ts`。
+
+---
+
 ## 2026-07-21 · 规范代码注释与文档文案
 
 把散落在代码注释、构建脚本、workflow 与契约文档里的内部开发编号（`M16 P5.1` / `M4-T3` / `P4.5` 这类）剥掉，保留其后的实际约束正文；一并去掉几处自我论证式措辞和把需求来源写进注释的表述。**零逻辑改动。**
