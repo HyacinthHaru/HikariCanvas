@@ -183,10 +183,9 @@ describe('useCanvasUpload paste dispatcher', () => {
         // 等 e.preventDefault 同步行为先生效（命中文件路径）
         expect(e.defaultPrevented).toBe(true);
 
-        // 等 FileReader macrotask + fetch microtask
-        await new Promise((r) => setTimeout(r, 20));
-
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        // 轮询等 FileReader macrotask + fetch microtask 落地（固定 sleep 在多 worker
+        // 抢 CPU 时会偶发不够 → 竞态 flaky）。
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
         expect(fetchMock.mock.calls[0][0]).toBe('/api/upload');
 
         tearDown(handle);
