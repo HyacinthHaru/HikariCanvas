@@ -176,7 +176,10 @@ project = 零参数 pack。二者可互转，故交叉导入**宽容处理、双
 
 - [ ] `params.json` 的 `visible_when` 表达式在 pack 里怎么求值（现有声明式模式在实例化期求值；
       pack 走 import 管线，可能需要在参数替换 pass 里先算可见性再决定占位符替换 / 元素保留）
-- [ ] 数值字段占位符（`"x": "${offset_x}"`）替换后 materialize 能否解析回数值 —— 需验证 Jackson
-      对 `ProjectState` 数值字段接受字符串数字，或替换 pass 做类型感知
-- [ ] `templates` 表 blob 改 pack bytes 后，旧行处理（D8 定 pre-1.0 清空，需迁移脚本 or 版本门）
+- [x] 数值字段占位符（`"x": "${offset_x}"`）替换后 materialize 能否解析回数值 —— **已验证**
+      （2026-07-22 探针）：`materialize` 用默认 `ObjectMapper`，Jackson scalar coercion 默认开，
+      `"5"`→int 5、`"45"`→double 45.0、`"0.0"`→stop position 0.0 均正确；非数字串（`"abc"`）被
+      materialize 拒绝归 `IMPORT_MALFORMED`；空串退 0（故数值参数的 `default` 须给合法值）。
+      **参数替换可为纯文本 pass，不挑字段类型，无需类型感知。**
+- [x] `templates` 表 blob 改 pack bytes 后，旧行处理 —— **已定**（D8）：pre-1.0 清空重来，不写迁移器
 - [ ] pack 缩略图缓存 key（现按 templateId + 内容 hash？pack bytes 变则失效）
