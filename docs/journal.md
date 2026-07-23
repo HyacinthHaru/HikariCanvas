@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-07-23 · 0.9.16-rc.2 存/删模板后 gallery 即时刷新（方案 A）
+
+用户实测:存为模板成功(文件 + preview + DB + `registry.reload` 都对),但**已打开的编辑器 gallery 不显示新模板**,要重开 editor link(新 `ready` 帧)才见。根因:前端模板列表**只在 `ready` 帧(连接时)拉一次**,存/删后后端没把更新推给已连 session;`registry.reload()` 只更新服务端。属老问题(`SaveAsTemplateModal` 一直是存后即关不刷新),P4 清空内置模板后被放大暴露。
+
+**方案 A**:`template.save`/`delete` 成功后,把该 session 最新可见模板列表(复用 `listVisibleTo`)推一帧 `templates` 回去;前端收到就 `setTemplates`。存/删一条路覆盖。
+- `TemplateOpDispatcher`:加 `TemplateListRefresher` 回调(`WebServer` 注入)+ `PERM_NODES` 加 `canvas.template.use-others`(算可见性 bypass)+ save/delete 成功后 `pushTemplateRefresh`。
+- `WebServer` 装配 lambda:`ctx.send(Envelope.of("templates", null, {templates: listTemplates(uuid, bypass)}))`。
+- 前端 `wsClient` `switch(env.op)` 加 `case "templates"` → `handleTemplatesRefresh` → `setTemplates`(复用 `ReadyPayload.templates`）。
+
+**验证**:后端 `:plugin:test` 2163(仅 4 既有渲染 fixture 环境失败)+ 前端 build/typecheck 通过 + vitest 1448/1450(2 既有 scriptEdit)。发 `v0.9.16-rc.2`。
+
+关联文件:`web/{TemplateOpDispatcher, WebServer}`、`web/src/network/wsClient.ts`。
+
+---
+
 ## 2026-07-23 · 0.9.16 退役旧 YAML 模板 DSL（P4 + P5）
 
 模板系统统一到 `.canvas` pack 收官：删掉与 pack 并行的旧 YAML DSL 全套，模板套用 / 预览 / 注册全走 pack 单轨。**模板 pack 重构 P1–P5 全部完工**（功能闭环 + 旧路径清除；只差作者手工内置 pack）。

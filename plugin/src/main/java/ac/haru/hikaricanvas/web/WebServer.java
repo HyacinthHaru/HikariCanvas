@@ -255,7 +255,10 @@ public final class WebServer {
         this.brushOpDispatcher = new BrushOpDispatcher(sessionManager, throttler, push);
         this.wallOpDispatcher = new WallOpDispatcher(
                 sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog);
-        this.templateOpDispatcher = new TemplateOpDispatcher(sessionManager, templatePublisher, plugin);
+        // 存 / 删成功后把该 session 最新可见模板列表推回去（前端只在 ready 帧拉一次，否则 gallery 要重连才刷新）。
+        this.templateOpDispatcher = new TemplateOpDispatcher(sessionManager, templatePublisher, plugin,
+                (ctx, session, bypass) -> ctx.send(Envelope.of("templates", null,
+                        java.util.Map.of("templates", listTemplates(session.playerUuid(), bypass)))));
         // HikariCanvas 总是先于 WebServer 构造完 VariableStore，生产恒非 null。
         this.variableOpDispatcher = variableStore == null ? null
                 : new VariableOpDispatcher(sessionManager, rateLimiter, variableStore,

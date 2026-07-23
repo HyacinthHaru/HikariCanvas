@@ -24,30 +24,51 @@ final class TemplateOpDispatcher {
     private static final int NODE_DELETE_ANY = 2;
     private static final int NODE_DELETE_OWN = 3;
     private static final int NODE_FEATURE = 4;
+    private static final int NODE_USE_OTHERS = 5;
     private static final String[] PERM_NODES = {
             "canvas.template.save",
             "canvas.template.bypass-limit",
             "canvas.template.delete.any",
             "canvas.template.delete.own",
             "canvas.template.feature",
+            "canvas.template.use-others",
     };
 
     private final SessionManager sessionManager;
     private final ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher;
     /** 主线程权限解析用宿主插件；可为 null（测试装配走直接调用）。 */
     private final org.bukkit.plugin.Plugin plugin;
+    /**
+     * 存 / 删成功后把该 session 最新可见模板列表推回去——前端只在 ready 帧拉一次列表，否则
+     * gallery 要重连才见新模板。可空：测试装配传 null（不推送，不影响 ack 主链）。
+     */
+    private final TemplateListRefresher refresher;
+
+    /** 由 {@code WebServer} 提供实现：算 {@code listVisibleTo} + {@code ctx.send} 一帧 {@code templates}。 */
+    @FunctionalInterface
+    interface TemplateListRefresher {
+        void refresh(WsMessageContext ctx, Session session, boolean useOthersBypass);
+    }
 
     TemplateOpDispatcher(SessionManager sessionManager,
                          ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher) {
-        this(sessionManager, templatePublisher, null);
+        this(sessionManager, templatePublisher, null, null);
     }
 
     TemplateOpDispatcher(SessionManager sessionManager,
                          ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher,
                          org.bukkit.plugin.Plugin plugin) {
+        this(sessionManager, templatePublisher, plugin, null);
+    }
+
+    TemplateOpDispatcher(SessionManager sessionManager,
+                         ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher,
+                         org.bukkit.plugin.Plugin plugin,
+                         TemplateListRefresher refresher) {
         this.sessionManager = sessionManager;
         this.templatePublisher = templatePublisher;
         this.plugin = plugin;
+        this.refresher = refresher;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
@@ -102,6 +123,7 @@ final class TemplateOpDispatcher {
                 slug, displayName, description, paramConfig, state, bypass);
         if (result instanceof ac.haru.hikaricanvas.template.TemplatePublisher.Result.Ok ok) {
             ctx.send(Envelope.of("ack", in.id(), Map.of("templateId", ok.templateId())));
+            pushTemplateRefresh(ctx, s, perms);
         } else if (result instanceof ac.haru.hikaricanvas.template.TemplatePublisher.Result.Failed f) {
             ctx.send(Envelope.error(in.id(), f.code(), f.message()));
         }
@@ -124,8 +146,16 @@ final class TemplateOpDispatcher {
                 templatePublisher.delete(templateId, s.playerUuid(), isAdmin);
         if (result instanceof ac.haru.hikaricanvas.template.TemplatePublisher.Result.Ok ok) {
             ctx.send(Envelope.of("ack", in.id(), Map.of("templateId", ok.templateId())));
+            pushTemplateRefresh(ctx, s, perms);
         } else if (result instanceof ac.haru.hikaricanvas.template.TemplatePublisher.Result.Failed f) {
             ctx.send(Envelope.error(in.id(), f.code(), f.message()));
+        }
+    }
+
+    /** 存 / 删成功后推该 session 最新可见模板列表（refresher 由 WebServer 注入；null 则跳过）。 */
+    private void pushTemplateRefresh(WsMessageContext ctx, Session s, MainThreadPerms.Resolved perms) {
+        if (refresher != null) {
+            refresher.refresh(ctx, s, perms.granted(NODE_USE_OTHERS));
         }
     }
 

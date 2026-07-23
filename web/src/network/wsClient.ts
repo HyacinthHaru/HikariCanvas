@@ -717,12 +717,23 @@ export class WsClient {
                 case 'script.trace':
                     this.handleScriptTrace(env.payload as ScriptTracePayload);
                     break;
+                case 'templates':
+                    this.handleTemplatesRefresh(env.payload as ReadyPayload);
+                    break;
                 default:
                     net.pushLog('meta', `unhandled op: ${env.op}`);
             }
         } catch (e) {
             net.pushLog('err', `frame handler threw for op "${env.op}": ${e instanceof Error ? e.message : String(e)}`);
         }
+    }
+
+    /**
+     * 存 / 删模板后 server 主动推来的最新可见模板列表——即时刷新 gallery，无需重连。
+     * 复用 ready 帧同款 {@code payload.templates}（server 端算的 listVisibleTo）。
+     */
+    private handleTemplatesRefresh(payload: ReadyPayload): void {
+        useTemplatesStore().setTemplates(payload.templates ?? []);
     }
 
     private handleReady(payload: ReadyPayload): void {
