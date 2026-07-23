@@ -71,7 +71,6 @@ class TemplateRegistryPackTest {
         assertEquals("string", spec.params().get("title").type());
         assertEquals(8, spec.params().get("title").maxLength(), "params.json 字段应映射进 TemplateParam");
         assertEquals("int", spec.params().get("off").type());
-        assertFalse(spec.isRawStateMode(), "pack 合成 spec 非 rawState 模式");
 
         // 合成 spec 带 fixed-size canvas（从 manifest wall 尺寸），供 Gallery 显示 pack 真实尺寸 + 兼容判定
         TemplateCanvas canvas = spec.canvas();

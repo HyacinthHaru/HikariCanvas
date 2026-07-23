@@ -28,12 +28,12 @@ import java.util.regex.Pattern;
  *       抛 {@link IllegalArgumentException}。防 {@code "${a}${a}${a}..."}
  *       式倍增展开。</li>
  * </ul>
- * <p>{@code IllegalArgumentException} 由 {@code TemplateInstantiator} 上游 try-catch
- * 包装为 {@code INVALID_TEMPLATE} 结构化错误码，不向客户端 echo 内部异常细节。</p>
+ * <p>{@code IllegalArgumentException} 由调用方（{@code PackParamResolver.substitute} 等）上游
+ * try-catch 包装为结构化错误码，不向客户端 echo 内部异常细节。</p>
  */
 public final class Interpolator {
 
-    /** 与 {@link ac.haru.hikaricanvas.template.TemplateLoader} 的 PARAM_REF 同形。 */
+    /** {@code ${param}} 引用正则（名字 {@code [a-z][a-z0-9_]{0,31}}）。 */
     private static final Pattern REF =
             Pattern.compile("\\$\\{([a-z][a-z0-9_]{0,31})\\}");
 

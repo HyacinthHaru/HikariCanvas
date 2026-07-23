@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-07-23 · 0.9.16 退役旧 YAML 模板 DSL（P4 + P5）
+
+模板系统统一到 `.canvas` pack 收官：删掉与 pack 并行的旧 YAML DSL 全套，模板套用 / 预览 / 注册全走 pack 单轨。**模板 pack 重构 P1–P5 全部完工**（功能闭环 + 旧路径清除；只差作者手工内置 pack）。
+
+- **删**：`TemplateInstantiator` / `TemplateLoader` / `TemplateElement` / `TemplateLayout` / `TemplateEffects` + 7 个内置 `*.yml` + `_index.txt` 清空 + 4 个 DSL 测试类（Instantiator / Loader / Builtin / HelloWorldYaml）。`TemplateSpec` 去 `layout` / `rawState` / `isRawStateMode`（12→10 字段）。
+- **转 pack-only**：`TemplateRegistry` 三源只扫 `*.canvas`（删 loader 字段 + `acceptOne` + 各 YAML 分支 + `isYamlFileName`）；`EditOpDispatcher.applyTemplate` 删 instantiator 分支（entries 皆 pack）；`TemplatePreviewService` 删 `renderPreview` + `stateOf` + `chooseDimensions` / `collectDefaults`（预览只走 `renderPackPreview`）。
+- **保留（原设计 §6 误列为删）**：`TemplateCanvas`（改承载 pack `fixed` 尺寸）；`template/expr/{Interpolator, Expr, ExpressionParser, ExpressionEvaluator}` —— `Interpolator` 被 `PackParamResolver` 复用、表达式解析被脚本 `ConditionEvaluator` 复用，**非 YAML 独有**，不删。
+- **内置模板**：清空，待作者手工制作 `.canvas` pack 放 `resources/templates/` + 登记 `_index.txt`。
+- **文档（P5）**：`template-spec.md` 归档 `docs/archive/`（加已废头）；CLAUDE 契约表 / `import-export.md`（kind=pack 落地）/ `data-model` 指针同步；散落 javadoc 里对已删类的引用（`TemplateEntry` / `TemplateCanvas` / `PackParamResolver` / `Interpolator` / `ExpressionParser` / `EditSession` / `ElementValidator` / `ValidationException`）改为陈述现状。
+
+**验证**：`:plugin:test` **2163**（原 2219 −56 删掉的 DSL 测试），仅既有 4 个 `RendererSnapshotTest` 文字类 fixture 本机 AWT 环境失败。
+
+关联文件：删 `template/{TemplateInstantiator,TemplateLoader,TemplateElement,TemplateLayout,TemplateEffects}` + 4 测试 + 7 yml；改 `template/{TemplateRegistry,TemplateSpec,TemplateEntry,TemplateCanvas,preview/TemplatePreviewService}`、`web/EditOpDispatcher`、`canvasfile/PackParamResolver`、`expr/{Interpolator,ExpressionParser}`、`state/{EditSession,ElementValidator,ValidationException}`、`_index.txt`；`docs/{template-pack,import-export,data-model,archive/template-spec}`、`CLAUDE.md`。
+
+---
+
 ## 2026-07-23 · 0.9.16 模板预览 + Gallery 缩略图（P3）
 
 pack 现在能出缩略图、Gallery 显示它，pack 尺寸判定正确。「存为模板」modal（P2 已产 pack）无需改。**全字段参数标记**（design §6：前端可标记任意字段而非仅 text）体量大——推迟到后续。

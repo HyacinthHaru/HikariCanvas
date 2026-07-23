@@ -36,8 +36,7 @@ import java.util.List;
  * {@code Literal(-n)}，保持既有 AST 形态（{@code parse("-1.5")} 仍是 Literal）。</p>
  *
  * <p><b>失败行为：</b> 任何 lex/parse 错误抛 {@link ParseException}，
- * 调用方（{@link ac.haru.hikaricanvas.template.TemplateLoader} /
- * {@code script.engine.ConditionEvaluator}）应把它当校验失败处理。</p>
+ * 调用方（{@code script.engine.ConditionEvaluator} 等）应把它当校验失败处理。</p>
  *
  * <p>实例无状态，可安全复用。</p>
  */
@@ -190,10 +189,9 @@ public final class ExpressionParser {
 
     /**
      * 递归下降嵌套深度上限。每层 {@code (} 进入 {@code parseOr}、每个 {@code !}/{@code -}
-     * 进入 {@code parseUnary} 都自增 depth，超限抛 {@link ParseException}（被
-     * {@code TemplateLoader.checkExpression} 正常 catch），把原本未设防的无界递归
-     * （海量 {@code (} / {@code !} → StackOverflowError 逃出 loader.reload）降级为
-     * 普通 §9 校验失败。64 远大于任何合理表达式嵌套深度。
+     * 进入 {@code parseUnary} 都自增 depth，超限抛 {@link ParseException}（被调用方正常 catch），
+     * 把原本未设防的无界递归（海量 {@code (} / {@code !} → StackOverflowError）降级为普通校验失败。
+     * 64 远大于任何合理表达式嵌套深度。
      */
     private static final int MAX_DEPTH = 64;
 

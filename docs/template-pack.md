@@ -130,12 +130,17 @@ project = 零参数 pack。二者可互转，故交叉导入**宽容处理、双
 
 ## 6. 退役 / 改造清单
 
-**退役（删）**：
+**退役（删，0.9.16 已删）**：
 - `TemplateInstantiator`（声明式 layout + raw_state 两路径）
 - `TemplateLoader`（YAML 解析）
-- `TemplateElement` / `TemplateLayout` / `TemplateCanvas` / `TemplateEffects`（声明式 DSL 类型）
-- `template/expr/Interpolator`（并入参数替换 pass；正则与语义保留）
-- `docs/template-spec.md`（旧 DSL 契约，整体作废或改为「已废」存档）
+- `TemplateElement` / `TemplateLayout` / `TemplateEffects`（声明式 DSL 类型）
+- 7 个内置 `*.yml` 模板 + `_index.txt` 清空（内置 pack 待作者手工制作）
+- `docs/template-spec.md` → 归档 `docs/archive/`
+
+**保留（原计划删，实测须留）**：
+- `TemplateCanvas`：改承载 pack 的 `fixed` 尺寸（size + maps），供 Gallery 显示
+- `template/expr/{Interpolator, Expr, ExpressionParser, ExpressionEvaluator}`：`Interpolator` 被
+  `PackParamResolver` 复用、表达式解析被脚本系统 `ConditionEvaluator` 复用——非 YAML 独有，不删
 
 **改造**：
 - `TemplateRegistry`：从读 `*.yml` 改读 `*.canvas`（解 manifest + params.json 供 Gallery）
@@ -174,8 +179,13 @@ project = 零参数 pack。二者可互转，故交叉导入**宽容处理、双
   materialize → rasterize）；`TemplateRegistry` 合成 spec 带 `fixed` 尺寸；`TemplateGallery` 显示预览
   `<img>`（list + 详情，404 占位）+ `types/template.ts` canvas/layout 可选。`SaveAsTemplateModal` 无需改
   （P2 已产 pack）。**全字段参数标记**（前端标记任意字段 → 客户端建 params.json / `${param}`）体量大，推迟。
-- **P4 退役 + 内置模板**：删旧 DSL 全套；作者手写内置 pack 入库；`template-spec.md` 归档。
-- **P5 收尾**：迁移说明、测试、文档同步（import-export.md kind=pack 落地、data-model 表结构）。
+- **P4 退役 + 内置模板** ✅（2026-07-23，0.9.16）：删旧 YAML DSL 全套（`TemplateInstantiator` /
+  `TemplateLoader` / `TemplateElement` / `TemplateLayout` / `TemplateEffects` + 7 内置 yml + 清空
+  `_index`）；`TemplateRegistry` / `EditOpDispatcher` / `TemplatePreviewService` / `TemplateSpec` 转
+  pack-only（`TemplateEntry` 保留退化空条目形态供防御判定）；`template-spec.md` 归档 `docs/archive/`。
+  **内置 pack 待作者手工制作**后放 `resources/templates/*.canvas` + 登记 `_index.txt`。
+- **P5 收尾** ✅（2026-07-23）：文档同步（CLAUDE 契约表指针 / `import-export.md` kind=pack 落地 /
+  `data-model` 指针 / `template-spec.md` 归档指针）；`:plugin:test` 全绿（仅既有渲染 fixture 环境失败）。
 
 ---
 

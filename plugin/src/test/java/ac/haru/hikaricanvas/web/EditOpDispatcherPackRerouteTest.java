@@ -38,7 +38,7 @@ class EditOpDispatcherPackRerouteTest {
 
     private static TemplateSpec syntheticPackSpec() {
         return new TemplateSpec(1, "subway", "Subway", null, null, null, null, null,
-                null, Map.of(), null, null);
+                null, Map.of());
     }
 
     /** projectImporter 从未注入（无 assetIngest / importConfig 的降级装配）→ pack 套用返 INTERNAL_ERROR。 */

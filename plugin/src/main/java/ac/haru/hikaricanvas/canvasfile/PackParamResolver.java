@@ -28,11 +28,10 @@ import java.util.regex.Pattern;
  * scalar coercion 默认开，{@code "10"} 自动解析回 int。故本类不做类型感知的字段定位，只在 JSON 文本上
  * 跑一遍占位符替换。{@code ${param}} 无冒号、运行时 {@code ${var:X}} 有冒号，二者天然共存，替换只吃前者。</p>
  *
- * <p><b>为何校验逻辑照搬 {@code TemplateInstantiator.coerceAndValidate}：</b>参数类型体系
- * （string/text/int/float/bool/color/enum/font）与校验规则现成，port 一份保持语义一致；旧模板路径
- * 退役后那份随之删除，这里成为唯一权威（故是复制而非依赖）。coerce 后的值以「toString 即字面量」的形态
- * 存入映射（int→{@code "5"} / float→{@code "45.0"} / bool→{@code "true"} / string/color 原样），
- * 供 {@link Interpolator} 直接拼进 JSON 文本。</p>
+ * <p><b>类型校验：</b>参数类型体系（string/text/int/float/bool/color/enum/font）+ 校验规则
+ * （长度 / 范围 / 颜色格式 / enum 成员）在此实现。coerce 后的值以「toString 即字面量」的形态存入映射
+ * （int→{@code "5"} / float→{@code "45.0"} / bool→{@code "true"} / string/color 原样），供
+ * {@link Interpolator} 直接拼进 JSON 文本。</p>
  *
  * <p>纯逻辑，不碰 Bukkit / DB / Session（与 {@link CanvasManifest} / {@link ProjectMaterializer}
  * 同范式），可裸测。</p>
@@ -41,7 +40,7 @@ public final class PackParamResolver {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /** 颜色字面量：{@code #RRGGBB} 或 {@code #RRGGBBAA}（与 {@code TemplateInstantiator} 同源）。 */
+    /** 颜色字面量：{@code #RRGGBB} 或 {@code #RRGGBBAA}。 */
     private static final Pattern COLOR_RE = Pattern.compile("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$");
     /** 整数字面量（含负号），供 int 类型的字符串填值解析。 */
     private static final Pattern INT_NUMERIC = Pattern.compile("^-?\\d+$");
@@ -171,7 +170,7 @@ public final class PackParamResolver {
         }
     }
 
-    // ==================== 类型校验（port 自 TemplateInstantiator.coerceAndValidate） ====================
+    // ==================== 类型校验 ====================
 
     private static Object coerceAndValidate(String key, TemplateParam p,
                                             Object raw, List<String> errors) {

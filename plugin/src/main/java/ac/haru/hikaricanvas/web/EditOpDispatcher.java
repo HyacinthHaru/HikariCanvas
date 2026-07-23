@@ -8,7 +8,6 @@ import ac.haru.hikaricanvas.session.SessionRateLimiter;
 import ac.haru.hikaricanvas.state.EditSession;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.template.TemplateEntry;
-import ac.haru.hikaricanvas.template.TemplateInstantiator;
 import ac.haru.hikaricanvas.template.TemplateRegistry;
 
 import java.util.List;
@@ -38,7 +37,6 @@ final class EditOpDispatcher {
     private final ProjectionThrottler throttler;
     private final SessionRateLimiter rateLimiter;
     private final TemplateRegistry templateRegistry;
-    private final TemplateInstantiator templateInstantiator = new TemplateInstantiator();
     private final ac.haru.hikaricanvas.storage.WallRepo wallRepo;
     private final OpPushCallback push;
     /** 可空——给 template.apply 跨用户拒绝路径写 audit。 */
@@ -320,7 +318,7 @@ final class EditOpDispatcher {
                 // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
                 java.util.UUID callerUuid = s.playerUuid();
                 boolean hasBypass = MainThreadPerms.hasPermission(plugin, callerUuid, "canvas.template.use-others");
-                yield applyTemplate(es, sessionId, tpl, tp, callerUuid, s.playerName(), hasBypass);
+                yield applyTemplate(sessionId, tpl, tp, callerUuid, s.playerName(), hasBypass);
             }
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());
             };
@@ -482,10 +480,10 @@ final class EditOpDispatcher {
     }
 
     /**
-     * template.apply 中枢：resolve registry → instantiate → replaceContent → walls write-back。
+     * template.apply 中枢：resolve registry（跨用户隔离）→ applyPackEntry（走 ProjectImporter.applyPack）。
      * 不在主线程跑（持有当前 WS thread），但只做内存/DB I/O，不碰 Bukkit world API。
      */
-    private EditSession.OpResult applyTemplate(EditSession es, String sessionId,
+    private EditSession.OpResult applyTemplate(String sessionId,
                                                String templateId, Map<String, Object> params,
                                                java.util.UUID callerUuid, String callerName,
                                                boolean hasBypass) {
@@ -513,29 +511,9 @@ final class EditOpDispatcher {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD",
                     "unknown template: " + templateId);
         }
-        // pack 条目（.canvas，manifest.kind="pack"）：走 ProjectImporter.applyPack 新管线。
-        // 返回的 OkSnapshot 交由 dispatch 的 OkSnapshot 分支统一收尾（ack + pushSnapshot +
-        // throttler 投影 + persist），故 applyPackEntry 内不自行 push/投影/落库（否则双推）。
-        if (entry.isPack()) {
-            return applyPackEntry(sessionId, templateId, entry, params, callerUuid);
-        }
-        ProjectState.Canvas cv = es.state().canvas();
-        TemplateInstantiator.Result r = templateInstantiator.instantiate(
-                entry.spec(), params, cv.widthMaps(), cv.heightMaps());
-        if (r instanceof TemplateInstantiator.Result.Failed f) {
-            return new EditSession.OpResult.Error(f.code(),
-                    String.join("; ", f.errors()));
-        }
-        TemplateInstantiator.Result.Ok ok = (TemplateInstantiator.Result.Ok) r;
-        EditSession.OpResult applied = es.replaceContent(ok.backgroundColor(), ok.elements());
-        if (applied instanceof EditSession.OpResult.OkSnapshot) {
-            // walls.template_id / template_version write-back（best-effort）
-            Session sess = sessionManager.byId(sessionId);
-            if (sess != null && sess.wallId() != null) {
-                wallRepo.setTemplate(sess.wallId(), templateId, entry.spec().version());
-            }
-        }
-        return applied;
+        // 模板 = .canvas pack：走 ProjectImporter.applyPack。返回的 OkSnapshot 交 dispatch 的
+        // OkSnapshot 分支统一收尾（ack + pushSnapshot + throttler 投影 + persist），applyPackEntry 内不双推。
+        return applyPackEntry(sessionId, templateId, entry, params, callerUuid);
     }
 
     /**

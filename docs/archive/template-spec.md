@@ -1,3 +1,9 @@
+> **已废弃（0.9.16 归档）**：模板系统已统一到 `.canvas` pack（`manifest.kind="pack"`）。旧 YAML DSL
+> 及 `TemplateLoader` / `TemplateInstantiator` 已于 0.9.16 退役删除。本文档仅作历史留档，权威设计见
+> `docs/template-pack.md`。
+
+---
+
 # 模板 YAML 规范
 
 **状态：** 实装稿 · 对齐代码 2026-06-14

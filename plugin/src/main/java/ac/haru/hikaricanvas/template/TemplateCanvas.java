@@ -7,16 +7,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
- * 模板顶层 {@code canvas:} 块。契约见 {@code docs/template-spec.md §3}。
- *
- * <p><b>字段惯例：</b></p>
- * <ul>
- *   <li>{@code size} = {@code "auto"} | {@code "fixed"}（默认 {@code "auto"}）</li>
- *   <li>{@code maps / minMaps / maxMaps} = {@code [width, height]}</li>
- *   <li>{@code background} 支持 {@code ${param}}（实例化时插值）</li>
- *   <li>{@code padding} 可为单一 int 或 [上, 右, 下, 左]；本 record 持有原始
- *       {@link Object}，由 {@link TemplateLoader} 归一化到 {@code int[4]} 后用</li>
- * </ul>
+ * 模板 spec 的 {@code canvas} 块。pack 合成 spec 只用 {@code size="fixed"} +
+ * {@code maps=[width, height]} 表达 pack 的墙尺寸（供 Gallery 显示 + 兼容判定）；
+ * {@code minMaps / maxMaps / background / padding} 为兼容前端镜像保留，pack 不填。
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TemplateCanvas(

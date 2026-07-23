@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
  *   <li>{@link EditSession} 自己的 buildXxx / applyXxxPatch / brush op</li>
  *   <li>{@link BrushSession}（brush op 状态机）</li>
  *   <li>{@link LayerOperations}（layer.* op，guide / blendMode 校验）</li>
- *   <li>{@code ac.haru.hikaricanvas.template.TemplateInstantiator}（raw_state 二次校验）</li>
+ *   <li>{@code ac.haru.hikaricanvas.canvasfile.ProjectMaterializer}（.canvas / pack 导入的元素二次校验）</li>
  * </ul>
  *
  * <p>抛出统一为 {@link ValidationException}，外层 op handler 接住并转为

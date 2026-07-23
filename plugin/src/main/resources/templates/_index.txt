@@ -1,10 +1,3 @@
-# 内置模板清单 — 每行一个 .yml 名（不含路径）。允许 # 注释。
-# 顺序 = 前端 TemplateGallery 默认展示顺序。
-
-hello_world.yml
-subway_station.yml
-shop_sign.yml
-welcome_banner.yml
-bulletin_board.yml
-nameplate.yml
-info_panel.yml
+# 内置模板清单（jar / classpath 内）。每行一个 .canvas pack 文件名（不含路径），允许 # 注释。
+# 顺序 = 前端 TemplateGallery 默认展示顺序。dev 模式（classes 与 resources 分离）下靠本清单定位。
+# 目前无内置模板 —— 作者手工制作的 .canvas pack 放入本目录并在此登记后生效。

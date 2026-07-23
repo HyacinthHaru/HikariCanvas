@@ -894,7 +894,7 @@ public final class EditSession {
      * 推荐新调用方走 {@link #replaceContent(Fill, List)} 直传 Fill。</p>
      *
      * @param backgroundColor 新背景色 hex（null = 保留当前）
-     * @param elements        新 element 列表（已由 TemplateInstantiator 物化）
+     * @param elements        新 element 列表
      */
     public synchronized OpResult replaceContent(String backgroundColor, List<Element> elements) {
         return replaceContent(backgroundColor == null ? null : new SolidFill(backgroundColor), elements);
@@ -2000,10 +2000,8 @@ public final class EditSession {
     }
 
     /**
-     * 模板 raw_state 反序列化得到的 element 通过本方法二次校验。
-     * 实现位于 {@link ElementValidator#validateElementForTemplateApply}；
-     * 保留本 wrapper 以维持 {@code ac.haru.hikaricanvas.template.TemplateInstantiator} 等外部调用方
-     * 的 API 不变。
+     * {@code .canvas} / pack 导入的 element 通过本方法二次校验（不信任外部数值）。
+     * 实现位于 {@link ElementValidator#validateElementForTemplateApply}；本 wrapper 保留统一入口。
      *
      * @throws ValidationException 任一字段不合法
      */

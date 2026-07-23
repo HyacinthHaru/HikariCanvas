@@ -53,8 +53,8 @@
 - `.canvas` 服务端存储 / 工程库 / 云同步——导出纯客户端落盘，分享靠玩家自己传文件
 - SVG **动画 → 时间轴**（见 §7 风险登记的专项说明）——动画 SVG 一律取首帧静态化
 - SVG 的 D10 全部不支持项（text/clip/mask/滤镜/动画/foreignObject/外链/use）
-- `manifest.kind = "pack"`（资源包 / 模板包）——保留字段位，本期只做 `"project"`；`"pack"`
-  的模板包统一设计见 `docs/template-pack.md`
+- `manifest.kind = "pack"`（模板包）——0.9.16 实装：模板系统统一到 `.canvas` pack，套用走
+  `ProjectImporter.applyPack`；统一设计见 `docs/template-pack.md`
 - 导出「服务端权威 state」模式——本期导出取前端 mirror，导出前强制同步一次（见 §10）
 
 ### 1.2 MVP 定义（两个功能各一闸）
