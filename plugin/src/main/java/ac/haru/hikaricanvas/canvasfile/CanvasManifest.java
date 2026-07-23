@@ -3,9 +3,14 @@ package ac.haru.hikaricanvas.canvasfile;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-/** .canvas manifest.json（docs/import-export.md §2.2）。只读所需字段，宽松忽略未知。 */
+/**
+ * .canvas manifest.json（docs/import-export.md §2.2）。只读所需字段，宽松忽略未知。
+ *
+ * <p>{@code id} 仅 pack 用（模板自声明 id，供注册表当条目 key，与 DB {@code templates.template_id}
+ * 对齐）；缺省时注册表退回文件名 stem。project 工程不含此字段（null）。</p>
+ */
 public record CanvasManifest(int spec, String kind, long createdAt, String name,
-                             int wallWidth, int wallHeight) {
+                             int wallWidth, int wallHeight, String id) {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public static CanvasManifest parse(byte[] json, int maxSpec) throws CanvasImportException {
@@ -32,6 +37,6 @@ public record CanvasManifest(int spec, String kind, long createdAt, String name,
         int w = wall.path("width").asInt(0), h = wall.path("height").asInt(0);
         if (w <= 0 || h <= 0) throw new CanvasImportException("IMPORT_MALFORMED", "manifest.wall 尺寸非法");
         return new CanvasManifest(spec, kind, n.path("created_at").asLong(0),
-            n.path("name").asText(null), w, h);
+            n.path("name").asText(null), w, h, n.path("id").asText(null));
     }
 }

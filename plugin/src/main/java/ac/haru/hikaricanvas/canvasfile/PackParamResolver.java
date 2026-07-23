@@ -133,17 +133,41 @@ public final class PackParamResolver {
      * 在 {@code project.json} 文本上单遍替换 {@code ${param}}（委托 {@link Interpolator}）。
      * 未声明引用 → {@code IMPORT_MALFORMED}（含 param 名）；Interpolator 的 16KB/1MB 上限
      * 触发的 {@link IllegalArgumentException} → 同样归 {@code IMPORT_MALFORMED}。
+     *
+     * <p><b>替换值按 JSON 字符串转义：</b>project.json 是 JSON，占位符一律嵌在字符串字面量里
+     * （数值字段也以 {@code "${x}"} 形态写，靠 materialize 的 Jackson coercion 解回数值）。若把
+     * 含引号 / 反斜杠 / 换行的值（多行招牌、带引号文案）裸插进去会破坏 JSON 结构，故先按 JSON 字符串
+     * 转义再替换。纯数字值转义后不变，D3 数值 coercion 不受影响。</p>
      */
     public static String substitute(String projectJson, Map<String, Object> values)
             throws CanvasImportException {
+        Map<String, Object> escaped = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : values.entrySet()) {
+            escaped.put(e.getKey(),
+                    e.getValue() == null ? "" : jsonEscapeInner(e.getValue().toString()));
+        }
         try {
-            return Interpolator.interpolate(projectJson, values);
+            return Interpolator.interpolate(projectJson, escaped);
         } catch (Interpolator.MissingParamException e) {
             throw new CanvasImportException("IMPORT_MALFORMED",
                     "project.json references undeclared template param '" + e.paramName() + "'");
         } catch (IllegalArgumentException e) {
             // Interpolator 单值 16KB / 累计 1MB 上限
             throw new CanvasImportException("IMPORT_MALFORMED", e.getMessage());
+        }
+    }
+
+    /**
+     * 把值转义成能安全嵌入 JSON 字符串字面量的形态（引号 / 反斜杠 / 控制字符 / 换行）。
+     * 借 Jackson 序列化成带引号的 JSON 串再去掉首尾引号，转义规则与 materialize 端解析对齐。
+     */
+    private static String jsonEscapeInner(String raw) {
+        try {
+            String quoted = MAPPER.writeValueAsString(raw);   // "...转义后..."
+            return quoted.substring(1, quoted.length() - 1);
+        } catch (Exception e) {
+            // writeValueAsString(String) 实际不抛；兜底返原值
+            return raw;
         }
     }
 

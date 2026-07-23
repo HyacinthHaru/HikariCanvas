@@ -36,7 +36,6 @@ import ac.haru.hikaricanvas.storage.MigrationRunner;
 import ac.haru.hikaricanvas.image.ImageQuotaService;
 import ac.haru.hikaricanvas.image.ImageStorage;
 import ac.haru.hikaricanvas.image.UploadHandler;
-import ac.haru.hikaricanvas.template.TemplateLoader;
 import ac.haru.hikaricanvas.template.TemplatePublisher;
 import ac.haru.hikaricanvas.template.TemplateRegistry;
 import ac.haru.hikaricanvas.template.asset.TemplateAssetService;
@@ -490,10 +489,9 @@ public final class HikariCanvas extends JavaPlugin {
 
         // 模板元数据 DAO + 创意工坊协调器
         templateRepo = new TemplateRepo(getLogger(), database.jdbi());
-        TemplateLoader publisherYamlLoader = new TemplateLoader();
         templatePublisher = new TemplatePublisher(getLogger(),
                 getDataFolder().toPath(),
-                publisherYamlLoader, templateRegistry, templateRepo,
+                templateRegistry, templateRepo,
                 compositor, config.templatesMaxPerPlayer);
         templatePublisher.syncBuiltinToDb();
         // 模板缩略图服务。Registry reload 时调 invalidate() 清缓存

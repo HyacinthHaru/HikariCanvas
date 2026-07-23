@@ -9,8 +9,10 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 模板元数据 DAO（创意工坊）。YAML spec 仍是真相；本表存 owner / featured / 排序用
- * 元数据。schema 见 {@code db-migrations/V008__templates.sql}。
+ * 模板元数据 DAO（创意工坊）。磁盘上的模板文件（{@code .yml} 或 {@code .canvas} pack）仍是真相；
+ * 本表存 owner / featured / 排序用元数据。schema 见 {@code db-migrations/V008__templates.sql}。
+ * DB 列名沿用 {@code yaml_path}（0.9.16 起也存 {@code .canvas} 路径；forward-only 迁移守卫禁改名，
+ * 故 Java 侧用中性的 {@code filePath} 映射它）。
  *
  * <ul>
  *   <li>builtin 模板：启动期由 {@link ac.haru.hikaricanvas.template.TemplateRegistry#reload}
@@ -28,7 +30,7 @@ public final class TemplateRepo {
             String ownerName,
             String displayName,
             String description,
-            String yamlPath,
+            String filePath,      // DB 列 yaml_path（可为 .yml 或 .canvas 路径）
             boolean builtin,
             boolean featured,
             long downloadCount,
@@ -51,7 +53,7 @@ public final class TemplateRepo {
                     "INSERT INTO templates(template_id, owner_uuid, owner_name, display_name, "
                             + "description, yaml_path, builtin, featured, download_count, "
                             + "created_at, updated_at) "
-                            + "VALUES(:id, :ouuid, :oname, :dname, :desc, :yaml, :builtin, "
+                            + "VALUES(:id, :ouuid, :oname, :dname, :desc, :file, :builtin, "
                             + ":feat, :dl, :created, :updated) "
                             + "ON CONFLICT(template_id) DO UPDATE SET "
                             + "display_name=excluded.display_name, "
@@ -63,7 +65,7 @@ public final class TemplateRepo {
                     .bind("oname", r.ownerName)
                     .bind("dname", r.displayName)
                     .bind("desc", r.description)
-                    .bind("yaml", r.yamlPath)
+                    .bind("file", r.filePath)
                     .bind("builtin", r.builtin ? 1 : 0)
                     .bind("feat", r.featured ? 1 : 0)
                     .bind("dl", r.downloadCount)

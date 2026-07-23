@@ -345,9 +345,9 @@ public final class TemplateRegistry {
                     TemplateEntry entry;
                     if (isPackFileName(fileName)) {
                         byte[] bytes = in.readAllBytes();
-                        id = packIdStem(fileName);
-                        TemplateSpec spec = tryBuildPackSpec(bytes, id, label, failures);
+                        TemplateSpec spec = tryBuildPackSpec(bytes, packIdStem(fileName), label, failures);
                         if (spec == null) continue;   // 非 pack / 解析失败（tryBuildPackSpec 已记 warn）
+                        id = spec.id();               // manifest 自声明或退回 stem
                         entry = TemplateEntry.pack(spec, TemplateSource.SERVER, label,
                                 Optional.empty(), bytes);
                     } else {
@@ -495,13 +495,14 @@ public final class TemplateRegistry {
                                     java.util.List<String> failures) {
         TemplateSpec spec = tryBuildPackSpec(packBytes, idStem, label, failures);
         if (spec == null) return false;   // 非 pack / 解析失败（tryBuildPackSpec 已记 warn/fine）
-        if (out.containsKey(idStem)) {
-            failures.add(label + ": duplicate id '" + idStem + "' (already loaded from "
-                    + out.get(idStem).sourceLabel() + ")");
-            log.warning(label + ": duplicate id '" + idStem + "', skipped");
+        String id = spec.id();            // manifest 自声明或退回 stem（见 buildPackSpec）
+        if (out.containsKey(id)) {
+            failures.add(label + ": duplicate id '" + id + "' (already loaded from "
+                    + out.get(id).sourceLabel() + ")");
+            log.warning(label + ": duplicate id '" + id + "', skipped");
             return false;
         }
-        out.put(idStem, TemplateEntry.pack(spec, source, label, ownerUuid, packBytes));
+        out.put(id, TemplateEntry.pack(spec, source, label, ownerUuid, packBytes));
         return true;
     }
 
@@ -562,7 +563,7 @@ public final class TemplateRegistry {
      * {@code description / version / author / tags / preview / canvas / layout / rawState} 均为 null
      * （pack 的画布内容在 {@code project.json}，apply 时由 {@code ProjectImporter.applyPack} 现解，不进 spec）。
      *
-     * @param idStem     id = 文件名去 {@code .canvas} 后缀
+     * @param idStem     文件名去 {@code .canvas} 后缀；仅当 manifest 未自声明 {@code id} 时退回用它
      * @param paramsJson pack 内 {@code params.json} 字节；可空（无参数 pack）
      */
     private static TemplateSpec buildPackSpec(String idStem, CanvasManifest manifest, byte[] paramsJson)
@@ -573,8 +574,11 @@ public final class TemplateRegistry {
                 params.put(def.id(), def.param());
             }
         }
-        String name = manifest.name() != null ? manifest.name() : idStem;
-        return new TemplateSpec(manifest.spec(), idStem, name, /*description*/ null,
+        // id 优先取 manifest 自声明（存为模板产出的 pack 带 user-<uuid8>-<slug>，与 DB template_id 对齐），
+        // 缺省退回文件名 stem（作者手写内置 pack 可只靠文件名）。
+        String id = (manifest.id() != null && !manifest.id().isBlank()) ? manifest.id() : idStem;
+        String name = manifest.name() != null ? manifest.name() : id;
+        return new TemplateSpec(manifest.spec(), id, name, /*description*/ null,
                 /*version*/ null, /*author*/ null, /*tags*/ null, /*preview*/ null,
                 /*canvas*/ null, params, /*layout*/ null, /*rawState*/ null);
     }

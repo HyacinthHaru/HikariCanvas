@@ -219,4 +219,30 @@ class PackParamResolverTest {
         String out = PackParamResolver.substitute("{\"text\":\"${var:online}\"}", Map.of());
         assertEquals("{\"text\":\"${var:online}\"}", out);
     }
+
+    // ---------- substitute：JSON 特殊字符转义（P2 存为模板会把任意用户文本捕获成 default） ----------
+
+    @Test
+    void substitute_valueWithQuotes_staysValidJson() throws Exception {
+        // 值含引号——须 JSON 转义，否则破坏结构。解析回来 text 应等于原值。
+        String out = PackParamResolver.substitute("{\"text\":\"${t}\"}", Map.of("t", "say \"hi\""));
+        var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(out);
+        assertEquals("say \"hi\"", node.get("text").asText());
+    }
+
+    @Test
+    void substitute_valueWithBackslashAndNewline_staysValidJson() throws Exception {
+        String raw = "line1\nline2\\end";   // 多行招牌文本 + 反斜杠
+        String out = PackParamResolver.substitute("{\"text\":\"${t}\"}", Map.of("t", raw));
+        var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(out);
+        assertEquals(raw, node.get("text").asText());
+    }
+
+    @Test
+    void substitute_embeddedPlaceholderWithSpecialChars_staysValidJson() throws Exception {
+        // 占位符嵌在更大字符串里 + 值含引号
+        String out = PackParamResolver.substitute("{\"text\":\"标题：${t}！\"}", Map.of("t", "a\"b"));
+        var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(out);
+        assertEquals("标题：a\"b！", node.get("text").asText());
+    }
 }

@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-07-23 · 0.9.16 存为模板产出 .canvas pack（P2）
+
+「存为模板」从产 YAML 改产 `.canvas` pack：`TemplateExporter` 把当前 `ProjectState` 反向序列化成 `project.json`（参数化 text 字段写 `${paramId}`）+ `params.json`（参数声明数组）+ `manifest`（kind=pack + 自声明 id），末尾用默认参数走一遍 applyPack 解析链自校验 roundtrip。`TemplatePublisher` 落 `<slug>.canvas` + DB 行 + registry reload，套用即走 P1 的 `applyPack`。前端 `template.save` 线不变（仍发 paramConfig，现产 pack）。
+
+- **`TemplateExporter` 重写**：产 pack 字节（zip manifest/params/project），弃 YAML + yamlLoader 依赖（构造器无参）；参数收集逻辑（text 元素 → `text_N` + keep/drop/rename）保留；`ExportResult` 改 `(templateId, packRelativePath, packBytes)`。
+- **`TemplatePublisher`**：写 `.canvas`（`Files.write` 字节）；delete + preview 走 `.canvas`/`.yml` 通用 stem。
+- **id 一致性**：pack manifest 加自声明 `id` 字段；`TemplateRegistry` pack 条目 key 优先取 `manifest.id`（缺省退文件名 stem），使存为模板产出的 registry 条目 id == DB `template_id` == `user-<uuid8>-<slug>`，apply 才找得到（ready 用注册表 id、marketplace 用 DB id，两者须一致）。`CanvasManifest` 加 nullable `id`。
+- **JSON 转义硬化（连带修 P1 applyPack）**：`PackParamResolver.substitute` 把替换值按 JSON 字符串转义再插入——多行 / 带引号的招牌文本作 default 时不再破坏 `project.json` 结构；纯数字值转义后不变，D3 coercion 不受影响。
+- **schema 不动**：原想把 `yaml_path` 列改名 `file_path`，被 forward-only 迁移守卫（`MigrationForwardOnlyTest`，V18+ 禁破坏性 DDL，生产库已在跑）挡下——列名沿用 `yaml_path`（现也存 `.canvas` 路径），Java 侧用中性 `filePath` 映射它。
+
+**验证**：`:plugin:test` **2219**（+11：TemplateExporter 6 / TemplatePublisherPack 2 / PackParamResolver 转义 3），仅既有 4 个 `RendererSnapshotTest` 文字类 fixture 本机 AWT 环境失败（render 未动）。
+
+关联文件：`template/{TemplateExporter/TemplatePublisher/TemplateRegistry}`、`canvasfile/{CanvasManifest/PackParamResolver}`、`storage/TemplateRepo`、`HikariCanvas` + 2 新测试类。
+
+---
+
 ## 2026-07-22 · 0.9.16 模板系统转 .canvas pack（后端管线打通）
 
 模板套用改接 `.canvas` 工程管线：pack = `manifest.kind="pack"` + `params.json`（参数声明数组）+ `project.json`（字符串位可含 `${param}`）。套用 = 校验参数 → 文本层替换 `${param}` → 复用 `ProjectImporter` 物化管线，模板由此天然带 timeline / script / asset / 安全栈。**additive** —— 旧 YAML 模板路径不动（后续版本退役）。设计见 `docs/template-pack.md`。

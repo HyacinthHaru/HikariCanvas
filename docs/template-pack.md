@@ -165,8 +165,11 @@ project = 零参数 pack。二者可互转，故交叉导入**宽容处理、双
   替换）；`ProjectImporter` 拆 build/propagate + 新 `applyPack`；`CanvasManifest` 接受 `kind=pack`；
   `TemplateRegistry` 三源读 `*.canvas`；`EditOpDispatcher.template.apply` 命中 pack 重路由。additive——YAML
   路径不动。端到端由测试 fixture 打通（内置 pack 待作者手工制作后于 P4 预置）。
-- **P2 存储 + 存为模板**：`templates` 表 schema 调整；`template.save` 存 pack；`TemplateExporter`
-  产 pack + params.json。
+- **P2 存储 + 存为模板** ✅（2026-07-23，0.9.16）：`TemplateExporter` 产 pack（project.json +
+  params.json + manifest，含自校验 roundtrip）；`TemplatePublisher` 存 `<slug>.canvas`；pack manifest
+  自声明 `id` 使 registry 条目 id == DB `template_id`；`PackParamResolver.substitute` 值按 JSON 转义
+  （连带硬化 P1 applyPack）。**表 schema 不动**——`yaml_path` 列改名被 forward-only 守卫（V18+）挡下，
+  沿用旧列名存 `.canvas` 路径。
 - **P3 预览 + 前端**：`TemplatePreviewService` 渲 pack；`TemplateGallery` / `SaveAsTemplateModal`
   改造 + 参数标记 UI。
 - **P4 退役 + 内置模板**：删旧 DSL 全套；作者手写内置 pack 入库；`template-spec.md` 归档。

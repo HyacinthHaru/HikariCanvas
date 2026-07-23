@@ -32,20 +32,18 @@ public final class TemplatePublisher {
     private final Logger log;
     private final Path dataFolder;
     private final TemplateExporter exporter;
-    private final TemplateLoader yamlLoader;
     private final TemplateRegistry registry;
     private final TemplateRepo repo;
     private final CanvasCompositor compositor;
     private final int maxPerPlayer;
 
     public TemplatePublisher(Logger log, Path dataFolder,
-                             TemplateLoader yamlLoader, TemplateRegistry registry,
+                             TemplateRegistry registry,
                              TemplateRepo repo, CanvasCompositor compositor,
                              int maxPerPlayer) {
         this.log = log;
         this.dataFolder = dataFolder;
-        this.exporter = new TemplateExporter(yamlLoader);
-        this.yamlLoader = yamlLoader;
+        this.exporter = new TemplateExporter();
         this.registry = registry;
         this.repo = repo;
         this.compositor = compositor;
@@ -80,18 +78,18 @@ public final class TemplatePublisher {
         }
         TemplateExporter.ExportResult ok = ((TemplateExporter.Result.Ok) exportResult).result();
 
-        // 3) 写 YAML 文件
-        Path yamlAbs = dataFolder.resolve(ok.yamlRelativePath());
+        // 3) 写 .canvas pack 文件
+        Path packAbs = dataFolder.resolve(ok.packRelativePath());
         try {
-            Files.createDirectories(yamlAbs.getParent());
-            Files.writeString(yamlAbs, ok.yamlString(), StandardOpenOption.CREATE,
+            Files.createDirectories(packAbs.getParent());
+            Files.write(packAbs, ok.packBytes(), StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
         } catch (IOException e) {
-            return new Result.Failed("WRITE_FAILED", "yaml: " + e.getMessage());
+            return new Result.Failed("WRITE_FAILED", "pack: " + e.getMessage());
         }
 
-        // 4) 缩略图：直接 rasterize 当前 ProjectState（已脱参数化前的快照）
-        Path previewAbs = yamlAbs.resolveSibling(slug + ".preview.png");
+        // 4) 缩略图：直接 rasterize 当前 ProjectState（参数化前的快照）
+        Path previewAbs = packAbs.resolveSibling(slug + ".preview.png");
         try {
             BufferedImage rgb = compositor.rasterize(state);
             try (OutputStream out = Files.newOutputStream(previewAbs,
@@ -109,7 +107,7 @@ public final class TemplatePublisher {
         long created = isExisting ? repo.findById(ok.templateId()).orElseThrow().createdAt() : now;
         TemplateRepo.Row row = new TemplateRepo.Row(
                 ok.templateId(), ownerUuid, ownerName,
-                displayName, description, ok.yamlRelativePath(),
+                displayName, description, ok.packRelativePath(),
                 false, false, 0L, created, now);
         if (!repo.upsert(row)) {
             return new Result.Failed("DB_FAILED", "templates upsert failed");
@@ -137,14 +135,14 @@ public final class TemplatePublisher {
             return new Result.Failed("FORBIDDEN", "only owner or admin can delete");
         }
 
-        // 删 YAML + PNG
+        // 删模板文件 + PNG
         try {
-            Path yamlAbs = dataFolder.resolve(row.yamlPath());
-            Files.deleteIfExists(yamlAbs);
-            Path previewAbs = yamlAbs.resolveSibling(slugFromYamlPath(row.yamlPath()) + ".preview.png");
+            Path fileAbs = dataFolder.resolve(row.filePath());
+            Files.deleteIfExists(fileAbs);
+            Path previewAbs = fileAbs.resolveSibling(slugFromFilePath(row.filePath()) + ".preview.png");
             Files.deleteIfExists(previewAbs);
-            // 若 uuid 目录空了也清掉（v1 best-effort，失败忽略）
-            Path uuidDir = yamlAbs.getParent();
+            // 若 uuid 目录空了也清掉（best-effort，失败忽略）
+            Path uuidDir = fileAbs.getParent();
             if (uuidDir != null && Files.isDirectory(uuidDir)) {
                 try (var stream = Files.list(uuidDir)) {
                     if (stream.findAny().isEmpty()) Files.deleteIfExists(uuidDir);
@@ -171,11 +169,11 @@ public final class TemplatePublisher {
             if (entry.source() == TemplateSource.USER) continue;
             String id = entry.spec().id();
             if (repo.findById(id).isPresent()) continue;
-            String yamlPath = "builtin:" + id;  // 占位；builtin 不可删，路径仅记录
+            String filePath = "builtin:" + id;  // 占位；builtin 不可删，路径仅记录
             TemplateRepo.Row row = new TemplateRepo.Row(
                     id, null, null,
                     entry.spec().name() == null ? id : entry.spec().name(),
-                    entry.spec().description(), yamlPath,
+                    entry.spec().description(), filePath,
                     true, true, 0L, now, now);
             if (repo.upsert(row)) inserted++;
         }
@@ -199,9 +197,10 @@ public final class TemplatePublisher {
         return new Result.Ok(templateId);
     }
 
-    private static String slugFromYamlPath(String yamlPath) {
-        int slash = yamlPath.lastIndexOf('/');
-        String filename = slash < 0 ? yamlPath : yamlPath.substring(slash + 1);
-        return filename.endsWith(".yml") ? filename.substring(0, filename.length() - 4) : filename;
+    private static String slugFromFilePath(String filePath) {
+        int slash = filePath.lastIndexOf('/');
+        String filename = slash < 0 ? filePath : filePath.substring(slash + 1);
+        int dot = filename.lastIndexOf('.');
+        return dot > 0 ? filename.substring(0, dot) : filename;
     }
 }
