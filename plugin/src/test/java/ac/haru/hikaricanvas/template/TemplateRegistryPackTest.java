@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.logging.Logger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -71,6 +72,12 @@ class TemplateRegistryPackTest {
         assertEquals(8, spec.params().get("title").maxLength(), "params.json 字段应映射进 TemplateParam");
         assertEquals("int", spec.params().get("off").type());
         assertFalse(spec.isRawStateMode(), "pack 合成 spec 非 rawState 模式");
+
+        // 合成 spec 带 fixed-size canvas（从 manifest wall 尺寸），供 Gallery 显示 pack 真实尺寸 + 兼容判定
+        TemplateCanvas canvas = spec.canvas();
+        assertNotNull(canvas, "pack 合成 spec 应带 canvas（manifest wall 尺寸），非 null");
+        assertEquals("fixed", canvas.size(), "pack canvas 应为 fixed-size");
+        assertEquals(List.of(2, 1), canvas.maps(), "canvas.maps 应为 manifest wall [width, height]");
 
         assertEquals(1, stats.serverLoaded(), "只有 pack 计入 server（普通工程被跳过、不计数）");
     }

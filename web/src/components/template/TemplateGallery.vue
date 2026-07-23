@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { X, Sparkles, RotateCcw, AlertTriangle } from 'lucide-vue-next';
+import { computed, ref, watch } from 'vue';
+import { X, Sparkles, RotateCcw, AlertTriangle, ImageOff } from 'lucide-vue-next';
 import { useTemplatesStore } from '@/stores/templates';
 import { useProjectStore } from '@/stores/project';
 import { useNetworkStore } from '@/stores/network';
@@ -67,6 +67,27 @@ function isCollapsed(groupName: string | null): boolean {
 }
 
 const hasExistingContent = computed(() => (project.state?.elements?.length ?? 0) > 0);
+
+// ---------- 预览缩略图 ----------
+// 后端 GET /api/template/{id}/preview.png 返回 PNG（无预览则 404）。同源相对 URL，
+// 复用编辑器已带的 sessionId cookie / 同源上下文；缓存交给端点自己的 Cache-Control。
+
+/** 拉取失败（404 / 未渲染）的模板 id 集合 —— 命中则改渲占位符，不露破图。 */
+const failedPreviews = ref<Set<string>>(new Set());
+
+function previewUrl(id: string): string {
+    return `/api/template/${encodeURIComponent(id)}/preview.png`;
+}
+
+function markPreviewFailed(id: string) {
+    // ref(new Set) 在 Vue 3 下是响应式集合，原地 add 会触发依赖 has() 的重渲。
+    failedPreviews.value.add(id);
+}
+
+// 模板列表刷新（如重新保存模板）后清空失败缓存，让预览重新拉取。
+watch(() => templates.list, () => {
+    failedPreviews.value.clear();
+});
 
 // ---------- 画布尺寸约束 ----------
 
@@ -246,6 +267,21 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
               :class="{ 'bg-[color:var(--accent)]': templates.selectedId === tpl.id }"
               @click="pick(tpl.id)"
             >
+              <!-- 预览缩略图；宽招牌用 object-contain 居中留白，无预览时占位符不露破图 -->
+              <span class="hc-preview-box block w-full h-16 mb-1.5">
+                <img
+                  v-if="!failedPreviews.has(tpl.id)"
+                  :src="previewUrl(tpl.id)"
+                  alt=""
+                  class="block w-full h-full object-contain"
+                  loading="lazy"
+                  draggable="false"
+                  @error="markPreviewFailed(tpl.id)"
+                >
+                <span v-else class="w-full h-full flex items-center justify-center text-[color:var(--muted-foreground)]">
+                  <ImageOff class="size-4 opacity-60" aria-hidden="true" />
+                </span>
+              </span>
               <div class="flex items-center gap-1.5">
                 <div class="text-sm font-medium truncate flex-1">{{ tpl.name }}</div>
                 <AlertTriangle
@@ -283,6 +319,22 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
             {{ t.templates.pickHint }}
           </div>
           <template v-else>
+            <!-- 详情大预览：占满右栏宽度，比列表缩略图更大更宽 -->
+            <div class="px-4 pt-4 pb-1">
+              <span class="hc-preview-box block w-full h-28">
+                <img
+                  v-if="!failedPreviews.has(selected.id)"
+                  :src="previewUrl(selected.id)"
+                  alt=""
+                  class="block w-full h-full object-contain"
+                  draggable="false"
+                  @error="markPreviewFailed(selected.id)"
+                >
+                <span v-else class="w-full h-full flex items-center justify-center text-[color:var(--muted-foreground)]">
+                  <ImageOff class="size-6 opacity-60" aria-hidden="true" />
+                </span>
+              </span>
+            </div>
             <header class="px-4 py-3 border-b border-[color:var(--border)] flex items-center gap-3">
               <div class="min-w-0">
                 <div class="text-base font-medium truncate">{{ selected.name }}</div>
@@ -523,5 +575,19 @@ function fontOptions(p: TemplateParam): TemplateParamOption[] {
     padding: 0;
     cursor: pointer;
     background: transparent;
+}
+/* 模板预览框：与图层缩略图同款 8px 棋盘格，透明像素 / 招牌留白处可辨。 */
+.hc-preview-box {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background-color: var(--card);
+    background-image:
+        linear-gradient(45deg, var(--muted) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--muted) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--muted) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--muted) 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
 </style>

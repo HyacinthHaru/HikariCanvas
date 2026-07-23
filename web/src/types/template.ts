@@ -148,7 +148,9 @@ export interface TemplateSpec {
     author?: string;
     tags?: string[];
     preview?: string;
-    canvas: TemplateCanvas;
+    // .canvas pack 形态可能整体缺省 canvas / layout（size 由预览端点体现，
+    // layout 是旧 YAML 模板独有）；旧 YAML 模板仍会带上。故两者皆可选。
+    canvas?: TemplateCanvas;
     params?: Record<string, TemplateParam>;
-    layout: TemplateLayout;
+    layout?: TemplateLayout;
 }

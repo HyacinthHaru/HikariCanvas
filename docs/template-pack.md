@@ -170,8 +170,10 @@ project = 零参数 pack。二者可互转，故交叉导入**宽容处理、双
   自声明 `id` 使 registry 条目 id == DB `template_id`；`PackParamResolver.substitute` 值按 JSON 转义
   （连带硬化 P1 applyPack）。**表 schema 不动**——`yaml_path` 列改名被 forward-only 守卫（V18+）挡下，
   沿用旧列名存 `.canvas` 路径。
-- **P3 预览 + 前端**：`TemplatePreviewService` 渲 pack；`TemplateGallery` / `SaveAsTemplateModal`
-  改造 + 参数标记 UI。
+- **P3 预览 + 前端** ✅（2026-07-23，0.9.16）：`TemplatePreviewService` 渲 pack 缩略图（现解 packBytes →
+  materialize → rasterize）；`TemplateRegistry` 合成 spec 带 `fixed` 尺寸；`TemplateGallery` 显示预览
+  `<img>`（list + 详情，404 占位）+ `types/template.ts` canvas/layout 可选。`SaveAsTemplateModal` 无需改
+  （P2 已产 pack）。**全字段参数标记**（前端标记任意字段 → 客户端建 params.json / `${param}`）体量大，推迟。
 - **P4 退役 + 内置模板**：删旧 DSL 全套；作者手写内置 pack 入库；`template-spec.md` 归档。
 - **P5 收尾**：迁移说明、测试、文档同步（import-export.md kind=pack 落地、data-model 表结构）。
 

@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-07-23 · 0.9.16 模板预览 + Gallery 缩略图（P3）
+
+pack 现在能出缩略图、Gallery 显示它，pack 尺寸判定正确。「存为模板」modal（P2 已产 pack）无需改。**全字段参数标记**（design §6：前端可标记任意字段而非仅 text）体量大——推迟到后续。
+
+- **后端预览**：`TemplatePreviewService.pngFor` 按 `entry.isPack()` 分流——pack 走新 `renderPackPreview`：现解 `packBytes`（unpack → default 参数收敛 → substitute → materialize → 逐层收敛 `${var:X}` fallback）成预览 `ProjectState`，再走与 YAML 同一条 `CanvasCompositor` 栅格化。`packStateForPreview` 抽 package-private 可裸测（不依赖 compositor）。两路共用 cache + 失败 null 不缓存重试。
+- **pack 尺寸**：`TemplateRegistry.buildPackSpec` 合成 spec 的 `canvas` 从 null 改为 `fixed [wallW, wallH]`（取 manifest.wall），Gallery 的 `sizeRange`/`fitsCurrentWall` 据此显示 pack 真实尺寸 + 兼容性判定（此前无 canvas 退 [1,1]–[8,4] 误判）。
+- **前端 Gallery**：列表项 + 详情栏加预览 `<img>`（同源 `/api/template/{id}/preview.png`，object-contain + 8px 棋盘格背景）；404 / 加载失败改渲 `ImageOff` 占位（reactive Set），模板列表刷新时清空重拉。`types/template.ts` 的 `canvas`/`layout` 改可选（pack 无 layout）。
+
+**验证**：后端 `:plugin:test` **2221**（+2 packStateForPreview）仅 4 个既有 `RendererSnapshotTest` fixture 本机失败；前端 vite build 成功 + vitest 1448/1450（2 失败为既有 `scriptEdit` i18n）。
+
+关联文件：`template/preview/TemplatePreviewService`、`template/TemplateRegistry` + 2 测试；`web/{TemplateGallery.vue, types/template.ts}`。
+
+---
+
 ## 2026-07-23 · 0.9.16 存为模板产出 .canvas pack（P2）
 
 「存为模板」从产 YAML 改产 `.canvas` pack：`TemplateExporter` 把当前 `ProjectState` 反向序列化成 `project.json`（参数化 text 字段写 `${paramId}`）+ `params.json`（参数声明数组）+ `manifest`（kind=pack + 自声明 id），末尾用默认参数走一遍 applyPack 解析链自校验 roundtrip。`TemplatePublisher` 落 `<slug>.canvas` + DB 行 + registry reload，套用即走 P1 的 `applyPack`。前端 `template.save` 线不变（仍发 paramConfig，现产 pack）。

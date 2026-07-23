@@ -1,7 +1,14 @@
 package ac.haru.hikaricanvas.template.preview;
 
+import ac.haru.hikaricanvas.canvasfile.CanvasArchive;
+import ac.haru.hikaricanvas.canvasfile.CanvasImportException;
+import ac.haru.hikaricanvas.canvasfile.CanvasManifest;
+import ac.haru.hikaricanvas.canvasfile.PackParamResolver;
+import ac.haru.hikaricanvas.canvasfile.ProjectImporter;
+import ac.haru.hikaricanvas.canvasfile.ProjectMaterializer;
 import ac.haru.hikaricanvas.render.CanvasCompositor;
 import ac.haru.hikaricanvas.state.Element;
+import ac.haru.hikaricanvas.state.Layer;
 import ac.haru.hikaricanvas.state.ProjectState;
 import ac.haru.hikaricanvas.state.TextElement;
 import ac.haru.hikaricanvas.template.TemplateEntry;
@@ -14,6 +21,7 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +40,12 @@ import java.util.logging.Logger;
  *   <li>结果缓存在内存里 {@link #cache}，key = templateId；reload 时清空</li>
  *   <li>失败的模板（实例化时 INVALID_PARAM 等）→ 不缓存，下次请求重试。前端 fallback 显占位图</li>
  * </ul>
+ *
+ * <p><b>两种载体：</b> YAML 模板走 {@link #renderPreview}（{@code TemplateInstantiator} 实例化）；
+ * {@code .canvas} pack（{@link TemplateEntry#isPack()}）的合成 spec 无 layout/rawState，走
+ * {@link #renderPackPreview}——现解 {@link TemplateEntry#packBytes()} 成预览 {@link ProjectState}
+ * （default 参数收敛 + {@code ${var:X}} 收敛 fallback），再走同一条 {@link CanvasCompositor}。两条路径
+ * 共用同一 cache 与「失败 null 不缓存、下次重试」语义。</p>
  */
 public final class TemplatePreviewService {
 
@@ -66,7 +80,12 @@ public final class TemplatePreviewService {
     public byte[] pngFor(String templateId) {
         TemplateEntry entry = registry.byId(templateId);
         if (entry == null) return null;
-        return cache.computeIfAbsent(templateId, id -> renderPreview(entry.spec()));
+        // pack（.canvas）与 YAML 两条渲染路径共用同一 cache（key=templateId）+「失败 null 不缓存、
+        // 下次重试」语义（computeIfAbsent 对 null 返回值不写表）。pack 的合成 spec 无 layout/rawState，
+        // 走 renderPreview 必失败——必须分流到 renderPackPreview 现解 packBytes。
+        return entry.isPack()
+                ? cache.computeIfAbsent(templateId, id -> renderPackPreview(entry))
+                : cache.computeIfAbsent(templateId, id -> renderPreview(entry.spec()));
     }
 
     private byte[] renderPreview(TemplateSpec spec) {
@@ -97,6 +116,95 @@ public final class TemplatePreviewService {
             log.log(Level.WARNING, "[preview] render failed for " + spec.id(), e);
             return null;
         }
+    }
+
+    // ================= .canvas pack 预览 =================
+
+    /**
+     * pack 解包上限。服主 / 玩家已落盘的本地文件（非公网上传），给宽松上限——仅防病态 zip 炸弹在预览
+     * 渲染期 OOM。与 {@link TemplateRegistry} 注册期的 {@code PACK_LOAD_MAX_*} 同值、各自独立。
+     */
+    private static final long PACK_PREVIEW_MAX_ZIP_BYTES = 64L * 1024 * 1024;    // 64 MB
+    private static final long PACK_PREVIEW_MAX_ENTRY_BYTES = 64L * 1024 * 1024;  // 64 MB
+    private static final long PACK_PREVIEW_MAX_TOTAL_BYTES = 256L * 1024 * 1024; // 256 MB
+
+    /**
+     * pack 缩略图：现解 {@link TemplateEntry#packBytes()} 成预览 {@link ProjectState}，再走与 YAML 路径
+     * 同一条 {@link CanvasCompositor} 栅格化 + PNG 编码。解包 / 物化失败（{@link CanvasImportException}）
+     * 或编码失败 → 记 warn + 返 {@code null}（不缓存、下次重试），与 {@link #renderPreview} 容错纪律一致。
+     */
+    private byte[] renderPackPreview(TemplateEntry entry) {
+        try {
+            ProjectState state = packStateForPreview(entry);
+            BufferedImage rgba = compositor.rasterize(state);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream(4096);
+            ImageIO.write(rgba, "PNG", baos);
+            log.fine("[preview] rendered pack " + entry.spec().id() + " "
+                    + rgba.getWidth() + "x" + rgba.getHeight() + " → " + baos.size() + " B");
+            return baos.toByteArray();
+        } catch (CanvasImportException e) {
+            log.warning("[preview] pack decode failed for " + entry.spec().id()
+                    + ": " + e.code() + " — " + e.getMessage());
+            return null;
+        } catch (IOException e) {
+            log.log(Level.WARNING, "[preview] PNG encode failed for pack " + entry.spec().id(), e);
+            return null;
+        } catch (Exception e) {
+            log.log(Level.WARNING, "[preview] pack render failed for " + entry.spec().id(), e);
+            return null;
+        }
+    }
+
+    /**
+     * 把 pack 字节现解成一份预览用 {@link ProjectState}（不含渲染，故不依赖 {@code compositor} / registry，
+     * 可裸测）。步骤与 {@code ProjectImporter.applyPack} 的 build 前段对齐：
+     * <ol>
+     *   <li>{@link CanvasArchive#unpack} 安全解包（宽松上限，仅防 zip 炸弹）；</li>
+     *   <li>{@link CanvasManifest#parse} 取墙尺寸；</li>
+     *   <li>有 {@code params.json} → {@link PackParamResolver#resolve} 用 default 收敛（预览无用户填值），
+     *       无则空 map；</li>
+     *   <li>{@link PackParamResolver#substitute} 在 {@code project.json} 文本层替换 {@code ${param}}；</li>
+     *   <li>{@link ProjectMaterializer#materialize} 物化 + 元素校验（喂 manifest 墙尺寸当会话尺寸，
+     *       pack 自洽必过尺寸匹配）；</li>
+     *   <li>{@link #convergePreviewVars} 逐层把 {@code ${var:X|fallback=Y}} 收敛成 Y（缩略图不接变量数据源）。</li>
+     * </ol>
+     */
+    // package-private for test
+    ProjectState packStateForPreview(TemplateEntry entry) throws CanvasImportException {
+        CanvasArchive.Limits limits = new CanvasArchive.Limits(
+                PACK_PREVIEW_MAX_ZIP_BYTES, PACK_PREVIEW_MAX_ENTRY_BYTES, PACK_PREVIEW_MAX_TOTAL_BYTES);
+        Map<String, byte[]> zipEntries = CanvasArchive.unpack(entry.packBytes(), limits);
+        CanvasManifest manifest = CanvasManifest.parse(
+                zipEntries.get("manifest.json"), ProjectImporter.CANVAS_SPEC_MAX);
+        byte[] paramsJson = zipEntries.get("params.json");
+        // 预览无用户填值：有 params.json 就用声明的 default 收敛，无则空 map（substitute 对无占位符文本 no-op）。
+        Map<String, Object> values = paramsJson != null
+                ? PackParamResolver.resolve(PackParamResolver.parse(paramsJson), Map.of())
+                : Map.of();
+        String projectJson = new String(zipEntries.get("project.json"), StandardCharsets.UTF_8);
+        String substituted = PackParamResolver.substitute(projectJson, values);
+        ProjectState state = ProjectMaterializer.materialize(
+                substituted.getBytes(StandardCharsets.UTF_8),
+                manifest.wallWidth(), manifest.wallHeight());
+        return convergePreviewVars(state);
+    }
+
+    /**
+     * 逐层把每个 {@link TextElement} 的 {@code ${var:X|fallback=Y}} 收敛成预览态（复用 YAML 路径的
+     * {@link #resolvePlaceholdersForPreview}），再重建 {@link ProjectState} 仅替换 layers。重建照
+     * {@code ProjectImporter.stripOrphanTracksAndCollect} 的 9 参构造，保留 version / canvas /
+     * activeLayerId / timelines / activeTimelineId / tweenFps（history 预览不带、传 null）。
+     */
+    private static ProjectState convergePreviewVars(ProjectState state) {
+        List<Layer> converged = new java.util.ArrayList<>(state.layers().size());
+        for (Layer l : state.layers()) {
+            converged.add(new Layer(l.id(), l.name(), l.visible(), l.locked(),
+                    l.opacity(), l.blendMode(), l.colorTag(),
+                    resolvePlaceholdersForPreview(l.elements())));
+        }
+        return new ProjectState(state.version(), state.canvas(), /*v1Elements*/ null, converged,
+                state.activeLayerId(), /*history*/ null,
+                state.timelines(), state.activeTimelineId(), state.tweenFps());
     }
 
     /** {@code ${var:NAME|fallback=VALUE}}（含冒号，与模板参数 {@code ${param}} 不同源）。 */

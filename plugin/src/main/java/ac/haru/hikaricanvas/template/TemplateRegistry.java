@@ -559,9 +559,10 @@ public final class TemplateRegistry {
 
     /**
      * 用 manifest + {@code params.json} 合成 pack 的 {@link TemplateSpec}——仅供 Gallery / list / preview
-     * 统一按 {@code spec()} 读。只填 {@code spec / id / name / params}；
-     * {@code description / version / author / tags / preview / canvas / layout / rawState} 均为 null
-     * （pack 的画布内容在 {@code project.json}，apply 时由 {@code ProjectImporter.applyPack} 现解，不进 spec）。
+     * 统一按 {@code spec()} 读。填 {@code spec / id / name / params}，外加从 manifest wall 尺寸合成的
+     * fixed-size {@code canvas}（让 Gallery 卡片显示 pack 真实尺寸 + 与目标墙做尺寸兼容判定）；
+     * {@code description / version / author / tags / preview / layout / rawState} 均为 null
+     * （pack 的画布<b>内容</b>在 {@code project.json}，apply 时由 {@code ProjectImporter.applyPack} 现解，不进 spec）。
      *
      * @param idStem     文件名去 {@code .canvas} 后缀；仅当 manifest 未自声明 {@code id} 时退回用它
      * @param paramsJson pack 内 {@code params.json} 字节；可空（无参数 pack）
@@ -578,9 +579,13 @@ public final class TemplateRegistry {
         // 缺省退回文件名 stem（作者手写内置 pack 可只靠文件名）。
         String id = (manifest.id() != null && !manifest.id().isBlank()) ? manifest.id() : idStem;
         String name = manifest.name() != null ? manifest.name() : id;
+        // canvas = manifest wall 尺寸合成的 fixed-size；Gallery 据此显示 pack 尺寸并判是否适配当前墙。
+        // 画布内容不在 spec（留 project.json，apply 时现解），故其余展示性字段仍为 null。
+        TemplateCanvas canvas = new TemplateCanvas("fixed",
+                List.of(manifest.wallWidth(), manifest.wallHeight()), null, null, null, null);
         return new TemplateSpec(manifest.spec(), id, name, /*description*/ null,
                 /*version*/ null, /*author*/ null, /*tags*/ null, /*preview*/ null,
-                /*canvas*/ null, params, /*layout*/ null, /*rawState*/ null);
+                canvas, params, /*layout*/ null, /*rawState*/ null);
     }
 
     /** pack 的 id = 文件名去最后一个扩展名（{@code subway.canvas → subway}）。 */
