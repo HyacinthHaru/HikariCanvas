@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-07-23 · build: 马善政字体 SHA-256 pin 跟随 google/fonts 上游
+
+发 `v0.9.16-rc.2` 时 CI `downloadFonts` 失败:`ma_shan_zheng` 的 URL 指向 `google/fonts` 的 `main` 分支(可变),上游重发了字体二进制,pin `b844c59b…` 对不上(rc.1 时缓存/CDN 还是旧版,rc.2 全新 runner 拿到新版)。核实当前上游文件合法(魔数 `00 01 00 00` / 5.6 MB / SHA-256 与 CI「实得」一致),更新 pin → `6d2546bb…`;本地删缓存重跑 `downloadFonts` + `shadowJar` 复验通过。
+
+**隐患留档**:13 个 google/fonts 字体 URL 都用 `raw/main/`,迟早再漂;根治是把 URL 固定到 commit SHA(后续加固,不阻塞本次 rc)。
+
+关联文件:`plugin/build.gradle.kts`。
+
+---
+
 ## 2026-07-23 · 0.9.16-rc.2 存/删模板后 gallery 即时刷新（方案 A）
 
 用户实测:存为模板成功(文件 + preview + DB + `registry.reload` 都对),但**已打开的编辑器 gallery 不显示新模板**,要重开 editor link(新 `ready` 帧)才见。根因:前端模板列表**只在 `ready` 帧(连接时)拉一次**,存/删后后端没把更新推给已连 session;`registry.reload()` 只更新服务端。属老问题(`SaveAsTemplateModal` 一直是存后即关不刷新),P4 清空内置模板后被放大暴露。

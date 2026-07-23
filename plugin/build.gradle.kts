@@ -221,7 +221,7 @@ val bundledFonts = listOf(
         displayId = "ma_shan_zheng",
         url = "https://github.com/google/fonts/raw/main/ofl/mashanzheng/MaShanZheng-Regular.ttf",
         destFileName = "MaShanZheng-Regular.ttf",
-        expectedSha256 = "b844c59bf20bf530e41c20d6ff12b383b23a2e553b9b68cc89f070869213155d"
+        expectedSha256 = "6d2546bb189c732a8ca29af9e22457b152387d158aa459e4ac2ce1e51788b7fb"
     ),
     FontSpec(
         displayId = "zcool_xiaowei",
