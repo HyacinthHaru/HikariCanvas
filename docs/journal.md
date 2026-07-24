@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-07-24 · rc3-A：合并 dependabot 批（含 Javalin 解锁 7.2.2）
+
+rc3 三项（dependabot / 字体 URL 加固 / 参数标记 MVP-1）的第一项。照 2026-07-21 范式直接在 main 手改版本 + 验证（不逐个 merge PR，避免 rebase 冲突）。
+
+- **直接合 6**：sqlite-jdbc 3.53.0.0→3.53.2.1 / tailwind-merge 3.5.0→3.6.0 / vitest + @vitest/ui 4.1.6→4.1.10（成对，`@vitest/ui` peer 锁定 vitest 同版本）/ actions/setup-java v4→v5 / actions/setup-node v6→v7。
+- **Javalin 解锁 7.1.0→7.2.2**（本体 + javalin-testtools 同步）：7.2 是 minor（内部性能优化 + Jetty 12.1.7→12.1.8 bugfix，无常规用法 API 移除）；7.2.0 changelog 的「Remove JavalinTest.class」只删仓库根一个误提交的编译产物、**不动** `io.javalin.testtools.JavalinTest` API，本项目 4 个 JavalinTest handler 测试无恙。CLAUDE.md 锁定表 7.1.0→7.2.2。
+- **留下不合**：junit-jupiter 5→6（major、无功能收益 + 2200 测试 + `junit-platform-launcher` 版本对齐坑，1.0 后再评估）/ MockBukkit 3.123→3.133（**死依赖**——全仓 17 处引用皆注释、零 import，升无意义）/ @lexical/history+utils 0.44→0.48（整族不齐会装嵌套第二份 lexical 核心、坏 chip 撤销，须整族一起升 + 人工验证 chip 编辑器）。
+
+**验证**：后端 `:plugin:test` **BUILD SUCCESSFUL**（JavalinTest 系列无失败）+ shadowJar 152 MB；前端 `npm install` 重生 lock + vitest **1450** + vite build 全绿。
+
+关联文件：`plugin/build.gradle.kts`、`web/{package.json,package-lock.json}`、`.github/workflows/{ci,release}.yml`、CLAUDE.md。
+
+---
+
 ## 2026-07-23 · build: 马善政字体 SHA-256 pin 跟随 google/fonts 上游
 
 发 `v0.9.16-rc.2` 时 CI `downloadFonts` 失败:`ma_shan_zheng` 的 URL 指向 `google/fonts` 的 `main` 分支(可变),上游重发了字体二进制,pin `b844c59b…` 对不上(rc.1 时缓存/CDN 还是旧版,rc.2 全新 runner 拿到新版)。核实当前上游文件合法(魔数 `00 01 00 00` / 5.6 MB / SHA-256 与 CI「实得」一致),更新 pin → `6d2546bb…`;本地删缓存重跑 `downloadFonts` + `shadowJar` 复验通过。

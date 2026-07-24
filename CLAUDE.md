@@ -24,7 +24,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 | Gradle | **9.4.1** |
 | `paperweight-userdev` | **2.0.0-beta.21**（同一版本即支持 1.21.x 与 26.x dev bundle） |
 | PacketEvents | **2.13.0**（多版本：同时支持 1.21.x + 26.1 + 26.2；0.9.5 从 2.11.2→2.12.2 支持 26.1，0.9.10 升 2.13.0 支持 26.2）。**0.9.11 起 `compileOnly` 不打包**——PacketEvents 是 GPL-3.0，打包会污染本项目 MIT；服主单独装 PacketEvents 插件（`paper-plugin.yml` 声明为必装 `required` 依赖，PE 插件自负 init/terminate） |
-| Javalin | **7.1.0**（6 已过时，不用） |
+| Javalin | **7.2.2**（6 已过时，不用；0.9.16 rc3 从 7.1.0 升 7.2.2，含 Jetty bugfix，本体 + testtools 同步） |
 | 插件描述文件 | **`paper-plugin.yml`**（不用 `plugin.yml` 旧格式） |
 | 本地测试服 | `./gradlew runServer`（paperweight-userdev 提供） |
 
