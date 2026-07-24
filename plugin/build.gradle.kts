@@ -162,7 +162,7 @@ data class FontSpec(
 val bundledFonts = listOf(
     FontSpec(
         displayId = "source_han_sans",
-        url = "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf",
+        url = "https://github.com/adobe-fonts/source-han-sans/raw/a4f7cf94edfb9d7ffbdfc4841de276358bd7e0f2/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf",
         destFileName = "SourceHanSansSC-Regular.otf",
         expectedSha256 = "f1d8611151880c6c336aabeac4640ef434fa13cbfbf1ffe82d0a71b2a5637256"
     ),
@@ -176,13 +176,13 @@ val bundledFonts = listOf(
     // 6 个新内置字体（全 SIL OFL 1.1）
     FontSpec(
         displayId = "source_han_serif",
-        url = "https://github.com/adobe-fonts/source-han-serif/raw/release/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf",
+        url = "https://github.com/adobe-fonts/source-han-serif/raw/7889f11bf31170b5d092a083b357c8c8130f89e0/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf",
         destFileName = "SourceHanSerifSC-Regular.otf",
         expectedSha256 = "78aa7a328fd974df2d688c8a9fd74a33d8334dfa84ab24d9d11efb2ffc464117"
     ),
     FontSpec(
         displayId = "jetbrains_mono",
-        url = "https://github.com/JetBrains/JetBrainsMono/raw/master/fonts/ttf/JetBrainsMono-Regular.ttf",
+        url = "https://github.com/JetBrains/JetBrainsMono/raw/19371302b95d218af43299bce79ddbddd0bc364d/fonts/ttf/JetBrainsMono-Regular.ttf",
         destFileName = "JetBrainsMono-Regular.ttf",
         expectedSha256 = "e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1"
     ),
@@ -202,7 +202,7 @@ val bundledFonts = listOf(
     ),
     FontSpec(
         displayId = "noto_serif",
-        url = "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSerif/hinted/ttf/NotoSerif-Regular.ttf",
+        url = "https://github.com/notofonts/notofonts.github.io/raw/9a5c9009968083bd4212d4bdbe87f5d8af08c26f/fonts/NotoSerif/hinted/ttf/NotoSerif-Regular.ttf",
         destFileName = "NotoSerif-Regular.ttf",
         expectedSha256 = "19e72cd8d595fae5bd74a5206f5d938512e1183d4fed7abb1ec1be1d7efa5f88"
     ),
@@ -219,25 +219,25 @@ val bundledFonts = listOf(
     ),
     FontSpec(
         displayId = "ma_shan_zheng",
-        url = "https://github.com/google/fonts/raw/main/ofl/mashanzheng/MaShanZheng-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/mashanzheng/MaShanZheng-Regular.ttf",
         destFileName = "MaShanZheng-Regular.ttf",
         expectedSha256 = "6d2546bb189c732a8ca29af9e22457b152387d158aa459e4ac2ce1e51788b7fb"
     ),
     FontSpec(
         displayId = "zcool_xiaowei",
-        url = "https://github.com/google/fonts/raw/main/ofl/zcoolxiaowei/ZCOOLXiaoWei-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/zcoolxiaowei/ZCOOLXiaoWei-Regular.ttf",
         destFileName = "ZCOOLXiaoWei-Regular.ttf",
         expectedSha256 = "a42b620140f493db42f741351dfbf343c0936d58588ee8004b8b2a218d997ff1"
     ),
     FontSpec(
         displayId = "zcool_kuaile",
-        url = "https://github.com/google/fonts/raw/main/ofl/zcoolkuaile/ZCOOLKuaiLe-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/zcoolkuaile/ZCOOLKuaiLe-Regular.ttf",
         destFileName = "ZCOOLKuaiLe-Regular.ttf",
         expectedSha256 = "812a6fc1fe54b6d73a419245c32dfeba8aa33104d5be90d1cf6af082007cb71d"
     ),
     FontSpec(
         displayId = "zcool_qingkehuangyou",
-        url = "https://github.com/google/fonts/raw/main/ofl/zcoolqingkehuangyou/ZCOOLQingKeHuangYou-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/zcoolqingkehuangyou/ZCOOLQingKeHuangYou-Regular.ttf",
         destFileName = "ZCOOLQingKeHuangYou-Regular.ttf",
         expectedSha256 = "54f0c0df4308cd74cd0f2fd3494ae054dbc4a1fd6fa7d71f4807eb4cdd8b4136"
     ),
@@ -250,31 +250,31 @@ val bundledFonts = listOf(
     // 西文装饰 7（permanent_marker 因 Apache License 跳过，用 OFL shadows_into_light 替代马克笔位）
     FontSpec(
         displayId = "comic_neue",
-        url = "https://github.com/google/fonts/raw/main/ofl/comicneue/ComicNeue-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/comicneue/ComicNeue-Regular.ttf",
         destFileName = "ComicNeue-Regular.ttf",
         expectedSha256 = "a0ee5a37c8b27c4db0700137d928598b1e23b0089e1546a8961909176b779360"
     ),
     FontSpec(
         displayId = "pacifico",
-        url = "https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/pacifico/Pacifico-Regular.ttf",
         destFileName = "Pacifico-Regular.ttf",
         expectedSha256 = "5b6c0d5334a7bf77dea52b975c5a0c408878c0f7115ed5b6fb151f634b7bf701"
     ),
     FontSpec(
         displayId = "lobster",
-        url = "https://github.com/google/fonts/raw/main/ofl/lobster/Lobster-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/lobster/Lobster-Regular.ttf",
         destFileName = "Lobster-Regular.ttf",
         expectedSha256 = "d6568e697fd50cedc0be04d8aae4127fe95add607e7bff954ca88604be80c205"
     ),
     FontSpec(
         displayId = "bangers",
-        url = "https://github.com/google/fonts/raw/main/ofl/bangers/Bangers-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/bangers/Bangers-Regular.ttf",
         destFileName = "Bangers-Regular.ttf",
         expectedSha256 = "4160a7311de9342674cce9160cde9fcbb30f48190397d86ff1b70b455af65824"
     ),
     FontSpec(
         displayId = "shadows_into_light",
-        url = "https://github.com/google/fonts/raw/main/ofl/shadowsintolight/ShadowsIntoLight.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/shadowsintolight/ShadowsIntoLight.ttf",
         destFileName = "ShadowsIntoLight.ttf",
         expectedSha256 = "1347863151acdc00fa281daaba1a3543dbce5870b55f9cf7479a15bb84007681"
     ),
@@ -282,13 +282,13 @@ val bundledFonts = listOf(
     // 取 default instance（wght=400）双端一致，可直接用。文件名带 [wght] 方括号，URL 编码为 %5Bwght%5D。
     FontSpec(
         displayId = "caveat",
-        url = "https://github.com/google/fonts/raw/main/ofl/caveat/Caveat%5Bwght%5D.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/caveat/Caveat%5Bwght%5D.ttf",
         destFileName = "Caveat-Variable.ttf",
         expectedSha256 = "0bdb6b660482d31531b3945849fba5916b3ef8695da7024a9e6b9ee3c4157988"
     ),
     FontSpec(
         displayId = "dancing_script",
-        url = "https://github.com/google/fonts/raw/main/ofl/dancingscript/DancingScript%5Bwght%5D.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/dancingscript/DancingScript%5Bwght%5D.ttf",
         destFileName = "DancingScript-Variable.ttf",
         expectedSha256 = "21808625578fe8d8cd10cb684be546dca077b27cd03a53a2f1ec11dc743c924c"
     ),
@@ -298,13 +298,13 @@ val bundledFonts = listOf(
     // 都来自 google/fonts，全 SIL OFL 1.1。
     FontSpec(
         displayId = "overpass",
-        url = "https://github.com/google/fonts/raw/main/ofl/overpass/Overpass%5Bwght%5D.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/overpass/Overpass%5Bwght%5D.ttf",
         destFileName = "Overpass-Variable.ttf",
         expectedSha256 = "970717df17a7f9911dee45f60695d05bfa9d745fa0a11fc5c348371fa21f0073"
     ),
     FontSpec(
         displayId = "bebas_neue",
-        url = "https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf",
+        url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/bebasneue/BebasNeue-Regular.ttf",
         destFileName = "BebasNeue-Regular.ttf",
         expectedSha256 = "08e4623805102d819f58601e46e345648846075e363b2ceb23313c2d1c83ec73"
     )
@@ -323,34 +323,34 @@ data class LicenseSpec(
 )
 
 val fontLicenses = listOf(
-    LicenseSpec("source_han_sans", "https://github.com/adobe-fonts/source-han-sans/raw/release/LICENSE.txt", "source_han_sans.OFL.txt", "fcac737e761ec63dbfbdce11030a1780161920d80315edba9c8beff1c2bac5a2"),
-    LicenseSpec("source_han_serif", "https://github.com/adobe-fonts/source-han-serif/raw/release/LICENSE.txt", "source_han_serif.OFL.txt", "9ff5bb567e1b92c801fc1069e5fbf992ff8efccacb9db94e5959a5b3ba9bb903"),
-    LicenseSpec("ark_pixel", "https://github.com/TakWolf/ark-pixel-font/raw/master/LICENSE-OFL", "ark_pixel.OFL.txt", "3ab41567e68e3988ba1ef16dd2644eca95ca5648ea12e7d46e6287fc0bbe5aee"),
-    LicenseSpec("jetbrains_mono", "https://github.com/JetBrains/JetBrainsMono/raw/master/OFL.txt", "jetbrains_mono.OFL.txt", "a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697"),
-    LicenseSpec("fira_code", "https://github.com/tonsky/FiraCode/raw/master/LICENSE", "fira_code.OFL.txt", "1d41e10031ab125302780a05ec4c91d218e47db0c7e37cf315cce5e608cdc25c"),
-    LicenseSpec("inter", "https://github.com/rsms/inter/raw/master/LICENSE.txt", "inter.OFL.txt", "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"),
-    LicenseSpec("noto_serif", "https://github.com/notofonts/latin-greek-cyrillic/raw/main/OFL.txt", "noto_serif.OFL.txt", "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a"),
-    LicenseSpec("smiley_sans", "https://github.com/atelier-anchor/smiley-sans/raw/main/LICENSE", "smiley_sans.OFL.txt", "9401f4050f1b66c26b6ccdc8b0e14a3c1cc37aac122eda84386f25854a9bec72"),
-    LicenseSpec("lxgw_wenkai", "https://github.com/lxgw/LxgwWenKai/raw/main/OFL.txt", "lxgw_wenkai.OFL.txt", "1a25e35da1031c6c3436fde545bb9cb5aca954e9873afe510c834b8b79bd21a0"),
-    LicenseSpec("ma_shan_zheng", "https://github.com/google/fonts/raw/main/ofl/mashanzheng/OFL.txt", "ma_shan_zheng.OFL.txt", "d7bdb1cee215b689e23c2f95672a6084c790542170648267a55114103d756a08"),
-    LicenseSpec("zcool_xiaowei", "https://github.com/google/fonts/raw/main/ofl/zcoolxiaowei/OFL.txt", "zcool_xiaowei.OFL.txt", "a094514ca57cf8f9c5e8d8d1adab5d8cd3a377297ff016f9df2c05b3ecd77f0a"),
-    LicenseSpec("zcool_kuaile", "https://github.com/google/fonts/raw/main/ofl/zcoolkuaile/OFL.txt", "zcool_kuaile.OFL.txt", "538078469839b4a2e7ad22bef4ebe41681a4e53749bb2a072144024f1d6d703d"),
-    LicenseSpec("zcool_qingkehuangyou", "https://github.com/google/fonts/raw/main/ofl/zcoolqingkehuangyou/OFL.txt", "zcool_qingkehuangyou.OFL.txt", "f1bce31b817dee01c1e4ef8bc45d8ecb95f01f4abbf0a985007cb3cd0fd8123d"),
-    LicenseSpec("comic_neue", "https://github.com/google/fonts/raw/main/ofl/comicneue/OFL.txt", "comic_neue.OFL.txt", "7c38a22e5878e60fe423360553e63dd7be23d29f1f60336034935dbfc96e8320"),
-    LicenseSpec("pacifico", "https://github.com/google/fonts/raw/main/ofl/pacifico/OFL.txt", "pacifico.OFL.txt", "a47e5daeda73568969395c656823102678f2eefb0d7d7ecb47aac4cc17e42204"),
-    LicenseSpec("lobster", "https://github.com/google/fonts/raw/main/ofl/lobster/OFL.txt", "lobster.OFL.txt", "88aece7d90f2bb7049719f11619a560af22af3451af141f12aa4f46bb157a99b"),
-    LicenseSpec("bangers", "https://github.com/google/fonts/raw/main/ofl/bangers/OFL.txt", "bangers.OFL.txt", "630dd5a307c0657b094d324e069b390edf90182fe5003639e06c02a0e5769af7"),
-    LicenseSpec("shadows_into_light", "https://github.com/google/fonts/raw/main/ofl/shadowsintolight/OFL.txt", "shadows_into_light.OFL.txt", "0e441ae9f18ad0c294cc5b6ae3974c2db1614cab220598578b1b58c4cc334485"),
-    LicenseSpec("caveat", "https://github.com/google/fonts/raw/main/ofl/caveat/OFL.txt", "caveat.OFL.txt", "1f9d81d094273d82f3898a1ee8b598a717d050ecbf5ff7bede105b704880157b"),
-    LicenseSpec("dancing_script", "https://github.com/google/fonts/raw/main/ofl/dancingscript/OFL.txt", "dancing_script.OFL.txt", "6f090277c00af96651ce6dbcc38ff1591047a3bffef486e80b6a32e8276a8201"),
-    LicenseSpec("overpass", "https://github.com/google/fonts/raw/main/ofl/overpass/OFL.txt", "overpass.OFL.txt", "86e5ff25c701ec446d20b1a85b02ee6d36de8503a7288a4c948f5459809af1f0"),
-    LicenseSpec("bebas_neue", "https://github.com/google/fonts/raw/main/ofl/bebasneue/OFL.txt", "bebas_neue.OFL.txt", "72082f6cb4d04be2ecf7cc7d9e1e7d73787f0af8a5a278a47cade70c16b78341")
+    LicenseSpec("source_han_sans", "https://github.com/adobe-fonts/source-han-sans/raw/a4f7cf94edfb9d7ffbdfc4841de276358bd7e0f2/LICENSE.txt", "source_han_sans.OFL.txt", "fcac737e761ec63dbfbdce11030a1780161920d80315edba9c8beff1c2bac5a2"),
+    LicenseSpec("source_han_serif", "https://github.com/adobe-fonts/source-han-serif/raw/7889f11bf31170b5d092a083b357c8c8130f89e0/LICENSE.txt", "source_han_serif.OFL.txt", "9ff5bb567e1b92c801fc1069e5fbf992ff8efccacb9db94e5959a5b3ba9bb903"),
+    LicenseSpec("ark_pixel", "https://github.com/TakWolf/ark-pixel-font/raw/417febb32c2d84d326e8f9f8f289da2122461a00/LICENSE-OFL", "ark_pixel.OFL.txt", "3ab41567e68e3988ba1ef16dd2644eca95ca5648ea12e7d46e6287fc0bbe5aee"),
+    LicenseSpec("jetbrains_mono", "https://github.com/JetBrains/JetBrainsMono/raw/19371302b95d218af43299bce79ddbddd0bc364d/OFL.txt", "jetbrains_mono.OFL.txt", "a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697"),
+    LicenseSpec("fira_code", "https://github.com/tonsky/FiraCode/raw/727682c24c33fb0bbc7ab0ed9b7a8d0d9745a198/LICENSE", "fira_code.OFL.txt", "1d41e10031ab125302780a05ec4c91d218e47db0c7e37cf315cce5e608cdc25c"),
+    LicenseSpec("inter", "https://github.com/rsms/inter/raw/353b61b9f4430d5f420d56605a6e7993e0941470/LICENSE.txt", "inter.OFL.txt", "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"),
+    LicenseSpec("noto_serif", "https://github.com/notofonts/latin-greek-cyrillic/raw/cb097900c74b26e6dcab899b4f07b2bc79dd80c4/OFL.txt", "noto_serif.OFL.txt", "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a"),
+    LicenseSpec("smiley_sans", "https://github.com/atelier-anchor/smiley-sans/raw/cbf2ce4a27933855e400f693265ef890fb60f21d/LICENSE", "smiley_sans.OFL.txt", "9401f4050f1b66c26b6ccdc8b0e14a3c1cc37aac122eda84386f25854a9bec72"),
+    LicenseSpec("lxgw_wenkai", "https://github.com/lxgw/LxgwWenKai/raw/ce97ea8371eb6557f881d6dddd94ae7ccdc33d7e/OFL.txt", "lxgw_wenkai.OFL.txt", "1a25e35da1031c6c3436fde545bb9cb5aca954e9873afe510c834b8b79bd21a0"),
+    LicenseSpec("ma_shan_zheng", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/mashanzheng/OFL.txt", "ma_shan_zheng.OFL.txt", "d7bdb1cee215b689e23c2f95672a6084c790542170648267a55114103d756a08"),
+    LicenseSpec("zcool_xiaowei", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/zcoolxiaowei/OFL.txt", "zcool_xiaowei.OFL.txt", "a094514ca57cf8f9c5e8d8d1adab5d8cd3a377297ff016f9df2c05b3ecd77f0a"),
+    LicenseSpec("zcool_kuaile", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/zcoolkuaile/OFL.txt", "zcool_kuaile.OFL.txt", "538078469839b4a2e7ad22bef4ebe41681a4e53749bb2a072144024f1d6d703d"),
+    LicenseSpec("zcool_qingkehuangyou", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/zcoolqingkehuangyou/OFL.txt", "zcool_qingkehuangyou.OFL.txt", "f1bce31b817dee01c1e4ef8bc45d8ecb95f01f4abbf0a985007cb3cd0fd8123d"),
+    LicenseSpec("comic_neue", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/comicneue/OFL.txt", "comic_neue.OFL.txt", "7c38a22e5878e60fe423360553e63dd7be23d29f1f60336034935dbfc96e8320"),
+    LicenseSpec("pacifico", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/pacifico/OFL.txt", "pacifico.OFL.txt", "a47e5daeda73568969395c656823102678f2eefb0d7d7ecb47aac4cc17e42204"),
+    LicenseSpec("lobster", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/lobster/OFL.txt", "lobster.OFL.txt", "88aece7d90f2bb7049719f11619a560af22af3451af141f12aa4f46bb157a99b"),
+    LicenseSpec("bangers", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/bangers/OFL.txt", "bangers.OFL.txt", "630dd5a307c0657b094d324e069b390edf90182fe5003639e06c02a0e5769af7"),
+    LicenseSpec("shadows_into_light", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/shadowsintolight/OFL.txt", "shadows_into_light.OFL.txt", "0e441ae9f18ad0c294cc5b6ae3974c2db1614cab220598578b1b58c4cc334485"),
+    LicenseSpec("caveat", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/caveat/OFL.txt", "caveat.OFL.txt", "1f9d81d094273d82f3898a1ee8b598a717d050ecbf5ff7bede105b704880157b"),
+    LicenseSpec("dancing_script", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/dancingscript/OFL.txt", "dancing_script.OFL.txt", "6f090277c00af96651ce6dbcc38ff1591047a3bffef486e80b6a32e8276a8201"),
+    LicenseSpec("overpass", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/overpass/OFL.txt", "overpass.OFL.txt", "86e5ff25c701ec446d20b1a85b02ee6d36de8503a7288a4c948f5459809af1f0"),
+    LicenseSpec("bebas_neue", "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/bebasneue/OFL.txt", "bebas_neue.OFL.txt", "72082f6cb4d04be2ecf7cc7d9e1e7d73787f0af8a5a278a47cade70c16b78341")
 )
 
 // Font Awesome Free 一份 LICENSE.txt 覆盖三种授权（图标 CC BY 4.0 / 字体 OFL / 代码 MIT）
 val iconLicense = LicenseSpec(
     "fontawesome",
-    "https://github.com/FortAwesome/Font-Awesome/raw/6.x/LICENSE.txt",
+    "https://github.com/FortAwesome/Font-Awesome/raw/840c215f894f429b26b8c1402a65da835dc5a450/LICENSE.txt",
     "LICENSE-fontawesome.txt",
     "9b914eae88817d63b576eab5aafde7068c7a1abae125d7cdfb034f1da43a9afc"
 )

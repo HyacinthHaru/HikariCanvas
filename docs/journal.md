@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-07-24 · rc3-B：字体/许可证下载 URL 固定到 commit SHA（防上游漂移）
+
+rc3 三项之二。根治 2026-07-23 留档的隐患（google/fonts `raw/main` 漂移曾搞崩 rc.2 的 `downloadFonts`）。评估发现会漂的不止 13 个 google 字体：**17 个字体二进制 + 23 条许可证 URL** 用可变分支引用（`main`/`master`/`release`/`6.x`），上游一动 pin 就对不上、CI 挂（许可证下载任务同病，之前留档漏了）。
+
+**做法**：把每条 URL 的分支段固定到具体 commit SHA（GitHub raw 支持 commit SHA）。固定到「当前内容对应的 commit」后二进制不变，**SHA-256 pin 一字不改**。
+- google/fonts 13 字体 + 13 许可证用一个 HEAD SHA `9fab8b6…` 覆盖；adobe sans/serif（`release` 分支）/ jetbrains（`master`）/ noto 字体（notofonts.github.io `main`）/ noto 许可证（latin-greek-cyrillic `main`，与字体不同仓）/ ark·fira·inter·smiley·lxgw 许可证（各自 `master`/`main`）/ FA license（`6.x` 分支）各用自己 HEAD SHA。
+- **不动**：5 个已用 release tag 的字体二进制（ark_pixel / fira_code / inter / smiley_sans / lxgw_wenkai）+ FA 图标 zip（`6.7.2` tag）。
+- 40 处 URL 替换（17 字体 + 22 许可证 + 1 FA），`build.gradle.kts` **40 insert / 40 delete 对称**（pin 值 / spec 结构一字未动）。
+
+**验证**：`rm -rf build/downloaded-{fonts,licenses} && ./gradlew :plugin:downloadFonts :plugin:downloadLicenses` **BUILD SUCCESSFUL**（22 字体 + 23 许可证全部从 SHA URL 下载 + 全 pin 通过 = 内容逐字节不变、无 pin 需更新）。以后上游重发字体不再影响本项目构建。
+
+关联文件：`plugin/build.gradle.kts`。
+
+---
+
 ## 2026-07-24 · rc3-A：合并 dependabot 批（含 Javalin 解锁 7.2.2）
 
 rc3 三项（dependabot / 字体 URL 加固 / 参数标记 MVP-1）的第一项。照 2026-07-21 范式直接在 main 手改版本 + 验证（不逐个 merge PR，避免 rebase 冲突）。
