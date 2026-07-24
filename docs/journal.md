@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-07-24 · rc3-C：参数标记 MVP-1（text 字色/字号/字体可参数化）
+
+rc3 三项之三。0.9.16 P3 推迟的「全字段参数标记」的最小增量：存为模板时 text 元素除内容外，字色/字号/字体也能标记为可填参数。
+
+**关键结论：params.json 契约无需改动**——`PackParamResolver` 早已支持 color/int/font type + 校验 + 纯文本替换（D3 数值靠 materialize coercion 解回），MVP-1 只是让 exporter/UI 用上已有能力（契约不动 = 1.0 冻结无忧）。0.9.16 P3 判「体量大」预设了重方案（画布点选 + 改遍面板），实际后端重活早就完工。
+
+- **后端 exporter 泛化**（`TemplateExporter`）：`ParamConfig` 加 `fieldMarks: List<FieldMark(autoId, field)>`（保留 1-arg 兼容 ctor，textActions 路径零回归）；`TextRef` 改持 `TextElement` 引用；`ParamDecl` 泛化（+type +jsonField +Object default）；样式字段参数派生 paramId = text finalId（或 autoId）+ `_color`/`_fontsize`/`_font`，type = color/int/font，default = 元素当前值，与 text id **共享 seen 去重**；`replaceTextWithParams`→`replaceFieldsWithParams`（`Map<flat, Map<jsonField, paramId>>`，一元素可同时参数化 text+color+size+font）；`buildParamsArray` 用 `p.type()` + fontSize 加 `min:1`；roundtrip 自校验兜底。
+- **后端 dispatcher**（`TemplateOpDispatcher.parseParamConfig`）：解析 payload 的 `fieldMarks`（textActions 缺失不再 early-return，只标记字段的场景能过）。
+- **前端**（`SaveAsTemplateModal`）：每个 text 行加字色/字号/字体 3 toggle（独立于 keep — 内容 drop 的行仍可参数化其样式）+ onSave 收集 `fieldMarks` + i18n 中英。填值 UI（`TemplateGallery` 已按 type 全渲染）零改。
+- **payload 契约**：`paramConfig.fieldMarks: [{autoId, field: 'color'|'fontSize'|'fontId'}]`，前后端定死对齐。
+
+**实施**：后端 opus implementer 走 TDD（+4 `TemplateExporterTest`，先红〈FieldMark/2-arg ParamConfig 编译失败〉后绿）；前端两次 opus implementer 均异常掉线（`tool_uses=0` 空返回，与本会话字体子代理同型），controller 自己做前端；controller 核对两端 diff + payload 对齐无 scope 蔓延。
+
+**验证**：后端 `:plugin:test` **BUILD SUCCESSFUL 2167**（+4）+ 前端 vitest **1450** + vite build 通过。
+
+关联文件：`template/TemplateExporter`、`web/TemplateOpDispatcher` + `TemplateExporterTest`；`web/src/components/template/SaveAsTemplateModal.vue`、`i18n/messages.ts`。
+
+---
+
 ## 2026-07-24 · rc3-B：字体/许可证下载 URL 固定到 commit SHA（防上游漂移）
 
 rc3 三项之二。根治 2026-07-23 留档的隐患（google/fonts `raw/main` 漂移曾搞崩 rc.2 的 `downloadFonts`）。评估发现会漂的不止 13 个 google 字体：**17 个字体二进制 + 23 条许可证 URL** 用可变分支引用（`main`/`master`/`release`/`6.x`），上游一动 pin 就对不上、CI 挂（许可证下载任务同病，之前留档漏了）。

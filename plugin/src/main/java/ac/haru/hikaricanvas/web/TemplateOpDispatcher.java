@@ -180,25 +180,40 @@ final class TemplateOpDispatcher {
         }
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * 解析 {@code paramConfig} payload：{@code textActions}（Map<autoId, action>）+ {@code fieldMarks}
+     * （数组，每项 {@code {autoId, field}}）。任一段缺失 / 非法 → 容错跳过该段，不整体失败。
+     */
     private static ac.haru.hikaricanvas.template.TemplateExporter.ParamConfig parseParamConfig(Object raw) {
-        if (raw == null) return ac.haru.hikaricanvas.template.TemplateExporter.ParamConfig.empty();
-        if (!(raw instanceof Map<?, ?> m)) return ac.haru.hikaricanvas.template.TemplateExporter.ParamConfig.empty();
-        Object textActionsObj = m.get("textActions");
-        if (!(textActionsObj instanceof Map<?, ?> txMap)) {
+        if (!(raw instanceof Map<?, ?> m)) {
             return ac.haru.hikaricanvas.template.TemplateExporter.ParamConfig.empty();
         }
-        Map<String, ac.haru.hikaricanvas.template.TemplateExporter.AutoTextAction> textActions = new java.util.LinkedHashMap<>();
-        for (Map.Entry<?, ?> e : txMap.entrySet()) {
-            if (!(e.getKey() instanceof String autoId)) continue;
-            if (!(e.getValue() instanceof Map<?, ?> v)) continue;
-            String action = v.get("action") instanceof String sa ? sa : "keep";
-            String name = v.get("name") instanceof String sn ? sn : null;
-            String label = v.get("label") instanceof String sl ? sl : null;
-            String desc = v.get("description") instanceof String sd ? sd : null;
-            textActions.put(autoId, new ac.haru.hikaricanvas.template.TemplateExporter.AutoTextAction(
-                    action, name, label, desc));
+        Map<String, ac.haru.hikaricanvas.template.TemplateExporter.AutoTextAction> textActions =
+                new java.util.LinkedHashMap<>();
+        if (m.get("textActions") instanceof Map<?, ?> txMap) {
+            for (Map.Entry<?, ?> e : txMap.entrySet()) {
+                if (!(e.getKey() instanceof String autoId)) continue;
+                if (!(e.getValue() instanceof Map<?, ?> v)) continue;
+                String action = v.get("action") instanceof String sa ? sa : "keep";
+                String name = v.get("name") instanceof String sn ? sn : null;
+                String label = v.get("label") instanceof String sl ? sl : null;
+                String desc = v.get("description") instanceof String sd ? sd : null;
+                textActions.put(autoId, new ac.haru.hikaricanvas.template.TemplateExporter.AutoTextAction(
+                        action, name, label, desc));
+            }
         }
-        return new ac.haru.hikaricanvas.template.TemplateExporter.ParamConfig(textActions);
+        java.util.List<ac.haru.hikaricanvas.template.TemplateExporter.FieldMark> fieldMarks =
+                new java.util.ArrayList<>();
+        if (m.get("fieldMarks") instanceof java.util.List<?> fmList) {
+            for (Object o : fmList) {
+                if (!(o instanceof Map<?, ?> fmMap)) continue;
+                String autoId = fmMap.get("autoId") instanceof String a ? a : null;
+                String field = fmMap.get("field") instanceof String f ? f : null;
+                if (autoId != null && field != null) {
+                    fieldMarks.add(new ac.haru.hikaricanvas.template.TemplateExporter.FieldMark(autoId, field));
+                }
+            }
+        }
+        return new ac.haru.hikaricanvas.template.TemplateExporter.ParamConfig(textActions, fieldMarks);
     }
 }

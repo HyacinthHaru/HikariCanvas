@@ -31,6 +31,10 @@ interface ParamRow {
     name: string;
     label: string;
     description: string;
+    // MVP-1：text 元素的字色/字号/字体也可标记为可填参数（独立于 keep）。
+    markColor: boolean;
+    markFontSize: boolean;
+    markFontId: boolean;
 }
 
 const slug = ref('');
@@ -57,6 +61,9 @@ function refreshParams() {
                     name: autoId,
                     label: te.text.length > 16 ? te.text.slice(0, 16) + '…' : te.text,
                     description: '',
+                    markColor: false,
+                    markFontSize: false,
+                    markFontId: false,
                 });
             }
         }
@@ -81,10 +88,15 @@ async function onSave() {
         return;
     }
     const textActions: Record<string, { action: string; name?: string; label?: string; description?: string }> = {};
+    // MVP-1：字段标记独立于 keep —— text 内容 drop 的行仍可参数化其字色/字号/字体。
+    const fieldMarks: Array<{ autoId: string; field: 'color' | 'fontSize' | 'fontId' }> = [];
     for (const row of paramRows) {
         textActions[row.autoId] = row.keep
             ? { action: 'keep', name: row.name, label: row.label, description: row.description }
             : { action: 'drop' };
+        if (row.markColor) fieldMarks.push({ autoId: row.autoId, field: 'color' });
+        if (row.markFontSize) fieldMarks.push({ autoId: row.autoId, field: 'fontSize' });
+        if (row.markFontId) fieldMarks.push({ autoId: row.autoId, field: 'fontId' });
     }
     submitting.value = true;
     submitError.value = null;
@@ -93,7 +105,7 @@ async function onSave() {
             slug: slug.value,
             displayName: displayName.value,
             description: description.value || null,
-            paramConfig: { textActions },
+            paramConfig: { textActions, fieldMarks },
         }, 8000);
         // wsClient.handleAck 直接 resolve `envelope.payload`（不是整个 envelope）。
         // 之前 `(ack as ...).payload?.templateId` 多剥一层永远是 undefined → 走 else 显"发布失败"，
@@ -209,6 +221,22 @@ function onClose() {
                          class="hc-input mt-0.5 text-xs"
                          v-model="row.description"
                          maxlength="128" />
+                </label>
+              </div>
+              <!-- MVP-1：字段参数化 toggle（独立于 keep） -->
+              <div class="flex flex-wrap items-center gap-3 pl-3 pt-0.5">
+                <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.workshop.markFieldsLabel }}</span>
+                <label class="flex items-center gap-1 cursor-pointer text-xs">
+                  <input type="checkbox" v-model="row.markColor" />
+                  <span>{{ t.workshop.markColor }}</span>
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer text-xs">
+                  <input type="checkbox" v-model="row.markFontSize" />
+                  <span>{{ t.workshop.markFontSize }}</span>
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer text-xs">
+                  <input type="checkbox" v-model="row.markFontId" />
+                  <span>{{ t.workshop.markFontId }}</span>
                 </label>
               </div>
             </li>

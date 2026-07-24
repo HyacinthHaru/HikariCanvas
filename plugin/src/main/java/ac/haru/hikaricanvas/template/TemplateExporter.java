@@ -28,19 +28,24 @@ import java.util.zip.ZipOutputStream;
  * {@code project.json}（工程本体，参数化字段写 {@code ${param}}）+ {@code params.json}（参数声明数组）
  * + {@code manifest.json}。纯函数；不碰文件 IO / DB / Registry（由 {@link TemplatePublisher} 协调）。
  *
- * <h2>参数化策略（v1）</h2>
+ * <h2>参数化策略</h2>
  * <ol>
  *   <li>按 z-order 扫所有 {@link TextElement} → 默认 paramId {@code text_1 / text_2 / ...}</li>
  *   <li>{@link ParamConfig#textActions} 允许用户对每个 autoId 选 {@code keep}（参数化 +
  *       重命名）或 {@code drop}（取消参数化，保持静态文本）</li>
  *   <li>{@code keep} 时 {@code project.json} 内对应 element.text 替换为 {@code "${finalParamId}"}；
  *       {@code params.json} 加入 {@code {id, type:text, default:原 text 值}}</li>
+ *   <li>{@link ParamConfig#fieldMarks} 允许把 text 元素的 {@code color / fontSize / fontId}
+ *       样式字段一并参数化：派生 paramId = 该 text 的 finalId（或 autoId）+ {@code _color /
+ *       _fontsize / _font} 后缀，type 分别 {@code color / int / font}，default = 元素当前值。
+ *       数值字段以字符串形态写占位符（{@code "fontSize": "${...}"}），套用后靠 Jackson coercion
+ *       解回 int（见 {@link PackParamResolver} D3）。</li>
  * </ol>
  *
  * <p>套用走 {@code ProjectImporter.applyPack}——填参数 → {@code ${param}} 替换 → materialize。
  * 导出末尾用默认参数跑一遍这条链自校验（{@code ROUNDTRIP_FAILED}），确保产出的 pack 可套用。</p>
  *
- * <p>非 text 字段（color / fontSize / 坐标等）的参数化留待前端「标记可参数化字段」步骤（后续阶段）。</p>
+ * <p>坐标 / 尺寸 / 效果等其余字段的参数化留待后续阶段。</p>
  */
 public final class TemplateExporter {
 
@@ -62,10 +67,28 @@ public final class TemplateExporter {
             String description
     ) {}
 
-    /** 用户的导出参数调整。{@code textActions: Map<autoId, AutoTextAction>}。 */
-    public record ParamConfig(Map<String, AutoTextAction> textActions) {
+    /**
+     * 把某个 autoId 对应 text 元素的一个样式字段标记为可参数化字段。
+     *
+     * @param autoId 目标 text 元素的 autoId（如 {@code text_1}）
+     * @param field  字段名，{@code "color" | "fontSize" | "fontId"}（= TextElement 的 wire 字段名）
+     */
+    public record FieldMark(String autoId, String field) {}
+
+    /**
+     * 用户的导出参数调整。
+     *
+     * @param textActions {@code Map<autoId, AutoTextAction>}：每个 text 元素内容的 keep / drop / 改名
+     * @param fieldMarks  标记要参数化的 text 元素样式字段（color / fontSize / fontId）
+     */
+    public record ParamConfig(Map<String, AutoTextAction> textActions, List<FieldMark> fieldMarks) {
+        /** 向后兼容：仅配 text 内容参数，无字段标记。 */
+        public ParamConfig(Map<String, AutoTextAction> textActions) {
+            this(textActions, List.of());
+        }
+
         public static ParamConfig empty() {
-            return new ParamConfig(Map.of());
+            return new ParamConfig(Map.of(), List.of());
         }
     }
 
@@ -109,20 +132,26 @@ public final class TemplateExporter {
             return new Result.Failed("INVALID_PAYLOAD", "displayName length > 64");
         }
         ParamConfig cfg = paramConfig == null ? ParamConfig.empty() : paramConfig;
+        Map<String, AutoTextAction> textActions = cfg.textActions() == null ? Map.of() : cfg.textActions();
+        List<FieldMark> fieldMarks = cfg.fieldMarks() == null ? List.of() : cfg.fieldMarks();
 
         // 1) 收集所有 TextElement + 分配 autoId
         List<TextRef> textRefs = collectTextElements(state);
-        // 2) 决定每个 autoId 的最终命名 / drop → params 声明 + flat 索引到 paramId 的映射
+        Map<String, TextRef> byAutoId = new java.util.HashMap<>();
+        for (TextRef ref : textRefs) byAutoId.put(ref.autoId(), ref);
+
+        // 2) 汇总所有参数声明：先 text 内容参数（keep/drop/改名），再样式字段参数。paramId 全局去重。
         List<ParamDecl> params = new ArrayList<>();
         Map<String, Boolean> seen = new java.util.HashMap<>();
-        Map<Integer, String> elementToParamId = new java.util.HashMap<>();
+
+        // 2a) text 内容参数
         for (TextRef ref : textRefs) {
-            AutoTextAction action = cfg.textActions() == null ? null : cfg.textActions().get(ref.autoId);
+            AutoTextAction action = textActions.get(ref.autoId());
             String act = action == null ? "keep" : action.action();
             if (!"keep".equals(act)) continue;
             String finalId = (action != null && action.name() != null && !action.name().isBlank())
                     ? action.name()
-                    : ref.autoId;
+                    : ref.autoId();
             if (!PARAM_ID_PATTERN.matcher(finalId).matches()) {
                 return new Result.Failed("INVALID_PARAM_ID",
                         "param id '" + finalId + "' must match [a-z][a-z0-9_]{0,31}");
@@ -131,17 +160,58 @@ public final class TemplateExporter {
                 return new Result.Failed("DUPLICATE_PARAM_ID",
                         "param id '" + finalId + "' used twice");
             }
-            String label = (action != null && action.label() != null) ? action.label() : ref.autoId;
+            String label = (action != null && action.label() != null) ? action.label() : ref.autoId();
             String desc = action != null ? action.description() : null;
-            params.add(new ParamDecl(finalId, label, desc, ref.text));
-            elementToParamId.put(ref.elementIndexFlat, finalId);
+            params.add(new ParamDecl(finalId, "text", ref.elementIndexFlat(), "text",
+                    label, desc, ref.element().text()));
+        }
+
+        // 2b) 样式字段参数（color / fontSize / fontId）：派生 id = 前缀 + 后缀，type / default 按字段定
+        for (FieldMark fm : fieldMarks) {
+            if (fm == null || fm.autoId() == null || fm.field() == null) continue;
+            TextRef ref = byAutoId.get(fm.autoId());
+            if (ref == null) continue;   // 找不到目标 text 元素 → 容错跳过
+            String field = fm.field();
+            String suffix;
+            String type;
+            String jsonField;
+            Object defaultValue;
+            if ("color".equals(field)) {
+                suffix = "_color"; type = "color"; jsonField = "color";
+                defaultValue = ref.element().color();
+            } else if ("fontSize".equals(field)) {
+                suffix = "_fontsize"; type = "int"; jsonField = "fontSize";
+                defaultValue = ref.element().fontSize();
+            } else if ("fontId".equals(field)) {
+                suffix = "_font"; type = "font"; jsonField = "fontId";
+                defaultValue = ref.element().fontId();
+            } else {
+                continue;   // 未知字段 → 容错跳过
+            }
+            String derivedId = paramPrefixFor(textActions, fm.autoId()) + suffix;
+            if (!PARAM_ID_PATTERN.matcher(derivedId).matches()) {
+                return new Result.Failed("INVALID_PARAM_ID",
+                        "derived param id '" + derivedId + "' must match [a-z][a-z0-9_]{0,31}");
+            }
+            if (seen.putIfAbsent(derivedId, Boolean.TRUE) != null) {
+                return new Result.Failed("DUPLICATE_PARAM_ID",
+                        "param id '" + derivedId + "' used twice");
+            }
+            params.add(new ParamDecl(derivedId, type, ref.elementIndexFlat(), jsonField,
+                    fm.autoId() + " " + field, null, defaultValue));
         }
 
         // 3) ProjectState → Map（深拷贝；本地修改不污染原 state）
         Map<String, Object> projectMap = mapper.convertValue(state, new TypeReference<Map<String, Object>>() {});
 
-        // 4) 在 project map 内按 (layer, element) 位置把每个参数化 TextElement 的 text 换成 "${paramId}"
-        replaceTextWithParams(projectMap, elementToParamId);
+        // 4) 在 project map 内按 (flat, jsonField) 把参数化字段的值换成 "${paramId}"
+        //    映射：flat 索引 → (json 字段名 → paramId)；一个元素可同时参数化 text + color + fontSize + fontId
+        Map<Integer, Map<String, String>> fieldReplacements = new java.util.HashMap<>();
+        for (ParamDecl p : params) {
+            fieldReplacements.computeIfAbsent(p.flat(), k -> new LinkedHashMap<>())
+                    .put(p.jsonField(), p.id());
+        }
+        replaceFieldsWithParams(projectMap, fieldReplacements);
 
         // 5) 序列化三件（manifest / params.json / project.json）
         // templateId 写进 manifest.id，让注册表登记时的条目 key 与 DB template_id 对齐。
@@ -196,10 +266,12 @@ public final class TemplateExporter {
         for (ParamDecl p : params) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.id());
-            m.put("type", "text");
+            m.put("type", p.type());
             m.put("label", p.label());
             if (p.description() != null) m.put("description", p.description());
-            m.put("default", p.defaultText());
+            m.put("default", p.defaultValue());
+            // fontSize 走 int 类型：加 min:1 防 0 / 负字号（materialize 端对 text.fontSize 无强校验，此处兜底）
+            if ("int".equals(p.type())) m.put("min", 1);
             arr.add(m);
         }
         return arr;
@@ -248,11 +320,22 @@ public final class TemplateExporter {
 
     // ---------------- helpers ----------------
 
-    /** 一个参数化 text 元素的声明。 */
-    private record ParamDecl(String id, String label, String description, String defaultText) {}
+    /**
+     * 一条参数声明。
+     *
+     * @param id           paramId（占位符名）
+     * @param type         params.json 的 type（{@code text / color / int / font}）
+     * @param flat         目标元素 flat 索引（layer.element 拍平后的位置）
+     * @param jsonField    project.json 内要替换的字段名（{@code text / color / fontSize / fontId}）
+     * @param label        人类标签
+     * @param description  描述；可空
+     * @param defaultValue 默认值（text/color/font → String，fontSize → int）
+     */
+    private record ParamDecl(String id, String type, int flat, String jsonField,
+                             String label, String description, Object defaultValue) {}
 
-    /** 单个 TextElement 的临时引用：autoId + text + flat 索引（layer.element 拍平后的位置）。 */
-    private record TextRef(String autoId, String text, int elementIndexFlat) {}
+    /** 单个 TextElement 的临时引用：autoId + 元素本体 + flat 索引（layer.element 拍平后的位置）。 */
+    private record TextRef(String autoId, TextElement element, int elementIndexFlat) {}
 
     private static List<TextRef> collectTextElements(ProjectState state) {
         List<TextRef> out = new ArrayList<>();
@@ -261,7 +344,7 @@ public final class TemplateExporter {
         for (Layer layer : state.layers()) {
             for (var el : layer.elements()) {
                 if (el instanceof TextElement t) {
-                    out.add(new TextRef("text_" + n, t.text(), flat));
+                    out.add(new TextRef("text_" + n, t, flat));
                     n++;
                 }
                 flat++;
@@ -271,13 +354,26 @@ public final class TemplateExporter {
     }
 
     /**
-     * 把 project map 中位置匹配的 text element 的 {@code text} 字段替换为 {@code "${paramId}"}。
+     * text 内容参数化后的最终 id（keep + 改名用 {@code name}，否则用 {@code autoId}）——作样式字段
+     * 派生 paramId 的前缀。drop / 缺省场景一律回退 autoId。
+     */
+    private static String paramPrefixFor(Map<String, AutoTextAction> textActions, String autoId) {
+        AutoTextAction a = textActions == null ? null : textActions.get(autoId);
+        if (a != null && "keep".equals(a.action()) && a.name() != null && !a.name().isBlank()) {
+            return a.name();
+        }
+        return autoId;
+    }
+
+    /**
+     * 把 project map 中位置匹配的 text element 的若干字段值替换为 {@code "${paramId}"}。
+     * {@code fieldReplacements}：flat 索引 → (json 字段名 → paramId)。
      * 用 flat index（layer.element 平铺顺序）与 {@link #collectTextElements} 计数对齐。
      */
     @SuppressWarnings("unchecked")
-    private static void replaceTextWithParams(Map<String, Object> projectMap,
-                                              Map<Integer, String> elementToParamId) {
-        if (elementToParamId.isEmpty()) return;
+    private static void replaceFieldsWithParams(Map<String, Object> projectMap,
+                                                Map<Integer, Map<String, String>> fieldReplacements) {
+        if (fieldReplacements.isEmpty()) return;
         Object layersObj = projectMap.get("layers");
         if (!(layersObj instanceof List<?> layers)) return;
         int flat = 0;
@@ -289,9 +385,12 @@ public final class TemplateExporter {
             if (!(elementsObj instanceof List<?> elements)) continue;
             for (Object elObj : elements) {
                 if (elObj instanceof Map<?, ?> elMap) {
-                    String paramId = elementToParamId.get(flat);
-                    if (paramId != null && "text".equals(elMap.get("type"))) {
-                        ((Map<String, Object>) elMap).put("text", "${" + paramId + "}");
+                    Map<String, String> fields = fieldReplacements.get(flat);
+                    if (fields != null && "text".equals(elMap.get("type"))) {
+                        for (Map.Entry<String, String> fe : fields.entrySet()) {
+                            // 数值字段（fontSize）也以字符串形态写占位符，套用后靠 Jackson coercion 解回 int。
+                            ((Map<String, Object>) elMap).put(fe.getKey(), "${" + fe.getValue() + "}");
+                        }
                     }
                 }
                 flat++;
