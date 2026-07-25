@@ -1,4 +1,4 @@
-<div align="center">
+<img width="750" height="501" alt="pids" src="https://github.com/user-attachments/assets/d9c362bb-7181-406d-87b0-f1c26490de32" /><div align="center">
 <img width="1000" height="400" alt="banner" src="https://github.com/user-attachments/assets/8721c5d5-ffe6-4664-806a-31d57b5e09b6" />
 </div>
 
@@ -16,16 +16,14 @@
 
 你的服务器以后能有动态展示框了，还是你自己做的那种。动态到什么程度？你右键一下展示框，能直接触发你自己用积木块搭的脚本。当然，你也可以在这里做简单的非线性动画和触发器。
 
-<table>
-  <tr>
-    <td width="15%">
-      <img width="300" height="300" alt="HikariCanvas_Motion" src="https://github.com/user-attachments/assets/4de45b7c-32f6-4c2c-a4e3-c8d9fd924b6d" />
-    </td>
-    <td width="85%">
-      <img width="1710" height="950" alt="image" src="https://github.com/user-attachments/assets/1e0d9c9a-da5f-4bf9-a9ca-1484323219f9" />
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img width="700" alt="image" src="https://github.com/user-attachments/assets/1e0d9c9a-da5f-4bf9-a9ca-1484323219f9" />
+</p>
+
+<p align="center">
+  <img height="250" alt="pids" src="https://github.com/user-attachments/assets/3d46ba11-1e60-41ec-8ed4-0efd087de234" />
+  <img height="250" alt="HikariCanvas_Motion" src="https://github.com/user-attachments/assets/4de45b7c-32f6-4c2c-a4e3-c8d9fd924b6d" />
+</p>
 
 把 Canva / Figma 的编辑体验，和 Scratch 的可视化脚本、After Effects 的非线性动画、地铁站的倒计时大屏幕，统统搬进 Minecraft。在网页里画一张图、排个版、做个动画，游戏内的地图展示框就能立刻同步显示同样的画面。拿来做店铺招牌、服务器公告屏、地铁车站机场信息屏，甚至右键地图就触发一连串动作的可编程画布。
 
