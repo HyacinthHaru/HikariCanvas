@@ -1,4 +1,4 @@
-<img width="750" height="501" alt="pids" src="https://github.com/user-attachments/assets/d9c362bb-7181-406d-87b0-f1c26490de32" /><div align="center">
+<div align="center">
 <img width="1000" height="400" alt="banner" src="https://github.com/user-attachments/assets/8721c5d5-ffe6-4664-806a-31d57b5e09b6" />
 </div>
 
