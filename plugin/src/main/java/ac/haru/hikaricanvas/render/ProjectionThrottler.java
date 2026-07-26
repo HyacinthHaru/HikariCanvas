@@ -77,6 +77,13 @@ public class ProjectionThrottler {
         boolean projectedOnce;
         /** 连续 flush 失败次数；成功即复位。达 {@link #FAILURE_CIRCUIT_BREAK} 触发熔断。 */
         int consecutiveFailures;
+        /**
+         * 是否有一次投影正在飞行中（已认领脏区域、尚未回写结果）。
+         *
+         * <p>投影本身在 Bucket 锁<b>外</b>执行（否则会与 EditSession 锁构成 ABBA 死锁），
+         * 于是同一 session 的投影不再天然被 Bucket 监视器串行化——靠本标志继续保证串行。</p>
+         */
+        boolean projecting;
         BukkitTask flushTask;
     }
 
@@ -124,7 +131,7 @@ public class ProjectionThrottler {
         if (region == null) return;
         AnimationTickerGate gate = this.animationGate;
         if (gate != null) {
-            var s = sessionManager.byId(sessionId);
+            Session s = sessionFor(sessionId);
             String wallId = s != null ? s.wallId() : null;
             if (wallId != null && gate.isWallAnimating(wallId)) {
                 // 被吸收的渲染意图转给 Ticker（invalidate → 下一帧重载 + 全量补发）
@@ -135,22 +142,31 @@ public class ProjectionThrottler {
         Bucket b = bySession.computeIfAbsent(sessionId, k -> new Bucket());
         long effectiveMs = effectiveInterval(sessionId);
         long effectiveNanos = effectiveMs * MS_TO_NANOS;
+        DirtyRegion claimed;
+        long now;
         synchronized (b) {
             b.pending = b.pending == null ? region : b.pending.union(region);
-            long now = System.nanoTime();
+            now = System.nanoTime();
             // nanoTime 单调，正常情况下 since >= 0；用 Math.max(0, ..) 兜底极端
             // nanoTime 实现回绕（理论上 ~292 年才回绕，仍防御一手）。
             long sinceNanos = Math.max(0L, now - b.lastProjectAtNanos);
             // 首帧立即下发（nanoTime 原点任意，不能靠 lastProjectAtNanos==0 推断）。
             if (!b.projectedOnce || sinceNanos >= effectiveNanos) {
-                flushLocked(sessionId, b, now);
-            } else if (b.flushTask == null) {
-                long waitMs = Math.max(1L, (effectiveNanos - sinceNanos) / MS_TO_NANOS);
-                long delayTicks = Math.max(1L, (waitMs + 49) / 50);
-                b.flushTask = Bukkit.getScheduler().runTaskLaterAsynchronously(
-                        plugin, () -> onScheduledFlush(sessionId), delayTicks);
+                claimed = claimFlush(sessionId, b, now);
+            } else {
+                claimed = null;
+                if (b.flushTask == null) {
+                    long waitMs = Math.max(1L, (effectiveNanos - sinceNanos) / MS_TO_NANOS);
+                    long delayTicks = Math.max(1L, (waitMs + 49) / 50);
+                    b.flushTask = Bukkit.getScheduler().runTaskLaterAsynchronously(
+                            plugin, () -> onScheduledFlush(sessionId), delayTicks);
+                }
+                // else: 已调度，仅并入 pending
             }
-            // else: 已调度，仅并入 pending
+        }
+        // 出锁投影：projectUnderEditLock 会取 EditSession 监视器，绝不能在持 Bucket 锁时做。
+        if (claimed != null) {
+            performFlush(sessionId, b, claimed, now);
         }
     }
 
@@ -195,45 +211,69 @@ public class ProjectionThrottler {
     private void onScheduledFlush(String sessionId) {
         Bucket b = bySession.get(sessionId);
         if (b == null) return;
+        DirtyRegion claimed;
+        long now = System.nanoTime();
         synchronized (b) {
             b.flushTask = null;
-            flushLocked(sessionId, b, System.nanoTime());
+            claimed = claimFlush(sessionId, b, now);
+        }
+        if (claimed != null) {
+            performFlush(sessionId, b, claimed, now);
         }
     }
 
     /**
-     * 必须在持有 {@code b} 锁下调用。
+     * 必须在持有 {@code b} 锁下调用。决定本次是否投影，并「认领」待投影的脏区域。
      *
-     * <p>{@code project()} 抛异常时不丢脏区域——只有成功返回后才清 {@code pending}
-     * 并推进 {@code lastProjectAt}；失败时把 {@code toProject} 通过 {@link DirtyRegion#union}
-     * 并回 {@code pending} 并保持 {@code lastProjectAt} 不变（不推进时间基），让下一次 submit
-     * 自动重投递该区域，兑现 architecture.md §5.1.5「session 关闭前最后一帧 100% 正确」承诺。</p>
+     * <p><b>返回非 null 时，调用方必须在释放 {@code b} 锁之后调 {@link #performFlush}。</b>
+     * 认领即把 {@code pending} 清空并置 {@code projecting}——投影期间新来的 submit 并入下一批，
+     * 由本次投影收尾时续排。</p>
+     *
+     * <p>{@code project()} 抛异常时不丢脏区域——只有成功返回后才推进 {@code lastProjectAt}；
+     * 失败时把 {@code toProject} 通过 {@link DirtyRegion#union} 并回 {@code pending} 并保持
+     * {@code lastProjectAt} 不变（不推进时间基），让下一次 submit 自动重投递该区域，兑现
+     * architecture.md §5.1.5「session 关闭前最后一帧 100% 正确」承诺。</p>
      *
      * <p><b>数据竞争修复：</b>{@code project()} 内 {@code CanvasCompositor.rasterize}
      * 会遍历 {@code ProjectState} 的 layers / 各 layer 的 elements live ArrayList。这些列表的
      * 结构修改全部发生在 {@link EditSession} 的 {@code synchronized(this)} mutator 里，而
      * rasterize 此前不持该监视器——两侧无共享锁，并发 WS 编辑 op 与变量驱动重画会对同一
-     * ArrayList 边改边迭代，抛 {@code ConcurrentModificationException} / 撕裂读。这里在
-     * {@code session.editSession()} 监视器内调 {@code project()}，让 rasterize 入口的
-     * {@code List.copyOf} 浅拷贝与 mutator 互斥（拷贝完成后即是不可变快照，后续迭代不再需要锁）。
-     * 锁顺序恒为 {@code Bucket → EditSession}（dispatcher 在 EditSession mutator 返回<b>后</b>才
-     * 调 {@code submit}，从不反向），无死锁；editSession 为 null（SELECTING 阶段）时无 live 列表
-     * 可竞争，直接 project。</p>
+     * ArrayList 边改边迭代，抛 {@code ConcurrentModificationException} / 撕裂读。
+     * {@link #projectUnderEditLock} 在 {@code session.editSession()} 监视器内调
+     * {@code project()}，让 rasterize 入口的 {@code List.copyOf} 浅拷贝与 mutator 互斥
+     * （拷贝完成后即是不可变快照，后续迭代不再需要锁）；editSession 为 null（SELECTING 阶段）
+     * 时无 live 列表可竞争，直接 project。</p>
+     *
+     * <p><b>锁序（0.9.17 修正）：</b>本类<b>绝不</b>在持 Bucket 锁时去取 EditSession 锁。
+     * 此处原先的注释声称「锁顺序恒为 Bucket → EditSession，dispatcher 在 EditSession mutator
+     * 返回<b>后</b>才调 submit，从不反向」——这与实现不符，且反向臂真实存在：
+     * {@code EditSession.setUserVariableValue}（以及另外 9 个 {@code *Variable*} 方法）是
+     * {@code synchronized}，它在监视器内同步调 {@code VariableStore.setValue} →
+     * {@code notifyReferencingWalls} → {@code wallDirtyCallback} →
+     * {@code SessionManager.submitFullCanvasDirtyByWallAndReport} → {@link #submit} →
+     * {@code synchronized(bucket)}。于是 Jetty 线程持 EditSession 等 Bucket、投影线程持
+     * Bucket 等 EditSession，互等即死锁；死锁后 {@code /canvas cancel} 与 SessionReaper
+     * 经 {@code preForgetHook.flushNow} 取同一 Bucket 锁，<b>主线程永久冻结</b>。
+     *
+     * <p>修法是把投影移出 Bucket 锁（claim / perform 两段式），让「持 Bucket 锁」与
+     * 「持 EditSession 锁」不再有交集——这样无论调用方处在哪个监视器里都不会成环，
+     * 比逐个修正 10 个 EditSession 方法的调用时机更稳。同一 session 的投影串行由
+     * {@code Bucket.projecting} 标志继续保证。</p>
      */
-    private void flushLocked(String sessionId, Bucket b, long nowNanos) {
+    private DirtyRegion claimFlush(String sessionId, Bucket b, long nowNanos) {
         DirtyRegion toProject = b.pending;
         if (toProject == null) {
             // 无脏区域：推进时间基即可（保持原有「空 flush 也刷新窗口」语义）。
             b.lastProjectAtNanos = nowNanos;
-            return;
+            return null;
         }
-        Session s = sessionManager.byId(sessionId);
+        Session s = sessionFor(sessionId);
         if (s == null) {
             // 会话已消亡，丢弃脏区域并推进时间基。
             b.pending = null;
             b.lastProjectAtNanos = nowNanos;
             b.projectedOnce = true;
-            return;
+            return null;
         }
         // 尾帧延迟 flush 也要查 gate——submit 时未播放、flush 执行前
         // play 落在延迟窗口内的情形，否则这次 reactive 直写会与 Ticker 抢同一 mapId。
@@ -243,38 +283,104 @@ public class ProjectionThrottler {
             b.pending = null;
             b.lastProjectAtNanos = nowNanos;
             b.projectedOnce = true;
-            return;
+            return null;
         }
+        if (b.projecting) {
+            // 已有一次投影在飞行中。脏区域留在 pending，由那次投影收尾时续排，
+            // 保证同一 session 的投影仍然串行（原本靠 Bucket 监视器串行）。
+            return null;
+        }
+        // 认领这批脏区域：清空 pending 让投影期间新来的 submit 并入下一批。
+        b.pending = null;
+        b.projecting = true;
+        return toProject;
+    }
+
+    /**
+     * 真正执行投影 + 结果回写。<b>调用方必须已经释放 {@code b} 的监视器。</b>
+     *
+     * <p>见 {@link #claimFlush} 的锁序说明——本方法内部会取 {@link EditSession} 监视器，
+     * 若调用方仍持 Bucket 锁就会重新引入 ABBA 死锁。</p>
+     */
+    private void performFlush(String sessionId, Bucket b, DirtyRegion toProject, long nowNanos) {
+        Session s = sessionFor(sessionId);
+        Throwable failure = null;
         try {
-            projectUnderEditLock(s, toProject);
-            // 成功：清 pending 并推进时间基，失败计数复位。
-            b.pending = null;
-            b.lastProjectAtNanos = nowNanos;
-            b.projectedOnce = true;
-            b.consecutiveFailures = 0;
+            if (s != null) {
+                projectUnderEditLock(s, toProject);
+            }
         } catch (Throwable t) {
             // catch Throwable 而非 Exception：畸形元素（如 glow.radius 超大）会让渲染器抛
             // OutOfMemoryError 而非 Exception，此前 Error 直接冒泡出去，pending 既不并回也不
             // 清空，下一次 submit 仍以同一畸形 state 重试 → 每帧反复大分配。
-            b.pending = b.pending == null ? toProject : b.pending.union(toProject);
-            b.consecutiveFailures++;
-            if (b.consecutiveFailures >= FAILURE_CIRCUIT_BREAK) {
-                // 熔断：连续失败到阈值就丢弃 pending 并推进时间基，让这条 bucket 停止
-                // 每帧重试。像素停在最后一次成功的帧；用户改动 / 重连会重新 submit。
-                b.pending = null;
-                b.lastProjectAtNanos = nowNanos;
-                b.projectedOnce = true;
-                plugin.getLogger().severe(
-                        "ProjectionThrottler: flush failed " + b.consecutiveFailures
-                                + "x consecutively, circuit-breaking sid=" + sessionId
-                                + " err=" + t);
-            } else {
-                plugin.getLogger().warning("ProjectionThrottler: flush failed sid=" + sessionId
-                        + " err=" + t.getMessage());
-            }
             // OOM 之外的 Error（StackOverflow / LinkageError 等）同样只记不抛：
             // 让单面墙的畸形数据不至于打死整条投影线程。
+            failure = t;
         }
+        synchronized (b) {
+            b.projecting = false;
+            if (failure == null) {
+                b.lastProjectAtNanos = nowNanos;
+                b.projectedOnce = true;
+                b.consecutiveFailures = 0;
+            } else {
+                b.pending = b.pending == null ? toProject : b.pending.union(toProject);
+                b.consecutiveFailures++;
+                if (b.consecutiveFailures >= FAILURE_CIRCUIT_BREAK) {
+                    // 熔断：连续失败到阈值就丢弃 pending 并推进时间基，让这条 bucket 停止
+                    // 每帧重试。像素停在最后一次成功的帧；用户改动 / 重连会重新 submit。
+                    b.pending = null;
+                    b.lastProjectAtNanos = nowNanos;
+                    b.projectedOnce = true;
+                    plugin.getLogger().severe(
+                            "ProjectionThrottler: flush failed " + b.consecutiveFailures
+                                    + "x consecutively, circuit-breaking sid=" + sessionId
+                                    + " err=" + failure);
+                } else {
+                    plugin.getLogger().warning("ProjectionThrottler: flush failed sid=" + sessionId
+                            + " err=" + failure.getMessage());
+                }
+            }
+            // 投影期间新并入的脏区域此刻没有任何人负责，补排一次尾帧（原实现里这批脏区域
+            // 会被同一个持锁的 flush 顺带处理，出锁投影后必须显式续排）。
+            if (b.pending != null && b.flushTask != null) {
+                return;
+            }
+            if (b.pending != null) {
+                scheduleTailFlush(sessionId, b);
+            }
+        }
+    }
+
+    /** 在持 {@code b} 锁下调用：按有效节流间隔排一次尾帧 flush。 */
+    private void scheduleTailFlush(String sessionId, Bucket b) {
+        // 测试装配传 null plugin（无 Bukkit server），此时不排尾帧，脏区域留在 pending
+        // 等下一次 submit。生产恒非 null。
+        if (plugin == null) return;
+        long delayTicks = Math.max(1L, (effectiveInterval(sessionId) + 49) / 50);
+        b.flushTask = Bukkit.getScheduler().runTaskLaterAsynchronously(
+                plugin, () -> onScheduledFlush(sessionId), delayTicks);
+    }
+
+    /**
+     * session 查找 seam。
+     *
+     * <p>package-private 可覆盖：{@link ac.haru.hikaricanvas.session.SessionManager} 是 final
+     * 且装配链很重（confirm 需 MapPool / WallResolver / 主线程），锁序回归测试只需要一个持有
+     * 真 {@link EditSession} 的 Session。生产行为逐字不变。</p>
+     */
+    Session sessionFor(String sessionId) {
+        return sessionManager == null ? null : sessionManager.byId(sessionId);
+    }
+
+    /**
+     * 投影 seam。
+     *
+     * <p>package-private 可覆盖：{@link CanvasProjector} 是 final class（不是接口），
+     * 锁序回归测试需要一个能在投影中途阻塞的假投影来撑开并发窗口。生产行为逐字不变。</p>
+     */
+    void doProject(Session s, DirtyRegion toProject) {
+        projector.project(s, toProject);
     }
 
     /**
@@ -285,11 +391,11 @@ public class ProjectionThrottler {
     private void projectUnderEditLock(Session s, DirtyRegion toProject) {
         EditSession es = s.editSession();
         if (es == null) {
-            projector.project(s, toProject);
+            doProject(s, toProject);
             return;
         }
         synchronized (es) {
-            projector.project(s, toProject);
+            doProject(s, toProject);
         }
     }
 
@@ -314,19 +420,26 @@ public class ProjectionThrottler {
      * 调用顺序应该是先 flushNow 后 discardSession——flushNow 持锁短暂跑 projector.project，
      * 不影响 discardSession 的 Bukkit task cancel。
      *
-     * <p>session 已不在 SessionManager 时（forget 已先发生）{@link #flushLocked} 内部
+     * <p>session 已不在 SessionManager 时（forget 已先发生）{@link #claimFlush} 内部
      * 自然短路（{@code sessionManager.byId(sessionId) == null}），安全 no-op。</p>
      */
     public void flushNow(String sessionId) {
         Bucket b = bySession.get(sessionId);
         if (b == null) return;
+        DirtyRegion claimed;
+        long now = System.nanoTime();
         synchronized (b) {
             if (b.pending == null) return;
             if (b.flushTask != null) {
                 b.flushTask.cancel();
                 b.flushTask = null;
             }
-            flushLocked(sessionId, b, System.nanoTime());
+            claimed = claimFlush(sessionId, b, now);
+        }
+        // 出锁投影（同 submit）。这正是死锁最致命的入口：/canvas cancel 与 SessionReaper
+        // 都经 preForgetHook 走到这里，一旦在持 Bucket 锁时等 EditSession 锁，主线程永久冻结。
+        if (claimed != null) {
+            performFlush(sessionId, b, claimed, now);
         }
     }
 }

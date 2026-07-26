@@ -5,6 +5,32 @@
 
 ---
 
+## 2026-07-26 · 0.9.17 必修 Bug 批 · W4：ABBA 死锁（唯一需要重新设计的一条）
+
+**#2 CRITICAL · `ProjectionThrottler` 与 `EditSession` 锁序相反，可冻结主线程。**
+
+- **臂一（投影线程）**：`submit` 持 `synchronized(bucket)` → `flushLocked` → `projectUnderEditLock` → `synchronized(editSession)`。
+- **臂二（Jetty 线程）**：`EditSession.setUserVariableValue` 是 `public synchronized`，**在监视器内**同步调 `VariableStore.setValue` → `notifyReferencingWalls` → `wallDirtyCallback` → `SessionManager.submitFullCanvasDirtyByWallAndReport` → `throttler.submit` → `synchronized(bucket)`。EditSession 里这样的 `synchronized` 变量方法共 **10 个**。
+
+两臂并发即互等。死锁后 `/canvas cancel` 与 `SessionReaper` 经 `preForgetHook.flushNow` 取同一 Bucket 锁，**主线程永久冻结**。`ProjectionThrottler` 的 javadoc 原本还声称「锁顺序恒为 Bucket → EditSession，dispatcher 在 EditSession mutator 返回**后**才调 submit，从不反向」——与实现直接矛盾。
+
+**修法选择**：没有去逐个修正那 10 个 EditSession 方法的调用时机（面大、易漏、将来新增方法还会复发），而是**把投影移出 Bucket 锁**，让「持 Bucket 锁」与「持 EditSession 锁」不再有交集——这样无论调用方处在哪个监视器里都不成环。
+
+- `flushLocked` 拆成两段：`claimFlush`（持 Bucket 锁，判定 + 认领脏区域 + 清 pending + 置 `projecting`）与 `performFlush`（**出锁**，真正投影 + 结果回写）。三个入口 `submit` / `onScheduledFlush` / `flushNow` 统一改为「锁内认领 → 锁外投影」。
+- 新增 `Bucket.projecting` 标志：投影出锁后同一 session 的投影不再天然被 Bucket 监视器串行化，靠该标志继续保证串行；投影期间新来的 submit 并入新一批 pending，由本次投影收尾时 `scheduleTailFlush` 续排。
+- 两个测试 seam（package-private 可覆盖，生产行为逐字不变）：`sessionFor`（`SessionManager` 是 final 且装配链很重）与 `doProject`（`CanvasProjector` 是 final class 不是接口，测试需要能中途阻塞的假投影撑开并发窗口）。
+- 顺带改正那段说谎的 javadoc，写清两条臂与修法理由。
+
+**验证（重点）**：新增 `ProjectionThrottlerLockOrderTest` 3 例——① 投影期间另一线程 submit 不被阻塞（Bucket 锁不变式的可观测判据）② **真·两臂并发**：臂二先持 EditSession 再 submit、臂一走投影路径取 EditSession ③ 同一 session 投影仍串行。
+
+**做了变异测试实证守卫非 vacuous**：把 `performFlush` 挪回 `synchronized(b)` 内（即恢复修复前的锁序），①② 两例**双双失败**；撤销变异后全部通过。中途还发现第一版 ② 的时序设计有缺陷（臂一持 es 等臂二、臂二又需要 es，是测试自身造的循环等待），重排为「臂二先持 es → 臂一进入 → 放行臂二 submit」后才真正复现 ABBA。
+
+后端 `:plugin:test` **2205 → 2208**，0 failures。
+
+关联文件：`render/ProjectionThrottler` + 新测试 `render/ProjectionThrottlerLockOrderTest`。
+
+---
+
 ## 2026-07-26 · 0.9.17 必修 Bug 批 · W3：地图池防呆 3 条
 
 本批最危险的一波——三条都能造成**不可逆的地图/画作损坏**。
