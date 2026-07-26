@@ -83,8 +83,9 @@ async function expandRailSection() {
             railLinesLoaded.value = true;
             // 若已绑定，自动拉线路详情（站点列表）
             if (rail.binding?.lineId) {
-                const detail = await ws.sendRailLineDetail(rail.binding.lineId);
-                rail.setStations(detail.stations);
+                const lineId = rail.binding.lineId;
+                const detail = await ws.sendRailLineDetail(lineId);
+                rail.setStations(detail.stations, lineId);
             }
         } catch (e) {
             net.pushLog('err', `rail.line.list rejected: ${(e as Error).message}`);
@@ -99,7 +100,7 @@ async function onRailLineChange() {
     if (!lineId) return;
     try {
         const detail = await ws.sendRailLineDetail(lineId);
-        rail.setStations(detail.stations);
+        rail.setStations(detail.stations, lineId);
     } catch (e) {
         net.pushLog('err', `rail.line.detail rejected: ${(e as Error).message}`);
     }
@@ -159,14 +160,23 @@ async function saveStationName(): Promise<void> {
     }
 }
 
-/** 0.4.0 bugfix（Bug 4）：切换精度。stationName 保留当前值。 */
+/**
+ * 切换精度。站名要取输入框里<b>正在显示</b>的那个，不能取 store 里的。
+ *
+ * <p>改完站名直接点精度按钮时，输入框失焦先发出一次"存新站名"，那一发还在路上，store 里
+ * 仍是旧站名；这时如果按 store 的值再发一次"存旧站名 + 新精度"，服务端按顺序处理，最后
+ * 存下的就是旧站名，而先前那发的回执又把界面写成新站名——界面和数据库对不上，一直骗到
+ * 下次刷新。</p>
+ */
 async function switchPrecision(precision: SchedulePrecision): Promise<void> {
     if (precisionSubmitting.value) return;
     if (schedule.precision === precision) return;
     precisionSubmitting.value = true;
     try {
-        const ack = await ws.sendScheduleUpsert(
-            schedule.current?.stationName ?? null, precision);
+        const typed = stationDraft.value.trim();
+        const ack = await ws.sendScheduleUpsert(typed.length === 0 ? null : typed, precision);
+        // 回执里的站名就是服务端真正存下的那个，一并同步，别让界面显示另一个值
+        schedule.setStationName(ack.stationName);
         if (ack.precision) schedule.setPrecision(ack.precision);
         else schedule.setPrecision(precision);
     } catch (e) {

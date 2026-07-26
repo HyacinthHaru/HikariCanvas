@@ -315,6 +315,13 @@ function ruleIdOf(el: HTMLElement): string | null {
 export interface DragGhost {
     /** palette 源 = 新块 kind；画布源 = 被拖块 kind（取其 action.type）。 */
     kind: string;
+    /**
+     * 画布源友好元素积木的 {@code action.kind}（moveTo / resize / …）；其余情况 undefined。
+     *
+     * <p>8 个友好积木序列化后 {@code type} 全是 {@code setElementProperties}，光靠 {@code kind}
+     * 认不出是哪一种，浮层就只能显示一个技术名。带上它，浮层才能显示用户在积木库里看到的那个标题。</p>
+     */
+    actionKind?: string;
     /** 浮层当前 viewport 坐标（跟随指针，已减去抓取点偏移）。 */
     x: number;
     y: number;
@@ -400,6 +407,12 @@ export function useBlockDrag(opts: {
 
     /** 拖动中缓存的候选插槽（pointerdown 时测一次，move 时复用——避免每帧 reflow）。 */
     let cachedSlots: SlotRect[] = [];
+
+    /**
+     * 最近一次指针位置（client 坐标）。{@link remeasure} 重测后要用它立刻重算吸附命中，
+     * 否则指示线会停在旧几何上直到用户再动一下鼠标。
+     */
+    let lastPointer: { x: number; y: number } | null = null;
 
     // ----- PointerEvent capture（借 useBrushHost 范式）-----
     let capturedTarget: HTMLElement | null = null;
@@ -509,6 +522,7 @@ export function useBlockDrag(opts: {
         deleteZoneActive.value = false;
         deleteZoneHot.value = false;
         cachedSlots = [];
+        lastPointer = null;
         // 若 pending（pointerdown 后未跨阈值就被 cancel/blur/dispose 中断）也一并清掉。
         clearPending();
         detachMoveListeners();
@@ -569,10 +583,40 @@ export function useBlockDrag(opts: {
         grabDx: number, grabDy: number,
         kind: string, actionKind?: string,
     ): void {
-        ghost.value = { kind, x: clientX - grabDx, y: clientY - grabDy };
+        lastPointer = { x: clientX, y: clientY };
+        ghost.value = { kind, x: clientX - grabDx, y: clientY - grabDy, actionKind };
         // 过滤不允许落入 tweenBlock body 的插槽（isTweenBodySlotAllowed 语义校验）。
         const allowedSlots = cachedSlots.filter((s) => isTweenBodySlotAllowed(kind, s, actionKind));
         activeSlot.value = findDropTarget(allowedSlots, clientX, clientY, DROP_THRESHOLD);
+    }
+
+    /**
+     * 重测候选插槽并立刻重算吸附命中。<b>画布缩放 / 平移后必须调</b>。
+     *
+     * <p>插槽矩形是 pointerdown 那一刻量的屏幕坐标，整个拖动期复用（每帧重量会卡）。可画布一缩放，
+     * 所有积木的屏幕矩形都变了，缓存里那套坐标当场作废——吸附线画在离积木老远的地方、松手插到
+     * 完全不相干的位置。缩放不是 PointerEvent，setPointerCapture 拦不住它。</p>
+     *
+     * <p>调用方要等 DOM 真的应用了新的 transform 再调（缩放只改 pan/zoom，样式下一帧才生效）。
+     * 未在拖块 / palette 拖动态时无副作用。</p>
+     */
+    function remeasure(): void {
+        if (state.mode === 'palette') {
+            measure(null);
+            if (lastPointer) {
+                updateDrag(lastPointer.x, lastPointer.y, state.grabDx, state.grabDy, state.kind);
+            }
+            return;
+        }
+        if (state.mode === 'block') {
+            measure(state.path, state.ruleId);
+            if (lastPointer) {
+                updateDrag(
+                    lastPointer.x, lastPointer.y,
+                    state.grabDx, state.grabDy, state.kind, state.actionKind,
+                );
+            }
+        }
     }
 
     // ----- palette 源：拖出新块 -----
@@ -889,6 +933,8 @@ export function useBlockDrag(opts: {
         startPaletteDrag,
         startBlockDrag,
         startStackDrag,
+        // 画布缩放 / 平移后重测插槽（拖动中缓存的几何会失效）
+        remeasure,
         // 兜底：viewport 可选绑 @pointercancel（window pointercancel 已覆盖，这是额外保险）
         onPointerCancel: abortDrag,
     };

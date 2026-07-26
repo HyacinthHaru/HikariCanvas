@@ -73,8 +73,12 @@ const editingDraft = ref('');
 const editingError = ref<string | null>(null);
 const editingSubmitting = ref(false);
 
-/** 合并 store cached + metadata declared keys → 完整可用列表。 */
-const merged = computed(() => mergeMetadata(store.variables.values(), metadata.value));
+/**
+ * 合并 store cached + metadata declared keys → 完整可用列表。
+ * 传 wallId 让骨架行（namespace 是裸的）和 store 行（namespace 带 wallId）认成同一个变量，
+ * 不然同一个变量会在列表里出现两条。
+ */
+const merged = computed(() => mergeMetadata(store.variables.values(), metadata.value, props.wallId));
 
 const groups = computed<PickerGroup[]>(() =>
     // 第 5 参 selfUuid 传入让 userglobal 分到 myGlobal / othersGlobal
@@ -112,10 +116,15 @@ function absoluteIdx(groupIdx: number, innerIdx: number): number {
     return acc + innerIdx;
 }
 
+/** 插入文本用的短名。带 wallId 才能把 per-wall 变量写成不焊死画布 id 的可移植形态。 */
+function shortName(v: Variable): string {
+    return displayName(v, props.wallId);
+}
+
 function selectFlat(idx: number) {
     const v = flat.value[idx];
     if (!v) return;
-    emit('select', displayName(v));
+    emit('select', shortName(v));
 }
 
 /** 是否 dynamic namespace（picker 行 UI 加标签）。 */
@@ -313,7 +322,7 @@ async function clearAlias(ev?: Event) {
                 </td>
                 <td class="hc-vp-cell hc-vp-name-cell">
                   <div class="hc-vp-name-inner">
-                    <span class="hc-vp-name" :title="`${v.namespace}/${v.key}`">{{ displayName(v) }}</span>
+                    <span class="hc-vp-name" :title="`${v.namespace}/${v.key}`">{{ shortName(v) }}</span>
                     <span class="hc-vp-meta">
                       <span
                         v-if="isDynamic(v.namespace)"
@@ -377,7 +386,7 @@ async function clearAlias(ev?: Event) {
                     </button>
                   </div>
                   <div class="hc-vp-edit-meta">
-                    <span class="hc-vp-edit-target">{{ displayName(v) }}</span>
+                    <span class="hc-vp-edit-target">{{ shortName(v) }}</span>
                     <span v-if="editingError" class="hc-vp-edit-error">{{ editingError }}</span>
                   </div>
                 </td>

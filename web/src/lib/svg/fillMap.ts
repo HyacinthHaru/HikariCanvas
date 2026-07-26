@@ -138,9 +138,13 @@ function normalizeColor(raw: string): string | undefined | null {
 function parsePercent(v: string | null | undefined, def = 0): number {
     if (v == null || v === '') return def;
     const s = v.trim();
-    if (s.endsWith('%')) return parseFloat(s) / 100;
+    if (s.endsWith('%')) {
+        const p = parseFloat(s);
+        // "abc%" 这种读不懂的值原来会算出 NaN 一路带到 stop.position，服务端整条拒收
+        return Number.isFinite(p) ? p / 100 : def;
+    }
     const n = parseFloat(s);
-    return isNaN(n) ? def : n;
+    return Number.isFinite(n) ? n : def;
 }
 
 /**
@@ -288,19 +292,36 @@ export function resolveFillValue(raw: string, root?: Element, currentColor?: str
  * 解析一对已经取好的 `stroke` / `stroke-width` 属性字符串（继承由调用方完成）。
  * `stroke` 的初始值是 `none`，所以「读不懂」与「显式 none」都返回 undefined —— 与 fill 不同，
  * 描边缺省本来就没有，回落不会丢内容。
+ *
+ * @param scale 祖先 transform 的等效缩放倍率（{@code sqrt(|det|)}）。线宽跟着坐标一起缩放，
+ *        否则 AI / Figma 导出的 `<g transform="scale(4)">` 里 1px 的线导进来还是 1px，
+ *        而形状被放大了 4 倍——线看着比原图细一大截。
  */
 export function resolveStrokeValue(
     rawStroke: string,
     rawWidth?: string,
     currentColor?: string,
+    scale = 1,
 ): Stroke | undefined {
     const source = rawStroke.trim().toLowerCase() === 'currentcolor'
         ? (currentColor ?? SVG_DEFAULT_CURRENT_COLOR)
         : rawStroke;
     const color = normalizeColor(source);
     if (color === undefined || color === null) return undefined;
-    const width = rawWidth !== undefined ? Number(rawWidth) : 1;
-    return { color, width: isNaN(width) ? 1 : width };
+    const raw = rawWidth !== undefined ? Number(rawWidth) : 1;
+    const base = Number.isFinite(raw) ? raw : 1;
+    const k = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    return { color, width: base * k };
+}
+
+/**
+ * 仿射矩阵的等效均匀缩放倍率 = {@code sqrt(|ad − bc|)}（面积缩放开方）。
+ * 非均匀缩放 / 有旋转时这是个折中值，够线宽用。
+ */
+export function matrixScale(m: readonly number[]): number {
+    const det = Math.abs(m[0] * m[3] - m[1] * m[2]);
+    const s = Math.sqrt(det);
+    return Number.isFinite(s) && s > 0 ? s : 1;
 }
 
 /**

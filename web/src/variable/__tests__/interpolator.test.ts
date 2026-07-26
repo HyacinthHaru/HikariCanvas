@@ -93,6 +93,15 @@ describe('interpolator.resolveFullName', () => {
         expect(resolveFullName('wall/id', null))
             .toBe('wall/id');
     });
+    // 剥空白的口径要跟后端 Java String.trim() 一样：只剥 ≤U+0020。
+    it('普通空格 / 换行 / 制表符照剥（与 Java trim 一致）', () => {
+        expect(resolveFullName('  user/X \t\n', 'w-abc')).toBe('user:w-abc/X');
+    });
+    it('全角空格与不换行空格不剥——后端剥不掉，前端也不能剥', () => {
+        // JS 原生 trim() 会把这两个剥掉，导致编辑器预览能取到值、游戏内却是 ???
+        expect(resolveFullName('\u3000user/X', 'w-abc')).toBe('\u3000user/X');
+        expect(resolveFullName('user/X\u00A0', 'w-abc')).toBe('user:w-abc/X\u00A0');
+    });
 });
 
 describe('interpolator.interpolate', () => {

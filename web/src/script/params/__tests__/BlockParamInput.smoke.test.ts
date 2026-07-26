@@ -109,6 +109,24 @@ describe('BlockParamInput — number', () => {
         await w.find('input').setValue('');
         expect(w.emitted('update')).toBeUndefined();
     });
+
+    // 标了 integer 的字段后端只收整数（requireInt / requireLong 连 3.0 都拒），手打个小数
+    // 会让整条脚本存不下、报错还指不到积木。step 管的是微调按钮，拦不住手打值。
+    it('integer 字段：手打小数当场取整', async () => {
+        const f = field({ type: 'number', name: 'ms', min: 50, max: 5000, step: 50, integer: true });
+        const w = mountInput(f, 500);
+        await w.find('input').setValue('100.5');
+        expect(lastUpdate(w)).toBe(101);
+        await w.find('input').setValue('2.4');
+        expect(lastUpdate(w)).toBe(50);      // 取整成 2 再钳到 min
+    });
+
+    it('没标 integer 的字段照旧收小数（音量 / 粒子偏移这类）', async () => {
+        const f = field({ type: 'number', name: 'volume', min: 0, max: 2, step: 0.1 });
+        const w = mountInput(f, 1);
+        await w.find('input').setValue('0.75');
+        expect(lastUpdate(w)).toBe(0.75);
+    });
 });
 
 describe('BlockParamInput — text / select / scope / op', () => {

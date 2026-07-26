@@ -66,17 +66,35 @@ function isCollapsed(groupName: string | null): boolean {
     return collapsedGroups.value.has(`${templates.selectedId}::${groupName}`);
 }
 
-const hasExistingContent = computed(() => (project.state?.elements?.length ?? 0) > 0);
+/**
+ * 当前画布上是否已经有东西——决定套用模板前要不要再问一遍。
+ *
+ * <p>必须看<b>所有图层</b>：套用模板是整个工程被换掉，不是只换当前图层。只看当前图层的话，
+ * 站在一个空图层上套模板就一句话不问，直接把别的图层辛苦画的全清了。</p>
+ */
+const hasExistingContent = computed(() => {
+    const s = project.state;
+    if (!s) return false;
+    if (s.layers && s.layers.length > 0) {
+        return s.layers.some((l) => (l.elements?.length ?? 0) > 0);
+    }
+    // 没有 layers 字段（老快照）时退回兼容视图
+    return (s.elements?.length ?? 0) > 0;
+});
 
 // ---------- 预览缩略图 ----------
 // 后端 GET /api/template/{id}/preview.png 返回 PNG（无预览则 404）。同源相对 URL，
-// 复用编辑器已带的 sessionId cookie / 同源上下文；缓存交给端点自己的 Cache-Control。
+// 缓存交给端点自己的 Cache-Control。
+// 必须带 sessionId：缩略图是模板画布内容的完整渲染图，后端按调用方身份过滤——不带身份
+// 就只能拿到 builtin / server 模板，自己存的模板会 404 显占位。
 
 /** 拉取失败（404 / 未渲染）的模板 id 集合 —— 命中则改渲占位符，不露破图。 */
 const failedPreviews = ref<Set<string>>(new Set());
 
 function previewUrl(id: string): string {
-    return `/api/template/${encodeURIComponent(id)}/preview.png`;
+    const base = `/api/template/${encodeURIComponent(id)}/preview.png`;
+    const sid = net.sessionId;
+    return sid ? `${base}?sessionId=${encodeURIComponent(sid)}` : base;
 }
 
 function markPreviewFailed(id: string) {

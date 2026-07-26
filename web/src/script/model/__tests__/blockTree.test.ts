@@ -283,6 +283,31 @@ describe('blockTree.moveNode', () => {
         expect(moveNode(a, ['actions', '9'], ['actions'], 0)).toBe(a);
     });
 
+    // 「落回原位」= 空操作，必须返回<b>入参那个引用</b>：调用方就靠 `next === old` 认出
+    // "什么都没动"，从而不入 undo 栈、不触发自动保存。恒返新数组的话，用户原地放下一块积木
+    // 也会白占一步撤销（按 Ctrl+Z 画面没变化）。
+    it('落回原位（插到自己前面）→ 返回原引用', () => {
+        const a: ScriptAction[] = [log('A'), log('B'), log('C')];
+        expect(moveNode(a, ['actions', '1'], ['actions'], 1)).toBe(a);
+    });
+
+    it('落回原位（插到自己后面，下标补偿后同位）→ 返回原引用', () => {
+        const a: ScriptAction[] = [log('A'), log('B'), log('C')];
+        expect(moveNode(a, ['actions', '1'], ['actions'], 2)).toBe(a);
+    });
+
+    it('子序列里落回原位同样返回原引用', () => {
+        const a: ScriptAction[] = [ifBlock('c', [log('T0'), log('T1')], [])];
+        expect(moveNode(a, ['actions', '0', 'then', '1'], ['actions', '0', 'then'], 1)).toBe(a);
+        expect(moveNode(a, ['actions', '0', 'then', '1'], ['actions', '0', 'then'], 2)).toBe(a);
+    });
+
+    it('真的换了位置就必须返回新树（守卫不能过头把正常移动也吞掉）', () => {
+        const a: ScriptAction[] = [log('A'), log('B'), log('C')];
+        expect(moveNode(a, ['actions', '1'], ['actions'], 0)).not.toBe(a);
+        expect(moveNode(a, ['actions', '1'], ['actions'], 3)).not.toBe(a);
+    });
+
     it('目标容器路径在本树里不存在 → 抛错（绝不能返回"少了一块"的树）', () => {
         // actions/0 是 log，没有 then 子序列；往它的 then 里插必然落空。
         // 早期实现在这里静默返回"已摘掉源节点"的树，调用方一提交积木就没了。

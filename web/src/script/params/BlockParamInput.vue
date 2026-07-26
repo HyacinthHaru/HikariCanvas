@@ -80,15 +80,21 @@ const label = computed(() => resolveLabelKey(t.value, props.field.labelKey));
 const numberValue = computed(() => (typeof props.value === 'number' ? props.value : null));
 
 /**
- * number input 改动：解析 + 钳位到 [min, max]。空 / 非有限数 → 不 emit（保留旧值，避免把字段写空）。
- * step 仅作 UI 步进提示，不强制取整（后端 validator 才是范围权威）。
+ * number input 改动：解析 + 取整（字段标了 {@code integer} 时）+ 钳位到 [min, max]。
+ * 空 / 非有限数 → 不 emit（保留旧值，避免把字段写空）。
+ *
+ * <p><b>为什么要当场取整</b>：标了 {@code integer} 的字段（等待时长 / 重复次数 / 各种毫秒…）
+ * 后端只收整数，手打一个 {@code 2.5} 会让整条脚本存不下，而且报错来自反序列化层、指不到是
+ * 哪块积木。{@code step} 只管微调按钮的步长，手打的值浏览器不拦，所以在这里收口。
+ * 小数字段（音量 / 音调 / 粒子偏移 …）不受影响。</p>
  */
 function onNumberInput(e: Event): void {
     const raw = (e.target as HTMLInputElement).value;
     if (raw.trim() === '') return; // 空：不写（保留旧值）
     const n = Number(raw);
     if (!Number.isFinite(n)) return;
-    const clamped = clampNumber(n);
+    const rounded = props.field.integer === true ? Math.round(n) : n;
+    const clamped = clampNumber(rounded);
     emit('update', clamped);
 }
 

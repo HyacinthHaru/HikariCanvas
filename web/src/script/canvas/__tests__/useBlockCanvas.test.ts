@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { effectScope, ref } from 'vue';
 import {
     clampZoom,
+    computeCenterPan,
     computeZoomPan,
     screenToWorldPure,
     useBlockCanvas,
@@ -218,5 +219,35 @@ describe('useBlockCanvas composable', () => {
             expect(c.worldStyle.value.transformOrigin).toBe('0 0');
         });
         scope.stop();
+    });
+});
+
+describe('computeCenterPan 定位到某块积木', () => {
+    const view: ViewState = { panX: 0, panY: 0, zoom: 1 };
+    const vp = { left: 0, top: 0, width: 800, height: 600 };
+
+    it('目标挪到 viewport 正中（pan 加上中心差量）', () => {
+        const next = computeCenterPan(view, vp, { left: 900, top: 700, width: 100, height: 40 });
+        expect(next.panX).toBe(-550);
+        expect(next.panY).toBe(-420);
+    });
+
+    it('已经在正中 → pan 不动', () => {
+        const next = computeCenterPan(view, vp, { left: 350, top: 280, width: 100, height: 40 });
+        expect(next.panX).toBe(0);
+        expect(next.panY).toBe(0);
+    });
+
+    it('在现有 pan 上累加，且不动 zoom', () => {
+        const next = computeCenterPan({ panX: 120, panY: -30, zoom: 1.5 }, vp, { left: 900, top: 700, width: 100, height: 40 });
+        expect(next.panX).toBe(-430);
+        expect(next.panY).toBe(-450);
+        expect(next.zoom).toBe(1.5);
+    });
+
+    it('viewport 不在屏幕左上角时按各自中心算', () => {
+        const next = computeCenterPan(view, { left: 200, top: 100, width: 400, height: 200 }, { left: 400, top: 300, width: 0, height: 0 });
+        expect(next.panX).toBe(0);      // 目标 x=400 恰好是 viewport 水平中心
+        expect(next.panY).toBe(-100);   // viewport 垂直中心 200，目标 300 → 上移 100
     });
 });

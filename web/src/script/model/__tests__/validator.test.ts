@@ -959,3 +959,80 @@ describe('validateRule — 收集全部错误（非 fail-fast）', () => {
         expect(errs.length).toBeGreaterThanOrEqual(2);
     });
 });
+
+// ---------- 整数字段（镜像后端 requireInt / requireLong）----------
+
+/**
+ * 后端读这些字段用 {@code requireInt / requireLong}，用的是 {@code isIntegralNumber()} ——
+ * 连 {@code 3.0} 这种整值浮点都拒。前端以前只 {@code Number(v)} 收下，于是手打一个小数会让
+ * 整条脚本再也存不下，而且报错来自反序列化层、指不到是哪块积木。
+ *
+ * <p>哪些字段收整数由 blockDefs 的字段表（{@code FieldDef.integer}）一处声明，validator 照表查，
+ * 所以这里挑几个代表性的验就行——真正要守住的是"标了就一定拦、没标的小数字段一定不拦"。</p>
+ */
+describe('validateRule — 整数字段（前端镜像后端 requireInt）', () => {
+    it('等待时长写小数 → 报错并指到那块积木', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'wait', ms: 100.5 }] }));
+        const hit = errs.find((e) => e.message.includes('必须是整数'));
+        expect(hit).toBeTruthy();
+        expect(hit!.blockId).toBe('actions/0');
+    });
+
+    it('整值浮点（100.0）在 JS 里就是整数 → 放行（与后端 3.0 的差异只存在于 JSON 文本层）', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'wait', ms: 100.0 }] }));
+        expect(errs.some((e) => e.message.includes('必须是整数'))).toBe(false);
+    });
+
+    it('重复次数 / 随机概率 / 补间时长写小数都拦得住', () => {
+        const cases: ScriptAction[] = [
+            { type: 'repeat', count: 2.5, body: [{ type: 'log', message: 'x' }] },
+            { type: 'randomBranch', probability: 33.3, then: [], else: [] },
+            {
+                type: 'tweenBlock', durationMs: 500.5, easing: { type: 'linear' },
+                body: [{ type: 'setElementProperties', elementId: 'e', patch: { x: '1' }, kind: 'moveTo' }],
+            },
+        ];
+        for (const action of cases) {
+            const errs = validateRule(rule({ actions: [action] }));
+            expect(errs.some((e) => e.message.includes('必须是整数'))).toBe(true);
+        }
+    });
+
+    it('克隆偏移（两个字段各自判）', () => {
+        const errs = validateRule(rule({
+            actions: [{ type: 'cloneElement', elementId: 'e-1', offsetX: 1.5, offsetY: 2.5 }],
+        }));
+        expect(errs.filter((e) => e.message.includes('必须是整数')).length).toBe(2);
+    });
+
+    it('触发器的整数字段（定时间隔）同样拦', () => {
+        const errs = validateRule(rule({ trigger: { type: 'timer', intervalSeconds: 1.5 } }));
+        const hit = errs.find((e) => e.message.includes('必须是整数'));
+        expect(hit).toBeTruthy();
+        expect(hit!.blockId).toBe('trigger');
+    });
+
+    it('小数字段（音量 / 粒子偏移 / 累加步长）不受影响', () => {
+        const errs = validateRule(rule({
+            actions: [
+                { type: 'playSound', soundId: 's', volume: 0.5, pitch: 1.2, scope: 'near' },
+                {
+                    type: 'playParticle', particle: 'minecraft:flame', count: 3,
+                    offsetX: 0.5, offsetY: 0.25, offsetZ: 0.75,
+                },
+                { type: 'incrementVariable', fullName: 'user/x', delta: 0.1 },
+            ],
+        }));
+        expect(errs.some((e) => e.message.includes('必须是整数'))).toBe(false);
+    });
+
+    it('NaN 也算不是整数（各处范围比较对 NaN 恒 false，本来是漏网的）', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'wait', ms: Number.NaN }] }));
+        expect(errs.some((e) => e.message.includes('必须是整数'))).toBe(true);
+    });
+
+    it('报错文案用的是用户在积木上看到的字段名，不是 wire 字段名', () => {
+        const errs = validateRule(rule({ actions: [{ type: 'repeat', count: 2.5, body: [{ type: 'log', message: 'x' }] }] }));
+        expect(errs.some((e) => e.message === '重复次数必须是整数（不能带小数）')).toBe(true);
+    });
+});

@@ -472,3 +472,108 @@ describe('absoluteFullName — 别名 key 必须是 store 里的绝对 fullName'
             .toBe(resolveFullName('wall.id', 'w-1'));
     });
 });
+
+// ---------- per-wall 变量：列表不重复 + 插入文案不焊死画布 id ----------
+
+describe('per-wall 变量在 picker 里只出现一条', () => {
+    const metadata: NamespaceMetadata[] = [
+        {
+            namespace: 'schedule',          // 骨架行的 namespace 是裸的
+            displayName: 'Schedule',
+            dynamic: false,
+            keys: [{ key: 'next_departure', type: 'STRING', ttlMs: 1000 }],
+        },
+        {
+            namespace: 'system',
+            displayName: 'System',
+            dynamic: false,
+            keys: [
+                { key: 'wall.id', type: 'STRING', ttlMs: 0 },
+                { key: 'server.time', type: 'STRING', ttlMs: 60000 },
+            ],
+        },
+    ];
+
+    it('骨架（schedule）与 store 里带 wallId 的同一变量合成一条，且取有值的那条', () => {
+        // store 里真正入库的形态带 wallId
+        const stored = [mkVar('schedule:w-abc', 'next_departure', '18:05')];
+        const merged = mergeMetadata(stored, metadata, 'w-abc');
+
+        const hits = merged.filter((v) => v.key === 'next_departure');
+        expect(hits.length).toBe(1);
+        expect(hits[0].currentValue).toBe('18:05');
+        expect(hits[0].namespace).toBe('schedule:w-abc');
+    });
+
+    it('system 的 per-wall 变量（wall.id）同样只出现一条', () => {
+        const stored = [mkVar('system:w-abc', 'wall.id', 'w-abc')];
+        const merged = mergeMetadata(stored, metadata, 'w-abc');
+        const hits = merged.filter((v) => v.key === 'wall.id');
+        expect(hits.length).toBe(1);
+        expect(hits[0].currentValue).toBe('w-abc');
+    });
+
+    it('全服变量（server.time）不受影响，仍按裸 namespace 命中', () => {
+        const stored = [mkVar('system', 'server.time', '14:35')];
+        const merged = mergeMetadata(stored, metadata, 'w-abc');
+        const hits = merged.filter((v) => v.key === 'server.time');
+        expect(hits.length).toBe(1);
+        expect(hits[0].currentValue).toBe('14:35');
+    });
+
+    it('没传 wallId 时行为不变（老调用点）', () => {
+        const stored = [mkVar('schedule:w-abc', 'next_departure', '18:05')];
+        const merged = mergeMetadata(stored, metadata);
+        // 认不出是同一个变量 → 还是两条（保持旧行为，不因为少传参数而报错）
+        expect(merged.filter((v) => v.key === 'next_departure').length).toBe(2);
+    });
+});
+
+describe('displayName 不把 wallId 焊进插入文案', () => {
+    it('schedule:<wallId>/next_departure → schedule/next_departure', () => {
+        expect(displayName(mkVar('schedule:w-abc', 'next_departure'), 'w-abc'))
+            .toBe('schedule/next_departure');
+    });
+
+    it('system:<wallId>/wall.id → wall.id', () => {
+        expect(displayName(mkVar('system:w-abc', 'wall.id'), 'w-abc')).toBe('wall.id');
+    });
+
+    it('缩写出来的短名必须能被渲染期原样还原（可移植的前提）', () => {
+        for (const v of [mkVar('schedule:w-abc', 'eta_minutes'), mkVar('system:w-abc', 'wall.alias')]) {
+            const short = displayName(v, 'w-abc');
+            expect(resolveFullName(short, 'w-abc')).toBe(`${v.namespace}/${v.key}`);
+            // 换一块画布也能解析到那块画布自己的变量
+            expect(resolveFullName(short, 'w-other')).toBe(`${v.namespace.split(':')[0]}:w-other/${v.key}`);
+        }
+    });
+
+    it('还原不了的 namespace 保持绝对形态（宁可不可移植，也不能解析不出来）', () => {
+        // 假想的 per-wall namespace，resolveFullName 没有对应规则
+        expect(displayName(mkVar('bedwars:w-abc', 'score'), 'w-abc')).toBe('bedwars:w-abc/score');
+    });
+
+    it('不传 wallId 时退回字面形态（老调用点行为不变）', () => {
+        expect(displayName(mkVar('schedule:w-abc', 'next_departure')))
+            .toBe('schedule:w-abc/next_departure');
+        expect(displayName(mkVar('user:w-abc', 'red'))).toBe('user/red');
+    });
+});
+
+describe('per-wall 变量的分组不掉进「插件」组', () => {
+    it('system:<wallId>/wall.id 仍归系统组', () => {
+        const groups = buildGroups([mkVar('system:w-abc', 'wall.id')], 'w-abc', '');
+        expect(groups.find((g) => g.id === 'system')?.items.map((v) => v.key)).toEqual(['wall.id']);
+        expect(groups.find((g) => g.id === 'plugin')?.items.length).toBe(0);
+    });
+
+    it('papi:<wallId> 同理归 PAPI 组', () => {
+        const groups = buildGroups([mkVar('papi:w-abc', '%player_name%')], 'w-abc', '');
+        expect(groups.find((g) => g.id === 'papi')?.items.length).toBe(1);
+    });
+
+    it('schedule:<wallId> 仍归插件组（它本来就是插件提供的）', () => {
+        const groups = buildGroups([mkVar('schedule:w-abc', 'next_departure')], 'w-abc', '');
+        expect(groups.find((g) => g.id === 'plugin')?.items.length).toBe(1);
+    });
+});

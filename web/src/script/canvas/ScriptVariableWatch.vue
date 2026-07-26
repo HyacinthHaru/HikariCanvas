@@ -124,7 +124,14 @@ function onSet(fullName: string, value: string): void {
 </script>
 
 <template>
-  <div class="hc-var-watch" :class="collapsed ? 'hc-var-watch-collapsed' : ''">
+  <!-- @pointerdown.stop：面板挂在画布 viewport 里，不拦住的话在面板上按住就冒泡成"拖空白平移画布"
+       （画布把空白处左键按下一律当 pan），结果是面板里按住一拖整个画布跟着跑、变量值也选不中。
+       只拦 pointerdown，折叠按钮的 click 不受影响。 -->
+  <div
+    class="hc-var-watch"
+    :class="collapsed ? 'hc-var-watch-collapsed' : ''"
+    @pointerdown.stop
+  >
     <!-- 标题条（点折叠按钮收起 / 展开；常驻，不随画布交互关闭） -->
     <button type="button" class="hc-var-watch-head" @click="toggleCollapsed">
       <Eye class="size-3.5 hc-var-watch-eye" />

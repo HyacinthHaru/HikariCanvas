@@ -10,6 +10,11 @@ export function usePanScroll(opts: {
     outerRef: Ref<HTMLElement | null>;
     widthPx: () => number;
     heightPx: () => number;
+    /**
+     * 返 true 时这次 mousedown 不起 pan。给"同一手势已经被别人接管"的场景用
+     * （目前是 Alt+左键画套索蒙版——它和 Alt+左键 pan 是同一个手势）。
+     */
+    blockPan?: () => boolean;
 }) {
     const { outerRef } = opts;
     const ui = useUiStore();
@@ -19,12 +24,19 @@ export function usePanScroll(opts: {
     function onWheel(e: WheelEvent) {
         if (!(e.ctrlKey || e.metaKey)) {
             // Shift+wheel → 水平滚动（PS / Figma 标准）。
-            // 鼠标 wheel 只有 deltaY；Shift 在此把 Y 轴增量重定向到水平方向。
-            // 触控板原生 deltaX 横滚不经此分支（未按 Shift），浏览器默认处理。
+            //
+            // 增量取 deltaX 优先、没有才退 deltaY：Windows / Linux 上鼠标滚轮只给 deltaY，
+            // Shift 由我们负责改投到水平方向；而 macOS 的 Chrome / Safari 在事件层就把
+            // Shift+滚轮换成了 deltaX（deltaY 恒为 0）——只看 deltaY 的话这里加 0 等于没滚，
+            // 却又把浏览器自己的横滚 preventDefault 掉了，横向彻底动不了。
+            // 触控板原生 deltaX 横滚不按 Shift，不经此分支，走浏览器默认处理。
             if (e.shiftKey) {
-                e.preventDefault();
-                const outer = outerRef.value;
-                if (outer) outer.scrollLeft += e.deltaY;
+                const dx = e.deltaX || e.deltaY;
+                if (dx !== 0) {
+                    e.preventDefault();
+                    const outer = outerRef.value;
+                    if (outer) outer.scrollLeft += dx;
+                }
             }
             return;
         }
@@ -65,6 +77,10 @@ export function usePanScroll(opts: {
     const pan: PanState = { active: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 };
 
     function onMouseDown(e: MouseEvent) {
+        // 这一手势已经被别人接管（Alt+左键画套索）→ 不抢过来当 pan。
+        // 套索那边靠 pointerdown 的 preventDefault 压掉兼容 mousedown，这里是第二道保险，
+        // 不指望浏览器一定按预期抑制兼容事件。
+        if (opts.blockPan?.()) return;
         const middleBtn = e.button === 1;
         const altLeft = e.button === 0 && e.altKey;
         // hand 工具下左键直接 pan（含点击元素 / 空白处任意位置）。

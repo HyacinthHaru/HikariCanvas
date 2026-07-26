@@ -320,9 +320,13 @@ function pathPolygon(originX: number, originY: number, d: string | undefined | n
     let firstGroupForCmd = true;
 
     const pushPoint = (x: number, y: number): void => {
-        // 避免重复连续点
+        // 避免重复连续点。points 里存的是全局坐标（已加 origin），传进来的是元素内坐标，
+        // 比之前要先把 origin 减回去——否则元素不在原点时这个判断永远不成立，重复点原样
+        // 喂给 polygon-clipping。
         const last = points[points.length - 1];
-        if (last && Math.abs(last[0] - x) < 1e-6 && Math.abs(last[1] - y) < 1e-6) return;
+        if (last
+            && Math.abs(last[0] - originX - x) < 1e-6
+            && Math.abs(last[1] - originY - y) < 1e-6) return;
         points.push([x + originX, y + originY]);
     };
 

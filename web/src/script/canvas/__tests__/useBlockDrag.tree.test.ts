@@ -505,3 +505,101 @@ describe('lock 守卫', () => {
         expect(edit.workingCopy!.actions[0]).toEqual({ type: 'log', message: 'A' });
     });
 });
+
+/**
+ * 拖动中缩放画布 → 缓存的插槽几何全部作废（#97）。
+ *
+ * <p>插槽矩形是 pointerdown 那一刻量的屏幕坐标，整个拖动期复用（每帧重量会卡）。而 ctrl+滚轮缩放
+ * 不是 PointerEvent，pointer capture 拦不住它：缩放后积木的屏幕位置全变了，吸附线还画在旧位置，
+ * 松手插到的也是旧位置对应的落点。修法是缩放后重测（BlockCanvas 的 wheel 处理器等一帧再调
+ * {@code drag.remeasure()}）。</p>
+ */
+describe('画布缩放后重测插槽（remeasure）', () => {
+    /** 造一个矩形可改的元素（模拟缩放后 DOM 位置变化）。 */
+    function movableEl(attrs: Record<string, string>, rect: { left: number; top: number; width: number; height: number }) {
+        const e = document.createElement('div');
+        for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+        const cur = { ...rect };
+        e.getBoundingClientRect = () => ({
+            left: cur.left, top: cur.top, width: cur.width, height: cur.height,
+            right: cur.left + cur.width, bottom: cur.top + cur.height,
+            x: cur.left, y: cur.top, toJSON: () => ({}),
+        }) as DOMRect;
+        e.setPointerCapture = () => { /* stub */ };
+        e.releasePointerCapture = () => { /* stub */ };
+        return { el: e, moveTo: (top: number) => { cur.top = top; } };
+    }
+
+    /** 两块积木的堆：actions/0 在 top=100、actions/1 在 top=140。返回可移动句柄。 */
+    function setupStack() {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule([
+            { type: 'log', message: 'A' },
+            { type: 'log', message: 'B' },
+        ]));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+
+        const stack = el({ 'data-rule-id': 'sr-1' }, { left: 0, top: 100, width: 280, height: 80 });
+        const a = movableEl({ 'data-block-path': 'actions/0' }, { left: 10, top: 100, width: 260, height: 30 });
+        const b = movableEl({ 'data-block-path': 'actions/1' }, { left: 10, top: 140, width: 260, height: 30 });
+        stack.appendChild(a.el);
+        stack.appendChild(b.el);
+        canvasEl.appendChild(stack);
+        return { edit, a, b };
+    }
+
+    /** 缩放后的新布局：两块整体下移 200px（尾插槽中心随之变到 y≈363）。 */
+    function zoomAway(a: { moveTo: (t: number) => void }, b: { moveTo: (t: number) => void }): void {
+        a.moveTo(300);
+        b.moveTo(340);
+    }
+
+    it('缩放后 remeasure → 按新几何吸附落点', () => {
+        const { edit, a, b } = setupStack();
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a.el));
+        crossThreshold();
+
+        zoomAway(a, b);
+        drag.remeasure();
+
+        // 落到"新位置"的顶层尾插槽（块 actions/1 下沿 y≈340+30-14=356，中心≈363）
+        window.dispatchEvent(pointerEvt('pointerup', 140, 363));
+        expect(edit.workingCopy!.actions.map((n) => (n as { message: string }).message)).toEqual(['B', 'A']);
+    });
+
+    it('不重测（旧行为）→ 同一次松手什么也插不中', () => {
+        const { edit, a, b } = setupStack();
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a.el));
+        crossThreshold();
+
+        zoomAway(a, b);   // 只缩放，不 remeasure
+
+        window.dispatchEvent(pointerEvt('pointerup', 140, 363));
+        expect(edit.workingCopy!.actions.map((n) => (n as { message: string }).message)).toEqual(['A', 'B']);
+    });
+
+    it('remeasure 顺带把吸附指示线挪到新位置', () => {
+        const { a, b } = setupStack();
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a.el));
+        crossThreshold();
+        // 指针停在新布局的尾插槽附近
+        window.dispatchEvent(pointerEvt('pointermove', 140, 363));
+        expect(drag.activeSlot.value).toBeNull();   // 旧几何里那儿什么都没有
+
+        zoomAway(a, b);
+        drag.remeasure();
+        expect(drag.activeSlot.value).not.toBeNull();
+        expect(drag.activeSlot.value!.index).toBe(2);
+    });
+
+    it('没在拖东西时 remeasure 无副作用', () => {
+        setupStack();
+        const drag = makeDrag();
+        expect(() => drag.remeasure()).not.toThrow();
+        expect(drag.activeSlot.value).toBeNull();
+    });
+});

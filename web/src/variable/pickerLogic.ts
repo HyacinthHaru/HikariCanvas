@@ -125,6 +125,7 @@ export function declaredKeyToVariable(
 export function mergeMetadata(
     storeVariables: Iterable<Variable>,
     metadata: NamespaceMetadata[],
+    wallId: string | null = null,
 ): Variable[] {
     const byFullName = new Map<string, Variable>();
     for (const v of storeVariables) {
@@ -134,10 +135,16 @@ export function mergeMetadata(
     const seen = new Set<string>();
     for (const ns of metadata) {
         for (const k of ns.keys) {
+            const skeleton = declaredKeyToVariable(ns.namespace, k);
             const fullName = `${ns.namespace}/${k.key}`;
-            const cached = byFullName.get(fullName);
-            out.push(cached ?? declaredKeyToVariable(ns.namespace, k));
+            // 骨架行的 namespace 是裸的（schedule / system），同一个变量在 store 里带着
+            // wallId（schedule:<wallId>）。两个形态都查一遍，否则列表里同一个变量会出现
+            // 两条：一条显示"—"、一条有值，用户挑哪条全靠运气。
+            const absolute = absoluteFullName(skeleton, wallId);
+            const cached = byFullName.get(fullName) ?? byFullName.get(absolute);
+            out.push(cached ?? skeleton);
             seen.add(fullName);
+            seen.add(absolute);
         }
     }
     // store-only：metadata 没声明、但 store 有的（动态注册 + 老插件未实现 declaredKeys 兜底）
@@ -167,14 +174,32 @@ export function isDynamicNamespace(
  * <ul>
  *   <li>user 变量：{@code user/<key>}（隐藏 wallId 部分，与文本中 {@code ${var:user/<key>}} 一致）</li>
  *   <li>userglobal：{@code userglobal/<key>}（保留前缀，文本写法一致）</li>
+ *   <li>其他带 wallId 的 per-wall 变量（{@code schedule:<wallId>} / {@code system:<wallId>}）：
+ *       去掉 wallId 写成可移植形态（{@code schedule/next_departure} / {@code wall.id}）</li>
  *   <li>其他：{@code <namespace>/<key>}</li>
  * </ul>
+ *
+ * <p><b>为什么要去 wallId</b>：写进文本的是这个短名，把 {@code w-abc} 焊进去之后，这份工程
+ * 导出再套到别的画布上就永远解析不出值。去掉之后由渲染期的 {@link resolveFullName} 按当前
+ * 画布现补——两边是同一个函数，所以这里只在"补回去能一字不差还原"时才敢缩写，还原不了的
+ * namespace 保持原样（宁可不可移植，也不能解析不出来）。</p>
+ *
+ * @param wallId 当前 wall id；不传（或为空）时一律退回字面形态
  */
-export function displayName(v: Variable): string {
+export function displayName(v: Variable, wallId: string | null = null): string {
     if (v.namespace.startsWith('user:')) {
         return `user/${v.key}`;
     }
-    return `${v.namespace}/${v.key}`;
+    const literal = `${v.namespace}/${v.key}`;
+    if (wallId && wallId.length > 0 && v.namespace.endsWith(`:${wallId}`)) {
+        const bare = v.namespace.slice(0, -(wallId.length + 1));
+        // 候选短名：先试 <namespace>/<key>（schedule/next_departure），
+        // 再试裸 key（system 下的 wall.id，用户写法本来就是 ${var:wall.id}）
+        for (const candidate of [`${bare}/${v.key}`, v.key]) {
+            if (resolveFullName(candidate, wallId) === literal) return candidate;
+        }
+    }
+    return literal;
 }
 
 /**
@@ -190,8 +215,11 @@ function groupOf(v: Variable, selfUuid: string | null): PickerGroup['id'] {
         return v.ownerUuid && selfUuid && v.ownerUuid === selfUuid
             ? 'myGlobal' : 'othersGlobal';
     }
-    if (v.namespace === 'system') return 'system';
-    if (v.namespace === 'papi') return 'papi';
+    // per-wall 变量在 store 里的 namespace 带 :<wallId>（system:w-abc / schedule:w-abc），
+    // 分组按冒号前那截判——否则 wall.id 会掉进"由插件提供"组里，用户翻半天找不到。
+    const bare = v.namespace.split(':')[0];
+    if (bare === 'system') return 'system';
+    if (bare === 'papi') return 'papi';
     return 'plugin';
 }
 

@@ -5,8 +5,9 @@
  *
  * 设计：
  * - props.element：当前元素（任意子类型）
- * - props.locked：wall 锁定时为 true（顶层 .hc-readonly-panel 已经禁用 pointer-events，
- *   这里不再额外处理，但保留参数以便未来子组件按需细化交互）
+ * - props.locked：wall 锁定时为 true。顶层用 `inert` 属性屏蔽整块编辑区（0.9.17 从
+ *   `pointer-events: none` 换过来——那个只挡鼠标，Tab 仍能聚焦进去改值并真的落库，
+ *   而且会连带把面板滚动一起吃掉）。这里保留该参数以便子组件按需细化交互
  * - emits update / updateDebounced：分别用于"定型"变更 vs 防抖输入；父组件转 ws.send
  *
  * opacity slider 的本地 draft 缓冲在自己内部维护，切换元素时 watch reset。

@@ -36,6 +36,10 @@ export function useCanvasShortcuts() {
     onKeyStroke('0', (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); ui.zoomReset(); } });
 
     onKeyStroke('Escape', () => {
+        // 正在输入框 / 富文本里打字时，Esc 是"退出这次输入"，不该顺手把画布选中也清了。
+        // 组件自己的 Esc 处理（变量 chip 编辑器、变量选择器、图标库）只 preventDefault
+        // 不 stopPropagation，window 这层必然也会收到，所以守卫得写在这儿。
+        if (inEditable()) return;
         // 绘制工具激活时按 Esc 切回 select；select / move 工具下按 Esc 等同清空选中
         if (isDrawTool(ui.activeTool)) {
             ui.setTool('select');

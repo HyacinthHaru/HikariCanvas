@@ -84,8 +84,27 @@ export interface SimpleCondition {
  */
 export function formatNumber(n: number): string {
     if (!Number.isFinite(n)) return '0';
-    if (Number.isInteger(n)) return String(n);
-    return String(n);
+    const s = String(n);
+    // JS 对极大 / 极小的数会写成指数（1e-7 / 1e+21），而后端表达式文法的 readNumber 只认
+    // "数字[.数字]"——原样写进条件里，保存时会被判成语法错、整条规则存不下。展开成普通小数写法。
+    return (s.includes('e') || s.includes('E')) ? expandExponent(s) : s;
+}
+
+/**
+ * 把 JS 的指数写法展开成普通小数写法（{@code '1e-7'} → {@code '0.0000001'}；
+ * {@code '1e+21'} → {@code '1000000000000000000000'}）。
+ * 认不出的形态原样返回（不制造更奇怪的串）。
+ */
+function expandExponent(s: string): string {
+    const m = /^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/.exec(s);
+    if (!m) return s;
+    const [, sign, intPart, fracPart = '', expText] = m;
+    const digits = intPart + fracPart;
+    // 小数点应落在 digits 的第几位（可能落在串外，两侧补零）。
+    const pointPos = intPart.length + Number(expText);
+    if (pointPos <= 0) return `${sign}0.${'0'.repeat(-pointPos)}${digits}`;
+    if (pointPos >= digits.length) return `${sign}${digits}${'0'.repeat(pointPos - digits.length)}`;
+    return `${sign}${digits.slice(0, pointPos)}.${digits.slice(pointPos)}`;
 }
 
 /**

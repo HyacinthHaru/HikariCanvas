@@ -20,7 +20,7 @@
  * <p>所有写操作（创建 / 改值 / 删除 / 绑定）走 {@code wsClient.sendVariable*}；
  * server 通过 state.patch 推变更，本组件被动消费 {@link useVariableStore}。</p>
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { onClickOutside, useEventListener } from '@vueuse/core';
 import {
     X, Search, Plus, Users, Package, Globe, Plug,
@@ -82,6 +82,16 @@ useEventListener(window, 'keydown', (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
     // 任意 modal 打开时不关 panel（先关 modal）
     if (showNewDialog.value || showValueEditor.value || showBindDialog.value) return;
+    // 正在改别名 / 正在等删除确认时，ESC 只退出这一层，不把整个面板一起关掉——
+    // 弹窗和行内输入框里的 ESC 都会冒泡到这里，不管的话按一次退两层。
+    if (editingAliasFor.value !== null) {
+        cancelAliasEdit();
+        return;
+    }
+    if (confirmingDeleteFor.value !== null) {
+        cancelDelete();
+        return;
+    }
     // 焦点在 input 也不关（用户可能在搜索框 ESC 清搜索；这里简单全关）
     ui.closeVariablePanel();
 });
@@ -155,16 +165,75 @@ const globalVariables = computed<Array<{
 
 // ---------- 行操作 ----------
 
+/**
+ * 加减按钮的本地即时值：fullName → 本地累加结果。
+ *
+ * <p>加减是「读当前值 → 算新值 → 把新值发过去」，基数如果取自 store 就会出事：长按每 50ms
+ * 发一次，而 store 要等服务端回执再推回来才更新。网络一慢，接连几次都拿同一个旧基数算，
+ * 发出去的是同一个数——长按一秒本该 +14，实际只加了一两下。快速连点同理。所以按下期间以
+ * 本地值为基数累加，等服务端的新值回来了再交回权威值。</p>
+ */
+const localNumbers = ref<Record<string, number>>({});
+/** 每个变量还有几发加减在路上；全部落地（或全部失败）才允许撤掉本地值。 */
+const incInflight = new Map<string, number>();
+
+/** 变量当前值的数值形态；不是数就当 0。 */
+function numericValueOf(v: Variable): number {
+    const cur = Number(v.currentValue ?? v.defaultValue ?? 0);
+    return Number.isFinite(cur) ? cur : 0;
+}
+
+function dropLocalNumber(fullName: string) {
+    if (!(fullName in localNumbers.value)) return;
+    const next = { ...localNumbers.value };
+    delete next[fullName];
+    localNumbers.value = next;
+}
+
+/** 当前值的显示文本。有本地累加值时显示它，否则显示服务端的值。 */
+function currentValueText(fullName: string, v: Variable): string {
+    const local = localNumbers.value[fullName];
+    if (local !== undefined) return String(local);
+    return v.currentValue ?? '∅';
+}
+
+// 服务端把新值推回来之后交回权威值——但必须等这个变量没有在途请求才撤，否则会拿滞后的
+// 值把正在累加的数字拉回去，屏幕上来回跳。
+watch(
+    () => Object.keys(localNumbers.value)
+        .map((fn) => `${fn}=${store.get(fn)?.currentValue ?? ''}`).join('|'),
+    () => {
+        const keys = Object.keys(localNumbers.value);
+        if (keys.length === 0) return;
+        const next = { ...localNumbers.value };
+        let changed = false;
+        for (const fn of keys) {
+            if ((incInflight.get(fn) ?? 0) > 0) continue;
+            delete next[fn];
+            changed = true;
+        }
+        if (changed) localNumbers.value = next;
+    },
+);
+
 async function incVariable(fullName: string, v: Variable, delta: number) {
     // number 类才允许；UI 已通过 v-if 隔离 +/-，这里二次防御
     if (v.type !== 'NUMBER') return;
-    const cur = Number(v.currentValue ?? v.defaultValue ?? 0);
-    const next = (Number.isFinite(cur) ? cur : 0) + delta;
+    const base = localNumbers.value[fullName] ?? numericValueOf(v);
+    const next = base + delta;
+    localNumbers.value = { ...localNumbers.value, [fullName]: next };
+    incInflight.set(fullName, (incInflight.get(fullName) ?? 0) + 1);
     try {
         await ws.sendVariableSet(fullName, String(next));
         // server 会通过 state.patch 推回，store 自动更新
     } catch (err) {
         net.pushLog('err', `variable.set inc rejected: ${(err as Error).message}`);
+        // 最后一发也被拒了 → 本地这几下没落地，撤回去显示服务端的真值
+        if ((incInflight.get(fullName) ?? 0) <= 1) dropLocalNumber(fullName);
+    } finally {
+        const left = (incInflight.get(fullName) ?? 1) - 1;
+        if (left <= 0) incInflight.delete(fullName);
+        else incInflight.set(fullName, left);
     }
 }
 
@@ -362,7 +431,7 @@ function isHexColor(s: string | null): boolean {
                   class="inline-block size-3 rounded border border-[color:var(--border)]"
                   :style="{ backgroundColor: entry.v.currentValue ?? '#000' }"
                 ></span>
-                <span class="font-mono text-[color:var(--foreground)]">{{ entry.v.currentValue ?? '∅' }}</span>
+                <span class="font-mono text-[color:var(--foreground)]">{{ currentValueText(entry.fullName, entry.v) }}</span>
               </span>
               <span class="flex items-center gap-1">
                 <span>{{ t.variables.defaultLabel }}:</span>
@@ -443,7 +512,7 @@ function isHexColor(s: string | null): boolean {
                   :maxlength="ALIAS_MAX_LEN + 8"
                   :disabled="aliasSubmitting"
                   @keydown.enter.prevent="submitAliasEdit"
-                  @keydown.escape.prevent="cancelAliasEdit"
+                  @keydown.escape.stop.prevent="cancelAliasEdit"
                 />
                 <button
                   class="hc-btn p-1 rounded border border-[color:var(--border)] text-[color:var(--ctp-green,var(--primary))] hover:bg-[color:var(--accent)] disabled:opacity-40"
@@ -563,7 +632,7 @@ function isHexColor(s: string | null): boolean {
                   class="inline-block size-3 rounded border border-[color:var(--border)]"
                   :style="{ backgroundColor: entry.v.currentValue ?? '#000' }"
                 ></span>
-                <span class="font-mono text-[color:var(--foreground)]">{{ entry.v.currentValue ?? '∅' }}</span>
+                <span class="font-mono text-[color:var(--foreground)]">{{ currentValueText(entry.fullName, entry.v) }}</span>
               </span>
               <span class="flex items-center gap-1">
                 <span>{{ t.variables.defaultLabel }}:</span>
@@ -642,7 +711,7 @@ function isHexColor(s: string | null): boolean {
                   :maxlength="ALIAS_MAX_LEN + 8"
                   :disabled="aliasSubmitting"
                   @keydown.enter.prevent="submitAliasEdit"
-                  @keydown.escape.prevent="cancelAliasEdit"
+                  @keydown.escape.stop.prevent="cancelAliasEdit"
                 />
                 <button
                   class="hc-btn p-1 rounded border border-[color:var(--border)] text-[color:var(--ctp-green,var(--primary))] hover:bg-[color:var(--accent)] disabled:opacity-40"

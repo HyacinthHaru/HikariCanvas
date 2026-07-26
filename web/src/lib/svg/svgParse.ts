@@ -39,6 +39,9 @@ function parseViewBox(v: string | null): [number, number, number, number] | null
 
 function parseLen(v: string | null): number | null {
     if (!v) return null;
-    const n = parseFloat(v);   // 忽略单位(px 默认); % 等留 null
+    // 百分比是相对外层视口的，导入时没有"外层"可参照，只能当作没声明尺寸。
+    // （原来这里 parseFloat('100%') 得 100，会被当成 100px。）
+    if (v.trim().endsWith('%')) return null;
+    const n = parseFloat(v);   // 忽略单位（px 默认）
     return Number.isFinite(n) ? n : null;
 }

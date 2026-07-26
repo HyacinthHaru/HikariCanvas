@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-07-27 · 0.9.17 第二/三/四批 · 前端总成（03/04/05 的全部前端条目，4 个并行代理）
+
+外部静态审查在 Top50 之后又产出三份清单：`03-必修BugTop51-100`（50 条）· `04-必修Bug第三批101-140`（40 条）· `05-类别专项筛查141-202`（62 条）。三份在文件空间上高度重叠，故**按文件域而非按文档切分**并行推进。本条是**前端**部分的合并记录。
+
+**画布交互 / 快捷键 / 选中模型**（#70 #108 #109 #112 #117 #124 #125 #177 #178 #179 #180）
+- **#117 报告的首选修法会把编辑器搞瘫，代理及时发现并改走备选**：`previewActive` 只有 `useTimelinePlayback.stop()` 会清，自动加帧拖一次后它一直是 true —— 照「预览态就 `listening:false` + 藏 Transformer」改，之后所有元素永久点不动。改为把插值几何喂给 `hitConfig`（与 `requestDraw` 同一份 `interpolate`），Transformer 自然对齐；顺带把「登记拖动集」与「打关键帧」拆开，否则预览态 + 自动加帧关时拖动会被插值拽回去。
+- **#112 部分不属实**：报告说 `CanvasView:453` 用 `activeLayerLocked` 会放行——当前不可复现（命中框只铺活动层，二者等价）。真缺口是另两处（`attachTransformer` 任何图层锁都不查；多选拖动的 follower 可能在锁定层），已修。
+- **#108** `element.locked` 形同虚设：新增 store 谓词 `layerOfElement / isElementEditable / editableIds`，Transformer 不给锁定元素挂锚点、Delete 与方向键按谓词过滤（**建在 Top50 新加的 `nudgeQueue` 累积结构上，锁定元素压根不进队列**）。
+- **#179** lock 从 `pointer-events:none` 换成 `inert`：前者只挡鼠标，**Tab 仍能聚焦进去改值并真的落库**，还连带把面板滚动一起吃掉。
+- 其余：隐藏元素关 `listening`（#70）· 套索三道防止被 Alt+pan 抢（#109）· Escape 加输入框守卫（#124）· 旋转元素跳过吸附（#125）· 拖放 window 兜底只拦 Files/图标两类 MIME（#177）· 「新加即选中」按改动前状态记已有 id + 200ms 归批（#178，粘贴 5 个现在 5 个都选中）· Shift+滚轮 macOS 不再吃掉浏览器原生行为（#180）。
+
+**脚本编辑器 / 积木**（#97 #98 #119 #120 #137 #138 #139 #161 #168 #169 #170 #174 #201）
+- **#168 做成结构性修复而非逐字段打补丁**（05 文档指出复发源是「前端校验器与后端 deserializer 的严格度差」）：`FieldDef` 加 `integer` 标记，照后端 `ActionDeserializer`/`TriggerDeserializer` 的读法标了 **16 个字段**（走 `requireDouble` 的与友好积木 patch 字段不标）；输入即 `Math.round` + 钳位；校验器由字段表驱动。**另加契约测试**：手抄后端读法的期望表与 `integer` 标记双向比对（该标的不漏、不该标的不多、只有 number 字段能标），字段表一漂就红。
+- **#119 不止 BlockStack**：同一机理在 `BlockNode` 更严重（`updateActionField` 按 path 写，路径在每条规则里都存在，会安静改掉另一条规则的同位置积木），6 个写入口一并加守卫。
+- **#98 已被 Top50 覆盖**（`moveNode` 插入落空即抛错），未重复改。
+- 其余：拖拽中缩放后 `remeasure`（#97）· 错误定位改挪 pan 而非滚 hidden 容器（#120）· 变量面板 `@pointerdown.stop`（#137）· 跟手浮层认 `actionKind`（#138）· `closeEditing` 返 boolean 让校验门挡住 Esc（#139）· 保存失败回调带 ruleId + `pendingSaves` 切回自动恢复（#161）· `formatNumber` 展开指数记法（#169）· 变量提取补 5 类动作（#170）· `setEnabled` 失败回滚且只在「还停在这条规则 + 开关仍是我们写的值」时回滚（#174）· 「落回原位」守卫真正生效（#201）。
+
+**时间轴 / SVG 导入 / Live Paint**（#71 #73 #74 #75 #77 #94 #100 #118 #134 #135 #136 #140 #175）
+- **#75 plausible → 实证属实**：实跑 polygon-clipping 0.15.7 —— 三条并排横杠塞进同一 PCPolygon，union 后**只剩第一条**；拆成独立 polygon 则三条全在，"O" 的真嵌套孔在同 polygon 内仍正常。改 `groupContoursByNesting`（面积序 + 射线法定嵌套层）。
+- **#74 顺带发现一个必炸的连带问题**：改成按 ack 计数后必须**分批发**（16 条/1.1s）——服务端 40 条/2s 限流、一分钟 5 次超限会踢连接，几十个形状的图标集原本必中。
+- **#73 plausible → 部分属实**：`viewBoxMat` 恒 IDENTITY 成立，但「不指定目标尺寸就不缩放」在文档覆盖内。真缺口是三个：声明 `width/height` 与 viewBox 单位不一致、负 `minX/minY` 让元素落画布外、`vbW/vbH=0` 除零。顺带修 `parseLen`（注释写「% 留 null」、实现却把 `100%` 当 100px）。**动了 `docs/rendering.md §11.2`。**
+- **#140 判定改前端**：契约权威已在 `rendering.md §9.5`（trim 剥 ≤U+0020），后端 `String.trim()` 原生即此语义、游戏内输出才是最终真相 → 改 `interpolator.ts` 用 `asciiTrim`。
+- **#175 根因在后端**（`TimelineOperations.addKeyframe` 无去重），前端两手兜住症状，根治已转交后端域。
+- 其余：`fill.ts` 加 `safeColor`（正则与后端逐字符相同，非法色落白，堵住 `addColorStop` 每帧抛）（#77）· 时间轴 8 处空 catch 接上失败回滚，**只在本地值仍是我们写进去的那个时才回滚**（#71）· 整体帧缓动补 `coalesceKey`（#118）· `complexityGuard` 按实际数字个数估算（#94）· 切 wall 的 reset watch 依赖改 `project.wallId`（#100）· 油漆桶 i18n 补键，**并新增 zh/en 键集合全等测试**把这一整类「加了一边忘另一边」拦住（#134）· 线宽随 transform 缩放烘焙（#135）· 去重坐标系修正（#136）。
+
+**变量面板 / 铁路 UI / WS 客户端**（#72 #93 #95 #99 #110 #111 #113 #121 #123 #176）
+- **#113 是会写进 DB 的数据污染**：`handleAck` 靠字段嗅探认副作用，设变量别名会污染 wall 别名。改为 `PendingAck` 记 `op` 名，只对 `wall.alias/lock/unlock` 三个 op 应用。
+- **#121 修完连带出一个回归并被同一代理接住**：去重后只剩带 wallId 的 store 行，`groupOf` 会把 `wall.id` 归进「插件」组 → 改按冒号前那截分组。`displayName` 也改成**只在 `resolveFullName(短名, wallId)` 能一字不差还原时**才缩写。
+- 其余：`hasExistingContent` 扫全部图层（#93，多层工程原本绕过覆盖二次确认）· NUMBER 变量本地乐观累加器 + 在途计数（#72）· 服务端时钟差换算到本机（#95）· rail store 改按线路整体替换（#99）· 站点排序改换位后整体重排并抹平历史重复号（#110）· 切精度用 `stationDraft`（#111）· ESC 只退一层（#123）· 心跳按**任意入帧**判活、静默超 2 个周期主动 close 交给既有退避重连（#176）。
+
+**controller 亲自收的三处域外遗留**：对齐/分布栏改为扫全图层 + 按元素所属图层的锁定谓词过滤（原来只滤元素自身 `locked`，漏图层锁 → 服务端回 `LAYER_LOCKED` 而前端已乐观改 = 分叉）；`useLockGuard` 与 `TransformSection` 两处「靠 pointer-events 屏蔽」的过期注释改对。
+
+**验证**：前端 vitest **1561 → 1747**（+186，130 个文件全绿）+ `vite build` 通过。四个代理对关键守卫**全部做了变异测试**（把修复改回旧行为确认转红），并各自指出了报告中不属实或修法有误的条目（见上）。
+
+---
+
 ## 2026-07-27 · 0.9.17 必修 Bug 批 · 前端总成（Top50 剩余前端条目，4 个并行代理）
 
 W1–W4 之后剩下的 Top50 条目改用**按文件域切分的并行子代理**推进（controller 只做装配、跨切面决策与统一验证）。本条是其中**前端**部分的合并记录；后端部分随下一条提交。

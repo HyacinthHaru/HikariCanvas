@@ -61,6 +61,31 @@ export function screenToWorldPure(view: ViewState, vpX: number, vpY: number): { 
     };
 }
 
+/** client 坐标矩形（getBoundingClientRect 的子集）。 */
+export interface ClientRect {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * 纯函数：把 {@code targetRect} 挪到 viewport 正中所需的新 pan（zoom 不变）。
+ *
+ * <p>两个矩形都取 client 坐标，差量直接加到现有 pan 上——{@code pan} 本身就是屏幕像素偏移，
+ * 不必经 world 换算。</p>
+ *
+ * <p><b>不用 {@code scrollIntoView}</b>：viewport 是 {@code overflow:hidden} 容器，
+ * scrollIntoView 照样会改它的 scrollTop/scrollLeft（hidden 只是不给滚动条，程序滚得动），
+ * 而本文件的 {@link screenToWorldPure} 只减 viewport 的 rect、从不读 scroll 偏移——一滚，
+ * 拖拽落点、吸附线、删除区就整体错位，只能刷新页面才复原。挪 pan 没有这个副作用。</p>
+ */
+export function computeCenterPan(view: ViewState, vpRect: ClientRect, targetRect: ClientRect): ViewState {
+    const dx = (vpRect.left + vpRect.width / 2) - (targetRect.left + targetRect.width / 2);
+    const dy = (vpRect.top + vpRect.height / 2) - (targetRect.top + targetRect.height / 2);
+    return { panX: view.panX + dx, panY: view.panY + dy, zoom: view.zoom };
+}
+
 export function useBlockCanvas(opts: {
     /** viewport DOM（overflow hidden 容器），用于读 getBoundingClientRect。 */
     viewportRef: { value: HTMLElement | null };
@@ -109,6 +134,23 @@ export function useBlockCanvas(opts: {
         panX.value = 0;
         panY.value = 0;
         zoom.value = 1;
+    }
+
+    /**
+     * 把某个元素挪到画布正中（只改 pan，不缩放、不滚容器）。用于"点错误提示跳到那块积木"。
+     * 无 viewport → no-op 返 false。
+     */
+    function centerOnElement(el: HTMLElement): boolean {
+        const vp = opts.viewportRef.value;
+        if (!vp) return false;
+        const next = computeCenterPan(
+            { panX: panX.value, panY: panY.value, zoom: zoom.value },
+            vp.getBoundingClientRect(),
+            el.getBoundingClientRect(),
+        );
+        panX.value = next.panX;
+        panY.value = next.panY;
+        return true;
     }
 
     // ---------- pan（PointerEvent + capture，清理借 useBrushHost 范式）----------
@@ -208,6 +250,7 @@ export function useBlockCanvas(opts: {
         onPanPointerCancel: abortPan,
         screenToWorld,
         resetView,
+        centerOnElement,
         isPanning,
     };
 }

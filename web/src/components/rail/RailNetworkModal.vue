@@ -78,8 +78,9 @@ async function selectLine(id: string) {
     try {
         const detail = await ws.sendRailLineDetail(id);
         rail.setLine(detail.line);
-        rail.setStations(detail.stations);
-        rail.setRuns(detail.runs);
+        // 传 lineId：整线重拉要能把别人删掉的站 / 车次从本地列表里去掉
+        rail.setStations(detail.stations, id);
+        rail.setRuns(detail.runs, id);
         // 填充 timetable cache（车次详情对话框开时直接命中，无需再拉）
         for (const [runId, rows] of Object.entries(detail.timetableByRun)) {
             rail.setTimetable(runId, rows.map((r) => ({
@@ -163,13 +164,34 @@ async function confirmDeleteStation(id: string) {
     }
 }
 
+/**
+ * 上移 / 下移一站：与相邻那站<b>互换</b>位置，再把整条线重排成 0..N。
+ *
+ * <p>不能只把自己的号 ±1：那样会和相邻站撞成同一个号，撞号后列表按名字排，按钮看着就
+ * "点了没反应"，而且重复的号会存进数据库、影响时刻表里的站序。整体重排顺带把历史遗留的
+ * 重复号 / 空号一并抹平。</p>
+ */
 async function updateStationSort(s: RailStation, delta: number) {
-    const newSort = Math.max(0, s.sortOrder + delta);
-    try {
-        const { station } = await ws.sendRailStationUpdate(s.id, { sortOrder: newSort });
-        rail.setStation(station);
-    } catch (e) {
-        errorMsg.value = (e as Error).message;
+    const ordered = selectedStations.value.slice();
+    const idx = ordered.findIndex((x) => x.id === s.id);
+    const target = idx + delta;
+    if (idx < 0 || target < 0 || target >= ordered.length) return;
+    [ordered[idx], ordered[target]] = [ordered[target], ordered[idx]];
+    await persistStationOrder(ordered);
+}
+
+/** 按给定顺序把站序写回服务端（重排 0..N，只发真正变了的那几站）。 */
+async function persistStationOrder(ordered: RailStation[]) {
+    for (let i = 0; i < ordered.length; i++) {
+        const s = ordered[i];
+        if (s.sortOrder === i) continue;
+        try {
+            const { station } = await ws.sendRailStationUpdate(s.id, { sortOrder: i });
+            rail.setStation(station);
+        } catch (e) {
+            errorMsg.value = (e as Error).message;
+            return;
+        }
     }
 }
 
@@ -209,18 +231,7 @@ async function onStationDrop(e: DragEvent, targetId: string) {
     const [dragged] = current.splice(draggedIdx, 1);
     current.splice(targetIdx, 0, dragged);
 
-    // 批量更新 sortOrder = 0..N（仅在 order 实际变化的项发请求）
-    for (let i = 0; i < current.length; i++) {
-        const s = current[i];
-        if (s.sortOrder === i) continue;
-        try {
-            const { station } = await ws.sendRailStationUpdate(s.id, { sortOrder: i });
-            rail.setStation(station);
-        } catch (ex) {
-            errorMsg.value = (ex as Error).message;
-            return;
-        }
-    }
+    await persistStationOrder(current);
 }
 
 function isDragOver(sId: string): boolean {
@@ -394,7 +405,7 @@ function closeRunDialog() {
                 </button>
               </div>
               <ul class="space-y-1">
-                <template v-for="s in selectedStations" :key="s.id">
+                <template v-for="(s, sIdx) in selectedStations" :key="s.id">
                   <li v-if="isConfirmingDelete('station', s.id)"
                       class="flex items-center gap-2 px-2 py-1.5 rounded bg-[color:var(--destructive)]/10 border border-[color:var(--destructive)]/30">
                     <span class="flex-1 text-[color:var(--destructive)] truncate">
@@ -423,11 +434,13 @@ function closeRunDialog() {
                           class="px-1.5 py-0.5 rounded bg-[color:var(--ctp-peach)]/15 text-[color:var(--ctp-peach)] text-[10px]">
                       {{ t.rail.terminus }}
                     </span>
-                    <button class="hc-btn p-0.5 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                    <button class="hc-btn p-0.5 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
                             :title="t.rail.sortUp"
+                            :disabled="sIdx === 0"
                             @click="updateStationSort(s, -1)">↑</button>
-                    <button class="hc-btn p-0.5 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)]"
+                    <button class="hc-btn p-0.5 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
                             :title="t.rail.sortDown"
+                            :disabled="sIdx === selectedStations.length - 1"
                             @click="updateStationSort(s, 1)">↓</button>
                     <button class="p-0.5 rounded text-[color:var(--destructive)] hover:bg-[color:var(--destructive)]/10"
                             @click="askDelete('station', s.id)">

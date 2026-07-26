@@ -10,11 +10,18 @@
  * <ul>
  *   <li><b>触发器</b>：{@code variableChange.fullName}；</li>
  *   <li><b>动作的变量名字段</b>：{@code setVariable / incrementVariable / scaleVariable /
- *       setRandomVariable} 的 {@code fullName}；</li>
+ *       setRandomVariable / roundVariable / appendVariable} 的 {@code fullName}，
+ *       {@code copyVariable} 的 {@code source} 与 {@code target}；</li>
  *   <li><b>文本里的 {@code ${var:X}}</b>：{@code setVariable.value} / {@code sendMessage.text} /
+ *       {@code appendVariable.text} / {@code showTitle.title|subtitle} /
  *       友好积木「改文字」（{@code setElementProperties} kind=setText）的 {@code patch.text}——
- *       用与渲染期一致的 {@link VARIABLE_PATTERN} 抓占位符内 rawName。</li>
+ *       用与渲染期一致的 {@link VARIABLE_PATTERN} 抓占位符内 rawName；</li>
+ *   <li><b>条件文本里的 {@code var("X")}</b>：{@code if / waitUntil / repeatUntil} 的
+ *       {@code condition}。</li>
  * </ul>
+ *
+ * <p>漏掉任何一类的后果不是"少一行"——面板整块空着，用户以为脚本没引用变量。加新积木时，
+ * 只要它带变量名字段或会插值的文本，就得在 {@link collectFromAction} 补一条 case。</p>
  *
  * <p><b>fullName 形态</b>：本模块只抓"占位符里写的 rawName"（如 {@code user/X} / {@code server.time}），
  * <b>不</b>在这里注入 wallId —— 注入（{@code user/X} → {@code user:<wallId>/X}）由面板组件用
@@ -90,9 +97,28 @@ function collectFromAction(action: ScriptAction, out: Set<string>): void {
             break;
         case 'if':
         case 'waitUntil':
-            // 条件文本（var("X") 文法）里的变量引用也进预览。if 的 then/else 子序列由
+        case 'repeatUntil':
+            // 条件文本（var("X") 文法）里的变量引用也进预览。if / repeatUntil 的子序列由
             // walk 下钻；这里只扫 condition 字段本身。
             collectFromCondition((action as { condition?: string }).condition, out);
+            break;
+        case 'copyVariable':
+            // 变量复制：来源与目标都是变量名字段。
+            collectName(action.source, out);
+            collectName(action.target, out);
+            break;
+        case 'appendVariable':
+            // 文本拼接：目标变量 + 被拼接的文本（可含 ${var:X}）。
+            collectName(action.fullName, out);
+            collectFromText(action.text, out);
+            break;
+        case 'roundVariable':
+            collectName(action.fullName, out);
+            break;
+        case 'showTitle':
+            // 标题弹窗的正副标题都会走插值。
+            collectFromText(action.title, out);
+            collectFromText(action.subtitle, out);
             break;
         case 'setElementProperties':
             // 友好积木「改文字」(kind=setText) 的目标文本可含 ${var:X}（其余 kind 的 patch 是数值 / 颜色，

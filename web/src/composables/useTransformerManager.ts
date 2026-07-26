@@ -31,6 +31,12 @@ export function useTransformerManager(opts: {
     transformerRef: Ref<{ getNode(): unknown } | null>;
     layerRef: Ref<{ getNode(): unknown } | null>;
     elementsWatchSource: () => Element[];
+    /**
+     * 画面上这个元素<b>现在显示</b>的几何（时间轴预览态下 = 插值结果）。返 null / 不传
+     * 表示"显示的就是元素本身的值"。只用来判断"用户到底有没有真的动过锚点"——
+     * 预览态下元素基础值与画面不一致，拿基础值比会把"碰一下没动"误判成改动过。
+     */
+    displayGeometryOf?: (id: string) => { x: number; y: number; w: number; h: number; rotation: number } | null;
 }) {
     const project = useProjectStore();
     const ui = useUiStore();
@@ -47,13 +53,22 @@ export function useTransformerManager(opts: {
         if (ui.activeTool === 'move' || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket' || ui.selectedCount === 0) { t.nodes([]); return; }
         const nodes: unknown[] = [];
         for (const id of ui.selectedIds) {
+            const el = project.elementById(id);
+            if (!el) continue;
             // 笔触元素不挂 transformer：它的宽高是采样点算出来的派生值，服务端
             // （EditSession.applyBrushPatch）根本没有 w / h 分支，收到就抛
             // "unknown brush field: w" 整条 patch 被拒。而 Transformer 只要挂上就一定会
             // 发出带 w/h 的几何 op（纯旋转也带），前端却已经乐观改过本地 w/h ——
             // 结果是浏览器显示缩放后的样子、游戏里还是原样，双端一直分叉到重新拉快照。
             // 笔触的旋转仍可在右侧属性面板改（那里按字段单发，不会带上 w/h）。
-            if (project.elementById(id)?.type === 'brush') continue;
+            if (el.type === 'brush') continue;
+            // 上锁的元素 / 上锁图层里的元素不给锚点。元素锁后端根本不看，锚点一挂就能拉；
+            // 图层锁后端会拒，但前端已经乐观改过本地几何，两边就此对不上。
+            if (!project.isElementEditable(id)) continue;
+            // 隐藏的元素不给锚点：画面上根本看不见的东西，挂一圈锚点在那儿既莫名其妙、
+            // 又能被拖着改（后端不看 visible，改动照样落地）。
+            if (!el.visible) continue;
+            if (project.layerOfElement(id)?.visible === false) continue;
             const n = l.findOne(`#${id}`);
             if (n) nodes.push(n);
         }
@@ -82,9 +97,11 @@ export function useTransformerManager(opts: {
         const el = project.elementById(id);
         if (!el) return;
         // 几何一点没变就别发 op：碰一下锚点又原地松手也会走到这里，发出去只是往
-        // 撤销栈里灌空操作、白占一次限流额度。
-        if (el.x === newX && el.y === newY && el.w === newW && el.h === newH
-            && el.rotation === newRot) {
+        // 撤销栈里灌空操作、白占一次限流额度。比的是"画面上显示的几何"——时间轴预览态下
+        // 元素基础值和画面不是一回事，拿基础值比会把没动过也当成动过。
+        const shown = opts.displayGeometryOf?.(id) ?? el;
+        if (shown.x === newX && shown.y === newY && shown.w === newW && shown.h === newH
+            && shown.rotation === newRot) {
             return;
         }
         // 内层防线：node 状态已视觉重置；wall 远端被 lock 时不发 op

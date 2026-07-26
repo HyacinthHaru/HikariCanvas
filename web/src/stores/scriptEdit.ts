@@ -79,6 +79,16 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
      * 拖拽期跳过整树替换；松手（setDragging(false)）后恢复 server-as-truth。</p>
      */
     const dragging = ref(false);
+    /**
+     * 「发出去没成功、而且那会儿人已经切到别的规则了」的改动快照：ruleId → 完整规则。
+     *
+     * <p>自动保存是异步的：切规则前先 flush 上一条，回执（或超时 / 断线）却要等几秒才回来，
+     * 那时 workingCopy 早换成新规则了。失败回调若直接 {@code dirty = true}，标脏的是<b>新规则</b>——
+     * 上一条的改动服务端没收到、本地副本又被顶掉，彻底没了，提示还只说一句"自动保存失败"，
+     * 用户根本不知道丢的是哪条。所以失败时把当时的快照按 ruleId 存这儿：切回那条规则就原样恢复
+     * （见 {@link selectRule}），或者下一次保存成功时顺手补发（见 {@link flushPendingSaves}）。</p>
+     */
+    const pendingSaves = ref<Record<string, ScriptRule>>({});
     /** undo 栈：workingCopy 的历史快照（push 改动前态）。 */
     const undoStack = ref<ScriptRule[]>([]);
     /** redo 栈：undo 后存被撤销的态。 */
@@ -155,6 +165,32 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         dirty.value = false;
         // 切规则 → 清元素字段绑定（上一规则的积木 path 在新规则里无意义）。
         activeElementBinding.value = null;
+        restorePendingSave(ruleId);
+    }
+
+    /**
+     * 这条规则上次没保存成功（当时人已切走）→ 把留下的快照放回 workingCopy，标脏重排一次保存。
+     * 没留快照就什么都不做。
+     *
+     * <p>不这么做的话，用户切回来看到的是服务端的旧版本，自己那批改动无声无息地没了。</p>
+     */
+    function restorePendingSave(ruleId: string): void {
+        const snapshot = pendingSaves.value[ruleId];
+        if (!snapshot) return;
+        const rest = { ...pendingSaves.value };
+        delete rest[ruleId];
+        pendingSaves.value = rest;
+        workingCopy.value = deepCloneRule(snapshot);
+        dirty.value = true;
+        net.lastError = scriptMsg('autoSaveRestored').replace('{name}', ruleLabel(snapshot));
+        scheduleSave();
+    }
+
+    /** 提示里用的规则名（空名退一个中性说法，别显示空引号）。 */
+    function ruleLabel(rule: ScriptRule): string {
+        return rule.name != null && rule.name.trim().length > 0
+            ? rule.name
+            : scriptMsg('ruleUnnamed');
     }
 
     /**
@@ -167,15 +203,20 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
      *
      * <p>注意：规则<b>已经从 server 消失</b>（被删 / 切 wall scripts.reset）的内部清理走
      * {@link forceClose}——那种场景无处可保存，必须无条件清，不能被校验门卡住。</p>
+     *
+     * @returns 是否真的退出了编辑。{@code false} = 被校验门挡住（改动还在，编辑会话没清）。
+     *          调用方（关编辑器的按钮 / Esc）必须据此决定要不要真把界面关掉——否则提示说着
+     *          "挡住了"，界面照关不误，用户以为改动已保存。
      */
-    function closeEditing(): void {
+    function closeEditing(): boolean {
         // 有脏改动但校验不过：清空会丢数据，挡住关闭并提示用户修正 / 撤销。
         if (dirty.value && validationErrors.value.length > 0) {
             net.lastError = scriptMsg('discardedByValidation');
-            return;
+            return false;
         }
         flushSave();
         forceClose();
+        return true;
     }
 
     /**
@@ -319,6 +360,8 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
      */
     function deleteRule(ruleId: string): void {
         if (project.isLocked) return;
+        // 规则要没了，攒着的失败快照也别再补发（会写到一条已删的规则上）。
+        dropPendingSave(ruleId);
         const editingThis = selectedRuleId.value === ruleId;
         if (editingThis) {
             // 关编辑会 flushSave；但删除场景不该把 workingCopy 写回（规则要没了）。
@@ -378,11 +421,19 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         const cur = workingCopy.value;
         if (!cur) return;
         if (cur.enabled === enabled) return;
+        const before = cur.enabled;
         // 即时回写本地（UI 立刻反映）；不标 dirty（enable 单独走 server，不参与 debounce save）。
         workingCopy.value = { ...cur, enabled };
         const ruleId = selectedRuleId.value;
         if (ruleId === null) return;
         getWsClient().sendScriptEnable(ruleId, enabled).catch((e) => {
+            // 没发成功就把开关拨回去：服务端那边根本没变，界面却显示已切换，用户会以为规则关了
+            // 其实还在跑（反之亦然），而且这个分歧不会自己好——enable 不进 debounce 队列、没有重试。
+            // 只在"还停在这条规则、且开关仍是我们刚写的那个值"时回滚（用户期间又拨过就别抢方向盘）。
+            const now = workingCopy.value;
+            if (now && selectedRuleId.value === ruleId && now.enabled === enabled) {
+                workingCopy.value = { ...now, enabled: before };
+            }
             net.lastError = `切换开关失败：${e instanceof Error ? e.message : String(e)}`;
         });
     }
@@ -546,6 +597,10 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
      * 真正发 sendScriptUpdate。仅当脏 + 有选中规则 + 有 workingCopy 时发。
      * 成功后清 dirty（让 server 回声能刷新 workingCopy）；失败<b>不清</b> dirty（下次改动 /
      * flush 时重试，不丢用户改动）+ toast。lock 时不发（理论上 lock 时不会进到这）。
+     *
+     * <p><b>失败回调认它自己那条规则</b>：回执可能几秒后才回来（ack 超时 / 断线），那时用户
+     * 多半已经切到别的规则了。此时标脏当前规则毫无意义（脏的不是它），上一条的改动反而无声消失。
+     * 故把 ruleId + 快照闭包进回调，失败时按"还在不在那条规则上"分流。</p>
      */
     function doSave(): void {
         if (!dirty.value) return;
@@ -556,13 +611,53 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
         // 有校验错误 → 不 send，保留 dirty（让 UI 红字提示用户修；改完再次
         // scheduleSave / flush 时 validationErrors 变空即可发出）。防"拖完保存才被后端打回"。
         if (validationErrors.value.length > 0) return;
+        // 快照：这一刻发出去的到底是什么（workingCopy 之后会被切规则 / 后续编辑替换）。
+        const snapshot = deepCloneRule(cur);
         // 乐观清脏：发出去就当本地无未保存改动；失败回调里再标回脏。
         dirty.value = false;
-        getWsClient().sendScriptUpdate(ruleId, stripIdWall(cur)).catch((e) => {
-            // 失败：标回脏（下次 scheduleSave / flush 重试），提示用户。
-            dirty.value = true;
-            net.lastError = `自动保存失败：${e instanceof Error ? e.message : String(e)}`;
-        });
+        getWsClient().sendScriptUpdate(ruleId, stripIdWall(snapshot))
+            .then(() => {
+                // 通道通着，顺手把之前失败攒下的补发掉。
+                flushPendingSaves();
+            })
+            .catch((e) => {
+                const detail = e instanceof Error ? e.message : String(e);
+                if (selectedRuleId.value === ruleId) {
+                    // 还在这条规则上：照旧标回脏，下次 scheduleSave / flush 自然重试。
+                    dirty.value = true;
+                    net.lastError = `自动保存失败：${detail}`;
+                    return;
+                }
+                // 已经切走：不能碰当前规则的 dirty（那是另一条规则的状态）。把快照留下，
+                // 切回去时恢复 / 下次保存成功时补发，并且提示要指名道姓说清是哪条规则。
+                pendingSaves.value = { ...pendingSaves.value, [ruleId]: snapshot };
+                net.lastError = scriptMsg('autoSaveFailedOther')
+                    .replace('{name}', ruleLabel(snapshot))
+                    .replace('{err}', detail);
+            });
+    }
+
+    /**
+     * 把攒下的失败快照补发一遍（有一次保存成功 = 通道恢复了，是个好时机）。
+     * 再失败就放回队列等下次，不再刷提示（第一次已经提示过、切回该规则也仍能恢复）。
+     */
+    function flushPendingSaves(): void {
+        const entries = Object.entries(pendingSaves.value);
+        if (entries.length === 0) return;
+        pendingSaves.value = {};
+        for (const [ruleId, snapshot] of entries) {
+            getWsClient().sendScriptUpdate(ruleId, stripIdWall(snapshot)).catch(() => {
+                pendingSaves.value = { ...pendingSaves.value, [ruleId]: snapshot };
+            });
+        }
+    }
+
+    /** 丢掉某条规则攒下的失败快照（规则删了 / 换了墙，再补发只会写到不该写的地方）。 */
+    function dropPendingSave(ruleId: string): void {
+        if (!(ruleId in pendingSaves.value)) return;
+        const rest = { ...pendingSaves.value };
+        delete rest[ruleId];
+        pendingSaves.value = rest;
     }
 
     // ---------- server-as-truth 协调 ----------
@@ -584,6 +679,7 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
             if (selectedRuleId.value === null) return;
             if (serverRule === null) {
                 // 规则在 server 侧没了（别人删了 / 自己 deleteRule 已先清这里就不会再进）。
+                dropPendingSave(selectedRuleId.value);
                 forceClose();
                 return;
             }
@@ -602,13 +698,15 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     watch(
         () => project.wallId,
         () => {
+            // 换墙了：攒下的失败快照属于上一面墙的规则，补发过去只会写错地方。
+            pendingSaves.value = {};
             forceClose();
         },
     );
 
     return {
         selectedRuleId, workingCopy, dirty, dragging, undoStack, redoStack,
-        activeElementBinding,
+        activeElementBinding, pendingSaves,
         validationErrors,
         selectRule, closeEditing,
         newRule, deleteRule,

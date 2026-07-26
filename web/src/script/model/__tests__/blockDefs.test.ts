@@ -425,3 +425,64 @@ describe('blockDefs.makeDefaultAction — 0.7.3 新积木默认值', () => {
         }
     });
 });
+
+// ---------- 整数字段标记（与后端 Deserializer 的读法对齐）----------
+
+/**
+ * 后端 {@code ActionDeserializer} / {@code TriggerDeserializer} 用
+ * {@code requireInt / requireLong / optionalLong} 读的字段只收整数（{@code isIntegralNumber()}，
+ * 连 {@code 3.0} 都拒）；用 {@code requireDouble} 读的字段收小数。这张表是照那两个文件手抄的，
+ * 漂了就说明前端字段表与后端读法脱节 —— 后果是那条脚本能编辑但永远存不下，
+ * 而且报错来自反序列化层、指不到具体积木。
+ */
+const EXPECTED_INTEGER_FIELDS: Record<string, string[]> = {
+    // 触发器（TriggerDeserializer.requireInt）
+    timer: ['intervalSeconds'],
+    playerNear: ['rangeBlocks'],
+    playerLeaveRange: ['rangeBlocks'],
+    // 动作（ActionDeserializer.requireInt / requireLong / optionalLong）
+    playTimeline: ['seekMs'],
+    wait: ['ms'],
+    repeat: ['count'],
+    repeatUntil: ['maxIterations'],
+    playParticle: ['count'],          // offsetX/Y/Z 走 requireDouble，不在此
+    waitUntil: ['timeoutMs'],
+    cloneElement: ['offsetX', 'offsetY'],
+    tweenBlock: ['durationMs'],
+    randomBranch: ['probability'],
+    showTitle: ['fadeInMs', 'stayMs', 'fadeOutMs'],
+};
+
+describe('blockDefs — 整数字段标记', () => {
+    it('该标整数的字段一个不漏', () => {
+        for (const [kind, names] of Object.entries(EXPECTED_INTEGER_FIELDS)) {
+            const def = defFor(kind);
+            expect(def, `缺 def: ${kind}`).toBeTruthy();
+            for (const name of names) {
+                const f = def!.fields.find((x) => x.name === name);
+                expect(f, `${kind}.${name} 不在字段表里`).toBeTruthy();
+                expect(f!.integer, `${kind}.${name} 应标 integer`).toBe(true);
+            }
+        }
+    });
+
+    it('不该标的一个不多（小数字段被误标会把合法的 0.5 判成错）', () => {
+        const allDefs = { ...TRIGGER_DEFS, ...ACTION_DEFS };
+        for (const [kind, def] of Object.entries(allDefs)) {
+            const expected = new Set(EXPECTED_INTEGER_FIELDS[kind] ?? []);
+            for (const f of def.fields) {
+                if (f.integer !== true) continue;
+                expect(expected.has(f.name), `${kind}.${f.name} 不该标 integer`).toBe(true);
+            }
+        }
+    });
+
+    it('只有 number 类型的字段才谈得上整数', () => {
+        const allDefs = { ...TRIGGER_DEFS, ...ACTION_DEFS };
+        for (const def of Object.values(allDefs)) {
+            for (const f of def.fields) {
+                if (f.integer === true) expect(f.type).toBe('number');
+            }
+        }
+    });
+});

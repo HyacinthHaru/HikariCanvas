@@ -116,15 +116,24 @@ export const useTimelineStore = defineStore('timeline', () => {
         draggingElementIds.value = new Set();
     }
 
-    // 切 wall：project.reset() 置 state=null（project.reset 本身不碰时间轴编辑态）→ 自动清。
-    // 自包含，不依赖外部 reset 链路记得调本 store。
-    watch(() => project.state === null, (isNull) => { if (isNull) reset(); });
+    // 切 wall 自动清编辑态。
+    //
+    // 曾经这里 watch 的是 `project.state === null`，但切 wall 的唯一路径是 wsClient 收到
+    // ready 后同步做 project.reset() + setSnapshot()——两句挨着，Vue 下一轮重算 getter
+    // 时看到的还是 false，回调一次都没进过，等于这条清理从来没生效。改成盯 wallId：
+    // 换墙 / 断开（null）都会真正变化一次。
+    watch(() => project.wallId, (next, prev) => { if (next !== prev) reset(); });
 
     // 切换激活时间轴 / 时长缩短：playhead 越界则钳回。
-    watch(activeTimeline, (tl) => {
-        if (!tl) { playheadMs.value = 0; return; }
-        if (playheadMs.value > tl.durationMs) playheadMs.value = tl.durationMs;
-    });
+    //
+    // 依赖必须显式写上 durationMs：时长改动的回声 patch 是原地改 activeTimeline 上的
+    // 字段，computed 本身没读过 durationMs 就不会重算，watch 也就不触发——"时长缩短把
+    // playhead 钳回来"这句注释此前一直是空话。
+    watch(() => [activeTimeline.value?.id ?? null, activeTimeline.value?.durationMs ?? 0] as const,
+        ([, dur]) => {
+            if (!activeTimeline.value) { playheadMs.value = 0; return; }
+            if (playheadMs.value > dur) playheadMs.value = dur;
+        });
 
     return {
         dockOpen, dockHeight, playheadMs, previewActive, playing, pxPerMs, scrollMs,

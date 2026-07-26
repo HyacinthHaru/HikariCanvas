@@ -15,21 +15,27 @@ export interface Cmd {
 // ── 工具函数 ────────────────────────────────────────────────────────────────
 
 /**
- * 格式化数字：整数去小数点，小数保留必要位数（去尾零，最多6位）。
+ * 格式化数字：整数去小数点，小数保留必要位数（去尾零，最多 `precision` 位）。
  */
-function fmt(n: number): string {
+function fmt(n: number, precision = 6): string {
     if (Number.isInteger(n)) return String(n);
-    // 保留6位精度，去尾零
-    const s = n.toFixed(6).replace(/\.?0+$/, '');
-    return s;
+    if (precision <= 0) return String(Math.round(n));
+    const s = n.toFixed(precision).replace(/\.?0+$/, '');
+    return s === '' || s === '-' ? '0' : s;
 }
 
 // ── commandsToD ─────────────────────────────────────────────────────────────
 
-export function commandsToD(cmds: Cmd[]): string {
+/**
+ * Cmd 数组 → d 字符串。
+ *
+ * @param precision 小数位上限，默认 6。后端 `PathDValidator` 对整串有 4096 字符上限，
+ *        超长时调用方可以降精度重出一版（画布是地图像素，小数点后两位以下肉眼无差）。
+ */
+export function commandsToD(cmds: Cmd[], precision = 6): string {
     return cmds.map(c => {
         if (c.type === 'Z') return 'Z';
-        return c.type + c.pts.map(fmt).join(' ');
+        return c.type + c.pts.map(p => fmt(p, precision)).join(' ');
     }).join(' ');
 }
 

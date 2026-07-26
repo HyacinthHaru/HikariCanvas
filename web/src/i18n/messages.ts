@@ -51,6 +51,8 @@ export const messages = {
             done: (n: number) => n === 0
                 ? '没有找到可导入的矢量内容（可能所有图层都被锁定了）'
                 : `导入了 ${n} 个图形`,
+            partial: (missed: number) =>
+                `有 ${missed} 个图形没能加进来：形状太复杂、尺寸超范围，或者服务器没收下`,
             failed: (code: string) => {
                 if (code === 'WALL_LOCKED') return '画板已锁定，先解锁才能导入';
                 if (code === 'SVG_TOO_LARGE') return 'SVG 文件太大，超过了大小限制';
@@ -344,6 +346,8 @@ export const messages = {
             hint: '点击空白处填色；点元素内部直接给元素换填充色',
             hintHoverPreview: '油漆桶：悬停时会高亮目标区域',
             fillLabel: '填充色',
+            toleranceLabel: '边缘精度',
+            toleranceTip: '填出来的形状保留多少细节。数值越小越贴合原图但顶点更多，越大越平滑省事',
             noGapFound: '这个位置没有可以填色的区域',
             layerLocked: '当前图层已锁定',
             building: '计算中…',
@@ -509,6 +513,7 @@ export const messages = {
             toggleVisible: (on: boolean) => (on ? '隐藏元素' : '显示元素'),
             toggleLock: (on: boolean) => (on ? '解锁元素' : '锁定元素'),
             lockedHint: '当前图层已锁定，先解锁才能编辑',
+            lockedSkipped: (n: number) => `有 ${n} 个元素被锁定，这次操作跳过了它们（先解锁才能改）`,
         },
         logdrawer: {
             header: '连接日志',
@@ -866,6 +871,9 @@ export const messages = {
             // 关闭/切换规则时有校验错误导致改动未保存的提示（不阻止关闭，只提醒）。
             discardedByValidation: '部分改动因校验未通过，未能保存',
             validationErrorsOnSwitch: '当前规则有校验错误，请修正或撤销改动后再切换。',
+            // 自动保存失败、而且用户已经切到别的规则时的提示（要指名是哪条规则，否则不知道丢的是什么）。
+            autoSaveFailedOther: '「{name}」的改动没能保存：{err}。改动先给你留着了，回到这条规则可以接着改、会自动重试。',
+            autoSaveRestored: '已经把「{name}」上次没保存成功的改动放回来了。',
             createRuleFailed: '新建规则失败：没收到服务器回执',
             // 试跑高亮图例（每种执行结果对应一种边框色）
             legendOk: '执行了',
@@ -1211,6 +1219,7 @@ export const messages = {
             errFpsTooHigh: '每秒帧数太高了（上限 240）',
             errLoopMode: '播放方式无效',
             errKeyframeTime: (max: number) => `时刻要落在 0 到 ${max} 毫秒之间`,
+            opFailed: '这次改动没能发到服务器，画面已恢复原样；检查连接后再试一次',
             // 区块 4：缓动方式（大白话，不暴露贝塞尔术语）
             addEasing: '缓动方式',
             easingLinear: '匀速',
@@ -1373,6 +1382,8 @@ export const messages = {
             done: (n: number) => n === 0
                 ? 'No importable vector content found (all layers may be locked)'
                 : `Imported ${n} shape${n === 1 ? '' : 's'}`,
+            partial: (missed: number) =>
+                `${missed} shape${missed === 1 ? '' : 's'} could not be added: too complex, out of range, or rejected by the server`,
             failed: (code: string) => {
                 if (code === 'WALL_LOCKED') return 'Wall is locked — unlock it first to import';
                 if (code === 'SVG_TOO_LARGE') return 'SVG file is too large';
@@ -1666,6 +1677,8 @@ export const messages = {
             hint: 'Click empty space to fill a gap; click inside an element to recolor it directly',
             hintHoverPreview: 'Paint Bucket — hover highlights the target region',
             fillLabel: 'Fill color',
+            toleranceLabel: 'Edge precision',
+            toleranceTip: 'How much detail the filled shape keeps. Lower hugs the original outline but adds vertices; higher is smoother and cheaper',
             noGapFound: 'No fillable region at this spot',
             layerLocked: 'Active layer is locked',
             building: 'Building…',
@@ -1831,6 +1844,7 @@ export const messages = {
             toggleVisible: (on: boolean) => (on ? 'Hide element' : 'Show element'),
             toggleLock: (on: boolean) => (on ? 'Unlock element' : 'Lock element'),
             lockedHint: 'Active layer is locked — unlock it to edit',
+            lockedSkipped: (n: number) => `${n} locked element${n === 1 ? ' was' : 's were'} skipped — unlock to edit`,
         },
         logdrawer: {
             header: 'Connection log',
@@ -2181,6 +2195,9 @@ export const messages = {
             // Shown when closing / switching rules with unsaved changes that failed validation (non-blocking).
             discardedByValidation: 'Some changes could not be saved because the rule has validation errors',
             validationErrorsOnSwitch: 'This rule has validation errors — fix or discard your changes before switching.',
+            // Shown when auto-save failed after the user already switched to another rule (name it, or they cannot tell what was lost).
+            autoSaveFailedOther: 'Could not save your changes to "{name}": {err}. They are kept for you — open that rule again to keep editing; it will retry automatically.',
+            autoSaveRestored: 'Restored the unsaved changes to "{name}".',
             createRuleFailed: 'Failed to create rule: no server acknowledgement',
             // test-run highlight legend (each result maps to a border color)
             legendOk: 'Ran',
@@ -2524,6 +2541,7 @@ export const messages = {
             errFpsTooHigh: 'Frames per second is too high (max 240)',
             errLoopMode: 'Invalid playback mode',
             errKeyframeTime: (max: number) => `Time must be between 0 and ${max} ms`,
+            opFailed: 'That change never reached the server — the view was restored; check your connection and retry',
             // Section 4: easing (plain wording, no bezier jargon)
             addEasing: 'Easing',
             easingLinear: 'Constant speed',

@@ -553,6 +553,16 @@ describe('planTransformUpsert (P4.5b 自动加帧计划)', () => {
         // 不同 timeMs 的 x@500 不参与 timeMs=0 的命中
         expect(plan.updates.find(u => u.property === 'x')!.keyframeId).toBe('kf-x-0');
     });
+
+    it('同一时刻已经有重复帧时，改的是靠后那一帧（真正生效的那帧）', () => {
+        // 取值规则是"取最后一个 timeMs ≤ t 的帧"，重复时靠后那帧才生效；
+        // 这里以前取第一个，表现为"这个时刻怎么改都没反应"。
+        const rect = mkRect();
+        const dupe: Keyframe = { ...mkKf('x', 0), id: 'kf-x-0-dupe' };
+        const tl = mkTimeline({ [rect.id]: [mkKf('x', 0), dupe] });
+        const plan = planTransformUpsert(tl, rect, 0);
+        expect(plan.updates.find(u => u.property === 'x')!.keyframeId).toBe('kf-x-0-dupe');
+    });
 });
 
 describe('applyDragOverride (P4.5b 拖动期跟手覆盖)', () => {

@@ -20,7 +20,8 @@
  */
 
 import type { ScriptRule, ScriptTrigger, ScriptAction, EasingType } from '@/types/protocol';
-import { TWEENABLE_KINDS } from './blockDefs';
+import { ACTION_DEFS, TRIGGER_DEFS, TWEENABLE_KINDS, type FieldDef } from './blockDefs';
+import { messages } from '@/i18n/messages';
 
 // ---------- 常量（逐一对照 ScriptRuleValidator.java，数值 / 集合必须一致）----------
 
@@ -214,6 +215,13 @@ export function validateRule(rule: ScriptRule): ValidationError[] {
 
 /** 触发器各子类字段范围（镜像后端 validateTrigger，文案逐字一致）。blockId 恒为 'trigger'。 */
 function validateTrigger(trigger: ScriptTrigger, errors: ValidationError[]): void {
+    // 整数字段（间隔秒数 / 范围方块数）——后端 TriggerDeserializer 用 requireInt 读，带小数直接拒。
+    validateIntegerFields(
+        TRIGGER_DEFS[trigger.type]?.fields,
+        trigger as unknown as Record<string, unknown>,
+        'trigger',
+        errors,
+    );
     switch (trigger.type) {
         case 'variableChange':
             if (isBlank(trigger.fullName)) {
@@ -281,6 +289,13 @@ function validateAction(
     path: string,
     errors: ValidationError[],
 ): void {
+    // 整数字段统一先过一遍（等待毫秒 / 重复次数 / 各种时长…），见 validateIntegerFields。
+    validateIntegerFields(
+        ACTION_DEFS[action.type]?.fields,
+        action as unknown as Record<string, unknown>,
+        path,
+        errors,
+    );
     switch (action.type) {
         case 'setVariable': {
             if (isBlank(action.fullName)) {
@@ -672,6 +687,49 @@ function validateAction(
 }
 
 // ---------- 内部辅助 ----------
+
+/**
+ * 数字字段「必须是整数」检查 —— 镜像后端 {@code ActionDeserializer.requireInt / requireLong /
+ * optionalLong}（它们用 {@code isIntegralNumber()}，连 {@code 3.0} 这种整值浮点都拒）。
+ *
+ * <p><b>为什么单独一段而不是逐个动作写 if</b>：哪些字段收整数由 {@code blockDefs} 的字段表
+ * （{@link FieldDef.integer}）一处声明，这里照着表查。加新积木时在字段表上标一下就自动拦住，
+ * 不会漏——「前端只 {@code Number(v)}、后端 {@code requireInt}」这道严格度差正是它反复复发的地方。</p>
+ *
+ * <p>报错落在具体积木上（blockId），用户点头部提示能直接跳到那块；否则这个错要等后端反序列化
+ * 才炸，前端只能给一句"保存失败"，指不出是哪块积木。</p>
+ *
+ * <p>只对<b>已经是数字</b>的值判整（缺失 / null 交给各字段自己的必填校验；非数字类型由各动作的
+ * 范围校验负责），避免同一个字段报两条。{@code NaN} 会命中这里——各处范围比较对 NaN 恒 false，
+ * 本来就漏网。</p>
+ */
+function validateIntegerFields(
+    fields: FieldDef[] | undefined,
+    holder: Record<string, unknown>,
+    blockId: string,
+    errors: ValidationError[],
+): void {
+    if (!fields) return;
+    for (const f of fields) {
+        if (f.integer !== true) continue;
+        const v = holder[f.name];
+        if (typeof v !== 'number' || Number.isInteger(v)) continue;
+        errors.push({ blockId, message: `${fieldLabel(f.labelKey)}必须是整数（不能带小数）` });
+    }
+}
+
+/**
+ * 取字段的中文标签（{@code 'script.fields.ms'} → {@code '毫秒'}）。
+ * 本文件的报错全是中文（与后端文案逐字对齐），故固定读中文表；查不到退回 key 本身不崩。
+ */
+function fieldLabel(labelKey: string): string {
+    let cur: unknown = messages.zh;
+    for (const seg of labelKey.split('.')) {
+        if (cur === null || typeof cur !== 'object') return labelKey;
+        cur = (cur as Record<string, unknown>)[seg];
+    }
+    return typeof cur === 'string' ? cur : labelKey;
+}
 
 /**
  * 镜像后端 {@code countBlocks}：每个动作计 1；if 自身计 1 再加 then + else 递归；

@@ -26,6 +26,18 @@ export const UNRESOLVED = '???';
 const USER_NAMESPACE_PREFIX = 'user';
 
 /**
+ * 与 Java {@code String.trim()} 等价的剥空白：只剥码位 ≤ U+0020 的字符。
+ *
+ * <p>JS 原生 {@code String.prototype.trim()} 剥的是全部 Unicode 空白（含 U+00A0 不换行
+ * 空格、U+3000 全角空格），比 Java 多剥一批——占位符里混进全角空格时两端会解析出不同的
+ * 变量名，编辑器预览显示值、游戏内显示 {@code ???}。口径以后端为准（游戏内才是最终输出），
+ * 与 {@code timeline/interpolation.ts} 的数值解析同源（docs/rendering.md §9.5）。</p>
+ */
+function asciiTrim(s: string): string {
+    return s.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '');
+}
+
+/**
  * TTL 过期判定，镜像后端 {@code Variable.isStale}：{@code ttl > 0 && (now - updatedAt) > ttl}。
  *
  * <p>之前前端只判 {@code currentValue != null && length > 0} 就用 cached，从不判过期；
@@ -88,7 +100,10 @@ export interface InterpolateResult {
  * </ul>
  */
 export function resolveFullName(rawName: string, wallId: string | null): string {
-    const trimmed = rawName.trim();
+    // 剥空白的口径必须与后端 String.trim() 一致（只剥 ≤U+0020）。JS 的 trim() 会连
+    // 不换行空格 / 全角空格一起剥掉，于是占位符里打了个全角空格时，编辑器预览能取到值、
+    // 游戏内却显示 ???。同一条口径见 timeline/interpolation.ts 的数值解析（rendering.md §9.5）。
+    const trimmed = asciiTrim(rawName);
     if (wallId && wallId.length > 0
             && trimmed.startsWith(USER_NAMESPACE_PREFIX + '/')) {
         const key = trimmed.substring(USER_NAMESPACE_PREFIX.length + 1);

@@ -9,6 +9,12 @@ import { useScriptStore } from './scripts';
 import { clearLayerThumbnailCache } from '@/render/LayerThumbnailRenderer';
 import { resetImageCaches } from '@/render/PreviewRenderer';
 
+/**
+ * 「同一批新建」的时间窗（毫秒）。粘贴 / 批量导入是逐条发 op、逐条回 patch，
+ * 相邻两条之间只隔几毫秒；而人手画两个图形至少隔几百毫秒，不会被误并成一批。
+ */
+export const ADD_BURST_MS = 200;
+
 /** 兜底默认层（state 尚未到达时供 UI 渲染避免 null check 散落组件里）。 */
 const EMPTY_LAYER: Layer = {
     id: '',
@@ -33,10 +39,18 @@ export const useProjectStore = defineStore('project', () => {
     const state = ref<ProjectState | null>(null);
 
     /**
-     * 最近一次 applyPatch 里被 {@code add} 创建的 element.id。
-     * 顶层组件 watch 它实现"新加即选中"。读后由 UI 侧自行清零（赋 null）。
+     * 最近<b>一批</b>新建元素的 id，顶层组件 watch 它实现"新加即选中"。
+     *
+     * <p>为什么是一批而不是一个：粘贴 5 个元素会逐个发 {@code element.add}，服务端也逐条回
+     * patch。以前每来一条就把选中整个换成它，5 条走完只剩最后一个被选中——用户接着的整体拖动
+     * 或删除只作用于 1 个。现在连着到达（间隔 ≤ {@link ADD_BURST_MS}）的算同一批，
+     * 数组随每条到达追加并整体重新赋值，UI 每次按整批选中，最终 5 个都在选中里。</p>
      */
-    const lastAddedElementId = ref<string | null>(null);
+    const lastAddedElementIds = ref<string[]>([]);
+    /** 当前这批的累积缓冲（非响应式；每次追加后整体赋给 {@link lastAddedElementIds} 触发 watch）。 */
+    let addBatch: string[] = [];
+    /** 上一条新建到达的时刻，用来判断是不是同一批。 */
+    let lastAddAt = 0;
 
     // wall 元数据（来自 ready payload + wall.* op 的 ack）
     // lockedAt: null = 可编辑，非 null = 锁定；ownerUuid + selfUuid
@@ -111,17 +125,46 @@ export const useProjectStore = defineStore('project', () => {
      */
     function applyPatch(version: number, ops: PatchOp[]) {
         if (!state.value) return;
+        claimNewElements(state.value, ops);
         for (const op of ops) {
-            // 检测 element.add：v1 /elements/N 或 v2 /layers/M/elements/N
-            if (op.op === 'add' && op.value
-                && (/^\/elements\/\d+$/.test(op.path)
-                    || /^\/layers\/\d+\/elements\/\d+$/.test(op.path))) {
-                const elId = (op.value as { id?: unknown }).id;
-                if (typeof elId === 'string') lastAddedElementId.value = elId;
-            }
             applyOne(state.value, op);
         }
         state.value.version = version;
+    }
+
+    /**
+     * 从一帧 patch 里挑出<b>真·新建</b>的元素 id，喂给"新加即选中"。
+     *
+     * <p>必须在应用这帧之前判断：调整叠放顺序 / 换图层发的也是「先 remove 再 add 同一个元素」，
+     * 光看 add 会把移动认成新建，于是拖一下图层列表就把选中抢走了。所以先照着<b>改动前</b>的
+     * 状态记下已有 id，add 的元素已经在里面就说明它只是换了位置，不认。</p>
+     */
+    function claimNewElements(s: ProjectState, ops: PatchOp[]): void {
+        const addedIds: string[] = [];
+        for (const op of ops) {
+            // element.add 的 patch 形态：v1 /elements/N 或 v2 /layers/M/elements/N
+            if (op.op !== 'add' || !op.value) continue;
+            if (!/^\/elements\/\d+$/.test(op.path) && !/^\/layers\/\d+\/elements\/\d+$/.test(op.path)) continue;
+            const elId = (op.value as { id?: unknown }).id;
+            if (typeof elId === 'string') addedIds.push(elId);
+        }
+        if (addedIds.length === 0) return;
+        const existing = new Set<string>();
+        for (const layer of s.layers ?? []) {
+            for (const el of layer.elements ?? []) existing.add(el.id);
+        }
+        for (const id of addedIds) {
+            if (!existing.has(id)) claimAdded(id);
+        }
+    }
+
+    /** 登记一个新建元素，按时间窗归批（见 {@link lastAddedElementIds}）。 */
+    function claimAdded(id: string): void {
+        const now = Date.now();
+        if (now - lastAddAt > ADD_BURST_MS) addBatch = [];
+        lastAddAt = now;
+        addBatch = [...addBatch, id];
+        lastAddedElementIds.value = addBatch;
     }
 
     /**
@@ -149,12 +192,52 @@ export const useProjectStore = defineStore('project', () => {
     }
 
     /**
+     * 元素所在的图层（扫全部图层）；找不到返 null。
+     *
+     * <p>判"这个元素能不能改"要看它<b>自己所在</b>的图层锁没锁，不是看当前激活的那层——
+     * 切图层不清选中，选中的元素在别的层是常态。后端 {@code EditSession} 拒 LAYER_LOCKED
+     * 就是按元素所属层判的，两边对齐。</p>
+     */
+    function layerOfElement(id: string): Layer | null {
+        const s = state.value;
+        if (!s || !s.layers) return null;
+        for (const layer of s.layers) {
+            if ((layer.elements ?? []).some((e) => e.id === id)) return layer;
+        }
+        return null;
+    }
+
+    /**
+     * 这个元素现在能不能改：元素自己没上锁 + 所在图层没上锁。
+     *
+     * <p>图层锁后端会拒（LAYER_LOCKED），元素锁后端不管——所以元素锁只有前端拦得住，
+     * 删除 / 方向键微移 / 变换锚点都得先问这一句，否则"锁定"就是个摆设。</p>
+     */
+    function isElementEditable(id: string): boolean {
+        const el = elementById(id);
+        if (!el || el.locked) return false;
+        const layer = layerOfElement(id);
+        return !layer || !layer.locked;
+    }
+
+    /** 从一组 id 里挑出现在能改的那些，顺序保持不变。删除 / 微移 / 拖动共用。 */
+    function editableIds(ids: Iterable<string>): string[] {
+        const out: string[] = [];
+        for (const id of ids) {
+            if (isElementEditable(id)) out.push(id);
+        }
+        return out;
+    }
+
+    /**
      * setup store 没有自动 $reset，手动把所有 wall-scoped ref 重置到初始值。
      * 调用点：wall 切换 / disconnect 后；palette / brush store 等跨 wall 用户偏好不在此处理。
      */
     function reset(): void {
         state.value = null;
-        lastAddedElementId.value = null;
+        lastAddedElementIds.value = [];
+        addBatch = [];
+        lastAddAt = 0;
         wallId.value = null;
         alias.value = null;
         lockedAt.value = null;
@@ -182,13 +265,13 @@ export const useProjectStore = defineStore('project', () => {
 
     return {
         state,
-        lastAddedElementId,
+        lastAddedElementIds,
         wallId, alias, lockedAt, ownerUuid, selfUuid,
         isLocked, isOwner, canEdit,
         canvasPixelWidth, canvasPixelHeight,
         activeLayer, activeLayerLocked, allElements,
         setSnapshot, setWallMeta, applyPatch,
-        elementById, layerById,
+        elementById, layerById, layerOfElement, isElementEditable, editableIds,
         reset,
     };
 });

@@ -66,7 +66,7 @@ function onClose() {
 <template>
   <div class="fixed inset-0 z-[60] bg-[color:var(--ctp-crust)]/50 flex items-center justify-center p-4"
        @click.self="onClose"
-       @keydown.escape.prevent="onClose"
+       @keydown.escape.stop.prevent="onClose"
   >
     <div class="bg-[color:var(--card)] text-[color:var(--foreground)] rounded-[var(--radius)] shadow-md w-full max-w-md flex flex-col border border-[color:var(--border)]">
       <header class="flex items-center gap-2 px-4 h-11 border-b border-[color:var(--border)]">

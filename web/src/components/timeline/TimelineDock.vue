@@ -14,6 +14,7 @@ import {
     Play, Pause, SkipBack, Plus, ChevronRight, ChevronDown, Film, X, Trash2, Spline, Settings, CircleDot,
 } from 'lucide-vue-next';
 import { useProjectStore } from '@/stores/project';
+import { useNetworkStore } from '@/stores/network';
 import { useUiStore } from '@/stores/ui';
 import { useTimelineStore } from '@/stores/timeline';
 import { getWsClient } from '@/network/wsClient';
@@ -57,6 +58,22 @@ const { upsertTransformKeyframe } = useTimelineAuthoring();
  */
 const lockGuard = useLockGuard();
 const locked = lockGuard.readonly;
+
+const net = useNetworkStore();
+
+/**
+ * 时间轴的一条 WS 操作没成功时，给用户一句提示。
+ *
+ * <p>以前这些 catch 全是空的，断线 / 服务端拒绝 / 5 秒等不到回执时界面一声不吭，
+ * 用户看到的还是"改好了"的样子，实际服务端根本没这回事。业务失败走 lastError 通道
+ * （状态栏有独立提示位），不染红连接指示灯。</p>
+ */
+function reportTimelineOpFailed(err: unknown): void {
+    const reason = err instanceof Error ? err.message : String(err);
+    const msg = t.value.timeline.opFailed;
+    net.lastError = msg;
+    net.pushLog('err', `${msg} (${reason})`);
+}
 
 const MANUAL_TRIGGER: TriggerConfig = { type: 'manual', params: {} };
 const ROW_H = 28;
@@ -181,12 +198,26 @@ function onBlockPointerUp(e: PointerEvent): void {
         const track = tl.value.tracks?.[d.elementId];
         // 整组帧共享 coalesceKey → 后端合并成一步撤销（与拉就设同理）
         const coalesceKey = `integ-move:${d.elementId}:${d.origTimeMs}`;
+        const movedTo = d.curTimeMs;
+        const movedFrom = d.origTimeMs;
+        const elementId = d.elementId;
         for (const kfId of d.keyframeIds) {
             const kf = track?.find(k => k.id === kfId);
-            if (kf) (kf as { timeMs: number }).timeMs = d.curTimeMs;   // 乐观本地挪，消 keyframe.move 往返闪烁
-            ws.sendKeyframeMove(tl.value.id, kfId, d.curTimeMs, coalesceKey).catch(() => { /* wsClient 日志 */ });
+            if (kf) (kf as { timeMs: number }).timeMs = movedTo;   // 乐观本地挪，消 keyframe.move 往返闪烁
+            ws.sendKeyframeMove(tl.value.id, kfId, movedTo, coalesceKey)
+                .catch((e: unknown) => {
+                    // 服务端没收下这一挪就把本地挪回去，否则画面上帧停在新位置、
+                    // 服务端还在老位置，之后所有操作都打在错的时刻上。
+                    // 只有本地值仍是我们刚写进去的那个才回滚——期间要是有新 patch 落地，
+                    // 那是更新的真相，别覆盖掉。
+                    if (kf && (kf as { timeMs: number }).timeMs === movedTo) {
+                        (kf as { timeMs: number }).timeMs = movedFrom;
+                        store.selectGroup(transformKeyframeKey(elementId, movedFrom));
+                    }
+                    reportTimelineOpFailed(e);
+                });
         }
-        store.selectGroup(transformKeyframeKey(d.elementId, d.curTimeMs));
+        store.selectGroup(transformKeyframeKey(d.elementId, movedTo));
     } else if (!d.moved) {
         store.selectGroup(transformKeyframeKey(d.elementId, d.origTimeMs), e.shiftKey);
     }
@@ -262,9 +293,14 @@ function onEasingUpdate(easing: Easing): void {
     const g = selectedGroupKf.value;
     if (!g || !tl.value) return;
     if (!lockGuard.guardMutation(t.value.timeline.addEasing)) return;
-    // 同步整体帧所有 transform 关键帧的缓动 → x/y 进度一致 → 轨迹直线
+    // 同步整体帧所有 transform 关键帧的缓动 → x/y 进度一致 → 轨迹直线。
+    // 6 条 op 必须共享同一个 coalesceKey：不传的话后端按「每帧一个 key」回退，一次调整
+    // 占 6 步撤销，而且撤一步只回滚一个属性的缓动 —— 正好造出上面这行想避免的
+    // 「x/y 进度不一致 → 轨迹被掰弯」。
+    const coalesceKey = `integ-easing:${g.elementId}:${g.timeMs}`;
     for (const kfId of g.keyframeIds) {
-        ws.sendKeyframeUpdate(tl.value.id, kfId, { easing }).catch(() => { /* wsClient 日志 */ });
+        ws.sendKeyframeUpdate(tl.value.id, kfId, { easing }, coalesceKey)
+            .catch((e: unknown) => reportTimelineOpFailed(e));
     }
 }
 function deleteSelectedGroups(): void {
@@ -276,7 +312,7 @@ function deleteSelectedGroups(): void {
         const timeMs = Number(key.slice(sep + 1));
         const g = aggregateTransformKeyframes(tl.value, elementId).find(x => x.timeMs === timeMs);
         if (g) for (const kfId of g.keyframeIds) {
-            ws.sendKeyframeDelete(tl.value.id, kfId).catch(() => { /* wsClient 日志 */ });
+            ws.sendKeyframeDelete(tl.value.id, kfId).catch((e: unknown) => reportTimelineOpFailed(e));
         }
     }
     store.clearGroups();
@@ -312,7 +348,7 @@ useEventListener(window, 'keydown', (e: KeyboardEvent) => {
     } else if (store.selectedKeyframeId && tl.value) {
         // per-property 子轨选中的单个关键帧
         if (!lockGuard.guardMutation(t.value.timeline.kfDeleteAria)) return;
-        ws.sendKeyframeDelete(tl.value.id, store.selectedKeyframeId).catch(() => { /* wsClient 日志 */ });
+        ws.sendKeyframeDelete(tl.value.id, store.selectedKeyframeId).catch((e: unknown) => reportTimelineOpFailed(e));
         store.selectKeyframe(null);
         e.preventDefault();
     }
@@ -355,7 +391,7 @@ async function createTimeline(): Promise<void> {
     if (!lockGuard.guardMutation(t.value.timeline.dockNew)) return;
     creating.value = true;
     try { await ws.sendTimelineCreate('', 5000, 20, 'loop', MANUAL_TRIGGER); }
-    catch { /* wsClient 日志 */ }
+    catch (e) { reportTimelineOpFailed(e); }
     finally { creating.value = false; }
 }
 
@@ -377,7 +413,7 @@ function updateTimeline(patch: Partial<{ name: string; durationMs: number; fps: 
     if (!tl.value) return;
     // 名称 / 时长 / 帧率 / 循环 / 触发方式共用这一个出口，锁定守卫放这里一处就全覆盖
     if (!lockGuard.guardMutation(t.value.timeline.dockSettings)) return;
-    ws.sendTimelineUpdate(tl.value.id, patch).catch(() => { /* wsClient 日志 */ });
+    ws.sendTimelineUpdate(tl.value.id, patch).catch((e: unknown) => reportTimelineOpFailed(e));
 }
 function onNameChange(e: Event): void { updateTimeline({ name: (e.target as HTMLInputElement).value }); }
 function onDurationChange(e: Event): void {
@@ -406,7 +442,7 @@ function onLoopChange(e: Event): void { updateTimeline({ loopMode: (e.target as 
 function deleteTimeline(): void {
     if (!tl.value) return;
     if (!lockGuard.guardMutation(t.value.timeline.dockDelete)) return;
-    ws.sendTimelineDelete(tl.value.id).catch(() => { /* wsClient 日志 */ });
+    ws.sendTimelineDelete(tl.value.id).catch((e: unknown) => reportTimelineOpFailed(e));
     confirmDeleteTimeline.value = false; settingsOpen.value = false;
 }
 function loopModeLabel(m: string): string {

@@ -34,22 +34,35 @@ const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
-/** 当前所有选中的 element（从 active layer 内按 selectedIds 过滤）。 */
+/**
+ * 当前所有选中且**可编辑**的 element。
+ *
+ * <p>两处不能省：</p>
+ * <ul>
+ *   <li>扫**全部图层**而不是 `state.elements`（那是 activeLayer 的兼容视图）——选中是可以
+ *       跨层的，只看活动层会把别层的选中元素漏掉，对齐结果与用户看到的选中框对不上。</li>
+ *   <li>按 `isElementEditable` 过滤，它同时看**元素自身 locked 与所属图层 locked**。
+ *       原来只在 `useAlignDistribute` 里滤 `!e.locked`，漏了图层锁——那些元素会被算进
+ *       对齐基准并发出 op，服务端回 `LAYER_LOCKED` 拒绝，而前端已乐观改过 = 双端分叉。</li>
+ * </ul>
+ */
 const selectedElements = computed<Element[]>(() => {
     const ids = ui.selectedIds;
     if (ids.size === 0) return [];
-    const elements = project.state?.elements ?? [];
-    return elements.filter((e) => ids.has(e.id));
+    const out: Element[] = [];
+    for (const layer of project.state?.layers ?? []) {
+        for (const e of layer.elements) {
+            if (ids.has(e.id) && project.isElementEditable(e.id)) out.push(e);
+        }
+    }
+    return out;
 });
 
-/** 工具栏可见性：2+ 选中 + wall 未锁定。 */
+/** 工具栏可见性：2+ 可编辑选中 + wall 未锁定。 */
 const visible = computed(() => selectedElements.value.length >= 2 && !project.isLocked);
 
-/** distribute 至少 3 元素（去 locked 后还得 ≥ 3）。 */
-const distributeEnabled = computed(() => {
-    const writable = selectedElements.value.filter((e) => !e.locked);
-    return writable.length >= 3;
-});
+/** distribute 至少 3 元素（selectedElements 已排除锁定项）。 */
+const distributeEnabled = computed(() => selectedElements.value.length >= 3);
 
 function applyAlignDistribute(axis: AlignAxis, mode: AlignMode): void {
     const els = selectedElements.value;

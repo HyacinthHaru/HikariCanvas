@@ -129,6 +129,25 @@ describe('formatNumber', () => {
         expect(formatNumber(Infinity)).toBe('0');
         expect(formatNumber(-Infinity)).toBe('0');
     });
+
+    // 后端表达式文法的 readNumber 只认「数字[.数字]」，没有指数写法。JS 的 String(n) 对极小 /
+    // 极大的数会写成 1e-7 / 1e+21，原样写进条件里就是个语法错，整条规则保存不了。
+    it('极小数不写成指数（1e-7 → 0.0000001）', () => {
+        expect(formatNumber(1e-7)).toBe('0.0000001');
+        expect(formatNumber(1.5e-7)).toBe('0.00000015');
+        expect(formatNumber(-2.5e-8)).toBe('-0.000000025');
+    });
+
+    it('极大数不写成指数（1e21 → 一串 0）', () => {
+        expect(formatNumber(1e21)).toBe('1000000000000000000000');
+        expect(formatNumber(-1.25e22)).toBe('-12500000000000000000000');
+    });
+
+    it('产出的串一律能被「数字[.数字]」文法接住（不含 e / E / +）', () => {
+        for (const n of [1e-7, 1e21, -3.5e-9, 2.5e30, 0.1, -42]) {
+            expect(formatNumber(n)).toMatch(/^-?\d+(\.\d+)?$/);
+        }
+    });
 });
 
 describe('escapeStringLiteral', () => {

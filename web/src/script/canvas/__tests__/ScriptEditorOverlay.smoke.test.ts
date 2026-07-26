@@ -98,6 +98,55 @@ describe('ScriptEditorOverlay 渲染 smoke', () => {
         expect(ui.scriptEditorOpen).toBe(false);
     });
 
+    // closeEditing 在"有未保存改动 + 校验不过"时会拒绝退出（清空 workingCopy 就是丢数据）。
+    // 以前不看它的返回值照关不误：提示一闪而过、编辑器关了，用户以为存上了。
+    it('有未保存又校验不过的改动时：X 和 Esc 都关不掉，编辑会话原样留着', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([{
+            id: 'sr-1', wallId: 'w-x', enabled: true, name: '规则',
+            trigger: { type: 'wallReady' }, actions: [{ type: 'log', message: 'ok' }], blockLayout: '{}',
+        }]);
+        const ui = useUiStore();
+        ui.scriptEditorOpen = true;
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('');                     // 规则名空 → 校验不过 + 脏
+        await nextTick();
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+
+        await wrapper.find('button[title="关闭"]').trigger('click');
+        expect(ui.scriptEditorOpen).toBe(true);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        await nextTick();
+        expect(ui.scriptEditorOpen).toBe(true);
+        // 改动还在，用户可以去修完再关
+        expect(edit.workingCopy).not.toBeNull();
+        wrapper.unmount();
+    });
+
+    it('把问题修好后就关得掉了', async () => {
+        const scripts = useScriptStore();
+        scripts.initScripts([{
+            id: 'sr-1', wallId: 'w-x', enabled: true, name: '规则',
+            trigger: { type: 'wallReady' }, actions: [{ type: 'log', message: 'ok' }], blockLayout: '{}',
+        }]);
+        const ui = useUiStore();
+        ui.scriptEditorOpen = true;
+        const wrapper = mount(ScriptEditorOverlay, { attachTo: document.body });
+        await nextTick();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('');
+        await nextTick();
+        edit.setName('修好了');
+        await nextTick();
+        await wrapper.find('button[title="关闭"]').trigger('click');
+        expect(ui.scriptEditorOpen).toBe(false);
+        wrapper.unmount();
+    });
+
     it('zoom% 显示 + reset 按钮存在', async () => {
         const wrapper = mount(ScriptEditorOverlay);
         await nextTick();
@@ -186,7 +235,27 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         expect(sendScriptTest).not.toHaveBeenCalled();
     });
 
-    it('点头部温和指示 → 定位到第一处错误积木（querySelector 命中 + scrollIntoView；根因 1 + 主根因联动）', async () => {
+    /**
+     * 给 viewport 与目标积木塞两个假矩形，让"挪到正中"算得出非零位移。
+     * happy-dom 的 getBoundingClientRect 恒返 0，不塞就什么都测不出来。
+     */
+    function stubRects(vp: HTMLElement, target: HTMLElement): void {
+        vp.getBoundingClientRect = () => ({
+            left: 0, top: 0, width: 800, height: 600,
+            right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
+        }) as DOMRect;
+        target.getBoundingClientRect = () => ({
+            left: 900, top: 700, width: 100, height: 40,
+            right: 1000, bottom: 740, x: 900, y: 700, toJSON: () => ({}),
+        }) as DOMRect;
+    }
+
+    /** 当前 world 层的 transform 串（pan 有没有动看它）。 */
+    function worldTransform(w: ReturnType<typeof mount>): string {
+        return w.find('.hc-block-world').element.getAttribute('style') ?? '';
+    }
+
+    it('点头部温和指示 → 把第一处错误积木挪到画布正中（改 pan，不滚容器）', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([{
             id: 'sr-1', wallId: 'w-x', enabled: true, name: '规则',
@@ -199,18 +268,25 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         edit.selectRule('sr-1');
         await nextTick();
         // 主根因联动：积木渲染自 workingCopy → 待完善积木的 data-block-path DOM 存在，能被 querySelector 找到。
-        const blockEl = document.querySelector('[data-block-path="actions/0"]') as HTMLElement | null;
-        expect(blockEl).not.toBeNull();
-        const scrollSpy = vi.spyOn(blockEl as HTMLElement, 'scrollIntoView').mockImplementation(() => {});
+        const blockEl = wrapper.find('[data-block-path="actions/0"]').element as HTMLElement;
+        expect(blockEl).toBeTruthy();
+        const vp = wrapper.find('.hc-block-viewport').element as HTMLElement;
+        stubRects(vp, blockEl);
+        // 绝不能去滚 viewport：那会让画布的屏幕↔world 换算整体错位（拖拽落点 / 吸附线全歪）。
+        const scrollSpy = vi.spyOn(blockEl, 'scrollIntoView').mockImplementation(() => {});
         const hint = wrapper.find('.hc-validation-hint');
         expect(hint.exists()).toBe(true);
         await hint.trigger('click');
-        // 点击真的滚动定位到了那个积木（不是"点了没反应"）
-        expect(scrollSpy).toHaveBeenCalled();
+        await nextTick();
+        // 积木中心 (950,720) → viewport 中心 (400,300)：pan 位移 (-550,-420)
+        expect(worldTransform(wrapper)).toContain('translate(-550px, -420px)');
+        expect(scrollSpy).not.toHaveBeenCalled();
+        expect(vp.scrollTop).toBe(0);
+        expect(vp.scrollLeft).toBe(0);
         wrapper.unmount();
     });
 
-    it('trigger 字段错误：点指示定位到帽子（data-block-path="trigger"）', async () => {
+    it('trigger 字段错误：点指示把帽子（data-block-path="trigger"）挪到正中', async () => {
         const scripts = useScriptStore();
         scripts.initScripts([{
             id: 'sr-1', wallId: 'w-x', enabled: true, name: '规则',
@@ -223,11 +299,14 @@ describe('ScriptEditorOverlay 试跑 + 校验 smoke（H）', () => {
         const edit = useScriptEditStore();
         edit.selectRule('sr-1');
         await nextTick();
-        const hatEl = document.querySelector('[data-block-path="trigger"]') as HTMLElement | null;
-        expect(hatEl).not.toBeNull();
-        const scrollSpy = vi.spyOn(hatEl as HTMLElement, 'scrollIntoView').mockImplementation(() => {});
+        const hatEl = wrapper.find('[data-block-path="trigger"]').element as HTMLElement;
+        expect(hatEl).toBeTruthy();
+        stubRects(wrapper.find('.hc-block-viewport').element as HTMLElement, hatEl);
+        const scrollSpy = vi.spyOn(hatEl, 'scrollIntoView').mockImplementation(() => {});
         await wrapper.find('.hc-validation-hint').trigger('click');
-        expect(scrollSpy).toHaveBeenCalled();
+        await nextTick();
+        expect(worldTransform(wrapper)).toContain('translate(-550px, -420px)');
+        expect(scrollSpy).not.toHaveBeenCalled();
         wrapper.unmount();
     });
 

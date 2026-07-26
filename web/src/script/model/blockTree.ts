@@ -217,7 +217,8 @@ export function replaceAt(
  * 返回的就是一棵"少了一整条子树"的树；调用方多半会把它当成正常结果提交并自动保存，
  * 用户的积木连子树一起人间蒸发且无从撤销。宁可抛错让调用方放弃这次移动。</p>
  *
- * @returns 新树；源 path 非法或源节点取不到 → 原样返回（没什么可移动的，不算错）。
+ * @returns 新树；源 path 非法 / 源节点取不到 / <b>落回原位</b>（同序列且补偿后下标不变）→
+ *          原样返回入参引用（没什么可移动的，不算错；调用方据"引用未变"跳过提交）。
  * @throws Error 目标 parentPath 在本树中无效（插入落空，会导致源节点丢失）。
  */
 export function moveNode(
@@ -233,6 +234,18 @@ export function moveNode(
     const fromIndex = parseLeafIndex(fromPath);
     if (fromIndex === null) return actions;
 
+    // 校正插入下标：同容器内向后移。
+    const sameSeq = samePath(fromParentPath, toParentPath);
+    let insertIndex = toIndex;
+    if (sameSeq && toIndex > fromIndex) {
+        insertIndex = toIndex - 1;
+    }
+
+    // 落回原位（同一序列、补偿后下标没变，即"插到自己前面"或"插到自己后面"）= 什么都没动。
+    // 原样返回入参引用，调用方一句 `next === old` 就能认出这是空操作，不必进 undo 栈、
+    // 不必发自动保存。下面那条 remove + insert 的路径恒返回新数组，认不出空操作。
+    if (sameSeq && insertIndex === fromIndex) return actions;
+
     const removed = removeAt(actions, fromPath);
 
     // 校正目标路径段：跨容器且目标路径经过源容器、进入下标在源下标之后 → -1。
@@ -241,12 +254,6 @@ export function moveNode(
         fromParentPath,
         fromIndex,
     );
-
-    // 校正插入下标：同容器内向后移。
-    let insertIndex = toIndex;
-    if (samePath(fromParentPath, toParentPath) && toIndex > fromIndex) {
-        insertIndex = toIndex - 1;
-    }
 
     const inserted = insertAt(removed, adjustedParent, insertIndex, node);
     // insertAt 对非法 parentPath 是原样返回。此处原样返回 = 源节点已摘、又没插回去，

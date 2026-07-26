@@ -493,6 +493,11 @@ export interface TransformUpsertPlan {
  * 算"在 timeMs 给元素打一个整体关键帧"要发的操作：遍历 6 个 transform 属性，取元素当前值
  * （{@link defaultValueFor}）；该属性在 timeMs 已有帧 → update 其 value，否则 add 新帧。
  * dock 的 + 按钮（{@code addTransformKeyframe}）与画布拖动自动加帧共用此计划，消两处逻辑分叉。
+ *
+ * <p><b>同一时刻万一有重复帧，改的必须是最后那一帧。</b>取值规则是"取最后一个 timeMs ≤ t 的帧"
+ * （见 timeline/interpolation.ts 的 spanAt，与后端一致），所以重复时真正生效的是靠后那帧。
+ * 这里以前取第一个，于是"改了没反应"——值写进了被遮住的那帧。重复帧本身由
+ * {@code useTimelineAuthoring} 的进行中 add 去重来防。</p>
  */
 export function planTransformUpsert(
     timeline: Timeline | null | undefined,
@@ -504,7 +509,10 @@ export function planTransformUpsert(
     const updates: { keyframeId: string; property: string; value: number }[] = [];
     for (const property of KEYFRAMEABLE_PROPERTIES) {
         const value = defaultValueFor(element, property);
-        const ex = existing.find(k => k.property === property && k.timeMs === timeMs);
+        let ex: Keyframe | undefined;
+        for (const k of existing) {
+            if (k.property === property && k.timeMs === timeMs) ex = k;   // 取最后一个
+        }
         if (ex) updates.push({ keyframeId: ex.id, property, value });
         else adds.push({ property, value });
     }

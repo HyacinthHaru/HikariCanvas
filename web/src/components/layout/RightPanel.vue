@@ -66,6 +66,18 @@ const isMulti = computed(() => ui.selectedCount >= 2);
  * 夹不住的情况（新字段、前后端范围不同步、后端加了新校验）。</p>
  */
 const rollbackByOpId = new Map<string, { elementId: string; before: Record<string, unknown> }>();
+
+/**
+ * 画板锁定时把编辑控件整块设成 inert（点不动、Tab 也聚焦不到），滚动照旧。
+ *
+ * <p>以前是整栏 {@code pointer-events: none}：滚轮事件直接穿过去，锁定状态下图层面板和属性
+ * 面板都滚不动——想只读看看反而看不全；而且 Tab 仍能聚焦到输入框，方向键改数值是<b>真发 op
+ * 落库</b>的（按架构约定后端编辑 op 不看锁状态）。</p>
+ *
+ * <p>写成 {@code || undefined} 是为了未锁定时把整个属性删掉：inert 只要出现就生效，
+ * {@code inert="false"} 一样是 inert。</p>
+ */
+const lockedInert = computed(() => project.isLocked || undefined);
 /** 最多留这么多帧的原值：够覆盖"发出去到错误回来"的窗口，又不至于无限涨。 */
 const MAX_ROLLBACK_ENTRIES = 32;
 
@@ -127,19 +139,31 @@ function sendUpdateDebounced(patch: Record<string, unknown>) {
     _sendUpdateDebouncedInner(patch, capturedId);
 }
 
+/** 选中的这个元素现在能不能改（它自己没锁 + 所在图层没锁）。删除按钮据此禁用。 */
+const selectedEditable = computed(() => !!selected.value && project.isElementEditable(selected.value.id));
+
 function deleteSelected() {
     const el = selected.value;
     if (!el) return;
+    // 锁定的元素不删。元素锁后端根本不看，前端不拦就等于没锁。
+    if (!project.isElementEditable(el.id)) {
+        net.lastError = t.value.elements.lockedSkipped(1);
+        return;
+    }
     ws.send('element.delete', { elementId: el.id });
     ui.selectElement(null);
 }
 
-/** M8-F：批量删除多选元素，逐个发 element.delete op。 */
+/** M8-F：批量删除多选元素，逐个发 element.delete op。锁定的跳过并说明跳了几个。 */
 function deleteMultiSelected(): void {
     if (ui.selectedCount === 0) return;
     const ids = Array.from(ui.selectedIds);
-    for (const id of ids) {
+    const deletable = project.editableIds(ids);
+    for (const id of deletable) {
         ws.send('element.delete', { elementId: id });
+    }
+    if (deletable.length < ids.length) {
+        net.lastError = t.value.elements.lockedSkipped(ids.length - deletable.length);
     }
     ui.clearSelection();
 }
@@ -148,25 +172,26 @@ function deleteMultiSelected(): void {
 <template>
   <aside class="w-72 bg-[color:var(--card)] border-l border-[color:var(--border)] flex flex-col"
          :class="{ 'hc-readonly-panel': project.isLocked }">
-    <!-- lock-state：locked 时整个右栏 pointer-events: none + opacity 60%，
-         禁止任何编辑控件交互；解锁路径只能走 TopBar Lock 按钮（owner 才可见）。 -->
+    <!-- lock-state：locked 时编辑控件整块 inert（点不动 / Tab 聚焦不到）+ opacity 60%，
+         但仍可滚动查看；解锁路径只能走 TopBar Lock 按钮（owner 才可见）。 -->
     <!-- 图层面板（顶端，自身控制 max-h 40%）。 -->
-    <LayerPanel />
+    <LayerPanel :inert="lockedInert" />
 
     <!-- 笔刷工具激活时，下半 BrushPanel 替代 Properties；其他工具走 Properties 原路径 -->
-    <BrushPanel v-if="ui.activeTool === 'brush'" />
+    <BrushPanel v-if="ui.activeTool === 'brush'" :inert="lockedInert" />
     <!-- Live Paint：油漆桶工具激活时，下半 PaintBucketPanel 替代 Properties -->
-    <PaintBucketPanel v-else-if="ui.activeTool === 'paint-bucket'" />
+    <PaintBucketPanel v-else-if="ui.activeTool === 'paint-bucket'" :inert="lockedInert" />
 
-    <!-- Properties -->
+    <!-- Properties。滚动容器自己不设 inert，否则锁定时连滚都滚不了 -->
     <template v-else>
     <section class="flex-1 overflow-y-auto min-h-0">
-      <header class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
+      <header :inert="lockedInert" class="flex items-center gap-2 px-3 h-9 border-b border-[color:var(--border)] text-xs font-medium uppercase tracking-wider text-[color:var(--muted-foreground)]">
         <Sliders class="size-3.5" />
         <span>{{ t.properties.header }}</span>
         <Tooltip v-if="selected" :text="t.properties.deleteTitle" shortcut="Del">
           <button
-            class="ml-auto p-1 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] text-[color:var(--muted-foreground)]"
+            class="ml-auto p-1 rounded hover:bg-[color:var(--destructive)] hover:text-[color:var(--destructive-foreground)] text-[color:var(--muted-foreground)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            :disabled="!selectedEditable"
             @click="deleteSelected"
           >
             <Trash2 class="size-3.5" />
@@ -182,12 +207,12 @@ function deleteMultiSelected(): void {
         </Tooltip>
       </header>
 
-      <div v-if="isMulti" class="p-3 space-y-2 text-xs">
+      <div v-if="isMulti" :inert="lockedInert" class="p-3 space-y-2 text-xs">
         <div class="font-medium">{{ t.properties.multiSelected(ui.selectedCount) }}</div>
         <div class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.multiHint }}</div>
       </div>
 
-      <div v-else-if="!selected" class="text-xs">
+      <div v-else-if="!selected" :inert="lockedInert" class="text-xs">
         <!-- 未选中元素时空 hint + 画板设置段 -->
         <div class="p-3 text-[color:var(--muted-foreground)]">
           {{ t.properties.empty }}
@@ -195,7 +220,7 @@ function deleteMultiSelected(): void {
         <CanvasSettingsSection />
       </div>
 
-      <div v-else class="p-3 space-y-3 text-xs">
+      <div v-else :inert="lockedInert" class="p-3 space-y-3 text-xs">
         <!-- 基本信息 -->
         <div class="flex items-center justify-between">
           <span class="text-[color:var(--muted-foreground)]">{{ t.properties.type }}</span>
@@ -245,17 +270,17 @@ function deleteMultiSelected(): void {
     </section>
 
     <!-- Elements（当前活动层内的元素列表）-->
-    <ElementListSection />
+    <ElementListSection :inert="lockedInert" />
     </template> <!-- v-else 结束（Properties 块只在非 brush 工具显示） -->
   </aside>
 </template>
 
 <style scoped>
-/* 2026-05-14 lock-state：locked 时整栏禁用编辑。pointer-events: none 完全屏蔽点击 / 输入 / 拖拽；
-   opacity 60% 提供视觉反馈让用户知道控件不可用。 */
-.hc-readonly-panel section,
-.hc-readonly-panel :deep(.layer-panel) {
-    pointer-events: none;
+/* 锁定时给编辑控件降透明度，提示"现在改不了"。真正的拦截靠 inert 属性（见 lockedInert）：
+   点不动、Tab 也聚焦不到，但仍然能滚动查看。
+   以前这里写的是 pointer-events: none —— 滚轮事件会穿过去，锁定状态下面板根本滚不动，
+   而且 Tab 依旧能聚焦，方向键改数值是真发 op 落库的。 */
+.hc-readonly-panel [inert] {
     opacity: 0.6;
 }
 </style>

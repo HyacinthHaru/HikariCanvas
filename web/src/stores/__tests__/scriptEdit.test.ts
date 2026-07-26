@@ -1059,3 +1059,190 @@ describe('scriptEditStore — D2 校验未通过静默丢弃 → 非阻塞提示
         expect(edit.dirty).toBe(false);
     });
 });
+
+// ---------- 自动保存失败时人已经切走（#161）----------
+
+/**
+ * 时序：切规则前先 flush 上一条 → 回执几秒后才回来（ack 超时 / 断线），那时 selectedRuleId
+ * 早就是新规则了。旧实现的失败回调直接 {@code dirty = true}，标脏的是<b>新</b>规则，上一条的
+ * 改动服务端没收到、本地副本又被顶掉 = 永久丢失，提示还只说一句"自动保存失败"。
+ */
+describe('scriptEditStore — 保存失败回调认自己那条规则', () => {
+    function twoRules() {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        scripts.upsert(makeRule('sr-2'));
+        return useScriptEditStore();
+    }
+
+    /** 让下一次 sendScriptUpdate 挂起，返回手动 reject 的把手。 */
+    function pendingUpdate(): { reject: (e: Error) => void } {
+        let rej!: (e: Error) => void;
+        sendScriptUpdate.mockImplementationOnce(() => new Promise<void>((_, r) => { rej = r; }));
+        return { reject: (e) => rej(e) };
+    }
+
+    it('失败时已切走 → 不误标当前规则脏，改动留快照 + 提示指名规则', async () => {
+        const edit = twoRules();
+        const net = useNetworkStore();
+        edit.selectRule('sr-1');
+        edit.setName('没保存上的改动');
+        const handle = pendingUpdate();
+        edit.selectRule('sr-2');           // 切走时 flush 了 sr-1（请求还挂着）
+        expect(edit.selectedRuleId).toBe('sr-2');
+
+        handle.reject(new Error('ack timeout'));
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // 当前规则（sr-2）没被误标脏
+        expect(edit.dirty).toBe(false);
+        // sr-1 的改动被留了下来
+        expect(edit.pendingSaves['sr-1']?.name).toBe('没保存上的改动');
+        // 提示说清楚是哪条规则
+        expect(net.lastError).toContain('没保存上的改动');
+    });
+
+    it('切回那条规则 → 改动恢复并自动重试', async () => {
+        const edit = twoRules();
+        edit.selectRule('sr-1');
+        edit.setName('没保存上的改动');
+        const handle = pendingUpdate();
+        edit.selectRule('sr-2');
+        handle.reject(new Error('boom'));
+        await Promise.resolve();
+        await Promise.resolve();
+
+        sendScriptUpdate.mockClear();
+        edit.selectRule('sr-1');
+        // 看到的是自己没保存上的那版，不是服务端的旧版本
+        expect(edit.workingCopy?.name).toBe('没保存上的改动');
+        expect(edit.dirty).toBe(true);
+        // 快照已消费（不会再重复补发）
+        expect(edit.pendingSaves['sr-1']).toBeUndefined();
+        vi.advanceTimersByTime(800);
+        expect(sendScriptUpdate).toHaveBeenCalledTimes(1);
+        expect(sendScriptUpdate.mock.calls[0][0]).toBe('sr-1');
+        expect((sendScriptUpdate.mock.calls[0][1] as { name: string }).name).toBe('没保存上的改动');
+    });
+
+    it('下一次保存成功 → 顺手把攒下的补发掉', async () => {
+        const edit = twoRules();
+        edit.selectRule('sr-1');
+        edit.setName('没保存上的改动');
+        const handle = pendingUpdate();
+        edit.selectRule('sr-2');
+        handle.reject(new Error('boom'));
+        await Promise.resolve();
+        await Promise.resolve();
+
+        sendScriptUpdate.mockClear();
+        sendScriptUpdate.mockResolvedValue(undefined);
+        edit.setName('sr-2 的改动');
+        vi.advanceTimersByTime(800);
+        await Promise.resolve();
+        await Promise.resolve();
+        const ids = sendScriptUpdate.mock.calls.map((c) => c[0]);
+        expect(ids).toContain('sr-2');
+        expect(ids).toContain('sr-1');
+        expect(edit.pendingSaves['sr-1']).toBeUndefined();
+    });
+
+    it('失败时还停在同一条规则 → 照旧标回脏重试（老行为不变）', async () => {
+        const edit = twoRules();
+        edit.selectRule('sr-1');
+        sendScriptUpdate.mockRejectedValueOnce(new Error('boom'));
+        edit.setName('x');
+        vi.advanceTimersByTime(800);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(edit.dirty).toBe(true);
+        expect(edit.pendingSaves['sr-1']).toBeUndefined();
+    });
+
+    it('规则被删 / 换墙 → 攒下的快照丢掉（不补发到不该写的地方）', async () => {
+        const edit = twoRules();
+        edit.selectRule('sr-1');
+        edit.setName('没保存上的改动');
+        const handle = pendingUpdate();
+        edit.selectRule('sr-2');
+        handle.reject(new Error('boom'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(edit.pendingSaves['sr-1']).toBeTruthy();
+        edit.deleteRule('sr-1');
+        expect(edit.pendingSaves['sr-1']).toBeUndefined();
+    });
+});
+
+// ---------- setEnabled 失败回滚（#174）----------
+
+describe('scriptEditStore — setEnabled 失败回滚', () => {
+    /**
+     * 先做一处普通改动把 dirty 标起来：否则 server-as-truth 的 watch 会在下一个微任务里
+     * 用服务端镜像整条替换 workingCopy（本测里镜像没被 mock 更新，enabled 恒为 true），
+     * 那样测的就不是回滚而是那个 watch 了。
+     */
+    function setupDirty(enabled = true) {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1', { enabled }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('改个名字标脏');
+        return edit;
+    }
+
+    it('发送失败 → 开关拨回原值（否则界面与服务端长期不一致且不会自愈）', async () => {
+        const edit = setupDirty(true);
+        sendScriptEnable.mockRejectedValueOnce(new Error('boom'));
+        edit.setEnabled(false);
+        expect(edit.workingCopy?.enabled).toBe(false);   // 乐观显示
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(edit.workingCopy?.enabled).toBe(true);    // 回滚
+        expect(useNetworkStore().lastError).toContain('切换开关失败');
+    });
+
+    it('发送成功 → 不回滚（开关停在用户切的那一档）', async () => {
+        const edit = setupDirty(true);
+        edit.setEnabled(false);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(edit.workingCopy?.enabled).toBe(false);
+    });
+
+    it('失败回来之前用户又拨了一次 → 不抢方向盘（以用户最后一次操作为准）', async () => {
+        const edit = setupDirty(true);
+        sendScriptEnable.mockRejectedValueOnce(new Error('boom'));
+        edit.setEnabled(false);
+        edit.setEnabled(true);      // 用户自己又拨回开
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(edit.workingCopy?.enabled).toBe(true);
+    });
+});
+
+// ---------- closeEditing 的返回值（#139）----------
+
+describe('scriptEditStore — closeEditing 告诉调用方到底关没关', () => {
+    it('校验挡住时返回 false 且编辑会话原样保留', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('');                       // 规则名空 → 校验不过
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        expect(edit.closeEditing()).toBe(false);
+        expect(edit.selectedRuleId).toBe('sr-1');
+        expect(edit.workingCopy).not.toBeNull();
+    });
+
+    it('正常关闭返回 true', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        expect(edit.closeEditing()).toBe(true);
+        expect(edit.selectedRuleId).toBe(null);
+    });
+});

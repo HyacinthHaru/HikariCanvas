@@ -35,6 +35,7 @@ function makeFakeOuter(initialScrollLeft = 0): HTMLElement {
 
 /** 创建 WheelEvent-like 对象（纯 POJO，供 onWheel 直接调用）。 */
 function makeWheelEvent(opts: {
+    deltaX?: number;
     deltaY?: number;
     ctrlKey?: boolean;
     metaKey?: boolean;
@@ -44,6 +45,7 @@ function makeWheelEvent(opts: {
 }): WheelEvent {
     const prevented = { called: false };
     return {
+        deltaX: opts.deltaX ?? 0,
         deltaY: opts.deltaY ?? 0,
         ctrlKey: opts.ctrlKey ?? false,
         metaKey: opts.metaKey ?? false,
@@ -53,6 +55,17 @@ function makeWheelEvent(opts: {
         preventDefault: vi.fn(),
         __prevented: prevented,
     } as unknown as WheelEvent;
+}
+
+/** 创建 MouseEvent-like 对象（纯 POJO，供 onMouseDown 直接调用）。 */
+function makeMouseEvent(opts: { button?: number; altKey?: boolean }): MouseEvent {
+    return {
+        button: opts.button ?? 0,
+        altKey: opts.altKey ?? false,
+        clientX: 100,
+        clientY: 100,
+        preventDefault: vi.fn(),
+    } as unknown as MouseEvent;
 }
 
 // ---------- test setup ----------
@@ -134,5 +147,79 @@ describe('usePanScroll — Shift+wheel 水平滚动', () => {
 
         expect(outer.scrollLeft).toBe(0);
         expect(e.preventDefault).toHaveBeenCalledOnce();
+    });
+
+    // macOS 的 Chrome / Safari 在事件层就把 Shift+滚轮换成了 deltaX（deltaY 恒为 0）。
+    // 只看 deltaY 的话这里加 0 等于没滚，却又把浏览器自己的横滚 preventDefault 掉了，
+    // 横向彻底动不了。
+    it('Shift+wheel 只给 deltaX（macOS）→ 按 deltaX 横滚', () => {
+        const outer = makeFakeOuter(300);
+        const outerRef = ref<HTMLElement | null>(outer);
+        const { onWheel } = usePanScroll({ outerRef, widthPx: () => 512, heightPx: () => 512 });
+
+        const e = makeWheelEvent({ shiftKey: true, deltaX: -120, deltaY: 0 });
+        onWheel(e);
+
+        expect(outer.scrollLeft).toBe(180);
+        expect(e.preventDefault).toHaveBeenCalledOnce();
+    });
+
+    it('Shift+wheel 两个增量都有 → deltaX 优先（不叠加）', () => {
+        const outer = makeFakeOuter(0);
+        const outerRef = ref<HTMLElement | null>(outer);
+        const { onWheel } = usePanScroll({ outerRef, widthPx: () => 512, heightPx: () => 512 });
+
+        const e = makeWheelEvent({ shiftKey: true, deltaX: 30, deltaY: 120 });
+        onWheel(e);
+
+        expect(outer.scrollLeft).toBe(30);
+    });
+
+    it('Shift+wheel 但两个增量都是 0 → 不拦浏览器默认行为', () => {
+        const outer = makeFakeOuter(50);
+        const outerRef = ref<HTMLElement | null>(outer);
+        const { onWheel } = usePanScroll({ outerRef, widthPx: () => 512, heightPx: () => 512 });
+
+        const e = makeWheelEvent({ shiftKey: true, deltaX: 0, deltaY: 0 });
+        onWheel(e);
+
+        expect(outer.scrollLeft).toBe(50);
+        expect(e.preventDefault).not.toHaveBeenCalled();
+    });
+});
+
+// Alt+左键既是"平移画布"也是"画套索蒙版"的手势。套索开画之后平移必须让路，
+// 否则画布一边滚一边采样，套索点全飘（采样是按容器位置换算的）。
+describe('usePanScroll — 手势被别人接管时不起平移', () => {
+    it('blockPan 返 true 时 Alt+左键不起平移', () => {
+        const outer = makeFakeOuter(500);
+        const outerRef = ref<HTMLElement | null>(outer);
+        const { onMouseDown, onMouseMove, isPanning } = usePanScroll({
+            outerRef, widthPx: () => 512, heightPx: () => 512,
+            blockPan: () => true,
+        });
+
+        const down = makeMouseEvent({ button: 0, altKey: true });
+        onMouseDown(down);
+        onMouseMove({ clientX: 200, clientY: 200 } as MouseEvent);
+
+        expect(isPanning.value).toBe(false);
+        expect(outer.scrollLeft).toBe(500);
+        expect(down.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it('blockPan 返 false 时 Alt+左键照常平移（回归守卫）', () => {
+        const outer = makeFakeOuter(500);
+        const outerRef = ref<HTMLElement | null>(outer);
+        const { onMouseDown, onMouseMove, isPanning } = usePanScroll({
+            outerRef, widthPx: () => 512, heightPx: () => 512,
+            blockPan: () => false,
+        });
+
+        onMouseDown(makeMouseEvent({ button: 0, altKey: true }));
+        onMouseMove({ clientX: 60, clientY: 100 } as MouseEvent);
+
+        expect(isPanning.value).toBe(true);
+        expect(outer.scrollLeft).toBe(540);
     });
 });

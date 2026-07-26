@@ -57,8 +57,22 @@ export const useRailStore = defineStore('rail', () => {
         stations.value = next;
     }
 
-    function setStations(list: RailStation[]) {
+    /**
+     * 整批写入站点，并<b>整体替换</b>所涉线路的站点集合。
+     *
+     * <p>为什么不能只做合并：铁路数据是全服共享的，服务端改动不会广播，本端只能靠重新拉取
+     * 对齐。只往旧 Map 上合并的话，别人删掉的站在这边永远删不掉——重拉多少次都还在列表里，
+     * 点它做任何操作都被服务端拒绝。</p>
+     *
+     * <p>{@code lineId} 指明这批数据属于哪条线；不传时按 list 里出现过的线路推断（服务端
+     * 返回空列表时就无从推断，所以调用方最好显式传）。其它线路的站点不受影响。</p>
+     */
+    function setStations(list: RailStation[], lineId?: string) {
         const next = new Map(stations.value);
+        const touched = new Set<string>();
+        if (lineId) touched.add(lineId);
+        for (const s of list) touched.add(s.lineId);
+        for (const [id, s] of next) if (touched.has(s.lineId)) next.delete(id);
         for (const s of list) next.set(s.id, s);
         stations.value = next;
     }
@@ -76,10 +90,27 @@ export const useRailStore = defineStore('rail', () => {
         runs.value = next;
     }
 
-    function setRuns(list: RailRun[]) {
+    /**
+     * 整批写入车次，并<b>整体替换</b>所涉线路的车次集合（理由同 {@link setStations}）。
+     * 被清掉的车次连带清掉它的时刻表缓存，不留孤儿。
+     */
+    function setRuns(list: RailRun[], lineId?: string) {
         const next = new Map(runs.value);
+        const touched = new Set<string>();
+        if (lineId) touched.add(lineId);
+        for (const r of list) touched.add(r.lineId);
+        const incoming = new Set(list.map((r) => r.id));
+        const tNext = new Map(timetables.value);
+        let timetableDirty = false;
+        for (const [id, r] of next) {
+            if (!touched.has(r.lineId) || incoming.has(id)) continue;
+            // 这一趟车服务端已经没有了 → 连它的时刻表缓存一起清，不留孤儿
+            next.delete(id);
+            if (tNext.delete(id)) timetableDirty = true;
+        }
         for (const r of list) next.set(r.id, r);
         runs.value = next;
+        if (timetableDirty) timetables.value = tNext;
     }
 
     function removeRun(id: string) {

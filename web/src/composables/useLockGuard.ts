@@ -11,9 +11,11 @@ import { useI18n } from '@/i18n';
  * 用户能成功改 wall —— 因为后端 lock 不拦编辑 op。所以多入口失防 = 实质上 lock 失效。</p>
  *
  * <p>CanvasView 顶部已有一个 stage 内 overlay（pointer-events 吃掉所有 stage 内 click），
- * RightPanel 用 .hc-readonly-panel CSS 吃掉编辑控件 pointer-events，但 LeftTools 按钮 /
- * CanvasZoomBar grid input / TemplateGallery apply / 快捷键 (Ctrl+Z 等) /
- * Paint Bucket 点击都是独立入口 —— 必须在每个发 op 的函数开头加一道防线。</p>
+ * RightPanel 的编辑区用 `inert` 属性屏蔽（0.9.17 从 `pointer-events: none` 换过来——那个
+ * 只挡鼠标，Tab 仍能聚焦进去改值并真的落库，还会连带把面板滚动一起吃掉）。但 LeftTools
+ * 按钮 / CanvasZoomBar grid input / TemplateGallery apply / SVG 与工程导入 / 时间轴 dock /
+ * 快捷键（Ctrl+Z 等）/ Paint Bucket 点击都是独立入口 —— 必须在每个发 op 的函数开头加一道
+ * 防线。<b>漏一个入口 = lock 实质失效</b>，0.9.17 就在导入与时间轴两处补过缺口。</p>
  *
  * <p><b>语义约定</b>（与代码库其他点一致，与 CLAUDE.md §lock-state "owner 仅有解锁权限"对齐）：</p>
  * <ul>

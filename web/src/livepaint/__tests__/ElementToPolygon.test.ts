@@ -224,4 +224,23 @@ describe('elementToPolygon — path', () => {
             [0, 10],
         ]);
     });
+
+    it('元素不在原点时，重复顶点仍被去掉', () => {
+        // 去重比较曾经拿"已加过偏移的上一点"去比"还没加偏移的新点"，元素 x/y 不为 0 时
+        // 永远判不相等 → 重复点原样喂给 polygon-clipping。
+        const poly = elementToPolygon(makePath({
+            x: 5,
+            y: 7,
+            w: 10,
+            h: 10,
+            d: 'M0 0 L10 0 L10 0 L10 10 L0 10 Z',   // 第二个 L10 0 是重复点
+        }));
+        expect(poly).not.toBeNull();
+        expect(poly!).toEqual([
+            [5, 7],
+            [15, 7],
+            [15, 17],
+            [5, 17],
+        ]);
+    });
 });

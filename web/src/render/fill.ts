@@ -69,13 +69,33 @@ export function fillToCanvasStyle(
 ): string | CanvasGradient | undefined {
     const f = normalizeFill(fill);
     if (!f) return undefined;
-    if (f.type === 'solid') return f.color;
+    if (f.type === 'solid') return safeColor(f.color);
     if (f.type === 'linear') return buildLinearGradient(ctx, f, bx, by, bw, bh);
     return buildRadialGradient(ctx, f, bx, by, bw, bh);
 }
 
 /** fallback 纯色（与后端 buildLinearPaint/buildRadialPaint 空 stops 时的 Color.WHITE 对齐）。 */
 const FILL_FALLBACK_WHITE = '#FFFFFF';
+
+/**
+ * 合法颜色串形态，与后端 {@code FillPaintBuilder.HEX_RE} / {@code FillValidator.COLOR_RE}
+ * 逐字符相同：{@code #RRGGBB} 或 {@code #RRGGBBAA}。
+ */
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
+
+/**
+ * 颜色兜底：读不懂的颜色串一律当白色，与后端 {@code FillPaintBuilder.parseColor}
+ * （不匹配即 {@code Color.WHITE}）对齐。
+ *
+ * <p>非做不可的原因：{@code CanvasGradient.addColorStop} 遇到非法颜色<b>抛异常</b>，
+ * 而画布重绘是 rAF 回调、没人接这个异常——一个坏颜色就让整块画布每帧崩一次，
+ * 页面从此不再更新。协议入口的 FillValidator 挡得住 WS 编辑，但工程导入构造的
+ * canvas.background 绕得过去（导入侧只校验元素，不校验画布背景）。</p>
+ */
+function safeColor(c: string | null | undefined): string {
+    if (typeof c !== 'string' || !HEX_COLOR_RE.test(c)) return FILL_FALLBACK_WHITE;
+    return c;
+}
 
 /**
  * 剔除 position 非有限的 stops（镜像后端 FillPaintBuilder.filterFiniteStops）；
@@ -100,7 +120,7 @@ function buildLinearGradient(
     // 三档退化兜底，逐档对齐后端 buildLinearPaint。
     const stops = filterFiniteStops(g.stops);
     if (stops.length === 0) return FILL_FALLBACK_WHITE;          // 0 stops → 纯白
-    if (stops.length < 2) return stops[0].color;                 // < 2 stops → 首 stop 色
+    if (stops.length < 2) return safeColor(stops[0].color);      // < 2 stops → 首 stop 色
     // 与 Java buildLinearPaint 同：方向向量 (cos θ, sin θ)；θ=0° 沿 +x，90° 沿 +y（画布坐标系 Y 朝下）
     // NaN 角度兜底为 0（对齐后端 Double.isFinite(g.angle())? : 0.0）
     const angle = Number.isFinite(g.angle) ? g.angle : 0;
@@ -126,7 +146,7 @@ function buildLinearGradient(
     const x2 = cx + dx * maxP;
     const y2 = cy + dy * maxP;
     // 端点重合（0 尺寸 bbox）→ 首 stop 纯色，对齐后端 `x1==x2 && y1==y2` 分支
-    if (x1 === x2 && y1 === y2) return stops[0].color;
+    if (x1 === x2 && y1 === y2) return safeColor(stops[0].color);
     const grad = ctx.createLinearGradient(x1, y1, x2, y2);
     addStops(grad, stops);
     return grad;
@@ -140,7 +160,7 @@ function buildRadialGradient(
     // 退化兜底对齐后端 buildRadialPaint。
     const stops = filterFiniteStops(g.stops);
     if (stops.length === 0) return FILL_FALLBACK_WHITE;
-    if (stops.length < 2) return stops[0].color;
+    if (stops.length < 2) return safeColor(stops[0].color);
     // cx/cy/r 非有限兜底（对齐后端 Double.isFinite? : 0.5/0.5/1.0）
     const gcx = Number.isFinite(g.cx) ? g.cx : 0.5;
     const gcy = Number.isFinite(g.cy) ? g.cy : 0.5;
@@ -150,7 +170,7 @@ function buildRadialGradient(
     const radius = gr * Math.min(bw, bh) / 2;
     // r<=0 / 非有限 → 首 stop 纯色（对齐后端 `radius <= 0 || !finite` 分支）。
     // 不再强制 Math.max(0.0001, ...)——那会让退化半径显示末 stop 色，与后端纯色行为分叉。
-    if (radius <= 0 || !Number.isFinite(radius)) return stops[0].color;
+    if (radius <= 0 || !Number.isFinite(radius)) return safeColor(stops[0].color);
     // Canvas createRadialGradient(x0,y0,r0,x1,y1,r1)：内圆退化为中心点（r0=0）映射 Java RadialGradientPaint
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
     addStops(grad, stops);
@@ -158,9 +178,10 @@ function buildRadialGradient(
 }
 
 function addStops(grad: CanvasGradient, stops: ReadonlyArray<{ position: number; color: string }>): void {
-    // Canvas 允许相等 position（硬切），无需 monotonize；只 clamp 到 [0,1]
+    // Canvas 允许相等 position（硬切），无需 monotonize；只 clamp 到 [0,1]。
+    // 颜色必须先过 safeColor：addColorStop 对非法颜色是抛异常而不是忽略。
     for (const s of stops) {
         const p = s.position < 0 ? 0 : s.position > 1 ? 1 : s.position;
-        grad.addColorStop(p, s.color);
+        grad.addColorStop(p, safeColor(s.color));
     }
 }

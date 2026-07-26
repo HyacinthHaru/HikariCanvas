@@ -82,6 +82,20 @@ function matRotateAround(deg: number, cx: number, cy: number): Mat {
     return mul(mul(matTranslate(cx, cy), matRotate(deg)), matTranslate(-cx, -cy));
 }
 
+/**
+ * 六个分量都得是有限数，否则退回单位矩阵。
+ *
+ * transform="translate(abc)" / "scale(1e999)" 这类写法经 map(Number) 会产出 NaN 或
+ * Infinity，烘焙进坐标后 d 串里会出现字面的 "NaN"，服务端直接拒收整个元素——
+ * 一个笔误就让整张图少一块。读不懂就当没写这个 transform。
+ */
+function finiteOrIdentity(m: Mat): Mat {
+    for (const v of m) {
+        if (!Number.isFinite(v)) return [...IDENTITY] as Mat;
+    }
+    return m;
+}
+
 /** Parse a single transform function into a Mat */
 function parseSingle(name: string, rawArgs: string): Mat {
     const args = rawArgs
@@ -149,8 +163,8 @@ export function parseTransform(s: string | null): Mat {
 
     while ((m = FUNC_RE.exec(s)) !== null) {
         matched = true;
-        const mat = parseSingle(m[1], m[2]);
-        acc = mul(acc, mat);
+        const mat = finiteOrIdentity(parseSingle(m[1], m[2]));
+        acc = finiteOrIdentity(mul(acc, mat));
     }
 
     return matched ? acc : ([...IDENTITY] as Mat);

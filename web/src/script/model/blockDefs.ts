@@ -50,6 +50,13 @@ export interface FieldOption {
  * {@code labelKey} 指向 i18n（积木内字段标签）。number 用 {@code min}/{@code max}/
  * {@code step}（镜像后端 validator 范围）；select 用 {@code options}；{@code optional}
  * 标记可省字段（如 {@code playTimeline.seekMs} 仅 op=seek 携带）。
+ *
+ * <p>{@code integer}：这个数字字段<b>只收整数</b>。后端读这些字段用的是
+ * {@code ActionDeserializer.requireInt / requireLong}，它连 {@code 3.0} 这种整值浮点都拒
+ * （{@code isIntegralNumber()}）——一条积木里手打了 {@code 2.5}，整条脚本就再也存不下，
+ * 而且报错来自反序列化层，指不到具体积木。标记后：输入控件当场取整、前端 validator
+ * 也跟着拦（{@code validateIntegerFields}），把问题挡在能指出积木的那一层。
+ * {@code step} 只是微调按钮的步长，浏览器不拦手打值，靠它是拦不住的。</p>
  */
 export interface FieldDef {
     name: string;
@@ -60,6 +67,8 @@ export interface FieldDef {
     max?: number;
     step?: number;
     optional?: boolean;
+    /** 只收整数（镜像后端 requireInt / requireLong / optionalLong）。 */
+    integer?: boolean;
 }
 
 /** 积木块分类——决定配色（colorVar）与语义分组（palette 也按此分组）。 */
@@ -225,6 +234,7 @@ export const TRIGGER_DEFS: Record<string, BlockDef> = {
                 min: 1,
                 max: 86400,
                 step: 1,
+                integer: true,
             },
         ],
     },
@@ -255,6 +265,7 @@ export const TRIGGER_DEFS: Record<string, BlockDef> = {
                 min: 1,
                 max: 32,
                 step: 1,
+                integer: true,
             },
         ],
     },
@@ -286,6 +297,7 @@ export const TRIGGER_DEFS: Record<string, BlockDef> = {
                 min: 1,
                 max: 32,
                 step: 1,
+                integer: true,
             },
         ],
     },
@@ -356,6 +368,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
                 min: 0,
                 step: 1,
                 optional: true,
+                integer: true,
             },
         ],
     },
@@ -377,7 +390,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         colorVar: CATEGORY_COLOR_VAR.control,
         labelKey: 'script.blocks.wait',
         fields: [
-            { name: 'ms', type: 'number', labelKey: 'script.fields.ms', min: 50, max: 5000, step: 50 },
+            { name: 'ms', type: 'number', labelKey: 'script.fields.ms', min: 50, max: 5000, step: 50, integer: true },
         ],
     },
     runCommand: {
@@ -472,7 +485,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         colorVar: CATEGORY_COLOR_VAR.control,
         labelKey: 'script.blocks.repeat',
         fields: [
-            { name: 'count', type: 'number', labelKey: 'script.fields.repeatCount', min: 1, max: 100, step: 1 },
+            { name: 'count', type: 'number', labelKey: 'script.fields.repeatCount', min: 1, max: 100, step: 1, integer: true },
             { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
@@ -486,7 +499,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.repeatUntil',
         fields: [
             { name: 'condition', type: 'condition', labelKey: 'script.fields.condition' },
-            { name: 'maxIterations', type: 'number', labelKey: 'script.fields.maxIterations', min: 1, max: 100, step: 1 },
+            { name: 'maxIterations', type: 'number', labelKey: 'script.fields.maxIterations', min: 1, max: 100, step: 1, integer: true },
             { name: 'body', type: 'statements', labelKey: 'script.fields.body' },
         ],
     },
@@ -508,7 +521,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.playParticle',
         fields: [
             { name: 'particle', type: 'select', labelKey: 'script.fields.particle', options: PARTICLE_OPTIONS },
-            { name: 'count', type: 'number', labelKey: 'script.fields.particleCount', min: 1, max: 1000, step: 1 },
+            { name: 'count', type: 'number', labelKey: 'script.fields.particleCount', min: 1, max: 1000, step: 1, integer: true },
             { name: 'offsetX', type: 'number', labelKey: 'script.fields.offsetX', step: 0.5 },
             { name: 'offsetY', type: 'number', labelKey: 'script.fields.offsetY', step: 0.5 },
             { name: 'offsetZ', type: 'number', labelKey: 'script.fields.offsetZ', step: 0.5 },
@@ -521,7 +534,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.waitUntil',
         fields: [
             { name: 'condition', type: 'condition', labelKey: 'script.fields.condition' },
-            { name: 'timeoutMs', type: 'number', labelKey: 'script.fields.timeoutMs', min: 50, max: 60000, step: 50 },
+            { name: 'timeoutMs', type: 'number', labelKey: 'script.fields.timeoutMs', min: 50, max: 60000, step: 50, integer: true },
         ],
     },
     // ---- 4 个新动作（变量复制 / 文本拼接 / 克隆元素 / 删除元素，都是副作用 → 'action' 蓝）----
@@ -554,8 +567,8 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         labelKey: 'script.blocks.cloneElement',
         fields: [
             { name: 'elementId', type: 'element', labelKey: 'script.fields.elementId' },
-            { name: 'offsetX', type: 'number', labelKey: 'script.fields.offsetX', step: 1 },
-            { name: 'offsetY', type: 'number', labelKey: 'script.fields.offsetY', step: 1 },
+            { name: 'offsetX', type: 'number', labelKey: 'script.fields.offsetX', step: 1, integer: true },
+            { name: 'offsetY', type: 'number', labelKey: 'script.fields.offsetY', step: 1, integer: true },
         ],
     },
     deleteElement: {
@@ -577,7 +590,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         colorVar: CATEGORY_COLOR_VAR.control,
         labelKey: 'script.blocks.tweenBlock',
         fields: [
-            { name: 'durationMs', type: 'number', labelKey: 'script.fields.tweenDurationMs', min: 1, max: 60000, step: 100 },
+            { name: 'durationMs', type: 'number', labelKey: 'script.fields.tweenDurationMs', min: 1, max: 60000, step: 100, integer: true },
             { name: 'easing', type: 'select', labelKey: 'script.fields.tweenEasing', options: TWEEN_EASING_OPTIONS },
             { name: 'body', type: 'statements', labelKey: 'script.fields.tweenBody' },
         ],
@@ -591,7 +604,7 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         colorVar: CATEGORY_COLOR_VAR.control,
         labelKey: 'script.blocks.randomBranch',
         fields: [
-            { name: 'probability', type: 'number', labelKey: 'script.fields.probability', min: 0, max: 100, step: 1 },
+            { name: 'probability', type: 'number', labelKey: 'script.fields.probability', min: 0, max: 100, step: 1, integer: true },
             { name: 'then', type: 'statements', labelKey: 'script.fields.then' },
             { name: 'else', type: 'statements', labelKey: 'script.fields.else' },
         ],
@@ -627,9 +640,9 @@ export const ACTION_DEFS: Record<string, BlockDef> = {
         fields: [
             { name: 'title', type: 'text', labelKey: 'script.fields.titleText' },
             { name: 'subtitle', type: 'text', labelKey: 'script.fields.subtitleText' },
-            { name: 'fadeInMs', type: 'number', labelKey: 'script.fields.fadeInMs', min: 0, max: 10000, step: 50 },
-            { name: 'stayMs', type: 'number', labelKey: 'script.fields.stayMs', min: 0, max: 60000, step: 50 },
-            { name: 'fadeOutMs', type: 'number', labelKey: 'script.fields.fadeOutMs', min: 0, max: 10000, step: 50 },
+            { name: 'fadeInMs', type: 'number', labelKey: 'script.fields.fadeInMs', min: 0, max: 10000, step: 50, integer: true },
+            { name: 'stayMs', type: 'number', labelKey: 'script.fields.stayMs', min: 0, max: 60000, step: 50, integer: true },
+            { name: 'fadeOutMs', type: 'number', labelKey: 'script.fields.fadeOutMs', min: 0, max: 10000, step: 50, integer: true },
             { name: 'target', type: 'scope', labelKey: 'script.fields.msgTarget', options: MESSAGE_TARGET_OPTIONS },
         ],
     },

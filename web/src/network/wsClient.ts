@@ -49,6 +49,11 @@ function uiLocaleToGameId(locale: Locale): string {
 
 const RECONNECT_TOKEN_KEY = 'hikari-canvas:reconnect-token';
 const HEARTBEAT_INTERVAL_MS = 20_000;  // 协议 §1 要求 30s；20s 留一次丢包容错
+/**
+ * 多久没收到任何服务端消息就认定连接已经断了（只是自己还不知道）。
+ * 取两个心跳周期：允许丢一次 pong，不至于网络抖一下就重连。
+ */
+const SILENT_LIMIT_MS = HEARTBEAT_INTERVAL_MS * 2;
 /** open → ready 看门狗超时。超过仍未 authenticated 则强制断开走重连。 */
 const READY_TIMEOUT_MS = 10_000;
 /** 重连退避阶梯（秒）。超过最后一档就停。 */
@@ -86,10 +91,46 @@ const ENVELOPE_V = 2;
  * {@link RECONNECT_BACKOFF_S} 的 5s/10s/30s 阶梯退避重连。</p>
  */
 type PendingAck = {
+    /** 发出这一帧时用的 op 名；ack 回来后据此判断能不能应用副作用（见 handleAck）。 */
+    op: string;
     resolve: (payload: unknown) => void;
     reject: (err: Error) => void;
     timer: number;
 };
+
+/**
+ * ack 里带的 {@code lockedAt} / {@code alias} 只对这三个 op 生效。
+ *
+ * <p>别的 op 的 ack 里也可能出现同名字段——设变量别名的 ack 就带一个顶层 {@code alias}。
+ * 早先的实现不看 op 名、见字段就往画布上写，于是给变量起个别名就把整块画布的名字改掉了，
+ * 用户下次点保存还会把它写进数据库。</p>
+ */
+const WALL_META_ACK_OPS: ReadonlySet<string> = new Set([
+    'wall.alias', 'wall.lock', 'wall.unlock',
+]);
+
+/**
+ * 把服务端下发的时间戳（服务器时钟）换算成本机时钟。
+ *
+ * <p>为什么要换算：变量的 {@code updatedAt} 有两条来路——整节点 patch 和 ready 快照直接落
+ * 服务器时间，而只改当前值的增量 patch 落的是本机时间。TTL 过期判定拿本机
+ * {@code Date.now()} 去减，两台机器的时钟差多少，这两条来路就差多少：同一个变量在浏览器里
+ * 显示过期、在游戏里还是好的（或者反过来）。统一换算到本机时钟，差多少都不影响。</p>
+ *
+ * <p>{@code offsetMs} = 服务器时钟 − 本机时钟，由每帧信封的 {@code ts} 现算（见 onMessage）。
+ * 时间戳本身是 0 / 负数 / 非有限值（"从未更新过"的骨架行）时原样返回，不做换算。</p>
+ */
+export function serverTsToLocal(serverEpochMs: number, offsetMs: number): number {
+    if (!Number.isFinite(serverEpochMs) || serverEpochMs <= 0) return serverEpochMs;
+    if (!Number.isFinite(offsetMs) || offsetMs === 0) return serverEpochMs;
+    return serverEpochMs - offsetMs;
+}
+
+/** 把一个 Variable 的 updatedAt 换算到本机时钟；无需换算时返回原引用。 */
+export function variableWithLocalClock(v: Variable, offsetMs: number): Variable {
+    const local = serverTsToLocal(v.updatedAt, offsetMs);
+    return local === v.updatedAt ? v : { ...v, updatedAt: local };
+}
 
 export class WsClient {
     private ws: WebSocket | null = null;
@@ -115,6 +156,18 @@ export class WsClient {
     private urlTokenRetryUsed = false;
     /** 按 client id 跟踪等待 ack 的 promise（sendWithAck 用）。 */
     private pendingAcks = new Map<string, PendingAck>();
+    /**
+     * 最近一次收到服务端消息的本机时刻。心跳看门狗用它判断连接是不是"半开"——
+     * WiFi 切换 / 休眠唤醒 / NAT 老化之后，socket 看着还是 OPEN、send 也不报错，
+     * 但发出去的东西全掉进黑洞。没有这个检查，用户能接着画十几分钟，画的全丢，
+     * 界面上不给任何提示。
+     */
+    private lastInboundAt = 0;
+    /**
+     * 服务器时钟 − 本机时钟（ms）。每收到一帧带 {@code ts} 的信封就重估一次，
+     * 用来把服务端下发的 updatedAt 换算到本机时钟（见 {@link serverTsToLocal}）。
+     */
+    private serverClockOffsetMs = 0;
 
     constructor(private readonly url: string) {}
 
@@ -203,7 +256,7 @@ export class WsClient {
                     reject(new Error('ack_timeout'));
                 }, timeoutMs)
                 : 0;
-            this.pendingAcks.set(id, { resolve, reject, timer });
+            this.pendingAcks.set(id, { op, resolve, reject, timer });
         });
     }
 
@@ -644,11 +697,29 @@ export class WsClient {
         });
     }
 
+    /**
+     * 启动心跳。每 {@link HEARTBEAT_INTERVAL_MS} 发一个 ping，并在发之前先检查
+     * 「上一次收到服务端消息是多久以前」。
+     *
+     * <p>只发不收是没用的：半开连接（WiFi 切换 / 休眠唤醒 / NAT 老化）下 socket 仍是 OPEN、
+     * send 也不抛异常，close 事件要等操作系统的 TCP 超时才来，可能好几分钟。而画布的编辑
+     * 操作（element.update / add 等）都是发出去就不管的，这期间画的东西全部无声丢失。
+     * 连续 {@link SILENT_LIMIT_MS} 没有任何回音就主动 close(4000)，交给既有的退避重连。</p>
+     */
     private startHeartbeat(): void {
         this.stopHeartbeat();
+        // 刚握完手就算"刚收到过消息"，免得第一个周期就误判。
+        this.lastInboundAt = Date.now();
         this.heartbeatTimer = window.setInterval(() => {
             const net = useNetworkStore();
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !net.authenticated) return;
+            const silentMs = Date.now() - this.lastInboundAt;
+            if (silentMs > SILENT_LIMIT_MS) {
+                net.pushLog('err', `no server frame for ${silentMs}ms; connection looks half-open, forcing reconnect`);
+                // 非 1000 码 → onClose 判定非 terminal → scheduleReconnect 接管退避重连。
+                try { this.ws.close(4000, 'heartbeat_timeout'); } catch { /* ignore */ }
+                return;
+            }
             const env: Envelope = { v: ENVELOPE_V, op: 'ping', id: `c-hb-${this.seq++}`, ts: Date.now() };
             this.ws.send(JSON.stringify(env));
         }, HEARTBEAT_INTERVAL_MS);
@@ -687,6 +758,8 @@ export class WsClient {
     private onMessage(text: string): void {
         const net = useNetworkStore();
         net.pushLog('recv', `← ${text}`);
+        // 收到任何一帧都算连接还活着（不限于 pong）——心跳看门狗读这个时刻。
+        this.lastInboundAt = Date.now();
 
         let env: Envelope;
         try {
@@ -694,6 +767,10 @@ export class WsClient {
         } catch {
             net.pushLog('err', 'malformed frame');
             return;
+        }
+        // 每帧信封都带服务器时刻，拿来现估两台机器的时钟差（见 serverTsToLocal）。
+        if (typeof env.ts === 'number' && Number.isFinite(env.ts)) {
+            this.serverClockOffsetMs = env.ts - Date.now();
         }
 
         // handler dispatch 外层包 try/catch，隔离单帧异常。TS 类型断言运行时擦除，
@@ -801,7 +878,10 @@ export class WsClient {
         templates.setTemplates(payload.templates ?? []);
         // 用 ready payload 携带的 variables 快照一次性初始化 VariableStore mirror；
         // 后续变更走 state.patch /variables/<encoded> 路径（见 applyVariablePatches）。
-        useVariableStore().initVariables(payload.variables ?? []);
+        // updatedAt 是服务器时钟，统一换算到本机时钟后再落表（TTL 过期判定用的是本机
+        // Date.now()，不换算的话两台机器时钟差多少就误判多少）。
+        useVariableStore().initVariables(
+            (payload.variables ?? []).map((v) => variableWithLocalClock(v, this.serverClockOffsetMs)));
         // 变量别名快照（per-wall）；后续变更走 state.patch /aliases/<encoded>。
         useVariableAliasStore().initAliases(payload.aliases ?? {});
         // 脚本规则快照（per-wall，服务端顺序）；后续变更走 state.patch /scripts/<encoded>。
@@ -833,17 +913,26 @@ export class WsClient {
         useProjectStore().setSnapshot(payload.projectState);
     }
 
-    /** ack payload 可能含 wall.* op 的副作用（lockedAt / alias）；同步进 store。
-     *  publishedAt → lockedAt 重命名。 */
+    /**
+     * ack payload 可能含 {@code wall.lock} / {@code wall.unlock} / {@code wall.alias} 的副作用
+     * （lockedAt / alias）；同步进 store。
+     *
+     * <p><b>只认这三个 op 的 ack</b>：字段名会撞车——给变量起别名的 ack 也带一个顶层
+     * {@code alias}，按字段盲嗅就会把变量别名当成整块画布的名字写进去，顶栏预填的也是它，
+     * 用户随手点一次保存就把它写进了数据库。所以这里按发出时记下的 op 名判定，不看字段。</p>
+     */
     private handleAck(ackId: string | undefined, payload: unknown): void {
         // 1) sendWithAck 的 Promise resolve（与 store 副作用解耦）
+        let ackedOp: string | null = null;
         if (ackId && this.pendingAcks.has(ackId)) {
             const pending = this.pendingAcks.get(ackId)!;
+            ackedOp = pending.op;
             if (pending.timer) window.clearTimeout(pending.timer);
             this.pendingAcks.delete(ackId);
             pending.resolve(payload);
         }
-        // 2) store 副作用
+        // 2) store 副作用：只有画布元信息那三个 op 才允许改 project.alias / lockedAt
+        if (ackedOp === null || !WALL_META_ACK_OPS.has(ackedOp)) return;
         if (!payload || typeof payload !== 'object') return;
         const project = useProjectStore();
         const p = payload as { lockedAt?: unknown; locked?: unknown; alias?: unknown };
@@ -873,7 +962,7 @@ export class WsClient {
             else projectOps.push(op);
         }
         if (variableOps.length > 0) {
-            applyVariablePatches(variableOps);
+            applyVariablePatches(variableOps, this.serverClockOffsetMs);
         }
         if (aliasOps.length > 0) {
             applyAliasPatches(aliasOps);
@@ -1155,7 +1244,7 @@ export function resolveWsUrl(): string {
 //   - remove  /variables/<encoded>
 // 其他 path 形态不支持（B 任务限定 patch 形态），收到时静默忽略并 log。
 
-function applyVariablePatches(ops: PatchOp[]): void {
+function applyVariablePatches(ops: PatchOp[], serverClockOffsetMs = 0): void {
     const store = useVariableStore();
     const net = useNetworkStore();
     for (const op of ops) {
@@ -1171,9 +1260,10 @@ function applyVariablePatches(ops: PatchOp[]): void {
         const fullName = decodeJsonPointerToken(encoded);
 
         if (op.op === 'add' && sub === '') {
-            // 整 Variable JSON 落表
+            // 整 Variable JSON 落表（updatedAt 换算到本机时钟，见 serverTsToLocal）
             if (op.value && typeof op.value === 'object') {
-                store.set(fullName, op.value as Variable);
+                store.set(fullName,
+                    variableWithLocalClock(op.value as Variable, serverClockOffsetMs));
             } else {
                 net.pushLog('err', `variable patch add: missing value for ${fullName}`);
             }
@@ -1184,7 +1274,8 @@ function applyVariablePatches(ops: PatchOp[]): void {
             // 与 add 分支同款落表逻辑——后端 SessionManager / EditSession 对 variable.update
             // 发的是 replace 整节点（而非逐字段 patch），漏接会让 type/defaultValue 不同步。
             if (op.value && typeof op.value === 'object') {
-                store.set(fullName, op.value as Variable);
+                store.set(fullName,
+                    variableWithLocalClock(op.value as Variable, serverClockOffsetMs));
             } else {
                 net.pushLog('err', `variable patch replace: missing value for ${fullName}`);
             }

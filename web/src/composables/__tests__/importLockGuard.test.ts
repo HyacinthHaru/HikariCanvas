@@ -9,7 +9,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 
 const sendSpy = vi.fn(() => 'c-1');
-vi.mock('@/network/wsClient', () => ({ getWsClient: () => ({ send: sendSpy }) }));
+const sendWithAckSpy = vi.fn().mockResolvedValue({});
+vi.mock('@/network/wsClient', () => ({
+    getWsClient: () => ({ send: sendSpy, sendWithAck: sendWithAckSpy }),
+}));
 
 import { useSvgImport } from '../useSvgImport';
 import { useProjectImport } from '../useProjectImport';
@@ -37,6 +40,7 @@ describe('导入入口的锁定守卫', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         sendSpy.mockClear();
+        sendWithAckSpy.mockClear().mockResolvedValue({});
         useProjectStore().setSnapshot(seedState());
         useNetworkStore().sessionId = 'sess-1';
     });
@@ -44,13 +48,13 @@ describe('导入入口的锁定守卫', () => {
     it('画板锁定时 SVG 导入抛 WALL_LOCKED，一条 element.add 都不发', async () => {
         useProjectStore().lockedAt = Date.now();
         await expect(useSvgImport().importSvg(SVG)).rejects.toBeInstanceOf(SvgImportError);
-        expect(sendSpy).not.toHaveBeenCalled();
+        expect(sendWithAckSpy).not.toHaveBeenCalled();
     });
 
     it('未锁定时 SVG 导入照常发 element.add（回归守卫）', async () => {
         const r = await useSvgImport().importSvg(SVG);
         expect(r.count).toBe(1);
-        expect(sendSpy).toHaveBeenCalledTimes(1);
+        expect(sendWithAckSpy).toHaveBeenCalledTimes(1);
     });
 
     it('画板锁定时工程导入直接返回 WALL_LOCKED，不发请求', async () => {

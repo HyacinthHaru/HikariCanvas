@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 
 const sendSpy = vi.fn(() => 'c-1');
-vi.mock('@/network/wsClient', () => ({ getWsClient: () => ({ send: sendSpy }) }));
+const sendWithAckSpy = vi.fn().mockResolvedValue({});
+vi.mock('@/network/wsClient', () => ({
+    getWsClient: () => ({ send: sendSpy, sendWithAck: sendWithAckSpy }),
+}));
 
 // Mock global fetch:
 // - data: URL fetch → returns a blob
@@ -56,6 +59,7 @@ describe('useSvgImport image (Task 16)', () => {
     beforeEach(() => {
         setActivePinia(createPinia());
         sendSpy.mockClear();
+        sendWithAckSpy.mockClear().mockResolvedValue({});
         mockFetch.mockClear();
 
         const project = useProjectStore();
@@ -82,9 +86,9 @@ describe('useSvgImport image (Task 16)', () => {
         expect(calls.some((u) => u.includes('/api/upload'))).toBe(true);
 
         // element.add should have been called with type='image' and correct source
-        expect(sendSpy).toHaveBeenCalledTimes(1);
-        expect(sendSpy.mock.calls[0][0]).toBe('element.add');
-        const payload = sendSpy.mock.calls[0][1] as { type: string; props: Record<string, unknown> };
+        expect(sendWithAckSpy).toHaveBeenCalledTimes(1);
+        expect(sendWithAckSpy.mock.calls[0][0]).toBe('element.add');
+        const payload = sendWithAckSpy.mock.calls[0][1] as { type: string; props: Record<string, unknown> };
         expect(payload.type).toBe('image');
         expect(payload.props.source).toBe('aabbccddeeff0011');
     });
@@ -99,7 +103,7 @@ describe('useSvgImport image (Task 16)', () => {
         );
 
         expect(result.count).toBe(0);
-        expect(sendSpy).not.toHaveBeenCalled();
+        expect(sendWithAckSpy).not.toHaveBeenCalled();
         expect(warnSpy).toHaveBeenCalled();
         warnSpy.mockRestore();
     });

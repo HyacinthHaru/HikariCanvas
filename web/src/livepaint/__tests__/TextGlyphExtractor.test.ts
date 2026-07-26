@@ -907,3 +907,64 @@ describe('TextGlyphExtractor — 传给 fontkit 的必须是 Uint8Array', () => 
         expect(seen[0]).toBeInstanceOf(Uint8Array);
     });
 });
+
+/**
+ * 一个字里几笔并排（不是套着）的轮廓不能当成内孔丢掉。
+ *
+ * <p>polygon-clipping 按 GeoJSON 语义理解一个 polygon：ring[0] 外环、其余全是内孔，而内孔
+ * 必须落在外环里面。"O" 确实是套着的，但 "三" / "i" / "%" / 大量汉字的几条轮廓是并排的实心
+ * 笔画——原来一股脑塞进同一个 polygon，除第一条以外全被库丢掉（实测三条并排横杠 union 完
+ * 只剩一条）。后果是后面几笔的位置被判成空白，油漆桶直接盖在字上。</p>
+ */
+describe('TextGlyphExtractor — 并排轮廓不被当成内孔', () => {
+    /** 三条并排横杠（"三"的简化形），互不嵌套。 */
+    const SAN = [
+        'M0 0 L800 0 L800 100 L0 100 Z',
+        'M0 300 L800 300 L800 400 L0 400 Z',
+        'M0 600 L800 600 L800 700 L0 700 Z',
+    ].join(' ');
+
+    it('三条并排横杠 → 三个独立 polygon，一条都不少', async () => {
+        mockFetchOk();
+        __setFontkitModuleForTest(
+            makeMockFontkitModule(makeMockFont({ defaultPath: SAN })) as never);
+
+        const multi = await textElementToMultiPolygon(
+            makeText({ text: '三', fontId: 'source_han_sans', fontSize: 100 }));
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBe(3);
+        // 三条都是实心外环，没有任何一条被当成内孔
+        for (const poly of multi!) {
+            expect(poly.length).toBe(1);
+        }
+    });
+
+    it('套着的外环 + 内孔仍然按内孔处理（回归守卫）', async () => {
+        mockFetchOk();
+        __setFontkitModuleForTest(makeMockFontkitModule(makeMockFont({
+            defaultPath: 'M0 0 L800 0 L800 800 L0 800 Z M200 200 L200 600 L600 600 L600 200 Z',
+        })) as never);
+
+        const multi = await textElementToMultiPolygon(
+            makeText({ text: 'O', fontSize: 100 }));
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBe(1);
+        expect(multi![0].length).toBe(2);   // 外环 + 内孔
+    });
+
+    it('外环 + 内孔 + 孔里还有一块实心 → 分成两个 polygon', async () => {
+        mockFetchOk();
+        __setFontkitModuleForTest(makeMockFontkitModule(makeMockFont({
+            defaultPath: [
+                'M0 0 L800 0 L800 800 L0 800 Z',              // 外环
+                'M200 200 L200 600 L600 600 L600 200 Z',      // 内孔
+                'M350 350 L350 450 L450 450 L450 350 Z',      // 孔里的实心块
+            ].join(' '),
+        })) as never);
+
+        const multi = await textElementToMultiPolygon(
+            makeText({ text: '回', fontId: 'source_han_sans', fontSize: 100 }));
+        expect(multi).not.toBeNull();
+        expect(multi!.length).toBe(2);
+    });
+});

@@ -319,11 +319,15 @@ function drawDitheredElement(
     applyBayerDither(img, palette, clipX, clipY);
     og.putImageData(img, 0, 0);
 
-    // element.opacity 通过主 ctx.globalAlpha 起作用（drawImage 走 SrcOver）
+    // element.opacity 通过主 ctx.globalAlpha 起作用（drawImage 走 SrcOver）。
+    // 与上面 palette 未就绪的 fallback 分支、以及 drawElement 用同一套 NaN/非有限兜底 + clamp(0,1)：
+    // 负 opacity（可经模板 raw_state 绕过协议入口注入）在前端会被 HTML 规范忽略成全不透明、
+    // 后端 clamp 到 0 变隐形 —— 三条分支少写一条就是一处双端分叉（rendering.md §6.5）。
     const op = e.opacity;
     const prevAlpha = ctx.globalAlpha;
-    if (op !== undefined && op !== null && op < 1) {
-        ctx.globalAlpha = prevAlpha * op;
+    if (op !== undefined && op !== null && (!Number.isFinite(op) || op < 1)) {
+        const safe = !Number.isFinite(op) ? 1 : Math.max(0, Math.min(1, op));
+        ctx.globalAlpha = prevAlpha * safe;
     }
     ctx.drawImage(off, clipX, clipY);
     ctx.globalAlpha = prevAlpha;
@@ -876,7 +880,9 @@ function drawRect(ctx: CanvasRenderingContext2D, r: RectElement): void {
         ctx.fillRect(r.x, r.y, r.w, r.h);
     }
     if (r.stroke && r.stroke.width > 0) {
-        const sw = Math.min(r.stroke.width, Math.max(1, Math.min(r.w, r.h) / 2));
+        // 除法向零截断，对齐后端 Java int 除法（RectRenderer）。min(w,h) 为奇数且描边粗过
+        // 半个盒子时，浮点除会比后端多半像素，极小矩形上两端边框对不齐（rendering.md §4.4）。
+        const sw = Math.min(r.stroke.width, Math.max(1, Math.trunc(Math.min(r.w, r.h) / 2)));
         ctx.fillStyle = r.stroke.color;
         ctx.fillRect(r.x, r.y, r.w, sw);
         ctx.fillRect(r.x, r.y + r.h - sw, r.w, sw);
@@ -932,6 +938,25 @@ function shouldUseNearestNeighbor(family: string): boolean {
     return !!(meta?.pixelated && meta.nativeSize > 0);
 }
 
+/**
+ * 字体兜底：与后端 {@code FontRegistry.DEFAULT_FONT_ID} 同一枚。
+ *
+ * <p>后端 TextRenderer 走 {@code getOrDefault(fontId)}，取不到就用这枚；前端此前把 fontId
+ * 直接当唯一 family，取不到就落到浏览器默认矢量字体 —— 服主删了用户字体、或跨服套用引用了
+ * 本服没有的字体时，编辑器里是平滑黑体、游戏里是 12px 点阵，同一段文字形态完全不同。</p>
+ */
+export const FALLBACK_FONT_ID = 'ark_pixel';
+
+/**
+ * 拼 CSS 字体栈：目标字体拿不到时浏览器自己退到 {@link FALLBACK_FONT_ID}，
+ * 与后端同一套兜底顺序（rendering.md §2.3）。
+ */
+export function fontStackSpec(family: string, sizePx: number): string {
+    return family === FALLBACK_FONT_ID
+        ? `${sizePx}px "${family}"`
+        : `${sizePx}px "${family}", "${FALLBACK_FONT_ID}"`;
+}
+
 // ---------- Variable interpolation context ----------
 //
 // PreviewRenderer 是同步纯函数；运行时需要拿当前 wallId + Pinia variable store 解析 ${var:X}。
@@ -964,7 +989,9 @@ function resolveTextForRender(t: TextElement): { rendered: string; segments: Pla
     // interpolator 已做二次扫描；若仍含 ${var:} 字面 = 数据损坏
     // （嵌套 / 错乱字符 / depth limit 内无法收敛），强制全替换为 "???" 防 wall 显字面 placeholder。
     if (rendered.indexOf('${var:') >= 0) {
-        rendered = rendered.replace(/\$\{var:[^}]*\}/g, '???');
+        // 闭合大括号可选（`\}?`），与后端 CanvasCompositor.maybeInterpolateText 同一条正则：
+        // 行尾缺 `}` 的 `${var:foo` 若要求必须闭合，后端出 ??? 而前端把字面串原样画出来。
+        rendered = rendered.replace(/\$\{var:[^}]*\}?/g, '???');
         if (import.meta.env.DEV) {
             // eslint-disable-next-line no-console
             console.warn('[PreviewRenderer] residual ${var:} after interpolate; replaced with ???');
@@ -1001,8 +1028,13 @@ function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
     const family = t.fontId;
     if (!isLoaded(family)) {
         ensureLoaded(family);
+        // 目标字体还没就绪 / 根本拿不到时，字体栈会退到 ark_pixel —— 先把它也拉起来，
+        // 否则栈里第二项同样缺席，还是落回浏览器默认矢量字体。
+        if (family !== FALLBACK_FONT_ID && !isLoaded(FALLBACK_FONT_ID)) {
+            ensureLoaded(FALLBACK_FONT_ID);
+        }
     }
-    const fontSpec = `${t.fontSize}px "${family}"`;
+    const fontSpec = fontStackSpec(family, t.fontSize);
     ctx.font = fontSpec;
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
@@ -1021,7 +1053,7 @@ function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
     const fx = t.effects;
     const useNN = shouldUseNearestNeighbor(family);
     const nativeSize = useNN ? FONT_META[family].nativeSize : 0;
-    const nativeSpec = useNN ? `${nativeSize}px "${family}"` : '';
+    const nativeSpec = useNN ? fontStackSpec(family, nativeSize) : '';
 
     // 0. placeholder hint chip 背景（仅编辑器；segments 非空 → 有变量占位符）
     //    游戏内后端 Compositor 不走本路径，无 hint，保持双端像素一致

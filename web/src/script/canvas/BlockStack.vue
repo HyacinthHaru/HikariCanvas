@@ -123,11 +123,26 @@ const triggerKindOptions = computed<{ kind: string; label: string }[]>(() =>
 );
 
 /**
+ * 确保正在编辑的就是本堆这条规则；没能切过去就返回 false，调用方必须放弃这次改动。
+ *
+ * <p>{@code edit.setTrigger} 改的是 workingCopy —— 也就是<b>当前选中那条规则</b>的副本，它不核对
+ * 改动是冲着哪条规则来的。堆上的 pointerdown 虽然会先 selectRule，但上一条规则有未保存又校验不过的
+ * 改动时 selectRule 会拒绝切换（只提示），键盘 Tab 进下拉更是压根不经过 pointerdown——两种情况下
+ * 接着改这里的控件，写进去的都是<b>上一条规则</b>的触发器。</p>
+ */
+function ensureEditingThisRule(): boolean {
+    if (edit.selectedRuleId === props.rule.id) return true;
+    edit.selectRule(props.rule.id);
+    return edit.selectedRuleId === props.rule.id;
+}
+
+/**
  * 改触发类型：用 {@link makeDefaultTrigger} 造该类型的合法默认 trigger（带范围内默认参数 /
  * 空引用），整体替换。lock 时 no-op（控件已 disabled，这里再守一手）。
  */
 function onTriggerKindChange(e: Event): void {
     if (locked.value) return;
+    if (!ensureEditingThisRule()) return;
     const kind = (e.target as HTMLSelectElement).value;
     if (kind === props.rule.trigger.type) return;
     edit.setTrigger(makeDefaultTrigger(kind));
@@ -144,6 +159,7 @@ function triggerFieldValue(field: FieldDef): unknown {
  */
 function onTriggerFieldUpdate(field: FieldDef, value: unknown): void {
     if (locked.value) return;
+    if (!ensureEditingThisRule()) return;
     const next = { ...props.rule.trigger, [field.name]: value } as ScriptTrigger;
     edit.setTrigger(next);
 }

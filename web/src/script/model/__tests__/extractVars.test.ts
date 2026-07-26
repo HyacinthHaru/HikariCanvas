@@ -166,3 +166,50 @@ describe('extractReferencedVariables', () => {
         expect(extractReferencedVariables(r)).toEqual(['user/x']);
     });
 });
+
+/**
+ * 漏扫一类动作的后果不是"少一行"：面板会整块空着（只用这些积木的规则一个变量都提取不到），
+ * 用户以为脚本没引用变量。
+ */
+describe('extractReferencedVariables — 容易漏扫的几类动作', () => {
+    it('repeatUntil 的条件文本', () => {
+        const r = rule([{
+            type: 'repeatUntil',
+            condition: 'var("user/进度") < 100',
+            maxIterations: 10,
+            body: [{ type: 'log', message: 'x' }],
+        }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/进度']);
+    });
+
+    it('copyVariable 的来源 + 目标', () => {
+        const r = rule([{ type: 'copyVariable', source: 'user/甲', target: 'user/乙' }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/甲', 'user/乙']);
+    });
+
+    it('appendVariable 的目标变量 + 文本里的占位符', () => {
+        const r = rule([{ type: 'appendVariable', fullName: 'user/日志', text: '来了 ${var:user/玩家}' }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/日志', 'user/玩家']);
+    });
+
+    it('roundVariable 的变量名', () => {
+        const r = rule([{ type: 'roundVariable', fullName: 'user/分数', mode: 'round' }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/分数']);
+    });
+
+    it('showTitle 的正副标题占位符', () => {
+        const r = rule([{
+            type: 'showTitle', title: '${var:user/标题}', subtitle: '${var:user/副标}',
+            fadeInMs: 0, stayMs: 1000, fadeOutMs: 0, target: 'trigger',
+        }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/标题', 'user/副标']);
+    });
+
+    it('这些动作嵌在循环体里也照样扫得到', () => {
+        const r = rule([{
+            type: 'repeat', count: 3,
+            body: [{ type: 'roundVariable', fullName: 'user/分数', mode: 'floor' }],
+        }]);
+        expect(extractReferencedVariables(r)).toEqual(['user/分数']);
+    });
+});

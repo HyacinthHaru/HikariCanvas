@@ -9,7 +9,7 @@ import { preloadMetrics, onMetricsReady } from '@/render/GlyphMetricsLut';
 import { ensureLoaded as ensureFontLoaded, onFontLoaded } from '@/render/FontLoader';
 import { onIconLoaded } from '@/render/IconLoader';
 import { useI18n } from '@/i18n';
-import type { Element } from '@/types/protocol';
+import type { Element, Layer } from '@/types/protocol';
 
 import CanvasGridOverlay from '@/components/canvas/CanvasGridOverlay.vue';
 import CanvasZoomBar from '@/components/canvas/CanvasZoomBar.vue';
@@ -226,6 +226,56 @@ const hoverId = ref<string | null>(null);
 
 const elements = computed(() => project.state?.elements ?? []);
 
+/**
+ * elementId → 所属图层。命中框现在只铺活动层，但"能不能改"必须按元素<b>自己所在</b>的层判
+ * （多选跨层是常态），所以统一走这张表，别再拿"当前激活层"当近似。
+ * 只在元素增删时重算；层的 locked / visible 是直接读活对象，改了照样触发重渲染。
+ */
+const layerOfElementId = computed(() => {
+    const m = new Map<string, Layer>();
+    for (const layer of project.state?.layers ?? []) {
+        for (const el of layer.elements ?? []) m.set(el.id, layer);
+    }
+    return m;
+});
+
+/** 画面上一个元素当下显示的几何（x/y/w/h/rotation）。 */
+interface DisplayGeom { x: number; y: number; w: number; h: number; rotation: number }
+
+/**
+ * 时间轴预览态下每个元素<b>画面上实际显示</b>的几何（插值结果）。
+ * 非预览态 / 没有激活时间轴 / 这条时间轴一根轨都没命中 → null，调用方直接用元素自身的值。
+ *
+ * <p>命中框和变换锚点都要按这张表摆：预览态画的是插值结果，而元素自身还存着基础值，
+ * 两者一旦不同，用户就会看到"框在这儿、图在那儿"，点不中也拉不动。
+ * 自动加帧时拖动会主动进预览态（"拉就设"），所以这是编辑状态而不是单纯的看片状态。</p>
+ */
+const previewGeometry = computed<Map<string, DisplayGeom> | null>(() => {
+    if (!timelineStore.previewActive) return null;
+    const base = project.state;
+    const tl = timelineStore.activeTimeline;
+    if (!base || !tl) return null;
+    const shown = interpolate(base, tl, timelineStore.playheadMs);
+    // interpolate 没有任何轨命中时原样返回入参，这时画面 = 基础值，不必建表
+    if (shown === base) return null;
+    const map = new Map<string, DisplayGeom>();
+    for (const layer of shown.layers) {
+        for (const el of layer.elements ?? []) {
+            map.set(el.id, { x: el.x, y: el.y, w: el.w, h: el.h, rotation: el.rotation ?? 0 });
+        }
+    }
+    return map;
+});
+
+/**
+ * 元素现在显示成什么样。正在拖的元素例外——渲染那边（applyDragOverride）此刻用的就是它的
+ * 实时基础值，命中框必须跟着走，否则手上拖的框和画面又对不上。
+ */
+function displayGeom(el: Element): DisplayGeom {
+    if (timelineStore.draggingElementIds.has(el.id)) return el;
+    return previewGeometry.value?.get(el.id) ?? el;
+}
+
 // ---------- Live Paint ----------
 // 只在 paint-bucket 工具激活时跑 worker；切走时 useLivePaint 内部跳过 send + 清空 graph。
 const livePaintEnabled = computed(() => ui.activeTool === 'paint-bucket');
@@ -297,6 +347,7 @@ const { onTransformEnd } = useTransformerManager({
     transformerRef,
     layerRef,
     elementsWatchSource: () => elements.value,
+    displayGeometryOf: (id) => previewGeometry.value?.get(id) ?? null,
 });
 
 /** M17.4：包一层透传给 onTransformEnd，并在结束时清 snap visualizer。 */
@@ -322,7 +373,13 @@ const {
     onMouseUpOrLeave,
     fitToViewport,
     isPanning,
-} = usePanScroll({ outerRef, widthPx: () => widthPx.value, heightPx: () => heightPx.value });
+} = usePanScroll({
+    outerRef,
+    widthPx: () => widthPx.value,
+    heightPx: () => heightPx.value,
+    // 套索蒙版正在画 → 这一手势归它，别再当平移（两者都是 Alt+左键）
+    blockPan: () => lasso.active.value,
+});
 const {
     uploadError,
     uploading,
@@ -476,30 +533,39 @@ function hitConfig(e: Element) {
     // Konva 用 offsetX/Y 把「bbox 左上」坐标转为「绕中心旋转」
     const hovered = hoverId.value === e.id;
     const selected = ui.isSelected(e.id);
-    const canDrag = !e.locked && e.visible && !project.activeLayerLocked;
+    const layer = layerOfElementId.value.get(e.id);
+    // 看不见的东西不该能被点中：隐藏的元素 / 隐藏图层里的元素，命中框以前照样在那儿，
+    // 悬停会画出虚线框（把藏起来的轮廓泄露出来）、点得中、还能挂锚点拉——而后端不看
+    // visible，拉完真落地。
+    const shown = e.visible && layer?.visible !== false;
+    // 能不能拖：元素自己没锁 + 所在图层没锁（不是"当前激活层"，多选跨层是常态）。
+    // 按住 Alt 时不给拖——Alt+左键是平移画布 / 画套索蒙版的手势，同时还把元素拽走纯属误伤。
+    const canDrag = !e.locked && shown && !layer?.locked && !lasso.isAltDown.value;
     // 绘制工具激活时，element-hit 整层 listening=false，让 mousedown 穿透到 stage
     // 启动 drag-to-create（PS/Figma 行为：drawTool 下点已有元素也是开始画新元素）
     // hand 工具同样关闭 element-hit listening，使左键直接被 outer 的 pan 处理。
     // Live Paint：paint-bucket 也关 element-hit listening，让 mousedown/move 都直达 stage
     // 由 onPaintBucketClick / hover 逻辑统一接管；实装"点击 element 内部 recolor"时再开
     const drawing = isDrawTool(ui.activeTool) || ui.activeTool === 'hand' || ui.activeTool === 'paint-bucket';
+    // 几何按"画面上显示的那份"摆（时间轴预览态下 = 插值结果），否则框和图对不上
+    const g = displayGeom(e);
     return {
         id: e.id,
         name: 'element-hit',
-        x: e.x + e.w / 2,
-        y: e.y + e.h / 2,
-        width: e.w,
-        height: e.h,
-        offsetX: e.w / 2,
-        offsetY: e.h / 2,
-        rotation: e.rotation,
+        x: g.x + g.w / 2,
+        y: g.y + g.h / 2,
+        width: g.w,
+        height: g.h,
+        offsetX: g.w / 2,
+        offsetY: g.h / 2,
+        rotation: g.rotation,
         // hover/选中时画轻微描边，让 PS 式拖拽提示可见；rgba 完全透明但 hit 可点
         fill: 'rgba(0,0,0,0.001)',
         stroke: hovered && !selected ? '#60a5fa' : undefined,
         strokeWidth: hovered && !selected ? 1 : 0,
         dash: hovered && !selected ? [4, 3] : undefined,
         draggable: canDrag,
-        listening: !drawing,
+        listening: !drawing && shown,
     };
 }
 
@@ -859,6 +925,11 @@ useEventListener(window, 'pointerdown', (e: PointerEvent) => {
     if (lasso.start(e)) {
         // 阻止 stage / element-hit / marquee 接管
         e.stopPropagation();
+        // 还要 preventDefault：光 stopPropagation 只挡住 pointerdown 这一条，浏览器随后
+        // 补发的兼容 mousedown 照样往上冒——外层容器的 Alt+左键平移当场启动，画布一边滚
+        // 一边采样，套索点全飘；Konva 那边也会顺手把元素拖走。按 Pointer Events 规范，
+        // 在 pointerdown 上 preventDefault 才能压掉这些兼容鼠标事件。
+        e.preventDefault();
     }
 }, { capture: true });
 useEventListener(window, 'pointermove', (e: PointerEvent) => {
@@ -930,7 +1001,14 @@ const cursorStyle = computed(() => {
 // 的 delta 同步其他 element 位置（视觉跟随）；dragend 时为所有选中 element 各发一条
 // element.transform op。单选场景 dragInitial 为空，走原 fast path。
 
-const dragInitial = ref<Map<string, { x: number; y: number }>>(new Map());
+/**
+ * 拖动起点。{@code x/y} 记的是<b>画面上显示</b>的位置（预览态 = 插值结果），follower 同步和
+ * "到底动没动"都按它算；{@code baseX/baseY} 是元素自身的值，用来发现"画面和基础值本来就
+ * 不一致"——那种情况即使指针回到原点也得把落点发出去，否则本地已经改了、服务端还是旧值。
+ */
+interface DragOrigin { x: number; y: number; baseX: number; baseY: number }
+
+const dragInitial = ref<Map<string, DragOrigin>>(new Map());
 
 function onDragStart(id: string): void {
     // 用户在编辑 A 时点 B 直接拖，Konva 走 mousedown → dragstart 而不触发 click。
@@ -939,22 +1017,27 @@ function onDragStart(id: string): void {
 
     // 单选 / 多选都记录初始位置 —— 单选场景 onDragMove 需要 initLeader 才能算 delta；
     // 多选场景还要给 follower 同步用。原 size>1 才 set 的逻辑会让单选 onDragMove 早 return。
-    const init = new Map<string, { x: number; y: number }>();
+    const init = new Map<string, DragOrigin>();
+    const record = (eid: string): void => {
+        const el = project.elementById(eid);
+        if (!el) return;
+        const g = previewGeometry.value?.get(eid) ?? el;
+        init.set(eid, { x: g.x, y: g.y, baseX: el.x, baseY: el.y });
+    };
     if (ui.selectedCount > 1 && ui.isSelected(id)) {
-        for (const sid of ui.selectedIds) {
-            const el = project.elementById(sid);
-            if (el) init.set(sid, { x: el.x, y: el.y });
-        }
+        // 上锁的元素 / 上锁图层里的元素不跟着走：本地先改了、服务端会拒（图层锁），
+        // 或者服务端压根不看（元素锁）——两种都让"锁定"变成摆设。
+        for (const sid of project.editableIds(ui.selectedIds)) record(sid);
     } else {
-        const el = project.elementById(id);
-        if (el) init.set(id, { x: el.x, y: el.y });
+        record(id);
     }
     dragInitial.value = init;
 
-    // 自动加帧模式——记录拖动元素集（渲染期跟手覆盖 + dragend upsert 用），并切预览态让
-    //   画布显示 playhead 处画面，被拖元素的实时值覆盖在其上跟手（见 :renderProjectState 前的覆盖）。
-    if (shouldAutoKeyframe()) {
-        timelineStore.setPreviewActive(true);
+    // 自动加帧模式——切预览态让画布显示 playhead 处画面（"拉就设"）。
+    if (shouldAutoKeyframe()) timelineStore.setPreviewActive(true);
+    // 预览态下拖动都要登记拖动元素集：渲染那边据此用实时值覆盖插值结果，被拖元素才跟手
+    //   （否则被插值钉在帧值上，怎么拖都不动）。是否顺手打帧另看自动加帧开关。
+    if (timelineStore.previewActive) {
         timelineStore.setDraggingElementIds(new Set(init.keys()));
     }
 }
@@ -978,22 +1061,30 @@ function onDragMove(ev: DragEvt, id: string): void {
     let leaderX = Math.round(node.x() - w / 2);
     let leaderY = Math.round(node.y() - h / 2);
 
-    // snap manager 修正 leader 落点。excludeIds 排除整个拖动组（多选）避免 snap 到自己。
-    const excludeIds = new Set<string>(dragInitial.value.keys());
-    const hints = snapManager.snap(leaderX, leaderY, w, h, excludeIds);
-    // 把 hints 推给 visualizer（即使无 snap 也置 null）。activeAxes / equalGap 任一非空都画。
-    const hasHits = hints.activeXAxes.length > 0 || hints.activeYAxes.length > 0
-        || !!hints.equalGapX || !!hints.equalGapY;
-    activeSnapHints.value = hasHits ? hints : null;
-    if (hints.snappedX !== leaderX || hints.snappedY !== leaderY) {
-        leaderX = hints.snappedX;
-        leaderY = hints.snappedY;
-        // 同步 Konva 节点位置回 snap 落点（视觉跟手）；后续 follower 同步算 delta 也用 snapped 值
-        node.x(leaderX + w / 2);
-        node.y(leaderY + h / 2);
+    const leaderEl = project.elementById(id);
+    // 旋转过的元素跳过吸附：吸附用的候选轴全是没旋转的外接框边，和用户看到的边根本不在
+    // 一处，吸上去的位置和画出来的参考线都是错的。缩放那条路径（boundBoxFunc）本来就这么
+    // 跳，这里对齐。
+    const rotated = !!leaderEl && Math.abs(leaderEl.rotation ?? 0) > 0.01;
+    if (rotated) {
+        activeSnapHints.value = null;
+    } else {
+        // snap manager 修正 leader 落点。excludeIds 排除整个拖动组（多选）避免 snap 到自己。
+        const excludeIds = new Set<string>(dragInitial.value.keys());
+        const hints = snapManager.snap(leaderX, leaderY, w, h, excludeIds);
+        // 把 hints 推给 visualizer（即使无 snap 也置 null）。activeAxes / equalGap 任一非空都画。
+        const hasHits = hints.activeXAxes.length > 0 || hints.activeYAxes.length > 0
+            || !!hints.equalGapX || !!hints.equalGapY;
+        activeSnapHints.value = hasHits ? hints : null;
+        if (hints.snappedX !== leaderX || hints.snappedY !== leaderY) {
+            leaderX = hints.snappedX;
+            leaderY = hints.snappedY;
+            // 同步 Konva 节点位置回 snap 落点（视觉跟手）；后续 follower 同步算 delta 也用 snapped 值
+            node.x(leaderX + w / 2);
+            node.y(leaderY + h / 2);
+        }
     }
 
-    const leaderEl = project.elementById(id);
     if (leaderEl) {
         leaderEl.x = leaderX;
         leaderEl.y = leaderY;
@@ -1043,8 +1134,12 @@ function onDragEnd(ev: DragEvt, id: string): void {
     // 这里若再判 el.x !== newX 恒为 false → ws.send 永不发 → server 漏更新元素位置。
     // 多选 case 已做过同样修复，但单选 path 曾漏修，导致所有拖动从未真正同步。
     const initLeader = dragInitial.value.get(id);
+    // 和"起点"比：起点记的是画面位置；另外只要落点和元素自身的旧值不同也算动过——
+    // 预览态下画面位置本来就和基础值不一样，指针原路返回时也必须把落点发出去，
+    // 否则本地已经写成画面值、服务端还留着旧值。
     const moved = initLeader
-        ? (initLeader.x !== newX || initLeader.y !== newY)
+        ? (initLeader.x !== newX || initLeader.y !== newY
+            || initLeader.baseX !== newX || initLeader.baseY !== newY)
         : (el != null && (el.x !== newX || el.y !== newY));
     if (el && moved) {
         // onDragMove 已乐观 mutate el.x/y；这里只发 ws 保证 server 落地
@@ -1067,7 +1162,8 @@ function onDragEnd(ev: DragEvt, id: string): void {
                 if (!otherEl) continue;
                 const otherX = init.x + dx;
                 const otherY = init.y + dy;
-                if (init.x !== otherX || init.y !== otherY) {
+                if (init.x !== otherX || init.y !== otherY
+                    || init.baseX !== otherX || init.baseY !== otherY) {
                     // dragmove 已经乐观更新过；这里只发 ws 确保服务端落地
                     ws.send('element.transform', { elementId: sid, x: otherX, y: otherY });
                 }
@@ -1076,7 +1172,9 @@ function onDragEnd(ev: DragEvt, id: string): void {
     }
     // 拖动落定 → 给所有拖动元素在 playhead upsert 整体帧（"拉就设"），并选中这些整体帧。
     //   值取 onDragMove 已乐观 mutate 的 el 当前几何；update 路径乐观改本地 value 消 WS 往返闪烁。
-    if (timelineStore.draggingElementIds.size > 0) {
+    //   只有真开着自动加帧才打帧：预览态下拖动也会登记拖动元素集（为了画面跟手），
+    //   但那不代表用户想加关键帧。
+    if (shouldAutoKeyframe() && timelineStore.draggingElementIds.size > 0) {
         const tlNow = timelineStore.activeTimeline;
         if (tlNow) {
             const timeMs = timelineStore.playheadMs;
@@ -1087,8 +1185,8 @@ function onDragEnd(ev: DragEvt, id: string): void {
             }
             timelineStore.selectGroups(keys);
         }
-        timelineStore.setDraggingElementIds(new Set());
     }
+    timelineStore.setDraggingElementIds(new Set());
     dragInitial.value = new Map();
     // drag 结束立刻清 hints（无 fade，v1.x 再加）
     activeSnapHints.value = null;

@@ -205,3 +205,73 @@ describe('BlockStack 渲染 smoke', () => {
         expect((num.element as HTMLInputElement).value).toBe('8');
     });
 });
+
+/**
+ * 帽子上的触发器控件改的是 workingCopy —— 也就是<b>当前选中那条规则</b>的副本。控件不核对
+ * 这次改动冲着哪条规则来，所以两种情况下会写错规则：① 上一条规则有未保存又校验不过的改动时，
+ * selectRule 会拒绝切换（只提示）；② 键盘 Tab 直接进下拉，压根没有 pointerdown 去选中。
+ */
+describe('BlockStack 触发器控件校验规则归属', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+        useUiStore().locale = 'zh';
+    });
+
+    /** sr-A（选中且校验不过、脏）+ sr-B（另一条），返回两条规则与 store。 */
+    async function twoRulesStuckOnA() {
+        const scripts = (await import('@/stores/scripts')).useScriptStore();
+        const a = makeRule({ id: 'sr-A', name: 'A', trigger: { type: 'wallReady' } });
+        const b = makeRule({ id: 'sr-B', name: 'B', trigger: { type: 'wallReady' } });
+        scripts.upsert(a);
+        scripts.upsert(b);
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-A');
+        edit.setName('');                       // 名称空 → 校验不过 + 脏 → 切规则会被挡
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        return { edit, b };
+    }
+
+    it('切不过去（上一条规则挡着）→ 不写进上一条规则的触发器', async () => {
+        const { edit, b } = await twoRulesStuckOnA();
+        const spy = vi.spyOn(edit, 'setTrigger');
+        const w = mount(BlockStack, { props: { rule: b, x: 0, y: 0 } });
+        await nextTick();
+        await w.find('.hc-hat-kind-select').setValue('timer');
+        expect(spy).not.toHaveBeenCalled();
+        expect(edit.selectedRuleId).toBe('sr-A');
+        expect(edit.workingCopy?.trigger).toEqual({ type: 'wallReady' });   // A 的触发器没被动
+    });
+
+    it('改参数同理：切不过去就不改', async () => {
+        const scripts = (await import('@/stores/scripts')).useScriptStore();
+        const a = makeRule({ id: 'sr-A', name: 'A', trigger: { type: 'wallReady' } });
+        const b = makeRule({ id: 'sr-B', name: 'B', trigger: { type: 'timer', intervalSeconds: 30 } });
+        scripts.upsert(a);
+        scripts.upsert(b);
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-A');
+        edit.setName('');
+        const spy = vi.spyOn(edit, 'setTrigger');
+        const w = mount(BlockStack, { props: { rule: b, x: 0, y: 0 } });
+        await nextTick();
+        const numInput = w.find('.hc-hat-param input[type="number"]');
+        await numInput.setValue('60');
+        await numInput.trigger('input');
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('能切过去（上一条规则是干净的）→ 先切到本规则再改', async () => {
+        const scripts = (await import('@/stores/scripts')).useScriptStore();
+        const a = makeRule({ id: 'sr-A', name: 'A', trigger: { type: 'wallReady' } });
+        const b = makeRule({ id: 'sr-B', name: 'B', trigger: { type: 'wallReady' } });
+        scripts.upsert(a);
+        scripts.upsert(b);
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-A');
+        const w = mount(BlockStack, { props: { rule: b, x: 0, y: 0 } });
+        await nextTick();
+        await w.find('.hc-hat-kind-select').setValue('timer');
+        expect(edit.selectedRuleId).toBe('sr-B');
+        expect(edit.workingCopy?.trigger).toEqual(makeDefaultTrigger('timer'));
+    });
+});

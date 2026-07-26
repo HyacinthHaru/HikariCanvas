@@ -402,13 +402,17 @@ async function computeLayoutMultiPolygon(
         // 把 fontkit Y-up 翻成屏幕 Y-down 并做 scale。
         const glyphPolygons = glyphToPolygons(glyph, scale, g.x, g.baselineY);
 
-        // 把一个 glyph 的所有 subpath 作为**同一 PCPolygon 内的多 ring**
-        // 推入 subPolygons。polygon-clipping 只有同 polygon 内的多 ring 才被识别为
-        // "外环 + holes"（独立 polygon union 时 inner 总被合并掉）—— "O" 内孔保留关键。
+        // 一个 glyph 的多条轮廓要按"套没套着"分组。
         //
-        // 不同 glyph 之间走独立 PCPolygon，让多字符 union 后保持独立 polygon（不连通），
-        // 避免被误合并成单一大外环。
-        const glyphRings: PCRing[] = [];
+        // polygon-clipping 按 GeoJSON 语义理解一个 polygon：ring[0] 是外环、其余全是内孔，
+        // 而内孔必须落在外环里面。"O" 这种确实是套着的，但 "三" / "i" / "%" / 大量汉字的
+        // 几条轮廓是并排的实心笔画——全塞进同一个 polygon 的话，除第一条以外全被当成
+        // 非法内孔丢掉（实测：三条并排横杠 union 完只剩一条）。结果是后面几笔的位置被
+        // 判成空白，油漆桶直接盖在字上。
+        //
+        // 所以：套着的（外环 + 内孔）留在同一个 polygon 里，并排的各自独立成 polygon。
+        // 不同 glyph 之间本来就走独立 polygon，多字符 union 后保持不连通。
+        const contours: Polygon[] = [];
         for (const poly of glyphPolygons) {
             if (poly.length < 3) continue;
             // italic 应用 horizontal shear。PreviewRenderer
@@ -416,11 +420,10 @@ async function computeLayoutMultiPolygon(
             // 复合矩阵作用为 worldX' = worldX - 0.2*(worldY - t.y)；化到 element-local
             // 坐标（worldX = localX + t.x, worldY = localY + t.y）得到
             // localX' = localX - 0.2 * localY，与 t.x/t.y 无关。
-            const sheared = italic ? applyItalicShear(poly) : poly;
-            glyphRings.push(closeRing(toPCRing(sheared)));
+            contours.push(italic ? applyItalicShear(poly) : poly);
         }
-        if (glyphRings.length > 0) {
-            subPolygons.push(glyphRings as PCPolygon);
+        for (const group of groupContoursByNesting(contours)) {
+            subPolygons.push(group.map(r => closeRing(toPCRing(r))) as PCPolygon);
         }
     }
 
@@ -743,6 +746,65 @@ function applyItalicShear(poly: Polygon): Polygon {
     for (let i = 0; i < poly.length; i++) {
         const [x, y] = poly[i];
         out[i] = [x + ITALIC_SHEAR * y, y];
+    }
+    return out;
+}
+
+/**
+ * 点在多边形内判定（射线法）。字形的各条轮廓互不相交，所以拿某条轮廓的任意一个顶点
+ * 去测另一条，结果就代表整条轮廓的包含关系。
+ */
+function pointInPolygon(px: number, py: number, poly: Polygon): boolean {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i];
+        const [xj, yj] = poly[j];
+        if ((yi > py) !== (yj > py)
+            && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+/**
+ * 把一个 glyph 的若干条轮廓按嵌套层数分组：偶数层是外环（各自开一个 polygon），
+ * 奇数层是它最近那层外环的内孔。
+ *
+ * <p>"O" → 1 组 [外环, 内孔]；"三" → 3 组各 1 条；"8" 里孔中还有实心的话也能正确成组。
+ * 轮廓数量以个位数计，O(n²) 足够。</p>
+ */
+export function groupContoursByNesting(contours: Polygon[]): Polygon[][] {
+    if (contours.length <= 1) return contours.map(c => [c]);
+    // 面积从大到小处理，保证外层先于内层
+    const order = contours.map((_, i) => i)
+        .sort((a, b) => polygonArea(contours[b]) - polygonArea(contours[a]));
+    const parent = new Array<number>(contours.length).fill(-1);
+    const depth = new Array<number>(contours.length).fill(0);
+    for (let oi = 0; oi < order.length; oi++) {
+        const i = order[oi];
+        const [px, py] = contours[i][0];
+        let best = -1;
+        let bestArea = Infinity;
+        for (let oj = 0; oj < oi; oj++) {
+            const j = order[oj];
+            if (!pointInPolygon(px, py, contours[j])) continue;
+            const a = polygonArea(contours[j]);
+            if (a < bestArea) { bestArea = a; best = j; }   // 取最贴身的那一层
+        }
+        parent[i] = best;
+        depth[i] = best < 0 ? 0 : depth[best] + 1;
+    }
+    const polyIndexOf = new Array<number>(contours.length).fill(-1);
+    const out: Polygon[][] = [];
+    for (const i of order) {
+        const p = parent[i];
+        if (depth[i] % 2 === 1 && p >= 0 && polyIndexOf[p] >= 0) {
+            out[polyIndexOf[p]].push(contours[i]);   // 内孔挂到外环那一组
+        } else {
+            polyIndexOf[i] = out.length;
+            out.push([contours[i]]);
+        }
     }
     return out;
 }

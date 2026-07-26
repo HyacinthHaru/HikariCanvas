@@ -158,25 +158,20 @@ function onTest(): void {
 }
 
 /**
- * 点头部「待完善」温和指示 → 定位到<b>第一个带 blockId 的错误积木</b>
- * （best-effort——滚动到 data-block-path 元素居中）。循环找首个有 blockId 的错误（规则级错误如
- * 名称空 / 动作列表空无 blockId，跳过它们找到第一个能定位的积木）。无任何可定位错误 → 静默。
+ * 点头部「待完善」温和指示 → 定位到<b>第一个带 blockId 的错误积木</b>（把它挪到画布正中）。
+ * 循环找首个有 blockId 的错误（规则级错误如名称空 / 动作列表空无 blockId，跳过它们找到第一个
+ * 能定位的积木）。无任何可定位错误 → 静默。
+ *
+ * <p><b>挪画布，不滚容器</b>：积木画布是个 {@code overflow:hidden} 的 viewport，里面靠 transform
+ * 平移缩放。{@code scrollIntoView} 照样能把这种容器滚起来（hidden 只是没有滚动条），而画布的
+ * 屏幕↔world 换算根本不看 scroll 偏移——滚一下，之后拖积木的落点、吸附线、删除区就全体错位，
+ * 只能刷新页面才复原。所以改由画布自己调 pan（{@code BlockCanvas.centerOnBlock}）。</p>
  */
 function onIndicatorClick(): void {
     for (const err of validationErrors.value) {
         if (!err.blockId) continue;
-        const el = document.querySelector(`[data-block-path="${cssEscape(err.blockId)}"]`);
-        if (el && 'scrollIntoView' in el) {
-            (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
-            return;
-        }
+        if (canvasRef.value?.centerOnBlock(err.blockId)) return;
     }
-}
-
-/** CSS 属性选择器转义（blockId 含 '/'，需转义才能用在 querySelector）。 */
-function cssEscape(s: string): string {
-    const c = (window as unknown as { CSS?: { escape?: (v: string) => string } }).CSS;
-    return c?.escape ? c.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
 /** 高亮图例项（试跑结果色 → 文案），步进时底部小图例用。 */
@@ -256,9 +251,15 @@ function onSplitterUp(): void {
     detachSplitterListeners();
 }
 
+/**
+ * 关编辑器：先 flush 待保存改动 + 清编辑会话（不影响 server 镜像 / 不切 wall）。
+ *
+ * <p><b>{@code closeEditing} 拦下来就别关</b>：它在"有未保存改动 + 校验不过"时会拒绝退出并给出
+ * 提示（这种状态下清空 workingCopy 就是丢数据）。以前不看返回值照关不误——提示一闪而过、编辑器
+ * 关了，用户以为存上了。现在关不掉，用户就知道要先把那几处填完或撤销。</p>
+ */
 function close(): void {
-    // 关编辑器前 flush 待保存改动 + 清编辑会话（不影响 server 镜像 / 不切 wall）。
-    edit.closeEditing();
+    if (!edit.closeEditing()) return;
     ui.closeScriptEditor();
 }
 

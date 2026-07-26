@@ -95,6 +95,25 @@ function selectOwningRule(e: PointerEvent): void {
 }
 
 /**
+ * 确保正在编辑的就是本块所在那条规则；切不过去就返回 false，调用方放弃这次改动。
+ *
+ * <p>{@code edit.updateActionField} 改的是 workingCopy —— <b>当前选中那条规则</b>的副本，它按 path
+ * 定位，不核对这次改动冲着哪条规则来。而每条规则的路径都长一样（{@code actions/0} 到处都有），
+ * 写错规则不会报错，只会安静地改掉另一条规则的同位置积木。</p>
+ *
+ * <p>两条绕过 pointerdown 选中的路子：① 上一条规则有未保存又校验不过的改动时，selectRule 会拒绝
+ * 切换（只提示）；② 键盘 Tab 直接进字段，压根没有 pointerdown。所以写入前必须自己再确认一次。</p>
+ *
+ * <p>单独 mount（没有 BlockStack provide 规则 id）时拿不到归属，不拦——那是测试 / 预览场景。</p>
+ */
+function ensureEditingThisRule(): boolean {
+    const ruleId = stackRuleId?.value;
+    if (!ruleId || edit.selectedRuleId === ruleId) return true;
+    edit.selectRule(ruleId);
+    return edit.selectedRuleId === ruleId;
+}
+
+/**
  * pointerdown 目标是否落在交互控件（命中则不启动拖块，留给控件自身的 click / focus）。
  *
  * <p>触控板敏感度修复：用 {@code closest} 而非 {@code matches}。变量「选变量」按钮
@@ -308,6 +327,7 @@ const isTweenEasingCustom = computed(() => tweenEasing.value.type === 'cubicBezi
  * （不会被调用到）。
  */
 function onFieldUpdate(field: FieldDef, value: unknown): void {
+    if (!ensureEditingThisRule()) return;
     // easing：select emit 字符串 type，包回 Easing 对象。
     // 切到 cubicBezier 时保留/初始化 bezier（默 ease [0.25,0.1,0.25,1]）；
     // 切到其他预设时丢掉 bezier（非 cubicBezier 类型无 bezier 字段）。
@@ -329,6 +349,7 @@ function onFieldUpdate(field: FieldDef, value: unknown): void {
  * 仅 tweenBlock 的 easing 字段用到。
  */
 function onTweenEasingCurveUpdate(newEasing: Easing): void {
+    if (!ensureEditingThisRule()) return;
     edit.updateActionField(props.path, { easing: newEasing } as unknown as Partial<ScriptAction>);
 }
 
@@ -356,6 +377,7 @@ function friendlyFieldValue(field: FieldDef): unknown {
  * patch 作为 action 的普通字段被 merge，blockId（path）不变（1 积木 1 path，同构守住）。
  */
 function onFriendlyFieldUpdate(field: FieldDef, value: unknown): void {
+    if (!ensureEditingThisRule()) return;
     const nextPatch = { ...friendlyPatch.value, [field.name]: String(value) };
     edit.updateActionField(props.path, { patch: nextPatch } as Partial<ScriptAction>);
 }
@@ -367,6 +389,7 @@ const friendlyElementValue = computed(() =>
 
 /** friendly 块改元素：elementId 落顶层（非 patch），复用 updateActionField。 */
 function onFriendlyElementUpdate(value: unknown): void {
+    if (!ensureEditingThisRule()) return;
     edit.updateActionField(props.path, { elementId: String(value) } as Partial<ScriptAction>);
 }
 
@@ -418,6 +441,7 @@ function isElementField(field: FieldDef): boolean {
 function onCommandUpdate(value: unknown): void {
     const v = value as CommandValue;
     if (!v || typeof v !== 'object') return;
+    if (!ensureEditingThisRule()) return;
     edit.updateActionField(props.path, {
         templateId: v.templateId,
         params: v.params,
@@ -465,6 +489,7 @@ const conditionText = computed(() => {
 
 /** if 的 condition 改值回写（ConditionBuilder emit 出 build 后的 / 高级模式原串）。 */
 function onConditionUpdate(value: string): void {
+    if (!ensureEditingThisRule()) return;
     edit.updateActionField(props.path, { condition: value } as Partial<ScriptAction>);
 }
 

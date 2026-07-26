@@ -17,7 +17,7 @@
  * <p>pan 触发：空格按住拖 / 中键拖 / 拖空白处；拖块 / 移堆进行中不启动 pan。缩放 = ctrl/meta +
  * wheel 以光标为锚。</p>
  */
-import { computed, provide, ref } from 'vue';
+import { computed, nextTick, provide, ref } from 'vue';
 import { useBlockCanvas } from './useBlockCanvas';
 import { useBlockDrag } from './useBlockDrag';
 import { BLOCK_DRAG_KEY } from './dragInjection';
@@ -25,7 +25,7 @@ import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection'
 import { useScriptStore } from '@/stores/scripts';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 import { useI18n } from '@/i18n';
-import { defFor } from '../model/blockDefs';
+import { CATEGORY_COLOR_VAR, defFor, FRIENDLY_ELEMENT_DEFS } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { parseBlockLayout, autoLayout, type BlockLayout } from '../model/serialize';
 import BlockStack from './BlockStack.vue';
@@ -70,12 +70,37 @@ if (props.highlight) {
     provide(BLOCK_HIGHLIGHT_KEY, props.highlight);
 }
 
-// 暴露给父级：zoom% + reset 视图 + palette 源拖出入口。
+// 暴露给父级：zoom% + reset 视图 + palette 源拖出入口 + 定位到某块积木。
 defineExpose({
     zoom: canvas.zoom,
     resetView: canvas.resetView,
     startPaletteDrag: drag.startPaletteDrag,
+    centerOnBlock,
 });
+
+/**
+ * 把当前编辑规则里某块积木挪到画布正中（点头部「待完善」提示时用）。
+ * 找不到那块积木（比如已被删）→ 返 false，调用方继续找下一条错误。
+ *
+ * <p>选择器带上 {@code data-rule-id}：每条规则的顶层序列路径都叫 {@code actions/0}，
+ * 不限规则会随便命中别的堆里同名的一块，跳到八竿子打不着的地方。</p>
+ */
+function centerOnBlock(blockId: string): boolean {
+    const vp = viewportRef.value;
+    const ruleId = editStore.selectedRuleId;
+    if (!vp || !ruleId) return false;
+    const el = vp.querySelector<HTMLElement>(
+        `[data-rule-id="${cssEscape(ruleId)}"] [data-block-path="${cssEscape(blockId)}"]`,
+    );
+    if (!el) return false;
+    return canvas.centerOnElement(el);
+}
+
+/** CSS 属性选择器转义（blockId 含 '/'，不转义没法用在 querySelector）。 */
+function cssEscape(s: string): string {
+    const c = (window as unknown as { CSS?: { escape?: (v: string) => string } }).CSS;
+    return c?.escape ? c.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
+}
 
 /**
  * 渲染用的规则列表：<b>当前正在编辑的那条规则用 {@code editStore.workingCopy}（本地副本），
@@ -138,18 +163,28 @@ function liveStackPos(entry: { rule: { id: string }; x: number; y: number }): { 
     return { x: entry.x, y: entry.y };
 }
 
-/** 跟手浮层显示的块标题（palette / block 源的 kind → label）。 */
+/**
+ * 跟手浮层显示的块标题。
+ *
+ * <p>三条查找顺序：① 友好元素积木（移动到 / 缩放 / 转到…）——它们不在 ACTION_DEFS 里，
+ * 皮肤表才有；画布源拖的是一条 {@code setElementProperties}，得看 {@code actionKind} 才认得出是哪种；
+ * ② 常规动作 / 触发器；③ 都查不到才退回原始 kind。少了第 ① 条，从积木库拖友好积木时浮层显示的
+ * 是英文技术名（moveTo）而不是用户在库里看到的标题。</p>
+ */
 const ghostLabel = computed(() => {
     const g = drag.ghost.value;
     if (!g) return '';
+    const friendly = FRIENDLY_ELEMENT_DEFS[g.actionKind ?? g.kind];
+    if (friendly) return resolveLabelKey(t.value, friendly.labelKey);
     const def = defFor(g.kind);
     return def ? resolveLabelKey(t.value, def.labelKey) : g.kind;
 });
 
-/** 跟手浮层色条颜色。 */
+/** 跟手浮层色条颜色（友好积木没有自己的配色，与积木库里一样统一走动作蓝）。 */
 const ghostColor = computed(() => {
     const g = drag.ghost.value;
     if (!g) return 'var(--border)';
+    if (FRIENDLY_ELEMENT_DEFS[g.actionKind ?? g.kind]) return `var(${CATEGORY_COLOR_VAR.action})`;
     const def = defFor(g.kind);
     return def ? `var(${def.colorVar})` : 'var(--border)';
 });
@@ -174,6 +209,22 @@ function onPointerDown(e: PointerEvent): void {
     // viewport 空白处都可 pan（积木堆 / 帽子 / 块的 pointerdown 已 stopPropagation，不冒泡到这）。
     canvas.onPanPointerDown(e, true);
 }
+
+/**
+ * 滚轮：ctrl/meta 时以光标为锚缩放。<b>拖块 / 拖新块的过程中缩放要重测吸附几何</b>——
+ * 插槽矩形是按下那一刻量的屏幕坐标，画布一缩放全部作废，不重测就会出现"指示线飘在别处、
+ * 松手插到不相干的位置"。缩放不是 PointerEvent，pointer capture 拦不住它。
+ *
+ * <p>等一帧再重测：缩放只改 pan/zoom，world 的 transform 要等 Vue 把样式刷下去才生效，
+ * 当帧量到的还是旧矩形。</p>
+ */
+async function onWheel(e: WheelEvent): Promise<void> {
+    canvas.onWheel(e);
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (!drag.isDraggingBlock.value) return;
+    await nextTick();
+    drag.remeasure();
+}
 </script>
 
 <template>
@@ -182,7 +233,7 @@ function onPointerDown(e: PointerEvent): void {
     class="hc-block-viewport"
     tabindex="0"
     :class="canvas.isPanning.value ? 'cursor-grabbing' : 'cursor-grab'"
-    @wheel="canvas.onWheel"
+    @wheel="onWheel"
     @pointerdown="onPointerDown"
     @pointermove="canvas.onPanPointerMove"
     @pointerup="canvas.onPanPointerUp"
