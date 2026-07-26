@@ -158,7 +158,13 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 
 这与 token 暴力枚举限流（§2.4 `TokenRateLimiter`，per-IP 10 次/分钟 → close 4429）是正交的两套限流。
 
-**覆盖面（重要）**：`SessionRateLimiter.allow()` 只在 6 个编辑类 dispatcher 内调用 —— `element.* / layer.* / canvas.* / timeline.* / keyframe.*`（EditOpDispatcher）、`variable.*`、`variable.alias.*`、`schedule.*`、`rail.*`、`script.*`。**不计入**限流窗口的消息：`ping`（无副作用 echo）、`brush.*`（笔触流畅性考量，靠 `MAX_BRUSH_POINTS_PER_STROKE` / `MAX_ACTIVE_STROKES` 内存上限兜底）、`wall.*` / `template.*`（各有 ACL + DB 写锁兜底）。即「反复超限 → close 1008」只对编辑类 op 生效。把全部消息面纳入统一限流是一个会影响笔触体验的独立决策，留待后续按需评估（见 PROPOSAL「工具不是保姆」性能哲学，不预先过度防御）。
+**覆盖面（重要）**：`SessionRateLimiter.allow()` 在 **8 个 dispatcher** 内调用 —— `element.* / layer.* / canvas.* / timeline.* / keyframe.*`（EditOpDispatcher）、`variable.*`、`variable.alias.*`、`schedule.*`、`rail.*`、`script.*`、**`wall.*`**、**`template.*`**。**不计入**限流窗口的消息：`ping`（无副作用 echo）、`brush.*`（笔触流畅性考量，靠 `MAX_BRUSH_POINTS_PER_STROKE` / `MAX_ACTIVE_STROKES` 内存上限兜底）。
+
+> **`wall.*` / `template.*` 于 0.9.17 纳入限流**（此前豁免，理由记作「各有 ACL + DB 写锁兜底」）。该理由对 `wall.refresh` 不成立：它每收到一条消息就往主线程 `runTask` 一次 `FrameDeployer.repairFor`，内部是 `world.getEntitiesByClass(ItemFrame.class)` **全世界实体扫描 + 逐格补方块**，既不落 DB 也没有任何写锁可兜底。于是任意持 `canvas.edit`（default=true）的玩家开一个 session 后即可让主线程每秒跑上百次全世界扫描把 TPS 打崩。`template.save` 同理含磁盘写 + DB 写却不限流。
+>
+> `wall.refresh` **另加 per-wall 冷却 1 次/秒**（`WallOpDispatcher.REFRESH_COOLDOWN_MS`）：40msg/2s 的通用窗口对「每次都全世界扫描」这种量级仍然过宽。冷却期内的 refresh 直接返回 `RATE_LIMITED`，不入主线程队列。
+
+`brush.*` 仍豁免——那是笔触体验的既定取舍，不是遗漏（见 PROPOSAL「工具不是保姆」性能哲学）。即「反复超限 → close 1008」现对编辑类 + `wall.*` + `template.*` 生效。
 
 ---
 

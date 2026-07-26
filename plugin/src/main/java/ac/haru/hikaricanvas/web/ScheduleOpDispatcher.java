@@ -328,12 +328,12 @@ final class ScheduleOpDispatcher {
         }
         boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
         String requiredNode = isOwnerOnly ? "canvas.schedule.own" : "canvas.schedule.any";
-        // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
-        boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
-        // own 节点 default=true（与 var write own 同款）；offline 玩家 own 路径放行
-        if (!granted && "canvas.schedule.own".equals(requiredNode)) {
-            granted = true;
-        }
+        // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）。
+        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, callerUuid, requiredNode);
+        // own 节点 default=true 的兜底只兜「离线 / 解析超时」，不兜「在线且被显式收回」。
+        // 判定收敛在 MainThreadPerms（4 个 dispatcher 共用），见该方法 javadoc。
+        boolean granted = MainThreadPerms.grantedWithDefaultTrueFallback(
+                resolved, "canvas.schedule.own".equals(requiredNode));
         if (granted) return true;
 
         if (auditLog != null) {

@@ -27,13 +27,30 @@ final class WallOpDispatcher {
     private final ac.haru.hikaricanvas.render.ProjectionThrottler throttler;
     private final org.bukkit.plugin.java.JavaPlugin plugin;
     private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
+    /**
+     * 输入限流；可空（测试装配传 null = 不限流）。0.9.17 纳入，见 security.md §3.3。
+     */
+    private final ac.haru.hikaricanvas.session.SessionRateLimiter rateLimiter;
+
+    /**
+     * {@code wall.refresh} 的 per-wall 冷却。
+     *
+     * <p>通用 40msg/2s 窗口对 refresh 仍太宽：每条 refresh 都往主线程 runTask 一次
+     * {@code FrameDeployer.repairFor}，内部是 {@code world.getEntitiesByClass(ItemFrame.class)}
+     * 全世界实体扫描 + 逐格补方块。1 次/秒足够覆盖"画框被破坏后手动修复"的真实用法。</p>
+     */
+    static final long REFRESH_COOLDOWN_MS = 1000L;
+
+    /** wallId → 上次 refresh 的 nanoTime。session 级不够（换 session 可绕过），故按 wall 记。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> lastRefreshAt =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     WallOpDispatcher(SessionManager sessionManager,
                      ac.haru.hikaricanvas.storage.WallRepo wallRepo,
                      ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer,
                      ac.haru.hikaricanvas.render.ProjectionThrottler throttler,
                      org.bukkit.plugin.java.JavaPlugin plugin) {
-        this(sessionManager, wallRepo, frameDeployer, throttler, plugin, null);
+        this(sessionManager, wallRepo, frameDeployer, throttler, plugin, null, null);
     }
 
     WallOpDispatcher(SessionManager sessionManager,
@@ -42,16 +59,45 @@ final class WallOpDispatcher {
                      ac.haru.hikaricanvas.render.ProjectionThrottler throttler,
                      org.bukkit.plugin.java.JavaPlugin plugin,
                      ac.haru.hikaricanvas.storage.AuditLog auditLog) {
+        this(sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog, null);
+    }
+
+    WallOpDispatcher(SessionManager sessionManager,
+                     ac.haru.hikaricanvas.storage.WallRepo wallRepo,
+                     ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer,
+                     ac.haru.hikaricanvas.render.ProjectionThrottler throttler,
+                     org.bukkit.plugin.java.JavaPlugin plugin,
+                     ac.haru.hikaricanvas.storage.AuditLog auditLog,
+                     ac.haru.hikaricanvas.session.SessionRateLimiter rateLimiter) {
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
         this.frameDeployer = frameDeployer;
         this.throttler = throttler;
         this.plugin = plugin;
         this.auditLog = auditLog;
+        this.rateLimiter = rateLimiter;
+    }
+
+    /**
+     * {@code wall.refresh} 冷却闸。true = 放行（并记录本次时间）。
+     * package-private 供测试直接驱动。
+     */
+    boolean allowRefresh(String wallId, long nowNanos) {
+        Long prev = lastRefreshAt.get(wallId);
+        if (prev != null && nowNanos - prev < REFRESH_COOLDOWN_MS * 1_000_000L) {
+            return false;
+        }
+        lastRefreshAt.put(wallId, nowNanos);
+        return true;
     }
 
     /** 入口：payload 解析后转 {@link #handleWallOp}。 */
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
+        // 输入限流（0.9.17 纳入）。wall.refresh 另有 per-wall 冷却，见 handleWallOp。
+        if (rateLimiter != null && !rateLimiter.allow(sessionId)) {
+            ctx.send(Envelope.error(in.id(), "RATE_LIMITED", "input rate exceeded; slow down"));
+            return;
+        }
         Map<String, Object> payload;
         try {
             payload = asPayloadMap(in.payload());
@@ -179,6 +225,13 @@ final class WallOpDispatcher {
                 if (s.wall() == null || s.mapIds() == null) {
                     ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND",
                             "session lacks wall geometry"));
+                    return;
+                }
+                // per-wall 冷却：repairFor 是全世界实体扫描 + 逐格补方块的主线程任务，
+                // 通用 40msg/2s 窗口对它仍太宽。冷却期内不入主线程队列。
+                if (!allowRefresh(wallId, System.nanoTime())) {
+                    ctx.send(Envelope.error(in.id(), "RATE_LIMITED",
+                            "wall.refresh cooldown; retry in a moment"));
                     return;
                 }
                 final ac.haru.hikaricanvas.deploy.WallResolver.Result.Ok geom = s.wall();

@@ -75,11 +75,22 @@ public class ProjectionThrottler {
         long lastProjectAtNanos;
         /** 是否已 flush 过一次。false 时下一次 submit 强制立即 flush（保「首帧立即」契约）。 */
         boolean projectedOnce;
+        /** 连续 flush 失败次数；成功即复位。达 {@link #FAILURE_CIRCUIT_BREAK} 触发熔断。 */
+        int consecutiveFailures;
         BukkitTask flushTask;
     }
 
     /** 节流间隔从毫秒换算到纳秒（{@link Bucket#lastProjectAtNanos} 同源单调钟比较）。 */
     private static final long MS_TO_NANOS = 1_000_000L;
+
+    /**
+     * 连续 flush 失败多少次后熔断该 bucket（丢 pending、停止每帧重试）。
+     *
+     * <p>畸形元素（超大 glow / 非法 brush size）会让每次 rasterize 都抛，重试链本身
+     * 成为放大器——OOM 场景下更是每帧反复申请大 buffer。3 次足够区分「偶发竞态」与
+     * 「这份 state 就是渲染不了」。</p>
+     */
+    static final int FAILURE_CIRCUIT_BREAK = 3;
 
     public ProjectionThrottler(JavaPlugin plugin,
                                SessionManager sessionManager,
@@ -236,17 +247,33 @@ public class ProjectionThrottler {
         }
         try {
             projectUnderEditLock(s, toProject);
-            // 成功：清 pending 并推进时间基。
+            // 成功：清 pending 并推进时间基，失败计数复位。
             b.pending = null;
             b.lastProjectAtNanos = nowNanos;
             b.projectedOnce = true;
-        } catch (Exception e) {
-            // 失败：把脏区域并回 pending（与期间新并入的 region 合并），不推进时间基，
-            // 也不置 projectedOnce——下次 submit 会因 !projectedOnce 立即重试该帧，
-            // 避免像素永久陈旧。
+            b.consecutiveFailures = 0;
+        } catch (Throwable t) {
+            // catch Throwable 而非 Exception：畸形元素（如 glow.radius 超大）会让渲染器抛
+            // OutOfMemoryError 而非 Exception，此前 Error 直接冒泡出去，pending 既不并回也不
+            // 清空，下一次 submit 仍以同一畸形 state 重试 → 每帧反复大分配。
             b.pending = b.pending == null ? toProject : b.pending.union(toProject);
-            plugin.getLogger().warning(
-                    "ProjectionThrottler: flush failed sid=" + sessionId + " err=" + e.getMessage());
+            b.consecutiveFailures++;
+            if (b.consecutiveFailures >= FAILURE_CIRCUIT_BREAK) {
+                // 熔断：连续失败到阈值就丢弃 pending 并推进时间基，让这条 bucket 停止
+                // 每帧重试。像素停在最后一次成功的帧；用户改动 / 重连会重新 submit。
+                b.pending = null;
+                b.lastProjectAtNanos = nowNanos;
+                b.projectedOnce = true;
+                plugin.getLogger().severe(
+                        "ProjectionThrottler: flush failed " + b.consecutiveFailures
+                                + "x consecutively, circuit-breaking sid=" + sessionId
+                                + " err=" + t);
+            } else {
+                plugin.getLogger().warning("ProjectionThrottler: flush failed sid=" + sessionId
+                        + " err=" + t.getMessage());
+            }
+            // OOM 之外的 Error（StackOverflow / LinkageError 等）同样只记不抛：
+            // 让单面墙的畸形数据不至于打死整条投影线程。
         }
     }
 

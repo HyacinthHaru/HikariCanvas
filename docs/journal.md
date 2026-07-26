@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-07-26 · 0.9.17 必修 Bug 批 · W2：安全组 4 条
+
+- **#8 权限 fail-open ×4（安全）**：Variable / VariableAlias / Schedule / Rail 四个 dispatcher 各写了一份 `if (!granted && isDefaultTrue) granted = true;`——**无条件**兜底，不区分「玩家离线 / 权限解析超时」与「在线且被服主显式收回」。后果：服主用 LuckPerms 负权限收回 `canvas.var.write.own` / `canvas.schedule.own` / `canvas.rail.line.create` / `edit.own` / `delete.own` / `wall.bind` 全部形同虚设，且无从察觉。`ScriptOpDispatcher` 早已修成 `resolve().online()` 的正确写法，那 4 处没跟进——典型复制粘贴分叉。**修法不是四处各改一遍，而是把判定收敛成 `MainThreadPerms.grantedWithDefaultTrueFallback(resolved, nodeIsDefaultTrue)` 一个函数，4 处共用**——根除再次分叉，且让这条规则有唯一可单测的落点。
+- **#7 缺 `EntityDamageByEntityEvent` 保护（安全）**：MC 里左键攻击**装有物品**的 ItemFrame，第一下只弹出物品（触发 `EntityDamageByEntityEvent`），frame 本体不破坏，**不触发** `HangingBreakByEntityEvent`。而 `FrameProtectionListener` 只监听 HangingBreak / HangingBreakByEntity / PlayerInteractEntity / BlockBreak 四个事件，全插件唯一的 damage 监听是 `WandListener`（仅持 wand 时生效）。于是**任何无权限玩家一击即可把受保护 wall 的 FILLED_MAP 打落并捡走**——招牌变空框，且那张地图在池复用后还会显示别的 wall 内容。与 `security.md §6` 契约不符。补 handler：受保护 frame 且攻击者无 `canvas.admin.force-break` → cancel + ActionBar 提示；`ignoreCancelled = true` 让 WandListener（NORMAL 优先级）的 wand 路径优先，不重复提示。
+- **#9 `wall.*` / `template.*` 完全不限流（可用性）**：两个 dispatcher **零** rateLimiter 引用（另外 7 个都有）。`wall.refresh` 每收一条消息就往主线程 `runTask` 一次 `FrameDeployer.repairFor`，内部是 `world.getEntitiesByClass(ItemFrame.class)` **全世界实体扫描 + 逐格补方块**；任意持 `canvas.edit`（default=true）的玩家开一个 session 即可让主线程每秒跑上百次全世界扫描把 TPS 打崩。`template.save` 同理含磁盘写 + DB 写。两者纳入 `SessionRateLimiter`，refresh **另加 per-wall 1 次/秒冷却**（通用 40msg/2s 对这种量级仍太宽）。**按纪律先改契约**：`security.md §3.3` 原文把 `wall.*`/`template.*` 列为豁免、理由记作「各有 ACL + DB 写锁兜底」——该理由对 refresh 根本不成立（既不落 DB 也无写锁），已改写并说明原因；`brush.*` 仍豁免（那是笔触体验的既定取舍，不是遗漏）。
+- **#1 导入路径元素校验缺口（数据损坏 / 可用性）**：`ElementValidator.validateElementForTemplateApply` 是 **.canvas 导入与模板套用的唯一元素校验点**（`ProjectMaterializer` 自述「不信任任何元素数值」），但 if-chain 覆盖 Path / Brush / Shape / Rect / Circle / Image / Icon 七个分支、**唯独缺 TextElement**，Brush 只查 `points != null`，effects 完全不校验。WS 实时编辑路径校验齐全（text≤256 / fontSize 1..512 / brush size 1..64 / glow radius 0..64），导入路径全部豁免 = 导入成了绕过校验的后门。可达后果：`glow.radius=2000万` → GlowRenderer 按 bbox 申请数 GB buffer → OOM；`brush.size` 为负 → BasicStroke 构造抛异常 → 该 wall 渲染永久失败循环。补 TextElement 分支（text/fontSize/color/align/字距/行高）+ 新增记录级 `validateEffects`（stroke/shadow/glow 三项施加与 `buildStroke`/`buildShadow`/`buildGlow` 同一组约束——那三个走的是 WS 的 Map 形态，导入路径拿到的是 Jackson 直接反序列化的 record，绕开了那条链）+ Brush 内容校验（size + 点数 ≤ `MAX_BRUSH_POINTS_PER_STROKE`）。
+  - **配套**：`ProjectionThrottler.flushLocked` 的 `catch (Exception)` 放宽到 `catch (Throwable)` —— OOM 是 `Error` 不是 `Exception`，此前直接冒泡，pending 既不并回也不清空，下次 submit 仍以同一畸形 state 重试 → **每帧反复大分配**。并加 `FAILURE_CIRCUIT_BREAK = 3` 熔断：连续 3 次失败即丢 pending + 推进时间基，让「这份 state 就是渲染不了」的 bucket 停止每帧重试（像素停在最后一次成功的帧）。
+
+**验证**：后端 `:plugin:test` **2170 → 2195**（+25），0 failures。新增 3 个测试文件——`DefaultTruePermissionFallbackTest`（5 例，覆盖 online×granted×defaultTrue 四象限，核心是「在线且被显式收回 default-true 节点必须真拒」）· `ImportPathElementValidationTest`（15 例，text 超长 / fontSize 越界 / 非法色 / **glow radius 2000万** / stroke 宽越界 / shadow 偏移越界 / brush 负 size / brush 点数超限 …）· `WallRefreshCooldownTest`（5 例，含「冷却按 wall 记不按 session」与「被拒不后延窗口」）。
+
+关联文件：`docs/security.md §3.3`；`web/{MainThreadPerms, VariableOpDispatcher, ScheduleOpDispatcher, VariableAliasDispatcher, RailOpDispatcher, WallOpDispatcher, TemplateOpDispatcher, WebServer}`、`deploy/FrameProtectionListener`、`state/ElementValidator`、`render/ProjectionThrottler` + 3 新测试。
+
+---
+
 ## 2026-07-26 · 0.9.17 必修 Bug 批 · W1：5 条低风险修复
 
 外部静态审查产出一份 50 条必修清单。controller 逐条读代码复核了其中 30 条 + 6 条「新增发现」里的 1 条，**全部属实、0 条推翻**（对照 0.9.14 那次三报一假）。本批按「一次改动解决一类」重排为 6 波推进，W1 是改动最小、可自证的 5 条，同时建立本批的验证基线。版本 `0.9.16-SNAPSHOT` → **`0.9.17-SNAPSHOT`**（前后端同步）。

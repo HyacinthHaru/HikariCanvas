@@ -359,13 +359,12 @@ final class VariableOpDispatcher {
         }
 
         // 主线程解析在线玩家权限（Bukkit.getPlayer + hasPermission 主线程专用），
-        // 复用 auth 路径同款 callSyncMethod；离线 / 超时 / 异常返 false（own 节点下方兜底放行）。
-        boolean granted = MainThreadPerms.hasPermission(plugin, callerUuid, requiredNode);
-        // own / create 节点 default=true（paper-plugin.yml）；offline 玩家 / 测试期 mock
-        // 也允许 own / create 路径，与 SessionManager.open 处理 default 节点惯例一致。
-        if (!granted && isOwnNodeDefaultTrue(requiredNode)) {
-            granted = true;
-        }
+        // 复用 auth 路径同款 callSyncMethod。
+        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, callerUuid, requiredNode);
+        // own / create 节点 default=true 的兜底只兜「离线 / 解析超时」，不兜「在线且被显式收回」。
+        // 判定收敛在 MainThreadPerms（4 个 dispatcher 共用），见该方法 javadoc。
+        boolean granted = MainThreadPerms.grantedWithDefaultTrueFallback(
+                resolved, isOwnNodeDefaultTrue(requiredNode));
         if (granted) return true;
 
         // 拒：发 error + audit

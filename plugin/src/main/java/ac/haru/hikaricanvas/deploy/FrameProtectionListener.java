@@ -9,6 +9,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.hanging.HangingBreakByEntityEvent;
 import org.bukkit.event.hanging.HangingBreakEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
@@ -21,9 +22,16 @@ import org.bukkit.event.player.PlayerInteractEntityEvent;
  * <ul>
  *   <li>{@link HangingBreakEvent} — 所有破坏原因（含爆炸、物理失联）</li>
  *   <li>{@link HangingBreakByEntityEvent} — 实体攻击；玩家持 {@code canvas.admin.force-break} 权限时允许</li>
+ *   <li>{@link EntityDamageByEntityEvent} — <b>左键攻击弹出地图</b>（见下）</li>
  *   <li>{@link PlayerInteractEntityEvent} — 玩家右键改内容</li>
  *   <li>{@link BlockBreakEvent} — 支撑方块被破坏；扫 4 个水平相邻格（只支持垂直墙面）</li>
  * </ul>
+ *
+ * <p><b>为什么 HangingBreak 系列不够</b>：装有物品的 ItemFrame 被左键攻击时，第一下只
+ * <b>弹出物品</b>（触发 {@link EntityDamageByEntityEvent}），frame 本体不破坏，因此
+ * <b>不触发</b> {@link HangingBreakByEntityEvent}。缺这个 handler 时任何无权限玩家一击即可把
+ * 受保护 wall 的 FILLED_MAP 打落并捡走——招牌变空框，且那张地图物品在池复用后还会显示
+ * 别的 wall 内容。</p>
  */
 public final class FrameProtectionListener implements Listener {
 
@@ -60,6 +68,29 @@ public final class FrameProtectionListener implements Listener {
             return;  // force-break → 允许
         }
         event.setCancelled(true);
+    }
+
+    /**
+     * 左键攻击受保护 frame → 拒绝（否则第一下就把 FILLED_MAP 打落，招牌变空框）。
+     *
+     * <p>{@code ignoreCancelled = true}：{@link ac.haru.hikaricanvas.session.WandListener}
+     * 在 {@link EventPriority#NORMAL} 已对"持 wand 点画框"取消并路由到 open/选角，本 handler
+     * 跑在 HIGH 会看到已取消的事件——跳过即可，避免重复发 ActionBar。</p>
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof ItemFrame frame)) return;
+        if (!frameDeployer.isProtectedFrame(frame)) return;
+        // 与 HangingBreakByEntity 同一判定：仅 canvas.admin.force-break 可绕过。
+        // 非玩家伤害源（箭矢 / 爆炸实体 / 生物）一律拒绝。
+        Player p = event.getDamager() instanceof Player pp ? pp : null;
+        if (p != null && p.hasPermission(FORCE_BREAK_PERMISSION)) {
+            return;
+        }
+        event.setCancelled(true);
+        if (p != null) {
+            messages.sendActionBar(p, "frame-protect.blocked");
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGH)

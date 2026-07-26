@@ -576,8 +576,51 @@ public final class ElementValidator {
     // ---------- 模板 raw_state 反序列化得到的 element 二次校验 ----------
 
     /**
+     * 已反序列化的 {@link Effects} 记录级校验。
+     *
+     * <p>{@link #buildEffects} 走的是 WS payload 的 {@code Map} 形态；导入 / 模板套用路径拿到的
+     * 是 Jackson 直接反序列化出的 record，绕开了那条链。本方法施加<b>同一组</b>约束。</p>
+     *
+     * <p>缺它的后果是实打实的：{@code glow.radius} 若为 2000 万，{@code GlowRenderer} 会按 bbox
+     * 申请数 GB buffer → {@code OutOfMemoryError}，而 {@code ProjectionThrottler.flushLocked}
+     * 只 catch Exception，Error 冒泡后每帧重试反复大分配。</p>
+     */
+    public static void validateEffects(Effects e) {
+        if (e == null) return;
+        Stroke stroke = e.stroke();
+        if (stroke != null) {
+            if (stroke.width() < 0 || stroke.width() > MAX_STROKE_WIDTH) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "stroke.width out of range 0.." + MAX_STROKE_WIDTH + ": " + stroke.width());
+            }
+            validateColor(stroke.color());
+        }
+        Shadow shadow = e.shadow();
+        if (shadow != null) {
+            if (Math.abs(shadow.dx()) > MAX_SHADOW_OFFSET
+                    || Math.abs(shadow.dy()) > MAX_SHADOW_OFFSET) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "shadow offset out of range ±" + MAX_SHADOW_OFFSET);
+            }
+            validateColor(shadow.color());
+        }
+        Glow glow = e.glow();
+        if (glow != null) {
+            if (glow.radius() < 0 || glow.radius() > MAX_GLOW_RADIUS) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "glow.radius out of range 0.." + MAX_GLOW_RADIUS + ": " + glow.radius());
+            }
+            validateColor(glow.color());
+        }
+    }
+
+    /**
      * 模板 raw_state 反序列化得到的 element 通过本方法二次校验。
      * {@code EditSession.validateElementForTemplateApply} 保留 wrapper 维持外部 API。
+     *
+     * <p><b>本方法是 .canvas 导入与模板套用的唯一元素校验点</b>（{@code ProjectMaterializer}
+     * 自述「不信任任何元素数值」）。任何在此缺席的分支 = 该字段在导入路径完全无约束，
+     * 而 WS 实时编辑路径校验齐全——两条路径必须等价，否则导入就是绕过校验的后门。</p>
      *
      * @throws ValidationException 任一字段不合法
      */
@@ -594,9 +637,27 @@ public final class ElementValidator {
             }
             validatePathD(p.d());
             if (p.fill() != null) FillValidator.validate(p.fill());
+        } else if (el instanceof TextElement t) {
+            // 与 WS 的 buildText / applyTextPatch 同款校验。此前整个 TextElement 分支缺席：
+            // 导入路径的 text 长度 / fontSize / color / align / 字距行高 / effects 全部无约束。
+            validateText(t.text());
+            validateFontSize(t.fontSize());
+            validateColor(t.color());
+            validateAlign(t.align());
+            validateLetterSpacing(t.letterSpacing());
+            validateLineHeight(t.lineHeight());
+            validateEffects(t.effects());
         } else if (el instanceof BrushStrokeElement b) {
             if (b.points() == null) {
                 throw new ValidationException("INVALID_PAYLOAD", "brush.points required");
+            }
+            // 内容校验此前完全缺席（只查 points 非 null）。size 为负会让 BasicStroke 构造抛异常
+            // → 该 wall 渲染永久失败循环；点数无上限则可让单元素撑爆渲染耗时。
+            validateBrushSize(b.size());
+            if (b.points().size() > BrushSession.MAX_BRUSH_POINTS_PER_STROKE) {
+                throw new ValidationException("INVALID_PAYLOAD",
+                        "brush.points count " + b.points().size() + " > "
+                                + BrushSession.MAX_BRUSH_POINTS_PER_STROKE);
             }
             if (b.fill() != null) FillValidator.validate(b.fill());
         } else if (el instanceof ShapeElement sh) {

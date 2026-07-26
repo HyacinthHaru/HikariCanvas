@@ -143,4 +143,25 @@ final class MainThreadPerms {
     record Resolved(boolean online, boolean[] granted) {
         boolean granted(int idx) { return granted[idx]; }
     }
+
+    /**
+     * {@code default=true} 节点（{@code .own} / {@code .create}）的放行判定，
+     * 供 Variable / VariableAlias / Schedule / Rail 四个 dispatcher <b>共用一份</b>。
+     *
+     * <p><b>为什么必须共用</b>：这条规则此前在 4 处各写一份，全部写成了
+     * {@code if (!granted && isDefaultTrue) granted = true;}——无条件兜底，不区分
+     * 「玩家离线 / 解析超时」与「在线且被服主显式收回」。于是服主用 LuckPerms 负权限
+     * 收回 {@code canvas.var.write.own} / {@code canvas.schedule.own} /
+     * {@code canvas.rail.*} 全部形同虚设，且无从察觉。{@code ScriptOpDispatcher} 早已
+     * 修成正确写法，那 4 处没跟进——典型的复制粘贴分叉。收敛成一个函数以根除复发。</p>
+     *
+     * @param resolved         {@link #resolve} 的结果（只看 idx 0）
+     * @param nodeIsDefaultTrue 该节点在 {@code paper-plugin.yml} 里是否 {@code default: true}
+     * @return true = 放行
+     */
+    static boolean grantedWithDefaultTrueFallback(Resolved resolved, boolean nodeIsDefaultTrue) {
+        if (resolved.granted(0)) return true;
+        // 兜底只兜「离线 / 权限解析超时」。在线且明确 false = 服主显式收回，必须真拒。
+        return !resolved.online() && nodeIsDefaultTrue;
+    }
 }

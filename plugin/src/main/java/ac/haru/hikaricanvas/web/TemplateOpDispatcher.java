@@ -43,6 +43,13 @@ final class TemplateOpDispatcher {
      * gallery 要重连才见新模板。可空：测试装配传 null（不推送，不影响 ack 主链）。
      */
     private final TemplateListRefresher refresher;
+    /**
+     * 输入限流；可空（测试装配传 null = 不限流）。
+     *
+     * <p>0.9.17 纳入：{@code template.save} 含磁盘写 + DB 写，此前完全不限流
+     * （security.md §3.3 原记「各有 ACL + DB 写锁兜底」，对本 op 不成立）。</p>
+     */
+    private final ac.haru.hikaricanvas.session.SessionRateLimiter rateLimiter;
 
     /** 由 {@code WebServer} 提供实现：算 {@code listVisibleTo} + {@code ctx.send} 一帧 {@code templates}。 */
     @FunctionalInterface
@@ -65,13 +72,27 @@ final class TemplateOpDispatcher {
                          ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher,
                          org.bukkit.plugin.Plugin plugin,
                          TemplateListRefresher refresher) {
+        this(sessionManager, templatePublisher, plugin, refresher, null);
+    }
+
+    TemplateOpDispatcher(SessionManager sessionManager,
+                         ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher,
+                         org.bukkit.plugin.Plugin plugin,
+                         TemplateListRefresher refresher,
+                         ac.haru.hikaricanvas.session.SessionRateLimiter rateLimiter) {
         this.sessionManager = sessionManager;
         this.templatePublisher = templatePublisher;
         this.plugin = plugin;
         this.refresher = refresher;
+        this.rateLimiter = rateLimiter;
     }
 
     void dispatch(WsMessageContext ctx, Envelope in, String sessionId) {
+        // 输入限流（0.9.17 纳入；template.save 含磁盘写 + DB 写）
+        if (rateLimiter != null && !rateLimiter.allow(sessionId)) {
+            ctx.send(Envelope.error(in.id(), "RATE_LIMITED", "input rate exceeded; slow down"));
+            return;
+        }
         Session s = sessionManager.byId(sessionId);
         if (s == null) {
             ctx.send(Envelope.error(in.id(), "SESSION_CLOSED", "no active session"));
