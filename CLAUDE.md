@@ -227,7 +227,7 @@ GitHub Actions 2 workflow：
 - **环境锁**：Java 21 Temurin + Node 22 LTS（不用 Node 25，已知卡 vue-tsc）
 - **cache**：`gradle/actions/setup-gradle` + `setup-node` 自带，不显式配 `actions/cache`
 - **`npm ci || npm install` fallback**：macOS 生成的 lock 缺 Linux 平台传递依赖时，严格 `npm ci` 会失败——fallback 保证 CI/release 跑通（实跑中确实常命中）
-- **release jar ≈ 90MB，本地 shadowJar ≈ 152MB**：本地跑过 `syncFontsToWeb` 会把字体多塞一份进 `web/fonts`，CI release 路径不跑它。**90MB 是正确的精简产物**
+- **jar ≈ 86MB，本地构建 = release 构建**（0.9.17 起）：`copyWebToResources` 显式 `exclude("fonts/**")`，jar 内容与任务执行顺序彻底解耦。此前本地跑过 `syncFontsToWeb` 会把字体多塞一份进 `web/fonts` 被 vite 烤进 jar（本地 ≈152MB vs release ≈90MB），而 CI release 路径不跑 `syncFontsToWeb` 所以躲过了——那是**任务序决定 jar 内容**，本身就是不可复现构建。字体二进制走后端 `/api/font/file` 端点，`web/fonts/*.ttf` 纯冗余
 
 ## 远期 TODO（不做但记下）
 
