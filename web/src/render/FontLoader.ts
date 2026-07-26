@@ -22,7 +22,19 @@
 interface LoadState {
     promise: Promise<void>;
     face?: FontFace;
+    /** 加载失败的时间戳；0 = 没失败过。过了 TTL 再问就重新拉一次。 */
+    failedAt: number;
 }
+
+/**
+ * 失败条目多久之后允许重试（与 PreviewRenderer 的图片 / 图标缓存同一档）。
+ *
+ * <p>没有它的话，一次 fetch 抖动 / 后端字体注册窗口期的 404 就会把该字体钉死到整页刷新
+ * 为止：{@link ensureLoaded} 第二次调用直接命中已 resolve 的旧 promise 立刻返回，
+ * PreviewRenderer 每帧那句 {@code if (!isLoaded) ensureLoaded()} 变成纯空转，
+ * 编辑器整场会话都用浏览器 system fallback 画字——与游戏里后端拿真 TTF 渲染的结果对不上。</p>
+ */
+const FAILED_RETRY_TTL_MS = 10_000;
 
 const loaded = new Map<string, LoadState>();
 const readyHandlers: ((fontId: string) => void)[] = [];
@@ -50,15 +62,32 @@ export function isLoaded(fontId: string): boolean {
 }
 
 /**
+ * 丢弃加载失败的条目，让下次 {@link ensureLoaded} 立刻重新拉（不等 TTL）。
+ * 切 wall / 重连后调，语义同 IconLoader.clearFailedIconCache。
+ */
+export function clearFailedFontCache(): void {
+    for (const [fontId, state] of loaded) {
+        if (state.failedAt !== 0) loaded.delete(fontId);
+    }
+}
+
+/**
  * 幂等加载某字体。首次调用发起 fetch + FontFace 注册；已加载 / 正在加载返现有 Promise。
- * 失败静默——浏览器 ctx.font 走 system fallback，不抛。
+ * 失败静默——浏览器 ctx.font 走 system fallback，不抛；过 {@link FAILED_RETRY_TTL_MS}
+ * 后下一次调用会重新拉一遍（瞬时 404 / 网络抖动自愈，不必整页刷新）。
  */
 export function ensureLoaded(fontId: string): Promise<void> {
     const existing = loaded.get(fontId);
-    if (existing) return existing.promise;
+    if (existing) {
+        if (existing.failedAt === 0 || Date.now() - existing.failedAt <= FAILED_RETRY_TTL_MS) {
+            return existing.promise;
+        }
+        // 失败条目过了 TTL：摘掉后走下面的正常加载路径重来一次。
+        loaded.delete(fontId);
+    }
 
     // 先占位 state 防并发竞争；promise 后挂上
-    const state: LoadState = { promise: Promise.resolve() };
+    const state: LoadState = { promise: Promise.resolve(), failedAt: 0 };
     loaded.set(fontId, state);
 
     state.promise = (async () => {
@@ -71,6 +100,7 @@ export function ensureLoaded(fontId: string): Promise<void> {
             for (const fn of readyHandlers) fn(fontId);
         } catch (e) {
             console.warn(`[FontLoader] failed to load ${fontId}:`, e);
+            state.failedAt = Date.now();
             // 不抛 — 调用方继续走 system fallback
         }
     })();

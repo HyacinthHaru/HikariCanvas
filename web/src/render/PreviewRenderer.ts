@@ -1,14 +1,15 @@
 import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, ImageElement, PathElement, CircleElement, ShapeElement, BrushStrokeElement, Glow } from '@/types/protocol';
 import { isLegacyIconSource } from '@/types/protocol';
-import { layoutText, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
+import { layoutText, charAdvance, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 import { applyBlendModeOver } from './BlendModes';
 import { parsePathD } from './PathParser';
 import { arrowSize, arrowShape, dotRadius, drawArrow, drawDot } from './MarkerRenderer';
 import { fillToCanvasStyle } from './fill';
 import { applyBayerDither } from './BayerDither';
 import { getPaletteLut, type PaletteLut } from './PaletteLut';
-import { ensureLoaded, isLoaded } from './FontLoader';
+import { ensureLoaded, isLoaded, clearFailedFontCache } from './FontLoader';
 import { ensureLoaded as ensureIconLoaded, getCached as getCachedIcon, onIconLoaded, clearFailedIconCache } from './IconLoader';
+import { clearFailedMetricsCache } from './GlyphMetricsLut';
 import { interpolate, type PlaceholderSegment } from '@/variable/interpolator';
 import type { useVariableStore } from '@/stores/variables';
 
@@ -197,6 +198,8 @@ let paletteReadyHook: (() => void) | null = null;
 // in-flight 守卫。未就绪时 getCachedPalette 每帧都会被调；若不挡，每帧都注册一个
 // 新的 getPaletteLut().then 回调，导致 palette resolve 时一次性触发 N 次 requestDraw。
 let paletteLoading = false;
+/** 上次 palette 加载失败的时间戳；0 = 没失败过。过了 TTL 才允许再发一次。 */
+let paletteFailedAt = 0;
 
 /** CanvasView 注册：PaletteLut 加载完成 → 请求重绘（dither element 首帧本来 fallback clean）。 */
 export function onPaletteReady(hook: () => void) { paletteReadyHook = hook; }
@@ -205,15 +208,22 @@ function getCachedPalette(): PaletteLut | null {
     if (cachedPalette) return cachedPalette;
     // 已有在途加载则直接返回 null，不再重复注册 .then
     if (paletteLoading) return null;
+    // 刚失败过就先歇着：本函数每帧都会被调，不隔一会儿会把失败的后端按住猛刷。
+    if (paletteFailedAt !== 0 && Date.now() - paletteFailedAt <= FAILED_RETRY_TTL_MS) return null;
     paletteLoading = true;
     // 首次：发起 lazy load，本帧返回 null，加载完后 hook 触发重绘
     getPaletteLut().then((p) => {
         cachedPalette = p;
         paletteLoading = false;
+        paletteFailedAt = 0;
         paletteReadyHook?.();
     }).catch(() => {
-        // palette 加载失败：清守卫允许后续重试；dither element 本窗口 fallback 走 clean
+        // palette 加载失败：清守卫 + 记时间戳，隔 TTL 后下一次重绘会真的重发 fetch
+        // （getPaletteLut 失败时会把自己缓存的 promise 丢掉，不再返回同一个已 reject 的
+        // promise——没有那一步的话这里清守卫是白清的，永远不会有第二次请求）。
+        // dither element 在此期间 fallback 走 clean。
         paletteLoading = false;
+        paletteFailedAt = Date.now();
     });
     return null;
 }
@@ -610,16 +620,18 @@ function drawIconSvgPath(ctx: CanvasRenderingContext2D, ic: IconElement): void {
     const offX = (ic.w - vbW * scale) / 2 - vbX * scale;
     const offY = (ic.h - vbH * scale) / 2 - vbY * scale;
 
-    // fill 渐变 bbox = element bbox（与 Rect/Circle 一致）。fillStyle 在变换前算好（用 element 坐标系），
-    // 否则 CanvasGradient 端点会被 translate/scale 错位。Canvas API: fillStyle 一旦 set，
-    // 后续 fill() 在当前变换矩阵下绘制——gradient 几何按 set 时坐标系算。
-    const style = fillToCanvasStyle(ctx, ic.fill, ic.x, ic.y, ic.w, ic.h) ?? '#000000';
-
     ctx.save();
     try {
         ctx.translate(ic.x + offX, ic.y + offY);
         ctx.scale(scale, scale);
-        ctx.fillStyle = style;
+        // 渐变端点是在 fill() 那一刻按当前变换矩阵映射的，不是设 fillStyle 时定死的。
+        // 所以这里必须用**变换后坐标系**里的 element bbox：canvas 上的 (ic.x, ic.y) 对应
+        // 本地 (-offX/scale, -offY/scale)，尺寸同样除以 scale。写 element 全局坐标的话
+        // 渐变会再被这层 translate + scale 映射一遍，整个错位（同文件 drawPath 传 0..p.w/p.h
+        // 就是同一条规则）。后端 IconRenderer 用 createTransformedShape 不动 Graphics2D 变换，
+        // Paint 坐标本来就是画布坐标，故此前是编辑器画错、游戏内画对。
+        ctx.fillStyle = fillToCanvasStyle(
+            ctx, ic.fill, -offX / scale, -offY / scale, ic.w / scale, ic.h / scale) ?? '#000000';
         for (const p of cached.paths) {
             const path2d = new Path2D(p.d);
             ctx.fill(path2d);
@@ -711,12 +723,16 @@ export function preloadImage(source: string, dataUrl: string): void {
 }
 
 /**
- * 丢弃图片 / 图标缓存中的失败（占位 ?）条目，并联动清 IconLoader 的失败 SVG 条目。
+ * 丢弃渲染资源缓存里的失败条目：图片 / 图标（占位 ?）、IconLoader 的 SVG、字体文件、
+ * 字形 metrics 表。名字里的 Image 是历史留下的，实际覆盖面见上。
  *
  * <p>由 {@code project.reset()}（切 wall / 断线重连触发）调用，与 {@code clearLayerThumbnailCache}
- * 并列。原先这两个模块级 Map 永不重置——瞬时网络错误把资源永久钉死占位 ?，只能整页刷新；
+ * 并列。原先这些模块级 Map 永不重置——瞬时网络错误把资源永久钉死占位 ?，只能整页刷新；
  * 且跨多次 wall 切换累积历史资产带来内存增长。成功条目（内容寻址，可跨 wall 共享）保留不动，
  * 仅丢弃失败条目让下次绘制重新发起加载。</p>
+ *
+ * <p>字体与 metrics 各自还有 10s TTL 自愈，这里只是让"切 wall / 重连"这个明确的时机
+ * 立刻重试，不用干等。</p>
  */
 export function resetImageCaches(): void {
     for (const [k, v] of imageCache) {
@@ -726,6 +742,10 @@ export function resetImageCaches(): void {
         if (v.failed) iconCache.delete(k);
     }
     clearFailedIconCache();
+    clearFailedFontCache();
+    clearFailedMetricsCache();
+    // palette 也一样：重连后立刻允许重新拉 /api/palette，不等 TTL。
+    paletteFailedAt = 0;
 }
 
 function drawImage(ctx: CanvasRenderingContext2D, im: ImageElement): void {
@@ -1011,7 +1031,7 @@ function drawTextInner(ctx: CanvasRenderingContext2D, t: TextElement): void {
 
     // 1. glow（底层）
     if (fx?.glow && fx.glow.radius > 0) {
-        renderGlow(ctx, glyphs, fontSpec, t.fontSize, fx.glow);
+        renderGlow(ctx, glyphs, fontSpec, family, t.fontSize, fx.glow);
     }
     // 2. shadow：drawString offset（与后端 CanvasCompositor 一致，不用 ctx.shadow*）
     if (fx?.shadow) {
@@ -1227,7 +1247,7 @@ function drawGlyphStroke(ctx: CanvasRenderingContext2D, g: PositionedGlyph, font
 // ---------- Glow（自实现盒模糊，镜像 Java GlowRenderer） ----------
 
 function renderGlow(ctx: CanvasRenderingContext2D, glyphs: PositionedGlyph[],
-                    fontSpec: string, fontSize: number, glow: Glow): void {
+                    fontSpec: string, fontId: string, fontSize: number, glow: Glow): void {
     const radius = glow.radius;
     // 1) 外接矩形（考虑 rotated）
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1241,7 +1261,10 @@ function renderGlow(ctx: CanvasRenderingContext2D, glyphs: PositionedGlyph[],
             minY = Math.min(minY, g.baselineY - fontSize / 2);
             maxY = Math.max(maxY, g.baselineY + fontSize / 2);
         } else {
-            const chW = ctx.measureText(g.ch).width;
+            // 宽度必须与 layoutText 推进 cursor 用的度量同源（后端 GlowRenderer 同款 charAdvance）。
+            // 这里原先用 ctx.measureText（浏览器实测墨迹宽），后端用的却是 canonical 简化值 ——
+            // 宽西文字符（W / M）小 radius 时后端会把右缘光晕裁掉，游戏内与编辑器对不上。
+            const chW = charAdvance(fontId, g.ch, fontSize);
             minX = Math.min(minX, g.x);
             maxX = Math.max(maxX, g.x + chW);
             minY = Math.min(minY, g.baselineY - ascent);

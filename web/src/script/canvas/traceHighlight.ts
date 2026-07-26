@@ -11,9 +11,27 @@
  * <p><b>blockId 树路径</b>：{@code 'trigger'}（对应 BlockStack 帽子）/ {@code 'actions/2'} /
  * {@code 'actions/2/then/1'}——与后端 trace blockId、blockTree path、积木 {@code data-block-path}
  * 逐字符同构。BlockNode / BlockStack 用自身 path 查 highlightMap 取 result → 边框色。</p>
+ *
+ * <p><b>map 的 key 是「规则 id + blockId」复合键</b>（{@link highlightKey}），不是裸 blockId。
+ * blockId 只在一条规则内唯一：画布上每条规则都有自己的 {@code 'trigger'} 帽子、都有
+ * {@code 'actions/0'}。裸 blockId 作 key 时，同一份 map 发给画布上所有积木堆，试跑规则 A
+ * 会把其它每一堆的帽子和同路径积木一起点亮、还挂上 A 的 detail 提示。</p>
  */
 
 import type { ScriptTraceStep } from '@/types/protocol';
+
+/** 复合 key 的分隔符：NUL 字符，规则 id 与 blockId 都不可能含它，拼出的 key 不会撞。 */
+const KEY_SEP = '\u0000';
+
+/**
+ * 高亮 map 的复合 key：规则 id + blockId。
+ *
+ * <p>生产者（{@link buildHighlightFrames} / overlay 的 detail map）与消费者（BlockStack /
+ * BlockNode）必须都经这个函数拼 key，谁绕过谁就查不到高亮（查不到 = 不亮，是安全的一侧）。</p>
+ */
+export function highlightKey(ruleId: string, blockId: string): string {
+    return `${ruleId}${KEY_SEP}${blockId}`;
+}
 
 /** 单步点亮间隔（ms）。120ms 步进动画。 */
 export const STEP_INTERVAL_MS = 120;
@@ -23,7 +41,10 @@ export const HOLD_AFTER_MS = 2000;
 /** trace step 的结果态（与 {@link ScriptTraceStep.result} 同）。 */
 export type StepResult = ScriptTraceStep['result'];
 
-/** blockId → 结果态的高亮映射（组件局部 ref 持有；BlockNode/BlockStack 查它取边框色）。 */
+/**
+ * {@link highlightKey}（规则 id + blockId）→ 结果态的高亮映射；组件局部 ref 持有，
+ * BlockNode / BlockStack 用自己的规则 id + path 拼 key 查它取边框色。
+ */
 export type HighlightMap = Map<string, StepResult>;
 
 /**
@@ -48,13 +69,16 @@ export function resultColorVar(result: StepResult): string {
 /**
  * 把 trace steps 展开成"逐步累积高亮 map"序列：第 i 帧（0-based）= 已点亮前 i+1 个 step 的
  * map 快照。<b>纯函数</b>——给定 steps 返回 N 个 Map（N = steps.length），第 i 个含 steps[0..i]
- * 的 {@code blockId → result}。同一 blockId 被多个 step 命中时<b>后者覆盖前者</b>（后端 trace
- * 顺序即执行顺序，最后一次结果是该块的最终态）。
+ * 的 {@code highlightKey(ruleId, blockId) → result}。同一 blockId 被多个 step 命中时
+ * <b>后者覆盖前者</b>（后端 trace 顺序即执行顺序，最后一次结果是该块的最终态）。
  *
  * <p>组件按 {@link STEP_INTERVAL_MS} 定时把第 0、1、2… 帧赋给局部 ref 即得到步进动画；测试直接
  * 断言每帧 map 内容，无需 fake timer。空 steps → 空数组（无可点亮）。</p>
+ *
+ * @param ruleId 这份 trace 属于哪条规则（{@code script.trace} payload 自带）。key 里必须带上它，
+ *               否则画布上别的积木堆会跟着一起亮。
  */
-export function buildHighlightFrames(steps: ScriptTraceStep[]): HighlightMap[] {
+export function buildHighlightFrames(steps: ScriptTraceStep[], ruleId: string): HighlightMap[] {
     const frames: HighlightMap[] = [];
     const acc: HighlightMap = new Map();
     for (const step of steps) {
@@ -63,7 +87,7 @@ export function buildHighlightFrames(steps: ScriptTraceStep[]): HighlightMap[] {
             // 跳过空 blockId：帧数 = 有效 step 数，UI 停在最后一个有效高亮上。
             continue;
         }
-        acc.set(step.blockId, step.result);
+        acc.set(highlightKey(ruleId, step.blockId), step.result);
         frames.push(new Map(acc));
     }
     return frames;
@@ -79,8 +103,11 @@ export function buildHighlightFrames(steps: ScriptTraceStep[]): HighlightMap[] {
  * 所有 timer 句柄集中管理，{@code stop}/{@code clear}/重新 {@code start} 都先清旧句柄，杜绝泄漏。</p>
  */
 export interface HighlightStepper {
-    /** 开始一轮步进（先停旧轮）。空 steps → 直接清空高亮。 */
-    start(steps: ScriptTraceStep[]): void;
+    /**
+     * 开始一轮步进（先停旧轮）。空 steps → 直接清空高亮。
+     * @param ruleId 这轮 trace 所属规则 id（拼进 map key，见 {@link highlightKey}）。
+     */
+    start(steps: ScriptTraceStep[], ruleId: string): void;
     /** 停定时器（保留当前高亮）。 */
     stop(): void;
     /** 停 + 清空高亮。 */
@@ -108,9 +135,9 @@ export function createHighlightStepper(opts: StepperOptions): HighlightStepper {
         }
     }
 
-    function start(steps: ScriptTraceStep[]): void {
+    function start(steps: ScriptTraceStep[], ruleId: string): void {
         killTimer();
-        const frames = buildHighlightFrames(steps);
+        const frames = buildHighlightFrames(steps, ruleId);
         if (frames.length === 0) {
             opts.apply(new Map());
             return;

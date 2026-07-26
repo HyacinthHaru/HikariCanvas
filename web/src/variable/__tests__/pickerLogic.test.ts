@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+    absoluteFullName,
     buildGroups,
     declaredKeyToVariable,
     displayName,
@@ -22,6 +23,7 @@ import {
     totalCount,
     type NamespaceMetadata,
 } from '../pickerLogic';
+import { resolveFullName } from '../interpolator';
 import type { Variable } from '@/types/variable';
 
 function mkVar(namespace: string, key: string, current: string | null = '1'): Variable {
@@ -430,5 +432,43 @@ describe('nextActiveIndex', () => {
     });
     it('普通 +1', () => {
         expect(nextActiveIndex(2, 1, 5)).toBe(3);
+    });
+});
+
+describe('absoluteFullName — 别名 key 必须是 store 里的绝对 fullName', () => {
+    // metadata 骨架行的 namespace 是相对形态（schedule / system），store 里却是
+    // schedule:<wallId> / system:<wallId>。两边形态不一致时别名永远查不到，
+    // 这组用例把「picker 存别名用的 key」钉死成和 chip / 面板同一个形态。
+    it('user：namespace 自带 wallId → 原样（本来就绝对）', () => {
+        expect(absoluteFullName(mkVar('user:w-1', '红队比分'), 'w-1')).toBe('user:w-1/红队比分');
+    });
+    it('schedule 骨架行 → 补上 wallId', () => {
+        expect(absoluteFullName(mkVar('schedule', 'next_departure'), 'w-1'))
+            .toBe('schedule:w-1/next_departure');
+    });
+    it('system 的 per-wall 键（wall.*）→ 补上 wallId', () => {
+        expect(absoluteFullName(mkVar('system', 'wall.id'), 'w-1')).toBe('system:w-1/wall.id');
+        expect(absoluteFullName(mkVar('system', 'wall.alias'), 'w-1')).toBe('system:w-1/wall.alias');
+    });
+    it('system 的全服键（server.*）→ 不补 wallId（store 里就是 system/server.time）', () => {
+        expect(absoluteFullName(mkVar('system', 'server.time'), 'w-1')).toBe('system/server.time');
+    });
+    it('全服 namespace（scoreboard / papi / userglobal）→ 字面形态', () => {
+        expect(absoluteFullName(mkVar('scoreboard', 'kill.Steve'), 'w-1')).toBe('scoreboard/kill.Steve');
+        expect(absoluteFullName(mkVar('papi', 'player_name'), 'w-1')).toBe('papi/player_name');
+        expect(absoluteFullName(mkVar('userglobal', '赛季'), 'w-1')).toBe('userglobal/赛季');
+    });
+    it('没有 wall 上下文（wallId=null）→ 一律字面形态，不瞎补', () => {
+        expect(absoluteFullName(mkVar('schedule', 'next_departure'), null))
+            .toBe('schedule/next_departure');
+        expect(absoluteFullName(mkVar('system', 'wall.id'), null)).toBe('system/wall.id');
+    });
+    it('与 chip 侧口径一致：resolveFullName(用户写法) 与本函数结果相同', () => {
+        // chip 里写 ${var:schedule.next_departure} → resolveFullName → schedule:w-1/next_departure
+        expect(absoluteFullName(mkVar('schedule', 'next_departure'), 'w-1'))
+            .toBe(resolveFullName('schedule.next_departure', 'w-1'));
+        // chip 里写 ${var:wall.id} → system:w-1/wall.id
+        expect(absoluteFullName(mkVar('system', 'wall.id'), 'w-1'))
+            .toBe(resolveFullName('wall.id', 'w-1'));
     });
 });

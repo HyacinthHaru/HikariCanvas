@@ -126,10 +126,18 @@ export const useScriptEditStore = defineStore('scriptEdit', () => {
     /**
      * 选中一条规则进入编辑：从 ScriptStore 深拷进 workingCopy，清 undo/redo + dirty。
      * 切规则前先 flush 上一条的待保存改动（避免丢更新）。不存在的 ruleId → no-op。
+     *
+     * <p><b>重复点当前规则 = 完全 no-op</b>。下面那段「深拷 server 镜像 + 清 undo/redo +
+     * 清 dirty」对同一条规则跑一遍，等于把手上还没落盘的改动直接扔掉，而且连 Ctrl+Z 都
+     * 撤不回来。丢失窗口不小：每次改动后的 800ms 自动保存防抖窗口内，以及校验没过、
+     * doSave 一直被挡住的整段时间（可以无限长）。规则列表点条目是唯一没做「已选中就跳过」
+     * 判断的入口，守卫放在 store 里，所有调用点一并覆盖。</p>
      */
     function selectRule(ruleId: string): void {
         const rule = scripts.get(ruleId);
         if (!rule) return;
+        // 重复点当前规则：什么都不做（workingCopy 为 null 说明状态不一致，照常重建）。
+        if (selectedRuleId.value === ruleId && workingCopy.value !== null) return;
         // 切到另一条规则前，先把上一条手上的脏改动落盘。
         if (selectedRuleId.value !== null && selectedRuleId.value !== ruleId) {
             // 有脏改动但校验不过：flushSave 会被 doSave 内的校验门拒绝，直接切走会

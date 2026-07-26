@@ -228,14 +228,30 @@ const elements = computed(() => project.state?.elements ?? []);
 
 // ---------- Live Paint ----------
 // 只在 paint-bucket 工具激活时跑 worker；切走时 useLivePaint 内部跳过 send + 清空 graph。
-// visibleElements 过滤 visible=false 的 element（隐藏图层 / 隐藏元素不参与 gap 计算）。
 const livePaintEnabled = computed(() => ui.activeTool === 'paint-bucket');
-// elements 指向 activeLayer.elements；活动层被隐藏时画布不渲染这些元素，
-// 故它们也不应参与 findElementAt / marquee / Live Paint gap 命中——与 useSnapManager
-// 的 `layer.visible && el.visible` 语义对齐（隐藏即不可交互）。
-const visibleElements = computed(() =>
-    project.activeLayer.visible === false ? [] : elements.value.filter((e) => e.visible !== false),
-);
+/**
+ * 油漆桶的输入 = 所有可见图层里的所有可见元素，按 z-order（图层数组顺序 = 从下到上，
+ * 与 PreviewRenderer 的 `for (const layer of state.layers)` 一致）。
+ *
+ * 这里<b>不能</b>用 `project.state.elements`：store 把它重定向成了 activeLayer.elements
+ * 同一引用，只有活动层。而画布是全层绘制的，于是别的图层上明明画着东西，
+ * 油漆桶算空隙时却当那里是空白——hover 蓝色高亮直接盖在别层图形上，点下去还会新建
+ * 一个路径元素压在人家上面。docs/architecture.md 里管线输入写的就是 visibleLayers。
+ *
+ * 隐藏的图层 / 元素不参与：画布上看不见的东西不该能被点中（与 useSnapManager
+ * 的 `layer.visible && el.visible` 语义一致）。
+ */
+const visibleElements = computed(() => {
+    const layers = project.state?.layers ?? [];
+    const out: Element[] = [];
+    for (const layer of layers) {
+        if (layer.visible === false) continue;
+        for (const el of layer.elements ?? []) {
+            if (el.visible !== false) out.push(el);
+        }
+    }
+    return out;
+});
 const livePaint = useLivePaint({
     elements: visibleElements,
     canvasWidth: widthPx,
@@ -369,6 +385,12 @@ const lasso = useLassoMask({
         ws.send('element.update', { elementId: img.id, patch: { mask } });
         // 乐观本地更新
         (img as unknown as Record<string, unknown>).mask = mask;
+    },
+    // 套索结果有问题时给用户一句话，否则表现就是"画完了没反应"
+    onError: (kind) => {
+        net.pushLog('meta', kind === 'too-few-points'
+            ? t.value.image.maskLassoMinPoints
+            : t.value.image.maskLassoSimplified);
     },
     drawingGuide: lassoGuide,
 });
@@ -610,9 +632,19 @@ interface StageEvt {
 function onStageMouseDown(ev: StageEvt): void {
     const node = ev.target;
     if (!node) return;
-    const isElementHit = node.hasName?.('element-hit') ?? false;
-    // drawTool 下 element-hit listening=false，target 实际是 stage 根，所以下面 isElementHit 必为 false
-    if (isElementHit) return;  // element 点击由 onHitClick 处理（仅 select/move 工具）
+    const stage = node.getStage?.();
+    if (!stage) return;
+    // 只有真正点在空白画布上才启动框选 / 绘制。
+    //
+    // 以前这里只排除带 element-hit 名字的命中矩形，可 Transformer 的锚点和边框不带这名字，
+    // 事件照样冒泡到 stage —— 拖锚点缩放时框选被同时启动；而 stage 的 mouseup 跑在
+    // window 兜底 marqueeCancel 之前，marqueeEnd 返回 click-empty 就把选中清空了。
+    // 表现就是"在锚点上点一下，选中没了"。Konva 官方 select 示例的守卫写法就是
+    // target !== stage，这里对齐：任何图形节点（命中矩形 / 锚点 / 边框）都不启动框选。
+    //
+    // 绘制工具 / hand / paint-bucket 下命中矩形整层 listening=false，target 本来就是 stage，
+    // 所以这条守卫不影响它们。
+    if ((node as unknown) !== (stage as unknown)) return;
 
     // alt / middle 让 outer onMouseDown 接管 pan
     const evt = ev.evt as MouseEvt | undefined;
@@ -621,7 +653,6 @@ function onStageMouseDown(ev: StageEvt): void {
     // hand 工具 / 按住 Space 临时切的 hand —— 左键交给 outer pan，不启动 marquee / draw。
     if (ui.activeTool === 'hand') return;
 
-    const stage = node.getStage?.();
     const pos = stage?.getPointerPosition?.();
     if (!pos) return;
 
@@ -733,6 +764,12 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
             net.pushLog('meta', t.value.livePaint.noGapFound);
             return;
         }
+        // 路径描述已经简化到容差上限还是超过服务端长度限制 —— 发出去必被拒。
+        // 与其让用户看到"高亮说能填、点了却只在日志里冒一条 err"，不如当场说清楚。
+        if (elementData.overBudget) {
+            net.pushLog('err', t.value.livePaint.gapTooComplex);
+            return;
+        }
 
         // element.add payload 结构 = { type, props, layerId }
         ws.send('element.add', {
@@ -758,6 +795,14 @@ function onPaintBucketClick(canvasX: number, canvasY: number): void {
     if (hitElement) {
         if (hitElement.locked) {
             net.pushLog('meta', t.value.livePaint.elementLocked);
+            return;
+        }
+        // 命中的元素可能在别的图层上（gap 图按所有可见图层建）。那个图层若被锁，
+        // 后端会回 LAYER_LOCKED，而错误只会落进日志抽屉——这里提前说清楚。
+        const owningLayer = (project.state?.layers ?? [])
+            .find((l) => (l.elements ?? []).some((e) => e.id === hitElement.id));
+        if (owningLayer?.locked) {
+            net.pushLog('meta', t.value.livePaint.layerLocked);
             return;
         }
         // 仅 4 种元素支持 fill 字段（任务约束）：rect / circle / shape / path

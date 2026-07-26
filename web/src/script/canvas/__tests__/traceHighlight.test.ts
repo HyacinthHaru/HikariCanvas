@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
     buildHighlightFrames,
+    highlightKey,
     createHighlightStepper,
     resultColorVar,
     STEP_INTERVAL_MS,
@@ -28,38 +29,38 @@ describe('resultColorVar — 结果态配色（K-UI-8）', () => {
 
 describe('buildHighlightFrames — 逐帧累积', () => {
     it('空 steps → 空帧', () => {
-        expect(buildHighlightFrames([])).toEqual([]);
+        expect(buildHighlightFrames([], 'r1')).toEqual([]);
     });
     it('N step → N 帧，第 i 帧含 steps[0..i]', () => {
         const steps = [step('trigger', 'ok'), step('actions/0', 'ok'), step('actions/1', 'skipped')];
-        const frames = buildHighlightFrames(steps);
+        const frames = buildHighlightFrames(steps, 'r1');
         expect(frames).toHaveLength(3);
         // 帧 0：只有 trigger
-        expect([...frames[0]]).toEqual([['trigger', 'ok']]);
+        expect([...frames[0]]).toEqual([[highlightKey('r1', 'trigger'), 'ok']]);
         // 帧 1：trigger + actions/0
-        expect(frames[1].get('trigger')).toBe('ok');
-        expect(frames[1].get('actions/0')).toBe('ok');
+        expect(frames[1].get(highlightKey('r1', 'trigger'))).toBe('ok');
+        expect(frames[1].get(highlightKey('r1', 'actions/0'))).toBe('ok');
         expect(frames[1].size).toBe(2);
         // 帧 2：全部三个
         expect(frames[2].size).toBe(3);
-        expect(frames[2].get('actions/1')).toBe('skipped');
+        expect(frames[2].get(highlightKey('r1', 'actions/1'))).toBe('skipped');
     });
     it('同一 blockId 被多步命中 → 后者覆盖', () => {
         const steps = [step('actions/0', 'ok'), step('actions/0', 'error')];
-        const frames = buildHighlightFrames(steps);
+        const frames = buildHighlightFrames(steps, 'r1');
         // 第 2 帧该 block 取 error（最后一次结果）
-        expect(frames[1].get('actions/0')).toBe('error');
+        expect(frames[1].get(highlightKey('r1', 'actions/0'))).toBe('error');
         expect(frames[1].size).toBe(1);
     });
     it('空 blockId 的 step 被跳过（不产帧）', () => {
         const steps = [step('', 'ok'), step('actions/0', 'ok')];
-        const frames = buildHighlightFrames(steps);
+        const frames = buildHighlightFrames(steps, 'r1');
         expect(frames).toHaveLength(1);
-        expect(frames[0].get('actions/0')).toBe('ok');
+        expect(frames[0].get(highlightKey('r1', 'actions/0'))).toBe('ok');
     });
     it('每帧是独立 Map 快照（改后帧不互相污染）', () => {
         const steps = [step('a', 'ok'), step('b', 'ok')];
-        const frames = buildHighlightFrames(steps);
+        const frames = buildHighlightFrames(steps, 'r1');
         frames[0].set('zzz', 'error'); // 改帧 0
         expect(frames[1].has('zzz')).toBe(false); // 帧 1 不受影响
     });
@@ -98,7 +99,7 @@ describe('createHighlightStepper — 注入 fake timer 步进', () => {
             clearTimer: ft.clearTimer,
         });
         const steps = [step('trigger', 'ok'), step('actions/0', 'blocked')];
-        stepper.start(steps);
+        stepper.start(steps, 'r1');
         // 第一帧立即应用（tick 同步执行一次）
         expect(applied).toHaveLength(1);
         expect(applied[0].size).toBe(1);
@@ -120,7 +121,7 @@ describe('createHighlightStepper — 注入 fake timer 步进', () => {
             setTimer: ft.setTimer,
             clearTimer: ft.clearTimer,
         });
-        stepper.start([]);
+        stepper.start([], 'r1');
         expect(applied).toHaveLength(1);
         expect(applied[0].size).toBe(0);
         expect(ft.pending()).toBe(0);
@@ -130,11 +131,11 @@ describe('createHighlightStepper — 注入 fake timer 步进', () => {
         const ft = fakeTimers();
         const apply = vi.fn();
         const stepper = createHighlightStepper({ apply, setTimer: ft.setTimer, clearTimer: ft.clearTimer });
-        stepper.start([step('a', 'ok'), step('b', 'ok'), step('c', 'ok')]);
+        stepper.start([step('a', 'ok'), step('b', 'ok'), step('c', 'ok')], 'r1');
         // 第一帧已 apply，队里有第 2 帧 timer
         expect(ft.pending()).toBe(1);
         // 重新 start 另一组：应清掉旧 timer，只留新轮的
-        stepper.start([step('x', 'ok'), step('y', 'ok')]);
+        stepper.start([step('x', 'ok'), step('y', 'ok')], 'r1');
         expect(ft.pending()).toBe(1); // 仍只有 1 个（旧的被清，新的排上）
     });
 
@@ -146,7 +147,7 @@ describe('createHighlightStepper — 注入 fake timer 步进', () => {
             setTimer: ft.setTimer,
             clearTimer: ft.clearTimer,
         });
-        stepper.start([step('a', 'ok'), step('b', 'ok')]);
+        stepper.start([step('a', 'ok'), step('b', 'ok')], 'r1');
         stepper.clear();
         // clear 后队列空（timer 被清）+ 最后一次 apply 是空 map
         expect(ft.pending()).toBe(0);
@@ -161,7 +162,7 @@ describe('createHighlightStepper — 注入 fake timer 步进', () => {
             setTimer: ft.setTimer,
             clearTimer: ft.clearTimer,
         });
-        stepper.start([step('a', 'ok'), step('b', 'ok')]);
+        stepper.start([step('a', 'ok'), step('b', 'ok')], 'r1');
         const before = applied.length;
         stepper.stop();
         expect(ft.pending()).toBe(0); // timer 停了

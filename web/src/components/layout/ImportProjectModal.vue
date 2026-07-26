@@ -15,16 +15,19 @@
  * <p>warning 渲染经 {@link warningText} 把后端 {@code kind} 翻成服主/玩家看得懂的大白话
  * （文案在 i18n {@code project.warn}，zh/en 镜像）；未知 kind 兜底回原始 detail。</p>
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { X, Upload, FileUp, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 import { useProjectImport } from '@/composables/useProjectImport';
+import { useProjectStore } from '@/stores/project';
 import type { ImportWarningDto } from '@/types/canvasFile';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const { t } = useI18n();
+/** 画板锁定时不许导入（导入会整块替换画布）。对话框可能开着的时候锁才落下，所以这里也判一次。 */
+const locked = computed(() => useProjectStore().isLocked);
 
 /** 处理阶段：idle 选文件 → confirm 二次确认 → importing → done / error。 */
 type Phase = 'idle' | 'confirm' | 'importing' | 'done' | 'error';
@@ -220,7 +223,8 @@ defineExpose({ doImport, acceptFile, warningText });
             @click="cancelConfirm"
           >{{ t.workshop.cancel }}</button>
           <button
-            class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90"
+            class="hc-btn px-3 py-1.5 text-xs rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 disabled:opacity-40"
+            :disabled="locked"
             @click="confirmImport"
           >{{ t.project.importTitle }}</button>
         </template>

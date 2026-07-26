@@ -124,11 +124,23 @@ export const useProjectStore = defineStore('project', () => {
         state.value.version = version;
     }
 
+    /**
+     * 按 id 找元素，<b>扫全部图层</b>。
+     *
+     * <p>不能只查 {@code state.elements}（那是 activeLayer.elements 的兼容视图）：切图层
+     * 不会清空选中态，Konva 的命中层也只铺活动层，于是「选中的元素在别的层」是常态。
+     * 只查活动层的话，属性面板会突然变空、方向键微移静默 no-op、复制悄悄漏掉元素、
+     * 时间轴加帧（useTimelineAuthoring 里 {@code if (!el) return}）静默失败。后端
+     * {@code elementExists} 本来就是扫全层的，两边对齐。</p>
+     */
     function elementById(id: string): Element | null {
-        if (!state.value) return null;
-        const elements = state.value.elements;
-        if (!elements) return null;
-        return elements.find((e) => e.id === id) ?? null;
+        const s = state.value;
+        if (!s || !s.layers) return null;
+        for (const layer of s.layers) {
+            const hit = (layer.elements ?? []).find((e) => e.id === id);
+            if (hit) return hit;
+        }
+        return null;
     }
 
     function layerById(id: string): Layer | null {

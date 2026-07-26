@@ -21,7 +21,7 @@
 import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon } from 'polygon-clipping';
 import type { BrushStrokeElement, Element, TextElement } from '@/types/protocol';
 import type { Polygon } from './types';
-import { brushStrokeToPolygon } from './BrushStrokeOffset';
+import { brushStrokeToPolygon, brushStrokeToMultiPolygon } from './BrushStrokeOffset';
 import { textElementToPolygon, textElementToMultiPolygon } from './TextGlyphExtractor';
 
 /** 椭圆采样点数。32 在 128 像素半径下视觉上几乎无棱角；更多会让 union 顶点爆炸。 */
@@ -178,6 +178,22 @@ export async function elementToMultiPolygonAsync(el: Element): Promise<PCMultiPo
             [textEl.x, textEl.y + textEl.h],
         ])];
         return [bbox];
+    }
+
+    // 笔触：走保留内孔的版本。画一个圈（闭合笔画）时 union 出来是个环形，
+    // 圈内空白是内孔——只取外环会把圈内算成占用区，用户点圈里填不上色。
+    if (el.type === 'brush') {
+        const brush = el as BrushStrokeElement;
+        const globalPts = (brush.points ?? []).map(p => ({ x: brush.x + p.x, y: brush.y + p.y }));
+        const multi = brushStrokeToMultiPolygon(globalPts, brush.size);
+        if (multi !== null && multi.length > 0) {
+            const rotation = (el.rotation ?? 0) % 360;
+            const rotated = rotation === 0
+                ? multi
+                : rotateMulti(multi, el.x + el.w / 2, el.y + el.h / 2, rotation);
+            return ensureClosedMulti(rotated);
+        }
+        // 退化（0 点 / size ≤ 0 / union 失败）→ 落到下面通用路径的 bbox 兜底
     }
 
     // 非 text → 走 sync 单 ring，包成 MultiPolygon

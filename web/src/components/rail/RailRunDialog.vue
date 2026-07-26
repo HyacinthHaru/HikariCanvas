@@ -51,6 +51,15 @@ const draftNotes = ref('');
 
 /** 时刻表 inline 编辑草稿 — 站点 id → { arrival, departure, stopsHere }。 */
 const timetableDraft = ref<Map<string, { arrival: string; departure: string; stopsHere: boolean }>>(new Map());
+/**
+ * 时刻表草稿有没有被改过、且还没保存。
+ *
+ * <p>基本信息和时刻表是两个独立的保存按钮，但 {@code watch(run, …)} 是整体重建草稿：点"保存
+ * 基本信息"后 store 换上服务端返回的新 run 对象 → computed 身份变 → watch 触发 → 时刻表草稿被
+ * store 里的<b>旧</b>时刻表整体覆盖，用户刚填的一屏时间不声不响就没了（在主 modal 里切线路
+ * 拉详情同理）。脏的时候就不重建时刻表那部分，等它自己保存完再说。</p>
+ */
+const timetableDirty = ref(false);
 
 const showAutoGenerate = ref(false);
 const autoFirst = ref('06:00:00');
@@ -86,7 +95,13 @@ function syncDraftFromStore() {
     draftEndId.value = r.endStationId ?? '';
     draftNotes.value = r.notes ?? '';
 
-    // 同步时刻表 draft（按当前 stations 顺序，缺失补空）
+    // 时刻表草稿有未保存的编辑 → 保留用户手上的内容，不用 store 的旧值盖掉。
+    if (timetableDirty.value) return;
+    syncTimetableFromStore();
+}
+
+/** 用 store 里的时刻表整体重建草稿（按当前 stations 顺序，缺失补空）。 */
+function syncTimetableFromStore() {
     const existing = rail.timetableOf(props.runId);
     const existingMap = new Map<string, RailTimetableEntry>();
     for (const e of existing) existingMap.set(e.stationId, e);
@@ -100,6 +115,16 @@ function syncDraftFromStore() {
         });
     }
     timetableDraft.value = next;
+    timetableDirty.value = false;
+}
+
+/** 改时刻表某站的一格：写草稿 + 标脏（标脏后 watch 不再拿 store 旧值盖掉它）。 */
+function editRow(
+    stationId: string,
+    patch: Partial<{ arrival: string; departure: string; stopsHere: boolean }>,
+): void {
+    Object.assign(getRow(stationId), patch);
+    timetableDirty.value = true;
 }
 
 async function saveBasic() {
@@ -144,6 +169,8 @@ async function saveTimetable() {
             departure: e.departure,
             stopsHere: e.stopsHere,
         })));
+        // 已落盘：草稿与 store 一致，解除保护（保存失败则保持脏，内容留着让用户重试）
+        timetableDirty.value = false;
     } catch (e) {
         error.value = (e as Error).message;
         net.pushLog('err', `rail.run.timetable.set rejected: ${(e as Error).message}`);
@@ -248,6 +275,8 @@ async function runAutoGenerate() {
         }
         // 未在区间内的站点保持原样
         timetableDraft.value = draft;
+        // 生成结果已同时写进服务端和 store，草稿与 store 一致 → 不算脏
+        timetableDirty.value = false;
         showAutoGenerate.value = false;
     } catch (e) {
         error.value = (e as Error).message;
@@ -451,6 +480,10 @@ function isValidTime(v: string): boolean {
         <section>
           <div class="flex items-center gap-1.5 mb-2">
             <span class="font-medium">{{ t.rail.timetable }}</span>
+            <!-- 未保存提示：时刻表和基本信息各存各的，容易点错按钮以为存过了 -->
+            <span v-if="timetableDirty" class="text-[10px] px-1.5 py-0.5 rounded bg-[color:var(--ctp-yellow)]/15 text-[color:var(--ctp-yellow,var(--foreground))]">
+              {{ t.rail.timetableUnsaved }}
+            </span>
             <button class="ml-auto hc-btn flex items-center gap-1 px-3 py-1 text-xs rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] hover:opacity-90 disabled:opacity-40"
                     :disabled="submitting"
                     @click="saveTimetable">
@@ -476,18 +509,18 @@ function isValidTime(v: string): boolean {
                   <input type="time" step="1" class="hc-input font-mono"
                          :class="isValidTime(getRow(s.id).arrival) ? '' : 'hc-input-error'"
                          :value="getRow(s.id).arrival"
-                         @input="(e: Event) => getRow(s.id).arrival = (e.target as HTMLInputElement).value" />
+                         @input="(e: Event) => editRow(s.id, { arrival: (e.target as HTMLInputElement).value })" />
                 </td>
                 <td class="py-1">
                   <input type="time" step="1" class="hc-input font-mono"
                          :class="isValidTime(getRow(s.id).departure) ? '' : 'hc-input-error'"
                          :value="getRow(s.id).departure"
-                         @input="(e: Event) => getRow(s.id).departure = (e.target as HTMLInputElement).value" />
+                         @input="(e: Event) => editRow(s.id, { departure: (e.target as HTMLInputElement).value })" />
                 </td>
                 <td class="py-1 text-center">
                   <input type="checkbox"
                          :checked="getRow(s.id).stopsHere"
-                         @change="(e: Event) => getRow(s.id).stopsHere = (e.target as HTMLInputElement).checked" />
+                         @change="(e: Event) => editRow(s.id, { stopsHere: (e.target as HTMLInputElement).checked })" />
                 </td>
               </tr>
             </tbody>

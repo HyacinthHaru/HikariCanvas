@@ -12,10 +12,11 @@
  * 拆分前 1076 行 god component。后续段还会继续往里塞东西，
  * 留薄壳让子组件迭代不影响其他段。
  */
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { useDebounceFn } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { useUiStore } from '@/stores/ui';
+import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
 import { Sliders, Trash2 } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
@@ -33,6 +34,7 @@ import type { Element, TextElement, RectElement, CircleElement, ShapeElement, Pa
 
 const project = useProjectStore();
 const ui = useUiStore();
+const net = useNetworkStore();
 const ws = getWsClient();
 const { t } = useI18n();
 
@@ -53,20 +55,63 @@ const isGeometric = computed(() => isRect.value || isCircle.value || isShape.val
 const isMulti = computed(() => ui.selectedCount >= 2);
 
 /**
+ * 待回滚的乐观更新：帧 id → 改之前的字段原值。
+ *
+ * <p>面板是"先改本地再发帧"。服务端拒收（{@code INVALID_PAYLOAD}，比如值超出
+ * ElementValidator 的范围）时，本地那份改动此前<b>既不回滚也不重拉</b>：浏览器显示新值、
+ * 游戏里还是旧值，双端一直分叉到下次全量快照，而错误只进了日志，用户全程无感。</p>
+ *
+ * <p>现在每帧记一份原值，收到同 id 的 INVALID_PAYLOAD 就把那几个字段还原回去，并把
+ * 服务端的说明写进状态栏的提示位。上限之类的越界值已经在各 Section 里夹过一道，这里兜的是
+ * 夹不住的情况（新字段、前后端范围不同步、后端加了新校验）。</p>
+ */
+const rollbackByOpId = new Map<string, { elementId: string; before: Record<string, unknown> }>();
+/** 最多留这么多帧的原值：够覆盖"发出去到错误回来"的窗口，又不至于无限涨。 */
+const MAX_ROLLBACK_ENTRIES = 32;
+
+/**
  * 立即发送（用于 boolean / color / select 之类"定型"变更）。
  *
  * <p>接受显式 elementId 以防止跨元素串写：当子组件 emit 触发时由外层捕获当前 id，
  * 不在执行时重读 selected.value——避免 80ms 防抖 flush 时用户已切换到另一元素的竞态。</p>
+ *
+ * <p>发出前先把要改的字段原值记进 {@link rollbackByOpId}，被拒时能原样还原。</p>
  */
 function sendUpdate(patch: Record<string, unknown>, elementId: string) {
     const el = project.elementById(elementId);
     if (!el) return;
-    // optimistic
-    for (const [k, v] of Object.entries(patch)) {
-        (el as unknown as Record<string, unknown>)[k] = v;
+    const record = el as unknown as Record<string, unknown>;
+    // 先留一份原值，再做乐观更新
+    const before: Record<string, unknown> = {};
+    for (const k of Object.keys(patch)) before[k] = record[k];
+    for (const [k, v] of Object.entries(patch)) record[k] = v;
+    const opId = ws.send('element.update', { elementId, patch });
+    if (opId === null) return; // socket 没开，压根没发出去
+    if (rollbackByOpId.size >= MAX_ROLLBACK_ENTRIES) {
+        const oldest = rollbackByOpId.keys().next();
+        if (!oldest.done) rollbackByOpId.delete(oldest.value);
     }
-    ws.send('element.update', { elementId, patch });
+    rollbackByOpId.set(opId, { elementId, before });
 }
+
+/**
+ * 服务端拒了某一帧 → 把那一帧的乐观更新还原。只认自己发的帧 id，不会误撤别人的改动。
+ * 非 INVALID_PAYLOAD（限流、会话关闭等）不回滚：那些是"没送到"，本地值本身并不违规，
+ * 等服务端下一次快照对齐即可。
+ */
+watch(() => net.lastOpError, (err) => {
+    if (!err || !err.opId) return;
+    const entry = rollbackByOpId.get(err.opId);
+    if (!entry) return;
+    rollbackByOpId.delete(err.opId);
+    if (err.code !== 'INVALID_PAYLOAD') return;
+    const el = project.elementById(entry.elementId);
+    if (!el) return;
+    const record = el as unknown as Record<string, unknown>;
+    for (const [k, v] of Object.entries(entry.before)) record[k] = v;
+    // 让用户看见"这次改动没生效"，而不是默默地两边不一样
+    net.lastError = err.message;
+});
 
 /**
  * 防抖包装：调用时捕获当前 selected 的 id，flush 时按该捕获 id 路由，

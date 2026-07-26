@@ -13,6 +13,35 @@
  * "—" 占位）。{@link mergeMetadata} 完成这一合并。</p>
  */
 import type { Variable } from '@/types/variable';
+import { resolveFullName } from '@/variable/interpolator';
+
+/**
+ * 一行变量在 store / 别名表里的<b>绝对</b> fullName（{@code namespace/key}，namespace 已含 wallId）。
+ *
+ * <p>为什么不能直接拼 {@code namespace/key}：metadata 端点下发的骨架行 namespace 是<b>相对</b>
+ * 形态（{@code schedule} / {@code system}），而同一个变量在 store 里叫
+ * {@code schedule:<wallId>/next_departure} / {@code system:<wallId>/wall.id}。别名表、变量面板、
+ * 文本里的 chip 用的都是绝对形态；picker 若按相对形态存别名，存完看着像成功，chip 和面板却永远
+ * 查不到。user 变量之所以没这个问题，是后端下发的 namespace 本来就带 wallId。</p>
+ *
+ * <p>归一化复用 {@link resolveFullName}（与 chip 同一个函数，口径天然一致）：先按
+ * {@code namespace/key} 试，再按裸 key 试（{@code system} 下的 {@code wall.id}，用户写法就是
+ * {@code ${var:wall.id}}）。两次都补不出 {@code namespace:wallId} 前缀，说明这个 namespace 本来
+ * 就是全服一份（{@code system/server.time} / {@code scoreboard/…} / {@code userglobal/…}），
+ * 字面形态即绝对形态。</p>
+ *
+ * @param wallId 当前 wall id；为空（无 wall 上下文）时一律退字面形态。
+ */
+export function absoluteFullName(v: Variable, wallId: string | null): string {
+    const literal = `${v.namespace}/${v.key}`;
+    // namespace 自带 :wallId（store 下发的 user:<wallId> 等）→ 已是绝对形态
+    if (v.namespace.includes(':')) return literal;
+    const byPair = resolveFullName(literal, wallId);
+    if (byPair.startsWith(`${v.namespace}:`)) return byPair;
+    const byKey = resolveFullName(v.key, wallId);
+    if (byKey.startsWith(`${v.namespace}:`)) return byKey;
+    return literal;
+}
 
 /**
  * 一组分类显示的变量。

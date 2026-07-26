@@ -45,7 +45,9 @@ export function useClipboard(): {
         const indexOf = new Map<string, number>();
         layerEls.forEach((el, i) => indexOf.set(el.id, i));
 
-        // 选中元素可能跨 layer（多选一般在 activeLayer 内，但保险起见用 elementById）
+        // 选中元素可能跨 layer（切层不清选中），所以取元素本身走 elementById——它扫全部
+        // 图层。上面那张 indexOf 只覆盖活动层，不在活动层的元素查不到 zIndex，
+        // 统一按 MAX_SAFE_INTEGER 排到末尾（跨层的相对 z-order 本来也没有单一定义）。
         const items: Array<{ el: Element; zIndex: number }> = [];
         for (const id of ids) {
             const el = project.elementById(id);

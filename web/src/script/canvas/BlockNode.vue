@@ -27,8 +27,8 @@ import { ref } from 'vue';
 import { defFor, FRIENDLY_ELEMENT_DEFS, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
-import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
-import { resultColorVar, type HighlightMap } from './traceHighlight';
+import { BLOCK_HIGHLIGHT_KEY, BLOCK_STACK_RULE_KEY, type HighlightInject } from './highlightInjection';
+import { highlightKey, resultColorVar, type HighlightMap } from './traceHighlight';
 import BlockParamInput, { type CommandValue } from '../params/BlockParamInput.vue';
 import ConditionBuilder from '../params/ConditionBuilder.vue';
 import EasingCurveEditor from '@/components/timeline/EasingCurveEditor.vue';
@@ -55,6 +55,11 @@ const EMPTY_HIGHLIGHT: HighlightInject = {
     details: ref<Map<string, string>>(new Map()),
 };
 const highlight = inject(BLOCK_HIGHLIGHT_KEY, EMPTY_HIGHLIGHT);
+/**
+ * 本块所属规则 id（BlockStack provide）。高亮 map 是整块画布共用的，key 里必须带规则 id，
+ * 否则试跑一条规则会把别的堆里同路径的积木一起点亮。单独 mount 时为 null → 查不到高亮。
+ */
+const stackRuleId = inject(BLOCK_STACK_RULE_KEY, null);
 
 /**
  * 块根 pointerdown：启动"拖已有块"。只接管主键（左键）。ruleId 从最近祖先 [data-rule-id] 现取
@@ -209,10 +214,18 @@ const isRunCommand = computed(() => props.action.type === 'runCommand');
 
 // ---------- H：试跑高亮（按本块 path 查高亮 map）----------
 
+/** 本块在高亮 map 里的 key（规则 id + path）；没有规则上下文时为 null = 永远查不到。 */
+const ownHighlightKey = computed(() =>
+    stackRuleId?.value ? highlightKey(stackRuleId.value, props.path) : null,
+);
 /** 本块的试跑结果态（未命中 → undefined，不高亮）。 */
-const highlightResult = computed(() => highlight.results.value.get(props.path));
+const highlightResult = computed(() =>
+    ownHighlightKey.value === null ? undefined : highlight.results.value.get(ownHighlightKey.value),
+);
 /** 本块的 trace detail 文案（作 title 提示；无则 undefined）。 */
-const highlightDetail = computed(() => highlight.details.value.get(props.path));
+const highlightDetail = computed(() =>
+    ownHighlightKey.value === null ? undefined : highlight.details.value.get(ownHighlightKey.value),
+);
 /**
  * 高亮态的边框色：命中 step 时用结果色（ok=green/skipped=overlay/blocked=yellow/error=red），
  * 否则用 def 的 category 色条色（与原静态渲染一致）。

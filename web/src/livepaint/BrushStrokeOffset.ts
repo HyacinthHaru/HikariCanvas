@@ -13,8 +13,13 @@
  *   3. 端点（首尾）：圆形 cap（半圆 16 段采样）
  *   4. 接头（内部点）：round join（圆弧 8 段采样，外侧凸角）—— 简化为完整圆盘
  *      让 union 自动处理凸/凹两侧（圆盘是凸的，与两边矩形 union 自然贴合）
- *   5. polygon-clipping union(...) 合并 → 单外环 polygon（不含 hole；brush stroke
- *      不可能产生 hole，self-intersection 也是 stroke 局部交叠）
+ *   5. polygon-clipping union(...) 合并
+ *
+ * <p><b>笔画是会有洞的</b>：画一个圈（首尾接上的闭合笔画）时，union 结果就是一个带内孔的
+ * 环形。早先这里只取 poly[0] 外环、注释还写着"brush stroke 不可能产生 hole"，
+ * 于是圈里的空白被算成占用区 —— 用户画个圈想给圈里填色，油漆桶找不到空隙，
+ * 转而走"点元素内部改填充"，而笔触又不支持填充，最后只得到一句"不支持"。
+ * {@link brushStrokeToMultiPolygon} 保留全部 ring（外环 + 内孔）给上游。</p>
  *
  * 性能：
  *   - 长 brush 经 RDP 简化到 ≤ 80 顶点 → ~80 个 segment + 81 个圆盘 join + 2 caps
@@ -24,11 +29,10 @@
  * 退化处理：
  *   - 0 点 / size ≤ 0 → null（caller fallback bbox）
  *   - polygon-clipping union 抛错 → null
- *   - union 输出 multipoly（多外环）→ 只取面积最大的（不可能但防御）
  */
 
 import polygonClipping from 'polygon-clipping';
-import type { Pair, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
+import type { Pair, MultiPolygon as PCMultiPolygon, Polygon as PCPolygon, Ring as PCRing } from 'polygon-clipping';
 import type { Polygon } from './types';
 import { rdpSimplify } from './RdpSimplifier';
 
@@ -45,16 +49,17 @@ export const CAP_SAMPLES = 16;
 export const JOIN_SAMPLES = 16;
 
 /**
- * 主入口：brush 采样点 + 基础宽度 → 真实笔画 polygon。
+ * 主入口：brush 采样点 + 基础宽度 → 真实笔画形状，<b>保留内孔</b>。
  *
  * @param points BrushPoint[]，坐标须已加上 (element.x, element.y) 偏移转全局
  * @param size BrushStrokeElement.size（基础宽度 px，半径 = size / 2）
- * @returns 单 ring polygon（首点不复制）；null = 退化输入 / union 失败
+ * @returns polygon-clipping MultiPolygon（每个 polygon = [外环, 内孔…]，ring 已闭合）；
+ *          null = 退化输入 / union 失败
  */
-export function brushStrokeToPolygon(
+export function brushStrokeToMultiPolygon(
     points: Array<{ x: number; y: number }>,
     size: number,
-): Polygon | null {
+): PCMultiPolygon | null {
     if (!Number.isFinite(size) || size <= 0) return null;
     if (!points || points.length === 0) return null;
 
@@ -72,7 +77,7 @@ export function brushStrokeToPolygon(
 
     // 单点：直接返回圆盘
     if (cleanPoints.length === 1) {
-        return diskPolygon(cleanPoints[0][0], cleanPoints[0][1], r, JOIN_SAMPLES);
+        return singleDiskMulti(cleanPoints[0][0], cleanPoints[0][1], r);
     }
 
     // 预处理：去重连续重合点（防止 segment 长度 0 导致 NaN 法向）
@@ -85,7 +90,7 @@ export function brushStrokeToPolygon(
         }
     }
     if (dedup.length === 1) {
-        return diskPolygon(dedup[0][0], dedup[0][1], r, JOIN_SAMPLES);
+        return singleDiskMulti(dedup[0][0], dedup[0][1], r);
     }
 
     // RDP 简化（长 brush 性能优化）
@@ -102,7 +107,7 @@ export function brushStrokeToPolygon(
         }
     }
     if (pts.length === 1) {
-        return diskPolygon(pts[0][0], pts[0][1], r, JOIN_SAMPLES);
+        return singleDiskMulti(pts[0][0], pts[0][1], r);
     }
 
     // 构造小 polygon 集合：每 segment 矩形 + 每内部接头圆盘 + 首尾端点圆盘（圆盘同时充当 cap + join）
@@ -151,36 +156,68 @@ export function brushStrokeToPolygon(
         return null;
     }
 
-    // 输出为 MultiPolygon = Array<Polygon = Array<Ring>>
-    // brush stroke union 理论上只产生 1 个 polygon（连续笔触）
-    // 但 RDP 简化或浮点精度可能让 union 分裂成多个 — 选面积最大的外环
+    // 输出为 MultiPolygon = Array<Polygon = Array<Ring>>；库约定每个 polygon 的
+    // ring[0] = 外环、ring[1..] = 内孔。<b>内孔必须原样带走</b>：闭合笔画（画个圈）
+    // 的圈内空白就藏在这些 ring 里，丢了它上游就会把圈内当成占用区。
     if (!merged || merged.length === 0) return null;
 
-    let bestRing: PCRing | null = null;
-    let bestArea = -1;
+    const out: PCMultiPolygon = [];
     for (const poly of merged) {
         if (poly.length === 0) continue;
-        const ring = poly[0]; // outer ring（库约定第一个 ring = outer）
-        const polyOut = fromPCRing(ring);
-        if (polyOut.length < 3) continue;
-        const area = polygonArea(polyOut);
+        const rings: PCPolygon = [];
+        for (const ring of poly) {
+            const cleaned = fromPCRing(ring);
+            // 少于 3 个顶点的 ring 是浮点噪声，留着只会让下游 union 更容易退化
+            if (cleaned.length < 3) continue;
+            let finite = true;
+            for (const [x, y] of cleaned) {
+                if (!Number.isFinite(x) || !Number.isFinite(y)) { finite = false; break; }
+            }
+            if (!finite) return null;
+            rings.push(closeRing(toPCRing(cleaned)));
+        }
+        // 外环没了就整块丢（只剩孤立内孔没有意义）
+        if (rings.length > 0) out.push(rings);
+    }
+    return out.length > 0 ? out : null;
+}
+
+/**
+ * 兼容入口：只要笔画的外轮廓（面积最大那块的外环）。
+ *
+ * <p>同步命中检测（CanvasView.findElementAt）用它。那条路径只在"点击处不属于任何空隙"
+ * 时才走到，闭合笔画的圈内空白修好之后会被判成空隙、走不到这里，所以外环够用。</p>
+ *
+ * @returns 单 ring polygon（首点不复制）；null = 退化输入 / union 失败
+ */
+export function brushStrokeToPolygon(
+    points: Array<{ x: number; y: number }>,
+    size: number,
+): Polygon | null {
+    const multi = brushStrokeToMultiPolygon(points, size);
+    if (multi === null) return null;
+
+    let best: Polygon | null = null;
+    let bestArea = -1;
+    for (const poly of multi) {
+        if (poly.length === 0) continue;
+        const outer = fromPCRing(poly[0]);
+        if (outer.length < 3) continue;
+        const area = polygonArea(outer);
         if (area > bestArea) {
             bestArea = area;
-            bestRing = ring;
+            best = outer;
         }
     }
-    if (bestRing === null) return null;
-    const outer = fromPCRing(bestRing);
-    if (outer.length < 3) return null;
-
-    // 出口校验
-    for (const [x, y] of outer) {
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    }
-    return outer;
+    return best;
 }
 
 // ---------- helpers ----------
+
+/** 单点笔触退化成一个圆盘；包成 MultiPolygon 形态返回。 */
+function singleDiskMulti(cx: number, cy: number, r: number): PCMultiPolygon {
+    return [[closeRing(toPCRing(diskPolygon(cx, cy, r, JOIN_SAMPLES)))]];
+}
 
 /**
  * 生成圆形 polygon（绕 (cx, cy) 半径 r，samples 段采样）。首点不复制末点。

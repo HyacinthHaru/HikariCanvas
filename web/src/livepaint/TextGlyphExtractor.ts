@@ -80,7 +80,13 @@ interface FontkitFont {
 }
 
 interface FontkitModule {
-    create(buffer: ArrayBuffer | Uint8Array): FontkitFont;
+    /**
+     * 只能传 {@code Uint8Array}（或别的 TypedArray）。fontkit 内部把它交给 restructure 的
+     * DecodeStream，那里直接 {@code new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)}
+     * ——裸 ArrayBuffer 没有 {@code .buffer} 属性，会抛 TypeError。签名故意不写
+     * {@code ArrayBuffer}，免得又有人把 {@code res.arrayBuffer()} 的结果直接递进来。
+     */
+    create(buffer: Uint8Array): FontkitFont;
 }
 
 // ---------- fontkit 模块 / 字体 cache ----------
@@ -140,7 +146,13 @@ async function loadFontkit(): Promise<FontkitModule> {
     return fontkitModulePromise;
 }
 
-/** fetch + parse 单个字体；缓存按 fontId。失败返 null。 */
+/**
+ * fetch + parse 单个字体；缓存按 fontId。失败返 null。
+ *
+ * <p><b>失败不留在缓存里</b>：一次网络抖动、或后端字体还没注册完的那个窗口期返 404，
+ * 不该把这个字体钉死到 worker 重建为止（下次 Live Paint 只能拿 bbox 兜底）。
+ * 拿到 null 就把条目摘掉，下次点击重试。</p>
+ */
 function loadFont(fontId: string): Promise<FontkitFont | null> {
     const existing = fontCache.get(fontId);
     if (existing) return existing;
@@ -151,7 +163,11 @@ function loadFont(fontId: string): Promise<FontkitFont | null> {
             if (!res.ok) return null;
             const buf = await res.arrayBuffer();
             const fk = await loadFontkit();
-            const font = fk.create(buf);
+            // 必须包成 Uint8Array：fontkit 走 restructure 的 DecodeStream，那里拿
+            // buffer.buffer / byteOffset 建 DataView，裸 ArrayBuffer 会抛
+            // "First argument to DataView constructor must be an ArrayBuffer"，
+            // 被下面的 catch 吞成 null —— 结果是所有文字的 Live Paint 都静默退化成 bbox。
+            const font = fk.create(new Uint8Array(buf));
             return font ?? null;
         } catch (e) {
             if (typeof console !== 'undefined' && import.meta.env && import.meta.env.DEV) {
@@ -161,6 +177,10 @@ function loadFont(fontId: string): Promise<FontkitFont | null> {
         }
     })();
     fontCache.set(fontId, p);
+    void p.then((font) => {
+        // 只在这条 promise 仍是当前缓存时摘，别误删后来重新发起的那次。
+        if (font === null && fontCache.get(fontId) === p) fontCache.delete(fontId);
+    });
     return p;
 }
 
@@ -187,7 +207,9 @@ export async function textElementToPolygon(textEl: TextElement): Promise<Polygon
     if (cached === undefined) {
         // 走 multi 路径再降级为"面积最大外环"——避免与 textElementToMultiPolygon 重复
         // 跑昂贵的 fontkit layout + union。
-        const multi = await getOrComputeMultiLayout(textEl);
+        const { multi, cacheable } = await getOrComputeMultiLayout(textEl);
+        // 字体这次没拿到时不写缓存：那是"暂时取不到字体"，不是"这段文字没形状"。
+        if (!cacheable) return null;
         cached = multi === null ? null : pickLargestOuterRing(multi);
         // LRU 简单实现：超阈值清最早 entry
         if (polygonCache.size >= POLYGON_CACHE_MAX) {
@@ -227,7 +249,7 @@ export async function textElementToMultiPolygon(textEl: TextElement): Promise<PC
     if (!textEl.text || textEl.text.trim().length === 0) return null;
     if (!Number.isFinite(textEl.fontSize) || textEl.fontSize <= 0) return null;
 
-    const multi = await getOrComputeMultiLayout(textEl);
+    const { multi } = await getOrComputeMultiLayout(textEl);
     if (multi === null) return null;
 
     // 平移到全局坐标（每 ring 每点 +offset）
@@ -250,22 +272,34 @@ export async function textElementToMultiPolygon(textEl: TextElement): Promise<PC
     return out.length === 0 ? null : out;
 }
 
+/** {@link getOrComputeMultiLayout} 的返回：结果 + 这个结果值不值得进缓存。 */
+interface LayoutLookup {
+    /** 算出来的 MultiPolygon；null = 这段文字没有可用形状（或字体没取到）。 */
+    multi: PCMultiPolygon | null;
+    /**
+     * false = 这次是因为字体没取到才 null，别缓存。
+     * 缓存了会把退化状态钉死在这条 cache key 上：字体后来恢复了，这段文字也永远走 bbox 兜底。
+     */
+    cacheable: boolean;
+}
+
 /**
  * 内部：取或算 MultiPolygon layout cache（以 (0,0) 为原点）。失败 / 空 → null。
  * 与 polygonCache 共用同 key（fontId|size|text|letterSpacing|lineHeight）。
  */
-async function getOrComputeMultiLayout(textEl: TextElement): Promise<PCMultiPolygon | null> {
+async function getOrComputeMultiLayout(textEl: TextElement): Promise<LayoutLookup> {
     const key = buildLayoutCacheKey(textEl);
     if (multiPolygonCache.has(key)) {
-        return multiPolygonCache.get(key) ?? null;
+        return { multi: multiPolygonCache.get(key) ?? null, cacheable: true };
     }
-    const result = await computeLayoutMultiPolygon(textEl);
+    const { multi, fontMissing } = await computeLayoutMultiPolygon(textEl);
+    if (fontMissing) return { multi: null, cacheable: false };
     if (multiPolygonCache.size >= POLYGON_CACHE_MAX) {
         const firstKey = multiPolygonCache.keys().next().value;
         if (firstKey !== undefined) multiPolygonCache.delete(firstKey);
     }
-    multiPolygonCache.set(key, result);
-    return result;
+    multiPolygonCache.set(key, multi);
+    return { multi, cacheable: true };
 }
 
 /**
@@ -317,9 +351,12 @@ function pickLargestOuterRing(multi: PCMultiPolygon): Polygon | null {
  * bold (effects.stroke / textEl.bold) 让视觉 outline 比 path 大几 px，v1 接受不完美——
  * polygon 是 glyph path 本身的 outline，bold 几 px 误差小于 hole 半径 6 px，可接受。
  */
-async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPolygon | null> {
+async function computeLayoutMultiPolygon(
+    textEl: TextElement,
+): Promise<{ multi: PCMultiPolygon | null; fontMissing: boolean }> {
     const font = await loadFont(textEl.fontId);
-    if (!font) return null;
+    // 字体没取到要单独告诉调用方：它跟"这段文字算出来就是空的"不一样，不能缓存。
+    if (!font) return { multi: null, fontMissing: true };
     const unitsPerEm = font.unitsPerEm || 1000;
     const fontSize = textEl.fontSize;
     /** font design units → pixel 缩放 */
@@ -332,10 +369,10 @@ async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPo
     //
     // vertical 模式在 textElementToPolygon / textElementToMultiPolygon 入口已早退，
     // 这里再做一次防御保险。
-    if (textEl.vertical) return null;
+    if (textEl.vertical) return { multi: null, fontMissing: false };
     const layoutInput: TextElement = { ...textEl, x: 0, y: 0 };
     const positioned = layoutText(layoutInput);
-    if (positioned.length === 0) return null;
+    if (positioned.length === 0) return { multi: null, fontMissing: false };
 
     const italic = textEl.italic === true;
 
@@ -387,7 +424,7 @@ async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPo
         }
     }
 
-    if (subPolygons.length === 0) return null;
+    if (subPolygons.length === 0) return { multi: null, fontMissing: false };
 
     let merged: ReturnType<typeof polygonClipping.union>;
     try {
@@ -396,9 +433,9 @@ async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPo
         if (typeof console !== 'undefined' && import.meta.env && import.meta.env.DEV) {
             console.warn('[TextGlyphExtractor] union failed:', e);
         }
-        return null;
+        return { multi: null, fontMissing: false };
     }
-    if (!merged || merged.length === 0) return null;
+    if (!merged || merged.length === 0) return { multi: null, fontMissing: false };
 
     // 返完整 MultiPolygon = Polygon[] = Ring[][]
     //   - 每 Polygon = [outerRing, hole1, hole2, ...]
@@ -425,7 +462,7 @@ async function computeLayoutMultiPolygon(textEl: TextElement): Promise<PCMultiPo
         }
         if (cleanPoly.length > 0) out.push(cleanPoly);
     }
-    return out.length === 0 ? null : out;
+    return { multi: out.length === 0 ? null : out, fontMissing: false };
 }
 
 /**

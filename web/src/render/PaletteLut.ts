@@ -159,8 +159,20 @@ let lutPromise: Promise<PaletteLut> | null = null;
  * 首次调 fetch + 构建；之后返回缓存 promise。
  * 构建耗时 ~1-3s（单线程遍历 8M 格 × 248 palette）；由于只跑一次，放 main thread 可接受。
  * 可迁到 Web Worker 避免首帧阻塞。
+ *
+ * <p><b>失败不留缓存</b>：reject 时把 {@link lutPromise} 置回 null。留着的话后续每次调用
+ * 拿到的都是同一个已经 reject 的 promise——立刻 reject、永远不再发第二次 fetch。
+ * {@code /api/palette} 只要在后端启动窗口或网络抖动时失败一次，整页生命周期内所有
+ * dither 元素就都降级成 clean 渲染，浏览器预览与游戏内的抖动像素持续对不上，
+ * 只有整页刷新能恢复。</p>
  */
 export function getPaletteLut(): Promise<PaletteLut> {
-    if (!lutPromise) lutPromise = PaletteLut.loadFromEndpoint();
-    return lutPromise;
+    if (lutPromise) return lutPromise;
+    const p: Promise<PaletteLut> = PaletteLut.loadFromEndpoint().catch((e) => {
+        // 只在自己仍是当前缓存时清，别把后来别人重新发起的那次误伤了。
+        if (lutPromise === p) lutPromise = null;
+        throw e;
+    });
+    lutPromise = p;
+    return p;
 }

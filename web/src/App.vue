@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { defineAsyncComponent, onMounted, ref, watch } from 'vue';
-import { useEventListener } from '@vueuse/core';
+import { useDebounceFn, useEventListener } from '@vueuse/core';
 import TopBar from '@/components/layout/TopBar.vue';
 import LeftTools from '@/components/layout/LeftTools.vue';
 import CanvasView from '@/components/layout/CanvasView.vue';
@@ -20,6 +20,7 @@ import { useProjectStore } from '@/stores/project';
 import { useVariableStore } from '@/stores/variables';
 import { useTimelineStore } from '@/stores/timeline';
 import { createWsClient, pickInitialToken } from '@/network/wsClient';
+import { createNudgeQueue } from '@/composables/nudgeQueue';
 import { setUploadAuthProvider, setVariableContextProvider } from '@/render/PreviewRenderer';
 
 const ui = useUiStore();
@@ -76,6 +77,27 @@ watch(() => project.lastAddedElementId, (id) => {
         project.lastAddedElementId = null;
     }
 });
+
+// ---------- 方向键微移：本地累积 + 松手后一次提交 ----------
+
+/**
+ * 方向键微移走"本地累积 + 松手提交"，不再每次 keydown 发一帧（见 {@link createNudgeQueue}
+ * 头注：按住方向键会被后端限流丢帧、甚至被 1008 断连踢下线）。与画布拖动同一纪律。
+ */
+const nudgeQueue = createNudgeQueue({
+    getElement: (id) => project.elementById(id) ?? null,
+    send: (id, x, y) => { wsClient.send('element.transform', { elementId: id, x, y }); },
+});
+
+/** 兜底：一直按着不松手（键盘自动重复不产生 keyup）时也要把落点发出去。 */
+const flushNudgeDebounced = useDebounceFn(() => nudgeQueue.flush(), 200);
+
+// 松开方向键 = 一次微移结束，立刻提交落点（不用等防抖）。
+useEventListener(document, 'keyup', (e: KeyboardEvent) => {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) nudgeQueue.flush();
+});
+// 切走窗口时 keyup 可能永远收不到，兜一手。
+useEventListener(window, 'blur', () => nudgeQueue.flush());
 
 // 全局快捷键。跳过 input/textarea/contenteditable 以免 typing 时误触
 useEventListener(document, 'keydown', (e: KeyboardEvent) => {
@@ -144,30 +166,6 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     }
 
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        // 多选时所有选中 element 同步微移
-        if (ui.selectedCount > 1) {
-            e.preventDefault();
-            const step = e.shiftKey ? 10 : 1;
-            let dx = 0;
-            let dy = 0;
-            if (e.key === 'ArrowLeft') dx = -step;
-            else if (e.key === 'ArrowRight') dx = step;
-            else if (e.key === 'ArrowUp') dy = -step;
-            else if (e.key === 'ArrowDown') dy = step;
-            for (const id of ui.selectedIds) {
-                const el = project.elementById(id);
-                if (!el) continue;
-                const newX = el.x + dx;
-                const newY = el.y + dy;
-                el.x = newX; el.y = newY;
-                wsClient.send('element.transform', { elementId: id, x: newX, y: newY });
-            }
-            return;
-        }
-        if (!selectedId) return;
-        const el = project.elementById(selectedId);
-        if (!el) return;
-        e.preventDefault();
         const step = e.shiftKey ? 10 : 1;
         let dx = 0;
         let dy = 0;
@@ -175,11 +173,19 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
         else if (e.key === 'ArrowRight') dx = step;
         else if (e.key === 'ArrowUp') dy = -step;
         else if (e.key === 'ArrowDown') dy = step;
-        const newX = el.x + dx;
-        const newY = el.y + dy;
-        el.x = newX;
-        el.y = newY;
-        wsClient.send('element.transform', { elementId: selectedId, x: newX, y: newY });
+
+        // 多选时所有选中 element 同步微移
+        if (ui.selectedCount > 1) {
+            e.preventDefault();
+            for (const id of ui.selectedIds) nudgeQueue.nudge(id, dx, dy);
+            flushNudgeDebounced();
+            return;
+        }
+        if (!selectedId) return;
+        if (!project.elementById(selectedId)) return;
+        e.preventDefault();
+        nudgeQueue.nudge(selectedId, dx, dy);
+        flushNudgeDebounced();
     }
 });
 </script>

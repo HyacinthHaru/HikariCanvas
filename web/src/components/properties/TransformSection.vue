@@ -16,6 +16,7 @@ import { useDebounceFn } from '@vueuse/core';
 import { HelpCircle } from 'lucide-vue-next';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useI18n } from '@/i18n';
+import { MAX_COORD, MAX_DIM, clampNumber } from '@/constants/elementLimits';
 import type { Element } from '@/types/protocol';
 
 interface Props {
@@ -35,14 +36,27 @@ function onBoolChange(field: 'visible' | 'locked', ev: Event) {
     emit('update', { [field]: v });
 }
 
+/**
+ * 笔刷（brush）的宽高是采样点算出来的派生值，不是可写字段——后端
+ * {@code EditSession.applyBrushPatch} 的字段表里压根没有 w/h，发过去必被拒
+ * （INVALID_PAYLOAD），而前端已经乐观改过尺寸，于是编辑器显示缩放后的样子、游戏里纹丝不动。
+ * 所以这两个输入框对笔刷直接禁用（x/y/rotation 是支持的，照常可改）。
+ * 画布上的缩放手柄也已经对笔刷关掉，两处口径一致。
+ */
+const isBrush = computed(() => props.element.type === 'brush');
+
 function onNumberChange(field: string, ev: Event) {
     let v = parseFloat((ev.target as HTMLInputElement).value);
     if (!Number.isFinite(v)) return;
     if (field === 'rotation') v = ((Math.round(v) % 360) + 360) % 360;
-    // w/h JS 层下限钳位。HTML `min="1"` 只约束 spinner/validity，不阻止手动键入负数；
-    // 负 w/h 乐观本地 mutate 后 PreviewRenderer.drawCircle/drawShape 收到负半径会抛
-    // IndexSizeError 中断整帧（后端 ElementValidator 也拒 v<=0，落地前先护住本地帧）。
-    if (field === 'w' || field === 'h') v = Math.max(1, v);
+    // HTML 的 min/max 只约束上下箭头和表单校验，手输 / 粘贴照样能塞任意数进来，
+    // 所以范围必须在 JS 这层夹死：
+    // - w/h 夹到 [1, MAX_DIM]。负半径会让 PreviewRenderer.drawCircle/drawShape 抛
+    //   IndexSizeError 直接中断整帧；超上限则被后端 ElementValidator 拒收，而拒收后
+    //   浏览器按新值画、游戏里还是旧值，双端就此分叉。
+    // - x/y 夹到 ±MAX_COORD，同样是后端的硬边界。
+    if (field === 'w' || field === 'h') v = clampNumber(v, 1, MAX_DIM);
+    if (field === 'x' || field === 'y') v = clampNumber(v, -MAX_COORD, MAX_COORD);
     emit('updateDebounced', { [field]: v });
 }
 
@@ -91,7 +105,8 @@ function onOpacityChange(): void {
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
         </span>
-        <input type="number" class="hc-input" :value="element.x" @input="(e) => onNumberChange('x', e)">
+        <input type="number" :min="-MAX_COORD" :max="MAX_COORD" class="hc-input" :value="element.x"
+               @input="(e) => onNumberChange('x', e)">
       </label>
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
@@ -100,25 +115,30 @@ function onOpacityChange(): void {
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
         </span>
-        <input type="number" class="hc-input" :value="element.y" @input="(e) => onNumberChange('y', e)">
+        <input type="number" :min="-MAX_COORD" :max="MAX_COORD" class="hc-input" :value="element.y"
+               @input="(e) => onNumberChange('y', e)">
       </label>
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
           w
-          <Tooltip :text="t.properties.sizeTip">
+          <Tooltip :text="isBrush ? t.properties.brushSizeReadonlyTip : t.properties.sizeTip">
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
         </span>
-        <input type="number" min="1" class="hc-input" :value="element.w" @input="(e) => onNumberChange('w', e)">
+        <input type="number" min="1" :max="MAX_DIM" class="hc-input" :value="element.w"
+               :disabled="isBrush" :class="isBrush ? 'opacity-60 cursor-not-allowed' : ''"
+               @input="(e) => onNumberChange('w', e)">
       </label>
       <label class="flex flex-col gap-0.5">
         <span class="hc-field-label">
           h
-          <Tooltip :text="t.properties.sizeTip">
+          <Tooltip :text="isBrush ? t.properties.brushSizeReadonlyTip : t.properties.sizeTip">
             <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
           </Tooltip>
         </span>
-        <input type="number" min="1" class="hc-input" :value="element.h" @input="(e) => onNumberChange('h', e)">
+        <input type="number" min="1" :max="MAX_DIM" class="hc-input" :value="element.h"
+               :disabled="isBrush" :class="isBrush ? 'opacity-60 cursor-not-allowed' : ''"
+               @input="(e) => onNumberChange('h', e)">
       </label>
       <label class="flex flex-col gap-0.5 col-span-2">
         <span class="hc-field-label">

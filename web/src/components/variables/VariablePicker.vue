@@ -25,6 +25,7 @@ import { useVariableStore } from '@/stores/variables';
 import { useVariableAliasStore } from '@/stores/variableAliases';
 import { useI18n } from '@/i18n';
 import {
+    absoluteFullName,
     buildGroups,
     displayName,
     flattenGroups,
@@ -93,8 +94,12 @@ const groupTitleMap = computed<Record<PickerGroup['id'], string>>(() => ({
     papi: t.value.variables.picker.groupPapi,
 }));
 
+/**
+ * 这一行在别名表里的 key —— 必须是变量在 store 里的<b>绝对</b> fullName
+ * （见 {@link absoluteFullName}：骨架行的 namespace 是相对形态，直接拼会让别名永远查不到）。
+ */
 function variableFullName(v: Variable): string {
-    return `${v.namespace}/${v.key}`;
+    return absoluteFullName(v, props.wallId);
 }
 
 function aliasOf(v: Variable): string | null {

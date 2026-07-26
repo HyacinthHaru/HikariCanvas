@@ -21,8 +21,14 @@ import type { ImageElement, Mask } from '@/types/protocol';
  * 末尾 {@code Z}。
  *
  * <h3>简化</h3>
- * pointer move 收集的原始点串往往 100+ 顶点，远超 PathDValidator 顶点上限。用
- * {@link rdpSimplify} 阶梯化简（容差 1, 2, 4, 8）直到 ≤ 200 顶点。
+ * pointer move 收集的原始点串往往 100+ 顶点，用 {@link rdpSimplify} 阶梯化简
+ * （容差逐级翻倍）直到不超过 {@link MAX_VERTICES}。
+ *
+ * <p><b>上限必须是 64</b>：服务端蒙版走 ElementValidator.validateMaskPathBounds，
+ * 数 d 里的 M/L/Q/C 命令个数，超过 64 直接 INVALID_PAYLOAD。这与 PathDValidator 给
+ * 普通路径的 240 是两套限制，别混。以前这里写 200，于是稍微复杂点的自由套索
+ * 简化完还有七八十个点，element.update 100% 被服务端拒绝，而前端没有任何提示 ——
+ * 用户看到的现象就是"画完了，没反应"。</p>
  *
  * <h3>退出</h3>
  * pointer up / pointercancel / window blur / Alt 松开（drawing 中途）→ 终止绘制。
@@ -34,12 +40,28 @@ import type { ImageElement, Mask } from '@/types/protocol';
  *   <li>{@code clientToCanvasLocal}：把屏幕坐标转换为 element 局部坐标 [0..w, 0..h]，
  *     超出 element bbox 时返 null（用于 pointer down 判定 + path 点采样）</li>
  *   <li>{@code onUpdateMask}：lasso 完成时调用，传入新 {@link Mask}（保留 featherPx）</li>
- *   <li>{@code onError}：点数不足 / 取消时的提示</li>
+ *   <li>{@code onError}：点数不足 / 顶点超限被强行抽稀时的提示</li>
  * </ul>
  */
 
 const MIN_POINTS = 3;
-const MAX_VERTICES = 200;
+/** 服务端 ElementValidator.MAX_MASK_VERTICES，双端必须一致。 */
+export const MAX_VERTICES = 64;
+/** RDP 容差阶梯（像素）。逐级翻倍，越往后轮廓越粗糙但顶点越少。 */
+const TOLERANCE_LADDER = [1, 2, 4, 8, 16, 32, 64];
+
+/**
+ * 阶梯 RDP 压不到上限时的兜底：等间隔抽点，硬砍到 max 个。
+ * 首点保留，末点不重复首点（polylineToSvgPathD 自己补 Z）。
+ */
+function decimate(pts: Array<[number, number]>, max: number): Array<[number, number]> {
+    if (pts.length <= max) return pts;
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < max; i++) {
+        out.push(pts[Math.floor((i * pts.length) / max)]);
+    }
+    return out;
+}
 
 export function useLassoMask(opts: {
     selectedImageGetter: () => ImageElement | null;
@@ -47,7 +69,7 @@ export function useLassoMask(opts: {
     /** 把 client (clientX, clientY) 转 element 局部 (lx, ly)；超出 element bbox 返 null */
     clientToElementLocal: (clientX: number, clientY: number) => { lx: number; ly: number } | null;
     onUpdateMask: (mask: Mask) => void;
-    onError?: (kind: 'too-few-points') => void;
+    onError?: (kind: 'too-few-points' | 'simplified') => void;
     /** 投影模式标志：lasso 进行时 true，CanvasView 可据此画虚线 path 提示 */
     drawingGuide?: Ref<{ active: boolean; points: Array<[number, number]>; w: number; h: number } | null>;
 }) {
@@ -112,12 +134,17 @@ export function useLassoMask(opts: {
             opts.onError?.('too-few-points');
             return true;
         }
-        // RDP 阶梯化简到 MAX_VERTICES 以下
+        // RDP 阶梯化简到 MAX_VERTICES 以下。每轮都从原始点串重算，避免误差累积。
         let simplified = collected;
-        const tolerances = [1, 2, 4, 8, 16];
-        for (const tol of tolerances) {
+        for (const tol of TOLERANCE_LADDER) {
             if (simplified.length <= MAX_VERTICES) break;
-            simplified = rdpSimplify(simplified, tol);
+            simplified = rdpSimplify(collected, tol);
+        }
+        // 阶梯走完还超（长而绕的套索会这样）→ 等间隔抽稀硬砍到上限，并告诉用户边缘被简化了。
+        // 宁可轮廓糙一点也要让蒙版真的生效——直接发出去只会被服务端整条拒掉。
+        if (simplified.length > MAX_VERTICES) {
+            simplified = decimate(simplified, MAX_VERTICES);
+            opts.onError?.('simplified');
         }
         // 强制末点闭合（不重复首点）
         const d = polylineToSvgPathD(simplified);

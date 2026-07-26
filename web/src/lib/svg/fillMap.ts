@@ -9,6 +9,17 @@
  *   - mapOpacity:  opacity / fill-opacity 属性 → number | undefined
  *
  * 优先级：style="" 内联属性覆盖同名 presentation 属性。
+ *
+ * <h3>为什么另有一套 resolveFillValue / resolveStrokeValue</h3>
+ * mapFill / mapStroke 只看元素<b>自己</b>的属性，且把「没写 fill」和「fill='none'」
+ * 都返回 undefined。这两点合起来会丢图：SVG 规范里 fill 的初始值是<b>黑色</b>而不是无填充，
+ * 而且 fill 是可继承属性（常见写法是把 fill 写在父 &lt;g&gt; 上）。于是「什么样式都没写的
+ * path」（Font Awesome 实心图标就是这形态）和「样式写在父 g 上的图标」会被上游判成
+ * 「fill 与 stroke 都为空」直接丢弃，导入结果是 0 个元素。
+ *
+ * resolveFillValue 把结果拆成三态（有填充 / 显式无填充 / 值解析不了），让上游能区分
+ * 「用户明确要求透明」和「我们读不懂这个值」——后者按 SVG 的错误处理规则回落到默认黑色，
+ * 而不是把整个形状丢掉。属性继承由调用方（svgToElements）沿祖先链取值后传进来。
  */
 
 import type { Fill, Stroke, Stop, LinearGradient, RadialGradient } from '../../types/protocol';
@@ -63,7 +74,14 @@ function parseInlineStyle(style: string): Record<string, string> {
 /**
  * 读取 SVG 元素的某个 presentation 属性，style 内联覆盖 presentation 属性。
  * 返回 undefined 表示该属性未设置。
+ *
+ * <p>导出给 svgToElements 做祖先链继承查找用（`fill` / `stroke` 等都是可继承属性，
+ * 常见写法是把它们写在父 &lt;g&gt; 上）。</p>
  */
+export function getPresentationAttr(el: Element, prop: string): string | undefined {
+    return getAttr(el, prop);
+}
+
 function getAttr(el: Element, prop: string): string | undefined {
     const styleStr = el.getAttribute('style') ?? '';
     const inlineStyle = parseInlineStyle(styleStr);
@@ -203,6 +221,89 @@ function resolveGradient(id: string, root: Element): LinearGradient | RadialGrad
 // ---------- 公开 API ----------
 
 /**
+ * SVG 规范里 `fill` 的初始值是黑色（不是「无填充」）。没写 fill 的形状回落到这个颜色。
+ */
+export const SVG_DEFAULT_FILL_COLOR = '#000000';
+
+/**
+ * `currentColor` 的兜底取值。
+ *
+ * <p>规范上 `currentColor` 等于当前元素继承到的 CSS `color` 属性；SVG 文件里若没写
+ * `color`，浏览器用的初始值就是黑色。<b>不</b>取编辑器主题前景色：深色主题下前景是接近
+ * 白色的 hsl 值，把图标导成白色贴到浅色画布上等于看不见，而且主题 token 是 hsl()
+ * 形态、本模块的颜色解析只认 hex 与命名色。祖先链上写了 `color` 属性时按规范用它，
+ * 这条路径由 svgToElements 传 currentColor 参数进来。</p>
+ */
+export const SVG_DEFAULT_CURRENT_COLOR = '#000000';
+
+/**
+ * fill 值的三态解析结果。
+ *
+ * <ul>
+ *   <li>{@code fill} —— 解析出了具体填充（纯色 / 渐变）</li>
+ *   <li>{@code none} —— 用户明确要求不填充（`none` / `transparent`）</li>
+ *   <li>{@code unresolved} —— 写了值但读不懂（坏 hex、认不出的命名色、引用不到的渐变）。
+ *       按 SVG 的错误处理规则，调用方应回落到默认值而不是丢弃形状</li>
+ * </ul>
+ */
+export type FillResolution =
+    | { kind: 'fill'; fill: Fill }
+    | { kind: 'none' }
+    | { kind: 'unresolved' };
+
+/**
+ * 解析一个已经取好的 `fill` 属性字符串（继承由调用方完成）。
+ *
+ * @param raw          fill 属性原值
+ * @param root         svg 根元素，用于解析 `url(#id)` 渐变引用
+ * @param currentColor `currentColor` 关键字要换成的颜色，缺省黑色
+ */
+export function resolveFillValue(raw: string, root?: Element, currentColor?: string): FillResolution {
+    const v = raw.trim().toLowerCase();
+
+    // url(#id) gradient 引用
+    if (v.startsWith('url(')) {
+        if (!root) return { kind: 'unresolved' };
+        // 提取 id：url(#foo) → foo
+        const match = /url\(#([^)]+)\)/i.exec(raw.trim());
+        if (!match) return { kind: 'unresolved' };
+        const grad = resolveGradient(match[1].trim(), root);
+        return grad ? { kind: 'fill', fill: grad } : { kind: 'unresolved' };
+    }
+
+    if (v === 'currentcolor') {
+        const color = normalizeColor(currentColor ?? SVG_DEFAULT_CURRENT_COLOR);
+        if (color === undefined) return { kind: 'none' };
+        if (color === null) return { kind: 'fill', fill: { type: 'solid', color: SVG_DEFAULT_CURRENT_COLOR } };
+        return { kind: 'fill', fill: { type: 'solid', color } };
+    }
+
+    const color = normalizeColor(raw);
+    if (color === undefined) return { kind: 'none' };      // none / transparent
+    if (color === null) return { kind: 'unresolved' };     // 读不懂的值
+    return { kind: 'fill', fill: { type: 'solid', color } };
+}
+
+/**
+ * 解析一对已经取好的 `stroke` / `stroke-width` 属性字符串（继承由调用方完成）。
+ * `stroke` 的初始值是 `none`，所以「读不懂」与「显式 none」都返回 undefined —— 与 fill 不同，
+ * 描边缺省本来就没有，回落不会丢内容。
+ */
+export function resolveStrokeValue(
+    rawStroke: string,
+    rawWidth?: string,
+    currentColor?: string,
+): Stroke | undefined {
+    const source = rawStroke.trim().toLowerCase() === 'currentcolor'
+        ? (currentColor ?? SVG_DEFAULT_CURRENT_COLOR)
+        : rawStroke;
+    const color = normalizeColor(source);
+    if (color === undefined || color === null) return undefined;
+    const width = rawWidth !== undefined ? Number(rawWidth) : 1;
+    return { color, width: isNaN(width) ? 1 : width };
+}
+
+/**
  * 从 SVG 元素映射 `fill` 属性到 HikariCanvas `Fill`。
  * - `fill="#hex"` 或命名色 → `{ type: 'solid', color: '#rrggbb' }`
  * - `fill="none"` / `fill="transparent"` → `undefined`
@@ -210,28 +311,16 @@ function resolveGradient(id: string, root: Element): LinearGradient | RadialGrad
  * - `fill="url(#id)"` 且无 root 或 id 不存在 → `undefined`（优雅降级）
  * - 未设置 fill → `undefined`
  *
+ * <p>只看元素自身属性、不做继承与默认值回落；导入主流程走
+ * {@link resolveFillValue}（见文件头说明）。</p>
+ *
  * PB-4 降维忽略：gradientTransform / gradientUnits=userSpaceOnUse / spreadMethod / fx,fy
  */
 export function mapFill(el: Element, root?: Element): Fill | undefined {
     const raw = getAttr(el, 'fill');
     if (raw === undefined) return undefined;
-
-    const v = raw.trim().toLowerCase();
-
-    // url(#id) gradient 引用
-    if (v.startsWith('url(')) {
-        if (!root) return undefined;
-        // 提取 id：url(#foo) → foo
-        const match = /url\(#([^)]+)\)/i.exec(raw.trim());
-        if (!match) return undefined;
-        const id = match[1].trim();
-        return resolveGradient(id, root);
-    }
-
-    const color = normalizeColor(raw);
-    if (color === undefined || color === null) return undefined; // none / 无法解析
-
-    return { type: 'solid', color };
+    const res = resolveFillValue(raw, root);
+    return res.kind === 'fill' ? res.fill : undefined;
 }
 
 /**

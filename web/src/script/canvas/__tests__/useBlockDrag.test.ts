@@ -124,6 +124,23 @@ describe('buildSlots — 排除被拖块自身及其子树（关键正确性）'
         expect(keys).toContain('actions/0/then#2');
     });
 
+    it('传了 ruleId → 只剔自己那条规则里的子树，别的堆同路径槽保留', () => {
+        // 两条规则的 actions/0 都是 if：拖 rA 的 actions/0 时只该剔掉 rA 的 then 槽，
+        // rB 的 actions/0/then 路径长得一样但属于另一堆，是合法落点不能剔。
+        const measured = [
+            block('actions/0', 'rA'),
+            block('actions/0/then/0', 'rA'),
+            block('actions/0', 'rB'),
+            block('actions/0/then/0', 'rB'),
+        ];
+        const slots = buildSlots(measured, ['actions', '0'], 'rA');
+        const keys = slots.map((s) => `${s.stackRuleId}:${s.parentPath.join('/')}#${s.index}`).sort();
+        expect(keys).not.toContain('rA:actions/0/then#0');
+        expect(keys).not.toContain('rA:actions/0/then#1');
+        expect(keys).toContain('rB:actions/0/then#0');
+        expect(keys).toContain('rB:actions/0/then#1');
+    });
+
     it('palette 源（draggingPath=null）→ 不剔除任何槽', () => {
         const measured = [
             block('actions/0'),

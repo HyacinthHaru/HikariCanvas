@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, ref, type Ref } from 'vue';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 import { useProjectStore } from '@/stores/project';
+import { useNetworkStore } from '@/stores/network';
 import { insertAt, moveNode, parsePath, pathToString } from '@/script/model/blockTree';
 import { findDropTarget, type SlotRect } from '@/script/model/dropTarget';
 import { makeDefaultAction, TWEENABLE_KINDS } from '@/script/model/blockDefs';
@@ -118,15 +119,19 @@ export interface MeasuredBlock {
  * <p><b>排除被拖块自身及其子树</b>（画布源不能拖进自己里面 → 死循环）：传入 {@code draggingPath}
  * （拖动块 path 段数组，palette 源传 {@code null}）时，剔除一切 parentPath 以 draggingPath 为
  * <b>前缀</b>的插槽（含拖动块 then/else 内所有层）。注意"拖动块前面/后面"的同级插槽不剔除——
- * 那是合法的同序列重排目标（moveNode 自带下标补偿，落回原位也只是无害空操作）。</p>
+ * 那是合法的同序列重排目标（moveNode 自带下标补偿，落回原位也只是无害空操作）。
+ * <b>剔除要连 ruleId 一起比</b>：path 只在一条规则内唯一，画布上每条规则的顶层序列都叫
+ * {@code actions}，光比 path 会把别的堆里路径长得一样的合法插槽也一并误杀。</p>
  *
- * @param measured     已测画布元素。
- * @param draggingPath 画布源拖动块 path 段（如 {@code ['actions','2']}）；palette 源传 {@code null}。
- * @param bandH        插槽吸附带高度（默认 {@link SLOT_BAND_H}）。
+ * @param measured       已测画布元素。
+ * @param draggingPath   画布源拖动块 path 段（如 {@code ['actions','2']}）；palette 源传 {@code null}。
+ * @param draggingRuleId 被拖块所属规则 id；{@code null} = 不限规则（只按 path 剔，保守）。
+ * @param bandH          插槽吸附带高度（默认 {@link SLOT_BAND_H}）。
  */
 export function buildSlots(
     measured: MeasuredBlock[],
     draggingPath: string[] | null,
+    draggingRuleId: string | null = null,
     bandH: number = SLOT_BAND_H,
 ): SlotRect[] {
     const slots: SlotRect[] = [];
@@ -217,9 +222,14 @@ export function buildSlots(
         });
     }
 
-    // 4) 排除被拖块自身及其子树：剔除 parentPath 以 draggingPath 为前缀的插槽。
+    // 4) 排除被拖块自身及其子树：剔除「同一条规则里」parentPath 以 draggingPath 为前缀的插槽。
+    //    ruleId 必须一起比——上面第 2 步分组时已经踩过同一个坑（两条规则的顶层序列
+    //    parentPath 都是 ['actions']），这里漏了就会把别的堆的合法插槽误当成自己的子树剔掉。
     if (draggingPath !== null) {
-        return slots.filter((s) => !isPrefix(draggingPath, s.parentPath));
+        return slots.filter((s) => !(
+            (draggingRuleId === null || s.stackRuleId === draggingRuleId)
+            && isPrefix(draggingPath, s.parentPath)
+        ));
     }
     return slots;
 }
@@ -230,8 +240,14 @@ export function buildSlots(
  *
  * <p>{@code data-block-path="trigger"} 视为 hat；其余 data-block-path 视为真实块；
  * {@code data-slot-path} 视为空容器占位。ruleId 取最近祖先 {@code [data-rule-id]}。</p>
+ *
+ * @param draggingRuleId 画布源被拖块所属规则 id（透传给 {@link buildSlots} 做同规则子树剔除）。
  */
-export function collectSlots(canvasEl: HTMLElement, draggingPath: string[] | null): SlotRect[] {
+export function collectSlots(
+    canvasEl: HTMLElement,
+    draggingPath: string[] | null,
+    draggingRuleId: string | null = null,
+): SlotRect[] {
     const measured: MeasuredBlock[] = [];
 
     const blockEls = canvasEl.querySelectorAll<HTMLElement>('[data-block-path]');
@@ -265,7 +281,7 @@ export function collectSlots(canvasEl: HTMLElement, draggingPath: string[] | nul
         });
     });
 
-    return buildSlots(measured, draggingPath);
+    return buildSlots(measured, draggingPath, draggingRuleId);
 }
 
 // ---------- 内部纯辅助 ----------
@@ -310,7 +326,20 @@ export interface DragGhost {
 type DragState =
     | { mode: 'none' }
     | { mode: 'palette'; kind: string; grabDx: number; grabDy: number }
-    | { mode: 'block'; ruleId: string; path: string[]; kind: string; grabDx: number; grabDy: number }
+    | {
+        mode: 'block';
+        ruleId: string;
+        path: string[];
+        kind: string;
+        /**
+         * 友好元素积木（{@code setElementProperties}）的 {@code action.kind}（如 moveTo）。
+         * 补间 body 的准入白名单看的是这个值，不是 kind——8 个友好积木序列化后 type 全都是
+         * {@code setElementProperties}，只看 kind 会把它们全挡在补间体外面。
+         */
+        actionKind?: string;
+        grabDx: number;
+        grabDy: number;
+    }
     | { mode: 'stack'; ruleId: string; startX: number; startY: number; x0: number; y0: number };
 
 /**
@@ -321,7 +350,9 @@ type DragState =
  *
  * @param draggingKind  被拖积木 kind（palette 源从 kind 直接取；block 源从 action.type 取）。
  * @param slot          目标插槽。
- * @param draggingActionKind  palette 源友好积木的 kind（如 'moveTo'）；非 setElementProperties 时同 draggingKind。
+ * @param draggingActionKind  画布源友好积木的 {@code action.kind}（如 'moveTo'）。画布源的
+ *        draggingKind 恒为 {@code setElementProperties}，不带这个值就没法判它到底是哪种属性动作。
+ *        palette 源不用传——它的 kind 本身就是友好 kind。
  */
 export function isTweenBodySlotAllowed(
     draggingKind: string,
@@ -511,17 +542,36 @@ export function useBlockDrag(opts: {
 
     /**
      * 测量候选插槽（pointerdown 时调）。画布源传自身 path 段以排除自身子树；palette 源传 null。
+     *
+     * <p><b>画布源只保留被拖块自己那一堆的插槽。</b>落树走的是 {@code moveNode(workingCopy.actions,…)}
+     * ——只在当前编辑规则这一棵树上做增删。拿别的堆的插槽路径去改这棵树，路径碰巧存在就把积木搬去
+     * 了莫名其妙的位置，路径不存在则"摘下来没插回去"，整条子树连同自动保存一起消失。既然跨堆搬运
+     * 根本没法执行，就干脆别让它成为候选落点（用户也看不到跨堆的吸附指示线）。</p>
      */
-    function measure(draggingPath: string[] | null): void {
+    function measure(draggingPath: string[] | null, draggingRuleId: string | null = null): void {
         const el = opts.canvasRef.value;
-        cachedSlots = el ? collectSlots(el, draggingPath) : [];
+        if (!el) {
+            cachedSlots = [];
+            return;
+        }
+        const all = collectSlots(el, draggingPath, draggingRuleId);
+        cachedSlots = draggingRuleId === null
+            ? all
+            : all.filter((s) => s.stackRuleId === draggingRuleId);
     }
 
-    /** 拖动中更新跟手浮层 + 吸附命中（palette / block 源共用）。 */
-    function updateDrag(clientX: number, clientY: number, grabDx: number, grabDy: number, kind: string): void {
+    /**
+     * 拖动中更新跟手浮层 + 吸附命中（palette / block 源共用）。
+     * {@code actionKind} 只有画布源的友好元素积木会传（见 {@link isTweenBodySlotAllowed}）。
+     */
+    function updateDrag(
+        clientX: number, clientY: number,
+        grabDx: number, grabDy: number,
+        kind: string, actionKind?: string,
+    ): void {
         ghost.value = { kind, x: clientX - grabDx, y: clientY - grabDy };
         // 过滤不允许落入 tweenBlock body 的插槽（isTweenBodySlotAllowed 语义校验）。
-        const allowedSlots = cachedSlots.filter((s) => isTweenBodySlotAllowed(kind, s));
+        const allowedSlots = cachedSlots.filter((s) => isTweenBodySlotAllowed(kind, s, actionKind));
         activeSlot.value = findDropTarget(allowedSlots, clientX, clientY, DROP_THRESHOLD);
     }
 
@@ -588,14 +638,23 @@ export function useBlockDrag(opts: {
             // 标记拖拽中：server 回声不再替换整树（capture 已握住的 DOM 不被 v-for 重建打断）。
             edit.setDragging(true);
             // 选中该规则（拖动隐含编辑它；若不是当前规则则切过去）。dragging 守卫已防其回声替换整树。
-            if (edit.selectedRuleId !== stackRuleId) edit.selectRule(stackRuleId);
-            const kind = blockKindAt(stackRuleId, path);
-            state = { mode: 'block', ruleId: stackRuleId, path, kind, grabDx, grabDy };
-            measure(path);
+            if (edit.selectedRuleId !== stackRuleId) {
+                edit.selectRule(stackRuleId);
+                // selectRule 会挡住切换（上一条规则有未保存又校验不过的改动时它只提示、不切）。
+                // 没切成功就绝不能开拖：落树改的是 workingCopy，那还是<b>上一条规则</b>的树，
+                // 拿本堆的路径去改它 = 把积木搬进别人家 / 直接搬丢。
+                if (edit.selectedRuleId !== stackRuleId) {
+                    abortDrag();
+                    return;
+                }
+            }
+            const { kind, actionKind } = blockKindAt(stackRuleId, path);
+            state = { mode: 'block', ruleId: stackRuleId, path, kind, actionKind, grabDx, grabDy };
+            measure(path, stackRuleId);
             // 拖动作积木时亮出删除区（仅 block 源；松手在区内 = 删该积木）。
             deleteZoneActive.value = true;
             // 用阈值跨越点坐标初始化浮层（首个正式 onPointerMove 会立刻校正到指针处）。
-            updateDrag(crossX, crossY, grabDx, grabDy, kind);
+            updateDrag(crossX, crossY, grabDx, grabDy, kind, actionKind);
             attachMoveListeners();
         });
     }
@@ -622,18 +681,32 @@ export function useBlockDrag(opts: {
         return hot;
     }
 
-    /** 取规则 working copy 里 path 处块的 kind（用于浮层显示）；取不到 → 'log' 兜底。 */
-    function blockKindAt(ruleId: string, path: string[]): string {
+    /**
+     * 取规则 working copy 里 path 处块的类型信息；取不到 → {@code kind:'log'} 兜底。
+     *
+     * <p>返回两个值而不是一个：{@code kind} = {@code action.type}（浮层显示 + 一般判定用），
+     * {@code actionKind} = 友好元素积木的 {@code action.kind}（moveTo / resize / …）。
+     * 8 个友好积木序列化后 type 全是 {@code setElementProperties}，补间 body 的准入白名单
+     * 只认得 {@code action.kind}——少带这一个值，画布上已有的 moveTo 就既拖不进补间体、
+     * 也没法在补间体里重排，只能删掉从侧栏重拖一个。</p>
+     */
+    function blockKindAt(ruleId: string, path: string[]): { kind: string; actionKind?: string } {
         const wc = edit.workingCopy;
-        if (!wc || edit.selectedRuleId !== ruleId) return 'log';
+        if (!wc || edit.selectedRuleId !== ruleId) return { kind: 'log' };
         // 浮层只需 kind，简单从 path 末段定位（深拷在 store 内，这里只读类型字段）。
         // 直接用 blockTree.getAt 需引入额外依赖；这里轻量复用 store 已选规则的 actions。
         let seq: unknown = wc.actions;
         for (let i = 0; i < path.length; i += 2) {
             const idx = Number(path[i + 1]);
-            if (!Array.isArray(seq) || !Number.isInteger(idx) || idx < 0 || idx >= seq.length) return 'log';
-            const node = seq[idx] as { type?: string; then?: unknown; else?: unknown; body?: unknown };
-            if (i + 2 >= path.length) return node?.type ?? 'log';
+            if (!Array.isArray(seq) || !Number.isInteger(idx) || idx < 0 || idx >= seq.length) {
+                return { kind: 'log' };
+            }
+            const node = seq[idx] as {
+                type?: string; kind?: string; then?: unknown; else?: unknown; body?: unknown;
+            };
+            if (i + 2 >= path.length) {
+                return { kind: node?.type ?? 'log', actionKind: node?.kind };
+            }
             const branch = path[i + 2];
             // if → then/else；repeat → body（浮层 kind 标签深入循环体也正确）。
             seq = branch === 'then' ? node?.then
@@ -641,7 +714,7 @@ export function useBlockDrag(opts: {
                 : branch === 'body' ? node?.body
                 : null;
         }
-        return 'log';
+        return { kind: 'log' };
     }
 
     // ----- 移堆：拖帽子改坐标 -----
@@ -709,7 +782,7 @@ export function useBlockDrag(opts: {
             return;
         }
         // block：先更新浮层 + 吸附命中，再判删除区——命中删除区则清吸附指示线（意图是删，不是重排）。
-        updateDrag(e.clientX, e.clientY, state.grabDx, state.grabDy, state.kind);
+        updateDrag(e.clientX, e.clientY, state.grabDx, state.grabDy, state.kind, state.actionKind);
         if (updateDeleteHot(e.clientX, e.clientY)) {
             activeSlot.value = null;
         }
@@ -741,8 +814,10 @@ export function useBlockDrag(opts: {
         }
 
         // palette / block：按命中插槽落树。同 updateDrag，过滤 tweenBlock body 约束。
-        const dragKind = s.mode === 'palette' ? s.kind : s.kind;
-        const allowedSlotsUp = cachedSlots.filter((slot) => isTweenBodySlotAllowed(dragKind, slot));
+        const dragActionKind = s.mode === 'block' ? s.actionKind : undefined;
+        const allowedSlotsUp = cachedSlots.filter(
+            (slot) => isTweenBodySlotAllowed(s.kind, slot, dragActionKind),
+        );
         const hit = findDropTarget(allowedSlotsUp, e.clientX, e.clientY, DROP_THRESHOLD);
         if (hit === null) {
             // 无命中：palette 源丢弃（不创建）；画布源还原（不拆堆）。两者都只是 abort。
@@ -763,9 +838,22 @@ export function useBlockDrag(opts: {
         // 与 blockTree.moveNode "toIndex 按移动前渲染树测量"契约对齐）。
         const wc = edit.workingCopy;
         const fromPath = s.path;
+        const fromRuleId = s.ruleId;
         abortDrag();
         if (!wc) return;
-        const newActions = moveNode(wc.actions, fromPath, hit.parentPath, hit.index);
+        // 落点必须属于被拖块自己那条规则，且那条规则就是此刻 workingCopy 里的规则。
+        // measure 已经把别的堆的插槽滤掉了，这里是第二道闸：万一哪天测量或选中时序变了，
+        // 也绝不能拿 B 堆的路径去改 A 堆的树（那会让积木搬错位置，甚至连子树一起消失）。
+        if (hit.stackRuleId !== fromRuleId || edit.selectedRuleId !== fromRuleId) return;
+        let newActions;
+        try {
+            newActions = moveNode(wc.actions, fromPath, hit.parentPath, hit.index);
+        } catch (err) {
+            // moveNode 只在"目标路径在这棵树里不存在"时抛（源节点已摘、插不回去）。
+            // 放弃这次拖放，树保持原样；日志留给抽屉排查。
+            useNetworkStore().pushLog('err', `block drop cancelled: ${(err as Error).message}`);
+            return;
+        }
         if (newActions === wc.actions) return; // 无变化（落回原位）→ 不提交
         edit.setActions(newActions);
     }

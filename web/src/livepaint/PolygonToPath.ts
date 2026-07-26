@@ -10,6 +10,13 @@
  * 顶点限制：
  * - PathDValidator.MAX_LEN = 4096 char；每顶点约 17 char → 约 240 顶点上限
  * - 安全阈值 180（留 holes / 模板字段余量）；超限触发 RDP 简化
+ *
+ * <h3>为什么还要按 d 的总长度再卡一道</h3>
+ * 服务端唯一的规模限制是 d 字符串<b>总长</b> 4096，而这里的顶点上限是<b>逐个 ring</b>
+ * 分别算的。多孔洞的空隙（画面里散着十来个小岛）每个 ring 都远没到 240 顶点、各自看都"合规"，
+ * 加起来却轻松超过 4096 字符 —— element.add 被服务端拒掉，而鼠标悬停时的高亮还在告诉用户
+ * 这里能填。所以在拼完 d 之后按总长再兜一次：先整体抬高简化容差重试，实在压不下来就
+ * 明确告诉调用方（overBudget），由 UI 提示，而不是发一条注定被拒的 op。
  */
 
 import type { GapPolygon, Polygon } from './types';
@@ -27,6 +34,18 @@ export const VERTEX_HARD_LIMIT = 240;
 
 /** 默认基础 tolerance（与 paintBucket store DEFAULT_TOLERANCE 一致，避免循环依赖故复制常量）。 */
 export const DEFAULT_BASE_TOLERANCE = 0.5;
+
+/** 服务端 PathDValidator.MAX_LEN，双端必须一致。 */
+export const MAX_PATH_D_LEN = 4096;
+
+/**
+ * d 字符串总长预算。留出余量是因为服务端量的是最终落库的 d，
+ * 而中间还可能有格式化差异；贴着 4096 发容易踩边界。
+ */
+export const PATH_D_BUDGET = 3900;
+
+/** 简化容差上限：再大轮廓就糊得不成样子了，与 maybeSimplify 内部阶梯共用这个天花板。 */
+const MAX_TOLERANCE = 16;
 
 /**
  * 阶梯式 RDP 简化。顶点 > VERTEX_WARN_THRESHOLD 时触发，初始 tolerance = baseTolerance，
@@ -49,7 +68,7 @@ function maybeSimplify(poly: Polygon, baseTolerance: number): Polygon {
     let tol = baseTolerance > 0 ? baseTolerance : DEFAULT_BASE_TOLERANCE;
     let simplified = rdpSimplify(poly, tol);
     // 一轮就压到 LIMIT 以下当然好；不行就 tolerance 翻倍重来
-    while (simplified.length > VERTEX_HARD_LIMIT && tol < 16) {
+    while (simplified.length > VERTEX_HARD_LIMIT && tol < MAX_TOLERANCE) {
         tol *= 2;
         simplified = rdpSimplify(poly, tol);
     }
@@ -91,6 +110,8 @@ export function gapToPathElement(gap: GapPolygon, baseTolerance: number = DEFAUL
     h: number;
     d: string;
     vertexCount: number;
+    /** true = 简化到容差上限后 d 仍超过服务端长度限制，调用方不该提交，应给用户提示。 */
+    overBudget: boolean;
 } {
     // 收集全部点算 bbox
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -106,7 +127,7 @@ export function gapToPathElement(gap: GapPolygon, baseTolerance: number = DEFAUL
     for (const hole of gap.holes) accumulate(hole);
 
     if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
-        return { x: 0, y: 0, w: 0, h: 0, d: '', vertexCount: 0 };
+        return { x: 0, y: 0, w: 0, h: 0, d: '', vertexCount: 0, overBudget: false };
     }
 
     const shift = ([x, y]: [number, number]): [number, number] => [x - minX, y - minY];
@@ -114,23 +135,36 @@ export function gapToPathElement(gap: GapPolygon, baseTolerance: number = DEFAUL
     // 因为 tolerance 是绝对像素阈值）。简化策略见 maybeSimplify。
     const shiftedOuter: Polygon = gap.outer.map(shift);
     const shiftedHoles: Polygon[] = gap.holes.map(h => h.map(shift));
-    const simplifiedOuter = maybeSimplify(shiftedOuter, baseTolerance);
-    const simplifiedHoles = shiftedHoles.map(h => maybeSimplify(h, baseTolerance));
 
-    const localGap: GapPolygon = {
-        outer: simplifiedOuter,
-        holes: simplifiedHoles,
+    /** 用给定容差简化全部 ring 并拼出 d。 */
+    const buildAt = (tolerance: number): { gap: GapPolygon; d: string; vertexCount: number } => {
+        const outer = maybeSimplify(shiftedOuter, tolerance);
+        const holes = shiftedHoles.map(h => maybeSimplify(h, tolerance));
+        const localGap: GapPolygon = { outer, holes };
+        return {
+            gap: localGap,
+            d: gapPolygonToPathD(localGap),
+            vertexCount: outer.length + holes.reduce((s, h) => s + h.length, 0),
+        };
     };
 
-    const vertexCount = simplifiedOuter.length + simplifiedHoles.reduce((s, h) => s + h.length, 0);
+    let tolerance = baseTolerance > 0 ? baseTolerance : DEFAULT_BASE_TOLERANCE;
+    let built = buildAt(tolerance);
+    // 每个 ring 单独看都没超顶点上限，加起来的 d 却可能远超服务端 4096 的总长限制
+    // （十来个小岛就够了）。这里按总长再抬容差重试。
+    while (built.d.length > PATH_D_BUDGET && tolerance < MAX_TOLERANCE) {
+        tolerance = Math.min(tolerance * 2, MAX_TOLERANCE);
+        built = buildAt(tolerance);
+    }
 
     return {
         x: minX,
         y: minY,
         w: maxX - minX,
         h: maxY - minY,
-        d: gapPolygonToPathD(localGap),
-        vertexCount,
+        d: built.d,
+        vertexCount: built.vertexCount,
+        overBudget: built.d.length > PATH_D_BUDGET,
     };
 }
 

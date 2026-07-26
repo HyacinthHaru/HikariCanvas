@@ -52,6 +52,7 @@ export const messages = {
                 ? '没有找到可导入的矢量内容（可能所有图层都被锁定了）'
                 : `导入了 ${n} 个图形`,
             failed: (code: string) => {
+                if (code === 'WALL_LOCKED') return '画板已锁定，先解锁才能导入';
                 if (code === 'SVG_TOO_LARGE') return 'SVG 文件太大，超过了大小限制';
                 if (code === 'SVG_HAS_ENTITY') return 'SVG 文件含有不安全内容，已拒绝导入';
                 if (code === 'SVG_MALFORMED') return 'SVG 文件格式有问题，读不进来';
@@ -70,7 +71,8 @@ export const messages = {
             importConfirmReplace: '导入会替换当前画布的全部内容，确定继续吗？',
             importing: '正在导入…',
             importDone: '导入完成',
-            importFailed: (code: string) => `导入失败（${code}）`,
+            importFailed: (code: string) =>
+                code === 'WALL_LOCKED' ? '画板已锁定，先解锁才能导入工程' : `导入失败（${code}）`,
             warnTitle: '导入提示',
             // 后端 warning kind → 服主/玩家看得懂的大白话（禁开发黑话）。
             warn: {
@@ -254,6 +256,7 @@ export const messages = {
             positionTip: '元素左上角相对画布的坐标（像素）',
             sizeLabel: '尺寸',
             sizeTip: '元素的宽 × 高（像素）',
+            brushSizeReadonlyTip: '笔触的宽高由笔画本身决定，不能直接改；要改形状请重新画',
             colorLabel: '颜色',
             colorTip: '点击色块选颜色；alpha 用于半透明叠加',
             alignLabel: '对齐',
@@ -349,6 +352,7 @@ export const messages = {
             elementUnsupported: (type: string) => `${type} 类型的元素不支持油漆桶`,
             wallLocked: '画板已锁定，没法编辑',
             degraded: '油漆桶检测到几何过于复杂；试试简化或删除重叠元素',
+            gapTooComplex: '这块区域的形状太碎（里面的小块太多），填不了；把"平滑度"调高一点或者减少重叠元素再试',
         },
         iconLibrary: {
             title: '图标库',
@@ -432,6 +436,7 @@ export const messages = {
             maskEditLassoTip: '按住 Alt 键，在画布上图片元素内拖动鼠标，松手即生成自由蒙版',
             maskClear: '清除蒙版',
             maskLassoMinPoints: '蒙版需要至少 3 个点',
+            maskLassoSimplified: '套索画得太复杂，边缘已自动简化（蒙版最多 64 个转折点）',
             uploading: '上传中…',
             uploadTip: '上传图片（点击 / 拖到画布 / Ctrl+V 粘贴 / 粘贴 URL）',
             uploadUrlPasting: '已识别为图片 URL，正在下载…',
@@ -717,6 +722,7 @@ export const messages = {
             departure: '出发',
             stopsHere: '停靠',
             saveTimetable: '保存时刻表',
+            timetableUnsaved: '时刻表有改动还没保存',
             // 自动生成对话框
             autoGenerateTitle: '自动生成时刻表',
             firstDeparture: '首站发车（HH:mm:ss）',
@@ -1368,6 +1374,7 @@ export const messages = {
                 ? 'No importable vector content found (all layers may be locked)'
                 : `Imported ${n} shape${n === 1 ? '' : 's'}`,
             failed: (code: string) => {
+                if (code === 'WALL_LOCKED') return 'Wall is locked — unlock it first to import';
                 if (code === 'SVG_TOO_LARGE') return 'SVG file is too large';
                 if (code === 'SVG_HAS_ENTITY') return 'SVG file contains unsafe content and was rejected';
                 if (code === 'SVG_MALFORMED') return 'SVG file is malformed and could not be read';
@@ -1386,7 +1393,8 @@ export const messages = {
             importConfirmReplace: 'Importing replaces everything on the current canvas. Continue?',
             importing: 'Importing…',
             importDone: 'Imported',
-            importFailed: (code: string) => `Import failed (${code})`,
+            importFailed: (code: string) =>
+                code === 'WALL_LOCKED' ? 'Wall is locked — unlock it first to import a project' : `Import failed (${code})`,
             warnTitle: 'Import notes',
             // backend warning kind → plain language for server owners / players.
             warn: {
@@ -1570,6 +1578,7 @@ export const messages = {
             positionTip: 'Top-left corner of the element relative to the canvas (in pixels)',
             sizeLabel: 'Size',
             sizeTip: 'Element width × height in pixels',
+            brushSizeReadonlyTip: 'Brush stroke size comes from the stroke itself and cannot be edited here; redraw to change it',
             colorLabel: 'Color',
             colorTip: 'Click the swatch to pick a color; alpha controls translucency',
             alignLabel: 'Align',
@@ -1665,6 +1674,7 @@ export const messages = {
             elementUnsupported: (type: string) => `Paint bucket doesn\'t support ${type} elements`,
             wallLocked: 'Wall is locked — editing blocked',
             degraded: 'Paint bucket detected complex geometry; try simplifying or removing overlapping elements',
+            gapTooComplex: 'This region has too many separate islands to fill; raise the smoothing setting or remove some overlapping elements',
         },
         iconLibrary: {
             title: 'Icon Library',
@@ -1748,6 +1758,7 @@ export const messages = {
             maskEditLassoTip: 'Hold Alt and drag over the image element on the canvas — release to create a free-form mask',
             maskClear: 'Clear mask',
             maskLassoMinPoints: 'Mask needs at least 3 points',
+            maskLassoSimplified: 'That lasso was very detailed — its edge was simplified (masks allow at most 64 corner points)',
             uploading: 'Uploading…',
             uploadTip: 'Upload an image (click / drag onto canvas / Ctrl+V paste / paste URL)',
             uploadUrlPasting: 'Detected an image URL — downloading…',
@@ -2032,6 +2043,7 @@ export const messages = {
             departure: 'Departure',
             stopsHere: 'Stops',
             saveTimetable: 'Save timetable',
+            timetableUnsaved: 'Timetable has unsaved changes',
             autoGenerateTitle: 'Auto-generate timetable',
             firstDeparture: 'First departure (HH:mm:ss)',
             travelSeconds: 'Travel seconds',

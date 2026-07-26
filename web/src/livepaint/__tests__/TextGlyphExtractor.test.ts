@@ -834,3 +834,76 @@ describe('LivePaint buildGraph — 0.4.10 text hole gap 集成', () => {
         expect(gap).toBeNull();
     });
 });
+
+/**
+ * 字体拿不到时的重试路径。
+ *
+ * <p>旧实现把「拿不到」的结果无条件写进 fontCache（该 Map 无 LRU 无失效），一次
+ * fetch 抖动 / 后端字体还没注册完的窗口期 404，就让这个字体永久降级为 bbox 兜底，
+ * 直到 worker 重建为止。多边形缓存里那条 null 同样会把退化状态钉死在这条 cache key 上。</p>
+ */
+describe('TextGlyphExtractor — 字体加载失败不留缓存', () => {
+    it('先失败后成功：第二次调用真的重新 fetch 并算出 glyph polygon', async () => {
+        let call = 0;
+        __setFetchForTest(async () => {
+            call += 1;
+            return {
+                ok: call > 1,
+                arrayBuffer: async () => new ArrayBuffer(8),
+            };
+        });
+        __setFontkitModuleForTest(
+            makeMockFontkitModule(makeMockFont({ defaultPath: 'M100 0 L500 0 L500 500 L0 500 Z' })) as never,
+        );
+
+        const el = makeText({ text: 'A', x: 0, y: 0 });
+        expect(await textElementToPolygon(el)).toBeNull();
+        expect(call).toBe(1);
+
+        const poly = await textElementToPolygon(el);
+        expect(call).toBe(2);
+        expect(poly).not.toBeNull();
+    });
+
+    it('字体拿到手之后仍然只 fetch 一次（成功结果照常缓存）', async () => {
+        let call = 0;
+        __setFetchForTest(async () => {
+            call += 1;
+            return { ok: true, arrayBuffer: async () => new ArrayBuffer(8) };
+        });
+        __setFontkitModuleForTest(
+            makeMockFontkitModule(makeMockFont({ defaultPath: 'M100 0 L500 0 L500 500 L0 500 Z' })) as never,
+        );
+
+        await textElementToPolygon(makeText({ text: 'A' }));
+        await textElementToPolygon(makeText({ text: 'B' }));
+        expect(call).toBe(1);
+    });
+});
+
+/**
+ * fontkit 的入参形态。
+ *
+ * <p>{@code res.arrayBuffer()} 给的是裸 ArrayBuffer，而 fontkit 内部把它交给 restructure 的
+ * DecodeStream，那里直接 {@code new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)}
+ * ——裸 ArrayBuffer 没有 {@code .buffer}，抛 TypeError 后被 catch 吞成 null，
+ * 结果是所有文字的 Live Paint 都静默退化成 bbox。必须包成 Uint8Array。</p>
+ */
+describe('TextGlyphExtractor — 传给 fontkit 的必须是 Uint8Array', () => {
+    it('create 收到的是 Uint8Array 而不是裸 ArrayBuffer', async () => {
+        mockFetchOk();
+        const seen: unknown[] = [];
+        const font = makeMockFont({ defaultPath: 'M100 0 L500 0 L500 500 L0 500 Z' });
+        __setFontkitModuleForTest({
+            create: (buf: unknown): unknown => {
+                seen.push(buf);
+                return font;
+            },
+        } as never);
+
+        await textElementToPolygon(makeText({ text: 'A' }));
+        expect(seen).toHaveLength(1);
+        expect(ArrayBuffer.isView(seen[0])).toBe(true);
+        expect(seen[0]).toBeInstanceOf(Uint8Array);
+    });
+});

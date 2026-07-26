@@ -101,6 +101,77 @@ describe('scriptEditStore — selectRule / 深拷隔离', () => {
     });
 });
 
+/**
+ * 重复选中当前规则必须完全 no-op。
+ *
+ * <p>旧实现只在「换了另一条规则」时才走 flush，同 id 直接落到「深拷 server 镜像 +
+ * 清 undo/redo + 清 dirty」——等于把手上还没落盘的改动直接扔掉，连 Ctrl+Z 都撤不回来。
+ * 丢失窗口 = 每次改动后的 800ms 自动保存防抖窗口内，以及校验没过、doSave 一直被挡住的
+ * 整段时间（可以无限长）。规则列表点条目是唯一没做「已选中就跳过」判断的入口。</p>
+ */
+describe('scriptEditStore — 重复选中当前规则不丢改动', () => {
+    it('防抖窗口内再点一次同一条规则：改动、dirty、undo 栈全都在', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1', { name: '原名' }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('改过的名字');
+        expect(edit.dirty).toBe(true);
+        expect(edit.undoStack.length).toBe(1);
+
+        // 800ms 防抖还没到，用户又在规则列表里点了同一条
+        edit.selectRule('sr-1');
+
+        expect(edit.workingCopy?.name).toBe('改过的名字');
+        expect(edit.dirty).toBe(true);
+        expect(edit.undoStack.length).toBe(1);
+        // 撤销仍然可用
+        edit.undo();
+        expect(edit.workingCopy?.name).toBe('原名');
+    });
+
+    it('防抖计时不被重置，改动照常按时发出去', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.setName('改过的名字');
+        edit.selectRule('sr-1');
+        vi.advanceTimersByTime(800);
+        expect(sendScriptUpdate).toHaveBeenCalledTimes(1);
+        expect((sendScriptUpdate.mock.calls[0][1] as ScriptRule).name).toBe('改过的名字');
+    });
+
+    it('校验没过、保存一直被挡住时再点一次也不丢改动', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1'));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        // 动作列表清空 → 前端 validator 镜像判不合法，doSave 被挡住、dirty 一直挂着
+        edit.setActions([]);
+        expect(edit.validationErrors.length).toBeGreaterThan(0);
+        vi.advanceTimersByTime(800);
+        expect(sendScriptUpdate).not.toHaveBeenCalled();
+
+        edit.selectRule('sr-1');
+
+        expect(edit.workingCopy?.actions).toHaveLength(0);
+        expect(edit.dirty).toBe(true);
+        expect(edit.undoStack.length).toBe(1);
+    });
+
+    it('workingCopy 意外为空（状态不一致）时仍会重新建立编辑会话', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule('sr-1', { name: '原名' }));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+        edit.workingCopy = null;
+        edit.selectRule('sr-1');
+        // 显式标注类型：上一行赋 null 会让 TS 把属性收窄成 null
+        expect((edit.workingCopy as ScriptRule | null)?.name).toBe('原名');
+    });
+});
+
 describe('scriptEditStore — 变更入口 + dirty + undo', () => {
     function setup() {
         const scripts = useScriptStore();

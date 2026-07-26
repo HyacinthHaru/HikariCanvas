@@ -1,16 +1,17 @@
 /**
- * 0.7.3 ultrareview 批次 B — B1/B2 双端一致性修复单测。
+ * 双端一致性：glow 外接盒度量 + dither fallback 路径的 opacity 守卫。
  *
- * B1 (P2-7): 后端 GlowRenderer 非旋转 glyph bbox 改用 canonicalCharWidth（与主字形 fill layout
- *   一致）+ ascent=round(fontSize*0.8)，消除原 AWT FontMetrics 与前端 measureText 的分叉。
- *   前端 renderGlow 已使用同款规则；测试验证两端公式计算结果一致。
+ * glow bbox：高度两端都用 ascent=round(fontSize*0.8) / descent=fontSize-ascent；
+ *   宽度两端都用 charAdvance（排版同源）。后端曾用 canonicalCharWidth、前端用 measureText，
+ *   宽西文字符的右缘光晕于是在游戏内被裁掉。
  *
  * B2 (P2-19): drawDitheredElement fallback-path 的 opacity 守卫补齐 isFinite + clamp(0,1)，
  *   对齐 drawElement。测试验证负/NaN/Infinity opacity 的 safe 值计算与 drawElement 路径等价。
  */
 
-import { describe, expect, it } from 'vitest';
-import { canonicalCharWidth } from '../TextLayout';
+import { describe, expect, it, vi } from 'vitest';
+import { canonicalCharWidth, charAdvance } from '../TextLayout';
+import { preloadMetrics } from '../GlyphMetricsLut';
 
 // ---------------------------------------------------------------------------
 // B1：glow bbox 度量公式等价性（前端 renderGlow vs 后端 GlowRenderer 修复后）
@@ -53,19 +54,57 @@ describe('B1 glow bbox 高度公式：前后端一致', () => {
     }
 });
 
-describe('B1 glow bbox 宽度公式：canonicalCharWidth 与主字形 fill layout 一致', () => {
-    // renderGlow 使用 ctx.measureText，但那是 Canvas API；测试退而验证后端修复采用的
-    // canonicalCharWidth 与 TextLayout.layout 路径所用公式完全一致（同一函数）。
-    it('ASCII 字符宽 = round(fontSize * 0.5)', () => {
+describe('glow bbox 宽度：两端都走 charAdvance（与排版同源）', () => {
+    // renderGlow 原先用 ctx.measureText（浏览器实测墨迹宽），后端 GlowRenderer 用的却是
+    // canonicalCharWidth（西文一律 0.5×fontSize）——宽字符（W / M）小 radius 时后端把右缘光晕
+    // 裁掉，编辑器里却是完整的。两端现已统一到 charAdvance，即排版推进 cursor 用的同一个度量。
+    const FIXTURE_FONT = 'glow-metrics-fixture';
+
+    it('没有 metrics 表时退回 canonical —— 两端同一条 fallback', () => {
+        expect(charAdvance('font-with-no-metrics-table', 'W', 20))
+            .toBe(canonicalCharWidth('W', 20));
+    });
+
+    it('ASCII canonical 宽 = round(fontSize * 0.5)', () => {
         expect(canonicalCharWidth('A', 20)).toBe(Math.round(20 * 0.5));
         expect(canonicalCharWidth('a', 16)).toBe(Math.round(16 * 0.5));
         expect(canonicalCharWidth('!', 12)).toBe(Math.round(12 * 0.5));
     });
 
-    it('CJK 字符宽 = fontSize', () => {
+    it('CJK canonical 宽 = fontSize', () => {
         expect(canonicalCharWidth('中', 20)).toBe(20);
         expect(canonicalCharWidth('あ', 16)).toBe(16);
         expect(canonicalCharWidth('Ａ', 12)).toBe(12); // 全角 A (U+FF21)
+    });
+
+    it('有 metrics 表时宽字符明显宽于 canonical —— 这就是被裁掉的那部分', async () => {
+        // 一张最小 advance 表：baseSize 12，W 占满 1em（内置 inter 的真实值就是 12）
+        const raw = {
+            fontId: FIXTURE_FONT,
+            baseSize: 12,
+            ascent: 10,
+            descent: 2,
+            advances: {
+                [String('W'.codePointAt(0))]: 12,
+                [String('中'.codePointAt(0))]: 12,
+            },
+        };
+        const fetchMock = vi.fn(async () => ({ ok: true, json: async () => raw }));
+        vi.stubGlobal('fetch', fetchMock);
+        try {
+            await preloadMetrics(FIXTURE_FONT);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+
+        // 后端 TextLayout.charAdvance 与前端这一支是同一个公式：round(baseAdv × size / base)
+        expect(charAdvance(FIXTURE_FONT, 'W', 48)).toBe(48);
+        expect(canonicalCharWidth('W', 48)).toBe(24);
+        expect(charAdvance(FIXTURE_FONT, 'W', 48))
+            .toBeGreaterThan(canonicalCharWidth('W', 48));
+
+        // CJK 两者相等，故这条修复不影响全角字（与后端 GlowWideCharBboxTest 对齐）
+        expect(charAdvance(FIXTURE_FONT, '中', 48)).toBe(canonicalCharWidth('中', 48));
     });
 
     it('ascent+descent = fontSize（bbox 高度守恒）', () => {

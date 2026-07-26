@@ -13,9 +13,17 @@ import { complexityGuard } from './svgSecurity';
 import { shapeToPathD } from './shapesToPath';
 import { parsePathCommands, commandsToD } from './normalizeD';
 import { bakeMatrix, commandsBBox, rebaseToOrigin } from './bakePath';
-import { mapFill, mapStroke, mapFillRule, mapOpacity } from './fillMap';
+import {
+    mapOpacity,
+    getPresentationAttr,
+    resolveFillValue,
+    resolveStrokeValue,
+    SVG_DEFAULT_CURRENT_COLOR,
+    SVG_DEFAULT_FILL_COLOR,
+} from './fillMap';
 import { parseTransform, mul, IDENTITY, applyPoint } from './transform';
 import type { Mat } from './transform';
+import type { Fill, Stroke } from '../../types/protocol';
 
 export interface ElementDraft {
     type: 'path' | 'image';
@@ -57,6 +65,52 @@ function ancestorMatrix(shape: Element, root: Element): Mat {
         }
     }
     return m;
+}
+
+/**
+ * 沿祖先链（元素自身 → 父 → … → svg 根）找第一个写了 prop 的节点，返回它的值。
+ * 都没写返回 undefined。
+ *
+ * <p>`fill` / `stroke` / `stroke-width` / `fill-rule` / `color` 在 SVG 里都是<b>可继承</b>属性，
+ * 而现实中的图标 SVG 极常把它们写在外层 &lt;g&gt; 上、叶子 path 一个样式属性都不带。
+ * 只读叶子属性会把整组图形判成"没样式"丢掉——这就是导入产出 0 元素的成因之一。</p>
+ */
+function inheritedAttr(shape: Element, root: Element, prop: string): string | undefined {
+    let cur: Element | null = shape;
+    while (cur) {
+        const v = getPresentationAttr(cur, prop);
+        if (v !== undefined) return v;
+        if (cur === root) break;
+        cur = cur.parentElement;
+    }
+    return undefined;
+}
+
+/**
+ * 按 SVG 规则定出这个形状最终的 fill。
+ *
+ * <ul>
+ *   <li>祖先链上一处都没写 fill → 规范初始值 <b>黑色</b>（不是"无填充"）</li>
+ *   <li>写了 `none` / `transparent` → 无填充</li>
+ *   <li>写了但读不懂（坏 hex、引用不到的渐变）→ 同样回落黑色，别让形状凭空消失</li>
+ * </ul>
+ */
+function resolveShapeFill(shape: Element, root: Element): Fill | undefined {
+    const raw = inheritedAttr(shape, root, 'fill');
+    if (raw === undefined) return { type: 'solid', color: SVG_DEFAULT_FILL_COLOR };
+    const currentColor = inheritedAttr(shape, root, 'color') ?? SVG_DEFAULT_CURRENT_COLOR;
+    const res = resolveFillValue(raw, root, currentColor);
+    if (res.kind === 'fill') return res.fill;
+    if (res.kind === 'none') return undefined;
+    return { type: 'solid', color: SVG_DEFAULT_FILL_COLOR };
+}
+
+/** 按 SVG 规则定出这个形状最终的 stroke。stroke 初始值就是 none，故缺省 / 读不懂都返回无描边。 */
+function resolveShapeStroke(shape: Element, root: Element): Stroke | undefined {
+    const raw = inheritedAttr(shape, root, 'stroke');
+    if (raw === undefined) return undefined;
+    const currentColor = inheritedAttr(shape, root, 'color') ?? SVG_DEFAULT_CURRENT_COLOR;
+    return resolveStrokeValue(raw, inheritedAttr(shape, root, 'stroke-width'), currentColor);
 }
 
 /**
@@ -136,13 +190,16 @@ export function svgToElements(
         cmds = rebaseToOrigin(cmds, bbox.x, bbox.y);
         const d = commandsToD(cmds);
 
-        // Step 4: fill / stroke / fillRule / opacity
-        const fill = mapFill(shape, doc.root as unknown as Element);
-        const stroke = mapStroke(shape);
-        const fillRule = mapFillRule(shape);
+        // Step 4: fill / stroke / fillRule / opacity（前三个都按祖先链继承 + 规范默认值解析）
+        const rootEl = doc.root as unknown as Element;
+        const fill = resolveShapeFill(shape, rootEl);
+        const stroke = resolveShapeStroke(shape, rootEl);
+        const fillRuleRaw = inheritedAttr(shape, rootEl, 'fill-rule');
+        const fillRule = fillRuleRaw === 'nonzero' || fillRuleRaw === 'evenodd' ? fillRuleRaw : undefined;
         const opacity = mapOpacity(shape);
 
-        // fill 和 stroke 都为空 → 跳过（后端 path 无样式无意义）
+        // fill 和 stroke 都为空 → 跳过。走到这里只剩「显式 fill='none' 且没描边」一种情况，
+        // 即用户确实画了个看不见的形状；缺省 / 值读不懂都已在上面回落成黑色填充。
         if (!fill && !stroke) continue;
 
         // Step 5: 组装 draft props（只放有值的字段）

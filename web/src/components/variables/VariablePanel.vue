@@ -578,7 +578,7 @@ function isHexColor(s: string | null): boolean {
 
             <!-- 第 3 行：操作按钮（非 owner 时禁编辑；admin 也不在此 UI 暴露 — 走 /canvas var 命令） -->
             <div
-              v-if="confirmingDeleteFor !== entry.fullName"
+              v-if="confirmingDeleteFor !== entry.fullName && editingAliasFor !== entry.fullName"
               class="flex items-center gap-1 pt-0.5"
             >
               <template v-if="entry.v.type === 'NUMBER' && entry.isMine">
@@ -624,6 +624,52 @@ function isHexColor(s: string | null): boolean {
               <span v-else class="ml-auto text-[10px] text-[color:var(--muted-foreground)]">
                 {{ t.variables.actionReadonly }}
               </span>
+            </div>
+
+            <!-- alias 编辑（inline）。别名是纯 UI 层的显示名，谁都能给全局变量起，
+                 所以这一分支不看 isMine（与操作行里那个不禁用的别名按钮一致）。 -->
+            <div
+              v-else-if="editingAliasFor === entry.fullName"
+              class="flex flex-col gap-1 p-2 rounded bg-[color:var(--accent)]/10 border border-[color:var(--accent)]/30"
+            >
+              <div class="flex items-center gap-1.5">
+                <Tag class="size-3 text-[color:var(--ctp-mauve)] shrink-0" />
+                <input
+                  type="text"
+                  class="hc-input flex-1"
+                  :placeholder="t.variables.dialogNewAliasPlaceholder"
+                  v-model="aliasDraft"
+                  :maxlength="ALIAS_MAX_LEN + 8"
+                  :disabled="aliasSubmitting"
+                  @keydown.enter.prevent="submitAliasEdit"
+                  @keydown.escape.prevent="cancelAliasEdit"
+                />
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] text-[color:var(--ctp-green,var(--primary))] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasSaveButton"
+                  :disabled="aliasSubmitting"
+                  @click="submitAliasEdit"
+                >
+                  <Check class="size-3" />
+                </button>
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasClearButton"
+                  :disabled="aliasSubmitting"
+                  @click="clearAlias"
+                >
+                  <Eraser class="size-3" />
+                </button>
+                <button
+                  class="hc-btn p-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] disabled:opacity-40"
+                  :title="t.variables.picker.aliasCancelButton"
+                  :disabled="aliasSubmitting"
+                  @click="cancelAliasEdit"
+                >
+                  <X class="size-3" />
+                </button>
+              </div>
+              <span v-if="aliasError" class="text-[color:var(--destructive)] text-[10px]">{{ aliasError }}</span>
             </div>
 
             <!-- 删除确认 popover（inline） -->

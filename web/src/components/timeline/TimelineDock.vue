@@ -38,6 +38,7 @@ import {
     type TransformKeyframe,
 } from './timelineLogic';
 import { useTimelineAuthoring } from '@/composables/useTimelineAuthoring';
+import { useLockGuard } from '@/composables/useLockGuard';
 import EasingCurveEditor from './EasingCurveEditor.vue';
 import VariablePicker from '@/components/variables/VariablePicker.vue';
 import type { Easing, LoopMode, TriggerConfig, TriggerType } from '@/types/protocol';
@@ -49,6 +50,13 @@ const ws = getWsClient();
 const { t } = useI18n();
 const playback = useTimelinePlayback();
 const { upsertTransformKeyframe } = useTimelineAuthoring();
+/**
+ * 画板锁定守卫。后端按纪律不看 lock、编辑 op 一律放行，前端是锁的唯一执行者 ——
+ * 时间轴这一整块以前一处都没接，锁定的作品照样能拖帧 / 删帧 / 改时长，等于锁没锁上。
+ * 播放、拖播放头、展开轨道、框选这类只读操作不受影响。
+ */
+const lockGuard = useLockGuard();
+const locked = lockGuard.readonly;
 
 const MANUAL_TRIGGER: TriggerConfig = { type: 'manual', params: {} };
 const ROW_H = 28;
@@ -169,7 +177,7 @@ function onBlockPointerUp(e: PointerEvent): void {
     if (!d) return;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(blockPointerId); } catch { /* ignore */ }
     blockPointerId = -1;
-    if (d.moved && d.curTimeMs !== d.origTimeMs && tl.value) {
+    if (d.moved && d.curTimeMs !== d.origTimeMs && tl.value && lockGuard.guardMutation(t.value.timeline.dockTitle)) {
         const track = tl.value.tracks?.[d.elementId];
         // 整组帧共享 coalesceKey → 后端合并成一步撤销（与拉就设同理）
         const coalesceKey = `integ-move:${d.elementId}:${d.origTimeMs}`;
@@ -253,6 +261,7 @@ const selectedEasing = computed<Easing>(() => selectedGroupKf.value?.easing ?? {
 function onEasingUpdate(easing: Easing): void {
     const g = selectedGroupKf.value;
     if (!g || !tl.value) return;
+    if (!lockGuard.guardMutation(t.value.timeline.addEasing)) return;
     // 同步整体帧所有 transform 关键帧的缓动 → x/y 进度一致 → 轨迹直线
     for (const kfId of g.keyframeIds) {
         ws.sendKeyframeUpdate(tl.value.id, kfId, { easing }).catch(() => { /* wsClient 日志 */ });
@@ -260,6 +269,7 @@ function onEasingUpdate(easing: Easing): void {
 }
 function deleteSelectedGroups(): void {
     if (!tl.value) return;
+    if (!lockGuard.guardMutation(t.value.timeline.kfDeleteAria)) return;
     for (const key of store.selectedGroups) {
         const sep = key.lastIndexOf(':');
         const elementId = key.slice(0, sep);
@@ -277,6 +287,7 @@ function deleteSelectedGroups(): void {
  */
 function addTransformKeyframe(elementId: string): void {
     if (!tl.value) return;
+    if (!lockGuard.guardMutation(t.value.timeline.dockAddKeyframe)) return;
     const timeMs = store.playheadMs;
     upsertTransformKeyframe(tl.value, elementId, timeMs);
     store.selectGroup(transformKeyframeKey(elementId, timeMs));
@@ -290,13 +301,17 @@ watch(() => store.selectedGroups.size, (n) => { if (n === 0) easingEditorOpen.va
 useEventListener(window, 'keydown', (e: KeyboardEvent) => {
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
     if (!store.dockOpen) return;
-    const tag = (e.target as HTMLElement | null)?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    // 光标在可输入的地方就别抢这一下退格。只判 tagName 会漏掉画布内联文本编辑器和右栏
+    // 文本框——它们是 Lexical 的 contenteditable，根节点是 div，tagName 永远不是 INPUT，
+    // 于是"在文本框里按退格删字" = 字没删掉、选中的关键帧全没了。判法与 App.vue 对齐。
+    const target = e.target as HTMLElement | null;
+    if (target && (target.matches?.('input, textarea, select') || target.isContentEditable)) return;
     if (store.selectedGroups.size > 0) {
         deleteSelectedGroups();
         e.preventDefault();
     } else if (store.selectedKeyframeId && tl.value) {
         // per-property 子轨选中的单个关键帧
+        if (!lockGuard.guardMutation(t.value.timeline.kfDeleteAria)) return;
         ws.sendKeyframeDelete(tl.value.id, store.selectedKeyframeId).catch(() => { /* wsClient 日志 */ });
         store.selectKeyframe(null);
         e.preventDefault();
@@ -337,6 +352,7 @@ function rewind(): void { playback.pause(); store.setPreviewActive(true); store.
 const creating = ref(false);
 async function createTimeline(): Promise<void> {
     if (creating.value) return;
+    if (!lockGuard.guardMutation(t.value.timeline.dockNew)) return;
     creating.value = true;
     try { await ws.sendTimelineCreate('', 5000, 20, 'loop', MANUAL_TRIGGER); }
     catch { /* wsClient 日志 */ }
@@ -358,7 +374,10 @@ const maxKeyframeMs = computed(() => {
     return max;
 });
 function updateTimeline(patch: Partial<{ name: string; durationMs: number; fps: number; loopMode: LoopMode; trigger: TriggerConfig }>): void {
-    if (tl.value) ws.sendTimelineUpdate(tl.value.id, patch).catch(() => { /* wsClient 日志 */ });
+    if (!tl.value) return;
+    // 名称 / 时长 / 帧率 / 循环 / 触发方式共用这一个出口，锁定守卫放这里一处就全覆盖
+    if (!lockGuard.guardMutation(t.value.timeline.dockSettings)) return;
+    ws.sendTimelineUpdate(tl.value.id, patch).catch(() => { /* wsClient 日志 */ });
 }
 function onNameChange(e: Event): void { updateTimeline({ name: (e.target as HTMLInputElement).value }); }
 function onDurationChange(e: Event): void {
@@ -386,6 +405,7 @@ function onFpsChange(e: Event): void {
 function onLoopChange(e: Event): void { updateTimeline({ loopMode: (e.target as HTMLSelectElement).value as LoopMode }); }
 function deleteTimeline(): void {
     if (!tl.value) return;
+    if (!lockGuard.guardMutation(t.value.timeline.dockDelete)) return;
     ws.sendTimelineDelete(tl.value.id).catch(() => { /* wsClient 日志 */ });
     confirmDeleteTimeline.value = false; settingsOpen.value = false;
 }
@@ -503,13 +523,15 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
         ><Settings class="size-4" /></button>
         <button
           v-if="store.selectedGroups.size === 1"
-          class="hc-btn ml-1 p-1 rounded-[var(--radius-sm)] transition-colors"
+          class="hc-btn ml-1 p-1 rounded-[var(--radius-sm)] transition-colors disabled:opacity-40"
           :class="easingEditorOpen ? 'bg-[color:var(--accent)] text-[color:var(--foreground)]' : 'hover:bg-[color:var(--accent)]'"
+          :disabled="locked"
           :title="t.timeline.addEasing" @click="easingEditorOpen = !easingEditorOpen"
         ><Spline class="size-4" /></button>
         <button
           v-if="hasSelectedGroup"
-          class="hc-btn p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--destructive)]/15 text-[color:var(--destructive)]"
+          class="hc-btn p-1 rounded-[var(--radius-sm)] hover:bg-[color:var(--destructive)]/15 text-[color:var(--destructive)] disabled:opacity-40"
+          :disabled="locked"
           :title="t.timeline.kfDeleteAria" @click="deleteSelectedGroups"
         ><Trash2 class="size-4" /></button>
       </template>
@@ -521,7 +543,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
     <div v-if="!tl" class="flex-1 flex flex-col items-center justify-center gap-3 text-[color:var(--muted-foreground)]">
       <span class="text-sm">{{ t.timeline.dockEmpty }}</span>
       <span class="text-xs">{{ t.timeline.dockEmptyHint }}</span>
-      <button class="hc-btn inline-flex items-center gap-1 px-3 py-1.5 rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] disabled:opacity-50" :disabled="creating" @click="createTimeline"><Plus class="size-4" />{{ t.timeline.dockNew }}</button>
+      <button class="hc-btn inline-flex items-center gap-1 px-3 py-1.5 rounded-[var(--radius-sm)] bg-[color:var(--primary)] text-[color:var(--primary-foreground)] disabled:opacity-50" :disabled="creating || locked" @click="createTimeline"><Plus class="size-4" />{{ t.timeline.dockNew }}</button>
     </div>
 
     <!-- 主体 -->
@@ -536,7 +558,7 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
                 <ChevronDown v-if="store.isExpanded(row.elementId)" class="size-3.5" /><ChevronRight v-else class="size-3.5" />
               </button>
               <span class="font-medium truncate flex-1">{{ elementLabel(row) }}</span>
-              <button class="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[color:var(--accent)] text-[color:var(--muted-foreground)]" :title="t.timeline.dockAddKeyframe" @click="addTransformKeyframe(row.elementId)"><Plus class="size-3.5" /></button>
+              <button v-if="!locked" class="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[color:var(--accent)] text-[color:var(--muted-foreground)]" :title="t.timeline.dockAddKeyframe" @click="addTransformKeyframe(row.elementId)"><Plus class="size-3.5" /></button>
             </template>
             <template v-else>
               <span class="pl-6 text-[color:var(--muted-foreground)] truncate">{{ propertyLabel(row.property!) }}</span>
@@ -631,42 +653,44 @@ watch(() => store.dockOpen, (open) => { if (!open) playback.exitPreview(); });
     >
       <label class="flex flex-col gap-1">
         <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.newName }}</span>
-        <input :value="tl.name" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onNameChange" />
+        <input :value="tl.name" :disabled="locked" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent disabled:opacity-40" @change="onNameChange" />
       </label>
       <div class="flex gap-2">
         <label class="flex flex-col gap-1 flex-1">
           <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.newDuration }}</span>
-          <input :value="tl.durationMs" type="number" min="100" max="3600000" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onDurationChange" />
+          <input :value="tl.durationMs" :disabled="locked" type="number" min="100" max="3600000" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent disabled:opacity-40" @change="onDurationChange" />
         </label>
         <label class="flex flex-col gap-1 w-16">
           <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.newFps }}</span>
-          <input :value="tl.fps" type="number" min="1" max="240" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onFpsChange" />
+          <input :value="tl.fps" :disabled="locked" type="number" min="1" max="240" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent disabled:opacity-40" @change="onFpsChange" />
         </label>
       </div>
       <p v-if="settingsError" class="text-[10px] text-[color:var(--destructive)] leading-snug">{{ settingsError }}</p>
       <label class="flex flex-col gap-1">
         <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.newLoop }}</span>
-        <select :value="tl.loopMode" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onLoopChange">
+        <select :value="tl.loopMode" :disabled="locked" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent disabled:opacity-40" @change="onLoopChange">
           <option v-for="m in LOOP_MODES" :key="m" :value="m">{{ loopModeLabel(m) }}</option>
         </select>
       </label>
       <!-- 触发方式：手动 / 变量变化 / 到点 -->
       <label class="flex flex-col gap-1">
         <span class="text-[color:var(--muted-foreground)]">{{ t.timeline.triggerLabel }}</span>
-        <select v-model="draftTriggerType" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent" @change="onTriggerTypeChange">
+        <select v-model="draftTriggerType" :disabled="locked" class="px-2 py-1 rounded border border-[color:var(--border)] bg-transparent disabled:opacity-40" @change="onTriggerTypeChange">
           <option v-for="ty in TRIGGER_TYPES" :key="ty" :value="ty">{{ triggerTypeLabel(ty) }}</option>
         </select>
       </label>
       <div v-if="triggerNeedsVariable(draftTriggerType)" class="flex flex-col gap-1">
         <button
-          class="px-2 py-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] text-left truncate"
+          class="px-2 py-1 rounded border border-[color:var(--border)] hover:bg-[color:var(--accent)] text-left truncate disabled:opacity-40"
           :class="triggerFullName ? '' : 'text-[color:var(--muted-foreground)] italic'"
+          :disabled="locked"
           @click="triggerPickerOpen = true"
         >{{ triggerFullName || t.timeline.triggerPickHint }}</button>
         <span class="text-[10px] text-[color:var(--muted-foreground)] leading-snug">{{ t.timeline.triggerVarHint }}</span>
       </div>
       <button
-        class="mt-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded border-t border-[color:var(--border)] text-[color:var(--destructive)] hover:bg-[color:var(--destructive)]/15"
+        class="mt-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded border-t border-[color:var(--border)] text-[color:var(--destructive)] hover:bg-[color:var(--destructive)]/15 disabled:opacity-40"
+        :disabled="locked"
         @click="confirmDeleteTimeline ? deleteTimeline() : (confirmDeleteTimeline = true)"
       >
         <Trash2 class="size-3.5" />{{ confirmDeleteTimeline ? t.timeline.dockDeleteConfirm : t.timeline.dockDelete }}

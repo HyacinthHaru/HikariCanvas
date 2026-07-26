@@ -28,9 +28,9 @@ vi.mock('@/network/wsClient', () => ({
     getWsClient: () => ({ sendScriptCreate, sendScriptUpdate, sendScriptDelete, sendScriptEnable }),
 }));
 
-function makeRule(actions: ScriptAction[]): ScriptRule {
+function makeRule(actions: ScriptAction[], id = 'sr-1'): ScriptRule {
     return {
-        id: 'sr-1', wallId: 'w-1', enabled: true, name: 'r', trigger: { type: 'wallReady' },
+        id, wallId: 'w-1', enabled: true, name: 'r', trigger: { type: 'wallReady' },
         actions, blockLayout: '{}',
     };
 }
@@ -279,6 +279,117 @@ describe('画布源 → moveNode', () => {
         window.dispatchEvent(pointerEvt('pointerup', 140, 900));
 
         expect(edit.workingCopy!.actions.map((x) => (x.type === 'log' ? x.message : x.type))).toEqual(['A', 'B']);
+    });
+});
+
+describe('跨规则堆落点（积木不许搬去别人家，更不许搬丢）', () => {
+    /**
+     * 画布上两条规则：A（sr-1，两块 log）在上，B（sr-2，一个 if + 空 then 槽）在下。
+     *
+     * <p>B 的 then 槽路径 {@code actions/0/then} 在 A 的树里是<b>无效</b>的（A 的 actions/0 是
+     * log，没有 then 子序列）——正是"摘下来插不回去"那条数据丢失路径：修复前把 A 的积木松手在
+     * 这个槽上，A0 会连同子树一起消失并被自动保存固化。</p>
+     */
+    function twoStacks() {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule([
+            { type: 'log', message: 'A0' },
+            { type: 'log', message: 'A1' },
+        ], 'sr-1'));
+        scripts.upsert(makeRule([
+            { type: 'if', condition: 'true', then: [], else: [] },
+        ], 'sr-2'));
+
+        const stackA = el({ 'data-rule-id': 'sr-1' }, { left: 0, top: 100, width: 280, height: 80 });
+        const a0 = el({ 'data-block-path': 'actions/0' }, { left: 10, top: 100, width: 260, height: 30 });
+        stackA.appendChild(a0);
+        const a1 = el({ 'data-block-path': 'actions/1' }, { left: 10, top: 140, width: 260, height: 30 });
+        stackA.appendChild(a1);
+        // B 堆在 y=400 一带，与 A 堆的插槽不重叠
+        const stackB = el({ 'data-rule-id': 'sr-2' }, { left: 0, top: 400, width: 280, height: 90 });
+        stackB.appendChild(el({ 'data-block-path': 'actions/0' }, { left: 10, top: 400, width: 260, height: 80 }));
+        stackB.appendChild(el({ 'data-slot-path': 'actions/0/then' }, { left: 30, top: 430, width: 230, height: 22 }));
+        canvasEl.appendChild(stackA);
+        canvasEl.appendChild(stackB);
+        return { a0, a1 };
+    }
+
+    it('把 A 堆的积木松手在 B 堆的 then 槽上 → A 堆两块都还在（不静默消失）', () => {
+        const { a1 } = twoStacks();
+        const scripts = useScriptStore();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+
+        const drag = makeDrag();
+        // 拖 A 的第二块（actions/1）：它的 path 不是 B 那个 then 槽路径的前缀，
+        // 保证这条用例真的走到"落到别的堆"的分支，而不是被别的过滤顺手挡掉。
+        drag.startBlockDrag('sr-1', 'actions/1', pointerEvt('pointerdown', 120, 150, a1));
+        crossThreshold();
+        // 松手落在 B 堆 if 的空 then 槽中心（top 430，h 22 → 中心 441）
+        window.dispatchEvent(pointerEvt('pointerup', 140, 441));
+
+        // A 堆（working copy）原样，两块都在
+        expect(edit.workingCopy!.actions.map((x) => (x.type === 'log' ? x.message : x.type)))
+            .toEqual(['A0', 'A1']);
+        // B 堆（server 镜像）也没被塞东西
+        const b0 = scripts.get('sr-2')!.actions[0];
+        expect(b0.type).toBe('if');
+        if (b0.type === 'if') expect(b0.then).toHaveLength(0);
+    });
+
+    it('跨堆落点不产生吸附指示线（B 堆的槽压根不是候选）', () => {
+        const { a0 } = twoStacks();
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0', pointerEvt('pointerdown', 120, 110, a0));
+        crossThreshold();
+        window.dispatchEvent(pointerEvt('pointermove', 140, 441));
+        expect(drag.activeSlot.value).toBeNull();
+
+        // 回到自己堆内的落点仍然正常吸附
+        window.dispatchEvent(pointerEvt('pointermove', 140, 147));
+        expect(drag.activeSlot.value?.stackRuleId).toBe('sr-1');
+    });
+});
+
+describe('补间体内重排（画布源友好积木）', () => {
+    it('把补间体里的 moveTo 拖到同体尾插槽 → 顺序调换', () => {
+        const scripts = useScriptStore();
+        scripts.upsert(makeRule([{
+            type: 'tweenBlock',
+            durationMs: 500,
+            easing: { type: 'linear' },
+            body: [
+                { type: 'setElementProperties', elementId: 'e1', kind: 'moveTo', patch: { x: '1', y: '1' } },
+                { type: 'setElementProperties', elementId: 'e2', kind: 'moveTo', patch: { x: '2', y: '2' } },
+            ],
+        } as unknown as ScriptAction]));
+        const edit = useScriptEditStore();
+        edit.selectRule('sr-1');
+
+        const stack = el({ 'data-rule-id': 'sr-1' }, { left: 0, top: 100, width: 280, height: 200 });
+        // tweenBlock 本体（data-block-type 让子序列插槽标上 containerBlockType）
+        stack.appendChild(el(
+            { 'data-block-path': 'actions/0', 'data-block-type': 'tweenBlock' },
+            { left: 10, top: 100, width: 260, height: 150 },
+        ));
+        const body0 = el({ 'data-block-path': 'actions/0/body/0', 'data-block-type': 'setElementProperties' },
+            { left: 20, top: 140, width: 240, height: 30 });
+        stack.appendChild(body0);
+        stack.appendChild(el({ 'data-block-path': 'actions/0/body/1', 'data-block-type': 'setElementProperties' },
+            { left: 20, top: 180, width: 240, height: 30 }));
+        canvasEl.appendChild(stack);
+
+        const drag = makeDrag();
+        drag.startBlockDrag('sr-1', 'actions/0/body/0', pointerEvt('pointerdown', 120, 150, body0));
+        crossThreshold();
+        // body 尾插槽：末块底沿 180+30-14=196，中心 203
+        window.dispatchEvent(pointerEvt('pointerup', 140, 203));
+
+        const body = (edit.workingCopy!.actions[0] as unknown as { body: Array<{ elementId: string }> }).body;
+        expect(body.map((b) => b.elementId)).toEqual(['e2', 'e1']);
     });
 });
 

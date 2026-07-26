@@ -31,8 +31,13 @@ export const useNetworkStore = defineStore('network', () => {
      * 状态栏持续显示 error 直到重连——纯误导。业务错误现在只走 lastError，不染红连接指示。</p>
      */
     const connectionError = ref<string | null>(null);
-    /** 最近一次服务端 op 错误。每次 handleError 都更新，用于组件 watch ts 判定"我发的那一帧失败了"。 */
-    const lastOpError = ref<{ code: string; message: string; ts: number } | null>(null);
+    /**
+     * 最近一次服务端 op 错误。每次 handleError 都更新，用于组件 watch ts 判定"我发的那一帧失败了"。
+     *
+     * <p>{@code opId} = 失败那一帧的信封 id（服务端把请求 id 原样回在 error 信封里）。发过 op 的
+     * 组件据此精确认领：只有 id 对得上才回滚自己那次乐观更新，不会把别人的改动一起撤了。</p>
+     */
+    const lastOpError = ref<{ code: string; message: string; ts: number; opId?: string } | null>(null);
     const closeCode = ref<number | null>(null);
 
     type LogLine = { id: number; ts: number; level: 'sent' | 'recv' | 'meta' | 'err'; text: string };

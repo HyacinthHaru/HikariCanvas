@@ -12,6 +12,7 @@ import { useProjectStore } from '@/stores/project';
 import { useNetworkStore } from '@/stores/network';
 import { getWsClient } from '@/network/wsClient';
 import { svgToElements } from '@/lib/svg/svgToElements';
+import { SvgImportError } from '@/lib/svg/svgSecurity';
 import type { Layer } from '@/types/protocol';
 
 /**
@@ -34,6 +35,12 @@ export function useSvgImport(): {
     const ws = getWsClient();
 
     async function importSvg(svg: string): Promise<{ count: number }> {
+        // 0. 画板锁定就别导：SVG 导入是一串 element.add，后端按纪律不看 lock 会照单全收，
+        //    前端是锁的唯一执行者。抛错走对话框的失败分支，用户能看到原因（早期这里没守卫，
+        //    锁定的作品可以被塞进任意矢量图形）。
+        if (project.isLocked) {
+            throw new SvgImportError('WALL_LOCKED', 'wall is locked');
+        }
         // 1. 转换 SVG → ElementDraft[]
         const drafts = svgToElements(svg);
         if (drafts.length === 0) return { count: 0 };

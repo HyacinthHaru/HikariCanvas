@@ -16,7 +16,7 @@ export {
     PATH_CURVE_SAMPLES,
 } from './ElementToPolygon';
 export { textElementToPolygon, textElementToMultiPolygon, GLYPH_CURVE_SAMPLES } from './TextGlyphExtractor';
-export { brushStrokeToPolygon, RDP_THRESHOLD, RDP_TOLERANCE, CAP_SAMPLES, JOIN_SAMPLES } from './BrushStrokeOffset';
+export { brushStrokeToPolygon, brushStrokeToMultiPolygon, RDP_THRESHOLD, RDP_TOLERANCE, CAP_SAMPLES, JOIN_SAMPLES } from './BrushStrokeOffset';
 export { buildGraph, findGapAt, pointInPolygon } from './LivePaintCore';
 export {
     gapPolygonToPathD,

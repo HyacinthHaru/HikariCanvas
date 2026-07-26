@@ -108,6 +108,11 @@ export class WsClient {
     private lastToken: string | null = null;
     /** 用户主动关闭或 auth 已判死时置 true，阻止自动重连。 */
     private stopped = false;
+    /**
+     * 「存量 token 被拒 → 改用地址栏那枚重试」这条补救路径本次连接是否已经用过。
+     * 只补救一次，避免两枚都失效时来回撞。握手成功（handleReady）后复位。
+     */
+    private urlTokenRetryUsed = false;
     /** 按 client id 跟踪等待 ack 的 promise（sendWithAck 用）。 */
     private pendingAcks = new Map<string, PendingAck>();
 
@@ -775,6 +780,8 @@ export class WsClient {
         }
         // 握手真正完成才清零退避计数（open 不再清零，见 connect open 回调注释）。
         this.reconnectAttempt = 0;
+        // 这次握手成功，把「存量 token 被拒改用地址栏那枚」的一次性补救额度还回去。
+        this.urlTokenRetryUsed = false;
         net.authenticated = true;
         net.sessionId = payload.sessionId;
         net.serverVersion = payload.serverVersion;
@@ -806,12 +813,18 @@ export class WsClient {
         useRailStore().setBinding(railBinding ?? null);
         // rotate 过来的新 token 存 sessionStorage 供断线重连
         if (payload.reconnectToken) {
+            let stored = false;
             try {
                 sessionStorage.setItem(RECONNECT_TOKEN_KEY, payload.reconnectToken);
+                stored = true;
                 net.pushLog('meta', `reconnect token stored (len ${payload.reconnectToken.length})`);
             } catch {
                 net.pushLog('err', 'sessionStorage unavailable; reconnect disabled');
             }
+            // 新 token 存好了，才把地址栏里那枚一次性券抹掉：它已经被后端消费过，
+            // 留着只会在下次刷新时被当成可用凭据、换来一个必然失败的握手。
+            // 存不进 sessionStorage（隐私模式等）时反而要留着，那是唯一剩下的凭据。
+            if (stored) stripTokenFromUrl();
         }
         this.startHeartbeat();
     }
@@ -888,11 +901,18 @@ export class WsClient {
         const friendly = localizeErrorCode(payload.code, payload.message);
         if (payload.code === 'AUTH_FAILED') {
             net.setConnectionError(friendly);
+        } else if (payload.code === 'RATE_LIMITED') {
+            // 限流 = 这一帧被服务端丢了。以前它完全静默，用户只看到画面莫名回跳
+            // （前端已乐观改过，服务端却没收下），根本不知道发生了什么。
+            // 走 lastError 这条业务提示通道（状态栏会显示），不染红连接指示——连接本身没断。
+            net.lastError = friendly;
         }
         net.lastOpError = {
             code: payload.code,
             message: friendly,
             ts: Date.now(),
+            // 带上失败那一帧的 id，让发起方能精确认领并回滚自己的乐观更新
+            opId: errId,
         };
         // log 仍保留原文（含 server side detail），LogDrawer 显示给开发者；UI 状态走 friendly。
         net.pushLog('err', `${payload.code}: ${payload.message ?? friendly}`);
@@ -931,9 +951,17 @@ export class WsClient {
         const terminal = isTerminalCloseCode(ev.code);
         if (this.stopped || terminal) {
             if (ev.code === 4001) {
+                // 被拒的若是 sessionStorage 里那枚，先试一次地址栏上的新券再报错。
+                if (this.retryWithUrlTokenAfterAuthFailure()) return;
                 // 友好提示走 i18n（AUTH_FAILED 中英文都覆盖到 token 提示）
                 net.setConnectionError(localizeErrorCode('AUTH_FAILED'));
-                this.clearStoredToken();
+                // 只有「刚被拒的就是存量 token」才清它。旧实现无差别清：地址栏那枚
+                // 一次性券被拒（刷新页面必然发生，后端 CAS 消费过一次就不再认）时，
+                // 会顺手把握手时 rotate 下来、还在 grace 期内能续命的 reconnectToken
+                // 一起删掉——刷新一次就必须回游戏重跑 /canvas confirm。
+                if (this.lastToken !== null && this.lastToken === readStoredToken()) {
+                    this.clearStoredToken();
+                }
             } else if (ev.code === 4002) {
                 // handleReady 已设精确 connectionError（「协议版本不兼容 server=X client=Y」）；
                 // 若 stopped 为 true 且已有精确内容，不覆写（防止通用提示冲掉精确提示）。
@@ -991,11 +1019,31 @@ export class WsClient {
 
     private pickTokenForReconnect(): string | null {
         // 优先 sessionStorage（服务器 rotate 后的 reconnect token）；退回当前 lastToken
-        try {
-            const stored = sessionStorage.getItem(RECONNECT_TOKEN_KEY);
-            if (stored) return stored;
-        } catch { /* ignore */ }
-        return this.lastToken;
+        return readStoredToken() ?? this.lastToken;
+    }
+
+    /**
+     * auth 被拒（close 4001）后的一次性补救。
+     *
+     * <p>场景：玩家在游戏里重跑了 {@code /canvas confirm}，把新链接开在<b>同一个标签页</b>——
+     * 此时 sessionStorage 里还留着上一场会话早已过期的 reconnectToken，而地址栏挂着一枚
+     * 全新的券。默认优先用存量（见 {@link pickInitialToken}），于是先撞一次 4001。
+     * 这里把作废的存量清掉、改用地址栏那枚重连一次；只补救一次，两枚都不行就照常报错。</p>
+     *
+     * @return true = 已经安排了重连，调用方直接返回不要再刷错误提示
+     */
+    private retryWithUrlTokenAfterAuthFailure(): boolean {
+        if (this.urlTokenRetryUsed || this.stopped) return false;
+        const stored = readStoredToken();
+        // 只处理「被拒的正是存量 token」；地址栏那枚被拒是另一回事（存量还可能有效）。
+        if (stored === null || this.lastToken !== stored) return false;
+        const urlToken = readUrlToken();
+        if (urlToken === null || urlToken === stored) return false;
+        this.urlTokenRetryUsed = true;
+        this.clearStoredToken();
+        useNetworkStore().pushLog('meta', 'stored reconnect token rejected; retrying with URL token');
+        this.connect(urlToken);
+        return true;
     }
 
     private clearStoredToken(): void {
@@ -1017,13 +1065,63 @@ export function getWsClient(): WsClient {
     return singleton;
 }
 
-export function pickInitialToken(): { token: string | null; source: 'url' | 'session-storage' | 'none' } {
-    const url = new URLSearchParams(location.search).get('token');
-    if (url) return { token: url, source: 'url' };
+/** 读 sessionStorage 里的 reconnect token；不可用 / 没有则 null。 */
+function readStoredToken(): string | null {
     try {
-        const stored = sessionStorage.getItem(RECONNECT_TOKEN_KEY);
-        if (stored) return { token: stored, source: 'session-storage' };
-    } catch { /* ignore */ }
+        return sessionStorage.getItem(RECONNECT_TOKEN_KEY);
+    } catch {
+        return null;
+    }
+}
+
+/** 读地址栏 {@code ?token=}；没有则 null。 */
+function readUrlToken(): string | null {
+    try {
+        return new URLSearchParams(window.location.search).get('token');
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * 从地址栏抹掉 {@code ?token=}（其余查询参数与 hash 原样保留），走
+ * {@code history.replaceState} 不产生新的历史条目。握手成功、新 reconnectToken
+ * 已存进 sessionStorage 之后调用。
+ *
+ * <p>为什么必须抹：URL 上那枚是 {@code /canvas confirm} 发的<b>一次性券</b>，后端
+ * {@code TokenService.consume} 用 CAS 消费，第二次必拒 {@code ALREADY_USED}。留在地址栏里
+ * 只会让下次刷新拿它去握手、换来一个注定失败的连接。</p>
+ */
+export function stripTokenFromUrl(): void {
+    try {
+        const loc = window.location;
+        const params = new URLSearchParams(loc.search);
+        if (!params.has('token')) return;
+        params.delete('token');
+        const query = params.toString();
+        // query 空时不要留一个光秃秃的 "?"。
+        const next = `${loc.pathname}${query ? `?${query}` : ''}${loc.hash}`;
+        window.history.replaceState(window.history.state, '', next);
+    } catch { /* ignore：历史 API 不可用不该影响连接 */ }
+}
+
+/**
+ * 挑首次连接用的 token。
+ *
+ * <p><b>先看 sessionStorage，再看地址栏</b>——顺序很关键。地址栏的 {@code ?token=} 是
+ * 一次性券，握手成功后就被后端消费掉了；sessionStorage 里那枚是 ready 帧 rotate 下来的
+ * reconnectToken，配合 config {@code ws-grace-minutes} 的宽限期，F5 之后原会话还在、
+ * 拿它就能直接续上。反过来先用 URL 那枚，刷新必被拒 4001，还会连累存量 token 一起被清
+ * （见 onClose 的 4001 分支），刷新一次就得回游戏重开。</p>
+ *
+ * <p>握手成功后 {@link stripTokenFromUrl} 会把地址栏那枚抹掉，正常情况下第二次刷新
+ * 也就只剩 sessionStorage 一条路了。</p>
+ */
+export function pickInitialToken(): { token: string | null; source: 'url' | 'session-storage' | 'none' } {
+    const stored = readStoredToken();
+    if (stored) return { token: stored, source: 'session-storage' };
+    const url = readUrlToken();
+    if (url) return { token: url, source: 'url' };
     return { token: null, source: 'none' };
 }
 

@@ -25,6 +25,7 @@ import { getWsClient } from '@/network/wsClient';
 import { useI18n } from '@/i18n';
 import {
     createHighlightStepper,
+    highlightKey,
     resultColorVar,
     type HighlightMap,
     type StepResult,
@@ -98,12 +99,16 @@ watch(
         if (!trace) return;
         if (trace.ruleId !== edit.selectedRuleId) return;
         // 先建 detail map（一次性），再启动 result 步进。
+        // key 带上 trace.ruleId：画布上所有积木堆共用这两张 map，只按 blockId 存的话
+        // 别的堆会跟着一起亮、还顶着这条规则的 detail 文案。
         const details = new Map<string, string>();
         for (const step of trace.steps) {
-            if (step.blockId && step.detail) details.set(step.blockId, step.detail);
+            if (step.blockId && step.detail) {
+                details.set(highlightKey(trace.ruleId, step.blockId), step.detail);
+            }
         }
         highlightDetails.value = details;
-        stepper.start(trace.steps);
+        stepper.start(trace.steps, trace.ruleId);
         testing.value = false;
     },
 );

@@ -212,7 +212,13 @@ export function replaceAt(
  * <p>两者互斥：路径相等时只校正插入下标；严格前缀延伸时只校正路径段。同容器前移 / 完全
  * 无关容器不校正。</p>
  *
- * @returns 新树；任一端 path 非法或源节点取不到 → 原样返回。
+ * <p><b>目标路径在本树里不存在时抛错，不静默返回。</b>移动是"先摘再插"两步：摘掉源节点后
+ * 若插入落空（目标容器不在这棵树里 —— 典型是调用方拿了<b>另一条规则</b>的插槽路径），
+ * 返回的就是一棵"少了一整条子树"的树；调用方多半会把它当成正常结果提交并自动保存，
+ * 用户的积木连子树一起人间蒸发且无从撤销。宁可抛错让调用方放弃这次移动。</p>
+ *
+ * @returns 新树；源 path 非法或源节点取不到 → 原样返回（没什么可移动的，不算错）。
+ * @throws Error 目标 parentPath 在本树中无效（插入落空，会导致源节点丢失）。
  */
 export function moveNode(
     actions: ScriptAction[],
@@ -242,7 +248,15 @@ export function moveNode(
         insertIndex = toIndex - 1;
     }
 
-    return insertAt(removed, adjustedParent, insertIndex, node);
+    const inserted = insertAt(removed, adjustedParent, insertIndex, node);
+    // insertAt 对非法 parentPath 是原样返回。此处原样返回 = 源节点已摘、又没插回去，
+    // 返回值是一棵缺了整条子树的树。不能交出去，抛错让调用方整体放弃。
+    if (inserted === removed) {
+        throw new Error(
+            `moveNode: 目标容器路径无效 "${pathToString(adjustedParent)}"，移动已取消`,
+        );
+    }
+    return inserted;
 }
 
 /**

@@ -10,14 +10,14 @@
  * blockLayout 解析后通过 props.x / props.y 传入。规则名本阶段只显示（编辑留后续）。
  * 触发器帽子 path = {@code 'trigger'}（trace 中触发器步的 blockId）。</p>
  */
-import { computed, inject, ref } from 'vue';
+import { computed, inject, provide, ref } from 'vue';
 import type { ScriptRule, ScriptTrigger } from '@/types/protocol';
 import { useI18n } from '@/i18n';
 import { TRIGGER_DEFS, makeDefaultTrigger, type FieldDef } from '../model/blockDefs';
 import { resolveLabelKey } from './labelKey';
 import { BLOCK_DRAG_KEY, NOOP_DRAG_HANDLES } from './dragInjection';
-import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from './highlightInjection';
-import { resultColorVar, type HighlightMap } from './traceHighlight';
+import { BLOCK_HIGHLIGHT_KEY, BLOCK_STACK_RULE_KEY, type HighlightInject } from './highlightInjection';
+import { highlightKey, resultColorVar, type HighlightMap } from './traceHighlight';
 import { useProjectStore } from '@/stores/project';
 import { useScriptEditStore } from '@/stores/scriptEdit';
 import BlockNode from './BlockNode.vue';
@@ -45,10 +45,17 @@ const EMPTY_HIGHLIGHT: HighlightInject = {
     details: ref<Map<string, string>>(new Map()),
 };
 const highlight = inject(BLOCK_HIGHLIGHT_KEY, EMPTY_HIGHLIGHT);
+/**
+ * 本堆所属规则 id，往下 provide 给递归的 BlockNode 拼高亮 key 用。
+ * 画布上所有堆共用同一份高亮 map，key 里不带规则 id 的话，试跑一条规则会把每一堆的
+ * 帽子和同路径积木一起点亮（见 highlightInjection 头注）。
+ */
+const ownRuleId = computed(() => props.rule.id);
+provide(BLOCK_STACK_RULE_KEY, ownRuleId);
 /** 帽子（trigger）的试跑结果态。 */
-const hatResult = computed(() => highlight.results.value.get('trigger'));
+const hatResult = computed(() => highlight.results.value.get(highlightKey(props.rule.id, 'trigger')));
 /** 帽子的 trace detail（作 title）。 */
-const hatDetail = computed(() => highlight.details.value.get('trigger'));
+const hatDetail = computed(() => highlight.details.value.get(highlightKey(props.rule.id, 'trigger')));
 
 /**
  * 帽子 pointerdown：选中本规则 + 启动移堆（拖帽子移整堆）。只接管主键（左键）。

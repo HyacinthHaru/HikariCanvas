@@ -11,16 +11,19 @@
  * <p>错误处理：catch {@link SvgImportError}（code 字段）或通用异常，
  * 文案由 i18n {@code svgImport.failed(code)} 翻成大白话。</p>
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { X, FileImage, Loader2, CheckCircle2, AlertTriangle } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 import { useSvgImport } from '@/composables/useSvgImport';
+import { useProjectStore } from '@/stores/project';
 import { SvgImportError } from '@/lib/svg/svgSecurity';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const { t } = useI18n();
+/** 画板锁定时不许导入。对话框可能开着的时候锁才落下，所以这里也判一次。 */
+const locked = computed(() => useProjectStore().isLocked);
 
 /** 处理阶段：idle 选文件 → importing → done / error。SVG 追加不破坏工程，无需二次确认。 */
 type Phase = 'idle' | 'importing' | 'done' | 'error';
@@ -116,13 +119,14 @@ defineExpose({ doImport });
           @change="onPick"
         />
 
-        <!-- idle：选文件 / 拖拽入口 -->
+        <!-- idle：选文件 / 拖拽入口。画板锁定时禁用（后端不看 lock，前端是唯一执行者） -->
         <template v-if="phase === 'idle'">
           <button
-            class="hc-btn w-full flex flex-col items-center justify-center gap-2 px-3 py-6 rounded-[var(--radius-sm)] border border-dashed transition-colors"
+            class="hc-btn w-full flex flex-col items-center justify-center gap-2 px-3 py-6 rounded-[var(--radius-sm)] border border-dashed transition-colors disabled:opacity-40"
             :class="isDragging
               ? 'border-[color:var(--ctp-blue)] bg-[color:var(--ctp-blue)]/10'
               : 'border-[color:var(--border)] hover:bg-[color:var(--accent)]'"
+            :disabled="locked"
             @click="pickFile"
             @dragenter.prevent="isDragging = true"
             @dragover.prevent="isDragging = true"

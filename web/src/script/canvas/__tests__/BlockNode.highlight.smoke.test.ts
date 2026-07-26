@@ -14,8 +14,8 @@ import { nextTick, ref } from 'vue';
 
 import BlockNode from '../BlockNode.vue';
 import BlockStack from '../BlockStack.vue';
-import { BLOCK_HIGHLIGHT_KEY, type HighlightInject } from '../highlightInjection';
-import type { StepResult } from '../traceHighlight';
+import { BLOCK_HIGHLIGHT_KEY, BLOCK_STACK_RULE_KEY, type HighlightInject } from '../highlightInjection';
+import { highlightKey, type StepResult } from '../traceHighlight';
 import { useUiStore } from '@/stores/ui';
 import type { ScriptAction, ScriptRule } from '@/types/protocol';
 
@@ -23,6 +23,19 @@ function makeHighlight(results: [string, StepResult][], details: [string, string
     return {
         results: ref(new Map(results)),
         details: ref(new Map(details)),
+    };
+}
+
+/** 高亮 map 的 key 是「规则 id + blockId」复合键，测试统一经 highlightKey 拼。 */
+function k(blockId: string, ruleId = 'sr-1'): string {
+    return highlightKey(ruleId, blockId);
+}
+
+/** BlockNode 单独挂载时要自带规则上下文（画布上由 BlockStack provide）。 */
+function nodeProvide(highlight: HighlightInject, ruleId = 'sr-1') {
+    return {
+        [BLOCK_HIGHLIGHT_KEY as symbol]: highlight,
+        [BLOCK_STACK_RULE_KEY as symbol]: ref(ruleId),
     };
 }
 
@@ -36,7 +49,7 @@ describe('BlockNode 试跑高亮 smoke', () => {
         const action: ScriptAction = { type: 'log', message: 'hi' };
         const w = mount(BlockNode, {
             props: { action, path: 'actions/0' },
-            global: { provide: { [BLOCK_HIGHLIGHT_KEY as symbol]: makeHighlight([['actions/0', 'ok']]) } },
+            global: { provide: nodeProvide(makeHighlight([[k('actions/0'), 'ok']])) },
         });
         await nextTick();
         const node = w.find('.hc-block-node');
@@ -49,9 +62,9 @@ describe('BlockNode 试跑高亮 smoke', () => {
         const w = mount(BlockNode, {
             props: { action, path: 'actions/0' },
             global: {
-                provide: {
-                    [BLOCK_HIGHLIGHT_KEY as symbol]: makeHighlight([['actions/0', 'error']], [['actions/0', '执行抛异常']]),
-                },
+                provide: nodeProvide(
+                    makeHighlight([[k('actions/0'), 'error']], [[k('actions/0'), '执行抛异常']]),
+                ),
             },
         });
         await nextTick();
@@ -62,7 +75,7 @@ describe('BlockNode 试跑高亮 smoke', () => {
         const action: ScriptAction = { type: 'log', message: 'hi' };
         const w = mount(BlockNode, {
             props: { action, path: 'actions/1' },
-            global: { provide: { [BLOCK_HIGHLIGHT_KEY as symbol]: makeHighlight([['actions/0', 'ok']]) } },
+            global: { provide: nodeProvide(makeHighlight([[k('actions/0'), 'ok']])) },
         });
         await nextTick();
         const node = w.find('.hc-block-node');
@@ -96,7 +109,7 @@ describe('BlockStack 帽子高亮 smoke（blockId=trigger）', () => {
     it("trigger step 命中 → 帽子 data-hl-result", async () => {
         const w = mount(BlockStack, {
             props: { rule: makeRule(), x: 0, y: 0 },
-            global: { provide: { [BLOCK_HIGHLIGHT_KEY as symbol]: makeHighlight([['trigger', 'ok']]) } },
+            global: { provide: { [BLOCK_HIGHLIGHT_KEY as symbol]: makeHighlight([[k('trigger'), 'ok']]) } },
         });
         await nextTick();
         const hat = w.find('.hc-stack-hat');
@@ -108,7 +121,10 @@ describe('BlockStack 帽子高亮 smoke（blockId=trigger）', () => {
         const w = mount(BlockStack, {
             props: { rule: makeRule(), x: 0, y: 0 },
             global: {
-                provide: { [BLOCK_HIGHLIGHT_KEY as symbol]: makeHighlight([['trigger', 'skipped']], [['trigger', '条件不满足']]) },
+                provide: {
+                    [BLOCK_HIGHLIGHT_KEY as symbol]:
+                        makeHighlight([[k('trigger'), 'skipped']], [[k('trigger'), '条件不满足']]),
+                },
             },
         });
         await nextTick();
@@ -119,5 +135,33 @@ describe('BlockStack 帽子高亮 smoke（blockId=trigger）', () => {
         const w = mount(BlockStack, { props: { rule: makeRule(), x: 0, y: 0 } });
         await nextTick();
         expect(w.find('.hc-stack-hat').attributes('data-hl-result')).toBeUndefined();
+    });
+
+    it('试跑的是别的规则 → 本堆帽子和积木都不亮（不跨堆误亮）', async () => {
+        // 画布上所有堆共用同一份高亮 map：试跑 sr-9 时 sr-1 这一堆必须一片安静。
+        const highlight = makeHighlight(
+            [[k('trigger', 'sr-9'), 'ok'], [k('actions/0', 'sr-9'), 'ok']],
+            [[k('trigger', 'sr-9'), '别的规则的说明']],
+        );
+        const w = mount(BlockStack, {
+            props: { rule: makeRule(), x: 0, y: 0 },
+            global: { provide: { [BLOCK_HIGHLIGHT_KEY as symbol]: highlight } },
+        });
+        await nextTick();
+        expect(w.find('.hc-stack-hat').attributes('data-hl-result')).toBeUndefined();
+        expect(w.find('.hc-stack-hat').attributes('title')).toBeUndefined();
+        expect(w.find('.hc-block-node').attributes('data-hl-result')).toBeUndefined();
+    });
+
+    it('试跑的就是本规则 → 帽子与堆内积木都点亮', async () => {
+        const highlight = makeHighlight([[k('trigger'), 'ok'], [k('actions/0'), 'blocked']]);
+        const w = mount(BlockStack, {
+            props: { rule: makeRule(), x: 0, y: 0 },
+            global: { provide: { [BLOCK_HIGHLIGHT_KEY as symbol]: highlight } },
+        });
+        await nextTick();
+        expect(w.find('.hc-stack-hat').attributes('data-hl-result')).toBe('ok');
+        // 堆内 BlockNode 自己从 BlockStack provide 的规则 id 拼 key，无需外部再注入
+        expect(w.find('.hc-block-node').attributes('data-hl-result')).toBe('blocked');
     });
 });

@@ -19,6 +19,11 @@ import { ensureLoaded as ensureFontLoaded } from '@/render/FontLoader';
 import { useI18n } from '@/i18n';
 import { useProjectStore } from '@/stores/project';
 import { getWsClient } from '@/network/wsClient';
+import {
+    MAX_FONT_SIZE, MAX_GLOW_RADIUS, MAX_LETTER_SPACING, MAX_LINE_HEIGHT, MAX_SHADOW_OFFSET,
+    MAX_STROKE_WIDTH, MAX_TEXT_LEN, MIN_LETTER_SPACING, MIN_LINE_HEIGHT,
+    clampNumber, clampText,
+} from '@/constants/elementLimits';
 import type { TextElement, Effects, Stroke, Shadow, Glow } from '@/types/protocol';
 
 // 字体下拉动态化 —— fetch /api/font/list 而非读硬编码 FONT_META 白名单。
@@ -138,10 +143,15 @@ function onPickerClose() {
     pickerMode.value = { kind: 'insertNew' };
 }
 
-/** chip editor 把整段最新 text 通过 v-model:text 回传。 */
+/**
+ * chip editor 把整段最新 text 通过 v-model:text 回传。
+ * 超过后端上限（{@link MAX_TEXT_LEN} 字符）就地截断——否则这一帧会被后端整条拒收，
+ * 而浏览器里已经显示了全文，游戏里还停在上一版，两边一直对不上。
+ */
 function onTextChipUpdate(v: string) {
-    (props.element as unknown as Record<string, unknown>).text = v;
-    emit('updateDebounced', { text: v });
+    const text = clampText(v);
+    (props.element as unknown as Record<string, unknown>).text = text;
+    emit('updateDebounced', { text });
     autoFitHeightDebounced();
 }
 
@@ -149,9 +159,17 @@ const autoFitHeightDebounced = useDebounceFn(() => {
     fitTextHeight();
 }, 250);
 
+/**
+ * 数值字段改值。HTML 的 min/max 只管上下箭头和表单校验，手输 / 粘贴照样能塞进任意数，
+ * 所以范围在这里夹死——超界的帧会被后端整条拒收，而本地已经乐观改过，双端就此分叉且无提示。
+ * 范围与后端 ElementValidator 同源（见 constants/elementLimits）。
+ */
 function onNumberChange(field: string, ev: Event) {
-    const v = parseFloat((ev.target as HTMLInputElement).value);
+    let v = parseFloat((ev.target as HTMLInputElement).value);
     if (!Number.isFinite(v)) return;
+    if (field === 'fontSize') v = Math.round(clampNumber(v, 1, MAX_FONT_SIZE));
+    else if (field === 'lineHeight') v = clampNumber(v, MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+    else if (field === 'letterSpacing') v = clampNumber(v, MIN_LETTER_SPACING, MAX_LETTER_SPACING);
     emit('updateDebounced', { [field]: v });
 }
 
@@ -223,17 +241,25 @@ function toggleGlow(ev: Event) {
     updateEffects({ glow: on ? { radius: 3, color: '#33CCFF' } : undefined });
 }
 
+// 三个特效的数值都夹到后端范围内再发（同 onNumberChange 的理由：超界整帧被拒 + 双端分叉）。
 function patchStroke(partial: Partial<Stroke>) {
     const cur = textEffects().stroke ?? { width: 2, color: '#000000' };
-    updateEffects({ stroke: { ...cur, ...partial } });
+    const next = { ...cur, ...partial };
+    next.width = Math.round(clampNumber(next.width, 0, MAX_STROKE_WIDTH));
+    updateEffects({ stroke: next });
 }
 function patchShadow(partial: Partial<Shadow>) {
     const cur = textEffects().shadow ?? { dx: 2, dy: 2, color: '#000000' };
-    updateEffects({ shadow: { ...cur, ...partial } });
+    const next = { ...cur, ...partial };
+    next.dx = Math.round(clampNumber(next.dx, -MAX_SHADOW_OFFSET, MAX_SHADOW_OFFSET));
+    next.dy = Math.round(clampNumber(next.dy, -MAX_SHADOW_OFFSET, MAX_SHADOW_OFFSET));
+    updateEffects({ shadow: next });
 }
 function patchGlow(partial: Partial<Glow>) {
     const cur = textEffects().glow ?? { radius: 3, color: '#33CCFF' };
-    updateEffects({ glow: { ...cur, ...partial } });
+    const next = { ...cur, ...partial };
+    next.radius = Math.round(clampNumber(next.radius, 0, MAX_GLOW_RADIUS));
+    updateEffects({ glow: next });
 }
 </script>
 
@@ -339,7 +365,7 @@ function patchGlow(partial: Partial<Glow>) {
               <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
             </Tooltip>
           </span>
-          <input type="number" min="1" class="hc-input" :value="element.fontSize"
+          <input type="number" min="1" :max="MAX_FONT_SIZE" class="hc-input" :value="element.fontSize"
                  @input="(e) => onNumberChange('fontSize', e)">
         </label>
         <label class="flex flex-col gap-0.5">
@@ -391,7 +417,8 @@ function patchGlow(partial: Partial<Glow>) {
               <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
             </Tooltip>
           </span>
-          <input type="number" step="0.5" class="hc-input" :value="element.letterSpacing"
+          <input type="number" step="0.5" :min="MIN_LETTER_SPACING" :max="MAX_LETTER_SPACING"
+                 class="hc-input" :value="element.letterSpacing"
                  @input="(e) => onNumberChange('letterSpacing', e)">
         </label>
         <label class="flex flex-col gap-0.5">
@@ -401,7 +428,8 @@ function patchGlow(partial: Partial<Glow>) {
               <HelpCircle class="size-2.5 opacity-50 hover:opacity-100 inline" />
             </Tooltip>
           </span>
-          <input type="number" step="0.1" class="hc-input" :value="element.lineHeight"
+          <input type="number" step="0.1" :min="MIN_LINE_HEIGHT" :max="MAX_LINE_HEIGHT"
+                 class="hc-input" :value="element.lineHeight"
                  @input="(e) => onNumberChange('lineHeight', e)">
         </label>
       </div>
@@ -428,7 +456,7 @@ function patchGlow(partial: Partial<Glow>) {
         <div v-if="textEffects().stroke" class="grid grid-cols-2 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
             <span class="text-xs text-[color:var(--muted-foreground)]">width</span>
-            <input type="number" min="0" class="hc-input" :value="textEffects().stroke!.width"
+            <input type="number" min="0" :max="MAX_STROKE_WIDTH" class="hc-input" :value="textEffects().stroke!.width"
                    @input="(e) => patchStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
@@ -447,12 +475,14 @@ function patchGlow(partial: Partial<Glow>) {
         <div v-if="textEffects().shadow" class="grid grid-cols-3 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
             <span class="text-xs text-[color:var(--muted-foreground)]">dx</span>
-            <input type="number" class="hc-input" :value="textEffects().shadow!.dx"
+            <input type="number" :min="-MAX_SHADOW_OFFSET" :max="MAX_SHADOW_OFFSET" class="hc-input"
+                   :value="textEffects().shadow!.dx"
                    @input="(e) => patchShadow({ dx: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
             <span class="text-xs text-[color:var(--muted-foreground)]">dy</span>
-            <input type="number" class="hc-input" :value="textEffects().shadow!.dy"
+            <input type="number" :min="-MAX_SHADOW_OFFSET" :max="MAX_SHADOW_OFFSET" class="hc-input"
+                   :value="textEffects().shadow!.dy"
                    @input="(e) => patchShadow({ dy: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">
@@ -471,7 +501,7 @@ function patchGlow(partial: Partial<Glow>) {
         <div v-if="textEffects().glow" class="grid grid-cols-2 gap-2 pt-1.5">
           <label class="flex flex-col gap-0.5">
             <span class="text-xs text-[color:var(--muted-foreground)]">radius</span>
-            <input type="number" min="0" max="64" class="hc-input" :value="textEffects().glow!.radius"
+            <input type="number" min="0" :max="MAX_GLOW_RADIUS" class="hc-input" :value="textEffects().glow!.radius"
                    @input="(e) => patchGlow({ radius: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">

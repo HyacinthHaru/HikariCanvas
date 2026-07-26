@@ -14,6 +14,7 @@ import Tooltip from '@/components/ui/Tooltip.vue';
 import ColorInput from '@/components/ui/ColorInput.vue';
 import FillInput from '@/components/ui/FillInput.vue';
 import { useI18n } from '@/i18n';
+import { MAX_STROKE_WIDTH, clampNumber } from '@/constants/elementLimits';
 import type { RectElement, CircleElement, ShapeElement, PathElement, Stroke, Fill } from '@/types/protocol';
 
 type GeometricElement = RectElement | CircleElement | ShapeElement | PathElement;
@@ -44,7 +45,11 @@ function toggleGeomStroke(ev: Event) {
 }
 function patchGeomStroke(partial: Partial<Stroke>) {
     const cur = geomStroke() ?? { width: 1, color: '#000000' };
-    emit('update', { stroke: { ...cur, ...partial } });
+    const next = { ...cur, ...partial };
+    // 宽度夹到后端范围内。输入框的 min="0" 挡不住手输负数，`parseInt(...) || 0` 也照样放行
+    // 负值；超界这一帧会被后端整条拒收，而本地已经乐观改过，编辑器和游戏里就此对不上。
+    next.width = Math.round(clampNumber(next.width, 0, MAX_STROKE_WIDTH));
+    emit('update', { stroke: next });
 }
 function toggleGeomFill(ev: Event) {
     const on = (ev.target as HTMLInputElement).checked;
@@ -105,7 +110,7 @@ function onNumberChange(field: string, ev: Event) {
         <div class="grid grid-cols-2 gap-2">
           <label class="flex flex-col gap-0.5">
             <span class="text-xs text-[color:var(--muted-foreground)]">{{ t.properties.strokeWidth }}</span>
-            <input type="number" min="0" class="hc-input" :value="geomStroke()!.width"
+            <input type="number" min="0" :max="MAX_STROKE_WIDTH" class="hc-input" :value="geomStroke()!.width"
                    @input="(e) => patchGeomStroke({ width: parseInt((e.target as HTMLInputElement).value, 10) || 0 })">
           </label>
           <label class="flex flex-col gap-0.5">

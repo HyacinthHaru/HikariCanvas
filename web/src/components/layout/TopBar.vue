@@ -471,17 +471,19 @@ const showMoreButton = computed(() => true);
           <Download class="size-4 shrink-0" />
           <span>{{ t.topbar.moreExport }}</span>
         </button>
-        <!-- 导入工程（.canvas）：仅溢出菜单内，常驻不折叠 -->
+        <!-- 导入工程（.canvas）：仅溢出菜单内，常驻不折叠。锁定时禁用（导入=整块画布被替换） -->
         <button
           class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left disabled:opacity-40"
+          :disabled="locked"
           @click="importOpen = true"
         >
           <Upload class="size-4 shrink-0" />
           <span>{{ t.topbar.moreImport }}</span>
         </button>
-        <!-- 导入 SVG：追加矢量元素到当前工程，仅溢出菜单内，常驻不折叠 -->
+        <!-- 导入 SVG：追加矢量元素到当前工程，仅溢出菜单内，常驻不折叠。锁定时禁用 -->
         <button
           class="hc-btn w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--accent)] transition-colors text-left disabled:opacity-40"
+          :disabled="locked"
           @click="svgImportOpen = true"
         >
           <FileImage class="size-4 shrink-0" />

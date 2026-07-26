@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-07-27 · 0.9.17 必修 Bug 批 · 前端总成（Top50 剩余前端条目，4 个并行代理）
+
+W1–W4 之后剩下的 Top50 条目改用**按文件域切分的并行子代理**推进（controller 只做装配、跨切面决策与统一验证）。本条是其中**前端**部分的合并记录；后端部分随下一条提交。
+
+**画布 / 变换 / SVG / Live Paint / lock 守卫**
+- **#12** brush 元素被排除出 Transformer（笔触 w/h 是采样点派生值，后端 `applyBrushPatch` 无 w/h 分支必拒）；`onTransformEnd` 加「几何未变则不发 op」短路（原来碰一下锚点就往撤销栈灌空操作）。
+- **#13** lasso `MAX_VERTICES` 200 → 64 对齐后端 `MAX_MASK_VERTICES`；容差阶梯扩到 `[1..64]` 且每轮从原始点串重算；仍超限则等间隔抽稀 + `onError('simplified')` 提示（`CanvasView` 原本根本没接 `onError`）。
+- **#18** SVG 无显式 fill 的形状不再被丢弃：新增三态解析（有填充 / 显式 none / 值读不懂）+ 沿祖先链继承 `fill`/`stroke`/`stroke-width`/`fill-rule`/`color`，缺省与读不懂都回落黑色（SVG 规范默认值）。**`currentColor` 定为映射黑色而非主题前景色**——主题 token 是 `hsl()` 形态而该模块只认 hex/命名色，且深色主题前景接近白色、贴到浅色画布上等于看不见；黑色也是 CSS `color` 的浏览器初始值。
+- **#19** lock 守卫三处缺口补齐：SVG 导入 / 工程导入 / 整个时间轴 dock（8 个 mutation 出口全加 guard，播放与只读操作不受影响），相关按钮 `:disabled`。
+- **#20** `TimelineDock` 的 Delete 监听改用 `isContentEditable`（Lexical 编辑器根节点是 div，原来只判 tagName，在 chip 里按 Backspace 会真删关键帧）。
+- **#35** Live Paint 的 gap graph 与 `findElementAt` 改用全部可见图层（原来只含活动层，而 `PreviewRenderer` 是全层绘制）；顺带对「命中元素在被锁的其它层」提前提示，不让它变成后端静默失败。
+- **#39** 报告自标 plausible 的那一环证据补上了：查仓库内 **Konva 9.3.22** 源码，`Transformer._handleMouseDown` 确实**没有**设 `cancelBubble`（只在 dragstart/dragend 设），锚点 mousedown 一路冒到 stage 成立。改用 Konva 官方 `target !== stage` 写法。
+- **#41** brush 闭合环形笔画的 hole 不再被丢（原 `poly[0]` 只取外环，头注释「brush stroke 不可能产生 hole」对闭环不成立）→ 画个圈想填内部现在填得了。
+- **#42** gap path 的 `d` 加总长预算（后端 `MAX_LEN=4096` 的镜像 3900），超预算整体抬容差重试，压不进去才提示。实测报告里「十来个圆岛 ≈5000 字符」的场景被救回（3655 字符正常提交）。
+
+**网络 / store / 各类缓存**
+- **#21** 刷新页面必登出：`pickInitialToken` 改存量优先、auth 成功后 `history.replaceState` 清洗 URL、4001 只在被拒的正是存量 token 时才清。**代理指出「存量优先」会引入新死路**（重跑 `/canvas confirm` 后在同标签页打开新链接时，过期存量会被优先用、撞 4001 后无路可走），补了一次性补救：被拒的是存量且地址栏另有一枚不同 token 时，改用 URL 那枚重连一次。
+- **#22** `selectRule` 同 id 早退守卫放在 **store** 而非组件，一次覆盖三个调用点。
+- **#24 / #25 / #26 / #43** 四处负缓存统一按仓内既有的 `FAILED_RETRY_TTL_MS = 10s` 自愈范式改（metrics 表清 null sentinel、FontLoader 失败条目可过期、palette reject 时把 promise 置回 null、Live Paint 字体失败不写缓存）；`PreviewRenderer.resetImageCaches` 一并清这三处，切 wall / 重连即刻重试。
+- **#43 的「未确证疑点」实证为真 bug 且比标注严重**：在仓库真实字体上跑 fontkit 2.0.4 的 node 与 browser 两个构建，裸 `ArrayBuffer` 双双抛 `TypeError: First argument to DataView constructor must be an ArrayBuffer`，`Uint8Array` 正常。根因链定位到 `fontkit.create` → `DecodeStream` → `restructure` 的 `new DataView(buffer.buffer, …)`。**生产里所有文字的 Live Paint 一直静默退化成 bbox 近似**。除改传 `Uint8Array` 外，把本地 `FontkitModule.create` 签名从 `ArrayBuffer | Uint8Array` **收窄成 `Uint8Array`** 让同类错误编译期即挡；并堵掉放大器（字体缺失时不进 polygon / multiPolygon 缓存）。
+- **#34** `elementById` 改扫全部图层；`useClipboard.ts` 那条说反的注释（「保险起见用 elementById」）一并改正。
+
+**脚本编辑器 / 变量面板 / 属性面板 / 铁路 UI**
+- **#15** 全局变量组补上 mine 组那样的内联别名编辑分支（原来按钮点了完全没反应且 `editingAliasFor` 悬空）。
+- **#16 比描述更糟**：`moveNode` 在目标路径失效时返回的是**已摘掉源节点**的树，调用方照常提交并自动保存 → 积木连子树真丢。改为插入落空即**抛错**；`buildSlots`/`collectSlots` 带 `draggingRuleId`（自身子树剔除改成同规则才剔，原来只比 path 会误杀别堆合法插槽）；画布源只保留本堆插槽 + 落树前二次闸。
+- **#17** `blockKindAt` 改回 `{kind, actionKind}`，两处 `isTweenBodySlotAllowed` 补第三参（friendly 积木序列化后 type 恒为 `setElementProperties`，原来 tween body 槽全被过滤）。
+- **#40** 试跑高亮 key 加 ruleId 复合前缀 + `BLOCK_STACK_RULE_KEY` provide/inject（不层层透传 prop），跨堆误亮消除。
+- **#44** Picker 别名 key 统一走新纯函数 `absoluteFullName`（复用 `resolveFullName` 归一化），与 chip 侧逐字对齐。
+- **#45** `RailRunDialog` 加 `timetableDirty`，脏时跳过时刻表重建 + 未保存提示（原来先点「保存基本信息」就静默清空时刻表编辑）。
+- **#36** 方向键微移抽出 `nudgeQueue`（本地累积 + keyup/blur/200ms 防抖单次提交），照搬拖动路径的既有纪律；`RATE_LIMITED` 现在走 `lastError` 业务提示通道（长按方向键原本可触发 5 次/60s 违规 → close 1008 把编辑器踢下线）。
+- **#37** 新增 `constants/elementLimits.ts` 镜像后端常量，对报告复核后确认真缺的字段补钳位（text 256 / x·y ±10000 / w·h 上限 / fontSize·lineHeight·letterSpacing / stroke.width 负值 / shadow 偏移 / glow 半径）；**并做了精确回滚**——协议里没有客户端重拉快照的 op，故按帧 id 记原值，`INVALID_PAYLOAD` 回来时只还原那几个字段（`RATE_LIMITED` 这类「没送到」不回滚）。
+- **顺带（代理 A 发现、转交代理 D 处理的同根因遗漏）**：`RightPanel` 对 brush 也渲染 `TransformSection`，其 w/h 输入同样发 `element.update` 必被拒——已禁用这两个输入（x/y/rotation 保留，后端支持）。
+
+**代理判断与我不同、且更对的地方**：#18 的 `currentColor` 映射（见上）。**代理主动补上的缺失证据**：#39 的 Konva 源码、#43 的 fontkit 实跑。
+
+**验证**：前端 vitest **1450 → 1561**（+111，112 个文件全绿）+ `vite build` 通过。四个代理各自对关键守卫做了变异测试（把修复改回旧行为确认转红）；其中 #16 首版跨堆用例曾被另一个 bug 掩盖成 vacuous，代理改用「拖第二块」使其真正命中后才成立。
+
+关联文件：69 个（`web/src/**`），含 11 个新增测试文件与 2 个新增模块（`composables/nudgeQueue.ts`、`constants/elementLimits.ts`）。
+
+---
+
 ## 2026-07-26 · 0.9.17 必修 Bug 批 · W4：ABBA 死锁（唯一需要重新设计的一条）
 
 **#2 CRITICAL · `ProjectionThrottler` 与 `EditSession` 锁序相反，可冻结主线程。**

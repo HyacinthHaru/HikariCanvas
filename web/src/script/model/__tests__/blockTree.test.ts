@@ -282,6 +282,15 @@ describe('blockTree.moveNode', () => {
         const a = nested();
         expect(moveNode(a, ['actions', '9'], ['actions'], 0)).toBe(a);
     });
+
+    it('目标容器路径在本树里不存在 → 抛错（绝不能返回"少了一块"的树）', () => {
+        // actions/0 是 log，没有 then 子序列；往它的 then 里插必然落空。
+        // 早期实现在这里静默返回"已摘掉源节点"的树，调用方一提交积木就没了。
+        const a: ScriptAction[] = [log('A'), log('B')];
+        expect(() => moveNode(a, ['actions', '1'], ['actions', '0', 'then'], 0)).toThrow();
+        // 入参不被修改（immutable 契约）
+        expect(a.map((n) => (n as { message: string }).message)).toEqual(['A', 'B']);
+    });
 });
 
 describe('blockTree.walk', () => {
