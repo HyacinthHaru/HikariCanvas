@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-07-26 · 0.9.17 必修 Bug 批 · W1：5 条低风险修复
+
+外部静态审查产出一份 50 条必修清单。controller 逐条读代码复核了其中 30 条 + 6 条「新增发现」里的 1 条，**全部属实、0 条推翻**（对照 0.9.14 那次三报一假）。本批按「一次改动解决一类」重排为 6 波推进，W1 是改动最小、可自证的 5 条，同时建立本批的验证基线。版本 `0.9.16-SNAPSHOT` → **`0.9.17-SNAPSHOT`**（前后端同步）。
+
+- **#10 `buildPatch` 缺 `color` case**（后端，功能 100% 失效）：`ScriptRuleValidator.ELEMENT_PROPERTIES` 有 9 项含 `color`，而 `ElementPropertyApplier.buildPatch` 的 switch 只有 8 个 case，`color` 落 `default -> throw`。后果：`setColor` / `setElementProperty` 积木保存合法但运行时恒返 error step；`TweenBlock` 的 color 补间中间帧正常渲染、末帧无法落库，`clearStaticDiff` 后弹回原色（违反 scripting-tween.md T7）。补 `color` case（复用同正则的 `HEX_FILL`，与 `ElementValidator.COLOR_RE` 一致）。**该函数自己的 javadoc 写着「白名单 8 属性」——注释与校验器早就对不上，一并改正。**
+- **#11 元素列表拖拽被改两遍**（前端，数据错乱）：`ElementListSection.onElementDrop` 先本地 `splice` 重排再发 `element.reorder`，而后端产出位置型 patch 且 `EditOpDispatcher` 对发起 session 自己也 `pushPatch`，前端 `applyPatch` 无自身消息去重 → 同一次重排执行两遍（`[A,B,C]` 拖 A 到 idx2 → 本地 `[B,C,A]` → 回放成 `[C,A,A]`，B 消失 A 重复）。**删掉乐观 splice** —— `LayerPanel` 的同类拖拽一直是只发 op 的正确写法。
+- **#33 关网格 patch 被 NON_NULL 吞掉**（双端，功能失效）：后端 `setGridSize(0)` 归一化为 null 并发 `replace /canvas/gridSize`，Javalin 全局 `JsonInclude.NON_NULL` 把 `value` 字段整个省掉；前端 canvas 分支要求 `op.value !== undefined` 才应用 → op 静默丢弃，UI 网格关不掉、`useSnapManager` 仍按旧 gridSize 吸附。改为 `replace` 无条件应用（缺席 = null 语义）+ 补 `remove` 分支。同族的 `/tweenFps`、`/activeTimelineId` 一直有 undefined 兜底，`WallOpDispatcher:121` 也早注释过同一个坑（wall.unlock）。
+- **#38 Transformer 未禁翻转**（前端）：全仓无 `flipEnabled`，Konva 默认允许拖锚点越过对边镜像，`decompose` 产出 rotation 180 + 单轴负 scale，`onTransformEnd` 的 `Math.max(1, round(size × 负 scale))` 恒得 1 → 元素塌成 1px 落盘（path 的 d 同时被 `scalePathD` 压毁）。设 `flipEnabled: false`。
+- **#50 业务 toast 让连接状态永久显示 error**（前端）：`network.status` 首判 `lastError`，而 `lastError` 是全站统一错误显示通道（TopBar / scriptEdit / ScriptVariableWatch / ConditionBuilder 都写）→ 一次业务失败就让状态栏红到重连为止。**拆两个字段**：新增 `connectionError`（只由 wsClient 经 `setConnectionError` 写，驱动 status）+ `clearErrors()`；`lastError` 保留为显示通道；wsClient 12 处连接层写入全部迁移；StatusBar 给业务提示单独一个非红色 chip（不让业务错误变不可见）。
+
+**验证**：后端 `:plugin:test` `ElementPropertyApplierTest` 新增 3 例全绿——`buildPatch_supportsColor` / **`buildPatch_coversEveryWhitelistedProperty`（结构守卫：遍历 ELEMENT_PROPERTIES 断言 buildPatch 每项都有 case，这是防复发的真守卫）** / `headless_colorChange_persistsToDb`（端到端打通 buildPatch → applyMany → applyTextPatch → DB 真链——**此前只有 fake `applyFn` 的补间测试，真链从未被打通，这正是 color 能漏到现在的根因**）。前端 vitest **1450 → 1458**（新增 `projectCanvasPatch` 4 例 + `networkStatus` 4 例）全绿。两组新守卫均已确认非 vacuous（修复前必失败）。
+
+关联文件：`build.gradle.kts`、`web/package.json`；`script/engine/ElementPropertyApplier` + 其 Test；`web/src/{stores/project.ts,stores/network.ts,network/wsClient.ts,components/properties/ElementListSection.vue,components/layout/CanvasView.vue,components/layout/StatusBar.vue}` + 2 新测试。
+
+---
+
 ## 2026-07-25 · CLAUDE.md 精简（历史进度改指针到 journal）+ 清理 ultrareview 归档
 
 纯文档整理，零代码改动。

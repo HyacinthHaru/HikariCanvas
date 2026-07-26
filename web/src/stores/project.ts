@@ -237,10 +237,17 @@ function applyOne(state: ProjectState, op: PatchOp): void {
     // ---------- /canvas/<field> ----------
     if (tokens[0] === 'canvas' && tokens.length === 2) {
         const field = tokens[1] as keyof ProjectState['canvas'];
-        if (op.op === 'replace' && op.value !== undefined) {
+        // replace 的 value 缺席 = 后端把该字段归一化成 null（Javalin 全局
+        // JsonInclude.NON_NULL 会整个省掉 value 字段），不是"没带值所以别动"。
+        // 早先要求 value !== undefined 才应用，导致 setGridSize(0) → null 的
+        // 关网格 patch 被静默丢弃，UI 网格关不掉、snap 仍按旧 gridSize 吸附。
+        // 同族的 /tweenFps 与 /activeTimelineId 分支一直有 undefined 兜底。
+        if (op.op === 'replace') {
             // canvas.background 升级 FillCompat 后 Canvas 字段类型异构，
             // 显式 unknown 中转避免 TS 严格 cast 报错。
             (state.canvas as unknown as Record<string, unknown>)[field] = op.value;
+        } else if (op.op === 'remove') {
+            (state.canvas as unknown as Record<string, unknown>)[field] = undefined;
         }
         return;
     }

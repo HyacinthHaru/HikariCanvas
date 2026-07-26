@@ -465,10 +465,14 @@ public final class ElementPropertyApplier {
     }
 
     /**
-     * 值串 → element.update patch（单属性）。白名单 8 属性
+     * 值串 → element.update patch（单属性）。白名单 9 属性
      * （{@code ScriptRuleValidator.ELEMENT_PROPERTIES}）由校验层兜底，此处防御重申。
      *
-     * @throws IllegalArgumentException 属性不在白名单 / fill 格式非法
+     * <p>本 switch 必须与 {@code ScriptRuleValidator.ELEMENT_PROPERTIES} 逐项对齐——
+     * 校验层放行而这里 default 抛错的属性，会让积木保存成功但运行时恒返 error step，
+     * 且补间末帧无法落库（{@code color} 曾漏此 case）。</p>
+     *
+     * @throws IllegalArgumentException 属性不在白名单 / fill / color 格式非法
      */
     static Map<String, Object> buildPatch(String property, String value) {
         if (property == null) throw new IllegalArgumentException("property missing");
@@ -486,6 +490,15 @@ public final class ElementPropertyApplier {
                 }
                 // 字符串形态交给 EditSession（ElementValidator.parseFillNullable
                 // string → SolidFill 的 M11 既有兼容路径）
+                yield Map.of(property, value);
+            }
+            case "color" -> {
+                // text 字色。EditSession.applyTextPatch 的 color case 走
+                // ElementValidator.validateColor（COLOR_RE 与本类 HEX_FILL 同正则）。
+                if (value == null || !HEX_FILL.matcher(value).matches()) {
+                    throw new IllegalArgumentException(
+                            "color only supports #RRGGBB / #RRGGBBAA, got: " + value);
+                }
                 yield Map.of(property, value);
             }
             default -> throw new IllegalArgumentException("unsupported property: " + property);

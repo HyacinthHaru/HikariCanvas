@@ -27,10 +27,17 @@ const statusLabel = computed(() => {
         case 'ready': return t.value.status.ready;
         case 'authenticating': return t.value.status.authenticating;
         case 'connecting': return t.value.status.connecting;
-        case 'error': return net.lastError ?? t.value.status.error;
+        case 'error': return net.connectionError ?? t.value.status.error;
         default: return t.value.status.disconnected;
     }
 });
+
+/**
+ * 业务错误（改变量失败 / 规则校验不过 / 锁定失败等）单独显示，不染红连接指示。
+ * 连接本身出错时 statusLabel 已在讲同一件事，此处不重复。
+ */
+const noticeText = computed(() =>
+    net.status === 'error' ? null : net.lastError);
 
 // lock-state：published 砍 → locked / unlocked
 const wallStateLabel = computed(() => {
@@ -66,6 +73,12 @@ const wallStateLabel = computed(() => {
           <Lock v-if="project.isLocked" class="size-3" />
           <Unlock v-else class="size-3" />
           {{ wallStateLabel }}
+        </span>
+      </Tooltip>
+      <Tooltip v-if="noticeText" :text="noticeText">
+        <span class="flex items-center gap-1 text-[color:var(--ctp-peach)] max-w-[32ch] truncate">
+          <ShieldAlert class="size-3 shrink-0" />
+          {{ noticeText }}
         </span>
       </Tooltip>
     </div>

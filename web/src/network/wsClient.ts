@@ -122,15 +122,15 @@ export class WsClient {
             return;
         }
         if (!token) {
-            net.lastError = 'no token; open editor via /canvas confirm in-game';
-            net.pushLog('err', net.lastError);
+            net.setConnectionError('no token; open editor via /canvas confirm in-game');
+            net.pushLog('err', net.lastError!);
             return;
         }
         this.lastToken = token;
         this.stopped = false;
         this.clearReconnect();
         net.connecting = true;
-        net.lastError = null;
+        net.clearErrors();
         net.pushLog('meta', `connecting ${this.url}`);
         const sock = new WebSocket(this.url);
 
@@ -748,7 +748,7 @@ export class WsClient {
         // 旧后端不发 accepted_v → undefined → 沿用 v2 默认（信任 server）。
         const acceptedV = payload.accepted_v;
         if (typeof acceptedV === 'number' && acceptedV !== CLIENT_V) {
-            net.lastError = `协议版本不兼容 (server accepted_v=${acceptedV}, client=${CLIENT_V})；请升级`;
+            net.setConnectionError(`协议版本不兼容 (server accepted_v=${acceptedV}, client=${CLIENT_V})；请升级`);
             net.pushLog('err', `protocol version mismatch: accepted_v=${acceptedV} client_v=${CLIENT_V}`);
             this.stopped = true;
             try { this.ws?.close(4002, 'protocol_version_unsupported'); } catch { /* ignore */ }
@@ -759,7 +759,7 @@ export class WsClient {
         // authenticated=true / 未启心跳的半态卡死）。缺失视为协议错误：记日志 + 主动 close
         // （非 1000 码）让 onClose→scheduleReconnect 接管，而非半态继续。
         if (!payload || !payload.projectState || !payload.projectState.canvas) {
-            net.lastError = localizeErrorCode('MALFORMED_READY');
+            net.setConnectionError(localizeErrorCode('MALFORMED_READY'));
             net.pushLog('err', 'ready payload missing projectState/canvas; closing connection');
             try { this.ws?.close(4000, 'malformed_ready'); } catch { /* ignore */ }
             return;
@@ -887,7 +887,7 @@ export class WsClient {
         // （方便 LogDrawer 排查、客户端 i18n key 缺失时回退）。
         const friendly = localizeErrorCode(payload.code, payload.message);
         if (payload.code === 'AUTH_FAILED') {
-            net.lastError = friendly;
+            net.setConnectionError(friendly);
         }
         net.lastOpError = {
             code: payload.code,
@@ -932,26 +932,26 @@ export class WsClient {
         if (this.stopped || terminal) {
             if (ev.code === 4001) {
                 // 友好提示走 i18n（AUTH_FAILED 中英文都覆盖到 token 提示）
-                net.lastError = localizeErrorCode('AUTH_FAILED');
+                net.setConnectionError(localizeErrorCode('AUTH_FAILED'));
                 this.clearStoredToken();
             } else if (ev.code === 4002) {
-                // handleReady 已设精确 lastError（「协议版本不兼容 server=X client=Y」）；
-                // 若 stopped 为 true 且 lastError 已有精确内容，不覆写（防止通用提示冲掉精确提示）。
+                // handleReady 已设精确 connectionError（「协议版本不兼容 server=X client=Y」）；
+                // 若 stopped 为 true 且已有精确内容，不覆写（防止通用提示冲掉精确提示）。
                 // 若 stopped 为 false（理论上 handleReady 分支不会走这里，防御性保留兜底）。
-                if (!net.lastError) {
-                    net.lastError = localizeErrorCode('PROTOCOL_VERSION_UNSUPPORTED');
+                if (!net.connectionError) {
+                    net.setConnectionError(localizeErrorCode('PROTOCOL_VERSION_UNSUPPORTED'));
                 }
             } else if (ev.code === 4429) {
-                net.lastError = localizeErrorCode('RATE_LIMITED');
+                net.setConnectionError(localizeErrorCode('RATE_LIMITED'));
             } else if (ev.code === 1008) {
-                net.lastError = localizeErrorCode('RATE_LIMITED');
+                net.setConnectionError(localizeErrorCode('RATE_LIMITED'));
             } else if (ev.code === 1000) {
                 // 主动关闭，不刷红
             } else {
                 // stopped=true 但 code 不在以上特殊 code 中（如 close() 默认 1000 以外的情形）；
-                // 若 handleReady 等已设精确 lastError，不覆写。
-                if (!net.lastError) {
-                    net.lastError = `${localizeErrorCode('CONNECTION_CLOSED')}（code ${ev.code}）`;
+                // 若 handleReady 等已设精确 connectionError，不覆写。
+                if (!net.connectionError) {
+                    net.setConnectionError(`${localizeErrorCode('CONNECTION_CLOSED')}（code ${ev.code}）`);
                 }
             }
             return;
@@ -963,19 +963,19 @@ export class WsClient {
     private scheduleReconnect(): void {
         const net = useNetworkStore();
         if (this.reconnectAttempt >= RECONNECT_BACKOFF_S.length) {
-            net.lastError = localizeErrorCode('RECONNECT_EXHAUSTED');
+            net.setConnectionError(localizeErrorCode('RECONNECT_EXHAUSTED'));
             return;
         }
         const delay = RECONNECT_BACKOFF_S[this.reconnectAttempt] * 1000;
         this.reconnectAttempt += 1;
-        net.lastError = `连接断开，${delay / 1000}s 后重试（第 ${this.reconnectAttempt} 次）`;
+        net.setConnectionError(`连接断开，${delay / 1000}s 后重试（第 ${this.reconnectAttempt} 次）`);
         net.pushLog('meta', `reconnect scheduled in ${delay}ms`);
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
             if (this.stopped) return;
             const token = this.pickTokenForReconnect();
             if (!token) {
-                net.lastError = localizeErrorCode('TOKEN_MISSING');
+                net.setConnectionError(localizeErrorCode('TOKEN_MISSING'));
                 return;
             }
             this.connect(token);

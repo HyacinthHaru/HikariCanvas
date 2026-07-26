@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -139,6 +140,41 @@ class ElementPropertyApplierTest {
     }
 
     @Test
+    void buildPatch_supportsColor() {
+        assertEquals(Map.of("color", "#FF0000"),
+                ElementPropertyApplier.buildPatch("color", "#FF0000"));
+        assertEquals(Map.of("color", "#FF000080"),
+                ElementPropertyApplier.buildPatch("color", "#FF000080"), "#RRGGBBAA 合法");
+        assertThrows(IllegalArgumentException.class,
+                () -> ElementPropertyApplier.buildPatch("color", "red"));
+        assertThrows(IllegalArgumentException.class,
+                () -> ElementPropertyApplier.buildPatch("color", null));
+    }
+
+    /**
+     * 结构守卫：buildPatch 的 switch 必须覆盖
+     * {@link ac.haru.hikaricanvas.script.ScriptRuleValidator#ELEMENT_PROPERTIES} 全集。
+     *
+     * <p>校验层放行、这里却抛 unsupported 的属性，会让积木保存成功但运行时恒返 error step，
+     * 且 TweenBlock 末帧无法落库（clearStaticDiff 后视觉弹回原值）。{@code color} 就是这样
+     * 漏掉的——白名单有它、buildPatch 没有，而补间测试注的是 fake applyFn 从未打通真实
+     * applyMany，于是一直没被发现。</p>
+     */
+    @Test
+    void buildPatch_coversEveryWhitelistedProperty() {
+        for (String prop : ac.haru.hikaricanvas.script.ScriptRuleValidator.ELEMENT_PROPERTIES) {
+            String sample = switch (prop) {
+                case "fill", "color" -> "#123456";
+                case "text" -> "hi";
+                case "opacity" -> "0.5";
+                default -> "1";
+            };
+            assertDoesNotThrow(() -> ElementPropertyApplier.buildPatch(prop, sample),
+                    () -> "ELEMENT_PROPERTIES 含 '" + prop + "' 但 buildPatch 无对应 case");
+        }
+    }
+
+    @Test
     void buildPatch_rejectsBadFillAndUnknownProperty() {
         assertThrows(IllegalArgumentException.class,
                 () -> ElementPropertyApplier.buildPatch("fill", "red"));
@@ -162,6 +198,19 @@ class ElementPropertyApplierTest {
 
         ProjectState reloaded = wallRepo.loadById(wallId).orElseThrow().state();
         assertEquals("world", findText(reloaded, "e-1").text(), "落库后重读生效");
+    }
+
+    /**
+     * 端到端补上 buildPatch → applyMany → EditSession.applyTextPatch → DB 这条真链。
+     * 此前只有 fake applyFn 的补间测试，真链从未被打通（这是 color 漏 case 的根因）。
+     */
+    @Test
+    void headless_colorChange_persistsToDb() {
+        String wallId = createWall(stateWithText("e-1", false));
+        TraceStep step = headlessApplier().apply(wallId, "actions/0", "e-1", "color", "#00FF00");
+        assertEquals("ok", step.result(), () -> "setColor 积木 / color 补间末帧应落库: " + step.detail());
+        assertEquals("#00FF00",
+                findText(wallRepo.loadById(wallId).orElseThrow().state(), "e-1").color());
     }
 
     @Test

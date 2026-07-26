@@ -207,6 +207,10 @@ const transformerConfig = {
     ],
     rotationSnaps: [] as number[],
     rotationSnapTolerance: 5,
+    // 禁翻转：Konva 默认允许拖锚点越过对边做镜像，decompose 后产出 rotation 180 +
+    // 单轴负 scale，而 onTransformEnd 的 Math.max(1, round(size × 负 scale)) 恒得 1
+    // → 元素某一边塌成 1px 并落盘（path 的 d 同时被 scalePathD 压毁）。
+    flipEnabled: false,
     borderStroke: '#60a5fa',
     borderStrokeWidth: 1.5,
     anchorStroke: '#60a5fa',

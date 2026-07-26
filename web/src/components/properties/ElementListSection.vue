@@ -54,10 +54,11 @@ function onElementDrop(ev: DragEvent, idx: number) {
     if (!project.state) return;
     const el = project.state.elements[from];
     if (!el) return;
-    // optimistic reorder
-    const arr = project.state.elements;
-    const [moved] = arr.splice(from, 1);
-    arr.splice(idx, 0, moved);
+    // 只发 op，不做本地乐观重排——后端 element.reorder 产出的是位置型 patch
+    // （remove /layers/i/elements/from + add .../to），且 EditOpDispatcher 对发起
+    // session 自己也 pushPatch，前端 applyPatch 无自身消息去重。先本地 splice 会让
+    // 同一次重排被执行两遍（[A,B,C] 拖 A 到 idx2 → 本地 [B,C,A] → patch 回放成
+    // [C,A,A]，B 消失且 A 重复）。LayerPanel 的同类拖拽同样只发 op。
     ws.send('element.reorder', { elementId: el.id, index: idx });
 }
 

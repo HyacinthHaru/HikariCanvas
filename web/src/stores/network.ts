@@ -18,7 +18,19 @@ export const useNetworkStore = defineStore('network', () => {
     const sessionId = ref<string | null>(null);
     const serverVersion = ref<string | null>(null);
     const wallSize = ref<{ w: number; h: number } | null>(null);
+    /**
+     * 统一错误显示通道：连接层与业务层都往这里写（TopBar / scriptEdit /
+     * ScriptVariableWatch / ConditionBuilder 等），StatusBar 与日志面板订阅它。
+     */
     const lastError = ref<string | null>(null);
+    /**
+     * 连接层错误，<b>只</b>由 {@link '@/network/wsClient'} 写（走 {@link setConnectionError}）。
+     *
+     * <p>{@link status} 据此判 'error'。此前 status 直接判 lastError，而 lastError
+     * 的写入方包含大量业务路径，于是一次业务失败（改变量失败 / 规则校验不过）就让连接
+     * 状态栏持续显示 error 直到重连——纯误导。业务错误现在只走 lastError，不染红连接指示。</p>
+     */
+    const connectionError = ref<string | null>(null);
     /** 最近一次服务端 op 错误。每次 handleError 都更新，用于组件 watch ts 判定"我发的那一帧失败了"。 */
     const lastOpError = ref<{ code: string; message: string; ts: number } | null>(null);
     const closeCode = ref<number | null>(null);
@@ -28,12 +40,24 @@ export const useNetworkStore = defineStore('network', () => {
     const MAX_LOG = 200;
 
     const status = computed<'disconnected' | 'connecting' | 'authenticating' | 'ready' | 'error'>(() => {
-        if (lastError.value) return 'error';
+        if (connectionError.value) return 'error';
         if (authenticated.value) return 'ready';
         if (connecting.value) return 'connecting';
         if (connected.value) return 'authenticating';
         return 'disconnected';
     });
+
+    /** 连接层错误：同时写 connectionError（染红状态栏）与 lastError（统一显示通道）。 */
+    function setConnectionError(msg: string) {
+        connectionError.value = msg;
+        lastError.value = msg;
+    }
+
+    /** 连接成功 / 重新 connect 时清两个错误位。 */
+    function clearErrors() {
+        connectionError.value = null;
+        lastError.value = null;
+    }
 
     function pushLog(level: LogLine['level'], text: string) {
         // 每条带唯一 id（模块级单调自增）作为 LogDrawer v-for 的稳定 key，
@@ -55,8 +79,9 @@ export const useNetworkStore = defineStore('network', () => {
     return {
         connected, authenticated, connecting,
         sessionId, serverVersion, wallSize,
-        lastError, lastOpError, closeCode,
+        lastError, connectionError, lastOpError, closeCode,
         logs, status,
         pushLog, clearLogs, reset,
+        setConnectionError, clearErrors,
     };
 });
