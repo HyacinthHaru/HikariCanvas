@@ -139,8 +139,12 @@ class MapPoolDetectLeaksThreadSafetyTest {
         // detectLeaks 调用：wallId "w-deadbeef" 不在 liveWallIds → 判定为泄漏
         // 修复前：offerFreeByName 缓存 miss → Bukkit.getWorld → NPE（无 Bukkit server）
         // 修复后：offerFreeByName(id, worldName, false) → 直接进 unknown-world 桶，不碰 Bukkit
+        //
+        // live 集用「有别的墙、但没有本墙」而非全空：0.9.17 起 detectLeaks 对
+        // 「live 集全空 + 仍有 wall:* RESERVED」判定为读表失败并拒绝回收（必修 Bug #3），
+        // 全空集合已无法驱动本用例要测的回收路径。
         int leaked = assertDoesNotThrow(
-                () -> pool.detectLeaks(Set.of() /* 无存活 wall */),
+                () -> pool.detectLeaks(Set.of("w-some-other-live-wall")),
                 "detectLeaks 缓存 miss 时不应抛异常（Bukkit.getWorld 已被禁止）");
 
         assertEquals(1, leaked, "应检测到 1 个泄漏 map");
@@ -184,8 +188,9 @@ class MapPoolDetectLeaksThreadSafetyTest {
         // 缓存已预热
         assertEquals(1, worldNameToUidSize(pool), "worldNameToUid 应有 1 个条目");
 
+        // live 集非空（理由同上：0.9.17 的空 live 集防呆）
         int leaked = assertDoesNotThrow(
-                () -> pool.detectLeaks(Set.of()),
+                () -> pool.detectLeaks(Set.of("w-some-other-live-wall")),
                 "缓存命中路径也不应抛异常");
 
         assertEquals(1, leaked);

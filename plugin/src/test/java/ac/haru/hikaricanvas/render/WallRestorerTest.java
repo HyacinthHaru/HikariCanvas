@@ -234,5 +234,6 @@ class WallRestorerTest {
         @Override public World installRenderer(int mapId, MapRenderer renderer) { return maps.get(mapId); }
         @Override public World mapWorld(int mapId) { return maps.get(mapId); }
         @Override public World worldByName(String name) { return worlds.get(name); }
+        @Override public boolean hasMapView(int mapId) { return maps.containsKey(mapId); }
     }
 }

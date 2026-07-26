@@ -5,6 +5,23 @@
 
 ---
 
+## 2026-07-26 · 0.9.17 必修 Bug 批 · W3：地图池防呆 3 条
+
+本批最危险的一波——三条都能造成**不可逆的地图/画作损坏**。
+
+- **#3 `loadAll` 单行失败返回空表 → 泄漏检测释放全服在用地图（全服级数据损坏）**：`mapRow` 只对 `owner_uuid` 做单行降级，`project_json` 反序列化失败或 `facing` 非法（`BlockFace.valueOf`）会抛 SQLException 冒泡，`loadAll` 一律 catch 后返回 `List.of()`。而 5 分钟周期任务把它当 live wall **全集**喂给 `MapPool.detectLeaks` —— 空集合让全部非 pending 的 RESERVED map 被判泄漏、强制 FREE 并落盘，随后被新墙复用 → **旧墙 ItemFrame 显示新墙像素（跨墙串台）**。同一空表还让启动期 `WallRestorer` 恢复 0 面墙且不报错。与 `data-model.md §7.1`「walls 表**无对应行**才视为泄漏」相悖：读失败 ≠ 表无行。**同文件的 `loadAllOn` 注释早写着「与 loadAll() 不同：本方法不吞异常……宁可拒上传也不误删在用图」——作者在图片 LRU 那条路径上已认识到这个模式，泄漏检测这条漏了。**
+  - **三道修**：① 新增 `loadAllWallIds()` 专供泄漏检测——**只 SELECT `wall_id` 一列**，不碰 project_json 反序列化、不碰 BlockFace 解析，从根上消除「单行坏数据毒化整表」这一整类风险；读失败返回 `Optional.empty()` 而非空集合，调用方据此**跳过本轮**。② `loadAll()` 改逐行 try/catch 跳过坏行并计数（修 WallRestorer 静默恢复 0 面墙那一半）。③ `detectLeaks` 加防呆：live 集为空但仍有 `wall:*` 拥有的 RESERVED map → 拒绝回收它们 + SEVERE + `POOL_LEAK_SCAN_SKIPPED` 审计。
+  - **防呆刻意只抑制「wall 不在 live 集」这一条判定**：owner 为 null / 旧版 `session:` / `draft:` 前缀的记录是无歧义的垃圾，与 walls 表读没读到无关，照常回收。第一版闸做粗了（整个扫描早退）打挂 3 个既有线程安全测试，收窄后全绿——**那 3 个测试恰好证明了闸的粒度问题，是有效的回归信号**。另外 2 个用 `Set.of()` 驱动 `wall:*` 回收路径的既有用例改传非空 live 集（语义等价：「有别的墙、但没有本墙」），并在注释里写明原因。
+  - 不做「较上轮骤降则拒绝」的启发式：`loadAllWallIds` 要么完整读到要么整个失败，不存在「部分行读丢」的中间态，故骤降只可能来自服主真的删了墙。
+- **#5 `MapPool.initialize` 把「世界未加载」误判为「地图丢失」→ 永久泄漏**：`BukkitMapBackend.installRenderer` 末行 `return view.getWorld()`——MapView 存在但关联世界未加载时 Bukkit 返 null，**与「MapView 不存在」不可区分**。`initialize` 在 onEnable 同步执行，此时由 Multiverse 等插件管理的世界往往尚未加载，这些世界的池地图全部走 `mapWorld == null` 分支被 **DELETE pool_maps**。后果：mapId 从池簿记永久消失（不再复用 → 重新 createMap → **`idcounts.dat` 膨胀，项目核心风险**）；该世界的 wall 因 byId 无此 mapId 使 `bindToWall` 返 false，**永久打不开且每次重启复现**；审计名 `POOL_ORPHAN_ROW` 让误删看起来像正常回收。修法：`MapBackend` 加 `hasMapView(int)` 给 null 返回值消歧——MapView 在但世界没加载 → **保留 pool 行 + 登记回 byId**，FREE 的按名字进 unknown-world 桶（世界加载后由 `reserveForWall → reclaimUnknownBucketForWorld` 自动回迁）；MapView 真没了才当孤儿删。启动日志加 `world-not-loaded=N` 计数。
+- **#6 delete 时区块/世界未加载 → 画框残留但地图已释放复用**：`runDeleteConfirm` 在 `world == null` 时 `frames=0` 直接跳过拆框，**仍执行 `deleteWall`**（releaseWall 置 FREE + 删 walls 行）；world 已加载时 `removeForWall` 用 `getEntitiesByClass` 也**只遍历已加载区块**，全链无 chunk 强加载。后果：残留 ItemFrame 的 `wall_id` PDC 还在，而 `FrameProtectionListener` 只看 PDC 不查 walls 行 → **普通玩家永远拆不掉**；归还池的 mapId 被新 wall 复用 → 旧框显示新 wall 像素；该位置再选区被判 stale 但 wall 行已删、无法再 delete。修法：世界未加载**拒绝删除**（新 `command.delete.world-not-loaded` 中英文案）+ 拆框前按 wall 尺寸算保守区块半径同步加载一圈。**刻意不加「frames < 期望数则中止」**——被玩家破坏过的墙本来就少框，那样会让合法清理永远删不掉；真正的失败机制（世界未加载 / 区块未加载）已被上面两步各自堵死。
+
+**验证**：后端 `:plugin:test` **2195 → 2205**（+10），0 failures。新增 `MapPoolLeakGuardTest`（5 例：空 live 集拒绝回收 / 无 RESERVED 时空集合合法 / **对照组：非空 live 集仍正常回收真泄漏** / 世界未加载保留行且登记回 byId / 对照组 MapView 真没了仍删孤儿）+ `WallRepoBadRowTest`（6 例：坏 project_json 与坏 facing 各自只跳过该行 / `loadAllWallIds` 不受坏行影响 / 空表返回 present-empty / **读失败返回 `Optional.empty()` 而非空集合**）。`FakeMapBackend` 加 `hasMapView` + `preexistingWithUnloadedWorld` + `seedNextId`（重启类用例的新 backend 号段要推开，否则新铸 id 撞上旧 id 让断言失真）。
+
+关联文件：`storage/WallRepo`、`pool/{MapPool, MapBackend, BukkitMapBackend}`、`HikariCanvas`、`command/CanvasCommand`、`lang/{zh_cn,en_us}.yml`；测试 `pool/{FakeMapBackend, MapPoolDetectLeaksThreadSafetyTest}`、`render/WallRestorerTest` + 2 新测试。
+
+---
+
 ## 2026-07-26 · 0.9.17 必修 Bug 批 · W2：安全组 4 条
 
 - **#8 权限 fail-open ×4（安全）**：Variable / VariableAlias / Schedule / Rail 四个 dispatcher 各写了一份 `if (!granted && isDefaultTrue) granted = true;`——**无条件**兜底，不区分「玩家离线 / 权限解析超时」与「在线且被服主显式收回」。后果：服主用 LuckPerms 负权限收回 `canvas.var.write.own` / `canvas.schedule.own` / `canvas.rail.line.create` / `edit.own` / `delete.own` / `wall.bind` 全部形同虚设，且无从察觉。`ScriptOpDispatcher` 早已修成 `resolve().online()` 的正确写法，那 4 处没跟进——典型复制粘贴分叉。**修法不是四处各改一遍，而是把判定收敛成 `MainThreadPerms.grantedWithDefaultTrueFallback(resolved, nodeIsDefaultTrue)` 一个函数，4 处共用**——根除再次分叉，且让这条规则有唯一可单测的落点。

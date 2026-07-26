@@ -950,13 +950,21 @@ public final class HikariCanvas extends JavaPlugin {
                 this,
                 () -> {
                     // onDisable 已置 shuttingDown 时 short-circuit——避免本 run 在
-                    // database.close() 之后才读 wallRepo.loadAll() / mapPool.detectLeaks（走 DB）
+                    // database.close() 之后才读 walls 表 / mapPool.detectLeaks（走 DB）
                     // 触发 use-after-close。Bukkit cancel() 不等 in-flight run，这是唯一稳的兜底。
                     if (shuttingDown || database == null) return;
-                    java.util.Set<String> liveWallIds = wallRepo.loadAll().stream()
-                            .map(w -> w.wallId())
-                            .collect(java.util.stream.Collectors.toSet());
-                    int leaked = mapPool.detectLeaks(liveWallIds);
+                    // 只读 wall_id 列（不碰 project_json 反序列化 / BlockFace 解析），且读失败
+                    // 显式返回 empty。原先用 loadAll()，任一行 project_json 损坏或 facing 非法
+                    // 就毒化整查询 → 返回空表 → detectLeaks 把全服在用地图判为泄漏强制释放，
+                    // 被新墙复用后跨墙串台。读不到就跳过本轮，5 分钟后自然重试。
+                    java.util.Optional<java.util.Set<String>> liveWallIds =
+                            wallRepo.loadAllWallIds();
+                    if (liveWallIds.isEmpty()) {
+                        getLogger().severe("[mapPool] leak scan skipped: could not read walls table"
+                                + " (refusing to treat an unreadable table as 'no live walls')");
+                        return;
+                    }
+                    int leaked = mapPool.detectLeaks(liveWallIds.get());
                     if (leaked > 0) {
                         getLogger().warning("[mapPool] detected " + leaked + " leaked map(s); released");
                     }

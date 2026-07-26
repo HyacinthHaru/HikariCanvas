@@ -21,9 +21,22 @@ public interface MapBackend {
 
     /**
      * initialize 用：{@code Bukkit.getMap(mapId)} → 清默认 renderer + 装 {@code renderer} →
-     * 返回该 map 的 world；map 不存在返回 {@code null}（对应 initialize 的 missingMapView 分支）。
+     * 返回该 map 的 world；<b>返回 null 有两种含义</b>——MapView 不存在，或 MapView 存在但其
+     * world 未加载（{@code MapView.getWorld()} 此时返 null）。两者必须用
+     * {@link #hasMapView(int)} 区分：前者才是真孤儿可删，后者删了会永久丢地图。
      */
     World installRenderer(int mapId, MapRenderer renderer);
+
+    /**
+     * {@code Bukkit.getMap(mapId) != null}。
+     *
+     * <p>存在的唯一理由是给 {@link #installRenderer} 的 null 返回值消歧：MapView 在不在，
+     * 与它的 world 加载没加载，是两件事。{@code MapPool.initialize} 在 onEnable 同步执行，
+     * 此时由 Multiverse 等插件管理的世界往往尚未加载 —— 把这些 map 当孤儿 DELETE 掉会让
+     * mapId 从池簿记永久消失（不再复用 → 重新 createMap → {@code idcounts.dat} 膨胀，
+     * 项目核心风险），且该世界的 wall 因 byId 无此 mapId 永久打不开。</p>
+     */
+    boolean hasMapView(int mapId);
 
     /** bindToWall 用：{@code Bukkit.getMap(mapId)} 的 world；map 不存在返回 {@code null}。 */
     World mapWorld(int mapId);

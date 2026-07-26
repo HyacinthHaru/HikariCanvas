@@ -28,6 +28,11 @@ public final class BukkitMapBackend implements MapBackend {
     }
 
     @Override
+    public boolean hasMapView(int mapId) {
+        return Bukkit.getMap(mapId) != null;
+    }
+
+    @Override
     public World mapWorld(int mapId) {
         MapView view = Bukkit.getMap(mapId);
         return view == null ? null : view.getWorld();

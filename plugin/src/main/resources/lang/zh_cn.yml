@@ -51,6 +51,7 @@ command:
     pending: "<yellow>即将删除画布 <wall_id><alias_part>，请在 30 秒内执行 /canvas delete <wall_id> confirm。</yellow>"
     pending-alias-part: " '<alias>'"
     expired: "<red>确认窗口已过期或不匹配，请重新执行 /canvas delete <wall_id></red>"
+    world-not-loaded: "<red>无法删除画布 <wall_id>：所在世界 '<world>' 未加载。请先加载该世界再删除，否则展示框会残留、地图会被错误复用。</red>"
     already-gone: "<gray>画布 <wall_id> 已不存在。</gray>"
     deleted: "<green>画布 <wall_id> 已删除，共移除 <frames> 个展示框。</green>"
   confirm:

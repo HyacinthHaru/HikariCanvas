@@ -490,9 +490,36 @@ public final class CanvasCommand {
             messages.send(player, "command.delete.not-owner-confirm");
             return Command.SINGLE_SUCCESS;
         }
-        // 拆 ItemFrame
+        // 拆 ItemFrame。
+        //
+        // 世界未加载时**必须拒绝删除**：原实现直接 frames=0 跳过拆框，仍执行 deleteWall
+        // （releaseWall 置 FREE + 删 walls 行）。后果是残留 ItemFrame 的 wall_id PDC 还在，
+        // 而 FrameProtectionListener 只看 PDC 不查 walls 行是否还在 → 普通玩家永远拆不掉；
+        // 归还池的 mapId 被新 wall 复用 → 旧框直接显示新 wall 像素（跨墙串台）；该位置再选区
+        // 被判 stale 但 wall 行已删、无法再 delete。
         World world = plugin.getServer().getWorld(w.key().world());
-        int frames = world == null ? 0 : frameDeployer.removeForWall(wallId, world);
+        if (world == null) {
+            messages.send(player, "command.delete.world-not-loaded",
+                    Placeholder.unparsed("wall_id", wallId),
+                    Placeholder.unparsed("world", w.key().world()));
+            return Command.SINGLE_SUCCESS;
+        }
+        // removeForWall 走 world.getEntitiesByClass，**只遍历已加载区块**。不先强加载就会
+        // 漏掉未加载区块里的画框，产生和"世界未加载"同样的残留。按 wall 尺寸算保守区块半径
+        // （每个 map 占 1 格，chunk 16 格）后同步加载一圈。
+        int span = Math.max(w.widthMaps(), w.heightMaps());
+        int chunkRadius = (span / 16) + 1;
+        int originChunkX = w.key().originX() >> 4;
+        int originChunkZ = w.key().originZ() >> 4;
+        for (int dx = -chunkRadius; dx <= chunkRadius; dx++) {
+            for (int dz = -chunkRadius; dz <= chunkRadius; dz++) {
+                world.getChunkAt(originChunkX + dx, originChunkZ + dz);
+            }
+        }
+        int frames = frameDeployer.removeForWall(wallId, world);
+        // 注意：**不**按「frames < 期望数」判失败并中止——被玩家破坏过的墙本来就少框，
+        // 那样会让合法的清理操作永远删不掉。真正的失败机制（世界未加载 / 区块未加载）
+        // 已在上面两步各自堵死。
         // SessionManager.deleteWall 释放池 + 删 walls 行（含 cancel 任何活跃 session）
         sessionManager.deleteWall(wallId);
         messages.send(player, "command.delete.deleted",

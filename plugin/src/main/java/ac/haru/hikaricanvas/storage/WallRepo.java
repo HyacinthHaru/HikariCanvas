@@ -219,14 +219,77 @@ public final class WallRepo {
         }
     }
 
+    /**
+     * 全部 wall。<b>单行坏数据跳过而非毒化整个查询</b>。
+     *
+     * <p>{@link #mapRow} 只对 {@code owner_uuid} 做单行降级；{@code project_json} 反序列化失败
+     * 或 {@code facing} 非法（{@code BlockFace.valueOf}）会抛 SQLException 冒泡到这里，原实现
+     * 一律 catch 后返回空表 —— 启动期 {@code WallRestorer} 因此恢复 0 面墙且不报错。改为逐行
+     * try/catch 跳过坏行并计数。</p>
+     *
+     * <p><b>泄漏检测不要用本方法</b>：它仍可能返回残缺集合，而 {@code MapPool.detectLeaks} 把
+     * 传入集合当 live wall 全集，缺谁就释放谁的地图。那条路径走
+     * {@link #loadAllWallIds()}（只读 wall_id 列 + 失败显式返回 empty）。</p>
+     */
     public List<Wall> loadAll() {
         try {
-            return jdbi.withHandle(h -> h.createQuery("SELECT * FROM walls")
-                    .map((rs, ctx) -> mapRow(rs))
+            List<Wall> rows = jdbi.withHandle(h -> h.createQuery("SELECT * FROM walls")
+                    .map((rs, ctx) -> {
+                        try {
+                            return mapRow(rs);
+                        } catch (Exception rowEx) {
+                            String badId;
+                            try {
+                                badId = rs.getString("wall_id");
+                            } catch (Exception ignored) {
+                                badId = "<unreadable>";
+                            }
+                            log.log(Level.WARNING,
+                                    "loadAll: skipping unreadable wall row wallId=" + badId, rowEx);
+                            return null;
+                        }
+                    })
                     .list());
+            List<Wall> ok = new ArrayList<>(rows.size());
+            for (Wall w : rows) {
+                if (w != null) ok.add(w);
+            }
+            if (ok.size() != rows.size()) {
+                log.warning("loadAll: " + (rows.size() - ok.size()) + " of " + rows.size()
+                        + " wall row(s) unreadable and skipped");
+            }
+            return ok;
         } catch (Exception e) {
             log.log(Level.WARNING, "loadAll failed", e);
             return List.of();
+        }
+    }
+
+    /**
+     * 全部 wall 的 id 集合，<b>供 {@code MapPool.detectLeaks} 判定 live wall 专用</b>。
+     *
+     * <p>只 SELECT {@code wall_id} 一列——不碰 {@code project_json} 反序列化、不碰
+     * {@code BlockFace.valueOf}，从根上消除「单行坏数据毒化整表」这一整类风险。</p>
+     *
+     * <p><b>失败必须显式可辨</b>：返回 {@link Optional#empty()} 而非空集合。泄漏检测把传入集合
+     * 当 live wall <b>全集</b>，空集合会让全部非 pending 的 RESERVED map 被判泄漏、强制 FREE
+     * 并落盘，随后被新墙复用 → 旧墙 ItemFrame 显示新墙像素（跨墙串台，全服级数据损坏）。
+     * 与 {@code data-model.md §7.1}「walls 表<b>无对应行</b>才视为泄漏」的语义一致：
+     * 读失败 ≠ 表无行。</p>
+     */
+    public Optional<java.util.Set<String>> loadAllWallIds() {
+        try {
+            List<String> ids = jdbi.withHandle(h -> h.createQuery("SELECT wall_id FROM walls")
+                    .map((rs, ctx) -> rs.getString("wall_id"))
+                    .list());
+            java.util.Set<String> out = new java.util.HashSet<>(ids.size() * 2);
+            for (String id : ids) {
+                if (id != null) out.add(id);
+            }
+            return Optional.of(out);
+        } catch (Exception e) {
+            log.log(Level.SEVERE, "loadAllWallIds failed; leak detection must be skipped", e);
+            return Optional.empty();
         }
     }
 

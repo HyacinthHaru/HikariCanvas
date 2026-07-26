@@ -133,9 +133,36 @@ public final class MapPool {
         List<Integer> orphanDeletes = new ArrayList<>();
         List<PooledMap> normalizedPersists = new ArrayList<>();
 
+        int worldNotLoaded = 0;
         for (PooledMap rec : persisted) {
             World mapWorld = backend.installRenderer(rec.mapId(), sharedRenderer);
             if (mapWorld == null) {
+                // installRenderer 返 null 有两种含义，必须区分：
+                //   ① MapView 不存在        → 真孤儿，DELETE pool 行
+                //   ② MapView 在，但其 world 未加载（MapView.getWorld() 返 null）
+                //
+                // ② 在真实服上很常见：initialize 在 onEnable 同步执行，而 Multiverse 等插件
+                // 管理的世界此时往往还没加载。原实现把 ② 也 DELETE，后果是 mapId 从池簿记
+                // 永久消失（不再复用 → 重新 createMap → idcounts.dat 膨胀，项目核心风险），
+                // 且该世界的 wall 因 byId 无此 mapId 使 bindToWall 返 false，永久打不开、
+                // 每次重启复现。审计名 POOL_ORPHAN_ROW 还让误删看起来像正常回收。
+                if (backend.hasMapView(rec.mapId())) {
+                    worldNotLoaded++;
+                    // 保留 pool 行 + 登记进 byId（簿记完整，detectLeaks 也能看到）。
+                    // FREE 的按名字进桶：world 名解析不到就落 unknown-world 桶，
+                    // 世界加载后由 reserveForWall → reclaimUnknownBucketForWorld 自动回迁。
+                    PooledMap kept = enforceInvariant(rec, now);
+                    if (!kept.equals(rec)) {
+                        normalized++;
+                        normalizedPersists.add(kept);
+                    }
+                    byId.put(kept.mapId(), kept);
+                    if (kept.state() == PoolState.FREE) {
+                        offerFreeByName(kept.mapId(), kept.world(), false);
+                    }
+                    recovered++;
+                    continue;
+                }
                 missingMapView++;
                 orphanDeletes.add(rec.mapId());
                 auditLog.record("POOL_ORPHAN_ROW", null, null, null, null,
@@ -160,12 +187,19 @@ public final class MapPool {
         flushInitDbWork(orphanDeletes, normalizedPersists);
 
         log.info(String.format(
-                "MapPool recovered %d entries (free=%d reserved=%d; missing MapView=%d; normalized=%d)",
+                "MapPool recovered %d entries (free=%d reserved=%d; missing MapView=%d; "
+                        + "world-not-loaded=%d; normalized=%d)",
                 recovered,
                 countByState(PoolState.FREE),
                 countByState(PoolState.RESERVED),
                 missingMapView,
+                worldNotLoaded,
                 normalized));
+        if (worldNotLoaded > 0) {
+            log.info("MapPool: " + worldNotLoaded + " map(s) kept although their world is not"
+                    + " loaded yet (Multiverse-style late world load); rows preserved,"
+                    + " they rejoin the correct bucket once the world loads");
+        }
 
         // 补齐到 initial-size（只补 FREE，按 perWorldInitial 分配；剩余去 defaultWorld）
         int totalFree = totalFreeCount();
@@ -387,6 +421,22 @@ public final class MapPool {
      */
     public synchronized int detectLeaks(java.util.Set<String> liveWallIds) {
         long now = System.currentTimeMillis();
+        // 防呆：live 集合为空但池里确有 wall:* 拥有的 RESERVED map —— 几乎必然是「读 walls
+        // 表失败」而不是「真的一面墙都没有」。此时若照常执行，这些在用地图会被判泄漏、强制
+        // FREE 并落盘，随后被新墙复用 → 旧墙 ItemFrame 显示新墙像素（跨墙串台，全服级损坏）。
+        // 宁可漏检一轮（5 分钟后再来）也不能误删全服在用地图。
+        //
+        // **只抑制「wall 不在 live 集」这一条判定**：owner 为 null / 旧版 session: / draft:
+        // 前缀的记录是无歧义的垃圾，与 walls 表读没读到无关，照常回收。
+        //
+        // 调用方另有一道闸：WallRepo.loadAllWallIds() 读失败返回 Optional.empty()，
+        // HikariCanvas 的周期任务据此直接跳过本轮。两道闸互不依赖。
+        //
+        // 不做「较上轮骤降则拒绝」的启发式：loadAllWallIds 只读 wall_id 列，要么完整读到
+        // 要么整个失败，不存在「部分行读丢」的中间态，故骤降只可能来自服主真的删了墙。
+        boolean liveSetUntrustworthy = liveWallIds != null && liveWallIds.isEmpty()
+                && hasWallOwnedReserved();
+        int suppressed = 0;
         List<Integer> leaked = new ArrayList<>();
         for (PooledMap m : new ArrayList<>(byId.values())) {
             if (m.state() != PoolState.RESERVED) continue;
@@ -406,8 +456,21 @@ public final class MapPool {
                 continue;
             }
             if (liveWallIds != null && !liveWallIds.contains(wallId)) {
+                if (liveSetUntrustworthy) {
+                    // live 集空 = 大概率读表失败，不是"这面墙真没了"。跳过，下轮再判。
+                    suppressed++;
+                    continue;
+                }
                 leaked.add(m.mapId());
             }
+        }
+        if (suppressed > 0) {
+            log.severe("MapPool.detectLeaks: live wall set is EMPTY but " + suppressed
+                    + " map(s) are still owned by wall:* — refusing to reclaim them"
+                    + " (almost certainly a failed walls-table read, not an actually empty"
+                    + " server). Skipping those this round.");
+            auditLog.record("POOL_LEAK_SCAN_SKIPPED", null, null, null, null,
+                    Map.of("reason", "empty_live_set", "suppressed", suppressed));
         }
         for (int id : leaked) {
             PooledMap m = byId.get(id);
@@ -426,6 +489,18 @@ public final class MapPool {
                     Map.of("count", leaked.size(), "map_ids", leaked));
         }
         return leaked.size();
+    }
+
+    /** 池里是否有 {@code wall:<真 wallId>} 拥有的 RESERVED map（pending-* 不算）。 */
+    private boolean hasWallOwnedReserved() {
+        for (PooledMap m : byId.values()) {
+            if (m.state() != PoolState.RESERVED) continue;
+            String owner = m.reservedBy();
+            if (owner == null || !owner.startsWith(WALL_OWNER_PREFIX)) continue;
+            if (owner.substring(WALL_OWNER_PREFIX.length()).startsWith(PENDING_WALL_PREFIX)) continue;
+            return true;
+        }
+        return false;
     }
 
     public synchronized Stats stats() {

@@ -51,6 +51,7 @@ command:
     pending: "<yellow>About to delete wall <wall_id><alias_part>. Run /canvas delete <wall_id> confirm within 30s.</yellow>"
     pending-alias-part: " '<alias>'"
     expired: "<red>Confirm window expired or mismatched. Re-run /canvas delete <wall_id></red>"
+    world-not-loaded: "<red>Cannot delete canvas <wall_id>: its world '<world>' is not loaded. Load the world first, otherwise item frames would be left behind and their maps wrongly reused.</red>"
     already-gone: "<gray>Wall already gone: <wall_id></gray>"
     deleted: "<green>Wall <wall_id> deleted. <frames> frames removed.</green>"
   confirm:
