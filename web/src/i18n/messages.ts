@@ -130,9 +130,6 @@ export const messages = {
             loading: '加载中…',
             failed: (msg: string) => `加载失败：${msg}`,
             empty: '还没有任何画板。先到游戏里运行 /canvas edit 创建一块吧。',
-            needsInGameEntry: '画板清单需要先在游戏里打开编辑器才能查看——它带着每面画的作者、世界和坐标，'
-                + '公网部署下不适合匿名公开。请在游戏里运行 /canvas edit 或 /canvas open <wall_id>，'
-                + '点聊天栏里的链接进入。',
             lockedGroup: (n: number) => `已锁定（${n}）`,
             unlockedGroup: (n: number) => `可编辑（${n}）`,
             mapsLabel: (w: number, h: number) => `${w}×${h} 张地图`,
@@ -1464,10 +1461,6 @@ export const messages = {
             loading: 'Loading…',
             failed: (msg: string) => `Could not load: ${msg}`,
             empty: 'No walls yet. Run /canvas edit in-game to create your first one.',
-            needsInGameEntry: 'The wall list is only available after you open the editor from in-game — '
-                + 'it carries every wall’s author, world and coordinates, which should not be public '
-                + 'on an internet-facing deployment. Run /canvas edit or /canvas open <wall_id> in-game '
-                + 'and click the link in chat.',
             lockedGroup: (n: number) => `Locked (${n})`,
             unlockedGroup: (n: number) => `Editable (${n})`,
             mapsLabel: (w: number, h: number) => `${w}×${h} maps`,

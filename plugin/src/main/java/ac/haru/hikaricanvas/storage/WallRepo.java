@@ -69,6 +69,26 @@ public final class WallRepo {
             long updatedAt
     ) {}
 
+    /**
+     * 公开投影：{@link Summary} 去掉<b>作者名、世界、坐标、朝向</b>。
+     *
+     * <p>{@code GET /api/walls} 是匿名端点（前端落地页 HomePage 在拿到 token 之前就要用它列画作），
+     * 而默认绑 {@code 127.0.0.1} 只挡得住没有主机权限的人——<b>公网反代是文档明确支持的部署形态，
+     * 且反代层不做鉴权</b>。把「谁在哪个世界的哪个坐标画了什么、朝向如何」整表挂在互联网上，
+     * 等于给拆家发了一份藏宝图。裁掉这四类字段后剩下的（别名 / 尺寸 / 锁状态 / 更新时间）
+     * 不足以定位到世界里的具体位置，也不暴露玩家身份。</p>
+     *
+     * <p>需要完整字段的路径（{@code /canvas list} 等）走 {@link Summary}，它们本来就在
+     * 游戏内、已有玩家身份。</p>
+     */
+    public record PublicSummary(
+            String wallId,
+            String alias,
+            int widthMaps, int heightMaps,
+            Long publishedAt,
+            long updatedAt
+    ) {}
+
     private static final SecureRandom RNG = new SecureRandom();
 
     private final Logger log;
@@ -305,7 +325,29 @@ public final class WallRepo {
                 .list();
     }
 
-    /** 列全部 walls 的 Summary（首页用）。 */
+    /**
+     * 列全部 walls 的公开投影（匿名的 {@code GET /api/walls} 用）。
+     * 见 {@link PublicSummary} 的 javadoc 说明为什么要裁字段。
+     */
+    public List<PublicSummary> listPublic() {
+        try {
+            return jdbi.withHandle(h -> h.createQuery(
+                    "SELECT wall_id, alias, width_maps, height_maps, published_at, updated_at "
+                            + "FROM walls ORDER BY updated_at DESC")
+                    .map((rs, ctx) -> new PublicSummary(
+                            rs.getString("wall_id"),
+                            rs.getString("alias"),
+                            rs.getInt("width_maps"), rs.getInt("height_maps"),
+                            toLong(rs.getObject("published_at")),
+                            rs.getLong("updated_at")))
+                    .list());
+        } catch (Exception e) {
+            log.log(Level.WARNING, "listPublic failed", e);
+            return List.of();
+        }
+    }
+
+    /** 列全部 walls 的 Summary（游戏内路径用，含作者 / 世界 / 坐标 / 朝向）。 */
     public List<Summary> listAll() {
         try {
             return jdbi.withHandle(h -> h.createQuery(

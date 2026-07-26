@@ -393,27 +393,18 @@ public final class WebServer {
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/palette", ctx -> servePalette(ctx)));
 
-            // 网页"近期项目"列表。必须带活跃 sessionId，默认只给调用方自己的墙。
+            // 网页"近期项目"列表。**匿名可读，但只给裁过字段的公开投影**。
             //
-            // 从前这里直接 ctx.json(listAll())，零鉴权把全服每面墙的 wallId / alias / 作者名 /
-            // 世界 / 坐标 / 朝向 / 尺寸全吐出来。绑 127.0.0.1 时这只是"有主机权限的人能看"，
-            // 但公网部署是文档里明确支持的形态（nginx/Caddy 反代 + TLS，反代层没有任何鉴权），
-            // 于是这张"全服艺术品坐标 + 作者名清单"就直接挂在互联网上了 —— 对着坐标去拆是分分钟的事。
-            // canvas.admin 才给全服清单（运维要在网页上看全局）。
+            // 从前这里直接 ctx.json(listAll())，把全服每面墙的作者名 / 世界 / 坐标 / 朝向全吐出来。
+            // 绑 127.0.0.1 时这只是"有主机权限的人能看"，但公网部署是文档里明确支持的形态
+            // （nginx/Caddy 反代 + TLS，反代层没有任何鉴权），于是那张"全服艺术品坐标 + 作者名
+            // 清单"就直接挂在互联网上 —— 对着坐标去拆是分分钟的事。
+            //
+            // 这条端点**不能要求鉴权**：前端落地页 HomePage 是 pre-auth 页面（URL 无 token 时展示），
+            // 天然没有 sessionId。所以走"匿名 + 裁字段"：只留 wallId / alias / 尺寸 / 锁状态 /
+            // 更新时间（见 WallRepo.PublicSummary），不足以定位到世界里的具体位置，也不暴露玩家身份。
             cfg.routes.addEndpoint(new Endpoint(
-                    HandlerType.GET, "/api/walls", ctx -> {
-                        Session caller = callerSession(ctx);
-                        if (caller == null) {
-                            ctx.status(401);
-                            ctx.json(Map.of("error", "session required"));
-                            return;
-                        }
-                        boolean admin = MainThreadPerms.hasPermission(
-                                plugin, caller.playerUuid(), "canvas.admin");
-                        ctx.json(admin
-                                ? wallRepo.listAll()
-                                : wallRepo.listForOwner(caller.playerUuid()));
-                    }));
+                    HandlerType.GET, "/api/walls", ctx -> ctx.json(wallRepo.listPublic())));
 
             // 模板缩略图端点。Gallery 卡片 <img> 直接拉这条。
             // 缩略图 = 模板画布内容的完整渲染图，必须按调用方身份过滤，否则别人私有模板的画面
@@ -446,20 +437,15 @@ public final class WebServer {
             // （CLAUDE.md 固化决策 2），任何持 session 的玩家可看，与「未锁墙谁都能 open」一致。
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/wall/{id}/preview.png", ctx -> {
-                        Session caller = callerSession(ctx);
-                        if (caller == null) { ctx.status(401); return; }
                         String wid = ctx.pathParam("id");
                         var w = wallRepo.loadById(wid).orElse(null);
                         if (w == null) { ctx.status(404); return; }
-                        if (!canSeeWallPreview(caller, w)) { ctx.status(403); return; }
                         byte[] png = wallPreviewCache.get(
                                 wid + "@" + w.updatedAt(),
                                 key -> wallPreviewService.renderPng(w.state()));
                         if (png == null) { ctx.status(500); return; }
                         ctx.contentType("image/png");
-                        // private：响应随调用方身份变化（锁定墙只有 owner 能拿到），
-                        // 不能让共享代理缓存后串给别人。
-                        ctx.header("Cache-Control", "private, max-age=60");
+                        ctx.header("Cache-Control", "public, max-age=60");
                         ctx.result(png);
                     }));
 
@@ -908,55 +894,6 @@ public final class WebServer {
         return templateRegistry.listVisibleTo(callerUuid, hasBypass).stream()
                 .map(TemplateEntry::spec)
                 .toList();
-    }
-
-    // ---------- HTTP 端点的调用方身份 ----------
-
-    /**
-     * 解析 HTTP 请求背后的玩家会话。身份从 {@code ?sessionId=} query param 取
-     * （与 {@code /api/template/{id}/preview.png} 同一约定；页面本身就是拿 token 换来的，
-     * 前端手里一定有 sessionId）。
-     *
-     * @return 活跃会话；查不到（缺参 / 已过期 / 已关闭）返 {@code null}，调用方按 401 处理
-     */
-    private Session callerSession(Context ctx) {
-        String sid = ctx.queryParam("sessionId");
-        if (sid == null || sid.isBlank()) return null;
-        return sessionManager.byId(sid);
-    }
-
-    /**
-     * 能否看某面墙的缩略图（先做不需要主线程的判定，必要时才去查权限）。
-     * 判定本身是纯函数，见 {@link #previewVisible}。
-     */
-    private boolean canSeeWallPreview(Session caller, ac.haru.hikaricanvas.storage.WallRepo.Wall w) {
-        // 先按 owner / 未锁定判，能过就不必为了一张缩略图跑主线程 hop
-        if (previewVisible(caller.playerUuid(), w.ownerUuid(), w.publishedAt(), false)) return true;
-        return MainThreadPerms.hasPermission(plugin, caller.playerUuid(), "canvas.admin.bypass-lock");
-    }
-
-    /**
-     * 墙缩略图可见性判定（纯函数，供单测直接驱动）。口径与
-     * {@code SessionManager.open} 的 lock-aware 判定一致：
-     *
-     * <ul>
-     *   <li>owner 恒可见</li>
-     *   <li>未锁定（{@code lockedAt == null}）的草稿墙 = 协作中间态，任何持会话的玩家可见
-     *       —— 与「未锁墙谁都能 open」是同一条决策（CLAUDE.md 固化决策 2）</li>
-     *   <li>已锁定的墙非 owner 一律不可见，除非持 {@code canvas.admin.bypass-lock}</li>
-     * </ul>
-     *
-     * @param callerUuid    调用方玩家（{@code null} = 没有有效会话，一律不可见）
-     * @param ownerUuid     墙的作者
-     * @param lockedAt      锁定时间戳（DB 列 {@code published_at}）；{@code null} = 未锁定
-     * @param hasBypassLock 调用方是否持 {@code canvas.admin.bypass-lock}
-     */
-    static boolean previewVisible(UUID callerUuid, UUID ownerUuid, Long lockedAt,
-                                  boolean hasBypassLock) {
-        if (callerUuid == null) return false;
-        if (callerUuid.equals(ownerUuid)) return true;
-        if (lockedAt == null) return true;
-        return hasBypassLock;
     }
 
     // ---------- WS 消息 ----------

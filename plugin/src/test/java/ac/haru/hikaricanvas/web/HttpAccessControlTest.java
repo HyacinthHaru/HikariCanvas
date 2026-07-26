@@ -2,7 +2,9 @@ package ac.haru.hikaricanvas.web;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.UUID;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -12,55 +14,53 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * HTTP 面的访问控制守卫。
  *
  * <ul>
- *   <li>{@code GET /api/wall/{id}/preview.png} 的可见性判定
- *       （{@link WebServer#previewVisible}）—— 这条端点以前零鉴权，
- *       任何人对任意 wallId 都能出一整张画面图</li>
+ *   <li>{@code GET /api/walls} 只吐{@linkplain ac.haru.hikaricanvas.storage.WallRepo.PublicSummary
+ *       裁过字段的公开投影}——该端点匿名可读（前端落地页在拿到 token 前就要用它），
+ *       所以字段本身必须是安全的</li>
  *   <li>{@code brush.end} 必须计入会话输入限流，其余 brush op 保持豁免</li>
  * </ul>
  */
 class HttpAccessControlTest {
 
-    private static final UUID ALICE = UUID.randomUUID();
-    private static final UUID BOB = UUID.randomUUID();
-    private static final long LOCKED = 1_700_000_000_000L;
+    // ---------- /api/walls 的公开投影不得含定位信息 ----------
 
-    // ---------- 墙缩略图可见性 ----------
-
+    /**
+     * 结构守卫：{@code PublicSummary} 的字段集合必须逐字等于白名单。
+     *
+     * <p>它是匿名端点的响应体。将来给它加字段的人不会记得这条端点没有鉴权——把作者名、
+     * 世界、坐标、朝向任何一个加回去，等于把「全服艺术品藏宝图」重新挂上互联网。
+     * 加字段就红，逼加的人先想清楚这个字段能不能公开。</p>
+     */
     @Test
-    void noSession_neverVisible() {
-        assertFalse(WebServer.previewVisible(null, ALICE, null, false),
-                "没有有效会话就不该拿得到任何墙的画面");
-        assertFalse(WebServer.previewVisible(null, ALICE, LOCKED, true));
+    void publicWallSummary_carriesNoLocationOrIdentity() {
+        Set<String> actual = Arrays.stream(
+                        ac.haru.hikaricanvas.storage.WallRepo.PublicSummary.class
+                                .getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName)
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertEquals(
+                Set.of("wallId", "alias", "widthMaps", "heightMaps", "publishedAt", "updatedAt"),
+                actual,
+                "匿名 /api/walls 的字段集变了。禁止出现 ownerName / world / originX / originY /"
+                        + " originZ / facing —— 那是定位到世界里具体位置 + 玩家身份的信息");
+
+        for (String forbidden : List.of("ownerName", "ownerUuid", "world",
+                "originX", "originY", "originZ", "facing")) {
+            assertFalse(actual.contains(forbidden), "公开投影不得含 " + forbidden);
+        }
     }
 
+    /** 对照：需要完整字段的游戏内路径仍走 Summary，别把它一起裁了。 */
     @Test
-    void owner_alwaysVisible() {
-        assertTrue(WebServer.previewVisible(ALICE, ALICE, null, false));
-        assertTrue(WebServer.previewVisible(ALICE, ALICE, LOCKED, false),
-                "作者看自己的画不受锁定影响");
-    }
-
-    /** 未锁定的草稿墙是协作中间态，与「未锁墙谁都能 open」同一条决策。 */
-    @Test
-    void draftWall_visibleToAnySession() {
-        assertTrue(WebServer.previewVisible(BOB, ALICE, null, false));
-    }
-
-    /** 锁定后非 owner 一律 403，除非持 canvas.admin.bypass-lock。 */
-    @Test
-    void lockedWall_hiddenFromNonOwnerUnlessBypass() {
-        assertFalse(WebServer.previewVisible(BOB, ALICE, LOCKED, false),
-                "锁定的墙不该被别人拉走画面");
-        assertTrue(WebServer.previewVisible(BOB, ALICE, LOCKED, true),
-                "持 canvas.admin.bypass-lock 的管理员可见（与 open 口径一致）");
-    }
-
-    /** owner 为 null（脏数据）时不能当成「谁都是 owner」。 */
-    @Test
-    void nullOwner_doesNotGrantOwnership() {
-        assertFalse(WebServer.previewVisible(BOB, null, LOCKED, false));
-        assertTrue(WebServer.previewVisible(BOB, null, null, false),
-                "未锁定仍按草稿墙放行");
+    void internalSummary_stillCarriesFullFields() {
+        Set<String> actual = Arrays.stream(
+                        ac.haru.hikaricanvas.storage.WallRepo.Summary.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName)
+                .collect(java.util.stream.Collectors.toSet());
+        assertTrue(actual.containsAll(
+                        List.of("ownerName", "world", "originX", "originY", "originZ", "facing")),
+                "/canvas list 等游戏内路径依赖这些字段");
     }
 
     // ---------- brush.end 计入限流 ----------

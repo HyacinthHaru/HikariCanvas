@@ -52,10 +52,15 @@
 ### 验证
 后端 `:plugin:test` **2208 → 2461**（+253），0 failures；前端 **1747**，`vite build` 通过。五个后端代理对关键守卫**全部做了变异测试**（改回旧行为确认转红，再还原复绿），其中协议域一次性验了 10 处。
 
-### 需要你决策的一条（**已做安全的临时落地，可 10 行回退**）
-**#142 `/api/walls` 与 `preview.png` 加鉴权会让 HomePage 空转。** 那是 pre-auth 落地页，天然没有 sessionId。代理仍实装了鉴权，理由：默认绑 `127.0.0.1` 无所谓，但**公网反代是文档明确支持的部署形态且反代层不做鉴权**——一张「全服艺术品坐标 + 作者名 + 朝向」的清单挂在互联网上，照着坐标去拆是分分钟的事。
+### #142 的最终处置（作者已定：**匿名 + 裁字段**）
+代理最初给 `/api/walls` 与 `preview.png` 都加了鉴权，但那会让 HomePage 空转——它是 pre-auth 落地页，拿到 token 之前就要列画作，天然没有 sessionId。作者选定「保留匿名但裁字段」，已按此落地：
 
-controller 的临时处置：HomePage 收到 401/403 时**不再显示红色 `HTTP 401`**，改为说明「请在游戏里 `/canvas edit` 或 `/canvas open`，点聊天栏链接进入」的空态。三个选项供你定：① 维持现状（安全，但失去本地画作总览）② 保留匿名但**裁字段**（去掉 ownerName / world / 坐标 / facing，只留别名+尺寸+锁状态）③ 加 config 开关交给服主（贴合「数据透明不替服主决策」的产品哲学，但增配置面）。
+- 新增 `WallRepo.PublicSummary`（仅 `wallId` / `alias` / `widthMaps` / `heightMaps` / `publishedAt` / `updatedAt`）+ `listPublic()`；`GET /api/walls` 恢复匿名，只吐这个投影。**去掉的是 ownerName / world / originX·Y·Z / facing** —— 那四项合起来才是「谁在哪画了什么、朝向如何」的藏宝图，剩下的不足以定位到世界里的具体位置、也不暴露玩家身份。
+- `preview.png` 恢复匿名（画面本身按 `security.md §1.1` 只算「低」价值资产，且脱离坐标无法定位），`Cache-Control` 改回 `public`。随之删掉已成死代码的 `callerSession` / `canSeeWallPreview` / `previewVisible`。
+- 需要完整字段的游戏内路径仍走 `Summary`（`/canvas list`），未受影响。
+- 前端 HomePage 去掉坐标行与相应接口字段。
+- **加了结构守卫**：`HttpAccessControlTest` 对 `PublicSummary` 的字段集合做**逐字相等**断言 + 逐项禁止名单。将来给它加字段会直接红——那条端点没有鉴权，加字段的人未必记得。同时有对照用例断言 `Summary` 仍保留完整字段，防止两个投影被一起裁掉。
+- `security.md` 端点表与权限表同步（`canvas.admin` 的描述去掉「看全服清单」）。
 
 ---
 

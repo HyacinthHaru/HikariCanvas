@@ -409,7 +409,7 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 | `canvas.delete.own` | true | 删除自己的画（`/canvas delete <wall_id>`） |
 | `canvas.delete.any` | op | 删除任何画 |
 | `canvas.alias.any` | op | 修改任意 wall 的 alias（默认 wall.alias WS op 只允许 owner 改） |
-| `canvas.admin` | op | 管理命令（stats / diagnose / cleanup / reload），以及 `/api/walls` 看全服清单 |
+| `canvas.admin` | op | 管理命令（stats / diagnose / cleanup / reload） |
 | `canvas.admin.force-break` | op | 允许破坏插件保护的成品物品框 / 支撑方块 |
 | `canvas.admin.bypass-lock` | op | 绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open |
 | `canvas.template.save` | true | 把当前 wall 发布为创意工坊模板 |
@@ -464,9 +464,21 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 | `template.apply`（他人发布的用户模板） | `canvas.template.use-others`（内置模板 / 自己发布的模板无需此节点） |
 | `/canvas delete <wall_id>` | wall owner == 自己 且 `canvas.delete.own` / 或 `canvas.delete.any`；二次确认强制 30s |
 | 管理员命令 | `canvas.admin` |
-| `GET /api/walls` | 必须带活跃 `sessionId`；默认只返回自己的墙，持 `canvas.admin` 才返全服 |
-| `GET /api/wall/{id}/preview.png` | 必须带活跃 `sessionId`；已锁定的墙非 owner 一律 403（`canvas.admin.bypass-lock` 除外） |
+| `GET /api/walls` | **匿名可读，但只返回裁过字段的公开投影**（见下） |
+| `GET /api/wall/{id}/preview.png` | 匿名可读（画面本身按 §1.1 只算「低」价值资产，且脱离坐标无法定位） |
 | 破坏成品物品框 | 需 `canvas.admin.force-break`（否则 event cancel） |
+
+> **`/api/walls` 为什么是「匿名 + 裁字段」而不是加鉴权。** 前端落地页（HomePage）在拿到 token
+> 之前就要用这条端点列画作，天然没有 `sessionId`，加鉴权等于废掉这个页面。但原来的响应体
+> 把每面墙的**作者名 / 世界 / 精确坐标 / 朝向**全吐出来——绑 `127.0.0.1` 时这只是「有主机权限
+> 的人能看」，而公网反代是 §7 明确支持的部署形态、反代层不做鉴权，那就等于把一张「谁在哪画了
+> 什么、朝向如何」的藏宝图挂在互联网上，照着坐标去拆是分分钟的事。
+>
+> 0.9.17 起该端点返回 `WallRepo.PublicSummary`：仅 `wallId` / `alias` / `widthMaps` /
+> `heightMaps` / `publishedAt`（锁状态）/ `updatedAt`。**不含任何定位信息与玩家身份。**
+> 需要完整字段走游戏内 `/canvas list`（那条路径本来就有玩家身份）。
+> `HttpAccessControlTest` 对该 record 的字段集合做**逐字相等**断言——将来给它加字段会直接红，
+> 逼加的人先想清楚这个字段能不能匿名公开。
 
 > **画布尺寸上限（`limits.canvas-max-maps`）没有 bypass 节点。** 早期表里的 `canvas.admin.bypass-limit`
 > 全仓零引用（定义了从没接线），服主收权限以为封了功能其实照用，已从 `paper-plugin.yml` 与本表移除。

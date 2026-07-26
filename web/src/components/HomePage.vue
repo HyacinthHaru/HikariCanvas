@@ -1,17 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue';
-import { Lock, Pencil, MapPin, Clock, Tag, ImageOff, RefreshCw, Sparkles, Star, User } from 'lucide-vue-next';
+import { Lock, Pencil, Clock, Tag, ImageOff, RefreshCw, Sparkles, Star, User } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 
 interface WallSummary {
     wallId: string;
     alias: string | null;
-    ownerName: string;
-    world: string;
-    originX: number;
-    originY: number;
-    originZ: number;
-    facing: string;
     widthMaps: number;
     heightMaps: number;
     /** 锁定时间戳（2026-05-14 起 publishedAt 字段语义化为 lock 时间戳） */
@@ -32,30 +26,20 @@ const locked = computed(() => walls.value.filter(w => w.publishedAt != null));
 const unlocked = computed(() => walls.value.filter(w => w.publishedAt == null));
 
 /**
- * 画布清单需要登录才能看（0.9.17 起）。
+ * 画布清单是匿名端点，但后端只吐**裁过字段**的公开投影
+ * （`WallRepo.PublicSummary`：wallId / alias / 尺寸 / 锁状态 / 更新时间）。
  *
- * <p>这个清单带着**每面画的作者名、世界、精确坐标与朝向**。默认绑 127.0.0.1 时无所谓，
- * 但公网反代是文档里明确支持的部署形态、且反代层不做鉴权——匿名可列 = 把全服艺术品的
- * 坐标表挂在互联网上，照着坐标去拆是分分钟的事。</p>
- *
- * <p>本页是 pre-auth 落地页，天然没有 sessionId，所以 401 是**预期结果**而不是故障。
- * 不要显示成红色报错，改为说明从游戏内进入编辑器的正确姿势。</p>
+ * <p>作者名、世界、精确坐标、朝向 0.9.17 起不再下发——本页是 pre-auth 落地页，
+ * 天然没有 sessionId 没法鉴权，而公网反代是文档明确支持的部署形态且反代层不做鉴权。
+ * 那四类字段合起来就是一张「谁在哪画了什么、朝向如何」的藏宝图，不能匿名公开。
+ * 要看完整信息走游戏内 `/canvas list`。</p>
  */
-const needsInGameEntry = ref(false);
-
 async function loadWalls(isManualRefresh = false) {
     if (isManualRefresh) refreshing.value = true;
     try {
         const r = await fetch('/api/walls');
-        if (r.status === 401 || r.status === 403) {
-            needsInGameEntry.value = true;
-            walls.value = [];
-            error.value = null;
-            return;
-        }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         walls.value = await r.json();
-        needsInGameEntry.value = false;
         error.value = null;
     } catch (e) {
         error.value = (e as Error).message;
@@ -158,14 +142,6 @@ function previewUrl(w: WallSummary): string {
     <main class="flex-1 px-6 py-6 max-w-6xl w-full mx-auto">
       <div v-if="loading" class="text-sm text-[color:var(--muted-foreground)]">{{ t.home.loading }}</div>
       <div v-else-if="error" class="text-sm text-[color:var(--destructive)]">{{ t.home.failed(error) }}</div>
-      <!-- 401/403 是本页的预期结果（清单需登录，本页天然无 session），不是故障 -->
-      <div v-else-if="needsInGameEntry"
-           class="flex flex-col items-center justify-center py-20 gap-3 text-center">
-        <Lock class="size-12 text-[color:var(--muted-foreground)] opacity-40" />
-        <div class="text-sm text-[color:var(--muted-foreground)] max-w-md">
-          {{ t.home.needsInGameEntry }}
-        </div>
-      </div>
       <div v-else-if="walls.length === 0" class="flex flex-col items-center justify-center py-20 gap-3 text-center">
         <ImageOff class="size-12 text-[color:var(--muted-foreground)] opacity-40" />
         <div class="text-sm text-[color:var(--muted-foreground)] max-w-md">
@@ -188,10 +164,6 @@ function previewUrl(w: WallSummary): string {
                   <span v-if="w.alias" class="flex items-center gap-1 text-xs font-sans text-[color:var(--muted-foreground)] truncate">
                     <Tag class="size-3 shrink-0" /><span class="truncate">{{ w.alias }}</span>
                   </span>
-                </div>
-                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)] truncate">
-                  <MapPin class="size-3 shrink-0" />
-                  <span class="truncate">{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
                 </div>
                 <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
                   <span class="tabular-nums">{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
@@ -226,10 +198,6 @@ function previewUrl(w: WallSummary): string {
                   <span v-if="w.alias" class="flex items-center gap-1 text-xs font-sans text-[color:var(--muted-foreground)] truncate">
                     <Tag class="size-3 shrink-0" /><span class="truncate">{{ w.alias }}</span>
                   </span>
-                </div>
-                <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)] truncate">
-                  <MapPin class="size-3 shrink-0" />
-                  <span class="truncate">{{ w.world }} ({{ w.originX }},{{ w.originY }},{{ w.originZ }}) {{ w.facing }}</span>
                 </div>
                 <div class="flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
                   <span class="tabular-nums">{{ t.home.mapsLabel(w.widthMaps, w.heightMaps) }}</span>
