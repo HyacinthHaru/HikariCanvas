@@ -687,7 +687,7 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 
 - **插件版本**：SemVer（`MAJOR.MINOR.PATCH`）
 - **DB schema 版本**：单调整数，每次变更 +1
-- **模板 spec 版本**：独立整数（pack `manifest.spec`）；旧 YAML DSL 见 `archive/template-spec.md`（已废）
+- **模板 spec 版本**：独立整数（pack `manifest.spec`）；旧 YAML DSL 见 `docs/template-spec.md`（已废）
 - **协议版本**：独立整数，见 `protocol.md`
 - **.canvas spec 版本**：独立整数。**0.8 首发 = `1`**（前端 `CANVAS_SPEC` / 后端 `ProjectImporter.CANVAS_SPEC_MAX` 均 = 1，§4.4–§4.5）；导入 `spec > 当前支持` → `IMPORT_SPEC_UNSUPPORTED`
 

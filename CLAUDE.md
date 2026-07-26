@@ -42,7 +42,7 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 - `docs/architecture.md` — 架构与核心机制
 - `docs/protocol.md` — WebSocket 协议
 - `docs/rendering.md` — 渲染管线与双端一致性
-- `docs/template-pack.md` — 模板系统（`.canvas` pack；旧 YAML DSL 已退役，见 `archive/template-spec.md`）
+- `docs/template-pack.md` — 模板系统（`.canvas` pack；旧 YAML DSL 已退役，历史留档见 `docs/template-spec.md`）
 - `docs/data-model.md` — SQLite / PDC / `.canvas` 格式
 - `docs/security.md` — 威胁模型与安全规范
 - `docs/dynamic-data.md` — 变量系统 + Push API + 四层数据源

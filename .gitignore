@@ -101,9 +101,13 @@ run/
 
 # 临时
 *.tmp
+*.tmp.*
 *.swp
 *.bak
 *~
+
+# 工具产生的本地台账 / 草稿，不入库
+.superpowers/
 
 # 渲染测试输出（CI 产出保留 expected，actual 不提交）
 rendering-test/actual-java/
