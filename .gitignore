@@ -109,6 +109,15 @@ run/
 # 工具产生的本地台账 / 草稿，不入库
 .superpowers/
 
+# 云同步（iCloud / Dropbox 等）产生的冲突副本：`foo 2.ttf` / `Bar 2.java`。
+# 2026-07-27 实测：同步服务往 plugin/build/ 里塞了 46 个这种副本（39 个是字体），
+# 把 shadowJar 从 85MB 撑到 195MB；还把 0.9.9 改包名时删掉的 moe/ 旧包目录
+# （361 个文件）和 0.9.16 退役的 7 个 YAML 模板整批恢复回工作区。
+# **建议把本项目目录移出同步范围**，至少排除 build/ 与 node_modules/。
+*[0-9] [0-9].*
+* 2.*
+* 3.*
+
 # 渲染测试输出（CI 产出保留 expected，actual 不提交）
 rendering-test/actual-java/
 rendering-test/actual-web/
