@@ -18,7 +18,11 @@ import java.util.function.LongSupplier;
  * <p><b>容量：</b>{@link #MAX_HISTORY} 控制 past 栈深度；超过踢掉最老
  * （对应 docs/protocol.md §5.5）。工程有激活时间轴时提升到
  * {@link #MAX_HISTORY_TIMELINE}（keyframe 编辑高频，16 步会被一次拖动序列吞光）。
- * future 不设上限——每次 commit 都会清空 future。</p>
+ * <b>future 同上限</b>——「每次 commit 都会清空 future」这条曾被当成 future 不必设限的理由，
+ * 但 {@link #historyMark} 是刻意<b>不</b>清 future 的（mark 只贴标签、不开新分支），
+ * 于是 {@code history.mark → undo} 循环里 past 一进一出净零、future 每轮 +1 且永不回收。
+ * 每条都是 {@link ProjectSnapshot} 深拷贝（逐 Layer 重建），几百个元素的工程刷起来就是几十 MB/小时，
+ * 会话不结束不释放。</p>
  *
  * <p><b>coalescing（docs/timeline.md §7.2）：</b>同
  * {@code coalesceKey} 的连续提交在 {@link #COALESCE_WINDOW_MS} 窗口内合并为一步 ——
@@ -77,6 +81,12 @@ final class HistoryStack {
         while (past.size() > cap) past.removeLast();
     }
 
+    /** future 栈同样受 {@link #capacity()} 约束；超出踢掉最老的（栈底 = 最早 undo 的那步）。 */
+    private void trimFuture() {
+        int cap = capacity();
+        while (future.size() > cap) future.removeLast();
+    }
+
     /**
      * 拍当前 {@link ProjectState} 快照（不入栈，仅生成）。EditSession op 在 mutation
      * 之前调一次拿到 preSnapshot，成功后再 {@link #commitHistory} 推进。
@@ -84,7 +94,7 @@ final class HistoryStack {
     ProjectSnapshot snapshotNow() {
         return new ProjectSnapshot(
                 state.canvas(), state.layers(), state.activeLayerId(),
-                state.timelines(), state.activeTimelineId(), null);
+                state.timelines(), state.activeTimelineId(), state.tweenFps(), null);
     }
 
     /**
@@ -141,6 +151,7 @@ final class HistoryStack {
             return new EditSession.OpResult.Error("INVALID_PAYLOAD", "nothing to undo");
         }
         future.push(snapshotNow());
+        trimFuture();
         ProjectSnapshot restoreTo = past.pop();
         state.restore(restoreTo);
         long v = state.bumpVersion();
@@ -176,7 +187,7 @@ final class HistoryStack {
         }
         ProjectSnapshot marked = new ProjectSnapshot(
                 state.canvas(), state.layers(), state.activeLayerId(),
-                state.timelines(), state.activeTimelineId(), label);
+                state.timelines(), state.activeTimelineId(), state.tweenFps(), label);
         past.push(marked);
         trim();
         lastCoalesceKey = null;

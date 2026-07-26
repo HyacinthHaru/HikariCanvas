@@ -24,9 +24,11 @@ import java.util.regex.Pattern;
  *   <li>单参数 {@code toString()} 长度 &gt; {@link #MAX_VALUE_LEN}（16 KiB）→
  *       抛 {@link IllegalArgumentException}。防恶意 user-template 把超大值塞进
  *       text element 的 content 字段。</li>
- *   <li>累计输出长度 &gt; {@link #MAX_OUTPUT_LEN}（1 MiB）→
+ *   <li>输出比模板本身多出 &gt; {@link #MAX_OUTPUT_LEN}（1 MiB）→
  *       抛 {@link IllegalArgumentException}。防 {@code "${a}${a}${a}..."}
- *       式倍增展开。</li>
+ *       式倍增展开。<b>额度只算替换带来的膨胀，不算模板里原样穿过的静态文本</b>——
+ *       否则一份 3 MB 的 {@code project.json} 只要含一个 {@code ${param}} 就必然
+ *       在插值这层被拒，而 zip 解包那层明明允许它到 10 MB。</li>
  * </ul>
  * <p>{@code IllegalArgumentException} 由调用方（{@code PackParamResolver.substitute} 等）上游
  * try-catch 包装为结构化错误码，不向客户端 echo 内部异常细节。</p>
@@ -40,7 +42,10 @@ public final class Interpolator {
     /** 单参数替换值的最大字符数（16 KiB）。 */
     public static final int MAX_VALUE_LEN = 16 * 1024;
 
-    /** 单次 interpolation 调用累计输出最大字符数（1 MiB）。 */
+    /**
+     * 单次 interpolation 允许的<b>净膨胀</b>上限（1 MiB）：输出长度最多比模板长度多这么多。
+     * 模板原样穿过的静态文本不占额度，只有替换值写进去的部分才算。
+     */
     public static final int MAX_OUTPUT_LEN = 1024 * 1024;
 
     public static final class MissingParamException extends RuntimeException {
@@ -59,11 +64,13 @@ public final class Interpolator {
 
     public static String interpolate(String template, Map<String, Object> values) {
         if (template == null || !template.contains("${")) return template;
+        // 额度 = 模板长度 + 1 MiB 净膨胀。静态文本原样穿过不该扣额度，倍增展开仍被挡住。
+        final long cap = (long) template.length() + MAX_OUTPUT_LEN;
         Matcher m = REF.matcher(template);
         StringBuilder out = new StringBuilder(template.length() + 16);
         int last = 0;
         while (m.find()) {
-            appendChecked(out, template, last, m.start());
+            appendChecked(out, template, last, m.start(), cap);
             String name = m.group(1);
             if (values == null || !values.containsKey(name)) {
                 throw new MissingParamException(name);
@@ -76,22 +83,22 @@ public final class Interpolator {
                         "interpolated value for '" + name + "' too large: "
                                 + s.length() + " > " + MAX_VALUE_LEN);
             }
-            // 累计输出上限——防 ${a}${a}${a}... 倍增展开
-            if ((long) out.length() + s.length() > MAX_OUTPUT_LEN) {
+            // 净膨胀上限——防 ${a}${a}${a}... 倍增展开
+            if ((long) out.length() + s.length() > cap) {
                 throw new IllegalArgumentException(
                         "interpolated output exceeds limit " + MAX_OUTPUT_LEN);
             }
             out.append(s);
             last = m.end();
         }
-        appendChecked(out, template, last, template.length());
+        appendChecked(out, template, last, template.length(), cap);
         return out.toString();
     }
 
-    /** Append substring while enforcing the cumulative output cap. */
-    private static void appendChecked(StringBuilder out, String src, int start, int end) {
+    /** 追加一段静态文本，同时守住净膨胀额度。 */
+    private static void appendChecked(StringBuilder out, String src, int start, int end, long cap) {
         int add = end - start;
-        if ((long) out.length() + add > MAX_OUTPUT_LEN) {
+        if ((long) out.length() + add > cap) {
             throw new IllegalArgumentException(
                     "interpolated output exceeds limit " + MAX_OUTPUT_LEN);
         }

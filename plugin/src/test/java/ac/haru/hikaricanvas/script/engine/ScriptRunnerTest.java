@@ -503,9 +503,38 @@ class ScriptRunnerTest {
         ScriptRule ru = new ScriptRule("r1", WALL, true, "r-1",
                 new Trigger.PlayerJoin(), List.of(new Action.Log("x")), "{}");
         r.submit(WALL, ru, new TriggerContext(TriggerContext.Source.PLAYER_JOIN, 0, "Alice"));
-        assertEquals(List.of("Alice"), seen, "执行期 TRIGGER_DETAIL = ctx.detail（触发玩家名）");
+        assertEquals(List.of("Alice"), seen, "执行期 TRIGGER_DETAIL = ctx.detail");
         assertNull(ScriptRunner.TRIGGER_DETAIL.get(), "run 结束 finally 清 ThreadLocal");
         assertNull(ScriptRunner.currentTriggerDetail(), "无上下文时读到 null");
+    }
+
+    /** 触发玩家走独立 ThreadLocal（与 detail 分离），run 结束一并清。 */
+    @Test
+    void triggerPlayer_setDuringRun_clearedAfter() {
+        ScriptRunner r = runner();
+        List<String> seen = new ArrayList<>();
+        sink.onExecute = () -> seen.add(ScriptRunner.TRIGGER_PLAYER.get());
+        ScriptRule ru = new ScriptRule("r1", WALL, true, "r-1",
+                new Trigger.PlayerKill(), List.of(new Action.Log("x")), "{}");
+        // playerKill 形态：detail 是 victim→killer 拼接串，triggerPlayer 单独给击杀者
+        r.submit(WALL, ru, new TriggerContext(TriggerContext.Source.PLAYER_KILL, 0,
+                "Victim→Killer", "Killer"));
+        assertEquals(List.of("Killer"), seen, "执行期 TRIGGER_PLAYER = ctx.triggerPlayer");
+        assertNull(ScriptRunner.TRIGGER_PLAYER.get(), "run 结束 finally 清 ThreadLocal");
+        assertNull(ScriptRunner.currentTriggerPlayer(), "无上下文时读到 null");
+    }
+
+    /** 没有触发玩家的来源（变量变化 / timer / wallReady）→ TRIGGER_PLAYER 恒 null。 */
+    @Test
+    void triggerPlayer_absentForNonPlayerSources() {
+        ScriptRunner r = runner();
+        List<String> seen = new ArrayList<>();
+        seen.add("sentinel");
+        sink.onExecute = () -> seen.add(ScriptRunner.TRIGGER_PLAYER.get());
+        r.submit(WALL, rule("r1", List.of(new Action.Log("a"))),
+                new TriggerContext(TriggerContext.Source.VARIABLE, 0, "user:w-1/score"));
+        assertEquals(java.util.Arrays.asList("sentinel", null), seen,
+                "变量触发没有触发玩家");
     }
 
     @Test

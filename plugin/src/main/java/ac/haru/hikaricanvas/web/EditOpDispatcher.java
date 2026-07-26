@@ -326,7 +326,10 @@ final class EditOpDispatcher {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", iae.getMessage()));
             return;
         } catch (RuntimeException re) {
-            // 兜底：op 解析期任意运行期异常不应静默逃逸（前端会 5s ack_timeout）
+            // 兜底：op 解析期任意运行期异常不应静默逃逸（前端会 5s ack_timeout）。
+            // 必须留日志——客户端只拿到脱敏的 "op processing failed"，服务端再不记就等于
+            // 生产上偶发失败无从排查。
+            LOG.log(java.util.logging.Level.WARNING, "edit op failed: op=" + in.op(), re);
             ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", "op processing failed"));
             return;
         }
@@ -399,7 +402,9 @@ final class EditOpDispatcher {
      *
      * <p>权限：与编辑 op 同权（session 活跃即可，不查 owner，docs/timeline.md §5.2）。
      * audit 记 {@code TIMELINE_PLAY / TIMELINE_PAUSE / TIMELINE_SEEK}（照 {@code WALL_LOCK} 形态，
-     * auditLog 可空时跳过）。</p>
+     * auditLog 可空时跳过）。<b>play / seek 只在 ticker 真的返回 OK 时才记</b>——
+     * 失败（墙 / 时间轴不存在）不能记成已执行，否则事后查审计只会被误导；
+     * pause 是幂等 no-op，恒记。</p>
      *
      * <p>package-private（非 private）以便 dispatcher 单测直接驱动 op→Result→错误码映射，
      * 绕开 {@code WsMessageContext}（Javalin final 类，不可 mock）。</p>
@@ -421,8 +426,12 @@ final class EditOpDispatcher {
         return switch (op) {
             case "timeline.play" -> {
                 ac.haru.hikaricanvas.render.AnimationTicker.Result r = ticker.play(wallId, timelineId);
-                recordTimelineAudit("TIMELINE_PLAY", callerUuid, callerName, sessionId,
-                        wallId, timelineId, null);
+                // 只在真播起来了才记 TIMELINE_PLAY。审计日志的用途就是事后取证，
+                // 把「墙不存在 / 时间轴不存在」的失败也记成"已执行"会直接误导排查。
+                if (r == ac.haru.hikaricanvas.render.AnimationTicker.Result.OK) {
+                    recordTimelineAudit("TIMELINE_PLAY", callerUuid, callerName, sessionId,
+                            wallId, timelineId, null);
+                }
                 yield mapPlaybackResult(inId, r);
             }
             case "timeline.pause" -> {
@@ -444,8 +453,10 @@ final class EditOpDispatcher {
                     yield Envelope.error(inId, "INVALID_PAYLOAD", "atMs must be >= 0");
                 }
                 ac.haru.hikaricanvas.render.AnimationTicker.Result r = ticker.seek(wallId, timelineId, at);
-                recordTimelineAudit("TIMELINE_SEEK", callerUuid, callerName, sessionId,
-                        wallId, timelineId, at);
+                if (r == ac.haru.hikaricanvas.render.AnimationTicker.Result.OK) {
+                    recordTimelineAudit("TIMELINE_SEEK", callerUuid, callerName, sessionId,
+                            wallId, timelineId, at);
+                }
                 yield mapPlaybackResult(inId, r);
             }
             // 入口 switch 已圈定这三个 op；理论不可达

@@ -61,12 +61,21 @@ public final class IconRenderer implements ElementRenderer {
             g.drawImage(img, ic.x(), ic.y(), ic.w(), ic.h(), null);
             return;
         }
-        // 染色：先画 tinted 形状 (source-in 合成) 到临时图，再贴
-        BufferedImage tinted = new BufferedImage(ic.w(), ic.h(), BufferedImage.TYPE_INT_ARGB);
+        // 染色：先画 tinted 形状 (source-in 合成) 到临时图，再贴。
+        // 临时图先与画布求交再分配 —— MAX_DIM 守卫放行的 10000×10000 仍是 400 MB ARGB，
+        // 而这段跑在编辑会话锁里（同 ImageRenderer 羽化路径，rendering.md §4.4）。
+        // 无模糊、无邻域依赖，直接相交即可，可见像素逐位不变。
+        java.awt.Rectangle full = new java.awt.Rectangle(ic.x(), ic.y(), ic.w(), ic.h());
+        java.awt.Rectangle canvas = CanvasCompositor.visibleBounds(g);
+        java.awt.Rectangle box = canvas == null ? full : full.intersection(canvas);
+        if (box.isEmpty()) return;
+        BufferedImage tinted = new BufferedImage(box.width, box.height, BufferedImage.TYPE_INT_ARGB);
         Graphics2D tg = tinted.createGraphics();
         try {
             tg.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
                     RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            // 局部 (0,0) 对应画布 (box.x, box.y)，下面仍按「元素本地 0..w / 0..h」写
+            tg.translate(ic.x() - box.x, ic.y() - box.y);
             tg.drawImage(img, 0, 0, ic.w(), ic.h(), null);
             tg.setComposite(AlphaComposite.SrcIn);
             tg.setColor(FillPaintBuilder.parseColor(ic.tint()));
@@ -74,7 +83,7 @@ public final class IconRenderer implements ElementRenderer {
         } finally {
             tg.dispose();
         }
-        g.drawImage(tinted, ic.x(), ic.y(), null);
+        g.drawImage(tinted, box.x, box.y, null);
     }
 
     // ---------- SVG 矢量路径 ----------

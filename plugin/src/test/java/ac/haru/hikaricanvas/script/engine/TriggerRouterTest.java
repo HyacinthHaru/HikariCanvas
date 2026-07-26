@@ -73,6 +73,54 @@ class TriggerRouterTest {
         return new VariableStore.VariableChangeEvent(fullName, null, type, Set.of());
     }
 
+    // ---------- 重建期的单条隔离 ----------
+
+    /**
+     * 一条规则登记失败不该把整墙的索引重建带崩。
+     *
+     * <p>rebuild 是"先清空该墙的旧索引、再逐条重登"。中间某条抛出去的话，旧索引已经清了、
+     * 新索引只登了一半，该墙的触发就静默失效到下一次 rebuild（外层 ScriptStore.notifyWall
+     * 有 catch，所以连报错都看不到）。生产里的抛点很实在：near 类触发器要
+     * {@code originSource.load} 读库 + 查世界，DB 抖动 / 世界卸载都可能抛。</p>
+     */
+    @Test
+    void ruleRegistrationFailure_doesNotAbortWholeWallRebuild() {
+        TriggerRouter.WallOriginSource throwingOrigin = wallId -> {
+            throw new IllegalStateException("world not loaded");
+        };
+        TriggerRouter r2 = new TriggerRouter(scriptStore, runner,
+                VariableInterpolator::resolveFullName, throwingOrigin, LOG,
+                new FakeTimerScheduler());
+        addRule(WALL, true, new Trigger.PlayerNear(8));                    // 这条会抛
+        addRule(WALL, true, new Trigger.VariableChange("user/score"));     // 这条必须照常登记
+
+        assertDoesNotThrow(() -> r2.rebuildWall(WALL));
+
+        r2.onVariableChange(event("user:" + WALL + "/score",
+                VariableStore.ChangeType.VALUE_SET));
+        assertEquals(1, sink.blockIds.size(),
+                "坏规则不该连累同墙其他规则的登记");
+    }
+
+    /** 全量重建同款：一条坏规则不影响其他墙。 */
+    @Test
+    void ruleRegistrationFailure_doesNotAbortRebuildAll() {
+        TriggerRouter.WallOriginSource throwingOrigin = wallId -> {
+            throw new IllegalStateException("db down");
+        };
+        TriggerRouter r2 = new TriggerRouter(scriptStore, runner,
+                VariableInterpolator::resolveFullName, throwingOrigin, LOG,
+                new FakeTimerScheduler());
+        addRule("w-bad", true, new Trigger.PlayerNear(8));
+        addRule("w-good", true, new Trigger.VariableChange("user/score"));
+
+        assertDoesNotThrow(r2::rebuildAll);
+
+        r2.onVariableChange(event("user:w-good/score",
+                VariableStore.ChangeType.VALUE_SET));
+        assertEquals(1, sink.blockIds.size());
+    }
+
     // ---------- variableChange 索引 ----------
 
     @Test
@@ -277,9 +325,26 @@ class TriggerRouterTest {
         assertEquals(TriggerContext.Source.PLAYER_KILL, rec.contexts.get(0).source());
         assertEquals(0, rec.contexts.get(0).chainDepth());
         assertEquals("Alex→Steve", rec.contexts.get(0).detail(), "detail = victim→killer");
+        // 触发玩家单独给击杀者——sendMessage(target=trigger) 靠它找人，
+        // 拿 detail 那个拼接串去 getPlayerExact 永远找不到人
+        assertEquals("Steve", rec.contexts.get(0).triggerPlayer(), "triggerPlayer = 击杀者");
         // join 事件不触发 kill 规则
         r2.firePlayerJoin("Steve");
         assertEquals(1, rec.contexts.size());
+    }
+
+    /** 进服 / 退服 / 右键墙 / 靠近：触发玩家 = 事件里那名玩家。 */
+    @Test
+    void firePlayerJoin_carriesTriggerPlayer() {
+        RecordingSubmitter rec = new RecordingSubmitter();
+        TriggerRouter r2 = new TriggerRouter(scriptStore, rec,
+                VariableInterpolator::resolveFullName, ORIGIN_AT_ZERO, LOG,
+                new FakeTimerScheduler());
+        addRule(WALL, true, new Trigger.PlayerJoin());
+        r2.rebuildWall(WALL);
+        r2.firePlayerJoin("Steve");
+        assertEquals(1, rec.contexts.size());
+        assertEquals("Steve", rec.contexts.get(0).triggerPlayer());
     }
 
     @Test

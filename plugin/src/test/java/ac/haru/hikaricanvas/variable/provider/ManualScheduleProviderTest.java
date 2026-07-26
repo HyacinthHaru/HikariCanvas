@@ -291,6 +291,31 @@ class ManualScheduleProviderTest {
         provider.unregisterWall("");
     }
 
+    /**
+     * 纯铁路墙（从没配过手动时刻表）删除时，共享的 15 个 {@code schedule:<wallId>/*}
+     * 也要被清掉。
+     *
+     * <p>这条链是这样的：RailScheduleProvider 注册时会 create 全部 29 个 key，但它的
+     * unregisterWall 只删自己专属的 14 个，共享的 15 个留给本 provider 收尾；而本 provider
+     * 早先"没注册过就早退"，于是那 15 个变量在 /canvas delete 之后一直留在内存里到重启。
+     * 现在无论注册过与否都扫一遍删。</p>
+     */
+    @Test
+    void unregisterWall_cleansSharedKeys_evenIfNeverRegisteredHere() {
+        // 模拟 rail 侧 create 出来的共享 key（本 provider 没注册过这面墙）
+        for (String key : ManualScheduleProvider.ALL_KEYS) {
+            store.create("schedule:w-rail", key, VarType.STRING, null, "rail");
+        }
+        assertFalse(provider.registeredWallsSnapshot().contains("w-rail"));
+
+        provider.unregisterWall("w-rail");
+
+        for (String key : ManualScheduleProvider.ALL_KEYS) {
+            assertFalse(store.get("schedule:w-rail/" + key).isPresent(),
+                    "共享 key 应被清掉: " + key);
+        }
+    }
+
     @Test
     void refresh_publishesPrecisionVariable() {
         // 0.4.0 bugfix（Bug 4）：precision 字段也作为变量暴露

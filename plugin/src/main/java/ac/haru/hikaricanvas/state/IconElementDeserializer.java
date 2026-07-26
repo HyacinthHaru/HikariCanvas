@@ -25,10 +25,24 @@ import java.io.IOException;
  * 这里手工解析所有字段而不靠 Jackson 自动 binding，因为 IconElement record 已挂自定义
  * deserializer（@JsonDeserialize）就走不到默认 record binding 了。</p>
  *
- * <p>未知字段抛 {@link com.fasterxml.jackson.databind.JsonMappingException}（行为与 Jackson
- * FAIL_ON_UNKNOWN_PROPERTIES = true 一致；防协议漂移 / 字段嗅探）。</p>
+ * <p><b>未知字段跟随调用方 mapper 的 {@code FAIL_ON_UNKNOWN_PROPERTIES}</b>：交给
+ * {@code ctxt.handleUnknownProperty} 决定 —— 协议入口的严格 mapper（{@code WebServer} /
+ * {@code ElementValidator}）下抛 {@code UnrecognizedPropertyException}，持久化 blob 的宽容
+ * mapper 下静默忽略。</p>
+ *
+ * <p>这里以前是「手工逐个 {@code node.path(...)} 取完就 return，从不检查剩余字段」，
+ * 而类注释白纸黑字写着未知字段会抛错。于是 icon 成了严格校验网上唯一一个洞
+ * （{@code @JsonDeserialize} 让 IconElement 绕开了那张网），注释还告诉读代码的人洞不存在。</p>
  */
 public final class IconElementDeserializer extends JsonDeserializer<IconElement> {
+
+    /**
+     * 本 deserializer 认识的字段。{@code type} 是 {@code @JsonTypeInfo} 的多态判别符——
+     * 视 Jackson 是否把它留在转发过来的 tree 里而定，一律放行。
+     */
+    private static final java.util.Set<String> KNOWN_FIELDS = java.util.Set.of(
+            "type", "id", "x", "y", "w", "h", "rotation", "locked", "visible",
+            "source", "tint", "opacity", "blendMode", "renderMode", "fill");
 
     @Override
     public IconElement deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
@@ -39,6 +53,14 @@ public final class IconElementDeserializer extends JsonDeserializer<IconElement>
                     IconElement.class, p);
         }
         ObjectCodec codec = p.getCodec();
+
+        java.util.Iterator<String> names = node.fieldNames();
+        while (names.hasNext()) {
+            String field = names.next();
+            if (KNOWN_FIELDS.contains(field)) continue;
+            // 严格 mapper 下这一句会抛；宽容 mapper 下返 false，等同忽略该字段
+            ctxt.handleUnknownProperty(p, this, IconElement.class, field);
+        }
 
         String id = textOrNull(node, "id");
         int x = node.path("x").asInt(0);

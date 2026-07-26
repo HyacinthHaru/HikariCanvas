@@ -86,21 +86,29 @@ public final class BenchCompositor {
         // 合成渐变图片加载器。纯 AWT、确定性、无 IO / 无 Bukkit。
         // 对任意 source（含未知 hash）都返回同一张渐变图，让 ImageElement / mask 场景渲染真实
         // 像素而非占位；从而量化真实的图片解码替身 + 蒙版 clip + dither 成本。
-        compositor.setImageLoader(BenchCompositor::syntheticGradient);
+        compositor.setImageLoader(source -> SYNTHETIC_GRADIENT);
         return compositor;
     }
 
     /**
-     * 为任意 {@code source} 生成一张确定性 256×256 RGB 渐变图（无 IO）。
+     * 合成渐变图<b>只建一次</b>。生产的 loader 是 {@code imageStorage::load}，带 TTL LRU 内存缓存；
+     * 而 {@code ImageRenderer} 对每个 ImageElement 每次 rasterize 都会调一次 loader —— 以前这里
+     * 每次调用都跑 65536 次 {@code setRGB} 重建 256×256，夹具生成成本被算进了被测的 rasterize 里，
+     * image / mask 场景的数字整体虚高，与 Benchmark 原则 1「跑真实渲染代码路径」相悖。
+     *
+     * <p>对任意 source 本来就返回同一张图，提成常量不改变确定性。渲染侧只读不改这张图。</p>
+     */
+    private static final BufferedImage SYNTHETIC_GRADIENT = syntheticGradient();
+
+    /**
+     * 生成一张确定性 256×256 RGB 渐变图（无 IO），供 {@link #SYNTHETIC_GRADIENT} 初始化。
      *
      * <p>红 = x 方向线性、绿 = y 方向线性、蓝 = 固定 0x80，构成一张对调色板量化有代表性
-     * （覆盖大量不同颜色 → 触发 LUT 大量 distinct 匹配）的图。同一进程内重复调用对同一
-     * source 返回等价像素（确定性），保证 benchmark 跨 iteration 可比。</p>
+     * （覆盖大量不同颜色 → 触发 LUT 大量 distinct 匹配）的图，保证 benchmark 跨 iteration 可比。</p>
      *
-     * @param source ImageElement 的 sha256 hash；此处忽略具体值（任意 hash 都给同一渐变）
      * @return 256×256 {@code TYPE_INT_RGB} 渐变图
      */
-    private static BufferedImage syntheticGradient(String source) {
+    private static BufferedImage syntheticGradient() {
         int size = SYNTHETIC_IMAGE_SIZE;
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
         for (int y = 0; y < size; y++) {

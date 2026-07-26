@@ -312,7 +312,9 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 - `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（全局受 `map-pool.max` 限制）
 - `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（之前 silent bind 会让 map 显示在错误维度）
 - 跨世界绑定路径被根除：WallRestorer 启动恢复 / `/canvas open` / `confirm` 三处都走 world-aware 路径
-- 失败兜底：WallRestorer 任一 wall 恢复异常 → `MapPool.releaseToFree(mapIds, world)` 回收避免 idcounts.dat 膨胀（**项目核心风险**，详见 PROPOSAL §5.2.6）；同时审计 `POOL_RELEASE_TO_FREE`
+- 失败兜底分两种，看异常发生在 bind 之前还是之后：
+  - **bind 之前**（world 未加载 / `bindToWall` 抛）→ 这一轮已借到的 mapId 走 `MapPool.releaseToFree` 回 FREE，不留半态预留（避免 idcounts.dat 膨胀，**项目核心风险**，详见 PROPOSAL §5.2.6）；审计 `POOL_RELEASE_TO_FREE`
+  - **bind 之后**（渲染阶段抛）→ **保留绑定**，只记 SEVERE + 把 wall 记入 `failedRestoreWallIds` 等下次重启重试。walls 行还在，这些地图本就属于该 wall，泄漏检测不会回收它们；反而是还回 FREE 会被下一次 confirm 借走 → 两面墙共用一张地图 + 该 wall 下次 bind 必失败、永久恢复不了
 
 **配置（config.yml，实际键名）**：
 
@@ -531,9 +533,22 @@ cancel(session):
 
 每次收到 op 后：
 1. EditSession 算出哪些元素受影响（添加/删除/修改）
-2. 每个受影响元素的包围盒合并 → 整体脏矩形 `(x, y, w, h)`
+2. 每个受影响元素的包围盒**按实际会画到的像素外扩**后合并 → 整体脏矩形 `(x, y, w, h)`
 3. 脏矩形按 128×128 网格切片，每张涉及的 map 各一个局部 packet
 4. 若脏矩形覆盖整图 > 80%，降级为整图推送
+
+**外扩规则（`DirtyRegion.of`）** —— 元素画出来的像素常常超出 bbox，脏区不跟着扩就会在相邻 map 上留下擦不掉的残影（前端每帧全量重画看不见，只在游戏内出现）：
+
+| 情形 | 外扩 |
+| --- | --- |
+| 文字 `effects.shadow` | 按 `(dx, dy)` 单向 |
+| 文字 `effects.stroke` / `glow` | 按 `width/2` / `radius` 四向 |
+| 圆 / 多边形 / path 的 `stroke` | `ceil(width/2)` 四向（`BasicStroke` 以路径为中心分摊，向外溢出一半） |
+| path 的箭头 / 圆点 marker | 再按 marker 尺寸四向（marker 画在端点之外） |
+| 矩形的 `stroke` | 不扩（4 条 `fillRect` 画在 bbox 内部） |
+| `rotation` 非 0 / 180 | 旋转后四角的外接矩形 |
+
+已知未覆盖：`PathElement.d` 的坐标可以画到 `w/h` 之外（改 `d` 时 bbox 不同步），要覆盖得解析 `d` 求真实范围，暂不做。
 
 ### 5.3 Packet 格式
 
@@ -649,6 +664,8 @@ CI 集成：
    - 立即走 7.2 的部署流程
    - 确认成功后**从玩家 inventory 移除 Wand**（如果持有）
 
+> **尊重保护插件**：选点的三个 listener（方块左/右键、画框左/右键）都不处理已被别的插件取消的交互——方块层看 `PlayerInteractEvent.useInteractedBlock() == DENY`（不是笼统的 `isCancelled()`，那会把"只禁了手上这件物品"的情形也算进来），实体层直接 `ignoreCancelled = true`；三者都注册在 `EventPriority.HIGH`，确保跑在保护插件（多在 LOWEST~NORMAL 拒绝）之后。否则玩家能在 WorldGuard / 领地保护区里选一片墙，`confirm` 之后由插件自己动方块 + 挂画框，等于绕过保护。
+
 **SELECTING 期间的其他行为：**
 - 玩家重复点击 = 覆盖更新最近的同键位点
 - `/canvas cancel` = 丢弃 selection，进 CLOSING 后逻辑隐退（无活跃会话）
@@ -669,6 +686,17 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 - ~~`hikaricanvas:published_at`~~ ← **2026-05-14 lock-state 重设计砍**：`FrameDeployer.markPublished` 已移除，ItemFrame PDC 不再写此 key（现存旧画框残留的该 key 保留无害，不再读）。lock 状态只存 DB 列 `walls.published_at`，不下放到 PDC
 
 > **路径 B「打开已有 wall」（`/canvas open` 或 wand 二次点击 / 启动恢复）不走 7.2，物品框已存在不重新部署，直接 bind 池 + 写 ProjectState。**
+
+**部署 / 修复时对世界的改动边界**（`FrameDeployer`）：
+
+| 情况 | 行为 |
+| --- | --- |
+| 墙面 bbox 内支撑方块变成 AIR | 补回 `STONE`（这是墙自己的格子，玩家撸掉支撑画框就会掉） |
+| 画框位置被草 / 雪 / 水等**可被放置覆盖**的方块占住 | 清掉后照常挂画框 |
+| 画框位置被玩家**放置的方块**占住（`Block.isReplaceable() == false`） | **跳过这一格**并 warning，绝不替玩家删方块。玩家清空后再点一次刷新即可补上 |
+| 画框位置 1 格内有掉落物 | 只清 `ITEM_FRAME` / `GLOW_ITEM_FRAME` / `FILLED_MAP` / `MAP`（本插件自己弄掉的东西）；玩家的其它掉落物不动 |
+
+> `wall.refresh` 的修复路径（`repairFor`）在扫现存画框之前会**同步加载墙面所在区块**。Bukkit 的实体查询只看得见已加载区块，玩家在远处点刷新时若不先加载，会把"看不见"当成"画框没了"，再 spawn 一整面新的 → 区块加载回来就是两层画框重叠。同理 `/canvas delete` 拆框前也必须先确保区块已加载（`CanvasCommand.runDeleteConfirm` 世界未加载直接拒绝 + 按墙尺寸预加载一圈）。
 
 ### 7.3 wall 数据生命周期 vs 会话生命周期
 

@@ -43,7 +43,9 @@ List<MapBitmap>   输出
 ### 2.1 字体文件
 
 - 后端：jar 内 `/fonts/*.ttf`（或 `.otf`），由 Gradle `downloadFonts` 构建期抓取后经 `processResources` 进入 shadow jar（不入 git，`.gitignore` 排除）
-- 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（单轨加载，见 §2.3），**不再走 `.woff2` + CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`，由 Gradle `syncFontsToWeb` 构建期同步进 `web/public/fonts/`；该目录被 `.gitignore` 排除，同时也落了字体二进制副本但渲染不读它，仅 metrics JSON 被消费）
+- 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（单轨加载，见 §2.3），**不再走 `.woff2` + CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`），失败再 fallback `GET /api/font/metrics?id=X`
+- **两条 metrics 通道后端都必须真的能答**：`/fonts/{id}.metrics.json` 由 `WebServer` 路由供给（内置字体直读 jar 内 `fonts/`，用户字体落 `FontMetricsTable.serializeToJson` 的内存表），`/api/font/metrics` 同源。dev 下 vite 直接 serve `web/public/fonts/`（`syncFontsToWeb` 构建期同步，目录被 `.gitignore` 排除）——**只靠它会掩盖线上 404**：jar 部署没有那条静态路径，两条通道齐 404 时前端整页退回 `canonicalCharWidth`，而后端排版用真实 advance，字距与换行点系统性双端不一致
+- `serializeToJson` 自己会惰性加载 classpath 表，不依赖"后端已经渲染过这个字体"
 - 后端 + 前端**使用同一源字体文件**，构建脚本中以 SHA-256 pin 校验
 
 ### 2.1.1 分发策略（方案 A）
@@ -85,7 +87,13 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 ### 2.3 加载规则
 
 - **后端**：启动时 `Font.createFont(TRUETYPE_FONT, stream)`（AWT 对 TTF/OTF 统一用 `TRUETYPE_FONT` 常量），缓存 `Map<String, Registered>`
-- **前端（单轨加载）**：`FontLoader.ensureLoaded(fontId)` 用 `new FontFace(id, "url(/api/font/file?id=X)")` → `await face.load()` → `document.fonts.add(face)` 动态注册；加载完触发 `onFontLoaded(fontId)` 回调 → `requestDraw` 重画。**删除了 `style.css` 静态 `@font-face` + `PreviewRenderer.fontFamily()` 的 KNOWN 白名单**（加字体时漏修的 bug 根因）。失败静默，浏览器走 system fallback
+- **前端（单轨加载）**：`FontLoader.ensureLoaded(fontId)` 用 `new FontFace(id, "url(/api/font/file?id=X)")` → `await face.load()` → `document.fonts.add(face)` 动态注册；加载完触发 `onFontLoaded(fontId)` 回调 → `requestDraw` 重画。**删除了 `style.css` 静态 `@font-face` + `PreviewRenderer.fontFamily()` 的 KNOWN 白名单**（加字体时漏修的 bug 根因）
+
+**取不到字体时两端兜底同一枚。** 后端 `TextRenderer` 走 `FontRegistry.getOrDefault(fontId)`，取不到就用
+`DEFAULT_FONT_ID = ark_pixel`。前端**必须写成 CSS 字体栈** `${size}px "<fontId>", "ark_pixel"`，并且在
+目标字体没就绪时顺带 `ensureLoaded('ark_pixel')`。此前前端只写 `"<fontId>"` 一项，字体拉不到就落到浏览器
+默认矢量字体 —— 服主删了用户字体、或跨服套用引用了本服没有的字体时，编辑器里是平滑黑体、游戏里是
+12px 点阵，同一段文字形态完全不同。
 
 ### 2.4 字号语义
 
@@ -94,6 +102,10 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 - 浏览器：`ctx.font = \`${size}px \"${fontFamily}\"\``
 
 **像素字体警告：** 若 `pixelated=true` 且用户字号 ≠ `native-size` 的整数倍，后端必须用**最近邻缩放**而非字体自缩放；前端同理 `image-rendering: pixelated`。
+
+**最近邻路径的 mask 基线两端都用 `round(nativeSize × 0.8)`**（`ASCENT_RATIO`，同 §3.2），
+不用字体引擎实测的 ascent。这条路径存在的全部理由就是双端像素对齐，而 AWT `FontMetrics.getAscent()`
+是平台 / JDK / 字体 `hhea` 表相关的，前端用的又是固定比例 —— 用实测值等于按构造破掉镜像纪律。
 
 ---
 
@@ -115,9 +127,19 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 
 ### 3.2 基线与行高
 
-- 每行高度 = `fontSize × lineHeight`（`lineHeight` 默认 1.2）
+- 每行高度 = `round(fontSize × lineHeight)`（`lineHeight` 默认 1.2）
 - 基线位于每行顶 + `fontSize × ascentRatio`，`ascentRatio` 固定 0.8（跨字体统一，牺牲精确性换一致性）
 - 首行顶贴文本框顶部（`y = 0`）
+
+**行高乘法必须两端都用 IEEE754 double。** 后端 `TextElement.lineHeight` 字段是 `float`，直接
+`Math.round(fontSize * lineHeightMul)` 走的是 float 乘法，与前端的 double 乘法在部分取值上差一：
+`fontSize=15 / lineHeight=2.1` → float 给 31、double 给 32；`fontSize=30 / lineHeight=1.05` 同样差一。
+多行文本第 N 行就差 N 像素。（fontSize 1..512 × lineHeight 0.10..4.00 步进 0.01 共 200192 个组合，
+实测 286 个分歧，见 `TextLayoutLineHeightTest`。）
+**强转 `(double) 1.1f` 无效**（等于 `1.100000023…`，不是 JSON 里那个 1.1）。后端统一走
+`TextLayout.lineHeightMultiplier(float)`：用 `Float.toString` 拿到唯一还原该 float 的最短十进制串再按
+`double` 解析，取回 JSON 源值，然后 `(int) Math.round(fontSize × mul)`。横排行高与竖排列宽
+（`colStep`）都走这一个入口。
 
 ### 3.3 竖排
 
@@ -199,14 +221,20 @@ for each line:
         offset += charWidth + letterSpacing
 ```
 
+**残留 `${var:}` 的兜底替换（两端同一条正则）：** 插值器二次扫描后文本里仍有 `${var:` 字面 = 数据损坏，
+两端都强制替换成 `???`，正则统一为 `\$\{var:[^}]*\}?` —— **闭合大括号可选**，否则行尾缺 `}` 的
+`${var:foo` 后端出 `???`、前端留字面串。
+
 **RectElement：**
 ```
 g.setColor(fill)
 g.fillRect(x, y, w, h)
 if stroke:
+    // 描边宽度钳制：sw = min(stroke.width, max(1, ⌊min(w, h) / 2⌋))
+    // 除法必须两端都向零截断（Java int 除法 / 前端 Math.trunc），否则 min(w,h) 为奇数
+    // 且描边粗过半个盒子时，两端差半像素
     g.setColor(stroke.color)
-    g.setStroke(new BasicStroke(stroke.width))
-    g.drawRect(x, y, w, h)
+    // 4 个 fillRect 手工画边框（BasicStroke.drawRect 会把线宽分摊到边界两侧，像素对不齐）
 ```
 
 **ImageElement：**
@@ -248,6 +276,23 @@ g.setClip(originalClip);
 
 如 element.renderMode === 'dither'：drawElementsTo 走的是 per-element off-buffer 路径→ `drawElementBody` 完整跑（含 mask clip）→ 整个 element buffer 跑 `BayerDither.apply` → blend 回主 graphics。所以 dither 在 mask **内部** 像素，mask 外像素本就透明，dither 不影响（"先 dither 再 mask"语义实际由 per-element buffer 结构自然达成）。
 
+**羽化 mask 的中间缓冲区（后端）：**
+
+`mask.featherPx > 0` 时后端走 off-buffer + alpha 复合，缓冲区**必须先与画布求交再分配**：
+
+- 可见范围取自 `Graphics2D.getClipBounds()`（`CanvasCompositor` 在建主 buffer / 层 buffer /
+  dither buffer 时都显式 `setClip` 到该 buffer 的整块范围，renderer 才读得到画布尺寸；
+  clip 只是把本来就画不出去的部分显式化，不改任何像素）
+- 交集再向四周扩 `3 × featherPx + 1`：盒滤波跑 3 遍，每遍影响半径 `featherPx`，扩这么多能保证
+  可见区内每个像素的模糊输入都齐全 —— **裁剪前后可见像素逐位相同**
+- 扩后仍超 `MAX_FEATHER_PIXELS`（16 M 像素），或压根拿不到 clip 时，**降级为硬边 clip + 直接画原图**
+  （O(1) 内存），而不是整个元素不画。元素 `w/h` 被关键帧插值放大过 `MAX_DIM` 时同理走降级 ——
+  以前是直接 `return`，后端整张图消失、前端照常显示，双端分叉
+
+**盒滤波用可分离 1D 核**（水平一遍 + 垂直一遍，每像素 `O(k)`），不用 `(2r+1)²` 二维核
+（`r=32` 时每像素 4225 次乘加 × 3 遍，10000×10000 元素能把渲染线程钉死几分钟）。前端羽化走
+`ctx.filter='blur()'`（浏览器高斯），两端本就是"视觉近似"而非逐位一致，见 §8.2。
+
 ---
 
 ## 5. 效果
@@ -276,6 +321,24 @@ g.setClip(originalClip);
 4. 画正常字形于主画布
 
 **盒式模糊算法：** 水平 + 垂直两次 radius 长的均值滤波，两端固定实现，`rendering-test/glow-*.png` 作为 snapshot 基准。
+
+**外接盒度量（双端同源）：** mask 缓冲区的范围按字形位置 + 每字宽度算，宽度必须用排版同一个
+`charAdvance(fontId, ch, fontSize)`（§3 第 2 条），高度用 `ascent = round(fontSize × 0.8)` /
+`descent = fontSize − ascent`，四周再留 `radius + 1` 的 padding。竖排旋转字形按 `fontSize × fontSize`
+方格算。后端曾用 `canonicalCharWidth`、前端用 `ctx.measureText`，于是宽西文字符（W / M）的右缘光晕在
+游戏内被裁掉、编辑器里却完整 —— 两端都必须走 `charAdvance`。
+
+**缓冲区裁剪与面积上限（后端）：** 外接盒只由字形位置决定，不受画布尺寸约束 —— `text` 256 字 CJK +
+`fontSize=512` + `lineHeight=4` + `letterSpacing=128` 这套**全部合法**的参数能让 bbox 涨到
+1e4 × 3.5e4 ≈ 3.5e8 像素，单帧 ARGB + `getRGB` 的 `int[]` 就是 3.5 GB，而渲染又在编辑会话的锁里，
+有 `canvas.edit` 的玩家能用纯合法 op 打挂服务器。因此后端：
+
+1. 先把 bbox 与**画布向外扩 `radius + 1`** 的范围求交（padding ≥ 模糊半径 → 画布内像素的模糊输入
+   全都还在，**裁剪前后可见像素逐位相同**）；画布范围取自 `Graphics2D.getClipBounds()`
+2. 交集面积仍超 `MAX_GLOW_PIXELS`（20 M 像素，够 32×32 maps 满画布 + padding），或读不到 clip
+   且原始 bbox 超上限 → **本次不画发光**（打一条限流警告），不尝试分配
+
+前端在浏览器里画，超限只影响该标签页，暂不设同款上限。
 
 ### 5.4 效果顺序
 
@@ -352,6 +415,12 @@ for r in 0..31: for g in 0..31: for b in 0..31:
 - 结果：`opacity = 0.5` 的红色 `(255, 0, 0)` 落在白底上变成 `(255, 128, 128)` → 量化后是某个粉色调色板索引
 
 **双端契约：** Java `AlphaComposite.SrcOver` + 前端 `globalAlpha`。两边算出来的 RGB **应该位级一致**（线性 alpha 公式相同），量化后必然像素一致。
+
+**非有限 / 越界 opacity 的兜底两端必须一致，且每条绘制分支都要有。** 后端 `CanvasCompositor` 统一
+`finiteOr(opacity, 1.0)` + clamp 到 `[0, 1]`；前端 `PreviewRenderer` 的**三条**分支（普通元素 / dither 主路径 /
+palette 未就绪的 dither fallback）都要做同一套 `Number.isFinite` + clamp。负 opacity 可以经模板 `raw_state`
+之类绕过协议入口的路径进来，而负 `globalAlpha` 被 HTML 规范**忽略**（元素全不透明），后端 clamp 到 0
+（元素隐形）—— 少写一条分支就是一处双端分叉。
 
 **用户视角：** opacity 是"褪色"工具，不是"半透明"工具。docs/deployment.md / 编辑器 UI 都要明确告知。
 
@@ -503,6 +572,9 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 
   再经 `kf_i.easing` 映射成 `eased`（§9.3），按属性类别（§9.2）用 `eased` 插值。
 - 区间两端 `timeMs` 相等（重合帧）：取后一帧值，`local` 不计算（除零保护）。
+  这条是**旧数据兜底**——`docs/timeline.md §2.1` 的唯一性不变量落地后，同一
+  `(element, property, timeMs)` 只允许存在一帧，正常写入路径不再产生重合帧。
+  但已经存下来的工程可能带，取值侧必须扛得住。
 
 `easing` 永远取**区间左端帧**的，末帧的 `easing` 无意义。
 
@@ -534,7 +606,12 @@ enum EasingType { LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT, CUBIC_BEZIER }
 | `EASE_IN_OUT` | (0.42, 0, 0.58, 1) |
 
 `CUBIC_BEZIER`：标准三次贝塞尔缓动，端点固定 `P0=(0,0)`、`P3=(1,1)`，控制点 `P1=(x1,y1)`、
-`P2=(x2,y2)`。约束 `x1, x2 ∈ [0,1]`（保证 `Bx` 在 `[0,1]` 单调，与 CSS 一致；`y` 不限）。
+`P2=(x2,y2)`。约束 `x1, x2 ∈ [0,1]`（保证 `Bx` 在 `[0,1]` 单调，与 CSS 一致）；
+**`y1, y2 ∈ [-100, 100]`**——`y` 本身允许超调（CSS 的 `back` 类曲线就靠它），但必须有界：
+`cy = 3·y1` 在 `y1 = 1e308` 这种合法 JSON double 上会溢出成 `Infinity`，`ay = 1 − cy − by`
+随即变 `NaN`，`eased = NaN` 之后 Java 侧 `(int)NaN = 0` 而 JS 侧 `Math.round(NaN) = NaN`，
+色值也一个出 `#000000` 一个出垃圾 hex——直接破掉双端逐位等价。±100 对任何真实缓动都绰绰有余。
+越界在 op 入口（`TimelineOperations.parseEasing`）拒 `INVALID_EASING`，不留到求值期。
 
 **求值**：输入 `local` 是横轴（时间）进度，先解 `Bx(u) = local` 得参数 `u`，再求 `eased = By(u)`。
 两端用**同一套定点系数 + 同一迭代策略**（WebKit `UnitBezier` 形式）：
@@ -698,7 +775,20 @@ viewBoxMat = translate(-minX*sx, -minY*sy) ∘ scale(sx, sy)
 
 每个形状的祖先链 transform 矩阵与 `viewBoxMat` 累乘后，由 `bakePath.bakeMatrix` 烘焙进路径坐标；再经 `rebaseToOrigin` 把 bbox 左上角平移到 `(0, 0)`，对齐 `PathElement.d` 「坐标相对 element (x,y)」的约定。
 
-若 SVG 无 `viewBox`（或导入对话框不指定目标尺寸），则以 SVG 声明的 `width/height` 属性作像素尺寸，不做缩放。
+目标宽高按以下顺序取（`buildViewBoxMatrix`）：
+
+1. 导入方显式传的 `targetWidth/targetHeight`；
+2. 没传时用 SVG 根元素声明的 `width/height`（仅限像素值；`100%` 这类百分比没有外层视口可参照，视为未声明）——
+   `viewBox="0 0 24 24" width="96"` 的图标应导成 96px，而不是按 viewBox 单位出 24px；
+3. 两者都没有 → 不缩放，`viewBoxMat = translate(-minX, -minY)` 只把 viewBox 原点归零（`minX/minY` 为负时不归零会让元素坐标为负、落到画布外）。
+
+`viewBox` 宽或高为 0 / 负 / 非有限时视为未声明（否则除零得 `Infinity`，整张图坐标全废）。SVG 无 `viewBox` 时不做任何映射。
+
+**导入出口预检**：`svgToElementsDetailed` 在产出 draft 前按后端硬约束收敛——d 串超 `PathDValidator.MAX_LEN`
+时逐档降小数精度（6→2→1→0）重出，仍超则丢弃并计数；`w/h` 取整且下限 1（水平线 bbox 高度为 0 会被
+`validateDim` 拒）；`stroke.width` 取整钳 `[0,128]`，无填充时下限 1（否则触发「path needs fill or non-zero
+stroke」）；渐变停止点数 / 位置 / 半径 / 角度按 `FillValidator` 范围钳位。被丢弃的形状按原因计数返回给导入
+对话框，不计入「成功导入 N 个」。
 
 ### 11.3 path d 归一化到 M/L/Q/C/Z 子集
 

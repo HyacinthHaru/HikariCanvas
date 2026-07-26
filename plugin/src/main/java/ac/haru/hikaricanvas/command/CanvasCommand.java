@@ -139,7 +139,11 @@ public final class CanvasCommand {
     }
 
     public LiteralCommandNode<CommandSourceStack> build() {
-        var root = Commands.literal("canvas");
+        // canvas.use = 基础总开关（security.md §5 一直这么写，但此前全仓零引用——
+        // 服主收掉它以为封停了插件，实际所有命令照跑）。挂在根节点上：Brigadier 的
+        // requires 沿树继承，收掉即整族 /canvas 命令不可见。default: true，正常玩家无感。
+        var root = Commands.literal("canvas")
+                .requires(src -> src.getSender().hasPermission("canvas.use"));
         if (variableSubCommand != null) {
             // /canvas var <sub> 命令族
             root = root.then(variableSubCommand.build());
@@ -153,7 +157,10 @@ public final class CanvasCommand {
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runEdit))
                 .then(Commands.literal("wand")
-                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        // canvas.wand（不是 canvas.edit）——security.md §6 的检查点表一直
+                        // 写的就是这个节点，只是从没接上；服主想单独收掉发魔杖的权限时
+                        // 之前收了个寂寞。default: true，正常玩家无感。
+                        .requires(src -> isPlayerWith(src, "canvas.wand"))
                         .executes(this::runWand))
                 .then(Commands.literal("confirm")
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
@@ -246,6 +253,13 @@ public final class CanvasCommand {
 
     private int runWand(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
+        // 背包里已经有自己的魔棒就不再发。魔棒是一把普通金铲，能丢、能存箱子、能熔炼成金粒，
+        // 而这条命令的门槛是默认全员都有的 canvas.edit —— 无条件发放等于给玩家开了个刷金的宏。
+        // 与 /canvas edit 的 ensureWand 同一套判断。
+        if (CanvasWand.hasWand(player, plugin)) {
+            messages.send(player, "command.wand.already-have");
+            return Command.SINGLE_SUCCESS;
+        }
         player.getInventory().addItem(CanvasWand.forPlayer(plugin, player, messages));
         messages.send(player, "command.wand.received");
         return Command.SINGLE_SUCCESS;
@@ -522,6 +536,17 @@ public final class CanvasCommand {
         // 已在上面两步各自堵死。
         // SessionManager.deleteWall 释放池 + 删 walls 行（含 cancel 任何活跃 session）
         sessionManager.deleteWall(wallId);
+        // 复查一遍行到底没了没有。deleteWall 是"先把地图释放回池、后删 walls 行"，删行失败
+        // （比如 SQLITE_BUSY 5 秒没抢到写锁）它自己不报错 —— 那样玩家会以为删掉了，实际留下
+        // 最糟的组合：行还在、地图却已经能被下一面墙借走。宁可如实说"没删成，再来一次"。
+        if (wallRepo.loadById(wallId).isPresent()) {
+            plugin.getLogger().severe("delete: wall row " + wallId + " is still present after"
+                    + " deleteWall — its maps were already returned to the pool. Player was told"
+                    + " the deletion failed; retry /canvas delete " + wallId);
+            messages.send(player, "command.delete.failed",
+                    Placeholder.unparsed("wall_id", wallId));
+            return Command.SINGLE_SUCCESS;
+        }
         messages.send(player, "command.delete.deleted",
                 Placeholder.unparsed("wall_id", wallId),
                 Placeholder.unparsed("frames", String.valueOf(frames)));

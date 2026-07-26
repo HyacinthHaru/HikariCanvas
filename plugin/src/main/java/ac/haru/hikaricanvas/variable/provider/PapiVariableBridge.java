@@ -50,9 +50,15 @@ public final class PapiVariableBridge implements VariableProvider {
     private static final Logger log = Logger.getLogger(PapiVariableBridge.class.getName());
 
     public static final String NAMESPACE = "papi";
-    /** PAPI placeholder 通常是查询型，5s TTL 够用。 */
-    public static final long TTL_MS = 5_000L;
     public static final long REFRESH_INTERVAL_MS = 5_000L;
+    /**
+     * 变量 TTL = 刷新周期 × 2。
+     *
+     * <p>与刷新周期取同一个数会让每轮都出现一段"值刚过期、下一轮还没写进来"的空窗
+     * （调度抖动 + 主线程 hop），墙上闪 {@code ???}。留一倍宽限，只有连续两轮没刷上
+     * （PAPI 掉了）才走 fallback。</p>
+     */
+    public static final long TTL_MS = REFRESH_INTERVAL_MS * 2;
 
     private static final String PAPI_PLUGIN_NAME = "PlaceholderAPI";
 

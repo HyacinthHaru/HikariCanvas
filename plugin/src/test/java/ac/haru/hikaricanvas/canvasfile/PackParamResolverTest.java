@@ -6,9 +6,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -45,6 +47,35 @@ class PackParamResolverTest {
         CanvasImportException ex = assertThrows(CanvasImportException.class,
                 () -> PackParamResolver.parse(utf8("[{\"type\":\"string\",\"label\":\"x\"}]")));
         assertEquals("IMPORT_MALFORMED", ex.code());
+    }
+
+    /**
+     * 缺 type 的 pack 以前能一路注册进 Gallery，直到套用时才在类型分支上 NPE ——
+     * HTTP 导入退化成 500，WS {@code template.apply} 更糟（一帧回音都收不到，前端挂等超时）。
+     */
+    @Test
+    void parse_missingType_throwsMalformed() {
+        CanvasImportException ex = assertThrows(CanvasImportException.class,
+                () -> PackParamResolver.parse(utf8("[{\"id\":\"title\",\"label\":\"标题\"}]")));
+        assertEquals("IMPORT_MALFORMED", ex.code());
+        assertTrue(ex.getMessage().contains("title"), "报错要说清是哪个参数: " + ex.getMessage());
+    }
+
+    @Test
+    void parse_unknownType_throwsMalformed() {
+        CanvasImportException ex = assertThrows(CanvasImportException.class,
+                () -> PackParamResolver.parse(utf8("[{\"id\":\"when\",\"type\":\"date\"}]")));
+        assertEquals("IMPORT_MALFORMED", ex.code());
+    }
+
+    /** 类型体系是冻结契约：8 种取值一个不少、一个不多。 */
+    @Test
+    void parse_acceptsExactlyTheFrozenTypeSet() throws Exception {
+        for (String t : List.of("string", "text", "int", "float", "bool", "color", "enum", "font")) {
+            List<PackParamResolver.ParamDef> decls = PackParamResolver.parse(
+                    utf8("[{\"id\":\"p\",\"type\":\"" + t + "\"}]"));
+            assertEquals(t, decls.get(0).param().type());
+        }
     }
 
     @Test
@@ -244,5 +275,103 @@ class PackParamResolverTest {
         String out = PackParamResolver.substitute("{\"text\":\"标题：${t}！\"}", Map.of("t", "a\"b"));
         var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(out);
         assertEquals("标题：a\"b！", node.get("text").asText());
+    }
+
+    // ---------- pattern：不可信正则不能把线程钉死（ReDoS） ----------
+
+    /**
+     * 灾难回溯：{@code (.*a){25}} 配上一个末尾不匹配的长串，回溯次数随长度指数增长。
+     * 实测在 JDK 25 上这一句用普通 {@code String} 跑起来就<b>回不来了</b>（&gt;8 秒仍未结束）。
+     * 正则和被匹配串<b>双双来自不可信 pack</b>——default 值就够了，光是导入就能触发，
+     * 于是 Jetty 工作线程被钉死、CPU 打满，重复几次就把编辑器拖垮。
+     */
+    @Test
+    void resolve_catastrophicPattern_failsFastInsteadOfHanging() {
+        String evil = "a".repeat(38) + "b";
+        List<PackParamResolver.ParamDef> decls = assertDoesNotThrow(() -> PackParamResolver.parse(utf8(
+                "[{\"id\":\"s\",\"type\":\"string\",\"label\":\"x\",\"default\":\"" + evil
+                        + "\",\"pattern\":\"(.*a){25}\"}]")));
+
+        CanvasImportException ex = assertTimeoutPreemptively(java.time.Duration.ofSeconds(5),
+                () -> assertThrows(CanvasImportException.class,
+                        () -> PackParamResolver.resolve(decls, Map.of())),
+                "不可信正则必须撞上步数闸快速失败，不能一直跑");
+        assertEquals("IMPORT_INVALID_PARAM", ex.code());
+        assertTrue(ex.getMessage().contains("too expensive"),
+                "报错要说清是正则太贵，而不是值不匹配: " + ex.getMessage());
+    }
+
+    /** 正常正则照常工作——步数闸不能把合法校验一起挡了。 */
+    @Test
+    void resolve_normalPattern_stillValidatesBothWays() throws Exception {
+        List<PackParamResolver.ParamDef> decls = PackParamResolver.parse(utf8(
+                "[{\"id\":\"s\",\"type\":\"string\",\"label\":\"x\",\"default\":\"abc\","
+                        + "\"pattern\":\"^[a-z]+$\"}]"));
+        assertEquals("abc", PackParamResolver.resolve(decls, Map.of()).get("s"));
+
+        CanvasImportException ex = assertThrows(CanvasImportException.class,
+                () -> PackParamResolver.resolve(decls, Map.of("s", "ABC")));
+        assertTrue(ex.getMessage().contains("doesn't match pattern"), ex.getMessage());
+    }
+
+    /** 超长正则连编译都不给编译。 */
+    @Test
+    void resolve_oversizedPattern_rejected() throws Exception {
+        String longPattern = "^(?:" + "a|".repeat(200) + "b)$";
+        List<PackParamResolver.ParamDef> decls = PackParamResolver.parse(utf8(
+                "[{\"id\":\"s\",\"type\":\"string\",\"label\":\"x\",\"default\":\"a\","
+                        + "\"pattern\":\"" + longPattern + "\"}]"));
+        CanvasImportException ex = assertThrows(CanvasImportException.class,
+                () -> PackParamResolver.resolve(decls, Map.of()));
+        assertTrue(ex.getMessage().contains("pattern too long"), ex.getMessage());
+    }
+
+    // ---------- NaN / Infinity / 显式 null ----------
+
+    /**
+     * {@code NaN < min} 与 {@code NaN > max} 同时为假，min/max 就静默失效了，NaN 还会一路
+     * 替换进 project.json。必须当"不是 float"拒掉。
+     */
+    @Test
+    void resolve_nanAndInfinity_rejectedInsteadOfBypassingRange() throws Exception {
+        List<PackParamResolver.ParamDef> decls = PackParamResolver.parse(utf8(
+                "[{\"id\":\"f\",\"type\":\"float\",\"label\":\"x\",\"default\":1.0,"
+                        + "\"min\":0,\"max\":10}]"));
+
+        for (Object bad : List.of("NaN", "Infinity", "-Infinity", Double.NaN,
+                Double.POSITIVE_INFINITY)) {
+            CanvasImportException ex = assertThrows(CanvasImportException.class,
+                    () -> PackParamResolver.resolve(decls, Map.of("f", bad)),
+                    "应拒绝非有限值: " + bad);
+            assertTrue(ex.getMessage().contains("is not float"), ex.getMessage());
+        }
+        // 正常值不受影响
+        assertEquals(5.0, PackParamResolver.resolve(decls, Map.of("f", 5.0)).get("f"));
+    }
+
+    /**
+     * 前端表单没填的字段常直接发 {@code null}。按 containsKey 判断的话默认值和全部校验一起被跳过，
+     * 最后替换成空串——用户看到的是"什么都没了"。
+     */
+    @Test
+    void resolve_explicitNull_fallsBackToDefault() throws Exception {
+        List<PackParamResolver.ParamDef> decls = PackParamResolver.parse(utf8(
+                "[{\"id\":\"n\",\"type\":\"int\",\"label\":\"x\",\"default\":7,\"min\":1,\"max\":9}]"));
+
+        Map<String, Object> withNull = new java.util.HashMap<>();
+        withNull.put("n", null);
+        assertEquals(7, PackParamResolver.resolve(decls, withNull).get("n"));
+    }
+
+    /** 显式 null 同样不能绕过 required。 */
+    @Test
+    void resolve_explicitNullOnRequiredWithoutDefault_stillErrors() throws Exception {
+        List<PackParamResolver.ParamDef> decls = PackParamResolver.parse(utf8(
+                "[{\"id\":\"n\",\"type\":\"string\",\"label\":\"x\",\"required\":true}]"));
+        Map<String, Object> withNull = new java.util.HashMap<>();
+        withNull.put("n", null);
+        CanvasImportException ex = assertThrows(CanvasImportException.class,
+                () -> PackParamResolver.resolve(decls, withNull));
+        assertTrue(ex.getMessage().contains("required"), ex.getMessage());
     }
 }

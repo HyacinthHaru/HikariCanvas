@@ -207,7 +207,10 @@ final class RailOpDispatcher {
         }
         String ownerName = s.playerName() == null ? owner.toString() : s.playerName();
         RailLine line = new RailLine(id, name, code, color, owner, ownerName, now, now);
-        dao.upsertLine(line);
+        if (!dao.upsertLine(line)) {
+            ctx.send(Envelope.error(in.id(), "DB_FAILED", "line insert failed"));
+            return;
+        }
         audit(sessionId, s, "RAIL_LINE_CREATE",
                 Map.of("line_id", id, "name", name));
         Map<String, Object> ack = new LinkedHashMap<>();
@@ -234,7 +237,10 @@ final class RailOpDispatcher {
                 color == null ? existing.color() : color,
                 existing.ownerUuid(), existing.ownerName(),
                 existing.createdAt(), System.currentTimeMillis());
-        dao.upsertLine(updated);
+        if (!dao.upsertLine(updated)) {
+            ctx.send(Envelope.error(in.id(), "DB_FAILED", "line update failed"));
+            return;
+        }
         audit(sessionId, s, "RAIL_LINE_UPDATE", Map.of("line_id", id));
         Map<String, Object> ack = new LinkedHashMap<>();
         ack.put("line", lineToMap(updated));
@@ -293,7 +299,10 @@ final class RailOpDispatcher {
         // do-while 唯一 id（冲突时追加 random 后缀并再次校验）
         String id = generateUniqueId("stn-", cand -> dao.findStation(cand).isPresent());
         RailStation st = new RailStation(id, lineId, name, code, sortOrder, terminus, now);
-        dao.upsertStation(st);
+        if (!dao.upsertStation(st)) {
+            ctx.send(Envelope.error(in.id(), "DB_FAILED", "station insert failed"));
+            return;
+        }
         audit(sessionId, s, "RAIL_STATION_ADD",
                 Map.of("line_id", lineId, "station_id", id, "name", name));
         Map<String, Object> ack = new LinkedHashMap<>();
@@ -321,7 +330,10 @@ final class RailOpDispatcher {
                 sortOrder == null ? existing.sortOrder() : sortOrder,
                 termObj == null ? existing.isTerminus() : Boolean.TRUE.equals(termObj),
                 existing.createdAt());
-        dao.upsertStation(updated);
+        if (!dao.upsertStation(updated)) {
+            ctx.send(Envelope.error(in.id(), "DB_FAILED", "station update failed"));
+            return;
+        }
         audit(sessionId, s, "RAIL_STATION_UPDATE", Map.of("station_id", id));
         Map<String, Object> ack = new LinkedHashMap<>();
         ack.put("station", stationToMap(updated));
@@ -373,24 +385,19 @@ final class RailOpDispatcher {
         String endId = stringOrNull(payload.get("endStationId"));
         String notes = trimOrNull(stringOrNull(payload.get("notes")));
 
-        if (runNumber == null || runNumber.isEmpty() || runNumber.length() > STR_MAX_LEN) {
+        if (runNumber == null || runNumber.isEmpty()) {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "runNumber required (≤64)"));
             return;
         }
-        if (!RailRun.DIRECTION_UP.equals(direction) && !RailRun.DIRECTION_DOWN.equals(direction)) {
-            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
-                    "direction must be up / down"));
+        if (direction == null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "direction must be up / down"));
             return;
         }
         if (serviceType == null || serviceType.isEmpty()) serviceType = "local";
-        if (notes != null && notes.length() > NOTES_MAX_LEN) {
-            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
-                    "notes too long (≤256)"));
-            return;
-        }
-        // 编组数范围校验（可选字段；提供时须 1..32，防退化/超长编组）
-        if (cars != null && (cars < 1 || cars > 32)) {
-            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "cars must be 1..32"));
+        // create 与 update 共用同一套字段校验（传 null 的字段视作"不提供 / 不改"，跳过）
+        String invalid = validateRunFields(runNumber, direction, serviceType, cars, notes);
+        if (invalid != null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", invalid));
             return;
         }
         long now = System.currentTimeMillis();
@@ -412,9 +419,17 @@ final class RailOpDispatcher {
         }
         RailRun run = new RailRun(id, lineId, runNumber, direction, serviceType,
                 cars, startId, endId, notes, now, now);
-        dao.upsertRun(run);
-        if (autoEntries != null && !autoEntries.isEmpty()) {
-            dao.replaceTimetable(id, autoEntries);
+        if (!dao.upsertRun(run)) {
+            // 最常见是撞了 UNIQUE(line_id, run_number)：同线路已有这个车次号
+            ctx.send(Envelope.error(in.id(), "DB_FAILED",
+                    "run insert failed (duplicate run number on this line?)"));
+            return;
+        }
+        if (autoEntries != null && !autoEntries.isEmpty() && !dao.replaceTimetable(id, autoEntries)) {
+            // 时刻表没写进去 → 车次留着会是个没有任何停靠的空壳，删掉让前端重来
+            dao.deleteRun(id);
+            ctx.send(Envelope.error(in.id(), "DB_FAILED", "auto timetable write failed"));
+            return;
         }
         audit(sessionId, s, "RAIL_RUN_CREATE",
                 Map.of("line_id", lineId, "run_id", id, "run_number", runNumber));
@@ -481,14 +496,13 @@ final class RailOpDispatcher {
         Object startObj = payload.get("startStationId");  // 允许 null = 清空区间起点
         Object endObj = payload.get("endStationId");
         String notes = trimOrNull(stringOrNull(payload.get("notes")));
-        if (notes != null && notes.length() > NOTES_MAX_LEN) {
-            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
-                    "notes too long (≤256)"));
-            return;
-        }
-        // 编组数范围校验（提供时须 1..32）
-        if (cars != null && (cars < 1 || cars > 32)) {
-            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "cars must be 1..32"));
+        // 与 create 同一套校验（不传的字段 = 不改，跳过）。update 曾经少查 direction 白名单
+        // 与 runNumber / serviceType 长度：写进一个 "up "/"UP"/"左" 之类的方向后，
+        // listStationStops 的 `AND r.direction = :dir` 永远命中不了，这趟车会从所有站牌上
+        // 静默消失，界面还什么都不提示。
+        String invalid = validateRunFields(runNumber, direction, serviceType, cars, notes);
+        if (invalid != null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", invalid));
             return;
         }
         RailRun updated = new RailRun(
@@ -503,11 +517,43 @@ final class RailOpDispatcher {
                         ? (endObj instanceof String enStr ? enStr : null) : existing.endStationId(),
                 notes == null ? existing.notes() : notes,
                 existing.createdAt(), System.currentTimeMillis());
-        dao.upsertRun(updated);
+        if (!dao.upsertRun(updated)) {
+            ctx.send(Envelope.error(in.id(), "DB_FAILED",
+                    "run update failed (duplicate run number on this line?)"));
+            return;
+        }
         audit(sessionId, s, "RAIL_RUN_UPDATE", Map.of("run_id", id));
         Map<String, Object> ack = new LinkedHashMap<>();
         ack.put("run", runToMap(updated));
         ctx.send(Envelope.of("ack", in.id(), ack));
+    }
+
+    /**
+     * 车次字段校验（create 与 update 共用）。
+     *
+     * <p>传 null 的字段视作"不提供 / 不改"，跳过不校验——update 的"只改想改的字段"语义
+     * 靠这个约定成立。返回 null = 全通过；非 null = 给客户端的报错文案。</p>
+     */
+    static String validateRunFields(String runNumber, String direction,
+                                    String serviceType, Integer cars, String notes) {
+        if (runNumber != null && (runNumber.isEmpty() || runNumber.length() > STR_MAX_LEN)) {
+            return "runNumber too long (≤64)";
+        }
+        if (direction != null
+                && !RailRun.DIRECTION_UP.equals(direction)
+                && !RailRun.DIRECTION_DOWN.equals(direction)) {
+            return "direction must be up / down";
+        }
+        if (serviceType != null && serviceType.length() > STR_MAX_LEN) {
+            return "serviceType too long (≤64)";
+        }
+        if (cars != null && (cars < 1 || cars > 32)) {
+            return "cars must be 1..32";
+        }
+        if (notes != null && notes.length() > NOTES_MAX_LEN) {
+            return "notes too long (≤256)";
+        }
+        return null;
     }
 
     private void handleRunDelete(WsMessageContext ctx, Envelope in, String sessionId,
@@ -533,22 +579,59 @@ final class RailOpDispatcher {
             ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", "entries must be list"));
             return;
         }
+        TimetableParse parse = parseTimetableEntries(runId, list);
+        if (parse.error() != null) {
+            ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD", parse.error()));
+            return;
+        }
+        List<RailTimetableEntry> parsed = parse.entries();
+        if (!dao.replaceTimetable(runId, parsed)) {
+            // 事务已回滚，旧时刻表还在；多半是某条 stationId 不存在
+            ctx.send(Envelope.error(in.id(), "DB_FAILED",
+                    "timetable write failed (unknown stationId?)"));
+            return;
+        }
+        audit(sessionId, s, "RAIL_TIMETABLE_SET",
+                Map.of("run_id", runId, "rows", parsed.size()));
+        Map<String, Object> ack = new LinkedHashMap<>();
+        ack.put("rows", parsed.size());
+        ctx.send(Envelope.of("ack", in.id(), ack));
+    }
+
+    /** 时刻表解析结果：error 非 null 即整条 payload 拒收（此时 entries 为空）。 */
+    record TimetableParse(List<RailTimetableEntry> entries, String error) {}
+
+    /**
+     * 时刻表行解析 + 校验（包级静态，单测直接打）。
+     *
+     * <p><b>非法行显式报错，不静默丢弃</b>：丢掉的行会让整张时刻表少一站，而 ack 还回
+     * "写了 N 行"，用户根本看不出哪儿不对——车次从那一站的站牌上消失了也只能靠肉眼发现。
+     * 重复站也在这里拦下：撞主键会让整个事务回滚，只回一句 DB_FAILED 的话谁都猜不到
+     * 真实原因是"同一站填了两遍"。</p>
+     */
+    static TimetableParse parseTimetableEntries(String runId, List<?> list) {
         List<RailTimetableEntry> parsed = new ArrayList<>(list.size());
-        for (Object o : list) {
-            if (!(o instanceof Map<?, ?> row)) continue;
+        Set<String> seenStations = new HashSet<>();
+        for (int i = 0; i < list.size(); i++) {
+            Object o = list.get(i);
+            if (!(o instanceof Map<?, ?> row)) {
+                return new TimetableParse(List.of(), "entries[" + i + "] must be an object");
+            }
             String stationId = stringOrNull(row.get("stationId"));
-            if (stationId == null) continue;
+            if (stationId == null || stationId.isEmpty()) {
+                return new TimetableParse(List.of(), "entries[" + i + "] missing stationId");
+            }
+            if (!seenStations.add(stationId)) {
+                return new TimetableParse(List.of(),
+                        "duplicate stationId in entries: " + stationId);
+            }
             String arrival = trimOrNull(stringOrNull(row.get("arrival")));
             String departure = trimOrNull(stringOrNull(row.get("departure")));
             if (arrival != null && !HHMMSS_PATTERN.matcher(arrival).matches()) {
-                ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
-                        "arrival invalid HH:mm[:ss]: " + arrival));
-                return;
+                return new TimetableParse(List.of(), "arrival invalid HH:mm[:ss]: " + arrival);
             }
             if (departure != null && !HHMMSS_PATTERN.matcher(departure).matches()) {
-                ctx.send(Envelope.error(in.id(), "INVALID_PAYLOAD",
-                        "departure invalid HH:mm[:ss]: " + departure));
-                return;
+                return new TimetableParse(List.of(), "departure invalid HH:mm[:ss]: " + departure);
             }
             boolean stops = !Boolean.FALSE.equals(row.get("stopsHere"));
             parsed.add(new RailTimetableEntry(runId, stationId,
@@ -556,12 +639,7 @@ final class RailOpDispatcher {
                     departure == null ? null : padSec(departure),
                     stops));
         }
-        dao.replaceTimetable(runId, parsed);
-        audit(sessionId, s, "RAIL_TIMETABLE_SET",
-                Map.of("run_id", runId, "rows", parsed.size()));
-        Map<String, Object> ack = new LinkedHashMap<>();
-        ack.put("rows", parsed.size());
-        ctx.send(Envelope.of("ack", in.id(), ack));
+        return new TimetableParse(parsed, null);
     }
 
     /** HH:mm → HH:mm:00（schema 字段保持秒精度规范）。 */
@@ -586,9 +664,23 @@ final class RailOpDispatcher {
         String stationId = stringOrNull(payload.get("stationId"));
         String direction = WallRailBinding.normalizeDirection(
                 stringOrNull(payload.get("direction")));
+        // 先确认线路 / 车站真的存在。写进去才发现外键不成立的话，wall 会被当成"已绑铁路"：
+        // ManualSchedule 从此跳过它，RailScheduleProvider 又查不到停靠 → 站牌 29 个变量全空。
+        // （lineId / stationId 允许为 null = 解绑，那条不校验。）
+        if (lineId != null && dao.findLine(lineId).isEmpty()) {
+            ctx.send(Envelope.error(in.id(), "NOT_FOUND", "line not found"));
+            return;
+        }
+        if (stationId != null && dao.findStation(stationId).isEmpty()) {
+            ctx.send(Envelope.error(in.id(), "NOT_FOUND", "station not found"));
+            return;
+        }
         long now = System.currentTimeMillis();
         WallRailBinding b = new WallRailBinding(wallId, lineId, stationId, direction, now);
-        dao.upsertBinding(b);
+        if (!dao.upsertBinding(b)) {
+            ctx.send(Envelope.error(in.id(), "DB_FAILED", "binding write failed"));
+            return;
+        }
         // 即时生效：注册到 RailScheduleProvider
         if (provider != null) provider.registerWallByBinding(wallId, b);
         audit(sessionId, s, "RAIL_WALL_BIND",

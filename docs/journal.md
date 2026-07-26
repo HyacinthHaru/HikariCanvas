@@ -5,6 +5,60 @@
 
 ---
 
+## 2026-07-27 · 0.9.17 后端总成（Top50 后端 + 03/04/05 全部后端条目，5 个并行代理）
+
+至此**四份清单 202 条全部处理完毕**。本条合并 Top50 的后端部分与第二/三/四批的全部后端条目。
+
+### 资源耗尽 / 越权（本批最高危面）
+- **glow 缓冲无面积上限**（#56）：WS 合法参数即可单帧分配约 3.5GB。新增 `clipToCanvas()`——bbox ∩（画布外扩 `radius+1`），**可见像素逐位不变**（padding ≥ 模糊半径），再加 `MAX_GLOW_PIXELS = 20M` 硬上限，超限跳过 glow 并 60s 节流告警，绝不分配。使能条件：`CanvasCompositor` 三个 buffer 站点显式 `setClip`——`BufferedImage` 的 graphics `clip == null` 且 `getDeviceConfiguration().getBounds()` 返 `Integer.MAX_VALUE`（实测确认），clip 是唯一可移植通道。
+- **羽化路径**（#57）：按元素全尺寸分配巨型 buffer + 非分离 65×65 卷积。buffer 改为 元素矩形 ∩（画布外扩 `3×featherPx+1`）；`boxBlurAlpha` 换成**两个可分离一维 ConvolveOp**（O(k) 而非 O(k²)）；超 `MAX_FEATHER_PIXELS = 16M` 降级硬边。顺带发现 `IconRenderer` 的 tint buffer 同病（`MAX_DIM` 守卫仍放行 10000×10000 = 400MB）。
+- **ReDoS**（#53）：**报告举的例子是错的**——`^(a+)+$` 在 JDK 25 上不炸（实测 490 步），但 `(.*a){25}` 对 38 字符输入真挂（>8s）。修法用 `MAX_PATTERN_LEN=256` + 步数受限的 `CharSequence` 包装（`MAX_MATCH_STEPS=200_000`），确定性、无超时线程。
+- **导入绕过配额**（#54）：闸放在 `ProjectMaterializer` 而非 `EditSession.replaceProject`，让 HTTP 导入与 `template.apply` **一道闸全覆盖**。
+- **配额拒绝后 evict 的受害者文件永久泄漏**（#55）：三个 deny 站点都补 `deleteFileOnly`；顺带改掉两条假注释（「事务回滚」——jdbi 正常返回即 commit；「启动期清扫」——根本没有）。
+- **每张 asset 全表扫 walls**（#52）：改为**仅在真需要 LRU 淘汰时**才求值的 `Supplier`（仍在事务内，保住既有 TOCTOU 修复）。**刻意偏离报告的「每次导入扫一次并缓存」**——跨事务缓存会重新引入跨 hash 误删竞态。
+- **模板缩略图跨玩家泄漏**（#105）：`pngFor` 走 `byIdForApply`，forbidden 与 not-found 不可区分（无枚举 oracle）。
+- **`/api/walls` 与 preview.png 零鉴权**（#142）：见文末「需要你决策」。
+
+### 安全 / 权限
+- **`script.enable` 漏权限面检查**（#141）：create/update/test 三条路径都调 `checkFacets`，唯独 enable 没调——而被翻回 enabled 的规则由 `ActionExecutor` 以 **`Bukkit.getConsoleSender()`** 身份执行，攻击者 = 任何能 open 该墙的普通玩家（草稿墙人人可 open）。`enabled=true` 时对**库里现存规则**重跑权限面；`enabled=false` 永远放行（关危险规则不该被权限拦）。
+- **脚本变量动作绕过 ACL**（#58）：7 个变量族积木写前过 `checkWritable`，copyVariable 来源过 `checkReadable`。
+- **占位符可跨墙直读他人变量**（#145）：字面透传前拦 `isForeignPerWall`，换哨兵 `!denied/cross-wall`（`!` 不在 namespace 文法内，永不误命中）；**顺带覆盖脚本条件式**（`ConditionEvaluator` 的 `var(...)` 同走该路径）。
+- **HTTP 面漏接会话 IP 绑定 + Jetty 线程裸调 Bukkit 权限 API**（#143/#157）：4 个上传端点接上 `bindOrCheckIp`（新增 `X-Canvas-Session` 头通道；`GET /api/upload/{source}` 作 `<img src>` 用带不了头，IP 绑定就是它的补偿控制）+ 单次主线程 hop 解析权限。**controller 另补 `ProjectImportHandler`**（同型缺口、不在任何代理条目内）——它在 `web` 包里能直接用 `MainThreadPerms`，`UploadHandler` 在 `image` 包用不了只能自建一份。
+- 其余：scoreboard `trackedKeys` 只增不减 → 加空闲回收（#146）· `variable.bind` 走 own 节点绕过 `canvas.var.bind`（#183）· 伪 wall 无限注册（#106）· 全服广播动作新增独立权限面 `canvas.script.broadcast`（#103）· 选点与部署尊重保护插件（#61）· `/canvas wand` 不再无限刷可熔炼金铲（#59）。
+
+### 数据一致性 / 生命周期
+- **泄漏检测 TOCTOU**（#51）：`detectLeaks` 新增快照时刻参数，`lastUsedAt >= 快照时刻` 的 RESERVED 跳过本轮（confirm 的 reserve→INSERT→bind 链若跨越快照点，新墙会被误判）。
+- **`WallRestorer` 失败处置**（#60）：**原行为方向就是错的**，且与 CLAUDE.md 的固化决策相抵触——已核实并把 CLAUDE.md 第 8 条改写为总不变式「**已被某个存在的 walls 行认领的地图，绝不能回 FREE**」，restore（bind 前/后）与 `deleteWall`（先删行后放图）两条派生规则挂其下。
+- **`FrameDeployer` 只见已加载区块**（#148）：扫画框前同步加载墙面区块 + 全世界 `getEntitiesByClass` 换成墙 bbox 范围查询。
+- 其余：pending 预留加 60s TTL 并在启动期收敛（#79）· `pos1/pos2` 拆两个 face 让 `NORMAL_MISMATCH` 不再是死代码（#83，controller 收尾）· `WallRepo.delete` 返 boolean（#87）· 部署只清插件自己的掉落物不动玩家物品（#165）· `MapPool` 借出路径改走事务版 persist（#197）· `wall.refresh` 主线程任务复查墙是否已删（#162）· `totalMaps` 整型溢出（#78）。
+
+### 双端一致性
+- **glow 外接盒**（#27）：**报告低估了严重度**——不是「几像素」。inter 的 `W` 在 baseSize 12 下 advance=12 而 canonical=6，fontSize 56 时后端 bbox 少 28px，快照基线旧图里最后那个 W 的右半边光晕**整块缺失**。两端统一到 `charAdvance`，快照基线已按仓库既定流程更新。
+- **行高 float vs double**（#115）：**报告的例子不成立**（`15/1.1` 两端都得 17）。穷举探测 fontSize 1..512 × lineHeight 0.10..4.00 共 200192 组 → **286 组真分叉**（如 `15/2.1` → 31 vs 32）。用 `Double.parseDouble(Float.toString(f))` 复原 JSON 侧的 double，286 → 0。
+- 其余：像素字体 NN mask 基线改比例式（#116，实测输出中性、消除 JDK/平台漂移风险）· `DirtyRegion` 对 circle/shape/path 外扩描边（#29）· rect 描边钳制补 `Math.trunc`（#131）· 残留 `${var:}` 正则两端对齐（#96）· dither opacity 主路径补 `isFinite`+clamp（#166）· 前端字体栈兜底（#167）。
+
+### 协议 / 契约（每条都判断了「改代码对齐文档」还是「改文档对齐实现」）
+- **`throttle.projection-fps` 死配置**（#186）→ **改代码**：让它推算 `adaptive-fps` 的默认值（行为逐位不变），`deployment.md` 教服主调的那个旋钮从此真的有效。
+- **关键帧唯一性**（#175+#85）→ **新写契约**：`timeline.md §2.1` 新增不变量「一个 `(element,property,timeMs)` 只允许一帧」，add 撞键=覆盖、move 撞键=被拖的胜出；`rendering.md §9.1` 的「重合取后」降级为旧数据兜底。前端已按此实现，无需改动。
+- **bezier easing 的 y 无上限**（#153）→ **先改 `rendering.md §9.3` 再改代码**：`y=1e308` → `cy=3·y1` 溢出 → `eased=NaN` → Java `(int)NaN=0` vs JS `Math.round(NaN)=NaN`，是双端逐位等价的真实缺口。定 `|y| ≤ 100`。
+- **权限节点**（#182）→ **两边都改**：`canvas.use` / `canvas.wand` 接线；`canvas.commit`（命令已废止）与 `canvas.admin.bypass-limit`（从未接线）从 yml 与 security.md 删除。**新增 `PermissionNodeWiringTest` 长期守卫**：yml 里每个节点都必须在主源码树被引用，否则测试红——它当场又抓出 3 个孤儿节点。
+- 改文档的：`web.trusted-proxies` 根本不存在（#190）· `canvas.resize` 是 stub（#191）· 变量语法示例的中文 key 过不了 `KEY_RE`（#192）· `brush.point` 报 dirty 也画不出在飞笔触（#193）。
+- **`EditOpDispatcher` pushPatch 乱序**（#68）→ **驳回报告修法**：把 `ctx.send` 拖进 EditSession 监视器，与刚修完的 ABBA 是同一类风险。改为传输层自愈——per-session 记已发出的最大 version，发现要发的 patch 更旧就改推全量 snapshot。
+- **`buildWeb` / `syncFontsToWeb` 无序**（#126）→ **驳回报告的后半条**：给 buildWeb 声明 `web/public` 为输入会适得其反（让字体产物反过来触发 vite 重跑并烤进 dist）。改为 `copyWebToResources { exclude("fonts/**") }`，jar 内容彻底与任务序解耦，**本地构建 = release 构建**（这也顺带消掉了 152MB vs 90MB 的历史差额）。
+
+### 其余
+`audit_log` 保留策略实装（#104）· 外部 lang 改键级 merge（#46）· `RailDao` 5 个写方法 `void → boolean` + dispatcher 按结果回 `DB_FAILED`（#32/#69/#149）· `TimelineTriggerRegistry` 补同步并做成**反射断言两个姊妹类方法都 synchronized** 的跨类纪律守卫（#158）· `AnimationTicker` 的 `play()` 不再吞并发 `invalidate`（#159）· `renderStatic` 每帧 `loadById` 加缓存（#194）· 一墙一补间改为按 `(elementId, property)` 接管、同墙多任务合并成一帧（#185）· 残留占位符告警按 wall 分桶 60s 节流（#89 + controller 补 `CanvasCompositor` 同源第二处）· 一批「注释/javadoc 与实现相反」逐条改对（#197 #199 #195 #198 #163 #81 #55）。
+
+### 验证
+后端 `:plugin:test` **2208 → 2461**（+253），0 failures；前端 **1747**，`vite build` 通过。五个后端代理对关键守卫**全部做了变异测试**（改回旧行为确认转红，再还原复绿），其中协议域一次性验了 10 处。
+
+### 需要你决策的一条（**已做安全的临时落地，可 10 行回退**）
+**#142 `/api/walls` 与 `preview.png` 加鉴权会让 HomePage 空转。** 那是 pre-auth 落地页，天然没有 sessionId。代理仍实装了鉴权，理由：默认绑 `127.0.0.1` 无所谓，但**公网反代是文档明确支持的部署形态且反代层不做鉴权**——一张「全服艺术品坐标 + 作者名 + 朝向」的清单挂在互联网上，照着坐标去拆是分分钟的事。
+
+controller 的临时处置：HomePage 收到 401/403 时**不再显示红色 `HTTP 401`**，改为说明「请在游戏里 `/canvas edit` 或 `/canvas open`，点聊天栏链接进入」的空态。三个选项供你定：① 维持现状（安全，但失去本地画作总览）② 保留匿名但**裁字段**（去掉 ownerName / world / 坐标 / facing，只留别名+尺寸+锁状态）③ 加 config 开关交给服主（贴合「数据透明不替服主决策」的产品哲学，但增配置面）。
+
+---
+
 ## 2026-07-27 · 0.9.17 第二/三/四批 · 前端总成（03/04/05 的全部前端条目，4 个并行代理）
 
 外部静态审查在 Top50 之后又产出三份清单：`03-必修BugTop51-100`（50 条）· `04-必修Bug第三批101-140`（40 条）· `05-类别专项筛查141-202`（62 条）。三份在文件空间上高度重叠，故**按文件域而非按文档切分**并行推进。本条是**前端**部分的合并记录。

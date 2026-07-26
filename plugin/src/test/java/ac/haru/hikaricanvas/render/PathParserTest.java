@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.geom.PathIterator;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -473,5 +475,41 @@ class PathParserTest {
         // star viewBox 0 0 576 512；bbox 大致填满
         assertTrue(bbox.getWidth() > 500, "star width ≈ 576, got " + bbox.getWidth());
         assertTrue(bbox.getHeight() > 400, "star height ≈ 508, got " + bbox.getHeight());
+    }
+
+    // ---------- 无 M 起手的畸形 path（IconRegistry 的用户 SVG 不过 PathDValidator） ----------
+
+    /**
+     * 首个绘制命令前没有 moveTo 时，Path2D 会抛 IllegalPathStateException —— 而本类契约是
+     * 「尽力而为、绝不抛异常」，且 CanvasCompositor 没有 per-element try-catch，一个畸形 svg
+     * 就能让整墙 rasterize 失败。按 SVG 规范停在出错点，返回空 path。
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "L10 10",
+            "l10 10 L20 20",
+            "H50",
+            "V50",
+            "Q10 10 20 20",
+            "T20 20",
+            "C1 1 2 2 3 3",
+            "S1 1 2 2",
+            "A10 10 0 0 1 20 20",
+            "  10 10 L20 20",
+    })
+    void malformedPathWithoutLeadingMoveTo_doesNotThrow(String d) {
+        PathParser.Result r = assertDoesNotThrow(() -> PathParser.parse(d),
+                "畸形 path 不许抛异常（会打断整墙 rasterize）");
+        assertNotNull(r.path());
+        assertFalse(r.hasSegments(), "首命令非 M → 按 SVG 规范停在出错点，产不出 segment");
+        assertTrue(r.path().getPathIterator(null).isDone(), "path 应为空");
+    }
+
+    /** 反向锚定：正常以 M 起手的同款命令仍然照常解析。 */
+    @Test
+    void wellFormedPathAfterGuard_stillParses() {
+        PathParser.Result r = PathParser.parse("M0 0 L10 10 H20 V30 Z");
+        assertTrue(r.hasSegments());
+        assertEquals(20.0, r.path().getBounds2D().getMaxX(), 1e-9);
     }
 }

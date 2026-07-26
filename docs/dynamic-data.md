@@ -59,7 +59,7 @@
 ```java
 public record Variable(
     String namespace,        // "user" / "system" / "papi" / 插件 namespace
-    String key,              // "红队比分" / "server_time" / "%player_name%"
+    String key,              // "red_score" / "server_time" / "%player_name%"
     VarType type,            // STRING / NUMBER / BOOLEAN / COLOR
     String defaultValue,     // null = 无 fallback
     String currentValue,     // 当前缓存值（push 写入 / 手动设 / Tier 3 计算）
@@ -75,7 +75,9 @@ enum VarType { STRING, NUMBER, BOOLEAN, COLOR }
 ### 2.2 VariableStore
 
 - **Global store**：`Map<String fullName, Variable>` 共享
-  - fullName = `<namespace>/<key>`（如 `user/红队比分` / `bedwars/match_a.red_score`）
+  - fullName = `<namespace>/<key>`（如 `user/red_score` / `bedwars/match_a.red_score`）
+  - **key 只能用 `a-z A-Z 0-9 _ . -`**（`VariableStore.KEY_RE`）。中文 / 空格 / 其它符号一律拒；
+    文档里的例子过去写过中文名，那种名字建不出来也解析不了，已全部换成 ASCII
 - **Per-wall ACL**：每个 wall 只能引用 global store 的变量；不存在 wall-scoped 变量（简化模型）
 - **持久化**：用户变量（`user/*` namespace）持久化到 DB；插件变量 / 系统变量 / PAPI 变量内存态，重启不保留
 
@@ -84,8 +86,7 @@ enum VarType { STRING, NUMBER, BOOLEAN, COLOR }
 文本字段（TextElement.text）含占位符：
 
 ```
-${var:user/红队比分}                            完整命名
-${var:红队比分}                                 简写（自动加 user/ 前缀）
+${var:user/red_score}                            完整命名（user 变量必须写全，没有简写形态）
 ${var:bedwars/score}                            插件变量
 ${var:server.time}                              系统变量（点分号 alias 兼容）
 ${var:papi/%player_name%}                        PAPI（斜杠形态；亦接受 ${var:papi.player_name} 点号形态）
@@ -116,6 +117,12 @@ ${var:eta_minutes|format=int|suffix=min}
   或 `${var:papi.player_name}`（点号）：interpolator resolve miss → `notifyDynamicLookup` →
   {{PapiVariableBridge}} 把 `%xxx%` 编码成内部 store key `papi/pct_xxx_pct` 注册 + 5s 刷新。
 
+**跨墙隔离（写字面内部形态时）**：占位符里可以直接写 store 的内部形态（插件 namespace 就是靠
+这条透传的），但 per-wall 三族 `user:<wallId>/…` / `system:<wallId>/…` / `schedule:<wallId>/…`
+只认**本墙**的 wallId——写别的墙的 wallId 会被 `resolveFullName` 换成一个必然查不到的哨兵名，
+走 fallback 链显示 `???`，而不是把别人墙的变量值读出来（固化决策 12「namespace 严格隔离」）。
+`wallId == null` 的路径（模板预览 / publish）本来就查不到 per-wall 变量，不受影响。
+
 ---
 
 ## 3. WS 协议扩展
@@ -125,29 +132,29 @@ ${var:eta_minutes|format=int|suffix=min}
 ```typescript
 // variable.create — 玩家创建用户变量
 { "op": "variable.create", "payload": {
-    "name": "红队比分",        // 自动加 user/ 前缀
+    "name": "red_score",        // 自动加 user/ 前缀
     "type": "number",
     "defaultValue": "0"
 } }
 
 // variable.update — 改名 / 改类型 / 改 default
 { "op": "variable.update", "payload": {
-    "fullName": "user/红队比分",
+    "fullName": "user/red_score",
     "patch": { "default": "0", "type": "number" }
 } }
 
 // variable.set — 玩家手动改当前值
 { "op": "variable.set", "payload": {
-    "fullName": "user/红队比分",
+    "fullName": "user/red_score",
     "value": "5"
 } }
 
 // variable.delete
-{ "op": "variable.delete", "payload": { "fullName": "user/红队比分" } }
+{ "op": "variable.delete", "payload": { "fullName": "user/red_score" } }
 
 // variable.bind — 让插件接管
 { "op": "variable.bind", "payload": {
-    "fullName": "user/红队比分",
+    "fullName": "user/red_score",
     "boundTo": "BedWarsPlugin"   // null = unbind
 } }
 ```
@@ -162,7 +169,7 @@ VariableStore 变更通过 state.patch 推到客户端：
     "payload": {
         "version": 42,
         "patches": [
-            { "op": "replace", "path": "/variables/user~1红队比分/currentValue", "value": "5" }
+            { "op": "replace", "path": "/variables/user~1red_score/currentValue", "value": "5" }
         ]
     }
 }
@@ -423,7 +430,7 @@ public class BedWarsPlugin extends JavaPlugin {
 │     ↳ fallback → 08:15              │
 │                                     │
 │ 👤 我的变量                          │
-│   user/红队比分              [number] │
+│   user/red_score              [number] │
 │     当前 "5" │ 默认 "0"             │
 │     [-1] [+1] [改值] [让插件接管]   │
 │   user/下一班车              [string] │
@@ -465,7 +472,7 @@ public class BedWarsPlugin extends JavaPlugin {
 │   papi/%player_name%             │
 │   papi/%server_uptime%           │
 │ ▼ 👤 我的变量                    │
-│   user/红队比分                  │
+│   user/red_score                  │
 │   user/下一班车                  │
 └─────────────────────────────────┘
 ```
@@ -596,7 +603,7 @@ dynamic:
 ```sql
 CREATE TABLE IF NOT EXISTS user_variables (
     wall_id TEXT NOT NULL,              -- 变量所属 wall（user 变量是 per-wall）
-    name TEXT NOT NULL,                 -- "红队比分"（不含 user/ 前缀）
+    name TEXT NOT NULL,                 -- "red_score"（不含 user/ 前缀）
     type TEXT NOT NULL,                 -- 'STRING' / 'NUMBER' / 'BOOLEAN' / 'COLOR'
     default_value TEXT,                 -- 可空
     current_value TEXT,                 -- 当前值
@@ -778,6 +785,11 @@ CREATE INDEX idx_user_global_variables_owner ON user_global_variables(owner_uuid
   - `canvas.var.global.write.any` (default: op) — **admin override**，可改任何
   - `canvas.var.global.delete.own` (default: true)
   - `canvas.var.global.delete.any` (default: op)
+- **`variable.bind` 不在上面这套 own/any 里**：绑定 = 把变量交给插件 push 接管，是敏感操作，
+  全局变量与 per-wall 变量一视同仁，统一查 `canvas.var.bind`（default op）。走 own 节点会让
+  「默认权限玩家把自己建的全局变量绑到任意插件 namespace」变成默认可做，与 §9.1 的 bind 定位矛盾。
+- **脚本积木改全局变量**：脚本没有发起人身份，只能以"墙"的身份写，规则是 owner 必须对得上——
+  只有变量 owner == 墙 owner 才允许写，没有 admin override（见 `security.md §13.8`）。
 - **类型冲突**：name 已存在（任意 owner 创建过）→ 拒 `VARIABLE_EXISTS`；只能删原 + 重建
 - **owner 离开后**：变量永久保留（同 user_variables 现状）；admin 可手动删
 

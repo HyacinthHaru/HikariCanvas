@@ -23,9 +23,16 @@ import java.util.logging.Logger;
  * <p>构造参数全是 seam（player / resolver / wallSource / clock），不直接依赖 AnimationTicker /
  * VariableStore 具体类型，可换实现。</p>
  *
- * <p><b>线程安全：</b>索引用 {@link ConcurrentHashMap} + {@link ConcurrentHashMap#newKeySet}。
- * {@link #onVariableChange} 在 VariableStore 后台线程触发；{@code rebuild*} 在编辑持久化 / 启动
- * 线程触发；{@link TimelinePlayer#play} 自带 entry 级同步（任意线程安全，见 AnimationTicker.play）。</p>
+ * <p><b>线程安全：</b>索引用 {@link ConcurrentHashMap} + {@link ConcurrentHashMap#newKeySet}，
+ * 但"清旧 + 重登"必须是一个原子动作——{@link #rebuildAll} / {@link #rebuildForWall} /
+ * {@link #removeWall} 与私有的 registerWall 一律<b>方法级 synchronized</b>，与姊妹类
+ * {@code TriggerRouter} 对齐。两个线程（Jetty 编辑线程的 persistWall 与脚本线程的
+ * ElementPropertyApplier→persistWall）同时重建同一面墙时，不同步会出现
+ * 「A 已拿到 wallKeys 快照 → B 写入新 binding → A 按旧快照 removeIf 把 B 刚加的删掉」，
+ * 结果 wallKeys 说已绑、byFullName 却是空的，该墙的变量/时刻表触发静默失效到下次 rebuild。</p>
+ *
+ * <p>{@link #onVariableChange} 走无锁读（CHM），rebuild 中途的瞬时 miss 可接受——
+ * 同 TriggerRouter 纪律：读路径不进锁，避免触发链被重建阻塞。</p>
  */
 public final class TimelineTriggerRegistry {
 
@@ -76,7 +83,7 @@ public final class TimelineTriggerRegistry {
     }
 
     /** 全库重建（启动期，autoRegisterAll 之后调一次）。 */
-    public void rebuildAll() {
+    public synchronized void rebuildAll() {
         byFullName.clear();
         wallKeys.clear();
         lastFire.clear();
@@ -88,7 +95,7 @@ public final class TimelineTriggerRegistry {
     }
 
     /** 重建某 wall 的触发绑定（编辑持久化 / session 关闭后调）：清旧 + 按当前 activeTimeline 的 trigger 重登。 */
-    public void rebuildForWall(String wallId) {
+    public synchronized void rebuildForWall(String wallId) {
         if (wallId == null) return;
         removeWall(wallId);
         WallRepo.Wall w = wallSource.load(wallId);
@@ -97,7 +104,7 @@ public final class TimelineTriggerRegistry {
     }
 
     /** 注销某 wall 的全部触发绑定（/canvas delete 后调）。 */
-    public void removeWall(String wallId) {
+    public synchronized void removeWall(String wallId) {
         if (wallId == null) return;
         Set<String> keys = wallKeys.remove(wallId);
         if (keys != null) {
@@ -141,8 +148,12 @@ public final class TimelineTriggerRegistry {
         }
     }
 
-    /** 登记 wall 的 activeTimeline（若其 trigger 是 VARIABLE_CHANGE / SCHEDULE 且有 fullName）。返回是否登记了。 */
-    private boolean registerWall(String wallId, ProjectState state) {
+    /**
+     * 登记 wall 的 activeTimeline（若其 trigger 是 VARIABLE_CHANGE / SCHEDULE 且有 fullName）。
+     * 返回是否登记了。仅由已 synchronized 的 rebuild 入口调用，自身也标 synchronized
+     * （可重入，成本可忽略）保证任何调用路径都在锁内。
+     */
+    private synchronized boolean registerWall(String wallId, ProjectState state) {
         String activeId = state.activeTimelineId();
         if (activeId == null) return false;
         Timeline tl = findTimeline(state, activeId);

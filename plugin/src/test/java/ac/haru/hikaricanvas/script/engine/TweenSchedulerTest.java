@@ -89,9 +89,12 @@ class TweenSchedulerTest {
         @Override public void invalidate(String w) {}
         @Override public void refreshAutoPlay(String w) {}
 
+        volatile ProjectState lastFrame;
+
         @Override
         public void renderStatic(String wallId, ProjectState frame) {
             renderCalls.add(wallId);
+            lastFrame = frame;
         }
 
         @Override
@@ -851,5 +854,145 @@ class TweenSchedulerTest {
             case EditSession.OpResult.Error err -> "error";
             default -> "unknown";
         };
+    }
+
+    // ---------- 冲突语义（scripting-tween.md §6）：同属性接管 / 不同属性并存 ----------
+
+    /** 只改 fill（颜色）的补间；与 tweenMove 争的是不同属性。 */
+    private static Action.TweenBlock tweenFill(long durationMs, String toColor) {
+        Action.SetElementProperties recolor = new Action.SetElementProperties(
+                ELEMENT, Map.of("fill", toColor), "setFill");
+        return new Action.TweenBlock(durationMs, Easing.LINEAR, List.of(recolor));
+    }
+
+    private static int rectX(ProjectState state) {
+        for (Layer l : state.layers()) {
+            for (var e : l.elements()) {
+                if (e.id().equals(ELEMENT)) return e.x();
+            }
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    private static String rectFillHex(ProjectState state) {
+        for (Layer l : state.layers()) {
+            for (var e : l.elements()) {
+                if (e instanceof RectElement r && r.fill() instanceof ac.haru.hikaricanvas.state.SolidFill sf) {
+                    return sf.color();
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 等一个列表变非空（默认 2s 预算）——同上，容忍后台 tick 与测试线程的时序抖动。 */
+    private static void awaitNonEmpty(List<String> list, String message) {
+        long deadline = System.nanoTime() + 2_000_000_000L;
+        while (list.isEmpty() && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertFalse(list.isEmpty(), message);
+    }
+
+    /** 等一个计数器达到期望值（默认 2s 预算）——用于跨线程触发的续接回调断言。 */
+    private static void awaitCount(java.util.concurrent.atomic.AtomicInteger counter,
+                                   int expected, String message) {
+        long deadline = System.nanoTime() + 2_000_000_000L;
+        while (counter.get() != expected && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertEquals(expected, counter.get(), message);
+    }
+
+    /**
+     * 同元素<b>不同</b>属性 → 并存。以前 active 以 wallId 为 key、后来者无条件顶掉前者，
+     * 「移动 + 变色」两条补间必然互相掐断。
+     */
+    @Test
+    void differentProperty_sameElement_coexists() {
+        fakeState = stateWithRect(0, 0);
+        java.util.concurrent.atomic.AtomicInteger moveDone = new java.util.concurrent.atomic.AtomicInteger();
+
+        clock.set(0L);
+        assertEquals("ok", scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 100, 0),
+                moveDone::incrementAndGet).result());
+        assertEquals("ok", scheduler.enqueue(WALL, BLOCK, tweenFill(1000L, "#00FF00")).result());
+
+        assertEquals(0, moveDone.get(), "变色补间不该把移动补间掐断");
+        assertEquals(1, scheduler.activeCount(), "仍是同一面墙");
+        assertEquals(2, scheduler.activeTaskCount(), "两条补间并存");
+    }
+
+    /** 并存的两条补间必须合进<b>同一帧</b>渲染，否则后渲的那张会抹掉另一条的进度。 */
+    @Test
+    void coexistingTweens_areMergedIntoOneFrame() {
+        fakeState = stateWithRect(0, 0);
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 100, 0));
+        scheduler.enqueue(WALL, BLOCK, tweenFill(1000L, "#00FF00"));
+
+        clock.set(500L);
+        scheduler.tickForTest();
+
+        // 关键是「同一张帧里同时带着两条补间的进度」：各 task 各渲各的话，后渲的那张会缺另一条。
+        // （不断言调用次数——后台 SES 也在按 cadence 跑同一个 tick，次数不确定。）
+        ProjectState frame = ticker.lastFrame;
+        assertEquals(50, rectX(frame), "移动补间的中间值要在帧里");
+        assertNotEquals("#FF0000", rectFillHex(frame), "变色补间的中间值也要在同一帧里");
+    }
+
+    /** 同元素<b>同</b>属性 → 后者接管：旧的注销 + 触发续接，新的从当前插值位继续。 */
+    @Test
+    void sameProperty_takesOver_andFiresOldContinuation() {
+        fakeState = stateWithRect(0, 0);
+        java.util.concurrent.atomic.AtomicInteger oldDone = new java.util.concurrent.atomic.AtomicInteger();
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 100, 0), oldDone::incrementAndGet);
+        clock.set(500L);
+        assertEquals("ok", scheduler.enqueue(WALL, BLOCK, tweenMove(1000L, 200, 0)).result());
+
+        assertEquals(1, oldDone.get(), "同属性接管应触发旧补间续接一次");
+        assertEquals(1, scheduler.activeTaskCount(), "同属性只留一条");
+    }
+
+    /** 一条补间跑完注销时，同墙另一条还没完的不能被连坐清掉。 */
+    @Test
+    void oneTweenFinishing_doesNotCancelTheOtherOnSameWall() {
+        fakeState = stateWithRect(0, 0);
+        java.util.concurrent.atomic.AtomicInteger shortDone = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger longDone = new java.util.concurrent.atomic.AtomicInteger();
+
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tweenMove(500L, 100, 0), shortDone::incrementAndGet);
+        scheduler.enqueue(WALL, BLOCK, tweenFill(5000L, "#00FF00"), longDone::incrementAndGet);
+
+        clock.set(600L);
+        scheduler.tickForTest();
+
+        // 引擎的顺序承诺是「先落盘、再摘任务、最后触发续接」；后台 SES 也在按 cadence 跑同一个
+        // tick，可能抢在测试线程前摘掉任务而续接回调还差一步 —— 给回调一点时间，别把这点
+        // 时序抖动当成回归。
+        awaitCount(shortDone, 1, "短的那条跑完了");
+        assertEquals(0, longDone.get(), "长的那条还没完，不能被连坐");
+        assertTrue(scheduler.hasActive(WALL), "墙上还有活");
+        assertEquals(1, scheduler.activeTaskCount());
+        assertTrue(ticker.clearCalls.isEmpty(), "墙上还有补间在跑，不该清 staticDiff");
+    }
+
+    /** 全部跑完才清理 staticDiff 与墙条目。 */
+    @Test
+    void allTweensFinished_clearsWallEntryAndDiff() {
+        fakeState = stateWithRect(0, 0);
+        clock.set(0L);
+        scheduler.enqueue(WALL, BLOCK, tweenMove(500L, 100, 0));
+        scheduler.enqueue(WALL, BLOCK, tweenFill(600L, "#00FF00"));
+
+        clock.set(700L);
+        scheduler.tickForTest();
+
+        assertFalse(scheduler.hasActive(WALL), "全跑完 → 墙条目移除");
+        assertEquals(0, scheduler.activeTaskCount());
+        awaitNonEmpty(ticker.clearCalls, "全跑完才清 staticDiff");
     }
 }

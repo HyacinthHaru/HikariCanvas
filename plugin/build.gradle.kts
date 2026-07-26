@@ -103,9 +103,21 @@ val buildWeb = tasks.register<Exec>("buildWeb") {
     outputs.dir(webBuildDir.dir("dist"))
 }
 
+// dist → jar 的 web/。**排除 fonts/**：那是 vite 从 web/public/ 原样搬过去的字体副本，
+// 是 syncFontsToWeb 为 dev server（vite 直接 serve /fonts/*.ttf）铺的，运行期根本用不到——
+// jar 里字体的权威位置是 /fonts/（下面 processResources 从 downloadedFontsDir 直接拷），
+// 前端拿字体二进制走 GET /api/font/file、拿 metrics 走 /fonts/{id}.metrics.json，
+// 两条路都读 classpath 根的 fonts/，没有一条会去读 web/fonts/。
+//
+// 不排除的话，jar 内容就取决于 buildWeb 与 syncFontsToWeb 谁先跑：先 sync 后 build →
+// 字体被烤进 dist（本地 152MB），先 build 后 sync → 没有（CI release 90MB）。
+// 同一份源码两种产物，且 buildWeb 一旦 UP-TO-DATE 还会长期定格在旧结果。
+// 排除之后，无论任务序如何，jar 里字体恒好只有一份，本地构建 = release 构建。
 val copyWebToResources = tasks.register<Copy>("copyWebToResources") {
     dependsOn(buildWeb)
-    from(webBuildDir.dir("dist"))
+    from(webBuildDir.dir("dist")) {
+        exclude("fonts/**")
+    }
     into(generatedWebResources.map { it.dir("web") })
 }
 
@@ -558,6 +570,11 @@ val syncFontsToWeb = tasks.register<Copy>("syncFontsToWeb") {
         include("*.metrics.json")
     }
     into(webFontsDir)
+    // 这个任务往 web/public/fonts/ 写，而 buildWeb 跑的 vite 会把 web/public/ 整个搬进 dist。
+    // 两者只经 processResources.dependsOn 并列、彼此无先后约束，执行序一变 dist 内容就变。
+    // 固定成「先 build 再 sync」：vite 不用白搬 60MB 字体，产物也不再随任务序漂。
+    // （jar 侧另有 copyWebToResources 的 exclude("fonts/**") 兜底，两层都不依赖执行序。）
+    mustRunAfter(buildWeb)
 }
 
 // ---- 构建期 Font Awesome Free 矢量图标库下载 + JSON 生成 ----

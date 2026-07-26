@@ -63,11 +63,36 @@ public final class TemplatePreviewService {
     public void invalidate() { cache.clear(); }
 
     /**
-     * 取（或生成）某模板的 PNG bytes。线程安全：{@link ConcurrentHashMap#computeIfAbsent} 单 flight。
-     * 模板不存在或渲染失败返回 {@code null}（前端 fallback 占位图）。
+     * 单个模板失效。重新发布同 slug 时 templateId 不变（缓存 key 就是它），不主动清的话
+     * Gallery 会一直显示上一版的缩略图，直到 {@code /canvas reload} 或重启。
      */
-    public byte[] pngFor(String templateId) {
-        TemplateEntry entry = registry.byId(templateId);
+    public void invalidate(String templateId) {
+        if (templateId != null) cache.remove(templateId);
+    }
+
+    /**
+     * 取（或生成）某模板的 PNG bytes。线程安全：{@link ConcurrentHashMap#computeIfAbsent} 单 flight。
+     * 模板不存在、调用方无权看、或渲染失败一律返回 {@code null}（前端 fallback 占位图）。
+     *
+     * <p><b>按调用方身份过滤</b>：缩略图是模板画布内容的完整渲染图，等于把别人私有模板的
+     * 画面直接给出去。这里走与 {@code template.apply} 同一条隔离判定
+     * （{@link TemplateRegistry#byIdForApply}）：builtin / server 模板人人可看，
+     * user-templates 只有 owner（或持 bypass 的调用方）能看。<b>无法解析出调用方身份时
+     * 传 {@code null}</b>，效果是只放行 builtin / server。</p>
+     *
+     * <p>越权与不存在都返回 {@code null}（同一个 404），不区分——否则这个端点就成了
+     * "枚举别人有哪些模板"的探针。</p>
+     *
+     * @param callerUuid 请求方玩家 UUID；{@code null} 等同非 owner
+     * @param hasBypass  调用方是否持 {@code canvas.template.use-others}
+     */
+    public byte[] pngFor(String templateId, java.util.UUID callerUuid, boolean hasBypass) {
+        TemplateEntry entry;
+        try {
+            entry = registry.byIdForApply(templateId, callerUuid, hasBypass);
+        } catch (ac.haru.hikaricanvas.template.ForbiddenTemplateException e) {
+            return null;
+        }
         if (entry == null || !entry.isPack()) return null;
         // computeIfAbsent 对 null 返回值不写表 → 渲染失败不缓存、下次请求重试。
         return cache.computeIfAbsent(templateId, id -> renderPackPreview(entry));

@@ -17,6 +17,7 @@ command:
     session-closing: "<gray>Session is closing; try again in a moment.</gray>"
   wand:
     received: "<gold>Received Canvas Wand. Left-click / right-click blocks to select corners.</gold>"
+    already-have: "<yellow>You already have a Canvas Wand in your inventory.</yellow>"
   cancel:
     cancelled: "<yellow>Session cancelled (was <prev_state>). <wand_note>Wall data preserved — use /canvas open or right-click ItemFrame to resume.</yellow>"
     cancelled-wand-returned: "Wand returned. "
@@ -54,6 +55,7 @@ command:
     world-not-loaded: "<red>Cannot delete canvas <wall_id>: its world '<world>' is not loaded. Load the world first, otherwise item frames would be left behind and their maps wrongly reused.</red>"
     already-gone: "<gray>Wall already gone: <wall_id></gray>"
     deleted: "<green>Wall <wall_id> deleted. <frames> frames removed.</green>"
+    failed: "<red>Wall <wall_id> could not be deleted (database write failed). Please run /canvas delete <wall_id> again in a moment; see the server log for details.</red>"
   confirm:
     not-ready: "<red>Not ready: <detail></red>"
     wall-invalid: "<red>Wall invalid: <reason> — <detail></red>"
@@ -89,7 +91,7 @@ command:
   reload:
     config-type-mismatch: "<red>reload config: plugin type mismatch (internal bug)</red>"
     config-ok: "<gold>Config reloaded: <summary></gold>"
-    config-restart-note: "<gray>Note: host/port changes require server restart to take effect.</gray>"
+    config-restart-note: "<gray>Note: only settings marked [热更] in config.yml (scripts.* limits, scripts.command-templates, i18n.default-locale) apply right away; everything else still needs a server restart.</gray>"
     templates-ok: "<gold>Templates reloaded: <builtin> builtin + <server> server (overrides=<overrides>, failed=<failed>) — total=<total></gold>"
     template-failure: "<red>  ✗ <file></red>"
   var:

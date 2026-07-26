@@ -28,11 +28,20 @@ public final class WallResolver {
     private final NamespacedKey wallIdKey;
 
     public WallResolver(int maxMaps, JavaPlugin plugin) {
+        this(maxMaps, new NamespacedKey(plugin, "wall_id"));
+    }
+
+    /**
+     * 直接给 PDC key 的构造。{@code new NamespacedKey(plugin, ...)} 需要一个真的插件实例，
+     * 单测里造不出来；本构造让"选区几何 / 上限判定"这部分纯算法可以脱离 Bukkit server 测试。
+     * 生产一律走 {@link #WallResolver(int, JavaPlugin)}，两者产生同一个 key。
+     */
+    public WallResolver(int maxMaps, NamespacedKey wallIdKey) {
         if (maxMaps <= 0) {
             throw new IllegalArgumentException("maxMaps must be positive: " + maxMaps);
         }
         this.maxMaps = maxMaps;
-        this.wallIdKey = new NamespacedKey(plugin, "wall_id");
+        this.wallIdKey = wallIdKey;
     }
 
     public sealed interface Result {
@@ -106,7 +115,9 @@ public final class WallResolver {
         int width = xAxisNormal ? (maxZ - minZ + 1) : (maxX - minX + 1);
         int height = maxY - minY + 1;
 
-        int totalMaps = width * height;
+        // 用 long 算面积。两次点击的坐标差可以到几千万（/tp 之后隔着半张地图点两下），
+        // width * height 在 int 里会溢出成负数或一个很小的正数，直接绕过下面的上限判定。
+        long totalMaps = (long) width * (long) height;
         if (totalMaps > maxMaps) {
             return fail(FailReason.TOO_LARGE,
                     width + "x" + height + "=" + totalMaps + " exceeds limit " + maxMaps);

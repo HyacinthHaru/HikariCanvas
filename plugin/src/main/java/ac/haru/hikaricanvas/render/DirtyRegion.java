@@ -1,8 +1,12 @@
 package ac.haru.hikaricanvas.render;
 
+import ac.haru.hikaricanvas.state.CircleElement;
 import ac.haru.hikaricanvas.state.Effects;
 import ac.haru.hikaricanvas.state.Element;
+import ac.haru.hikaricanvas.state.PathElement;
 import ac.haru.hikaricanvas.state.ProjectState;
+import ac.haru.hikaricanvas.state.ShapeElement;
+import ac.haru.hikaricanvas.state.Stroke;
 import ac.haru.hikaricanvas.state.TextElement;
 
 import java.util.ArrayList;
@@ -27,18 +31,29 @@ public record DirtyRegion(int x, int y, int w, int h) {
     }
 
     /**
-     * 元素 bbox → DirtyRegion。考虑 rotation 与 TextElement.effects 对像素范围的扩张。
+     * 元素 bbox → DirtyRegion。考虑 rotation、文字效果与描边溢出对像素范围的扩张。
      *
      * <p>扩张顺序：</p>
      * <ol>
      *   <li>{@link TextElement#effects()} 让字形像素溢出 bbox——
      *       {@code shadow} 按 {@code (dx, dy)} 单向外扩、{@code stroke} 按 width/2 四向外扩、
      *       {@code glow} 按 radius 四向外扩</li>
+     *   <li>圆 / 多边形 / path 的描边四向外扩 {@code ceil(width/2)}；path 带箭头或圆点
+     *       marker 时再按 marker 尺寸外扩</li>
      *   <li>{@code rotation ∈ {90, 270}} → 外接 = 边长 {@code max(w, h)} 方形中心对齐</li>
      * </ol>
      *
-     * <p>其他 rotation（0 / 180）bbox 不变。stroke 为 TextElement.effects.stroke；
-     * RectElement 的 stroke 不在外扩——那是 bbox 内部的边框，不溢出。</p>
+     * <p>其他 rotation（0 / 180）bbox 不变。</p>
+     *
+     * <p><b>为什么矩形不扩而圆 / 多边形 / path 要扩：</b>RectRenderer 用 4 条 fillRect 画边框，
+     * 边框完全在 bbox 内部；CircleRenderer / ShapeRenderer / PathRenderer 用 {@code BasicStroke}，
+     * 描边以路径为中心两侧各分一半，向外溢出 width/2（描边最粗 128 → 溢出 64 px）。不扩的话
+     * move / delete 只推 bbox 覆盖到的 map，溢进相邻 map 的那部分旧描边就留在游戏内地图上，
+     * 要等某次全量重绘才消失——前端每帧全量重画看不到这个残影，双端于是不一致
+     * （{@code architecture.md §5.1.5}「最后一帧 100% 正确」）。</p>
+     *
+     * <p><b>已知未覆盖：</b>PathElement 的 {@code d} 坐标可以画到 w/h 之外（改 d 时 bbox 不跟着变，
+     * 见 PathElement 注释）。真要覆盖得把 d 解析一遍算实际范围，这里不做。</p>
      */
     public static DirtyRegion of(Element e) {
         int x = e.x(), y = e.y(), w = e.w(), h = e.h();
@@ -52,7 +67,16 @@ public record DirtyRegion(int x, int y, int w, int h) {
             h += pad[1] + pad[3];
         }
 
-        // Step 2：rotation 外接。任意角度按旋转后四角外接矩形算。
+        // Step 2：BasicStroke 中心对齐描边 + path marker 的溢出
+        int outset = strokeOutset(e);
+        if (outset > 0) {
+            x -= outset;
+            y -= outset;
+            w += outset * 2;
+            h += outset * 2;
+        }
+
+        // Step 3：rotation 外接。任意角度按旋转后四角外接矩形算。
         int rot = ((e.rotation() % 360) + 360) % 360;
         if (rot != 0 && rot != 180) {
             double rad = Math.toRadians(rot);
@@ -65,6 +89,40 @@ public record DirtyRegion(int x, int y, int w, int h) {
             return new DirtyRegion(cx - newW / 2, cy - newH / 2, newW, newH);
         }
         return new DirtyRegion(x, y, w, h);
+    }
+
+    /**
+     * 元素描边（以及 path marker）向 bbox 外溢出的像素数，四向取同一个最大值。
+     *
+     * <p>矩形返 0（fillRect 边框画在 bbox 内）；文字的 effects.stroke 由
+     * {@link #computeEffectPadding} 负责，不在这里重复算。</p>
+     */
+    private static int strokeOutset(Element e) {
+        if (e instanceof CircleElement c) return halfStrokeWidth(c.stroke());
+        if (e instanceof ShapeElement sh) return halfStrokeWidth(sh.stroke());
+        if (e instanceof PathElement p) return pathOutset(p);
+        return 0;
+    }
+
+    /** {@code ceil(width / 2)}；无描边返 0。 */
+    private static int halfStrokeWidth(Stroke s) {
+        if (s == null) return 0;
+        return (Math.max(0, s.width()) + 1) / 2;
+    }
+
+    /**
+     * path 除描边外还要算 marker：箭头从端点朝外延伸一个 size，圆点以端点为心铺一个半径，
+     * 而端点本身就可能贴在 bbox 边上。取两种 marker 的较大值再加一个线宽留余量。
+     */
+    private static int pathOutset(PathElement p) {
+        int outset = halfStrokeWidth(p.stroke());
+        if (p.markerStart() == null && p.markerEnd() == null) return outset;
+        int width = p.stroke() == null ? 0 : Math.max(0, p.stroke().width());
+        double diag = Math.hypot(p.w(), p.h());
+        int marker = Math.max(
+                MarkerRenderer.arrowSize(width, diag),
+                MarkerRenderer.dotRadius(width, diag));
+        return Math.max(outset, marker + width);
     }
 
     private static int[] computeEffectPadding(Effects fx) {

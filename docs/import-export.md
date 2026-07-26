@@ -153,7 +153,8 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
    + 条目名安全校验（无 ../、无绝对路径、无符号链接）+ 白名单条目（§5.1）
 3. 解析 manifest → spec 兼容校验（§2.2）
 4. project.json → ProjectState（复用 @JsonCreator + ElementValidator/FillValidator/PathDValidator/StrictNumber，
-   不信任文件内任何数值；w/h clamp ≤ canvas-max-maps）
+   不信任文件内任何数值；w/h clamp ≤ canvas-max-maps）+ 结构配额校验（图层 / 时间轴 / 关键帧 /
+   元素总数 / 单墙图片数，见 §5.1a）
 5. 尺寸匹配：超当前会话墙尺寸 → IMPORT_SIZE_MISMATCH 中止，提示开匹配尺寸新会话（§4.4 现状）
 6. assets/*.png 逐个走 magic + ImageIO 隔离解码（200ms 超时）+ 落 hash 存储（复用 §4.5 校验栈）；
    assets/icons/*.svg 走 SVG 清洗（§5.3）后落 icons 目录
@@ -221,7 +222,7 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 | `IMPORT_BAD_ENTRY` | 条目名路径穿越 / 非白名单条目 / assets 非 PNG |
 | `IMPORT_SPEC_UNSUPPORTED` | `manifest.spec` 高于当前插件支持 |
 | `IMPORT_SIZE_MISMATCH` | 工程尺寸超当前会话墙 |
-| `IMPORT_MALFORMED` | manifest/project.json 解析失败 / 校验不过 |
+| `IMPORT_MALFORMED` | manifest/project.json 解析失败 / 校验不过（含图层·时间轴·关键帧·元素·图片数量超 §5.1a 上限） |
 
 导入成功响应：`{ ok:true, warnings:[ {kind, detail} … ] }`（warning 不阻断）。代码实装产出的 8 种 `kind`：
 
@@ -231,6 +232,7 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 | `missing-icon` | 工程引用的用户自定义图标（`user/<id>`）本服缺失，已留空（`detail` = source）。 |
 | `missing-variable` | 工程引用的全局用户变量（`userglobal/*`）本服不存在，显示为占位符（`detail` = 变量全名）。 |
 | `asset-quota` | 图片配额已满，部分引用图片未落地。 |
+| `asset-rehashed` | 某张图片在本服重新编码后内容指纹变了，工程里的引用已自动改写指向新文件（`detail` = 原指纹）。 |
 | `orphan-track-dropped` | 有关键帧轨指向已不存在的元素，已自动丢弃（`detail` = elementId）。 |
 | `script-invalid` | 有一条脚本规则解析 / 校验不过，已跳过，其余规则照常导入（`detail` = 原因）。 |
 | `script-command-blocked` | 脚本里的命令模板本服未配置，该积木停用、规则其余照常（`detail` = templateId）。 |
@@ -248,6 +250,24 @@ mysign.canvas                  （zip 包，扩展名 .canvas）
 - **白名单加 `scripts.json` + `assets/icons/*.svg`**（D3 + SVG 图标）。
 - **`thumbnail.png` 也是攻击面**：同走 magic + ImageIO 隔离解码 + 尺寸上限（防超大 PNG）。
 - **配额**：导入落地的图片**计入图片配额**（`config.images.*`，`security.md §4.5d`），防止用导入绕过上传限频灌图。
+- **`assets/*.png` 条目数上限 256**：字节闸只管总量，不管条数——几万个几字节的小 PNG 同样在字节闸之内，
+  却会让摄入循环开几万次写事务。超过 256 张时多出来的直接跳过并计进 `asset-quota` warning。
+
+### 5.1a 工程结构配额（`materialize` 期强制，超限即 `IMPORT_MALFORMED`）
+
+zip 闸只看字节，一份合规的 10 MiB `project.json` 仍能塞进几万个元素、上千个图层。这些数量
+在**物化时**统一卡住，两条入口（`POST /api/project/import` 与模板套用 `template.apply`）共用同一组闸：
+
+| 项 | 上限 | 与谁对齐 |
+|---|---|---|
+| 图层数 | 64 | 与 `layer.create` 的上限同值 |
+| 图层名长度 | 64 | 与 `layer.create` 同值 |
+| 图层 `opacity` | 必须是 `[0,1]` 内的有限值 | 越界会让合成阶段算出噪点像素或整层消失 |
+| 时间轴数 | 16 | 与 `timeline.create` 同值 |
+| 单时间轴关键帧总数 | 2048 | 与 `keyframe.set` 同值 |
+| 单轨关键帧数 | 256 | 与 `keyframe.set` 同值 |
+| 元素总数 | 4096 | 结构性天花板（正常人工作图远低于此） |
+| 单墙引用的不同图片数 | `config.images.max-per-wall`（默 16） | 与 `element.add type=image` 同一配额 |
 
 ### 5.2 `scripts.json` 安全（沿用 `security.md §13.5`）
 

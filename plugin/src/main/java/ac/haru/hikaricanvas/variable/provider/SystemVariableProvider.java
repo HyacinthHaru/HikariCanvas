@@ -67,8 +67,21 @@ public final class SystemVariableProvider implements VariableProvider {
     public static final String NAMESPACE = "system";
     /** Daemon refresh interval（最小公约：server.tick = 1s）。 */
     public static final long BASE_REFRESH_INTERVAL_MS = 1000L;
-    /** per-wall alias 刷新节流间隔（与 wall.alias TTL=5s 一致）。 */
+    /** per-wall alias 刷新节流间隔。 */
     public static final long PER_WALL_ALIAS_INTERVAL_MS = 5_000L;
+
+    /**
+     * 变量 TTL 相对刷新周期的宽限倍数。
+     *
+     * <p>TTL 与刷新周期取同一个数会让每一轮都出现一段"值已过期、新值还没写进来"的空窗
+     * （调度抖动 + 算值要切主线程），墙上就会闪一下 {@code ???}。给 2 倍宽限：正常轮次
+     * 永远刷在过期之前，只有真的连续两轮没刷上（Provider 挂了）才让占位符走 fallback。</p>
+     */
+    static final int TTL_GRACE_FACTOR = 2;
+
+    /** wall ID 形态（{@code w-<8位小写十六进制>}，与 {@code WallRepo.generateWallId} 对齐）。 */
+    private static final java.util.regex.Pattern WALL_ID_PATTERN =
+            java.util.regex.Pattern.compile("w-[0-9a-f]{8}");
 
     /** server.time 格式化器（24h HH:mm）。 */
     private static final DateTimeFormatter TIME_FMT =
@@ -239,6 +252,11 @@ public final class SystemVariableProvider implements VariableProvider {
      */
     void handleDynamicWall(String wallId) {
         if (wallId == null || wallId.isEmpty()) return;
+        // 形态守卫：这个 hook 是渲染线程同步调的（interpolator resolve miss → notifyDynamicLookup），
+        // 而占位符里的 namespace 段是玩家自由文本——任何人在文本元素里写
+        // ${var:system:随便什么/wall.alias} 都会走到这里。不校验的话每个假 wallId 都会永久
+        // 占 4 个内存变量 + 每 5s 白跑一次 DB 查询，且首次注册那趟 DB 往返就发生在渲染线程上。
+        if (!WALL_ID_PATTERN.matcher(wallId).matches()) return;
         if (registeredWalls.contains(wallId)) return; // 已注册，跳过 DB 往返
         registerWall(wallId);
     }
@@ -274,13 +292,18 @@ public final class SystemVariableProvider implements VariableProvider {
                 }
                 if (meta.alias() != null) {
                     store.setValue(ns + "/wall.alias", meta.alias(),
-                            Duration.ofMillis(5_000L));
+                            Duration.ofMillis(PER_WALL_ALIAS_INTERVAL_MS * TTL_GRACE_FACTOR));
                 }
             }
         } catch (Exception e) {
             log.log(Level.WARNING,
                     "system per-wall initial fill failed: wallId=" + wallId, e);
         }
+    }
+
+    /** 当前已注册的 per-wall 集合快照（测试 / 调试用，照两个 Schedule Provider 的同名方法）。 */
+    java.util.Set<String> registeredWallsSnapshot() {
+        return java.util.Set.copyOf(registeredWalls);
     }
 
     /** 注销 wall（删 4 个 wall.* 变量）。同 wall 重复或未注册幂等。 */
@@ -323,7 +346,9 @@ public final class SystemVariableProvider implements VariableProvider {
                 return;
             }
             try {
-                store.setValue(NAMESPACE + "/" + k.key, value, Duration.ofMillis(k.ttlMs));
+                // TTL 给刷新周期的 2 倍宽限（见 TTL_GRACE_FACTOR）：等于周期会让每轮都闪一次 ???
+                store.setValue(NAMESPACE + "/" + k.key, value,
+                        Duration.ofMillis(k.ttlMs * TTL_GRACE_FACTOR));
             } catch (VariableException e) {
                 log.log(Level.WARNING,
                         "system var setValue failed: " + k.key + " — " + e.getMessage(), e);
@@ -370,8 +395,9 @@ public final class SystemVariableProvider implements VariableProvider {
         String ns = NAMESPACE + ":" + wallId;
         if (meta.alias() != null) {
             try {
+                // 同上：TTL = 刷新间隔 × 宽限倍数，避开每轮的 stale 空窗
                 store.setValue(ns + "/wall.alias", meta.alias(),
-                        Duration.ofMillis(5_000L));
+                        Duration.ofMillis(PER_WALL_ALIAS_INTERVAL_MS * TTL_GRACE_FACTOR));
             } catch (VariableException ignored) {
                 // 变量被外部删了 → 静默
             }

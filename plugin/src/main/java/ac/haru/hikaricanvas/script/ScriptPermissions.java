@@ -26,8 +26,17 @@ public final class ScriptPermissions {
     public static final String NODE_TRIGGER_GLOBAL = "canvas.script.trigger.global";
     /** 播放声音面。 */
     public static final String NODE_SOUND = "canvas.script.sound";
+    /**
+     * 全服广播面：发消息 / 弹标题选 {@code target=all} 时要这个节点。
+     * {@code target=trigger}（只发给触发脚本的那名玩家）不需要——只有遍历全服在线玩家
+     * 的那一档才算广播。默认开，服主嫌吵可以整服收回（security.md §13.3）。
+     */
+    public static final String NODE_BROADCAST = "canvas.script.broadcast";
     /** 执行命令模板面。 */
     public static final String NODE_COMMAND = "canvas.script.command";
+
+    /** {@code SendMessage.target} / {@code ShowTitle.target} 的全服广播档取值。 */
+    private static final String TARGET_ALL = "all";
 
     private ScriptPermissions() {
     }
@@ -72,7 +81,10 @@ public final class ScriptPermissions {
                 // 均无附加权限面（仍走基础 canvas.script.edit）
                 case Action.SetElementProperties ignored -> { }
                 case Action.NudgeElement ignored -> { }
-                case Action.SendMessage ignored -> { }
+                // 发消息：target=all 才是全服广播 → 要 broadcast 面；trigger 档只发触发玩家
+                case Action.SendMessage sm -> {
+                    if (TARGET_ALL.equals(sm.target())) facets.add(NODE_BROADCAST);
+                }
                 case Action.SetRandomVariable ignored -> { }
                 case Action.ScaleVariable ignored -> { }
                 case Action.PlayTimelineAwait ignored -> { }
@@ -94,7 +106,10 @@ public final class ScriptPermissions {
                 }
                 case Action.SetElementLayer ignored -> { }
                 case Action.RoundVariable ignored -> { }
-                case Action.ShowTitle ignored -> { }
+                // 标题弹窗：同 SendMessage，target=all 走 broadcast 面
+                case Action.ShowTitle st -> {
+                    if (TARGET_ALL.equals(st.target())) facets.add(NODE_BROADCAST);
+                }
             }
         }
     }

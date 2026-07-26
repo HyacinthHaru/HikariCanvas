@@ -104,6 +104,11 @@ public final class HikariCanvasConfig {
     public final boolean databaseAutoBackup;
     /** 备份保留天数：启动期自动清理超过此天数的 data.db.pre-V&lt;NNN&gt;.bak。≤0 = 永久保留。 */
     public final int backupRetentionDays;
+    /**
+     * {@code audit_log} 表保留天数（{@code docs/security.md §8.2} / {@code data-model.md §2.6.4}）。
+     * ≤0 = 永久保留。清理由 {@link ac.haru.hikaricanvas.storage.AuditLog} 自己顺带跑，不起调度器。
+     */
+    public final int auditRetentionDays;
 
     // ---- dynamic ----
     /**
@@ -349,6 +354,7 @@ public final class HikariCanvasConfig {
         this.importConfig = b.importConfig;
         this.databaseAutoBackup = b.databaseAutoBackup;
         this.backupRetentionDays = b.backupRetentionDays;
+        this.auditRetentionDays = b.auditRetentionDays;
         this.pushRateLimitConfig = b.pushRateLimitConfig;
         this.scheduleConfig = b.scheduleConfig;
         this.userGlobalMaxPerOwner = b.userGlobalMaxPerOwner;
@@ -378,15 +384,14 @@ public final class HikariCanvasConfig {
 
         // 网络层安全收口
         b.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, f.getInt("network.ws-auth-timeout-seconds", 5)));
-        @SuppressWarnings("unchecked")
-        java.util.List<String> origins = (java.util.List<String>) f.getList(
-                "network.allowed-origins", java.util.List.of());
-        b.allowedOrigins = origins == null
-                ? java.util.List.of()
-                : java.util.List.copyOf(origins);
+        b.allowedOrigins = readAllowedOrigins(f, plugin.getLogger());
 
-        b.tokenTtl = Duration.ofMinutes(f.getLong("session.token-ttl-minutes", 15));
-        b.wsGrace = Duration.ofMinutes(f.getLong("session.ws-grace-minutes", 5));
+        // token-ttl / ws-grace 下限钳到 1 分钟。这两项此前原样读：服主看隔壁
+        // idle-minutes 注释写着「0 = 永不超时」，很自然就跟着写个 0，结果 token-ttl-minutes
+        // 被当成 SessionReaper 的 issuedTimeout 传下去 → 所有刚签发的会话 30 秒内全被收，
+        // 编辑器彻底打不开而且日志里一点线索都没有。负值同理。
+        b.tokenTtl = Duration.ofMinutes(clampMinutes(f, "session.token-ttl-minutes", 15, plugin.getLogger()));
+        b.wsGrace = Duration.ofMinutes(clampMinutes(f, "session.ws-grace-minutes", 5, plugin.getLogger()));
         long idleMin = f.getLong("session.idle-minutes", 30);
         b.idleTimeout = idleMin <= 0 ? Duration.ofDays(365 * 100) : Duration.ofMinutes(idleMin);
         b.reaperScanTicks = 20L * Math.max(5, f.getLong("session.reaper-scan-seconds", 30));
@@ -418,23 +423,16 @@ public final class HikariCanvasConfig {
         b.inputRatePerSecond = Math.max(1, f.getInt("throttle.input-rate-per-second", 20));
         b.inputBurst = Math.max(b.inputRatePerSecond, f.getInt("throttle.input-burst", 40));
 
-        // 自适应渲染段
-        org.bukkit.configuration.ConfigurationSection adaptSec =
-                f.getConfigurationSection("rendering.adaptive-fps");
-        AdaptiveFpsConfig adaptDefaults = AdaptiveFpsConfig.defaults();
-        if (adaptSec == null) {
-            b.adaptiveFps = adaptDefaults;
-        } else {
-            long defMs = Math.max(33L,
-                    adaptSec.getLong("default-min-interval-ms", adaptDefaults.defaultMinIntervalMs()));
-            long highMs = Math.max(33L,
-                    adaptSec.getLong("high-freq-min-interval-ms", adaptDefaults.highFreqMinIntervalMs()));
-            // 高频间隔不该比默认还大；交叉配置时取小者保护用户意图
-            if (highMs > defMs) highMs = defMs;
-            boolean pushOn = adaptSec.getBoolean("push-packets-enabled",
-                    adaptDefaults.pushPacketsEnabled());
-            b.adaptiveFps = new AdaptiveFpsConfig(defMs, highMs, pushOn);
-        }
+        // 自适应渲染段。
+        //
+        // projection-fps 曾经是死配置：解析完只进 summary，投影节流器实际吃的是
+        // rendering.adaptive-fps.default-min-interval-ms，而 deployment.md 还在教服主
+        // 「卡就降 projection-fps」——照做零效果。这里把它接上：projection-fps 推算
+        // default-min-interval-ms 的**默认值**（1000/fps；默认 5fps 正好是原来的硬编码 200ms，
+        // 行为不变），服主若显式写了 default-min-interval-ms 则以那个为准。两个旋钮一个语义，
+        // 显式 > 推算，不做任何隐式自动调优。
+        b.adaptiveFps = resolveAdaptiveFps(
+                f.getConfigurationSection("rendering.adaptive-fps"), b.projectionFps);
 
         // i18n 段 —— 国际化兜底语言
         org.bukkit.configuration.ConfigurationSection i18nSec = f.getConfigurationSection("i18n");
@@ -473,6 +471,8 @@ public final class HikariCanvasConfig {
         // database 段：备份 WAL 安全，默认打开。
         b.databaseAutoBackup = f.getBoolean("database.auto-backup-before-migration", true);
         b.backupRetentionDays = f.getInt("database.backup-retention-days", 30);
+        b.auditRetentionDays = f.getInt("database.audit-retention-days",
+                ac.haru.hikaricanvas.storage.AuditLog.DEFAULT_RETENTION_DAYS);
 
         // dynamic.push-rate-limit 段
         org.bukkit.configuration.ConfigurationSection rate =
@@ -713,6 +713,87 @@ public final class HikariCanvasConfig {
                 + "a TLS reverse proxy (nginx / Caddy) in front. See SECURITY.md.");
     }
 
+    /**
+     * 读 {@code network.allowed-origins}，逐元素校验后返回不可变列表。
+     *
+     * <p>此前这里只是把 {@code getList} 的结果 unchecked cast 再 {@code List.copyOf}。
+     * 而 config.yml 恰恰是明确教服主手写这个列表的地方，YAML 列表笔误是常态：</p>
+     * <ul>
+     *   <li>写了空项或 {@code - ~} → 列表里含 {@code null} → {@code List.copyOf} 直接 NPE，
+     *       既炸 onEnable 也炸运行时 {@code /canvas reload config}</li>
+     *   <li>写成 {@code - 443} 之类非字符串 → 后面 {@code for (String allowed : allowedOrigins)}
+     *       隐式转型抛 ClassCastException，每次 WS 升级 500</li>
+     * </ul>
+     *
+     * <p>现在非法项跳过 + warning，与本段「缺失字段走默认值」的容错基调一致——
+     * 一行笔误不该让整个插件起不来。</p>
+     */
+    /**
+     * 解析 {@code rendering.adaptive-fps} 段，缺省值由 {@code throttle.projection-fps} 推算。
+     *
+     * <p>{@code projection-fps} 曾经是死配置：解析完只进 summary，投影节流器实际吃的是
+     * {@code default-min-interval-ms}，而 deployment.md 还在教服主「卡就降 projection-fps」——
+     * 照做零效果。现在两个旋钮接上了：{@code projection-fps} 推算
+     * {@code default-min-interval-ms} 的<b>默认值</b>（{@code 1000/fps}；默认 5fps 正好是
+     * 原来的硬编码 200ms，行为不变），服主若显式写了 {@code default-min-interval-ms}
+     * 则以那个为准。显式 &gt; 推算，不做任何隐式自动调优。</p>
+     *
+     * @param adaptSec     配置段；{@code null} = 整段缺失，全走推算 / 缺省
+     * @param projectionFps 已钳位到 [1,30] 的 {@code throttle.projection-fps}
+     */
+    static AdaptiveFpsConfig resolveAdaptiveFps(
+            org.bukkit.configuration.ConfigurationSection adaptSec, int projectionFps) {
+        AdaptiveFpsConfig adaptDefaults = AdaptiveFpsConfig.defaults();
+        long derived = Math.max(33L, 1000L / Math.max(1, projectionFps));
+        if (adaptSec == null) {
+            return new AdaptiveFpsConfig(
+                    derived,
+                    Math.min(adaptDefaults.highFreqMinIntervalMs(), derived),
+                    adaptDefaults.pushPacketsEnabled());
+        }
+        long defMs = Math.max(33L, adaptSec.getLong("default-min-interval-ms", derived));
+        long highMs = Math.max(33L,
+                adaptSec.getLong("high-freq-min-interval-ms", adaptDefaults.highFreqMinIntervalMs()));
+        // 高频间隔不该比默认还大；交叉配置时取小者保护用户意图
+        if (highMs > defMs) highMs = defMs;
+        boolean pushOn = adaptSec.getBoolean("push-packets-enabled",
+                adaptDefaults.pushPacketsEnabled());
+        return new AdaptiveFpsConfig(defMs, highMs, pushOn);
+    }
+
+    static java.util.List<String> readAllowedOrigins(FileConfiguration f, Logger logger) {
+        java.util.List<?> raw = f.getList("network.allowed-origins", java.util.List.of());
+        if (raw == null || raw.isEmpty()) return java.util.List.of();
+        java.util.List<String> out = new java.util.ArrayList<>(raw.size());
+        for (Object o : raw) {
+            if (o instanceof String s && !s.isBlank()) {
+                out.add(s.trim());
+            } else {
+                logger.warning("network.allowed-origins contains an invalid entry ("
+                        + (o == null ? "empty / null" : o.getClass().getSimpleName() + ": " + o)
+                        + "); skipping it. Entries must be quoted origin strings, "
+                        + "e.g. \"https://canvas.example.com\".");
+            }
+        }
+        return java.util.List.copyOf(out);
+    }
+
+    /**
+     * 读一个「分钟数」配置项并把下限钳到 1。
+     *
+     * <p>{@code session.token-ttl-minutes} / {@code session.ws-grace-minutes} 都没有
+     * 「0 = 关闭」的语义（隔壁 {@code idle-minutes} 才有），但服主很容易照着隔壁写 0，
+     * 而 0 会让整条确认流程静默瘫痪。越界时钳回默认值并 warning，服主至少能在日志里看到。</p>
+     */
+    static long clampMinutes(FileConfiguration f, String path, long def, Logger logger) {
+        long v = f.getLong(path, def);
+        if (v >= 1) return v;
+        logger.warning(path + "=" + v + " is not a valid duration (must be >= 1 minute); "
+                + "falling back to " + def + ". Note: unlike session.idle-minutes, "
+                + "0 does NOT mean 'never expire' here.");
+        return def;
+    }
+
     /** 摘要字符串，启动 / reload 时 log 一下，方便排错。 */
     public String summary() {
         return String.format(
@@ -749,6 +830,7 @@ public final class HikariCanvasConfig {
         ImportConfig importConfig = ImportConfig.defaults();
         boolean databaseAutoBackup = true;
         int backupRetentionDays = 30;
+        int auditRetentionDays = ac.haru.hikaricanvas.storage.AuditLog.DEFAULT_RETENTION_DAYS;
         ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config pushRateLimitConfig =
                 ac.haru.hikaricanvas.variable.plugin.PushRateLimiter.Config.defaults();
         ScheduleConfig scheduleConfig = ScheduleConfig.defaults();

@@ -21,6 +21,45 @@ class ScriptPermissionsTest {
         assertEquals(Set.of(), ScriptPermissions.requiredFacets(r));
     }
 
+    /**
+     * 全服广播（{@code target=all}）要 broadcast 面：这两个积木不带任何面的话，
+     * 默认权限玩家就能稳定刷全服 chat / title（草稿墙人人可开 + budget 10 次/秒），
+     * 而侵扰性更低的播声音 / 粒子反而有可撤销的开关。服主至少得有个旋钮能收回。
+     */
+    @Test
+    void broadcast_targetAll_requiresBroadcastFacet() {
+        ScriptRule msg = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.SendMessage("大家好", "chat", "all")));
+        assertEquals(Set.of(ScriptPermissions.NODE_BROADCAST),
+                ScriptPermissions.requiredFacets(msg));
+
+        ScriptRule title = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.ShowTitle("标题", "副标题", 200, 2000, 200, "all")));
+        assertEquals(Set.of(ScriptPermissions.NODE_BROADCAST),
+                ScriptPermissions.requiredFacets(title));
+    }
+
+    /** {@code target=trigger} 只发给触发玩家一个人，不算广播，不要面。 */
+    @Test
+    void broadcast_targetTrigger_needsNoFacet() {
+        ScriptRule msg = rule(new Trigger.VariableChange("user/score"),
+                List.of(new Action.SendMessage("你好", "chat", "trigger"),
+                        new Action.ShowTitle("标题", "副标题", 200, 2000, 200, "trigger")));
+        assertEquals(Set.of(), ScriptPermissions.requiredFacets(msg));
+    }
+
+    /** 嵌在 if / repeat 里的广播同样要面（递归扫描）。 */
+    @Test
+    void broadcast_insideNestedBlocks_stillCounted() {
+        ScriptRule r = rule(new Trigger.VariableChange("user/score"), List.of(
+                new Action.If("1 > 0",
+                        List.of(new Action.Repeat(3,
+                                List.of(new Action.SendMessage("刷屏", "chat", "all")))),
+                        List.of())));
+        assertEquals(Set.of(ScriptPermissions.NODE_BROADCAST),
+                ScriptPermissions.requiredFacets(r));
+    }
+
     @Test
     void global_join() {
         ScriptRule r = rule(new Trigger.PlayerJoin(), List.of(new Action.Log("hi")));

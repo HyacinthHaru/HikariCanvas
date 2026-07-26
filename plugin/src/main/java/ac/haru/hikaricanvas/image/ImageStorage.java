@@ -210,8 +210,13 @@ public final class ImageStorage {
 
     /**
      * 删除磁盘 PNG 文件（**不**碰 DB / 内存缓存）。
-     * 用于事务 commit 之后 LRU evict 已 DELETE 的行的磁盘 cleanup；DB 行已不在，
-     * 这里失败仅 warn，孤儿文件由下次启动 sweep / 手工清理 / 永远占空间（最坏情况）。
+     *
+     * <p>用于事务 commit 之后清掉 LRU evict 已 DELETE 掉 DB 行的那些文件。<b>调用方必须在
+     * 每一条 evict 发生过的路径上都调它</b>——包括配额最终判定为"拒绝"的那条，因为 jdbi 只在
+     * 抛异常时回滚，正常返回一个"拒绝"结果同样会 COMMIT 掉那些 DELETE。</p>
+     *
+     * <p>这里删文件失败只记 warn。<b>项目没有启动期 sweep，也没有周期清理任务</b>，所以漏掉
+     * 的文件就永久占着空间，且 {@code sumBytes()}（读 DB）从此低估真实磁盘占用。</p>
      */
     public void deleteFileOnly(String hash) {
         if (hash == null || !HASH_RE.matcher(hash).matches()) return;

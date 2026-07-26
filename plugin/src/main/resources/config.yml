@@ -1,17 +1,16 @@
 # HikariCanvas 配置文件
 # ----------------------------------------------------------------
-# 修改后用 `/canvas reload config`（管理员）或重启服务器生效。
-# 标 [需重启] 的项 hot-reload 不影响 —— 必须重启服务器。
+# 改完这个文件，**默认都要重启服务器才生效**。
+# 只有标 [热更] 的项支持 `/canvas reload config`（管理员）当场生效，
+# 其余项即使执行了 reload 也仍是旧值 —— 别被 reload 的成功提示骗了。
 # ----------------------------------------------------------------
 
 # WebSocket / HTTP 编辑器服务
 network:
   # 监听地址。生产环境强烈建议保持 127.0.0.1 + nginx/Caddy 反代加 TLS。
   # 直接绑 0.0.0.0 会暴露未加密 token，详见 docs/deployment.md。
-  # [需重启]
   host: "127.0.0.1"
   # 监听端口。
-  # [需重启]
   port: 8877
   # 玩家点 /canvas confirm 后看到的 URL 模板。{token} 会被实际 token 替换。
   # 内网默认就是 http://127.0.0.1:8877/?token={token}。
@@ -31,13 +30,16 @@ network:
   #   allowed-origins:
   #     - "https://canvas.example.com"
   # 默认空列表 = 只信回环 + 同源；其它 Origin 一律 403。
+  # 每一项都要是带引号的完整 origin 字符串（scheme://host[:port]）。写错的项（空项、
+  # 纯数字、`- ~`）会被跳过并在控制台留一条 warning，不会连累插件起不来。
   allowed-origins: []
 
 # 会话生命周期（玩家从 /canvas confirm 到关浏览器的整个过程）
 session:
-  # token 签发后多久内必须 auth 完成，否则 token 失效。
+  # token 签发后多久内必须 auth 完成，否则 token 失效。最小 1；
+  # 这里的 0 不是「永不超时」（只有下面 idle-minutes 有那个语义），写 0 会被钳回 15 并告警。
   token-ttl-minutes: 15
-  # WS 连接断开后保留 session 多久（玩家断网重连用）。超时 → cancel。
+  # WS 连接断开后保留 session 多久（玩家断网重连用）。超时 → cancel。最小 1，同上。
   ws-grace-minutes: 5
   # ACTIVE 会话无任何输入多久后被清。0 = 永不超时（谨慎，可能 leak 内存）。
   idle-minutes: 30
@@ -66,10 +68,21 @@ map-pool:
   #     world_the_end: 4   # end 预热 4 张
   per-world: {}
 
+# 招牌尺寸上限
+limits:
+  # 单面招牌最多占多少张地图（宽 × 高）。玩家选区超过这个数 → 提示 TOO_LARGE 并拒绝。
+  # 范围 1~64，默认 16（例如 4×4 或 8×2）。调大意味着一面墙一次渲染更多像素、
+  # 占用更多池地图，请配合上面的 map-pool 一起放大。
+  # 只作用于新建：已经存在的招牌即使超过新上限也照常能打开、能编辑。
+  canvas-max-maps: 16
+
 # 投影帧率 / 输入限流
 throttle:
   # 服务端把 ProjectState 渲染推送到游戏地图的最大频率（fps）。
   # 玩家停手 → 0 fps；持续输入 → 上限被卡到这个值。5 fps 对 4×2 墙的 MC packet 量是合理上限。
+  # 实际生效的旋钮是下面 rendering.adaptive-fps.default-min-interval-ms，这一项按
+  # 1000/fps 推算它的默认值（5 fps → 200ms，与老版本硬编码完全一致）。
+  # 如果你在下面显式写了 default-min-interval-ms，那边优先，这一项就不再参与。
   projection-fps: 5
   # 单 session 输入 op 速率上限（msg/s）。
   input-rate-per-second: 20
@@ -82,7 +95,8 @@ throttle:
 # 弥补 Paper 默认 MapView sync 的 250ms-5s 抖动。
 rendering:
   adaptive-fps:
-    # 普通 wall 间隔（ms；保持 throttle.projection-fps 等价默认 200ms = 5fps）
+    # 普通 wall 间隔（ms）。不写这一行时按 throttle.projection-fps 推算（1000/fps）；
+    # 写了就以这里为准。200ms = 5fps，正是 projection-fps 默认值推出来的数。
     default-min-interval-ms: 200
     # 高频 wall 间隔（ms；50ms = 20fps；CPU / bandwidth 翻倍可接受）
     high-freq-min-interval-ms: 50
@@ -112,6 +126,8 @@ images:
   # 单文件最大字节（KiB）。超出 → 413 UPLOAD_REJECTED。
   max-size-kb: 2048
   # 允许的上传 MIME。magic bytes 与 Content-Type 双层校验。
+  # 注意：标准 Java 不带 WebP 解码器，除非你自己装了对应的 ImageIO 插件，否则
+  # webp 上传会被直接拒绝并提示"本服无法解码该格式"。想用 WebP 就先装解码器。
   allowed-mime: ["image/png", "image/jpeg", "image/webp"]
   # 解码后边长上限；超出自动 bilinear downscale 到此尺寸。
   downscale-max-edge: 1024
@@ -148,6 +164,10 @@ database:
   auto-backup-before-migration: true
   # 备份保留天数：自动删除早于此天数的 data.db.pre-V<NNN>.bak（启动期清一次）。0 = 永久保留。
   backup-retention-days: 30
+  # 审计表（audit_log）保留天数。0 = 永久保留（表会一直涨，自己掂量）。
+  # 超期记录在写审计时顺带清，每 6 小时最多清一次，不额外起线程。
+  # 想查审计记录：目前没有游戏内命令，直接用 SQLite 工具查 data.db 的 audit_log 表。
+  audit-retention-days: 90
 
 # 动态数据（0.4.0）
 # 详见 docs/dynamic-data.md
@@ -196,18 +216,18 @@ timeline:
 # 0.7：墙脚本（视觉运行时；docs/scripting.md）
 scripts:
   # 单面墙可挂的脚本规则数上限（防玩家堆几百条规则拖慢服务器）。
-  # /canvas reload 可热更，只影响后续创建，不裁剪已有规则。
+  # [热更] 只影响后续创建，不裁剪已有规则。
   max-rules-per-wall: 16
   # 单面墙的元素总数上限（脚本"克隆元素"积木反复克隆是唯一能无限堆元素的入口；默认 200）。
   # 达到上限后克隆动作会被拒绝（不崩、不影响其他动作），只约束脚本克隆，不限制正常编辑。
-  # /canvas reload 可热更，下一次克隆即生效。
+  # [热更] 下一次克隆即生效。
   max-elements-per-wall: 200
   # "玩家靠近"触发器的采样间隔（游戏 tick，20 tick = 1 秒；默认 10 = 半秒扫一次）。
   # 数字越小反应越灵敏，但服务器主线程扫描越频繁（每轮 = 靠近规则数 × 在线玩家数次
-  # 距离比较）；范围 1..200，/canvas reload 可热更。底层任务固定每 2 tick 跑一次，
+  # 距离比较）；范围 1..200。[热更] 底层任务固定每 2 tick 跑一次，
   # 所以填 1 和 2 效果一样。
   player-near-sample-ticks: 10
-  # 执行预算三闸（docs/scripting.md §2.4；/canvas reload 可热更）。
+  # 执行预算三闸（docs/scripting.md §2.4）。[热更] 已开始的那一秒窗口不重置，下个窗口起生效。
   budget:
     # 单次触发展开执行的动作总数（含嵌套 if 分支与 wait 续接累计）。
     max-actions-per-run: 50
@@ -224,7 +244,7 @@ scripts:
     max-fps: 60
     # 同时活跃的补间动画上限（超限新任务报错不执行，不裁剪已有任务）。
     max-concurrent: 16
-  # 脚本"执行命令"积木的命令模板白名单（docs/scripting.md §5.2）。
+  # 脚本"执行命令"积木的命令模板白名单（docs/scripting.md §5.2）。[热更]
   # 插件不内置任何模板——这里没写的模板，脚本里引用了也不会执行（安全设计）。
   # 规则：
   #   - command 是真正执行的命令全文，{参数名} 是占位符，由脚本作者填值
@@ -251,4 +271,5 @@ scripts:
 i18n:
   # 玩家客户端语言无对应 lang 文件、或某条文案缺译时的兜底语言。
   # 内置 en_us / zh_cn；可在 plugins/HikariCanvas/lang/ 自加语言文件后用其文件名（去 .yml）。
+  # [热更] reload 时会连 plugins/HikariCanvas/lang/ 下的语言文件一起重扫。
   default-locale: en_us

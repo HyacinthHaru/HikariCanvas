@@ -281,7 +281,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 | op | 方向 | payload |
 | --- | --- | --- |
-| `canvas.resize` | C→S | `{ widthMaps, heightMaps }` (前提：池有容量) |
+| `canvas.resize` | C→S | `{ widthMaps, heightMaps }` — **未实装**：只接受与当前尺寸相同的取值（no-op，回空 patch），任何真实尺寸变更返 `POOL_EXHAUSTED`。动态扩缩容要连带 MapPool 借还 + 物品框增删，尚未做；前端零调用 |
 | `canvas.background` | C→S | `{ fill: Fill }` 推荐 / `{ color: "#RRGGBB[AA]" }` 兼容 — 见下方 schema |
 | `canvas.grid` | C→S | `{ size: int }`（0 = 关闭网格） |
 | `canvas.guides.set` | C→S | `{ guides: [{ axis, position }, ...] }`（整组替换；前端拖动期不发，松手 batch 发） |
@@ -320,7 +320,7 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `wall.lock` | C→S | `{}` - **owner-only**：caller UUID == wall.owner_uuid 才接受；UPDATE walls.published_at=now（DB 列名保留，语义为 lock 时间戳）；返回 `ack { lockedAt }`；非 owner 返 `FORBIDDEN`；session 不关闭。**2026-05-14 引入** |
 | `wall.unlock` | C→S | `{}` - **owner-only**：UPDATE walls.published_at=NULL；返回 `ack { lockedAt: null }`；非 owner 返 `FORBIDDEN`；session 不关闭 |
 | `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；不符合 `[A-Za-z0-9_-]{2,32}` 返 `INVALID_ALIAS_FORMAT`；冲突返 `ALIAS_TAKEN`；session 不关闭 |
-| `wall.refresh` | C→S | `{}` - 玩家撸掉支撑方块 / 画框时手动触发；切回主线程跑 `FrameDeployer.repairFor`（补方块 + 补 spawn 缺失画框）后整画布脏矩形 reprojection；`ack { framesRespawned, framesReAttached, wallBlocksReplaced }` |
+| `wall.refresh` | C→S | `{}` - 玩家撸掉支撑方块 / 画框时手动触发；切回主线程跑 `FrameDeployer.repairFor`（补方块 + 补 spawn 缺失画框）后整画布脏矩形 reprojection；`ack { framesRespawned, framesReAttached, wallBlocksReplaced }` / `error RATE_LIMITED`（per-wall 1 次/秒冷却）/ `error WALL_NOT_FOUND`（排队到执行之间这面墙被 `/canvas delete` 删了——继续修就是立一面幽灵墙，挂着已归还的地图） |
 
 > `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
 >
@@ -328,13 +328,18 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 ### 5.9 笔刷流
 
-笔刷 op 走 `BrushOpDispatcher` 独立路径，**不走** edit 路径的 rateLimiter（brush.point 高频低消息，限流会卡笔触流畅性）；内存安全靠 `MAX_BRUSH_POINTS_PER_STROKE` + `MAX_ACTIVE_STROKES` 双闸门。
+笔刷 op 走 `BrushOpDispatcher` 独立路径。`brush.start` / `brush.point` / `brush.cancel` **不走** edit 路径的 rateLimiter（brush.point 高频低消息，限流会卡笔触流畅性），内存安全靠 `MAX_BRUSH_POINTS_PER_STROKE` + `MAX_ACTIVE_STROKES` 双闸门；**`brush.end` 走限流**（它一次要跑 RDP 简化 + 全量快照 + 追加元素，不是「高频低消息」，见 `docs/security.md §3.3`）。
 
 | op | 方向 | payload | 响应 |
 | --- | --- | --- | --- |
 | `brush.start` | C→S | `{ layerId?, props: BrushProps }` `BrushProps = { color: "#RRGGBB[AA]", size: number, opacity: 0..1, smoothing?: 0..1, taper?: bool, hardness?: 0..1 }` | `ack { strokeId }` / `error TOO_MANY_STROKES / LAYER_LOCKED` |
-| `brush.point` | C→S | `{ strokeId, points: [[x, y, pressure, t], ...] }` 批量点，pressure 0..1，t 是相对 stroke.start 的 ms | **无 ack**（高频）；服务端立即更 dirty bbox 推 MC packet；点数超限拒 `STROKE_TOO_LONG` |
-| `brush.end` | C→S | `{ strokeId }` | `ack { version }` + `state.patch`（固化为 `BrushStrokeElement` 写入 layer，附带 RDP 简化 + Catmull-Rom 平滑）；`INVALID_STROKE` 若 strokeId 不存在 |
+| `brush.point` | C→S | `{ strokeId, points: [[x, y, pressure, t], ...] }` 批量点，pressure 0..1，t 是相对 stroke.start 的 ms | **无 ack**（高频）；只把点累进服务端 buffer，**不产 patch 也不推 MC packet**；点数超限拒 `STROKE_TOO_LONG` |
+| `brush.end` | C→S | `{ strokeId }` | `ack { version }` + `state.patch`（固化为 `BrushStrokeElement` 写入 layer，附带 RDP 简化 + Catmull-Rom 平滑）；`INVALID_STROKE` 若 strokeId 不存在；超限拒 `RATE_LIMITED` |
+
+> **落笔过程游戏内看不到，只在 `brush.end` 一次性出现**（浏览器里有实时预览，那是前端本地画的）。
+> 原因是投影管线渲染的是 `ProjectState`，而未完成的笔触只存在于 `BrushSession.StrokeBuffer` 里，
+> 还没进 `ProjectState`——就算 `brush.point` 报了 dirty bbox，重渲那块区域也画不出这条正在画的线。
+> 要做到游戏内实时跟笔，得让 compositor 认识「在飞的 stroke」，是独立的一块工作，未做。
 | `brush.cancel` | C→S | `{ strokeId }` | `ack {}`；丢弃 stroke 不持久化；空 patch |
 
 > 限制：`MAX_ACTIVE_STROKES` = 8（同 session 同时活跃 stroke 上限）；`MAX_BRUSH_POINTS_PER_STROKE` = 4096（单 stroke 累计点数硬上限）。超出返 `TOO_MANY_STROKES` / `STROKE_TOO_LONG`，前端 UI 应拦截不该发到这一层。
@@ -410,7 +415,9 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 | `rail.run.update` | C→S | `{ runId, ...patch }` | |
 | `rail.run.delete` | C→S | `{ runId }` | |
 | `rail.run.timetable.set` | C→S | `{ runId, entries: [{ stationId, arrival?, departure?, stopsHere }] }` | 整表替换，返 `{ rows }` |
-| `rail.wall.bind` | C→S | `{ wallId?, lineId?, stationId?, direction? }` | 绑定当前 wall 到线路+站+方向（wallId 缺省由后端注入） |
+| `rail.wall.bind` | C→S | `{ wallId?, lineId?, stationId?, direction? }` | 绑定当前 wall 到线路+站+方向（wallId 缺省由后端注入）；`lineId` / `stationId` 不存在 → `NOT_FOUND` |
+
+**写失败一律回 `DB_FAILED`，不回 ack。** 五条写路径（line create/update、station add/update、run create/update、timetable.set、wall.bind）都按 `RailDao` 写方法的返回值判定：写没成功（外键约束、`UNIQUE(line_id, run_number)` 撞车次号、DB 故障）就回 `error DB_FAILED`，前端据此不更新本地镜像。`rail.run.create` 若车次写成功而自动时刻表写失败，会回滚删掉刚建的车次再报错，不留没有任何停靠的空车次。
 
 > 铁路网络的协议细节以 `docs/dynamic-data.md §18.7` 为权威。
 
@@ -540,8 +547,8 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `QUOTA_PER_DAY` | 玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
 | `QUOTA_DISK_FULL` | 插件 uploads 目录总字节超 `images.max-total-storage-mb`，且 LRU 无可回收行 | ❌ |
 | `QUOTA_EXCEEDED` | 模板发布超 `templates.max-per-player`，且无 `canvas.template.bypass-limit` | ❌ |
-| `NOT_FOUND` | template.delete / template.feature / template.unfeature 指向不存在 templateId | ❌ |
-| `DB_FAILED` | TemplatePublisher 写 SQLite 失败（templates upsert / featured update） | ✅ |
+| `NOT_FOUND` | template.delete / template.feature / template.unfeature 指向不存在 templateId；rail.wall.bind 的 lineId / stationId 不存在 | ❌ |
+| `DB_FAILED` | TemplatePublisher 写 SQLite 失败（templates upsert / featured update）；rail.* 写路径失败（外键 / UNIQUE 冲突 / DB 故障） | ✅ |
 | `WRITE_FAILED` | TemplatePublisher 写 YAML 文件失败（user-templates/<uuid>/*.yml） | ✅ |
 | `NO_SESSION` | 0.8-A：`POST /api/project/import` 缺 sessionId 或会话未知（HTTP 401） | ❌ |
 | `SESSION_NOT_READY` | 0.8-A：`POST /api/project/import` 会话无可写活动墙（HTTP 409） | ❌ |
@@ -553,7 +560,7 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `IMPORT_MALFORMED` | 0.8-A：`.canvas` zip 无法解析 / 缺 manifest.json 或 project.json / 结构非法（HTTP 400） | ❌ |
 | `INTERNAL` | 0.8-A：`POST /api/project/import` 编排期意外运行期异常兜底（HTTP 500；不静默 500-without-body） | ❌ |
 | `UNEXPECTED` | 服务端断言失败（如 brush op 返了 OkSnapshot），通常是 bug，含上下文 | ❌ |
-| `INTERNAL_ERROR` | 服务器内部错误 | 视情况 |
+| `INTERNAL_ERROR` | 服务器内部错误。含子系统未装配（variable / schedule / rail / script dispatcher 为 null），以及**任何 dispatcher 抛出未检异常时的兜底**——`WebServer.handleMessage` 对整条分发链有外层 catch，保证每个 op 至少有一帧回音（细节只进服务器日志，不回给客户端） | 视情况 |
 
 ### 6.2 WS Close 码
 
@@ -870,7 +877,8 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 **校验栈**（详见 `security.md §4.5`）：
 1. 权限：caller 必须有 `canvas.upload`（默认绑 `canvas.edit`）
 2. `Content-Length` ≤ `config.images.max-size-kb`（默认 2 MB），否则 `413` + `UPLOAD_REJECTED: file too large`
-3. `Content-Type` ∈ `config.images.allowed-mime`（默认 `image/png|jpeg|webp`）
+3. `Content-Type` ∈ `config.images.allowed-mime`（默认 `image/png|jpeg|webp`）且本机 ImageIO 有对应解码器
+   （标准 JDK 无 WebP 解码器，未装第三方插件时 webp 在此被拒并给出明确文案）
 4. **Magic bytes** 校验真实 MIME（前 16 字节），两层不一致拒
 5. `ImageIO.read` 超时 200ms（`ExecutorService.submit(...).get`）；解码失败 / 死循环 / OOM 拒
 6. Bbox sanity：0 < w/h ≤ 8192；边长 > `downscale-max-edge`（默认 1024）→ 自动 bilinear downscale

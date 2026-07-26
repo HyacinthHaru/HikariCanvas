@@ -86,6 +86,12 @@ public final class FrameDeployer {
      * <p>{@code wallId} 已有 ItemFrame 的 slot 跳过；缺失 slot 重新 spawn 同样的 PDC + MapView。</p>
      */
     public RepairResult repairFor(String wallId, WallResolver.Result.Ok wall, List<Integer> mapIds) {
+        // 0) 先把墙面所在区块加载起来。找现存画框走的是 Bukkit 实体查询，而实体查询
+        //    **只看得见已加载区块**——玩家在几百格外点刷新时墙那边多半没人、区块没加载，
+        //    扫出来是 0 个画框，于是这里判定"全都不见了"，转头又 spawn 一整面新的，
+        //    区块加载回来就是两层画框叠在一起。
+        loadWallChunks(wall);
+
         // 1) 补回缺失的支撑方块（画框需要支撑才能挂住）
         int wallBlocksReplaced = replaceMissingWallBlocks(wall);
 
@@ -99,7 +105,7 @@ public final class FrameDeployer {
         int scanned = 0;
         int deadOrInvalid = 0;
         int wallMatched = 0;
-        for (ItemFrame f : wall.world().getEntitiesByClass(ItemFrame.class)) {
+        for (ItemFrame f : framesAroundWall(wall)) {
             scanned++;
             if (f.isDead() || !f.isValid()) { deadOrInvalid++; continue; }
             PersistentDataContainer pdc = f.getPersistentDataContainer();
@@ -174,6 +180,62 @@ public final class FrameDeployer {
             reAttached.add(slot);
         }
         return reAttached;
+    }
+
+    /**
+     * 把墙面 bbox（含画框那一层 + 一格余量）覆盖到的区块同步加载起来。
+     *
+     * <p>Bukkit 的实体查询只看得见已加载区块，所以任何"扫现有画框"的逻辑都必须先做这一步，
+     * 否则会把"区块没加载所以看不见"误判成"画框不存在"。与
+     * {@code replaceMissingWallBlocks} 里 {@code world.getBlockAt} 的同步加载是同一性质。</p>
+     */
+    private void loadWallChunks(WallResolver.Result.Ok wall) {
+        World world = wall.world();
+        int minChunkX = (wall.minX() - 1) >> 4;
+        int maxChunkX = (maxX(wall) + 1) >> 4;
+        int minChunkZ = (wall.minZ() - 1) >> 4;
+        int maxChunkZ = (maxZ(wall) + 1) >> 4;
+        for (int cx = minChunkX; cx <= maxChunkX; cx++) {
+            for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
+                world.getChunkAt(cx, cz);   // 同步加载
+            }
+        }
+    }
+
+    /**
+     * 墙面附近的 ItemFrame。<b>只查墙自己的 bbox（各方向留 1 格余量）</b>，不是整个世界扫一遍：
+     * 画框挂在墙面前一格，位置完全由几何决定，没有必要（也不该）为了找它们去遍历世界上
+     * 所有实体。调用前须先 {@link #loadWallChunks}。
+     */
+    private java.util.List<ItemFrame> framesAroundWall(WallResolver.Result.Ok wall) {
+        World world = wall.world();
+        org.bukkit.util.BoundingBox box = new org.bukkit.util.BoundingBox(
+                wall.minX() - 1, wall.minY() - 1, wall.minZ() - 1,
+                maxX(wall) + 2, maxY(wall) + 2, maxZ(wall) + 2);
+        java.util.List<ItemFrame> out = new java.util.ArrayList<>();
+        for (org.bukkit.entity.Entity e : world.getNearbyEntities(box)) {
+            if (e instanceof ItemFrame f) out.add(f);
+        }
+        return out;
+    }
+
+    /** 墙面 bbox 的最大 X 方块坐标（EAST/WEST 朝向时墙沿 Z 展开，X 只有一列）。 */
+    private static int maxX(WallResolver.Result.Ok wall) {
+        BlockFace f = wall.facing();
+        boolean spansZ = (f == BlockFace.EAST || f == BlockFace.WEST);
+        return spansZ ? wall.minX() : wall.minX() + wall.width() - 1;
+    }
+
+    /** 墙面 bbox 的最大 Z 方块坐标。 */
+    private static int maxZ(WallResolver.Result.Ok wall) {
+        BlockFace f = wall.facing();
+        boolean spansZ = (f == BlockFace.EAST || f == BlockFace.WEST);
+        return spansZ ? wall.minZ() + wall.width() - 1 : wall.minZ();
+    }
+
+    /** 墙面 bbox 的最大 Y 方块坐标。 */
+    private static int maxY(WallResolver.Result.Ok wall) {
+        return wall.minY() + wall.height() - 1;
     }
 
     /**
@@ -298,6 +360,16 @@ public final class FrameDeployer {
                 blockY + facing.getModY(),
                 blockZ + facing.getModZ());
         if (!frontBlock.getType().isAir()) {
+            // 只清"能被放置动作直接覆盖"的方块：草、雪层、水、火之类自然长出来 / 流过来的东西
+            // （WallResolver 在选区时就是拿它们当 FRAME_SPACE_BLOCKED 拒掉的）。
+            // 玩家真放上去的方块（箱子、告示牌、任意建材）**不动**——这一格宁可不挂画框，
+            // 也不能让插件替玩家把方块删了。缺的那一格清干净后再点一次刷新即可补上。
+            if (!frontBlock.isReplaceable()) {
+                plugin.getLogger().warning("[spawnSlot] front block at " + frontBlock.getLocation()
+                        + " is " + frontBlock.getType() + "; someone placed a block in the frame"
+                        + " space — skipping slot=" + slotIndex + " instead of breaking it");
+                return false;
+            }
             plugin.getLogger().warning("[spawnSlot] front block at " + frontBlock.getLocation()
                     + " is " + frontBlock.getType() + " (not air), clearing for slot=" + slotIndex);
             frontBlock.setType(Material.AIR, false);
@@ -305,6 +377,10 @@ public final class FrameDeployer {
 
         // 防御 3：清掉 frameLoc 1 格内残留的 Item 掉落物（撸破的画框 / 地图 item 可能掉在这）
         //         + 清掉"自己 wall + 同 slot 上次失败 spawn 留下的"幽灵 ItemFrame。
+        //
+        // 掉落物只删画框和地图这两种：它们就是本插件自己弄掉的东西。原实现对范围内**所有**
+        // 掉落物一律 remove()，玩家扔在墙根的钻石、死在这里掉的一整套装备都会在 confirm /
+        // 重启恢复时被无声销毁。
         //
         // 关键约束 A（邻接 wall confirm 误删）：
         //   不动 PDC wall_id != current 的 ItemFrame —— ItemFrame bbox 半径 ~0.25 + query box
@@ -317,9 +393,14 @@ public final class FrameDeployer {
         //   PDC 不带 wall_id 的 vanilla ItemFrame（玩家自己挂的画框 / 地图）也不动——
         //   位置占用问题由 WallResolver 在 confirm 之前的 OCCUPIED 检查拒绝。
         for (org.bukkit.entity.Entity e : world.getNearbyEntities(frameLoc, 0.8, 0.8, 0.8)) {
-            if (e instanceof org.bukkit.entity.Item) {
-                plugin.getLogger().fine("[spawnSlot] removing stray Item at " + e.getLocation()
-                        + " for slot=" + slotIndex);
+            if (e instanceof org.bukkit.entity.Item drop) {
+                Material dropped = drop.getItemStack().getType();
+                if (dropped != Material.ITEM_FRAME && dropped != Material.GLOW_ITEM_FRAME
+                        && dropped != Material.FILLED_MAP && dropped != Material.MAP) {
+                    continue;   // 玩家的东西，不碰
+                }
+                plugin.getLogger().fine("[spawnSlot] removing stray " + dropped + " at "
+                        + e.getLocation() + " for slot=" + slotIndex);
                 e.remove();
             } else if (e instanceof ItemFrame ifr) {
                 PersistentDataContainer pdc = ifr.getPersistentDataContainer();
@@ -367,7 +448,15 @@ public final class FrameDeployer {
         return true;
     }
 
-    /** 扫世界删除某 wall 的所有 ItemFrame。/canvas delete confirm 走此路径。 */
+    /**
+     * 扫世界删除某 wall 的所有 ItemFrame。{@code /canvas delete confirm} 走此路径。
+     *
+     * <p><b>调用方必须先确保墙面所在区块已加载</b>：这里用的实体查询只看得见已加载区块，
+     * 区块没加载就一个也扫不到，而调用方通常紧接着就把 walls 行删了 —— 留在世界上的画框
+     * 从此没有任何东西认得它，它挂着的地图 ID 却已回到池里被下一面墙借走，那面孤儿画框
+     * 就会显示别人的画。{@code CanvasCommand.runDeleteConfirm} 为此在调用前按 wall 尺寸
+     * 同步加载了一圈区块，并在世界未加载时直接拒绝删除。</p>
+     */
     public int removeForWall(String wallId, World world) {
         int removed = 0;
         for (ItemFrame f : world.getEntitiesByClass(ItemFrame.class)) {

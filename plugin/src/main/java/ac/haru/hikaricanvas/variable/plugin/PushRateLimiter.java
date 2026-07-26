@@ -220,35 +220,52 @@ public final class PushRateLimiter {
     /**
      * 1s 固定窗口计数器。{@code windowSec} 变化时 lazy reset。
      *
-     * <p>线程安全：addAndGet 用 CAS 重置 windowSec 后再 add count；
-     * 并发场景下多个线程都看到旧 window 时只有一个 CAS 成功（清零），
-     * 其余线程的 add 落到新 window，无丢失。</p>
+     * <p><b>线程安全：</b> {@code (windowSec, count)} 打包进<b>一个</b> {@link AtomicLong}
+     * （高 32 位 = 窗口秒数截断，低 32 位 = 计数）走单次 CAS，窗口切换与计数是同一个原子动作，
+     * 真正做到跨窗口零丢失。</p>
+     *
+     * <p>此前是两个独立 AtomicLong：先 CAS 换 windowSec、赢家 {@code count.set(0)}，
+     * 输家直接 {@code count.addAndGet}。注释写着「输家的 add 落到新 window，无丢失」——
+     * 实际交错是输家先 add、赢家随后 set(0) 把它抹掉。窗口切换那一瞬计数会少算，
+     * 限流器允许一小撮突发溢出，而注释还告诉你这里没有丢失，将来谁拿它做配额审计就会栽。</p>
+     *
+     * <p>窗口秒数截断成 int 不影响判定：只比相等，2038 之后回绕仍是「同一秒相等、不同秒不等」。</p>
      */
     private static final class Window {
-        private final AtomicLong windowSec = new AtomicLong(0L);
-        private final AtomicLong count = new AtomicLong(0L);
+        /** 高 32 位 = windowSec（截断），低 32 位 = count。 */
+        private final AtomicLong packed = new AtomicLong(0L);
+
+        private static long pack(int windowSec, int count) {
+            return ((long) windowSec << 32) | (count & 0xFFFF_FFFFL);
+        }
 
         int addAndGet(long currentWindowSec, int delta) {
-            long w = windowSec.get();
-            if (w != currentWindowSec) {
-                if (windowSec.compareAndSet(w, currentWindowSec)) {
-                    count.set(0L);
+            int w = (int) currentWindowSec;
+            while (true) {
+                long cur = packed.get();
+                int curW = (int) (cur >>> 32);
+                int curC = (int) cur;
+                // 窗口已切 → 从 delta 重新起算；同窗口 → 累加（饱和，不回绕）
+                int next = (curW == w) ? saturatedAdd(curC, delta) : Math.max(0, delta);
+                if (packed.compareAndSet(cur, pack(w, next))) {
+                    return next;
                 }
-                // CAS 失败说明并发已 reset，继续 add 即可
             }
-            long c = count.addAndGet(delta);
-            return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, c));
+        }
+
+        private static int saturatedAdd(int a, int b) {
+            long s = (long) a + b;
+            return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, s));
         }
 
         int snapshotFor(long currentWindowSec) {
-            if (windowSec.get() != currentWindowSec) return 0;
-            long c = count.get();
-            return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, c));
+            long cur = packed.get();
+            if ((int) (cur >>> 32) != (int) currentWindowSec) return 0;
+            return Math.max(0, (int) cur);
         }
 
         void reset() {
-            windowSec.set(0L);
-            count.set(0L);
+            packed.set(0L);
         }
     }
 }

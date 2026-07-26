@@ -178,7 +178,9 @@ ScriptRunner(async 单线程执行队列,与 AnimationTicker 同范式)
 ActionExecutor —— 按 action 类型分发
         ├ setVariable / increment / log → VariableStore(async 安全)
         ├ setElementProperty → 主线程 hop → EditSession 标准 op(墙开着编辑器时同步进 history;
-        │   没开编辑器时走 headless 直改 ProjectState + persistWall,语义同 0.4 动态变量路径)
+        │   没开编辑器时走 headless 直改 ProjectState + persistWall,语义同 0.4 动态变量路径
+        │   —— 落库后必须让画面跟上:在播 invalidate / 有时间轴 refreshAutoPlay /
+        │   静态墙 renderStatic 补一次重画,三条分支缺一不可)
         ├ playTimeline → AnimationTicker.play/pause/seek(现成,线程安全入口)
         ├ playSound / runCommand → 主线程 hop(Bukkit.dispatchCommand console sender)
         └ 全程三层异常隔离(单 action 失败 → log + 跳过,不断链;照 Provider daemon 范式)
@@ -265,6 +267,9 @@ rail 这族「不进 ProjectState 的 per-wall 资源」全部不走 EditSession
 | 越权挂全服监听 | trigger.global 面权限,保存时检查 |
 | `.canvas` 导入带恶意命令 | templateId 按名引用,本服 config 没有 = 积木灰显不可执行 |
 | 试跑刷副作用 | script.test 同样过 Budget + 面权限 + audit |
+| 全服刷屏(发消息 / 弹标题的 `target=all`) | broadcast 面权限(`canvas.script.broadcast`,默认开、服主可整服收回),保存时检查 |
+| 重新打开被服主禁用的危险规则 | `script.enable` 开启方向对库里现存规则重跑面检查(关闭方向永远放行) |
+| 脚本改别人的变量(跨墙 / 他人全服变量 / 伪造系统值) | 变量族积木写之前过目标校验:只能写本墙 `user:` 变量、owner 对得上的 `userglobal/`、以及插件自己的 namespace;Provider 自有的 `system` / `papi` / `scoreboard` / `schedule` 一律拒(详见 `security.md §13.8`) |
 
 ### 5.2 命令模板
 
@@ -394,6 +399,14 @@ SCRIPT_COMMAND_EXECUTED / SCRIPT_TEST`
 | `RightClickWall` | 0.7.1 | 玩家右键墙的 ItemFrame 时触发(全局面) |
 | `PlayerLeaveRange` | 0.7.1 | 玩家离开墙 `rangeBlocks` 方块半径(离开沿)触发 |
 | `PlayerQuit` | 0.7.1 | 玩家退出服务器时触发(全局面) |
+
+> **谁是「触发玩家」**（`sendMessage` / `showTitle` 的 `target=trigger` 发给谁）：
+> `PlayerJoin` / `PlayerQuit` / `PlayerNear` / `PlayerLeaveRange` / `RightClickWall` = 事件里那名玩家；
+> **`PlayerKill` = 击杀者**（动手的那个是触发方）；`VariableChange` / `Timer` / `WallReady` / 试跑
+> 没有触发玩家，`target=trigger` 的消息直接跳过（ok step 标 skipped）。
+> 触发玩家由 `TriggerContext.triggerPlayer` 单独携带，**不是**从 `detail` 字符串里反解——
+> `detail` 是给 trace / 日志看的自由文本（`playerKill` 的 detail 是 `victim→killer` 拼接串），
+> 任何判定都不许 parse 它。
 
 ### A.2 动作（28 个 + `If` 条件分支，`sealed Action`）
 

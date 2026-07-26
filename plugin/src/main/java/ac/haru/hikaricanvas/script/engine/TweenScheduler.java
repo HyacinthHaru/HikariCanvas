@@ -55,7 +55,8 @@ import java.util.logging.Logger;
  *
  * <p><b>属性支持</b>：数值（x/y/w/h/rotation/opacity）/ 颜色（TextElement.color,
  * {@link ColorLerp#lerpHex}）/ fill（几何元素 {@link ColorLerp#lerpFill}）；含 {@code ${var:}}
- * 的颜色/fill 退化末帧瞬切（不每帧 resolve）。一墙一补间（同 wallId 后来者接管）。</p>
+ * 的颜色/fill 退化末帧瞬切（不每帧 resolve）。<b>接管只按 (elementId, property)</b>：
+ * 同元素不同属性并存，同属性后来者接管（scripting-tween.md §6）。</p>
  *
  * <p><b>共存分流</b>（§5）：每 tick 现查 {@link TickerControl#isWallAnimating(String)}；
  * 有时间轴 → 每渲帧 {@link ApplyManyFn} 落 DB（让 Ticker reload 叠加关键帧）；
@@ -155,8 +156,18 @@ public final class TweenScheduler {
     // ---------- 字段 ----------
 
     private final ScheduledExecutorService scheduler;
-    /** key = wallId；MVP 一墙一补间。ConcurrentHashMap 保证 enqueue/tick 跨线程可见。 */
-    private final Map<String, TweenTask> active = new ConcurrentHashMap<>();
+    /**
+     * key = wallId，value = 该墙当前活跃的补间任务表（<b>不可变快照</b>，每次改动整体换新）。
+     *
+     * <p>一墙可以并存多个 task：scripting-tween.md §6 写死了「同元素<b>不同</b>属性 → 并存」，
+     * 只有<b>同 (elementId, property)</b> 才接管。原来这里是 {@code Map<String, TweenTask>}，
+     * 同墙第二个补间无条件顶掉第一个，「移动 + 变色」两条补间必然互相掐断。</p>
+     *
+     * <p><b>并发</b>：value 一律 {@code List.copyOf} 不可变，所有改动走
+     * {@code active.compute}（ConcurrentHashMap 的 compute 持桶锁 → enqueue（Runner 线程）
+     * 与 tick（tween 线程）的读改写互斥）；tick 迭代拿到的是快照，迭代期间不受并发改动影响。</p>
+     */
+    private final Map<String, List<TweenTask>> active = new ConcurrentHashMap<>();
     /**
      * per-wall 最后一次 renderStatic 时间戳（毫秒）。key = wallId。
      * <b>三线程契约：</b> tick 线程读写（节流 get/put + 任务结束 remove），<b>且 enqueue 线程
@@ -269,7 +280,8 @@ public final class TweenScheduler {
 
         // 收集 PropTarget（从 body 的 SetElementProperties 解析 to + 读当前值 from）
         List<PropTarget> targets = new ArrayList<>();
-        TweenTask existingForTakeover = active.get(wallId); // 接管快照（接管时从当前插值位作新 from）
+        // 接管快照：按 (elementId, property) 逐个找占着同一属性的旧 task，从它当前插值位作新 from
+        List<TweenTask> existingOnWall = active.getOrDefault(wallId, List.of());
         long nowForTakeover = clock.getAsLong();
         for (Action a : tb.body()) {
             if (!(a instanceof Action.SetElementProperties sep)) {
@@ -286,7 +298,8 @@ public final class TweenScheduler {
                     return TraceStep.error(blockId, "tween unsupported property: " + property
                             + " (supported: x/y/w/h/rotation/opacity/color/fill)");
                 }
-                PropTarget target = buildTarget(baseState, existingForTakeover, nowForTakeover,
+                PropTarget target = buildTarget(baseState,
+                        ownerOf(existingOnWall, elementId, property), nowForTakeover,
                         elementId, property, toStr, blockId);
                 if (target == null) {
                     return TraceStep.error(blockId, "tween target build failed: property=" + property
@@ -308,18 +321,52 @@ public final class TweenScheduler {
                 tb.easing() != null ? tb.easing() : Easing.LINEAR,
                 baseState, wallFps, oneShot(onComplete));
 
-        // 同 wall 已有旧补间 → 接管：清 diff + 清旧 lastRenderAt（新任务首帧立即渲），
-        // 且替换为新 task 后<b>触发旧补间的续接回调</b>（旧脚本不永久挂起，接管语义）。
-        TweenTask old = active.put(wallId, task);
-        if (old != null) {
+        // 只顶掉<b>属性冲突</b>的旧 task（同 elementId + 同 property），其余并存。
+        // 被顶掉的要清 diff + 清 lastRenderAt（新任务首帧立即渲）并触发它的续接回调
+        // （旧脚本不永久挂起，接管语义）。
+        List<TweenTask> evicted = new ArrayList<>();
+        active.compute(wallId, (k, cur) -> {
+            List<TweenTask> next = new ArrayList<>();
+            if (cur != null) {
+                for (TweenTask t : cur) {
+                    if (conflicts(t, task)) evicted.add(t);
+                    else next.add(t);
+                }
+            }
+            next.add(task);
+            return List.copyOf(next);
+        });
+        if (!evicted.isEmpty()) {
             ticker.clearStaticDiff(wallId);
             lastRenderAt.remove(wallId);
             // 接管发生在 Runner 线程；fireComplete 内只 schedule 投递到 Runner SES（见调用方），
-            // 不在此跑脚本续接。一次性保证由 old 自身的 oneShot 包装兜底。
-            fireComplete(old);
+            // 不在此跑脚本续接。一次性保证由被顶掉的 task 自身的 oneShot 包装兜底。
+            for (TweenTask t : evicted) fireComplete(t);
         }
         return TraceStep.ok(blockId, "action", "tween registered, targets=" + targets.size()
                 + " duration=" + tb.durationMs() + "ms");
+    }
+
+    /** 两个 task 是否争同一个 (elementId, property) —— 只有争了才接管（scripting-tween.md §6）。 */
+    private static boolean conflicts(TweenTask a, TweenTask b) {
+        for (PropTarget x : a.targets()) {
+            for (PropTarget y : b.targets()) {
+                if (x.elementId().equals(y.elementId()) && x.property().equals(y.property())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 找当前占着 (elementId, property) 的活跃 task；没有返 null。 */
+    private static TweenTask ownerOf(List<TweenTask> tasks, String elementId, String property) {
+        for (TweenTask t : tasks) {
+            for (PropTarget pt : t.targets()) {
+                if (pt.elementId().equals(elementId) && pt.property().equals(property)) return t;
+            }
+        }
+        return null;
     }
 
     // ---------- tick（tween 线程，scheduleAtFixedRate） ----------
@@ -327,95 +374,130 @@ public final class TweenScheduler {
     private void tick() {
         if (shutdown || active.isEmpty()) return;
         long now = clock.getAsLong();
-        // ConcurrentHashMap.entrySet() 快照迭代（其他线程 put/remove 不影响本次迭代）
-        for (Map.Entry<String, TweenTask> entry : active.entrySet()) {
+        // ConcurrentHashMap.entrySet() 快照迭代（其他线程改动不影响本次迭代）；
+        // value 本身是不可变 List，拿到就不会再变
+        for (Map.Entry<String, List<TweenTask>> entry : active.entrySet()) {
             String wallId = entry.getKey();
-            TweenTask task = entry.getValue();
+            List<TweenTask> tasks = entry.getValue();
             try {
-                tickOne(wallId, task, now);
+                tickWall(wallId, tasks, now);
             } catch (Throwable t) {
-                // 任务级异常隔离：单 wall 补间失败不杀整个 tick 循环
+                // 墙级异常隔离：单 wall 补间失败不杀整个 tick 循环
                 log.log(Level.WARNING, "[tween] tick failed wallId=" + wallId + ": " + t.getMessage(), t);
                 // 出错也清理，防无限重试
-                active.remove(wallId, task);
+                dropTasks(wallId, tasks);
+                lastRenderAt.remove(wallId);
                 ticker.clearStaticDiff(wallId);
                 // 异常也要触发续接回调，让脚本以「补间失败」状态续接 —— 否则脚本永久挂起。
                 // 触发在 tween 线程；回调内只把续接 schedule 到 Runner SES（不在 tween 线程跑脚本）。
-                fireComplete(task);
+                for (TweenTask task : tasks) fireComplete(task);
             }
         }
     }
 
-    private void tickOne(String wallId, TweenTask task, long now) {
-        long elapsed = now - task.startMs();
-        double local = task.durationMs() <= 0 ? 1.0
-                : Math.min(1.0, Math.max(0.0, (double) elapsed / task.durationMs()));
-        double eased = EasingSolver.ease(task.easing(), local);
-
+    /**
+     * 推进一面墙上<b>所有</b>活跃补间一帧。
+     *
+     * <p>渲染必须按墙聚合：静态墙那条路每帧只发一张完整 {@code ProjectState}，
+     * 各 task 各渲各的会互相覆盖（后一张缺前一张的进度）。这里把同墙所有 task 的
+     * 插值 patch 合进<b>同一帧</b>再 renderStatic 一次，「移动 + 变色」才真能并存。</p>
+     *
+     * <p>节流也是 per-wall（{@link #lastRenderAt}），间隔取墙上各 task 里最短的那个 ——
+     * 谁要求快就按谁来，慢的那条不会因此掉帧（进度计算本来就不受节流影响）。
+     * 有 task 到末帧时无视节流强渲一帧，避免画面停在中间值。</p>
+     */
+    private void tickWall(String wallId, List<TweenTask> tasks, long now) {
+        if (tasks.isEmpty()) return;
         // 共存分流：每 tick 现查（不缓存——补间期间用户可能开/关时间轴）
         boolean animating = ticker.isWallAnimating(wallId);
 
-        if (local >= 1.0) {
-            // 末帧：两种墙都落 DB（目标值，按 elementId 分组合并 patch） + 清 diff + 注销
-            // 静态墙额外渲末帧（防止末帧前的节流导致画面停在中间值）
-            if (!animating) {
-                ProjectState finalFrame = buildInterpolatedFrame(task, eased);
-                if (finalFrame != null) {
-                    ticker.renderStatic(wallId, finalFrame);
-                }
-            }
-            Map<String, Map<String, String>> byElement = new java.util.LinkedHashMap<>();
-            for (PropTarget pt : task.targets()) {
-                byElement.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
-                         .put(pt.property(), formatFinalValue(pt));
-            }
-            for (Map.Entry<String, Map<String, String>> el : byElement.entrySet()) {
-                try {
-                    applyFn.apply(wallId, task.blockId(), el.getKey(), el.getValue());
-                } catch (Exception e) {
-                    log.log(Level.WARNING, "[tween] final frame applyMany failed wallId=" + wallId
-                            + " elementId=" + el.getKey() + ": " + e.getMessage(), e);
-                }
-            }
-            active.remove(wallId, task);
-            lastRenderAt.remove(wallId);
-            if (!animating) ticker.clearStaticDiff(wallId);
-            // 顺序承诺：续接<b>必在末帧落盘（上面 applyFn.apply）之后</b>触发——这样脚本
-            // 后续动作（读元素 x/y、waitUntil/if 读几何）读到的是补间<b>目标值</b>而非起始值。
-            // 触发在 tween 线程；回调内只把续接 schedule 到 Runner SES，不在 tween 线程跑脚本。
-            fireComplete(task);
-            return;
+        List<TweenTask> finished = new ArrayList<>();
+        List<Double> easedOf = new ArrayList<>(tasks.size());
+        long renderIntervalMs = Long.MAX_VALUE;
+        for (TweenTask task : tasks) {
+            long elapsed = now - task.startMs();
+            double local = task.durationMs() <= 0 ? 1.0
+                    : Math.min(1.0, Math.max(0.0, (double) elapsed / task.durationMs()));
+            easedOf.add(EasingSolver.ease(task.easing(), local));
+            if (local >= 1.0) finished.add(task);
+            renderIntervalMs = Math.min(renderIntervalMs, Math.max(1L, Math.round(1000.0 / task.fps())));
         }
 
-        // 中间帧：per-wall fps 节流（进度计算不受节流影响）
-        long renderIntervalMs = Math.max(1L, Math.round(1000.0 / task.fps()));
         Long last = lastRenderAt.get(wallId);
-        if (last == null || now - last >= renderIntervalMs) {
+        // 末帧无视节流：不强渲的话画面会停在末帧前最后一次节流的中间值上
+        boolean due = !finished.isEmpty() || last == null || now - last >= renderIntervalMs;
+
+        if (due) {
             if (animating) {
-                // 有时间轴：每渲帧 applyMany 落 DB，让时间轴下帧 reload 叠加（§5 共存方案）
-                Map<String, Map<String, String>> byElement = new java.util.LinkedHashMap<>();
-                for (PropTarget pt : task.targets()) {
-                    byElement.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
-                             .put(pt.property(), interpolatedValueStr(pt, eased));
-                }
-                for (Map.Entry<String, Map<String, String>> el : byElement.entrySet()) {
-                    try {
-                        applyFn.apply(wallId, task.blockId(), el.getKey(), el.getValue());
-                    } catch (Exception e) {
-                        log.log(Level.WARNING, "[tween] mid-frame applyMany failed wallId=" + wallId
-                                + " elementId=" + el.getKey() + ": " + e.getMessage(), e);
-                    }
+                // 有时间轴：每渲帧 applyMany 落 DB，让时间轴下帧 reload 叠加（§5 共存方案）。
+                // 到末帧的 task 用目标值（下面的末帧落盘会再写一次，幂等）。
+                for (int i = 0; i < tasks.size(); i++) {
+                    TweenTask task = tasks.get(i);
+                    boolean atEnd = finished.contains(task);
+                    applyToDb(wallId, task, easedOf.get(i), atEnd, "mid-frame");
                 }
             } else {
-                // 静态墙：渲临时态不落 DB（路径 Z）
-                ProjectState frame = buildInterpolatedFrame(task, eased);
+                // 静态墙：渲临时态不落 DB（路径 Z）。同墙所有 task 合成一帧。
+                ProjectState frame = buildInterpolatedFrame(tasks, easedOf);
                 if (frame != null) {
                     ticker.renderStatic(wallId, frame);
                 }
             }
             lastRenderAt.put(wallId, now);
         }
-        // else: 节流跳过本次渲染，进度照旧推进（下次 tick 继续算 eased）
+
+        if (finished.isEmpty()) return;
+
+        // 末帧：两种墙都把目标值落 DB（按 elementId 分组合并 patch）
+        for (TweenTask task : finished) {
+            applyToDb(wallId, task, 1.0, true, "final frame");
+        }
+        List<TweenTask> remaining = dropTasks(wallId, finished);
+        if (remaining.isEmpty()) {
+            lastRenderAt.remove(wallId);
+            if (!animating) ticker.clearStaticDiff(wallId);
+        }
+        // 顺序承诺：续接<b>必在末帧落盘（上面 applyToDb）之后</b>触发——这样脚本
+        // 后续动作（读元素 x/y、waitUntil/if 读几何）读到的是补间<b>目标值</b>而非起始值。
+        // 触发在 tween 线程；回调内只把续接 schedule 到 Runner SES，不在 tween 线程跑脚本。
+        for (TweenTask task : finished) fireComplete(task);
+    }
+
+    /** 把一个 task 的当前值（{@code atEnd} 时为目标值）按 elementId 分组落 DB。 */
+    private void applyToDb(String wallId, TweenTask task, double eased, boolean atEnd, String stage) {
+        Map<String, Map<String, String>> byElement = new java.util.LinkedHashMap<>();
+        for (PropTarget pt : task.targets()) {
+            byElement.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
+                     .put(pt.property(), atEnd ? formatFinalValue(pt) : interpolatedValueStr(pt, eased));
+        }
+        for (Map.Entry<String, Map<String, String>> el : byElement.entrySet()) {
+            try {
+                applyFn.apply(wallId, task.blockId(), el.getKey(), el.getValue());
+            } catch (Exception e) {
+                log.log(Level.WARNING, "[tween] " + stage + " applyMany failed wallId=" + wallId
+                        + " elementId=" + el.getKey() + ": " + e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * 从墙上摘掉指定 task（按引用比对，不用 record equals —— 两个字段全同的 task 是不同任务）。
+     * 摘空则整条 key 移除。返回剩余任务表。
+     */
+    private List<TweenTask> dropTasks(String wallId, List<TweenTask> drop) {
+        List<TweenTask> remaining = active.compute(wallId, (k, cur) -> {
+            if (cur == null) return null;
+            List<TweenTask> next = new ArrayList<>(cur.size());
+            for (TweenTask t : cur) {
+                boolean dropIt = false;
+                for (TweenTask d : drop) {
+                    if (t == d) { dropIt = true; break; }
+                }
+                if (!dropIt) next.add(t);
+            }
+            return next.isEmpty() ? null : List.copyOf(next);
+        });
+        return remaining == null ? List.of() : remaining;
     }
 
     // ---------- 关停 ----------
@@ -653,18 +735,25 @@ public final class TweenScheduler {
      *
      * @param eased 已经过缓动函数映射的插值进度 [0,1]
      */
-    private static ProjectState buildInterpolatedFrame(TweenTask task, double eased) {
-        // 按 elementId 分组，把同一元素的多属性合并到一次 updateElement 调用
+    private static ProjectState buildInterpolatedFrame(List<TweenTask> tasks, List<Double> easedOf) {
+        if (tasks.isEmpty()) return null;
+        // 按 elementId 分组，把同一元素的多属性合并到一次 updateElement 调用。
+        // 同墙多个 task 合进同一份 patches —— 各 task 管各自的 (elementId, property)，
+        // enqueue 侧已保证不会有两个活跃 task 争同一个属性，所以这里不会互相覆盖。
         Map<String, Map<String, Object>> patches = new java.util.LinkedHashMap<>();
-        for (PropTarget pt : task.targets()) {
-            Object v = buildPatchValue(pt, eased);
-            if (v == null) continue; // snap 目标（末帧瞬切）或插值失败，中间帧跳过
-            patches.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
-                   .put(pt.property(), v);
+        for (int i = 0; i < tasks.size(); i++) {
+            double eased = easedOf.get(i);
+            for (PropTarget pt : tasks.get(i).targets()) {
+                Object v = buildPatchValue(pt, eased);
+                if (v == null) continue; // snap 目标（末帧瞬切）或插值失败，中间帧跳过
+                patches.computeIfAbsent(pt.elementId(), k -> new java.util.LinkedHashMap<>())
+                       .put(pt.property(), v);
+            }
         }
+        // baseState 取最后注册那个 task 的快照（同一面墙的几份快照只差注册时刻，取最新的最贴近现状）。
         // patches 为空（全 snap 目标）也返回独立副本——保持「frame 是 baseState 的隔离拷贝」
         // 这一不变式（绝不把共享 baseState 直接漏给异步读的 renderStatic）
-        ProjectState frame = deepCopyState(task.baseState());
+        ProjectState frame = deepCopyState(tasks.get(tasks.size() - 1).baseState());
         if (patches.isEmpty()) return frame;
 
         EditSession es = new EditSession(frame);
@@ -832,11 +921,19 @@ public final class TweenScheduler {
     // ---------- 测试辅助（包级可见） ----------
 
     /**
-     * 活跃补间任务数。公开供 {@code /canvas stats} / {@code diagnose} 观测
+     * 有活跃补间的<b>墙</b>数。公开供 {@code /canvas stats} / {@code diagnose} 观测
      * （{@code active} 是 {@link java.util.concurrent.ConcurrentHashMap}，{@code size()} 无锁线程安全）。
+     * 一面墙可以同时挂多条补间（不同属性各一条），要看任务条数用 {@link #activeTaskCount()}。
      */
     public int activeCount() {
         return active.size();
+    }
+
+    /** 活跃补间<b>任务</b>总数（跨墙求和）。 */
+    public int activeTaskCount() {
+        int n = 0;
+        for (List<TweenTask> tasks : active.values()) n += tasks.size();
+        return n;
     }
 
     /** 是否有指定 wall 的活跃任务（测试断言用）。 */

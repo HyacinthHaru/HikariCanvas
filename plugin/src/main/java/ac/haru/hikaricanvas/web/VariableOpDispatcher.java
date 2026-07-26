@@ -26,7 +26,8 @@ import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
  * <ul>
  *   <li>{@code variable.create / update / set / delete}：owner 走 {@code canvas.var.write.own}；
  *       非 owner 需 {@code canvas.var.write.any}。delete 单独细分 own/any 节点，本 v1 用 write 节点统管。</li>
- *   <li>{@code variable.bind}：敏感，统一查 {@code canvas.var.bind}。</li>
+ *   <li>{@code variable.bind}：敏感，统一查 {@code canvas.var.bind}——per-wall 与
+ *       {@code userglobal/} 两条路径都是它，不走 own/any 那族。</li>
  * </ul>
  * 离线玩家无 {@code Player} 实例 → {@code hasPermission} 不可用；遵循项目惯例（参考
  * {@link WallOpDispatcher} alias / template 处理）按"无 bypass"处理：owner 仍可走 own 路径，
@@ -388,21 +389,29 @@ final class VariableOpDispatcher {
      *
      * <ul>
      *   <li>{@code variable.create} (scope=global) → {@code canvas.var.global.create}</li>
+     *   <li>{@code variable.bind} (userglobal/) → {@code canvas.var.bind}（与 per-wall 同一个
+     *       敏感节点，default=op）</li>
      *   <li>{@code variable.delete} (userglobal/) → owner? {@code .delete.own} : {@code .delete.any}</li>
-     *   <li>{@code variable.update / set / bind} (userglobal/) → owner? {@code .write.own} : {@code .write.any}</li>
+     *   <li>{@code variable.update / set} (userglobal/) → owner? {@code .write.own} : {@code .write.any}</li>
      * </ul>
      */
-    private String pickGlobalPermissionNode(String op, UUID callerUuid,
-                                            Map<String, Object> payload) {
+    String pickGlobalPermissionNode(String op, UUID callerUuid,
+                                    Map<String, Object> payload) {
         if ("variable.create".equals(op)) {
             return "canvas.var.global.create";
+        }
+        // bind 不进 own/any 那一族：把变量交给插件 push 接管是敏感操作，全局与 per-wall 一视同仁
+        // 统一查 canvas.var.bind（dynamic-data.md §17.3 / security.md §9）。走 .write.own 的话
+        // 「默认权限玩家把自己建的全局变量绑到任意插件 namespace」会变成默认可做。
+        if ("variable.bind".equals(op)) {
+            return "canvas.var.bind";
         }
         String fullName = stringOrNull(payload.get("fullName"));
         boolean ownerOnly = isCallerGlobalOwner(callerUuid, fullName);
         if ("variable.delete".equals(op)) {
             return ownerOnly ? "canvas.var.global.delete.own" : "canvas.var.global.delete.any";
         }
-        // update / set / bind 共用 write.own/.any（dynamic-data.md §17.3）
+        // update / set 共用 write.own/.any（dynamic-data.md §17.3）
         return ownerOnly ? "canvas.var.global.write.own" : "canvas.var.global.write.any";
     }
 
@@ -425,7 +434,7 @@ final class VariableOpDispatcher {
      * 哪些节点是 default=true（offline 玩家也通行）。
      * 与 paper-plugin.yml 一致：{@code .own / .create} 节点默认通；{@code .any / .bind} 默认 op。
      */
-    private static boolean isOwnNodeDefaultTrue(String node) {
+    static boolean isOwnNodeDefaultTrue(String node) {
         return node.equals("canvas.var.write.own")
                 || node.equals("canvas.var.global.create")
                 || node.equals("canvas.var.global.write.own")

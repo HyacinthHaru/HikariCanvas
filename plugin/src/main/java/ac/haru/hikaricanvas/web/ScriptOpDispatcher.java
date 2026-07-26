@@ -45,10 +45,11 @@ import static ac.haru.hikaricanvas.web.WebHelpers.stringOrNull;
  *
  * <p>全部 op 先查基础节点 {@link ScriptPermissions#NODE_EDIT}（default=true；仅 offline
  * 玩家兜底放行，在线被显式收回必须真拒，与 alias 模板的 own 兜底等价语义）。
- * create / update 解析出
- * rule 后再对 {@link ScriptPermissions#requiredFacets} 逐面查——<b>面节点无兜底</b>：
- * 服主收回 {@code canvas.script.sound} / {@code canvas.script.command} /
- * {@code canvas.script.trigger.global} 时必须真拒（危险面纪律）。</p>
+ * create / update 解析出 rule 后、test 与 enable(=true) 对<b>库里现存规则</b>，
+ * 都再对 {@link ScriptPermissions#requiredFacets} 逐面查——<b>面节点无兜底</b>：
+ * 服主收回 {@code canvas.script.sound} / {@code canvas.script.broadcast} /
+ * {@code canvas.script.command} / {@code canvas.script.trigger.global} 时必须真拒
+ * （危险面纪律）。delete 与 enable(=false) 是"收敛动作"，不查面。</p>
  *
  * <p><b>不读 wall lock</b>（lock-state 纪律：后端编辑 op 不读 lock）。</p>
  *
@@ -315,6 +316,22 @@ final class ScriptOpDispatcher {
             return Envelope.error(in.id(), "INVALID_PAYLOAD", "enabled (boolean) required");
         }
 
+        // 开启方向是被禁用规则的最后一道闸：对库里现存的这条规则重跑面检查
+        // （security.md §13.4）。少了这一步，服主收回 canvas.script.command 之后
+        // 玩家把旧规则重新打开就能继续以 console 身份跑命令——create/update/test
+        // 三条路都查了面，只有 enable 漏了。关闭方向不查（关危险规则不该被权限拦）。
+        Set<String> facets = Set.of();
+        if (enabled) {
+            ScriptRule existing = store.find(wallId, ruleId).orElse(null);
+            if (existing == null) {
+                return Envelope.error(in.id(), "SCRIPT_NOT_FOUND",
+                        "script rule not found: " + ruleId);
+            }
+            facets = ScriptPermissions.requiredFacets(existing);
+            Envelope facetDenied = checkFacets(in, sessionId, s, "script.enable", facets);
+            if (facetDenied != null) return facetDenied;
+        }
+
         ScriptRule flipped;
         try {
             flipped = store.setEnabled(wallId, ruleId, enabled);
@@ -324,7 +341,10 @@ final class ScriptOpDispatcher {
 
         Map<String, Object> ruleMap = ruleToMap(flipped);
         pushAdd(sessionId, s, flipped.id(), ruleMap);
-        recordAudit("SCRIPT_ENABLE", sessionId, s, wallId, flipped, Set.of());
+        // enabled 进 audit：开还是关是这个事件的全部信息量，security.md §13.7 的字段表
+        // 也这么写。开启方向另附实际查过的面，方便事后核对"当时他有没有命令权限"。
+        recordAudit("SCRIPT_ENABLE", sessionId, s, wallId, flipped, facets,
+                flipped.id(), Map.of("enabled", enabled));
         return Envelope.of("ack", in.id(), Map.of("rule", ruleMap));
     }
 
@@ -563,9 +583,13 @@ final class ScriptOpDispatcher {
      * 面权限逐一查，<b>无兜底</b>（被服主收回必须真拒）。任一缺 →
      * {@code PERMISSION_DENIED}（message 含缺的节点）+ audit。
      * 返回 null = 全通过；非 null = 错误帧。
+     *
+     * <p>package-private 而非 private：{@code ScriptOpFacetGuardTest} 用反射清点
+     * 「每个改动规则内容 / 启用态的 op 都真的走到这里」，防再出现 script.enable
+     * 那种"复制了兄弟 handler 的骨架却没复制它的闸"的漏检。</p>
      */
-    private Envelope checkFacets(Envelope in, String sessionId,
-                                 Session s, String op, Set<String> facets) {
+    Envelope checkFacets(Envelope in, String sessionId,
+                         Session s, String op, Set<String> facets) {
         if (facets.isEmpty()) return null;
         UUID callerUuid = s.playerUuid();
         // 一次主线程 hop 批量解析（≤3 节点）；offline / 超时 → 全 false（fail-closed）
@@ -617,9 +641,18 @@ final class ScriptOpDispatcher {
                 rule == null ? null : rule.id());
     }
 
-    /** details 恒含 wall_id / rule_id / rule_name；facets 非空时逗号串接附上。 */
     private void recordAudit(String event, String sessionId, Session s, String wallId,
                              ScriptRule rule, Set<String> facets, String ruleId) {
+        recordAudit(event, sessionId, s, wallId, rule, facets, ruleId, Map.of());
+    }
+
+    /**
+     * details 恒含 wall_id / rule_id / rule_name；facets 非空时逗号串接附上；
+     * {@code extras} 是该事件特有的字段（如 enable 的 {@code enabled}）。
+     */
+    private void recordAudit(String event, String sessionId, Session s, String wallId,
+                             ScriptRule rule, Set<String> facets, String ruleId,
+                             Map<String, Object> extras) {
         if (auditLog == null) return;
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("wall_id", wallId);
@@ -628,6 +661,7 @@ final class ScriptOpDispatcher {
         if (facets != null && !facets.isEmpty()) {
             d.put("facets", String.join(",", facets.stream().sorted().toList()));
         }
+        d.putAll(extras);
         auditLog.record(event,
                 s.playerUuid() == null ? null : s.playerUuid().toString(),
                 s.playerName(), sessionId, null, d);

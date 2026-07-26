@@ -587,6 +587,95 @@ class VariableInterpolatorTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  跨墙隔离：占位符里写内部 fullName 形态也读不到别人的墙
+    // ──────────────────────────────────────────────────────────
+
+    /**
+     * 占位符允许写内部形态（插件 namespace 靠这条透传），但写别的墙的
+     * {@code user:<wallId>/key} 就等于跨墙直读他人变量——wallId 从 /api/walls 就能拿到，
+     * 等于人人可读全服所有墙的用户变量。必须落 fallback 链而不是把值吐出来。
+     */
+    @Test
+    void crossWallUserVariable_notReadable() {
+        store.create("user:w-other01", "score", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-other01/score", "1337", null);
+
+        var r = interp.interpolate("${var:user:w-other01/score}", "w-mine0001");
+
+        assertEquals(VariableInterpolator.UNRESOLVED, r.text(), "别的墙的值不许漏出来");
+        assertFalse(r.referencedFullNames().contains("user:w-other01/score"));
+    }
+
+    @Test
+    void crossWallSystemAndScheduleVariables_notReadable() {
+        store.create("system:w-other01", "wall.alias", VarType.STRING, null, "system");
+        store.setValue("system:w-other01/wall.alias", "别人的招牌", null);
+        store.create("schedule:w-other01", "next_departure", VarType.STRING, null, "schedule");
+        store.setValue("schedule:w-other01/next_departure", "08:00", null);
+
+        assertEquals(VariableInterpolator.UNRESOLVED,
+                interp.interpolate("${var:system:w-other01/wall.alias}", "w-mine0001").text());
+        assertEquals(VariableInterpolator.UNRESOLVED,
+                interp.interpolate("${var:schedule:w-other01/next_departure}", "w-mine0001").text());
+    }
+
+    /** 本墙的内部形态照常可读（别把正常用法一起拦了）。 */
+    @Test
+    void ownWallInternalForm_stillReadable() {
+        store.create("user:w-mine0001", "score", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-mine0001/score", "42", null);
+
+        assertEquals("42", interp.interpolate("${var:user:w-mine0001/score}", "w-mine0001").text());
+        assertEquals("42", interp.interpolate("${var:user/score}", "w-mine0001").text());
+    }
+
+    /** 插件 namespace 的字面透传不受影响。 */
+    @Test
+    void pluginNamespace_stillPassesThrough() {
+        store.create("bedwars", "score", VarType.NUMBER, null, "bedwars");
+        store.setValue("bedwars/score", "7", null);
+
+        assertEquals("7", interp.interpolate("${var:bedwars/score}", "w-mine0001").text());
+    }
+
+    /** 无 wall 上下文（模板预览 / publish）同样读不到任何墙的私有变量。 */
+    @Test
+    void nullWallId_cannotReadPerWallVariables() {
+        store.create("user:w-other01", "score", VarType.NUMBER, null, "manual");
+        store.setValue("user:w-other01/score", "1337", null);
+
+        assertEquals(VariableInterpolator.UNRESOLVED,
+                interp.interpolate("${var:user:w-other01/score}", null).text());
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  残缺占位符不刷日志（匹配不上就收工，不白跑满二次扫描）
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    void unclosedPlaceholder_doesNotWarnEveryCall() {
+        java.util.List<java.util.logging.LogRecord> records = new ArrayList<>();
+        Logger interpLog = Logger.getLogger(VariableInterpolator.class.getName());
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord r) { records.add(r); }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        interpLog.addHandler(handler);
+        try {
+            // 行尾缺 } 的残缺占位符：正则匹配不上 → 二次扫描没有任何进展
+            for (int i = 0; i < 5; i++) {
+                interp.interpolate("下一班 ${var:schedule.next_departure", "w-mine0001");
+            }
+        } finally {
+            interpLog.removeHandler(handler);
+        }
+        assertTrue(records.stream().noneMatch(
+                        r -> r.getLevel().intValue() >= java.util.logging.Level.WARNING.intValue()),
+                "匹配不上的残缺占位符不该每帧打 WARNING（动画墙上就是每秒几十条）: " + records.size());
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Helper：与 VariableStoreTest 同构的 fake DAO
     // ──────────────────────────────────────────────────────────
 

@@ -344,6 +344,73 @@ class ProjectImporterTest {
                 .execute());
     }
 
+    // ---------- 图片引用：重编码漂移修正 ----------
+
+    /**
+     * 摄入会解码 + 重新编码再算 hash，得出的指纹常与导出方写在文件名里的那个不同
+     * （第三方工具产出的包、不同 JDK）。元素引用的是文件名那个，不改写的话图片全指向不存在的
+     * 文件——渲染出来是占位，而且一句提示都没有。
+     */
+    @Test
+    void importInto_recodedAssetHash_rewritesElementSourceAndWarns() throws Exception {
+        Session session = freshSession(2, 1);
+        String declared = "deadbeefdeadbeef";
+        String project = "{\"version\":3,\"canvas\":{\"widthMaps\":2,\"heightMaps\":1,\"background\":\"#FFFFFF\"},"
+                + "\"layers\":[{\"id\":\"l1\",\"name\":\"L\",\"visible\":true,\"locked\":false,\"opacity\":1.0,"
+                + "\"blendMode\":\"normal\",\"elements\":["
+                + "{\"type\":\"image\",\"id\":\"e1\",\"x\":0,\"y\":0,\"w\":8,\"h\":8,"
+                + "\"source\":\"" + declared + "\"}]}],\"activeLayerId\":\"l1\"}";
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream z = new ZipOutputStream(bos)) {
+            z.putNextEntry(new ZipEntry("manifest.json"));
+            z.write("{\"spec\":1,\"kind\":\"project\",\"created_at\":1,\"wall\":{\"width\":2,\"height\":1}}".getBytes());
+            z.closeEntry();
+            z.putNextEntry(new ZipEntry("project.json"));
+            z.write(project.getBytes());
+            z.closeEntry();
+            z.putNextEntry(new ZipEntry("assets/" + declared + ".png"));
+            z.write(png(8, 8));
+            z.closeEntry();
+        }
+
+        ImportResult r = newImporter().importInto(session, bos.toByteArray(), UUID.randomUUID());
+
+        var el = session.projectState().layers().get(0).elements().get(0);
+        String source = ((ac.haru.hikaricanvas.state.ImageElement) el).source();
+        assertFalse(declared.equals(source),
+                "声明 hash 与实际落盘 hash 不同时，元素引用必须被改写");
+        assertTrue(r.warnings().stream().anyMatch(w -> "asset-rehashed".equals(w.kind())),
+                "改写要给用户一条提示: " + r.warnings());
+    }
+
+    // ---------- 结构数量闸（导入侧 replaceProject 零计数校验的补集） ----------
+
+    @Test
+    void importInto_tooManyDistinctImages_rejected() throws Exception {
+        Session session = freshSession(2, 1);
+        StringBuilder els = new StringBuilder();
+        // ImageConfig.defaults() 的 max-per-wall = 16，这里放 20 个不同 source
+        for (int i = 0; i < 20; i++) {
+            if (i > 0) els.append(',');
+            els.append("{\"type\":\"image\",\"id\":\"e").append(i)
+               .append("\",\"x\":0,\"y\":0,\"w\":8,\"h\":8,\"source\":\"")
+               .append(String.format("%016x", i)).append("\"}");
+        }
+        byte[] canvas = buildCanvas(
+                "{\"spec\":1,\"kind\":\"project\",\"created_at\":1,\"wall\":{\"width\":2,\"height\":1}}",
+                "{\"version\":3,\"canvas\":{\"widthMaps\":2,\"heightMaps\":1,\"background\":\"#FFFFFF\"},"
+                        + "\"layers\":[{\"id\":\"l1\",\"name\":\"L\",\"visible\":true,\"locked\":false,"
+                        + "\"opacity\":1.0,\"blendMode\":\"normal\",\"elements\":[" + els + "]}],"
+                        + "\"activeLayerId\":\"l1\"}");
+
+        CanvasImportException ex = assertThrows(CanvasImportException.class,
+                () -> newImporter().importInto(session, canvas, UUID.randomUUID()));
+        assertEquals("IMPORT_MALFORMED", ex.code());
+        assertTrue(ex.getMessage().contains("引用图片数"), ex.getMessage());
+        assertFalse(push.snapshotPushed, "被闸拒的导入不该动会话工程");
+    }
+
     private static byte[] buildCanvas(String manifest, String project) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (ZipOutputStream z = new ZipOutputStream(bos)) {

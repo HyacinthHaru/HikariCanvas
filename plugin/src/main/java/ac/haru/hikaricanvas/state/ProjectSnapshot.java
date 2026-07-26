@@ -22,8 +22,12 @@ import java.util.List;
  * @param canvas           快照时刻的 canvas（含 gridSize / guides；record 本身不可变）
  * @param layers           深拷贝后的层树；外层 {@link List#copyOf} 锁住引用
  * @param activeLayerId    快照时刻的活动层 id
+ * <p>{@code tweenFps} 同理：{@code replaceProject}（工程导入 / 模板套用）会改它并压一份快照，
+ * 快照里不带就成了「导入之后按撤销，元素全回去了、补间帧率还留在导入文件那一档」的半回滚。</p>
+ *
  * @param timelines        快照时刻的时间轴列表（Timeline record 不可变，浅拷外层）
  * @param activeTimelineId 快照时刻的激活时间轴 id（null = 无）
+ * @param tweenFps         快照时刻的 per-wall 补间帧率（null = 用默认 30）
  * @param label            {@code null} = 常规 op 产生的匿名快照；非 null = {@code history.mark}
  *                         产生的命名检查点
  */
@@ -33,8 +37,15 @@ public record ProjectSnapshot(
         String activeLayerId,
         List<Timeline> timelines,
         String activeTimelineId,
+        Integer tweenFps,
         String label
 ) {
+
+    /** 6 参兼容构造器（{@code tweenFps} 引入之前的调用点 / 测试）：tweenFps 代 null。 */
+    public ProjectSnapshot(ProjectState.Canvas canvas, List<Layer> layers, String activeLayerId,
+                           List<Timeline> timelines, String activeTimelineId, String label) {
+        this(canvas, layers, activeLayerId, timelines, activeTimelineId, null, label);
+    }
     public ProjectSnapshot {
         if (layers == null) {
             layers = List.of();

@@ -32,8 +32,8 @@
 
 ```yaml
 network:
-  host: "127.0.0.1"   # [需重启] 监听地址
-  port: 8877          # [需重启] 监听端口
+  host: "127.0.0.1"   # 监听地址（改完要重启）
+  port: 8877          # 监听端口（改完要重启）
   editor-url: "http://{host}:{port}/?token={token}"
 ```
 
@@ -316,12 +316,13 @@ network:
 
 **症状：** 改了 `config.yml`，跑 `/canvas reload config`（需 `canvas.admin`）后某些配置没生效。
 
-**原因：部分配置是启动期一次性注入的，热重载改不了。** 最典型的是 `network.host` / `network.port`——socket 已经绑死，reload 只会刷新引用 + 打印配置，不会重绑端口。reload 后命令本身也会提示「host/port changes require server restart」。
+**原因：绝大多数配置是启动期一次性注入的，热重载改不了。** `/canvas reload config` 只是重新读文件 + 换掉插件持有的配置引用，已经把值拿走的组件（Jetty 的监听端口、地图池容量、会话超时、上传配额……）不会回头再问一次。最典型的是 `network.host` / `network.port`——socket 已经绑死，reload 不会重绑端口。
 
 **解决：**
 
-- 标了 **`[需重启]`** 的项（host / port 等）改完**必须重启服务器**。
-- 大多数其他项（帧率、限流、配额、脚本预算、命令模板白名单等）`/canvas reload config` 即可热更。`/canvas reload templates` 单独重载模板。
+- 记住约定：**默认都要重启**，只有 `config.yml` 里标了 **`[热更]`** 的项 reload 后当场生效。目前就三类：`scripts.*` 各上限（规则数 / 元素数 / 靠近采样 / 执行预算）、`scripts.command-templates` 命令模板白名单、`i18n.default-locale`（连带重扫 `lang/` 下的语言文件）。
+- 模板内容走 `/canvas reload templates`；插件 Push 限流走 `/canvas var reload`。
+- 其余项（帧率、限流、配额、地图池、导入上限、招牌尺寸上限等）改完一律重启服务器。
 - 改完看一眼 reload 命令回显的配置摘要，确认读进去的是你期望的值。
 
 ---

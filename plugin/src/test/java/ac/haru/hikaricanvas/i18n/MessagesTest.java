@@ -119,4 +119,48 @@ class MessagesTest {
         m.loadExternal(dir);
         assertEquals("OVERRIDDEN", m.rawOrNull("en_us", "command.no-session"));
     }
+
+    /**
+     * 外部文件是按键合并，不是整份替换。服主只改了一句话，其余全部保留内置值 ——
+     * 否则插件升级后新增的键在他那份文件里不存在，玩家直接看到 {@code canvas.error.foo} 这种键名。
+     */
+    @Test
+    void loadExternal_mergesPerKey_keepsUntouchedBuiltInKeys(@TempDir Path dir) throws Exception {
+        Messages builtInOnly = new Messages(Logger.getLogger("t"));
+        builtInOnly.loadBuiltIn();
+        String otherKeyBefore = builtInOnly.rawOrNull("en_us", "command.no-wall-session");
+        assertNotNull(otherKeyBefore, "前提：内置 en_us 里有 command.no-wall-session");
+
+        Files.writeString(dir.resolve("en_us.yml"), "command:\n  no-session: \"OVERRIDDEN\"\n");
+        Messages m = new Messages(Logger.getLogger("t"));
+        m.loadBuiltIn();
+        m.loadExternal(dir);
+
+        assertEquals("OVERRIDDEN", m.rawOrNull("en_us", "command.no-session"), "改过的键用服主的");
+        assertEquals(otherKeyBefore, m.rawOrNull("en_us", "command.no-wall-session"),
+                "没改的键保留内置值，不能因为外部文件里没有就消失");
+    }
+
+    /** 兜底链的终点 defaultLocale 也必须是合并后的，否则缺键仍然会露出原始 key 名。 */
+    @Test
+    void loadExternal_defaultLocaleFallbackStillResolves(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("en_us.yml"), "command:\n  no-session: \"OVERRIDDEN\"\n");
+        Messages m = new Messages(Logger.getLogger("t"));
+        m.loadBuiltIn();
+        m.loadExternal(dir);
+        m.setDefaultLocale("en_us");
+        // 服主没写进外部文件的键，回退 defaultLocale 时仍要拿到内置文案而不是 key 名本身
+        String key = "command.no-wall-session";
+        assertNotEquals(key, plain(m.get("en_us", key)));
+    }
+
+    /** 服主新增一个内置没有的语言文件，照常整份生效（合并函数只在已有内置时才介入）。 */
+    @Test
+    void loadExternal_newLocale_loadsAsIs(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("fr_fr.yml"), "command:\n  no-session: \"Aucune session\"\n");
+        Messages m = new Messages(Logger.getLogger("t"));
+        m.loadBuiltIn();
+        m.loadExternal(dir);
+        assertEquals("Aucune session", m.rawOrNull("fr_fr", "command.no-session"));
+    }
 }

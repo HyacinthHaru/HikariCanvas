@@ -17,7 +17,7 @@ import java.util.UUID;
  *
  * <p>字段分阶段生效：</p>
  * <ul>
- *   <li>{@link SessionState#SELECTING}：仅 pos1 / pos2 / face 有意义</li>
+ *   <li>{@link SessionState#SELECTING}：仅 pos1 / pos2 及各自的朝向有意义</li>
  *   <li>{@link SessionState#ISSUED} 及之后：wall / mapIds / wallKey 有意义</li>
  *   <li>{@link SessionState#ACTIVE}：lastActivityAt 跟随 WS 消息更新；
  *       wsDisconnectedAt &gt; 0 表示在 5 分钟宽限窗口内等待重连</li>
@@ -33,7 +33,14 @@ public final class Session {
     private volatile SessionState state;
     private volatile Block pos1;
     private volatile Block pos2;
-    private volatile BlockFace face;            // pos1/pos2 共用同一 normal
+    /**
+     * 两次点击各自的朝向。<b>必须分开记</b>：原先只有一个 face 字段、两次点击都往里写，
+     * 第二次点击会把第一次的朝向直接覆盖掉，于是 {@code WallResolver} 拿到的两个 face 参数
+     * 恒等，{@code NORMAL_MISMATCH}（两角朝向不一致）这条校验永远命中不了 ——
+     * 玩家先点北面再点东面，系统一声不吭地按东面建墙。
+     */
+    private volatile BlockFace pos1Face;
+    private volatile BlockFace pos2Face;
     private volatile WallResolver.Result.Ok wall;
     private volatile List<Integer> mapIds;
     private volatile WallKey wallKey;
@@ -72,7 +79,18 @@ public final class Session {
     public SessionState state() { return state; }
     public Block pos1() { return pos1; }
     public Block pos2() { return pos2; }
-    public BlockFace face() { return face; }
+    /** 第一次点击的朝向；还没点过返回 null。 */
+    public BlockFace pos1Face() { return pos1Face; }
+    /** 第二次点击的朝向；还没点过返回 null。 */
+    public BlockFace pos2Face() { return pos2Face; }
+    /**
+     * 本次选区最终采用的朝向：有第二次点击就用第二次的，否则用第一次的。
+     *
+     * <p>只作展示 / 兼容用。<b>要做两角朝向一致性校验的调用方必须分别取
+     * {@link #pos1Face()} 与 {@link #pos2Face()}</b>，从这里拿只会拿到一个值，
+     * 校验必然恒真。</p>
+     */
+    public BlockFace face() { return pos2Face != null ? pos2Face : pos1Face; }
     public WallResolver.Result.Ok wall() { return wall; }
     public List<Integer> mapIds() { return mapIds; }
     public WallKey wallKey() { return wallKey; }
@@ -94,10 +112,15 @@ public final class Session {
 
     // package-private mutators——只允许 SessionManager 在持锁下修改
     void state(SessionState s) { this.state = s; }
-    void pos1(Block b, BlockFace f) { this.pos1 = b; this.face = f; }
-    void pos2(Block b, BlockFace f) { this.pos2 = b; this.face = f; }
+    void pos1(Block b, BlockFace f) { this.pos1 = b; this.pos1Face = f; }
+    void pos2(Block b, BlockFace f) { this.pos2 = b; this.pos2Face = f; }
     /** 清空已选角，让玩家在 SELECTING 状态下重新开始（隐式 reselect 用）。 */
-    void clearPos() { this.pos1 = null; this.pos2 = null; this.face = null; }
+    void clearPos() {
+        this.pos1 = null;
+        this.pos2 = null;
+        this.pos1Face = null;
+        this.pos2Face = null;
+    }
     void wall(WallResolver.Result.Ok w) { this.wall = w; }
     void mapIds(List<Integer> ids) { this.mapIds = ids; }
     void wallKey(WallKey k) { this.wallKey = k; }

@@ -7,6 +7,7 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -102,5 +103,80 @@ class UploadHandlerHelpersTest {
         BufferedImage dst = UploadHandler.downscale(src, 1024);
         assertEquals(1024, dst.getWidth());
         assertEquals(1024, dst.getHeight());
+    }
+
+    // ---------- 白名单放行 ≠ 真能解码 ----------
+
+    @Test
+    void canDecodePngAndJpeg() {
+        assertTrue(UploadHandler.canDecodeMime("image/png"));
+        assertTrue(UploadHandler.canDecodeMime("image/jpeg"));
+    }
+
+    /**
+     * {@code image/webp} 一直在默认白名单里，但标准 JDK 根本没有 WebP reader——白名单放行、
+     * magic 探测认得，然后必定死在解码那一步，报的还是笼统的"图片解码失败"。
+     * 在 MIME 校验层问一次运行时能力，就能给出说得清的理由。
+     *
+     * <p>不写死"webp 一定不行"：服主真装了 WebP 的 ImageIO 插件（启动期 IIORegistry 过滤会
+     * 保留它）时它就该可用。本用例只钉住"没装解码器 → 判定为不可解码"这条因果。</p>
+     */
+    @Test
+    void canDecodeMimeReflectsWhatImageIoActuallyHas() {
+        boolean hasWebpReader = javax.imageio.ImageIO
+                .getImageReadersByMIMEType("image/webp").hasNext();
+        assertEquals(hasWebpReader, UploadHandler.canDecodeMime("image/webp"));
+    }
+
+    @Test
+    void canDecodeMimeRejectsUnknownAndNull() {
+        assertFalse(UploadHandler.canDecodeMime("image/definitely-not-a-format"));
+        assertFalse(UploadHandler.canDecodeMime(null));
+    }
+
+    // ---------- 会话级 IP 绑定（security.md §2.5）在 HTTP 面的比对原语 ----------
+
+    @Test
+    void normalizeIp_stripsSlashPrefixBracketsAndPort() {
+        assertEquals("127.0.0.1", UploadHandler.normalizeIp("/127.0.0.1"));
+        assertEquals("127.0.0.1", UploadHandler.normalizeIp("127.0.0.1:54321"));
+        assertEquals("127.0.0.1", UploadHandler.normalizeIp("  127.0.0.1  "));
+        assertEquals("0:0:0:0:0:0:0:1", UploadHandler.normalizeIp("[::1]:8877"));
+    }
+
+    /**
+     * WS 侧存的是 {@code InetAddress.getHostAddress()} 的写法，HTTP 侧拿到的可能是
+     * {@code ::1} 这种缩写 —— 不归一就会把同一个地址判成两个，合法上传全被拒。
+     */
+    @Test
+    void normalizeIp_ipv6ShorthandAndLongFormAgree() {
+        assertEquals(UploadHandler.normalizeIp("0:0:0:0:0:0:0:1"),
+                UploadHandler.normalizeIp("::1"));
+        assertEquals(UploadHandler.normalizeIp("::ffff:127.0.0.1"),
+                UploadHandler.normalizeIp("127.0.0.1"));
+    }
+
+    @Test
+    void normalizeIp_blankOrNull_becomesUnknown() {
+        assertEquals("unknown", UploadHandler.normalizeIp(null));
+        assertEquals("unknown", UploadHandler.normalizeIp(""));
+        assertEquals("unknown", UploadHandler.normalizeIp("   "));
+    }
+
+    /** 同机部署时浏览器可能给 WS 和 HTTP 各挑一个地址族，两者互认。 */
+    @Test
+    void bothLoopback_acceptsMixedLocalhostFamilies() {
+        assertTrue(UploadHandler.bothLoopback("127.0.0.1", "0:0:0:0:0:0:0:1"));
+        assertTrue(UploadHandler.bothLoopback("::1", "127.0.0.2"));
+    }
+
+    /** 但绝不能把真实外网地址也放进来 —— 那就等于 IP 绑定没做。 */
+    @Test
+    void bothLoopback_rejectsRealAddresses() {
+        assertFalse(UploadHandler.bothLoopback("127.0.0.1", "203.0.113.7"));
+        assertFalse(UploadHandler.bothLoopback("203.0.113.7", "127.0.0.1"));
+        assertFalse(UploadHandler.bothLoopback("192.168.1.5", "192.168.1.6"));
+        assertFalse(UploadHandler.bothLoopback("unknown", "unknown"));
+        assertFalse(UploadHandler.bothLoopback(null, "127.0.0.1"));
     }
 }

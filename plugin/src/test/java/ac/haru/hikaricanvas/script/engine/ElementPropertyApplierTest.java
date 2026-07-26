@@ -229,6 +229,46 @@ class ElementPropertyApplierTest {
         assertEquals(0, ticker.refreshes.size(), "静态墙不 refreshAutoPlay");
     }
 
+    /**
+     * 静态墙（无活跃 session、无时间轴）被脚本改完必须补一次重画——否则数据库变了、
+     * 游戏内地图还是旧画面，要等重启 / 有人开编辑器才对上。
+     */
+    @Test
+    void headless_staticWall_repaintsViaRenderStatic() {
+        String wallId = createWall(stateWithText("e-1", false));
+        headlessApplier().apply(wallId, "b", "e-1", "text", "changed");
+        assertEquals(List.of(wallId), ticker.renderStatics, "静态墙落库后补一次 renderStatic");
+        assertEquals(List.of(wallId), ticker.clearedStaticDiffs, "渲完清 per-wall diff，不留缓存");
+        assertEquals("changed", findText(ticker.lastStaticFrame, "e-1").text(),
+                "推给 Ticker 的是改后的 state，不是旧快照");
+    }
+
+    /** clone / delete 等结构变更走同一条 runHeadless 骨架，静态墙同样要补画。 */
+    @Test
+    void headless_staticWall_cloneAndDeleteAlsoRepaint() {
+        String wallId = createWall(stateWithText("e-1", false));
+        headlessApplier().applyClone(wallId, "b", "e-1", 5, 5);
+        assertEquals(1, ticker.renderStatics.size(), "clone 后补画");
+        headlessApplier().applyDelete(wallId, "b", "e-1");
+        assertEquals(2, ticker.renderStatics.size(), "delete 后补画");
+    }
+
+    @Test
+    void headless_animatingWall_doesNotRenderStatic() {
+        String wallId = createWall(stateWithText("e-1", true));
+        ticker.animating = true;
+        headlessApplier().apply(wallId, "b", "e-1", "text", "x");
+        assertEquals(0, ticker.renderStatics.size(), "在播的墙交给 Ticker 出帧，不抢 renderStatic");
+    }
+
+    @Test
+    void headless_idleWallWithActiveTimeline_doesNotRenderStatic() {
+        String wallId = createWall(stateWithText("e-1", true));
+        ticker.animating = false;
+        headlessApplier().apply(wallId, "b", "e-1", "text", "x");
+        assertEquals(0, ticker.renderStatics.size(), "有时间轴走 refreshAutoPlay，不额外 renderStatic");
+    }
+
     @Test
     void headless_animatingWall_invalidates() {
         String wallId = createWall(stateWithText("e-1", true));
@@ -883,6 +923,9 @@ class ElementPropertyApplierTest {
         final List<Long> seeks = new ArrayList<>();
         final List<String> invalidates = new ArrayList<>();
         final List<String> refreshes = new ArrayList<>();
+        final List<String> renderStatics = new ArrayList<>();
+        final List<String> clearedStaticDiffs = new ArrayList<>();
+        ProjectState lastStaticFrame;
 
         @Override
         public AnimationTicker.Result play(String wallId, String timelineId) {
@@ -919,10 +962,13 @@ class ElementPropertyApplierTest {
 
         @Override
         public void renderStatic(String wallId, ac.haru.hikaricanvas.state.ProjectState frame) {
+            renderStatics.add(wallId);
+            lastStaticFrame = frame;
         }
 
         @Override
         public void clearStaticDiff(String wallId) {
+            clearedStaticDiffs.add(wallId);
         }
     }
 }

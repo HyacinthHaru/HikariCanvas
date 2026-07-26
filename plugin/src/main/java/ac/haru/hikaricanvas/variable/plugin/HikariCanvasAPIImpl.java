@@ -343,6 +343,24 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
     }
 
     /**
+     * 把小于下限的正数 TTL 抬到 {@link VariableStore#MIN_TTL_MS}（{@code api.md §3.3 / §8.2}
+     * 承诺的 "ttl &lt; 100ms 自动 clamp"）。
+     *
+     * <p>为什么在这一层 clamp 而不是放宽 {@code VariableStore.validateTtl}：store 是内部契约，
+     * WS op 与 {@code /canvas var} 命令那两条路上有真人在操作，TTL 写错就该报错让人看见；
+     * 插件 push 这条路 api.md 明写"静默 clamp"，且这里丢掉的是整条 push 数据——按文档
+     * clamp 才不至于让接入方莫名其妙掉数据。负数 TTL 不 clamp（文档没承诺），仍然照常拒。</p>
+     */
+    private @Nullable Duration clampTtl(@Nullable Duration ttl, String namespace, String key) {
+        if (ttl == null) return null;
+        long ms = ttl.toMillis();
+        if (ms <= 0 || ms >= VariableStore.MIN_TTL_MS) return ttl;
+        log.fine("[HikariCanvas] ttl " + ms + "ms clamped to "
+                + VariableStore.MIN_TTL_MS + "ms (ns=" + namespace + " key=" + key + ")");
+        return Duration.ofMillis(VariableStore.MIN_TTL_MS);
+    }
+
+    /**
      * setVariable / setVariables 共用核心：若 store 内无该变量则 create + setValue。
      *
      * <p>顺序：先 setValue 试探 → 若 {@link VariableException.Code#VARIABLE_NOT_FOUND}
@@ -350,8 +368,9 @@ public final class HikariCanvasAPIImpl implements HikariCanvasAPI {
      * 不残留 currentValue=null 的半态变量</b>——失败的 push 不污染 store。</p>
      */
     private void doSetVariable(String namespace, String key, String value,
-                               @Nullable Duration ttl, String sourcePluginName) {
+                               @Nullable Duration rawTtl, String sourcePluginName) {
         Objects.requireNonNull(value, "value");
+        Duration ttl = clampTtl(rawTtl, namespace, key);
         String fullName = namespace + "/" + key;
         try {
             store.setValue(fullName, value, ttl);

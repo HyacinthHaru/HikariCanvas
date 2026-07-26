@@ -259,7 +259,7 @@ i18n:
 | nginx 后 WS 不停断 | nginx `proxy_read_timeout` 太短；改 3600s 或更长 |
 | Caddy 自动证书签不出 | 域名 A 记录没解析到本机 / 80 端口没开 / cloud provider 防火墙没放行 |
 | WS 连不上但 HTTP 能开 | 反代漏配 `Upgrade: websocket` 头转发 |
-| 公网 `host: 0.0.0.0` 后玩家访问超慢 | MC 服务器主线程被画布渲染卡到了；降低 `throttle.projection-fps` 或减少 wall 尺寸 |
+| 公网 `host: 0.0.0.0` 后玩家访问超慢 | MC 服务器主线程被画布渲染卡到了；降低 `throttle.projection-fps`（若已显式配了 `rendering.adaptive-fps.default-min-interval-ms`，改那一项——它优先级更高）或减少 wall 尺寸 |
 | `/canvas reload config` 看上去没生效 | host/port/池容量/超时这些"启动期注入"的字段需要重启。`/canvas reload config` 当前只热更脚本相关字段（`scripts.*` 配额 / budget / playerNear 采样间隔 / 克隆元素配额），其余字段刷新引用但需重启才生效；插件 Push 限流另走 `/canvas var reload` 热替换 |
 
 ---
@@ -275,27 +275,29 @@ i18n:
 | `network.editor-url` | `http://{host}:{port}/?token={token}` | `/canvas confirm` 发给玩家的 URL 模板（仅 http/https，其它协议被拒） | ✅ |
 | `network.ws-auth-timeout-seconds` | `5` | WS 建连后多少秒内必须 auth，超时 close 4001 | ✅ |
 | `network.allowed-origins` | `[]` | WS upgrade Origin 白名单（回环 + 同源默认放行；反代域名要加进来） | ✅ |
-| `session.token-ttl-minutes` | `15` | token 有效期 | ❌（新 token 立即生效） |
+| `session.token-ttl-minutes` | `15` | token 有效期 | ✅（TokenService 在启动期拿到 TTL，reload 不换） |
 | `session.ws-grace-minutes` | `5` | 断线后保留 session 多久供重连 | ✅ |
 | `session.idle-minutes` | `30` | 无输入多久回收（0 = 永不超时） | ✅ |
 | `map-pool.initial` / `.max` | `64` / `256` | 预览地图池容量 | ✅ |
 | `map-pool.per-world` | `{}` | 可选 per-world 预热 map 数（多世界服务器） | ✅ |
-| `throttle.projection-fps` | `5` | 服务端推送 MC 地图的 fps | ✅ |
+| `limits.canvas-max-maps` | `16` | 单面招牌最多占几张地图（范围 1~64；只挡新建，老招牌照常打开） | ✅ |
+| `throttle.projection-fps` | `5` | 服务端推送 MC 地图的 fps 上限。实际生效的是 `rendering.adaptive-fps.default-min-interval-ms`，本项按 `1000 / fps` 推算它的默认值；**显式写了 `default-min-interval-ms` 就以那个为准**，本项不再参与 | ✅ |
 | `throttle.input-rate-per-second` / `.input-burst` | `20` / `40` | 单玩家 WS op 速率 + 突发上限 | ✅ |
 | `rendering.adaptive-fps.*` | 见 config | 自适应渲染（秒级变量墙的高频间隔 + 主动推帧） | ✅ |
 | `templates.auto-reload-on-startup` / `.preview-cache-seconds` / `.max-per-player` | `true` / `300` / `20` | 模板自动 reload + 缩略图缓存 TTL + 每玩家发布上限 | 部分（模板内容可 `/canvas reload templates`） |
-| `images.max-size-kb` / `.allowed-mime` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / png·jpeg·webp / `1024` / `16` / `50` / `1024` | 图片上传：单文件 / MIME / 降采样 / 单墙 / 每日 / 全服磁盘配额 | ✅ |
+| `images.max-size-kb` / `.allowed-mime` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / png·jpeg·webp / `1024` / `16` / `50` / `1024` | 图片上传：单文件 / MIME / 降采样 / 单墙 / 每日 / 全服磁盘配额。**webp 实际不可用**——标准 JDK 没有 WebP 解码器，除非自行安装 ImageIO 插件，否则上传会被明确拒绝 | ✅ |
 | `import.canvas-max-mb` / `.canvas-max-entry-mb` / `.canvas-max-total-mb` | `10` / `10` / `50` | 0.8 `.canvas` 工程导入限额（防 zip 炸弹） | ✅ |
 | `security.token-rate-limit.per-minute` | `10` | 每 IP 每分钟 WS auth token 尝试次数（防暴破） | ✅ |
 | `i18n.default-locale` | `en_us` | 玩家客户端语言无对应 lang 文件时的兜底语言（内置 `en_us` / `zh_cn`；可加自定义文件） | ❌（`/canvas reload config` 即时生效） |
 | `database.auto-backup-before-migration` | `false` | migration 前自动备份 `data.db`（stable 发版后建议开） | ✅ |
+| `database.audit-retention-days` | `90` | `audit_log` 表保留多少天（`0` = 永久保留）。超期记录在写审计时顺带清（每 6 小时最多一次） | ✅ |
 | `dynamic.push-rate-limit.*` | `100` / `1000` / `10000` | 插件 Push API 单插件 / 全局每秒上限 + 熔断保护期 ms | `/canvas var reload` 热替换 |
 | `dynamic.schedule.*` | `60` / "进站中" / "" | 兜底列车 ETA 进站阈值秒 + 进站 / 空闲文案 | ✅ |
 | `dynamic.variables.userglobal-max-per-owner` / `.userglobal-max-total` | `500` / `10000` | 0.4.3 全局用户变量配额（每 owner / 全服） | ✅ |
 | `timeline.default-fps` / `.max-fps` | `20` / `60` | 0.6 时间轴默认帧率 + 服务器级 fps 安全阀 | ✅ |
 | `scripts.max-rules-per-wall` / `.max-elements-per-wall` / `.player-near-sample-ticks` / `.budget.*` / `.tween.*` / `.command-templates` | 见 config | 0.7 墙脚本：规则 / 元素配额 + 靠近采样 + 执行预算三闸 + 补间帧率 + 命令模板白名单 | `/canvas reload config` 热更（除补间 SES 上限） |
 
-> "改了要重启 = ✅" 表示 `/canvas reload config` 不足以让该字段生效，必须重启服务器。当前 `/canvas reload config` 的 hot-apply 仅覆盖 `scripts.*` 字段（规则配额 / budget / playerNear 采样 / 克隆元素配额，且只影响后续创建，不裁剪已有）；模板内容走 `/canvas reload templates`；插件 Push 限流走 `/canvas var reload`。其余字段（host/port/池容量/超时等启动期注入项）一律需重启。各字段含义以 jar 内嵌 `config.yml` 行内注释为准（标 `[需重启]` 的项 hot-reload 不影响）。
+> "改了要重启 = ✅" 表示 `/canvas reload config` 不足以让该字段生效，必须重启服务器。当前 `/canvas reload config` 的 hot-apply 仅覆盖 `scripts.*` 字段（规则配额 / budget / playerNear 采样 / 克隆元素配额，且只影响后续创建，不裁剪已有）；模板内容走 `/canvas reload templates`；插件 Push 限流走 `/canvas var reload`。其余字段（host/port/池容量/超时等启动期注入项）一律需重启。各字段含义以 jar 内嵌 `config.yml` 行内注释为准——那里的约定是**默认都要重启，只有标 `[热更]` 的项 `/canvas reload config` 当场生效**。
 
 ---
 

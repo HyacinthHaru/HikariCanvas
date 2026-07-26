@@ -259,7 +259,11 @@ public final class HikariCanvas extends JavaPlugin {
         mapPool.initialize(Bukkit.getWorlds().get(0), config.mapPoolPerWorldInitial);
 
         // 墙面识别 + 会话管理（Wand / 命令族会注入这两个）
-        wallResolver = new WallResolver(16, this);  // canvas-max-maps 默认；plugin 提供 PDC namespace
+        // 单面招牌的地图数上限。docs/data-model.md §5 与 security.md 一直把它写成配置项，
+        // 但实现里一直是写死的 16 —— 服主加了这个键完全不生效。现在真的读它（范围 1~64，
+        // 越界只提示并钳回边界，不阻断启动）。plugin 提供 PDC namespace。
+        int canvasMaxMaps = readCanvasMaxMaps();
+        wallResolver = new WallResolver(canvasMaxMaps, this);
         wallRepo = new WallRepo(getLogger(), database.jdbi());
 
         // 把 protocol_version < 2 的老 wall 升到 v2 layered 形态。
@@ -288,11 +292,11 @@ public final class HikariCanvas extends JavaPlugin {
         fontRegistry.loadExternal(getDataFolder().toPath().resolve("fonts"));
         getLogger().info("FontRegistry: " + fontRegistry.size() + " font(s) ready");
 
-        // 多语言消息注册表。jar 内置 lang/ → saveResource 拷到 dataFolder/lang/ 供服主覆盖；
-        // 再 loadExternal 扫 dataFolder/lang/ 让外部覆盖生效。
+        // 多语言消息注册表。jar 内置 lang/ → 首次启动拷一份到 dataFolder/lang/ 供服主改；
+        // 再 loadExternal 按键合并回来（改过的句子用服主的，没改的用内置，见 Messages.loadExternal）。
         messages = new ac.haru.hikaricanvas.i18n.Messages(getLogger());
-        saveResource("lang/en_us.yml", false);
-        saveResource("lang/zh_cn.yml", false);
+        saveLangIfAbsent("lang/en_us.yml");
+        saveLangIfAbsent("lang/zh_cn.yml");
         messages.loadBuiltIn();
         messages.loadExternal(getDataFolder().toPath().resolve("lang"));
         messages.setDefaultLocale(config.i18nConfig.defaultLocale());
@@ -496,6 +500,13 @@ public final class HikariCanvas extends JavaPlugin {
         templatePublisher.syncBuiltinToDb();
         // 模板缩略图服务。Registry reload 时调 invalidate() 清缓存
         templatePreviewService = new TemplatePreviewService(getLogger(), templateRegistry, compositor);
+        // 发布 / 删除模板后按 templateId 清缩略图，Gallery 立刻看到新图
+        templatePublisher.setPreviewService(templatePreviewService);
+        // 存为模板时把图片与积木脚本一起打进 pack。不接的话：原图被 LRU 驱逐后套用出来是空白，
+        // 墙上的脚本更是直接丢光（docs/template-pack.md §3 明列 pack 含这两样）。
+        templatePublisher.setAssetSource(imageStorage::readPngBytes);
+        final ac.haru.hikaricanvas.script.ScriptStore storeForTemplates = scriptStore;
+        templatePublisher.setScriptSource(wallId -> serializeWallScripts(storeForTemplates, wallId));
         wallPreviewService = new WallPreviewService(getLogger(), compositor);
 
         // 节流：投影 fps + 输入速率（per session）
@@ -957,6 +968,10 @@ public final class HikariCanvas extends JavaPlugin {
                     // 显式返回 empty。原先用 loadAll()，任一行 project_json 损坏或 facing 非法
                     // 就毒化整查询 → 返回空表 → detectLeaks 把全服在用地图判为泄漏强制释放，
                     // 被新墙复用后跨墙串台。读不到就跳过本轮，5 分钟后自然重试。
+                    // 时刻必须在读表**之前**取：detectLeaks 用它豁免"快照之后才借出去"的
+                    // 地图。confirm 走 reserve→INSERT walls→bind，快照拍在 INSERT 之前、
+                    // 检测又跑在 bind 之后时，新墙会被误判成泄漏（见 MapPool.detectLeaks）。
+                    long liveSnapshotAt = System.currentTimeMillis();
                     java.util.Optional<java.util.Set<String>> liveWallIds =
                             wallRepo.loadAllWallIds();
                     if (liveWallIds.isEmpty()) {
@@ -964,7 +979,7 @@ public final class HikariCanvas extends JavaPlugin {
                                 + " (refusing to treat an unreadable table as 'no live walls')");
                         return;
                     }
-                    int leaked = mapPool.detectLeaks(liveWallIds.get());
+                    int leaked = mapPool.detectLeaks(liveWallIds.get(), liveSnapshotAt);
                     if (leaked > 0) {
                         getLogger().warning("[mapPool] detected " + leaked + " leaked map(s); released");
                     }
@@ -990,6 +1005,23 @@ public final class HikariCanvas extends JavaPlugin {
             if (t instanceof Error err) throw err;
             throw new IllegalStateException("HikariCanvas onEnable failed", t);
         }
+    }
+
+    /**
+     * 读 {@code limits.canvas-max-maps}（单面招牌的最大地图数）。默认 16，允许范围 1~64
+     * （与 {@code docs/data-model.md §5} 的取值表一致）；越界钳回边界并 warning。
+     *
+     * <p>这一项改了要重启：{@link WallResolver} 在装配期一次性拿到上限，且只作用于
+     * 新建路径——已存在的 wall 即使把上限调小也照常能打开（见 {@code rendering.md §11}）。</p>
+     */
+    private int readCanvasMaxMaps() {
+        int raw = getConfig().getInt("limits.canvas-max-maps", 16);
+        int clamped = Math.max(1, Math.min(64, raw));
+        if (clamped != raw) {
+            getLogger().warning("limits.canvas-max-maps=" + raw
+                    + " is out of the supported range 1-64; using " + clamped);
+        }
+        return clamped;
     }
 
     /**
@@ -1031,6 +1063,25 @@ public final class HikariCanvas extends JavaPlugin {
             messages.setDefaultLocale(fresh.i18nConfig.defaultLocale());
         }
         getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
+    }
+
+    /**
+     * 把某面墙的积木脚本序列化成 {@code scripts.json} 的字节（{@code ScriptRule[]} 数组），
+     * 供"存为模板"把脚本一起打进 pack。该墙没有脚本、或序列化失败 → 返 null（模板照常存，
+     * 只是不带脚本）。
+     */
+    private byte[] serializeWallScripts(ac.haru.hikaricanvas.script.ScriptStore store, String wallId) {
+        if (store == null || wallId == null) return null;
+        java.util.List<ac.haru.hikaricanvas.script.ScriptRule> rules = store.listByWall(wallId);
+        if (rules == null || rules.isEmpty()) return null;
+        try {
+            // Trigger / Action 的多态判别符靠各自类型注解写出，普通 ObjectMapper 即可
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(rules);
+        } catch (Exception e) {
+            getLogger().log(java.util.logging.Level.WARNING,
+                    "serializing scripts of wall " + wallId + " failed; template saved without them", e);
+            return null;
+        }
     }
 
     /** 供命令侧用；返回 null 表示插件还没 onEnable。 */
@@ -1195,6 +1246,24 @@ public final class HikariCanvas extends JavaPlugin {
         } catch (Throwable t) {
             getLogger().log(java.util.logging.Level.WARNING,
                     "cleanup: " + name + " failed (continuing)", t);
+        }
+    }
+
+    /**
+     * 首次启动时把 jar 内的语言文件拷到 {@code plugins/HikariCanvas/lang/}；已经有了就不动。
+     *
+     * <p>直接调 {@code saveResource(path, false)} 会在文件已存在时打一条 WARNING——服主每次重启
+     * 都看到两行"already exists"告警，实际什么问题也没有。这里先判存在，把噪音去掉。
+     * 不覆盖是有意的：服主的改动要保留，缺的键由 {@code Messages.loadExternal} 按键合并回内置值。</p>
+     */
+    private void saveLangIfAbsent(String resourcePath) {
+        java.nio.file.Path target = getDataFolder().toPath().resolve(resourcePath);
+        if (java.nio.file.Files.exists(target)) return;
+        try {
+            saveResource(resourcePath, false);
+        } catch (Exception e) {
+            getLogger().log(java.util.logging.Level.WARNING,
+                    "failed to write default lang file " + resourcePath, e);
         }
     }
 

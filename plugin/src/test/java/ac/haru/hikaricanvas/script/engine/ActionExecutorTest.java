@@ -410,7 +410,7 @@ class ActionExecutorTest {
 
     @Test
     void sendMessage_noTriggerPlayer_okSkip() {
-        ScriptRunner.TRIGGER_DETAIL.remove(); // 无触发玩家
+        ScriptRunner.TRIGGER_PLAYER.remove(); // 无触发玩家
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("hi", "chat", "trigger"));
         assertEquals("ok", step.result());
@@ -428,12 +428,34 @@ class ActionExecutorTest {
     @Test
     void sendMessage_withTriggerPlayer_okStep_dispatchContained() {
         // 触发玩家有值，plugin=null 直跑：Bukkit.getPlayerExact 无 server 抛 → work 内自吞（三层隔离）
-        ScriptRunner.TRIGGER_DETAIL.set("Alice");
+        ScriptRunner.TRIGGER_PLAYER.set("Alice");
         try {
             TraceStep step = executor().execute(WALL, "b",
                     new Action.SendMessage("hi", "chat", "trigger"));
             assertEquals("ok", step.result());
             assertTrue(step.detail().contains("Alice"), step.detail());
+        } finally {
+            ScriptRunner.TRIGGER_PLAYER.remove();
+        }
+    }
+
+    /**
+     * 触发玩家读的是 TRIGGER_PLAYER 不是 TRIGGER_DETAIL。
+     *
+     * <p>playerKill 的 detail 是 {@code victim→killer} 拼接串，早先拿它当玩家名去
+     * getPlayerExact 必然找不到人，消息静默丢失。这里模拟那个形态：只有 detail 有值时
+     * 必须按"无触发玩家"跳过，不许把拼接串当人名用。</p>
+     */
+    @Test
+    void sendMessage_detailIsNotUsedAsPlayerName() {
+        ScriptRunner.TRIGGER_DETAIL.set("Victim→Killer");
+        ScriptRunner.TRIGGER_PLAYER.remove();
+        try {
+            TraceStep step = executor().execute(WALL, "b",
+                    new Action.SendMessage("hi", "chat", "trigger"));
+            assertEquals("ok", step.result());
+            assertTrue(step.detail().contains("no trigger player"), step.detail());
+            assertFalse(step.detail().contains("→"), "detail 串不该被当成玩家名: " + step.detail());
         } finally {
             ScriptRunner.TRIGGER_DETAIL.remove();
         }
@@ -449,7 +471,7 @@ class ActionExecutorTest {
      */
     @Test
     void sendMessage_targetAll_takesBroadcastBranch_notTriggerSkip() {
-        ScriptRunner.TRIGGER_DETAIL.remove(); // 无触发玩家
+        ScriptRunner.TRIGGER_PLAYER.remove(); // 无触发玩家
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("大家好", "chat", "all"));
         assertEquals("ok", step.result());
@@ -460,7 +482,7 @@ class ActionExecutorTest {
     /** target=all 即使有触发玩家也走广播分支（不只发触发者）。 */
     @Test
     void sendMessage_targetAll_withTriggerPlayer_stillBroadcast() {
-        ScriptRunner.TRIGGER_DETAIL.set("Alice");
+        ScriptRunner.TRIGGER_PLAYER.set("Alice");
         try {
             TraceStep step = executor().execute(WALL, "b",
                     new Action.SendMessage("大家好", "actionbar", "all"));
@@ -469,14 +491,14 @@ class ActionExecutorTest {
             assertFalse(step.detail().contains("Alice"),
                     "target=all 广播 detail 不应标触发玩家名: " + step.detail());
         } finally {
-            ScriptRunner.TRIGGER_DETAIL.remove();
+            ScriptRunner.TRIGGER_PLAYER.remove();
         }
     }
 
     /** target=trigger 无触发玩家仍按现有逻辑跳过（向后兼容回归）。 */
     @Test
     void sendMessage_targetTrigger_noPlayer_okSkip() {
-        ScriptRunner.TRIGGER_DETAIL.remove();
+        ScriptRunner.TRIGGER_PLAYER.remove();
         TraceStep step = executor().execute(WALL, "b",
                 new Action.SendMessage("hi", "chat", "trigger"));
         assertEquals("ok", step.result());

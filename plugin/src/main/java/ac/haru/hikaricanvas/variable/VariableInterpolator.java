@@ -59,6 +59,28 @@ public final class VariableInterpolator {
     /** 系统兜底文案（fallback 链最后一档）。 */
     public static final String UNRESOLVED = "???";
 
+    /**
+     * 跨墙引用被拦下时替换成的哨兵名。
+     *
+     * <p>占位符里允许直接写 store 的内部形态（插件 namespace 就靠这条透传），但
+     * per-wall 三族 {@code user:} / {@code system:} / {@code schedule:} 只认本墙的 wallId——
+     * 写别人的 wallId 会被换成这个名字，store 必然查不到，走 fallback 链显示
+     * {@value #UNRESOLVED}（{@code dynamic-data.md §2.3} 跨墙隔离）。</p>
+     *
+     * <p>名字里的 {@code !} 不在 {@code VariableStore} 的 namespace 文法内，所以真实变量
+     * 永远不可能叫这个，也就不会误命中谁的数据；动态 namespace hook 同样匹配不上。</p>
+     */
+    public static final String CROSS_WALL_DENIED = "!denied/cross-wall";
+
+    /** per-wall namespace 前缀（这三族的 namespace 形如 {@code <前缀>:<wallId>}）。 */
+    private static final String[] PER_WALL_PREFIXES = {"user:", "system:", "schedule:"};
+
+    /**
+     * Provider 自有的 namespace（脚本不许写；它们的值由各自 Provider 周期覆盖，
+     * 让脚本写进去只会伪造系统数据）。带 {@code :wallId} 后缀的 per-wall 形态一并覆盖。
+     */
+    private static final String[] PROVIDER_OWNED = {"system", "papi", "scoreboard", "schedule"};
+
     /** 二次扫描最大深度，防止数据 / 算法异常下死循环。 */
     private static final int MAX_INTERPOLATE_DEPTH = 2;
 
@@ -79,8 +101,10 @@ public final class VariableInterpolator {
      * <p>二次扫描兜底（服务器重启后字面 {@code ${var:} 残留场景）：把 {@link #doInterpolate}
      * 拆成内部实现 + 外层 wrapper 做二次扫描。当首次替换后输出仍含 {@code ${var:} 字面（典型场景：
      * chip editor roundtrip 漏 escape / 数据写入了双重嵌套 {@code ${${var:X}}}），最多再 interpolate
-     * {@value #MAX_INTERPOLATE_DEPTH} 次兜底；若 depth>0 则 {@link Logger#warning} 提示用户数据可能
-     * 嵌套。前后端保持双端一致兜底语义。</p>
+     * {@value #MAX_INTERPOLATE_DEPTH} 次兜底；若真展开了一层（depth&gt;0）则 {@link Logger#warning}
+     * 提示用户数据可能嵌套。<b>某一轮没有任何变化就立刻收工</b>——那说明剩下的 {@code ${var:}
+     * 根本匹配不上正则（典型：行尾漏了右花括号），再扫也是同一个串，不必白跑也不该告警。
+     * 输出与"跑满两轮"完全一致，双端兜底语义不变。</p>
      *
      * @param text   原始文本；可为 null（返 null + 空 referenced）
      * @param wallId 当前 wall ID；非空时把 {@code ${var:user/X}} 注入成 {@code user:<wallId>/X}；
@@ -94,11 +118,19 @@ public final class VariableInterpolator {
         while (result.text() != null && result.text().indexOf("${var:") >= 0
                 && depth < MAX_INTERPOLATE_DEPTH) {
             Result next = doInterpolate(result.text(), wallId);
+            // 没变化 = 剩下的 ${var: 根本匹配不上正则（典型：漏了右花括号的 ${var:foo），
+            // 再扫多少遍都是同一个串。立刻收工——否则每次渲染都白跑满 depth 且打一条
+            // WARNING，动画墙上就是每秒几十条日志（谁都能靠一个残缺占位符刷屏）。
+            if (java.util.Objects.equals(next.text(), result.text())) {
+                break;
+            }
             Set<String> mergedRefs = new HashSet<>(result.referencedFullNames());
             mergedRefs.addAll(next.referencedFullNames());
             result = new Result(next.text(), mergedRefs, next.segments());
             depth++;
         }
+        // depth>0 = 真的嵌套了一层并被展开（数据可能有问题），值得告警；
+        // 匹配不上的残缺占位符走上面的 break，不在这里刷日志。
         if (depth > 0) {
             String preview = text == null ? "(null)"
                     : text.length() > 100 ? text.substring(0, 100) + "..." : text;
@@ -221,7 +253,51 @@ public final class VariableInterpolator {
                 return "scoreboard/" + tail;
             }
         }
+        // 上面各分支都没接住 = 字面透传（插件 namespace 靠这条）。透传前拦一道跨墙：
+        // 直接写 user:<别人的墙>/key 这种内部形态就能读到别人墙的变量值，破坏 namespace 隔离。
+        if (isForeignPerWall(rawName, wallId)) {
+            return CROSS_WALL_DENIED;
+        }
         return rawName;
+    }
+
+    /**
+     * 这个 fullName 是不是"别的墙"的 per-wall 变量？
+     *
+     * <p>{@code user:<w>/…} / {@code system:<w>/…} / {@code schedule:<w>/…} 三族的 {@code <w>}
+     * 与当前 {@code wallId} 不一致即为跨墙（{@code wallId} 为空的路径——模板预览 / publish——
+     * 一律算跨墙，那些路径本来就不该读到任何墙的私有数据）。非 per-wall 形态（插件
+     * namespace / 全局 system 变量 {@code system/server.time} 等）恒返 false。</p>
+     */
+    public static boolean isForeignPerWall(@Nullable String fullName, @Nullable String wallId) {
+        if (fullName == null) return false;
+        for (String prefix : PER_WALL_PREFIXES) {
+            if (!fullName.startsWith(prefix)) continue;
+            int slash = fullName.indexOf('/', prefix.length());
+            // 缺 key 段（如 "user:w-1"）不是合法 fullName，按跨墙处理（保守）
+            if (slash < 0) return true;
+            String owner = fullName.substring(prefix.length(), slash);
+            return wallId == null || wallId.isEmpty() || !owner.equals(wallId);
+        }
+        return false;
+    }
+
+    /**
+     * 这个 fullName 是不是 Provider 自有 namespace（{@code system} / {@code papi} /
+     * {@code scoreboard} / {@code schedule}，含 {@code <ns>:<wallId>} 的 per-wall 形态）？
+     * 脚本的变量族积木据此拒写（{@code security.md §13.8}）。
+     */
+    public static boolean isProviderOwned(@Nullable String fullName) {
+        if (fullName == null) return false;
+        int slash = fullName.indexOf('/');
+        if (slash < 0) return false;
+        String namespace = fullName.substring(0, slash);
+        int colon = namespace.indexOf(':');
+        String base = colon < 0 ? namespace : namespace.substring(0, colon);
+        for (String owned : PROVIDER_OWNED) {
+            if (owned.equals(base)) return true;
+        }
+        return false;
     }
 
     /** 按 {@code docs/dynamic-data.md §5.3} fallback 链解析。 */

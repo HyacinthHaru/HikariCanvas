@@ -233,7 +233,7 @@ CREATE INDEX idx_audit_event ON audit_log(event);
 
 > 注：`SESSION_CLOSED` / `WALL_NOT_FOUND` / `SCRIPT_INVALID` / `SCRIPT_NOT_FOUND` / `SCRIPT_QUOTA_EXCEEDED` / `SCRIPT_ENGINE_UNAVAILABLE` 等是 WS `Envelope.error(...)` 的**错误码**（返回给前端），并非全部都写入 audit 表——以代码 `auditLog.record(...)` 实际调用为准。
 
-**保留策略：** 默认保留 90 天，后台任务定期 `DELETE WHERE ts < now - 90d`。可配置。
+**保留策略：** 默认保留 90 天，由 `database.audit-retention-days` 配（`0` = 永久保留）。清理逻辑在 `AuditLog` 内部：写入时若距上次清理超过 6 小时就顺带跑一次 `DELETE FROM audit_log WHERE ts < ?`（走 `idx_audit_ts`），不起独立调度线程。
 
 ### 2.6.5 表：`image_uploads`
 
@@ -795,7 +795,8 @@ V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount �
 
 | 场景 | 处理 |
 | --- | --- |
-| `pool_maps` RESERVED `wall:<id>` 但 walls 表无对应行 | 视为泄漏；`detectLeaks` 强制 → FREE + 告警 |
+| `pool_maps` RESERVED `wall:<id>` 但 walls 表无对应行 | 视为泄漏；`detectLeaks` 强制 → FREE + 告警。三条例外不判：① walls 表**读失败**（`loadAllWallIds` 返 empty）→ 整轮跳过，读不到 ≠ 表里没有；② 地图是在**读表之后**才借出去的（`last_used_at` 晚于快照时刻）→ 快照对它没有发言权，下轮再判；③ owner 是 `wall:pending-*` 且未超 `PENDING_RESERVE_TTL_MS`（60s）→ 正在创建中的墙 |
+| `pool_maps` RESERVED `wall:pending-*` 超过 60s / 跨了重启 | 上一次建墙被硬中断（kill -9 / 崩服）留下的残留。`detectLeaks` 超期回收；启动期 `initialize` 直接降级 FREE（pending 是 confirm 内部的中间态，活不过重启） |
 | `walls.map_ids` 引用的 map 不在 `pool_maps` 或非该 wall 持有 | 启动时 WallRestorer 检测；行 → quarantine + 告警，不阻塞启动 |
 | ItemFrame PDC `wall_id` 但 walls 表无对应行 | 启动时报告，不主动拆框（玩家可能误删后想恢复）；管理员 `/canvas cleanup` 决定 |
 | walls 行存在但所有 ItemFrame 消失 | 行保留（玩家可能后续走到原位置 `/canvas open` 恢复）；`/canvas list` 标记 detached |

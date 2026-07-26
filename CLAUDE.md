@@ -119,7 +119,11 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 5. **Schema forward-only**：首次 stable（≥1.0.0）发版后禁破坏性 DDL + 强制 auto-backup（`MigrationForwardOnlyTest` 守卫，V018 起冻结，V001-V017 grandfather）。详见 `data-model.md §6.6`
 6. **shadowJar 全 relocate**：jackson / caffeine / jdbi / hikari / javalin / jetty / snakeyaml → `ac.haru.hikaricanvas.shaded.*`；**`org.sqlite` 不 relocate**（JNI 保护）
 7. **HikariCP maxPoolSize=4 保持**：SQLite 单写但允许并发读；4 池让 read-heavy 路径（preview / quota check）不阻塞主线程；写靠 `busy_timeout=5000` + `leakDetectionThreshold=30s` 兜底。缩到 1 会让任何长查询阻塞所有后续连接获取
-8. **MapPool 按 world UUID 分桶**：wall 与 map 必须 world 一致（强校验，跨世界绑定抛异常）；config `map-pool.per-world: {}` 配每世界 size。`WallRestorer` 失败必须 `releaseToFree`——否则泄漏地图 ID、`idcounts.dat` 膨胀（项目核心风险）
+8. **MapPool 按 world UUID 分桶**：wall 与 map 必须 world 一致（强校验，跨世界绑定抛异常）；config `map-pool.per-world: {}` 配每世界 size。
+   **地图归还的总不变式：已被某个存在的 walls 行认领的地图，绝不能回 FREE。** 由此派生两条：
+   - `WallRestorer` 失败按 bind 前后分处置（0.9.17 细化；原表述「失败必须 `releaseToFree`」过粗，对 bind 之后的情形是错的）——**bind 尚未成功**（world 解析不到 / `bindToWall` 抛）→ 借到手的 mapId 全部 `releaseToFree`，不留半态预留；**bind 已成功、后续渲染炸了** → **保留绑定**（判据 `bindCommitted` 标志）。理由：walls 行还在、`detectLeaks` 认得它不会回收，本就不存在泄漏；放回 FREE 反而会让下次 confirm 把同一张图借给别的 wall（两墙共用互相覆盖像素），而原 wall 的 `map_ids` 指向已被抢走的地图，下次启动 `bindToWall` 直接被拒，这面墙永久恢复不了
+   - `SessionManager.deleteWall` **先删 walls 行、再放地图**（0.9.17 修）。原来反着来，而 `WallRepo.delete` 曾是吞异常的 void——删行失败时地图已进池子、walls 行还指着它们，同样落进跨墙串台。删行失败即整个中止（宁可留一面删不掉的墙让玩家重试）
+   - 原「防 `idcounts.dat` 膨胀」的意图由这条总不变式 + `detectLeaks` 的防呆共同覆盖
 
 ### 变量系统
 

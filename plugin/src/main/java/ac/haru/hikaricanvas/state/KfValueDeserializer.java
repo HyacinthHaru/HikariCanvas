@@ -27,8 +27,14 @@ public final class KfValueDeserializer extends JsonDeserializer<KfValue> {
             return new KfValue.Str(node.asText());
         }
         if (node.isObject()) {
-            Fill fill = p.getCodec().treeToValue(node, Fill.class);
-            return new KfValue.FillV(fill);
+            try {
+                return new KfValue.FillV(p.getCodec().treeToValue(node, Fill.class));
+            } catch (IOException | RuntimeException e) {
+                // 同下方宽容路径：FillDeserializer 对未知 type 会抛硬错，那条异常会直接
+                // 穿透上来把整面墙的加载搞挂（触发路径很现实：新版本存的墙回滚旧 jar 打开）。
+                // 本类承诺「坏数据不在反序列化期抛硬错」，这里必须自己接住。
+                return null;
+            }
         }
         // 宽容路径：boolean / array 等非预期形态不抛硬错（异常会冒泡致整个 ProjectState
         // 加载失败，违反「坏数据不在反序列化期抛硬错」承诺）。返回 null 交 KeyframeInterpolator

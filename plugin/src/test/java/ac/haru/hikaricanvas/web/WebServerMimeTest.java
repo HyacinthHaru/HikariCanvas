@@ -90,4 +90,34 @@ class WebServerMimeTest {
         assertNull(WebServer.guessMime("web/mystery.xyz"));
         assertNull(WebServer.guessMime("web/noext"));
     }
+
+    // ---------- /fonts/{file}（字体 advance 表） ----------
+
+    /**
+     * 生产环境前端首选通道就是 {@code /fonts/{id}.metrics.json}。web/public 不进仓库、
+     * jar 里也没有这条静态路径，以前线上必 404；现在由这条路由直读 jar 内 /fonts/。
+     */
+    @Test
+    void metricsFontId_acceptsValidName() {
+        assertEquals("inter", WebServer.metricsFontIdOrNull("inter.metrics.json"));
+        assertEquals("source_han_sans",
+                WebServer.metricsFontIdOrNull("source_han_sans.metrics.json"));
+        assertEquals("my-user-font1", WebServer.metricsFontIdOrNull("my-user-font1.metrics.json"));
+    }
+
+    @Test
+    void metricsFontId_rejectsNonMetricsFile() {
+        assertNull(WebServer.metricsFontIdOrNull("Inter-Regular.otf"), "字体二进制走 /api/font/file");
+        assertNull(WebServer.metricsFontIdOrNull("inter.json"));
+        assertNull(WebServer.metricsFontIdOrNull(""));
+        assertNull(WebServer.metricsFontIdOrNull(null));
+    }
+
+    @Test
+    void metricsFontId_rejectsTraversalAndWeirdNames() {
+        assertNull(WebServer.metricsFontIdOrNull("../secret.metrics.json"));
+        assertNull(WebServer.metricsFontIdOrNull("a/b.metrics.json"));
+        assertNull(WebServer.metricsFontIdOrNull(".metrics.json"), "空 id 不放行");
+        assertNull(WebServer.metricsFontIdOrNull("in ter.metrics.json"));
+    }
 }

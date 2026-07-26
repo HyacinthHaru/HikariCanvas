@@ -132,6 +132,14 @@ public final class Messages {
         }
     }
 
+    /**
+     * 加载服主放在 {@code plugins/HikariCanvas/lang/} 下的外部文案，**按键合并**到已加载的内置文案上：
+     * 同名键用服主的，外部文件没写的键保留内置值。
+     *
+     * <p>此前是整份 {@code put} 替换。那样一旦服主改过某个语言文件，插件升级后新增的键在他的文件里
+     * 不存在，而兜底链的 defaultLocale 指向的也是这份被替换掉的外部文案 —— 结果玩家直接看到
+     * {@code canvas.error.foo} 这种原始键名。键级合并让"改了几句话"不再等于"锁死整套文案的版本"。</p>
+     */
     public void loadExternal(Path langDir) {
         if (langDir == null || !Files.isDirectory(langDir)) return;
         try (Stream<Path> s = Files.list(langDir)) {
@@ -140,7 +148,8 @@ public final class Messages {
                  String fn = p.getFileName().toString();
                  String id = norm(fn.substring(0, fn.length() - 4));
                  try {
-                     byLocale.put(id, YamlConfiguration.loadConfiguration(p.toFile()));
+                     byLocale.merge(id, YamlConfiguration.loadConfiguration(p.toFile()),
+                             Messages::mergeOverKeys);
                  } catch (Exception e) {
                      log.warning("[i18n] failed to load " + fn + ": " + e.getMessage());
                  }
@@ -148,6 +157,25 @@ public final class Messages {
         } catch (Exception e) {
             log.warning("[i18n] failed to scan lang dir: " + e.getMessage());
         }
+    }
+
+    /**
+     * 把 {@code external} 的每个叶子键覆盖到 {@code builtIn} 的副本上（外部优先，缺的键回落内置）。
+     *
+     * <p>用 {@code getKeys(true)} 拿全部深层路径，只搬叶子（非 ConfigurationSection）——
+     * 直接搬中间节点会把内置的同级兄弟键整段挤掉，那就退化回整份替换了。</p>
+     */
+    private static YamlConfiguration mergeOverKeys(YamlConfiguration builtIn, YamlConfiguration external) {
+        YamlConfiguration merged = new YamlConfiguration();
+        for (String key : builtIn.getKeys(true)) {
+            if (builtIn.isConfigurationSection(key)) continue;
+            merged.set(key, builtIn.get(key));
+        }
+        for (String key : external.getKeys(true)) {
+            if (external.isConfigurationSection(key)) continue;
+            merged.set(key, external.get(key));
+        }
+        return merged;
     }
 
     public void reload(Path langDir) {

@@ -123,6 +123,52 @@ class AssetIngestTest {
         assertEquals(1, stored.size(), "只处理 assets/*.png，其余忽略");
     }
 
+    /**
+     * 条目数上限。解包那层只数字节——几万个几字节的小 PNG 完全在字节闸之内，却会让摄入循环
+     * 开几万次 SERIALIZABLE 写事务、长时间霸占 SQLite 写锁，把编辑 op 的落库一起拖停。
+     */
+    @Test
+    void ingest_tooManyEntries_stopsAtCapAndReportsOverflow() throws Exception {
+        Map<String, byte[]> assets = new LinkedHashMap<>();
+        int over = AssetIngest.MAX_ASSET_ENTRIES + 5;
+        for (int i = 0; i < over; i++) {
+            // 每张内容不同（尺寸递增）→ 不会被内容寻址去重掉
+            assets.put(String.format("assets/%016x.png", i), png(1 + (i % 16), 1 + (i / 16)));
+        }
+        AssetIngest.Report report = ingest.ingestAll(assets, uploader, false);
+        assertEquals(5, report.overflowSkipped(), "超出上限的条目应原样跳过并计数");
+        assertTrue(report.storedHashes().size() <= AssetIngest.MAX_ASSET_ENTRIES,
+                "落盘张数不能超过条目数上限，实际 " + report.storedHashes().size());
+    }
+
+    /**
+     * 摄入会解码 + 重新编码再算 hash，得出的指纹与导出方写在文件名里的那个常常对不上
+     * （第三方工具产出的包、不同 JDK）。元素引用的是文件名那个，所以必须把差异报出去，
+     * 否则图片全静默变占位、一句提示都没有。
+     */
+    @Test
+    void ingest_recomputedHashDiffersFromFileName_isReported() throws Exception {
+        Map<String, byte[]> assets = Map.of("assets/deadbeefdeadbeef.png", png(8, 8));
+        AssetIngest.Report report = ingest.ingestAll(assets, uploader, false);
+
+        assertEquals(1, report.storedHashes().size());
+        String actual = report.storedHashes().iterator().next();
+        assertEquals(Map.of("deadbeefdeadbeef", actual), report.rehashed(),
+                "声明 hash 与实际 hash 不一致时必须报出映射，供调用方改写元素引用");
+    }
+
+    /** 声明 hash 与重算结果一致时不该产生多余映射（绝大多数导入走这条）。 */
+    @Test
+    void ingest_matchingHash_producesNoRemap() throws Exception {
+        byte[] raw = png(8, 8);
+        // 先跑一遍拿到本机重编码后的真实 hash，再用它当文件名重跑
+        String actual = ingest.ingestAll(Map.of("assets/0000000000000000.png", raw), uploader)
+                .iterator().next();
+        AssetIngest.Report report = ingest.ingestAll(
+                Map.of("assets/" + actual + ".png", raw), uploader, false);
+        assertTrue(report.rehashed().isEmpty(), "一致就不该有映射: " + report.rehashed());
+    }
+
     @Test
     void shutdown_repeatedCalls_idempotentNoThrow() {
         // R3-assetingest-leak：onDisable 关停 decoderPool；cleanupResources 与 onEnable-fail

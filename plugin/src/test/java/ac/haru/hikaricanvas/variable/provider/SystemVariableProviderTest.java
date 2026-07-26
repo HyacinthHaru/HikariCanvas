@@ -163,6 +163,32 @@ class SystemVariableProviderTest {
         assertEquals("New MOTD", store.get("system/server.motd").get().currentValue());
     }
 
+    /**
+     * 变量 TTL 必须比刷新周期长。
+     *
+     * <p>两者取同一个数时，每一轮都会出现一段"值刚过期、下一轮还没写进来"的空窗
+     * （刷新调度本身有抖动，算值还要切主线程），墙上就会周期性闪一下 {@code ???}。
+     * 三个周期型 Provider 统一留一倍宽限。</p>
+     */
+    @Test
+    void variableTtlOutlivesRefreshInterval() {
+        provider.initialize();
+        forceAllStale(provider);
+        provider.refresh();
+
+        // server.tick 的刷新周期是 1s（= BASE_REFRESH_INTERVAL_MS）
+        long tickTtl = store.get("system/server.tick").orElseThrow().ttl();
+        assertTrue(tickTtl > SystemVariableProvider.BASE_REFRESH_INTERVAL_MS,
+                "TTL 必须大于刷新周期，否则每轮都有 stale 空窗: " + tickTtl);
+
+        // 姊妹 Provider 同款纪律（常量级断言，防哪天又被改回相等）
+        assertTrue(PapiVariableBridge.TTL_MS > PapiVariableBridge.REFRESH_INTERVAL_MS,
+                "PAPI 的 TTL 必须大于刷新周期");
+        assertTrue(ScoreboardVariableProvider.TTL_MS
+                        > ScoreboardVariableProvider.REFRESH_INTERVAL_MS,
+                "计分板的 TTL 必须大于刷新周期");
+    }
+
     @Test
     void refresh_perWallAliasUpdated() {
         dataSource.wallIds.add("w-1");
@@ -338,6 +364,42 @@ class SystemVariableProviderTest {
     }
 
     // ──────────────────────────────────────────────────────────
+    //  伪 wall 守卫：占位符里的 namespace 段是玩家自由文本
+    // ──────────────────────────────────────────────────────────
+
+    /**
+     * 任何人在文本元素里写 {@code ${var:system:随便什么/wall.alias}} 都会同步走到
+     * dynamic-lookup hook。不校验形态的话，每个假 wallId 都会永久占 4 个内存变量 +
+     * 每 5s 白跑一次 DB 查询，而且首次注册那趟 DB 往返就发生在渲染线程上。
+     */
+    @Test
+    void dynamicWallRegistration_rejectsMalformedWallIds() {
+        int before = store.size();
+        provider.handleDynamicWall("不是墙 id");
+        provider.handleDynamicWall("../../etc/passwd");
+        provider.handleDynamicWall("w-XYZ");
+        provider.handleDynamicWall("w-1");                 // 位数不够
+        provider.handleDynamicWall("w-DEADBEEF");          // 大写十六进制不是本项目形态
+        provider.handleDynamicWall("w-deadbeef-extra");
+
+        assertTrue(provider.registeredWallsSnapshot().isEmpty(), "伪 wall 一个都不该注册");
+        assertEquals(before, store.size(), "伪 wall 不该产生变量");
+        assertEquals(0, dataSource.wallMetaCalls.get(), "伪 wall 不该发起 DB 查询");
+    }
+
+    /** 形态合法的 wallId 仍走懒注册（别把正常路径一起拦了）。 */
+    @Test
+    void dynamicWallRegistration_acceptsRealWallId() {
+        dataSource.wallMetas.put("w-0a1b2c3d",
+                new SystemVariableProvider.WallMeta("w-0a1b2c3d", "招牌", "HaruP", "uuid-1"));
+
+        provider.handleDynamicWall("w-0a1b2c3d");
+
+        assertTrue(provider.registeredWallsSnapshot().contains("w-0a1b2c3d"));
+        assertTrue(store.get("system:w-0a1b2c3d/wall.alias").isPresent());
+    }
+
+    // ──────────────────────────────────────────────────────────
     //  Fakes
     // ──────────────────────────────────────────────────────────
 
@@ -357,8 +419,12 @@ class SystemVariableProviderTest {
             return new ArrayList<>(wallIds);
         }
 
+        /** wallMeta 调用次数（生产实现是一次 DB 查询——伪 wall 守卫据此断言"零往返"）。 */
+        final AtomicInteger wallMetaCalls = new AtomicInteger();
+
         @Override
         public SystemVariableProvider.WallMeta wallMeta(String wallId) {
+            wallMetaCalls.incrementAndGet();
             return wallMetas.get(wallId);
         }
 

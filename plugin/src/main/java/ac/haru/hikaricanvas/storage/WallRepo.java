@@ -402,13 +402,35 @@ public final class WallRepo {
         }
     }
 
-    public void delete(String wallId) {
+    /**
+     * 删除 walls 行。<b>返回是否真的删掉了</b>——调用方必须看返回值。
+     *
+     * <p>原实现是 void + catch 后只写日志：删除因 {@code SQLITE_BUSY}（默认 5s
+     * busy_timeout 内没抢到写锁，比如同时在跑图片配额清理的大事务）失败时，调用方
+     * {@code SessionManager.deleteWall} 照样返回成功。而它是<b>先</b>把这面墙的地图释放回
+     * FREE 池、<b>后</b>删行的，于是留下最坏的组合：walls 行还在（玩家看得到、还能 open），
+     * 它引用的地图却已被下一面墙借走 → 两面墙共用一张地图互相覆盖像素。
+     *
+     * <p>返回 false 时调用方应当把地图释放回滚掉（或者干脆把顺序改成先删行、成功了再放地图），
+     * 至少要让玩家知道这次删除没成功，而不是报个成功了事。</p>
+     *
+     * @return {@code true} = 确实删掉了行；{@code false} = 数据库写失败，或者本来就没有这一行
+     */
+    public boolean delete(String wallId) {
         try {
-            jdbi.useHandle(h -> h.createUpdate("DELETE FROM walls WHERE wall_id = :id")
+            int affected = jdbi.withHandle(h -> h.createUpdate("DELETE FROM walls WHERE wall_id = :id")
                     .bind("id", wallId)
                     .execute());
+            if (affected == 0) {
+                log.warning("delete: no walls row for " + wallId + " (already gone?)");
+                return false;
+            }
+            return true;
         } catch (Exception e) {
-            log.log(Level.WARNING, "delete failed: " + wallId, e);
+            log.log(Level.SEVERE, "delete failed: " + wallId
+                    + " — the wall row is still there while its maps may already have been"
+                    + " returned to the pool; caller must not report success", e);
+            return false;
         }
     }
 

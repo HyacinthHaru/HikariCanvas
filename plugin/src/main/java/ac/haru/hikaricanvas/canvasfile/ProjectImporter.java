@@ -5,6 +5,7 @@ import ac.haru.hikaricanvas.render.ProjectionThrottler;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.state.EditSession;
 import ac.haru.hikaricanvas.state.Element;
+import ac.haru.hikaricanvas.state.ImageElement;
 import ac.haru.hikaricanvas.state.Keyframe;
 import ac.haru.hikaricanvas.state.Layer;
 import ac.haru.hikaricanvas.state.ProjectState;
@@ -34,7 +35,8 @@ import java.util.UUID;
  *       校验用户填值、在 {@code project.json} 文本层单遍替换 {@code ${param}}（{@link PackParamResolver}）；
  *       无 {@code params.json}（普通 project）时 no-op，字节原样穿透，与旧路径逐字节等价；</li>
  *   <li>{@link ProjectMaterializer#materialize} 把 untrusted {@code project.json} 物化为校验过的
- *       {@link ProjectState}，并与会话墙尺寸做匹配；</li>
+ *       {@link ProjectState}，并与会话墙尺寸做匹配 + 卡住图层 / 时间轴 / 关键帧 / 元素 / 图片数量
+ *       （{@code docs/import-export.md §5.1a}）；</li>
  *   <li>{@link MissingResourceScanner#scan} 扫缺字体 / 缺 user 图标 / 缺 userglobal 变量
  *       （{@code missing-font} / {@code missing-icon} / {@code missing-variable} warn）；可空跳过；</li>
  *   <li>{@link AssetIngest#ingestAll} 摄入 {@code assets/*.png}（magic + 隔离解码 + 配额 + 落 hash）；</li>
@@ -120,6 +122,16 @@ public final class ProjectImporter {
         this.auditLog = auditLog;
         this.throttler = throttler;
         this.missingResourceScanner = missingResourceScanner;
+    }
+
+    /**
+     * 单个 {@code .canvas} 包允许的最大字节数（{@code config.import.canvas-max-mb}）。
+     *
+     * <p>端点用它在<b>把 multipart 临时文件读进堆之前</b>先看一眼大小。解包内部也有同一道闸，
+     * 但那是 {@code readAllBytes()} 之后的事——真拿 1GB 文件打过来，堆先炸，闸没机会说话。</p>
+     */
+    public long maxCanvasBytes() {
+        return importConfig.canvasMaxMb() * MB;
     }
 
     /**
@@ -212,11 +224,14 @@ public final class ProjectImporter {
     private Built buildFromEntries(Session session, Map<String, byte[]> entries,
                                    CanvasManifest manifest, UUID uploader)
             throws CanvasImportException {
-        // 3) project.json 物化 + 元素校验 + 尺寸匹配（喂会话当前墙尺寸）
+        // 3) project.json 物化 + 元素校验 + 结构数量闸 + 尺寸匹配（喂会话当前墙尺寸）
+        //    数量闸放在 materialize 里，让 HTTP 导入与 template.apply 两条入口共用同一组上限
+        //    （replaceProject 本身零计数校验，绕过 element.add 路径的 images.max-per-wall）。
         ProjectState.Canvas sessionCanvas = session.projectState().canvas();
         ProjectState imported = ProjectMaterializer.materialize(
                 entries.get("project.json"),
-                sessionCanvas.widthMaps(), sessionCanvas.heightMaps());
+                sessionCanvas.widthMaps(), sessionCanvas.heightMaps(),
+                ProjectMaterializer.Limits.withMaxImageSources(assetIngest.maxImagesPerWall()));
 
         List<ImportWarning> warnings = new ArrayList<>();
 
@@ -229,12 +244,17 @@ public final class ProjectImporter {
 
         // 4) assets/*.png 摄入（落盘；缺/拒静默跳过，差额生成 asset-quota warning）
         int requestedAssets = countRequestedAssetPngs(entries);
-        Set<String> storedHashes = assetIngest.ingestAll(entries, uploader);
+        AssetIngest.Report assets = assetIngest.ingestAll(entries, uploader, false);
+        Set<String> storedHashes = assets.storedHashes();
         int skipped = requestedAssets - storedHashes.size();
         if (skipped > 0) {
             warnings.add(new ImportWarning("asset-quota",
                     skipped + " image(s) skipped (quota full or undecodable)"));
         }
+
+        // 4.5) 重编码漂移修正：摄入按内容重算 hash，而元素引用的是导出方写在文件名里的那个。
+        //      两者不一致时把 ImageElement.source 改写过去，否则图片全静默变占位、零提示。
+        imported = remapAssetSources(imported, assets.rehashed(), warnings);
 
         // 5) 孤儿关键帧轨丢弃 + warn（timelines 为 null/空则跳过）
         imported = stripOrphanTracksAndCollect(imported, warnings);
@@ -362,6 +382,56 @@ public final class ProjectImporter {
                 imported.activeLayerId(),
                 null,                       // history：导入不带历史
                 cleaned,
+                imported.activeTimelineId(),
+                imported.tweenFps());
+    }
+
+    /**
+     * 把 {@link ImageElement#source()} 从"导出方声明的 hash"改写成"本服实际落盘的 hash"。
+     *
+     * <p>{@code AssetIngest} 解码后重新编码再算 hash，只要编码行为有一点差别（第三方工具产出的
+     * 包、不同 JDK），算出来的就和 {@code assets/<hash>.png} 文件名里写的不一样。工程元素引用的
+     * 是文件名那个，不改写的话图片全部指向不存在的文件——渲染出来是占位，而且一句提示都没有。</p>
+     *
+     * <p>{@code remap} 为空时原样返回（绝大多数导入走这条）。每改写一处记一条
+     * {@code asset-rehashed} warning，让用户知道发生过重编码。</p>
+     */
+    static ProjectState remapAssetSources(ProjectState imported, Map<String, String> remap,
+                                          List<ImportWarning> warnings) {
+        if (remap == null || remap.isEmpty()) return imported;
+        boolean changed = false;
+        List<Layer> rebuilt = new ArrayList<>(imported.layers().size());
+        Set<String> reported = new HashSet<>();
+        for (Layer layer : imported.layers()) {
+            List<Element> elements = new ArrayList<>(layer.elements().size());
+            for (Element el : layer.elements()) {
+                String newHash = (el instanceof ImageElement im && im.source() != null)
+                        ? remap.get(im.source()) : null;
+                if (newHash == null) {
+                    elements.add(el);
+                    continue;
+                }
+                ImageElement im = (ImageElement) el;
+                elements.add(new ImageElement(im.id(), im.x(), im.y(), im.w(), im.h(),
+                        im.rotation(), im.locked(), im.visible(), newHash, im.mask(),
+                        im.opacity(), im.blendMode(), im.renderMode()));
+                changed = true;
+                if (reported.add(im.source())) {
+                    warnings.add(new ImportWarning("asset-rehashed", im.source()));
+                }
+            }
+            rebuilt.add(new Layer(layer.id(), layer.name(), layer.visible(), layer.locked(),
+                    layer.opacity(), layer.blendMode(), layer.colorTag(), elements));
+        }
+        if (!changed) return imported;
+        return new ProjectState(
+                imported.version(),
+                imported.canvas(),
+                null,                       // v1Elements：走 layers 路径，不用
+                rebuilt,
+                imported.activeLayerId(),
+                null,                       // history：导入不带历史
+                imported.timelines(),
                 imported.activeTimelineId(),
                 imported.tweenFps());
     }

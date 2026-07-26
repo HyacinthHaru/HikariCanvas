@@ -34,8 +34,8 @@ import java.util.stream.Stream;
  *
  * <p>注册时只解包出 manifest + params.json 合成一份 UI 用 {@link TemplateSpec}（id 优先取 manifest 自声明、
  * 缺省退文件名 stem；canvas 带 fixed 尺寸），pack 原始字节整包存进 {@link TemplateEntry#packBytes()} 供套用时经
- * {@code ProjectImporter.applyPack} 现解。{@code kind="project"} 的普通工程 {@code .canvas} 不是模板，
- * 扫到即跳过（记 fine，不计失败）。</p>
+ * {@code ProjectImporter.applyPack} 现解。扫到 {@code kind="project"} 的普通工程 {@code .canvas} 时
+ * <b>按零参数模板收下</b>（{@code docs/template-pack.md §5} 的交叉导入宽容规则）。</p>
  *
  * <p><b>原子热替换：</b> {@link #entries} 为 {@code volatile} 引用，{@link #reload}
  * 把全量加载结果在末尾一次性 swap，期间读到的注册表始终是某次成功加载的完整快照，
@@ -454,11 +454,16 @@ public final class TemplateRegistry {
     }
 
     /**
-     * 解包 pack 字节 + 解析 manifest + 校验 {@code kind="pack"} + 合成 {@link TemplateSpec}。
+     * 解包 pack 字节 + 解析 manifest + 合成 {@link TemplateSpec}。
      *
-     * <p>返回 {@code null} 表示「跳过」：{@code kind="project"} 的普通工程不是模板（记 fine，不计失败）；
-     * 解包 / manifest / params 解析失败（{@link CanvasImportException}）记 warn + failures。两种情形都
-     * <b>不上抛</b>——照每文件容错纪律，一个坏包不毁整次 {@link #reload()}。</p>
+     * <p><b>{@code kind="project"} 也收</b>：契约（{@code docs/template-pack.md §5}）写明
+     * 「模板导入遇 project → 当零参数模板处理（无参数可填，套用即原样）入库」。project 与 pack
+     * 只差一层 {@code params.json}，套用走同一条 {@code applyPack}——没有 params.json 时替换段
+     * 直接 no-op。此前这里直接跳过，服主把导出的工程丢进模板目录后界面上一点反馈都没有。</p>
+     *
+     * <p>返回 {@code null} 表示「跳过」：解包 / manifest / params 解析失败
+     * （{@link CanvasImportException}）记 warn + failures，<b>不上抛</b>——照每文件容错纪律，
+     * 一个坏包不毁整次 {@link #reload()}。</p>
      */
     private TemplateSpec tryBuildPackSpec(byte[] packBytes, String idStem, String label,
                                           java.util.List<String> failures) {
@@ -469,9 +474,7 @@ public final class TemplateRegistry {
             CanvasManifest manifest = CanvasManifest.parse(
                     zipEntries.get("manifest.json"), ProjectImporter.CANVAS_SPEC_MAX);
             if (!"pack".equals(manifest.kind())) {
-                // 普通工程（kind=project）不是模板——跳过（zero-param-project 容忍是后续阶段的事，不在此）。
-                log.fine(label + ": kind=" + manifest.kind() + " (not a pack), skipped");
-                return null;
+                log.fine(label + ": kind=" + manifest.kind() + ", loaded as a zero-parameter template");
             }
             return buildPackSpec(idStem, manifest, zipEntries.get("params.json"));
         } catch (CanvasImportException e) {

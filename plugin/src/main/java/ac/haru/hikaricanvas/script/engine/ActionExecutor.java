@@ -48,6 +48,12 @@ import java.util.logging.Logger;
  * <p><b>三层异常隔离</b>（照 Provider daemon 范式）：单动作 throw → error step +
  * WARNING log，链不断——Runner 收到 error step 继续下一动作。</p>
  *
+ * <p><b>变量族积木的越权闸</b>（{@code security.md §13.8}）：变量名是玩家自由填的字符串，
+ * 而脚本执行身份是"墙"（没有 caller 可查权限），所以写之前统一过 {@link #checkWritable}——
+ * 只放行本墙 {@code user:} 变量、owner 与墙 owner 一致的 {@code userglobal/}、以及插件自己的
+ * namespace；跨墙、Provider 自有 namespace 一律出 error step。读侧同款
+ * （{@link #checkReadable} + {@code resolveFullName} 的跨墙哨兵）。</p>
+ *
  * <p>依赖全部可 null（测试容忍）：null 的依赖被动作触到 → error step 不抛。</p>
  */
 public final class ActionExecutor implements ActionSink {
@@ -179,6 +185,73 @@ public final class ActionExecutor implements ActionSink {
 
     // ---------- 变量族（async 安全） ----------
 
+    /**
+     * 变量族积木的写目标校验（{@code security.md §13.8}）。
+     *
+     * <p>脚本的执行身份是"墙"而不是某个玩家——规则可能由 timer / 游戏事件触发，编排它的人
+     * 早就下线了，所以这条链上没有 caller 可查权限，只能按墙本身的归属判。允许写的只有三类：
+     * 本墙的 {@code user:} 变量、owner 与墙 owner 一致的 {@code userglobal/} 变量、以及插件
+     * 自己的 namespace（{@code setValue} 只能改已存在的变量，建不出新的）。</p>
+     *
+     * @param rawName  积木里原样填的变量名（报错文案用它，玩家才认得出自己写了什么）
+     * @param fullName {@link VariableInterpolator#resolveFullName} 之后的内部名
+     * @return null = 放行；非 null = 拒绝原因（调用方出 error step）
+     */
+    private @Nullable String checkWritable(String wallId, String rawName, String fullName) {
+        // resolveFullName 对跨墙的内部形态已经换成哨兵（那条链保护的是 ${var:} 渲染侧），
+        // 这里两种形态都认一遍：哨兵 → 说明它被换过；rawName 自身跨墙 → 直接点名报错，
+        // 让 trace 里看到的是玩家写的那个名字，而不是"变量不存在"这种误导性文案。
+        if (VariableInterpolator.CROSS_WALL_DENIED.equals(fullName)
+                || VariableInterpolator.isForeignPerWall(rawName, wallId)) {
+            return "拒绝写别的墙的变量: " + rawName;
+        }
+        if (VariableInterpolator.isProviderOwned(fullName)) {
+            return "拒绝写系统 / 时刻表 / PAPI / 计分板变量（这些由插件自己刷新）: " + fullName;
+        }
+        if (fullName.startsWith(VariableStore.USER_GLOBAL_NAMESPACE + "/")) {
+            return checkUserGlobalWritable(wallId, fullName);
+        }
+        return null;
+    }
+
+    /**
+     * 全服变量（{@code userglobal/}）只允许"墙主写自己的"——与 WS 侧
+     * {@code canvas.var.global.write.own} 同语义，但脚本路径没有管理员 override
+     * （没有 caller 可查 {@code .any} 节点）。墙记录读不到 / 变量无主 → 一律拒（fail-closed）。
+     */
+    private @Nullable String checkUserGlobalWritable(String wallId, String fullName) {
+        if (store == null) return "VariableStore not wired";
+        String key = fullName.substring(VariableStore.USER_GLOBAL_NAMESPACE.length() + 1);
+        java.util.UUID varOwner = store.getGlobalOwner(key)
+                .map(VariableStore.GlobalOwnerInfo::ownerUuid).orElse(null);
+        if (varOwner == null) {
+            return "全服变量无主，拒绝脚本改写: " + fullName;
+        }
+        if (wallRepo == null) {
+            return "无法确认墙主，拒绝脚本改写全服变量: " + fullName;
+        }
+        WallRepo.Wall wall = wallRepo.loadById(wallId).orElse(null);
+        if (wall == null || wall.ownerUuid() == null) {
+            return "无法确认墙主，拒绝脚本改写全服变量: " + fullName;
+        }
+        if (!varOwner.equals(wall.ownerUuid())) {
+            return "全服变量属于别人，拒绝脚本改写: " + fullName;
+        }
+        return null;
+    }
+
+    /**
+     * 变量族积木的读目标校验：跨墙读同样拒（{@code copyVariable} 的来源变量；
+     * {@code ${var:...}} 侧由 {@link VariableInterpolator#resolveFullName} 自己挡）。
+     */
+    private static @Nullable String checkReadable(String wallId, String rawName, String fullName) {
+        if (VariableInterpolator.CROSS_WALL_DENIED.equals(fullName)
+                || VariableInterpolator.isForeignPerWall(rawName, wallId)) {
+            return "拒绝读别的墙的变量: " + rawName;
+        }
+        return null;
+    }
+
     private TraceStep doSetVariable(String wallId, String blockId, Action.SetVariable a) {
         if (store == null || interpolator == null) {
             return TraceStep.error(blockId, "VariableStore not wired");
@@ -186,6 +259,8 @@ public final class ActionExecutor implements ActionSink {
         // value 过 ${var:X} 插值（与 Compositor 渲染期同一 VariableInterpolator 实现）
         String resolved = interpolator.interpolate(a.value(), wallId).text();
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String denied = checkWritable(wallId, a.fullName(), fullName);
+        if (denied != null) return TraceStep.error(blockId, denied);
         try {
             // CHAIN_DEPTH 已由 Runner 置位——fireChange 同步发生在本线程，
             // Router listener 读 ThreadLocal 得链深
@@ -201,6 +276,8 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.error(blockId, "VariableStore not wired");
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String denied = checkWritable(wallId, a.fullName(), fullName);
+        if (denied != null) return TraceStep.error(blockId, denied);
         // 读 cached 当前值（与 ConditionEvaluator.storeLookup 同链：fresh → default → null）；
         // 非数值 / null 按 0 起算（StrictNumber 文法，§2.3）
         double base = StrictNumber.parse(storeLookup.apply(fullName));
@@ -225,6 +302,10 @@ public final class ActionExecutor implements ActionSink {
         }
         String src = VariableInterpolator.resolveFullName(a.source(), wallId);
         String dst = VariableInterpolator.resolveFullName(a.target(), wallId);
+        String deniedRead = checkReadable(wallId, a.source(), src);
+        if (deniedRead != null) return TraceStep.error(blockId, deniedRead);
+        String denied = checkWritable(wallId, a.target(), dst);
+        if (denied != null) return TraceStep.error(blockId, denied);
         var srcVar = store.get(src).orElse(null);
         if (srcVar == null) {
             return TraceStep.error(blockId, "source variable not found: " + src);
@@ -248,6 +329,8 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.error(blockId, "VariableStore not wired");
         }
         String dst = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String denied = checkWritable(wallId, a.fullName(), dst);
+        if (denied != null) return TraceStep.error(blockId, denied);
         String add = interpolator.interpolate(a.text(), wallId).text();
         String cur = store.get(dst)
                 .map(v -> v.currentValue() != null ? v.currentValue() : "")
@@ -544,8 +627,8 @@ public final class ActionExecutor implements ActionSink {
     /**
      * 发消息。按 {@link Action.SendMessage#target()} 分流——
      * {@code "all"} → 全服广播（{@code Bukkit.getOnlinePlayers()} 逐个发，不依赖触发玩家）；
-     * 否则（{@code "trigger"}）→ 触发玩家名 = {@link ScriptRunner#currentTriggerDetail}（仅
-     * player* 触发器有值），无触发玩家 / 离线 → ok step skip（非错误）。text 过
+     * 否则（{@code "trigger"}）→ 触发玩家名 = {@link ScriptRunner#currentTriggerPlayer}（仅
+     * player* / rightClickWall 触发器有值），无触发玩家 / 离线 → ok step skip（非错误）。text 过
      * {@code ${var:X}} 插值。主线程 hop 发（Adventure {@code Component} / {@code Title}，禁 NMS）。
      */
     private TraceStep doSendMessage(String wallId, String blockId, Action.SendMessage a) {
@@ -573,8 +656,10 @@ public final class ActionExecutor implements ActionSink {
             }
             return TraceStep.ok(blockId, "action", "msg -> broadcast (" + channel + ")");
         }
-        // target=trigger（默认）：发给触发该脚本的玩家
-        String who = ScriptRunner.currentTriggerDetail();
+        // target=trigger（默认）：发给触发该脚本的玩家。读 triggerPlayer 不读 detail——
+        // detail 是给 trace 看的自由文本（playerKill 的 detail 是 victim→killer 拼接串，
+        // 拿它当玩家名找人必然找不到，消息静默丢失）
+        String who = ScriptRunner.currentTriggerPlayer();
         if (who == null || who.isBlank()) {
             return TraceStep.ok(blockId, "action", "no trigger player; skipped");
         }
@@ -621,6 +706,8 @@ public final class ActionExecutor implements ActionSink {
             v = a.min() + rng.nextInt((int) (a.max() - a.min()) + 1);
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String denied = checkWritable(wallId, a.fullName(), fullName);
+        if (denied != null) return TraceStep.error(blockId, denied);
         String formatted = formatNumber(v);
         try {
             store.setValue(fullName, formatted, null);
@@ -646,6 +733,8 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.error(blockId, "divisor must not be 0");
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String denied = checkWritable(wallId, a.fullName(), fullName);
+        if (denied != null) return TraceStep.error(blockId, denied);
         double base = StrictNumber.parse(storeLookup.apply(fullName));
         double result = mul ? base * a.factor() : base / a.factor();
         String formatted = formatNumber(result);
@@ -694,6 +783,8 @@ public final class ActionExecutor implements ActionSink {
             return TraceStep.error(blockId, "VariableStore not wired");
         }
         String fullName = VariableInterpolator.resolveFullName(a.fullName(), wallId);
+        String denied = checkWritable(wallId, a.fullName(), fullName);
+        if (denied != null) return TraceStep.error(blockId, denied);
         String raw = storeLookup.apply(fullName);
         // 非严格数值（abc / 0x1p4 / 5d / Infinity / NaN）→ error step（区别于 doIncrement/doScale
         // 的「按 0」：取整非数值无意义，让用户在 trace 看到）。StrictNumber.PATTERN 严格判定。

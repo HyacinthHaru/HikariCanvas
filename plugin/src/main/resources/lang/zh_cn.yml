@@ -17,6 +17,7 @@ command:
     session-closing: "<gray>会话正在关闭中，请稍后再试。</gray>"
   wand:
     received: "<gold>已获得 Canvas 魔棒，左键 / 右键点击方块以选取对角。</gold>"
+    already-have: "<yellow>你的背包里已经有一把 Canvas 魔棒了。</yellow>"
   cancel:
     cancelled: "<yellow>会话已取消（原状态：<prev_state>）。<wand_note>画布数据已保留 — 可用 /canvas open 或右键展示框重新打开。</yellow>"
     cancelled-wand-returned: "魔棒已回收。"
@@ -54,6 +55,7 @@ command:
     world-not-loaded: "<red>无法删除画布 <wall_id>：所在世界 '<world>' 未加载。请先加载该世界再删除，否则展示框会残留、地图会被错误复用。</red>"
     already-gone: "<gray>画布 <wall_id> 已不存在。</gray>"
     deleted: "<green>画布 <wall_id> 已删除，共移除 <frames> 个展示框。</green>"
+    failed: "<red>画布 <wall_id> 没能删掉（数据库写入失败），请稍后重新执行 /canvas delete <wall_id>。详情见服务端日志。</red>"
   confirm:
     not-ready: "<red>尚未就绪：<detail></red>"
     wall-invalid: "<red>画布无效：<reason> — <detail></red>"
@@ -89,7 +91,7 @@ command:
   reload:
     config-type-mismatch: "<red>重载配置失败：插件类型不匹配（内部错误）</red>"
     config-ok: "<gold>配置已重载：<summary></gold>"
-    config-restart-note: "<gray>注意：host/port 的更改需要重启服务器才能生效。</gray>"
+    config-restart-note: "<gray>注意：只有 config.yml 里标了 [热更] 的项（scripts.* 各上限、命令模板白名单、i18n.default-locale）当场生效，其余项仍要重启服务器。</gray>"
     templates-ok: "<gold>模板已重载：<builtin> 个内置 + <server> 个服务器自定义（覆盖=<overrides>，失败=<failed>）— 共 <total> 个</gold>"
     template-failure: "<red>  ✗ <file></red>"
   var:

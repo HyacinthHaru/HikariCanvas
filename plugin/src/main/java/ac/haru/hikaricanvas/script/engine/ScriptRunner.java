@@ -76,15 +76,28 @@ public final class ScriptRunner {
     }
 
     /**
-     * 当前 run 的触发玩家名（{@link TriggerContext#detail()}，仅 player* 触发器有值）。
+     * 当前 run 的触发描述（{@link TriggerContext#detail()}）。只给 trace / 日志看，
+     * <b>不是玩家名</b>（playerKill 的 detail 是 {@code victim→killer} 拼接串）。
      * 与 {@link #RULE_KEY} 同生命周期（runFrames 置位 / finally 清）。
-     * {@code ActionExecutor.doSendMessage} 读它拿触发玩家——ActionSink 接口不为此扩参。
      */
     static final ThreadLocal<String> TRIGGER_DETAIL = new ThreadLocal<>();
 
-    /** 包级读取入口：当前线程触发玩家名；无 run 上下文返 null。 */
+    /** 包级读取入口：当前线程触发描述；无 run 上下文返 null。 */
     static @Nullable String currentTriggerDetail() {
         return TRIGGER_DETAIL.get();
+    }
+
+    /**
+     * 当前 run 的触发玩家名（{@link TriggerContext#triggerPlayer()}，仅 player* /
+     * rightClickWall 触发器有值）。与 {@link #RULE_KEY} 同生命周期。
+     * {@code ActionExecutor.doSendMessage} / {@code doShowTitle} 读它拿人
+     * （{@code target=trigger}）——ActionSink 接口不为此扩参。
+     */
+    static final ThreadLocal<String> TRIGGER_PLAYER = new ThreadLocal<>();
+
+    /** 包级读取入口：当前线程触发玩家名；无 run 上下文 / 无触发玩家返 null。 */
+    static @Nullable String currentTriggerPlayer() {
+        return TRIGGER_PLAYER.get();
     }
 
     /**
@@ -275,7 +288,8 @@ public final class ScriptRunner {
     private void runFrames(RunState st, Deque<Frame> stack) {
         CHAIN_DEPTH.set(st.ctx.chainDepth());
         RULE_KEY.set(ruleKey(st.wallId, st.rule));
-        TRIGGER_DETAIL.set(st.ctx.detail());   // 触发玩家名（player* 触发器有值）→ sendMessage
+        TRIGGER_DETAIL.set(st.ctx.detail());          // 自由描述 → trace / 日志
+        TRIGGER_PLAYER.set(st.ctx.triggerPlayer());   // 触发玩家 → sendMessage/showTitle 的 trigger 档
         try {
             outer:
             while (!stack.isEmpty()) {
@@ -488,6 +502,7 @@ public final class ScriptRunner {
             CHAIN_DEPTH.remove();
             RULE_KEY.remove();
             TRIGGER_DETAIL.remove();
+            TRIGGER_PLAYER.remove();
         }
     }
 
@@ -530,12 +545,14 @@ public final class ScriptRunner {
             st.trace.add(TraceStep.error(blockId, "waitUntil poll failed: " + t.getMessage()));
             fireTraceOnce(st);
         } finally {
-            // pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这三个 ThreadLocal，
-            // 防异常/inline 首调路径把 CHAIN_DEPTH/RULE_KEY/TRIGGER_DETAIL 泄漏到 runner 线程后续任务。
-            // 续接 runFrames（上方 schedule）会在自身入口重设这三个值，故此处清理不影响续接。
+            // pollWaitUntil 走独立调度、不在 runFrames 的 try-finally 内——自清这四个 ThreadLocal，
+            // 防异常/inline 首调路径把 CHAIN_DEPTH/RULE_KEY/TRIGGER_DETAIL/TRIGGER_PLAYER
+            // 泄漏到 runner 线程后续任务。续接 runFrames（上方 schedule）会在自身入口重设，
+            // 故此处清理不影响续接。
             CHAIN_DEPTH.remove();
             RULE_KEY.remove();
             TRIGGER_DETAIL.remove();
+            TRIGGER_PLAYER.remove();
         }
     }
 

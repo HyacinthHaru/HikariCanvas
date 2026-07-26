@@ -19,9 +19,14 @@ dependencies:
 
 # 权限节点（完整节点表见 docs/security.md §5）
 # 默认权限策略：编辑 / 提交类权限给所有玩家，管理类保留 op
+#
+# 这里列出的每个节点都必须在代码里真的被查过。定义了却没人查的节点比没有更糟：
+# 服主收掉它以为封停了功能，实际全功能照用，还查不出原因。
+# （canvas.commit 随 /canvas commit 命令一起废止；canvas.admin.bypass-limit 从未接线，
+#  想放宽画布尺寸请直接改 config 的 limits.canvas-max-maps。两者已移除。）
 permissions:
   canvas.use:
-    description: Use any HikariCanvas functionality
+    description: Use any HikariCanvas command (master switch on the /canvas root node)
     default: true
   canvas.edit:
     description: Open an editing session
@@ -29,17 +34,11 @@ permissions:
   canvas.wand:
     description: Receive a Canvas Wand
     default: true
-  canvas.commit:
-    description: Commit (save) a sign
-    default: true
   canvas.admin:
-    description: Administrative commands (stats / cleanup / reload)
+    description: Administrative commands (stats / diagnose / cleanup / reload) and the server-wide wall list
     default: op
   canvas.admin.force-break:
     description: Break HikariCanvas-managed item frames / supporting blocks
-    default: op
-  canvas.admin.bypass-limit:
-    description: Bypass rate limits and canvas size caps
     default: op
   canvas.bench:
     description: Run the server-side render benchmark (/canvas bench list/run/report/clear)
@@ -148,6 +147,9 @@ permissions:
     default: true
   canvas.script.sound:
     description: 在脚本里使用"播放声音"积木
+    default: true
+  canvas.script.broadcast:
+    description: 在脚本里让"发消息/弹标题"积木发给全服（只发触发玩家不需要这个）
     default: true
   canvas.script.command:
     description: 在脚本里使用"执行命令模板"积木（危险面）

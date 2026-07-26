@@ -59,7 +59,6 @@ public final class TextRenderer implements ElementRenderer {
         boolean useNearest = shouldUseNearestNeighbor(reg, t.fontSize());
         Font font = reg.derive(t.fontSize());
         g.setFont(font);
-        FontMetrics fm = g.getFontMetrics(font);
 
         // 多行 + wrap + letterSpacing + 基线 + align + 竖排
         // 全由 TextLayout；用 canonicalCharWidth，不再依赖 Java FontMetrics
@@ -70,7 +69,7 @@ public final class TextRenderer implements ElementRenderer {
 
         // 发光：最底层。字形 mask → 盒模糊 alpha → 着色 → 合成到主画布
         if (effects != null && effects.glow() != null) {
-            GlowRenderer.render(g, glyphs, font, effects.glow());
+            GlowRenderer.render(g, glyphs, font, t.fontId(), effects.glow());
         }
 
         // 阴影：drawString 到 (dx, dy) 偏移处
@@ -78,7 +77,7 @@ public final class TextRenderer implements ElementRenderer {
             Shadow sh = effects.shadow();
             g.setColor(FillPaintBuilder.parseColor(sh.color()));
             for (TextLayout.PositionedGlyph pg : glyphs) {
-                if (useNearest) drawPixelatedGlyph(g, pg, reg, t.fontSize(), fm, sh.dx(), sh.dy());
+                if (useNearest) drawPixelatedGlyph(g, pg, reg, t.fontSize(), sh.dx(), sh.dy());
                 else drawGlyph(g, pg, sh.dx(), sh.dy());
             }
         }
@@ -117,7 +116,7 @@ public final class TextRenderer implements ElementRenderer {
         // 最顶层：字形填充（正常颜色）
         g.setColor(FillPaintBuilder.parseColor(t.color()));
         for (TextLayout.PositionedGlyph pg : glyphs) {
-            if (useNearest) drawPixelatedGlyph(g, pg, reg, t.fontSize(), fm, 0, 0);
+            if (useNearest) drawPixelatedGlyph(g, pg, reg, t.fontSize(), 0, 0);
             else drawGlyph(g, pg, 0, 0);
         }
     }
@@ -144,10 +143,14 @@ public final class TextRenderer implements ElementRenderer {
      */
     private static void drawPixelatedGlyph(Graphics2D g, TextLayout.PositionedGlyph pg,
                                            FontRegistry.Registered reg, int targetSize,
-                                           FontMetrics targetFm, int dx, int dy) {
+                                           int dx, int dy) {
         int nativeSize = reg.metadata().nativeSize();
         Font nativeFont = reg.derive(nativeSize);
-        FontMetrics nativeFm = g.getFontMetrics(nativeFont);
+        // mask 基线用固定比例 round(nativeSize × 0.8)，不用 AWT 实测 ascent：这条 NN 路径
+        // 存在的全部理由就是双端像素对齐，而前端用的是同一个固定比例，AWT 的
+        // FontMetrics.getAscent() 却随 JDK / 平台 / 字体 hhea 表漂移（rendering.md §2.4）。
+        // 顺带省掉 per-glyph 的 FontMetrics 查询。
+        int nativeAscent = (int) Math.round(nativeSize * TextLayout.ASCENT_RATIO);
 
         // 1) mask 全宽
         BufferedImage mask = new BufferedImage(nativeSize, nativeSize, BufferedImage.TYPE_INT_ARGB);
@@ -156,7 +159,7 @@ public final class TextRenderer implements ElementRenderer {
             CanvasCompositor.applyHints(mg);
             mg.setFont(nativeFont);
             mg.setColor(g.getColor());
-            mg.drawString(pg.ch(), 0, nativeFm.getAscent());
+            mg.drawString(pg.ch(), 0, nativeAscent);
         } finally {
             mg.dispose();
         }

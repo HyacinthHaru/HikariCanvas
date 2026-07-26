@@ -123,9 +123,21 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 
 **绑 session 不绑 token**：Session 跨多次 WS 重连复用（5s~30s 阶梯重连），首次 auth 后任何重连都会触发 bindOrCheckIp。实现位置：`SessionManager.bindOrCheckIp(sessionId, callerIp)`，单方法 CAS + check 两态。
 
+**HTTP 面同样强制。** 拿 `sessionId` 鉴权的 HTTP 端点（`POST /api/upload`、`POST /api/upload/url`、
+`GET /api/upload/quota`、`GET /api/upload/{source}`）走同一个 `bindOrCheckIp`，不一致 → 401。
+理由：`sessionId` 会随 URL 落进反代 access log、浏览器历史与 `Referer`，捡到一条日志行的人
+本可以从任意 IP 直接调这些端点（改写受害者 live projectState、代服务器发外联请求、下载他人图片）。
+
+- **sessionId 的传递位置**：优先 `X-Canvas-Session` 请求头；`query` / `form` 字段保留兼容 ——
+  `GET /api/upload/{source}` 被 `<img src>` 直接使用，带不了自定义头，只能留在 query string，
+  IP 绑定就是它的补偿措施
+- **回环互认**：同机部署时浏览器可能给 WS 和 HTTP 各挑一个地址族（`::1` vs `127.0.0.1`），
+  两端都是回环时互认，不然本机部署的合法上传会被全拒。地址串先过一遍
+  `InetAddress.getHostAddress()` 归一（`::1` 与 `0:0:0:0:0:0:0:1` 是同一个地址）
+
 **已知限制：**
 
-- **IPv6 normalization**：当前用 `InetAddress.getHostAddress()` 字符串比较，未做 `::ffff:0:0/96` IPv4-mapped 归一化；玩家 IPv4/IPv6 切换会被误拒（需要重新走 token issue 路径，无安全风险但 UX 差）
+- **IPv6 normalization**：WS 侧仍是 `InetAddress.getHostAddress()` 裸字符串比较，未做 `::ffff:0:0/96` IPv4-mapped 归一化；玩家 IPv4/IPv6 切换会被误拒（需要重新走 token issue 路径，无安全风险但 UX 差）。HTTP 侧已在比对前归一（含 IPv4-mapped 与回环互认），两侧口径统一是待办
 - **反代 X-Forwarded-For**：未在 IP 绑定路径读 XFF（避免反代伪造 XFF 头突破 IP 绑定）。这意味着所有公网部署（反代→插件）下 boundIp 永远是反代本机 IP，绑定退化为「同一反代来源」。需要服主在反代层（nginx `limit_req_zone $binary_remote_addr`）做真实 IP 级限流弥补
 - v1.x 修复方向：trusted-proxies 白名单内的 XFF 头才信任，配合 §7.4 trusted-proxies 联动
 
@@ -143,7 +155,7 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 
 - JSON 严格模式解析（拒绝尾随逗号、注释）
 - 消息最大 1 MiB，超过立即关闭连接
-- 解析失败累计 3 次 → close
+- 畸形帧（envelope 解析失败 / 缺 `op`）按连接累计，达 **3 次 → close 1008**（`WebServer.handleMessage` 在 `WsContext` attribute 上计数；任何一帧解析成功即清零）。计数与 `SessionRateLimiter` 正交——畸形帧根本进不到 dispatcher，不占用 40msg/2s 窗口
 - 所有未认证状态下的消息除 `auth`/`ping` 外 → 拒绝
 - 每消息记录 `sessionId + opId`，审计日志可关联到 wall_id（通过 session 持有的 wall）
 
@@ -158,13 +170,15 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 
 这与 token 暴力枚举限流（§2.4 `TokenRateLimiter`，per-IP 10 次/分钟 → close 4429）是正交的两套限流。
 
-**覆盖面（重要）**：`SessionRateLimiter.allow()` 在 **8 个 dispatcher** 内调用 —— `element.* / layer.* / canvas.* / timeline.* / keyframe.*`（EditOpDispatcher）、`variable.*`、`variable.alias.*`、`schedule.*`、`rail.*`、`script.*`、**`wall.*`**、**`template.*`**。**不计入**限流窗口的消息：`ping`（无副作用 echo）、`brush.*`（笔触流畅性考量，靠 `MAX_BRUSH_POINTS_PER_STROKE` / `MAX_ACTIVE_STROKES` 内存上限兜底）。
+**覆盖面（重要）**：`SessionRateLimiter.allow()` 在 **8 个 dispatcher** 内调用 —— `element.* / layer.* / canvas.* / timeline.* / keyframe.*`（EditOpDispatcher）、`variable.*`、`variable.alias.*`、`schedule.*`、`rail.*`、`script.*`、**`wall.*`**、**`template.*`**，外加笔刷路径的 **`brush.end`**。**不计入**限流窗口的消息：`ping`（无副作用 echo）、`brush.start` / `brush.point` / `brush.cancel`（笔触流畅性考量，靠 `MAX_BRUSH_POINTS_PER_STROKE` / `MAX_ACTIVE_STROKES` 内存上限兜底）。
 
 > **`wall.*` / `template.*` 于 0.9.17 纳入限流**（此前豁免，理由记作「各有 ACL + DB 写锁兜底」）。该理由对 `wall.refresh` 不成立：它每收到一条消息就往主线程 `runTask` 一次 `FrameDeployer.repairFor`，内部是 `world.getEntitiesByClass(ItemFrame.class)` **全世界实体扫描 + 逐格补方块**，既不落 DB 也没有任何写锁可兜底。于是任意持 `canvas.edit`（default=true）的玩家开一个 session 后即可让主线程每秒跑上百次全世界扫描把 TPS 打崩。`template.save` 同理含磁盘写 + DB 写却不限流。
 >
 > `wall.refresh` **另加 per-wall 冷却 1 次/秒**（`WallOpDispatcher.REFRESH_COOLDOWN_MS`）：40msg/2s 的通用窗口对「每次都全世界扫描」这种量级仍然过宽。冷却期内的 refresh 直接返回 `RATE_LIMITED`，不入主线程队列。
 
-`brush.*` 仍豁免——那是笔触体验的既定取舍，不是遗漏（见 PROPOSAL「工具不是保姆」性能哲学）。即「反复超限 → close 1008」现对编辑类 + `wall.*` + `template.*` 生效。
+> **`brush.end` 于 0.9.17 纳入限流**。`brush.start` / `brush.point` / `brush.cancel` 仍豁免——那是笔触体验的既定取舍，不是遗漏（见 PROPOSAL「工具不是保姆」性能哲学）。但 `brush.end` 不属于「高频低消息」那一类：它一次要跑最多 5000 点的 RDP 简化（最坏 O(n²)）+ 一次全量 `ProjectSnapshot` 深拷贝入 undo 栈 + 往图层永久追加一个元素。`MAX_ACTIVE_STROKES` 只挡「start 了不 end」，挡不住 start→点满→end 的循环，故这一个 op 走通用 40msg/2s 窗口。正常落笔一秒撑死几笔，够用。
+>
+> 即「反复超限 → close 1008」现对编辑类 + `wall.*` + `template.*` + `brush.end` 生效。
 
 ---
 
@@ -246,7 +260,10 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 
 **b) MIME 双重校验**
 
-- 第一层：HTTP `Content-Type` 必须在 `config.images.allowed-mime`（默认 `image/png` / `image/jpeg` / `image/webp`）
+- 第一层：HTTP `Content-Type` 必须在 `config.images.allowed-mime`（默认 `image/png` / `image/jpeg` / `image/webp`），
+  并且本机 ImageIO 必须真有对应解码器——**标准 JDK 不带 WebP 解码器**，所以除非服主自行装了
+  WebP 的 ImageIO 插件，否则 webp 会在这一层被拒（错误文案直说"本服无法解码该格式"），
+  而不是白名单放行后死在解码那步报一句笼统的"图片解码失败"
 - 第二层：**读首 16 字节 magic 校验真实类型**
   - PNG: `89 50 4E 47 0D 0A 1A 0A`
   - JPEG: `FF D8 FF`
@@ -383,18 +400,16 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 
 | 节点 | 默认 | 说明 |
 | --- | --- | --- |
-| `canvas.use` | true | 使用任何功能（基础总开关） |
+| `canvas.use` | true | 使用任何功能（基础总开关；挂在 `/canvas` 根节点上，收掉即整族命令不可见） |
 | `canvas.edit` | true | 开启编辑会话（`/canvas edit` / 持 Wand 交互） |
-| `canvas.wand` | true | 领取 Canvas Wand 物品 |
-| `canvas.commit` | true | 提交（保存）招牌 |
+| `canvas.wand` | true | 领取 Canvas Wand 物品（`/canvas wand`） |
 | `canvas.bench` | op | 跑服务端渲染 benchmark（`/canvas bench`） |
 | `canvas.upload` | true | 通过 `/api/upload` 上传图片 |
 | `canvas.upload.bypass-limit` | op | 跳过每画 / 每日 / 总磁盘配额检查 |
 | `canvas.delete.own` | true | 删除自己的画（`/canvas delete <wall_id>`） |
 | `canvas.delete.any` | op | 删除任何画 |
 | `canvas.alias.any` | op | 修改任意 wall 的 alias（默认 wall.alias WS op 只允许 owner 改） |
-| `canvas.admin` | op | 管理命令（stats / cleanup / reload） |
-| `canvas.admin.bypass-limit` | op | 无视限流与画布上限 |
+| `canvas.admin` | op | 管理命令（stats / diagnose / cleanup / reload），以及 `/api/walls` 看全服清单 |
 | `canvas.admin.force-break` | op | 允许破坏插件保护的成品物品框 / 支撑方块 |
 | `canvas.admin.bypass-lock` | op | 绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open |
 | `canvas.template.save` | true | 把当前 wall 发布为创意工坊模板 |
@@ -408,7 +423,7 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 | `canvas.var.write.any` | op | 在任意 wall 上修改用户变量 |
 | `canvas.var.delete.own` | true | 删除自己 wall 上的 user/* 变量 |
 | `canvas.var.delete.any` | op | 删除任意 wall 上的用户变量 |
-| `canvas.var.bind` | op | 让 user/* 变量被插件 push 接管（敏感操作） |
+| `canvas.var.bind` | op | 让 user/* 或 userglobal/* 变量被插件 push 接管（敏感操作，全局变量同样要这个节点） |
 | `canvas.var.command` | op | 用 `/canvas var` 命令族 |
 | `canvas.var.global.create` | true | 创建全局用户变量（`userglobal/*`，跨 wall 共享） |
 | `canvas.var.global.write.own` | true | 修改自己创建的全局用户变量 |
@@ -426,6 +441,7 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 | `canvas.script.edit` | true | 给自己能打开的墙编排积木脚本（基础脚本权限） |
 | `canvas.script.trigger.global` | true | 使用全服事件触发器（进服 / 被击杀 / 退服 / 右键墙） |
 | `canvas.script.sound` | true | 在脚本里用"播放声音 / 粒子"积木 |
+| `canvas.script.broadcast` | true | 在脚本里用"发消息 / 弹标题"积木的**全服广播**档（`target=all`） |
 | `canvas.script.command` | op | 在脚本里用"执行命令模板"积木（危险面，见 §13.1） |
 
 Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
@@ -440,6 +456,7 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
 | 场景 | 检查点 |
 | --- | --- |
+| `/canvas` 任意子命令 | `canvas.use`（根节点 gate，收掉即整族命令不可见） |
 | `/canvas edit` | `canvas.edit` |
 | `/canvas wand` | `canvas.wand` |
 | `/canvas confirm` | `canvas.edit`（同开启会话的权限） |
@@ -447,8 +464,13 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 | `template.apply`（他人发布的用户模板） | `canvas.template.use-others`（内置模板 / 自己发布的模板无需此节点） |
 | `/canvas delete <wall_id>` | wall owner == 自己 且 `canvas.delete.own` / 或 `canvas.delete.any`；二次确认强制 30s |
 | 管理员命令 | `canvas.admin` |
-| 超出画布 `max-maps` | 需 `canvas.admin.bypass-limit` |
+| `GET /api/walls` | 必须带活跃 `sessionId`；默认只返回自己的墙，持 `canvas.admin` 才返全服 |
+| `GET /api/wall/{id}/preview.png` | 必须带活跃 `sessionId`；已锁定的墙非 owner 一律 403（`canvas.admin.bypass-lock` 除外） |
 | 破坏成品物品框 | 需 `canvas.admin.force-break`（否则 event cancel） |
+
+> **画布尺寸上限（`limits.canvas-max-maps`）没有 bypass 节点。** 早期表里的 `canvas.admin.bypass-limit`
+> 全仓零引用（定义了从没接线），服主收权限以为封了功能其实照用，已从 `paper-plugin.yml` 与本表移除。
+> 要放宽尺寸就改 `limits.canvas-max-maps` 本身。
 
 任何检查失败 → 返回 `PERMISSION_DENIED` + 审计记录。
 
@@ -495,11 +517,14 @@ server {
 
 插件配置 `web.context-path: "/canvas"` 配合。
 
-### 7.4 反代 IP 识别
+### 7.4 反代 IP 识别 —— 未实装
 
-- 插件信任 `X-Real-IP` 或 `X-Forwarded-For` **仅当请求源 IP 在 `web.trusted-proxies` 白名单**
-- 默认白名单为空 → 不信任任何代理头
-- 公网部署必须配置 `trusted-proxies: ["127.0.0.1", "::1"]`（反代在本机）
+**插件不读 `X-Real-IP` / `X-Forwarded-For`，也没有 `web.trusted-proxies` 这个配置键。** 早期版本的本节
+教服主去配它，那是个不存在的键，写了不生效。真实行为见 §2.5「已知限制」：反代部署下
+`Session.boundIp` 恒为反代本机 IP，会话 IP 绑定退化成「同一反代来源」。
+
+要拿到玩家真实 IP 级的防护，请在反代层做（nginx `limit_req_zone $binary_remote_addr`）。
+信任白名单 + XFF 解析是 v1.x 方向，见 §2.5。
 
 ---
 
@@ -522,6 +547,8 @@ server {
 | `SESSION_CONFIRM` | `/canvas confirm` 提交 | player, session |
 | `SESSION_CANCEL` | `/canvas cancel` 取消 | player, session |
 | `TOKEN_RATE_LIMIT_EXCEEDED` | per-IP token 限流超限（close 4429） | ipHash（仅 SHA-256，不存原文 IP） |
+| `SESSION_RATE_LIMIT_DISCONNECT` | 1 分钟内反复超限达 5 次，主动断连（close 1008，§3.3） | player, session, reason |
+| `SESSION_MALFORMED_FRAME_DISCONNECT` | 连续 3 个畸形帧，主动断连（close 1008，§3.2） | player, session, reason, strikes |
 
 **权限 / wall / 上传：**
 
@@ -562,9 +589,13 @@ server {
 
 ### 8.2 访问控制
 
-- 审计日志仅 `canvas.admin` 可通过 `/canvas audit` 查阅
 - 日志**不可在游戏内删除**；如需删除，DB 层外部操作
-- 保留 90 天（可配）
+- **保留期默认 90 天**，由 `database.audit-retention-days` 配（`0` = 永久保留，自担 DB 膨胀）。
+  清理由 `AuditLog` 自己驱动：写入时若距上次清理超过 6 小时就跑一次
+  `DELETE FROM audit_log WHERE ts < ?`（`idx_audit_ts` 索引直接命中）。不起独立调度器，
+  与 `BackupReaper` 同一条「启动/顺带清一次，不常驻」的思路
+- **游戏内查阅命令未实装**：没有 `/canvas audit`。要看审计记录请直接查 `data.db` 的 `audit_log` 表
+  （或用外部 SQLite 工具）。早期本节写的「仅 `canvas.admin` 可通过 `/canvas audit` 查阅」是个从未落地的承诺
 
 ---
 
@@ -674,8 +705,11 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 |---|---|---|
 | playerJoin / playerKill / playerQuit / rightClickWall（全局语义） | `canvas.script.trigger.global` | **true** |
 | playSound / playParticle | `canvas.script.sound` | **true** |
+| sendMessage / showTitle 且 `target=all`（全服广播） | `canvas.script.broadcast` | **true** |
 | runCommand | `canvas.script.command` | **op** |
 | 其余（setVariable / setElementProperty / playTimeline / wait / if 等） | 无（仅基础 `canvas.script.edit`） | **true** |
+
+`sendMessage` / `showTitle` 的 `target=trigger` 档只发给触发脚本的那名玩家，不需要广播面；只有 `target=all` 会遍历全服在线玩家，因此单独给服主一个可撤回的旋钮（默认开，不破坏已有规则；服主嫌吵可以整服收回）。
 
 权限面在**保存时检查**，不在执行时二次查。Owner 失权后已保存的规则照跑（语义与 wall 锁定一致），服主可手动 disable 规则。
 
@@ -688,6 +722,8 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 **实际缓解（代码：`ScriptOpDispatcher.java`）**：
 
 - `script.create` / `script.update` / `script.delete` / `script.enable` / `script.test` 全部先过 `canvas.script.edit` 基础权限，再按规则内容逐积木检查附加面（§13.3）。
+- **`script.enable` 是被禁用规则的最后一道闸**：`enabled=true` 方向必须对**库里现存的那条规则**重跑一遍 `requiredFacets` + 面检查（缺面拒 `PERMISSION_DENIED`），否则「服主收回 `canvas.script.command` → 玩家把旧规则重新打开」就能绕过命令面；`enabled=false` 方向（关规则）不查面，永远放行——关闭危险规则不该被权限拦住。
+- **守卫测试**：`ScriptOpFacetGuardTest` 对 `ScriptOpDispatcher` 每个改动规则内容 / 启用态的 op 逐个断言面检查真的被走到，并用反射清点 `handleXxx` 方法集合——新增 op 不登记就红，防「复制了兄弟 handler 的骨架却没复制它的闸」这类回归。
 - 鉴权基准：caller 必须能打开该 wall（open 路径鉴权）——非 owner 且 wall 已锁定 → open 时已拒 FORBIDDEN；后端编辑 op 路径不读 lock（lock-state §3.6 架构纪律）。
 - 条件语法保存期预检：`if.condition` 字段在 create/update 时过 `ConditionEvaluator.checkSyntax` parse-only 检查，语法错误立即拒 `SCRIPT_INVALID`（返回 parse 错误首行 + blockId 定位），不等运行期静默 false。
 
@@ -725,6 +761,32 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 | `SCRIPT_COMMAND_EXECUTED` | runCommand 积木执行命令（不限频，每次记） | templateId, rendered 全文, ruleKey |
 
 `log` 动作（`Action.Log`）**不进 audit**（玩家级高频动作进 audit 会刷库）；仅进 plugin logger INFO 级别。
+
+### 13.8 脚本改变量的越权面
+
+**威胁**：变量族积木（`setVariable` / `incrementVariable` / `copyVariable` / `appendVariable` /
+`setRandomVariable` / `scaleVariable` / `roundVariable`）的目标变量名是玩家在编辑器里自由填的字符串，
+且脚本执行身份是"墙"而不是某个玩家——不做限制的话，任何能编排该墙脚本的玩家（`canvas.script.edit`
+默认开）都能写字面 `userglobal/别人的变量` 覆写他人全服变量并落库，或写 `user:<别人的墙>/key`
+跨墙改数据，绕开 `variable.*` WS op 那一整套 owner ACL（§9 / `dynamic-data.md §17.3`）。
+
+**实际缓解（代码：`ActionExecutor.checkWritable` / `checkReadable`）**：所有变量族积木在写之前过一次
+目标校验，不通过就出 error step（链不断、不落库）：
+
+| 目标形态 | 判定 |
+|---|---|
+| `user/X`（本墙 user 变量，注入成 `user:<本墙>/X`） | 放行——脚本的正常用法 |
+| `user:<别的墙>/X` | 拒（跨墙写） |
+| `userglobal/X` | 仅当该变量的 owner == 本墙 owner 才放行；owner 查不到（墙记录缺失 / 变量无主）一律拒 |
+| `system` / `system:*` / `papi` / `scoreboard` / `schedule` / `schedule:*` | 拒（Provider 自有数据，脚本写了下一轮也会被覆盖，还能拿来伪造系统值） |
+| 其他（插件自己的 namespace，如 `bedwars/score`） | 放行（插件集成用；`setValue` 只能改已存在的变量，建不出新变量） |
+
+读侧同款：`copyVariable` 的来源变量、`${var:...}` 占位符都不允许读别的墙的 per-wall 变量
+（`user:` / `system:` / `schedule:` 带别人 wallId 的形态），命中即当作"查无此变量"走 fallback 链。
+
+脚本路径**没有管理员 override**——这条链上没有"发起人"可查权限（规则可能由 timer / 游戏事件触发，
+发起人早就下线了），身份只能是墙本身。要跨墙 / 跨 owner 改变量，走 `/canvas var` 命令或
+`variable.*` WS op，那两条路才有真正的 caller 身份可以查 `.any` 节点。
 
 ---
 

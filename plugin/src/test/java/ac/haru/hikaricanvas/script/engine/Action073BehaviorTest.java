@@ -302,7 +302,7 @@ class Action073BehaviorTest {
     }
 
     /**
-     * target=trigger，无触发玩家（TRIGGER_DETAIL ThreadLocal 为空）→ 跳过，step ok。
+     * target=trigger，无触发玩家（TRIGGER_PLAYER ThreadLocal 为空）→ 跳过，step ok。
      */
     @Test
     void showTitle_trigger_noTriggerPlayer_skipOk() {

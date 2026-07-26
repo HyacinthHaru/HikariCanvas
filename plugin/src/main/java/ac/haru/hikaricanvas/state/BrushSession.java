@@ -176,7 +176,14 @@ final class BrushSession {
 
     // ---------- brush.point ----------
 
-    /** brush.point：累加点到 buffer。空 patch（不 emit），客户端不期待 ack。 */
+    /**
+     * brush.point：累加点到 buffer。空 patch（不 emit），客户端不期待 ack。
+     *
+     * <p><b>不产脏区，游戏内看不到落笔过程</b>（{@code docs/protocol.md §5.9} 已同步）：
+     * 投影管线渲染的是 {@link ProjectState}，而在飞的笔触只存在于这里的 {@code StrokeBuffer}，
+     * 还没进 state —— 就算这里报了 dirty bbox，重渲那块也画不出这条线。浏览器里的实时预览
+     * 是前端本地画的。要做到游戏内实时跟笔，得让 compositor 认识在飞的 stroke，未做。</p>
+     */
     EditSession.OpResult appendBrushPoints(String strokeId, List<BrushPoint> points) {
         StrokeBuffer buf = strokes.get(strokeId);
         if (buf == null) return err("INVALID_STROKE", "unknown strokeId: " + strokeId);

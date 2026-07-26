@@ -432,5 +432,7 @@ public final class ProjectState {
         this.activeTimelineId =
                 (snap.activeTimelineId() != null && containsTimeline(snap.activeTimelineId()))
                         ? snap.activeTimelineId() : null;
+        // per-wall 补间帧率也归快照管：replaceProject 会改它，undo 时不还原就是半回滚
+        this.tweenFps = snap.tweenFps();
     }
 }

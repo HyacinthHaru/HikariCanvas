@@ -167,6 +167,50 @@ class VariableStoreTest {
         assertEquals(0, store.listByNamespace("absent").size());
     }
 
+    /**
+     * 删最后一个变量会把空桶从 byNamespace 摘掉（防 per-wall namespace 的桶永久驻留），
+     * 但"判空 + 摘桶"必须对并发 create 原子。
+     *
+     * <p>并发压力版：一个线程反复删、另一个线程反复建，结束后 store 里还剩的变量必须
+     * 都能被 listByNamespace 看到。早先用 {@code byNamespace.remove(ns, bucket)} 两参版并
+     * 注释说"并发 create 已重新填入时值不等会跳过"——不成立：并发 create 拿到的是同一个
+     * Set 对象引用，equals 恒真，照删不误，倒排索引就丢桶了（listByNamespace 漏显、
+     * 删墙漏清 user 变量 → 内存 + DB 行泄漏）。</p>
+     */
+    @Test
+    void namespaceBucket_removalIsAtomicAgainstConcurrentCreate() throws Exception {
+        final String ns = "user:w-race001";
+        final int rounds = 2000;
+        Thread deleter = new Thread(() -> {
+            for (int i = 0; i < rounds; i++) {
+                try {
+                    store.create(ns, "tmp" + i, VarType.STRING, null, null);
+                    store.delete(ns + "/tmp" + i);
+                } catch (VariableException ignored) {
+                    // 与另一线程撞名 / 已删 —— 本测试只关心索引一致性
+                }
+            }
+        });
+        Thread creator = new Thread(() -> {
+            for (int i = 0; i < rounds; i++) {
+                try {
+                    store.create(ns, "keep" + i, VarType.STRING, null, null);
+                } catch (VariableException ignored) {
+                }
+            }
+        });
+        deleter.start();
+        creator.start();
+        deleter.join();
+        creator.join();
+
+        long alive = store.listAll().stream()
+                .filter(v -> v.namespace().equals(ns))
+                .count();
+        assertEquals(alive, store.listByNamespace(ns).size(),
+                "倒排索引与 store 必须一致——丢桶会让这些变量在 listByNamespace 里凭空消失");
+    }
+
     @Test
     void listByWall_followsMarkedReferences() {
         store.create("bedwars", "score", VarType.NUMBER, null, null);

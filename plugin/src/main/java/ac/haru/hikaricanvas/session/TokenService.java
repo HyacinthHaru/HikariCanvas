@@ -21,7 +21,8 @@ import java.util.logging.Logger;
  *   <li>长度：32 字节 → URL-safe base64 无 padding，43 字符</li>
  *   <li>主存：内存 {@link ConcurrentMap}；原文绝不落盘</li>
  *   <li>审计：SHA-256 入 {@link AuditLog}，配合 {@code AUTH_ISSUED} / {@code AUTH_OK} / {@code AUTH_FAILED} 事件</li>
- *   <li>TTL：默认 15 分钟，可配置</li>
+ *   <li>TTL：首发 token 默认 15 分钟，可配置（{@code session.token-ttl-minutes}）；
+ *       {@link #rotate} 出的重连 token 走 {@link #reconnectTtlMillis()}，必须覆盖会话存活上限</li>
  *   <li>单次使用：{@link #consume(String)} 成功即永久 mark used</li>
  * </ul>
  *
@@ -43,14 +44,37 @@ public final class TokenService {
     private final Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
     private final Base64.Decoder decoder = Base64.getUrlDecoder();
     private final ConcurrentMap<String, Record> tokens = new ConcurrentHashMap<>();
+    /** 重连 token TTL 的硬顶（24h）。挡住 idle-minutes: 0（永不超时）算出的百年 TTL。 */
+    static final long MAX_RECONNECT_TTL_MILLIS = 24L * 60L * 60L * 1000L;
+
+    /**
+     * 没告诉本类会话存活上限时，重连 token 用的兜底 TTL（12 小时）。
+     * 足够盖住默认的 idle 30min + grace 5min 以及绝大多数服主的加长配置。
+     */
+    static final long DEFAULT_SESSION_LIFETIME_MILLIS = 12L * 60L * 60L * 1000L;
+
     private final AuditLog auditLog;
     private final Logger log;
     private final long defaultTtlMillis;
+    /** 会话可能的最长存活时间（idle + ws-grace），供 {@link #reconnectTtlMillis()} 推算。 */
+    private final long sessionLifetimeMillis;
 
+    /** 常用装配：会话存活上限走 {@link #DEFAULT_SESSION_LIFETIME_MILLIS} 兜底值。 */
     public TokenService(AuditLog auditLog, Logger log, long defaultTtlMillis) {
+        this(auditLog, log, defaultTtlMillis, DEFAULT_SESSION_LIFETIME_MILLIS);
+    }
+
+    /**
+     * @param defaultTtlMillis      首发 token TTL（{@code session.token-ttl-minutes}）
+     * @param sessionLifetimeMillis 会话存活上限（{@code idle-minutes + ws-grace-minutes}），
+     *                              用于给重连 token 定 TTL，见 {@link #reconnectTtlMillis()}
+     */
+    public TokenService(AuditLog auditLog, Logger log,
+                        long defaultTtlMillis, long sessionLifetimeMillis) {
         this.auditLog = auditLog;
         this.log = log;
         this.defaultTtlMillis = defaultTtlMillis;
+        this.sessionLifetimeMillis = sessionLifetimeMillis;
     }
 
     /**
@@ -65,20 +89,50 @@ public final class TokenService {
 
     /**
      * WS auth 成功后 rotate 签发新 token 供后续断线重连使用（{@code docs/security.md §2.2}）。
-     * 语义与 {@link #issue} 完全相同，只是审计事件改为 {@code AUTH_ROTATED} 以便溯源
-     * 「初次签发 vs rotate 签发」。
+     * 语义与 {@link #issue} 相同，只是审计事件改为 {@code AUTH_ROTATED} 以便溯源
+     * 「初次签发 vs rotate 签发」，且 <b>TTL 走 {@link #reconnectTtlMillis()}</b>。
+     *
+     * <p><b>为什么重连 token 不能跟首发 token 共用 15 分钟：</b> rotate 只在每次 auth 成功
+     * 时发生一次，签发时刻就是「上次 auth 时刻」，此后整个会话期间不再刷新。而会话本身
+     * 可以活得久得多（ws-grace 5 分钟 + idle 30 分钟）。于是「编辑超过 15 分钟 → 网络闪断 →
+     * 前端拿着早就过期的 reconnectToken 去 auth」必被拒，玩家只能回游戏重跑 /canvas open——
+     * 而这恰恰是长时间创作最容易碰上的场景。首发 token 是「换页面用的一次性凭证」，
+     * 短 TTL 合理；重连 token 是「会话存活期内的续命凭证」，TTL 必须覆盖会话可能的存活上限。</p>
      */
     public String rotate(UUID playerUuid, String playerName, String sessionId) {
-        return issueInternal(playerUuid, playerName, sessionId, "AUTH_ROTATED");
+        return issueInternal(playerUuid, playerName, sessionId, "AUTH_ROTATED", reconnectTtlMillis());
+    }
+
+    /**
+     * 重连 token 的 TTL：至少覆盖 {@code session.idle-minutes} 上限，再留一点余量。
+     *
+     * <p>没有独立配置项——它不是给服主调的旋钮，而是「会话还活着，重连凭证就该还有效」
+     * 这条不变量的实现细节。取 {@code max(首发 TTL, 会话存活上限)} 并封顶 24 小时
+     * （idle-minutes 配 0 = 永不超时时会得到一个百年的 Duration，不能照搬）。</p>
+     *
+     * <p><b>拉长 TTL 不放大攻击面</b>：token 仍是一次性的，且必须指向一个还活着、
+     * 非 CLOSING 的 session，还要过会话 IP 绑定。真正的有效期是
+     * {@code min(token TTL, 会话剩余寿命)}——会话一 cancel / forget，token 立刻作废。
+     * 所以让 token TTL 宽一点、由会话寿命当真正的闸，才是对的分工。</p>
+     */
+    long reconnectTtlMillis() {
+        long floor = sessionLifetimeMillis;
+        long capped = Math.min(floor, MAX_RECONNECT_TTL_MILLIS);
+        return Math.max(defaultTtlMillis, capped);
     }
 
     private String issueInternal(UUID playerUuid, String playerName, String sessionId, String auditEvent) {
+        return issueInternal(playerUuid, playerName, sessionId, auditEvent, defaultTtlMillis);
+    }
+
+    private String issueInternal(UUID playerUuid, String playerName, String sessionId,
+                                 String auditEvent, long ttlMillis) {
         byte[] bytes = new byte[32];
         rng.nextBytes(bytes);
         String token = encoder.encodeToString(bytes);
 
         long now = System.currentTimeMillis();
-        tokens.put(token, new Record(playerUuid, sessionId, now, defaultTtlMillis, false));
+        tokens.put(token, new Record(playerUuid, sessionId, now, ttlMillis, false));
 
         auditLog.record(
                 auditEvent,
@@ -88,7 +142,7 @@ public final class TokenService {
                 null,
                 Map.of(
                         "token_sha256", sha256Hex(token),
-                        "ttl_ms", defaultTtlMillis));
+                        "ttl_ms", ttlMillis));
 
         return token;
     }

@@ -73,6 +73,36 @@ public final class CanvasCompositor {
     /** 静态 logger 用于 {@code maybeInterpolateText} 静态路径。 */
     private static final Logger LOG = Logger.getLogger(CanvasCompositor.class.getName());
 
+    /** 残留占位符告警的节流窗口。与 {@code GlowRenderer.WARN_INTERVAL_NANOS} 同口径。 */
+    private static final long RESIDUAL_WARN_INTERVAL_NANOS = 60_000_000_000L;  // 60s
+    /** wallId → 上次告警的 nanoTime。 */
+    private static final java.util.concurrent.ConcurrentMap<String, Long> LAST_RESIDUAL_WARN =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 残留占位符告警，每面墙每 60s 最多一条。
+     *
+     * <p>写坏的 <code>${var:</code>（比如行尾缺 <code>}</code>）会让**每一帧**都撞到这里，
+     * 而墙是持续重绘的——原来无节流，任何玩家在文本里打一个残缺占位符就能把服务器日志刷爆。
+     * 按 wallId 分桶是为了多面墙同时出问题时不互相掩盖。</p>
+     */
+    private static void warnResidualThrottled(String wallId) {
+        String key = wallId == null ? "<no-wall>" : wallId;
+        long now = System.nanoTime();
+        // compute 对同一 key 是原子的：多个渲染线程同时撞上时只有一个会拿到 shouldWarn。
+        boolean[] shouldWarn = {false};
+        LAST_RESIDUAL_WARN.compute(key, (k, last) -> {
+            if (last != null && now - last < RESIDUAL_WARN_INTERVAL_NANOS) return last;
+            shouldWarn[0] = true;
+            return now;
+        });
+        if (shouldWarn[0]) {
+            LOG.warning("[CanvasCompositor] wall " + key + ": residual ${var:} after interpolate;"
+                    + " replaced with " + VariableInterpolator.UNRESOLVED
+                    + "（该墙的同类告警 60 秒内不再重复）");
+        }
+    }
+
     private final PaletteLut paletteLut;
     private final RenderContext ctx;
     /** 图片加载器；null = 所有 ImageElement 走占位。 */
@@ -236,6 +266,11 @@ public final class CanvasCompositor {
                 ? new HashSet<>() : null;
         try {
             applyHints(g);
+            // 显式把 clip 设成整块画布：renderer 侧（GlowRenderer / ImageRenderer）靠
+            // getClipBounds 知道画布多大，才能把巨型中间缓冲区裁到可见范围内再分配。
+            // BufferedImage 的 Graphics2D 默认 clip 是 null，读不出尺寸。设 clip 不改任何像素
+            // ——画布外本来就画不出去。
+            g.setClip(0, 0, widthPx, heightPx);
             // 背景：background 是 Fill 联合类型（solid / linear / radial），
             // 由 FillPaintBuilder.fillToPaint 渲染——bbox 取全画布以便渐变铺满。
             g.setPaint(FillPaintBuilder.fillToPaint(canvas.background(), 0, 0, widthPx, heightPx));
@@ -383,8 +418,7 @@ public final class CanvasCompositor {
             // 闭合大括号设为可选 `}?`，让未闭合的 `${var:foo`（行尾缺 `}`）也被兜底替换，
             // 否则残缺占位符会原样漏到 wall 显字面字符串。[^}]* 贪心吃到下一个 } 或行尾。
             rendered = rendered.replaceAll("\\$\\{var:[^}]*\\}?", VariableInterpolator.UNRESOLVED);
-            LOG.warning("[CanvasCompositor] residual ${var:} after interpolate; replaced with "
-                    + VariableInterpolator.UNRESOLVED);
+            warnResidualThrottled(wallId);
         }
         // 替换文本相同 → 不分配新 record（极端情况：占位符全 resolve 出与原字符串等同的文本，罕见）
         if (src.equals(rendered)) return e;
@@ -467,6 +501,9 @@ public final class CanvasCompositor {
         Graphics2D eg = buf.createGraphics();
         try {
             applyHints(eg);
+            // clip 要在 translate 之前设（此刻还是 buffer 自身坐标）；之后 renderer 侧
+            // getClipBounds 拿到的就是反变换回原画坐标的可见范围
+            eg.setClip(0, 0, clipW, clipH);
             // buf 局部 (0,0) 对应原画 (clipX, clipY)，drawElementBody 仍用原画坐标
             eg.translate(-clipX, -clipY);
             if (e.rotation() != 0) {
@@ -504,6 +541,7 @@ public final class CanvasCompositor {
         Graphics2D lg = buf.createGraphics();
         try {
             applyHints(lg);
+            lg.setClip(0, 0, widthPx, heightPx);   // 同 rasterizeInto：把画布尺寸传给 renderer
             drawElementsTo(lg, elements, widthPx, heightPx,
                     interp, wallId, referencedAccumulator);
         } catch (RuntimeException | Error ex) {
@@ -551,6 +589,27 @@ public final class CanvasCompositor {
     // ---------- Graphics2D 设置（rendering.md §4.2）----------
     // 包级 static：供 TextRenderer.drawPixelatedGlyph 等 renderer 复用，保持 mask buffer 与
     // 主 buffer 渲染 hint 一致（关键：FRACTIONALMETRICS_OFF 保证像素字体 NN 路径稳定）
+
+    /**
+     * 读当前 Graphics2D 的可见范围（用户坐标系）。renderer 侧用它把中间缓冲区裁到画布内，
+     * 见 rendering.md §4.4 / §5.3。
+     *
+     * <p>{@code BufferedImage.createGraphics()} 的 clip 默认是 null，
+     * {@code getDeviceConfiguration().getBounds()} 又返回 {@code Integer.MAX_VALUE} 的假边界 ——
+     * 所以画布尺寸只能靠 {@link #applyHints} 旁边那句显式 {@code setClip} 传下来。拿不到就返
+     * {@code null}，调用方各自走面积上限兜底。</p>
+     *
+     * <p>有 rotation 时 {@code getClipBounds} 给的是反变换后的外接盒（超集），只会裁得更保守。</p>
+     */
+    static java.awt.Rectangle visibleBounds(Graphics2D g) {
+        try {
+            java.awt.Rectangle r = g.getClipBounds();
+            if (r == null || r.width <= 0 || r.height <= 0) return null;
+            return r;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
 
     static void applyHints(Graphics2D g) {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);

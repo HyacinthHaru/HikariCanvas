@@ -39,7 +39,10 @@ public final class FontMetricsTable {
 
     private FontMetricsTable() {}
 
-    /** 显式预加载（启动期由 HikariCanvas 调；test 可用 main classloader 直接读）。 */
+    /**
+     * 显式预热某字体的表。正常路径不需要调它——{@link #advance} 与
+     * {@link #serializeToJson} 都会惰性加载。留给测试和"想提前把 IO 做掉"的场景。
+     */
     public static void preload(String fontId) {
         load(fontId);
     }
@@ -130,13 +133,20 @@ public final class FontMetricsTable {
     }
 
     /**
-     * 把指定字体的 advance 表序列化为 JSON 字符串，供 WebServer
-     * {@code GET /api/font/metrics} 端点输出。表未加载 / 为 MISSING sentinel 返 null。
+     * 把指定字体的 advance 表序列化为 JSON 字符串，供 WebServer 的
+     * {@code GET /api/font/metrics} 与 {@code GET /fonts/{id}.metrics.json} 端点输出。
+     *
+     * <p>走 {@link #load} 惰性加载：内置字体的表此前只在后端首次渲染该字体时才进内存，
+     * 于是服务器刚起来的窗口期前端两条通道全 404、只能退回 canonical 排版——双端字距不一致。
+     * 这里主动加载，端点任何时候问都有答案。用户字体（{@link #registerRuntime} 注册的内存表）
+     * 命中 tables 缓存，不会触发 classpath IO。</p>
+     *
+     * <p>字体确实没有表（既无 classpath JSON 也没注册过）时返 null，调用方回 404。</p>
      */
     public static String serializeToJson(String fontId) {
         if (fontId == null) return null;
-        Table t = tables.get(fontId);
-        if (t == null || t == MISSING || t.baseSize <= 0) return null;
+        Table t = load(fontId);
+        if (t == MISSING || t.baseSize <= 0) return null;
         StringBuilder sb = new StringBuilder(t.advances.length * 8);
         sb.append("{\"fontId\":\"").append(fontId).append("\",")
           .append("\"baseSize\":").append(t.baseSize).append(",")

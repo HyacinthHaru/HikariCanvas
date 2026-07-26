@@ -278,7 +278,11 @@ public final class SessionManager {
         if (s.pos1() == null || s.pos2() == null) {
             return null;
         }
-        return wallResolver.resolve(s.pos1(), s.face(), s.pos2(), s.face());
+        // 两个角各传自己的朝向。原来两个参数都传 s.face()（那时 Session 只存一个 face
+        // 字段），于是 WallResolver 的 NORMAL_MISMATCH 判定——「两次点击打在朝向不同的
+        // 面上」——两边恒等、永远不成立，是死代码。玩家先点北墙再点东墙时不会被拦，
+        // 会拿两个不共面的角去算 bbox。
+        return wallResolver.resolve(s.pos1(), s.pos1Face(), s.pos2(), s.pos2Face());
     }
 
     // ---------- /canvas confirm ----------
@@ -338,8 +342,9 @@ public final class SessionManager {
             return new ConfirmResult.NotReady("please click both corners first");
         }
 
-        // 走 WallResolver；OCCUPIED 由 WallResolver 兼容处理
-        WallResolver.Result r = wallResolver.resolve(s.pos1(), s.face(), s.pos2(), s.face());
+        // 走 WallResolver；OCCUPIED 由 WallResolver 兼容处理。
+        // 两个角各传自己的朝向，让 NORMAL_MISMATCH 真正生效（见 previewWall 的说明）。
+        WallResolver.Result r = wallResolver.resolve(s.pos1(), s.pos1Face(), s.pos2(), s.pos2Face());
         if (r instanceof WallResolver.Result.Failed f) {
             return new ConfirmResult.WallFailed(f);
         }
@@ -1099,13 +1104,24 @@ public final class SessionManager {
         } finally {
             writeLock.unlock();
         }
-        // Bukkit / MapPool / WallRepo / renderer 全部在锁外
+        // Bukkit / MapPool / WallRepo / renderer 全部在锁外。
+        //
+        // **顺序要紧**：先删 walls 行、再放地图。原来反着来——先 releaseWall 把地图还回
+        // FREE 池，再 wallRepo.delete；而 delete 是吞异常的 void，删行失败时地图已经进了
+        // 池子，下一次 confirm 会把它借给新 wall，可 walls 行还在、还指着同一批 mapId
+        // → 两面墙共用地图互相覆盖像素（跨墙串台）。删行失败就整个中止，宁可留一面删不掉
+        // 的墙（玩家可以重试），也不能留一批同时属于两面墙的地图。
+        if (!wallRepo.delete(wallId)) {
+            log.severe("SessionManager.deleteWall: walls row delete failed for " + wallId
+                    + "; keeping its maps RESERVED to avoid handing them to another wall");
+            for (String id : forgottenIds) runForgetHooks(id);
+            return false;
+        }
         List<Integer> released = mapPool.releaseWall(wallId);
         // 清像素缓存，防 mapId 复用导致旧像素显示在新 wall。
         if (canvasRenderer != null && !released.isEmpty()) {
             canvasRenderer.invalidate(released);
         }
-        wallRepo.delete(wallId);
         auditLog.record("WALL_DELETE", null, null, null, null,
                 Map.of("wall_id", wallId, "released_maps", released.size()));
         for (String id : forgottenIds) runForgetHooks(id);
@@ -1445,8 +1461,10 @@ public final class SessionManager {
      *
      * <p>规则：</p>
      * <ul>
-     *   <li>{@link SessionState#ISSUED}：{@code now - createdAt > issuedTimeoutMs}
-     *       → {@code "issued-timeout"}（玩家 confirm 后迟迟不打开编辑器）</li>
+     *   <li>{@link SessionState#ISSUED}：{@code now - max(createdAt, lastActivityAt) > issuedTimeoutMs}
+     *       → {@code "issued-timeout"}（玩家 confirm 后迟迟不打开编辑器）。取 max 是因为
+     *       {@code /canvas open} 的幂等重用分支会重新签发 token 并 touchActivity，
+     *       起算点必须跟着新 token 走</li>
      *   <li>{@link SessionState#ACTIVE} + {@code wsDisconnectedAt > 0}：
      *       {@code now - wsDisconnectedAt > wsGraceMs} → {@code "ws-reconnect-timeout"}
      *       （断连超过宽限没回来）</li>
@@ -1457,6 +1475,23 @@ public final class SessionManager {
      * </ul>
      */
     public record ExpiredSession(String id, String reason) {}
+
+    /**
+     * {@link SessionState#ISSUED} 会话是否该被收（{@link #collectExpired} 用；抽出来便于单测）。
+     *
+     * <p>起算点取 {@code max(createdAt, lastActivityAt)}：{@code /canvas open} 命中幂等重用
+     * 分支时会 {@code touchActivity} 并<b>重新签发一个 token</b>，起算点必须跟着往后挪。
+     * 否则「open 之后忘了开浏览器，十几分钟后重跑 /canvas open 拿新链接」——最自然的自救动作——
+     * 会拿到一个转眼就随 session 一起被收掉的链接，而且看不出任何原因。</p>
+     *
+     * <p>ISSUED 态下 {@code lastActivityAt} 只会被 open 的重用分支推进
+     * （{@code touch} 走的是已认证路径，那时已经是 ACTIVE），所以这里等价于
+     * 「距最近一次签发过了多久」。</p>
+     */
+    static boolean issuedExpired(long now, long createdAt, long lastActivityAt,
+                                 long issuedTimeoutMs) {
+        return now - Math.max(createdAt, lastActivityAt) > issuedTimeoutMs;
+    }
 
     public List<ExpiredSession> collectExpired(
             long now, long issuedTimeoutMs, long wsGraceMs, long activeIdleMs) {
@@ -1469,7 +1504,7 @@ public final class SessionManager {
         for (Session s : byId.values()) {
             switch (s.state()) {
                 case ISSUED -> {
-                    if (now - s.createdAt() > issuedTimeoutMs) {
+                    if (issuedExpired(now, s.createdAt(), s.lastActivityAt(), issuedTimeoutMs)) {
                         out.add(new ExpiredSession(s.id(), "issued-timeout"));
                     }
                 }

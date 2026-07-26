@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
  *   <li>{@link #parse} —— {@code params.json}（JSON 数组）→ 声明列表；</li>
  *   <li>{@link #resolve} —— 声明 + 用户填值 → 校验过的 id→值 映射（缺省值回填 + 全类型校验，累计报错）；</li>
  *   <li>{@link #substitute} —— {@code project.json} 文本层单遍替换 {@code ${param}}（复用
- *       {@link Interpolator}，含 16KB 单值 / 1MB 累计上限）。</li>
+ *       {@link Interpolator}，含 16KB 单值上限 / 1MB 净膨胀上限）。</li>
  * </ol>
  *
  * <p><b>为何是纯文本替换（D3）：</b>参数化不挑字段。数值字段以字符串形态写占位符
@@ -45,6 +45,29 @@ public final class PackParamResolver {
     /** 整数字面量（含负号），供 int 类型的字符串填值解析。 */
     private static final Pattern INT_NUMERIC = Pattern.compile("^-?\\d+$");
 
+    /**
+     * {@code params.json} 里 {@code pattern} 字段的最大长度。正则本体来自不可信 pack，
+     * 长度先卡一道，避免把病态巨型正则送进 {@link Pattern#compile}。
+     */
+    static final int MAX_PATTERN_LEN = 256;
+
+    /**
+     * 单次正则匹配允许消耗的字符读取步数。正则引擎每读一个字符计一步，超限即中止。
+     *
+     * <p>不可信 pack 可以同时提供正则与被匹配串（{@code default} 值就够了，纯导入即触发），
+     * 于是 {@code (a+)+$} 这类经典灾难回溯能把 Jetty 工作线程钉死、CPU 打满。步数上限把
+     * 指数级回溯变成"跑一会儿就放弃"，且是确定性的——不依赖超时线程，也不会因机器快慢飘。
+     * 正常正则匹配一条 ≤16 KiB 的串远用不到这个量级。</p>
+     */
+    static final int MAX_MATCH_STEPS = 200_000;
+
+    /**
+     * 合法的参数类型全集。1.0 起冻结的契约——**不要往里加**，加了会让已导出的用户 pack
+     * 在旧版本插件上打不开。这里只用来在解析期拒掉缺失 / 拼错的 type。
+     */
+    private static final java.util.Set<String> VALID_TYPES = java.util.Set.of(
+            "string", "text", "int", "float", "bool", "color", "enum", "font");
+
     private PackParamResolver() {
     }
 
@@ -61,7 +84,13 @@ public final class PackParamResolver {
      * 其余字段映射为 {@link TemplateParam}（record 上有 {@code @JsonIgnoreProperties(ignoreUnknown)}，
      * 条目里的 {@code id} 被记录映射无害忽略，故这里单独抽 id）。
      *
-     * @throws CanvasImportException {@code IMPORT_MALFORMED} —— JSON 坏、非数组、条目非对象或缺 id
+     * <p>{@code type} 同样必填且必须在 {@link #VALID_TYPES} 内。缺 type 的 pack 以前能顺利注册进
+     * Gallery，直到套用时才在类型 switch 上 NPE——HTTP 导入退化成 500、WS {@code template.apply}
+     * 更糟（一帧回音都没有，前端只能挂等超时）。在解析期就拒掉，报错也说得清是哪个参数。
+     * 注意这不是给类型体系加约束：null / 拼错的值本来就不在契约里。</p>
+     *
+     * @throws CanvasImportException {@code IMPORT_MALFORMED} —— JSON 坏、非数组、条目非对象、
+     *         缺 id，或 type 缺失 / 不在合法取值内
      */
     public static List<ParamDef> parse(byte[] paramsJson) throws CanvasImportException {
         JsonNode root;
@@ -90,15 +119,21 @@ public final class PackParamResolver {
                 throw new CanvasImportException("IMPORT_MALFORMED",
                         "params.json 参数 '" + id + "' 映射失败: " + e.getMessage());
             }
+            if (param.type() == null || !VALID_TYPES.contains(param.type())) {
+                throw new CanvasImportException("IMPORT_MALFORMED",
+                        "params.json 参数 '" + id + "' 的 type 缺失或非法: " + param.type()
+                                + "（可用: string/text/int/float/bool/color/enum/font）");
+            }
             out.add(new ParamDef(id, param));
         }
         return out;
     }
 
     /**
-     * 对每个声明求值：填值取 {@code userInput}（有则用），否则取 {@link TemplateParam#defaultValue()}；
-     * 仍为 {@code null} 且 {@code required} → 记一条错误；否则按类型 coerce + 校验。所有错误累计，
-     * 非空即抛（不半态返回）。返回 id→值 映射（值的 {@code toString()} 即拼进 JSON 的字面量）。
+     * 对每个声明求值：填值取 {@code userInput}（非 null 才算填了），否则取
+     * {@link TemplateParam#defaultValue()}；仍为 {@code null} 且 {@code required} → 记一条错误；
+     * 否则按类型 coerce + 校验。所有错误累计，非空即抛（不半态返回）。返回 id→值 映射
+     * （值的 {@code toString()} 即拼进 JSON 的字面量）。
      *
      * @throws CanvasImportException {@code IMPORT_INVALID_PARAM} —— 任一参数缺失 / 越界 / 类型不符（消息含全部问题）
      */
@@ -110,7 +145,10 @@ public final class PackParamResolver {
         for (ParamDef decl : decls) {
             String id = decl.id();
             TemplateParam p = decl.param();
-            Object raw = input.containsKey(id) ? input.get(id) : p.defaultValue();
+            // 显式传 null（前端表单没填的字段常这样发）与压根没传同等对待——都回落默认值。
+            // 用 containsKey 判断会让 {"size": null} 跳过默认值与全部校验，最后替换成空串。
+            Object raw = input.get(id);
+            if (raw == null) raw = p.defaultValue();
             if (raw == null) {
                 if (p.required()) {
                     errors.add("param '" + id + "' is required");
@@ -130,8 +168,8 @@ public final class PackParamResolver {
 
     /**
      * 在 {@code project.json} 文本上单遍替换 {@code ${param}}（委托 {@link Interpolator}）。
-     * 未声明引用 → {@code IMPORT_MALFORMED}（含 param 名）；Interpolator 的 16KB/1MB 上限
-     * 触发的 {@link IllegalArgumentException} → 同样归 {@code IMPORT_MALFORMED}。
+     * 未声明引用 → {@code IMPORT_MALFORMED}（含 param 名）；Interpolator 的 16KB 单值 / 1MB
+     * 净膨胀上限触发的 {@link IllegalArgumentException} → 同样归 {@code IMPORT_MALFORMED}。
      *
      * <p><b>替换值按 JSON 字符串转义：</b>project.json 是 JSON，占位符一律嵌在字符串字面量里
      * （数值字段也以 {@code "${x}"} 形态写，靠 materialize 的 Jackson coercion 解回数值）。若把
@@ -151,7 +189,7 @@ public final class PackParamResolver {
             throw new CanvasImportException("IMPORT_MALFORMED",
                     "project.json references undeclared template param '" + e.paramName() + "'");
         } catch (IllegalArgumentException e) {
-            // Interpolator 单值 16KB / 累计 1MB 上限
+            // Interpolator 单值 16KB / 净膨胀 1MB 上限
             throw new CanvasImportException("IMPORT_MALFORMED", e.getMessage());
         }
     }
@@ -184,13 +222,7 @@ public final class PackParamResolver {
                     errors.add("param '" + key + "' length > " + p.maxLength());
                 }
                 if (p.pattern() != null) {
-                    try {
-                        if (!Pattern.compile(p.pattern()).matcher(s).matches()) {
-                            errors.add("param '" + key + "' doesn't match pattern " + p.pattern());
-                        }
-                    } catch (Exception e) {
-                        errors.add("param '" + key + "' pattern invalid: " + e.getMessage());
-                    }
+                    matchGuarded(key, p.pattern(), s, errors);
                 }
                 return s;
             }
@@ -249,6 +281,84 @@ public final class PackParamResolver {
         }
     }
 
+    /**
+     * 用不可信 pack 提供的正则匹配不可信填值，带长度闸 + 步数闸。任何问题只往
+     * {@code errors} 里记一条，不上抛、不卡线程。
+     */
+    private static void matchGuarded(String key, String pattern, String value, List<String> errors) {
+        if (pattern.length() > MAX_PATTERN_LEN) {
+            errors.add("param '" + key + "' pattern too long: "
+                    + pattern.length() + " > " + MAX_PATTERN_LEN);
+            return;
+        }
+        Pattern compiled;
+        try {
+            compiled = Pattern.compile(pattern);
+        } catch (RuntimeException e) {
+            errors.add("param '" + key + "' pattern invalid: " + e.getMessage());
+            return;
+        }
+        try {
+            if (!compiled.matcher(new StepLimited(value, MAX_MATCH_STEPS)).matches()) {
+                errors.add("param '" + key + "' doesn't match pattern " + pattern);
+            }
+        } catch (StepLimitExceeded e) {
+            // 走到这里基本就是灾难回溯（或者串太长配上太贵的正则）。当作校验不通过处理，
+            // 并把原因说清楚，免得 pack 作者对着"不匹配"一头雾水。
+            errors.add("param '" + key + "' pattern too expensive to evaluate: " + pattern);
+        } catch (RuntimeException e) {
+            errors.add("param '" + key + "' pattern failed: " + e.getMessage());
+        }
+    }
+
+    /** 步数用尽的信号；只在本类内部使用，不外泄给调用方。 */
+    private static final class StepLimitExceeded extends RuntimeException {
+        StepLimitExceeded() {
+            super("regex step limit exceeded", null, false, false);
+        }
+    }
+
+    /**
+     * 只读字符序列包装：每次 {@code charAt} 计一步，超过预算就抛 {@link StepLimitExceeded}。
+     * 正则引擎的回溯全部体现为反复读字符，故这是给 {@link java.util.regex.Matcher} 上硬闸的
+     * 标准做法——比起另起线程 + 超时，它确定、可测，也不留悬挂线程。
+     */
+    private static final class StepLimited implements CharSequence {
+        private final CharSequence delegate;
+        private final int[] budget;
+
+        StepLimited(CharSequence delegate, int budget) {
+            this(delegate, new int[]{budget});
+        }
+
+        private StepLimited(CharSequence delegate, int[] budget) {
+            this.delegate = delegate;
+            this.budget = budget;
+        }
+
+        @Override
+        public int length() {
+            return delegate.length();
+        }
+
+        @Override
+        public char charAt(int index) {
+            if (--budget[0] < 0) throw new StepLimitExceeded();
+            return delegate.charAt(index);
+        }
+
+        @Override
+        public CharSequence subSequence(int start, int end) {
+            // 共用同一份预算，子串也不能绕过闸门
+            return new StepLimited(delegate.subSequence(start, end), budget);
+        }
+
+        @Override
+        public String toString() {
+            return delegate.toString();
+        }
+    }
+
     private static Integer asInt(Object o) {
         if (o == null) return null;
         if (o instanceof Number n) return n.intValue();
@@ -264,12 +374,21 @@ public final class PackParamResolver {
         return null;
     }
 
+    /**
+     * float 填值解析。<b>只接受有限值</b>——{@code NaN} / {@code Infinity} 会让上层
+     * {@code d < min} / {@code d > max} 两条比较全部为假，等于 min/max 静默失效，
+     * 之后 NaN 还会顺着替换写进 project.json。故一律当"不是 float"处理。
+     */
     private static Double asDouble(Object o) {
         if (o == null) return null;
-        if (o instanceof Number n) return n.doubleValue();
+        if (o instanceof Number n) {
+            double d = n.doubleValue();
+            return Double.isFinite(d) ? d : null;
+        }
         if (o instanceof String s) {
             try {
-                return Double.parseDouble(s);
+                double d = Double.parseDouble(s);
+                return Double.isFinite(d) ? d : null;
             } catch (NumberFormatException ignored) {
                 // 非数字串 → 返 null，上层记「不是 float」
             }

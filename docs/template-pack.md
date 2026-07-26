@@ -75,6 +75,10 @@ my_template.canvas
 字段与现有 `TemplateParam` 一致（`type` / `label` / `default` / `required` / `max_length` /
 `presets` / `group` / `visible_when`）。
 
+**`id` 与 `type` 都是必填**，`type` 只能是 `string` / `text` / `int` / `float` / `bool` /
+`color` / `enum` / `font` 之一（1.0 起冻结，见 §4）。缺失或拼错在解析期就拒
+（`IMPORT_MALFORMED`，报错带参数名）——否则这种 pack 能注册进 Gallery、直到套用时才在类型分支上炸。
+
 **`project.json` 里的占位符**：任意字符串字段，例如
 `"text": "${station}"`、`"fill": "${line_color}"`、`"x": "${offset_x}"`（数值字段以字符串
 形态写占位符，替换后 materialize 解析回数值）。

@@ -45,6 +45,10 @@ import java.util.zip.ZipOutputStream;
  * <p>套用走 {@code ProjectImporter.applyPack}——填参数 → {@code ${param}} 替换 → materialize。
  * 导出末尾用默认参数跑一遍这条链自校验（{@code ROUNDTRIP_FAILED}），确保产出的 pack 可套用。</p>
  *
+ * <p><b>pack 自带图片与脚本</b>：{@code assets/<hash>.png} + {@code scripts.json}
+ * （{@code docs/template-pack.md §3} 的条目布局）。不带的话，模板引用的原图一旦被 LRU 驱逐，
+ * 套用出来就是空白；墙上的积木脚本也会彻底丢掉。字节由 {@code TemplatePublisher} 收集后传进来。</p>
+ *
  * <p>坐标 / 尺寸 / 效果等其余字段的参数化留待后续阶段。</p>
  */
 public final class TemplateExporter {
@@ -54,6 +58,9 @@ public final class TemplateExporter {
 
     /** paramId 必须符合 {@code [a-z][a-z0-9_]{0,31}}。 */
     private static final Pattern PARAM_ID_PATTERN = Pattern.compile("^[a-z][a-z0-9_]{0,31}$");
+
+    /** 图片资产文件名 = {@code sha256[:16]} 小写 hex，与 {@code ImageElement.source} 同形态。 */
+    private static final Pattern ASSET_HASH_PATTERN = Pattern.compile("^[0-9a-f]{16}$");
 
     /** 单个 autoId 的处理决策。 */
     public record AutoTextAction(
@@ -112,12 +119,28 @@ public final class TemplateExporter {
     }
 
     /**
-     * 主入口。slug 校验 → 收集 autoText → 构造 project.json（含 {@code ${param}}）+ params.json +
-     * manifest → 默认参数套用一遍自校验 roundtrip → zip 成 pack 字节。
+     * 主入口（不带图片与脚本；仅供测试 / 老调用点）。
      */
     public Result export(UUID ownerUuid, String ownerName,
                          String slug, String displayName, String description,
                          ParamConfig paramConfig, ProjectState state) {
+        return export(ownerUuid, ownerName, slug, displayName, description,
+                paramConfig, state, Map.of(), null);
+    }
+
+    /**
+     * 主入口。slug 校验 → 收集 autoText → 构造 project.json（含 {@code ${param}}）+ params.json +
+     * manifest → 默认参数套用一遍自校验 roundtrip → zip 成 pack 字节（连同图片与脚本）。
+     *
+     * @param assets      要打进 {@code assets/<hash>.png} 的图片字节（hash → PNG）；空 map = 不带图片。
+     *                    <b>不带图片的模板一旦原图被 LRU 驱逐，套用出来就是空白</b>——pack 得自带一份。
+     * @param scriptsJson 要打进 {@code scripts.json} 的字节（{@code ScriptRule[]} 的 JSON 数组）；
+     *                    null = 该墙没有脚本
+     */
+    public Result export(UUID ownerUuid, String ownerName,
+                         String slug, String displayName, String description,
+                         ParamConfig paramConfig, ProjectState state,
+                         Map<String, byte[]> assets, byte[] scriptsJson) {
         if (state == null) {
             return new Result.Failed("INVALID_PAYLOAD", "projectState is null");
         }
@@ -232,10 +255,10 @@ public final class TemplateExporter {
         Result validation = validateRoundtrip(manifestBytes, paramsBytes, projectBytes, state);
         if (validation != null) return validation;
 
-        // 7) zip 成 pack 字节
+        // 7) zip 成 pack 字节（连同图片与脚本——少一样，套用出来就缺一样）
         byte[] packBytes;
         try {
-            packBytes = zipPack(manifestBytes, paramsBytes, projectBytes);
+            packBytes = zipPack(manifestBytes, paramsBytes, projectBytes, assets, scriptsJson);
         } catch (IOException e) {
             return new Result.Failed("SERIALIZE_FAILED", "zip: " + e.getMessage());
         }
@@ -302,12 +325,31 @@ public final class TemplateExporter {
         }
     }
 
-    private static byte[] zipPack(byte[] manifest, byte[] params, byte[] project) throws IOException {
+    /**
+     * 打包成 {@code .canvas} zip。条目布局与 {@code docs/template-pack.md §3} 一致：
+     * manifest / params / project / scripts.json / assets/*.png。
+     *
+     * <p>{@code assets} 的 key 必须是 {@code sha256[:16]} 形态的内容 hash（同
+     * {@code ImageElement.source}），否则导入侧的条目名校验会拒。</p>
+     */
+    private static byte[] zipPack(byte[] manifest, byte[] params, byte[] project,
+                                  Map<String, byte[]> assets, byte[] scriptsJson)
+            throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (ZipOutputStream z = new ZipOutputStream(bos)) {
             putEntry(z, "manifest.json", manifest);
             if (params != null) putEntry(z, "params.json", params);
             putEntry(z, "project.json", project);
+            if (scriptsJson != null && scriptsJson.length > 0) {
+                putEntry(z, "scripts.json", scriptsJson);
+            }
+            if (assets != null) {
+                for (Map.Entry<String, byte[]> a : assets.entrySet()) {
+                    if (a.getKey() == null || a.getValue() == null || a.getValue().length == 0) continue;
+                    if (!ASSET_HASH_PATTERN.matcher(a.getKey()).matches()) continue;
+                    putEntry(z, "assets/" + a.getKey() + ".png", a.getValue());
+                }
+            }
         }
         return bos.toByteArray();
     }

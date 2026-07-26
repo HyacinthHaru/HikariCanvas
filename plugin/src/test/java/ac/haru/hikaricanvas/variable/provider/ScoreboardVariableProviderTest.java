@@ -226,6 +226,61 @@ class ScoreboardVariableProviderTest {
     //  Fakes
     // ──────────────────────────────────────────────────────────
 
+    // ──────────────────────────────────────────────────────────
+    //  回收：没人引用的 key 不再永久占着全服共享配额
+    // ──────────────────────────────────────────────────────────
+
+    /**
+     * scoreboard 是全服共享的单一 namespace（配额 1000），key 又是玩家写占位符时自动建的。
+     * 只增不减的话，一个人写几十个 {@code ${var:scoreboard.随便.随便}} 就能把槽位灌满，
+     * 之后全服谁都建不了新的 scoreboard 变量，且只能靠重启回收。
+     */
+    @Test
+    void idleKeys_areEvictedAndFreeTheSharedQuota() {
+        long[] now = {1_000_000L};
+        provider.setClockForTest(() -> now[0]);
+        provider.handleDynamic("scoreboard.kills.Steve");
+        assertTrue(store.get("scoreboard/kills.Steve").isPresent());
+
+        // 没有任何墙引用它 + 空闲超过阈值 → 下一轮 refresh 连变量一起回收
+        now[0] += ScoreboardVariableProvider.IDLE_EVICT_MS + 1;
+        provider.refresh();
+
+        assertTrue(provider.trackedKeysSnapshot().isEmpty(), "空闲 key 应被回收");
+        assertTrue(store.get("scoreboard/kills.Steve").isEmpty(), "变量也应删掉，把槽位还回去");
+    }
+
+    /** 还有墙在引用的 key 不许被回收（引用集合由 Compositor 渲染时写回）。 */
+    @Test
+    void referencedKeys_survive() {
+        long[] now = {1_000_000L};
+        provider.setClockForTest(() -> now[0]);
+        provider.handleDynamic("scoreboard.kills.Steve");
+        store.markWallReferences("w-abc12345", java.util.Set.of("scoreboard/kills.Steve"));
+
+        now[0] += ScoreboardVariableProvider.IDLE_EVICT_MS * 3;
+        provider.refresh();
+
+        assertTrue(provider.trackedKeysSnapshot().contains("kills.Steve"),
+                "有墙引用就不能回收");
+        assertTrue(store.get("scoreboard/kills.Steve").isPresent());
+    }
+
+    /** 回收后再被引用会自动重建（所以回收是安全的，最多闪一帧 fallback）。 */
+    @Test
+    void evictedKey_isRecreatedOnNextLookup() {
+        long[] now = {1_000_000L};
+        provider.setClockForTest(() -> now[0]);
+        provider.handleDynamic("scoreboard.kills.Steve");
+        now[0] += ScoreboardVariableProvider.IDLE_EVICT_MS + 1;
+        provider.refresh();
+        assertTrue(store.get("scoreboard/kills.Steve").isEmpty());
+
+        provider.handleDynamic("scoreboard.kills.Steve");
+
+        assertTrue(store.get("scoreboard/kills.Steve").isPresent(), "再被引用应自动重建");
+    }
+
     private static final class FakeScoreboardDataSource
             implements ScoreboardVariableProvider.DataSource {
         final Map<String, Integer> scores = new HashMap<>();

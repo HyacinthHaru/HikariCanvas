@@ -75,6 +75,15 @@ public final class EditSession {
     /** 单工程参考线数上限（防意外刷爆）。 */
     private static final int MAX_GUIDES = 256;
 
+    /**
+     * 只用来把已校验的 {@link Element} 转成「它在 wire 上长什么样」的字段 map
+     * （{@link #serializeFields}，供 {@code element.update} 广播规范化后的值）。
+     * 纯序列化方向，无反序列化配置需求，故用默认配置即可 —— 字段名 / 枚举 wire 形态
+     * 都由各 record 自己的注解决定，与 {@code state.snapshot} 走同一套。
+     */
+    private static final com.fasterxml.jackson.databind.ObjectMapper WIRE_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private final ProjectState state;
 
     /**
@@ -313,11 +322,22 @@ public final class EditSession {
      * {@code imagesInTargetWall >= maxPerWall} 口径一致。</p>
      */
     private OpResult checkImagePerWallQuota(String incomingSource) {
+        return checkImagePerWallQuota(incomingSource, null);
+    }
+
+    /**
+     * 同上，但统计时跳过 {@code excludeElementId} 这一个元素。
+     *
+     * <p>{@code element.update} 改 source 时必须走这条：改的是既有元素，旧 source 更新后就不在了，
+     * 用「含旧 source 的集合」判定会在恰好卡在上限时误拒一次纯替换。</p>
+     */
+    private OpResult checkImagePerWallQuota(String incomingSource, String excludeElementId) {
         Integer max = this.maxImagesPerWall;
         if (max == null || max <= 0) return null;
         java.util.Set<String> distinctSources = new java.util.HashSet<>();
         for (Layer l : state.layers()) {
             for (Element e : l.elements()) {
+                if (excludeElementId != null && excludeElementId.equals(e.id())) continue;
                 if (e instanceof ImageElement im && im.source() != null) {
                     distinctSources.add(im.source());
                 }
@@ -373,24 +393,99 @@ public final class EditSession {
             return err(ve.code, ve.getMessage());
         }
 
+        // 换图也要过单墙图片配额。addElement 的 javadoc 早就写着「强制点在这里而不在上传路径」，
+        // 但 update 分支漏了：逐个 element.update{source} 换 hash（引用别的墙已上传的文件即可，
+        // 内容寻址是全服共享的）就能把本墙去重 source 数顶过 images.max-per-wall。
+        if (updated instanceof ImageElement newIm && patch.containsKey("source")
+                && loc.element instanceof ImageElement oldIm
+                && !java.util.Objects.equals(oldIm.source(), newIm.source())) {
+            OpResult quota = checkImagePerWallQuota(newIm.source(), elementId);
+            if (quota != null) return quota;
+        }
+
         ProjectSnapshot pre = snapshotNow();
         loc.layer.elements().set(loc.elementIdx, updated);
         commitHistory(pre);
         long v = state.bumpVersion();
 
+        // 广播的是**服务端规范化后**的值，不是客户端原样发来的输入。权威态存的是
+        // intValue 截断过小数、blendMode / renderMode 小写归一、effects/fill/stroke 重建过的结果；
+        // 回传客户端原值等于让发送方镜像与权威态从这一刻起就对不上（要等下次全量 snapshot 才自愈）。
+        Map<String, Object> normalized = serializeFields(updated, patch.keySet());
         StatePatchBuilder b = new StatePatchBuilder();
         for (var e : patch.entrySet()) {
             String path = elementFieldPath(loc.layerIdx, loc.elementIdx, e.getKey());
             Object value = e.getValue();
             if (value == null) {
+                // 客户端显式发 null = 清空该字段，仍用 remove（前端有对应分支）
                 b.remove(path);
             } else {
-                b.replace(path, value);
+                b.replace(path, normalized.getOrDefault(e.getKey(), value));
             }
         }
         // 脏矩形 = 旧 bbox ∪ 新 bbox，覆盖元素"从旧位移到新位"的扫过区域
         DirtyRegion dirty = DirtyRegion.of(loc.element).union(DirtyRegion.of(updated));
         return new OpResult.Ok(b.build(v), dirty);
+    }
+
+    /** 字体 id 字符集：与 {@code WebServer} 的 {@code /fonts/{id}.metrics.json} 白名单同款。 */
+    private static final java.util.regex.Pattern FONT_ID_RE =
+            java.util.regex.Pattern.compile("[a-zA-Z0-9_-]{1,64}");
+
+    /**
+     * 校验 {@code fontId} 字符集 + 长度。
+     *
+     * <p>渲染侧不会因为怪字体名崩（{@code FontRegistry} 查不到就回退默认字体），真正的问题在
+     * {@code FontMetricsTable} 的 {@code tables.computeIfAbsent(fontId, ...)}：那是个
+     * <b>static map</b>，任何客户端传过来的串都会永久留在里面，删掉元素也不回收。
+     * 一个会话反复发随机 fontId 就能慢慢把它撑起来。顺带把口径与 HTTP 侧的
+     * {@code [a-zA-Z0-9_-]+} 白名单对齐——同一个 id 在两条通道被判定为一合法一非法很难排查。</p>
+     */
+    private static void validateFontId(String fontId) {
+        if (fontId == null) return;   // 缺省由调用方兜底
+        if (!FONT_ID_RE.matcher(fontId).matches()) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    "fontId must match [a-zA-Z0-9_-] and be 1-64 chars");
+        }
+    }
+
+    /**
+     * 把 {@code element} 序列化成字段 map，只取 {@code fields} 里点名的那几个键。
+     *
+     * <p>用于 {@code element.update} 的 patch 广播：拿到的就是这个元素将来出现在
+     * {@code state.snapshot} 里的形态，两条下行通道天然一致。序列化失败（理论不该发生）
+     * 返回空 map，调用方回退用客户端原值——降级成老行为，不至于因此发不出 patch。</p>
+     */
+    private static Map<String, Object> serializeFields(Element element,
+                                                       java.util.Set<String> fields) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> all = WIRE_MAPPER.convertValue(stripHeavyFields(element), Map.class);
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (String k : fields) {
+                if (all.containsKey(k)) out.put(k, all.get(k));
+            }
+            return out;
+        } catch (RuntimeException e) {
+            return Map.of();
+        }
+    }
+
+    /**
+     * 序列化前把「又大又不可 patch」的字段换成空的，避免每次拖动都白序列化一遍。
+     *
+     * <p>目前只有笔触的 {@code points}：一条笔迹可以有上千个采样点，而它根本不在
+     * {@code applyBrushPatch} 的可改字段里（改 w/h 也不缩放 points，用户重画即可），
+     * 拿它去算规范化值纯属浪费。</p>
+     */
+    private static Element stripHeavyFields(Element e) {
+        if (e instanceof BrushStrokeElement b && b.points() != null && !b.points().isEmpty()) {
+            return new BrushStrokeElement(b.id(), b.x(), b.y(), b.w(), b.h(), b.rotation(),
+                    b.locked(), b.visible(), List.of(), b.size(), b.fill(),
+                    b.pressureSize(), b.pressureOpacity(),
+                    b.opacity(), b.blendMode(), b.renderMode());
+        }
+        return e;
     }
 
     // ---------- element.delete ----------
@@ -753,8 +848,12 @@ public final class EditSession {
     // ---------- canvas.resize ----------
 
     /**
-     * 只接受尺寸等于当前值的 no-op resize（保持 op channel 通畅 + 前端试探能通过）。
-     * 真正的动态扩缩容涉及 MapPool 借还和物品框增删，尚未实装。
+     * <b>未实装</b>（{@code docs/protocol.md §5.5} 已同步标注）。只接受尺寸等于当前值的
+     * no-op resize（保持 op channel 通畅 + 前端试探能通过）；任何真实尺寸变更返
+     * {@code POOL_EXHAUSTED}。真正的动态扩缩容涉及 MapPool 借还和物品框增删，尚未做。
+     *
+     * <p>错误码沿用 {@code POOL_EXHAUSTED} 而非 {@code UNSUPPORTED}：协议错误码表里没有
+     * 后者，改码是 wire 变更；前端零调用，只有第三方客户端会碰到，文档已写清是未实装。</p>
      */
     public synchronized OpResult resizeCanvas(int widthMaps, int heightMaps) {
         ProjectState.Canvas c = state.canvas();
@@ -941,8 +1040,8 @@ public final class EditSession {
                 imported.activeLayerId(),
                 imported.timelines(),
                 imported.activeTimelineId(),
+                imported.tweenFps(),
                 null));
-        state.tweenFps(imported.tweenFps());
         commitHistory(pre);
         long v = state.bumpVersion();
         return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
@@ -963,6 +1062,16 @@ public final class EditSession {
     /** 见 {@link HistoryStack#historyMark(String)}。 */
     public synchronized OpResult historyMark(String label) {
         return history.historyMark(label);
+    }
+
+    /** 测试观察：past 栈当前深度。 */
+    int pastDepthForTest() {
+        return history.pastDepth();
+    }
+
+    /** 测试观察：future 栈当前深度（守 history.mark + undo 循环的无界增长）。 */
+    int futureDepthForTest() {
+        return history.futureDepth();
     }
 
     // ---------- 历史栈内部 helpers（thin delegates，保留以最小化 op 内调用点改动）----------
@@ -987,7 +1096,7 @@ public final class EditSession {
         int rotation = intFieldOrDefault(p, "rotation", 0); validateRotation(rotation);
         boolean locked = boolFieldOrDefault(p, "locked", false);
         boolean visible = boolFieldOrDefault(p, "visible", true);
-        String fontId = stringFieldOrDefault(p, "fontId", "ark_pixel");
+        String fontId = stringFieldOrDefault(p, "fontId", "ark_pixel"); validateFontId(fontId);
         int fontSize = intFieldOrDefault(p, "fontSize", 12); validateFontSize(fontSize);
         String color = stringFieldOrDefault(p, "color", "#000000"); validateColor(color);
         String align = stringFieldOrDefault(p, "align", "left"); validateAlign(align);
@@ -1358,7 +1467,7 @@ public final class EditSession {
                 case "rotation" -> { rotation = intValue(v, k); validateRotation(rotation); }
                 case "locked" -> locked = boolValue(v, k);
                 case "visible" -> visible = boolValue(v, k);
-                case "fontId" -> fontId = requireStringValue(v, k);
+                case "fontId" -> { fontId = requireStringValue(v, k); validateFontId(fontId); }
                 case "fontSize" -> { fontSize = intValue(v, k); validateFontSize(fontSize); }
                 case "color" -> { color = requireStringValue(v, k); validateColor(color); }
                 case "align" -> { align = requireStringValue(v, k); validateAlign(align); }
@@ -1822,13 +1931,11 @@ public final class EditSession {
         long v = state.bumpVersion();
         StatePatchBuilder b = new StatePatchBuilder();
         if (updated != null) {
-            // source 字段承担 boundTo 语义（VariableStore.bind 写 source 槽位）
-            String path = variablePath(fullName) + "/source";
-            if (updated.source() == null) {
-                b.remove(path);
-            } else {
-                b.replace(path, updated.source());
-            }
+            // source 字段承担 boundTo 语义（VariableStore.bind 写 source 槽位）。
+            // 解绑（source == null）也用 replace(path, null)，与上面 currentValue 同形：
+            // 前端 applyVariablePatches 只认 replace，remove 落 else 分支被整条丢弃 ——
+            // 表现就是"点了解绑，绑定关系还挂在那儿，得重连才消失"。
+            b.replace(variablePath(fullName) + "/source", updated.source());
         }
         return new OpResult.Ok(b.build(v), null);
     }
@@ -1968,12 +2075,9 @@ public final class EditSession {
         long v = state.bumpVersion();
         StatePatchBuilder b = new StatePatchBuilder();
         if (updated != null) {
-            String path = variablePath(fullName) + "/source";
-            if (updated.source() == null) {
-                b.remove(path);
-            } else {
-                b.replace(path, updated.source());
-            }
+            // 同 user 变量的 bind 路径：解绑也发 replace(path, null)，不发 remove
+            // （前端只认 replace，remove 会被静默丢弃 → 解绑看起来不生效）
+            b.replace(variablePath(fullName) + "/source", updated.source());
         }
         return new OpResult.Ok(b.build(v), null);
     }

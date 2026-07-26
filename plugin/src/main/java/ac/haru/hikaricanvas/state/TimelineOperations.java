@@ -37,6 +37,9 @@ final class TimelineOperations {
     static final int MAX_KEYFRAMES_PER_TIMELINE = 2048;
     /** 单属性轨关键帧数上限。 */
     static final int MAX_KEYFRAMES_PER_TRACK = 256;
+
+    /** cubicBezier 控制点 y 的幅度上限（docs/rendering.md §9.3）。 */
+    static final double MAX_BEZIER_Y = 100.0;
     /** 时间轴 / 关键帧名字段长度上限。 */
     static final int NAME_MAX = 64;
     /** 时间轴时长下界（ms）。 */
@@ -276,6 +279,21 @@ final class TimelineOperations {
         return s != null && s.indexOf("${var:") >= 0;
     }
 
+    /**
+     * w/h 关键帧不得超 {@code MAX_DIM}——渲染线程会按 element 的 w×h 直接分配 buffer，
+     * 越界值就是一次 OOM。数值形态与字面数值串形态共用这一道闸。
+     *
+     * <p>{@code ${var:...}} 形态挡不住（值要到渲染期才知道），那条路只能靠取值侧钳制。</p>
+     */
+    private static void checkDimBound(String property, double d) {
+        if (!"w".equals(property) && !"h".equals(property)) return;
+        if (d > ElementValidator.MAX_DIM) {
+            throw new ValidationException("INVALID_PAYLOAD",
+                    property + " keyframe value exceeds MAX_DIM ("
+                            + ElementValidator.MAX_DIM + "): " + d);
+        }
+    }
+
     private static KfValue parseValue(String property, Object valueRaw) {
         if (Keyframe.NUMERIC_PROPERTIES.contains(property)) {
             if (valueRaw instanceof Number n) {
@@ -284,13 +302,7 @@ final class TimelineOperations {
                     throw new ValidationException("INVALID_PAYLOAD",
                             "numeric keyframe value must be finite: " + property);
                 }
-                // B1：w/h 关键帧不得超 MAX_DIM，否则渲染线程按 element w×h 分配巨 buffer → OOM
-                if (("w".equals(property) || "h".equals(property))
-                        && d > ElementValidator.MAX_DIM) {
-                    throw new ValidationException("INVALID_PAYLOAD",
-                            property + " keyframe value exceeds MAX_DIM ("
-                                    + ElementValidator.MAX_DIM + "): " + d);
-                }
+                checkDimBound(property, d);
                 return new KfValue.Num(d);
             }
             if (valueRaw instanceof String s) {
@@ -299,6 +311,12 @@ final class TimelineOperations {
                 if (!isVarTemplate(s) && !StrictNumber.PATTERN.matcher(s.trim()).matches()) {
                     throw new ValidationException("INVALID_PAYLOAD",
                             "numeric keyframe string must be a number or ${var:...}: " + property);
+                }
+                // 字面数值串走与 Number 分支同一道 MAX_DIM 闸。上面那道只覆盖了 JSON number 形态，
+                // 于是 {"value": "999999999"} 这种字符串形态可以照样把 w/h 顶上天，
+                // 插值出来的巨大 w×h 会流到未裁剪的分配路径（如 IconRenderer）。
+                if (!isVarTemplate(s)) {
+                    checkDimBound(property, Double.parseDouble(s.trim()));
                 }
                 return strValue(s);
             }
@@ -396,10 +414,20 @@ final class TimelineOperations {
                 }
                 bezier.add(d);
             }
-            // x1 = bezier[0], x2 = bezier[2] 须 ∈ [0,1]（保证 Bx 单调，与 CSS 一致；y 不限）
+            // x1 = bezier[0], x2 = bezier[2] 须 ∈ [0,1]（保证 Bx 单调，与 CSS 一致）
             if (bezier.get(0) < 0 || bezier.get(0) > 1 || bezier.get(2) < 0 || bezier.get(2) > 1) {
                 throw new ValidationException("INVALID_EASING",
                         "cubicBezier x1/x2 must be in [0,1]");
+            }
+            // y1 = bezier[1], y2 = bezier[3] 须 ∈ [-100, 100]（rendering.md §9.3）。
+            // y 允许超调（back 类曲线靠它），但不能无界：y1 = 1e308 是合法 JSON double，
+            // 求值时 cy = 3·y1 溢出成 Infinity → ay = 1 − cy − by 变 NaN → eased = NaN，
+            // 之后 Java 侧 (int)NaN = 0 而 JS 侧 Math.round(NaN) = NaN，颜色也一个出 #000000
+            // 一个出垃圾 hex —— 直接破掉双端逐位等价。±100 对任何真实缓动都绰绰有余。
+            if (Math.abs(bezier.get(1)) > MAX_BEZIER_Y || Math.abs(bezier.get(3)) > MAX_BEZIER_Y) {
+                throw new ValidationException("INVALID_EASING",
+                        "cubicBezier y1/y2 must be in [-" + (int) MAX_BEZIER_Y
+                                + ", " + (int) MAX_BEZIER_Y + "]");
             }
             return new Easing(EasingType.CUBIC_BEZIER, bezier);
         }
@@ -594,6 +622,33 @@ final class TimelineOperations {
         List<Keyframe> existing = cur.tracks().get(elementId);
         boolean newTrack = (existing == null);
         int trackSize = newTrack ? 0 : existing.size();
+
+        // 唯一性不变量（docs/timeline.md §2.1）：一个 (element, property, timeMs) 只允许一帧。
+        // 撞上已有帧就**覆盖**它的 value + easing，不追加。
+        // 允许重合的话同一时刻会堆出多个帧、UI 上重叠成一个点，用户改的是被遮住的那个 ——
+        // 症状就是「这个时刻怎么调都不动」，而且没有任何正常入口能删掉压在下面的那一帧。
+        // 双击 / 连拖 / 整体帧批量加帧都能轻易造出来，必须堵在写入侧。
+        int dupIdx = newTrack ? -1 : indexOfKeyframeAt(existing, property, timeMs);
+        if (dupIdx >= 0) {
+            Keyframe orig = existing.get(dupIdx);
+            Keyframe replaced = new Keyframe(orig.id(), property, timeMs, value, easing);
+            List<Keyframe> overwritten = new ArrayList<>(existing);
+            overwritten.set(dupIdx, replaced);
+
+            LinkedHashMap<String, List<Keyframe>> dupTracks = new LinkedHashMap<>(cur.tracks());
+            dupTracks.put(elementId, overwritten);
+
+            ProjectSnapshot dupPre = history.snapshotNow();
+            state.replaceTimelineAt(idx, cur.withTracks(dupTracks));
+            if (coalesceKey != null) history.commitHistoryCoalesced(dupPre, coalesceKey);
+            else history.commitHistory(dupPre);
+            long dupV = state.bumpVersion();
+            // 整轨 replace：覆盖语义下客户端可能本来就不知道那一帧存在，整轨替换最不会错
+            return new EditSession.OpResult.Ok(new StatePatchBuilder()
+                    .replace(trackPath(idx, elementId), overwritten)
+                    .build(dupV), null);
+        }
+
         if (trackSize >= MAX_KEYFRAMES_PER_TRACK
                 || cur.totalKeyframes() >= MAX_KEYFRAMES_PER_TIMELINE) {
             return err("INVALID_PAYLOAD", "keyframe quota exceeded for this track / timeline");
@@ -602,7 +657,7 @@ final class TimelineOperations {
         String kfId = freshId("kf-", allKeyframeIds());
         Keyframe kf = new Keyframe(kfId, property, timeMs, value, easing);
 
-        // 按 timeMs 升序找插入位 k；相等 timeMs 排在已有之后（rendering.md §9.1 重合帧取后）
+        // 按 timeMs 升序找插入位 k；同 timeMs 的其它 property 帧排在新帧之前
         List<Keyframe> newTrackList = new ArrayList<>(trackSize + 1);
         int k = trackSize;
         if (!newTrack) {
@@ -638,6 +693,24 @@ final class TimelineOperations {
             b.add(keyframePath(idx, elementId, k), kf);
         }
         return new EditSession.OpResult.Ok(b.build(v), null);
+    }
+
+    /**
+     * 在轨里找同 {@code (property, timeMs)} 的帧下标；{@code excludeIdx} 传 &ge;0 时跳过那一项
+     * （move 场景：被移动的帧自己不算冲突）。找不到返 -1。
+     */
+    private static int indexOfKeyframeAt(List<Keyframe> track, String property, int timeMs,
+                                         int excludeIdx) {
+        for (int i = 0; i < track.size(); i++) {
+            if (i == excludeIdx) continue;
+            Keyframe kf = track.get(i);
+            if (kf.timeMs() == timeMs && property.equals(kf.property())) return i;
+        }
+        return -1;
+    }
+
+    private static int indexOfKeyframeAt(List<Keyframe> track, String property, int timeMs) {
+        return indexOfKeyframeAt(track, property, timeMs, -1);
     }
 
     // ---------- keyframe.update ----------
@@ -726,9 +799,21 @@ final class TimelineOperations {
         newTrack.set(loc.index(), updatedKf);
         int newIndex = loc.index();
         if (timeChanged) {
-            // 重排该轨（timeMs 升序，相等排在已有之后）
-            newTrack.sort((a, b2) -> Integer.compare(a.timeMs(), b2.timeMs()));
-            newIndex = newTrack.indexOf(updatedKf);
+            // 唯一性不变量（docs/timeline.md §2.1）：拖到同 (property, timeMs) 已有帧上时，
+            // **被拖过来的这一帧胜出**，原地那一帧删掉。
+            //
+            // 老写法是 List.sort 靠稳定排序，注释还写着「相等排在已有之后」—— 稳定排序做不到
+            // 这件事，它只保持原相对顺序：把左边的帧拖到右边同 timeMs 的帧上，被拖的那个仍排在前面，
+            // 而取值按「重合取后」拿的是后面那个 —— 用户刚拖进去的值直接被遮掉，画面纹丝不动。
+            int dup = indexOfKeyframeAt(newTrack, orig.property(), timeMs, loc.index());
+            if (dup >= 0) newTrack.remove(dup);
+            newTrack.remove(newTrack.indexOf(updatedKf));
+            int insertAt = 0;
+            while (insertAt < newTrack.size() && newTrack.get(insertAt).timeMs() <= timeMs) {
+                insertAt++;
+            }
+            newTrack.add(insertAt, updatedKf);
+            newIndex = insertAt;
         }
 
         LinkedHashMap<String, List<Keyframe>> tracks = new LinkedHashMap<>(cur.tracks());

@@ -13,6 +13,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * <p>序列化采用 camelCase 字符串 —— 同 {@link BlendMode} 的 {@code @JsonProperty}
  * 显式映射范式。</p>
  *
+ * <p><b>反序列化对未知值宽容</b>（{@link #fromJson}）：认不出来的 type 返 {@code null}，
+ * 由 {@link Easing} 的紧凑构造器兜成 {@code LINEAR}。这是 {@link Easing} 明写的承诺
+ * 「坏数据不在反序列化期抛硬错」的必要一环——靠 {@code @JsonProperty} 映射的话，
+ * 未知值会直接抛 {@code InvalidFormatException} 穿透上来，整面墙加载失败而不是降级到线性。
+ * 触发路径很现实：新版本存的墙回滚旧 jar 打开。放在枚举自己身上而不是靠各处 ObjectMapper
+ * 配 {@code READ_UNKNOWN_ENUM_VALUES_AS_NULL}，是因为漏配一个 mapper 就前功尽弃。</p>
+ *
  * @since 0.6
  */
 public enum EasingType {
@@ -31,6 +38,15 @@ public enum EasingType {
     /** 协议 wire 形态字符串。 */
     public String wire() {
         return wire;
+    }
+
+    /**
+     * Jackson 反序列化入口（delegating creator）：未知 wire 值返 {@code null} 而不抛，
+     * 交 {@link Easing} 紧凑构造器兜成 {@code LINEAR}。见类注释。
+     */
+    @com.fasterxml.jackson.annotation.JsonCreator
+    static EasingType fromJson(String s) {
+        return fromWire(s);
     }
 
     /** 从 wire 字符串解析（WS payload 手动解析用）；未知 / null 返回 {@code null}。 */

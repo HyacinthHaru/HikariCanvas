@@ -30,10 +30,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 0.9.6：{@link WallRestorer} 启动期恢复守卫。核心是 <b>M16 P2.5 命根子</b>——某 wall
- * bind 到 {@link MapPool} 成功、但后续渲染（{@code renderer.update}）抛异常时，restoreOne
- * 的 catch 必须把这一轮已 bind 的 mapId 全部 {@link MapPool#releaseToFree} 回 FREE，否则它们
- * 卡在 RESERVED（owner=wall:&lt;id&gt;）而 wall 又没真正恢复 → 软泄漏 → idcounts.dat 膨胀。
+ * {@link WallRestorer} 启动期恢复守卫。核心是失败时地图的归属：
+ *
+ * <ul>
+ *   <li><b>bind 之前</b>失败（世界没加载 / bindToWall 自己抛）→ 这一轮借到手的地图全部
+ *       {@link MapPool#releaseToFree} 回 FREE，不留半态预留。</li>
+ *   <li><b>bind 之后</b>失败（渲染阶段炸）→ 保留绑定。walls 行还在，这些地图本来就属于这面墙；
+ *       还回 FREE 会被下一面墙借走，造成两墙共用一张地图 + 这面墙永久恢复不了。</li>
+ * </ul>
  *
  * <p><b>测试策略</b>（照 {@code MapPoolInvariantTest} 范式）：真 SQLite（tmpdir Database +
  * MigrationRunner）+ {@link FakeMapBackendForRender}（不可用 MockBukkit）+ JDK Proxy 造 fake
@@ -160,25 +164,34 @@ class WallRestorerTest {
     }
 
     // ──────────────────────────────────────────────────────────
-    //  ② 命根子：bind 后渲染抛异常 → releaseToFree 全回滚，0 泄漏
+    //  ② bind 之后渲染炸了 → 保留绑定，绝不把地图还回池子
     // ──────────────────────────────────────────────────────────
 
+    /**
+     * 这条曾经反着断言（渲染失败也把地图全 releaseToFree），当时的理由是"wall 没恢复成功，
+     * 地图卡在 RESERVED 就是软泄漏"。这个理由不成立：walls 行还在库里，泄漏检测认得这面墙，
+     * 根本不会去回收它的地图 —— 它们本来就是这面墙的。
+     *
+     * <p>反过来，把地图还回 FREE 才是真的灾难：下一次 confirm 会把同一张地图借给别的墙，
+     * 两面墙共用一张图互相覆盖像素；而这面墙的 map_ids 仍指向被抢走的地图，下次启动
+     * bindToWall 直接被拒，从此再也恢复不了 —— 一次瞬时渲染异常换来一面永久坏掉的墙。</p>
+     */
     @Test
-    void restore_failureAfterBind_releasesAllMapsToFree() {
+    void restore_renderFailureAfterBind_keepsMapsBoundToTheWall() {
         SeededWall sw = seedPristineWall(3);
         int mapCount = sw.mapIds().size();
 
-        // ThrowingRenderer.update 抛 → restoreOne bind 成功后 renderer.update 炸 → catch → releaseToFree
+        // ThrowingRenderer.update 抛 → restoreOne bind 成功后 renderer.update 炸
         WallRestorer restorer = restorer(new ThrowingRenderer(), name -> worldA);
         int restored = restorer.restore();
 
         assertEquals(0, restored, "渲染失败 → 该墙不算恢复");
-        assertEquals(mapCount, pool.stats().free(),
-                "命根子：bind 过的 map 全 releaseToFree 回 FREE，无泄漏");
-        assertEquals(0, pool.stats().reserved(),
-                "命根子：不能有 map 卡在 RESERVED（软泄漏 = idcounts.dat 膨胀）");
+        assertEquals(mapCount, pool.stats().reserved(),
+                "地图必须仍然绑在这面墙上（放回 FREE 会被下一面墙借走 → 两墙共用一张图）");
+        assertEquals(0, pool.stats().free(),
+                "一张都不该回到 FREE 池");
         assertTrue(restorer.isRestorationFailed(sw.wallId()),
-                "失败墙进 failedRestoreWallIds");
+                "失败墙进 failedRestoreWallIds，玩家点它时有提示，下次重启重试");
     }
 
     // ──────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -35,10 +36,17 @@ public final class TemplateAssetService {
     private final Logger log;
     private final Path serverIconsDir;
 
-    /** key = source name；value = lazy-loaded BufferedImage（null = 已尝试但找不到） */
-    private final Map<String, BufferedImage> imageCache = new ConcurrentHashMap<>();
-    /** key = source name；value = PNG bytes（供 HTTP 直接 serve；从 imageCache 同步生成） */
-    private final Map<String, byte[]> pngCache = new ConcurrentHashMap<>();
+    /**
+     * key = source name；value = 懒加载的图（{@link Optional#empty()} = 已经找过了，确实没有）。
+     *
+     * <p>用 Optional 而不是 null 值：{@link ConcurrentHashMap#computeIfAbsent} 的映射函数返回
+     * null 时**根本不写表**，于是"找不到"这件事没被记住——渲染器每帧都会重新查一遍 classpath +
+     * 磁盘并刷一行 WARNING。而元素校验只管 source 的字符格式、不管图标存不存在，随便一个不存在的
+     * 名字就能进画布，这条路是走得通的。</p>
+     */
+    private final Map<String, Optional<BufferedImage>> imageCache = new ConcurrentHashMap<>();
+    /** key = source name；value = PNG bytes（供 HTTP 直接 serve；从 imageCache 同步生成）。同样用 Optional 记住"没有"。 */
+    private final Map<String, Optional<byte[]>> pngCache = new ConcurrentHashMap<>();
 
     public TemplateAssetService(Logger log, Path serverDataFolder) {
         this.log = log;
@@ -49,27 +57,28 @@ public final class TemplateAssetService {
         return name != null && SAFE_NAME.matcher(name).matches();
     }
 
-    /** 后端渲染用 BufferedImage（含 alpha）。 */
+    /** 后端渲染用 BufferedImage（含 alpha）。找不到返回 null，且这个"找不到"会被记住。 */
     public BufferedImage loadIcon(String source) {
         if (!isValidName(source)) return null;
-        return imageCache.computeIfAbsent(source, this::loadIconUncached);
+        return imageCache.computeIfAbsent(source,
+                name -> Optional.ofNullable(loadIconUncached(name))).orElse(null);
     }
 
-    /** HTTP 端点用 PNG bytes。 */
+    /** HTTP 端点用 PNG bytes。找不到 / 编码失败返回 null，同样会被记住（端点可被反复打）。 */
     public byte[] iconPng(String source) {
         if (!isValidName(source)) return null;
         return pngCache.computeIfAbsent(source, name -> {
             BufferedImage img = loadIcon(name);
-            if (img == null) return null;
+            if (img == null) return Optional.empty();
             try {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream(4096);
                 ImageIO.write(img, "PNG", baos);
-                return baos.toByteArray();
+                return Optional.of(baos.toByteArray());
             } catch (IOException e) {
                 log.log(Level.WARNING, "[asset] PNG encode failed: " + name, e);
-                return null;
+                return Optional.empty();
             }
-        });
+        }).orElse(null);
     }
 
     private BufferedImage loadIconUncached(String source) {
@@ -98,6 +107,10 @@ public final class TemplateAssetService {
         return null;
     }
 
+    /**
+     * 清空两级缓存（{@code /canvas reload} 调）。服主往 {@code assets/icons/} 里补了缺失的图标后，
+     * 靠这个把"找不到"的记录也一起清掉，不用重启。
+     */
     public void invalidate() {
         imageCache.clear();
         pngCache.clear();

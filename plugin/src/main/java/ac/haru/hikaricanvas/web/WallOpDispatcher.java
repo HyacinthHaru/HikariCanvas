@@ -36,8 +36,8 @@ final class WallOpDispatcher {
      * {@code wall.refresh} 的 per-wall 冷却。
      *
      * <p>通用 40msg/2s 窗口对 refresh 仍太宽：每条 refresh 都往主线程 runTask 一次
-     * {@code FrameDeployer.repairFor}，内部是 {@code world.getEntitiesByClass(ItemFrame.class)}
-     * 全世界实体扫描 + 逐格补方块。1 次/秒足够覆盖"画框被破坏后手动修复"的真实用法。</p>
+     * {@code FrameDeployer.repairFor}，内部要同步加载墙面区块 + 查一遍范围内实体 + 逐格补方块。
+     * 1 次/秒足够覆盖"画框被破坏后手动修复"的真实用法。</p>
      */
     static final long REFRESH_COOLDOWN_MS = 1000L;
 
@@ -227,7 +227,7 @@ final class WallOpDispatcher {
                             "session lacks wall geometry"));
                     return;
                 }
-                // per-wall 冷却：repairFor 是全世界实体扫描 + 逐格补方块的主线程任务，
+                // per-wall 冷却：repairFor 是同步加载区块 + 查实体 + 逐格补方块的主线程任务，
                 // 通用 40msg/2s 窗口对它仍太宽。冷却期内不入主线程队列。
                 if (!allowRefresh(wallId, System.nanoTime())) {
                     ctx.send(Envelope.error(in.id(), "RATE_LIMITED",
@@ -243,6 +243,18 @@ final class WallOpDispatcher {
                     // RuntimeException 时，原代码异常逃出 task 体 → 仅 Bukkit 默认日志，前端永不收 ack
                     // → 8s ack_timeout 误报"无响应"。改为捕获后记 SEVERE + 回 INTERNAL_ERROR 让前端拿真错码。
                     try {
+                        // 排进主线程队列到真正执行之间隔着至少一个 tick，这期间
+                        // `/canvas delete <id> confirm` 完全可能已经跑完（它也在主线程）：
+                        // 地图已归还池子（甚至已被别的墙借走）、walls 行已删。这时再照着
+                        // 捕获的几何补方块 + spawn 画框，等于把一面幽灵墙重新立起来，
+                        // 挂的还是别人的地图，而 DB 里没有它的行 → 启动恢复永远接管不了它。
+                        if (wallRepo.loadById(wallId).isEmpty()) {
+                            plugin.getLogger().info("wall.refresh: wall " + wallId
+                                    + " was deleted before the repair task ran; skipping");
+                            ctx.send(Envelope.error(ackId, "WALL_NOT_FOUND",
+                                    "wall was deleted"));
+                            return;
+                        }
                         ac.haru.hikaricanvas.deploy.FrameDeployer.RepairResult result =
                                 frameDeployer.repairFor(wallId, geom, mapIds);
                         if (s.projectState() != null) {

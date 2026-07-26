@@ -338,10 +338,18 @@ public final class ManualScheduleProvider implements VariableProvider {
             "next2_eta_minutes", "next2_eta_seconds", "next2_eta_mmss",
             "next2_is_arriving", "next2_arrival_status"};
 
-    /** 注销 wall（删 schedule 变量）。同 wall 重复 / 未注册幂等。 */
+    /**
+     * 注销 wall（删 schedule 变量）。同 wall 重复 / 未注册幂等。
+     *
+     * <p><b>没注册过也要扫一遍删</b>：这个方法是 wall 删除 hook 的唯一出口，而
+     * {@code schedule:<wallId>/*} 这 15 个 key 是本 provider 与 {@code RailScheduleProvider}
+     * 共写的——纯铁路墙（从没配过手动时刻表，因此从没进过 registeredWalls）删除时，
+     * rail 侧只删自己那 14 个专属 key，共享的 15 个全指望这里收尾。早退的话它们会一直
+     * 留在内存里直到重启。删不存在的 key 本来就静默跳过，代价只是几次 map 查找。</p>
+     */
     public void unregisterWall(String wallId) {
         if (wallId == null || wallId.isEmpty()) return;
-        if (registeredWalls.remove(wallId) == null) return;
+        registeredWalls.remove(wallId);
         lastPushAt.remove(wallId);
         precisionCache.remove(wallId);
         String ns = NAMESPACE_PREFIX + ":" + wallId;

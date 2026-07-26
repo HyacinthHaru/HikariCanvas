@@ -277,8 +277,10 @@ final class LayerOperations {
         for (Element e : src.elements()) {
             copiedElements.add(EditSession.cloneElementWithNewId(e));
         }
+        // 8 参构造器：必须带上 colorTag，否则复制出来的层丢颜色标签
+        // （7 参兼容构造器会把 colorTag 代成 null）
         Layer copy = new Layer(newId, newName, src.visible(), false,
-                src.opacity(), src.blendMode(), copiedElements);
+                src.opacity(), src.blendMode(), src.colorTag(), copiedElements);
 
         int insertIdx = idx + 1;
         ProjectSnapshot pre = history.snapshotNow();

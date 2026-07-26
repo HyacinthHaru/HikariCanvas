@@ -153,6 +153,12 @@ public final class PathParser {
             // 收齐一组参数，执行命令
             boolean relative = Character.isLowerCase(curCmd);
             char op = Character.toUpperCase(curCmd);
+            // 首个绘制命令前没有 M：Path2D 没有当前点，lineTo / quadTo / curveTo 会抛
+            // IllegalPathStateException，把整墙 rasterize 打断（IconRegistry 的用户 SVG
+            // 不过 PathDValidator，这条路是敞开的）。本类契约是「尽力而为、绝不抛异常」，
+            // 按 SVG 规范「路径数据出错就渲染到出错点为止」停止解析，返回已累积结果 ——
+            // 与前端 new Path2D(d) 对同款畸形串给空 path 的行为一致。
+            if (op != 'M' && !firstMoveDone) break;
             switch (op) {
                 case 'M' -> {
                     double x = relative ? curX + paramBuf[0] : paramBuf[0];

@@ -56,6 +56,18 @@ public final class MapPool {
      */
     public static final String PENDING_WALL_PREFIX = "pending-";
 
+    /**
+     * pending 豁免的有效期。超过这个时长还挂在 {@code wall:pending-*} 名下的预留，
+     * 一律当垃圾回收。
+     *
+     * <p>真实的 reserve→bind 窗口是毫秒级（同一次 confirm 里的连续两步）。窗口内进程被
+     * {@code kill -9} / 断电 / 别的插件崩服，这批行会以 RESERVED 状态留在库里，重启后
+     * 既没有对应 walls 行、又因为 pending 前缀被泄漏检测无条件豁免 —— 没有任何路径能
+     * 回收它们，等于地图 ID 永久泄漏（{@code idcounts.dat} 膨胀，本项目的核心风险）。
+     * 60 秒对正常窗口是天文数字，对残留则足够快地收敛。</p>
+     */
+    public static final long PENDING_RESERVE_TTL_MS = 60_000L;
+
     private final Logger log;
     private final Jdbi jdbi;
     private final AuditLog auditLog;
@@ -285,13 +297,37 @@ public final class MapPool {
         String owner = WALL_OWNER_PREFIX + wallId;
         Deque<Integer> queue = freeByWorld.get(world.getUID());
         List<Integer> out = new ArrayList<>(count);
+
+        // 借出与 bindToWall 走同一条持久化纪律：先在单事务里把全部 map 落盘
+        // （all-or-nothing，失败抛出），DB 成功后才改内存。
+        // 原实现在循环里逐张 persist（吞异常只打 SEVERE），中段失败会留下"内存已借出、
+        // DB 还写着 FREE"的分叉：重启后这批 map 回到 FREE 队列被别的 wall 借走，
+        // 而先前那面 wall 的 map_ids 仍指向它们 → 两面墙共用同一张地图、像素互相覆盖。
+        List<Integer> picked = new ArrayList<>(count);
+        List<PooledMap> updates = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            Integer mapId = queue.poll();
-            PooledMap cur = byId.get(mapId);
-            PooledMap updated = cur.withReserved(owner, now);
-            byId.put(mapId, updated);
-            persist(updated);
-            out.add(mapId);
+            Integer mapId = queue == null ? null : queue.poll();
+            if (mapId == null) {
+                // 不该发生（上面已按 count 校验 / 扩容过）。把已摘下的放回队列后爆出来，
+                // 绝不半途借出。
+                for (Integer back : picked) queue.offer(back);
+                throw new IllegalStateException(
+                        "reserveForWall: FREE queue for world '" + world.getName()
+                                + "' ran dry after capacity check (wanted " + count + ")");
+            }
+            picked.add(mapId);
+            updates.add(byId.get(mapId).withReserved(owner, now));
+        }
+        try {
+            persistAllStrict(updates);
+        } catch (RuntimeException e) {
+            // DB 没写成 → 内存一并回滚（map 放回 FREE 队列，byId 一个字节没动）
+            for (Integer back : picked) queue.offer(back);
+            throw e;
+        }
+        for (PooledMap upd : updates) {
+            byId.put(upd.mapId(), upd);
+            out.add(upd.mapId());
         }
         auditLog.record("POOL_RESERVE", null, null, null, null,
                 Map.of("wall_id", wallId, "count", count, "world", world.getName(), "map_ids", out));
@@ -417,10 +453,44 @@ public final class MapPool {
      * reserve（owner=wall:pending-&lt;uuid&gt;）与最终 bind 到真 wallId 之间有一个短暂窗口，
      * 此间 maps 是 RESERVED 但 wallId 是临时的 pending-*，不在 liveWallIds 里。若不豁免，异步
      * detectLeaks 恰好在该窗口运行会把正在创建的 wall 的 maps 强制 FREE，造成 confirm 内部
-     * bind race / 像素错乱。pending-* 是 transient 中间态，<b>不参与泄漏判定</b>。</p>
+     * bind race / 像素错乱。pending-* 是 transient 中间态，<b>不参与泄漏判定</b>——但豁免
+     * 有 {@link #PENDING_RESERVE_TTL_MS} 的有效期，超期的残留照常回收（见该常量说明）。</p>
+     *
+     * <p>本重载不带 live 集的读取时刻，等价于"假定快照绝对新鲜"（无 reserve 竞态豁免），
+     * 供测试与单线程调用方使用。<b>周期泄漏任务必须用
+     * {@link #detectLeaks(java.util.Set, long)}</b>。</p>
      */
     public synchronized int detectLeaks(java.util.Set<String> liveWallIds) {
-        long now = System.currentTimeMillis();
+        return detectLeaks(liveWallIds, Long.MAX_VALUE);
+    }
+
+    /**
+     * {@link #detectLeaks(java.util.Set)} 带快照时刻的版本。
+     *
+     * @param liveWallIds     walls 表快照
+     * @param liveSnapshotAt  <b>读 walls 表之前</b>取的 {@code System.currentTimeMillis()}。
+     *                        比这个时刻更晚被借出的 RESERVED 地图一律跳过本轮。
+     *
+     * <p><b>为什么需要这个参数（快照 TOCTOU）：</b>快照是在池锁外拍的，而
+     * {@code /canvas confirm} 在主线程按 reserve(pending) → INSERT walls → bind(wall:新id)
+     * 的顺序推进。若快照恰好拍在 INSERT 之前、而 detectLeaks 进锁又在 bind 之后，新墙的
+     * wall_id 既不在快照里、owner 也已不是 pending-* → 这批刚借出的地图被判泄漏、强制 FREE
+     * 并落盘；下一次 confirm 再把同一 mapId 借给别的墙 → 两面墙共用一张地图、像素互相覆盖，
+     * 而原墙的 map_ids 指向已被抢占的地图，状态永久错乱。</p>
+     *
+     * <p>用"借出时刻 vs 快照时刻"判定即可关掉这个窗口：{@code lastUsedAt} 在 reserve / bind
+     * 时被刷新，晚于快照就说明"这张地图是在我们看 walls 表之后才借出去的"，此时快照对它
+     * 没有发言权。跳过一轮的代价是 5 分钟后再判，代价可忽略；反过来误删则是数据损坏。</p>
+     */
+    public synchronized int detectLeaks(java.util.Set<String> liveWallIds, long liveSnapshotAt) {
+        return detectLeaks(liveWallIds, liveSnapshotAt, System.currentTimeMillis());
+    }
+
+    /**
+     * 注入"当前时刻"的版本，package-private 只为测试用 —— pending 豁免的 TTL 判定要跨
+     * 几十秒，测试不可能真等。生产路径一律走 {@link #detectLeaks(java.util.Set, long)}。
+     */
+    synchronized int detectLeaks(java.util.Set<String> liveWallIds, long liveSnapshotAt, long now) {
         // 防呆：live 集合为空但池里确有 wall:* 拥有的 RESERVED map —— 几乎必然是「读 walls
         // 表失败」而不是「真的一面墙都没有」。此时若照常执行，这些在用地图会被判泄漏、强制
         // FREE 并落盘，随后被新墙复用 → 旧墙 ItemFrame 显示新墙像素（跨墙串台，全服级损坏）。
@@ -437,6 +507,8 @@ public final class MapPool {
         boolean liveSetUntrustworthy = liveWallIds != null && liveWallIds.isEmpty()
                 && hasWallOwnedReserved();
         int suppressed = 0;
+        int reservedAfterSnapshot = 0;
+        int stalePending = 0;
         List<Integer> leaked = new ArrayList<>();
         for (PooledMap m : new ArrayList<>(byId.values())) {
             if (m.state() != PoolState.RESERVED) continue;
@@ -451,8 +523,13 @@ public final class MapPool {
                 continue;
             }
             String wallId = owner.substring(WALL_OWNER_PREFIX.length());
-            // pending-* 是 confirm() reserve→bind 之间的临时 owner，豁免泄漏检测
+            // pending-* 是 confirm() reserve→bind 之间的临时 owner，窗口内豁免泄漏检测；
+            // 超过 TTL 说明那次 confirm 没能走到 bind（进程被杀 / 崩服），残留必须回收，
+            // 否则没有任何路径能拿回这些地图。
             if (wallId.startsWith(PENDING_WALL_PREFIX)) {
+                if (now - m.lastUsedAt() <= PENDING_RESERVE_TTL_MS) continue;
+                stalePending++;
+                leaked.add(m.mapId());
                 continue;
             }
             if (liveWallIds != null && !liveWallIds.contains(wallId)) {
@@ -461,8 +538,27 @@ public final class MapPool {
                     suppressed++;
                     continue;
                 }
+                if (m.lastUsedAt() >= liveSnapshotAt) {
+                    // 这张地图是在快照之后才借出去的 —— 快照里没有它的 wall 是理所当然，
+                    // 不能据此判泄漏（见方法 javadoc 的 TOCTOU 说明）。下轮再判。
+                    reservedAfterSnapshot++;
+                    continue;
+                }
                 leaked.add(m.mapId());
             }
+        }
+        if (reservedAfterSnapshot > 0) {
+            log.info("MapPool.detectLeaks: skipped " + reservedAfterSnapshot
+                    + " map(s) reserved after the walls-table snapshot was taken"
+                    + " (they will be judged next round)");
+        }
+        if (stalePending > 0) {
+            log.warning("MapPool.detectLeaks: " + stalePending
+                    + " map(s) stuck on a 'pending-*' reservation older than "
+                    + PENDING_RESERVE_TTL_MS + "ms — reclaiming (a wall creation was"
+                    + " interrupted, most likely by a hard shutdown)");
+            auditLog.record("POOL_PENDING_EXPIRED", null, null, null, null,
+                    Map.of("count", stalePending, "ttl_ms", PENDING_RESERVE_TTL_MS));
         }
         if (suppressed > 0) {
             log.severe("MapPool.detectLeaks: live wall set is EMPTY but " + suppressed
@@ -720,6 +816,15 @@ public final class MapPool {
                             + " is RESERVED with null owner; downgrading to FREE");
                     return rec.withFree(now);
                 }
+                // wall:pending-* 是 confirm 内部 reserve→bind 的中间态，活不过一次重启：
+                // 能读到它只说明上次 confirm 被硬中断（kill -9 / 断电 / 崩服）。留着的话
+                // detectLeaks 的 pending 豁免会让它永远回不来（地图 ID 永久泄漏）。
+                if (rec.reservedBy().startsWith(WALL_OWNER_PREFIX + PENDING_WALL_PREFIX)) {
+                    log.warning("pool_maps row map_id=" + rec.mapId()
+                            + " is still held by an unfinished wall creation ('"
+                            + rec.reservedBy() + "'); returning it to the FREE pool");
+                    return rec.withFree(now);
+                }
             }
         }
         return rec;
@@ -800,9 +905,14 @@ public final class MapPool {
     }
 
     /**
-     * {@link #bindToWall} 专用——把多张 map 的 upsert 收进<b>单个事务</b>，失败<b>抛出</b>（不吞）。
-     * 保证 all-or-nothing：要么全部落盘、要么全不落盘并抛异常让调用方回滚，杜绝 {@link #persist}
-     * 那种"中段失败、内存全改而 DB 部分改"的分叉。
+     * <b>地图借出路径统一走这里</b>（{@link #reserveForWall} + {@link #bindToWall}）——把多张 map 的
+     * upsert 收进<b>单个事务</b>，失败<b>抛出</b>（不吞）。保证 all-or-nothing：要么全部落盘、
+     * 要么全不落盘并抛异常让调用方回滚，杜绝 {@link #persist} 那种"中段失败、内存全改而
+     * DB 部分改"的分叉。
+     *
+     * <p>归还路径（{@link #releaseWall} / {@link #releaseToFree} / {@link #detectLeaks}）仍用
+     * 吞异常的 {@link #persist}：那边内存/DB 分叉的方向是"内存 FREE、DB 还写着 RESERVED"，
+     * 重启后地图仍归原 wall，不会串给别人，风险等级完全不同。</p>
      */
     private void persistAllStrict(List<PooledMap> maps) {
         jdbi.useTransaction(h -> {

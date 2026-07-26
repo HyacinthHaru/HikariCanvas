@@ -264,8 +264,13 @@ class EditSessionVariableTest {
         assertEquals("BedWarsPlugin", op.value());
     }
 
+    /**
+     * 解绑必须发 {@code replace(path, null)}，<b>不能</b>发 remove。
+     * 前端 applyVariablePatches 只认 replace，remove 会落 else 分支被整条丢弃 ——
+     * 表现是「点了解绑，绑定关系还挂在面板上，得重连才消失」。
+     */
     @Test
-    void bindUserVariable_unbindWithNullClearsSourceAndRemovesPath() {
+    void bindUserVariable_unbindEmitsReplaceNullNotRemove() {
         es.createVariable(store, WALL, "score", VarType.NUMBER, "0");
         es.bindUserVariable(store, WALL, "user:" + WALL + "/score", "BedWarsPlugin");
         // 现在解绑 → source 回 null
@@ -275,8 +280,9 @@ class EditSessionVariableTest {
         assertNull(store.get("user:" + WALL + "/score").orElseThrow().source());
 
         PatchOp op = ok.patch().ops().get(0);
-        assertEquals("remove", op.op());
+        assertEquals("replace", op.op(), "解绑要发 replace(path, null)，remove 前端认不了");
         assertTrue(op.path().endsWith("/source"));
+        assertNull(op.value());
     }
 
     @Test

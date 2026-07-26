@@ -21,8 +21,8 @@ import java.util.regex.Pattern;
  *       （装配时绑 OpPushCallback + ProjectionThrottler）。</li>
  *   <li><b>路径 B（headless）</b>：WallRepo 读 state → 临时 {@link EditSession} 套同一个
  *       {@code updateElement}（校验 / immutable 重建与编辑器路径单一权威，零语义分叉）→
- *       {@code wallRepo.updateState} → Ticker 处理照 {@code SessionManager.persistWall}
- *       链（在播 invalidate / 有 activeTimeline refreshAutoPlay / 静态墙不碰）。</li>
+ *       {@code wallRepo.updateState} → {@link #repaintAfterHeadlessWrite} 让画面跟上
+ *       （在播 invalidate / 有 activeTimeline refreshAutoPlay / 静态墙 renderStatic 补画）。</li>
  * </ul>
  *
  * <p><b>纪律</b>：两路径都不读 wall lock（CLAUDE.md §lock-state 第 2 条——后端编辑路径
@@ -411,13 +411,7 @@ public final class ElementPropertyApplier {
             return TraceStep.error(blockId, "unexpected op result: " + r.getClass().getSimpleName());
         }
         wallRepo.updateState(wallId, es.state());
-        if (ticker != null) {
-            if (ticker.isWallAnimating(wallId)) {
-                ticker.invalidate(wallId);
-            } else if (es.state().activeTimelineId() != null) {
-                ticker.refreshAutoPlay(wallId);
-            }
-        }
+        repaintAfterHeadlessWrite(wallId, es.state());
         return TraceStep.ok(blockId, "action", desc + " -> headless(updateState)");
     }
 
@@ -452,16 +446,37 @@ public final class ElementPropertyApplier {
             return TraceStep.error(blockId, "unexpected op result: " + r.getClass().getSimpleName());
         }
         wallRepo.updateState(wallId, es.state());
-        // 照 SessionManager.persistWall 的 Ticker 链：在播 → invalidate（下一帧用新 state）；
-        // 没在播但有 activeTimeline → refreshAutoPlay；静态墙不碰（省一次 loadWall DB 读）
-        if (ticker != null) {
-            if (ticker.isWallAnimating(wallId)) {
-                ticker.invalidate(wallId);
-            } else if (es.state().activeTimelineId() != null) {
-                ticker.refreshAutoPlay(wallId);
-            }
-        }
+        repaintAfterHeadlessWrite(wallId, es.state());
         return TraceStep.ok(blockId, "action", property + " -> headless(updateState)");
+    }
+
+    /**
+     * headless 落库后让游戏内的地图跟上新 state。三种墙分三条路：
+     *
+     * <ul>
+     *   <li>在播动画 → {@code invalidate}，Ticker 下一帧自己拿新 state 重渲；</li>
+     *   <li>没在播但挂了时间轴 → {@code refreshAutoPlay}（照 {@code SessionManager.persistWall}）；</li>
+     *   <li><b>静态墙 → {@code renderStatic} 补一次重画</b>。这里原先什么都不做，于是没人开编辑器、
+     *       又没时间轴的墙被脚本改完只有数据库变了，画面要等到重启 / 有人打开编辑器 / 恰好某个
+     *       变量触发重画才更新。补间在静态墙上落末帧走的就是这条 renderStatic 路径，语义一致。</li>
+     * </ul>
+     *
+     * <p>渲完立刻 {@code clearStaticDiff}：两次调用都投递到 Ticker 的单线程 executor，FIFO 保证
+     * 清理排在渲染之后，既不留 {@code byte[mapCount][16384]} 的 per-wall diff 缓存，也不影响本次出帧
+     * （代价是下次脚本改动重新全量推，与变量重画路径 {@code projectByWall} 同量级）。</p>
+     *
+     * <p>活跃编辑器 session 的墙不会走到这——那条是路径 A，压根不进 headless。</p>
+     */
+    private void repaintAfterHeadlessWrite(String wallId, ac.haru.hikaricanvas.state.ProjectState state) {
+        if (ticker == null) return;
+        if (ticker.isWallAnimating(wallId)) {
+            ticker.invalidate(wallId);
+        } else if (state.activeTimelineId() != null) {
+            ticker.refreshAutoPlay(wallId);
+        } else {
+            ticker.renderStatic(wallId, state);
+            ticker.clearStaticDiff(wallId);
+        }
     }
 
     /**

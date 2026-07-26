@@ -215,8 +215,15 @@ class ProjectImportHandlerTest {
         });
     }
 
+    /**
+     * 超限的包在 {@code readAllBytes()} <b>之前</b>就被 {@code file.size()} 挡住。
+     *
+     * <p>先读进堆再判大小的话，真被打进一个巨大文件就是堆先炸——解包里的同一道闸那时已经
+     * 没机会说话了。响应文案带上实际字节数，正是新闸的特征（解包那道闸的文案是中文的
+     * "包大小 … 超过上限 …"）。</p>
+     */
     @Test
-    void oversizedZip_returns413() throws Exception {
+    void oversizedZip_rejectedBeforeReadingIntoHeap() throws Exception {
         Session session = sessionWithProject(2, 1);
         // 1MB 包上限（ImportConfig 单位 MB），喂一个 >1MB 的不可压缩 zip → IMPORT_ZIP_TOO_LARGE → 413
         Javalin app = buildApp(sid -> session, s -> true,
@@ -229,8 +236,17 @@ class ProjectImportHandlerTest {
                     .header("Content-Type", "multipart/form-data; boundary=" + BOUNDARY)
                     .post(HttpRequest.BodyPublishers.ofByteArray(body)));
             assertEquals(413, resp.code());
-            assertTrue(resp.body().string().contains("IMPORT_ZIP_TOO_LARGE"));
+            String text = resp.body().string();
+            assertTrue(text.contains("IMPORT_ZIP_TOO_LARGE"), text);
+            assertTrue(text.contains("bytes; max"), "应是端点侧的大小闸先拒: " + text);
         });
+    }
+
+    /** 大小闸的阈值必须跟着 {@code config.import.canvas-max-mb} 走。 */
+    @Test
+    void maxCanvasBytesFollowsConfig() {
+        assertEquals(3L * 1024 * 1024,
+                importer(new HikariCanvasConfig.ImportConfig(3, 1, 1)).maxCanvasBytes());
     }
 
     // ---------- helpers ----------

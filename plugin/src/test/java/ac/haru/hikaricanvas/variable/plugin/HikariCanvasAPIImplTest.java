@@ -236,6 +236,59 @@ class HikariCanvasAPIImplTest {
         assertTrue(store.get("ns1/k").isEmpty());
     }
 
+    /**
+     * {@code ttl < 100ms} 按 {@code api.md §3.3 / §8.2} 的承诺 clamp 到 100ms，而不是把整条
+     * push 丢掉。
+     *
+     * <p>之前的实现是 store 直接抛 TTL_INVALID、API 层 catch 后只打一条 WARNING——
+     * 接入方看到的是"数据莫名其妙没进去"，文档却写着"自动 clamp"。这条钉住文档那一侧。</p>
+     */
+    @Test
+    void setVariable_tooSmallTtl_isClampedNotDropped() {
+        api.registerNamespace(pluginA, "ns1", new NamespaceInfo("A", "PluginA", "1.0"));
+
+        api.setVariable(pluginA, "ns1", "k", "v", Duration.ofMillis(5));
+
+        Variable v = store.get("ns1/k").orElseThrow(
+                () -> new AssertionError("ttl 太小不该丢掉整条 push"));
+        assertEquals("v", v.currentValue());
+        assertEquals(VariableStore.MIN_TTL_MS, v.ttl(), "应 clamp 到下限而不是原样写入");
+    }
+
+    /** 批量 push 同样走 clamp（两条路共用一个写入核心）。 */
+    @Test
+    void setVariables_tooSmallTtl_isClamped() {
+        api.registerNamespace(pluginA, "ns1", new NamespaceInfo("A", "PluginA", "1.0"));
+
+        api.setVariables(pluginA, "ns1",
+                Map.of("k", new VariableUpdate("v", Duration.ofMillis(1))));
+
+        Variable v = store.get("ns1/k").orElseThrow();
+        assertEquals(VariableStore.MIN_TTL_MS, v.ttl());
+    }
+
+    /** 负数 TTL 文档没承诺 clamp —— 仍然照常拒（静默 drop + log）。 */
+    @Test
+    void setVariable_negativeTtl_stillRejected() {
+        api.registerNamespace(pluginA, "ns1", new NamespaceInfo("A", "PluginA", "1.0"));
+
+        api.setVariable(pluginA, "ns1", "k", "v", Duration.ofMillis(-5));
+
+        assertTrue(store.get("ns1/k").isEmpty());
+    }
+
+    /** 0 = 永久、≥100ms 原样传（clamp 只碰 0<ttl<100ms 那一段）。 */
+    @Test
+    void setVariable_normalTtl_unchanged() {
+        api.registerNamespace(pluginA, "ns1", new NamespaceInfo("A", "PluginA", "1.0"));
+
+        api.setVariable(pluginA, "ns1", "forever", "v", Duration.ZERO);
+        api.setVariable(pluginA, "ns1", "later", "v", Duration.ofSeconds(30));
+
+        assertEquals(0L, store.get("ns1/forever").orElseThrow().ttl());
+        assertEquals(30_000L, store.get("ns1/later").orElseThrow().ttl());
+    }
+
     // ──────────────────────────────────────────────────────────
     //  setVariables
     // ──────────────────────────────────────────────────────────

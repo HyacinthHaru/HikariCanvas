@@ -23,8 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>验证：server 目录里的 {@code *.canvas}（{@code manifest.kind="pack"}）被登记为 pack 条目
  * （id = 文件名去后缀 / {@link TemplateEntry#isPack()} / {@code packBytes} 原样存 / 合成
- * {@link TemplateSpec} 带 params）；同目录里 {@code kind="project"} 的普通工程 {@code .canvas} 被跳过
- * （非模板），且既有 YAML 加载不受影响。</p>
+ * {@link TemplateSpec} 带 params）；同目录里 {@code kind="project"} 的普通工程 {@code .canvas}
+ * 按零参数模板收下（{@code docs/template-pack.md §5} 交叉导入宽容规则）。</p>
  */
 class TemplateRegistryPackTest {
 
@@ -78,24 +78,29 @@ class TemplateRegistryPackTest {
         assertEquals("fixed", canvas.size(), "pack canvas 应为 fixed-size");
         assertEquals(List.of(2, 1), canvas.maps(), "canvas.maps 应为 manifest wall [width, height]");
 
-        assertEquals(1, stats.serverLoaded(), "只有 pack 计入 server（普通工程被跳过、不计数）");
+        assertEquals(1, stats.serverLoaded(), "目录里只有这一个文件");
     }
 
     @Test
-    void plainProjectCanvasIsSkipped(@TempDir Path serverDir) throws IOException {
+    void plainProjectCanvasLoadsAsZeroParamTemplate(@TempDir Path serverDir) throws IOException {
         Files.write(serverDir.resolve("subway.canvas"),
                 buildPack(PACK_MANIFEST, PACK_PARAMS, MINIMAL_PROJECT));
-        // kind=project（普通工程，非模板）——同目录，应被跳过，不登记、不计失败
+        // kind=project（普通工程）——契约 template-pack.md §5：模板导入遇 project 当零参数模板入库
         Files.write(serverDir.resolve("plainproj.canvas"),
                 buildProject(PROJECT_MANIFEST, MINIMAL_PROJECT));
 
         TemplateRegistry reg = new TemplateRegistry(LOG, TemplateRegistryPackTest.class, serverDir);
         TemplateRegistry.ReloadStats stats = reg.reload();
 
-        assertNull(reg.byId("plainproj"), "kind=project 的 .canvas 不是模板，不应登记");
+        TemplateEntry plain = reg.byId("plainproj");
+        assertNotNull(plain, "kind=project 的 .canvas 应作零参数模板登记");
+        assertTrue(plain.isPack(), "登记后同样携带原始字节，套用走 applyPack");
+        assertTrue(plain.spec().params() == null || plain.spec().params().isEmpty(),
+                "无 params.json → 零参数");
+        assertEquals("Plain", plain.spec().name(), "name 取自 manifest.name");
         assertNotNull(reg.byId("subway"), "同目录的 pack 仍正常登记");
-        assertEquals(0, stats.failed(), "跳过普通工程不算失败: " + stats.failures());
-        assertEquals(1, stats.serverLoaded(), "仅 pack 计入 server");
+        assertEquals(0, stats.failed(), "收下普通工程不算失败: " + stats.failures());
+        assertEquals(2, stats.serverLoaded(), "pack 与 project 都计入 server");
     }
 
     @Test

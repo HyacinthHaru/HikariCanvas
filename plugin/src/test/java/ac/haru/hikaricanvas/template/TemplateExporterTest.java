@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -240,6 +241,55 @@ class TemplateExporterTest {
                 cfg, state);
         TemplateExporter.Result.Failed f = assertInstanceOf(TemplateExporter.Result.Failed.class, r);
         assertEquals("DUPLICATE_PARAM_ID", f.code());
+    }
+
+    // ---------- pack 要自带图片与脚本（docs/template-pack.md §3） ----------
+
+    /**
+     * 只写 manifest / params / project 三件的话：模板引用的原图一旦被 LRU 驱逐，
+     * 套用出来就是空白；墙上的积木脚本更是彻底丢掉。
+     */
+    @Test
+    void export_bundlesAssetsAndScripts() throws Exception {
+        ProjectState state = withTexts("Hi");
+        byte[] png = new byte[]{(byte) 0x89, 'P', 'N', 'G', 1, 2, 3};
+        byte[] scripts = "[{\"id\":\"r1\",\"wallId\":\"w-1\",\"enabled\":true,\"name\":\"n\"}]"
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        TemplateExporter.Result r = exporter.export(UUID.randomUUID(), "Steve", "bundle", "Bundle",
+                null, TemplateExporter.ParamConfig.empty(), state,
+                Map.of("00000000000000ab", png), scripts);
+
+        var entries = unpack(assertInstanceOf(TemplateExporter.Result.Ok.class, r).result().packBytes());
+        assertTrue(entries.containsKey("assets/00000000000000ab.png"), "图片应打进 assets/");
+        assertArrayEquals(png, entries.get("assets/00000000000000ab.png"));
+        assertTrue(entries.containsKey("scripts.json"), "脚本应打进 scripts.json");
+        assertArrayEquals(scripts, entries.get("scripts.json"));
+    }
+
+    /** 没有图片 / 脚本时不写空条目——保持与既有 pack 逐字节一致。 */
+    @Test
+    void export_withoutAssetsOrScripts_keepsThreeEntries() throws Exception {
+        TemplateExporter.Result r = exporter.export(UUID.randomUUID(), "Steve", "plain", "Plain",
+                null, TemplateExporter.ParamConfig.empty(), withTexts("Hi"), Map.of(), null);
+        var entries = unpack(assertInstanceOf(TemplateExporter.Result.Ok.class, r).result().packBytes());
+        assertFalse(entries.containsKey("scripts.json"));
+        assertTrue(entries.keySet().stream().noneMatch(k -> k.startsWith("assets/")));
+    }
+
+    /** 文件名必须是内容 hash 形态，否则导入侧的条目名校验会把整包拒掉。 */
+    @Test
+    void export_rejectsAssetKeysThatAreNotContentHashes() throws Exception {
+        java.util.Map<String, byte[]> bad = new java.util.LinkedHashMap<>();
+        bad.put("../evil", new byte[]{1});
+        bad.put("NOTAHASH", new byte[]{1});
+        bad.put("00000000000000ab", new byte[]{1});
+
+        TemplateExporter.Result r = exporter.export(UUID.randomUUID(), "Steve", "guard", "Guard",
+                null, TemplateExporter.ParamConfig.empty(), withTexts("Hi"), bad, null);
+        var entries = unpack(assertInstanceOf(TemplateExporter.Result.Ok.class, r).result().packBytes());
+        assertEquals(1, entries.keySet().stream().filter(k -> k.startsWith("assets/")).count());
+        assertTrue(entries.containsKey("assets/00000000000000ab.png"));
     }
 
     @Test

@@ -11,6 +11,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -36,6 +37,21 @@ public final class TemplatePublisher {
     private final TemplateRepo repo;
     private final CanvasCompositor compositor;
     private final int maxPerPlayer;
+    /**
+     * 缩略图服务。发布 / 删除后要清掉对应模板的内存缓存，否则 Gallery 拿到的还是旧图。
+     * 它在装配顺序上晚于 publisher 构造，故走 setter；可为 null（测试装配不接）。
+     */
+    private volatile ac.haru.hikaricanvas.template.preview.TemplatePreviewService previewService;
+    /**
+     * 图片字节来源：内容 hash → PNG 字节（生产接 {@code ImageStorage::readPngBytes}）。
+     * 可为 null——那样存出来的模板不带图片，套用时原图被 LRU 驱逐就变空白。
+     */
+    private volatile java.util.function.Function<String, byte[]> assetSource;
+    /**
+     * 脚本字节来源：wallId → {@code scripts.json} 字节（{@code ScriptRule[]} 数组）。
+     * 可为 null / 返 null——那样存出来的模板不带脚本。
+     */
+    private volatile java.util.function.Function<String, byte[]> scriptSource;
 
     public TemplatePublisher(Logger log, Path dataFolder,
                              TemplateRegistry registry,
@@ -50,15 +66,41 @@ public final class TemplatePublisher {
         this.maxPerPlayer = maxPerPlayer;
     }
 
-    /**
-     * 发布当前 wall 为新模板（或更新同 slug 的现有模板）。
-     *
-     * @param bypassQuota 持 {@code canvas.template.bypass-limit} 权限时跳过 max-per-player
-     */
+    /** 装配缩略图服务（HikariCanvas 在 TemplatePreviewService 建好后调）。 */
+    public void setPreviewService(
+            ac.haru.hikaricanvas.template.preview.TemplatePreviewService previewService) {
+        this.previewService = previewService;
+    }
+
+    /** 装配图片字节来源（生产传 {@code imageStorage::readPngBytes}）；不装 = 存模板不带图片。 */
+    public void setAssetSource(java.util.function.Function<String, byte[]> assetSource) {
+        this.assetSource = assetSource;
+    }
+
+    /** 装配脚本字节来源（wallId → scripts.json 字节）；不装 = 存模板不带脚本。 */
+    public void setScriptSource(java.util.function.Function<String, byte[]> scriptSource) {
+        this.scriptSource = scriptSource;
+    }
+
+    /** 不带 wallId 的重载：脚本无从取，只打包工程 + 图片。 */
     public Result publish(UUID ownerUuid, String ownerName,
                           String slug, String displayName, String description,
                           TemplateExporter.ParamConfig paramConfig,
                           ProjectState state, boolean bypassQuota) {
+        return publish(ownerUuid, ownerName, slug, displayName, description,
+                paramConfig, state, bypassQuota, null);
+    }
+
+    /**
+     * 发布当前 wall 为新模板（或更新同 slug 的现有模板）。
+     *
+     * @param bypassQuota 持 {@code canvas.template.bypass-limit} 权限时跳过 max-per-player
+     * @param wallId      来源墙 id，用来取该墙的积木脚本一并打包；null = 不带脚本
+     */
+    public Result publish(UUID ownerUuid, String ownerName,
+                          String slug, String displayName, String description,
+                          TemplateExporter.ParamConfig paramConfig,
+                          ProjectState state, boolean bypassQuota, String wallId) {
         // 1) 配额检查（基于已有数量，含同 slug 即将 upsert 的情况——给宽限）
         if (!bypassQuota && maxPerPlayer > 0) {
             int existing = repo.countByOwner(ownerUuid);
@@ -70,15 +112,20 @@ public final class TemplatePublisher {
             }
         }
 
-        // 2) Exporter：ProjectState → spec + yaml
+        // 2) 收集要一起打包的图片与脚本（缺任一都只是"少带"，不阻断发布）
+        Map<String, byte[]> assets = collectAssets(state);
+        byte[] scriptsJson = collectScripts(wallId);
+
+        // 3) Exporter：ProjectState → pack 字节（含 assets/ 与 scripts.json）
         TemplateExporter.Result exportResult = exporter.export(
-                ownerUuid, ownerName, slug, displayName, description, paramConfig, state);
+                ownerUuid, ownerName, slug, displayName, description, paramConfig, state,
+                assets, scriptsJson);
         if (exportResult instanceof TemplateExporter.Result.Failed f) {
             return new Result.Failed(f.code(), f.message());
         }
         TemplateExporter.ExportResult ok = ((TemplateExporter.Result.Ok) exportResult).result();
 
-        // 3) 写 .canvas pack 文件
+        // 4) 写 .canvas pack 文件
         Path packAbs = dataFolder.resolve(ok.packRelativePath());
         try {
             Files.createDirectories(packAbs.getParent());
@@ -88,7 +135,7 @@ public final class TemplatePublisher {
             return new Result.Failed("WRITE_FAILED", "pack: " + e.getMessage());
         }
 
-        // 4) 缩略图：直接 rasterize 当前 ProjectState（参数化前的快照）
+        // 5) 缩略图：直接 rasterize 当前 ProjectState（参数化前的快照）
         Path previewAbs = packAbs.resolveSibling(slug + ".preview.png");
         try {
             BufferedImage rgb = compositor.rasterize(state);
@@ -101,7 +148,7 @@ public final class TemplatePublisher {
             // 缩略图失败不阻断发布；前端可走 404 → 占位
         }
 
-        // 5) DB upsert
+        // 6) DB upsert
         long now = System.currentTimeMillis();
         boolean isExisting = repo.findById(ok.templateId()).isPresent();
         long created = isExisting ? repo.findById(ok.templateId()).orElseThrow().createdAt() : now;
@@ -113,8 +160,10 @@ public final class TemplatePublisher {
             return new Result.Failed("DB_FAILED", "templates upsert failed");
         }
 
-        // 6) Registry 热重载（让前端 listTemplates 立即看到新条目）
+        // 7) Registry 热重载（让前端 listTemplates 立即看到新条目）
         registry.reload();
+        // 重发布同 slug 时 templateId 不变 → 缩略图缓存命中的还是旧图，这里点名清掉
+        if (previewService != null) previewService.invalidate(ok.templateId());
 
         return new Result.Ok(ok.templateId());
     }
@@ -155,6 +204,7 @@ public final class TemplatePublisher {
 
         repo.delete(templateId);
         registry.reload();
+        if (previewService != null) previewService.invalidate(templateId);
         return new Result.Ok(templateId);
     }
 
@@ -195,6 +245,52 @@ public final class TemplatePublisher {
             return new Result.Failed("DB_FAILED", "update featured failed");
         }
         return new Result.Ok(templateId);
+    }
+
+    /**
+     * 扫工程里所有 {@link ac.haru.hikaricanvas.state.ImageElement} 引用的图片，逐个取 PNG 字节。
+     *
+     * <p>取不到的（文件已被 LRU 驱逐 / 读失败）跳过并记一条 warn——存模板本身照常成功，
+     * 只是这张图没带上。{@code assetSource} 没装配时返回空 map。</p>
+     */
+    private Map<String, byte[]> collectAssets(ProjectState state) {
+        java.util.function.Function<String, byte[]> src = this.assetSource;
+        if (src == null || state == null || state.layers() == null) return Map.of();
+        Map<String, byte[]> out = new java.util.LinkedHashMap<>();
+        for (var layer : state.layers()) {
+            for (var el : layer.elements()) {
+                if (!(el instanceof ac.haru.hikaricanvas.state.ImageElement im)) continue;
+                String hash = im.source();
+                if (hash == null || out.containsKey(hash)) continue;
+                byte[] png;
+                try {
+                    png = src.apply(hash);
+                } catch (RuntimeException e) {
+                    log.log(Level.WARNING, "[publisher] reading image " + hash + " failed", e);
+                    continue;
+                }
+                if (png == null || png.length == 0) {
+                    log.warning("[publisher] image " + hash
+                            + " is no longer on disk; template will be saved without it");
+                    continue;
+                }
+                out.put(hash, png);
+            }
+        }
+        return out;
+    }
+
+    /** 取该墙的积木脚本序列化字节；来源没装配、没 wallId 或该墙无脚本时返 null。 */
+    private byte[] collectScripts(String wallId) {
+        java.util.function.Function<String, byte[]> src = this.scriptSource;
+        if (src == null || wallId == null) return null;
+        try {
+            byte[] json = src.apply(wallId);
+            return (json == null || json.length == 0) ? null : json;
+        } catch (RuntimeException e) {
+            log.log(Level.WARNING, "[publisher] reading scripts for wall " + wallId + " failed", e);
+            return null;
+        }
     }
 
     private static String slugFromFilePath(String filePath) {

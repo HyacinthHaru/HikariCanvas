@@ -139,9 +139,10 @@ final class TemplateOpDispatcher {
                 parseParamConfig(payload.get("paramConfig"));
         boolean bypass = perms.granted(NODE_BYPASS_LIMIT);
 
+        // 传 wallId：pack 要把该墙的积木脚本一起打包，否则存成模板后脚本永久丢失
         ac.haru.hikaricanvas.template.TemplatePublisher.Result result = templatePublisher.publish(
                 s.playerUuid(), s.playerName(),
-                slug, displayName, description, paramConfig, state, bypass);
+                slug, displayName, description, paramConfig, state, bypass, s.wallId());
         if (result instanceof ac.haru.hikaricanvas.template.TemplatePublisher.Result.Ok ok) {
             ctx.send(Envelope.of("ack", in.id(), Map.of("templateId", ok.templateId())));
             pushTemplateRefresh(ctx, s, perms);

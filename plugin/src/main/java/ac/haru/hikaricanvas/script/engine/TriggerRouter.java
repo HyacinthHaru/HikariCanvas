@@ -198,7 +198,7 @@ public final class TriggerRouter {
         }
         for (ScriptRule r : store.listByWall(wallId)) {
             if (!r.enabled()) continue;       // disabled 规则不进索引、不调度
-            registerRuleLocked(wallId, r);
+            registerRuleSafely(wallId, r);
         }
         refreshNearSnapshotLocked();
     }
@@ -221,7 +221,7 @@ public final class TriggerRouter {
         for (Map.Entry<String, java.util.List<ScriptRule>> e : store.snapshotAll().entrySet()) {
             for (ScriptRule r : e.getValue()) {
                 if (!r.enabled()) continue;
-                registerRuleLocked(e.getKey(), r);
+                registerRuleSafely(e.getKey(), r);
                 n++;
             }
         }
@@ -311,16 +311,18 @@ public final class TriggerRouter {
      */
     public void firePlayerJoin(String playerName) {
         fireGlobal(joinRules, Trigger.PlayerJoin.class,
-                TriggerContext.Source.PLAYER_JOIN, playerName);
+                TriggerContext.Source.PLAYER_JOIN, playerName, playerName);
     }
 
     /**
      * 玩家被击杀（{@code GameEventListenerHub.onPlayerDeath}，killer 非 null
-     * 才到这里）→ 遍历全局 kill 索引投递。detail = {@code victim→killer}。
+     * 才到这里）→ 遍历全局 kill 索引投递。detail = {@code victim→killer}（给 trace 看的，
+     * 别去 parse 它）；<b>触发玩家 = 击杀者</b>（动手的那个是触发方，
+     * {@code target=trigger} 的消息发给他）。
      */
     public void firePlayerKill(String victimName, String killerName) {
         fireGlobal(killRules, Trigger.PlayerKill.class,
-                TriggerContext.Source.PLAYER_KILL, victimName + "→" + killerName);
+                TriggerContext.Source.PLAYER_KILL, victimName + "→" + killerName, killerName);
     }
 
     /**
@@ -329,7 +331,7 @@ public final class TriggerRouter {
      */
     public void firePlayerQuit(String playerName) {
         fireGlobal(quitRules, Trigger.PlayerQuit.class,
-                TriggerContext.Source.PLAYER_QUIT, playerName);
+                TriggerContext.Source.PLAYER_QUIT, playerName, playerName);
     }
 
     /**
@@ -346,7 +348,8 @@ public final class TriggerRouter {
                 continue;   // 索引残留 / 已禁用 / 已换型 → 跳过
             }
             runner.submit(wallId, latest,
-                    new TriggerContext(TriggerContext.Source.RIGHT_CLICK_WALL, 0, playerName));
+                    new TriggerContext(TriggerContext.Source.RIGHT_CLICK_WALL, 0,
+                            playerName, playerName));
         }
     }
 
@@ -369,7 +372,7 @@ public final class TriggerRouter {
         } else {
             return;   // 已换型 → 跳过
         }
-        runner.submit(wallId, latest, new TriggerContext(src, 0, playerName));
+        runner.submit(wallId, latest, new TriggerContext(src, 0, playerName, playerName));
     }
 
     /**
@@ -385,7 +388,7 @@ public final class TriggerRouter {
      * enabled 且触发器仍是期望类型才投递（rebuild 竞态窗口里换型规则不误触发）。
      */
     private void fireGlobal(Set<RuleRef> refs, Class<? extends Trigger> expectedType,
-                            TriggerContext.Source source, String detail) {
+                            TriggerContext.Source source, String detail, String triggerPlayer) {
         if (shutdown || refs.isEmpty()) return;
         for (RuleRef ref : refs) {
             ScriptRule latest = store.find(ref.wallId(), ref.ruleId()).orElse(null);
@@ -393,13 +396,31 @@ public final class TriggerRouter {
                     || !expectedType.isInstance(latest.trigger())) {
                 continue;   // 索引残留 / 已禁用 / 已换型 → 跳过
             }
-            runner.submit(ref.wallId(), latest, new TriggerContext(source, 0, detail));
+            runner.submit(ref.wallId(), latest,
+                    new TriggerContext(source, 0, detail, triggerPlayer));
         }
     }
 
     // ──────────────────────────────────────────────────────────
     //  内部（*Locked 方法仅在 synchronized 内调）
     // ──────────────────────────────────────────────────────────
+
+    /**
+     * 单条规则登记的异常隔离外壳。
+     *
+     * <p>登记链上有会向外抛的环节（{@code originSource.load} 要读库 / 读世界，resolver 是
+     * 注入的 seam），一条规则炸了不该让整墙的重建半途而废——那样 clearWallLocked 已经把旧索引
+     * 清了、新索引只登了一半，该墙的触发会静默失效到下一次 rebuild。逐条兜住，坏的那条跳过，
+     * 其余照常登记。</p>
+     */
+    private void registerRuleSafely(String wallId, ScriptRule rule) {
+        try {
+            registerRuleLocked(wallId, rule);
+        } catch (RuntimeException e) {
+            log.warning("TriggerRouter: rule registration failed (skipped) wall=" + wallId
+                    + " rule=" + rule.id() + " err=" + e.getMessage());
+        }
+    }
 
     private void registerRuleLocked(String wallId, ScriptRule rule) {
         Trigger t = rule.trigger();
@@ -447,7 +468,16 @@ public final class TriggerRouter {
      */
     private void registerNearLocked(String wallId, ScriptRule rule, int rangeBlocks,
                                     boolean leaveEdge) {
-        WallOrigin origin = originSource == null ? null : originSource.load(wallId);
+        WallOrigin origin;
+        try {
+            // 生产实现要读库 + 查世界，会抛（DB 抖动 / 世界卸载）。照 VariableChange 分支的
+            // resolver 兜法接住：这一条跳过，不牵连同墙其他规则的登记。
+            origin = originSource == null ? null : originSource.load(wallId);
+        } catch (RuntimeException e) {
+            log.warning("TriggerRouter: origin lookup threw for wall=" + wallId
+                    + " rule=" + rule.id() + " err=" + e.getMessage());
+            return;
+        }
         if (origin == null) {
             log.warning("TriggerRouter: " + (leaveEdge ? "playerLeaveRange" : "playerNear")
                     + " origin resolve failed (wall missing or world not loaded); rule skipped registration wall="

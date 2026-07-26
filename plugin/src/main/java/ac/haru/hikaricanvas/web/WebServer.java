@@ -61,6 +61,22 @@ public final class WebServer {
 
     private static final String ATTR_SESSION_ID = "sessionId";
 
+    /** 每连接的畸形帧连击计数（{@code WsContext} attribute key）。 */
+    private static final String ATTR_MALFORMED_STRIKES = "malformedStrikes";
+
+    /**
+     * 连续多少个畸形帧就断连（{@code docs/security.md §3.2}「解析失败累计 3 次 → close」）。
+     * 畸形帧进不到任何 dispatcher，因此不占 {@link SessionRateLimiter} 的 40msg/2s 窗口，
+     * 得单独计——否则一个只会发垃圾 JSON 的客户端可以永远挂着刷 INVALID_PAYLOAD。
+     */
+    static final int MALFORMED_FRAME_LIMIT = 3;
+
+    /** 字体 id 白名单（间接寻址前的第一道闸，杜绝路径穿越 / 嗅探）。 */
+    private static final java.util.regex.Pattern FONT_ID_RE =
+            java.util.regex.Pattern.compile("[a-zA-Z0-9_-]+");
+    /** advance 表文件名后缀，{@code /fonts/{id}.metrics.json}。 */
+    private static final String METRICS_SUFFIX = ".metrics.json";
+
     private final Logger log;
     private final String host;
     private final int port;
@@ -157,6 +173,11 @@ public final class WebServer {
 
     /** 活跃 session → 绑定的 WS 连接；用于服务端主动推送（state.snapshot / state.patch）。 */
     private final ConcurrentMap<String, WsContext> wsBySession = new ConcurrentHashMap<>();
+    /**
+     * per-session 出站顺序闸：记住已经发出去的最大 {@code state.patch} version，
+     * 用来发现跨线程乱序（详见 {@link #pushPatch}）。key 与 {@link #wsBySession} 同步清理。
+     */
+    private final ConcurrentMap<String, long[]> outboundGates = new ConcurrentHashMap<>();
     /** 会话输入限流器；持引用供"反复超限 → 单点断连"回调（见 {@link #closeForRepeatedViolation}）。 */
     private final SessionRateLimiter rateLimiter;
     /** 服务端主动推送 {@code s-<N>} 的自增计数。 */
@@ -252,7 +273,7 @@ public final class WebServer {
         };
         this.editOpDispatcher = new EditOpDispatcher(
                 sessionManager, throttler, rateLimiter, templateRegistry, wallRepo, push, auditLog, plugin);
-        this.brushOpDispatcher = new BrushOpDispatcher(sessionManager, throttler, push);
+        this.brushOpDispatcher = new BrushOpDispatcher(sessionManager, throttler, rateLimiter, push);
         this.wallOpDispatcher = new WallOpDispatcher(
                 sessionManager, wallRepo, frameDeployer, throttler, plugin, auditLog, rateLimiter);
         // 存 / 删成功后把该 session 最新可见模板列表推回去（前端只在 ready 帧拉一次，否则 gallery 要重连才刷新）。
@@ -372,37 +393,73 @@ public final class WebServer {
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/palette", ctx -> servePalette(ctx)));
 
-            // 网页首页"近期项目"列表。无玩家认证（127.0.0.1 trust）；返回所有 walls 的 summary
+            // 网页"近期项目"列表。必须带活跃 sessionId，默认只给调用方自己的墙。
+            //
+            // 从前这里直接 ctx.json(listAll())，零鉴权把全服每面墙的 wallId / alias / 作者名 /
+            // 世界 / 坐标 / 朝向 / 尺寸全吐出来。绑 127.0.0.1 时这只是"有主机权限的人能看"，
+            // 但公网部署是文档里明确支持的形态（nginx/Caddy 反代 + TLS，反代层没有任何鉴权），
+            // 于是这张"全服艺术品坐标 + 作者名清单"就直接挂在互联网上了 —— 对着坐标去拆是分分钟的事。
+            // canvas.admin 才给全服清单（运维要在网页上看全局）。
             cfg.routes.addEndpoint(new Endpoint(
-                    HandlerType.GET, "/api/walls", ctx -> ctx.json(wallRepo.listAll())));
+                    HandlerType.GET, "/api/walls", ctx -> {
+                        Session caller = callerSession(ctx);
+                        if (caller == null) {
+                            ctx.status(401);
+                            ctx.json(Map.of("error", "session required"));
+                            return;
+                        }
+                        boolean admin = MainThreadPerms.hasPermission(
+                                plugin, caller.playerUuid(), "canvas.admin");
+                        ctx.json(admin
+                                ? wallRepo.listAll()
+                                : wallRepo.listForOwner(caller.playerUuid()));
+                    }));
 
-            // 模板缩略图端点。Gallery 卡片 <img> 直接拉这条
+            // 模板缩略图端点。Gallery 卡片 <img> 直接拉这条。
+            // 缩略图 = 模板画布内容的完整渲染图，必须按调用方身份过滤，否则别人私有模板的画面
+            // 谁都能拉走（apply 端的隔离就白做了）。身份从 sessionId query param 解析，解析不到
+            // 就只放行 builtin / server 模板。
+            // hasBypass 一律传 false：canvas.template.use-others 要主线程 hop 才能查，而这是个
+            // <img> 高频端点。代价是持该权限的管理员看别人的模板卡片时显占位图而非缩略图。
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/template/{id}/preview.png", ctx -> {
                         String id = ctx.pathParam("id");
-                        byte[] png = templatePreviewService.pngFor(id);
+                        String sid = ctx.queryParam("sessionId");
+                        Session caller = sid == null ? null : sessionManager.byId(sid);
+                        byte[] png = templatePreviewService.pngFor(
+                                id, caller == null ? null : caller.playerUuid(), false);
                         if (png == null) {
                             ctx.status(404);
                             return;
                         }
                         ctx.contentType("image/png");
-                        // 模板内容不变 → 长缓存；reload 后服务端 invalidate，浏览器靠 ETag/304 路径
-                        ctx.header("Cache-Control", "public, max-age=300");
+                        // 模板内容不变 → 长缓存；reload 后服务端 invalidate，浏览器靠 ETag/304 路径。
+                        // private：响应随调用方身份变化，不能让共享代理缓存后串给别人。
+                        ctx.header("Cache-Control", "private, max-age=300");
                         ctx.result(png);
                     }));
 
-            // wall 缩略图。HomePage 卡片展示用；按 wall.updatedAt 做粗粒度缓存
+            // wall 缩略图。HomePage 卡片展示用；按 wall.updatedAt 做粗粒度缓存。
+            // 同 /api/walls：必须带活跃 sessionId，否则任何人都能对任意 wallId 出图，
+            // 把别人的画一张张拉走。已锁定的墙只有 owner（或持 canvas.admin.bypass-lock 的管理员）
+            // 能看——与 SessionManager.open 的 lock-aware 判定同口径；未锁的草稿墙是协作中间态
+            // （CLAUDE.md 固化决策 2），任何持 session 的玩家可看，与「未锁墙谁都能 open」一致。
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/wall/{id}/preview.png", ctx -> {
+                        Session caller = callerSession(ctx);
+                        if (caller == null) { ctx.status(401); return; }
                         String wid = ctx.pathParam("id");
                         var w = wallRepo.loadById(wid).orElse(null);
                         if (w == null) { ctx.status(404); return; }
+                        if (!canSeeWallPreview(caller, w)) { ctx.status(403); return; }
                         byte[] png = wallPreviewCache.get(
                                 wid + "@" + w.updatedAt(),
                                 key -> wallPreviewService.renderPng(w.state()));
                         if (png == null) { ctx.status(500); return; }
                         ctx.contentType("image/png");
-                        ctx.header("Cache-Control", "public, max-age=60");
+                        // private：响应随调用方身份变化（锁定墙只有 owner 能拿到），
+                        // 不能让共享代理缓存后串给别人。
+                        ctx.header("Cache-Control", "private, max-age=60");
                         ctx.result(png);
                     }));
 
@@ -445,12 +502,44 @@ public final class WebServer {
                         HandlerType.POST, "/api/project/import", projectImportHandler::handleImport));
             }
 
-            // 字体 advance 表查询端点（用户字体走这条路；内置字体仍由
-            // /fonts/{id}.metrics.json 静态文件提供，前端先 fetch 静态后 fallback 此端点）
+            // 字体 advance 表：前端先 fetch /fonts/{id}.metrics.json，失败再 fallback
+            // /api/font/metrics?id=。两条通道后端都要真的能答——开发时 vite 直接 serve
+            // web/public/fonts 掩盖了这点，而 web/public 不进仓库、jar 部署下没有这条静态路径，
+            // 于是线上两条通道齐 404、前端整页退回 canonical 排版，与后端真实 advance 排版对不上。
+            // 这里把 /fonts/*.metrics.json 也接上：内置字体直读 jar 内 /fonts/，
+            // 用户字体（只有内存表）落到 serializeToJson。
+            cfg.routes.addEndpoint(new Endpoint(
+                    HandlerType.GET, "/fonts/{file}", ctx -> {
+                        String id = metricsFontIdOrNull(ctx.pathParam("file"));
+                        if (id == null) {
+                            ctx.status(404);
+                            return;
+                        }
+                        java.io.InputStream in = getClass().getClassLoader()
+                                .getResourceAsStream("fonts/" + id + METRICS_SUFFIX);
+                        if (in != null) {
+                            ctx.header("X-Content-Type-Options", "nosniff");
+                            ctx.contentType("application/json");
+                            // 同 id 的构建期产物 immutable，长缓存
+                            ctx.header("Cache-Control", "max-age=86400, immutable");
+                            ctx.result(in);
+                            return;
+                        }
+                        String json = ac.haru.hikaricanvas.render.FontMetricsTable.serializeToJson(id);
+                        if (json == null) {
+                            ctx.status(404);
+                            return;
+                        }
+                        ctx.header("X-Content-Type-Options", "nosniff");
+                        ctx.contentType("application/json").result(json);
+                        // 用户字体表是启动期后台线程逐个注册的，短缓存让早期请求能被后续刷新
+                        ctx.header("Cache-Control", "max-age=300, private");
+                    }));
+
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/font/metrics", ctx -> {
                         String id = ctx.queryParam("id");
-                        if (id == null || id.isEmpty() || !id.matches("[a-zA-Z0-9_-]+")) {
+                        if (id == null || id.isEmpty() || !FONT_ID_RE.matcher(id).matches()) {
                             ctx.status(400).result("{\"code\":\"BAD_REQUEST\"}");
                             return;
                         }
@@ -715,6 +804,19 @@ public final class WebServer {
     }
 
     /**
+     * {@code /fonts/{file}} 的文件名 → 字体 id。只认 {@code {id}.metrics.json}，
+     * id 必须过白名单正则（间接寻址前的第一道闸，杜绝路径穿越 / 嗅探）。不合规返 null（调用方回 404）。
+     *
+     * <p>字体二进制不从这条路出——走 {@code /api/font/file}，那边有格式判定与正确 MIME。</p>
+     */
+    static String metricsFontIdOrNull(String file) {
+        if (file == null || !file.endsWith(METRICS_SUFFIX)) return null;
+        String id = file.substring(0, file.length() - METRICS_SUFFIX.length());
+        if (id.isEmpty() || !FONT_ID_RE.matcher(id).matches()) return null;
+        return id;
+    }
+
+    /**
      * 按扩展名映射 MIME。猜不到返 null —— 调用方（{@link #serveClasspath}）负责兜底到
      * {@code application/octet-stream}（安全下载语义），别让响应落到 Javalin 默认的
      * {@code text/plain}。仅供本包 + 单测使用（package-private）。
@@ -808,6 +910,55 @@ public final class WebServer {
                 .toList();
     }
 
+    // ---------- HTTP 端点的调用方身份 ----------
+
+    /**
+     * 解析 HTTP 请求背后的玩家会话。身份从 {@code ?sessionId=} query param 取
+     * （与 {@code /api/template/{id}/preview.png} 同一约定；页面本身就是拿 token 换来的，
+     * 前端手里一定有 sessionId）。
+     *
+     * @return 活跃会话；查不到（缺参 / 已过期 / 已关闭）返 {@code null}，调用方按 401 处理
+     */
+    private Session callerSession(Context ctx) {
+        String sid = ctx.queryParam("sessionId");
+        if (sid == null || sid.isBlank()) return null;
+        return sessionManager.byId(sid);
+    }
+
+    /**
+     * 能否看某面墙的缩略图（先做不需要主线程的判定，必要时才去查权限）。
+     * 判定本身是纯函数，见 {@link #previewVisible}。
+     */
+    private boolean canSeeWallPreview(Session caller, ac.haru.hikaricanvas.storage.WallRepo.Wall w) {
+        // 先按 owner / 未锁定判，能过就不必为了一张缩略图跑主线程 hop
+        if (previewVisible(caller.playerUuid(), w.ownerUuid(), w.publishedAt(), false)) return true;
+        return MainThreadPerms.hasPermission(plugin, caller.playerUuid(), "canvas.admin.bypass-lock");
+    }
+
+    /**
+     * 墙缩略图可见性判定（纯函数，供单测直接驱动）。口径与
+     * {@code SessionManager.open} 的 lock-aware 判定一致：
+     *
+     * <ul>
+     *   <li>owner 恒可见</li>
+     *   <li>未锁定（{@code lockedAt == null}）的草稿墙 = 协作中间态，任何持会话的玩家可见
+     *       —— 与「未锁墙谁都能 open」是同一条决策（CLAUDE.md 固化决策 2）</li>
+     *   <li>已锁定的墙非 owner 一律不可见，除非持 {@code canvas.admin.bypass-lock}</li>
+     * </ul>
+     *
+     * @param callerUuid    调用方玩家（{@code null} = 没有有效会话，一律不可见）
+     * @param ownerUuid     墙的作者
+     * @param lockedAt      锁定时间戳（DB 列 {@code published_at}）；{@code null} = 未锁定
+     * @param hasBypassLock 调用方是否持 {@code canvas.admin.bypass-lock}
+     */
+    static boolean previewVisible(UUID callerUuid, UUID ownerUuid, Long lockedAt,
+                                  boolean hasBypassLock) {
+        if (callerUuid == null) return false;
+        if (callerUuid.equals(ownerUuid)) return true;
+        if (lockedAt == null) return true;
+        return hasBypassLock;
+    }
+
     // ---------- WS 消息 ----------
 
     private void handleMessage(WsMessageContext ctx) {
@@ -819,13 +970,17 @@ public final class WebServer {
             // 细节走 server 日志，client 拿固定 code。
             log.log(Level.FINE, "WS malformed envelope", e);
             ctx.send(Envelope.error(null, "INVALID_PAYLOAD", null));
+            countMalformedFrame(ctx);
             return;
         }
         if (in == null || in.op() == null || in.op().isBlank()) {
             String id = in == null ? null : in.id();
             ctx.send(Envelope.error(id, "INVALID_PAYLOAD", "missing op"));
+            countMalformedFrame(ctx);
             return;
         }
+        // 一帧解析成功即清零畸形帧计数（连续 3 次才断，偶发坏帧不误伤）
+        ctx.attribute(ATTR_MALFORMED_STRIKES, null);
 
         String bound = ctx.attribute(ATTR_SESSION_ID);
         if (bound == null) {
@@ -841,6 +996,59 @@ public final class WebServer {
 
         // 已认证
         sessionManager.touch(bound);
+        try {
+            dispatchAuthenticated(ctx, in, bound);
+        } catch (Throwable t) {
+            // 任何 dispatcher 抛未检异常都必须回一帧——否则前端既收不到 ack 也收不到 error，
+            // 只能挂等到 8s 超时，看起来像"点了没反应"。
+            // 错误脱敏同 envelope 解析分支：细节只进服务器日志，客户端拿固定 code。
+            log.log(Level.SEVERE, "WS dispatch failed op=" + in.op() + " session=" + bound, t);
+            try {
+                ctx.send(Envelope.error(in.id(), "INTERNAL_ERROR", null));
+            } catch (Exception sendFail) {
+                log.log(Level.FINE, "WS error frame send failed", sendFail);
+            }
+        }
+    }
+
+    /**
+     * 记一次畸形帧；连续达到 {@link #MALFORMED_FRAME_LIMIT} 就 close 1008。
+     *
+     * <p>计数挂在 {@code WsContext} attribute 上（按连接，不按登录态 session——畸形帧
+     * 可能发生在 auth 之前，那时还没有 sessionId）。任何一帧解析成功会在
+     * {@link #handleMessage} 里清零，所以偶发坏帧不会累积到断连。</p>
+     */
+    private void countMalformedFrame(WsMessageContext ctx) {
+        Integer prev = ctx.attribute(ATTR_MALFORMED_STRIKES);
+        int strikes = (prev == null ? 0 : prev) + 1;
+        ctx.attribute(ATTR_MALFORMED_STRIKES, strikes);
+        if (strikes < MALFORMED_FRAME_LIMIT) return;
+
+        String bound = ctx.attribute(ATTR_SESSION_ID);
+        if (bound != null) {
+            wsBySession.remove(bound, ctx);
+            if (auditLog != null) {
+                java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();
+                details.put("reason", "repeated malformed frames");
+                details.put("strikes", strikes);
+                Session s = sessionManager.byId(bound);
+                auditLog.record("SESSION_MALFORMED_FRAME_DISCONNECT",
+                        (s == null || s.playerUuid() == null) ? null : s.playerUuid().toString(),
+                        s == null ? null : s.playerName(), bound, null, details);
+            }
+        }
+        try {
+            ctx.closeSession(Protocol.CLOSE_RATE_LIMIT_VIOLATION, "malformed_frames");
+        } catch (Exception ignored) {}
+        log.info("WS closed " + Protocol.CLOSE_RATE_LIMIT_VIOLATION
+                + " malformed_frames: " + strikes + " consecutive, sessionId=" + bound);
+    }
+
+    /**
+     * 已认证连接的 op 路由。抛出的异常由 {@link #handleMessage} 统一兜成
+     * {@code INTERNAL_ERROR} 回帧。
+     */
+    private void dispatchAuthenticated(WsMessageContext ctx, Envelope in, String bound) {
         switch (in.op()) {
             case "ping" -> ctx.send(Envelope.pong(in.id()));
             case "element.add",
@@ -1204,11 +1412,15 @@ public final class WebServer {
                 // 直接 query RailDao（dispatcher 内部已持有）；这里复用 plugin 装配链
                 ac.haru.hikaricanvas.rail.WallRailBinding b =
                         ac.haru.hikaricanvas.web.RailOpDispatcher.lookupBinding(railOpDispatcher, wallId);
-                if (b != null && b.lineId() != null) {
+                // 判定必须与 RailScheduleProvider 的接管条件完全一致：lineId 与 stationId
+                // 都非空才算「走铁路数据源」。只看 lineId 会在「站点被删掉」之后骗人——
+                // 那时 FK 把 station_id 置了 null、provider 已 unregisterWall 交回 ManualSchedule，
+                // 前端却还显示「铁路模式已启用」，服主对着一个不生效的开关调半天。
+                if (b != null && b.lineId() != null && b.stationId() != null) {
                     java.util.Map<String, Object> bMap = new java.util.LinkedHashMap<>();
                     bMap.put("wallId", b.wallId());
                     bMap.put("lineId", b.lineId());
-                    if (b.stationId() != null) bMap.put("stationId", b.stationId());
+                    bMap.put("stationId", b.stationId());
                     if (b.direction() != null) bMap.put("direction", b.direction());
                     payload.put("railBinding", bMap);
                 } else {
@@ -1234,22 +1446,63 @@ public final class WebServer {
     public boolean pushSnapshot(String sessionId, ProjectState state) {
         WsContext ctx = wsBySession.get(sessionId);
         if (ctx == null) return false;
-        String id = "s-" + serverIdSeq.incrementAndGet();
-        ctx.send(Envelope.of("state.snapshot", id, Map.of("projectState", state)));
+        long[] gate = outboundGate(sessionId);
+        synchronized (gate) {
+            String id = "s-" + serverIdSeq.incrementAndGet();
+            ctx.send(Envelope.of("state.snapshot", id, Map.of("projectState", state)));
+            // 全量重同步：客户端镜像直接对齐到这个 version，之后比它旧的 patch 一律算乱序
+            gate[0] = Math.max(gate[0], state.version());
+        }
         return true;
     }
 
     /**
      * 推送 {@code state.patch}（RFC 6902 子集增量）。每个 element/canvas op 成功后调用。
      *
+     * <p><b>乱序自愈：</b> {@code EditSession} 用监视器串行化 mutation，但 {@code version}
+     * 是在监视器内 bump、patch 却在监视器<b>外</b>发出去的（{@code EditOpDispatcher} 与
+     * {@code SessionManager} 的脚本 / 补间路径都是这个形态）。于是 Jetty WS 线程与
+     * ScriptRunner / TweenScheduler 线程可以交错，让 version=N+1 的 patch 先于 N 到达前端。
+     * 前端按 RFC6902 索引路径逐条应用，乱序时 add/remove 会让元素下标整体移位，后到的那条
+     * 直接改错元素 —— 镜像与权威态就此静默分叉，用户还在错镜像上继续编辑。</p>
+     *
+     * <p>这里在传输层守住：per-session 记住已发出去的最大 version，发现要发的 patch 比它
+     * <b>更旧</b>（真正的乱序），就不发这条增量，改推一份全量 {@code state.snapshot} 让客户端
+     * 直接对齐权威态。代价是一次全量下行，换掉一次静默损坏。锁只圈住"比较 + send"，
+     * 不碰 EditSession 监视器，避免与投影节流器构成锁序环。</p>
+     *
      * @return 是否成功发送
      */
     public boolean pushPatch(String sessionId, StatePatch patch) {
         WsContext ctx = wsBySession.get(sessionId);
         if (ctx == null) return false;
-        String id = "s-" + serverIdSeq.incrementAndGet();
-        ctx.send(Envelope.of("state.patch", id, patch));
+        long[] gate = outboundGate(sessionId);
+        synchronized (gate) {
+            if (patch.version() < gate[0]) {
+                log.warning("WS out-of-order state.patch v=" + patch.version()
+                        + " after v=" + gate[0] + " (sessionId=" + sessionId
+                        + "); resyncing with full snapshot");
+                Session s = sessionManager.byId(sessionId);
+                ProjectState st = (s == null) ? null : s.projectState();
+                if (st == null) return false;
+                String sid = "s-" + serverIdSeq.incrementAndGet();
+                ctx.send(Envelope.of("state.snapshot", sid, Map.of("projectState", st)));
+                gate[0] = Math.max(gate[0], st.version());
+                return true;
+            }
+            String id = "s-" + serverIdSeq.incrementAndGet();
+            ctx.send(Envelope.of("state.patch", id, patch));
+            gate[0] = patch.version();
+        }
         return true;
+    }
+
+    /**
+     * per-session 的出站顺序闸（{@code long[1]}，元素 0 = 已发出去的最大 version）。
+     * 用数组当锁对象兼状态槽，省一个 wrapper 类；生命周期跟 {@link #wsBySession} 一起清。
+     */
+    private long[] outboundGate(String sessionId) {
+        return outboundGates.computeIfAbsent(sessionId, k -> new long[]{-1L});
     }
 
     /**
@@ -1290,6 +1543,7 @@ public final class WebServer {
      */
     public void forgetSession(String sessionId) {
         if (sessionId == null) return;
+        outboundGates.remove(sessionId);
         WsContext ctx = wsBySession.remove(sessionId);
         if (ctx != null) {
             // 服务端主动 forget 后该连接已无对应 session，关闭让 client 重新走 auth。
@@ -1372,6 +1626,7 @@ public final class WebServer {
      * <p>关连接逻辑收口于此单点；6 个 dispatcher 的 {@code rateLimiter.allow()} 调用一律不变。</p>
      */
     private void closeForRepeatedViolation(String sessionId) {
+        outboundGates.remove(sessionId);
         WsContext ctx = wsBySession.remove(sessionId);
         if (auditLog != null) {
             java.util.LinkedHashMap<String, Object> details = new java.util.LinkedHashMap<>();

@@ -1,7 +1,6 @@
 package ac.haru.hikaricanvas.render;
 
 import ac.haru.hikaricanvas.state.Element;
-import ac.haru.hikaricanvas.state.ElementValidator;
 import ac.haru.hikaricanvas.state.ImageElement;
 import ac.haru.hikaricanvas.state.Mask;
 
@@ -60,40 +59,56 @@ public final class ImageRenderer implements ElementRenderer {
     }
 
     /**
-     * feather 路径。流程：
+     * feather 路径。流程（契约见 {@code docs/rendering.md §4.4}）：
      * <ol>
-     *   <li>off-buffer1：把 image 缩放绘到 (w, h) ARGB</li>
-     *   <li>off-buffer2：把 mask path 填白色到 (w, h)；inverted 时填外部</li>
-     *   <li>对 off-buffer2 做盒滤波模糊（box blur 三遍近似高斯）</li>
+     *   <li>算可分配区域：元素矩形 ∩（画布向外扩 {@code 3 × featherPx + 1}）</li>
+     *   <li>off-buffer1：把 image 缩放绘到 (w, h) ARGB，只保留可分配区域那块</li>
+     *   <li>off-buffer2：把 mask path 填白色；inverted 时填外部</li>
+     *   <li>对 off-buffer2 做盒滤波模糊（可分离 1D 核，3 遍近似高斯）</li>
      *   <li>用 {@code AlphaComposite.DST_IN} 把 mask alpha 复合到 image off-buffer1</li>
      *   <li>把 off-buffer1 画回主 g</li>
      * </ol>
      *
-     * <p>失败时降级为硬边 clip 路径（不影响渲染稳定性）。</p>
+     * <p><b>为什么必须裁剪：</b>元素 w/h 上限 {@code MAX_DIM} = 10000，两张 ARGB 中间图各 400 MB；
+     * 关键帧插值还能把 w/h 顶过 MAX_DIM。裁到画布内之后最坏就是画布大小。向外多扩
+     * {@code 3 × featherPx}（3 遍模糊，每遍影响半径 featherPx）保证可见区内像素与不裁剪时逐位相同。</p>
+     *
+     * <p><b>降级而不是不画：</b>裁完面积仍超 {@link #MAX_FEATHER_PIXELS} 时走硬边 clip + 直接画原图
+     * —— O(1) 内存。以前这里是直接 {@code return}，
+     * 后端整张图消失、前端照常显示，双端分叉。中途抛异常时同样降级。</p>
      */
     private static void drawWithFeather(Graphics2D g, ImageElement im, BufferedImage src, RenderContext ctx) {
         int w = im.w();
         int h = im.h();
-        // 关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）；dither 路径按 clip∩canvas 分配安全，不用改
-        if (w > ElementValidator.MAX_DIM || h > ElementValidator.MAX_DIM) return;
         Mask mask = im.mask();
         int featherPx = mask == null ? 0 : mask.featherPxOrZero();
+
+        java.awt.Rectangle crop = featherBufferRect(g, w, h, featherPx);
+        if (crop == null) {
+            // 超上限 / 读不到画布范围 —— 降级硬边，别硬分配也别整张图不画
+            drawHardEdgeFallback(g, im, src, ctx);
+            return;
+        }
+        if (crop.isEmpty()) return;   // 完全在画布外，本来就看不见
+
         try {
-            // (1) image off-buffer
-            BufferedImage imgBuf = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            // (1) image off-buffer（局部 (0,0) 对应元素坐标 (crop.x, crop.y)）
+            BufferedImage imgBuf = new BufferedImage(crop.width, crop.height, BufferedImage.TYPE_INT_ARGB);
             Graphics2D ig = imgBuf.createGraphics();
             try {
+                ig.translate(-crop.x, -crop.y);
                 ig.drawImage(src, 0, 0, w, h, null);
             } finally {
                 ig.dispose();
             }
 
             // (2) mask off-buffer (grayscale alpha)
-            BufferedImage maskBuf = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            BufferedImage maskBuf = new BufferedImage(crop.width, crop.height, BufferedImage.TYPE_INT_ARGB);
             PathParser.Result parsed = PathParser.parse(mask.d());
             Path2D maskPath = parsed.path();
             Graphics2D mg = maskBuf.createGraphics();
             try {
+                mg.translate(-crop.x, -crop.y);
                 mg.setColor(Color.WHITE);
                 if (mask.inverted()) {
                     Area area = new Area(new Rectangle2D.Double(0, 0, w, h));
@@ -119,23 +134,61 @@ public final class ImageRenderer implements ElementRenderer {
             }
 
             // (5) 主 g 已 translate(im.x, im.y) → drawImage 落到 element 位置
-            g.drawImage(imgBuf, 0, 0, null);
+            g.drawImage(imgBuf, crop.x, crop.y, null);
         } catch (InternalError | RuntimeException ex) {
             if (ctx.log() != null) {
                 ctx.log().warning("mask feather render failed for element " + im.id()
                         + ": " + ex.getMessage());
             }
-            // 降级：硬边 clip + 原图
-            try {
-                applyImageMaskClipSafely(g, im, ctx);
-                g.drawImage(src, 0, 0, w, h, null);
-            } catch (Exception ignored) {}
+            drawHardEdgeFallback(g, im, src, ctx);
+        }
+    }
+
+    /** 羽化中间缓冲区面积硬上限（像素）。32×32 maps 满画布 = 16.8 M，正常用法碰不到。 */
+    static final long MAX_FEATHER_PIXELS = 16_777_216L;
+
+    /**
+     * 算羽化 off-buffer 的可分配矩形（元素本地坐标，主 g 已 translate 到元素原点）。
+     *
+     * @return 可分配矩形；{@code isEmpty()} = 完全在画布外（不画）；{@code null} = 超上限 / 无从裁剪，调用方降级
+     */
+    static java.awt.Rectangle featherBufferRect(Graphics2D g, int w, int h, int featherPx) {
+        java.awt.Rectangle full = new java.awt.Rectangle(0, 0, w, h);
+        java.awt.Rectangle canvas = CanvasCompositor.visibleBounds(g);
+        java.awt.Rectangle crop;
+        if (canvas == null) {
+            // 拿不到画布范围（直接拿裸 Graphics2D 调 renderer 的路径）：只能退回全尺寸
+            crop = full;
+        } else {
+            java.awt.Rectangle grown = new java.awt.Rectangle(canvas);
+            int pad = 3 * Math.max(0, featherPx) + 1;   // 3 遍模糊，每遍影响半径 featherPx
+            grown.grow(pad, pad);
+            crop = full.intersection(grown);
+            if (crop.isEmpty()) return crop;
+        }
+        if ((long) crop.width * (long) crop.height > MAX_FEATHER_PIXELS) return null;
+        return crop;
+    }
+
+    /** 降级路径：硬边 clip + 原图。O(1) 内存，任何尺寸都画得出来。 */
+    private static void drawHardEdgeFallback(Graphics2D g, ImageElement im,
+                                             BufferedImage src, RenderContext ctx) {
+        try {
+            applyImageMaskClipSafely(g, im, ctx);
+            g.drawImage(src, 0, 0, im.w(), im.h(), null);
+        } catch (InternalError | RuntimeException ignored) {
+            // 连硬边都画不出来（clip 状态已污染）——调用方 finally 会恢复 clip / transform
         }
     }
 
     /**
      * 盒滤波模糊（box blur，3 次近似高斯）。仅对 alpha 通道关键，但本实现对 ARGB
-     * 整体跑——更简洁且性能差距可忽略（mask off-buffer 一般 ≤ 1MP）。
+     * 整体跑——更简洁且性能差距可忽略。
+     *
+     * <p><b>用可分离 1D 核</b>（水平一遍 + 垂直一遍），每像素 {@code O(k)}。原来用
+     * {@code (2r+1)²} 二维核：{@code r=32} 时每像素 4225 次乘加、跑 3 遍，500×500 元素就是
+     * 30 亿次运算/帧，而这段跑在编辑会话锁里。二维均值核本身就是两个 1D 均值核的卷积，
+     * 拆开是数学等价的。</p>
      *
      * @param src     ARGB 输入图
      * @param radius  半径（像素）；0 / 负值直接 return src
@@ -147,17 +200,22 @@ public final class ImageRenderer implements ElementRenderer {
         int passes = 3;
         BufferedImage out = src;
         int kSize = 2 * r + 1;
-        float kVal = 1f / (kSize * kSize);
-        float[] kernel = new float[kSize * kSize];
+        float kVal = 1f / kSize;
+        float[] kernel = new float[kSize];
         java.util.Arrays.fill(kernel, kVal);
-        ConvolveOp op = new ConvolveOp(new Kernel(kSize, kSize, kernel), ConvolveOp.EDGE_NO_OP, null);
+        ConvolveOp horizontal = new ConvolveOp(new Kernel(kSize, 1, kernel), ConvolveOp.EDGE_NO_OP, null);
+        ConvolveOp vertical = new ConvolveOp(new Kernel(1, kSize, kernel), ConvolveOp.EDGE_NO_OP, null);
         for (int i = 0; i < passes; i++) {
-            BufferedImage next = new BufferedImage(out.getWidth(), out.getHeight(),
-                    BufferedImage.TYPE_INT_ARGB);
-            op.filter(out, next);
-            out = next;
+            out = applyKernel(vertical, applyKernel(horizontal, out));
         }
         return out;
+    }
+
+    private static BufferedImage applyKernel(ConvolveOp op, BufferedImage in) {
+        BufferedImage next = new BufferedImage(in.getWidth(), in.getHeight(),
+                BufferedImage.TYPE_INT_ARGB);
+        op.filter(in, next);
+        return next;
     }
 
     /**
@@ -194,9 +252,15 @@ public final class ImageRenderer implements ElementRenderer {
             if (ctx.log() != null) {
                 ctx.log().warning("mask render failed for element " + im.id() + ": " + ex.getMessage());
             }
-            // 降级：不应用 mask（caller 已 saveClip/restoreClip，故 setClip 状态可能已部分污染）
-            // 把 clip 重置回 element bbox 之外（用大 rect 覆盖全屏），让 drawImage 仍画原图
-            // —— 由于 g.translate 已 applied，本地坐标 0..w, 0..h 是 element 范围
+            // 降级为「无 mask 直接画原图」。g.clip() 自己抛的时候 clip 可能已被部分收窄，
+            // 不重置的话接下来那句 drawImage 会把图片画没 —— 这里把 clip 拨回 element bbox
+            // （g.translate 已 applied，本地 0..w / 0..h 就是元素范围），等价于没有 mask。
+            // caller 的 finally 仍会把 clip 恢复成进方法前的值。
+            try {
+                g.setClip(0, 0, im.w(), im.h());
+            } catch (InternalError | RuntimeException ignored) {
+                // 连 setClip 都失败就只能放弃，外层 finally 兜底恢复
+            }
         }
     }
 

@@ -23,8 +23,11 @@ import java.util.logging.Logger;
  * {@code rail_timetable} / {@code wall_rail_bindings} 五表的 CRUD。FK 级联由 schema 自带
  * （V016 migration），DAO 不重复触发显式 DELETE。</p>
  *
- * <p>所有方法异常被 catch + log，**不上抛**——业务层（{@code RailOpDispatcher}）走
- * Optional / count 判定成功；保持与 ScheduleDao 风格一致。</p>
+ * <p>所有方法异常被 catch + log，<b>不上抛</b>——保持与 ScheduleDao 风格一致。但吞掉的异常
+ * 必须让业务层看得见结果：读方法返 Optional / List，删方法返受影响行数，<b>写方法
+ * （upsert* / replaceTimetable）返 boolean</b>，{@code false} = 这次没写进去（外键约束、
+ * UNIQUE 冲突、DB 故障……）。业务层（{@code RailOpDispatcher}）据此回 error 而不是照样 ack
+ * 成功——写方法曾经一律 void，绑定失败也回 ack，站牌空白到重启且查不出原因。</p>
  */
 public class RailDao {
 
@@ -40,7 +43,8 @@ public class RailDao {
     //  rail_lines
     // ────────────────────────────────────────────────────────────
 
-    public void upsertLine(RailLine line) {
+    /** @return 是否写入成功（false = 约束冲突 / DB 故障，已记 WARNING） */
+    public boolean upsertLine(RailLine line) {
         try {
             jdbi.useHandle(h -> h.createUpdate(
                     "INSERT INTO rail_lines("
@@ -61,8 +65,10 @@ public class RailDao {
                     .bind("created", line.createdAt())
                     .bind("updated", line.updatedAt())
                     .execute());
+            return true;
         } catch (Exception e) {
             log.log(Level.WARNING, "RailDao.upsertLine failed: " + line.id(), e);
+            return false;
         }
     }
 
@@ -107,7 +113,8 @@ public class RailDao {
     //  rail_stations
     // ────────────────────────────────────────────────────────────
 
-    public void upsertStation(RailStation s) {
+    /** @return 是否写入成功（false = 线路不存在等外键冲突 / DB 故障，已记 WARNING） */
+    public boolean upsertStation(RailStation s) {
         try {
             jdbi.useHandle(h -> h.createUpdate(
                     "INSERT INTO rail_stations("
@@ -126,8 +133,10 @@ public class RailDao {
                     .bind("term", s.isTerminus() ? 1 : 0)
                     .bind("created", s.createdAt())
                     .execute());
+            return true;
         } catch (Exception e) {
             log.log(Level.WARNING, "RailDao.upsertStation failed: " + s.id(), e);
+            return false;
         }
     }
 
@@ -174,7 +183,11 @@ public class RailDao {
     //  rail_runs
     // ────────────────────────────────────────────────────────────
 
-    public void upsertRun(RailRun r) {
+    /**
+     * @return 是否写入成功。{@code false} 常见于 {@code UNIQUE(line_id, run_number)} 撞车次号
+     *         或线路 / 起终点站不存在（外键），也可能是 DB 故障；均已记 WARNING
+     */
+    public boolean upsertRun(RailRun r) {
         try {
             jdbi.useHandle(h -> h.createUpdate(
                     "INSERT INTO rail_runs("
@@ -203,8 +216,10 @@ public class RailDao {
                     .bind("created", r.createdAt())
                     .bind("updated", r.updatedAt())
                     .execute());
+            return true;
         } catch (Exception e) {
             log.log(Level.WARNING, "RailDao.upsertRun failed: " + r.id(), e);
+            return false;
         }
     }
 
@@ -253,8 +268,11 @@ public class RailDao {
 
     /**
      * 批量替换车次的 timetable：先删该 runId 的所有行，再批量 insert。事务内执行。
+     *
+     * @return 是否整体成功。{@code false} 时事务已回滚（旧时刻表原样保留），常见原因是
+     *         某条目的 station_id 不存在（外键）
      */
-    public void replaceTimetable(String runId, List<RailTimetableEntry> entries) {
+    public boolean replaceTimetable(String runId, List<RailTimetableEntry> entries) {
         try {
             jdbi.useTransaction(h -> {
                 h.createUpdate("DELETE FROM rail_timetable WHERE run_id = :r")
@@ -273,8 +291,10 @@ public class RailDao {
                             .execute();
                 }
             });
+            return true;
         } catch (Exception e) {
             log.log(Level.WARNING, "RailDao.replaceTimetable failed: run=" + runId, e);
+            return false;
         }
     }
 
@@ -412,7 +432,12 @@ public class RailDao {
     //  wall_rail_bindings
     // ────────────────────────────────────────────────────────────
 
-    public void upsertBinding(WallRailBinding b) {
+    /**
+     * @return 是否写入成功。{@code false} 常见于 line_id / station_id 指向不存在的行（外键），
+     *         此时绝不能回 ack——否则 wall 被当成"已绑铁路"，ManualSchedule 永久跳过它，
+     *         而 RailScheduleProvider 又查不到停靠信息，站牌只剩空白
+     */
+    public boolean upsertBinding(WallRailBinding b) {
         try {
             jdbi.useHandle(h -> h.createUpdate(
                     "INSERT INTO wall_rail_bindings("
@@ -429,8 +454,10 @@ public class RailDao {
                     .bind("d", b.direction())
                     .bind("u", b.updatedAt())
                     .execute());
+            return true;
         } catch (Exception e) {
             log.log(Level.WARNING, "RailDao.upsertBinding failed: " + b.wallId(), e);
+            return false;
         }
     }
 

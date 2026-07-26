@@ -63,9 +63,16 @@ class AnimationTickerTest {
     /** 内存 wall 源；put 覆盖（模拟编辑持久化后 invalidate 重载），remove 模拟 wall 删除。 */
     private static final class FakeWallSource implements AnimationTicker.WallSource {
         final Map<String, WallRepo.Wall> walls = new HashMap<>();
+        /** load 调用次数（守 renderStatic 不每帧 loadById 的类契约）。 */
+        final AtomicInteger loadCount = new AtomicInteger();
+        /** load 内部回调 seam：模拟「锁外 load 期间并发落了一次 invalidate」。 */
+        volatile Runnable onLoad;
 
         @Override
         public WallRepo.Wall load(String wallId) {
+            loadCount.incrementAndGet();
+            Runnable hook = onLoad;
+            if (hook != null) hook.run();
             return walls.get(wallId);
         }
 
@@ -662,5 +669,167 @@ class AnimationTickerTest {
         t.clearStaticDiff("w-static");
         t.flushSchedulerForTest();
         assertFalse(t.hasStaticDiffForTest("w-static"), "clearStaticDiff 后该条目被移除");
+    }
+
+    // ---------- 补间静态帧路径（renderStatic）与暂停态 / 缓存 ----------
+
+    /**
+     * 暂停态的时间轴不产帧，{@link AnimationTicker#isWallAnimating} 也返 false（补间引擎据此
+     * 走静态帧分流）；那 renderStatic 就不能因为「这墙有 entry」而让位 —— 让位等于把补间的每
+     * 一帧都扔掉，画面完全不动。
+     */
+    @Test
+    void renderStatic_pausedTimeline_stillRenders() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-1", wall("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        FakeRenderer r = new FakeRenderer();
+        AnimationTicker t = newTicker(src, r);
+
+        t.play("w-1", "tl-1");
+        t.pause("w-1");
+        assertFalse(t.isWallAnimating("w-1"), "暂停态 gate 放行 reactive / 补间路径");
+
+        r.reset();
+        t.renderStatic("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        t.flushSchedulerForTest();
+        assertEquals(1, r.renderCount.get(), "暂停态下补间的静态帧必须真的渲出去");
+    }
+
+    /** 反向锚定：真正在播的时间轴仍然优先，renderStatic 让位。 */
+    @Test
+    void renderStatic_playingTimeline_yields() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-1", wall("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        FakeRenderer r = new FakeRenderer();
+        AnimationTicker t = newTicker(src, r);
+
+        t.play("w-1", "tl-1");
+        assertTrue(t.isWallAnimating("w-1"));
+        r.reset();
+        t.renderStatic("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        t.flushSchedulerForTest();
+        assertEquals(0, r.renderCount.get(), "播放中由 ticker 自己产帧，renderStatic 不抢");
+    }
+
+    /**
+     * 类契约写死了「不每 tick loadById」。补间默认 30fps，renderStatic 每帧一次 DB 读
+     * 比时间轴路径判死刑的 20 读/秒还高 —— 必须缓存。
+     */
+    @Test
+    void renderStatic_cachesWallAcrossFrames() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-static", wall("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        AnimationTicker t = newTicker(src, new FakeRenderer());
+
+        src.loadCount.set(0);
+        for (int i = 0; i < 10; i++) {
+            t.renderStatic("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        }
+        t.flushSchedulerForTest();
+        assertEquals(1, src.loadCount.get(), "10 帧只该读一次 wall");
+    }
+
+    /** 编辑落库后 invalidate 必须把补间静态帧那条路的 wall 缓存也打掉（那种墙通常没有 entry）。 */
+    @Test
+    void invalidate_dropsStaticWallCache() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-static", wall("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        AnimationTicker t = newTicker(src, new FakeRenderer());
+
+        t.renderStatic("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        t.flushSchedulerForTest();
+        src.loadCount.set(0);
+
+        t.invalidate("w-static");
+        t.renderStatic("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        t.flushSchedulerForTest();
+        assertEquals(1, src.loadCount.get(), "invalidate 后下一帧应重新读一次");
+    }
+
+    /** 补间结束清理时静态 wall 缓存也要一起丢，别把删掉的墙一直攥在手里。 */
+    @Test
+    void clearStaticDiff_dropsStaticWallCache() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-static", wall("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        AnimationTicker t = newTicker(src, new FakeRenderer());
+
+        t.renderStatic("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        t.flushSchedulerForTest();
+        t.clearStaticDiff("w-static");
+        t.flushSchedulerForTest();
+        src.loadCount.set(0);
+
+        t.renderStatic("w-static", stateWith("e-1", LoopMode.LOOP, "tl-1", 1));
+        t.flushSchedulerForTest();
+        assertEquals(1, src.loadCount.get(), "清理后再来一帧应重新读");
+    }
+
+    // ---------- 暂停期间被直写后恢复播放 ----------
+
+    /**
+     * 暂停期间 gate 放行 reactive 路径直写地图（projectByWall / 补间静态帧），
+     * 时间轴那份 per-map diff 基准就作废了；恢复播放若不重置基准，diff 会认为「像素没变」
+     * 而永不重推，画面一直卡在暂停帧上。
+     */
+    @Test
+    void resumeAfterPause_resetsDiffBaseline() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-1", wall("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        final boolean[] diffWasNullOnEntry = new boolean[1];
+        AnimationTicker.FrameRenderer probe = (wall, frame, diff, force) -> {
+            diffWasNullOnEntry[0] = diff.lastFrames == null;
+            diff.lastFrames = new byte[][] { new byte[] {1} };
+            return 0;
+        };
+        AnimationTicker t = new AnimationTicker(src, probe, 60, LOG);
+        this.ticker = t;
+
+        t.play("w-1", "tl-1");
+        t.tickOnceForTest("w-1");
+        t.tickOnceForTest("w-1");
+        assertFalse(diffWasNullOnEntry[0], "连续播放沿用基准");
+
+        // 暂停 → 期间别人直写了地图 → 恢复
+        t.pause("w-1");
+        t.play("w-1", "tl-1");
+        t.tickOnceForTest("w-1");
+        assertTrue(diffWasNullOnEntry[0], "恢复播放后首帧必须重建全量基准");
+    }
+
+    // ---------- play 锁外 load 与并发 invalidate ----------
+
+    /**
+     * play 的 loadWall 在 entry 锁外（DB 读不能压在锁上）。若 invalidate 恰好落在
+     * load 与进锁之间，旧写法无条件 {@code e.wall = w; e.invalidated = false} 会把编辑连同
+     * 失效标志一起吞掉 —— 墙上一直渲染编辑前的状态。schedule 触发型时间轴每秒调一次 play，
+     * 命中概率随编辑频率累积。
+     */
+    @Test
+    void play_concurrentInvalidateDuringLoad_doesNotSwallowEdit() {
+        FakeWallSource src = new FakeWallSource();
+        src.walls.put("w-1", wall("w-1", stateWith("e-1", LoopMode.LOOP, "tl-1", 1)));
+        FakeRenderer r = new FakeRenderer();
+        AnimationTicker t = newTicker(src, r);
+
+        // 先注册一个暂停态 entry（invalidate 才有作用对象）
+        t.play("w-1", "tl-1");
+        t.pause("w-1");
+
+        // 下一次 play 的 loadWall 期间：模拟「编辑落库 + invalidate」抢在进锁之前
+        AtomicInteger hooks = new AtomicInteger();
+        src.onLoad = () -> {
+            if (hooks.incrementAndGet() == 1) {
+                src.walls.put("w-1", wall("w-1", stateWith("e-2", LoopMode.LOOP, "tl-1", 1)));
+                t.invalidate("w-1");
+            }
+        };
+        t.play("w-1", "tl-1");
+        src.onLoad = null;
+
+        r.reset();
+        t.tickOnceForTest("w-1");
+        assertEquals(1, r.renderCount.get());
+        assertEquals(Integer.MIN_VALUE, r.lastX(),
+                "渲染的必须是编辑后的 state（e-1 已被换成 e-2），不能回退到 load 时那份旧快照");
     }
 }

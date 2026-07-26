@@ -31,7 +31,9 @@ import java.util.logging.Logger;
  *
  * <p><b>状态缓存：</b>每个播放中的 wall 缓存 {@link WallRepo.Wall}（state + mapIds + key），
  * <b>不</b>每 tick 走 {@code loadById}（20fps = 20 DB 读/秒/墙，不可接受）。编辑持久化后由
- * 装配层调 {@link #invalidate}，下一 tick 重载——编辑可见延迟 ≤ 1 帧。</p>
+ * 装配层调 {@link #invalidate}，下一 tick 重载——编辑可见延迟 ≤ 1 帧。
+ * 补间引擎用的 {@link #renderStatic} 走同一条纪律（缓存表 {@code staticWalls}，补间默认 30fps，
+ * 每帧一次 DB 读比时间轴路径判死刑的数字还高）。</p>
  *
  * <p><b>播放语义（MANUAL）：</b></p>
  * <ul>
@@ -126,6 +128,11 @@ public final class AnimationTicker implements AnimationTickerGate {
         boolean paused;
         boolean invalidated;
         /**
+         * 失效代次：{@link #invalidate} 每次自增。{@link #play} 在锁外读 DB，进锁后比对这个数 ——
+         * 不等就说明手上的 wall 快照在 load 期间已被编辑覆盖过，不能拿它回填。
+         */
+        long invalidationGen;
+        /**
          * diff 只许 Ticker 线程触碰。控制线程（play 非 resume /
          * invalidate）想清 diff 时置此标志，由下一 tick 在 Ticker 线程上执行 reset。
          */
@@ -152,7 +159,16 @@ public final class AnimationTicker implements AnimationTickerGate {
      * 契约同 {@link PlaybackEntry#diff}——线程限定安全。
      */
     private final Map<String, FrameDiff> staticDiffs = new ConcurrentHashMap<>();
+    /**
+     * 补间静态帧路径的 wall 元数据缓存（mapIds / world / key），key = wallId。
+     * 与 {@link #staticDiffs} 同生命周期、同线程契约（仅 Ticker 线程读写）；
+     * 由 {@link #invalidate}（编辑落库）与 {@link #clearStaticDiff}（补间结束）失效。
+     */
+    private final Map<String, WallRepo.Wall> staticWalls = new ConcurrentHashMap<>();
     private volatile boolean shutdown;
+
+    /** {@link #play} 撞上并发 invalidate 时的重读上限；用尽后退化为「置 invalidated 交给下一 tick」。 */
+    private static final int MAX_PLAY_RELOAD_RETRIES = 3;
 
     /** 时钟注入 seam（测试用）。 */
     private volatile LongSupplier nanoClock = System::nanoTime;
@@ -238,34 +254,56 @@ public final class AnimationTicker implements AnimationTickerGate {
      */
     public Result play(String wallId, String timelineId) {
         if (shutdown || wallId == null) return Result.WALL_NOT_FOUND;
-        WallRepo.Wall w = loadWall(wallId);
-        if (w == null) return Result.WALL_NOT_FOUND;
-        Timeline tl = resolveTimeline(w.state(), timelineId);
-        if (tl == null) return Result.TIMELINE_NOT_FOUND;
 
-        // TOCTOU：computeIfAbsent 与进入 entry 锁之间，并发 stopWall
-        // 可能已把该 entry 摘出 map——若仍在其上 schedule 会产生「永不可达的孤儿 cadence 任务」。
-        // 锁内复核 map 成员资格，被摘除则重试拿新 entry；stopWall 的 remove 也在 entry 锁内，
-        // 两者互斥后该窗口被关死。
-        while (true) {
+        // loadWall 是 DB 读，必须放锁外（entry 锁被 isWallAnimating 等热路径共用，不能压在 IO 上）。
+        // 代价是「锁外读到的快照可能在进锁前就被编辑覆盖」：schedule 触发型时间轴每秒调一次 play，
+        // 与 persistWall→invalidate 撞上时，旧写法无条件 e.wall = w + e.invalidated = false
+        // 会把编辑连同失效标志一起吞掉，墙上一直渲染编辑前的状态直到下次 invalidate。
+        // 这里用 invalidationGen 做版本比对：不等就重新 load；重试用尽仍撞上就置 invalidated，
+        // 交给下一 tick 重载 —— 绝不静默采用过期快照。
+        for (int attempt = 0; ; attempt++) {
+            PlaybackEntry pre = entries.get(wallId);
+            long genBefore = pre == null ? 0L : generationOf(pre);
+
+            WallRepo.Wall w = loadWall(wallId);
+            if (w == null) return Result.WALL_NOT_FOUND;
+            Timeline tl = resolveTimeline(w.state(), timelineId);
+            if (tl == null) return Result.TIMELINE_NOT_FOUND;
+
+            // TOCTOU：computeIfAbsent 与进入 entry 锁之间，并发 stopWall
+            // 可能已把该 entry 摘出 map——若仍在其上 schedule 会产生「永不可达的孤儿 cadence 任务」。
+            // 锁内复核 map 成员资格，被摘除则重试拿新 entry；stopWall 的 remove 也在 entry 锁内，
+            // 两者互斥后该窗口被关死。
             PlaybackEntry e = entries.computeIfAbsent(wallId, PlaybackEntry::new);
             synchronized (e) {
                 if (entries.get(wallId) != e) continue;
+                boolean stale = e.invalidationGen != genBefore;
+                if (stale && attempt < MAX_PLAY_RELOAD_RETRIES) continue;   // 重新 load 一遍
                 boolean resume = e.paused && tl.id().equals(e.timelineId);
                 e.wall = w;
                 e.timeline = tl;
                 e.timelineId = tl.id();
-                e.invalidated = false;
+                e.invalidated = stale;   // 重试用尽仍撞上 → 让下一 tick 自己重载
                 e.basisNanos = nanoClock.getAsLong();
                 if (!resume) {
                     e.basisPosMs = 0L;
-                    // 不直接动 e.diff（在飞 tick 可能正用它）；置标志由 Ticker 线程消化
-                    e.diffResetPending = true;
                 }
+                // diff 基准无条件重置。暂停期间 gate 放行 reactive 路径直写地图
+                // （projectByWall / 补间静态帧），恢复播放后 per-map diff 会以为「像素没变」
+                // 而永不重推，画面卡在暂停帧上。不直接动 e.diff（在飞 tick 可能正用它），
+                // 置标志由 Ticker 线程消化。
+                e.diffResetPending = true;
                 e.paused = false;
                 schedule(e, cadenceOf(tl));
                 return Result.OK;
             }
+        }
+    }
+
+    /** 锁外读 {@code play} 用的失效代次快照。 */
+    private static long generationOf(PlaybackEntry e) {
+        synchronized (e) {
+            return e.invalidationGen;
         }
     }
 
@@ -349,10 +387,15 @@ public final class AnimationTicker implements AnimationTickerGate {
      * </ul>
      */
     public void invalidate(String wallId) {
-        PlaybackEntry e = wallId == null ? null : entries.get(wallId);
+        if (wallId == null) return;
+        // 补间静态帧那条路径的 wall 缓存也要失效 —— 那种墙通常没有 timeline entry，
+        // 放在下面的 entry 判空之后就永远轮不到。
+        invalidateStaticWall(wallId);
+        PlaybackEntry e = entries.get(wallId);
         if (e == null) return;
         synchronized (e) {
             if (entries.get(wallId) != e) return;
+            e.invalidationGen++;   // 让并发 play 看见「你手上的快照过期了」
             // 被吸收的 reactive 意图（编辑 flush / wall.refresh）转为下一帧全量补发，
             // 避免 per-map diff 跳过「像素没变但 ItemFrame 重挂」的 map
             e.diffResetPending = true;
@@ -431,8 +474,15 @@ public final class AnimationTicker implements AnimationTickerGate {
     /**
      * 补间引擎用：渲染某 wall 的一帧补间中间态（不落 DB；Ticker 线程执行保 BufferPool/diff 契约）。
      *
-     * <p>该 wall 已有 timeline 播放 entry 时本方法静默 no-op（timeline tick 优先，
-     * 仅对无 timeline 播放的静态墙生效）。wall 不存在 / shutdown 也 no-op。</p>
+     * <p>该 wall 的时间轴<b>正在播</b>时本方法静默 no-op（timeline tick 优先）。判定必须与
+     * {@link #isWallAnimating} 用同一条谓词：补间引擎正是按它分流的 —— 之前这里用
+     * {@code entries.containsKey}，把暂停态也算作「有人产帧」，于是暂停 / seek 过一次的墙上
+     * 补间的每一帧都被吞掉，画面完全不动。</p>
+     *
+     * <p>wall 元数据（mapIds / world / key）按 wallId 缓存，与 {@link #staticDiffs} 同生命周期。
+     * 类契约写死了「不每 tick loadById」，补间默认 30fps，这条路径每帧一次 DB 读 + 全量 JSON
+     * 反序列化比时间轴路径判死刑的 20 读/秒还高。缓存由 {@link #invalidate} /
+     * {@link #clearStaticDiff} 失效。</p>
      *
      * <p>任意线程可调（投递 scheduler.execute 到 Ticker 线程）；frame 必须 immutable 不可变。</p>
      */
@@ -440,16 +490,33 @@ public final class AnimationTicker implements AnimationTickerGate {
         if (shutdown || wallId == null || frame == null) return;
         scheduler.execute(() -> {
             try {
-                // 有 timeline entry（含暂停态）→ 本帧不抢，ticker 自己产帧
-                if (entries.containsKey(wallId)) return;
-                WallRepo.Wall wall = wallSource.load(wallId);
-                if (wall == null) return;
+                // 只有真正在播的时间轴才让位；暂停态不产帧，让位等于把这一帧扔了
+                if (isWallAnimating(wallId)) return;
+                WallRepo.Wall wall = staticWalls.get(wallId);
+                if (wall == null) {
+                    wall = wallSource.load(wallId);
+                    if (wall == null) return;
+                    staticWalls.put(wallId, wall);
+                }
                 FrameDiff diff = staticDiffs.computeIfAbsent(wallId, k -> new FrameDiff());
                 renderer.renderFrame(wall, frame, diff, false);
             } catch (Throwable t) {
                 log.log(Level.WARNING, "renderStatic failed wallId=" + wallId + ": " + t.getMessage(), t);
             }
         });
+    }
+
+    /**
+     * 丢掉补间静态帧路径的 wall 缓存。{@link #staticWalls} 契约是「仅 Ticker 线程读写」，
+     * 所以走 {@code scheduler.execute} 投递（同 {@link #clearStaticDiff} 的理由）。
+     */
+    private void invalidateStaticWall(String wallId) {
+        if (shutdown) return;
+        try {
+            scheduler.execute(() -> staticWalls.remove(wallId));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // 关停竞态，随进程退出整体回收
+        }
     }
 
     /**
@@ -466,7 +533,10 @@ public final class AnimationTicker implements AnimationTickerGate {
     public void clearStaticDiff(String wallId) {
         if (shutdown || wallId == null) return;
         try {
-            scheduler.execute(() -> staticDiffs.remove(wallId));
+            scheduler.execute(() -> {
+                staticDiffs.remove(wallId);
+                staticWalls.remove(wallId);
+            });
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
             // 关停竞态（scheduler 已 shutdown）——staticDiffs 会随进程退出整体回收，无需补救
         }

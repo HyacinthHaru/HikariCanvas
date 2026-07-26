@@ -92,6 +92,23 @@ enum LoopMode { ONCE, LOOP, PING_PONG }   // wire: once / loop / pingPong（came
 > 一个元素在一条 timeline 里**每个 property 一串关键帧**——见 §2.3 的 `property` 字段（同一 element
 > 的不同 property 关键帧混在该 element 的列表里，按 property 分组）。
 
+#### 唯一性不变量：一个 (element, property, timeMs) 上只允许一帧
+
+后端在写入路径强制这条（`TimelineOperations`）：
+
+| 入口 | 撞上同 `(property, timeMs)` 的已有帧时 |
+|---|---|
+| `keyframe.add` | **覆盖**那一帧的 `value` + `easing`（等价于 update），不追加新帧；patch 回整轨 replace |
+| `keyframe.move` / `keyframe.update` 改 `timeMs` | 被拖过去的那一帧**胜出**，原地那一帧被删掉 |
+
+**为什么不是「允许重合、取值时挑一个」**：允许重合的话，同一时刻会堆出多个帧，UI 上重叠成一个点，
+用户改了半天改的是被遮住的那一个——「这个时刻怎么调都不动」。双击 / 连拖 / 整体帧批量加帧都能轻易
+造出重复帧，而且一旦造出来就再也没有正常入口能删掉被压在下面的那一帧。堵在写入侧是唯一干净的做法。
+
+**`rendering.md §9.1` 的「区间两端 timeMs 相等 → 取后一帧」保留**，但它现在只是**旧数据的兜底**
+（这条不变量落地之前存下来的工程可能带重复帧），不是正常态。前端 `spanAt` / `planTransformUpsert`
+的「重合取后」与之同向，两边一致。
+
 ### 2.2 `KeyframeTrack`（方案 B 落地形态）
 
 方案 B = keyframe **不进 Element record**。逻辑上"一条 track = 某元素某属性的关键帧序列"，物理上压平

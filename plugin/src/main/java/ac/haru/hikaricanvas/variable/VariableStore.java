@@ -447,14 +447,19 @@ public final class VariableStore {
                 throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
                         "global variable quota exceeded: " + MAX_GLOBAL);
             }
-            Set<String> nsBucket = byNamespace.computeIfAbsent(namespace,
-                    n -> ConcurrentHashMap.newKeySet());
-            if (!skipNsQuota && nsBucket.size() >= MAX_PER_NAMESPACE) {
-                throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
-                        "namespace variable quota exceeded for " + namespace
-                                + ": " + MAX_PER_NAMESPACE);
-            }
-            nsBucket.add(k);
+            // 配额判定 + 加桶整段放进 byNamespace 的 compute 里：delete 侧清空桶用的是同一把
+            // per-key 锁，这样"桶空了就摘掉"与"往桶里加"不会交错（否则并发 create 刚加进去的
+            // 元素会随空桶一起被摘掉，倒排索引丢桶 → listByNamespace 漏显、删墙漏清）。
+            byNamespace.compute(namespace, (n, bucket) -> {
+                Set<String> b = bucket == null ? ConcurrentHashMap.newKeySet() : bucket;
+                if (!skipNsQuota && b.size() >= MAX_PER_NAMESPACE) {
+                    throw new VariableException(VariableException.Code.QUOTA_EXCEEDED,
+                            "namespace variable quota exceeded for " + namespace
+                                    + ": " + MAX_PER_NAMESPACE);
+                }
+                b.add(k);
+                return b;
+            });
             // 反查 byWall 倒排索引。Compositor 渲染早于 store.create
             // 时（典型场景：用户先在 wall 文本里写 ${var:schedule.X} 触发 markWallReferences，
             // 后 ManualScheduleProvider.ensureWallRegistered 才 create），addWallToReferencedSet
@@ -562,17 +567,17 @@ public final class VariableStore {
             throw new VariableException(VariableException.Code.VARIABLE_NOT_FOUND,
                     "variable not found: " + fullName);
         }
-        Set<String> nsBucket = byNamespace.get(removed.namespace());
-        if (nsBucket != null) {
-            nsBucket.remove(fullName);
-            // 桶空则原子移除空桶——否则 per-wall namespace（user:<wallId> /
-            // schedule:<wallId> 等）的桶在 wall 删除后永久驻留（内存泄漏，long-running server
-            // 上 byNamespace 单调增长）。用 2 参 remove(key, value) 防 race：仅当当前映射仍是
-            // 这个空桶才移除——若有并发 create 已重新填入，2 参 remove 会因值不等而跳过。
-            if (nsBucket.isEmpty()) {
-                byNamespace.remove(removed.namespace(), nsBucket);
-            }
-        }
+        // 桶空则摘掉空桶——否则 per-wall namespace（user:<wallId> / schedule:<wallId> 等）的桶
+        // 在 wall 删除后永久驻留（内存泄漏，long-running server 上 byNamespace 单调增长）。
+        // 「清元素 + 判空 + 摘桶」整段走 computeIfPresent，与 create 侧的 compute 共用同一把
+        // per-key 锁，检查与移除对并发 create 原子。
+        //
+        // 早先写的是 remove(ns, bucket) 两参版并注释说"并发 create 已重新填入时值不等会跳过"——
+        // 那是错的：并发 create 拿到的是同一个 Set 对象引用，equals 恒真，照删不误。
+        byNamespace.computeIfPresent(removed.namespace(), (ns, bucket) -> {
+            bucket.remove(fullName);
+            return bucket.isEmpty() ? null : bucket;
+        });
         // 删除前先抓住 referencedByWalls 快照——用于 fireChange 路由。
         // 接下来 byWall 清掉之后 removed.referencedByWalls() 仍是 mutation 前的 Set（record immutable），
         // 而 fireChange(... DELETED, removed) 用 removed.referencedByWalls() 作为 walls 列表，正确。

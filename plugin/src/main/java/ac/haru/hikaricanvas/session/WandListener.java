@@ -87,11 +87,22 @@ public final class WandListener implements Listener {
 
     // ---------- 方块层 ----------
 
-    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = false)
+    // priority = HIGH：要在保护插件之后跑。它们的拒绝多数发在 LOWEST~NORMAL，我们若也在
+    // NORMAL，谁先谁后取决于注册顺序 —— 那样下面这行取消判定时灵时不灵。
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onInteract(PlayerInteractEvent event) {
         Action a = event.getAction();
         if (a != Action.LEFT_CLICK_BLOCK && a != Action.RIGHT_CLICK_BLOCK) return;
         if (event.getHand() != EquipmentSlot.HAND) return;
+        // 领地 / 保护插件（WorldGuard、GriefPrevention 等）拒绝这次点击时不能当作选角：
+        // 否则玩家可以在别人的保护区里选一片墙，confirm 之后插件自己动方块 + 挂展示框，
+        // 等于绕过了保护。
+        //
+        // 判的是 useInteractedBlock 而不是 event.isCancelled()：PlayerInteractEvent 的
+        // "取消"是两个 Result 的合并（对方块的交互 + 对手持物的使用），单看 isCancelled()
+        // 会把"只禁用了手上这个物品"的情形也算进来（创造模式左键等场景会命中），
+        // 让魔棒在完全没有保护插件的服务器上莫名其妙不响应。
+        if (event.useInteractedBlock() == org.bukkit.event.Event.Result.DENY) return;
 
         Player player = event.getPlayer();
         ItemStack hand = event.getItem();
@@ -106,7 +117,9 @@ public final class WandListener implements Listener {
 
     // ---------- entity 层 ----------
 
-    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = false)
+    // ignoreCancelled = true：保护插件已经拦下的交互不再当作选角 / 打开画布的操作。
+    // priority = HIGH 的理由同 onInteract。
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onRightClickEntity(PlayerInteractEntityEvent event) {
         if (event.getHand() != EquipmentSlot.HAND) return;
         if (!(event.getRightClicked() instanceof ItemFrame frame)) return;
@@ -116,7 +129,8 @@ public final class WandListener implements Listener {
         routeFrameClick(player, frame, false);
     }
 
-    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = false)
+    // 同上：被保护插件取消的"左键打展示框"不参与选角 / 二次确认。
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onLeftClickEntity(EntityDamageByEntityEvent event) {
         if (!(event.getDamager() instanceof Player player)) return;
         if (!(event.getEntity() instanceof ItemFrame frame)) return;

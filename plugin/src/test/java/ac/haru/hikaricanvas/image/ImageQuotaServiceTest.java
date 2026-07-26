@@ -130,6 +130,104 @@ class ImageQuotaServiceTest {
                 svc.check(uploader, 999, 999_999_999L, true));
     }
 
+    // ---------- 事务化 tryReserveQuotaOn ----------
+
+    private ImageUploadDao.Row row(String hash, long bytes, UUID uploader, long ts) {
+        return new ImageUploadDao.Row(hash, bytes, 10, 10, "image/png", uploader, ts, ts);
+    }
+
+    /**
+     * 磁盘满 + LRU 也腾不出空间时，事务里已经 DELETE 掉的 victim 必须交给调用方去删文件。
+     *
+     * <p>jdbi 只在抛异常时回滚——返回一个"拒绝"结果照样 COMMIT。以前 {@code DeniedDiskAfterLru}
+     * 不带 evicted 列表，于是 DB 行没了、磁盘文件还在，{@code sumBytes()} 从此低估真实占用，
+     * 每拒一次漂移一点，最后把 {@code max-total-storage-mb} 这道闸整个架空。</p>
+     */
+    @Test
+    void deniedDiskAfterLruReportsEvictedVictimsForFileCleanup() {
+        UUID uploader = UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        // 1 MB 上限。aa 是无引用老图（可被 LRU 挑走），bb 被墙引用（挑不走，占死空间）。
+        // 新图 900KB：删光 aa 之后仍有 400KB + 900KB = 1.3MB > 1MB，最终只能拒。
+        dao.insert(row("00000000000000aa", 600_000, uploader, now - 10_000));
+        dao.insert(row("00000000000000bb", 400_000, uploader, now - 5_000));
+        var svc = new ImageQuotaService(dao, cfg(0, 0, 1));
+
+        var result = database.jdbi().inTransaction(
+                org.jdbi.v3.core.transaction.TransactionIsolationLevel.SERIALIZABLE,
+                h -> svc.tryReserveQuotaOn(h, uploader, row("00000000000000cc", 900_000, uploader, now),
+                        900_000, false,
+                        // bb 被墙引用 → LRU 不能挑；只有 aa 可删，删完 400_000+900_000 仍 >1MB
+                        () -> java.util.Set.of("00000000000000bb"), false));
+
+        var denied = assertInstanceOf(ImageQuotaService.DeniedDiskAfterLru.class, result);
+        assertEquals(List.of("00000000000000aa"), denied.evictedHashes(),
+                "被 evict 的 victim 必须报给调用方，否则文件成物理孤儿");
+        assertTrue(dao.findByHash("00000000000000aa").isEmpty(), "victim 的 DB 行确实已被删除");
+    }
+
+    /**
+     * 引用集要惰性求值：算它得全表扫 walls 并逐行反序列化 project_json。导入一次几百张图时
+     * 每张都扫一遍会把 SQLite 写锁按住不放，编辑 op 的落库全被堵住。
+     */
+    @Test
+    void referencedHashesNotScannedWhenNoEvictionNeeded() {
+        UUID uploader = UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        var svc = new ImageQuotaService(dao, cfg(0, 0, 1024));   // 1GB 上限，绰绰有余
+        int[] calls = {0};
+
+        var result = database.jdbi().inTransaction(
+                org.jdbi.v3.core.transaction.TransactionIsolationLevel.SERIALIZABLE,
+                h -> svc.tryReserveQuotaOn(h, uploader, row("00000000000000dd", 1_000, uploader, now),
+                        1_000, false,
+                        () -> { calls[0]++; return java.util.Set.of(); }, false));
+
+        assertInstanceOf(ImageQuotaService.Reserved.class, result);
+        assertEquals(0, calls[0], "空间够用时不该去扫 walls 引用集");
+    }
+
+    /** hash 已存在（重复上传 / 导入里重复的图）只 touch，同样不该扫引用集。 */
+    @Test
+    void referencedHashesNotScannedWhenHashAlreadyExists() {
+        UUID uploader = UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        dao.insert(row("00000000000000ee", 1_000, uploader, now - 1000));
+        var svc = new ImageQuotaService(dao, cfg(0, 0, 1));
+        int[] calls = {0};
+
+        var result = database.jdbi().inTransaction(
+                org.jdbi.v3.core.transaction.TransactionIsolationLevel.SERIALIZABLE,
+                h -> svc.tryReserveQuotaOn(h, uploader, row("00000000000000ee", 1_000, uploader, now),
+                        1_000, true,
+                        () -> { calls[0]++; return java.util.Set.of(); }, false));
+
+        assertInstanceOf(ImageQuotaService.Reserved.class, result);
+        assertEquals(0, calls[0], "已存在的 hash 只 touch，不该扫引用集");
+    }
+
+    /** 真需要 evict 时引用集必须被求值，且被引用的 hash 不能当 victim。 */
+    @Test
+    void referencedHashesScannedAndHonouredWhenEvicting() {
+        UUID uploader = UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        dao.insert(row("00000000000000a1", 400_000, uploader, now - 10_000)); // 最老，可删
+        dao.insert(row("00000000000000a2", 400_000, uploader, now - 5_000));  // 被引用，不可删
+        var svc = new ImageQuotaService(dao, cfg(0, 0, 1));
+        int[] calls = {0};
+
+        var result = database.jdbi().inTransaction(
+                org.jdbi.v3.core.transaction.TransactionIsolationLevel.SERIALIZABLE,
+                h -> svc.tryReserveQuotaOn(h, uploader, row("00000000000000a3", 400_000, uploader, now),
+                        400_000, false,
+                        () -> { calls[0]++; return java.util.Set.of("00000000000000a2"); }, false));
+
+        var ok = assertInstanceOf(ImageQuotaService.Reserved.class, result);
+        assertEquals(1, calls[0], "需要 evict 时必须扫一次引用集");
+        assertEquals(List.of("00000000000000a1"), ok.evictedHashes());
+        assertTrue(dao.findByHash("00000000000000a2").isPresent(), "被引用的图不能被 LRU 挑走");
+    }
+
     @Test
     void remainingSummaryReturnsConfigLimitsAndUsage() {
         UUID uploader = UUID.randomUUID();

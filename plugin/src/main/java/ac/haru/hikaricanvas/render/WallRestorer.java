@@ -21,11 +21,16 @@ import java.util.logging.Logger;
  * MapView 缓存（{@link HikariCanvasRenderer}），同时把 mapIds 在 {@link MapPool} 里 bind 到
  * {@code wall:<wall_id>} 防 leak 扫描归还。
  *
- * <p><b>池泄漏修复：</b> 启动期 restore 某 wall 的 bind / compose / IO 任一步抛异常时，
- * 必须把这一轮已经在 {@link MapPool} 里 bind 过的 mapId 全部 {@link MapPool#releaseToFree}
- * 回 FREE。否则它们留在 RESERVED 状态（owner = wall:&lt;id&gt;）但 wall 也没真正恢复 →
- * 必须等周期 detectLeaks 扫到才能回收，中间窗口期视为软泄漏；同时极端情况下"半态" wall
- * 也可能误导 wand 路径。</p>
+ * <p><b>失败时怎么处置地图，按失败发生在 bind 之前还是之后分两种：</b></p>
+ * <ul>
+ *   <li><b>bind 还没成功</b>（world 解析不到 / {@code bindToWall} 自己抛）：这一轮已经借到手的
+ *       mapId 全部 {@link MapPool#releaseToFree} 回 FREE，不留半态预留。</li>
+ *   <li><b>bind 已成功、后面的渲染炸了</b>（元素数据损坏、瞬时 OOM、AWT 抛错……）：
+ *       <b>保留绑定关系</b>，只记录告警。这批地图在 DB 里本来就属于这面 wall（walls 行还在，
+ *       泄漏检测认得它、不会回收），把它们放回 FREE 才是真正的灾难——下一次 confirm 会把
+ *       同一张地图借给别的 wall，两面墙共用一张图互相覆盖像素，而原 wall 的 map_ids 指向已被
+ *       抢走的地图，下次启动 bind 直接失败，这面墙就再也恢复不了了。</li>
+ * </ul>
  *
  * <p>失败的 wall_id 被记入 {@link #failedRestoreWallIds()}（线程安全只读快照）；
  * wand 路径在玩家与该 wall 交互时可调用 {@link #isRestorationFailed(String)} 做 ActionBar 提示。
@@ -110,9 +115,9 @@ public final class WallRestorer {
     }
 
     /**
-     * 单 wall 恢复：bind 池 → compose 像素。任一步异常时把<b>本轮已 bind 的全部 mapId</b>
-     * release 回 FREE，避免 RESERVED 软泄漏 + 防止 wall 留在"半态"。WallRepo 行不删除，
-     * 留待下次重启再 retry。
+     * 单 wall 恢复：bind 池 → compose 像素。bind 之前失败 → 把本轮已借到的 mapId 全 release
+     * 回 FREE；bind 之后（渲染阶段）失败 → 保留绑定只记告警，理由见类 javadoc。
+     * 两种情况 WallRepo 行都不删除，留待下次重启再 retry。
      */
     private boolean restoreOne(WallRepo.Wall w) {
         List<Integer> mapIds = w.mapIds();
@@ -121,9 +126,11 @@ public final class WallRestorer {
             return false;
         }
 
-        // 这一轮已经"成功 bind 到本 wall"的 mapId（含 bind 成功但后续 compose 失败的情况）。
-        // 任一步抛异常 → 全部 release 回 FREE。
+        // 这一轮已经借到手、但绑定关系还没落定的 mapId。bindToWall 目前是原子的
+        // （先全量校验 + 单事务落盘，再改内存），所以真正走到"要回滚"这一步的只有
+        // bindToWall 自己抛异常的情况；保留这个列表是为了 bind 将来变成多步时不出漏子。
         List<Integer> bound = new ArrayList<>();
+        boolean bindCommitted = false;
         try {
             // bindToWall 需校验 world；先解析 wall 所在 world
             World world = worldResolver.apply(w.key().world());
@@ -142,7 +149,8 @@ public final class WallRestorer {
                 log.warning("WallRestorer: pool bind refused for " + w.wallId() + " mapIds=" + mapIds);
                 return false;
             }
-            bound.addAll(mapIds);  // bind 成功 → 全部记录待 rollback
+            bound.addAll(mapIds);
+            bindCommitted = true;  // 绑定关系已落定：后面再失败也不动这些地图
 
             ProjectState state = w.state();
             int widthMaps = Math.max(1, state.canvas().widthMaps());
@@ -164,7 +172,20 @@ public final class WallRestorer {
             }
             return true;
         } catch (RuntimeException | Error ex) {
-            // 关键修复：把本轮已 bind 的 mapId 全 release 回 FREE，避免软泄漏
+            if (bindCommitted) {
+                // 渲染阶段炸的。地图仍然是这面 wall 的（walls 行还在，泄漏检测认得它），
+                // 放回 FREE 会让下一次 confirm 把同一张图借给别人 → 两面墙共用一张地图，
+                // 且这面墙下次启动 bind 必失败、永久恢复不了。所以只报错，不动池。
+                log.log(Level.SEVERE,
+                        "WallRestorer: wall " + w.wallId() + " failed while rendering; "
+                                + "its " + bound.size() + " map(s) stay bound to this wall "
+                                + bound + " (returning them to the free pool would let another"
+                                + " wall grab them) — wall row preserved in DB for retry on"
+                                + " next start",
+                        ex);
+                return false;
+            }
+            // bind 还没落定就失败：把这一轮已借到手的 mapId 全部还回 FREE，不留半态预留。
             List<Integer> releasedNow = new ArrayList<>();
             for (int mid : bound) {
                 try {
@@ -176,9 +197,9 @@ public final class WallRestorer {
                 }
             }
             log.log(Level.SEVERE,
-                    "WallRestorer: wall " + w.wallId() + " restore failed; "
-                            + "released " + releasedNow.size() + "/" + bound.size()
-                            + " map(s) back to FREE pool: " + releasedNow
+                    "WallRestorer: wall " + w.wallId() + " restore failed before the pool"
+                            + " binding was committed; released " + releasedNow.size() + "/"
+                            + bound.size() + " map(s) back to FREE pool: " + releasedNow
                             + " — wall row preserved in DB for retry on next start",
                     ex);
             // 不重抛——单 wall 失败应该让其它 wall 继续 restore（caller loop 期望 boolean）

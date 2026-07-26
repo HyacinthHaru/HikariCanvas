@@ -64,6 +64,28 @@ public final class TextLayout {
         return canonicalCharWidth(c, fontSize);
     }
 
+    /**
+     * 行高倍数：取双端一致的 double 值（rendering.md §3.2）。
+     *
+     * <p>{@code TextElement.lineHeight} 存的是 float，而前端和 {@code .canvas} / DB 里的 JSON
+     * 数字是 double。直接算 {@code Math.round(fontSize * lineHeightFloat)} 走的是 float 乘法：
+     * {@code fontSize=15} + {@code lineHeight=1.1} 时 float 积恰为 {@code 16.5f} 进位到 17，
+     * 前端 double 得 {@code 16.499999999999996} 落到 16，多行文本第 N 行差 N 像素。
+     * <b>强转 {@code (double) 1.1f} 没用</b>——那是 {@code 1.100000023…}，不是 JSON 里写的 1.1。</p>
+     *
+     * <p>{@code Float.toString} 给的是唯一还原该 float 的最短十进制串，再按 double 解析就拿回了
+     * 源值（UI 步进 0.1、范围 [0.1, 4] 全覆盖）。{@code <= 0} 走默认 1.2。</p>
+     */
+    public static double lineHeightMultiplier(float raw) {
+        if (!(raw > 0f)) return 1.2;   // NaN / 0 / 负值都走默认
+        return Double.parseDouble(Float.toString(raw));
+    }
+
+    /** 行高像素 = {@code round(fontSize × 行高倍数)}，至少 1px。横排行高与竖排列宽共用。 */
+    public static int lineHeightPx(int fontSize, float rawLineHeight) {
+        return Math.max(1, (int) Math.round(fontSize * lineHeightMultiplier(rawLineHeight)));
+    }
+
     private TextLayout() {}
 
     /**
@@ -104,9 +126,8 @@ public final class TextLayout {
         int fontSize = t.fontSize();
         int boxWidth = t.w();
         float letterSpacing = t.letterSpacing();
-        float lineHeightMul = t.lineHeight() <= 0 ? 1.2f : t.lineHeight();
         int ascentPx = (int) Math.round(fontSize * ASCENT_RATIO);
-        int lineHeightPx = Math.max(1, Math.round(fontSize * lineHeightMul));
+        int lineHeightPx = lineHeightPx(fontSize, t.lineHeight());
 
         // 1) 硬换行
         String[] paragraphs = t.text().split("\n", -1);
@@ -273,8 +294,7 @@ public final class TextLayout {
         String fontId = t.fontId();
         int fontSize = t.fontSize();
         int letterSpacing = Math.round(t.letterSpacing());
-        float lineHeightMul = t.lineHeight() <= 0 ? 1.2f : t.lineHeight();
-        int colStep = Math.max(1, Math.round(fontSize * lineHeightMul));
+        int colStep = lineHeightPx(fontSize, t.lineHeight());
         int ascentPx = (int) Math.round(fontSize * ASCENT_RATIO);
         int boxH = t.h();
 

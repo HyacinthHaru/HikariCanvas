@@ -45,8 +45,11 @@ import java.util.logging.Logger;
  *
  * <h2>校验栈</h2>
  * <ol>
- *   <li>auth + permission：{@code sessionId} multipart 字段定位 {@link Session}；查
- *       {@link Bukkit#getPlayer(UUID)} 取 live Player → {@code hasPermission("canvas.upload")}</li>
+ *   <li>auth + permission：{@code X-Canvas-Session} header（或 query / multipart 字段）定位
+ *       {@link Session} → 校验会话级 IP 绑定（{@code security.md §2.5}，HTTP 面与 WS 同一条
+ *       {@code bindOrCheckIp}）→ 一次主线程 hop 查 {@code canvas.upload} 与
+ *       {@code canvas.upload.bypass-limit}（{@code Bukkit.getPlayer} / {@code hasPermission}
+ *       都是主线程专用 API，见 {@code resolveUploadPerms}）</li>
  *   <li>大小：{@code file.getSize()} ≤ {@code max-size-kb}</li>
  *   <li>Content-Type：客户端声明 MIME ∈ {@code allowed-mime}</li>
  *   <li>magic bytes：实际文件前 16 字节匹配 MIME（防止 Content-Type 假冒）</li>
@@ -143,23 +146,20 @@ public final class UploadHandler {
      * </ol>
      */
     public void handleUrlUpload(io.javalin.http.Context ctx) {
-        // 1. sessionId
-        String sessionId = ctx.queryParam("sessionId");
-        if (sessionId == null || sessionId.isBlank()) {
-            sessionId = ctx.formParam("sessionId");  // 兼容 client 用 form 传
-        }
-        ac.haru.hikaricanvas.session.Session session = resolveSession(ctx, sessionId);
+        // 1. sessionId（header 优先，其次 query / form）
+        String sessionId = sessionIdOf(ctx, true);
+        ac.haru.hikaricanvas.session.Session session = authSession(ctx, sessionId);
         if (session == null) return;
         UUID uploader = session.playerUuid();
         String uploaderName = session.playerName();
-        Player player = Bukkit.getPlayer(uploader);
-        // 权限检查 fail-closed（同 handleUpload）。离线玩家拿不到 live Player → 拒。
-        if (player == null || !player.hasPermission("canvas.upload")) {
+        // 权限解析必须一次主线程 hop（同 handleUpload）。离线玩家拿不到 live Player → 拒。
+        UploadPerms perms = resolveUploadPerms(uploader);
+        if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission_url");
             reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
             return;
         }
-        boolean bypass = player.hasPermission("canvas.upload.bypass-limit");
+        boolean bypass = perms.bypassLimit();
 
         // 2. body JSON parse
         String url;
@@ -235,6 +235,11 @@ public final class UploadHandler {
                 auditUploadRejected(uploader, uploaderName, sessionId, "url_mime_not_allowed");
                 reject(ctx, 415, "UPLOAD_REJECTED",
                         "Content-Type not allowed: " + declaredMime);
+                return;
+            }
+            if (!canDecodeMime(declaredMime)) {
+                auditUploadRejected(uploader, uploaderName, sessionId, "url_mime_no_decoder");
+                reject(ctx, 415, "UPLOAD_REJECTED", noDecoderMessage(declaredMime));
                 return;
             }
             long advertised = conn.getContentLengthLong();
@@ -372,10 +377,11 @@ public final class UploadHandler {
                     handle.execute("UPDATE image_uploads SET last_used_at = last_used_at "
                             + "WHERE hash = '__locker__'");
                     // referenced 集合在持写锁的事务内 sweep（同一一致视图），消除跨 hash 误删竞态。
-                    Set<String> referenced = storage.collectReferencedHashesOn(handle, wallRepo);
+                    // 惰性求值：只有真要 LRU evict 时才付这次全表扫描的代价。
                     Optional<ImageUploadDao.Row> existing = imageDao.findByHashOn(handle, hash);
                     return quota.tryReserveQuotaOn(handle, uploader, candidate, pngLen,
-                            existing.isPresent(), referenced, bypass);
+                            existing.isPresent(),
+                            () -> storage.collectReferencedHashesOn(handle, wallRepo), bypass);
                 });
             } catch (Exception e) {
                 log.log(Level.WARNING, "url upload transaction failed", e);
@@ -390,6 +396,11 @@ public final class UploadHandler {
                 return;
             }
             if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
+                // 事务已 COMMIT，victim 的 DB 行已经删了——文件必须跟着删，否则物理孤儿
+                // 会让 sumBytes 永久低估真实磁盘占用。
+                for (String evictedHash : dd.evictedHashes()) {
+                    storage.deleteFileOnly(evictedHash);
+                }
                 auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk_url");
                 reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
                         "disk full; cannot free " + dd.bytesShort() + " more bytes");
@@ -442,22 +453,22 @@ public final class UploadHandler {
      */
     public void handleUpload(Context ctx) {
         // 1. sessionId + permission
-        String sessionId = ctx.formParam("sessionId");
-        Session session = resolveSession(ctx, sessionId);
+        String sessionId = sessionIdOf(ctx, true);
+        Session session = authSession(ctx, sessionId);
         if (session == null) return;
         UUID uploader = session.playerUuid();
         String uploaderName = session.playerName();
-        Player player = Bukkit.getPlayer(uploader);
         // 权限检查 fail-closed。player == null（玩家离线）时不能 fail-open 放行 ——
         // 与 WallOpDispatcher.wall.alias / SessionManager.open 同款离线处理：拿不到 live
         // Player 即视为无 canvas.upload 权限直接拒（base 权限 fail-closed，bypass 权限同样
-        // 只在 live Player 上判定）。
-        if (player == null || !player.hasPermission("canvas.upload")) {
+        // 只在 live Player 上判定）。解析走一次主线程 hop，见 resolveUploadPerms。
+        UploadPerms perms = resolveUploadPerms(uploader);
+        if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission");
             reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
             return;
         }
-        boolean bypass = player.hasPermission("canvas.upload.bypass-limit");
+        boolean bypass = perms.bypassLimit();
 
         // 2. multipart file
         UploadedFile file = ctx.uploadedFile("file");
@@ -492,6 +503,11 @@ public final class UploadHandler {
             auditUploadRejected(uploader, uploaderName, sessionId, "mime_not_allowed");
             reject(ctx, 415, "UPLOAD_REJECTED",
                     "Content-Type not allowed: " + declaredMime);
+            return;
+        }
+        if (!canDecodeMime(declaredMime)) {
+            auditUploadRejected(uploader, uploaderName, sessionId, "mime_no_decoder");
+            reject(ctx, 415, "UPLOAD_REJECTED", noDecoderMessage(declaredMime));
             return;
         }
 
@@ -591,13 +607,14 @@ public final class UploadHandler {
                             + "WHERE hash = '__locker__'");
                     // referenced 集合在持写锁的事务内 sweep（同一一致视图），事务内用作
                     // LRU 排除集——消除"事务外快照、事务内 evict"的跨 hash 误删竞态。
-                    Set<String> referenced = storage.collectReferencedHashesOn(handle, wallRepo);
+                    // 惰性求值：只有真要 LRU evict 时才付这次全表扫描的代价。
                     // 重新查（持写锁内）以决定走 exists vs new
                     Optional<ImageUploadDao.Row> existing = imageDao.findByHashOn(handle, hash);
                     boolean alreadyExists = existing.isPresent();
                     return quota.tryReserveQuotaOn(
                             handle, uploader, candidate, pngLen,
-                            alreadyExists, referenced, bypass);
+                            alreadyExists,
+                            () -> storage.collectReferencedHashesOn(handle, wallRepo), bypass);
                 });
             } catch (Exception e) {
                 log.log(Level.WARNING, "upload transaction failed", e);
@@ -613,6 +630,11 @@ public final class UploadHandler {
                 return;
             }
             if (qr instanceof ImageQuotaService.DeniedDiskAfterLru dd) {
+                // 事务已 COMMIT，victim 的 DB 行已经删了——文件必须跟着删，否则物理孤儿
+                // 会让 sumBytes 永久低估真实磁盘占用。
+                for (String evictedHash : dd.evictedHashes()) {
+                    storage.deleteFileOnly(evictedHash);
+                }
                 auditUploadRejected(uploader, uploaderName, sessionId, "quota_disk");
                 reject(ctx, 413, "QUOTA_EXCEEDED_DISK",
                         "disk full; cannot free " + dd.bytesShort() + " more bytes");
@@ -676,9 +698,13 @@ public final class UploadHandler {
      * <p>失败统一 401 + {@code {"code":"UNAUTHORIZED"}}，不 echo 内部异常。</p>
      */
     public void handleDownload(Context ctx) {
-        // sessionId query 参数 → resolveSession 校验。等价于 POST /api/upload 的鉴权方式
-        String sessionId = ctx.queryParam("sessionId");
-        if (sessionId == null || sessionId.isBlank() || sessionManager.byId(sessionId) == null) {
+        // sessionId 校验 + 会话级 IP 绑定。等价于 POST /api/upload 的鉴权方式。
+        // 这个端点被 <img src> 直接使用，没法带 header，所以 sessionId 只能留在 query string；
+        // IP 绑定就是它的补偿措施——反代 access log 里捡到一条 URL 也换不到别处能用的凭据。
+        String sessionId = sessionIdOf(ctx, false);
+        Session downloadSession = sessionId == null || sessionId.isBlank()
+                ? null : sessionManager.byId(sessionId);
+        if (downloadSession == null || !sessionIpMatches(ctx, sessionId, downloadSession)) {
             ctx.status(401).json(Map.of("code", "UNAUTHORIZED"));
             return;
         }
@@ -705,8 +731,8 @@ public final class UploadHandler {
     // ---------- GET /api/upload/quota ----------
 
     public void handleQuota(Context ctx) {
-        String sessionId = ctx.queryParam("sessionId");
-        Session session = resolveSession(ctx, sessionId);
+        String sessionId = sessionIdOf(ctx, false);
+        Session session = authSession(ctx, sessionId);
         if (session == null) return;
         // 上报真实 per-wall image 元素数（按 source 去重，依 data-model.md §2），
         // 取代原硬编码 0——让 perWall.used 对前端有意义（之前恒报 0/limit）。
@@ -722,6 +748,25 @@ public final class UploadHandler {
 
     // ---------- helpers ----------
 
+    /**
+     * HTTP 面的会话鉴权：解析 {@link Session} + 校验会话级 IP 绑定。失败时已写响应。
+     *
+     * <p><b>为什么 HTTP 面也要比对 IP</b>：{@code security.md §2.5} 的会话级 IP 绑定（方案 B）
+     * 此前只在 WS auth 那条路生效，HTTP 端点只查 {@code byId}。而 sessionId 会随 URL 落进
+     * 反代 access log、浏览器历史与 Referer —— 捡到一条日志行的人就能从任意 IP 调
+     * {@code /api/upload}、{@code /api/upload/url}（代服务器发外联请求）、{@code /api/upload/{'{'}source{'}'}}。
+     * 补上比对之后，泄漏的 sessionId 换不到别处能用的凭据。</p>
+     */
+    private Session authSession(Context ctx, String sessionId) {
+        Session s = resolveSession(ctx, sessionId);
+        if (s == null) return null;
+        if (!sessionIpMatches(ctx, sessionId, s)) {
+            reject(ctx, 401, "AUTH_FAILED", "session ip mismatch");
+            return null;
+        }
+        return s;
+    }
+
     /** 通过 multipart {@code sessionId} 字段（或 query 参数）解析 {@link Session}；失败时已写响应。 */
     private Session resolveSession(Context ctx, String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -734,6 +779,186 @@ public final class UploadHandler {
             return null;
         }
         return s;
+    }
+
+    /**
+     * 会话级 IP 绑定比对（{@code security.md §2.5}）。与 WS 侧同一个
+     * {@code SessionManager.bindOrCheckIp}，取值口径也对齐：只认 socket peer 地址、
+     * 不解析 {@code X-Forwarded-For}（防伪造头）。
+     *
+     * <p>回环地址互认是有意的：同一台机器上浏览器可能给 WS 和 HTTP 各挑一个地址族
+     * （{@code ::1} vs {@code 127.0.0.1}），不互认会把本机部署的合法上传全拒掉。
+     * 这不放宽安全性——两条连接本来就都来自本机。</p>
+     */
+    private boolean sessionIpMatches(Context ctx, String sessionId, Session session) {
+        String presented = httpClientIp(ctx);
+        SessionManager.IpBindResult result = sessionManager.bindOrCheckIp(sessionId, presented);
+        if (result != SessionManager.IpBindResult.MISMATCH) return true;
+        if (bothLoopback(session.boundIp(), presented)) {
+            log.fine("HTTP session ip differs but both are loopback; accepting sid=" + sessionId);
+            return true;
+        }
+        log.warning("HTTP session ip mismatch sid=" + sessionId
+                + " boundIp=" + session.boundIp() + " presentedIp=" + presented
+                + "; sessionId may have leaked through logs / Referer");
+        return false;
+    }
+
+    /**
+     * 取 sessionId：{@code X-Canvas-Session} header 优先，其次 query，最后 form。
+     *
+     * <p>header 优先是为了让新版前端能把它从 URL 里挪走（query string 会落进反代
+     * access log / 浏览器历史 / Referer）。query 与 form 保留：
+     * {@code GET /api/upload/{'{'}source{'}'}} 被 {@code <img src>} 直接使用，带不了 header。</p>
+     *
+     * @param allowForm 是否读 multipart / form 字段（只对 POST 端点开，GET 上读 form 会去解析 body）
+     */
+    static String sessionIdOf(Context ctx, boolean allowForm) {
+        String header = ctx.header(SESSION_HEADER);
+        if (header != null && !header.isBlank()) return header.trim();
+        String query = ctx.queryParam("sessionId");
+        if (query != null && !query.isBlank()) return query.trim();
+        if (!allowForm) return null;
+        try {
+            String form = ctx.formParam("sessionId");
+            return form == null || form.isBlank() ? null : form.trim();
+        } catch (RuntimeException e) {
+            return null;   // 无 body / 非 form 编码
+        }
+    }
+
+    /** HTTP 客户端 IP，规范化到与 WS 侧 {@code InetAddress.getHostAddress()} 相同的写法。 */
+    private static String httpClientIp(Context ctx) {
+        try {
+            return normalizeIp(ctx.ip());
+        } catch (RuntimeException e) {
+            return "unknown";
+        }
+    }
+
+    /**
+     * 把各种写法的地址串归一：去 {@code /} 前缀、去 IPv6 方括号、去 IPv4 的 {@code :port}，
+     * 再过一遍 {@link java.net.InetAddress#getHostAddress()}。
+     *
+     * <p>不归一的话，{@code ::1} 与 {@code 0:0:0:0:0:0:0:1} 是同一个地址却比不相等，
+     * 合法请求会被当成凭据泄漏拒掉。输入是地址字面量，{@code getByName} 不会触发 DNS 查询。</p>
+     */
+    static String normalizeIp(String raw) {
+        if (raw == null || raw.isBlank()) return "unknown";
+        String s = raw.trim();
+        if (s.startsWith("/")) s = s.substring(1);
+        if (s.startsWith("[")) {
+            int close = s.indexOf(']');
+            if (close > 1) s = s.substring(1, close);
+        } else if (s.indexOf(':') >= 0 && s.indexOf(':') == s.lastIndexOf(':')) {
+            s = s.substring(0, s.indexOf(':'));   // IPv4:port
+        }
+        if (s.isBlank()) return "unknown";
+        try {
+            return java.net.InetAddress.getByName(s).getHostAddress();
+        } catch (java.net.UnknownHostException | SecurityException e) {
+            return s;
+        }
+    }
+
+    /** 两个地址是否都是回环（见 {@link #sessionIpMatches} 里的互认说明）。 */
+    static boolean bothLoopback(String a, String b) {
+        return isLoopback(a) && isLoopback(b);
+    }
+
+    private static boolean isLoopback(String ip) {
+        if (ip == null || ip.isBlank()) return false;
+        try {
+            return java.net.InetAddress.getByName(normalizeIp(ip)).isLoopbackAddress();
+        } catch (java.net.UnknownHostException | SecurityException e) {
+            return false;
+        }
+    }
+
+    // ---------- 主线程权限解析（对齐 web.MainThreadPerms 的纪律） ----------
+
+    /** {@code sessionId} 的推荐传递位置：header，避免落进 access log / Referer。 */
+    static final String SESSION_HEADER = "X-Canvas-Session";
+
+    /** 主线程权限解析超时；与 WS 侧一致。 */
+    private static final long PERM_TIMEOUT_SECONDS = 2L;
+
+    /**
+     * 上传相关权限的解析结果。
+     *
+     * @param online      玩家是否在线
+     * @param canUpload   是否持 {@code canvas.upload}
+     * @param bypassLimit 是否持 {@code canvas.upload.bypass-limit}
+     */
+    record UploadPerms(boolean online, boolean canUpload, boolean bypassLimit) {}
+
+    private static final UploadPerms DENY_ALL = new UploadPerms(false, false, false);
+
+    /** 承载本类的插件实例（{@code JavaPlugin.getProvidingPlugin}）；测试环境解析不出来 → null。 */
+    private volatile org.bukkit.plugin.Plugin owningPlugin;
+    private volatile boolean owningPluginResolved;
+
+    /**
+     * 一次主线程 hop 解析上传相关权限。
+     *
+     * <p><b>为什么不能在 Jetty 线程直接调</b>：{@code Bukkit.getPlayer(UUID)} 读的是主线程
+     * join/quit 时 mutate 的在线表，{@code Player.hasPermission} 读的是 LuckPerms 在主线程
+     * 重算的 {@code PermissibleBase}，两者都是主线程专用 API。裸调可能读到不一致的在线表
+     * （误拒合法上传）或半构造的权限对象（在权限重算窗口误判 bypass-limit = 绕过配额），
+     * Paper 上异步遍历在线表还可能抛 CME 让请求 500。WS 的 7 个 op dispatcher 早已统一走
+     * 主线程 hop，这几个 HTTP 端点是漏网的。</p>
+     *
+     * <p>超时 / scheduler 关停 / 中断 / callable 异常一律 <b>fail-closed</b>（全 false）——
+     * 这里既判 base 节点也判提权节点，宁可误拒不可误放。离线同样判 false，与本类原有
+     * 「拿不到 live Player 即视为无权限」的语义完全一致。</p>
+     */
+    private UploadPerms resolveUploadPerms(UUID uploader) {
+        if (uploader == null) return DENY_ALL;
+        org.bukkit.plugin.Plugin plugin = owningPlugin();
+        if (plugin == null) {
+            // 测试装配（无插件上下文 / 单线程）：直接调，无主线程纪律问题
+            return resolveUploadPermsDirect(uploader);
+        }
+        try {
+            return Bukkit.getScheduler()
+                    .callSyncMethod(plugin, () -> resolveUploadPermsDirect(uploader))
+                    .get(PERM_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return DENY_ALL;
+        } catch (TimeoutException | java.util.concurrent.ExecutionException
+                | java.util.concurrent.RejectedExecutionException
+                | java.util.concurrent.CancellationException e) {
+            log.warning("main-thread permission check failed for upload; denying: " + e);
+            return DENY_ALL;
+        }
+    }
+
+    /** 主线程内（或测试单线程内）直接解析。 */
+    private static UploadPerms resolveUploadPermsDirect(UUID uploader) {
+        Player p = Bukkit.getPlayer(uploader);
+        if (p == null) return DENY_ALL;
+        return new UploadPerms(true,
+                p.hasPermission("canvas.upload"),
+                p.hasPermission("canvas.upload.bypass-limit"));
+    }
+
+    /**
+     * 懒解析承载本类的插件实例。用 {@code JavaPlugin.getProvidingPlugin} 而不是构造器注入，
+     * 是为了不动装配层签名；解析不出来（纯 JVM 单测，类不由 PluginClassLoader 加载）时返 null，
+     * 此时退回直接调用，与 {@code web.MainThreadPerms} 的 {@code plugin == null} 分支同义。
+     */
+    private org.bukkit.plugin.Plugin owningPlugin() {
+        if (owningPluginResolved) return owningPlugin;
+        org.bukkit.plugin.Plugin p = null;
+        try {
+            p = org.bukkit.plugin.java.JavaPlugin.getProvidingPlugin(UploadHandler.class);
+        } catch (RuntimeException | LinkageError ignored) {
+            // 非插件类加载器（单测）/ Bukkit 未初始化
+        }
+        owningPlugin = p;
+        owningPluginResolved = true;
+        return p;
     }
 
     private void reject(Context ctx, int status, String code, String message) {
@@ -881,6 +1106,27 @@ public final class UploadHandler {
                 reader.dispose();
             }
         }
+    }
+
+    /**
+     * 本 JVM 的 ImageIO 到底有没有能读这个 MIME 的 reader。
+     *
+     * <p>{@code image/webp} 一直在默认白名单里，但标准 JDK 根本没有 WebP reader——白名单放行、
+     * magic 探测认得、然后必定死在解码那一步，报的还是笼统的"图片解码失败"，用户完全不知道
+     * 是格式不支持。放在 MIME 校验这层查一次，可以直接给出说得清的理由。</p>
+     *
+     * <p>不写死格式名而是问运行时：服主真装了 WebP 的 ImageIO 插件（启动期的 IIORegistry
+     * 过滤会保留它），WebP 上传就自然可用，不必再改代码或配置。</p>
+     */
+    static boolean canDecodeMime(String mime) {
+        if (mime == null) return false;
+        return ImageIO.getImageReadersByMIMEType(mime).hasNext();
+    }
+
+    /** 白名单放行但本机没有解码器时的拒绝文案。 */
+    private static String noDecoderMessage(String mime) {
+        return "this server cannot decode " + mime
+                + " (no image reader installed); please upload PNG or JPEG instead";
     }
 
     /** Magic bytes 真实 MIME 探测：前 16 字节即可识别 PNG/JPEG/WEBP。 */
