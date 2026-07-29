@@ -49,7 +49,7 @@ dependencies {
     implementation("org.jdbi:jdbi3-sqlite:3.54.0")
 
     // 内存上限：wallPreviewCache 等需要 LRU + TTL（替代 ConcurrentHashMap 无界）
-    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
 
     // snapshot 测试台
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
