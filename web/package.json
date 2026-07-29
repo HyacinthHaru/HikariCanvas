@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "@vitejs/plugin-vue": "^6.0.6",
+    "@vitejs/plugin-vue": "^6.0.8",
     "@vitest/ui": "^4.1.10",
     "@vue/test-utils": "^2.4.11",
     "class-variance-authority": "^0.7.1",
