@@ -21,14 +21,14 @@ Minecraft Paper 1.21+ 插件 + 内嵌 Web 编辑器。通过 TTF 字体渲染 + 
 |---|---|
 | Java | **21** 编译目标（跑 1.21.x 用 Java 21、跑 26.x 用 Java 25；0.9.5 起一份 jar 通吃） |
 | Paper API | **1.21.11** 编译目标（`1.21.11-R0.1-SNAPSHOT`；可 `-PpaperApi=`/`-PjavaVer=` 切换，CI `compat-26` job 对 26.2 编译守卫） |
-| Gradle | **9.4.1** |
+| Gradle | **9.6.1** |
 | `paperweight-userdev` | **2.0.0-beta.21**（同一版本即支持 1.21.x 与 26.x dev bundle） |
 | PacketEvents | **2.13.0**（多版本：同时支持 1.21.x + 26.1 + 26.2）。**0.9.11 起 `compileOnly` 不打包**——PacketEvents 是 GPL-3.0，打包会污染本项目 MIT；服主单独装 PacketEvents 插件（`paper-plugin.yml` 声明为必装 `required` 依赖，PE 插件自负 init/terminate） |
 | Javalin | **7.2.2**（6 已过时，不用；0.9.16 rc3 从 7.1.0 升 7.2.2，含 Jetty bugfix，本体 + testtools 同步） |
 | 插件描述文件 | **`paper-plugin.yml`**（不用 `plugin.yml` 旧格式） |
 | 本地测试服 | `./gradlew runServer`（paperweight-userdev 提供） |
 
-其余：HikariCP + JDBI + SQLite、**jackson-dataformat-yaml（2.22.1，与 jackson-databind 同版本；两模块必须对齐——dependabot 曾只升 databind、须手动补 yaml）**、JUnit 5 + MockBukkit、AWT/Graphics2D。
+其余：HikariCP + JDBI + SQLite、**jackson-dataformat-yaml（2.22.1，与 jackson-databind 同版本；两模块必须对齐——dependabot 曾只升 databind、须手动补 yaml）**、JUnit 6 + MockBukkit、AWT/Graphics2D。
 
 > **YAML 解析用 jackson-dataformat-yaml，不用 SnakeYAML。** 项目已全面 Jackson 化（ProjectState / PatchOp / WallRepo 都靠 Jackson），同 ObjectMapper 配置 + record 自动 mapping 可省 ~300 行手工 YAML→Map 转换 + 校验。安全上 jackson-dataformat-yaml 默认即关闭 polymorphic typing，不存在 SnakeYAML SafeConstructor 才解决的 `!!java/*` tag RCE 面（见 `docs/security.md §4.3`）。
 
