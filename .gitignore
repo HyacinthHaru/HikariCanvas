@@ -109,6 +109,10 @@ run/
 # 工具产生的本地台账 / 草稿，不入库
 .superpowers/
 
+# 其他 AI 助手的项目说明文件。内容是 CLAUDE.md 的镜像（仅署名规则一行不同），
+# 入库会变成第二份需要同步维护的契约副本 —— 两份迟早漂移。以 CLAUDE.md 为唯一权威。
+AGENTS.md
+
 # 云同步（iCloud / Dropbox 等）产生的冲突副本：`foo 2.ttf` / `Bar 2.java`。
 # 2026-07-27 实测：同步服务往 plugin/build/ 里塞了 46 个这种副本（39 个是字体），
 # 把 shadowJar 从 85MB 撑到 195MB；还把 0.9.9 改包名时删掉的 moe/ 旧包目录
