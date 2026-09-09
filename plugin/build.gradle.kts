@@ -56,7 +56,7 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
     // 测试基建：MockBukkit（FrameDeployer / wall.lock owner-only 等需要 Bukkit world / entity 设施）
-    testImplementation("com.github.seeseemelk:MockBukkit-v1.21:3.123.0")
+    testImplementation("com.github.seeseemelk:MockBukkit-v1.21:3.133.2")
     // 测试基建：JavalinTest（HTTP / WS 端到端测试 — UploadHandler 全场景 / sessionId 鉴权）
     testImplementation("io.javalin:javalin-testtools:7.2.2")
 }
