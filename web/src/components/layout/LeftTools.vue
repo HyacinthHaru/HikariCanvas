@@ -60,7 +60,10 @@ function addText() {
             text: 'TEXT',
             x: box.x, y: box.y, w: box.w, h: box.h,
             fontSize: 32,
-            color: '#FFFFFF',
+            // 深灰而非白：画布默认背景就是白色（ProjectState 默认 Fill.solid("#FFFFFF")），
+            // 白字落上去等于隐形。#444444 同时是 DEFAULT_SWATCHES 里的那格深灰，
+            // 用户点色板能一键复现这个默认值。
+            color: '#444444',
             align: 'center',
             fontId: 'ark_pixel',
         },

@@ -47,8 +47,6 @@ function radiusLabel(id: RadiusScale): string {
         case 'sm':   return t.value.theme.radiusSm;
         case 'md':   return t.value.theme.radiusMd;
         case 'lg':   return t.value.theme.radiusLg;
-        case 'xl':   return t.value.theme.radiusXl;
-        case 'full': return t.value.theme.radiusFull;
     }
 }
 
@@ -148,7 +146,7 @@ const isActiveRadius = computed(() => (r: RadiusScale) => theme.radius === r);
         <h6 class="text-xs font-semibold uppercase tracking-wider text-[color:var(--muted-foreground)] mb-2">
           {{ t.theme.radiusHeader }}
         </h6>
-        <div class="grid grid-cols-5 gap-1.5">
+        <div class="grid grid-cols-3 gap-1.5">
           <button
             v-for="r in RADIUS_OPTIONS"
             :key="r.id"

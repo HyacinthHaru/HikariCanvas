@@ -40,6 +40,19 @@ const loaded = new Map<string, LoadState>();
 const readyHandlers: ((fontId: string) => void)[] = [];
 
 /**
+ * 一次真实网络加载的开始 / 结束信号（UI 用来提示"字体正在加载"）。
+ *
+ * <p>与 {@link onFontLoaded} 的区别：`onFontLoaded` 只在**成功**时触发，语义是
+ * "可以重绘了"；这里的 `end` 无论成功还是失败都触发。少了失败那条路，加载挂掉时
+ * 提示条会永远转下去。</p>
+ *
+ * <p>只有真正发起 fetch 才会触发——命中缓存 / 正在加载的重复调用直接返现有 promise，
+ * 不再报一次 start。</p>
+ */
+const loadStartHandlers: ((fontId: string) => void)[] = [];
+const loadEndHandlers: ((fontId: string) => void)[] = [];
+
+/**
  * 注册回调，加载完任意字体后触发（CanvasView 接到后 requestDraw）。
  * 返回 unsubscribe 闭包；CanvasView onBeforeUnmount 调用以注销，避免
  * 组件多次挂载/卸载时 readyHandlers 数组只增不减（旧闭包持组件引用泄漏 + 重复 requestDraw）。
@@ -50,6 +63,24 @@ export function onFontLoaded(fn: (fontId: string) => void): () => void {
 }
 
 /** 注销 onFontLoaded 注册的回调。 */
+/** 订阅"某字体开始真实加载"。返回 unsubscribe 闭包（用法同 {@link onFontLoaded}）。 */
+export function onFontLoadStart(fn: (fontId: string) => void): () => void {
+    loadStartHandlers.push(fn);
+    return () => {
+        const i = loadStartHandlers.indexOf(fn);
+        if (i >= 0) loadStartHandlers.splice(i, 1);
+    };
+}
+
+/** 订阅"某字体加载结束"——**成功与失败都会触发**。返回 unsubscribe 闭包。 */
+export function onFontLoadEnd(fn: (fontId: string) => void): () => void {
+    loadEndHandlers.push(fn);
+    return () => {
+        const i = loadEndHandlers.indexOf(fn);
+        if (i >= 0) loadEndHandlers.splice(i, 1);
+    };
+}
+
 export function offFontLoaded(fn: (fontId: string) => void): void {
     const i = readyHandlers.indexOf(fn);
     if (i >= 0) readyHandlers.splice(i, 1);
@@ -90,6 +121,8 @@ export function ensureLoaded(fontId: string): Promise<void> {
     const state: LoadState = { promise: Promise.resolve(), failedAt: 0 };
     loaded.set(fontId, state);
 
+    for (const fn of loadStartHandlers) fn(fontId);
+
     state.promise = (async () => {
         try {
             const url = `/api/font/file?id=${encodeURIComponent(fontId)}`;
@@ -102,6 +135,9 @@ export function ensureLoaded(fontId: string): Promise<void> {
             console.warn(`[FontLoader] failed to load ${fontId}:`, e);
             state.failedAt = Date.now();
             // 不抛 — 调用方继续走 system fallback
+        } finally {
+            // finally 而非 try 尾：失败路径也必须报结束，否则 UI 的加载提示永远不消。
+            for (const fn of loadEndHandlers) fn(fontId);
         }
     })();
 

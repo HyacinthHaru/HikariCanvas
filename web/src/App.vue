@@ -7,6 +7,7 @@ import CanvasView from '@/components/layout/CanvasView.vue';
 import IconLibrary from '@/components/layout/IconLibrary.vue';
 import RightPanel from '@/components/layout/RightPanel.vue';
 import StatusBar from '@/components/layout/StatusBar.vue';
+import FontLoadingToast from '@/components/ui/FontLoadingToast.vue';
 import LogDrawer from '@/components/layout/LogDrawer.vue';
 import VariablePanel from '@/components/variables/VariablePanel.vue';
 import ScheduleManagerModal from '@/components/schedule/ScheduleManagerModal.vue';
@@ -247,6 +248,8 @@ useEventListener(document, 'keydown', (e: KeyboardEvent) => {
     <!-- 时间轴 AE 风底部 dock（布局流兄弟，压缩画布可视区；懒加载拆 chunk） -->
     <TimelineDock v-if="timeline.dockOpen" />
     <StatusBar />
+    <!-- 字体拉取慢时的右下角轻提示（fixed，不随画布滚动） -->
+    <FontLoadingToast />
     <TemplateGallery />
     <HelpModal />
     <!-- 变量管理面板 fixed drawer，z-50；与 LogDrawer / TemplateGallery 同层 modal -->

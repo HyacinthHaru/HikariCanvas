@@ -16,7 +16,7 @@ import { ref, watch } from 'vue';
 
 export type Flavor = 'latte' | 'frappe' | 'macchiato';
 export type Accent = 'mauve' | 'blue' | 'teal' | 'green' | 'peach' | 'pink' | 'lavender' | 'sapphire';
-export type RadiusScale = 'sm' | 'md' | 'lg' | 'xl' | 'full';
+export type RadiusScale = 'sm' | 'md' | 'lg';
 
 export interface ThemePreset {
     id: Flavor;
@@ -60,12 +60,20 @@ export const ACCENTS: { id: Accent; color: string }[] = [
     { id: 'sapphire', color: 'hsl(189 70% 42%)' },
 ];
 
+/**
+ * 圆角刻度只留小 / 中 / 大三档。
+ *
+ * <p>原来还有 `xl`(24px) 与 `full`(9999px)。`full` 会把输入框、下拉、面板一起做成纯胶囊，
+ * 文本框变成药丸形——那不是可选风格而是坏掉的外观；`xl` 与 `lg` 在实际控件上几乎看不出差别，
+ * 留着只是让选择变难。</p>
+ *
+ * <p>迁移不需要额外代码：{@link loadRadius} 本来就按 RADIUS_OPTIONS 校验存量值，
+ * 旧用户存的 `xl` / `full` 读不出来时自动回落 `md`。</p>
+ */
 export const RADIUS_OPTIONS: { id: RadiusScale; px: number }[] = [
-    { id: 'sm',   px: 6  },
-    { id: 'md',   px: 12 },
-    { id: 'lg',   px: 16 },
-    { id: 'xl',   px: 24 },
-    { id: 'full', px: 9999 },
+    { id: 'sm', px: 6  },
+    { id: 'md', px: 12 },
+    { id: 'lg', px: 16 },
 ];
 
 const FLAVOR_KEY = 'hikari-canvas:theme.flavor';

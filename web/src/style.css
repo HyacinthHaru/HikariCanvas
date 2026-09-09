@@ -259,8 +259,6 @@
 [data-radius="sm"]   { --radius: 6px;  }
 [data-radius="md"]   { --radius: 12px; }
 [data-radius="lg"]   { --radius: 16px; }
-[data-radius="xl"]   { --radius: 24px; }
-[data-radius="full"] { --radius: 9999px; }
 
 /* ---------- Tailwind 4 @theme（让 bg-primary / rounded-md 之类直接生效） ---------- */
 

@@ -1314,162 +1314,181 @@ function requestDraw(): void {
 </script>
 
 <template>
-  <section
-    ref="outerRef"
-    class="flex-1 relative overflow-auto bg-[color:var(--background)]"
-    :style="{ cursor: cursorStyle }"
-    @wheel="onWheel"
-    @mousedown="onMouseDown"
-    @mousemove="onMouseMove"
-    @mouseup="onMouseUpOrLeave"
-    @mouseleave="() => { onMouseUpOrLeave(); hoveredGap = null; }"
-    @dragover="onOuterDragOver"
-    @drop="onOuterDrop"
-  >
-    <!-- 画布居中容器
-         M17 F4：1024px 虚空白边——padding 让 scrollWidth / scrollHeight 虚拟扩大，
-         用户可以把画布拖到 viewport 任意角落。fitToViewport 仍按 v-stage 实际尺寸计算
-         不受 padding 影响；初次居中由 scrollLeft / scrollTop 中点策略实现。 -->
-    <div class="min-h-full min-w-full flex items-center justify-center hc-canvas-padding">
-      <div
-        class="relative shadow-lg ring-1 ring-[color:var(--border)] bg-white"
-        :style="{
-          width: `${widthPx * ui.zoom}px`,
-          height: `${heightPx * ui.zoom}px`,
-        }"
-      >
-        <!-- 外层一个 scale wrapper，让 canvas 和 Konva 都按原始像素绘制，DOM 缩放由 CSS 做 -->
+  <!-- 外层不滚动，只作定位上下文；真正的滚动容器是里面那个 absolute inset-0 的 <section>。
+       画布 chrome（对齐栏 / 缩放栏 / Live Paint 指示）必须挂在这一层：它们要相对「可视区」
+       固定，而滚动容器的**子元素一律活在内容坐标系里**，横向滚动时就会跟着内容一起漂走。
+       sticky 也救不了——sticky 的约束矩形是滚动容器的内容盒（只有视口那么宽），
+       scrollLeft > 0 之后它只能被钳在内容盒右缘，照样往左漂。 -->
+  <div class="flex-1 relative min-w-0 min-h-0">
+    <section
+      ref="outerRef"
+      class="absolute inset-0 overflow-auto bg-[color:var(--background)]"
+      :style="{ cursor: cursorStyle }"
+      @wheel="onWheel"
+      @mousedown="onMouseDown"
+      @mousemove="onMouseMove"
+      @mouseup="onMouseUpOrLeave"
+      @mouseleave="() => { onMouseUpOrLeave(); hoveredGap = null; }"
+      @dragover="onOuterDragOver"
+      @drop="onOuterDrop"
+    >
+      <!-- 画布居中容器
+           M17 F4：1024px 虚空白边——padding 让 scrollWidth / scrollHeight 虚拟扩大，
+           用户可以把画布拖到 viewport 任意角落。fitToViewport 仍按 v-stage 实际尺寸计算
+           不受 padding 影响；初次居中由 scrollLeft / scrollTop 中点策略实现。 -->
+      <div class="min-h-full min-w-full flex items-center justify-center hc-canvas-padding">
         <div
-          ref="brushHostRef"
-          class="absolute origin-top-left"
+          class="relative shadow-lg ring-1 ring-[color:var(--border)] bg-white"
           :style="{
-            width: `${widthPx}px`,
-            height: `${heightPx}px`,
-            transform: `scale(${ui.zoom})`,
+            width: `${widthPx * ui.zoom}px`,
+            height: `${heightPx * ui.zoom}px`,
           }"
-          @pointerdown="onBrushPointerDown"
-          @pointermove="onBrushPointerMove"
-          @pointerup="onBrushPointerUp"
-          @pointercancel="onBrushPointerCancel"
         >
-          <canvas
-            ref="canvasEl"
-            class="absolute inset-0 hc-canvas-layer"
-            :style="{ width: `${widthPx}px`, height: `${heightPx}px` }"
-          />
-          <!-- grid overlay（仅前端预览，不入 MC）。CSS 双线性渐变实现实线网格。 -->
-          <CanvasGridOverlay :grid-size="gridSize" />
-          <!-- lock-state readonly overlay：locked 时拦截所有 stage 鼠标事件。
-               中间显示提示；owner 看到解锁按钮，非 owner 看到 "仅作者可解锁"。 -->
+          <!-- 外层一个 scale wrapper，让 canvas 和 Konva 都按原始像素绘制，DOM 缩放由 CSS 做 -->
           <div
-            v-if="project.isLocked"
-            class="absolute inset-0 z-20 flex items-center justify-center bg-[color:var(--ctp-crust)]/20 cursor-not-allowed"
-            @mousedown.stop.prevent
-            @click.stop.prevent
-            @dblclick.stop.prevent
+            ref="brushHostRef"
+            class="absolute origin-top-left"
+            :style="{
+              width: `${widthPx}px`,
+              height: `${heightPx}px`,
+              transform: `scale(${ui.zoom})`,
+            }"
+            @pointerdown="onBrushPointerDown"
+            @pointermove="onBrushPointerMove"
+            @pointerup="onBrushPointerUp"
+            @pointercancel="onBrushPointerCancel"
           >
-            <div class="px-3 py-1.5 rounded-[var(--radius-sm)] bg-[color:var(--ctp-peach)] text-[color:var(--ctp-base)] text-xs font-medium pointer-events-none">
-              {{ project.isOwner ? t.wall.lockedOwnerHint : t.wall.lockedReaderHint }}
-            </div>
-          </div>
-          <v-stage
-            ref="stageRef"
-            :config="stageConfig"
-            class="absolute inset-0"
-            @mousedown="onStageMouseDown"
-            @mousemove="onStageMouseMove"
-            @mouseup="onStageMouseUp"
-            @touchstart="onStageMouseDown"
-            @touchmove="onStageMouseMove"
-            @touchend="onStageMouseUp"
-            @dblclick="onStageDblClick"
-          >
-            <v-layer ref="layerRef">
-              <v-rect
-                v-for="el in elements"
-                :key="el.id"
-                :config="hitConfig(el)"
-                @click="(ev: any) => onHitClick(ev, el.id)"
-                @tap="(ev: any) => onHitClick(ev, el.id)"
-                @dblclick="(ev: any) => onHitDblClick(ev, el.id)"
-                @dragstart="() => onDragStart(el.id)"
-                @dragmove="(ev: any) => onDragMove(ev, el.id)"
-                @dragend="(ev: any) => onDragEnd(ev, el.id)"
-                @transformend="(ev: any) => onElementTransformEnd(ev, el.id)"
-                @mouseenter="(ev: any) => onHitMouseEnter(ev, el.id)"
-                @mouseleave="(ev: any) => onHitMouseLeave(ev)"
-              />
-              <v-transformer ref="transformerRef" :config="transformerConfig" />
-            </v-layer>
-            <!-- marquee 拖框可视层；drag-to-create 预览同 layer -->
-            <v-layer v-if="marqueeConfig || drawPreview" :listening="false">
-              <v-rect v-if="marqueeConfig" :config="marqueeConfig" />
-              <v-line v-if="drawPreview?.kind === 'line'" :config="drawPreview.config" />
-              <v-arrow v-if="drawPreview?.kind === 'arrow'" :config="drawPreview.config" />
-              <v-ellipse v-if="drawPreview?.kind === 'ellipse'" :config="drawPreview.config" />
-              <v-star v-if="drawPreview?.kind === 'star'" :config="drawPreview.config" />
-            </v-layer>
-            <!-- snap visualizer（红色对齐线 + 绿色间距标注）。
-                 仅当 activeSnapHints 非空时层 mount；drag/transform 结束立刻清。 -->
-            <SnapGuideOverlay
-              :hints="activeSnapHints"
-              :width-px="widthPx"
-              :height-px="heightPx"
+            <canvas
+              ref="canvasEl"
+              class="absolute inset-0 hc-canvas-layer"
+              :style="{ width: `${widthPx}px`, height: `${heightPx}px` }"
             />
-            <!-- Live Paint：paint-bucket 工具 hover 高亮。layer listening=false，
-                 让 mousedown/move 直达 stage。 -->
-            <LivePaintHoverOverlay :hovered-gap="hoveredGap" />
-            <!-- lasso 绘制中的虚线 path 预览 -->
-            <v-layer v-if="lassoGuide && lassoGuide.active" :listening="false">
-              <v-line
-                v-if="lassoGuide.points.length >= 2 && lassoImageOffset"
-                :config="{
-                  points: lassoFlatPoints,
-                  x: lassoImageOffset.x,
-                  y: lassoImageOffset.y,
-                  stroke: '#60a5fa',
-                  strokeWidth: 1.5,
-                  dash: [4, 3],
-                  closed: false,
-                  listening: false,
-                }"
+            <!-- grid overlay（仅前端预览，不入 MC）。CSS 双线性渐变实现实线网格。 -->
+            <CanvasGridOverlay :grid-size="gridSize" />
+            <!-- lock-state readonly overlay：locked 时拦截所有 stage 鼠标事件。
+                 中间显示提示；owner 看到解锁按钮，非 owner 看到 "仅作者可解锁"。 -->
+            <div
+              v-if="project.isLocked"
+              class="absolute inset-0 z-20 flex items-center justify-center bg-[color:var(--ctp-crust)]/20 cursor-not-allowed"
+              @mousedown.stop.prevent
+              @click.stop.prevent
+              @dblclick.stop.prevent
+            >
+              <div class="px-3 py-1.5 rounded-[var(--radius-sm)] bg-[color:var(--ctp-peach)] text-[color:var(--ctp-base)] text-xs font-medium pointer-events-none">
+                {{ project.isOwner ? t.wall.lockedOwnerHint : t.wall.lockedReaderHint }}
+              </div>
+            </div>
+            <v-stage
+              ref="stageRef"
+              :config="stageConfig"
+              class="absolute inset-0"
+              @mousedown="onStageMouseDown"
+              @mousemove="onStageMouseMove"
+              @mouseup="onStageMouseUp"
+              @touchstart="onStageMouseDown"
+              @touchmove="onStageMouseMove"
+              @touchend="onStageMouseUp"
+              @dblclick="onStageDblClick"
+            >
+              <v-layer ref="layerRef">
+                <v-rect
+                  v-for="el in elements"
+                  :key="el.id"
+                  :config="hitConfig(el)"
+                  @click="(ev: any) => onHitClick(ev, el.id)"
+                  @tap="(ev: any) => onHitClick(ev, el.id)"
+                  @dblclick="(ev: any) => onHitDblClick(ev, el.id)"
+                  @dragstart="() => onDragStart(el.id)"
+                  @dragmove="(ev: any) => onDragMove(ev, el.id)"
+                  @dragend="(ev: any) => onDragEnd(ev, el.id)"
+                  @transformend="(ev: any) => onElementTransformEnd(ev, el.id)"
+                  @mouseenter="(ev: any) => onHitMouseEnter(ev, el.id)"
+                  @mouseleave="(ev: any) => onHitMouseLeave(ev)"
+                />
+                <v-transformer ref="transformerRef" :config="transformerConfig" />
+              </v-layer>
+              <!-- marquee 拖框可视层；drag-to-create 预览同 layer -->
+              <v-layer v-if="marqueeConfig || drawPreview" :listening="false">
+                <v-rect v-if="marqueeConfig" :config="marqueeConfig" />
+                <v-line v-if="drawPreview?.kind === 'line'" :config="drawPreview.config" />
+                <v-arrow v-if="drawPreview?.kind === 'arrow'" :config="drawPreview.config" />
+                <v-ellipse v-if="drawPreview?.kind === 'ellipse'" :config="drawPreview.config" />
+                <v-star v-if="drawPreview?.kind === 'star'" :config="drawPreview.config" />
+              </v-layer>
+              <!-- snap visualizer（红色对齐线 + 绿色间距标注）。
+                   仅当 activeSnapHints 非空时层 mount；drag/transform 结束立刻清。 -->
+              <SnapGuideOverlay
+                :hints="activeSnapHints"
+                :width-px="widthPx"
+                :height-px="heightPx"
               />
-            </v-layer>
-          </v-stage>
-          <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。
-               PreviewRenderer 会跳过 editingId 对应的 element，避免画布底层字形与 textarea 重影。 -->
-          <TextInlineEditor
-            ref="inlineEditorRef"
-            :element="editingElement"
-            :wall-id="project.wallId"
-            @update:text="onEditTextUpdate"
-            @finish="finishEditing"
-            @cancel="finishEditing"
-            @insert-variable-request="onInlineInsertVariableRequest"
-            @edit-variable-request="onInlineEditVariableRequest"
-            @create-variable-request="onInlineCreateVariableRequest"
-          />
-          <!-- inline editor 触发的 VariablePicker（与 RightPanel 的 picker 不冲突，
-               同一时刻只有一个 editor 在焦点） -->
-          <VariablePicker
-            v-if="inlinePickerOpen && editingId"
-            :wall-id="project.wallId"
-            class="hc-inline-var-picker"
-            @select="onInlinePickerSelect"
-            @close="onInlinePickerClose"
-          />
+              <!-- Live Paint：paint-bucket 工具 hover 高亮。layer listening=false，
+                   让 mousedown/move 直达 stage。 -->
+              <LivePaintHoverOverlay :hovered-gap="hoveredGap" />
+              <!-- lasso 绘制中的虚线 path 预览 -->
+              <v-layer v-if="lassoGuide && lassoGuide.active" :listening="false">
+                <v-line
+                  v-if="lassoGuide.points.length >= 2 && lassoImageOffset"
+                  :config="{
+                    points: lassoFlatPoints,
+                    x: lassoImageOffset.x,
+                    y: lassoImageOffset.y,
+                    stroke: '#60a5fa',
+                    strokeWidth: 1.5,
+                    dash: [4, 3],
+                    closed: false,
+                    listening: false,
+                  }"
+                />
+              </v-layer>
+            </v-stage>
+            <!-- 就地编辑 overlay：双击文本元素弹出，背景透明 + 字体继承，营造"直接在画布上编辑"观感。
+                 PreviewRenderer 会跳过 editingId 对应的 element，避免画布底层字形与 textarea 重影。 -->
+            <TextInlineEditor
+              ref="inlineEditorRef"
+              :element="editingElement"
+              :wall-id="project.wallId"
+              @update:text="onEditTextUpdate"
+              @finish="finishEditing"
+              @cancel="finishEditing"
+              @insert-variable-request="onInlineInsertVariableRequest"
+              @edit-variable-request="onInlineEditVariableRequest"
+              @create-variable-request="onInlineCreateVariableRequest"
+            />
+            <!-- inline editor 触发的 VariablePicker（与 RightPanel 的 picker 不冲突，
+                 同一时刻只有一个 editor 在焦点） -->
+            <VariablePicker
+              v-if="inlinePickerOpen && editingId"
+              :wall-id="project.wallId"
+              class="hc-inline-var-picker"
+              @select="onInlinePickerSelect"
+              @close="onInlinePickerClose"
+            />
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- 上传错误 / 进度 banner（顶部居中，自动消失） -->
-    <div
-      v-if="uploadError || uploading"
-      class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-[var(--radius-sm)] text-xs shadow-lg pointer-events-none"
-      :class="uploadError ? 'bg-[color:var(--destructive)]/95 text-[color:var(--destructive-foreground)]' : 'bg-[color:var(--ctp-blue)]/95 text-white'"
-    >
-      {{ uploadError ?? t.image.uploading }}
-    </div>
+      <!-- 上传错误 / 进度 banner（顶部居中，自动消失） -->
+      <div
+        v-if="uploadError || uploading"
+        class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-[var(--radius-sm)] text-xs shadow-lg pointer-events-none"
+        :class="uploadError ? 'bg-[color:var(--destructive)]/95 text-[color:var(--destructive-foreground)]' : 'bg-[color:var(--ctp-blue)]/95 text-white'"
+      >
+        {{ uploadError ?? t.image.uploading }}
+      </div>
+
+      <!-- 隐藏 file input（点击工具栏上传按钮触发） -->
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        class="hidden"
+        @change="onFileInputChange"
+      />
+
+    </section>
+
+    <!-- ↓↓↓ 以下浮层挂在滚动容器**外**，相对可视区固定，不随画布横向 / 纵向滚动 ↓↓↓ -->
 
     <!-- Live Paint：worker 正在构建 graph 时的浮动 indicator（仅 paint-bucket 工具下显示） -->
     <div
@@ -1480,20 +1499,12 @@ function requestDraw(): void {
       {{ t.livePaint.building }}
     </div>
 
-    <!-- 隐藏 file input（点击工具栏上传按钮触发） -->
-    <input
-      ref="fileInputRef"
-      type="file"
-      accept="image/png,image/jpeg,image/webp"
-      class="hidden"
-      @change="onFileInputChange"
-    />
-
     <!-- 对齐 / 分布工具栏（仅多选时显示） -->
     <AlignDistributeBar />
 
-    <!-- 右下角 zoom 控件（升级版） -->
+    <!-- 右下角 zoom 控件（升级版）。定位由这里给，组件自身只管内容。 -->
     <CanvasZoomBar
+      class="absolute bottom-3 right-3 z-30"
       :size-label="sizeLabel"
       :grid-size="gridSize"
       :uploading="uploading"
@@ -1501,7 +1512,7 @@ function requestDraw(): void {
       @trigger-upload="triggerFileInput"
       @grid-change="onGridChange"
     />
-  </section>
+  </div>
 </template>
 
 <style scoped>

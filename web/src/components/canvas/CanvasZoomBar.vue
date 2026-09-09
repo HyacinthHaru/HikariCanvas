@@ -43,7 +43,7 @@ function cancelZoomEdit() {
 </script>
 
 <template>
-  <div class="sticky bottom-3 float-right mr-3 flex items-center gap-1 bg-[color:var(--card)] border border-[color:var(--border)] rounded-[var(--radius)] p-1 shadow-sm text-[color:var(--foreground)]">
+  <div class="flex items-center gap-1 bg-[color:var(--card)] border border-[color:var(--border)] rounded-[var(--radius)] p-1 shadow-sm text-[color:var(--foreground)]">
     <Tooltip :text="t.image.uploadTip">
       <button
         class="p-1.5 rounded hover:bg-[color:var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"

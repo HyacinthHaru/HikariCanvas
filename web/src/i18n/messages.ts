@@ -203,6 +203,8 @@ export const messages = {
             transparentBgTooltip: '把背景设为完全透明，可让 wall 后面的方块 / 风景透出来',
             // 画布导航快捷键提示（ZoomBar 角落显示）
             navHint: 'Shift+滚轮 横向 · 中键 / Space / H 拖拽画布',
+            // 字体从服务端拉取较慢时的右下角提示
+            fontLoading: '网页字体正在加载中，请稍等',
         },
         properties: {
             header: '元素属性',
@@ -323,8 +325,6 @@ export const messages = {
             radiusSm: '小',
             radiusMd: '中',
             radiusLg: '大',
-            radiusXl: '很大',
-            radiusFull: '圆形',
         },
         brush: {
             header: '笔刷设置',
@@ -1534,6 +1534,7 @@ export const messages = {
             transparentBgTooltip: 'Show blocks / scenery behind the wall through transparent pixels',
             // canvas navigation shortcut hint shown in the ZoomBar
             navHint: 'Shift+Scroll horizontal · Middle-click / Space / H to pan',
+            fontLoading: 'Loading web font, please wait…',
         },
         properties: {
             header: 'Element properties',
@@ -1654,8 +1655,6 @@ export const messages = {
             radiusSm: 'Small',
             radiusMd: 'Medium',
             radiusLg: 'Large',
-            radiusXl: 'Extra',
-            radiusFull: 'Pill',
         },
         brush: {
             header: 'Brush settings',
