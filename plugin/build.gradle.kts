@@ -7,7 +7,7 @@ import java.util.zip.ZipFile
 
 plugins {
     `java`
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.23"
     id("xyz.jpenilla.run-paper") version "3.0.2"
     id("com.gradleup.shadow") version "9.6.1"
 }
