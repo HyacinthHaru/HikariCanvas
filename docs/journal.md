@@ -5,6 +5,34 @@
 
 ---
 
+## 2026-09-09 · 0.9.18：dependabot 11 批 + 4 处界面修复
+
+### 依赖批（11 个 PR，10 个走 GitHub 合并按钮，1 个撞车后本地处理）
+6 个不碰 `package-lock.json` 的先合（setup-java v6 / gradle-wrapper 9.6.1 / shadow 9.6.1 / caffeine 3.2.4 / junit-jupiter 6.1.2 / MockBukkit 3.133.2），npm 侧再逐个合。**junit 5→6 与 MockBukkit 此前被判「押后」**（major 无收益 + launcher 对齐坑 / 死依赖），这次实跑后端 **2458 测试全绿**，押后的理由不再成立。
+
+**lexical 家族拉齐（本批唯一必须人工介入的一处）**：dependabot 只给 `@lexical/history`（#26）与 `@lexical/utils`（#24）开了 PR，**没给核心 `lexical` 和 `@lexical/plain-text` 开**。`^0.44.0` 对 0.x 语义是 `<0.45`，只升其中两个会让 npm 装进**嵌套的第二份 lexical 核心**，chip 撤销会坏——CI 跑不出来（vitest 覆盖不到那条运行时路径）。改为四个包一起升 0.48.0，实测 `node_modules` 下单一核心、无嵌套副本。#24 因与 #26 改同一段锁文件冲突，由本次一并处理。
+
+**TypeScript 6→7（#30）已合但随后回退**。TS 7 是原生（Go）重写版，不再从 `exports` 暴露 `./lib/tsc`，而 `vue-tsc` 正是靠 `require.resolve('typescript/lib/tsc')` 启动 → `npm run typecheck` **直接崩溃**。试过 vue-tsc 最新 3.3.11，同样起不来（peer 写着 `typescript >=5.0.0`，但那只是范围宽松，并非真支持）。CI 之所以放行，是因为 `npm run build` 只是 `vite build`、**根本不跑类型检查**。回退到 `^6.0.3`；vue-tsc 顺带留在 3.3.11（与 TS 6 正常工作）。
+
+> 附带查明：`npm run typecheck` 在 TS 6 下**本来就红**（16 个历史错误，含 fontkit 缺声明、4 处失效的 `@ts-expect-error`、几个测试文件的类型收窄）。它从来不在 CI 里，所以一直没人管。**没有在本批处理**——那是独立一件事，混进依赖批会看不清。
+
+### 界面修复 4 处
+- **新建文字默认色 `#FFFFFF` → `#444444`**（`LeftTools.vue`）。画布默认背景就是白（`ProjectState` 默认 `Fill.solid("#FFFFFF")`），白字落上去等于隐形。取 `#444444` 而非随手一个深灰：它是 `DEFAULT_SWATCHES` 里那格，用户点色板能一键复现这个默认值。
+- **字体加载提示**（新 `FontLoadingToast.vue` + `FontLoader` 加 `onFontLoadStart` / `onFontLoadEnd`）。中文字体动辄十几 MB，慢网下画布先用系统 fallback 顶着，用户看到的是"点了没反应"。两个常量决定它不烦人：`SHOW_DELAY_MS=200`（命中缓存的加载几十毫秒就完，直接弹会每次闪一下）+ `MIN_VISIBLE_MS=1000`（弹出后至少留一秒，否则卡在阈值附近的加载"闪现一帧"比不提示更困惑）。
+  **关键一点是结束信号挂在 `finally` 而非 try 尾**：现有的 `onFontLoaded` 只在成功时触发，若结束信号也只走成功分支，一次 404 就让提示条永远转下去。已有专门用例守这条，变异测试确认转红。
+- **圆角刻度 5 档 → 3 档**（`theme.ts` / `style.css` / `messages.ts` / `ThemeSwitcher.vue`）。删掉 `xl`(24px) 与 `full`(9999px)。`full` 会把输入框、下拉、面板一起做成纯胶囊——那不是可选风格而是坏掉的外观；`xl` 与 `lg` 在真实控件上几乎看不出差别。**迁移零代码**：`loadRadius` 本来就按 `RADIUS_OPTIONS` 校验存量值，旧用户存的 `xl`/`full` 自动回落 `md`（已补用例守住，含"回落后写进 `<html data-radius>` 的必须是有效刻度"——否则 CSS 没有对应规则，`--radius` 掉回 `:root` 默认值，用户看到的是"设置丢了"且再也换不回来，因为按钮列表里已经没那一项）。
+- **画布浮层随横向滚动漂走**（`CanvasView.vue` / `CanvasZoomBar.vue`）。根因：缩放栏挂在滚动容器 `<section>` 内部，而**滚动容器的子元素一律活在内容坐标系里**。原写法 `sticky bottom-3 float-right` 只给了纵向 inset，横向自然跟着内容跑。
+  **`sticky` 补个 `right` 也救不了**：sticky 的约束矩形是滚动容器的内容盒（只有视口那么宽），`scrollLeft > 0` 之后元素只能被钳在内容盒右缘，照样往左漂。改为给 CanvasView 包一层不滚动的 `relative` 定位上下文，`<section>` 变 `absolute inset-0` 继续当滚动容器（`outerRef` 不变），把**对齐/分布栏、缩放栏、Live Paint 指示**三个浮层一起移到该层。
+  → **顺带修好了对齐栏与 Live Paint 指示**：它们是同一个缺陷（`position:absolute` 落在滚动容器内），作者只报了缩放栏一处。画布内联变量选择器留在原处未动——它按设计要跟随行内编辑器，属于内容锚定而非视口锚定。
+
+### 顺带
+`AGENTS.md` 加入 `.gitignore`（内容是 `CLAUDE.md` 的镜像、仅署名一行不同，入库等于第二份要同步维护的契约副本）· 云同步又一次把 0.9.9 改包名时删掉的 `moe/` 旧包复活（`examples/` 两个示例插件各若干文件，时间戳仍是 6-15 15:46 / `-rw-------`）——**这次不是惰性垃圾**：`examples:*` 是 gradle 子项目，那些文件 `import moe.hikari.canvas.api.*`（包已不存在），会让 `./gradlew build` 编译失败，已删 · `CLAUDE.md` 锁定表 Gradle 9.4.1→9.6.1、"JUnit 5"→"JUnit 6"。
+
+### 验证
+后端 `:plugin:test` **2458**，0 failures（Gradle 9.6.1 + junit 6.1.2）。前端 vitest **1747 → 1768**（+21，133 文件），`vite build` 通过。新增守卫**全部做过变异测试**——改回旧行为确认转红再还原，其中"加载够快就不弹"那条第一版对阈值不敏感（`tick(SHOW_DELAY_MS-50)` 在阈值改 0 时算成负数），已改成绝对值断言后重验。
+
+---
+
 ## 2026-07-27 · 仓库瘦身 + 云同步污染清理 + cut `v0.9.17-rc.1`
 
 ### 仓库瘦身（`2c44d93d`）
