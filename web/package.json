@@ -36,7 +36,7 @@
     "fflate": "0.8.3",
     "fontkit": "^2.0.4",
     "konva": "^10.3.0",
-    "lexical": "^0.48.0",
+    "lexical": "^0.50.0",
     "lucide-vue-next": "^0.468.0",
     "pinia": "^2.3.1",
     "polygon-clipping": "^0.15.7",
