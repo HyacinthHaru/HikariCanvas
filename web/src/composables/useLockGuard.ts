@@ -40,7 +40,8 @@ import { useI18n } from '@/i18n';
  */
 export function useLockGuard(): {
     isLocked: ComputedRef<boolean>;
-    isOwner: ComputedRef<boolean>;
+    /** 能否管理这面墙（lock / unlock / alias）。协议 v8 由服务端下发，前端不本地推导。 */
+    canManageWall: ComputedRef<boolean>;
     isReadonly: ComputedRef<boolean>;
     readonly: ComputedRef<boolean>;
     guardMutation: (actionName?: string) => boolean;
@@ -50,7 +51,7 @@ export function useLockGuard(): {
     const { t } = useI18n();
 
     const isLocked = computed(() => project.isLocked);
-    const isOwner = computed(() => project.isOwner);
+    const canManageWall = computed(() => project.canManageWall);
     /**
      * lock 状态下任何人都不能改 wall（owner 需先解锁）—— 与代码库现有路径
      * （useClipboard.paste / useCanvasUpload / IconLibrary.onPick / CanvasView.lockedOverlay）
@@ -82,5 +83,5 @@ export function useLockGuard(): {
         return false;
     }
 
-    return { isLocked, isOwner, isReadonly, readonly, guardMutation };
+    return { isLocked, canManageWall, isReadonly, readonly, guardMutation };
 }

@@ -350,10 +350,18 @@ export interface ReadyPayload {
     alias?: string;
     /** lock 时间戳；null = 可编辑，非 null = 锁定（前端 readonly UI）。 */
     lockedAt?: number;
-    /** wall 创建者 UUID（walls.owner_uuid） */
+    /** wall 创建者 UUID（walls.owner_uuid）。**仅供展示**，不要拿它推导授权。 */
     ownerUuid?: string;
-    /** 当前 session 玩家 UUID，供前端判 isOwner = (selfUuid === ownerUuid) */
+    /**
+     * 当前 session 主体的 UUID。控制台主体为 nil UUID `00000000-…`。
+     * **这是索引键不是身份凭据**——授权看 {@link canManageWall}。
+     */
     selfUuid?: string;
+    /**
+     * 协议 v8 起：当前主体能否管理这面墙（lock / unlock / alias）。
+     * 服务端算好的结论（`SessionManager.canManageWall`），前端直接消费、**不再本地推导**。
+     */
+    canManageWall?: boolean;
     // 全量 TemplateSpec 列表（builtin + server-side templates）
     templates?: import('./template').TemplateSpec[];
     // 该 wall 当前所有变量快照（VariableDto 形式，referencedByWalls 已剔除）

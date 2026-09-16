@@ -1159,13 +1159,16 @@ public final class WebServer {
         // 避免再起一次 callSyncMethod；离线玩家无 bypass（fail-closed，只看到自己的模板）。
         boolean templateBypass = false;
         try {
-            boolean[] perms = org.bukkit.Bukkit.getScheduler().callSyncMethod(plugin, () -> {
-                org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(session.playerUuid());
-                if (live == null) return new boolean[]{true, false};  // 玩家离线：放行 + 无 bypass
-                return new boolean[]{
-                        live.hasPermission("canvas.edit"),
-                        live.hasPermission("canvas.template.use-others")};
-            }).get(2, java.util.concurrent.TimeUnit.SECONDS);
+            boolean[] perms = session.isConsole()
+                    // 控制台主体：全授予，不查节点也不 hop 主线程（docs/security.md §5.0）。
+                    ? new boolean[]{true, true}
+                    : org.bukkit.Bukkit.getScheduler().callSyncMethod(plugin, () -> {
+                        org.bukkit.entity.Player live = org.bukkit.Bukkit.getPlayer(session.playerUuid());
+                        if (live == null) return new boolean[]{true, false};  // 玩家离线：放行 + 无 bypass
+                        return new boolean[]{
+                                live.hasPermission("canvas.edit"),
+                                live.hasPermission("canvas.template.use-others")};
+                    }).get(2, java.util.concurrent.TimeUnit.SECONDS);
             boolean allowed = perms != null && perms[0];
             templateBypass = perms != null && perms[1];
             if (!allowed) {
@@ -1278,19 +1281,24 @@ public final class WebServer {
         // T4：ready payload 中的 projectState 直接由 session 持有的权威状态序列化
         ProjectState state = session.projectState();
 
-        // 附带 wall 元数据（wallId / alias / lockedAt + ownerUuid + selfUuid），前端 TopBar 显示。
-        // 字段 publishedAt 改名 lockedAt；新增 ownerUuid + selfUuid
-        // 供前端判 isOwner = (selfUuid === ownerUuid)。
+        // 附带 wall 元数据（wallId / alias / lockedAt + ownerUuid + selfUuid + canManageWall）。
+        // 字段 publishedAt 改名 lockedAt。
+        // canManageWall（协议 v8）是服务端算好的授权结论，前端直接消费 ——
+        // 此前前端自行比对 isOwner = (selfUuid === ownerUuid)，那是"在第二处重新推导授权"，
+        // 也正是控制台主体永远拿不到解锁按钮的原因。判据与后端三个 dispatcher 分支共用
+        // SessionManager.canManageWall，授权结论只允许有一个权威。
         String wallId = session.wallId();
         String alias = null;
         Long lockedAt = null;
         String ownerUuid = null;
+        boolean canManageWall = false;
         if (wallId != null) {
             var w = wallRepo.loadById(wallId).orElse(null);
             if (w != null) {
                 alias = w.alias();
                 lockedAt = w.publishedAt();  // DB 列名保留 published_at，语义为 lock 时间戳
                 ownerUuid = w.ownerUuid().toString();  // Wall.ownerUuid() 返回 UUID，前端 selfUuid 也是 String
+                canManageWall = ac.haru.hikaricanvas.session.SessionManager.canManageWall(session, w);
             }
         }
 
@@ -1308,6 +1316,7 @@ public final class WebServer {
         if (lockedAt != null) payload.put("lockedAt", lockedAt);
         if (ownerUuid != null) payload.put("ownerUuid", ownerUuid);
         payload.put("selfUuid", session.playerUuid().toString());
+        payload.put("canManageWall", canManageWall);
         // TemplateSpec 下发（协议 §3.2），前端无需独立接口
         // 按 caller owner + canvas.template.use-others 过滤——只下发 builtin/server +
         // 自己的 user 模板（或持 bypass 时全部），堵住其他玩家私有模板 rawState 经 ready 帧外泄。

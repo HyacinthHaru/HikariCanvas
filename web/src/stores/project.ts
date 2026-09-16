@@ -53,17 +53,25 @@ export const useProjectStore = defineStore('project', () => {
     let lastAddAt = 0;
 
     // wall 元数据（来自 ready payload + wall.* op 的 ack）
-    // lockedAt: null = 可编辑，非 null = 锁定；ownerUuid + selfUuid
-    // 供前端 computed isOwner = (selfUuid === ownerUuid)，仅 owner 能 lock/unlock。
+    // lockedAt: null = 可编辑，非 null = 锁定。
+    // ownerUuid / selfUuid 仅供展示；能不能 lock/unlock/alias 一律看 canManageWall。
     const wallId = ref<string | null>(null);
     const alias = ref<string | null>(null);
     const lockedAt = ref<number | null>(null);
     const ownerUuid = ref<string | null>(null);
     const selfUuid = ref<string | null>(null);
 
+    /**
+     * 当前主体能否管理这面墙（lock / unlock / alias）—— 协议 v8 由服务端下发。
+     *
+     * 这里<b>不再本地算</b> `ownerUuid === selfUuid`。那种"在第二处重新推导授权"的写法
+     * 正是控制台主体永远拿不到解锁按钮的原因：控制台会话带的是 nil UUID，
+     * 与 ownerUuid 永远不等，而它其实有权管理任何一面墙。授权结论只允许有一个权威（后端）。
+     */
+    const canManageWall = ref(false);
+
     const isLocked = computed(() => lockedAt.value != null);
-    const isOwner = computed(() => !!ownerUuid.value && ownerUuid.value === selfUuid.value);
-    /** locked + 非 owner = 完全 readonly 无解锁路径；locked + owner = 锁定状态但可解锁 */
+    /** locked + 无管理权 = 完全 readonly 无解锁路径；locked + 有管理权 = 锁定但可解锁 */
     const canEdit = computed(() => !isLocked.value);
 
     const canvasPixelWidth = computed(() =>
@@ -108,12 +116,14 @@ export const useProjectStore = defineStore('project', () => {
     }
 
     function setWallMeta(id: string | null, a: string | null, lock: number | null,
-                         owner: string | null, self: string | null) {
+                         owner: string | null, self: string | null,
+                         manage: boolean = false) {
         wallId.value = id;
         alias.value = a;
         lockedAt.value = lock;
         ownerUuid.value = owner;
         selfUuid.value = self;
+        canManageWall.value = manage;
     }
 
     /**
@@ -267,7 +277,7 @@ export const useProjectStore = defineStore('project', () => {
         state,
         lastAddedElementIds,
         wallId, alias, lockedAt, ownerUuid, selfUuid,
-        isLocked, isOwner, canEdit,
+        isLocked, canManageWall, canEdit,
         canvasPixelWidth, canvasPixelHeight,
         activeLayer, activeLayerLocked, allElements,
         setSnapshot, setWallMeta, applyPatch,

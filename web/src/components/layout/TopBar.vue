@@ -27,7 +27,7 @@ const { exportProject } = useProjectExport();
 
 // lock-state：published 概念砍 → lock 概念。仅 wall owner 可锁/解锁。
 const locked = computed(() => project.isLocked);
-const isOwner = computed(() => project.isOwner);
+const canManageWall = computed(() => project.canManageWall);
 
 const editingAlias = ref(false);
 const aliasDraft = ref('');
@@ -61,7 +61,7 @@ const aliasInFlight = ref(false);
  */
 async function toggleLock() {
     if (!project.wallId) return;
-    if (!isOwner.value) return;  // 非 owner 按钮 disabled，理论上不应触发
+    if (!canManageWall.value) return;  // 无管理权时按钮 disabled，理论上不应触发
     if (lockInFlight.value) return;  // 连击防护：pending 期间忽略
     const prev = project.lockedAt;
     const wasLocked = prev != null;
@@ -303,14 +303,14 @@ const showMoreButton = computed(() => true);
         </div>
         <!-- lock 按钮：替换原 publish 按钮。owner 可点；非 owner disabled。 -->
         <Tooltip :text="locked
-          ? (isOwner ? t.wall.lockToggleOff : t.wall.lockOwnerOnly)
-          : (isOwner ? t.wall.lockToggleOn : t.wall.lockOwnerOnly)">
+          ? (canManageWall ? t.wall.lockToggleOff : t.wall.lockOwnerOnly)
+          : (canManageWall ? t.wall.lockToggleOn : t.wall.lockOwnerOnly)">
           <button
             class="hc-btn flex items-center gap-1 px-2 py-1 rounded-[var(--radius-sm)] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60 shrink-0"
             :class="locked
               ? 'bg-[color:var(--ctp-peach)]/20 text-[color:var(--ctp-peach)] hover:bg-[color:var(--ctp-peach)]/30'
               : 'bg-[color:var(--secondary)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent)]'"
-            :disabled="!isOwner || lockInFlight"
+            :disabled="!canManageWall || lockInFlight"
             @click="toggleLock"
           >
             <Lock v-if="locked" class="size-3" />

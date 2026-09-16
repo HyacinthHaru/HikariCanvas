@@ -22,10 +22,10 @@ public final class Protocol {
     private Protocol() {}
 
     /** 服务端可接受的最小 business protocol 版本。 */
-    public static final int SUPPORTED_MIN = 7;
+    public static final int SUPPORTED_MIN = 8;
 
     /** 服务端可接受的最大 business protocol 版本。 */
-    public static final int SUPPORTED_MAX = 7;
+    public static final int SUPPORTED_MAX = 8;
 
     /** 协议版本不匹配时关闭 WS 的 close code（与 4001 auth_timeout 同 4xxx 段）。 */
     public static final int CLOSE_PROTOCOL_VERSION_UNSUPPORTED = 4002;

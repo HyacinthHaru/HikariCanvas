@@ -8,7 +8,7 @@
  *   <li>未锁定：guardMutation 返 true、不写 log</li>
  *   <li>已锁定：guardMutation 返 false、写一条 err log（带 / 不带 actionName）</li>
  *   <li>readonly / isReadonly computed 跟随 lockedAt 变化</li>
- *   <li>isOwner 跟随 selfUuid / ownerUuid 变化（但不影响 isReadonly —— 设计上 owner 也要解锁才能编辑）</li>
+ *   <li>canManageWall 直接来自服务端下发（不再由 selfUuid/ownerUuid 本地推导），且不影响 isReadonly —— 设计上有管理权也要先解锁才能编辑</li>
  *   <li>guardMutation 多次调用每次都写一条 log（不去重）</li>
  * </ul>
  *
@@ -101,14 +101,30 @@ describe('useLockGuard', () => {
         unmount();
     });
 
-    it('isOwner 跟随 selfUuid / ownerUuid 但不影响 isReadonly', () => {
-        // 设计意图：lock 状态下 owner 也要先解锁；这与 CanvasView overlay / RightPanel
-        // hc-readonly-panel 现有行为一致——owner 看到 "click Unlock to keep editing" 提示。
+    it('canManageWall 有管理权也不影响 isReadonly', () => {
+        // 设计意图：lock 状态下有管理权也要先解锁；这与 CanvasView overlay / RightPanel
+        // hc-readonly-panel 现有行为一致——看到 "click Unlock to keep editing" 提示。
         const { guard, project, unmount } = mountGuard();
-        project.setWallMeta('w-1', null, Date.now(), 'same-uuid', 'same-uuid');
-        expect(guard.isOwner.value).toBe(true);
+        project.setWallMeta('w-1', null, Date.now(), 'same-uuid', 'same-uuid', true);
+        expect(guard.canManageWall.value).toBe(true);
         expect(guard.isLocked.value).toBe(true);
-        expect(guard.isReadonly.value).toBe(true);  // owner 也被 guard 挡（owner 必须先解锁）
+        expect(guard.isReadonly.value).toBe(true);  // 有管理权也被 guard 挡（必须先解锁）
+        unmount();
+    });
+
+    it('canManageWall 只认服务端结论，不看 selfUuid / ownerUuid', () => {
+        // 协议 v8 的核心改动。控制台主体带的是 nil UUID，与 ownerUuid 永远不等，
+        // 但它有权管理任何一面墙 —— 若这里退回本地比对，控制台就永远拿不到解锁按钮。
+        const { guard, project, unmount } = mountGuard();
+
+        // UUID 完全不同，但服务端说可以管 → 必须可以管
+        project.setWallMeta('w-1', null, Date.now(),
+            'owner-uuid', '00000000-0000-0000-0000-000000000000', true);
+        expect(guard.canManageWall.value).toBe(true);
+
+        // UUID 相同，但服务端说不行 → 必须不行
+        project.setWallMeta('w-1', null, Date.now(), 'same-uuid', 'same-uuid', false);
+        expect(guard.canManageWall.value).toBe(false);
         unmount();
     });
 

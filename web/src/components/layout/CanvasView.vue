@@ -1375,7 +1375,7 @@ function requestDraw(): void {
               @dblclick.stop.prevent
             >
               <div class="px-3 py-1.5 rounded-[var(--radius-sm)] bg-[color:var(--ctp-peach)] text-[color:var(--ctp-base)] text-xs font-medium pointer-events-none">
-                {{ project.isOwner ? t.wall.lockedOwnerHint : t.wall.lockedReaderHint }}
+                {{ project.canManageWall ? t.wall.lockedOwnerHint : t.wall.lockedReaderHint }}
               </div>
             </div>
             <v-stage
