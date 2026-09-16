@@ -7,7 +7,7 @@
 
 | 版本号 | 当前值 | 代码出处 | 何时升 |
 |---|---|---|---|
-| **业务协议版本**（business protocol） | **7** | `Protocol.SUPPORTED_MIN = SUPPORTED_MAX = 7`；前端 `wsClient.ts CLIENT_V = 7` | 新增 op / 改 payload 语义 |
+| **业务协议版本**（business protocol） | **8** | `Protocol.SUPPORTED_MIN = SUPPORTED_MAX = 8`；前端 `wsClient.ts CLIENT_V = 8` | 新增 op / 改 payload 语义 |
 | **信封壳版本**（envelope schema） | **恒为 2** | `Envelope.of` 固定写 `2`；前端 `wsClient.ts ENVELOPE_V = 2` | 只有改信封字段（`v / op / id / ts / payload`）才动 |
 | **ProjectState schema** | **3** | `ProjectState.PROTOCOL_VERSION = 3` | 只有 project_json schema 变化才同步 bump |
 
@@ -23,7 +23,7 @@
 
 ## 版本演进
 
-协议业务版本 **v1→v7 的逐版沿革见 `docs/journal.md`**（每次都取"干净切换"：`Protocol.SUPPORTED_MIN = SUPPORTED_MAX` 同步提升，不维持双轨——前端 bundle 由插件自带分发，客户端与服务端版本在实际部署中永远匹配，混版会导致按旧 schema 保存时静默丢数据）。当前边界与各版本引入的能力：
+协议业务版本 **v1→v8 的逐版沿革见 `docs/journal.md`**（每次都取"干净切换"：`Protocol.SUPPORTED_MIN = SUPPORTED_MAX` 同步提升，不维持双轨——前端 bundle 由插件自带分发，客户端与服务端版本在实际部署中永远匹配，混版会导致按旧 schema 保存时静默丢数据）。当前边界与各版本引入的能力：
 
 | 版本 | 引入能力 | 对 ProjectState schema 的影响 |
 |---|---|---|
@@ -33,6 +33,7 @@
 | v5 | 3 新触发器 + 有界循环「重复 N 次」（只扩 Trigger / Action wire union） | 不 bump |
 | v6 | 补间包裹积木 `tweenBlock`（契约 `docs/scripting-tween.md`） | 不 bump |
 | v7 | 备选积木批（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗等，扩 Action union） | 不 bump |
+| v8 | ready payload 新增 `canManageWall`（服务端算好的墙管理授权结论，替代前端自行比对 `selfUuid === ownerUuid`）；配套会话主体类型 `PLAYER` / `CONSOLE`，见 `docs/security.md §5.0` | 不 bump |
 
 - **信封壳 `Envelope.v` 恒为 2**：以上升版均只动 business protocol（`client_v` / `accepted_v`），不改信封字段（`v / op / id / ts / payload`）。
 - **要点（v3+ 共同纪律）**：脚本 op **不进画布 undo/redo**（scripting.md §4.3；alias/schedule/rail 族同例）；`script.*` patch 推送 `StatePatch.version` 取当前 `ProjectState.version` 不写 0；一墙一活跃 session（byWall 排他锁），单 session push 等价全墙广播。
@@ -135,7 +136,7 @@ GET /api/session/:token HTTP/1.1
     "sessionId": "e1b2...",
     "serverVersion": "1.0.0",
     "protocolVersion": 3,
-    "accepted_v": 7,
+    "accepted_v": 8,
     "reconnectToken": "...",
     "projectState": { /* 见 §7；含 timelines（v3 起） */ },
     "wallId": "w-1a2b3c4d",
@@ -143,6 +144,7 @@ GET /api/session/:token HTTP/1.1
     "lockedAt": 1714200000000,
     "ownerUuid": "00112233-4455-6677-8899-aabbccddeeff",
     "selfUuid": "ffeeddcc-bbaa-9988-7766-554433221100",
+    "canManageWall": true,
     "templates": [ ... ],
     "variables": [
       {
@@ -170,14 +172,15 @@ GET /api/session/:token HTTP/1.1
 | `sessionId` | string | 登录态 session id |
 | `serverVersion` | string | 插件版本字符串 |
 | `protocolVersion` | int | = `ProjectState.PROTOCOL_VERSION`（当前 **3**）；描述 project_json schema，**不是**业务协议版本 |
-| `accepted_v` | int | server 实际接受的业务协议版本（= 协商的 `client_v`，当前 **7**）。前端收到后断言 `accepted_v === CLIENT_V`，不一致则主动 close `4002`（`wsClient.handleReady`） |
+| `accepted_v` | int | server 实际接受的业务协议版本（= 协商的 `client_v`，当前 **8**）。前端收到后断言 `accepted_v === CLIENT_V`，不一致则主动 close `4002`（`wsClient.handleReady`） |
 | `reconnectToken` | string | auth 成功后 rotate 出的新 token，供断线重连 |
 | `projectState` | object | 权威工程状态，见 §7 |
 | `wallId` | string? | 仅 session 绑了 wall 时存在 |
 | `alias` | string? | wall 别名，缺省略 |
 | `lockedAt` | number? | = `walls.published_at`（DB 列名保留，**语义为 lock 时间戳**）；非 null = 已锁定，前端 readonly。缺省（null）略 |
-| `ownerUuid` | string? | wall 作者 UUID；与 `selfUuid` 比对得 `isOwner` |
-| `selfUuid` | string | 当前 session 玩家 UUID（始终下发） |
+| `ownerUuid` | string? | wall 作者 UUID。**仅供展示**——不要用它与 `selfUuid` 比对来判授权，那是 `canManageWall` 的职责 |
+| `selfUuid` | string | 当前 session 主体的 UUID（始终下发）。控制台主体为 nil UUID `00000000-0000-0000-0000-000000000000`，**该值是索引键不是身份凭据**，前端不得据此推断权限 |
+| `canManageWall` | bool | **v8 起**。当前主体能否管理这面墙（`wall.lock` / `wall.unlock` / `wall.alias`）。服务端判据 = 主体是 `CONSOLE` **或** wall owner == 自己，见 `docs/security.md §5.0`。前端直接消费此结论，**不再本地推导** —— 授权判断只允许有一个权威。wall=null 时为 `false` |
 | `templates` | TemplateSpec[] | 按 caller owner + `canvas.template.use-others` 过滤后的可见模板 |
 | `variables` | VariableDto[] | 当前 wall 可见的变量快照（`listVisibleToWall`，含 user/system/schedule/scoreboard/papi）；剔除 `referencedByWalls` 防泄露。wall=null 或 store 未配 → `[]` |
 | `aliases` | Map<fullName, string> | 当前 wall 的变量别名（0.4.2）；wall=null 或 dao 未配 → `{}` |

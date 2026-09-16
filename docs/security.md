@@ -26,7 +26,7 @@
 | 编号 | 威胁 | 影响 |
 | --- | --- | --- |
 | T1 | 未授权用户访问编辑器 | 他人冒充玩家生成招牌、污染世界 |
-| T2 | Token 泄漏（URL 被分享、日志泄漏） | 同 T1 |
+| T2 | Token 泄漏（URL 被分享、日志泄漏） | 同 T1。**控制台命令回显的编辑器链接会落入 `logs/latest.log`，这是 0.9.19 起经作者认可的已知例外**（见 §2.2）——服主上传日志求助前应先 `/canvas cancel` 或等链接过期 |
 | T3 | Token 暴力枚举 | 同 T1 |
 | T4 | 中间人篡改（公网明文 HTTP） | 劫持编辑动作 |
 | T5 | WS 消息洪水（单会话内高速发送） | 服务器资源耗尽 |
@@ -85,7 +85,12 @@
 - **随机源**：`java.security.SecureRandom`，不得用 `Math.random()` 或 `ThreadLocalRandom`
 - **长度**：至少 256 bit 熵（32 字节 base64）
 - **存储**：仅内存（主体）+ SQLite SHA-256（审计溯源），**原文 token 不落盘**
-- **日志**：token 原文禁止出现在任何 log（包括 DEBUG 级别）
+- **日志**：token 原文禁止出现在**插件自身的 debug / trace 日志**（含 DEBUG 级别）。
+  **唯一例外**（0.9.19 起）：控制台命令 `canvas open` 回显的编辑器链接含 token 原文，会随控制台输出
+  进入 `logs/latest.log`。这是有意为之的折衷——服主不进游戏就得有地方拿到链接，而链接本身已被
+  四道防线夹住：**单次使用**（消耗即失效）+ **15 分钟 TTL** + **首次 auth 绑死调用方 IP**（异地重放即拒）
+  + **per-IP 限流 10 次/分**。残余风险仅为"15 分钟内、抢在服主之前打开、且此后锁死在攻击者 IP"。
+  **代价必须让服主知道**：上传 `latest.log` 求助前先 `/canvas cancel` 或等 15 分钟过期（见 T2）。
 - **传输**：默认绑定 127.0.0.1 规避明文传 token；公网场景强制 TLS（由反代提供）
 - **TTL**：默认 15 分钟，可配置 1m~24h
 - **单次使用**：消耗后立即失效
@@ -396,6 +401,22 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 
 ## 5. 权限节点
 
+### 5.0 会话主体类型（0.9.19 起）
+
+授权的依据是 **`Session.principal`**，不是 session 携带的 UUID。
+
+| 主体 | 来源 | 授权 |
+| --- | --- | --- |
+| `PLAYER` | `/canvas edit` / `/canvas open` 由玩家发起 | 逐节点查 `Bukkit.getPlayer(uuid).hasPermission(...)`；玩家离线时 `default: true` 的节点按 §6 兜底，其余一律拒 |
+| `CONSOLE` | 服务端控制台执行 `canvas open` | **全授予，不查任何节点**。与 Bukkit 对 `ConsoleCommandSender` 的既有语义一致（控制台本就持全部权限） |
+
+控制台会话携带 nil UUID（`00000000-0000-0000-0000-000000000000`）作为索引键。
+**该 UUID 不是身份凭据**——任何鉴权判断都不得从它反推主体，必须读 `principal`。
+（`PrincipalAuthorityTest` 有一条专门守卫：`principal=PLAYER` 但 UUID 为 nil 的会话必须按玩家拒绝。）
+
+命令入口的 sender 白名单为 **Player + ConsoleCommandSender**，**显式排除命令方块**——
+否则 `canvas open` 可被写进命令方块，把 token 打进方块输出 / 世界数据，门槛远低于控制台日志且服主无从察觉。
+
 > 下表与 `plugin/src/main/resources/paper-plugin.yml` 的 `permissions:` 段为权威，二者必须一致。默认值列直接取 yml 的 `default`（`true` = 所有玩家、`op` = 仅 OP）。
 
 | 节点 | 默认 | 说明 |
@@ -411,7 +432,7 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 | `canvas.alias.any` | op | 修改任意 wall 的 alias（默认 wall.alias WS op 只允许 owner 改） |
 | `canvas.admin` | op | 管理命令（stats / diagnose / cleanup / reload） |
 | `canvas.admin.force-break` | op | 允许破坏插件保护的成品物品框 / 支撑方块 |
-| `canvas.admin.bypass-lock` | op | 绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open |
+| `canvas.admin.bypass-lock` | op | 绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open。**控制台主体无需此节点**（§5.0） |
 | `canvas.template.save` | true | 把当前 wall 发布为创意工坊模板 |
 | `canvas.template.delete.own` | true | 删除自己发布的模板 |
 | `canvas.template.delete.any` | op | 删除任意模板（moderation） |
@@ -463,6 +484,8 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 | WS auth 成功 | 再次校验 `canvas.edit`（防权限中途撤销） |
 | `template.apply`（他人发布的用户模板） | `canvas.template.use-others`（内置模板 / 自己发布的模板无需此节点） |
 | `/canvas delete <wall_id>` | wall owner == 自己 且 `canvas.delete.own` / 或 `canvas.delete.any`；二次确认强制 30s |
+| 控制台执行任意 `canvas` 子命令 | sender 必须是 `ConsoleCommandSender`（命令方块被排除）；主体为 `CONSOLE` 后不再查节点（§5.0） |
+| `wall.lock` / `wall.unlock` / `wall.alias` | `canManageWall(session, wall)` = 主体是 `CONSOLE` **或** wall owner == 自己（`alias` 另可走 `canvas.alias.any`） |
 | 管理员命令 | `canvas.admin` |
 | `GET /api/walls` | **匿名可读，但只返回裁过字段的公开投影**（见下） |
 | `GET /api/wall/{id}/preview.png` | 匿名可读（画面本身按 §1.1 只算「低」价值资产，且脱离坐标无法定位） |

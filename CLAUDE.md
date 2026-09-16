@@ -113,6 +113,7 @@ Paper 26.1 起移除插件的 Spigot 重映射，任何碰 NMS 的插件 26.x �
 2. **草稿 wall = 协作中间态**：未锁 wall（`lockedAt=null`）任何有 `canvas.edit` 的玩家可 open，多人可接力编辑；只有 owner 可触发 lock；lock 后非 owner 不能 open（除 `canvas.admin.bypass-lock`）。owner-only 草稿 ACL 属未来协作 scope。详见 `architecture.md §3.6.1`
 3. **会话级 IP 绑定（方案 B）**：Token **不**绑 IP（confirm 阶段无 HTTP context）；`Session.boundIp` 首次 auth 时 CAS 绑定，后续帧不一致拒 4001。绑 session 不绑 token——token 已单次使用 + 短 TTL，再绑 token 是冗余且阻塞合法重连。详见 `security.md §2.5`
 4. **动态画板必须走 P-1（渲染期占位符）或 P-3（Plugin API + Provider）**；反模式 P-2（定时 patch ProjectState）禁用。详见 `architecture.md §13`
+4b. **授权依据是 `Session.principal`（`PLAYER` / `CONSOLE`），不是 session 携带的 UUID。** 控制台主体全授予、不查节点；其 nil UUID 只是索引键，任何 `if (uuid.equals(CONSOLE_UUID))` 形态的鉴权都是退化（`PrincipalAuthorityTest` 守卫）。墙管理授权收敛到 `SessionManager.canManageWall`，并经 ready 帧 `canManageWall` 下发——前端不得自行比对 `selfUuid === ownerUuid`。详见 `architecture.md §3.6.3` + `security.md §5.0`
 
 ### 持久化 / 构建
 

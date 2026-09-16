@@ -305,6 +305,29 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 
 **未来 ACL（owner-only 草稿）**：若服主想要"草稿也仅 owner 可改"的语义，走 v1.x 协作 scope（新增 `walls.acl` 列 + acl-aware open 校验）；详见 §13 动态画板路径的同源扩展思路（acl 字段同样不进编辑 op 路径，仅在 open 鉴权点生效）。
 
+### 3.6.3 会话主体类型（0.9.19 起）
+
+`Session` 带一个显式的 `principal` 字段：
+
+| 主体 | 来源 | UUID | 授权 |
+|---|---|---|---|
+| `PLAYER` | 玩家执行 `/canvas edit` / `/canvas open` | 玩家真实 UUID | 逐节点查 `Bukkit.getPlayer(uuid).hasPermission(...)` |
+| `CONSOLE` | 服务端控制台执行 `canvas open` | nil UUID `00000000-…`（**仅索引键**） | 全授予，不查节点 |
+
+**为什么需要显式字段，而不是"给控制台合成一个 UUID 就行"**：整条鉴权链的输入原本是 `UUID`，
+而"控制台"不是一个 UUID 能表达的主体。合成假 UUID 会让全链继续以为自己在跟玩家打交道——
+`Bukkit.getPlayer(假UUID)` 恒 `null` → 被当成离线玩家 → `default: false` 的节点一律拒，
+`wall.ownerUuid().equals(playerUuid)` 恒 false → owner-only 操作全不可用。
+控制台明明是服务器上权力最大的主体，却会被判成权力最小的。
+
+由此固化一条纪律：**授权依据是 `principal`，不是 UUID。**
+任何 `if (uuid.equals(CONSOLE_UUID))` 形态的判断都是退化，`PrincipalAuthorityTest` 有专门守卫。
+
+墙管理授权（`wall.lock` / `wall.unlock` / `wall.alias`）收敛到单一判据
+`SessionManager.canManageWall(session, wall)` = 主体是 `CONSOLE` 或 wall owner == 自己，
+并通过 ready 帧的 `canManageWall` 下发给前端（`docs/protocol.md` v8）——
+前端不再自行比对 `selfUuid === ownerUuid`，授权结论只允许有一个权威。
+
 ### 3.6.2 多世界假设
 
 **MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；现 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。

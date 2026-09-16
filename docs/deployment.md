@@ -244,6 +244,28 @@ i18n:
 - 玩家**没有归属概念**：任何有 `canvas.edit` 权限的玩家都能开任何 wall（用 wall_id）。`canvas.delete.own` 限定只能删自己创建的。`canvas.delete.any` 删任意（默认 op 才有）。
 - wall 的 ItemFrame `BlockBreakEvent` / `HangingBreakEvent` 由 `canvas.modify` 权限统一保护——无该权限的玩家拒绝破坏。详见 `docs/security.md §5`。锁定 / 解锁由网页编辑器 TopBar 的 Lock 按钮触发，走 WS `wall.lock` / `wall.unlock` op，owner-only，且仅作前端只读冻结，不影响游戏内破坏行为。
 
+### 6.1 从服务端控制台管理画布（0.9.19 起）
+
+服主不进游戏也能管画布。控制台可用的子命令：
+
+| 命令 | 说明 |
+|---|---|
+| `canvas open <wall_id\|alias>` | 打开任意画布（**包括别人锁定的**），控制台回显一条编辑器链接 |
+| `canvas list` | 列出全部画布 |
+| `canvas alias <名称>` | 给当前控制台会话的画布改别名 |
+| `canvas delete <wall_id> [confirm]` | 删除任意画布（同样需 30 秒内二次确认） |
+| `canvas cancel` | 结束当前控制台会话，释放画布 |
+
+`edit` / `wand` / `confirm` **控制台不可用**——它们要用金铲在世界里点两个方块选墙面，没有玩家就没有选区。
+
+⚠️ **链接会进日志。** `canvas open` 回显的链接含访问令牌，会写入 `logs/latest.log`。
+令牌**只能用一次、15 分钟过期、被第一个打开它的浏览器锁定 IP**，所以风险有限，但
+**把日志发给别人排障之前，先跑 `canvas cancel` 或等 15 分钟**。详见 `docs/security.md §2.2`。
+
+控制台同一时刻只能开**一面**画布；想开下一面先 `canvas cancel`（或等 15 分钟自动过期）。
+
+---
+
 > 玩家身份认证（HomePage 点击直接打开、归属隔离、多人协作）是单独的 milestone，尚未实现。当前公网部署**应该把 HomePage `/api/walls` 视为对内网开放**——所有人都看得到所有人的画清单。
 
 ---
