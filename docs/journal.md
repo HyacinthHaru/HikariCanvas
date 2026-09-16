@@ -5,6 +5,56 @@
 
 ---
 
+## 2026-09-16 · 0.9.19：会话主体类型 + 控制台管理命令
+
+服主不进游戏也能管画布：控制台跑 `canvas open <wall_id>` 拿一条编辑器链接，能开 / 删 / 改别名 / 列出**任何**画布（含别人锁定的）。设计稿 `docs/superpowers/specs/2026-09-09-0.9.19-console-principal.md`（作者已过目）。
+
+### 根因不是「命令少个 instanceof」
+
+整条鉴权链的输入原本是 `UUID`，而「控制台」不是一个 UUID 能表达的主体。若按最省事的做法给控制台合成一个假 UUID，全链会继续以为自己在跟玩家打交道：`Bukkit.getPlayer(假UUID)` 恒 null → 被当成**离线玩家** → `default:false` 的节点（`admin.*` / `delete.any` / `script.broadcast` / `template.use-others` / `canvas.upload`）一律拒；`wall.ownerUuid().equals(playerUuid)` 恒 false → `lock` / `unlock` / `alias` 全 `FORBIDDEN`。**控制台——服务器上权力最大的主体——会被判成权力最小的。**
+
+故新增 `Principal { PLAYER, CONSOLE }` 挂在 `Session` 上，**UUID 从「权限依据」降级为「索引键」**。控制台带 nil UUID（`Session.CONSOLE_UUID`），但任何鉴权判断都不许读它。
+
+- `playerUuid()` 不做成可空：全仓 55 个消费点 / 12 个文件，改可空等于把编译期安全的字段换成运行时 NPE 面。
+- `MainThreadPerms` 的 `resolve` / `hasPermission` 改吃 `Session` 而非多加一个 `Principal` 形参：14 个调用点全都已持有 session，传它不可能传错；多一个形参则任何一处手滑写成 `PLAYER` 都会静默退化成「控制台被当普通玩家」，**表现与本次要修的 bug 一模一样、不会有人发现**。0.9.17 刚因同型的复制粘贴分叉修过一次（`grantedWithDefaultTrueFallback` 在 4 处各写一份且全写错）。
+- 墙管理授权收敛到 `SessionManager.canManageWall(session, wall)` = 控制台 **或** owner，后端三个 dispatcher 分支与 ready 帧共用这一个判据。
+- 锁定墙的 open 准入抽成纯函数 `mayOpenLockedWall`（同 `issuedExpired` 的处理），Bukkit 查权限那步由调用方先算好传入，判定本身可单测；顺带保留「控制台与 owner 都不多查一次 Bukkit」的原有行为。
+- `UploadHandler` 在 `image` 包够不到 package-private 的 `MainThreadPerms`，自带一份主线程 hop，其 `p == null → DENY_ALL` 会让**控制台会话传不了图**。改为从入口传 `Session` 进去只问 `isConsole()`，**不在 image 包复制第二份主体判定**。
+
+### 协议 v8：授权结论只允许有一个权威
+
+ready 帧新增 `canManageWall`（服务端算好的布尔）。前端此前的 `isOwner = (selfUuid === ownerUuid)` 是**在第二处重新推导授权**，正是控制台永远拿不到解锁按钮的原因 —— 改为直接消费服务端结论，`project.isOwner` 更名 `canManageWall`，5 个消费点同步。`ownerUuid` / `selfUuid` 保留但在协议文档里标注「仅供展示，不得用于授权推导」。
+
+按 `protocol.md` 既定的「干净切换」规矩升 `SUPPORTED_MIN = MAX = 8` + `CLIENT_V = 8`：浏览器里缓存的旧前端会被 close `4002` 顶掉强制刷新，而不是静默不认识新字段、让控制台用户看不到解锁按钮却查不出原因。
+
+### 命令层
+
+`open` / `list` / `alias` / `delete` / `cancel` 五条控制台可用；`edit` / `wand` / `confirm` 保持玩家专属（要拿金铲在世界里点两个方块选墙面，没有玩家就没有选区）。
+
+**sender 白名单是 Player + ConsoleCommandSender，显式排除命令方块**——不能图省事写成 `src.getSender().hasPermission(...)`：那会让命令方块也能跑 `canvas open`，把 token 打进方块输出 / 世界数据，门槛远低于控制台日志且服主无从察觉。RCON 远程控制台同样排除（走网络明文回传，与本地控制台的威胁模型不同，要支持是独立的安全评估）。
+
+其余细节：`list` 对控制台走 `listAll()`（玩家仍只看自己的）· 控制台的链接**不做可点击 Component**（带颜色/下划线会把 ANSI 控制码裹在 URL 外，终端拖选复制易带进不可见字符）· `delete` 二次确认桶复用 `CONSOLE_UUID` 那一格，结构不变 · `cancel` 对控制台跳过收魔棒。**没有新增 i18n key**——控制台复用既有的 `command.open.editor-url` 前缀。
+
+### 安全：token 原文入日志（作者 2026-09-09 决定）
+
+原禁令「token 原文禁止出现在任何 log」属过度防御。链接本身已被四道防线夹住：**单次使用 + 15 分钟 TTL + 首次 auth 绑死调用方 IP + per-IP 限流 10 次/分**，残余风险仅为「15 分钟内、抢在服主之前打开、且此后锁死在攻击者 IP」。`security.md §2.2` 改为「只约束插件自身 debug/trace 日志，控制台链接是已知例外」，威胁表 T2 与 `deployment.md §6.1` 都写明服主须知：**上传 latest.log 求助前先 `canvas cancel` 或等过期**。
+
+### 刻意没做
+
+控制台**不做多开**（同一时刻一面墙）。`byPlayer` 的唯一性被 writeLock 临界区、`forget()`、`collectExpired` 共同依赖，破例要重新审计整套并发不变式，代价远超收益；逃生口是 `canvas cancel`，且 15 分钟自动过期。`SessionRateLimiter`（40 ops/2s）与 IP 绑定对控制台会话**照常生效**——前者是资源护栏不是授权闸，后者恰是 token 入日志能被接受的关键一环。
+
+### 验证
+
+后端 `:plugin:test` **2458 → 2484**（+26），0 failures；前端 vitest **1768 → 1769**，`vite build` 通过。
+
+新增守卫做了 5 项变异测试，全部转红后还原复绿。其中最关键的一条：把控制台短路从 `session.isConsole()` 改写成 `uuid.equals(CONSOLE_UUID)` —— 那种写法**今天看起来完全正确**（目前只有控制台用这个 UUID），但它把「UUID 即身份」的错误模型又固化一层。`MainThreadPermsPrincipalTest` 的「principal=PLAYER 但 UUID 是 nil」用例精确打红（7 跑 1 红），正是为此存在。
+
+### 环境：云同步第三次干扰
+
+本次构建期间同步服务往 `plugin/build/` 塞了 **166 个 ` 2.` / ` 3.` 冲突副本**（含 22 个重复字体 + 大量 `.class`），导致 `:plugin:test` 报 `wrong name: ...Test 2` 直接崩掉测试发现；清理后仍在跑测期间持续新增。已用「清理后立即跑」绕过。**根治仍需把项目目录移出同步范围**（同 0.9.17 / 0.9.18 两次记录）。
+
+---
+
 ## 2026-09-09 · 0.9.18：dependabot 11 批 + 4 处界面修复
 
 ### 依赖批（11 个 PR，10 个走 GitHub 合并按钮，1 个撞车后本地处理）
