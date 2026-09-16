@@ -560,7 +560,19 @@ public final class SessionManager {
         record Forbidden(String message) implements OpenResult {}
     }
 
+    /** 玩家发起的 open（既有调用点语义不变）。 */
     public OpenResult open(UUID playerUuid, String playerName, String wallIdOrAlias) {
+        return open(Principal.PLAYER, playerUuid, playerName, wallIdOrAlias);
+    }
+
+    /**
+     * 打开一面已存在的 wall。
+     *
+     * @param principal 会话主体。{@link Principal#CONSOLE} 可打开任意墙（含他人锁定的），
+     *                  无需 {@code canvas.admin.bypass-lock} —— 见 {@code docs/security.md §5.0}
+     */
+    public OpenResult open(Principal principal, UUID playerUuid, String playerName,
+                           String wallIdOrAlias) {
         assertMainThread();
         var w = wallRepo.loadById(wallIdOrAlias).orElse(
                 wallRepo.loadByAlias(wallIdOrAlias).orElse(null));
@@ -569,10 +581,16 @@ public final class SessionManager {
         // lock-aware open。后端编辑 op 仍透明放行（CLAUDE.md §lock-state 第 2 条），
         // 仅在 open 入口拦截：locked wall + 非 owner + 无 canvas.admin.bypass-lock 权限 → Forbidden。
         // 注意：Bukkit.getPlayer 调用在锁外（持锁中调 Bukkit API 易死锁）。
-        if (w.publishedAt() != null && !playerUuid.equals(w.ownerUuid())) {
-            org.bukkit.entity.Player live = Bukkit.getPlayer(playerUuid);
-            boolean bypass = live != null && live.hasPermission("canvas.admin.bypass-lock");
-            if (!bypass) {
+        if (w.publishedAt() != null) {
+            // 权限查询要 Bukkit，抽不出去；判定本身抽成纯函数便于单测（同 issuedExpired 的处理）。
+            // 控制台主体不查节点——它不是"持 bypass 权限的玩家"，而是权限体系之上的主体，
+            // 走 Bukkit.getPlayer 对它永远返 null（见 Principal 类注释）。
+            // 只在真需要时才查（控制台与 owner 都不需要）——保持原有的"不多调一次 Bukkit"行为。
+            boolean hasBypassPerm = !principal.isConsole()
+                    && !playerUuid.equals(w.ownerUuid())
+                    && Bukkit.getPlayer(playerUuid) instanceof org.bukkit.entity.Player live
+                    && live.hasPermission("canvas.admin.bypass-lock");
+            if (!mayOpenLockedWall(principal, playerUuid, w.ownerUuid(), hasBypassPerm)) {
                 // lock-aware open 拒绝留痕——监控异常尝试访问他人 locked wall
                 LinkedHashMap<String, Object> details = new LinkedHashMap<>();
                 details.put("operation", "open");
@@ -620,7 +638,7 @@ public final class SessionManager {
 
         long now = System.currentTimeMillis();
         String sessionId = UUID.randomUUID().toString();
-        Session s = new Session(sessionId, playerUuid, playerName, now);
+        Session s = new Session(sessionId, playerUuid, playerName, now, principal);
         s.wallKey(key);
         s.wallId(w.wallId());
         s.mapIds(w.mapIds());
@@ -656,7 +674,7 @@ public final class SessionManager {
         }
 
         auditLog.record("SESSION_OPEN", playerUuid.toString(), playerName, sessionId, null,
-                Map.of("wall_id", w.wallId()));
+                Map.of("wall_id", w.wallId(), "principal", principal.name()));
         return new OpenResult.Ok(s, w);
     }
 
@@ -1005,6 +1023,35 @@ public final class SessionManager {
      * 防同一 sessionId 并发两 WS 都看到 boundIp==null 同时写入两不同 IP。
      */
     public enum IpBindResult { OK, BOUND, MISMATCH, NO_SESSION }
+
+    /**
+     * 墙管理授权的<b>单一判据</b>：能否 {@code wall.lock} / {@code wall.unlock} / {@code wall.alias}。
+     *
+     * <p>后端三个 dispatcher 分支与 ready 帧的 {@code canManageWall} 字段共用本方法——
+     * 授权结论只允许有一个权威。前端此前自行比对 {@code selfUuid === ownerUuid}，
+     * 正是那种"在第二处重新推导授权"的做法导致控制台主体永远拿不到解锁按钮。</p>
+     *
+     * <p>注意 {@code wall.alias} 另有 {@code canvas.alias.any} 旁路（玩家用），
+     * 那条在 dispatcher 里单独判，不并进本方法——本方法只回答"是不是这面墙的管理者"。</p>
+     */
+    /**
+     * 锁定墙的 open 准入判定（纯函数，便于单测；查权限那步由调用方先算好传进来）。
+     *
+     * <p>顺序即优先级：控制台主体 &gt; wall owner &gt; 持 {@code canvas.admin.bypass-lock}。</p>
+     *
+     * @param hasBypassPerm caller 是否在线且持 {@code canvas.admin.bypass-lock}
+     */
+    static boolean mayOpenLockedWall(Principal principal, UUID caller, UUID owner,
+                                     boolean hasBypassPerm) {
+        if (principal != null && principal.isConsole()) return true;
+        if (caller != null && caller.equals(owner)) return true;
+        return hasBypassPerm;
+    }
+
+    public static boolean canManageWall(Session s, WallRepo.Wall w) {
+        if (s == null || w == null) return false;
+        return s.isConsole() || w.ownerUuid().equals(s.playerUuid());
+    }
 
     public IpBindResult bindOrCheckIp(String sessionId, String presentedIp) {
         Session s = byId.get(sessionId);

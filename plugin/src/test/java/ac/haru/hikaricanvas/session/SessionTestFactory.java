@@ -18,6 +18,27 @@ public final class SessionTestFactory {
 
     private SessionTestFactory() {}
 
+    /**
+     * 造一个<b>控制台主体</b>的 session（0.9.19）。
+     * UUID 固定为 {@link Session#CONSOLE_UUID}——它只是索引键，授权看 principal。
+     */
+    public static Session console(String sessionId, String wallId) {
+        return withPrincipal(sessionId, Principal.CONSOLE, Session.CONSOLE_UUID, "CONSOLE", wallId);
+    }
+
+    /**
+     * 造一个指定主体 + 指定 UUID 的 session。
+     *
+     * <p>存在的意义是能造出"{@code principal=PLAYER} 但 UUID 恰好是 nil"这种组合——
+     * {@code PrincipalAuthorityTest} 用它守住"UUID 不是权限依据"这条纪律。</p>
+     */
+    public static Session withPrincipal(String sessionId, Principal principal, UUID uuid,
+                                        String name, String wallId) {
+        Session s = new Session(sessionId, uuid, name, System.currentTimeMillis(), principal);
+        s.wallId(wallId);
+        return s;
+    }
+
     /** 造一个已绑定 {@code wallId} 的 session（其余字段保持初始态）。 */
     public static Session withWall(String sessionId, UUID playerUuid,
                                    String playerName, String wallId) {

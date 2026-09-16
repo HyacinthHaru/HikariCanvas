@@ -81,7 +81,7 @@ public final class ProjectImportHandler {
         this(s -> Objects.requireNonNull(sessionManager, "sessionManager").byId(s),
                 session -> {
                     MainThreadPerms.Resolved r = MainThreadPerms.resolve(
-                            resolveHostPlugin(), session.playerUuid(), "canvas.edit");
+                            resolveHostPlugin(), session, "canvas.edit");
                     return r.online() && r.granted(0);
                 },
                 importer,

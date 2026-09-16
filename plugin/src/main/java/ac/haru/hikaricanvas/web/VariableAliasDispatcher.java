@@ -237,7 +237,7 @@ final class VariableAliasDispatcher {
         boolean isOwnerOnly = wall.ownerUuid().equals(callerUuid);
         String requiredNode = isOwnerOnly ? "canvas.var.write.own" : "canvas.var.write.any";
         // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）。
-        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, callerUuid, requiredNode);
+        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, s, requiredNode);
         // own 节点 default=true 的兜底只兜「离线 / 解析超时」，不兜「在线且被显式收回」。
         // 判定收敛在 MainThreadPerms（4 个 dispatcher 共用），见该方法 javadoc。
         boolean granted = MainThreadPerms.grantedWithDefaultTrueFallback(

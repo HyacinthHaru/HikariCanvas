@@ -106,7 +106,7 @@ final class TemplateOpDispatcher {
             return;
         }
         // 一次主线程 hop 解析在线态 + 全部节点；离线 / 超时 → online=false + 全节点 false。
-        MainThreadPerms.Resolved perms = MainThreadPerms.resolve(plugin, s.playerUuid(), PERM_NODES);
+        MainThreadPerms.Resolved perms = MainThreadPerms.resolve(plugin, s, PERM_NODES);
         if (!perms.online()) {
             ctx.send(Envelope.error(in.id(), "FORBIDDEN", "player offline"));
             return;

@@ -735,7 +735,7 @@ final class RailOpDispatcher {
                                Session s, UUID callerUuid, String node,
                                boolean defaultTrue) {
         // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）。
-        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, callerUuid, node);
+        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, s, node);
         // own / create 节点 default=true 的兜底只兜「离线 / 解析超时」，不兜「在线且被显式收回」
         // ——否则收回 canvas.rail.line.create / edit.own / delete.own / wall.bind 形同虚设。
         // 判定收敛在 MainThreadPerms（4 个 dispatcher 共用），见该方法 javadoc。

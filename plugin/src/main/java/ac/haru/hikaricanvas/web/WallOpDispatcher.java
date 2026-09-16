@@ -120,13 +120,13 @@ final class WallOpDispatcher {
         String wallId = s.wallId();
         switch (in.op()) {
             case "wall.lock" -> {
-                // owner-only：只有 wall 创建者（owner_uuid）能锁
+                // 管理者才能锁：wall 创建者，或控制台主体（SessionManager.canManageWall 单一判据）
                 var wall = wallRepo.loadById(wallId).orElse(null);
                 if (wall == null) {
                     ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
                     return;
                 }
-                if (!wall.ownerUuid().equals(s.playerUuid())) {
+                if (!SessionManager.canManageWall(s, wall)) {
                     ctx.send(Envelope.error(in.id(), "FORBIDDEN", "only wall owner can lock"));
                     return;
                 }
@@ -146,13 +146,13 @@ final class WallOpDispatcher {
                 ctx.send(Envelope.of("ack", in.id(), Map.of("lockedAt", ts)));
             }
             case "wall.unlock" -> {
-                // owner-only：只有 wall 创建者能解锁
+                // 管理者才能解锁（判据同 wall.lock）
                 var wall = wallRepo.loadById(wallId).orElse(null);
                 if (wall == null) {
                     ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
                     return;
                 }
-                if (!wall.ownerUuid().equals(s.playerUuid())) {
+                if (!SessionManager.canManageWall(s, wall)) {
                     ctx.send(Envelope.error(in.id(), "FORBIDDEN", "only wall owner can unlock"));
                     return;
                 }
@@ -175,18 +175,19 @@ final class WallOpDispatcher {
                             "alias must match [A-Za-z0-9_-]{2,32}"));
                     return;
                 }
-                // owner-only（或带 canvas.alias.any 权限）。与命令侧 CanvasCommand.runAlias 同款检查。
-                // 离线玩家无法走 hasPermission，bypass 视为 false（与 SessionManager.open 处理一致）。
+                // 管理者（或带 canvas.alias.any 权限）。与命令侧 CanvasCommand.runAlias 同款检查。
+                // 离线玩家无法走 hasPermission，bypass 视为 false（与 SessionManager.open 处理一致）；
+                // 控制台主体在 canManageWall 即已放行，不落到 alias.any 那条。
                 var wallOpt = wallRepo.loadById(wallId);
                 if (wallOpt.isEmpty()) {
                     ctx.send(Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found"));
                     return;
                 }
                 var wall = wallOpt.get();
-                boolean isOwner = wall.ownerUuid().equals(s.playerUuid());
+                boolean isOwner = SessionManager.canManageWall(s, wall);
                 if (!isOwner) {
                     // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
-                    boolean canAny = MainThreadPerms.hasPermission(plugin, s.playerUuid(), "canvas.alias.any");
+                    boolean canAny = MainThreadPerms.hasPermission(plugin, s, "canvas.alias.any");
                     if (!canAny) {
                         // 非 owner 尝试改 alias 留痕——可观测异常尝试
                         if (auditLog != null) {

@@ -361,7 +361,7 @@ final class VariableOpDispatcher {
 
         // 主线程解析在线玩家权限（Bukkit.getPlayer + hasPermission 主线程专用），
         // 复用 auth 路径同款 callSyncMethod。
-        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, callerUuid, requiredNode);
+        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, s, requiredNode);
         // own / create 节点 default=true 的兜底只兜「离线 / 解析超时」，不兜「在线且被显式收回」。
         // 判定收敛在 MainThreadPerms（4 个 dispatcher 共用），见该方法 javadoc。
         boolean granted = MainThreadPerms.grantedWithDefaultTrueFallback(

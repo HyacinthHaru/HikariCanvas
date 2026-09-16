@@ -317,7 +317,7 @@ final class EditOpDispatcher {
                 // 跨用户隔离——查 caller 的 use-others bypass 权限
                 // 主线程解析权限（Bukkit.getPlayer + hasPermission 主线程专用）；离线 / 超时返 false。
                 java.util.UUID callerUuid = s.playerUuid();
-                boolean hasBypass = MainThreadPerms.hasPermission(plugin, callerUuid, "canvas.template.use-others");
+                boolean hasBypass = MainThreadPerms.hasPermission(plugin, s, "canvas.template.use-others");
                 yield applyTemplate(sessionId, tpl, tp, callerUuid, s.playerName(), hasBypass);
             }
             default -> new EditSession.OpResult.Error("INVALID_OP", "unreachable: " + in.op());

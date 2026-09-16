@@ -559,7 +559,7 @@ final class ScriptOpDispatcher {
         if (wall == null) {
             return Envelope.error(in.id(), "WALL_NOT_FOUND", "wall not found");
         }
-        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, callerUuid,
+        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, s,
                 ScriptPermissions.NODE_EDIT);
         if (resolved.online() && !resolved.granted(0)) {
             // 在线且显式无节点 → 真拒（default=true 只兜 offline 不兜显式收回）
@@ -594,7 +594,7 @@ final class ScriptOpDispatcher {
         UUID callerUuid = s.playerUuid();
         // 一次主线程 hop 批量解析（≤3 节点）；offline / 超时 → 全 false（fail-closed）
         String[] nodes = facets.toArray(new String[0]);
-        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, callerUuid, nodes);
+        MainThreadPerms.Resolved resolved = MainThreadPerms.resolve(plugin, s, nodes);
         for (int i = 0; i < nodes.length; i++) {
             if (resolved.granted(i)) continue;
             String missing = nodes[i];

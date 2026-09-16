@@ -1,6 +1,7 @@
 package ac.haru.hikaricanvas.web;
 
 import org.bukkit.Bukkit;
+import ac.haru.hikaricanvas.session.Session;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
@@ -59,6 +60,21 @@ final class MainThreadPerms {
      *
      * @return {@code true} = 在线且持权限；其余（离线 / 无权限 / 超时 / 异常）= {@code false}
      */
+    /**
+     * 主体版：控制台直接放行，玩家走原路径。
+     *
+     * <p><b>为什么吃 {@link Session} 而不是多加一个 {@code Principal} 形参</b>：
+     * 14 个调用点全都已经持有 session，传它不可能传错；而多一个形参，任何一处手滑写成
+     * {@code PLAYER} 都会静默退化成"控制台被当普通玩家"，表现与本次要修的 bug 一模一样、
+     * 不会有人发现。0.9.17 刚因同型的复制粘贴分叉修过一次
+     * （{@code grantedWithDefaultTrueFallback} 在 4 处各写一份且全写错），不给第二次机会。</p>
+     */
+    static boolean hasPermission(Plugin plugin, Session session, String node) {
+        if (session == null) return false;
+        if (session.isConsole()) return true;
+        return hasPermission(plugin, session.playerUuid(), node);
+    }
+
     static boolean hasPermission(Plugin plugin, java.util.UUID callerUuid, String node) {
         if (callerUuid == null) return false;
         if (plugin == null) {
@@ -96,6 +112,16 @@ final class MainThreadPerms {
      * @param nodes 待查节点；返回的 {@code granted[i]} 对应 {@code nodes[i]}
      * @return {@link Resolved}：{@code online} = 玩家是否在线；{@code granted[i]} = 是否持 {@code nodes[i]}
      */
+    /**
+     * 主体版：控制台直接全授予（不查任何节点，也不 hop 主线程），玩家走原路径。
+     * 理由同 {@link #hasPermission(Plugin, Session, String)}。
+     */
+    static Resolved resolve(Plugin plugin, Session session, String... nodes) {
+        if (session == null) return new Resolved(false, new boolean[nodes.length]);
+        if (session.isConsole()) return Resolved.allGranted(nodes.length);
+        return resolve(plugin, session.playerUuid(), nodes);
+    }
+
     static Resolved resolve(Plugin plugin, java.util.UUID callerUuid, String... nodes) {
         // 测试 seam 优先（生产恒 null，单次 volatile 读）
         var seam = testResolver;
@@ -142,6 +168,19 @@ final class MainThreadPerms {
      */
     record Resolved(boolean online, boolean[] granted) {
         boolean granted(int idx) { return granted[idx]; }
+
+        /**
+         * 控制台主体的解析结果：全部授予。
+         *
+         * <p>{@code online = true} 的含义是"主体在场"——控制台永远在场。这让
+         * {@link #grantedWithDefaultTrueFallback} 在首行 {@code granted(0)} 即命中，
+         * 不会走到那条只为"玩家离线"准备的兜底分支。</p>
+         */
+        static Resolved allGranted(int n) {
+            boolean[] all = new boolean[n];
+            java.util.Arrays.fill(all, true);
+            return new Resolved(true, all);
+        }
     }
 
     /**

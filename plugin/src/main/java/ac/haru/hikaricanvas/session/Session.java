@@ -25,9 +25,22 @@ import java.util.UUID;
  */
 public final class Session {
 
+    /**
+     * 控制台会话携带的 UUID（nil UUID）。
+     *
+     * <p><b>它只是 {@link SessionManager} 三索引结构里的键，不是身份凭据。</b>
+     * 授权一律读 {@link #principal()}；见 {@link Principal} 的类注释。</p>
+     *
+     * <p>选 nil 而不是让 {@code playerUuid} 可空：该字段全仓 55 个消费点、12 个文件，
+     * 改成可空等于把一个编译期安全的字段换成运行时 NPE 面。nil UUID 不会与任何真实玩家
+     * 碰撞，且 {@code Bukkit.getPlayer(nil)} 安全返 null。</p>
+     */
+    public static final UUID CONSOLE_UUID = new UUID(0L, 0L);
+
     private final String id;
     private final UUID playerUuid;
     private final String playerName;
+    private final Principal principal;
     private final long createdAt;
 
     private volatile SessionState state;
@@ -62,10 +75,16 @@ public final class Session {
      */
     private volatile String editorLocale;
 
+    /** 玩家会话（既有调用点走这条，语义不变）。 */
     Session(String id, UUID playerUuid, String playerName, long now) {
+        this(id, playerUuid, playerName, now, Principal.PLAYER);
+    }
+
+    Session(String id, UUID playerUuid, String playerName, long now, Principal principal) {
         this.id = id;
         this.playerUuid = playerUuid;
         this.playerName = playerName;
+        this.principal = principal;
         this.createdAt = now;
         this.state = SessionState.SELECTING;
         this.lastActivityAt = now;
@@ -74,6 +93,12 @@ public final class Session {
     public String id() { return id; }
     public UUID playerUuid() { return playerUuid; }
     public String playerName() { return playerName; }
+
+    /** 授权依据。<b>不要用 {@link #playerUuid()} 反推主体</b>——见 {@link Principal}。 */
+    public Principal principal() { return principal; }
+
+    /** {@code principal() == Principal.CONSOLE} 的简写。 */
+    public boolean isConsole() { return principal.isConsole(); }
     public long createdAt() { return createdAt; }
 
     public SessionState state() { return state; }

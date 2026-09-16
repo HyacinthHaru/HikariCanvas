@@ -153,7 +153,7 @@ public final class UploadHandler {
         UUID uploader = session.playerUuid();
         String uploaderName = session.playerName();
         // 权限解析必须一次主线程 hop（同 handleUpload）。离线玩家拿不到 live Player → 拒。
-        UploadPerms perms = resolveUploadPerms(uploader);
+        UploadPerms perms = resolveUploadPerms(session);
         if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission_url");
             reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
@@ -462,7 +462,7 @@ public final class UploadHandler {
         // 与 WallOpDispatcher.wall.alias / SessionManager.open 同款离线处理：拿不到 live
         // Player 即视为无 canvas.upload 权限直接拒（base 权限 fail-closed，bypass 权限同样
         // 只在 live Player 上判定）。解析走一次主线程 hop，见 resolveUploadPerms。
-        UploadPerms perms = resolveUploadPerms(uploader);
+        UploadPerms perms = resolveUploadPerms(session);
         if (!perms.canUpload()) {
             auditUploadRejected(uploader, uploaderName, sessionId, "missing_permission");
             reject(ctx, 403, "FORBIDDEN", "missing canvas.upload permission");
@@ -912,6 +912,22 @@ public final class UploadHandler {
      * 这里既判 base 节点也判提权节点，宁可误拒不可误放。离线同样判 false，与本类原有
      * 「拿不到 live Player 即视为无权限」的语义完全一致。</p>
      */
+    /**
+     * 解析上传相关权限。
+     *
+     * <p>本类在 {@code image} 包，够不到 package-private 的 {@code web.MainThreadPerms}，
+     * 所以自带一份主线程 hop。<b>但主体判定不在这里重复实现</b>——只问
+     * {@link ac.haru.hikaricanvas.session.Session#isConsole()}，判定逻辑的唯一定义仍在
+     * {@code session.Principal}。</p>
+     */
+    private UploadPerms resolveUploadPerms(ac.haru.hikaricanvas.session.Session session) {
+        if (session == null) return DENY_ALL;
+        // 控制台主体全授予：走下面的 Bukkit.getPlayer 路径对它恒 null → 恒 DENY_ALL，
+        // 结果就是控制台开出来的编辑器传不了图（见 docs/security.md §5.0）。
+        if (session.isConsole()) return new UploadPerms(true, true, true);
+        return resolveUploadPerms(session.playerUuid());
+    }
+
     private UploadPerms resolveUploadPerms(UUID uploader) {
         if (uploader == null) return DENY_ALL;
         org.bukkit.plugin.Plugin plugin = owningPlugin();
