@@ -29,7 +29,7 @@
     "vue-tsc": "^3.3.11"
   },
   "dependencies": {
-    "@lexical/history": "^0.48.0",
+    "@lexical/history": "^0.50.0",
     "@lexical/plain-text": "^0.48.0",
     "@lexical/utils": "^0.48.0",
     "@vueuse/core": "^12.8.2",
