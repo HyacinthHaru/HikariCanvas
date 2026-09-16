@@ -11,6 +11,7 @@ import ac.haru.hikaricanvas.deploy.FrameDeployer;
 import ac.haru.hikaricanvas.deploy.WallResolver;
 import ac.haru.hikaricanvas.i18n.Messages;
 import ac.haru.hikaricanvas.pool.MapPool;
+import ac.haru.hikaricanvas.session.Principal;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionState;
@@ -25,6 +26,7 @@ import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -166,25 +168,25 @@ public final class CanvasCommand {
                         .requires(src -> isPlayerWith(src, "canvas.edit"))
                         .executes(this::runConfirm))
                 .then(Commands.literal("cancel")
-                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        .requires(src -> isPlayerOrConsoleWith(src, "canvas.edit"))
                         .executes(this::runCancel))
                 .then(Commands.literal("open")
-                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        .requires(src -> isPlayerOrConsoleWith(src, "canvas.edit"))
                         .then(Commands.argument("id_or_alias", StringArgumentType.word())
                                 .executes(this::runOpen)))
                 .then(Commands.literal("list")
-                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        .requires(src -> isPlayerOrConsoleWith(src, "canvas.edit"))
                         .executes(this::runList))
                 .then(Commands.literal("alias")
-                        .requires(src -> isPlayerWith(src, "canvas.edit"))
+                        .requires(src -> isPlayerOrConsoleWith(src, "canvas.edit"))
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(this::runAlias)))
                 .then(Commands.literal("delete")
                         // 门禁与业务权限并集对齐——业务逻辑（runDeleteConfirm 等）允许
                         // canvas.delete.any 删他人 wall，故门禁不能只认 .own，否则纯 .any
                         // 管理员被挡在 Brigadier 节点外。
-                        .requires(src -> isPlayerWith(src, "canvas.delete.own")
-                                || isPlayerWith(src, "canvas.delete.any"))
+                        .requires(src -> isPlayerOrConsoleWith(src, "canvas.delete.own")
+                                || isPlayerOrConsoleWith(src, "canvas.delete.any"))
                         .then(Commands.argument("wall_id", StringArgumentType.word())
                                 .executes(this::runDeleteFirstStep)
                                 .then(Commands.literal("confirm")
@@ -209,8 +211,48 @@ public final class CanvasCommand {
                 .build();
     }
 
+    /** 仅玩家。{@code edit} / {@code wand} / {@code confirm} 要在世界里选方块，天生只能玩家跑。 */
     private static boolean isPlayerWith(CommandSourceStack src, String permission) {
         return src.getSender() instanceof Player p && p.hasPermission(permission);
+    }
+
+    /**
+     * 玩家<b>或服务端控制台</b>；<b>显式排除命令方块等其他 {@link CommandSender}</b>。
+     *
+     * <p>不能图省事写成 {@code src.getSender().hasPermission(...)}：那会让命令方块也能跑
+     * {@code canvas open}，把编辑器 token 打进方块输出 / 世界数据——门槛远低于控制台日志，
+     * 而且服主完全无从察觉。控制台链接入日志是经评估接受的折衷
+     * （{@code docs/security.md §2.2}），命令方块不在那个折衷范围内。</p>
+     */
+    private static boolean isPlayerOrConsoleWith(CommandSourceStack src, String permission) {
+        return senderAllowed(src.getSender(), permission);
+    }
+
+    /**
+     * {@link #isPlayerOrConsoleWith} 的纯判定部分（抽出来便于单测，无需伪造
+     * {@code CommandSourceStack}）。
+     */
+    static boolean senderAllowed(CommandSender sender, String permission) {
+        if (sender instanceof Player p) return p.hasPermission(permission);
+        return sender instanceof ConsoleCommandSender && sender.hasPermission(permission);
+    }
+
+    /** 控制台会话的"玩家名"，出现在审计与 {@code /canvas list} 的持有者列。 */
+    private static final String CONSOLE_NAME = "CONSOLE";
+
+    /** 该 sender 对应的会话主体。 */
+    private static Principal principalOf(CommandSender sender) {
+        return sender instanceof Player ? Principal.PLAYER : Principal.CONSOLE;
+    }
+
+    /** 该 sender 的会话索引键：玩家用自己的 UUID，控制台用 nil UUID（见 {@link Principal}）。 */
+    private static UUID subjectUuidOf(CommandSender sender) {
+        return sender instanceof Player p ? p.getUniqueId() : Session.CONSOLE_UUID;
+    }
+
+    /** 该 sender 的显示名。 */
+    private static String subjectNameOf(CommandSender sender) {
+        return sender instanceof Player p ? p.getName() : CONSOLE_NAME;
     }
 
     // ---------- edit / wand / cancel ----------
@@ -266,24 +308,25 @@ public final class CanvasCommand {
     }
 
     private int runCancel(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
-        Session s = sessionManager.byPlayer(player.getUniqueId());
+        CommandSender sender = ctx.getSource().getSender();
+        Session s = sessionManager.byPlayer(subjectUuidOf(sender));
         if (s == null) {
-            messages.send(player, "command.no-session");
+            messages.send(sender, "command.no-session");
             return 0;
         }
         // cancel 仅释放 session/wand；wall 数据 + ItemFrames 保留
         String sid = s.id();
         SessionState prev = s.state();
         sessionManager.cancel(sid, "player-cancel");
-        int wands = CanvasWand.removeAllFrom(player, plugin);
+        // 控制台没有背包，也从来拿不到魔棒——收棒只对玩家做。
+        int wands = sender instanceof Player p ? CanvasWand.removeAllFrom(p, plugin) : 0;
 
         // wand_note 为魔棒回收提示（有棒时）或空串（无棒时）
         String wandNoteKey = wands > 0 ? "command.cancel.cancelled-wand-returned"
                 : "command.cancel.cancelled-no-wand";
-        String wandNote = messages.rawOrNull(messages.localeId(player), wandNoteKey);
+        String wandNote = messages.rawOrNull(messages.localeId(sender), wandNoteKey);
         if (wandNote == null) wandNote = "";
-        messages.send(player, "command.cancel.cancelled",
+        messages.send(sender, "command.cancel.cancelled",
                 Placeholder.unparsed("prev_state", prev.toString()),
                 Placeholder.unparsed("wand_note", wandNote));
         return Command.SINGLE_SUCCESS;
@@ -292,10 +335,10 @@ public final class CanvasCommand {
     // ---------- open / list / alias / delete ----------
 
     private int runOpen(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
+        CommandSender player = ctx.getSource().getSender();
         String idOrAlias = StringArgumentType.getString(ctx, "id_or_alias");
         SessionManager.OpenResult r = sessionManager.open(
-                player.getUniqueId(), player.getName(), idOrAlias);
+                principalOf(player), subjectUuidOf(player), subjectNameOf(player), idOrAlias);
         if (r instanceof SessionManager.OpenResult.NotFound) {
             messages.send(player, "command.open.not-found",
                     Placeholder.unparsed("id_or_alias", idOrAlias));
@@ -324,7 +367,8 @@ public final class CanvasCommand {
         }
         SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;
         // 签发 token
-        String token = tokenService.issue(player.getUniqueId(), player.getName(), ok.session().id());
+        String token = tokenService.issue(
+                subjectUuidOf(player), subjectNameOf(player), ok.session().id());
         String url = editorUrlTemplate.replace("{token}", token);
         WallRepo.Wall w = ok.wall();
 
@@ -340,13 +384,16 @@ public final class CanvasCommand {
                 Placeholder.unparsed("alias_part", aliasPart),
                 Placeholder.unparsed("width", String.valueOf(w.widthMaps())),
                 Placeholder.unparsed("height", String.valueOf(w.heightMaps())));
-        sendEditorUrlComponent(player, url, "command.open.editor-url", "command.open.editor-url-hover");
+        sendEditorUrl(player, url, "command.open.editor-url", "command.open.editor-url-hover");
         return Command.SINGLE_SUCCESS;
     }
 
     private int runList(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
-        List<WallRepo.Summary> walls = wallRepo.listForOwner(player.getUniqueId());
+        CommandSender player = ctx.getSource().getSender();
+        // 控制台管的是整个服务器，列全部；玩家仍只看自己的（归属语义不变）。
+        List<WallRepo.Summary> walls = player instanceof Player p
+                ? wallRepo.listForOwner(p.getUniqueId())
+                : wallRepo.listAll();
         if (walls.isEmpty()) {
             messages.send(player, "command.list.empty");
             return Command.SINGLE_SUCCESS;
@@ -363,7 +410,7 @@ public final class CanvasCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    private void sendWallLine(Player p, WallRepo.Summary w, boolean locked) {
+    private void sendWallLine(CommandSender p, WallRepo.Summary w, boolean locked) {
         String aliasPart = w.alias() != null ? " '" + w.alias() + "'" : "";
         String lineKey = locked ? "command.list.line-locked" : "command.list.line-draft";
         String lineRaw = messages.rawOrNull(messages.localeId(p), lineKey);
@@ -393,8 +440,8 @@ public final class CanvasCommand {
     }
 
     private int runAlias(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
-        Session s = sessionManager.byPlayer(player.getUniqueId());
+        CommandSender player = ctx.getSource().getSender();
+        Session s = sessionManager.byPlayer(subjectUuidOf(player));
         if (s == null || s.wallId() == null) {
             messages.send(player, "command.no-wall-session");
             return Command.SINGLE_SUCCESS;
@@ -411,7 +458,8 @@ public final class CanvasCommand {
             return Command.SINGLE_SUCCESS;
         }
         var wall = wallOpt.get();
-        boolean isOwner = wall.ownerUuid().equals(player.getUniqueId());
+        // 与 WS 侧 wall.alias 同款判据：管理者（owner 或控制台主体）或持 canvas.alias.any。
+        boolean isOwner = SessionManager.canManageWall(s, wall);
         boolean canAny = player.hasPermission("canvas.alias.any");
         if (!isOwner && !canAny) {
             messages.send(player, "command.alias.not-owner");
@@ -430,7 +478,7 @@ public final class CanvasCommand {
     }
 
     private int runDeleteFirstStep(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
+        CommandSender player = ctx.getSource().getSender();
         String wallId = StringArgumentType.getString(ctx, "wall_id");
         var w = wallRepo.loadById(wallId).orElse(null);
         if (w == null) {
@@ -438,14 +486,19 @@ public final class CanvasCommand {
                     Placeholder.unparsed("wall_id", wallId));
             return Command.SINGLE_SUCCESS;
         }
-        if (!w.ownerUuid().equals(player.getUniqueId())
-                && !player.hasPermission("canvas.delete.any")) {
+        // 控制台主体可删任意墙（docs/security.md §5.0）；玩家仍须 owner 或 canvas.delete.any。
+        boolean mayDelete = !(player instanceof Player p)
+                || w.ownerUuid().equals(p.getUniqueId())
+                || p.hasPermission("canvas.delete.any");
+        if (!mayDelete) {
             messages.send(player, "command.delete.not-owner");
             return Command.SINGLE_SUCCESS;
         }
         long now = System.currentTimeMillis();
+        // 控制台复用 CONSOLE_UUID 那一格，桶结构不变（PlayerQuit 清理对它天然不触发，
+        // 靠既有的 reapExpired 30s 窗口回收）。
         ConcurrentMap<String, PendingDelete> bucket = pendingDeletes.computeIfAbsent(
-                player.getUniqueId(), k -> new ConcurrentHashMap<>());
+                subjectUuidOf(player), k -> new ConcurrentHashMap<>());
         // 先清这玩家自己已过期的条目（顺手 reap），再判同一 wallId 是否已 pending
         reapExpired(bucket, now);
         PendingDelete existing = bucket.get(wallId);
@@ -478,14 +531,14 @@ public final class CanvasCommand {
     }
 
     private int runDeleteConfirm(CommandContext<CommandSourceStack> ctx) {
-        Player player = (Player) ctx.getSource().getSender();
+        CommandSender player = ctx.getSource().getSender();
         String wallId = StringArgumentType.getString(ctx, "wall_id");
         long now = System.currentTimeMillis();
-        ConcurrentMap<String, PendingDelete> bucket = pendingDeletes.get(player.getUniqueId());
+        ConcurrentMap<String, PendingDelete> bucket = pendingDeletes.get(subjectUuidOf(player));
         PendingDelete pd = bucket == null ? null : bucket.remove(wallId);
         // 若 bucket 被清空，gc 外层 entry，避免长期挂着空 map
         if (bucket != null && bucket.isEmpty()) {
-            pendingDeletes.remove(player.getUniqueId(), bucket);
+            pendingDeletes.remove(subjectUuidOf(player), bucket);
         }
         if (pd == null || !pd.wallId().equals(wallId)
                 || now - pd.ts() > DELETE_CONFIRM_WINDOW_MS) {
@@ -499,8 +552,10 @@ public final class CanvasCommand {
                     Placeholder.unparsed("wall_id", wallId));
             return Command.SINGLE_SUCCESS;
         }
-        if (!w.ownerUuid().equals(player.getUniqueId())
-                && !player.hasPermission("canvas.delete.any")) {
+        // confirm 时复查一次（两步之间权限可能被收回）。控制台主体恒放行。
+        if (player instanceof Player p
+                && !w.ownerUuid().equals(p.getUniqueId())
+                && !p.hasPermission("canvas.delete.any")) {
             messages.send(player, "command.delete.not-owner-confirm");
             return Command.SINGLE_SUCCESS;
         }
@@ -663,6 +718,28 @@ public final class CanvasCommand {
      * 发送带 ClickEvent（open_url）和 HoverEvent 的编辑器链接。
      * lang 文件只提供 hover 文字，链接本体由 Java 构建（MiniMessage 不支持动态 url click tag）。
      */
+    /**
+     * 下发编辑器链接。玩家得到可点击的 Component；<b>控制台得到不带任何装饰的明文行</b>。
+     *
+     * <p>控制台不做可点链接不只是"点不了"——带颜色 / 下划线的 Component 会把 ANSI 控制码
+     * 裹在 URL 外面，服主从终端拖选复制时极易带进不可见字符，粘到浏览器就是一条打不开的链接。
+     * 明文一行最好复制。</p>
+     *
+     * <p>该链接含 token 原文，会进入 {@code logs/latest.log}——这是经评估接受的折衷，
+     * 四道防线与服主须知见 {@code docs/security.md §2.2}。</p>
+     */
+    private void sendEditorUrl(CommandSender sender, String url, String prefixKey, String hoverKey) {
+        if (sender instanceof Player p) {
+            sendEditorUrlComponent(p, url, prefixKey, hoverKey);
+            return;
+        }
+        String prefixRaw = messages.rawOrNull(messages.localeId(sender), prefixKey);
+        Component prefix = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+                .deserialize(prefixRaw != null ? prefixRaw.replace("<url>", "") : "Open editor: ");
+        sender.sendMessage(prefix);
+        sender.sendMessage(Component.text(url));   // 明文独占一行，便于整行复制
+    }
+
     private void sendEditorUrlComponent(Player player, String url, String prefixKey, String hoverKey) {
         // hover 文字来自 lang
         String hoverRaw = messages.rawOrNull(messages.localeId(player), hoverKey);
