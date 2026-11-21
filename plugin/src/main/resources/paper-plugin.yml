@@ -1,5 +1,5 @@
 name: HikariCanvas
-version: '0.9.16-SNAPSHOT'
+version: '${version}'
 main: ac.haru.hikaricanvas.HikariCanvas
 api-version: '1.21'
 authors:

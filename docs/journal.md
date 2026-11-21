@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-11-21 · `paper-plugin.yml` 版本号统一注入
+
+主插件与两个示例插件的 `paper-plugin.yml` 此前硬编码停留在 `0.9.16-SNAPSHOT`，导致运行期 `getPluginMeta().getVersion()` 与根 `build.gradle.kts`（`0.9.19-SNAPSHOT`）脱节。
+
+- 根 `build.gradle.kts` 在 `allprojects` 中对 `ProcessResources` 声明 `inputs.property("version", ...)` 并对 `paper-plugin.yml` 展开 `${version}`。
+- 三份 `paper-plugin.yml` 的 `version` 字段改为 `'${version}'`。
+
+关联文件：`build.gradle.kts`、`plugin/src/main/resources/paper-plugin.yml`、`examples/demo-train-plugin/src/main/resources/paper-plugin.yml`、`examples/demo-score-plugin/src/main/resources/paper-plugin.yml`。
+
+---
+
 ## 2026-09-16 · 0.9.19：会话主体类型 + 控制台管理命令
 
 服主不进游戏也能管画布：控制台跑 `canvas open <wall_id>` 拿一条编辑器链接，能开 / 删 / 改别名 / 列出**任何**画布（含别人锁定的）。设计稿 `docs/superpowers/specs/2026-09-09-0.9.19-console-principal.md`（作者已过目）。
