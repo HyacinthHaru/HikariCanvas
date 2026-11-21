@@ -1,393 +1,257 @@
-# 工程导入导出 与 SVG 导入（0.8）设计总纲
+# `.canvas` 工程归档与 SVG 矢量导入规范
 
-> **定稿 2026-06-16（brainstorming D1-D10）。** 本文件是 0.8 的契约总纲。
-> 它把 `data-model.md §4`（`.canvas` 工程文件格式，此前标「规划中·未实装」）**升级为实装定稿**，
-> 并新增 SVG 导入契约。
->
-> **实装状态（2026-06-21 核对）：**
-> - **Part A（`.canvas` 导入导出）：已实装（A1-A4）。** 导出 = 前端 `fflate` 打包 + TopBar 更多菜单入口；导入 = 后端 `POST /api/project/import` + `ImportProjectModal` UI；含脚本（`scripts.json`）+ 图片（`assets/*.png`）。
-> - **Part B（SVG 矢量导入）：已实装（B0-B5）。** 纯前端（`web/src/lib/svg/`），后端零新解析器；`PathElement.fillRule` 字段实装（D9）；UI 入口 = TopBar 溢出菜单「导入 SVG」（`SvgImportModal.vue`）。`assets/icons/*.svg`（IconElement 用户自定义图标导出/导入）仍未实装，与 SVG→PathElement 矢量导入是不同路径。
->
-> **配套下游契约（已据实回填 2026-06-21）：**
-> `data-model.md §4`、`security.md §4.7（新增）`、`protocol.md §7（PathElement fillRule）`、`rendering.md §11（新增）`。
->
-> **写代码前必读本文。要改契约 → 先改本文，再改代码。**
+**定位**：本文档定义 HikariCanvas 作品导入导出系统的完整契约，包含 `.canvas` ZIP 工程归档格式（`manifest.json`、`project.json`、`scripts.json`、`assets/*`）、客户端打包导出与服务端安全解包物化管线（`ProjectImporter` / `ProjectMaterializer` / `AssetIngest` / `MissingResourceScanner`），以及前端静态 SVG 矢量解析转换管线（`web/src/lib/svg/*`）。
 
-一句话：让玩家的作品能**走出去**（导出 `.canvas` 分享 / 备份）和**走进来**（导入 `.canvas` 工程、导入 SVG 素材）。
-`.canvas` 导入导出是 1.0 的最大硬前置；SVG 导入是增值新功能。
-
-时间轴（0.6）回答「什么时间显示什么」、脚本（0.7）回答「什么条件下做什么」；
-导入导出（0.8）回答「作品**怎么搬进搬出**」。
+**关联契约**：`docs/data-model.md §4`（`.canvas` 字段与数据库映射）· `docs/template-pack.md`（`manifest.kind = "pack"` 模板包规范）· `docs/security.md §4.4 / §4.7 / §13.5`（归档、SVG 与脚本导入安全模型）· `docs/protocol.md §5.3 / §7`（元素创建操作与 `PathElement.fillRule`）· `docs/rendering.md §11`（`fillRule` 双端渲染与 SVG `viewBox` 坐标映射）。
 
 ---
 
-## 0. 决策摘要（固化后不可越界）
+## 1. 定位与范围
 
-| # | 决策 | 结论 | 理由速记 |
-|---|---|---|---|
-| **D1** | 0.8 范围 | **两个功能**：①`.canvas` 工程文件导入/导出 ②SVG 矢量导入。不含其它新功能 | 长期评估收敛：核心能力链（招牌→模板→变量→时间轴→脚本）已是完全体，仅剩这两件「搬进搬出」 |
-| **D2** | `.canvas` 格式 | **zip 多文件**（沿用 `data-model.md §4.1` 骨架）：`manifest.json` + `project.json` + **`scripts.json`** + `thumbnail.png`（可选）+ `assets/` | 体积小、可人工检视、缩略图独立；spec 与安全闸已写好，改方案=推翻两份契约 |
-| **D3** | `.canvas` 含脚本 | **新增 `scripts.json`**（修正现有 §4.3「只导 ProjectState」的缺口） | 脚本独立存 `wall_scripts` 表、不在 ProjectState（脚本总纲 D7）；0.7 已是脚本时代，导出不含脚本=丢交互逻辑。**用户 AskUserQuestion 拍板：纳入** |
-| **D4** | 前后端职责 | **导出=前端**（`fflate` 纯客户端打包下载）；**导入=后端**（信任边界，zip 安全闸全在 Java 侧） | 导出贴合 §4.5「不经服务器」；导入是攻击面，zip 炸弹/路径穿越/magic 校验必须在后端 |
-| **D5** | SVG 导入路线 | **矢量解析成原生 `PathElement`**（不新增元素类型）；**动画 SVG 取首帧静态化** | `PathElement`/`Fill`(渐变)/双端 `PathParser` 全现成；栅格化反而受 magic-bytes 制约且丢核心卖点。**用户拍板：只做矢量完整版** |
-| **D6** | SVG 解析位置 | **前端 `DOMParser` 解析 + 归一化到 `PathElement.d` 可渲染子集**；**后端零新解析器**（`PathParser.java` 已支持全 SVG path 文法） | 契合「无 SVG 库 / 纤瘦 jar」纪律；否决 Batik（体积大、XXE/SSRF CVE 史长） |
-| **D7** | 孤儿关键帧轨 | **丢弃 + `log warn`**（定稿 `data-model.md §4.4` 留给 §10 的待定项） | 坏 elementId 引用进运行期会让 Ticker 空插值；丢弃最干净 |
-| **D8** | 变量随工程走 | `user:` 变量**带定义、不带运行期当前值**；`userglobal/*` **不带**（既定纪律，跨服无意义→fallback `"???"`） | 定义让占位符有 default 兜底而非直接 `"???"`；当前值是临时态 |
-| **D9** | SVG `fill-rule` | 导入时**按 SVG 显式承载**（SVG 默认 `nonzero`，项目 PathRenderer 多处默认 `even-odd`） | 不显式设会让「带洞图形」渲染错误——真实保真度坑 |
-| **D10** | SVG 不做（防膨胀） | 不支持：`<text>` / `clipPath` / `mask` / `<filter>` 滤镜 / SMIL+CSS **动画** / `<foreignObject>` / 外部 `href` 引用 / `<use>`·`<symbol>` / CSS `@keyframes` 解析 | 这些要么无对应能力、要么安全面大、要么 scope 爆炸；留后续版本 |
+### 1.1 核心能力
 
----
+- **`.canvas` 客户端导出**：前端收集当前会话工程状态（含图层、元素、关键帧时间轴）、墙脚本规则与引用图片资源，生成预览缩略图后通过 `fflate` 在浏览器本地打包为 `.canvas` ZIP 文件触发下载，无需服务端中转。
+- **`.canvas` 服务端导入**：后端通过 `POST /api/project/import` 接收归档，执行流式三闸解包、版本与画布尺寸校验、结构数量配额与逐元素安全重校验、图片隔离解码与重哈希修正、孤儿关键帧轨清理及脚本重绑重校验，整体替换当前会话工程并广播 `state.snapshot` 与非阻断告警列表。
+- **SVG 静态矢量导入**：前端使用浏览器原生 `DOMParser` 解析静态 SVG 文档，剥离危险节点与外链，将基本几何形状与路径变换烘焙归一化为原生 `PathElement`（`M/L/Q/C/Z` 绝对命令子集，显式保留 `fillRule`），将 `data:` 内嵌位图经 `/api/upload` 转为 `ImageElement`，追加写入当前活动图层。
+- **`.canvas` 模板包互通**：`manifest.kind = "pack"` 复用同一套解包与物化管线，详见 `docs/template-pack.md`。
 
-## 1. 目标与范围
+### 1.2 非目标与功能边界
 
-### 1.1 做 / 不做
-
-**做（0.8）：**
-- `.canvas` **导出**：前端把当前工程（含时间轴 + 脚本 + 引用图片）打成 zip 下载
-- `.canvas` **导入**：后端安全解包 + 校验 + 灌入当前会话墙 + 广播 `state.snapshot`
-- **SVG 导入**：前端解析静态 SVG → 一组 `PathElement`（+ 内嵌位图 → `ImageElement`）插入当前工程
-- 导入冲突 / 降级的用户提示（缺字体 / 缺变量 / 缺图标 / 图片配额满 / 孤儿轨已丢弃 / 脚本不合法 / 脚本指令被 block / 脚本超额）
-
-**不做（明确砍掉，防 scope 膨胀）：**
-- `.canvas` **跨墙合并 / 增量导入**——导入语义是「整体替换当前会话工程」，非 merge
-- `.canvas` 服务端存储 / 工程库 / 云同步——导出纯客户端落盘，分享靠玩家自己传文件
-- SVG **动画 → 时间轴**（见 §7 风险登记的专项说明）——动画 SVG 一律取首帧静态化
-- SVG 的 D10 全部不支持项（text/clip/mask/滤镜/动画/foreignObject/外链/use）
-- `manifest.kind = "pack"`（模板包）——0.9.16 实装：模板系统统一到 `.canvas` pack，套用走
-  `ProjectImporter.applyPack`；统一设计见 `docs/template-pack.md`
-- 导出「服务端权威 state」模式——本期导出取前端 mirror，导出前强制同步一次（见 §10）
-
-### 1.2 MVP 定义（两个功能各一闸）
-
-- **`.canvas` MVP**：编辑器导出一个工程 → `.canvas` 文件 → 再导入回来，**ProjectState + 时间轴 + 脚本 roundtrip 还原**，后端 zip 安全闸全到位。
-- **SVG MVP**：导入一个静态 SVG（含 `<path>` + 基本形状 + `fill`）→ 得到一组**可编辑、可缩放、可绑变量**的 `PathElement`，前后端渲染一致（snapshot CI 绿）。
+- **不做跨墙增量合并**：导入 `.canvas` 工程的语义固定为「整体替换当前会话墙工程」，不提供图层级或元素级 merge；服务端不托管云端工程库。
+- **不做动态/复杂 SVG 特性**：SVG 导入不支持 `<text>`、`<clipPath>`、`<mask>`、`<filter>`、`<foreignObject>`、`<use>` / `<symbol>`、外部网络 `href` 引用，也不解析 SMIL（`<animate*>` / `<set>`）或 CSS `@keyframes` 动画（动画节点在清洗阶段直接剥离，按静态首帧图形导入）。
+- **自定义矢量图标归档预留**：归档白名单已预留 `assets/icons/<id>.svg` 路径位，当前 `IconElement` 的用户自定义 SVG 随包导出/摄入通道暂未启用，缺失时由 `MissingResourceScanner` 产出 `missing-icon` 告警提示。
 
 ---
 
-## 2. 数据结构与格式
+## 2. 数据结构与映射规范
 
-### 2.1 `.canvas` 文件结构（实装定稿，更新 `data-model.md §4.1`）
+### 2.1 `.canvas` 归档结构
+
+`.canvas` 本质为标准 ZIP 归档，内部目录树受严格白名单约束：
 
 ```
-mysign.canvas                  （zip 包，扩展名 .canvas）
-├── manifest.json              # 必选：元信息 + spec 版本
-├── project.json               # 必选：完整 ProjectState（layers/elements/timelines/canvas）
-├── scripts.json               # 可选：ScriptRule[]（D3 新增；无脚本则省略）
-├── thumbnail.png              # 可选：预览缩略图 256×128
+mysign.canvas
+├── manifest.json              # 必选：归档元信息、kind 判别符与画布地图尺寸
+├── project.json               # 必选：完整 ProjectState（layers / elements / timelines / canvas）
+├── params.json                # 可选：模板包参数声明数组（仅 kind="pack" 使用，见 template-pack.md）
+├── scripts.json               # 可选：ScriptRule[] 墙脚本规则数组（无脚本时省略）
+├── thumbnail.png              # 可选：256×128 预览缩略图
 └── assets/
-    ├── <sha256[:16]>.png      # 工程引用的上传图片（内容寻址，与服务端命名一致）
-    └── icons/<id>.svg         # 工程引用的用户自定义图标（source=user/<id>）
+    ├── <sha256[:16]>.png      # 可选：工程引用的内容寻址 PNG 图片资产
+    └── icons/<id>.svg         # 预留：用户自定义 SVG 图标条目位
 ```
 
-- `assets/` 嵌**值**（图片/图标二进制随包走，跨服可用）；**字体不嵌**（只存 `fontId` 引用，缺失降级默认字体）。
-- 老导入器遇到未知顶层条目（如未来的 `scripts.json`）应**忽略**而非报错——前向兼容。
+- **资源内嵌与引用边界**：工程上传的位图以二进制内嵌于 `assets/`，保证跨服开箱可用；字体**不内嵌**二进制，仅在元素中保留 `fontId` 字符串引用（目标服缺失该字体时回退默认字体并记 `missing-font` 告警）。
+- **变量随包边界**：墙内私有 `user:` 变量随工程携带定义与默认值（不携带运行期瞬时缓存值）；全服级 `userglobal/*` 变量属服务器全局状态，**不打入 `.canvas` 归档**（目标服不存在同名全局变量时走占位符回退链并记 `missing-variable` 告警）。
 
-### 2.2 `manifest.json`（沿用 §4.2 + 补充）
+### 2.2 `manifest.json`
 
-字段沿用 `data-model.md §4.2`（`spec` / `kind` / `created_at` / `created_by` / `server` / `plugin_version` / `name` / `wall{width,height}` / `template_origin`）。补充约束：
+由后端 `CanvasManifest.parse` 解析并校验核心元数据（宽松忽略未知扩展字段）：
 
-- `spec`：独立整数（`data-model.md §6.1`）。**0.8 首发 = `spec: 1`**（此前从未真实导出过文件，1 即首个实装格式）。
-- 导入时 `spec > 当前支持` → 拒绝 `IMPORT_SPEC_UNSUPPORTED` + 提示升级插件；`spec < 当前` → 走 ProjectState 既有 v1→v2→v3 `@JsonCreator` 兼容链自动升级（已实装，免新代码）。
-- manifest 全部字符串字段渲进编辑器时走 Vue 默认转义（防 T10 XSS，`security.md §4` 威胁表）；禁 `v-html`。
+```json
+{
+  "spec": 1,
+  "kind": "project",
+  "created_at": 1750000000000,
+  "created_by": "PlayerName",
+  "plugin_version": "1.0.0",
+  "name": "中央车站欢迎牌",
+  "wall": { "width": 4, "height": 2 }
+}
+```
 
-### 2.3 `scripts.json`（D3 新增）
+- **`spec`**：归档格式版本整数，当前最高支持版本 `ProjectImporter.CANVAS_SPEC_MAX = 1`。`spec <= 0` 报 `IMPORT_MALFORMED`；`spec > 1` 报 `IMPORT_SPEC_UNSUPPORTED` 并提示升级插件；旧版 `project.json` 内部状态结构通过 `ProjectState` `@JsonCreator` 的 `v1 → v2 → v3` 兼容链自动升级。
+- **`kind`**：必填判别符，仅接受 `"project"` 或 `"pack"`（其余值报 `IMPORT_MALFORMED`）。模板包可额外携带 `id` 字符串字段（见 `docs/template-pack.md §1.1`）。
+- **`wall`**：`width` 与 `height` 必须为正整数（单位：地图张数）。
+- **前端转义约束**：`manifest` 所有字符串字段在前端界面展示时一律走 Vue 默认文本插值转义，严禁使用 `v-html`。
 
-```jsonc
-// scripts.json = 一个 JSON 数组，每项是一条 ScriptRule（见 scripting.md §2.1）
+### 2.3 `scripts.json`
+
+`scripts.json` 为顶层 JSON 数组，每项对应一条序列化的 `ScriptRule`（模型定义见 `docs/scripting.md §2.1`）：
+
+```json
 [
   {
     "id": "sr-1a2b3c4d",
-    "wallId": "<导出时的 wallId>",   // 导入时由后端重绑到当前会话墙，见下
+    "wallId": "w-00112233",
     "enabled": true,
-    "name": "比分牌",
+    "name": "比分播报",
     "trigger": { "type": "playerKill" },
-    "actions": [ /* … Action 树，含 If 嵌套 … */ ],
-    "blockLayout": "<前端积木摆放坐标 JSON，后端原样存取>"
+    "actions": [],
+    "blockLayout": "{}"
   }
 ]
 ```
 
-- **`wallId` 重绑**：导出时记录的 `wallId` 在目标服无意义；导入时后端把每条规则的 `wallId` 改写为**当前会话墙的 wallId**，再写入 `wall_scripts` 表（脚本归墙，脚本总纲 D7）。
-- **命令模板按名引用**：`runCommand.templateId` 在目标服 `config.yml` 不存在 → `CommandTemplateEngine` 返 `Blocked`，编辑器红 badge 灰显、不可执行，**规则其余照常**（`security.md §13.5`，已写无需新代码）。
-- **积木重校验**：导入的 `trigger` / `action` 类型、参数范围、`if.condition` 语法**一律按生产路径重新服务端校验**（不信任文件内的 rule_json），复用脚本 create/update 的校验栈（`security.md §13.5` K16 等）。
+导入时由 `ScriptImporter.importScripts` 执行三项处理：
+1. **`wallId` 重绑**：忽略归档内记录的源服 `wallId`，强制重写为当前导入会话绑定的目标 `wallId` 后写入 `wall_scripts` 表。
+2. **全量安全重校验**：不信任文件内的 JSON 内容，逐条重跑 `ScriptRuleValidator.validate` 与所有条件积木的 `ConditionEvaluator.checkSyntax`；单条规则不合法时跳过该条并产出 `script-invalid` 告警，不阻断其余合法规则与画布本体导入；超出目标服 `scripts.max-rules-per-wall` 上限时停止导入后续规则并产出 `script-quota` 告警。
+3. **缺失命令模板降级**：若规则内 `runCommand.templateId` 在目标服 `config.yml` 中未定义，`CommandTemplateEngine` 将其标记为 `Blocked`（编辑器内显示红色徽章并灰显禁用该积木），规则其余部分正常保留并产出 `script-command-blocked` 告警。
 
-### 2.4 SVG 导入产物（D5：映射到 `PathElement`）
+### 2.4 SVG 矢量导入映射
 
-**实装状态：已实装（0.8 Part B）**
+前端将静态 SVG 文档转换为现有的原生 `PathElement` 与 `ImageElement` 组合，**不引入任何新元素类型或后端 SVG 解析器**：
 
-前端把一份 SVG 文档解析成一组**原生元素**插入当前工程：
+| SVG 源结构 | 目标画布模型 | 转换与近似规则 |
+| --- | --- | --- |
+| `<path d="...">` | `PathElement` | `d` 归一化为绝对坐标 `M/L/Q/C/Z` 命令子集（`H/V → L`、`S → C`、`T → Q`、`A` 椭圆弧按 W3C SVG F.6 标准算法分解为三次贝塞尔段） |
+| `<rect>` `<circle>` `<ellipse>` `<line>` `<polyline>` `<polygon>` | `PathElement` | 统一由 `shapesToPath.ts` 转为等价 `path d`（圆与椭圆使用 $\kappa = 0.5522847498$ 的 4 段三次贝塞尔拟合），收敛到单一路径管线 |
+| `fill`（纯色 / `linearGradient` / `radialGradient`） | `PathElement.fill`（`Fill` 联合类型） | 纯色转 `SolidFill`；渐变 `url(#id)` 降维映射为 `LinearGradient`（`angle = atan2(dy, dx)`）或 `RadialGradient`（归一化 `cx/cy/r`），色标排序并钳制至 `[2, 8]` 个（忽略 `gradientTransform`、`spreadMethod` 与双焦点偏移） |
+| `stroke`（颜色与线宽） | `PathElement.stroke`（`Stroke`） | 保留纯色与宽度；虚线 `stroke-dasharray`、端点帽 `linecap/linejoin` 与渐变描边自动舍弃 |
+| `transform`（`translate` / `scale` / `rotate` / `matrix` / `skewX` / `skewY`） | 烘焙入 `PathElement.d` 顶点坐标 | 逐层累乘祖先 2×3 仿射变换矩阵及 `viewBox` 缩放矩阵，直接烘焙至路径控制点并重定原点至元素包围盒左上角 |
+| `opacity` | `PathElement.opacity` | 直接映射至元素不透明度字段 |
+| `fill-rule`（`nonzero` / `evenodd`） | `PathElement.fillRule` | 显式承载 SVG 填充缠绕规则（SVG 默认 `nonzero`），由后端 `PathRenderer` 与前端 `PreviewRenderer.drawPath` 双端一致渲染带孔洞复合路径（见 `docs/rendering.md §11.1`） |
+| `<image href="data:...">` 内嵌位图 | `ImageElement` | 提取 `data:` URL 解码为 `Blob`/`File`，调用 `POST /api/upload` 通过完整图片安全校验栈换取内容寻址 `sha256` 标识，再创建 `ImageElement` |
 
-| SVG 输入 | 映射到 | 说明 |
-|---|---|---|
-| `<path d>` | `PathElement` | `d` **归一化到可渲染子集** M/L/Q/C/Z（H/V→L，S/T→C/Q，A 椭圆弧→cubic 近似），见 D6 + §3.3 |
-| `<rect> <circle> <ellipse> <line> <polyline> <polygon>` | `PathElement`（转 `d`） | 基本形状统一转 path d（`shapesToPath.ts`）；**不直映** `RectElement`/`CircleElement`（统一 path 管线更简单） |
-| `fill`（纯色 / `linearGradient` / `radialGradient`） | `PathElement.fill`（`Fill` 联合，渐变现成） | 渐变 stop / gradientUnits 映射到项目 `LinearGradient`/`RadialGradient`（**降维近似**：linear angle=atan2(dy,dx)，radial cx/cy/r 归一化，stops 排序钳[2,8]；忽略 gradientTransform/userSpaceOnUse/spreadMethod/双焦点） |
-| `stroke`（color + width） | `PathElement.stroke`（`Stroke`） | 项目 `Stroke` 仅 width+color；dasharray/cap/join/渐变描边丢失 |
-| `transform`（translate/scale/rotate/matrix/skewX/skewY） | **烘焙进 `d` 坐标** | `transform.ts` 解析 2×3 矩阵 + 链式累乘；`bakePath.ts` 烘焙进坐标 |
-| `opacity` | `PathElement.opacity` | 元素级现成字段 |
-| `<image href=data:…>` 内嵌位图 | `ImageElement` | 抽出 base64 → `fetch(dataUrl)→blob→File` → `POST /api/upload`（带 sessionId）→ 拿 sha256 source → `element.add type=image` |
-| `fill-rule` | `PathElement.fillRule`（`"nonzero"` / `"evenodd"` / `null`，D9） | **已实装**：`fillMap.mapFillRule` 映射；后端 `PathRenderer` + 前端 `PreviewRenderer.drawPath` 双端一致（见 `rendering.md §11.1`） |
-
-- **不新增元素类型**：零新数据模型、`.canvas` / `project_json` 序列化形态不变、双端一致天然成立。
-- 一份 SVG 导入 = N 条 `element.add` op（N 个元素独立写入，各自可撤销）。SVG 元素成组落在当前活动图层。
+一次 SVG 导入对应在当前活动图层依次发送多条标准 `element.add` WebSocket 操作，每个生成的元素均可独立选中、缩放、上色、绑定变量与逐步撤销。
 
 ---
 
 ## 3. 处理管线
 
-### 3.1 导出流程（前端，D4）
+### 3.1 前端导出流程（`useProjectExport`）
 
-```
-1. 取当前 ProjectState（useProjectStore().state；导出前强制 sync 一次，§10）
-2. 渲染缩略图 256×128（复用 LayerThumbnailRenderer / PreviewRenderer）→ thumbnail.png
-3. 收集引用资源：扫 element 里的 image hash（去重）+ user/<id> 图标 → fetch 字节塞 assets/
-4. 序列化：project.json = ProjectState；scripts.json = 该墙 wall_scripts（若有）；manifest.json 填充
-5. fflate 打 zip → Blob → a.download 触发下载（无服务器往返）
-```
+1. **状态同步**：读取当前 `useProjectStore().state`（确保最新编辑操作已完成同步）。
+2. **生成缩略图**：调用前端渲染管线生成 `256×128` 预览图编码为 `thumbnail.png`。
+3. **收集引用资产**：扫描所有图层 `ImageElement.source` 去重哈希集合，拉取对应 PNG 字节放入 `assets/<hash>.png`。
+4. **序列化清单与脚本**：写出 `project.json`、当前墙非空的 `scripts.json` 以及填充元信息的 `manifest.json`（`spec: 1, kind: "project"`）。
+5. **本地打包下载**：通过 `fflate` 在客户端内存压缩生成 `.canvas` Blob，触发浏览器文件下载。
 
-### 3.2 导入流程（后端，D4 — 信任边界）
+### 3.2 后端导入流程（`ProjectImporter`）
 
-```
-1. 前端选文件 → POST multipart 到 /api/project/import（复用 /api/upload 多部分范式）
-2. 后端【zip 安全解包】流式边解边计数：包≤10MiB / 单文件解压≤10MiB / 总解压≤50MiB
-   + 条目名安全校验（无 ../、无绝对路径、无符号链接）+ 白名单条目（§5.1）
-3. 解析 manifest → spec 兼容校验（§2.2）
-4. project.json → ProjectState（复用 @JsonCreator + ElementValidator/FillValidator/PathDValidator/StrictNumber，
-   不信任文件内任何数值；w/h clamp ≤ canvas-max-maps）+ 结构配额校验（图层 / 时间轴 / 关键帧 /
-   元素总数 / 单墙图片数，见 §5.1a）
-5. 尺寸匹配：超当前会话墙尺寸 → IMPORT_SIZE_MISMATCH 中止，提示开匹配尺寸新会话（§4.4 现状）
-6. assets/*.png 逐个走 magic + ImageIO 隔离解码（200ms 超时）+ 落 hash 存储（复用 §4.5 校验栈）；
-   assets/icons/*.svg 走 SVG 清洗（§5.3）后落 icons 目录
-7. scripts.json：wallId 重绑当前墙 + 积木重校验（§2.3）→ 写 wall_scripts
-8. 孤儿关键帧轨丢弃 + warn（D7）；扫缺字体/变量/图标产出 warning 清单
-9. 灌入会话 ProjectState + 广播 state.snapshot + audit PROJECT_IMPORT
-10. 前端收 snapshot 全量刷新 + 展示 warning 清单
-```
+HTTP `POST /api/project/import`（鉴权 `canvas.edit`，multipart 上传）在读取文件前先校验请求体不超过 `config.import.canvas-max-mb`，随后执行完整流水线：
 
-### 3.3 SVG 解析流程（前端，D6）
+1. **流式安全解包（`CanvasArchive.unpack`）**：边流式解压边统计真实解压字节数（不信任 ZIP 头声明长度），强制执行单包、单条目、总解压三道体积闸与条目名路径安全及白名单检查，校验必含 `manifest.json` 与 `project.json`。
+2. **清单校验与模板参数前置替换**：`CanvasManifest.parse` 校验 `spec <= 1` 与 `kind`；若包内含 `params.json`（交叉导入的模板包），调用 `PackParamResolver` 以各参数默认值执行单遍 JSON 转义替换（普通 `project` 包无 `params.json`，字节零改动直通）。
+3. **工程物化与配额校验（`ProjectMaterializer.materialize`）**：反序列化 `project.json`，校验工程地图宽高不超过当前会话墙尺寸（超限抛 `IMPORT_SIZE_MISMATCH`），执行 §5.1a 结构数量配额检查，并对每个元素运行 `ElementValidator.validateElementForTemplateApply` 全字段范围重校验。
+4. **缺资源扫描（`MissingResourceScanner.scan`）**：扫描本服缺失的字体 ID、缺失的用户图标及缺失的 `userglobal/*` 变量，生成对应的 `missing-*` 告警项。
+5. **图片摄入与重哈希修正（`AssetIngest.ingestAll` + `remapAssetSources`）**：逐张对 `assets/*.png` 执行 PNG 魔数检查、200ms 隔离线程 `ImageIO` 解码重编码与配额扣减落盘；若本服重编码后的内容寻址指纹与包内原文件名指纹存在差异，自动改写对应 `ImageElement.source` 指向新指纹并记录 `asset-rehashed` 告警，避免图片断链变占位符。
+6. **孤儿关键帧轨剔除（`stripOrphanTracksAndCollect`）**：遍历所有时间轴 `tracks`，丢弃指向不存在 `elementId` 的孤儿轨道并逐条记录 `orphan-track-dropped` 告警。
+7. **替换会话与导入脚本**：调用 `EditSession.replaceProject` 整体替换会话工程，若有 `scripts.json` 则调用 `ScriptImporter.importScripts` 重绑落库。
+8. **广播、投影、持久化与审计**：向会话推送 `state.snapshot` 全量快照，提交 `ProjectionThrottler` 触发游戏内地图全画布重绘，更新 `walls` 表状态，并写入 `PROJECT_IMPORT` 审计记录。
+   > 注：导入路径通过 `ProjectionThrottler` 立即刷新静态画面；若导入工程包含自动循环时间轴，将在手动点击播放、编辑持久化或下次墙加载/会话关闭时启动 `AnimationTicker`。
 
-**实装状态：已实装（0.8 Part B，`web/src/lib/svg/`）**
+### 3.3 前端 SVG 转换流程（`web/src/lib/svg/`）
 
-```
-1. 文件大小预闸（≤ svg-import-max-kb，默 512KB）+ 拒含 <!DOCTYPE/<!ENTITY 的源串（§5.3）
-   ← 实装：svgSecurity.preParseGuard（体积 + 实体拦截）
-
-2. new DOMParser().parseFromString(svg, 'image/svg+xml')  ← 不取外部实体、不执行脚本
-   ← 实装：svgToElements.ts 内直接调用 DOMParser；天然挡 XXE/脚本注入 DOM
-
-3. 剥离危险节点：<script>/<foreignObject>/<use>/<symbol>/<animate*>/<set>/<style> + on* 属性
-   + href^=javascript: + 外部 <image href> （非 data: 前缀）
-   ← 实装：svgSecurity.stripDangerous（深度优先遍历，按 DANGEROUS_TAGS 集合删节点）
-
-4. 遍历 DOM：basic shapes → path d；逐节点累乘祖先 transform 矩阵 + viewBox→目标尺寸 scale，烘焙进 d 坐标
-   ← 实装：svgParse.ts（形状收集 + viewBox/width/height 解析）；shapesToPath.ts（rect/circle/ellipse/
-      line/polyline/polygon → path d，圆/椭圆用 kappa=0.5522847498 的 4 段三次贝塞尔）；
-      transform.ts（translate/scale/rotate/matrix/skewX/skewY → 2×3 矩阵，支持链式累乘）；
-      bakePath.ts（矩阵烘焙进坐标 + bbox + rebase 到 bbox 左上）
-
-5. d 归一化到 M/L/Q/C/Z 绝对命令子集（H/V→L；S→C；T→Q；A→cubic 逐公式移植后端 PathParser.arcToBezier）
-   ← 实装：normalizeD.ts（A 弧按 W3C SVG F.6 椭圆弧分解，完整移植后端算法）
-
-6. fill/stroke/opacity/fill-rule 映射（§2.4）；gradient url(#id) → Linear/RadialGradient 降维近似；
-   动画节点（<animate>/CSS @keyframes）→ stripDangerous 已删除，无需另取 t=0
-   ← 实装：fillMap.ts（fill/stroke/opacity/fillRule 映射；渐变降维：linear angle=atan2(dy,dx)，
-      radial cx/cy/r 归一化，stops 排序钳[2,8]；忽略 gradientTransform/userSpaceOnUse/spreadMethod/双焦点）
-
-7. <image href=data:…> → 抽出 base64 → fetch(dataUrl)→blob→File → POST /api/upload（带 sessionId）
-   → 拿 sha256 source → element.add type=image
-   ← 实装：useSvgImport.ts（Task 16 image 支持）
-
-8. PathElement draft 直接发 element.add；image draft 走 /api/upload 再 element.add
-   ← 实装：useSvgImport.importSvg（循环发 element.add，server-authoritative；每条独立可撤销）
-
-9. 节点数 / 顶点数超闸 → 前端熔断提示
-   ← 实装：svgSecurity.complexityGuard（maxShapes=500 / maxTotalVertices=50000，超限 throw SVG_TOO_COMPLEX）
-```
+1. **预解析拦截（`svgSecurity.preParseGuard`）**：检查源文本字节长度（≤ 512 KB），若包含 `<!DOCTYPE` 或 `<!ENTITY` 立即拒绝（防 XML 实体膨胀）。
+2. **安全 DOM 解析**：调用 `new DOMParser().parseFromString(svg, 'image/svg+xml')`，不加载外部实体、不执行内嵌脚本。
+3. **危险节点剥离（`svgSecurity.stripDangerous`）**：深度优先遍历删除 `<script>`、`<foreignObject>`、`<use>`、`<symbol>`、`<animate*>`、`<set>`、`<style>` 节点，剥除所有 `on*` 事件属性、`javascript:` 链接以及非 `data:` 前缀的外部 `<image>` 节点。
+4. **形状收集与仿射烘焙（`svgParse` + `shapesToPath` + `transform` + `bakePath`）**：解析 `viewBox`/`width`/`height` 到目标画布的映射缩放（`docs/rendering.md §11.2`），将基本形状转为路径，累乘各级 `transform` 2×3 矩阵烘焙入控制点坐标并归一化至局部包围盒左上角。
+5. **命令集归一化（`normalizeD`）**：将所有相对命令与简写命令展开为绝对坐标 `M/L/Q/C/Z` 子集，确保前后端 `PathParser` 渲染结果逐像素一致。
+6. **复杂度熔断（`svgSecurity.complexityGuard`）**：校验总形状数 `maxShapes <= 500` 且总顶点数 `maxTotalVertices <= 50000`，超限抛出 `SVG_TOO_COMPLEX`。
+7. **样式映射与元素创建（`fillMap` + `useSvgImport`）**：完成填充、描边、不透明度与 `fillRule` 映射；内嵌 `data:` 图片先上传 `/api/upload`，随后按图层顺序逐条发送 `element.add` 落入工程。
 
 ---
 
-## 4. 协议（新增端点 + 错误码）
+## 4. 协议端点、错误码与告警
 
-| 端点 / op | 方向 | 用途 |
-|---|---|---|
-| `POST /api/project/import` | HTTP multipart | 导入 `.canvas`（大二进制不走 WS——`security.md` WS 上限 1 MiB）。后端解包校验后经 WS `state.snapshot` 推全量 |
-| 导出 | 纯前端 | 无端点（fflate 客户端打包 + 下载）；取图片字节复用现有图片下载端点（实现期核对签名） |
-| SVG 导入 | 纯前端 + 现有 op | 前端解析后走**现有 element 创建 op**插入；内嵌位图走现有 `POST /api/upload` |
+| 通道 | 方向与形式 | 说明 |
+| --- | --- | --- |
+| `POST /api/project/import` | HTTP `multipart/form-data` | 上传 `.canvas` 归档（避开 WebSocket 1 MiB 单帧限制）；成功后经 WS `state.snapshot` 同步状态 |
+| 工程导出 | 纯客户端本地处理 | `fflate` 浏览器端打包下载，不新增专用导出 HTTP 端点 |
+| SVG 矢量导入 | 前端解析 + 既有端点/WS op | 路径元素走既有 WS `element.add`；内嵌 `data:` 位图复用 `POST /api/upload` |
 
-**导入错误码**（`protocol.md` 回填）：
+**致命导入错误码**（返回非 2xx HTTP 状态并中止导入，当前会话工程保持原状）：
 
-| code | 触发 |
-|---|---|
-| `IMPORT_ZIP_TOO_LARGE` | 包 / 单文件 / 总解压 超闸 |
-| `IMPORT_BAD_ENTRY` | 条目名路径穿越 / 非白名单条目 / assets 非 PNG |
-| `IMPORT_SPEC_UNSUPPORTED` | `manifest.spec` 高于当前插件支持 |
-| `IMPORT_SIZE_MISMATCH` | 工程尺寸超当前会话墙 |
-| `IMPORT_MALFORMED` | manifest/project.json 解析失败 / 校验不过（含图层·时间轴·关键帧·元素·图片数量超 §5.1a 上限） |
+| 错误码（`code`） | HTTP 状态 | 触发条件 |
+| --- | --- | --- |
+| `IMPORT_ZIP_TOO_LARGE` | `413` | 归档总大小、单条目解压大小或累计总解压大小超出安全阈值 |
+| `IMPORT_SPEC_UNSUPPORTED` | `409` | `manifest.spec` 高于当前插件支持的最高版本（`1`） |
+| `IMPORT_SIZE_MISMATCH` | `409` | 归档 `canvas` 地图宽高超出当前会话墙的物理尺寸 |
+| `IMPORT_BAD_ENTRY` | `400` | ZIP 含路径穿越（`..`、前导 `/`、`\`、空字节）或非白名单条目 |
+| `IMPORT_MALFORMED` | `400` | ZIP 损坏、缺必选文件、JSON 解析失败、模板参数非法、元素校验失败或超出 §5.1a 结构数量配额 |
 
-导入成功响应：`{ ok:true, warnings:[ {kind, detail} … ] }`（warning 不阻断）。代码实装产出的 8 种 `kind`：
+**非阻断导入告警**（导入成功返回 `{ ok: true, warnings: [{ kind, detail }, ...] }`，共 9 种 `kind`）：
 
-| kind | 含义（用户语） |
-|---|---|
-| `missing-font` | 工程用到的字体本服没有，已用默认字体代替（`detail` = fontId）。 |
-| `missing-icon` | 工程引用的用户自定义图标（`user/<id>`）本服缺失，已留空（`detail` = source）。 |
-| `missing-variable` | 工程引用的全局用户变量（`userglobal/*`）本服不存在，显示为占位符（`detail` = 变量全名）。 |
-| `asset-quota` | 图片配额已满，部分引用图片未落地。 |
-| `asset-rehashed` | 某张图片在本服重新编码后内容指纹变了，工程里的引用已自动改写指向新文件（`detail` = 原指纹）。 |
-| `orphan-track-dropped` | 有关键帧轨指向已不存在的元素，已自动丢弃（`detail` = elementId）。 |
-| `script-invalid` | 有一条脚本规则解析 / 校验不过，已跳过，其余规则照常导入（`detail` = 原因）。 |
-| `script-command-blocked` | 脚本里的命令模板本服未配置，该积木停用、规则其余照常（`detail` = templateId）。 |
-| `script-quota` | 脚本数量超本服上限，超额规则未导入、后续停止处理。 |
-
----
-
-## 5. 安全
-
-### 5.1 `.canvas` 导入 zip 闸（沿用 `security.md §4.4` + 补充）
-
-现有 §4.4 已定：包≤10MiB、单文件解压≤10MiB、总解压≤50MiB、路径安全校验、白名单条目（`manifest.json`/`project.json`/`thumbnail.png`/`assets/*`）、assets 仅 PNG+magic。**本期补充：**
-
-- **流式边解边计数**：闸必须在解压过程中累计，不能先全解压再查（否则形同虚设）。
-- **白名单加 `scripts.json` + `assets/icons/*.svg`**（D3 + SVG 图标）。
-- **`thumbnail.png` 也是攻击面**：同走 magic + ImageIO 隔离解码 + 尺寸上限（防超大 PNG）。
-- **配额**：导入落地的图片**计入图片配额**（`config.images.*`，`security.md §4.5d`），防止用导入绕过上传限频灌图。
-- **`assets/*.png` 条目数上限 256**：字节闸只管总量，不管条数——几万个几字节的小 PNG 同样在字节闸之内，
-  却会让摄入循环开几万次写事务。超过 256 张时多出来的直接跳过并计进 `asset-quota` warning。
-
-### 5.1a 工程结构配额（`materialize` 期强制，超限即 `IMPORT_MALFORMED`）
-
-zip 闸只看字节，一份合规的 10 MiB `project.json` 仍能塞进几万个元素、上千个图层。这些数量
-在**物化时**统一卡住，两条入口（`POST /api/project/import` 与模板套用 `template.apply`）共用同一组闸：
-
-| 项 | 上限 | 与谁对齐 |
-|---|---|---|
-| 图层数 | 64 | 与 `layer.create` 的上限同值 |
-| 图层名长度 | 64 | 与 `layer.create` 同值 |
-| 图层 `opacity` | 必须是 `[0,1]` 内的有限值 | 越界会让合成阶段算出噪点像素或整层消失 |
-| 时间轴数 | 16 | 与 `timeline.create` 同值 |
-| 单时间轴关键帧总数 | 2048 | 与 `keyframe.set` 同值 |
-| 单轨关键帧数 | 256 | 与 `keyframe.set` 同值 |
-| 元素总数 | 4096 | 结构性天花板（正常人工作图远低于此） |
-| 单墙引用的不同图片数 | `config.images.max-per-wall`（默 16） | 与 `element.add type=image` 同一配额 |
-
-### 5.2 `scripts.json` 安全（沿用 `security.md §13.5`）
-
-- 缺命令模板 → `Blocked` 灰显（已写）。
-- 导入积木**全量重校验**（类型/参数/condition 语法），不信任文件内 rule_json（§2.3）。
-- 导入的命令字符串走与生产同样的 Budget 三闸 + 权限面检查。
-
-### 5.3 SVG 导入闸（`security.md §4.7`，**0.8 Part B 已实装**）
-
-**实装状态：已实装（0.8 Part B，见 `security.md §4.7` 详细说明）**
-
-| 闸 | 值 / 做法 | 实装位置 |
-|---|---|---|
-| 源串体积 | ≤ 512 KB（`svg.length` 字节数） | `svgSecurity.preParseGuard` |
-| XML 实体 | **拒含 `<!DOCTYPE` / `<!ENTITY`**（防十亿笑）；`DOMParser` 天然挡 XXE | `svgSecurity.preParseGuard` + DOMParser |
-| 危险节点 | 剥离 `<script>`/`<foreignObject>`/`<use>`/`<symbol>`/`<animate*>`/`<set>`/`<style>` + `on*` 事件属性 + `href^=javascript:` + 外部 `<image href>`（非 data:） | `svgSecurity.stripDangerous` |
-| path 复杂度 | maxShapes=500 / maxTotalVertices=50000，超限 throw `SVG_TOO_COMPLEX`，前端展示大白话提示 | `svgSecurity.complexityGuard` |
-| 后端兜底 | 每个 `PathElement.d` 仍过后端 `PathDValidator`（M/L/Q/C/Z 命令子集 + 数值范围）；ImageElement 走 `POST /api/upload` 全栈 | `ElementValidator`（server-side） |
-| SSRF | 一律拒 SVG 内外链；内嵌位图仅允许 `data:` 协议，外链 `<image>` 被 `stripDangerous` 删除 | `svgSecurity.stripDangerous` |
-
-> `security.md` 威胁表 **T16 恶意 SVG 导入**（XXE / 实体爆炸 / 嵌入脚本 / 超大 path → DoS）已新增，详见 `security.md §4.7`。
+| `kind` | 含义与 `detail` 内容 |
+| --- | --- |
+| `missing-font` | 工程引用的字体本服未安装，已回退默认字体渲染（`detail` = `fontId`） |
+| `missing-icon` | 工程引用的用户自定义图标（`user/<id>`）本服不存在，显示为空占位（`detail` = `source`） |
+| `missing-variable` | 工程引用的全局用户变量（`userglobal/*`）本服未创建，按占位符回退显示（`detail` = 变量全名） |
+| `asset-quota` | 图片配额已满、超出单包 256 张上限或个别图片解码失败，对应资产已跳过（`detail` = 跳过张数说明） |
+| `asset-rehashed` | 图片在本服隔离重编码后内容哈希发生变化，元素引用已自动重定向至新指纹（`detail` = 原始指纹） |
+| `orphan-track-dropped` | 时间轴中存在指向已不存在元素的孤儿关键帧轨，已自动清理（`detail` = `elementId`） |
+| `script-invalid` | 单条脚本规则未通过结构或条件语法重校验，已跳过该条规则（`detail` = 校验原因） |
+| `script-command-blocked` | 脚本引用的 `runCommand.templateId` 本服未配置，该命令积木已停用、规则其余部分照常导入（`detail` = `templateId`） |
+| `script-quota` | 导入脚本条数达到本服 `scripts.max-rules-per-wall` 上限，超额规则已停止导入 |
 
 ---
 
-## 6. 前端
+## 5. 安全与配额校验栈
 
-### 6.1 导出 UI
-- TopBar「更多菜单」（0.7.4 OverflowMenu）新增「导出工程」→ fflate 打包 → 下载 + 错误提示。
+### 5.1 `.canvas` ZIP 解包与资产安全闸（`CanvasArchive` & `AssetIngest`）
 
-### 6.2 导入 UI
-- 「导入 `.canvas`」文件选择 → POST → 进度 → 成功后展示 **warning 清单**（缺字体/缺变量/缺图标/图片配额满/孤儿轨已丢弃/脚本不合法/脚本指令被 block/脚本超额，8 种见 §4）。
-- 锁定 / 未保存工程的导入是**破坏性替换** → 必须二次确认（防覆盖丢数据）。
+1. **流式字节三闸**：在 `ZipInputStream` 循环读取过程中实时累加字节计数（配置段 `config.import.*`，默认单包 ≤ **10 MiB**、单条目解压 ≤ **10 MiB**、总解压 ≤ **50 MiB**），彻底防御篡改 ZIP 头尺寸的压缩炸弹。
+2. **路径与条目白名单**：拒绝含 `/` 前缀、`\`、`..` 或 `\0` 的条目名；顶层仅放行 `manifest.json`、`project.json`、`params.json`、`scripts.json`、`thumbnail.png` 及 `assets/` 前缀文件。
+3. **图片隔离解码与条数上限**：`assets/*.png` 与 `thumbnail.png` 均须通过 PNG 魔数校验与 200ms 超时线程池隔离 `ImageIO` 解码，落盘计入玩家与全服图片配额（`config.images.*`，见 `docs/security.md §4.5`）。同时限制单包 `assets/*.png` 最多处理 **256 张**，防止海量微型合法 PNG 触发数万次磁盘/数据库事务造成拒绝服务（超额部分计入 `asset-quota` 告警）。
 
-### 6.3 SVG 解析器（**0.8 Part B 已实装**）
+### 5.1a 工程结构配额（`ProjectMaterializer`）
 
-- **`web/src/composables/useSvgImport.ts`**（已实装）：协调 `svgToElements`（解析+烘焙+归一化）→ 循环发 `element.add` + 内嵌位图走 `POST /api/upload` → `element.add type=image`。
-- **`web/src/lib/svg/`**（已实装，8 个 `.ts`）：`svgSecurity`（安全三闸）/ `svgParse`（DOM 收集）/ `shapesToPath`（基本形状→path）/ `transform`（2×3 矩阵链式累乘）/ `normalizeD`（命令归一化）/ `bakePath`（矩阵烘焙+rebase）/ `fillMap`（fill/stroke/fillRule/opacity 映射+渐变降维）/ `svgToElements`（编排入口）。
-- **`SvgImportModal.vue`**（已实装）：`accept=".svg,image/svg+xml"`；SVG 是「追加」操作，不替换工程，无破坏性二次确认。
-- **TopBar 溢出菜单入口**（已实装）：「导入 SVG」项常驻溢出菜单内。
-- viewBox→画布坐标映射规范见 `rendering.md §11.2`。
-- 解析失败 / 超闸时展示大白话错误提示（`i18n svgImport.failed(code)`）；前端已按 `SVG_TOO_LARGE` / `SVG_HAS_ENTITY` / `SVG_TOO_COMPLEX` 等错误码映射文案。
+为防止合规体积内的 `project.json` 塞入极端数量的图层、元素或关键帧拖垮合成与存储，`ProjectMaterializer.materialize` 在物化阶段对 HTTP 工程导入与 `template.apply` 模板套用统一实施以下硬上限（超限一律拒绝为 `IMPORT_MALFORMED`）：
 
----
+| 校验维度 | 硬上限 | 对齐依据 |
+| --- | --- | --- |
+| 图层总数 | `64` | 与 `layer.create` 上限一致 |
+| 单图层名称长度 | `64` 字符 | 与 `layer.create` 上限一致 |
+| 图层 `opacity` | 有限浮点数且 $\in [0, 1]$ | 防止 `NaN` 或越界透明度在合成期产生像素噪点或整层消失 |
+| 时间轴总数 | `16` | 与 `timeline.create` 上限一致 |
+| 单条时间轴关键帧总数 | `2048` | 与关键帧编辑操作上限一致 |
+| 单属性轨关键帧数 | `256` | 与关键帧编辑操作上限一致 |
+| 全工程元素总数 | `4096` | 画布元素结构天花板 |
+| 单墙引用的不同图片数 | `config.images.max-per-wall`（默认 `16`） | 与 `element.add`（`type = image`）单墙图片配额一致 |
 
-## 7. 风险登记
+### 5.2 `scripts.json` 安全重校验
 
-| 风险 | 缓解 |
-|---|---|
-| zip 炸弹 / 路径穿越 | 流式三闸 + 条目名规范化后 startsWith 校验（§5.1） |
-| 恶意 SVG（XXE / 实体爆炸 / 脚本 / 超大 path） | 拒 DOCTYPE/ENTITY + 剥离危险节点 + 复杂度上限 + 后端 PathDValidator 兜底（§5.3） |
-| **双端渲染不一致**（前端 PathParser.ts 子集 vs 后端全文法） | SVG d **归一化到 M/L/Q/C/Z 子集**（§3.3 步骤 5）+ snapshot CI 新增用例 |
-| `fill-rule` 保真度 | 按 SVG 显式承载（D9）；带洞图形回归用例 |
-| 前端 mirror state 滞后 | 导出前强制 sync 一次（§3.1 步骤 1；§10 待决是否改取服务端权威） |
-| 地图量化损失 | 渐变 / 抗锯齿 / 细线经 MC 调色板量化会损失——用户文案讲清「导入后是像素化效果」 |
-| **SVG 动画无法转时间轴** | 见下方专项 |
+导入脚本严格遵循零信任原则（对齐 `docs/security.md §13.5`）：全量重跑 `ScriptRuleValidator` 与 `ConditionEvaluator.checkSyntax`，未知 `templateId` 强制进入 `Blocked` 不可执行态，运行期照常受 `ScriptBudget` 三闸与变量写命名空间白名单约束。
 
-**专项：SVG 动画 → 时间轴（本期明确不做，记录评估结论）**
-真实世界动画 SVG 普遍依赖 CSS `@keyframes`（我们无 CSS 解析器）+ SMIL 渐变 stop 动画（我们无此概念）+ `stroke-dashoffset` 画线（无对应能力）+ 多周期并发（一墙一时刻只播一条时间轴）。即便将来单做「SVG 动画→时间轴」转换器，也只有 A 档（平移/旋转/透明度/keySplines→cubicBezier）能近无损映射，B/C 档（颜色流动/morph/motion-path）撞核心模型。**结论**：动画 SVG 一律取首帧静态化；「SVG 动画→时间轴」作为 0.9+ 独立候选（约 50h，只做 A 档 + CSS 解析），不进 0.8。
+### 5.3 SVG 导入安全闸（`docs/security.md §4.7`）
 
----
-
-## 8. 分期与工时（历史记录）
-
-> SVG 跳过「阶段 0 单 path 图标上传甜点」（用户选「只做矢量完整版」），直接 B1 起。
-
-**Part A — `.canvas` 导入导出（✅ 已实装 A1-A4）**
-
-| 批 | 内容 | 状态 |
-|---|---|---|
-| A1 | 导出（前端）：fflate 打包 + manifest + project.json + 缩略图 + 收集图片塞 assets + 菜单入口/下载 | ✅ 已实装 |
-| A2 | 导入解析 + 安全（后端）：`/api/project/import` + zip 安全解包三闸 + manifest/spec + ProjectState 校验 + 尺寸匹配 + assets magic 解码 + 孤儿轨/缺资源扫描 + 灌会话/广播/audit | ✅ 已实装 |
-| A3 | 导入前端 UI：文件选择/进度/错误 + warning 清单 + 破坏性导入二次确认 + i18n | ✅ 已实装 |
-| A4 | 脚本纳入（D3）：导出 `scripts.json` + 导入 wallId 重绑/重校验/写 wall_scripts + user 变量定义（D8） | ✅ 已实装 |
-
-**Part B — SVG 矢量导入（✅ 已实装 B0-B5）**
-
-| 批 | 内容 | 状态 |
-|---|---|---|
-| B0 | SVG 安全三闸（preParseGuard / stripDangerous / complexityGuard）| ✅ 已实装 |
-| B1 | 前端 SVG 文档解析器：DOMParser 遍历 + basic shapes→path + transform 烘焙 + fill/stroke 映射 | ✅ 已实装 |
-| B2 | 多 `PathElement` 成组插入：d 归一化（A/S/T/H/V 展开）+ element.add 循环写入 | ✅ 已实装 |
-| B3 | gradient 降维近似 + viewBox/尺寸映射 + 内嵌位图抽取（/api/upload → ImageElement） | ✅ 已实装 |
-| B4 | fillRule 双端实现（D9）：PathElement.fillRule + PathRenderer + PreviewRenderer.drawPath | ✅ 已实装 |
-| B5 | UI 入口（SvgImportModal / TopBar 溢出菜单）+ i18n + 大白话提示 + 文档回填 | ✅ 已实装（含本次文档回填） |
-
-**仍未实装**：`assets/icons/*.svg`（IconElement 用户自定义 SVG 图标的导出/导入路径），留后续版本。
+| 防护层级 | 规则与阈值 | 实现模块 |
+| --- | --- | --- |
+| 源文本体积闸 | 原始 SVG 字符串长度 ≤ **512 KB**（超限报 `SVG_TOO_LARGE`） | `svgSecurity.preParseGuard` |
+| XML 实体拦截 | 源串含 `<!DOCTYPE` 或 `<!ENTITY` 立即拒绝报 `SVG_HAS_ENTITY`；`DOMParser` 不解析外部实体 | `svgSecurity.preParseGuard` + `DOMParser` |
+| 危险标签与外链剥离 | 移除 `<script>` / `<foreignObject>` / `<use>` / `<symbol>` / `<animate*>` / `<set>` / `<style>`、`on*` 属性、`javascript:` 协议及一切非 `data:` 外链图片（零 SSRF 面） | `svgSecurity.stripDangerous` |
+| 几何复杂度熔断 | 形状数 ≤ **500**、累计路径顶点数 ≤ **50,000**（超限报 `SVG_TOO_COMPLEX`） | `svgSecurity.complexityGuard` |
+| 服务端二次兜底 | 每条生成的 `PathElement.d` 仍须通过后端 `PathDValidator`（命令子集、顶点数与坐标范围校验）；内嵌位图走 `/api/upload` 完整校验栈 | `ElementValidator` / `UploadHandler` |
 
 ---
 
-## 9. 文档回填清单（2026-06-21 完成状态）
+## 6. 前端集成
 
-| 文档 | 动作 | 状态 |
-|---|---|---|
-| `data-model.md §4` | 去掉「未实装」警示；§4.1 更新 `assets/icons/` 说明；§4.3 补 `fillRule` 加法说明；Part B 状态注释更新 | ✅ 已完成（2026-06-21） |
-| `security.md` | **新增 §4.7 SVG 导入安全**；威胁表加 **T16** | ✅ 已完成（2026-06-21） |
-| `protocol.md` | §7 工程状态模型补 `PathElement` 完整 type 定义（含 `fillRule`）；§5.3 补 SVG 导入走 element.add 说明；删除「Part B 未实装」失实注释 | ✅ 已完成（2026-06-21） |
-| `rendering.md` | 新增 §11（SVG 导入渲染）：fillRule 双端实现 + viewBox→画布坐标映射公式 + d 归一化到 M/L/Q/C/Z 子集 | ✅ 已完成（2026-06-21） |
-| `import-export.md` | 本文：Part B 状态标为已实装（B0-B5）；§2.4/§3.3/§5.3/§6.3/§8 据实更新 | ✅ 已完成（2026-06-21） |
-| `data-model.md §5.1` / `architecture.md §11` | config 新增 `limits.svg-import-max-kb` 等字段 | 部分（`security.md §4.7` 已提及默认值 512KB；config 字段声明留后续） |
-| `architecture.md` | 补「导入/导出数据流」节 | 留后续（非 0.8 Part B 文档回填范围） |
-| 用户文档（操作类） | 大白话讲「导出分享 / 导入工程 / 导入 SVG 是像素化、不支持动画」 | 留后续（操作类文档可等实现稳定后写，见「文档先行工作方式」纪律） |
+### 6.1 导出交互
 
----
+TopBar 溢出菜单提供「导出工程」入口，调用 `useProjectExport` 在本地完成缩略图渲染、资产收集与 `fflate` 压缩下载，失败时展示本地化错误提示。
 
-## 10. 未决问题（实现期回填）
+### 6.2 导入交互与覆盖确认
 
-- [ ] **fflate 的 zip 写入 API 易用度**——`fflate` 已在 `package-lock.json` 传递依赖，但其 zip 打包 API 是否满足前端用法需 spike 1h（备选 JSZip，体积大一个数量级）。
-- [ ] **导出取前端 mirror vs 服务端权威 state**——本期取 mirror + 导出前强制 sync（§3.1）；若实测 mirror 滞后坑多，再评估改后端导出（需同步改 §4.5）。
-- [ ] **缩略图渲染**复用前端 `LayerThumbnailRenderer` 还是后端 `WallPreviewService`——倾向前端（导出全客户端）。
-- [ ] **SVG path 节点数 / 总顶点数具体上限值**——B4 实测定。
-- [ ] **基本形状直映现成元素 vs 一律转 path**——简单矩形/正圆是否直映 `RectElement`/`CircleElement`（更可编辑）还是统一 `PathElement`（更简单），B2 定。
-- [ ] **SVG `<text>` 是否阶段 2 映射 TextElement**——本期 D10 不做，记录为后续候选。
+TopBar 溢出菜单「导入工程」打开 `ImportProjectModal`：由于 `.canvas` 导入会整体覆盖当前画布内容，提交前强制弹出破坏性替换二次确认；上传完成后自动应用下行快照，并以人类可读列表分类展示返回的非空 `warnings`。
+
+### 6.3 SVG 解析模块与导入弹窗
+
+- **编排入口**：`web/src/composables/useSvgImport.ts` 串联解析、内嵌位图上传与批量 `element.add` 发送。
+- **核心库（`web/src/lib/svg/`，8 个纯逻辑模块）**：`svgSecurity.ts`、`svgParse.ts`、`shapesToPath.ts`、`transform.ts`、`normalizeD.ts`、`bakePath.ts`、`fillMap.ts`、`svgToElements.ts`。
+- **交互入口**：TopBar 溢出菜单「导入 SVG」打开 `SvgImportModal.vue`（接受 `.svg` / `image/svg+xml`）；因 SVG 导入属于当前图层元素追加而非整墙覆盖，无需破坏性二次确认；触发 `SVG_TOO_LARGE` / `SVG_HAS_ENTITY` / `SVG_TOO_COMPLEX` 等错误码时通过 i18n 展示明确提示。
 
 ---
 
-## 11. 与现有契约的关系（指针）
+## 7. 关键约束与静态化边界
 
-本文是 0.8 的**契约总纲**。以下文档是被本文**升级 / 扩展**的下游契约，以本文为权威，实装时按 §9 回填：
+| 工程约束 | 处理机制 |
+| --- | --- |
+| 压缩包体积膨胀与路径穿越 | `CanvasArchive` 流式三闸计数 + 严格路径字符与条目名白名单校验（§5.1） |
+| 恶意或超复杂 SVG 输入 | 实体声明阻断 + 危险节点与外链剥离 + 500 形状 / 50,000 顶点熔断 + 后端 `PathDValidator` 兜底（§5.3） |
+| 前后端路径渲染一致性 | 前端 `normalizeD` 统一展开椭圆弧与简写指令至 `M/L/Q/C/Z` 绝对子集，显式同步 `fillRule`（§2.4 / §3.3） |
+| 跨环境 PNG 重编码指纹漂移 | `ProjectImporter.remapAssetSources` 自动将元素 `source` 重映射至本服落盘新指纹并回传 `asset-rehashed` 告警（§3.2） |
+| 调色板量化与像素化表现 | 导入的平滑渐变与细矢量曲线在地图输出端均经过 248 色调色板量化，UI 文案明确传达像素化渲染特性 |
+| 动画 SVG 静态化处理 | 真实动画 SVG 普遍依赖 CSS `@keyframes` 样式表、SMIL 渐变色标动画、`stroke-dashoffset` 描边推进及多独立周期并发，超出单时间轴关键帧属性模型范围；因此解析器统一剥离动画节点，提取静态首帧几何导入 |
 
-- `data-model.md §4`（`.canvas` 格式）：本文 D2/D3 + §2.1-2.3 升级它（「规划」→「实装定稿」+ 加 `scripts.json`）。
-- `security.md §4.4 / §13.5`：本文 §5.1/§5.2 沿用 + 补充；§5.3 新增 §4.7。
-- `scripting.md §2.1`（`ScriptRule`）：本文 §2.3 `scripts.json` 直接复用其结构，不改脚本数据模型。
-- `protocol.md §7`（`ProjectState`）：本文 `project.json` 直接复用，不改元素 / 状态数据模型（SVG 导入 D5 不新增元素类型）。
+---
+
+## 8. 关联契约
+
+- **`docs/data-model.md §4`**：`.canvas` 归档字段字典与持久化表结构映射。
+- **`docs/template-pack.md`**：`manifest.kind = "pack"` 模板包参数声明、替换与工坊隔离规范。
+- **`docs/security.md §4.4 / §4.7 / §13.5`**：`.canvas` 归档解包、SVG 矢量导入与脚本导入的安全规范。
+- **`docs/scripting.md §2.1`**：`scripts.json` 复用的 `ScriptRule` 数据模型与校验规则。
+- **`docs/protocol.md §5.3 / §7`**：`element.add` 协议载荷与 `PathElement`（含 `fillRule`）状态定义。
+- **`docs/rendering.md §11`**：`PathElement.fillRule` 双端渲染实现与 SVG `viewBox` 到画布像素空间的坐标映射公式。

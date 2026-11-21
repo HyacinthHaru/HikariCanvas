@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""0.6 P3：插值共享测试向量生成器（docs/rendering.md §9.3/§9.4）。
+"""插值共享测试向量生成器（docs/rendering.md §9.3/§9.4）。
 
 本脚本是规格的**第三方参照实现**（Python float = IEEE754 double，与 Java/JS 同精度）：
 按 rendering.md §9.3 伪码逐行实现 cubic-bezier 求解、按 §9.4 细则实现 sRGB 线性空间
@@ -76,7 +76,7 @@ CUSTOM_BEZIERS = [
     (0.9, 0.05, 0.1, 0.95),
     (0.5, 0.5, 0.5, 0.5),
     (1.0, 1.0, 0.0, 0.0),
-    # P3 审查 #1：强制牛顿不收敛→二分兜底的区域（x1=x2=0 / x1=x2=1），
+    # 强制牛顿不收敛→二分兜底的区域（x1=x2=0 / x1=x2=1），
     # 保护 BISECT_MAX / EPS / 区间更新式不被任一端静默改动
     (0.0, 0.0, 0.0, 1.0),
     (1.0, 0.0, 1.0, 1.0),
@@ -156,7 +156,7 @@ COLOR_PAIRS = [
     ("#FFFFFF", "#00000000"),
 ]
 
-# 含过冲 eased（cubicBezier y 超 [0,1] 时 lerp 的 t 可越界——验证 clamp 行为，审查 #10）
+# 含过冲 eased（cubicBezier y 超 [0,1] 时 lerp 的 t 可越界——验证 clamp 行为）
 COLOR_T = [-0.5, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5]
 
 

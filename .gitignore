@@ -16,9 +16,6 @@ out/
 .vscode/
 *.code-workspace
 
-# Claude Code
-.claude/
-
 # Eclipse
 .project
 .classpath
@@ -58,7 +55,7 @@ dist-ssr/
 *.local
 .env
 
-# M5-C1 前端字体：由 ./gradlew downloadFonts 从 plugin/build/downloaded-fonts/ 同步进来
+# 前端开发期字体同步目录（由 Gradle syncFontsToWeb 生成）
 web/public/fonts/
 .env.*
 !.env.example
@@ -106,27 +103,17 @@ run/
 *.bak
 *~
 
-# 工具产生的本地台账 / 草稿，不入库
+# 本地辅助文件与草稿，不入库
+.claude/
 .superpowers/
-
-# 其他 AI 助手的项目说明文件。内容是 CLAUDE.md 的镜像（仅署名规则一行不同），
-# 入库会变成第二份需要同步维护的契约副本 —— 两份迟早漂移。以 CLAUDE.md 为唯一权威。
+CLAUDE.md
 AGENTS.md
 
-# 云同步（iCloud / Dropbox 等）产生的冲突副本：`foo 2.ttf` / `Bar 2.java`。
-# 2026-07-27 实测：同步服务往 plugin/build/ 里塞了 46 个这种副本（39 个是字体），
-# 把 shadowJar 从 85MB 撑到 195MB；还把 0.9.9 改包名时删掉的 moe/ 旧包目录
-# （361 个文件）和 0.9.16 退役的 7 个 YAML 模板整批恢复回工作区。
-# **建议把本项目目录移出同步范围**，至少排除 build/ 与 node_modules/。
+# 云同步冲突副本
 *[0-9] [0-9].*
 * 2.*
 * 3.*
 
-# 渲染测试输出（CI 产出保留 expected，actual 不提交）
-rendering-test/actual-java/
-rendering-test/actual-web/
-rendering-test/diff/
-
-# Python（rendering-test 一致性向量生成器的编译缓存）
+# Python 编译缓存（rendering-test 向量生成器）
 __pycache__/
 *.pyc

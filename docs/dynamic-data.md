@@ -1,10 +1,10 @@
-# 动态数据接入设计（0.4.0）
+# 动态数据接入设计
 
-> 本文是变量系统（0.4.0 起）的设计权威：所有数据模型 / 协议 / API 决策以本文为准。
+> 本文是变量系统与动态数据源的设计权威：所有数据模型、协议与 API 决策以本文为准。
 
-## 0. 目标 & 设计哲学
+## 1. 目标与设计原则
 
-**HikariCanvas 0.4.0 把"静态招牌"升级到"动态信息屏"**。覆盖场景：
+**HikariCanvas 动态数据子系统让招牌支持实时动态信息展示**。覆盖场景：
 - 路牌实时晚点 / 列车 ETA
 - 服务器公告 / 在线人数 / 玩家欢迎屏
 - PvP 比分实时更新
@@ -23,15 +23,15 @@
 
 ---
 
-## 1. 四层数据源
+## 2. 四层数据源
 
 ```
 ┌─ Tier 1: 玩家自定义变量（用户定义） ──────────────┐
 │   • 玩家在编辑器 UI 创建变量                       │
-│   • user/<name> 命名空间                          │
+│   • user/<name> / userglobal/<name> 命名空间       │
 │   • 手动改值（+/- 按钮 / 输入框 / 命令）          │
 │   • 可"让插件接管"（绑定 plugin namespace push）   │
-│   • 持久化到 .canvas / DB                         │
+│   • 持久化到 SQLite DB                            │
 ├─ Tier 2: 插件推送（专业接入） ─────────────────────┤
 │   • HikariCanvasAPI.setVariable(ns, key, v, ttl) │
 │   • <namespace>/<key> 命名空间                    │
@@ -52,9 +52,9 @@
 
 ---
 
-## 2. 数据模型
+## 3. 数据模型
 
-### 2.1 Variable record
+### 3.1 Variable record
 
 ```java
 public record Variable(
@@ -72,31 +72,27 @@ public record Variable(
 enum VarType { STRING, NUMBER, BOOLEAN, COLOR }
 ```
 
-### 2.2 VariableStore
+### 3.2 VariableStore
 
 - **Global store**：`Map<String fullName, Variable>` 共享
   - fullName = `<namespace>/<key>`（如 `user/red_score` / `bedwars/match_a.red_score`）
   - **key 只能用 `a-z A-Z 0-9 _ . -`**（`VariableStore.KEY_RE`）。中文 / 空格 / 其它符号一律拒；
     文档里的例子过去写过中文名，那种名字建不出来也解析不了，已全部换成 ASCII
-- **Per-wall ACL**：每个 wall 只能引用 global store 的变量；不存在 wall-scoped 变量（简化模型）
-- **持久化**：用户变量（`user/*` namespace）持久化到 DB；插件变量 / 系统变量 / PAPI 变量内存态，重启不保留
+- **Per-wall ACL**：每个 wall 只能引用 global store 的变量；per-wall 变量通过内部 `<ns>:<wallId>/<key>` 命名空间隔离
+- **持久化**：用户变量（`user/*` 与 `userglobal/*`）持久化到 SQLite DB；插件变量 / 系统变量 / PAPI 变量内存态，重启不保留
 
-### 2.3 引用语法
+### 3.3 引用语法
 
 文本字段（TextElement.text）含占位符：
 
 ```
 ${var:user/red_score}                            完整命名（user 变量必须写全，没有简写形态）
-${var:bedwars/score}                            插件变量
-${var:server.time}                              系统变量（点分号 alias 兼容）
+${var:bedwars/score}                             插件变量
+${var:system/server.time}                        系统变量
 ${var:papi/%player_name%}                        PAPI（斜杠形态；亦接受 ${var:papi.player_name} 点号形态）
 
 # fallback 语法
-${var:bedwars/score|fallback=0}                 变量不存在 / 过期时显示 0
-
-# 格式化（v0.4.0 不做，留 0.5.0）
-${var:server.time|format=HH:mm}
-${var:eta_minutes|format=int|suffix=min}
+${var:bedwars/score|fallback=0}                  变量不存在 / 过期时显示 0
 ```
 
 **正则**：`\$\{var:([^|}]+)(\|fallback=([^}]+))?\}`
@@ -104,30 +100,29 @@ ${var:eta_minutes|format=int|suffix=min}
 **namespace 注入 / 别名规则**（双端 interpolator 一致）：
 
 - `${var:user/X}` + `wallId="w-abc"` → 内部 `user:w-abc/X`（user 变量是 per-wall）
-- `${var:wall.X}` + `wallId="w-abc"` → 内部 `system:w-abc/wall.X`（{{SystemVariableProvider}} 按
+- `${var:wall.X}` + `wallId="w-abc"` → 内部 `system:w-abc/wall.X`（`SystemVariableProvider` 按
   per-wall namespace 注册 `wall.id` / `wall.alias` / `wall.owner` / `wall.owner_uuid`）；wallId 为
   null（模板 publish / 预览路径）跳过注入
 - `${var:scoreboard.<obj>.<player>}` → 内部 `scoreboard/<obj>.<player>`（点分号 alias →
-  slash；与 {{ScoreboardVariableProvider}} `store.create("scoreboard", "<obj>.<player>", …)` 存储
+  slash；与 `ScoreboardVariableProvider` `store.create("scoreboard", "<obj>.<player>", …)` 存储
   侧约定一致）
-- `${var:server.time}` 等系统点分号 alias 暂未实现完整映射（仅 wall.* / scoreboard.\* 注入）；
-  系统变量当前以 slash 形式访问：`${var:system/server.time}`。完整 dot-alias 留 0.4.1+
+- 系统全局指标统一以斜杠形式访问：`${var:system/server.time}`、`${var:system/server.online}` 等（仅 `wall.*` 与 `scoreboard.*` 支持点分号简写注入）
 - **PAPI 形态**：`resolveFullName`（双端）不解析 `papi:` 冒号语法——`${var:papi:%xxx%}` 会按
   字面 `papi:%xxx%` 查 store（必然 miss → fallback）。可用形态是 `${var:papi/%player_name%}`（斜杠）
   或 `${var:papi.player_name}`（点号）：interpolator resolve miss → `notifyDynamicLookup` →
-  {{PapiVariableBridge}} 把 `%xxx%` 编码成内部 store key `papi/pct_xxx_pct` 注册 + 5s 刷新。
+  `PapiVariableBridge` 把 `%xxx%` 编码成内部 store key `papi/pct_xxx_pct` 注册 + 5s 刷新。
 
 **跨墙隔离（写字面内部形态时）**：占位符里可以直接写 store 的内部形态（插件 namespace 就是靠
 这条透传的），但 per-wall 三族 `user:<wallId>/…` / `system:<wallId>/…` / `schedule:<wallId>/…`
 只认**本墙**的 wallId——写别的墙的 wallId 会被 `resolveFullName` 换成一个必然查不到的哨兵名，
-走 fallback 链显示 `???`，而不是把别人墙的变量值读出来（固化决策 12「namespace 严格隔离」）。
+走 fallback 链显示 `???`，而不是把别人墙的变量值读出来（见 §10.2 namespace 严格隔离）。
 `wallId == null` 的路径（模板预览 / publish）本来就查不到 per-wall 变量，不受影响。
 
 ---
 
-## 3. WS 协议扩展
+## 4. WS 协议扩展
 
-### 3.1 新 op 族
+### 4.1 新 op 族
 
 ```typescript
 // variable.create — 玩家创建用户变量
@@ -159,7 +154,7 @@ ${var:eta_minutes|format=int|suffix=min}
 } }
 ```
 
-### 3.2 state.patch 扩展
+### 4.2 state.patch 扩展
 
 VariableStore 变更通过 state.patch 推到客户端：
 
@@ -177,7 +172,7 @@ VariableStore 变更通过 state.patch 推到客户端：
 
 注意：variables 不在 ProjectState 内（per-wall），而在 global VariableStore，但 state.patch 仍走同 WS 通道。客户端的 VariableStore mirror 也是单例 store。
 
-### 3.3 HTTP 端点
+### 4.3 HTTP 端点
 
 - `GET /api/variable/list?wall=<wallId>` → 该 wall 引用的变量当前快照（暂未实装；ready payload 已能下发 wall 引用快照，前端不需要主动 fetch）
 - `GET /api/variable/list-all-namespaces?sessionId=<id>&wallId=<wallId>` → **所有可用 namespace + 已声明 keys**（编辑器 VariablePicker 自动补全用）
@@ -231,7 +226,7 @@ VariableStore 变更通过 state.patch 推到客户端：
 
 - `namespace`：用于在 placeholder 文本里引用的 namespace（如 `${var:system/server.time}`）。
 - `displayName`：UI 显示分组名（picker 标题等）。
-- `dynamic`：是否为动态 namespace（{@link VariableProvider#isDynamic()}）；动态 namespace `keys` 始终为空，编辑器应给出模板字符串说明（如 `scoreboard.<obj>.<player>` / `papi/%placeholder%`）。
+- `dynamic`：是否为动态 namespace（`VariableProvider.isDynamic()`）；动态 namespace `keys` 始终为空，编辑器应给出模板字符串说明（如 `scoreboard.<obj>.<player>` / `papi/%placeholder%`）。
 - `keys[i].key`：完整 key（不含 namespace 前缀）。
 - `keys[i].type`：`STRING` / `NUMBER` / `BOOLEAN` / `COLOR`。
 - `keys[i].description`：人类可读说明（可选）。
@@ -241,9 +236,9 @@ VariableStore 变更通过 state.patch 推到客户端：
 
 ---
 
-## 4. 插件 Push API
+## 5. 插件 Push API
 
-### 4.1 接口设计
+### 5.1 接口设计
 
 ```java
 package ac.haru.hikaricanvas.api;
@@ -315,7 +310,7 @@ public record VariableUpdate(
 - 异常体系：`NamespaceConflictException`（跨 plugin 冲突）+ `PluginNamespaceException`（Code = `NAMESPACE_NOT_REGISTERED` / `NAMESPACE_ACL_DENIED`），均 RuntimeException
 - 完整接入教程：`docs/api.md`
 
-### 4.2 插件接入示例
+### 5.2 插件接入示例
 
 ```java
 public class BedWarsPlugin extends JavaPlugin {
@@ -350,7 +345,7 @@ public class BedWarsPlugin extends JavaPlugin {
 }
 ```
 
-### 4.3 错误隔离
+### 5.3 错误隔离
 
 **HikariCanvas 内部**：
 - 所有 `setVariable` 调用包 `try-catch`：插件抛异常 → log + 该次 push 丢弃，**不影响 HikariCanvas 本身**
@@ -359,9 +354,9 @@ public class BedWarsPlugin extends JavaPlugin {
 
 ---
 
-## 5. 渲染期变量解析
+## 6. 渲染期变量解析
 
-### 5.1 线程模型
+### 6.1 线程模型
 
 **变量 resolve 不在 MC 主线程跑**：
 
@@ -382,7 +377,7 @@ public class BedWarsPlugin extends JavaPlugin {
   Tier 1 用户变量手动改值，无定时
 ```
 
-### 5.2 缓存
+### 6.2 缓存
 
 每个 Variable 内部含 `updatedAt` + `ttl`：
 - 读取时若 `now - updatedAt > ttl` → 标记 stale，但仍返回 cached value（避免渲染期阻塞）
@@ -394,7 +389,7 @@ public class BedWarsPlugin extends JavaPlugin {
 - 最大 永久（0 = 永久，玩家手动变量默认永久）
 - 默认 30s（Tier 2 没声明 TTL 时）
 
-### 5.3 fallback 链
+### 6.3 fallback 链
 
 ```
 渲染时取 ${var:X} 值：
@@ -406,11 +401,11 @@ public class BedWarsPlugin extends JavaPlugin {
 
 ---
 
-## 6. 编辑器 UX
+## 7. 编辑器交互与面板
 
-### 6.1 变量管理面板
+### 7.1 变量管理面板
 
-新组件 `VariablePanel.vue`，挂在 RightPanel 底部或 Topbar 按钮触发：
+组件 `VariablePanel.vue`，挂在 RightPanel 底部或 Topbar 按钮触发：
 
 ```
 ┌─ 变量管理 ──────────────────────────┐
@@ -433,7 +428,7 @@ public class BedWarsPlugin extends JavaPlugin {
 │   user/red_score              [number] │
 │     当前 "5" │ 默认 "0"             │
 │     [-1] [+1] [改值] [让插件接管]   │
-│   user/下一班车              [string] │
+│   user/next_train             [string] │
 │     当前 "08:30 站台 1"             │
 │     [✏ 编辑] [删除]                 │
 └─────────────────────────────────────┘
@@ -445,15 +440,12 @@ public class BedWarsPlugin extends JavaPlugin {
 - "类型化输入框"：number 用 numeric input；color 用 color picker；boolean 用 toggle
 - "删除"：弹确认 + 列出引用该变量的 wall 元素警告
 
-### 6.2 TextElement 内嵌入变量
+### 7.2 TextElement 内嵌入变量
 
-**0.4.0 朴素版**：textarea 直接输入 `${var:name}` 字面字符串。下方提供：
-- "插入变量"按钮 → 弹 Variable Picker → 选完插入到光标位置
-- live preview：textarea 下方 200ms debounce 显示最终渲染结果
+- **富文本标签（Chip）模式**：编辑器将 `${var:...}` 占位符渲染为内联蓝色胶囊标签（优先展示变量别名 > 当前值 > fallback > 默认值），鼠标悬停查看当前值，点击胶囊可弹出 Variable Picker 更换绑定或设置 fallback。
+- **字面编辑与插入**：亦支持直接输入 `${var:name}` 字面字符串，或点击「插入变量」按钮弹出 Variable Picker 在光标处插入，下方提供 200ms 防抖实时预览。
 
-**0.4.1 chip 版（独立 milestone）**：Notion-style contentEditable，变量渲染成蓝色 pill。鼠标 hover 显示当前值；点击 chip 弹 picker 改绑定。
-
-### 6.3 Variable Picker（自动补全）
+### 7.3 Variable Picker（自动补全）
 
 弹 popover 分类显示所有可用 variable：
 
@@ -472,8 +464,8 @@ public class BedWarsPlugin extends JavaPlugin {
 │   papi/%player_name%             │
 │   papi/%server_uptime%           │
 │ ▼ 👤 我的变量                    │
-│   user/red_score                  │
-│   user/下一班车                  │
+│   user/red_score                 │
+│   user/next_train                │
 └─────────────────────────────────┘
 ```
 
@@ -481,9 +473,9 @@ public class BedWarsPlugin extends JavaPlugin {
 
 ---
 
-## 7. 内置 Provider 实现
+## 8. 内置 Provider 实现
 
-### 7.1 Tier 3 系统变量
+### 8.1 Tier 3 系统变量
 
 | Variable | 数据源 | TTL | 备注 |
 |---|---|---|---|
@@ -501,7 +493,7 @@ public class BedWarsPlugin extends JavaPlugin {
 | `wall.owner_uuid` | wall self | 永久 | UUID |
 | `scoreboard.<obj>.<player>` | `Bukkit.getScoreboardManager()` | 10s | |
 
-### 7.2 Tier 4 PAPI 桥接
+### 8.2 Tier 4 PAPI 桥接
 
 实现位置：`plugin/.../variable/provider/PapiVariableBridge.java`。软依赖 PAPI（不在 build.gradle 加 dep），通过 reflection 调 `me.clip.placeholderapi.PlaceholderAPI.setPlaceholders(OfflinePlayer, String)`。PAPI 未装时 `refreshInterval=ZERO` → daemon 不调度，整 `papi/*` namespace 不出现，**零开销**。
 
@@ -541,19 +533,19 @@ public final class PapiVariableBridge implements VariableProvider {
 
 `handleDynamic` 接受两种形态（编码 `pct_xxx_pct` / 原文 `%xxx%`，前缀走 `papi/` 斜杠或 `papi.` 点号），统一编码为 `pct_<inner>_pct`；refresh 时按 tracker 内原文调 PAPI、按 encoded key 写 store。interpolator（`resolveFullName`，双端）对 papi namespace **不做任何特殊语法转换**——既不解析 `papi:` 冒号，也不主动编码 `%`。可用路径是玩家直接写 `${var:papi/%xxx%}` 或 `${var:papi.xxx}`，interpolator 按字面 resolve miss → `notifyDynamicLookup("papi/...")` → 本桥接 hook 接管编码 + 注册。
 
-**ACL**：HikariCanvas 不做额外 ACL，完全信任 PAPI（详见 §9.3）。
+**ACL**：HikariCanvas 不做额外 ACL，完全信任 PAPI（详见 §10.3）。
 
 **线程模型**：`refresh()` 在 daemon 线程跑——不切主线程。理由：(a) PAPI placeholder 量大时切主线程会拖 TPS；(b) 社区主流 placeholder stateless；(c) 失败 catch + log，旧 cached 保留，不污染。失败 placeholder 不阻断同 tick 内其他 placeholder 的 refresh（per-key try-catch）。
 
 PAPI placeholder 自动 wrap 为 `papi/<encoded>` 变量；TTL 默认 5s（PAPI placeholder 通常是查询型）。
 
-### 7.3 内置 Manual Schedule Provider（兜底列车功能）
+### 8.3 内置 Manual Schedule Provider（兜底列车功能）
 
 零外部依赖的"时刻表" provider，让玩家不依赖第三方铁路插件也能做基础站牌。支持每 wall 独立的分钟 / 秒精度，`is_arriving` 阈值可配（默认 60s）。
 
 - 玩家在 wall 的 "Schedule Manager" panel 配时刻表 + 选精度（minute / second）
 - 内置 provider 暴露 **15 个变量**（namespace = `schedule:<wallId>`；8 个基础 + 第二班次 `next2_*` 7 个；
-  实测见 {{ManualScheduleProvider}}.ALL_KEYS）：
+  见 `ManualScheduleProvider.ALL_KEYS`）：
 
 | 变量 | 类型 | 示例 | 说明 |
 |---|---|---|---|
@@ -594,11 +586,11 @@ dynamic:
 
 ---
 
-## 8. 持久化
+## 9. 持久化
 
-### 8.1 用户变量（`user/*` namespace）
+### 9.1 用户变量（`user/*` namespace）
 
-存到 `data.db` 新表：
+存到 `data.db` 的 `user_variables` 表（服务器级与跨重启状态，不放入 `ProjectState`）：
 
 ```sql
 CREATE TABLE IF NOT EXISTS user_variables (
@@ -614,25 +606,19 @@ CREATE TABLE IF NOT EXISTS user_variables (
 );
 ```
 
-**Migration**：V011__user_variables.sql
+**Migration**：`V011__user_variables.sql`
 
-### 8.2 插件 / 系统 / PAPI 变量
+### 9.2 插件 / 系统 / PAPI 变量
 
 **不持久化**——重启后由插件 / 系统重新 push。这是 Push 模式的自然属性。
 
 如果插件没及时 push，渲染时走 fallback 链。
 
-### 8.3 .canvas 工程文件
-
-`ProjectState` 增加 `userVariables: Map<String, Variable>` 字段：
-- export `.canvas` 时序列化
-- import `.canvas` 时反序列化 + 写入 user_variables 表
-
 ---
 
-## 9. 权限模型
+## 10. 权限模型
 
-### 9.1 玩家权限节点
+### 10.1 玩家权限节点
 
 | 权限 | default | 用途 |
 |---|---|---|
@@ -644,21 +630,21 @@ CREATE TABLE IF NOT EXISTS user_variables (
 | `canvas.var.bind` | op | 让 user/* 变量被插件接管（敏感操作） |
 | `canvas.var.command` | op | 用 `/canvas var` 命令 |
 
-> **per-wall user 变量的权限实装说明**：`VariableOpDispatcher.checkPermission` 对所有 non-bind 的 per-wall user/* 操作（`variable.create / update / set / delete`）统一按 owner 与否选 `canvas.var.write.own` / `canvas.var.write.any`；`variable.bind` 走 `canvas.var.bind`。`canvas.var.delete.own/.any` 两个节点仍在 `paper-plugin.yml` 声明，但**当前代码无任何引用**（删除走 write 节点）。全局用户变量（`userglobal/*`）的删除走另一套节点族 `canvas.var.global.delete.own/.any`（见 §17.3）。
+> **per-wall user 变量的权限实装说明**：`VariableOpDispatcher.checkPermission` 对所有 non-bind 的 per-wall user/* 操作（`variable.create / update / set / delete`）统一按 owner 与否选 `canvas.var.write.own` / `canvas.var.write.any`；`variable.bind` 走 `canvas.var.bind`。`canvas.var.delete.own/.any` 两个节点仍在 `paper-plugin.yml` 声明，但**当前代码无任何引用**（删除走 write 节点）。全局用户变量（`userglobal/*`）的删除走另一套节点族 `canvas.var.global.delete.own/.any`（见 §14.2）。
 
-### 9.2 插件 namespace ACL
+### 10.2 插件 namespace ACL
 
 - 插件注册 namespace 时**自己声明**自己的 namespace
 - HikariCanvas 拒绝插件 A 推 plugin B 的 namespace（防 spoof）
 - 跨插件污染防御：注册中心 `Map<namespace, RegisteringPlugin>`，重复注册 throw
 
-### 9.3 PAPI 桥接 ACL
+### 10.3 PAPI 桥接 ACL
 
 - HikariCanvas 不做额外 ACL，**完全信任 PAPI**
 - PAPI placeholder `%player_X_balance%` 的 ACL 由 PAPI / Vault / 经济插件自己负责
 - HikariCanvas 只是 placeholder string 的 forwarder
 
-### 9.4 变量值长度限制
+### 10.4 变量值长度限制
 
 防止 push 滥用：
 - 单变量值 ≤ 4096 字符（够长字符串但不会爆内存）
@@ -667,9 +653,9 @@ CREATE TABLE IF NOT EXISTS user_variables (
 
 ---
 
-## 10. 性能 / 节流
+## 11. 性能与节流
 
-### 10.1 Wall dirty 合并
+### 11.1 Wall dirty 合并
 
 ```
 插件 1ms 内连推 100 次（同一变量） →
@@ -681,20 +667,20 @@ CREATE TABLE IF NOT EXISTS user_variables (
 所以 push 频率不影响渲染负担——push 是廉价的写操作。
 ```
 
-### 10.2 Push 限流
+### 11.2 Push 限流
 
 防卡服务器：
 - 单插件 push > 100/s → 警告 + 限流（drop tail）
 - 全局 push > 1000/s → 警告 + reject 新 push（保护期 10s）
 - 限流策略可在 `config.yml` 调
 
-### 10.3 编辑器 live preview throttle
+### 11.3 编辑器实时预览节流
 
 textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重画）。
 
 ---
 
-## 11. 已知限制 & 边界
+## 12. 已知限制与边界
 
 | 项 | 说明 |
 |---|---|
@@ -709,53 +695,29 @@ textarea 输入 → 200ms debounce → 渲染预览（避免每 keystroke 都重
 
 ---
 
-## 13. 后续路线指针
-
-动态数据之上的后续路线（性能 Benchmark、时间轴编辑器、视觉运行时）已各有权威设计文档，不在本文展开：
-
-- 性能 Benchmark：`docs/benchmark.md`
-- 时间轴编辑器：`docs/timeline.md`
-- 视觉积木脚本运行时：`docs/scripting.md`
-
-> 脚本是上层（条件分支 + 副作用），时间轴是被编排的素材（脚本可 playTimeline / pause / seek），二者同画布共存。
-
----
-
-## 14. 不在 0.4.0 范围
-
-留 v1.x：
-- 自定义脚本（Blockly 留 0.6.0+）
-- 多人协作 OT/CRDT
-- 完整动画 / 时间轴（留 0.5.0）
-- per-player personalized 变量（每玩家看不同值，性能成本高）
-- 变量数据类型扩展（list / map / object 留 1.x）
-- 加密 / 签名变量（防恶意插件篡改）
-
----
-
-## 16. 设计决策汇总
+## 13. 设计决策汇总
 
 1. **Push 模式** > Pull 模式（性能 / 解耦 / 扩展性）
 2. **变量是 string**（业务语义在插件侧，HikariCanvas 不解析）
-3. **用户变量持久化**（DB + .canvas）
+3. **用户变量持久化**（SQLite DB）
 4. **插件 / 系统 / PAPI 变量不持久化**（重启 push 重建）
 5. **resolve 不在主线程**（ProjectionThrottler 用 cache，async daemon 后台拉）
 6. **namespace 严格隔离**（防 plugin spoof）
 7. **PAPI 桥接零 ACL**（信任 PAPI 自己）
-8. **fallback 链**：cached → ${var:X|fallback=...} → default → "???"
+8. **fallback 链**：cached → `${var:X|fallback=...}` → default → `"???"`
 9. **TTL 全局 min 100ms**（防虐用）+ **默认 30s**
 
 ---
 
-## 17. 0.4.3 全局用户变量（userglobal namespace）
+## 14. 全局用户变量（`userglobal` namespace）
 
-user 变量按 wall 持久化（namespace = `user:<wallId>/X`），不能跨画布共享。为支持"全服可见、跨画布共享"的玩家自定义变量（如全服活动比分、公告状态等），引入独立 namespace `userglobal/<key>`（不带 wallId 后缀）。
+`user` 变量按 wall 持久化（namespace = `user:<wallId>/X`），不能跨画布共享。为支持"全服可见、跨画布共享"的玩家自定义变量（如全服活动比分、公告状态等），提供独立 namespace `userglobal/<key>`（不带 wallId 后缀）。
 
-### 17.2 数据模型
+### 14.1 数据模型
 
-新 namespace：`userglobal/<key>`（key 规则同 user 变量：`[a-zA-Z0-9_.-]+` ≤ 64）。
+独立 namespace：`userglobal/<key>`（key 规则同 user 变量：`[a-zA-Z0-9_.-]+` ≤ 64）。
 
-**V015 migration** 新表 `user_global_variables`：
+**V015 migration** 表 `user_global_variables`：
 
 ```sql
 CREATE TABLE IF NOT EXISTS user_global_variables (
@@ -774,7 +736,7 @@ CREATE INDEX idx_user_global_variables_owner ON user_global_variables(owner_uuid
 
 注：name 是 PRIMARY KEY（全服唯一）— 全局变量名不能与其他玩家创建的重名。
 
-### 17.3 ACL
+### 14.2 ACL
 
 - **外部插件禁推 `userglobal/*`**：`userglobal` 加入 `PluginNamespaceRegistry.RESERVED_NAMESPACES`。
   插件 `registerNamespace("userglobal", ...)` 抛 IllegalArgumentException。插件仍可用自己
@@ -787,13 +749,13 @@ CREATE INDEX idx_user_global_variables_owner ON user_global_variables(owner_uuid
   - `canvas.var.global.delete.any` (default: op)
 - **`variable.bind` 不在上面这套 own/any 里**：绑定 = 把变量交给插件 push 接管，是敏感操作，
   全局变量与 per-wall 变量一视同仁，统一查 `canvas.var.bind`（default op）。走 own 节点会让
-  「默认权限玩家把自己建的全局变量绑到任意插件 namespace」变成默认可做，与 §9.1 的 bind 定位矛盾。
+  「默认权限玩家把自己建的全局变量绑到任意插件 namespace」变成默认可做，与 §10.1 的 bind 定位矛盾。
 - **脚本积木改全局变量**：脚本没有发起人身份，只能以"墙"的身份写，规则是 owner 必须对得上——
   只有变量 owner == 墙 owner 才允许写，没有 admin override（见 `security.md §13.8`）。
 - **类型冲突**：name 已存在（任意 owner 创建过）→ 拒 `VARIABLE_EXISTS`；只能删原 + 重建
 - **owner 离开后**：变量永久保留（同 user_variables 现状）；admin 可手动删
 
-### 17.4 配额
+### 14.3 配额
 
 ```yaml
 dynamic:
@@ -806,9 +768,9 @@ dynamic:
 - 该 owner_uuid 已有 N ≥ 500 → 拒 `OWNER_QUOTA_EXCEEDED`
 - 全服总数 ≥ 10000 → 拒 `GLOBAL_QUOTA_EXCEEDED`
 
-### 17.5 WS 协议
+### 14.4 WS 协议
 
-复用 0.4.0 `variable.*` 5 op，**加 `scope` 字段**：
+复用 `variable.*` 5 个 op，通过 `scope` 字段区分作用域：
 
 ```typescript
 // variable.create payload
@@ -816,7 +778,7 @@ dynamic:
     "name": "red_score",
     "type": "NUMBER",
     "defaultValue": "0",
-    "scope": "global"   // 0.4.3 新增；缺省 "wall" 保留 0.4.0 行为（per-wall user 变量）
+    "scope": "global"   // 缺省 "wall" 为 per-wall user 变量
 }
 ```
 
@@ -826,7 +788,7 @@ dynamic:
 
 ack 含 `{ fullName: "userglobal/red_score" }`。
 
-### 17.6 interpolator 行为
+### 14.5 interpolator 行为
 
 `${var:userglobal/X}` 字面查询 store（**不**注入 wallId）。同 user 变量风格：
 - `${var:user/X}` → `user:<wallId>/X`（注入）
@@ -834,7 +796,7 @@ ack 含 `{ fullName: "userglobal/red_score" }`。
 
 interpolator.resolveFullName 不动；天然支持（fallback 路径返字面）。
 
-### 17.7 state.patch 广播：所有 session
+### 14.6 state.patch 广播：所有 session
 
 per-wall 变量变更只推该 wallId 的 session。**全局变量变更要广播给所有连接的 session**：
 
@@ -847,32 +809,32 @@ VariableStore.ChangeListener 触发时，HikariCanvas listener 检测：
 - `event.fullName.startsWith("userglobal/")` → 走 broadcastToAll
 - 否则走 broadcastToWall（现有 referencingWalls 路由）
 
-### 17.8 Picker / UI 改造
+### 14.7 Picker 与面板展示
 
-VariablePicker 新分组：
+VariablePicker 分组：
 - 👤 **我的**（wall 局部）
 - 🌐 **我的全局变量**（owner = self 的 userglobal/*）
 - 🌐 **其他全局变量**（owner ≠ self 的 userglobal/*，显示只读 + owner 名）
 - 🚂 列车 / 📦 插件 / 🔌 PAPI / 🎯 系统
 
-NewVariableDialog 加 **scope toggle**：
+NewVariableDialog 提供 **scope toggle**：
 - [ 本 wall | 全局 ]
 - 全局模式下提示文案："其他玩家可读取，但只有你和管理员能修改"
 
 VariablePanel 行内显示 owner_name（自己 = 不显，他人 = 显 owner badge）+ 只读时禁用编辑控件。
 
-### 17.9 别名（复用 0.4.2）
+### 14.8 变量别名
 
-`variable_aliases` 表已支持任意 fullName（含 userglobal）。每 wall 独立别名：
+`variable_aliases` 表支持任意 fullName（含 `userglobal`）。每 wall 独立别名：
 - wall A 给 `userglobal/red_score` 起别名 "红队"
 - wall B 给同变量起别名 "Red Team"
 
-### 17.10 .canvas 文件
+### 14.9 `.canvas` 文件导出约定
 
-**不入 .canvas 工程文件导出**。理由：全局变量是服务器级状态（owner_uuid + 跨 wall 共享），
-导入到另一服务器时无意义。引用全局变量的 wall 在导入后该占位符走 fallback "???"。
+**不入 `.canvas` 工程文件导出**。理由：全局变量是服务器级状态（owner_uuid + 跨 wall 共享），
+导入到另一服务器时无意义。引用全局变量的 wall 在导入后该占位符走 fallback `"???"`。
 
-### 17.11 删除联动
+### 14.10 删除联动
 
 owner / admin 删除 `userglobal/red_score`：
 1. DB DELETE FROM user_global_variables WHERE name = ?
@@ -882,15 +844,15 @@ owner / admin 删除 `userglobal/red_score`：
 
 ---
 
-## 18. 0.4.4 铁路网络（线路 / 站点 / 车次 / 时刻表）
+## 15. 铁路网络（线路 / 站点 / 车次 / 时刻表）
 
-ManualScheduleProvider 是**纯 per-wall**：每个 wall 独立配自己的时刻表，100 个地铁屏 = 100 套独立配置，无法共享"1 号线"概念。铁路网络引入完整抽象 + **真实地铁系统语义**：
+`ManualScheduleProvider` 是**纯 per-wall**：每个 wall 独立配自己的时刻表，100 个地铁屏 = 100 套独立配置，无法共享"1 号线"概念。铁路网络引入完整抽象与真实地铁运营语义：
 
 - 线路 / 站点 / **车次（含服务类型 / 编组 / 区间 / 备注）** / **每站详细时刻表**
 - wall 编辑器内下拉选**线路 + 本站 + 方向**自动绑定该站时刻，**改一处全服同步**
 - wall 上可展示"A01 次 → 郑州东（6 节 大站快车）"完整运营语义
 
-### 18.2 数据模型（5 表，V016 migration）
+### 15.1 数据模型（5 表，V016 迁移）
 
 ```sql
 -- 线路（如 "1 号线" / "2 号线"）
@@ -959,7 +921,7 @@ CREATE INDEX idx_rail_timetable_station ON rail_timetable(station_id);
 -- wall 绑定到某线某站某方向
 CREATE TABLE wall_rail_bindings (
     wall_id TEXT PRIMARY KEY,
-    line_id TEXT,                     -- null = 未绑定（fallback 到 0.4.0 ManualSchedule）
+    line_id TEXT,                     -- null = 未绑定（回退到 ManualScheduleProvider）
     station_id TEXT,
     direction TEXT,                   -- "up" / "down" / "both"
     updated_at INTEGER NOT NULL,
@@ -969,7 +931,7 @@ CREATE TABLE wall_rail_bindings (
 );
 ```
 
-### 18.3 计算逻辑
+### 15.2 计算逻辑
 
 `RailScheduleProvider`（接替 / 补充 `ManualScheduleProvider`）：
 
@@ -978,19 +940,19 @@ CREATE TABLE wall_rail_bindings (
 2. 取前两班 ≥ 当前时刻（or 过零点回首班）
 3. JOIN `rail_runs` 拿 run_number / service_type / cars / end_station_id / notes
 4. JOIN `rail_stations` 拿 terminus name
-5. 暴露到 `schedule:<wallId>/*` 变量（兼容 0.4.0 schedule namespace）
+5. 暴露到 `schedule:<wallId>/*` 变量（与单墙时刻表共享 `schedule` namespace）
 
-实测（{{RailScheduleProvider}}.ALL_RAIL_KEYS）：rail-bound wall 共 push **29 个 key** =
+实测（`RailScheduleProvider.ALL_RAIL_KEYS`）：rail-bound wall 共 push **29 个 key** =
 **15 个与 ManualSchedule 共享的基础 key**（`SHARED_BASE_KEYS`，让旧 wall 文本无感升级）+
 **14 个车次专属 key**（`RAIL_ONLY_KEYS`，next 7 + next2 7）。`unbind` 时只删 14 个 rail-only key，
-共享 15 个保留交回 ManualScheduleProvider。
+共享 15 个保留交回 `ManualScheduleProvider`。
 
-**关键**：每站时刻**精确从 rail_timetable 读**，不再走"travel_seconds 均匀推算"。
+**关键**：每站时刻**精确从 `rail_timetable` 读**，不再走"travel_seconds 均匀推算"。
 这样支持站间不均匀（如长区间 vs 短区间）+ 大站快车跳站 + 区间车不到全线。
 
-### 18.4 暴露变量（含车次语义）
+### 15.3 暴露变量（含车次语义）
 
-兼容 0.4.0 已有的 `next_*` / `next2_*` 字段，新增车次语义字段：
+兼容单墙时刻表已有的 `next_*` / `next2_*` 字段（见 §8.3），新增车次语义字段：
 
 | 变量 | 例子 | 备注 |
 |---|---|---|
@@ -1002,7 +964,7 @@ CREATE TABLE wall_rail_bindings (
 | `schedule:<wallId>/next_notes` | "末班车" / "" | 备注（null → 空字符串） |
 | `schedule:<wallId>/next_arrival` | "06:02:30" | 该站精确**到达**时刻（读 `arrival_time`；始发站无到达 → fallback `departure_time`；两列皆空 → 空串） |
 | `schedule:<wallId>/next_departure` | "06:03:00" | 该站精确**发车**时刻（读 `departure_time`；终到站无发车 → fallback `arrival_time`；两列皆空 → 空串）。**与 `next_arrival` 是两个独立字段**：中间站两列均非空时各取本列、互不相等 |
-| `schedule:<wallId>/next_eta_*` | 同 0.4.0 | 兼容旧 wall 引用 |
+| `schedule:<wallId>/next_eta_*` | 同 §8.3 | 兼容旧 wall 引用 |
 | `next2_*` 同上 | 第二班 |
 | 旧 `is_arriving / arrival_status / precision` | 保留 | 兼容 |
 
@@ -1014,9 +976,9 @@ ETA ${var:schedule.next_eta_mmss}
 ${var:schedule.next_notes}
 ```
 
-### 18.5 UI
+### 15.4 编辑器界面
 
-#### 新 modal：铁路网络管理（TopBar 火车图标二级菜单）
+#### 铁路网络管理弹窗（TopBar 火车图标二级菜单）
 
 ```
 ┌─ 铁路网络 ──────────────────────────────────────────┐
@@ -1034,7 +996,7 @@ ${var:schedule.next_notes}
 └──────────────────────────────────────────────────────┘
 ```
 
-#### 车次详情编辑（modal 内子页 / inline 展开）
+#### 车次详情编辑（弹窗内子页 / 行内展开）
 
 ```
 车次 A01 ◊ 1 号线 ◊ up 方向
@@ -1060,18 +1022,18 @@ ${var:schedule.next_notes}
 - [区间起 / 止] 起 / 止站选择
 - → 生成所有 timetable rows，**预览后可逐站调整**
 
-#### Schedule Manager modal 改造（保持现状 + 加铁路绑定）
+#### Schedule Manager 弹窗（兼容单墙模式 + 铁路绑定）
 
-顶部加 **"铁路网络绑定"** 段：
+顶部提供 **"铁路网络绑定"** 段：
 - ☐ 启用铁路网络模式
 - [线路] 1 号线 ▼
 - [本站] 郑州火车站 ▼
 - [方向] up / down / both
-- 启用后下方 entries 灰显（自动从 timetable 计算）；关闭则走 0.4.0 ManualSchedule
+- 启用后下方 entries 灰显（自动从 timetable 计算）；关闭则走 `ManualScheduleProvider`
 
-### 18.6 ACL / 权限节点
+### 15.5 ACL 与权限节点
 
-实测（{{RailOpDispatcher}}.checkPermission + paper-plugin.yml）— **5 个 rail 节点 + 复用 schedule.any**，
+实测（`RailOpDispatcher.checkPermission` + `paper-plugin.yml`）— **6 个 rail 节点 + 复用 `schedule.any`**，
 **没有** `canvas.rail.run.edit.*` / `canvas.rail.station.*` 独立节点：
 
 - `canvas.rail.line.create` (default: true) — 任何玩家可建线路
@@ -1083,11 +1045,11 @@ ${var:schedule.next_notes}
   非每张子表配独立 owner 字段）；`rail.line.delete` 走 `delete.own/.any`；`rail.line.list / rail.line.detail`
   完全开放（只读）。
 
-### 18.7 WS 协议（新 13 个 op）
+### 15.6 WS 协议（13 个 op）
 
-> {{RailOpDispatcher}} switch 共 **13 op**：除下列 11 个写/查 op 外，另有 2 个只读 op
+> `RailOpDispatcher` switch 共 **13 个 op**：除下列 11 个写 op 外，另有 2 个只读 op
 > `rail.line.list`（列全部线路）+ `rail.line.detail { lineId }`（聚合返该线 stations + runs +
-> timetableByRun，单接口避 N+1）；二者权限完全开放（只读）。
+> `timetableByRun`，单接口避 N+1）；二者权限完全开放（只读）。
 
 ```
 rail.line.list                              ← 只读
@@ -1113,14 +1075,14 @@ rail.run.timetable.set  { runId, entries: [{ stationId, arrival?, departure?, st
 rail.wall.bind          { wallId, lineId?, stationId?, direction }
 ```
 
-### 18.9 兼容性
+### 15.7 兼容性
 
-- 0.4.0 ManualScheduleProvider **不删**——`wall_rail_bindings.line_id IS NULL` 的 wall 仍走旧路径
-- 旧 `schedule:<wallId>/next_departure` 等变量**保留**——RailScheduleProvider 也会写这些 key
+- `ManualScheduleProvider` **保留**——`wall_rail_bindings.line_id IS NULL` 的 wall 仍走单墙时刻表路径
+- 旧 `schedule:<wallId>/next_departure` 等变量**保留**——`RailScheduleProvider` 也会写这些 key
   让既有 wall 文本不需要改写
 - 新增 `next_run_number / next_service_type / next_cars / next_terminus / next_notes` 等**追加**变量
 
-### 18.10 服务类型 i18n
+### 15.8 服务类型国际化
 
 `service_type` 字段存内部 enum 值（local / express / section / limited 或 custom 字符串）。
 `next_service_type_text` 变量按 owner locale 查 i18n：

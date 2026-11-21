@@ -1,8 +1,8 @@
 name: Release
 
-# Tag 触发：`git tag v0.2.0-SNAPSHOT && git push origin v0.2.0-SNAPSHOT`
+# Tag 触发：`git tag v1.0.0 && git push origin v1.0.0`
 # 自动跑测试 + shadowJar + 创建 GitHub Release + 附 jar。
-# 含 `-`（pre-release / SNAPSHOT）自动标 prerelease=true。
+# 含 `-`（如 v1.0.0-rc.1）自动标 prerelease=true。
 
 on:
   push:
@@ -59,9 +59,7 @@ jobs:
 
       - name: Rename artifact
         # plugin/build.gradle.kts shadowJar.archiveClassifier="" → 输出
-        # HikariCanvas-<gradle-version>.jar；tag 版本与 gradle 内置版本可能不一致
-        # （如 tag 是 v0.2.0 但 build.gradle 是 0.2.0-SNAPSHOT），所以需要重命名为
-        # tag 版本以供 Release。
+        # HikariCanvas-<gradle-version>.jar；若 tag 版本与 gradle 版本不一致，统一重命名为 tag 版本。
         run: |
           set -eu
           src=$(find plugin/build/libs -name 'HikariCanvas-*.jar' ! -name 'HikariCanvas-*-sources.jar' -print -quit)
@@ -79,7 +77,6 @@ jobs:
           files: plugin/build/libs/HikariCanvas-${{ env.VERSION }}.jar
           generate_release_notes: true
           draft: false
-          # 含 `-`（如 v0.2.0-SNAPSHOT / v1.0.0-beta.1）自动 prerelease；
-          # 纯 stable（如 v1.0.0）不打 prerelease。
+          # 含 `-`（如 v1.0.0-rc.1）自动标为 prerelease；正式版不标 prerelease。
           prerelease: ${{ contains(env.VERSION, '-') }}
           fail_on_unmatched_files: true

@@ -1,6 +1,5 @@
 # 安全规范
 
-**状态：** 随代码同步更新（最近一次对照代码核对：2026-06-20，覆盖至 0.8 Part A `.canvas` 工程导入）
 **适用范围：** 插件 Web 服务、认证、限流、输入校验、权限节点、审计、脚本运行时、部署建议
 
 本文档定义 HikariCanvas 的安全模型与实现要求。所有面向网络的代码必须满足本文要求，否则 PR 不合并。
@@ -26,14 +25,14 @@
 | 编号 | 威胁 | 影响 |
 | --- | --- | --- |
 | T1 | 未授权用户访问编辑器 | 他人冒充玩家生成招牌、污染世界 |
-| T2 | Token 泄漏（URL 被分享、日志泄漏） | 同 T1。**控制台命令回显的编辑器链接会落入 `logs/latest.log`，这是 0.9.19 起经作者认可的已知例外**（见 §2.2）——服主上传日志求助前应先 `/canvas cancel` 或等链接过期 |
+| T2 | Token 泄漏（URL 被分享、日志泄漏） | 同 T1。**控制台执行 `canvas open` 回显的编辑器链接会随控制台输出写入 `logs/latest.log`**（运维易用性权衡，见 §2.2）——服主外发日志求助前应先执行 `/canvas cancel` 或等链接过期 |
 | T3 | Token 暴力枚举 | 同 T1 |
 | T4 | 中间人篡改（公网明文 HTTP） | 劫持编辑动作 |
 | T5 | WS 消息洪水（单会话内高速发送） | 服务器资源耗尽 |
 | T6 | 大 payload 攻击（超大文本、超大画布） | 渲染 OOM、CPU 占满 |
 | T7 | 预览地图池耗尽 | 其他玩家无法编辑 |
 | T8 | PDC / SQLite 注入（非法字段值） | 数据损坏 |
-| T9 | 恶意模板（YAML 解析 RCE） | 任意代码执行（jackson-dataformat-yaml 默认即免疫 SnakeYAML `!!java/*` tag 路径）|
+| T9 | 恶意 `.canvas` 模板包（参数膨胀 / 正则灾难回溯 / 畸形结构） | CPU/内存耗尽、反序列化滥用。防御：复用 `CanvasArchive` 解包三闸、`PackParamResolver` 长度上限与正则步数熔断、Jackson 禁用默认多态、`ProjectMaterializer` 结构配额与逐元素重校验（§4.3） |
 | T10 | 恶意 `.canvas` 工程文件导入（zip bomb / 路径穿越 / 伪造图片 / 越权脚本 / 不存在命令模板） | 资源耗尽 / 服务器异常 / 越权写。防御：解包三闸 + 路径校验 + 白名单（§4.4 `CanvasArchive`）、assets PNG magic + 隔离解码 + 配额（§4.4 `AssetIngest`）、脚本全量重校验 + wallId 重绑 + 命令模板白名单（§13.5 `ScriptImporter`）|
 | T11 | 端口扫描识别本插件 | 辅助上述攻击 |
 | T12 | 审计日志被清除 | 事后无法溯源 |
@@ -86,11 +85,7 @@
 - **长度**：至少 256 bit 熵（32 字节 base64）
 - **存储**：仅内存（主体）+ SQLite SHA-256（审计溯源），**原文 token 不落盘**
 - **日志**：token 原文禁止出现在**插件自身的 debug / trace 日志**（含 DEBUG 级别）。
-  **唯一例外**（0.9.19 起）：控制台命令 `canvas open` 回显的编辑器链接含 token 原文，会随控制台输出
-  进入 `logs/latest.log`。这是有意为之的折衷——服主不进游戏就得有地方拿到链接，而链接本身已被
-  四道防线夹住：**单次使用**（消耗即失效）+ **15 分钟 TTL** + **首次 auth 绑死调用方 IP**（异地重放即拒）
-  + **per-IP 限流 10 次/分**。残余风险仅为"15 分钟内、抢在服主之前打开、且此后锁死在攻击者 IP"。
-  **代价必须让服主知道**：上传 `latest.log` 求助前先 `/canvas cancel` 或等 15 分钟过期（见 T2）。
+  **控制台会话的运维权衡**：控制台命令 `canvas open` 回显的编辑器链接含 token 原文，会随控制台标准输出写入 `logs/latest.log`。这是不进游戏即可获取编辑链接的必要路径，链接本身同时受四道防线约束：**单次使用**（消耗即失效）+ **15 分钟 TTL** + **首次 auth 绑定调用方 IP**（异地重放即拒）+ **per-IP 限流 10 次/分**。残余风险限于"15 分钟内抢在服主之前从日志拿到链接并打开"。因此服主外发 `latest.log` 排障前应先执行 `/canvas cancel` 或等待 15 分钟过期（见 T2）。
 - **传输**：默认绑定 127.0.0.1 规避明文传 token；公网场景强制 TLS（由反代提供）
 - **TTL**：默认 15 分钟，可配置 1m~24h
 - **单次使用**：消耗后立即失效
@@ -177,13 +172,11 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 
 **覆盖面（重要）**：`SessionRateLimiter.allow()` 在 **8 个 dispatcher** 内调用 —— `element.* / layer.* / canvas.* / timeline.* / keyframe.*`（EditOpDispatcher）、`variable.*`、`variable.alias.*`、`schedule.*`、`rail.*`、`script.*`、**`wall.*`**、**`template.*`**，外加笔刷路径的 **`brush.end`**。**不计入**限流窗口的消息：`ping`（无副作用 echo）、`brush.start` / `brush.point` / `brush.cancel`（笔触流畅性考量，靠 `MAX_BRUSH_POINTS_PER_STROKE` / `MAX_ACTIVE_STROKES` 内存上限兜底）。
 
-> **`wall.*` / `template.*` 于 0.9.17 纳入限流**（此前豁免，理由记作「各有 ACL + DB 写锁兜底」）。该理由对 `wall.refresh` 不成立：它每收到一条消息就往主线程 `runTask` 一次 `FrameDeployer.repairFor`，内部是 `world.getEntitiesByClass(ItemFrame.class)` **全世界实体扫描 + 逐格补方块**，既不落 DB 也没有任何写锁可兜底。于是任意持 `canvas.edit`（default=true）的玩家开一个 session 后即可让主线程每秒跑上百次全世界扫描把 TPS 打崩。`template.save` 同理含磁盘写 + DB 写却不限流。
+> **`wall.*` / `template.*` 纳入限流**：`wall.refresh` 每收到一条消息就往主线程投递一次 `FrameDeployer.repairFor`（含区域实体查询与逐格补方块），既不落 DB 也无写锁兜底；若不限流，持 `canvas.edit` 的会话可高频触发扫描拖慢主线程。`template.save` 同理涉及磁盘与 DB 写入。此外，`wall.refresh` **另加 per-wall 冷却 1 次/秒**（`WallOpDispatcher.REFRESH_COOLDOWN_MS`），冷却期内直接返回 `RATE_LIMITED`，不入主线程队列。
 >
-> `wall.refresh` **另加 per-wall 冷却 1 次/秒**（`WallOpDispatcher.REFRESH_COOLDOWN_MS`）：40msg/2s 的通用窗口对「每次都全世界扫描」这种量级仍然过宽。冷却期内的 refresh 直接返回 `RATE_LIMITED`，不入主线程队列。
-
-> **`brush.end` 于 0.9.17 纳入限流**。`brush.start` / `brush.point` / `brush.cancel` 仍豁免——那是笔触体验的既定取舍，不是遗漏（见 PROPOSAL「工具不是保姆」性能哲学）。但 `brush.end` 不属于「高频低消息」那一类：它一次要跑最多 5000 点的 RDP 简化（最坏 O(n²)）+ 一次全量 `ProjectSnapshot` 深拷贝入 undo 栈 + 往图层永久追加一个元素。`MAX_ACTIVE_STROKES` 只挡「start 了不 end」，挡不住 start→点满→end 的循环，故这一个 op 走通用 40msg/2s 窗口。正常落笔一秒撑死几笔，够用。
+> **`brush.end` 纳入限流**：`brush.start` / `brush.point` / `brush.cancel` 为保障笔触跟手体验豁免滑窗限流（靠内存点数上限兜底，见 `docs/architecture.md §1.2` 设计原则）。但 `brush.end` 一次要跑最多 4096 点的 RDP 简化、全量 `ProjectSnapshot` 深拷贝入撤销栈并永久追加图层元素，故纳入通用 40msg/2s 限流窗口。
 >
-> 即「反复超限 → close 1008」现对编辑类 + `wall.*` + `template.*` + `brush.end` 生效。
+> 综上，「反复超限 → close 1008」对编辑类、`wall.*`、`template.*` 与 `brush.end` 统一生效。
 
 ---
 
@@ -199,26 +192,27 @@ token 本体熵（256 bit · 单次使用 · 15min TTL）是第一道防线。**
 
 | 字段 | 规则 |
 | --- | --- |
-| 任何字符串 | UTF-8、长度 ≤ `limits.text-max-length`（默认 256）、无控制字符（`\x00-\x08\x0B\x0C\x0E-\x1F\x7F`） |
-| 文字内容（TextElement.text） | 长度 ≤ `limits.text-max-length`、允许换行 `\n`、不允许其他控制字符 |
+| 常规文本字符串 | UTF-8、长度 ≤ `ElementValidator.MAX_TEXT_LEN`（256）、无控制字符（`\x00-\x08\x0B\x0C\x0E-\x1F\x7F`） |
+| 文字内容（`TextElement.text`） | 长度 ≤ `256`、允许换行 `\n`、不允许其他控制字符 |
 | 颜色 | 严格 `^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$` |
-| 字体 ID | 必须存在于 config 声明的字体 |
+| 字体 ID | 来自内置 22 枚字体矩阵（`FontRegistry.BUILT_IN`）或 `plugins/HikariCanvas/fonts/` 用户字体目录（文件名去扩展名，无需在 `config.yml` 声明）；非空且无控制字符，渲染期未知 ID 确定性回退 `ark_pixel` |
 | 元素坐标/尺寸 | 整数，`-10000 ≤ x,y ≤ 10000`，`0 < w,h ≤ 10000` |
-| 字号 | 整数 1~512 |
-| 画布矩阵 | `1 ≤ w,h ≤ limits.canvas-max-maps` |
-| 旋转 | 严格枚举 `0, 90, 180, 270` |
+| 字号 | 整数 `1~512` |
+| 画布矩阵 | 新建时总张数 `1 ≤ widthMaps × heightMaps ≤ limits.canvas-max-maps`（默认 16，配置上限 64）；`Canvas` 单边硬上限 `1..32` |
+| 旋转 | 整数角度 `0..359`（`[0, 360)`） |
 | 元素 ID | `^e-[a-zA-Z0-9-]{1,64}$` |
-| 会话 ID / 招牌 ID | UUID v4 格式 |
-| 模板 ID | `^[a-z][a-z0-9_]{2,63}$` |
-| 参数值 | 按模板 `params` 声明类型校验，多做一次（不信任客户端） |
+| 会话 ID / 墙 ID | 会话 ID 为 UUID 格式；墙 ID（`wall_id`）为 `^w-[0-9a-f]{8}$`；墙别名（`alias`）为 `^[A-Za-z0-9_-]{2,32}$` |
+| 模板 ID / slug | slug 为 `^[a-z0-9][a-z0-9_-]{1,31}$`（用户模板 ID 前缀 `user-<uuid8>-<slug>`） |
+| 模板参数值 | 按模板包 `params.json` 声明类型（`string/text/int/float/bool/color/enum/font`）由 `PackParamResolver` 在服务端二次校验，不信任客户端 |
 
-### 4.3 YAML 解析（模板）
+### 4.3 模板包（`.canvas` pack）与反序列化安全
 
-- 使用 **jackson-dataformat-yaml**（2.18.2）解析
-- jackson-dataformat-yaml 底层基于 SnakeYAML 但不暴露 `!!java/*` tag 接口，默认不允许任意类实例化
-- 不开 Jackson 的 `enableDefaultTyping` / `@class` 多态机制
-- 最大文件大小 256 KiB（启动加载时按 byte 长度预筛）
-- 解析失败的模板不加载，打 warn log；YAMLMapper 的 `MISSING_PROPERTY` / `UNKNOWN_PROPERTY` 视情设 strict 或忽略未来兼容
+模板系统统一采用 `.canvas` 压缩包（`manifest.kind = "pack"` + `params.json`，见 `docs/template-pack.md`），与工程导入共用同一套 `canvasfile` 信任边界：
+
+- **流式解包与路径白名单（`CanvasArchive`）**：共用 `import.canvas-max-mb` / `canvas-max-entry-mb` / `canvas-max-total-mb` 三闸流式边读边计数（不信任 `ZipEntry.getSize()`）；拒绝 `..`、绝对路径、反斜杠与 NUL 字节；仅放行 `manifest.json`、`project.json`、`params.json`、`scripts.json`、`thumbnail.png` 及 `assets/` 前缀条目
+- **参数校验与防膨胀 / 防 ReDoS（`PackParamResolver`）**：`params.json` 强制校验必填 `id` 与冻结的 8 种 `type`；自定义正则 `pattern` 长度 ≤ 256 字符，且匹配引擎限制单次读取步数 `MAX_MATCH_STEPS = 200,000`（确定性阻断灾难性回溯）；`${param}` 执行单遍纯文本替换（不递归展开参数值内的占位符），单参数值 ≤ 16 KiB、单次累计净膨胀 ≤ 1 MiB，替换值按 JSON 字符串转义防止破坏结构
+- **严格 Jackson 反序列化**：全局不开启 `enableDefaultTyping` 或 `@class` 任意类多态机制；多态类型仅限于代码内显式受控的 `sealed` / 自定义反序列化器（`Element` / `Fill` / `Trigger` / `Action`）
+- **结构配额与元素重校验（`ProjectMaterializer`）**：替换后的 `project.json` 强制校验结构数量上限（图层 ≤ 64、元素总数 ≤ 4096、时间轴 ≤ 16、单时间轴关键帧 ≤ 2048、单轨关键帧 ≤ 256、单墙引用图片数受 `images.max-per-wall` 约束），并对每个元素执行 `ElementValidator` 全量数值范围校验
 
 ### 4.4 `.canvas` 文件导入
 
@@ -401,7 +395,7 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 
 ## 5. 权限节点
 
-### 5.0 会话主体类型（0.9.19 起）
+### 5.1 会话主体类型
 
 授权的依据是 **`Session.principal`**，不是 session 携带的 UUID。
 
@@ -417,6 +411,8 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 命令入口的 sender 白名单为 **Player + ConsoleCommandSender**，**显式排除命令方块**——
 否则 `canvas open` 可被写进命令方块，把 token 打进方块输出 / 世界数据，门槛远低于控制台日志且服主无从察觉。
 
+### 5.2 权限矩阵
+
 > 下表与 `plugin/src/main/resources/paper-plugin.yml` 的 `permissions:` 段为权威，二者必须一致。默认值列直接取 yml 的 `default`（`true` = 所有玩家、`op` = 仅 OP）。
 
 | 节点 | 默认 | 说明 |
@@ -430,9 +426,9 @@ SVG 导入生成的每个 `PathElement.d` 仍经后端 `PathDValidator` 校验�
 | `canvas.delete.own` | true | 删除自己的画（`/canvas delete <wall_id>`） |
 | `canvas.delete.any` | op | 删除任何画 |
 | `canvas.alias.any` | op | 修改任意 wall 的 alias（默认 wall.alias WS op 只允许 owner 改） |
-| `canvas.admin` | op | 管理命令（stats / diagnose / cleanup / reload） |
+| `canvas.admin` | op | 管理命令（stats / diagnose / reload） |
 | `canvas.admin.force-break` | op | 允许破坏插件保护的成品物品框 / 支撑方块 |
-| `canvas.admin.bypass-lock` | op | 绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open。**控制台主体无需此节点**（§5.0） |
+| `canvas.admin.bypass-lock` | op | 绕过 lock-aware open 校验，对已锁定的非自己 wall 也能 open。**控制台主体无需此节点**（§5.1） |
 | `canvas.template.save` | true | 把当前 wall 发布为创意工坊模板 |
 | `canvas.template.delete.own` | true | 删除自己发布的模板 |
 | `canvas.template.delete.any` | op | 删除任意模板（moderation） |
@@ -469,7 +465,7 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
 > **lock/unlock op 权限**：`wall.lock` / `wall.unlock` 不走权限节点，由 owner-only 校验代替——后端直接对比 caller.uuid == wall.owner_uuid，非 owner 拒 FORBIDDEN。无权限节点。
 
-> **插件 namespace ACL**：`HikariCanvasAPI.setVariable` 走 namespace 注册中心校验——插件 A 不能 push 插件 B 的 namespace（防 spoof）。无玩家权限节点，由 plugin 自声明 namespace 后强制绑定。详见 `docs/dynamic-data.md §9.2`。
+> **插件 namespace ACL**：`HikariCanvasAPI.setVariable` 走 namespace 注册中心校验——插件 A 不能 push 插件 B 的 namespace（防 spoof）。无玩家权限节点，由 plugin 自声明 namespace 后强制绑定。详见 `docs/dynamic-data.md §10.2`。
 
 ---
 
@@ -484,7 +480,7 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 | WS auth 成功 | 再次校验 `canvas.edit`（防权限中途撤销） |
 | `template.apply`（他人发布的用户模板） | `canvas.template.use-others`（内置模板 / 自己发布的模板无需此节点） |
 | `/canvas delete <wall_id>` | wall owner == 自己 且 `canvas.delete.own` / 或 `canvas.delete.any`；二次确认强制 30s |
-| 控制台执行任意 `canvas` 子命令 | sender 必须是 `ConsoleCommandSender`（命令方块被排除）；主体为 `CONSOLE` 后不再查节点（§5.0） |
+| 控制台执行任意 `canvas` 子命令 | sender 必须是 `ConsoleCommandSender`（命令方块被排除）；主体为 `CONSOLE` 后不再查节点（§5.1） |
 | `wall.lock` / `wall.unlock` / `wall.alias` | `canManageWall(session, wall)` = 主体是 `CONSOLE` **或** wall owner == 自己（`alias` 另可走 `canvas.alias.any`） |
 | 管理员命令 | `canvas.admin` |
 | `GET /api/walls` | **匿名可读，但只返回裁过字段的公开投影**（见下） |
@@ -497,7 +493,7 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 > 的人能看」，而公网反代是 §7 明确支持的部署形态、反代层不做鉴权，那就等于把一张「谁在哪画了
 > 什么、朝向如何」的藏宝图挂在互联网上，照着坐标去拆是分分钟的事。
 >
-> 0.9.17 起该端点返回 `WallRepo.PublicSummary`：仅 `wallId` / `alias` / `widthMaps` /
+> 该端点返回 `WallRepo.PublicSummary`：仅 `wallId` / `alias` / `widthMaps` /
 > `heightMaps` / `publishedAt`（锁状态）/ `updatedAt`。**不含任何定位信息与玩家身份。**
 > 需要完整字段走游戏内 `/canvas list`（那条路径本来就有玩家身份）。
 > `HttpAccessControlTest` 对该 record 的字段集合做**逐字相等**断言——将来给它加字段会直接红，
@@ -515,14 +511,14 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 
 ### 7.1 绑定
 
-- **默认 `bind: 127.0.0.1`**。若服主显式改为 `0.0.0.0` → 启动时 **强烈警告**（连打 3 行 red log）
+- **默认 `network.host: "127.0.0.1"`**。若服主显式改为 `0.0.0.0` / `::` → 启动时 **强烈警告**（连打 3 行日志）
 - 建议搭配系统级防火墙（`ufw` / `firewalld`）只放行反代所在主机
 
 ### 7.2 TLS
 
 - 插件本体不内置 TLS（简化依赖）
 - 公网部署必须通过反代（nginx / Caddy）加 TLS
-- `deployment.md` 提供完整 nginx + Let's Encrypt 示例
+- `docs/deployment.md` 提供完整 Caddy 与 nginx + Let's Encrypt 示例
 - 文档明确：**没有 TLS 的公网部署是不安全的，严禁用于生产**
 
 ### 7.3 示例 nginx 配置（选粹）
@@ -530,36 +526,34 @@ Bukkit 权限系统原生支持，配合 LuckPerms 等可细粒度授权。
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name signs.example.com;
+    server_name canvas.example.com;
 
-    ssl_certificate     /etc/letsencrypt/live/signs.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/signs.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/canvas.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/canvas.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
 
-    # 推荐 TLS 配置（Mozilla Modern）
-    # ...
-
-    location /canvas/ {
-        proxy_pass http://127.0.0.1:8877/;
+    location / {
+        proxy_pass         http://127.0.0.1:8877;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        "upgrade";
         proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 ```
 
-插件配置 `web.context-path: "/canvas"` 配合。
+同时在 `config.yml` 配置 `network.editor-url: "https://canvas.example.com/?token={token}"` 与 `network.allowed-origins: ["https://canvas.example.com"]`（完整部署步骤见 `docs/deployment.md §3`）。
 
 ### 7.4 反代 IP 识别 —— 未实装
 
-**插件不读 `X-Real-IP` / `X-Forwarded-For`，也没有 `web.trusted-proxies` 这个配置键。** 早期版本的本节
-教服主去配它，那是个不存在的键，写了不生效。真实行为见 §2.5「已知限制」：反代部署下
-`Session.boundIp` 恒为反代本机 IP，会话 IP 绑定退化成「同一反代来源」。
+**插件不读 `X-Real-IP` / `X-Forwarded-For`，也没有 `trusted-proxies` 配置键。** 反代部署下
+`Session.boundIp` 恒为反代本机 IP，会话 IP 绑定退化成「同一反代来源」（见 §2.5「已知限制」）。
 
 要拿到玩家真实 IP 级的防护，请在反代层做（nginx `limit_req_zone $binary_remote_addr`）。
-信任白名单 + XFF 解析是 v1.x 方向，见 §2.5。
 
 ---
 
@@ -659,18 +653,16 @@ server {
 | Paper API | 宿主 | 跟随 MC 版本 |
 | Javalin | HTTP/WS | 关注 CVE，及时升级 |
 | PacketEvents | 包发送 | 关注 API 破坏 |
-| jackson-dataformat-yaml | YAML 解析 | **不开 `enableDefaultTyping`**；底层 SnakeYAML tag 接口不暴露 |
+| Jackson（`databind` / `dataformat-yaml`） | JSON 与序列化 | **不开启 `enableDefaultTyping`**；仅做显式受控的 record / sealed 多态绑定 |
 | HikariCP + JDBI + SQLite JDBC | DB | 稳定 |
 | SLF4J | 日志 | |
-| 前端：Vue / Vite / Konva | 编辑器 | npm audit 纳入 CI |
+| 前端：Vue / Vite / Konva | 编辑器 | 锁定版本与构建校验 |
 
-### 10.2 CI
+### 10.2 CI 与依赖监控
 
-> **当前实装状态**：`.github/workflows/ci.yml` 跑前端 vitest + vite build + 后端 `:plugin:test` + `shadowJar`。下列依赖安全扫描项为**规划目标，尚未接入 CI**：
->
-> - Dependabot（或 Renovate）监控依赖升级 —— **未配置**（无 `.github/dependabot.yml`）
-> - 每日 `gradle dependencyCheck`（OWASP 插件）—— **未接入**
-> - 前端 `npm audit --audit-level=high` 纳入 PR 检查 —— **未接入**（CI 里 npm ci 失败回退时反而带 `--no-audit`）
+- **GitHub Actions CI（`.github/workflows/ci.yml`）**：push / PR 跑前端 `vitest` + `vite build`、后端 `:plugin:test` + `:plugin:shadowJar`，以及 Java 25 对 Paper 26.2 API 的 `compat-26` 编译守卫
+- **Dependabot（`.github/dependabot.yml`）**：已配置每周自动扫描根 Gradle、`web/` 前端 npm 与 GitHub Actions workflow 三个生态并提交升级 PR
+- **暂未接入的扫描项**：OWASP `dependencyCheck` 与 PR 门禁式 `npm audit` 暂未作为强制阻断步骤接入 CI（常规依赖更新由 Dependabot 周检覆盖）
 
 ### 10.3 发布构件
 
@@ -759,7 +751,7 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 - `script.create` / `script.update` / `script.delete` / `script.enable` / `script.test` 全部先过 `canvas.script.edit` 基础权限，再按规则内容逐积木检查附加面（§13.3）。
 - **`script.enable` 是被禁用规则的最后一道闸**：`enabled=true` 方向必须对**库里现存的那条规则**重跑一遍 `requiredFacets` + 面检查（缺面拒 `PERMISSION_DENIED`），否则「服主收回 `canvas.script.command` → 玩家把旧规则重新打开」就能绕过命令面；`enabled=false` 方向（关规则）不查面，永远放行——关闭危险规则不该被权限拦住。
 - **守卫测试**：`ScriptOpFacetGuardTest` 对 `ScriptOpDispatcher` 每个改动规则内容 / 启用态的 op 逐个断言面检查真的被走到，并用反射清点 `handleXxx` 方法集合——新增 op 不登记就红，防「复制了兄弟 handler 的骨架却没复制它的闸」这类回归。
-- 鉴权基准：caller 必须能打开该 wall（open 路径鉴权）——非 owner 且 wall 已锁定 → open 时已拒 FORBIDDEN；后端编辑 op 路径不读 lock（lock-state §3.6 架构纪律）。
+- 鉴权基准：caller 必须能打开该 wall（open 路径鉴权）——非 owner 且 wall 已锁定 → open 时已拒 FORBIDDEN；后端编辑 op 路径不读 lock（见 `docs/architecture.md §3.4`）。
 - 条件语法保存期预检：`if.condition` 字段在 create/update 时过 `ConditionEvaluator.checkSyntax` parse-only 检查，语法错误立即拒 `SCRIPT_INVALID`（返回 parse 错误首行 + blockId 定位），不等运行期静默 false。
 
 ### 13.5 `.canvas` 工程文件导入中的脚本
@@ -803,7 +795,7 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 `setRandomVariable` / `scaleVariable` / `roundVariable`）的目标变量名是玩家在编辑器里自由填的字符串，
 且脚本执行身份是"墙"而不是某个玩家——不做限制的话，任何能编排该墙脚本的玩家（`canvas.script.edit`
 默认开）都能写字面 `userglobal/别人的变量` 覆写他人全服变量并落库，或写 `user:<别人的墙>/key`
-跨墙改数据，绕开 `variable.*` WS op 那一整套 owner ACL（§9 / `dynamic-data.md §17.3`）。
+跨墙改数据，绕开 `variable.*` WS op 那一整套 owner ACL（`dynamic-data.md §10.1` / `§14.2`）。
 
 **实际缓解（代码：`ActionExecutor.checkWritable` / `checkReadable`）**：所有变量族积木在写之前过一次
 目标校验，不通过就出 error step（链不断、不落库）：
@@ -822,13 +814,3 @@ Budget 三闸全部 volatile 字段，`/canvas reload` 热更，`LongSupplier` �
 脚本路径**没有管理员 override**——这条链上没有"发起人"可查权限（规则可能由 timer / 游戏事件触发，
 发起人早就下线了），身份只能是墙本身。要跨墙 / 跨 owner 改变量，走 `/canvas var` 命令或
 `variable.*` WS op，那两条路才有真正的 caller 身份可以查 `.any` 节点。
-
----
-
-## 14. 未决问题
-
-- [ ] 是否支持 OAuth 登录（如 Microsoft Account / Minecraft）以替代一次性 token——复杂度高，v1.0 不做
-- [ ] 多服务器场景下的共享 session / token 传递
-- [ ] DoS 防护是否需要集成 fail2ban（通过 `audit_log` 导出规则）
-- [ ] WS 消息是否值得签名（防中间人篡改）—— 若强制 TLS 则不必
-- [ ] 审计日志的数字签名 / 追加性防篡改（目前不做，信任 DB 层）

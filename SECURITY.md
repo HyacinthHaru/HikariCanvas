@@ -2,13 +2,12 @@
 
 ## Supported Versions
 
-HikariCanvas is pre-1.0 software. Security fixes land on the latest released
-version only. There is no back-porting to older snapshots before 1.0.
+Security fixes are released on the latest version line only.
 
 | Version | Supported |
 |---------|-----------|
-| Latest `0.9.x` release | ✅ |
-| Older pre-releases | ❌ |
+| Latest release | ✅ |
+| Older releases | ❌ |
 
 ## Reporting a Vulnerability
 

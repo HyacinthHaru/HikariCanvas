@@ -1,6 +1,5 @@
 # 部署指南
 
-**状态：** 0.9.10-SNAPSHOT · 2026-07-18
 **适用范围：** 把 HikariCanvas 部署给真实玩家（单机测试 → 内网 LAN → 公网服务器）
 
 本文档讲三件事：
@@ -15,9 +14,9 @@
 
 > ⚠️ **必装前置依赖：PacketEvents 插件。** HikariCanvas 靠 PacketEvents 把渲染画面以地图数据包推送到游戏内地图（核心投影通道），且**不打包它**——PacketEvents 是 GPL-3.0，打包会污染本插件的 MIT 授权。**先从 <https://modrinth.com/plugin/packetevents> 或 SpigotMC 下载 PacketEvents 插件、丢进 `plugins/`，再装 HikariCanvas。** 没装 PacketEvents 时 HikariCanvas 会拒绝加载（Paper 报缺少必需依赖）。
 
-把 jar 扔进 `plugins/`、重启服务器，第一次启动会自动生成 `plugins/HikariCanvas/config.yml`。GitHub Releases 上的发布 jar 约 90 MB（体积偏大是因为内置了 20+ 套字体，由后端统一供给给编辑器，无需服主另配字体；属正常，首次启动稍慢也正常）。
+把 jar 扔进 `plugins/`、重启服务器，第一次启动会自动生成 `plugins/HikariCanvas/config.yml`。GitHub Releases 上的发布 jar 约 85–90 MB（体积偏大是因为内置了 22 套字体与矢量图标库，由后端统一供给编辑器以保证双端渲染一致，无需服主另配字体；属正常，首次启动稍慢也正常）。
 
-> **支持的服务端版本**：同一份 jar 同时支持 **Paper 1.21.11 ~ 26.x**（26.1 自 0.9.5、26.2 自 0.9.10——各随 PacketEvents 升级）。Java 要求跟随 MC 版本——跑 1.21.x 用 **Java 21**，跑 26.x 用 **Java 25**（Minecraft 26 自身的要求）。插件不碰 NMS，全靠公开 Bukkit API + PacketEvents，所以一份包就能跨大版本，无需为不同版本下不同包。
+> **支持的服务端版本**：同一份 jar 同时支持 **Paper 1.21.11 ~ 26.x**（含 26.1 / 26.2）。Java 要求跟随 MC 版本——跑 1.21.x 用 **Java 21**，跑 26.x 用 **Java 25**（Minecraft 26 自身的要求）。插件不碰 NMS，全靠公开 Bukkit API + PacketEvents（2.13.0+），所以一份包就能跨大版本，无需为不同版本下不同包。
 
 ```yaml
 network:
@@ -237,14 +236,14 @@ i18n:
 
 ## 6. 多玩家场景注意事项
 
-当前版本的 wall 排他锁是**全局**的（详见 `docs/architecture.md §3`）：
+wall 排他锁是**全局**的（详见 `docs/architecture.md §3`）：
 
 - 任意时刻一个 wall 最多一个活跃 session。第二个玩家试图 `/canvas open` 同一 wall 会收 `WALL_OCCUPIED`。
 - alias 是全服唯一（`UNIQUE INDEX idx_walls_alias`）。两个玩家不能用同一别名。
-- 玩家**没有归属概念**：任何有 `canvas.edit` 权限的玩家都能开任何 wall（用 wall_id）。`canvas.delete.own` 限定只能删自己创建的。`canvas.delete.any` 删任意（默认 op 才有）。
+- 未锁定的草稿 wall 默认开放协作：任何有 `canvas.edit` 权限的玩家都能用 `wall_id` 打开编辑；作者锁定后非作者无法打开（除 `canvas.admin.bypass-lock`）。`canvas.delete.own` 限定只能删自己创建的，`canvas.delete.any` 删任意（默认 op 才有）。
 - wall 的 ItemFrame `BlockBreakEvent` / `HangingBreakEvent` 由 `canvas.modify` 权限统一保护——无该权限的玩家拒绝破坏。详见 `docs/security.md §5`。锁定 / 解锁由网页编辑器 TopBar 的 Lock 按钮触发，走 WS `wall.lock` / `wall.unlock` op，owner-only，且仅作前端只读冻结，不影响游戏内破坏行为。
 
-### 6.1 从服务端控制台管理画布（0.9.19 起）
+### 6.1 从服务端控制台管理画布
 
 服主不进游戏也能管画布。控制台可用的子命令：
 
@@ -266,7 +265,7 @@ i18n:
 
 ---
 
-> 玩家身份认证（HomePage 点击直接打开、归属隔离、多人协作）是单独的 milestone，尚未实现。当前公网部署**应该把 HomePage `/api/walls` 视为对内网开放**——所有人都看得到所有人的画清单。
+> 编辑器落地页无需登录即可浏览画布清单（`GET /api/walls` 为公开只读接口），公网部署时**应将该清单视为公开可见**；进入任意画布编辑仍须持游戏内或控制台签发的一次性令牌。
 
 ---
 
@@ -282,7 +281,7 @@ i18n:
 | Caddy 自动证书签不出 | 域名 A 记录没解析到本机 / 80 端口没开 / cloud provider 防火墙没放行 |
 | WS 连不上但 HTTP 能开 | 反代漏配 `Upgrade: websocket` 头转发 |
 | 公网 `host: 0.0.0.0` 后玩家访问超慢 | MC 服务器主线程被画布渲染卡到了；降低 `throttle.projection-fps`（若已显式配了 `rendering.adaptive-fps.default-min-interval-ms`，改那一项——它优先级更高）或减少 wall 尺寸 |
-| `/canvas reload config` 看上去没生效 | host/port/池容量/超时这些"启动期注入"的字段需要重启。`/canvas reload config` 当前只热更脚本相关字段（`scripts.*` 配额 / budget / playerNear 采样间隔 / 克隆元素配额），其余字段刷新引用但需重启才生效；插件 Push 限流另走 `/canvas var reload` 热替换 |
+| `/canvas reload config` 看上去没生效 | host/port/池容量/超时这些"启动期注入"的字段需要重启。`/canvas reload config` 仅热更 `scripts.*`（配额 / budget / playerNear 采样间隔 / 命令模板白名单）与 `i18n.default-locale`（含重扫 `lang/`），其余字段需重启才生效；模板走 `/canvas reload templates`，插件 Push 限流走 `/canvas var reload` |
 
 ---
 
@@ -308,24 +307,24 @@ i18n:
 | `rendering.adaptive-fps.*` | 见 config | 自适应渲染（秒级变量墙的高频间隔 + 主动推帧） | ✅ |
 | `templates.auto-reload-on-startup` / `.preview-cache-seconds` / `.max-per-player` | `true` / `300` / `20` | 模板自动 reload + 缩略图缓存 TTL + 每玩家发布上限 | 部分（模板内容可 `/canvas reload templates`） |
 | `images.max-size-kb` / `.allowed-mime` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / png·jpeg·webp / `1024` / `16` / `50` / `1024` | 图片上传：单文件 / MIME / 降采样 / 单墙 / 每日 / 全服磁盘配额。**webp 实际不可用**——标准 JDK 没有 WebP 解码器，除非自行安装 ImageIO 插件，否则上传会被明确拒绝 | ✅ |
-| `import.canvas-max-mb` / `.canvas-max-entry-mb` / `.canvas-max-total-mb` | `10` / `10` / `50` | 0.8 `.canvas` 工程导入限额（防 zip 炸弹） | ✅ |
+| `import.canvas-max-mb` / `.canvas-max-entry-mb` / `.canvas-max-total-mb` | `10` / `10` / `50` | `.canvas` 工程导入限额（防 zip 炸弹） | ✅ |
 | `security.token-rate-limit.per-minute` | `10` | 每 IP 每分钟 WS auth token 尝试次数（防暴破） | ✅ |
 | `i18n.default-locale` | `en_us` | 玩家客户端语言无对应 lang 文件时的兜底语言（内置 `en_us` / `zh_cn`；可加自定义文件） | ❌（`/canvas reload config` 即时生效） |
-| `database.auto-backup-before-migration` | `false` | migration 前自动备份 `data.db`（stable 发版后建议开） | ✅ |
+| `database.auto-backup-before-migration` | `true` | migration 前自动备份 `data.db`（配合 `backup-retention-days` 默认保留 30 天） | ✅ |
 | `database.audit-retention-days` | `90` | `audit_log` 表保留多少天（`0` = 永久保留）。超期记录在写审计时顺带清（每 6 小时最多一次） | ✅ |
 | `dynamic.push-rate-limit.*` | `100` / `1000` / `10000` | 插件 Push API 单插件 / 全局每秒上限 + 熔断保护期 ms | `/canvas var reload` 热替换 |
 | `dynamic.schedule.*` | `60` / "进站中" / "" | 兜底列车 ETA 进站阈值秒 + 进站 / 空闲文案 | ✅ |
-| `dynamic.variables.userglobal-max-per-owner` / `.userglobal-max-total` | `500` / `10000` | 0.4.3 全局用户变量配额（每 owner / 全服） | ✅ |
-| `timeline.default-fps` / `.max-fps` | `20` / `60` | 0.6 时间轴默认帧率 + 服务器级 fps 安全阀 | ✅ |
-| `scripts.max-rules-per-wall` / `.max-elements-per-wall` / `.player-near-sample-ticks` / `.budget.*` / `.tween.*` / `.command-templates` | 见 config | 0.7 墙脚本：规则 / 元素配额 + 靠近采样 + 执行预算三闸 + 补间帧率 + 命令模板白名单 | `/canvas reload config` 热更（除补间 SES 上限） |
+| `dynamic.variables.userglobal-max-per-owner` / `.userglobal-max-total` | `500` / `10000` | 全局用户变量配额（每 owner / 全服） | ✅ |
+| `timeline.default-fps` / `.max-fps` | `20` / `60` | 时间轴默认帧率 + 服务器级 fps 安全阀 | ✅ |
+| `scripts.max-rules-per-wall` / `.max-elements-per-wall` / `.player-near-sample-ticks` / `.budget.*` / `.tween.*` / `.command-templates` | 见 config | 墙脚本：规则 / 元素配额 + 靠近采样 + 执行预算三闸 + 补间帧率 + 命令模板白名单 | `/canvas reload config` 热更（除补间 SES 上限） |
 
-> "改了要重启 = ✅" 表示 `/canvas reload config` 不足以让该字段生效，必须重启服务器。当前 `/canvas reload config` 的 hot-apply 仅覆盖 `scripts.*` 字段（规则配额 / budget / playerNear 采样 / 克隆元素配额，且只影响后续创建，不裁剪已有）；模板内容走 `/canvas reload templates`；插件 Push 限流走 `/canvas var reload`。其余字段（host/port/池容量/超时等启动期注入项）一律需重启。各字段含义以 jar 内嵌 `config.yml` 行内注释为准——那里的约定是**默认都要重启，只有标 `[热更]` 的项 `/canvas reload config` 当场生效**。
+> "改了要重启 = ✅" 表示 `/canvas reload config` 不足以让该字段生效，必须重启服务器。`/canvas reload config` 的热更新仅覆盖 `scripts.*`（规则配额 / budget / playerNear 采样 / 克隆元素配额 / 命令模板白名单，且配额只影响后续创建，不裁剪已有）与 `i18n.default-locale`（连带重扫 `lang/`）；`.canvas` 模板包内容走 `/canvas reload templates`；插件 Push 限流走 `/canvas var reload`。其余字段（host/port/池容量/超时等启动期注入项）一律需重启。各字段含义以 jar 内嵌 `config.yml` 行内注释为准——那里的约定是**默认都要重启，只有标 `[热更]` 的项 `/canvas reload config` 当场生效**。
 
 ---
 
-## 9. 版本升级 SOP（stable 1.0.0+）
+## 9. 备份与恢复 / 版本升级
 
-> **配套契约：** `docs/data-model.md §6.6` 定义 stable 发版（≥1.0.0）后 schema 强制 forward-only + 强制 auto-backup。本节是运维侧的 SOP。当前仍处 pre-release。
+> **配套契约：** 数据库 schema 严格遵循向前兼容（forward-only）迁移，并在每次迁移前自动备份 `data.db`（详见 `docs/data-model.md §6.5`）。本节是运维侧的升级与回滚流程。
 
 ### 9.1 升级前
 

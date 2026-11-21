@@ -2,9 +2,9 @@
 
 **适用范围：** SQLite schema、PersistentDataContainer 约定、`.canvas` 工程文件格式、迁移策略
 
-本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。当前 DB schema 演进到 **V017**（V009 跳号未落地脚本）；`.canvas` 工程文件格式（§4）+ SVG 矢量导入已在 0.8 实装（契约总纲见 `docs/import-export.md`）。
+本文档定义所有持久化数据的结构。**一旦 v1.0 发布，schema 变更必须通过迁移脚本完成**；不允许在线上直接改表。当前 DB schema 演进到 **V017**（V009 跳号未落地脚本）；`.canvas` 工程与模板包格式（§4）及 SVG 矢量导入契约总纲见 `docs/import-export.md` 与 `docs/template-pack.md`。
 
-> **lock-state 语义**：DB 列 `walls.published_at` 名字保留（避免 SQL 迁移风险），语义为 **lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定（前端 readonly UI）。`walls.owner_uuid` 为作者权限依据。ItemFrame PDC 不再写 `published_at`。下文 §2.X 涉及 published 语义的描述均按"lock 时间戳"理解。详见 CLAUDE.md `§lock-state` + `docs/architecture.md §3.6`。
+> **lock-state 语义**：DB 列 `walls.published_at` 名字保留（避免 SQL 迁移风险），语义为 **lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定（前端 readonly UI）。`walls.owner_uuid` 为作者权限依据。ItemFrame PDC 不写 `published_at`。下文涉及 published 语义的描述均按"lock 时间戳"理解。详见 `docs/architecture.md §3.4`。
 
 ---
 
@@ -12,12 +12,12 @@
 
 | 存储位置 | 内容 | 生命周期 |
 | --- | --- | --- |
-| SQLite `data.db` | 池元信息、walls 表、审计日志、模板统计、image_uploads 配额表、用户变量 / 别名 / 全局变量、列车时刻表、铁路网络、墙脚本 | 跨服务器重启；随世界快照备份 |
-| `ItemFrame` PDC | `wall_id` / `slot` 标签（`published_at` 不再写入，2026-05-14 砍） | 随世界文件 |
-| 文件：`templates/*.yml` | 模板定义 | 人工管理 |
-| 文件：`user-templates/<uuid>/` | 玩家上传模板（v1.x） | 按玩家 uuid 组织 |
-| 文件：`fonts/*.ttf` / `*.woff2` | 字体 | 人工管理 |
-| 文件：`.canvas` 工程导出 | 玩家导出的工程（0.8 实装；纯前端 fflate 打包下载，不经服务端存储） | 外部管理 |
+| SQLite `data.db` | 池元信息、walls 表、审计日志、模板元数据与统计、image_uploads 配额表、用户变量 / 别名 / 全局变量、列车时刻表、铁路网络、墙脚本 | 跨服务器重启；随世界快照备份 |
+| `ItemFrame` PDC | `wall_id` / `slot` 标签 | 随世界文件 |
+| 文件：`templates/*.canvas` | 内置 `.canvas` 模板包（jar classpath，`kind="pack"`，见 `docs/template-pack.md`） | 随插件版本分发 |
+| 文件：`user-templates/<uuid>/*.canvas` | 玩家发布的创意工坊 `.canvas` 模板包 | 按玩家 uuid 组织 |
+| 文件：`fonts/*.ttf` / `*.otf` | 服主放置的用户扩展字体（内置 22 枚字体打包在 jar `/fonts/` 内） | 人工管理 |
+| 文件：`.canvas` 工程导出 | 玩家导出的工程包（纯前端 fflate 打包下载，不经服务端存储） | 外部管理 |
 | **文件：`uploads/<sha256[:16]>.png`** | 玩家上传的图片（hash 内容寻址，跨 wall 引用同一文件不重复存） | 按 last_used_at LRU 清理；删 wall 不立即清 |
 
 ---
@@ -72,7 +72,7 @@ CREATE INDEX idx_pool_owner ON pool_maps(reserved_by);
 
 插件启动时执行一次性扫描验证不变式，异常记录移回 FREE + 告警。
 
-> **删字段**：`sign_id` 列删除（合并入 `reserved_by`）。原 `PERMANENT` 状态废止——wall 占的 map 一直 RESERVED 直到 `/canvas delete`。详见 architecture.md §4。
+> **地图归属**：wall 占用的 map 始终保持 `RESERVED` 直到执行 `/canvas delete`。详见 `docs/architecture.md §4`。
 
 ### 2.4 表：`walls`（替代 `sign_records` + `drafts`）
 
@@ -169,21 +169,21 @@ v2 形态:
 
 **实施位置：** `MigrationRunner` V006 + `WallRepo.migrateProjectJsonV1ToV2` 静态方法。
 
-### 2.4.2 `project_json` v2 → v3 加法（0.6）
+### 2.4.2 `project_json` v2 → v3 加法
 
-0.6 时间轴在 `ProjectState` 顶层加两个 **nullable** 字段（依据 `timeline.md §2.6/§2.7`）；0.7.1 沿同一加法范式再补一个 `tweenFps`（per-wall 补间帧率，见下表）：
+时间轴与补间动画在 `ProjectState` 顶层新增三个 **nullable** 字段（依据 `timeline.md §2.6/§2.7`）：
 
 | 字段 | 类型 | 缺省 | 语义 |
 | --- | --- | --- | --- |
-| `timelines` | `List<Timeline>` | `null` | 工程下所有时间轴；每条含 `tracks: Map<elementId, List<Keyframe>>`（方案 B：关键帧轨压平进 timeline，不进 Element） |
+| `timelines` | `List<Timeline>` | `null` | 工程下所有时间轴；每条含 `tracks: Map<elementId, List<Keyframe>>`（关键帧轨内聚在 timeline 内，不侵入 Element） |
 | `activeTimelineId` | `String` | `null` | 当前激活时间轴 id；`null` = 静态画板（本节加法不生效） |
-| `tweenFps` | `Integer` | `null` | **0.7.1 引入**：per-wall 补间帧率；nullable blob 加法，旧工程无此字段 → `null` → `effectiveTweenFps()` 取引擎默认 30；序列化省略 `null`（`NON_NULL`）；同样无新 DB schema 版本 |
+| `tweenFps` | `Integer` | `null` | per-wall 补间帧率；nullable blob 加法，旧工程无此字段 → `null` → `effectiveTweenFps()` 取引擎默认 30；序列化省略 `null`（`NON_NULL`）；无新 DB schema 版本 |
 
 `Timeline` / `Keyframe` / `Easing` / `TriggerConfig` record 形态以 `timeline.md §2.1–§2.5` 为权威。
 
-**与 v1→v2（§2.4.1）的关键区别：v2→v3 是纯加法，不重构结构、不需主动 rewrite 迁移。** v1→v2 把 `elements[]` 包进 `layers[]`、改了树形结构，故走启动期全库扫描回写（方案 A）；v2→v3 只是顶层多两个字段，沿用 **v2 nullable 加法范式**：旧 v2 blob 无这两字段 → Jackson 反序列化填 `null` → `timelines == null` 走完全静态行为、baseline 零漂移（`ProjectState` 的 `@JsonCreator` 入口为此加 `timelines` / `activeTimelineId` 两个 `@JsonProperty` 参数；0.7.1 又以同一 nullable 加法范式补了 `tweenFps`，故现共三个新参数，缺失均退 `null`）。
+**与 v1→v2（§2.4.1）的关键区别：v2→v3 是纯加法，不重构结构、不需主动 rewrite 迁移。** v1→v2 把 `elements[]` 包进 `layers[]`、改了树形结构，故走启动期全库扫描回写；v2→v3 只是顶层新增可空字段，沿用 **nullable 加法范式**：旧 v2 blob 无这些字段 → Jackson `@JsonCreator` 反序列化填 `null` → `timelines == null` 走完全静态行为、baseline 零漂移。
 
-**`Element` 8 个 record 零改动**——这是方案 B 的核心好处：关键帧不进 Element，故 sealed permits 与全部元素字段不动，`.canvas` / `project_json` 里既有 element 的序列化形态完全不变。
+**`Element` 8 个 record 零改动**：关键帧轨内聚在 `Timeline.tracks` 而非 `Element` 内，故 sealed permits 与全部元素字段不动，`.canvas` / `project_json` 里既有元素的序列化形态完全不变。
 
 **`protocolVersion` 内部字段 2 → 3**，但**不主动回写**旧 blob：
 
@@ -191,7 +191,7 @@ v2 形态:
 - 运行期代码**同时接受 2 与 3**：读到 v2（无 `timelines`）按静态处理，读到 v3 按带时间轴处理。
 - **lazy on-write**：某 wall 下次保存时 `project_json` 自然写成 `protocolVersion: 3`，无显式迁移步骤。
 
-**无新 SQLite 表 / 无新 schema 版本。** `timelines` 以及每元素关键帧轨（`Timeline.tracks: Map<elementId, List<Keyframe>>`）全部序列化进 `walls.project_json` blob，与 `layers` / `elements` 同级。**0.6 不加 DB schema 版本、不加表、不做 `ALTER`**——本次变更全在 `project_json` blob 层（与 §6 的 schema 版本约定对照见 §6.2 末）。
+**无新 SQLite 表 / 无新 schema 版本。** `timelines` 以及每元素关键帧轨（`Timeline.tracks: Map<elementId, List<Keyframe>>`）全部序列化进 `walls.project_json` blob，与 `layers` / `elements` 同级，不增加 DB schema 版本或 `ALTER` 语句（与 §6 的 schema 版本约定对照见 §6.2 末）。
 
 ### 2.5 表：`audit_log`
 
@@ -214,28 +214,28 @@ CREATE INDEX idx_audit_player ON audit_log(player_uuid);
 CREATE INDEX idx_audit_event ON audit_log(event);
 ```
 
-**实际记录的事件清单（2026-06-14 按代码 `auditLog.record(...)` 调用点核对，约 30+ 个）：**
+**实际记录的事件清单（按代码 `auditLog.record(...)` 调用点核对）：**
 
 | 分组 | 事件字面量 | 出处 |
 | --- | --- | --- |
-| 认证 | `AUTH_OK` | `SessionManager`（认证成功；`AUTH_FAILED` 是 WS/HTTP 错误响应码，不入 audit 表） |
-| 会话 | `SESSION_OPEN` `SESSION_BEGIN` `SESSION_CONFIRM` `SESSION_CANCEL` | `SessionManager` |
-| 墙 | `WALL_ALIAS` `WALL_LOCK` `WALL_UNLOCK` `WALL_DELETE` | 命令族 / lock dispatcher |
+| 认证 | `AUTH_ISSUED` `AUTH_ROTATED` `AUTH_OK` | `SessionManager` / `TokenService`（`AUTH_FAILED` 是 WS/HTTP 错误响应码，不入 audit 表） |
+| 会话 | `SESSION_OPEN` `SESSION_BEGIN` `SESSION_CONFIRM` `SESSION_CANCEL` `SESSION_RATE_LIMIT_DISCONNECT` `SESSION_MALFORMED_FRAME_DISCONNECT` | `SessionManager` / `WebServer` |
+| 墙与导入 | `WALL_ALIAS` `WALL_LOCK` `WALL_UNLOCK` `WALL_DELETE` `PROJECT_IMPORT` | 命令族 / lock dispatcher / `ProjectImporter` |
 | 地图池 | `POOL_INITIALIZED` `POOL_RESERVE` `POOL_BIND_WALL` `POOL_RELEASE_WALL` `POOL_RELEASE_TO_FREE` `POOL_EXPAND` `POOL_LEAK` `POOL_ORPHAN_ROW` | `MapPool` / 启动扫描 |
 | 图片上传 | `IMAGE_UPLOAD_OK` `IMAGE_UPLOAD_REJECTED` | `UploadHandler` |
 | 安全 | `PERMISSION_DENIED` `PLUGIN_NAMESPACE_DENIED` `TOKEN_RATE_LIMIT_EXCEEDED` | 鉴权 / Plugin API / token rate limit |
 | 变量（命令） | `VARIABLE_COMMAND_SET` `VARIABLE_COMMAND_DELETE` | `/canvas var` 命令 |
 | 变量（WS op） | `VARIABLE_CREATE` `VARIABLE_UPDATE` `VARIABLE_SET` `VARIABLE_DELETE` `VARIABLE_BIND`（global 走 `VARIABLE_GLOBAL_*` 前缀） | `VariableOpDispatcher`（按 op 拼前缀 + 动作名） |
-| 变量别名 | `VARIABLE_ALIAS_SET` `VARIABLE_ALIAS_CLEAR` | `VariableAliasDispatcher`（0.4.2） |
-| 时刻表 | `SCHEDULE_UPSERT` `SCHEDULE_ENTRY_ADD` `SCHEDULE_ENTRY_UPDATE` `SCHEDULE_ENTRY_DELETE` | `ScheduleOpDispatcher`（0.4.0） |
-| 铁路网络 | `RAIL_LINE_CREATE/UPDATE/DELETE` `RAIL_STATION_ADD/UPDATE/DELETE` `RAIL_RUN_CREATE/UPDATE/DELETE` `RAIL_TIMETABLE_SET` `RAIL_WALL_BIND` | `RailOpDispatcher`（0.4.4） |
-| 脚本 | `SCRIPT_CREATE/UPDATE/DELETE/ENABLE/TEST` `SCRIPT_COMMAND_EXECUTED` `SCRIPT_RUN_BLOCKED` | `ScriptOpDispatcher` / 脚本执行引擎（0.7.0） |
+| 变量别名 | `VARIABLE_ALIAS_SET` `VARIABLE_ALIAS_CLEAR` | `VariableAliasDispatcher` |
+| 时刻表 | `SCHEDULE_UPSERT` `SCHEDULE_ENTRY_ADD` `SCHEDULE_ENTRY_UPDATE` `SCHEDULE_ENTRY_DELETE` | `ScheduleOpDispatcher` |
+| 铁路网络 | `RAIL_LINE_CREATE/UPDATE/DELETE` `RAIL_STATION_ADD/UPDATE/DELETE` `RAIL_RUN_CREATE/UPDATE/DELETE` `RAIL_TIMETABLE_SET` `RAIL_WALL_BIND` | `RailOpDispatcher` |
+| 时间轴与脚本 | `TIMELINE_PLAY/PAUSE/SEEK` `SCRIPT_CREATE/UPDATE/DELETE/ENABLE/TEST` `SCRIPT_COMMAND_EXECUTED` `SCRIPT_RUN_BLOCKED` | `EditOpDispatcher` / `ScriptOpDispatcher` / 脚本执行引擎 |
 
 > 注：`SESSION_CLOSED` / `WALL_NOT_FOUND` / `SCRIPT_INVALID` / `SCRIPT_NOT_FOUND` / `SCRIPT_QUOTA_EXCEEDED` / `SCRIPT_ENGINE_UNAVAILABLE` 等是 WS `Envelope.error(...)` 的**错误码**（返回给前端），并非全部都写入 audit 表——以代码 `auditLog.record(...)` 实际调用为准。
 
 **保留策略：** 默认保留 90 天，由 `database.audit-retention-days` 配（`0` = 永久保留）。清理逻辑在 `AuditLog` 内部：写入时若距上次清理超过 6 小时就顺带跑一次 `DELETE FROM audit_log WHERE ts < ?`（走 `idx_audit_ts`），不起独立调度线程。
 
-### 2.6.5 表：`image_uploads`
+### 2.6 表：`image_uploads`
 
 按 sha256[:16] hash 内容寻址。一个 hash 对应磁盘上一个 PNG 文件 + 一条 image_uploads 行；多个 ImageElement.source 可指同一 hash（跨 wall 引用零重复存储）。
 
@@ -255,7 +255,7 @@ CREATE INDEX idx_uploads_uploader ON image_uploads(uploader_uuid, uploaded_at DE
 CREATE INDEX idx_uploads_lru ON image_uploads(last_used_at);
 ```
 
-> **无 `refcount` 列**：引用计数改为运行期实时 sweep（见下方 LRU 清理）；原 `refcount INTEGER` 列已在 V010 DROP（详见 §6.5.1）。
+> **无 `refcount` 列**：引用计数改为运行期实时 sweep（见下方 LRU 清理）；原 `refcount INTEGER` 列已在 V010 迁移移除（详见 §6.2）。
 
 **关键字段语义：**
 
@@ -269,16 +269,15 @@ CREATE INDEX idx_uploads_lru ON image_uploads(last_used_at);
 SELECT COUNT(*) FROM image_uploads
 WHERE uploader_uuid = ? AND uploaded_at > strftime('%s', 'now') * 1000 - 86400000;
 
--- 单 wall 关联图片数（通过 ImageElement.source）—— project_json JSON_EACH 查
--- v1 简化：在 EditSession 内存层算（layers 内所有 image element.source 去重）
+-- 单 wall 关联图片数（通过 ImageElement.source）—— 在 EditSession 内存层统计（layers 内所有 image element.source 去重）
 
 -- 总磁盘字节
 SELECT SUM(bytes) FROM image_uploads;
 ```
 
-### 2.7 表：`template_usage`
+### 2.7 表：`template_usage` 与 `templates`
 
-模板使用统计，供编辑器排序「最近用过」「热门」。
+`template_usage` 记录玩家套用模板统计，供编辑器排序「最近用过」「热门」：
 
 ```sql
 CREATE TABLE template_usage (
@@ -293,14 +292,34 @@ CREATE INDEX idx_usage_player ON template_usage(player_uuid, last_used_at DESC);
 CREATE INDEX idx_usage_global ON template_usage(last_used_at DESC);
 ```
 
-### 2.8 表：`user_variables`（0.4.0 引入，V011）
+`templates`（V008 引入）存储内置与创意工坊模板元数据：
+
+```sql
+CREATE TABLE templates (
+  template_id     TEXT    PRIMARY KEY,
+  owner_uuid      TEXT,                      -- builtin=1 时为 NULL
+  owner_name      TEXT,
+  display_name    TEXT    NOT NULL,
+  description     TEXT,
+  yaml_path       TEXT    NOT NULL UNIQUE,   -- 列名因 schema 兼容保留；实际存 .canvas 模板包路径
+  builtin         INTEGER NOT NULL DEFAULT 0,
+  featured        INTEGER NOT NULL DEFAULT 0,
+  download_count  INTEGER NOT NULL DEFAULT 0,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+```
+
+> **`yaml_path` 列名保留说明**：模板系统已全面迁移为 `.canvas` 模板包（`kind="pack"`，见 `docs/template-pack.md`），物理 SQLite 列名 `yaml_path` 为满足 forward-only 迁移兼容规则（§6.5.2 禁止 `RENAME COLUMN`）而保留，实际存储 `.canvas` 文件路径（如 `templates/<id>.canvas` 或 `user-templates/<uuid>/<slug>.canvas`，Java DAO 层映射为中性 `filePath` 字段）。
+
+### 2.8 表：`user_variables`（V011）
 
 玩家在 wall 内创建的用户变量持久化。Tier 1 数据源（详见 `docs/dynamic-data.md`）。
 
 ```sql
 CREATE TABLE user_variables (
     wall_id        TEXT NOT NULL,             -- 所属 wall（per-wall scope）
-    name           TEXT NOT NULL,             -- "红队比分"（不含 user/ 前缀）
+    name           TEXT NOT NULL,             -- "red_score"（不含 user/ 前缀，仅允许 [a-zA-Z0-9_.-]+）
     type           TEXT NOT NULL,             -- 'STRING' / 'NUMBER' / 'BOOLEAN' / 'COLOR'
     default_value  TEXT,                      -- 可空：fallback when push 失效
     current_value  TEXT,                      -- 当前值（手动设 / 插件 push 后被写回）
@@ -317,9 +336,8 @@ CREATE INDEX idx_uvar_bound ON user_variables(bound_to) WHERE bound_to IS NOT NU
 
 - **持久化**：仅 `user/*` namespace 变量持久化；插件 / 系统 / PAPI 变量内存态重启不留
 - **级联删除**：wall 删除时 cascade（FOREIGN KEY 已声明）
-- **migration V011**：pre-release 0.x SNAPSHOT 阶段允许加表（§6.6.1 规则）
 
-### 2.9 表：`wall_schedules` + `schedule_entries`（0.4.0 引入，V012；V013 加 precision）
+### 2.9 表：`wall_schedules` + `schedule_entries`（V012 / V013）
 
 per-wall 列车 / 公交时刻表元数据。`ManualScheduleProvider` 启动期 loadAll 注册所有 wall 的 schedule 变量。
 
@@ -341,7 +359,7 @@ CREATE TABLE schedule_entries (
     FOREIGN KEY (wall_id) REFERENCES walls(wall_id) ON DELETE CASCADE
 );
 
--- V013：0.4.0 bugfix（Bug 4）—— per-wall 精度
+-- V013：每墙独立时间精度
 ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute';
 ```
 
@@ -349,7 +367,7 @@ ALTER TABLE wall_schedules ADD COLUMN precision TEXT NOT NULL DEFAULT 'minute';
 - **migration V013**：现有 wall 行 ALTER ADD COLUMN DEFAULT 'minute'，无数据丢失，向下兼容
 - **级联删除**：wall 删除时 cascade（FK CASCADE 已声明；ScheduleDao.deleteByWall 显式调用兜底）
 
-### 2.9.1 表：`variable_aliases`（0.4.2 引入，V014）
+### 2.9.1 表：`variable_aliases`（V014）
 
 per-wall 变量别名。别名仅 UI 展示用（picker / panel / chip），**不参与 `${var:...}` 解析**。所有 namespace 通用（user / system / papi / scoreboard / schedule / plugin 等）。
 
@@ -367,9 +385,9 @@ CREATE TABLE variable_aliases (
 CREATE INDEX idx_variable_aliases_wall ON variable_aliases(wall_id);
 ```
 
-### 2.9.2 表：`user_global_variables`（0.4.3 引入，V015）
+### 2.9.2 表：`user_global_variables`（V015）
 
-全服共享的用户变量（`userglobal/<name>` namespace；`name` 单字段全服唯一，**不带 wallId**）。补 0.4.0 user 变量 per-wall 不能跨画布的遗留。
+全服共享的用户变量（`userglobal/<name>` namespace；`name` 单字段全服唯一，**不带 wallId**），用于跨画布共享的自定义状态。
 
 ```sql
 CREATE TABLE user_global_variables (
@@ -391,7 +409,7 @@ CREATE INDEX idx_ugvar_bound ON user_global_variables(bound_to) WHERE bound_to I
 - **无 wall 外键**：全服级状态，不随某个 wall cascade 删除；`.canvas` 工程文件不含 userglobal（跨服务器无意义）
 - **配额**：per-owner 500 + 全服 10000（config 可调）
 
-### 2.9.3 表：铁路网络 5 表（0.4.4 引入，V016）
+### 2.9.3 表：铁路网络 5 表（V016）
 
 完整铁路网络抽象：线路 + 站点 + 车次（含服务类型 / 编组 / 区间 / 备注）+ 每站精确时刻表 + wall 绑定。`RailScheduleProvider` 接管 rail-bound wall，从 `rail_timetable` 精确查站时刻（非估算）。
 
@@ -462,10 +480,9 @@ CREATE TABLE wall_rail_bindings (
 - **rail + manual 共享 `schedule:*` namespace**：RailScheduleProvider 接管的 wall 让 ManualScheduleProvider 跳过 push，避免双写同 key
 - **`wall_rail_bindings.line_id IS NULL` 走 fallback**：兼容只用 ManualSchedule 的旧 server
 
-### 2.10 表：`wall_scripts`（0.7.0 引入，V017）
+### 2.10 表：`wall_scripts`（V017）
 
-墙脚本规则（视觉运行时；契约 `docs/scripting.md §2`）。脚本不进 ProjectState（D7），
-独立表 + `ScriptStore` 内存镜像（onEnable `loadFromDb` 全量加载）。
+墙脚本规则（视觉运行时；契约 `docs/scripting.md §2`）。脚本不进 `ProjectState`，使用独立表 + `ScriptStore` 内存镜像（onEnable `loadFromDb` 全量加载）。
 
 ```sql
 -- V017
@@ -525,18 +542,16 @@ CREATE INDEX IF NOT EXISTS idx_wall_scripts_wall ON wall_scripts(wall_id);
 
 ---
 
-## 4. `.canvas` 工程文件格式（0.8 Part A + Part B 实装）
+## 4. `.canvas` 工程与模板包格式
 
-> **实装状态（2026-06-21 核对）：本节描述的 `.canvas` zip 导出/导入已在 0.8 Part A 落地；SVG 矢量导入已在 0.8 Part B 落地。**
-> 代码核对结论：
-> - 导出：纯前端 `web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 的 `zipSync` 打 zip（无服务端往返、无 JSZip）；
-> - 导入：后端 `POST /api/project/import`（`web/ProjectImportHandler` → `canvasfile/ProjectImporter` 编排，`canvasfile/CanvasArchive` 流式安全解包用 `java.util.zip.ZipInputStream`）；
-> - 前端有「导出工程」（TopBar 更多菜单）/「导入 `.canvas`」（`ImportProjectModal`）UI 入口；
-> - SVG 矢量导入：纯前端 `web/src/lib/svg/`（`useSvgImport.ts` 编排）→ element.add 写入，`PathElement.fillRule` 字段（0.8 Part B D9）实装；UI 入口 = TopBar 溢出菜单「导入 SVG」（`SvgImportModal.vue`）。
+> **实现概况**：
+> - 导出：纯前端 `web/src/composables/useProjectExport.ts` + `web/src/lib/canvasFile.ts`，用 **fflate** 的 `zipSync` 客户端打 zip 下载（无服务端存储）；「存为模板」通过后端 `TemplateExporter` / `TemplatePublisher` 产出 `kind="pack"` 的 `.canvas` 包；
+> - 导入与套用：后端 `POST /api/project/import`（`web/ProjectImportHandler` → `canvasfile/ProjectImporter`）与 WS `template.apply` 共用同一条安全解包与物化管线（`canvasfile/CanvasArchive` 流式安全解包）；
+> - SVG 矢量导入：纯前端 `web/src/lib/svg/`（`useSvgImport.ts` 编排）→ `element.add` 写入，`PathElement.fillRule` 字段双端一致。
 >
-> 契约总纲见 `docs/import-export.md`。下文 §4.1–§4.6 据已实装代码回填。
+> 契约总纲见 `docs/import-export.md` 与 `docs/template-pack.md`。
 >
-> **仍未实装**：`assets/icons/*.svg`（IconElement 用户自定义 SVG 图标的导出/导入路径，与 SVG→PathElement 矢量导入是不同路径），留后续版本（见 §4.1 注）。
+> **未实装占位**：`assets/icons/*.svg`（`IconElement` 用户自定义 SVG 图标的随包导出/导入路径，与 SVG→`PathElement` 矢量导入是不同路径），详见 §4.1 注。
 
 玩家在编辑器中可「导出工程」供离线保存 / 分享，也可「导入 `.canvas`」整体替换当前会话工程。
 
@@ -548,17 +563,18 @@ CREATE INDEX IF NOT EXISTS idx_wall_scripts_wall ON wall_scripts(wall_id);
 mysign.canvas
 ├── manifest.json            # 必选
 ├── project.json             # 必选：完整 ProjectState
-├── scripts.json             # 可选：ScriptRule[]（0.8-A4 新增；无脚本则省略）
+├── params.json              # 可选：参数定义数组（仅 kind="pack" 模板包携带，见 docs/template-pack.md）
+├── scripts.json             # 可选：ScriptRule[]（无脚本则省略）
 ├── thumbnail.png            # 可选：预览缩略图 256×128
 └── assets/
     ├── <sha256[:16]>.png    # 工程引用的上传图片（内容寻址，与服务端命名一致）
-    └── icons/<id>.svg       # 工程引用的用户自定义图标（见下注，Part B 才写/读）
+    └── icons/<id>.svg       # 前向预留：用户自定义图标（当前仅白名单接纳、未摄入）
 ```
 
 - **必选项缺失 → `IMPORT_MALFORMED`**：解包后若缺 `manifest.json` 或 `project.json`，`CanvasArchive.unpack` 直接拒（`CanvasArchive.java`）。
 - **`assets/<hash>.png`**：导出时 `collectImageHashes` 扫所有图层的 image 元素 `source` 去重，逐张拉字节塞进包；导入时逐张走与上传同等的不可信防御链落 hash（`AssetIngest`，见 §4.4）。
-- **`assets/icons/<id>.svg`（仍未实装）**：解包白名单**接纳** `assets/icons/<file>` 条目（`CanvasArchive.isSafeEntryName`），但当前导出**不写**（`useProjectExport` 只收 image hash、不收 `user/<id>` 图标）、导入摄入器**显式跳过**（`AssetIngest.isAssetPng` 只认 `assets/<file>.png`，注释明确「排除 `assets/icons/*.svg`」）。注意：这条路径是给「IconElement 用户自定义 SVG 图标」的导出/导入用的，与「SVG→PathElement 矢量导入」（0.8 Part B 已实装，走 `useSvgImport` + `element.add`）是不同路径。SVG 图标的写入 / 清洗 / 落盘留后续版本，结构图保留该路径作前向占位。
-- **前向兼容**：老导入器遇到未知顶层条目应忽略而非报错（当前白名单外条目由 `isSafeEntryName` 拒为 `IMPORT_BAD_ENTRY`，白名单内的可选条目缺失则正常跳过）。
+- **`assets/icons/<id>.svg`（前向预留）**：解包白名单接纳 `assets/icons/<file>` 条目（`CanvasArchive.isSafeEntryName`），但当前导出不写、导入摄入器显式跳过（`AssetIngest.isAssetPng` 只认 `assets/<file>.png`）。注意：该条目针对 `IconElement`（`user/<id>`）资产打包，与独立的「SVG→`PathElement` 矢量导入」（走 `useSvgImport` + `element.add`）是两条不同路径。
+- **前向兼容**：白名单外条目由 `isSafeEntryName` 拒为 `IMPORT_BAD_ENTRY`，白名单内的可选条目缺失则正常跳过。
 
 ### 4.2 `manifest.json`
 
@@ -578,38 +594,38 @@ mysign.canvas
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `spec` | ✅ | 格式版本 |
-| `kind` | ✅ | `"project"`（与未来的 `"pack"` 区分） |
+| `spec` | ✅ | 格式版本（当前 `1`） |
+| `kind` | ✅ | `"project"`（普通工程档）或 `"pack"`（参数化模板包，配套 `params.json`，见 `docs/template-pack.md`） |
 | `created_at` | ✅ | 导出时间 |
-| `name` | | 工程名 |
-| `template_origin` | | 若来自模板，记录原 id |
+| `name` | | 工程或模板名 |
+| `template_origin` | | 若来自模板，记录源模板 id |
 
 ### 4.3 `project.json`
 
 直接包含 `protocol.md §7` 定义的 `ProjectState` 对象。v2 起为 layered 形态（含 `layers[]` / `activeLayerId` / `canvas.gridSize` / `canvas.guides` / 元素级 `opacity` / `blendMode` / `renderMode`）。导入老的 v1 `project.json`（含 `elements[]`）时自动 migrate（见 §2.4.1）。
 
-v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引入）/ `tweenFps`（0.7.1 引入），见 §2.4.2。导入老的 v1/v2 `project.json`（无这两个字段）时按静态处理（`timelines` 读为 `null`），无须迁移。时间轴是工程状态的一部分（序列化进 `ProjectState`），故 `.canvas` 导出天然带上它，无需 `assets/` 之类外置资源承载。
+v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId` / `tweenFps`，见 §2.4.2。导入老的 v1/v2 `project.json`（无这些字段）时按静态处理（`timelines` 读为 `null`），无须迁移。时间轴是工程状态的一部分（序列化进 `ProjectState`），故 `.canvas` 导出天然带上它，无需外置资源承载。
 
-**0.8 Part B 新增字段（`PathElement.fillRule`）**：`PathElement` 在 `project.json` 内新增可空字段 `fillRule`（`"nonzero"` / `"evenodd"` / `null`，`null` 等价 `nonzero`）。**无 DB migration**：`fillRule` 在 `project_json` blob 内是 nullable 加法，旧 blob 无此字段 → Jackson `@JsonProperty` 反序列化读为 `null` → 渲染时走默认 `nonzero`，基线零漂移。SVG 矢量导入生成的 `PathElement` 按 SVG 源文件的 `fill-rule` 属性写入此字段（`fillMap.mapFillRule` 映射）。
+**`PathElement.fillRule` 可空字段**：`PathElement` 在 `project.json` 内携带可空字段 `fillRule`（`"nonzero"` / `"evenodd"` / `null`，`null` 等价 `nonzero`）。**无 DB migration**：`fillRule` 在 `project_json` blob 内是 nullable 加法，旧 blob 无此字段 → Jackson `@JsonProperty` 反序列化读为 `null` → 渲染时走默认 `nonzero`，基线零漂移。SVG 矢量导入生成的 `PathElement` 按 SVG 源文件的 `fill-rule` 属性写入此字段（`fillMap.mapFillRule` 映射）。
 
-> **脚本不进 `project.json`**：墙脚本独立存 `wall_scripts` 表（不在 ProjectState，见 §2.10 / 脚本总纲 D7），故 `.canvas` 用独立的 `scripts.json` 条目承载（0.8-A4 新增）。形态见 **§4.6**。
+> **脚本不进 `project.json`**：墙脚本独立存 `wall_scripts` 表（不在 `ProjectState`，见 §2.10），故 `.canvas` 用独立的 `scripts.json` 条目承载。形态见 **§4.6**。
 
 ### 4.4 导入语义
 
 导入是后端 `POST /api/project/import`（multipart 收 `.canvas` 字节），鉴权 `canvas.edit`（fail-closed）。编排见 `ProjectImporter.importInto`（流程契约 `import-export.md §3.2`）：
 
 1. **流式安全解包**（`CanvasArchive.unpack`）：三闸边解边计数（包 / 单条目 / 总解压，闸值来自 config `import.*`，见 §5.1）+ 条目名安全校验（无 `..` / 绝对路径 / 反斜杠 / NUL）+ 白名单条目（§4.1）；缺 `manifest.json` / `project.json` → `IMPORT_MALFORMED`。
-2. **解析 manifest**（`CanvasManifest.parse`）：校验 `spec`（缺失/≤0 → `IMPORT_MALFORMED`；> `CANVAS_SPEC_MAX`(=1) → `IMPORT_SPEC_UNSUPPORTED` 提示升级插件）、`kind=="project"`、`wall.width/height>0`。
-3. **物化 `project.json` → `ProjectState`**（`ProjectMaterializer.materialize`）：复用既有 `@JsonCreator` + 元素/数值校验栈，不信任文件内任何数值；并与**当前会话墙尺寸**匹配，超出 → `IMPORT_SIZE_MISMATCH` 中止，提示开匹配尺寸新会话。
+2. **解析 manifest 与参数替换**（`CanvasManifest.parse` + `PackParamResolver`）：校验 `spec`（缺失/≤0 → `IMPORT_MALFORMED`；> `CANVAS_SPEC_MAX`(=1) → `IMPORT_SPEC_UNSUPPORTED` 提示升级插件）、`kind`（`"project"` 或 `"pack"`）、`wall.width/height>0`；若含 `params.json`（如把 `pack` 模板包直接当工程导入），先以默认参数值在文本层单遍替换 `${param}`。
+3. **物化 `project.json` → `ProjectState`**（`ProjectMaterializer.materialize`）：复用既有 `@JsonCreator` + 结构数量闸 + 元素数值校验栈，不信任文件内任何数值；并与**当前会话墙尺寸**匹配，超出 → `IMPORT_SIZE_MISMATCH` 中止，提示开匹配尺寸新会话。
 4. **`assets/*.png` 摄入**（`AssetIngest.ingestAll`）：逐张走 magic + ImageIO 隔离解码（200ms 超时 + 头部尺寸预检）+ 按内容重算 hash + 配额事务落盘；单张缺/拒**静默跳过**（计入图片配额，防绕过上传限频），差额产出 `asset-quota` warning。
-5. **孤儿关键帧轨丢弃 + warn**（`ProjectImporter.stripOrphanTracksAndCollect`）：若 `project.json` 含 `timelines[]`，其 `tracks` 的 key 是 elementId；对照所有图层的 elementId 集合，引用**不存在 elementId** 的 track（孤儿轨，常见于只导入了部分元素或元素被删过的工程）**剔除**，每条加一条 `orphan-track-dropped` warning。**此前 §10 留待定的「丢弃 vs 保留」现定稿为：丢弃 + warn**（不让坏引用进运行期，否则 Ticker 按 elementId 查不到元素会空插值）。
+5. **孤儿关键帧轨丢弃 + warn**（`ProjectImporter.stripOrphanTracksAndCollect`）：若 `project.json` 含 `timelines[]`，其 `tracks` 的 key 是 elementId；对照所有图层的 elementId 集合，引用**不存在 elementId** 的 track **剔除**，每条加一条 `orphan-track-dropped` warning（不让坏引用进运行期导致空插值）。
 6. **整体替换会话工程**（`EditSession.replaceProject`）：保留多层 / 时间轴。
 7. **`scripts.json` 导入**（若包内含且会话已绑墙，见 §4.6）。
 8. 全量快照广播（`pushSnapshot`）+ 游戏内地图全画布重绘（`throttler.submit`）+ 持久化（`wallRepo.updateState`）+ `audit PROJECT_IMPORT`。
 
 > **已知限制（导入路径不起播动画）**：throttler 只投静态像素帧；`persistWall` 全链的 Ticker 自动播 / 触发器 rebuild **不**在导入路径触发，故导入工程里的时间轴动画不会自动起播——需手动播一次，或随墙下次加载 / 会话回收时自然起播。
 >
-> **导入成功响应** `{ ok:true, warnings:[{kind, detail}…] }`；warning 不阻断，`kind` ∈ `asset-quota` / `orphan-track-dropped` / `script-invalid` / `script-command-blocked` / `script-quota`（错误码 → HTTP status 见 `import-export.md §4`：`IMPORT_ZIP_TOO_LARGE`→413、`IMPORT_SPEC_UNSUPPORTED`/`IMPORT_SIZE_MISMATCH`→409、`IMPORT_BAD_ENTRY`/`IMPORT_MALFORMED`→400）。
+> **导入成功响应** `{ ok:true, warnings:[{kind, detail}…] }`；warning 不阻断（错误码 → HTTP status 见 `import-export.md §4`：`IMPORT_ZIP_TOO_LARGE`→413、`IMPORT_SPEC_UNSUPPORTED`/`IMPORT_SIZE_MISMATCH`→409、`IMPORT_BAD_ENTRY`/`IMPORT_MALFORMED`→400）。
 
 ### 4.5 导出语义
 
@@ -620,11 +636,11 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 4. 取当前墙脚本 `useScriptStore().listSorted` → `scripts.json`（非空才写，见 §4.6）
 5. `assembleCanvasZip` 用 **fflate** 的 `zipSync`（`level: 6`）打 zip → `downloadBlob` 触发 `<name>.canvas` 下载
 
-> **打包库 = fflate**（`web/package.json` 依赖 `fflate@0.8.3`，非 JSZip；项目从未引入 JSZip / file-saver）。导出**不**经过服务器存储，完全在浏览器端完成。
+> **打包库 = fflate**（`web/package.json` 依赖 `fflate@0.8.3`）。导出**不**经过服务器存储，完全在浏览器端完成。
 
-### 4.6 `scripts.json` 形态（0.8-A4 新增）
+### 4.6 `scripts.json` 形态
 
-`scripts.json` = 一个 JSON 数组，每项是一条 `ScriptRule`（record 形态以 `scripting.md §2.1` 为权威：`id` / `wallId` / `enabled` / `name` / `trigger` / `actions`（Action 树，含 If 嵌套）/ `blockLayout`）。墙脚本独立存 `wall_scripts`（不在 ProjectState，§2.10 / D7），故用独立条目承载。无脚本时**省略**该条目（`assembleCanvasZip` 的 `scriptsJson` 可选）。
+`scripts.json` = 一个 JSON 数组，每项是一条 `ScriptRule`（record 形态以 `scripting.md §2.1` 为权威：`id` / `wallId` / `enabled` / `name` / `trigger` / `actions`（Action 树，含 If 嵌套）/ `blockLayout`）。墙脚本独立存 `wall_scripts`（不在 `ProjectState`，见 §2.10），故用独立条目承载。无脚本时**省略**该条目（`assembleCanvasZip` 的 `scriptsJson` 可选）。
 
 ```jsonc
 // scripts.json = ScriptRule[]（见 scripting.md §2.1）
@@ -657,27 +673,58 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 
 ### 5.1 `plugins/HikariCanvas/config.yml`
 
-见 `architecture.md §11` 的骨架。此处补充**字段约束：**
+以打包的 `plugin/src/main/resources/config.yml` 与 `HikariCanvasConfig` 解析逻辑为权威。核心配置字段约束如下：
 
-| 字段 | 类型 | 范围 | 默认 |
+| 字段 | 类型 | 范围 / 约束 | 默认 |
 | --- | --- | --- | --- |
-| `web.bind` | string | IP | `127.0.0.1` |
-| `web.port` | int | 1~65535 | `8877` |
-| `web.context-path` | string | 以 `/` 开头或空 | `""` |
-| `pool.initial-size` | int | 1~1024 | `64` |
-| `pool.max-size` | int | ≥ initial-size，≤ 8192 | `256` |
-| `session.token-ttl` | duration | `1m` ~ `24h` | `15m` |
-| `session.idle-disconnect` | duration | `30s` ~ `1h` | `5m` |
-| `limits.ws-messages-per-second` | int | 1~1000 | `20` |
-| `limits.text-max-length` | int | 1~4096 | `256` |
+| `network.host` | string | 监听 IP（公网通配地址启动期告警） | `"127.0.0.1"` |
+| `network.port` | int | 1~65535 | `8877` |
+| `network.editor-url` | string | 仅允许 `http://` / `https://`，禁含 CR/LF | `"http://{host}:{port}/?token={token}"` |
+| `network.ws-auth-timeout-seconds` | int | 1~60 | `5` |
+| `network.allowed-origins` | list\<string\> | 完整 `scheme://host[:port]` 列表 | `[]` |
+| `session.token-ttl-minutes` | int | ≥ 1（≤0 钳回默认并告警） | `15` |
+| `session.ws-grace-minutes` | int | ≥ 1 | `5` |
+| `session.idle-minutes` | int | `0` = 永不超时，或 ≥ 1 | `30` |
+| `session.reaper-scan-seconds` | int | ≥ 5 | `30` |
+| `session.token-purge-minutes` | int | ≥ 1 | `5` |
+| `map-pool.initial` | int | 1~1024 | `64` |
+| `map-pool.max` | int | ≥ `map-pool.initial` | `256` |
+| `map-pool.per-world` | map\<string,int\> | 各世界初始预热张数（总和 ≤ `max`） | `{}` |
 | `limits.canvas-max-maps` | int | 1~64 | `16` |
-| `import.canvas-max-mb` | int | ≥ 1 | `10` |
-| `import.canvas-max-entry-mb` | int | ≥ 1 | `10` |
-| `import.canvas-max-total-mb` | int | ≥ 1 | `50` |
+| `throttle.projection-fps` | int | 1~30 | `5` |
+| `throttle.input-rate-per-second` | int | ≥ 1 | `20` |
+| `throttle.input-burst` | int | ≥ `input-rate-per-second` | `40` |
+| `rendering.adaptive-fps.default-min-interval-ms` | long | ≥ 1 | `200` |
+| `rendering.adaptive-fps.high-freq-min-interval-ms` | long | ≥ 1 | `50` |
+| `rendering.adaptive-fps.push-packets-enabled` | bool | true / false | `true` |
+| `templates.auto-reload-on-startup` | bool | true / false | `true` |
+| `templates.preview-cache-seconds` | int | ≥ 0 | `300` |
+| `templates.max-per-player` | int | `0` = 不限，或 ≥ 1 | `20` |
+| `images.max-size-kb` | int | ≥ 1 | `2048` |
+| `images.allowed-mime` | list\<string\> | MIME 白名单 | `["image/png", "image/jpeg", "image/webp"]` |
+| `images.downscale-max-edge` | int | ≥ 64 | `1024` |
+| `images.max-per-wall` | int | `0` = 不限，或 ≥ 1 | `16` |
+| `images.max-uploads-per-day` | int | `0` = 不限，或 ≥ 1 | `50` |
+| `images.max-total-storage-mb` | int | `0` = 不限，或 ≥ 1 | `1024` |
+| `import.canvas-max-mb` | int | ≥ 1（整包上限，MB） | `10` |
+| `import.canvas-max-entry-mb` | int | ≥ 1（单条目解压上限，MB） | `10` |
+| `import.canvas-max-total-mb` | int | ≥ 1（总解压上限，MB） | `50` |
+| `security.token-rate-limit.per-minute` | int | ≥ 1 | `10` |
+| `database.auto-backup-before-migration` | bool | true / false | `true` |
+| `database.backup-retention-days` | int | `0` = 永久保留，或 ≥ 1 | `30` |
+| `database.audit-retention-days` | int | `0` = 永久保留，或 ≥ 1 | `90` |
+| `dynamic.push-rate-limit.*` | int/long | `per-plugin-per-second`(100) / `global-per-second`(1000) / `global-circuit-break-ms`(10000) | 见左 |
+| `dynamic.schedule.*` | mixed | `arriving-threshold-seconds`(60) / `arriving-text`("进站中") / `idle-text`("") | 见左 |
+| `dynamic.variables.*` | int | `userglobal-max-per-owner`(500) / `userglobal-max-total`(10000) | 见左 |
+| `timeline.default-fps` / `max-fps` | int | ≥ 1（`default-fps ≤ max-fps`） | `20` / `60` |
+| `scripts.max-rules-per-wall` / `max-elements-per-wall` | int | ≥ 1 | `16` / `200` |
+| `scripts.player-near-sample-ticks` | int | 1~200 | `10` |
+| `scripts.budget.*` | int | `max-actions-per-run`(50) / `max-runs-per-second`(10) / `max-chain-depth`(8) | 见左 |
+| `scripts.tween.max-fps` / `max-concurrent` | int | ≥ 1 | `60` / `16` |
+| `scripts.command-templates` | map | 服主白名单命令模板（见 `docs/scripting.md §5.2`） | `{}` |
+| `i18n.default-locale` | string | 小写下划线语言码 | `"en_us"` |
 
-所有 duration 支持 `s` / `m` / `h` 后缀。
-
-> **`import.*`（0.8）**：`.canvas` 导入 zip 三闸，单位 **MB**，防恶意大文件 / zip 炸弹（`HikariCanvasConfig.ImportConfig` + `config.yml` `import:` 段）。下界均为 `1`（`Math.max(1, …)` 兜底）。`canvas-max-mb` = 整个包上限（超 → 413 `IMPORT_ZIP_TOO_LARGE`）；`canvas-max-entry-mb` = 单个内部文件解压上限（边读边计数，不信声明大小）；`canvas-max-total-mb` = 所有内部文件解压总和上限（防多文件累加炸弹）。`CanvasArchive` 把 MB × 1024×1024 换算成 byte 后施闸。
+> **`import.*` 解包三闸**：单位 **MB**，防恶意大文件与 zip 炸弹（`CanvasArchive` 把 MB × 1024×1024 换算成 byte 后流式边读边计数施闸）。
 
 ---
 
@@ -687,9 +734,8 @@ v3 起 `project.json` 可含可选 `timelines[]` / `activeTimelineId`（0.6 引�
 
 - **插件版本**：SemVer（`MAJOR.MINOR.PATCH`）
 - **DB schema 版本**：单调整数，每次变更 +1
-- **模板 spec 版本**：独立整数（pack `manifest.spec`）；旧 YAML DSL 见 `docs/template-spec.md`（已废）
+- **`.canvas` 工程与模板包 `spec` 版本**：独立整数，工程档（`kind="project"`）与模板包（`kind="pack"`，见 `docs/template-pack.md`）共享同一 `manifest.spec`（当前为 `1`，前端 `CANVAS_SPEC` / 后端 `ProjectImporter.CANVAS_SPEC_MAX` 均 = 1，§4.4–§4.5）；导入 `spec > 当前支持` → `IMPORT_SPEC_UNSUPPORTED`
 - **协议版本**：独立整数，见 `protocol.md`
-- **.canvas spec 版本**：独立整数。**0.8 首发 = `1`**（前端 `CANVAS_SPEC` / 后端 `ProjectImporter.CANVAS_SPEC_MAX` 均 = 1，§4.4–§4.5）；导入 `spec > 当前支持` → `IMPORT_SPEC_UNSUPPORTED`
 
 ### 6.2 DB 迁移流程
 
@@ -705,61 +751,59 @@ plugin/src/main/resources/db-migrations/
 
 **当前迁移清单（核对 `MigrationRunner.java`，最高 V017；V009 跳号未落地脚本）：**
 
-| 版本 | 文件 | 引入版本 | 主要内容 |
-| --- | --- | --- | --- |
-| V001 | `V001__initial.sql` | 0.1.0 | 初始 4 表：`pool_maps` / `sign_records` / `audit_log` / `template_usage` |
-| V002 | `V002__drafts.sql` | 0.1.0 | 加 `drafts` 表（二段式编辑模型） |
-| V003 | `V003__drafts_add_maps.sql` | 0.1.0 | `drafts` 加 maps 字段 |
-| V004 | `V004__drafts_wall_id_alias.sql` | 0.1.0 | `drafts` 加 wall_id / alias |
-| V005 | `V005__walls_unified.sql` | 0.1.0 | **重构**：DROP `sign_records` + `drafts`，drop+recreate `pool_maps`（去 `sign_id`），新建 `walls` 表 |
-| V006 | `V006__walls_protocol_version.sql` | 0.1.0 | `walls` 加 `protocol_version` 列（标记 project_json 形态 v1/v2） |
-| V007 | `V007__image_uploads.sql` | 0.1.0 | 新建 `image_uploads` 表（含 `refcount` 列） |
-| V008 | `V008__templates.sql` | 0.1.0 | 新建 `templates` 表（玩家模板） |
-| V009 | （跳号） | — | 迭代中预留，**未落地脚本**，`MIGRATIONS` 列表无此项 |
-| V010 | `V010__remove_refcount.sql` | 0.1.0 | `ALTER TABLE image_uploads DROP COLUMN refcount` |
-| V011 | `V011__user_variables.sql` | 0.4.0 | 新建 `user_variables` 表 |
-| V012 | `V012__wall_schedules.sql` | 0.4.0 | 新建 `wall_schedules` + `schedule_entries` 表 |
-| V013 | `V013__schedule_precision.sql` | 0.4.0 bugfix | `wall_schedules` 加 `precision` 列 |
-| V014 | `V014__variable_aliases.sql` | 0.4.2 | 新建 `variable_aliases` 表（per-wall 别名） |
-| V015 | `V015__user_global_variables.sql` | 0.4.3 | 新建 `user_global_variables` 表（全服唯一） |
-| V016 | `V016__rail_network.sql` | 0.4.4 | 铁路网络 5 表：`rail_lines` / `rail_stations` / `rail_runs` / `rail_timetable` / `wall_rail_bindings` |
-| V017 | `V017__wall_scripts.sql` | 0.7.0 | 新建 `wall_scripts` 表（视觉运行时脚本） |
+| 版本 | 文件 | 主要内容 |
+| --- | --- | --- |
+| V001 | `V001__initial.sql` | 初始 4 表：`pool_maps` / `sign_records` / `audit_log` / `template_usage` |
+| V002 | `V002__drafts.sql` | 加 `drafts` 表（早期二段式编辑模型） |
+| V003 | `V003__drafts_add_maps.sql` | `drafts` 加 maps 字段 |
+| V004 | `V004__drafts_wall_id_alias.sql` | `drafts` 加 wall_id / alias |
+| V005 | `V005__walls_unified.sql` | **重构**：DROP `sign_records` + `drafts`，重建 `pool_maps`（去 `sign_id`），新建 `walls` 表 |
+| V006 | `V006__walls_protocol_version.sql` | `walls` 加 `protocol_version` 列（标记 project_json 形态 v1/v2） |
+| V007 | `V007__image_uploads.sql` | 新建 `image_uploads` 表（含初始 `refcount` 列） |
+| V008 | `V008__templates.sql` | 新建 `templates` 表（模板元数据，`yaml_path` 列现存 `.canvas` 路径） |
+| V009 | （跳号） | 迭代中预留，**未落地脚本**，`MIGRATIONS` 列表无此项 |
+| V010 | `V010__remove_refcount.sql` | `ALTER TABLE image_uploads DROP COLUMN refcount` |
+| V011 | `V011__user_variables.sql` | 新建 `user_variables` 表 |
+| V012 | `V012__wall_schedules.sql` | 新建 `wall_schedules` + `schedule_entries` 表 |
+| V013 | `V013__schedule_precision.sql` | `wall_schedules` 加 `precision` 列 |
+| V014 | `V014__variable_aliases.sql` | 新建 `variable_aliases` 表（per-wall 别名） |
+| V015 | `V015__user_global_variables.sql` | 新建 `user_global_variables` 表（全服唯一） |
+| V016 | `V016__rail_network.sql` | 铁路网络 5 表：`rail_lines` / `rail_stations` / `rail_runs` / `rail_timetable` / `wall_rail_bindings` |
+| V017 | `V017__wall_scripts.sql` | 新建 `wall_scripts` 表（视觉运行时脚本） |
 
-> 时间轴（0.6）**不建表**——序列化进 `walls.project_json` blob（见 §2.4.2），故 schema 版本无对应条目。
+> 时间轴**不建表**——序列化进 `walls.project_json` blob（见 §2.4.2），故 schema 版本无对应条目。
 
 启动时：
 1. 读 `schema_version` 表最大 version `N`
 2. 遍历 `MigrationRunner.MIGRATIONS`，对 `version > N` 的条目按序应用
 3. 每应用一个脚本 → 在 `schema_version` 表插入新 row
-4. **每个 migration 各自包一个事务**，失败回滚不留半态；事务前 WAL 安全 `auto-backup`（0.9.1 起默认开，见 §6.6.2）
+4. **每个 migration 各自包一个事务**，失败回滚不留半态；事务前 WAL 安全 `auto-backup`（默认开启，见 §6.5.2）
 
-**0.6 例外（无 schema 变更）：** 0.6 时间轴把协议版本由 2 升至 3（详见 `protocol.md`），但**不引入新的 DB schema 版本**——无新表、无 `ALTER`，`timelines` / 关键帧轨全在 `walls.project_json` blob 层加（§2.4.2）。与历来"每次 DB 变更 +1"（§6.1）的惯例对照：本次变更不触碰任何表结构，故 `schema_version` 不动；版本演进体现在 `project_json` 内部的 `protocolVersion` 字段（lazy on-write 写成 3），而非 schema 整数。
+**纯 blob 演进不增加 schema 版本：** 如时间轴将 `ProjectState` 升至 v3（详见 `protocol.md`），因无新表与 `ALTER`，改动全在 `walls.project_json` blob 层（§2.4.2），故 `schema_version` 不递增；版本演进体现在 `project_json` 内部的 `protocolVersion` 字段（lazy on-write 写成 3）。
 
 ### 6.3 破坏性变更处理
 
 - **pool_maps schema 变更**：必须保持既有 map 数据可用
 - **walls.project_json 结构变更**：对应 `protocol.md §7` 升版；迁移脚本或启动时懒转换
-- **模板 spec 升版**：旧模板文件保持可加载，读取时 `adapter.transform(oldYaml) → currentSpec`
+- **模板包与列名兼容**：模板存储统一为 `.canvas` 压缩包（`kind="pack"`，见 `docs/template-pack.md`），版本兼容与工程档共用 `manifest.spec` + `ProjectState` `@JsonCreator` 兼容链；`templates.yaml_path` 物理列名因 §6.5.2 forward-only 约束保留不改名，直接存放 `.canvas` 相对路径
 
 ### 6.4 备份与恢复
 
-**0.9.1 起**：每次 schema migration 前自动 WAL 安全备份（见 §6.6.2；`database.auto-backup-before-migration` 默认开）。这是"迁移前兜底"，不是周期性快照。
+每次 schema migration 前自动执行 WAL 安全备份（见 §6.5.2；`database.auto-backup-before-migration` 默认开）。这是"迁移前兜底"，不是周期性快照。
 
 日常运维仍建议：
 - `data.db` 应随世界文件一并快照（迁移前备份只覆盖 migration 时点）
 - 恢复时确保 DB 与世界文件的时间一致，否则 map 与 PDC 可能不匹配
 
-### 6.6 Migration 兼容性规则（pre-release vs stable 发版）
+### 6.5 Migration 兼容性规则
 
-> **数据契约闸 0.9.1 落地**（2026-06-23）：早期 migration 走"激进 drop+recreate"（如 V005 整体重置），适合 pre-release。0.9.1 把"首次 stable 后必须 forward-only + 强制 auto-backup"从文档约定变成**代码/测试落地**——并把 **schema 冻结点提前到 V018**（V001-V017 grandfathered，自 V018 起强制 forward-only），抢在 1.0 之前一个版本进入冻结。
->
-> **版本语义**：`0.x.y-SNAPSHOT` 历来视为 pre-release（允许激进改 schema）；但 **schema 实际已自 V018 冻结**（forward-only 守卫强制起始版本），不再等到 1.0.0。当前最高迁移 V017。
+> **Forward-only 冻结点 = V018**：V001–V017 为早期结构演进产物（grandfathered），自 **V018** 起由单测与运行期备份双重强制执行 forward-only 兼容规则。当前最高迁移为 V017。
 
-#### 6.6.1 Pre-release schema（V001-V017，grandfathered）
+#### 6.5.1 既有基线（V001-V017，grandfathered）
 
-V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount 等），forward-only 守卫不追溯，原样保留。
+V001-V017 是早期结构定型产物（如 V005 表合并、V010 移除 `refcount` 列），forward-only 守卫不追溯，原样保留。
 
-#### 6.6.2 Forward-only（V018 起强制）
+#### 6.5.2 Forward-only（V018 起强制）
 
 **强制 forward-only**（由 `MigrationForwardOnlyTest` 编译期守卫——扫 `db-migrations/*.sql`，V018+ 命中即 fail）：
 
@@ -773,19 +817,17 @@ V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount �
 
 **强制 auto-backup**（`MigrationRunner.tryBackup`，**WAL 安全**）：
 
-- `database.auto-backup-before-migration: true`（0.9.1 起 config 默认开）
+- `database.auto-backup-before-migration: true`（config 默认开启）
 - 每个待执行 migration 前：先 `PRAGMA wal_checkpoint(TRUNCATE)` 把 WAL 已提交事务刷进主库，再 copy `data.db` + `-wal`/`-shm` → `data.db.pre-V<NNN>.bak`（+ `.bak-wal`/`.bak-shm`）。迁移在 onEnable 单线程跑、无并发写，故备份是一致快照。
 - **恢复**：停服 → 用 `.bak` 覆盖 `data.db`（连同 `.bak-wal`/`.bak-shm` 覆盖，或删除现有 `data.db-wal`/`-shm`）→ 启动。
-- **备份保留策略**（0.9.1 已实装）：`BackupReaper` 在 migration 后启动期清理超过 `database.backup-retention-days`（默 30）天的 `data.db.pre-V<NNN>.bak`（含 `-wal`/`-shm`）。`0` = 永久保留，禁用清理。
+- **备份保留策略**：`BackupReaper` 在 migration 后启动期清理超过 `database.backup-retention-days`（默 30）天的 `data.db.pre-V<NNN>.bak`（含 `-wal`/`-shm`）。`0` = 永久保留，禁用清理。
 
-#### 6.6.3 Migration 测试要求（V018 起）
+#### 6.5.3 Migration 测试要求（V018 起）
 
-每个新 migration 必须有 fixture 测试（基建 `MigrationFixtureTestBase` 0.9.1 已就位）：
+每个新 migration 必须有 fixture 测试（基建 `MigrationFixtureTestBase`）：
 `runUpTo(V<N-1>)` 建 baseline → 灌 `migration-fixtures/V<NNN>__<name>/before.sql` 种子数据 →
 `runUpTo(V<N>)` 应用目标迁移 → 子类断言关键查询数据无损 / 新结构正确。
 示范见 `V017WallScriptsFixtureTest`；加新 fixture 的步骤见 `migration-fixtures/README.md`。
-
-详见 `docs/journal.md` 2026-05-16 条目。
 
 ---
 
@@ -798,13 +840,9 @@ V001-V017 是激进期产物（V005 drop+recreate、V010 DROP COLUMN refcount �
 | `pool_maps` RESERVED `wall:<id>` 但 walls 表无对应行 | 视为泄漏；`detectLeaks` 强制 → FREE + 告警。三条例外不判：① walls 表**读失败**（`loadAllWallIds` 返 empty）→ 整轮跳过，读不到 ≠ 表里没有；② 地图是在**读表之后**才借出去的（`last_used_at` 晚于快照时刻）→ 快照对它没有发言权，下轮再判；③ owner 是 `wall:pending-*` 且未超 `PENDING_RESERVE_TTL_MS`（60s）→ 正在创建中的墙 |
 | `pool_maps` RESERVED `wall:pending-*` 超过 60s / 跨了重启 | 上一次建墙被硬中断（kill -9 / 崩服）留下的残留。`detectLeaks` 超期回收；启动期 `initialize` 直接降级 FREE（pending 是 confirm 内部的中间态，活不过重启） |
 | `walls.map_ids` 引用的 map 不在 `pool_maps` 或非该 wall 持有 | 启动时 WallRestorer 检测；行 → quarantine + 告警，不阻塞启动 |
-| ItemFrame PDC `wall_id` 但 walls 表无对应行 | 启动时报告，不主动拆框（玩家可能误删后想恢复）；管理员 `/canvas cleanup` 决定 |
+| ItemFrame PDC `wall_id` 但 walls 表无对应行 | 启动时报告，不主动拆框（玩家可能误删后想恢复），由管理员核查处理 |
 | walls 行存在但所有 ItemFrame 消失 | 行保留（玩家可能后续走到原位置 `/canvas open` 恢复）；`/canvas list` 标记 detached |
 | ItemFrame 存在但 walls 表行被删（不应发生，因为 delete 会拆框） | 下次 wand 交互时识别为"陌生 ItemFrame"，提示用户手动拆 |
-
-### 7.2 `/canvas fsck`
-
-管理员命令，扫描全局一致性并输出报告。尚未实装；当前 `/canvas cleanup` 命令保留 stub 占位。
 
 ---
 
@@ -853,19 +891,5 @@ LIMIT 10;
 | 玩家 UUID | 中 | 存储，不外发 |
 | 玩家名 | 低 | 冗余存储 |
 | 玩家 IP | 高 | **仅 SHA-256 存 `audit_log.ip_hash`**，不存明文 |
-| Token | 高 | 生成后仅存 SHA-256 → SQLite，原文件只在内存 + 返回玩家一次 |
+| Token | 高 | 生成后仅存 SHA-256 → SQLite，原文只在内存 + 返回发起方一次 |
 | 项目内容（招牌文字） | 低 | 明文存储，属玩家作品 |
-
----
-
-## 10. 未决问题
-
-- [ ] `pool_maps` 删除（池缩容）是否支持在线执行
-- [ ] 世界卸载/加载时 DB 的行为（某世界下线，其中的 walls 行如何处理）
-- [ ] `walls_map_index(map_id PK, wall_id)` 反向表是 P1 加，还是直接走 LIKE 查询（数据量小可不加）
-- [ ] alias 大小写敏感性（"Subway" vs "subway" 是否同名冲突）
-- [ ] wall delete 时是否需要保留 audit log 一份 project_json 备份（防误删）
-- [ ] `audit_log` 是否分库以免主 DB 膨胀
-- [ ] 多服务器共享 DB 的场景（暂不支持，但考虑未来是否兼容）
-- [x] **0.6 引入 / 0.8 定稿**：孤儿关键帧轨（导入的 `timelines[].tracks` 引用当前工程不存在的 elementId）丢弃 vs 保留——**已定稿为「丢弃 + `orphan-track-dropped` warn」**（0.8 Part A 实装，`ProjectImporter.stripOrphanTracksAndCollect`，见 §4.4 步骤 5）
-- [ ] **0.6 引入**：`timelines` 含大量关键帧时 `project_json` blob 体积是否需要上限约束（单 wall 一个 blob，关键帧数无天然边界；与 `limits.*` config 段的关系待定）

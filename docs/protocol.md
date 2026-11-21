@@ -1,6 +1,5 @@
 # WebSocket 通信协议
 
-**状态：** 已实装（随代码更新）· 2026-06-14
 **适用范围：** 浏览器编辑器 ↔ 插件
 
 本协议有**三个相互独立的版本号**，务必分清（详见下方「三层版本号」一节）：
@@ -17,27 +16,27 @@
 
 代码里存在三个版本号，含义不同、各自独立递增（见 `web/Protocol.java` javadoc 与 `web/src/network/wsClient.ts` 常量注释）：
 
-1. **业务协议版本**（business protocol）= 业务 op / payload schema 的版本。client 在 auth 帧携 `client_v`，server 在 ready 帧回 `accepted_v`；不匹配 close `4002`。常量在 `Protocol.SUPPORTED_MIN / SUPPORTED_MAX`（当前都 = `7`），前端 `CLIENT_V = 7`。每次升版都取"干净切换"（`MIN = MAX` 同步提升，不维持双轨）。**协议版本 v1→v7 沿革见 `docs/journal.md`。**
+1. **业务协议版本**（business protocol）= 业务 op / payload schema 的版本。client 在 auth 帧携 `client_v`，server 在 ready 帧回 `accepted_v`；不匹配 close `4002`。常量在 `Protocol.SUPPORTED_MIN / SUPPORTED_MAX`（当前都 = `8`），前端 `CLIENT_V = 8`。每次升版都取"干净切换"（`MIN = MAX` 同步提升，不维持双轨）。
 2. **信封壳版本**（envelope schema）= 消息容器格式版本，`Envelope.v` 恒为 `2`（`Envelope.of` 固定写 2，前端 `ENVELOPE_V = 2`）。改 envelope 字段才会动这个号，业务升级时**不动**。所有出帧（含 auth / ping）用它做 `v`。
-3. **ProjectState schema** = `ProjectState.PROTOCOL_VERSION`，当前 `3`，序列化进 `project_json`。0.6 的 timeline 字段进了 ProjectState 故 bump 到 3；0.7 脚本**不进 ProjectState**（有意为之，见 scripting.md D7），故 v4-v7 升业务版本时此号留 3 不动。
+3. **ProjectState schema** = `ProjectState.PROTOCOL_VERSION`，当前 `3`，序列化进 `project_json`。时间轴字段进了 `ProjectState` 故升至 3；墙脚本独立存储而不进入 `ProjectState`（见 `docs/scripting.md §2.5`），故业务版本升至 v4–v8 时此号保持 `3` 不动。
 
 ## 版本演进
 
-协议业务版本 **v1→v8 的逐版沿革见 `docs/journal.md`**（每次都取"干净切换"：`Protocol.SUPPORTED_MIN = SUPPORTED_MAX` 同步提升，不维持双轨——前端 bundle 由插件自带分发，客户端与服务端版本在实际部署中永远匹配，混版会导致按旧 schema 保存时静默丢数据）。当前边界与各版本引入的能力：
+协议业务版本每次升版均取"干净切换"（`Protocol.SUPPORTED_MIN = SUPPORTED_MAX` 同步提升，不维持双轨——前端 bundle 由插件自带分发，客户端与服务端版本在实际部署中永远匹配，混版会导致按旧 schema 保存时静默丢数据）。各版本引入的能力：
 
 | 版本 | 引入能力 | 对 ProjectState schema 的影响 |
 |---|---|---|
 | v2 | 图层模型（`layers[]` / `activeLayerId`）+ 元素级 `opacity`/`blendMode`/`renderMode` + `canvas.gridSize`/`guides[]`；`layer.*` op 族 | schema bump 到 2（`elements[]` 包进 `layers[]`） |
 | v3 | 时间轴（`timelines?[]` / `activeTimelineId?`）；`timeline.*`（§5.12）+ `keyframe.*`（§5.13）op | schema bump 到 3（timeline 字段进 ProjectState） |
-| v4 | 墙脚本（`script.*` 5 op，§5.14）；ready payload 加 `scripts[]` | **不 bump**（脚本不进 ProjectState，scripting.md D7；schema 留 3） |
-| v5 | 3 新触发器 + 有界循环「重复 N 次」（只扩 Trigger / Action wire union） | 不 bump |
-| v6 | 补间包裹积木 `tweenBlock`（契约 `docs/scripting-tween.md`） | 不 bump |
-| v7 | 备选积木批（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗等，扩 Action union） | 不 bump |
-| v8 | ready payload 新增 `canManageWall`（服务端算好的墙管理授权结论，替代前端自行比对 `selfUuid === ownerUuid`）；配套会话主体类型 `PLAYER` / `CONSOLE`，见 `docs/security.md §5.0` | 不 bump |
+| v4 | 墙脚本（`script.*` op，§5.14）；ready payload 加 `scripts[]` | **不 bump**（脚本不进 ProjectState，见 `docs/scripting.md §2.5`；schema 留 3） |
+| v5 | 扩展触发器 + 有界循环「重复 N 次」（扩 Trigger / Action wire union） | 不 bump |
+| v6 | 补间包裹积木 `tweenBlock`（见 `docs/scripting.md` 附录） | 不 bump |
+| v7 | 扩展积木批（随机分支 / 元素置顶置底 / 变量取整 / 标题弹窗等，扩 Action union） | 不 bump |
+| v8 | ready payload 新增 `canManageWall`（服务端算好的墙管理授权结论，替代前端自行比对 `selfUuid === ownerUuid`）；配套会话主体类型 `PLAYER` / `CONSOLE`，见 `docs/security.md §5.1` | 不 bump |
 
 - **信封壳 `Envelope.v` 恒为 2**：以上升版均只动 business protocol（`client_v` / `accepted_v`），不改信封字段（`v / op / id / ts / payload`）。
-- **要点（v3+ 共同纪律）**：脚本 op **不进画布 undo/redo**（scripting.md §4.3；alias/schedule/rail 族同例）；`script.*` patch 推送 `StatePatch.version` 取当前 `ProjectState.version` 不写 0；一墙一活跃 session（byWall 排他锁），单 session push 等价全墙广播。
-- Trigger / Action 的完整 wire 多态形态（type 判别 + 扁平字段）以 `docs/scripting.md §2.2/§2.3` 及各分版设计稿（`scripting-0.7.1.md` / `scripting-0.7.2.md` / `scripting-0.7.3.md` / `scripting-tween.md`）为权威。
+- **要点（v3+ 共同纪律）**：脚本 op **不进画布 undo/redo**（`docs/scripting.md §4.3`；alias/schedule/rail 族同例）；`script.*` patch 推送 `StatePatch.version` 取当前 `ProjectState.version` 不写 0；一墙一活跃 session（byWall 排他锁），单 session push 等价全墙广播。
+- Trigger / Action 的完整 wire 多态形态（type 判别 + 扁平字段）以 `docs/scripting.md §2.2/§2.3` 与文末附录为权威。
 
 ---
 
@@ -107,24 +106,24 @@ GET /api/session/:token HTTP/1.1
 ### 3.2 WS 握手
 
 1. 打开 `wss://.../ws`（或 `ws://` 本地）
-2. 客户端首帧必须发送 `auth`，**必须**携带 `client_v`（2026-05-16 之前别名 `clientProtocolVersion` 兼容期保留）：
+2. 客户端首帧必须发送 `auth`，**必须**携带 `client_v`（兼容期同时保留旧别名 `clientProtocolVersion`）：
 
 ```json
 { "v": 2, "op": "auth", "id": "c-0",
-  "payload": { "token": "...", "client_v": 7, "clientProtocolVersion": 7 } }
+  "payload": { "token": "...", "client_v": 8, "clientProtocolVersion": 8 } }
 ```
 
-> 前端实际同时发 `client_v`（主字段名）和旧别名 `clientProtocolVersion`（兼容回滚到旧 jar 的情形，见 `wsClient.ts sendAuth`）。服务端优先读 `client_v`，缺则回退读 `clientProtocolVersion`（`WebServer.handleAuth`）。
+> 前端实际同时发 `client_v`（主字段名）和旧别名 `clientProtocolVersion`（见 `wsClient.ts sendAuth`）。服务端优先读 `client_v`，缺则回退读 `clientProtocolVersion`（`WebServer.handleAuth`）。
 >
-> 服务端收到 `client_v` 不在 `[Protocol.SUPPORTED_MIN, SUPPORTED_MAX]`（当前都 = `7`）或非数字 / 缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `ac.haru.hikaricanvas.web.Protocol`（前后端双向校验）。**版本检查在 token consume 之前**（避免为不兼容客户端浪费一次性 token），但在 per-IP 限流之后（防绕过）。
+> 服务端收到 `client_v` 不在 `[Protocol.SUPPORTED_MIN, SUPPORTED_MAX]`（当前都 = `8`）或非数字 / 缺字段 → 立刻发 `error: VERSION_MISMATCH` + close `4002` (`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`)。版本号常量集中在 `ac.haru.hikaricanvas.web.Protocol`（前后端双向校验）。**版本检查在 token consume 之前**（避免为不兼容客户端浪费一次性 token），但在 per-IP 限流之后（防绕过）。
 >
 > **未认证 5s 超时**：WS 升级后未在 `network.ws-auth-timeout-seconds`（默认 5s，代码钳到 `1..60`）内收到合法 `auth` 帧 → close `4001` (`auth_timeout`)。防止恶意客户端占 WS 槽。
 >
 > **Origin 白名单**：WS upgrade 时校验 `Origin` 头（`checkWsOrigin` / `isOriginAllowed`）。**放行**：① 无 Origin / `null`（同源 fetch / 非浏览器）；② `127.0.0.1:*` 与 `localhost:*`（任何端口）；③ 与服务端 `host:port` 完全相同的同源；④ `network.allowed-origins` 精确匹配（大小写敏感）。其余 → 403 + 不 upgrade。注意：与表格描述不同，回环始终放行，并非"默认空 = 不校验"。
 >
-> **per-IP token 限流**（2026-05-25）：auth 进校验前先做 per-IP 速率限制（`TokenRateLimiter`，默配见 config）；超限 → `error: RATE_LIMITED` + close `4429` (`CLOSE_TOKEN_RATE_LIMITED`)。client 看到 4429 应显示"请稍后再试"而非自动重连。
+> **per-IP token 限流**：auth 进校验前先做 per-IP 速率限制（`TokenRateLimiter`，默配见 config）；超限 → `error: RATE_LIMITED` + close `4429` (`CLOSE_TOKEN_RATE_LIMITED`)。client 看到 4429 应显示"请稍后再试"而非自动重连。
 >
-> **auth 时复查权限**（2026-05-25 #3）：token 签发后玩家可能被撤权（lp/pex/reload），故 auth 路径经主线程 hop 复查 `canvas.edit`；被撤权 → `error: PERMISSION_DENIED` + close `4003`（同 takeover 码，client 不重连）。同一 hop 顺带解析 `canvas.template.use-others` 供 ready 帧模板可见性过滤。
+> **auth 时复查权限**：token 签发后玩家可能被撤权（lp/pex/reload），故 auth 路径经主线程 hop 复查 `canvas.edit`；被撤权 → `error: PERMISSION_DENIED` + close `4003`（同 takeover 码）。同一 hop 顺带解析 `canvas.template.use-others` 供 ready 帧模板可见性过滤。
 >
 > **会话级 IP 绑定**：首次 auth 时 `bindOrCheckIp` 把 client socket peer IP（**不解析 XFF**，避免伪造头攻击）CAS 绑定到 `Session.boundIp`；后续重连 IP 不一致 → `error: AUTH_FAILED` + close `4001`（文本 `ip_mismatch`）。
 
@@ -180,12 +179,12 @@ GET /api/session/:token HTTP/1.1
 | `lockedAt` | number? | = `walls.published_at`（DB 列名保留，**语义为 lock 时间戳**）；非 null = 已锁定，前端 readonly。缺省（null）略 |
 | `ownerUuid` | string? | wall 作者 UUID。**仅供展示**——不要用它与 `selfUuid` 比对来判授权，那是 `canManageWall` 的职责 |
 | `selfUuid` | string | 当前 session 主体的 UUID（始终下发）。控制台主体为 nil UUID `00000000-0000-0000-0000-000000000000`，**该值是索引键不是身份凭据**，前端不得据此推断权限 |
-| `canManageWall` | bool | **v8 起**。当前主体能否管理这面墙（`wall.lock` / `wall.unlock` / `wall.alias`）。服务端判据 = 主体是 `CONSOLE` **或** wall owner == 自己，见 `docs/security.md §5.0`。前端直接消费此结论，**不再本地推导** —— 授权判断只允许有一个权威。wall=null 时为 `false` |
+| `canManageWall` | bool | **v8 起**。当前主体能否管理这面墙（`wall.lock` / `wall.unlock` / `wall.alias`）。服务端判据 = 主体是 `CONSOLE` **或** wall owner == 自己，见 `docs/security.md §5.1`。前端直接消费此结论，**不再本地推导** —— 授权判断只允许有一个权威。wall=null 时为 `false` |
 | `templates` | TemplateSpec[] | 按 caller owner + `canvas.template.use-others` 过滤后的可见模板 |
 | `variables` | VariableDto[] | 当前 wall 可见的变量快照（`listVisibleToWall`，含 user/system/schedule/scoreboard/papi）；剔除 `referencedByWalls` 防泄露。wall=null 或 store 未配 → `[]` |
-| `aliases` | Map<fullName, string> | 当前 wall 的变量别名（0.4.2）；wall=null 或 dao 未配 → `{}` |
-| `scripts` | ScriptRule[] | 当前 wall 全部脚本规则快照（0.7.0）；wall=null 或 store 未配 → `[]` |
-| `railBinding` | object? | 当前 wall 的铁路绑定 `{ wallId, lineId, stationId?, direction? }`（0.4.5）；未绑定 → `null` |
+| `aliases` | Map<fullName, string> | 当前 wall 的变量别名；wall=null 或 dao 未配 → `{}` |
+| `scripts` | ScriptRule[] | 当前 wall 全部脚本规则快照；wall=null 或 store 未配 → `[]` |
+| `railBinding` | object? | 当前 wall 的铁路绑定 `{ wallId, lineId, stationId?, direction? }`；未绑定 → `null` |
 
 > **`accepted_v` 断言**：ready 携带 `accepted_v: number`（服务端实际接受的业务协议版本，= 协商的 `client_v`）。前端收到 ready 后做「accepted_v == CLIENT_V」断言，不一致则**主动 close 4002 并停止重连**（`wsClient.handleReady`）。
 
@@ -244,9 +243,10 @@ S → C:  { op: "error", id: "c-17",
 
 | op | 方向 | 说明 |
 | --- | --- | --- |
-| `state.snapshot` | S→C | 完整工程状态（握手后 + undo 后） |
+| `state.snapshot` | S→C | 完整工程状态（握手后 / undo / redo / 模板套用 / 工程导入后） |
 | `state.patch` | S→C | 增量补丁（JSON Patch RFC 6902 子集） |
-| `project.load` | C→S | 载入既有 wall 进行二次编辑（`/canvas open` 已经在握手前完成 load，此 op 实际可能不再需要，待 P2 实施时确认） |
+
+> 既有 wall 的初始工程状态由 `/canvas open` 在握手前加载并随 `ready` 帧直接下发，无独立 `project.load` 客户端请求。
 
 **state.patch 时间轴路径（v3 新增）**：v3 起 `state.patch` 新增 `/timelines/<i>/...`（时间轴属性，如 `/timelines/0/durationMs`）与 `/timelines/<i>/tracks/<elementId>/<k>/...`（某元素第 `k` 个关键帧的字段，如 `/timelines/0/tracks/e-abc/2/timeMs`）两类路径。沿用现有 JSON Pointer 分拣，与 `/layers/<i>/elements/<j>/...` 同构（前端 `project.ts` applier 多认一段 token）；keyframe 数组的增删 = 列表项 `add` / `remove`（与现有 elements 数组 patch 完全一致）。
 
@@ -265,9 +265,9 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `element.move-to-layer` | C→S | `{ elementId, targetLayerId, index? }`（跨层移动；index 缺省 = 落底） |
 | `element.transform` | C→S | `{ elementId, x?, y?, w?, h?, rotation? }` |
 
-**Live Paint 注**：油漆桶工具不引入新 op。点击空白 gap 走 `element.add type=path`（payload `props.d` = gap polygon 转的 SVG path 字符串 + `props.fill` = 当前 fill）；点击元素内部走 `element.update {patch:{fill}}`（vector-fill 决策 A）。拓扑计算完全在前端 Web Worker 跑，详见 `docs/architecture.md §16` 与 `docs/rendering.md §8.4`。
+**Live Paint 注**：油漆桶工具不引入新 op。点击空白 gap 走 `element.add type=path`（payload `props.d` = gap polygon 转的 SVG path 字符串 + `props.fill` = 当前 fill）；点击几何元素内部走 `element.update {patch:{fill}}` 直接修改填充。拓扑计算完全在前端 Web Worker 跑，详见 `docs/architecture.md §16` 与 `docs/rendering.md §8.4`。
 
-**0.8 Part B SVG 矢量导入注**：SVG 导入不引入新 op，走现有 `element.add`（server-authoritative）。前端解析一份 SVG → N 个 PathElement draft + 可选 ImageElement draft，循环发 N 条 `element.add { type, props, layerId }`；服务端逐条校验（`PathDValidator` + `parseFillRuleNullable` 等）后写入 state，各条独立可撤销。`props` 含 `fillRule`（`"nonzero"`/`"evenodd"`/缺省）字段（`ElementValidator` 0.8 Part B 起支持）。内嵌位图（`<image data:…>`）先 `POST /api/upload` 拿 `source` hash，再发 `element.add type=image`。
+**SVG 矢量导入注**：SVG 导入不引入新 op，走现有 `element.add`（server-authoritative）。前端解析一份 SVG → N 个 `PathElement` draft + 可选 `ImageElement` draft，循环发 N 条 `element.add { type, props, layerId }`；服务端逐条校验（`PathDValidator` + `parseFillRuleNullable` 等）后写入 state，各条独立可撤销。`props` 可含 `fillRule`（`"nonzero"`/`"evenodd"`/缺省）字段。内嵌位图（`<image data:…>`）先 `POST /api/upload` 拿 `source` hash，再发 `element.add type=image`。
 
 ### 5.4 图层（v2 新增）
 
@@ -288,8 +288,8 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `canvas.background` | C→S | `{ fill: Fill }` 推荐 / `{ color: "#RRGGBB[AA]" }` 兼容 — 见下方 schema |
 | `canvas.grid` | C→S | `{ size: int }`（0 = 关闭网格） |
 | `canvas.guides.set` | C→S | `{ guides: [{ axis, position }, ...] }`（整组替换；前端拖动期不发，松手 batch 发） |
-| `canvas.tweenFps` | C→S | 0.7.3：设置本 wall 补间动画帧率（per-wall）；走 editOpDispatcher 路径 |
-| `template.apply` | C→S | `{ templateId, params }` （会清空所有层 + 用 Default Layer 包结果） |
+| `canvas.tweenFps` | C→S | `{ fps: int }`（设置本 wall 补间动画帧率，范围 `1..60`，走 `EditOpDispatcher` 路径） |
+| `template.apply` | C→S | `{ templateId, params }`（套用 `.canvas` 模板包，整体替换当前会话工程并保留多层/时间轴） |
 
 **`canvas.background` payload schema：**
 
@@ -315,19 +315,26 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `redo` | C→S | `{}` |
 | `history.mark` | C→S | `{ label }` 打一个可命名的历史点 |
 
-### 5.7 会话终结
+### 5.7 会话与墙元数据
 
 | op | 方向 | payload |
 | --- | --- | --- |
-| `cancel` | C→S | **⚠️ 未实装**：`WebServer.handleMessage` switch 无 `cancel` 分支（发了会回 `INVALID_OP`），前端也不发。实际"关闭浏览器"路径靠直接断开 WS（onClose → `markDisconnected`）+ SessionReaper 回收。规划语义为：`{}` - 服务器回 `ack` 后关闭 session（wall 数据保留） |
-| `wall.lock` | C→S | `{}` - **owner-only**：caller UUID == wall.owner_uuid 才接受；UPDATE walls.published_at=now（DB 列名保留，语义为 lock 时间戳）；返回 `ack { lockedAt }`；非 owner 返 `FORBIDDEN`；session 不关闭。**2026-05-14 引入** |
-| `wall.unlock` | C→S | `{}` - **owner-only**：UPDATE walls.published_at=NULL；返回 `ack { lockedAt: null }`；非 owner 返 `FORBIDDEN`；session 不关闭 |
+| `wall.lock` | C→S | `{}` - **管理主体专属**（`canManageWall`：wall owner 或控制台主体）：UPDATE `walls.published_at = now`（DB 列名保留，语义为 lock 时间戳）；返回 `ack { lockedAt }`；非管理主体返 `FORBIDDEN`；session 不关闭 |
+| `wall.unlock` | C→S | `{}` - **管理主体专属**：UPDATE `walls.published_at = NULL`；返回 `ack { locked: false }`；非管理主体返 `FORBIDDEN`；session 不关闭 |
 | `wall.alias` | C→S | `{ "alias": "shop-a" }` - 设别名；不符合 `[A-Za-z0-9_-]{2,32}` 返 `INVALID_ALIAS_FORMAT`；冲突返 `ALIAS_TAKEN`；session 不关闭 |
 | `wall.refresh` | C→S | `{}` - 玩家撸掉支撑方块 / 画框时手动触发；切回主线程跑 `FrameDeployer.repairFor`（补方块 + 补 spawn 缺失画框）后整画布脏矩形 reprojection；`ack { framesRespawned, framesReAttached, wallBlocksReplaced }` / `error RATE_LIMITED`（per-wall 1 次/秒冷却）/ `error WALL_NOT_FOUND`（排队到执行之间这面墙被 `/canvas delete` 删了——继续修就是立一面幽灵墙，挂着已归还的地图） |
 
-> `commit` op 废止。`wall.*` 系列是 wall 元数据修改，与编辑 op 解耦——不影响 session 生命周期。
->
-> **2026-05-14**：`wall.publish` / `wall.unpublish` 砍，新 `wall.lock` / `wall.unlock`。lock 是 UX 层概念，**后端编辑 op（element.* / canvas.* / layer.*）路径与 lock 状态完全解耦**——锁定的 wall 仍能接受编辑 op（动态展示场景需要），前端 readonly UI 是 lock 唯一的执行者。`/canvas publish` / `/canvas unpublish` 命令同时砍。
+> 浏览器关闭会话直接断开 WebSocket 即可（`onClose` → `markDisconnected` + `SessionReaper` 宽限期回收，无客户端 `cancel` 或 `commit` op）。`wall.*` 系列是墙元数据修改，与编辑 op 解耦——不影响会话生命周期，且**后端编辑 op（`element.*` / `canvas.*` / `layer.*`）路径与锁状态完全解耦**，前端只读 UI 是锁状态的唯一执行者。
+
+### 5.8 服务端主动推送
+
+| op | 方向 | 说明 |
+| --- | --- | --- |
+| `state.snapshot` / `state.patch` | S→C | 状态推送（见 §5.2，实装的主力 S→C 通道） |
+| `script.trace` | S→C | `script.test` 的异步执行轨迹（已实装；详见 §5.14） |
+| `session.warning` | S→C | **未实装**（规划：非致命警告，如池即将耗尽、限流） |
+| `session.terminated` | S→C | **未实装**（实际强制断开直接发 WS close code，如 1008 / 4001 / 4003） |
+| `variable.changed` | S→C | **未实装**（实际变量变化走 `state.patch /variables/*` 通道） |
 
 ### 5.9 笔刷流
 
@@ -338,13 +345,12 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 | `brush.start` | C→S | `{ layerId?, props: BrushProps }` `BrushProps = { color: "#RRGGBB[AA]", size: number, opacity: 0..1, smoothing?: 0..1, taper?: bool, hardness?: 0..1 }` | `ack { strokeId }` / `error TOO_MANY_STROKES / LAYER_LOCKED` |
 | `brush.point` | C→S | `{ strokeId, points: [[x, y, pressure, t], ...] }` 批量点，pressure 0..1，t 是相对 stroke.start 的 ms | **无 ack**（高频）；只把点累进服务端 buffer，**不产 patch 也不推 MC packet**；点数超限拒 `STROKE_TOO_LONG` |
 | `brush.end` | C→S | `{ strokeId }` | `ack { version }` + `state.patch`（固化为 `BrushStrokeElement` 写入 layer，附带 RDP 简化 + Catmull-Rom 平滑）；`INVALID_STROKE` 若 strokeId 不存在；超限拒 `RATE_LIMITED` |
+| `brush.cancel` | C→S | `{ strokeId }` | `ack {}`；丢弃 stroke 不持久化；空 patch |
 
 > **落笔过程游戏内看不到，只在 `brush.end` 一次性出现**（浏览器里有实时预览，那是前端本地画的）。
 > 原因是投影管线渲染的是 `ProjectState`，而未完成的笔触只存在于 `BrushSession.StrokeBuffer` 里，
 > 还没进 `ProjectState`——就算 `brush.point` 报了 dirty bbox，重渲那块区域也画不出这条正在画的线。
-> 要做到游戏内实时跟笔，得让 compositor 认识「在飞的 stroke」，是独立的一块工作，未做。
-| `brush.cancel` | C→S | `{ strokeId }` | `ack {}`；丢弃 stroke 不持久化；空 patch |
-
+>
 > 限制：`MAX_ACTIVE_STROKES` = 8（同 session 同时活跃 stroke 上限）；`MAX_BRUSH_POINTS_PER_STROKE` = 4096（单 stroke 累计点数硬上限）。超出返 `TOO_MANY_STROKES` / `STROKE_TOO_LONG`，前端 UI 应拦截不该发到这一层。
 
 ### 5.10 模板创意工坊
@@ -357,16 +363,16 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 | op | 方向 | payload | 响应 |
 | --- | --- | --- | --- |
-| `template.save` | C→S | `{ slug: string, displayName: string, description?: string, paramConfig?: { textActions: { <autoId>: { action: "keep"\|"prompt", name?, label?, description? } } } }` 当前 session 的 `projectState` 作为模板内容 | `ack { templateId }` / `error QUOTA_EXCEEDED / WRITE_FAILED / DB_FAILED / FORBIDDEN` |
+| `template.save` | C→S | `{ slug: string, displayName: string, description?: string, paramConfig?: { textActions: { <autoId>: { action: "keep"\|"prompt", name?, label?, description? } } } }` 当前 session 的 `projectState` 导出为 `.canvas` 模板包（`kind="pack"`） | `ack { templateId }` / `error QUOTA_EXCEEDED / WRITE_FAILED / DB_FAILED / FORBIDDEN` |
 | `template.delete` | C→S | `{ templateId }` | `ack { templateId }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
 | `template.feature` | C→S | `{ templateId }` | `ack { templateId, featured: true }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
 | `template.unfeature` | C→S | `{ templateId }` | `ack { templateId, featured: false }` / `error NOT_FOUND / FORBIDDEN / DB_FAILED` |
 
-### 5.11 变量系统（0.4.0 规划，详见 `docs/dynamic-data.md`）
+### 5.11 变量系统（详见 `docs/dynamic-data.md`）
 
 | op | 方向 | payload | 行为 |
 | --- | --- | --- | --- |
-| `variable.create` | C→S | `{ name, type, defaultValue?, scope? }` | 玩家创建用户变量。`scope='wall'`（默认）→ 加 `user/` 前缀（per-wall）；`scope='global'`（0.4.3）→ `userglobal/<name>`（全服共享）。`ack { fullName }` / `error VARIABLE_EXISTS / INVALID_PAYLOAD` |
+| `variable.create` | C→S | `{ name, type, defaultValue?, scope? }` | 玩家创建用户变量。`scope='wall'`（默认）→ 加 `user/` 前缀（per-wall）；`scope='global'` → `userglobal/<name>`（全服共享）。`ack { fullName }` / `error VARIABLE_EXISTS / INVALID_PAYLOAD` |
 | `variable.update` | C→S | `{ fullName, patch: { type?, defaultValue? } }` | 改类型 / default；`ack` / `error VARIABLE_NOT_FOUND` |
 | `variable.set` | C→S | `{ fullName, value }` | 手动设当前值（仅 user/* 与 userglobal/*）；`ack` / `error VARIABLE_TYPE_MISMATCH` |
 | `variable.bind` | C→S | `{ fullName, boundTo: pluginName \| null }` | 让 user/* 变量被插件 push 接管 |
@@ -374,9 +380,9 @@ v2 起：`element.add` 接受可选 `layerId`；缺省 = 落到 `activeLayerId`�
 
 state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形如 `/variables/<encoded-fullName>/currentValue`（整节点 add/replace/remove 也支持；前端 `applyVariablePatches` 路由）。`userglobal/*` 的变更经 `SessionManager.broadcastVariableChangeToAll` 广播到所有 session。
 
-> **0.4.3 全局用户变量**：`variable.create scope='global'` 与对 `userglobal/*` 的 update/set/delete/bind 走同一组 op，但 dispatcher 按 `fullName.startsWith("userglobal/")` 分流到 owner-only + admin override 权限节点（`canvas.var.global.*`）。`userglobal` 在 `PluginNamespaceRegistry.RESERVED_NAMESPACES` 中，外部插件禁推。
+> **全局用户变量**：`variable.create scope='global'` 与对 `userglobal/*` 的 update/set/delete/bind 走同一组 op，但 dispatcher 按 `fullName.startsWith("userglobal/")` 分流到 owner-only + admin override 权限节点（`canvas.var.global.*`）。`userglobal` 在 `PluginNamespaceRegistry.RESERVED_NAMESPACES` 中，外部插件禁推。
 
-### 5.11.1 变量别名（0.4.2）
+### 5.11.1 变量别名
 
 全 namespace 通用、per-wall 隔离。走 `VariableAliasDispatcher`，复用 `canvas.var.write.own/any` 权限（list 只读放行）。
 
@@ -388,26 +394,26 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 
 > 别名仅在 UI 层展示（picker / panel / chip），**不参与 `${var:...}` 解析**。ready payload 的 `aliases` 字段一次性初始化前端 `VariableAliasStore` mirror。
 
-### 5.11.2 时刻表（0.4.0-P3-L，ManualScheduleProvider）
+### 5.11.2 时刻表（`ManualScheduleProvider`）
 
 走 `ScheduleOpDispatcher`；per-wall。
 
 | op | 方向 | payload | 行为 |
 | --- | --- | --- | --- |
-| `schedule.list` | C→S | `{}` | 返当前 wall 完整时刻表 `{ schedule }`（含 0.4.5 railBinding） |
-| `schedule.upsert` | C→S | `{ stationName, precision? }` | 创建/更新元数据（站名 + 时间精度 minute/second，0.4.0 bugfix Bug 4）；precision 不传时保留现值 |
+| `schedule.list` | C→S | `{}` | 返当前 wall 完整时刻表 `{ schedule }`（含 `railBinding`） |
+| `schedule.upsert` | C→S | `{ stationName, precision? }` | 创建/更新元数据（站名 + 时间精度 `minute`/`second`）；`precision` 不传时保留现值 |
 | `schedule.entry.add` | C→S | `{ departureTime, destination, sortOrder }` | 添加条目，返回生成的 id |
 | `schedule.entry.update` | C→S | `{ id, departureTime, destination, sortOrder }` | 按 id 改条目 |
 | `schedule.entry.delete` | C→S | `{ id }` | 按 id 删条目 |
 
-### 5.11.3 铁路网络（0.4.4 + 0.4.5）
+### 5.11.3 铁路网络
 
-走 `RailOpDispatcher`；线路级 owner ACL（`canvas.rail.*` 6 权限节点）。共 13 op（0.4.4 的 12 + 0.4.5 新增 `rail.line.detail`）。
+走 `RailOpDispatcher`；线路级 owner ACL（`canvas.rail.*` 权限节点）。共 13 个 op。
 
 | op | 方向 | payload | 行为 |
 | --- | --- | --- | --- |
 | `rail.line.list` | C→S | `{}` | 列所有线路（含 owner / color 元数据） |
-| `rail.line.detail` | C→S | `{ lineId }` | 0.4.5：聚合查 stations + runs + `timetableByRun`（避免 N+1） |
+| `rail.line.detail` | C→S | `{ lineId }` | 聚合查 stations + runs + `timetableByRun`（避免 N+1） |
 | `rail.line.create` | C→S | `{ name, code?, color? }` | 返 `{ lineId, line }` |
 | `rail.line.update` | C→S | `{ lineId, name?/code?/color? }` | |
 | `rail.line.delete` | C→S | `{ lineId }` | |
@@ -422,11 +428,11 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 
 **写失败一律回 `DB_FAILED`，不回 ack。** 五条写路径（line create/update、station add/update、run create/update、timetable.set、wall.bind）都按 `RailDao` 写方法的返回值判定：写没成功（外键约束、`UNIQUE(line_id, run_number)` 撞车次号、DB 故障）就回 `error DB_FAILED`，前端据此不更新本地镜像。`rail.run.create` 若车次写成功而自动时刻表写失败，会回滚删掉刚建的车次再报错，不留没有任何停靠的空车次。
 
-> 铁路网络的协议细节以 `docs/dynamic-data.md §18.7` 为权威。
+> 铁路网络的协议细节以 `docs/dynamic-data.md §15.6` 为权威。
 
 ### 5.12 时间轴（v3 新增）
 
-时间轴的增删改走 `timeline.*` op，落 DB（序列化进 `project_json`，见 `docs/data-model.md` v3）+ 进 history。播放控制（`play/pause/seek`）单独一档，**不落 DB、不进 history**——它只在真实部署 wall 上启停 / 定位后端 `AnimationTicker`。
+时间轴的增删改走 `timeline.*` op，落 DB（序列化进 `project_json`，见 `docs/data-model.md §2.4.2`）+ 进 history。播放控制（`play/pause/seek`）单独一档，**不落 DB、不进 history**——它只在真实部署 wall 上启停 / 定位后端 `AnimationTicker`。
 
 | op | 方向 | payload | 说明 |
 | --- | --- | --- | --- |
@@ -437,11 +443,11 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 | `timeline.pause` | C→S | `{}` | 停止后端 Ticker；payload 无参；**不落 DB、不进 history**；`ack` |
 | `timeline.seek` | C→S | `{ atMs, timelineId? }` | 定位后端 Ticker 到 `atMs`（前端始终携带；`timelineId` 缺省用 `activeTimelineId`）；**不落 DB、不进 history**；`ack` |
 
-> 编辑器内 scrubber 拖动的本地预览是**纯前端、不发 WS**（60fps 跟手，见 `docs/timeline.md §6.3`）。`timeline.play/pause/seek` 仅用于操控真实部署 wall 上的后端 Ticker；游戏内最终输出永远以后端为权威（`docs/timeline.md` D9）。
+> 编辑器内 scrubber 拖动的本地预览是**纯前端、不发 WS**（60fps 跟手，见 `docs/timeline.md §6.3`）。`timeline.play/pause/seek` 仅用于操控真实部署 wall 上的后端 Ticker；游戏内最终输出永远以后端为权威（见 `docs/timeline.md §8.2`）。
 
 ### 5.13 关键帧（v3 新增）
 
-关键帧是高频编辑（一次拖动一秒几十条），仿 `element.*` 的 ack 模型走专用 `keyframe.*` op（`docs/timeline.md` D6）。
+关键帧是高频编辑（一次拖动一秒几十条），仿 `element.*` 的 ack 模型走专用 `keyframe.*` op（见 `docs/timeline.md §6.1`）。
 
 | op | 方向 | payload | 说明 |
 | --- | --- | --- | --- |
@@ -452,7 +458,7 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 
 > `property` 取值集合（`x`/`y`/`w`/`h`/`rotation`/`opacity`/`color`/`fill`/`text` 等）与其插值类别（数值 / 颜色 / 离散）见 `docs/rendering.md §9.2`；`easing` 结构（`type` + 可选 `bezier` 控制点）见 `docs/rendering.md §9.3`。
 >
-> **`coalesceKey`（可选，0.6 新增）**：一个用户动作映射到多条 `keyframe.*` op 时（"整体帧"——拉就设 / 加帧 / 整体块拖动一次性写元素全部 transform 属性）让它们共享一个撤销步。同 `coalesceKey` 的连续 op 在历史栈按 `commitHistoryCoalesced` 合并为一步（窗口 500ms，见 `timeline.md §7.2`），一次撤销整组回收。**缺省（不传）= 保持单帧粒度**（`add` 各自一步；`update`/`move` 按默认键 `{elementId}:{keyframeId}:{property}` 合并连续拖动），向后兼容。
+> **`coalesceKey`（可选）**：一个用户动作映射到多条 `keyframe.*` op 时（"整体帧"——拉就设 / 加帧 / 整体块拖动一次性写元素全部 transform 属性）让它们共享一个撤销步。同 `coalesceKey` 的连续 op 在历史栈按 `commitHistoryCoalesced` 合并为一步（窗口 500ms，见 `timeline.md §7.2`），一次撤销整组回收。**缺省（不传）= 保持单帧粒度**（`add` 各自一步；`update`/`move` 按默认键 `{elementId}:{keyframeId}:{property}` 合并连续拖动），向后兼容。
 >
 > 撤销侧 keyframe 连续拖动会按 coalesce key 合并（`docs/timeline.md §7`），协议层无需感知——前端在 `dragend` 才发终值一条 op，服务端按常规处理。
 
@@ -464,31 +470,17 @@ state.patch 扩展：variables 变更走相同 `state.patch` 通道，path 形�
 | `script.update` | C→S | `{ ruleId, rule: {...同上全量} }` | 全量替换（积木编辑粒度太碎不做 patch op）；ruleId 必须属本 session 的 wall（跨墙 → `SCRIPT_NOT_FOUND`）。ack `{ rule }` + patch add |
 | `script.delete` | C→S | `{ ruleId }` | ack `{ ruleId, removed }`；不存在也推 `remove /scripts/<id>` 幂等 |
 | `script.enable` | C→S | `{ ruleId, enabled }` | 启停开关。ack `{ rule }` + patch add |
-| `script.test` | C→S | `{ ruleId }` | **0.7.0-P3 起异步**（K11）：试跑即真实执行（D5）——过 sound/command 面权限 + audit `SCRIPT_TEST` + Budget 全闸（K12：TEST 不豁免）；ack **立即**返 `{ accepted: true, ruleId }`（受理回执，不等执行——合法规则可串 wait 至分钟级）；轨迹在 run 结束后经 `script.trace` 推送。引擎未装配恒回 `SCRIPT_ENGINE_UNAVAILABLE` |
+| `script.test` | C→S | `{ ruleId }` | **异步受理**：试跑即真实执行——过 sound/broadcast/command 面权限 + audit `SCRIPT_TEST` + Budget 全闸（试跑不豁免）；ack **立即**返 `{ accepted: true, ruleId }`（受理回执，不等执行——合法规则可串 wait 至分钟级）；轨迹在 run 结束后经 `script.trace` 推送。引擎未装配恒回 `SCRIPT_ENGINE_UNAVAILABLE` |
 | `script.trace` | S→C | `{ ruleId, steps: [{ blockId, kind, result, detail? }] }` | `script.test` 的异步执行轨迹，推给发起 session（session 断了静默丢，不补发）。run 最终段结束（含 wait 续接）/ Budget 掐断 / 投递闸拒（blocked trigger step）都恰推一次。`blockId` = 动作树路径（`trigger` / `actions/0` / `actions/2/then/1`）；`kind` ∈ trigger\|condition\|action；`result` ∈ ok\|skipped\|blocked\|error；`detail` 为 null 时省略 |
 
-权限（保存时检查，执行时不查——scripting.md §4.1）：5 op 恒查 `canvas.script.edit`
-（default true；在线被显式收回**真拒**，仅离线/解析失败走 default 兜底）；create/update/test
-按规则内容加查面节点——全服事件帽子 → `canvas.script.trigger.global`、播声音 →
-`canvas.script.sound`、执行命令 → `canvas.script.command`（默 op）。**不读 wall lock**
-（lock-state 纪律）。脚本 op 不进画布 undo/redo（§4.3）。
+权限（保存时检查，执行时不查——`docs/scripting.md §4.1`）：5 op 恒查 `canvas.script.edit`
+（default true；在线被显式收回**真拒**，仅离线/解析失败走 default 兜底）；create/update/enable(true)/test
+按规则内容加查面节点——全服事件帽子 → `canvas.script.trigger.global`、播声音/粒子 →
+`canvas.script.sound`、全服广播消息/标题 → `canvas.script.broadcast`、执行命令 → `canvas.script.command`（默 op）。**不读 wall lock**。脚本 op 不进画布 undo/redo（见 `docs/scripting.md §4.3`）。
 
-create/update 校验链（0.7.0-P3 起，K16）：`ScriptRuleValidator` 结构校验后，所有
-`if.condition` 过 `ConditionEvaluator.checkSyntax`（parse-only）预检——坏条件保存时即
-`SCRIPT_INVALID`（错误信息首行 + blockId 定位），不等运行期静默 false。
+create/update 校验链：`ScriptRuleValidator` 结构校验后，所有条件表达式（`if` / `waitUntil` / `repeatUntil`）过 `ConditionEvaluator.checkSyntax`（parse-only）预检——坏条件保存时即拒 `SCRIPT_INVALID`（错误信息首行 + blockId 定位），不等运行期静默 false。
 
-`trigger` / `actions` 的 wire 多态形态（type 判别 + 扁平字段、if 的 then/else 递归、
-playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为权威。
-
-### 5.8 服务端主动推送
-
-| op | 方向 | 说明 |
-| --- | --- | --- |
-| `state.snapshot` / `state.patch` | S→C | 状态推送（见 §5.2，实装的主力 S→C 通道） |
-| `script.trace` | S→C | 0.7.0-P3：`script.test` 的异步执行轨迹（**已实装**；详见 §5.14） |
-| `session.warning` | S→C | **未实装**（规划：非致命警告，如池即将耗尽、限流） |
-| `session.terminated` | S→C | **未实装**（规划：服务端强制结束）。实际强制断开走 close code（4001/4003）而非此 op |
-| `variable.changed` | S→C | **未实装**（规划：变量值变化通知）。实际变量变化走 `state.patch /variables/*` 通道 |
+`trigger` / `actions` 的 wire 多态形态（type 判别 + 扁平字段、if 的 then/else 递归、playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 与文末附录为权威。
 
 ---
 
@@ -523,7 +515,7 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `INVALID_ELEMENT` | 元素 id 不存在或属性非法 | ❌ |
 | `INVALID_ALIAS_FORMAT` | wall.alias 不满足 `[A-Za-z0-9_-]{2,32}` | ❌ |
 | `PERMISSION_DENIED` | 权限不足 | ❌ |
-| `FORBIDDEN` | 鉴权方案 C：lock-aware open / template.* / wall.lock/unlock 非 owner（或缺管理员 bypass）；与 PERMISSION_DENIED 区别是基于运行期身份（owner_uuid / lock 状态）而非静态权限节点。0.8-A 起 `POST /api/project/import` 缺 `canvas.edit`（含玩家离线 fail-closed）也用此码（HTTP 403） | ❌ |
+| `FORBIDDEN` | 运行期归属或锁状态鉴权拒绝：锁定墙开启会话（非 owner 且无 `canvas.admin.bypass-lock`）、`template.*` 越权、`wall.lock/unlock` 非管理主体（`canManageWall=false`）；`POST /api/project/import` 缺 `canvas.edit`（含玩家离线 fail-closed）也用此码（HTTP 403） | ❌ |
 | `SESSION_CLOSED` | 会话已关闭 | ❌ |
 | `ALIAS_TAKEN` | wall.alias 已被其他 wall 占用 | ❌ |
 | `WALL_NOT_FOUND` | wall.* op 但当前 session 没绑定 wall（不应发生） | ❌ |
@@ -533,35 +525,35 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | `TOO_MANY_STROKES` | active stroke 数超 `MAX_ACTIVE_STROKES`（默认 8） | ❌ |
 | `INVALID_STROKE` | strokeId 不存在 / 已 end / 已 cancel | ❌ |
 | `STROKE_TOO_LONG` | 单 stroke 点数超 `MAX_BRUSH_POINTS_PER_STROKE`（默认 4096） | ❌ |
-| `VARIABLE_NOT_FOUND` | 0.4.0：variable.* op 指向不存在的 fullName | ❌ |
-| `VARIABLE_EXISTS` | 0.4.0：variable.create 同名已存在 | ❌ |
-| `VARIABLE_TYPE_MISMATCH` | 0.4.0：variable.set 值与声明 type 不符 | ❌ |
-| `VARIABLE_NAMESPACE_DENIED` | 0.4.0：HikariCanvasAPI.setVariable 试图推非注册 namespace | ❌ |
-| `TIMELINE_NOT_FOUND` | 0.6：timeline.* / keyframe.* op 指向不存在的 timelineId | ❌ |
-| `KEYFRAME_NOT_FOUND` | 0.6：keyframe.update / delete / move 指向不存在的 keyframeId | ❌ |
-| `INVALID_EASING` | 0.6：cubicBezier 控制点 x 越界 `[0,1]`，或缺 bezier 字段 | ❌ |
-| `INVALID_KEYFRAME_TIME` | 0.6：keyframe timeMs 为负值或超出所属 timeline 的 durationMs | ❌ |
-| `SCRIPT_INVALID` | 0.7：ScriptRuleValidator 结构校验拒（message 为人读原因首行；细节进 server 日志） | ❌ |
-| `SCRIPT_NOT_FOUND` | 0.7：script.update / delete / enable / test 指向不存在或非本墙的 ruleId | ❌ |
-| `SCRIPT_QUOTA_EXCEEDED` | 0.7：单墙规则数超 `scripts.max-rules-per-wall`（默 16）。另 0.7.2 起单墙脚本可操作元素数受 `scripts.max-elements-per-wall`（默 200）约束 | ❌ |
-| `SCRIPT_ENGINE_UNAVAILABLE` | 0.7：script.test 时执行引擎（ScriptTestLauncher）未装配——启动早期窗口 / 测试装配缺时回此码（P2-P5 已落地，正常运行不再触发） | ❌ |
+| `VARIABLE_NOT_FOUND` | `variable.*` op 指向不存在的 fullName | ❌ |
+| `VARIABLE_EXISTS` | `variable.create` 同名已存在 | ❌ |
+| `VARIABLE_TYPE_MISMATCH` | `variable.set` 值与声明 type 不符 | ❌ |
+| `VARIABLE_NAMESPACE_DENIED` | `HikariCanvasAPI.setVariable` 试图推非注册 namespace | ❌ |
+| `TIMELINE_NOT_FOUND` | `timeline.*` / `keyframe.*` op 指向不存在的 timelineId | ❌ |
+| `KEYFRAME_NOT_FOUND` | `keyframe.update / delete / move` 指向不存在的 keyframeId | ❌ |
+| `INVALID_EASING` | `cubicBezier` 控制点越界（`x ∉ [0,1]` 或 `y ∉ [-100,100]`），或缺 `bezier` 字段 | ❌ |
+| `INVALID_KEYFRAME_TIME` | keyframe `timeMs` 为负值或超出所属 timeline 的 `durationMs` | ❌ |
+| `SCRIPT_INVALID` | `ScriptRuleValidator` 结构或条件语法校验拒绝（message 为人读原因首行；细节进 server 日志） | ❌ |
+| `SCRIPT_NOT_FOUND` | `script.update / delete / enable / test` 指向不存在或非本墙的 ruleId | ❌ |
+| `SCRIPT_QUOTA_EXCEEDED` | 单墙规则数超 `scripts.max-rules-per-wall`（默 16）；单墙脚本克隆元素数另受 `scripts.max-elements-per-wall`（默 200）约束 | ❌ |
+| `SCRIPT_ENGINE_UNAVAILABLE` | `script.test` 时执行引擎（`ScriptTestLauncher`）未装配——仅启动早期窗口或测试裸装配时返回 | ❌ |
 | `UPLOAD_REJECTED` | 图片上传被拒；message 含具体原因（大小 / MIME / decode timeout / bbox） | ❌ |
 | `QUOTA_PER_WALL` | 当前 wall 引用图片数超 `images.max-per-wall` | ❌ |
 | `QUOTA_PER_DAY` | 玩家 24h 上传次数超 `images.max-uploads-per-day` | ❌ |
 | `QUOTA_DISK_FULL` | 插件 uploads 目录总字节超 `images.max-total-storage-mb`，且 LRU 无可回收行 | ❌ |
 | `QUOTA_EXCEEDED` | 模板发布超 `templates.max-per-player`，且无 `canvas.template.bypass-limit` | ❌ |
-| `NOT_FOUND` | template.delete / template.feature / template.unfeature 指向不存在 templateId；rail.wall.bind 的 lineId / stationId 不存在 | ❌ |
-| `DB_FAILED` | TemplatePublisher 写 SQLite 失败（templates upsert / featured update）；rail.* 写路径失败（外键 / UNIQUE 冲突 / DB 故障） | ✅ |
-| `WRITE_FAILED` | TemplatePublisher 写 YAML 文件失败（user-templates/<uuid>/*.yml） | ✅ |
-| `NO_SESSION` | 0.8-A：`POST /api/project/import` 缺 sessionId 或会话未知（HTTP 401） | ❌ |
-| `SESSION_NOT_READY` | 0.8-A：`POST /api/project/import` 会话无可写活动墙（HTTP 409） | ❌ |
-| `NO_FILE` | 0.8-A：`POST /api/project/import` 缺 `file` multipart 字段（HTTP 400） | ❌ |
-| `IMPORT_ZIP_TOO_LARGE` | 0.8-A：`.canvas` 包体积 / 单条或总解压量超限，防 zip 炸弹（HTTP 413） | ❌ |
-| `IMPORT_SPEC_UNSUPPORTED` | 0.8-A：`manifest.spec` 高于本插件支持的最高版本，需升级插件（HTTP 409） | ❌ |
-| `IMPORT_SIZE_MISMATCH` | 0.8-A：工程画布尺寸与目标墙尺寸不一致（HTTP 409） | ❌ |
-| `IMPORT_BAD_ENTRY` | 0.8-A：`.canvas` zip 含非法条目名（路径穿越等，HTTP 400） | ❌ |
-| `IMPORT_MALFORMED` | 0.8-A：`.canvas` zip 无法解析 / 缺 manifest.json 或 project.json / 结构非法（HTTP 400） | ❌ |
-| `INTERNAL` | 0.8-A：`POST /api/project/import` 编排期意外运行期异常兜底（HTTP 500；不静默 500-without-body） | ❌ |
+| `NOT_FOUND` | `template.delete / feature / unfeature` 指向不存在 templateId；`rail.wall.bind` 的 lineId / stationId 不存在 | ❌ |
+| `DB_FAILED` | `TemplatePublisher` 写 SQLite 失败；`rail.*` 写路径失败（外键 / UNIQUE 冲突 / DB 故障） | ✅ |
+| `WRITE_FAILED` | `TemplatePublisher` 写入 `.canvas` 模板包文件失败（`user-templates/<uuid>/*.canvas`） | ✅ |
+| `NO_SESSION` | `POST /api/project/import` 缺 sessionId 或会话未知（HTTP 401） | ❌ |
+| `SESSION_NOT_READY` | `POST /api/project/import` 会话无可写活动墙（HTTP 409） | ❌ |
+| `NO_FILE` | `POST /api/project/import` 缺 `file` multipart 字段（HTTP 400） | ❌ |
+| `IMPORT_ZIP_TOO_LARGE` | `.canvas` 包体积 / 单条或总解压量超限，防 zip 炸弹（HTTP 413） | ❌ |
+| `IMPORT_SPEC_UNSUPPORTED` | `manifest.spec` 高于本插件支持的最高版本，需升级插件（HTTP 409） | ❌ |
+| `IMPORT_SIZE_MISMATCH` | 工程画布尺寸超过目标墙尺寸（HTTP 409） | ❌ |
+| `IMPORT_BAD_ENTRY` | `.canvas` zip 含非法条目名（路径穿越等，HTTP 400） | ❌ |
+| `IMPORT_MALFORMED` | `.canvas` zip 无法解析 / 缺 `manifest.json` 或 `project.json` / 结构非法（HTTP 400） | ❌ |
+| `INTERNAL` | `POST /api/project/import` 编排期意外运行期异常兜底（HTTP 500；不静默无响应体） | ❌ |
 | `UNEXPECTED` | 服务端断言失败（如 brush op 返了 OkSnapshot），通常是 bug，含上下文 | ❌ |
 | `INTERNAL_ERROR` | 服务器内部错误。含子系统未装配（variable / schedule / rail / script dispatcher 为 null），以及**任何 dispatcher 抛出未检异常时的兜底**——`WebServer.handleMessage` 对整条分发链有外层 catch，保证每个 op 至少有一帧回音（细节只进服务器日志，不回给客户端） | 视情况 |
 
@@ -572,12 +564,13 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 | code | 说明 | 前端重连 |
 | --- | --- | --- |
 | 1000 | 正常关闭（客户端主动 `close()`） | 否（terminal） |
+| 1008 | 策略违反（`Protocol.CLOSE_RATE_LIMIT_VIOLATION`）：单会话 1 分钟内累计 5 次输入限流（`rate_limit_violation`）或单连接连续 3 个畸形帧（`malformed_frames`），见 `docs/security.md §3.2–§3.3` | 否（terminal）— 显示"操作过于频繁，已断开"并停止重连 |
 | 4001 | 认证失败 / `auth_timeout`（未认证 5s 超时）/ 会话级 IP 绑定不一致（文本 `ip_mismatch`）/ `session_forgotten`（服务端 forget 陈旧连接） | 否（terminal）— 清掉本地 token |
-| 4002 | 业务协议版本不匹配（`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`，已常量化）。前端 `handleReady` 检出 `accepted_v !== CLIENT_V` 时也主动发此码 | 否（terminal）— 需升级客户端 |
-| 4003 | 会话被其他连接接管（`session-takeover`）**或**认证后权限被撤销（`PERMISSION_REVOKED`，2026-05-25 #3 复用同码） | **是**（非 terminal，会退避重连）— 接管/撤权场景下重连会再走 auth 自然失败 |
-| 4429 | token 暴力枚举超限（`CLOSE_TOKEN_RATE_LIMITED`，2026-05-25）。沿用 HTTP 429 语义，client 应显示"请稍后再试" | 否（terminal） |
+| 4002 | 业务协议版本不匹配（`CLOSE_PROTOCOL_VERSION_UNSUPPORTED`）。前端 `handleReady` 检出 `accepted_v !== CLIENT_V` 时也主动发此码 | 否（terminal）— 需升级客户端 |
+| 4003 | 会话被其他连接接管（`session-takeover`）**或**认证后权限被撤销（`PERMISSION_REVOKED`） | **是**（非 terminal，会退避重连）— 接管/撤权场景下重连会再走 auth 自然失败 |
+| 4429 | token 暴力枚举超限（`CLOSE_TOKEN_RATE_LIMITED`）。沿用 HTTP 429 语义，client 应显示"请稍后再试" | 否（terminal） |
 
-> **未实装**：原表中的 `1008`（策略违反 / 限流反复触发）、`1011`（服务端错误）、`4004`（空闲超时）当前代码均**未作为 WS close code 发出**——`SessionRateLimiter` 注释标明 close 1008 尚未实装，idle/空闲回收走 SessionReaper 的 `markDisconnected` 而非显式 4004 close。保留记录以备规划。
+> `1011`（服务端错误）与 `4004`（空闲超时）不作为服务端显式 WS close 码发出——空闲会话回收走 `SessionReaper` 的 `markDisconnected` 路径。
 >
 > 前端另有一个内部用的 `4000`（`ready_timeout` / `malformed_ready`）——`wsClient` 在 open→ready 看门狗超时或 ready payload 畸形时**客户端自己**发的 close 码（非服务端发出），落非 terminal 分支触发重连。
 
@@ -585,7 +578,7 @@ playTimeline.seekMs 仅 seek 携带等）以 `docs/scripting.md §2.2/§2.3` 为
 
 ## 7. 工程状态模型
 
-客户端与服务器共享同一份数据结构。v2 起 elements 数组被层包裹；`protocolVersion` = `ProjectState.PROTOCOL_VERSION`，当前 **3**（v3 timeline 进 ProjectState 时 bump；脚本不进 ProjectState 故 v4-v7 不动）：
+客户端与服务器共享同一份数据结构。v2 起 elements 数组被层包裹；`protocolVersion` = `ProjectState.PROTOCOL_VERSION`，当前 **3**（v3 timeline 进 ProjectState 时升版；脚本不进 ProjectState，故业务协议 v4–v8 期间保持 `3` 不动）：
 
 ```typescript
 type ProjectState = {
@@ -594,8 +587,8 @@ type ProjectState = {
   canvas: {
     widthMaps: number;
     heightMaps: number;
-    background: Fill;         // string→Fill 联合类型（solid/linear/radial）；
-                             // FillDeserializer 自动把旧 "#xxx" 字符串 wrap 成 SolidFill
+    background: Fill;         // Fill 联合类型（solid/linear/radial）；
+                             // FillDeserializer 自动把旧 "#xxx" 字符串包装成 SolidFill
     gridSize?: number;        // 0/缺省 = 不显示网格；常用值 8/16/32（仅前端预览，不入 MC）
     guides?: Guide[];         // 用户参考线，仅前端预览
   };
@@ -603,7 +596,8 @@ type ProjectState = {
   activeLayerId: string;      // 当前 UI 操作层；服务端中继 + element.add 缺 layerId 时用
   timelines?: Timeline[];     // v3 新增；缺省/null = 静态画板
   activeTimelineId?: string;  // v3 新增；缺省/null = 无激活时间轴
-  history: { undoDepth, redoDepth };
+  tweenFps?: number;          // per-wall 补间帧率（1..60，缺省 = 30）
+  history: { undoDepth: number; redoDepth: number };
 };
 
 type Guide = {
@@ -618,6 +612,7 @@ type Layer = {
   locked: boolean;
   opacity: number;            // 0..1
   blendMode: BlendMode;       // 见下
+  colorTag?: "red" | "peach" | "yellow" | "green" | "blue" | "mauve" | "overlay0" | null;
   elements: Element[];        // 层内 z-order = index
 };
 
@@ -630,6 +625,7 @@ type Element =
   | PathElement
   | CircleElement
   | ShapeElement       // 正多边形 / 星
+  | BrushStrokeElement // 压感自由笔触
   | ImageElement;
 
 type BaseElement = {
@@ -642,9 +638,9 @@ type BaseElement = {
   rotation: number; // 0..359
   locked: boolean;
   visible: boolean;
-  opacity?: number;           // v2 新增；默认 1.0
-  blendMode?: BlendMode;      // v2 新增；默认 "normal"
-  renderMode?: "clean" | "dither";  // v2 新增；默认 "clean"
+  opacity?: number;           // 默认 1.0
+  blendMode?: BlendMode;      // 默认 "normal"
+  renderMode?: "clean" | "dither";  // 默认 "clean"
 };
 
 type TextElement = BaseElement & {
@@ -657,7 +653,9 @@ type TextElement = BaseElement & {
   lineHeight: number;
   letterSpacing: number;
   vertical: boolean;
-  effects: {
+  bold?: boolean | null;
+  italic?: boolean | null;
+  effects?: {
     stroke?: { width: number; color: string };
     shadow?: { dx: number; dy: number; color: string };
     glow?: { radius: number; color: string };
@@ -666,26 +664,59 @@ type TextElement = BaseElement & {
 
 type RectElement = BaseElement & {
   type: "rect";
-  fill: string;
+  fill?: Fill;
   stroke?: { width: number; color: string };
+};
+
+// IconElement：矢量图标（source 形如 "fa-solid/heart" 或 "user/foo"，经 IconRegistry /api/icon/paths 拉取）。
+type IconElement = BaseElement & {
+  type: "icon";
+  source: string;
+  fill?: Fill;
+  tint?: string;              // 仅兼容历史旧存档
 };
 
 // PathElement：通用 SVG-like 路径（M/L/Q/C/Z 子集）。
 // d 坐标相对 element (x,y)（即 element bbox 左上角）。
-// fillRule 字段 0.8 Part B 新增：SVG fill-rule，null 等价 nonzero（默认）。
-// 无 DB migration：fillRule 在 project_json blob 内，旧记录缺字段 = 视为 null。
 type PathElement = BaseElement & {
   type: "path";
-  d: string;                              // SVG path d（M/L/Q/C/Z 绝对命令子集）
+  d: string;                              // SVG path d（M/L/Q/C/Z 命令子集）
   fill?: Fill;                            // 填充（solid/linear/radial）
   stroke?: { width: number; color: string };
-  marker?: string;                        // 箭头等标记（可空）
-  fillRule?: "nonzero" | "evenodd";       // 0.8 Part B 新增；null/缺省 = nonzero
+  markerStart?: "arrow" | "dot";
+  markerEnd?: "arrow" | "dot";
+  fillRule?: "nonzero" | "evenodd";       // null/缺省 = nonzero
 };
 // element.add（type="path"）和 element.update（patch 含 fillRule）均支持 fillRule 字段；
 // 服务端 ElementValidator.parseFillRuleNullable 校验：仅接受 "nonzero"/"evenodd"/null。
 // 双端渲染：后端 PathRenderer 走 Path2D.WIND_EVEN_ODD/WIND_NON_ZERO；
 // 前端 PreviewRenderer.drawPath 走 ctx.fill(path, fillRule ?? 'nonzero')。
+
+type CircleElement = BaseElement & {
+  type: "circle";
+  fill?: Fill;
+  stroke?: { width: number; color: string };
+};
+
+type ShapeElement = BaseElement & {
+  type: "shape";
+  kind: "polygon" | "star";
+  sides: number;              // 3..32
+  innerRatio?: number;        // 0.1..0.95（star 用）
+  fill?: Fill;
+  stroke?: { width: number; color: string };
+};
+
+// BrushStrokeElement：由 brush.start → brush.point → brush.end 固化生成的压感笔触。
+// 保留采样点与压感，渲染时经 Catmull-Rom 拟合与变宽/变透明度绘制。
+type BrushStrokeElement = BaseElement & {
+  type: "brush";
+  points: { x: number; y: number; pressure: number }[];  // 坐标相对 (x, y)
+  size: number;               // 1..64 px
+  fill: Fill;
+  pressureSize: boolean;
+  pressureOpacity: boolean;
+};
 
 // 图片元素。source 是上传时返回的 sha256[:16] hash（内容寻址）；
 // 客户端用 GET /api/upload/{source} 拉取原图。mask 是可选 SVG path
@@ -697,6 +728,7 @@ type ImageElement = BaseElement & {
   mask?: {
     d: string;             // SVG path d，相对 (0,0)..(w,h)
     inverted: boolean;     // false=显示 mask 内（默认），true=显示 mask 外
+    featherPx?: number | null; // 0/null=硬边，1..32=边缘羽化半径
   };
 };
 
@@ -716,7 +748,7 @@ type Timeline = {
 };
 
 // tracks 的 key 是 elementId，值是该元素**所有属性混在一起**、按 timeMs 升序的关键帧列表。
-// 前端按 (elementId, property) 二级分组渲染成多条属性子轨（方案 B，见 docs/timeline.md §2.2）。
+// 前端按 (elementId, property) 二级分组渲染成多条属性子轨（见 docs/timeline.md §2.2）。
 
 type LoopMode = "once" | "loop" | "pingPong";
 
@@ -744,9 +776,9 @@ type TriggerConfig = {
   params: Record<string, string>;   // 各 trigger 的参数（如 variableChange 的 fullName）
 };
 
-// playerNear 留 0.7（需从零建事件层 + 与 0.7 Scratch 触发系统重叠，见 docs/timeline.md D5）
+// 玩家靠近等游戏事件触发统一归入墙脚本系统（见 docs/scripting.md）
 type TriggerType = "manual" | "variableChange" | "schedule";
-// 0.6 P5 落地：variableChange / schedule 必须带 params.fullName（绑定的变量 rawName，如 user/hp /
+// variableChange / schedule 必须带 params.fullName（绑定的变量 rawName，如 user/hp /
 // schedule/eta_seconds），缺失 / 空白 → timeline.create/update 拒 INVALID_PAYLOAD。fullName 用
 // 与 ${var:X} 同款 rawName 形态，后端 TimelineTriggerRegistry 注册时经 resolveFullName 注入 wallId 匹配
 // 变化事件；同一 (wall,timeline) 触发去抖窗 200ms（服务端状态机内部决策，不在协议层暴露，见 timeline.md §5.2）。
@@ -762,7 +794,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 前端 ─── HTTP GET /api/session/abc123 ───▶ 插件
                                            ← 200 { ok: true, playerName, wsUrl }   (精简，敏感元数据走 ready)
 前端 ─── WS open /ws ─────────────────────▶
-前端 ─── { op: "auth", id: "c-0", payload: { token, client_v: 7 } }
+前端 ─── { op: "auth", id: "c-0", payload: { token, client_v: 8 } }
                                            ← { op: "ready", id: "s-0", payload: { projectState, ... } }
 
 （画布空白，玩家看到白色预览墙面，无任何文字）
@@ -790,7 +822,7 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 前端继续快速改色、改字号……每个 op 走同样流程。
 ```
 
-### 8.2.5 图层操作（v2）
+### 8.3 图层操作
 
 ```
 # 新建图层（叠加到 "线条" 层之上）
@@ -819,39 +851,38 @@ type TriggerType = "manual" | "variableChange" | "schedule";
                                            ← { op: "ack", id: "c-9" }
 ```
 
-### 8.3 锁定与终结（lock-state 重设计 · 2026-05-14）
+### 8.4 锁定与终结
 
 ```
 （编辑期间任何 element.* op 都已 auto-save 到 walls 表，不需要显式 commit）
 
-# 玩家（必须是 owner）点击 TopBar Lock 按钮
+# 管理主体（wall owner 或控制台）点击 TopBar Lock 按钮
 前端 ─── { op: "wall.lock", id: "c-42" }
                                            ← { op: "ack", id: "c-42",
                                                payload: { lockedAt: 1714200000000 } }
-（服务端校验 caller.uuid == wall.owner_uuid，UPDATE walls.published_at=now；
- ItemFrame PDC **不再** 写 published_at（2026-05-14 lock-state 重设计砍）；
- session 仍 ACTIVE；后端编辑 op 路径不被 lock 状态影响——前端 readonly UI 是唯一执行者）
+（服务端校验 canManageWall(session, wall)，UPDATE walls.published_at=now；
+ ItemFrame PDC 不写 published_at；session 仍保持 ACTIVE；
+ 后端编辑 op 路径不被 lock 状态影响——前端 readonly UI 是唯一执行者）
 
-# 非 owner 试图 lock
+# 非管理主体试图 lock
 前端 ─── { op: "wall.lock", id: "c-42" }
                                            ← { op: "error", id: "c-42",
                                                payload: { code: "FORBIDDEN",
                                                           message: "only wall owner can lock" } }
 
-# 玩家解锁
+# 解锁
 前端 ─── { op: "wall.unlock", id: "c-43" }
                                            ← { op: "ack", id: "c-43",
                                                payload: { locked: false } }
 > 注意：unlock 回 `locked: false`（显式布尔），**不用** `lockedAt: null`——`JsonInclude.NON_NULL` 全局策略会把 null 字段吞掉导致前端收空对象。
 
-# 玩家关闭浏览器
-前端 ─── { op: "cancel", id: "c-99" }
-                                           ← { op: "ack", id: "c-99" }
-                                           ← WS close code 1000
-（服务端释放 session/wand；wall 数据 + ItemFrame 完整保留，下次可 /canvas open <wall_id> 继续）
+# 玩家关闭浏览器标签页
+前端 ─── 直接断开 WebSocket（close 1000）
+（无客户端 cancel op；服务端 onClose 标记连接断开，wall 数据与 ItemFrame 完整保留，
+ SessionReaper 在断连宽限期后回收会话，下次可 /canvas open <wall_id> 继续）
 ```
 
-> `commit` / `wall.publish` / `wall.unpublish` op 均已废止；锁定由 `wall.lock` / `wall.unlock`（§5.7）取代，MC 命令族不再含 publish/unpublish 子命令。
+> 锁定与解锁统一经 `wall.lock` / `wall.unlock`（§5.7）完成，MC 命令族无对应的 publish/unpublish 子命令。
 
 ---
 
@@ -861,15 +892,15 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 | --- | --- | --- |
 | 单会话 op 速率 | 20 msg/s | 返回 `RATE_LIMITED` 并丢弃本次 op |
 | 单会话 op 突发 | 40 msg / 2s | 同上 |
-| 重复触发 | 5 次 / 1min | **未实装**：`SessionRateLimiter` 注释标明 close 1008 尚未实装；当前只有上面两档软限流 |
+| 重复触发 | 5 次 `RATE_LIMITED` / 1min | 主动断开连接（close `1008` `rate_limit_violation`，terminal 不自动重连）并记录 `SESSION_RATE_LIMIT_DISCONNECT` 审计（`SessionRateLimiter` 回调 `WebServer.closeForRepeatedViolation`） |
 
-另有 per-IP 的 **token 暴力枚举限流**（`TokenRateLimiter`，2026-05-25），在 auth 阶段触发 → close `4429`（见 §3.2 / §6.2），与上面的 op 速率限流是两套机制。
+另有 per-IP 的 **token 暴力枚举限流**（`TokenRateLimiter`），在 auth 阶段触发 → close `4429`（见 §3.2 / §6.2），与上面的 op 速率限流是两套机制。
 
 对 `ping` / `ack` 不计速率。
 
 ---
 
-## 9.5 HTTP API
+## 10. HTTP API
 
 部分操作不走 WS，而是 HTTP 端点：
 
@@ -894,9 +925,9 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 **错误**：`401` 未认证 / `403` 无权限 / `413` 太大 / `400` `UPLOAD_REJECTED`（含 reason）/ `429` 配额耗尽
 
-### `POST /api/project/import`（0.8-A）
+### `POST /api/project/import`
 
-导入一个 `.canvas` 工程包（zip），**整体替换**当前会话绑定墙的工程内容（保留多层 / 时间轴语义）。后端 `ProjectImportHandler.handleImport` 处理；`WebServer` 注册此端点时要求 `AssetIngest` 与 `images` 导入配置（`ImportConfig`）均装配，**任一缺则该端点不注册**（请求 404）。
+导入一个 `.canvas` 工程包（zip），**整体替换**当前会话绑定墙的工程内容（保留多层 / 时间轴语义）。后端 `ProjectImportHandler.handleImport` 处理；`WebServer` 注册此端点时要求 `AssetIngest` 与导入限额配置（`ImportConfig`）均装配，**任一缺则该端点不注册**（请求 404）。
 
 请求体 `multipart/form-data`，字段：
 
@@ -958,13 +989,13 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 > 脚本是 wall-scoped 状态、与 `ProjectState` 解耦，不进 `state.snapshot`——`scripts.json` 仅落 `wall_scripts` 库。
 >
-> **SVG 矢量导入（0.8 Part B 实装）**走纯前端路径：前端解析 SVG → 一组 `PathElement`（+内嵌位图 `ImageElement`）→ 经现有 `element.add` op 循环写入（每个元素独立一条 op，N 条 element.add = N 次可撤销）；内嵌位图走 `POST /api/upload` 先上传拿 hash 再 element.add。SVG 导入**不走本端点**，无需新 HTTP 端点。
+> **SVG 矢量导入**走纯前端路径：前端解析 SVG → 一组 `PathElement`（+内嵌位图 `ImageElement`）→ 经现有 `element.add` op 循环写入（每个元素独立一条 op，N 条 element.add = N 次可撤销）；内嵌位图走 `POST /api/upload` 先上传拿 hash 再 element.add。SVG 导入**不走本端点**，无需新 HTTP 端点。
 
 ### `GET /api/upload/{source}?session=<sessionId>`（强制鉴权）
 
 按 sha256[:16] hash 拉取原图。返回 `image/png`（统一存储为 PNG，jpeg/webp 上传时已转）。
 
-> **鉴权变更（2026-05-16）**：原"无需 token，hash 不可枚举即视为脱敏"的假设被推翻——hash 会出现在 `project_json` / 客户端 DOM / WS 帧日志中，任何能拿到 ws 流量的第三方插件 / 服内调试工具都能枚举出 hash 列表。现强制要求 query `?session=<sessionId>`，服务端校验：(a) sessionId 对应一个活跃 ACTIVE session；(b) 该 session 绑定 wall 的 `project_json` 内任意 ImageElement.source == 请求的 hash。不通过 → HTTP 401 + `UNAUTHORIZED`。这保证图片只对正在编辑该 wall 的玩家可见。
+> **强制会话与归属校验**：hash 会出现在 `project_json` / 客户端 DOM / WS 帧日志中，不可仅靠 hash 难以猜测来脱敏。端点强制要求携带 `session`（或 `X-Canvas-Session` 请求头），服务端校验：(a) `sessionId` 对应一个活跃 `ACTIVE` 会话且通过会话级 IP 绑定；(b) 该会话绑定 wall 的 `project_json` 内任意 `ImageElement.source` 命中请求的 hash。不通过 → HTTP 401 + `UNAUTHORIZED`。这保证图片只对正在编辑该 wall 的玩家可见。
 
 ### `GET /api/upload/quota`
 
@@ -979,19 +1010,16 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 
 ---
 
-## 10. 版本化与兼容
+## 11. 版本化与兼容
 
-- 协议版本字段 `v` 只在**不兼容**变更时递增
-- **向后兼容新增**：加新 op、加新可选字段、加新错误码 — 不升 `v`
-- **不兼容变更**：改字段类型、改必填字段、改语义 — `v` +1
-- 插件拒绝 `v < minSupported` 的客户端：`error: VERSION_MISMATCH` + close 4002
-- 协议版本协商在 `auth` 帧进行；客户端用多大的 `v` 作为上限由握手时 `serverVersion` 决定
-- **0.6 起协议升至 v3**（取干净切换，不维持 v2 双轨；理由见开头「版本演进」注）。`ProjectState.PROTOCOL_VERSION` 同步 bump 到 3
-- **0.7.0 起 v4**（墙脚本 `script.*`），**0.7.1 起 v5**（新触发器 + 有界循环），**0.7.3 起 v6**（补间 tweenBlock）→ **v7**（备选积木批）。均干净切换；`Protocol.SUPPORTED_MIN = MAX` 当前都 = **7**，前端 `CLIENT_V = 7`。v4 起脚本不进 ProjectState，故 `ProjectState.PROTOCOL_VERSION` 留 **3** 不动（有意为之）。auth 帧 `client_v` 不在范围 → reject `VERSION_MISMATCH` + close 4002，沿用既有版本协商路径
+- 信封壳版本字段 `Envelope.v` 仅在改顶层信封结构（`v / op / id / ts / payload`）时递增（当前恒为 `2`）
+- 业务协议版本（`client_v` / `accepted_v`）在新引入 op 或修改业务 payload 语义时递增，采用干净切换（`Protocol.SUPPORTED_MIN = SUPPORTED_MAX = 8`，前端 `CLIENT_V = 8`）
+- 协议版本协商在 `auth` 帧进行；`client_v` 不在 `[SUPPORTED_MIN, SUPPORTED_MAX]` 范围内时立即返回 `error: VERSION_MISMATCH` + close `4002`
+- 时间轴随 v3 进入 `ProjectState` 时将 `ProjectState.PROTOCOL_VERSION` 升至 `3`；v4–v8 墙脚本与授权扩展不改动 `ProjectState` 结构，故 `ProjectState.PROTOCOL_VERSION` 保持 `3` 不动
 
 ---
 
-## 11. 安全要求（参考 `security.md`）
+## 12. 安全要求（参考 `security.md`）
 
 - Token 必须通过 HTTPS/WSS（公网部署）
 - Token 单次使用：握手成功后立即 rotate，新 token 供重连用
@@ -1000,20 +1028,3 @@ type TriggerType = "manual" | "variableChange" | "schedule";
 - 任何字符串字段最大长度 256；富文本字段单独定义最大长度
 - 颜色必须为 `#RRGGBB` 或 `#RRGGBBAA` 格式，拒绝 CSS 关键字
 - Jackson 接收侧严格：`FAIL_ON_UNKNOWN_PROPERTIES=true`，未知字段直接拒 `INVALID_PAYLOAD`；服务端错误消息脱敏（不回传字段实际值 / 内部路径）
-
----
-
-## 12. 未决问题
-
-- [ ] 是否支持 batch op（多个操作打包一次发送，减少延迟）
-- [ ] 历史 `history.mark` 的 label 是否持久化到 walls.project_json（当前 walls 不存 history，cancel 后 redo/undo 栈丢失；如要保留可加 `walls.history_json`）
-- [ ] **0.6**：`timeline.play/pause/seek` 是否需在服务端持久化"上次播放位置"，还是每次从 0 起（与 `docs/timeline.md §12` 同一项对齐，不另造结论）
-- [ ] **0.6**：触发器 `variableChange` 绑高频变量（如 `eta_seconds` 每秒变）时的去抖策略是否需要在协议层可见（`trigger.params` 暴露去抖窗口），还是纯服务端状态机内部决策（`docs/timeline.md §5.2`）
-- [ ] 画布 resize 是否允许缩小（需处理越界元素）
-- [x] template.apply 是否支持保留现有自由元素（merge 语义）—— **v1 不做**，沿用 replace（清空 elements + 替换 background）；UI 上加"应用模板会覆盖当前内容"提示。merge 留 v2+
-- [x] 多人协作（v2）时的协议扩展（是否需要 CRDT）—— **永久不做**。接力编辑（前一玩家 cancel 后下一玩家 /canvas open）已满足需求
-- [x] ready payload 加 `wallId` / `alias` / `publishedAt` —— **已实装**
-- [x] ready payload 加 `templates`（全量 TemplateSpec 列表）—— **已实装**
-- [x] 图层模型 + 协议 v2 + opacity/blendMode/gridSize/guides 一次性升级 —— **协议固化，待实施**
-- [ ] 笔刷流 brush.* 通道：能否复用 element.update 还是必须独立通道 → 待 dither 完成后回头评估带宽
-- [x] 图片上传 `/api/upload` 端点 chunked 大文件 vs 一次性 multipart → **决策（2026-05-14）：一次性 multipart**。默认 max-size-kb=2048（2 MB），单 HTTP body multipart 足够；chunked 上传增加协议复杂度，单文件上限提到 10 MB 内都可承受。chunked 留 v2 加视频文件支持时再上

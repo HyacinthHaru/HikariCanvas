@@ -1,6 +1,5 @@
 # 渲染规范
 
-**状态：** 立项稿 v0.1 · 2026-04-19
 **适用范围：** 后端 Java Graphics2D 渲染器 + 前端 Canvas 预览渲染器
 
 本文档定义从工程状态 (`ProjectState`) 到像素输出的完整渲染管线。**前后端两套代码必须按相同规则实现**，并通过 CI snapshot 测试保证输出像素级一致。
@@ -9,7 +8,7 @@
 
 ## 1. 渲染目标
 
-输入：`ProjectState`（§ protocol.md §7）
+输入：`ProjectState`（见 `protocol.md §7`）
 输出：`widthMaps × heightMaps` 张 128×128 的调色板索引位图（`byte[]`，每字节一个 MC 调色板索引）
 
 整个管线由五层组成：
@@ -43,12 +42,12 @@ List<MapBitmap>   输出
 ### 2.1 字体文件
 
 - 后端：jar 内 `/fonts/*.ttf`（或 `.otf`），由 Gradle `downloadFonts` 构建期抓取后经 `processResources` 进入 shadow jar（不入 git，`.gitignore` 排除）
-- 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（单轨加载，见 §2.3），**不再走 `.woff2` + CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`），失败再 fallback `GET /api/font/metrics?id=X`
+- 前端：运行时**字体二进制**通过 **FontFace API + `GET /api/font/file?id=X`** 从后端拉同一字体动态注册（单轨加载，见 §2.3），**不依赖静态 CSS `@font-face` 双轨**。前端的**双端 advance 表**走 `GET /fonts/{id}.metrics.json`（`GlyphMetricsLut`），失败再 fallback `GET /api/font/metrics?id=X`
 - **两条 metrics 通道后端都必须真的能答**：`/fonts/{id}.metrics.json` 由 `WebServer` 路由供给（内置字体直读 jar 内 `fonts/`，用户字体落 `FontMetricsTable.serializeToJson` 的内存表），`/api/font/metrics` 同源。dev 下 vite 直接 serve `web/public/fonts/`（`syncFontsToWeb` 构建期同步，目录被 `.gitignore` 排除）——**只靠它会掩盖线上 404**：jar 部署没有那条静态路径，两条通道齐 404 时前端整页退回 `canonicalCharWidth`，而后端排版用真实 advance，字距与换行点系统性双端不一致
 - `serializeToJson` 自己会惰性加载 classpath 表，不依赖"后端已经渲染过这个字体"
 - 后端 + 前端**使用同一源字体文件**，构建脚本中以 SHA-256 pin 校验
 
-### 2.1.1 分发策略（方案 A）
+### 2.1.1 分发策略
 
 **全部内置字体走 Gradle `downloadFonts` 任务**（构建期从官方 Release / google/fonts 抓到 `build/downloaded-fonts/`，SHA-256 pin 校验 → `processResources` 合并进 shadow jar）；仓库**不入任何字体文件**，`.gitignore` 排除。
 
@@ -78,7 +77,7 @@ val downloadFonts = tasks.register("downloadFonts") {
 tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { into("fonts") } }
 ```
 
-**用户字体：** 服主可放到 `plugins/HikariCanvas/fonts/*.ttf`（`.otf`）；运行时 `FontRegistry.loadExternal` 启动期扫描该目录，**文件名去扩展名即 `fontId`**（约定优于配置；同名覆盖内置）。用户字体无构建期 metrics，启动期由 `FontMetricsTable.registerRuntime` 后台 worker 现场计算（见 §2.4 / CLAUDE.md）。
+**用户字体：** 服主可放到 `plugins/HikariCanvas/fonts/*.ttf`（`.otf`）；运行时 `FontRegistry.loadExternal` 启动期扫描该目录，**文件名去扩展名即 `fontId`**（约定优于配置；同名覆盖内置）。用户字体无构建期 metrics，启动期由 `FontMetricsTable.registerRuntime` 后台 worker 现场计算（见 §3.1）。
 
 ### 2.2 字体 ID 与声明
 
@@ -171,24 +170,13 @@ tasks.processResources { dependsOn(downloadFonts); from(downloadedFontsDir) { in
 
 - 整个工程渲染到单张大画布：`widthMaps × 128 × heightMaps × 128` 像素的 `BufferedImage TYPE_INT_ARGB`（Java）/ `ImageData`（JS）
 - 背景先填充 `canvas.background`（Fill 联合类型，§6.4 透明背景说明）
-- **v2 起：分层渲染。** 渲染只看 `layer.visible()` + `layer.opacity > 0` 两个条件（lock 是**纯前端 readonly**，后端 rasterize 透明不读 lock —— 见 CLAUDE.md §lock-state 第 2 条 / `architecture.md §13`）。对每个 `visible` 且 `opacity > 0` 的 layer：
+- **分层渲染：** 渲染只看 `layer.visible()` + `layer.opacity > 0` 两个条件（lock 是**纯前端 readonly**，后端 rasterize 透明不读 lock —— 见 `architecture.md §3.4` 与 `§13`）。对每个 `visible` 且 `opacity > 0` 的 layer：
   1. 分配同尺寸 ARGB layer-buffer
   2. 在 layer-buffer 上按层内 z-order 绘制每个 visible element（element 自己的 opacity + blendMode 在此层 buffer 内生效）
   3. 用 `layer.opacity` + `layer.blendMode` 把 layer-buffer 合成到主 buffer
 - 最终主 buffer 走 §6 量化
 
 详细 opacity / blendMode 公式见 §6.5 / §6.6。grid / guides **不参与栅格化**（只在前端预览叠加层画，详见 §4.5）。
-
-### 4.5 网格与参考线（v2 引入，仅前端）
-
-`canvas.gridSize > 0` 时在编辑器 Canvas 上叠加网格（每 N 像素一条浅灰线）。`canvas.guides[]` 渲染为绿/紫细线。两者：
-
-- **不**进入 §4.1 主 buffer
-- **不**参与 §6 量化
-- **不**经过 §7 切片
-- 游戏内 MC 地图看不到这两样
-
-实现：CanvasView 在主 `<canvas>`（渲染主 buffer）之上加一个独立的 `<canvas>` overlay，每帧重画网格 + guides 线条。fly-out 标尺供拖出新 guide，guides[] 改动经 `canvas.guides.set` op 同步到服务端持久化。
 
 ### 4.2 Graphics2D 必设项（Java）
 
@@ -237,12 +225,16 @@ if stroke:
     // 4 个 fillRect 手工画边框（BasicStroke.drawRect 会把线宽分摊到边界两侧，像素对不齐）
 ```
 
+**IconElement：**
+- 图标通过 `IconRegistry` 以矢量 SVG 路径渲染（`source` 格式 `pack/name`，如内置 `fa-solid/heart` 或用户图标 `user/foo`；前端经 `GET /api/icon/paths?id=...` 获取同一份 `path d` 与 `viewBox`）
+- 经 `PathParser` 解析为 `Path2D`（Java）/ `Path2D`（Canvas），按 `viewBox` 到元素 `(x, y, w, h)` 等比缩放并居中对齐，使用 `FillPaintBuilder.fillToPaint` 填充（`fill` 缺省时退黑色）；未注册图标绘制占位虚线框与 `?`
+
 **ImageElement：**
 ```
 // 1. 加载缓存 BufferedImage（按 hash 从 plugins/HikariCanvas/uploads/<hash>.png）
 BufferedImage img = imageStorage.load(e.source);
 if (img == null) {
-    drawIconStylePlaceholder(g, e);  // 同 IconElement 文件缺失占位（虚线框 + ?）
+    drawMissingPlaceholder(g, e);  // 文件缺失占位（虚线框 + ?）
     return;
 }
 
@@ -293,6 +285,17 @@ g.setClip(originalClip);
 （`r=32` 时每像素 4225 次乘加 × 3 遍，10000×10000 元素能把渲染线程钉死几分钟）。前端羽化走
 `ctx.filter='blur()'`（浏览器高斯），两端本就是"视觉近似"而非逐位一致，见 §8.2。
 
+### 4.5 网格与参考线（仅前端）
+
+`canvas.gridSize > 0` 时在编辑器 Canvas 上叠加网格（每 N 像素一条浅灰线）。`canvas.guides[]` 渲染为绿/紫细线。两者：
+
+- **不**进入 §4.1 主 buffer
+- **不**参与 §6 量化
+- **不**经过 §7 切片
+- 游戏内 MC 地图看不到这两样
+
+实现：CanvasView 在主 `<canvas>`（渲染主 buffer）之上加一个独立的 `<canvas>` overlay，每帧重画网格 + guides 线条。fly-out 标尺供拖出新 guide，`guides[]` 改动经 `canvas.guides.set` op 同步到服务端持久化。
+
 ---
 
 ## 5. 效果
@@ -320,7 +323,7 @@ g.setClip(originalClip);
 3. 着色 `glow.color` 画到主画布
 4. 画正常字形于主画布
 
-**盒式模糊算法：** 水平 + 垂直两次 radius 长的均值滤波，两端固定实现，`rendering-test/glow-*.png` 作为 snapshot 基准。
+**盒式模糊算法：** 水平 + 垂直两次 `radius` 长的可分离均值滤波，两端固定实现（snapshot 基线见 §8.1 `05-effects-glow.png`）。
 
 **外接盒度量（双端同源）：** mask 缓冲区的范围按字形位置 + 每字宽度算，宽度必须用排版同一个
 `charAdvance(fontId, ch, fontSize)`（§3 第 2 条），高度用 `ascent = round(fontSize × 0.8)` /
@@ -393,9 +396,7 @@ for r in 0..31: for g in 0..31: for b in 0..31:
 
 ### 6.3 距离度量
 
-使用 **CIE76 近似（Lab）** 比 RGB 欧氏距离更符合视觉。Lab 转换公式内嵌常量，禁止引入 OpenCV 等重依赖。
-
-若 `render.palette-strategy: "fast"`（配置）则退回 RGB 欧氏，性能优先场景使用。
+统一使用 **CIE76 近似（Lab）** 色差度量构建 32³ LUT，比 RGB 欧氏距离更符合人眼视觉感知。Lab 转换公式内嵌常量，不引入外部重型图像处理依赖。
 
 ### 6.4 透明处理
 
@@ -404,7 +405,7 @@ for r in 0..31: for g in 0..31: for b in 0..31:
 
 不支持**半透明**像素（MC 地图原生不支持中间 alpha）。文字的半透明抗锯齿边缘也会被硬截断——这是必须关抗锯齿的另一原因。
 
-**透明背景（0.4.6 P2 起支持）：** 主 rasterize buffer 升为 `TYPE_INT_ARGB`（之前 `TYPE_INT_RGB` 会强制合成不透明，把 `SolidFill("#00000000")` 吃成黑底）。背景 alpha 通道现可贯穿到量化层：`toPaletteSlice` 逐像素调 **4 参 `matchColor(r, g, b, a)`** 重载，`a < 128` 时直接返 `TRANSPARENT_INDEX(0)`，整块画布无元素覆盖的区域在 MC 地图里透明。内存成本 +33%（不透明像素 `a >= 128` 时 4 参与 3 参 `matchColor` 等价，snapshot baseline 0 漂移）。编辑器 `CanvasSettingsSection` 提供「设为透明背景」快捷按钮。
+**透明背景：** 主 rasterize buffer 采用 `TYPE_INT_ARGB`，使背景 alpha 通道贯穿到量化层：`toPaletteSlice` 逐像素调 **4 参 `matchColor(r, g, b, a)`** 重载，`a < 128` 时直接返 `TRANSPARENT_INDEX(0)`，整块画布无元素覆盖的区域在 MC 地图里透明。内存成本 +33%（不透明像素 `a >= 128` 时 4 参与 3 参 `matchColor` 等价，snapshot baseline 0 漂移）。编辑器 `CanvasSettingsSection` 提供「设为透明背景」快捷按钮。
 
 ### 6.5 元素级 opacity
 
@@ -508,9 +509,9 @@ plugin/src/test/resources/
 
 测试流程：`RendererSnapshotTest` 读 `fixtures/*.json` → `rasterize` → 与 `expected/*.png` 逐像素比对，差异 > 0.5%（`TOLERANCE`）→ fail，差异图写 diff 目录。
 
-**前端无独立 snapshot 渲染台：** §8.1 早期设想的 `java-runner` / `web-runner`（Playwright Headless Chrome）**未实装**。前端只有 vitest 单元测试（`web/src/**/__tests__/*.test.ts`，覆盖 livepaint / interpolator / glow+dither 等算法），**不跑像素级双端对比**。双端一致靠"同算法 + 同常量 + 同 metrics JSON"的代码镜像纪律保证（§8.4 / §9.6 缓动测试向量是少数有显式双端数值比对的路径）。
+**前端无独立像素级 snapshot 渲染台：** 前端以 vitest 单元测试覆盖关键算法（`web/src/**/__tests__/*.test.ts`，含 livepaint / interpolator / glow+dither 等），双端一致性由"同算法 + 同常量 + 同 metrics JSON"的代码镜像纪律以及跨端共享测试向量 `rendering-test/easing-vectors.json`（§9.6）共同保证。
 
-**CI 跳过文本 fixture（0.4.7 起）：** `02-chinese-text` / `03-effects-stroke` / `04-effects-shadow` / `05-effects-glow` 在 Linux + macOS AWT 度量 / effects 内部实现差异 > 0.5%，CI Linux 跑会 fail。这 4 个拆到 `snapshotPlatformSensitive` 方法 + `@DisabledIfEnvironmentVariable(GITHUB_ACTIONS=true)`，**CI 只跑跨平台稳定的几何 / 路径 / 渐变 / dither / 笔刷 / 图片 fixture**；4 个文本 fixture 仅本地 macOS 跑。
+**CI 跳过平台敏感文本 fixture：** `02-chinese-text` / `03-effects-stroke` / `04-effects-shadow` / `05-effects-glow` 在 Linux + macOS AWT 字形栅格化实现差异 > 0.5%，CI Linux 跑会 fail。这 4 个拆到 `snapshotPlatformSensitive` 方法 + `@DisabledIfEnvironmentVariable(GITHUB_ACTIONS=true)`，**CI 只跑跨平台稳定的几何 / 路径 / 渐变 / dither / 笔刷 / 图片 / 时间轴 fixture**；4 个文本 fixture 仅在本地环境运行。
 
 ### 8.2 容忍度
 
@@ -543,7 +544,7 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 
 ---
 
-## 9. 时间轴插值与缓动（0.6 引入）
+## 9. 时间轴插值与缓动
 
 时间轴给渲染管线加一个**时间维前置层**：给定一条 `Timeline` 与查询时刻 `timeMs`，先把每个带关键帧的
 元素属性插值成瞬时值，产出一个临时 `ProjectState`（record copy，只改值不改结构），再走 §4 Rasterize
@@ -580,14 +581,16 @@ Live Paint（油漆桶工具）的拓扑计算**仅在浏览器 Web Worker 跑**
 
 ### 9.2 逐类型插值规则
 
+可加关键帧的属性白名单（`Keyframe.PROPERTIES`）共 9 项，按插值方式分三类：
+
 | property 类 | 属性 | 规则 |
 |---|---|---|
-| 数值 | `x`/`y`/`w`/`h`/`rotation`/`opacity` | `v = a + (b − a) × eased`，`a`/`b` 为左右帧值 |
-| 颜色 / Fill | `color`/`fill` | sRGB 线性空间分量插值（§9.4） |
-| 离散 | `text`/`fontId` 等 | **step**：取 `timeMs ≤ t` 的最近关键帧（`t` 在首帧之前取首帧，与 §9.1 边界一致），不插值，`eased` 不参与 |
+| 数值 | `x` / `y` / `w` / `h` / `rotation` / `opacity` | `v = a + (b − a) × eased`，`a`/`b` 为左右帧值 |
+| 颜色 / Fill | `color`（`TextElement`）/ `fill`（几何/图标/笔刷元素） | sRGB 线性空间分量插值（§9.4） |
+| 离散 | `text`（`TextElement`） | **step**：取 `timeMs ≤ t` 的最近关键帧（`t` 在首帧之前取首帧，与 §9.1 边界一致），不插值，`eased` 不参与 |
 
-**字形级动画不做**：逐字 advance 量化是双端已知痛点（§2、CLAUDE.md）。文本只做整体属性（位置 /
-缩放 / 旋转 / 不透明度）插值 + 内容 step 切换，不做字形级 morph。
+**字形级动画不做**：逐字 advance 量化需严格受控（见 §2、§3.1）。文本只做整体属性（位置 /
+缩放 / 旋转 / 不透明度 / 字色）插值 + 文本内容 `text` 阶跃切换，不做字形级 morph，也不对 `fontId` 等字体结构字段建轨。
 
 ### 9.3 缓动函数（双端逐位等价）
 
@@ -651,7 +654,7 @@ eased = sampleY(solveU(local))
 **两端写死相同的常量**：`NEWTON_ITER = 8`、`BISECT_MAX = 32`、`EPS = 1e-6`。
 **边界捷径（两端相同）**：`local <= 0 → 0`、`local >= 1 → 1`（与求解结果一致，但保证端点精确）。
 
-**禁引第三方 easing 库**（D8）：第三方浮点实现与本式对不齐，会让多帧 snapshot 在边界像素抖动。
+**禁引第三方 easing 库**：第三方浮点实现与本式对不齐，会让多帧 snapshot 在边界像素抖动。
 
 ### 9.4 色彩插值空间
 
@@ -702,16 +705,16 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
 - **字符串 / 离散类**：step 取最近帧后，由 Rasterize 既有的 `maybeInterpolateText` 每帧统一 resolve（取
   最新值，免费）。
 
-变量 cached 值在异步线程读取安全（见 `architecture.md`；0.4.10 已证）。
+变量 cached 值在异步线程读取安全（见 `architecture.md §13.1`）。
 
 ### 9.6 一致性验证（接 §8）
 
-现有 `RendererSnapshotTest` 无时间维（读 fixture → `rasterize(state)` 一次 → 比单张 PNG），**测不了
+单帧 `RendererSnapshotTest` 无时间维（读 fixture → `rasterize(state)` 一次 → 比单张 PNG），**测不了
 缓动双端一致**。新增两层防线：
 
-1. **缓动测试向量** `easing.json`：每条 = `{ type 或控制点, 一批输入 t }` → `expected eased`（容差 `1e-6`）。
+1. **缓动测试向量** `rendering-test/easing-vectors.json`：每条 = `{ type 或控制点, 一批输入 t }` → `expected eased`（容差 `1e-6`）。
    Java 端与 TS 端各跑同一向量并比对 expected。纯算术、跨平台稳定，进 CI gate。
-2. **多帧 snapshot**：新增 `rasterize(state, timeMs)` 路径 + 带 `timeline` 的 fixture；同一 timeline 在
+2. **多帧 snapshot**：`RendererSnapshotTimelineTest` 走 `rasterize(state, timeMs)` 路径 + 带 `timeline` 的 fixture（`14-timeline-easing.json`）；同一 timeline 在
    `t = 0 / 250 / 500 / 750ms` 各出一张 PNG 比基线。缓动 fixture **只用纯几何元素**（文本 fixture 因 AWT
    度量差已在 CI 跳过，§8.1 同因）。
 
@@ -742,13 +745,13 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
 
 ---
 
-## 11. SVG 导入渲染（0.8 Part B 实装）
+## 11. SVG 导入渲染
 
 本节描述 SVG 矢量导入管线与渲染层的对接约定。SVG 导入是**纯前端**操作（`web/src/lib/svg/`），后端零新解析器；产物是一组原生 `PathElement`（+ 内嵌位图 `ImageElement`），经现有 `element.add` op 写入，走 §4.4 的 `PathElement` 常规渲染路径。
 
-### 11.1 fill-rule 双端一致（D9）
+### 11.1 fill-rule 双端一致
 
-`PathElement` 新增可空字段 `fillRule`（`"nonzero"` / `"evenodd"` / `null`），`null` 等价于 `"nonzero"`。
+`PathElement` 携带可空字段 `fillRule`（`"nonzero"` / `"evenodd"` / `null`），`null` 等价于 `"nonzero"`。
 
 **双端实现（须逐函数一致）：**
 
@@ -759,7 +762,7 @@ encode(l) = (l ≤ 0.0031308) ? 12.92·l : 1.055·l^(1/2.4) − 0.055
 
 两端均以"默认 nonzero"为兜底（`null` 或缺字段时走 `WIND_NON_ZERO`/`'nonzero'`）。`ElementValidator.parseFillRuleNullable` 在服务端校验；协议层 `protocol.ts` 的 `PathElement` 定义加 `fillRule?: 'nonzero' | 'evenodd'`。
 
-> **为何要显式承载（D9）**：SVG 默认 nonzero，但带洞图形（如字母 O 的内圆）依赖 evenodd；不显式设置会让后端与前端渲染结果不一致。
+> **为何要显式承载**：SVG 默认 `nonzero`，但带洞图形（如字母 O 的内圆）依赖 `evenodd`；不显式承载会让后端与前端渲染结果不一致。
 
 **无 DB migration**：`fillRule` 序列化在 `project_json` blob 内，是 nullable 加法（旧 blob 无此字段 → Jackson 读为 `null` → 沿用默认 nonzero，零漂移）。
 
@@ -818,16 +821,5 @@ stroke」）；渐变停止点数 / 位置 / 半径 / 角度按 `FillValidator` 
 | 字号 ≤ 0 | 元素不渲染，校验阶段应已拦截 |
 | 超大画布（> `limits.canvas-max-maps`） | confirm 阶段 WallResolver 拒绝（校验在新建路径一次性做；现有 wall 即使配置改小也允许打开） |
 | 元素超出画布边界 | 只绘制画布内部分，越界部分裁剪 |
-| 字体不存在 | fallback 到默认字体并产生 `session.warning` |
+| 字体不存在 | 双端统一回退内置默认字体 `ark_pixel` |
 | 调色板 LUT 未加载 | 渲染拒绝并 `INTERNAL_ERROR` |
-
----
-
-## 13. 未决问题
-
-- [ ] 非像素字体是否需要提供「强制像素化」选项（字号任意 → 量化到 1px 网格）
-- [ ] Dithering 是否值得做（v1.0 不做，但预留配置）
-- [ ] 效果组合（描边+阴影+发光）的性能 budget
-- [ ] 中文字体的 emoji / 符号缺字处理（fallback chain）
-- [ ] 多帧 snapshot fixture 的关键帧密度与采样时刻（§9.6；t=0/250/500/750 是否够覆盖缓动曲线拐点）
-- [ ] 渐变 Fill 跨类型插值（solid↔linear）是否值得做平滑过渡，还是永久保持 step 降级（§9.4）

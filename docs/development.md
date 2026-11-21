@@ -1,12 +1,11 @@
 # HikariCanvas 开发指南
 
-**状态：** 操作类文档 · 2026-06-21 首版
 **适用范围：** 贡献者 / 二次开发者
 **面向读者：** 想克隆仓库、构建、跑测试、起本地 dev server、改后端 Java 或前端 Vue 的人
 
 本文是「怎么把代码跑起来 + 在哪改」的实操指南。架构与契约决策不在这里——那些在
-`PROPOSAL.md` 与 `docs/architecture.md` / `docs/protocol.md` / `docs/rendering.md` 等
-契约文档里。**改契约要先改对应 `docs/*.md` 再改代码**（见 `CLAUDE.md` 「文档先行」）。
+`docs/architecture.md` / `docs/protocol.md` / `docs/rendering.md` 等契约文档里。
+**改契约要先改对应 `docs/*.md`，再改代码。**
 
 ---
 
@@ -18,7 +17,7 @@
 |---|---|---|
 | **Java** | **21**（Temurin / 任意 21 LTS JDK） | 生产 jar 的编译目标，Gradle toolchain 默认 `JavaLanguageVersion.of(21)`。跑 Paper 26.x 的服务器需要 Java 25，但那是**运行**要求；一份 jar 通吃两版，编译目标不变（见 §1.1） |
 | **Node.js** | **22 LTS** | **不要用 Node 25**——已知卡 `vue-tsc`（见 §8）。CI 锁 Node 22 |
-| **Gradle** | **9.4.1** | 走 `./gradlew` wrapper（`gradle/wrapper/gradle-wrapper.properties` 已 pin），不要装全局 Gradle |
+| **Gradle** | **9.6.1** | 走 `./gradlew` wrapper（`gradle/wrapper/gradle-wrapper.properties` 已 pin），不要装全局 Gradle |
 | npm | 随 Node 22 自带 | 前端依赖严格按 `web/package-lock.json` |
 
 ### 1.1 多版本编译
@@ -39,22 +38,22 @@
 
 锁定版本的权威来源（构建脚本真实现状）：
 
-- 根 `build.gradle.kts`：`group = "ac.haru"` / `version = "0.9.16-SNAPSHOT"`
+- 根 `build.gradle.kts`：`group = "ac.haru"`，统一把版本号注入子项目与 `paper-plugin.yml`
 - `settings.gradle.kts`：`rootProject.name = "hikari-canvas"`，子项目 `plugin` +
   `examples:demo-train-plugin` + `examples:demo-score-plugin`
 - `plugin/build.gradle.kts` 关键依赖：Paper `1.21.11-R0.1-SNAPSHOT`（`paperweight-userdev`
-  2.0.0-beta.21，shadow 9.4.3）、Javalin 7.1.0、Jackson 2.22.1（databind 与 dataformat-yaml
-  **必须同版本**）、SQLite JDBC 3.53.0.0、HikariCP 7.1.0、JDBI 3.54.0（core 与 sqlite
-  **必须同版本**）、Caffeine 3.1.8；测试侧 JUnit 5.11.3 + MockBukkit-v1.21 3.123.0 +
-  javalin-testtools 7.1.0（须与 Javalin 本体同版本）
+  2.0.0-beta.21、`run-paper` 3.0.2、Shadow 9.6.1）、Javalin 7.2.2、Jackson 2.22.1（`jackson-databind`
+  与 `jackson-dataformat-yaml` **必须同版本**）、SQLite JDBC 3.53.2.1、HikariCP 7.1.0、JDBI 3.54.0
+  （`jdbi3-core` 与 `jdbi3-sqlite` **必须同版本**）、Caffeine 3.2.4；测试侧 JUnit Jupiter 6.1.2 +
+  `javalin-testtools` 7.2.2（须与 Javalin 本体同版本）
 - **PacketEvents 2.13.0 是 `compileOnly`，不打进 jar**：它是 GPL-3.0，打包会污染本项目 MIT。
   服主须单独安装 PacketEvents 插件（`paper-plugin.yml` 声明为必装依赖）
-- `web/package.json` 关键依赖：Vue 3.5、Pinia 2.3、Konva 9.3 + vue-konva 3.4、Lexical 0.44
-  （`lexical` 与 `@lexical/*` **必须同版本**）、fontkit 2.0、polygon-clipping 0.15、
-  Tailwind 4 + Vite 8.1 + Vitest 4 + vue-tsc 3.2
+- `web/package.json` 关键依赖：Vue 3.5、Pinia 2.3、Konva 10.3 + vue-konva 3.4、Lexical 0.48
+  （`lexical` 与 `@lexical/*` **必须同版本**）、fontkit 2.0、polygon-clipping 0.15、fflate 0.8、
+  Tailwind 4 + Vite 8.1 + Vitest 4 + vue-tsc 3.3
 
 > **模块版本对齐**：上面标了「必须同版本」的几组，dependabot 只会单独升其中一个模块，合并前
-> 要手动补齐另一个。Jackson（2026-07-18）与 JDBI（2026-07-21）都踩过这个坑。
+> 务必手动补齐另一个（Jackson 与 JDBI 都曾因单模块升级产生运行时冲突）。
 
 ---
 
@@ -79,7 +78,7 @@ cd web && npm run test && cd ..
 
 # 6. 打包 shadow jar（自动跑 palette / fonts / web 产物链）
 ./gradlew :plugin:shadowJar
-# 产物：plugin/build/libs/HikariCanvas-0.9.16-SNAPSHOT.jar
+# 产物：plugin/build/libs/HikariCanvas-<version>.jar
 
 # 7. 起本地 MC 1.21.11 dev server（自动挂上一步的 jar）
 ./gradlew :plugin:runServer
@@ -89,7 +88,7 @@ cd web && npm run test && cd ..
 
 `shadowJar` / `processResources` 会自动触发一串构建期任务（无需手动跑）：
 
-1. `downloadFonts`——从各 GitHub Release / raw 抓 20+ 枚内置字体（OFL 1.1）到
+1. `downloadFonts`——从各 GitHub Release / raw 抓 22 枚内置字体（OFL 1.1）到
    `build/downloaded-fonts/`，每枚 SHA-256 pin 校验。**首跑慢（~10min），后续命中缓存秒过**。
 2. `generateGlyphMetrics`——对每枚字体用 AWT 算 BMP advance 表，输出 `*.metrics.json`。
 3. `generatePalette`——从 Paper `MapPalette` 导 248 色到 `palette.json`（独立 `generator`
@@ -137,7 +136,7 @@ token 后，把 token 拼到 Vite 地址用：`http://127.0.0.1:9173/?token=<tok
 |---|---|
 | `:plugin:shadowJar` | 打可部署 jar（自动跑 palette/fonts/icons/web 链 + relocate 第三方依赖） |
 | `:plugin:runServer` | 起本地 MC 1.21.11 dev server，自动挂最新 shadow jar + 自动写 `eula=true` |
-| `:plugin:test` | 后端单测（JUnit 5 + MockBukkit + JavalinTest，含渲染快照） |
+| `:plugin:test` | 后端单测（JUnit Jupiter + JavalinTest，含渲染快照） |
 | `:plugin:assemble` | = `shadowJar` |
 | `:plugin:syncFontsToWeb` | 下字体 + 生成 metrics + 拷到 `web/public/fonts/`（首次 / 字体规格变更跑一次） |
 | `:plugin:downloadFonts` | 仅下载内置字体到 `build/downloaded-fonts/` |
@@ -180,7 +179,7 @@ JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanv
 | 子包 | 一句话职责 |
 |---|---|
 | `api` | 公开 Plugin Push API（`ac.haru.hikaricanvas.api.*`，**shadowJar 不 relocate**）：`HikariCanvasAPI` + `VarType` + `NamespaceInfo` + 2 异常 |
-| `benchmark` | 0.5.0 纯服务端性能 Benchmark：scene 生成 + rasterize/palette/GC 模拟 + report.json/html + 50mspt 计算器 |
+| `benchmark` | 纯服务端性能 Benchmark：scene 生成 + rasterize/palette/GC 模拟 + report.json/html + 50mspt 计算器 |
 | `canvasfile` | `.canvas` 工程文件导入导出：archive 打包 / manifest / asset 摄取 / 物化 / 脚本导入 |
 | `command` | `/canvas` 命令树：`CanvasCommand`（根）+ `VariableSubCommand`（`var` 族）+ `BenchmarkSubCommand`（`bench` 族） |
 | `deploy` | 游戏世界侧：`MapPacketSender`（**唯一发包入口**，PacketEvents 调用集中）+ `FrameDeployer` + `WallResolver` + `CanvasWand` + `FrameProtectionListener` |
@@ -189,15 +188,15 @@ JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanv
 | `rail` | 铁路网络模型：线路 / 站点 / 车次 / 时刻表 / 服务类型 + `AutoTimetableGenerator` 纯函数 |
 | `render` | 渲染引擎（最大子包）：`CanvasCompositor` rasterize + 各元素 renderer + 字体 / palette / dither / blend + 时间轴 `AnimationTicker` / 插值 / 缓动 + `BufferPool`（详见 §6） |
 | `schedule` | 手动时刻表 record（`WallSchedule` / `ScheduleEntry`） |
-| `script` | 0.7.0 视觉脚本数据模型：`ScriptRule` / `Trigger` / `Action`（含序列化器）+ `ScriptRuleValidator` + `ScriptStore` + `ScriptPermissions` |
+| `script` | 视觉脚本数据模型与执行引擎：`ScriptRule` / `Trigger` / `Action`（含序列化器）+ `ScriptRuleValidator` + `ScriptStore` + `ScriptPermissions` + `engine/`（`ScriptRunner` / `TweenScheduler`） |
 | `session` | 编辑会话：`SessionManager`（byWall 排他锁）+ `Session` + `TokenService` + IP 绑定 + 限流 + `WandListener` |
 | `state` | 工程状态与元素模型：`ProjectState` + sealed `Element`（text/path/circle/shape/image/icon/brush）+ `Fill` + `EditSession`（编辑 op 入口 + undo/redo）+ 时间轴 `Timeline`/`Keyframe`/`Easing` |
 | `storage` | 持久化：`Database`（HikariCP + SQLite）+ `MigrationRunner`（V001..）+ 各 DAO（Wall / Template / Variable / Schedule / Rail / Script / ImageUpload）+ `AuditLog` |
-| `template` | 模板系统：YAML v1 加载 / 实例化 / 校验 / 注册表 / 导出 / 发布 |
-| `variable` | 0.4.0 变量系统：`VariableStore` + `VariableInterpolator`（`${var:X}` 替换）+ `VarType` + DTO + provider/plugin 子目录 |
+| `template` | 模板系统：`.canvas` 模板包（pack）注册表 / 导出 / 创意工坊发布 / 缩略图预览 |
+| `variable` | 变量系统：`VariableStore` + `VariableInterpolator`（`${var:X}` 替换）+ `VarType` + DTO + provider/plugin 子目录 |
 | `web` | WebSocket / HTTP 端点：`Protocol`（版本协商）+ `Envelope` + 各 `*OpDispatcher`（Edit / Brush / Rail / Schedule / Script / Template）+ `WebServer`（Javalin） |
 
-架构纪律（**不可越界**，详见 `CLAUDE.md`「架构纪律」+ `PROPOSAL.md §5.2.6`）：
+架构纪律（**不可越界**，详见 `docs/architecture.md §1.3`）：
 
 1. **禁用 NMS**——任何 `net.minecraft.*` / 服务端内部类禁止；只用公开 Bukkit API + PacketEvents。
 2. **PacketEvents 调用集中**——所有发包走 `deploy/MapPacketSender.java` 一个类，别处不直接碰。
@@ -222,7 +221,7 @@ JavaPlugin`，`onEnable` 装配所有单例 / `onDisable` 关停）+ `HikariCanv
 | `composables/` | 可复用交互逻辑：`useSnapManager` / `useDrawToCreate` / `useClipboard` / `useBrushHost` / `useLassoMask` / `useLockGuard` / `usePanScroll` / `useTimelinePlayback` / `useSvgImport` / `useProjectImport`/`Export` 等 |
 | `livepaint/` | 油漆桶（**前端独占功能**）：`LivePaintCore` + `ElementToPolygon` + `PolygonToPath` + `RdpSimplifier` + Web Worker（`livePaintWorker.ts`） |
 | `timeline/` | 时间轴双端插值镜像：`easing` / `colorLerp` / `interpolation`（与后端 `render` 缓动逻辑对镜，数值需逐位一致） |
-| `script/` | 0.7.0 积木脚本编辑器：`model`（blockDefs / blockTree / dropTarget / validator / serialize）+ `canvas`（无限画布 + 拖拽 + 渲染）+ `params`（参数表单 / 条件构建器） |
+| `script/` | 积木脚本编辑器：`model`（blockDefs / blockTree / dropTarget / validator / serialize）+ `canvas`（无限画布 + 拖拽 + 渲染）+ `params`（参数表单 / 条件构建器） |
 | `variable/` | 变量前端逻辑：`interpolator`（`${var:X}` 镜像）+ `pickerLogic` + `lexicalChip`（Notion 风 chip 编辑器） |
 | `brush/` | `BrushController`——笔刷绘制控制 |
 | `i18n/` | 中英文案（`messages.ts` ~1900 行 + `index.ts`） |
@@ -323,52 +322,48 @@ GitHub Actions 两个 workflow（`.github/workflows/`）：
 
 ### 9.1 `ci.yml`——push / PR 到 `main` 触发
 
-单 job（前后端互相依赖，拆 job 反而要重复 setup）：
+共两个并行 job：
 
-1. `actions/checkout`
-2. setup Java 21 Temurin + Node 22 LTS（npm cache，key = `web/package-lock.json`）
-3. setup Gradle（`gradle/actions/setup-gradle@v4`，自带 dep / build / config cache，不额外配
-   `actions/cache`）
-4. 前端：装依赖（`npm ci`，失败 fallback `npm install`）→ `npm run test` → `npm run build`
-5. 后端：`./gradlew :plugin:test --no-daemon --stacktrace` → `./gradlew :plugin:shadowJar ...`
-6. 上传 jar artifact（`HikariCanvas-<sha>`，留 30 天）；失败时上传 test reports（留 7 天）
+1. **`build`（主构建与测试）**：
+   - 环境：Java 21 Temurin + Node 22 LTS（npm 依赖按 `web/package-lock.json` 缓存）+ `gradle/actions/setup-gradle@v6`（自带 Gradle dependency / build / configuration cache）
+   - 前端：装依赖（`npm ci`，跨平台可选依赖不匹配时 fallback `npm install`）→ `npm run test` → `npm run build`
+   - 后端：`./gradlew :plugin:test --no-daemon --stacktrace` → `./gradlew :plugin:shadowJar --no-daemon --stacktrace`
+   - 产物：上传 `HikariCanvas-<sha>` jar artifact（保留 30 天）；失败时上传测试报告（保留 7 天）
+2. **`compat-26`（Paper 26.2 编译守卫）**：
+   - 环境：Java 25 Temurin + `gradle/actions/setup-gradle@v6`
+   - 执行：`./gradlew :plugin:compileJava -PpaperApi=26.2.build.+ -PjavaVer=25 --no-daemon --stacktrace`，对同一份 `main` 源码针对 Paper 26.2 API 做编译验证，第一时间拦截已移除 API 回归
 
-首跑 ~5min（paperweight dev bundle 首装），后续 ~2min（缓存生效）。
+首跑约 5 分钟（paperweight dev bundle 首装），后续命中缓存约 2 分钟。
 
 ### 9.2 `release.yml`——tag `v*` 触发
 
 ```bash
-git tag v0.9.16-rc.1 && git push origin v0.9.16-rc.1
+git tag v1.0.0 && git push origin v1.0.0
 ```
 
 跑 test + shadowJar → 从 tag 解版本号 → 把产物重命名为 `HikariCanvas-<version>.jar` →
-`softprops/action-gh-release` 创建 Release 并附 jar。tag 含 `-`（如 `-SNAPSHOT` / `-beta.1`）
-自动标 **prerelease**；纯 stable（`v1.0.0`）不标。
+`softprops/action-gh-release` 创建 Release 并附 jar。tag 含 `-`（如 `v1.1.0-rc.1`）
+自动标 **prerelease**；纯正式版本号（`v1.0.0`）不标。
 
 ---
 
-## 10. Git 提交约定（贡献者须知）
+## 10. Git 提交与贡献约定
 
-完整规则见 `CLAUDE.md`「Git 提交约定」。要点：
-
-- 所有 commit **SSH 签名**（`gpg.format=ssh` + `commit.gpgsign=true`）；身份与密钥由本地
-  `.git/config` 持有，不动全局。签名失败先查原因，
-  **不要用 `--no-gpg-sign` 绕过**。
-- **禁止任何形式的 Claude / AI 署名**（含 `Co-Authored-By`）。
-- 每次修改在 `docs/journal.md` 顶部追加一条（日期 · 范围 · 改动 · 关联文件）。
-- 评估「做到哪了 / 还剩什么」**优先读 `docs/journal.md` + 代码**，不要只信 `CLAUDE.md`
-  路线表 / 设计文档分期表（它们会滞后）。
+- **提交签名**：仓库要求 commit 使用 SSH / GPG 签名（例如在本地 `.git/config` 配置 `gpg.format=ssh` + `commit.gpgsign=true`）；签名失败时请先排查密钥或 agent 状态，不要用 `--no-gpg-sign` 绕过。
+- **契约先行**：涉及 WebSocket 协议、数据库 / `.canvas` 格式、双端渲染一致性或安全模型的变更，请先同步修改对应的 `docs/*.md` 契约文档，再修改实现代码。
+- **提交前自检**：确保 `./gradlew :plugin:test` 与 `cd web && npm run test` 全部通过，渲染快照无非预期漂移。
 
 ---
 
 ## 相关文档
 
-- `PROPOSAL.md` — 立项总纲
 - `docs/architecture.md` — 架构与核心机制
 - `docs/protocol.md` — WebSocket 协议
 - `docs/rendering.md` — 渲染管线与双端一致性（§8 快照 / §9 缓动数学）
 - `docs/data-model.md` — SQLite / PDC / `.canvas` 格式
+- `docs/template-pack.md` — `.canvas` 模板包规范
+- `docs/import-export.md` — 工程导入导出与 SVG 导入
 - `docs/security.md` — 威胁模型与安全规范
-- `docs/api.md` — Plugin Push API 接入教程
-- `docs/deployment.md` — 生产部署
-- `docs/journal.md` — 每个 commit / 里程碑的真实落地日志（日期倒序）
+- `docs/api.md` — Plugin Push API 接入指南
+- `docs/deployment.md` — 生产部署指南
+- `docs/benchmark.md` — 性能 Benchmark 指南

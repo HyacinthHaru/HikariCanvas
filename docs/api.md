@@ -1,13 +1,13 @@
 # HikariCanvas Plugin Push API
 
 > 让外部插件（铁路 / PvP / 商店 / ...）实时向 HikariCanvas wall 推送动态变量。
-> 引入版本：**0.4.0**；接口稳定性：**实验性**（pre-1.0，详见 §10）。
+> 接口稳定性：**稳定**（遵循语义化版本，详见 §11）。
 
 ---
 
 ## 1. 概览
 
-`HikariCanvasAPI` 是 HikariCanvas 0.4.0 引入的"动态接入"接口，让外部插件可以：
+`HikariCanvasAPI` 是 HikariCanvas 提供的外部插件动态接入接口，让外部插件可以：
 
 - 注册一个 **namespace**（如 `bedwars` / `railway`）
 - 声明可用变量 **key**（编辑器 Variable Picker 会自动补全）
@@ -47,8 +47,8 @@ repositories {
 }
 
 dependencies {
-    compileOnly(files("libs/HikariCanvas-0.9.10-SNAPSHOT.jar")) // 替换为 build.gradle.kts 当前版本
-    // 或 compileOnly("ac.haru:hikari-canvas:0.9.10-SNAPSHOT")
+    compileOnly(files("libs/HikariCanvas-1.0.0.jar")) // 替换为你实际使用的版本
+    // 或 compileOnly("ac.haru:hikari-canvas:1.0.0")
 }
 ```
 
@@ -314,7 +314,7 @@ void unsetVariable(Plugin plugin, String namespace, String key);
 
 删除单个变量（**不删 namespace 本身**）。
 
-引用该变量的 wall 文本走 fallback 链：cached → `${var:X|fallback=...}` → `Variable.default` → `"???"`（详见 §6.3）。
+引用该变量的 wall 文本走 fallback 链：cached → `${var:X|fallback=...}` → `Variable.default` → `"???"`（详见 §6.2）。
 
 **抛**：
 
@@ -337,7 +337,7 @@ canvas.unsetVariable(this, "bedwars", "match_a.mvp");
 | Namespace | 用途 |
 |---|---|
 | `user` / `user:<wallId>` | 玩家用户变量（per-wall） |
-| `userglobal` | 全服共享用户变量（0.4.3 起保留；仅玩家通过编辑器创建，插件禁推） |
+| `userglobal` | 全服共享用户变量（仅玩家通过编辑器创建，外部插件禁推） |
 | `system` / `system:<wallId>` | 系统变量（`server.time` / `wall.alias` 等） |
 | `papi` | PlaceholderAPI 桥接 |
 | `scoreboard` | Bukkit 记分板 |
@@ -397,11 +397,12 @@ HikariCanvas 重启 / reload 后，**所有 plugin / system / PAPI / scoreboard 
 文本字段（如 `TextElement.text`）含占位符：
 
 ```
-${var:bedwars/match_a.red_score}              完整命名
-${var:user/红队比分}                          玩家用户变量
-${var:server.time}                            系统变量点分号 alias（暂未完整实装，0.4.1+）
-${var:system/server.time}                     系统变量 slash 形态（当前可用）
-${var:papi:%player_name%}                     PAPI placeholder
+${var:bedwars/match_a.red_score}              第三方插件变量（namespace/key）
+${var:user/red_score}                         玩家单画布用户变量
+${var:userglobal/red_score}                   玩家全局用户变量
+${var:system/server.time}                     全局系统变量（须带 system/ 前缀）
+${var:wall.alias}                             单画布系统变量
+${var:papi/%player_name%}                     PAPI placeholder（斜杠或点号分隔）
 
 # fallback 语法
 ${var:bedwars/score|fallback=0}               变量不存在 / 过期时显示 0
@@ -553,19 +554,17 @@ A: 是。`bedwars/red_score` 和 `railway/red_score` 完全独立（不同 names
 
 ### Q: 我能查询某个变量当前值吗？
 
-A: **0.4.0 暂不提供** `getVariable` 方法 —— HikariCanvas 设计为单向 Push（你推 → HC 显示），双向同步会引入 race condition + 缓存一致性问题。
+A: **不提供** `getVariable` 方法 —— HikariCanvas 设计为单向 Push（你推 → HC 显示），双向同步会引入 race condition + 缓存一致性问题。
 
 如果你需要业务侧也用变量值，请在你自己的插件里维护一份镜像（push 时同时写自己的内存）。
 
 ### Q: 我能让 wall 显示的变量值带颜色 / 格式化吗？
 
-A: `0.4.0` 的 `${var:...}` 占位符仅做**纯字符串替换**。颜色和格式化由 `TextElement` 本身的 fill / font 控制，整个 element 同一样式。
-
-未来 `0.5.0+` 计划引入 chip 编辑器 + 格式化语法（`${var:X|format=int|suffix=min}` 等），届时支持 per-variable 样式。
+A: `${var:...}` 占位符仅做**纯字符串替换**。颜色、字体与字号由所在的 `TextElement` 统一控制；如需让变量值与周围文字呈现不同样式，拆成独立的 `TextElement` 即可。
 
 ### Q: 我可以用 PAPI placeholder 而非自己写 plugin 吗？
 
-A: 可以。任何 `${var:papi:%placeholder%}` 会自动桥接到 PlaceholderAPI（前提是服务器装了 PAPI）。详见 `docs/dynamic-data.md §7.2`。
+A: 可以。任何 `${var:papi/%placeholder%}` 会自动桥接到 PlaceholderAPI（前提是服务器装了 PAPI）。详见 `docs/dynamic-data.md §7.2`。
 
 但如果你的数据来源是自己的插件，写 Push API 比期望玩家装 PAPI + 你的 PAPI 扩展更可靠（少一层依赖 + 编辑器自动补全更友好）。
 
@@ -595,20 +594,18 @@ public void onPluginEnable(PluginEnableEvent ev) {
 
 ---
 
-## 11. 升级 / 向后兼容承诺
+## 11. 稳定性与向后兼容承诺
 
-- **pre-1.0**（`0.x.y` 预发布阶段）：API 可能小破坏，会在 CHANGELOG / journal.md 通告
-- **1.0 起**：API 接口冻结，新方法只追加不修改；现有方法签名 / 行为保持向后兼容
-- **包路径**：`ac.haru.hikaricanvas.api.*` 是公开 SPI 包，受 shadowJar relocate `exclude` 保护，跨 HC 版本路径稳定
-- **VarType enum**：新增类型走追加（不重排顺序 / 不删除现有）
-
-如有破坏性变更，**总在 minor 版本号上调**（如 `0.4.x` → `0.5.0`）+ journal.md 突出标注。
+- **语义化版本（`1.x`）**：`HikariCanvasAPI` 在 `1.x` 系列内保持接口冻结——新能力只通过追加方法提供，现有方法签名与行为保持向后兼容。
+- **包路径**：`ac.haru.hikaricanvas.api.*` 是公开 SPI 包，受 shadowJar relocate `exclude` 保护，跨版本路径稳定。
+- **`VarType` enum**：新增类型只走末尾追加（不重排顺序 / 不删除现有值）。
+- **版本公告**：如有跨主版本（如 `2.0.0`）的破坏性变更，将在 [GitHub Releases](https://github.com/HyacinthHaru/HikariCanvas/releases) 发布说明中明确标注迁移方案。
 
 ---
 
 ## 12. 参考文档
 
-- `docs/dynamic-data.md` —— 0.4.0 完整动态数据设计（§4 是本 API 的设计源）
+- `docs/dynamic-data.md` —— 动态数据与变量系统设计契约（§4 是本 API 的设计源）
 - `docs/protocol.md` —— WebSocket 协议（编辑器与后端的通讯，与本 API 无直接关系）
 - `docs/architecture.md §13` —— 动态画板架构纪律
 - `docs/security.md` —— 权限节点 + 审计日志

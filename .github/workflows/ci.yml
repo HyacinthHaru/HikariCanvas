@@ -31,8 +31,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 22
-          # CLAUDE.md：Node 25 偶卡 vue-tsc，CI 锁 22 LTS 稳定。
-          # cache: npm 自动用 web/package-lock.json 做 key 缓存 node_modules 依赖。
+          # 锁定 Node 22 LTS，并基于 web/package-lock.json 缓存依赖。
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -83,10 +82,8 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # 0.9.5 多版本支持：双版本编译守卫。
-  # 用 Java 25 对 Paper 26.2 API 编译同一份 main 源码，提前抓「用了 26.x 已移除 API」的回归。
-  # 只 compileJava（不跑 :plugin:test —— MockBukkit 锁 1.21；26.x 功能验证靠真服手动测）。
-  # 生产 jar 仍由上面的 build job 以 1.21.11 / Java 21 / release 21 产出，一份 jar 通吃两版。
+  # 双版本编译守卫：用 Java 25 对 Paper 26.2 API 编译同一份源码，提前拦截 26.x 已移除 API 的回归。
+  # 生产 jar 仍由 build job 以 1.21.11 / Java 21 产出，一份 jar 同时兼容 1.21.x 与 26.x。
   compat-26:
     name: Compile against Paper 26.x (Java 25)
     runs-on: ubuntu-latest

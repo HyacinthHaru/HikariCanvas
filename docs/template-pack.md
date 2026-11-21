@@ -1,206 +1,235 @@
-# 模板包（.canvas pack）——模板系统统一到工程格式
+# 模板包规范（`.canvas` Pack）
 
-**定位**：把模板系统从独立的 YAML DSL（声明式 layout + raw_state 两模式）整体迁到 `.canvas`
-工程格式，`manifest.kind = "pack"`。模板 = 一个 `.canvas` 包 + 一层参数定义。套用即
-「参数替换后走工程导入管线」，因此模板天然支持时间轴动画、积木脚本、图片资产、跨服分享。
+**定位**：本文档定义 HikariCanvas 模板包（`.canvas` pack）的归档结构、来源层级与工坊权限、`params.json` 参数声明与类型校验、占位符替换与条件表达式语义，以及套用与交叉导入管线。模板包与普通工程共享 `.canvas` 容器格式，以 `manifest.kind = "pack"` 区分，天然承载多层元素、时间轴动画、积木脚本与图片资产。
 
-**契约关联**：`docs/import-export.md`（`.canvas` 格式 / 导入管线 / 安全栈）·
-`docs/template-spec.md`（旧模板 DSL，本设计落地后整体作废）· `docs/data-model.md §4`
-（manifest 字段）· `docs/security.md`（导入安全栈复用）。
-
-**实施前必读本文。**
+**关联契约**：`docs/import-export.md`（`.canvas` 归档格式、解包与物化管线）· `docs/data-model.md §4`（manifest 与持久化结构）· `docs/security.md §4.4`（归档导入安全栈）· `docs/scripting.md §2.3`（共用条件表达式求值器）。
 
 ---
 
-## 1. 背景
+## 1. 概述与包结构
 
-`.canvas`（0.8）已是完整工程容器：`project.json` 存完整 `ProjectState`（含 `timelines`）、
-`scripts.json` 存积木脚本、`assets/` 存图片，配三闸解包 + 路径白名单 + materialize 重校验 +
-script 重校验 + spec 版本兼容链。
-
-模板系统（M6 起）是并行的另一套：YAML DSL + `TemplateInstantiator` + 独立安全校验。它的
-`Result.Ok` 只透传 `elements + bg + 尺寸`，**结构上没有 timeline / script 通道** —— 模板永远
-无法带动画和脚本。raw_state 模式本质是「手写的、阉割掉 timeline/script 的 ProjectState」，与
-`.canvas` 的 `project.json` 高度重复。
-
-`import-export.md` D1 决策当年已给模板包预留位置：`manifest.kind` 保留 `"pack"` 值位、本期
-只做 `"project"`。本设计实装 `"pack"`。
-
-模板独有、`.canvas` 没有的只有一件：**参数化**（`${param}` + 参数定义 + 套用时填值）。统一的
-全部工作量就集中在「把参数化叠加到 `.canvas` 之上」。
-
----
-
-## 2. 固化决策
-
-| # | 项 | 决策 | 理由 |
-|---|---|---|---|
-| **D1** | 统一方向 | 模板 = `.canvas` pack（`kind="pack"`）。旧 YAML DSL 两模式**整体退役** | pre-1.0 是删旧路径的最后窗口；不留双轨、不留半个轮子 |
-| **D2** | 参数注入点 | `ProjectImporter.importInto`：manifest 解析后、`materialize` 前，对 `project.json` bytes 做 `${param}` 替换 | 复用 materialize 之后的全部管线（元素校验 / asset / script / timeline / 广播），参数化只是一个前置 pass |
-| **D3** | 参数化范围 | **全字段**：`project.json` 里任意字符串位置可写 `${param}`（含坐标 / 尺寸 / 颜色 / 渐变 stop / 字体） | 手写 pack 时想参数化什么都行；替换在 JSON 文本层，不挑字段 |
-| **D4** | 参数语法 | `${param}` 沿用（`[a-z][a-z0-9_]{0,31}`，无冒号）。运行时变量 `${var:X}`（有冒号）天然不冲突，二者可共存 | 已验证：模板参数正则不吃冒号，`${var:X}` 原样穿透到运行期解析 |
-| **D5** | 参数定义 | pack 内新增 `params.json`：`[{ id, type, label, default, ... }]`，沿用现有 `TemplateParam` 的 type 体系（string/text/color/enum/bool/font） | 参数 UI 与校验逻辑现成，直接搬 |
-| **D6** | 存为模板 | 保留。玩家「存为模板」= 前端 `useProjectExport` 导出一个 pack + 参数标记 UI | 复用导出管线；参数标记是 `SaveAsTemplateModal` 的扩展 |
-| **D7** | 内置模板 | jar `/templates/*.canvas`（zip）。作者手写工程 → 导出 pack → 入库。`_index.txt` 保留为展示顺序清单 | 内置模板也是 pack，无特例路径 |
-| **D8** | 迁移 | 现有 7 内置 YAML 模板不迁移，作者重做为 pack。用户模板（`templates` 表 + `user-templates/`）pre-1.0 清空重来（pre-1.0 激进改 schema OK，见 data-model §6.6） | 旧模板设计本就要重做；用户模板量小、非冻结契约 |
-| **D9** | 安全 | 参数替换后走 `materialize` 重校验（复用）。参数值套用 `Interpolator` 的 16KB/1MB 上限。pack 解包三闸复用。参数值不得再引入 `${param}`（单遍替换，不递归） | 不新增安全面；参数替换后的 JSON 与普通导入的 project.json 走同一校验 |
-| **D10** | 预览 | `TemplatePreviewService` 改渲 pack：参数用 default 值替换 → `${var:X}` 走 fallback 收敛（已实装 `previewResolve`）→ rasterize | 缩略图 = 「默认参数 + 无数据源」的样子 |
-
----
-
-## 3. 数据格式
-
-pack 是一个 `.canvas` zip（与 project 同扩展名，靠 `manifest.kind` 区分）：
+模板包是一个标准 `.canvas` ZIP 归档，通过 `manifest.json` 中的 `kind = "pack"` 标识，在普通工程归档之上叠加一层 `params.json` 参数声明与 `project.json` 字符串占位符：
 
 ```
 my_template.canvas
-├── manifest.json      # kind="pack" + name + wall{w,h} + spec
-├── project.json       # 完整 ProjectState，字符串位置可含 ${param}
-├── params.json        # 参数定义数组（pack 独有）
-├── scripts.json       # 可选：积木脚本
-└── assets/*.png       # 可选：图片资产
+├── manifest.json      # 必选：kind="pack" + spec + name + wall{width,height} + 可选 id
+├── project.json       # 必选：完整 ProjectState（可含 ${param} 占位符与 ${var:X} 运行时变量）
+├── params.json        # 可选：参数声明数组（零参数模板可省略）
+├── scripts.json       # 可选：墙脚本规则数组（ScriptRule[]）
+├── thumbnail.png      # 可选：256×128 预览缩略图
+└── assets/*.png       # 可选：内容寻址图片资产
 ```
 
-**`params.json`**：
+### 1.1 `manifest.json` 模板字段约束
 
-```jsonc
-[
-  { "id": "station",     "type": "string", "label": "站名", "default": "人民广场", "max_length": 8 },
-  { "id": "line_color",  "type": "color",  "label": "线路色", "default": "#E4002B",
-    "presets": [ { "label": "1 号线红", "value": "#E4002B" } ] },
-  { "id": "show_footer", "type": "bool",   "label": "显示落款", "default": true }
-]
-```
+除遵循 `docs/import-export.md §2.2` 的通用字段（`spec`、`kind`、`created_at`、`name`、`wall{width,height}`）外，模板包具有以下约定：
 
-字段与现有 `TemplateParam` 一致（`type` / `label` / `default` / `required` / `max_length` /
-`presets` / `group` / `visible_when`）。
+- **`kind`**：固定为 `"pack"`（模板注册表扫描到 `"project"` 归档时按 §5 宽容规则作零参数模板加载）。
+- **`id`**（可选）：匹配 `^[a-z][a-z0-9_-]{2,63}$`。玩家发布工坊模板时写入自声明 ID（形如 `user-<uuid8>-<slug>`），使 `TemplateRegistry` 条目 key 与数据库 `templates.template_id` 严格一致；手写内置或服务器模板省略 `id` 时，注册表自动退回文件名去 `.canvas` 后缀的 stem（如 `subway.canvas` → `subway`）。
+- **画布尺寸合成**：注册表加载时从 `manifest.wall` 合成固定尺寸的 `TemplateCanvas`（`size = "fixed"`, `maps = [width, height]`），供前端 `TemplateGallery` 展示尺寸并判定与当前会话墙是否兼容；完整画布内容留在 `project.json` 中，套用时按需解包物化。
 
-**`id` 与 `type` 都是必填**，`type` 只能是 `string` / `text` / `int` / `float` / `bool` /
-`color` / `enum` / `font` 之一（1.0 起冻结，见 §4）。缺失或拼错在解析期就拒
-（`IMPORT_MALFORMED`，报错带参数名）——否则这种 pack 能注册进 Gallery、直到套用时才在类型分支上炸。
+### 1.2 全字段占位符机制
 
-**`project.json` 里的占位符**：任意字符串字段，例如
-`"text": "${station}"`、`"fill": "${line_color}"`、`"x": "${offset_x}"`（数值字段以字符串
-形态写占位符，替换后 materialize 解析回数值）。
+`project.json` 中任意字符串字面量位置均可书写 `${param}` 模板参数占位符（参数名匹配 `^[a-z][a-z0-9_]{0,31}$`，不含冒号）：
+
+- **文本与颜色字段**：如 `"text": "${station} 站"`、`"fill": "${line_color}"`、`"fontId": "${title_font}"`。
+- **数值字段**：在原始 `project.json` 中以字符串字面量书写占位符（如 `"x": "${offset_x}"`、`"fontSize": "${size}"`）。套用时先在 JSON 文本层替换为数值字面量字符串（如 `"x": "10"`），再由 `ProjectMaterializer` 借助 Jackson 默认开启的 scalar coercion 自动反序列化回目标数值类型（`int` / `double`）。非数值非法串由物化校验拦截并报 `IMPORT_MALFORMED`。
+- **与运行时变量正交共存**：模板参数 `${param}` 不含冒号，运行时动态变量 `${var:X}` 必含冒号。模板套用阶段仅替换无冒号的 `${param}`，`${var:X}` 原样穿透保留至渲染期动态解析。
 
 ---
 
-## 4. 套用管线（apply）
+## 2. 来源层级、工坊隔离与权限
+
+### 2.1 三层模板源与加载覆盖规则
+
+`TemplateRegistry` 按固定顺序扫描加载三类来源（`TemplateSource` 枚举）：
+
+| 来源层级 | 枚举值 | 存储路径 | 所有权（`ownerUuid`） | 同 `id` 冲突处理 |
+| --- | --- | --- | --- | --- |
+| 内置模板 | `BUILTIN` | jar 内 `resources/templates/*.canvas`（优先按 `templates/_index.txt` 顺序清单读取，无清单时回退扫描 jar/classes 目录） | 空（全服可见） | 同层重复跳过并记 warn |
+| 服务器模板（服主管理层） | `SERVER` | `plugins/HikariCanvas/templates/*.canvas` | 空（全服可见） | **覆盖同 `id` 的 `BUILTIN` 模板**；同为 `SERVER` 重复则跳过并记 warn |
+| 玩家工坊模板 | `USER` | `plugins/HikariCanvas/user-templates/<uuid>/*.canvas` | `<uuid>`（目录名须为合法 UUID，非法子目录跳过并记 warn） | **不覆盖任何已有 `id`**（防玩家抢占内置、服主或其他玩家模板 ID） |
+
+- **单包容错与本地解包闸**：单个 `.canvas` 包损坏或校验不过时仅记 warn 日志并跳过，不影响其余模板加载。本地磁盘/jar 扫描使用独立防炸弹安全上限（单包 ≤ 64 MiB、单条目解压 ≤ 64 MiB、总解压 ≤ 256 MiB）。
+- **原子热重载**：`/canvas reload templates`（需 `canvas.admin`）在后台构建完整新映射后一次性替换 `volatile` 注册表引用，读取端无锁且绝不会观测到半加载状态。
+- **持久化兼容**：玩家发布的工坊模板元数据写入 SQLite `templates` 表，落盘路径列沿用历史列名 `yaml_path`（受 forward-only schema 冻结纪律约束，实际存储 `<slug>.canvas` 路径，Java 侧映射为中性 `filePath`）。
+
+### 2.2 工坊所有权隔离与发布配额
+
+- **可见性与套用双向隔离**：`BUILTIN` 与 `SERVER` 模板对所有玩家公开可见、可套用。`USER` 工坊模板受跨用户隔离保护——非 owner 且不持有 `canvas.template.use-others` 权限的玩家，在会话 `ready` 帧及模板列表查询（`TemplateRegistry.listVisibleTo`）中不会收到他人的工坊模板（防止画布结构越权泄露），直接调用套用接口（`TemplateRegistry.byIdForApply`）亦被 `ForbiddenTemplateException` 拒绝。
+- **发布配额**：`config.yml` 中 `templates.max-per-player` 控制单名玩家可发布的工坊模板数量上限（默认 `20`，设为 `0` 表示不限）。超出上限返回 `QUOTA_EXCEEDED`；更新同 `slug` 的已有自有模板不新增配额占用；持有 `canvas.template.bypass-limit` 的玩家豁免此上限。
+
+### 2.3 权限节点
+
+权限检查集中在 `TemplateOpDispatcher` 与 `paper-plugin.yml`：
+
+| 权限节点 | 默认值 | 作用 |
+| --- | --- | --- |
+| `canvas.template.save` | `true` | 将当前招牌工程导出并发布为玩家工坊模板（`template.save`） |
+| `canvas.template.delete.own` | `true` | 删除自己发布的工坊模板 |
+| `canvas.template.delete.any` | `op` | 删除任意玩家的工坊模板（管理员审核治理） |
+| `canvas.template.feature` | `op` | 在模板库标记或取消「精选」推荐状态 |
+| `canvas.template.bypass-limit` | `op` | 豁免 `templates.max-per-player` 单玩家模板发布数量配额 |
+| `canvas.template.use-others` | `op` | 查看并套用其他玩家拥有的工坊模板 |
+
+---
+
+## 3. 参数声明规范（`params.json`）
+
+`params.json` 为顶层 JSON 数组，每项声明一个暴露给前端表单填写的模板参数（由 `PackParamResolver.parse` 解析为 `ParamDef(id, TemplateParam)`）：
+
+```json
+[
+  {
+    "id": "station",
+    "type": "string",
+    "label": "站名",
+    "description": "显示在站牌中央的主标题",
+    "required": true,
+    "default": "人民广场",
+    "max_length": 8,
+    "placeholder": "例：人民广场",
+    "group": "基础信息"
+  },
+  {
+    "id": "line_color",
+    "type": "color",
+    "label": "线路色",
+    "default": "#E4002B",
+    "presets": [
+      { "label": "1 号线红", "value": "#E4002B" },
+      { "label": "2 号线绿", "value": "#00A651" }
+    ],
+    "group": "视觉样式"
+  },
+  {
+    "id": "show_english",
+    "type": "bool",
+    "label": "显示英文站名",
+    "default": true
+  },
+  {
+    "id": "english_name",
+    "type": "string",
+    "label": "英文站名",
+    "default": "People's Square",
+    "max_length": 32,
+    "visible_when": "show_english == true"
+  }
+]
+```
+
+### 3.1 8 种冻结参数类型
+
+`id`（非空白字符串，匹配 `^[a-z][a-z0-9_]{0,31}$`）与 `type` 均为必填字段。`type` 取值集合自 `v1.0` 起冻结为以下 **8 种**（缺失或不在集合内在解析期即抛出 `IMPORT_MALFORMED`，避免坏包混入模板库后在套用阶段报错）：
+
+| `type` | 转换目标类型 | 类型专属约束字段 | 校验与转换规则（`PackParamResolver`） |
+| --- | --- | --- | --- |
+| `string` | `String` | `min_length`, `max_length`, `placeholder`, `pattern` | 转字符串；校验字符长度上下界；若声明 `pattern` 则执行带步数硬闸的正则整串匹配 |
+| `text` | `String` | `min_length`, `max_length`, `placeholder`, `pattern` | 多行文本输入控件；后端校验与转义规则与 `string` 一致 |
+| `int` | `Integer` | `min`, `max`, `step` | 接受 JSON 数值或匹配 `^-?\d+$` 的整数字符串（超出 32 位 `int` 范围判非法）；校验 `[min, max]` 闭区间 |
+| `float` | `Double` | `min`, `max`, `step` | 接受有限 JSON 数值或可解析为有限 `double` 的字符串（`NaN` / `Infinity` 一律拒绝，防止绕过上下界比较）；校验 `[min, max]` 闭区间 |
+| `bool` | `Boolean` | — | 接受 JSON 布尔值或大小写不敏感的 `"true"` / `"false"` 字符串 |
+| `color` | `String` | `presets: [{label, value}]` | 必须匹配十六进制颜色正则 `^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$`（`#RRGGBB` 或 `#RRGGBBAA`） |
+| `enum` | `String` | `options: [{label, value}]` | `options` 条目的 `value` 可为字符串或数字；填值 `toString()` 必须命中某个选项的 `String.valueOf(value)` |
+| `font` | `String` | — | 字体 ID 字符串（如 `source_han_sans`、`ark_pixel`），前端下拉选项取自 `GET /api/font/list` |
+
+### 3.2 通用元数据字段
+
+所有参数类型共享以下声明字段（未知多余字段由 `@JsonIgnoreProperties(ignoreUnknown = true)` 宽容忽略）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `string` | **必填**。占位符标识符，对应 `project.json` 中的 `${id}` |
+| `type` | `string` | **必填**。上表 8 种类型之一 |
+| `label` | `string` | 表单显示名称 |
+| `description` | `string` | 表单辅助说明文案 |
+| `required` | `boolean` | 是否必填（默认 `false`） |
+| `default` | `any` | 用户未传或传 `null` 时的回退默认值（数值参数若用于数值字段占位符，应提供合法数值 `default`） |
+| `visible_when` | `string` | 表单项条件显示表达式（文法见 §4.2） |
+| `group` | `string` | 表单分组标题；`TemplateGallery` 按 `group` 首次出现顺序分节展示并支持折叠，未设 `group` 的参数归入顶部无标题默认组 |
+
+### 3.3 参数校验与正则回溯防护
+
+1. **空值回退与累计报错**：`PackParamResolver.resolve` 将缺失键与显式 `null` 同等对待，均回退至 `default`；若回退后仍为 `null`，`required = true` 时记录缺失错误，`required = false` 时映射为空串 `""`。一次套用会遍历全部参数累计所有校验错误，非空则统一抛出 `IMPORT_INVALID_PARAM`。
+2. **不可信正则硬闸（防 ReDoS）**：由于第三方 `.canvas` pack 可同时携带恶意 `pattern`（如 `(a+)+$`）与触发回溯的 `default` 值，`PackParamResolver` 对 `pattern` 实施双重硬限：
+   - 正则源串长度上限 `MAX_PATTERN_LEN = 256`；
+   - 匹配过程以 `StepLimited` 包装 `CharSequence`，每次 `charAt` 读取扣减预算，单次匹配最多允许 `MAX_MATCH_STEPS = 200_000` 步，超限立即确定性中止并记入参数校验错误，不依赖超时线程、不阻塞工作线程。
+
+---
+
+## 4. 参数替换、表达式文法与套用管线
+
+### 4.1 文本层 JSON 转义替换（`PackParamResolver.substitute`）
+
+参数校验通过后，`PackParamResolver.substitute` 在 `project.json` 原始文本上执行**单遍、非递归**替换：
+
+1. **JSON 字符串内容转义**：每个参数值先按 JSON 字符串字面量规则转义内部引号、反斜杠、换行与控制字符（等价于 Jackson `writeValueAsString` 剥除首尾引号），再拼入 `${param}` 位置。多行文本或含引号的招牌文案不会破坏 `project.json` 的 JSON 语法结构，而纯数字字面量转义后保持原样以供后续 scalar coercion。
+2. **单遍防注入与膨胀上限**：底层委托 `Interpolator.interpolate` 单遍扫描替换——用户输入的参数值即使包含 `${other}` 字面量也**不会**触发二次展开。单参数替换值上限 **16 KiB**，`project.json` 替换后净膨胀上限 **1 MiB**；引用未在 `params.json` 声明的 `${param}` 或超出体积上限均抛出 `IMPORT_MALFORMED`。
+
+### 4.2 条件表达式文法与求值语义
+
+`template/expr/` 包下的 `ExpressionParser` 与 `ExpressionEvaluator` 定义了项目统一的无副作用条件表达式语言，**由模板参数 `visible_when` 与积木脚本 `ConditionEvaluator`（`if` / `waitUntil` / `repeatUntil`）共同复用**：
 
 ```
-template.apply(templateId, params)
-  → 取 pack bytes（内置 jar / 用户存储）
-  → CanvasArchive.unpack（三闸）
-  → CanvasManifest.parse（kind=pack 校验 + spec 兼容）
-  → 【新】params.json 校验用户填值（复用 TemplateParam 校验）
-  → 【新】对 project.json bytes 做 ${param} 替换（复用 Interpolator，含上限）
-  → ProjectMaterializer.materialize（元素重校验 + 尺寸匹配）—— 与普通导入同一入口
-  → asset 摄入 / 孤儿轨丢弃 / replaceProject（含 timeline）/ scripts 导入（重绑+重校验）
-  → 快照广播 + 地图重绘
+or      := and ( "||" and )*
+and     := equ ( "&&" equ )*
+equ     := cmp ( ("==" | "!=") cmp )*
+cmp     := add ( ("<" | "<=" | ">" | ">=") add )?     # 禁止连串比较
+add     := mul ( ("+" | "-") mul )*
+mul     := unary ( ("*" | "/") unary )*
+unary   := "!" unary | "-" unary | primary
+primary := "var" "(" string ")" | ident | number | string
+         | "true" | "false" | "(" or ")"
 ```
 
-D2/D4 的价值：`template.apply` 与 `.canvas` 导入**收敛到同一条 `ProjectImporter` 管线**，只在
-manifest 解析后多一个「校验参数 + 替换占位符」的前置段。
+- **运算符优先级（高 → 低）**：一元 `!` / `-` → `*` / `/` → `+` / `-` → 大小比较 `<` / `<=` / `>` / `>=` → 相等比较 `==` / `!=` → 逻辑与 `&&` → 逻辑或 `||`。
+- **语法约束**：大小比较禁止连串（如 `1 < 2 < 3` 直接计为语法错误，须写为 `1 < 2 && 2 < 3`）；数字字面量不支持科学计数法（如 `1e3` 为语法错误）；`var("...")` 为内置变量取值保留形式（供脚本条件读取运行时变量，`var` 不可作普通标识符），除此之外不支持任何函数调用或属性访问。
+- **`==` / `!=` 数值与字符串比较语义**：数值解析统一以 `StrictNumber` 为单一权威。当左右操作数**双侧均为数值形态**（数字字面量，或整串符合 `StrictNumber` 文法的字符串）时，按 `double` 数值等值比较（例如 `"3.50" == 3.5` 求值为 `true`）；只要任一侧非数值形态，则退回布尔或字符串字面量等值比较（因此 `"abc" == 0` 与 `"" == 0` 恒为 `false`，不存在隐式零值转换陷阱）。
+
+### 4.3 套用管线、预览与导出
+
+套用模板（WS `template.apply`）与普通 `.canvas` 工程导入共用同一条 `ProjectImporter` 核心管线：
+
+```
+template.apply(templateId, userParams)
+  → TemplateRegistry.byIdForApply（跨用户隔离校验）
+  → ProjectImporter.applyPack：
+      1. CanvasArchive.unpack（流式三闸 + 路径安全 + 条目白名单）
+      2. CanvasManifest.parse（spec 兼容校验）
+      3. PackParamResolver.parse → resolve → substitute（参数校验 + JSON 转义单遍替换）
+      4. ProjectMaterializer.materialize（画布尺寸匹配 + 结构配额闸 + 逐元素安全重校验）
+      5. MissingResourceScanner.scan → AssetIngest.ingestAll（含重编码 hash 重映射）
+      6. 孤儿关键帧轨剔除 → EditSession.replaceProject（整体替换工程，含图层与时间轴）
+      7. ScriptImporter.importScripts（wallId 重绑目标墙 + 脚本与条件语法重校验）
+  → WS dispatcher 推送 state.snapshot + 触发 ProjectionThrottler 重绘 + 持久化 walls 行
+```
+
+- **Replace 覆盖语义与溯源记录**：套用模板整体替换当前会话墙的画布工程（前端调用前弹出覆盖二次确认），并在 `walls` 表记录 `template_id` 与 `template_version` 供列表展示与审计溯源；套用完成后画板即为独立普通工程，后续自由编辑与源模板解耦。
+- **动态缩略图预览（`TemplatePreviewService`）**：`GET /api/template/{id}/preview.png` 对模板包执行默认参数替换（`userParams = Map.of()`）→ 物化 `ProjectState` → 运行时变量 `${var:X}` 按 `previewResolve` 回退链收敛 → 栅格化输出预览 PNG。
+- **存为模板导出（`TemplateExporter` / `TemplatePublisher`）**：玩家在编辑器触发「存为模板」时，生成 `manifest.kind = "pack"` 的 `.canvas` 归档（写出 `project.json`、`params.json`、可选 `scripts.json` 与引用图片资产，并执行物化 roundtrip 自校验），按 `user-<uuid8>-<slug>` 落盘至 `user-templates/<uuid>/` 并登记数据库与注册表。
 
 ---
 
 ## 5. 交叉导入与入口语义
 
-**唯一判别符**：`manifest.kind`（`"project"` / `"pack"`）。两种文件同为 `.canvas`、同扩展名，
-靠此字段区分，不靠扩展名或文件名。
+普通工程与模板包同为 `.canvas` 扩展名，**唯一判别符是 `manifest.kind`**（`"project"` 或 `"pack"`），不依赖文件名或后缀。
 
-**入口矩阵**：
+### 5.1 编辑器入口矩阵
 
-| 入口 | 正常输入 | 产出 / 去向 |
-|---|---|---|
-| 导出工程（右上角） | 当前工程 | `.canvas`（kind=project，当前快照，无参数） |
-| 存为模板 | 当前工程 | `.canvas`（kind=pack，带 `params.json` + `${param}` 标记） |
-| 普通导入（右上角） | project 文件 | 导入到当前墙 |
-| 模板导入（模板库） | pack 文件 | 存入模板库（可反复套用） |
-| 模板套用（Gallery） | 库内 pack | 填参数 → 当前墙 |
+| 入口 | 标准输入 | 产出 / 目标去向 |
+| --- | --- | --- |
+| 导出工程（TopBar 菜单） | 当前会话工程 | 下载 `.canvas`（`kind = "project"`，当前快照，无 `params.json`） |
+| 存为模板 | 当前会话工程 + 参数标记 | 生成 `.canvas`（`kind = "pack"`，含 `params.json` 与 `${param}` 占位符）并入库 |
+| 导入工程（`POST /api/project/import`） | `project` 归档 | 整体替换当前会话墙工程 |
+| 模板库加载 / 导入 | `pack` 归档 | 注册进 `TemplateRegistry` 供反复填参套用 |
+| 模板套用（`TemplateGallery`） | 库内模板条目 + 用户填参 | 参数替换后整体替换当前会话墙工程 |
 
-**pack ⊃ project**：pack 去掉 params 层、`${param}` 用 default 替换 = 一个合法 project；
-project = 零参数 pack。二者可互转，故交叉导入**宽容处理、双向不报错**：
+### 5.2 双向宽容互操作规则
 
-| 场景 | 处理 |
-|---|---|
-| 普通导入遇 **pack** | 用 default 参数实例化后当工程导入本墙；顶部**非阻塞提示**：「这是一个模板文件，可在模板导入页导入以获得更好的展示与编辑体验」引导去模板入口 |
-| 模板导入遇 **project** | 当零参数模板处理（无参数可填，套用即原样）入库 |
+从结构上看，`pack` 用默认值收敛全部 `${param}` 后即等价于合法 `project`，而 `project` 等价于零参数 `pack`（无 `params.json` 时 `applySubstitution` 直接无操作透传）。因此两条导入路径对交叉文件采取**双向宽容、不报错拦截**的设计：
 
-设计哲学：文件通用、分享无摩擦；kind 差异靠**提示透明传达**，不靠拦截。提示文案是 i18n key，
-实施时定稿。
-
----
-
-## 6. 退役 / 改造清单
-
-**退役（删，0.9.16 已删）**：
-- `TemplateInstantiator`（声明式 layout + raw_state 两路径）
-- `TemplateLoader`（YAML 解析）
-- `TemplateElement` / `TemplateLayout` / `TemplateEffects`（声明式 DSL 类型）
-- 7 个内置 `*.yml` 模板 + `_index.txt` 清空（内置 pack 待作者手工制作）
-- `docs/template-spec.md` → 归档 `docs/archive/`
-
-**保留（原计划删，实测须留）**：
-- `TemplateCanvas`：改承载 pack 的 `fixed` 尺寸（size + maps），供 Gallery 显示
-- `template/expr/{Interpolator, Expr, ExpressionParser, ExpressionEvaluator}`：`Interpolator` 被
-  `PackParamResolver` 复用、表达式解析被脚本系统 `ConditionEvaluator` 复用——非 YAML 独有，不删
-
-**改造**：
-- `TemplateRegistry`：从读 `*.yml` 改读 `*.canvas`（解 manifest + params.json 供 Gallery）
-- `TemplatePreviewService`：渲 pack（default 参数替换 → materialize → rasterize）
-- `TemplateOpDispatcher.template.save`：存 pack（前端导出的 pack bytes 落库 / 落盘）
-- `EditOpDispatcher.template.apply`：走 §4 管线
-- `TemplateExporter` / `TemplatePublisher`：产出 pack + params.json
-- 数据表 `templates`：blob 从 YAML 文本改为 pack bytes（schema 调整）
-
-**复用（不动）**：
-- `ProjectImporter` / `ProjectMaterializer` / `CanvasArchive` / `CanvasManifest` / `AssetIngest` /
-  `ScriptImporter` / `MissingResourceScanner`
-- `TemplateParam`（参数类型 + 校验）
-- 前端参数填写 UI、`useProjectExport` / `useProjectImport`
-
-**前端改造**：
-- `TemplateGallery`：从 pack manifest + params.json 渲染卡片；预览走后端 pack 缩略图
-- `SaveAsTemplateModal`：加「标记可参数化字段」步骤（全字段 → 生成 params.json + 把选中字段值
-  替换为 `${param}` 写进导出的 project.json）
-- `stores/templates` / `types/template`：类型对齐 pack
-
----
-
-## 7. 分期（草案，实施前细化）
-
-- **P1 后端管线** ✅（2026-07-22，0.9.16）：`PackParamResolver`（`params.json` 解析 + 校验 + `${param}`
-  替换）；`ProjectImporter` 拆 build/propagate + 新 `applyPack`；`CanvasManifest` 接受 `kind=pack`；
-  `TemplateRegistry` 三源读 `*.canvas`；`EditOpDispatcher.template.apply` 命中 pack 重路由。additive——YAML
-  路径不动。端到端由测试 fixture 打通（内置 pack 待作者手工制作后于 P4 预置）。
-- **P2 存储 + 存为模板** ✅（2026-07-23，0.9.16）：`TemplateExporter` 产 pack（project.json +
-  params.json + manifest，含自校验 roundtrip）；`TemplatePublisher` 存 `<slug>.canvas`；pack manifest
-  自声明 `id` 使 registry 条目 id == DB `template_id`；`PackParamResolver.substitute` 值按 JSON 转义
-  （连带硬化 P1 applyPack）。**表 schema 不动**——`yaml_path` 列改名被 forward-only 守卫（V18+）挡下，
-  沿用旧列名存 `.canvas` 路径。
-- **P3 预览 + 前端** ✅（2026-07-23，0.9.16）：`TemplatePreviewService` 渲 pack 缩略图（现解 packBytes →
-  materialize → rasterize）；`TemplateRegistry` 合成 spec 带 `fixed` 尺寸；`TemplateGallery` 显示预览
-  `<img>`（list + 详情，404 占位）+ `types/template.ts` canvas/layout 可选。`SaveAsTemplateModal` 无需改
-  （P2 已产 pack）。**全字段参数标记**（前端标记任意字段 → 客户端建 params.json / `${param}`）体量大，推迟。
-- **P4 退役 + 内置模板** ✅（2026-07-23，0.9.16）：删旧 YAML DSL 全套（`TemplateInstantiator` /
-  `TemplateLoader` / `TemplateElement` / `TemplateLayout` / `TemplateEffects` + 7 内置 yml + 清空
-  `_index`）；`TemplateRegistry` / `EditOpDispatcher` / `TemplatePreviewService` / `TemplateSpec` 转
-  pack-only（`TemplateEntry` 保留退化空条目形态供防御判定）；`template-spec.md` 归档 `docs/archive/`。
-  **内置 pack 待作者手工制作**后放 `resources/templates/*.canvas` + 登记 `_index.txt`。
-- **P5 收尾** ✅（2026-07-23）：文档同步（CLAUDE 契约表指针 / `import-export.md` kind=pack 落地 /
-  `data-model` 指针 / `template-spec.md` 归档指针）；`:plugin:test` 全绿（仅既有渲染 fixture 环境失败）。
-
----
-
-## 8. 未决问题（实施时回填）
-
-- [ ] `params.json` 的 `visible_when` 表达式在 pack 里怎么求值（现有声明式模式在实例化期求值；
-      pack 走 import 管线，可能需要在参数替换 pass 里先算可见性再决定占位符替换 / 元素保留）
-- [x] 数值字段占位符（`"x": "${offset_x}"`）替换后 materialize 能否解析回数值 —— **已验证**
-      （2026-07-22 探针）：`materialize` 用默认 `ObjectMapper`，Jackson scalar coercion 默认开，
-      `"5"`→int 5、`"45"`→double 45.0、`"0.0"`→stop position 0.0 均正确；非数字串（`"abc"`）被
-      materialize 拒绝归 `IMPORT_MALFORMED`；空串退 0（故数值参数的 `default` 须给合法值）。
-      **参数替换可为纯文本 pass，不挑字段类型，无需类型感知。**
-- [x] `templates` 表 blob 改 pack bytes 后，旧行处理 —— **已定**（D8）：pre-1.0 清空重来，不写迁移器
-- [ ] pack 缩略图缓存 key（现按 templateId + 内容 hash？pack bytes 变则失效）
+| 交叉场景 | 系统行为 |
+| --- | --- |
+| 在「导入工程」入口上传 **`kind = "pack"`** 文件 | `ProjectImporter.importInto` 以空参数集调用 `applySubstitution`，自动用各参数的 `default` 值完成替换并导入当前墙；前端顶部展示非阻塞引导提示，告知用户该文件为模板包、可在模板入口导入以获得参数填写体验 |
+| 在模板目录或模板导入入口放入 **`kind = "project"`** 文件 | `TemplateRegistry` 将其作为零参数模板加载入库（无参数表单，套用时原样还原整份工程） |

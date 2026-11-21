@@ -43,7 +43,7 @@
 
 ## 安装
 
-把 `HikariCanvas-0.3.0-SNAPSHOT.jar` + `DemoTrainPlugin.jar` + `DemoScorePlugin.jar` 一起放入
+把 PacketEvents、`HikariCanvas-<version>.jar`、`DemoTrainPlugin-<version>.jar` 与 `DemoScorePlugin-<version>.jar` 一起放入
 Paper 服务器的 `plugins/` 目录即可。两个 demo 都在 `paper-plugin.yml` 声明 HikariCanvas 为
 `required: true + load: BEFORE`，启动顺序由 Paper plugin loader 保证。
 
@@ -52,4 +52,4 @@ Paper 服务器的 `plugins/` 目录即可。两个 demo 都在 `paper-plugin.ym
 编辑器 TextElement 的文本框内输入 `${` 自动弹出 Variable Picker；选择
 `demo_train` / `demo_score` namespace 下任意 key 即可插入占位符。
 
-详细 API 用法见 `docs/api.md`（P4-S 产物）。
+详细 API 用法见 `docs/api.md`。

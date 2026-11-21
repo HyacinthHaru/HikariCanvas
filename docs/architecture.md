@@ -1,13 +1,10 @@
 # HikariCanvas 系统架构
 
-**状态：** 立项稿 v0.1 · 2026-04-19；wall 模型重构 · 2026-04-27；lock-state 重设计 · 2026-05-14
 **适用范围：** 后端插件 + 前端编辑器
 
 本文档定义系统的组件划分、数据流、生命周期与关键机制。所有代码实现必须遵循此架构；如需调整，先改本文档再改代码。
 
-> **路线修正（2026-04-27）**：原"编辑 → commit 永久固化"二段式（drafts + sign_records / RESERVED + PERMANENT）已废止。新模型：单一 `walls` 表 + `published_at` 标签，wall 永远可改，命令族新增 `open / list / publish / delete` 替代 `commit`。
-
-> **lock-state 重设计（2026-05-14）**：`/canvas publish` / `/canvas unpublish` 命令砍；DB 列 `walls.published_at` 保留但语义改为 lock 时间戳；新 WS op `wall.lock` / `wall.unlock`（owner-only）；前端 TopBar Lock 按钮 + RightPanel readonly UI 是 lock 的唯一执行者；后端编辑 op 路径与 lock 状态完全解耦（未来动态展示用例需要）；ItemFrame PDC 不再写 published_at；FrameProtectionListener "已发布拦截" 砍。下文 §6/§7 旧 publish 流程段落标 `[DEPRECATED 2026-05-14]`，请参考 CLAUDE.md `§lock-state` 与本文档 §3.6 新流程。
+> **核心模型约定**：持久化采用单一 `walls` 表，每面墙始终可二次打开编辑。DB 列 `walls.published_at` 保留历史列名，语义为 **lock 时间戳**（`null` = 可编辑，非 `null` = 已锁定）；锁定与解锁经 WebSocket `wall.lock` / `wall.unlock` 操作触发，前端只读 UI 是锁状态的唯一执行者，后端编辑 op 路径与锁状态解耦（详见 §3.4 与 §13）。ItemFrame PDC 仅存 `wall_id` 与 `slot`。
 
 ---
 
@@ -17,7 +14,23 @@
 
 玩家在游戏里锁定一面墙 → 打开浏览器编辑器 → 编辑实时投影到那面墙上 → 任何时候都能再次打开继续改；作者可在前端 TopBar 触发 lock 把 wall 冻结为只读（其他玩家拿到 `/canvas open` 也只能查看，无解锁路径）。
 
-### 1.2 高层拓扑
+### 1.2 设计原则
+
+HikariCanvas 面向清楚自身硬件与运维边界的服主，遵循"工具，不是保姆"的设计原则：
+
+1. **数据透明，不替服主决策**：系统暴露真实的渲染耗时、内存压力与每元素开销并提供换算公式，不给出主观的"推荐配置"结论数字；Benchmark 仅测量服务端可控的 CPU 与内存开销。
+2. **不自动降级**：不做静默限帧、自动拒绝大负载或自动隐藏高开销选项。`config.yml` 中的各项阈值仅作为防止内存溢出或失控的安全上限，默认取宽松值，由服主按机器情况主动收紧。
+3. **明确网络与反代边界**：网络带宽、传输压缩比、RTT、公网 TLS 终止以及真实客户端 IP 限流均属服主运维边界（见 `docs/deployment.md`），插件服务端不探测也不猜测网络层状态。
+
+### 1.3 架构纪律（零 NMS 与发包收口）
+
+Paper 26.1 起移除对插件的 Spigot 重映射，直接触碰服务端内部类的插件跨大版本必崩。为保证同一份构件同时兼容 Paper 1.21.x（Java 21）与 26.x（Java 25），代码严守三条边界：
+
+1. **禁用 NMS**：严禁直接调用任何 `net.minecraft.*` 或服务端内部类，全部交互仅走公开 Bukkit API 与 PacketEvents。
+2. **PacketEvents 调用集中**：所有 `ClientboundMapItemDataPacket` 构造与 `sendPacket` 调用唯一收口在 `deploy/MapPacketSender.java`，其余模块不直接依赖 PacketEvents，将协议层变更面收敛到单文件。
+3. **Mojang mappings 直出**：采用 `paperweight-userdev` 默认的 Mojang mappings 产出且不做重混淆（reobf），一份 jar 无需修改代码即可跨版本加载。
+
+### 1.4 高层拓扑
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -65,13 +78,13 @@
 │  │  └───────────────────────────────────────────────┘   │     │
 │  │                                                       │     │
 │  │  ┌───────────────────────────────────────────────┐   │     │
-│  │  │ Storage: SQLite · PDC · YAML Templates        │   │     │
+│  │  │ Storage: SQLite · PDC · .canvas Packs         │   │     │
 │  │  └───────────────────────────────────────────────┘   │     │
 │  └────────────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 核心数据流
+### 1.5 核心数据流
 
 **开启编辑（两段式：先选区再确认）：**
 ```
@@ -148,7 +161,7 @@ MapPacketSender.push(mapId, dirtyRect, paletteBytes)
                                   （CanvasView overlay + RightPanel 禁用 + 快捷键守卫）
 ```
 
-lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），语义为 lock 时间戳；non-owner 调用 wall.lock/unlock 返 FORBIDDEN。ItemFrame PDC 不写 published_at；所有 wall ItemFrame 由 canvas.modify 权限统一保护。
+lock 状态：DB 列 `walls.published_at` 保留原列名（避 SQL 迁移），语义为 lock 时间戳；非管理主体调用 `wall.lock`/`wall.unlock` 返 `FORBIDDEN`。ItemFrame PDC 不写 `published_at`；所有 wall ItemFrame 由破坏事件监听统一保护。
 
 **删除（仅此操作真正移除 wall）：**
 ```
@@ -157,9 +170,9 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
    ▼
 /canvas delete <wall_id> confirm （30s 内）
    │
-   ├─▶ FrameDeployer.removeForWall  → 拆 ItemFrame
-   ├─▶ MapPool.releaseWall(wallId)   → owned maps 全 → FREE
-   └─▶ WallRepo.delete(wallId)        → 删 walls 行
+   ├─▶ WallRepo.delete(wallId)        → 先删 walls 行（失败即中止，防地图串台）
+   ├─▶ FrameDeployer.removeForWall    → 拆 ItemFrame
+   └─▶ MapPool.releaseWall(wallId)    → owned maps 全 → FREE
 ```
 
 ---
@@ -168,36 +181,36 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 
 ### 2.1 后端（插件）
 
-| 层 | 包 | 职责 |
+| 层 | 包 / 类 | 职责 |
 | --- | --- | --- |
-| 入口 | `HikariCanvas` | 生命周期、依赖装配 |
+| 入口与配置 | `HikariCanvas` / `HikariCanvasConfig` | 生命周期、依赖装配、`config.yml` 强类型解析与热重载 |
 | 命令 | `command/` | `/canvas` 所有子命令（Brigadier） |
-| Web | `web/` | Javalin HTTP + WebSocket + 静态资源 |
-| 认证 | `web/auth/` | Token 签发、校验、过期 |
-| 会话 | `session/` | 编辑会话状态、每玩家最多 1 活跃 |
-| 渲染 | `render/` | 字体、排版、调色板、效果、笔触简化、Bayer dither |
-| 笔刷 | （EditSession 内 StrokeBuffer） | brush.* op 缓冲、RDP 简化、 Catmull-Rom 拟合 |
-| 模板 | `template/` | YAML 解析（jackson-dataformat-yaml）、参数绑定、实例化、registry 热重载 |
-| 地图池 | `pool/` | **核心**：预览地图借还 |
-| 部署 | `deploy/` | 墙面识别、物品框、包发送 |
-| **图片** | `image/`（`ImageStorage` / `UploadHandler` / `ImageQuotaService`） | sha256 内容寻址 + LRU + 配额 + ImageIO 解码隔离 |
-| **工程档**（0.8-A） | `canvasfile/`（`CanvasArchive` / `CanvasManifest` / `ProjectMaterializer` / `AssetIngest` / `ScriptImporter` / `ProjectImporter`） | `.canvas` 工程档**导入**信任边界：zip 安全解包 + manifest 校验 + project.json 物化 + 图片摄入 + 脚本重绑（导出在前端，见 §18） |
-| 存储 | `storage/` | SQLite、PDC 工具；新增 `image_uploads` 表 DAO |
-| 配置 | `config/` | YAML 配置读取 |
+| Web 与认证 | `web/` | Javalin HTTP + WebSocket 路由、Token 签发与校验、限流、静态资源 |
+| 会话与状态 | `session/` · `state/` | 编辑会话状态机、权威 `ProjectState` 变体、元素校验、撤销历史栈 |
+| 渲染 | `render/` | 字体与度量表、排版、调色板 LUT、图层合成、Bayer dither、矢量图标库（`IconRegistry`）、时间轴 `AnimationTicker` |
+| 模板 | `template/` | `.canvas` 模板包（`kind="pack"`）注册表、创意工坊发布导出、默认参数缩略图渲染（详见 `docs/template-pack.md`） |
+| 工程与模板包 | `canvasfile/`（`CanvasArchive` / `CanvasManifest` / `PackParamResolver` / `ProjectMaterializer` / `AssetIngest` / `ScriptImporter` / `ProjectImporter`） | `.canvas` 导入与套用信任边界：zip 安全解包、manifest 与参数校验、`project.json` 物化、图片摄入、脚本重绑（详见 §18） |
+| 地图池与部署 | `pool/` · `deploy/` | 按世界分桶的预览地图借还、墙面识别、物品框部署修复、`MapPacketSender` 集中发包 |
+| 图片 | `image/`（`ImageStorage` / `UploadHandler` / `ImageQuotaService`） | `sha256[:16]` 内容寻址、LRU 回收、三层配额、ImageIO 200ms 隔离解码 |
+| 动态数据 | `api/` · `variable/` · `schedule/` · `rail/` | 插件 Push API、四层变量存储与 Provider 守护线程、单墙时刻表、跨墙铁路网络 |
+| 脚本与补间 | `script/` | 触发路由（`TriggerRouter`）、帧栈执行器（`ScriptRunner`）、补间调度（`TweenScheduler`）、命令模板白名单 |
+| 存储与其他 | `storage/` · `benchmark/` · `i18n/` | SQLite + Flyway 风格迁移、审计日志、纯软件渲染压测、多语言文案 |
 
-### 2.2 前端（编辑器）
+### 2.2 前端（编辑器，`web/src/`）
 
-| 层 | 目录 | 职责 |
+| 层 | 目录 / 文件 | 职责 |
 | --- | --- | --- |
-| 应用壳 | `App.vue` | 路由、全局布局 |
-| 画布 | `components/Canvas/` | Konva 画布、图层渲染、选中变换 |
-| 工具栏 | `components/Toolbar/` | 新增元素、撤销重做、缩放 |
-| 图层面板 | `components/LayerPanel/` | 图层顺序、显隐、锁定 |
-| 属性面板 | `components/PropertiesPanel/` | 选中元素的参数编辑 |
-| 模板库 | `components/TemplateGallery/` | 模板浏览与载入 |
-| 网络 | `network/` | WS 客户端、重连、消息序列化 |
-| 预览 | `render/PreviewRenderer.ts` | 与后端一致的 Canvas 渲染 |
-| 状态 | `stores/` | Pinia：工程状态、UI 状态、网络状态 |
+| 应用壳 | `App.vue` · `components/HomePage.vue` | 顶层布局、快捷键装配、无 token 落地页 |
+| 画布交互 | `components/canvas/` | 顶层 Konva 透明交互层（选中/变换/对齐辅助线/油漆桶预览）+ 底层 Canvas 2D 像素层 |
+| 布局与工具栏 | `components/layout/` · `components/toolbar/` | 顶栏（TopBar）、左侧工具栏（LeftTools）、图层面板（LayerPanel）、右侧面板容器、状态栏 |
+| 属性面板 | `components/properties/` | 选中元素参数与画布背景/网格编辑 |
+| 模板库 | `components/template/` | `.canvas` 模板浏览、参数表单填写与发布弹窗 |
+| 动态数据面板 | `components/variables/` · `components/schedule/` · `components/rail/` | 变量管理与自动补全、站点时刻表、铁路网络管理弹窗 |
+| 时间轴 | `components/timeline/` · `timeline/` | 底部时间轴面板、三次贝塞尔缓动编辑器、前端关键帧插值器 |
+| 积木脚本 | `script/` | 自研可视化积木画布、积木定义、条件构建器与试跑轨迹高亮 |
+| 绘制与导入导出 | `livepaint/` · `brush/` · `lib/svg/` · `lib/canvasFile.ts` | Web Worker 油漆桶拓扑、压感笔刷、SVG 矢量导入管线、`.canvas` 客户端 zip 导出（fflate） |
+| 渲染镜像 | `render/` | 与后端逐像素对齐的 `PreviewRenderer`、`TextLayout`、`PaletteLut`、`FontLoader` |
+| 网络与状态 | `network/` · `stores/` · `composables/` · `i18n/` | 单例 `WsClient`、Pinia 状态仓库、智能对齐 `useSnapManager` 等通用组合式函数、中英双语 |
 
 ---
 
@@ -268,7 +281,7 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 - **每面墙最多 1 个活跃会话**（排他锁，wall_id 为 key）。不做协作编辑（OT/CRDT 超 scope）
 - 池容量耗尽：拒绝新会话，提示用户稍后；wall 占的 map 一直占着不自动释放，需 `/canvas delete` 显式清
 
-### 3.6 lock 状态
+### 3.4 lock 状态
 
 `walls.published_at` 列保留原名，**语义改为 lock 时间戳**：`null` = 可编辑，非 `null` = 已锁定。owner 由 `walls.owner_uuid` 决定。
 
@@ -295,17 +308,41 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 
 **关键不变量**：lock 是 UX 层概念，不阻挡 op 路径。如果作者发布锁定的 wall，但内部系统（如未来的动态展示）想用 ws.send(element.update) 更新内容，**不会被 lock 拒**。
 
-### 3.6.1 草稿 wall 协作语义
+### 3.4.1 草稿 wall 协作语义
 
-**未锁定 wall（lockedAt=null）= 协作中间态**：任何 `canvas.edit` 玩家可 `/canvas open <wall_id>`，进入 ACTIVE 编辑。`byWall` 排他锁保证同一时刻只有一个活跃 session，但接力 / 切换 owner 完全开放——前一玩家 `cancel` 后下一玩家立即 open。这是 v1 的协作模型（接力 ≠ 实时多人，OT/CRDT 永久不做）。
+**未锁定 wall（lockedAt=null）= 协作中间态**：任何 `canvas.edit` 玩家可 `/canvas open <wall_id>`，进入 ACTIVE 编辑。`byWall` 排他锁保证同一时刻只有一个活跃 session，但接力 / 切换 owner 完全开放——前一玩家 `cancel` 后下一玩家立即 open。这是协作编辑模型（接力 ≠ 实时多人，OT/CRDT 不纳入范围）。
 
-**锁定 wall（lockedAt 非 null）**：鉴权方案 C：仅 owner（`caller UUID == owner_uuid`）或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`（`SessionManager.open` 入口拦截）。
+**锁定 wall（lockedAt 非 null）**：开启会话入口鉴权（lock-aware open）：仅 owner（`caller UUID == owner_uuid`）、控制台主体或持 `canvas.admin.bypass-lock` 的管理员可 open；其他玩家拒 `FORBIDDEN`（`SessionManager.open` 入口拦截）。
 
-> **`wall.lock` / `wall.unlock` WS op 本身严格 owner-only，无 admin bypass**（`WallOpDispatcher` 直接比 `wall.ownerUuid == caller`，非 owner 一律 `FORBIDDEN`）。`canvas.admin.bypass-lock` 仅作用于"打开已锁定 wall"的 open 路径，不放行"代替 owner 锁/解锁"。
+> **`wall.lock` / `wall.unlock` WS op 本身仅限管理主体（owner 或控制台），无普通管理员权限绕过**（`WallOpDispatcher` 调用 `canManageWall`，非管理主体一律 `FORBIDDEN`）。`canvas.admin.bypass-lock` 仅作用于"打开已锁定 wall"的 open 路径，不放行"代替 owner 锁/解锁"。
 
-**未来 ACL（owner-only 草稿）**：若服主想要"草稿也仅 owner 可改"的语义，走 v1.x 协作 scope（新增 `walls.acl` 列 + acl-aware open 校验）；详见 §13 动态画板路径的同源扩展思路（acl 字段同样不进编辑 op 路径，仅在 open 鉴权点生效）。
+**未来 ACL（owner-only 草稿）**：若服主想要"草稿也仅 owner 可改"的语义，可按同源扩展新增 `walls.acl` 列并在 open 鉴权入口校验（同样不介入编辑 op 路径，见 §13）。
 
-### 3.6.3 会话主体类型（0.9.19 起）
+### 3.4.2 多世界假设
+
+**MapPool 按 world UUID 分桶**：`MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每个世界独立维护 FREE / RESERVED 队列。
+
+- `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（全局受 `map-pool.max` 限制）
+- `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（防止地图显示在错误维度）
+- 跨世界绑定路径被根除：WallRestorer 启动恢复 / `/canvas open` / `confirm` 三处都走 world-aware 路径
+- 失败兜底分两种，看异常发生在 bind 之前还是之后：
+  - **bind 之前**（world 未加载 / `bindToWall` 抛）→ 这一轮已借到的 mapId 走 `MapPool.releaseToFree` 回 FREE，不留半态预留（避免 `idcounts.dat` 膨胀，见 §4.1）；审计 `POOL_RELEASE_TO_FREE`
+  - **bind 之后**（渲染阶段抛）→ **保留绑定**，只记 SEVERE + 把 wall 记入 `failedRestoreWallIds` 等下次重启重试。walls 行还在，这些地图本就属于该 wall，泄漏检测不会回收它们；反而是还回 FREE 会被下一次 confirm 借走 → 两面墙共用一张地图 + 该 wall 下次 bind 必失败、永久恢复不了
+
+**配置（`config.yml` 实际键名）**：
+
+```yaml
+map-pool:
+  initial: 64            # 全局默认预热张数
+  max: 256               # 池上限（全局）
+  per-world:             # 可选：按 world name 覆写 initial（值是单个 int，仅预热张数）
+    world: 32            # overworld 预热 32 张
+    world_nether: 8      # nether 预热 8 张
+```
+
+`per-world` 只覆写每世界的预热张数（`initial`），无独立 max；未列出的 world 走按需扩容（首次 confirm 时 `createMap`），全局 `max` 是唯一总上限。无 `per-world` 配置时各 world 仍独立分桶，按需扩容。
+
+### 3.4.3 会话主体类型
 
 `Session` 带一个显式的 `principal` 字段：
 
@@ -325,36 +362,12 @@ lock 状态：DB 列 walls.published_at 保留原列名（避 SQL 迁移），�
 
 墙管理授权（`wall.lock` / `wall.unlock` / `wall.alias`）收敛到单一判据
 `SessionManager.canManageWall(session, wall)` = 主体是 `CONSOLE` 或 wall owner == 自己，
-并通过 ready 帧的 `canManageWall` 下发给前端（`docs/protocol.md` v8）——
+并通过 ready 帧的 `canManageWall` 下发给前端（`docs/protocol.md`）——
 前端不再自行比对 `selfUuid === ownerUuid`，授权结论只允许有一个权威。
-
-### 3.6.2 多世界假设
-
-**MapPool 按 world UUID 分桶**：原 §4 暗示单世界共享池；现 `MapPool` 内部维护 `Map<UUID worldId, PoolBucket>`，每 world 独立 FREE/RESERVED 队列。
-
-- `acquireForWall(World world, String wallId, int count)`：从指定 world bucket 借出；该 bucket 不足时 expand（全局受 `map-pool.max` 限制）
-- `bindToWall(World world, ...)`：**强校验** `mapView.world == world`；不一致抛 `IllegalStateException`（之前 silent bind 会让 map 显示在错误维度）
-- 跨世界绑定路径被根除：WallRestorer 启动恢复 / `/canvas open` / `confirm` 三处都走 world-aware 路径
-- 失败兜底分两种，看异常发生在 bind 之前还是之后：
-  - **bind 之前**（world 未加载 / `bindToWall` 抛）→ 这一轮已借到的 mapId 走 `MapPool.releaseToFree` 回 FREE，不留半态预留（避免 idcounts.dat 膨胀，**项目核心风险**，详见 PROPOSAL §5.2.6）；审计 `POOL_RELEASE_TO_FREE`
-  - **bind 之后**（渲染阶段抛）→ **保留绑定**，只记 SEVERE + 把 wall 记入 `failedRestoreWallIds` 等下次重启重试。walls 行还在，这些地图本就属于该 wall，泄漏检测不会回收它们；反而是还回 FREE 会被下一次 confirm 借走 → 两面墙共用一张地图 + 该 wall 下次 bind 必失败、永久恢复不了
-
-**配置（config.yml，实际键名）**：
-
-```yaml
-map-pool:
-  initial: 64            # 全局默认预热张数
-  max: 256               # 池上限（全局）
-  per-world:             # 可选：按 world name 覆写 initial（值是单个 int，仅预热张数）
-    world: 32            # overworld 预热 32 张
-    world_nether: 8      # nether 预热 8 张
-```
-
-per-world 只覆写每世界的预热张数（`initial`），无独立 max；未列出的 world 走 on-demand 扩容（首次 confirm 时 `createMap`），全局 `max` 是唯一总上限。无 per-world 配置时各 world 仍独立分桶，按需扩容。
 
 ---
 
-### 3.7 图片上传数据流
+### 3.5 图片上传数据流
 
 `/api/upload` 走纯 HTTP（不经 WS），与编辑 op 通道完全解耦。配额跟踪在专表 `image_uploads`；ImageElement.source 持 sha256[:16] hash，跨 wall 引用同 hash 文件零重复存储。
 
@@ -400,7 +413,7 @@ per-world 只覆写每世界的预热张数（`initial`），无独立 max；未
 
 **关键不变量：**
 - ImageStorage.load 内存缓存：图片首次解码后保留 60s（LRU MRU 队列）；过期重读磁盘
-- 引用统计走**实时 sweep**（无持久 refcount 列，原列已 V010 DROP，见 `docs/data-model.md §6.5.1`）：LRU 候选 = 遍历所有 `walls.project_json` 收集被引用 hash（`ImageStorage.collectReferencedHashes`）后 `NOT IN` 剔除孤儿（`ImageUploadDao.pickLruCandidates`）
+- 引用统计走**实时 sweep**（无持久 refcount 列，原列已于 V010 移除，见 `docs/data-model.md §2.6` 与 `§6.2`）：LRU 候选 = 遍历所有 `walls.project_json` 收集被引用 hash（`ImageStorage.collectReferencedHashes`）后 `NOT IN` 剔除孤儿（`ImageUploadDao.pickLruCandidates`）
 - 删 wall 不立即清磁盘（其他 wall 可能引用同 hash）；待下次 sweep 时若无任何 wall 引用该 hash 才由 LRU 自然回收
 - 客户端无路径控制：filename 仅日志，存储路径完全由 hash 决定（防路径穿越）
 
@@ -420,7 +433,7 @@ Minecraft 的 map ID 存于世界文件 `data/idcounts.dat`，每次 `Bukkit.cre
 PooledMap
 ├── id: int                        MC map ID
 ├── mapView: MapView               Bukkit 对象
-├── state: FREE | RESERVED         （两态。PERMANENT 已废止）
+├── state: FREE | RESERVED         （两态）
 ├── reservedBy: String?            RESERVED 时指向 owner，格式 "wall:<wall_id>"
 ├── lastUsedAt: long               用于 LRU 清理
 └── paletteBuffer: byte[128*128]   当前像素（调色板索引）
@@ -484,10 +497,7 @@ cancel(session):
         freeQueue.offer(m)
 ```
 
-**清理（管理员 `/canvas cleanup`，原 PERMANENT 校对路径已废止）：**
-**未实装（stub）。** `CanvasCommand.runCleanup` 当前仅回一句 "cleanup is stubbed" 提示，不做任何实际操作。规划语义为：扫 walls 表，对每行验证 `(world, origin, facing, map_ids)` 与世界中 ItemFrame 的对应关系，孤立行（ItemFrame 全丢）由管理员决定 delete；ItemFrame 不在 walls 表里的（外来）报告但不动。该 fsck 实现尚未落地（至今未做）。
-
-> **泄漏防护不依赖 cleanup**：idcounts.dat 防膨胀的实际防线是后台 `MapPool.detectLeaks` 周期任务（每 5 分钟，硬编码于 `HikariCanvas` onEnable，见 §4.5 / §10.2）+ confirm/部署失败时的原子 `releaseToFree` 回滚，与未实装的 cleanup 命令无关。
+> **泄漏防护**：`idcounts.dat` 防膨胀依靠后台 `MapPool.detectLeaks` 周期任务（每 5 分钟，硬编码于 `HikariCanvas` `onEnable`，见 §4.5 / §10.2）与 confirm 绑定前的原子 `releaseToFree` 回滚。
 
 ### 4.4 Placeholder 地图
 
@@ -543,12 +553,12 @@ cancel(session):
 - **输入中**：100ms 防抖 + 5 fps 节流。
 - **session 关闭前最后一帧**：一次完整（非差分）推送，确保最终帧 100% 正确（旧模型称"提交时全量"，新模型下不存在显式 commit，改为 cancel/disconnect 前 ProjectionThrottler flush）。
 
-**两条产帧路径（0.6 引入）。** 上面描述的是**反应式路径**；时间轴动画引入第二条**主动 cadence 路径**。两条按 wall 是否有活跃动画分流：
+**两条产帧路径。** 上面描述的是**反应式路径**；时间轴动画引入第二条**主动 cadence 路径**。两条按 wall 是否有活跃动画分流：
 
 | 路径 | 适用 wall | 驱动 | 静止行为 |
 | --- | --- | --- | --- |
-| 反应式（原 ProjectionThrottler） | 静态 / 编辑中 wall | 事件驱动（op / 变量变化） | 无事件 0fps |
-| 主动 cadence（AnimationTicker，0.6 引入） | 活跃动画 wall | 按 `timeline.fps` 定 cadence 主动产帧（§5.5） | 由 Ticker 主驱，不依赖外部事件 |
+| 反应式（`ProjectionThrottler`） | 静态 / 编辑中 wall | 事件驱动（op / 变量变化） | 无事件 0fps |
+| 主动 cadence（`AnimationTicker`） | 活跃动画 wall | 按 `timeline.fps` 定 cadence 主动产帧（§5.5） | 由 Ticker 主驱，不依赖外部事件 |
 
 **分流 gate（不可越界）：** 当某 wall 既有活跃动画、又同时在编辑器里被编辑时，两条路径会对同一 wallId 重复写 `HikariCanvasRenderer.update(mapId)`。装配层按 wallId gate：动画接管期间，编辑 op 产生的 reactive flush 退让给 Ticker，由 Ticker 出帧（详见 `timeline.md §3.2`）。`ProjectionThrottler.setIntervalForSession` 只**放宽节流上限**、不自驱产帧——**不能**当 Ticker 用，它仅用于编辑器内预览动画时把节流放宽。
 
@@ -593,7 +603,7 @@ cancel(session):
 - **MC 协议（插件 ↔ 客户端）：** MC 原生协议层 zlib（默认 256B 阈值自动压）。
 - **不自行再加一层。**
 
-### 5.5 AnimationTicker（0.6 引入）
+### 5.5 AnimationTicker
 
 时间轴动画的产帧引擎。详细设计见 `timeline.md §3`；本节固化其在投影管线中的定位与约束。
 
@@ -622,7 +632,7 @@ cancel(session):
 
 1. `Timeline.fps` 是服主显式参数，**默认 20fps**（= 一个 Bukkit tick 50ms）。每墙刷新率由服主自改。
 2. config `timeline.max-fps` 是**服务器级安全阀**（默 **60**）：管理员保护多租户服务器、防单墙极端 fps 拖垮渲染线程 / 网络的总阀门。`Timeline.fps` 受此阀钳。
-3. **不做成本估算、不自动校准、不自动降级。** 服主自负性能，工具不替其决策（"数据透明、不替服主决策"原则的延续，见 §13）。想知道单机承载，服主自跑 `/canvas bench`（0.5.0，与时间轴解耦）。
+3. **不做成本估算、不自动校准、不自动降级。** 服主自负性能，工具不替其决策（遵循 §1.2 设计原则）。想知道单机承载，服主可运行 `/canvas bench`（见 `docs/benchmark.md`）。
 
 **帧间脏区：** 动画帧间脏区 ≈ 整画布，§5.2 的 dirty-region 增量基本失效。改做 **per-map 帧间 diff**：只发"像素变了的 map"（不是变了的像素）——逐 map 比对相邻两帧，未变 map 不发包。这是基本不浪费的优化，直接做，不 gate 在实测上。
 
@@ -636,23 +646,20 @@ cancel(session):
 
 ### 6.2 强制规则
 
-1. **同一 TTF 文件**：`src/main/resources/fonts/*.ttf` 和前端 `public/fonts/*.woff2` 由同一源字体转出，构建脚本保证一致
-2. **关抗锯齿**：
+1. **同一源字体单轨加载**：内置 22 枚 SIL OFL 1.1 字体（jar `/fonts/*.ttf` / `.otf`）与用户扩展字体（`plugins/HikariCanvas/fonts/*.ttf` / `.otf`）统一由后端 `GET /api/font/file?id=<fontId>` 下发二进制，前端经 `FontFace` API 动态注册（不依赖静态 CSS `@font-face` 双轨）
+2. **共享字形步进表（`FontMetricsTable`）**：构建期与用户字体加载期统一用 AWT 计算 BMP 字符 advance 表（`/fonts/{id}.metrics.json` 与 `/api/font/metrics`），双端排版共用同一套 `charAdvance(fontId, ch, fontSize)`
+3. **关抗锯齿**：
    - Java：`KEY_TEXT_ANTIALIASING = VALUE_TEXT_ANTIALIAS_OFF`
    - Browser Canvas：`ctx.imageSmoothingEnabled = false`
-3. **像素字体优先**：默认模板全部用像素字体，规避 hinting 差异
-4. **统一调色板映射**：前端和后端共享同一份 `palette.json`（构建时生成），前端预览也做调色板量化
-5. **不用系统字体**：编辑器禁用 `font-family` 回退到系统字体
+4. **统一调色板映射**：前端和后端共享同一份构建期生成的 `palette.json`（32³ Lab LUT），前端预览直接执行调色板量化与 Bayer dither
+5. **确定性字体回退**：双端取不到指定字体时统一回退内置像素字体 `ark_pixel`，不落回宿主系统默认字体
 
 ### 6.3 验证
 
-CI 集成：
-- 固定文本集合（20 段覆盖中英数字符号）
-- 两端各自渲染输出 PNG
-- 像素级 diff，容忍度 < 1%
-- 超过阈值则 build 失败
+- 后端 JUnit `RendererSnapshotTest`（及多帧 `RendererSnapshotTimelineTest`）对比 `plugin/src/test/resources/expected/*.png` 基线，像素容忍度 < 0.5%
+- 缓动与色彩插值通过跨端共享向量 `rendering-test/easing-vectors.json` 逐位校验
 
-详见 `rendering.md`。
+详见 `docs/rendering.md`。
 
 ---
 
@@ -743,10 +750,10 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 
 | 存储 | 内容 | 生命周期 |
 | --- | --- | --- |
-| **SQLite** (`plugins/HikariCanvas/data.db`) | 池元信息、walls 表、审计日志、模板使用统计 | 跨重启 |
-| **PDC**（每张 ItemFrame） | `wall_id` / `slot`（2026-05-14 起不再写 `published_at`，见 §7.2） | 随世界文件 |
-| **文件**（`templates/*.yml`） | 模板定义 | 人工管理 |
-| **文件**（`fonts/*.ttf`） | 字体 | 人工管理 |
+| **SQLite** (`plugins/HikariCanvas/data.db`) | 池元信息、walls 表、审计日志、模板元数据与统计、图片配额、变量/时刻表/铁路/脚本 | 跨重启 |
+| **PDC**（每张 ItemFrame） | `wall_id` / `slot`（见 §7.2） | 随世界文件 |
+| **文件**（`templates/*.canvas` · `user-templates/<uuid>/*.canvas`） | 内置与玩家发布的 `.canvas` 模板包（`kind="pack"`，见 `docs/template-pack.md`） | 内置随 jar / 用户模板持久管理 |
+| **文件**（`fonts/*.ttf` · `*.otf`） | 用户扩展字体（内置 22 枚字体在 jar `/fonts/` 内） | 人工管理 |
 
 ### 8.2 walls 表概览（取代 SignRecord）
 
@@ -776,8 +783,8 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 | `/assets/{file}` | GET | 127.0.0.1 trust | 静态资源（JS/CSS/字体）；含 `..` / `/` 拒绝 |
 | `/api/session/{token}` | GET | token | 会话预握手，校验 token + 返会话元信息 |
 | `/api/walls` | GET | 127.0.0.1 trust | 首页"近期项目"列表（全 walls summary） |
-| `/api/templates` · `/api/template/{id}/preview.png` · `/api/template-asset/icons/{name}` | GET | 127.0.0.1 trust | 模板库 |
-| `/api/palette` · `/api/font/{metrics,file,list}` · `/api/icon/{list,paths}` | GET | 127.0.0.1 trust | 调色板 / 字体 / 图标资源（无玩家鉴权） |
+| `/api/templates` · `/api/template/{id}/preview.png` | GET | 127.0.0.1 trust | 模板库与缩略图 |
+| `/api/palette` · `/api/font/{metrics,file,list}` · `/api/icon/{list,paths}` | GET | 127.0.0.1 trust | 调色板 / 字体 / 矢量图标资源（`IconRegistry`，无玩家鉴权） |
 | `/api/wall/{id}/preview.png` | GET | 127.0.0.1 trust | wall 缩略图 |
 | `/api/upload`（POST）· `/api/upload/url`（POST）· `/api/upload/quota` · `/api/upload/{source}` | POST/GET | **sessionId**（query 或 form 字段）| 图片上传 / 下载 / 配额；缺失或失效返 401 |
 | `/api/project/import` | POST | **sessionId** + `canvas.edit` | `.canvas` 工程档导入（multipart `file`）；整体替换会话工程，破坏性写故要编辑权限（fail-closed，玩家离线即拒）。仅当 `AssetIngest` + 导入限额装配时注册。详见 §18 |
@@ -800,9 +807,8 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 
 ### 9.3 绑定与部署
 
-- 默认 `bind: 127.0.0.1`，端口默认 `8877`（可配置）
-- 公网场景：必须反代 + TLS
-- 支持配置 `context-path`（如 `/canvas/`），便于反代下挂多个插件
+- 默认 `network.host: "127.0.0.1"`，端口默认 `8877`（`config.yml` 可配置）
+- 公网场景：必须经 nginx / Caddy 反向代理终止 TLS，并在 `config.yml` 配置 `network.editor-url` 与 `network.allowed-origins`（完整示例见 `docs/deployment.md`）
 
 ---
 
@@ -822,7 +828,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 
 - **主线程（Bukkit）**：物品框操作、PDC、MapView 生命周期
 - **异步线程（插件 executor）**：渲染、调色板映射、WS I/O、SQLite
-- **AnimationTicker（0.6 引入）**：独立 `ScheduledExecutorService`，按 `timeline.fps` 主动产帧（§5.5）；不访问非线程安全 Bukkit API（viewer 查询走 `world.getPlayers()` / `Player.getLocation()` 线程安全只读路径，双层 try-catch 收窄瞬态异常——与 ProjectionThrottler async 线程同纪律）；产帧后经 MapPacketSender 发送
+- **AnimationTicker**：独立 `ScheduledExecutorService`，按 `timeline.fps` 主动产帧（§5.5）；不访问非线程安全 Bukkit API（viewer 查询走 `world.getPlayers()` / `Player.getLocation()` 线程安全只读路径，双层 try-catch 收窄瞬态异常——与 ProjectionThrottler async 线程同纪律）；产帧后经 `MapPacketSender` 发送
 - **推送**：异步线程构造 packet → PacketEvents 内部处理发送
 
 **禁止**在异步线程调用 Bukkit API（除明确标注线程安全的）。
@@ -830,13 +836,11 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 ### 10.3 可观测性
 
 - SLF4J + 配置文件控制 log level
-- `/canvas stats` 管理员命令：池状态（total/free/reserved）、walls 计数（含 locked）、活跃会话数、活跃 token 数
-- `/canvas cleanup` 管理员命令：**未实装/stub**（见 §4.3）
-- `/canvas reload templates` / `/canvas reload config` 管理员命令：热重载模板 registry / config.yml（host/port 改动需重启生效）
-- ~~`/canvas debug <sessionId>`~~：**未实装/规划中**（CanvasCommand 无此子命令）
+- `/canvas stats` 与 `/canvas diagnose` 管理员命令：池状态（total/free/reserved）、walls 计数（含 locked）、活跃会话数、活跃 token 数与运行健康诊断
+- `/canvas reload templates` / `/canvas reload config` 管理员命令：热重载模板 registry / `config.yml`（`host`/`port` 改动需重启生效）
 
-> **命令族现状**（`CanvasCommand.build`）：玩家级 `edit / wand / confirm / cancel / open / list / alias / delete`（`publish / unpublish` 已于 2026-05-14 砍，锁定改走前端 `wall.lock/unlock` WS op）；管理员级 `stats / cleanup(stub) / reload {templates,config}`；另有按子系统装配挂载的 `/canvas var`（0.4.0 变量系统）与 `/canvas bench`（0.5.0 Benchmark）子命令族（对应 handler 为 null 时不注册）。
-- 审计日志：`SESSION_BEGIN/CONFIRM/CANCEL` / `WALL_LOCK/UNLOCK/DELETE`（2026-05-14 起，旧 `WALL_PUBLISH/UNPUBLISH` 已随命令砍）/ `WALL_ALIAS` / `AUTH_OK/FAILED` / `POOL_*` / `IMAGE_UPLOAD_OK/REJECTED` / `PERMISSION_DENIED`，写 SQLite
+> **命令族概览**（`CanvasCommand.build`）：玩家级 `edit / wand / confirm / cancel / open / list / alias / delete`（锁定走前端 `wall.lock/unlock` WS op）；管理员级 `stats / diagnose / reload {templates,config}`；另有按子系统装配挂载的 `/canvas var`（变量系统）与 `/canvas bench`（性能压测）子命令族（对应 handler 为 null 时不注册）。
+- 审计日志：`SESSION_BEGIN/CONFIRM/CANCEL` / `WALL_LOCK/UNLOCK/DELETE` / `WALL_ALIAS` / `AUTH_OK` / `POOL_*` / `IMAGE_UPLOAD_OK/REJECTED` / `PERMISSION_DENIED` 等，写 SQLite（完整清单见 `docs/security.md §8.1`）
 
 ### 10.4 安全
 
@@ -850,7 +854,7 @@ PDC 标记（namespace 固定 `hikaricanvas`，`NamespacedKey(plugin, key)` 取�
 
 ---
 
-## 10.5 图层模型（协议 v2）
+## 11. 图层模型
 
 **心智模型：** ProjectState 不再持有扁平 `elements: Element[]`，而是 `layers: Layer[]`。每个 Layer 是一组共享可见性 / 锁 / 不透明度 / 混合模式的元素集合。Z-order 在两层：层间（`layers[i]` 的 i 越大越上层）+ 层内（layer.elements[j] 的 j 越大越上层）。
 
@@ -895,9 +899,9 @@ Guide {
 
 ### 生命周期
 
-- **创建 wall（confirm 路径）**：自动生成 1 个 `Default Layer`，所有 element 落入该层；activeLayerId 指向它
-- **template.apply（replace 语义）**：清空所有层 → 生成 1 个 `Default Layer` 包住模板物化结果。**不保留**旧的多层结构（与 replace 语义一致）
-- **/canvas open 重新打开**：activeLayerId 沿用 DB 持久化值；若 DB 没有（v1 老画 migrate 后）→ 取第一个 layer
+- **创建 wall（confirm 路径）**：自动生成 1 个 `Default Layer`，所有 element 落入该层；`activeLayerId` 指向它
+- **template.apply（整体替换语义）**：套用 `.canvas` 模板包时复用 `ProjectImporter.applyPack` → `EditSession.replaceProject`，清空当前墙的旧图层并用模板包内的完整多层结构与时间轴整体替换（详见 `docs/template-pack.md §4`）
+- **/canvas open 重新打开**：`activeLayerId` 沿用 DB 持久化值；若 DB 没有（v1 老画 migrate 后）→ 取第一个 layer
 - **/canvas delete**：所有层一起删（layer 不跨 wall 共享）
 
 ### 渲染顺序
@@ -949,109 +953,50 @@ CanvasCompositor.rasterize 大体流程：
 
 ---
 
-## 11. 配置文件骨架
+## 12. 配置文件与部署约定
 
-> **以打包的 `plugin/src/main/resources/config.yml` 为权威**。本节是早期骨架，部分键名已与实现分叉，仅作结构示意。已知差异：`web.public-url` 实为 `web.editor-url`；`session.token-ttl` 实为 `session.token-ttl-minutes`、`session.idle-disconnect` 实为 `session.idle-minutes`；`render:` 段不存在（字体 / 调色板走构建期资源，非运行配置）；帧率限流在 `throttle.projection-fps`（默 5）而非下方 `render` 段。`map-pool` 段与泄漏扫描周期（硬编码 5 分钟）见 §3.6.2 / §4.5 已校正。
+运行期配置定义在 `plugin/src/main/resources/config.yml`（由 `HikariCanvasConfig` 解析为不可变强类型配置对象），文档不重复维护易漂移的 YAML 骨架。权威键名、默认值、取值约束及热重载说明请直接参阅：
 
-```yaml
-# plugins/HikariCanvas/config.yml（示意，非逐字；权威见打包 config.yml）
+- **完整默认配置与注释**：`plugin/src/main/resources/config.yml`（标 `[热更]` 的项支持 `/canvas reload config` 立即生效，其余项如 `network.host` / `network.port` 修改后需重启服务器）
+- **字段类型与范围约束表**：`docs/data-model.md §5.1`
+- **公网反向代理、TLS 与防火墙部署指南**：`docs/deployment.md`
 
-web:
-  bind: 127.0.0.1
-  port: 8877
-  context-path: ""                  # 反代时可设 "/canvas"
-  public-url: "http://127.0.0.1:8877" # 生成给玩家的链接
-
-# 实际 config.yml 用 `map-pool:` 段（旧 `pool.*` 名已废）。泄漏扫描周期不可配——
-# 硬编码 5 分钟（HikariCanvas onEnable 的 mapPoolLeakTask）。
-map-pool:
-  initial: 64                       # 启动预创建张数（HikariCanvasConfig 钳 [1, 1024]）
-  max: 256                          # 池上限；达上限新会话拿 POOL_EXHAUSTED
-  per-world: {}                     # 可选：按 world name 覆写 initial（见 §3.6.2）
-
-session:
-  token-ttl: 15m
-  idle-disconnect: 5m
-  per-player-limit: 1
-
-render:
-  default-font: "sourcehan"
-  palette-lut: "built-in"           # built-in | custom-path
-
-timeline:                           # 0.6 引入
-  default-fps: 20                   # 新建 timeline 的默认帧率（= 一个 Bukkit tick 50ms）
-  max-fps: 60                       # 服务器级安全阀：单墙 fps 的硬上限，钳每条 timeline 的 fps
-                                    #   （多租户保护，防单墙极端 fps 拖垮渲染线程 / 网络；不做自动降级）
-
-limits:
-  ws-messages-per-second: 20
-  text-max-length: 256
-  canvas-max-maps: 16               # 单个招牌最多 16 张地图
-
-storage:
-  sqlite-path: "plugins/HikariCanvas/data.db"
-
-logging:
-  audit: true
-```
-
----
-
-## 12. 未决问题
-
-- [ ] 预览地图池初始化时，若 SQLite 恢复数量 > `initial-size`，超出部分如何处理（保留 vs 缩容）
-- [ ] 反代下的 `public-url` 自动探测是否可行，或仍要求服主手动配置
-- [ ] 会话 disconnect 5 分钟宽限是否太长（公网弱网场景 vs 池占用）
-- [x] 多世界支持：同一池跨世界共享 vs 按世界分池 —— **按 world UUID 分桶**。MapPool 内部 `Map<UUID worldId, PoolBucket>`；`acquireForWall(World, ...)` / `bindToWall` 强校验 mapView.world 一致；跨世界绑定抛 IllegalStateException。config `map-pool.per-world: {}` 按 world name 覆写 size。详见 §3.6.2
-- [ ] published wall 是否需要"自动归档"（长期无 op 自动 unpublish 释放给 `/canvas list` 滚动列表）—— 倾向不做，walls 数量 < 100 不需要
-- [x] 协作编辑（多 client 同时编辑同一 wall_id）—— **永久不做**。`byWall` 排他锁阻止，玩家接力编辑（前一玩家 cancel 后下一玩家 `/canvas open <wall_id>`）已是现状
-- [ ] 图层数 / 层内元素数上限（暂无；建议 layers ≤ 32、单层 elements ≤ 200 作为软上限做 warn 不做 hard cap）
-- [ ] blendMode v1 选 normal/multiply/screen/overlay 4 个；其他 PS 风格 mode 等用户呼声
-- [ ] **0.6 引入**：AnimationTicker 与编辑 op 并发改 state 的锁范式落点——倾向进 EditSession monitor、复用 `ProjectionThrottler.projectUnderEditLock`（`ProjectionThrottler.java:221`，`synchronized (es)`）的锁范式；实现时确认是否需要单列。对齐 `timeline.md §9` 风险登记
-
-这些问题实现时根据实际情况回填本文档。
+主要配置分区概览：`network`（监听地址/端口/编辑器 URL/Origin 白名单）、`session`（Token TTL 与断连宽限）、`map-pool`（全局与按世界分桶容量，见 §3.4.2）、`limits`（单招牌最大地图数）、`throttle` 与 `rendering.adaptive-fps`（投影帧率与输入限流）、`templates`（模板缓存与发布配额）、`images` 与 `import`（上传与 `.canvas` 解包三闸）、`security`（Token 速率限制）、`database`（迁移前自动备份与审计保留期）、`dynamic`（Push API 限流、时刻表阈值、全局变量配额）、`timeline` 与 `scripts`（动画帧率上限、脚本执行预算三闸、补间并发上限与命令模板白名单）、`i18n`（默认语言）。
 
 ---
 
 ## 13. 动态画板设计约束
 
-> **0.4.0 详细设计**：`docs/dynamic-data.md`（变量系统 + Push API + UX + 权限）。本节为顶层架构约束。
+> **详细设计权威**：`docs/dynamic-data.md`（变量系统 + Push API + 面板交互 + 权限）。本节固化顶层架构边界。
 
-### 13.1 路径选择：P-1 + P-3 混合
+### 13.1 路径选择：渲染期占位符求值 + Push API 数据源推送
 
-**最终架构 = P-1 渲染期占位符 + P-3 Plugin Push API**（0.4.0 实施）：
+动态画板由**渲染期占位符求值**与 **Push API 数据源推送**两条正交路径共同组成：
 
-- **P-1 渲染期**：TextElement.text 含 `${var:name}` / `${var:bedwars/score}` 占位符；`ProjectState` 仅存「模板字符串」不存「实际值」；`CanvasCompositor.drawText` 渲染前用 cached value 替换
-- **P-3 Push API**：外部插件 `HikariCanvasAPI.setVariable(namespace, key, value, ttl)` 主动 push；HikariCanvas 写入 VariableStore + mark wall dirty 触发重画
-- ✅ 与方案 C 兼容：渲染走 `CanvasProjector` 不经过 `SessionManager.open`
-- ✅ Lock 锁的是「模板编辑」，不是「显示内容更新」
-- ✅ 玩家 lock 后模板冻结，但每帧仍读最新动态值
+- **渲染期占位符求值**：`TextElement.text` 含 `${var:name}` / `${var:bedwars/score}` 占位符；`ProjectState` 仅存模板字符串而不存运行期展开值；`CanvasCompositor.drawText` 在栅格化前读取内存缓存值完成替换
+- **Push API 数据源推送**：外部插件调用 `HikariCanvasAPI.setVariable(plugin, namespace, key, value, ttl)` 主动推送；HikariCanvas 写入 `VariableStore` 并标记引用该变量的 wall 为 dirty，触发投影重绘
+- **与锁状态解耦**：渲染走 `CanvasProjector`，不经过 `SessionManager.open` 入口鉴权；锁定冻结的是"模板编辑"，不影响动态数值刷新
 
 **关键约束**：
 
-1. **Push > Pull**：HikariCanvas 不做 active polling 外部数据；插件主动 push
-2. **变量是 string**：HikariCanvas 不解析业务语义，纯字符串 forward
-3. **不在主线程 resolve**：`ProjectionThrottler` 用 cached value 渲染（O(1) lookup）；async daemon 后台拉系统变量 / PAPI
-4. **namespace 严格隔离**：插件注册 namespace 后只能 push 自己 namespace（防 spoof）
-5. **fallback 链**：cached → `${var:X\|fallback=...}` → `Variable.default` → `"???"`
+1. **Push > Pull**：HikariCanvas 不主动轮询外部业务数据，由外部插件事件驱动推送
+2. **变量是 string**：HikariCanvas 不解析业务语义，仅做纯字符串传递与渲染替换
+3. **不在主线程 resolve**：`ProjectionThrottler` 直接读取缓存值渲染（O(1) 查找）；后台守护线程异步刷新系统变量与 PAPI
+4. **namespace 严格隔离**：插件注册 namespace 后只能推送自身所属的 namespace（防跨插件伪造）
+5. **fallback 链**：cached → `${var:X|fallback=...}` → `Variable.default` → `"???"`
 
-### 13.2 四层数据源（详见 dynamic-data.md §1）
+### 13.2 四层数据源（详见 `dynamic-data.md §2`）
 
-- Tier 1 用户变量（`user/*`，持久化，玩家手动改）
-- Tier 2 插件 push（`<namespace>/*`，HikariCanvasAPI.setVariable）
-- Tier 3 系统变量（`server.*` / `wall.*` / `scoreboard.*`，内置）
+- Tier 1 用户变量（`user/*` 与 `userglobal/*`，SQLite 持久化，玩家手动改值）
+- Tier 2 插件推送（`<namespace>/*`，`HikariCanvasAPI.setVariable`）
+- Tier 3 系统变量（`system/*` / `wall.*` / `scoreboard.*`，内置 Provider）
 - Tier 4 PAPI 桥接（`papi/%placeholder%`，自动暴露）
 
-### 13.3 反模式（不允许）
+### 13.3 反模式：禁止定时改写 ProjectState
 
-**P-2 定时 patch ProjectState**：后台 task 每 N 秒 `EditSession.updateElement`。
-**不允许** — 会撞 lock-aware open 鉴权 + 撑爆 history 栈 + 产生大量 WS 流量。
+**禁止后台任务每隔 N 秒调用 `EditSession.updateElement` 定时改写 `ProjectState`**——该做法会污染撤销历史栈、持续写库并产生大量无意义的 WebSocket 广播流量。动态文本一律走变量占位符系统。
 
-P-2 由变量系统取代。
-
-**AnimationTicker（0.6，§5.5）不属于 P-2 反模式。** 它在 Ticker 线程内算**临时**插值 ProjectState 直接渲染（与 P-1 用 cached 变量值渲染同路），**从不** mutate 持久化 ProjectState、不进 history 栈、不发 WS 编辑流量。与被禁的"后台 task 定时 `EditSession.updateElement`"有本质区别。
-
-详见 `docs/journal.md` 2026-05-16 + 2026-05-19 0.4.0 规划条目。
+**`AnimationTicker`（§5.5）不属于该反模式。** 它在独立 Ticker 线程内计算**临时**插值 `ProjectState` 副本直接送入栅格化（与渲染期读取缓存变量值同构），从不改写持久化的 `ProjectState`、不写入历史栈、也不产生 WebSocket 编辑流量。
 
 ---
 
@@ -1126,7 +1071,7 @@ ui store 字段：`snapEnabled / snapToGrid / snapToCanvas / snapToElement / sna
 
 ## 16. Live Paint 子系统
 
-油漆桶工具：用户点击画布上某个位置 → 系统识别该点所在的"闭合空白 gap"（被一组元素轮廓包围的连通区域）→ 生成对应 PathElement 并以当前 fill 填充；点击元素内部时直接修改该元素的 fill 字段（vector-fill 决策 A）。
+油漆桶工具：用户点击画布上某个位置 → 系统识别该点所在的"闭合空白 gap"（被一组元素轮廓包围的连通区域）→ 生成对应 `PathElement` 并以当前 fill 填充；点击几何元素内部时直接修改该元素的 `fill` 字段。
 
 ### 16.1 设计纪律：前端独占
 
@@ -1189,7 +1134,7 @@ element.add type=path  落库 + 后端 PathRenderer 渲染
 
 `web/src/components/canvas/LivePaintHoverOverlay.vue` = hover hint（vue-konva v-path + `fillRule='evenodd'` + 蓝色半透明）。
 
-### 16.5 vector-fill 决策 A
+### 16.5 点击命中与元素直接填色
 
 `findElementAt(canvasX, canvasY)` 倒序遍历 visibleElements（z-order 顶层优先）+ `elementToPolygon` + `pointInPolygon` 精确命中（非 bbox，避免 circle / star / path 角落误判）。
 
@@ -1200,7 +1145,7 @@ element.add type=path  落库 + 后端 PathRenderer 渲染
 3. graph degraded → 拒（`livePaint.graphDegraded`）
 4. 命中 gap → `element.add type=path` + 当前 fill + 乐观本地 mutate
 5. 命中 element：
-   - `rect / circle / shape / path` → `element.update {patch:{fill}}` + 乐观本地 mutate（vector-fill 快捷，沿用 Fill 联合类型）
+   - `rect / circle / shape / path` → `element.update {patch:{fill}}` + 乐观本地 mutate（直接改矢量填充，沿用 Fill 联合类型）
    - `text / image / brush` → `livePaint.elementUnsupported(type)` 提示（这些元素 fill 不是颜色平铺语义）
 6. 都没命中 → `livePaint.noGap` 提示
 
@@ -1220,7 +1165,7 @@ element.add type=path  落库 + 后端 PathRenderer 渲染
 
 ## 17. 脚本运行时架构
 
-> **契约总纲**：`docs/scripting.md`（D1-D8 决策 / 执行管线 §3 / Budget §2.4 / 命令白名单 §5 / 权限 §6）。本节仅固化脚本系统在整体架构中的定位与线程契约，不重复设计细节。
+> **契约总纲**：`docs/scripting.md`（执行管线 §3 / Budget §2.4 / 命令白名单 §5.2 / 权限与安全：`scripting.md §4.1`、`docs/security.md §13`）。本节仅固化脚本系统在整体架构中的定位与线程契约，不重复设计细节。
 
 ### 17.1 执行引擎三组件
 
@@ -1281,20 +1226,20 @@ ActionExecutor — 按动作类型分发：
 | wall 当前有活跃编辑器 session | `EditSession` 标准 op | 副作用进编辑器 history 栈；UI 实时可见 |
 | 无活跃 session（headless） | 直改持久化 `ProjectState` + `persistWall` | 不进 history；下次 open 可见 |
 
-headless 路径的已知竞态（可接受）：若 session open/close 与 headless 写入并发，脚本改动可能被 session 旧 state 覆盖（单属性丢一次更新，低频低危，scripting.md §10 已记账）。
+headless 路径的已知竞态（可接受）：若 session open/close 与 headless 写入并发，脚本改动可能被 session 旧 state 覆盖（单属性丢一次更新，低频低危，详见 `docs/scripting.md §3.2`）。
 
 ### 17.5 与时间轴和变量系统的关系
 
-**脚本是上层，时间轴是被编排的素材（D2）**——对应 §13 动态画板路径中的反模式约定：
+**脚本是上层，时间轴是被编排的素材**——对应 §13 动态画板路径中的约束：
 
 - 脚本 `playTimeline` 动作调 `AnimationTicker` 的公开线程安全入口；时间轴关键帧插值不感知脚本存在。
-- 脚本 `setVariable` / `incrementVariable` 写 `VariableStore`；`VariableStore.ChangeListener` 回调 `TriggerRouter.onVariableChange`（ABA 链深在此计量）；渲染期 `Compositor` 读 VariableStore cached 值替换占位符（P-1 路径，同 §13.1）。
+- 脚本 `setVariable` / `incrementVariable` 写 `VariableStore`；`VariableStore.ChangeListener` 回调 `TriggerRouter.onVariableChange`（ABA 链深在此计量）；渲染期 `Compositor` 读 `VariableStore` 缓存值完成渲染期占位符求值（同 §13.1）。
 - **补间（TweenScheduler）**改 base ProjectState 字段；时间轴 KeyframeInterpolator 在 base 上叠加关键帧偏移。两层叠加不冲突——补间是"改终态"，时间轴是"在终态基础上周期插值"。
 - **脚本不 mutate 时间轴的 `timeMs`（播放进度），只能通过 `playTimeline(play/pause/seek)` 命令式控制**。时间轴的进度只在 AnimationTicker 线程内推进，不允许脚本直接写。
 
 ### 17.6 反模式守则（对照 §13.3）
 
-§13.3 已禁止"P-2 定时 patch ProjectState"（后台 task 定时 `EditSession.updateElement`）。脚本系统 `setElementProperty` 走 `ElementPropertyApplier` 双路径（§17.4），**不经 `EditSession.updateElement`**（不进 history 栈 / 不触发 WS 编辑流量）——属于 P-1 渲染期内嵌路径的合规延伸，**不是 P-2 反模式**。
+§13.3 禁止后台任务定时调用 `EditSession.updateElement` 改写 `ProjectState`。脚本系统 `setElementProperty` 走 `ElementPropertyApplier` 双路径（§17.4），事件触发且受 Budget 三闸约束；无活跃会话时走 headless 直改而不制造撤销栈膨胀或空转 WS 流量。
 
 脚本的正确定位：**条件分支 + 副作用**的上层调度器，使用时间轴（作为可播放素材）和变量（作为状态载体），不绕过这两个子系统直接写渲染状态。
 
@@ -1302,7 +1247,7 @@ headless 路径的已知竞态（可接受）：若 session open/close 与 headl
 
 ## 18. `.canvas` 工程导入 / 导出
 
-`.canvas` 是 HikariCanvas 的工程档格式——一个普通 zip，内含 `manifest.json`（spec/kind/wall 尺寸等元信息）+ `project.json`（整棵 `ProjectState`，多层 + 时间轴）+ 可选 `scripts.json`（墙脚本规则数组）+ 可选 `thumbnail.png`（256×128 缩略图）+ `assets/<hash>.png`（工程引用到的图片字节）。完整档案布局与 manifest 字段见 `docs/import-export.md`；本节只讲两条数据流与信任边界。
+`.canvas` 是 HikariCanvas 的统一压缩包格式（zip），按 `manifest.kind` 区分普通工程（`"project"`）与参数化模板包（`"pack"`，另含 `params.json`，详见 `docs/template-pack.md`）。包内含 `manifest.json`（spec/kind/wall 尺寸等元信息）+ `project.json`（整棵 `ProjectState`，多层 + 时间轴）+ 可选 `params.json`（仅 `pack`）+ 可选 `scripts.json`（墙脚本规则数组）+ 可选 `thumbnail.png`（256×128 缩略图）+ `assets/<hash>.png`（工程引用到的图片字节）。完整档案布局见 `docs/import-export.md`；本节只讲两条数据流与信任边界。
 
 > **信任边界**：**导出在前端、导入在后端**。导出只是把已在内存的可信状态打成 zip 让浏览器下载，不经服务器；导入收的是用户上传的不可信 zip，所有防御（zip 炸弹 / 路径穿越 / magic 校验 / 元素与脚本重校验 / 配额）一律在 Java 侧做，前端不参与任何安全判定。
 
@@ -1342,9 +1287,10 @@ useProjectExport.exportProject()
 
 | 零件 | 职责 |
 | --- | --- |
-| `CanvasArchive` | zip 流式安全解包：三闸（包 / 单条目 / 解压总量上限，单位由 `ImportConfig` 的 MB 换算）+ 边读边计数（不信 `entry.getSize()`）+ 路径校验（拒 `..` / 绝对路径 / 反斜杠 / NUL）+ 顶层白名单（`manifest.json` / `project.json` / `scripts.json` / `thumbnail.png` / `assets/`） |
-| `CanvasManifest` | 解析 `manifest.json`，校验 `spec`（>0 且 ≤ `CANVAS_SPEC_MAX`，否则 `IMPORT_SPEC_UNSUPPORTED`）、`kind == project`、`wall` 尺寸合法；宽松忽略未知字段 |
-| `ProjectMaterializer` | 把不可信 `project.json` 反序列化成 `ProjectState`（`@JsonCreator` 处理 v1/v2/v3 迁移），与会话当前墙尺寸做**匹配**（工程不得大于墙，否则 `IMPORT_SIZE_MISMATCH`），并对每个元素跑 `ElementValidator`（不信任任何元素数值，校验失败归 `IMPORT_MALFORMED`） |
+| `CanvasArchive` | zip 流式安全解包：三闸（包 / 单条目 / 解压总量上限，单位由 `ImportConfig` 的 MB 换算）+ 边读边计数（不信 `entry.getSize()`）+ 路径校验（拒 `..` / 绝对路径 / 反斜杠 / NUL）+ 顶层白名单（`manifest.json` / `project.json` / `params.json` / `scripts.json` / `thumbnail.png` / `assets/`） |
+| `CanvasManifest` | 解析 `manifest.json`，校验 `spec`（>0 且 ≤ `CANVAS_SPEC_MAX`，否则 `IMPORT_SPEC_UNSUPPORTED`）、`kind`（`project` 或 `pack`）、`wall` 尺寸合法；宽松忽略未知字段 |
+| `PackParamResolver` | 针对 `kind == "pack"`（或含 `params.json` 的包）校验参数类型与范围，并在 `project.json` 文本层单遍替换 `${param}` 占位符 |
+| `ProjectMaterializer` | 把不可信 `project.json` 反序列化成 `ProjectState`（`@JsonCreator` 处理 v1/v2/v3 迁移），校验图层/元素/时间轴数量上限，与会话当前墙尺寸做**匹配**（工程不得大于墙，否则 `IMPORT_SIZE_MISMATCH`），并对每个元素跑 `ElementValidator`（不信任任何元素数值，校验失败归 `IMPORT_MALFORMED`） |
 | `AssetIngest` | `assets/*.png` 逐张安全摄入，走与图片上传**同等**的防御链：magic bytes 校验 → ImageIO 隔离解码（独立 daemon 线程 + 200ms 超时 + 解码前 8192 头部尺寸预检拦分配型炸弹）→ 规范化 PNG 后**按内容重算 hash**（不信文件名）→ per-hash 锁 + SERIALIZABLE 配额事务落库落盘。任一张失败**只跳过该张、不中止导入** |
 | `ScriptImporter` | 导入 `scripts.json`：每条规则**重绑到目标墙**（经 `ScriptStore.create` 生成新 `sr-<id>` + 强制 wallId）+ **全量重校验**（结构 `ScriptRuleValidator` + 条件语法 `ConditionEvaluator.checkSyntax`）+ 命令模板缺失检查（缺则 `script-command-blocked` 但不跳过，运行期判 Blocked）+ 落 `wall_scripts`；配额超限 `script-quota` 即停 |
 | `ProjectImporter` | **编排**：把上述零件串成完整导入链 + 孤儿轨丢弃 + 灌入会话 + 广播 / 投影 / 持久化 / 留痕（见下） |
@@ -1379,7 +1325,7 @@ ProjectImporter.importInto(session, canvasBytes, uploader)
      SPEC_UNSUPPORTED/SIZE_MISMATCH→409、BAD_ENTRY/MALFORMED→400）
 ```
 
-`EditSession.replaceProject` 是导入专用的**保留多层**整体替换——区别于模板套用走的 `replaceContent`（把内容拍平成单层）；它采用 imported 的 canvas + 整棵 layers 树 + timelines + tweenFps，深拷贝 layers（替换后会话 state 与传入对象不再共享可变集合），bump version 并把替换前状态压 undo 栈，返回结构跳变 `OkSnapshot`。
+`EditSession.replaceProject` 是工程导入与模板包套用共用的**保留多层**整体替换：它采用导入工程的 `canvas` + 整棵 `layers` 树 + `timelines` + `tweenFps`，深拷贝 `layers`（替换后会话 state 与传入对象不再共享可变集合），递增 `version` 并把替换前状态压入 undo 栈，返回结构跳变 `OkSnapshot`。
 
 ### 18.3 装配（依赖注入）
 
@@ -1390,5 +1336,5 @@ ProjectImporter.importInto(session, canvasBytes, uploader)
 ### 18.4 已知限制
 
 - **导入未走 `SessionManager.persistWall` 全链**：导入路径只投静态像素帧（`ProjectionThrottler.submit`），`persistWall` 里的 `AnimationTicker` 自动播刷新与触发器 rebuild **不**在导入时触发。故导入工程里的时间轴动画不会自动起播——需手动播一次，或随墙下次加载 / 会话回收时自然起播。
-- **`thumbnail.png` 仅导出生成、导入侧不读取**（缩略图是给文件管理 / 未来工程库用的，导入不依赖它）。
-- **`assets/icons/*.svg` 仅白名单接纳、不摄入**——`AssetIngest` 只摄 `assets/<file>.png`，SVG 条目虽过解包白名单但被忽略。SVG 导入是 **Part B**（尚未实装），本节只覆盖 `.canvas` 工程档的 Part A 实装。
+- **`thumbnail.png` 仅导出生成、导入侧不读取**（缩略图是给文件管理用的，导入不依赖它）。
+- **`assets/icons/*.svg` 仅白名单接纳、不摄入**——`AssetIngest` 只摄 `assets/<file>.png`，`.canvas` 包内的用户自定义 `IconElement` SVG 资产条目暂不摄入落盘。注意：**独立的 SVG 矢量导入已在前端实装**（`web/src/lib/svg/`，将 SVG 形状解析归一化为原生 `PathElement` 经 `element.add` 写入，详见 `docs/import-export.md` 与 `docs/rendering.md §11`）。

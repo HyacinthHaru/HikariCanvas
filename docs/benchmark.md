@@ -1,10 +1,10 @@
 # HikariCanvas 性能 Benchmark 运维指南
 
-> HikariCanvas 0.5.0 性能测试指南。帮你回答"我这台机器能撑多少画布"。
+> HikariCanvas 性能测试指南。帮你用本机实测数据回答"我这台机器能撑多少画布"。
 >
 > 配套文档：
-> - `docs/dynamic-data.md §13.3`（设计与实现细节）
-> - `PROPOSAL.md §5.2.7`（设计原则）
+> - `docs/architecture.md §1.2`（设计原则）
+> - `docs/deployment.md`（配置与调优）
 
 ## 目录
 
@@ -21,7 +21,7 @@
 - [4 性能预算公式与交互计算器](#4-性能预算公式与交互计算器)
 - [5 用实测容量设 config 软上限](#5-用实测容量设-config-软上限)
 - [6 已知局限](#6-已知局限)
-- [7 0.7.x 脚本 / 补间压测](#7-07x-脚本--补间压测run-tween--run-script)
+- [7 脚本与补间压测](#7-脚本与补间压测)
 
 ---
 
@@ -56,9 +56,11 @@ HikariCanvas 把画布渲染成地图像素，这个过程要花 CPU 和内存�
 | 子命令 | 作用 |
 |---|---|
 | `/canvas bench list` | 列出全部 21 个场景（id / category / tile 尺寸 / 主元素类型） |
-| `/canvas bench run [selector] [iters] [warmup]` | 跑测试，落 `benchmarks/<时间戳>/` 三件产物，结束发摘要 |
+| `/canvas bench run [selector] [iters] [warmup]` | 跑渲染测试，落 `benchmarks/<时间戳>/` 三件产物，结束发摘要 |
 | `/canvas bench report [id]` | 读最近（或指定时间戳）的 `report.json` 重新打印摘要 |
 | `/canvas bench clear` | 清空 `benchmarks/` 目录内容 |
+| `/canvas bench run-tween [iters] [warmup]` | 跑补间动画插值压测，聊天栏直接输出耗时表（见 §7.1） |
+| `/canvas bench run-script [iters] [warmup]` | 跑积木脚本动作链压测，聊天栏直接输出耗时表（见 §7.2） |
 
 注意：
 
@@ -176,14 +178,14 @@ HikariCanvas 把画布渲染成地图像素，这个过程要花 CPU 和内存�
 ```
 
 `report.html` 里这是一个**交互计算器**：填四个输入框（每 tick 预算 / 目标 tps / 份额% / 目标帧率），
-内联 JS 实时算出每个场景的"能放的墙数"。默认值取自 §13.3 示例：
+内联 JS 实时算出每个场景的"能放的墙数"。默认参数如下：
 
 | 输入 | 默认 | 含义 |
 |---|---|---|
 | 每 tick 预算 | 50 | 每 tick 留给画布的毫秒数 |
 | 目标 tps | 20 | 服务器目标 tick rate |
 | 份额 % | 30 | 分给本插件的处理时间份额（其余给世界和别的插件） |
-| 目标帧率 | 5 | 画布刷新率（v1 静态招牌默认值） |
+| 目标帧率 | 5 | 画布刷新率（普通招牌默认值） |
 
 > 例：50 × 20 × 30% = 300 ms/s 可用预算。某场景渲染耗时(偏慢值) = 0.5 ms、fps = 5 → 单面墙成本
 > 2.5 ms/s → 可开约 120 面。
@@ -212,34 +214,31 @@ Benchmark 的实战用途：把**你自己机器的实测数据**变成 config �
 
 ## 6 已知局限
 
-当前版本有几处地方测得不够精确，列在这里供参考：
+有几处地方测得不够精确，列在这里供参考：
 
 - **图标元素**：矢量图标目前走占位渲染，真实成本会被低估。
 - **图片**：图片场景用的是一张固定的测试图，和你真实上传的图片在尺寸、解码上有差异，成本只是大致估算。
 - **整体成本偏保守**：公式把整个渲染都算进服务器的处理成本，而实际有一部分在后台跑（详见 §4 末尾）。
 
-设计与实现细节见 `docs/dynamic-data.md §13.3`。
+性能边界与设计原则见 `docs/architecture.md §1.2`。
 
 ---
 
-## 7 0.7.x 脚本 / 补间压测（run-tween / run-script）
+## 7 脚本与补间压测
 
-0.7.x 引入脚本引擎（0.7.0）和补间动画（scripting-tween.md），这两条路径有独立的 CPU 开销，
-无法用原有 21 个渲染场景衡量。新增两条**最小可用**测量：
+除了把画布画成像素，积木脚本和补间动画在服务端也有各自的计算与调度开销。下面两条命令专门用来测量
+脚本与补间引擎本身的 CPU 耗时——同样在后台独立运行，不需要真实玩家，也不影响在线的人。
 
 ### 7.1 补间帧率压测（`/canvas bench run-tween`）
 
-**测什么**：N 面墙同时有活跃补间任务时，`TweenScheduler.tick` 每轮的总耗时——
-主要成本来自 `buildInterpolatedFrame`（每面墙一次 `deepCopyState` + 插值 + `EditSession`
-属性写回）。
-
-**N 的梯度**：1 / 4 / 16 / 64（硬编码在驱动里；可改代码扩展）。
+**测什么**：1 / 4 / 16 / 64 面墙同时在播补间动画时，每推进一帧（拷贝画布状态 + 计算属性插值）总共花多少毫秒。
+测试场景固定每面墙 20 个矩形元素、4 个并发过渡属性。
 
 **怎么跑**：
 
 ```
-/canvas bench run-tween              # 默认 10 预热 + 100 测量
-/canvas bench run-tween 200 20       # 200 测量 + 20 预热
+/canvas bench run-tween              # 默认 100 测量轮 + 10 预热轮
+/canvas bench run-tween 200 20       # 200 测量轮 + 20 预热轮
 ```
 
 **输出格式**：
@@ -254,22 +253,18 @@ Benchmark 的实战用途：把**你自己机器的实测数据**变成 config �
 64       0.1040    0.1290    0.1510    0.1073    0.1540
 ```
 
-**装配方式**：headless 全 fake——fake TickerControl（渲染调用丢弃）/ fake WallLoader（返回
-内存 ProjectState）/ fake ApplyManyFn（末帧落盘丢弃）/ 静止 fake clock（恒中间帧，
-不触发末帧路径）。每面 wall 持 20 个 RectElement、4 个补间 target。
+测试完全在内存中隔离运行，只算状态拷贝与插值的纯 CPU 开销，不写数据库、不触发像素重绘或发包。
 
 ### 7.2 脚本动作链压测（`/canvas bench run-script`）
 
-**测什么**：一条规则含 N 个 `setVariable` 动作时，ScriptRunner 执行一轮的耗时——
-包含帧栈建立、N 次 ActionSink.execute 调用、trace 收集、finish 回调。
-
-**N 的梯度**：1 / 10 / 25 / 50（硬编码在驱动里；50 ≈ 默认 `max-actions-per-run`）。
+**测什么**：单条积木规则顺序执行 1 / 10 / 25 / 50 个变量赋值动作时（50 对应默认的单次执行动作上限
+`max-actions-per-run`），脚本引擎跑完一轮要花多少毫秒，包含执行栈建立、动作分发与轨迹记录。
 
 **怎么跑**：
 
 ```
-/canvas bench run-script             # 默认 10 预热 + 100 测量
-/canvas bench run-script 200 20      # 200 测量 + 20 预热
+/canvas bench run-script             # 默认 100 测量轮 + 10 预热轮
+/canvas bench run-script 200 20      # 200 测量轮 + 20 预热轮
 ```
 
 **输出格式**：
@@ -284,16 +279,14 @@ Benchmark 的实战用途：把**你自己机器的实测数据**变成 config �
 50         0.0112    0.0145    0.0190    0.0115    0.0193
 ```
 
-**装配方式**：headless 全 fake——fake ActionSink（O(1) 无副作用）/ AlwaysTrueConditionEvaluator
-（不碰 VariableStore）/ TrampolineScheduler（同步直跑，无 SES 线程开销）。
-budget 动态设为 actionCount+1 保证不被熔断。
+测试在内存中同步运行，测量脚本调度器本身的开销，不触发真实的数据库写入或游戏世界操作。
 
 ### 7.3 已知局限
 
 | 局限 | 说明 |
 |---|---|
-| fake sink 无副作用 | `run-script` 不测实际 DB 写、变量插值、Bukkit 主线程 hop |
-| 不测 PlayerNear 采样 | `PlayerNearSampler` 依赖 Bukkit 主线程 + 在线玩家，headless 测不了；只能在真实服务器观察 |
-| 补间 clock 静止 | `run-tween` 中 clock 固定 0ms，tick 恒走中间帧路径（不触发末帧落盘 + applyFn）；末帧开销需在真实服务器观察 |
-| 不测网络 | 补间产生的帧不经 rasterize / PacketEvents；实际成本另加 0.5.0 `run` 得出的渲染成本 |
-| 无 HTML 报告 | 这两条压测的输出是聊天栏文字摘要，不写磁盘 / 不生成 HTML（简化设计） |
+| 不含外部副作用 | `run-script` 只测脚本调度开销，不含真实数据库写入、变量插值或主线程切换 |
+| 不含「玩家靠近」扫描 | 靠近触发器的距离采样依赖在线玩家与游戏世界，只能在真实服务器观察 |
+| 不含动画末帧落盘 | `run-tween` 固定测量中间帧插值耗时，不含补间结束时的状态保存开销 |
+| 不含像素渲染与发包 | 补间推进后的画面重绘成本，请叠加 `/canvas bench run` 测出的对应场景渲染耗时 |
+| 仅输出文字摘要 | 这两条命令直接在聊天栏 / 控制台打印结果，不写磁盘文件、不生成 `report.html` |
