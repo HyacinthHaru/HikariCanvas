@@ -38,7 +38,6 @@ import ac.haru.hikaricanvas.image.ImageStorage;
 import ac.haru.hikaricanvas.image.UploadHandler;
 import ac.haru.hikaricanvas.template.TemplatePublisher;
 import ac.haru.hikaricanvas.template.TemplateRegistry;
-import ac.haru.hikaricanvas.template.asset.TemplateAssetService;
 import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
 import ac.haru.hikaricanvas.template.preview.WallPreviewService;
 import ac.haru.hikaricanvas.variable.VariableStore;
@@ -106,7 +105,6 @@ public final class HikariCanvas extends JavaPlugin {
     private PaletteLut paletteLut;
     private TemplateRegistry templateRegistry;
     private TemplatePreviewService templatePreviewService;
-    private TemplateAssetService templateAssetService;
     private WallPreviewService wallPreviewService;
     private ImageStorage imageStorage;
     private UploadHandler uploadHandler;
@@ -238,7 +236,7 @@ public final class HikariCanvas extends JavaPlugin {
                 getDataFolder().toPath(), "data.db", config.backupRetentionDays,
                 System.currentTimeMillis());
         // AuditLog 接 logger，让 DB 失败时能 fallback 到 server log。
-        auditLog = new AuditLog(database.jdbi(), getLogger());
+        auditLog = new AuditLog(database.jdbi(), getLogger(), config.auditRetentionDays);
 
         // 一次性 token 服务（contract: docs/security.md §2）。
         tokenService = new TokenService(
@@ -317,10 +315,6 @@ public final class HikariCanvas extends JavaPlugin {
                     + "did ./gradlew generatePalette run?", e);
         }
 
-        // 模板图标资源服务（classpath /template-assets/icons + dataFolder/assets/icons）
-        templateAssetService = new TemplateAssetService(getLogger(),
-                getDataFolder().toPath());
-
         // 图片上传 + 存储 + 配额。先于 compositor 装配，让 WallRestorer 重启
         // restore 时 ImageElement 也能正确加载（否则一次启动期会画占位）。
         ImageUploadDao imageDao = new ImageUploadDao(getLogger(), database.jdbi());
@@ -330,7 +324,7 @@ public final class HikariCanvas extends JavaPlugin {
         // 编辑 op 成功后把受影响 mapIds 重绘。
         // Compositor = RGBA 大图 rasterize + palette 量化切片
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry,
-                templateAssetService, iconRegistry, getLogger());
+                iconRegistry, getLogger());
         compositor.setImageLoader(imageStorage::load);
         // 自适应渲染：构造期传 mapPacketSender + wallRepo，让 projector 渲染完
         // 主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket（不再依赖 Paper 默认 MapView
@@ -575,7 +569,7 @@ public final class HikariCanvas extends JavaPlugin {
         // 还需要 imageDao + jdbi 做事务化 quota+insert+evict
         uploadHandler = new UploadHandler(getLogger(), imageStorage, imageQuota,
                 imageDao, database.jdbi(),
-                config.images, tokenService, sessionManager, wallRepo, auditLog);
+                config.images, sessionManager, wallRepo, auditLog);
 
         // .canvas 工程导入的 assets 图片摄入栈（与上传同款 magic+隔离解码+配额+落 hash）。
         // 复用上面已装配的 imageStorage / imageQuota / imageDao / wallRepo / jdbi，注入 WebServer
@@ -602,7 +596,7 @@ public final class HikariCanvas extends JavaPlugin {
                 tokenService, sessionManager,
                 projectionThrottler, rateLimiter,
                 wallRepo, frameDeployer, templateRegistry, templatePreviewService,
-                templateAssetService, wallPreviewService, uploadHandler,
+                config.previewCacheSeconds, wallPreviewService, uploadHandler,
                 templatePublisher, templateRepo, auditLog, fontRegistry, iconRegistry,
                 variableStore, scheduleDao, manualScheduleProviderRef,
                 railDao, railScheduleProviderRef,
@@ -841,12 +835,12 @@ public final class HikariCanvas extends JavaPlugin {
         // 在 onEnable 内注册，位置无关；仅依赖被注入对象就位，故下移到此。
         DiagnosticsSubCommand diagnosticsSubCommand = new DiagnosticsSubCommand(
                 mapPool, sessionManager, wallRepo, variableStore,
-                this.animationTicker, this.tweenScheduler, frameDeployer,
-                tokenService, database, this, messages);
+                this.animationTicker, this.tweenScheduler,
+                tokenService, database, messages);
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event ->
                 event.registrar().register(
                         new CanvasCommand(this, sessionManager, frameDeployer,
-                                tokenService, mapPool, database, wallRepo,
+                                tokenService, wallRepo,
                                 templateRegistry, templatePreviewService, editorUrlTemplateRef,
                                 variableSubCommandRef, benchmarkSubCommand,
                                 diagnosticsSubCommand, messages).build()));

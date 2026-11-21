@@ -22,6 +22,5 @@ public record TemplateCanvas(
 ) {
     @JsonCreator
     public TemplateCanvas {
-        // record 反序列化入口；默认值在 Loader 阶段补
     }
 }

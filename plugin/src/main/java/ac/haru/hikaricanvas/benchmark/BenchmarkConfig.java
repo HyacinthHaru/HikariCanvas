@@ -3,21 +3,17 @@ package ac.haru.hikaricanvas.benchmark;
 import java.util.List;
 
 /**
- * Benchmark 压测配置：预热 / 测量轮数 + 矩阵轴（fps × viewer 数）+ 场景选择。
+ * Benchmark 压测配置：预热轮数、测量轮数、报告预算参数（帧率档 / 观看人数档）与场景选择器。
  *
- * <p>{@code warmupIterations} / {@code measuredIterations} / {@code sceneSelector}
- * 用于 {@code SceneTimer} 单场景计时。{@code fpsValues} / {@code viewerCounts} 为
- * 矩阵 runner 预留。</p>
+ * <p>{@code warmupIterations}、{@code measuredIterations} 与 {@code sceneSelector} 控制渲染计时；
+ * {@code fpsValues} 与 {@code viewerCounts} 随报告记录供摘要与预算计算器参考，不重复触发渲染测量
+ * （详见 {@code docs/benchmark.md §2.2}）。</p>
  *
- * <p>viewer 数按决策 ②（{@code docs/dynamic-data.md §13.3}）是「单次 encode 的线性外推
- * 乘数」，benchmark 不实跑 PacketEvents；fps 仅参与 SERIALIZE 换算公式，不改变
- * rasterize 本身。</p>
- *
- * @param warmupIterations   每场景测量前预热轮数（触发 C2 JIT 编译；&lt;0 归零）
+ * @param warmupIterations   每场景测量前预热轮数（触发 JIT 编译；&lt;0 归零）
  * @param measuredIterations 每场景测量轮数（&lt;1 归 1）
- * @param fpsValues          模拟帧率档（SERIALIZE 成本 = tile × fps）；空 → {@code [5]}
- * @param viewerCounts       模拟 viewer 数（encode 线性外推乘数）；空 → {@code [1]}
- * @param sceneSelector      场景选择：具体 sceneId / category 名 / {@code "all"}；空 → {@code "all"}
+ * @param fpsValues          报告记录的帧率档；null/空 → {@code [5]}
+ * @param viewerCounts       报告记录的观看人数档；null/空 → {@code [1]}
+ * @param sceneSelector      场景选择器：sceneId / category 名 / {@code "all"}；空白 → {@code "all"}
  */
 public record BenchmarkConfig(
         int warmupIterations,
@@ -36,12 +32,12 @@ public record BenchmarkConfig(
         viewerCounts = List.copyOf(viewerCounts);
     }
 
-    /** 快速冒烟：少量迭代、单 fps/viewer——给 {@code /canvas bench run} 默认 + CI 功能性 gate。 */
+    /** 默认快速压测配置（{@code /canvas bench run} 无参默认）。 */
     public static BenchmarkConfig quick() {
         return new BenchmarkConfig(5, 20, List.of(5), List.of(1), "all");
     }
 
-    /** 完整压测：充分 warmup + 高迭代 + 多 fps/viewer 档。 */
+    /** 完整压测配置：高预热 + 高测量轮数 + 多档帧率与观看人数参考值。 */
     public static BenchmarkConfig full() {
         return new BenchmarkConfig(20, 200, List.of(1, 5, 10, 20, 30),
                 List.of(1, 5, 20, 50), "all");

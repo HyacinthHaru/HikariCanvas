@@ -19,11 +19,6 @@ dependencies:
 
 # 权限节点（完整节点表见 docs/security.md §5）
 # 默认权限策略：编辑 / 提交类权限给所有玩家，管理类保留 op
-#
-# 这里列出的每个节点都必须在代码里真的被查过。定义了却没人查的节点比没有更糟：
-# 服主收掉它以为封停了功能，实际全功能照用，还查不出原因。
-# （canvas.commit 随 /canvas commit 命令一起废止；canvas.admin.bypass-limit 从未接线，
-#  想放宽画布尺寸请直接改 config 的 limits.canvas-max-maps。两者已移除。）
 permissions:
   canvas.use:
     description: Use any HikariCanvas command (master switch on the /canvas root node)
@@ -35,7 +30,7 @@ permissions:
     description: Receive a Canvas Wand
     default: true
   canvas.admin:
-    description: Administrative commands (stats / diagnose / cleanup / reload) and the server-wide wall list
+    description: Administrative commands (stats / diagnose / reload) and the server-wide wall list
     default: op
   canvas.admin.force-break:
     description: Break HikariCanvas-managed item frames / supporting blocks
@@ -59,7 +54,7 @@ permissions:
     description: Set alias on any wall (moderation)
     default: op
   canvas.admin.bypass-lock:
-    description: Open / edit locked walls created by others (动态展示插件 / admin)
+    description: Open locked walls created by other players
     default: op
   canvas.template.save:
     description: Publish the current wall as a workshop template
@@ -80,77 +75,77 @@ permissions:
     description: Apply user-templates owned by other players (workshop cross-user)
     default: op
   canvas.var.read:
-    description: 查看变量列表与值
+    description: View variable list and values
     default: true
   canvas.var.write.own:
-    description: 在自己的 wall 上创建 / 修改用户变量
+    description: Create or modify user variables on your own walls
     default: true
   canvas.var.write.any:
-    description: 在任意 wall 上修改用户变量（管理员）
+    description: Modify user variables on any wall (moderation)
     default: op
   canvas.var.delete.own:
-    description: 删除自己 wall 上的用户变量
+    description: Delete user variables on your own walls
     default: true
   canvas.var.delete.any:
-    description: 删除任意 wall 上的用户变量（管理员）
+    description: Delete user variables on any wall (moderation)
     default: op
   canvas.var.bind:
-    description: 把用户变量绑定到插件 namespace（敏感）
+    description: Bind user variables to external plugin namespaces
     default: op
   canvas.var.command:
-    description: 使用 /canvas var 命令族
+    description: Use the /canvas var command family
     default: op
   canvas.var.global.create:
-    description: 创建全局用户变量（userglobal/*，跨 wall 共享）
+    description: Create global user variables (userglobal/*)
     default: true
   canvas.var.global.write.own:
-    description: 修改自己创建的全局用户变量值 / type / defaultValue
+    description: Modify global user variables you created
     default: true
   canvas.var.global.write.any:
-    description: 修改任意全局用户变量（管理员 override）
+    description: Modify any global user variable (moderation)
     default: op
   canvas.var.global.delete.own:
-    description: 删除自己创建的全局用户变量
+    description: Delete global user variables you created
     default: true
   canvas.var.global.delete.any:
-    description: 删除任意全局用户变量（管理员 override）
+    description: Delete any global user variable (moderation)
     default: op
   canvas.schedule.own:
-    description: 管理自己 wall 的列车 / 公交时刻表
+    description: Manage transit schedules on your own walls
     default: true
   canvas.schedule.any:
-    description: 管理任意 wall 的时刻表（管理员）
+    description: Manage transit schedules on any wall (moderation)
     default: op
   canvas.rail.line.create:
-    description: 创建铁路线路
+    description: Create railway lines
     default: true
   canvas.rail.line.edit.own:
-    description: 编辑自己创建的铁路线路 / 站点 / 车次 / 时刻表
+    description: Edit railway lines, stations, runs, and timetables you created
     default: true
   canvas.rail.line.edit.any:
-    description: 编辑任意铁路线路（管理员）
+    description: Edit any railway line (moderation)
     default: op
   canvas.rail.line.delete.own:
-    description: 删除自己创建的铁路线路
+    description: Delete railway lines you created
     default: true
   canvas.rail.line.delete.any:
-    description: 删除任意铁路线路（管理员）
+    description: Delete any railway line (moderation)
     default: op
   canvas.rail.wall.bind:
-    description: 把 wall 绑定到铁路网络（wall owner 走 schedule.own）
+    description: Bind walls to railway stations
     default: true
   canvas.script.edit:
-    description: 给自己能打开的墙编排积木脚本
+    description: Author visual block scripts on walls you can open
     default: true
   canvas.script.trigger.global:
-    description: 使用全服事件触发器（玩家进服/被击杀）
+    description: Use server-wide script triggers (player join / kill)
     default: true
   canvas.script.sound:
-    description: 在脚本里使用"播放声音"积木
+    description: Use play-sound blocks in wall scripts
     default: true
   canvas.script.broadcast:
-    description: 在脚本里让"发消息/弹标题"积木发给全服（只发触发玩家不需要这个）
+    description: Broadcast script messages or titles server-wide
     default: true
   canvas.script.command:
-    description: 在脚本里使用"执行命令模板"积木（危险面）
+    description: Use whitelisted command-template blocks in wall scripts
     default: op

@@ -15,22 +15,21 @@ import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 /**
- * 批次 B / Task B1：IconRenderer tint 分支 + ImageRenderer.drawWithFeather —— 关键帧 w/h
+ * 批次 B / Task B1：IconRenderer + ImageRenderer.drawWithFeather —— 关键帧 w/h
  * 超 MAX_DIM 时不分配巨型 off-screen buffer，不 OOM，直接 return。
  *
- * <p>前提：渲染线程由 AnimationTicker 驱动；关键帧 w/h 只受 finite 校验（parseValue 修前），
- * 可到 50000+ 。两处 {@code new BufferedImage(w, h, ...)} 直接分配 50000×50000 × 4B = 10 GB
- * native raster → OOM。修后在 {@code w/h > MAX_DIM} 时 return，不进入 new BufferedImage。</p>
+ * <p>前提：渲染线程由 AnimationTicker 驱动；关键帧 w/h 若超 MAX_DIM，渲染器在入口处直接 return，
+ * 不进入后续分配或绘制。</p>
  */
 class OomGuardRenderersTest {
 
     private static final Logger LOG = Logger.getLogger(OomGuardRenderersTest.class.getName());
     private static final int OVER = ElementValidator.MAX_DIM + 1;  // 10001
 
-    // ---------- 最小可用 RenderContext（无 assetService / imageLoader / iconRegistry）----------
+    // ---------- 最小可用 RenderContext（无 imageLoader / iconRegistry）----------
 
     private static RenderContext minimalCtx() {
-        return new RenderContext(null, null, null, null, LOG, () -> null);
+        return new RenderContext(null, null, null, LOG, () -> null);
     }
 
     // ---------- 最小画布：只要不 NPE 就足够（不关心像素输出）----------
@@ -42,18 +41,12 @@ class OomGuardRenderersTest {
         return g;
     }
 
-    // ---------- IconRenderer — tint 分支 OOM 防御 ----------
+    // ---------- IconRenderer 尺寸守卫 ----------
 
-    /**
-     * w 超 MAX_DIM 时 renderLegacyPng 在 new BufferedImage 前 return。
-     * assetService == null → 走 warning + return，不到 tint 分支；但 w > MAX_DIM 守卫在
-     * w<=0 守卫之后、assetService null 检查之前，所以直接 return，不打 warning 也不 OOM。
-     */
     @Test
-    void iconRendererLegacyTint_oversizedW_doesNotOom() {
-        // legacy source（无 /）→ renderLegacyPng 路径
+    void iconRenderer_oversizedW_doesNotOom() {
         IconElement ic = new IconElement("ic1", 0, 0, OVER, 100, 0, false, true,
-                "heart", "#FF0000", 1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null);
+                "fa-solid/star", null, 1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null);
         IconRenderer renderer = new IconRenderer();
         Graphics2D g = canvas();
         try {
@@ -65,9 +58,9 @@ class OomGuardRenderersTest {
     }
 
     @Test
-    void iconRendererLegacyTint_oversizedH_doesNotOom() {
+    void iconRenderer_oversizedH_doesNotOom() {
         IconElement ic = new IconElement("ic2", 0, 0, 100, OVER, 0, false, true,
-                "heart", "#FF0000", 1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null);
+                "fa-solid/star", null, 1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null);
         IconRenderer renderer = new IconRenderer();
         Graphics2D g = canvas();
         try {
@@ -78,16 +71,15 @@ class OomGuardRenderersTest {
         }
     }
 
-    /** 正常尺寸（MAX_DIM）时守卫放行（不 return，走到 assetService null 路径——无 OOM）。 */
+    /** 正常尺寸（MAX_DIM）时守卫放行（iconRegistry == null → 走占位，无 OOM）。 */
     @Test
-    void iconRendererLegacyTint_exactlyMaxDim_allowed() {
+    void iconRenderer_exactlyMaxDim_allowed() {
         IconElement ic = new IconElement("ic3", 0, 0, ElementValidator.MAX_DIM,
                 ElementValidator.MAX_DIM, 0, false, true,
-                "heart", "#FF0000", 1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null);
+                "fa-solid/star", null, 1.0f, BlendMode.NORMAL, RenderMode.CLEAN, null);
         IconRenderer renderer = new IconRenderer();
         Graphics2D g = canvas();
         try {
-            // assetService null → warning + return（占位）；关键是不 throw、不分配 10000×10000 buffer
             assertDoesNotThrow(() -> renderer.draw(g, ic, minimalCtx()),
                     "exactly MAX_DIM should be allowed (no OOM guard trigger)");
         } finally {
@@ -109,7 +101,7 @@ class OomGuardRenderersTest {
         // 创建一个 1×1 的假图让 imageLoader 不返 null
         BufferedImage fakeImg = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
         CanvasCompositor.ImageLoader fakeLoader = hash -> fakeImg;
-        RenderContext ctx = new RenderContext(null, null, null, null, LOG,
+        RenderContext ctx = new RenderContext(null, null, null, LOG,
                 () -> fakeLoader);
 
         // feather mask：hasFeather() = true，强制进 drawWithFeather 分支
@@ -131,7 +123,7 @@ class OomGuardRenderersTest {
     void imageRendererDrawWithFeather_oversizedH_doesNotOom() {
         BufferedImage fakeImg = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
         CanvasCompositor.ImageLoader fakeLoader = hash -> fakeImg;
-        RenderContext ctx = new RenderContext(null, null, null, null, LOG,
+        RenderContext ctx = new RenderContext(null, null, null, LOG,
                 () -> fakeLoader);
 
         ac.haru.hikaricanvas.state.Mask featherMask =

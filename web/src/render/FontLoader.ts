@@ -8,8 +8,7 @@
  *
  * <p>ensureLoaded(fontId) 幂等 async：首次 fetch → new FontFace → document.fonts.add；
  * 已加载或正在加载直接返现有 Promise（去重）。加载完触发 onFontLoaded(fontId)，
- * CanvasView 接收回调走 requestDraw（与 onIconReady / onPaletteReady / onMetricsReady
- * 同款 pattern）。失败静默——浏览器走 system fallback。</p>
+ * CanvasView 接收回调走 requestDraw。失败静默——浏览器走 system fallback。</p>
  *
  * <p>注意：FontFace API 加载流程</p>
  * <ol>

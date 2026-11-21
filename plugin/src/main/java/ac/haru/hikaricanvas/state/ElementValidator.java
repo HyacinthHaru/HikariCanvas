@@ -102,16 +102,12 @@ public final class ElementValidator {
 
     /**
      * 非 finite（NaN / ±Inf）→ {@code fallback}；否则返回原值。
-     * 用于渲染层兜底所有浮点字段（rotation / opacity / stop.offset / dx / dy / blur 等）；
-     * 对已存在的残破数据（极端模板 / 旧 .canvas 文件）容忍替换、不抛，避免单元素污染整 wall。
+     * 用于渲染层兜底浮点字段（opacity 等）；对已存在的残破数据（旧 .canvas 文件等）容忍替换、
+     * 不抛，避免单元素污染整 wall。
      *
      * <p>protocol 入口（{@link FillValidator} / {@link #parseOpacityNullable} 等）已经
-     * reject 非 finite 值；本 helper 是渲染期的兜底，覆盖模板 raw_state 反序列化等绕过路径。</p>
+     * reject 非 finite 值；本 helper 是渲染期的兜底。</p>
      */
-    public static double finiteOr(double v, double fallback) {
-        return Double.isFinite(v) ? v : fallback;
-    }
-
     public static float finiteOr(float v, float fallback) {
         return Float.isFinite(v) ? v : fallback;
     }
@@ -488,15 +484,6 @@ public final class ElementValidator {
         return s;
     }
 
-    public static String nullableString(Map<String, Object> m, String k) {
-        Object v = m.get(k);
-        if (v == null) return null;
-        if (!(v instanceof String s)) {
-            throw new ValidationException("INVALID_PAYLOAD", k + " must be string or null");
-        }
-        return s;
-    }
-
     public static int intFieldOrDefault(Map<String, Object> m, String k, int def) {
         Object v = m.get(k);
         if (v == null) return def;
@@ -573,7 +560,7 @@ public final class ElementValidator {
         return b;
     }
 
-    // ---------- 模板 raw_state 反序列化得到的 element 二次校验 ----------
+    // ---------- .canvas / pack 导入反序列化得到的 element 二次校验 ----------
 
     /**
      * 已反序列化的 {@link Effects} 记录级校验。
@@ -615,8 +602,7 @@ public final class ElementValidator {
     }
 
     /**
-     * 模板 raw_state 反序列化得到的 element 通过本方法二次校验。
-     * {@code EditSession.validateElementForTemplateApply} 保留 wrapper 维持外部 API。
+     * {@code .canvas} 工程 / 模板 pack 反序列化得到的 element 通过本方法二次校验。
      *
      * <p><b>本方法是 .canvas 导入与模板套用的唯一元素校验点</b>（{@code ProjectMaterializer}
      * 自述「不信任任何元素数值」）。任何在此缺席的分支 = 该字段在导入路径完全无约束，
@@ -661,13 +647,11 @@ public final class ElementValidator {
             }
             if (b.fill() != null) FillValidator.validate(b.fill());
         } else if (el instanceof ShapeElement sh) {
-            // 模板 raw_state 的 ShapeElement 走与 WS buildShape/applyShapePatch 同款校验。
             validateShapeKind(sh.kind());
             validateSides(sh.sides());
             if (sh.innerRatio() != null) validateInnerRatio(sh.innerRatio());
             if (sh.fill() != null) FillValidator.validate(sh.fill());
         } else if (el instanceof RectElement r) {
-            // raw_state Rect fill 含 NaN 渐变在反序列化期 fail-fast，而非渲染期。
             if (r.fill() != null) FillValidator.validate(r.fill());
         } else if (el instanceof CircleElement c) {
             if (c.fill() != null) FillValidator.validate(c.fill());
@@ -684,7 +668,6 @@ public final class ElementValidator {
                 validateMaskPathBounds(im.mask().d());
             }
         } else if (el instanceof IconElement ic) {
-            // 扩展 source schema 接受 fa-solid/heart / user/foo / material/star.fill / legacy "heart"
             if (!IconElement.isValidSource(ic.source())) {
                 throw new ValidationException("INVALID_PAYLOAD",
                         "icon source must match " + IconElement.SOURCE_RE.pattern()

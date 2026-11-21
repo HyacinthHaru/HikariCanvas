@@ -5,7 +5,6 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import ac.haru.hikaricanvas.deploy.FrameDeployer;
 import ac.haru.hikaricanvas.i18n.Messages;
 import ac.haru.hikaricanvas.pool.MapPool;
 import ac.haru.hikaricanvas.render.AnimationTicker;
@@ -18,7 +17,6 @@ import ac.haru.hikaricanvas.variable.VariableStore;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
-import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Locale;
 import java.util.Map;
@@ -61,12 +59,8 @@ public final class DiagnosticsSubCommand {
     private final VariableStore variableStore;
     private final AnimationTicker animationTicker;
     private final TweenScheduler tweenScheduler;
-    @SuppressWarnings("unused") // 留作 0.9.2 后续 diagnose 扩展（ItemFrame 在位检测）用
-    private final FrameDeployer frameDeployer;
     private final TokenService tokenService;
     private final Database database;
-    @SuppressWarnings("unused") // 留作后续 diagnose 扩展用
-    private final JavaPlugin plugin;
     private final Messages messages;
 
     public DiagnosticsSubCommand(MapPool mapPool,
@@ -75,10 +69,8 @@ public final class DiagnosticsSubCommand {
                                  VariableStore variableStore,
                                  AnimationTicker animationTicker,
                                  TweenScheduler tweenScheduler,
-                                 FrameDeployer frameDeployer,
                                  TokenService tokenService,
                                  Database database,
-                                 JavaPlugin plugin,
                                  Messages messages) {
         this.mapPool = Objects.requireNonNull(mapPool, "mapPool");
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager");
@@ -86,18 +78,13 @@ public final class DiagnosticsSubCommand {
         this.variableStore = Objects.requireNonNull(variableStore, "variableStore");
         this.animationTicker = Objects.requireNonNull(animationTicker, "animationTicker");
         this.tweenScheduler = Objects.requireNonNull(tweenScheduler, "tweenScheduler");
-        this.frameDeployer = Objects.requireNonNull(frameDeployer, "frameDeployer");
         this.tokenService = Objects.requireNonNull(tokenService, "tokenService");
         this.database = Objects.requireNonNull(database, "database");
-        this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.messages = Objects.requireNonNull(messages, "messages");
     }
 
     /**
-     * 仅供单测的窄构造器——{@link #diagnose} 纯逻辑只依赖 {@link Messages}，其余 10
-     * 个子系统在 diagnose 链中由调用方预先快照进 {@link DiagnoseInputs}，故测试无需装配它们（也就
-     * 不必引 Bukkit / SQLite）。<b>勿用于生产</b>：用此构造器的实例调 {@link #runStats} /
-     * {@link #runDiagnose} / {@link #suggestWallIds} 会 NPE。包级可见，仅测试同包可用。
+     * 仅供单测的窄构造器——{@link #diagnose} 纯逻辑只依赖 {@link Messages}。
      */
     DiagnosticsSubCommand(Messages messages) {
         this.mapPool = null;
@@ -106,10 +93,8 @@ public final class DiagnosticsSubCommand {
         this.variableStore = null;
         this.animationTicker = null;
         this.tweenScheduler = null;
-        this.frameDeployer = null;
         this.tokenService = null;
         this.database = null;
-        this.plugin = null;
         this.messages = Objects.requireNonNull(messages, "messages");
     }
 
@@ -240,8 +225,7 @@ public final class DiagnosticsSubCommand {
         }
         WallRepo.Wall w = in.wall().get();
 
-        // 第一个 ERROR/WARN 的 lang key 记下来用于总结；后续环节继续跑完（一次看全部问题）。
-        String firstIssueKey = null;
+        boolean hasIssues = false;
 
         // ── 2. 地图分配 ──
         int expectedMaps = w.widthMaps() * w.heightMaps();
@@ -255,9 +239,7 @@ public final class DiagnosticsSubCommand {
                     Placeholder.unparsed("pool_total", String.valueOf(in.poolStats().total())),
                     Placeholder.unparsed("pool_free", String.valueOf(in.poolStats().free())),
                     Placeholder.unparsed("pool_reserved", String.valueOf(in.poolStats().reserved())));
-            if (firstIssueKey == null) {
-                firstIssueKey = "command.diagnose.maps-missing";
-            }
+            hasIssues = true;
         } else {
             messages.send(sender, "command.diagnose.maps-ok",
                     Placeholder.unparsed("map_count", String.valueOf(assignedMaps)),
@@ -271,9 +253,7 @@ public final class DiagnosticsSubCommand {
         if (!in.worldLoaded().test(worldName)) {
             messages.send(sender, "command.diagnose.world-unloaded",
                     Placeholder.unparsed("world", worldName));
-            if (firstIssueKey == null) {
-                firstIssueKey = "command.diagnose.world-unloaded";
-            }
+            hasIssues = true;
         } else {
             messages.send(sender, "command.diagnose.world-loaded",
                     Placeholder.unparsed("world", worldName));
@@ -284,7 +264,6 @@ public final class DiagnosticsSubCommand {
                 ? "command.diagnose.session-active" : "command.diagnose.session-none");
 
         // ── 5. ProjectState 解析（loadById 成功 = 已解析；附图层数）──
-        //    走到这里 wall 非空 → project_json 已成功反序列化（loadById/mapRow 保证），故为 OK。
         int layerCount = w.state() == null || w.state().layers() == null
                 ? 0 : w.state().layers().size();
         messages.send(sender, "command.diagnose.state-ok",
@@ -295,10 +274,9 @@ public final class DiagnosticsSubCommand {
                 ? "command.diagnose.anim-playing" : "command.diagnose.anim-static");
 
         // ── 7. 总结 ──
-        if (firstIssueKey == null) {
+        if (!hasIssues) {
             messages.send(sender, "command.diagnose.summary-ok");
         } else {
-            // 通用总结行（指向上方第一处问题环节）；不再嵌带占位符的 issue 文本，避免值被剥空。
             messages.send(sender, "command.diagnose.summary-issues");
         }
         return Command.SINGLE_SUCCESS;

@@ -39,9 +39,9 @@ import java.util.regex.Pattern;
  *
  * <p><b>边界：</b></p>
  * <ul>
- *   <li>SVG 解析仅支持简单单一 path 形态（FA / Material 都这样）。复杂多 path / transform /
+ *   <li>SVG 解析仅支持简单单一 path 形态（Font Awesome 内置包均如此）。复杂多 path / transform /
  *       stroke 用户 SVG → 仅取首 path 并 log.warning。</li>
- *   <li>viewBox 缺失 → 退 {@code "0 0 24 24"}（Material Symbols 默认）。</li>
+ *   <li>用户 SVG 缺失 viewBox → 退 {@code "0 0 24 24"}。</li>
  *   <li>用户 SVG 命名：文件名 {@code [a-z0-9_-]+\.svg}，去 .svg 后作 user/&lt;id&gt;。</li>
  * </ul>
  */
@@ -63,7 +63,6 @@ public final class IconRegistry {
     /** classpath 资源根；jar 内 /icons/<pack>.icons.json。 */
     private static final String[] BUILTIN_PACKS = {
             "fa-solid", "fa-regular", "fa-brands"
-            // material 待 IconLibraryGenerator 增 material pipeline 后追加
     };
 
     private final Logger log;
@@ -186,7 +185,7 @@ public final class IconRegistry {
     public String getPathD(String fullId) {
         if (fullId == null) return null;
         int slash = fullId.indexOf('/');
-        if (slash < 0) return null;  // legacy PNG 形态不走 IconRegistry
+        if (slash < 0) return null;
         String pack = fullId.substring(0, slash);
         String name = fullId.substring(slash + 1);
         IconPack ip = packs.get(pack);
@@ -198,10 +197,6 @@ public final class IconRegistry {
     public String getViewBox(String fullId) {
         IconInfo info = index.get(fullId);
         return info == null ? null : info.viewBox();
-    }
-
-    public IconInfo getInfo(String fullId) {
-        return index.get(fullId);
     }
 
     public boolean isRegistered(String fullId) {

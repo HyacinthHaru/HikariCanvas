@@ -23,9 +23,6 @@ dependencies {
 
 tasks.compileJava {
     dependsOn(":plugin:compileJava")
-}
-
-tasks.compileJava {
     options.encoding = "UTF-8"
     options.release.set(21)
 }

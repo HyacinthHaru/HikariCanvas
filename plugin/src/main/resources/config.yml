@@ -89,7 +89,7 @@ throttle:
   # 突发 op 上限（在任意 2 秒窗口）。
   input-burst: 40
 
-# 0.4.0 方案 B 自适应渲染
+# 自适应渲染
 # wall 引用秒级变量（schedule.eta_seconds / system.server.tick 等）时，自动把投影间隔
 # 切到 high-freq；同时渲染完主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket
 # 弥补 Paper 默认 MapView sync 的 250ms-5s 抖动。
@@ -113,15 +113,10 @@ templates:
   # 创意工坊：每玩家最多可发布模板数。0 = 不限。
   # 持 canvas.template.bypass-limit 权限的玩家跳过此限制。
   max-per-player: 20
-  # 模板系统 DoS 防御 & 跨用户隔离（当前硬编码，未来可改为本段可配）：
-  #   YAML 解析：maxAliasesForCollections=50, codePointLimit=5 MiB
-  #   raw_state 嵌套深度：MAX_DEPTH=32
-  #   Interpolator：单参数 ≤16 KiB，单次累计输出 ≤1 MiB
-  #   user-templates：玩家间默认隔绝；apply 他人模板需 canvas.template.use-others（default: op）
 
 # 图片上传
 # 文件存在 plugins/HikariCanvas/uploads/<sha256[:16]>.png；hash 内容寻址，跨 wall
-# 引用同 hash 文件零重复存储。详见 docs/security.md §4.5、docs/architecture.md §3.7。
+# 引用同 hash 文件零重复存储。详见 docs/security.md §4.5、docs/architecture.md §3.5。
 images:
   # 单文件最大字节（KiB）。超出 → 413 UPLOAD_REJECTED。
   max-size-kb: 2048
@@ -138,7 +133,7 @@ images:
   # 全服磁盘总配额（MiB）。超出 → 触发 LRU 清理直到腾出空间。0 = 不限。
   max-total-storage-mb: 1024
 
-# .canvas 工程导入限额（0.8）。防恶意大文件 / zip 炸弹。下界均为 1MB。
+# .canvas 工程导入限额。防恶意大文件 / zip 炸弹。下界均为 1MB。
 import:
   # 整个 .canvas 包上限（MB）。超出 → 413 IMPORT_ZIP_TOO_LARGE。
   canvas-max-mb: 10
@@ -147,7 +142,7 @@ import:
   # 所有内部文件解压总和上限（MB）。防多文件累加的 zip 炸弹。
   canvas-max-total-mb: 50
 
-# 安全（2026-05-25 token 暴力枚举防御）
+# 安全
 security:
   # WS auth 帧 token 校验前的每 IP 尝试限流，防御 token 暴破 / 撞库。
   # 合法用户重连 retry 远低于 10 次/分钟，超出几乎必然是攻击。
@@ -158,8 +153,7 @@ security:
 
 # 数据库 / 迁移
 database:
-  # 跑 schema migration 前自动备份 data.db 到 data.db.pre-V<NNN>.bak（含 -wal/-shm）。
-  # 0.9.1 起备份做了 WAL 安全（先 wal_checkpoint(TRUNCATE) 再拷），默认打开。
+  # 跑 schema migration 前自动备份 data.db 到 data.db.pre-V<NNN>.bak（含 -wal/-shm，先执行 wal_checkpoint）。
   # 恢复：停服 → 用 .bak 覆盖 data.db（连同 .bak-wal/.bak-shm 覆盖 data.db-wal/-shm，或删除现有 -wal/-shm）→ 启动。
   auto-backup-before-migration: true
   # 备份保留天数：自动删除早于此天数的 data.db.pre-V<NNN>.bak（启动期清一次）。0 = 永久保留。
@@ -169,7 +163,7 @@ database:
   # 想查审计记录：目前没有游戏内命令，直接用 SQLite 工具查 data.db 的 audit_log 表。
   audit-retention-days: 90
 
-# 动态数据（0.4.0）
+# 动态数据
 # 详见 docs/dynamic-data.md
 dynamic:
   # Plugin Push API 限流（防恶意 / bug 插件刷爆 VariableStore）
@@ -185,19 +179,17 @@ dynamic:
     # 10s 给运维 / 日志足够时间排查；保护期结束自动恢复。
     global-circuit-break-ms: 10000
 
-  # 0.4.0 bugfix（Bug 3）：兜底列车 ManualScheduleProvider 配置
-  # 见 docs/dynamic-data.md §7.3
+  # 列车时刻表（ManualScheduleProvider，见 docs/dynamic-data.md §7.3）
   schedule:
     # is_arriving / arrival_status 触发阈值（秒）。eta ≤ 阈值时 is_arriving=true 且
-    # arrival_status=arriving-text。默认 60s（原 dynamic-data.md §7.3 写的 5min 已废，
-    # 秒粒度更符合实际列车 / 公交业务）。
+    # arrival_status=arriving-text。
     arriving-threshold-seconds: 60
     # arrival_status 文案（eta ≤ 阈值时）
     arriving-text: "进站中"
     # arrival_status 文案（eta > 阈值时）
     idle-text: ""
 
-  # 0.4.3：全局用户变量（userglobal/*）配额。详见 docs/dynamic-data.md §17.4
+  # 全局用户变量（userglobal/*）配额。详见 docs/dynamic-data.md §14.4
   # 全局变量 = 玩家可创建的跨 wall 共享变量，与 user/* per-wall 隔离不同
   variables:
     # 每 owner 上限（创建超出此数 → QUOTA_EXCEEDED）
@@ -205,15 +197,14 @@ dynamic:
     # 全服总上限（任何 owner 加起来不超过此数）
     userglobal-max-total: 10000
 
-# 0.6：时间轴动画（docs/timeline.md / docs/architecture.md §5.5）
+# 时间轴动画（docs/timeline.md / docs/architecture.md §5.5）
 timeline:
   # 新建 timeline 的默认帧率（20 = 一个 Bukkit tick）
   default-fps: 20
   # 服务器级安全阀：单墙 fps 硬上限，钳每条 timeline 的 fps。
-  # 这是管理员保护整台服务器的总阀门；插件不做成本估算、不自动校准、不自动降级。
   max-fps: 60
 
-# 0.7：墙脚本（视觉运行时；docs/scripting.md）
+# 墙脚本（视觉运行时；docs/scripting.md）
 scripts:
   # 单面墙可挂的脚本规则数上限（防玩家堆几百条规则拖慢服务器）。
   # [热更] 只影响后续创建，不裁剪已有规则。
@@ -236,10 +227,9 @@ scripts:
     # 链式熔断：脚本写变量又触发别的脚本，链深达到此值时掐断本次执行。
     # 只掐断不自动禁用脚本——日志和审计会告诉你是哪条规则在转圈。
     max-chain-depth: 8
-  # 0.7.1：补间动画引擎参数。
+  # 补间动画引擎参数。
   tween:
     # SES cadence 上限兼 per-wall fps 硬上限（发送地图包的最大速率）。
-    # 这是管理员保护整台服务器的总阀门；插件不做成本估算、不自动降级。
     # per-wall 帧率由 canvas.tweenFps WS op 设置（默认 30fps）。
     max-fps: 60
     # 同时活跃的补间动画上限（超限新任务报错不执行，不裁剪已有任务）。

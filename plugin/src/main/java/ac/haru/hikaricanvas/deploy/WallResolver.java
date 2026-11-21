@@ -83,7 +83,7 @@ public final class WallResolver {
         }
         if (!HORIZONTAL.contains(face1)) {
             return fail(FailReason.VERTICAL_ONLY,
-                    "normal=" + face1 + " not supported in M2 (only N/S/E/W)");
+                    "floor/ceiling placement is not supported (N/S/E/W walls only)");
         }
         if (block1.getWorld() != block2.getWorld()) {
             return fail(FailReason.DIFFERENT_WORLDS,

@@ -10,13 +10,11 @@ import ac.haru.hikaricanvas.deploy.CanvasWand;
 import ac.haru.hikaricanvas.deploy.FrameDeployer;
 import ac.haru.hikaricanvas.deploy.WallResolver;
 import ac.haru.hikaricanvas.i18n.Messages;
-import ac.haru.hikaricanvas.pool.MapPool;
 import ac.haru.hikaricanvas.session.Principal;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
 import ac.haru.hikaricanvas.session.SessionState;
 import ac.haru.hikaricanvas.session.TokenService;
-import ac.haru.hikaricanvas.storage.Database;
 import ac.haru.hikaricanvas.storage.WallRepo;
 import ac.haru.hikaricanvas.template.TemplateRegistry;
 import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
@@ -66,8 +64,6 @@ public final class CanvasCommand {
     private final SessionManager sessionManager;
     private final FrameDeployer frameDeployer;
     private final TokenService tokenService;
-    private final MapPool mapPool;
-    private final Database database;
     private final WallRepo wallRepo;
     private final TemplateRegistry templateRegistry;
     private final TemplatePreviewService templatePreviewService;
@@ -103,8 +99,6 @@ public final class CanvasCommand {
                          SessionManager sessionManager,
                          FrameDeployer frameDeployer,
                          TokenService tokenService,
-                         MapPool mapPool,
-                         Database database,
                          WallRepo wallRepo,
                          TemplateRegistry templateRegistry,
                          TemplatePreviewService templatePreviewService,
@@ -117,8 +111,6 @@ public final class CanvasCommand {
         this.sessionManager = sessionManager;
         this.frameDeployer = frameDeployer;
         this.tokenService = tokenService;
-        this.mapPool = mapPool;
-        this.database = database;
         this.wallRepo = wallRepo;
         this.templateRegistry = templateRegistry;
         this.templatePreviewService = templatePreviewService;
@@ -199,9 +191,6 @@ public final class CanvasCommand {
                         .then(Commands.argument("wall_id", StringArgumentType.word())
                                 .suggests(diagnosticsSubCommand::suggestWallIds)
                                 .executes(diagnosticsSubCommand::runDiagnose)))
-                .then(Commands.literal("cleanup")
-                        .requires(src -> src.getSender().hasPermission("canvas.admin"))
-                        .executes(this::runCleanup))
                 .then(Commands.literal("reload")
                         .requires(src -> src.getSender().hasPermission("canvas.admin"))
                         .then(Commands.literal("templates")
@@ -760,15 +749,6 @@ public final class CanvasCommand {
     }
 
     // ---------- admin ----------
-
-    // runStats 已迁出至 DiagnosticsSubCommand（多行增强 + diagnose 族）。
-
-    private int runCleanup(CommandContext<CommandSourceStack> ctx) {
-        CommandSender sender = ctx.getSource().getSender();
-        // stub —— 真正的孤立 ItemFrame / 错位 walls 行检测尚未实装（fsck 待补）
-        messages.send(sender, "command.cleanup.stubbed");
-        return Command.SINGLE_SUCCESS;
-    }
 
     private int runReloadConfig(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();

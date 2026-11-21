@@ -86,8 +86,6 @@ command:
     anim-static: "<gray>  ℹ Animation: static (no timeline playing).</gray>"
     summary-ok: "<green>  → All checks passed. If it still won't show, open the editor once to drive a render.</green>"
     summary-issues: "<yellow>  → Issues found: the first ✗ / ⚠ line above is the cause.</yellow>"
-  cleanup:
-    stubbed: "<yellow>This command isn't available yet. Cleanup of orphaned frames / data repair is planned for a later release.</yellow>"
   reload:
     config-type-mismatch: "<red>reload config: plugin type mismatch (internal bug)</red>"
     config-ok: "<gold>Config reloaded: <summary></gold>"
@@ -270,8 +268,8 @@ command:
       header: "<gold>/canvas bench subcommands:</gold>"
       list: "<gray>  /canvas bench list                          — list benchmark scenes</gray>"
       run: "<gray>  /canvas bench run [scene] [iter] [warmup]   — run render benchmark</gray>"
-      run-tween: "<gray>  /canvas bench run-tween [iter] [warmup]     — tween fps benchmark (0.7.x)</gray>"
-      run-script: "<gray>  /canvas bench run-script [iter] [warmup]    — script action benchmark (0.7.x)</gray>"
+      run-tween: "<gray>  /canvas bench run-tween [iter] [warmup]     — tween fps benchmark</gray>"
+      run-script: "<gray>  /canvas bench run-script [iter] [warmup]    — script action benchmark</gray>"
       report: "<gray>  /canvas bench report [id]                   — show latest or given report</gray>"
       clear: "<gray>  /canvas bench clear                         — delete saved reports</gray>"
 wand:

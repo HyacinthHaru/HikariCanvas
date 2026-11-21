@@ -51,7 +51,7 @@ public final class TemplateRegistry {
 
     private static final String CLASSPATH_TEMPLATES_DIR = "templates";
     /** jar / classpath 内的模板清单文件——dev 模式（classes 与 resources 分离）下用它，
-     *  避免遍历目录失败。文件每行一个 yml / .canvas 名（不含路径），允许 # 注释。 */
+     *  避免遍历目录失败。文件每行一个 {@code .canvas} 文件名（不含路径），允许 # 注释。 */
     private static final String INDEX_RESOURCE = "templates/_index.txt";
 
     // 加载可信 .canvas pack 的解包上限（服主 / 玩家已落盘的本地文件，非公网上传，故给宽松上限——
@@ -64,7 +64,7 @@ public final class TemplateRegistry {
     /** 用于定位 jar 的"锚点类"——通常传 {@code HikariCanvas.class}。 */
     private final Class<?> anchorClass;
     private final Path serverTemplatesDir;
-    /** 玩家发布的模板根目录 {@code dataFolder/user-templates/<uuid>/*.yml}。 */
+    /** 玩家发布的模板根目录 {@code dataFolder/user-templates/<uuid>/*.canvas}。 */
     private final Path userTemplatesDir;
 
     /** {@code id → entry}。每次 reload 整体替换。读时取一次引用，避免拷贝。 */
@@ -122,16 +122,15 @@ public final class TemplateRegistry {
     /**
      * ready / list 端点用的可见性过滤，与 {@link #byIdForApply} 共用同一隔离判定。
      *
-     * <p>ready 帧只下发调用方可见的 {@link TemplateSpec}——user-template 的完整
-     * {@code raw_state} 画布内容不能泄漏给非 owner，否则 {@code byIdForApply} 的 apply
-     * 端隔离形同虚设。</p>
+     * <p>ready 帧只下发调用方可见的 {@link TemplateSpec}——user-template 条目与参数规格
+     * 不能泄漏给非 owner，与 {@code byIdForApply} 的 apply 端隔离保持一致。</p>
      *
      * <p>规则（与 {@link #byIdForApply} 对齐）：</p>
      * <ul>
      *   <li>builtin / server 模板（{@code ownerUuid} empty）→ 始终可见</li>
      *   <li>{@code hasBypass}（{@code canvas.template.use-others}）→ 全部可见</li>
      *   <li>USER 模板且 {@code ownerUuid} == {@code callerUuid} → 可见</li>
-     *   <li>其余 USER 模板 → 整条剔除（不下发 spec / rawState）</li>
+     *   <li>其余 USER 模板 → 整条剔除（不下发 spec）</li>
      * </ul>
      *
      * @param callerUuid 请求方玩家 UUID；{@code null} 等同非 owner
@@ -166,13 +165,13 @@ public final class TemplateRegistry {
         int[] userLoaded = {0};
         int[] overrides = {0};
 
-        // 1) 内置：jar 内 /templates/*.yml
+        // 1) 内置：jar 内 /templates/*.canvas
         loadBuiltin(next, builtinLoaded, failures);
 
-        // 2) 服务器：dataFolder/templates/*.yml（同 id 覆盖 builtin）
+        // 2) 服务器：dataFolder/templates/*.canvas（同 id 覆盖 builtin）
         loadServer(next, serverLoaded, overrides, failures);
 
-        // 3) 玩家发布：dataFolder/user-templates/<uuid>/*.yml（同 id 跳过；不覆盖 builtin/server）
+        // 3) 玩家发布：dataFolder/user-templates/<uuid>/*.canvas（同 id 跳过；不覆盖 builtin/server）
         loadUser(next, userLoaded, failures);
 
         // 4) atomic swap
@@ -194,8 +193,8 @@ public final class TemplateRegistry {
                              java.util.List<String> failures) {
         // 主路径：读 classpath 内的 _index.txt 清单，按名字依次 getResourceAsStream。
         // 这条路径同时覆盖：
-        //   - 打包后 jar（all .yml 与 _index.txt 都在 jar 内）
-        //   - dev / test（gradle 把 _index.txt + .yml 一起摊到 build/resources/main/）
+        //   - 打包后 jar（所有 .canvas 与 _index.txt 都在 jar 内）
+        //   - dev / test（gradle 把 _index.txt + .canvas 一起摊到 build/resources/main/）
         // 避免之前"扫 codesource 目录"在 classes 与 resources 分离时漏文件。
         List<String> manifest = readBuiltinManifest();
         if (!manifest.isEmpty()) {
@@ -283,7 +282,7 @@ public final class TemplateRegistry {
 
     private void loadBuiltinFromClassesDir(File classesDir, Map<String, TemplateEntry> out,
                                             int[] counter, java.util.List<String> failures) {
-        // 测试 / 开发期：plugin/build/classes/.../templates/*.yml
+        // 测试 / 开发期：plugin/build/classes/.../templates/*.canvas
         File templatesDir = new File(classesDir, CLASSPATH_TEMPLATES_DIR);
         if (!templatesDir.isDirectory()) return;
         File[] files = templatesDir.listFiles((d, name) -> isTemplateFileName(name));
@@ -343,7 +342,7 @@ public final class TemplateRegistry {
     // ---------------- user (plugins/HikariCanvas/user-templates/<uuid>/) ----------------
 
     /**
-     * 递归扫 {@code user-templates/<uuid>/*.yml}。同 id 已存在 → 跳过（不覆盖
+     * 递归扫 {@code user-templates/<uuid>/*.canvas}。同 id 已存在 → 跳过（不覆盖
      * builtin / server）。容错：单 uuid 子目录失败不影响其他。
      */
     private void loadUser(Map<String, TemplateEntry> out, int[] counter,
@@ -406,8 +405,8 @@ public final class TemplateRegistry {
     // ---------------- .canvas pack ----------------
 
     /**
-     * pack 加载的简单去重路径（builtin / user 共用，同 {@link #acceptOne} 的 containsKey 规则）：
-     * 把 pack 字节合成 {@link TemplateSpec} 后放入 {@code out}。非 pack（kind=project）/ 解析失败 /
+     * pack 加载的简单去重路径（builtin / user 共用）：
+     * 把 pack 字节合成 {@link TemplateSpec} 后放入 {@code out}。解析失败 /
      * 重复 id → 返 {@code false}（不计数）。
      *
      * @param idStem    id = 文件名去 {@code .canvas} 后缀
@@ -432,7 +431,7 @@ public final class TemplateRegistry {
 
     /**
      * server 源统一注册（override / 重复判定）：{@code prev} 为 SERVER → 重复报错跳过；{@code prev}
-     * 为 BUILTIN → 覆盖 + 计 override；否则纯新增。YAML 与 pack 两条路径共用，保证覆盖语义一致。
+     * 为 BUILTIN → 覆盖 + 计 override；否则纯新增。
      */
     private void registerServerEntry(Map<String, TemplateEntry> out, String id, String label,
                                      TemplateEntry entry, int[] counter, int[] overrides,
@@ -488,7 +487,7 @@ public final class TemplateRegistry {
      * 用 manifest + {@code params.json} 合成 pack 的 {@link TemplateSpec}——仅供 Gallery / list / preview
      * 统一按 {@code spec()} 读。填 {@code spec / id / name / params}，外加从 manifest wall 尺寸合成的
      * fixed-size {@code canvas}（让 Gallery 卡片显示 pack 真实尺寸 + 与目标墙做尺寸兼容判定）；
-     * {@code description / version / author / tags / preview / layout / rawState} 均为 null
+     * {@code description / version / author / tags / preview} 均为 null
      * （pack 的画布<b>内容</b>在 {@code project.json}，apply 时由 {@code ProjectImporter.applyPack} 现解，不进 spec）。
      *
      * @param idStem     文件名去 {@code .canvas} 后缀；仅当 manifest 未自声明 {@code id} 时退回用它
@@ -530,10 +529,6 @@ public final class TemplateRegistry {
 
     /** 模板文件名 = {@code .canvas} pack（旧 YAML DSL 已退役）。各来源 scan 过滤器据此纳入文件。 */
     private static boolean isTemplateFileName(String name) {
-        return isPackFileName(name);
-    }
-
-    private static boolean isPackFileName(String name) {
         return name.endsWith(".canvas");
     }
 }

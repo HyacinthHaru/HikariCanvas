@@ -211,7 +211,7 @@ class RenderBufferLimitTest {
 
         BufferedImage canvas = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img2d(canvas);
-        RenderContext ctx = new RenderContext(null, null, null, null, LOG, () -> hash -> src);
+        RenderContext ctx = new RenderContext(null, null, null, LOG, () -> hash -> src);
         // w/h 远超 MAX_DIM（10000）：只有关键帧插值能造出来
         ImageElement im = new ImageElement("im-huge", 0, 0, 50_000, 50_000, 0, false, true,
                 "0123456789abcdef", new Mask("M0 0 L1 0 L1 1 L0 1 Z", false, 4),

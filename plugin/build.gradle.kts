@@ -12,8 +12,8 @@ plugins {
     id("com.gradleup.shadow") version "9.6.1"
 }
 
-// 0.9.5 多版本支持：编译目标可参数化，默认 1.21.11 / Java 21（生产 jar）。
-// CI 双版本编译守卫用 `-PpaperApi=26.1.2-R0.1-SNAPSHOT -PjavaVer=25` 对 26.x API 编译同一份源码，
+// 多版本支持：编译目标可参数化，默认 1.21.11 / Java 21（生产 jar）。
+// CI 双版本编译守卫用 `-PpaperApi=26.2.build.+ -PjavaVer=25` 对 26.x API 编译同一份源码，
 // 提前抓「用了 26.x 已移除 API」的回归；本地也可 `./gradlew runServer -PpaperApi=... -PjavaVer=25` 起 26.x dev server。
 // paperApi = paperweight dev bundle 坐标（1.21.11 用 `1.21.11-R0.1-SNAPSHOT`；26.x 新版本号用
 // `26.1.2.build.+` 追最新 stable build）。mcVersion 单列（runServer 用，两种格式无法统一推导）。
@@ -54,10 +54,7 @@ dependencies {
     // snapshot 测试台
     testImplementation("org.junit.jupiter:junit-jupiter:6.1.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-
-    // 测试基建：MockBukkit（FrameDeployer / wall.lock owner-only 等需要 Bukkit world / entity 设施）
-    testImplementation("com.github.seeseemelk:MockBukkit-v1.21:3.133.2")
-    // 测试基建：JavalinTest（HTTP / WS 端到端测试 — UploadHandler 全场景 / sessionId 鉴权）
+    // 测试基建：JavalinTest（HTTP / WS 端到端测试）
     testImplementation("io.javalin:javalin-testtools:7.2.2")
 }
 
@@ -185,7 +182,7 @@ val bundledFonts = listOf(
         expectedSha256 = "2fa78b40f74714b0092fa549eb6814b3efec5a729d020254968a270771ba5f75",
         inZipEntryPattern = ".*monospaced-zh_cn\\.ttf"
     ),
-    // 6 个新内置字体（全 SIL OFL 1.1）
+    // 正文与等宽字体（全 SIL OFL 1.1）
     FontSpec(
         displayId = "source_han_serif",
         url = "https://github.com/adobe-fonts/source-han-serif/raw/7889f11bf31170b5d092a083b357c8c8130f89e0/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf",
@@ -218,10 +215,8 @@ val bundledFonts = listOf(
         destFileName = "NotoSerif-Regular.ttf",
         expectedSha256 = "19e72cd8d595fae5bd74a5206f5d938512e1183d4fed7abb1ec1be1d7efa5f88"
     ),
-    // 注：source_han_mono SC 单文件不存在（adobe-fonts/source-han-mono release 只发 122MB ttc 多语言合包），
-    // 122MB 超过整个 shadow jar 现尺寸 2 倍，本期跳过；未来需中文等宽可走外部字体目录。
-    // 13 个艺术 / 装饰字体（全 SIL OFL 1.1）
-    // 中文艺术 6
+    // 注：source_han_mono SC 无单文件分发（仅 122MB ttc 多语言合包），中文等宽需求走外部 fonts/ 目录。
+    // 中文艺术字体（SIL OFL 1.1）
     FontSpec(
         displayId = "smiley_sans",
         url = "https://github.com/atelier-anchor/smiley-sans/releases/download/v2.0.0/smiley-sans-v2.0.0.zip",
@@ -259,7 +254,7 @@ val bundledFonts = listOf(
         destFileName = "LXGWWenKai-Regular.ttf",
         expectedSha256 = "ea47ec17d0f3d0ed1e6d9c51d6146402d4d1e2f0ff397a90765aaaa0ddd382fb"
     ),
-    // 西文装饰 7（permanent_marker 因 Apache License 跳过，用 OFL shadows_into_light 替代马克笔位）
+    // 西文装饰字体（SIL OFL 1.1）
     FontSpec(
         displayId = "comic_neue",
         url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/comicneue/ComicNeue-Regular.ttf",
@@ -304,10 +299,7 @@ val bundledFonts = listOf(
         destFileName = "DancingScript-Variable.ttf",
         expectedSha256 = "21808625578fe8d8cd10cb684be546dca077b27cd03a53a2f1ec11dc743c924c"
     ),
-    // 用户请求 FHWA Series（美国路牌字体）+ Bahnschrift（Microsoft 专有）的 OFL 替代。
-    // Overpass：Red Hat 出品的 FHWA Series B / D 风格替代（variable wght；default 400 双端一致）。
-    // Bebas Neue：经典 DIN / Bahnschrift Condensed 风格替代（纯大写英文 condensed sans）。
-    // 都来自 google/fonts，全 SIL OFL 1.1。
+    // 路牌与紧凑无衬线体（Overpass / Bebas Neue，SIL OFL 1.1）
     FontSpec(
         displayId = "overpass",
         url = "https://github.com/google/fonts/raw/9fab8b6cc7b2f20376914fd765d918c698c66d75/ofl/overpass/Overpass%5Bwght%5D.ttf",
@@ -414,7 +406,7 @@ fun fetchWithRetry(url: String, dest: File, logger: Logger) {
 
 val downloadFonts = tasks.register("downloadFonts") {
     group = "build"
-    description = "下载内置字体（思源黑体 + Ark Pixel 12px）到 build/downloaded-fonts/"
+    description = "下载 22 枚内置字体到 build/downloaded-fonts/"
     outputs.dir(downloadedFontsDir)
     doLast {
         val dir = downloadedFontsDir.get().asFile
@@ -554,9 +546,7 @@ val generateGlyphMetrics = tasks.register("generateGlyphMetrics") {
     dependsOn(generateGlyphMetricsTasks)
 }
 
-// 把已下载的字体同步到 web/public/fonts/，Vite 通过 @font-face 加载到浏览器
-// Canvas 2D / TextLayout 需要与 Java Graphics2D 使用完全相同的 TTF/OTF（rendering.md §2.1）
-// 同步追加 *.metrics.json（前端运行期 fetch）
+// 将已下载的字体与构建期生成的 *.metrics.json 同步到 web/public/fonts/（供前端开发期加载）
 val webFontsDir = rootProject.layout.projectDirectory.dir("web/public/fonts")
 val syncFontsToWeb = tasks.register<Copy>("syncFontsToWeb") {
     group = "build"
@@ -700,7 +690,7 @@ tasks.processResources {
         include("*.ttf", "*.otf")
         into("fonts")
     }
-    // metrics.json 进 jar /fonts/，后端 FontRegistry 后续 phase 用 getResourceAsStream 读
+    // metrics.json 进 jar /fonts/，后端 FontMetricsTable 用 getResourceAsStream 读取
     from(generatedGlyphMetricsDir) {
         include("*.metrics.json")
         into("fonts")

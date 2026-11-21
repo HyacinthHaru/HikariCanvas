@@ -1,5 +1,4 @@
 import type { ProjectState, Element, Layer, RectElement, TextElement, IconElement, ImageElement, PathElement, CircleElement, ShapeElement, BrushStrokeElement, Glow } from '@/types/protocol';
-import { isLegacyIconSource } from '@/types/protocol';
 import { layoutText, charAdvance, ASCENT_RATIO, type PositionedGlyph } from './TextLayout';
 import { applyBlendModeOver } from './BlendModes';
 import { parsePathD } from './PathParser';
@@ -518,77 +517,9 @@ function drawShape(ctx: CanvasRenderingContext2D, s: ShapeElement): void {
 }
 
 // ---------- Icon 图标 ----------
-//
-// 加载策略：源走 /api/template-asset/icons/<source>.png。Image 是异步的，但 renderProjectState
-// 是同步函数 —— 因此首次绘制时图未就绪，画占位 ?；图加载完毕调用 onIconReady() 回调，外层
-// CanvasView 的 requestDraw 会再触发一次完整重绘。
-
-// 失败条目记 failedAt 时间戳；重绘命中超过 TTL 的 failed 条目时重新发起加载，
-// 避免瞬时 404 / 401 / 网络抖动把资源永久钉死在占位 ?（原先 failed=true 一旦写入再不重试）。
-const FAILED_RETRY_TTL_MS = 10_000;
-
-interface IconCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; failedAt: number; }
-const iconCache = new Map<string, IconCacheEntry>();
-let iconReadyHook: (() => void) | null = null;
-
-/** CanvasView 注册：图标异步加载完成后请求重绘 */
-export function onIconReady(hook: () => void) { iconReadyHook = hook; }
-
-function startIconLoad(source: string, entry: IconCacheEntry): void {
-    entry.ready = false;
-    entry.failed = false;
-    entry.failedAt = 0;
-    entry.img.onload = () => { entry.ready = true; iconReadyHook?.(); };
-    entry.img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); iconReadyHook?.(); };
-    entry.img.src = `/api/template-asset/icons/${encodeURIComponent(source)}.png`;
-}
-
-function getIconImage(source: string): IconCacheEntry {
-    let entry = iconCache.get(source);
-    if (entry) {
-        // 失败条目超过 TTL → 重新加载（瞬时失败自愈，无需整页刷新）。
-        if (entry.failed && Date.now() - entry.failedAt > FAILED_RETRY_TTL_MS) {
-            startIconLoad(source, entry);
-        }
-        return entry;
-    }
-    entry = { img: new Image(), ready: false, failed: false, failedAt: 0 };
-    iconCache.set(source, entry);
-    startIconLoad(source, entry);
-    return entry;
-}
 
 function drawIcon(ctx: CanvasRenderingContext2D, ic: IconElement): void {
-    if (isLegacyIconSource(ic.source)) {
-        drawIconLegacyPng(ctx, ic);
-        return;
-    }
     drawIconSvgPath(ctx, ic);
-}
-
-/** legacy PNG 路径（行为完全不变）：source 不含 `/` 时走 /api/template-asset/icons/<source>.png。 */
-function drawIconLegacyPng(ctx: CanvasRenderingContext2D, ic: IconElement): void {
-    const entry = getIconImage(ic.source);
-    if (entry.failed || !entry.ready) {
-        drawIconPlaceholder(ctx, ic);
-        return;
-    }
-    if (!ic.tint) {
-        ctx.drawImage(entry.img, ic.x, ic.y, ic.w, ic.h);
-        return;
-    }
-    // tint：先画到 offscreen canvas，再 source-in 染色，最后贴到主 canvas
-    const off = document.createElement('canvas');
-    off.width = ic.w;
-    off.height = ic.h;
-    const octx = off.getContext('2d');
-    if (!octx) { ctx.drawImage(entry.img, ic.x, ic.y, ic.w, ic.h); return; }
-    octx.imageSmoothingEnabled = false;
-    octx.drawImage(entry.img, 0, 0, ic.w, ic.h);
-    octx.globalCompositeOperation = 'source-in';
-    octx.fillStyle = ic.tint;
-    octx.fillRect(0, 0, ic.w, ic.h);
-    ctx.drawImage(off, ic.x, ic.y);
 }
 
 /**
@@ -677,8 +608,14 @@ function drawIconPlaceholder(ctx: CanvasRenderingContext2D, ic: IconElement): vo
 // 加载完毕调用同一 iconReadyHook → CanvasView.requestDraw 再触一次重绘。
 // mask 用 Canvas 2D ctx.clip(Path2D) 实装；inverted 用 even-odd fill rule 反相。
 
+const FAILED_RETRY_TTL_MS = 10_000;
+
 interface ImageCacheEntry { img: HTMLImageElement; ready: boolean; failed: boolean; failedAt: number; }
 const imageCache = new Map<string, ImageCacheEntry>();
+let imageReadyHook: (() => void) | null = null;
+
+/** CanvasView 注册：上传图片异步加载完成后请求重绘 */
+export function onImageReady(hook: () => void) { imageReadyHook = hook; }
 
 // /api/upload/{hash} 后端鉴权要 sessionId query param；上层注入访问器避免
 // PreviewRenderer 直接耦合 Pinia store。
@@ -695,8 +632,8 @@ function startUploadLoad(source: string, entry: ImageCacheEntry): void {
     entry.ready = false;
     entry.failed = false;
     entry.failedAt = 0;
-    entry.img.onload = () => { entry.ready = true; iconReadyHook?.(); };
-    entry.img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); iconReadyHook?.(); };
+    entry.img.onload = () => { entry.ready = true; imageReadyHook?.(); };
+    entry.img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); imageReadyHook?.(); };
     entry.img.src = buildUploadUrl(source);
 }
 
@@ -721,34 +658,22 @@ export function preloadImage(source: string, dataUrl: string): void {
     const img = new Image();
     const entry: ImageCacheEntry = { img, ready: false, failed: false, failedAt: 0 };
     imageCache.set(source, entry);
-    img.onload = () => { entry.ready = true; iconReadyHook?.(); };
-    img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); iconReadyHook?.(); };
+    img.onload = () => { entry.ready = true; imageReadyHook?.(); };
+    img.onerror = () => { entry.failed = true; entry.failedAt = Date.now(); imageReadyHook?.(); };
     img.src = dataUrl;
 }
 
 /**
- * 丢弃渲染资源缓存里的失败条目：图片 / 图标（占位 ?）、IconLoader 的 SVG、字体文件、
- * 字形 metrics 表。名字里的 Image 是历史留下的，实际覆盖面见上。
- *
- * <p>由 {@code project.reset()}（切 wall / 断线重连触发）调用，与 {@code clearLayerThumbnailCache}
- * 并列。原先这些模块级 Map 永不重置——瞬时网络错误把资源永久钉死占位 ?，只能整页刷新；
- * 且跨多次 wall 切换累积历史资产带来内存增长。成功条目（内容寻址，可跨 wall 共享）保留不动，
- * 仅丢弃失败条目让下次绘制重新发起加载。</p>
- *
- * <p>字体与 metrics 各自还有 10s TTL 自愈，这里只是让"切 wall / 重连"这个明确的时机
- * 立刻重试，不用干等。</p>
+ * 丢弃渲染资源缓存里的失败条目：上传图片、IconLoader 的 SVG、字体文件、字形 metrics 表。
+ * 由 `project.reset()`（切 wall / 断线重连）调用，成功条目（内容寻址，可跨 wall 共享）保留不动。
  */
 export function resetImageCaches(): void {
     for (const [k, v] of imageCache) {
         if (v.failed) imageCache.delete(k);
     }
-    for (const [k, v] of iconCache) {
-        if (v.failed) iconCache.delete(k);
-    }
     clearFailedIconCache();
     clearFailedFontCache();
     clearFailedMetricsCache();
-    // palette 也一样：重连后立刻允许重新拉 /api/palette，不等 TTL。
     paletteFailedAt = 0;
 }
 

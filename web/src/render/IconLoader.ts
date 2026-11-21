@@ -6,12 +6,8 @@
  * <ol>
  *   <li>{@link ensureLoaded} 幂等 async：首次发 fetch；已加载 / 正在加载返现有 Promise</li>
  *   <li>cache 内 null 表示"加载失败 / 不存在"，让 PreviewRenderer 走占位 ? 渲染</li>
- *   <li>加载完触发 {@link onIconLoaded} 回调，CanvasView 接到后 requestDraw（与
- *       onFontLoaded / onPaletteReady / onIconReady 同款 pattern）</li>
+ *   <li>加载完触发 {@link onIconLoaded} 回调，CanvasView 接到后 requestDraw</li>
  * </ol></p>
- *
- * <p><b>边界</b>：legacy PNG 形态（source 不含 {@code /}）不走本模块——PreviewRenderer
- * 自己在 drawIcon 入口分流到原 {@code getIconImage} PNG 缓存。</p>
  */
 
 export interface IconPathData {

@@ -180,30 +180,12 @@ export interface RectElement extends BaseElement {
 
 export interface IconElement extends BaseElement {
     type: 'icon';
-    /**
-     * 图标资源名。
-     *
-     * - 矢量形态：{@code pack/name}（如 {@code fa-solid/heart} / {@code user/foo}）；
-     *   path d + viewBox 走 {@code GET /api/icon/paths?id=...} 拉取。
-     * - legacy PNG 形态：不含 {@code /}（如 {@code "heart"}）；走 {@code /api/template-asset/icons/{source}.png}。
-     */
+    /** 图标资源名（`pack/name`，如 `fa-solid/heart` 或 `user/foo`）。 */
     source: string;
-    /**
-     * deprecated：仅供旧 .canvas / 模板向后兼容；新协议改用 {@code fill}。
-     * legacy PNG 形态仍走 source-in 染色路径。
-     */
+    /** 兼容旧数据的纯色字段；新协议统一使用 `fill`。 */
     tint?: string;
-    /**
-     * 矢量 path 填充。Fill 联合类型（solid / linear / radial），与 Rect/Circle/Shape 共用。
-     * {@code undefined} → pack 默认色（前端 / 后端均退黑色）。仅对 SVG 矢量 source 生效，
-     * legacy PNG 仍走 tint 路径。
-     */
+    /** 矢量路径填充（`solid` / `linear` / `radial`）；未设置时退回黑色。 */
     fill?: FillCompat;
-}
-
-/** legacy PNG 形态 = source 不含 `/`。镜像后端 {@code IconElement.isLegacySource}。 */
-export function isLegacyIconSource(source: string | undefined | null): boolean {
-    return !!source && source.indexOf('/') < 0;
 }
 
 /**

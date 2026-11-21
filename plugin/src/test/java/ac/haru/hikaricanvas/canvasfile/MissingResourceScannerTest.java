@@ -121,9 +121,9 @@ class MissingResourceScannerTest {
     }
 
     @Test
-    void scan_legacyPngIcon_noMissingIconWarning() {
-        // legacy 不含 '/' 的 PNG 形态走 TemplateAssetService，不是 user 图标，不在本扫描范围。
-        ProjectState state = stateWith(icon("i1", "heart"));
+    void scan_nonUserPackIcon_noMissingIconWarning() {
+        // 非 user/* 的矢量图标 pack 不在本扫描范围（只查 user/<id>）。
+        ProjectState state = stateWith(icon("i1", "fa-solid/heart"));
         List<ImportWarning> w = new MissingResourceScanner(fonts, icons, variables).scan(state);
         assertEquals(0, kindCount(w, "missing-icon"));
     }
@@ -270,9 +270,7 @@ class MissingResourceScannerTest {
     }
 
     private static ProjectState stateWithLayers(List<Layer> layers) {
-        ProjectState.Canvas canvas = new ProjectState.Canvas(2, 1, (ac.haru.hikaricanvas.state.Fill) null);
-        return new ProjectState(0L, canvas,
-                null, layers, layers.get(0).id(), null, null, null, null);
+        return new ProjectState(new ProjectState.Canvas(2, 1), layers, layers.get(0).id(), null, null);
     }
 
     private static int kindCount(List<ImportWarning> w, String kind) {

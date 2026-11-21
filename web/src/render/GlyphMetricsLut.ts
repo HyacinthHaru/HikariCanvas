@@ -5,8 +5,7 @@
  * round(baseAdv × fontSize / baseSize)。缺字 / 未加载字体返 -1，调用方 fallback
  * canonicalCharWidth。
  *
- * 加载是 async，但 first paint 时表可能未到——onMetricsReady 通知 PreviewRenderer 重画一次。
- * 与现有 onIconReady / onPaletteReady 同款 pattern。
+ * 加载是 async，first paint 时表可能未到——onMetricsReady 通知 PreviewRenderer 重画一次。
  */
 
 interface RawTable {

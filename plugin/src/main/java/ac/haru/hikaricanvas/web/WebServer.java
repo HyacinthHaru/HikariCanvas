@@ -25,7 +25,6 @@ import ac.haru.hikaricanvas.template.TemplateRegistry;
 import ac.haru.hikaricanvas.template.TemplateSpec;
 import ac.haru.hikaricanvas.template.preview.TemplatePreviewService;
 import ac.haru.hikaricanvas.template.preview.WallPreviewService;
-import ac.haru.hikaricanvas.template.asset.TemplateAssetService;
 
 import java.time.Duration;
 import java.util.List;
@@ -96,7 +95,7 @@ public final class WebServer {
     private final org.bukkit.plugin.java.JavaPlugin plugin;
     private final TemplateRegistry templateRegistry;
     private final TemplatePreviewService templatePreviewService;
-    private final TemplateAssetService templateAssetService;
+    private final int previewCacheSeconds;
     private final WallPreviewService wallPreviewService;
     private final ac.haru.hikaricanvas.image.UploadHandler uploadHandler;
     private final ac.haru.hikaricanvas.storage.TemplateRepo templateRepo;
@@ -205,7 +204,7 @@ public final class WebServer {
                      ac.haru.hikaricanvas.deploy.FrameDeployer frameDeployer,
                      TemplateRegistry templateRegistry,
                      TemplatePreviewService templatePreviewService,
-                     TemplateAssetService templateAssetService,
+                     int previewCacheSeconds,
                      WallPreviewService wallPreviewService,
                      ac.haru.hikaricanvas.image.UploadHandler uploadHandler,
                      ac.haru.hikaricanvas.template.TemplatePublisher templatePublisher,
@@ -245,7 +244,7 @@ public final class WebServer {
         this.tokenRateLimiter = tokenRateLimiter;
         this.templateRegistry = templateRegistry;
         this.templatePreviewService = templatePreviewService;
-        this.templateAssetService = templateAssetService;
+        this.previewCacheSeconds = Math.max(0, previewCacheSeconds);
         this.wallPreviewService = wallPreviewService;
         this.uploadHandler = uploadHandler;
         this.templateRepo = templateRepo;
@@ -424,17 +423,11 @@ public final class WebServer {
                             return;
                         }
                         ctx.contentType("image/png");
-                        // 模板内容不变 → 长缓存；reload 后服务端 invalidate，浏览器靠 ETag/304 路径。
-                        // private：响应随调用方身份变化，不能让共享代理缓存后串给别人。
-                        ctx.header("Cache-Control", "private, max-age=300");
+                        ctx.header("Cache-Control", "private, max-age=" + previewCacheSeconds);
                         ctx.result(png);
                     }));
 
-            // wall 缩略图。HomePage 卡片展示用；按 wall.updatedAt 做粗粒度缓存。
-            // 同 /api/walls：必须带活跃 sessionId，否则任何人都能对任意 wallId 出图，
-            // 把别人的画一张张拉走。已锁定的墙只有 owner（或持 canvas.admin.bypass-lock 的管理员）
-            // 能看——与 SessionManager.open 的 lock-aware 判定同口径；未锁的草稿墙是协作中间态
-            // （CLAUDE.md 固化决策 2），任何持 session 的玩家可看，与「未锁墙谁都能 open」一致。
+            // wall 缩略图。HomePage 卡片展示用；按 wall.updatedAt 做缓存。
             cfg.routes.addEndpoint(new Endpoint(
                     HandlerType.GET, "/api/wall/{id}/preview.png", ctx -> {
                         String wid = ctx.pathParam("id");
@@ -446,26 +439,6 @@ public final class WebServer {
                         if (png == null) { ctx.status(500); return; }
                         ctx.contentType("image/png");
                         ctx.header("Cache-Control", "public, max-age=60");
-                        ctx.result(png);
-                    }));
-
-            // 图标资源端点（whitelist 名 + builtin/classpath 优先 + 服主自定义后备）
-            cfg.routes.addEndpoint(new Endpoint(
-                    HandlerType.GET, "/api/template-asset/icons/{name}", ctx -> {
-                        String name = ctx.pathParam("name");
-                        // 移除 .png 后缀（允许 /icons/foo 也允许 /icons/foo.png）
-                        if (name.endsWith(".png")) name = name.substring(0, name.length() - 4);
-                        if (!TemplateAssetService.isValidName(name)) {
-                            ctx.status(400);
-                            return;
-                        }
-                        byte[] png = templateAssetService.iconPng(name);
-                        if (png == null) {
-                            ctx.status(404);
-                            return;
-                        }
-                        ctx.contentType("image/png");
-                        ctx.header("Cache-Control", "public, max-age=3600");
                         ctx.result(png);
                     }));
 
@@ -601,9 +574,7 @@ public final class WebServer {
                     HandlerType.GET, "/api/icon/paths", ctx -> {
                         String id = ctx.queryParam("id");
                         if (id == null || id.isEmpty() || id.length() > 64
-                                || !ac.haru.hikaricanvas.state.IconElement.isValidSource(id)
-                                || ac.haru.hikaricanvas.state.IconElement.isLegacySource(id)) {
-                            // legacy PNG 形态不走本端点（前端应拉 /api/template-asset/icons/）
+                                || !ac.haru.hikaricanvas.state.IconElement.isValidSource(id)) {
                             ctx.status(400).result("{\"code\":\"BAD_REQUEST\"}");
                             return;
                         }

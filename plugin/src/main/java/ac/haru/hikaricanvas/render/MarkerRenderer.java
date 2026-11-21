@@ -34,27 +34,15 @@ public final class MarkerRenderer {
     public static final int MIN_DOT_RADIUS = 3;
 
     /**
-     * arrow size 公式 = {@code max(MIN_ARROW_SIZE, strokeWidth × 2 + 4)}。
+     * arrow size（含 element-aware cap）：基础值 {@code max(MIN_ARROW_SIZE, strokeWidth × 2 + 4)}，
+     * 再按元素对角线 cap 到 {@code diag × MARKER_MAX_RATIO_OF_LENGTH}。
      *
-     * <p>arrow 是三角形（面积 ∝ size²），若让 size 随 stroke 线性放大过快，粗 stroke 时
-     * arrow 视觉面积会按平方膨胀；{@code × 2 + 4} 让细 stroke (1-3) 几乎不变、粗 stroke 增速
-     * 线性平缓。</p>
-     *
-     * <p>不带硬上限——element-aware cap 由调用方传 element 对角线限制 marker 不溢出。</p>
-     */
-    public static int arrowSize(int strokeWidth) {
-        return Math.max(MIN_ARROW_SIZE, strokeWidth * 2 + 4);
-    }
-
-    /**
-     * element-aware cap 重载。
-     *
-     * <p>caller 传 element 对角线，marker 自动 cap 到 {@code diag × MARKER_MAX_RATIO_OF_LENGTH}。
-     * 但**仍保证 base ≥ stroke × 2**（视觉清晰度底线，比 element 比例优先级高）——若元素
-     * 过短装不下，宁可让箭头略微溢出 bbox 也别糊掉。</p>
+     * <p>arrow 是三角形（面积 ∝ size²），{@code × 2 + 4} 让细 stroke (1-3) 几乎不变、粗 stroke
+     * 增速线性平缓。仍保证 {@code ≥ max(MIN_ARROW_SIZE, stroke × 2)}（视觉清晰度底线优先于
+     * element 比例限制——若元素过短装不下，宁可让箭头略微溢出 bbox 也别糊掉）。</p>
      */
     public static int arrowSize(int strokeWidth, double elementDiagonal) {
-        int base = arrowSize(strokeWidth);
+        int base = Math.max(MIN_ARROW_SIZE, strokeWidth * 2 + 4);
         if (elementDiagonal <= 0) return base;
         int byLength = (int) Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH);
         // 视觉清晰底线：base 至少 stroke × 2（否则跟直线视觉粘连）。优先级 > element cap
@@ -63,18 +51,11 @@ public final class MarkerRenderer {
     }
 
     /**
-     * dot radius 公式 = {@code max(MIN_DOT_RADIUS, strokeWidth / 2 + 3)}（Java 整数除法 = floor）。
-     *
-     * <p>dot 是圆（面积 ∝ r²）；{@code / 2 + 3} 让粗 stroke 时圆形 marker 面积不按平方膨胀、
-     * 不抢直线视觉。</p>
+     * dot radius（含 element-aware cap）：基础值 {@code max(MIN_DOT_RADIUS, strokeWidth / 2 + 3)}
+     * （整数除法 = floor），再按元素对角线 cap（dot 直径 = 半径 × 2，故 cap 取 {@code ratio / 2}）。
      */
-    public static int dotRadius(int strokeWidth) {
-        return Math.max(MIN_DOT_RADIUS, strokeWidth / 2 + 3);
-    }
-
-    /** element-aware cap，同 arrowSize。 */
     public static int dotRadius(int strokeWidth, double elementDiagonal) {
-        int base = dotRadius(strokeWidth);
+        int base = Math.max(MIN_DOT_RADIUS, strokeWidth / 2 + 3);
         if (elementDiagonal <= 0) return base;
         // dot 直径 = 半径 × 2，所以 cap 是 ratio/2
         int byLength = (int) Math.round(elementDiagonal * MARKER_MAX_RATIO_OF_LENGTH * 0.5);

@@ -4,7 +4,7 @@ import { useEventListener } from '@vueuse/core';
 import { useProjectStore } from '@/stores/project';
 import { isDrawTool, useUiStore } from '@/stores/ui';
 import { getWsClient } from '@/network/wsClient';
-import { renderProjectState, onIconReady, onPaletteReady } from '@/render/PreviewRenderer';
+import { renderProjectState, onImageReady, onPaletteReady } from '@/render/PreviewRenderer';
 import { preloadMetrics, onMetricsReady } from '@/render/GlyphMetricsLut';
 import { ensureLoaded as ensureFontLoaded, onFontLoaded } from '@/render/FontLoader';
 import { onIconLoaded } from '@/render/IconLoader';
@@ -1226,15 +1226,9 @@ onMounted(() => {
     ensureFontLoaded('ark_pixel');
     ensureFontLoaded('source_han_sans');
     loaderUnsubscribers.push(onFontLoaded(() => requestDraw()));
-    // 图标异步加载就绪后请求重绘（每个新 source 第一次显示时占位 ?，加载完后真图替换）
-    onIconReady(() => requestDraw());
-    // SVG 矢量图标 path d / viewBox 异步加载完成后请求重绘（同 onIconReady pattern；
-    // 前者是 PNG 路径走 /api/template-asset，后者是 SVG path 走 /api/icon/paths）
     loaderUnsubscribers.push(onIconLoaded(() => requestDraw()));
-    // PaletteLut 异步加载完成后请求重绘（dither element 首帧 fallback clean，加载后切回 dither）
+    onImageReady(() => requestDraw());
     onPaletteReady(() => requestDraw());
-    // GlyphMetricsLut 异步加载完成后请求重绘（text element 首帧走 canonicalCharWidth fallback,
-    // 加载完切到 per-font advance；与 onIconReady / onPaletteReady 同款 pattern）
     preloadMetrics('ark_pixel');
     preloadMetrics('source_han_sans');
     loaderUnsubscribers.push(onMetricsReady(() => requestDraw()));

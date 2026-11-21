@@ -14,7 +14,6 @@ import ac.haru.hikaricanvas.state.RectElement;
 import ac.haru.hikaricanvas.state.RenderMode;
 import ac.haru.hikaricanvas.state.ShapeElement;
 import ac.haru.hikaricanvas.state.TextElement;
-import ac.haru.hikaricanvas.template.asset.TemplateAssetService;
 import ac.haru.hikaricanvas.variable.VariableInterpolator;
 import ac.haru.hikaricanvas.variable.VariableStore;
 
@@ -136,24 +135,18 @@ public final class CanvasCompositor {
     private final ElementRenderer imageRenderer = new ImageRenderer();
 
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry, Logger log) {
-        this(paletteLut, fontRegistry, null, null, log);
-    }
-
-    public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry,
-                            TemplateAssetService assetService, Logger log) {
-        this(paletteLut, fontRegistry, assetService, null, log);
+        this(paletteLut, fontRegistry, null, log);
     }
 
     /**
      * 完整构造，含 {@link IconRegistry} 注入（矢量 icon 渲染需要）。生产路径
-     * （{@code HikariCanvas.onEnable}）走这条；测试 / 老 fixture 仍可走前两个无 iconRegistry
-     * 构造（IconRenderer 对 SVG 元素退占位）。
+     * （{@code HikariCanvas.onEnable}）走这条；测试 / 基准可走 3 参无 iconRegistry
+     * 构造（{@link IconRenderer} 自动退占位）。
      */
     public CanvasCompositor(PaletteLut paletteLut, FontRegistry fontRegistry,
-                            TemplateAssetService assetService, IconRegistry iconRegistry,
-                            Logger log) {
+                            IconRegistry iconRegistry, Logger log) {
         this.paletteLut = paletteLut;
-        this.ctx = new RenderContext(paletteLut, fontRegistry, assetService, iconRegistry,
+        this.ctx = new RenderContext(paletteLut, fontRegistry, iconRegistry,
                 log, () -> this.imageLoader);
     }
 

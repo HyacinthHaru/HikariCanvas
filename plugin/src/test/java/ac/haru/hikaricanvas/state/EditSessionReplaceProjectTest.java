@@ -13,25 +13,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 0.8-A2 Task 9：{@link EditSession#replaceProject(ProjectState)} 行为校验。
  *
- * <p>区别于 {@link EditSession#replaceContent(Fill, java.util.List)}（把内容拍平成单层），
- * {@code replaceProject} 整体替换为导入工程并<b>保留其多层 / 时间轴结构</b>，用于 .canvas 导入。</p>
- *
- * <p>注：plan 蓝图里的 {@code Layer.withId/withName}、{@code ProjectState.withLayers(list, id)}、
- * {@code EditSession.snapshot()} 在真实代码中不存在——真实路径是 {@link Layer} 的 canonical
- * 构造器 + {@link ProjectState#replaceAllLayers(List, String)} + {@link EditSession#state()}。</p>
+ * <p>{@code replaceProject} 整体替换为导入工程并<b>保留其多层 / 时间轴结构</b>，用于 .canvas 导入与模板套用。</p>
  */
 class EditSessionReplaceProjectTest {
 
-    /** 造一个 layerCount=3 的 ProjectState（用真实 Layer 构造器 + replaceAllLayers）。 */
+    /** 造一个 layerCount=3 的 ProjectState。 */
     private static ProjectState threeLayerState(int w, int h) {
-        ProjectState imported = new ProjectState(w, h);
         List<Layer> layers = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
             layers.add(new Layer("layer-" + i, "L" + i,
                     true, false, 1.0f, BlendMode.NORMAL, new ArrayList<>()));
         }
-        imported.replaceAllLayers(layers, "layer-0");
-        return imported;
+        return new ProjectState(new ProjectState.Canvas(w, h), layers, "layer-0", null, null);
     }
 
     @Test

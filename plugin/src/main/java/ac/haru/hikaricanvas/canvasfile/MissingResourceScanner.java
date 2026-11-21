@@ -32,8 +32,7 @@ import java.util.regex.Pattern;
  *       null 表示用户没指定字体（渲染期走默认），不报。去重。</li>
  *   <li><b>missing-icon</b>：所有 {@link IconElement#source()} 中<b>仅 {@code user/<id>} 形态</b>查
  *       {@link IconRegistry#isRegistered}；内置 {@code fa-solid/*} / {@code fa-regular/*} /
- *       {@code fa-brands/*} 恒在不查（CI 上 jar 可能未装内置图标包，但绝不是「缺」），legacy
- *       不含 {@code /} 的 PNG 形态走 {@code TemplateAssetService}、不在本扫描范围。去重。</li>
+ *       {@code fa-brands/*} 等非 {@code user} pack 恒在不查（CI 上 jar 可能未装内置图标包，但绝不是「缺」）。去重。</li>
  *   <li><b>missing-variable</b>：所有含文本元素提取 {@code ${var:...}} 引用，<b>仅判定
  *       {@code userglobal/<key>} 引用</b>（全局变量表存在性最可靠，且跨服分享最容易缺）查
  *       {@link VariableStore#get}。去重。</li>
@@ -142,14 +141,13 @@ public final class MissingResourceScanner {
     }
 
     /**
-     * 图标：仅 {@code user/<id>} 形态查存在性。内置 {@code fa-*} pack 恒在不查；legacy 无 {@code /}
-     * 形态走 PNG 兼容路径不在范围。
+     * 图标：仅 {@code user/<id>} 形态查存在性。内置 {@code fa-*} 等非 {@code user} pack 恒在不查。
      */
     private void scanIcon(IconElement ic, Set<String> seen) {
         if (iconRegistry == null) return;
         String source = ic.source();
         if (source == null || source.isEmpty()) return;
-        String pack = IconElement.packOf(source);   // legacy（无 '/'）返 null
+        String pack = IconElement.packOf(source);
         if (!"user".equals(pack)) return;            // 只看用户图标
         if (seen.contains(source)) return;
         if (!iconRegistry.isRegistered(source)) {

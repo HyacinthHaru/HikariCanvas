@@ -85,6 +85,11 @@ public final class ProjectState {
                     guides == null ? List.of() : guides);
         }
 
+        /** 默认白底快捷构造：等价于 {@code Canvas(widthMaps, heightMaps, "#FFFFFF")}。 */
+        public Canvas(int widthMaps, int heightMaps) {
+            this(widthMaps, heightMaps, Fill.solid("#FFFFFF"), null, List.of());
+        }
+
         /** v1 兼容快捷构造：等价于 5 参数版本传 {@code null} / {@code List.of()}。 */
         public Canvas(int widthMaps, int heightMaps, Fill background) {
             this(widthMaps, heightMaps, background, null, List.of());
@@ -138,6 +143,12 @@ public final class ProjectState {
         this.layers.add(def);
         this.activeLayerId = def.id();
         this.history = new History(0, 0);
+    }
+
+    /** Java 侧多层构造入口（无需传 v1 {@code elements} / {@code history} 占位参数）。 */
+    public ProjectState(Canvas canvas, List<Layer> layers, String activeLayerId,
+                        List<Timeline> timelines, Integer tweenFps) {
+        this(0L, canvas, null, layers, activeLayerId, null, timelines, null, tweenFps);
     }
 
     /**
@@ -279,14 +290,6 @@ public final class ProjectState {
         return true;
     }
 
-    public int indexOfElement(String elementId) {
-        List<Element> es = activeLayer().elements();
-        for (int i = 0; i < es.size(); i++) {
-            if (es.get(i).id().equals(elementId)) return i;
-        }
-        return -1;
-    }
-
     // ---------- package-private mutators（EditSession 使用）----------
 
     /** 每次成功变更后递增 version；返回新版本号。 */
@@ -330,16 +333,6 @@ public final class ProjectState {
         layers.add(to, l);
     }
 
-    /**
-     * 整体替换 layers 树 + activeLayerId。{@code template.apply} 走的路径。
-     * 不做 layer.id 校验；调用方应保证传入的 layers 至少含一个、activeLayerId 在其中。
-     */
-    public void replaceAllLayers(List<Layer> newLayers, String newActiveLayerId) {
-        layers.clear();
-        layers.addAll(newLayers);
-        this.activeLayerId = newActiveLayerId;
-    }
-
     // ---------- 0.6 v3：timeline 级 mutator（TimelineOperations 使用）----------
 
     /** 追加时间轴到列表末尾。 */
@@ -374,26 +367,6 @@ public final class ProjectState {
 
     public void addElement(int index, Element e) {
         activeLayer().elements().add(index, e);
-    }
-
-    public void clearElements() {
-        activeLayer().elements().clear();
-    }
-
-    public Element removeElementAt(int index) {
-        return activeLayer().elements().remove(index);
-    }
-
-    public void replaceElementAt(int index, Element e) {
-        activeLayer().elements().set(index, e);
-    }
-
-    /** 把 [from] 位置的元素移到 [to] 位置。reorder op 用。 */
-    public void moveElement(int from, int to) {
-        if (from == to) return;
-        List<Element> es = activeLayer().elements();
-        Element e = es.remove(from);
-        es.add(to, e);
     }
 
     /**

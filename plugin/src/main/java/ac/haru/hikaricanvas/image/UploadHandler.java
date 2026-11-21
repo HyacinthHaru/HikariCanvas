@@ -5,7 +5,6 @@ import io.javalin.http.UploadedFile;
 import ac.haru.hikaricanvas.HikariCanvasConfig;
 import ac.haru.hikaricanvas.session.Session;
 import ac.haru.hikaricanvas.session.SessionManager;
-import ac.haru.hikaricanvas.session.TokenService;
 import ac.haru.hikaricanvas.state.ImageElement;
 import ac.haru.hikaricanvas.storage.ImageUploadDao;
 import ac.haru.hikaricanvas.storage.WallRepo;
@@ -73,10 +72,8 @@ public final class UploadHandler {
     private final ImageUploadDao imageDao;
     private final Jdbi jdbi;
     private final HikariCanvasConfig.ImageConfig cfg;
-    private final TokenService tokenService;
     private final SessionManager sessionManager;
     private final WallRepo wallRepo;
-    /** 上传成功 / 拒绝路径打 audit；可空（旧测试构造器走 null）。 */
     private final ac.haru.hikaricanvas.storage.AuditLog auditLog;
     private final ExecutorService decoderPool;
 
@@ -84,16 +81,7 @@ public final class UploadHandler {
                          ImageStorage storage, ImageQuotaService quota,
                          ImageUploadDao imageDao, Jdbi jdbi,
                          HikariCanvasConfig.ImageConfig cfg,
-                         TokenService tokenService, SessionManager sessionManager,
-                         WallRepo wallRepo) {
-        this(log, storage, quota, imageDao, jdbi, cfg, tokenService, sessionManager, wallRepo, null);
-    }
-
-    public UploadHandler(Logger log,
-                         ImageStorage storage, ImageQuotaService quota,
-                         ImageUploadDao imageDao, Jdbi jdbi,
-                         HikariCanvasConfig.ImageConfig cfg,
-                         TokenService tokenService, SessionManager sessionManager,
+                         SessionManager sessionManager,
                          WallRepo wallRepo,
                          ac.haru.hikaricanvas.storage.AuditLog auditLog) {
         this.log = log;
@@ -102,7 +90,6 @@ public final class UploadHandler {
         this.imageDao = imageDao;
         this.jdbi = jdbi;
         this.cfg = cfg;
-        this.tokenService = tokenService;
         this.sessionManager = sessionManager;
         this.wallRepo = wallRepo;
         this.auditLog = auditLog;
@@ -209,7 +196,7 @@ public final class UploadHandler {
             conn.setConnectTimeout(URL_TIMEOUT_MS / 2);
             conn.setReadTimeout(URL_TIMEOUT_MS / 2);
             conn.setInstanceFollowRedirects(false);  // 重定向需手工处理 — v1 不跟随防 SSRF
-            conn.setRequestProperty("User-Agent", "HikariCanvas-Uploader/0.4.7");
+            conn.setRequestProperty("User-Agent", "HikariCanvas");
             conn.setRequestProperty("Accept", "image/png,image/jpeg,image/webp");
             int sc = conn.getResponseCode();
             if (sc < 200 || sc >= 300) {

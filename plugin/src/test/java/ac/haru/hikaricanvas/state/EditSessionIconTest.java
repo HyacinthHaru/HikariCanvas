@@ -94,15 +94,13 @@ class EditSessionIconTest {
     }
 
     @Test
-    void addIconLegacySourceFormat() {
-        // 不含 '/'，走 isLegacySource 路径（M7-M25 旧模板 PNG 形态）
+    void addIconBareSourceWithoutPackRejected() {
+        // 不含 '/' 的裸名不再接受（要求 <pack>/<name> 矢量形态）
         EditSession es = newSession();
         EditSession.OpResult r = es.addElement("icon", Map.of(
                 "source", "heart"
         ), null, null);
-        assertInstanceOf(EditSession.OpResult.Ok.class, r);
-        IconElement ic = (IconElement) es.state().elements().get(0);
-        assertEquals("heart", ic.source());
+        assertEquals("INVALID_PAYLOAD", ((EditSession.OpResult.Error) r).code());
     }
 
     @Test

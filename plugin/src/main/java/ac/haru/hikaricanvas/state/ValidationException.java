@@ -5,7 +5,7 @@ package ac.haru.hikaricanvas.state;
  * 由 op handler 外层 catch 后转为 {@code OpResult.Error(code, message)} 下行。
  *
  * <p>public：供 {@code canvasfile.ProjectMaterializer} 等在 .canvas / pack 导入时 catch
- * {@code EditSession.validateElementForTemplateApply} 抛的异常。</p>
+ * {@link ElementValidator#validateElementForTemplateApply} 抛的异常。</p>
  */
 public final class ValidationException extends RuntimeException {
     public final String code;

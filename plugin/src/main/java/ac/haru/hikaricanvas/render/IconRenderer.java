@@ -6,87 +6,32 @@ import ac.haru.hikaricanvas.state.Fill;
 import ac.haru.hikaricanvas.state.IconElement;
 import ac.haru.hikaricanvas.state.SolidFill;
 
-import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Paint;
-import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
-import java.awt.image.BufferedImage;
 
 /**
- * 绘制图标元素。
+ * 绘制矢量图标元素（SVG 矢量路径，见 {@code docs/rendering.md §4.4}）。
  *
- * <p><b>双路径分流</b>：</p>
- * <ul>
- *   <li><b>SVG 矢量路径</b>（{@code source} 含 {@code /}）：从 {@link IconRegistry} 取 path d
- *       + viewBox，{@link PathParser} 解析为 {@link java.awt.geom.Path2D}；viewBox → bbox
- *       等比缩放居中变换；用 {@link IconElement#fill()}（{@link FillPaintBuilder#fillToPaint}）
- *       填充。fill 为 null 时退黑色。</li>
- *   <li><b>PNG legacy 路径</b>（{@code source} 不含 {@code /}）：行为不变；
- *       {@code tint} 非空时对 alpha 做 source-in 染色（保留 alpha 形状、整体替换 tint 色）。</li>
- * </ul>
+ * <p>从 {@link IconRegistry} 按 {@code <pack>/<name>} 取 path d + viewBox，
+ * {@link PathParser} 解析为 {@link java.awt.geom.Path2D}；viewBox → bbox 等比缩放居中变换；
+ * 用 {@link IconElement#fill()}（{@link FillPaintBuilder#fillToPaint}）填充，
+ * {@code fill == null} 时退黑色默认色。未注册或 {@code iconRegistry == null} 时画占位框。</p>
  */
 public final class IconRenderer implements ElementRenderer {
 
     @Override
     public void draw(Graphics2D g, Element e, RenderContext ctx) {
         IconElement ic = (IconElement) e;
-        if (IconElement.isLegacySource(ic.source())) {
-            renderLegacyPng(g, ic, ctx);
-        } else {
-            renderSvgPath(g, ic, ctx);
+        if (ic.w() <= 0 || ic.h() <= 0
+                || ic.w() > ElementValidator.MAX_DIM || ic.h() > ElementValidator.MAX_DIM) {
+            return;
         }
+        renderSvgPath(g, ic, ctx);
     }
-
-    // ---------- legacy PNG 路径（行为完全不变） ----------
-
-    private void renderLegacyPng(Graphics2D g, IconElement ic, RenderContext ctx) {
-        // 渲染层兜底；w/h ≤ 0 时 drawImage / BufferedImage 行为退化 → 直接 return
-        if (ic.w() <= 0 || ic.h() <= 0) return;
-        // 关键帧 w/h 可能超 MAX_DIM（动画 ticker 线程 OOM 防御）
-        if (ic.w() > ElementValidator.MAX_DIM || ic.h() > ElementValidator.MAX_DIM) return;
-        if (ctx.assetService() == null) {
-            ctx.log().warning("[compositor] IconElement '" + ic.id() + "' but no assetService bound");
-            return;
-        }
-        BufferedImage img = ctx.assetService().loadIcon(ic.source());
-        if (img == null) {
-            drawPlaceholder(g, ic);
-            return;
-        }
-        if (ic.tint() == null || ic.tint().isBlank()) {
-            g.drawImage(img, ic.x(), ic.y(), ic.w(), ic.h(), null);
-            return;
-        }
-        // 染色：先画 tinted 形状 (source-in 合成) 到临时图，再贴。
-        // 临时图先与画布求交再分配 —— MAX_DIM 守卫放行的 10000×10000 仍是 400 MB ARGB，
-        // 而这段跑在编辑会话锁里（同 ImageRenderer 羽化路径，rendering.md §4.4）。
-        // 无模糊、无邻域依赖，直接相交即可，可见像素逐位不变。
-        java.awt.Rectangle full = new java.awt.Rectangle(ic.x(), ic.y(), ic.w(), ic.h());
-        java.awt.Rectangle canvas = CanvasCompositor.visibleBounds(g);
-        java.awt.Rectangle box = canvas == null ? full : full.intersection(canvas);
-        if (box.isEmpty()) return;
-        BufferedImage tinted = new BufferedImage(box.width, box.height, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D tg = tinted.createGraphics();
-        try {
-            tg.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-            // 局部 (0,0) 对应画布 (box.x, box.y)，下面仍按「元素本地 0..w / 0..h」写
-            tg.translate(ic.x() - box.x, ic.y() - box.y);
-            tg.drawImage(img, 0, 0, ic.w(), ic.h(), null);
-            tg.setComposite(AlphaComposite.SrcIn);
-            tg.setColor(FillPaintBuilder.parseColor(ic.tint()));
-            tg.fillRect(0, 0, ic.w(), ic.h());
-        } finally {
-            tg.dispose();
-        }
-        g.drawImage(tinted, box.x, box.y, null);
-    }
-
-    // ---------- SVG 矢量路径 ----------
 
     private void renderSvgPath(Graphics2D g, IconElement ic, RenderContext ctx) {
         IconRegistry registry = ctx.iconRegistry();
@@ -101,7 +46,6 @@ public final class IconRenderer implements ElementRenderer {
             drawPlaceholder(g, ic);
             return;
         }
-        if (ic.w() <= 0 || ic.h() <= 0) return;
 
         // 1. parse path d → Path2D（PathParser 支持完整 SVG 命令集 M/L/H/V/Q/T/C/S/A；
         //    A 弧用 ≤π/2 段 cubic bezier 近似——见 PathParser 类 doc）

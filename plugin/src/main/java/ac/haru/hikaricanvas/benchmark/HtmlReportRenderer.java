@@ -1,5 +1,10 @@
 package ac.haru.hikaricanvas.benchmark;
 
+import ac.haru.hikaricanvas.benchmark.BenchmarkReport.EnvInfo;
+import ac.haru.hikaricanvas.benchmark.BenchmarkReport.GcSummary;
+import ac.haru.hikaricanvas.benchmark.BenchmarkReport.PerElementCost;
+import ac.haru.hikaricanvas.benchmark.BenchmarkReport.Percentiles;
+import ac.haru.hikaricanvas.benchmark.BenchmarkReport.SceneResult;
 import ac.haru.hikaricanvas.i18n.Messages;
 
 import java.time.Instant;
@@ -14,35 +19,72 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * 把聚合好的 {@link BenchmarkReport} 渲染成<b>完全自包含</b>的 HTML5 报告。
+ * 将 {@link BenchmarkReport} 渲染为完全自包含的 HTML5 报告（内联样式、SVG 横向条形图与交互式性能预算计算器，
+ * 零外部脚本/样式/字体依赖；见 {@code docs/benchmark.md §3-§4}）。
  *
- * <p>报告只摊开描述性测量（环境 / per-scene 分位 /
- * per-element 边际 / GC），结论部分交给服主用<b>自己</b>的 mspt 预算在内联 JS 计算器里实时试算。
- * 计算器的算法精确镜像 {@link BudgetFormula#availableMsPerSecond} /
- * {@link BudgetFormula#projectedMaxWalls}，并随身展示 disclaimer（保守下界口径，避免被当成硬上限）。</p>
- *
- * <p>文案按 {@code messages.defaultLocale()} 从 {@code command.bench.report-html.*} 取（rawOrNull，
- * 不走 MiniMessage —— 报告是磁盘文件、无"某玩家"，与 summary.txt 同口径；lang 值可含 HTML 实体）。</p>
- *
- * <p>纯 headless：仅从 report 拼 String，无任何 Bukkit / Player / PacketEvents / NMS，无外部资源
- * （无 CDN script、无远端 link、无 web font）—— 全部内联 {@code <style>} + {@code <script>}。
- * 时间一律由 {@code report.generatedAtMillis()} 推得，<b>不</b>调用任何当前时钟 API。</p>
+ * <p>文案按 {@code messages.defaultLocale()} 从 {@code command.bench.report-html.*} 读取；
+ * 生成时间完全取自 {@code report.generatedAtMillis()}，不读取系统时钟。</p>
  */
 public final class HtmlReportRenderer {
+
+    /**
+     * 交互式性能预算计算器的默认参数载体（对应 {@code docs/benchmark.md §4}：
+     * {@code 可用预算 = mspt × tps × share%}，{@code 可载墙数 = 可用预算 / (p95 × fps)}）。
+     *
+     * @param msptBudgetMs       每 tick 预算毫秒（≤0 时归一为 50）
+     * @param tps                目标 tps（≤0 时归一为 20）
+     * @param mainThreadSharePct 分给本插件的预算份额百分比（越界时归一为 30）
+     * @param fps                目标刷新帧率（≤0 时归一为 1）
+     */
+    public record Inputs(double msptBudgetMs, int tps, double mainThreadSharePct, int fps) {
+        public Inputs {
+            if (msptBudgetMs <= 0) msptBudgetMs = 50.0;
+            if (tps <= 0) tps = 20;
+            if (mainThreadSharePct <= 0 || mainThreadSharePct > 100) mainThreadSharePct = 30.0;
+            if (fps <= 0) fps = 1;
+        }
+
+        /** 默认预算输入：50 mspt / 20 tps / 30% 份额 / 5 fps。 */
+        public static Inputs defaults() {
+            return new Inputs(50.0, 20, 30.0, 5);
+        }
+    }
+
+    /** 内联 SVG 横向条形图的单行数据项。 */
+    record Bar(String label, double value) {}
 
     private static final DateTimeFormatter TIME_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'").withZone(ZoneOffset.UTC);
 
+    // SVG 条形图配色（Catppuccin Latte）与 viewBox 布局常量
+    private static final String COLOR_BAR = "#1e66f5";
+    private static final String COLOR_TEXT = "#4c4f69";
+    private static final String COLOR_SUBTEXT = "#6c6f85";
+    private static final String COLOR_TRACK = "#ccd0da";
+    private static final String COLOR_ROW_ALT = "#eff1f5";
+
+    private static final int VIEW_WIDTH = 640;
+    private static final int ROW_HEIGHT = 22;
+    private static final int TITLE_HEIGHT = 30;
+    private static final int PADDING_TOP = 6;
+    private static final int PADDING_BOTTOM = 8;
+    private static final int LABEL_X = 8;
+    private static final int LABEL_WIDTH = 180;
+    private static final int VALUE_WIDTH = 96;
+    private static final int BAR_X = LABEL_X + LABEL_WIDTH;
+    private static final int BAR_MAX_WIDTH = VIEW_WIDTH - BAR_X - VALUE_WIDTH;
+    private static final int BAR_STUB_WIDTH = 2;
+    private static final int BAR_INSET = 4;
+
     private HtmlReportRenderer() {
-        // 工具类
     }
 
     /**
-     * 渲染完整自包含 HTML 报告文档（以 {@code <!DOCTYPE html>} 开头）。
+     * 渲染完整自包含 HTML5 报告文档。
      *
-     * @param report   聚合产出的报告（数据源）
-     * @param messages i18n 中枢；文案按 {@code messages.defaultLocale()} 渲染
-     * @return 完整 HTML 文档字符串，可直接落盘成 {@code report.html}
+     * @param report   聚合报告数据源
+     * @param messages 国际化文案中枢（按 {@code messages.defaultLocale()} 取文案）
+     * @return 完整 HTML 字符串
      */
     public static String render(BenchmarkReport report, Messages messages) {
         String loc = messages.defaultLocale();
@@ -71,12 +113,108 @@ public final class HtmlReportRenderer {
         return sb.toString();
     }
 
-    /** locale id（如 {@code zh_cn} / {@code en_us}）→ HTML {@code lang} 属性。 */
+    /** 生成响应式内联横向条形图 {@code <svg>…</svg>} 片段（空列表或非正极值安全降级）。 */
+    static String horizontalBarChart(String title, List<Bar> bars, String unit) {
+        String safeUnit = unit == null ? "" : unit;
+        String safeTitle = esc(title == null ? "" : title);
+
+        if (bars == null || bars.isEmpty()) {
+            return emptyChart(safeTitle);
+        }
+
+        double maxValue = 0.0;
+        for (Bar b : bars) {
+            double v = b == null ? 0.0 : b.value();
+            if (Double.isFinite(v) && v > maxValue) {
+                maxValue = v;
+            }
+        }
+        boolean degenerate = !(maxValue > 0.0);
+
+        int rows = bars.size();
+        int totalHeight = TITLE_HEIGHT + PADDING_TOP + rows * ROW_HEIGHT + PADDING_BOTTOM;
+
+        StringBuilder sb = new StringBuilder(512 + rows * 256);
+        sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ")
+                .append(VIEW_WIDTH).append(' ').append(totalHeight)
+                .append("\" style=\"width:100%;height:auto;font-family:system-ui,-apple-system,sans-serif\" ")
+                .append("role=\"img\">");
+
+        sb.append("<text x=\"").append(LABEL_X).append("\" y=\"20\" ")
+                .append("font-size=\"14\" font-weight=\"600\" fill=\"").append(COLOR_TEXT)
+                .append("\">").append(safeTitle).append("</text>");
+
+        int baseY = TITLE_HEIGHT + PADDING_TOP;
+        for (int i = 0; i < rows; i++) {
+            Bar b = bars.get(i);
+            String label = esc(b == null ? "" : b.label());
+            double value = b == null ? 0.0 : b.value();
+            if (!Double.isFinite(value)) {
+                value = 0.0;
+            }
+
+            int rowY = baseY + i * ROW_HEIGHT;
+            int textY = rowY + ROW_HEIGHT - 7;
+            int barY = rowY + BAR_INSET;
+            int barH = ROW_HEIGHT - BAR_INSET * 2;
+
+            if ((i & 1) == 1) {
+                sb.append("<rect x=\"0\" y=\"").append(rowY).append("\" width=\"")
+                        .append(VIEW_WIDTH).append("\" height=\"").append(ROW_HEIGHT)
+                        .append("\" fill=\"").append(COLOR_ROW_ALT).append("\"/>");
+            }
+
+            sb.append("<rect x=\"").append(BAR_X).append("\" y=\"").append(barY)
+                    .append("\" width=\"").append(BAR_MAX_WIDTH).append("\" height=\"").append(barH)
+                    .append("\" rx=\"2\" fill=\"").append(COLOR_TRACK).append("\"/>");
+
+            int barW;
+            if (degenerate || value <= 0.0) {
+                barW = BAR_STUB_WIDTH;
+            } else {
+                double ratio = Math.min(1.0, value / maxValue);
+                barW = Math.max(BAR_STUB_WIDTH, (int) Math.round(ratio * BAR_MAX_WIDTH));
+            }
+            sb.append("<rect x=\"").append(BAR_X).append("\" y=\"").append(barY)
+                    .append("\" width=\"").append(barW).append("\" height=\"").append(barH)
+                    .append("\" rx=\"2\" fill=\"").append(COLOR_BAR).append("\"/>");
+
+            sb.append("<text x=\"").append(LABEL_X).append("\" y=\"").append(textY)
+                    .append("\" font-size=\"12\" fill=\"").append(COLOR_TEXT)
+                    .append("\">").append(label).append("</text>");
+
+            String valueText = esc(num(value) + (safeUnit.isEmpty() ? "" : " " + safeUnit));
+            sb.append("<text x=\"").append(VIEW_WIDTH - 6).append("\" y=\"").append(textY)
+                    .append("\" font-size=\"12\" text-anchor=\"end\" fill=\"").append(COLOR_SUBTEXT)
+                    .append("\">").append(valueText).append("</text>");
+        }
+
+        sb.append("</svg>");
+        return sb.toString();
+    }
+
+    private static String emptyChart(String safeTitle) {
+        int totalHeight = TITLE_HEIGHT + ROW_HEIGHT + PADDING_BOTTOM;
+        StringBuilder sb = new StringBuilder(256);
+        sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ")
+                .append(VIEW_WIDTH).append(' ').append(totalHeight)
+                .append("\" style=\"width:100%;height:auto;font-family:system-ui,-apple-system,sans-serif\" ")
+                .append("role=\"img\">");
+        if (!safeTitle.isEmpty()) {
+            sb.append("<text x=\"").append(LABEL_X).append("\" y=\"20\" font-size=\"14\" ")
+                    .append("font-weight=\"600\" fill=\"").append(COLOR_TEXT)
+                    .append("\">").append(safeTitle).append("</text>");
+        }
+        sb.append("<text x=\"").append(LABEL_X).append("\" y=\"")
+                .append(TITLE_HEIGHT + 16).append("\" font-size=\"12\" fill=\"")
+                .append(COLOR_SUBTEXT).append("\">(no data)</text>");
+        sb.append("</svg>");
+        return sb.toString();
+    }
+
     private static String htmlLang(String loc) {
         return (loc != null && loc.toLowerCase(Locale.ROOT).startsWith("zh")) ? "zh-CN" : "en";
     }
-
-    // ---------------------------------------------------------------- head
 
     private static void appendHead(StringBuilder sb, Function<String, String> t) {
         sb.append("<head>\n");
@@ -87,7 +225,6 @@ public final class HtmlReportRenderer {
         sb.append("</head>\n");
     }
 
-    /** Catppuccin Latte 浅色主题；数字表用系统等宽字体栈；蓝 #1e66f5 / mauve #8839ef accent。 */
     private static String css() {
         return ":root{--bg:#eff1f5;--text:#4c4f69;--subtext:#6c6f85;--card:#ffffff;"
                 + "--border:#ccd0da;--blue:#1e66f5;--mauve:#8839ef;--zebra:#f5f6f8;--crust:#dce0e8;}"
@@ -129,8 +266,6 @@ public final class HtmlReportRenderer {
                 + ".foot{color:var(--subtext);font-size:.85rem;text-align:center;margin:36px 0 0;}";
     }
 
-    // ---------------------------------------------------------------- header
-
     private static void appendHeader(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         String when = TIME_FMT.format(Instant.ofEpochMilli(report.generatedAtMillis()));
         sb.append("<h1>").append(esc(t.apply("title"))).append("</h1>\n");
@@ -138,8 +273,6 @@ public final class HtmlReportRenderer {
                 .append(" &middot; ").append(esc(t.apply("header-format"))).append(report.schemaVersion())
                 .append("</p>\n");
     }
-
-    // ---------------------------------------------------------------- env
 
     private static void appendEnvCard(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         EnvInfo env = report.env();
@@ -158,8 +291,6 @@ public final class HtmlReportRenderer {
     private static void kv(StringBuilder sb, String k, String v) {
         sb.append("<dt>").append(esc(k)).append("</dt><dd>").append(esc(v)).append("</dd>\n");
     }
-
-    // ---------------------------------------------------------------- config
 
     private static void appendConfigCard(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         BenchmarkConfig cfg = report.config();
@@ -189,8 +320,6 @@ public final class HtmlReportRenderer {
         return b.toString();
     }
 
-    // ---------------------------------------------------------------- scene table
-
     private static void appendSceneTable(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         sb.append("<section class=\"card\">\n<h2>").append(esc(t.apply("scenes-title"))).append("</h2>\n");
         sb.append("<table>\n<thead>\n<tr>")
@@ -208,9 +337,7 @@ public final class HtmlReportRenderer {
         for (SceneResult s : report.scenes()) {
             Percentiles r = s.rasterizeMs();
             Percentiles p = s.paletteMs();
-            String alloc = s.allocSupported()
-                    ? num(s.meanAllocMbPerIter())
-                    : "n/a";
+            String alloc = s.allocSupported() ? num(s.meanAllocMbPerIter()) : "n/a";
             sb.append("<tr>")
                     .append("<td>").append(esc(s.sceneId())).append("</td>")
                     .append("<td>").append(num(r.p50())).append("</td>")
@@ -227,45 +354,38 @@ public final class HtmlReportRenderer {
         sb.append("</tbody>\n</table>\n</section>\n");
     }
 
-    // ---------------------------------------------------------------- scene chart
-
     private static void appendSceneChart(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         List<SceneResult> sorted = new ArrayList<>(report.scenes());
         sorted.sort(Comparator.comparingDouble((SceneResult s) -> s.rasterizeMs().p95()).reversed());
-        List<SvgBarChart.Bar> bars = new ArrayList<>(sorted.size());
+        List<Bar> bars = new ArrayList<>(sorted.size());
         for (SceneResult s : sorted) {
-            bars.add(new SvgBarChart.Bar(s.sceneId(), s.rasterizeMs().p95()));
+            bars.add(new Bar(s.sceneId(), s.rasterizeMs().p95()));
         }
         sb.append("<section class=\"card\">\n");
-        sb.append(SvgBarChart.horizontal(t.apply("chart-scene"), bars, "ms"));
+        sb.append(horizontalBarChart(t.apply("chart-scene"), bars, "ms"));
         sb.append("\n</section>\n");
     }
-
-    // ---------------------------------------------------------------- per-element chart
 
     private static void appendPerElementChart(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         List<PerElementCost> costs = report.perElement();
         if (costs == null || costs.isEmpty()) {
             return;
         }
-        // 统计每个 elementType 出现次数：>1 时在 label 后缀 sceneId 区分（如两个 text 场景）。
         Map<String, Integer> typeCount = new HashMap<>();
         for (PerElementCost c : costs) {
             typeCount.merge(c.elementType(), 1, Integer::sum);
         }
-        List<SvgBarChart.Bar> bars = new ArrayList<>(costs.size());
+        List<Bar> bars = new ArrayList<>(costs.size());
         for (PerElementCost c : costs) {
             String label = typeCount.getOrDefault(c.elementType(), 1) > 1
                     ? c.elementType() + "(" + c.sceneId() + ")"
                     : c.elementType();
-            bars.add(new SvgBarChart.Bar(label, c.marginalMsPerElement()));
+            bars.add(new Bar(label, c.marginalMsPerElement()));
         }
         sb.append("<section class=\"card\">\n");
-        sb.append(SvgBarChart.horizontal(t.apply("chart-element"), bars, "ms"));
+        sb.append(horizontalBarChart(t.apply("chart-element"), bars, "ms"));
         sb.append("\n</section>\n");
     }
-
-    // ---------------------------------------------------------------- gc
 
     private static void appendGcLine(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
         GcSummary gc = report.gc();
@@ -276,15 +396,12 @@ public final class HtmlReportRenderer {
         sb.append("</section>\n");
     }
 
-    // ---------------------------------------------------------------- calculator
-
     private static void appendCalculator(StringBuilder sb, BenchmarkReport report, Function<String, String> t) {
-        BudgetFormula.Inputs d = BudgetFormula.Inputs.defaults();
+        Inputs d = Inputs.defaults();
         sb.append("<section class=\"card\">\n<h2>").append(esc(t.apply("calc-title"))).append("</h2>\n");
         sb.append("<p class=\"sub\" style=\"margin-bottom:14px\">")
                 .append(esc(t.apply("calc-intro"))).append("</p>\n");
 
-        // 表单
         sb.append("<div class=\"calc-form\">\n");
         numberInput(sb, "calc-mspt", t.apply("calc-mspt"), d.msptBudgetMs(), "1", "0");
         numberInput(sb, "calc-tps", t.apply("calc-tps"), d.tps(), "1", "1");
@@ -292,11 +409,9 @@ public final class HtmlReportRenderer {
         numberInput(sb, "calc-fps", t.apply("calc-fps"), d.fps(), "1", "1");
         sb.append("</div>\n");
 
-        // 公式 + disclaimer（formula 含 HTML 实体，rawOrNull 原样输出，不 esc）
         sb.append("<p class=\"formula\">").append(t.apply("calc-formula")).append("</p>\n");
         sb.append("<p class=\"disclaimer\">").append(esc(t.apply("disclaimer"))).append("</p>\n");
 
-        // 结果表
         sb.append("<table style=\"margin-top:16px\">\n<thead>\n<tr>")
                 .append("<th>").append(esc(t.apply("th-scene"))).append("</th>")
                 .append("<th>").append(esc(t.apply("calc-th-cost"))).append("</th>")
@@ -311,7 +426,6 @@ public final class HtmlReportRenderer {
         }
         sb.append("</tbody>\n</table>\n");
 
-        // 内联脚本：精确镜像 BudgetFormula.availableMsPerSecond + projectedMaxWalls
         sb.append("<script>\n");
         sb.append("(function(){\n");
         sb.append("var scenes=").append(scenesJsLiteral(report)).append(";\n");
@@ -322,12 +436,10 @@ public final class HtmlReportRenderer {
         sb.append("  var tps=val(inputs[1],").append(jsNum(d.tps())).append(");\n");
         sb.append("  var share=val(inputs[2],").append(jsNum(d.mainThreadSharePct())).append(");\n");
         sb.append("  var fps=val(inputs[3],").append(jsNum(d.fps())).append(");\n");
-        // 镜像 availableMsPerSecond = mspt * tps * (share/100)
         sb.append("  var availableMs=mspt*tps*(share/100);\n");
         sb.append("  var rows=document.querySelectorAll('tr[data-scene]');\n");
         sb.append("  for(var i=0;i<scenes.length;i++){\n");
         sb.append("    var s=scenes[i];\n");
-        // 镜像 projectedMaxWalls：cost<=0 -> Infinity，否则 availableMs/cost
         sb.append("    var cost=s.p95*fps;\n");
         sb.append("    var walls=(cost<=0)?Infinity:availableMs/cost;\n");
         sb.append("    var cell=rows[i]?rows[i].querySelector('.walls'):null;\n");
@@ -349,7 +461,6 @@ public final class HtmlReportRenderer {
                 .append("\" min=\"").append(esc(min)).append("\"></label>\n");
     }
 
-    /** 构造 per-scene 的 JS 数组字面量 {@code [{id:"…",p95:<double>}, …]}（id 双重转义）。 */
     private static String scenesJsLiteral(BenchmarkReport report) {
         StringBuilder b = new StringBuilder();
         b.append('[');
@@ -366,20 +477,15 @@ public final class HtmlReportRenderer {
         return b.toString();
     }
 
-    // ---------------------------------------------------------------- footer
-
     private static void appendFooter(StringBuilder sb, Function<String, String> t) {
         sb.append("<p class=\"foot\">").append(esc(t.apply("footer"))).append("</p>\n");
     }
 
-    // ---------------------------------------------------------------- helpers
-
-    /** 格式化数值：%.3f，固定 Locale.ROOT（点小数 + 无千分位）。 */
+    /** 固定 {@link Locale#ROOT} 三位小数格式化（避免逗号小数破坏表格或 SVG）。 */
     private static String num(double v) {
         return String.format(Locale.ROOT, "%.3f", v);
     }
 
-    /** JS 数值字面量：有限值原样（Locale.ROOT 点小数），非有限值降级 0。 */
     private static String jsNum(double v) {
         if (!Double.isFinite(v)) {
             return "0";
@@ -387,12 +493,9 @@ public final class HtmlReportRenderer {
         return String.format(Locale.ROOT, "%s", v);
     }
 
-    /**
-     * HTML 转义：处理 {@code & < > " '} 五个字符——所有放进 HTML 正文 / 属性 / JS 字符串字面量
-     * （配合 {@link #jsStr}）的动态字符串都必须过这个。
-     */
+    /** HTML / XML 实体转义（覆盖 {@code & < > " '}），供表格、属性与内联 SVG 共享。 */
     private static String esc(String s) {
-        if (s == null) {
+        if (s == null || s.isEmpty()) {
             return "";
         }
         StringBuilder b = new StringBuilder(s.length() + 8);
@@ -410,11 +513,7 @@ public final class HtmlReportRenderer {
         return b.toString();
     }
 
-    /**
-     * JS 字符串字面量转义：用于内嵌进 {@code "…"} 的 JS 上下文（计算器数据数组的 id）。
-     * 先按 JS 规则转义反斜杠 / 引号 / 控制字符 / {@code <}（防 {@code </script>} 提前闭合），
-     * 该结果再被放进 HTML {@code <script>} 块——脚本块内 HTML 实体不解析，故不能用 {@link #esc}。
-     */
+    /** JS 双引号字符串字面量转义（含 {@code \u003c} 防 {@code </script>} 闭合逃逸）。 */
     private static String jsStr(String s) {
         if (s == null) {
             return "";

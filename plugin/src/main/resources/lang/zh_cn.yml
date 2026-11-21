@@ -86,8 +86,6 @@ command:
     anim-static: "<gray>  ℹ 动画：静态（没有时间轴在播）。</gray>"
     summary-ok: "<green>  → 所有检查通过。若仍不显示，打开一次编辑器驱动一帧渲染即可。</green>"
     summary-issues: "<yellow>  → 发现问题：上方第一处标 ✗ / ⚠ 的环节即原因。</yellow>"
-  cleanup:
-    stubbed: "<yellow>该命令暂未开放。清理孤立展示框 / 修复数据将在后续版本提供。</yellow>"
   reload:
     config-type-mismatch: "<red>重载配置失败：插件类型不匹配（内部错误）</red>"
     config-ok: "<gold>配置已重载：<summary></gold>"
@@ -270,8 +268,8 @@ command:
       header: "<gold>/canvas bench 子命令：</gold>"
       list: "<gray>  /canvas bench list                          — 列出测试场景</gray>"
       run: "<gray>  /canvas bench run [场景] [轮次] [预热]  — 运行渲染性能测试</gray>"
-      run-tween: "<gray>  /canvas bench run-tween [轮次] [预热]       — 补间动画帧率压测（0.7.x）</gray>"
-      run-script: "<gray>  /canvas bench run-script [轮次] [预热]      — 脚本动作链开销压测（0.7.x）</gray>"
+      run-tween: "<gray>  /canvas bench run-tween [轮次] [预热]       — 补间动画帧率压测</gray>"
+      run-script: "<gray>  /canvas bench run-script [轮次] [预热]      — 脚本动作链开销压测</gray>"
       report: "<gray>  /canvas bench report [id]                   — 打印最近的或指定的报告</gray>"
       clear: "<gray>  /canvas bench clear                         — 清空已保存的报告</gray>"
 wand:

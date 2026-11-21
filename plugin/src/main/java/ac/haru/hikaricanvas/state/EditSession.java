@@ -981,48 +981,14 @@ public final class EditSession {
                 null);
     }
 
-    // ---------- template.apply ----------
-
-    /**
-     * 替换 ProjectState 内容（背景 + 整 layers 树）。{@code template.apply} 的"replace 语义"。
-     *
-     * <p>清空所有层 → 生成一个 Default Layer 包住 {@code elements} → activeLayerId
-     * 指向它。符合 {@code docs/architecture.md §10.5}。</p>
-     *
-     * <p>{@code backgroundColor} String 入口保留兼容（自动 wrap 为 SolidFill）；
-     * 推荐新调用方走 {@link #replaceContent(Fill, List)} 直传 Fill。</p>
-     *
-     * @param backgroundColor 新背景色 hex（null = 保留当前）
-     * @param elements        新 element 列表
-     */
-    public synchronized OpResult replaceContent(String backgroundColor, List<Element> elements) {
-        return replaceContent(backgroundColor == null ? null : new SolidFill(backgroundColor), elements);
-    }
-
-    /** Fill 入口的 replaceContent。{@code null} 保留当前 background。 */
-    public synchronized OpResult replaceContent(Fill background, List<Element> elements) {
-        ProjectSnapshot pre = snapshotNow();
-        ProjectState.Canvas c = state.canvas();
-        state.canvas(new ProjectState.Canvas(c.widthMaps(), c.heightMaps(),
-                background == null ? c.background() : background,
-                c.gridSize(), c.guides()));
-        // 重建：单个 Default Layer 包新 elements，activeLayerId 指向它
-        String newLayerId = "l-" + UUID.randomUUID().toString().substring(0, 8);
-        Layer defLayer = new Layer(newLayerId, ProjectState.DEFAULT_LAYER_NAME,
-                true, false, 1.0f, BlendMode.NORMAL,
-                new ArrayList<>(elements == null ? List.of() : elements));
-        state.replaceAllLayers(List.of(defLayer), newLayerId);
-        commitHistory(pre);
-        long v = state.bumpVersion();
-        return new OpResult.OkSnapshot(v, DirtyRegion.fullCanvas(state));
-    }
+    // ---------- .canvas 导入 / template.apply ----------
 
     /**
      * 整体替换当前工程为导入的 {@link ProjectState}，<b>保留其多层结构 + 时间轴</b>。
      *
-     * <p>用于 {@code .canvas} 工程导入——区别于 {@link #replaceContent(Fill, List)} 把内容拍平成
-     * 单层。采用 imported 的 canvas + layers(+activeLayerId) + timelines(+activeTimelineId) +
-     * tweenFps，bump version 并把替换前状态压入 undo 栈，返回结构跳变 {@link OpResult.OkSnapshot}。</p>
+     * <p>用于 {@code .canvas} 工程导入与模板 pack 套用。采用 imported 的 canvas +
+     * layers(+activeLayerId) + timelines(+activeTimelineId) + tweenFps，bump version 并把
+     * 替换前状态压入 undo 栈，返回结构跳变 {@link OpResult.OkSnapshot}。</p>
      *
      * <p>实现走 {@link ProjectState#restore(ProjectSnapshot)}：它对 imported 的 layers 深拷贝
      * （新 Layer + 新 element ArrayList），timelines 浅拷外层（Timeline record 不可变），保证
@@ -1534,13 +1500,13 @@ public final class EditSession {
     // ---------- IconElement（矢量 + Fill 联合类型） ----------
 
     /**
-     * 构造 IconElement。source 走 {@link IconElement#isValidSource}（pack/name 形态
-     * 或 legacy 单段），fill 优先于 tint：
+     * 构造 IconElement。source 走 {@link IconElement#isValidSource}（{@code <pack>/<name>} 形态），
+     * fill 优先于 tint：
      * <ul>
      *   <li>同次 add 给了 {@code fill} → 走 {@link FillValidator}；{@code tint} 仅作为冗余字段
      *       存入 record（向后兼容旧客户端读取）</li>
-     *   <li>没 fill 但有 {@code tint}（旧客户端 / 旧模板） → 自动 wrap {@link SolidFill}</li>
-     *   <li>两者都没 → fill = null（IconRenderer 退回 pack 默认色 / 黑）</li>
+     *   <li>没 fill 但有 {@code tint}（旧客户端） → 自动 wrap {@link SolidFill}</li>
+     *   <li>两者都没 → fill = null（IconRenderer 退回默认黑色）</li>
      * </ul>
      */
     private Element buildIcon(String id, Map<String, Object> p) {
@@ -2101,16 +2067,6 @@ public final class EditSession {
 
     private static OpResult.Error err(String code, String msg) {
         return new OpResult.Error(code, msg);
-    }
-
-    /**
-     * {@code .canvas} / pack 导入的 element 通过本方法二次校验（不信任外部数值）。
-     * 实现位于 {@link ElementValidator#validateElementForTemplateApply}；本 wrapper 保留统一入口。
-     *
-     * @throws ValidationException 任一字段不合法
-     */
-    public static void validateElementForTemplateApply(Element el) {
-        ElementValidator.validateElementForTemplateApply(el);
     }
 
 }
