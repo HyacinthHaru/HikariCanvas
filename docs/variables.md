@@ -1,35 +1,34 @@
-# HikariCanvas 变量系统使用指南
+# HikariCanvas 变量与铁路教程
 
-> HikariCanvas「动态信息屏」使用与运维指南，覆盖玩家入门（用户变量、系统变量、PAPI 与计分板桥接、列车时刻表、铁路网络、全局变量、变量别名）与服务端运维管理。
->
-> 配套文档：
-> - `docs/dynamic-data.md`（设计 / 协议 / 数据模型契约）
-> - `docs/api.md`（第三方插件接入 SDK）
+这篇指南面向**玩家**与**服主**，介绍如何用变量系统做动态信息屏——包括单画布变量、跨画布全局变量、系统自动变量、PlaceholderAPI 与原版计分板接入、列车时刻表、全线铁路网络，以及后台运维命令。
+
+- 想从你自己的插件往招牌推送实时数据，请阅读 [外部插件接入 API](api.md)。
+- 想了解底层数据模型与协议细节，请查阅 [动态数据接入设计](dynamic-data.md)。
 
 ## 目录
 
 - [第一部分：玩家入门](#第一部分玩家入门)
   - [1.1 什么是变量](#11-什么是变量)
   - [1.2 创建你的第一个变量](#12-创建你的第一个变量)
-  - [1.3 在 wall 上使用变量](#13-在-wall-上使用变量)
-  - [1.4 NUMBER 类快捷操作](#14-number-类快捷操作)
-  - [1.5 VariablePicker 自动补全](#15-variablepicker-自动补全)
+  - [1.3 在招牌文字里插入变量](#13-在招牌文字里插入变量)
+  - [1.4 数字变量的快捷加减](#14-数字变量的快捷加减)
+  - [1.5 变量选择器与胶囊标签](#15-变量选择器与胶囊标签)
   - [1.6 系统自动变量](#16-系统自动变量)
-  - [1.7 PlaceholderAPI 集成](#17-placeholderapi-集成)
-  - [1.8 Scoreboard 动态变量](#18-scoreboard-动态变量)
-  - [1.9 列车时刻表（Manual Schedule）](#19-列车时刻表manual-schedule)
-  - [1.10 fallback 语法](#110-fallback-语法)
-  - [1.11 变量被删除后？](#111-变量被删除后)
-  - [1.12 变量别名](#112-变量别名)
-  - [1.13 铁路网络](#113-铁路网络)
-  - [1.14 全局用户变量](#114-全局用户变量)
-- [第二部分：运维管理](#第二部分运维管理)
-  - [2.1 /canvas var 命令族](#21-canvas-var-命令族)
-  - [2.2 config.yml 限流配置](#22-configyml-限流配置)
+  - [1.7 接入 PlaceholderAPI](#17-接入-placeholderapi)
+  - [1.8 接入原版计分板（Scoreboard）](#18-接入原版计分板scoreboard)
+  - [1.9 简易列车时刻表](#19-简易列车时刻表)
+  - [1.10 缺值兜底语法（fallback）](#110-缺值兜底语法fallback)
+  - [1.11 变量被删除后会怎样](#111-变量被删除后会怎样)
+  - [1.12 给变量起别名](#112-给变量起别名)
+  - [1.13 铁路网络（多站联动站台屏）](#113-铁路网络多站联动站台屏)
+  - [1.14 跨画布共享的全局用户变量](#114-跨画布共享的全局用户变量)
+- [第二部分：服主运维管理](#第二部分服主运维管理)
+  - [2.1 `/canvas var` 命令速查](#21-canvas-var-命令速查)
+  - [2.2 推送限流配置](#22-推送限流配置)
   - [2.3 第三方插件接入](#23-第三方插件接入)
-  - [2.4 监控 + 故障排查](#24-监控--故障排查)
-  - [2.5 备份 + 恢复](#25-备份--恢复)
-  - [2.6 重载流程](#26-重载流程)
+  - [2.4 常见日志与排查](#24-常见日志与排查)
+  - [2.5 数据备份与恢复](#25-数据备份与恢复)
+  - [2.6 配置重载对照表](#26-配置重载对照表)
 
 ---
 
@@ -37,665 +36,428 @@
 
 ### 1.1 什么是变量
 
-普通招牌是**静态**的：画好以后内容不会变。**变量系统**让招牌变成**动态信息屏**——文字可以根据服务器状态、玩家分数、列车 ETA 等数据自动刷新。
+普通招牌上的字写好就不会变了；**变量**则让文字能跟着实时数据自动刷新——小到比赛计分牌、当前服务器时间，大到地铁站台的列车到站倒计时，都靠它驱动。
 
-核心机制：在 TextElement 文本里写 **占位符** `${var:NAME}`，渲染时 HikariCanvas 把占位符替换成变量当前值。
+用法很直观：在文本元素里插入形如 `${var:变量名}` 的占位符，画布渲染时就会自动把它替换成变量的最新值。
 
-变量按 **来源**（namespace）分四层，覆盖几乎所有用例：
+按数据来源划分，你可以直接使用以下几类变量：
 
-| 数据源 | namespace | 示例 | 谁负责更新 |
-|---|---|---|---|
-| 玩家变量 | `user:<wallId>` | `user/red_score` | 玩家手动 / 插件 push |
-| 插件变量 | 插件自定义（如 `bedwars`） | `bedwars/red_score` | 第三方插件 push |
-| 系统变量 | `system` / `wall` | `${var:system/server.time}` / `${var:wall.alias}` | HikariCanvas 自维护 |
-| PAPI 桥接 | `papi` | `${var:papi/%player_name%}` | PlaceholderAPI 实时算 |
-| Scoreboard | `scoreboard` | `${var:scoreboard.points.Steve}` | Bukkit Scoreboard API |
-| Schedule | `schedule:<wallId>` | `schedule.next_departure` | HikariCanvas 自维护（用户配的时刻表） |
-
-> 详细架构 / 协议见 `docs/dynamic-data.md`。
+| 数据来源 | 命名前缀 | 引用示例 | 谁来更新数据 |
+| --- | --- | --- | --- |
+| 单画布用户变量 | `user/` | `${var:user/red_score}` | 玩家在网页或积木脚本里修改 |
+| 全局用户变量 | `userglobal/` | `${var:userglobal/red_score}` | 创建者或管理员修改，全服画布共享 |
+| 系统变量 | `system/`、`wall.` | `${var:system/server.time}`、`${var:wall.alias}` | 插件自动维护 |
+| PlaceholderAPI | `papi/` | `${var:papi/%player_name%}` | PlaceholderAPI 实时计算 |
+| 原版计分板 | `scoreboard.` | `${var:scoreboard.points.Steve}` | 读取服务器计分板分数 |
+| 时刻表与铁路 | `schedule.` | `${var:schedule.eta_mmss}` | 根据你配置的时刻表或铁路网络自动推算 |
+| 第三方插件变量 | 插件自定义（如 `bedwars/`） | `${var:bedwars/red_score}` | 外部插件通过 API 主动推送 |
 
 ### 1.2 创建你的第一个变量
 
-打开 wall 编辑器，在顶栏找到 **变量**（Variable）图标：
+打开网页编辑器，点击顶栏的 **变量管理** 图标：
 
-1. 点变量图标 → 右侧弹出**变量面板**
-2. 点面板顶部 **[+ 新建]** 按钮 → 弹出新建变量对话框
-3. 输入名称（如 `red_score`），实时校验合法字符：`[a-zA-Z0-9_.-]+`
-4. 选类型：**STRING** / **NUMBER** / **BOOLEAN** / **COLOR**
-5. 配默认值（按类型显示对应控件，NUMBER 默认 `0`，COLOR 默认 `#FFFFFF`）
-6. 点 **提交** → 变量保存并出现在变量面板中
+1. 右侧会展开**变量管理**面板，点击顶部的 **新建变量** 按钮。
+2. 填写变量名称（如 `red_score`，仅支持英文字母、数字、`_`、`.`、`-`）。
+3. 选择变量类型：**字符串**、**数字**、**布尔** 或 **颜色**。
+4. 填入初始默认值（例如数字默认 `0`，颜色默认 `#FFFFFF`）。
+5. 点击保存，新变量就会出现在面板的「我的变量」分组下。
 
-新建变量自动归到 **User**（本 wall）分组，namespace = `user:<wallId>`。
+默认新建的变量属于**本画板私有**（内部归属在 `user:<画板ID>` 下），删掉画板时会一并清理；如果你想建一个多块招牌共用的变量，见 [1.14 跨画布共享的全局用户变量](#114-跨画布共享的全局用户变量)。
 
-### 1.3 在 wall 上使用变量
+### 1.3 在招牌文字里插入变量
 
-随便加一个 TextElement，在 textarea 写：
+在画布上添加一个文本元素，在右侧文本输入框（或双击画布上的文字）里写：
 
+```text
+红队比分：${var:user/red_score}
 ```
-红队比分: ${var:user/red_score}
-```
 
-立即看到 wall 上文字被替换成变量当前值。改变量值 → wall 内文字 200ms 内 live preview。
+画布上的文字会立刻显示出 `red_score` 当前的数值。之后只要在变量管理面板里改掉这个值，游戏内外的画面都会在约 0.2 秒内自动刷新。
 
-> 200ms 是输入 debounce 上限，最终落到 wall 渲染只算一次性能（详见 `dynamic-data.md §10.2`）。
+### 1.4 数字变量的快捷加减
 
-### 1.4 NUMBER 类快捷操作
-
-NUMBER 类型变量在 VariablePanel 里有两组按钮：`-1` / `+1`。操作：
+**数字**类型的变量在变量管理面板里自带 `-1` 和 `+1` 快捷按钮，适合比赛现场手动记分：
 
 | 操作 | 效果 |
-|---|---|
-| 单击 `+1` | 当前值 +1 |
-| 单击 `-1` | 当前值 -1 |
-| **长按 300ms 后** `+1` | 每 50ms 自动累加 1（连续按住直到松开） |
-| 手动改值 | 点变量行的值 → 弹出内联输入框 |
+| --- | --- |
+| 单击 `+1` / `-1` | 当前数值加 1 或减 1 |
+| 按住 `+1` / `-1` 不放（超过 0.3 秒） | 自动连续加减，松手即停 |
+| 直接点击数值 | 展开输入框，手动填入任意数字 |
 
-所有变量修改都会实时写回服务端并同步刷新画布预览。
+### 1.5 变量选择器与胶囊标签
 
-### 1.5 VariablePicker 自动补全
+在文本输入框里输入 `${` 两个字符，就会自动弹出**变量选择器**，把当前能用的所有变量按来源分组列出来，支持直接打字搜索：
 
-**文字元素的文本框内置胶囊标签（chip）编辑器**：占位符 `${var:X}` 不再显示生硬的字面字符串，而是渲染成紫色胶囊标签——悬停可查看当前值 / 来源 / 缺失告警，点击可弹出选择器更换绑定。详见 §1.5.1。
+- 按键盘 **↑ / ↓** 切换条目，按 **Enter** 插入，按 **Esc** 关闭；
+- 也可以直接点击输入框旁边的插入按钮唤出选择器，不必手敲 `${`；
+- 在画布上双击文字直接编辑时，输入 `${` 同样会弹出选择器。
 
-在文本框内输入 `${`，**自动弹出变量选择器（VariablePicker）**——按命名空间分组列出全部可用变量，并支持搜索过滤。
+插入后的变量在输入框里不会显示成一长串生硬的代码，而是变成一颗**紫色胶囊标签**：
 
-操作：
-
-- **键盘 ↑↓** 切换候选
-- **Enter** 插入（自动补全 `${var:NAME}` 并把光标移到标签后）
-- **Esc** 关闭
-- **左侧按钮触发** 也能手动唤出选择器（不用打 `${`）
-- **画布内双击文本** 进入内联编辑时，输入 `${` 同样会弹出选择器
-
-选择器会汇总当前可用的全部命名空间（user / userglobal / system / wall / scoreboard / papi / schedule，以及第三方插件已声明的变量）。
-
-#### 1.5.1 chip 编辑器交互
-
-| 行为 | 触发 | 结果 |
-|---|---|---|
-| 看变量当前值 | 悬停 chip | 浮出提示：原始占位符 / 当前值 / 来源（user / system / plugin / papi） |
-| 改绑定 | 点击普通 chip（紫色） | 弹出变量选择器，选新变量后整颗 chip 替换 |
-| 补创缺失变量 | 点击红色 chip（变量已删除 / 不存在） | 确认对话框「是否立即创建？」→ 自动新建空字符串 user 变量；非 user 域提示「请通过对应 Provider 注册」 |
-| 整体删除 chip | 光标停在 chip 边界按 Backspace / Delete | chip 一次性整体删除（不会逐字符拆散） |
-| 粘贴升级 | 粘贴含 `${var:X}` 字面的纯文本 | 自动识别并转为胶囊 chip（无需手动重输 `${`） |
-| 复制 chip | 选中 chip + Ctrl/Cmd+C | 剪贴板拿到字面占位符 `${var:X}`，粘贴到外部应用是纯文本字符串 |
-| 字号联动 | 调整文字元素字号 | chip 尺寸随字号缩放并限制在合理比例（0.6×~1.2×），避免极大或极小字号失控 |
-
-chip 视觉状态：
-
-- 正常：紫色胶囊 + ⚡ 前缀（深浅主题自动适配对比度）
-- 错误态（变量缺失）：红色 + 删除线 + ⚠ 前缀
+| 你想做的事 | 怎么操作 | 效果 |
+| --- | --- | --- |
+| 查看变量详情 | 鼠标悬停在胶囊上 | 显示原始变量名、当前值与数据来源 |
+| 换成别的变量 | 点击紫色胶囊 | 弹出变量选择器，选新变量即可整颗替换 |
+| 补建缺失变量 | 点击变红的胶囊 | 若引用的单画布变量还没建，弹窗确认后可一键补建 |
+| 删掉整个变量引用 | 光标停在胶囊旁按退格 / 删除键 | 整颗胶囊一次删掉，不会删成半截括号 |
+| 复制与粘贴 | 选中复制，或粘贴含 `${var:...}` 的纯文本 | 复制出来是标准 `${var:...}` 纯文本；粘贴进输入框时自动变回胶囊标签 |
 
 ### 1.6 系统自动变量
 
-无需创建，HikariCanvas 启动就有 12 个 system / wall 变量可用（全局 8 + per-wall 4）：
+不用手动创建，插件启动后自带 12 个现成的系统变量（8 个服务器全局信息 + 4 个当前画板信息）：
 
-**全局（namespace = `system`）：**
+#### 服务器全局信息（前缀 `system/`）
 
-| 引用 | 类型 | 描述 | 刷新间隔 |
-|---|---|---|---|
-| `${var:system/server.time}` | STRING | 当前服务器本地时间 `HH:mm` | 60s |
-| `${var:system/server.real_time}` | STRING | 完整 ISO 时间戳 | 60s |
-| `${var:system/server.tick}` | NUMBER | Bukkit tick 计数 | 1s |
-| `${var:system/server.online}` | NUMBER | 当前在线人数 | 30s |
-| `${var:system/server.online_list}` | STRING | 在线玩家名（逗号分隔） | 30s |
-| `${var:system/server.motd}` | STRING | 服务器 MOTD | 1h |
-| `${var:system/server.tps}` | NUMBER | Paper TPS 1min 平均 | 30s |
-| `${var:system/server.name}` | STRING | 服务器名 | 1h |
+| 引用写法 | 类型 | 含义 | 更新频率 |
+| --- | --- | --- | --- |
+| `${var:system/server.time}` | 字符串 | 服务器当前时间（`HH:mm`） | 每 60 秒 |
+| `${var:system/server.real_time}` | 字符串 | 完整日期时间戳 | 每 60 秒 |
+| `${var:system/server.tick}` | 数字 | 服务器运行 tick 计数 | 每 1 秒 |
+| `${var:system/server.online}` | 数字 | 当前在线玩家人数 | 每 30 秒 |
+| `${var:system/server.online_list}` | 字符串 | 在线玩家名单（逗号分隔） | 每 30 秒 |
+| `${var:system/server.tps}` | 数字 | 服务器最近 1 分钟平均 TPS | 每 30 秒 |
+| `${var:system/server.motd}` | 字符串 | 服务器 MOTD 标语 | 每 1 小时 |
+| `${var:system/server.name}` | 字符串 | 服务器名称 | 每 1 小时 |
 
-**per-wall（namespace = `wall`）：**
+#### 当前画板信息（前缀 `wall.`）
 
-| 引用 | 描述 |
-|---|---|
-| `${var:wall.id}` | wall 短 ID（`w-<8hex>`） |
-| `${var:wall.alias}` | wall 玩家命名（可能为空） |
-| `${var:wall.owner}` | wall 创建者玩家名 |
-| `${var:wall.owner_uuid}` | wall 创建者 UUID |
+| 引用写法 | 含义 |
+| --- | --- |
+| `${var:wall.id}` | 当前画板编号（如 `w-3a17b2c0`） |
+| `${var:wall.alias}` | 画板别名（未设置时为空） |
+| `${var:wall.owner}` | 画板创建者玩家名 |
+| `${var:wall.owner_uuid}` | 画板创建者 UUID |
 
-> **引用语法注意**：
-> - **全局 `server.*` 变量必须写完整 `${var:system/server.time}`**——裸点号 alias `${var:server.time}` **不被注入**（interpolator 只对 `user/` `wall.` `schedule.` `scoreboard.` 做 namespace 注入），裸写会 miss 走 fallback `???`。
-> - **per-wall `wall.*` 变量可裸写**——`${var:wall.alias}` 被 interpolator 自动注入成内部 `system:<wallId>/wall.alias`；写 `${var:wall/alias}` 斜杠形式也等价。
+> **写法提醒**：服务器全局信息**必须带上 `system/` 前缀**（写成 `${var:system/server.time}`）；只写 `${var:server.time}` 会找不到变量并显示 `???`。而当前画板的 `wall.*` 变量可以直接写 `${var:wall.alias}`（写 `${var:wall/alias}` 也同样有效）。
 
-### 1.7 PlaceholderAPI 集成
+### 1.7 接入 PlaceholderAPI
 
-装上 [PlaceholderAPI](https://wiki.placeholderapi.com/) 后自动启用——HikariCanvas 启动时反射检测 PAPI 类，存在则注册 `papi` namespace 的动态 Provider。
+只要服务器安装了 [PlaceholderAPI](https://wiki.placeholderapi.com/)，插件启动时会自动识别并接通，不需要额外开开关。直接把原有的 `%占位符%` 写在 `papi/`（或 `papi.`）后面即可：
 
-引用语法（推荐直接写原生 `%xxx%`）：
-
-```
+```text
 ${var:papi/%player_name%}
-${var:papi.%player_name%}
 ${var:papi/%server_online%}
-${var:papi/%<expansion>_<key>%}
+${var:papi/%vault_eco_balance%}
 ```
 
-> **注意：冒号形态 `${var:papi:%player_name%}` 不被接受**——桥接只识别 `papi/...` 或 `papi....`（斜杠 / 点号分隔），冒号会被当成 key 的一部分 → miss 走 fallback。
->
-> **编码形式也接受**：`${var:papi/pct_player_name_pct}` / `${var:papi.pct_player_name_pct}`。桥接内部把 PAPI 占位符的 `%` 编码为 `pct_` / `_pct`（store key 校验正则不允许 `%`），resolve 时 decode 回 `%xxx%` 再喂给 PAPI。写原生 `%xxx%` 时由桥接自动编码，玩家无需关心。
+> **注意分隔符**：`papi` 后面请用**斜杠 `/`** 或**点号 `.`** 连接，不要写成冒号 `${var:papi:%player_name%}`（冒号无法识别）。如果服务器没装 PlaceholderAPI，这些占位符会按缺值规则显示 `???` 或你设定的兜底文字。
 
-不装 PAPI 的服务器：`${var:papi/%xxx%}` 走 fallback 链（`???` 或自定义 `|fallback=...`）。
+### 1.8 接入原版计分板（Scoreboard）
 
-### 1.8 Scoreboard 动态变量
+服务器里任何原版 Bukkit 计分板（`/scoreboard`）的分数都能直接读到招牌上。例如你在游戏里建了一个积分项：
 
-任何 Bukkit Scoreboard 都能引用——HikariCanvas 自动检测 + 注册。
-
-先建 objective：
-
-```
+```text
 /scoreboard objectives add points dummy
 /scoreboard players set Steve points 42
 ```
 
-然后在 wall 写：
+在招牌文字里直接写 `scoreboard.<计分项>.<玩家或目标名>`：
 
+```text
+Steve 的积分：${var:scoreboard.points.Steve}
 ```
-分数: ${var:scoreboard.points.Steve}
-```
 
-首次引用时 HikariCanvas 会自动登记 `scoreboard.points.Steve` 并开始按 10s 周期同步计分板数值。第一次渲染可能短暂显示兜底值 `???`，最多 10s 后刷新为实际分数。
+第一次写上去时插件会自动登记该计分项，并按每 10 秒一次的频率同步分数（刚填上去的前几秒可能短暂显示 `???`，等第一次同步完成即显示真实分数）。因为计分板组合是按需绑定的，它不会预先列在变量选择器里，直接手写上面的格式即可。
 
-> `scoreboard` 命名空间按需动态绑定，无需事先创建变量，但也不会预列在自动补全列表里，直接手写 `${var:scoreboard.<计分项>.<目标>}` 即可。
+### 1.9 简易列车时刻表
 
-### 1.9 列车时刻表（Manual Schedule）
+如果只是给一两块站牌做发车倒计时、不需要全线联动，可以直接用内置的**列车时刻表管理**：
 
-HikariCanvas 内置 **手动时刻表** 工具，给 server 没装专门列车 / 公交插件做兜底。支持每 wall 独立的 **分钟 / 秒精度**，共暴露 15 个变量（含 `eta_seconds` / `eta_mmss` / `arrival_status` / `precision` + 第二班 `next2_*` 系列）。需要完整线路 / 站点 / 车次抽象的服主见 §1.13 铁路网络。
+1. 点击编辑器顶栏的 **列车时刻表**（小火车）图标，打开「列车时刻表管理」窗口。
+2. 填写本站名称（可选），并选择**时间精度**：
+   - **分钟（`HH:mm`）**：默认选项，适合常规时刻表，每 30 秒刷新一次；
+   - **秒（`HH:mm:ss`）**：适合需要精确读秒的地铁屏，每秒刷新一次。
+3. 点击 **+ 添加条目**，填入各班车的出发时间与终点站。
+4. 关闭窗口后，当前画板就会自动生成 **15 个时刻表变量**（下一班车 8 个 + 下下班车 7 个）。
 
-操作：
+在文本里直接用 `schedule.xxx` 引用即可（系统会自动关联到当前画板）：
 
-1. TopBar 点 **Train**（列车）图标 → 弹 **Schedule Manager** modal
-2. 设站名（终点）
-3. 选时间精度（分钟 / 秒）
-   - 分钟（默认）：entry 用 `HH:mm`，刷新 30s 一次
-   - 秒：entry 用 `HH:mm:ss`（或 `HH:mm` 自动补 `:00`），刷新 1s 一次
-4. 配若干 entry
-5. 关闭 modal → 自动注册 15 个 `schedule:<wallId>` 变量（8 个下一班 + 7 个第二班 `next2_*`）
+#### 下一班车变量
 
-引用（`schedule.X` 裸点号会被 interpolator 自动注入 wallId，无需写完整 namespace）：
+| 引用写法 | 类型 | 含义 |
+| --- | --- | --- |
+| `${var:schedule.next_departure}` | 字符串 | 下一班发车时间（`HH:mm` 或 `HH:mm:ss`） |
+| `${var:schedule.next_destination}` | 字符串 | 下一班终点站 |
+| `${var:schedule.eta_minutes}` | 数字 | 距离发车还有多少分钟 |
+| `${var:schedule.eta_seconds}` | 数字 | 距离发车还有多少秒 |
+| `${var:schedule.eta_mmss}` | 字符串 | `MM:SS` 格式倒计时（超过 99 分钟也会如实累加分钟数） |
+| `${var:schedule.is_arriving}` | 布尔 | 倒计时小于等于进站阈值（默认 60 秒）时为 `true`，否则为 `false` |
+| `${var:schedule.arrival_status}` | 字符串 | 进站时显示「进站中」，平时为空（文案可在 `config.yml` 修改） |
+| `${var:schedule.precision}` | 字符串 | 当前时间精度（`minute` 或 `second`） |
 
-**下一班：**
+#### 下下班车变量（`next2_*`，双行站台屏常用）
 
-| 变量 | 类型 | 描述 |
-|---|---|---|
-| `${var:schedule.next_departure}` | STRING | 下一班发车时刻 `HH:mm` 或 `HH:mm:ss`（按 wall 精度） |
-| `${var:schedule.next_destination}` | STRING | 下一班终点 |
-| `${var:schedule.eta_minutes}` | NUMBER | 距下一班还有多少分钟（向下兼容） |
-| `${var:schedule.eta_seconds}` | NUMBER | 距下一班还有多少秒（秒精度主用） |
-| `${var:schedule.eta_mmss}` | STRING | 距下一班 `MM:SS` 格式（超 99min 仍按 MM 累加） |
-| `${var:schedule.is_arriving}` | BOOLEAN | eta ≤ 阈值（默认 60s）→ `true` / `false` |
-| `${var:schedule.arrival_status}` | STRING | 进站中文案 / 空闲文案（config 可改） |
-| `${var:schedule.precision}` | STRING | wall 当前精度 `minute` / `second` |
+| 引用写法 | 含义 |
+| --- | --- |
+| `${var:schedule.next2_departure}` | 第二班发车时间 |
+| `${var:schedule.next2_destination}` | 第二班终点站 |
+| `${var:schedule.next2_eta_minutes}` | 距离第二班发车分钟数 |
+| `${var:schedule.next2_eta_seconds}` | 距离第二班发车秒数 |
+| `${var:schedule.next2_eta_mmss}` | 第二班 `MM:SS` 倒计时 |
+| `${var:schedule.next2_is_arriving}` | 第二班是否已进入进站阈值 |
+| `${var:schedule.next2_arrival_status}` | 第二班进站状态文字 |
 
-**第二班（`next2_*`，地铁屏标配）：**
-
-| 变量 | 类型 | 描述 |
-|---|---|---|
-| `${var:schedule.next2_departure}` | STRING | 第二班发车时刻 |
-| `${var:schedule.next2_destination}` | STRING | 第二班终点 |
-| `${var:schedule.next2_eta_minutes}` | NUMBER | 距第二班多少分钟 |
-| `${var:schedule.next2_eta_seconds}` | NUMBER | 距第二班多少秒 |
-| `${var:schedule.next2_eta_mmss}` | STRING | 第二班 `MM:SS` 格式 |
-| `${var:schedule.next2_is_arriving}` | BOOLEAN | 第二班 ETA ≤ 阈值 |
-| `${var:schedule.next2_arrival_status}` | STRING | 第二班进站 / 空闲文案 |
-
-**配置**（`config.yml`）：
+服主可以在 `config.yml` 里调整全服统一的进站提示阈值和文字：
 
 ```yaml
 dynamic:
   schedule:
-    arriving-threshold-seconds: 60   # is_arriving / arrival_status 阈值（秒）
-    arriving-text: "进站中"           # arrival_status 进站文案
-    idle-text: ""                    # arrival_status 空闲文案
+    arriving-threshold-seconds: 60   # 倒计时剩余多少秒以内算「进站中」
+    arriving-text: "进站中"           # 进站时显示的文字
+    idle-text: ""                    # 平时显示的文字
 ```
 
-> per-wall：每个 wall 一组独立时刻表。`wall.id` 自动注入到 fullName 内（namespace = `schedule:w-xxxxx`）。
+### 1.10 缺值兜底语法（fallback）
 
-### 1.10 fallback 语法
+当某个变量还没拿到值、数据已过期，或者对应插件暂时没开时，你可以在占位符末尾加上 `|fallback=兜底文字`，指定它暂时显示什么：
 
-变量值缺失时（变量被删 / TTL 过期 / Provider 还没拉到第一次数据），HikariCanvas 按 **4 档兜底链** 解析：
-
-```
-${var:NAME}                     无 fallback → 走默认链
-${var:NAME|fallback=N/A}        显式 fallback → 当 currentValue / defaultValue 都缺时用 "N/A"
+```text
+当前比分：${var:bedwars/red_score|fallback=未开赛}
+在线人数：${var:system/server.online}
 ```
 
-完整链（按优先级）：
+系统取值时严格按下面四步顺序往下找：
 
-| 档 | 条件 | 输出 |
-|---|---|---|
-| 1 | `Variable.currentValue` 非空 **且未过 TTL（非 stale）** | `currentValue` |
-| 2 | cached 缺失 / 为空 / 已过期，但占位符里写了 `\|fallback=X` | `X` |
-| 3 | 无 `\|fallback=`，但 `Variable.defaultValue` 非 null | `defaultValue` |
-| 4 | 全空 / 变量不存在 | `???`（系统兜底） |
+1. **有未过期的当前值** → 直接显示当前值；
+2. **当前值缺失或已过期，但占位符里写了 `|fallback=xxx`** → 显示 `xxx`；
+3. **没写 `|fallback=`，但变量本身设有默认值** → 显示变量默认值；
+4. **以上都没有（或变量根本不存在）** → 显示 `???`，提醒你这里缺数据。
 
-> 注意优先级：**占位符内的 `\|fallback=X` 比变量自身的 `defaultValue` 优先**（cached 缺失时先用 inline fallback，没写才退到 default）。TTL 过期（stale）的 cached 值不再被采用，等同"缺失"走后续档。
+> 注意：写在文字里的 `|fallback=xxx` 优先级高于变量自身的默认值。
 
-例子：
+### 1.11 变量被删除后会怎样
 
-```
-分数: ${var:bedwars/red_score|fallback=未开始}
-人数: ${var:system/server.online}（无 fallback；缺失走 ???）
-```
+在变量管理面板里删掉一个变量后，画布文字里原本引用它的占位符**不会被强行抹掉**（防止不小心删错变量就把整段排好的文字毁了），而是会退回到兜底文字或 `???`。
 
-### 1.11 变量被删除后？
+同时，网页编辑器会在三处给出醒目提醒：
+- 文本输入框里的那颗胶囊标签会**变红并加上删除线与 `⚠` 标记**，点击它可以一键重新创建同名变量；
+- 文本预览区下方会弹出红色提示：「`变量 xxx 已被删除，引用此变量的文本将显示 "???"`」；
+- 鼠标悬停在红色胶囊上也会提示该变量已删除。
 
-VariablePanel 里删变量 → wall 内引用该变量的位置 **不会自动改文字**，但渲染时走 fallback `???`（除非占位符里写了 `|fallback=...`）。
+### 1.12 给变量起别名
 
-编辑器额外提示（三层）：
+当一块画板上同时用了系统变量、时刻表变量和插件变量时，原始名字（比如 `schedule/eta_seconds` 或 `system/server.time`）看着不够直观。你可以给任意变量起一个顺眼的中文**别名**：
 
-1. **chip 编辑器** 内：被删变量对应的 chip 转为 **红色 + 删除线 + ⚠ 前缀**，点击红 chip 弹「是否立即创建？」确认对话框 → 一键补创 user 变量
-2. **TextElement live preview** 下方标红 **banner**——警告 "Variable X was deleted, references will render as ???"
-3. hover 红 chip 显 tooltip："变量已删除，最终渲染为 '???'"
+- **不挑来源**：自己的变量、全局变量、系统变量、PAPI、铁路变量、第三方插件变量都能加别名。
+- **每块画板独立**：同一变量在不同画板上可以起不同的名字，互不干扰。
+- **只改界面显示，不改底层引用**：起好别名后，变量面板、搜索框和输入框里的紫色胶囊都会优先显示别名（搜别名和搜原名都能搜到），而底层保存的仍然是原变量名，不会把数据绑乱。
 
-> **删除不级联**：为避免误删变量导致画布整段文字消失，删除变量时原有占位符保留在文本中，按兜底规则渲染（详见 `docs/dynamic-data.md`）。
+#### 三种加别名的地方
+- **新建变量时**：在「新建变量」弹窗底部顺手填上「别名」一栏（留空即不起别名）。
+- **变量管理面板里**：点击任意变量行右侧的 `🏷` 标签图标，直接在行内输入并保存。
+- **变量选择器里**：输入 `${` 弹出列表后，点任意一行末尾的 `✏` 铅笔图标就能就地改名，不用切回右侧面板。
 
-### 1.12 变量别名
+> 画板创建者可以直接设置或清空别名；其他玩家若要修改需具备 `canvas.var.write.any` 权限。
 
-变量的内部完整名（如 `user:w-3a17/red_score` / `schedule:w-3a17/eta_seconds` / `system/server.time`）在混用多个命名空间时较长、可读性一般。你可以给任何变量起一个易读的**别名**：
+### 1.13 铁路网络（多站联动站台屏）
 
-- **所有 namespace 都可加别名**：user / userglobal / schedule / system / papi / scoreboard / 第三方插件均支持
-- **per-wall**：同一变量在不同 wall 可起不同别名（个性化），互不干扰；同一 wall 内一个变量只能有一个别名
-- **仅 UI 显示用**：别名不参与 `${var:...}` 解析——文本中仍写 `${var:user/red_score}`，渲染时按原完整名取值；别名只在选择器、变量面板和胶囊 chip 上替代展示原名
-- **chip 显示优先级**：别名 > 当前值 > fallback > 默认值 > 缺失提示（数值会变，别名稳定，更适合作为胶囊标签文字）
+如果服务器修了一整条地铁或铁路线，几十块站台屏逐块填时刻表太折腾。**铁路网络**让你只需要建一次「线路 → 站点 → 车次时刻表」，沿线所有站台屏绑定对应站点和上下行方向后就会自动算好各自的到站倒计时。
 
-#### 怎么加别名
+#### 第一步：编排线路、站点与车次
 
-**方式 A：新建变量时一并起**
+点击编辑器顶栏的 **铁路网络**（铁轨图标，或在「更多 `…`」菜单里打开）：
 
-变量面板「+ 新建」对话框最下面有可选 **别名** 字段（留空 = 不起别名）。
+1. 在左侧点击 **新建线路**（例如 `1 号线`），选中它后在右侧按顺序 **添加站点**（如 `郑州火车站 → 二七广场 → 紫荆山 → 郑州东站`）。
+2. 在下方车次区域点击 **新建车次**（如 `A01`），点车次右侧的 **详情** 配置运营信息：
 
-**方式 B：在变量面板里改**
+| 配置项 | 示例 | 说明 |
+| --- | --- | --- |
+| 车次号 | `A01` | 同一条线路内唯一 |
+| 运行方向 | `上行` / `下行` | 决定列车沿站点列表正向还是反向行驶 |
+| 服务类型 | `站站停` / `大站快车` / `区间车` / `特快` 或自定义文字 | 内置 4 种常见类型，也支持手填如「通勤快车」 |
+| 编组节数 | `6` | 列车车厢节数（选填） |
+| 区间起止站 | `郑州火车站` → `紫荆山` | 跑不满全线的区间车可单独指定起止站；留默认即跑全线首末站 |
+| 备注 | `末班车` / `周末加开` | 站台屏可展示的附加提示（选填） |
+| 逐站时刻表 | 每站精确到秒的到达、出发时间与是否停靠 | 支持站间耗时不同、大站快车跳站通过 |
 
-每个变量行末尾有 🏷 标签按钮 → 点击 → 行内变成输入框 + 保存/清空/取消按钮，提交即生效。
+3. 不用逐站手算时间：在车次详情里点 **自动生成时刻表**，填好首站发车时间、站间行驶秒数、停站秒数以及要跳过的站点，一键生成整趟车的时刻表后，还可以对个别车站微调，最后点 **保存时刻表**。
 
-**方式 C：在变量选择器里改**
+#### 第二步：把站台屏绑定到车站
 
-文本框输入 `${` 触发选择器，列表分 3 列展示：
+打开某块站台招牌的 **列车时刻表管理** 窗口，在顶部的「铁路网络绑定」区域选好 **线路**、**本站** 和 **方向**（上行 / 下行 / 双向），点击 **启用绑定**。
 
-| 别名 | 数值 | 变量名 |
-|---|---|---|
-| 红队 | 5 | user/red_score |
-| ETA秒 | 90 | schedule/eta_seconds |
-| — | 14:35 | system/server.time |
+绑定后，这块画板的 `schedule.*` 变量就会自动由铁路网络接管（窗口下方的单画板手动条目会自动灰显跳过，互不冲突）。除了前面 [1.9](#19-简易列车时刻表) 的全部 15 个变量照常生效外，还额外多出 **14 个车次详情变量**（下一班 7 个 + 第二班 `next2_*` 7 个）：
 
-每行末尾有 ✏ 按钮，点一下即可就地起名，编辑文本时顺手给陌生变量加个易记名，不用切回变量面板。
+| 引用写法 | 示例值 | 含义 |
+| --- | --- | --- |
+| `${var:schedule.next_run_number}` | `A01` | 下一班车次号 |
+| `${var:schedule.next_service_type}` | `express` | 服务类型英文代号（方便在积木脚本条件里判断） |
+| `${var:schedule.next_service_type_text}` | `大站快车` | 服务类型显示文字（可直接排上屏幕） |
+| `${var:schedule.next_cars}` | `6` | 车厢编组节数 |
+| `${var:schedule.next_terminus}` | `郑州东站` | 本趟车实际终点站（区间车会准确显示区间终点） |
+| `${var:schedule.next_notes}` | `末班车` | 车次备注 |
+| `${var:schedule.next_arrival}` | `06:02:30` | 本站计划到达时刻 |
+| `${var:schedule.next2_*}`（同上 7 项） | — | 第二班车的对应信息 |
 
-#### 怎么搜
+#### 站台屏排版示例
 
-变量选择器与变量面板的搜索框**同时匹配原始变量名与别名**——给 `system/server.time` 起名「服务器时间」后，搜「服务器」也能命中。
-
-#### 规则与权限
-
-- 别名长度最多 64 个字符；同一面画布内允许不同变量使用相同别名。
-- 画布作者（owner）可直接设置或清除别名；非作者需具备 `canvas.var.write.any` 权限。任何能打开该画布的玩家都能查看已有别名。
-- 删除画布时，该画布下的所有变量别名会自动一并清理。（协议与表结构契约详见 `docs/protocol.md §5.13` 与 `docs/data-model.md`。）
-
-### 1.13 铁路网络
-
-前面的手动时刻表是**单画布独立配置**的——100 块站台屏就要配 100 套。**铁路网络**提供完整的「线路 / 站点 / 车次 / 每站精确时刻表」抽象：定义一次线路与时刻表，多块画布绑定后自动同步。
-
-#### 入口
-
-TopBar 火车轨道图标 → **「铁路网络」** modal。
-
-#### 三层结构
-
-```
-线路（1 号线）
-  ├ 站点（按顺序排列）
-  │   郑州火车站 → 二七广场 → 紫荆山 → ...
-  └ 车次（一趟具体的车）
-      ├ A01 ◊ 上行 ◊ 大站快车 ◊ 6 节 [详情]
-      ├ A02 ◊ 上行 ◊ 站站停 ◊ 8 节
-      └ B01 ◊ 下行 ◊ 区间车（郑州→紫荆山）
+```text
+下一班 ${var:schedule.next_run_number} 次 开往 ${var:schedule.next_terminus}
+${var:schedule.next_cars} 节编组 · ${var:schedule.next_service_type_text}
+预计 ${var:schedule.eta_mmss} 后到站  ${var:schedule.next_notes}
 ```
 
-每个车次有完整运营语义：
+上墙渲染效果：
 
-| 字段 | 例子 | 备注 |
-|---|---|---|
-| 车次号 | `A01` | 同线唯一 |
-| 方向 | `上行` / `下行` | 决定站点排序 |
-| **服务类型** | `站站停` / `大站快车` / `区间车` / `特快` + 自定义 | 4 内置 enum + 任意字符串 |
-| 编组 | `6` 节 | 整数；可空 |
-| 区间起 / 止 | 郑州 → 紫荆山 | 区间车非首末站；null = 线路首站 / 末站 |
-| 备注 | "末班车" / "节假日加开" | |
-| **时刻表** | 每站精确到秒的到 / 发时间 + 是否停靠 | 支持站间不均 + 大站快车跳站 |
-
-#### 自动生成时刻表
-
-新建车次时点 **「自动生成时刻表」**：
-
-- 首站发车时间（HH:mm:ss）
-- 站间均匀秒数（如 90s）
-- 停靠秒数（如 30s）
-- 跳过的站集合（大站快车）
-
-→ 生成完整 timetable rows，**预览后可逐站手调**。
-
-#### wall 绑定铁路
-
-在 Schedule Manager 对话框内展开「铁路绑定」区域（线路 / 本站 / 方向 3 列下拉），选定后即可完成绑定；也可用 `/canvas var inspect <wallId>` 命令查看画布当前绑定。
-
-绑定后该画布的 `${var:schedule.next_*}` 自动来自铁路网络，取代单画布的手动时刻表配置。
-
-#### 新增 14 个铁路变量（共享 schedule namespace）
-
-| 变量 | 例子 | 来源 |
-|---|---|---|
-| `schedule:<wallId>/next_run_number` | "A01" | rail_runs.run_number |
-| `schedule:<wallId>/next_service_type` | "express" | enum 值 |
-| `schedule:<wallId>/next_service_type_text` | "大站快车" | i18n 友好（按 owner locale） |
-| `schedule:<wallId>/next_cars` | "6" | 编组 |
-| `schedule:<wallId>/next_terminus` | "郑州东" | run.end_station_id 站名（区间车显区间终点） |
-| `schedule:<wallId>/next_notes` | "末班车" | 备注 |
-| `schedule:<wallId>/next_arrival` | "06:02:30" | timetable.arrival_time（精确读，非估算） |
-| `next2_*` 同上 7 个 | 第二班 |
-
-手动时刻表原有的 `next_departure / eta_minutes / eta_seconds / eta_mmss / is_arriving /
-arrival_status / precision` 等变量继续保留并由铁路网络自动填充，既有画布文本无需改动。
-
-#### wall 文本示例
-
-```
-下一班 ${var:schedule.next_run_number} 次 → ${var:schedule.next_terminus}
-${var:schedule.next_cars} 节 · ${var:schedule.next_service_type_text}
-ETA ${var:schedule.eta_mmss}
-${var:schedule.next_notes}
+```text
+下一班 A01 次 开往 郑州东站
+6 节编组 · 大站快车
+预计 02:30 后到站  末班车
 ```
 
-渲染结果：
-```
-下一班 A01 次 → 郑州东
-6 节 · 大站快车
-ETA 02:30
-末班车
-```
+#### 铁路相关权限
 
-#### 权限节点
-
-| 节点 | 默认 | 作用 |
-|---|---|---|
-| `canvas.rail.line.create` | true | 创建铁路线路 |
-| `canvas.rail.line.edit.own` | true | owner 编辑自己的线路 / 站点 / 车次 / 时刻表 |
-| `canvas.rail.line.edit.any` | op | admin override：编辑任意线路 |
-| `canvas.rail.line.delete.own / .any` | true / op | owner / admin 删除线路 |
-| `canvas.rail.wall.bind` | true | 把 wall 绑到铁路网络（wall owner 同款 schedule.own） |
-
-#### 与手动时刻表的关系
-
-- **共存**：未绑定铁路线路的画布仍走手动时刻表。
-- **共享 namespace**：都用 `schedule:<wallId>/*`；绑定铁路后由铁路网络自动接管，手动时刻表自动跳过，避免双写同 key。
-- **旧画布文本零修改**：现有的 `${var:schedule.next_departure}` 等占位符在绑定铁路后自动切换数据源，**像素无差**。
+| 权限节点 | 默认归属 | 用途 |
+| --- | --- | --- |
+| `canvas.rail.line.create` | 全员（`true`） | 新建铁路线路 |
+| `canvas.rail.line.edit.own` | 全员（`true`） | 编辑自己创建的线路、站点、车次与时刻表 |
+| `canvas.rail.line.edit.any` | 仅 OP | 编辑任意玩家的铁路线路 |
+| `canvas.rail.line.delete.own` / `.any` | 全员 / 仅 OP | 删除自己的 / 任意玩家的铁路线路 |
+| `canvas.rail.wall.bind` | 全员（`true`） | 将自己的画板绑定到铁路站点 |
 
 ---
 
-### 1.14 全局用户变量
+### 1.14 跨画布共享的全局用户变量
 
-普通 user 变量是 **per-wall** 的（namespace = `user:<wallId>`），跨画布不共享。
-**全局用户变量**（namespace = `userglobal`）由玩家自定义、**全服可见、跨画布共享**。
+前面建的普通 `user/` 变量只属于当前那一面墙；如果你想做**全服活动总比分板**或**多块屏幕同步切换的公告词**，可以在新建变量时把「作用域」切到 **全局**：
 
-#### 创建
+- **引用写法**：`${var:userglobal/变量名}`（例如 `${var:userglobal/red_score}`）。
+- **谁能看、谁能改**：全服任何画板都能读取和引用它（变量选择器里会分在「🌐 我的全局」和「🌐 其他全局」两组）；但**只有创建者本人和管理员**（持 `canvas.var.global.write.any` / `delete.any`）能改值或删除，不用担心别人乱改你的比分。
+- **单画布变量 vs 全局用户变量对比**：
 
-VariablePanel → `+ 新建变量` → 第 2 个 toggle 切到「全局」：
+| 对比项 | 单画布变量（`user/xxx`） | 全局用户变量（`userglobal/xxx`） |
+| --- | --- | --- |
+| 跨画板共享 | 仅当前画板可见 | 全服所有画板可读可引用 |
+| 重名限制 | 同一块画板内不重名即可 | **全服唯一**（已被别人占用的名字不能重复建） |
+| 删除画板时 | 随画板一并清除 | 继续保留，不影响其他正在引用它的画板 |
+| `.canvas` 工程导出 | 随工程一起打包带走 | **不打包进工程文件**（属于当前服务器的公共状态） |
 
-| 选项 | 行为 |
-|---|---|
-| **本 wall** | 默认；创建 `user:<wallId>/<name>`，仅本画布可见，wall 删除时一并清 |
-| **全局** | 创建 `userglobal/<name>`，**全服共享**；wall 删除不影响它，只有你和管理员能修改 |
-
-文本里写 `${var:userglobal/red_score}` 即可引用（与 user 变量 `${var:user/X}` 同款写法，
-但不注入 wallId）。
-
-#### Picker 分组
-
-VariablePicker 把 userglobal 变量分到两组：
-
-- 🌐 **我的全局**：你创建的（owner = 当前玩家）
-- 🌐 **其他全局**：其他玩家创建的（只读显示 + 显示 owner 名）
-
-只有 owner（创建者）和管理员（`canvas.var.global.write.any` / `delete.any`）能修改 / 删除；
-其他玩家只能读取 / 引用 / 起别名。
-
-#### 配额
-
-config.yml `dynamic.variables` 段：
+服主可在 `config.yml` 中调整全局变量数量上限（默认每人最多 500 个、全服最多 10000 个）：
 
 ```yaml
 dynamic:
   variables:
-    userglobal-max-per-owner: 500   # 每 owner 上限
-    userglobal-max-total: 10000     # 全服总上限
+    userglobal-max-per-owner: 500
+    userglobal-max-total: 10000
 ```
-
-超出抛 `QUOTA_EXCEEDED`。
-
-#### 权限节点（paper-plugin.yml）
-
-| 节点 | 默认 | 作用 |
-|---|---|---|
-| `canvas.var.global.create` | true | 创建全局变量 |
-| `canvas.var.global.write.own` | true | owner 改自己的全局变量 |
-| `canvas.var.global.write.any` | op | admin override：改任意全局变量 |
-| `canvas.var.global.delete.own` | true | owner 删自己的全局变量 |
-| `canvas.var.global.delete.any` | op | admin override：删任意全局变量 |
-
-#### 与 user 变量的对比
-
-| 项 | `user/X`（per-wall） | `userglobal/X`（全局） |
-|---|---|---|
-| 内部 namespace | `user:<wallId>` | `userglobal` |
-| 跨 wall 共享 | ❌ | ✅ |
-| wall 删除时 | 随画布一并删除 | 保留（owner 或管理员可手动删） |
-| 同 namespace 内 key 唯一性 | per-wall 唯一 | **全服唯一**（同名会被拒绝） |
-| 别名 | per-wall 独立别名 | 同上（每面画布可对同一全局变量起不同别名） |
-| `.canvas` 工程导出 | 含 user 变量值 | **不含**（服务器级状态，跨服务器无意义） |
-| 外部插件可推 | ❌（保留命名空间） | ❌（保留命名空间；**第三方插件请使用自有 namespace 实现全服共享**） |
-
-#### 玩家场景示例
-
-- 全服活动比分板：玩家 A 在画布 X 上创 `userglobal/red_score`，画布 Y / Z 都 ref 同一变量；
-  A 在 X 上修改值，Y / Z 实时同步
-- 公告状态：admin 创 `userglobal/announcement_text`，全服 wall 引用同一文案；
-  admin 用 `/canvas var set userglobal/announcement_text "维护中"` 即可全服更新
 
 ---
 
-## 第二部分：运维管理
+## 第二部分：服主运维管理
 
-### 2.1 /canvas var 命令族
+### 2.1 `/canvas var` 命令速查
 
-权限：`canvas.var.command`（默认 op）。
+后台变量管理命令需要 `canvas.var.command` 权限（默认仅 OP），在游戏内或服务端控制台均可执行：
 
-7 子命令完整 reference：
+#### 查看命名空间与变量列表：`list [命名空间]`
 
-#### `list [namespace]`
+不带参数时列出当前所有命名空间及各自的变量数；带上命名空间名则列出其下所有变量的当前值与有效期：
 
-无参 → 列全部 namespace + 每个的变量数量：
-
-```
-$ /canvas var list
-Variable namespaces:
-  system · 8 var(s)
-  system:w-1a2b3c4d · 4 var(s)        # per-wall wall.* 变量
-  schedule:w-1a2b3c4d · 15 var(s)
-  user:w-1a2b3c4d · 1 var(s)
+```text
+/canvas var list
+/canvas var list system
 ```
 
-有 ns 参 → 列该 namespace 所有 fullName + currentValue + ttl：
+#### 查看单个变量详情：`get <完整变量名>`
 
-```
-$ /canvas var list system
-Namespace 'system' (8 variable(s)):
-  system/server.time [STRING] = 14:23 ttl=60s
-  system/server.online [NUMBER] = 3 ttl=30s
-  ...
+查看某个变量的类型、默认值、当前值、更新时间、有效期以及正在引用它的画板数量：
+
+```text
+/canvas var get user:w-1a2b3c4d/red_score
 ```
 
-#### `get <fullName>`
+#### 手动修改变量值：`set <完整变量名> <新值...>`
 
-显示完整元信息：
+直接在后台改值（支持包含空格的句子，常用于管理员一键更换全服公告牌文字，操作会记入审计日志）：
 
-```
-$ /canvas var get user:w-1a2b3c4d/red_score
-Variable user:w-1a2b3c4d/red_score
-  namespace: user:w-1a2b3c4d
-  key:       red_score
-  type:      NUMBER
-  default:   0
-  current:   42
-  updated:   2026-05-19 14:23:55
-  ttl:       永久
-  source:    (none)
-  refByWalls:1
+```text
+/canvas var set userglobal/announcement_text 服务器将于 22:00 例行维护
 ```
 
-#### `set <fullName> <value...>`
+#### 删除变量：`delete <完整变量名>`
 
-手动改当前值（`args[2..]` 拼接 → 支持带空格 value）：
+删除指定变量（玩家变量会同步从数据库移除；插件与系统变量仅清理内存缓存）：
 
-```
-$ /canvas var set user:w-1a2b3c4d/red_score 999
-✓ Set user:w-1a2b3c4d/red_score = 999
-```
-
-audit 日志事件：`VARIABLE_COMMAND_SET`（与 WS op `VARIABLE_SET` 区分，便于运维事后追溯来源）。
-
-#### `delete <fullName>`
-
-删除变量：
-
-```
-$ /canvas var delete bedwars/old_key
-✓ Deleted bedwars/old_key
+```text
+/canvas var delete bedwars/old_key
 ```
 
-audit 日志事件：`VARIABLE_COMMAND_DELETE`。
+#### 查看数据源状态：`providers`
 
-> user 变量同时从 DB（`user_variables` 表）删；插件 / 系统变量仅 in-memory。
+列出当前已注册的全部变量数据源（系统变量、计分板、PlaceholderAPI、时刻表、铁路及已接入的第三方插件）：
 
-#### `providers`
-
-列已注册 Provider：
-
-```
-$ /canvas var providers
-Registered providers (6):
-  system '系统变量' [static] keys=12 interval=1s
-  scoreboard 'Bukkit Scoreboard' [dynamic] keys=0 interval=10s
-  papi 'PlaceholderAPI' [dynamic] keys=0 interval=30s
-  schedule 'Manual Schedule' [static] keys=15 interval=1s
-  rail 'Rail Schedule' [static] keys=... interval=...
-  bedwars 'BedWars' [static] keys=0 interval=ZERO
-  ...
+```text
+/canvas var providers
 ```
 
-#### `reload`
+#### 反查画板引用的变量：`inspect <画板ID>`
 
-重读 `config.yml` → 重建 `PushRateLimiter` → 热替换到 `HikariCanvasAPIImpl`：
+查看某块画板当前实际引用了哪些变量及各自取到的值，排查「为什么这块牌子上的字没更新」时最直接：
 
-```
-$ /canvas var reload
-✓ Config reloaded. PushRateLimiter:
-  per-plugin:           100/s
-  global:               1000/s
-  circuit-break:        10000ms
+```text
+/canvas var inspect w-1a2b3c4d
 ```
 
-> 仅 `dynamic.push-rate-limit` 段会立即生效——其他段（host / port / DB）仍需重启。`/canvas reload config` 命令仍有效作整体 reload；`/canvas var reload` 是 push 限流专项。
+#### 热重载推送限流：`reload`
 
-#### `inspect <wallId>`
+修改 `config.yml` 里的 `dynamic.push-rate-limit` 段后，执行此命令即可立即生效，无需重启服务器：
 
-倒排索引可视化：
-
-```
-$ /canvas var inspect w-1a2b3c4d
-Wall w-1a2b3c4d references 3 variable(s):
-  system/server.time = 14:23
-  user:w-1a2b3c4d/red_score = 42
-  papi/pct_player_name_pct = (null)
+```text
+/canvas var reload
 ```
 
-显示该 wall 当前 **引用** 的变量集合（来自 Compositor 上次渲染 `markWallReferences`），帮助排查 "为什么这个变量不更新"。
+---
 
-### 2.2 config.yml 限流配置
+### 2.2 推送限流配置
+
+为防止某个外部插件写死循环疯狂推送变量拖慢服务器，`config.yml` 默认设有两级速率保护：
 
 ```yaml
-# config.yml
 dynamic:
   push-rate-limit:
-    # 单插件每秒 push 上限 — 防一个 plugin bug 把 store 灌爆
-    per-plugin-per-second: 100
-    # 全局每秒 push 上限 — 总闸
-    global-per-second: 1000
-    # 全局触限后保护期（ms）— 期间所有 push reject
-    global-circuit-break-ms: 10000
+    per-plugin-per-second: 100     # 单个外部插件每秒最多推送次数
+    global-per-second: 1000        # 全服所有外部插件合计每秒上限
+    global-circuit-break-ms: 10000 # 触发全局上限后的冷静保护期（毫秒）
 ```
 
-调整后 `/canvas var reload` 立即生效。
-
-详细行为：`docs/dynamic-data.md §10.2`。
+改完后执行 `/canvas var reload` 当场生效。
 
 ### 2.3 第三方插件接入
 
-第三方插件用 `HikariCanvasAPI` 推变量到 HikariCanvas，详见 **`docs/api.md`**（含两份示例插件代码、Gradle 配置、`ServicesManager` 推荐入口，以及 ACL / 限流 / 生命周期说明）。
+如果你是插件开发者，想把自家小游戏、经济或车控插件的数据推上招牌，请直接阅读 [外部插件接入 API](api.md)（仓库 [`examples/`](../examples/README.md) 目录内附有两份完整示例工程）。
 
-### 2.4 监控 + 故障排查
+### 2.4 常见日志与排查
 
-| 日志模式 | 含义 | 处理 |
-|---|---|---|
-| `[HikariCanvas] plugin 'X' push rate exceeded` | 单插件超 100/s | 看 plugin 是不是 push 过频，调推送间隔 |
-| `[HikariCanvas] global push rate exceeded` | 全局超 1000/s | 多插件同时密集 push；可在 config 调高限额 |
-| `[HikariCanvas] PAPI invoke failed for ...` | PAPI placeholder 报错 | 检查 PAPI 自己 / 对应 expansion |
-| `[HikariCanvas] plugin 'X' disabled; unregistered N namespaces (cached values retained for 30s)` | plugin 卸载触发清理 | 正常行为 |
-| `[HikariCanvas] purged N/N orphan namespace(s) after 30s grace period` | 30s grace 后清理完成 | 正常行为 |
-| `[HikariCanvas] setVariable rejected: QUOTA_EXCEEDED` | 单插件变量超 1000 个 | 检查 plugin 是不是漏 unset；考虑 setVariables 批量 |
-| `[HikariCanvas] setVariable unexpected error` | 未知异常 + stack trace | 看具体 trace；可能 HikariCanvas bug，报 issue |
-| `[AUDIT FALLBACK]` | DB 写 audit 失败 fallback 到 log | DB 大概锁住了；查 SQLite busy |
+| 后台日志关键字 | 含义 | 处理办法 |
+| --- | --- | --- |
+| `plugin 'X' push rate exceeded` | 外部插件 `X` 每秒推送超过上限（默认 100 次/秒） | 检查该插件是否推送过于频繁，或适当调高 `per-plugin-per-second` |
+| `global push rate exceeded` | 全服总推送速率触发熔断保护 | 排查高频推送插件，或按需调高 `global-per-second` |
+| `PAPI invoke failed for ...` | 某个 PlaceholderAPI 占位符解析时抛错 | 检查 PlaceholderAPI 及对应扩展包是否安装正常 |
+| `plugin 'X' disabled; unregistered N namespaces` | 外部插件卸载时触发自动回收（旧值保留 30 秒防闪屏后清理） | 属于正常的插件重载/关停流程，无需处理 |
+| `setVariable rejected: QUOTA_EXCEEDED` | 单个外部插件注册的变量数超过 1000 个上限 | 检查该插件是否一直在新建不同名字的变量而未清理旧键 |
+| `[AUDIT FALLBACK]` | 审计日志写入 SQLite 超时，已退回打印到控制台日志 | 检查磁盘读写负载，确认没有外部程序强锁 `data.db` |
 
-### 2.5 备份 + 恢复
+### 2.5 数据备份与恢复
 
-变量数据持久化在 `plugins/HikariCanvas/data.db`（SQLite）。**仅用户侧变量与时刻表配置**持久化（插件 / 系统 / PAPI / 计分板变量均为内存态）。
+玩家创建的单画布变量、全局用户变量、变量别名、时刻表以及整套铁路网络，全部保存在 `plugins/HikariCanvas/data.db`（SQLite 数据库）中；系统变量、PlaceholderAPI、计分板和外部插件推送值则为实时内存态，重启后自动重新拉取。
 
-涉及的表：
+日常备份只需在停服后复制 `data.db`（若需在线热备，可使用 `sqlite3 plugins/HikariCanvas/data.db ".backup '/备份路径/data.db'"`）。完整的升级备份与回滚步骤见 [部署指南 §9](deployment.md#9-备份版本升级与回滚)。
 
-- `user_variables` — per-wall 用户变量（`wall_id / name / type / default_value / current_value / bound_to / created_at / updated_at`）
-- `user_global_variables` — 全局用户变量（namespace = `userglobal`，`name` 主键全服唯一）
-- `variable_aliases` — 变量别名（per-wall）
-- `wall_schedules` — 手动时刻表 per-wall 配置（站名 / precision 等）
-- `schedule_entries` — 手动时刻表条目（HH:mm / 终点）
-- `rail_lines` / `rail_stations` / `rail_runs` / `rail_timetable` / `wall_rail_bindings` — 铁路网络
+### 2.6 配置重载对照表
 
-备份（停服或在 server 内 `save-all + save-off`）：
-
-```bash
-sqlite3 plugins/HikariCanvas/data.db ".backup '/path/to/backup-$(date +%Y%m%d).db'"
-```
-
-或简单 cp：
-
-```bash
-cp plugins/HikariCanvas/data.db /path/to/backup-$(date +%Y%m%d).db
-```
-
-恢复：停服 → 把备份文件覆盖回去 → 启动（若旧备份版本较低，启动期会自动执行向前兼容的 schema 迁移）。生产环境建议定期备份，完整升级与恢复流程见 `docs/deployment.md §9`。
-
-### 2.6 重载流程
-
-| 改了什么 | 怎么生效 |
-|---|---|
-| `config.yml` 限流参数 | `/canvas var reload` |
-| `config.yml` 其他参数（host / port / 池容量等） | `/canvas reload config`（仅标 `[热更]` 的项当场生效，其余需重启） |
-| user 变量 / schedule / 铁路数据 | 实时（自动推送到在线编辑会话与画布渲染） |
-| `lang/*.yml` 游戏内文案 | `/canvas reload config` 热重载 |
-| `paper-plugin.yml` 权限定义 | 重启 server |
-| 第三方插件代码 | 触发 PluginDisableEvent → 30s grace → reload plugin |
+| 你改了什么 | 怎么让它生效 |
+| --- | --- |
+| 网页里的变量值、别名、时刻表、铁路车次 | **实时生效**（改完自动推送到游戏内墙面与在线会话） |
+| `config.yml` 的 `dynamic.push-rate-limit` 推送限流 | 执行 `/canvas var reload` |
+| `config.yml` 中标有 `[热更]` 的项与 `lang/*.yml` 语言文件 | 执行 `/canvas reload config` |
+| `config.yml` 其余参数（如进站提示文案、全局变量配额、监听端口等） | **重启服务器** |
 
 ---
 
 ## 相关文档
 
-- [`docs/dynamic-data.md`](dynamic-data.md) — 变量系统设计 / 协议契约
-- [`docs/api.md`](api.md) — 第三方插件接入 SDK
-- [时间轴动画使用指南](timeline-guide.md) — 让元素随时间或变量变化动起来
-- [积木脚本使用指南](scripting-guide.md) — 用积木读写变量、编排条件与动作
-- [`docs/protocol.md`](protocol.md) — WebSocket 协议
-- [`docs/data-model.md`](data-model.md) — SQLite / PDC 格式
+- [玩家与服主使用手册](user-guide.md) —— 基础建墙、命令速查与权限配置
+- [时间轴动画指南](timeline-guide.md) —— 让元素随时间或变量变化动起来
+- [积木脚本指南](scripting-guide.md) —— 用积木读写变量、按条件触发动作
+- [外部插件接入 API](api.md) —— 第三方插件推送变量开发指南
+- [动态数据接入设计](dynamic-data.md) —— 内部架构与协议契约

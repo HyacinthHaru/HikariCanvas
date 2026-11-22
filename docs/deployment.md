@@ -1,22 +1,25 @@
-# 部署指南
+# HikariCanvas 部署指南
 
-**适用范围：** 把 HikariCanvas 部署给真实玩家（单机测试 → 内网 LAN → 公网服务器）
+这篇指南面向**服主与运维人员**，按从易到难的顺序讲清楚三件事：
 
-本文档讲三件事：
-
-1. 服务怎么起来（最小可用）
-2. 默认 `127.0.0.1` 绑定为什么不能在公网直开
-3. 公网部署的两种姿势（反向代理 + TLS，强烈推荐 vs 直绑公网 + 自签证书，不推荐）
+1. 单机与局域网怎么装上即用；
+2. 为什么默认只绑 `127.0.0.1`、不能把端口直接裸露到公网；
+3. 公网服务器如何用 Caddy 或 nginx 配好 HTTPS 反向代理，以及日常配置、多语言与备份升级流程。
 
 ---
 
-## 1. 单机 / 内网最小可用
+## 1. 单机与局域网快速部署
 
-> ⚠️ **必装前置依赖：PacketEvents 插件。** HikariCanvas 靠 PacketEvents 把渲染画面以地图数据包推送到游戏内地图（核心投影通道），且**不打包它**——PacketEvents 是 GPL-3.0，打包会污染本插件的 MIT 授权。**先从 <https://modrinth.com/plugin/packetevents> 或 SpigotMC 下载 PacketEvents 插件、丢进 `plugins/`，再装 HikariCanvas。** 没装 PacketEvents 时 HikariCanvas 会拒绝加载（Paper 报缺少必需依赖）。
+> **必装前置：PacketEvents 插件。**
+> HikariCanvas 通过 PacketEvents 向客户端发送地图画面数据包。由于 PacketEvents 采用 GPL-3.0 协议，为避免传染本项目的 MIT 协议，插件包内不捆绑它——请先前往 [Modrinth](https://modrinth.com/plugin/packetevents) 下载 **PacketEvents（`2.13.0` 及以上）** 放入 `plugins/`，再放入 HikariCanvas。未安装前置时服务器启动会提示缺少必需依赖。
 
-把 jar 扔进 `plugins/`、重启服务器，第一次启动会自动生成 `plugins/HikariCanvas/config.yml`。GitHub Releases 上的发布 jar 约 85–90 MB（体积偏大是因为内置了 22 套字体与矢量图标库，由后端统一供给编辑器以保证双端渲染一致，无需服主另配字体；属正常，首次启动稍慢也正常）。
+把两个 jar 放进 `plugins/` 目录并启动服务器，首次运行会自动生成 `plugins/HikariCanvas/config.yml`。发布包体积约 86–90 MB，是因为内置了 22 款开源字体、矢量图标库和完整的网页编辑器，服主无需额外安装系统字体，首次启动稍慢属于正常现象。
 
-> **支持的服务端版本**：同一份 jar 同时支持 **Paper 1.21.11 ~ 26.x**（含 26.1 / 26.2）。Java 要求跟随 MC 版本——跑 1.21.x 用 **Java 21**，跑 26.x 用 **Java 25**（Minecraft 26 自身的要求）。插件不碰 NMS，全靠公开 Bukkit API + PacketEvents（2.13.0+），所以一份包就能跨大版本，无需为不同版本下不同包。
+**服务端与 Java 版本对应关系**（同一份 jar 直接通吃，无需按版本下载不同包）：
+- 运行 **Paper 1.21.11**：使用 **Java 21**
+- 运行 **Paper 26.1 / 26.2**：使用 **Java 25**（Minecraft 26 自身的运行要求）
+
+默认的网络配置如下：
 
 ```yaml
 network:
@@ -25,84 +28,65 @@ network:
   editor-url: "http://{host}:{port}/?token={token}"
 ```
 
-- **同一台机器开服 + 编辑**：默认配置直接能用。`/canvas confirm` 后聊天里弹出的 `http://127.0.0.1:8877/...` 在你这台机器上点开就行。
-- **同一局域网（LAN）开服 + 远程玩家编辑**：把 `host` 改成服务器的内网 IP（`192.168.x.x` 之类），`editor-url` 也跟着改。其他玩家用浏览器访问 `http://192.168.x.x:8877/?token=...` 即可。
-  - 风险：内网 token 仍走明文 HTTP/WS。家庭/小型办公局域网可以接受。
+- **本机开服、本机编辑**：保持默认配置即可。进游戏执行 `/canvas edit` 选墙、`/canvas confirm` 确认后，直接在本机浏览器点开聊天栏弹出的 `http://127.0.0.1:8877/...` 链接就能开始画。
+- **局域网联机（同一路由器 / 内网）**：把 `host` 改成那台开服电脑的内网 IP（例如 `192.168.1.100`），`editor-url` 保持上面模板不变或同步填入内网 IP，然后**重启服务器**。同局域网玩家点开链接即可访问（家庭或寝室局域网内明文 HTTP 风险可控；公网环境请务必按第 3 节配置 HTTPS）。
 
-> ⚠️ **重要：** 改完 `host` / `port` **必须重启服务器**。`/canvas reload config` 只刷新引用 + log 配置，但 socket 已经绑死的端口不会重绑。
-
----
-
-## 2. 为什么默认 `127.0.0.1` ？
-
-`docs/security.md` §3 把 TLS 列为**公网部署的硬性前提**。原因：
-
-- **Token 单次使用但明文传输**：玩家从 `/canvas confirm` 拿到的 URL 里带一个一次性 token。HTTP 明文传输时，任何在中间链路上嗅探的人（同 WiFi、ISP、不信任代理）都能立刻拿到 token，在它过期前抢先 auth。本项目 token 有 15 分钟 TTL + 一次性 consume，但攻击窗口仍然存在。
-- **WebSocket 帧明文**：之后所有 op（包括 element.update 的文本内容）也都走明文。在企业网 / 公共 WiFi 抓包可见。
-- **CORS 不防内网横向**：本服务没有 CORS 限制，因为预期就是同源。公网开放后任何网站都能从浏览器跨域试图打这个端口。
-
-`127.0.0.1` 强制限制了仅本机进程可以连过来。所有需要远程访问的场景，**必须**通过一个 TLS-terminating 反代来。
+> 修改 `host`、`port`、`editor-url` 或 `allowed-origins` 后**必须重启服务器**——监听端口在启动时绑定，`/canvas reload config` 不会重新绑定端口。
 
 ---
 
-## 3. 公网部署 · 推荐路径（nginx / Caddy 反代 + TLS）
+## 2. 为什么默认只绑 `127.0.0.1`？
 
-### 3.1 架构
+网页编辑器的链接里包含一次性访问令牌（`token`），编辑过程中的画布操作与图片上传则通过 WebSocket / HTTP 传输。如果把 `8877` 端口直接以明文 HTTP 暴露在公网上：
 
+- **令牌容易在公网链路被截获**：在公共 Wi-Fi、校园网或不可信网络环境下，明文传输的链接一旦被中间节点嗅探，对方就能在令牌失效前抢先打开会话；
+- **编辑内容全程明文可见**：后续所有的文字修改、脚本配置在网络层都是未加密状态。
+
+因此插件默认锁死 `127.0.0.1`（仅允许服务器本机进程连接）。公网开服时，让 Caddy 或 nginx 在前面承接 443 端口的 HTTPS / WSS 加密流量，再在服务器本机环回转发给 `127.0.0.1:8877`，既安全又省心。
+
+---
+
+## 3. 公网服务器部署（推荐：Caddy / nginx + HTTPS）
+
+### 3.1 流量走向
+
+```text
+玩家浏览器
+   │  HTTPS / WSS（公网 443 端口，全程 TLS 加密）
+   ▼
+反向代理（Caddy 或 nginx，自动管理 Let's Encrypt 证书）
+   │  HTTP / WS（仅本机内部 127.0.0.1:8877）
+   ▼
+HikariCanvas 内置网页服务
 ```
-   玩家浏览器
-       │ HTTPS / WSS（443）
-       ▼
-   反代（nginx / Caddy）+ Let's Encrypt 证书
-       │ HTTP / WS（环回 127.0.0.1:8877）
-       ▼
-   HikariCanvas WebServer
-```
 
-反代负责：
-- TLS 终止（拿到 Let's Encrypt 证书）
-- WebSocket 升级转发
-- 限速 / 防 DDoS（可选）
+HikariCanvas 自身继续保持 `host: "127.0.0.1"`，不需要向公网开放 `8877` 端口。
 
-HikariCanvas 还是绑 `127.0.0.1:8877`，**不直接暴露到公网**。
+### 3.2 准备一个域名
 
-### 3.2 申请域名 + 证书
+准备一个解析到服务器公网 IP 的域名或子域名（例如 `canvas.example.com`），确保服务器防火墙与云厂商安全组放行了 `80`（用于签发证书）与 `443` 端口。
 
-最简单：用一个能解析到你服务器公网 IP 的域名（如 `canvas.example.com`）。证书走 **Let's Encrypt**：
+### 3.3 方案一：使用 Caddy（最省事，自动签发并续期证书）
 
-- **Caddy**：自动管理，零配置（见下方 Caddyfile）
-- **nginx**：用 `certbot --nginx` 一次性签发 + 自动续期
-
-### 3.3 Caddyfile（推荐）
-
-`/etc/caddy/Caddyfile`：
+编辑 `/etc/caddy/Caddyfile`：
 
 ```caddy
 canvas.example.com {
-    # WebSocket 升级 + HTTP 反代一锅端
     reverse_proxy 127.0.0.1:8877 {
-        # WS 帧 / 大 payload 给充足窗口
         transport http {
             keepalive 60s
         }
     }
 
-    # 推荐：限速避免被刷
-    @editor_path {
-        path /
-    }
-    rate_limit @editor_path 60r/m
-
-    # 编辑期 WS 长连接，禁止响应缓冲
     encode zstd gzip
 }
 ```
 
-`systemctl reload caddy`，证书自动签 + 续。
+保存后执行 `systemctl reload caddy`，Caddy 会自动申请 Let's Encrypt 证书并转发 HTTP 与 WebSocket 连接（令牌鉴权与接口限流由插件后端自带保护，无需额外编译第三方 Caddy 限速模块）。
 
-### 3.4 nginx 配置（如果你坚持用 nginx）
+### 3.4 方案二：使用 nginx
 
-`/etc/nginx/sites-available/hikari-canvas.conf`：
+编辑 `/etc/nginx/sites-available/hikari-canvas.conf`（并软链到 `sites-enabled/`）：
 
 ```nginx
 server {
@@ -113,24 +97,25 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/canvas.example.com/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
 
-    # 编辑器静态资源 + HTTP API + WS 升级，全代到 127.0.0.1:8877
     location / {
         proxy_pass         http://127.0.0.1:8877;
         proxy_http_version 1.1;
-        # WS 升级
-        proxy_set_header   Upgrade      $http_upgrade;
-        proxy_set_header   Connection   "upgrade";
-        # 透传客户端 IP（用于服务端日志）
-        proxy_set_header   X-Real-IP    $remote_addr;
-        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header   Host         $host;
-        # WS 长连接 idle 上限
+
+        # 转发 WebSocket 升级头（漏配会导致网页能打开但连不上画布）
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        "upgrade";
+
+        # 透传真实客户端 IP 与域名
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   Host              $host;
+
+        # 保持编辑会话长连接不断线
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
     }
 }
 
-# 80 → 443 跳转
 server {
     listen 80;
     server_name canvas.example.com;
@@ -138,221 +123,166 @@ server {
 }
 ```
 
-`certbot --nginx -d canvas.example.com` 一行搞定证书，然后 `nginx -s reload`。
+用 `certbot --nginx -d canvas.example.com` 签发证书后，执行 `nginx -s reload` 即可。
 
-### 3.5 调整 HikariCanvas config
+### 3.5 修改 `plugins/HikariCanvas/config.yml`
+
+反代配好后，把对外域名填进 `editor-url` 和 `allowed-origins`（**两处都要配**，漏配 `allowed-origins` 会触发防跨站拦截导致网页报 403 连不上）：
 
 ```yaml
 network:
-  host: "127.0.0.1"      # 不变，仍然只绑本机
-  port: 8877             # 不变
+  host: "127.0.0.1"      # 保持本机监听不变
+  port: 8877             # 与反代转发端口一致
   editor-url: "https://canvas.example.com/?token={token}"
-  #          ^^^^^                       ^^^^^^^^
-  #          关键：协议改 https；域名改成反代域名
+  allowed-origins:
+    - "https://canvas.example.com"
 ```
 
-`/canvas reload config` 让配置生效，**然后重启服务器**（因为 url-template 字段在 onEnable 时被传给了 WandListener / CanvasCommand 等不参与 reload 的组件）。
+保存后**重启 Minecraft 服务器**即可生效。
 
-### 3.6 防火墙
+### 3.6 防火墙检查
 
-公网服务器：
-- `:443` 开（反代入口）
-- `:8877` **关闭对外**（仅本机 lo 接口可达）
-- `:25565`（MC 默认）按需开
-
-iptables 示例：
+确认公网防火墙只对外开放 `443`（反代）与游戏端口（如 `25565`），**不要对外放行 `8877`**。因为插件默认绑在 `127.0.0.1`，内核层面本就不会接收外部网卡流量；若你想在防火墙再加一道双保险：
 
 ```bash
-# 只允许本机访问 8877
-iptables -A INPUT -p tcp --dport 8877 -s 127.0.0.1 -j ACCEPT
-iptables -A INPUT -p tcp --dport 8877 -j DROP
-```
-
-或者 ufw：
-
-```bash
-ufw allow from 127.0.0.1 to any port 8877
-ufw deny 8877
+# ufw 示例
+ufw allow 443/tcp
+ufw deny 8877/tcp
 ```
 
 ---
 
-## 4. 公网部署 · 不推荐路径（直绑公网）
+## 4. 临时直绑公网（不推荐）
 
-如果你**真的**只是临时测试、且能接受明文 token 风险，可以：
+如果你只是临时开一台测试服验证功能、没有域名，且清楚明文传输令牌的风险，可以短暂改为：
 
 ```yaml
 network:
-  host: "0.0.0.0"        # 监听所有网卡
+  host: "0.0.0.0"
   port: 8877
-  editor-url: "http://your-server-ip:8877/?token={token}"
+  editor-url: "http://你的公网IP:8877/?token={token}"
 ```
 
-**不要长期这样做。** 明文 token 在公网链路上等于"谁先抓到谁就能编辑你的画"。
-
-如果只是想用自签证书省事，那 HikariCanvas 内置 WebServer 没有 TLS 模块（用了 Javalin 默认 HTTP）—— 还是得起反代。建议直接走 §3。
+**切勿在正式服长期这样运行**——公网明文传输下，链路上的第三方只要抓到链接就能抢先接管编辑会话。插件内置的网页服务不直接挂载证书文件，正式对外请一律采用第 3 节的反向代理方案。
 
 ---
 
-## 5. 语言 / 文案
+## 5. 多语言与提示文案
 
-### 5.1 玩家看到的语言
+### 5.1 自动跟随客户端语言
 
-游戏内命令回复、wand 提示、压测反馈等文字**按每位玩家自己的 MC 客户端语言**显示——中文客户端看中文，英文客户端看英文，不需要服主做任何设置。
+游戏内的命令回复、魔棒选区提示和压测输出会自动匹配**每位玩家自己的 Minecraft 客户端语言**：中文客户端看简体中文（`zh_cn`），英文客户端看英文（`en_us`），服主不需要手动切换。
 
-插件内置两种语言：
+当某位玩家的客户端语言没有对应的语言文件时，会回落使用 `config.yml` 中的 `i18n.default-locale`（默认 `en_us`）。
 
-| 语言 ID | 对应语言 |
-|---|---|
-| `en_us` | 英文 |
-| `zh_cn` | 简体中文 |
+### 5.2 自定义文案或新增语种
 
-**当玩家的客户端语言没有对应文件时**（比如玩家用法语），会自动回落到 `config.yml` 里 `i18n.default-locale`（默认 `en_us`）。
+首次启动后，内置的 `zh_cn.yml` 和 `en_us.yml` 会自动释放到 `plugins/HikariCanvas/lang/` 目录：
 
-### 5.2 修改或添加语言文件
-
-语言文件在 **`plugins/HikariCanvas/lang/`** 目录，首次启动时内置的两个文件（`en_us.yml` / `zh_cn.yml`）会自动复制到这个目录里。你可以：
-
-- **改现有文案**：直接编辑对应 `.yml` 文件，跑 `/canvas reload config` 立即生效，无需重启。
-- **添加新语言**：在同目录放 `<语言 ID>.yml`（如 `fr_fr.yml`），同样 `/canvas reload config` 热重载即可。
-
-> 文案支持 MiniMessage 格式，可以加颜色标签（如 `<red>...</red>` / `<gradient:...>`）。
-
-### 5.3 统一所有玩家的语言
-
-如果想让所有玩家不管客户端语言是什么都看同一种语言，把 `i18n.default-locale` 改为目标语言 ID，**并且删掉其他语言的 lang 文件**（或者把其他 `.yml` 内容改成你想要的文字）。
-
-最常见的场景是纯中文服务器希望所有玩家看中文：
-
-```yaml
-# config.yml
-i18n:
-  default-locale: zh_cn
-```
-
-改完 `/canvas reload config` 热重载，不用重启服务器。
+- **修改现有提示语**：直接编辑对应 `.yml` 文件（支持 `<gold>`、`<gradient:...>` 等 MiniMessage 颜色格式），保存后执行 `/canvas reload config` 即刻生效，不用重启服务器。
+- **添加其他语言**：按 Minecraft 语言代号命名放入同目录（例如 `zh_tw.yml`、`ja_jp.yml`），再执行 `/canvas reload config` 即可识别。
+- **强制全服统一显示中文**：把 `config.yml` 里的 `i18n.default-locale` 设为 `zh_cn`，并删掉（或替换）其他语种的 `.yml` 文件，然后 `/canvas reload config`。
 
 ---
 
-## 6. 多玩家场景注意事项
+## 6. 多人协作、防破坏与控制台管理
 
-wall 排他锁是**全局**的（详见 `docs/architecture.md §3`）：
+日常运营中常遇到的几个多人规则（完整权限节点配法见 [玩家与服主使用手册 §4](user-guide.md#第四部分服主权限配置指南)）：
 
-- 任意时刻一个 wall 最多一个活跃 session。第二个玩家试图 `/canvas open` 同一 wall 会收 `WALL_OCCUPIED`。
-- alias 是全服唯一（`UNIQUE INDEX idx_walls_alias`）。两个玩家不能用同一别名。
-- 未锁定的草稿 wall 默认开放协作：任何有 `canvas.edit` 权限的玩家都能用 `wall_id` 打开编辑；作者锁定后非作者无法打开（除 `canvas.admin.bypass-lock`）。`canvas.delete.own` 限定只能删自己创建的，`canvas.delete.any` 删任意（默认 op 才有）。
-- wall 的 ItemFrame `BlockBreakEvent` / `HangingBreakEvent` 由 `canvas.modify` 权限统一保护——无该权限的玩家拒绝破坏。详见 `docs/security.md §5`。锁定 / 解锁由网页编辑器 TopBar 的 Lock 按钮触发，走 WS `wall.lock` / `wall.unlock` op，owner-only，且仅作前端只读冻结，不影响游戏内破坏行为。
+- **单画板排他编辑**：同一时刻一块画板最多只能被一个人打开编辑；第二个人尝试 `/canvas open` 时会提示该画板正在被他人编辑。
+- **别名全服唯一**：画板别名全服不重名，先到先得。
+- **草稿协作与作者锁定**：未锁定的画板默认允许其他有编辑权限的玩家用编号打开协作；作者点击网页编辑器顶栏的 **锁定** 按钮后，画板变为只读，非作者无法再打开修改（拥有 `canvas.admin.bypass-lock` 权限的管理员除外）。
+- **游戏内防破坏保护**：所有由插件生成的招牌展示框及其背后的支撑方块默认受保护，普通玩家无法敲掉（无论画板是否锁定）；只有拥有 **`canvas.admin.force-break`** 权限的管理员才能强行破坏。正常拆除画板请使用 `/canvas delete <画板ID>`。
 
-### 6.1 从服务端控制台管理画布
+### 6.1 从服务端控制台直接管理画布
 
-服主不进游戏也能管画布。控制台可用的子命令：
+服主不进游戏也能在后台控制台管理全服画板：
 
-| 命令 | 说明 |
-|---|---|
-| `canvas open <wall_id\|alias>` | 打开任意画布（**包括别人锁定的**），控制台回显一条编辑器链接 |
-| `canvas list` | 列出全部画布 |
-| `canvas alias <名称>` | 给当前控制台会话的画布改别名 |
-| `canvas delete <wall_id> [confirm]` | 删除任意画布（同样需 30 秒内二次确认） |
-| `canvas cancel` | 结束当前控制台会话，释放画布 |
+| 控制台命令 | 作用 |
+| --- | --- |
+| `canvas list` | 列出全服所有画板 |
+| `canvas open <画板ID或别名>` | 打开任意画板（含玩家已锁定的画板），在控制台打印一条编辑链接 |
+| `canvas alias <新别名>` | 修改当前控制台已打开画板的别名 |
+| `canvas delete <画板ID> [confirm]` | 删除任意画板（同样需在 30 秒内带 `confirm` 二次确认） |
+| `canvas cancel` | 结束当前控制台编辑会话，释放画板占用 |
 
-`edit` / `wand` / `confirm` **控制台不可用**——它们要用金铲在世界里点两个方块选墙面，没有玩家就没有选区。
+> **日志脱敏提醒**：在控制台执行 `canvas open` 时，带一次性访问令牌的链接会一并写入 `logs/latest.log`。虽然该令牌 15 分钟自动过期且首次打开即绑定浏览器 IP，但如果你准备把 `latest.log` 发给他人帮忙排错，请先执行一次 `canvas cancel` 让令牌立即作废。
 
-⚠️ **链接会进日志。** `canvas open` 回显的链接含访问令牌，会写入 `logs/latest.log`。
-令牌**只能用一次、15 分钟过期、被第一个打开它的浏览器锁定 IP**，所以风险有限，但
-**把日志发给别人排障之前，先跑 `canvas cancel` 或等 15 分钟**。详见 `docs/security.md §2.2`。
-
-控制台同一时刻只能开**一面**画布；想开下一面先 `canvas cancel`（或等 15 分钟自动过期）。
+> **首页公开列表说明**：直接访问编辑器根地址（不带 `?token=`）会展示当前服务器的画板概览列表（只读展示编号、尺寸与更新时间，无法点进画布修改）；只有持有游戏内或控制台签发的有效令牌才能进入编辑。
 
 ---
 
-> 编辑器落地页无需登录即可浏览画布清单（`GET /api/walls` 为公开只读接口），公网部署时**应将该清单视为公开可见**；进入任意画布编辑仍须持游戏内或控制台签发的一次性令牌。
+## 7. 快速排障对照
+
+遇到问题时，管理员可先在游戏或控制台跑两条只读检查命令：
+- `/canvas stats` —— 看地图池余量、活跃会话、变量与动画概况；
+- `/canvas diagnose <画板ID>` —— 逐项体检某块画板为什么不显示。
+
+| 常见现象 | 常见原因与处理办法 |
+| --- | --- |
+| 打开编辑链接一直转圈或拒绝连接 | 仍在用默认的 `127.0.0.1` 从外网/别机访问；按第 1 节改局域网 IP 或按第 3 节配反向代理 |
+| 通过域名打开网页提示连不上，后台报 `Origin=... not in allowlist` | `config.yml` 的 `network.allowed-origins` 漏填了你的 `https://域名`，补上后重启服务器 |
+| 网页能打开但立刻提示认证失败（`4001`） | 链接已用过一次或超过 15 分钟过期；回游戏重新 `/canvas open <编号>` 拿新链接 |
+| 走 nginx 反代时编辑几分钟就断线重连 | nginx 默认读取超时太短；在对应 `location` 加上 `proxy_read_timeout 3600s;` |
+| 网页能开但一直卡在连接中 | 反代漏配了 WebSocket 升级头（`Upgrade` 与 `Connection "upgrade"`） |
+| 跑了 `/canvas reload config` 但改的配置没生效 | 端口、域名、地图池、配额等需要在启动时初始化的项必须**重启服务器**才生效（见下表） |
+
+更完整的故障现象说明见 [常见问题排错](troubleshooting.md)。
 
 ---
 
-## 7. 常见问题排查
+## 8. `config.yml` 核心配置速查
 
-> **排查前先自查**（需 `canvas.admin`，两条都是只读）：`/canvas stats` 看全局健康（地图池是否接近上限 / 会话 / 变量 / 动画占用）；`/canvas diagnose <wallId>` 给单面墙逐环节体检（墙存在 → 地图 → 世界加载 → 会话 → 工程数据 → 动画），直接定位"某块墙为什么渲不出"。详见 `troubleshooting.md §2.5`。
+首次启动生成的 `plugins/HikariCanvas/config.yml` 内每一项都附有详细中文注释。下表汇总常用字段及修改后是否需要重启服务器：
 
-| 现象 | 可能原因 |
-|---|---|
-| 浏览器打开 `http://127.0.0.1:8877` 卡白屏 | shadow jar 没打 web/ 资源；跑 `./gradlew :plugin:shadowJar` 重打 |
-| WS 连上后立即 `4001 AUTH_FAILED` | token 已被消费 / 已过期。重新 `/canvas confirm` |
-| nginx 后 WS 不停断 | nginx `proxy_read_timeout` 太短；改 3600s 或更长 |
-| Caddy 自动证书签不出 | 域名 A 记录没解析到本机 / 80 端口没开 / cloud provider 防火墙没放行 |
-| WS 连不上但 HTTP 能开 | 反代漏配 `Upgrade: websocket` 头转发 |
-| 公网 `host: 0.0.0.0` 后玩家访问超慢 | MC 服务器主线程被画布渲染卡到了；降低 `throttle.projection-fps`（若已显式配了 `rendering.adaptive-fps.default-min-interval-ms`，改那一项——它优先级更高）或减少 wall 尺寸 |
-| `/canvas reload config` 看上去没生效 | host/port/池容量/超时这些"启动期注入"的字段需要重启。`/canvas reload config` 仅热更 `scripts.*`（配额 / budget / playerNear 采样间隔 / 命令模板白名单）与 `i18n.default-locale`（含重扫 `lang/`），其余字段需重启才生效；模板走 `/canvas reload templates`，插件 Push 限流走 `/canvas var reload` |
-
----
-
-## 8. config.yml 速查
-
-完整字段说明见 jar 内嵌的 `resources/config.yml`（首次启动自动拷到 `plugins/HikariCanvas/`，每行都带中文注释），共 13 个顶级段。下表按段列关键字段：
-
-| 段 / 字段 | 默认 | 含义 | 改了要重启？ |
-|---|---|---|---|
-| `network.host` | `127.0.0.1` | WS/HTTP 绑定 IP | ✅ |
-| `network.port` | `8877` | 同上端口 | ✅ |
-| `network.editor-url` | `http://{host}:{port}/?token={token}` | `/canvas confirm` 发给玩家的 URL 模板（仅 http/https，其它协议被拒） | ✅ |
-| `network.ws-auth-timeout-seconds` | `5` | WS 建连后多少秒内必须 auth，超时 close 4001 | ✅ |
-| `network.allowed-origins` | `[]` | WS upgrade Origin 白名单（回环 + 同源默认放行；反代域名要加进来） | ✅ |
-| `session.token-ttl-minutes` | `15` | token 有效期 | ✅（TokenService 在启动期拿到 TTL，reload 不换） |
-| `session.ws-grace-minutes` | `5` | 断线后保留 session 多久供重连 | ✅ |
-| `session.idle-minutes` | `30` | 无输入多久回收（0 = 永不超时） | ✅ |
-| `map-pool.initial` / `.max` | `64` / `256` | 预览地图池容量 | ✅ |
-| `map-pool.per-world` | `{}` | 可选 per-world 预热 map 数（多世界服务器） | ✅ |
-| `limits.canvas-max-maps` | `16` | 单面招牌最多占几张地图（范围 1~64；只挡新建，老招牌照常打开） | ✅ |
-| `throttle.projection-fps` | `5` | 服务端推送 MC 地图的 fps 上限。实际生效的是 `rendering.adaptive-fps.default-min-interval-ms`，本项按 `1000 / fps` 推算它的默认值；**显式写了 `default-min-interval-ms` 就以那个为准**，本项不再参与 | ✅ |
-| `throttle.input-rate-per-second` / `.input-burst` | `20` / `40` | 单玩家 WS op 速率 + 突发上限 | ✅ |
-| `rendering.adaptive-fps.*` | 见 config | 自适应渲染（秒级变量墙的高频间隔 + 主动推帧） | ✅ |
-| `templates.auto-reload-on-startup` / `.preview-cache-seconds` / `.max-per-player` | `true` / `300` / `20` | 模板自动 reload + 缩略图缓存 TTL + 每玩家发布上限 | 部分（模板内容可 `/canvas reload templates`） |
-| `images.max-size-kb` / `.allowed-mime` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / png·jpeg·webp / `1024` / `16` / `50` / `1024` | 图片上传：单文件 / MIME / 降采样 / 单墙 / 每日 / 全服磁盘配额。**webp 实际不可用**——标准 JDK 没有 WebP 解码器，除非自行安装 ImageIO 插件，否则上传会被明确拒绝 | ✅ |
-| `import.canvas-max-mb` / `.canvas-max-entry-mb` / `.canvas-max-total-mb` | `10` / `10` / `50` | `.canvas` 工程导入限额（防 zip 炸弹） | ✅ |
-| `security.token-rate-limit.per-minute` | `10` | 每 IP 每分钟 WS auth token 尝试次数（防暴破） | ✅ |
-| `i18n.default-locale` | `en_us` | 玩家客户端语言无对应 lang 文件时的兜底语言（内置 `en_us` / `zh_cn`；可加自定义文件） | ❌（`/canvas reload config` 即时生效） |
-| `database.auto-backup-before-migration` | `true` | migration 前自动备份 `data.db`（配合 `backup-retention-days` 默认保留 30 天） | ✅ |
-| `database.audit-retention-days` | `90` | `audit_log` 表保留多少天（`0` = 永久保留）。超期记录在写审计时顺带清（每 6 小时最多一次） | ✅ |
-| `dynamic.push-rate-limit.*` | `100` / `1000` / `10000` | 插件 Push API 单插件 / 全局每秒上限 + 熔断保护期 ms | `/canvas var reload` 热替换 |
-| `dynamic.schedule.*` | `60` / "进站中" / "" | 兜底列车 ETA 进站阈值秒 + 进站 / 空闲文案 | ✅ |
-| `dynamic.variables.userglobal-max-per-owner` / `.userglobal-max-total` | `500` / `10000` | 全局用户变量配额（每 owner / 全服） | ✅ |
-| `timeline.default-fps` / `.max-fps` | `20` / `60` | 时间轴默认帧率 + 服务器级 fps 安全阀 | ✅ |
-| `scripts.max-rules-per-wall` / `.max-elements-per-wall` / `.player-near-sample-ticks` / `.budget.*` / `.tween.*` / `.command-templates` | 见 config | 墙脚本：规则 / 元素配额 + 靠近采样 + 执行预算三闸 + 补间帧率 + 命令模板白名单 | `/canvas reload config` 热更（除补间 SES 上限） |
-
-> "改了要重启 = ✅" 表示 `/canvas reload config` 不足以让该字段生效，必须重启服务器。`/canvas reload config` 的热更新仅覆盖 `scripts.*`（规则配额 / budget / playerNear 采样 / 克隆元素配额 / 命令模板白名单，且配额只影响后续创建，不裁剪已有）与 `i18n.default-locale`（连带重扫 `lang/`）；`.canvas` 模板包内容走 `/canvas reload templates`；插件 Push 限流走 `/canvas var reload`。其余字段（host/port/池容量/超时等启动期注入项）一律需重启。各字段含义以 jar 内嵌 `config.yml` 行内注释为准——那里的约定是**默认都要重启，只有标 `[热更]` 的项 `/canvas reload config` 当场生效**。
+| 配置项 | 默认值 | 含义说明 | 生效方式 |
+| --- | --- | --- | --- |
+| `network.host` / `.port` | `127.0.0.1` / `8877` | 内置网页与 WebSocket 监听地址和端口 | 重启服务器 |
+| `network.editor-url` | `http://{host}:{port}/?token={token}` | 发给玩家的编辑器链接模板（仅支持 `http` / `https`） | 重启服务器 |
+| `network.ws-auth-timeout-seconds` | `5` | 网页建连后完成令牌认证的超时秒数 | 重启服务器 |
+| `network.allowed-origins` | `[]` | 反向代理对外域名白名单（如 `https://canvas.example.com`） | 重启服务器 |
+| `session.token-ttl-minutes` | `15` | 编辑链接令牌的有效期（分钟） | 重启服务器 |
+| `session.ws-grace-minutes` | `5` | 浏览器断线后保留会话供重连的宽限期（分钟） | 重启服务器 |
+| `session.idle-minutes` | `30` | 打开编辑器后长时间无操作自动释放的分钟数（`0` 为不超时） | 重启服务器 |
+| `map-pool.initial` / `.max` | `64` / `256` | 地图池初始预热张数与最大容量上限 | 重启服务器 |
+| `map-pool.per-world` | `{}` | 多世界服务器按世界单独指定初始预热地图张数 | 重启服务器 |
+| `limits.canvas-max-maps` | `16` | 新建单块招牌最多允许占用的地图张数（`1`–`64`，不影响已有老招牌） | 重启服务器 |
+| `throttle.projection-fps` | `5` | 常规编辑时向游戏内地图推送画面的每秒帧数上限 | 重启服务器 |
+| `throttle.input-rate-per-second` / `.input-burst` | `20` / `40` | 单名玩家每秒编辑操作速率与突发上限 | 重启服务器 |
+| `rendering.adaptive-fps.*` | 见配置文件 | 含秒级动态变量画板的刷新间隔设置 | 重启服务器 |
+| `templates.auto-reload-on-startup` / `.preview-cache-seconds` / `.max-per-player` | `true` / `300` / `20` | 启动自动加载模板、缩略图缓存秒数、单人发布工坊模板上限 | 配置需重启；新增模板文件可跑 `/canvas reload templates` |
+| `images.max-size-kb` / `.downscale-max-edge` / `.max-per-wall` / `.max-uploads-per-day` / `.max-total-storage-mb` | `2048` / `1024` / `16` / `50` / `1024` | 图片上传限制：单图大小、最大边长缩放、单墙张数、单人每日次数、全服总磁盘空间（标准 JDK 默认支持 PNG 与 JPEG） | 重启服务器 |
+| `import.canvas-max-mb` / `.canvas-max-entry-mb` / `.canvas-max-total-mb` | `10` / `10` / `50` | `.canvas` 工程包导入体积上限（防超大压缩包） | 重启服务器 |
+| `security.token-rate-limit.per-minute` | `10` | 同一 IP 每分钟最多尝试验证令牌的次数 | 重启服务器 |
+| `i18n.default-locale` | `en_us` | 玩家客户端语言无匹配文件时的默认语言（如 `zh_cn`） | `/canvas reload config` 即时生效 |
+| `database.auto-backup-before-migration` / `.backup-retention-days` | `true` / `30` | 插件升级变更数据库结构前自动备份 `data.db`，以及旧备份保留天数 | 重启服务器 |
+| `database.audit-retention-days` | `90` | 操作审计日志保留天数（`0` 为永久保留） | 重启服务器 |
+| `dynamic.push-rate-limit.*` | `100` / `1000` / `10000` | 第三方插件推送变量的单插件上限、全服上限与熔断冷却毫秒数 | `/canvas var reload` 即时生效 |
+| `dynamic.schedule.*` | `60` / `"进站中"` / `""` | 列车倒计时进站阈值（秒）及进站、空闲显示文字 | 重启服务器 |
+| `dynamic.variables.userglobal-max-*` | `500` / `10000` | 全局用户变量的单人上限与全服总上限 | 重启服务器 |
+| `timeline.default-fps` / `.max-fps` | `20` / `60` | 时间轴动画默认帧率与全服最高允许帧率 | 重启服务器 |
+| `scripts.*`（配额、预算、靠近采样、命令模板白名单） | 见配置文件 | 单墙脚本规则上限、元素上限、靠近检测间隔、执行预算三道安全阀与白名单命令模板 | `/canvas reload config` 即时生效（补间并发池大小除外） |
 
 ---
 
-## 9. 备份与恢复 / 版本升级
+## 9. 备份、版本升级与回滚
 
-> **配套契约：** 数据库 schema 严格遵循向前兼容（forward-only）迁移，并在每次迁移前自动备份 `data.db`（详见 `docs/data-model.md §6.5`）。本节是运维侧的升级与回滚流程。
+插件的所有持久化数据都集中在 `plugins/HikariCanvas/` 目录下（核心数据库 `data.db`、上传图片目录 `images/`、玩家工坊模板 `user-templates/` 以及配置文件 `config.yml`），地图物品本身则保存在对应世界的存档数据中。
 
-### 9.1 升级前
+### 9.1 常规升级步骤
 
-1. 停服（保证 `data.db` / world 文件不变）
-2. **手动备份**：`cp -r plugins/HikariCanvas plugins/HikariCanvas.bak.<date>`
-3. 备份 `data.db`（即便 plugin 自动 backup 也建议手工冗余）
+1. **停服备份**：先正常关停服务器，把整个插件数据目录完整拷贝一份留底：
+   ```bash
+   cp -r plugins/HikariCanvas plugins/HikariCanvas.bak.$(date +%Y%m%d)
+   ```
+2. **替换插件包**：将新版 `HikariCanvas-<版本>.jar` 放入 `plugins/`，删除旧版 jar。
+3. **启动自动迁移**：启动服务器。如果新版包含数据库表结构升级，插件会在升级前自动在目录内额外生成一份 `data.db.pre-V<编号>.bak` 备份，随后完成向前兼容迁移并在日志打印 `DB schema current version`。
+4. **进服抽查**：执行 `/canvas stats` 和 `/canvas list`，确认原有画板显示与打开编辑一切正常。确认稳定运行一两天后再清理手动备份即可。
 
-### 9.2 升级中
+### 9.2 异常回滚
 
-4. 替换 jar 文件
-5. 启动服务器
-6. 启动期 `MigrationRunner` 自动跑 `V<currentVersion+1>..V<latest>`
-   （`database.auto-backup-before-migration: true` 时每个 migration
-   前再 `cp data.db data.db.pre-V<NNN>.bak`）
-7. 看 server log 确认 `DB schema current version: <newVersion>` 和
-   `✓ V<NNN> applied` 信息
+如果升级后遇到异常需要退回旧版：
 
-### 9.3 升级后
-
-8. 跑 `/canvas list` 验证 walls 数据完整
-9. 至少 1 个玩家打开旧 wall 验证编辑流程正常
-10. 24h 后无问题再删 backup（disk 充裕则保留 30d）
-
-### 9.4 回滚
-
-如启动失败 / migration 异常：
-
-1. 停服
-2. `cp data.db.pre-V<NNN>.bak data.db`（或恢复手动备份）
-3. 换回旧版本 jar
-4. 启动 — server log 应看到 `current version: <旧 N>` 跳过新 migration
+1. 关停服务器；
+2. 用升级前的 `data.db.pre-V<编号>.bak`（或你手动备份的目录）覆盖回 `plugins/HikariCanvas/data.db`；
+3. 换回旧版插件 jar 并启动服务器即可。

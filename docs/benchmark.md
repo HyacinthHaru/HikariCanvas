@@ -1,10 +1,11 @@
 # HikariCanvas 性能 Benchmark 运维指南
 
-> HikariCanvas 性能测试指南。帮你用本机实测数据回答"我这台机器能撑多少画布"。
+> HikariCanvas 性能测试指南。帮你用本机实测数据回答「我这台机器能撑多少画布」。
 >
 > 配套文档：
-> - `docs/architecture.md §1.2`（设计原则）
-> - `docs/deployment.md`（配置与调优）
+> - [部署指南](deployment.md)（配置与调优）
+> - [玩家与服主使用手册](user-guide.md)（命令与权限速查）
+> - [系统架构](architecture.md)（§1.2 设计原则）
 
 ## 目录
 

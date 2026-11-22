@@ -201,8 +201,8 @@ HikariCanvas 的默认权限策略非常省心：**装上插件不改任何权�
 | 权限节点 | 默认值 | 作用说明 |
 | --- | --- | --- |
 | `canvas.script.edit` | 全员（`true`） | 为自己能打开的画板编写与保存积木脚本 |
-| `canvas.script.trigger.global` | 全员（`true`） | 使用全服事件触发器（如玩家进服、退服、击杀等） |
-| `canvas.script.sound` | 全员（`true`） | 在脚本中使用「播放声音」积木 |
+| `canvas.script.trigger.global` | 全员（`true`） | 使用全局或任意玩家触发器（玩家进服、退服、击杀、右键画板） |
+| `canvas.script.sound` | 全员（`true`） | 在脚本中使用「播放声音」与「播放粒子」积木 |
 | `canvas.script.broadcast` | 全员（`true`） | 在脚本中向全服玩家广播聊天消息或屏幕大标题 |
 | `canvas.script.command` | 仅 OP | 在脚本中使用服主白名单内的「执行命令」积木（务必保持仅管理员或高信誉组） |
 
