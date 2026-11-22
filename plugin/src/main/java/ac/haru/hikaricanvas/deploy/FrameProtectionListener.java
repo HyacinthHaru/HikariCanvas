@@ -69,6 +69,9 @@ public final class FrameProtectionListener implements Listener {
             return;  // force-break → 允许
         }
         event.setCancelled(true);
+        if (p != null && messages != null) {
+            messages.sendActionBar(p, "frame-protect.frame-blocked");
+        }
     }
 
     /**
@@ -89,8 +92,8 @@ public final class FrameProtectionListener implements Listener {
             return;
         }
         event.setCancelled(true);
-        if (p != null) {
-            messages.sendActionBar(p, "frame-protect.blocked");
+        if (p != null && messages != null) {
+            messages.sendActionBar(p, "frame-protect.frame-blocked");
         }
     }
 
@@ -117,7 +120,9 @@ public final class FrameProtectionListener implements Listener {
                 // 所有 wall 同等保护（不区分 lock 状态）；仅 force-break 权限可绕过。
                 if (canForce) return;
                 event.setCancelled(true);
-                messages.sendActionBar(player, "frame-protect.blocked");
+                if (messages != null) {
+                    messages.sendActionBar(player, "frame-protect.blocked");
+                }
                 return;
             }
         }

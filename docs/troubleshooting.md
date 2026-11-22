@@ -425,7 +425,7 @@ i18n:
 |---|---|---|
 | `/canvas stats` | 查看地图池余量、画板总数、活跃会话、变量与动画概况 | `canvas.admin` |
 | `/canvas diagnose <画板ID>` | 逐项检查某块画板的地图分配、世界加载、工程数据与动画状态 | `canvas.admin` |
-| `/canvas list` | 列出自己的画板（中文显示 `[锁]` / `[草]`，管理员执行列出全服） | `canvas.edit` |
+| `/canvas list` | 列出自己的画板（显示 `[已锁]` / `[未锁]`，控制台执行列出全服） | `canvas.edit` |
 | `/canvas reload config` | 热重载标有 `[热更]` 的配置项与 `lang/` 语言文件 | `canvas.admin` |
 | `/canvas reload templates` | 重新扫描 `templates/` 预设模板并刷新缩略图缓存 | `canvas.admin` |
 | `/canvas open <ID或别名>` | 重新打开一面画板获取新的编辑链接 | `canvas.edit` |

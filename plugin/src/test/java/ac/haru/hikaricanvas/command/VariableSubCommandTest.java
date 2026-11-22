@@ -351,6 +351,26 @@ class VariableSubCommandTest {
         assertTrue(empty.isEmpty());
     }
 
+    @Test
+    void zhCnLocale_localizesMetadataAndProviderLiterals() {
+        messages.setDefaultLocale("zh_cn");
+        store.create("alpha", "k1", VarType.STRING, null, null);
+        daemon.register(new FakeProvider("alpha", "Alpha Display", true, Duration.ZERO));
+
+        cmd.execute(sender, new String[]{"list"});
+        cmd.execute(sender, new String[]{"get", "alpha/k1"});
+        cmd.execute(sender, new String[]{"providers"});
+
+        String out = allMessages();
+        assertTrue(out.contains("共 1 个命名空间"), out);
+        assertTrue(out.contains("（未设置）"), out);
+        assertTrue(out.contains("永久"), out);
+        assertTrue(out.contains("不轮询"), out);
+        assertTrue(out.contains("数据源"), out);
+        assertFalse(out.contains("(null)"), out);
+        assertFalse(out.contains("ZERO"), out);
+    }
+
     // ──────────────────────────────────────────────────────────
     //  Fakes
     // ──────────────────────────────────────────────────────────

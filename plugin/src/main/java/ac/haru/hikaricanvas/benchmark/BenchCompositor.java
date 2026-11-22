@@ -53,8 +53,7 @@ public final class BenchCompositor {
             paletteLut = PaletteLut.loadFromClasspath(PALETTE_RESOURCE);
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException(
-                    "Benchmark 无法加载调色板 " + PALETTE_RESOURCE
-                            + "（确认构建期 generatePalette 已注入 classpath）", e);
+                    "Failed to load built-in color palette (" + PALETTE_RESOURCE + ")", e);
         }
 
         FontRegistry fontRegistry = new FontRegistry(log);
@@ -62,7 +61,7 @@ public final class BenchCompositor {
             fontRegistry.loadBuiltIn();
         } catch (RuntimeException e) {
             throw new IllegalStateException(
-                    "Benchmark 无法加载内置字体矩阵（FontRegistry.loadBuiltIn 失败）", e);
+                    "Failed to load built-in fonts for benchmark", e);
         }
 
         CanvasCompositor compositor = new CanvasCompositor(paletteLut, fontRegistry, log);

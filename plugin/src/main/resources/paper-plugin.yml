@@ -4,12 +4,11 @@ main: ac.haru.hikaricanvas.HikariCanvas
 api-version: '1.21'
 authors:
   - HyacinthHaru
-description: Text signage plugin with TTF font rendering, template system, and a live web editor.
+description: Custom map signage and dynamic displays with TTF fonts, templates, animations, and a live web editor.
 website: https://github.com/HyacinthHaru/HikariCanvas
 
-# 硬依赖：PacketEvents 是 GPL-3.0，不打包进本 jar（避免污染本项目 MIT 授权）。
-# 服主须单独安装 PacketEvents 插件（https://modrinth.com/plugin/packetevents 或 SpigotMC）。
-# 用途：MapPacketSender 用 WrapperPlayServerMapData 把渲染像素推给玩家——核心投影通道，必装。
+# 必装前置：PacketEvents 采用 GPL-3.0 协议，不打包进本插件 jar（避免传染本项目的 MIT 授权）。
+# 服主需单独下载安装 PacketEvents 插件（https://modrinth.com/plugin/packetevents），用于向客户端推送地图画面数据包。
 dependencies:
   server:
     packetevents:
@@ -17,104 +16,103 @@ dependencies:
       required: true
       join-classpath: true
 
-# 权限节点（完整节点表见 docs/security.md §5）
-# 默认权限策略：编辑 / 提交类权限给所有玩家，管理类保留 op
+# 默认权限策略：日常创建与编辑类权限默认对所有玩家开放，全服管理与跨玩家操作权限默认仅限管理员（op）。
 permissions:
   canvas.use:
-    description: Use any HikariCanvas command (master switch on the /canvas root node)
+    description: Use HikariCanvas commands (/canvas)
     default: true
   canvas.edit:
-    description: Open an editing session
+    description: Create, open, list, and edit canvas walls
     default: true
   canvas.wand:
-    description: Receive a Canvas Wand
+    description: Get a Canvas Wand directly via /canvas wand
     default: true
   canvas.admin:
-    description: Administrative commands (stats / diagnose / reload) and the server-wide wall list
+    description: Run administrative commands (/canvas stats, diagnose, and reload)
     default: op
   canvas.admin.force-break:
-    description: Break HikariCanvas-managed item frames / supporting blocks
+    description: Break protected HikariCanvas item frames and supporting blocks
     default: op
   canvas.bench:
-    description: Run the server-side render benchmark (/canvas bench list/run/report/clear)
+    description: Run server-side performance benchmarks (/canvas bench)
     default: op
   canvas.upload:
-    description: Upload images for use as ImageElement
+    description: Upload custom images in the web editor
     default: true
   canvas.upload.bypass-limit:
-    description: Bypass per-player / per-wall / total-disk image quota
+    description: Bypass daily upload count and server disk storage quotas for images
     default: op
   canvas.delete.own:
-    description: Delete walls you own (used by /canvas delete)
+    description: Delete walls you own (/canvas delete)
     default: true
   canvas.delete.any:
     description: Delete any wall regardless of owner
     default: op
   canvas.alias.any:
-    description: Set alias on any wall (moderation)
+    description: Set or change the alias of any wall
     default: op
   canvas.admin.bypass-lock:
-    description: Open locked walls created by other players
+    description: Open locked walls owned by other players
     default: op
   canvas.template.save:
-    description: Publish the current wall as a workshop template
+    description: Publish a wall to the template gallery as a community template
     default: true
   canvas.template.delete.own:
-    description: Delete templates you authored
+    description: Delete community templates you published
     default: true
   canvas.template.delete.any:
-    description: Delete any workshop template (moderation)
+    description: Delete any community template regardless of author
     default: op
   canvas.template.feature:
-    description: Mark / unmark templates as featured on the marketplace
+    description: Mark or unmark templates as featured in the template gallery
     default: op
   canvas.template.bypass-limit:
-    description: Bypass per-player template publication count quota
+    description: Bypass the per-player community template publishing limit
     default: op
   canvas.template.use-others:
-    description: Apply user-templates owned by other players (workshop cross-user)
+    description: Apply community templates published by other players
     default: op
   canvas.var.read:
-    description: View variable list and values
+    description: View variables and their current values
     default: true
   canvas.var.write.own:
-    description: Create or modify user variables on your own walls
+    description: Create or modify user variables on walls you own
     default: true
   canvas.var.write.any:
-    description: Modify user variables on any wall (moderation)
+    description: Create or modify user variables on any wall
     default: op
   canvas.var.delete.own:
-    description: Delete user variables on your own walls
+    description: Delete user variables on walls you own
     default: true
   canvas.var.delete.any:
-    description: Delete user variables on any wall (moderation)
+    description: Delete user variables on any wall
     default: op
   canvas.var.bind:
-    description: Bind user variables to external plugin namespaces
+    description: Bind variables to external plugin data namespaces
     default: op
   canvas.var.command:
-    description: Use the /canvas var command family
+    description: Run variable management commands (/canvas var)
     default: op
   canvas.var.global.create:
-    description: Create global user variables (userglobal/*)
+    description: Create server-wide global user variables
     default: true
   canvas.var.global.write.own:
     description: Modify global user variables you created
     default: true
   canvas.var.global.write.any:
-    description: Modify any global user variable (moderation)
+    description: Modify any global user variable regardless of owner
     default: op
   canvas.var.global.delete.own:
     description: Delete global user variables you created
     default: true
   canvas.var.global.delete.any:
-    description: Delete any global user variable (moderation)
+    description: Delete any global user variable regardless of owner
     default: op
   canvas.schedule.own:
-    description: Manage transit schedules on your own walls
+    description: Manage transit schedules on walls you own
     default: true
   canvas.schedule.any:
-    description: Manage transit schedules on any wall (moderation)
+    description: Manage transit schedules on any wall
     default: op
   canvas.rail.line.create:
     description: Create railway lines
@@ -123,29 +121,29 @@ permissions:
     description: Edit railway lines, stations, runs, and timetables you created
     default: true
   canvas.rail.line.edit.any:
-    description: Edit any railway line (moderation)
+    description: Edit any railway line regardless of owner
     default: op
   canvas.rail.line.delete.own:
     description: Delete railway lines you created
     default: true
   canvas.rail.line.delete.any:
-    description: Delete any railway line (moderation)
+    description: Delete any railway line regardless of owner
     default: op
   canvas.rail.wall.bind:
     description: Bind walls to railway stations
     default: true
   canvas.script.edit:
-    description: Author visual block scripts on walls you can open
+    description: Create and edit block scripts on walls you can open
     default: true
   canvas.script.trigger.global:
-    description: Use server-wide script triggers (player join / kill)
+    description: Use global or public script triggers (player join, quit, kill, or right-clicking a wall)
     default: true
   canvas.script.sound:
-    description: Use play-sound blocks in wall scripts
+    description: Use sound and particle effect blocks in wall scripts
     default: true
   canvas.script.broadcast:
-    description: Broadcast script messages or titles server-wide
+    description: Broadcast chat messages or screen titles to all online players from wall scripts
     default: true
   canvas.script.command:
-    description: Use whitelisted command-template blocks in wall scripts
+    description: Execute whitelisted server command templates in wall scripts
     default: op

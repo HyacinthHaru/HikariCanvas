@@ -364,26 +364,27 @@ public final class HikariCanvasConfig {
      * 启动期或 {@code /canvas reload config} 调；调用前应先 {@code plugin.reloadConfig()}。
      */
     public static HikariCanvasConfig load(JavaPlugin plugin) {
-        FileConfiguration f = plugin.getConfig();
+        return fromConfiguration(plugin.getConfig(), plugin.getLogger());
+    }
+
+    static HikariCanvasConfig fromConfiguration(FileConfiguration f, Logger logger) {
         Builder b = new Builder();
         b.host = f.getString("network.host", b.host);
-        warnIfPublicBind(b.host, plugin.getLogger());
+        warnIfPublicBind(b.host, logger);
         b.port = f.getInt("network.port", b.port);
         String urlTemplate = f.getString("network.editor-url",
                 "http://{host}:{port}/?token={token}");
-        // editor-url 协议白名单。admin 把 url 写成 javascript:/data:/file:/vbscript:
-        // 等 → 玩家点 ActionBar / chat 链接执行 JS，等价于配置侧 XSS。仅允许 http(s)；
-        // 不合法回退到默认 http://{host}:{port}/?token={token}，并 severe log 让 ops 知道。
-        b.editorUrlTemplate = sanitizeEditorUrl(urlTemplate, b.host, b.port, plugin.getLogger());
+        // editor-url 协议白名单：仅允许 http(s)，不合法回退到默认并记录错误。
+        b.editorUrlTemplate = sanitizeEditorUrl(urlTemplate, b.host, b.port, logger);
 
         // 网络层安全收口
         b.wsAuthTimeoutSeconds = Math.max(1, Math.min(60, f.getInt("network.ws-auth-timeout-seconds", 5)));
-        b.allowedOrigins = readAllowedOrigins(f, plugin.getLogger());
+        b.allowedOrigins = readAllowedOrigins(f, logger);
 
         // token-ttl / ws-grace 下限钳到 1 分钟（不同于 idle-minutes，0 不代表"永不超时"；
         // 配 ≤0 会导致签发后会话立即被 SessionReaper 回收，故回退默认值并打 warning）。
-        b.tokenTtl = Duration.ofMinutes(clampMinutes(f, "session.token-ttl-minutes", 15, plugin.getLogger()));
-        b.wsGrace = Duration.ofMinutes(clampMinutes(f, "session.ws-grace-minutes", 5, plugin.getLogger()));
+        b.tokenTtl = Duration.ofMinutes(clampMinutes(f, "session.token-ttl-minutes", 15, logger));
+        b.wsGrace = Duration.ofMinutes(clampMinutes(f, "session.ws-grace-minutes", 5, logger));
         long idleMin = f.getLong("session.idle-minutes", 30);
         b.idleTimeout = idleMin <= 0 ? Duration.ofDays(365 * 100) : Duration.ofMinutes(idleMin);
         b.reaperScanTicks = 20L * Math.max(5, f.getLong("session.reaper-scan-seconds", 30));
@@ -566,14 +567,14 @@ public final class HikariCanvasConfig {
                     ConfigurationSection tplSec =
                             ctSec.getConfigurationSection(tplId);
                     if (tplSec == null) {
-                        plugin.getLogger().severe("scripts.command-templates." + tplId
-                                + " is not a configuration section; skipping");
+                        logger.severe("config.yml: scripts.command-templates." + tplId
+                                + " must be a section with a 'command' field; skipping template.");
                         continue;
                     }
                     String command = tplSec.getString("command", "");
                     if (command == null || command.isBlank()) {
-                        plugin.getLogger().severe("scripts.command-templates." + tplId
-                                + ".command is missing or blank; skipping template");
+                        logger.severe("config.yml: scripts.command-templates." + tplId
+                                + ".command is missing or blank; skipping template.");
                         continue;
                     }
                     Map<String, ParamSpec> params = new LinkedHashMap<>();
@@ -591,9 +592,10 @@ public final class HikariCanvasConfig {
                                 if (ParamSpec.TYPE_ONLINE_PLAYER.equals(rawType)) {
                                     type = ParamSpec.TYPE_ONLINE_PLAYER;
                                 } else if (!ParamSpec.TYPE_TEXT.equals(rawType)) {
-                                    plugin.getLogger().severe("scripts.command-templates."
+                                    logger.warning("config.yml: scripts.command-templates."
                                             + tplId + ".params." + pName + ".type has unknown value '"
-                                            + rawType + "'; treating as text");
+                                            + rawType + "' (expected 'text' or 'online-player'); "
+                                            + "defaulting to 'text'.");
                                 }
                             }
                             params.put(pName, new ParamSpec(maxLen, type));
@@ -649,7 +651,8 @@ public final class HikariCanvasConfig {
                 .replace("{port}", String.valueOf(port));
         // CR/LF 注入防御：合法 url 不应含换行
         if (resolved.indexOf('\n') >= 0 || resolved.indexOf('\r') >= 0) {
-            logger.severe("editor-url contains CR/LF; falling back to default. raw=<redacted>");
+            logger.severe("config.yml: network.editor-url must not contain line breaks; "
+                    + "falling back to default (" + fallback + ").");
             return fallback;
         }
         // {token} 是运行期替换占位符；URI 解析期为了拿 scheme，先用占位字符串替代
@@ -659,18 +662,20 @@ public final class HikariCanvasConfig {
             URI uri = URI.create(parseTarget);
             scheme = uri.getScheme();
         } catch (IllegalArgumentException e) {
-            logger.severe("editor-url is not a valid URI; falling back to default. reason=" + e.getMessage());
+            logger.severe("config.yml: network.editor-url is not a valid URL (" + e.getMessage()
+                    + "); falling back to default (" + fallback + ").");
             return fallback;
         }
         if (scheme == null) {
-            logger.severe("editor-url has no scheme; must start with http:// or https://. falling back to default.");
+            logger.severe("config.yml: network.editor-url must start with http:// or https://; "
+                    + "falling back to default (" + fallback + ").");
             return fallback;
         }
         String lower = scheme.toLowerCase(Locale.ROOT);
         if (!lower.equals("http") && !lower.equals("https")) {
-            logger.severe("editor-url has invalid scheme '" + scheme
-                    + "'; must be http(s); falling back to default. "
-                    + "(rejected schemes include javascript:/data:/file:/vbscript:)");
+            logger.severe("config.yml: network.editor-url uses unsupported protocol '" + scheme
+                    + "' (only http:// and https:// are allowed); falling back to default ("
+                    + fallback + ").");
             return fallback;
         }
         return resolved;
@@ -691,11 +696,11 @@ public final class HikariCanvasConfig {
                 || h.equals("*") || h.isEmpty();
         if (!publicBind) return;
         logger.warning("============================================================");
-        logger.warning("[HikariCanvas] network.host is bound to '" + host
-                + "' (a public interface). The web editor ships NO TLS, so the auth "
-                + "token is exposed in plaintext on the network.");
-        logger.warning("[HikariCanvas] For any public deployment, bind 127.0.0.1 and put "
-                + "a TLS reverse proxy (nginx / Caddy) in front. See SECURITY.md.");
+        logger.warning("config.yml: network.host is bound to '" + host
+                + "' (a public interface). The web editor has no built-in TLS, so edit "
+                + "tokens will travel in plaintext over the network.");
+        logger.warning("For public servers, bind 127.0.0.1 and put an HTTPS reverse proxy "
+                + "(Caddy or nginx) in front. See the deployment guide.");
     }
 
     /**
@@ -742,10 +747,11 @@ public final class HikariCanvasConfig {
             if (o instanceof String s && !s.isBlank()) {
                 out.add(s.trim());
             } else {
-                logger.warning("network.allowed-origins contains an invalid entry ("
-                        + (o == null ? "empty / null" : o.getClass().getSimpleName() + ": " + o)
-                        + "); skipping it. Entries must be quoted origin strings, "
-                        + "e.g. \"https://canvas.example.com\".");
+                String badValue = (o == null) ? "empty value"
+                        : (o instanceof String ? "blank string" : "'" + o + "'");
+                logger.warning("config.yml: network.allowed-origins contains an invalid entry ("
+                        + badValue + "); skipping. Each entry must be a quoted URL origin such as "
+                        + "\"https://canvas.example.com\".");
             }
         }
         return List.copyOf(out);
@@ -761,21 +767,41 @@ public final class HikariCanvasConfig {
     static long clampMinutes(FileConfiguration f, String path, long def, Logger logger) {
         long v = f.getLong(path, def);
         if (v >= 1) return v;
-        logger.warning(path + "=" + v + " is not a valid duration (must be >= 1 minute); "
-                + "falling back to " + def + ". Note: unlike session.idle-minutes, "
-                + "0 does NOT mean 'never expire' here.");
+        logger.warning("config.yml: " + path + "=" + v + " must be at least 1 minute; "
+                + "using default " + def
+                + " (unlike session.idle-minutes, 0 does not disable expiration).");
         return def;
     }
 
-    /** 摘要字符串，启动 / reload 时 log 一下，方便排错。 */
+    /** 开服配置摘要（监听地址、地图池容量、刷新间隔、会话超时与默认语言）。 */
     public String summary() {
         return String.format(
-                "host=%s port=%d tokenTtl=%dm idleTimeout=%s mapPool=[%d..%d] "
-                        + "fps=%d rate=%d/s burst=%d",
-                host, port, tokenTtl.toMinutes(),
-                idleTimeout.toDays() > 30 ? "∞" : (idleTimeout.toMinutes() + "m"),
+                "listen=%s:%d, map-pool=%d..%d, refresh=%dms (high-freq=%dms), "
+                        + "token-ttl=%dm, idle-timeout=%s, default-locale=%s",
+                host, port,
                 mapPoolInitial, mapPoolMax,
-                projectionFps, inputRatePerSecond, inputBurst);
+                adaptiveFps.defaultMinIntervalMs(), adaptiveFps.highFreqMinIntervalMs(),
+                tokenTtl.toMinutes(),
+                idleTimeout.toDays() > 30 ? "disabled" : (idleTimeout.toMinutes() + "m"),
+                i18nConfig.defaultLocale());
+    }
+
+    /**
+     * 热重载配置摘要：仅汇总 {@code /canvas reload config} 当场热更生效的项，
+     * 避免在重载时打印需要重启才生效的端口、地图池等配置误导服主。
+     */
+    public String reloadSummary() {
+        return String.format(
+                "default-locale=%s, scripts.max-rules=%d, scripts.max-elements=%d, "
+                        + "scripts.near-sample=%dt, scripts.budget=%d/%ds/depth-%d, command-templates=%d",
+                i18nConfig.defaultLocale(),
+                scriptsConfig.maxRulesPerWall(),
+                scriptsConfig.maxElementsPerWall(),
+                scriptsConfig.playerNearSampleTicks(),
+                scriptsConfig.maxActionsPerRun(),
+                scriptsConfig.maxRunsPerSecond(),
+                scriptsConfig.maxChainDepth(),
+                scriptsConfig.commandTemplates().size());
     }
 
     /** 字段默认值的初始化容器；load() 内部用。 */

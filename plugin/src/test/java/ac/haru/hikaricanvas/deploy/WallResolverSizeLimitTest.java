@@ -1,5 +1,6 @@
 package ac.haru.hikaricanvas.deploy;
 
+import ac.haru.hikaricanvas.i18n.Messages;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -7,9 +8,11 @@ import org.bukkit.block.BlockFace;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link WallResolver} 的尺寸上限判定。
@@ -109,5 +112,33 @@ class WallResolverSizeLimitTest {
         WallResolver.Result.Failed failed =
                 assertInstanceOf(WallResolver.Result.Failed.class, r);
         assertEquals(WallResolver.FailReason.NORMAL_MISMATCH, failed.reason());
+    }
+
+    @Test
+    void localizeFailureAndDirection_renderHumanReadableMessages() {
+        Messages msgs = new Messages(Logger.getLogger("wall-resolver-test"));
+        msgs.loadBuiltIn();
+
+        assertEquals("北", WallResolver.localizeDirection(msgs, "zh_cn", BlockFace.NORTH));
+        assertEquals("east", WallResolver.localizeDirection(msgs, "en_us", BlockFace.EAST));
+
+        World world = fakeWorld();
+        WallResolver resolver = new WallResolver(16, WALL_ID_KEY);
+
+        WallResolver.Result.Failed tooLarge = assertInstanceOf(
+                WallResolver.Result.Failed.class,
+                resolver.resolve(fakeBlock(world, 0, 0, 0), BlockFace.WEST,
+                        fakeBlock(world, 0, 4, 4), BlockFace.WEST));
+        String zhTooLarge = WallResolver.localizeFailure(msgs, "zh_cn", tooLarge);
+        assertTrue(zhTooLarge.contains("5×5"), zhTooLarge);
+        assertTrue(zhTooLarge.contains("25"), zhTooLarge);
+        assertTrue(zhTooLarge.contains("16"), zhTooLarge);
+
+        WallResolver.Result.Failed mismatch = assertInstanceOf(
+                WallResolver.Result.Failed.class,
+                resolver.resolve(fakeBlock(world, 0, 0, 0), BlockFace.NORTH,
+                        fakeBlock(world, 0, 1, 1), BlockFace.EAST));
+        String zhMismatch = WallResolver.localizeFailure(msgs, "zh_cn", mismatch);
+        assertTrue(zhMismatch.contains("朝北") && zhMismatch.contains("朝东"), zhMismatch);
     }
 }

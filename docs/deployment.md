@@ -267,7 +267,7 @@ network:
 
 ## 9. 备份、版本升级与回滚
 
-插件的所有持久化数据都集中在 `plugins/HikariCanvas/` 目录下（核心数据库 `data.db`、上传图片目录 `images/`、玩家工坊模板 `user-templates/` 以及配置文件 `config.yml`），地图物品本身则保存在对应世界的存档数据中。
+插件的所有持久化数据都集中在 `plugins/HikariCanvas/` 目录下（核心数据库 `data.db`、上传图片目录 `uploads/`、玩家工坊模板 `user-templates/` 以及配置文件 `config.yml`），地图物品本身则保存在对应世界的存档数据中。
 
 ### 9.1 常规升级步骤
 
@@ -284,5 +284,5 @@ network:
 如果升级后遇到异常需要退回旧版：
 
 1. 关停服务器；
-2. 用升级前的 `data.db.pre-V<编号>.bak`（或你手动备份的目录）覆盖回 `plugins/HikariCanvas/data.db`；
+2. 先删除 `plugins/HikariCanvas/` 目录中可能残留的 `data.db-wal` 与 `data.db-shm`，再用升级前的 `data.db.pre-V<编号>.bak` 覆盖恢复 `plugins/HikariCanvas/data.db`（若备份时一并生成了对应的 `.bak-wal` 与 `.bak-shm`，也同步覆盖恢复为 `data.db-wal` 与 `data.db-shm`；或直接整目录恢复 9.1 中的手动备份）；
 3. 换回旧版插件 jar 并启动服务器即可。

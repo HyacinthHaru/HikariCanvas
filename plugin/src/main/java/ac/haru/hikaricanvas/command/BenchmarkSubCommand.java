@@ -39,6 +39,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -253,7 +254,8 @@ public final class BenchmarkSubCommand {
                 warm, measured, quick.fpsValues(), quick.viewerCounts(), selector);
 
         running = true;
-        sender.sendActionBar(messages.get(messages.localeId(sender), "command.bench.running"));
+        String locale = messages.localeId(sender);
+        sender.sendActionBar(messages.get(locale, "command.bench.running"));
         messages.send(sender, "command.bench.run.started",
                 Placeholder.unparsed("selector", selector),
                 Placeholder.unparsed("measured", String.valueOf(measured)),
@@ -261,7 +263,7 @@ public final class BenchmarkSubCommand {
 
         benchExecutor.submit(() -> {
             try {
-                runOnWorker(sender, cfg, selector);
+                runOnWorker(sender, cfg, selector, locale);
             } catch (Throwable t) {
                 plugin.getLogger().log(Level.SEVERE, "Benchmark run failed", t);
                 String msg = t.getClass().getSimpleName()
@@ -275,7 +277,8 @@ public final class BenchmarkSubCommand {
     }
 
     /** worker 线程：构造无头 compositor → 运行 BenchmarkRunner → 写入三件报告产物 → 回主线程发摘要。 */
-    private void runOnWorker(CommandSender sender, BenchmarkConfig cfg, String selector) throws IOException {
+    private void runOnWorker(CommandSender sender, BenchmarkConfig cfg,
+                             String selector, String locale) throws IOException {
         CanvasCompositor compositor = BenchCompositor.create(plugin.getLogger());
         SceneLibrary lib = new SceneLibrary();
         if (lib.select(selector).isEmpty()) {
@@ -291,8 +294,8 @@ public final class BenchmarkSubCommand {
         Files.createDirectories(outDir);
         mapper.writerWithDefaultPrettyPrinter()
                 .writeValue(outDir.resolve(REPORT_FILE).toFile(), report);
-        Files.writeString(outDir.resolve(SUMMARY_FILE), renderReportText(selector, report));
-        Files.writeString(outDir.resolve(HTML_FILE), HtmlReportRenderer.render(report, messages));
+        Files.writeString(outDir.resolve(SUMMARY_FILE), renderReportText(selector, report, locale));
+        Files.writeString(outDir.resolve(HTML_FILE), HtmlReportRenderer.render(report, messages, locale));
 
         runOnMain(() -> {
             sendReportToSender(sender, report);
@@ -384,7 +387,7 @@ public final class BenchmarkSubCommand {
         EnvInfo env = report.env();
         messages.send(sender, "command.bench.summary.header",
                 Placeholder.unparsed("scene_count", String.valueOf(report.scenes().size())),
-                Placeholder.unparsed("blank_baseline_ms", String.format("%.3f", report.blankBaselineMs())));
+                Placeholder.unparsed("blank_baseline_ms", String.format(Locale.ROOT, "%.3f", report.blankBaselineMs())));
         messages.send(sender, "command.bench.summary.env",
                 Placeholder.unparsed("java_version", env.javaVersion()),
                 Placeholder.unparsed("processors", String.valueOf(env.availableProcessors())),
@@ -397,8 +400,8 @@ public final class BenchmarkSubCommand {
             messages.send(sender, "command.bench.summary.per-element-header");
             for (PerElementCost p : report.perElement()) {
                 messages.send(sender, "command.bench.summary.per-element-line",
-                        Placeholder.unparsed("element_type", String.format("%-10s", p.elementType())),
-                        Placeholder.unparsed("marginal_ms", String.format("%.5f", p.marginalMsPerElement())),
+                        Placeholder.unparsed("element_type", String.format(Locale.ROOT, "%-10s", p.elementType())),
+                        Placeholder.unparsed("marginal_ms", String.format(Locale.ROOT, "%.5f", p.marginalMsPerElement())),
                         Placeholder.unparsed("element_count", String.valueOf(p.elementCount())));
             }
         }
@@ -410,22 +413,30 @@ public final class BenchmarkSubCommand {
 
     private void sendSceneLine(CommandSender sender, SceneResult r) {
         Percentiles ras = r.rasterizeMs();
+        String locale = messages.localeId(sender);
+        String allocUnit = messages.plain(locale, "command.bench.summary.alloc-unit");
+        String allocNa = messages.plain(locale, "command.bench.summary.alloc-na");
         String alloc = r.allocSupported()
-                ? String.format("%.2f MB/it", r.meanAllocMbPerIter())
-                : "n/a";
+                ? String.format(Locale.ROOT, "%.2f %s", r.meanAllocMbPerIter(), allocUnit)
+                : allocNa;
         messages.send(sender, "command.bench.summary.scene-line",
                 Placeholder.unparsed("scene_id", r.sceneId()),
-                Placeholder.unparsed("p50", String.format("%.3f", ras.p50())),
-                Placeholder.unparsed("p95", String.format("%.3f", ras.p95())),
-                Placeholder.unparsed("p99", String.format("%.3f", ras.p99())),
-                Placeholder.unparsed("palette_p50", String.format("%.3f", r.paletteMs().p50())),
+                Placeholder.unparsed("p50", String.format(Locale.ROOT, "%.3f", ras.p50())),
+                Placeholder.unparsed("p95", String.format(Locale.ROOT, "%.3f", ras.p95())),
+                Placeholder.unparsed("p99", String.format(Locale.ROOT, "%.3f", ras.p99())),
+                Placeholder.unparsed("palette_p50", String.format(Locale.ROOT, "%.3f", r.paletteMs().p50())),
                 Placeholder.unparsed("alloc", alloc));
     }
 
-    private String renderReportText(String selector, BenchmarkReport report) {
-        String loc = messages.defaultLocale();
+    private String renderReportText(String selector, BenchmarkReport report, String localeId) {
+        String loc = (localeId == null || localeId.isBlank())
+                ? messages.defaultLocale()
+                : messages.resolveLocaleId(localeId);
         Function<String, String> t = k -> {
             String s = messages.rawOrNull(loc, k);
+            if (s == null) {
+                s = messages.rawOrNull(messages.defaultLocale(), k);
+            }
             return s == null ? k : s;
         };
         EnvInfo env = report.env();
@@ -438,45 +449,58 @@ public final class BenchmarkSubCommand {
         sb.append(t.apply("command.bench.report-file.cpu-prefix")).append(env.availableProcessors())
                 .append(t.apply("command.bench.report-file.cpu-cores-mem"))
                 .append(env.maxHeapMb() < 0 ? "?" : env.maxHeapMb() + "MB").append('\n');
-        sb.append(t.apply("command.bench.report-file.gc-method-prefix")).append(env.gcNames()).append('\n');
+        sb.append(t.apply("command.bench.report-file.gc-method-prefix"))
+                .append(env.gcNames().isEmpty() ? "?" : String.join(", ", env.gcNames())).append('\n');
         sb.append(t.apply("command.bench.report-file.settings-prefix")).append(cfg.measuredIterations())
                 .append(t.apply("command.bench.report-file.settings-warmup"))
                 .append(cfg.warmupIterations())
-                .append(t.apply("command.bench.report-file.settings-fps")).append(cfg.fpsValues())
-                .append(t.apply("command.bench.report-file.settings-viewers")).append(cfg.viewerCounts())
+                .append(t.apply("command.bench.report-file.settings-fps")).append(joinInts(cfg.fpsValues()))
+                .append(t.apply("command.bench.report-file.settings-viewers")).append(joinInts(cfg.viewerCounts()))
                 .append(t.apply("command.bench.report-file.settings-suffix")).append('\n');
         sb.append(t.apply("command.bench.report-file.blank-prefix"))
-                .append(String.format("%.4f", report.blankBaselineMs()))
+                .append(String.format(Locale.ROOT, "%.4f", report.blankBaselineMs()))
                 .append(t.apply("command.bench.report-file.blank-suffix")).append('\n');
         sb.append(t.apply("command.bench.report-file.gc-prefix")).append(report.gc().collectionCount())
                 .append(t.apply("command.bench.report-file.gc-mid"))
                 .append(report.gc().collectionTimeMs())
                 .append(t.apply("command.bench.report-file.gc-suffix")).append('\n');
         sb.append("=================================================================\n");
-        sb.append(String.format("%-28s  %-21s  %-21s  %10s%n",
+        sb.append(String.format(Locale.ROOT, "%-28s  %-21s  %-21s  %10s%n",
                 t.apply("command.bench.report-file.col-scene"),
                 t.apply("command.bench.report-file.col-rasterize"),
                 t.apply("command.bench.report-file.col-palette"),
                 t.apply("command.bench.report-file.col-alloc")));
+        String allocNa = t.apply("command.bench.summary.alloc-na");
         for (SceneResult r : report.scenes()) {
             Percentiles ra = r.rasterizeMs();
             Percentiles pa = r.paletteMs();
             String alloc = r.allocSupported()
-                    ? String.format("%.2fMB", r.meanAllocMbPerIter()) : "n/a";
-            sb.append(String.format("%-28s  %6.3f/%6.3f/%6.3f  %6.3f/%6.3f/%6.3f  %10s%n",
+                    ? String.format(Locale.ROOT, "%.2fMB", r.meanAllocMbPerIter()) : allocNa;
+            sb.append(String.format(Locale.ROOT, "%-28s  %6.3f/%6.3f/%6.3f  %6.3f/%6.3f/%6.3f  %10s%n",
                     r.sceneId(), ra.p50(), ra.p95(), ra.p99(),
                     pa.p50(), pa.p95(), pa.p99(), alloc));
         }
         sb.append("-----------------------------------------------------------------\n");
         sb.append(t.apply("command.bench.report-file.per-element-header")).append('\n');
         for (PerElementCost p : report.perElement()) {
-            sb.append(String.format("  %-10s x%-4d  %.5f", p.elementType(), p.elementCount(), p.marginalMsPerElement()))
+            sb.append(String.format(Locale.ROOT, "  %-10s x%-4d  %.5f",
+                            p.elementType(), p.elementCount(), p.marginalMsPerElement()))
                     .append(t.apply("command.bench.report-file.per-element-unit"))
-                    .append(String.format("%.4f", p.isolationSceneMeanMs()))
+                    .append(String.format(Locale.ROOT, "%.4f", p.isolationSceneMeanMs()))
                     .append(t.apply("command.bench.report-file.per-element-scene"))
                     .append(p.sceneId()).append(")\n");
         }
         return sb.toString();
+    }
+
+    private static String joinInts(List<Integer> xs) {
+        if (xs == null || xs.isEmpty()) return "—";
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < xs.size(); i++) {
+            if (i > 0) b.append(", ");
+            b.append(xs.get(i));
+        }
+        return b.toString();
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -627,12 +651,12 @@ public final class BenchmarkSubCommand {
         for (BenchRow r : rows) {
             var p = r.p();
             messages.send(sender, base + ".row",
-                    Placeholder.unparsed("n", String.format("%-8d", r.n())),
-                    Placeholder.unparsed("p50", String.format("%8.4f", p.p50())),
-                    Placeholder.unparsed("p95", String.format("%8.4f", p.p95())),
-                    Placeholder.unparsed("p99", String.format("%8.4f", p.p99())),
-                    Placeholder.unparsed("mean", String.format("%8.4f", p.mean())),
-                    Placeholder.unparsed("max", String.format("%8.4f", p.max())));
+                    Placeholder.unparsed("n", String.format(Locale.ROOT, "%-8d", r.n())),
+                    Placeholder.unparsed("p50", String.format(Locale.ROOT, "%8.4f", p.p50())),
+                    Placeholder.unparsed("p95", String.format(Locale.ROOT, "%8.4f", p.p95())),
+                    Placeholder.unparsed("p99", String.format(Locale.ROOT, "%8.4f", p.p99())),
+                    Placeholder.unparsed("mean", String.format(Locale.ROOT, "%8.4f", p.mean())),
+                    Placeholder.unparsed("max", String.format(Locale.ROOT, "%8.4f", p.max())));
         }
         messages.send(sender, base + ".note");
     }

@@ -216,4 +216,72 @@ class HikariCanvasConfigTest {
             assertEquals("en_us", I18nConfig.defaults().defaultLocale());
         }
     }
+
+    @Nested
+    class SummariesAndDiagnostics {
+
+        @Test
+        void reloadSummary_onlyReportsHotReloadableFields_notListenPort() {
+            List<String> logs = new ArrayList<>();
+            HikariCanvasConfig cfg = HikariCanvasConfig.fromConfiguration(yaml("""
+                    network:
+                      host: "127.0.0.1"
+                      port: 9988
+                    i18n:
+                      default-locale: zh_cn
+                    scripts:
+                      max-rules-per-wall: 24
+                      max-elements-per-wall: 300
+                      player-near-sample-ticks: 6
+                      command-templates:
+                        hello:
+                          command: "say {msg}"
+                          params:
+                            msg: { max-length: 32 }
+                    """), quietLogger(logs));
+
+            String startup = cfg.summary();
+            assertTrue(startup.contains("127.0.0.1:9988"), startup);
+            assertTrue(startup.contains("default-locale=zh_cn"), startup);
+
+            String reload = cfg.reloadSummary();
+            assertTrue(reload.contains("default-locale=zh_cn"), reload);
+            assertTrue(reload.contains("scripts.max-rules=24"), reload);
+            assertTrue(reload.contains("scripts.max-elements=300"), reload);
+            assertTrue(reload.contains("scripts.near-sample=6t"), reload);
+            assertTrue(reload.contains("command-templates=1"), reload);
+            assertFalse(reload.contains("9988"), "reloadSummary 不应打印未热更生效的端口号: " + reload);
+            assertTrue(logs.isEmpty(), "合法配置不应产生告警: " + logs);
+        }
+
+        @Test
+        void commandTemplate_unknownParamType_logsWarningWithExpectedChoices() {
+            List<LogRecord> records = new ArrayList<>();
+            Logger logger = Logger.getLogger("cfg-tpl-test-" + System.nanoTime());
+            logger.setUseParentHandlers(false);
+            logger.addHandler(new Handler() {
+                @Override public void publish(LogRecord r) {
+                    if (r.getLevel().intValue() >= Level.WARNING.intValue()) records.add(r);
+                }
+                @Override public void flush() {}
+                @Override public void close() {}
+            });
+
+            HikariCanvasConfig cfg = HikariCanvasConfig.fromConfiguration(yaml("""
+                    scripts:
+                      command-templates:
+                        greet:
+                          command: "say {who}"
+                          params:
+                            who:
+                              type: selector
+                    """), logger);
+
+            assertEquals("text", cfg.scriptsConfig.commandTemplates().get("greet").params().get("who").type());
+            assertEquals(1, records.size());
+            assertEquals(Level.WARNING, records.get(0).getLevel());
+            String msg = records.get(0).getMessage();
+            assertTrue(msg.contains("text") && msg.contains("online-player"), msg);
+        }
+    }
 }

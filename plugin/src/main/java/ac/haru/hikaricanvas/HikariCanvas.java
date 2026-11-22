@@ -251,11 +251,11 @@ public final class HikariCanvas extends JavaPlugin {
             for (var spi : toRemove) registry.deregisterServiceProvider(spi);
             deregisteredImageReaders.clear();
             deregisteredImageReaders.addAll(toRemove);  // 留给 onDisable 恢复
-            getLogger().info("IIORegistry: deregistered " + toRemove.size()
+            getLogger().fine("IIORegistry: deregistered " + toRemove.size()
                     + " unused image readers (kept PNG/JPEG)");
         } catch (Exception e) {
             getLogger().log(Level.WARNING,
-                    "IIORegistry deregistration failed (non-fatal)", e);
+                    "Failed to disable unused JVM image readers", e);
         }
 
         // config.yml。首次启动把 jar 内默认配置拷到 dataFolder
@@ -303,9 +303,9 @@ public final class HikariCanvas extends JavaPlugin {
         // 失败的行保留 v1，下次启动重试 + 运行期 /canvas open 时 lazy 兼容。
         WallRepo.MigrationStats wallV2Stats = wallRepo.migrateAllToV2();
         if (wallV2Stats.scanned() > 0) {
-            getLogger().info("ProjectState v1→v2 migration: scanned="
-                    + wallV2Stats.scanned() + " migrated=" + wallV2Stats.migrated()
-                    + " failed=" + wallV2Stats.failed());
+            getLogger().info("Upgraded legacy wall data to v2 format: scanned="
+                    + wallV2Stats.scanned() + ", migrated=" + wallV2Stats.migrated()
+                    + ", failed=" + wallV2Stats.failed());
         }
 
         sessionManager = new SessionManager(getLogger(), mapPool, wallResolver, auditLog, wallRepo, canvasRenderer);
@@ -321,7 +321,7 @@ public final class HikariCanvas extends JavaPlugin {
         fontRegistry = new FontRegistry(getLogger());
         fontRegistry.loadBuiltIn();
         fontRegistry.loadExternal(getDataFolder().toPath().resolve("fonts"));
-        getLogger().info("FontRegistry: " + fontRegistry.size() + " font(s) ready");
+        getLogger().info("Loaded " + fontRegistry.size() + " font(s)");
 
         // 多语言消息注册表。jar 内置 lang/ → 首次启动拷一份到 dataFolder/lang/ 供服主改；
         // 再 loadExternal 按键合并回来（改过的句子用服主的，没改的用内置，见 Messages.loadExternal）。
@@ -331,21 +331,25 @@ public final class HikariCanvas extends JavaPlugin {
         messages.loadBuiltIn();
         messages.loadExternal(getDataFolder().toPath().resolve("lang"));
         messages.setDefaultLocale(config.i18nConfig.defaultLocale());
-        getLogger().info("Messages: " + messages.size() + " language(s) ready");
+        getLogger().info("Loaded " + messages.size() + " language pack(s) (default: "
+                + config.i18nConfig.defaultLocale() + ")");
 
         // 矢量图标注册表。jar 内置 Font Awesome Free + 用户 plugins/HikariCanvas/icons/*.svg
         iconRegistry = new IconRegistry(getLogger());
         iconRegistry.loadBuiltIn();
         iconRegistry.loadExternal(getDataFolder().toPath().resolve("icons"));
-        getLogger().info("IconRegistry: " + iconRegistry.size() + " icon(s) ready");
+        getLogger().info("Loaded " + iconRegistry.size() + " vector icon(s)");
 
         // 调色板 LUT（32³ Lab）。启动期一次性构建 ~32 KiB，常驻
         try {
             paletteLut = PaletteLut.loadFromClasspath("/palette.json");
-            getLogger().info("PaletteLut: " + paletteLut.size() + " entries loaded");
+            getLogger().info("Loaded map color palette (" + paletteLut.size() + " colors)");
         } catch (IOException e) {
-            throw new IllegalStateException("failed to load palette.json from classpath; "
-                    + "did ./gradlew generatePalette run?", e);
+            throw new IllegalStateException(
+                    "Missing built-in '/palette.json' resource. If you downloaded a release jar, "
+                            + "the file may be corrupted — please re-download HikariCanvas. "
+                            + "If building from source, run './gradlew generatePalette' first.",
+                    e);
         }
 
         // 图片上传 + 存储 + 配额。先于 compositor 装配，让 WallRestorer 重启
@@ -406,8 +410,7 @@ public final class HikariCanvas extends JavaPlugin {
         variableStore.configureUserGlobal(userGlobalVariableDao,
                 config.userGlobalMaxPerOwner, config.userGlobalMaxTotal);
         variableStore.loadGlobalsFromDb();
-        getLogger().info("VariableStore: " + variableStore.size()
-                + " variable(s) loaded (user + userglobal)");
+        getLogger().info("Loaded " + variableStore.size() + " saved user variable(s)");
         // Compositor 接入变量替换与倒排索引联动（早于下方 wallRestorerInstance.restore()，
         // 使启动期恢复与后续 CanvasProjector / 预览渲染均能解析占位符）。
         VariableInterpolator variableInterpolator = new VariableInterpolator(variableStore);
@@ -435,14 +438,15 @@ public final class HikariCanvas extends JavaPlugin {
         // 所有依赖就位（compositor.interpolator + Provider 已装入 store），执行启动期 wall 像素恢复。
         try {
             int restored = wallRestorerInstance.restore();
-            getLogger().info("Wall restore: " + restored + " wall(s) repainted (post-provider init)");
+            getLogger().info("Restored and repainted " + restored + " existing wall(s)");
             if (!wallRestorerInstance.failedRestoreWallIds().isEmpty()) {
-                getLogger().warning("Wall restore: failed wall_ids = "
+                getLogger().warning("Failed to restore wall(s) "
                         + wallRestorerInstance.failedRestoreWallIds()
-                        + " (interactions will be blocked until next successful restart)");
+                        + "; editing on those walls is temporarily locked until the next server restart");
             }
         } catch (Exception e) {
-            getLogger().log(Level.WARNING, "WallRestorer failed (non-fatal)", e);
+            getLogger().log(Level.WARNING,
+                    "Failed to restore existing walls on startup; affected walls may not display properly", e);
         }
         final ManualScheduleProvider manualScheduleProvider =
                 (ManualScheduleProvider) this.variableProviderDaemon
@@ -480,7 +484,7 @@ public final class HikariCanvas extends JavaPlugin {
         // plugin disable 时 Bukkit 自动反注册，无需手动 unregister。
         Bukkit.getServicesManager().register(
                 HikariCanvasAPI.class, apiImpl, this, ServicePriority.Normal);
-        getLogger().info("HikariCanvasAPI registered to Bukkit ServicesManager");
+        getLogger().fine("HikariCanvasAPI registered to Bukkit ServicesManager");
         // PluginDisableEvent listener：外部插件 disable 时清掉它的 namespace。
         // 立即 unregister registry + daemon；30s 后清 store 数据（保留 cached value 平滑过渡）。
         getServer().getPluginManager().registerEvents(
@@ -642,7 +646,7 @@ public final class HikariCanvas extends JavaPlugin {
         // 排除启动期恢复失败的墙。
         int autoPlayed = ticker.autoRegisterAll(wallRestorer.failedRestoreWallIds());
         if (autoPlayed > 0) {
-            getLogger().info("AnimationTicker: " + autoPlayed + " wall(s) auto-playing (LOOP)");
+            getLogger().info("Resumed looping timeline animations on " + autoPlayed + " wall(s)");
         }
 
         // 时间轴触发器路由（VARIABLE_CHANGE / SCHEDULE，timeline.md §5.2）。
@@ -665,7 +669,7 @@ public final class HikariCanvas extends JavaPlugin {
                 triggerRegistryRef.onVariableChange(event.fullName());
             }
         });
-        getLogger().info("TimelineTriggerRegistry: registered (variable/schedule change → timeline play)");
+        getLogger().fine("TimelineTriggerRegistry: registered (variable/schedule change -> timeline play)");
 
         // Provider 写值时主动推 state.patch 给前端 mirror（Provider 直接写 store，不经 EditSession op 路径）。
         final OpPushCallback varPushCallback =
@@ -694,7 +698,7 @@ public final class HikariCanvas extends JavaPlugin {
                 sessionManagerRef.broadcastVariableChangeToWall(event, varPushCallback);
             }
         });
-        getLogger().info("VariableStore.ChangeListener registered (Provider→frontend mirror, "
+        getLogger().fine("VariableStore.ChangeListener registered (Provider->frontend mirror, "
                 + "userglobal broadcasts to all sessions)");
 
         // 自适应渲染：第二条 ChangeListener。任意变量 mutation 或 wall 引用集合变化都
@@ -719,7 +723,7 @@ public final class HikariCanvas extends JavaPlugin {
                 }
             }
         });
-        getLogger().info("VariableStore.ChangeListener registered (adaptive-fps high-freq detection,"
+        getLogger().fine("VariableStore.ChangeListener registered (adaptive-fps high-freq detection,"
                 + " default=" + defaultIntervalMs + "ms high-freq=" + highFreqIntervalMs + "ms)");
 
         // ── 脚本执行引擎全链装配（docs/scripting.md §3） ─────────────
@@ -879,8 +883,11 @@ public final class HikariCanvas extends JavaPlugin {
                     new TriggerContext(TriggerContext.Source.TEST, 0, "test"),
                     traceCallback);
         });
-        getLogger().info("Script engine: runner + trigger router registered ("
-                + scriptReadyWalls.size() + " wall(s) wallReady fired)");
+        Map<String, List<ScriptRule>> loadedScripts = scriptStore.snapshotAll();
+        int totalScriptRules = loadedScripts.values().stream().mapToInt(List::size).sum();
+        getLogger().info("Wall scripts ready (" + totalScriptRules + " rule(s) on "
+                + loadedScripts.size() + " wall(s); startup triggers run for "
+                + scriptReadyWalls.size() + " wall(s))");
 
         // MapPool 泄漏检测周期任务（5 分钟）。
         mapPoolLeakTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
@@ -892,13 +899,13 @@ public final class HikariCanvas extends JavaPlugin {
                     long liveSnapshotAt = System.currentTimeMillis();
                     Optional<Set<String>> liveWallIds = wallRepo.loadAllWallIds();
                     if (liveWallIds.isEmpty()) {
-                        getLogger().severe("[mapPool] leak scan skipped: could not read walls table"
-                                + " (refusing to treat an unreadable table as 'no live walls')");
+                        getLogger().severe("Map pool check skipped: could not read the walls table from database.");
                         return;
                     }
-                    int leaked = mapPool.detectLeaks(liveWallIds.get(), liveSnapshotAt);
-                    if (leaked > 0) {
-                        getLogger().warning("[mapPool] detected " + leaked + " leaked map(s); released");
+                    int reclaimed = mapPool.detectLeaks(liveWallIds.get(), liveSnapshotAt);
+                    if (reclaimed > 0) {
+                        getLogger().warning("Map pool maintenance: " + reclaimed
+                                + " orphaned map(s) reclaimed into free pool.");
                     }
                 },
                 20L * 60 * 5,
@@ -907,16 +914,16 @@ public final class HikariCanvas extends JavaPlugin {
         getLogger().info("HikariCanvas enabled");
         } catch (Throwable t) {
             getLogger().log(Level.SEVERE,
-                    "onEnable failed mid-assembly; cleaning up partially-initialized resources", t);
+                    "Failed to start HikariCanvas; shutting down partially initialized services", t);
             try {
                 cleanupResources();
             } catch (Throwable cleanupErr) {
                 getLogger().log(Level.SEVERE,
-                        "cleanup after onEnable failure also threw", cleanupErr);
+                        "Error while cleaning up after failed startup", cleanupErr);
             }
             if (t instanceof RuntimeException re) throw re;
             if (t instanceof Error err) throw err;
-            throw new IllegalStateException("HikariCanvas onEnable failed", t);
+            throw new IllegalStateException("HikariCanvas startup failed", t);
         }
     }
 
@@ -931,8 +938,8 @@ public final class HikariCanvas extends JavaPlugin {
         int raw = getConfig().getInt("limits.canvas-max-maps", 16);
         int clamped = Math.max(1, Math.min(64, raw));
         if (clamped != raw) {
-            getLogger().warning("limits.canvas-max-maps=" + raw
-                    + " is out of the supported range 1-64; using " + clamped);
+            getLogger().warning("config.yml: limits.canvas-max-maps=" + raw
+                    + " is outside the supported range (1-64); using " + clamped + ".");
         }
         return clamped;
     }
@@ -975,7 +982,8 @@ public final class HikariCanvas extends JavaPlugin {
             messages.reload(getDataFolder().toPath().resolve("lang"));
             messages.setDefaultLocale(fresh.i18nConfig.defaultLocale());
         }
-        getLogger().info("Config refreshed (most fields need restart): " + fresh.summary());
+        getLogger().info("Reloaded hot-updatable settings (" + fresh.reloadSummary()
+                + "); other config changes take effect on next server restart.");
     }
 
     /**
@@ -991,7 +999,8 @@ public final class HikariCanvas extends JavaPlugin {
             return new ObjectMapper().writeValueAsBytes(rules);
         } catch (Exception e) {
             getLogger().log(Level.WARNING,
-                    "serializing scripts of wall " + wallId + " failed; template saved without them", e);
+                    "Failed to package scripts from wall " + wallId
+                            + "; template was saved without scripts", e);
             return null;
         }
     }
@@ -1037,17 +1046,17 @@ public final class HikariCanvas extends JavaPlugin {
         // 先 cancel 异步周期任务，再关 DB（顺序保证 cancel 后不会再有新 run 排进
         // 队列触发 DB 访问）。Bukkit cancel() 不等 in-flight，shuttingDown flag 兜住已入队的 run。
         if (tokenPurgeTask != null) {
-            closeQuietly("tokenPurgeTask.cancel", tokenPurgeTask::cancel);
+            closeQuietly("expired token cleanup task", tokenPurgeTask::cancel);
             tokenPurgeTask = null;
         }
         if (mapPoolLeakTask != null) {
-            closeQuietly("mapPoolLeakTask.cancel", mapPoolLeakTask::cancel);
+            closeQuietly("map pool maintenance task", mapPoolLeakTask::cancel);
             mapPoolLeakTask = null;
         }
         // playerNear 采样是主线程同步任务，onDisable 也在主线程——cancel 后
         // 不可能再有 in-flight tick；放 Router shutdown 之前停掉新触发来源。
         if (playerNearTask != null) {
-            closeQuietly("playerNearTask.cancel", playerNearTask::cancel);
+            closeQuietly("proximity trigger task", playerNearTask::cancel);
             playerNearTask = null;
             playerNearSampler = null;
         }
@@ -1056,7 +1065,7 @@ public final class HikariCanvas extends JavaPlugin {
         // 先停 provider daemon，让守护线程池 awaitTermination 完成 + provider
         // shutdown 钩子释放资源；放最前是因为 daemon 内部 refresh task 可能引用 store / DB。
         if (variableProviderDaemon != null) {
-            closeQuietly("variableProviderDaemon.shutdown", variableProviderDaemon::shutdown);
+            closeQuietly("variable provider scheduler", variableProviderDaemon::shutdown);
             variableProviderDaemon = null;
         }
         // 停脚本引擎——先 Router（cancel 全部 timer + 关 hikari-script-trigger
@@ -1064,59 +1073,59 @@ public final class HikariCanvas extends JavaPlugin {
         // animationTicker / database 关停：脚本动作会触碰 ticker（playTimeline）与 DB
         // （setVariable 持久化 / persistWall）。
         if (scriptTriggerRouter != null) {
-            closeQuietly("scriptTriggerRouter.shutdown", scriptTriggerRouter::shutdown);
+            closeQuietly("script trigger router", scriptTriggerRouter::shutdown);
             scriptTriggerRouter = null;
         }
         if (scriptRunner != null) {
-            closeQuietly("scriptRunner.shutdown", scriptRunner::shutdown);
+            closeQuietly("script execution engine", scriptRunner::shutdown);
             scriptRunner = null;
         }
         // 补间动画引擎：scriptRunner 停后、animationTicker 停前关停（补间依赖 ticker.renderStatic）。
         if (tweenScheduler != null) {
-            closeQuietly("tweenScheduler.shutdown", tweenScheduler::shutdown);
+            closeQuietly("tween animation scheduler", tweenScheduler::shutdown);
             tweenScheduler = null;
         }
         // 停时间轴产帧引擎（单线程 daemon awaitTermination）。与 variableProviderDaemon
         // 同段关停——两者都是引用 wallRepo / DB 的 daemon，须早于下方 database.close。
         if (animationTicker != null) {
-            closeQuietly("animationTicker.shutdown", animationTicker::shutdown);
+            closeQuietly("timeline animation ticker", animationTicker::shutdown);
             animationTicker = null;
         }
         if (sessionReaper != null) {
-            closeQuietly("sessionReaper.stop", sessionReaper::stop);
+            closeQuietly("idle session reaper", sessionReaper::stop);
             sessionReaper = null;
         }
         if (webServer != null) {
-            closeQuietly("webServer.stop", webServer::stop);
+            closeQuietly("web server", webServer::stop);
             webServer = null;
         }
         if (uploadHandler != null) {
-            closeQuietly("uploadHandler.shutdown", uploadHandler::shutdown);
+            closeQuietly("image upload service", uploadHandler::shutdown);
             uploadHandler = null;
         }
         // 停 .canvas 导入 assets 摄入栈的 daemon 解码线程池（shutdownNow 幂等）。
         if (assetIngest != null) {
-            closeQuietly("assetIngest.shutdown", assetIngest::shutdown);
+            closeQuietly("project asset importer", assetIngest::shutdown);
             assetIngest = null;
         }
         if (imageStorage != null) {
-            closeQuietly("imageStorage.shutdown", imageStorage::shutdown);
+            closeQuietly("image storage", imageStorage::shutdown);
             imageStorage = null;
         }
         // 关停 /canvas bench 守护线程 executor（shutdownNow 中断 in-flight 压测）。
         if (benchmarkSubCommand != null) {
-            closeQuietly("benchmarkSubCommand.shutdown", benchmarkSubCommand::shutdown);
+            closeQuietly("benchmark runner", benchmarkSubCommand::shutdown);
             benchmarkSubCommand = null;
         }
         // 停字体 metrics 后台 worker（中断 + join）+ 清 FontMetricsTable 内存表，
         // 防（热）卸载后 worker 线程泄漏 / 旧 metrics 残留致下次 onEnable 双端布局不一致。
         if (fontRegistry != null) {
-            closeQuietly("fontRegistry.shutdownMetricsWorker", fontRegistry::shutdownMetricsWorker);
+            closeQuietly("font metrics worker", fontRegistry::shutdownMetricsWorker);
         }
-        closeQuietly("FontMetricsTable.clear", FontMetricsTable::clear);
+        closeQuietly("font metrics cache", FontMetricsTable::clear);
         // database.close() 必须在异步任务 cancel + daemon shutdown 之后（它们可能引用 DB）。
         if (database != null) {
-            closeQuietly("database.close", database::close);
+            closeQuietly("database", database::close);
             database = null;
         }
         if (!deregisteredImageReaders.isEmpty()) {
@@ -1129,13 +1138,13 @@ public final class HikariCanvas extends JavaPlugin {
                         restored++;
                     } catch (Exception e) {
                         getLogger().log(Level.WARNING,
-                                "IIORegistry: failed to restore reader " + spi.getClass().getName(), e);
+                                "Failed to restore JVM image reader " + spi.getClass().getName(), e);
                     }
                 }
-                getLogger().info("IIORegistry: restored " + restored + " image reader(s)");
+                getLogger().fine("IIORegistry: restored " + restored + " image reader(s)");
             } catch (Exception e) {
                 getLogger().log(Level.WARNING,
-                        "IIORegistry restore failed (non-fatal)", e);
+                        "Failed to restore JVM image readers during shutdown", e);
             }
             deregisteredImageReaders.clear();
         }
@@ -1145,7 +1154,7 @@ public final class HikariCanvas extends JavaPlugin {
      * onDisable / onEnable-fail 用——执行一个 shutdown 动作，捕获并 WARNING 记录任何
      * {@link Throwable}，保证后续资源释放步骤不被前面的异常跳过。
      *
-     * @param name   动作名（仅用于日志定位）
+     * @param name   可读组件名（用于日志定位）
      * @param action 关闭动作（如 {@code database::close}）
      */
     private void closeQuietly(String name, Runnable action) {
@@ -1153,7 +1162,7 @@ public final class HikariCanvas extends JavaPlugin {
             action.run();
         } catch (Throwable t) {
             getLogger().log(Level.WARNING,
-                    "cleanup: " + name + " failed (continuing)", t);
+                    "Error while stopping " + name + " during shutdown (continuing)", t);
         }
     }
 
@@ -1168,7 +1177,7 @@ public final class HikariCanvas extends JavaPlugin {
             saveResource(resourcePath, false);
         } catch (Exception e) {
             getLogger().log(Level.WARNING,
-                    "failed to write default lang file " + resourcePath, e);
+                    "Failed to write default language file " + resourcePath, e);
         }
     }
 

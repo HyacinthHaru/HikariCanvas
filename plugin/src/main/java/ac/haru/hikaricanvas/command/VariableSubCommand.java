@@ -378,9 +378,11 @@ public final class VariableSubCommand {
         messages.send(sender, "command.var.list.ns-header",
                 Placeholder.unparsed("namespace", ns),
                 Placeholder.unparsed("count", String.valueOf(vars.size())));
+        String locale = messages.localeId(sender);
+        String nullLabel = messages.plain(locale, "command.var.value.unset");
         for (Variable v : vars) {
-            String value = v.currentValue() == null ? "(null)" : truncate(v.currentValue(), 64);
-            String ttl = formatTtl(v.ttl());
+            String value = v.currentValue() == null ? nullLabel : truncate(v.currentValue(), 64);
+            String ttl = formatTtl(locale, v.ttl());
             messages.send(sender, "command.var.list.var-line",
                     Placeholder.unparsed("full_name", v.fullName()),
                     Placeholder.unparsed("type", v.type().toString()),
@@ -402,10 +404,14 @@ public final class VariableSubCommand {
             return;
         }
         Variable v = opt.get();
-        String defaultVal = v.defaultValue() == null ? "(null)" : v.defaultValue();
-        String currentVal = v.currentValue() == null ? "(null)" : v.currentValue();
-        String updatedAt = v.updatedAt() == 0L ? "(never)" : TS_FMT.format(Instant.ofEpochMilli(v.updatedAt()));
-        String source = v.source() == null ? "(none)" : v.source();
+        String locale = messages.localeId(sender);
+        String nullLabel = messages.plain(locale, "command.var.value.unset");
+        String neverLabel = messages.plain(locale, "command.var.value.never");
+        String noneLabel = messages.plain(locale, "command.var.value.none");
+        String defaultVal = v.defaultValue() == null ? nullLabel : v.defaultValue();
+        String currentVal = v.currentValue() == null ? nullLabel : v.currentValue();
+        String updatedAt = v.updatedAt() == 0L ? neverLabel : TS_FMT.format(Instant.ofEpochMilli(v.updatedAt()));
+        String source = v.source() == null ? noneLabel : v.source();
         messages.send(sender, "command.var.get.header",
                 Placeholder.unparsed("full_name", v.fullName()));
         messages.send(sender, "command.var.get.namespace",
@@ -421,7 +427,7 @@ public final class VariableSubCommand {
         messages.send(sender, "command.var.get.updated",
                 Placeholder.unparsed("value", updatedAt));
         messages.send(sender, "command.var.get.ttl",
-                Placeholder.unparsed("value", formatTtl(v.ttl())));
+                Placeholder.unparsed("value", formatTtl(locale, v.ttl())));
         messages.send(sender, "command.var.get.source",
                 Placeholder.unparsed("value", source));
         messages.send(sender, "command.var.get.ref-by-walls",
@@ -491,8 +497,9 @@ public final class VariableSubCommand {
         }
         messages.send(sender, "command.var.providers.header",
                 Placeholder.unparsed("count", String.valueOf(providers.size())));
+        String locale = messages.localeId(sender);
         for (VariableProvider p : providers) {
-            String interval = formatInterval(p.refreshInterval());
+            String interval = formatInterval(locale, p.refreshInterval());
             int keys = p.declaredKeys() == null ? 0 : p.declaredKeys().size();
             String lineKey = p.isDynamic()
                     ? "command.var.providers.line-dynamic"
@@ -542,10 +549,12 @@ public final class VariableSubCommand {
         messages.send(sender, "command.var.inspect.header",
                 Placeholder.unparsed("wall_id", wallId),
                 Placeholder.unparsed("count", String.valueOf(refs.size())));
+        String locale = messages.localeId(sender);
+        String nullLabel = messages.plain(locale, "command.var.value.unset");
         for (String fn : refs) {
             Optional<Variable> v = store.get(fn);
             String cur = v.map(x -> x.currentValue() == null
-                    ? "(null)" : truncate(x.currentValue(), 48))
+                    ? nullLabel : truncate(x.currentValue(), 48))
                     .orElse(null);
             if (cur == null) {
                 messages.send(sender, "command.var.inspect.var-missing",
@@ -607,8 +616,8 @@ public final class VariableSubCommand {
         messages.send(sender, "command.var.usage.inspect");
     }
 
-    private static String formatTtl(long ttlMs) {
-        if (ttlMs == 0L) return "permanent";
+    private String formatTtl(String locale, long ttlMs) {
+        if (ttlMs == 0L) return messages.plain(locale, "command.var.value.permanent");
         if (ttlMs < 1000) return ttlMs + "ms";
         long s = ttlMs / 1000;
         if (s < 60) return s + "s";
@@ -617,9 +626,11 @@ public final class VariableSubCommand {
         return (m / 60) + "h";
     }
 
-    private static String formatInterval(Duration d) {
-        if (d == null || d.isZero() || d.isNegative()) return "ZERO";
-        return formatTtl(d.toMillis());
+    private String formatInterval(String locale, Duration d) {
+        if (d == null || d.isZero() || d.isNegative()) {
+            return messages.plain(locale, "command.var.value.no-interval");
+        }
+        return formatTtl(locale, d.toMillis());
     }
 
     private static String truncate(String s, int max) {

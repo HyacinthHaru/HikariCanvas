@@ -1,252 +1,247 @@
 # HikariCanvas 配置文件
 # ----------------------------------------------------------------
-# 改完这个文件，**默认都要重启服务器才生效**。
-# 只有标 [热更] 的项支持 `/canvas reload config`（管理员）当场生效，
-# 其余项即使执行了 reload 也仍是旧值 —— 别被 reload 的成功提示骗了。
+# 修改本文件后，未特别标注的配置项均需重启服务器后生效。
+# 热更新支持情况：
+#   - 标有 [热更] 的配置项：执行 /canvas reload config 后立即生效
+#   - dynamic.push-rate-limit 段：执行 /canvas var reload 后立即生效
+#   - 模板文件目录变更：执行 /canvas reload templates 即可重新扫描
 # ----------------------------------------------------------------
 
-# WebSocket / HTTP 编辑器服务
+# 网页编辑器与网络连接
 network:
-  # 监听地址。生产环境强烈建议保持 127.0.0.1 + nginx/Caddy 反代加 TLS。
-  # 直接绑 0.0.0.0 会暴露未加密 token，详见 docs/deployment.md。
+  # 内置网页服务的监听地址。
+  # 本机游玩或配合反向代理时请保持 127.0.0.1；局域网联机可改为开服电脑的内网 IP。
+  # 公网服务器请保持 127.0.0.1 并在前端架设 Caddy 或 nginx 开启 HTTPS 反向代理；
+  # 直接绑定 0.0.0.0 会导致编辑链接中的访问令牌在公网明文传输。
   host: "127.0.0.1"
-  # 监听端口。
+  # 内置网页服务的监听端口。
   port: 8877
-  # 玩家点 /canvas confirm 后看到的 URL 模板。{token} 会被实际 token 替换。
-  # 内网默认就是 http://127.0.0.1:8877/?token={token}。
-  # 公网部署改为 https://yourdomain.com/?token={token}。
-  # 安全收口：仅支持 http:// 和 https:// 协议；javascript: / data: / file: /
-  # vbscript: 等一律被拒（防止 admin 误配后玩家点 ActionBar 链接执行任意 JS）。
-  # URL 中也不允许含换行（CR/LF）。配置不合法 → 启动期 severe log + 回退到内置默认值。
+  # 玩家执行 /canvas confirm 或 /canvas open 后，在聊天栏收到的编辑器链接模板。
+  # 支持三个占位符：{host} 与 {port} 会自动替换为上方监听地址与端口，
+  # {token} 会在打开画板时替换为当次生成的一次性访问令牌。
+  # 本机默认即 http://127.0.0.1:8877/?token={token}；
+  # 公网配置好 HTTPS 反向代理后，请改为 https://你的域名/?token={token}。
+  # 仅支持 http:// 或 https:// 开头的完整网址且不能包含换行；填写有误时会在后台提示并回退为默认模板。
   editor-url: "http://{host}:{port}/?token={token}"
-  # WS 连接建立后多少秒内必须完成 auth；超时 → close 4001 auth_timeout。
-  # 防御未认证 socket 长挂占连接的 DoS 路径。范围 1-60。
+  # 浏览器连接上网页服务后，必须在此秒数内完成访问令牌验证（范围 1~60）。
+  # 超时未验证的连接会自动断开，防止无效连接长期占用服务器资源。
   ws-auth-timeout-seconds: 5
-  # WS upgrade Origin 白名单。下列三类一律放行，无需配置：
-  #   1) Origin 缺失 / null（非浏览器 client，或同源 fetch 不带 Origin）
-  #   2) http://127.0.0.1:<port> / http://localhost:<port>
-  #   3) 与 network.host:port 完全匹配
-  # 公网通过反代部署时把反代 origin 加进来，例如：
+  # 允许连接编辑器的外部网页来源白名单。
+  # 本机回环地址（127.0.0.1 / localhost）以及与上方 host:port 一致的直连地址默认放行，无需填写。
+  # 公网通过反向代理部署时，请把对外访问的完整域名地址（含协议，带引号）加进列表，例如：
   #   allowed-origins:
   #     - "https://canvas.example.com"
-  # 默认空列表 = 只信回环 + 同源；其它 Origin 一律 403。
-  # 每一项都要是带引号的完整 origin 字符串（scheme://host[:port]）。写错的项（空项、
-  # 纯数字、`- ~`）会被跳过并在控制台留一条 warning，不会连累插件起不来。
+  # 默认空列表表示仅允许本机与同地址直连，来自其他域名的网页连接会被拦截（403）。
+  # 格式有误的条目会在后台输出警告并自动跳过，不会影响插件启动。
   allowed-origins: []
 
-# 会话生命周期（玩家从 /canvas confirm 到关浏览器的整个过程）
+# 编辑会话超时控制（玩家从确认选区到关闭网页编辑器的全过程）
 session:
-  # token 签发后多久内必须 auth 完成，否则 token 失效。最小 1；
-  # 这里的 0 不是「永不超时」（只有下面 idle-minutes 有那个语义），写 0 会被钳回 15 并告警。
+  # 编辑链接的有效时长（分钟，最小为 1）。
+  # 玩家获取链接后需在此时间内打开网页完成验证，超时后需重新执行 /canvas open 获取新链接。
+  # 注意此处填 0 不代表永不过期，小于 1 的数值会自动恢复为默认值 15 并在后台提示。
   token-ttl-minutes: 15
-  # WS 连接断开后保留 session 多久（玩家断网重连用）。超时 → cancel。最小 1，同上。
+  # 浏览器意外断网或刷新页面后，为玩家保留编辑会话的宽限时长（分钟，最小为 1）。
+  # 在宽限期内重新连接可无缝继续编辑，超时后自动结束会话；小于 1 的数值会自动恢复为默认值 5。
   ws-grace-minutes: 5
-  # ACTIVE 会话无任何输入多久后被清。0 = 永不超时（谨慎，可能 leak 内存）。
+  # 打开网页编辑器后长时间没有任何操作时，自动关闭会话的分钟数。
+  # 填 0 表示不自动超时（注意：设为 0 时若玩家忘记关闭网页，会一直占用该画板导致其他人无法打开）。
   idle-minutes: 30
-  # SessionReaper 扫描周期。值越小回收越及时但更费 CPU；30s 是合理默认。
+  # 后台检查并回收已超时会话的间隔秒数（最小为 5，默认 30 秒兼顾回收及时性与性能开销）。
   reaper-scan-seconds: 30
-  # 过期 token 异步清理周期。
+  # 后台清理已过期访问令牌的间隔分钟数。
   token-purge-minutes: 5
 
-# 地图池容量（预览池）
+# 地图池容量规划
+# 重要说明：每块已创建的招牌都会持续占用对应张数的游戏地图，直到执行 /canvas delete 删除招牌后
+# 才会归还到池中复用（并非只在打开网页编辑时临时占用）。
 map-pool:
-  # 启动时预创建多少张 MapView。每张消耗约 64 KiB 内存 + 一个 mapId。
-  # 建议 = 服务器同时编辑会话数 × 平均墙面尺寸（如 4×2=8 张）+ 一些 buffer。
+  # 开服时预先准备的备用地图张数（范围 1~1024，每张地图约占 64 KB 内存与一个地图编号）。
   initial: 64
-  # 池上限。达到上限后新会话会拿到 POOL_EXHAUSTED 错误，提示玩家等待。
-  # 单服 200 张地图够 25 人同时编辑 4×2 墙面。
+  # 全服允许分配的地图总张数上限。
+  # 请按「全服预计建造的招牌总数 × 平均每块招牌占用的地图张数」规划此上限，并适当留出余量
+  # （例如预计全服建造 30 块 4×2 招牌即需 240 张地图）。达到上限后将无法新建招牌，需调大上限或删除旧招牌。
   max: 256
-  # 可选 per-world initial 分配（多世界服务器用）。池内按 world 分桶；
-  # 给 wall 借出的 map 必须与 wall 所在 world 一致——否则 wall 在 nether 但 map 在
-  # overworld 会导致位置概念错乱。下面 key = world name（与 server.properties 一致）。
-  # 列出的 world 在启动时确保 ≥ 该数 FREE map；未列出的 world 走 on-demand 扩容
-  # （首次 /canvas confirm 时按需 createMap）。所有 per-world 之和不超过 max。
+  # 多世界服务器可选配置：按世界名称（与 server.properties 或多世界插件中的世界名一致）
+  # 指定开服时为该世界预先准备的备用地图张数。
+  # 招牌只能绑定所在世界的地图（跨世界会导致位置关系错乱）；未在此列出的世界会在首次创建招牌时按需分配，
+  # 所有世界的地图总用量共同受上方 max 上限约束。
   # 示例：
   #   per-world:
-  #     world: 32          # overworld 预热 32 张
-  #     world_nether: 8    # nether 预热 8 张
-  #     world_the_end: 4   # end 预热 4 张
+  #     world: 32          # 主世界预留 32 张
+  #     world_nether: 8    # 下界预留 8 张
+  #     world_the_end: 4   # 末地预留 4 张
   per-world: {}
 
-# 招牌尺寸上限
+# 单块招牌尺寸上限
 limits:
-  # 单面招牌最多占多少张地图（宽 × 高）。玩家选区超过这个数 → 提示 TOO_LARGE 并拒绝。
-  # 范围 1~64，默认 16（例如 4×4 或 8×2）。调大意味着一面墙一次渲染更多像素、
-  # 占用更多池地图，请配合上面的 map-pool 一起放大。
-  # 只作用于新建：已经存在的招牌即使超过新上限也照常能打开、能编辑。
+  # 新建单块招牌最多允许占用的地图张数（宽 × 高，范围 1~64，默认 16 即如 4×4 或 8×2）。
+  # 玩家圈选的墙面超出此张数时会提示尺寸过大并拒绝创建。调大此项时建议同步调大上方 map-pool.max。
+  # 仅限制新建招牌：已经创建好的旧招牌即使超过新上限，依然可以正常打开与编辑。
   canvas-max-maps: 16
 
-# 投影帧率 / 输入限流
+# 画面推送与操作限流
 throttle:
-  # 服务端把 ProjectState 渲染推送到游戏地图的最大频率（fps）。
-  # 玩家停手 → 0 fps；持续输入 → 上限被卡到这个值。5 fps 对 4×2 墙的 MC packet 量是合理上限。
-  # 实际生效的旋钮是下面 rendering.adaptive-fps.default-min-interval-ms，这一项按
-  # 1000/fps 推算它的默认值（5 fps → 200ms，与老版本硬编码完全一致）。
-  # 如果你在下面显式写了 default-min-interval-ms，那边优先，这一项就不再参与。
+  # 编辑画板时向游戏内刷新画面的备用每秒帧数上限（范围 1~30；不操作时不发送画面）。
+  # 注意：下方的 rendering.adaptive-fps.default-min-interval-ms 已显式配置为 200 且优先级高于本项；
+  # 如需调整常规刷新速度，请直接修改下方的 default-min-interval-ms（仅在删除或注释掉下方该行时，
+  # 系统才会按 1000 / projection-fps 自动换算刷新间隔）。
   projection-fps: 5
-  # 单 session 输入 op 速率上限（msg/s）。
+  # 单个编辑会话每秒允许提交的操作次数上限。
   input-rate-per-second: 20
-  # 突发 op 上限（在任意 2 秒窗口）。
+  # 单个编辑会话在短时间内允许连续突发提交的操作次数上限。
   input-burst: 40
 
-# 自适应渲染
-# wall 引用秒级变量（schedule.eta_seconds / system.server.tick 等）时，自动把投影间隔
-# 切到 high-freq；同时渲染完主动给 chunk-loaded viewer 推 ClientboundMapItemDataPacket
-# 弥补 Paper 默认 MapView sync 的 250ms-5s 抖动。
+# 动态画面刷新策略
+# 当画板内容引用了按秒跳动的动态变量（例如列车倒计时 schedule.eta_seconds，在编辑器内写作
+# ${var:schedule.eta_seconds}）时，会自动切换为高频刷新间隔，保证倒计时显示连贯不跳秒。
 rendering:
   adaptive-fps:
-    # 普通 wall 间隔（ms）。不写这一行时按 throttle.projection-fps 推算（1000/fps）；
-    # 写了就以这里为准。200ms = 5fps，正是 projection-fps 默认值推出来的数。
+    # 常规画板的最小刷新间隔（毫秒，最小 33；200 毫秒对应每秒最多刷新 5 次）。
+    # 本项优先级高于上方的 throttle.projection-fps，调整常规画面刷新率请直接修改此值。
     default-min-interval-ms: 200
-    # 高频 wall 间隔（ms；50ms = 20fps；CPU / bandwidth 翻倍可接受）
+    # 含秒级动态变量画板的最小刷新间隔（毫秒，最小 33；50 毫秒对应每秒最多刷新 20 次）。
     high-freq-min-interval-ms: 50
-    # 是否主动推帧给 chunk-loaded viewer。false → 仅靠 Paper 默认 sync（不稳但带宽更省）。
+    # 画面重绘后是否立即向附近已加载该区域的玩家直接发送地图画面数据包，以消除服务端默认地图同步
+    # 带来的延迟与卡顿。设为 false 则仅依靠服务端默认机制同步（更省带宽，但画面更新会有明显延迟）。
     push-packets-enabled: true
 
-# 模板系统
+# 模板库与社区工坊
 templates:
-  # 启动时自动 reload；改为 false 适合内置模板需要手工 reload 的工作流。
+  # 开服时是否自动扫描并加载模板文件；若习惯手动执行 /canvas reload templates 可改为 false。
   auto-reload-on-startup: true
-  # 模板缩略图（/api/template/{id}/preview.png）缓存 TTL（秒）。
-  # reload templates 时服务端会主动 invalidate；TTL 主要影响浏览器侧。
+  # 网页端模板预览缩略图的浏览器缓存秒数。
+  # 重载模板、发布或删除模板时服务端会自动刷新最新缩略图，此项主要控制浏览器本地缓存时长。
   preview-cache-seconds: 300
-  # 创意工坊：每玩家最多可发布模板数。0 = 不限。
-  # 持 canvas.template.bypass-limit 权限的玩家跳过此限制。
+  # 每名玩家最多可发布到社区模板库的模板数量（填 0 表示不限制）。
+  # 拥有 canvas.template.bypass-limit 权限的玩家不受此数量限制。
   max-per-player: 20
 
-# 图片上传
-# 文件存在 plugins/HikariCanvas/uploads/<sha256[:16]>.png；hash 内容寻址，跨 wall
-# 引用同 hash 文件零重复存储。详见 docs/security.md §4.5、docs/architecture.md §3.5。
+# 图片上传与存储配额
+# 上传的图片保存在 plugins/HikariCanvas/uploads/ 目录下；多块画板使用同一张图片时会自动共用同一份文件，
+# 不会重复占用磁盘空间。
 images:
-  # 单文件最大字节（KiB）。超出 → 413 UPLOAD_REJECTED。
+  # 单张上传图片允许的最大文件体积（KB），超出将被拒绝上传。
   max-size-kb: 2048
-  # 允许的上传 MIME。magic bytes 与 Content-Type 双层校验。
-  # 注意：标准 Java 不带 WebP 解码器，除非你自己装了对应的 ImageIO 插件，否则
-  # webp 上传会被直接拒绝并提示"本服无法解码该格式"。想用 WebP 就先装解码器。
+  # 允许上传的图片格式列表（服务端会同时核对文件真实格式头与声明类型）。
+  # 注意：标准 Java 运行环境自带 PNG 与 JPEG 支持，默认不包含 WebP 解码支持；
+  # 若未额外安装对应的图片解码扩展，玩家上传 WebP 图片时会收到格式不支持的提示。
   allowed-mime: ["image/png", "image/jpeg", "image/webp"]
-  # 解码后边长上限；超出自动 bilinear downscale 到此尺寸。
+  # 图片长或宽超过此像素上限时，会在保存前自动等比例缩小到该尺寸以内。
   downscale-max-edge: 1024
-  # 单 wall 引用 image 元素的上限（防滥用）。0 = 不限。
+  # 单块画板最多允许放置的图片元素数量（填 0 表示不限制）。
   max-per-wall: 16
-  # 单玩家 24 小时上传次数。0 = 不限。
+  # 单名玩家每 24 小时最多允许上传图片的次数（填 0 表示不限制）。
   max-uploads-per-day: 50
-  # 全服磁盘总配额（MiB）。超出 → 触发 LRU 清理直到腾出空间。0 = 不限。
+  # 全服上传图片占用的磁盘总空间上限（MB，填 0 表示不限制）。
+  # 超出此总空间上限时，系统只会按最早使用顺序自动清理未被任何现有画板引用的闲置图片；
+  # 正在任何画板中使用的图片绝不会被删除。
   max-total-storage-mb: 1024
 
-# .canvas 工程导入限额。防恶意大文件 / zip 炸弹。下界均为 1MB。
+# .canvas 工程包导入大小限制（防止导入超大文件或恶意压缩包，各项最小值为 1 MB）
 import:
-  # 整个 .canvas 包上限（MB）。超出 → 413 IMPORT_ZIP_TOO_LARGE。
+  # 上传的整个 .canvas 工程文件最大体积上限（MB）。
   canvas-max-mb: 10
-  # 单个内部文件解压上限（MB）。边读边计数，不信任声明的大小。
+  # 工程包内单个文件解压后的最大体积上限（MB）。
   canvas-max-entry-mb: 10
-  # 所有内部文件解压总和上限（MB）。防多文件累加的 zip 炸弹。
+  # 工程包内全部文件解压后的总体积上限（MB）。
   canvas-max-total-mb: 50
 
-# 安全
+# 安全防护
 security:
-  # WS auth 帧 token 校验前的每 IP 尝试限流，防御 token 暴破 / 撞库。
-  # 合法用户重连 retry 远低于 10 次/分钟，超出几乎必然是攻击。
-  # 超限 → close 4429 + audit TOKEN_RATE_LIMIT_EXCEEDED；攻击者每分钟只能试 ≤10 次。
+  # 限制同一 IP 每分钟尝试验证访问令牌的次数，防止暴力猜测编辑链接。
+  # 正常玩家打开或重连远低于每分钟 10 次；超出上限的请求会被拒绝连接并记入安全审计记录。
   token-rate-limit:
-    # 每 IP 每分钟可尝试的 token 次数。下界 1（即每分钟只准 1 次，过严）。
+    # 每个 IP 每分钟最多允许尝试验证令牌的次数（最小为 1）。
     per-minute: 10
 
-# 数据库 / 迁移
+# 数据库备份与审计日志
 database:
-  # 跑 schema migration 前自动备份 data.db 到 data.db.pre-V<NNN>.bak（含 -wal/-shm，先执行 wal_checkpoint）。
-  # 恢复：停服 → 用 .bak 覆盖 data.db（连同 .bak-wal/.bak-shm 覆盖 data.db-wal/-shm，或删除现有 -wal/-shm）→ 启动。
+  # 插件升级需要更新数据库表结构前，是否自动将 data.db 备份为 data.db.pre-V<编号>.bak。
+  # 如需回滚旧版本：先停服，删除目录中残留的 data.db-wal 与 data.db-shm，再用 .bak 备份文件恢复 data.db。
   auto-backup-before-migration: true
-  # 备份保留天数：自动删除早于此天数的 data.db.pre-V<NNN>.bak（启动期清一次）。0 = 永久保留。
+  # 升级前自动生成的数据库备份文件保留天数（开服时自动清理超期旧备份；填 0 表示永久保留）。
   backup-retention-days: 30
-  # 审计表（audit_log）保留天数。0 = 永久保留（表会一直涨，自己掂量）。
-  # 超期记录在写审计时顺带清，每 6 小时最多清一次，不额外起线程。
-  # 想查审计记录：目前没有游戏内命令，直接用 SQLite 工具查 data.db 的 audit_log 表。
+  # 数据库中操作审计记录的保留天数（填 0 表示永久保留，数据库体积会随时间持续增长）。
+  # 超期记录会在日常写入审计时顺带清理，每 6 小时最多执行一次，不额外占用后台线程。
+  # 如需查阅历史审计记录，可使用 SQLite 工具打开 data.db 查看 audit_log 表。
   audit-retention-days: 90
 
-# 动态数据
-# 详见 docs/dynamic-data.md
+# 动态变量与时刻表
 dynamic:
-  # Plugin Push API 限流（防恶意 / bug 插件刷爆 VariableStore）
-  # 见 docs/dynamic-data.md §10.2
+  # 外部插件推送动态变量的速率限制（防止外部插件异常高频写入拖慢服务器）。
+  # [热更: /canvas var reload] 修改以下三项后执行 /canvas var reload 即可立即生效。
   push-rate-limit:
-    # 单插件每秒 push 上限（超出 drop tail + WARN log）
-    # 100/s 对正常使用绰绰有余；BedWars / 列车 ETA / 比分等业务 1-10/s 即可。
+    # 单个外部插件每秒最多允许推送变量的次数（超出部分会被丢弃并在后台提示警告；常规计分或报站每秒 1~10 次即可）。
     per-plugin-per-second: 100
-    # 全局每秒 push 上限（超出触发保护期）
-    # 保护期内所有插件 push 一律 reject——防多插件协同压垮 VariableStore。
+    # 所有外部插件合计每秒最多允许推送变量的次数（超出后进入短暂保护期）。
     global-per-second: 1000
-    # 全局触限后的保护期（ms）—— 期间所有 push reject
-    # 10s 给运维 / 日志足够时间排查；保护期结束自动恢复。
+    # 触发全服推送上限后的保护冷却时间（毫秒）。冷却期内暂停接收外部插件推送，时间结束后自动恢复。
     global-circuit-break-ms: 10000
 
-  # 列车时刻表（ManualScheduleProvider，见 docs/dynamic-data.md §7.3）
+  # 列车时刻表默认状态文案
   schedule:
-    # is_arriving / arrival_status 触发阈值（秒）。eta ≤ 阈值时 is_arriving=true 且
-    # arrival_status=arriving-text。
+    # 列车进站提示触发阈值（秒）。当距离发车或到站倒计时小于等于此秒数时，
+    # schedule.is_arriving 变量变为 true，且 schedule.arrival_status 显示下方进站文案。
     arriving-threshold-seconds: 60
-    # arrival_status 文案（eta ≤ 阈值时）
+    # 倒计时处于阈值以内时，schedule.arrival_status 显示的文字。
     arriving-text: "进站中"
-    # arrival_status 文案（eta > 阈值时）
+    # 倒计时大于阈值或无近期班次时，schedule.arrival_status 显示的文字。
     idle-text: ""
 
-  # 全局用户变量（userglobal/*）配额。详见 docs/dynamic-data.md §14.4
-  # 全局变量 = 玩家可创建的跨 wall 共享变量，与 user/* per-wall 隔离不同
+  # 全局用户变量数量上限（全局用户变量可在全服多块画板之间共享数值，区别于单块画板独立的普通变量）
   variables:
-    # 每 owner 上限（创建超出此数 → QUOTA_EXCEEDED）
+    # 每名玩家最多可创建的全局用户变量数量。
     userglobal-max-per-owner: 500
-    # 全服总上限（任何 owner 加起来不超过此数）
+    # 全服所有玩家合计最多可创建的全局用户变量总数。
     userglobal-max-total: 10000
 
-# 时间轴动画（docs/timeline.md / docs/architecture.md §5.5）
+# 时间轴动画
 timeline:
-  # 新建 timeline 的默认帧率（20 = 一个 Bukkit tick）
+  # 新建时间轴动画时的默认每秒帧率（20 对应与游戏刻一致的每秒 20 帧）。
   default-fps: 20
-  # 服务器级安全阀：单墙 fps 硬上限，钳每条 timeline 的 fps。
+  # 全服单条时间轴动画允许设置的最高每秒帧率上限。
   max-fps: 60
 
-# 墙脚本（视觉运行时；docs/scripting.md）
+# 画板交互脚本与补间动画
 scripts:
-  # 单面墙可挂的脚本规则数上限（防玩家堆几百条规则拖慢服务器）。
-  # [热更] 只影响后续创建，不裁剪已有规则。
+  # 单块画板最多允许创建的脚本规则条数（防止单墙堆积过多规则影响服务器性能）。
+  # [热更] 仅限制后续新增规则，不会删除已有规则。
   max-rules-per-wall: 16
-  # 单面墙的元素总数上限（脚本"克隆元素"积木反复克隆是唯一能无限堆元素的入口；默认 200）。
-  # 达到上限后克隆动作会被拒绝（不崩、不影响其他动作），只约束脚本克隆，不限制正常编辑。
-  # [热更] 下一次克隆即生效。
+  # 单块画板允许包含的元素总数量上限（防止脚本中的克隆元素积木无限循环复制占满内存）。
+  # 达到上限时仅阻止脚本继续克隆新元素，不影响其他脚本动作与日常手动编辑。
+  # [热更] 下一次执行克隆动作时立即生效。
   max-elements-per-wall: 200
-  # "玩家靠近"触发器的采样间隔（游戏 tick，20 tick = 1 秒；默认 10 = 半秒扫一次）。
-  # 数字越小反应越灵敏，但服务器主线程扫描越频繁（每轮 = 靠近规则数 × 在线玩家数次
-  # 距离比较）；范围 1..200。[热更] 底层任务固定每 2 tick 跑一次，
-  # 所以填 1 和 2 效果一样。
+  # 「玩家靠近画板」触发器的检测间隔（单位为游戏刻 tick，20 tick = 1 秒；默认 10 即每半秒检测一次，范围 1~200）。
+  # 数值越小感应越灵敏，但主线程计算玩家距离的次数越多。
+  # [热更] 底层检测任务最短每 2 tick 运行一次，因此填 1 与填 2 实际效果相同。
   player-near-sample-ticks: 10
-  # 执行预算三闸（docs/scripting.md §2.4）。[热更] 已开始的那一秒窗口不重置，下个窗口起生效。
+  # 单条脚本运行安全限制（防止死循环或高频连环触发卡死服务器）。
+  # [热更] 当前这一秒内的计数窗口结束后立即按新数值生效。
   budget:
-    # 单次触发展开执行的动作总数（含嵌套 if 分支与 wait 续接累计）。
+    # 单次触发一条规则最多允许连续执行的积木动作步数（包含条件分支与延时等待后的后续动作）。
     max-actions-per-run: 50
-    # 单条规则每秒最多触发次数（超出的触发直接丢弃 + 审计记录）。
+    # 同一条规则每秒最多允许被触发的次数（超出次数会被自动跳过并记入审计记录）。
     max-runs-per-second: 10
-    # 链式熔断：脚本写变量又触发别的脚本，链深达到此值时掐断本次执行。
-    # 只掐断不自动禁用脚本——日志和审计会告诉你是哪条规则在转圈。
+    # 脚本连环触发的最大嵌套层数（例如脚本 A 修改变量触发脚本 B，达到此层数时自动中止本次连锁，防止死循环）。
     max-chain-depth: 8
-  # 补间动画引擎参数。
+  # 脚本补间动画参数（修改需重启服务器生效）
   tween:
-    # SES cadence 上限兼 per-wall fps 硬上限（发送地图包的最大速率）。
-    # per-wall 帧率由 canvas.tweenFps WS op 设置（默认 30fps）。
+    # 补间动画每秒发送画面的最高帧率上限（画板默认使用每秒 30 帧，最高不超过此上限）。
     max-fps: 60
-    # 同时活跃的补间动画上限（超限新任务报错不执行，不裁剪已有任务）。
+    # 全服允许同时运行的补间动画任务数量上限（超出时新发起的补间动画会提示繁忙并跳过，不中断正在播放的动画）。
     max-concurrent: 16
-  # 脚本"执行命令"积木的命令模板白名单（docs/scripting.md §5.2）。[热更]
-  # 插件不内置任何模板——这里没写的模板，脚本里引用了也不会执行（安全设计）。
-  # 规则：
-  #   - command 是真正执行的命令全文，{参数名} 是占位符，由脚本作者填值
-  #   - 每个占位符必须在 params 里声明；填进来的值会自动剥掉换行和 § 颜色码
-  #   - 值里带 @（目标选择器）一律拒绝执行，除非该参数声明 type: online-player
-  #     （此时值必须是某个在线玩家的名字，杜绝 @a / @e 选择器夺权）
-  #   - max-length 是单个参数值的长度上限，默认 64
-  #   - 参数值可以含空格，空格会成为命令的额外参数——设计模板时把自由文本参数
-  #     放在命令末尾（比如 say 的消息），别放在 give 这类按空格切参的命令中间
-  #   - 命令以服务器控制台身份执行（模板是你写的，等于你授权了这些命令）
-  #   - 每次执行都会进审计日志（事件 SCRIPT_COMMAND_EXECUTED，含替换后的命令全文）
-  # 示例（去掉注释即可用）：
+  # 脚本「执行命令」积木的命令模板白名单。[热更]
+  # 插件默认不内置任何可执行命令——未在此处明确配置的模板，脚本中引用时一律不会执行。
+  # 编写说明：
+  #   - command 为实际在服务端控制台执行的命令文本（无需写开头的斜杠 /），{参数名} 为脚本作者可填写的占位符
+  #   - 所有占位符都必须在 params 下声明，玩家填入的文本会自动过滤换行符与传统颜色格式符
+  #   - 默认参数类型（type: text）严禁包含 @ 符号，防止玩家注入 @a、@e 等全服选择器；
+  #     若确实需要指定玩家，请声明 type: online-player（此时填入值必须与当前在线玩家名完全一致才会执行）
+  #   - max-length 用于限制单个参数的最大字符长度，默认 64
+  #   - 文本参数中若允许包含空格，请将该占位符放在命令末尾（例如 say 公告内容），避免空格拆分命令参数
+  #   - 命令会以控制台最高权限执行，请只配置你确认安全的命令模板；每次执行均会完整记入审计记录
+  # 配置示例（去掉前面的 # 注释符号即可启用）：
   # command-templates:
   #   announce:
   #     command: "say [招牌] {msg}"
@@ -257,9 +252,9 @@ scripts:
   #     params:
   #       player: { type: online-player }
 
-# 国际化（i18n）：玩家在游戏内看到的文字
+# 游戏内多语言提示
 i18n:
-  # 玩家客户端语言无对应 lang 文件、或某条文案缺译时的兜底语言。
-  # 内置 en_us / zh_cn；可在 plugins/HikariCanvas/lang/ 自加语言文件后用其文件名（去 .yml）。
-  # [热更] reload 时会连 plugins/HikariCanvas/lang/ 下的语言文件一起重扫。
+  # 当玩家客户端语言在 plugins/HikariCanvas/lang/ 中没有对应语言文件、或个别词条未翻译时使用的默认语言。
+  # 内置 en_us（英文）与 zh_cn（简体中文）；你也可以在 lang/ 目录下自行添加其他语言文件并在此填入文件名（不带 .yml）。
+  # [热更] 执行 /canvas reload config 时会一并重新读取 plugins/HikariCanvas/lang/ 目录下的所有语言文件。
   default-locale: en_us

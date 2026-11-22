@@ -172,7 +172,7 @@ public final class WandListener implements Listener {
                 && !player.hasPermission("canvas.admin.bypass-lock")) {
             sendActionBar(player, "wand.locked-by",
                     Placeholder.unparsed("wall_id", wallId),
-                    Placeholder.unparsed("owner_name", w.ownerName()));
+                    Placeholder.unparsed("owner_name", w.ownerName() == null ? "?" : w.ownerName()));
             return;
         }
         long now = System.currentTimeMillis();
@@ -198,24 +198,35 @@ public final class WandListener implements Listener {
             return;
         }
         if (r instanceof SessionManager.OpenResult.AlreadyHasSession a) {
+            String stateText = messages != null
+                    ? messages.plain(messages.localeId(player), SessionManager.stateLangKey(a.current()))
+                    : (a.current() == null ? "unknown" : a.current().name());
             sendMsg(player, "command.open.already-has-session",
-                    Placeholder.unparsed("state", a.current().toString()));
+                    Placeholder.unparsed("state", stateText));
             return;
         }
         if (r instanceof SessionManager.OpenResult.WallOccupied wo) {
             sendMsg(player, "command.open.wall-occupied",
                     Placeholder.unparsed("other_player",
-                            wo.otherPlayer() == null ? "?" : wo.otherPlayer().toString()));
+                            wo.otherPlayerName() == null || wo.otherPlayerName().isBlank()
+                                    ? "?" : wo.otherPlayerName()));
             return;
         }
         if (r instanceof SessionManager.OpenResult.BindFailed bf) {
-            sendMsg(player, "command.open.bind-failed",
-                    Placeholder.unparsed("detail", bf.detail()));
+            if (bf.reason() == SessionManager.OpenResult.BindFailReason.WORLD_NOT_LOADED) {
+                sendMsg(player, "command.open.bind-world-unloaded",
+                        Placeholder.unparsed("wall_id", bf.wallId()),
+                        Placeholder.unparsed("world", bf.worldName()));
+            } else {
+                sendMsg(player, "command.open.bind-failed",
+                        Placeholder.unparsed("wall_id", bf.wallId()));
+            }
             return;
         }
         if (r instanceof SessionManager.OpenResult.Forbidden f) {
             sendMsg(player, "command.open.forbidden",
-                    Placeholder.unparsed("message", f.message()));
+                    Placeholder.unparsed("wall_id", f.wallId()),
+                    Placeholder.unparsed("owner_name", f.ownerName()));
             return;
         }
         SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;
@@ -275,13 +286,14 @@ public final class WandListener implements Listener {
         sessionManager.recordPos(session.id(), firstCorner, block, face);
         echoCorner(player, firstCorner, block, face);
 
+        String locale = messages != null ? messages.localeId(player) : null;
         WallResolver.Result preview = sessionManager.preview(session.id());
         if (preview instanceof WallResolver.Result.Ok ok) {
             sendMsg(player, "wand.preview-ok",
                     Placeholder.unparsed("width", String.valueOf(ok.width())),
                     Placeholder.unparsed("height", String.valueOf(ok.height())),
                     Placeholder.unparsed("maps", String.valueOf(ok.mapCount())),
-                    Placeholder.unparsed("facing", ok.facing().name()),
+                    Placeholder.unparsed("facing", WallResolver.localizeDirection(messages, locale, ok.facing())),
                     Placeholder.unparsed("min_x", String.valueOf(ok.minX())),
                     Placeholder.unparsed("min_y", String.valueOf(ok.minY())),
                     Placeholder.unparsed("min_z", String.valueOf(ok.minZ())),
@@ -290,8 +302,7 @@ public final class WandListener implements Listener {
                     Placeholder.unparsed("max_z", String.valueOf(computeMaxZ(ok))));
         } else if (preview instanceof WallResolver.Result.Failed f) {
             sendMsg(player, "wand.preview-invalid",
-                    Placeholder.unparsed("reason", f.reason().name()),
-                    Placeholder.unparsed("detail", f.detail()));
+                    Placeholder.unparsed("message", WallResolver.localizeFailure(messages, locale, f)));
         }
     }
 
@@ -314,17 +325,21 @@ public final class WandListener implements Listener {
     }
 
     private void echoCorner(Player player, boolean first, Block block, BlockFace face) {
+        String locale = messages != null ? messages.localeId(player) : null;
         String labelKey = first ? "wand.label-first" : "wand.label-second";
         String labelText = (messages != null)
-                ? messages.rawOrNull(messages.localeId(player), labelKey)
+                ? messages.rawOrNull(locale, labelKey)
                 : null;
+        if (labelText == null && messages != null) {
+            labelText = messages.rawOrNull(messages.defaultLocale(), labelKey);
+        }
         if (labelText == null) labelText = first ? "First corner" : "Second corner";
         sendMsg(player, "wand.corner",
                 Placeholder.unparsed("label", labelText),
                 Placeholder.unparsed("x", String.valueOf(block.getX())),
                 Placeholder.unparsed("y", String.valueOf(block.getY())),
                 Placeholder.unparsed("z", String.valueOf(block.getZ())),
-                Placeholder.unparsed("face", face.name()));
+                Placeholder.unparsed("face", WallResolver.localizeDirection(messages, locale, face)));
     }
 
     // ---------- i18n helpers (null-safe: fall back to legacy Component when messages == null) ----------

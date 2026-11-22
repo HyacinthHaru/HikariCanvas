@@ -1,5 +1,8 @@
 package ac.haru.hikaricanvas.deploy;
 
+import ac.haru.hikaricanvas.i18n.Messages;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
@@ -8,8 +11,11 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.EnumSet;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -56,7 +62,15 @@ public final class WallResolver {
                 return width * height;
             }
         }
-        record Failed(FailReason reason, String detail) implements Result {}
+        record Failed(FailReason reason, String detail, Map<String, String> params) implements Result {
+            public Failed(FailReason reason, String detail) {
+                this(reason, detail, Map.of());
+            }
+
+            public Failed {
+                params = params == null ? Map.of() : Map.copyOf(params);
+            }
+        }
     }
 
     /** bbox 一格上的 ItemFrame 类型。 */
@@ -79,7 +93,9 @@ public final class WallResolver {
     public Result resolve(Block block1, BlockFace face1, Block block2, BlockFace face2) {
         if (face1 != face2) {
             return fail(FailReason.NORMAL_MISMATCH,
-                    "first click face=" + face1 + " but second face=" + face2);
+                    "first click face=" + face1 + " but second face=" + face2,
+                    Map.of("face1", face1 == null ? "?" : face1.name(),
+                            "face2", face2 == null ? "?" : face2.name()));
         }
         if (!HORIZONTAL.contains(face1)) {
             return fail(FailReason.VERTICAL_ONLY,
@@ -96,12 +112,20 @@ public final class WallResolver {
         if (xAxisNormal) {
             if (block1.getX() != block2.getX()) {
                 return fail(FailReason.NOT_COPLANAR,
-                        "facing " + face1 + " requires same X; got " + block1.getX() + " vs " + block2.getX());
+                        "facing " + face1 + " requires same X; got " + block1.getX() + " vs " + block2.getX(),
+                        Map.of("facing", face1.name(),
+                                "axis", "X",
+                                "coord1", String.valueOf(block1.getX()),
+                                "coord2", String.valueOf(block2.getX())));
             }
         } else { // NORTH / SOUTH
             if (block1.getZ() != block2.getZ()) {
                 return fail(FailReason.NOT_COPLANAR,
-                        "facing " + face1 + " requires same Z; got " + block1.getZ() + " vs " + block2.getZ());
+                        "facing " + face1 + " requires same Z; got " + block1.getZ() + " vs " + block2.getZ(),
+                        Map.of("facing", face1.name(),
+                                "axis", "Z",
+                                "coord1", String.valueOf(block1.getZ()),
+                                "coord2", String.valueOf(block2.getZ())));
             }
         }
 
@@ -120,7 +144,11 @@ public final class WallResolver {
         long totalMaps = (long) width * (long) height;
         if (totalMaps > maxMaps) {
             return fail(FailReason.TOO_LARGE,
-                    width + "x" + height + "=" + totalMaps + " exceeds limit " + maxMaps);
+                    width + "x" + height + "=" + totalMaps + " exceeds limit " + maxMaps,
+                    Map.of("width", String.valueOf(width),
+                            "height", String.valueOf(height),
+                            "maps", String.valueOf(totalMaps),
+                            "max", String.valueOf(maxMaps)));
         }
 
         // 校验：bbox 内每个方块是实心 full cube + 法线方向前一格状态：
@@ -134,7 +162,10 @@ public final class WallResolver {
                     if (!isWallBlock(wall)) {
                         return fail(FailReason.BLOCK_NOT_SOLID,
                                 "block at (" + x + "," + y + "," + z + ") = "
-                                        + wall.getType() + " not a solid full cube");
+                                        + wall.getType() + " not a solid full cube",
+                                Map.of("x", String.valueOf(x),
+                                        "y", String.valueOf(y),
+                                        "z", String.valueOf(z)));
                     }
                     Block adjacent = wall.getRelative(face1);
                     FrameKind kind = kindOfFrame(wall, face1);
@@ -143,12 +174,18 @@ public final class WallResolver {
                         if (!adjacent.getType().isAir()) {
                             return fail(FailReason.FRAME_SPACE_BLOCKED,
                                     "frame space at (" + adjacent.getX() + "," + adjacent.getY() + "," + adjacent.getZ()
-                                            + ") = " + adjacent.getType() + " must be air");
+                                            + ") = " + adjacent.getType() + " must be air",
+                                    Map.of("x", String.valueOf(adjacent.getX()),
+                                            "y", String.valueOf(adjacent.getY()),
+                                            "z", String.valueOf(adjacent.getZ())));
                         }
                     } else if (kind == FrameKind.FOREIGN) {
                         return fail(FailReason.OCCUPIED,
                                 "non-HikariCanvas item frame at face " + face1
-                                        + " of (" + x + "," + y + "," + z + ")");
+                                        + " of (" + x + "," + y + "," + z + ")",
+                                Map.of("x", String.valueOf(adjacent.getX()),
+                                        "y", String.valueOf(adjacent.getY()),
+                                        "z", String.valueOf(adjacent.getZ())));
                     } else {
                         // HIKARI：自家画框 → 标记 + 继续
                         hasHikariFrame = true;
@@ -188,5 +225,64 @@ public final class WallResolver {
 
     private Result.Failed fail(FailReason r, String detail) {
         return new Result.Failed(r, detail);
+    }
+
+    private Result.Failed fail(FailReason r, String detail, Map<String, String> params) {
+        return new Result.Failed(r, detail, params);
+    }
+
+    /** 将 {@link BlockFace} 映射为 {@code direction.*} 本地化文字（如 北 / north）。 */
+    public static String localizeDirection(@Nullable Messages messages, @Nullable String locale,
+                                           @Nullable BlockFace face) {
+        return localizeDirection(messages, locale, face == null ? null : face.name());
+    }
+
+    /** 将朝向名称字符串映射为 {@code direction.*} 本地化文字。 */
+    public static String localizeDirection(@Nullable Messages messages, @Nullable String locale,
+                                           @Nullable String faceName) {
+        if (faceName == null || faceName.isBlank()) {
+            return "?";
+        }
+        if (messages == null) {
+            return faceName;
+        }
+        String key = "direction." + faceName.trim().toLowerCase(Locale.ROOT);
+        String val = messages.rawOrNull(locale, key);
+        if (val == null) {
+            val = messages.rawOrNull(messages.defaultLocale(), key);
+        }
+        return val != null ? val : faceName.toLowerCase(Locale.ROOT);
+    }
+
+    /** 将选区失败 {@link Result.Failed} 渲染为 {@code wall.invalid.*} 自然语言提示。 */
+    public static String localizeFailure(@Nullable Messages messages, @Nullable String locale,
+                                         @Nullable Result.Failed failed) {
+        if (failed == null) {
+            return "";
+        }
+        if (messages == null) {
+            return failed.detail();
+        }
+        String key = switch (failed.reason()) {
+            case NORMAL_MISMATCH -> "wall.invalid.normal-mismatch";
+            case DIFFERENT_WORLDS -> "wall.invalid.different-worlds";
+            case VERTICAL_ONLY -> "wall.invalid.vertical-only";
+            case NOT_COPLANAR -> "wall.invalid.not-coplanar";
+            case TOO_LARGE -> "wall.invalid.too-large";
+            case BLOCK_NOT_SOLID -> "wall.invalid.block-not-solid";
+            case FRAME_SPACE_BLOCKED -> "wall.invalid.frame-space-blocked";
+            case OCCUPIED -> "wall.invalid.occupied";
+        };
+        TagResolver[] resolvers = failed.params().entrySet().stream()
+                .map(e -> {
+                    String k = e.getKey();
+                    String v = e.getValue();
+                    if ("face1".equals(k) || "face2".equals(k) || "facing".equals(k)) {
+                        v = localizeDirection(messages, locale, v);
+                    }
+                    return Placeholder.unparsed(k, v);
+                })
+                .toArray(TagResolver[]::new);
+        return messages.plain(locale, key, resolvers);
     }
 }

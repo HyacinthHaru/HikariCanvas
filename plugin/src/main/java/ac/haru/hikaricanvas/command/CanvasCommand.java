@@ -301,7 +301,6 @@ public final class CanvasCommand {
         }
         // cancel 仅释放 session/wand；wall 数据 + ItemFrames 保留
         String sid = s.id();
-        SessionState prev = s.state();
         sessionManager.cancel(sid, "player-cancel");
         // 控制台没有背包，也从来拿不到魔棒——收棒只对玩家做。
         int wands = sender instanceof Player p ? CanvasWand.removeAllFrom(p, plugin) : 0;
@@ -309,10 +308,11 @@ public final class CanvasCommand {
         // wand_note 为魔棒回收提示（有棒时）或空串（无棒时）
         String wandNoteKey = wands > 0 ? "command.cancel.cancelled-wand-returned"
                 : "command.cancel.cancelled-no-wand";
-        String wandNote = messages.rawOrNull(messages.localeId(sender), wandNoteKey);
+        String locale = messages.localeId(sender);
+        String wandNote = messages.rawOrNull(locale, wandNoteKey);
+        if (wandNote == null) wandNote = messages.rawOrNull(messages.defaultLocale(), wandNoteKey);
         if (wandNote == null) wandNote = "";
         messages.send(sender, "command.cancel.cancelled",
-                Placeholder.unparsed("prev_state", prev.toString()),
                 Placeholder.unparsed("wand_note", wandNote));
         return Command.SINGLE_SUCCESS;
     }
@@ -330,24 +330,34 @@ public final class CanvasCommand {
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.AlreadyHasSession a) {
+            String stateText = messages.plain(
+                    messages.localeId(player), SessionManager.stateLangKey(a.current()));
             messages.send(player, "command.open.already-has-session",
-                    Placeholder.unparsed("state", a.current().toString()));
+                    Placeholder.unparsed("state", stateText));
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.WallOccupied wo) {
             messages.send(player, "command.open.wall-occupied",
                     Placeholder.unparsed("other_player",
-                            wo.otherPlayer() == null ? "?" : wo.otherPlayer().toString()));
+                            wo.otherPlayerName() == null || wo.otherPlayerName().isBlank()
+                                    ? "?" : wo.otherPlayerName()));
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.BindFailed bf) {
-            messages.send(player, "command.open.bind-failed",
-                    Placeholder.unparsed("detail", bf.detail()));
+            if (bf.reason() == SessionManager.OpenResult.BindFailReason.WORLD_NOT_LOADED) {
+                messages.send(player, "command.open.bind-world-unloaded",
+                        Placeholder.unparsed("wall_id", bf.wallId()),
+                        Placeholder.unparsed("world", bf.worldName()));
+            } else {
+                messages.send(player, "command.open.bind-failed",
+                        Placeholder.unparsed("wall_id", bf.wallId()));
+            }
             return Command.SINGLE_SUCCESS;
         }
         if (r instanceof SessionManager.OpenResult.Forbidden f) {
             messages.send(player, "command.open.forbidden",
-                    Placeholder.unparsed("message", f.message()));
+                    Placeholder.unparsed("wall_id", f.wallId()),
+                    Placeholder.unparsed("owner_name", f.ownerName()));
             return Command.SINGLE_SUCCESS;
         }
         SessionManager.OpenResult.Ok ok = (SessionManager.OpenResult.Ok) r;
@@ -396,14 +406,27 @@ public final class CanvasCommand {
     }
 
     private void sendWallLine(CommandSender p, WallRepo.Summary w, boolean locked) {
-        String aliasPart = w.alias() != null ? " '" + w.alias() + "'" : "";
+        String locale = messages.localeId(p);
+        String aliasPart = "";
+        if (w.alias() != null) {
+            String aliasPartRaw = messages.rawOrNull(locale, "command.list.alias-part");
+            if (aliasPartRaw == null) {
+                aliasPartRaw = messages.rawOrNull(messages.defaultLocale(), "command.list.alias-part");
+            }
+            if (aliasPartRaw == null) aliasPartRaw = " (alias: <alias>)";
+            aliasPart = aliasPartRaw.replace("<alias>", w.alias());
+        }
         String lineKey = locked ? "command.list.line-locked" : "command.list.line-draft";
-        String lineRaw = messages.rawOrNull(messages.localeId(p), lineKey);
+        String lineRaw = messages.rawOrNull(locale, lineKey);
+        if (lineRaw == null) {
+            lineRaw = messages.rawOrNull(messages.defaultLocale(), lineKey);
+        }
         if (lineRaw == null) {
             lineRaw = locked
-                    ? "<aqua>  [L] <wall_id><alias_part> · <width>x<height> · <world> (<x>,<y>,<z>) <facing></aqua>"
-                    : "<gray>  [D] <wall_id><alias_part> · <width>x<height> · <world> (<x>,<y>,<z>) <facing></gray>";
+                    ? "<aqua>  [Locked] <wall_id><alias_part> · <width>×<height> · <world> (<x>,<y>,<z>) facing <facing></aqua>"
+                    : "<gray>  [Unlocked] <wall_id><alias_part> · <width>×<height> · <world> (<x>,<y>,<z>) facing <facing></gray>";
         }
+        String facingText = WallResolver.localizeDirection(messages, locale, w.facing());
         Component label = MiniMessage.miniMessage()
                 .deserialize(lineRaw,
                         Placeholder.unparsed("wall_id", w.wallId()),
@@ -414,9 +437,12 @@ public final class CanvasCommand {
                         Placeholder.unparsed("x", String.valueOf(w.originX())),
                         Placeholder.unparsed("y", String.valueOf(w.originY())),
                         Placeholder.unparsed("z", String.valueOf(w.originZ())),
-                        Placeholder.unparsed("facing", w.facing()));
+                        Placeholder.unparsed("facing", facingText));
         // hover text from lang
-        String hoverRaw = messages.rawOrNull(messages.localeId(p), "command.list.line-hover");
+        String hoverRaw = messages.rawOrNull(locale, "command.list.line-hover");
+        if (hoverRaw == null) {
+            hoverRaw = messages.rawOrNull(messages.defaultLocale(), "command.list.line-hover");
+        }
         if (hoverRaw == null) hoverRaw = "Click to suggest /canvas open <wall_id>";
         String hoverText = hoverRaw.replace("<wall_id>", w.wallId());
         p.sendMessage(label
@@ -597,29 +623,48 @@ public final class CanvasCommand {
             messages.send(player, "command.confirm-failed");
             return Command.SINGLE_SUCCESS;
         }
+        String locale = messages.localeId(player);
         if (result instanceof SessionManager.ConfirmResult.NotReady nr) {
-            messages.send(player, "command.confirm.not-ready",
-                    Placeholder.unparsed("detail", nr.detail()));
+            switch (nr.reason()) {
+                case MISSING_CORNERS -> messages.send(player, "command.confirm.not-ready.missing-corners");
+                case ALREADY_CONFIRMED -> messages.send(player, "command.confirm.not-ready.already-confirmed",
+                        Placeholder.unparsed("state",
+                                messages.plain(locale, SessionManager.stateLangKey(nr.state()))));
+                case STALE_WALL_DATA -> {
+                    if (nr.wallId() != null) {
+                        messages.send(player, "command.confirm.not-ready.stale-wall-id",
+                                Placeholder.unparsed("wall_id", nr.wallId()));
+                    } else {
+                        messages.send(player, "command.confirm.not-ready.stale-wall");
+                    }
+                }
+                case NO_SESSION -> messages.send(player, "command.no-session-edit-first");
+            }
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.WallFailed wf) {
             messages.send(player, "command.confirm.wall-invalid",
-                    Placeholder.unparsed("reason", String.valueOf(wf.reason().reason())),
-                    Placeholder.unparsed("detail", wf.reason().detail()));
+                    Placeholder.unparsed("message",
+                            WallResolver.localizeFailure(messages, locale, wf.reason())));
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.WallOccupied wo) {
             messages.send(player, "command.confirm.wall-occupied",
-                    Placeholder.unparsed("session_id", wo.otherSessionId()));
+                    Placeholder.unparsed("other_player",
+                            wo.otherPlayerName() == null || wo.otherPlayerName().isBlank()
+                                    ? "?" : wo.otherPlayerName()));
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.PoolExhausted pe) {
             messages.send(player, "command.confirm.pool-exhausted",
-                    Placeholder.unparsed("message", pe.message()));
+                    Placeholder.unparsed("needed", String.valueOf(pe.neededMaps())),
+                    Placeholder.unparsed("max", String.valueOf(pe.poolMax())));
             return Command.SINGLE_SUCCESS;
         }
         if (result instanceof SessionManager.ConfirmResult.Forbidden fb) {
-            player.sendMessage(Component.text(fb.message(), NamedTextColor.RED));
+            messages.send(player, "command.confirm.forbidden",
+                    Placeholder.unparsed("wall_id", fb.wallId()),
+                    Placeholder.unparsed("owner_name", fb.ownerName()));
             return Command.SINGLE_SUCCESS;
         }
 
@@ -657,8 +702,7 @@ public final class CanvasCommand {
                             "deploy-failure rollback also failed for wall " + wallId, rollbackEx);
                     sessionManager.cancel(sessionAfter.id(), "deploy-failed");  // 兜底至少结束 session
                 }
-                messages.send(player, "command.confirm.deploy-failed",
-                        Placeholder.unparsed("message", e.getMessage() != null ? e.getMessage() : "unknown"));
+                messages.send(player, "command.confirm.deploy-failed");
                 return Command.SINGLE_SUCCESS;
             }
         }
@@ -732,7 +776,7 @@ public final class CanvasCommand {
         HikariCanvasConfig fresh = HikariCanvasConfig.load(plugin);
         hc.applyConfig(fresh);
         messages.send(sender, "command.reload.config-ok",
-                Placeholder.unparsed("summary", fresh.summary()));
+                Placeholder.unparsed("summary", fresh.reloadSummary()));
         messages.send(sender, "command.reload.config-restart-note");
         return Command.SINGLE_SUCCESS;
     }
@@ -744,6 +788,7 @@ public final class CanvasCommand {
         messages.send(sender, "command.reload.templates-ok",
                 Placeholder.unparsed("builtin", String.valueOf(stats.builtinLoaded())),
                 Placeholder.unparsed("server", String.valueOf(stats.serverLoaded())),
+                Placeholder.unparsed("user", String.valueOf(stats.userLoaded())),
                 Placeholder.unparsed("overrides", String.valueOf(stats.overrides())),
                 Placeholder.unparsed("failed", String.valueOf(stats.failed())),
                 Placeholder.unparsed("total", String.valueOf(templateRegistry.size())));

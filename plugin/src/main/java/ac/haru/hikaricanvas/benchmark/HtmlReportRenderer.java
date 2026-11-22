@@ -80,16 +80,33 @@ public final class HtmlReportRenderer {
     }
 
     /**
-     * 渲染完整自包含 HTML5 报告文档。
+     * 渲染完整自包含 HTML5 报告文档（使用默认语言 {@link Messages#defaultLocale()}）。
      *
      * @param report   聚合报告数据源
-     * @param messages 国际化文案中枢（按 {@code messages.defaultLocale()} 取文案）
+     * @param messages 国际化文案中枢
      * @return 完整 HTML 字符串
      */
     public static String render(BenchmarkReport report, Messages messages) {
-        String loc = messages.defaultLocale();
+        return render(report, messages, messages.defaultLocale());
+    }
+
+    /**
+     * 按指定语言渲染完整自包含 HTML5 报告文档。
+     *
+     * @param report   聚合报告数据源
+     * @param messages 国际化文案中枢
+     * @param localeId 目标语言（如 {@code zh_cn} / {@code en_us}；为空或未知时回退默认语言）
+     * @return 完整 HTML 字符串
+     */
+    public static String render(BenchmarkReport report, Messages messages, String localeId) {
+        String loc = (localeId == null || localeId.isBlank())
+                ? messages.defaultLocale()
+                : messages.resolveLocaleId(localeId);
         Function<String, String> t = k -> {
             String s = messages.rawOrNull(loc, "command.bench.report-html." + k);
+            if (s == null) {
+                s = messages.rawOrNull(messages.defaultLocale(), "command.bench.report-html." + k);
+            }
             return s == null ? k : s;
         };
 

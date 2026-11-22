@@ -93,7 +93,7 @@
 | `/canvas confirm` | 全员可用（`canvas.edit`） | 确认当前选区，生成或绑定展示框并获取网页编辑链接 |
 | `/canvas cancel` | 全员可用（`canvas.edit`） | 取消当前选区或结束编辑会话（不删画板数据） |
 | `/canvas open <ID或别名>` | 全员可用（`canvas.edit`） | 直接打开一块已有画板并获取新的编辑链接 |
-| `/canvas list` | 全员可用（`canvas.edit`） | 列出自己创建的全部画板（管理员执行时列出全服画板） |
+| `/canvas list` | 全员可用（`canvas.edit`） | 列出自己创建的全部画板（服务端控制台执行时列出全服画板） |
 | `/canvas alias <别名>` | 全员可用（`canvas.edit`） | 为当前正在编辑的画板设置全服唯一别名 |
 | `/canvas delete <ID> [confirm]` | 全员可用（`canvas.delete.own`） | 删除自己的画板（需在 30 秒内带 `confirm` 二次确认） |
 
@@ -164,7 +164,7 @@ HikariCanvas 的默认权限策略非常省心：**装上插件不改任何权�
 | 权限节点 | 默认值 | 作用说明 |
 | --- | --- | --- |
 | `canvas.upload` | 全员（`true`） | 在编辑器内上传本地或网络图片（关掉即禁止该玩家传图） |
-| `canvas.upload.bypass-limit` | 仅 OP | 不受单墙张数、每日上传次数与总磁盘配额限制 |
+| `canvas.upload.bypass-limit` | 仅 OP | 不受每日上传次数与服务器总磁盘配额限制 |
 | `canvas.template.save` | 全员（`true`） | 将当前画板发布为个人工坊模板 |
 | `canvas.template.delete.own` | 全员（`true`） | 删除自己发布的工坊模板 |
 | `canvas.template.delete.any` | 仅 OP | 删除任意玩家发布的工坊模板 |
@@ -210,7 +210,7 @@ HikariCanvas 的默认权限策略非常省心：**装上插件不改任何权�
 
 | 权限节点 | 默认值 | 作用说明 |
 | --- | --- | --- |
-| `canvas.admin` | 仅 OP | 执行 `/canvas stats`、`diagnose`、`reload` 及查看全服画板列表 |
+| `canvas.admin` | 仅 OP | 执行 `/canvas stats`、`diagnose` 与 `reload` 等管理诊断命令 |
 | `canvas.var.command` | 仅 OP | 执行 `/canvas var` 系列后台变量管理命令 |
 | `canvas.bench` | 仅 OP | 执行 `/canvas bench` 系列性能压测命令 |
 

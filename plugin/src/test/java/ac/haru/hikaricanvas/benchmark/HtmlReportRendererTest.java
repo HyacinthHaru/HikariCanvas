@@ -110,6 +110,18 @@ class HtmlReportRendererTest {
         assertTrue(html.contains("各场景耗时"));
     }
 
+    @Test
+    void htmlReportRendersExplicitLocaleOverrideWithoutMutatingDefault() {
+        BenchmarkReport report = sampleReport("subway-sign-2x1");
+        Messages msgs = new Messages(Logger.getLogger("test"));
+        msgs.loadBuiltIn();
+        // defaultLocale stays en_us, caller passes sender's zh_cn locale
+        String html = HtmlReportRenderer.render(report, msgs, "zh_cn");
+        assertTrue(html.contains("<html lang=\"zh-CN\">"));
+        assertTrue(html.contains("性能预算计算器"));
+        assertEquals("en_us", msgs.defaultLocale());
+    }
+
     private static BenchmarkReport sampleReport(String sceneId) {
         EnvInfo env = new EnvInfo("21", "OpenJDK 64-Bit Server VM",
                 "Linux", "amd64", 8, 4096, List.of("G1 Young Generation"));

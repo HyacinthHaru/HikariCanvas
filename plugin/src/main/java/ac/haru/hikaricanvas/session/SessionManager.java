@@ -300,19 +300,41 @@ public final class SessionManager {
     // ---------- /canvas confirm ----------
 
     public sealed interface ConfirmResult {
+        enum NotReadyReason {
+            NO_SESSION,
+            ALREADY_CONFIRMED,
+            MISSING_CORNERS,
+            STALE_WALL_DATA
+        }
         /** 新建路径：池借了新 map，调用方应 deploy ItemFrames。 */
         record OkNewWall(Session session, WallResolver.Result.Ok wall, List<Integer> mapIds, String wallId) implements ConfirmResult {}
         /** 复用路径：bind 现有 wall 的 map，ItemFrames 已存在不重新部署。 */
         record OkExistingWall(Session session, WallResolver.Result.Ok wall, List<Integer> mapIds, String wallId) implements ConfirmResult {}
-        record NotReady(String detail) implements ConfirmResult {}
+        record NotReady(NotReadyReason reason, @Nullable SessionState state, @Nullable String wallId, String detail) implements ConfirmResult {
+            public NotReady(String detail) {
+                this(NotReadyReason.NO_SESSION, null, null, detail);
+            }
+        }
         record WallFailed(WallResolver.Result.Failed reason) implements ConfirmResult {}
-        record WallOccupied(String otherSessionId, UUID otherPlayer) implements ConfirmResult {}
-        record PoolExhausted(String message) implements ConfirmResult {}
+        record WallOccupied(String otherSessionId, @Nullable UUID otherPlayer, String otherPlayerName) implements ConfirmResult {
+            public WallOccupied(String otherSessionId, @Nullable UUID otherPlayer) {
+                this(otherSessionId, otherPlayer, "?");
+            }
+        }
+        record PoolExhausted(int neededMaps, int poolMax, String message) implements ConfirmResult {
+            public PoolExhausted(String message) {
+                this(0, 0, message);
+            }
+        }
         /**
          * locked wall 二次编辑 + 非 owner + 无 bypass 权限 → 拒绝。
-         * 与 {@link OpenResult.Forbidden} 同款；调用方应给玩家显示 "wall is locked by owner"。
+         * 与 {@link OpenResult.Forbidden} 同款；调用方通过本地化词条提示该画布已被所有者锁定。
          */
-        record Forbidden(String message) implements ConfirmResult {}
+        record Forbidden(String wallId, String ownerName, String message) implements ConfirmResult {
+            public Forbidden(String message) {
+                this("?", "?", message);
+            }
+        }
     }
 
     /**
@@ -345,13 +367,19 @@ public final class SessionManager {
     public ConfirmResult confirm(String sessionId) {
         assertMainThread();
         Session s = byId.get(sessionId);
-        if (s == null) return new ConfirmResult.NotReady("session not found");
+        if (s == null) {
+            return new ConfirmResult.NotReady(
+                    ConfirmResult.NotReadyReason.NO_SESSION, null, null, "session not found");
+        }
         if (s.state() != SessionState.SELECTING) {
             return new ConfirmResult.NotReady(
+                    ConfirmResult.NotReadyReason.ALREADY_CONFIRMED, s.state(), null,
                     "session already in state " + s.state() + " — use /canvas cancel to reset");
         }
         if (s.pos1() == null || s.pos2() == null) {
-            return new ConfirmResult.NotReady("please click both corners first");
+            return new ConfirmResult.NotReady(
+                    ConfirmResult.NotReadyReason.MISSING_CORNERS, null, null,
+                    "please click both corners first");
         }
 
         // 走 WallResolver；OCCUPIED 由 WallResolver 兼容处理。
@@ -369,7 +397,8 @@ public final class SessionManager {
         if (holderId != null) {
             Session holder = byId.get(holderId);
             return new ConfirmResult.WallOccupied(holderId,
-                    holder == null ? null : holder.playerUuid());
+                    holder == null ? null : holder.playerUuid(),
+                    holderPlayerName(holder));
         }
 
         var existing = wallRepo.loadByKey(key).orElse(null);
@@ -400,6 +429,8 @@ public final class SessionManager {
                     auditLog.record("PERMISSION_DENIED", s.playerUuid().toString(),
                             s.playerName(), sessionId, null, details);
                     return new ConfirmResult.Forbidden(
+                            existing.wallId(),
+                            displayNameOrFallback(existing.ownerName()),
                             "wall '" + existing.wallId() + "' is locked by its owner");
                 }
             }
@@ -416,6 +447,9 @@ public final class SessionManager {
                 // 不一致：要么画框存在但 walls 行缺失；要么 walls 行存在但 bbox 没画框。
                 // 拒绝建议玩家先 /canvas delete 重置或换地点。
                 return new ConfirmResult.NotReady(
+                        ConfirmResult.NotReadyReason.STALE_WALL_DATA,
+                        null,
+                        existing != null ? existing.wallId() : null,
                         "this location has stale wall data; /canvas delete <id> to reset, or pick empty space");
             } else {
                 // 全空 → 新建。链路：reserve → INSERT walls → release(pending) + bind(wallId)
@@ -426,7 +460,8 @@ public final class SessionManager {
                 try {
                     mapIds = mapPool.reserveForWall(reserveOwnerWallId, wall.mapCount(), wall.world());
                 } catch (PoolExhaustedException e) {
-                    return new ConfirmResult.PoolExhausted(e.getMessage());
+                    return new ConfirmResult.PoolExhausted(
+                            wall.mapCount(), mapPool.maxSize(), e.getMessage());
                 }
                 // step1 rollback：释放 pending owner 持有的 reserve
                 rollbacks.push(() -> mapPool.releaseWall(reserveOwnerWallId));
@@ -479,7 +514,9 @@ public final class SessionManager {
                 String raceHolder = byWall.putIfAbsent(key, sessionId);
                 if (raceHolder != null) {
                     Session holder = byId.get(raceHolder);
-                    throw new WallRaceException(raceHolder, holder == null ? null : holder.playerUuid());
+                    throw new WallRaceException(raceHolder,
+                            holder == null ? null : holder.playerUuid(),
+                            holderPlayerName(holder));
                 }
             } finally {
                 writeLock.unlock();
@@ -498,12 +535,14 @@ public final class SessionManager {
                     : new ConfirmResult.OkExistingWall(s, wall, mapIds, wallId);
         } catch (WallRaceException race) {
             runRollbacks(rollbacks);
-            return new ConfirmResult.WallOccupied(race.holderSessionId, race.holderPlayer);
+            return new ConfirmResult.WallOccupied(
+                    race.holderSessionId, race.holderPlayer, race.holderPlayerName);
         } catch (SessionConfirmFailedException e) {
             // map bind race 内部抛出 → 跑 rollback 后向上层报 PoolExhausted（保持 API 兼容）
             runRollbacks(rollbacks);
             log.log(Level.WARNING, "SessionManager.confirm rolled back: " + e.getMessage(), e);
-            return new ConfirmResult.PoolExhausted("map bind race after reserve");
+            return new ConfirmResult.PoolExhausted(
+                    wall.mapCount(), mapPool.maxSize(), "map bind race after reserve");
         } catch (RuntimeException e) {
             runRollbacks(rollbacks);
             log.log(Level.SEVERE, "SessionManager.confirm failed, rolled back; see chain above", e);
@@ -516,10 +555,12 @@ public final class SessionManager {
     private static final class WallRaceException extends RuntimeException {
         final String holderSessionId;
         final UUID holderPlayer;
-        WallRaceException(String holderSessionId, UUID holderPlayer) {
+        final String holderPlayerName;
+        WallRaceException(String holderSessionId, UUID holderPlayer, String holderPlayerName) {
             super("wall race lost to session " + holderSessionId);
             this.holderSessionId = holderSessionId;
             this.holderPlayer = holderPlayer;
+            this.holderPlayerName = holderPlayerName;
         }
     }
 
@@ -555,13 +596,29 @@ public final class SessionManager {
      * 主线程调用。
      */
     public sealed interface OpenResult {
+        enum BindFailReason {
+            WORLD_NOT_LOADED,
+            MAP_BIND_REFUSED
+        }
         record Ok(Session session, WallRepo.Wall wall) implements OpenResult {}
         record NotFound() implements OpenResult {}
-        record AlreadyHasSession(SessionState current) implements OpenResult {}
-        record WallOccupied(String otherSessionId, UUID otherPlayer) implements OpenResult {}
-        record BindFailed(String detail) implements OpenResult {}
+        record AlreadyHasSession(@Nullable SessionState current) implements OpenResult {}
+        record WallOccupied(String otherSessionId, @Nullable UUID otherPlayer, String otherPlayerName) implements OpenResult {
+            public WallOccupied(String otherSessionId, @Nullable UUID otherPlayer) {
+                this(otherSessionId, otherPlayer, "?");
+            }
+        }
+        record BindFailed(BindFailReason reason, String wallId, String worldName, String detail) implements OpenResult {
+            public BindFailed(String detail) {
+                this(BindFailReason.MAP_BIND_REFUSED, "?", "?", detail);
+            }
+        }
         /** wall 已锁定 + caller 非 owner + 无 bypass 权限 → 拒绝 open。 */
-        record Forbidden(String message) implements OpenResult {}
+        record Forbidden(String wallId, String ownerName, String message) implements OpenResult {
+            public Forbidden(String message) {
+                this("?", "?", message);
+            }
+        }
     }
 
     /** 玩家发起的 open（既有调用点语义不变）。 */
@@ -600,6 +657,8 @@ public final class SessionManager {
                 auditLog.record("PERMISSION_DENIED", playerUuid.toString(), playerName,
                         null, null, details);
                 return new OpenResult.Forbidden(
+                        w.wallId(),
+                        displayNameOrFallback(w.ownerName()),
                         "wall '" + w.wallId() + "' is locked by its owner");
             }
         }
@@ -624,16 +683,24 @@ public final class SessionManager {
         if (holderId != null) {
             Session holder = byId.get(holderId);
             return new OpenResult.WallOccupied(holderId,
-                    holder == null ? null : holder.playerUuid());
+                    holder == null ? null : holder.playerUuid(),
+                    holderPlayerName(holder));
         }
         // Bukkit.getWorld + MapPool.bindToWall 必须在锁外（持锁中调 Bukkit API 易死锁）
         World world = Bukkit.getWorld(w.key().world());
         if (world == null) {
             return new OpenResult.BindFailed(
+                    OpenResult.BindFailReason.WORLD_NOT_LOADED,
+                    w.wallId(),
+                    w.key().world(),
                     "world '" + w.key().world() + "' not loaded for wall " + w.wallId());
         }
         if (!mapPool.bindToWall(w.wallId(), w.mapIds(), world)) {
-            return new OpenResult.BindFailed("map pool refused bind for " + w.wallId());
+            return new OpenResult.BindFailed(
+                    OpenResult.BindFailReason.MAP_BIND_REFUSED,
+                    w.wallId(),
+                    w.key().world(),
+                    "map pool refused bind for " + w.wallId());
         }
 
         long now = System.currentTimeMillis();
@@ -665,7 +732,8 @@ public final class SessionManager {
             if (raceHolder != null) {
                 Session holder = byId.get(raceHolder);
                 return new OpenResult.WallOccupied(raceHolder,
-                        holder == null ? null : holder.playerUuid());
+                        holder == null ? null : holder.playerUuid(),
+                        holderPlayerName(holder));
             }
             byId.put(sessionId, s);
             byPlayer.put(playerUuid, sessionId);
@@ -1431,6 +1499,25 @@ public final class SessionManager {
                     "SessionManager: must be called on Bukkit main thread (was: "
                             + Thread.currentThread().getName() + ")");
         }
+    }
+
+    /** 将 {@link SessionState} 映射为 {@code session.state.*} 语言键（防 null NPE）。 */
+    public static String stateLangKey(@Nullable SessionState state) {
+        if (state == null) return "session.state.unknown";
+        return switch (state) {
+            case SELECTING -> "session.state.selecting";
+            case ISSUED -> "session.state.issued";
+            case ACTIVE -> "session.state.active";
+            case CLOSING -> "session.state.closing";
+        };
+    }
+
+    private static String displayNameOrFallback(@Nullable String name) {
+        return (name == null || name.isBlank()) ? "?" : name;
+    }
+
+    private static String holderPlayerName(@Nullable Session holder) {
+        return holder == null ? "?" : displayNameOrFallback(holder.playerName());
     }
 
     private Session requireSession(String sessionId) {

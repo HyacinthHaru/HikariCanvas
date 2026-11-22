@@ -120,8 +120,11 @@ public final class DiagnosticsSubCommand {
         // ── 分世界行（仅多 world 或非空时发；单 world 时信息冗余，省略）──
         Map<String, Integer> byWorld = mapPool.byWorldStats();
         if (byWorld.size() > 1) {
+            String unknownLabel = messages.plain(
+                    messages.localeId(sender), "command.stats.unknown-world");
             messages.send(sender, "command.stats.by-world",
-                    Placeholder.unparsed("world_breakdown", joinBreakdown(byWorld)));
+                    Placeholder.unparsed("world_breakdown",
+                            joinWorldBreakdown(byWorld, unknownLabel)));
         }
 
         // ── 变量行 ──
@@ -320,6 +323,16 @@ public final class DiagnosticsSubCommand {
         for (Map.Entry<String, Integer> e : m.entrySet()) {
             if (sb.length() > 0) sb.append(' ');
             sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        return sb.toString();
+    }
+
+    private static String joinWorldBreakdown(Map<String, Integer> m, String unknownLabel) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Integer> e : m.entrySet()) {
+            if (sb.length() > 0) sb.append(' ');
+            String key = "<unknown>".equals(e.getKey()) ? unknownLabel : e.getKey();
+            sb.append(key).append('=').append(e.getValue());
         }
         return sb.toString();
     }
